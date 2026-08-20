@@ -303,7 +303,13 @@
 .pn-md pre { margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: var(--gray-bg); overflow-x: auto; }
 .pn-md pre code { background: none; padding: 0; }
 .pn-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
-.pn-tl { overflow: auto; padding: 6px 12px 14px; }
+/* 타임라인 칸 = 그 세션의 발자취 위젯(web/timeline.ts) 통째. 위젯이 [머리 바 + 자기 스크롤]을 이미 갖고 있으니
+   여기서는 높이만 내주고 스크롤은 겹치지 않게 둔다 — 겉과 속이 둘 다 스크롤하면 휠이 어디로 갈지 사람이 못 읽는다. */
+.pn-tl { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.pn-tlhost { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.pn-tl .v2-aside-h { padding: 9px 12px 8px; }          /* 곁칸은 좁다 — 머리 바 좌우 여백을 칸 폭에 맞춘다 */
+.pn-tl .tl-scroll { padding: 10px 12px 18px; }
+.pn-tl .tl-scope { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%; }  /* 세션 이름이 길면 줄인다 */
 .pn-liv { overflow: hidden; }
 
 /* ══ 프로젝트 설정 창 ═══════════════════════════════════════════════════════ */

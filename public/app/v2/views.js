@@ -157,6 +157,8 @@ export function renderSession(host, data, id, vopts = {}) {
         //  내 세션 219건 중 복원 가능 198건). 어긋남의 원인은 '자동'이 아니라 **프레임이 몰래 갈아탄 것**이었으므로,
         //  셸이 라우팅까지 쥐고 되살리면 둘 다 만족한다. 실패하면 그 기록 화면과 버튼이 그대로 남는다.
         autoResume: shouldRestoreOnOpen({ restorable: !!s.raw?.restorable, owned: s.owned }),
+        isVisible: vopts.isVisible,
+        onResumed: vopts.onResumed,
     });
 }
 // ── 데이터 정규화 — 라이브(terminal/sessions) + 기록(v6/sessions) 를 한 목록으로 ─────────

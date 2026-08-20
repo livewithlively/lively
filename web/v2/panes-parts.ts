@@ -13,8 +13,6 @@ import { confirmSessionForget } from '../session-actions.js';
 import { fmtSize } from '../projects/files.js';
 import { upDropZone } from '../projects/files-upload.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
-import { createTimeline } from '../timeline.js';
-import { loadProjectTimeline } from '../timeline-sources.js';
 import { hasBrowserSurface } from './browser-surface.js';
 import { filesPart } from './panes-files.js';
 import { NOISE_RE, TRASH_DIR, attachName, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
@@ -47,6 +45,19 @@ export interface PartCtx {
   mountSession?: (host: HTMLElement, sid: string) => { destroy(): void } | null;
   /** 새 세션 자리에서 세션을 **방금 만들었다** — 셸이 그 전문을 목록에 즉시 끼워 넣는다(20초 폴링을 기다리지 않게). */
   onSessionCreated?: (row: any) => void;
+  // ── ★ 부품은 '이 프로젝트의 것'이 아니라 **'지금 보는 세션의 것'**이다(원준 2026-08-20) ────────────
+  //  자료·지식만 프로젝트의 것이고(세션들이 같이 보는 공용물), 나머지 칸에서 한 조작은 같은 프로젝트의 다른
+  //  세션으로 새어 나가면 안 된다 — 타임라인은 그 세션의 발자취여야 하고, 웹 칸의 주소·편집기가 열어 둔 파일도
+  //  세션마다 따로다. 세션들이 나눠 쓰는 것은 **어떤 칸이 떠 있나(배치)** 뿐이다(panes.ts).
+  /** 지금 보는 세션. 서랍에서 갈아 끼우면 이 값이 바뀐다(정적인 sessionId 와 달리 살아 있다). */
+  curSession: () => string | null;
+  /** 보는 세션이 바뀌면 알려 준다 — 돌려주는 함수를 부르면 구독을 끊는다(부품 destroy 에서). */
+  onSession: (fn: (sid: string | null) => void) => (() => void);
+  /** 지금 세션의 **발자취 위젯이 사는 자리**. 세션 화면(대화)이 트랜스크립트를 읽으며 여기를 채운다 —
+   *  타임라인 칸은 이 자리를 자기 몸에 들이기만 한다(셸이 세션마다 새로 만들어 준다). */
+  trailHost: () => HTMLElement;
+  /** 그 세션에만 딸리는 값의 저장 열쇠 — 세션이 있으면 세션, 없으면(새 세션 자리) 프로젝트로 떨어진다. */
+  memKey: () => string;
 }
 
 export interface Part {
@@ -191,7 +202,6 @@ function sessionsPart(ctx: PartCtx): Part {
   let mounted: { sid: string; h: { destroy(): void } | null; ok: boolean } | null = null;
   let retry = 0;                                      // 방금 만든 세션이 목록에 아직 없을 때 다시 붙여 보는 횟수
   let retryTimer = 0;
-  let missSince = 0;                                  // sel 이 목록에서 안 보이기 시작한 시각(0 = 보인다) — paint() 주석
 
   // 위(그리고 전부) — 세션 화면이 통째로 들어오는 자리
   const stage = el('div', { class: 'pn-stage' });
@@ -345,38 +355,22 @@ function sessionsPart(ctx: PartCtx): Part {
     select(made.id);
   }
 
-  /** 목록에서 sel 이 사라졌다고 갈아타기까지 두는 유예.
-   *  2분은 넉넉히 잡은 값이다 — 게이트웨이 재배포 후 노드가 다시 붙기까지 **최악 33초**(노드 에이전트 재연결
-   *  백오프 상한 30초 + 상태 push 주기 3초, src/node/agent.ts BACKOFF_MAX_MS·STATE_PUSH_MS)이고 그 사이
-   *  노드 세션은 목록에서 통째로 빠져 있다(게이트웨이 states 는 인메모리라 재시작 때 리셋된다).
-   *  반대로 늦어서 손해 볼 일은 거의 없다: 세션을 다른 프로젝트로 옮기거나 지운 드문 경우에 화면이 잠깐 더
-   *  머무를 뿐이고, 그동안에도 터미널은 그 세션에 정상으로 붙어 있다. */
-  const MISS_GRACE_MS = 120_000;
-
   function paint(): void {
     const ss = mine();
-    // 지정된 세션이 이 프로젝트에 없으면(옮겼거나 사라졌다) 맨 위 세션으로.
-    //  ⚠ 방금 만들어 아직 목록에 안 온 세션(mounted.ok === false)은 예외다 — 여기서 다른 세션으로 튕기면
-    //   사람이 방금 연 세션을 잃는다.
-    // ★ '목록에 없다' ≠ '사라졌다'(상민님 신고 2026-08-20). 게이트웨이를 재배포하면 /terminal/sessions 가
-    //   몇 초간 실패하고, 노드 세션 목록은 게이트웨이 재시작 때 통째로 리셋된다(src/node/registry.ts states —
-    //   노드가 다시 붙어 상태를 push 할 때까지 비어 있다). 그 한두 판에 이 폴백이 돌면 **살아 있는 세션이**
-    //   맨 위 세션으로 갈아치워졌다: 주소·탭 제목·상단바는 옛 세션 그대로인데 터미널만 남의 세션(대개 다른
-    //   탭에서 보고 있던 그 세션)인 화면이 되고, 20초 목록 갱신이 옛 세션 정보를 그 상단바에 계속 덧칠해
-    //   새로고침 전까지 어긋난 채로 굳었다. 그래서 셋을 건다 —
-    //   ⓐ 목록을 통째로 못 받은 판은 아예 판단하지 않는다(갈아탈 근거가 그 판에는 없다),
-    //   ⓑ 30초 넘게 계속 안 보일 때만 갈아탄다(재배포·일시장애는 그 안에 복구된다),
-    //   ⓒ 갈아탈 때는 select() 로 간다 — 주소·탭 제목까지 함께 옮겨 **화면과 주소가 어긋나지 않는다**.
+    // ★★ **보고 있는 세션을 다른 세션으로 바꾸지 않는다**(상민님 재신고 2026-08-20 — 1차 수정 후에도 재발).
+    //
+    //  종전엔 여기 "지정된 세션이 이 프로젝트 목록에 없으면 맨 위 세션으로" 폴백이 있었고, 그게 화면이
+    //  남의 세션으로 바뀌는 **유일한 입구**였다. 1차 수정에서 유예(2분)와 주소 동기화를 붙였지만 그것으로는
+    //  부족했다 — 실제로 난 사고는 이렇다:
+    //   ⓐ 게이트웨이 재시작 창에 renderRoute 가 세션을 목록에서 못 찾는다(노드 세션은 그때 잠깐 빠진다),
+    //   ⓑ 그래서 셸이 **loose(projectId=0)** 로 마운트된다 — 문패가 '프로젝트 없는 세션'이 된다,
+    //   ⓒ 그 셸의 mine() 은 '프로젝트 없는 세션'들(dev 실측 70개)이고, 보고 있던 세션은 거기 없다,
+    //   ⓓ 폴백이 그중 맨 위(유일하게 살아 있던 **남의 세션**)로 갈아탄다.
+    //
+    //  올바른 처방은 '세션을 바꾸기'가 아니라 **'셸을 그 세션의 프로젝트로 다시 그리기'** 다. 그건 호출자가
+    //  안다(main.ts 20초 갱신이 셸 프로젝트와 세션의 실제 프로젝트를 대조해 다시 그린다). 여기서는 주소가
+    //  가리키는 세션을 그대로 지킨다 — 세션이 진짜로 사라졌으면 그건 터미널이 4410 으로 말해 준다.
     const pending = !!mounted && mounted.sid === sel && !mounted.ok;
-    const blind = !ctx.data().sessions.length;        // 목록 자체가 비었다 = 못 받은 판(진짜 0건이어도 갈아탈 곳이 없다)
-    const missing = !composing && !!sel && !pending && !blind && !ss.some((s) => s.id === sel);
-    if (!missing) missSince = 0;
-    else if (!missSince) missSince = Date.now();
-    if (missing && Date.now() - missSince >= MISS_GRACE_MS) {
-      missSince = 0;
-      select(ss.length ? ss[0].id : null);            // 주소·탭 제목까지 함께(onSessionPicked) — mountStage 도 select 안에서 돈다
-      return;
-    }
     if (!ss.length && !composing && !pending && !sel) composing = true;
     mountStage();
   }
@@ -520,11 +514,37 @@ function tasksPart(ctx: PartCtx): Part {
 }
 
 // ══ 타임라인 · 리브 ═══════════════════════════════════════════════════════════
+// ══ 타임라인 — **이 세션의 발자취**(원준 2026-08-20) ══════════════════════════════
+//  종전엔 프로젝트 한 벌이었다(loadProjectTimeline). 그런데 이 화면에서 사람이 보는 것은 늘 '지금 이 세션'이고,
+//  옆 세션이 무엇을 했는지가 같은 자리에 섞이면 지금 시킨 일이 어디 있는지 알 수 없다.
+//  대상은 **지금 보는 세션**이고 재료는 두 갈래다:
+//   ① 그 세션의 트랜스크립트 — 세션 화면(session-chat)이 대화를 읽으며 흘려 준다. **내가 올린 지시(질문)가 여기 있다.**
+//   ② 그 세션이 서버에 남긴 작업 기록(activity_log) — 트랜스크립트와 별개의 정본.
+//  ①의 그릇(발자취 위젯)은 셸(panes.ts)이 세션마다 쥔다 — 칸을 닫았다 열어도 그 세션이 한 일이 남아 있으려면
+//  그릇이 이 부품보다 오래 살아야 하기 때문이다. 여기서는 그 자리를 몸에 들이고, 세션이 바뀌면 다시 들인다.
 function timelinePart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-tl' });
-  const tl = createTimeline(root, { scope: '프로젝트 #' + ctx.id, showActors: true, outcomes: true, empty: '아직 남은 것이 없어요.' });
-  void loadProjectTimeline(ctx.id, ctx.detail()).then((items) => { if (!ctx.dead()) tl.addAll(items); });
-  return { root };
+  const empty = el('div', { class: 'pn-empty' },
+    pnIcon('clock', 'pn-i big'),
+    el('b', { text: '아직 보고 있는 세션이 없어요.' }),
+    el('p', { class: 'pn-fine', text: '세션을 하나 열면 그 세션에 시킨 일과 남긴 것이 여기 시간순으로 쌓입니다.' }));
+  // 발자취는 **한 벌뿐**이라 자리도 하나다. 같은 타임라인을 두 칸에 놓으면 보이는 칸이 임자고, 나머지 칸은
+  //  뺏지 않고 그렇다고 말한다 — 서로 뺏으면 8초마다 발자취가 이 칸 저 칸으로 튄다.
+  const elsewhere = el('div', { class: 'pn-empty' },
+    pnIcon('clock', 'pn-i big'),
+    el('b', { text: '이 세션의 발자취는 다른 칸에 떠 있어요.' }),
+    el('p', { class: 'pn-fine', text: '발자취는 한 벌이라 한 칸에만 뜹니다. 그 칸을 닫거나 다른 탭으로 바꾸면 이 자리로 옵니다.' }));
+  const show = (node: HTMLElement): void => { if (root.firstChild !== node) root.replaceChildren(node); };
+  function paint(): void {
+    if (!ctx.curSession()) { show(empty); return; }
+    const host = ctx.trailHost();
+    if (host.parentElement === root) return;                                 // 내가 들고 있다
+    if (host.isConnected && host.offsetParent) { show(elsewhere); return; }   // 보이는 칸이 임자다
+    show(host);
+  }
+  const off = ctx.onSession(() => paint());
+  paint();
+  return { root, tick: () => paint(), destroy: () => off() };
 }
 
 function livPart(ctx: PartCtx): Part {
@@ -628,7 +648,8 @@ function webPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-web' });
   const KEY = 'pn_web_url';
   const store = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (_) { return {}; } };
-  const keyOf = (): string => String(ctx.id || 0);
+  // 주소는 **세션마다** 따로 기억한다 — 옆 세션에서 열어 둔 페이지가 이 세션 칸에 뜨면 그건 남의 화면이다(원준 2026-08-20).
+  const keyOf = (): string => ctx.memKey();
   const norm = (v: string): string => {
     const t = v.trim();
     if (!t) return '';
@@ -651,20 +672,69 @@ function webPart(ctx: PartCtx): Part {
     const m = store(); m[keyOf()] = u;
     try { localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
   };
+  // 지금 프레임에 실린 **그 주소를 다시** 싣는다 — go() 는 주소칸의 글자로 '가는' 것이라 뜻이 다르다.
+  //  같은 주소를 src 에 그대로 넣는 것만으로는 #조각만 다른 주소에서 다시 싣지 않으므로, 남의 사이트면 빈 화면을 한 번 거친다.
+  const reload = (): void => {
+    const u = frame.getAttribute('src') || norm(input.value);
+    if (!u) return;
+    // 프레임은 둘 중 하나다(위 live). ⚠ webview 엔 contentWindow 가 없어 iframe 길로 가면 `?.` 가 조용히 빠지고
+    //  그대로 return 된다 — '다시 불러오기'가 아무 일도 안 한다(무동작은 오동작보다 찾기 어렵다, desktop 계약 테스트가 이 분기를 지킨다).
+    if (live) { try { (frame as any).reload(); return; } catch (_) { /* 아래로 */ } }
+    try { (frame as HTMLIFrameElement).contentWindow?.location.reload(); return; } catch (_) { /* 남의 사이트 — 안쪽에 시킬 수 없다. 아래로 */ }
+    frame.setAttribute('src', 'about:blank');   // 같은 주소를 그대로 넣으면 #조각만 다른 경우 다시 싣지 않는다
+    window.setTimeout(() => { if (frame.isConnected) frame.setAttribute('src', u); }, 0);
+  };
   input.onkeydown = (e: KeyboardEvent) => { if (!e.isComposing && e.key === 'Enter') { e.preventDefault(); go(); } };
   const openTab = el('a', { class: 'pn-web-btn', target: '_blank', rel: 'noopener', title: '새 탭에서 엽니다', href: '#' }, pnIcon('ext', 'pn-i sm')) as HTMLAnchorElement;
   openTab.onclick = (e: Event) => { const u = norm(input.value); if (!u) { e.preventDefault(); return; } openTab.href = u; };
   root.append(
     el('div', { class: 'pn-web-bar' },
-      el('button', { class: 'pn-web-btn', type: 'button', title: '다시 불러오기', onclick: () => go() }, pnIcon('undo', 'pn-i sm')),
+      el('button', { class: 'pn-web-btn', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm')),
       input,
       el('button', { class: 'pn-web-btn', type: 'button', text: '열기', onclick: () => go() }),
       openTab),
     frame,
     live ? null : el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요. 데스크톱 앱에서는 이 칸 안에 그대로 뜹니다.' }));
-  const saved = store()[keyOf()];
-  if (saved) { input.value = saved; frame.setAttribute('src', saved); }
-  return { root };
+  // 이 세션이 보던 주소로 맞춘다 — 세션을 갈아 끼우면 그 세션이 보던 페이지로 갈아입는다(아무것도 없으면 빈 칸).
+  function adopt(): void {
+    const u = store()[keyOf()] || '';
+    if (u === (frame.getAttribute('src') || '')) { input.value = u; return; }
+    input.value = u;
+    if (u) frame.setAttribute('src', u); else frame.removeAttribute('src');
+  }
+  adopt();
+  const offSess = ctx.onSession(() => adopt());
+
+  // ── ⌘R 은 이 칸만(원준 2026-08-20 신고: "웹을 고른 채 새로고침하면 화면 전체가 다시 실린다") ─────
+  //  ⌘R 은 본디 브라우저의 것이다. 이 칸이 열려 있다는 이유만으로 늘 뺏으면 세션·자료를 보던 사람의 새로고침까지 먹는다.
+  //  그래서 **마지막으로 만진 칸이 여기일 때만** 가로챈다 — 탭을 눌러 이 칸을 고른 것도 '만진' 것이다(신고된 그 상황이다).
+  //  ⇧⌘R 은 일부러 두었다 — 화면 전체를 다시 싣는 탈출구가 하나는 있어야 한다.
+  //  ⚠ 못 하는 것을 할 수 있는 척하지 않는다: 프레임 **안**(남의 사이트)을 누른 뒤의 ⌘R 은 그 사이트 문서로 가고
+  //   우리에게 오지 않는다(cross-origin 프레임의 키 입력은 부모로 새지 않는다 — 뚫을 수 있는 문이 아니다).
+  //   그 때는 주소칸을 한 번 누르고 ⌘R, 또는 왼쪽 ↺ 를 누르면 된다. 전체가 다시 실려도 이 칸 주소는 저장해 두었으니 같은 자리로 돌아온다.
+  //  데스크톱 앱의 <webview>(#1829) 안쪽도 같은 한계다 — 별도 WebContents 라 그 안의 키는 우리에게 오지 않는다.
+  let mine = false;
+  const paneOf = (): HTMLElement => (root.closest('.pn-pane') as HTMLElement | null) || root;
+  const mark = (e: Event): void => { const t = e.target; mine = t instanceof Node && paneOf().contains(t); };
+  const onKey = (e: KeyboardEvent): void => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    if (String(e.key).toLowerCase() !== 'r' && e.code !== 'KeyR') return;   // 한글 자판에서도 같게 — e.key 가 늘 'r' 로 오지는 않는다
+    if (!mine || root.hidden || !root.offsetParent) return;                 // 다른 칸을 보고 있거나 이 칸이 접혀 있으면 내 차례가 아니다
+    e.preventDefault();
+    reload();
+  };
+  document.addEventListener('pointerdown', mark, true);
+  document.addEventListener('focusin', mark, true);
+  window.addEventListener('keydown', onKey, true);
+  return {
+    root,
+    destroy: () => {
+      offSess();
+      document.removeEventListener('pointerdown', mark, true);
+      document.removeEventListener('focusin', mark, true);
+      window.removeEventListener('keydown', onKey, true);
+    },
+  };
 }
 
 // ══ 뷰어 — 자료의 파일을 이 칸에 띄워 본다 (#1819) ══════════════════════════════
@@ -687,8 +757,12 @@ function viewerPart(ctx: PartCtx): Part {
   let q = '';
   const urls: string[] = [];
   const fileUrl = (p2: string): string => apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2));
+  // 무엇을 열어 두었나도 **세션마다** 따로 — 자료(파일 자체)는 프로젝트 공용이지만, '내가 지금 뭘 펴 놨나'는 내 세션의 것이다.
   const remember = (p2: string): void => {
-    try { const m = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; m[String(ctx.id || 0)] = p2; localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
+    try { const m = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; m[ctx.memKey()] = p2; localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
+  };
+  const remembered = (): string => {
+    try { return (JSON.parse(localStorage.getItem(KEY) || '{}') || {})[ctx.memKey()] || ''; } catch (_) { return ''; }
   };
 
   async function loadList(): Promise<void> {
@@ -798,15 +872,17 @@ function viewerPart(ctx: PartCtx): Part {
   };
   window.addEventListener(VIEWER_EVT, onSend);
 
-  void loadList().then(() => {
-    let last = '';
-    try { last = (JSON.parse(localStorage.getItem(KEY) || '{}') || {})[String(ctx.id)] || ''; } catch (_) { /* noop */ }
+  const openRemembered = (): void => {
+    const last = remembered();
     void open(last && list.some((f) => f.path === last) ? last : '');
-  });
+  };
+  void loadList().then(() => openRemembered());
+  // 세션을 갈아 끼우면 그 세션이 펴 두었던 파일로 — 단 **고치는 중이면 건드리지 않는다**(저장 안 한 글을 뺏지 않는다).
+  const offSess = ctx.onSession(() => openRemembered());
   return {
     root,
     tick: () => { void loadList().then(() => { if (!path) paintPicker(); paintBar(); }); },
-    destroy: () => { window.removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    destroy: () => { offSess(); window.removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 

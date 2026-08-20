@@ -29,6 +29,7 @@ import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork } from './views.js';
 import { switcherTop } from './switcher.js';
 import { THEME_ORDER, setThemePref, themePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
+import { mountDesktopUpdate } from '../desktop-update.js'; // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
 const OPEN_KEY = 'lively_v2_opened';
@@ -349,6 +350,10 @@ function render() {
     // 검색칸은 돋보기를 눌렀을 때만(#1067 의 방식). 단 **검색어가 남아 있으면 계속 보인다** —
     //  #1154 가 토글을 폐지했던 사유 중 하나가 '검색 중인 줄 모른 채 짧아진 목록을 본다'였다.
     ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []), ...(fltN ? [filterSummary(fltN)] : []), treeEl, el('div', { class: 'v2-side-foot' }, 
+    // 앱 업데이트(#1838) — 데스크톱 앱이 받아 둔 새 버전이 있을 때만 뜬다(브라우저에선 늘 접혀 있다).
+    //  발치에 두는 이유: 이 줄은 '보고 있는 것'이 아니라 **이 앱 자체**에 관한 일이라, 계정·클래식 전환과
+    //  같은 층이다. 그리고 사이드바는 접히지 않으므로(v2 규약) 어떤 화면을 보고 있어도 늘 눈에 닿는다.
+    updateSlot(), 
     // 「도구」 — 앱(런치패드)은 콘텐츠가 아니라 도구다. 계정(신원)과 결을 갈라, 푸터가 잡동사니로 읽히지 않게 한다.
     el('div', { class: 'v2-foot-k', text: '도구' }), el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), themeSeg(), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
     renderTree(rows);
@@ -363,6 +368,13 @@ function render() {
         findIn.focus();
     }
     bindFindKey();
+}
+/** 사이드바 발치의 업데이트 칸 — 자리만 만들고 내용은 desktop-update 가 채운다(받아 둔 게 없으면 접혀 있다).
+ *  drawSide 는 사이드바를 통째로 다시 그리므로 이 자리도 매번 새로 난다 — 모듈이 옛 자리를 스스로 정리한다. */
+function updateSlot() {
+    const host = el('div', { hidden: true });
+    mountDesktopUpdate(host, 'row');
+    return host;
 }
 // ── 돋보기 = 검색칸 여닫기 (#1067 의 방식을 되살리되 #1154 의 반려 사유 둘을 설계로 막는다) ──
 //  ⓐ "있는 줄도 모른다" → 돋보기 **아이콘 자체는 늘 보인다**(헤더 고정 자리) + 어디서든 `/` 키로 열린다 +

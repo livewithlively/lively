@@ -27,6 +27,8 @@ import { anchoredPopover, api, el, personFace, toast } from '../core.js';
 import { makeSplitter } from './split.js';
 import { PART_DEFS, makePart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
+import { createTimeline, type TimelineHandle } from '../timeline.js';
+import { loadSessionActivities } from '../timeline-sources.js';
 import { type V2Data } from './views.js';
 
 export interface PanesOpts {
@@ -39,7 +41,7 @@ export interface PanesOpts {
   /** 서랍에서 세션을 갈아 끼웠다 — 셸을 다시 그리지 않고 주소만 그 세션 것으로. */
   onSessionPicked?: (sid: string | null) => void;
   /** 세션 화면(대화창·터미널·상단바) 통째를 붙이는 배선 — main.ts 가 준다. */
-  mountSession?: (host: HTMLElement, sid: string) => { destroy(): void } | null;
+  mountSession?: (host: HTMLElement, sid: string, o?: { trail?: TimelineHandle | null }) => { destroy(): void } | null;
   /** 새 세션 자리에서 세션을 방금 만들었다 — 셸이 그 전문을 세션 목록에 즉시 끼워 넣는다(v2/panes-parts spawn). */
   onSessionCreated?: (row: any) => void;
   /** 세션 탭에서 고친 이름 — main.ts 의 renameSession 이 서버·사이드바·셸 탭·세션 머리줄까지 한 번에 갱신한다. */
@@ -58,7 +60,14 @@ interface Layout {
   act: { main: PartType | null; side: PartType | null; bottom: PartType | null };
   sideOn: boolean; bottomOn: boolean;
 }
-const LAYOUT_KEY = 'lively_panes_layout_v1';
+// ★ 배치는 **프로젝트마다 한 벌**이고, 그 프로젝트의 세션들이 함께 쓴다(원준 2026-08-20:
+//  "띄워져 있는 창의 종류만 같은 프로젝트 안의 다른 세션들이 공유하게 해줘").
+//  종전엔 전역 한 벌이었다(위 ② 참조) — '프로젝트마다 설정할 게 많다'를 피하려던 선택이었지만, 정작 필요한 칸은
+//  프로젝트마다 달랐다(코드 프로젝트엔 편집기·웹, 글 프로젝트엔 지식·할 일). 세션 사이에서는 여전히 한 벌이라
+//  '설정할 게 많다'로 돌아가지는 않는다. 그리고 처음 여는 프로젝트는 **마지막으로 쓰던 배치를 물려받는다** —
+//  기본으로 되돌려 버리면 프로젝트를 옮길 때마다 같은 배치를 다시 맞춰야 한다.
+const LAYOUT_KEY = 'lively_panes_layout_v2';    // { last: Layout, p: { [projectId]: Layout } }
+const LAYOUT_KEY_V1 = 'lively_panes_layout_v1'; // 전역 한 벌이던 옛 판 — 첫 이사 때 'last' 의 씨앗으로만 읽는다
 const DEF_LAYOUT = (): Layout => ({
   main: ['sessions'], side: ['files', 'knowledge', 'apps'], bottom: ['timeline'],
   act: { main: 'sessions', side: 'files', bottom: 'timeline' },
@@ -83,25 +92,36 @@ function normalizeLayout(lay: Layout): Layout {
   return lay;
 }
 
-function loadLayout(): Layout {
-  try {
-    const s = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
-    if (!s || typeof s !== 'object') return DEF_LAYOUT();
-    const arr = (v: any): PartType[] => (Array.isArray(v) ? v.filter((x: any) => ALL.has(x)) : []);
-    const d = DEF_LAYOUT();
-    const lay: Layout = {
-      main: arr(s.main), side: arr(s.side), bottom: arr(s.bottom),
-      act: {
-        main: ALL.has(s.act?.main) ? s.act.main : null,
-        side: ALL.has(s.act?.side) ? s.act.side : null,
-        bottom: ALL.has(s.act?.bottom) ? s.act.bottom : null,
-      },
-      sideOn: s.sideOn !== false, bottomOn: !!s.bottomOn,
-    };
-    // 저장된 배치가 모든 칸에서 비었으면(옛 판·손상) 기본으로 — 빈 화면을 보여 주는 것보다 낫다.
-    if (!lay.main.length && !lay.side.length && !lay.bottom.length) return d;
-    return normalizeLayout(lay);
-  } catch (_) { return DEF_LAYOUT(); }
+/** 저장된 한 벌(어떤 판이든) → 쓸 수 있는 Layout. 못 읽으면 null(부른 쪽이 다음 후보로 넘어간다). */
+function parseLayout(s: any): Layout | null {
+  if (!s || typeof s !== 'object') return null;
+  const arr = (v: any): PartType[] => (Array.isArray(v) ? v.filter((x: any) => ALL.has(x)) : []);
+  const lay: Layout = {
+    main: arr(s.main), side: arr(s.side), bottom: arr(s.bottom),
+    act: {
+      main: ALL.has(s.act?.main) ? s.act.main : null,
+      side: ALL.has(s.act?.side) ? s.act.side : null,
+      bottom: ALL.has(s.act?.bottom) ? s.act.bottom : null,
+    },
+    sideOn: s.sideOn !== false, bottomOn: !!s.bottomOn,
+  };
+  // 저장된 배치가 모든 칸에서 비었으면(옛 판·손상) 없는 것으로 — 빈 화면을 보여 주는 것보다 낫다.
+  if (!lay.main.length && !lay.side.length && !lay.bottom.length) return null;
+  return normalizeLayout(lay);
+}
+interface LayoutStore { last?: any; p?: Record<string, any> }
+function layoutStore(): LayoutStore {
+  try { const s = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; }
+}
+/** 이 프로젝트의 배치 — 없으면 마지막으로 쓰던 것, 그것도 없으면 옛 전역 한 벌, 끝으로 기본. */
+function loadLayout(id: number): Layout {
+  const st = layoutStore();
+  const mine = parseLayout(st.p ? st.p[String(id)] : null);
+  if (mine) return mine;
+  const last = parseLayout(st.last);
+  if (last) return last;
+  try { const v1 = parseLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY_V1) || 'null')); if (v1) return v1; } catch (_) { /* noop */ }
+  return DEF_LAYOUT();
 }
 
 export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
@@ -109,13 +129,18 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const loose = id === 0;                       // 프로젝트 없는 세션들의 화면 — 공유 폴더·지식·할 일이 없다
   let detail: any = opts.detail;
   let dead = false;
-  let lay = loadLayout();
+  let lay = loadLayout(id);
   // 프로젝트 없는 세션 화면 — 공유 폴더·지식·할 일이 없으니 곁칸에 넣을 것도 없다. 빈 칸을 보여 주느니 접어 둔다.
   if (loose) { lay = { ...lay, side: lay.side.filter((t) => t === 'timeline'), bottom: [], bottomOn: false, sideOn: false }; }
 
   function saveLayout(): void {
     if (loose) return;                          // 자투리 화면의 임시 배치를 정본으로 굳히지 않는다
-    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(lay)); } catch (_) { /* noop */ }
+    try {
+      const st = layoutStore();
+      const map = st.p && typeof st.p === 'object' ? st.p : {};
+      map[String(id)] = lay;
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ last: lay, p: map }));
+    } catch (_) { /* noop */ }
   }
   saveLayout();   // loadLayout 의 교정(normalizeLayout)을 디스크에도 남긴다 — 갇힌 배치가 한 번 열고 끝나지 않게
 
@@ -157,6 +182,41 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   const pj = (): any => (loose ? { id: 0, name: '프로젝트 없는 세션' } : (detail && detail.project) || { id, name: '프로젝트 #' + id });
 
+  // ── 발자취 — **세션마다 한 벌**, 그릇은 셸이 쥔다(원준 2026-08-20) ─────────────────
+  //  왜 타임라인 칸이 아니라 여기서 만드나: 재료는 세션 화면(session-chat)이 대화를 읽으며 흘려 준다.
+  //  그릇이 그 칸의 것이면 **칸을 닫았다 열 때마다 그 세션이 한 일이 통째로 사라진다** — 그릇은 세션 화면과
+  //  같은 수명이어야 한다. 그래서 셸이 쥐고, 타임라인 칸은 이 자리를 자기 몸에 들이기만 한다.
+  //  담기는 것 두 갈래: ① 트랜스크립트(내가 올린 지시 + 그 지시로 남은 것) ② 서버에 남은 작업 기록.
+  const trailHost = el('div', { class: 'pn-tlhost' });
+  let trailSid: string | null = null;
+  let trailW: TimelineHandle | null = null;
+  function trailFor(sid: string | null): TimelineHandle | null {
+    if (!sid) { trailSid = null; trailW = null; trailHost.replaceChildren(); return null; }
+    if (trailSid === sid && trailW) return trailW;
+    trailSid = sid; trailW = null;
+    trailHost.replaceChildren();
+    const nm = opts.data().sessions.find((x) => x.id === sid);
+    const w = createTimeline(trailHost, {
+      scope: (nm && nm.label) || '이 세션',
+      chapters: true,      // 지시 하나 = 한 장, 그 아래 그 지시로 일어난 일
+      allSays: true,       // 아직 아무것도 안 남은 지시도 그 자리에 — 내가 뭘 시켰나가 이 화면의 줄기다
+      empty: '아직 아무것도 없어요 — 이 세션에 무언가 시키면 여기 쌓입니다.',
+    });
+    trailW = w;
+    void loadSessionActivities(sid).then((items) => { if (!dead && trailSid === sid) w.addAll(items); });
+    return w;
+  }
+
+  // 세션에 딸린 칸들(타임라인·웹·편집기)에게 '보는 세션이 바뀌었다'를 알린다 — 각자 자기 것을 그 세션 것으로 갈아입는다.
+  const sessSubs = new Set<(sid: string | null) => void>();
+  function curSession(): string | null {
+    const sp = panes.get('main')?.parts.get('sessions');
+    return sp && sp.currentSession ? sp.currentSession() : (opts.sessionId || null);
+  }
+  function announceSession(sid: string | null): void {
+    for (const fn of [...sessSubs]) { try { fn(sid); } catch (_) { /* 한 칸이 넘어져도 나머지는 간다 */ } }
+  }
+
   const ctx: PartCtx = {
     id,
     data: opts.data,
@@ -165,9 +225,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onChanged: () => { void refreshDetail(); opts.onProjectChanged?.(); },
     openSettings: () => openSettings(),
     sessionId: opts.sessionId || null,
-    onSessionPicked: (sid) => { opts.onSessionPicked?.(sid); paintDoor(); },
-    mountSession: opts.mountSession,
+    onSessionPicked: (sid) => { trailFor(sid); announceSession(sid); opts.onSessionPicked?.(sid); paintDoor(); },
+    // 세션 화면을 붙일 때 **그 세션의 발자취 그릇**을 함께 넘긴다 — 대화가 읽히는 대로 타임라인 칸이 자란다.
+    mountSession: opts.mountSession ? (host, sid) => opts.mountSession!(host, sid, { trail: trailFor(sid) }) : undefined,
     onSessionCreated: (row) => { opts.onSessionCreated?.(row); paintDoor(); },
+    curSession: () => curSession(),
+    onSession: (fn) => { sessSubs.add(fn); return () => { sessSubs.delete(fn); }; },
+    trailHost: () => trailHost,
+    // 세션에 딸린 값(웹 주소·편집 중인 파일)의 저장 열쇠. 세션이 없을 때만 프로젝트로 떨어진다(새 세션 자리).
+    memKey: () => curSession() || 'p' + id,
   };
 
   // ── 골격 ──
@@ -532,6 +598,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       ros.length = 0;
       for (const pane of panes.values()) for (const p of pane.parts.values()) p.destroy?.();
       panes.clear();
+      sessSubs.clear();
+      trailSid = null; trailW = null; trailHost.replaceChildren();
     },
   };
 }

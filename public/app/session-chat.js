@@ -406,7 +406,7 @@ export function mountSessionChat(host, first, opts) {
         // ★ #1820 — 열면 되살린다. 이 화면에 온 것 자체가 "이 세션을 쓰겠다"는 뜻이라, 버튼을 한 번 더 누르게 하지
         //  않는다. 되살아나면 새 id 로 주소가 옮겨 가고(셸이 라우팅을 쥔다 — 프레임이 몰래 갈아타지 않는다, #1808),
         //  실패하면 이 기록 화면과 버튼이 그대로 남는다(자동이 막다른 길을 만들지 않는다).
-        if (opts.autoResume && !resumeAuto) {
+        if (opts.autoResume && !resumeAuto && visibleNow()) {
             resumeAuto = true;
             view.setNote('세션을 이어서 여는 중…');
             void resumeSession(btn);
@@ -445,6 +445,8 @@ export function mountSessionChat(host, first, opts) {
     let termReady = false; // 프레임이 첫 신호(상태)를 보냈나 — 그 전에 보낸 명령은 사라진다
     let termQueue = [];
     let resumeAuto = false; // #1820 — 자동 복원을 이미 걸었나(한 화면에서 한 번만)
+    /** 지금 이 화면이 보이나 — **자동** 복원의 전제(opts.isVisible 주석). 사람이 버튼을 누른 복원은 이걸 안 본다. */
+    const visibleNow = () => !opts.isVisible || opts.isVisible();
     function termSend(cmd) {
         if (!termFrame || !termFrame.contentWindow)
             return;
@@ -474,7 +476,7 @@ export function mountSessionChat(host, first, opts) {
         //  자기 주소만 갈아타면 셸 주소·탭 제목·사이드바는 옛 세션 그대로인 어긋난 화면이 된다(#1808 사고).
         //  여기서 부르는 resumeSession 은 [이어서 대화하기]와 같은 경로라 주소(#/s/<새 id>)까지 함께 옮긴다.
         if (m && m.type === 'lively-term-gone' && String(m.id || '') === target.id) {
-            if (m.canRestore && !resumeAuto) {
+            if (m.canRestore && !resumeAuto && visibleNow()) {
                 resumeAuto = true;
                 view.setNote('세션을 이어서 여는 중…');
                 void resumeSession();
@@ -1483,12 +1485,18 @@ export function mountSessionChat(host, first, opts) {
             if (!nextId)
                 throw new Error('새 세션 id 를 받지 못했습니다.');
             toast('이어받기 세션을 열었어요.');
-            location.hash = '#/s/' + encodeURIComponent(nextId);
+            // 라우팅은 호출자(탭)에게 — 전역 주소를 여기서 바꾸면 숨은 탭의 복원이 활성 탭을 끌고 간다(opts.onResumed 주석).
+            if (opts.onResumed)
+                opts.onResumed(nextId);
+            else
+                location.hash = '#/s/' + encodeURIComponent(nextId);
         }
         catch (e) {
             toast(e?.message || '이어받기 세션을 만들지 못했습니다.');
-            resumeAuto = false; // 자동 복원이 실패했으면 다시 시도할 수 있게 푼다(버튼은 그대로 있다)
+            // ⚠ **자동** 복원 실패는 잠근 채로 둔다(#1834 후속) — 종전엔 여기서 풀어 줘, 실패가 반복되는 동안
+            //  (노드가 잠깐 오프라인인 때 등) 같은 화면이 계속 되살리기를 시도했다. 사람이 버튼을 누르면 다시 된다.
             if (btn) {
+                resumeAuto = false;
                 btn.disabled = false;
                 btn.textContent = orig || '이어서 대화하기';
             }

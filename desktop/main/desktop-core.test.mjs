@@ -12,10 +12,10 @@ import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
 import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
-import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
+import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState } from "./update-policy.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
@@ -628,6 +628,58 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
   const seg = js.slice(js.indexOf('$("check-update").addEventListener'), js.indexOf('// ── 로그 두 축'));
   assert.ok(!/upd-note"\)\.textContent = r\.note/.test(seg), '렌더러가 IPC 응답 문구로 진행률 문구를 덮는다');
+});
+
+// ── U14~U15. 받아 둔 업데이트를 **메인 화면(웹 UI)에서** 알리고 반영한다 (#1838) ────────────────
+// 실측(2026-08-20 상민님): "트레이에서 설치 노드 설정 들어가서 업데이트 확인을 눌러야 되는데, 유저가 명시적으로
+//  업데이트해야 하는 게 너무 복잡하고 현실성 낮다." — 받기는 이미 자동이었다(켤 때 + 6시간 · autoDownload).
+//  빠진 건 **알리는 자리**다: 입구가 트레이·마법사뿐이라 라이블리 화면을 띄워 두고 일하는 사람에겐 신호가 없었고,
+//  창이 보이는 동안엔 자동 적용도 하지 않으므로(U10) 업데이트가 그 창이 닫힐 때까지 앉아 있었다.
+t('U14 웹에 넘기는 상태 — 세 값뿐이고, 받는 중인 버전을 준비된 것처럼 말하지 않는다', () => {
+  assert.deepEqual(webUpdateState({ ready: true, version: ' 0.1.331 ', busy: false }), { ready: true, version: '0.1.331', busy: false });
+  // ⚠ 아직 안 받았으면 버전을 비운다 — 화면이 '준비됨' 을 앞서 말하는 유일한 경로를 여기서 막는다.
+  assert.deepEqual(webUpdateState({ ready: false, version: '0.1.331', busy: false }), { ready: false, version: '', busy: false });
+  assert.deepEqual(webUpdateState({ ready: true, version: null, busy: true }), { ready: true, version: '', busy: true });
+  assert.deepEqual(webUpdateState(undefined), { ready: false, version: '', busy: false });
+  assert.deepEqual(Object.keys(webUpdateState({ ready: true, version: 'v' })), ['ready', 'version', 'busy'], '웹에 넘기는 값이 늘었다 — 원격 페이지에 주는 면은 최소로');
+});
+
+t('U15 ★ 배선 — 웹 창이 상태를 받고(밀기+물어보기) 그 자리에서 적용하며, 두 셸 모두 그 자리를 가진다', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  // 채널 셋 — 이름은 계약 한 곳에서만 온다
+  assert.equal(IPC_WEB.UPDATE_STATE, 'lively-web:update-state');
+  assert.equal(IPC_WEB.UPDATE_APPLY, 'lively-web:update-apply');
+  assert.equal(IPC_WEB.UPDATE, 'lively-web:update');
+  // 메인: 두 핸들러 모두 **게이트웨이 출처**에서 온 요청만 — 창이 잠깐 남의 사이트를 싣고 있을 수 있다
+  const st = main.slice(main.indexOf('ipcMain.handle(IPC_WEB.UPDATE_STATE'), main.indexOf('ipcMain.handle(IPC_WEB.LOGOUT'));
+  assert.match(st, /fromGateway\(e\)/, 'UPDATE_STATE 가 출처를 안 본다');
+  assert.match(st, /ipcMain\.handle\(IPC_WEB\.UPDATE_APPLY/, 'UPDATE_APPLY 핸들러가 없다');
+  assert.match(st, /if \(!fromGateway\(e\)\) return \{ ok: false/, 'UPDATE_APPLY 가 출처를 안 본다');
+  assert.match(st, /return applyUpdate\(\)/, '웹의 적용이 트레이와 다른 경로를 탄다 — quitAndInstall 한 자리(U12)로 모아야 한다');
+  // 밀기: 상태가 바뀔 때마다(refreshState) 웹 창들에 보내고, **게이트웨이 출처를 실은 창에만** 보낸다
+  assert.match(main, /renderTray\(\); send\(IPC\.STATE, state\); pushWebUpdate\(\);/, 'refreshState 가 웹에 밀지 않는다');
+  const sw = main.slice(main.indexOf('function sendWeb'), main.indexOf('function sendWeb') + 900);
+  assert.match(sw, /new URL\(u\)\.origin !== origin/, 'sendWeb 이 창의 출처를 안 본다');
+  assert.match(main, /webUpdateSent/, '같은 값을 반복해 밀고 있다(30초 폴링마다 재렌더)');
+  // preload: 세 다리(get·apply·onChange) + **구독 해제**. 인자를 받는 자리가 없어야 한다(페이지가 정할 값이 없다).
+  const web = readFileSync(fileURLToPath(new URL('../preload/web.cjs', import.meta.url)), 'utf8');
+  assert.match(web, /get: \(\) => ipcRenderer\.invoke\("lively-web:update-state"\)/);
+  assert.match(web, /apply: \(\) => ipcRenderer\.invoke\("lively-web:update-apply"\)/, '적용에 인자가 붙었다');
+  assert.match(web, /removeListener\("lively-web:update", h\)/, 'onChange 가 구독 해제를 안 준다 — 리스너가 쌓인다');
+  // 웹: 다리의 유무로만 능력을 판정하고, **받아 둔 게 있을 때만** 그린다
+  const ui = readFileSync(fileURLToPath(new URL('../../web/desktop-update.ts', import.meta.url)), 'utf8');
+  assert.match(ui, /livelyDesktop/, '웹이 데스크톱 다리를 안 본다');
+  assert.match(ui, /if \(!cur\.ready\)/, '받아 두지 않았는데도 무언가 그린다');
+  assert.match(ui, /다시 시작하여 반영하기/, '사람이 누를 문구가 없다');
+  assert.ok(!/다시 켜|직접 켜/.test(ui), '사람에게 앱을 켜라고 말하면 종전 경쟁(U10 머리말)이 재현된다');
+  // 두 셸 모두 그 자리를 가진다 — 클래식이 제품 기본이고(web/lib/state.ts uiMode), v2 는 사이드바 발치.
+  const classic = readFileSync(fileURLToPath(new URL('../../web/main.ts', import.meta.url)), 'utf8');
+  assert.match(classic, /mountDesktopUpdate\(deskUp, 'bar'\)/, '클래식 셸에 자리가 없다');
+  const side = readFileSync(fileURLToPath(new URL('../../web/v2/side.ts', import.meta.url)), 'utf8');
+  assert.match(side, /mountDesktopUpdate\(host, 'row'\)/, '새 셸 사이드바에 자리가 없다');
+  const html = readFileSync(fileURLToPath(new URL('../../public/index.html', import.meta.url)), 'utf8');
+  assert.match(html, /id="desktop-update" hidden/, '클래식 셸의 자리가 문서에 없다(기본은 접힘)');
+  assert.match(html, /44-desktop-update\.css/, '스타일이 문서에 안 걸렸다');
 });
 
 // ── S. Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs) ────────────────────

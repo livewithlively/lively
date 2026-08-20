@@ -123,6 +123,11 @@ export interface TimelineCtx {
   empty?: string;
   /** 세션처럼 '지시 하나 = 한 장'으로 묶을 화면이면 true. */
   chapters?: boolean;
+  /** 남긴 것이 없는 지시도 **한 장으로 세운다**(chapters 와 함께 쓴다).
+   *  기본은 지운다 — 프로젝트·워크스페이스 타임라인에서 '아무것도 안 남은 지시'는 사건이 아니기 때문이다.
+   *  세션 발자취는 반대다: 내가 무엇을 시켰나가 곧 그 세션의 줄기라, 아직 아무것도 안 남았어도 그 자리에 있어야 한다
+   *  (원준 2026-08-20: "타임라인에는 내가 올린 질문들도 보였으면 좋겠고"). */
+  allSays?: boolean;
   /** 결과물 보기(#1756) — 무슨 일이 있었나가 아니라 **무엇이 남았나**. 세션 화면이 쓴다. */
   outcomes?: boolean;
 }
@@ -311,8 +316,9 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
       if (cur) cur.kids.push(it); else rows.push({ solo: it });
     }
     // 장은 안에 남은 것이 있을 때만 세운다 — 아무것도 안 남은 지시는 타임라인의 사건이 아니다.
-    const shownRows = rows.filter((r) => ('solo' in r ? true : r.kids.length > 0));
-    const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length), 0);
+    //  단 allSays 면 반대로 **모든 지시가 선다**(세션 발자취 — 위 TimelineCtx.allSays 주석).
+    const shownRows = rows.filter((r) => ('solo' in r ? true : ctx.allSays || r.kids.length > 0));
+    const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length + (ctx.allSays ? 1 : 0)), 0);
     countEl.textContent = String(shownCount);
     emptyEl.hidden = shownCount > 0;
 
