@@ -25,7 +25,8 @@ export const IPC = {
 /**
  * 웹 UI 창(게이트웨이의 /ui/ 를 싣는 창) ↔ 메인 채널 (#1541 · web-shell.mjs).
  *  ⚠ 마법사 채널(IPC)과 **다른 preload·다른 접두(`lively-web:`)** 다 — 원격 페이지(웹 UI)에는 설치·노드를 움직이는
- *  IPC 를 절대 노출하지 않는다(웹 UI 의 XSS 한 방이 이 PC 의 CLI 실행으로 승격되면 안 된다). 여기 둘만 있다:
+ *  IPC 를 절대 노출하지 않는다(웹 UI 의 XSS 한 방이 이 PC 의 CLI 실행으로 승격되면 안 된다). 원격 페이지에 주는
+ *  다리는 아래 것들뿐이고, 하나같이 **인자 없는 단일 동작**이거나 메인이 형태를 강제하는 값이다:
  *   BOOT   preload 가 문서 시작 시점에 동기로 받는 값 — { origin, token, appVersion, platform } (web-shell.webBootPayload)
  *   LOGOUT 웹 UI 의 '로그아웃' 이 데스크톱 로그인(CLI 토큰)까지 끝내도록 — 안 이으면 웹은 localStorage 만 지우고
  *          다음 창 열기에서 토큰이 다시 주입돼 '로그아웃이 안 된다' 로 보인다
@@ -42,6 +43,17 @@ export const IPC_WEB = {
   EXT_LIST: "lively-web:ext-list",
   EXT_INSTALL: "lively-web:ext-install",
   EXT_REMOVE: "lively-web:ext-remove",
+  // 앱 업데이트를 **메인 화면(웹 UI)에서** 알리고 적용한다 (#1838). 종전엔 받아 둔 업데이트의 입구가 트레이와
+  //  마법사뿐이라, 라이블리 화면을 띄워 두고 일하는 사람에게는 아무 신호도 가지 않았다 — 창이 보이는 동안엔
+  //  자동 적용도 하지 않으므로(창 앞에서 앱이 사라지면 고장으로 읽힌다) 업데이트가 무한정 앉아 있었다.
+  //   UPDATE_STATE  지금 받아 둔 게 있나 — { ready, version, busy } (update-policy.webUpdateState)
+  //   UPDATE_APPLY  지금 적용(앱이 스스로 닫고·설치하고·다시 뜬다) — 트레이 항목과 같은 경로
+  //   UPDATE        메인 → 웹, 위 값이 바뀔 때마다(폴링을 시키지 않는다)
+  //  ⚠ CLI 를 돌리는 통로가 아니다 — 인자가 없고, 하는 일은 '이 앱을 다시 시작' 하나뿐이다. 게이트웨이 출처에서
+  //   온 요청만 받는 것은 다른 채널과 같다.
+  UPDATE_STATE: "lively-web:update-state",
+  UPDATE_APPLY: "lively-web:update-apply",
+  UPDATE: "lively-web:update",
 };
 
 /** 렌더러가 요청할 수 있는 작업 — 화이트리스트. 임의 argv 를 렌더러가 만들지 못하게 한다. */
