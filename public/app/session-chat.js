@@ -1504,6 +1504,7 @@ export function mountSessionChat(host, first, opts) {
     setMode('term'); // 기본 = 터미널(터미널 없는 세션은 setMode 가 대화로 되돌린다)
     void open();
     return {
+        id: first.id,
         setFilesOn(on) { filesBtn.classList.toggle('sc-act-on', !!on); },
         update(t) {
             const wasDead = dead();

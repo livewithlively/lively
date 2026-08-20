@@ -1161,6 +1161,20 @@ async function dropFileToAgent(file) {
 export function setupClipboard() {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
+    // ── 통합검색(Alt+K · 맥 ⌘K) — 이 프레임이 먹으면 셸이 못 듣는다 ─────────────────────────────
+    //  세션 화면 안에서 터미널은 **iframe** 이라(session-chat.ts sc-term-frame) 여기서 눌린 키는 부모 문서에
+    //  아예 도착하지 않는다. 그래서 셸의 전역 단축키가 "터미널만 켜 두면 안 먹는" 것처럼 보였다
+    //  (상민님 2026-08-20 윈도우 앱 신고). 이미 있는 같은-오리진 다리로 넘긴다.
+    //  ⚠ **Ctrl+K 는 가로채지 않는다** — 그건 readline `kill-line`(커서~줄끝 삭제)이라 뺏으면 셸이 불편해진다.
+    //   Alt+K 는 터미널에서 ESC k(meta-k)이고 readline 기본 바인딩이 없어 잃는 것이 없다.
+    //   맥 ⌘K 는 어차피 PTY 로 안 가므로 그대로 넘긴다.
+    //  단독 탭(EMBED 아님)에서는 넘길 셸이 없다 — 그때는 가로채지 않고 그대로 흘려보낸다(공연히 키를 삼키지 않는다).
+    if (EMBED && (e.key === 'k' || e.key === 'K') && !e.ctrlKey && (e.altKey || e.metaKey)) {
+      // #633 과 같은 이유로 preventDefault 필수 — return false 는 xterm 자체 처리만 막고 브라우저 기본동작은 안 막는다.
+      e.preventDefault();
+      try { window.parent.postMessage({ type: 'lively-omni-open' }, location.origin); } catch (_) { /* 부모가 없다 */ }
+      return false;
+    }
     // [#1300] 비IME 키(Space/Enter/Backspace/화살표 등) = 사파리 IME 커밋 신호 — 에코 추적만 해제한다
     //  (음절은 이미 실시간 에코돼 있어 보낼 것이 없다. 해제해 두면 이후 치환이 와도 엉뚱한 글자를 지우지 않는다).
     //  ⚠ 수정자 키(Shift/Ctrl/Alt/Cmd/CapsLock) 자체는 커밋이 아니다 — 예: 안녕하세요 + Shift+1 은

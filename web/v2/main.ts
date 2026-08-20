@@ -11,7 +11,7 @@ import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, projectOrder, sessText } from './side.js';
+import { bySeen, drawSide as drawSideTree, markNav, projectOrder, sessText } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
@@ -23,6 +23,8 @@ import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome } from './mobile.js';
 import { takeCreated } from './created-cache.js';
+import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
+import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
@@ -33,6 +35,7 @@ let centerEl: HTMLElement | null = null;
 let asideEl: HTMLElement | null = null;
 let tabsApi: TabsApi | null = null;
 let mobile: MobileChrome | null = null;   // ≤900px 모바일 크롬(#1777) — 상단 바·서랍. 데스크톱에선 보이지 않는 채로 달려 있다.
+let titlebar: Titlebar | null = null;     // 데스크톱 앱 창 맨 윗줄(탭 줄이 그리로 간다). 브라우저에선 null.
 let data: V2Data = { projects: [], sessions: [], loadedAt: 0 };
 let projLoadedAt = 0;
 const projRetried = new Set<number>();   // 목록에 없어 한 번 더 당겨 본 프로젝트 id(같은 id 로 반복 재조회 방지)
@@ -96,7 +99,10 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
       tab.route = href;
       // 셸은 그대로 두고 주소·탭 제목만 바꾼다 — hashchange 를 한 번 삼켜 라우터가 다시 그리지 않게.
       //  ⚠ 값이 같으면 hashchange 가 아예 안 나므로 그때는 세지 않는다(안 그러면 다음 진짜 이동을 삼킨다).
-      if (location.hash !== href) { suppressHash++; location.hash = href; }
+      //  ⚠ 주소는 **활성 탭의 것**이다 — 숨어 있는 탭이 스스로 세션을 갈아탈 때도(목록에서 사라진 세션의
+      //   유예 뒤 폴백, panes-parts sessionsPart.paint) 이 훅이 불린다. 그때 location 을 만지면 지금 보고 있는
+      //   **다른 탭의 주소**를 덮어쓴다. 그 탭이 활성일 때만 맞추고, 아니면 탭 제목만 바꾼다(activate 가 나중에 맞춘다).
+      if (tabsApi?.current() === tab && location.hash !== href) { suppressHash++; location.hash = href; }
       tabsApi?.routed(tab);
       drawSide();
     },
@@ -151,6 +157,9 @@ export async function bootV2(): Promise<void> {
     mobile = mountMobileChrome(root, sideEl!, asideEl!);
     root.prepend(mobile.bar);
     root.append(mobile.scrim);
+    // 데스크톱 앱(frameless 창)이면 **창 맨 윗줄**(최소화·창모드·닫기와 같은 줄)을 셸이 가져간다 — 탭 줄이 그리로 간다.
+    //  브라우저에서 연 웹 UI 에선 null 이고, 탭 줄은 종전대로 가운데 열 맨 위에 남는다.
+    titlebar = mountTitlebar(root);
   }
 
   // 실험장(#1719 원준): 크롬식 탭 줄은 걷는다 — 사이드바(프로젝트·열린 세션)가 이미 그 역할을 한다.
@@ -182,9 +191,14 @@ export async function bootV2(): Promise<void> {
     },
   });
   if (!TABS_OFF) {
-    centerEl!.prepend(tabsApi.strip);   // 탭 줄은 가운데 열 맨 위(탭 패널들은 tabs.ts 가 이미 뒤에 붙였다)
-    // 모바일이면 탭 줄이 상단 바 가운데로 옮겨 간다(#1777) — 데스크톱으로 돌아오면 여기(가운데 열 맨 위)로 되돌린다.
-    mobile?.adoptStrip(tabsApi.strip, () => centerEl!.prepend(tabsApi!.strip));
+    // 탭 줄의 제자리 — 데스크톱 앱이면 창 맨 윗줄(타이틀바), 아니면 가운데 열 맨 위.
+    //  (탭 패널들은 tabs.ts 가 이미 가운데·우패널에 붙였다 — 옮기는 건 '줄' 하나뿐이다.)
+    const homeStrip = (): void => {
+      if (titlebar) titlebar.host.prepend(tabsApi!.strip); else centerEl!.prepend(tabsApi!.strip);
+    };
+    homeStrip();
+    // 모바일이면 탭 줄이 상단 바 가운데로 옮겨 간다(#1777) — 데스크톱으로 돌아오면 제자리로.
+    mobile?.adoptStrip(tabsApi.strip, homeStrip);
   }
 
   drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
@@ -201,8 +215,22 @@ export async function bootV2(): Promise<void> {
   }
   drawSide();
 
-  window.addEventListener('hashchange', () => { void onHash(); });
+  window.addEventListener('hashchange', () => { histStamp(); void onHash(); });
+  histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
   bindAltOpen();
+  // 통합검색(⌘K) — 셸이 쥔 목록(세션·프로젝트)은 즉시, 나머지 자원은 REST 팬아웃. 이동은 탭 규칙을 아는 셸이 한다.
+  setOmniHooks({
+    data: () => data,
+    open: (href, newTab, title) => {
+      if (title) { const k = routeKey(href); if (k.startsWith('raw:')) routeTitleHint.set(k, title); }
+      if (!tabsApi) { location.hash = href; return; }
+      const hit = tabsApi.find(href);
+      if (newTab) { if (hit) tabsApi.activate(hit); else tabsApi.add(href); return; }
+      if (hit && hit !== tabsApi.current()) { hit.route = href; tabsApi.activate(hit); return; }
+      location.hash = href;
+    },
+  });
+  bindOmniKey();
   // 사이드바 상태점 — 라이브 세션은 자주 바뀐다. 20초 폴링. 탭이 숨어 있으면(브라우저 탭) 건너뛴다.
   setInterval(() => {
     if (document.hidden || !tabsApi) return;
@@ -214,7 +242,10 @@ export async function bootV2(): Promise<void> {
         if (!t.chat) continue;
         const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
         const s = sid ? findSess(sid) : null;
-        if (s) { t.chat.update({ ...s, projectName: projName(data, s.projectId) });
+        // ★ 탭이 보는 세션(라우트)과 **실제로 붙어 있는 화면**(chat.id)이 다르면 덧칠하지 않는다.
+        //  어긋남 자체는 panes-parts.ts sessionsPart.paint 에서 막았지만, 어떤 경로로든 어긋나면 이 갱신이
+        //  '상단바만 남의 세션'인 화면을 20초마다 다시 만든다(상민님 신고 2026-08-20).
+        if (s && t.chat.id === s.id) { t.chat.update({ ...s, projectName: projName(data, s.projectId) });
           // 우측 '이 세션'도 — 프로젝트 드롭다운(#1749)은 body 팝오버라 우측을 되그려도 안 닫힌다.
           drawAsideSession(t, s); }
       }
@@ -223,13 +254,17 @@ export async function bootV2(): Promise<void> {
 }
 
 // ── 데이터 ──
+// 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
+let lastLive: any[] = [];
+let lastLogs: any[] = [];
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
   const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
   const [pj, live, logs] = await Promise.all([
     // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
     wantProj ? api('/api/ui/v6/projects').then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
-    api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => []),
-    api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => []),
+    // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
+    api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
+    api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => null),
   ]);
   let projects = data.projects;
   if (Array.isArray(pj)) {
@@ -240,7 +275,13 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
       created_by: p.created_by != null ? String(p.created_by) : null, member_ids: Array.isArray(p.members) ? p.members.map((m: any) => String(m && m.member_id != null ? m.member_id : m)) : [] }));
     projLoadedAt = Date.now();
   }
-  const sessions = mergeSessions(live as any[], logs as any[]);
+  // 실패한 축은 **직전 응답을 그대로 쓴다**(상민님 신고 2026-08-20). 게이트웨이를 재배포하면 이 두 요청이
+  //  몇 초간 실패하는데, 그때 빈 목록으로 덮으면 살아 있는 세션이 화면에서 통째로 사라졌다가 돌아온다 —
+  //  그 한 판에 세션 화면이 다른 세션으로 갈아타는 사고가 났다(v2/panes-parts.ts sessionsPart.paint 주석).
+  //  빈 배열(요청 성공)은 그대로 반영한다 — 실패와 '진짜 0건'은 다르다.
+  if (Array.isArray(live)) lastLive = live as any[];
+  if (Array.isArray(logs)) lastLogs = logs as any[];
+  const sessions = mergeSessions(lastLive, lastLogs);
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
   data = { projects, sessions, loadedAt: Date.now() };
   if (!wantProj) {
@@ -258,10 +299,18 @@ function parseRoute(route: string): { segs: string[]; params: URLSearchParams; r
   const path = q >= 0 ? h.slice(0, q) : h;
   return { segs: path.split('/').filter(Boolean), params: new URLSearchParams(q >= 0 ? h.slice(q + 1) : ''), raw: h };
 }
+// ── 클래식 딥링크의 이름 힌트 ──────────────────────────────────────────────
+//  `#/k/<name>`·`#/knowledge/sources?src=…` 같은 주소는 앱 프레임으로 열리므로 탭 이름이 전부 **'WIKI'** 가 된다
+//  (앱 표의 제목이 그거다). 지식 문서를 두 개만 열어도 탭 줄이 'WIKI · WIKI' 가 되어 서로 구분이 안 된다.
+//  통합검색은 무엇을 여는지 **이미 알고 있으므로**(결과 줄의 제목) 그 이름을 여기 남긴다 — 탭이 제 이름을 갖는다.
+//  ⚠ 힌트는 클래식 딥링크(routeKey 'raw:…')에만 쓴다. 세션·프로젝트 이름은 살아 있는 데이터가 정본이다.
+const routeTitleHint = new Map<string, string>();
 /** 라우트 → 탭 제목·우패널 유무(탭 줄이 매 paint 마다 묻는다 — 데이터가 늦게 와도 이름이 따라잡는다). */
 function titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string } {
   const { segs, raw } = parseRoute(route);
   const p = segs[0] || '';
+  const key = routeKey(route);
+  if (key.startsWith('raw:')) { const hint = routeTitleHint.get(key); if (hint) return { title: hint, noAside: true }; }
   // 실험장: **어느 화면에도 상시 타임라인 열은 없다**(원준 2026-08-19 "메인 홈에도 리브에도 떠 있는데 둘 다 없애줘").
   //  돌아보기는 불러오는 것 — 프로젝트 화면은 문패 [타임라인](알림 센터)이 그 자리를 맡는다.
   if (!p || p === 'dashboard') return { title: '홈', noAside: true };
@@ -499,8 +548,31 @@ function drawSide(): void {
     // [새 작업] — **늘 새 탭**에 홈을 연다. 이미 열린 홈 탭으로 되돌아가면(find→activate) 거기 쓰던 지시가 덮이고,
     //  '새로 시작한다'는 이름과 동작이 어긋난다. 빈 홈 탭이 남으면 세션을 열 때 그 자리가 세션이 되어 정리된다.
     onNewTask: () => { tabsApi?.add('#/'); },
+    onSearch: () => omniOpen(),
+    onBack: () => history.back(),
+    onForward: () => history.forward(),
+    navState: () => ({ back: histPos > 0, forward: histPos < histSeq }),
   });
 }
+
+// ── 뒤로/앞으로가 켜져 있어야 하는가 ─────────────────────────────────────────────
+//  브라우저는 "뒤에 뭐가 있나"를 알려 주지 않는다(history.length 는 앞뒤를 안 가른다). 그래서 **우리가 센다**:
+//  엔트리마다 replaceState 로 순번을 찍어 두고, hashchange 때 그 순번이 있으면 '되돌아온 것', 없으면 '새로 간 것'이다.
+//  · 새로 감  → 순번 = ++histSeq (앞 기록은 잘렸으므로 forward 꺼짐)
+//  · 되돌아옴 → 찍힌 순번을 그대로 → back/forward 판정이 정확해진다
+//  location.replace(라우터의 리다이렉트)는 상태를 지운다 → 그 엔트리는 '새로 감'으로 잡힌다(pos=seq → forward 꺼짐).
+//  뒤로는 켜진 채로 남는데, 그게 맞다(앞 화면은 실제로 있다).
+let histSeq = -1;   // 아직 아무 엔트리도 안 찍었다 — 첫 찍기가 0 이 되어 '뒤로'가 꺼진 채 시작한다
+let histPos = 0;
+function histStamp(): void {
+  const st: any = history.state || {};
+  if (typeof st.v2i === 'number') { histPos = st.v2i; histSeq = Math.max(histSeq, st.v2i); paintNav(); return; }
+  histPos = ++histSeq;
+  try { history.replaceState({ ...st, v2i: histPos }, ''); } catch (_) { /* 사파리 rate limit — 판정만 흐려진다 */ }
+  paintNav();
+}
+// 화살표 두 개만 켜고 끈다 — 이동할 때마다 사이드바를 통째로 다시 그리면 트리 스크롤·검색칸 조합이 흔들린다(markFind 와 같은 원칙).
+function paintNav(): void { markNav({ back: histPos > 0, forward: histPos < histSeq }); }
 
 /** 이 탭이 보고 있는 프로젝트 — 프로젝트 주소면 그 id, 세션 주소면 그 세션이 붙은 프로젝트. 아니면 -1. */
 function tabProject(t: ShellTab): number {
@@ -624,12 +696,13 @@ function applyRenamePins(sessions: Sess[]): void {
 /** 사이드바 인라인 편집(#1719 원준) — 탭이 어디에 있든 이름을 전체에 반영한다.
  *  그 세션을 연 탭이 있으면 그 탭의 대화창·우패널·탭 제목까지, 없으면 목록만. 서버 반영은 renameSession 과 같은 경로. */
 async function renameSessionEverywhere(sessionId: string, label: string): Promise<void> {
-  const tab = tabsApi?.tabs.find((t) => routeKey(t.route) === 's:' + sessionId) || tabsApi?.active();
-  if (!tab) return;
+  // ⚠ 그 세션을 연 탭이 없으면 **활성 탭으로 폴백하지 않는다** — 폴백하면 지금 보고 있는 다른 세션의 상단바·
+  //  우패널이 남의 세션 것으로 갈아 끼워진다(겉과 속이 어긋난 화면의 또 다른 입구). 목록만 고치면 된다.
+  const tab = tabsApi?.tabs.find((t) => routeKey(t.route) === 's:' + sessionId) || null;
   await renameSession(sessionId, label, tab);
 }
 
-async function renameSession(sessionId: string, label: string, tab: ShellTab): Promise<void> {
+async function renameSession(sessionId: string, label: string, tab: ShellTab | null): Promise<void> {
   const s = findSess(sessionId);            // 기록(uuid) 링크로 열린 세션도 같은 박스를 가리키게
   const body: Record<string, unknown> = { label };
   if (s && s.node) body.node = s.node;         // 노드 세션은 게이트웨이가 그 노드로 중계한다(라우트가 body.node 를 본다)
@@ -638,9 +711,9 @@ async function renameSession(sessionId: string, label: string, tab: ShellTab): P
   if (s) { s.label = label; if (s.raw) s.raw.label = label; }
   drawSide();
   const cur = findSess(sessionId);
-  if (tab.chat && cur) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
-  drawAsideSession(tab, cur || null);
-  tabsApi?.routed(tab); tabsApi?.paint();       // 탭 줄의 제목도 새 이름으로
+  if (tab && tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
+  if (tab) { drawAsideSession(tab, cur || null); tabsApi?.routed(tab); }   // 탭 줄의 제목도 새 이름으로
+  tabsApi?.paint();
   void loadData().then(() => { drawSide(); tabsApi?.paint(); });
 }
 
@@ -666,7 +739,7 @@ function openProjectPicker(anchor: HTMLElement, sessionId: string, tab: ShellTab
       if (closePop) closePop();
       await loadData(); drawSide(); tabsApi?.paint();
       const cur = data.sessions.find((x) => x.id === sessionId) || null;
-      if (tab.chat && cur) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
+      if (tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
       drawAsideSession(tab, cur);
     } catch (e: any) {
       busyPick = false;

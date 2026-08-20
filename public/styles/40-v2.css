@@ -128,7 +128,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 늘 있는 곳(홈·리브) — 프로젝트 행과 **같은 모양**이다. 알약(테두리·큰 글씨)으로 만들면 목록보다 먼저
    읽혀 위계가 뒤집힌다(상민님 2026-08-19). 아이콘도 프로젝트 폴더와 같은 칸에 앉아 글자가 기둥 56px 에 선다. */
 .v2-fixed { padding: 0 var(--side-x, 8px) 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
-.v2-nav { display: flex; align-items: center; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ink-sub); text-decoration: none; }
+/* ⚠ 고정 행(새 작업·확인할 것·외부 앱 연결·리브)은 **프로젝트 행과 같은 무게**여야 한다(원준 2026-08-20:
+   "존재가 너무 없고 안 중요한 버튼 같다"). 자리는 이미 같았다 — 실측 아이콘 36 · 글자 56 · 높이 34 로
+   프로젝트와 동일. 다른 건 **크기·굵기·색 셋뿐**이었고(13/600/ink-sub vs 14/700/ink) 그 셋이 "덜 중요한
+   것"으로 읽히게 만들었다. 이 줄들은 목록의 항목이 아니라 **목록과 같은 급의 갈 곳**이다. */
+.v2-nav { display: flex; align-items: center; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; font-size: 14px; font-weight: 700; line-height: 1.4; color: var(--ink); text-decoration: none; }
 .v2-nav:hover { background: var(--bg); color: var(--ink); }
 .v2-nav.on { background: var(--bg); color: var(--ink); font-weight: 700; box-shadow: inset 0 0 0 1px var(--line-net); }
 .v2-nav .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -312,10 +316,12 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
    아이콘(집·말풍선·폴더)은 그대로 두되 **아이콘 색이 곧 상태**다(.st-busy/wait/done). */
 .v2-tabs { display: flex; align-items: stretch; gap: 1px; height: 37px; padding: 0; border-bottom: 1px solid var(--line); background: var(--gray-bg-2); flex: none; overflow-x: auto; scrollbar-width: none; }
 .v2-tabs::-webkit-scrollbar { display: none; }
-/* 탭이 많아도 글자가 뭉개지지 않게 — **바닥 폭**을 두고 그 아래로는 줄이 굴러간다(원준 2026-08-20).
-   활성 탭만 더 넓다: 지금 보고 있는 것 하나는 언제나 읽혀야 한다. */
-.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head); cursor: pointer; max-width: 220px; min-width: 118px; white-space: nowrap; flex: 0 1 auto; user-select: none; }
-.v2-tab.on { min-width: 190px; }
+/* 폭은 **줄을 n 등분**한다(상민님 2026-08-20 "탭 길이 전체 탭 섹션의 1/n 으로 균등하게").
+   종전엔 활성 탭만 190px, 나머지는 118~220px 사이에서 내용대로 늘었다 — 같은 줄의 탭인데 크기가 제각각이라
+   '지금 켜진 것'과 '이름이 긴 것'이 같은 신호(넓다)로 보였다. 켜짐은 이제 **면과 밑줄**만으로 말한다.
+   flex:1 1 0 이 곧 1/n 이고, 바닥 폭(min-width) 아래로 밀리면 그때부터 줄이 굴러간다 —
+   글자가 아예 안 읽히는 탭 20개보다, 읽히는 탭 몇 개 + 스크롤 + [모든 탭] 목록이 낫다. */
+.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head); cursor: pointer; flex: 1 1 0; min-width: 96px; max-width: none; white-space: nowrap; user-select: none; }
 .v2-tab:hover { background: rgba(255,255,255,.62); color: var(--ink); }
 .v2-tab.on { background: var(--bg); box-shadow: inset 0 2px 0 var(--blue); color: var(--ink); font-weight: 700; }
 .v2-tab.on:hover { background: var(--bg); }
@@ -417,21 +423,29 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-liv-tag { display: inline-flex; align-items: center; gap: 7px; color: var(--mint-deep); font-weight: 800; font-size: 13px; }
 .v2-h1 { margin: 10px 0 0; font-size: 22px; font-weight: 800; letter-spacing: -.45px; line-height: 1.38; text-wrap: balance; word-break: keep-all; }
 .v2-title, .v2-desc { word-break: keep-all; }
+/* 전폭 문서 칸 — 목록형 화면(연결)은 v2-center 의 읽기 폭(820px)을 쓰면 좌우가 200px 넘게 놀고
+   그만큼 세로로 길어진다(실측 1440 창: 가운데 칸 1032 · 내용 820 · 좌우 106씩 · 세로 1.43배 스크롤).
+   글을 읽는 화면이 아니라 **고르는 화면**이라 가로를 다 쓰고 세로를 줄이는 쪽이 맞다(원준 2026-08-20). */
+.v2-wide { width: 100%; max-width: 1360px; margin: 0 auto; padding: 26px 32px 34px; }
+@media (max-width: 900px) { .v2-wide { padding: 18px 16px 26px; } }
+
 /* ══ 외부 앱 연결(#/connect · #/connect/<key>) — #1719 원준 ══════════════════════
    목록은 세션 트리와 같은 '행' 문법(아이콘 · 이름+메타 · 오른쪽 ›), 상세는 v2-center 문서 문법.
    새 시각 언어를 만들지 않는다 — 셸 안에서 화면마다 다른 결이 생기면 그게 '정리 안 된 느낌'의 뿌리다. */
-.cn-top { display: flex; align-items: center; gap: 16px; margin: 22px 0 6px; flex-wrap: wrap; }
+.cn-top { display: flex; align-items: center; gap: 16px; margin: 18px 0 4px; flex-wrap: wrap; }
 .cn-sum { display: flex; align-items: center; gap: 18px; flex: 1; min-width: 0; }
 .cn-sum-i { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12.5px; color: var(--muted); }
 .cn-sum-i b { font-size: 19px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
 .cn-sum-i.on b { color: var(--mint-deep); }
 .cn-find { flex: none; width: 220px; max-width: 100%; padding: 7px 11px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); font: inherit; font-size: 13px; color: var(--ink); }
 .cn-find:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
-.cn-groups { display: flex; flex-direction: column; gap: 26px; margin-top: 18px; }
+.cn-groups { display: flex; flex-direction: column; gap: 20px; margin-top: 16px; }
 .cn-group-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .cn-group-note { font-size: 12px; color: var(--muted); }
-.cn-list { display: flex; flex-direction: column; gap: 2px; }
-.cn-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 0; border-radius: 10px; background: none; font: inherit; text-align: left; text-decoration: none; color: inherit; cursor: pointer; }
+/* ★격자 — 앱은 '읽는 것'이 아니라 '고르는 것'이라 한 줄씩 쌓을 이유가 없다. 폭에 따라 2~4열로 접힌다
+   (auto-fill + minmax): 1032px 칸이면 3열이라 13개가 6줄로 끝난다(종전 13줄). */
+.cn-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 4px 10px; }
+.cn-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 11px; border: 0; border-radius: 10px; background: none; font: inherit; text-align: left; text-decoration: none; color: inherit; cursor: pointer; }
 .cn-row:hover { background: var(--bg-tint); }
 .cn-row.blocked { cursor: pointer; }
 .cn-row.blocked .cn-row-main .t { color: var(--ink-sub); }
@@ -442,21 +456,29 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .cn-row:hover .cn-row-go { color: var(--blue); }
 .cn-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
 .cn-dot.on { background: var(--mint-deep); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
-.cn-extra { margin-top: 8px; padding-top: 22px; border-top: 1px solid var(--line-net); }
+.cn-extra { margin-top: 4px; padding-top: 18px; border-top: 1px solid var(--line-net); }
 .cn-git-ic { width: 40px; height: 40px; flex: none; border-radius: 12px; background: var(--bg-tint-2); color: var(--muted); display: inline-grid; place-items: center; font-family: var(--mono, ui-monospace, monospace); font-size: 14px; font-weight: 700; }
 /* 상세 */
 .cn-back { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); text-decoration: none; }
 .cn-back:hover { color: var(--blue); }
 .cn-head { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+.v2-connect-app .v2-desc, .v2-connect .v2-desc { max-width: 72ch; }
 .cn-head-tt { min-width: 0; }
 .cn-head-tt .v2-title { margin: 0; }
 .cn-head-st { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12.5px; color: var(--muted); }
 .cn-head-st.on { color: var(--mint-deep); font-weight: 600; }
 .cn-acts { display: flex; align-items: center; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
-.cn-facts { display: grid; grid-template-columns: auto 1fr; gap: 7px 18px; margin: 22px 0 0; padding: 14px 16px; border: 1px solid var(--line-net); border-radius: 12px; font-size: 13px; }
+.cn-facts { display: grid; grid-template-columns: auto 1fr; gap: 7px 18px; margin: 0; padding: 14px 16px; border: 1px solid var(--line-net); border-radius: 12px; font-size: 13px; }
 .cn-facts dt { color: var(--muted); }
 .cn-facts dd { margin: 0; color: var(--ink); }
-.cn-sec { margin-top: 28px; }
+/* 상세의 아래 절반 — 넓으면 두 칸(사실·발급방법 | 설정), 좁으면 한 칸. 세로로만 쌓으면 슬랙처럼 설정이
+   긴 앱은 사실 표가 화면 밖으로 밀린다. */
+.cn-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; margin-top: 22px; align-items: start; }
+@media (min-width: 1100px) { .cn-body:has(.cn-col + .cn-col) { grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr); gap: 30px; } }
+.cn-col { min-width: 0; display: flex; flex-direction: column; }
+.cn-col > .cn-facts { margin-top: 0; }
+.cn-col > .cn-sec:first-child { margin-top: 0; }
+.cn-sec { margin-top: 24px; }
 .cn-sec-h { margin-bottom: 8px; }
 .cn-help { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-sub); line-height: 1.7; max-width: 66ch; }
 /* 슬랙 대화 정책은 관리탭 카드 문법으로 만들어졌다 — 셸 안에서는 테두리 한 겹만 두르고 그대로 싣는다. */
@@ -1038,10 +1060,13 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-tab-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45, 107, 240, .12); }
 
 /* [모든 탭] — 줄 오른쪽 끝에 붙어 있는 목록 단추(줄이 굴러가도 늘 보이게 sticky). */
-.v2-tab-menu { position: sticky; right: 0; z-index: 3; display: inline-flex; align-items: center; gap: 3px; height: 36px; padding: 0 9px; border: 0; border-left: 1px solid var(--line); background: var(--gray-bg-2); font: inherit; font-size: 11.5px; color: var(--muted-head); cursor: pointer; flex: none; }
+.v2-tab-menu { position: sticky; left: 0; z-index: 3; display: inline-flex; align-items: center; gap: 3px; height: 36px; padding: 0 9px; border: 0; border-right: 1px solid var(--line); background: var(--gray-bg-2); font: inherit; font-size: 11.5px; color: var(--muted-head); cursor: pointer; flex: none; }
 .v2-tab-menu:hover { color: var(--blue); }
 .v2-tab-menu .n { font-variant-numeric: tabular-nums; font-weight: 600; }
-.v2-tabpop { width: 320px; max-width: 86vw; padding: 8px; }
+/* [모든 탭] 목록 — anchoredPopover 의 .dash-pop 은 **자리만** 잡는다(20-dashboard.css). 배경·테두리·그림자는
+   여는 쪽이 준다. 안 주면 떠 있는 글자가 뒤 화면에 그대로 겹쳐 읽히지 않는다(상민님 2026-08-20 신고). */
+.v2-tabpop { width: 320px; max-width: 86vw; padding: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(16, 32, 64, .16), 0 2px 6px rgba(16, 32, 64, .08); }
 .v2-tabpop-h { margin: 2px 4px 6px; font-size: 11.5px; color: var(--muted); }
 .v2-tabpop-find { width: 100%; height: 28px; margin-bottom: 6px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
 .v2-tabpop-find:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }

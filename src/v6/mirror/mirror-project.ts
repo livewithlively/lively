@@ -37,7 +37,7 @@ async function syncProjectMembers(
   for (const m of merged) {
     await client.query(
       `INSERT INTO project_member(project_id, member_id, role, sort) VALUES($1,$2,'member',$3)
-       ON CONFLICT (tenant_id, project_id, member_id) DO NOTHING`,
+       ON CONFLICT (project_id, member_id) DO NOTHING`,
       [projectId, m, sort++]);
   }
   const removed = prevConnectorSet.filter((m) => !merged.includes(m));

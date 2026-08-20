@@ -250,7 +250,11 @@ function glyph(kind, cls) {
     const D = {
         folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
         // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
-        'folder-open': ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
+        //  ⚠ 뒤판은 **왼쪽 세로선까지 그린다**(`M3 17V7…`). 종전엔 `M3 7…v1` 이라 (3,7)→(21,10) 으로 위쪽만 긋고
+        //   끝나서, 왼쪽 y=7~17 구간이 통째로 비어 있었다 — 앞판이 (3,17) 에서 시작하므로 그 사이가 뚫린 채 남고,
+        //   16px 에서는 폴더가 **납작하게 잘려 보인다**(원준 2026-08-20 "폴더 아이콘이 좀 가려짐"). 겹침이 아니라
+        //   글리프가 덜 그려진 것이 원인이었다. 접힌 폴더와 같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채운다.
+        'folder-open': ['M3 17V7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
         chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
         inbox: ['M4.6 5h14.8L22 13v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4z', 'M2 13h6a4 4 0 0 0 8 0h6'],
         // 외부 앱 연결 — 고리 둘이 맞물린 모양(연결). 자물쇠·플러그는 '잠금'·'전원'으로 읽혀 뜻이 어긋난다.
@@ -312,7 +316,8 @@ function render() {
     const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
     // 확인할 것 = 확인 필요(waiting, 보이는 것 전부 — 프로젝트 세션은 팀 누구든 답할 수 있다) + 작업 완료 미열람(내 것만).
     const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
-    host.replaceChildren(switcherTop({ people, faces: faceOwners }), // 좌상단 워크스페이스 **문패 카드**(#1750 메뉴 + 얼굴 스택) — 여기가 어느 집인지 말하는 자리
+    host.replaceChildren(navRow(), // 맨 위 — 뒤로/앞으로 + 통합검색(상민님 2026-08-20, 클로드 데스크톱 문법)
+    switcherTop({ people, faces: faceOwners }), // 좌상단 워크스페이스 **문패 카드**(#1750 메뉴 + 얼굴 스택) — 여기가 어느 집인지 말하는 자리
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
     el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' }, 
     // [새 작업](원준 2026-08-20) — 홈은 이제 **고정 탭이 아니라 새 탭으로 여는 화면**이다. 그래서 이 줄은
@@ -440,6 +445,44 @@ function newBtn() {
         });
     };
     return b;
+}
+// ── 사이드바 맨 윗줄 — [←][→] + [통합검색] (상민님 2026-08-20 "클로드 데스크탑 앱처럼") ──────────────
+//  왜 여기인가: 데스크톱 앱에서 맨 위 줄은 이제 **탭 줄**이 가져갔고(창 버튼과 같은 줄), 탐색 도구는
+//  내용(프로젝트·세션)보다 위, 문패보다도 위 — '이 워크스페이스 안에서 움직이는 손잡이'라 목록의 일부가 아니다.
+//  웹(브라우저)에서도 같은 자리다: 브라우저 뒤로가기와 겹쳐 보여도, 앱 안에서 손이 닿는 자리가 하나 있어야 한다.
+//  검색은 **칸처럼 생긴 버튼**이다 — 진짜 입력칸을 두면 사이드바 20초 재렌더가 입력을 끊는다(트리 검색칸이
+//  포커스·IME 를 지키느라 치르는 비용을 하나 더 만들지 않는다). 눌리면 화면 가운데 스포트라이트가 뜬다.
+function navArrow(dir, on, run) {
+    const d = dir === 'back' ? 'M14 6l-6 6 6 6' : 'M10 6l6 6-6 6';
+    return el('button', {
+        class: 'v2-navb', type: 'button', disabled: !on || !run,
+        title: dir === 'back' ? '뒤로' : '앞으로', 'aria-label': dir === 'back' ? '뒤로 가기' : '앞으로 가기',
+        onclick: () => run?.()
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-navb-ic', 'aria-hidden': 'true' }, sv('path', { d })));
+}
+function navRow() {
+    const st = hooks.navState ? hooks.navState() : { back: true, forward: true };
+    // 표기는 플랫폼을 따른다 — 맥이 아닌데 ⌘K 라고 적어 두면 눌러도 안 열린다(같은 키를 두 이름으로 배우게 된다).
+    //  맥이 아니면 **Alt+K** 를 적는다: Ctrl+K 도 먹지만 터미널이 포커스면 안 먹는다(그건 셸의 kill-line 이다).
+    //  '거의 되는 키'를 적어 두면 안 될 때 고장으로 읽히므로, 화면에는 **어디서나 되는 쪽**을 적는다.
+    const mac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '');
+    return el('div', { class: 'v2-side-nav' }, navArrow('back', st.back, hooks.onBack), navArrow('fwd', st.forward, hooks.onForward), el('button', {
+        class: 'v2-omnib', type: 'button',
+        title: mac ? '통합검색 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력을 한 번에 (⌘K)'
+            : '통합검색 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력을 한 번에 (Alt+K, 터미널 밖에서는 Ctrl+K 도)',
+        'aria-label': '통합검색 열기', onclick: () => hooks.onSearch?.()
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-omnib-ic', 'aria-hidden': 'true' }, sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })), el('span', { class: 'v2-omnib-t', text: '검색' }), el('kbd', { class: 'v2-omnib-k', text: mac ? '⌘K' : 'Alt K' })));
+}
+/** 화살표 둘의 켜짐만 갱신한다 — 이동할 때마다 사이드바를 통째로 다시 그리지 않게(markFind 와 같은 규칙). */
+export function markNav(st) {
+    const row = document.querySelector('.v2-side-nav');
+    if (!row)
+        return;
+    const btns = Array.from(row.querySelectorAll('.v2-navb'));
+    if (btns[0])
+        btns[0].disabled = !st.back || !hooks.onBack;
+    if (btns[1])
+        btns[1].disabled = !st.forward || !hooks.onForward;
 }
 function findBtn() {
     const on = findShown();

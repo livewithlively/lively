@@ -121,3 +121,43 @@ test("★★ 스키마 초기화 시드가 tenant_id 를 중재자로 쓰지 않
   }
   assert.deepEqual(bad, [], `중재자 없는 DO NOTHING 이나 ON CONSTRAINT <이름> 을 쓸 것: ${bad.join(", ")}`);
 });
+
+// ── ★★ 재작성 **제외** 테이블에는 tenant_id 를 중재자로 쓰지 않는다 ──────────
+// isNaturalKey 머리말 ⓑ 가 그 예로 `project_member(project_id, member_id)` 를 든다: project_id 가
+//  project.id(대리키)를 가리키는 FK 라 이미 전역 유일이고, 그래서 이 PK 는 **재작성되지 않는다**.
+//  PK 가 (project_id, member_id) 로 남으므로 `ON CONFLICT (tenant_id, project_id, member_id)` 는
+//  42P10 "no unique or exclusion constraint matching" 으로 죽는다 — **컬럼은 있는데 제약이 없다**
+//  (그래서 42703 이 아니라 42P10 이고, 컬럼 존재만 확인해서는 못 잡는다).
+// 실측(2026-08-20, #1821): #126 일괄치환이 project_member 5곳에만 tenant_id 를 넣어, members 를 준
+//  프로젝트 생성(MCP project_create_v6)이 전부 500 이었다. 같은 배열의 자매 task_assignee·
+//  task_comment_reaction 은 안 바꿔서 멀쩡했다 — 규칙이 아니라 누락이었다.
+test("★★ 재작성 제외 테이블(project_member 등)에 tenant_id 중재자를 쓰지 않는다", async () => {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const files: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) files.push(p);
+    }
+  };
+  walk("src");
+  // ⚠ 정규식을 쓰지 않는다 — 이스케이프가 한 번 어긋나면 이런 스캔 테스트는 **조용히 통과**한다
+  //  (이 테스트 자체가 처음에 그렇게 깨졌다). 앵커부터 400자 창을 떠서 문자열 포함만 본다.
+  const TABLES = ["project_member", "task_assignee", "task_comment_reaction"];
+  const ARBITERS = ["ON CONFLICT (tenant_id", 'conflict: "tenant_id'];
+  const bad: string[] = [];
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    for (const t of TABLES) {
+      for (const anchor of [`INSERT INTO ${t}`, `table: "${t}"`]) {
+        for (let i = src.indexOf(anchor); i >= 0; i = src.indexOf(anchor, i + 1)) {
+          const window = src.slice(i, i + 400);
+          if (ARBITERS.some((a) => window.includes(a))) bad.push(`${f} (${t})`);
+        }
+      }
+    }
+  }
+  assert.deepEqual([...new Set(bad)], [], `이 표들의 PK 는 (tenant_id, …) 로 재작성되지 않는다 — tenant_id 를 빼라: ${bad.join(", ")}`);
+});
