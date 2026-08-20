@@ -782,6 +782,41 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-dot.tlk-activity, .tl-dot.tlk-cmd { background: var(--blue-fill); }
 .tl-dot.tlk-task, .tl-dot.tlk-project { background: var(--blue-fill-deep); }
 .tl-dot.tlk-source { background: var(--node-blue-soft); }
+
+/* ── 질문·대답(#1819 원준 2026-08-21) ───────────────────────────────────────────
+   타임라인은 프로젝트가 아니라 **세션**의 위젯이다. 그래서 한 항목이 아니라 **한 묶음**이 단위다:
+   [질문] 내가 시킨 것 → [답] 그 답과 그때 남은 것. 묶음 안은 붙이고, 묶음끼리는 띄운다 —
+   그 리듬만으로 "여기서부터 다른 얘기"가 읽히므로 구분선을 더 긋지 않는다.
+   색은 전부 토큰이다(다크는 90-dark.css 가 같은 토큰을 갈아 끼운다 — 여기에 hex 를 박지 않는다). */
+.tl-qa { display: flex; flex-direction: column; }
+.tl-qa + .tl-qa { margin-top: 14px; }
+.tl-qa .tl-card { padding-top: 6px; padding-bottom: 6px; }
+/* 질문 — 잉크색 한 줄. 이 줄만 잉크고 나머지는 톤을 낮춰, 훑을 때 질문만 먼저 눈에 들어오게. */
+.tl-q .tl-ttl { -webkit-line-clamp: 3; }
+.tl-q .tl-kw { color: var(--muted-2); font-weight: 700; }
+/* 답 — 질문 바로 아래 붙는다. 거터에 시각이 없으므로(같은 묶음이다) 종류 한 단어만 선다. */
+.tl-a { padding-top: 0 !important; }
+.tl-a .tl-gut { padding-top: 1px; }
+.tl-a .tl-ans { font-weight: 500; color: var(--ink-sub); -webkit-line-clamp: 3; }
+.tl-a.err .tl-ans { color: var(--coral-text); }
+/* 붙여넣은 덩어리 — 제목으로 세우지 않고 크기만 말한다. 눌러야 전문이 나온다. */
+.tl-paste { display: flex; margin: 1px 0 3px; }
+.tl-paste span {
+  display: inline-flex; align-items: center; max-width: 100%; padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-tint-2); color: var(--muted);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .01em; white-space: nowrap;
+}
+/* 지시 전문 — 접혀 있다가 눌러서. 원문 보관소가 아니라 확인용이라 높이를 묶어 둔다. */
+.tl-full {
+  margin: 6px 0 2px; padding: 8px 10px; max-height: 260px; overflow: auto;
+  border-radius: 8px; background: var(--bg-tint);
+  font-family: var(--mono, ui-monospace, monospace); font-size: 11px; line-height: 1.6;
+  color: var(--ink-sub); white-space: pre-wrap; word-break: break-word;
+}
+.tl-full[hidden] { display: none; }
+/* 그 지시에서 남은 것 — 답 밑에 조용히 붙는다(별도 상자를 세우지 않는다). */
+.tl-kids { display: flex; flex-direction: column; gap: 0; margin-top: 2px; }
+.tl-sub.err .tl-sub-t { color: var(--coral-text); }
 .tl-dot.tlk-say, .tl-dot.tlk-meta { background: var(--muted-2); }
 .tl-dot.tlk-all { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
 .v2-kn-foot { flex: none; margin-top: 0; padding: 14px 16px 18px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }

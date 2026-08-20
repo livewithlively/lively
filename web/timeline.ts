@@ -19,7 +19,7 @@
 import { el, personFace } from './core.js';
 
 export type TlTier = 1 | 2 | 3;
-export type TlKind = 'file' | 'cmd' | 'knowledge' | 'activity' | 'project' | 'task' | 'source' | 'say' | 'meta';
+export type TlKind = 'file' | 'cmd' | 'knowledge' | 'activity' | 'project' | 'task' | 'source' | 'say' | 'reply' | 'meta';
 
 export interface TlActor { id?: string | null; name?: string | null; agent?: string | null }
 /** 장 안에 접혀 있는 한 줄 — 그 항목이 스스로 데리고 있는 것(작업 기록의 산출지식·커밋 등). */
@@ -36,6 +36,10 @@ export interface TlItem {
   actor?: TlActor | null;
   href?: string | null;    // 누르면 갈 가운데 화면
   children?: TlChild[];    // 있으면 이 항목이 곧 장이 된다
+  /** 지시 전문(#1819) — 한 줄 제목 뒤에 접어 둔 원문. 붙여넣은 덩어리는 여기에만 산다. */
+  full?: string;
+  /** 붙여넣은 줄 수(#1819) — 제목으로 세우지 않고 칩으로 접은 덩어리의 크기. */
+  pasteLines?: number;
   count: number;
   error?: boolean;
 }
@@ -43,7 +47,7 @@ export interface TlItem {
 // ── 위계표 ──────────────────────────────────────────────────────────────────
 const KEEP_VERBS = new Set(['씀', '고침', '남김', '덧붙임', '만듦', '끝냄', '커밋', '기록', '바꿈']);
 const KIND_TIER: Record<TlKind, TlTier> = {
-  file: 2, cmd: 2, knowledge: 2, activity: 1, project: 2, task: 2, source: 2, say: 3, meta: 3,
+  file: 2, cmd: 2, knowledge: 2, activity: 1, project: 2, task: 2, source: 2, say: 3, reply: 3, meta: 3,
 };
 export function tierOf(it: { kind: TlKind; verb: string; tier?: TlTier }): TlTier {
   if (it.tier) return it.tier;
@@ -61,7 +65,7 @@ export const TL_KINDS: Array<{ key: TlKind; label: string }> = [
 //    그 단어가 또 소음이 된다(같은 이유로 세션 뷰의 지시도 비움). 단어는 **소수파일 때만 정보**다.
 const KIND_WORD: Record<string, string> = {
   task: '끝낸 일', knowledge: '지식', activity: '', cmd: '커밋', file: '파일',
-  project: '프로젝트', say: '', source: '자료', meta: '설정',
+  project: '프로젝트', say: '', reply: '답', source: '자료', meta: '설정',
 };
 
 const hhmm = (iso?: string): string => {
@@ -132,7 +136,7 @@ export interface TimelineCtx {
   outcomes?: boolean;
 }
 export interface TimelineHandle {
-  add(item: { id: string; kind: string; verb: string; label: string; key: string; ts?: string; detail?: string; actor?: TlActor | null; href?: string | null; tier?: TlTier; children?: TlChild[] }, at?: 'end' | 'start'): void;
+  add(item: { id: string; kind: string; verb: string; label: string; key: string; ts?: string; detail?: string; actor?: TlActor | null; href?: string | null; tier?: TlTier; children?: TlChild[]; full?: string; pasteLines?: number }, at?: 'end' | 'start'): void;
   result(id: string, output: string, isError: boolean): void;
   addAll(items: Array<Omit<TlItem, 'count'> & { count?: number }>): void;
   setNote(note: string | null): void;
@@ -211,7 +215,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   }
   /** 펼친 카드 안의 한 줄 — 맥락은 카드가 잡았으니 여기서는 촘촘해도 된다. */
   function sub(it: TlItem): HTMLElement {
-    return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : ''), href: it.href || null, title: it.label },
+    return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : '') + (it.error ? ' err' : ''), href: it.href || null, title: it.label },
       el('span', { class: 'tl-sub-v tlk-' + it.kind, text: it.verb }),
       el('span', { class: 'tl-sub-t', text: it.label }),
       it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null,
@@ -262,7 +266,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   function outcomes(): { keep: TlItem[]; rest: TlItem[] } {
     const by = new Map<string, TlItem>();
     for (const it of items) {
-      if (it.kind === 'say') continue;
+      if (it.kind === 'say' || it.kind === 'reply') continue;
       const k = it.kind + '|' + it.label;
       const cur = by.get(k);
       if (!cur) { by.set(k, { ...it }); continue; }
@@ -305,8 +309,88 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
     list.replaceChildren(...kids);
   }
 
+  // ── 질문·대답(#1819 원준 2026-08-21) ────────────────────────────────────────
+  //  ★ 타임라인은 프로젝트가 아니라 **세션**에 딸린 위젯이다. 세션에서 일이 벌어지는 단위는 '내가 시킨 것 하나'이므로
+  //   장(章)의 머리는 내 지시(질문)이고, 몸은 그 지시에 대한 답이다:
+  //    [질문] 내가 한 말 한 줄. 붙여넣은 덩어리는 제목으로 세우지 않고 '붙여넣은 글 N줄' 칩으로 접는다(눌러서 전문).
+  //           — 로그를 통째로 붙여넣은 지시가 제목이 되면 그 한 장이 화면을 다 먹는다(원준 2026-08-21).
+  //    [답]   AI 가 한 말 첫 문장 + 그 지시에서 **남은 것**(파일·지식·커밋·작업 기록).
+  //  ⚠ 한 장에 답은 여러 번 온다("확인하겠습니다" → 도구 → … → 최종 답). 세우는 것은 **마지막 것**이다.
+  //  ⚠ 거터의 말은 '나·다온'이 아니라 '질문·답'이다 — 페르소나 이름은 조직마다 다르므로 화면에 박지 않는다.
+  interface Chap { q: TlItem | null; a: TlItem | null; kids: TlItem[] }
+  function chapters(): Chap[] {
+    const out: Chap[] = [];
+    let cur: Chap | null = null;
+    for (const it of items) {
+      if (isHead(it)) { cur = { q: it, a: null, kids: [] }; out.push(cur); continue; }
+      if (!cur) { cur = { q: null, a: null, kids: [] }; out.push(cur); }   // 창 첫머리(되그린 꼬리) — 버리지 않는다
+      if (it.kind === 'reply') { cur.a = it; continue; }
+      cur.kids.push(it);
+    }
+    // allSays 면 아직 아무 결과도 없는 지시도 선다(세션 발자취의 줄기는 '내가 뭘 시켰나'다).
+    return out.filter((c) => (c.q ? (ctx.allSays || !!c.a || c.kids.length > 0) : (!!c.a || c.kids.length > 0)));
+  }
+
+  /** 질문 한 줄 — 붙여넣은 덩어리는 칩으로 접고, 전문은 눌러서 편다. */
+  function askRow(it: TlItem): HTMLElement {
+    const isOpen = open.has(it.id);
+    const box = el('div', {
+      class: 'tl-card tl-q tlk-say' + (it.full ? ' can' : '') + (isOpen ? ' open' : ''),
+      title: it.label,
+    },
+      el('div', { class: 'tl-gut' }, el('span', { class: 'tl-tm', text: hhmm(it.ts) }), el('span', { class: 'tl-kw', text: '질문' })),
+      el('div', { class: 'tl-main' },
+        it.pasteLines ? el('div', { class: 'tl-paste' }, el('span', { text: '붙여넣은 글 ' + it.pasteLines + '줄' })) : null,
+        el('div', { class: 'tl-head' },
+          el('span', { class: 'tl-ttl', text: it.label || '(빈 지시)' }),
+          it.full ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null),
+        it.full ? el('pre', { class: 'tl-full', hidden: !isOpen, text: it.full }) : null));
+    if (it.full) {
+      box.setAttribute('role', 'button');
+      box.setAttribute('tabindex', '0');
+      box.setAttribute('aria-expanded', String(isOpen));
+      const toggle = (): void => { if (isOpen) open.delete(it.id); else open.add(it.id); paint(); };
+      box.addEventListener('click', toggle);
+      box.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    }
+    return box;
+  }
+
+  /** 대답 — 한 줄 + 그 지시에서 남은 것. 둘 다 없으면 줄 자체가 없다(아직 도는 중인 장). */
+  function ansRow(c: Chap): HTMLElement | null {
+    if (!c.a && !c.kids.length) return null;
+    return el('div', { class: 'tl-card tl-a tlk-reply' + (c.a && c.a.error ? ' err' : '') },
+      el('div', { class: 'tl-gut' }, el('span', { class: 'tl-kw', text: '답' })),
+      el('div', { class: 'tl-main' },
+        c.a ? el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl tl-ans', text: c.a.label, title: c.a.label })) : null,
+        c.kids.length ? el('div', { class: 'tl-kids' }, ...c.kids.map(sub)) : null));
+  }
+
+  function paintQA(): void {
+    const chaps = chapters();
+    countEl.textContent = String(chaps.length);
+    emptyEl.hidden = chaps.length > 0;
+    const kids: HTMLElement[] = [];
+    let day = ' ';
+    let rail: HTMLElement = el('div', { class: 'tl-rail' });
+    for (let i = chaps.length - 1; i >= 0; i--) {              // 최신 장이 위
+      const c = chaps[i];
+      const it0 = c.q || c.a || c.kids[0];
+      const d = dayOf(it0 && it0.ts);
+      if (d !== day) {
+        day = d;
+        if (d) kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
+        rail = el('div', { class: 'tl-rail' });
+        kids.push(el('div', { class: 'tl-group' }, rail));     // 하루 = 한 판(다른 보기와 같은 골격)
+      }
+      rail.append(el('div', { class: 'tl-qa' }, c.q ? askRow(c.q) : null, ansRow(c)));
+    }
+    list.replaceChildren(...kids);
+  }
+
   // ── 그리기 ──
   function paint(): void {
+    if (ctx.chapters) { paintQA(); return; }
     if (ctx.outcomes) { paintOutcomes(); return; }
     type Row = { head: TlItem; kids: TlItem[] } | { solo: TlItem };
     const rows: Row[] = [];
@@ -374,7 +458,8 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
       if (!merge(it, at)) {
         if (at === 'end') items.push(it); else items.unshift(it);
         byId.set(it.id, it); byKey.set(it.key, it);
-        if (isHead(it) && at === 'end') { open.clear(); open.add(it.id); }   // 지금 하는 일만 펼친 채로
+        // #1819 — 장 머리를 자동으로 펼치던 규칙은 뺐다. 이제 접는 것은 '장의 몸'이 아니라 **지시 전문**이고,
+        //  그건 기본이 접힘이어야 한다(붙여넣은 로그가 열린 채로 뜨면 그 한 장이 화면을 다 먹는다).
       }
       schedule();
     },

@@ -20,7 +20,7 @@ import { el, personFace } from './core.js';
 // ── 위계표 ──────────────────────────────────────────────────────────────────
 const KEEP_VERBS = new Set(['씀', '고침', '남김', '덧붙임', '만듦', '끝냄', '커밋', '기록', '바꿈']);
 const KIND_TIER = {
-    file: 2, cmd: 2, knowledge: 2, activity: 1, project: 2, task: 2, source: 2, say: 3, meta: 3,
+    file: 2, cmd: 2, knowledge: 2, activity: 1, project: 2, task: 2, source: 2, say: 3, reply: 3, meta: 3,
 };
 export function tierOf(it) {
     if (it.tier)
@@ -39,7 +39,7 @@ export const TL_KINDS = [
 //    그 단어가 또 소음이 된다(같은 이유로 세션 뷰의 지시도 비움). 단어는 **소수파일 때만 정보**다.
 const KIND_WORD = {
     task: '끝낸 일', knowledge: '지식', activity: '', cmd: '커밋', file: '파일',
-    project: '프로젝트', say: '', source: '자료', meta: '설정',
+    project: '프로젝트', say: '', reply: '답', source: '자료', meta: '설정',
 };
 const hhmm = (iso) => {
     if (!iso)
@@ -171,7 +171,7 @@ export function createTimeline(host, ctx) {
     }
     /** 펼친 카드 안의 한 줄 — 맥락은 카드가 잡았으니 여기서는 촘촘해도 된다. */
     function sub(it) {
-        return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : ''), href: it.href || null, title: it.label }, el('span', { class: 'tl-sub-v tlk-' + it.kind, text: it.verb }), el('span', { class: 'tl-sub-t', text: it.label }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) }));
+        return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : '') + (it.error ? ' err' : ''), href: it.href || null, title: it.label }, el('span', { class: 'tl-sub-v tlk-' + it.kind, text: it.verb }), el('span', { class: 'tl-sub-t', text: it.label }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) }));
     }
     function childLine(c) {
         return el(c.href ? 'a' : 'div', { class: 'tl-sub' + (c.href ? ' go' : ''), href: c.href || null, title: c.label }, el('span', { class: 'tl-sub-v', text: c.verb }), el('span', { class: 'tl-sub-t', text: c.label }));
@@ -218,7 +218,7 @@ export function createTimeline(host, ctx) {
     function outcomes() {
         const by = new Map();
         for (const it of items) {
-            if (it.kind === 'say')
+            if (it.kind === 'say' || it.kind === 'reply')
                 continue;
             const k = it.kind + '|' + it.label;
             const cur = by.get(k);
@@ -269,8 +269,85 @@ export function createTimeline(host, ctx) {
         }
         list.replaceChildren(...kids);
     }
+    function chapters() {
+        const out = [];
+        let cur = null;
+        for (const it of items) {
+            if (isHead(it)) {
+                cur = { q: it, a: null, kids: [] };
+                out.push(cur);
+                continue;
+            }
+            if (!cur) {
+                cur = { q: null, a: null, kids: [] };
+                out.push(cur);
+            } // 창 첫머리(되그린 꼬리) — 버리지 않는다
+            if (it.kind === 'reply') {
+                cur.a = it;
+                continue;
+            }
+            cur.kids.push(it);
+        }
+        // allSays 면 아직 아무 결과도 없는 지시도 선다(세션 발자취의 줄기는 '내가 뭘 시켰나'다).
+        return out.filter((c) => (c.q ? (ctx.allSays || !!c.a || c.kids.length > 0) : (!!c.a || c.kids.length > 0)));
+    }
+    /** 질문 한 줄 — 붙여넣은 덩어리는 칩으로 접고, 전문은 눌러서 편다. */
+    function askRow(it) {
+        const isOpen = open.has(it.id);
+        const box = el('div', {
+            class: 'tl-card tl-q tlk-say' + (it.full ? ' can' : '') + (isOpen ? ' open' : ''),
+            title: it.label,
+        }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-tm', text: hhmm(it.ts) }), el('span', { class: 'tl-kw', text: '질문' })), el('div', { class: 'tl-main' }, it.pasteLines ? el('div', { class: 'tl-paste' }, el('span', { text: '붙여넣은 글 ' + it.pasteLines + '줄' })) : null, el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl', text: it.label || '(빈 지시)' }), it.full ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null), it.full ? el('pre', { class: 'tl-full', hidden: !isOpen, text: it.full }) : null));
+        if (it.full) {
+            box.setAttribute('role', 'button');
+            box.setAttribute('tabindex', '0');
+            box.setAttribute('aria-expanded', String(isOpen));
+            const toggle = () => { if (isOpen)
+                open.delete(it.id);
+            else
+                open.add(it.id); paint(); };
+            box.addEventListener('click', toggle);
+            box.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            } });
+        }
+        return box;
+    }
+    /** 대답 — 한 줄 + 그 지시에서 남은 것. 둘 다 없으면 줄 자체가 없다(아직 도는 중인 장). */
+    function ansRow(c) {
+        if (!c.a && !c.kids.length)
+            return null;
+        return el('div', { class: 'tl-card tl-a tlk-reply' + (c.a && c.a.error ? ' err' : '') }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-kw', text: '답' })), el('div', { class: 'tl-main' }, c.a ? el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl tl-ans', text: c.a.label, title: c.a.label })) : null, c.kids.length ? el('div', { class: 'tl-kids' }, ...c.kids.map(sub)) : null));
+    }
+    function paintQA() {
+        const chaps = chapters();
+        countEl.textContent = String(chaps.length);
+        emptyEl.hidden = chaps.length > 0;
+        const kids = [];
+        let day = ' ';
+        let rail = el('div', { class: 'tl-rail' });
+        for (let i = chaps.length - 1; i >= 0; i--) { // 최신 장이 위
+            const c = chaps[i];
+            const it0 = c.q || c.a || c.kids[0];
+            const d = dayOf(it0 && it0.ts);
+            if (d !== day) {
+                day = d;
+                if (d)
+                    kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
+                rail = el('div', { class: 'tl-rail' });
+                kids.push(el('div', { class: 'tl-group' }, rail)); // 하루 = 한 판(다른 보기와 같은 골격)
+            }
+            rail.append(el('div', { class: 'tl-qa' }, c.q ? askRow(c.q) : null, ansRow(c)));
+        }
+        list.replaceChildren(...kids);
+    }
     // ── 그리기 ──
     function paint() {
+        if (ctx.chapters) {
+            paintQA();
+            return;
+        }
         if (ctx.outcomes) {
             paintOutcomes();
             return;
@@ -355,10 +432,8 @@ export function createTimeline(host, ctx) {
                     items.unshift(it);
                 byId.set(it.id, it);
                 byKey.set(it.key, it);
-                if (isHead(it) && at === 'end') {
-                    open.clear();
-                    open.add(it.id);
-                } // 지금 하는 일만 펼친 채로
+                // #1819 — 장 머리를 자동으로 펼치던 규칙은 뺐다. 이제 접는 것은 '장의 몸'이 아니라 **지시 전문**이고,
+                //  그건 기본이 접힘이어야 한다(붙여넣은 로그가 열린 채로 뜨면 그 한 장이 화면을 다 먹는다).
             }
             schedule();
         },
