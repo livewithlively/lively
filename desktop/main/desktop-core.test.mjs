@@ -1277,7 +1277,10 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(main, /app\.on\("web-contents-created"/, "web-contents-created 훅이 없다 — 자식 창은 규칙 밖이 된다");
     assert.match(main, /setWindowOpenHandler/, "window.open 을 다루지 않는다 — 터미널 새 창이 시스템 브라우저로 나간다");
     assert.match(main, /wc\.on\("will-navigate"/, "최상위 이동을 막지 않는다 — 앱 창이 남의 사이트로 넘어갈 수 있다");
-    const seg = main.slice(main.indexOf("setWindowOpenHandler"), main.indexOf('wc.on("will-navigate"'));
+    // ⚠ 앵커는 **웹 UI 쪽** 핸들러다. #1829 로 같은 훅 안에 브라우저 서피스(webview 게스트)용 핸들러가
+    //  하나 더 생겼고 그게 먼저 온다(게스트를 먼저 갈라 조기 return 해야 서피스가 안 죽는다 — browser-surface.test.mjs F1).
+    //  indexOf 로 잡으면 게스트 쪽이 잡혀 여기 단언이 통째로 엉뚱한 코드를 본다 → 마지막 것을 잡는다.
+    const seg = main.slice(main.lastIndexOf("setWindowOpenHandler"), main.lastIndexOf('wc.on("will-navigate"'));
     assert.match(seg, /openTargetFor\(url, state\.gatewayUrl\)/, "핸들러가 openTargetFor 를 안 쓴다");
     assert.match(seg, /shell\.openExternal\(url\); return \{ action: "deny" \}/, "외부 링크를 브라우저로 넘긴 뒤 거부하지 않는다");
     assert.match(seg, /preload: WEB_PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true/, "자식 창에 같은 preload·격리를 안 준다");
@@ -1360,7 +1363,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     for (const ch of Object.values(IPC_WEB)) assert.ok(ch.startsWith("lively-web:") && !Object.values(IPC).includes(ch));
     // 메인: BOOT 는 동기 응답, LOGOUT 은 CLI logout, 둘 다 게이트웨이 출처에서 온 요청에만
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
-    assert.match(main, /ipcMain\.on\(IPC_WEB\.BOOT, \(e\) => \{[\s\S]*?e\.returnValue = \{ \.\.\.webBootPayload\(/, "BOOT 가 동기 응답이 아니다(비동기면 웹이 토큰 없이 부팅해 로그인 화면이 깜빡인다)");
+    assert.match(main, /ipcMain\.on\(IPC_WEB\.BOOT, \(e\) => \{[\s\S]*?e\.returnValue = \{\s*\.\.\.webBootPayload\(/, "BOOT 가 동기 응답이 아니다(비동기면 웹이 토큰 없이 부팅해 로그인 화면이 깜빡인다)");
     assert.match(main, /frameless: framelessOn\(process\.platform\)/, "BOOT 가 frameless 를 안 준다 — preload 가 타이틀바를 언제 그릴지 모른다");
     const bootSeg = main.slice(main.indexOf("ipcMain.on(IPC_WEB.BOOT"), main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"));
     assert.match(bootSeg, /fromGateway\(e\)/, "BOOT 가 보내는 프레임의 출처를 안 본다");

@@ -10,6 +10,7 @@
 import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
+import { browserSurface } from './browser-surface.js';
 import { bySeen, drawSide as drawSideTree, projectOrder, sessText } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { renderConnect, renderConnectApp } from './connect.js';
@@ -434,9 +435,20 @@ async function renderRoute(tab: ShellTab): Promise<void> {
     } else if (page === 'app' && segs[1]) {
       const a = appByKey(segs[1]);
       const rest = segs.slice(2).join('/');
+      // 브라우저 앱(#1829)은 우리 화면이 아니라 남의 웹이다 — iframe(appFrame)이 아니라 서피스로 띄운다.
+      //  ⚠ 주소는 **한 세그먼트에 encodeURIComponent 로** 싣는다(`#/app/web/https%3A%2F%2Fexample.com`).
+      //   raw 로 넣으면 안 된다 — parseRoute 가 '/' 로 쪼갠 뒤 filter(Boolean) 로 빈 조각을 버려서
+      //   `https://x` 의 `//` 가 `/` 하나로 뭉개진다(`https:/x` = 못 여는 주소).
+      if (a && a.kind === 'browser') {
+        let url = a.home || '';
+        if (segs[2]) { try { url = decodeURIComponent(segs[2]); } catch { url = segs[2]; } }
+        tab.center.replaceChildren(browserSurface({ url, title: a.title }));
+        markActive('app:' + a.key);
+      } else {
       const hash = a ? a.route + (rest ? '/' + rest : '') : segs.slice(1).join('/');
       tab.center.replaceChildren(appFrame(hash, a ? a.title : segs[1]));
       markActive('app:' + (a ? a.key : ''));
+      }
     } else if (CLASSIC_PAGES[page]) {
       const a = appByKey(CLASSIC_PAGES[page]);
       tab.center.replaceChildren(appFrame(raw, a ? a.title : page));

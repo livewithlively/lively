@@ -23,6 +23,7 @@ import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
+import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
@@ -447,6 +448,10 @@ function showApp() {
       webPreferences: {
         preload: WEB_PRELOAD,
         contextIsolation: true, nodeIntegration: false, sandbox: true,   // 원격 페이지다 — 마법사보다 더 믿지 않는다
+        // 브라우저 서피스(#1829) — 웹 UI 가 `<webview>` 로 남의 사이트를 앱 안에 띄울 수 있게 한다(iframe 은 XFO 에 막힌다).
+        //  ⚠ 켠다고 페이지가 마음대로 하는 게 아니다 — 붙는 순간 will-attach-webview 가 preload 를 떼고 node·격리·파티션을
+        //   강제한다(browser-surface.mjs). 그 훅이 없으면 이 한 줄은 XSS→RCE 승격 통로가 된다.
+        webviewTag: true,
       },
     });
     // 첫 그림이 준비되면 보인다. 게이트웨이가 느리면 1.5초 뒤엔 빈 창이라도 띄운다(아무것도 안 뜨면 "안 열린다" 로 보인다).
@@ -528,10 +533,67 @@ async function verifyTokenAfter401(gatewayUrl) {
   } catch { /* 네트워크 실패 = 판정 불가 — 거짓 '만료'가 판정 불가보다 나쁘다. 다음 401 에서 다시 검증한다. */ }
   finally { verifyingToken = false; }
 }
-// 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`)와 최상위 이동 — 어느 웹 컨텐츠든 같은 규칙(web-shell.openTargetFor):
-//  같은 출처(터미널 새 창·그래프)는 앱 안의 새 창으로(토큰은 같은 localStorage 라 그대로 로그인 상태), 바깥은 시스템 브라우저로,
-//  그 외(javascript: 등)는 열지 않는다. 자식 창에도 같은 preload·격리를 준다.
+// 브라우저 서피스(#1829)의 세션 — 남의 사이트 전용 저장소. 한 번만 채비한다(파티션이 하나라 세션도 하나).
+//  ① UA 에서 임베디드 표식을 뗀다(보험 — 실측상 지금 막히는 건 없다) ② 권한은 전부 거부(카메라·마이크·위치…).
+//  ⚠ app ready 전에 부르면 안 된다(session.fromPartition 이 죽는다) — 그래서 부착 훅에서 지연 생성한다.
+let surfaceSessionReady = false;
+function browserSurfaceSession() {
+  const s = session.fromPartition(BROWSER_SURFACE_PARTITION);
+  if (!surfaceSessionReady) {
+    surfaceSessionReady = true;
+    try { s.setUserAgent(cleanUserAgent(s.getUserAgent(), app.getName())); } catch { /* 비치명 — 표식이 남을 뿐이다 */ }
+    // 요구를 조용히 삼키지 않고 거부한다. 사람이 허용하는 흐름이 생기면 surfacePermissionAllowed 를 그때 넓힌다.
+    try { s.setPermissionRequestHandler((_wc, permission, cb) => cb(surfacePermissionAllowed(permission))); } catch { /* 비치명 */ }
+    try { s.setPermissionCheckHandler((_wc, permission) => surfacePermissionAllowed(permission)); } catch { /* 비치명 */ }
+  }
+  return s;
+}
+
+// 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`)와 최상위 이동 — **두 규칙이 산다**:
+//  · 웹 UI(우리 페이지·자식 창): web-shell.openTargetFor — 같은 출처는 앱 안의 새 창으로(토큰이 같은 localStorage 라
+//    그대로 로그인 상태), 바깥은 시스템 브라우저로, 그 외(javascript: 등)는 열지 않는다. 자식 창에도 같은 preload·격리를 준다.
+//  · 브라우저 서피스 게스트(#1829): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
+//  그래서 게스트를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
 app.on("web-contents-created", (_e, wc) => {
+  // ── 브라우저 서피스 안(=`<webview>` 게스트)은 규칙이 정반대다 ───────────────────────────────────────
+  //  아래 웹 UI 규칙(openTargetFor)은 "남의 사이트를 앱에 들이지 않는다" 라 **게이트웨이 밖 이동을 전부 밖으로 던진다**.
+  //  그걸 서피스에도 걸면 남의 사이트를 보려고 만든 화면이 첫 이동에서 통째로 시스템 브라우저로 튄다 — 기능이 죽는다.
+  //  게스트는 `getType() === "webview"` 로 갈린다(Electron 이 주는 신호라 우리가 표시를 붙일 필요가 없다).
+  if (wc.getType() === "webview") {
+    wc.setWindowOpenHandler(({ url }) => {
+      // 서피스 안에서 새 창(`target=_blank`·window.open)은 띄우지 않는다 — 서피스는 창이 아니라 화면 한 칸이라
+      //  떠도 사람이 닫을 크롬이 없다. 볼 수 있는 주소면 시스템 브라우저로 넘긴다(눌렀는데 아무 일도 없는 것보다 낫다).
+      if (surfaceNavTarget(url) !== "deny") shell.openExternal(url);
+      return { action: "deny" };
+    });
+    wc.on("will-navigate", (e, url) => {
+      const t = surfaceNavTarget(url);
+      if (t === "allow") return;
+      e.preventDefault();
+      if (t === "external") shell.openExternal(url);
+    });
+    return;
+  }
+
+  // ── 웹 UI(우리 페이지)가 `<webview>` 를 붙이려 할 때 — 설정은 **페이지가 아니라 여기가** 정한다 ────────
+  wc.on("will-attach-webview", (e, webPreferences, params) => {
+    const d = webviewAttachDecision(params);
+    if (!d.allow) {
+      e.preventDefault();
+      if (d.external && params && params.src) shell.openExternal(params.src);
+      return;
+    }
+    for (const k of WEBVIEW_DROPPED_PREFS) delete webPreferences[k];   // 토큰 주입 preload 를 남의 사이트에서 돌리지 않는다
+    Object.assign(webPreferences, WEBVIEW_FORCED_PREFS);
+    browserSurfaceSession();                                           // UA·권한 정책이 붙은 세션을 준비해 두고
+    // ⚠ **`webPreferences.partition` 이어야 한다. `params.partition` 은 Electron 이 무시한다.**
+    //  실측(43.4.1): `params.partition` 에 넣으면 값은 바뀌는데 게스트는 페이지가 적은 파티션에 그대로 붙는다
+    //  (게스트 session !== 우리 세션, UA·권한 핸들러 전부 미적용 = **격리가 통째로 무력**). `webPreferences` 로
+    //  넣어야 붙는다. 값이 반영된 것처럼 보여서 코드만 읽으면 절대 안 보이는 함정이다 — 바꾸기 전에 실기기로 재라.
+    webPreferences.partition = BROWSER_SURFACE_PARTITION;
+    params.allowpopups = false;   // 팝업의 실질 차단은 게스트의 setWindowOpenHandler 다(이건 겹겹이)
+  });
+
   wc.setWindowOpenHandler(({ url }) => {
     const t = openTargetFor(url, state.gatewayUrl);
     if (t === "external") { shell.openExternal(url); return { action: "deny" }; }
@@ -541,7 +603,7 @@ app.on("web-contents-created", (_e, wc) => {
       overrideBrowserWindowOptions: {
         width: 1100, height: 760, autoHideMenuBar: true, title: "라이블리",
         ...frameOptions(process.platform, osTheme()),   // 자식 창(터미널 새 창)도 같은 타이틀바 규약 — 섞이면 그게 버그로 보인다
-        webPreferences: { preload: WEB_PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true },
+        webPreferences: { preload: WEB_PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: true },
       },
     };
   });
@@ -704,7 +766,13 @@ const fromGateway = (e) => { const o = webOrigin(state.gatewayUrl); try { return
 ipcMain.on(IPC_WEB.BOOT, (e) => {
   const ok = fromGateway(e);
   // frameless 는 출처와 무관하다 — 이 창이 frameless 로 떠 있다는 사실이므로, 어떤 페이지가 실렸든 타이틀바는 있어야 창을 끈다.
-  e.returnValue = { ...webBootPayload({ gatewayUrl: state.gatewayUrl, token: ok ? readTrim(join(LIVELY_DIR, "token")) : null, appVersion: safeAppVersion(), platform: process.platform }), frameless: framelessOn(process.platform) };
+  e.returnValue = {
+    ...webBootPayload({ gatewayUrl: state.gatewayUrl, token: ok ? readTrim(join(LIVELY_DIR, "token")) : null, appVersion: safeAppVersion(), platform: process.platform }),
+    frameless: framelessOn(process.platform),
+    // 브라우저 서피스 능력(#1829) — 웹은 이 값의 **존재 여부로** `<webview>` 를 쓸지 폴백을 그릴지 정한다.
+    //  게이트웨이 출처일 때만 준다: 남의 사이트가 이 창에 실렸다면 우리 능력을 알려 줄 이유가 없다.
+    browserSurface: ok ? { version: BROWSER_SURFACE_VERSION } : null,
+  };
 });
 // 타이틀바 색 보고(preload ③) — Windows 에서만 뜻이 있다(WCO 버튼 색). 값은 titlebarOverlayPatch 가 #RRGGBB 로 강제한다.
 ipcMain.handle(IPC_WEB.TITLEBAR, (e, t) => {
