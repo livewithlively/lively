@@ -82,7 +82,7 @@ export function rqEnsureStyles(): void {
 .rq-row-main:hover{background:var(--bg-tint)}
 .rq-chk{flex:none;width:15px;height:15px;cursor:pointer}
 .rq-badge{flex:none;font-size:10.5px;font-weight:800;padding:2px 7px;border-radius:6px;border:1px solid var(--line)}
-.rq-badge.new{background:var(--bg-success);border-color:var(--mint-soft,#7FE0C4);color:var(--mint-deep)}
+.rq-badge.new{background:var(--bg-success);border-color:var(--node-mint-soft);color:var(--mint-deep)}
 .rq-badge.edit{background:var(--bg-note);border-color:var(--line-note);color:var(--ink-note)}
 .rq-title{flex:1;min-width:0;font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rq-meta{flex:none;display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted-head)}

@@ -201,7 +201,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
             ['공개 범위', inviteNames.length ? ('초대: ' + inviteNames.join(', ')) : '비공개 — 프로젝트 세션은 팀원 공용'],
             ['세션 ID', s.id],
         ];
-        const rowEl = (kv) => el('div', { style: 'display:flex;gap:10px;padding:7px 0;border-bottom:1px solid rgba(127,127,127,.12)' }, el('div', { style: 'flex:0 0 92px;color:var(--muted,#888);font-size:13px', text: kv[0] }), el('div', { style: 'flex:1;min-width:0;word-break:break-all', text: kv[1] }));
+        const rowEl = (kv) => el('div', { style: 'display:flex;gap:10px;padding:7px 0;border-bottom:1px solid rgba(127,127,127,.12)' }, el('div', { style: 'flex:0 0 92px;color:var(--muted);font-size:13px', text: kv[0] }), el('div', { style: 'flex:1;min-width:0;word-break:break-all', text: kv[1] }));
         const enterBtn = el('button', { class: 'btn btn-primary', text: '입장',
             onclick: () => window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank') });
         const back = overlayBox('세션 정보 — ' + (s.label || s.id), el('div', {}, ...rows.map(rowEl)), el('div', { class: 'ov-actions' }, enterBtn, el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() })));

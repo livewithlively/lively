@@ -173,7 +173,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
       ['세션 ID', s.id],
     ];
     const rowEl = (kv) => el('div', { style: 'display:flex;gap:10px;padding:7px 0;border-bottom:1px solid rgba(127,127,127,.12)' },
-      el('div', { style: 'flex:0 0 92px;color:var(--muted,#888);font-size:13px', text: kv[0] }),
+      el('div', { style: 'flex:0 0 92px;color:var(--muted);font-size:13px', text: kv[0] }),
       el('div', { style: 'flex:1;min-width:0;word-break:break-all', text: kv[1] }));
     const enterBtn = el('button', { class: 'btn btn-primary', text: '입장',
       onclick: () => window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank') });

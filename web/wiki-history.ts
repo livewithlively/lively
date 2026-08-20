@@ -48,7 +48,7 @@ function khEnsureStyles(): void {
 .kh-who{flex:1;min-width:0;font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kh-kind{font-size:10.5px;font-weight:800;padding:1px 6px;border-radius:5px;margin-left:6px;border:1px solid var(--line)}
 .kh-kind.ai{background:var(--bg-note);border-color:var(--line-note);color:var(--ink-note)}
-.kh-kind.human{background:var(--bg-success);border-color:var(--mint-soft,#7FE0C4);color:var(--mint-deep)}
+.kh-kind.human{background:var(--bg-success);border-color:var(--node-mint-soft);color:var(--mint-deep)}
 .kh-cat{flex:none;font-size:11.5px;color:var(--ink-sub);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kh-delta{flex:none;font-family:ui-monospace,monospace;font-size:11px;font-weight:700}
 .kh-delta .add{color:var(--mint-deep)}

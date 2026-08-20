@@ -629,7 +629,7 @@ async function pjvBulkList(anchor) {
     catch (_) { /* graceful */ }
     menu.replaceChildren(headEl);
     const mkItem = (label, listId, color) => {
-        const item = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line, #2a2a33)') }), el('span', { class: 'pjv-asg-mname', text: label }));
+        const item = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line)') }), el('span', { class: 'pjv-asg-mname', text: label }));
         item.onclick = () => { close(); pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }), '리스트로 이동됨'); };
         return item;
     };
