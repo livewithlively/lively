@@ -5,7 +5,8 @@
 //     ⚠ **출처가 게이트웨이일 때만** 넣는다. preload 는 이 창이 무엇을 싣든 돌므로(리다이렉트·외부 IdP 등)
 //      출처를 안 보면 남의 사이트에 우리 토큰을 흘린다. 문서 시작 시점(페이지 스크립트보다 먼저)에 동기로 받는다 —
 //      비동기면 웹의 boot() 가 토큰 없이 /api/ui/me 를 쳐서 로그인 화면이 한 번 깜빡인다.
-//  ② `window.livelyDesktop` — 웹이 '데스크톱 안' 임을 알고 로그아웃을 데스크톱으로 넘기게 하는 최소 다리.
+//  ② `window.livelyDesktop` — 웹이 '데스크톱 안' 임을 알고, 앱만 할 수 있는 일(로그아웃·서피스·**앱 업데이트 적용**)을
+//     넘기게 하는 최소 다리. 전부 **인자 없는 단일 동작**이거나 메인이 형태를 강제하는 값이다.
 //     설치·노드를 움직이는 채널(preload.cjs 의 것)은 **여기 없다** — 원격 페이지에 CLI 실행 통로를 주지 않는다.
 //  ③ 커스텀 타이틀바: 창이 frameless 라(웹셸 규약 web-shell.frameOptions) 페이지 위 36px 스트립을 **preload 가** 그린다.
 //     웹(게이트웨이)이 아니라 여기가 소유하는 이유 — 타이틀바는 frameless 와 한 몸이라 **앱과 함께** 배포돼야 한다.
@@ -65,6 +66,22 @@ contextBridge.exposeInMainWorld("livelyDesktop", {
     install: () => ipcRenderer.invoke("lively-web:ext-install"),
     remove: (id) => ipcRenderer.invoke("lively-web:ext-remove", { id: String(id || "") }),
   } : null,
+  // 앱 업데이트(#1838) — 받아 둔 새 버전을 **웹 UI 가 알고, 그 자리에서 적용**하게 하는 다리.
+  //  · 있고 없음이 곧 능력 선언이다: 구 앱 + 새 웹이면 이 객체가 없어 웹은 아무것도 그리지 않는다(브라우저도 같다).
+  //  · 값을 넣어 두지 않고 물어보게 한다(get) — preload 는 문서 시작 때 한 번 도는데, 업데이트는 그 뒤에 받아진다.
+  //  · onChange 는 **구독 해제 함수**를 돌려준다. 화면이 다시 그려질 때 해제하지 않으면 리스너가 쌓이고,
+  //    그만큼 같은 갱신이 여러 번 그려진다(트레이 리스너 누적으로 이미 겪은 자리다 — main.getUpdater 머리말).
+  //  ⚠ 인자를 받지 않는다 — 페이지가 정할 값이 하나도 없다. 하는 일은 '이 앱을 다시 시작' 하나뿐이다.
+  update: {
+    get: () => ipcRenderer.invoke("lively-web:update-state"),
+    apply: () => ipcRenderer.invoke("lively-web:update-apply"),
+    onChange: (cb) => {
+      if (typeof cb !== "function") return () => {};
+      const h = (_e, payload) => { try { cb(payload); } catch { /* 화면 쪽 오류가 다리를 끊지 않게 */ } };
+      ipcRenderer.on("lively-web:update", h);
+      return () => ipcRenderer.removeListener("lively-web:update", h);
+    },
+  },
 });
 
 // ── ③ 커스텀 타이틀바 — frameless 창에서만(리눅스는 네이티브 프레임 그대로 → boot.frameless=false) ──────────

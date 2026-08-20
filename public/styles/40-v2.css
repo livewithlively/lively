@@ -5,14 +5,14 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* ── 임베드 모드: 새 셸이 클래식 화면을 iframe 에 실을 때. 크롬만 걷고 화면 코드는 그대로. ── */
-body.embed #org-banner, body.embed header.topbar, body.embed footer.app-foot, body.embed #skip-link { display: none !important; }
+body.embed #org-banner, body.embed #desktop-update, body.embed header.topbar, body.embed footer.app-foot, body.embed #skip-link { display: none !important; }
 body.embed #view { padding-top: 12px; }
 body.embed .liv-head { display: none; } /* 리브 페이지도 임베드되면 '← 라이블리'가 이중이 된다 */
 
 /* ── 새 셸 켜짐: 클래식 크롬 숨김, 뿌리 전체 화면 ── */
 body[data-ui="v2"] { height: 100vh; overflow: hidden; margin: 0; }
 body[data-ui="v2"] #app { display: block !important; height: 100vh; }
-body[data-ui="v2"] #org-banner, body[data-ui="v2"] header.topbar, body[data-ui="v2"] main#view, body[data-ui="v2"] footer.app-foot, body[data-ui="v2"] #skip-link { display: none !important; }
+body[data-ui="v2"] #org-banner, body[data-ui="v2"] #desktop-update, body[data-ui="v2"] header.topbar, body[data-ui="v2"] main#view, body[data-ui="v2"] footer.app-foot, body[data-ui="v2"] #skip-link { display: none !important; }
 /* 세 칸 + 사이 손잡이 둘(v2/split.ts) — 너비는 변수, 손잡이가 바꾼다(기억됨). no-aside 면 우패널·그 손잡이는 0. */
 #v2-root { --v2-side-w: 292px; --v2-aside-w: 316px; height: 100vh; display: grid; grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); background: var(--bg); color: var(--ink); }
 #v2-root.no-aside { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
