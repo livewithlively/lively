@@ -255,15 +255,22 @@ export function mergePathDirs(loginPath, currentPath, extras, sep) {
 }
 function loginShellPath() {
   if (process.platform === "win32") return "";
-  // 마커로 감싼다 — 셸 rc 가 stdout 에 찍는 잡음(모트·에코)과 PATH 를 가른다. -l(로그인)만 쓰고 -i 는 안 쓴다
-  //  (-i 는 tty 를 기다리다 매달릴 수 있다). SHELL 미설정(GUI 컨텍스트)이면 macOS 기본 zsh 로 폴백.
+  // 마커로 감싼다 — 셸 rc 가 stdout 에 찍는 잡음(모트·에코)과 PATH 를 가른다. SHELL 미설정(GUI 컨텍스트)이면
+  //  macOS 기본 zsh 로 폴백. **-lc 와 -ilc 둘 다 물어 합친다** — zsh 의 -l(비대화 로그인)은 .zshrc 를 읽지 않아
+  //  nvm·claude 네이티브 설치처럼 PATH 를 .zshrc 에만 넣는 관례가 통째로 빠진다(실측 2026-08-20 원준 맥:
+  //  트레이로 시작한 노드의 pane 이 claude 를 못 찾음. brew 설치 맥은 -l 로 충분해 멀쩡 — 설치 방식 복불복이었다).
+  //  -i 의 tty 대기 우려는 stdin=ignore + timeout 으로 프로브별 격리 — 매달리면 그 프로브만 조용히 실패한다.
   const sh = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-  try {
-    const out = execFileSync(sh, ["-lc", 'printf "<<<LIVELY_PATH:%s>>>" "$PATH"'],
-      { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] });
-    const m = /<<<LIVELY_PATH:([^>]*)>>>/.exec(out);
-    return m ? m[1] : "";
-  } catch { return ""; }
+  const paths = [];
+  for (const flag of ["-lc", "-ilc"]) {
+    try {
+      const out = execFileSync(sh, [flag, 'printf "<<<LIVELY_PATH:%s>>>" "$PATH"'],
+        { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] });
+      const m = /<<<LIVELY_PATH:([^>]*)>>>/.exec(out);
+      if (m && m[1]) paths.push(m[1]);
+    } catch { /* 이 프로브만 포기 */ }
+  }
+  return paths.join(":");
 }
 function bakedNodePath() {
   if (process.platform === "win32") return process.env.PATH || "";
