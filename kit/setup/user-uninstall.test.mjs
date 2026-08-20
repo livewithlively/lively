@@ -12,6 +12,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name) => { pass++; console.log(`ok  ${name}`); };
@@ -70,12 +71,23 @@ function symlinkedBundle(prefix) {
     const box = mkdtempSync(join(tmpdir(), "uninst-mcp-"));
     const home = join(box, "home");
     const USER_URL = "https://user-owns-this.example/mcp"; // 유저가 설치 전부터 쓰던 linear URL
+    // ⚠ 이 블록은 **진짜 claude CLI** 를 부른다(통합 왕복이 이 케이스의 값어치다). 그래서 격리가
+    //  샌다면 실행한 사람의 실제 ~/.claude.json 을 덮어쓴다 — 2026-08-20 실측 사고가 정확히 이것이었다
+    //  (lively MCP 등록이 `http://localhost:8080/mcp` + `Bearer dummy`, 즉 아래 픽스처 값으로 덮임).
+    //  닫아야 할 구멍이 둘이다:
+    //   ① HOME 만으로는 **윈도우에서 무효** — node·claude 의 os.homedir() 는 USERPROFILE 을 본다.
+    //      sandboxEnv() 가 HOME·USERPROFILE·TMPDIR·TEMP·TMP 를 한 벌로 돌린다(#1510).
+    //   ② 셸에 CLAUDE_CONFIG_DIR 가 export 돼 있으면(웹터미널 프로필 격리 #346) **그게 HOME 을 이겨**
+    //      claude 가 실 프로필에 쓴다(#1786 윈도우 훅 전멸이 이 경로였다). 상속을 끊는다.
+    //  빈 문자열로 덮는 이유: 소비자들이 전부 `CLAUDE_CONFIG_DIR || <기본>` / `${…:-}` 로 읽으므로
+    //   빈 값이면 "없음"으로 폴백한다. delete 와 달리 **넘긴다는 사실이 코드에 남아** 다음 사람이 지운다.
+    const boxEnv = { ...process.env, ...sandboxEnv({ home, tmp: box }), CLAUDE_CONFIG_DIR: "" };
     mkdirSync(join(home, ".claude"), { recursive: true });
     // d.claude=true 되도록 lively 훅 심긴 settings.json(.lively/hooks/ 마커) — 없으면 uninstall 이 claude 블록을 건너뛴다.
     writeFileSync(join(home, ".claude", "settings.json"),
       JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: 'node "$HOME/.lively/hooks/session-preload.mjs"' }] }] } }) + "\n");
     spawnSync("claude", ["mcp", "add-json", "linear", JSON.stringify({ type: "http", url: USER_URL }), "--scope", "user"],
-      { env: { ...process.env, HOME: home }, stdio: "ignore" }); // 유저의 설치-전 linear
+      { env: boxEnv, stdio: "ignore" }); // 유저의 설치-전 linear
     mkdirSync(join(home, ".lively"), { recursive: true });
     writeFileSync(join(home, ".lively", "mcp-servers.json"),
       JSON.stringify({ servers: [
@@ -85,10 +97,10 @@ function symlinkedBundle(prefix) {
     writeFileSync(join(home, ".lively", "kit-version"), "test\n");
     // 설치: register-clients.sh — 덮어쓰기 전 최초 1회 스냅샷 + 덮어쓰기
     spawnSync("bash", [join(HERE, "register-clients.sh")],
-      { env: { ...process.env, HOME: home, STORE_URL: "http://localhost:8080/mcp", LIVELY_TOKEN: "dummy" }, stdio: "ignore" });
+      { env: { ...boxEnv, STORE_URL: "http://localhost:8080/mcp", LIVELY_TOKEN: "dummy" }, stdio: "ignore" });
     // 제거: user-uninstall — remove 후 유저 원본 복원
     spawnSync(process.execPath, [join(HERE, "user-uninstall.mjs"), "--yes"],
-      { env: { ...process.env, HOME: home, LIVELY_HOME: home }, stdio: "ignore" });
+      { env: { ...boxEnv, LIVELY_HOME: home }, stdio: "ignore" });
     let m = {};
     try { m = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers || {}; } catch { /* */ }
     const linearOk = !!(m.linear && m.linear.url === USER_URL); // 유저 원본으로 복원
