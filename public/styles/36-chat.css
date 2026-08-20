@@ -131,6 +131,14 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-meta a { color: var(--ink-sub); text-decoration: none; }
 .sc-meta a:hover { color: var(--blue); }
 .sc-sep { color: var(--muted-2, #a6b2c8); }
+/* 지금 무엇으로 돌고 있나(모델·추론강도) — 하네스 이름 옆. 자기 안에서도 sc-meta 와 같은 리듬(6px)을 쓴다.
+   [hidden] 을 다시 적는 것은 display:inline-flex 가 hidden 속성의 기본 display:none 을 이기기 때문이다. */
+.sc-run { display: inline-flex; align-items: center; gap: 6px; }
+.sc-run[hidden] { display: none; }
+/* 이 줄에 남은 값은 전부 짧고 폭이 고정이다(상태 · 하네스 · 모델 · 추론강도) — 좁아질 때 줄어드는 쪽은
+   제목(.sc-titlebox) 하나다. 길어서 오른쪽 조작부를 타고 넘던 프로젝트 이름은 이 줄에서 내려갔다
+   (2026-08-20 — 1440px 에서 '최대'가 '연결됨' 위에 겹쳐 찍혔다. 지금은 [⋯ ▸ 이 세션]). */
+.sc-meta { min-width: 0; }
 .sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
@@ -279,7 +287,6 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   button.sc-title { font-size: 15px; max-width: 100%; }
   .sc-title-in { font-size: 16px; width: 100%; }
   .sc-meta { flex: 1 1 100%; overflow: hidden; }
-  .sc-meta .sc-proj > a { max-width: min(240px, 46vw); }
   .sc-head-r { flex: 1 1 100%; justify-content: flex-start; gap: 2px; margin-left: -6px; }
   .sc-act { font-size: 13px; padding: 7px 9px; min-height: 36px; }
   .sc-wait { flex-wrap: wrap; padding: 9px 12px; }
