@@ -205,7 +205,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .livc-desktop .livc-mark { margin: 6px 0 0; }
 .livc-desktop .livc-err { margin-top: 8px; }
 
-/* 접힌 도구 줄 — "도구 N개 사용함 ›" · 펼치면 슬립이 그대로 */
+/* 접힌 도구 줄 — "라이블리 5개 · 명령 2개 사용함 ›"(문구는 web/chat-tool-group.ts) · 펼치면 슬립이 그대로 */
 .dt-tools { margin: 6px 0; }
 .dt-tools > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: baseline; gap: 7px;
   font-size: 12.5px; line-height: 1.5; color: var(--ink-sub); padding: 3px 0; border-radius: 6px; }
