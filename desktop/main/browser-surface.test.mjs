@@ -156,4 +156,18 @@ t("F6 웹은 **기능 감지**로 능력을 본다 — 플랫폼·UA 추측 금�
   assert.match(WEBSURF, /'webview'/, "폴백만 있고 실제 서피스를 안 만든다");
 });
 
+t("F7 ★ 세션 곁칸 '웹' 도 능력이 있으면 서피스로 그린다 — 원래 신고가 난 자리다", () => {
+  const pane = readFileSync(fileURLToPath(new URL("../../web/v2/panes-parts.ts", import.meta.url)), "utf8");
+  const at = pane.indexOf("function webPart(");
+  assert.ok(at >= 0, "웹 칸이 없다");
+  const seg = pane.slice(at, at + 2200);
+  assert.match(seg, /hasBrowserSurface\(\)/, "★ 능력 감지를 안 한다 — 데스크톱에서도 iframe 이라 막힌 사이트가 그대로 막힌다");
+  assert.match(seg, /el\('webview', \{ class: 'pn-webframe' \}\)/, "★ 능력이 있어도 webview 로 안 그린다");
+  // src 는 프로퍼티 대입이 아니라 **속성**으로 — webview 는 부착 전 프로퍼티 대입이 안 먹는다
+  assert.ok(!/frame\.src = /.test(seg), "★ frame.src 프로퍼티 대입 — webview 에선 안 먹는다");
+  assert.match(seg, /frame\.setAttribute\('src', /, "속성으로 안 넣는다");
+  // 데스크톱에선 "막혀서 빈 화면" 안내가 거짓말이 된다
+  assert.match(seg, /live \? null : el\('p', \{ class: 'pn-web-note/, "★ 서피스에서도 '막혔다' 안내를 띄운다 — 거짓 안내다");
+});
+
 console.log(`\n${pass} passed`);

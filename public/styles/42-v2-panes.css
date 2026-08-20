@@ -351,7 +351,9 @@
 .pn-web-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
 .pn-web-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg, #fff); font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; text-decoration: none; flex: none; }
 .pn-web-btn:hover { color: var(--blue); border-color: var(--blue); }
-.pn-webframe { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; }
+.pn-webframe { flex: 1; min-height: 0; min-width: 0; width: 100%; border: 0; background: #fff; }
+/* 데스크톱 앱(#1829)에서는 이 칸이 <webview> 다 — 교체 요소라 내재 크기로 버티므로 flex 자식임을 명시한다. */
+webview.pn-webframe { display: flex; }
 .pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
 .pn-ed-pick { max-width: 46%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
 .pn-ed-body { flex: 1; min-height: 0; display: flex; }
