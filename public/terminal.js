@@ -484,7 +484,46 @@
     { v: "Monaco, 'D2Coding', monospace", label: "Monaco" },
     { v: "Consolas, 'D2Coding', monospace", label: "Consolas" }
   ];
+  var ANSI_DARK = {
+    black: "#2B3549",
+    red: "#F07E7E",
+    green: "#37B592",
+    yellow: "#F0A32B",
+    blue: "#6E9AF8",
+    magenta: "#A29AE8",
+    cyan: "#3EC4C6",
+    white: "#B0BDD5",
+    brightBlack: "#74839F",
+    brightRed: "#F6B3AB",
+    brightGreen: "#43E5B0",
+    brightYellow: "#F0C97E",
+    brightBlue: "#8FB2FA",
+    brightMagenta: "#C0B8FF",
+    brightCyan: "#6FE0E2",
+    brightWhite: "#EAF0FA"
+  };
+  var ANSI_LIGHT = {
+    black: "#15233B",
+    red: "#C7443F",
+    green: "#0F7A5F",
+    yellow: "#8A5A00",
+    blue: "#2453C7",
+    magenta: "#6C4FB8",
+    cyan: "#0E6E70",
+    white: "#5A6B85",
+    brightBlack: "#64728A",
+    brightRed: "#B84E44",
+    brightGreen: "#0A805F",
+    brightYellow: "#6B4E00",
+    brightBlue: "#2D6BF0",
+    brightMagenta: "#5B4FA8",
+    brightCyan: "#12797B",
+    brightWhite: "#15233B"
+  };
+  var APP_DARK = Object.assign({ background: "#111726", foreground: "#EAF0FA", cursor: "#43E5B0", selectionBackground: "#2B3B5C" }, ANSI_DARK);
+  var APP_LIGHT = Object.assign({ background: "#FFFFFF", foreground: "#15233B", cursor: "#2D6BF0", selectionBackground: "#CFE0F7" }, ANSI_LIGHT);
   var THEMES = {
+    auto: { name: "\uC571 \uD14C\uB9C8 \uB530\uB984", auto: true },
     dark: { name: "\uB2E4\uD06C", dark: true, theme: { background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc", selectionBackground: "#585b70" } },
     light: { name: "\uB77C\uC774\uD2B8", dark: false, theme: { background: "#fdfdfd", foreground: "#2a2a2a", cursor: "#5566ff", selectionBackground: "#cfe3ff" } },
     dracula: { name: "Dracula", dark: true, theme: { background: "#282a36", foreground: "#f8f8f2", cursor: "#ff79c6", selectionBackground: "#44475a" } },
@@ -492,6 +531,24 @@
     nord: { name: "Nord", dark: true, theme: { background: "#2e3440", foreground: "#d8dee9", cursor: "#88c0d0", selectionBackground: "#434c5e" } },
     github: { name: "GitHub Light", dark: false, theme: { background: "#ffffff", foreground: "#24292f", cursor: "#0969da", selectionBackground: "#b6e3ff" } }
   };
+  function appIsDark() {
+    try {
+      const p = localStorage.getItem("lv:theme");
+      if (p === "dark") return true;
+      if (p === "light") return false;
+    } catch (_) {
+    }
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+  function resolveTheme(key) {
+    const t = THEMES[key] || THEMES.auto;
+    if (t.auto) return appIsDark() ? APP_DARK : APP_LIGHT;
+    return t.theme;
+  }
+  function themeIsDark(key) {
+    const t = THEMES[key] || THEMES.auto;
+    return t.auto ? appIsDark() : !!t.dark;
+  }
   function withKR(ff) {
     ff = String(ff || FONTS[0].v);
     if (/D2Coding/i.test(ff)) return ff;
@@ -504,8 +561,12 @@
       p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
     } catch (_) {
     }
-    const browserDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const merged = Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? "dark" : "light", cursorStyle: "bar", scrollSpeed: 3, padGain: 3 }, p);
+    const merged = Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: "auto", cursorStyle: "bar", scrollSpeed: 3, padGain: 3 }, p);
+    if (!merged.themeAutoMigrated && (merged.theme === "dark" || merged.theme === "light")) {
+      merged.theme = "auto";
+      merged.themeAutoMigrated = true;
+      savePrefs(merged);
+    }
     merged.fontFamily = withKR(merged.fontFamily);
     return merged;
   }
@@ -516,9 +577,32 @@
     }
   }
   function applyChrome(themeKey) {
-    const t = THEMES[themeKey] || THEMES.dark;
-    document.documentElement.dataset.theme = t.dark ? "dark" : "light";
-    document.documentElement.style.setProperty("--term-bg", t.theme.background);
+    const th = resolveTheme(themeKey);
+    document.documentElement.dataset.theme = themeIsDark(themeKey) ? "dark" : "light";
+    document.documentElement.style.setProperty("--term-bg", th.background);
+  }
+  function syncAppTheme() {
+    const p = prefs();
+    if (p.theme !== "auto") return;
+    const th = resolveTheme("auto");
+    try {
+      if (term) term.options.theme = th;
+    } catch (_) {
+    }
+    applyChrome("auto");
+    try {
+      doResize();
+    } catch (_) {
+    }
+  }
+  function watchAppTheme() {
+    window.addEventListener("storage", (e) => {
+      if (!e.key || e.key === "lv:theme") syncAppTheme();
+    });
+    try {
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncAppTheme);
+    } catch (_) {
+    }
   }
   var API_PREFIX = (() => {
     const m = /^(\/preview\/[A-Za-z0-9][A-Za-z0-9._-]*)\//.exec(location.pathname);
@@ -575,7 +659,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build c85a5751",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build d8a9b14e",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -2191,7 +2275,7 @@
       term.options.fontFamily = np.fontFamily;
       term.options.fontSize = np.fontSize;
       term.options.cursorStyle = np.cursorStyle;
-      term.options.theme = (THEMES[np.theme] || THEMES.dark).theme;
+      term.options.theme = resolveTheme(np.theme);
       scrollSpeed = np.scrollSpeed;
       padGain = np.padGain;
       savePrefs(np);
@@ -2306,7 +2390,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "c85a5751 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "d8a9b14e \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2688,6 +2772,7 @@
     scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
     padGain = Math.max(0.5, Math.min(6, Number(p.padGain) || 3));
     applyChrome(p.theme);
+    watchAppTheme();
     if (!SESSION_ID) {
       gate('\uC138\uC158\uC774 \uC9C0\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uC138\uC158 \uBAA9\uB85D\uC5D0\uC11C "\uC5F4\uAE30"\uB85C \uC9C4\uC785\uD558\uC138\uC694.');
       return;
@@ -2779,7 +2864,7 @@
       fontSize: p.fontSize,
       cursorStyle: p.cursorStyle,
       cursorBlink: true,
-      theme: (THEMES[p.theme] || THEMES.dark).theme,
+      theme: resolveTheme(p.theme),
       scrollback: 1e4,
       allowProposedApi: true,
       // OSC 8 하이퍼링크(#1541) — TUI(claude 등)가 표시 텍스트와 별개의 URI 를 심는 형식. 핸들러가 없으면 xterm 은

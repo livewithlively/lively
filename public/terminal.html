@@ -13,13 +13,17 @@
   /* 한글 코딩 글꼴 D2Coding — 자체호스팅(public/fonts, OFL). #279 한글 가독성 */
   @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
   @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding-Bold.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: swap; }
+  /* 크롬 팔레트(#1683) — 앱(public/styles/01-base.css·90-dark.css)과 같은 브랜드 축. 이 페이지는 앱 셸 밖에서
+     뜨므로 토큰을 import 할 수 없어 값을 옮겨 적는다(같은 값을 두 곳에 두는 대신, 축을 하나로 유지한다).
+     data-theme 은 terminal.ts 의 applyChrome 이 찍는다 — 기본 테마 auto 면 앱 테마를 그대로 따른다.
+     --term-bg 도 applyChrome 이 실제 xterm 배경으로 덮으므로, 여기 값은 스크립트 전 첫 페인트용이다. */
   :root {
-    --bg: #ffffff; --bg2: #f4f5f7; --fg: #1f2328; --fg-dim: #6b7280; --border: #e5e7eb;
-    --accent: #16a37f; --danger: #c0392b; --term-bg: #1e1e2e;
+    --bg: #FFFFFF; --bg2: #F6FAFF; --fg: #15233B; --fg-dim: #5A6B85; --border: #E6ECF5;
+    --accent: #0FA37E; --danger: #B84E44; --term-bg: #FFFFFF;
   }
   html[data-theme="dark"] {
-    --bg: #181825; --bg2: #1e1e2e; --fg: #cdd6f4; --fg-dim: #9399b2; --border: #313244;
-    --accent: #16C79A; --danger: #f38ba8; --term-bg: #1e1e2e;
+    --bg: #111726; --bg2: #1A2336; --fg: #EAF0FA; --fg-dim: #B0BDD5; --border: #273349;
+    --accent: #2BD3A5; --danger: #F49B91; --term-bg: #111726;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
@@ -219,6 +223,9 @@
     .pop.pop-help, .pop.pop-hint { width: min(460px, 94vw); }
   }
 </style>
+<!-- 테마 pre-paint(#1683) — 저장된 앱 테마(lv:theme)를 CSS 로드 전에 찍는다. 이 페이지는 앱 셸 밖이지만
+     같은 출처라 그 키가 보인다. 키 없음 = 시스템 따름(@media 가 받는다). 그 뒤 terminal.js 의 applyChrome 이 실제 테마(auto면 앱 테마)로 다시 찍는다. -->
+<script>(function(){try{var t=localStorage.getItem('lv:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
 </head>
 <body>
 <div id="root"></div>

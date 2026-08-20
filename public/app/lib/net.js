@@ -76,6 +76,18 @@ async function api(path, opts = {}) {
     const ws = currentWorkspace();
     if (ws && ws !== 'primary')
         headers['x-lively-workspace'] = ws;
+    // 화면 테마(#1683) — 이 브라우저가 지금 **실제로 보고 있는** 테마. 세션을 만들 때 서버가 이 값을
+    //  pane env(COLORFGBG·LIVELY_THEME)로 내려, 터미널 안에서 도는 하네스가 배경에 맞는 색을 고르게 한다
+    //  (src/terminal/sessions.ts). 여기 한 자리가 모든 세션 생성 경로를 덮는다 — 호출부가 여럿이라
+    //  (홈 입력창·새 세션 폼·프로젝트·me-ai…) payload 마다 넣으면 하나씩 빠진다.
+    //  ⚠ 해석 로직을 web/theme.ts 에서 import 하지 않고 여기 3줄로 되풀이한다 — 이 모듈은 **우리 모듈 import 0 인
+    //   leaf** 가 계약이기 때문이다(파일 머리 주석). 키 이름('lv:theme')과 규칙(없음=시스템 따름)이 계약면이다.
+    try {
+        const pref = localStorage.getItem('lv:theme');
+        const dark = pref === 'dark' || (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        headers['x-lively-theme'] = dark ? 'dark' : 'light';
+    }
+    catch (_) { /* 스토리지·matchMedia 없는 문맥 — 헤더 생략(서버는 미지정으로 본다) */ }
     if (opts.body)
         headers['Content-Type'] = 'application/json';
     const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
