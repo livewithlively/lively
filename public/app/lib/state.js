@@ -43,8 +43,8 @@ function navOn(tab) {
 //  우선순위: ① URL ?ui=classic|v2 (이번 로드에만 — 링크로 상대 화면을 보여줄 때)
 //           ② 브라우저 로컬 오버라이드 localStorage[lively_ui_mode] (관리탭 [화면] 의 '이 브라우저에서만' 버튼)
 //           ③ 조직 기본 me.ui_mode (org_runtime_config.ui_mode — 관리자가 정함, 매니지드는 컨트롤플레인이 push)
-//           ④ 'v2' (제품 기본 — 서버가 값을 못 준 구 게이트웨이도 새 셸로 뜬다)
-//  ⚠ 셀프호스트가 옛 화면을 유지하려면 ③ 을 classic 으로 두면 된다(어니스트 등 기배포는 운영자가 수동 설정 — 대표 결정).
+//           ④ 'classic' (제품 기본 — 대표 결정 2026-08-20: v2 는 베타라 완성 전까지 opt-in. 서버가 값을 못 줘도 종전 화면)
+//  새 화면(베타)을 쓰려면 ③ 을 v2 로 올리거나(조직), 관리탭 [화면] 의 '이 브라우저에서만'으로 개인만 켠다.
 const UI_MODE_KEY = 'lively_ui_mode';
 function uiMode() {
     try {
@@ -57,7 +57,7 @@ function uiMode() {
     }
     catch (_) { /* localStorage 접근 불가(프라이버시 모드 등) → 조직 기본으로 */ }
     const m = state.me && state.me.ui_mode;
-    return m === 'classic' ? 'classic' : 'v2';
+    return m === 'v2' ? 'v2' : 'classic';
 }
 // 로컬 오버라이드 쓰기 — null 이면 해제(조직 기본으로 복귀). 관리탭 [화면] 과 새 셸의 '클래식으로' 링크가 쓴다.
 function setUiModeOverride(m) {
