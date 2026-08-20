@@ -3,6 +3,7 @@
 //  설치 시맨틱을 쓰도록 한 곳에 둔다(선례: seed 가 인라인하던 diff/runInstall 블록을 여기로 승격).
 import { getApp, listComponents, upsertUiAsset, pruneUiAssets } from "../org/store/apps.js";
 import type { LoadedApp } from "./loader.js";
+import { ensureAppTables } from "./store-schema.js";
 import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
 import { diffComponents, type AppComponentRef } from "./install-plan.js";
@@ -38,6 +39,10 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // UI entry HTML 보존(PR5) — 설치가 active 로 저널된 뒤. best-effort: 실패해도 앱(하네스·principal)은 유효하고
   //  다음 설치/시드가 재보존한다. seed 의 skip 경로도 같은 헬퍼로 백필한다(마이그레이션 — 기존 설치 앱).
   await persistUiAssets(loaded);
+
+  // 앱 데이터 테이블(app 스키마, D6) — 선언 테이블을 소유자 커넥션으로 생성(tenant_id+RLS 한 몸). best-effort per-table.
+  try { await ensureAppTables(id, loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns }))); }
+  catch (err) { logger.warn({ err, id }, "앱 데이터 테이블 보장 실패(비치명 — 다음 설치/부팅이 재보장)"); }
 
   for (const c of drop) {
     try { await deps.reclaim(c); } catch { /* best-effort — 저널이 스위퍼를 부른다 */ }

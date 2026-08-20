@@ -24,6 +24,7 @@ import { statusTemplateV6Capabilities } from "./status-templates-v6.js";
 import { favoritesCapabilities } from "./favorites.js";
 import { appCapabilities } from "./apps.js";
 import { appToolCallCapabilities } from "./app-tool-call.js";
+import { appStoreCapabilities } from "./app-store.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
 import { folderV6Capabilities } from "./folders-v6.js";
@@ -116,6 +117,7 @@ const all: Capability[] = [
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
   ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.
   ...appToolCallCapabilities, // #1780 PR5b: 앱 UI 브리지 tools/call(org_app_tool_call, REST 전용) — 앱 UI 의 도구 호출을 앱 principal 로 재판정 실행.
+  ...appStoreCapabilities, // #1780 D6: 앱 데이터 store_*(insert/query/tables) — 앱이 자기 app 스키마 테이블을 RLS 격리 하에 읽고 쓴다.
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
