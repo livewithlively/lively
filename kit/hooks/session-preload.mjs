@@ -547,6 +547,17 @@ function takeUpdateNotice() {
   } catch { return null; }
 }
 
+// fetch 이후의 종료는 process.exit 직호출 금지(#249) — Windows(Node 24)에서 undici 핸들 정리와
+//  process.exit 가 겹치면 libuv 가 src/win/async.c:76 어서션으로 abort 한다(작업은 끝난 뒤라 무해하지만
+//  매 세션 빨간 에러). dispatcher 를 먼저 닫고 루프가 비면 자연 종료, 안 비면 250ms unref 타이머가
+//  강제 종료한다 — "훅이 안 끝나 세션이 멈추는" 회귀 없음. fetch 전 조기 exit 는 그대로 둔다(핸들 없음).
+function safeExit(code = 0) {
+  process.exitCode = code;
+  try { globalThis[Symbol.for("undici.globalDispatcher.1")]?.close?.()?.catch?.(() => {}); } catch { /* noop */ }
+  const t = setTimeout(() => process.exit(code), 250);
+  if (typeof t.unref === "function") t.unref();
+}
+
 // 전체 하드 타임박스 4.5s — 어느 경로든 exit 0
 // 출력 = [정적 org-context(게이트웨이 우선, 로컬 폴백)]. 라이브 현황 블록은 폐기(v6 — 구 item/curate 모델 기반이라 제거).
 async function main() {
@@ -571,7 +582,7 @@ async function main() {
     const notice = takeUpdateNotice(); // 직전 업데이트 결과 안내(있으면 이번 세션에 1회)
     maybeSelfUpdate(rc && rc.kit_version);
     // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
-    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); process.exit(0); }
+    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); safeExit(0); return; }
     // 레포 통지는 org-context 앞에 — 길이가 긴 컨텍스트 뒤에 묻히면 안 되는 '지금 이 세션의 상태'다.
     const blocks = [notice, repoNotice, orgCtx || STATIC].filter(Boolean); // 업데이트 안내 → 레포 실패 → org-context(없으면 로컬 STATIC)
     emitContext(withRo(blocks.join("\n\n")), { reloadSkills: healed }); // 읽기전용이면 배너를 맨 앞에(#1007)
@@ -579,7 +590,7 @@ async function main() {
     // fail-open — 라이브가 터져도 정적 컨텍스트(로컬)·레포 통지는 내보낸다.
     emitContext(withRo([repoNotice, STATIC].filter(Boolean).join("\n\n")));
   }
-  process.exit(0);
+  safeExit(0);
 }
 
 // main-guard(#959) — 이 파일이 직접 실행될 때만 main() 을 돈다. 테스트가 reconcileExtPullWiring 을 import 할 때

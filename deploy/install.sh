@@ -122,5 +122,10 @@ main() {
   echo ""
   log "다음: 이 호스트에서 'claude' 로그인(중앙박스 세션이 쓸 계정) → 웹UI 로그인 → 고객 DB(읽기전용)·구성원 등록."
   [ "$OS" = linux ] && log "서비스 로그: journalctl -u lively-gateway -f   또는   tail -f $APP_DIR/logs/gateway.log"
+  # macOS 는 SG 같은 방화벽 계층이 없다(#250) — 전 인터페이스 바인딩(기본)이면 같은 LAN 의 임의 기기가 :$PORT 에 도달한다.
+  #  ⚠ `[ … ] && warn` 금지: main 의 마지막 명령이라 비-mac 에서 main 이 1 을 반환해 스크립트가 exit 1 로 끝난다.
+  if [ "$OS" = mac ]; then
+    warn "이 호스트는 방화벽 계층이 없습니다 — 같은 LAN 노출을 원치 않으면 .env 에 BIND_HOST=127.0.0.1 을 넣고 재기동한 뒤, 원격 접속은 tailscale serve 등 앞단으로 노출하세요."
+  fi
 }
 main "$@"

@@ -15,7 +15,7 @@ claude mcp remove "$MCP_LABEL" 2>/dev/null || true
 #  stdio 는 로컬 프로세스라 항상 connected 이고, 상류가 살아나면 tools/list_changed 로 되살아난다.
 #  종전 헤더(Authorization·x-lively-session#852·x-lively-mode#1007+)는 사라진 게 아니라 **프록시가
 #  ~/.lively/token 과 세션 env 에서 읽어 상류 호출에 붙인다**(kit/cli/lively-mcp-gateway.mjs).
-#  ⚠ kit/cli/lively.mjs registerLivelyMcp 와 **같은 transport 를 유지할 것**(lively.test.mjs ④ 가 두 트윈을 함께 못박는다).
+#  ⚠ kit/cli/lively.mjs registerClaudeMcp 와 **같은 transport 를 유지할 것**(lively.test.mjs ④ 가 두 트윈을 함께 못박는다).
 LIVELY_SHIM="${LIVELY_SHIM:-$HOME/.lively/bin/lively}"
 if [ -x "$LIVELY_SHIM" ] && [ -f "$HOME/.lively/lib/lively-mcp-gateway.mjs" ] \
    && [ "$(cat "$HOME/.lively/mcp-transport" 2>/dev/null || true)" != "http" ]; then

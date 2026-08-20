@@ -98,7 +98,9 @@ run_as_service() {
 #  게이트웨이 유저 = ${SERVICE_USER:-현재유저}. 호출자(provision=lively, update=현재보존)가 SERVICE_USER 로 지정.
 render_service_unit() {
   local svc_user="${SERVICE_USER:-$(id -un)}"
-  local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6)"; svc_home="${svc_home:-$HOME}"
+  # ⚠ `|| true` 필수(#246) — getent 는 macOS 에 없어(127) pipefail+set -e 가 설치를 여기서 무언 중단시킨다.
+  #  값은 linux 분기(@PATH@ 치환)만 쓰므로 폴백($HOME)으로 충분하다.
+  local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6 || true)"; svc_home="${svc_home:-$HOME}"
   require_cmd node   # set -e 에서 `$(command -v node)` 는 미설치 시 무언 exit(빈 ExecStart 유닛). 명시적 die 로 조기 차단.
   local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
   # 게이트웨이(비-운영자 lively)가 런타임에 '쓰는' 디렉토리는 서비스유저 소유여야 한다 — logs(systemd append) +
@@ -154,7 +156,7 @@ render_bluegreen_unit() {
   #  조용히 실행자 유닛이 렌더되므로 함수 자체가 불변식을 강제한다(알 수 없으면 폴백 말고 die).
   [ -n "${SERVICE_USER:-}" ] || die "render_bluegreen_unit: SERVICE_USER 미설정 — 호출자가 서비스 유저를 export 해야 합니다(silent 실행자 드리프트 금지)."
   local svc_user="$SERVICE_USER"
-  local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6)"; svc_home="${svc_home:-$HOME}"
+  local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6 || true)"; svc_home="${svc_home:-$HOME}"  # || true: #246 과 동일(pipefail)
   require_cmd node   # set -e 에서 `$(command -v node)` 는 미설치 시 무언 exit(빈 ExecStart 유닛). 명시적 die 로 조기 차단.
   local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
   # 게이트웨이가 런타임에 '쓰는' 공유 디렉토리는 서비스유저 소유 — render_service_unit 과 동일 원칙·동일 멱등성.
@@ -399,9 +401,10 @@ DOMAINMAP_DATABASE_URL=postgres://lively:$pgpw@localhost:$idbport/domainmap
 # db_query 용 고객 제품 DB 는 웹UI(org_db_source)로 등록(읽기전용 리플리카). DATABASE_URL env 자동등록은 폐기됨.
 
 # ── 에이전트/MCP bearer 토큰(정적) ──
-#  scope=context/items/db 만 — admin/runtime 은 DANGEROUS_SCOPES 라 거부(kill-switch). 사람관리=세션 로그인.
+#  scope=context/items/db/memory — admin/runtime 은 DANGEROUS_SCOPES 라 거부(kill-switch). 사람관리=세션 로그인.
+#  memory 는 knowledge_* 게이트(#248) — 없으면 호스트 세션의 지식 조회·저장이 전부 Forbidden(조용히 실패).
 #  운영 시 회수가능 DB 토큰(lvk_)으로 발급 권장.
-AUTH_TOKENS_JSON='{"$token":{"userId":"agent","email":"agent@$orgdom","scopes":["context","items","db"],"projects":["*"]}}'
+AUTH_TOKENS_JSON='{"$token":{"userId":"agent","email":"agent@$orgdom","scopes":["context","items","db","memory"],"projects":["*"]}}'
 WEBHOOK_SECRET=$webhook
 
 # ── at-rest 암호화 키 — git 자격(#540)·커넥터 토큰(#541)을 DB에 봉투 암호화(secret-box)하는 공용 마스터키. ──

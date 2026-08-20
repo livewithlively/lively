@@ -507,7 +507,7 @@ function codexAutoApproveLines() {
   return out;
 }
 
-// lively 본체 MCP 등록 — claude 와 **같은 transport 규약**을 쓴다(register-clients.sh · lively.mjs registerLivelyMcp).
+// lively 본체 MCP 등록 — claude 와 **같은 transport 규약**을 쓴다(register-clients.sh · lively.mjs registerClaudeMcp).
 //  기본은 로컬 stdio 프록시(`lively mcp`). codex 에서 이게 특히 중요한 이유:
 //   ① codex 의 http_headers 는 **정적 문자열**이라 세션 env 를 확장하지 못한다 → http 직결로는
 //      x-lively-session(#852 — 작업기록의 세션 축)·x-lively-mode(#1007 — 읽기전용/incognito)를 **영영 못 보낸다**.

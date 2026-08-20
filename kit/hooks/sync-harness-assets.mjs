@@ -473,5 +473,11 @@ async function main() {
   await reportLocalInventory(new Set(Object.keys(next)));
 }
 
+// fetch 이후의 종료는 process.exit 직호출 금지(#249) — Windows(Node 24)에서 undici 핸들 정리와
+//  process.exit 가 겹치면 libuv 어서션(src/win/async.c:76) abort. session-preload.mjs safeExit 와 동형:
+//  dispatcher 닫고 자연 종료, 안 비면 250ms unref 타이머가 강제 종료(세션 시작을 막는 회귀 없음).
 try { await Promise.race([main(), new Promise((r) => setTimeout(r, HARD_MS + 500))]); } catch { /* fail-open */ }
-process.exit(0);
+process.exitCode = 0;
+try { globalThis[Symbol.for("undici.globalDispatcher.1")]?.close?.()?.catch?.(() => {}); } catch { /* noop */ }
+const finalT = setTimeout(() => process.exit(0), 250);
+if (typeof finalT.unref === "function") finalT.unref();
