@@ -34,6 +34,26 @@ const DEF_LAYOUT = () => ({
     sideOn: true, bottomOn: false,
 });
 const ALL = new Set(PART_DEFS.map((d) => d.type));
+/** ⚠ 불변식: **세션 부품은 가운데 칸에만 산다.**
+ *  세션은 탭을 만들지 않는다(고르기는 사이드바가 한다 — 아래 'tabsOf' 주석). 그래서 곁칸·아래 칸에 들어가면
+ *  탭도 ×도 없어 **뺄 방법이 사라지고**, 그 칸에 세션만 남으면 탭 줄 자체가 숨어 ＋ 마저 없어진다
+ *  (원준 2026-08-20 신고: "세션이 어디 열린 건지도 모르겠고 닫을 수도 없어 골머리"). 넣는 길을 막고(addBtn·moveTab),
+ *  이미 그렇게 저장된 배치는 여기서 되돌린다 — 갇힌 사람은 새로고침 한 번으로 풀린다. */
+function normalizeLayout(lay) {
+    for (const z of ['side', 'bottom']) {
+        const i = lay[z].indexOf('sessions');
+        if (i < 0)
+            continue;
+        lay[z].splice(i, 1);
+        if (lay.act[z] === 'sessions')
+            lay.act[z] = lay[z][0] || null;
+    }
+    if (!lay.main.includes('sessions'))
+        lay.main.unshift('sessions');
+    if (!lay.act.main || !lay.main.includes(lay.act.main))
+        lay.act.main = 'sessions';
+    return lay;
+}
 function loadLayout() {
     try {
         const s = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
@@ -53,7 +73,7 @@ function loadLayout() {
         // 저장된 배치가 모든 칸에서 비었으면(옛 판·손상) 기본으로 — 빈 화면을 보여 주는 것보다 낫다.
         if (!lay.main.length && !lay.side.length && !lay.bottom.length)
             return d;
-        return lay;
+        return normalizeLayout(lay);
     }
     catch (_) {
         return DEF_LAYOUT();
@@ -77,6 +97,7 @@ export function mountPanes(host, opts) {
         }
         catch (_) { /* noop */ }
     }
+    saveLayout(); // loadLayout 의 교정(normalizeLayout)을 디스크에도 남긴다 — 갇힌 배치가 한 번 열고 끝나지 않게
     const pj = () => (loose ? { id: 0, name: '프로젝트 없는 세션' } : (detail && detail.project) || { id, name: '프로젝트 #' + id });
     const ctx = {
         id,
@@ -191,6 +212,8 @@ export function mountPanes(host, opts) {
             activate(to, type);
             return;
         }
+        if (type === 'sessions' && to !== 'main')
+            return; // 세션은 가운데 칸 밖으로 나가지 않는다(위 불변식)
         removeTab(from, type);
         addTab(to, type);
     }
@@ -217,7 +240,9 @@ export function mountPanes(host, opts) {
     function addBtn(zone) {
         const b = el('button', { class: 'pn-tab-add', type: 'button', title: '이 칸에 내용을 더합니다', 'aria-label': '내용 더하기' }, pnIcon('plus', 'pn-i sm'));
         b.onclick = () => {
-            const rest = PART_DEFS.filter((d) => !lay[zone].includes(d.type) && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'overview' || d.type === 'liv')));
+            const rest = PART_DEFS.filter((d) => !lay[zone].includes(d.type)
+                && !(d.type === 'sessions' && zone !== 'main') // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
+                && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'overview' || d.type === 'liv')));
             const close = anchoredPopover(b, el('div', { class: 'pn-pop' }, el('p', { class: 'pn-pop-h', text: '이 칸에 넣을 것을 고르세요.' }), rest.length ? el('div', { class: 'pn-pop-list' }, ...rest.map((d) => el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); addTab(zone, d.type); } }, pnIcon(d.icon, 'pn-i sm'), el('span', { class: 'n' }, el('b', { text: d.name }), el('span', { class: 'pn-fine', text: d.hint })))))
                 : el('p', { class: 'pn-fine', text: '넣을 수 있는 것을 이미 다 넣었어요.' }), 
             // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
