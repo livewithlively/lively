@@ -8,6 +8,7 @@ import {
   getOrgProfile, listTokens, getRuntimeConfig, listMcpServers, listOrgHooks, listOrgHarnessAssets, listAssetPrefs, listTools,
   listDbSources, listConnectors
 } from "../../org/store.js";
+import { effectiveHooks, seedHookIds } from "../../org/delivery/seed-hook-lock.js";
 import { envSourcesPayload, maskDbSource } from "./db-sources.js";
 import { membersPayload } from "./members.js";
 import { sectionsPayload } from "./org-content.js";
@@ -43,7 +44,9 @@ export const overviewCapabilities: Capability[] = [
       const dbSources = isAdmin ? await listDbSources() : [];
       const envSources = isAdmin ? await envSourcesPayload(new Set(dbSources.map((s) => s.name))) : [];
       // runtime 권한자: 커스텀 훅·툴 목록 + 빌트인 목록 + 툴 정책(allowlist — 시크릿 아님).
-      const orgHooks = isRuntime ? await listOrgHooks() : [];
+      // #1836 — 시드 훅은 코드가 SoT 라 화면도 실행본(코드 본문)을 보여야 한다. lockedHookIds 로 관리탭이
+      //  read-only·배지를 그린다(편집 시도는 서버가 409 로 막지만, 막히기 전에 화면이 먼저 말해야 한다).
+      const orgHooks = isRuntime ? effectiveHooks(await listOrgHooks()) : [];
       const orgHarnessAssets = isRuntime ? await listOrgHarnessAssets() : [];
       const orgAssetPrefs = isRuntime ? await listAssetPrefs() : []; // #699: 멤버 개인 오버라이드(관리탭 '일괄 조회')
       const tools = isRuntime ? await listTools() : [];
@@ -55,7 +58,7 @@ export const overviewCapabilities: Capability[] = [
         profile, sections: sectionMap, sectionDefaults, writebackNoticeDefault,
         members: memberRows, tokens, runtimeConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
-        orgHooks, orgHarnessAssets, orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
+        orgHooks, lockedHookIds: isRuntime ? seedHookIds() : [], orgHarnessAssets, orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
     }),
