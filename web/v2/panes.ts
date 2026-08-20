@@ -25,7 +25,7 @@
 import { anchoredPopover, api, el, personFace, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { makeSplitter } from './split.js';
-import { PART_DEFS, lookupSessNames, makePart, partDef, pnIcon, sessTitle, type Part, type PartCtx, type PartType } from './panes-parts.js';
+import { PART_DEFS, hiddenSessions, hideSession, lookupSessNames, makePart, partDef, pnIcon, sessTitle, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
 import { dotCls, type Sess, type V2Data } from './views.js';
 
@@ -241,19 +241,34 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       class: 'pn-tab pn-stab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(on),
       title: t + ' — ' + s.stateLabel, onclick: () => { part.selectSession?.(s.id); paintPane('main'); },
     }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { class: 'ell', text: t }));
+    // ×는 **모든 세션 탭**에 있다(원준 2026-08-20 "탭을 닫을 수가 없음"). 하는 일이 상태에 따라 갈릴 뿐이다:
+    //  · 살아 있는 내 세션 → 확인창 뒤 **보관**(터미널을 내리고 대화·설정은 남긴다) + 탭에서 치움.
+    //  · 그 밖(끝난 세션·남의 세션) → 내릴 터미널이 없으니 **탭에서만 치운다**. 둘 다 [보관한 세션]에 남는다.
     const canArchive = s.owned && s.live && s.alive;
-    const x = canArchive ? el('button', {
-      class: 'pn-tab-x', type: 'button', title: '이 세션을 보관합니다 — 대화는 남고, [보관한 세션]에서 되살릴 수 있어요.',
-      'aria-label': `「${t}」 세션 보관`,
-      onclick: (e: MouseEvent) => { e.stopPropagation(); void archiveSess(s, t); },
-    }, pnIcon('x', 'pn-i xs')) : null;
-    const wrap = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') }, b);
-    if (x) wrap.append(x);
-    return wrap;
+    const x = el('button', {
+      class: 'pn-tab-x', type: 'button',
+      title: canArchive ? '이 세션을 보관합니다 — 대화는 남고, [보관한 세션]에서 되살릴 수 있어요.'
+        : '탭에서 치웁니다 — 세션은 [보관한 세션]에 그대로 있어요.',
+      'aria-label': canArchive ? `「${t}」 세션 보관` : `「${t}」 탭 치우기`,
+      onclick: (e: MouseEvent) => { e.stopPropagation(); void closeSessTab(s, t, part); },
+    }, pnIcon('x', 'pn-i xs'));
+    return el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') }, b, x);
   }
 
-  /** 세션 보관 — 터미널만 내리고 좌표·대화는 DB 에 남긴다(DELETE ?reclaim=1 = restorable). */
-  async function archiveSess(s: Sess, name: string): Promise<void> {
+  /** 탭 × — 살아 있는 내 세션이면 보관까지, 아니면 보기에서만 치운다. 치운 뒤 보던 탭이면 옆 탭으로 옮겨 준다. */
+  async function closeSessTab(s: Sess, name: string, part: Part): Promise<void> {
+    if (s.owned && s.live && s.alive) { if (!await archiveSess(s, name)) return; }
+    hideSession(s.id);
+    if (part.currentSession?.() === s.id) {
+      const next = mySessions().find((x) => x.id !== s.id && !hiddenSessions().has(x.id));
+      part.selectSession?.(next ? next.id : null);
+    }
+    if (!(s.owned && s.live && s.alive)) toast('탭에서 치웠어요 — [보관한 세션]에 그대로 있어요.');
+    paintPane('main');
+  }
+
+  /** 세션 보관 — 터미널만 내리고 좌표·대화는 DB 에 남긴다(DELETE ?reclaim=1 = restorable). 성공하면 true. */
+  async function archiveSess(s: Sess, name: string): Promise<boolean> {
     const working = s.stateKey === 'busy' || s.stateKey === 'waiting';
     const ok = await confirmDialog({
       title: `「${name}」 세션을 보관할까요?`,
@@ -261,14 +276,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       lines: ['대화와 설정은 그대로 남습니다 — [보관한 세션]에서 언제든 되살릴 수 있어요.'],
       confirmText: '보관', danger: working,
     });
-    if (!ok) return;
+    if (!ok) return false;
     try {
       await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : ''), { method: 'DELETE' });
       toast('세션을 보관했어요 — [보관한 세션]에서 되살릴 수 있어요.');
       opts.onProjectChanged?.();
-      paintPane('main');
+      return true;
     } catch (e: any) {
       toast('보관하지 못했어요 — ' + (e && e.message ? e.message : e), true);
+      return false;
     }
   }
 
@@ -277,7 +293,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const part = pane.parts.get('sessions');
     if (!part || !part.selectSession) return [];
     const cur = part.currentSession?.() ?? null;
-    const ss = mySessions();
+    const hid = hiddenSessions();
+    // 치운 탭은 줄에서 빠진다 — 단 **지금 보고 있는 세션은 예외**(보는 화면의 탭이 없으면 어디 있는지 알 수 없다).
+    const ss = mySessions().filter((s) => !hid.has(s.id) || s.id === cur);
     const shown = ss.slice(0, SESS_TAB_MAX);
     // 지금 보는 세션이 상한 밖이면 그 탭만은 끼워 넣는다 — 켜진 것이 안 보이면 어디 있는지 알 수 없다.
     const out = ss.find((s) => s.id === cur && !shown.some((x) => x.id === s.id));
@@ -434,9 +452,14 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   paintAll();
   if (!loose && !detail) void refreshDetail();
 
+  // [보관한 세션]에서 [탭에 꺼내기]를 누르면 이 줄을 그 자리에서 다시 그린다(8초 틱을 기다리지 않게).
+  const onViewChanged = (): void => { if (!dead) paintPane('main'); };
+  window.addEventListener('pn:sessions-view', onViewChanged);
+
   return {
     destroy(): void {
       dead = true;
+      window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
       for (const pane of panes.values()) for (const p of pane.parts.values()) p.destroy?.();
       panes.clear();
