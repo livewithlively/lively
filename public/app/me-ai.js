@@ -2,7 +2,8 @@
 //  (#1313 R38, admin.ts 에서 verbatim 분리).
 //  개인 레이어(org_member.body_md)의 선택지·직렬화·복원은 me-profile.ts 소유를 그대로 쓴다(PROF_* · profChips ·
 //   parseMyProfile) — 규약이 두 벌이 되면 [내 정보] 모달과 이 화면의 저장이 서로를 지운다.
-import { api, appUrl, busy, cardHead, el, errorNote, state, toast, uiText, withTip } from './core.js';
+import { api, busy, cardHead, el, errorNote, state, toast, uiText, withTip } from './core.js';
+import { sessionTermUrl } from './lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { field, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 import { PROF_DEV, PROF_LANG, PROF_TONE, parseMyProfile, profChips } from './me-profile.js';
@@ -56,7 +57,7 @@ function aiAccountRow(a, mySessions, reload) {
                 }) });
             toast('로그인용 세션을 열었습니다 — ' + (AI_LOGIN_HINT[a.key] || '그 세션에서 로그인하세요.'));
             if (out && out.session)
-                window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || ''), '_blank');
+                window.open(sessionTermUrl(out.session.id, { label: out.session.label }), '_blank');
         }
         catch (e) {
             toast('로그인 세션을 열지 못했습니다 — ' + ((e && e.message) || e), true);

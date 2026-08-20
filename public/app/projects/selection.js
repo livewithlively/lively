@@ -8,7 +8,8 @@
 //    · pjvDrag._init — pjvDragInit() 이 pointerover/pointerup 을 1회만
 //    · pjvReorder._init — pjvReorderInit() 이 pointermove/pointerup 을 1회만
 //   따라서 플래그(pjvDrag·pjvReorder·pjvBulkBarEl)와 그 init 함수는 절대 갈라놓지 않는다.
-import { api, appUrl, el, infoPop, personFace, state, sv, toast } from '../core.js';
+import { api, el, infoPop, personFace, state, sv, toast } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlayBox } from '../learn.js';
 //  ⚠ 배럴(../projects.js) 경유 — copyText·openLocalWorkModal 의 소유는 projects/detail-sections.ts(R35) 지만
 //   그쪽은 detail.ts 를 되짚는 상세 서브트리라, 직결하면 selection→detail-sections→detail→selection 순환이
@@ -270,7 +271,7 @@ async function pjvBulkRunClaude(btn) {
             localStorage.setItem('lively:autosend:' + sid, prompt);
         }
         catch (_) { /* */ }
-        window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(sid) + '&label=' + encodeURIComponent((r.session && r.session.label) || label) + '&autosend=1', '_blank');
+        window.open(sessionTermUrl(sid, { label: (r.session && r.session.label) || label, autosend: true }), '_blank');
         toast(ids.length + '개 태스크(본문·하위·첨부 포함)를 클로드에게 맡겼어요 — 새 탭에서 실행됩니다');
         pjvSelReset();
     }

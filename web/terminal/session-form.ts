@@ -1,7 +1,8 @@
 // terminal/session-form.ts — 세션 **생성·수정 폼**과 그 부속: 실행 설정 기억(#673/#782) · 초대 피커 · 노드 관리 · 로그인 배너/프로필 안내.
 //  소비자: terminal/{session-list,routes}.ts + 프로젝트·대시보드 탭(배럴 terminal.ts 경유).
 //  import 방향: select-bar(아래층)만 본다. 목록 재렌더는 routes.ts 를 직접 import 하지 않고 아래 훅으로 부른다(순환 방지).
-import { api, appUrl, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
+import { api, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { field, overlay } from '../admin.js';
 import { isTourActive } from '../tour.js';
 import { termUrl } from './select-bar.js';
@@ -63,7 +64,7 @@ async function openLoginSession(view) {
       label: '내 계정 로그인', rootKey: 'personal', subpath: '', harness: 'claude', flags: {}, autoApprove: false, loginProfile: true,
     }) });
     toast('로그인 터미널을 열었습니다 — 뜨는 claude 에서 로그인을 진행하세요');
-    if (out && out.session) window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || ''), '_blank');
+    if (out && out.session) window.open(sessionTermUrl(out.session.id, { label: out.session.label }), '_blank');
     renderTerminal(view);
   } catch (e) { toast('로그인 터미널 열기 실패 — ' + e.message, true); }
 }
@@ -552,7 +553,7 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
           });
           back.remove();
           toast('세션 생성됨');
-          if (out && out.session) window.open(termUrl(out.session.id, out.session.label, nodeId, fromTour ? '&welcome=1' : ''), '_blank');
+          if (out && out.session) window.open(termUrl(out.session.id, out.session.label, nodeId, { welcome: !!fromTour }), '_blank');
           if (onCreated) onCreated(out); else renderTerminal(view);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
       } })));

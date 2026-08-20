@@ -27,9 +27,11 @@ const eq = (got, want, n) => { assert.equal(got, want, `${n}: '${want}' 여야 �
 // ① 자동 복원 — 사용자 개입 없이 세션을 되살리는 유일한 칸.
 eq(goneMode({ restorable: true, canRestore: true, exitedByUser: false }, false), "auto",
   "①중단됨(재부팅·자동회수) + 내 세션 → 자동 복원");
-// ② 내가 끝낸 것은 묻는다.
-eq(goneMode({ restorable: true, canRestore: true, exitedByUser: true }, false), "ask",
-  "②내가 /exit 로 끝낸 세션 → 되살릴지 물어봄");
+// ② #1820 정정 — **과거에** /exit 한 세션도 '지금 열었으면' 되살린다. 목록에서 골라 연 사람은 그걸 쓰려는 것이고,
+//  종전 'ask' 는 복원 가능 세션의 대부분(dev 실측 198건 중 다수)을 막다른 길로 만들었다. '내가 방금 끝냈다'는
+//  이 탭의 입력(typed)이 정확히 가른다 — 아래 ㉜.
+eq(goneMode({ restorable: true, canRestore: true, exitedByUser: true }, false), "auto",
+  "②과거에 /exit 한 세션도 새로 열면 되살린다(#1820)");
 // ③④ 복원 권한 없음 — exit 여부와 무관하게 같은 답.
 eq(goneMode({ restorable: true, canRestore: false, exitedByUser: false }, false), "notowner",
   "③복원가능하지만 내 세션이 아님(프로젝트 공동 세션) → 복원 불가 안내");
@@ -57,11 +59,16 @@ eq(goneMode({ restorable: true, canRestore: true }, false), "auto",
 //  원리적으로 기록할 수 없고, 이어받을 대화도 없다 → 자동 복원은 exit 를 무시하는 셈이 된다. 그리고 이 탭에서
 //  키를 눌렀다는 사실 자체가 '내가 만지다 끝냈다'의 신호다(자동 복원의 목적은 '열었더니 죽어 있다'뿐).
 const mid = { restorable: true, canRestore: true, exitedByUser: false, harness: "claude" };
-eq(goneMode(mid, false, false, false), "auto", "㉙claude + 중단됨 + 입력없음 = 자동 복원(유일한 auto)");
-eq(goneMode({ ...mid, harness: "shell" }, false, false, false), "ask",
-  "㉚셸 세션은 자동 복원하지 않는다(exit 신호를 얻을 수 없고 이어받을 대화도 없다)");
-eq(goneMode({ ...mid, harness: "codex" }, false, false, false), "ask", "㉛claude 가 아닌 하네스 전부 동일");
-eq(goneMode(mid, false, false, true), "ask", "㉜이 탭에서 입력이 있었으면 자동 복원하지 않는다");
+eq(goneMode(mid, false, false, false), "auto", "㉙claude + 중단됨 + 입력없음 = 자동 복원");
+// #1820 정정 — 하네스는 더 이상 자동 복원을 가르지 않는다. 종전 근거였던 "셸은 exit 신호를 못 얻는다"는
+//  **여는 시점**엔 성립하지 않는다(그 신호가 필요한 건 '쓰던 중'이고 그건 typed 가 잡는다). 그리고 #1711 이후
+//  codex·opencode·antigravity 도 각자 수단으로 대화를 이어받으므로 '복원의 이득이 없다'도 거짓이 됐다.
+eq(goneMode({ ...mid, harness: "shell" }, false, false, false), "auto",
+  "㉚셸 세션도 열면 되살린다 — 같은 폴더·설정으로 다시 여는 것이 사용자가 기대하는 일(#1820)");
+eq(goneMode({ ...mid, harness: "codex" }, false, false, false), "auto", "㉛claude 가 아닌 하네스 전부 동일");
+eq(goneMode(mid, false, false, true), "ask", "㉜이 탭에서 입력이 있었으면 자동 복원하지 않는다(유일한 ask)");
+eq(goneMode({ ...mid, harness: "shell" }, false, false, true), "ask",
+  "㉜-b 셸에서 exit 한 그 탭은 여전히 묻는다 — 2026-07-28 '복원 루프' 사고의 브레이크는 typed 다");
 eq(goneMode({ ...mid, harness: undefined }, false, false, false), "auto",
   "㉞harness 미상(구 응답)은 종전대로 auto — 새 필드 부재가 기능을 죽이지 않는다");
 
@@ -91,10 +98,13 @@ eq(goneMode({ ...mid, harness: undefined }, false, false, false), "auto",
 //  세션'은 어떤 상태여도 auto 가 되면 안 된다. 이 세 행이 그 브레이크다.
 eq(goneMode({ restorable: true, canRestore: true, exitedByUser: false, harness: "claude" }, false, true), "loop",
   "㉓복원으로 열린 페이지가 (내 조작 없이) 또 끊기면 자동 복원하지 않는다(루프 차단)");
-// ⚠ 2026-07-28 정정: 종전엔 이 케이스를 loop 로 잡았는데, 그러면 '복원해서 쓰다가 또 exit 한' 정상 종료에
-//  "이어받을 대화를 못 찾았다"는 **틀린 설명**이 떴다(실측 신고). exit 기록은 loop 보다 앞선다.
-eq(goneMode({ restorable: true, canRestore: true, exitedByUser: true, harness: "claude" }, false, true), "ask",
-  "㉔exit 기록이 있으면 복원 직후여도 loop 가 아니라 ask (문구가 사유를 맞게 말해야 한다)");
+// ⚠ 2026-07-28 정정 → #1820 재정정: '복원해서 쓰다가 또 exit 한' 정상 종료에 "이어받을 대화를 못 찾았다"는
+//  **틀린 설명**이 뜨면 안 된다. 그 사실을 가르는 신호가 종전엔 exitedByUser(과거 기록)였는데, 그건 새로 연
+//  세션까지 막았다. 지금은 **typed**(이 탭에서 조작했다)가 가른다 — 더 정확하다(그 자리에서 일어난 일이므로).
+eq(goneMode({ restorable: true, canRestore: true, exitedByUser: true, harness: "claude" }, false, true, true), "ask",
+  "㉔복원해서 쓰다가 내가 끝낸 경우(typed) → loop 가 아니라 ask (문구가 사유를 맞게 말해야 한다)");
+eq(goneMode({ restorable: true, canRestore: true, exitedByUser: true, harness: "claude" }, false, true, false), "loop",
+  "㉔-b 복원 직후 **손대지도 않았는데** 또 죽었으면 exit 기록이 있어도 loop — 되살리기를 멈추고 사람에게 맡긴다");
 eq(goneMode({ restorable: true, canRestore: false, exitedByUser: false }, false, true), "notowner",
   "㉕권한 없음이 loop 보다 앞선다(남의 세션은 애초에 복원 불가)");
 eq(goneMode(null, false, true), "end", "㉖복원 직후여도 기록이 없으면 종료 안내");

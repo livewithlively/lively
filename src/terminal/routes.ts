@@ -36,6 +36,7 @@ import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";  
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
 import { chatIoCaps } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
+import { deadSessionMeta } from "./session-meta.js";                 // #1820 — 죽은 세션이 '복원 가능'을 말하는 단일 판정
 
 // 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
 //  으로 묻히면 원인 진단이 불가능하다(#869 haru 사례: 세션 생성 500 의 진짜 원인이 로그에만 있고 응답엔 안 나왔다).
@@ -311,56 +312,48 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
   app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
+    const isAdmin = !!userOf(req).scopes?.includes("admin");
+    const id = req.params.id;
     res.setHeader("Cache-Control", "no-store");
     // 노드 세션(#869) — 마지막 상태 스냅샷에서 가시성 판정 후 라벨 반환(노드 오프라인이어도 표시 가능).
     const nodeId = String(req.query.node ?? "").trim();
     if (nodeId) {
-      const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === req.params.id);
+      const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === id);
       if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 }); return; }
       // #1791 — 스냅샷에 없다 = 그 노드에서 죽었다(또는 노드가 스냅샷을 아직 안 올렸다). 아래 desired-state 경로로 떨어져
       //  '복원 가능'을 알린다(종전엔 여기서 403 — 노드 세션은 desired-state 가 없어 알릴 것이 없었다).
     }
+    // 복원 판정에 쓸 desired-state 는 한 번만 읽어 아래 세 갈래(노드·박스 사망·권한없음)가 나눠 쓴다.
+    const st = await getSessionState(id);
     // #1791 — 노드 세션의 desired-state(node_id) — 라이브 스냅샷에 없으면 죽은 것이다. 게이트웨이 tmux 를 묻지 않는다
     //  (그 id 는 여기 tmux 에 없고, canAttach 가 DB owner 로 통과해 빈 라벨을 돌려주는 오답을 막는다).
-    {
-      const st = await getSessionState(req.params.id);
-      if (st?.node_id) {
-        const mine = st.owner === uid || !!userOf(req).scopes?.includes("admin");
-        if (!(mine || (st.project_id ?? 0) > 0)) throw new HttpError(403, "세션에 접근할 수 없습니다");
-        const ln = liveNodes().find((n) => n.id === st.node_id);
-        res.json({
-          id: req.params.id, label: st.label || req.params.id, projectId: st.project_id || 0,
-          restorable: true, canRestore: mine, exitedByUser: !!st.exited_at,
-          oomKilled: !st.exited_at && st.exit_reason === "oom",
-          harness: st.harness || "shell",
-          node: { id: st.node_id, name: ln?.name || st.node_id, online: !!ln?.online },
-        });
-        return;
-      }
+    if (st?.node_id) {
+      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      if (dead.kind !== "ok") throw new HttpError(403, "세션에 접근할 수 없습니다");
+      const ln = liveNodes().find((n) => n.id === st.node_id);
+      res.json({ ...dead.body, node: { id: st.node_id, name: ln?.name || st.node_id, online: !!ln?.online } });
+      return;
     }
-    if (!(await canAttach(req.params.id, uid))) {
+    // ★ #1820 — 박스 세션이 tmux 에 없으면 **여기서** '복원 가능'을 알린다. canAttach 뒤로 미루면 안 된다:
+    //  ownerMeta 가 desired(DB) 우선이 되면서(#109 3be85ae, 2026-08-14) **죽은 세션도 canAttach 를 통과**해
+    //  아래 라벨 조회(tmux)로 흘렀고, 그 결과 `{label:"", projectId:0}` 만 나가 restorable 신호가 통째로 빠졌다.
+    //  화면은 그걸 '그냥 끝난 세션'으로 읽어(goneMode 'end') **모든 진입점에서 복원이 죽었다**(실측 dev 2026-08-20:
+    //  내 세션 219건 중 198건이 이 상태 — 세션을 여는 일의 대부분이 막다른 길이었다).
+    //  ⚠ sessionGone 은 tmux 가 "그런 세션 없다"고 **확답**할 때만 true 다(소켓 불통·타임아웃은 false) — 모르면
+    //   종전 경로로 흘러 살아 있는 세션을 죽었다고 오판하지 않는다(#835 '확답 only').
+    if (await sessionGone(id)) {
+      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      if (dead.kind === "ok") { res.json(dead.body); return; }
+      if (dead.kind === "forbidden") throw new HttpError(403, "세션에 접근할 수 없습니다");
+      // kind === "none" — 되살릴 근거(desired-state)가 없는 진짜 끝난 세션. 종전 흐름이 답한다.
+    }
+    if (!(await canAttach(id, uid))) {
       // #1059 E — tmux 에 없어도(재부팅·회수·정상종료) desired-state 가 남아 있으면 '복원 가능'으로 알린다.
-      //  canAttach 는 tmux 메타(ownerMeta)에 기대므로 죽은 세션은 무조건 false 라, 종전엔 세션 링크로 바로 들어온
-      //  사람이 라벨조차 못 받고 '종료됨' 배너로 끝났다 — 그 자리에서 복원할 길이 없었다(E 의 '열 때 lazy resume'
-      //  이 목록 카드의 [복원] 버튼에만 붙어 있던 갭). 터미널 페이지가 이 신호로 자동 복원한다.
+      //  위 게이트가 tmux 확답을 못 받았을 때의 폴백이다(공유 게이트웨이가 그 세션의 tmux 서버 문맥 밖에 있는 경우 등).
       //  노출 범위는 복원 권한과 같게: 소유자·admin 만 desired-state 를 보고 되살릴 수 있고(canRestore),
       //  프로젝트 세션은 #452 로 전원 공개라 라벨까지는 보이되 복원은 소유자 몫으로 둔다.
-      const st = await getSessionState(req.params.id);
-      const mine = !!st && (st.owner === uid || !!userOf(req).scopes?.includes("admin"));
-      if (st && (mine || (st.project_id ?? 0) > 0)) {
-        res.json({
-          id: req.params.id, label: st.label || req.params.id, projectId: st.project_id || 0,
-          restorable: true, canRestore: mine, exitedByUser: !!st.exited_at,
-          // #1251 — 딥링크로 바로 들어온 경우에도 왜 사라졌는지 알 수 있게(사용자 종료가 있으면 그쪽이 이긴다).
-          oomKilled: !st.exited_at && st.exit_reason === "oom",
-          // harness 를 실어 준다 — 프론트가 **자동 복원 여부**를 여기서 가른다. claude 가 아닌 세션(셸·코덱스)은
-          //  ① 이어받을 대화가 없어 복원의 이득이 없고 ② claude 훅이 없어 `exited_at`(사용자가 끝냈다)을 원리적으로
-          //  기록할 수 없다 → 자동 복원하면 셸에서 `exit` 한 것을 무조건 되살려 **exit 가 안 먹히는** UX 가 된다
-          //  (2026-07-28 실측 신고: 셸에서 exit 했는데 자동 복원됨. 그 세션의 exited_at·uuid 가 둘 다 null 인 게 증거).
-          harness: st.harness || "shell",
-        });
-        return;
-      }
+      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      if (dead.kind === "ok") { res.json(dead.body); return; }
       throw new HttpError(403, "세션에 접근할 수 없습니다");
     }
     // 라벨 + 프로젝트 id 를 함께 반환 — 프로젝트 세션이면 프론트가 상단 '프로젝트 페이지 열기' 버튼을 켠다(개인 세션은 0 → 숨김).
