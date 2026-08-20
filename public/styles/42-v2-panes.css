@@ -276,3 +276,15 @@
 .pn-ed-split .pn-ed-ta { border-bottom: 1px solid var(--line); }
 .pn-ed-pv { width: 100%; height: 100%; border: 0; background: #fff; }
 .pn-ed-img { width: 100%; height: 100%; object-fit: contain; background: #F7F9FC; }
+
+/* ── 앱 부품(#1780 panes 정합) — 설치된 앱을 곁칸에서 목록·열기 ── */
+.pn-apps { display: flex; flex-direction: column; overflow: hidden; }
+.pn-apps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; padding: 12px; overflow-y: auto; }
+.pn-app { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 8px; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; text-align: center; font: inherit; color: var(--ink); }
+.pn-app:hover { border-color: var(--blue); }
+.pn-app b { font-size: 12.5px; font-weight: 700; }
+.pn-app-ic { width: 40px; height: 40px; border-radius: 11px; background: var(--bg-tint, #F6FAFF); border: 1px solid var(--line); display: grid; place-items: center; color: var(--blue); }
+.pn-app-ic .pn-i { width: 20px; height: 20px; }
+.pn-apps-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #FAFBFC; }
+.pn-apps-cur { font-size: 12.5px; }
+.pn-apps .v2-appui-frame { flex: 1; width: 100%; border: 0; background: #fff; }
