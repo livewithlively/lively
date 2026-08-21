@@ -45,8 +45,12 @@
 .sw-opt span { font-size: 11px; line-height: 1.45; color: var(--muted); }
 .sw-pop-help { margin-top: 10px; font-size: 11.5px; }
 
-/* ── 처음 자리가 바뀔 때의 안내 ── */
-.sw-intro { padding: 4px 2px 2px; max-width: 460px; }
+/* ── 처음 자리가 바뀔 때의 안내 ──
+   짧은 안내는 화면 한가운데에, 글 폭에 맞게. (기본 껍데기 .ov-back/.ov-box 는 긴 모달용이라 위쪽 정렬 + 760px 고정
+   이다 — 그대로 쓰면 오른쪽이 텅 비고 위로 치우친다. 전역 규칙을 바꾸지 않고 이 안내에만 클래스를 얹는다.) */
+.sw-intro-back { align-items: center; }
+.sw-intro-box { max-width: 520px; }
+.sw-intro { padding: 4px 2px 2px; }
 .sw-intro-p { margin: 0 0 10px; font-size: 13px; line-height: 1.65; color: var(--ink); }
 .sw-intro-p.muted { color: var(--muted); font-size: 12.5px; }
 .sw-intro-p b { font-weight: 700; }
