@@ -25,7 +25,7 @@
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
 import { anchoredPopover, api, el, personFace, toast } from '../core.js';
 import { makeSplitter } from './split.js';
-import { PART_DEFS, makePart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
+import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
@@ -333,6 +333,21 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (zone === 'bottom') lay.bottomOn = true;
     saveLayout(); paintAll();
   }
+  // 미리보기 칸에서 "이 주소 열어" 하고 부르면 웹 칸을 켠다 — 없으면 곁칸에 만들고, 이미 있으면 그 칸이 스스로 받는다.
+  const onOpenWeb = (): void => { addTab('side', 'web'); };
+  document.addEventListener('pn:open-web', onOpenWeb);
+  // 터미널 iframe 이 미리보기 링크를 넘겨 온다 — 새 탭 대신 웹 칸에 싣는다(원준 2026-08-21).
+  //  ⚠ 출처를 반드시 확인한다. 받았으면 답을 보내 터미널이 새 탭 폴백을 접게 한다.
+  const onMsg = (e: MessageEvent): void => {
+    if (e.origin !== location.origin) return;
+    const d: any = e.data;
+    if (!d || d.type !== 'lively:open-in-pane' || typeof d.url !== 'string') return;
+    openInWebPart(ctx, d.url);
+    addTab('side', 'web');
+    try { (e.source as Window | null)?.postMessage({ type: 'lively:open-in-pane:ok' }, e.origin); } catch (_) { /* 이미 닫힘 */ }
+  };
+  window.addEventListener('message', onMsg);
+
   function removeTab(zone: Zone, type: PartType): void {
     const list = lay[zone];
     const i = list.indexOf(type);
@@ -591,6 +606,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   return {
     newSession,
     destroy(): void {
+      document.removeEventListener('pn:open-web', onOpenWeb);
+      window.removeEventListener('message', onMsg);
       dead = true;
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);

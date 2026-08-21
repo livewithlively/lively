@@ -47,6 +47,22 @@ function openLinkFromTerminal(uri: string): void {
       window.parent.location.hash = u.hash;   // 같은 출처 부모(셸) — 교차 출처면 아래 catch 로
       return;
     }
+    // 미리보기 주소는 새 탭이 아니라 **곁칸의 웹 칸**으로 보낸다(원준 2026-08-21).
+    //  종전엔 여기가 그대로 window.open 으로 빠져 라이블리 창이 하나 더 떴다 — 화면을 고치는 동안
+    //  터미널↔새 탭 왕복이 계속 일어난다. 셸이 이 알림을 받아 웹 칸을 켜고 주소를 싣는다.
+    //  ⚠ 부모가 안 듣는 판(구 셸·단독 페이지)에서는 아무 일도 안 일어나면 안 되므로, 셸이 받았다고
+    //   답하지 않으면 잠시 뒤 새 탭으로 떨어진다.
+    if (u.origin === location.origin && /\/preview\/[^/]+\//.test(u.pathname) && window.parent !== window) {
+      let taken = false;
+      const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
+      window.addEventListener('message', ack);
+      window.parent.postMessage({ type: 'lively:open-in-pane', url: u.href }, location.origin);
+      window.setTimeout(() => {
+        window.removeEventListener('message', ack);
+        if (!taken) window.open(uri, '_blank', 'noopener');
+      }, 400);
+      return;
+    }
   } catch (_) { /* URL 파싱·부모 접근 실패 — 새 창 폴백 */ }
   window.open(uri, '_blank', 'noopener');
 }

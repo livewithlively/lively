@@ -35,6 +35,7 @@ export const PART_DEFS = [
     // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
     { type: 'archive', name: '보관한 세션', icon: 'box', hint: '닫아 둔 AI 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
     { type: 'web', name: '웹', icon: 'globe', hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
+    { type: 'preview', name: '미리보기', icon: 'globe', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
     { type: 'editor', name: '뷰어', icon: 'eye', hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상.' },
     { type: 'apps', name: '앱', icon: 'grid', hint: '설치된 앱을 이 칸에서 엽니다 — 화면 있는 앱은 여기 바로, 세션 앱은 새 세션으로.' },
 ];
@@ -632,9 +633,25 @@ function archivePart(ctx) {
 //  ⚠ 정직하게 말해 둘 것 — 많은 사이트가 남의 창 안에 뜨는 것을 스스로 막는다(X-Frame-Options·CSP).
 //   그건 우리가 뚫을 수 있는 것이 아니고(뚫으려면 서버가 남의 페이지를 대신 받아 오는 프록시가 되어야 하는데,
 //   그건 로그인도 깨지고 보안상 열어서는 안 되는 문이다). 그래서 **빈 화면이면 새 탭으로**를 그 자리에 둔다.
+/** 웹 칸에 실린 주소의 저장 열쇠 — 세션마다 따로다(webPart 와 같은 규칙을 써야 서로 어긋나지 않는다). */
+const WEB_URL_KEY = 'pn_web_url';
+/** "이 주소를 웹 칸에 실어라" — 칸이 아직 없으면 셸(panes.ts)이 듣고 칸부터 켠다. */
+const WEB_OPEN_EVT = 'pn:open-web';
+/** 밖(다른 부품)에서 웹 칸에 주소를 싣는 유일한 통로.
+ *  ⚠ 저장을 **먼저** 한 다음 알린다 — 칸이 아직 없으면 셸이 그때 만드는데, 새로 만들어진 웹 칸은
+ *   이벤트를 이미 놓친 뒤라 저장된 값에서 주소를 읽는다(둘 중 하나만 하면 '처음 한 번'이 조용히 안 먹는다). */
+export function openInWebPart(ctx, url) {
+    try {
+        const m = JSON.parse(localStorage.getItem(WEB_URL_KEY) || '{}') || {};
+        m[ctx.memKey()] = url;
+        localStorage.setItem(WEB_URL_KEY, JSON.stringify(m));
+    }
+    catch (_) { /* 저장이 막혀도 아래 이벤트로 지금 떠 있는 칸은 바뀐다 */ }
+    document.dispatchEvent(new CustomEvent(WEB_OPEN_EVT, { detail: { url } }));
+}
 function webPart(ctx) {
     const root = el('div', { class: 'pn-part pn-web' });
-    const KEY = 'pn_web_url';
+    const KEY = WEB_URL_KEY;
     const store = () => { try {
         return JSON.parse(localStorage.getItem(KEY) || '{}') || {};
     }
@@ -701,6 +718,10 @@ function webPart(ctx) {
         e.preventDefault();
         go();
     } };
+    // 밖에서 부른 주소 — 미리보기 칸에서 누른 것이 여기로 온다. 칸이 이미 떠 있으면 이 경로로 갈아 끼운다.
+    const onOpen = (e) => { const u = e.detail?.url; if (u)
+        go(String(u)); };
+    document.addEventListener(WEB_OPEN_EVT, onOpen);
     const openTab = el('a', { class: 'pn-web-btn', target: '_blank', rel: 'noopener', title: '새 탭에서 엽니다', href: '#' }, pnIcon('ext', 'pn-i sm'));
     openTab.onclick = (e) => { const u = norm(input.value); if (!u) {
         e.preventDefault();
@@ -962,6 +983,68 @@ function appsPart(ctx) {
     void list();
     return { root, destroy: drop };
 }
+// ══ 미리보기 — 띄워 둔 화면을 웹 칸으로 보낸다 (원준 2026-08-21) ══════════
+//  왜: 미리보기는 지금 앱 밖에서만 볼 수 있다. 주소를 복사해 새 탭에서 열고, 앱으로 돌아오려면 탭을 다시 찾는다.
+//   화면을 고치는 동안 이 왕복이 계속 일어난다. 목록을 칸에 두고 누르면 **웹 칸**이 그 화면을 문다 — 곁칸을 새로
+//   만들지 않는다(칸은 이미 있다. 없던 것은 '무엇을 띄울지 고르는 목록'뿐이다).
+function previewPart(ctx) {
+    const root = el('div', { class: 'pn-part pn-prev' });
+    const listEl = el('div', { class: 'pn-prev-list' }, el('div', { class: 'pn-prev-msg', text: '불러오는 중…' }));
+    root.append(listEl);
+    let cur = ''; // 지금 웹 칸에 실어 둔 것 — 목록에서 표시해 둔다
+    // 상태를 사람 말로. 서버 값(running/preparing/…)을 그대로 두면 뜻을 사람이 해석해야 한다.
+    const STATE = {
+        running: { t: '켜져 있어요', k: 'on' }, preparing: { t: '준비 중이에요', k: 'busy' },
+        stopped: { t: '꺼져 있어요', k: 'off' }, error: { t: '문제가 생겼어요', k: 'bad' },
+    };
+    const draw = (rows) => {
+        if (!rows.length) {
+            listEl.replaceChildren(el('div', { class: 'pn-prev-msg', text: '띄워 둔 미리보기가 없어요.' }));
+            return;
+        }
+        listEl.replaceChildren(...rows.map((p) => {
+            const st = STATE[String(p.status)] || { t: String(p.status || ''), k: 'off' };
+            const name = String(p.label || p.project_name || p.id || '');
+            const meta = [p.id, p.branch, p.last_active_at ? relTime(p.last_active_at) : ''].filter(Boolean).join(' · ');
+            const row = el('button', {
+                class: 'pn-prev-row' + (p.url && p.url === cur ? ' is-on' : ''), type: 'button',
+                title: p.url ? '웹 칸에서 엽니다' : '주소가 아직 없어요',
+                onclick: () => {
+                    if (!p.url) {
+                        toast('아직 주소가 없어요 — 미리보기가 준비되면 열립니다.');
+                        return;
+                    }
+                    cur = String(p.url);
+                    openInWebPart(ctx, cur);
+                    for (const r of Array.from(listEl.querySelectorAll('.pn-prev-row')))
+                        r.classList.remove('is-on');
+                    row.classList.add('is-on');
+                },
+            }, el('span', { class: 'pn-prev-dot pn-prev-dot--' + st.k, title: st.t }), el('span', { class: 'pn-prev-b' }, el('span', { class: 'pn-prev-t', text: name }), el('span', { class: 'pn-prev-m', text: meta })), pnIcon('ext', 'pn-i sm pn-prev-go'));
+            return row;
+        }));
+    };
+    const load = async () => {
+        if (ctx.dead())
+            return;
+        try {
+            const res = await api('/api/ui/preview-envs');
+            const rows = (Array.isArray(res) ? res : (res && (res.envs || res.items || res.previews))) || [];
+            // 켜진 것 먼저, 그다음 최근에 쓴 순 — 지금 볼 수 있는 것이 위로 온다.
+            const rank = (x) => (x.status === 'running' ? 0 : x.status === 'preparing' ? 1 : 2);
+            rows.sort((a, b) => rank(a) - rank(b)
+                || String(b.last_active_at || b.updated_at || '').localeCompare(String(a.last_active_at || a.updated_at || '')));
+            if (!ctx.dead())
+                draw(rows);
+        }
+        catch (_) {
+            if (!ctx.dead())
+                listEl.replaceChildren(el('div', { class: 'pn-prev-msg', text: '목록을 불러오지 못했어요.' }));
+        }
+    };
+    void load();
+    return { root, tick: () => void load() };
+}
 export function makePart(type, ctx) {
     if (type === 'sessions')
         return sessionsPart(ctx);
@@ -969,6 +1052,8 @@ export function makePart(type, ctx) {
         return archivePart(ctx);
     if (type === 'web')
         return webPart(ctx);
+    if (type === 'preview')
+        return previewPart(ctx);
     if (type === 'editor')
         return viewerPart(ctx);
     if (type === 'files')
