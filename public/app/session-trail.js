@@ -11,6 +11,7 @@
 //   파일은 대상 경로가 드러날 때만 파일이라 부른다 — 실측상 편집 상당수가 Bash 안(heredoc·sed·tee)에서 일어난다.
 //
 //  위젯은 여기 없다 — 그리는 일은 web/timeline.ts 한 곳이 한다(발자취·프로젝트·워크스페이스가 같은 부품).
+import { apiUrl, TOKEN_KEY } from './core.js';
 import { humanTitle } from './timeline.js';
 const tailPath = (p) => { const s = String(p ?? ''); const parts = s.split('/').filter(Boolean); return parts.length > 3 ? '…/' + parts.slice(-3).join('/') : s; };
 const mk = (kind, verb, label, extra) => ({ kind, verb, label, key: `${kind}|${verb}|${label}`, ...extra });
@@ -80,4 +81,151 @@ export function classifyToolUse(name, input) {
     if (t === 'task_set_status_v6' && o.status === 'done')
         return mk('task', '끝냄', '#' + String(o.id ?? ''), { href: o.id ? '#/projects2/t/' + o.id : null });
     return null; // 조회·수정·검색·기록은 화면에 남기지 않는다(작업 기록은 서버가 정본)
+}
+// ══ 세션 되감기(#1819) — 타임라인은 대화창의 창이 아니라 **세션 전체**를 본다 ═══════════════
+//  왜 여기냐: 재료를 만드는 규칙(무엇이 사람 말인가·무엇이 답인가·무엇이 남은 것인가)은 한 벌이어야 한다.
+//  라이브(session-chat 이 한 줄씩)와 되감기(아래 replayTrail 이 통째로)가 **같은 함수**를 쓴다.
+//
+//  ⚠ 왜 되감기가 필요했나 — 실측 #1819: 20.3MB 세션에서 대화창의 창(꼬리 1.5MB)은 전체의 7.4% 였고,
+//   질문 15개 중 **14개가 창 밖**이라 타임라인에 2줄만 떴다. 서버의 얇은 판(fmt=thin, 2.24%)이 그 벽을 없앤다.
+// ── 사람 말 걸러내기(대화창과 공용) ──
+export const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|Caveat:)/;
+export const INTERRUPT_RE = /^\s*\[Request interrupted/;
+export const CONTINUED_RE = /^\s*This session is being continued/;
+/** 여러 줄에서 **첫 뜻있는 줄**(또는 그 첫 문장)만. 통째로 이으면 제목이 벽이 된다. */
+export const firstLine = (t) => {
+    const ln = String(t || '').split('\n').map((x) => x.trim()).find((x) => x.length > 1) || '';
+    const dot = ln.search(/[.?!。]\s/);
+    return (dot > 8 ? ln.slice(0, dot + 1) : ln).trim();
+};
+export const cut = (t, n) => (t.length > n ? t.slice(0, n - 1).replace(/[\s·,]+$/, '') + '…' : t);
+/** 마크다운 부호는 화면 말이 아니다 — 답 한 줄은 '## 결론' 이 아니라 '결론' 이어야 한다. */
+export const plain = (t) => t.replace(/^\s*(?:[#>]+|[*\-•]\s)\s*/, '').replace(/\*\*|`|~~/g, '').trim();
+/** 답이 아닌 것 — 하네스가 '할 말 없음'을 적어 두는 상용구. 장의 마지막 텍스트면 진짜 답을 밀어낸다. */
+export const NO_ANSWER_RE = /^\s*(?:no response requested\.?|\(no content\)|\[no content\]|null)\s*$/i;
+// ── 붙여넣은 덩어리 가리기 ──
+//  로그를 통째로 붙여넣은 지시가 제목이 되면 그 한 장이 타임라인을 다 먹는다. **사람이 친 한 줄**만 세우고
+//  나머지는 '붙여넣은 글 N줄' 칩으로 접는다(전문은 항목을 눌러서).
+const PASTE_LINES = 8;
+const PASTE_CHARS = 400;
+const HUMAN_LINE = 120;
+export function sayParts(raw) {
+    const text = String(raw || '');
+    const lines = text.split('\n').map((x) => x.trim()).filter((x) => x.length > 0);
+    const heavy = lines.length > PASTE_LINES || text.length > PASTE_CHARS;
+    const head = lines[0] || '';
+    const tail = lines[lines.length - 1] || '';
+    const pick = !heavy ? text : (head.length <= HUMAN_LINE ? head : tail.length <= HUMAN_LINE ? tail : head);
+    const label = cut(firstLine(pick), 110);
+    const rest = lines.length - 1;
+    return {
+        label: label || '(빈 지시)',
+        pasteLines: heavy && rest > 0 ? rest : undefined,
+        full: text.trim().length > label.length ? text.slice(0, 4000) : undefined,
+    };
+}
+const turnKey = (o, text) => String(o.uuid || o.timestamp || String(text).slice(0, 40));
+/** 사람 말 한 줄 → 장(章)의 머리. */
+export function trailSay(w, o, text, at) {
+    const q = sayParts(text);
+    const k = turnKey(o, text);
+    w.add({ id: 'turn:' + k, kind: 'say', verb: '지시', label: q.label, full: q.full, pasteLines: q.pasteLines,
+        key: 'turn|' + k, ts: o.timestamp }, at);
+}
+/** AI 한 줄 → 도구 사용은 그 장에 **남은 것**으로, 텍스트는 그 장의 **답**으로.
+ *  ⚠ at='start'(되그리기)는 앞으로 밀어 넣으므로 블록을 거꾸로 넣어야 원래 순서가 산다. */
+export function trailMsg(w, o, at) {
+    const meta = !!o.isMeta; // 사람에게 한 말이 아니다(하네스 내부 줄)
+    const c = o?.message?.content;
+    const blocks = Array.isArray(c) ? c : (typeof c === 'string' && c.trim() ? [{ type: 'text', text: c }] : []);
+    const emit = (b, i) => {
+        if (b && b.type === 'tool_use' && b.id) {
+            const cls = classifyToolUse(String(b.name ?? ''), b.input);
+            if (cls)
+                w.add({ ...cls, id: String(b.id), ts: o.timestamp }, at);
+            return;
+        }
+        if (!b || b.type !== 'text' || meta)
+            return;
+        const raw = String(b.text ?? '');
+        if (NO_ANSWER_RE.test(raw))
+            return;
+        const t = plain(raw).trim();
+        if (!t || NO_ANSWER_RE.test(t))
+            return;
+        // 한 장에 답은 여러 번 온다("확인하겠습니다" → 도구 → … → 최종 답). 렌더러가 **마지막 것**만 세우므로
+        //  열쇠를 고유하게 둔다 — 합치면 첫 마디가 굳어 최종 답이 영영 안 보인다.
+        const id = 'ans:' + String(o.uuid || o.timestamp || '') + '#' + i;
+        w.add({ id, kind: 'reply', verb: '답함', label: cut(firstLine(t), 96), key: id, ts: o.timestamp }, at);
+    };
+    if (at === 'start')
+        for (let i = blocks.length - 1; i >= 0; i--)
+            emit(blocks[i], i);
+    else
+        blocks.forEach(emit);
+}
+/** 얇은 대화록(ndjson) 통째 → 타임라인. 항목 id 가 같으면 위젯이 알아서 무시하므로 라이브와 겹쳐도 안전하다. */
+export function replayTrail(w, ndjson) {
+    for (const line of String(ndjson || '').split('\n')) {
+        if (!line.trim())
+            continue;
+        let o;
+        try {
+            o = JSON.parse(line);
+        }
+        catch {
+            continue;
+        }
+        if (!o || typeof o !== 'object' || o.isSidechain)
+            continue;
+        if (o.type === 'user') {
+            const c = o.message && o.message.content;
+            let text = '';
+            if (typeof c === 'string')
+                text = c;
+            else if (Array.isArray(c)) {
+                for (const b of c) {
+                    if (!b || typeof b !== 'object')
+                        continue;
+                    if (b.type === 'text')
+                        text += (text ? '\n' : '') + String(b.text ?? '');
+                    else if (b.type === 'tool_result' && b.tool_use_id)
+                        w.result(String(b.tool_use_id), '', !!b.is_error);
+                }
+            }
+            if (o.isMeta || !text.trim())
+                continue;
+            if (INTERRUPT_RE.test(text) || CONTINUED_RE.test(text) || INJECTED_RE.test(text))
+                continue;
+            trailSay(w, o, text, 'end');
+            continue;
+        }
+        if (o.type === 'assistant')
+            trailMsg(w, o, 'end');
+    }
+}
+/** 서버의 얇은 판을 받아 타임라인에 통째로 붓는다. 돌려주는 값으로 '앞이 잘렸나'를 안다. */
+export async function loadThinTrail(w, s) {
+    const node = String(s.node || s.logNode || '');
+    const sid = node ? String(s.logId || s.id) : s.id;
+    const path = node
+        ? `/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?node=${encodeURIComponent(node)}&fmt=thin`
+        : `/api/ui/terminal/sessions/${encodeURIComponent(sid)}/transcript?fmt=thin`;
+    const headers = {};
+    const tok = localStorage.getItem(TOKEN_KEY);
+    if (tok)
+        headers.Authorization = 'Bearer ' + tok;
+    try {
+        const res = await fetch(apiUrl(path), { headers, credentials: 'same-origin' });
+        if (!res.ok)
+            return { ok: false, from: 0, bytes: 0 };
+        const text = await res.text();
+        const n = (h) => { const v = Number(res.headers.get(h)); return Number.isFinite(v) ? v : 0; };
+        replayTrail(w, text);
+        w.sortByTime(); // 라이브가 먼저 들어와 있어도 시간순으로 다시 세운다
+        return { ok: true, from: n('X-Log-From'), bytes: n('X-Log-Bytes') };
+    }
+    catch (_) {
+        return { ok: false, from: 0, bytes: 0 };
+    }
 }

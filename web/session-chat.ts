@@ -21,7 +21,7 @@
 import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, sv, toast } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { toolLabel } from './session-tool-labels.js';
-import { classifyToolUse, type TrailWidget } from './session-trail.js';
+import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
 import { effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 
@@ -47,9 +47,7 @@ const POLL_RUN_MS = 700;           // 도는 중(블록 단위로 즉시 쌓인�
 const POLL_IDLE_MS = 3000;         // 살아 있고 안 도는 중(다음 지시를 터미널에서 칠 수도 있다)
 const POLL_LOG_MS = 8000;          // 중앙 기록(턴 단위 — 자주 봐도 안 늘어난다)
 const POLL_LOG_LIVE_MS = 3000;     // 중앙 기록인데 살아서 도는 노드 세션(#1744) — 턴 끝나 올라오는 순간을 놓치지 않게 조금 촘촘히
-const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|Caveat:)/;
-const INTERRUPT_RE = /^\s*\[Request interrupted/;
-const CONTINUED_RE = /^\s*This session is being continued/;
+// 사람 말 걸러내기 규칙(INJECTED/INTERRUPT/CONTINUED)의 정본은 session-trail.ts 다 — 타임라인 되감기와 같은 자를 써야 한다.
 
 // ── 원문 읽기(ndjson + 워터마크 헤더) ────────────────────────────────────────────────────────
 interface RawChunk { status: number; text: string; bytes: number; from: number; to: number; uuid?: string; prev?: string }
@@ -598,40 +596,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (na === nb) return true;
     return na.length >= 24 && nb.length >= 24 && na.slice(0, 64) === nb.slice(0, 64);
   };
-  // 타임라인 장 제목 — 붙여넣은 로그·여러 문단은 **첫 줄(또는 첫 문장)**만. 통째로 이으면 제목이 벽이 된다.
-  const firstLine = (t: string): string => {
-    const ln = String(t || '').split('\n').map((x) => x.trim()).find((x) => x.length > 1) || '';
-    const dot = ln.search(/[.?!。]\s/);
-    return (dot > 8 ? ln.slice(0, dot + 1) : ln).trim();
-  };
-  const cut = (t: string, n: number): string => (t.length > n ? t.slice(0, n - 1).replace(/[\s·,]+$/, '') + '…' : t);
-  // 마크다운 부호는 화면 말이 아니다 — 답 한 줄은 '## 결론' 이 아니라 '결론' 이어야 한다.
-  const plain = (t: string): string => t.replace(/^\s*(?:[#>]+|[*\-•]\s)\s*/, '').replace(/\*\*|`|~~/g, '').trim();
-
-  // ── 붙여넣은 덩어리 가리기(#1819 원준 2026-08-21) ────────────────────────────
-  //  "질문에 내가 복붙한 헤비한 텍스트가 있으면 그건 너무 길게 보이지 않게 적당히 가려서."
-  //  로그·문서를 통째로 붙여넣은 지시가 제목이 되면 그 한 장이 타임라인을 다 먹는다. 그래서 **사람이 친 한 줄**만
-  //  제목으로 세우고, 나머지는 '붙여넣은 글 N줄' 칩으로 접는다(전문은 항목을 눌러서).
-  //  어느 줄이 사람 말인가 — 첫 줄이 짧으면 그것(지시가 앞), 첫 줄부터 길면 짧은 끝 줄(로그를 먼저 붙여넣은 꼴).
-  const PASTE_LINES = 8;      // 이 줄 수를 넘으면 '붙여넣었다'로 본다
-  const PASTE_CHARS = 400;
-  const HUMAN_LINE = 120;     // 사람이 한 줄로 치는 말의 현실적 최대
-  function sayParts(raw: string): { label: string; pasteLines?: number; full?: string } {
-    const text = String(raw || '');
-    const lines = text.split('\n').map((x) => x.trim()).filter((x) => x.length > 0);
-    const heavy = lines.length > PASTE_LINES || text.length > PASTE_CHARS;
-    const head = lines[0] || '';
-    const tail = lines[lines.length - 1] || '';
-    const pick = !heavy ? text : (head.length <= HUMAN_LINE ? head : tail.length <= HUMAN_LINE ? tail : head);
-    const label = cut(firstLine(pick), 110);
-    const rest = lines.length - 1;
-    return {
-      label: label || '(빈 지시)',
-      pasteLines: heavy && rest > 0 ? rest : undefined,
-      // 전문은 눌러서 본다. 무한정 들고 있지 않는다 — 여긴 읽는 자리지 원문 보관소가 아니다(원문은 가운데 대화창).
-      full: text.trim().length > label.length ? text.slice(0, 4000) : undefined,
-    };
-  }
+  // 장 제목·붙여넣기 가리기·답 뽑기의 정본은 session-trail.ts(sayParts·trailSay·trailMsg) — 라이브와 되감기가 같은 규칙을 쓴다.
   function userText(o: any): { text: string; results: any[] } {
     const c = o?.message?.content;
     if (typeof c === 'string') return { text: c, results: [] };
@@ -661,10 +626,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   그 자리에서 return 하므로 **타임라인에 영영 안 들어왔다.** 답(assistant)은 pending 과 무관하게 들어오니
       //   결과는 두 겹으로 나빴다 — ① 내가 시킨 것이 사라지고 ② 주인 없는 답들이 '질문 없는 장' 하나로 뭉쳐,
       //   열 턴이 한 줄로 보였다. 그래서 **어느 경로로 오든 먼저 넣는다**(같은 열쇠는 add 가 알아서 합친다).
-      const q = sayParts(text);
-      trail?.add({ id: 'turn:' + String(o.uuid || o.timestamp || text.slice(0, 40)), kind: 'say', verb: '지시',
-        label: q.label, full: q.full, pasteLines: q.pasteLines,
-        key: 'turn|' + String(o.uuid || o.timestamp || text.slice(0, 40)), ts: o.timestamp }, 'end');
+      if (trail) trailSay(trail, o, text, 'end');
 
       // 내가 보낸(또는 큐에 있던) 말이 파일에 나타났다 → 낙관적으로 그린 그 턴을 그대로 쓴다(두 번 그리지 않는다)
       const pi = pending.findIndex((pd) => sameSaid(pd.text, text));
@@ -683,7 +645,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (o.effort) setObserved('effort', String(o.effort));
       if (!cur) cur = newRec(null);
       cur.evs.push(o); view.event(cur.t, o); running = true;
-      trailMsg(o, 'end');
+      if (trail) trailMsg(trail, o, 'end');
       return;
     }
     if (o.type === 'system') {
@@ -697,39 +659,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   // 발자취(우패널) — 이 세션이 읽고 쓴 것. tool_use → 항목, tool_result → 그 항목의 본문. 대화창과 같은 줄에서 함께 뽑는다.
   const trail = opts.trail || null;
-  // 답이 아닌 것 — 하네스가 '할 말 없음'을 적어 두는 상용구다. 이게 장의 마지막 텍스트면 진짜 답을 밀어낸다
-  //  (실측 #1819: 답 자리에 "No response requested." 가 서서 그 턴이 무엇이었는지 알 수 없었다).
-  const NO_ANSWER_RE = /^\s*(?:no response requested\.?|\(no content\)|\[no content\]|null)\s*$/i;
   const trailOut = (b: any): string => typeof b.content === 'string' ? b.content
     : Array.isArray(b.content) ? b.content.map((c: any) => (c && c.type === 'text' ? String(c.text ?? '') : '')).join('\n') : '';
-  /** AI 한 줄(assistant) → 타임라인. 도구 사용은 그 장에 **남은 것**으로, 텍스트는 그 장의 **답**으로 간다(#1819).
-   *  ⚠ at='start'(되그리기)는 앞으로 밀어 넣으므로 블록을 거꾸로 넣어야 원래 순서가 산다. */
-  function trailMsg(o: any, at: 'end' | 'start'): void {
-    const w = trail;
-    if (!w) return;
-    const meta = !!o.isMeta;                       // 사람에게 한 말이 아니다(하네스 내부 줄) — 답으로 세우지 않는다
-    const c = o?.message?.content;
-    const blocks: any[] = Array.isArray(c) ? c : (typeof c === 'string' && c.trim() ? [{ type: 'text', text: c }] : []);
-    const emit = (b: any, i: number): void => {
-      if (b && b.type === 'tool_use' && b.id) {
-        const cls = classifyToolUse(String(b.name ?? ''), b.input);
-        if (cls) w.add({ ...cls, id: String(b.id), ts: o.timestamp }, at);
-        return;
-      }
-      if (!b || b.type !== 'text') return;
-      if (meta) return;
-      const raw = String(b.text ?? '');
-      if (NO_ANSWER_RE.test(raw)) return;
-      const t = plain(raw).trim();
-      if (!t || NO_ANSWER_RE.test(t)) return;
-      // 한 장에 답은 여러 번 온다("확인하겠습니다" → 도구 → … → 최종 답). 렌더러가 **마지막 것**만 세우므로
-      //  열쇠를 고유하게 둔다 — 합치면 첫 마디가 굳어 최종 답이 영영 안 보인다.
-      const id = 'ans:' + String(o.uuid || o.timestamp || '') + '#' + i;
-      w.add({ id, kind: 'reply', verb: '답함', label: cut(firstLine(t), 96), key: id, ts: o.timestamp }, at);
-    };
-    if (at === 'start') for (let i = blocks.length - 1; i >= 0; i--) emit(blocks[i], i);
-    else blocks.forEach(emit);
-  }
   function trailResults(results: any[]): void {
     if (!trail) return;
     for (const b of results) if (b?.tool_use_id) trail.result(String(b.tool_use_id), trailOut(b), !!b.is_error);
@@ -1033,11 +964,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let olderEl: HTMLElement | null = null;
   function olderBar(): void {
     olderEl?.remove();
-    // 타임라인은 **대화창이 읽은 만큼만** 안다(재료가 이 트랜스크립트다). 그러니 앞이 더 있으면 그렇다고 말한다 —
-    //  안 그러면 "왜 이것밖에 없지"가 곧 "고장났다"로 읽힌다(#1819 원준 2026-08-21).
-    trail?.setNote(loadedFrom > 0 || oldestPrev
-      ? '이 앞의 대화는 아직 안 불러왔어요. 가운데 대화를 위로 올려 [이전 대화 불러오기] 를 누르면 여기에도 더 쌓입니다.'
-      : null);
+    // ⚠ 타임라인 범위는 이제 이 창과 무관하다(#1819) — 얇은 판으로 **세션 전체**를 따로 붓는다(loadThinTrail).
     if (loadedFrom <= 0 && !oldestPrev) { olderEl = null; return; }
     const kb = Math.round(loadedFrom / 1024);
     const label = loadedFrom > 0 ? `이전 대화 불러오기 (${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb + 'KB'} 더 있음)` : '압축 전 대화 불러오기';
@@ -1092,12 +1019,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         const head = bd.lines.find((x: any) => x && x.type === 'user') || {};
         const uuid = String(head.uuid || head.timestamp || bd.text.slice(0, 40));
         const ts = String(head.timestamp || '');
-        const q = sayParts(String(bd.text));
-        olderOps.push(() => trail?.add({ id: 'turn:' + uuid, kind: 'say', verb: '지시',
-          label: q.label, full: q.full, pasteLines: q.pasteLines, key: 'turn|' + uuid, ts }, 'start'));
+        olderOps.push(() => { if (trail) trailSay(trail, { uuid, timestamp: ts }, String(bd.text), 'start'); });
       }
       for (const o of bd.lines) {
-        if (o.type === 'assistant') olderOps.push(() => trailMsg(o, 'start'));
+        if (o.type === 'assistant') olderOps.push(() => { if (trail) trailMsg(trail, o, 'start'); });
         else if (o.type === 'user') { const { results } = userText(o); if (results.length) olderResults.push(...results); }
       }
     }

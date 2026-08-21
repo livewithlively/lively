@@ -49,7 +49,7 @@ import { locateTranscript } from "./harness-io/locate.js";
 import { readAlignedWindow, type AlignedWindow } from "./harness-io/window.js";
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";
 import { parseWindow } from "./harness-io/parse-cache.js";
-import { toNdjson } from "./harness-io/chat-line.js";
+import { toNdjson, toThinNdjson, THIN_MAX_BYTES } from "./harness-io/chat-line.js";
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -115,14 +115,18 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const found = await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null }, tfs.stat);
     if (!found) throw new HttpError(404, "대화 기록 파일을 찾지 못했습니다(아직 한 줄도 안 쌓였거나 이 박스가 읽을 수 없는 곳에 있습니다).");
     const q = req.query as Record<string, unknown>;
-    const { start, end } = transcriptRange(found.size, q);
+    // fmt=thin(#1819) — 타임라인은 창이 아니라 **세션 전체**를 본다. 덩치를 버린 같은 모양이라 20MB 가 455KB 가 된다.
+    const thin = String(q.fmt ?? "") === "thin";
+    const { start, end } = thin
+      ? { start: Math.max(0, found.size - THIN_MAX_BYTES), end: found.size }
+      : transcriptRange(found.size, q);
     // 창이 파일 머리(0)에 닿았고 그 파일이 압축으로 시작하면 이전 파일 uuid 를 함께 준다 — 화면이 [압축 전 대화 불러오기]를 낸다.
     //  (claude 의 compact_boundary 사슬 — 다른 하네스 파일엔 그 표식이 없어 null 이 돌아온다.)
     if (start === 0 && found.size > 0) {
       const prev = await tfs.prevTranscript(found.file);
       if (prev) res.setHeader("X-Prev-Session", prev);
     }
-    const explicitTo = q.to !== undefined;
+    const explicitTo = !thin && q.to !== undefined;
     let win: AlignedWindow = { from: start, to: start, data: Buffer.alloc(0) };
     if (end > start) win = await tfs.read(found.file, found.size, (r) => readAlignedWindow(r, found.size, start, end, explicitTo));
     const lines = win.data.length ? parseWindow(io.parse, `${id}|${found.file}`, win.from, win.to, win.data.toString("utf8")) : [];
@@ -132,7 +136,7 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     res.setHeader("X-Log-To", String(win.to));
     res.setHeader("X-Session-Uuid", uuid);
     res.setHeader("X-Harness", io.key);
-    res.end(toNdjson(lines));
+    res.end(thin ? toThinNdjson(lines) : toNdjson(lines));
   }));
 
   app.post("/api/ui/terminal/sessions/:id/keys", auth, wrap(async (req, res) => {

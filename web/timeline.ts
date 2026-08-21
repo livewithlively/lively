@@ -140,6 +140,8 @@ export interface TimelineHandle {
   result(id: string, output: string, isError: boolean): void;
   addAll(items: Array<Omit<TlItem, 'count'> & { count?: number }>): void;
   setNote(note: string | null): void;
+  /** 시간순으로 다시 세운다(#1819) — 세션 전체를 뒤늦게 부어 넣었을 때 라이브로 먼저 들어온 꼬리와 섞이지 않게. */
+  sortByTime(): void;
   /** 머리 바 바로 아래 한 줄(세션 사실 등). null 이면 그 줄 자체가 없다. */
   setMeta(node: HTMLElement | null): void;
   clear(): void;
@@ -522,6 +524,9 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   const h: TimelineHandle = {
     root,
     add(raw, at = 'end') {
+      // 같은 사건(id)은 한 번만 싣는다 — 세션 전체 되감기(#1819)와 라이브 대화가 같은 줄을 겹쳐 넣기 때문이다.
+      //  ⚠ ×N(같은 파일을 열 번 고침)은 **id 가 서로 다른** 항목들이 같은 key 로 합쳐지는 것이라 그대로 산다.
+      if (byId.has(raw.id)) return;
       const it: TlItem = { count: 1, ...raw, kind: (raw.kind as TlKind) || 'cmd' };
       if (!merge(it, at)) {
         if (at === 'end') items.push(it); else items.unshift(it);
@@ -548,6 +553,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
       schedule();
     },
     setNote(note) { noteEl.textContent = note || ''; noteEl.hidden = !note; },
+    sortByTime() { items.sort((a, b) => tsNum(a.ts) - tsNum(b.ts)); schedule(); },
     setMeta(node) { factsEl.replaceChildren(...(node ? [node] : [])); factsEl.hidden = !node; },
     clear() { items = []; byId.clear(); byKey.clear(); open.clear(); schedule(); },
   };

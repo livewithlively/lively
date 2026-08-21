@@ -17,7 +17,7 @@ import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwn
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import { parseWindow } from "../terminal/harness-io/parse-cache.js";
-import { toNdjson } from "../terminal/harness-io/chat-line.js";
+import { toNdjson, toThinNdjson, THIN_MAX_BYTES } from "../terminal/harness-io/chat-line.js";
 import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } from "../terminal/terminal-transcript.js";
 import { createSession, editSession, sharedRoot } from "../terminal/terminal-sessions.js";
@@ -213,19 +213,23 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     //  ⚠ to/tail/fmt 없는 GET 은 **원본 바이트** 그대로다 — CLI(`lively resume`)가 그 바이트로 로컬 파일을 물질화한다. 대화창은
     //   증분 폴(from 만)에도 fmt=chat 을 붙여 공통 ChatLine 을 받는다.
     const windowed = req.query.to !== undefined || req.query.tail !== undefined;
-    const chatFmt = windowed || req.query.fmt === "chat";
+    // fmt=thin(#1819) — 타임라인은 창이 아니라 **세션 전체**를 본다(덩치를 버린 같은 모양, 실측 2.24%).
+    const thin = req.query.fmt === "thin";
+    const chatFmt = windowed || thin || req.query.fmt === "chat";
     const io = harnessIo(await sessionHarness(nodeId, sessionId));
     let log: { from: number; bytes: number; data: Buffer };
     let winEnd: number | undefined;
     let ndjson: string | undefined;            // 어댑터를 거친 공통 ChatLine 본문(있으면 이걸 낸다)
     if (chatFmt) {
       const total = await sessionLogWatermark(nodeId, sessionId);
-      const rng = transcriptRange(total, { from: req.query.from, to: req.query.to, tail: req.query.tail });
+      const rng = thin
+        ? { start: Math.max(0, total - THIN_MAX_BYTES), end: total }
+        : transcriptRange(total, { from: req.query.from, to: req.query.to, tail: req.query.tail });
       if (io?.parse) {
         const reader = { read: (s: number, e: number) => readSessionLog(nodeId, sessionId, s, e).then((r) => r.data) };
-        const win = rng.end > rng.start ? await readAlignedWindow(reader, total, rng.start, rng.end, req.query.to !== undefined) : { from: rng.start, to: rng.start, data: Buffer.alloc(0) };
+        const win = rng.end > rng.start ? await readAlignedWindow(reader, total, rng.start, rng.end, !thin && req.query.to !== undefined) : { from: rng.start, to: rng.start, data: Buffer.alloc(0) };
         const lines = win.data.length ? parseWindow(io.parse, `log|${nodeId}|${sessionId}`, win.from, win.to, win.data.toString("utf8")) : [];
-        ndjson = toNdjson(lines);
+        ndjson = thin ? toThinNdjson(lines) : toNdjson(lines);
         log = { from: win.from, bytes: total, data: win.data }; winEnd = win.to;
       } else {
         log = await readSessionLog(nodeId, sessionId, rng.start, rng.end);

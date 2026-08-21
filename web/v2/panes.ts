@@ -31,6 +31,7 @@ import { hasBrowserSurface } from './browser-surface.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
+import { loadThinTrail } from '../session-trail.js';
 import { type V2Data } from './views.js';
 
 export interface PanesOpts {
@@ -205,6 +206,16 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       empty: '아직 아무것도 없어요 — 이 세션에 무언가 시키면 여기 쌓입니다.',
     });
     trailW = w;
+    // ★ 세션 **전체**를 얇은 판으로 한 번에 붓는다(#1819 원준 2026-08-21).
+    //  종전엔 재료가 대화창이 읽은 창(꼬리 1.5MB)뿐이라, 20MB 세션에서 질문 15개 중 14개가 창 밖이었다 —
+    //  화면엔 2줄만 떴고 그게 "누락이 엄청 많다"의 실체다. 얇은 판은 같은 내용의 2.24% 라 통째로 받아도 가볍다.
+    const row = opts.data().sessions.find((x) => x.id === sid) as any;
+    void loadThinTrail(w, { id: sid, node: (row && row.node) || null, logId: (row && row.raw && row.raw.claudeSessionId) || null })
+      .then((r) => {
+        if (dead || trailW !== w) return;
+        // 얇은 판마저 상한을 넘긴 초대형 세션 — 앞이 잘렸다는 사실만 조용히 밝힌다.
+        if (r.ok && r.from > 0) w.setNote('이 세션이 아주 커서 뒤쪽만 불러왔어요. 앞부분은 가운데 대화에서 보실 수 있습니다.');
+      });
     void loadSessionActivities(sid).then((items) => { if (!dead && trailSid === sid) w.addAll(items); });
     return w;
   }
