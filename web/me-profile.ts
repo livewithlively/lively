@@ -318,6 +318,7 @@ export {
   applyMyProfileSaved,
   avatarEditor,
   changePasswordModal,
+  companyLoginRow,   // 새 셸의 [내 프로필 · 환경설정] 창(v2/me-modal.ts)이 같은 줄을 쓴다 — 연결/해제 규칙이 두 벌이 되지 않게
   parseMyProfile,
   profChips,
 };

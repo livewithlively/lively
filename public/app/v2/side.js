@@ -22,14 +22,14 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { anchoredPopover, api, el, keepSideScroll, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
+import { anchoredPopover, api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork } from './views.js';
 import { switcherTop } from './switcher.js';
 import { mountDesktopUpdate } from '../desktop-update.js'; // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
-import { THEME_ORDER, setThemePref, themePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
+import { openMeModal } from './me-modal.js'; // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
 const OPEN_KEY = 'lively_v2_opened';
@@ -361,7 +361,13 @@ function render() {
     //  같은 층이다. 그리고 사이드바는 접히지 않으므로(v2 규약) 어떤 화면을 보고 있어도 늘 눈에 닿는다.
     updateSlot(), 
     // 「도구」 — 앱(런치패드)은 콘텐츠가 아니라 도구다. 계정(신원)과 결을 갈라, 푸터가 잡동사니로 읽히지 않게 한다.
-    el('div', { class: 'v2-foot-k', text: '도구' }), el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), themeSeg(), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
+    el('div', { class: 'v2-foot-k', text: '도구' }), el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), 
+    // [나] — 한 줄 전체가 **내 프로필 · 환경설정**을 여는 단추다(#1843, 원준 2026-08-21).
+    //  종전엔 이름 옆에 [로그아웃]만 있었고 그 아래로 테마 3단·클래식 링크가 늘어서, 발치가 '내 것'을 모아 둔
+    //  자리가 아니라 잡동사니 줄이 되어 있었다. 슬랙·노션·리니어가 다 그렇듯 개인 설정은 **얼굴을 눌러 여는 창**
+    //  하나로 모은다 — 테마·클래식 전환·로그아웃은 전부 그 창 안에 있다(v2/me-modal.ts).
+    el('div', { class: 'v2-foot-k', text: '나' }), el('button', { class: 'v2-me', type: 'button', title: '내 프로필 · 환경설정', 'aria-haspopup': 'dialog',
+        onclick: () => openMeModal({ onSaved: () => redraw() }) }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-me-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z' }), sv('path', { d: 'M19.4 13.6a7.6 7.6 0 0 0 0-3.2l1.9-1.4-1.9-3.3-2.2.9a7.7 7.7 0 0 0-2.8-1.6L14 2.5h-4l-.4 2.5a7.7 7.7 0 0 0-2.8 1.6l-2.2-.9L2.7 9l1.9 1.4a7.6 7.6 0 0 0 0 3.2L2.7 15l1.9 3.3 2.2-.9a7.7 7.7 0 0 0 2.8 1.6l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.8-1.6l2.2.9 1.9-3.3z' })))));
     renderTree(rows);
     treeEl.scrollTop = prevScroll;
     // 위 한 줄(prevScroll)은 **이번 렌더**의 이어붙이기다. 그런데 트리가 통째로 다시 만들어지는 길이 하나라도
@@ -866,15 +872,4 @@ async function doArchive(s) {
     catch (e) {
         toast((e && e.message) || '보관하지 못했습니다', true);
     }
-}
-// ── 테마 3단 토글(#1683) — 사이드바 하단. 시스템/라이트/다크 세그먼트, 저장·적용은 theme.ts. ──
-function themeSeg() {
-    const cur = themePref();
-    const lab = { system: '시스템', light: '라이트', dark: '다크' };
-    return el('div', { class: 'v2-theme', role: 'group', 'aria-label': '테마' }, ...THEME_ORDER.map((k) => el('button', {
-        class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
-        title: k === 'system' ? '시스템 설정을 따릅니다' : `${lab[k]} 테마로 봅니다`,
-        'aria-pressed': String(cur === k),
-        onclick: () => { setThemePref(k); redraw(); }
-    })));
 }
