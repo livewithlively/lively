@@ -148,12 +148,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* ＋도 아이콘 — 돋보기가 자리를 차지하면서 글자 버튼까지 두면 헤더가 두 줄로 접힌다(#1067 의 🔍/＋ 문법). */
 .v2-add { flex: none; display: inline-grid; place-items: center; width: 27px; height: 27px; color: var(--muted); text-decoration: none; border: 1px solid transparent; border-radius: 7px; }
 .v2-add:hover { color: var(--ink); background: var(--bg); border-color: var(--line); }
+.v2-add.on { color: var(--blue); background: var(--bg); border-color: var(--line); }
 .v2-add-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 /* ＋ 새 프로젝트 팝오버 — anchoredPopover 는 자리만 잡는다. 면(배경·테두리·그림자)은 이 클래스가 줘야 하고,
    없으면 입력칸·안내글이 본문 위에 투명하게 겹친다(상민님 2026-08-19 실측 사진). */
-.v2-newpop { z-index: 60; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(var(--shadow-ink), .14); }
-.v2-newrow { display: flex; align-items: center; gap: 8px; }
-.v2-newmsg { margin: 0; font-size: 11.5px; color: var(--coral-text); line-height: 1.5; }
 /* 상태 칩 — 살아 있는 세션 상태별 개수. 누르면 그 상태만(렌즈). 채운 파랑은 안 쓴다(주 액션 아님) — 켜짐은 흰 배경+테두리. */
 /* 돋보기 — 검색칸을 여닫는다. 아이콘 자체는 늘 보여서 '검색이 있는 줄 모르는' 일이 없다(#1154 반려 사유 대응).
    검색어가 남아 있으면 켜진 색으로 남아, 목록이 짧아진 이유를 헤더가 말해 준다. */
@@ -203,6 +201,17 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 프로젝트 행 — 폴더 + 굵은 이름. 누르면 **프로젝트 화면**. 완료·조용함도 이름은 같은 잉크색(태그·시각이 구분). */
 .v2-pj-row { display: flex; align-items: center; gap: 4px; padding: 7px 10px 7px 8px; min-height: var(--row-h, 34px); border-radius: 8px; font-size: 14px; font-weight: 700; line-height: 1.4; color: var(--ink); text-decoration: none; }
 .v2-pj-row:hover { background: var(--bg); }
+/* ＋ 새 프로젝트 한 줄 — 트리 바로 위에 돋는다. 프로젝트 줄과 같은 들여쓰기·같은 폴더 아이콘이라
+   '지금 이 목록에 하나 생긴다'가 눈으로 읽힌다(팝오버를 걷은 이유가 이것이다, 원준 2026-08-21). */
+.v2-npj { padding: 2px 10px 2px var(--side-x, 8px); }
+.v2-npj-l { display: flex; align-items: center; gap: 4px; padding: 6px 9px 6px 7px; min-height: var(--row-h, 34px);
+  border: 1px solid var(--blue); border-radius: 8px; background: var(--bg); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.v2-npj-l .v2-pj-ic { stroke: var(--blue); }
+.v2-npj-l.sending { opacity: .6; }
+.v2-npj-in { flex: 1; min-width: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 14px; font-weight: 700; line-height: 1.4; color: var(--ink); }
+.v2-npj-in:focus { outline: none; }
+.v2-npj-in::placeholder { font-weight: 400; color: var(--muted-2); }
+.v2-npj-err { margin: 4px 0 0 30px; font-size: 11.5px; line-height: 1.45; color: var(--coral-text); }
 .v2-pj-row.on { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-net); }
 .v2-pj-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
 .v2-pj-row:hover .v2-pj-ic, .v2-pj-row.on .v2-pj-ic { stroke: var(--blue); }
@@ -1062,12 +1071,6 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .stu-launch, .stu-notif, .stu-ghost, .stu-w.pop { animation: none; } .stu-ghost-cur { animation: none; } }
 @media (prefers-reduced-motion: reduce) { .stu-w.anim { transition: none; } .stu-scrim { transition: none; } }
 /* 새 프로젝트 — 사이드바 ＋ 의 그 자리 팝오버(만들면 그 작업대로 간다) */
-.v2-newpop { width: 300px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.v2-newrow { display: flex; gap: 8px; }
-.v2-newin { flex: 1; min-width: 0; height: 32px; border: 1px solid var(--line-net); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13px; }
-.v2-newin:focus { outline: none; border-color: var(--blue); }
-.v2-newpop .v2-fine { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
-.v2-newmsg { margin: 0; font-size: 11.5px; color: var(--coral-text); }
 
 /* ── 탭 끌어 옮기기 + 이름 고치기(원준 2026-08-20) ── */
 .v2-tab { position: relative; }
