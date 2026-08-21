@@ -50,9 +50,13 @@ async function checkStale(): Promise<void> {
   location.reload();
 }
 
-/** 화면이 다시 보이면 낡았는지 묻고, 낡았으면 다시 싣는다. 진입점에서 한 번 부른다. */
+/** 화면이 다시 보이면 낡았는지 묻고, 낡았으면 다시 싣는다. 진입점에서 한 번 부른다.
+ *  ⚠ 두 번 불려도 리스너는 한 벌만 단다 — 클래식 진입점(main.ts)과 v2 진입점(bootV2)이 **둘 다** 부르고,
+ *   v2 셸일 때는 그 둘이 같은 판에서 다 돌아 서버에 같은 질문을 두 번 하게 된다(실측). */
+let armed = false;
 export function watchStaleShell(): void {
-  if (!MY_GEN) return;
+  if (!MY_GEN || armed) return;
+  armed = true;
   document.addEventListener("visibilitychange", () => { if (!document.hidden) void checkStale(); });
   window.addEventListener("focus", () => { void checkStale(); });
 }
