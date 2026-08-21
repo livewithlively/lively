@@ -23,7 +23,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay } from "./notify.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
 
@@ -1731,6 +1731,49 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const cursorAt = fn.indexOf("personSince =");
     assert.ok(guardAt >= 0 && guardAt < cursorAt, "실패 가드보다 먼저 커서를 전진시킨다 — 그 사이 알림이 영영 사라진다");
     assert.ok(/personSeen = null/.test(main), "로그아웃에서 기준선을 버리지 않는다 — 다시 로그인하면 과거가 쏟아진다");
+  });
+  t("A24 실시간 전이표 — 병렬 세션에서 가장 자주 기다리는 신호는 busy→idle(끝났다)", () => {
+    assert.equal(phaseEventKind("busy", "idle"), NOTIFY.DONE);
+    assert.equal(phaseEventKind("idle", "waiting"), NOTIFY.WAITING);
+    assert.equal(phaseEventKind("busy", "waiting"), NOTIFY.WAITING);
+    assert.equal(phaseEventKind(null, "waiting"), NOTIFY.WAITING, "첫 보고가 대기면 알린다");
+    assert.equal(phaseEventKind(null, "idle"), null, "첫 보고가 idle 인 건 '끝난 것'이 아니라 그냥 쉬는 것이다");
+    assert.equal(phaseEventKind("idle", "busy"), null, "일을 시작한 건 알릴 일이 아니다");
+    assert.equal(phaseEventKind("waiting", "waiting"), null);
+  });
+  t("A25 스트림 사건 — 끈 종류·이미 본 key·모르는 형식은 배너가 되지 않는다", () => {
+    const ev = { type: "session", id: "box-jang-1", name: "빌드", prev: "busy", phase: "idle", key: "s:1:idle:100" };
+    assert.equal(streamEvent(ev, new Set()).kind, NOTIFY.DONE);
+    assert.equal(streamEvent(ev, new Set([ev.key])), null, "재연결 직후 같은 사건이 다시 떴다");
+    assert.equal(streamEvent(ev, new Set(), { [NOTIFY.DONE]: false }), null);
+    assert.equal(streamEvent({ type: "other", id: "x" }, new Set()), null);
+    assert.equal(streamEvent({ type: "session", prev: "busy", phase: "idle" }, new Set()), null, "id 없는 사건은 갈 곳이 없다");
+    assert.equal(streamEvent({ ...ev, name: "" }, new Set()).name, "이름 없는 세션");
+  });
+  t("A26 SSE 파싱 — 미완성 프레임은 버퍼에 남긴다(반쪽 JSON 을 파싱하면 사건을 잃는다)", () => {
+    const a = parseSse("event: session\ndata: {\"id\":1}\n\n: ping\n\nevent: session\ndata: {\"id\":2");
+    assert.deepEqual(a.events, [{ id: 1 }], "ping 주석이 사건으로 잡히거나 반쪽 프레임이 파싱됐다");
+    assert.ok(a.rest.includes("\"id\":2"), "미완성 프레임이 버려졌다 — 다음 조각과 이어지지 못한다");
+    const b = parseSse(a.rest + "}\n\n");
+    assert.deepEqual(b.events, [{ id: 2 }], "이어붙인 프레임이 복원되지 않았다");
+    assert.deepEqual(parseSse("data: {깨진\n\n").events, [], "깨진 프레임 하나가 예외로 스트림을 끊으면 안 된다");
+  });
+  t("A27 재연결 — 지수 백오프에 상한(게이트웨이 재시작 중 초당 재접속 금지)", () => {
+    assert.equal(reconnectDelay(0), 1000);
+    assert.equal(reconnectDelay(1), 2000);
+    assert.ok(reconnectDelay(3) < reconnectDelay(4));
+    assert.equal(reconnectDelay(99), 30_000, "상한이 없다");
+  });
+  t("A28 배선 — 스트림이 살아 있으면 폴링은 배너를 만들지 않되 기준선은 늘 갱신한다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(/\/api\/ui\/notify\/stream/.test(main), "실시간 스트림에 붙지 않는다");
+    const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
+    const snapAt = poll.indexOf("notifySnapshot = next;");
+    const gateAt = poll.indexOf("if (!streamAlive)");
+    assert.ok(snapAt >= 0 && gateAt > snapAt, "게이팅이 기준선 갱신보다 앞이다 — 연결이 끊기면 폴링이 못 이어받는다");
+    assert.ok(/streamAlive = true/.test(main) && /streamAlive = false/.test(main), "연결 상태를 갱신하지 않는다");
+    assert.ok(/finally\s*{[^}]*streamAlive = false/s.test(main), "끊길 때 상태를 되돌리지 않는다 — 영영 폴링 배너가 막힌다");
+    assert.ok(/scheduleStreamRetry/.test(main), "재연결이 배선되지 않았다");
   });
 }
 

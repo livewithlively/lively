@@ -32,7 +32,7 @@ import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, SEEN_MAX } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -533,6 +533,12 @@ let notifySnapshot = null;          // 직전 세션 스냅샷. null = 콜드스
 let notifyPolling = false;
 let personSince = null;             // 사람 알림 커서 — 서버가 준 `now`. null 이면 아직 한 번도 안 받았다
 let personSeen = null;              // 이미 띄운 사람 알림 key. null = 콜드스타트(첫 폴은 기준선만)
+// 실시간 스트림(#1842 3차) — 이게 붙어 있으면 세션 배너는 **스트림만** 만든다(폴링은 기준선만 갱신).
+let streamCtl = null;               // 현재 연결의 AbortController
+let streamAlive = false;            // 붙어 있나 — 폴링 배너 게이팅의 유일한 근거
+let streamTries = 0;                // 연속 실패 횟수(백오프)
+let streamTimer = null;             // 재연결 예약
+const streamSeen = new Set();       // 이미 띄운 스트림 사건 key(재연결 직후 중복 방지)
 
 /** 유형별 켜짐 — 파일이 없거나 깨졌으면 기본값(전부 켜짐). 설정을 못 읽었다고 알림이 멎으면 안 된다. */
 function notifyPrefs() {
@@ -574,6 +580,60 @@ function openHashInApp(hash) {
 function openSessionInApp(id) { openHashInApp(sessionHash(id)); }
 
 /**
+ * 실시간 스트림에 붙는다 (#1842). 게이트웨이가 하네스 훅 보고를 받는 **그 순간** 사건을 밀어 주므로,
+ *  "AI 를 여러 개 병렬로 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다(폴링은 폴백으로 남는다).
+ *
+ * ⚠ 이 함수는 연결이 끊길 때까지 돌아온다 — 호출자는 await 하지 않고 재연결만 예약한다.
+ */
+async function connectNotifyStream() {
+  const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
+  const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
+  if (!token) { scheduleStreamRetry(); return; }
+  const ctl = new AbortController();
+  streamCtl = ctl;
+  try {
+    const res = await fetch(`${gw}/api/ui/notify/stream`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+      signal: ctl.signal,
+    });
+    // 구 게이트웨이엔 이 표면이 없다(404) — 조용히 폴링만 쓴다(그래서 폴링을 없애지 않았다).
+    if (!res.ok || !res.body) { scheduleStreamRetry(); return; }
+    streamAlive = true; streamTries = 0;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const { events, rest } = parseSse(buf);
+      buf = rest;
+      const prefs = notifyPrefs();
+      for (const ev of events) {
+        const hit = streamEvent(ev, streamSeen, prefs);
+        if (!hit) continue;
+        streamSeen.add(hit.key);
+        while (streamSeen.size > SEEN_MAX) streamSeen.delete(streamSeen.values().next().value);
+        showBanner({ ...bannerFor(hit), event: hit });
+      }
+    }
+  } catch { /* 끊김·타임아웃·게이트웨이 재시작 — 아래에서 다시 붙는다 */ }
+  finally {
+    streamAlive = false;
+    if (streamCtl === ctl) streamCtl = null;
+    scheduleStreamRetry();
+  }
+}
+
+/** 재연결 예약 — 지수 백오프. 게이트웨이가 재시작 중일 때 초당 재접속으로 때리지 않는다. */
+function scheduleStreamRetry() {
+  if (quitting || streamTimer) return;
+  const wait = reconnectDelay(streamTries++);
+  streamTimer = setTimeout(() => { streamTimer = null; void connectNotifyStream(); }, wait);
+  if (streamTimer.unref) streamTimer.unref();
+}
+
+/**
  * 한 번의 폴 — 세션 목록을 받아 직전 스냅샷과 견주고, 생긴 사건만 배너로 띄운다.
  *  ⚠ 준비 안 됐거나(설치·로그인 전) 토큰이 없으면 **기준선을 버린다** — 다시 로그인했을 때 그 사이 사건이
  *   한꺼번에 되살아나지 않게(콜드스타트로 되돌린다). 반대로 네트워크 실패는 기준선을 **유지**한다(다음 폴에서 이어 본다).
@@ -582,7 +642,7 @@ async function pollNotifications() {
   if (notifyPolling) return;
   const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
   const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
-  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; return; }
+  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; streamSeen.clear(); return; }
   notifyPolling = true;
   try {
     const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
@@ -594,8 +654,10 @@ async function pollNotifications() {
     const next = snapshotSessions(data && data.sessions);
     const prefs = notifyPrefs();
     const events = diffSessions(notifySnapshot, next, prefs);
-    notifySnapshot = next;
-    for (const b of planBanners(events)) showBanner(b);
+    notifySnapshot = next;                               // ★ 기준선은 스트림 유무와 무관하게 늘 갱신한다 —
+    //  연결이 끊기는 순간 폴링이 그 자리에서 이어받아야 하는데, 기준선이 낡아 있으면 그 사이 전이를 통째로
+    //  놓치거나(오래된 스냅샷과 비교) 과거를 한꺼번에 다시 띄운다.
+    if (!streamAlive) for (const b of planBanners(events)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
     await pollPersonFeed(gw, token, prefs);
   } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
   finally { notifyPolling = false; }
@@ -1229,6 +1291,8 @@ else {
     void pollNotifications();
     const ntf = setInterval(() => void pollNotifications(), NOTIFY_POLL_MS);
     if (ntf.unref) ntf.unref();
+    // 실시간 스트림 — 이게 주 경로다(위 폴링은 연결이 끊긴 동안의 폴백).
+    void connectNotifyStream();
   });
   // ★ 창을 다 닫아도 종료하지 않는다(트레이 상주). 기본 동작(win/linux 종료)을 반드시 덮어야 한다.
   app.on("window-all-closed", () => { /* noop — 트레이로 산다 */ });

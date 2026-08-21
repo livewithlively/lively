@@ -191,3 +191,65 @@ export function planPersonBanners(events, max = MAX_BANNERS) {
   if (events.length <= max) return events.map((e) => ({ title: e.title, body: e.body, event: e }));
   return [{ title: "라이블리", body: `새 알림이 ${events.length}개 있어요.`, event: null }];
 }
+
+// ── 실시간 스트림 (#1842 3차) ────────────────────────────────────────────────
+// 30초 폴링으로는 "AI 를 여러 개 병렬로 돌리다 끝나는 것마다 바로 받는다"가 성립하지 않는다. 게이트웨이는
+//  하네스 훅 보고를 받는 순간 이미 그 사실을 아니까(#1221), 그 순간을 SSE 로 밀어 준다(/api/ui/notify/stream).
+//
+// ⚠ 신호원이 둘이 됐다 — **같은 사건을 다른 축으로 표현한다.** 헷갈리면 중복 배너가 된다:
+//   · 스트림: 하네스가 보고한 **실행 단계 전이**(busy·waiting·idle). 사건이 일어난 그 순간.
+//   · 폴링:  세션 목록의 **awaiting·working 플래그**. 30초마다 스냅샷 두 장을 견준 결과.
+//  그래서 **스트림이 붙어 있는 동안 폴링은 배너를 만들지 않는다**(스냅샷 갱신만 계속한다 — 연결이 끊기면
+//  폴링이 그 자리에서 이어받아야 하므로 기준선은 늘 최신이어야 한다). main.mjs 가 그 게이팅을 한다.
+
+/**
+ * 실행 단계 전이 → 알림 종류. **판정은 여기 한 곳**이다(서버는 사실만 싣고 해석하지 않는다).
+ *
+ * | prev | phase | 결과 | 왜 |
+ * |---|---|---|---|
+ * | ≠waiting | waiting | WAITING | 사람의 결정을 기다리기 시작했다 |
+ * | busy | idle | DONE | 돌던 작업이 끝났다 — **이게 병렬 세션에서 가장 자주 기다리는 신호다** |
+ * | (없음) | idle | 없음 | 첫 보고가 idle 이면 '끝난 것'이 아니라 그냥 쉬고 있는 것이다 |
+ * | idle | busy | 없음 | 일을 시작한 건 알릴 일이 아니다 |
+ * | 같은 값 | 같은 값 | 없음 | 하트비트(서버가 애초에 전이로 안 친다) |
+ */
+export function phaseEventKind(prev, phase) {
+  if (phase === "waiting" && prev !== "waiting") return NOTIFY.WAITING;
+  if (phase === "idle" && prev === "busy") return NOTIFY.DONE;
+  return null;
+}
+
+/** 스트림 이벤트 → 배너로 만들 사건(끈 종류·이미 본 key 는 거른다). 없으면 null. */
+export function streamEvent(ev, seen, prefs) {
+  if (!ev || ev.type !== "session" || !ev.id) return null;
+  const kind = phaseEventKind(ev.prev ?? null, ev.phase);
+  if (!kind) return null;
+  const on = { ...NOTIFY_DEFAULTS, ...(prefs || {}) };
+  if (!on[kind]) return null;
+  const key = String(ev.key || `s:${ev.id}:${ev.phase}`);
+  if (seen && seen.has(key)) return null;              // 재연결 직후 같은 사건이 다시 올 수 있다
+  return { kind, id: String(ev.id), key, name: String(ev.name || "").trim() || "이름 없는 세션" };
+}
+
+/**
+ * SSE 바이트 조각 → 이벤트. 프레임은 빈 줄로 끝나므로 **마지막 미완성 프레임은 버퍼에 남긴다**
+ *  (그걸 그냥 파싱하면 반쪽 JSON 을 만나 조용히 사건을 잃는다).
+ * @returns {{events: object[], rest: string}}
+ */
+export function parseSse(buffer) {
+  const parts = String(buffer || "").split("\n\n");
+  const rest = parts.pop() ?? "";                       // 마지막 조각은 아직 안 끝났다
+  const events = [];
+  for (const frame of parts) {
+    const data = frame.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
+    if (!data) continue;                                // 주석(`: ping`)·이벤트명만 있는 프레임
+    try { events.push(JSON.parse(data)); } catch { /* 깨진 프레임 하나가 스트림을 끊지 않는다 */ }
+  }
+  return { events, rest };
+}
+
+/** 재연결 대기(ms) — 지수 백오프에 상한. 게이트웨이가 재시작 중일 때 초당 재접속으로 때리지 않는다. */
+export function reconnectDelay(attempt) {
+  const n = Math.max(0, Number(attempt) || 0);
+  return Math.min(30_000, 1_000 * Math.pow(2, Math.min(n, 5)));   // 1s 2 4 8 16 32→30s 상한
+}
