@@ -114,81 +114,150 @@ export function appIcon(icon, cls) {
     svg.innerHTML = ICON_PATHS[icon];
     return svg;
 }
-// ── 앱 타일 — 맥 응용 프로그램 결의 채운 아이콘 (#1841 원준) ──────────────────
-//  위 appIcon() 은 **선 글리프**다(사이드바 행·칸 머리처럼 글자 옆에 서는 자리). 런치패드는 다르다:
-//  거기서 아이콘은 글자를 거드는 표식이 아니라 **그 앱 자체**라, 맥 응용 프로그램 폴더처럼 채운 그림이어야 한다.
-//  자료 폴더 아이콘(panes-kit.ts folderIcon)이 같은 이유로 혼자 채운 그림인 것과 같은 판단이고,
-//  거기서 얻은 규칙을 그대로 따른다 —
-//   ① 채운 그림(선 아님)
-//   ② **낮은 대비** 세로 그라디언트 — 명도차를 크게 주면 아래가 탁해져 '플라스틱'이 된다(폴더 초판 반려 사유).
-//   ③ 광택 덩어리 금지 — 빛은 윗변 가는 선 하나로만 말한다(폴더 초판 반려 사유).
-//   ④ 두 겹 그림자(접촉 + 주변광) — CSS `.v2-tile` 에 있다.
-//   ⑤ 각도·좌표는 고정. 무작위면 다시 그릴 때마다 흔들린다.
-//  ⚠ 그라디언트·필터 id 는 문서에 유일해야 한다 — 같은 id 가 여럿이면 브라우저가 첫 것만 써서 색이 굳는다.
-// 타일 바깥선은 둥근사각(rx)이 아니라 **초타원(squircle)** 이다 — 맥 아이콘의 모양.
-//  rx 로 그리면 직선에서 곡선으로 넘어가는 자리에서 곡률이 뚝 끊겨 '웹 카드'로 읽힌다.
-//  |x/a|^5+|y/b|^5=1 을 48점 샘플 → Catmull-Rom → 3차 베지에로 옮긴 좌표다(눈대중 아님).
-const TILE_SQUIRCLE = 'M62 32C62 36.43 61.97 42.37 61.9 45.29C61.83 48.2 61.73 48.28 61.59 49.47C61.45 50.66 61.28 51.55 61.06 52.43C60.85 53.31 60.61 54.04 60.32 54.74C60.04 55.43 59.71 56.03 59.35 56.6C58.98 57.16 58.57 57.66 58.12 58.12C57.66 58.57 57.16 58.98 56.6 59.35C56.03 59.71 55.43 60.04 54.74 60.32C54.04 60.61 53.31 60.85 52.43 61.06C51.55 61.28 50.66 61.45 49.47 61.59C48.28 61.73 48.2 61.83 45.29 61.9C42.37 61.97 36.43 62 32 62C27.57 62 21.63 61.97 18.71 61.9C15.8 61.83 15.72 61.73 14.53 61.59C13.34 61.45 12.45 61.28 11.57 61.06C10.69 60.85 9.96 60.61 9.26 60.32C8.57 60.04 7.97 59.71 7.4 59.35C6.84 58.98 6.34 58.57 5.88 58.12C5.43 57.66 5.02 57.16 4.65 56.6C4.29 56.03 3.96 55.43 3.68 54.74C3.39 54.04 3.15 53.31 2.94 52.43C2.72 51.55 2.55 50.66 2.41 49.47C2.27 48.28 2.17 48.2 2.1 45.29C2.03 42.37 2 36.43 2 32C2 27.57 2.03 21.63 2.1 18.71C2.17 15.8 2.27 15.72 2.41 14.53C2.55 13.34 2.72 12.45 2.94 11.57C3.15 10.69 3.39 9.96 3.68 9.26C3.96 8.57 4.29 7.97 4.65 7.4C5.02 6.84 5.43 6.34 5.88 5.88C6.34 5.43 6.84 5.02 7.4 4.65C7.97 4.29 8.57 3.96 9.26 3.68C9.96 3.39 10.69 3.15 11.57 2.94C12.45 2.72 13.34 2.55 14.53 2.41C15.72 2.27 15.8 2.17 18.71 2.1C21.63 2.03 27.57 2 32 2C36.43 2 42.37 2.03 45.29 2.1C48.2 2.17 48.28 2.27 49.47 2.41C50.66 2.55 51.55 2.72 52.43 2.94C53.31 3.15 54.04 3.39 54.74 3.68C55.43 3.96 56.03 4.29 56.6 4.65C57.16 5.02 57.66 5.43 58.12 5.88C58.57 6.34 58.98 6.84 59.35 7.4C59.71 7.97 60.04 8.57 60.32 9.26C60.61 9.96 60.85 10.69 61.06 11.57C61.28 12.45 61.45 13.34 61.59 14.53C61.73 15.72 61.83 15.8 61.9 18.71C61.97 21.63 62 27.57 62 32Z';
-// 앱마다 고유색 — 채도·명도대를 맞추고 **색상만** 돌려, 열 개가 흩어지지 않고 한 세트로 보이게 한다.
-//  위/아래 두 값의 명도차가 작다(규칙 ②). 색상은 색상환에 고루 흩어 놓았다 — 파랑·초록에 몰리면
-//  이름을 읽기 전에는 서로 구분이 안 된다(초판이 그랬다).
-//  브랜드 민트는 담당자(리브)에게 준다 — 민트는 우리 화면에서 '살아있음·성공'을 말하는 상태색이라,
-//  아무 앱에나 주면 그 뜻이 닳는다.
-const TILE_COLORS = {
-    home: ['#6B74E8', '#565FD6'], // 인디고
-    term: ['#5C6779', '#3E4859'], // 그래파이트 — 터미널
-    proj: ['#4E88F7', '#2D6BF0'], // 제품 블루
-    wiki: ['#A473EA', '#8B54DA'], // 바이올렛
-    ctx: ['#2FC3B6', '#12A99D'], // 틸
-    hist: ['#F5AC45', '#E5942C'], // 앰버
-    sys: ['#9BA7BA', '#7E8CA3'], // 그레이
-    web: ['#3DB8F1', '#1F9CDA'], // 시안
-    learn: ['#54C070', '#39A957'], // 그린
-    apps: ['#F0708F', '#E05578'], // 로즈
-    sess: ['#7A8AA6', '#5F6F8C'], // 슬레이트(타일로는 거의 안 쓰인다 — 칸 머리용 글리프가 본자리)
-    liv: ['#27C9A2', '#0FA37E'], // 민트 — 브랜드색
+const RAMP = ['#3EDCAB', '#16C79A', '#0F86B4', '#1C4FC2'];
+// 설정 전용 — 우리 화면의 회색 토큰을 그대로 램프로 세운 것(--line-net → --muted-2 → --ink-sub → --ink 쪽).
+//  ⚠ 민트 램프를 '탈색'해서 만들지 마라 — 그러면 청록기가 남아 화면의 다른 회색과 계열이 어긋난다(실측).
+const RAMP_MUTED = ['#C8D2E0', '#A6B2C8', '#7183A0', '#41516E'];
+// ⚠ 정거장 넷이다. 앞판은 셋(밝은민트→민트→블루)이었는데, 시작이 너무 밝고(L 82%) 끝이 얕아
+//  전체가 사탕색으로 보였다("과하게 밝고 네온"). 시작을 낮추고 중간에 틸을 끼워 넣어 여정을 길게 하면
+//  같은 시그니처 민트를 쓰면서도 보석처럼 깊어진다.
+// 서리 값은 CSS 토큰이다(아래 .g2-frost) — 라이트/다크가 다른 값을 써야 한다.
+//  라이트: 맑은 청회색을 높은 알파로. 다크: 더 밝은 색을 낮은 알파로(그래야 유리로 남는다).
+//  앞판 #C7DFEC 는 채도가 낮아 '먼지 낀 회색'으로 읽혔다 — 조금 맑게 올린다.
+const GLASS_ART = {
+    // 대시보드 — 머리띠(서리) · 본문 판(색) · 곁 위젯 하나(서리). 판 넷은 번잡했다.
+    //  세 덩어리면 '화면 배치'가 읽히고, 그 이상은 잔무늬가 된다.
+    home: {
+        span: [5, 15, 40, 58],
+        color: '<rect x="5" y="15" width="33" height="43" rx="4.5"/>',
+        frost: '<rect x="5" y="5" width="54" height="15" rx="4.5"/><rect x="42" y="25" width="17" height="33" rx="4.5"/>',
+        punch: '<rect x="11" y="29" width="20" height="2.8" rx="1.4"/><rect x="11" y="37" width="13" height="2.8" rx="1.4"/>',
+    },
+    // 터미널 창 — 색 타이틀바 + 서리 본문. 프롬프트는 **유리 위에** 색으로 얹는다(over).
+    //  흰색으로 뚫으면 옅은 서리 위라 대비가 안 나 안 읽힌다.
+    term: {
+        span: [5, 11, 59, 53],
+        color: '<path d="M10.5 11h43a5 5 0 0 1 5 5v7.5H5.5V16a5 5 0 0 1 5-5z"/>',
+        frost: '<path d="M5.5 20.5h53V48a5 5 0 0 1-5 5h-43a5 5 0 0 1-5-5z"/>',
+        punch: '<circle cx="14" cy="17.5" r="2.5"/><circle cx="22.6" cy="17.5" r="2.5"/><circle cx="31.2" cy="17.5" r="2.5"/>',
+        over: '<path d="M15 32.5l7 6.4-7 6.4" stroke-width="3.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+            + '<path d="M28 45.4h14.5" stroke-width="3.7" fill="none" stroke-linecap="round"/>',
+    },
+    // 태스크 목록 + 체크 — 서리 카드에 흰 줄(할 일) 세 개, 그 위를 색 체크가 가로지른다.
+    //  체크의 오른팔은 카드 **밖으로 나간다** — 유리 안에서는 부옇고 밖에서는 선명하다(겹침의 문법).
+    proj: {
+        span: [13, 14, 58, 46],
+        color: '<path d="M24.5 36.5l7.5 7.5L58 13.5" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+        frost: '<rect x="5" y="10" width="39" height="44" rx="5.5"/>',
+        punch: '<rect x="13" y="21" width="21" height="3.6" rx="1.8"/><rect x="13" y="31" width="15" height="3.6" rx="1.8"/>',
+    },
+    // 펼친 책 — 오른쪽 면이 색, 왼쪽 면이 서리. 두 면의 재질이 달라 펼쳐진 게 읽힌다.
+    wiki: {
+        span: [33, 11, 59, 53],
+        color: '<path d="M33.6 17.2c4.9-3.9 11.3-6 18.1-6h4.7a2.6 2.6 0 0 1 2.6 2.6v30.5a2.6 2.6 0 0 1-2.6 2.6h-4.7c-6.8 0-13.2 2.1-18.1 6z"/>',
+        frost: '<path d="M30.4 17.2c-4.9-3.9-11.3-6-18.1-6H7.6A2.6 2.6 0 0 0 5 13.8v30.5a2.6 2.6 0 0 0 2.6 2.6h4.7c6.8 0 13.2 2.1 18.1 6z"/>',
+    },
+    // 깔때기 — 위로 들어온 것이 좁아지며 걸러진다. 수집→증류→분류가 이 형태 하나에 다 있다.
+    //  서리 입구 바가 깔때기 아가리를 덮는다(레퍼런스 폴더의 '탭이 삐져나오는' 문법과 같은 자리).
+    ctx: {
+        span: [8, 17, 56, 56],
+        color: '<path d="M9.5 17h45a2 2 0 0 1 1.5 3.3L38.2 40.4v11.3a2 2 0 0 1-1.1 1.8l-6.8 3.4A2 2 0 0 1 27.4 55V40.4L8 20.3A2 2 0 0 1 9.5 17z"/>',
+        frost: '<rect x="8" y="6" width="38" height="12.5" rx="4"/>',
+    },
+    // 손목시계 — 색 베젤 + 유리 문자판 + 색 바늘. 앞판은 서리 원판에 가는 바늘뿐이라 창백했다.
+    //  베젤을 색으로 두르면 색 덩어리가 생기면서 동시에 '시계'라는 사물이 또렷해진다.
+    //  바늘은 over(유리 위) — 유리 아래 두면 부옇게 묻힌다.
+    hist: {
+        span: [7, 7, 57, 57],
+        color: '<circle cx="32" cy="32" r="25"/>',
+        frost: '<circle cx="32" cy="32" r="19.5"/>',
+        overSolid: 3, // 깊은 끝 단색 — 옅은 문자판 위에서 바늘이 읽히려면 이 대비가 필요하다
+        over: '<path d="M32 32V17.8" stroke-width="5.2" stroke-linecap="round" fill="none"/>'
+            + '<path d="M32 32l10 5.8" stroke-width="5.2" stroke-linecap="round" fill="none"/>'
+            + '<circle cx="32" cy="32" r="3.2"/>',
+    },
+    // 톱니 — **별이 되는 조건**을 피한 비율이다. 앞판은 골이 4°뿐이라 이빨 사이가 뾰족한 점으로 만났고,
+    //  그게 정확히 별의 정의였다. 기어로 읽히려면 ① 골이 원호로 충분히 보이고(12°) ② 깊이가 얕고(22%)
+    //  ③ 이빨 사이로 **원형 몸통**이 드러나야 한다. 실제 기어는 피치원에서 이빨과 골의 폭이 비슷하다.
+    //  8톱니 · 이빨 20° · 옆면 6.5°×2 · 골 12° · 팁 26 / 골바닥 20.4.
+    sys: {
+        span: [7, 6, 58, 58],
+        muted: true, // 기계는 무채색으로
+        color: '<path d="M27.49 6.39A26 26 0 0 1 36.51 6.39L37.79 12.44A20.4 20.4 0 0 1 41.73 14.07L46.91 10.7A26 26 0 0 1 53.3 17.09L49.93 22.27A20.4 20.4 0 0 1 51.56 26.21L57.61 27.49A26 26 0 0 1 57.61 36.51L51.56 37.79A20.4 20.4 0 0 1 49.93 41.73L53.3 46.91A26 26 0 0 1 46.91 53.3L41.73 49.93A20.4 20.4 0 0 1 37.79 51.56L36.51 57.61A26 26 0 0 1 27.49 57.61L26.21 51.56A20.4 20.4 0 0 1 22.27 49.93L17.09 53.3A26 26 0 0 1 10.7 46.91L14.07 41.73A20.4 20.4 0 0 1 12.44 37.79L6.39 36.51A26 26 0 0 1 6.39 27.49L12.44 26.21A20.4 20.4 0 0 1 14.07 22.27L10.7 17.09A26 26 0 0 1 17.09 10.7L22.27 14.07A20.4 20.4 0 0 1 26.21 12.44Z"/>',
+        frost: '<circle cx="32" cy="32" r="10.6"/>',
+    },
+    // 구 + 고리 — 색 구체를 서리 고리가 가로지른다. 레퍼런스의 '겹쳐 지나가는' 문법 그대로.
+    web: {
+        // ⚠ 이 아이콘만 흰 안쪽 테두리를 켠다(rim). 전역에서는 흰색이 세 겹이 되어 번잡해 걷어냈지만,
+        //  웹은 서리 고리가 색 구체를 **가로지르는** 구성이라 그 테두리가 고리의 앞뒤를 갈라 준다 —
+        //  걷어내니 고리가 구체에 묻혔다. 램프 구간도 전 구간으로 되돌린다.
+        span: [11, 9, 53, 51],
+        rim: true,
+        color: '<circle cx="32" cy="30" r="21"/>',
+        frost: '<ellipse cx="32" cy="34" rx="31" ry="11.5" transform="rotate(-21 32 34)"/>',
+    },
+    // 학사모 — 색 판(위에서 보는 면) + 서리 몸통.
+    learn: {
+        span: [5, 8, 59, 34],
+        color: '<path d="M30.8 7.9a2.8 2.8 0 0 1 2.4 0l25.4 11.4a1.7 1.7 0 0 1 0 3.1L33.2 33.8a2.8 2.8 0 0 1-2.4 0L5.4 22.4a1.7 1.7 0 0 1 0-3.1z"/>',
+        frost: '<path d="M15 28.5v13.4c0 5.8 7.6 10.5 17 10.5s17-4.7 17-10.5V28.5L33.4 35.1a4.2 4.2 0 0 1-2.8 0z"/>',
+    },
+    // 사각 넷 — 둘은 색, 둘은 서리. 대각으로 엇갈린다.
+    apps: {
+        span: [5, 5, 59, 59],
+        color: '<rect x="5.5" y="5.5" width="24" height="24" rx="5.5"/><rect x="34.5" y="34.5" width="24" height="24" rx="5.5"/>',
+        frost: '<rect x="34.5" y="5.5" width="24" height="24" rx="5.5"/><rect x="5.5" y="34.5" width="24" height="24" rx="5.5"/>',
+    },
+    // 리브 — 색 고리 + 유리 원반 + 색 코어. 펄스 돗이 퍼져 나가는 모양 그대로다.
+    //  고리를 서리로 두면 세트에서 혼자 창백해진다 — 색 덩어리를 바깥에 준다.
+    liv: {
+        span: [7, 7, 57, 57],
+        color: '<path fill-rule="evenodd" d="M32 7.5a24.5 24.5 0 1 0 0 49 24.5 24.5 0 1 0 0-49Zm0 5.4a19.1 19.1 0 1 1 0 38.2 19.1 19.1 0 1 1 0-38.2Z"/>',
+        frost: '<circle cx="32" cy="32" r="16"/>',
+        over: '<circle cx="32" cy="32" r="8.4"/>',
+    },
 };
-// 타일 심볼은 선 글리프보다 굵다(맥 아이콘의 심볼은 SF Symbols Bold 무게다).
-//  설정만 채운 모양을 따로 둔다 — 톱니는 64px 에서 선으로 그리면 골이 선 굵기에 먹혀 뭉갠다.
-//  좌표는 위 ICON_PATHS 의 톱니와 같은 기어 기하로 생성했고(톱니 6), 안쪽 구멍은 반대 방향
-//  서브패스라 fill-rule="evenodd" 로 뚫린다.
-const TILE_SOLID = {
-    sys: '<path fill-rule="evenodd" d="M9.49 2.63A9.7 9.7 0 0 1 14.51 2.63L13.78 6.17A6.1 6.1 0 0 1 16.16 7.54L18.86 5.14A9.7 9.7 0 0 1 21.37 9.49L17.94 10.63A6.1 6.1 0 0 1 17.94 13.37L21.37 14.51A9.7 9.7 0 0 1 18.86 18.86L16.16 16.46A6.1 6.1 0 0 1 13.78 17.83L14.51 21.37A9.7 9.7 0 0 1 9.49 21.37L10.22 17.83A6.1 6.1 0 0 1 7.84 16.46L5.14 18.86A9.7 9.7 0 0 1 2.63 14.51L6.06 13.37A6.1 6.1 0 0 1 6.06 10.63L2.63 9.49A9.7 9.7 0 0 1 5.14 5.14L7.84 7.54A6.1 6.1 0 0 1 10.22 6.17ZM12 8.1a3.9 3.9 0 1 0 0 7.8 3.9 3.9 0 1 0 0-7.8Z"/>',
-};
-let tileSeq = 0;
-/** 런치패드용 앱 타일(64×64). 글자 옆에 서는 자리에는 이걸 쓰지 말고 appIcon() 을 쓴다. */
-export function appTileIcon(icon, cls) {
-    const n = ++tileSeq;
-    const [top, bottom] = TILE_COLORS[icon] || TILE_COLORS.apps;
-    const solid = TILE_SOLID[icon];
-    // 심볼은 타일 폭의 약 45% — 맥 아이콘은 심볼 둘레에 넉넉한 여백을 둔다. 가득 채우면 '웹 아이콘'이 된다.
-    const s = 1.42, off = 32 - 12 * s;
+let glassSeq = 0;
+/** 런치패드용 유리 앱 아이콘(64×64). 글자 옆 16px 자리에는 이걸 쓰지 말고 appIcon() 을 쓴다. */
+export function appGlassIcon(icon, cls) {
+    const n = ++glassSeq;
+    const a = GLASS_ART[icon] || GLASS_ART.apps;
+    const color = a.color || '', frost = a.frost || '';
+    const sp = a.span || [6, 4, 58, 60];
+    const R = a.muted ? RAMP_MUTED : RAMP;
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 64 64');
-    svg.setAttribute('class', 'v2-tile ' + (cls || ''));
+    svg.setAttribute('class', 'v2-gi ' + (cls || ''));
     svg.setAttribute('aria-hidden', 'true');
     svg.innerHTML =
         `<defs>`
-            + `<linearGradient id="tg${n}" x1="0" y1="0" x2="0" y2="1">`
-            + `<stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient>`
-            // 윗변 하이라이트 — 위 28% 안에서만 보인다(광택 덩어리 대신).
-            + `<linearGradient id="th${n}" x1="0" y1="0" x2="0" y2="1">`
-            + `<stop offset="0" stop-color="#FFFFFF" stop-opacity=".6"/>`
-            + `<stop offset=".28" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>`
-            // 바닥 안쪽 림 — 타일에 유리 한 겹의 두께를 준다(아래에서만 보인다).
-            + `<linearGradient id="tr${n}" x1="0" y1="1" x2="0" y2="0">`
-            + `<stop offset="0" stop-color="#000000" stop-opacity=".14"/>`
-            + `<stop offset=".26" stop-color="#000000" stop-opacity="0"/></linearGradient>`
-            // 심볼 밑 옅은 그림자 — 흰 심볼이 타일 면 위에 얹힌 것으로 읽히게 한다.
-            + `<filter id="ts${n}" x="-20%" y="-20%" width="140%" height="140%">`
-            + `<feDropShadow dx="0" dy="1.1" stdDeviation="1" flood-color="#0B1B33" flood-opacity=".22"/></filter>`
+            + `<linearGradient id="gk${n}" gradientUnits="userSpaceOnUse" x1="${sp[0]}" y1="${sp[1]}" x2="${sp[2]}" y2="${sp[3]}">`
+            + `<stop offset="0" stop-color="${R[0]}"/><stop offset=".32" stop-color="${R[1]}"/>`
+            + `<stop offset=".66" stop-color="${R[2]}"/><stop offset="1" stop-color="${R[3]}"/></linearGradient>`
+            + `<linearGradient id="gf${n}" gradientUnits="userSpaceOnUse" x1="8" y1="6" x2="56" y2="58">`
+            + `<stop offset="0" stop-color="currentColor" stop-opacity="1"/>`
+            + `<stop offset="1" stop-color="currentColor" stop-opacity=".74"/></linearGradient>`
+            + `<linearGradient id="gh${n}" gradientUnits="userSpaceOnUse" x1="6" y1="10" x2="34" y2="46">`
+            + `<stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>`
+            + `<stop offset=".45" stop-color="#FFFFFF" stop-opacity=".26"/>`
+            + `<stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>`
+            + `<clipPath id="gp${n}">${frost}</clipPath>`
+            + `<filter id="gs${n}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="2.6"/></filter>`
             + `</defs>`
-            + `<path d="${TILE_SQUIRCLE}" fill="url(#tg${n})"/>`
-            + `<path d="${TILE_SQUIRCLE}" fill="none" stroke="url(#tr${n})" stroke-width="2.2" transform="translate(32 32) scale(.966) translate(-32 -32)"/>`
-            + `<path d="${TILE_SQUIRCLE}" fill="none" stroke="url(#th${n})" stroke-width="1.5" transform="translate(32 32) scale(.974) translate(-32 -32)"/>`
-            + `<g filter="url(#ts${n})" transform="translate(${off} ${off}) scale(${s})" `
-            + (solid ? 'fill="#FFFFFF" stroke="none"' : 'fill="none" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"')
-            + `>${solid || ICON_PATHS[icon]}</g>`;
+            + (a.frostFirst
+                ? `<g class="v2-gi-frost" fill="url(#gf${n})">${frost}</g><g fill="url(#gk${n})" stroke="url(#gk${n})">${color}</g>`
+                : `<g fill="url(#gk${n})" stroke="url(#gk${n})">${color}</g>`
+                    + `<g class="v2-gi-frost" fill="url(#gf${n})">${frost}</g>`
+                    + `<g clip-path="url(#gp${n})" filter="url(#gs${n})" fill="url(#gk${n})" stroke="url(#gk${n})" opacity=".5">${color}</g>`)
+            + `<g clip-path="url(#gp${n})"><rect x="-18" y="-12" width="26" height="120" fill="url(#gh${n})" transform="rotate(-32 32 32)"/></g>`
+            + `<g clip-path="url(#gp${n})" class="v2-gi-edge">`
+            + (a.rim ? `<g fill="none" stroke="#FFFFFF" stroke-opacity=".8" stroke-width="2" transform="translate(-1.1 -1.1)">${frost}</g>` : '')
+            + `<g fill="none" stroke="#0B2A3A" stroke-opacity=".085" stroke-width="2.6" transform="translate(1.3 1.3)">${frost}</g>`
+            + `</g>`
+            + (a.punch ? `<g class="v2-gi-punch">${a.punch}</g>` : '')
+            + (a.over
+                ? `<g fill="${a.overSolid != null ? R[a.overSolid] : `url(#gk${n})`}" stroke="${a.overSolid != null ? R[a.overSolid] : `url(#gk${n})`}">${a.over}</g>`
+                : '');
     return svg;
 }
 // ── 런치패드 오버레이 ──
@@ -210,7 +279,7 @@ export function openLaunchpad() {
     const draw = () => {
         const q = input.value.trim().toLowerCase();
         const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, title: a.title + ' — ' + a.desc,
-            onclick: () => closeLaunchpad() }, appTileIcon(a.icon), el('span', { class: 'v2-pad-name', text: a.title })));
+            onclick: () => closeLaunchpad() }, appGlassIcon(a.icon), el('span', { class: 'v2-pad-name', text: a.title })));
         const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => {
             const hasUi = a.pages.length > 0; // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
             return el('button', { class: 'v2-pad-item', role: 'listitem', type: 'button',
@@ -218,7 +287,7 @@ export function openLaunchpad() {
                 onclick: () => { closeLaunchpad(); if (hasUi)
                     void openAppUi(a.id, { title: a.title });
                 else
-                    void openAppSession(a.id, { title: a.title }); } }, appTileIcon(hasUi ? 'apps' : 'term'), el('span', { class: 'v2-pad-name', text: a.title }));
+                    void openAppSession(a.id, { title: a.title }); } }, appGlassIcon(hasUi ? 'apps' : 'term'), el('span', { class: 'v2-pad-name', text: a.title }));
         });
         grid.replaceChildren(...screen, ...session);
         if (!grid.childElementCount)

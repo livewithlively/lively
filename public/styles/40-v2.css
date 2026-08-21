@@ -789,40 +789,41 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-kn-foot { flex: none; margin-top: 0; padding: 14px 16px 18px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
 
 /* ── 런치패드 ── */
-/* 스크림 — 맥 런치패드 문법(#1841). 타일에서 카드 그릇을 걷어내면서, 뒤 화면을 가려 주던 것도 함께 사라졌다.
-   그 결과 앱 이름이 뒤 본문 글자와 겹쳐 안 읽혔다. 처방: 바탕을 세게 흐리고 어둡게 한 겹 덮는다.
-   ⚠ 스크림은 `--shadow-ink`(그림자·스크림 전용 토큰) 를 쓴다 — 라이트·다크 **둘 다 어두워진다**.
-    `--tint-ink` 는 호버용이라 다크에서 밝게 뒤집히는데, 스크림으로 쓰면 다크에서 밝은 막 위에
-    밝은 글자가 얹혀 안 읽힌다. 어두워지는 쪽으로 고정했으므로 앱 이름은 두 테마 모두 흰색이다. */
-.v2-pad { position: fixed; inset: 0; z-index: 900; background: rgba(var(--shadow-ink), .48); backdrop-filter: blur(22px) saturate(1.08); -webkit-backdrop-filter: blur(22px) saturate(1.08); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto; }
-/* 머리줄은 스크림 위에 그대로 얹는다 — 흰 카드로 두면 어두운 스크림 위에 밝은 판이 떠 맥 결이 깨진다. */
-.v2-pad-top { width: min(920px, 100%); display: flex; align-items: center; gap: 12px; margin-bottom: 22px; background: none; border: 0; padding: 2px 4px; }
+/* 스크림 — 밝은 유리(#1841). 종전엔 어둡게 덮었는데(맥 런치패드 문법), 아이콘이 유리가 되면서
+   그 바탕이 맞지 않게 됐다: 유리는 뒤가 밝아야 유리로 읽히고, 어두운 막 위에서는 탁해진다.
+   그래서 흐림은 그대로 두고 덮는 색만 **밝은 쪽**으로 뒤집는다. 앱 이름도 흰색에서 잉크로 돌아온다.
+   ⚠ 라이트·다크 모두 밝아져야 하므로 `--tint-ink`(호버용, 다크에서 뒤집힘)가 아니라 고정값을 쓴다. */
+.v2-pad { position: fixed; inset: 0; z-index: 900; background: var(--v2-pad-scrim); backdrop-filter: blur(22px) saturate(1.06); -webkit-backdrop-filter: blur(22px) saturate(1.06); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto; }
+.v2-pad-top { width: min(920px, 100%); display: flex; align-items: center; gap: 12px; margin-bottom: 26px; background: none; border: 0; padding: 2px 4px; }
 .v2-pad-h { display: flex; flex-direction: column; min-width: 0; }
-.v2-pad-h b { font-size: 15px; font-weight: 800; color: #FFFFFF; }
-.v2-pad-sub { font-size: 12px; color: rgba(255, 255, 255, .72); }
+.v2-pad-h b { font-size: 15px; font-weight: 800; color: var(--ink); }
+.v2-pad-sub { font-size: 12px; color: var(--ink-sub); }
 /* 찾기칸도 스크림 위 유리 — 배경을 살짝 밝히고 테두리만 흰 선으로. */
-.v2-pad-search { flex: 1; min-width: 160px; height: 38px; border: 1px solid rgba(255, 255, 255, .28); border-radius: 10px; padding: 0 12px; font: inherit; font-size: 14px; color: #FFFFFF; background: rgba(255, 255, 255, .14); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-.v2-pad-search::placeholder { color: rgba(255, 255, 255, .62); }
-.v2-pad-search:focus { outline: none; border-color: rgba(255, 255, 255, .6); background: rgba(255, 255, 255, .2); }
-/* 닫기 — 스크림 위에서는 무채 ghost 가 안 보인다. 흰 선 버튼으로 바꾼다. */
-.v2-pad-top .btn-ghost { color: #FFFFFF; background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .28); }
-.v2-pad-top .btn-ghost:hover { background: rgba(255, 255, 255, .22); border-color: rgba(255, 255, 255, .45); }
+.v2-pad-search { flex: 1; min-width: 160px; height: 38px; border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; font: inherit; font-size: 14px; color: var(--ink); background: var(--bg); }
+.v2-pad-search::placeholder { color: var(--muted); }
+.v2-pad-search:focus { outline: none; border-color: var(--blue); }
+/* 닫기 — 밝은 스크림이라 기본 ghost 가 그대로 보인다(종전 흰 선 버튼은 어두운 스크림용이었다). */
+.v2-pad-top .btn-ghost { background: var(--bg); }
 /* ── 런치패드 격자 — 맥 응용 프로그램 폴더 문법(#1841 원준) ────────────────────
    아이콘과 이름만. 카드 테두리·바탕·설명 줄을 걷었다 — 타일 자체가 이미 덩어리라 그릇이 필요 없고,
    그릇을 두면 '아이콘을 알아보는 자리'가 '카드를 읽는 자리'로 바뀐다(자료 폴더 아이콘과 같은 판단). */
-.v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 26px 8px; }
+.v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 30px 8px; }
 .v2-pad-item {
   display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 10px 4px 8px;
   background: none; border: 0; border-radius: 14px; text-decoration: none; color: var(--ink); text-align: center;
   cursor: pointer; font: inherit; transition: transform .12s ease, background-color .12s ease;
 }
-.v2-pad-item:hover { background: rgba(255, 255, 255, .15); }
+.v2-pad-item:hover { background: var(--bg-tint); }
 .v2-pad-item:active { transform: scale(.94); }
 .v2-pad-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* 두 겹 그림자 — 접촉(가깝고 진한 것) + 주변광(멀고 옅은 것). 폴더 아이콘과 같은 값 계열이다. */
-.v2-tile { width: 64px; height: 64px; flex: none; filter: drop-shadow(0 1px 1.5px rgba(21, 35, 59, .14)) drop-shadow(0 5px 12px rgba(21, 35, 59, .16)); }
-.v2-pad-name { font-size: 12.5px; font-weight: 500; color: #FFFFFF; line-height: 1.35; max-width: 106px; overflow-wrap: anywhere; text-shadow: 0 1px 2px rgba(0, 0, 0, .45); }
-.v2-pad-empty { color: rgba(255, 255, 255, .8); font-size: 13px; grid-column: 1 / -1; text-align: center; padding: 30px 0; }
+/* 유리 아이콘 — 그림자·글로우 없음(규칙 ④). 서리 **색**은 여기 color 로 준다:
+   서리의 옅은 기울기가 currentColor 를 쓰는데, 그건 svg 자신의 color 를 보지 도형의 color 를 안 본다. */
+.v2-gi { width: 64px; height: 64px; flex: none; display: block; color: var(--v2-gi-frost); }
+.v2-gi-frost { fill-opacity: var(--v2-gi-frost-a); }
+.v2-gi-punch { fill: var(--v2-gi-punch); fill-opacity: var(--v2-gi-punch-a); }
+.v2-pad-name { font-size: 12.5px; font-weight: 500; color: var(--ink); line-height: 1.35; max-width: 106px; overflow-wrap: anywhere; }
+.v2-pad-empty { color: var(--muted); font-size: 13px; grid-column: 1 / -1; text-align: center; padding: 30px 0; }
 
 /* ── 앱 사용 동의 창(#1780 app-session) — 세션 앱을 처음 열 때 뜨는 권한 확인 모달 ── */
 .v2-consent-ov { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(var(--shadow-ink), .32); padding: 20px; }
