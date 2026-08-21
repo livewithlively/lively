@@ -25,6 +25,7 @@
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
 import { anchoredPopover, api, el, personFace, toast } from '../core.js';
 import { makeSplitter } from './split.js';
+import { mountSideSwap } from './side-swap.js'; // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline } from '../timeline.js';
@@ -311,7 +312,16 @@ export function mountPanes(host, opts) {
     const bottomPane = makePane('bottom');
     const sidePane = makePane('side');
     // 세로 경계(가운데|곁칸) · 가로 경계(가운데|아래 칸) — 폭·높이는 split.ts 가 기억한다.
-    const splitX = makeSplitter({ axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: 340, min: 220, max: 620, grow: -1, label: '곁칸 너비' });
+    // 곁칸 경계 — 상한·부호를 side-swap 이 정한다(#1819). 곁칸이 왼쪽으로 가면 같은 손잡이의 부호가 반대가 된다.
+    let swap = null;
+    const splitX = makeSplitter({
+        axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: 340, min: 220,
+        max: () => swap?.maxSideW() ?? 620,
+        grow: () => (body.classList.contains('sw-left') ? 1 : -1),
+        label: '곁칸 너비',
+        onDrag: (px) => swap?.onDrag(px),
+        onEnd: (px) => swap?.onEnd(px),
+    });
     const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이' });
     colMain.append(mainPane.root, splitY, bottomPane.root);
     // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
@@ -321,6 +331,7 @@ export function mountPanes(host, opts) {
         onclick: () => { lay.sideOn = true; saveLayout(); paintAll(); },
     }, pnIcon('chev', 'pn-i sm'));
     body.append(colMain, splitX, sidePane.root, sideReopen);
+    swap = mountSideSwap({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn });
     // ── 탭 ──
     function ensurePart(pane, type) {
         let p = pane.parts.get(type);
@@ -527,6 +538,7 @@ export function mountPanes(host, opts) {
         paintPane('main');
         paintPane('side');
         paintPane('bottom');
+        swap?.sync();
         paintDoor();
     }
     // ── 문패 ──
@@ -547,7 +559,7 @@ export function mountPanes(host, opts) {
         //  흰 문패 위에서 회색 글자로 흩어졌고, 나란히 있으니 무엇이 주된 동작인지도 말하지 않았다.
         //  그래서 **크기·글자크기는 그대로 두고 채움만** 바꾼다 — 이 칸에서 사람이 제일 자주 하는 일(세션 열기)은
         //  칠한 버튼, 가끔 보는 것(상세)은 테두리 버튼. 위계가 색으로 먼저 읽힌다.
-        el('span', { class: 'pn-door-sep', 'aria-hidden': 'true' }), el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('plus', 'pn-i sm'), el('span', { text: '세션' })), 
+        el('span', { class: 'pn-door-sep', 'aria-hidden': 'true' }), swap ? swap.button() : null, el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('plus', 'pn-i sm'), el('span', { text: '세션' })), 
         // 이름은 '정보'가 아니라 **프로젝트 상세** — 개요 부품을 없앤 뒤로 본문·할 일·상태를 보는 유일한 입구다.
         //  '정보'만 있으면 무엇에 대한 정보인지 안 말해 준다(원준 2026-08-20).
         loose ? null : el('button', { class: 'btn btn-ghost btn-sm pn-door-btn', type: 'button', title: '본문·할 일·상태·이름을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '프로젝트 상세' }))));
@@ -627,6 +639,7 @@ export function mountPanes(host, opts) {
             dead = true;
             window.removeEventListener('pn:sessions-view', onViewChanged);
             window.clearInterval(timer);
+            swap?.destroy();
             for (const ro of ros)
                 ro.disconnect();
             ros.length = 0;

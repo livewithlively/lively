@@ -16,10 +16,21 @@ export function readSplit(key, def) {
         return def;
     }
 }
+/** 손잡이 밖에서 크기를 정해 줄 때(실험 모드가 바뀌며 상한이 좁아지는 경우 등). 화면과 기억을 함께 바꾼다. */
+export function writeSplit(key, target, cssVar, px) {
+    const v = Math.round(px);
+    target.style.setProperty(cssVar, v + 'px');
+    try {
+        localStorage.setItem(KEY(key), String(v));
+    }
+    catch { /* 저장 못 해도 이번 화면은 된다 */ }
+}
 /** 손잡이 요소를 만들어 돌려준다(호출자가 두 칸 사이에 끼운다). 저장된 값이 있으면 그 자리에서 곧바로 적용한다. */
 export function makeSplitter(o) {
+    const maxOf = () => (typeof o.max === 'function' ? o.max() : o.max);
+    const growOf = () => (typeof o.grow === 'function' ? o.grow() : o.grow);
     const apply = (px, persist) => {
-        const v = clamp(Math.round(px), o.min, o.max);
+        const v = clamp(Math.round(px), o.min, Math.max(o.min, maxOf()));
         o.target.style.setProperty(o.cssVar, v + 'px');
         if (persist) {
             try {
@@ -52,7 +63,8 @@ export function makeSplitter(o) {
         h.setPointerCapture(e.pointerId);
         const move = (ev) => {
             const d = (o.axis === 'x' ? ev.clientX : ev.clientY) - start;
-            apply(base + d * o.grow, false);
+            apply(base + d * growOf(), false);
+            o.onDrag?.(current());
         };
         const up = () => {
             h.classList.remove('on');
@@ -61,26 +73,30 @@ export function makeSplitter(o) {
             h.removeEventListener('pointerup', up);
             h.removeEventListener('pointercancel', up);
             apply(current(), true);
+            o.onEnd?.(current());
         };
         h.addEventListener('pointermove', move);
         h.addEventListener('pointerup', up);
         h.addEventListener('pointercancel', up);
     });
-    h.addEventListener('dblclick', () => apply(o.def, true));
+    h.addEventListener('dblclick', () => { apply(o.def, true); o.onEnd?.(current()); });
     h.addEventListener('keydown', (e) => {
         const step = e.shiftKey ? 32 : 8;
         const dec = o.axis === 'x' ? 'ArrowLeft' : 'ArrowUp';
         const inc = o.axis === 'x' ? 'ArrowRight' : 'ArrowDown';
         if (e.key === dec) {
-            apply(current() - step * o.grow, true);
+            apply(current() - step * growOf(), true);
+            o.onEnd?.(current());
             e.preventDefault();
         }
         else if (e.key === inc) {
-            apply(current() + step * o.grow, true);
+            apply(current() + step * growOf(), true);
+            o.onEnd?.(current());
             e.preventDefault();
         }
         else if (e.key === 'Home') {
             apply(o.def, true);
+            o.onEnd?.(current());
             e.preventDefault();
         }
     });
