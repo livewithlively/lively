@@ -15,6 +15,8 @@ import { upDropZone, upFromInput, upSend, upToast } from '../projects/files-uplo
 import { confirmDialog } from '../ui-primitives.js';
 import { mountProjectChat } from '../project-chat.js';
 import { hasBrowserSurface } from './browser-surface.js';
+import { EMBEDDED } from './embed.js';
+import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
 import { NOISE_RE, TRASH_DIR, attachName, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
 import { createRunPicker } from './run-picker.js';
@@ -636,19 +638,26 @@ function archivePart(ctx) {
 //   그건 로그인도 깨지고 보안상 열어서는 안 되는 문이다). 그래서 **빈 화면이면 새 탭으로**를 그 자리에 둔다.
 /** 웹 칸에 실린 주소의 저장 열쇠 — 세션마다 따로다(webPart 와 같은 규칙을 써야 서로 어긋나지 않는다). */
 const WEB_URL_KEY = 'pn_web_url';
-/** "이 주소를 웹 칸에 실어라" — 칸이 아직 없으면 셸(panes.ts)이 듣고 칸부터 켠다. */
+/** "이 주소를 웹 칸에 실어라" — 칸이 아직 없으면 셸(panes.ts)이 듣고 칸부터 켠다.
+ *  ⚠ 이 신호는 **곁칸 한 벌 안에서만** 돈다(ctx.paneRoot). 문서 전체로 뿌리면 다른 세션 탭까지 물든다. */
 const WEB_OPEN_EVT = 'pn:open-web';
 /** 밖(다른 부품)에서 웹 칸에 주소를 싣는 유일한 통로.
  *  ⚠ 저장을 **먼저** 한 다음 알린다 — 칸이 아직 없으면 셸이 그때 만드는데, 새로 만들어진 웹 칸은
- *   이벤트를 이미 놓친 뒤라 저장된 값에서 주소를 읽는다(둘 중 하나만 하면 '처음 한 번'이 조용히 안 먹는다). */
+ *   이벤트를 이미 놓친 뒤라 저장된 값에서 주소를 읽는다(둘 중 하나만 하면 '처음 한 번'이 조용히 안 먹는다).
+ *  ⚠ 저장도 알림도 **이 곁칸의 것**으로 끝난다 — 저장은 이 곁칸이 보는 세션 열쇠 하나에만, 알림은
+ *   이 곁칸 뿌리 안에만. 둘 중 하나라도 전역이면 옆 세션 탭이 같이 끌려간다. */
 export function openInWebPart(ctx, url) {
+    const u = normWebUrl(url);
+    if (!u)
+        return;
     try {
         const m = JSON.parse(localStorage.getItem(WEB_URL_KEY) || '{}') || {};
-        m[ctx.memKey()] = url;
-        localStorage.setItem(WEB_URL_KEY, JSON.stringify(m));
+        m[ctx.memKey()] = u;
+        if (!EMBEDDED)
+            localStorage.setItem(WEB_URL_KEY, JSON.stringify(m));
     }
-    catch (_) { /* 저장이 막혀도 아래 이벤트로 지금 떠 있는 칸은 바뀐다 */ }
-    document.dispatchEvent(new CustomEvent(WEB_OPEN_EVT, { detail: { url } }));
+    catch (_) { /* 저장이 막혀도 아래 알림으로 지금 떠 있는 칸은 바뀐다 */ }
+    ctx.paneRoot().dispatchEvent(new CustomEvent(WEB_OPEN_EVT, { detail: { url: u } }));
 }
 function webPart(ctx) {
     const root = el('div', { class: 'pn-part pn-web' });
@@ -661,16 +670,10 @@ function webPart(ctx) {
     } };
     // 주소는 **세션마다** 따로 기억한다 — 옆 세션에서 열어 둔 페이지가 이 세션 칸에 뜨면 그건 남의 화면이다(원준 2026-08-20).
     const keyOf = () => ctx.memKey();
-    const norm = (v) => {
-        const t = v.trim();
-        if (!t)
-            return '';
-        if (/^https?:\/\//i.test(t))
-            return t;
-        if (/^[\w.-]+\.[a-z]{2,}(\/|$|\?)/i.test(t))
-            return 'https://' + t;
-        return 'https://www.google.com/search?q=' + encodeURIComponent(t); // 주소가 아니면 검색으로 — 막다른 입력칸을 만들지 않는다
-    };
+    // 주소 정규화는 web-url.ts 한 곳에서 — 우리 오리진이면 ?embed=1 을 붙여 싣는다(표를 단 판은 탭·배치·주소를
+    //  기억하지도 기억되지도 않는다. 안 붙이면 같은 사이트라 localStorage 를 공유해, 칸 안 라이블리가 바깥이
+    //  보던 화면을 그대로 복제한다 — 실측 2026-08-21).
+    const norm = normWebUrl;
     // 데스크톱 앱(#1829)에서는 <webview> 로 그린다 — 별도 WebContents 라 X-Frame-Options 검사의 대상이 아니다.
     //  능력 감지로 가른다(UA/플랫폼 추측 금지). 없으면 종전 iframe 그대로.
     const live = hasBrowserSurface();
@@ -684,6 +687,10 @@ function webPart(ctx) {
             return;
         input.value = u;
         frame.setAttribute('src', u);
+        // ⚠ 끼워 넣은 판(미리보기 프레임 안)에서는 **기억하지 않는다** — 저장소를 바깥과 공유하므로
+        //  여기서 저장하면 바깥 사람이 그 세션에서 보던 주소를 덮어쓴다.
+        if (EMBEDDED)
+            return;
         const m = store();
         m[keyOf()] = u;
         try {
@@ -722,7 +729,10 @@ function webPart(ctx) {
     // 밖에서 부른 주소 — 미리보기 칸에서 누른 것이 여기로 온다. 칸이 이미 떠 있으면 이 경로로 갈아 끼운다.
     const onOpen = (e) => { const u = e.detail?.url; if (u)
         go(String(u)); };
-    document.addEventListener(WEB_OPEN_EVT, onOpen);
+    //  ⚠ `document` 가 아니라 **이 곁칸 뿌리**에서 듣는다 — 문서에 달면 열려 있는 모든 세션 탭의 웹 칸이
+    //   같은 신호를 받아 다 같이 그 주소로 갈아입는다(그리고 저마다 자기 세션 열쇠에 그걸 저장한다).
+    const evtHost = ctx.paneRoot();
+    evtHost.addEventListener(WEB_OPEN_EVT, onOpen);
     const openTab = el('a', { class: 'pn-web-btn', target: '_blank', rel: 'noopener', title: '새 탭에서 엽니다', href: '#' }, pnIcon('ext', 'pn-i sm'));
     openTab.onclick = (e) => { const u = norm(input.value); if (!u) {
         e.preventDefault();
@@ -772,6 +782,7 @@ function webPart(ctx) {
         root,
         destroy: () => {
             offSess();
+            evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
             document.removeEventListener('pointerdown', mark, true);
             document.removeEventListener('focusin', mark, true);
             window.removeEventListener('keydown', onKey, true);
@@ -806,6 +817,8 @@ function viewerPart(ctx) {
     const fileUrl = (p2) => apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2));
     // 무엇을 열어 두었나도 **세션마다** 따로 — 자료(파일 자체)는 프로젝트 공용이지만, '내가 지금 뭘 펴 놨나'는 내 세션의 것이다.
     const remember = (p2) => {
+        if (EMBEDDED)
+            return; // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
         try {
             const m = JSON.parse(localStorage.getItem(KEY) || '{}') || {};
             m[ctx.memKey()] = p2;

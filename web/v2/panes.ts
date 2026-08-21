@@ -28,6 +28,7 @@ import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { hasBrowserSurface } from './browser-surface.js';
+import { EMBEDDED } from './embed.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
@@ -138,6 +139,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   function saveLayout(): void {
     if (loose) return;                          // 자투리 화면의 임시 배치를 정본으로 굳히지 않는다
+    if (EMBEDDED) return;                       // 끼워 넣은 판(미리보기 프레임 안) — 바깥 사람의 배치를 덮어쓰지 않는다
     try {
       const st = layoutStore();
       const map = st.p && typeof st.p === 'object' ? st.p : {};
@@ -247,6 +249,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     trailHost: () => trailHost,
     // 세션에 딸린 값(웹 주소·편집 중인 파일)의 저장 열쇠. 세션이 없을 때만 프로젝트로 떨어진다(새 세션 자리).
     memKey: () => curSession() || 'p' + id,
+    // 부품끼리의 신호가 도는 **울타리**. 아래 wrap 은 이 객체보다 나중에 만들어지지만, 부르는 것은 늘
+    //  부품이 살아 있을 때(그때는 이미 있다)라 게터로 둔다.
+    paneRoot: () => wrap,
   };
 
   // ── 골격 ──
@@ -372,14 +377,29 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     saveLayout(); paintAll();
   }
   // 미리보기 칸에서 "이 주소 열어" 하고 부르면 웹 칸을 켠다 — 없으면 곁칸에 만들고, 이미 있으면 그 칸이 스스로 받는다.
+  //  ⚠ 칸을 새로 만들 때는 부품이 이벤트를 이미 놓친 뒤라, 주소는 openInWebPart 가 저장해 둔 값에서 읽힌다.
+  //  ⚠ `document` 가 아니라 **이 곁칸**에서 듣는다 — 문서에 달면 열려 있는 모든 세션 탭에 웹 칸이 한꺼번에
+  //   켜진다(실측 2026-08-21: 미리보기 한 번에 두 세션 탭 모두 칸이 생기고 저장값도 둘 다 물들었다).
   const onOpenWeb = (): void => { addTab('side', 'web'); };
-  document.addEventListener('pn:open-web', onOpenWeb);
+  wrap.addEventListener('pn:open-web', onOpenWeb);
   // 터미널 iframe 이 미리보기 링크를 넘겨 온다 — 새 탭 대신 웹 칸에 싣는다(원준 2026-08-21).
-  //  ⚠ 출처를 반드시 확인한다. 받았으면 답을 보내 터미널이 새 탭 폴백을 접게 한다.
+
+  //  ⚠ 출처를 반드시 확인한다(남의 프레임이 우리 칸을 마음대로 열지 못하게). 받았으면 답을 보내
+  //   터미널이 새 탭 폴백을 접게 한다 — 답이 없으면 저쪽은 잠시 뒤 새 탭을 연다.
+  //  ⚠ 창에 오는 message 는 **열려 있는 모든 탭의 곁칸이 함께** 받는다. 보낸 프레임이 내 탭 안의 것인지
+  //   가리지 않으면 터미널 링크 하나에 모든 세션 탭의 웹 칸이 같이 갈아입는다(같은 뿌리의 신고).
+  const ownsFrame = (w: unknown): boolean => {
+    const scope = wrap.closest('.v2-tabpane') as HTMLElement | null;
+    if (!scope) return true;                   // 탭이 없는 판(단독 화면) — 곁칸이 하나뿐이라 가릴 것이 없다
+    if (!w) return false;
+    for (const f of scope.querySelectorAll('iframe')) if ((f as HTMLIFrameElement).contentWindow === w) return true;
+    return false;
+  };
   const onMsg = (e: MessageEvent): void => {
     if (e.origin !== location.origin) return;
     const d: any = e.data;
     if (!d || d.type !== 'lively:open-in-pane' || typeof d.url !== 'string') return;
+    if (!ownsFrame(e.source)) return;           // 남의 탭 터미널이 보낸 것 — 그 탭의 곁칸이 받는다
     // 남의 사이트(claude.ai 아티팩트 등)는 **앱에서만** 칸에 들어간다 — 브라우저 iframe 은 상대가 막는다
     //  (CSP frame-ancestors). 막힐 걸 알면서 칸에 넣으면 빈 화면만 남으므로 그때는 새 탭으로 연다.
     let cross = false;
@@ -652,7 +672,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   return {
     newSession,
     destroy(): void {
-      document.removeEventListener('pn:open-web', onOpenWeb);
+      wrap.removeEventListener('pn:open-web', onOpenWeb);
       window.removeEventListener('message', onMsg);
       dead = true;
       window.removeEventListener('pn:sessions-view', onViewChanged);

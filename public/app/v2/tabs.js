@@ -17,7 +17,11 @@
 //    **새 탭으로** 여는 여느 화면이고, 그 탭에서 세션을 열면 그 자리가 곧 그 세션이 된다(브라우저 새 탭 문법).
 //  · **탭 끌어 순서 바꾸기** — 모든 탭이 같은 자격이라 어느 것이든 끌어 옮긴다.
 import { anchoredPopover, el, sv } from '../core.js';
+import { EMBEDDED } from './embed.js';
 const STORE_KEY = 'lively_v2_tabs';
+//  ⚠ 끼워 넣은 판(미리보기 프레임 안)은 **탭을 기억하지도 기억되지도 않는다** — 미리보기도 주소가 같은
+//   사이트라 저장소를 바깥과 공유한다. 복원하면 바깥이 보던 탭이 프레임 안에 통째로 되살아나 정작 보려던
+//   화면이 안 뜨고(원준 2026-08-21 신고), 저장하면 바깥 사람의 탭 목록을 덮어쓴다. 자세한 배경은 embed.ts.
 /** 라우트 정규화 키 — 같은 화면인지 비교(홈의 '', '#/', '#/dashboard' 는 한 화면). */
 export function routeKey(route) {
     const h = String(route || '').replace(/^#\/?/, '');
@@ -55,6 +59,8 @@ export function createTabs(centerHost, asideHost, hooks) {
         return t;
     }
     function save() {
+        if (EMBEDDED)
+            return;
         try {
             localStorage.setItem(STORE_KEY, JSON.stringify({
                 tabs: tabs.map((t) => ({ route: t.route, title: t.title })),
@@ -373,7 +379,7 @@ export function createTabs(centerHost, asideHost, hooks) {
     // 저장된 탭 복원 — 라우트·제목만(내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
     let restoredActive = 0;
     try {
-        const st = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+        const st = EMBEDDED ? null : JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
         if (st && Array.isArray(st.tabs)) {
             // ⚠ 복원에는 **중복 제거**가 필요하다 — 저장본에 같은 화면이 두 번 들어 있으면(옛 버그가 만든 잔재도) 그대로
             //  탭 두 개로 되살아나고, 그 뒤로는 find() 가 첫 번째만 잡으므로 둘째가 영영 남는다(원준 2026-08-20 신고).
