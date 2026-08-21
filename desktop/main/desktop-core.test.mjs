@@ -23,6 +23,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash } from "./notify.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
 
@@ -1561,6 +1562,108 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(chainAt >= 0, "노드 자동 시작 판정(nextAfterSetup)이 배선되지 않았다");
     assert.ok(rest.slice(chainAt).includes('start("node-start"'), "판정이 참일 때 node-start 를 잇지 않는다");
     assert.ok(rest.indexOf("!r.ok") < chainAt, "실패 가드보다 먼저 노드를 시작하려 한다");
+  });
+}
+
+// ── 앱 알림 판정 (#1842) ─────────────────────────────────────────────────────
+{
+  const S = (over) => ({ id: "box-jang-1", label: "세션", harness: "claude", owned: true, agentState: "idle", awaiting: false, working: false, ...over });
+  const snap = (arr) => snapshotSessions(arr);
+  const kinds = (evs) => evs.map((e) => e.kind);
+
+  t("A1 콜드스타트 — 앱을 켠 첫 폴은 **아무것도 알리지 않는다**(과거가 배너로 되살아나면 안 된다)", () => {
+    assert.deepEqual(diffSessions(null, snap([S({ awaiting: true })])), []);
+  });
+  t("A2 대기 진입 — awaiting false→true 에서만 뜬다(계속 대기 중이면 다시 안 뜬다)", () => {
+    const a = snap([S({ awaiting: false })]), b = snap([S({ awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+    assert.deepEqual(diffSessions(b, b), [], "같은 대기가 폴링마다 반복되면 30초마다 같은 배너가 된다");
+  });
+  t("A3 ★ 탭이 없어도(agentState=offline) 대기는 알린다 — 이 프로젝트의 핵심 함정", () => {
+    // catalog.ts: agentState 는 탭이 없으면 busy·waiting 을 offline 으로 덮는다. 그 값으로 판정하면
+    //  화면을 열어 둔 사람에게만 알림이 가고, 자리를 뜬 사람(=알림이 필요한 사람)에겐 안 뜬다.
+    const a = snap([S({ agentState: "offline", awaiting: false })]);
+    const b = snap([S({ agentState: "offline", awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+    const src = readFileSync(fileURLToPath(new URL("./notify.mjs", import.meta.url)), "utf8");
+    const body = src.slice(src.indexOf("export function diffSessions"));
+    assert.ok(!/\.state\s*===\s*"waiting"|agentState\s*===\s*"waiting"/.test(body), "waiting 판정에 agentState 를 쓰고 있다");
+  });
+  t("A4 완료 — working true→false", () => {
+    assert.deepEqual(kinds(diffSessions(snap([S({ working: true })]), snap([S({ working: false })]))), [NOTIFY.DONE]);
+  });
+  t("A5 완료와 대기가 같은 순간이면 **대기가 이긴다**(질문은 완료가 아니다)", () => {
+    const a = snap([S({ working: true })]), b = snap([S({ working: false, awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+  });
+  t("A6 종료 — 예기치 않은 종료만 알리고, 사람이 스스로 끝낸 것(exitedByUser)은 뺀다", () => {
+    const a = snap([S({ agentState: "busy" })]);
+    assert.deepEqual(kinds(diffSessions(a, snap([S({ agentState: "exited" })]))), [NOTIFY.EXITED]);
+    assert.deepEqual(diffSessions(a, snap([S({ agentState: "exited", exitedByUser: true })])), [], "내가 /exit 한 걸 되알리지 않는다");
+  });
+  t("A7 새 세션 — 곧장 승인을 물으면 알리고, 그냥 생긴 것은 안 알린다", () => {
+    const before = snap([]);
+    assert.deepEqual(kinds(diffSessions(before, snap([S({ awaiting: true })]))), [NOTIFY.WAITING]);
+    assert.deepEqual(diffSessions(before, snap([S({})])), []);
+  });
+  t("A8 사라진 세션(회수·정리)은 사건이 아니다", () => {
+    assert.deepEqual(diffSessions(snap([S({ working: true })]), snap([])), []);
+  });
+  t("A9 남의 세션(owned=false)·셸 세션(harness=shell)은 스냅샷에서 빠진다", () => {
+    assert.equal(snap([S({ owned: false, awaiting: true })]).size, 0);
+    assert.equal(snap([S({ harness: "shell", awaiting: true })]).size, 0);
+  });
+  t("A10 유형별 끄기 — 끈 종류는 만들지 않는다", () => {
+    const a = snap([S({ awaiting: false })]), b = snap([S({ awaiting: true })]);
+    assert.deepEqual(diffSessions(a, b, { [NOTIFY.WAITING]: false }), []);
+    assert.deepEqual(kinds(diffSessions(a, b, { [NOTIFY.DONE]: false })), [NOTIFY.WAITING], "다른 종류를 꺼도 대기는 산다");
+  });
+  t("A11 이름 폴백 — title 없으면 label, 둘 다 없으면 '이름 없는 세션'", () => {
+    assert.equal(snap([S({ title: "지금 하는 일" })]).get("box-jang-1").name, "지금 하는 일");
+    assert.equal(snap([S({ title: "", label: "라벨" })]).get("box-jang-1").name, "라벨");
+    assert.equal(snap([S({ title: "", label: "" })]).get("box-jang-1").name, "이름 없는 세션");
+  });
+  t("A12 배너 계획 — 적으면 개별, 많으면 한 장으로 묶는다(알림 폭탄 방지)", () => {
+    const ev = (i) => ({ kind: NOTIFY.WAITING, id: "s" + i, name: "세션" + i });
+    assert.equal(planBanners([ev(1), ev(2)]).length, 2);
+    const many = planBanners([ev(1), ev(2), ev(3), ev(4)]);
+    assert.equal(many.length, 1);
+    assert.equal(many[0].event, null, "묶음 배너는 특정 세션으로 보내지 않는다");
+    assert.match(many[0].body, /4개/);
+  });
+  t("A13 문구 — 본문은 어미까지 끝맺는다(ui-copy-complete-sentence-endings)", () => {
+    for (const k of [NOTIFY.WAITING, NOTIFY.DONE, NOTIFY.EXITED]) {
+      const b = bannerFor({ kind: k, name: "테스트 세션" });
+      assert.ok(b.title && b.body, k + " 문구가 비었다");
+      assert.ok(b.body.includes("테스트 세션"), k + " 본문에 세션 이름이 없다");
+    }
+    assert.match(bannerFor({ kind: NOTIFY.EXITED, name: "s", oom: true }).title, /강제/);
+  });
+  t("A14 세션 해시 — 형식이 아닌 id 는 주소로 만들지 않는다(응답을 그대로 믿지 않는다)", () => {
+    assert.equal(sessionHash("box-jang-8abcdb3b"), "#/s/box-jang-8abcdb3b");
+    for (const bad of ["", null, "a b", "../../etc", "javascript:alert(1)", "x".repeat(200)]) assert.equal(sessionHash(bad), null, String(bad));
+  });
+  t("A15 배선 — main.mjs 가 알림 폴러를 실제로 걸고 Notification 을 띄운다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(/from "\.\/notify\.mjs"/.test(main), "notify.mjs 를 쓰지 않는다");
+    assert.ok(/new Notification\(/.test(main), "OS 알림을 띄우지 않는다");
+    assert.ok(/setAppUserModelId/.test(main), "Windows 는 AppUserModelId 가 없으면 배너가 안 뜬다");
+  });
+  t("A16 트레이 — 갖춰졌을 때만 알림 서브메뉴가 서고, 체크는 현재 설정을 그대로 비춘다", () => {
+    const ready = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true };
+    const on = trayMenuModel({ ...ready, notifyPrefs: { [NOTIFY.WAITING]: false } });
+    const menu = on.find((m) => m.id === "notify");
+    assert.ok(menu && Array.isArray(menu.submenu), "알림 서브메뉴가 없다 — 끌 수단 없는 알림은 만들지 않는다");
+    assert.equal(menu.submenu.length, 3);
+    assert.equal(menu.submenu.find((m) => m.id === `notify:${NOTIFY.WAITING}`).checked, false, "끈 설정이 체크로 남아 있다");
+    assert.equal(menu.submenu.find((m) => m.id === `notify:${NOTIFY.DONE}`).checked, true, "설정이 없는 축은 기본 켜짐이다");
+    assert.ok(!trayMenuModel({ cliFound: false }).some((m) => m.id === "notify"), "설치 전에는 못 쓰는 스위치를 보여주지 않는다");
+  });
+  t("A17 배선 — 트레이가 서브메뉴를 그리고, 토글이 설정 파일로 간다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(/submenu:\s*m\.submenu\.map/.test(main), "renderTray 가 서브메뉴를 그리지 않는다 — 항목이 조용히 사라진다");
+    assert.ok(/id\.startsWith\("notify:"\)/.test(main), "알림 토글 클릭이 배선되지 않았다");
+    assert.ok(/notifyPrefs\(\)/.test(main), "트레이가 현재 설정을 읽지 않는다");
   });
 }
 

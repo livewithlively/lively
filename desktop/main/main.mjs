@@ -11,7 +11,7 @@
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 //  ④ **화면은 웹 UI 그대로다**(web-shell.mjs) — 설치·로그인·키트가 갖춰지면 창에 게이트웨이의 /ui/ 를 싣는다.
 //     앱에 화면 코드를 한 벌 더 두지 않는다(웹이 곧 앱). 마법사(renderer/)는 갖춰지기 전과 노드·점검 설정에만 쓴다.
-import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session, Notification } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -30,6 +30,8 @@ import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReady
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
+import { APP_ID } from "./win-stale-install.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, sessionHash } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -72,6 +74,7 @@ async function refreshState({ deep = false } = {}) {
   const cliPath = locateCli(existsSync);
   const next = { ...state, cliPath, cliFound: !!cliPath };
   next.gatewayUrl = readTrim(join(LIVELY_DIR, "gateway-url"));
+  next.notifyPrefs = notifyPrefs();   // 트레이 알림 서브메뉴의 체크 상태(#1842)
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
   // 토큰이 **있다**와 **먹힌다**는 다르다 — 게이트웨이가 401 로 거부한 그 토큰이 그대로면 로그인이 필요한 상태다.
   //  파일의 토큰이 바뀌면(다시 로그인) 저절로 풀린다 — 따로 초기화할 자리가 없어 빠뜨릴 일이 없다.
@@ -212,9 +215,13 @@ function renderTray() {
   if (!tray) return;
   const model = trayMenuModel(state);
   tray.setToolTip(`라이블리 — ${model[0]?.label ?? ""}`);
-  tray.setContextMenu(Menu.buildFromTemplate(model.map((m) => (m.type === "separator"
+  // 서브메뉴(알림 #1842)를 위해 재귀로 그린다 — 항목이 submenu 를 가지면 클릭이 아니라 펼침이다.
+  const toTemplate = (m) => (m.type === "separator"
     ? { type: "separator" }
-    : { label: m.label, type: m.type, checked: m.checked, enabled: m.enabled !== false, click: () => onMenu(m.id) }))));
+    : m.submenu
+      ? { label: m.label, enabled: m.enabled !== false, submenu: m.submenu.map(toTemplate) }
+      : { label: m.label, type: m.type, checked: m.checked, enabled: m.enabled !== false, click: () => onMenu(m.id) });
+  tray.setContextMenu(Menu.buildFromTemplate(model.map(toTemplate)));
 }
 function onMenu(id) {
   if (id === "open") return showMain();          // 갖춰졌으면 라이블리 화면, 아니면 마법사
@@ -230,6 +237,13 @@ function onMenu(id) {
   // 노드의 자동 시작 = OS 데몬 등록. `node --daemon` 이 켜고 `node stop` 이 끈다(등록·번들은 남는다).
   if (id === "node-autostart") return start(state.nodeDaemon ? "node-stop" : "node-start", {});
   if (id === "app-autolaunch") return setAppAutoLaunch(!state.appAutoLaunch);
+  // 알림 유형 토글(#1842) — 파일에 남기고 트레이를 다시 그린다(체크 표시가 곧 현재 설정이다).
+  if (id.startsWith("notify:")) {
+    const kind = id.slice("notify:".length);
+    const cur = notifyPrefs();
+    state = { ...state, notifyPrefs: setNotifyPref(kind, !cur[kind]) };
+    return renderTray();
+  }
 }
 
 // ── 앱 자동 시작 (#1541 T4) ─────────────────────────────────────────────────
@@ -479,6 +493,74 @@ function pushWebUpdate() {
   if (key === webUpdateSent) return;
   webUpdateSent = key;
   sendWeb(IPC_WEB.UPDATE, payload);
+}
+
+// ── 앱 알림 (#1842) ─────────────────────────────────────────────────────────
+// 트레이 상주 앱만이 **창 없이도** 살아 있다(window-all-closed = noop). 그래서 "화면을 안 보고 있을 때 부르는"
+//  알림은 여기서만 만들 수 있다 — 웹 화면이 하면 창을 닫는 순간 눈이 먼다. 판정은 전부 notify.mjs(순수·표로 검증).
+const NOTIFY_POLL_MS = 30_000;      // 세션 상태 조회는 tmux 를 훑는다 — 상태 폴링(refreshState)과 같은 리듬으로 둔다
+const NOTIFY_PREFS_FILE = "desktop-notify.json";   // { session_waiting: true, ... } — 트레이에서 끄면 여기 남는다
+let notifySnapshot = null;          // 직전 세션 스냅샷. null = 콜드스타트(첫 폴은 기준선만 잡고 아무것도 안 띄운다)
+let notifyPolling = false;
+
+/** 유형별 켜짐 — 파일이 없거나 깨졌으면 기본값(전부 켜짐). 설정을 못 읽었다고 알림이 멎으면 안 된다. */
+function notifyPrefs() {
+  try {
+    const raw = readFileSync(join(LIVELY_DIR, NOTIFY_PREFS_FILE), "utf8");
+    const o = JSON.parse(raw);
+    return o && typeof o === "object" ? { ...NOTIFY_DEFAULTS, ...o } : { ...NOTIFY_DEFAULTS };
+  } catch { return { ...NOTIFY_DEFAULTS }; }
+}
+function setNotifyPref(kind, on) {
+  const next = { ...notifyPrefs(), [kind]: !!on };
+  try { mkdirSync(LIVELY_DIR, { recursive: true }); writeFileSync(join(LIVELY_DIR, NOTIFY_PREFS_FILE), JSON.stringify(next, null, 2)); } catch { /* 못 써도 이번 세션엔 적용된다 */ }
+  return next;
+}
+
+/** 배너 한 장. 클릭하면 그 세션 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
+function showBanner({ title, body, event }) {
+  try {
+    if (!Notification.isSupported()) return;          // 리눅스 등 알림 데몬이 없는 환경 — 조용히 넘긴다
+    const n = new Notification({ title, body });
+    n.on("click", () => { if (event && event.id) openSessionInApp(event.id); else showMain(); });
+    n.show();
+  } catch { /* OS 가 알림을 막았어도 앱은 계속 돈다 */ }
+}
+
+/** 알림 클릭 → 앱 창을 띄우고 **그 세션 화면**으로. 이미 실려 있으면 해시만 바꾼다(전체 리로드는 보던 화면을 날린다). */
+function openSessionInApp(id) {
+  const hash = sessionHash(id);                        // 형식이 아니면 null — 응답을 그대로 주소로 쓰지 않는다
+  const r = showApp();
+  if (!r || !r.ok || !hash || !appWin || appWin.isDestroyed()) return;
+  const wc = appWin.webContents;
+  const go = () => { try { void wc.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`).catch(() => {}); } catch { /* 창이 사라졌다 */ } };
+  if (wc.isLoading()) wc.once("did-finish-load", go); else go();
+}
+
+/**
+ * 한 번의 폴 — 세션 목록을 받아 직전 스냅샷과 견주고, 생긴 사건만 배너로 띄운다.
+ *  ⚠ 준비 안 됐거나(설치·로그인 전) 토큰이 없으면 **기준선을 버린다** — 다시 로그인했을 때 그 사이 사건이
+ *   한꺼번에 되살아나지 않게(콜드스타트로 되돌린다). 반대로 네트워크 실패는 기준선을 **유지**한다(다음 폴에서 이어 본다).
+ */
+async function pollNotifications() {
+  if (notifyPolling) return;
+  const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
+  const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
+  if (!token) { notifySnapshot = null; return; }
+  notifyPolling = true;
+  try {
+    const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return;                               // 401 은 watchTokenRejection 이 따로 처리한다
+    const data = await res.json();
+    const next = snapshotSessions(data && data.sessions);
+    const events = diffSessions(notifySnapshot, next, notifyPrefs());
+    notifySnapshot = next;
+    for (const b of planBanners(events)) showBanner(b);
+  } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
+  finally { notifyPolling = false; }
 }
 
 // ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────
@@ -1024,6 +1106,9 @@ else {
     //  이건 호출자 쪽 근본 방어 — 둘이 겹쳐야 setup·tmux 탐색까지 안전하다). 실패는 무해(현재 PATH 유지).
     enrichPathFromLoginShell(process.env, process.platform, (sh, argv) =>
       execFileSync(sh, argv, { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] }));
+    // Windows: 이게 없으면 배너가 아예 안 뜨거나 'electron.app.Electron' 이름으로 뜬다(알림 센터가 앱을 못 묶는다).
+    //  설치본의 appId(package.json build.appId)와 **같은 문자열**이어야 한다 — 다르면 알림 설정이 두 앱으로 갈린다.
+    try { app.setAppUserModelId(APP_ID); } catch { /* 비치명 */ }
     tray = new Tray(trayImage());
     tray.on("click", () => showMain());            // Windows·Linux 는 좌클릭이 자연스럽다
     try { startedHidden = startedHiddenFrom({ platform: process.platform, argv: process.argv, loginItem: app.getLoginItemSettings({ args: AUTOLAUNCH_ARGS }) }); } catch { startedHidden = false; }
@@ -1046,6 +1131,10 @@ else {
     void detectStaleInstall({ force: true });
     const up = setInterval(() => void checkUpdates(), UPDATE_INTERVAL_MS);
     if (up.unref) up.unref();
+    // 앱 알림(#1842) — 첫 폴은 기준선만 잡는다(콜드스타트). 이후 30초마다 '지금 사람을 불러야 할 사건'만 배너로.
+    void pollNotifications();
+    const ntf = setInterval(() => void pollNotifications(), NOTIFY_POLL_MS);
+    if (ntf.unref) ntf.unref();
   });
   // ★ 창을 다 닫아도 종료하지 않는다(트레이 상주). 기본 동작(win/linux 종료)을 반드시 덮어야 한다.
   app.on("window-all-closed", () => { /* noop — 트레이로 산다 */ });
