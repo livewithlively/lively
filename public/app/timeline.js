@@ -123,7 +123,37 @@ export function createTimeline(host, ctx) {
     // 골격은 가운데 화면과 같다(#1756): [머리 바][사실 한 줄] + 본문만 스크롤.
     //  가운데 대화창(sc-head → sc-chat)과 같은 자리에 같은 선이 지나가야 두 열이 한 판으로 읽힌다.
     const factsEl = el('div', { class: 'tl-facts', hidden: true });
-    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl), factsEl, el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl));
+    // ── 보는 차례(#1819 원준 2026-08-21) ────────────────────────────────────────
+    //  items 는 늘 시간순(오래된 → 최신)으로 쌓이고, **그리는 차례만** 이 스위치가 정한다.
+    //  기본은 최신이 위 — 세션을 열면 방금 있었던 일이 먼저 보여야 한다. 과거순은 처음부터 훑어 읽을 때 쓴다.
+    //  취향이라 브라우저에 남긴다(칸 배치와 같은 급). 프라이빗 모드에선 저장이 막히므로 조용히 기본값으로 간다.
+    const ORDER_KEY = 'lively_tl_order';
+    let newestFirst = true;
+    try {
+        newestFirst = localStorage.getItem(ORDER_KEY) !== 'old';
+    }
+    catch (_) { /* 저장이 막힌 브라우저 */ }
+    /** 그리는 차례 — 최신순이면 뒤집어 그린다(원본은 건드리지 않는다). */
+    const inOrder = (arr) => (newestFirst ? arr.slice().reverse() : arr);
+    const ordBtn = el('button', { class: 'tl-ord', type: 'button' });
+    function paintOrdBtn() {
+        ordBtn.replaceChildren(el('span', { class: 'tl-ord-i', 'aria-hidden': 'true', text: '⇅' }), el('span', { text: newestFirst ? '최신순' : '과거순' }));
+        ordBtn.title = newestFirst
+            ? '지금은 최신이 맨 위에 있습니다. 누르면 과거순으로 바뀝니다.'
+            : '지금은 과거가 맨 위에 있습니다. 누르면 최신순으로 바뀝니다.';
+    }
+    const scrollEl = el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl);
+    ordBtn.addEventListener('click', () => {
+        newestFirst = !newestFirst;
+        try {
+            localStorage.setItem(ORDER_KEY, newestFirst ? 'new' : 'old');
+        }
+        catch (_) { /* noop */ }
+        paint();
+        // 차례를 뒤집으면 '지금'이 반대편 끝으로 간다 — 그 자리로 데려간다(안 그러면 옛날 얘기만 보인 채로 남는다).
+        scrollEl.scrollTop = newestFirst ? 0 : scrollEl.scrollHeight;
+    });
+    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), ordBtn, countEl), factsEl, scrollEl);
     host.append(root);
     const isHead = (it) => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
     // ── 한 항목 = 원장(ledger) 한 줄 ──────────────────────────────────────
@@ -246,8 +276,7 @@ export function createTimeline(host, ctx) {
         let lastWho = '\u0000';
         let rail = el('div', { class: 'tl-rail' });
         const shown = restOpen ? [...keep, ...rest].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts)) : keep;
-        for (let i = shown.length - 1; i >= 0; i--) { // 최신이 위
-            const it = shown[i];
+        for (const it of inOrder(shown)) { // 차례는 머리 바의 [최신순/과거순]이 정한다
             const d = dayOf(it.ts);
             if (d !== day) {
                 day = d;
@@ -327,8 +356,7 @@ export function createTimeline(host, ctx) {
         const kids = [];
         let day = ' ';
         let rail = el('div', { class: 'tl-rail' });
-        for (let i = chaps.length - 1; i >= 0; i--) { // 최신 장이 위
-            const c = chaps[i];
+        for (const c of inOrder(chaps)) { // 차례는 머리 바의 [최신순/과거순]이 정한다
             const it0 = c.q || c.a || c.kids[0];
             const d = dayOf(it0 && it0.ts);
             if (d !== day) {
@@ -343,15 +371,21 @@ export function createTimeline(host, ctx) {
         list.replaceChildren(...kids);
     }
     // ── 그리기 ──
+    //  갈래(질문·대답 / 결과물 / 옛 목록)를 고르고, **차례에 딸린 뒷일**은 여기서 한 번만 한다.
     function paint() {
-        if (ctx.chapters) {
+        // 과거순은 새 항목이 **아래**로 붙는다 — 바닥을 보고 있던 사람은 계속 바닥에 있어야 방금 일어난 일이 보인다.
+        const stick = !newestFirst && scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 24;
+        paintOrdBtn();
+        if (ctx.chapters)
             paintQA();
-            return;
-        }
-        if (ctx.outcomes) {
+        else if (ctx.outcomes)
             paintOutcomes();
-            return;
-        }
+        else
+            paintRows();
+        if (stick)
+            scrollEl.scrollTop = scrollEl.scrollHeight;
+    }
+    function paintRows() {
         const rows = [];
         let cur = null;
         for (const it of items) {
@@ -377,8 +411,7 @@ export function createTimeline(host, ctx) {
         let day = ' ';
         let lastWho = '\u0000';
         let rail = el('div', { class: 'tl-rail' });
-        for (let i = shownRows.length - 1; i >= 0; i--) { // 최신이 위
-            const r = shownRows[i];
+        for (const r of inOrder(shownRows)) { // 차례는 머리 바의 [최신순/과거순]이 정한다
             const it0 = 'solo' in r ? r.solo : r.head;
             const d = dayOf(it0.ts);
             if (d !== day) {

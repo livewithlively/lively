@@ -668,6 +668,16 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   background: none; font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer; text-align: left; }
 .tl-rest:hover { color: var(--ink); background: var(--bg-tint); }
 .tl-scope { font-size: 12px; color: var(--muted); }
+/* 보는 차례 스위치(#1819) — 머리 바의 조용한 고스트 버튼. 개수(.v2-k)는 늘 맨 오른쪽에 있던 자리를
+   지키고, 스위치가 그 왼쪽에 붙는다(사람이 이미 아는 자리를 밀어내지 않는다). */
+.tl-ord { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 0; border-radius: 7px;
+  background: none; font: inherit; font-size: 11px; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.tl-ord:hover { color: var(--ink); background: var(--bg-tint); }
+.tl-ord:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.tl-ord-i { font-size: 10.5px; line-height: 1; color: var(--muted-3); }
+.tl-ord:hover .tl-ord-i { color: var(--blue); }
+.tl-wrap .v2-aside-h .tl-ord { margin-left: auto; }
+.tl-wrap .v2-aside-h .tl-ord + .v2-k { margin-left: 0; }
 .tl-wrap .v2-aside-h .v2-k { margin-left: auto; }
 .tl-list { display: flex; flex-direction: column; min-height: 0; gap: 2px; }
 .tl-day { display: flex; align-items: center; gap: 10px; padding: 22px 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--muted-2); }
