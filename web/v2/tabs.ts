@@ -124,9 +124,28 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     paint(); save();
   }
 
+  // ── 연달아 닫기(원준 2026-08-20) ────────────────────────────────────────────
+  //  탭은 남은 폭을 나눠 갖는다(flex 1 1 0). 그래서 하나 닫으면 나머지가 **즉시 넓어져** ×가 커서 밑에서 달아나고,
+  //  같은 자리에서 두 번째를 닫으려면 매번 마우스를 다시 찾아가야 했다. 브라우저가 쓰는 방법을 그대로 쓴다 —
+  //  **닫는 동안에는 탭 폭을 그대로 얼려 둔다**(그러면 오른쪽 탭이 방금 닫힌 자리로 정확히 미끄러져 들어와 ×가
+  //  커서 밑에 그대로 온다). 얼음은 **줄에서 마우스가 벗어나면** 녹는다.
+  let frozenW: number | null = null;
+  function freezeWidths(): void {
+    const one = scroll.querySelector('.v2-tab') as HTMLElement | null;
+    if (one) { frozenW = Math.round(one.getBoundingClientRect().width); strip.classList.add('freeze'); }
+  }
+  function thaw(): void {
+    if (frozenW == null) return;
+    frozenW = null;
+    strip.classList.remove('freeze');
+    paint();
+  }
+  strip.addEventListener('pointerleave', thaw);
+
   function close(tab: ShellTab): void {
     const i = tabs.indexOf(tab);
     if (i < 0) return;
+    freezeWidths();
     tabs.splice(i, 1);
     hooks.onClose(tab);
     tab.center.remove(); tab.aside.remove();
@@ -138,6 +157,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   }
 
   function add(route: string, opts?: { activate?: boolean; title?: string }): ShellTab {
+    if (frozenW != null) { frozenW = null; strip.classList.remove('freeze'); }   // 탭이 늘면 언 폭은 의미가 없다
     const t = mkTab(route, opts?.title);
     if (opts?.activate !== false) activate(t); else { paint(); save(); }
     return t;
@@ -318,6 +338,8 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
           class: 'x', type: 'button', 'aria-label': `「${t.title}」 탭 닫기`, title: '탭 닫기',
           onclick: (e: Event) => { e.stopPropagation(); close(t); },
         }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-xic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))));
+      // 닫는 중이면 폭을 얼린 값으로 고정한다(위 주석) — 오른쪽 탭이 방금 닫힌 자리로 그대로 미끄러져 온다.
+      if (frozenW != null) node.style.flex = '0 0 ' + frozenW + 'px';
       return node;
     });
     // ＋(새 빈 탭)는 줄에 두지 않는다 — 새 탭을 여는 자리는 사이드바 맨 위 [새 작업] 하나다(같은 일을 두 곳에
