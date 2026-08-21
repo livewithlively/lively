@@ -33,10 +33,7 @@ body[data-ui="v2"] #org-banner, body[data-ui="v2"] #desktop-update, body[data-ui
 body.v2-splitting-x, body.v2-splitting-x * { cursor: col-resize !important; user-select: none; }
 body.v2-splitting-y, body.v2-splitting-y * { cursor: row-resize !important; user-select: none; }
 body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
-/* ⚠ `#v2-root` 로 좁히지 말 것(#1841) — 런치패드(.v2-pad)·팝오버는 document.body 바로 아래에 붙는다.
-   범위를 좁혔더니 그 자리에서 규칙이 안 닿아 SVG 기본값(검은 면 채움·선 없음)으로 떨어졌다 —
-   같은 아이콘이 사이드바에선 선으로, 런치패드에선 검은 덩어리로 보였다. `.v2-ic` 는 이미 우리 이름이라 좁힐 이유가 없다. */
-.v2-ic { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.7; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+#v2-root .v2-ic { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.7; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .v2-k { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .v2-dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); flex: none; display: inline-block; box-sizing: border-box; }
 /* 상태점 어휘(web/v2/views.ts dotCls) — 색은 셋뿐: 작업 중·확인 필요·작업 완료. 나머지 살아 있는 것은 회색, 끝난 것은 빈 점(기본). */
@@ -239,8 +236,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-row.on::before { content: ''; position: absolute; left: calc(3px + var(--nest, 14px)); top: 7px; bottom: 7px; width: 2.5px; border-radius: 2px; background: var(--blue-fill); }
 .v2-ss-go { width: 14px; height: 14px; margin-left: 6px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
 /* 보관(×) — 자리는 늘 차지하고 hover 때만 보인다(압정과 같은 규약: 나타나며 행을 밀면 목록이 흔들린다). */
-.v2-ss-x { width: 18px; height: 18px; margin-left: 4px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
+.v2-ss-x { width: 18px; height: 18px; margin-left: 6px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: .45; }
 .v2-ss-row:hover .v2-ss-x, .v2-ss-x:focus-visible { opacity: 1; }
+/* 모바일·터치엔 hover 가 없다 — 늘 또렷하게. */
+@media (hover: none) { .v2-ss-x { opacity: 1; } }
 .v2-ss-x:hover { color: var(--danger); background: var(--bg-tint-2); }
 .v2-ss-x-ic { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 /* 이름 인라인 편집 — 행의 글자 자리를 그대로 쓴다(칸이 튀어나오면 목록이 흔들린다). */
@@ -852,47 +851,25 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-kn-foot { flex: none; margin-top: 0; padding: 14px 16px 18px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
 
 /* ── 런치패드 ── */
-/* 스크림 (#1841) — 두 가지를 동시에 만족해야 한다.
-   ① **전체를 가리지 않는다.** 흐림 8px · 덮는 정도 34% — 뒤 화면의 형태가 비쳐 '위에 열린 판'으로 읽힌다.
-      한때 22px + 62% 로 올렸더니 뒤가 통째로 사라져 화면이 갈아엎힌 것처럼 보였다(원준 2026-08-21).
-   ② **두 테마가 같은 성격이어야 한다.** `--tint-ink` 는 다크에서 밝게 뒤집히는 호버용 토큰이라
-      쓰면 라이트=어두운 막 / 다크=밝은 막으로 정반대가 된다. 그래서 **양쪽 다 어두운** 고정 색을 쓴다.
-      라이트에서만 하얗게 뒤집었을 때는 서리(≈#D3E6EE)와 스크림(≈#F2F6FA)의 명도차가 7%뿐이라
-      아이콘이 흰 허공에 떴다(실측). 옅더라도 어두운 쪽이어야 옅은 서리가 유리로 산다. */
-.v2-pad { position: fixed; inset: 0; z-index: 900; background: var(--v2-pad-scrim); backdrop-filter: blur(8px) saturate(1.04); -webkit-backdrop-filter: blur(8px) saturate(1.04); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto;
-  /* ⚠ 바탕이 어두운 쪽이니 서리도 '어두운 바탕용' 값이어야 한다 — 페이지 테마가 아니라 **놓이는 바탕**이 정한다. */
-  --v2-gi-frost: #D2E8F5; --v2-gi-frost-a: .34; --v2-gi-punch: #DCEBF7; --v2-gi-punch-a: .55; }
-.v2-pad-top { width: min(920px, 100%); display: flex; align-items: center; gap: 12px; margin-bottom: 26px; background: none; border: 0; padding: 2px 4px; }
+.v2-pad { position: fixed; inset: 0; z-index: 900; background: rgba(var(--tint-ink), .28); backdrop-filter: blur(6px); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto; }
+.v2-pad-top { width: min(920px, 100%); display: flex; align-items: center; gap: 12px; margin-bottom: 18px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
 .v2-pad-h { display: flex; flex-direction: column; min-width: 0; }
-.v2-pad-h b { font-size: 15px; font-weight: 800; color: #FFFFFF; }
-.v2-pad-sub { font-size: 12px; color: rgba(255, 255, 255, .72); }
-/* 찾기칸도 스크림 위 유리 — 배경을 살짝 밝히고 테두리만 흰 선으로. */
-.v2-pad-search { flex: 1; min-width: 160px; height: 38px; border: 1px solid rgba(255, 255, 255, .26); border-radius: 10px; padding: 0 12px; font: inherit; font-size: 14px; color: #FFFFFF; background: rgba(255, 255, 255, .12); }
-.v2-pad-search::placeholder { color: rgba(255, 255, 255, .6); }
-.v2-pad-search:focus { outline: none; border-color: rgba(255, 255, 255, .55); background: rgba(255, 255, 255, .18); }
-/* 닫기 — 짙은 스크림 위에서는 무채 ghost 가 안 보인다. 흰 선 버튼으로. */
-.v2-pad-top .btn-ghost { color: #FFFFFF; background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .26); }
-.v2-pad-top .btn-ghost:hover { background: rgba(255, 255, 255, .2); border-color: rgba(255, 255, 255, .42); }
-/* ── 런치패드 격자 — 맥 응용 프로그램 폴더 문법(#1841 원준) ────────────────────
-   아이콘과 이름만. 카드 테두리·바탕·설명 줄을 걷었다 — 타일 자체가 이미 덩어리라 그릇이 필요 없고,
-   그릇을 두면 '아이콘을 알아보는 자리'가 '카드를 읽는 자리'로 바뀐다(자료 폴더 아이콘과 같은 판단). */
-.v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 30px 8px; }
-.v2-pad-item {
-  display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 10px 4px 8px;
-  background: none; border: 0; border-radius: 14px; text-decoration: none; color: var(--ink); text-align: center;
-  cursor: pointer; font: inherit; transition: transform .12s ease, background-color .12s ease;
-}
-.v2-pad-item:hover { background: rgba(255, 255, 255, .13); }
-.v2-pad-item:active { transform: scale(.94); }
-.v2-pad-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-/* 두 겹 그림자 — 접촉(가깝고 진한 것) + 주변광(멀고 옅은 것). 폴더 아이콘과 같은 값 계열이다. */
-/* 유리 아이콘 — 그림자·글로우 없음(규칙 ④). 서리 **색**은 여기 color 로 준다:
-   서리의 옅은 기울기가 currentColor 를 쓰는데, 그건 svg 자신의 color 를 보지 도형의 color 를 안 본다. */
-.v2-gi { width: 64px; height: 64px; flex: none; display: block; color: var(--v2-gi-frost); }
-.v2-gi-frost { fill-opacity: var(--v2-gi-frost-a); }
-.v2-gi-punch { fill: var(--v2-gi-punch); fill-opacity: var(--v2-gi-punch-a); }
-.v2-pad-name { font-size: 12.5px; font-weight: 500; color: #FFFFFF; line-height: 1.35; max-width: 106px; overflow-wrap: anywhere; text-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
-.v2-pad-empty { color: rgba(255, 255, 255, .78); font-size: 13px; grid-column: 1 / -1; text-align: center; padding: 30px 0; }
+.v2-pad-h b { font-size: 15px; font-weight: 800; }
+.v2-pad-sub { font-size: 12px; color: var(--muted); }
+.v2-pad-search { flex: 1; min-width: 160px; height: 36px; border: 1px solid var(--line-net); border-radius: 10px; padding: 0 12px; font: inherit; font-size: 14px; background: var(--bg); }
+.v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.v2-pad-item { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 16px; text-decoration: none; color: var(--ink); text-align: center; box-shadow: var(--shadow-1, 0 2px 8px rgba(var(--shadow-ink), .05)); }
+.v2-pad-item:hover { border-color: var(--blue); }
+.v2-pad-item b { font-size: 13.5px; font-weight: 800; }
+.v2-pad-ico { width: 46px; height: 46px; border-radius: 13px; background: var(--bg-tint); border: 1px solid var(--line); display: grid; place-items: center; color: var(--ink-sub); }
+.v2-pad-ico .v2-ic { width: 22px; height: 22px; }
+.v2-pad-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.v2-pad-empty { color: var(--on-fill); font-size: 13px; }
+/* 세션 앱 타일(#1780) — 화면 앱과 성격이 다르다(열면 전용 AI 세션이 뜬다). 민트 강조 + 배지로 구분. */
+.v2-pad-item--app { position: relative; cursor: pointer; font: inherit; }
+.v2-pad-item--app:hover { border-color: var(--mint-deep); }
+.v2-pad-item--app .v2-pad-ico { background: var(--bg-success); border-color: var(--ok-line-2); color: var(--mint-deep); }
+.v2-pad-badge { position: absolute; top: 8px; right: 8px; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--mint-deep); background: var(--bg-success); border: 1px solid var(--ok-line-2); border-radius: 999px; padding: 1px 7px; }
 
 /* ── 앱 사용 동의 창(#1780 app-session) — 세션 앱을 처음 열 때 뜨는 권한 확인 모달 ── */
 .v2-consent-ov { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(var(--shadow-ink), .32); padding: 20px; }
