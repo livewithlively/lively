@@ -6,6 +6,7 @@
 // ⚠ 이 앱은 **상시성의 주체가 아니다.** 노드를 살려 두는 건 OS 데몬(launchd·systemd·작업 스케줄러)이고
 //  앱은 그 데몬을 켜고 끄는 리모컨이다 — 그래서 '앱 종료' 가 노드를 끄지 않는다는 걸 메뉴가 말해 준다.
 import { appReady } from "./web-shell.mjs";
+import { NOTIFY, NOTIFY_DEFAULTS } from "./notify.mjs";
 
 /** 상태 뱃지 문구 — 사람이 한 줄로 이해하는 축은 '노드가 지금 도는가' 다. */
 export function statusLabel(st) {
@@ -79,6 +80,17 @@ export function trayMenuModel(st) {
   //  Linux 는 Electron 이 로그인 항목을 지원하지 않는다 → null 이면 항목 자체를 안 보여준다(있는 척 금지).
   if (s.appAutoLaunch !== null && s.appAutoLaunch !== undefined) {
     items.push({ id: "app-autolaunch", label: "이 앱도 로그인할 때 시작", type: "checkbox", checked: !!s.appAutoLaunch, enabled: !busy });
+  }
+  // 알림(#1842) — **끌 수단 없는 알림은 만들지 않는다.** 유형이 셋이라 한 줄로 뭉치지 않고 서브메뉴로 편다
+  //  (사람마다 원하는 축이 다르다: 확인 대기만 받고 완료는 안 받는 쓰임이 실제로 흔하다).
+  //  갖춰지기 전(로그인·설치 전)엔 알릴 소재 자체가 없으므로 항목을 숨긴다 — 못 쓰는 스위치를 보여주지 않는다.
+  if (ready) {
+    const np = { ...NOTIFY_DEFAULTS, ...(s.notifyPrefs || {}) };
+    items.push({ id: "notify", label: "알림", submenu: [
+      { id: `notify:${NOTIFY.WAITING}`, label: "AI 가 확인을 기다릴 때", type: "checkbox", checked: !!np[NOTIFY.WAITING] },
+      { id: `notify:${NOTIFY.DONE}`, label: "AI 가 작업을 마쳤을 때", type: "checkbox", checked: !!np[NOTIFY.DONE] },
+      { id: `notify:${NOTIFY.EXITED}`, label: "세션이 예기치 않게 끝났을 때", type: "checkbox", checked: !!np[NOTIFY.EXITED] },
+    ] });
   }
   items.push({ type: "separator" });
   // 창은 둘이다 — '라이블리 열기' 는 갖춰졌으면 웹 UI 화면(web-shell), 아니면 마법사(할 일이 있다). '설치·노드 설정' 은
