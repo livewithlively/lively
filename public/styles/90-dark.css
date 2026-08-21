@@ -109,6 +109,11 @@
 
   /* 채널 토큰 — 그림자는 순흑, 잉크 틴트는 밝은 잉크로 뒤집힘(호버가 '밝아진다') */
   --shadow-ink: 0, 0, 0;
+  --gi-r2: #0F86B4;  --gi-r3: #1C4FC2;
+  --v2-gi-frost: #D2E8F5;
+  --v2-gi-frost-a: .34;
+  --v2-gi-punch: #DCEBF7;
+  --v2-gi-punch-a: .55;
   --tint-ink: 234, 240, 250;
 
   color-scheme: dark;
@@ -216,6 +221,11 @@
 
   /* 채널 토큰 — 그림자는 순흑, 잉크 틴트는 밝은 잉크로 뒤집힘(호버가 '밝아진다') */
   --shadow-ink: 0, 0, 0;
+  --gi-r2: #0F86B4;  --gi-r3: #1C4FC2;
+  --v2-gi-frost: #D2E8F5;
+  --v2-gi-frost-a: .34;
+  --v2-gi-punch: #DCEBF7;
+  --v2-gi-punch-a: .55;
   --tint-ink: 234, 240, 250;
 
   color-scheme: dark;2
