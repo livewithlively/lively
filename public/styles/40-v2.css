@@ -344,6 +344,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-tab-ic.st-done { stroke: var(--mint-deep); }
 .v2-tab .x { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 5px; color: var(--muted-2); flex: none; visibility: hidden; }
 .v2-tab:hover .x, .v2-tab.on .x { visibility: visible; }
+/* 연달아 닫는 동안(freeze)에는 **모든 탭의 ×를 띄워 둔다** — 오른쪽 탭이 커서 밑으로 미끄러져 들어와도
+   그 탭에 hover 가 아직 안 걸려 ×가 안 보이면, 그 클릭이 '닫기'가 아니라 '탭 전환'이 된다(원준 2026-08-20). */
+.v2-tabs.freeze .v2-tab .x { visibility: visible; }
 .v2-tab .x:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-tab-xic { width: 10px; height: 10px; stroke: currentColor; stroke-width: 2.2; fill: none; stroke-linecap: round; }
 .v2-tab-add { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 36px; border-radius: 0; color: var(--muted-head); flex: none; }
