@@ -188,6 +188,8 @@
 
 .pn-ftools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .pn-fsp { flex: 1; }
+/* 올리기 두 입구(파일·폴더째)는 한 덩이 — 떨어뜨리면 폴더 아이콘이 옆의 [새 폴더](만들기)에 붙어 읽힌다. */
+.pn-upgrp { display: inline-flex; align-items: center; gap: 3px; }
 .pn-fbtn { flex: none; height: 24px; min-width: 24px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
   border: 1px solid var(--line-net); border-radius: 7px; background: var(--bg, #fff); font: inherit; font-size: 11.5px; color: var(--muted-head); cursor: pointer; }
 .pn-fbtn:hover { border-color: var(--blue); color: var(--ink); }

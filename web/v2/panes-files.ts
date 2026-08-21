@@ -56,25 +56,27 @@ export function filesPart(ctx: PartCtx): Part {
   const upDirIn = el('input', { type: 'file', multiple: 'true', webkitdirectory: '', hidden: true }) as HTMLInputElement;
   upIn.addEventListener('change', () => { const items = upFromInput(upIn); upIn.value = ''; void upload(items.map((u) => ({ file: u.file, rel: rel(u.rel) }))); });
   upDirIn.addEventListener('change', () => { const items = upFromInput(upDirIn); upDirIn.value = ''; void upload(items.map((u) => ({ file: u.file, rel: rel(u.rel) }))); });
-  /** [＋ 올리기] — 무엇을 올릴지 그 자리에서 고른다(칸의 우클릭 메뉴와 같은 생김새). */
-  function pickUpload(x: number, y: number): void {
-    const rows: Array<{ label: string; run?: () => void; off?: boolean }> = [{ label: '파일 올리기…', run: () => upIn.click() }];
-    // 폴더 입력은 브라우저가 받쳐 줄 때만 — 못 하는 걸 메뉴에 띄워 두면 눌러 보고 나서야 안 된다는 걸 안다.
-    if (upDirSupported()) rows.push({ label: '폴더 올리기… (하위 구조 그대로)', run: () => upDirIn.click() });
-    else rows.push({ label: '폴더 올리기 — 이 브라우저는 못 해요', off: true });
-    ctxMenu(x, y, rows);
-  }
+  // ⚠ 왜 버튼이 둘인가 — 브라우저가 **한 창에서 파일과 폴더를 같이 고르게 해주지 않는다.**
+  //  `<input type=file>` 은 파일만, `webkitdirectory` 는 폴더만 받는다(File System Access API 도
+  //  showOpenFilePicker/showDirectoryPicker 로 갈려 있다). 맥 네이티브 창은 둘 다 되지만 웹엔 안 열려 있다.
+  //  그래서 팀은 #781 에서 팝오버 메뉴로 풀었는데, 그러면 **가장 흔한 일(파일 올리기)에 클릭이 하나 더 붙는다**
+  //  (원준 2026-08-20: "드롭다운으로 나누지 말고"). 메뉴를 걷고 입구를 둘로 벌린다 — 각각 누르면 창이 바로 뜬다.
+  //  본 버튼은 파일(자료 칸에서 압도적으로 흔하다), 옆 아이콘은 폴더째. 폴더 입력을 못 받치는 브라우저면 옆 버튼을 숨긴다.
 
   // ── 머리 — 경로 / 개수 / 도구 ──
-  const upBtn = el('button', { class: 'btn-text', type: 'button', text: '＋ 올리기', title: '컴퓨터에서 파일이나 폴더를 고릅니다',
-    onclick: (e: MouseEvent) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); pickUpload(Math.round(r.left), Math.round(r.bottom + 4)); } });
+  const upBtn = el('button', { class: 'btn-text', type: 'button', text: '＋ 올리기', title: '컴퓨터에서 파일을 고릅니다 — 여러 개 고르거나 더블클릭으로 하나만', onclick: () => upIn.click() });
+  const upDirBtn = el('button', {
+    class: 'pn-fbtn', type: 'button', title: '폴더째 올리기 — 하위 구조 그대로 올라갑니다', 'aria-label': '폴더째 올리기',
+    onclick: () => upDirIn.click(),
+  }, pnIcon('folderup', 'pn-i sm')) as HTMLElement;
+  upDirBtn.hidden = !upDirSupported();
   const mkBtn = el('button', { class: 'btn-text', type: 'button', text: '새 폴더', title: '이 폴더 안에 폴더를 만듭니다', onclick: () => void newFolder() });
   const viewBtn = el('button', { class: 'pn-fbtn', type: 'button' }) as HTMLButtonElement;
   const sizeIn = el('input', { type: 'range', class: 'pn-fsize', min: '0', max: String(ICON_STEPS.length - 1), step: '1', title: '아이콘 크기', 'aria-label': '아이콘 크기' }) as HTMLInputElement;
   const sortBtn = el('button', { class: 'pn-fbtn wide', type: 'button', title: '정렬 순서' }) as HTMLButtonElement;
   const head = el('div', { class: 'pn-fhead' },
     el('div', { class: 'pn-frow1' }, crumbs, count),
-    el('div', { class: 'pn-ftools' }, upBtn, mkBtn, el('span', { class: 'pn-fsp' }), viewBtn, sizeIn, sortBtn));
+    el('div', { class: 'pn-ftools' }, el('span', { class: 'pn-upgrp' }, upBtn, upDirBtn), mkBtn, el('span', { class: 'pn-fsp' }), viewBtn, sizeIn, sortBtn));
   root.append(upIn, upDirIn, noteEl, head, body);
 
   viewBtn.onclick = () => { view = view === 'icon' ? 'list' : 'icon'; lsSet(FV_VIEW, view); paintTools(); render(); };
@@ -314,7 +316,8 @@ export function filesPart(ctx: PartCtx): Part {
     }
     rows.push({ label: '붙여넣기', run: () => void pasteFromApi() });
     rows.push({ label: '새 폴더', run: () => void newFolder() });
-    rows.push({ label: '올리기…', run: () => pickUpload(e.clientX, e.clientY) });
+    rows.push({ label: '파일 올리기…', run: () => upIn.click() });
+    if (upDirSupported()) rows.push({ label: '폴더째 올리기…', run: () => upDirIn.click() });
     rows.push({ sep: true, label: '' });
     rows.push({ label: view === 'icon' ? '목록으로 보기' : '아이콘으로 보기', run: () => { view = view === 'icon' ? 'list' : 'icon'; lsSet(FV_VIEW, view); paintTools(); render(); } });
     ctxMenu(e.clientX, e.clientY, rows);
