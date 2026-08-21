@@ -857,28 +857,27 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-pad-h b { font-size: 15px; font-weight: 800; }
 .v2-pad-sub { font-size: 12px; color: var(--muted); }
 .v2-pad-search { flex: 1; min-width: 160px; height: 36px; border: 1px solid var(--line-net); border-radius: 10px; padding: 0 12px; font: inherit; font-size: 14px; background: var(--bg); }
-.v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-.v2-pad-item { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 16px; text-decoration: none; color: var(--ink); text-align: center; box-shadow: var(--shadow-1, 0 2px 8px rgba(var(--shadow-ink), .05)); }
-.v2-pad-item:hover { border-color: var(--blue); }
-.v2-pad-item b { font-size: 13.5px; font-weight: 800; }
-.v2-pad-ico { width: 46px; height: 46px; border-radius: 13px; background: var(--bg-tint); border: 1px solid var(--line); display: grid; place-items: center; color: var(--ink-sub); }
-.v2-pad-ico .v2-ic { width: 22px; height: 22px; }
-/* 유리 앱 아이콘(#1841) — **아이콘만** 더한다. 런치패드의 배경·흐림·격자·카드·타일은 그대로 둔다.
+.v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
+.v2-pad-item { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 6px 12px; background: none; border: 0; border-radius: 18px; text-decoration: none; color: var(--ink); text-align: center; }
+.v2-pad-item:hover { background: rgba(var(--tint-ink), .12); }
+.v2-pad-item b { font-size: 12.5px; font-weight: 700; line-height: 1.35; }
+.v2-pad-ico { width: 60px; height: 60px; display: grid; place-items: center; color: var(--ink-sub); }
+.v2-pad-ico .v2-ic { width: 30px; height: 30px; }
+/* 유리 앱 아이콘(#1841) — 런치패드의 배경·흐림은 그대로 두고, 카드/타일 크롬만 걷어 아이콘을 그대로 앉힌다.
    ⚠ 서리 **색**은 여기 color 로 준다: 서리의 옅은 기울기가 currentColor 를 쓰는데, 그건 그라디언트가
     얹힌 svg 자신의 color 를 보지 그 도형의 color 를 보지 않는다. 값은 90-dark.css 에서 뒤집힌다.
    ⚠ 그림자·글로우는 넣지 않는다 — 그게 '네온'이 된다(규칙 ④). */
 .v2-gi { display: block; color: var(--v2-gi-frost); }
 .v2-gi-frost { fill-opacity: var(--v2-gi-frost-a); }
 .v2-gi-punch { fill: var(--v2-gi-punch); fill-opacity: var(--v2-gi-punch-a); }
-/* 46px 타일 안에서의 크기 — 선 글리프(22px)보다 크다. 유리는 형태가 곧 아이콘이라 여백이 덜 필요하다. */
-.v2-pad-ico .v2-gi { width: 34px; height: 34px; }
-.v2-pad-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+/* 타일 배경이 없으니 유리 아이콘이 곧 타일이다 — 칸을 꽉 채운다. */
+.v2-pad-ico .v2-gi { width: 60px; height: 60px; }
 .v2-pad-empty { color: var(--on-fill); font-size: 13px; }
 /* 세션 앱 타일(#1780) — 화면 앱과 성격이 다르다(열면 전용 AI 세션이 뜬다). 민트 강조 + 배지로 구분. */
 .v2-pad-item--app { position: relative; cursor: pointer; font: inherit; }
-.v2-pad-item--app:hover { border-color: var(--mint-deep); }
-.v2-pad-item--app .v2-pad-ico { background: var(--bg-success); border-color: var(--ok-line-2); color: var(--mint-deep); }
-.v2-pad-badge { position: absolute; top: 8px; right: 8px; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--mint-deep); background: var(--bg-success); border: 1px solid var(--ok-line-2); border-radius: 999px; padding: 1px 7px; }
+.v2-pad-item--app:hover { background: rgba(var(--tint-ink), .12); }
+.v2-pad-item--app .v2-pad-ico { color: var(--mint-deep); }
+.v2-pad-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--mint-deep); background: var(--bg-success); border: 1px solid var(--ok-line-2); border-radius: 999px; padding: 1px 7px; }
 
 /* ── 앱 사용 동의 창(#1780 app-session) — 세션 앱을 처음 열 때 뜨는 권한 확인 모달 ── */
 .v2-consent-ov { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(var(--shadow-ink), .32); padding: 20px; }
