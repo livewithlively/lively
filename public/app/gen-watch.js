@@ -13,9 +13,20 @@
 //   · 그 순간을 고른 이유: 앱의 '닫기(=숨김) → 열기(=보임)'가 곧 사람이 화면을 다시 마주하는 때다.
 //     주기적으로 폴링해 아무 때나 새로고침하면 **타이핑 중에 화면이 날아간다** — 그건 더 나쁘다.
 //   · 처음 로드 직후에는 묻지 않는다(방금 받은 판이다).
-//  ⚠ 자기 세대는 `import.meta.url` 의 `?v=` 에서 읽는다 — 서버가 모듈 스펙파이어에 심어 준 값이라
-//   따로 주입할 자리가 필요 없다. 스탬프가 없으면(로컬 dev 등) 그냥 아무것도 하지 않는다.
-const MY_GEN = new URL(import.meta.url).searchParams.get("v") || "";
+//  ── 자기 세대를 읽는 법 (한 번 데였다) ──
+//  처음엔 `import.meta.url` 의 `?v=` 만 봤는데, **이 모듈이 두 벌 로드되는 바람에** 안 먹었다:
+//  클래식(main.js)은 `./gen-watch.js` 로, v2 는 `../gen-watch.js` 로 부르는데 서버 스탬퍼가 `./` 만
+//  잡아서 후자엔 `?v=` 가 안 붙었다 → 다른 URL = 다른 인스턴스 = 세대를 못 읽고 조용히 아무것도 안 함.
+//  스탬퍼는 고쳤지만(src/web.ts, `../` 도 처리), 여기서도 **문서의 진입 스크립트**를 폴백으로 본다 —
+//  그건 HTML 스탬퍼가 늘 붙여 주는 값이라 모듈 경로가 어떻든 흔들리지 않는다.
+function ownGen() {
+    const fromModule = new URL(import.meta.url).searchParams.get("v");
+    if (fromModule)
+        return fromModule;
+    const entry = document.querySelector('script[type="module"][src*="?v="]');
+    return entry ? (new URL(entry.src, location.href).searchParams.get("v") || "") : "";
+}
+const MY_GEN = ownGen();
 const MIN_GAP_MS = 5000; // 연달아 보였다 숨었다 할 때 서버를 두들기지 않게
 let lastAsk = 0;
 let reloading = false;
@@ -46,10 +57,14 @@ async function checkStale() {
     reloading = true;
     location.reload();
 }
-/** 화면이 다시 보이면 낡았는지 묻고, 낡았으면 다시 싣는다. 진입점에서 한 번 부른다. */
+/** 화면이 다시 보이면 낡았는지 묻고, 낡았으면 다시 싣는다. 진입점에서 한 번 부른다.
+ *  ⚠ 두 번 불려도 리스너는 한 벌만 단다 — 클래식 진입점(main.ts)과 v2 진입점(bootV2)이 **둘 다** 부르고,
+ *   v2 셸일 때는 그 둘이 같은 판에서 다 돌아 서버에 같은 질문을 두 번 하게 된다(실측). */
+let armed = false;
 export function watchStaleShell() {
-    if (!MY_GEN)
+    if (!MY_GEN || armed)
         return;
+    armed = true;
     document.addEventListener("visibilitychange", () => { if (!document.hidden)
         void checkStale(); });
     window.addEventListener("focus", () => { void checkStale(); });
