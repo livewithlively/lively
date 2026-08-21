@@ -387,6 +387,8 @@
 
 /* ── 웹 · 파일 편집(원준 2026-08-20) ─────────────────────────────────────────── */
 .pn-web, .pn-ed { display: flex; flex-direction: column; min-height: 0; }
+/* 뷰어에 파일을 끌어다 놓는 중 — 자료 칸과 같은 신호로(같은 일이 일어나므로). */
+.pn-ed.drop-active { outline: 2px dashed var(--blue); outline-offset: -6px; background: var(--bg-tint); }
 .pn-web-bar, .pn-ed-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .pn-web-in { flex: 1; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
 .pn-web-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }

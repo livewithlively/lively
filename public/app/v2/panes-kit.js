@@ -22,6 +22,7 @@ const ICON_PATHS = {
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
     cols: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M15 5v14"/>',
     drop: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/>',
+    up: '<path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M5 5h14"/>',
     box: '<path d="M3 7h18v4H3z"/><path d="M5 11v8h14v-8"/><path d="M10 15h4"/>',
     undo: '<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>',
     globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
