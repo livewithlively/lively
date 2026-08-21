@@ -23,6 +23,7 @@ const { isEmbedded, EMBEDDED } = await import(join(root, "public/app/v2/embed.js
 const PARTS = read("web/v2/panes-parts.ts");
 const PANES = read("web/v2/panes.ts");
 const TABS = read("web/v2/tabs.ts");
+const FILES = read("web/v2/panes-files.ts");   // 자료 칸 — [뷰어에서 보기] 신호가 여기서 나간다
 
 /** 함수 하나만 잘라 본다 — 고정 길이로 자르면 그 함수가 자랐을 때 단언이 구간 밖으로 밀려 거짓 실패한다. */
 function slice(src, from, to) {
@@ -34,6 +35,7 @@ function slice(src, from, to) {
 }
 // ⚠ 끝 앵커는 **웹 칸 다음 함수**다 — stage 에서 editorPart 가 viewerPart 로 바뀌어 한 번 거짓 실패했다(2026-08-21).
 const WEB_PART = () => slice(PARTS, "function webPart(", "\nfunction viewerPart(");
+const VIEWER_PART = () => slice(PARTS, "function viewerPart(", "\nfunction appsPart(");
 
 // ══ 주소 만들기 — 실제로 불러서 본다(순수 모듈이라 그대로 검증된다) ═══════════════════
 const LIVE = "https://dev.lvly.io";
@@ -124,6 +126,25 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
 
   const viewer = slice(PARTS, "const remember = (p2: string)", "const remembered = (");
   ok(/if \(EMBEDDED\) return;/.test(viewer), "E22 뷰어가 펴 둔 파일을 기억하지 않는다");
+}
+
+
+// ══ 뷰어 칸도 같은 규율 — 자료에서 [뷰어에서 보기] 는 **그 곁칸**의 뷰어만 연다 (2026-08-21 추가) ══════
+//  웹 칸과 판박이 구조였고, 판박이로 새고 있었다: window 로 쏘고 window 에서 들어서 열려 있는 모든 세션 탭의
+//  뷰어가 같은 파일을 함께 열고 각자 자기 열쇠에 그 파일을 기억했다.
+{
+  ok(/ctx\.paneRoot\(\)\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
+    "E23 자료 칸의 [뷰어에서 보기] 가 **이 곁칸**에 대고 알린다");
+  ok(!/window\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
+    "E23 ★ window 로 쏘면 모든 세션 탭의 뷰어가 같은 파일을 연다 — 웹 칸과 같은 뿌리");
+  ok(/ctx\.paneRoot\(\)\.querySelector\('\.pn-ed'\)/.test(FILES) && !/document\.querySelector\('\.pn-ed'\)/.test(FILES),
+    "E24 뷰어가 있나도 **이 곁칸에서** 본다 — 옆 세션의 뷰어를 보고 '있다'고 판단하면 이 세션엔 안내조차 안 뜬다");
+
+  const viewer = VIEWER_PART();
+  ok(/paneRoot\(\)[\s\S]{0,120}addEventListener\(VIEWER_EVT/.test(viewer) && !/window\.addEventListener\(VIEWER_EVT/.test(viewer),
+    "E25 뷰어 칸이 이 곁칸에서 듣는다");
+  ok(/paneRoot\(\)\.removeEventListener\(VIEWER_EVT/.test(viewer) && !/window\.removeEventListener\(VIEWER_EVT/.test(viewer),
+    "E25 달았던 그 자리에서 끊는다");
 }
 
 console.log(`\n# ${pass} passed`);

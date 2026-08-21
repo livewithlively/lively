@@ -303,9 +303,12 @@ export function filesPart(ctx: PartCtx): Part {
     if (f) {
       rows.push({ label: many.length > 1 ? `${many.length}개 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => { for (const x of many.slice(0, 8)) open(x); } });
       if (f.type !== 'dir') rows.push({ label: '뷰어에서 보기', run: () => {
-        // 같은 화면의 [뷰어] 칸이 받아 연다. 뷰어 칸이 없으면 아무도 안 받으므로 그 사실을 말해 준다.
-        if (!document.querySelector('.pn-ed')) { toast('먼저 어느 칸에든 [뷰어]를 넣어 주세요 — 칸 위의 ＋ 에서 고릅니다.', true); return; }
-        window.dispatchEvent(new CustomEvent('pn-viewer-open', { detail: { id: ctx.id, path: f.path } }));
+        // ⚠ **이 곁칸 안에서만** 찾고 이 곁칸에만 알린다(웹 칸과 같은 규칙 — pane-signal-scope-and-embed-isolation-1819).
+        //  window 로 쏘면 열려 있는 모든 세션 탭의 뷰어가 같은 파일을 함께 열고 각자 자기 열쇠에 그 파일을 기억한다.
+        //  찾는 것도 document 로 하면 안 된다 — 옆 세션에 뷰어가 있다는 이유로 이 세션에서는 아무 일도 안 일어난 채
+        //  안내조차 안 뜬다(있는 줄 알고 쏘고 끝난다).
+        if (!ctx.paneRoot().querySelector('.pn-ed')) { toast('먼저 어느 칸에든 [뷰어]를 넣어 주세요 — 칸 위의 ＋ 에서 고릅니다.', true); return; }
+        ctx.paneRoot().dispatchEvent(new CustomEvent('pn-viewer-open', { detail: { id: ctx.id, path: f.path } }));
       } });
       if (f.type !== 'dir') rows.push({ label: '내려받기', run: () => { for (const x of many) if (x.type !== 'dir') download(x); } });
       rows.push({ label: '이름 바꾸기', off: many.length !== 1, run: () => { renameAt = f.path; render(); } });
