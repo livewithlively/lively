@@ -59,6 +59,17 @@
 /* 손잡이 왼쪽 그늘 = 왼쪽에 가려진 탭이 더 있다는 신호 */
 .pn-tabbar.has-more .pn-tabtail { box-shadow: -9px 0 9px -7px rgba(16, 24, 40, .22); }
 
+/* ── 좁으면 접는다 — 켜진 탭만 이름, 나머지는 아이콘만 (원준 2026-08-20) ──────────
+   브라우저 탭이 많아지면 파비콘만 남는 문법. **폭이 아니라 넘침으로** 정한다(panes.ts fit):
+   이름을 다 편 채로 재서 들어가면 절대 접지 않는다 — "충분히 보여줄 수 있는데 접는 일은 없게".
+   접힌 탭의 이름은 툴팁(title)과 손잡이의 [모두 보기]가 말한다. 켜진 탭은 이름도 ×도 그대로 둔다
+   (지금 보는 것이 무엇인지와, 그걸 닫는 길은 접혀도 남아야 한다). */
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab { gap: 0; padding: 0 9px; }
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab > span { display: none; }
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x { display: none; }
+/* 접혔으면 이름을 읽을 곳이 필요하다 — 넘치지 않아도 [모두 보기]를 남긴다(거기서 빼기도 한다). */
+.pn-tabbar.compact .pn-tab-more { display: inline-flex; }
+
 /* 세션 탭 — 부품 탭과 한 줄에 서지만 결이 다르다: **상태점 + 이름**, 닫기(×)는 없다(세션은 '열어 둔 문서'가
    아니라 프로젝트에 속한 실체다). 이름이 길어도 탭 줄이 무너지지 않게 폭을 묶는다. */
 .pn-stab { max-width: 190px; padding-right: 12px; }

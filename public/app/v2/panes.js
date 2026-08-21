@@ -296,16 +296,31 @@ export function mountPanes(host, opts) {
         tabs.addEventListener('scroll', () => syncMore(p), { passive: true });
         // 칸 폭이 바뀌면(경계 끌기·창 크기·곁칸 여닫기) '가려진 탭이 있다'를 다시 잰다.
         if (typeof ResizeObserver === 'function') {
-            const ro = new ResizeObserver(() => syncMore(p));
+            const ro = new ResizeObserver(() => fit(p));
             ro.observe(tabs);
             ros.push(ro);
         }
         panes.set(zone, p);
         return p;
     }
-    /** 띠가 넘치는가 — 넘칠 때만 [모두 보기]와 손잡이 왼쪽 그늘을 켠다(안 넘치면 군더더기다). */
+    /** 띠가 넘치는가 — 넘칠 때만 손잡이 왼쪽 그늘을 켠다(안 넘치면 군더더기다). */
     function syncMore(p) {
         p.bar.classList.toggle('has-more', p.tabs.scrollWidth > p.tabs.clientWidth + 1);
+    }
+    /** 이름을 접을까 — **재서** 정한다(원준 2026-08-20: "충분히 다 보여줄 수 있는데 접는 일은 절대 없게").
+     *
+     *  폭 브레이크포인트로 정하면 '곁칸은 좁지만 탭은 둘뿐'인 화면까지 아이콘만 남는다. 그래서 기준을 폭이 아니라
+     *  **넘치는가**로 둔다: 이름을 다 편 채로 재서 들어가면 그대로 두고, 넘칠 때만 켜진 탭 하나만 이름을 남기고
+     *  나머지를 아이콘으로 접는다(파비콘 문법 — 이름은 툴팁과 [모두 보기]가 말한다).
+     *
+     *  ⚠ 잴 때는 **가장 너그러운 상태**(이름 다 펴고 ⌄ 숨긴 채)로 되돌려 놓고 잰다. 접힌 상태에서 재면
+     *  '한 번 접히면 넓혀도 안 펴지는' 이력(hysteresis)이 생기고, ⌄(30px)를 낀 채 재면 그 30px 때문에
+     *  들어갈 것도 접힌다. scrollWidth 를 읽는 순간 레이아웃이 동기 계산되므로 이 되돌림은 화면에 안 보인다. */
+    function fit(p) {
+        p.bar.classList.remove('compact', 'has-more');
+        if (p.tabs.scrollWidth > p.tabs.clientWidth + 1)
+            p.bar.classList.add('compact');
+        syncMore(p); // 접고도 남는 넘침만 '더 있다'(그늘)로 말한다
     }
     const mainPane = makePane('main');
     const bottomPane = makePane('bottom');
@@ -381,7 +396,8 @@ export function mountPanes(host, opts) {
         const d = partDef(type);
         const b = el('button', {
             class: 'pn-tab' + (on ? ' on' : ''), type: 'button', role: 'tab',
-            'aria-selected': String(on), title: d.hint, draggable: 'true',
+            // 접히면 아이콘만 남는다(fit) — 이름은 툴팁이 말해야 한다. 읽어주는 이름(aria-label)도 이름으로 고정.
+            'aria-selected': String(on), title: `${d.name} — ${d.hint}`, 'aria-label': d.name, draggable: 'true',
             onclick: () => activate(zone, type),
         }, pnIcon(d.icon, 'pn-i sm'), el('span', { text: d.name }));
         b.addEventListener('dragstart', (e) => {
@@ -472,7 +488,7 @@ export function mountPanes(host, opts) {
         ].filter(Boolean));
         // 세션만 든 칸에는 탭도 손잡이도 없다 → 줄 자체를 감춘다(빈 띠가 남으면 그게 더 이상하다).
         pane.bar.hidden = pane.tabs.childElementCount === 0 && pane.tail.childElementCount === 0;
-        syncMore(pane);
+        fit(pane);
         // 켜진 탭이 띠 밖으로 밀려 있으면 끌어온다(셸 탭 줄과 같은 문법 — tabs.ts). 'nearest' 라 이미 보이면 안 움직인다.
         const onTab = pane.tabs.querySelector('.pn-tabwrap.on');
         if (onTab && pane.tabs.scrollWidth > pane.tabs.clientWidth + 1)
