@@ -11,7 +11,8 @@
 import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
 import { confirmSessionForget } from '../session-actions.js';
 import { fmtSize } from '../projects/files.js';
-import { upDropZone } from '../projects/files-upload.js';
+import { upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
+import { confirmDialog } from '../ui-primitives.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { hasBrowserSurface } from './browser-surface.js';
 import { filesPart } from './panes-files.js';
@@ -781,6 +782,11 @@ function webPart(ctx: PartCtx): Part {
 //  파일 고르기는 드롭다운이 아니다 — 드롭다운은 200개를 한 줄 구멍으로 보게 하고, 이름만 있고 종류·시각이
 //  없어 "그 파일이 어느 거였는지" 못 고른다(원준 신고). 대신 **자료 목록을 그대로 칸에 편다**: 검색 + 최근 먼저 +
 //  종류·크기·시각. 파일을 고르면 그 자리에서 미리보기로 바뀌고, [← 자료]로 목록에 돌아온다.
+//
+//  올리기도 이 칸에서 한다(원준 2026-08-21) — 보려는 파일이 아직 자료에 없으면 [자료] 칸을 따로 띄워 올리고
+//  다시 돌아와야 했다. 올린 파일은 **자료와 같은 곳**(프로젝트 공유 폴더)에 그대로 저장된다 — 뷰어만의 사본이나
+//  보관함 같은 건 만들지 않는다. 그래서 올리는 즉시 자료 칸에도 뜨고, 이 프로젝트의 세션들도 곧바로 참고한다.
+//  올린 뒤엔 그 파일을 이 칸이 바로 펴 준다(올린 이유는 보려는 것이다).
 const VIEWER_EVT = 'pn-viewer-open';   // 자료 칸의 우클릭 ▸ [뷰어에서 보기] 가 쏘는 신호
 type FlatFile = { path: string; size: number; mtime: number };   // 뷰어는 폴더를 다루지 않는다 — 평평한 매니페스트 한 줄
 function viewerPart(ctx: PartCtx): Part {
@@ -792,6 +798,8 @@ function viewerPart(ctx: PartCtx): Part {
   let list: FlatFile[] = [];
   let path = '';
   let q = '';
+  //  덮어쓰기 판정에 쓰는 **실제로 있는 것 전부**(list 는 휴지통·잡동사니를 걸러 낸 화면용이라 이름 자리를 놓친다).
+  let taken = new Set<string>();
   const urls: string[] = [];
   const fileUrl = (p2: string): string => apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2));
   // 무엇을 열어 두었나도 **세션마다** 따로 — 자료(파일 자체)는 프로젝트 공용이지만, '내가 지금 뭘 펴 놨나'는 내 세션의 것이다.
@@ -804,17 +812,64 @@ function viewerPart(ctx: PartCtx): Part {
 
   async function loadList(): Promise<void> {
     const m: any = await api('/api/ui/v6/projects/' + ctx.id + '/shared/manifest').catch(() => null);
-    list = (((m && m.files) || []) as any[])
-      .filter((f) => !String(f.path).startsWith(TRASH_DIR + '/') && !NOISE_RE.test('/' + f.path))
-      .map((f) => ({ path: String(f.path), size: Number(f.size || 0), mtime: Number(f.mtime || 0) }))
+    const all = (((m && m.files) || []) as any[])
+      .map((f) => ({ path: String(f.path), size: Number(f.size || 0), mtime: Number(f.mtime || 0) }));
+    taken = new Set(all.map((f) => f.path));
+    list = all
+      .filter((f) => !f.path.startsWith(TRASH_DIR + '/') && !NOISE_RE.test('/' + f.path))
       .sort((a, b) => b.mtime - a.mtime);
   }
 
+  // ── 올리기 — 받는 곳은 자료 칸과 **같은 API**(프로젝트 공유 폴더)다 ────────────
+  //  폴더는 이 칸이 다루지 않지만, 끌어다 놓은 폴더는 그대로 받아 자료에 구조째 넣는다(막을 이유가 없다).
+  //  뷰어는 평평한 목록이라 그 안의 파일들이 한 줄씩 보인다.
+  const upIn = el('input', { type: 'file', multiple: 'true', hidden: true }) as HTMLInputElement;
+  upIn.addEventListener('change', () => { const picked = upFromInput(upIn); upIn.value = ''; void upload(picked); });
+  root.append(upIn);
+  const UP_TITLE = '컴퓨터에서 파일을 고릅니다 — 자료에 저장되고 이 칸에서 바로 열려요';
+  /** 올리기 버튼. 목록에선 글자까지, 파일을 보는 중인 좁은 바에선 아이콘만(할 수 있는 일은 같다). */
+  const upBtn = (withText: boolean): HTMLElement => el('button', {
+    class: 'pn-web-btn', type: 'button', title: UP_TITLE, 'aria-label': '파일 올리기', onclick: () => upIn.click(),
+  }, pnIcon('up', 'pn-i sm'), ...(withText ? [el('span', { text: '올리기' })] : []));
+
+  async function upload(items: UpItem[], emptyDirs: string[] = []): Promise<void> {
+    if (!items.length && !emptyDirs.length) return;
+    if (!(ctx.id > 0)) { toast('이 화면은 프로젝트 폴더가 없어 파일을 둘 곳이 없어요.', true); return; }
+    //  같은 이름이 이미 있으면 **묻고 나서** 덮는다 — 자료는 이 프로젝트의 모든 세션이 읽는 공용물이라
+    //  조용히 갈아 끼우면 남의 근거가 소리 없이 바뀐다.
+    const over = items.filter((u) => taken.has(u.rel));
+    if (over.length && !(await confirmDialog({
+      title: over.length === 1 ? `「${base(over[0].rel)}」를 덮어쓸까요?` : `이미 있는 자료 ${over.length}개를 덮어쓸까요?`,
+      message: '자료에 같은 이름이 이미 있어요. 덮어쓰면 예전 파일은 되돌릴 수 없습니다.',
+      lines: over.slice(0, 8).map((u) => '• ' + u.rel).concat(over.length > 8 ? ['…외 ' + (over.length - 8) + '개'] : []),
+      confirmText: '덮어쓰기', danger: true,
+    }))) return;
+    const ac = new AbortController();
+    toast(items.length > 1 ? items.length + '개를 올리는 중이에요…' : '올리는 중이에요…');
+    const r = await upSend({
+      items, emptyDirs, signal: ac.signal,
+      fileUrl: (p2) => '/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2),
+      dirUrl: (d) => '/api/ui/v6/projects/' + ctx.id + '/folder?path=' + encodeURIComponent(d),
+    });
+    if (ctx.dead()) return;
+    upToast(r);
+    await loadList();
+    // 올린 이유는 **보려고**다 — 방금 올라간 것 중 첫 파일을 그 자리에서 편다(여럿이면 목록 맨 위에 모여 있다).
+    const first = r.ok ? items.find((u) => list.some((f) => f.path === u.rel)) : null;
+    if (first) { void open(first.rel); return; }
+    if (!path) paintPicker();
+    paintBar();
+  }
+
   function paintBar(): void {
-    if (!path) { bar.replaceChildren(el('span', { class: 'pn-fine', text: list.length ? list.length + '개 · 최근 먼저' : '' })); return; }
+    if (!path) {
+      bar.replaceChildren(upBtn(true), el('span', { class: 'pn-fine', text: list.length ? list.length + '개 · 최근 먼저' : '' }));
+      return;
+    }
     bar.replaceChildren(
       el('button', { class: 'pn-web-btn', type: 'button', text: '← 자료', title: '파일 목록으로 돌아갑니다', onclick: () => void open('') }),
       el('b', { class: 'pn-ed-name ell', text: base(path), title: path }),
+      upBtn(false),
       el('a', { class: 'pn-web-btn', href: fileUrl(path) + '&download=1', download: base(path), title: '내려받기' }, pnIcon('drop', 'pn-i sm')));
   }
 
@@ -830,9 +885,12 @@ function viewerPart(ctx: PartCtx): Part {
       const hit = list.filter((f) => !needle || f.path.toLowerCase().includes(needle));
       if (!hit.length) {
         rows.replaceChildren(el('div', { class: 'pn-empty' },
-          pnIcon('doc', 'pn-i big'),
+          pnIcon(list.length ? 'doc' : 'up', 'pn-i big'),
           el('b', { text: list.length ? '찾는 자료가 없어요.' : '아직 자료가 없어요.' }),
-          el('p', { class: 'pn-fine', text: list.length ? '이름 일부로 다시 찾아보세요.' : '자료 칸에 파일을 올리면 여기서 열 수 있어요.' })));
+          el('p', { class: 'pn-fine', text: list.length
+            ? '이름 일부로 다시 찾아보세요.'
+            : '파일을 이 칸에 끌어다 놓거나 [올리기]를 누르세요 — 올린 파일은 자료에도 그대로 쌓입니다.' }),
+          ...(list.length ? [] : [upBtn(true)])));
         return;
       }
       rows.replaceChildren(...hit.slice(0, 300).map((f) => {
@@ -900,6 +958,10 @@ function viewerPart(ctx: PartCtx): Part {
     body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '이 화면은 프로젝트 폴더가 없어 자료를 열 수 없어요.' }));
     return { root };
   }
+  // 컴퓨터에서 끌어다 놓기 — 목록을 보든 파일을 펴 놓았든 이 칸 어디서나 받는다.
+  //  (미리보기가 iframe 인 형식(PDF·시안) 위에 놓으면 브라우저가 프레임 쪽으로 보내므로 그때는 바의 [올리기]로 간다.)
+  upDropZone(root, root, (dropped, emptyDirs) => void upload(dropped, emptyDirs));
+
   // 자료 칸에서 [뷰어에서 보기] 로 보낸 파일 — 이 칸이 받아 연다.
   const onSend = (e: Event): void => {
     const d = (e as CustomEvent).detail as { id: number; path: string } | undefined;
