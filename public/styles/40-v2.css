@@ -33,7 +33,10 @@ body[data-ui="v2"] #org-banner, body[data-ui="v2"] #desktop-update, body[data-ui
 body.v2-splitting-x, body.v2-splitting-x * { cursor: col-resize !important; user-select: none; }
 body.v2-splitting-y, body.v2-splitting-y * { cursor: row-resize !important; user-select: none; }
 body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
-#v2-root .v2-ic { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.7; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+/* ⚠ `#v2-root` 로 좁히지 말 것(#1841) — 런치패드(.v2-pad)·팝오버는 document.body 바로 아래에 붙는다.
+   범위를 좁혔더니 그 자리에서 규칙이 안 닿아 SVG 기본값(검은 면 채움·선 없음)으로 떨어졌다 —
+   같은 아이콘이 사이드바에선 선으로, 런치패드에선 검은 덩어리로 보였다. `.v2-ic` 는 이미 우리 이름이라 좁힐 이유가 없다. */
+.v2-ic { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.7; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .v2-k { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .v2-dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); flex: none; display: inline-block; box-sizing: border-box; }
 /* 상태점 어휘(web/v2/views.ts dotCls) — 색은 셋뿐: 작업 중·확인 필요·작업 완료. 나머지 살아 있는 것은 회색, 끝난 것은 빈 점(기본). */

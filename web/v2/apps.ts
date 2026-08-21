@@ -15,7 +15,7 @@ export interface AppDef {
   desc: string;       // 한 줄
   route: string;      // 클래식 해시(#/ 뒤) — iframe 에 실릴 경로
   tab: string | null; // navOn 게이팅에 쓸 클래식 탭 키(없으면 항상 노출)
-  icon: 'home' | 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web';
+  icon: 'home' | 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'hist' | 'web' | 'apps';
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
@@ -30,7 +30,7 @@ export const APPS: AppDef[] = [
   { key: 'projects2', title: '프로젝트', desc: '보드 · 리스트 · 타임라인 · 태스크', route: 'projects2', tab: 'projects2', icon: 'proj' },
   { key: 'knowledge', title: 'WIKI', desc: '지식 트리 · 문서 · 검토 큐', route: 'knowledge', tab: 'knowledge', icon: 'wiki' },
   { key: 'context', title: '맥락 관리', desc: '수집(연결) · 증류 · 분류 · 자동 관리 파이프라인', route: 'context', tab: 'context', icon: 'ctx' },
-  { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
+  { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'hist' },
   { key: 'system', title: '설정', desc: '내 설정 · 조직 · 구성원 · 운영', route: 'system', tab: 'system', icon: 'sys' },
   { key: 'web', title: '웹', desc: '주소를 넣으면 이 화면 안에서 그대로 — 데스크톱 앱에서만 안에 열립니다', route: 'web', tab: null, icon: 'web',
     kind: 'browser', home: 'https://www.google.com/' },
@@ -74,25 +74,64 @@ export function soloSessionUrl(id: string): string {
   return location.pathname + '?solo=1#/s/' + encodeURIComponent(id);
 }
 
-// ── 아이콘(라인, 채움 없음 — DS 규약) ──
+// ── 아이콘 12종 (#1841) — 하나의 키라인 격자 위에 다시 그렸다. ────────────────
+//  왜 통째로 다시 그렸나: 종전 글리프는 눈대중으로 찍은 좌표라 같은 세트로 안 보였다 —
+//   지구본만 반지름 9로 혼자 크고, 프로젝트만 모서리가 안 깎였고, 책등은 두 번 그어져 그 선만
+//   두꺼웠고, 설정은 길이가 제각각인 선 8개라 톱니가 아니라 해로 읽혔다.
+//  규격(전 아이콘 공통): 격자 24 · 작업영역 20 · 사각 키라인 17.2 · 원 키라인 Ø17.2 ·
+//   모서리 2.4(바깥)/1.2(안쪽) · 선 1.7 round cap·join(디자인 시스템 tabIcon 문법 그대로).
+//  ⚠ 값은 innerHTML(<path>/<rect>/<circle> 섞임)이다 — dash/icons.ts·panes-kit.ts pnIcon 과 같은 방식.
+//   d 문자열 하나로 두면 원·둥근사각을 원호로 흉내 내야 해서 좌표가 다시 눈대중이 된다.
+//  sys(톱니)는 손으로 찍은 점이 아니라 기어 기하로 생성한 좌표다 — 톱니 6 · 팁 반경 9.4 ·
+//   골 반경 6.5 · 팁 반각 14° · 골 반각 18°. 그래서 톱니 여섯이 정확히 같은 모양·같은 간격이다.
 const ICON_PATHS: Record<AppDef['icon'], string> = {
-  home: 'M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z',
-  term: 'M4 17l6-5-6-5M12 19h8',
-  proj: 'M4 5h16v4H4zM4 11h7v8H4zM13 11h7v8h-7z',
-  wiki: 'M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2zM4 5v16M8 7h8M8 11h6',
-  ctx: 'M6 4v6a6 6 0 0 0 12 0V4M6 20h12M12 16v4',
-  sys: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM3 12h2M19 12h2M12 3v2M12 19v2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4',
-  learn: 'M12 4l9 4-9 4-9-4zM5 10v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5',
-  liv: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 10h.01M15 10h.01M9 14a4 4 0 0 0 6 0',
-  sess: 'M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-4 3z',
-  web: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.4 3.8 5.4 3.8 9s-1.3 6.6-3.8 9c-2.5-2.4-3.8-5.4-3.8-9S9.5 5.4 12 3z',
+  // 지붕 선이 몸통 어깨(y 8.9)에서 정확히 만난다 — 종전엔 지붕과 몸통이 어긋나 틈이 보였다.
+  home: '<path d="M3.4 10.9 12 4.1l8.6 6.8"/><path d="M6 8.9v9.9a1.6 1.6 0 0 0 1.6 1.6h8.8a1.6 1.6 0 0 0 1.6-1.6V8.9"/><path d="M10.1 20.4v-5.2h3.8v5.2"/>',
+  // 터미널 프롬프트 `>_` — 꺾쇠와 밑줄의 아래끝을 y 16.6 으로 맞춰 한 줄로 읽히게 했다.
+  term: '<path d="M4.8 7.4 10.4 12l-5.6 4.6"/><path d="M12.6 16.6h6.6"/>',
+  // 보드 = 머리띠 한 줄 + 세로 구분선(곁칸 cols 아이콘과 같은 어휘).
+  proj: '<rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.4"/><path d="M3.4 8.4h17.2"/><path d="M12 8.4v11"/>',
+  // 펼친 책 — 책등을 한 번만 긋고 양 페이지가 그 끝점(12,7.6)·(12,19.7)에서 시작·종료한다.
+  wiki: '<path d="M12 7.6v12.1"/><path d="M12 7.6c-1.6-1.5-4-2.3-6.4-2.3H3.5v12.1h2.1c2.4 0 4.8.8 6.4 2.3"/><path d="M12 7.6c1.6-1.5 4-2.3 6.4-2.3h2.1v12.1h-2.1c-2.4 0-4.8.8-6.4 2.3"/>',
+  // 흩어진 출처 셋 → 한 점. 수집·증류·분류가 하나의 맥락이 되는 일 그대로다.
+  //  ⚠ 깔때기는 쓰지 않는다 — 우리 화면에서 깔때기는 '필터'로 읽힌다(design-guide 아이콘 규칙).
+  //  연결선 끝점은 두 원의 중심을 잇는 선과 원둘레의 교점이다(눈대중 아님) — 그래서 선이 원에 정확히 닿는다.
+  ctx: '<circle cx="4.6" cy="5.4" r="1.9"/><circle cx="4.6" cy="12" r="1.9"/><circle cx="4.6" cy="18.6" r="1.9"/><circle cx="17.8" cy="12" r="2.9"/><path d="M6.3 6.25 15.21 10.7"/><path d="M6.5 12h8.4"/><path d="M6.3 17.75 15.21 13.3"/>',
+  // 톱니 6개 — 위 머리말의 기어 기하로 생성. 안쪽 구멍 r 3.4.
+  sys: '<path d="M9.73 2.88A9.4 9.4 0 0 1 14.27 2.88L14.01 5.82A6.5 6.5 0 0 1 16.35 7.17L18.76 5.47A9.4 9.4 0 0 1 21.04 9.41L18.36 10.65A6.5 6.5 0 0 1 18.36 13.35L21.04 14.59A9.4 9.4 0 0 1 18.76 18.53L16.35 16.83A6.5 6.5 0 0 1 14.01 18.18L14.27 21.12A9.4 9.4 0 0 1 9.73 21.12L9.99 18.18A6.5 6.5 0 0 1 7.65 16.83L5.24 18.53A9.4 9.4 0 0 1 2.96 14.59L5.64 13.35A6.5 6.5 0 0 1 5.64 10.65L2.96 9.41A9.4 9.4 0 0 1 5.24 5.47L7.65 7.17A6.5 6.5 0 0 1 9.99 5.82Z"/><circle cx="12" cy="12" r="3.4"/>',
+  // 학사모 — 술을 오른쪽에 달아 왼쪽으로 쏠린 무게를 잡는다.
+  learn: '<path d="M12 4.4 21.4 8.6 12 12.8 2.6 8.6z"/><path d="M5.9 10.2v4.6c0 1.9 2.7 3.4 6.1 3.4s6.1-1.5 6.1-3.4v-4.6"/><path d="M21.4 8.6v4.5"/>',
+  // 리브(담당자)의 얼굴. 설치된 앱에는 쓰지 않는다 — 그 자리는 apps(격자)다.
+  liv: '<circle cx="12" cy="12" r="8.6"/><path d="M9.2 10.3h.01"/><path d="M14.8 10.3h.01"/><path d="M8.7 14.3a4.3 4.3 0 0 0 6.6 0"/>',
+  // 말풍선 = 대화. 프로젝트 화면 '코멘트' 칸(project-view.ts)도 이걸 쓴다.
+  //  ⚠ 그래서 '세션 이력'은 이걸 쓰지 않는다 — 한 글리프가 두 뜻을 지면 둘 다 흐려진다(아래 hist).
+  sess: '<path d="M6.6 5.6h10.8a2.4 2.4 0 0 1 2.4 2.4v6.6a2.4 2.4 0 0 1-2.4 2.4h-5.9l-4.4 3.1v-3.1h-.5a2.4 2.4 0 0 1-2.4-2.4V8a2.4 2.4 0 0 1 2.4-2.4z"/>',
+  // 되감는 시계 = 지난 것(세션 이력).
+  hist: '<path d="M3.6 12a8.4 8.4 0 1 0 8.4-8.4 9.1 9.1 0 0 0-6.3 2.56L3.4 8.5"/><path d="M3.4 4.3v4.2h4.2"/><path d="M12 7.9V12l3.3 2"/>',
+  // 지구본 — 반지름 8.6(원 키라인). 종전 9는 이 아이콘만 혼자 커 보이게 했다.
+  web: '<circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2"/><path d="M12 3.4a4.7 8.6 0 0 1 0 17.2 4.7 8.6 0 0 1 0-17.2z"/>',
+  // 앱 = 타일 넷. 사이드바 [앱] 단추와 설치된 앱 타일이 함께 쓴다.
+  apps: '<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>',
 };
+/** 앱 아이콘 하나.
+ *  ⚠ 선 속성(fill·stroke·굵기·캡)을 **SVG 자체에** 박는다 — CSS 에만 맡기면 안 된다.
+ *   런치패드는 document.body 바로 아래에 붙는데 `.v2-ic` 선 규칙이 `#v2-root` 안쪽에만 걸려 있어,
+ *   규칙이 닿지 않아 SVG 기본값(검은 면 채움·선 없음)으로 떨어졌다 — 같은 아이콘이 사이드바에선
+ *   선으로, 런치패드에선 검은 덩어리로 보이던 원인이다(#1841, dev 실측 fill:rgb(0,0,0)/stroke:none).
+ *   CSS 쪽 범위도 함께 풀었지만(40-v2.css), 어디에 붙어도 같게 그려지도록 여기서 한 번 더 못박는다.
+ *   learn.ts tabIcon()·디자인 시스템 아이콘 규격과 같은 문법이다. */
 export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
-  const svgNs = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(svgNs, 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'v2-ic ' + (cls || '')); svg.setAttribute('aria-hidden', 'true');
-  const path = document.createElementNS(svgNs, 'path'); path.setAttribute('d', ICON_PATHS[icon]);
-  svg.append(path); return svg;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', 'v2-ic ' + (cls || ''));
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.7');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.innerHTML = ICON_PATHS[icon];
+  return svg;
 }
 
 // ── 런치패드 오버레이 ──
@@ -119,7 +158,7 @@ export function openLaunchpad(): void {
       return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
         title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
         onclick: () => { closeLaunchpad(); if (hasUi) void openAppUi(a.id, { title: a.title }); else void openAppSession(a.id, { title: a.title }); } },
-        el('span', { class: 'v2-pad-ico' }, appIcon(hasUi ? 'liv' : 'term')),
+        el('span', { class: 'v2-pad-ico' }, appIcon(hasUi ? 'apps' : 'term')),
         el('b', { text: a.title }),
         el('span', { class: 'v2-pad-desc', text: hasUi ? '앱 화면 — 창으로 열려요' : '앱 세션 — 열면 이 앱으로 대화가 시작돼요' }),
         el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
