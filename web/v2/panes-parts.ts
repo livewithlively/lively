@@ -803,7 +803,7 @@ function webPart(ctx: PartCtx): Part {
 //  다시 돌아와야 했다. 올린 파일은 **자료와 같은 곳**(프로젝트 공유 폴더)에 그대로 저장된다 — 뷰어만의 사본이나
 //  보관함 같은 건 만들지 않는다. 그래서 올리는 즉시 자료 칸에도 뜨고, 이 프로젝트의 세션들도 곧바로 참고한다.
 //  올린 뒤엔 그 파일을 이 칸이 바로 펴 준다(올린 이유는 보려는 것이다).
-const VIEWER_EVT = 'pn-viewer-open';   // 자료 칸의 우클릭 ▸ [뷰어에서 보기] 가 쏘는 신호
+const VIEWER_EVT = 'pn-viewer-open';   // 자료 칸의 우클릭 ▸ [뷰어에서 보기] 가 **그 곁칸에 대고** 쏘는 신호(window 금지)
 type FlatFile = { path: string; size: number; mtime: number };   // 뷰어는 폴더를 다루지 않는다 — 평평한 매니페스트 한 줄
 function viewerPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-ed' });
@@ -986,7 +986,8 @@ function viewerPart(ctx: PartCtx): Part {
     if (!list.some((f) => f.path === d.path)) void loadList();
     void open(d.path);
   };
-  window.addEventListener(VIEWER_EVT, onSend);
+  // ⚠ window 가 아니라 **이 곁칸**에서 듣는다 — 창에 달면 열려 있는 모든 세션 탭의 뷰어가 같이 갈아입는다.
+  ctx.paneRoot().addEventListener(VIEWER_EVT, onSend);
 
   const openRemembered = (): void => {
     const last = remembered();
@@ -998,7 +999,7 @@ function viewerPart(ctx: PartCtx): Part {
   return {
     root,
     tick: () => { void loadList().then(() => { if (!path) paintPicker(); paintBar(); }); },
-    destroy: () => { offSess(); window.removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    destroy: () => { offSess(); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 
