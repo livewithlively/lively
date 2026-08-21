@@ -374,7 +374,7 @@ function render(): void {
       updateSlot(),
       // 「도구」 — 앱(런치패드)은 콘텐츠가 아니라 도구다. 계정(신원)과 결을 갈라, 푸터가 잡동사니로 읽히지 않게 한다.
       el('div', { class: 'v2-foot-k', text: '도구' }),
-      el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
+      el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('apps', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
       // [나] — 한 줄 전체가 **내 프로필 · 환경설정**을 여는 단추다(#1843, 원준 2026-08-21).
       //  종전엔 이름 옆에 [로그아웃]만 있었고 그 아래로 테마 3단·클래식 링크가 늘어서, 발치가 '내 것'을 모아 둔
       //  자리가 아니라 잡동사니 줄이 되어 있었다. 슬랙·노션·리니어가 다 그렇듯 개인 설정은 **얼굴을 눌러 여는 창**
