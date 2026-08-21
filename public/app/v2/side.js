@@ -22,7 +22,7 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { anchoredPopover, api, el, keepSideScroll, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
+import { anchoredPopover, api, el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
@@ -243,6 +243,37 @@ function togglePin(key) {
     renderTree();
 }
 let treeEl = null;
+let lastScroll = 0; // 트리가 통째로 사라졌다 다시 생길 때의 마지막 자리
+function anchorRead() {
+    if (!treeEl || !treeEl.isConnected)
+        return null;
+    const top = treeEl.getBoundingClientRect().top;
+    const keys = [];
+    let delta = 0;
+    for (const n of Array.from(treeEl.querySelectorAll('[data-nav]'))) {
+        const b = n.getBoundingClientRect();
+        if (b.bottom <= top + 1)
+            continue; // 화면 위로 지나간 행
+        if (!keys.length)
+            delta = b.top - top; // 맨 위에 걸린 행의 어긋남을 그대로 보존
+        keys.push(String(n.dataset.nav || ''));
+        if (keys.length >= 6)
+            break; // 그 행이 사라졌을 때를 대비한 후보들
+    }
+    return keys.length ? { keys, delta } : null;
+}
+function anchorApply(a) {
+    if (!a || !treeEl)
+        return false;
+    for (const k of a.keys) {
+        const n = treeEl.querySelector(`[data-nav="${window.CSS && CSS.escape ? CSS.escape(k) : k}"]`);
+        if (!n)
+            continue;
+        treeEl.scrollTop += (n.getBoundingClientRect().top - treeEl.getBoundingClientRect().top) - a.delta;
+        return true;
+    }
+    return false;
+}
 let countEl = null;
 let filterOpen = false; // [필터] 팝오버 — 열림은 잠깐의 상태라 브라우저에 기억하지 않는다
 let outsideBound = false;
@@ -253,8 +284,8 @@ function glyph(kind, cls) {
         // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
         //  ⚠ 뒤판은 **왼쪽 세로선까지 그린다**(`M3 17V7…`). 종전엔 `M3 7…v1` 이라 (3,7)→(21,10) 으로 위쪽만 긋고
         //   끝나서, 왼쪽 y=7~17 구간이 통째로 비어 있었다 — 앞판이 (3,17) 에서 시작하므로 그 사이가 뚫린 채 남고,
-        //   16px 에서는 폴더가 **납작하게 잘려 보인다**(원준 2026-08-20 "폴더 아이콘이 좀 가려짐"). 겹침이 아니라
-        //   글리프가 덜 그려진 것이 원인이었다. 접힌 폴더와 같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채운다.
+        //   16px 에서는 폴더가 **납작하게 잘려 보인다**(원준 2026-08-20 "폴더 아이콘이 좀 가려짐"). 접힌 폴더와
+        //   같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채우면 두 아이콘의 무게가 맞는다.
         'folder-open': ['M3 17V7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
         chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
         inbox: ['M4.6 5h14.8L22 13v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4z', 'M2 13h6a4 4 0 0 0 8 0h6'],
@@ -281,7 +312,9 @@ function render() {
     const liveAll = rows.flatMap((r) => [...r.live, ...r.past]);
     const livOn = navOn('liv') !== false;
     // 20초 폴링마다 통째로 다시 그린다 — 스크롤 위치와 검색칸 포커스는 이어져야 한다(수백 행에서 매번 맨 위로 튀면 못 쓴다).
-    const prevScroll = treeEl ? treeEl.scrollTop : 0;
+    const hadOld = !!treeEl && treeEl.isConnected;
+    const anchor = hadOld ? anchorRead() : null;
+    const prevScroll = hadOld ? treeEl.scrollTop : lastScroll;
     const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
     const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
     countEl = el('span', { class: 'v2-k' });
@@ -357,12 +390,12 @@ function render() {
     // 「도구」 — 앱(런치패드)은 콘텐츠가 아니라 도구다. 계정(신원)과 결을 갈라, 푸터가 잡동사니로 읽히지 않게 한다.
     el('div', { class: 'v2-foot-k', text: '도구' }), el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), themeSeg(), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
     renderTree(rows);
-    treeEl.scrollTop = prevScroll;
-    // 위 한 줄(prevScroll)은 **이번 렌더**의 이어붙이기다. 그런데 트리가 통째로 다시 만들어지는 길이 하나라도
-    //  남으면(패널 재마운트·화면 전환 뒤 복귀 등) prevScroll 은 0 을 읽는다 — detach 된 노드의 scrollTop 은 0 이므로.
-    //  그래서 **노드 신원과 무관하게** 위치를 key 로 기억해 두는 팀 원시함수를 겹쳐 둔다(#1635 ⓑ).
-    //  사람이 휠·키로 움직이면 복원은 즉시 손을 뗀다(사람 조작을 덮지 않는다).
-    keepSideScroll(treeEl, 'v2-side');
+    //  ① 보던 줄을 같은 자리에 → ② 그 줄이 사라졌으면 옛 픽셀값으로(그래도 아무것도 안 하는 것보단 낫다).
+    if (!anchorApply(anchor))
+        treeEl.scrollTop = prevScroll;
+    lastScroll = treeEl.scrollTop;
+    treeEl.addEventListener('scroll', () => { if (treeEl)
+        lastScroll = treeEl.scrollTop; }, { passive: true });
     if (findHad) {
         findIn.focus();
         if (findSel && findSel[0] != null)
