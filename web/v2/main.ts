@@ -22,6 +22,7 @@ import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome } from './mobile.js';
+import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
@@ -225,6 +226,21 @@ export async function bootV2(): Promise<void> {
     mobile?.adoptStrip(tabsApi.strip, homeStrip);
   }
 
+  setAsideGuestOpener(openAsideGuest);   // 잎(미리보기)이 곁칸을 쓸 수 있게 창구를 연다(v2/aside-slot.ts)
+  //  앱 프레임(iframe) 안의 잎은 다른 창이라 위 창구가 안 닿는다 — postMessage 로 받는다.
+  //  ⚠ 보낸 창이 **우리 탭의 프레임인지** 확인하고 그 탭에 연다(오리진만 보면 남의 프레임도 남의 탭을 조종할 수 있다).
+  window.addEventListener('message', (ev: MessageEvent) => {
+    if (ev.origin !== location.origin || !ev.source || !tabsApi) return;
+    const m: any = ev.data;
+    if (!m || (m.type !== ASIDE_MSG.ping && m.type !== ASIDE_MSG.open)) return;
+    const tab = tabsApi.tabs.find((t) => {
+      const f = t.center.querySelector('iframe') as HTMLIFrameElement | null;
+      return !!f && f.contentWindow === ev.source;
+    });
+    if (!tab) return;
+    if (m.type === ASIDE_MSG.ping) { try { (ev.source as Window).postMessage({ type: ASIDE_MSG.pong }, location.origin); } catch { /* 프레임이 닫혔다 */ } return; }
+    if (m.guest && typeof m.guest.url === 'string') openAsideGuest(m.guest as AsideGuest, tab);
+  });
   drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
   await loadData();
 
@@ -377,8 +393,10 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   return { title: '홈', noAside: true };
 }
 function applyTabChrome(tab: ShellTab): void {
-  root!.classList.toggle('no-aside', tab.noAside);
-  if (mobile) mobile.setAside(!tab.noAside);   // 모바일 상단 바의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다
+  //  손님(미리보기)이 실려 있으면 곁칸이 없던 화면에도 곁칸을 연다 — 닫으면 다시 사라진다.
+  const guest = !!(tab.aside as AsideHost).__guest;
+  root!.classList.toggle('no-aside', tab.noAside && !guest);
+  if (mobile) mobile.setAside(!tab.noAside || guest);   // 모바일 상단 바의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다
   // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
   document.body.dataset.route = routeKey(tab.route) === 'raw:liv' || parseRoute(tab.route).segs[0] === 'liv' ? 'liv' : 'v2';
 }
@@ -642,10 +660,65 @@ function newSessionFor(projectId: number): void {
 //  탭마다 한 벌이므로 캐시도 탭의 aside 에 붙어 산다(전환해도 쌓인 것이 그대로).
 //  #1744 로 같은 자리에 **파일 탐색기**가 한 칸 더 산다(상단바 [파일]). 두 칸은 지워서 갈아 끼우지 않고 hidden 으로
 //  바꿔 낀다 — 발자취는 세션 화면이 대화를 읽으며 계속 밀어 넣는 곳이라, 지웠다 새로 만들면 쌓인 것이 사라진다.
-type AsideHost = HTMLElement & { __trail?: { id: string; w: TimelineHandle }; __files?: { id: string; h: FilesHandle }; __filesOn?: boolean };
+//  #1719(2026-08-20) 로 같은 자리에 **손님 화면**(미리보기 iframe)이 한 칸 더 산다 — v2/aside-slot.ts 참고.
+//   손님이 떠 있는 동안은 나머지 칸이 물러난다(지우지 않는다 — 닫으면 쌓아 둔 발자취가 그대로 돌아와야 한다).
+type AsideHost = HTMLElement & {
+  __trail?: { id: string; w: TimelineHandle }; __files?: { id: string; h: FilesHandle }; __filesOn?: boolean;
+  __guest?: { key: string; route: string; root: HTMLElement };
+  __prevW?: string;                           // 손님을 위해 넓히기 전의 우패널 너비(닫으면 돌려준다)
+};
 function paintAsidePanes(host: AsideHost): void {
-  if (host.__trail) host.__trail.w.root.hidden = !!host.__filesOn;
-  if (host.__files) host.__files.h.root.hidden = !host.__filesOn;
+  const g = !!host.__guest;
+  if (host.__trail) host.__trail.w.root.hidden = g || !!host.__filesOn;
+  if (host.__files) host.__files.h.root.hidden = g || !host.__filesOn;
+}
+/** 곁칸에 화면을 실으면 기본 폭으로는 못 본다 — 넓힌다. 사람이 끌어 둔 값이 더 넓으면 그대로 두고,
+ *  저장값(localStorage)은 건드리지 않는다 — 남의 설정을 말없이 바꾸지 않기 위해서다(닫으면 원래대로). */
+function widenAsideForGuest(host: AsideHost): void {
+  if (!root) return;
+  const cur = parseFloat(getComputedStyle(root).getPropertyValue('--v2-aside-w')) || 316;
+  const want = Math.min(720, Math.max(360, window.innerWidth - 560));   // 720 = 우패널 스플리터의 최대폭
+  if (want <= cur) return;
+  host.__prevW = root.style.getPropertyValue('--v2-aside-w');
+  root.style.setProperty('--v2-aside-w', Math.round(want) + 'px');
+}
+function dropAsideGuest(host: AsideHost): void {
+  if (host.__guest) { host.__guest.root.remove(); host.__guest = undefined; }
+  if (root && host.__prevW !== undefined) {
+    if (host.__prevW) root.style.setProperty('--v2-aside-w', host.__prevW);
+    else root.style.removeProperty('--v2-aside-w');
+    host.__prevW = undefined;
+  }
+}
+/** aside-slot 의 창구 구현 — 그 탭의 곁칸에 손님을 끼운다.
+ *  ⚠ 앱 프레임 탭(noAside)이라고 돌려보내지 않는다 — 미리보기 버튼이 사는 관리탭·클래식 프로젝트 상세가 바로 그
+ *   화면이라, 거기서 못 열면 이 기능은 아무 데서도 안 열린다. 손님이 있는 동안만 곁칸을 열어 준다(applyTabChrome). */
+function openAsideGuest(g: AsideGuest, forTab?: ShellTab): boolean {
+  const tab = forTab || (tabsApi ? tabsApi.active() : null);
+  if (!tab) return false;
+  const host = tab.aside as AsideHost;
+  if (host.__guest && host.__guest.key === g.key) { paintAsidePanes(host); return true; }   // 이미 그 손님 — 리로드하지 않는다
+  dropAsideGuest(host);
+  const frame = el('iframe', { class: 'v2-guest-frame', src: g.url, title: g.title,
+    allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
+  const hbtn = (label: string, title: string, onclick: () => void): HTMLElement =>
+    el('button', { class: 'fx-hbtn', type: 'button', title, 'aria-label': title, text: label, onclick });
+  const guest = el('section', { class: 'v2-guest' },
+    el('div', { class: 'v2-aside-h v2-guest-h' },
+      el('b', { text: '미리보기' }),
+      el('span', { class: 'v2-guest-t', text: g.title, title: g.title }),
+      el('span', { class: 'v2-guest-acts' },
+        hbtn('⟳', '새로고침', () => { try { frame.contentWindow!.location.reload(); } catch { frame.src = g.url; } }),
+        el('a', { class: 'fx-hbtn', href: g.url, target: '_blank', rel: 'noopener', text: '↗', title: '새 창으로 열기', 'aria-label': '새 창으로 열기' }),
+        hbtn('×', '닫기', () => { dropAsideGuest(host); paintAsidePanes(host); if (tabsApi && tabsApi.active() === tab) applyTabChrome(tab); }))),
+    frame);
+  host.__guest = { key: g.key, route: tab.route, root: guest };
+  host.append(guest);
+  widenAsideForGuest(host);
+  paintAsidePanes(host);
+  if (tabsApi && tabsApi.active() === tab) applyTabChrome(tab);   // 곁칸이 없던 화면이면 이 순간 열린다
+  if (mobile) mobile.openAside();              // 모바일에선 곁칸이 서랍이다 — 열어 주지 않으면 아무 일도 안 일어난 것처럼 보인다
+  return true;
 }
 function dropAsideFiles(host: AsideHost): void {
   if (host.__files) { host.__files.h.destroy(); host.__files = undefined; }
@@ -667,7 +740,7 @@ function toggleAsideFiles(tab: ShellTab, id: string): boolean {
 }
 function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null {
   const host = tab.aside as AsideHost;
-  if (!s) { host.__trail = undefined; dropAsideFiles(host); host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
+  if (!s) { host.__trail = undefined; dropAsideFiles(host); dropAsideGuest(host); host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
   const raw = s.raw || {};
   const factsEl = el('div', { class: 'v2-sfacts' },
     el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }),
@@ -676,6 +749,7 @@ function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null 
     s.node ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(s.node) })] : null,
     !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
   if (host.__trail && host.__trail.id === s.id && host.__trail.w.root.isConnected) { host.__trail.w.setMeta(factsEl); paintAsidePanes(host); return host.__trail.w; }
+  dropAsideGuest(host);          // 우패널을 통째로 다시 세운다 — 손님(미리보기)도 함께 물러난다
   host.replaceChildren();
   dropAsideFiles(host);          // 다른 세션으로 옮겼다 — 파일 패널도 그 세션 것으로 새로 연다
   const w = createTimeline(host, { scope: '이 세션', outcomes: true, empty: '아직 남은 것이 없어요 — 세션이 만들고 고친 것이 여기에 쌓입니다.' });

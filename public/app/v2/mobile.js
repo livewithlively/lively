@@ -112,5 +112,7 @@ export function mountMobileChrome(root, side, aside) {
             if (!on && open === 'aside')
                 closeAll();
         },
+        openAside() { if (isMobile() && !asideBtn.hidden && open !== 'aside')
+            openOne('aside'); },
     };
 }
