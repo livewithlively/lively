@@ -409,8 +409,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   // 상대 자산 참조에 버전 주입.
   //  JS: 정적 import/re-export(`… from './x.js'`)·동적 import(`import('./x.js')`) 의 상대 스펙파이어. CDN(https://)·bare 는 제외(`./` 필수).
   //  HTML: <script src>·<link href> 의 상대 로컬 자산. 삽입은 문자열 리터럴 내부라 문법을 깨지 않는다(최악의 오탐도 무해한 쿼리 추가).
-  const JS_IMPORT_RE = /((?:\bfrom|\bimport)\s*|\bimport\s*\(\s*)(['"])(\.\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
-  const HTML_ASSET_RE = /(\s(?:src|href)\s*=\s*)(['"])(\.\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
+  //  ⚠ `../` 도 받는다(#1841). 종전엔 `./` 로 시작하는 것만 잡아서, web/v2/* 가 부모 폴더를 부르는
+  //   `from '../core.js'` 류가 통째로 스탬프를 못 받았다 — 그 모듈들은 버전이 안 붙어 캐시 정책 밖으로 샜고,
+  //   같은 파일이 `?v=` 있는 판과 없는 판 **두 벌로 로드**돼 모듈 인스턴스가 갈렸다(실측: gen-watch 가
+  //   두 번 로드돼 v2 쪽 인스턴스는 자기 세대를 못 읽었다).
+  const JS_IMPORT_RE = /((?:\bfrom|\bimport)\s*|\bimport\s*\(\s*)(['"])(\.{1,2}\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
+  const HTML_ASSET_RE = /(\s(?:src|href)\s*=\s*)(['"])(\.{1,2}\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
   const stampJs = (src: string, v: string): string => src.replace(JS_IMPORT_RE, (_m, pre, q1, spec, q2) => `${pre}${q1}${spec}?v=${v}${q2}`);
   const stampHtml = (src: string, v: string): string => src.replace(HTML_ASSET_RE, (_m, pre, q1, spec, q2) => `${pre}${q1}${spec}?v=${v}${q2}`);
   // 모듈 rewrite 결과 캐시(버전·mtime 키) — 큰 번들(projects.js 700KB+)의 매요청 정규식 치환 회피. immutable 이라 재요청도 드묾.
