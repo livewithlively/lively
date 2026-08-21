@@ -6,6 +6,7 @@
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
 import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state } from './core.js';
+import { watchStaleShell } from './gen-watch.js'; // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { isDistillerDetailPath, renderContext } from './context.js'; // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
@@ -616,6 +617,7 @@ function showAuthErrorFromHash() {
 }
 renderAuthProviders();
 showAuthErrorFromHash();
+watchStaleShell(); // #1841 낡은 화면 자가복구 — 다시 보이는 순간에 세대를 묻고 낡았으면 다시 싣는다.
 installGlobalUndo(); // #702 전역 실행취소(Cmd/Ctrl+Z) — 텍스트 편집 밖에서 '내 마지막 웹 변경'을 되돌린다.
 boot();
 export { parseHash, };

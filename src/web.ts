@@ -409,8 +409,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   // 상대 자산 참조에 버전 주입.
   //  JS: 정적 import/re-export(`… from './x.js'`)·동적 import(`import('./x.js')`) 의 상대 스펙파이어. CDN(https://)·bare 는 제외(`./` 필수).
   //  HTML: <script src>·<link href> 의 상대 로컬 자산. 삽입은 문자열 리터럴 내부라 문법을 깨지 않는다(최악의 오탐도 무해한 쿼리 추가).
-  const JS_IMPORT_RE = /((?:\bfrom|\bimport)\s*|\bimport\s*\(\s*)(['"])(\.\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
-  const HTML_ASSET_RE = /(\s(?:src|href)\s*=\s*)(['"])(\.\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
+  //  ⚠ `../` 도 받는다(#1841). 종전엔 `./` 로 시작하는 것만 잡아서, web/v2/* 가 부모 폴더를 부르는
+  //   `from '../core.js'` 류가 통째로 스탬프를 못 받았다 — 그 모듈들은 버전이 안 붙어 캐시 정책 밖으로 샜고,
+  //   같은 파일이 `?v=` 있는 판과 없는 판 **두 벌로 로드**돼 모듈 인스턴스가 갈렸다(실측: gen-watch 가
+  //   두 번 로드돼 v2 쪽 인스턴스는 자기 세대를 못 읽었다).
+  const JS_IMPORT_RE = /((?:\bfrom|\bimport)\s*|\bimport\s*\(\s*)(['"])(\.{1,2}\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
+  const HTML_ASSET_RE = /(\s(?:src|href)\s*=\s*)(['"])(\.{1,2}\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
   const stampJs = (src: string, v: string): string => src.replace(JS_IMPORT_RE, (_m, pre, q1, spec, q2) => `${pre}${q1}${spec}?v=${v}${q2}`);
   const stampHtml = (src: string, v: string): string => src.replace(HTML_ASSET_RE, (_m, pre, q1, spec, q2) => `${pre}${q1}${spec}?v=${v}${q2}`);
   // 모듈 rewrite 결과 캐시(버전·mtime 키) — 큰 번들(projects.js 700KB+)의 매요청 정규식 치환 회피. immutable 이라 재요청도 드묾.
@@ -451,6 +455,15 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Cache-Control", cacheHdr);
     res.sendFile(full, { cacheControl: false }); return; // cacheControl:false — express 가 우리 헤더를 덮어쓰지 않도록
   };
+  // 세대 알림(#1841) — 지금 서빙 중인 자산 세대를 한 줄로 알려준다. 화면이 자기 세대와 비교해
+  //  낡았으면 스스로 다시 싣는다(web/gen-watch.ts). 인증 불요(정적 자산과 같은 급), 캐시 금지.
+  //  ⚠ 이게 필요한 이유: 데스크톱 앱 창은 닫아도 죽지 않고(hide) 다시 열 때 loadURL 을 건너뛴다.
+  //   그래서 게이트웨이가 갱신돼도 앱은 처음 뜬 판을 영영 들고 있었다(실측 2026-08-21: 앱 세대
+  //   7964959ed50d vs 서버 882a0a3d262e — 원준이 "반영 안 된 것 같다"를 세 번 말한 진짜 원인).
+  app.get("/ui/__gen", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ v: assetVersion() });
+  });
   app.use("/ui", serveStatic);
   app.get("/", (_req, res) => res.redirect("/ui/"));
 }
