@@ -136,12 +136,36 @@ export function createTimeline(host, ctx) {
     /** 그리는 차례 — 최신순이면 뒤집어 그린다(원본은 건드리지 않는다). */
     const inOrder = (arr) => (newestFirst ? arr.slice().reverse() : arr);
     const ordBtn = el('button', { class: 'tl-ord', type: 'button' });
-    function paintOrdBtn() {
+    // ── 얼마나 자세히(#1819 원준 2026-08-21) ─────────────────────────────────────
+    //  "답 밑에 고침·고침·커밋 이런 거, 컴팩트하게 보고 싶어하는 사람한테는 굳이 안 보여줄 수 있으면."
+    //  무엇이 남았나는 어떤 사람에겐 본론이고 어떤 사람에겐 소음이다 — 한쪽으로 정하지 말고 **사람이 고르게** 한다.
+    //  ⚠ 간단히에서도 **지우지는 않는다**: 남은 것이 있는 장에는 답 끝에 `+N` 칩이 서고, 그 장만 펼칠 수 있다.
+    //   안 보이는 것과 없는 것은 다르다(결과물 보기의 '접힘 줄'과 같은 규약).
+    const COMPACT_KEY = 'lively_tl_compact';
+    let compact = false;
+    try {
+        compact = localStorage.getItem(COMPACT_KEY) === '1';
+    }
+    catch (_) { /* 저장이 막힌 브라우저 */ }
+    const cmpBtn = el('button', { class: 'tl-ord tl-cmp', type: 'button', hidden: !ctx.chapters });
+    function paintHeadBtns() {
         ordBtn.replaceChildren(el('span', { class: 'tl-ord-i', 'aria-hidden': 'true', text: '⇅' }), el('span', { text: newestFirst ? '최신순' : '과거순' }));
         ordBtn.title = newestFirst
             ? '지금은 최신이 맨 위에 있습니다. 누르면 과거순으로 바뀝니다.'
             : '지금은 과거가 맨 위에 있습니다. 누르면 최신순으로 바뀝니다.';
+        cmpBtn.replaceChildren(el('span', { class: 'tl-ord-i', 'aria-hidden': 'true', text: '≡' }), el('span', { text: compact ? '간단히' : '자세히' }));
+        cmpBtn.title = compact
+            ? '지금은 질문과 답만 보입니다. 누르면 남은 것(파일·커밋·지식)까지 펼칩니다.'
+            : '지금은 남은 것(파일·커밋·지식)까지 보입니다. 누르면 접어서 질문과 답만 봅니다.';
     }
+    cmpBtn.addEventListener('click', () => {
+        compact = !compact;
+        try {
+            localStorage.setItem(COMPACT_KEY, compact ? '1' : '0');
+        }
+        catch (_) { /* noop */ }
+        paint();
+    });
     const scrollEl = el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl);
     ordBtn.addEventListener('click', () => {
         newestFirst = !newestFirst;
@@ -153,7 +177,7 @@ export function createTimeline(host, ctx) {
         // 차례를 뒤집으면 '지금'이 반대편 끝으로 간다 — 그 자리로 데려간다(안 그러면 옛날 얘기만 보인 채로 남는다).
         scrollEl.scrollTop = newestFirst ? 0 : scrollEl.scrollHeight;
     });
-    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), ordBtn, countEl), factsEl, scrollEl);
+    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), ordBtn, cmpBtn, countEl), factsEl, scrollEl);
     host.append(root);
     const isHead = (it) => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
     // ── 한 항목 = 원장(ledger) 한 줄 ──────────────────────────────────────
@@ -347,7 +371,22 @@ export function createTimeline(host, ctx) {
     function ansRow(c) {
         if (!c.a && !c.kids.length)
             return null;
-        return el('div', { class: 'tl-card tl-a tlk-reply' + (c.a && c.a.error ? ' err' : '') }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-kw', text: '답' })), el('div', { class: 'tl-main' }, c.a ? el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl tl-ans', text: c.a.label, title: c.a.label })) : null, c.kids.length ? el('div', { class: 'tl-kids' }, ...c.kids.map(sub)) : null));
+        // 간단히에서 접는 것은 **답이 있는 장의 남은 것**뿐이다 — 답이 없으면 남은 것이 그 장의 유일한 내용이라
+        //  접으면 빈 줄만 남는다(접기가 화면에서 사건을 지워 버리면 안 된다).
+        const cid = 'kids:' + String((c.q && c.q.id) || (c.a && c.a.id) || (c.kids[0] && c.kids[0].id) || '');
+        const canHide = compact && !!c.a && c.kids.length > 0;
+        const openKids = !canHide || open.has(cid);
+        const chip = canHide
+            ? el('button', {
+                class: 'tl-kidsn', type: 'button', 'aria-expanded': String(openKids),
+                title: openKids ? '남은 것을 다시 접습니다.' : `이 지시에서 남은 것 ${c.kids.length}개를 폅니다.`,
+                onclick: (e) => { e.stopPropagation(); if (openKids)
+                    open.delete(cid);
+                else
+                    open.add(cid); paint(); },
+            }, (openKids ? '−' : '+') + c.kids.length)
+            : null;
+        return el('div', { class: 'tl-card tl-a tlk-reply' + (c.a && c.a.error ? ' err' : '') }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-kw', text: '답' })), el('div', { class: 'tl-main' }, c.a ? el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl tl-ans', text: c.a.label, title: c.a.label }), chip) : null, c.kids.length && openKids ? el('div', { class: 'tl-kids' }, ...c.kids.map(sub)) : null));
     }
     function paintQA() {
         const chaps = chapters();
@@ -375,7 +414,7 @@ export function createTimeline(host, ctx) {
     function paint() {
         // 과거순은 새 항목이 **아래**로 붙는다 — 바닥을 보고 있던 사람은 계속 바닥에 있어야 방금 일어난 일이 보인다.
         const stick = !newestFirst && scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 24;
-        paintOrdBtn();
+        paintHeadBtns();
         if (ctx.chapters)
             paintQA();
         else if (ctx.outcomes)

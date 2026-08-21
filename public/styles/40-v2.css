@@ -667,7 +667,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-rest { display: flex; align-items: center; gap: 6px; width: 100%; margin: 8px 0 0; padding: 7px 10px 7px 60px; border: 0; border-radius: 8px;
   background: none; font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer; text-align: left; }
 .tl-rest:hover { color: var(--ink); background: var(--bg-tint); }
-.tl-scope { font-size: 12px; color: var(--muted); }
+.tl-scope { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 보는 차례 스위치(#1819) — 머리 바의 조용한 고스트 버튼. 개수(.v2-k)는 늘 맨 오른쪽에 있던 자리를
    지키고, 스위치가 그 왼쪽에 붙는다(사람이 이미 아는 자리를 밀어내지 않는다). */
 .tl-ord { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 0; border-radius: 7px;
@@ -678,6 +678,14 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-ord:hover .tl-ord-i { color: var(--blue); }
 .tl-wrap .v2-aside-h .tl-ord { margin-left: auto; }
 .tl-wrap .v2-aside-h .tl-ord + .v2-k { margin-left: 0; }
+.tl-cmp[hidden] { display: none; }
+/* 간단히에서 접힌 '남은 것'의 표 — 답 줄 끝에 붙는 아주 작은 칩. 접었다는 사실과 몇 개인지를 한 자리에서 말한다
+   (결과물 보기의 접힘 줄과 같은 규약: 안 보이는 것과 없는 것은 다르다). */
+.tl-kidsn { flex: none; align-self: flex-start; margin-top: 1px; padding: 0 6px; border: 0; border-radius: 999px;
+  background: var(--bg-tint-2); color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 700;
+  font-variant-numeric: tabular-nums; line-height: 18px; cursor: pointer; }
+.tl-kidsn:hover { color: var(--blue); }
+.tl-kidsn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .tl-wrap .v2-aside-h .v2-k { margin-left: auto; }
 .tl-list { display: flex; flex-direction: column; min-height: 0; gap: 2px; }
 .tl-day { display: flex; align-items: center; gap: 10px; padding: 22px 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--muted-2); }
