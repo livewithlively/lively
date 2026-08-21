@@ -327,7 +327,7 @@
       ['제품·기획', '기획·PO'], ['마케팅·브랜드', '마케팅'], ['영업·고객', '마케팅'], ['개발·데이터', '개발'],
       ['디자인', '기획·PO'], ['경영·전략', '기획·PO'], ['재무·회계·법무', '운영·재무'], ['인사·총무·운영', '운영·재무'],
     ] },
-    solo: { label: '1인·프리랜서', axis: '어느 쪽 일을 하고 계세요?', opts: [
+    solo: { label: '1인·프리랜서', axis: '어떤 일을 하고 계세요?', opts: [
       ['컨설팅·자문', '1인 사업'], ['개발·외주', '개발'], ['디자인·크리에이티브', '1인 사업'], ['콘텐츠·미디어', '마케팅'],
       ['커머스', '1인 사업'], ['교육·강의', '1인 사업'], ['전문직', '법무·계약'],
     ] },
@@ -335,9 +335,63 @@
       ['학부연구생', '연구·대학원'], ['석사', '연구·대학원'], ['박사', '연구·대학원'], ['포닥·연구원', '연구·대학원'], ['교원', '연구·대학원'],
     ] },
     student: { label: '학생', axis: '지금 어느 쪽에 가까우세요?', opts: [
-      ['1~2학년', '학생'], ['3~4학년', '학생'], ['졸업·취업 준비', '학생'], ['전공 밖 활동이 많음', '학생'],
+      ['수업·과제', '학생'], ['시험·자격', '학생'], ['학회·동아리', '학생'], ['창업·사이드 프로젝트', '학생'], ['취업', '학생'],
     ] },
   };
+  /* ── 자료 갈래 7축 (2026-08-21 재설계) ─────────────────────────────
+     옛 분류(문서·기획서/보고서·분석/회의록…)는 '형태'와 '용도'가 섞여 기획서가 두 갈래에 걸쳤다.
+     용도 한 축으로만 갈라 겹침을 없앴다 — 무엇을 위해 만든 것인가. */
+  const KINDS7 = [
+    ['기획·설계', '무엇을 만들지 정한 것'], ['보고·분석', '결과를 정리해 알린 것'],
+    ['기록', '오간 말을 남긴 것'], ['규정·계약', '지켜야 할 것을 못박은 것'],
+    ['산출물', '내보낸 결과물 자체'], ['조사·자료', '남이 만든 것을 모아 둔 것'],
+    ['거래·정산', '돈이 오간 것'],
+  ];
+  /* 직무가 실제로 쌓는 갈래 상위 3개 — 자료를 읽고 나서 "이렇게 보여요"로 내민다. */
+  const TALLY7 = {
+    '기획·PO': [['기획·설계', 18], ['기록', 13], ['보고·분석', 10]],
+    '마케팅': [['산출물', 17], ['보고·분석', 12], ['기록', 12]],
+    '연구·대학원': [['조사·자료', 23], ['기록', 12], ['기획·설계', 6]],
+    '법무·계약': [['규정·계약', 21], ['기록', 11], ['보고·분석', 7]],
+    '개발': [['산출물', 19], ['기획·설계', 12], ['기록', 10]],
+    '운영·재무': [['보고·분석', 16], ['거래·정산', 13], ['규정·계약', 9]],
+    '1인 사업': [['기획·설계', 14], ['거래·정산', 12], ['기록', 9]],
+    '학생': [['조사·자료', 20], ['기록', 10], ['산출물', 8]],
+    default: [['기획·설계', 15], ['기록', 12], ['보고·분석', 9]],
+  };
+  const tally7 = () => TALLY7[roleOf()] || TALLY7.default;
+
+  /* ── 이런 것까지 시킬 수 있어요 (2026-08-21) ────────────────────────
+     발견 3가지·첫 질문·답 화면을 걷어낸 자리. 고른 직무를 근거로 "보통은 여러 번 왔다 갔다 할 일"을
+     한 문장으로 끝내는 예시를 보여준다. 셋을 다 만족할 때만 넣었다 —
+     ① 자료 여러 곳을 가로지른다 ② 판단이 든다 ③ 산출물까지 나온다. */
+  const CAN = {
+    '제품·기획': [['지난 분기 VOC를 전부 훑어서 세 번 넘게 나온 요구만 고르고, 이번 로드맵에 있는지 대조한 다음, 빠진 것마다 왜 빠졌는지 회의록에서 근거를 찾아 표로 만들어 줘', 'VOC 열어 세고 → 로드맵 대조하고 → 회의록 뒤지고 → 표로 정리. 네 번 왔다 갔다.'],
+      ['마케팅', '그 요구 중에 우리가 이미 만들었는데 안 알린 게 있는지 지난 공지와 릴리스 노트에서 찾아 줘']],
+    '마케팅·브랜드': [['작년 같은 달 캠페인과 올해 것을 비교해서 나빠진 지표를 고르고, 각각 그때 쓴 소재를 붙이고, 회의에서 이유로 언급된 게 있으면 같이 정리해 줘', '작년 리포트 찾고 → 올해와 비교하고 → 소재 뒤지고 → 회의록 검색. 네 번.'],
+      ['영업', '그 캠페인으로 들어온 문의가 실제 계약까지 간 비율을 영업 자료에서 찾아 붙여 줘']],
+    '영업·고객': [['이번 분기에 떠난 고객들의 문의 기록과 계약서를 다 읽고 공통된 신호를 찾아서, 아직 남아 있는 고객 중 같은 신호가 보이는 곳을 알려 줘', '이탈 목록 뽑고 → 고객별 문의 열고 → 계약 확인하고 → 남은 고객과 대조. 고객 수만큼 반복.'],
+      ['제품', '그 신호가 제품의 어느 기능과 맞닿아 있는지 스펙에서 짚어 줘']],
+    '개발·데이터': [['이번 릴리스에서 바뀐 부분과 문서를 대조해서 설명이 안 맞는 것만 찾고, 그걸 쓰고 있는 쪽까지 짚어 줘', '변경 목록 뽑고 → 문서 찾아 비교하고 → 사용처 검색. 항목마다 반복.'],
+      ['기획', '그 변경 중에 스펙에 없던 것이 있으면 표시해 줘']],
+    '디자인': [['최근 시안 세 개에서 반복해서 지적받은 것을 뽑고, 그게 우리 디자인 규칙 중 어디와 어긋나는지 짚어 줘', '시안별 코멘트 열고 → 겹치는 것 세고 → 규칙 문서 대조. 세 번 이상.'],
+      ['제품', '그 지적이 실제로 스펙 변경까지 이어졌는지 확인해 줘']],
+    '경영·전략': [['지난 6개월 회의록에서 우리가 미룬 결정만 모아서, 각각 지금은 어떻게 됐는지 최근 자료로 확인해 줘', '회의록 스무 건 훑고 → 미룬 것 표시하고 → 각각 후속 자료 찾기. 결정 수만큼 반복.'],
+      ['재무', '그중 돈이 걸린 것만 골라 금액 규모를 붙여 줘']],
+    '재무·회계·법무': [['이번 달 계약서에서 표준과 다른 조항만 뽑고, 과거에 같은 조항으로 문제가 생긴 적이 있는지 지난 기록에서 찾아 줘', '계약서 한 건씩 열고 → 표준본과 비교하고 → 과거 사례 검색. 계약 수만큼 반복.'],
+      ['영업', '그 조항이 어느 고객과의 계약에 몰려 있는지 정리해 줘']],
+    '인사·총무·운영': [['지난 1년 채용 공고와 실제 입사자 이력을 비교해서, 공고와 다르게 뽑힌 패턴을 정리해 줘', '공고 모으고 → 입사자 이력 대조하고 → 패턴 세기. 직무 수만큼 반복.'],
+      ['경영', '그 패턴이 올해 조직 목표와 어긋나는 지점이 있으면 짚어 줘']],
+    solo: [['지난 프로젝트 산출물 중에 이번 제안에 재활용할 수 있는 것을 찾아서, 이 고객 업종에 맞게 고친 제안서 초안을 만들어 줘', '옛 프로젝트 폴더 뒤지고 → 쓸 것 고르고 → 업종에 맞게 고쳐 쓰기. 반나절.'],
+      ['정산', '그 제안에 들어갈 견적을 지난 비슷한 건들 기준으로 잡아 줘']],
+    academy: [['내가 읽은 논문 중에 이 가설을 반박하는 것을 찾고, 내 실험 결과와 어긋나는 지점을 짚고, 관련 연구 절 초안까지 써 줘', '논문 스무 편 다시 훑고 → 반박 찾고 → 내 데이터와 대조하고 → 초안 쓰기. 며칠.'],
+      ['지도 미팅', '다음 미팅 전에 교수님이 지난번에 지적하신 것 중 아직 반영 안 된 게 뭔지 알려 줘']],
+    student: [['이번 학기 강의자료 전부에서 시험에 나올 만한 개념을 뽑고, 내 필기에서 빠진 것만 알려 줘', '강의자료 열두 개 열고 → 정리하고 → 필기와 대조. 시험 전날 밤샘.'],
+      ['취업', '내가 한 프로젝트들에서 이 공고의 요구사항과 맞는 경험만 뽑아 자기소개서 초안을 써 줘']],
+  };
+  /** 고른 직무 → 예시. 직무 이름이 없으면 무대 단위로 폴백한다. */
+  const canFor = () => CAN[S.job] || CAN[S.stage] || CAN['제품·기획'];
+
   const stageOf = () => STAGES[S.stage] || STAGES.company;
   const jobOptsA2 = () => stageOf().opts.map(([label]) => ({ id: label, label }));
   /** 고른 직무 → 그 직무가 쓸 자료 세트(PERSONA 키). 목록에 없으면(직접 적기) 그 무대의 첫 직무 세트를 쓴다. */
@@ -357,7 +411,7 @@
   /* ───────────────────────── 상태 ───────────────────────── */
   const KEY = 'lvly-proto-v3';
   const fresh = () => ({
-    route: '#/start', name: '상민', day: 1, team: false, boardOn: false, invitesLeft: 3, ws: 'me', livView: 'chat', livMapOpen: false,
+    route: '#/start', name: '상민', nameSet: false, day: 1, team: false, boardOn: false, invitesLeft: 3, ws: 'me', livView: 'chat', livMapOpen: false,
     ob: { started: false, startedAt: null, finishedAt: null, step: 0, doneSteps: [], skipped: false, finished: false, scene: null, returnTo: null,
       buildProg: 0, noai: false, firstQ: null, answered: false, freeLeft: 3 },
     stage: null, job: null, role: null, detail: null, pain: null, nowline: null, fixes: [], jobs: [], sources: [], files: [], drop: false,
@@ -427,19 +481,27 @@
      · 입력창 없음 — 자유 대화는 첫 답이 끝난 뒤 홈에서 이어진다. */
   let stageEl = null, buildEl = null, ingestTimer = null, buildTimer = null, sceneToken = 0, readTimer = null;
 
-  const SCENE_DOT = { stage: 1, role: 1, sources: 2, upload: 2, ai: 3, claude: 3, terminal: 3,
-    reading: 4, guess: 4, b1: 4, b2: 4, b3: 4, b4: 4, nowline: 4, found: 4, firstq: 5, answer: 5, done: 5 };
+  const SCENE_DOT = { name: 1, stage: 1, role: 1, sources: 2, upload: 2, ai: 3, claude: 3, terminal: 3,
+    reading: 4, guess: 4, b1: 4, b2: 4, b3: 4, b4: 4, nowline: 4, can: 5, found: 4, firstq: 5, answer: 5, done: 5 };
   const SCENE_BACK = {
-    role: () => 'stage', sources: () => 'role', upload: () => 'sources',
+    stage: () => 'name', role: () => 'stage', sources: () => 'role', upload: () => 'sources',
     ai: () => (S.sources.length && !(S.sources.length === 1 && S.sources[0] === 'none') ? 'upload' : 'sources'),
     claude: () => 'ai', terminal: () => (S.ai && S.ai !== '아직 없어요' && !S.aiConnected ? 'claude' : 'ai'),
     guess: () => 'terminal', b1: () => 'guess', b2: () => 'b1', b3: () => 'b2', b4: () => 'b3', nowline: () => 'b4',
-    found: () => 'nowline',
+    can: () => 'nowline', found: () => 'nowline',
     firstq: () => (S.ingest.total ? 'found' : 'terminal'), answer: () => 'firstq',
   };
   function setDots(cur, allDone) { S.ob.step = cur; S.ob.doneSteps = allDone ? [1, 2, 3, 4, 5] : Array.from({ length: Math.max(0, cur - 1) }, (_, i) => i + 1); save(); renderDots(); }
   function renderDots() { $$('#dots li').forEach((li) => { const i = +li.dataset.i; const done = S.ob.doneSteps.includes(i); li.classList.toggle('done', done); li.classList.toggle('now', S.ob.step === i && !done); li.title = done ? '이 단계로 돌아가 고치기' : ''; }); }
-  const DOT_SCENE = { 1: 'stage', 2: 'sources', 3: 'ai', 4: 'guess' };
+  const DOT_SCENE = { 1: 'name', 2: 'sources', 3: 'ai', 4: 'guess' };
+  /* '나중에 하기'는 **아직 안 끝낸 일을 미루는 문**이다. 그래서 묻는 동안에만 연다.
+     리브가 다 읽고 결과를 보여주는 단계(찾은 것·첫 질문·답·요약)에서는 미룰 일이 남아 있지 않다 —
+     요약 화면에는 '홈으로 가기'가 이미 있어 같은 자리에 나가는 문이 둘이 된다(원준님 2026-08-21). */
+  const ESCAPE_OFF = new Set(['found', 'firstq', 'answer', 'done']);
+  function setEscape(key) {
+    const b = $('[data-act="skip-all"]'); if (!b) return;
+    b.hidden = S.ob.finished || ESCAPE_OFF.has(key);
+  }
   const fmtDur = (ms) => { const s = Math.max(1, Math.round(ms / 1000)); return `${Math.floor(s / 60)}분 ${String(s % 60).padStart(2, '0')}초`; };
   function tickTime() { const el = $('#roomTime'); if (!el) return; el.textContent = S.ob.finishedAt ? `처음 한 번 · ${fmtDur(S.ob.finishedAt - S.ob.startedAt)}` : '처음 한 번 · 3분'; }
 
@@ -468,7 +530,7 @@
     $('[data-act="skip-all"]').addEventListener('click', skipAll);
     $('#dots').addEventListener('click', (e) => { const li = e.target.closest('li.done'); if (!li) return; const i = +li.dataset.i; const key = i === 5 ? 'firstq' : DOT_SCENE[i]; if (!key || key === S.ob.scene) return; S.ob.returnTo = S.ob.scene; goScene(key, { fix: true }); });
     renderBuild(); tickTime(); startBuildMeter(); resumeIngest();
-    const scene = S.ob.finished ? 'done' : (S.ob.scene || 'stage');
+    const scene = S.ob.finished ? 'done' : (S.ob.scene || 'name');
     renderScene(scene, false);
   }
   const FIX_CHAIN = { sources: 'upload', ai: 'claude', stage: 'role' }; // 고치기 중에도 이어져야 하는 다음 장면
@@ -483,6 +545,7 @@
   async function renderScene(key, animate) {
     const token = ++sceneToken; clearInterval(readTimer);
     setDots(SCENE_DOT[key] || 5, key === 'done' || S.ob.finished);
+    setEscape(key);
     if (animate && stageEl.firstElementChild) { stageEl.firstElementChild.classList.add('sc-leave'); await wait(130); if (token !== sceneToken) return; }
     const sc = SCENES[key]; if (!sc) return;
     const el = document.createElement('div');
@@ -505,7 +568,9 @@
     const goWrap = $('.sc-go', el), go = goWrap ? $('button', goWrap) : null, wr = $('.sc-write', el), win = wr ? $('input', wr) : null;
     const extra = [];
     const chosen = () => $$('.chip.on[data-opt]', el).map((c) => c.dataset.opt).concat(extra);
-    const syncGo = () => { if (!goWrap) return; const n = chosen().length; goWrap.hidden = n === 0; if (go) go.textContent = `${n}개로 계속`; };
+    // ★ 버튼을 없앴다 붙였다 하지 않는다 — 나타나는 순간 장면이 길어져 화면 전체가 위로 밀린다(원준님 2026-08-21).
+    //    자리는 처음부터 지키고, '아직 못 누름 → 누를 수 있음'만 바꾼다.
+    const syncGo = () => { if (!goWrap || !go) return; const n = chosen().length; go.disabled = n === 0; go.textContent = n === 0 ? '계속' : `${n}개로 계속`; };
     syncGo();
     let committed = false;
     const commit = (sel) => { if (committed) return; committed = true; el.classList.add('sc-leave-soft'); onCommit(sel); };
@@ -533,7 +598,7 @@
   }
   const chipsHTML = (options, sel) => options.map((o, i) => { const id = typeof o === 'string' ? o : o.id; const label = typeof o === 'string' ? o : o.label; const none = typeof o === 'object' && o.none; const on = (sel || []).includes(id); return `<button type="button" class="chip${on ? ' on' : ''}${none ? ' chip-dim' : ''}" data-opt="${esc(id)}" data-none="${none ? 1 : 0}" style="animation-delay:${Math.min(60 + i * 40, 460)}ms">${esc(label)}</button>`; }).join('');
   const choiceHTML = (spec) => `<div class="sc-opts">${chipsHTML(spec.options, spec.sel)}${spec.other ? `<button type="button" class="chip chip-esc" data-esc="write" style="animation-delay:${Math.min(60 + spec.options.length * 40, 500)}ms">＋ ${esc(spec.other)}</button>` : ''}</div>
-    ${spec.multi ? `<div class="sc-go" hidden><button type="button" class="btn btn-primary">계속</button></div>` : ''}
+    ${spec.multi ? `<div class="sc-go"><button type="button" class="btn btn-primary" disabled>계속</button></div>` : ''}
     <div class="sc-write" hidden><input class="in" type="text" placeholder="여기에 적어 주세요"><button type="button" class="btn btn-ghost btn-sm">확인</button></div>
     ${spec.skip ? `<div class="sc-skip"><button type="button" class="btn-text" data-esc="skip">${esc(spec.skip)}</button></div>` : ''}`;
 
@@ -543,9 +608,23 @@
 
   /* ── 장면들 ── */
   const SCENES = {
+    /* A0 — 이름. 이후 모든 문구의 호칭이 여기서 나온다(2026-08-21 원준님 요청). */
+    name: {
+      html: () => scHead('안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다.', '어떻게 불러 드릴까요?', '이름이든 별명이든 편한 대로 적어 주세요. 나중에 언제든 바꾸실 수 있어요.')
+        + `<div class="sc-write"><input class="in" type="text" placeholder="예: 원준" aria-label="어떻게 부를지" value="${esc(S.nameSet ? S.name : '')}"><button type="button" class="btn btn-primary" data-write-go>이렇게 불러 주세요</button></div>`
+        + `<div class="sc-skip"><button type="button" class="btn-text" data-esc="skip">그냥 넘어갈게요</button></div>`,
+      bind: (el) => {
+        const inp = $('input.in', el), go = $('[data-write-go]', el);
+        const commit = () => { const v = (inp.value || '').trim(); if (v) { S.name = v; S.nameSet = true; } save(); renderBuild(); flashCard('#bcMe'); goScene('stage'); };
+        go.addEventListener('click', commit);
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); });
+        setTimeout(() => inp.focus(), 60);
+        $$('[data-esc="skip"]', el).forEach((b) => b.addEventListener('click', () => goScene('stage')));
+      },
+    },
     /* A1 — 무대. 직무 목록을 이걸로 가른다. */
     stage: {
-      html: () => scHead('안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다. 두 가지만 여쭙고, 나머지는 <b>자료를 보고 제가 맞혀 볼게요</b>.', '어디에서 일하고 계세요?', '자세한 건 안 여쭙습니다 — 두 번만 고르시면 됩니다.')
+      html: () => scHead('안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다. 몇 가지만 여쭙고, 나머지는 자료를 보고 <b>제가 알아서 세팅할게요</b>.', '어디에서 일하고 계세요?', '자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.')
         + choiceHTML({ options: Object.entries(STAGES).map(([id, s]) => ({ id, label: s.label })), sel: S.stage ? [S.stage] : [], skip: '나중에 정할게요' }),
       bind: (el) => bindChoice(el, {
         onCommit: (sel) => { if (S.stage !== sel[0]) { S.job = null; S.role = null; S.pain = null; } S.stage = sel[0]; save(); renderBuild(); flashCard('#bcMe'); goScene('role'); },
@@ -563,9 +642,9 @@
     },
     sources: {
       cls: 'wide',
-      html: () => scHead('고맙습니다. 여쭐 건 여기까지예요 — 이제 <b>자료만</b> 보여 주시면 됩니다.', '지금까지 일한 맥락들을 주로 어디에 쌓아 두셨나요?', '여러 개 골라도 됩니다. 살아 있는 서비스는 연결해 두면 새 자료가 계속 따라옵니다.')
+      html: () => scHead('고맙습니다. 나머지는 <b>조금 뒤에 올려주시는 자료를 보고</b> 제가 알아서 세팅할게요.', '지금까지의 맥락을 주로 어디에 쌓아 두셨나요?', '연결해 두시면 라이블리가 그 서비스의 자료를 계속 모아 정리해서, 쓰시는 AI에 자동으로 실어 줍니다. 맥락이 많은 곳일수록, 여러 곳을 이을수록 답이 좋아집니다. 여러 개 골라도 됩니다.')
         + `<div class="sc-srcs">${SOURCE_ROWS.map((row) => `<div class="srcrow"><span class="srcrow-k">${esc(row.k)}</span><div class="sc-opts">${row.items.map((s) => `<button type="button" class="chip chip-src${S.sources.includes(s.id) ? ' on' : ''}${s.none ? ' chip-dim' : ''}" data-opt="${esc(s.id)}" data-none="${s.none ? 1 : 0}">${s.logo ? brandLogo(s.logo) : ic(s.ic, 'ic-sm')}<span>${esc(s.label)}</span></button>`).join('')}</div></div>`).join('')}</div>`
-        + `<div class="sc-go" hidden><button type="button" class="btn btn-primary">계속</button></div>`
+        + `<div class="sc-go"><button type="button" class="btn btn-primary" disabled>계속</button></div>`
         + `<div class="sc-skip"><button type="button" class="btn-text" data-esc="skip">건너뛰기</button></div>`,
       bind: (el) => bindChoice(el, { multi: true, onCommit: async (sel) => { S.sources = sel; save(); renderBuild(); if (sel.includes('none') && sel.length === 1) return goScene('ai'); goScene('upload'); }, onSkip: () => goScene('ai') }),
     },
@@ -581,7 +660,7 @@
         const conn = (s) => { const st = S.conn[s.id]; return `<div class="conn"><span class="logo">${s.logo ? brandLogo(s.logo) : ic(s.ic || 'folder', 'ic-sm')}</span><div class="t">${esc(s.label)}</div>${st === 'on' ? `<span class="state on">연결됨</span>` : `<button type="button" class="btn btn-ghost btn-sm${st === 'busy' ? ' is-busy' : ''}" data-connect="${s.id}">연결</button>`}<div class="s">${st === 'on' ? '연결됐어요 · 읽기만 · 새 자료 자동 반영' : '읽기 권한만 · 한 번이면 됩니다'}</div></div>`; };
         const has = S.files.length > 0 || Object.values(S.conn).some((v) => v === 'on' || v === 'busy');
         const liveNames = oauth.map((s) => s.label).join('·');
-        return scHead(liveNames ? `${esc(liveNames)}은 한 번 연결하면 계속 새 자료가 따라옵니다.` : '파일이 손에 있으면 그냥 끌어다 놓으시면 됩니다.', '자료를 넘겨주세요.', '폴더 정리도, 이름 짓기도 필요 없습니다 — 읽는 동안 다음으로 넘어갑니다.')
+        return scHead(liveNames ? `${esc(liveNames)}은 한 번 연결하면 계속 새 자료가 따라옵니다.` : '파일을 가지고 계시면 그냥 끌어다 놓으시면 됩니다.', '자료를 넘겨주세요.', '폴더 정리도, 이름 짓기도 필요 없이 그냥 던져주시면 됩니다. 어차피 제가 자료를 전부 직접 읽어볼 거예요.')
           + `<div class="sc-body up-body">
             <div class="src-grid${oauth.length ? '' : ' solo'}">${files}${oauth.length ? `<div class="src-col">${oauth.map(conn).join('')}</div>` : ''}</div>
             ${local ? `<div class="conn ghost"><span class="logo">${ic('term')}</span><div class="t">내 컴퓨터 폴더</div><button type="button" class="btn btn-ghost btn-sm" data-copy>명령 복사</button><div class="s">한 줄만 실행하면 리브가 그 폴더를 읽습니다.</div></div>` : ''}
@@ -607,12 +686,12 @@
       },
     },
     ai: {
-      html: () => scHead(S.ingest.total && !S.ingest.finished ? '자료를 읽는 동안 하나 더요.' : '이제 AI 차례예요.', '평소 어떤 AI를 쓰세요?', '쓰던 AI를 그대로 씁니다 — 새로 결제할 것은 없습니다.') + choiceHTML({ options: AIS, sel: S.ai ? [S.ai] : [], skip: '나중에 정할게요' }),
+      html: () => scHead(S.ingest.total && !S.ingest.finished ? '자료를 읽는 동안 하나 더요.' : '이제 AI 차례예요.', '평소 어떤 AI를 쓰세요?', '쓰던 AI를 그대로 씁니다. 어느 걸 고르셔도 됩니다.') + choiceHTML({ options: AIS, sel: S.ai ? [S.ai] : [], skip: '나중에 정할게요' }),
       bind: (el) => bindChoice(el, { onCommit: async (sel) => { S.ai = sel[0]; save(); renderBuild(); if (S.ai === '아직 없어요') { S.ob.noai = true; save(); return goScene('terminal'); } if (S.ai === '여러 개') S.ai = 'Claude'; save(); return goScene('claude'); }, onSkip: () => goScene('terminal') }),
     },
     claude: {
       cls: 'wide',
-      html: () => scHead(`새 결제는 없어요. 연결한 뒤에는 저(리브)가 일할 때도 ${esc(S.name)}님의 ${esc(S.ai || 'AI')} 사용량을 씁니다 — 얼마나 썼는지는 언제든 보여 드릴게요.`, `${esc(S.ai || 'AI')} 계정을 연결해 주세요.`, '새 탭에서 로그인하고 짧은 코드를 가져오면 됩니다 · 1분')
+      html: () => scHead(`연결한 뒤에는 제(리브)가 일할 때도 ${esc(S.name)}님의 ${esc(S.ai || 'AI')} 사용량을 씁니다 — 얼마나 썼는지는 언제든 보여 드릴게요.`, `${esc(S.ai || 'AI')} 계정을 연결해 주세요.`, '새 탭에서 로그인하고 짧은 코드를 가져오면 됩니다 · 1분')
         + `<div class="sc-body"><div class="steps3"><div class="step3" data-s="a"><span class="n">① 열기</span><button type="button" class="btn btn-primary btn-sm" data-open>${esc(S.ai || 'AI')} 열기 ${ic('ext','ic-sm')}</button><span>새 탭에서 ${esc(S.ai || 'AI')}에 로그인합니다.</span></div>
         <div class="step3" data-s="b"><span class="n">② 코드 복사</span><span>화면에 나오는 짧은 코드를 복사합니다.<br><span class="muted">예: <span class="mono">3F7K-QX2M</span> 처럼 생겼어요.</span></span></div>
         <div class="step3" data-s="c"><span class="n">③ 여기 붙여넣기</span><input class="in" type="text" placeholder="코드 붙여넣기" aria-label="코드"><span class="muted">붙여넣으면 제가 확인합니다.</span></div></div></div>
@@ -642,7 +721,7 @@
       html: () => `${scHead('금방이에요.', '자료를 읽고 있어요.', `읽으면서 ${esc(detailOf())} 기준으로 보고 있어요 — 끝나면 <b>제가 본 것</b>을 말씀드립니다.`)}
         <div class="sc-read"><div class="sc-read-n" id="readN">${S.ingest.done} / ${S.ingest.total}</div><div class="meter"><i id="readBar" style="width:${Math.round(100 * S.ingest.done / Math.max(1, S.ingest.total))}%"></i></div><div class="sc-read-t" id="readT">${S.ingest.tally.map(([n, c]) => `${n} ${c}`).join(' · ') || '살펴보는 중'}</div></div>`,
       bind: (el, token) => {
-        const done = () => { if (token === sceneToken) goScene('found'); };
+        const done = () => { if (token === sceneToken) goScene('can'); };
         if (S.ingest.finished) return void setTimeout(done, 600);
         document.addEventListener('ingest-done', () => setTimeout(done, 500), { once: true });
         readTimer = setInterval(() => { const n = $('#readN', el), b = $('#readBar', el), t = $('#readT', el); if (!n) return; n.textContent = `${S.ingest.done} / ${S.ingest.total}`; b.style.width = Math.round(100 * S.ingest.done / Math.max(1, S.ingest.total)) + '%'; if (S.ingest.tally.length) t.textContent = S.ingest.tally.map(([x, c]) => `${x} ${c}`).join(' · '); }, 400);
@@ -652,7 +731,7 @@
        종전엔 맞혀보기가 A블록 끝(자료 0건)에 있어 근거 없는 짐작이었고, 몇 분 뒤 found 화면과 내용이 겹쳤다.
        읽은 뒤로 옮기니 같은 질문이 "자료에서 봤는데 맞나요?"가 된다 — 틀리면 고쳐 주고 싶어지는 것이 답할 이유다. */
     guess: {
-      html: () => scHead(`${S.ingest.total || 0}건을 훑어봤어요.`, '이게 제일 손이 가는 일 아닌가요?', '틀렸으면 고쳐 주세요 — 그대로 제 판단이 됩니다.')
+      html: () => scHead(`${S.ingest.total || 0}건을 훑어봤어요.`, '이게 제일 손이 가는 일 아닌가요?', '틀렸으면 고쳐 주세요. 그대로 제 판단이 됩니다.')
         + `<div class="sc-guess">${P().guess.line(detailOf())}</div>`
         + choiceHTML({ options: [{ id: '0', label: '맞아요, 그게 제일 큽니다' }, { id: '1', label: P().guess.alt[0] }, { id: '2', label: P().guess.alt[1] }], sel: S.pain != null ? [String(S.pain)] : [] }),
       bind: (el) => bindChoice(el, { onCommit: (sel) => { S.pain = +sel[0]; save(); renderBuild(); goScene('b1'); } }),
@@ -660,21 +739,21 @@
     /* B1 산출물 — 실제로 읽은 갈래를 보여주고 맞는지만 묻는다. */
     b1: {
       html: () => scHead('만드시는 게 이렇게 보여요.', '이 갈래가 맞나요?', '맞으면 이 갈래로 자료함을 나눠 둘게요.')
-        + `<div class="sc-tally">${((S.ingest.tally && S.ingest.tally.length ? S.ingest.tally : pick(TALLY_BY_ROLE, roleOf()))).map(([n, c]) => `<span class="tag">${esc(n)} <b class="num">${c}</b></span>`).join('')}</div>`
-        + choiceHTML({ options: [{ id: 'ok', label: '맞아요' }, { id: 'add', label: '빠진 게 있어요 — 직접 적기' }], sel: [] }),
+        + `<div class="sc-tally">${((S.ingest.tally && S.ingest.tally.length ? S.ingest.tally : tally7())).map(([n, c]) => `<span class="tag">${esc(n)} <b class="num">${c}</b></span>`).join('')}</div>`
+        + choiceHTML({ options: [{ id: 'ok', label: '맞아요' }, { id: 'add', label: '빠진 게 있어요. 직접 적을게요' }], sel: [] }),
       bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0] !== 'ok') S.decisions.unshift('갈래 추가 요청'); save(); renderBuild(); goScene('b2'); } }),
     },
     /* B2 주기 — 같은 양식이 반복되면 자동화 후보다. */
     b2: {
-      html: () => scHead(`같은 양식 문서가 여러 달치 있네요 — ${esc((P().files[0] || '보고서'))} 같은 것들이요.`, '정해진 주기로 만드시나요?', '주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.')
+      html: () => scHead(`같은 양식 문서가 여러 달치 있네요. ${esc((P().files[0] || '보고서'))} 같은 것들이요.`, '정해진 주기로 만드시나요?', '주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.')
         + choiceHTML({ options: [{ id: 'month', label: '네, 매달' }, { id: 'week', label: '네, 매주' }, { id: 'no', label: '아니요' }], sel: [] }),
       bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0] !== 'no') S.decisions.unshift(sel[0] === 'month' ? '매달 반복 작업으로 봄' : '매주 반복 작업으로 봄'); save(); renderBuild(); goScene('b3'); } }),
     },
     /* B3 협업 — 공유 범위를 정하는 근거. */
     b3: {
       html: () => scHead('문서에 같은 이름이 반복해서 나와요.', '같이 보는 팀이 있나요?', '있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.')
-        + choiceHTML({ options: [{ id: 'team', label: '팀이 있어요' }, { id: 'me', label: '나만 봐요' }], sel: [] }),
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.decisions.unshift(sel[0] === 'team' ? '팀과 함께 보는 자료로 봄' : '나만 보는 자료로 봄'); save(); renderBuild(); goScene('b4'); } }),
+        + choiceHTML({ options: [{ id: 'me', label: '나만 봐요' }, { id: 'team', label: '우리 팀이 같이 봐요' }, { id: 'dept', label: '회사의 여러 부서와 나눠요' }, { id: 'ext', label: '고객·외부에 냅니다' }], sel: [] }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.decisions.unshift(sel[0] === 'me' ? '나만 보는 자료로 봄' : sel[0] === 'team' ? '팀과 함께 보는 자료로 봄' : sel[0] === 'dept' ? '여러 부서와 나누는 자료로 봄' : '고객·외부로 나가는 자료로 봄'); save(); renderBuild(); goScene('b4'); } }),
     },
     /* B4 최신본 — 같은 문서가 두 벌일 때 무엇을 정답으로 삼을지. 한 번 답하면 계속 그 기준으로 답한다. */
     b4: {
@@ -688,12 +767,33 @@
         + `<div class="sc-write" hidden><input class="in" type="text" placeholder="예: ${esc((P().firstq[0] || '이번 주 보고서').replace(/\?$/, ''))}" aria-label="지금 하는 일"><button type="button" class="btn btn-primary" data-write-go>계속</button></div>`
         + `<div class="sc-opts"><button type="button" class="chip chip-esc" data-esc="write">＋ 직접 적기</button></div>`
         + `<div class="sc-skip"><button type="button" class="btn-text" data-esc="skip">지금은 건너뛰기</button></div>`,
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0]) { S.nowline = sel[0]; S.decisions.unshift(`지금 하는 일: ${sel[0]}`); } save(); renderBuild(); goScene(S.ingest.finished ? 'found' : 'reading'); }, onSkip: () => goScene(S.ingest.finished ? 'found' : 'reading') }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0]) { S.nowline = sel[0]; S.decisions.unshift(`지금 하는 일: ${sel[0]}`); } save(); renderBuild(); goScene(S.ingest.finished ? 'can' : 'reading'); }, onSkip: () => goScene(S.ingest.finished ? 'can' : 'reading') }),
+    },
+    /* E — 발견·첫질문·답을 걷어낸 자리. 고른 직무로 "이런 것까지 됩니다"를 보여주고 끝낸다. */
+    can: {
+      cls: 'wide',
+      html: () => {
+        const C = canFor();
+        return scHead(`다 읽었어요. ${esc(S.name)}님이 하시는 일이라면,`, '이런 것까지 저한테 맡기실 수 있어요.', '보통은 몇 번씩 왔다 갔다 해야 하는 일이에요. 여기서는 한 문장이면 됩니다.')
+          + `<div class="sc-body"><div class="found">
+            <article class="fnd"><div class="fnd-n">1</div><div class="fnd-b">
+              <div class="fnd-t">${esc(C[0][0])}</div>
+              <div class="fnd-ev"><span class="k">보통은</span>${esc(C[0][1])}</div>
+            </div></article>
+            <article class="fnd"><div class="fnd-n">2</div><div class="fnd-b">
+              <div class="fnd-t">${esc(C[1][1])}</div>
+              <div class="fnd-ev"><span class="k">${esc(C[1][0])} 쪽도</span>이런 것까지 이어서 물으실 수 있어요.</div>
+            </div></article>
+          </div></div>
+          <div class="sc-actions"><button type="button" class="btn btn-primary" data-next>준비 끝 — 정리해 주세요</button></div>
+          <p class="sc-fine">지금 시키지 않으셔도 됩니다. 홈에서 언제든 그대로 말씀하시면 돼요.</p>`;
+      },
+      bind: (el) => { $('[data-next]', el).addEventListener('click', () => { finish(); goScene('done'); }); },
     },
     found: {
       cls: 'wide',
       html: () => {
-        const B = bottles(); const T = S.ingest.tally.length ? S.ingest.tally : pick(TALLY_BY_ROLE, roleOf());
+        const B = bottles(); const T = S.ingest.tally.length ? S.ingest.tally : tally7();
         return `${scHead(`${S.ingest.total}개를 다 읽었어요. ${S.pain === 0 ? '짐작이 맞았고, ' : ''}자료에서 <b>세 가지</b>가 보입니다.`, `${esc(S.name)}님의 일하는 방식 — 제가 본 것`, '각각 제가 대신 할 수 있는 일이 있어요. 켜 두면 다음부터 알아서 합니다.')}
         <div class="sc-tally">${T.map(([n, c], i) => `<span class="tag mint" style="animation-delay:${60 + i * 60}ms">${esc(n)} <b class="num">${c}</b></span>`).join('')}</div>
         <div class="sc-body"><div class="found">${B.map((b, i) => {
@@ -718,7 +818,7 @@
           else {
             S.fixes.push(b.slip); S.decisions.push(b.slip);
             if (b.slip.startsWith('자동')) S.work.push({ id: 'fix' + card.dataset.fix, t: b.slip.replace(/^자동: /, ''), st: 'sched', when: '자동', m: '리브가 돌립니다' });
-            toast(`켰어요 — ${b.fix}`);
+            toast(`켰어요. ${b.fix}`);
           }
           save(); renderBuild(); renderScene('found', false);
         }));
@@ -790,21 +890,24 @@
   }
   function doneSceneHTML() {
     const dur = fmtDur((S.ob.finishedAt || Date.now()) - S.ob.startedAt);
-    const B = bottles();
-    const on = (b) => S.fixes.includes(b.slip);
-    const onCount = B.filter(on).length;
-    return `${scHead(`${dur} 걸렸어요. 답해 주신 것과 자료 ${S.ingest.total || 0}건에서 본 것입니다.`, `리브가 본 ${esc(S.name)}님의 일하는 방식`, `${esc(stageOf().label)} · ${esc(detailOf())}${S.nowline ? ` · ${esc(S.nowline)}` : ''}`)}
+    const T = tally7();
+    /* 발견 3가지 대신, 되묻기(B1~B5)에서 실제로 정해진 것만 보여준다(2026-08-21). */
+    const rows = [
+      ['자료함을 나눠 뒀어요', T.map(([n, c]) => `${n} ${c}`).join(' · '), '바꾸기'],
+      ...S.decisions.slice(0, 4).map((d) => ['정해 뒀어요', d, '되돌리기']),
+    ];
+    if (S.nowline) rows.push(['「진행 중」에 올려 뒀어요', S.nowline, '보기']);
+    return `${scHead(`${dur} 걸렸어요. 답해 주신 것과 자료 ${S.ingest.total || 0}건으로 이만큼 준비해 뒀습니다.`, `리브가 본 ${esc(S.name)}님의 일하는 방식`, `${esc(stageOf().label)} · ${esc(detailOf())}`)}
       <div class="sc-body"><div class="diag">
-        ${B.map((b, i) => `<article class="dg ${on(b) ? 'on' : 'off'}">
+        ${rows.map(([t, v, act], i) => `<article class="dg on">
           <div class="dg-n">${i + 1}</div>
           <div class="dg-b">
-            <div class="dg-t">${b.t}</div>
-            <div class="dg-ev"><span class="k">근거</span>${esc(b.ev)}</div>
-            <div class="dg-fix">${on(b) ? `<span class="state on">켜 뒀어요</span> ${esc(b.fix)}` : `<span class="state off">아직</span> ${esc(b.fix)}`}</div>
+            <div class="dg-t">${esc(t)}</div>
+            <div class="dg-ev"><span class="k">내용</span>${esc(v)}</div>
           </div>
-          ${on(b) ? '' : `<button type="button" class="btn btn-mint btn-sm" data-late="${i}">지금 켜기</button>`}
+          <button type="button" class="btn btn-ghost btn-sm" data-undo-row="${i}">${esc(act)}</button>
         </article>`).join('')}
-        <div class="dg-foot">${onCount ? `<b>${onCount}가지</b>를 켜 뒀습니다 — 다음부터 제가 알아서 합니다.` : '아직 켠 것이 없어요 — 홈에서 다시 권해 드릴게요.'} 전부 되돌릴 수 있습니다.</div>
+        <div class="dg-foot">전부 되돌릴 수 있습니다. 제가 정한 것은 하나씩 지우실 수 있어요.</div>
       </div>
       <div class="summary">${summaryHTML(dur)}</div></div>`;
   }
@@ -812,7 +915,7 @@
     $$('[data-late]', el).forEach((b) => b.addEventListener('click', () => {
       const x = bottles()[+b.dataset.late];
       if (!S.fixes.includes(x.slip)) { S.fixes.push(x.slip); S.decisions.push(x.slip); if (x.slip.startsWith('자동')) S.work.push({ id: 'fix-late' + b.dataset.late, t: x.slip.replace(/^자동: /, ''), st: 'sched', when: '자동', m: '리브가 돌립니다' }); }
-      save(); renderBuild(); renderScene('done', false); toast(`켰어요 — ${x.fix}`);
+      save(); renderBuild(); renderScene('done', false); toast(`켰어요. ${x.fix}`);
     }));
     // 온보딩이 끝나면 프로토가 흉내 낸 홈이 아니라 **진짜 제품**으로 넘긴다(원준님 2026-08-20).
     // 여기까지가 이 프로토가 설계하는 범위 — 그 뒤는 실제 앱이 받는다.
@@ -821,8 +924,7 @@
   }
   function finish() {
     if (S.ob.finished) return; S.ob.finished = true; S.ob.finishedAt = Date.now(); setDots(5, true); tickTime();
-    const first = { id: 'firstq', t: (S.ob.firstQ || pick(FIRSTQ_BY_ROLE, roleOf())[0]).replace(/\?$/, ''), st: 'done', when: '방금', m: '결과 → 자료함' };
-    if (!S.work.find((w) => w.id === 'firstq')) S.work.unshift(first);
+    if (S.nowline && !S.work.find((w) => w.id === 'nowline')) S.work.unshift({ id: 'nowline', t: S.nowline, st: 'busy', when: '방금', m: '리브가 자료를 읽고 준비 중' });
     if (!S.work.find((w) => w.id === 'ob')) S.work.push({ id: 'ob', t: '처음 설정 (리브)', st: 'done', when: '방금', m: `${fmtDur(S.ob.finishedAt - S.ob.startedAt)} · 되돌리기 가능` });
     save(); renderBuild();
   }
@@ -886,7 +988,7 @@
   function startIngest(total) { Object.assign(S.ingest, { total, done: 0, running: true, finished: false, tally: [] }); save(); renderBuild(); resumeIngest(); }
   function resumeIngest() {
     clearInterval(ingestTimer); if (!S.ingest.running || S.ingest.finished) return;
-    const T = pick(TALLY_BY_ROLE, roleOf());
+    const T = tally7();
     ingestTimer = setInterval(() => {
       const g = S.ingest; g.done = Math.min(g.total, g.done + 1);
       const p = g.done / g.total; g.tally = T.map(([n, c]) => [n, Math.round(c * p)]).filter(([, c]) => c > 0);
@@ -897,7 +999,7 @@
   /* 오른쪽 장부에서 바로 바꾸기 — 해당 장면으로 이동 */
   panelDelegate();
   function panelDelegate() { document.addEventListener('click', (e) => {
-    const un = e.target.closest('.build [data-undo]'); if (un) { const i = +un.dataset.undo; const gone = S.decisions.splice(i, 1); save(); renderBuild(); toast(gone.length ? `되돌렸어요 — ${gone[0]}` : '되돌렸어요.'); return; }
+    const un = e.target.closest('.build [data-undo]'); if (un) { const i = +un.dataset.undo; const gone = S.decisions.splice(i, 1); save(); renderBuild(); toast(gone.length ? `되돌렸어요. ${gone[0]}` : '되돌렸어요.'); return; }
     const b = e.target.closest('.build [data-fix], .stage .summary [data-fix]'); if (!b) return;
     const key = b.dataset.fix; if (S.ob.scene === key) return;
     S.ob.returnTo = S.ob.scene;
@@ -994,7 +1096,7 @@
   }
   /* 홈 우측 — 내 자료함(실시간): 무엇이 어디서 들어와 어떻게 정리되는지 한눈에 */
   function libFeed() {
-    const T = S.ingest.tally.length ? S.ingest.tally : pick(TALLY_BY_ROLE, roleOf());
+    const T = S.ingest.tally.length ? S.ingest.tally : tally7();
     const f = [];
     if (S.conn.notion === 'on') f.push({ when: '12분 전', src: '노션', to: T[0][0], t: `"8/14 주간회의" — 리브가 결정 2·할 일 3 뽑아 둠`, k: 'notion' });
     if (S.conn.gdrive === 'on') f.push({ when: S.conn.notion === 'on' ? '1시간 전' : '12분 전', src: '드라이브', to: T[0][0], t: `새 파일 ${S.day >= 2 ? 3 : 1}건 → 갈래 배정`, k: 'gdrive' });
@@ -1004,7 +1106,7 @@
     return f.slice(0, 3);
   }
   function libLiveCardHTML(kn) {
-    const T = S.ingest.tally.length ? S.ingest.tally : pick(TALLY_BY_ROLE, roleOf());
+    const T = S.ingest.tally.length ? S.ingest.tally : tally7();
     const live = S.conn.gdrive === 'on' || S.conn.notion === 'on';
     const feed = libFeed();
     return `<div class="rc rc-link lib-live" role="link" tabindex="0" title="자료함 열기">
@@ -1055,7 +1157,7 @@
     const lc = $('.lib-live', page); if (lc) lc.addEventListener('click', (e) => { if (e.target.closest('button,a')) return; S.libFilter = 'all'; S.libSrc = 'all'; save(); go('#/library'); });
     $$('[data-sug]', page).forEach((b) => b.addEventListener('click', () => { const t = $('#homeIn'); t.value = b.dataset.sug; t.focus(); }));
     if (S.homePrefill) { const t = $('#homeIn'); t.value = S.homePrefill; S.homePrefill = null; save(); setTimeout(() => { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }, 60); }
-    const send = () => { const t = $('#homeIn'); const v = t.value.trim(); if (!v) return; if (!S.aiConnected && S.ai !== 'Claude' && S.ob.freeLeft <= 0) { toast('체험 3회를 다 썼어요. Claude를 연결하면 계속 쓸 수 있습니다.'); return; } if (S.work.filter((w) => w.st === 'busy').length >= 3) { toast('동시에 3개까지 맡길 수 있어요. 하나가 끝나면 이어서 시켜 주세요.'); return; } t.value = ''; const id = 'w' + Date.now(); S.work.unshift({ id, t: v.length > 34 ? v.slice(0, 34) + '…' : v, st: 'busy', when: '방금', m: '읽은 것 고르는 중 · Claude', started: Date.now() }); S.usage += 1; if (!S.aiConnected && S.ai !== 'Claude') S.ob.freeLeft--; save(); render(); setTimeout(() => { const w = S.work.find((x) => x.id === id); if (w && w.st === 'busy') { w.st = 'done'; w.when = '방금'; w.m = '결과 → 자료함'; S.knowledge += 1; save(); if (location.hash.startsWith('#/home') || location.hash.startsWith('#/work')) render(); toast('끝났어요. 결과를 자료함에 남겼습니다.'); } }, 7000); };
+    const send = () => { const t = $('#homeIn'); const v = t.value.trim(); if (!v) return; if (!S.aiConnected && S.ai !== 'Claude' && S.ob.freeLeft <= 0) { toast('체험 3회를 다 썼어요. 쓰시는 AI를 연결하면 계속 쓸 수 있습니다.'); return; } if (S.work.filter((w) => w.st === 'busy').length >= 3) { toast('동시에 3개까지 맡길 수 있어요. 하나가 끝나면 이어서 시켜 주세요.'); return; } t.value = ''; const id = 'w' + Date.now(); S.work.unshift({ id, t: v.length > 34 ? v.slice(0, 34) + '…' : v, st: 'busy', when: '방금', m: '읽은 것 고르는 중 · Claude', started: Date.now() }); S.usage += 1; if (!S.aiConnected && S.ai !== 'Claude') S.ob.freeLeft--; save(); render(); setTimeout(() => { const w = S.work.find((x) => x.id === id); if (w && w.st === 'busy') { w.st = 'done'; w.when = '방금'; w.m = '결과 → 자료함'; S.knowledge += 1; save(); if (location.hash.startsWith('#/home') || location.hash.startsWith('#/work')) render(); toast('끝났어요. 결과를 자료함에 남겼습니다.'); } }, 7000); };
     $('#homeSend').addEventListener('click', send); $('#homeIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
     bindWorkRows(page);
   }
@@ -1072,7 +1174,7 @@
 
   /* ═════════════════════════ 자료함 ═════════════════════════ */
   function renderLibrary(page) {
-    const T = S.ingest.tally.length ? S.ingest.tally : pick(TALLY_BY_ROLE, roleOf());
+    const T = S.ingest.tally.length ? S.ingest.tally : tally7();
     const kn = S.knowledge + (S.team ? 21 : 0);
     const cur = S.libFilter || 'all'; const src = S.libSrc || 'all';
     const CAT = { default: [['8/12 팀 회의', '회의록', 'm4a', '1일 전'], ['8/5 팀 회의(초안)', '회의록', 'docx', '8일 전'], ['7/30 킥오프', '회의록', 'm4a', '2주 전'], ['7월 월간 보고서', '보고서', 'pptx', '2주 전'], ['6월 월간 보고서', '보고서', 'pptx', '6주 전'], ['캠페인 성과 시트', '보고서', 'xlsx', '3일 전'], ['가격 정책 v3', '정책·계약', 'docx', '3일 전'], ['가격 정책(7월)', '정책·계약', 'docx', '3주 전'], ['환불 기준 안내', '정책·계약', 'docx', '5일 전']] };
@@ -1119,10 +1221,10 @@
     </div></div>`;
     $$('[data-f]', page).forEach((b) => b.addEventListener('click', () => { S.libFilter = b.dataset.f; S.libSrc = 'all'; save(); renderLibrary(page); }));
     $$('[data-src]', page).forEach((b) => b.addEventListener('click', () => { S.libSrc = S.libSrc === b.dataset.src ? 'all' : b.dataset.src; S.libFilter = 'all'; save(); renderLibrary(page); }));
-    $$('[data-suggest]', page).forEach((b) => b.addEventListener('click', () => { const a = b.dataset.suggest; if (a === 'open') S.libSuggestOpen = true; else { S.libSuggestOpen = false; if (a === 'ok') { const T2 = S.ingest.tally.length ? S.ingest.tally : (S.ingest.tally = pick(TALLY_BY_ROLE, roleOf()).slice()); if (!T2.find((t) => t[0] === '고객 미팅')) { T2[0][1] -= 3; T2.push(['고객 미팅', 3]); } S.decisions.push("갈래 추가: '고객 미팅'"); toast("'고객 미팅' 갈래를 만들고 3건을 옮겼어요. 새 자료도 이 갈래로 들어갑니다."); } } save(); renderLibrary(page); }));
+    $$('[data-suggest]', page).forEach((b) => b.addEventListener('click', () => { const a = b.dataset.suggest; if (a === 'open') S.libSuggestOpen = true; else { S.libSuggestOpen = false; if (a === 'ok') { const T2 = S.ingest.tally.length ? S.ingest.tally : (S.ingest.tally = tally7().slice()); if (!T2.find((t) => t[0] === '고객 미팅')) { T2[0][1] -= 3; T2.push(['고객 미팅', 3]); } S.decisions.push("갈래 추가: '고객 미팅'"); toast("'고객 미팅' 갈래를 만들고 3건을 옮겼어요. 새 자료도 이 갈래로 들어갑니다."); } } save(); renderLibrary(page); }));
     $$('[data-conn-add]', page).forEach((b) => b.addEventListener('click', () => { const id = b.dataset.connAdd; const c = CONNECTORS.find((x) => x.id === id);
       if (c.node) { copyText('lively node --daemon'); S.node = true; S.decisions.push('내 컴퓨터 노드 연결'); save(); renderLibrary(page); toast('명령을 복사했어요. 터미널에서 실행하면 그 폴더를 리브가 읽어요.'); return; }
-      if (c.soon) { S.livLog = S.livLog || []; S.livLog.push({ me: `${c.label} 연결해 줘` }); S.livLog.push({ liv: `${c.label}은 앱 발급이 한 번 필요해서 제가 한 걸음씩 안내할게요. 먼저 ${c.label} 관리자 화면에서 앱을 만들고, 나오는 키를 여기 붙여 넣으시면 됩니다.`, slips: [{ name: `${c.label} 연결 안내 시작`, st: 'run', state: '기다리는 중' }] }); S.livView = 'chat'; save(); go('#/liv'); toast(`${c.label}은 리브가 안내해요 — 리브 탭으로 옮깁니다.`); return; }
+      if (c.soon) { S.livLog = S.livLog || []; S.livLog.push({ me: `${c.label} 연결해 줘` }); S.livLog.push({ liv: `${c.label}은 앱 발급이 한 번 필요해서 제가 한 걸음씩 안내할게요. 먼저 ${c.label} 관리자 화면에서 앱을 만들고, 나오는 키를 여기 붙여 넣으시면 됩니다.`, slips: [{ name: `${c.label} 연결 안내 시작`, st: 'run', state: '기다리는 중' }] }); S.livView = 'chat'; save(); go('#/liv'); toast(`${c.label}은 리브가 안내해요. 리브 탭으로 옮깁니다.`); return; }
       S.conn[id] = 'busy'; save(); renderLibrary(page); toast(`새 탭에서 ${c.label} 허용을 기다리는 중…`);
       setTimeout(() => { S.conn[id] = 'on'; S.knowledge += id === 'notion' ? 18 : 12; S.library.unshift({ t: id === 'notion' ? '노션 회의록 18건' : '드라이브 새 파일 12건', src: id, when: '방금' }); save(); if (location.hash.startsWith('#/library')) renderLibrary(page); toast(`${c.label}을 연결했어요 — ${id === 'notion' ? '회의록 18건' : '파일 12건'}이 들어왔고 앞으로 새 자료도 따라와요.`); }, 1400);
     }));
@@ -1169,8 +1271,8 @@
     g.watch = R.watch.map(([a, b]) => it('watch', a, b, onFiles));
     g.tidy = R.tidy.map(([a, b]) => it('tidy', a, b, files ? `${T[0][0]} ${T[0][1]}건` : '자료 넣은 뒤'));
     g.conn = [
-      notion ? it('conn', "노션 '회의' 페이지 말고 다른 페이지도 가져와 줘", '가져올 페이지를 골라 두면 그 페이지의 새 글도 따라와요', '노션 연결됨') : it('conn', '노션 연결해 줘', '노션 쪽에서 허용 한 번 — 회의록이 자료함으로 계속 들어와요', '읽기 권한만'),
-      gd ? it('conn', "드라이브는 '계약서' 폴더만 보게 해 줘", '보는 범위를 줄이면 무관한 파일이 안 섞여요', '드라이브 연결됨') : it('conn', '구글 드라이브 연결해 줘', '구글 허용 한 번 — 폴더의 새 파일이 계속 따라와요', '읽기 권한만'),
+      notion ? it('conn', "노션 '회의' 페이지 말고 다른 페이지도 가져와 줘", '가져올 페이지를 골라 두면 그 페이지의 새 글도 따라와요', '노션 연결됨') : it('conn', '노션 연결해 줘', '노션 쪽에서 한 번 허용해주세요. 회의록이 자료함으로 계속 들어와요', '읽기 권한만'),
+      gd ? it('conn', "드라이브는 '계약서' 폴더만 보게 해 줘", '보는 범위를 줄이면 무관한 파일이 안 섞여요', '드라이브 연결됨') : it('conn', '구글 드라이브 연결해 줘', '구글 드라이브에서 한 번 허용해주세요. 폴더의 새 파일이 계속 따라와요', '읽기 권한만'),
       it('conn', '슬랙 #general 채널도 연결해 줘', '슬랙은 앱 발급이 한 번 필요해서 리브가 한 걸음씩 안내해요', '준비 중'),
     ];
     g.ask = [
@@ -1274,7 +1376,7 @@
     const submit = (e) => { e.preventDefault(); const v = inp.value.trim(); if (!v) return; inp.value = ''; send(v); };
     form.addEventListener('submit', submit); inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) submit(e); });
     const bindSays = () => $$('[data-open-say]', page).forEach((b) => { if (b.dataset.bound) return; b.dataset.bound = 1; b.addEventListener('click', () => {
-      if (b.dataset.toHome) { S.homePrefill = b.dataset.openSay; save(); go('#/home'); toast('그건 내 AI가 답할 일이라 홈으로 넘겼어요 — 보내기만 누르세요.'); return; }
+      if (b.dataset.toHome) { S.homePrefill = b.dataset.openSay; save(); go('#/home'); toast('그건 내 AI가 답할 일이라 홈으로 넘겼어요. 보내기만 누르세요.'); return; }
       send(b.dataset.openSay);
     }); });
     bindSays(); bindLivInline(list);
@@ -1284,7 +1386,7 @@
   async function sendReplyOnly(v) { await wait(650); const rep = livReply(v); S.livLog.push(rep); save(); render(); const l = $('#livJl'); if (l) l.scrollTop = l.scrollHeight; }
   function bindWiki(page) {
     $$('[data-wk]', page).forEach((b) => b.addEventListener('click', () => { S.livWikiSel = +b.dataset.wk; save(); render(); }));
-    $$('[data-undo-dec]', page).forEach((b) => b.addEventListener('click', () => { const gone = S.decisions.splice(+b.dataset.undoDec, 1); save(); render(); toast(`되돌렸어요 — ${gone[0] || ''}`); }));
+    $$('[data-undo-dec]', page).forEach((b) => b.addEventListener('click', () => { const gone = S.decisions.splice(+b.dataset.undoDec, 1); save(); render(); toast(`되돌렸어요. ${gone[0] || ''}`); }));
     const fix = $('[data-wk-fix]', page); if (fix) fix.addEventListener('click', () => { const cur = wikiOf()[S.livWikiSel || 0]; S.livView = 'chat'; S.livLog = S.livLog || []; S.livLog.push({ me: `"${cur.t}" 내용이 틀렸어. 고쳐 줘.` }); S.livLog.push({ liv: `어디가 다른지 한 줄만 알려 주시면 그 부분만 고치고, 근거 자료도 다시 확인할게요. <span class="muted">(예: "위약금은 15%야")</span>`, slips: [{ name: `지식 "${cur.t}" 수정 대기`, st: 'run', state: '기다리는 중' }] }); save(); render(); });
     const redo = $('[data-wk-redo]', page); if (redo) redo.addEventListener('click', (e) => { e.currentTarget.classList.add('is-busy'); setTimeout(() => { toast('자료를 다시 읽고 만들었어요 — 내용은 같습니다.'); e.target.classList.remove('is-busy'); }, 1100); });
     const q = $('.wiki-q', page); if (q) q.addEventListener('input', () => { const t = q.value.trim(); $$('.wk[data-wk]', page).forEach((el) => { el.hidden = t && !el.textContent.includes(t); }); });
@@ -1293,7 +1395,7 @@
   const ladder = (arr) => arr.length ? `<div class="ladder"><span class="k">이것도 됩니다 →</span>${arr.map((x) => `<button type="button" class="chip" data-open-say="${esc(x)}">${esc(x)}</button>`).join('')}</div>` : '';
   const sugList = (items, lead) => `<div class="said" style="margin-top:8px">${lead}</div><div class="sug-list">${items.map(sugBtn).join('')}</div>`;
   function livReply(v) {
-    const g = livMap(); const all = Object.values(g).flat(); const T = pick(TALLY_BY_ROLE, roleOf()); const r = roleOf();
+    const g = livMap(); const all = Object.values(g).flat(); const T = tally7(); const r = roleOf();
     const pain = PAINS.find(([, t]) => t === v);
     if (pain) {
       const [k] = pain;
