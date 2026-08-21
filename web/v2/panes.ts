@@ -25,6 +25,7 @@
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
 import { anchoredPopover, api, el, personFace, toast } from '../core.js';
 import { makeSplitter } from './split.js';
+import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
@@ -276,7 +277,16 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const sidePane = makePane('side');
 
   // 세로 경계(가운데|곁칸) · 가로 경계(가운데|아래 칸) — 폭·높이는 split.ts 가 기억한다.
-  const splitX = makeSplitter({ axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: 340, min: 220, max: 620, grow: -1, label: '곁칸 너비' });
+  // 곁칸 경계 — 상한·부호를 side-swap 이 정한다(#1819). 곁칸이 왼쪽으로 가면 같은 손잡이의 부호가 반대가 된다.
+  let swap: SideSwapHandle | null = null;
+  const splitX = makeSplitter({
+    axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: 340, min: 220,
+    max: () => swap?.maxSideW() ?? 620,
+    grow: () => (body.classList.contains('sw-left') ? 1 : -1),
+    label: '곁칸 너비',
+    onDrag: (px) => swap?.onDrag(px),
+    onEnd: (px) => swap?.onEnd(px),
+  });
   const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이' });
   colMain.append(mainPane.root, splitY, bottomPane.root);
   // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
@@ -286,6 +296,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onclick: () => { lay.sideOn = true; saveLayout(); paintAll(); },
   }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
   body.append(colMain, splitX, sidePane.root, sideReopen);
+  swap = mountSideSwap({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn });
 
   // ── 탭 ──
   function ensurePart(pane: Pane, type: PartType): Part {
@@ -432,6 +443,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     bottomPane.root.hidden = !lay.bottomOn;
     splitY.hidden = !lay.bottomOn;
     paintPane('main'); paintPane('side'); paintPane('bottom');
+    swap?.sync();
     paintDoor();
   }
 
@@ -465,6 +477,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         //  프로젝트 그 자체(이름·상태·본문·할 일)라서다. '설정'은 환경설정을 기대하게 만들고, 정작
         //  "이 프로젝트가 뭐더라"를 찾는 사람은 설정을 누를 생각을 못 한다.
         // [＋ 세션] — 탭 줄을 없애면서 '새 세션'의 유일한 입구가 사라졌다(원준 2026-08-20). 문패로 옮긴다.
+        swap ? swap.button() : null,
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('plus', 'pn-i sm'), el('span', { text: '세션' })),
         loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '정보' }))));
   }
@@ -528,6 +541,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       dead = true;
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
+      swap?.destroy();
       for (const pane of panes.values()) for (const p of pane.parts.values()) p.destroy?.();
       panes.clear();
       sessSubs.clear();
