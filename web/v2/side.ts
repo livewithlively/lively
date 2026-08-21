@@ -22,7 +22,7 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { anchoredPopover, api, el, keepSideScroll, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
+import { anchoredPopover, api, el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
@@ -218,6 +218,44 @@ function togglePin(key: string): void {
 }
 
 let treeEl: HTMLElement | null = null;
+// ── 스크롤을 픽셀이 아니라 **내용**에 붙든다 ──────────────────────────────────
+//  픽셀(scrollTop 숫자)만 되돌리면 왜 모자라나: 세션을 누르면 **그 프로젝트가 펴지고 직전에 보던 것은
+//  접힌다**(projRow 의 isOpen — '선택된 프로젝트만 펼침'). 접힌 쪽이 화면 위쪽에 있었다면 그 높이만큼
+//  아래 내용이 통째로 위로 밀린다. 그때 옛 scrollTop 을 그대로 앉히면 **보던 줄이 저 위로 달아난다** —
+//  사람 눈에는 "누를 때마다 맨 위로 팅"으로 보인다(원준 2026-08-21).
+//  그래서 다시 그리기 전에 **화면 맨 위에 걸린 행이 무엇이었는지**를 기억했다가, 그린 뒤 그 행을 같은
+//  자리에 도로 앉힌다(브라우저의 scroll anchoring 과 같은 발상). 행 하나가 사라져도 되도록 후보를 몇 개 든다.
+//  ⚠ 그래서 팀 원시함수 keepSideScroll(#1635 ⓑ)을 여기 쓰지 않는다 — 그건 **픽셀 값**을 되돌리는 장치라,
+//   내용이 위에서 늘고 주는 이 트리에서는 되돌릴수록 어긋난다. 대신 아래 lastScroll 이 같은 구멍(트리가
+//   아예 없다가 새로 생기는 경우)을 막는다.
+type Anchor = { keys: string[]; delta: number };
+let lastScroll = 0;                       // 트리가 통째로 사라졌다 다시 생길 때의 마지막 자리
+
+function anchorRead(): Anchor | null {
+  if (!treeEl || !treeEl.isConnected) return null;
+  const top = treeEl.getBoundingClientRect().top;
+  const keys: string[] = [];
+  let delta = 0;
+  for (const n of Array.from(treeEl.querySelectorAll<HTMLElement>('[data-nav]'))) {
+    const b = n.getBoundingClientRect();
+    if (b.bottom <= top + 1) continue;                    // 화면 위로 지나간 행
+    if (!keys.length) delta = b.top - top;                // 맨 위에 걸린 행의 어긋남을 그대로 보존
+    keys.push(String(n.dataset.nav || ''));
+    if (keys.length >= 6) break;                          // 그 행이 사라졌을 때를 대비한 후보들
+  }
+  return keys.length ? { keys, delta } : null;
+}
+
+function anchorApply(a: Anchor | null): boolean {
+  if (!a || !treeEl) return false;
+  for (const k of a.keys) {
+    const n = treeEl.querySelector<HTMLElement>(`[data-nav="${(window as any).CSS && CSS.escape ? CSS.escape(k) : k}"]`);
+    if (!n) continue;
+    treeEl.scrollTop += (n.getBoundingClientRect().top - treeEl.getBoundingClientRect().top) - a.delta;
+    return true;
+  }
+  return false;
+}
 let countEl: HTMLElement | null = null;
 let filterOpen = false;            // [필터] 팝오버 — 열림은 잠깐의 상태라 브라우저에 기억하지 않는다
 let outsideBound = false;
@@ -257,7 +295,9 @@ function render(): void {
   const liveAll = rows.flatMap((r) => [...r.live, ...r.past]);
   const livOn = navOn('liv') !== false;
   // 20초 폴링마다 통째로 다시 그린다 — 스크롤 위치와 검색칸 포커스는 이어져야 한다(수백 행에서 매번 맨 위로 튀면 못 쓴다).
-  const prevScroll = treeEl ? treeEl.scrollTop : 0;
+  const hadOld = !!treeEl && treeEl.isConnected;
+  const anchor = hadOld ? anchorRead() : null;
+  const prevScroll = hadOld ? treeEl!.scrollTop : lastScroll;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
   const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
   countEl = el('span', { class: 'v2-k' });
@@ -336,12 +376,10 @@ function render(): void {
       themeSeg(),
       el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
   renderTree(rows);
-  treeEl!.scrollTop = prevScroll;
-  // 위 한 줄(prevScroll)은 **이번 렌더**의 이어붙이기다. 그런데 트리가 통째로 다시 만들어지는 길이 하나라도
-  //  남으면(패널 재마운트·화면 전환 뒤 복귀 등) prevScroll 은 0 을 읽는다 — detach 된 노드의 scrollTop 은 0 이므로.
-  //  그래서 **노드 신원과 무관하게** 위치를 key 로 기억해 두는 팀 원시함수를 겹쳐 둔다(#1635 ⓑ).
-  //  사람이 휠·키로 움직이면 복원은 즉시 손을 뗀다(사람 조작을 덮지 않는다).
-  keepSideScroll(treeEl!, 'v2-side');
+  //  ① 보던 줄을 같은 자리에 → ② 그 줄이 사라졌으면 옛 픽셀값으로(그래도 아무것도 안 하는 것보단 낫다).
+  if (!anchorApply(anchor)) treeEl!.scrollTop = prevScroll;
+  lastScroll = treeEl!.scrollTop;
+  treeEl!.addEventListener('scroll', () => { if (treeEl) lastScroll = treeEl.scrollTop; }, { passive: true });
   if (findHad) { findIn.focus(); if (findSel && findSel[0] != null) findIn.setSelectionRange(findSel[0], findSel[1]); }
   else if (findFocusWanted) { findFocusWanted = false; findIn.focus(); }
   bindFindKey();
