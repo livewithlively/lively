@@ -52,7 +52,12 @@ function openLinkFromTerminal(uri: string): void {
     //  터미널↔새 탭 왕복이 계속 일어난다. 셸이 이 알림을 받아 웹 칸을 켜고 주소를 싣는다.
     //  ⚠ 부모가 안 듣는 판(구 셸·단독 페이지)에서는 아무 일도 안 일어나면 안 되므로, 셸이 받았다고
     //   답하지 않으면 잠시 뒤 새 탭으로 떨어진다.
-    if (u.origin === location.origin && /\/preview\/[^/]+\//.test(u.pathname) && window.parent !== window) {
+    //  아티팩트도 같은 길로 보낸다(원준 2026-08-21). 다만 claude.ai 는 남의 사이트라 **브라우저에서는
+    //  iframe 임베드를 스스로 막는다**(CSP frame-ancestors 'self') — 그래서 곁칸에 넣을지 새 탭으로 열지는
+    //  여기서 정하지 않고 **부모가 정한다**(앱이면 webview 라 뚫린다, #1829). 터미널은 넘기기만 한다.
+    const toPane = (u.origin === location.origin && /\/preview\/[^/]+\//.test(u.pathname))
+      || (/(^|\.)claude\.ai$/.test(u.hostname) && /^\/code\/artifact\//.test(u.pathname));
+    if (toPane && window.parent !== window) {
       let taken = false;
       const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
       window.addEventListener('message', ack);

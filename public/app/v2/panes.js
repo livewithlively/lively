@@ -27,6 +27,7 @@ import { anchoredPopover, api, el, personFace, toast } from '../core.js';
 import { makeSplitter } from './split.js';
 import { mountSideSwap } from './side-swap.js'; // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon } from './panes-parts.js';
+import { hasBrowserSurface } from './browser-surface.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
@@ -386,8 +387,20 @@ export function mountPanes(host, opts) {
         const d = e.data;
         if (!d || d.type !== 'lively:open-in-pane' || typeof d.url !== 'string')
             return;
-        openInWebPart(ctx, d.url);
-        addTab('side', 'web');
+        // 남의 사이트(claude.ai 아티팩트 등)는 **앱에서만** 칸에 들어간다 — 브라우저 iframe 은 상대가 막는다
+        //  (CSP frame-ancestors). 막힐 걸 알면서 칸에 넣으면 빈 화면만 남으므로 그때는 새 탭으로 연다.
+        let cross = false;
+        try {
+            cross = new URL(d.url).origin !== location.origin;
+        }
+        catch (_) { /* 파싱 실패 — 같은 곳으로 본다 */ }
+        if (cross && !hasBrowserSurface())
+            window.open(d.url, '_blank', 'noopener');
+        else {
+            openInWebPart(ctx, d.url);
+            addTab('side', 'web');
+        }
+        // 어느 쪽이든 받았다고 답한다 — 안 그러면 터미널이 잠시 뒤 새 탭을 한 번 더 연다.
         try {
             e.source?.postMessage({ type: 'lively:open-in-pane:ok' }, e.origin);
         }
