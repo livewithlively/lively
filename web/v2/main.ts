@@ -568,11 +568,23 @@ function activeKey(): string {
 //  숨길 수 있는 것으로 두면 숨겨진 상태가 기본이 된다. 그래서 **없앨 수 없고, 폭만 조절**한다.
 //  · 닫기(×)·핀 고정·알약(stu-panel-fab)·그 자리 기억(stu_fab_pos)은 전부 제거했다.
 //  · 패널 머리글도 뺐다 — 트리 자신이 이미 '프로젝트 · N'과 검색·필터를 머리에 두고 있어 두 겹이었다.
+// ⚠ **패널 DOM 을 매번 새로 만들지 않는다**(원준 2026-08-21 "세션을 클릭할 때마다 팅팅 맨 위로 올라간다").
+//  종전엔 drawSide 마다 `sideEl.replaceChildren(새 div)` 로 통째 교체했는데, 그러면 **옛 트리가 문서에서
+//  떨어져 나가는 순간 그 scrollTop 이 0 이 된다.** side.ts 의 render() 는 `prevScroll = treeEl.scrollTop` 으로
+//  스크롤을 이어받으려 하지만, 그 값을 읽을 때 옛 트리는 **이미 detach 된 뒤**라 늘 0 을 읽었다.
+//  실측(라이브, 트리 높이 8405 · 창 266): 600 으로 내려 둔 스크롤이 20초 폴링 한 번에 **0** 으로 튀었다.
+//  세션 클릭·이름 변경·보관(×)·폴링 — drawSide 를 부르는 모든 길에서 같은 일이 났다.
+//  숙주(treeHost)를 **재사용**하면 옛 트리가 render() 안에서 교체될 때까지 붙어 있어 prevScroll 이 살아난다.
+//  (불변식: 제자리 갱신은 스크롤을 옮기지 않는다 — [[inplace-update-must-not-move-scroll-1635]] ⓑ 와 같은 뿌리.)
+let sideTreeHost: HTMLElement | null = null;
 function drawSide(): void {
   if (!sideEl) return;
-  const treeHost = el('div', { class: 'stu-panel-tree' });
-  sideEl.replaceChildren(el('div', { class: 'stu-panel' }, treeHost));
-  drawSideTree(treeHost, data, activeKey, {
+  if (!sideTreeHost || !sideEl.contains(sideTreeHost)) {
+    sideTreeHost = el('div', { class: 'stu-panel-tree' }) as HTMLElement;
+    sideEl.replaceChildren(el('div', { class: 'stu-panel' }, sideTreeHost));
+  }
+  const treeHost = sideTreeHost;
+  drawSideTree(treeHost!, data, activeKey, {
     onNewSession: newSessionFor,
     // 사이드바에서 고친 이름은 **화면 전체**에 반영한다 — 목록만 바뀌고 탭·대화창 제목이 옛 이름이면 그게 더 혼란스럽다.
     onRenameSession: (id, label) => renameSessionEverywhere(id, label),
