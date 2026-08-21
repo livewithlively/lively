@@ -256,6 +256,13 @@ export function mountSessionChat(host, first, opts) {
     //  내가 방금 고른 값이 여기로 되돌아오는 것이 그 변경이 실제로 먹혔다는 유일한 증거다.
     const SET_MODEL_RE = /Set model to\s+(.+?)(?:\s+and saved\b|$)/i;
     const setModel = (full) => setObserved('model', full.replace(/\s*\([^)]*\)\s*$/, '').trim() || full, full);
+    // ⚠ 하네스가 **스스로 만들어 끼운 줄**은 모델이 아니다. Claude Code 는 그런 줄의 model 에 `<synthetic>` 을 적는다 —
+    //  실측(2026-08-21, 최근 대화 80개): `<synthetic>` 45줄, 본문은 전부 "You've hit your session limit · resets …"
+    //  같은 **자기 안내문**이었다. 그대로 받으면 안내 한 줄이 진짜 모델을 덮어써 머리줄에 '<synthetic>' 이 뜬다
+    //  (원준님 신고). 꺾쇠로 감싼 값은 제공자의 모델 id 가 아니라 하네스의 표식이므로 통째로 무시한다 —
+    //  이렇게 하면 모르는 제공자(grok·gemini…)의 진짜 id 는 그대로 통과한다(허용목록으로 좁히지 않는 이유).
+    //  덮어쓰지 않을 뿐 **지우지도 않는다** — 안내가 떴다고 세션이 쓰던 모델이 바뀐 것은 아니다.
+    const realModelId = (m) => !!m.trim() && !/^<.*>$/.test(m.trim());
     // 처방전(#1719) — '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'가 앉는 자리. 입력칸 바로 위(askHost).
     const rxHost = el('div', { class: 'sc-rx-host' });
     // 대화창 ————
@@ -707,7 +714,7 @@ export function mountSessionChat(host, first, opts) {
             return;
         }
         if (o.type === 'assistant') {
-            if (o.message?.model)
+            if (o.message?.model && realModelId(String(o.message.model)))
                 setModel(prettyModel(String(o.message.model)));
             if (o.effort)
                 setObserved('effort', String(o.effort));
