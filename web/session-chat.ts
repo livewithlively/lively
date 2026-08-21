@@ -654,6 +654,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; return; }
       if (CONTINUED_RE.test(text)) { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', text); cur = newRec(null); running = true; return; }
       if (INJECTED_RE.test(text)) return;                       // 슬래시 명령·리마인더 — 사람 말이 아니다
+
+      // 타임라인(우패널)의 장(章) 머리 — 이 지시 아래로 그동안의 일이 묶인다(#1719 C안).
+      //  ★ 고장이었던 자리(#1819 원준 2026-08-21 신고 "질문을 훨씬 많이 했는데 2개만 보인다"):
+      //   이 줄이 **아래 pending 매칭보다 뒤에** 있었다. 웹 입력칸으로 보낸 지시는 낙관 말풍선과 이어지며
+      //   그 자리에서 return 하므로 **타임라인에 영영 안 들어왔다.** 답(assistant)은 pending 과 무관하게 들어오니
+      //   결과는 두 겹으로 나빴다 — ① 내가 시킨 것이 사라지고 ② 주인 없는 답들이 '질문 없는 장' 하나로 뭉쳐,
+      //   열 턴이 한 줄로 보였다. 그래서 **어느 경로로 오든 먼저 넣는다**(같은 열쇠는 add 가 알아서 합친다).
+      const q = sayParts(text);
+      trail?.add({ id: 'turn:' + String(o.uuid || o.timestamp || text.slice(0, 40)), kind: 'say', verb: '지시',
+        label: q.label, full: q.full, pasteLines: q.pasteLines,
+        key: 'turn|' + String(o.uuid || o.timestamp || text.slice(0, 40)), ts: o.timestamp }, 'end');
+
       // 내가 보낸(또는 큐에 있던) 말이 파일에 나타났다 → 낙관적으로 그린 그 턴을 그대로 쓴다(두 번 그리지 않는다)
       const pi = pending.findIndex((pd) => sameSaid(pd.text, text));
       if (pi >= 0) {
@@ -664,11 +676,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         if (rec) { cur = rec; rec.t.ts = o.timestamp; running = true; return; }
       }
       cur = newRec(text, o.timestamp); running = true;
-      // 타임라인(우패널)의 장(章) 머리 — 이 지시 아래로 그동안의 일이 묶인다(#1719 C안).
-      const q = sayParts(text);
-      trail?.add({ id: 'turn:' + String(o.uuid || o.timestamp || text.slice(0, 40)), kind: 'say', verb: '지시',
-        label: q.label, full: q.full, pasteLines: q.pasteLines,
-        key: 'turn|' + String(o.uuid || o.timestamp), ts: o.timestamp }, 'end');
       return;
     }
     if (o.type === 'assistant') {
@@ -690,6 +697,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   // 발자취(우패널) — 이 세션이 읽고 쓴 것. tool_use → 항목, tool_result → 그 항목의 본문. 대화창과 같은 줄에서 함께 뽑는다.
   const trail = opts.trail || null;
+  // 답이 아닌 것 — 하네스가 '할 말 없음'을 적어 두는 상용구다. 이게 장의 마지막 텍스트면 진짜 답을 밀어낸다
+  //  (실측 #1819: 답 자리에 "No response requested." 가 서서 그 턴이 무엇이었는지 알 수 없었다).
+  const NO_ANSWER_RE = /^\s*(?:no response requested\.?|\(no content\)|\[no content\]|null)\s*$/i;
   const trailOut = (b: any): string => typeof b.content === 'string' ? b.content
     : Array.isArray(b.content) ? b.content.map((c: any) => (c && c.type === 'text' ? String(c.text ?? '') : '')).join('\n') : '';
   /** AI 한 줄(assistant) → 타임라인. 도구 사용은 그 장에 **남은 것**으로, 텍스트는 그 장의 **답**으로 간다(#1819).
@@ -697,6 +707,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function trailMsg(o: any, at: 'end' | 'start'): void {
     const w = trail;
     if (!w) return;
+    const meta = !!o.isMeta;                       // 사람에게 한 말이 아니다(하네스 내부 줄) — 답으로 세우지 않는다
     const c = o?.message?.content;
     const blocks: any[] = Array.isArray(c) ? c : (typeof c === 'string' && c.trim() ? [{ type: 'text', text: c }] : []);
     const emit = (b: any, i: number): void => {
@@ -706,8 +717,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         return;
       }
       if (!b || b.type !== 'text') return;
-      const t = plain(String(b.text ?? '')).trim();
-      if (!t) return;
+      if (meta) return;
+      const raw = String(b.text ?? '');
+      if (NO_ANSWER_RE.test(raw)) return;
+      const t = plain(raw).trim();
+      if (!t || NO_ANSWER_RE.test(t)) return;
       // 한 장에 답은 여러 번 온다("확인하겠습니다" → 도구 → … → 최종 답). 렌더러가 **마지막 것**만 세우므로
       //  열쇠를 고유하게 둔다 — 합치면 첫 마디가 굳어 최종 답이 영영 안 보인다.
       const id = 'ans:' + String(o.uuid || o.timestamp || '') + '#' + i;
@@ -1019,6 +1033,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let olderEl: HTMLElement | null = null;
   function olderBar(): void {
     olderEl?.remove();
+    // 타임라인은 **대화창이 읽은 만큼만** 안다(재료가 이 트랜스크립트다). 그러니 앞이 더 있으면 그렇다고 말한다 —
+    //  안 그러면 "왜 이것밖에 없지"가 곧 "고장났다"로 읽힌다(#1819 원준 2026-08-21).
+    trail?.setNote(loadedFrom > 0 || oldestPrev
+      ? '이 앞의 대화는 아직 안 불러왔어요. 가운데 대화를 위로 올려 [이전 대화 불러오기] 를 누르면 여기에도 더 쌓입니다.'
+      : null);
     if (loadedFrom <= 0 && !oldestPrev) { olderEl = null; return; }
     const kb = Math.round(loadedFrom / 1024);
     const label = loadedFrom > 0 ? `이전 대화 불러오기 (${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb + 'KB'} 더 있음)` : '압축 전 대화 불러오기';
