@@ -3267,6 +3267,16 @@
   "input_hash": "cff82a5b7bd78ee1"
  },
  {
+  "name": "notify_feed",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/notify/feed"
+  ],
+  "input_hash": "5d7a3020a5fd239c"
+ },
+ {
   "name": "task_field_create_v6",
   "scope": "memory",
   "mcp": true,
