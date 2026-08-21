@@ -182,6 +182,10 @@ export function mountSideSwap(h: SideSwapHost): SideSwapHandle {
             class: 'btn btn-primary', type: 'button',
             onclick: () => back.remove(),
           }, el('span', { text: '이대로 쓸게요' }))))) as HTMLElement;
+    // 짧은 안내는 **화면 한가운데**에, 글 폭에 맞게. 기본 껍데기는 긴 모달용이라 위쪽 정렬(align-items:flex-start)에
+    //  760px 고정이어서, 이 안내를 그대로 얹으면 오른쪽이 텅 비고 위로 치우쳐 어색하다(원준 신고 2026-08-21).
+    back.classList.add('sw-intro-back');
+    back.querySelector('.ov-box')?.classList.add('sw-intro-box');
   }
 
   /** 무슨 일이 일어났는지 한눈에 — 말보다 그림이 빠르다(왼쪽=바뀌기 전, 오른쪽=바뀐 뒤). */
