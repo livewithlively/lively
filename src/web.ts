@@ -451,6 +451,15 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Cache-Control", cacheHdr);
     res.sendFile(full, { cacheControl: false }); return; // cacheControl:false — express 가 우리 헤더를 덮어쓰지 않도록
   };
+  // 세대 알림(#1841) — 지금 서빙 중인 자산 세대를 한 줄로 알려준다. 화면이 자기 세대와 비교해
+  //  낡았으면 스스로 다시 싣는다(web/gen-watch.ts). 인증 불요(정적 자산과 같은 급), 캐시 금지.
+  //  ⚠ 이게 필요한 이유: 데스크톱 앱 창은 닫아도 죽지 않고(hide) 다시 열 때 loadURL 을 건너뛴다.
+  //   그래서 게이트웨이가 갱신돼도 앱은 처음 뜬 판을 영영 들고 있었다(실측 2026-08-21: 앱 세대
+  //   7964959ed50d vs 서버 882a0a3d262e — 원준이 "반영 안 된 것 같다"를 세 번 말한 진짜 원인).
+  app.get("/ui/__gen", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ v: assetVersion() });
+  });
   app.use("/ui", serveStatic);
   app.get("/", (_req, res) => res.redirect("/ui/"));
 }
