@@ -12,10 +12,17 @@ export interface SplitOpts {
   cssVar: string;             // 바꿀 CSS 변수 이름(예: --v2-side-w)
   target: HTMLElement;        // 변수를 세팅할 요소(보통 컨테이너)
   def: number;                // 기본값(px)
-  min: number; max: number;   // 허용 범위(px)
-  /** 손잡이 기준으로 조정되는 칸이 '앞'(왼쪽/위)에 있으면 +1, '뒤'(오른쪽/아래)면 -1 — 끄는 방향과 크기 증감의 부호. */
-  grow: 1 | -1;
+  min: number;                // 허용 하한(px)
+  /** 허용 상한(px). 함수면 **끌 때마다 다시 묻는다** — 창 크기에 따라 상한이 달라지는 실험(v2/side-exp)용. */
+  max: number | (() => number);
+  /** 손잡이 기준으로 조정되는 칸이 '앞'(왼쪽/위)에 있으면 +1, '뒤'(오른쪽/아래)면 -1 — 끄는 방향과 크기 증감의 부호.
+   *  함수면 끌 때마다 다시 묻는다 — 좌우가 뒤바뀌는 실험(자리바꿈)에서는 같은 손잡이의 부호가 반대가 된다. */
+  grow: 1 | -1 | (() => 1 | -1);
   label: string;              // aria-label
+  /** 끄는 중(매 프레임) — 실험 모듈이 '지금 놓으면 어떻게 되는지'를 미리 보여 주는 자리. */
+  onDrag?: (px: number) => void;
+  /** 놓았을 때(키보드 조정·더블클릭 포함) — 자리바꿈 판정은 **놓는 순간에만** 한다(끌던 중에 바뀌면 손잡이가 손 밑에서 뒤집힌다). */
+  onEnd?: (px: number) => void;
 }
 
 const clamp = (v: number, a: number, b: number): number => Math.max(a, Math.min(b, v));
@@ -25,10 +32,19 @@ export function readSplit(key: string, def: number): number {
   try { const v = Number(localStorage.getItem(KEY(key))); return Number.isFinite(v) && v > 0 ? v : def; } catch { return def; }
 }
 
+/** 손잡이 밖에서 크기를 정해 줄 때(실험 모드가 바뀌며 상한이 좁아지는 경우 등). 화면과 기억을 함께 바꾼다. */
+export function writeSplit(key: string, target: HTMLElement, cssVar: string, px: number): void {
+  const v = Math.round(px);
+  target.style.setProperty(cssVar, v + 'px');
+  try { localStorage.setItem(KEY(key), String(v)); } catch { /* 저장 못 해도 이번 화면은 된다 */ }
+}
+
 /** 손잡이 요소를 만들어 돌려준다(호출자가 두 칸 사이에 끼운다). 저장된 값이 있으면 그 자리에서 곧바로 적용한다. */
 export function makeSplitter(o: SplitOpts): HTMLElement {
+  const maxOf = (): number => (typeof o.max === 'function' ? o.max() : o.max);
+  const growOf = (): number => (typeof o.grow === 'function' ? o.grow() : o.grow);
   const apply = (px: number, persist: boolean): void => {
-    const v = clamp(Math.round(px), o.min, o.max);
+    const v = clamp(Math.round(px), o.min, Math.max(o.min, maxOf()));
     o.target.style.setProperty(o.cssVar, v + 'px');
     if (persist) { try { localStorage.setItem(KEY(o.key), String(v)); } catch { /* 저장 못 해도 이번 화면은 된다 */ } }
   };
@@ -56,23 +72,25 @@ export function makeSplitter(o: SplitOpts): HTMLElement {
     h.setPointerCapture(e.pointerId);
     const move = (ev: PointerEvent): void => {
       const d = (o.axis === 'x' ? ev.clientX : ev.clientY) - start;
-      apply(base + d * o.grow, false);
+      apply(base + d * growOf(), false);
+      o.onDrag?.(current());
     };
     const up = (): void => {
       h.classList.remove('on'); document.body.classList.remove('v2-splitting-' + o.axis);
       h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up);
       apply(current(), true);
+      o.onEnd?.(current());
     };
     h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
   });
-  h.addEventListener('dblclick', () => apply(o.def, true));
+  h.addEventListener('dblclick', () => { apply(o.def, true); o.onEnd?.(current()); });
   h.addEventListener('keydown', (e: KeyboardEvent) => {
     const step = e.shiftKey ? 32 : 8;
     const dec = o.axis === 'x' ? 'ArrowLeft' : 'ArrowUp';
     const inc = o.axis === 'x' ? 'ArrowRight' : 'ArrowDown';
-    if (e.key === dec) { apply(current() - step * o.grow, true); e.preventDefault(); }
-    else if (e.key === inc) { apply(current() + step * o.grow, true); e.preventDefault(); }
-    else if (e.key === 'Home') { apply(o.def, true); e.preventDefault(); }
+    if (e.key === dec) { apply(current() - step * growOf(), true); o.onEnd?.(current()); e.preventDefault(); }
+    else if (e.key === inc) { apply(current() + step * growOf(), true); o.onEnd?.(current()); e.preventDefault(); }
+    else if (e.key === 'Home') { apply(o.def, true); o.onEnd?.(current()); e.preventDefault(); }
   });
   return h;
 }
