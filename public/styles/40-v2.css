@@ -301,11 +301,14 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-apps-btn { display: flex; align-items: center; gap: 4px; width: 100%; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; border: 0; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); cursor: pointer; text-align: left; }
 .v2-apps-btn:hover { background: var(--bg); color: var(--ink); }
 .v2-apps-btn .v2-cnt { margin-left: auto; }
-.v2-me { display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 18px; min-height: var(--row-h, 34px); font-size: 13px; color: var(--ink-sub); }
-.v2-me .v2-ava { width: 22px; height: 22px; border-radius: 50%; font-size: 10px; }
+/* [나] — 행 전체가 [내 프로필 · 환경설정]을 여는 단추다(#1843). 생김새는 위 [앱] 줄과 같은 규격(같은 층이라
+   같은 모양이어야 한다) — 손을 얹으면 배경이 들어오고, 오른쪽 톱니는 '설정이 여기 있다'는 표식이다. */
+.v2-me { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 10px 4px 18px; min-height: var(--row-h, 34px); border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13px; color: var(--ink-sub); cursor: pointer; text-align: left; }
+.v2-me:hover { background: var(--bg); color: var(--ink); }
+.v2-me .v2-ava { width: 22px; height: 22px; border-radius: 50%; font-size: 10px; flex: none; }
 .v2-me-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-classic-link { border: 0; background: none; font: inherit; font-size: 11px; color: var(--muted-2); cursor: pointer; text-align: left; padding: 2px 10px 0; }
-.v2-classic-link:hover { color: var(--ink-sub); text-decoration: underline; }
+.v2-me-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; color: var(--muted-2); }
+.v2-me:hover .v2-me-ic { color: var(--ink-sub); }
 
 /* ── 중앙 ── */
 .v2-main { position: relative; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }   /* relative: 타임라인 서랍 버튼(.v2-tl-btn)의 기준 */
@@ -1023,8 +1026,6 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-pin .v2-ss-row { min-height: 42px; }
   .v2-apps-btn { padding: 12px 12px; font-size: 15px; }
   .v2-me { padding: 8px 4px; font-size: 14.5px; }
-  .v2-me .btn-text { padding: 8px 10px; }
-  .v2-classic-link { padding: 6px 4px 2px; }
   .v2-flt-pop { right: 0; width: min(240px, calc(100vw - 32px)); }
   .v2-fo { padding: 9px 10px; font-size: 14px; }
   .v2-ws-menu { max-width: calc(100vw - 16px); }
@@ -1144,7 +1145,8 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-tabpop-row .x:hover { background: var(--bg-punch); color: var(--ink); }
 
 /* ── 테마 3단 토글(#1683) — 사이드바 하단 세그먼트(시스템/라이트/다크). web/v2/side.ts themeSeg(). ── */
-.v2-theme { display: flex; gap: 2px; margin: 8px 10px 0; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg-tint); }
+/* 테마 3단(#1683) — 지금 사는 곳은 [내 프로필 · 환경설정] ▸ 화면(#1843). 사이드바 발치에서 옮겨 왔다. */
+.v2-theme { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg-tint); }
 .v2-theme-opt { flex: 1; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 0; border-radius: 7px; cursor: pointer; transition: color 120ms ease, background 120ms ease; }
 .v2-theme-opt:hover { color: var(--ink-sub); }
 .v2-theme-opt.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .10); }
