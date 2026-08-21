@@ -17,10 +17,11 @@ export const NOTIFY = {
   WAITING: "session_waiting",   // AI 가 내 결정을 기다린다(승인·선택) — 놓치면 AI 가 그대로 멈춰 선다
   DONE: "session_done",         // AI 가 시킨 일을 마쳤다 — 맡겨두고 딴 일 하던 사람에게
   EXITED: "session_exited",     // 세션이 **예기치 않게** 끝났다(사람이 /exit 한 것은 제외 — 자기가 한 일은 알림이 아니다)
+  PERSON: "person",             // 사람이 나를 불렀다(멘션·댓글·담당 지정) — 판정은 서버(v6/notify-store.ts)가 한다
 };
 
 /** 기본 설정 — 사람이 끄기 전까지 셋 다 켠다. */
-export const NOTIFY_DEFAULTS = { [NOTIFY.WAITING]: true, [NOTIFY.DONE]: true, [NOTIFY.EXITED]: true };
+export const NOTIFY_DEFAULTS = { [NOTIFY.WAITING]: true, [NOTIFY.DONE]: true, [NOTIFY.EXITED]: true, [NOTIFY.PERSON]: true };
 
 /** 한 번의 폴에서 개별 배너로 띄울 최대 수. 넘으면 한 장으로 묶는다(대량 전이가 알림 폭탄이 되지 않게). */
 export const MAX_BANNERS = 3;
@@ -131,4 +132,62 @@ export function planBanners(events, max = MAX_BANNERS) {
 export function sessionHash(id) {
   const s = String(id || "");
   return /^[A-Za-z0-9_.-]{1,120}$/.test(s) ? "#/s/" + s : null;
+}
+
+// ── 사람 알림 (#1842 2차) ────────────────────────────────────────────────────
+// 세션 알림과 **판정 위치가 다르다**: 세션은 스냅샷 두 장을 앱이 견주지만(서버엔 '전이'라는 개념이 없다),
+//  사람 알림은 서버가 "since 이후 나에게 온 것"을 이미 골라 준다(/api/ui/notify/feed). 앱이 할 일은
+//  ① 처음 켰을 땐 기준선만 잡고 ② 이미 띄운 것을 다시 안 띄우는 것, 둘뿐이다.
+//
+// ⚠ 커서(since)만으로는 중복을 못 막는다. 폴 경계에 걸친 사건은 두 번 잡힐 수 있고(같은 초에 들어온 것),
+//  시계가 뒤로 갈 수도 있다. 그래서 **본 것의 key 를 따로 기억한다** — #1571 이 같은 이유로 커서를
+//  신뢰의 근거로 쓰지 말라고 못박았다("중복 방지는 항상 유니크 인덱스가 책임진다").
+
+/** 이미 띄운 사람 알림 key 를 기억하는 상한 — 넘으면 오래된 것부터 잊는다(메모리 상한). */
+export const SEEN_MAX = 300;
+
+/**
+ * 서버 피드 → 배너로 띄울 것.
+ * @param {Array} items /api/ui/notify/feed 의 items
+ * @param {Set<string>|null} seen 이미 띄운 key(호출자가 들고 있다). **null 이면 콜드스타트** — 기준선만 잡는다
+ * @param {object} [prefs] 유형별 on/off
+ * @returns {Array} 배너로 만들 이벤트(호출자가 seen 에 넣는다)
+ */
+export function pickPersonEvents(items, seen, prefs) {
+  const on = { ...NOTIFY_DEFAULTS, ...(prefs || {}) };
+  const rows = Array.isArray(items) ? items : [];
+  if (!seen) return [];                              // 콜드스타트: 앱을 켠 순간 지난 24시간이 배너로 쏟아지면 안 된다
+  if (!on[NOTIFY.PERSON]) return [];
+  const out = [];
+  for (const it of rows) {
+    const key = String(it && it.key || "");
+    if (!key || seen.has(key)) continue;
+    out.push({ kind: NOTIFY.PERSON, id: null, key, link: personLink(it && it.link),
+      title: String(it.text && it.text.title || "라이블리"), body: String(it.text && it.text.body || "") });
+  }
+  return out;
+}
+
+/** 본 key 를 기록하고 상한을 넘으면 오래된 것부터 버린다(Set 은 삽입 순서를 지킨다). */
+export function rememberSeen(seen, events, max = SEEN_MAX) {
+  for (const e of events) if (e.key) seen.add(e.key);
+  while (seen.size > max) seen.delete(seen.values().next().value);
+  return seen;
+}
+
+/**
+ * 사람 알림이 가리키는 화면 해시. 서버가 준 값이라도 **형식을 다시 본다** — 그 문자열이 웹 창의 주소가 되므로,
+ *  게이트웨이가 깨졌거나 중간에 바뀌었을 때 임의 주소로 튀는 길을 두지 않는다(sessionHash 와 같은 이유).
+ * @returns {string|null} `#/…` 형태가 아니면 null → 호출부는 앱 창만 띄운다
+ */
+export function personLink(link) {
+  const s = String(link || "");
+  return /^#\/[A-Za-z0-9/_.:%-]{1,200}$/.test(s) ? s : null;
+}
+
+/** 여러 건이면 개별 배너 대신 한 장으로 — 세션 쪽 planBanners 와 같은 규칙을 사람 알림에도 적용한다. */
+export function planPersonBanners(events, max = MAX_BANNERS) {
+  if (!events.length) return [];
+  if (events.length <= max) return events.map((e) => ({ title: e.title, body: e.body, event: e }));
+  return [{ title: "라이블리", body: `새 알림이 ${events.length}개 있어요.`, event: null }];
 }

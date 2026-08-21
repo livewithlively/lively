@@ -31,7 +31,7 @@ import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, sessionHash } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -502,6 +502,8 @@ const NOTIFY_POLL_MS = 30_000;      // 세션 상태 조회는 tmux 를 훑는�
 const NOTIFY_PREFS_FILE = "desktop-notify.json";   // { session_waiting: true, ... } — 트레이에서 끄면 여기 남는다
 let notifySnapshot = null;          // 직전 세션 스냅샷. null = 콜드스타트(첫 폴은 기준선만 잡고 아무것도 안 띄운다)
 let notifyPolling = false;
+let personSince = null;             // 사람 알림 커서 — 서버가 준 `now`. null 이면 아직 한 번도 안 받았다
+let personSeen = null;              // 이미 띄운 사람 알림 key. null = 콜드스타트(첫 폴은 기준선만)
 
 /** 유형별 켜짐 — 파일이 없거나 깨졌으면 기본값(전부 켜짐). 설정을 못 읽었다고 알림이 멎으면 안 된다. */
 function notifyPrefs() {
@@ -522,20 +524,25 @@ function showBanner({ title, body, event }) {
   try {
     if (!Notification.isSupported()) return;          // 리눅스 등 알림 데몬이 없는 환경 — 조용히 넘긴다
     const n = new Notification({ title, body });
-    n.on("click", () => { if (event && event.id) openSessionInApp(event.id); else showMain(); });
+    n.on("click", () => {
+      if (event && event.id) return openSessionInApp(event.id);        // 세션 알림 → 그 세션 화면
+      if (event && event.link) return openHashInApp(event.link);       // 사람 알림 → 그 프로젝트 화면
+      showMain();                                                      // 묶음 배너 — 갈 곳이 하나가 아니다
+    });
     n.show();
   } catch { /* OS 가 알림을 막았어도 앱은 계속 돈다 */ }
 }
 
-/** 알림 클릭 → 앱 창을 띄우고 **그 세션 화면**으로. 이미 실려 있으면 해시만 바꾼다(전체 리로드는 보던 화면을 날린다). */
-function openSessionInApp(id) {
-  const hash = sessionHash(id);                        // 형식이 아니면 null — 응답을 그대로 주소로 쓰지 않는다
+/** 알림 클릭 → 앱 창을 띄우고 그 화면으로. 이미 실려 있으면 해시만 바꾼다(전체 리로드는 보던 화면을 날린다). */
+function openHashInApp(hash) {
   const r = showApp();
   if (!r || !r.ok || !hash || !appWin || appWin.isDestroyed()) return;
   const wc = appWin.webContents;
   const go = () => { try { void wc.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`).catch(() => {}); } catch { /* 창이 사라졌다 */ } };
   if (wc.isLoading()) wc.once("did-finish-load", go); else go();
 }
+/** 세션 알림 클릭 — id 형식을 먼저 본다(응답을 그대로 주소로 쓰지 않는다). */
+function openSessionInApp(id) { openHashInApp(sessionHash(id)); }
 
 /**
  * 한 번의 폴 — 세션 목록을 받아 직전 스냅샷과 견주고, 생긴 사건만 배너로 띄운다.
@@ -546,7 +553,7 @@ async function pollNotifications() {
   if (notifyPolling) return;
   const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
   const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
-  if (!token) { notifySnapshot = null; return; }
+  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; return; }
   notifyPolling = true;
   try {
     const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
@@ -556,11 +563,29 @@ async function pollNotifications() {
     if (!res.ok) return;                               // 401 은 watchTokenRejection 이 따로 처리한다
     const data = await res.json();
     const next = snapshotSessions(data && data.sessions);
-    const events = diffSessions(notifySnapshot, next, notifyPrefs());
+    const prefs = notifyPrefs();
+    const events = diffSessions(notifySnapshot, next, prefs);
     notifySnapshot = next;
     for (const b of planBanners(events)) showBanner(b);
+    await pollPersonFeed(gw, token, prefs);
   } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
   finally { notifyPolling = false; }
+}
+
+/**
+ * 사람이 나를 부른 것(멘션·댓글·담당) — 판정은 서버가 한다(/api/ui/notify/feed). 앱은 커서를 들고 다니며
+ *  새로 온 것만 띄운다. **커서 전진은 성공했을 때만** 한다 — 실패했는데 전진시키면 그 사이 알림이 영영 사라진다.
+ */
+async function pollPersonFeed(gw, token, prefs) {
+  const url = `${gw}/api/ui/notify/feed` + (personSince ? `?since=${encodeURIComponent(personSince)}` : "");
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) return;                                 // 구 게이트웨이엔 이 엔드포인트가 없다(404) — 조용히 넘긴다
+  const data = await res.json();
+  const events = pickPersonEvents(data && data.items, personSeen, prefs);
+  if (!personSeen) personSeen = new Set();             // 첫 폴 = 기준선(위 pickPersonEvents 가 이미 빈 배열을 줬다)
+  rememberSeen(personSeen, events);
+  personSince = (data && data.now) || personSince;     // 서버 시계를 쓴다 — 앱 시계와 어긋나도 사건을 건너뛰지 않게
+  for (const b of planPersonBanners(events)) showBanner(b);
 }
 
 // ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────

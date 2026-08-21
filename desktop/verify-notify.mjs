@@ -35,13 +35,30 @@ const { app, Notification } = require("electron");
     const cold = notify.diffSessions(null, base);
     const events = notify.diffSessions(base, waiting);
     const plan = notify.planBanners(events);
+    // 사람 알림 종단 — 게이트웨이가 주어지면 **실제 HTTP 로** 피드를 받아 같은 판정을 태운다.
+    //  서버(notify-store)→REST→앱(pickPersonEvents)→Notification 가 실제로 이어지는지는 이 경로로만 확인된다.
+    let person = null;
+    const GW = process.env.VERIFY_GW || "", TOK = process.env.VERIFY_TOKEN || "";
+    if (GW && TOK) {
+      try {
+        const res = await fetch(GW + "/api/ui/notify/feed", { headers: { Authorization: "Bearer " + TOK } });
+        const data = await res.json();
+        const cold = notify.pickPersonEvents(data.items, null);            // 첫 폴 = 기준선
+        const evs = notify.pickPersonEvents(data.items, new Set());        // 그 다음 폴
+        const plan = notify.planPersonBanners(evs);
+        let pshown = 0;
+        for (const b of plan) { try { new Notification({ title: b.title, body: b.body }).show(); pshown++; } catch { /* 아래에서 센다 */ } }
+        person = { http: res.status, feed: (data.items || []).length, cold: cold.length, events: evs.length,
+                   planned: plan.length, shown: pshown, sample: plan.slice(0, 4).map((b) => b.title + " | " + b.body) };
+      } catch (e) { person = { error: String(e && e.message || e) }; }
+    }
     const supported = Notification.isSupported();
     let shown = 0, err = null;
     for (const b of plan) {
       try { const n = new Notification({ title: b.title, body: b.body }); n.show(); shown++; }
       catch (e) { err = String(e && e.message || e); }
     }
-    out({ ok: true, supported, appId: APP_ID, coldStart: cold.length, events: events.map((e) => e.kind), plan: plan.map((b) => ({ title: b.title, body: b.body })), shown, err,
+    out({ ok: true, supported, appId: APP_ID, coldStart: cold.length, events: events.map((e) => e.kind), plan: plan.map((b) => ({ title: b.title, body: b.body })), shown, err, person,
           bundleId: (process.platform === "darwin" ? (app.getName() || "") : ""), packaged: app.isPackaged });
     setTimeout(() => app.exit(0), 4000);   // 배너가 화면에 남을 시간을 준다(사람이 눈으로도 볼 수 있게)
   } catch (e) { out({ ok: false, error: String(e && e.stack || e) }); setTimeout(() => app.exit(1), 200); }
@@ -75,6 +92,17 @@ child.on("exit", (code) => {
   console.log(`전이 판정   : ${r.events.join(", ")}`);
   for (const b of r.plan) console.log(`배너        : [${b.title}] ${b.body}`);
   console.log(`실제 표시   : ${r.shown}/${r.plan.length}장`);
+  if (r.person) {
+    if (r.person.error) { console.error(`사람 알림   : 실패 — ${r.person.error}`); fail.push("사람 알림 종단이 실패했다"); }
+    else {
+      console.log(`사람 알림   : HTTP ${r.person.http} · 피드 ${r.person.feed}건 → 콜드스타트 ${r.person.cold}건 · 이후 ${r.person.events}건 → 배너 ${r.person.shown}/${r.person.planned}장`);
+      for (const s of r.person.sample) console.log(`            : ${s}`);
+      if (r.person.http !== 200) fail.push(`알림 피드가 ${r.person.http} 를 냈다`);
+      if (r.person.cold !== 0) fail.push("사람 알림 콜드스타트가 배너를 만들었다");
+      if (r.person.feed > 0 && r.person.events === 0) fail.push("피드는 왔는데 배너 이벤트가 0 — 판정이 전부 걸러냈다");
+      if (r.person.shown !== r.person.planned) fail.push("사람 알림 배너가 다 뜨지 않았다");
+    }
+  } else console.log(`사람 알림   : 건너뜀 (VERIFY_GW·VERIFY_TOKEN 을 주면 종단까지 확인한다)`);
   if (fail.length) { console.error("\n실패:\n - " + fail.join("\n - ")); process.exit(1); }
   console.log("\nPASS — 판정이 만든 문구가 실제 OS 배너로 떴다.");
 });

@@ -23,7 +23,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX } from "./notify.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
 
@@ -1654,7 +1654,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const on = trayMenuModel({ ...ready, notifyPrefs: { [NOTIFY.WAITING]: false } });
     const menu = on.find((m) => m.id === "notify");
     assert.ok(menu && Array.isArray(menu.submenu), "알림 서브메뉴가 없다 — 끌 수단 없는 알림은 만들지 않는다");
-    assert.equal(menu.submenu.length, 3);
+    assert.equal(menu.submenu.length, 4);
     assert.equal(menu.submenu.find((m) => m.id === `notify:${NOTIFY.WAITING}`).checked, false, "끈 설정이 체크로 남아 있다");
     assert.equal(menu.submenu.find((m) => m.id === `notify:${NOTIFY.DONE}`).checked, true, "설정이 없는 축은 기본 켜짐이다");
     assert.ok(!trayMenuModel({ cliFound: false }).some((m) => m.id === "notify"), "설치 전에는 못 쓰는 스위치를 보여주지 않는다");
@@ -1664,6 +1664,52 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(/submenu:\s*m\.submenu\.map/.test(main), "renderTray 가 서브메뉴를 그리지 않는다 — 항목이 조용히 사라진다");
     assert.ok(/id\.startsWith\("notify:"\)/.test(main), "알림 토글 클릭이 배선되지 않았다");
     assert.ok(/notifyPrefs\(\)/.test(main), "트레이가 현재 설정을 읽지 않는다");
+  });
+  t("A18 사람 알림 — 콜드스타트는 기준선만(지난 24시간이 배너로 쏟아지면 안 된다)", () => {
+    const items = [{ key: "comment:1", link: "#/projects2/p/7", text: { title: "밥이 나를 언급했어요", body: "확인해 주세요" } }];
+    assert.deepEqual(pickPersonEvents(items, null), [], "seen 이 null(첫 폴)인데 배너를 만들었다");
+    assert.equal(pickPersonEvents(items, new Set()).length, 1);
+  });
+  t("A19 사람 알림 — 이미 띄운 것은 다시 안 띄운다(커서만으로는 폴 경계 중복을 못 막는다)", () => {
+    const items = [{ key: "comment:1", link: "#/projects2/p/7", text: { title: "t", body: "b" } }];
+    const seen = new Set();
+    const first = pickPersonEvents(items, seen);
+    assert.equal(first.length, 1);
+    rememberSeen(seen, first);
+    assert.deepEqual(pickPersonEvents(items, seen), [], "같은 key 가 두 번 떴다");
+  });
+  t("A20 사람 알림 — 끄면 안 뜨고, key 기억은 상한에서 오래된 것부터 잊는다", () => {
+    const items = [{ key: "k1", text: { title: "t", body: "b" } }];
+    assert.deepEqual(pickPersonEvents(items, new Set(), { [NOTIFY.PERSON]: false }), []);
+    const seen = new Set();
+    rememberSeen(seen, Array.from({ length: SEEN_MAX + 50 }, (_, i) => ({ key: "k" + i })));
+    assert.equal(seen.size, SEEN_MAX);
+    assert.ok(!seen.has("k0"), "가장 오래된 key 가 남아 있다 — 상한이 안 먹었다");
+    assert.ok(seen.has("k" + (SEEN_MAX + 49)), "가장 최근 key 가 사라졌다");
+  });
+  t("A21 사람 알림 링크 — 해시 형태만 통과시킨다(서버가 준 값이라도 다시 본다)", () => {
+    assert.equal(personLink("#/projects2/p/7"), "#/projects2/p/7");
+    for (const bad of ["", null, "https://evil.example/x", "javascript:alert(1)", "#/a b", "#/" + "x".repeat(300)]) {
+      assert.equal(personLink(bad), null, String(bad));
+    }
+    assert.equal(pickPersonEvents([{ key: "k", link: "https://evil.example", text: { title: "t", body: "b" } }], new Set())[0].link, null,
+      "바깥 주소가 알림 클릭 대상으로 살아남았다");
+  });
+  t("A22 사람 알림 — 많으면 한 장으로 묶고, 묶음은 특정 화면으로 보내지 않는다", () => {
+    const ev = Array.from({ length: 5 }, (_, i) => ({ key: "k" + i, title: "t" + i, body: "b", link: "#/x" }));
+    const plan = planPersonBanners(ev);
+    assert.equal(plan.length, 1);
+    assert.equal(plan[0].event, null);
+    assert.match(plan[0].body, /5개/);
+  });
+  t("A23 배선 — 앱이 사람 알림 피드를 폴링하고, 실패하면 커서를 전진시키지 않는다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const fn = main.slice(main.indexOf("async function pollPersonFeed("));
+    assert.ok(/\/api\/ui\/notify\/feed/.test(fn), "알림 피드를 부르지 않는다");
+    const guardAt = fn.indexOf("if (!res.ok) return;");
+    const cursorAt = fn.indexOf("personSince =");
+    assert.ok(guardAt >= 0 && guardAt < cursorAt, "실패 가드보다 먼저 커서를 전진시킨다 — 그 사이 알림이 영영 사라진다");
+    assert.ok(/personSeen = null/.test(main), "로그아웃에서 기준선을 버리지 않는다 — 다시 로그인하면 과거가 쏟아진다");
   });
 }
 

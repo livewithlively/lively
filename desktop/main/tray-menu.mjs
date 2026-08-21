@@ -90,6 +90,7 @@ export function trayMenuModel(st) {
       { id: `notify:${NOTIFY.WAITING}`, label: "AI 가 확인을 기다릴 때", type: "checkbox", checked: !!np[NOTIFY.WAITING] },
       { id: `notify:${NOTIFY.DONE}`, label: "AI 가 작업을 마쳤을 때", type: "checkbox", checked: !!np[NOTIFY.DONE] },
       { id: `notify:${NOTIFY.EXITED}`, label: "세션이 예기치 않게 끝났을 때", type: "checkbox", checked: !!np[NOTIFY.EXITED] },
+      { id: `notify:${NOTIFY.PERSON}`, label: "사람이 나를 부를 때 (멘션·댓글·담당)", type: "checkbox", checked: !!np[NOTIFY.PERSON] },
     ] });
   }
   items.push({ type: "separator" });
