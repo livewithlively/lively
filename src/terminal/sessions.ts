@@ -32,7 +32,7 @@ import { mintAppToken } from "../apps/principal.js";
 import { writeAppHome, materializeAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, getSessionLabel, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, getSessionLabel, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
@@ -631,7 +631,11 @@ async function assertManage(user: LivelyUser, id: string): Promise<void> {
 // tmux 세션만 종료(권한·DB desired-state 미터치) — 회수(reaper)·관리자 회수가 각자 정책 적용 후 부른다.
 async function tmuxKill(id: string): Promise<void> {
   if (!ID_RE.test(id)) throw new HttpError(400, "세션 id 형식 오류");
-  await tmux(["kill-session", "-t", id]);
+  // ★이미 죽은 세션을 다시 죽이는 것은 **성공**이다(멱등). tmux 는 "can't find session" 으로 실패를 내는데,
+  //  그 예외가 그대로 500 으로 새어 나가 화면에선 보관(×)이 먹지 않는 것으로 보였다 — 하필 사람들이 가장 자주
+  //  보관하려는 것이 이미 끝나 tmux 가 사라진 세션이라, 보관이 필요한 자리에서만 실패했다(상민님 2026-08-21 실측).
+  try { await tmux(["kill-session", "-t", id]); }
+  catch (err) { if (!isSessionGoneError(err)) throw err; }
 }
 // #1059 F — reaper 전용 중앙 세션 회수: tmux 만 죽이고 **desired-state 는 보존**(org_session_state 유지 → restorable
 //  로 남아 열 때 lazy resume). 노드 세션 회수는 게이트웨이 라우트의 relayNodeOp{op:'kill'} 이 담당(F 는 소스별 dispatch).
