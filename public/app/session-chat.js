@@ -211,9 +211,10 @@ export function mountSessionChat(host, first, opts) {
             filesBtn.classList.toggle('sc-act-on', on);
         } });
     const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
-    // 지금 무엇으로 돌고 있나(모델·추론강도) — 터미널을 보고 있을 땐 입력창 아래 바가 통째로 숨어서
-    //  그 사실이 화면에서 사라진다(원준님 2026-08-20). 하네스 이름('claude') 옆이 그 자리다 — 이미 '어느 CLI로
-    //  떠 있나'를 말하는 칸이라, 같은 축의 나머지 두 값이 붙는 게 자연스럽다.
+    // 런타임 신원 — 하네스 · 모델 · 추론강도 · 노드를 **한 덩어리**로 묶은 알약(#1719, 원준님 2026-08-21).
+    //  종전엔 이 넷이 각각 다른 옷을 입고(하네스·모델은 mono, 상태·노드는 sans) 가운뎃점으로만 이어져
+    //  '애매하게 다른' 줄이었다. 구분은 글꼴이 아니라 **묶음**으로 한다 — 머리줄에 남는 축은 이제 둘뿐이다:
+    //  자주 바뀌는 **상태**(점+라벨)와, 잘 안 바뀌는 **무엇으로 도는가**(이 알약).
     //  ⚠ 여기 것은 **읽기 전용**이다. 바꾸는 자리는 입력창 아래 드롭다운 하나로 둔다 — 같은 조작을 두 자리에 두면
     //   어느 쪽이 진짜인지 묻게 된다(막다른 컨트롤 금지의 뒷면).
     const runEl = el('span', { class: 'sc-run', hidden: true });
@@ -223,7 +224,7 @@ export function mountSessionChat(host, first, opts) {
     //  한 번 더 적으면 같은 말이 세 자리를 차지하고, 길면(실측: 40자 넘는 프로젝트명) 조작부까지 밀어냈다.
     //  붙이기·바꾸기·떼기(#1749)는 사라지지 않고 [⋯ ▸ 이 세션] 으로 내려간다 — 세션 이름 바꾸기와 같은 자리다.
     paintTitle();
-    const head = el('div', { class: 'sc-head' }, el('div', { class: 'sc-head-l' }, dot, titleHost, chatBadge, el('span', { class: 'sc-meta' }, stateEl, target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null, runEl, target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)), el('div', { class: 'sc-head-r' }, termStatusEl, opts.onToggleFiles ? filesBtn : null, opts.terminalSrc && isBox ? [fixBtn, setBtn] : null, moreBtn));
+    const head = el('div', { class: 'sc-head' }, el('div', { class: 'sc-head-l' }, dot, titleHost, chatBadge, el('span', { class: 'sc-meta' }, stateEl, runEl)), el('div', { class: 'sc-head-r' }, termStatusEl, opts.onToggleFiles ? filesBtn : null, opts.terminalSrc && isBox ? [fixBtn, setBtn] : null, moreBtn));
     const chatHost = el('div', { class: 'sc-chat' });
     const termHost = el('div', { class: 'sc-term', hidden: true });
     const waitBar = el('div', { class: 'sc-wait', hidden: true });
@@ -255,6 +256,13 @@ export function mountSessionChat(host, first, opts) {
     //  내가 방금 고른 값이 여기로 되돌아오는 것이 그 변경이 실제로 먹혔다는 유일한 증거다.
     const SET_MODEL_RE = /Set model to\s+(.+?)(?:\s+and saved\b|$)/i;
     const setModel = (full) => setObserved('model', full.replace(/\s*\([^)]*\)\s*$/, '').trim() || full, full);
+    // ⚠ 하네스가 **스스로 만들어 끼운 줄**은 모델이 아니다. Claude Code 는 그런 줄의 model 에 `<synthetic>` 을 적는다 —
+    //  실측(2026-08-21, 최근 대화 80개): `<synthetic>` 45줄, 본문은 전부 "You've hit your session limit · resets …"
+    //  같은 **자기 안내문**이었다. 그대로 받으면 안내 한 줄이 진짜 모델을 덮어써 머리줄에 '<synthetic>' 이 뜬다
+    //  (원준님 신고). 꺾쇠로 감싼 값은 제공자의 모델 id 가 아니라 하네스의 표식이므로 통째로 무시한다 —
+    //  이렇게 하면 모르는 제공자(grok·gemini…)의 진짜 id 는 그대로 통과한다(허용목록으로 좁히지 않는 이유).
+    //  덮어쓰지 않을 뿐 **지우지도 않는다** — 안내가 떴다고 세션이 쓰던 모델이 바뀐 것은 아니다.
+    const realModelId = (m) => !!m.trim() && !/^<.*>$/.test(m.trim());
     // 처방전(#1719) — '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'가 앉는 자리. 입력칸 바로 위(askHost).
     const rxHost = el('div', { class: 'sc-rx-host' });
     // 대화창 ————
@@ -315,15 +323,28 @@ export function mountSessionChat(host, first, opts) {
         paintAxis('effort', selEffort, chipEffort, obsEffort, effortKo, effortKo);
         paintRunHead();
     }
-    //  머리줄(하네스 이름 옆) 표시 — **관측된 값만** 적는다. 아직 한 턴도 안 돌아 모르는 세션은 빈칸으로 둔다:
-    //   빈 자리가 틀린 값보다 낫다(카탈로그 기본값을 적으면 실제로 도는 것과 어긋난다).
-    //  보이는 조건은 termStatusEl 과 같다 — 터미널을 보고 있을 때만(대화 모드는 입력창 아래 바가 같은 사실을 이미 말한다).
+    //  알약 내용 — 왼쪽부터 '무엇이(하네스) · 어떤 모델로 · 어느 강도로 · 어디서(노드)'.
+    //   · 모델·추론강도는 **관측된 값만** 적는다. 아직 한 턴도 안 돌아 모르는 세션은 그 칸을 비운다 —
+    //     빈 자리가 틀린 값보다 낫다(카탈로그 기본값을 적으면 실제로 도는 것과 어긋난다).
+    //   · 그 둘은 **터미널을 보고 있을 때만** 넣는다(대화 모드는 입력창 아래 바가 같은 사실을 이미 말한다).
+    //     하네스·노드는 그 바가 말하지 않으므로 두 모드에서 늘 남는다 — 알약이 통째로 사라지지 않는 이유다.
     function paintRunHead() {
-        const vals = [obsModel ? prettyModel(obsModel) : '', obsEffort ? effortKo(obsEffort) : ''].filter(Boolean);
-        runEl.replaceChildren(...vals.flatMap((v) => [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: v })]));
-        if (vals.length)
-            runEl.title = '이 세션이 지금 쓰는 모델·추론강도예요 — 바꾸려면 [대화]에서 입력창 아래 칸으로 고르거나, 터미널에서 /model · /effort 를 치세요.';
-        runEl.hidden = termHost.hidden || !vals.length;
+        const onTerm = !termHost.hidden;
+        //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
+        const vals = [
+            { v: String(target.raw?.harness || '') },
+            { v: onTerm && obsModel ? prettyModel(obsModel) : '' },
+            { v: onTerm && obsEffort ? effortKo(obsEffort) : '' },
+            { v: target.node ? String(target.node) : '', cls: 'sc-run-node' },
+        ].filter((x) => !!x.v);
+        runEl.replaceChildren(...vals.flatMap((x, i) => {
+            const cell = el('span', x.cls ? { class: x.cls, text: x.v, title: x.v } : { text: x.v });
+            return i ? [el('span', { class: 'sc-sep', text: '·' }), cell] : [cell];
+        }));
+        runEl.title = onTerm && (obsModel || obsEffort)
+            ? '이 세션이 무엇으로 돌고 있는지예요 — 모델·추론강도를 바꾸려면 [대화]에서 입력창 아래 칸으로 고르거나, 터미널에서 /model · /effort 를 치세요.'
+            : '이 세션이 무엇으로 돌고 있는지예요.';
+        runEl.hidden = !vals.length;
     }
     //  tip = 칩에 걸 원문(줄인 모델 이름의 전체). 드롭다운이 서는 세션에선 칩이 숨으므로 안 쓰인다.
     function setObserved(a, v, tip) {
@@ -693,7 +714,7 @@ export function mountSessionChat(host, first, opts) {
             return;
         }
         if (o.type === 'assistant') {
-            if (o.message?.model)
+            if (o.message?.model && realModelId(String(o.message.model)))
                 setModel(prettyModel(String(o.message.model)));
             if (o.effort)
                 setObserved('effort', String(o.effort));
