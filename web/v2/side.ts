@@ -203,7 +203,7 @@ export interface SideHooks {
   onRenameSession?: (sessionId: string, label: string) => Promise<void>;
   /** 세션을 '지난 세션'으로 보냄(보관) — tmux 만 내리고 복원 좌표는 남긴다. 목록 재적재는 셸이 한다.
    *  휴지통으로 보내기·프로젝트 아카이브(#1851)도 같은 훅을 쓴다 — 어느 쪽이든 '서버가 바뀌었으니 다시 읽어라'다. */
-  onArchived?: () => void;
+  onArchived?: (sessionId?: string) => void;   // id 가 오면 그 세션은 **즉시** 지난 세션 취급(보관 ×)
   /** [새 작업] — **늘 새 탭**에 홈(시키는 자리)을 연다. 이미 열린 홈 탭으로 되돌아가지 않는다(그러면 쓰던 걸 덮는다). */
   onNewTask?: () => void;
   /** 통합검색(⌘K) 열기 — 지식·프로젝트·자료·세션·세션이력을 한 칸에서(web/v2/omni.ts). */
@@ -900,7 +900,10 @@ async function doArchive(s: Sess): Promise<void> {
     const q = '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : '');
     await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + q, { method: 'DELETE' });
     toast('지난 세션으로 보냈어요 — 열면 이어서 할 수 있습니다');
-    hooks.onArchived?.();
+    //  id 를 넘긴다 — 받는 쪽이 **서버 되읽기를 기다리지 않고** 이 세션을 곧바로 지난 세션으로 옮긴다.
+    //  종전엔 되읽기만 했는데, tmux 종료가 목록 API 에 반영되기까지 시차가 있어 몇 초 동안 그대로 살아 있는
+    //  것처럼 보였다(원준 2026-08-21 "새로고침해야 이동한다").
+    hooks.onArchived?.(s.id);
   } catch (e: any) { toast((e && e.message) || '보관하지 못했습니다', true); }
 }
 
