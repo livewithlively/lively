@@ -236,7 +236,10 @@ const appUi: Capability = {
     const key = input.page ? String(input.page) : pages[0].page_key;
     const a = await store.getUiAsset(id, key);
     if (!a) throw new HttpError(404, `UI 페이지 없음: ${key}`);
-    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: a.html, pages };
+    // csp = 매니페스트 선언(없으면 빈 객체 = 네트워크·프레임 0). 호스트(app-ui.ts)가 이걸로 srcdoc CSP 를 짓는다 —
+    //  선언에 없는 것은 브라우저가 막는다(우리 코드가 아니라 브라우저가 집행하는 경계).
+    const csp = ((app.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
+    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: a.html, pages, csp };
   },
 };
 

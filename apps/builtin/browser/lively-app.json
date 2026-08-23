@@ -1,0 +1,23 @@
+{
+  "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
+  "id": "browser",
+  "title": "웹 브라우저",
+  "version": "0.1.0",
+  "publisher": { "name": "Lively" },
+  "permissions": {
+    "scopes": [],
+    "tools": ["store_insert", "store_query", "store_update", "store_delete", "store_tables"]
+  },
+  "csp": {
+    "frame_domains": ["*"]
+  },
+  "data": {
+    "tables": [
+      { "name": "bookmarks", "columns": [{ "name": "title", "type": "text" }, { "name": "url", "type": "text" }] },
+      { "name": "visits", "columns": [{ "name": "title", "type": "text" }, { "name": "url", "type": "text" }] }
+    ]
+  },
+  "ui": {
+    "pages": [{ "key": "main", "title": "웹 브라우저", "entry": "ui/index.html", "display": ["inline", "fullscreen"] }]
+  }
+}
