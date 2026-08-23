@@ -15,6 +15,7 @@ import {
 } from './wiki-data.js';
 import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkRow, wkSection, wkTick } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
+import { wkColHead, wkDocCols, wkTableRow } from './wiki-table.js';   // #1841 프로젝트 표 문법
 
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
 function openFolderForm(cat: any, parentFolder: string, done: () => void) {
@@ -335,15 +336,21 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     const secActions: any[] = [];
     if (!sel.mode) secActions.push(el('button', { class: 'wk-sec-act', type: 'button', text: '선택',
       title: '여러 문서를 골라 프로젝트 연결·삭제', onclick: () => { sel.mode = true; paintLibrary(); } }));
-    const sec = wkSection('문서', { count: list.length, actions: secActions });
-    if (!list.length) sec.body.append(wkEmpty(topicFilter ? '이 주제의 문서가 없어요.' : f.type ? '이 유형의 문서가 없어요.' : '문서가 없어요.'));
+    // #1841 — 문서 목록은 프로젝트 표 문법(컬럼 헤더 + 행 + ⋯). 발췌는 제목 옆 한 줄, 선택 모드면 행 앞 체크박스.
+    const secHead = el('div', { class: 'wk-sec-head wk-doclist-head' },
+      el('span', { class: 'wk-sec-title', text: '문서' }), el('span', { class: 'wk-sec-count', text: String(list.length) }),
+      el('span', { class: 'wk-sec-sp' }), ...secActions);
+    const docBox = el('div', { class: 'card pjv-listboard wk-board wk-board-inline' });
+    if (!list.length) docBox.append(wkEmpty(topicFilter ? '이 주제의 문서가 없어요.' : f.type ? '이 유형의 문서가 없어요.' : '문서가 없어요.'));
     else {
-      for (const r of list) sec.body.append(wkRow(r, {
-        open: openDoc,
+      const cols = wkDocCols({ category: false });
+      const tbody = el('div', { class: 'pjv-tgroup-body wk-tbody' }, wkColHead(cols));
+      for (const r of list) tbody.append(wkTableRow(r, {
+        cols, open: openDoc,
         select: sel.mode ? { names: sel.names, onToggle: repaintBulk } : null,
         deck: sel.mode ? '' : wkDeck(r.body_md || '', 110),   // 발췌 한 줄 — 목록이 피드처럼 읽히게(#764v2)
-        metas: [r.is_wiki ? '인덱스' : null, !f.type && r.type ? (KN_TYPE_LABEL[r.type] || r.type) : null, relTime(r.updated_at)],
       }));
+      docBox.append(el('div', { class: 'pjv-tgroup wk-tgroup' }, tbody));
       if (!sel.mode) setWikiPeekList(list.map((r) => r.name));
     }
     // 주제 필터 크럼 — 색인에서 온 조종간(해제 ×).
@@ -352,7 +359,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
       el('span', { class: 'wk-topic-crumb-name', text: '「' + topicFilter.label + '」' }),
       el('button', { class: 'wk-topic-crumb-x', type: 'button', 'aria-label': '주제 필터 해제', title: '주제 필터 해제', text: '×',
         onclick: () => { topicFilter = null; paintLibrary(); } })) : null;
-    const wrap = el('div', { class: 'wk-doclist-wrap' }, ...[topicCrumb, typeRow, sec.el].filter(Boolean));
+    const wrap = el('div', { class: 'wk-doclist-wrap' }, ...[topicCrumb, typeRow, secHead, docBox].filter(Boolean));
     library.append(wrap);
   }
   paintLibrary();
