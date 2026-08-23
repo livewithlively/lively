@@ -24,7 +24,7 @@ const regenAgentsForList = async (listId: number | null) => {
   try { for (const pid of await projectIdsInList(listId)) await regenAgents(pid); } catch (e) { console.error("[regenAgentsForList] fail list=" + listId + ":", e); }
 };
 import {
-  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, getBoardFields,
+  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, setProjectArchived, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
@@ -112,12 +112,15 @@ const projectListV6Input = {
   categoryId: z.number().int().positive().optional(),
   status: z.enum(STATUSES).optional(),
   mine: z.boolean().optional(),
+  // #1851 아카이브 — exclude(기본: 보관한 프로젝트 제외) · include(보관 포함 전체) · only(보관한 것만).
+  archived: z.enum(["exclude", "include", "only"]).optional()
+    .describe("아카이브(보관) 프로젝트 처리 — exclude(기본: 제외) · include(포함) · only(보관한 것만). 보관은 project_archive_v6."),
 };
 type ProjectListV6Input = z.infer<z.ZodObject<typeof projectListV6Input>>;
 const projectListV6: Capability = {
   name: "project_list_v6",
   title: "프로젝트 목록(v6)",
-  description: "프로젝트(level=project)를 space/카테고리/status 로 최신순 조회. 웹 v6 프로젝트 탭 전용.",
+  description: "프로젝트(level=project)를 space/카테고리/status 로 최신순 조회. 보관(아카이브)한 프로젝트는 기본 제외 — archived=include|only 로 본다. 웹 v6 프로젝트 탭 전용.",
   scope: "memory",
   input: projectListV6Input,
   expose: {
@@ -130,6 +133,7 @@ const projectListV6: Capability = {
           categoryId: query.category ? Number(query.category) : undefined,
           status: query.status ? String(query.status) : undefined,
           mine: query.mine === "1" || query.mine === "true",
+          archived: query.archived === "include" || query.archived === "only" ? String(query.archived) as "include" | "only" : undefined,
         };
       } }],
   },
@@ -143,6 +147,7 @@ const projectListV6: Capability = {
       space: input.space, categoryId: input.categoryId, status: input.status,
       viewer: input.mine ? (ctx?.actor ?? user?.userId ?? null) : undefined,
       viewerVis,
+      archived: input.archived,
     });
     // 내 세션 수(프로젝트별) — 보드의 '내 세션' 칼럼을 '있으면 활성, 없으면 비활성'으로 칠하기 위한 신호.
     //  tmux 세션 목록 한 번 호출 → owned(@box_owner=나) 세션을 projectId(@box_project) 로 집계. 실패해도 목록은 그대로.
@@ -415,6 +420,36 @@ const projectSetStatusV6: Capability = {
     await assertProjectVisible(input.id, ctx);
     const project = await updateProjectStatus(input.id, input.status, writeCtx, input.status_raw ?? null);
     await regenAgents(input.id);
+    return { project };
+  },
+};
+
+// ── 아카이브(#1851) — 프로젝트를 통째로 보관하거나 되돌린다. 삭제가 아니다(태스크·팀원·세션·지식 연결 전부 그대로). ──
+//  보관하면 목록(project_list_v6 기본)·보드·새 셸 사이드바에서 빠지고 「아카이브」 화면에서만 보인다.
+//  가시성 게이트는 다른 쓰기와 같다(보이지 않는 것은 만질 수 없다 — 404).
+const projectArchiveV6Input = {
+  id: z.number().int().positive(),
+  archived: z.boolean().describe("true=아카이브로 보관 · false=보관 해제(평소 목록으로 복귀)"),
+};
+type ProjectArchiveV6Input = z.infer<z.ZodObject<typeof projectArchiveV6Input>>;
+const projectArchiveV6: Capability = {
+  name: "project_archive_v6",
+  title: "프로젝트 아카이브(v6)",
+  description: "프로젝트를 아카이브로 보관(archived=true)하거나 되돌린다(false). 삭제가 아니다 — 태스크·팀원·세션·지식 연결은 그대로 두고 평소 목록에서만 뺀다(project_list_v6 기본 제외, archived=include|only 로 조회). 감사 op=archive|unarchive.",
+  scope: "memory",
+  input: projectArchiveV6Input,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/archive"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return { id: parseId(req.params?.id), archived: b.archived === undefined ? true : !!b.archived };
+      } }],
+  },
+  handler: async (input: ProjectArchiveV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    await assertProjectVisible(input.id, ctx);
+    const project = await setProjectArchived(input.id, input.archived, writeCtx);
     return { project };
   },
 };
@@ -1302,7 +1337,7 @@ export const projectV6Capabilities: Capability[] = [
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   myTasksV6,   // #1232 정적 경로(/v6/my-tasks) — /projects/:id 계열과 세그먼트가 달라 무충돌이지만 순서 규칙대로 앞에
   projectTasksV6, // #1305 정적 경로(/v6/project-tasks) — 위와 같은 이유로 앞에
-  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
+  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectSetMembersV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];

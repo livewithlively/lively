@@ -95,6 +95,55 @@ export async function confirmSessionForget(opts) {
         extra: fate === 'all' || fate === 'some' ? sessionLogLink() : null,
     });
 }
+// ── 휴지통(#1851) — 지난 세션의 다음 단계. 잃는 것이 **없다**(표식 하나가 붙어 목록에서 빠질 뿐) → 위험 색 없이, 되돌릴 수 있다고 말한다. ──
+//  원준 2026-08-23: "휴지통으로 보낸다는 내용이 떠야" — 종전 '지울까요?'(완전 삭제) 창과 반드시 달라야 한다.
+export async function confirmSessionTrash(opts) {
+    const n = opts.n || 1;
+    return confirmDialog({
+        title: opts.title, confirmText: '휴지통으로', cancelText: '취소',
+        message: n > 1 ? `${n}개 세션이 목록에서 빠지고 휴지통으로 갑니다.` : '이 세션이 목록에서 빠지고 휴지통으로 갑니다.',
+        lines: [
+            '대화·설정은 그대로 남아요 — 휴지통에서 [되돌리기]를 누르면 지난 세션으로 돌아옵니다.',
+            '완전히 지우는 건 휴지통 안에서만 할 수 있어요.',
+        ],
+        note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
+    });
+}
+// ── 완전 삭제(휴지통 안에서만, #1851) ── 종전 '목록에서 지우기'(confirmSessionForget)와 잃는 것이 같다 — desired-state(되살리기
+//  좌표)가 지워지고 목록에서 영영 빠진다. 대화 기록이 남는지는 그 조직·하네스에 따라 다르므로 같은 판정(keepNote)을 쓴다.
+export async function confirmSessionPurge(opts) {
+    const policy = await sessionLogPolicy();
+    const fate = logFate(policy, harnessesOf(opts.sessions));
+    const n = opts.n || 1;
+    return confirmDialog({
+        title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
+        message: (n > 1 ? `${n}개 세션이 ` : '이 세션이 ') + '목록에서 영영 사라지고, [되살리기]로는 다시 열 수 없어요.',
+        note: keepNote(fate, policy),
+        extra: fate === 'all' || fate === 'some' ? sessionLogLink() : null,
+    });
+}
+/** 휴지통 조작 한 곳(#1851) — POST /api/ui/terminal/session-trash. ids 는 그 세션의 모든 이름(박스 id + 대화 uuid)을 넘긴다
+ *  (서버도 desired-state 의 uuid 를 덧붙이지만, 기록만 남은 세션은 프론트가 아는 uuid 가 전부다). */
+export async function sessionTrashOp(op, ids = []) {
+    const r = await api('/api/ui/terminal/session-trash', { method: 'POST', body: JSON.stringify({ op, ids }) });
+    return { done: Array.isArray(r && r.done) ? r.done : [], skipped: Array.isArray(r && r.skipped) ? r.skipped : [] };
+}
+/** 세션의 모든 이름 — 휴지통 표식은 두 이름에 다 붙어야 한다(views.ts mergeSessions 가 둘을 한 장으로 접는다). */
+export const sessionNames = (s) => [s.id, ...(s.logId ? [s.logId] : [])];
+// ── 프로젝트 아카이브(#1851) — 삭제가 아니라 '평소 화면에서 치우기'. 도는 세션이 있으면 멈춘다는 사실만 위험으로 말한다. ──
+export async function confirmProjectArchive(opts) {
+    return confirmDialog({
+        title: `「${opts.name}」을(를) 아카이브로 보낼까요?`, danger: opts.liveN > 0, confirmText: '아카이브로', cancelText: '취소',
+        message: opts.liveN > 0
+            ? `지금 돌고 있는 세션 ${opts.liveN}개는 그 자리에서 멈추고 지난 세션이 됩니다.`
+            : '이 프로젝트와 그 아래 세션이 사이드바·보드에서 빠집니다.',
+        lines: [
+            '태스크·팀원·지식 연결·세션 기록은 전부 그대로예요.',
+            '[아카이브] 화면에서 언제든 보관을 해제하면 원래 자리로 돌아옵니다.',
+        ],
+        note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
+    });
+}
 // ── 보관(reclaim=1) ── tmux 만 내리고 desired-state 는 남긴다. 잃는 것은 **돌던 실행뿐**이고,
 //  설정·대화 좌표가 DB 에 남아 [되살리기](POST …/restore)가 --resume 으로 그 대화를 이어 붙인다.
 //  그래서 이 약속만은 조직의 세션공유 설정과 무관하게 참이다(중앙 기록이 아니라 desired-state + 로컬 대화록에 기댄다).

@@ -12,7 +12,8 @@ import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { bySeen, drawSide as drawSideTree, markNav, projectOrder, sessText } from './side.js';
-import { dotCls, mergeSessions, projName, renderHome, renderInbox, renderSession } from './views.js';
+import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession } from './views.js';
+import { renderArchive, renderTrash } from './bins.js'; // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js'; // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { createTimeline } from '../timeline.js';
@@ -65,7 +66,8 @@ function canonSessionHash(hash) {
 function topSessionOf(projectId) {
     if (!(projectId > 0))
         return null;
-    const list = data.sessions.filter((s) => Number(s.projectId) === projectId).sort(bySeen);
+    // 휴지통에 있는 세션은 후보가 아니다(#1851) — 프로젝트를 눌렀는데 버린 세션이 열리면 안 된다.
+    const list = data.sessions.filter((s) => Number(s.projectId) === projectId && !isTrashedSess(s)).sort(bySeen);
     return list[0] || null;
 }
 /** 주소를 그 세션 것으로 바꾼다 — 라우터가 다시 돌아 셸을 그린다(프로젝트 주소는 거쳐 가는 문일 뿐이다).
@@ -316,8 +318,13 @@ export async function bootV2() {
             drawSide();
             tabsApi.paint();
             const at = tabsApi.active();
-            if (parseRoute(at.route).segs[0] === 'inbox')
+            const atPage = parseRoute(at.route).segs[0];
+            if (atPage === 'inbox')
                 renderInbox(at.center, data); // 확인할 것 — 20초 결로 따라온다
+            else if (atPage === 'archive')
+                renderArchive(at.center, data, binHooks); // 아카이브·휴지통도 같은 결(#1851)
+            else if (atPage === 'trash')
+                renderTrash(at.center, data, binHooks);
             for (const t of tabsApi.tabs) {
                 if (!t.chat)
                     continue;
@@ -347,6 +354,8 @@ export async function bootV2() {
         });
     }, 20000);
 }
+// 아카이브·휴지통 화면(#1851)의 배선 — 무엇을 바꾸든 서버가 정답이므로 다시 읽고 사이드바·탭을 되그린다.
+const binHooks = { onChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); } };
 // ── 데이터 ──
 // 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
 let lastLive = [];
@@ -355,7 +364,9 @@ async function loadData(opts) {
     const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
     const [pj, live, logs] = await Promise.all([
         // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
-        wantProj ? api('/api/ui/v6/projects').then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
+        //  archived=include(#1851) — 보관한 프로젝트도 받는다: 그 아래 세션이 '프로젝트 없는 세션'으로 떨어지지 않게, 그리고
+        //  「아카이브」 화면이 같은 데이터로 그려지게. 사이드바는 archived_at 을 보고 스스로 가른다(side.ts).
+        wantProj ? api('/api/ui/v6/projects?archived=include').then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
         // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
         api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
         api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => null),
@@ -366,6 +377,7 @@ async function loadData(opts) {
             // created_at — 사이드바가 '방금 만든 프로젝트'를 잠깐 맨 위에 세울 때 쓴다(side.ts freshMs).
             //  ⚠ 이 map 은 화이트리스트다. 서버가 주더라도 여기 없으면 화면엔 없는 값이다(#1819 실측: 정렬이 안 먹었다).
             created_at: p.created_at ?? null,
+            archived_at: p.archived_at ?? null, // #1851 아카이브 표식
             created_by: p.created_by != null ? String(p.created_by) : null, member_ids: Array.isArray(p.members) ? p.members.map((m) => String(m && m.member_id != null ? m.member_id : m)) : [] }));
         projLoadedAt = Date.now();
     }
@@ -420,6 +432,10 @@ function titleFor(route) {
         return { title: '홈', noAside: true };
     if (p === 'inbox')
         return { title: '확인할 것', noAside: true };
+    if (p === 'archive')
+        return { title: '아카이브', noAside: true }; // #1851
+    if (p === 'trash')
+        return { title: '휴지통', noAside: true };
     if (p === 'connect')
         return { title: segs[1] ? '앱 연결' : '외부 앱 연결', noAside: true };
     if (p === 'liv')
@@ -562,7 +578,7 @@ async function renderRoute(tab) {
     const seq = ++tab.seq;
     const { segs, raw, params } = parseRoute(tab.route);
     const page = segs[0] || '';
-    markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === 'connect' ? 'connect' : page === '' || page === 'dashboard' ? 'home' : '');
+    markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === 'connect' ? 'connect' : page === 'archive' ? 'archive' : page === 'trash' ? 'trash' : page === '' || page === 'dashboard' ? 'home' : '');
     try {
         if (page === '' || page === 'dashboard') {
             renderHome(tab.center, data);
@@ -571,6 +587,16 @@ async function renderRoute(tab) {
         else if (page === 'inbox') {
             markActive('inbox');
             renderInbox(tab.center, data);
+            tab.aside.replaceChildren();
+        }
+        else if (page === 'archive' || page === 'trash') {
+            // 아카이브·휴지통(#1851) — 사이드바 발치의 두 행이 여는 화면. ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
+            //  이 분기가 그보다 **앞에** 서야 한다(뒤에 두면 WIKI 앱 프레임의 옛 휴지통이 열린다 — 그쪽은 화면 안 링크로 간다).
+            markActive(page);
+            if (page === 'archive')
+                renderArchive(tab.center, data, binHooks);
+            else
+                renderTrash(tab.center, data, binHooks);
             tab.aside.replaceChildren();
         }
         else if (page === 'connect') {
@@ -708,7 +734,7 @@ function activeKey() {
     // 부작용 없는 조회 — 부팅 중(활성 탭 확정 전)의 drawSide 가 탭을 만들어 버리면 딥링크가 죽는다(실측).
     const t = tabsApi ? tabsApi.current() : null;
     const cur = parseRoute(t ? t.route : location.hash);
-    return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'connect' ? 'connect' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
+    return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
 // ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
 //  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고

@@ -140,6 +140,9 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       : k === 'home' ? ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5']
       : k.startsWith('p:') ? ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']
       : k.startsWith('s:') ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z']
+      // 아카이브(상자)·휴지통(#1851) — 사이드바 발치의 두 행과 같은 글리프(side.ts glyph)
+      : k === 'raw:archive' ? ['M3 6h18v4H3z', 'M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9', 'M10 14h4']
+      : k === 'raw:trash' ? ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13', 'M10 11v6M14 11v6']
       : ['M4 5h16v12H4z', 'M4 9h16'];
     // 상태는 **아이콘 색**으로 말한다(원준 2026-08-20) — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트.
     //  글자·바탕은 '켜진 탭인가'만 말하므로 두 축이 섞이지 않는다.

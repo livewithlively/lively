@@ -34,6 +34,9 @@ const when = (ms) => (ms ? relTime(new Date(ms).toISOString()) : '');
 //    사용자에겐 넷 다 "다시 이어서 할 수 있는 지난 세션"이라 한 묶음으로 다룬다(구분은 상태점·툴팁·세션 화면이 말한다).
 export const isLiveSess = (s) => s.live && s.alive;
 export const isPastSess = (s) => !isLiveSess(s);
+// 휴지통(#1851) — 멈춘 세션 중 사람이 휴지통으로 보낸 것. 사이드바·홈·확인할 것 어디에도 안 나오고 휴지통 화면에만 있다.
+export const isTrashedSess = (s) => !!s.trashedAt;
+export const isArchivedProj = (p) => !!(p && p.archived_at);
 /** 그 세션이 '하던 일' — 하네스 pane 제목이 정본이고, 없으면(멈춘 세션) 중앙 기록의 대화 제목(= 처음 시킨 말). */
 export const sessWork = (s) => String((s.raw && s.raw.title) || s.logTitle || '').trim();
 /** 화면에 쓸 세션 이름 — 이름이 프로젝트명 그대로면 '하던 일'이 그 자리를 받는다(같은 이름 대여섯 줄 방지). */
@@ -104,7 +107,7 @@ function nowList(data) {
     const live = data.sessions.filter(isLiveSess).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen);
     // 지난 세션(#1808) — 홈에서 **이어서 하기**로 곧장 갈 수 있어야 한다. 되살리는 건 소유자만 가능하므로(서버
     //  restore/resume 이 owner-gated) 내 것만 올린다. 넷까지 — 그 이상은 사이드바의 '지난 세션'과 AI 세션 앱이 받는다.
-    const past = data.sessions.filter((s) => isPastSess(s) && s.owned).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 4);
+    const past = data.sessions.filter((s) => isPastSess(s) && s.owned && !isTrashedSess(s)).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 4);
     if (!live.length && !past.length)
         return el('div', {});
     const waits = live.filter((s) => s.stateKey === 'waiting');
@@ -189,6 +192,7 @@ export function mergeSessions(liveRows, logRows) {
             node: r.node && typeof r.node === 'object' ? (String(r.node.id || '') || null) : (r.node ? String(r.node) : null),
             live: true, alive: !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
             lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
+            trashedAt: r.trashedAt ? String(r.trashedAt) : null, // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
         };
         out.set(s.id, s);
         if (r.claudeSessionId && !byUuid.has(String(r.claudeSessionId)))
@@ -206,11 +210,14 @@ export function mergeSessions(liveRows, logRows) {
                 owner.logTitle = String(r.title); // 이름 자리의 폴백(위 logTitle 주석)
             if (!owner.projectId && r.project_id != null)
                 owner.projectId = Number(r.project_id);
+            if (!owner.trashedAt && r.trashed_at)
+                owner.trashedAt = String(r.trashed_at); // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
             continue;
         }
         out.set(id, {
             id, label: String(r.title || id), projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
             live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,
+            trashedAt: r.trashed_at ? String(r.trashed_at) : null,
         });
     }
     return [...out.values()];

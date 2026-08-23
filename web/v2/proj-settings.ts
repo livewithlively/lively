@@ -8,6 +8,7 @@
 //  저장은 칸을 떠날 때(blur)·[저장]에서 곧바로 — '적용' 단계를 따로 두지 않는다(사람이 잊는다).
 import { api, el, toast } from '../core.js';
 import { pnIcon } from './panes-parts.js';
+import { confirmProjectArchive } from '../session-actions.js';   // #1851 — [보관] 확인창(사이드바 우클릭과 같은 문구)
 
 export interface ProjSettingsOpts {
   id: number;
@@ -123,6 +124,27 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
   const sec = (title: string, hint: string, ...kids: any[]): HTMLElement =>
     el('section', { class: 'pn-set-sec' }, el('h3', { text: title }), el('p', { class: 'pn-fine', text: hint }), ...kids);
 
+  // ── 보관(#1851) — 통째로 아카이브로 / 해제. 삭제가 아니라 '평소 화면에서 치우기'. ──
+  //  도는 세션 수는 셸이 들고 있는 목록이 아니라 상세 응답엔 없으므로 여기선 묻지 않고(0), 사이드바 경로가 그 숫자를 안다.
+  //  보내고 나면 창을 닫고 아카이브 화면으로 — 사라진 것이 어디로 갔는지 바로 보여 준다.
+  const archived = !!p.archived_at;
+  const archBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: archived ? '보관 해제' : '아카이브로 보내기',
+    title: archived ? '원래 자리(사이드바·보드)로 되돌립니다' : '사이드바·보드에서 빼고 [아카이브]에 둡니다' }) as HTMLButtonElement;
+  archBtn.onclick = () => {
+    void (async () => {
+      if (!archived && !await confirmProjectArchive({ name: String(p.name || ''), liveN: 0 })) return;
+      archBtn.disabled = true;
+      try {
+        await api('/api/ui/v6/projects/' + id + '/archive', { method: 'POST', body: JSON.stringify({ archived: !archived }) });
+        toast(archived ? '보관을 해제했어요 — 원래 자리로 돌아왔어요.' : '아카이브로 보냈어요.');
+        p.archived_at = archived ? null : new Date().toISOString();
+        opts.onChanged?.();
+        close();
+        if (!archived) location.hash = '#/archive';
+      } catch (e: any) { archBtn.disabled = false; toast((archived ? '보관을 해제하지' : '아카이브로 보내지') + ' 못했어요 — ' + (e?.message || e), true); }
+    })();
+  };
+
   panel.replaceChildren(
     el('header', { class: 'pn-modal-h' },
       el('h2', { text: '프로젝트 정보' }),
@@ -131,7 +153,8 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
       sec('이름', '사이드바·탭에 보이는 이름입니다.', nameIn),
       sec('상태', '프로젝트가 지금 어느 단계인지 알려 줍니다.', stateRow),
       sec('본문', '무엇을 하는 프로젝트인지 적어 둡니다. 세션과 리브가 이 글을 읽고 일합니다.', desc, el('div', { class: 'pn-set-foot' }, descSave)),
-      sec('할 일', '큰 덩어리만 적어 두면 충분합니다. 자세한 것은 세션이 만들어 줍니다.', taskIn, taskList)),
+      sec('할 일', '큰 덩어리만 적어 두면 충분합니다. 자세한 것은 세션이 만들어 줍니다.', taskIn, taskList),
+      sec('보관', archived ? '지금 아카이브에 있어요. 해제하면 사이드바·보드에 다시 보입니다.' : '끝났거나 한동안 안 볼 프로젝트는 통째로 치워 둘 수 있어요. 태스크·세션·지식 연결은 그대로 남습니다.', el('div', { class: 'pn-set-foot' }, archBtn))),
     el('footer', { class: 'pn-modal-f' },
       el('a', { class: 'btn-text', href: '#/projects/' + id, onclick: () => close(), text: '전체 프로젝트 화면 열기 ↗' }),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: close })));

@@ -13,7 +13,8 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { getRuntimeConfig } from "../org/store.js";
-import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession } from "../v6/session-log-store.js";
+import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession, type SessionListRow } from "../v6/session-log-store.js";
+import { trashMapFor } from "./session-trash.js";   // #1851 — 내 세션 목록에 휴지통 표식
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import { parseWindow } from "../terminal/harness-io/parse-cache.js";
@@ -95,7 +96,21 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const requester = idOf(userOf(req));
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
     res.setHeader("Cache-Control", "no-store");
-    res.json({ sessions: await listSessionsForOwner(requester) });
+    // #1851 휴지통 — 내 표식: 휴지통이면 trashed_at, 완전 삭제(purged)면 행을 뺀다(terminal/sessions 와 같은 규칙).
+    let rows = await listSessionsForOwner(requester);
+    try {
+      const marks = await trashMapFor(requester);
+      if (marks.size) {
+        rows = rows.filter((r) => {
+          const m = marks.get(r.session_id);
+          if (!m) return true;
+          if (m.purged) return false;
+          (r as SessionListRow & { trashed_at?: string }).trashed_at = m.trashed_at;
+          return true;
+        });
+      }
+    } catch { /* 표식 조회 실패 — 휴지통 없이 나간다 */ }
+    res.json({ sessions: rows });
   }));
 
   // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함). 인가: 프로젝트 멤버.
