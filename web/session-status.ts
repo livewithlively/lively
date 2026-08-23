@@ -105,7 +105,11 @@ export const SESS_DEAD_KEYS = ['restorable', 'oom_killed', 'exited_user'] as con
  *  이어받기는 곧 '새 세션 만들기'인데, 지난 대화를 읽으러 들어온 사람에게 세션을 하나 띄우는 건 과하다.
  *  그건 버튼으로 남긴다(사용자가 뜻을 밝힌 뒤에).
  */
-export function shouldRestoreOnOpen(s: { restorable?: boolean; owned?: boolean } | null | undefined): boolean {
-  return !!s && !!s.restorable && !!s.owned;
+//  ⚠ trashed — **휴지통에 있는 세션은 열어도 되살리지 않는다**(#1851, 원준 2026-08-24). 휴지통 행의 제목은 '내용이 뭔지
+//  보려고' 누르는 자리인데, 그 클릭이 새 박스로 복원되고(같은 대화 uuid resume) 목록 병합이 휴지통 표식을 그 라이브
+//  박스에 접어 "휴지통에 있는데 돌고 있는" 행을 만들었다 — [완전 삭제]가 '아직 돌고 있는 세션'으로 막히는데 휴지통엔
+//  ×(멈춤)가 없어 막다른 길이었다. 휴지통 것은 기록 화면으로만 열고, 되살리려면 [되돌리기]를 거친다.
+export function shouldRestoreOnOpen(s: { restorable?: boolean; owned?: boolean; trashed?: boolean } | null | undefined): boolean {
+  return !!s && !!s.restorable && !!s.owned && !s.trashed;
 }
 
