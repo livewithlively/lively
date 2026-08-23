@@ -10,7 +10,9 @@
 //   · 흐린 회색 본문 금지 — 완료·조용한 프로젝트도 이름은 같은 잉크색이고, 상태는 작은 태그·시각으로만 구분한다
 //     (연회색 글씨가 목록의 절반을 차지하면 전체가 바래 보인다).
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv } from '../core.js';
+import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
+// #1850 — 기록 완전 삭제. 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약).
+import { confirmSessionPurge, purgeSessionRecord, purgedToast } from '../session-actions.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, type Proj, type Sess, type V2Data } from './views.js';
@@ -140,12 +142,14 @@ let filterOpen = false;            // [필터] 팝오버 — 열림은 잠깐의
 let outsideBound = false;
 
 // 위계 아이콘 — 프로젝트는 폴더(펼치면 열린 폴더), 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
-function glyph(kind: 'folder' | 'folder-open' | 'chat', cls: string): SVGElement {
+function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'x', cls: string): SVGElement {
   const D: Record<string, string[]> = {
     folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
     // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
     'folder-open': ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
     chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
+    // 기록 완전 삭제(#1850) — 같은 24 뷰박스·같은 붓(스트로크)으로 위 둘과 한 벌.
+    x: ['M6 6l12 12', 'M18 6L6 18'],
   };
   return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
 }
@@ -413,5 +417,43 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
     s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),
     // 오른쪽 끝은 **한 자리**로 고정한다 — 상태어를 조건부로 넣으면 행마다 길이가 달라 목록이 들쭉날쭉해진다(상민님 2026-08-18).
     //  상태는 왼쪽 점이, 개수는 프로젝트 행이 말한다. 여기는 '누르면 대화로 간다'는 표식만(hover 때 보인다).
-    glyph('chat', 'v2-ss-go'));
+    glyph('chat', 'v2-ss-go'),
+    purgeBtn(s));
+}
+
+// 기록 완전 삭제 단추(#1850) — **끝난 세션에만**, 그리고 **내 세션에만** 붙는다.
+//  · 왜 끝난 세션만인가: 도는 세션을 여기서 지우면 진행 중인 작업의 기록이 사라지는 데다, 묘비 때문에
+//    그 세션은 이후로도 기록되지 않는다(session-record-purge-1850). 사이드바는 스쳐 지나며 누르는 자리라
+//    그런 결정을 내리기에 맞지 않다 — 도는 세션은 세션 화면 상단바 [기록 삭제]에서 확인창을 보고 지운다.
+//    사람이 "지난 세션으로 보낸 다음 완전 삭제"라고 말한 그 순서를 화면이 그대로 강제한다(원준 2026-08-23).
+//  · 좌표: 라이브 행에 접힌 기록이면 logId, 기록 행 자체면 그 id 가 곧 대화 uuid 다. 없으면 지울 것이 없다.
+function purgeBtn(s: Sess): HTMLElement | null {
+  const sid = s.logId || (!s.live ? s.id : '');
+  if (!s.owned || !sid || (s.live && s.alive)) return null;
+  const node = (s.logNode ?? s.node) || '';
+  const b = el('button', {
+    class: 'v2-ss-del', type: 'button', 'aria-label': '이 세션 기록 완전 삭제',
+    title: '이 세션의 대화 기록을 완전히 지웁니다(되돌릴 수 없어요).',
+  }, glyph('x', 'v2-ss-delx')) as HTMLButtonElement;
+  b.addEventListener('click', async (e) => {
+    // ⚠ 행 전체가 <a> 라 이 둘이 없으면 확인창을 띄우면서 **동시에 그 세션으로 이동한다**.
+    e.preventDefault(); e.stopPropagation();
+    const okd = await confirmSessionPurge({
+      title: '이 세션 기록을 완전히 지울까요?',
+      lines: [s.label || sid],
+      remoteNode: node || null,
+    });
+    if (!okd) return;
+    b.disabled = true;
+    try {
+      toast(purgedToast(await purgeSessionRecord(sid, node)));
+      // 목록·카운트를 서버 기준으로 다시 맞춘다. side → main 을 직접 import 하면 순환이라(import 경계 게이트)
+      //  이벤트로 알린다 — main 이 듣고 loadData→drawSide 한다.
+      window.dispatchEvent(new CustomEvent('lively:session-purged', { detail: { id: s.id } }));
+    } catch (err: any) {
+      toast(err?.message || '지우지 못했습니다.');
+      b.disabled = false;
+    }
+  });
+  return b;
 }

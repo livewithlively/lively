@@ -598,3 +598,14 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tr-md { font-size: 12.5px; line-height: 1.7; max-height: 480px; overflow: auto; }
 .tr-md .md > :first-child { margin-top: 0; }
 .tr-body .btn { align-self: flex-start; }
+
+/* 세션 행 기록 완전 삭제(#1850) — 호버 때만 나타난다. 끝난 세션·내 세션에만 붙으므로
+   평소 목록은 종전과 똑같이 조용하고, 지우려고 행에 손을 얹은 사람에게만 보인다.
+   ⚠ 위험한 동작이라 '가는 표식'(v2-ss-go)과 색으로 구분한다 — 호버하면 빨강. */
+.v2-ss-del { width: 20px; height: 20px; flex: none; display: inline-grid; place-items: center;
+  border: 0; background: none; padding: 0; cursor: pointer; opacity: 0; border-radius: 5px; }
+.v2-ss-row:hover .v2-ss-del { opacity: 1; }
+.v2-ss-del:hover { background: var(--danger-tint, #FDECEC); }
+.v2-ss-del:disabled { opacity: .4; cursor: default; }
+.v2-ss-delx { width: 13px; height: 13px; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 2; stroke-linecap: round; }
+.v2-ss-del:hover .v2-ss-delx { stroke: var(--danger, #dc2626); }
