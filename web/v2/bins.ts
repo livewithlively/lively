@@ -10,7 +10,7 @@
 import { api, el, relTime, sv, toast } from '../core.js';
 // 완전 삭제는 두 갈래(#1851 ⟶ #1850): 중앙 기록이 있는 세션은 #1850 의 범위 선택 확인창 + 기록 파기(purgeSessionRecord)를 그대로
 //  쓰고, 그 위에 되살리기 좌표(desired-state)까지 지우는 휴지통 op('purge')를 얹는다. 기록이 없는 세션은 좌표만 지운다.
-import { confirmSessionPurge, confirmSessionPurgeLocal, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp } from '../session-actions.js';
+import { confirmSessionPurge, confirmSessionPurgeLocal, confirmTrashEmpty, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp } from '../session-actions.js';
 import { sessText } from './side.js';
 import { dotCls, isArchivedProj, isLiveSess, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 
@@ -27,7 +27,9 @@ function sessRow(s: Sess, pn: string, actions: HTMLElement[] = [], tail?: string
   return el('div', { class: 'v2-bin-row' + (isLiveSess(s) ? '' : ' past') },
     dot(s.stateKey),
     el('a', { class: 'tw', href: '#/s/' + encodeURIComponent(s.id), title: (s.label || '') + '\n세션 대화를 엽니다' },
-      el('span', { class: 't', text: t.main }), t.sub ? el('span', { class: 'p', text: t.sub }) : null),
+      el('span', { class: 't', text: t.main }),
+      // 부제('하던 일')가 이름의 되풀이면 생략 — 이름이 첫 지시에서 잘려 나온 세션은 둘이 같은 문장으로 시작한다(실측).
+      t.sub && !t.sub.startsWith(t.main.replace(/…$/, '')) && !t.main.startsWith(t.sub) ? el('span', { class: 'p', text: t.sub }) : null),
     el('span', { class: 'st', text: tail || `${s.stateLabel} · ${whenMs(s.lastSeen)}` }),
     ...actions);
 }
@@ -44,10 +46,11 @@ export function renderArchive(host: HTMLElement, data: V2Data, hooks: BinHooks =
     const listEl = el('div', { class: 'v2-bin-list' });
     const paintList = (all: boolean): void => {
       const head = all ? ss : ss.slice(0, MAX_ROWS);
+      // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 배열 스프레드로.
       listEl.replaceChildren(
         ...head.map((s) => sessRow(s, p.name)),
-        ss.length > head.length ? el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${ss.length - head.length}개 더 보기`, onclick: () => paintList(true) }) : null,
-        !ss.length ? el('p', { class: 'v2-bin-empty', text: '이 프로젝트엔 세션이 없어요.' }) : null);
+        ...(ss.length > head.length ? [el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${ss.length - head.length}개 더 보기`, onclick: () => paintList(true) })] : []),
+        ...(!ss.length ? [el('p', { class: 'v2-bin-empty', text: '이 프로젝트엔 세션이 없어요.' })] : []));
     };
     paintList(false);
     const unarch = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '보관 해제',
@@ -67,9 +70,9 @@ export function renderArchive(host: HTMLElement, data: V2Data, hooks: BinHooks =
         unarch),
       listEl);
   };
-  host.replaceChildren(el('div', { class: 'v2-center v2-bin' },
+  host.replaceChildren(el('div', { class: 'v2-center v2-binpage' },
     el('h1', { class: 'v2-title', text: '아카이브' }),
-    el('p', { class: 'v2-desc', text: '통째로 보관한 프로젝트예요. 아래 세션은 그대로 열어 볼 수 있고, [보관 해제]를 누르면 원래 자리로 돌아갑니다.\n보내는 길: 사이드바 프로젝트 행을 오른쪽 클릭 ▸ [아카이브로 보내기], 또는 프로젝트 정보 창의 [보관].' }),
+    el('p', { class: 'v2-desc', text: '통째로 보관한 프로젝트예요. 아래 세션은 그대로 열어 볼 수 있고, [보관 해제]를 누르면 원래 자리로 돌아갑니다.\n보내는 길: 사이드바 프로젝트 행을 오른쪽 클릭 ▸ [아카이브로 보내기], 또는 프로젝트 상세 창의 [보관].' }),
     projs.length
       ? el('div', { class: 'v2-bin-cards' }, ...projs.map(card))
       : el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '보관한 프로젝트가 없어요.' }),
@@ -115,7 +118,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
         await sessionTrashOp('purge', sessionNames(s));   // 되살리기 좌표까지 — 기록만 지우면 '지난 세션'으로 되돌아온다
         toast(purgedToast(r));
       } else {
-        if (!await confirmSessionPurgeLocal({ title: `「${name}」을(를) 완전히 지울까요?`, sessions: [{ harness: String((s.raw && s.raw.harness) || '') }] })) return;
+        if (!await confirmSessionPurgeLocal({ title: `「${name}」을(를) 완전히 지울까요?` })) return;
         await sessionTrashOp('purge', sessionNames(s));
         toast('완전히 지웠어요.');
       }
@@ -126,7 +129,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
     if (!ss.length) return;
     // 비우기는 한 번의 확인으로 전부 — 범위 선택(지식·프로젝트)은 세션마다 달라 여기서 묻지 않는다: **대화 기록만** 지운다
     //  (기본값과 같다). 지식·프로젝트까지 함께 정리하려면 행별 [완전 삭제]로.
-    if (!await confirmSessionPurgeLocal({ title: '휴지통을 비울까요?', n: ss.length, sessions: ss.map((s) => ({ harness: String((s.raw && s.raw.harness) || '') })) })) return;
+    if (!await confirmTrashEmpty({ n: ss.length, withLog: ss.filter((s) => !!logSid(s)).length })) return;
     let logs = 0; let failed = 0;
     for (const s of ss) {
       const sid = logSid(s);
@@ -154,10 +157,12 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   const projSec = el('section', { class: 'v2-bin-sec', hidden: true },
     el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: '삭제된 프로젝트' })),
     projHost);
+  // 삭제된 프로젝트는 수십·수백 건이 쌓여 있다(실측 dev 199건) — 최근 것만 펴고 나머지는 눌러서 본다.
+  const PJ_HEAD = 12;
   void deletedProjects().then((rows) => {
     if (!projHost.isConnected) return;
     projSec.hidden = !rows.length;
-    projHost.replaceChildren(...rows.map((r) => {
+    const paintPj = (all: boolean): void => projHost.replaceChildren(...(all ? rows : rows.slice(0, PJ_HEAD)).map((r) => {
       const btn = el('button', { class: 'btn-text', type: 'button', text: '복원', title: '삭제 시점의 프로젝트 본체를 되살립니다(태스크·연결은 함께 지워져 돌아오지 않아요)' }) as HTMLButtonElement;
       btn.onclick = () => {
         btn.disabled = true;
@@ -170,10 +175,11 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
         el('span', { class: 'tw' }, el('span', { class: 't', text: r.label })),
         el('span', { class: 'st', text: '삭제 ' + when(r.at) }),
         btn);
-    }));
+    }), ...(!all && rows.length > PJ_HEAD ? [el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${rows.length - PJ_HEAD}개 더 보기`, onclick: () => paintPj(true) })] : []));
+    paintPj(false);
   });
 
-  host.replaceChildren(el('div', { class: 'v2-center v2-bin' },
+  host.replaceChildren(el('div', { class: 'v2-center v2-binpage' },
     el('div', { class: 'v2-bin-top' },
       el('div', {},
         el('h1', { class: 'v2-title', text: '휴지통' }),

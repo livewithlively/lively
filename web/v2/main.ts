@@ -277,7 +277,12 @@ export async function bootV2(): Promise<void> {
 }
 
 // 아카이브·휴지통 화면(#1851)의 배선 — 무엇을 바꾸든 서버가 정답이므로 다시 읽고 사이드바·탭을 되그린다.
-const binHooks = { onChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); } };
+const binHooks = { onChanged: () => { void loadData({ projects: true }).then(() => {
+  drawSide(); tabsApi?.paint();
+  // 그 화면 자체도 다시 — 되돌리기·완전 삭제 뒤 행이 그 자리에 남아 있으면 '안 됐나?'로 읽힌다(20초 결을 기다리지 않는다).
+  const at = tabsApi?.active();
+  if (at) { const pg = parseRoute(at.route).segs[0]; if (pg === 'archive') renderArchive(at.center, data, binHooks); else if (pg === 'trash') renderTrash(at.center, data, binHooks); }
+}); } };
 
 // ── 데이터 ──
 // 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
@@ -595,7 +600,8 @@ function drawSide(): void {
     // 사이드바에서 고친 이름은 **화면 전체**에 반영한다 — 목록만 바뀌고 탭·대화창 제목이 옛 이름이면 그게 더 혼란스럽다.
     onRenameSession: (id, label) => renameSessionEverywhere(id, label),
     // 보관(×) 뒤 — 그 세션은 이제 '지난 세션'이라 목록의 자리가 바뀐다. 서버가 정답이므로 다시 읽는다.
-    onArchived: () => { void loadData().then(() => { drawSide(); tabsApi?.paint(); }); },
+    //  휴지통·아카이브(#1851)도 같은 훅으로 온다 — 그 화면이 열려 있으면 그 화면까지 다시 그린다(binHooks).
+    onArchived: () => binHooks.onChanged(),
     // [새 작업] — **늘 새 탭**에 홈을 연다. 이미 열린 홈 탭으로 되돌아가면(find→activate) 거기 쓰던 지시가 덮이고,
     //  '새로 시작한다'는 이름과 동작이 어긋난다. 빈 홈 탭이 남으면 세션을 열 때 그 자리가 세션이 되어 정리된다.
     onNewTask: () => { tabsApi?.add('#/'); },

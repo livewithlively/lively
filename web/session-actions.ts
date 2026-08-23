@@ -117,18 +117,25 @@ export async function confirmSessionTrash(opts: { title: string; n?: number }): 
   });
 }
 
-// ── 완전 삭제(휴지통 안에서만, #1851) — **중앙 기록이 없는** 세션용(되살리기 좌표만 있는 것). 잃는 것은 종전 '목록에서 지우기'
-//  (confirmSessionForget)와 같다 — desired-state 가 지워지고 목록에서 영영 빠진다. 대화 기록이 남는지는 그 조직·하네스에 따라
-//  다르므로 같은 판정(keepNote)을 쓴다. 중앙 기록이 있는 세션은 아래 #1850 의 confirmSessionPurge(범위 선택)가 맡는다.
-export async function confirmSessionPurgeLocal(opts: { title: string; n?: number; sessions?: Array<{ harness?: string }> }): Promise<boolean> {
-  const policy = await sessionLogPolicy();
-  const fate = logFate(policy, harnessesOf(opts.sessions));
-  const n = opts.n || 1;
+// ── 완전 삭제(휴지통 안에서만, #1851) — 두 창. 어느 쪽도 keepNote(종료·지우기용)를 쓰지 않는다: 그 문구는 "대화 기록은 안 지워진다"가
+//  핵심 약속인데, 여기선 **지운다**(중앙 기록이 있으면 #1850 파기까지 함께 간다). 사실과 반대인 안심 문구가 제일 나쁘다(#1582 규약).
+//  · confirmSessionPurgeLocal — 중앙 기록이 **없는** 세션 하나(되살리기 좌표만 있는 것). 잃는 것 = 되살리기.
+//  · confirmTrashEmpty      — 휴지통 비우기(여러 개). 기록이 있는 것은 기록까지 지운다고 말한다.
+export async function confirmSessionPurgeLocal(opts: { title: string }): Promise<boolean> {
   return confirmDialog({
     title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
-    message: (n > 1 ? `${n}개 세션이 ` : '이 세션이 ') + '목록에서 영영 사라지고, [되살리기]로는 다시 열 수 없어요.',
-    note: keepNote(fate, policy),
-    extra: fate === 'all' || fate === 'some' ? sessionLogLink() : null,
+    message: '이 세션이 목록에서 영영 사라지고, [되살리기]로는 다시 열 수 없어요.',
+    note: '작업 폴더·파일·커밋은 그대로 남습니다. 이 세션은 중앙 대화 기록이 없어 지울 기록도 없어요.',
+  });
+}
+export async function confirmTrashEmpty(opts: { n: number; withLog: number }): Promise<boolean> {
+  return confirmDialog({
+    title: '휴지통을 비울까요?', danger: true, confirmText: '완전 삭제', cancelText: '취소',
+    message: `휴지통의 세션 ${opts.n}개가 목록에서 영영 사라지고, [되살리기]로는 다시 열 수 없어요.`,
+    lines: opts.withLog
+      ? [`그중 ${opts.withLog}개는 중앙 대화 기록도 함께 지워집니다 — 되돌릴 수 없어요.`, '이 세션들이 만든 지식·프로젝트는 건드리지 않아요. 그것까지 정리하려면 행마다 [완전 삭제]를 쓰세요.']
+      : [],
+    note: '작업 폴더·파일·커밋은 그대로 남습니다.',
   });
 }
 

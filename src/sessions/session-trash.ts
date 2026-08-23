@@ -24,17 +24,23 @@ export async function trashMapFor(owner: string): Promise<Map<string, TrashMark>
   return out;
 }
 
+// ⚠ upsert 에 `ON CONFLICT (session_id)` 처럼 **제약 컬럼을 적지 않는다** — 멀티테넌시 배포는 부팅 마이그레이션이 모든 표에
+//  tenant_id 를 붙이고 PK 를 (tenant_id, …) 로 다시 짜므로, 스키마 파일의 PK 로는 매칭 제약을 못 찾아 500 이 난다
+//  (#1850 이 실측으로 밟은 함정 — 이 표도 dev 에서 같은 500 을 냈다). 갱신은 UPDATE, 추가는 NOT EXISTS + ON CONFLICT DO NOTHING.
+
 /** 휴지통으로 — 이미 있던 행은 시각만 갱신(되돌렸다가 다시 넣는 경우). purged 행은 되살리지 않는다(완전 삭제는 최종). */
 export async function trashSessions(owner: string, ids: string[]): Promise<number> {
   const list = clean(ids);
   if (!owner || !list.length) return 0;
-  const r = await itemsPool.query(
+  const u = await itemsPool.query(
+    `UPDATE org_session_trash SET trashed_at = now()
+      WHERE owner = $1 AND purged_at IS NULL AND session_id = ANY($2::text[])`, [owner, list]);
+  const i = await itemsPool.query(
     `INSERT INTO org_session_trash(session_id, owner, trashed_at)
        SELECT x, $1, now() FROM unnest($2::text[]) AS x
-     ON CONFLICT (session_id) DO UPDATE SET trashed_at = now()
-       WHERE org_session_trash.owner = EXCLUDED.owner AND org_session_trash.purged_at IS NULL`,
-    [owner, list]);
-  return r.rowCount || 0;
+        WHERE NOT EXISTS (SELECT 1 FROM org_session_trash t WHERE t.session_id = x)
+     ON CONFLICT DO NOTHING`, [owner, list]);
+  return (u.rowCount || 0) + (i.rowCount || 0);
 }
 
 /** 되돌리기 — 휴지통 행을 지운다(purged 는 못 되돌린다). */
@@ -50,13 +56,15 @@ export async function untrashSessions(owner: string, ids: string[]): Promise<num
 export async function purgeSessions(owner: string, ids: string[]): Promise<number> {
   const list = clean(ids);
   if (!owner || !list.length) return 0;
-  const r = await itemsPool.query(
+  const u = await itemsPool.query(
+    `UPDATE org_session_trash SET purged_at = COALESCE(purged_at, now())
+      WHERE owner = $1 AND session_id = ANY($2::text[])`, [owner, list]);
+  const i = await itemsPool.query(
     `INSERT INTO org_session_trash(session_id, owner, trashed_at, purged_at)
        SELECT x, $1, now(), now() FROM unnest($2::text[]) AS x
-     ON CONFLICT (session_id) DO UPDATE SET purged_at = COALESCE(org_session_trash.purged_at, now())
-       WHERE org_session_trash.owner = EXCLUDED.owner`,
-    [owner, list]);
-  return r.rowCount || 0;
+        WHERE NOT EXISTS (SELECT 1 FROM org_session_trash t WHERE t.session_id = x)
+     ON CONFLICT DO NOTHING`, [owner, list]);
+  return (u.rowCount || 0) + (i.rowCount || 0);
 }
 
 /** 휴지통에 있는(아직 purged 아닌) 이 사람의 세션 id — 비우기가 한 번에 지울 목록. */
