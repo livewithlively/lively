@@ -316,9 +316,14 @@ function padKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeLaunchpad
 export function closeLaunchpad(): void { if (padEl) { padEl.remove(); padEl = null; } document.removeEventListener('keydown', padKey); }
 
 // ── 앱 프레임 — 중앙에 iframe 하나. 헤더 한 줄(앱 이름 · 새 탭 · 클래식으로) 외엔 크롬이 없다. ──
+//  #1841 — 안의 화면이 프로젝트 탭 문법의 머리(빵부스러기·뷰 탭·툴바)를 스스로 그리는 앱(FRAMELESS)은 이 띠를 안 단다.
+//   '클래식 화면 · 그대로 실림' 띠가 그 머리 위에 한 줄 더 얹히면 제목이 두 번 보이고 액자 티가 난다. 새 탭 열기는 그 화면의 ⋯ 메뉴가 든다.
+const FRAMELESS = new Set(['terminal']);
 export function appFrame(hash: string, title: string, opts?: { live?: boolean; src?: string }): HTMLElement {
   const src = opts?.src || embedUrl(hash);
   const frame = el('iframe', { class: 'v2-frame', src, title, loading: 'eager', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
+  const key = hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+  if (!opts?.live && FRAMELESS.has(key)) return el('div', { class: 'v2-app v2-app-frameless' }, frame);
   const head = el('div', { class: 'v2-frame-h' },
     el('b', { class: 'v2-frame-t', text: title }),
     el('span', { class: 'v2-frame-sub', text: opts?.live ? '라이브 세션' : '클래식 화면 · 그대로 실림' }),
