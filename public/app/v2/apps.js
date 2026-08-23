@@ -228,7 +228,7 @@ export function openLaunchpad() {
     const input = el('input', { class: 'v2-pad-search', type: 'search', placeholder: '앱 찾기', 'aria-label': '앱 찾기' });
     const draw = () => {
         const q = input.value.trim().toLowerCase();
-        const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, onclick: () => closeLaunchpad() }, el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: a.desc })));
+        const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, title: a.desc, onclick: () => closeLaunchpad() }, el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)), el('b', { text: a.title })));
         const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => {
             const hasUi = a.pages.length > 0; // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
             return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
@@ -236,7 +236,7 @@ export function openLaunchpad() {
                 onclick: () => { closeLaunchpad(); if (hasUi)
                     void openAppUi(a.id, { title: a.title });
                 else
-                    void openAppSession(a.id, { title: a.title }); } }, el('span', { class: 'v2-pad-ico' }, appGlassIcon(hasUi ? 'liv' : 'term')), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: hasUi ? '앱 화면 — 창으로 열려요' : '앱 세션 — 열면 이 앱으로 대화가 시작돼요' }), el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
+                    void openAppSession(a.id, { title: a.title }); } }, el('span', { class: 'v2-pad-ico' }, appGlassIcon(hasUi ? 'liv' : 'term')), el('b', { text: a.title }), el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
         });
         grid.replaceChildren(...screen, ...session);
         if (!grid.childElementCount)
