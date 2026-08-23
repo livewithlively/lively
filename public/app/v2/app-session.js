@@ -21,8 +21,11 @@ export async function listSessionApps() {
             const perm = (a.manifest && a.manifest.permissions) || {};
             const tools = [...(perm.tools || []), ...(perm.ext_tools || [])].map(String);
             const pages = (((a.manifest && a.manifest.ui) || {}).pages || []).map((p) => ({ key: String(p.key), title: String(p.title || p.key) }));
+            const csp = (a.manifest && a.manifest.csp) || {};
+            const sites = (csp.frame_domains || []).map(String);
+            const net = [...(csp.connect_domains || []), ...(perm.hosts || [])].map(String);
             return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-                scopes: (perm.scopes || []).map(String), tools, pages };
+                scopes: (perm.scopes || []).map(String), tools, pages, sites, net };
         });
     }
     catch (e) {
@@ -37,6 +40,19 @@ export function isSpawningApp() { return spawning; }
  *  UI 중립 — **행선지는 호출자가 정한다**: 런치패드는 openAppSession 으로 #/s/<id> 로 간다.
  *  opts.projectId 를 주면 만든 뒤 그 프로젝트에 붙인다.
  */
+/**
+ * 이 앱에 대한 내 동의(grant)를 확보한다 — 없으면 **동의 창을 띄우고** 승인 시 grant 를 만든다.
+ *  세션 스폰(403)·앱 UI 의 첫 도구 호출(403) 양쪽이 같은 창을 쓴다(동의는 한 번, 이후 계속 유효).
+ *  반환 false = 사람이 취소함(호출부는 조용히 멈춘다).
+ */
+export async function ensureAppGrant(appId, title) {
+    const app = (await listSessionApps()).find((a) => a.id === appId)
+        || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [] };
+    if (!(await appConsent(app)))
+        return false;
+    await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
+    return true;
+}
 export async function spawnAppSession(appId, opts) {
     if (spawning)
         return null;
@@ -48,12 +64,8 @@ export async function spawnAppSession(appId, opts) {
         }
         catch (e) {
             if (e && e.status === 403) {
-                // grant 없음 → 동의 창 → grant → 재시도 1회.
-                const app = (await listSessionApps()).find((a) => a.id === appId)
-                    || { id: appId, title: opts?.title || appId, version: '', scopes: [], tools: [], pages: [] };
-                if (!(await appConsent(app)))
+                if (!(await ensureAppGrant(appId, opts?.title)))
                     return null; // 취소 = 조용히 멈춤
-                await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
                 id = await postAppSession(appId, opts);
             }
             else
@@ -115,7 +127,9 @@ function appConsent(app) {
             : [el('span', { class: 'v2-consent-chip none', text: empty })]);
         const ov = el('div', { class: 'v2-consent-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': app.title + ' 사용 동의',
             onclick: (e) => { if (e.target === ov)
-                finish(false); } }, el('div', { class: 'v2-consent' }, el('h3', { class: 'v2-consent-t', text: '「' + app.title + '」을(를) 내 자격으로 실행할까요?' }), el('p', { class: 'v2-consent-sub', text: '이 앱이 여는 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }), el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))), el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))), el('div', { class: 'v2-consent-acts' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => finish(false) }), el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '동의하고 열기', onclick: () => finish(true) }))));
+                finish(false); } }, el('div', { class: 'v2-consent' }, el('h3', { class: 'v2-consent-t', text: '「' + app.title + '」을(를) 내 자격으로 실행할까요?' }), el('p', { class: 'v2-consent-sub', text: '이 앱이 여는 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }), el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))), el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))), 
+        // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
+        app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null, app.net.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '연결' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.net, ''))) : null, el('div', { class: 'v2-consent-acts' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => finish(false) }), el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '동의하고 열기', onclick: () => finish(true) }))));
         document.body.append(ov);
         document.addEventListener('keydown', onKey);
         ov.querySelector('.btn-primary')?.focus();

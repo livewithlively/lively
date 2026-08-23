@@ -99,3 +99,38 @@ test("APP_ID_RE 경계값", () => {
   assert.ok(!APP_ID_RE.test("a"));
   assert.ok(!APP_ID_RE.test("a".repeat(33)));
 });
+
+// ── csp 선언 (#1780 SDK — MCP Apps 채택) ────────────────────────────────────
+//  「입력 × 기대」 표: 미선언 = 아무것도 안 열림 / frame 은 * 허용(남의 페이지를 불투명 오리진으로 싣기만) /
+//  connect 의 * 는 거부(데이터 유출 통로) / 호스트 형식 검증 / $schema 는 통과하되 그 밖의 미지 키는 여전히 거부.
+
+test("csp 미선언 → 기본값 빈 배열(= 네트워크·프레임 0)", () => {
+  const m = parseAppManifest(base());
+  assert.deepEqual(m.csp.connect_domains, []);
+  assert.deepEqual(m.csp.resource_domains, []);
+  assert.deepEqual(m.csp.frame_domains, []);
+});
+
+test("csp.frame_domains 는 '*' 를 허용한다(브라우저형 앱)", () => {
+  const m = parseAppManifest({ ...base(), csp: { frame_domains: ["*"] } });
+  assert.deepEqual(m.csp.frame_domains, ["*"]);
+});
+
+test("csp.connect_domains 의 '*' 는 거부한다(유출 통로 — 명시 호스트만)", () => {
+  assert.throws(() => parseAppManifest({ ...base(), csp: { connect_domains: ["*"] } }), /connect_domains/);
+  // 명시 호스트·와일드카드 서브도메인은 통과.
+  const m = parseAppManifest({ ...base(), csp: { connect_domains: ["api.example.com", "*.corp.example.com"] } });
+  assert.deepEqual(m.csp.connect_domains, ["api.example.com", "*.corp.example.com"]);
+});
+
+test("csp 도메인 형식 위반 거부(스킴·경로·공백)", () => {
+  for (const bad of ["https://x.com", "x.com/path", "a b", "http://*", ""]) {
+    assert.throws(() => parseAppManifest({ ...base(), csp: { frame_domains: [bad] } }), /csp|매니페스트/);
+  }
+});
+
+test("$schema 는 통과(편집기 자동완성) — 그 밖의 미지 키는 여전히 거부(strict 유지)", () => {
+  const m = parseAppManifest({ ...base(), $schema: "https://dev.lvly.io/ui/lively-app.schema.json" });
+  assert.equal(m.id, "slack-dash");
+  assert.throws(() => parseAppManifest({ ...base(), nope: 1 }), /매니페스트/);
+});

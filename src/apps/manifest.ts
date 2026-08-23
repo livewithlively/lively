@@ -76,6 +76,22 @@ const uiWidgetSchema = z.object({
   surfaces: z.array(z.enum(APP_WIDGET_SURFACES)).default(["launchpad"]),
 }).strict();
 
+// ── CSP 선언 (MCP Apps `csp{connectDomains,resourceDomains,frameDomains}` 채택 — 발명하지 않는다) ──
+//  앱 UI 의 기본값은 **네트워크 0 · 프레임 0** 이다(app-ui.ts 가 srcdoc 에 CSP meta 를 박는다).
+//  그보다 넓은 것이 필요하면 매니페스트에 적어 **설치(관리자)·동의(사용자) 때 사람이 보게** 한다.
+//   · frame_domains   — 이 앱 화면 안에 실을 사이트(브라우저형 앱). `*` 허용 = https 전체.
+//     남의 페이지는 **불투명 오리진**으로 실려 우리 오리진·토큰엔 닿지 못하고, 앱도 그 안을 읽지 못한다(교차출처).
+//   · connect_domains — 앱 UI 가 직접 fetch 할 곳. ⚠ `*` **금지** — 그 하나가 곧 데이터 유출 통로다(명시 호스트만).
+//   · resource_domains — 이미지·폰트·미디어 출처.
+const cspHostSchema = z.string().min(1).max(253)
+  .regex(/^(\*|\*\.[a-z0-9-]+(\.[a-z0-9-]+)+|[a-z0-9-]+(\.[a-z0-9-]+)+|localhost)$/i,
+    "csp 도메인은 호스트·*.호스트·* 형식이어야 합니다");
+const cspSchema = z.object({
+  connect_domains: z.array(cspHostSchema).default([]),
+  resource_domains: z.array(cspHostSchema).default([]),
+  frame_domains: z.array(cspHostSchema).default([]),
+}).strict().default({});
+
 const uiSchema = z.object({
   pages: z.array(uiPageSchema).default([]),
   widgets: z.array(uiWidgetSchema).default([]),
@@ -108,6 +124,9 @@ const sectionSchema = z.object({
 
 // 매니페스트 전체.
 export const appManifestSchema = z.object({
+  // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다(strict 스키마라 명시적으로 받아 줘야 거부되지 않는다).
+  //  앱 개발자가 "$schema": "<게이트웨이>/ui/lively-app.schema.json" 를 적으면 VS Code 등이 그 자리에서 검증해 준다.
+  $schema: z.string().max(500).optional(),
   id: idSchema,
   title: z.string().min(1).max(200),
   version: semverSchema,
@@ -125,6 +144,7 @@ export const appManifestSchema = z.object({
     http_tools: z.array(z.record(z.unknown())).default([]),  // org_tool 프리셋 형식(설치가 재검증)
   }).strict().default({}),
   ui: uiSchema.default({}),
+  csp: cspSchema,
   jobs: z.array(jobSchema).default([]),
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
   sections: z.array(sectionSchema).default([]),
@@ -152,6 +172,12 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   for (const s of m.permissions.scopes) {
     if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `매니페스트 오류 [permissions.scopes]: 알 수 없는 scope '${s}'`);
     if (APP_FORBIDDEN_SCOPES.has(s)) throw new HttpError(400, `매니페스트 오류 [permissions.scopes]: '${s}' 는 앱이 요청할 수 없는 scope 입니다(관리·런타임)`);
+  }
+
+  // connect_domains 의 `*` 는 거부한다 — 프레임(남의 페이지를 보여줌)과 달리 connect 는 **우리 안의 데이터를
+  //  임의 서버로 보내는 통로**다. 넓게 열고 싶다는 선언을 그대로 받아 주면 동의 화면이 의미를 잃는다.
+  if (m.csp.connect_domains.includes("*")) {
+    throw new HttpError(400, "매니페스트 오류 [csp.connect_domains]: '*' 는 허용되지 않습니다 — 연결할 호스트를 명시하세요");
   }
 
   // UI/잡/자산 key 중복 거부(같은 표면 안에서).
