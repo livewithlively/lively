@@ -14,7 +14,7 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { authNodeToken, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, loadRecentLinkEvents, type OrgNode } from "./store.js";
 import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
-import { linkDiagMessage, keepAwakeLine } from "./link-advice.js";                     // #1849 — 그 판정을 사람의 말로
+import { linkDiagMessage, linkDiagSummary, keepAwakeLine } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로
 import { nodeOpenTo } from "./node-access.js";
 import { liveNodes } from "./registry.js";
 import { nodeHarnesses, agentIsLatest } from "./protocol.js";
@@ -49,6 +49,8 @@ interface NodeView extends Omit<OrgNode, "token_hash"> {
   link_diag: LinkDiagnosis;
   /** 잠자기로 추정될 때 화면에 그대로 띄울 한 문장(근거+조치). 판정이 없으면 null — 모르면 말하지 않는다. */
   link_note: string | null;
+  /** 같은 판정의 한 줄 요약 — 목록처럼 폭이 좁은 자리용(전문은 툴팁·오류 메시지에서 쓴다). */
+  link_note_short: string | null;
   /** 억제가 걸려 있나를 사람의 말로. 상태가 정상이어도 노드 화면이 "무엇이 안 막히는지"를 알려 준다. */
   keep_awake_note: string;
 }
@@ -72,6 +74,7 @@ function toView(
     //  cycles=0 으로 드러나므로 화면이 억지 결론을 내지 않는다.
     link_diag: diag,
     link_note: linkDiagMessage(diag, { platform: n.platform, keepAwake: n.keep_awake }),
+    link_note_short: linkDiagSummary(diag),
     keep_awake_note: keepAwakeLine(n.keep_awake, n.platform),
   };
 }

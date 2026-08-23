@@ -39,15 +39,23 @@ function versionBadge(n) {
 //  왜 화면에 두나: 종전엔 "꺼져 있음" 배지가 끝이었다. 그런데 사용자의 PC 는 **켜져 있었고**, 자고 있었을 뿐이다
 //  (실측 2026-08-23). 사람은 "전원도 인터넷도 멀쩡한데 왜?" 에서 막혔다 — 그 답을 여기서 한다.
 function sleepBadge(n) {
-    if (!n.link_note)
-        return null;
-    return el('span', { class: 'tsess-badge warn', title: n.link_note, text: '잠자기로 끊김' });
+    if (n.link_note)
+        return el('span', { class: 'tsess-badge warn', title: n.link_note, text: '잠자기로 끊김' });
+    // 정상 억제 중은 **배지 한 칸**으로 족하다 — 상세(못 막는 구멍)는 툴팁에.
+    if (n.online && n.keep_awake && n.keep_awake.active) {
+        return el('span', { class: 'tsess-badge', title: n.keep_awake_note || '', text: '잠자기 막는 중' });
+    }
+    return null;
 }
-// 억제 상태 한 줄 — 무엇이 이미 막혀 있고 무엇이 안 막히는지. 노드가 붙어 있을 때도 유용하다(뚜껑 닫기 등).
+// 억제 상태 한 줄 — **말할 게 있을 때만** 쓴다.
+//  ⚠ 화면 실측(프리뷰, 2026-08-23): 모든 노드에 "…보고하지 않습니다" 를 깔았더니 6대 전부에 같은 문장이
+//   잘린 채 반복돼 읽히지도, 구분되지도 않았다. 구 번들이 흔한 동안엔 그게 기본 상태라 정보가 아니라 소음이다.
+//   그래서 ① 모름(구 번들)은 말하지 않고 ② 정상은 배지로만 ③ **못 걸렸을 때만** 문장으로 말한다.
+//   (versionBadge 가 "최신이면 조용한 게 맞다" 고 한 것과 같은 규율.)
 function keepAwakeLine(n) {
-    if (!n.keep_awake_note)
+    if (!n.keep_awake || n.keep_awake.active)
         return null;
-    return el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '잠자기' }), n.keep_awake_note);
+    return el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '잠자기' }), n.keep_awake_note || '');
 }
 // 이 노드에서 열 수 있는 AI(#1713) — 노드가 스스로 보고한 목록(그 PC 에 실제로 깔린 것). 세션 만들기 폼이
 //  같은 값으로 선택지를 거르므로, 여기 보이는 것과 거기 고를 수 있는 것이 항상 같다.
@@ -59,7 +67,9 @@ function harnessLine(n) {
 }
 // 노드 한 행. acts 는 호출부가 정한다 — 같은 노드라도 '내 화면'과 '관리자 화면'에서 할 수 있는 일이 다르다.
 function nodeRow(n, ownerLabel, acts) {
-    const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: n.name || n.id }), el('span', { class: 'wikicat-key mono', text: n.id }), n.shared ? el('span', { class: 'dm-tag', text: '공유' }) : null, ownerLabel ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '연결한 사람' }), ownerLabel) : null, harnessLine(n), keepAwakeLine(n), n.link_note ? el('div', { class: 'wikicat-empty', text: n.link_note }) : null);
+    const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: n.name || n.id }), el('span', { class: 'wikicat-key mono', text: n.id }), n.shared ? el('span', { class: 'dm-tag', text: '공유' }) : null, ownerLabel ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '연결한 사람' }), ownerLabel) : null, harnessLine(n), keepAwakeLine(n), 
+    // #1849 — 좁은 열이라 **한 줄 요약**만 싣는다(전문은 배지 툴팁). 실측: 전문을 넣었더니 세로로 흘렀다.
+    n.link_note_short ? el('span', { class: 'wikicat-should', title: n.link_note || '' }, el('span', { class: 'wikicat-should-label', text: '잠자기' }), n.link_note_short) : null);
     return el('div', { class: 'wikicat-row' }, main, sleepBadge(n), versionBadge(n), statusBadge(n), acts || null);
 }
 // 그룹(제목·개수·한 줄 설명 + 행들). 빈 그룹도 '사실 + 다음에 할 일'로 말한다.
