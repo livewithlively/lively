@@ -112,6 +112,17 @@ function stageCard(o) {
 function flow(label) {
     return el('div', { class: 'ctxp-flow', 'aria-hidden': 'true' }, el('span', { class: 'ctxp-flow-line' }), el('span', { class: 'ctxp-flow-label', text: label }), el('span', { class: 'ctxp-flow-line' }));
 }
+/** 네 단계의 판정 레벨만 — 상단 단계 탭(#1841, context.ts)이 점 색으로 쓴다. 판정 잣대는 위 *Health 함수 한 벌(카드와 같은 눈). */
+export function stageHealthLevels(d) {
+    const s = (d && d.stages) || {};
+    const lv = (h) => (h ? h.level : 'note');
+    return {
+        collect: s.collect ? lv(collectHealth(s.collect)) : 'note',
+        distill: s.distill ? lv(distillHealth(s.distill)) : 'note',
+        classify: s.classify ? lv(classifyHealth(s.classify)) : 'note',
+        manage: s.manage ? lv(manageHealth(s.manage)) : 'note',
+    };
+}
 /** 파이프라인 개요를 host 에 그린다. onGoto = 스테이지 클릭 시 서브탭 전환(라우터 대신 인메모리 전환). */
 export async function renderPipeline(host) {
     host.replaceChildren(el('div', { class: 'ctxp-loading' }, el('p', { class: 'admin-hint', text: '파이프라인 현황을 불러오는 중…' })));
