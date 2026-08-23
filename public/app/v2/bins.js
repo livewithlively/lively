@@ -8,7 +8,9 @@
 //     [복원]이 같은 화면에 있다 — 프로젝트를 버리는 입구(클래식 보드·정보 창)는 여럿인데 되찾는 곳은 하나여야 한다.
 //  행의 문법은 홈·확인할 것(v2-now-row)과 같다 — 새 시각 언어를 만들지 않는다.
 import { api, el, relTime, sv, toast } from '../core.js';
-import { confirmSessionPurge, sessionNames, sessionTrashOp } from '../session-actions.js';
+// 완전 삭제는 두 갈래(#1851 ⟶ #1850): 중앙 기록이 있는 세션은 #1850 의 범위 선택 확인창 + 기록 파기(purgeSessionRecord)를 그대로
+//  쓰고, 그 위에 되살리기 좌표(desired-state)까지 지우는 휴지통 op('purge')를 얹는다. 기록이 없는 세션은 좌표만 지운다.
+import { confirmSessionPurge, confirmSessionPurgeLocal, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp } from '../session-actions.js';
 import { sessText } from './side.js';
 import { dotCls, isArchivedProj, isLiveSess, isTrashedSess, projName } from './views.js';
 const when = (iso) => (iso ? relTime(iso) : '');
@@ -83,13 +85,27 @@ export function renderTrash(host, data, hooks = {}) {
             toast('되돌리지 못했어요 — ' + (e?.message || e), true);
         }
     });
+    // 중앙 기록 좌표 — #1850 purgeBtn 과 같은 판정: 접힌 기록(logId)이 있으면 그것, 기록만 남은 행이면 자기 id.
+    const logSid = (s) => s.logId || (s.stateKey === 'log' ? s.id : '');
+    const logNode = (s) => String((s.logNode ?? s.node) || '');
     const purge = (s) => guard(async () => {
         const name = sessText(s, projName(data, s.projectId)).main || s.id;
-        if (!await confirmSessionPurge({ title: `「${name}」을(를) 완전히 지울까요?`, sessions: [{ harness: String((s.raw && s.raw.harness) || '') }] }))
-            return;
+        const sid = logSid(s);
         try {
-            await sessionTrashOp('purge', sessionNames(s));
-            toast('완전히 지웠어요.');
+            if (sid) {
+                const choice = await confirmSessionPurge({ sid, node: logNode(s), title: `「${name}」을(를) 완전히 지울까요?`, lines: [s.label || sid], remoteNode: logNode(s) || null });
+                if (!choice)
+                    return;
+                const r = await purgeSessionRecord(sid, logNode(s), choice);
+                await sessionTrashOp('purge', sessionNames(s)); // 되살리기 좌표까지 — 기록만 지우면 '지난 세션'으로 되돌아온다
+                toast(purgedToast(r));
+            }
+            else {
+                if (!await confirmSessionPurgeLocal({ title: `「${name}」을(를) 완전히 지울까요?`, sessions: [{ harness: String((s.raw && s.raw.harness) || '') }] }))
+                    return;
+                await sessionTrashOp('purge', sessionNames(s));
+                toast('완전히 지웠어요.');
+            }
             hooks.onChanged?.();
         }
         catch (e) {
@@ -99,11 +115,27 @@ export function renderTrash(host, data, hooks = {}) {
     const empty = () => guard(async () => {
         if (!ss.length)
             return;
-        if (!await confirmSessionPurge({ title: '휴지통을 비울까요?', n: ss.length, sessions: ss.map((s) => ({ harness: String((s.raw && s.raw.harness) || '') })) }))
+        // 비우기는 한 번의 확인으로 전부 — 범위 선택(지식·프로젝트)은 세션마다 달라 여기서 묻지 않는다: **대화 기록만** 지운다
+        //  (기본값과 같다). 지식·프로젝트까지 함께 정리하려면 행별 [완전 삭제]로.
+        if (!await confirmSessionPurgeLocal({ title: '휴지통을 비울까요?', n: ss.length, sessions: ss.map((s) => ({ harness: String((s.raw && s.raw.harness) || '') })) }))
             return;
+        let logs = 0;
+        let failed = 0;
+        for (const s of ss) {
+            const sid = logSid(s);
+            if (!sid)
+                continue;
+            try {
+                await purgeSessionRecord(sid, logNode(s), { log: true, knowledge: [], revert: [], projects: [], activities: false });
+                logs++;
+            }
+            catch {
+                failed++;
+            }
+        }
         try {
             const r = await sessionTrashOp('empty');
-            toast(`${r.done.length}개 세션을 완전히 지웠어요.` + (r.skipped.length ? ` (${r.skipped.length}개는 건너뜀)` : ''));
+            toast(`${r.done.length}개 세션을 완전히 지웠어요.` + (logs ? ` 대화 기록 ${logs}건 파기.` : '') + (failed ? ` ⚠ 기록 ${failed}건은 지우지 못했어요.` : '') + (r.skipped.length ? ` (${r.skipped.length}개는 건너뜀)` : ''));
             hooks.onChanged?.();
         }
         catch (e) {

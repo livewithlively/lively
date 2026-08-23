@@ -9,7 +9,7 @@
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
 import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
-import { confirmSessionForget } from '../session-actions.js';
+import { confirmSessionTrash, sessionNames, sessionTrashOp } from '../session-actions.js'; // #1851 — 보관 칸의 × 는 휴지통으로
 import { fmtSize } from '../projects/files.js';
 import { upDropZone, upFromInput, upSend, upToast } from '../projects/files-upload.js';
 import { confirmDialog } from '../ui-primitives.js';
@@ -549,6 +549,7 @@ function archivePart(ctx) {
     const mine = () => ctx.data().sessions
         .filter((s) => (ctx.id > 0 ? Number(s.projectId) === ctx.id : !s.projectId))
         .filter((s) => !(s.live && s.alive))
+        .filter((s) => !s.trashedAt) // 휴지통에 있는 건 여기 없다(#1851) — 휴지통 화면이 그 자리
         .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
     const canRestore = (s) => !!(s.raw && s.raw.restorable);
     async function restore(s) {
@@ -580,23 +581,24 @@ function archivePart(ctx) {
             paint();
         }
     }
+    // 휴지통으로(#1851) — 종전엔 이 × 가 곧바로 '완전 삭제'(desired-state 제거)였다. 완전 삭제는 이제 휴지통 안에서만 한다.
     async function purge(s, name) {
         if (workingId)
             return;
-        // 확인창은 #1582 의 단일 정의를 쓴다 — '대화록이 남는지'는 조직 설정·하네스에 따라 달라서,
-        //  그 판정을 여기서 흉내 내면 반드시 한쪽이 거짓말을 한다(confirmSessionForget 이 서버에 물어 참인 문장만 쓴다).
-        if (!await confirmSessionForget({ title: `「${name}」을 목록에서 지울까요?`, sessions: [{ harness: String((s.raw && s.raw.harness) || '') }] }))
+        if (!await confirmSessionTrash({ title: `「${name}」을(를) 휴지통으로 보낼까요?` }))
             return;
         workingId = s.id;
         sig = '';
         paint();
         try {
-            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node) : ''), { method: 'DELETE' });
-            toast('보관 목록에서 지웠어요.');
+            const r = await sessionTrashOp('trash', sessionNames(s));
+            if (r.skipped.length && !r.done.length)
+                throw new Error(r.skipped[0].why || '휴지통으로 보내지 못했습니다');
+            toast('휴지통으로 보냈어요 — 사이드바 [휴지통]에서 되돌릴 수 있어요.');
             ctx.onChanged?.();
         }
         catch (e) {
-            toast('지우지 못했어요 — ' + (e && e.message ? e.message : e), true);
+            toast('휴지통으로 보내지 못했어요 — ' + (e && e.message ? e.message : e), true);
         }
         finally {
             workingId = '';
@@ -622,7 +624,7 @@ function archivePart(ctx) {
                     class: 'btn-text', type: 'button', disabled: busy, text: busy ? '되살리는 중…' : '되살리기',
                     title: '저장해 둔 설정 그대로 다시 열고, 대화를 이어 붙입니다.', onclick: () => void restore(s),
                 })] : [el('a', { class: 'btn-text', href: '#/s/' + encodeURIComponent(s.id), text: '대화 보기' })]), el('button', {
-                class: 'pn-arow-x', type: 'button', title: '완전 삭제 — 되살릴 수 없게 됩니다', 'aria-label': `「${t}」 완전 삭제`,
+                class: 'pn-arow-x', type: 'button', title: '휴지통으로 보내기 — 휴지통에서 되돌리거나 완전히 지울 수 있어요', 'aria-label': `「${t}」 휴지통으로`,
                 onclick: () => void purge(s, t),
             }, pnIcon('x', 'pn-i xs')));
         });
