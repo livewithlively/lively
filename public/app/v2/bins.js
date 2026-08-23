@@ -11,7 +11,7 @@
 import { api, el, relTime, sv, toast } from '../core.js';
 // 완전 삭제는 두 갈래(#1851 ⟶ #1850): 중앙 기록이 있는 세션은 #1850 의 범위 선택 확인창 + 기록 파기(purgeSessionRecord)를 그대로
 //  쓰고, 그 위에 되살리기 좌표(desired-state)까지 지우는 휴지통 op('purge')를 얹는다. 기록이 없는 세션은 좌표만 지운다.
-import { confirmSessionPurge, confirmSessionPurgeLocal, confirmTrashEmpty, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped } from '../session-actions.js';
+import { confirmSessionPurge, confirmSessionPurgeLocal, confirmTrashEmpty, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
 import { sessText } from './side.js';
 import { dotCls, isArchivedProj, isLiveSess, isTrashedSess, projName } from './views.js';
 const when = (iso) => (iso ? relTime(iso) : '');
@@ -96,7 +96,7 @@ export function renderTrash(host, data, hooks = {}) {
         const sid = logSid(s);
         try {
             if (sid) {
-                const choice = await confirmSessionPurge({ sid, node: logNode(s), title: `「${name}」을(를) 완전히 지울까요?`, lines: [s.label || sid], remoteNode: logNode(s) || null });
+                const choice = await confirmSessionPurge({ sid, node: logNode(s), title: `「${name}」${eulReul(name)} 완전히 지울까요?`, lines: [s.label || sid], remoteNode: logNode(s) || null });
                 if (!choice)
                     return;
                 const r = await purgeSessionRecord(sid, logNode(s), choice);
@@ -111,7 +111,7 @@ export function renderTrash(host, data, hooks = {}) {
                 toast(purgedToast(r));
             }
             else {
-                if (!await confirmSessionPurgeLocal({ title: `「${name}」을(를) 완전히 지울까요?` }))
+                if (!await confirmSessionPurgeLocal({ title: `「${name}」${eulReul(name)} 완전히 지울까요?` }))
                     return;
                 const m = await sessionTrashOp('purge', sessionNames(s));
                 if (!outcome(m, '완전히 지웠어요.', '지우지 못했어요'))

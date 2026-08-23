@@ -27,7 +27,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isArchivedProj, isLiveSess, isPastSess, isTrashedSess, sessWork } from './views.js';
-import { confirmProjectArchive, confirmSessionTrash, sessionNames, sessionTrashOp } from '../session-actions.js'; // #1851 휴지통·아카이브
+import { confirmProjectArchive, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js'; // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
 import { switcherTop } from './switcher.js';
 import { openMeModal } from './me-modal.js'; // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
@@ -981,7 +981,7 @@ function trashBtn(s) {
 }
 async function doTrash(s) {
     const name = sessText(s, '').main || s.label || s.id;
-    if (!await confirmSessionTrash({ title: `「${name}」을(를) 휴지통으로 보낼까요?` }))
+    if (!await confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` }))
         return;
     try {
         const r = await sessionTrashOp('trash', sessionNames(s));

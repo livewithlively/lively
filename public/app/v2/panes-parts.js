@@ -9,7 +9,7 @@
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
 import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
-import { confirmSessionTrash, sessionNames, sessionTrashOp } from '../session-actions.js'; // #1851 — 보관 칸의 × 는 휴지통으로
+import { confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js'; // #1851 — 보관 칸의 × 는 휴지통으로
 import { fmtSize } from '../projects/files.js';
 import { upDropZone, upFromInput, upSend, upToast } from '../projects/files-upload.js';
 import { confirmDialog } from '../ui-primitives.js';
@@ -585,7 +585,7 @@ function archivePart(ctx) {
     async function purge(s, name) {
         if (workingId)
             return;
-        if (!await confirmSessionTrash({ title: `「${name}」을(를) 휴지통으로 보낼까요?` }))
+        if (!await confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` }))
             return;
         workingId = s.id;
         sig = '';

@@ -11,7 +11,7 @@
 import { api, el, relTime, sv, toast } from '../core.js';
 // 완전 삭제는 두 갈래(#1851 ⟶ #1850): 중앙 기록이 있는 세션은 #1850 의 범위 선택 확인창 + 기록 파기(purgeSessionRecord)를 그대로
 //  쓰고, 그 위에 되살리기 좌표(desired-state)까지 지우는 휴지통 op('purge')를 얹는다. 기록이 없는 세션은 좌표만 지운다.
-import { confirmSessionPurge, confirmSessionPurgeLocal, confirmTrashEmpty, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped } from '../session-actions.js';
+import { confirmSessionPurge, confirmSessionPurgeLocal, confirmTrashEmpty, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
 import { sessText } from './side.js';
 import { dotCls, isArchivedProj, isLiveSess, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 
@@ -109,7 +109,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
     const sid = logSid(s);
     try {
       if (sid) {
-        const choice = await confirmSessionPurge({ sid, node: logNode(s), title: `「${name}」을(를) 완전히 지울까요?`, lines: [s.label || sid], remoteNode: logNode(s) || null });
+        const choice = await confirmSessionPurge({ sid, node: logNode(s), title: `「${name}」${eulReul(name)} 완전히 지울까요?`, lines: [s.label || sid], remoteNode: logNode(s) || null });
         if (!choice) return;
         const r = await purgeSessionRecord(sid, logNode(s), choice);
         // 되살리기 좌표·휴지통 표식까지 — 기록만 지우면 '지난 세션'으로 되돌아온다. 기록은 이미 지워졌으므로 여기서 막히면
@@ -118,7 +118,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
         if (!m.done.length) { toast('대화 기록은 지웠지만 휴지통에서 빼지 못했어요 — ' + (m.skipped[0]?.why || '처리된 세션이 없어요'), true); hooks.onChanged?.(); return; }
         toast(purgedToast(r));
       } else {
-        if (!await confirmSessionPurgeLocal({ title: `「${name}」을(를) 완전히 지울까요?` })) return;
+        if (!await confirmSessionPurgeLocal({ title: `「${name}」${eulReul(name)} 완전히 지울까요?` })) return;
         const m = await sessionTrashOp('purge', sessionNames(s));
         if (!outcome(m, '완전히 지웠어요.', '지우지 못했어요')) return;
       }

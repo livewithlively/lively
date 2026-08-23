@@ -102,6 +102,13 @@ export async function confirmSessionForget(opts: {
   });
 }
 
+// 목적격 조사 — 「자기소개」을(를) 같은 기계 표기를 없앤다. 끝글자가 한글이면 받침으로 을/를, 아니면(숫자·영문·기호) 종전 표기.
+export function eulReul(name: string): string {
+  const c = (name || '').trim().slice(-1).charCodeAt(0);
+  if (c >= 0xac00 && c <= 0xd7a3) return (c - 0xac00) % 28 ? '을' : '를';
+  return '을(를)';
+}
+
 // ── 휴지통(#1851) — 지난 세션의 다음 단계. 잃는 것이 **없다**(표식 하나가 붙어 목록에서 빠질 뿐) → 위험 색 없이, 되돌릴 수 있다고 말한다. ──
 //  원준 2026-08-23: "휴지통으로 보낸다는 내용이 떠야" — 종전 '지울까요?'(완전 삭제) 창과 반드시 달라야 한다.
 //  원준 2026-08-24: "처음에는 팝업을 띄우되 [다시 보지 않기]를 체크하면 다음부턴 버튼만 눌러 바로 보내게" — 잃는 것이 없는
@@ -114,21 +121,22 @@ export function trashConfirmSkipped(): boolean {
 export function setTrashConfirmSkipped(on: boolean): void {
   try { if (on) localStorage.setItem(TRASH_SKIP_KEY, '1'); else localStorage.removeItem(TRASH_SKIP_KEY); } catch (_) { /* noop */ }
 }
+//  원준 2026-08-24 "가독성 너무 안 좋고 딸깍 한 팝업 같다": 종전엔 같은 말(잃는 게 없다·되돌릴 수 있다)을 네 줄로 되풀이하고
+//  회색 상자 두 개(note·체크행)가 쌓여 입력창처럼 보였다. #1582 규약대로 **잃는 것만** 말한다 — 여기선 없으니 한 문장이면 된다.
+//  구조: 제목(무엇을) → 본문 1문장(무슨 일이 일어나나) → 보조 1줄(되돌리는 길·완전 삭제 자리) → 선택 1줄(묻지 않기) → 버튼.
 export async function confirmSessionTrash(opts: { title: string; n?: number }): Promise<boolean> {
   if (trashConfirmSkipped()) return true;
   const n = opts.n || 1;
-  const skip = checkRow('sess-trash-skip', '다음부터는 묻지 않고 바로 휴지통으로 보내기', [], '휴지통 화면에서 다시 묻도록 되돌릴 수 있어요');
+  const skip = el('input', { type: 'checkbox', id: 'sess-trash-skip' }) as HTMLInputElement;
   const ok = await confirmDialog({
     title: opts.title, confirmText: '휴지통으로', cancelText: '취소',
-    message: n > 1 ? `${n}개 세션이 목록에서 빠지고 휴지통으로 갑니다.` : '이 세션이 목록에서 빠지고 휴지통으로 갑니다.',
-    lines: [
-      '대화·설정은 그대로 남아요 — 휴지통에서 [되돌리기]를 누르면 지난 세션으로 돌아옵니다.',
-      '완전히 지우는 건 휴지통 안에서만 할 수 있어요.',
-    ],
-    extra: el('div', { class: 'sess-purge' }, skip.el),
-    note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
+    message: (n > 1 ? `세션 ${n}개가 ` : '') + '목록에서 빠지고 휴지통으로 갑니다. 대화와 설정은 그대로 남아요.',
+    lines: ['휴지통에서 [되돌리기]를 누르면 지난 세션으로 돌아옵니다. 완전히 지우는 건 휴지통에서만 할 수 있어요.'],
+    extra: el('label', { class: 'ov-confirm-opt', for: 'sess-trash-skip' }, skip,
+      el('span', { class: 'n', text: '다음부터 묻지 않고 바로 보내기' }),
+      el('span', { class: 'h', text: '휴지통 화면에서 되돌릴 수 있어요' })),
   });
-  if (ok && skip.box.checked) setTrashConfirmSkipped(true);
+  if (ok && skip.checked) setTrashConfirmSkipped(true);
   return ok;
 }
 
@@ -166,7 +174,7 @@ export const sessionNames = (s: { id: string; logId?: string | null }): string[]
 // ── 프로젝트 아카이브(#1851) — 삭제가 아니라 '평소 화면에서 치우기'. 도는 세션이 있으면 멈춘다는 사실만 위험으로 말한다. ──
 export async function confirmProjectArchive(opts: { name: string; liveN: number }): Promise<boolean> {
   return confirmDialog({
-    title: `「${opts.name}」을(를) 아카이브로 보낼까요?`, danger: opts.liveN > 0, confirmText: '아카이브로', cancelText: '취소',
+    title: `「${opts.name}」${eulReul(opts.name)} 아카이브로 보낼까요?`, danger: opts.liveN > 0, confirmText: '아카이브로', cancelText: '취소',
     message: opts.liveN > 0
       ? `지금 돌고 있는 세션 ${opts.liveN}개는 그 자리에서 멈추고 지난 세션이 됩니다.`
       : '이 프로젝트와 그 아래 세션이 사이드바·보드에서 빠집니다.',
