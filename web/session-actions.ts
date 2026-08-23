@@ -170,7 +170,10 @@ function checkRow(id: string, label: string, names: string[], hint?: string): { 
   const box = el('input', { type: 'checkbox', id }) as HTMLInputElement;
   const kids: any[] = [el('span', { class: 'n', text: label })];
   if (hint) kids.push(el('span', { class: 'h', text: hint }));
-  if (names.length) kids.push(el('span', { class: 'l', text: names.slice(0, 6).join(' · ') + (names.length > 6 ? ` 외 ${names.length - 6}건` : '') }));
+  // ⚠ 제목을 그대로 이어 붙이면 안 된다 — 우리 지식 제목은 200자짜리도 있어서(실측) 확인창이 글자 벽이 된다.
+  //  무엇이 사라지는지 알아볼 만큼만 보이면 된다: 한 줄에 하나씩, 42자에서 자른다.
+  for (const n of names.slice(0, 5)) kids.push(el('span', { class: 'l', text: '· ' + (n.length > 42 ? n.slice(0, 42) + '…' : n) }));
+  if (names.length > 5) kids.push(el('span', { class: 'l', text: `· 외 ${names.length - 5}건` }));
   return { el: el('label', { class: 'sess-purge-row', for: id }, box, el('span', { class: 'b' }, ...kids)), box };
 }
 

@@ -1180,4 +1180,4 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .sess-purge-row .b { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .sess-purge-row .n { font-size: 13px; font-weight: 600; }
 .sess-purge-row .h { font-size: 12px; color: var(--blue); }
-.sess-purge-row .l { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.sess-purge-row .l { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
