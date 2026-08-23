@@ -11,7 +11,7 @@
 //
 //  ⚠ **키는 (node_id, session_id) 복합.** 스칼라면 같은 session_id 를 쓰는 두 머신 로그가 한 줄로 병합되고
 //   CAS 가 서로를 못 본다(설계 §5 ①). node_id='' = 게이트웨이 로컬(박스).
-import { itemsPool } from "../db/client.js";
+import { itemsPool, withTx } from "../db/client.js";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 // 무손실 압축 저장(#905 C1 슬②) — 청크 data 를 zstd 로 압축해 저장 공간을 줄인다. **무손실**이라 회수 시 원본 그대로
@@ -289,4 +289,61 @@ export async function reapSessionLogs(retentionDays: number): Promise<{ logs: nu
      SELECT (SELECT count(*) FROM reaped)::int AS logs, (SELECT count(*) FROM delchunks)::int AS chunks`,
     [retentionDays]);
   return { logs: Number(r.rows[0]?.logs ?? 0), chunks: Number(r.rows[0]?.chunks ?? 0) };
+}
+
+// 개인 세션 기록 **완전 삭제**(#1850) — 소유자가 자기 세션 대화 전문을 중앙에서 남김없이 지운다.
+//  ⚠ 보존 reap(위)과 목적이 다르다. reap 은 로그·청크만 지우고 `session` 레지스트리를 **불멸**로 남긴다
+//   (그 세션이 '있었다'는 증언). 여기선 그 증언까지 지운다 — 근거 둘:
+//    ① `session.title` 은 **첫 사람 발화에서 유도**한 값이다(firstUserPromptTitle). 개인정보를 지우겠다는
+//       사람에게 "내용은 지웠지만 당신이 처음 뭐라고 말했는지는 목록에 남아 있다"는 삭제가 아니다.
+//    ② 목록에 행이 남으면 사람은 안 지워졌다고 읽는다. '지웠다'가 화면에서 참이 되어야 한다(#1582 규약).
+//  · 서브에이전트(parent_session_id=이 세션)의 대화록도 함께 지운다 — 같은 대화의 다른 절반이고,
+//    부모만 지우면 그 내용이 고아로 남아 조회 표면에서 계속 읽힌다.
+//  · session_project(프로젝트 귀속)도 함께 — 세션 행이 사라지면 남을 근거가 없다.
+//  · **단일 트랜잭션** — 부분 삭제(내용은 지워졌는데 목록엔 남는 등)를 만들지 않는다. 실패하면 전부 롤백되고
+//    호출자는 '안 지워졌다'를 사실대로 말할 수 있다.
+export async function purgeSessionLog(nodeId: string, sessionId: string, purgedBy = ""): Promise<{ sessions: number; chunks: number; bytes: number; subagents: number }> {
+  return withTx(async (client) => {
+    // 지울 세션 = 이 세션 + 그 서브에이전트들(같은 노드). 한 번에 잡아 두고 그 목록으로만 지운다 —
+    //  삭제 도중 새 서브에이전트가 끼어들어도 이 트랜잭션의 대상은 고정이다(재실행하면 그건 다음에 지워진다).
+    const subs = await client.query(
+      `SELECT session_id FROM session WHERE node_id=$1 AND parent_session_id=$2`, [nodeId, sessionId]);
+    const ids = [sessionId, ...subs.rows.map((r) => String(r.session_id))];
+    // 지운 양(사람에게 "얼마가 사라졌다"를 사실대로 말하기 위해) — 삭제 전에 잰다.
+    const sz = await client.query(
+      `SELECT COALESCE(SUM(bytes), 0)::bigint AS bytes FROM session_log WHERE node_id=$1 AND session_id = ANY($2)`,
+      [nodeId, ids]);
+    const chunks = await client.query(
+      `DELETE FROM session_log_chunk WHERE node_id=$1 AND session_id = ANY($2)`, [nodeId, ids]);
+    await client.query(`DELETE FROM session_log WHERE node_id=$1 AND session_id = ANY($2)`, [nodeId, ids]);
+    const sessions = await client.query(`DELETE FROM session WHERE node_id=$1 AND session_id = ANY($2)`, [nodeId, ids]);
+    // session_project 는 (node 축이 없는) session_id 키다 — 같은 id 가 두 노드에 있으면 남은 쪽의 귀속까지
+    //  지워질 수 있어, **다른 노드에 같은 session_id 가 남아 있지 않을 때만** 지운다.
+    await client.query(
+      `DELETE FROM session_project sp
+        WHERE sp.session_id = ANY($1)
+          AND NOT EXISTS (SELECT 1 FROM session s WHERE s.session_id = sp.session_id)`, [ids]);
+    // 묘비 — 이 좌표는 다시 받지 않는다. 없으면 워터마크가 0으로 돌아간 자리에 캡처 훅이 전문을 다시 올려
+    //  지운 것이 부활한다(세션이 아직 살아 있을 때 특히). 서브에이전트 좌표도 각각 세운다(각자 append 대상이다).
+    for (const id of ids) {
+      await client.query(
+        `INSERT INTO session_purged(node_id, session_id, purged_by) VALUES($1,$2,$3)
+           ON CONFLICT (node_id, session_id) DO UPDATE SET purged_at = now(), purged_by = EXCLUDED.purged_by`,
+        [nodeId, id, purgedBy || null]);
+    }
+    return {
+      sessions: sessions.rowCount ?? 0,
+      chunks: chunks.rowCount ?? 0,
+      bytes: Number(sz.rows[0]?.bytes ?? 0),
+      subagents: subs.rows.length,
+    };
+  });
+}
+
+// 이 좌표가 완전 삭제된 적 있나(#1850) — append·watermark 게이트가 재수집을 거부하는 근거.
+//  ⚠ 조회는 (node, session) 정확일치. 묘비는 되살리지 않는다(복원 경로 없음 — 그게 '완전 삭제'의 뜻이다).
+export async function isSessionPurged(nodeId: string, sessionId: string): Promise<boolean> {
+  const r = await itemsPool.query(
+    `SELECT 1 FROM session_purged WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
+  return r.rows.length > 0;
 }

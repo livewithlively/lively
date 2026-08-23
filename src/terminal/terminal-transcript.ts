@@ -383,3 +383,29 @@ export async function searchPromptsHybrid(sessions: Array<{ id: string; label: s
   const results = scored.slice(0, limit).map(({ d }) => ({ sessionId: d.sessionId, label: d.label, projectId: d.projectId, text: d.text, ts: d.ts }));
   return { results, total: scored.length, truncated: scored.length > limit, partial: false, semantic: !!qEmb };
 }
+
+// 개인 세션 기록 완전 삭제(#1850) — 이 uuid 의 **로컬 대화 파일**을 지운다. 중앙(purgeSessionLog)만 지우면
+//  같은 대화가 박스 디스크에 그대로 남고, `--resume` 이나 통합검색이 그걸 다시 읽어 낸다(=안 지워진 것).
+//  · 소유자 스코프(rootsForOwner)만 훑는다 — 남의 홈에 있는 동명 파일을 지우지 않는다(#1059 와 같은 근거).
+//  · 뿌리 전부를 훑는다(공유 ~/.claude + 프로필 + 격리홈) — 한 곳만 지우면 나머지에서 되살아난다.
+//  · `<enc>/<uuid>/` 하위(서브에이전트 대화록)도 함께 — 같은 대화의 다른 절반이다.
+//  · 못 지운 건(권한 없는 격리 홈 등) 조용히 건너뛴다. 호출자는 지운 개수를 사람에게 사실대로 전한다.
+export async function deleteTranscriptFiles(cwd: string, sessionUuid: string, owner = ""): Promise<number> {
+  // uuid 형식 방어 — 이 값은 경로 조각이 된다. 라우트에서 이미 검증하지만 여기서도 막는다(삭제는 비가역).
+  if (!cwd || !sessionUuid || !/^[A-Za-z0-9._-]{1,64}$/.test(sessionUuid) || sessionUuid.includes("..")) return 0;
+  const enc = cwd.replace(/[/.]/g, "-");
+  let removed = 0;
+  for (const { dir } of rootsForOwner(await transcriptRoots(), owner)) {
+    const base = path.join(dir, enc);
+    try { await fsp.rm(path.join(base, `${sessionUuid}.jsonl`)); removed++; }
+    catch { /* 이 뿌리엔 없음 */ }
+    // 서브에이전트 폴더 — 캡처 훅과 같은 규약(<트랜스크립트 폴더>/<sid>/subagents/*.jsonl).
+    try {
+      const subDir = path.join(base, sessionUuid);
+      const files = (await fsp.readdir(path.join(subDir, "subagents"))).filter((f) => f.endsWith(".jsonl"));
+      await fsp.rm(subDir, { recursive: true, force: true });
+      removed += files.length;
+    } catch { /* 서브에이전트 없음 */ }
+  }
+  return removed;
+}
