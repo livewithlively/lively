@@ -46,7 +46,6 @@ export async function listDeleted(limit = 200, offset = 0): Promise<DeletedRow[]
           ORDER BY entity, entity_key, at DESC, id DESC
        ) latest
       WHERE latest.op = 'delete'
-        AND latest.before IS NOT NULL   -- #1851: 본문이 이미 비워진 행(#1850 세션 발자국 파기 등)은 복원할 것이 없다 — 휴지통에 '(제목 없음)'으로 남기지 않는다
       ORDER BY at DESC
       LIMIT $2 OFFSET $3`,   // #709 offset — 최신 삭제 N건 너머 옛 삭제 항목 복원 도달
     [TRASH_ENTITIES as unknown as string[], Math.min(Math.max(Number(limit) || 200, 1), 500),

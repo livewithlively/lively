@@ -20,8 +20,7 @@ import { dotCls, isArchivedProj, isLiveSess, isTrashedSess, projName } from './v
 export async function loadBins() {
     const [del, kn] = await Promise.all([
         api('/api/ui/deleted?limit=500').then((d) => (Array.isArray(d && d.entries) ? d.entries : [])).catch(() => []),
-        // provenance=authored — 외부 미러(노션 등)가 원본 아카이브를 전파한 archived(#551, dev 실측 511건)는 사람이 치운 것이 아니라 제외.
-        api('/api/ui/knowledge?lifecycle=archived&provenance=authored&limit=500&light=1').then((d) => (Array.isArray(d && d.entries) ? d.entries : [])).catch(() => []),
+        api('/api/ui/knowledge?lifecycle=archived&limit=500&light=1').then((d) => (Array.isArray(d && d.entries) ? d.entries : [])).catch(() => []),
     ]);
     return {
         deleted: del.filter((e) => e && !e.locked && (e.entity === 'project' || e.entity === 'knowledge'))
