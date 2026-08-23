@@ -326,9 +326,14 @@ export async function purgeSessionLog(nodeId: string, sessionId: string, purgedB
     // 묘비 — 이 좌표는 다시 받지 않는다. 없으면 워터마크가 0으로 돌아간 자리에 캡처 훅이 전문을 다시 올려
     //  지운 것이 부활한다(세션이 아직 살아 있을 때 특히). 서브에이전트 좌표도 각각 세운다(각자 append 대상이다).
     for (const id of ids) {
+      // ⚠ ON CONFLICT 에 **제약 컬럼을 적지 않는다**. 이 배포의 PK 는 스키마 정의 그대로가 아니다 —
+      //  멀티테넌시가 켜진 배포에선 부팅 마이그레이션(db/tenant-column.ts)이 모든 표에 tenant_id 를 붙이고
+      //  PK 를 (tenant_id, …) 로 재작성한다. 컬럼을 적으면 그 배포에서 "매칭되는 제약이 없다"로 터지고
+      //  (실측: 이 자리에서 500), 반대로 tenant_id 를 적으면 테넌시가 꺼진 배포에서 터진다.
+      //  묘비는 **있기만 하면 되는** 표라 DO NOTHING 이면 충분하다 — 첫 삭제 시각을 덮을 이유도 없다.
       await client.query(
         `INSERT INTO session_purged(node_id, session_id, purged_by) VALUES($1,$2,$3)
-           ON CONFLICT (node_id, session_id) DO UPDATE SET purged_at = now(), purged_by = EXCLUDED.purged_by`,
+           ON CONFLICT DO NOTHING`,
         [nodeId, id, purgedBy || null]);
     }
     return {
