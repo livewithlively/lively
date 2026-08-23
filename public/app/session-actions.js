@@ -164,36 +164,40 @@ export async function confirmSessionPurge(opts) {
     const rows = [];
     const kc = fp?.knowledge_created ?? [];
     const ke = fp?.knowledge_edited ?? [];
-    const pj = fp?.projects ?? [];
+    const pjMine = (fp?.projects ?? []).filter((p) => p.created_here); // 이 세션이 **만든** 프로젝트만 대상이다
     const acts = fp?.activities ?? 0;
-    if (kc.length || ke.length || pj.length || acts) {
-        rows.push(el('p', { class: 'sess-purge-h', text: '이 세션이 남긴 것도 함께 정리할까요?' }));
-        if (kc.length) {
-            const r = checkRow('pg-kc', `이 세션이 만든 지식 ${kc.length}건 지우기`, kc.map((k) => k.title || k.name));
-            rows.push(r.el);
-            boxes.push({ kind: 'kc', box: r.box });
-        }
-        if (ke.length) {
-            const r = checkRow('pg-ke', `이 세션이 고친 지식 ${ke.length}건`, ke.map((k) => k.title || k.name), '지우지 않고 이 세션 직전 내용으로 되돌려요');
-            rows.push(r.el);
-            boxes.push({ kind: 'ke', box: r.box });
-        }
-        if (pj.length) {
-            const r = checkRow('pg-pj', `이 세션이 만든 프로젝트 ${pj.filter((p) => p.created_here).length}건 지우기`, pj.filter((p) => p.created_here).map((p) => `#${p.id} ${p.name}`));
-            if (pj.some((p) => p.created_here)) {
-                rows.push(r.el);
-                boxes.push({ kind: 'pj', box: r.box });
-            }
-        }
-        if (acts) {
-            const r = checkRow('pg-ac', `이 세션의 작업 기록 ${acts}건 지우기`, []);
-            rows.push(r.el);
-            boxes.push({ kind: 'ac', box: r.box });
-        }
+    // ⚠ 먼저 항목을 만들고, **하나라도 있을 때만** 머리글을 붙인다. 종전엔 머리글 조건에 `projects.length` 를 써서,
+    //  이 세션이 만들지 않은 프로젝트만 붙어 있는 세션에서 **머리글만 뜨고 고를 것이 하나도 없는 화면**이 됐다
+    //  (원준 실측 2026-08-23). 고를 것이 없으면 묻지도 않는다.
+    if (kc.length) {
+        const r = checkRow('pg-kc', `이 세션이 만든 지식 ${kc.length}건 지우기`, kc.map((k) => k.title || k.name));
+        rows.push(r.el);
+        boxes.push({ kind: 'kc', box: r.box });
+    }
+    if (ke.length) {
+        const r = checkRow('pg-ke', `이 세션이 고친 지식 ${ke.length}건 되돌리기`, ke.map((k) => k.title || k.name), '지우지 않고 이 세션 직전 내용으로 되돌립니다');
+        rows.push(r.el);
+        boxes.push({ kind: 'ke', box: r.box });
+    }
+    if (pjMine.length) {
+        const r = checkRow('pg-pj', `이 세션이 만든 프로젝트 ${pjMine.length}건 지우기`, pjMine.map((p) => `#${p.id} ${p.name}`));
+        rows.push(r.el);
+        boxes.push({ kind: 'pj', box: r.box });
+    }
+    if (acts) {
+        const r = checkRow('pg-ac', `이 세션의 작업 기록 ${acts}건 지우기`, []);
+        rows.push(r.el);
+        boxes.push({ kind: 'ac', box: r.box });
+    }
+    if (rows.length) {
+        // ⚠ **질문형으로 쓰지 않는다.** "…도 함께 정리할까요?" 라고 물으면 사람은 그 물음에 답하는 [예]/[아니오] 를
+        //  찾는데, 아래 버튼은 [취소]/[완전 삭제] 뿐이라 "정리는 원치 않는다"를 고를 데가 없어 보인다(원준 지적).
+        //  체크박스 묶음의 머리글은 **질문이 아니라 이름표**다 — 답은 체크박스가 하고, 안 고르면 그게 '아니오'다.
+        rows.unshift(el('p', { class: 'sess-purge-h' }, el('span', { text: '함께 지울 것을 고르세요' }), el('span', { class: 'sub', text: '고르지 않으면 대화 기록만 지웁니다' })));
     }
     else if (fp && !fp.tmux_session_id) {
         // 다리(대화 uuid ↔ tmux 세션)가 없으면 작업 기록을 **찾을 수 없다**. 없다고 단언하지 않는다.
-        rows.push(el('p', { class: 'sess-purge-h', text: '이 세션이 만든 지식·프로젝트는 찾지 못했어요 — 있다면 그대로 남습니다.' }));
+        rows.push(el('p', { class: 'sess-purge-h' }, el('span', { text: '이 세션이 만든 지식·프로젝트·작업 기록은 찾지 못했어요' }), el('span', { class: 'sub', text: '있더라도 이 삭제로는 지워지지 않고 그대로 남습니다' })));
     }
     const ok = await confirmDialog({
         title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
@@ -209,7 +213,7 @@ export async function confirmSessionPurge(opts) {
         log: true,
         knowledge: on('kc') ? kc.map((k) => k.name) : [],
         revert: on('ke') ? ke.map((k) => k.name) : [],
-        projects: on('pj') ? pj.filter((p) => p.created_here).map((p) => p.id) : [],
+        projects: on('pj') ? pjMine.map((p) => p.id) : [],
         activities: on('ac'),
     };
 }
