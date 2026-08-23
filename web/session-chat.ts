@@ -21,6 +21,8 @@
 import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, toast } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { toolLabel } from './session-tool-labels.js';
+// #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
+import { confirmSessionPurge, purgeSessionRecord, purgedToast } from './session-actions.js';
 import { classifyToolUse, type TrailWidget } from './session-trail.js';
 import { effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 
@@ -102,6 +104,28 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       projEl.replaceChildren(el('span', { class: 'sc-proj-none', text: target.projectName || '프로젝트 없음' }));
     }
   }
+  // [기록 삭제] — 이 세션의 중앙 대화 기록을 영구 삭제한다(#1850). 확인창·실행·문구는 session-actions 의 단일 정의.
+  function purgeAct(): HTMLElement {
+    const b = el('button', { class: 'btn-text sc-act', type: 'button', text: '기록 삭제',
+      title: '이 세션의 대화 전문을 중앙 기록에서 영구 삭제합니다(되돌릴 수 없음).' }) as HTMLButtonElement;
+    b.addEventListener('click', async () => {
+      // 기록 좌표: 라이브 행에 접힌 기록이면 logId, 기록 행 자체면 그 id 가 곧 대화 uuid 다.
+      const sid = target.logId || (!target.live ? target.id : '');
+      const node = (target.logNode ?? target.node) || '';
+      if (!sid) { toast('아직 중앙에 올라온 대화 기록이 없어요 — 지울 것이 없습니다.'); return; }
+      const okd = await confirmSessionPurge({
+        title: '이 세션 기록을 완전히 지울까요?',
+        lines: [target.label || sid],
+        remoteNode: node || null,
+        live: target.live && target.alive,
+      });
+      if (!okd) return;
+      b.disabled = true; b.textContent = '지우는 중…';
+      try { toast(purgedToast(await purgeSessionRecord(sid, node))); b.textContent = '삭제됨'; }
+      catch (e: any) { toast(e?.message || '지우지 못했습니다.'); b.disabled = false; b.textContent = '기록 삭제'; }
+    });
+    return b;
+  }
   paintProject();
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
@@ -115,7 +139,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       idxBtn,
       opts.terminalSrc && isBox ? modeBtn : null,
       el('button', { class: 'btn-text sc-act', type: 'button', text: '링크', title: '이 세션 링크 복사', onclick: async () => { try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); } catch { window.prompt('이 링크를 복사하세요:', location.href); } } }),
-      opts.openHref ? el('a', { class: 'btn-text sc-act', href: opts.openHref, target: '_blank', rel: 'noopener', text: '새 탭 ↗' }) : null));
+      opts.openHref ? el('a', { class: 'btn-text sc-act', href: opts.openHref, target: '_blank', rel: 'noopener', text: '새 탭 ↗' }) : null,
+      // 기록 완전 삭제(#1850) — 내 세션일 때만. 좌표(중앙 기록 uuid)는 **누르는 시점의 target** 에서 읽는다:
+      //  라이브 세션은 첫 턴이 끝나야 기록이 생겨(logId 가 그때 붙는다) 화면을 그릴 땐 아직 없을 수 있다.
+      first.owned ? purgeAct() : null));
 
   const chatHost = el('div', { class: 'sc-chat' });
   const termHost = el('div', { class: 'sc-term', hidden: true });

@@ -13,13 +13,14 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { getRuntimeConfig } from "../org/store.js";
-import { appendSessionLog, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession } from "../v6/session-log-store.js";
+import { auditOrgContent } from "../v6/content-audit.js";   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
+import { appendSessionLog, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged } from "../v6/session-log-store.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import { parseWindow } from "../terminal/harness-io/parse-cache.js";
 import { toNdjson } from "../terminal/harness-io/chat-line.js";
 import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
-import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } from "../terminal/terminal-transcript.js";
+import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing, deleteTranscriptFiles } from "../terminal/terminal-transcript.js";
 import { createSession, sharedRoot } from "../terminal/terminal-sessions.js";
 import path from "node:path";
 import { getSessionState } from "./session-state.js";
@@ -33,10 +34,15 @@ export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8
 export interface AppendGateInput {
   enabled: boolean; harnesses: string[];
   requester: string; harness: string | null; owner: string | null; atOffset: number;
+  purged?: boolean;   // 이 좌표가 완전 삭제된 적 있나(#1850) — 있으면 다시 받지 않는다.
 }
 export function checkAppendGate(g: AppendGateInput): { status: number; message: string } | null {
   if (!g.requester) return { status: 403, message: "사용자 신원이 없습니다" };
   if (!Number.isFinite(g.atOffset) || g.atOffset < 0 || Math.floor(g.atOffset) !== g.atOffset) return { status: 400, message: "at(오프셋)은 0 이상 정수여야 합니다" };
+  // 🔑 묘비 게이트(#1850) — 소유자가 완전 삭제한 세션은 **다시 받지 않는다**. 이게 없으면 삭제로 워터마크가 0이
+  //  된 자리에 캡처 훅이 다음 턴에 전문을 처음부터 다시 올려 **지운 것이 부활한다**(세션이 아직 살아 있을 때).
+  //  enabled 검사보다 앞에 둔다 — 조직 스위치와 무관하게 개인의 삭제 결정이 우선한다.
+  if (g.purged) return { status: 410, message: "완전 삭제된 세션입니다 — 이 기록은 다시 수집하지 않습니다" };
   if (!g.enabled) return { status: 403, message: "세션 공유가 꺼져 있습니다(관리탭 ▸ 세션 공유에서 켜세요)" };
   if (g.harness && !g.harnesses.includes(g.harness)) return { status: 403, message: `하네스 '${g.harness}' 는 수집 대상이 아닙니다` };
   if (g.owner && g.owner !== g.requester) return { status: 403, message: "이 세션 로그의 소유자가 아닙니다" };
@@ -55,6 +61,17 @@ export function checkViewGate(g: ViewGateInput): { status: number; message: stri
   if (g.owner && g.owner === g.requester) return null;                    // 소유자는 언제나 자기 로그를 본다
   if (g.viewPolicy === "attach" && g.isProjectMember) return null;        // 프로젝트 멤버 열람(DB 기반, 죽은 세션도)
   return { status: 403, message: "이 세션 로그를 볼 권한이 없습니다" };
+}
+// 완전 삭제 인가 판정(순수, #1850) — 개인정보 삭제요구권의 이행 경로라 게이트를 좁게 잡는다. ok면 null.
+//  · **소유자 본인만**. 열람(checkViewGate)은 프로젝트 멤버까지 넓지만, 지우는 것은 그 대화를 말한 사람의 권한이다 —
+//    남의 프로젝트 멤버가 남의 대화를 지울 수 있으면 그건 삭제권이 아니라 검열이다.
+//  · 관리자 특권도 두지 않는다(이 슬라이스 범위 밖). 조직 차원의 일괄 파기는 보존기간(reap)이 담당한다.
+//  · 기록이 아예 없으면 404 — "지웠다"고 거짓말하지 않는다(#1582 규약: 확인창은 실제로 일어난 일만 말한다).
+export function checkPurgeGate(g: { requester: string; owner: string | null }): { status: number; message: string } | null {
+  if (!g.requester) return { status: 403, message: "사용자 신원이 없습니다" };
+  if (!g.owner) return { status: 404, message: "중앙에 기록된 세션이 없습니다" };
+  if (g.owner !== g.requester) return { status: 403, message: "이 세션 기록을 지울 수 없습니다(소유자만 가능)." };
+  return null;
 }
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -126,7 +143,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // 인가 게이트(순수 checkAppendGate) — enabled·하네스·소유자·오프셋. config·owner 는 DB 에서 채운다.
     const cfg = (await getRuntimeConfig()).session_share;
     const owner = await sessionOwner(nodeId, sessionId);
-    const denied = checkAppendGate({ enabled: cfg.enabled, harnesses: cfg.harnesses, requester, harness, owner, atOffset });
+    const purged = await isSessionPurged(nodeId, sessionId);
+    const denied = checkAppendGate({ enabled: cfg.enabled, harnesses: cfg.harnesses, requester, harness, owner, atOffset, purged });
     if (denied) throw new HttpError(denied.status, denied.message);
 
     const data = await readRawBody(req, MAX_DELTA);
@@ -158,6 +176,14 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
     const owner = await sessionOwner(nodeId, sessionId);
     if (owner && owner !== requester) throw new HttpError(403, "이 세션 로그의 소유자가 아닙니다");
+    // 묘비(#1850) — 완전 삭제된 좌표는 **capture.enabled=false** 로 답한다. 훅은 이 한 번의 GET 으로 "보낼지"를
+    //  정하므로(`if (cap.enabled !== true) return`), 여기서 끄면 델타를 아예 만들지 않는다 — POST 로 와서
+    //  410 을 맞는 것보다 조용하고 싸다. append 쪽 묘비 게이트는 그대로 둔다(구 훅·직접 호출 방어).
+    if (await isSessionPurged(nodeId, sessionId)) {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ bytes: 0, capture: { enabled: false, harnesses: [], scope: "main", store: "slim" } });
+      return;
+    }
     const c = (await getRuntimeConfig()).session_share;
     res.setHeader("Cache-Control", "no-store");
     res.json({
@@ -223,7 +249,10 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       const includeSidechain = !!(await sessionParent(nodeId, sessionId));
       // 비-claude 는 어댑터로 공통 ChatLine 을 만든 뒤 렌더(renderTranscript 는 ChatLine 문법을 읽는다). claude 는 원본 그대로.
       const text = (io && io.parse && io.key !== "claude") ? toNdjson(io.parse(log.data.toString("utf8"), {}).lines) : log.data.toString("utf8");
-      res.json({ from: log.from, bytes: log.bytes, items: renderTranscript(text, 5000, { includeSidechain }) });
+      // isOwner 를 함께 싣는다(#1850) — 대화록 화면이 [완전 삭제]를 **소유자에게만** 보이려면 이게 필요하다.
+      //  이 화면은 공유 링크로도 열리고(view_policy=attach 면 프로젝트 멤버도 본다) 목록을 거치지 않을 수 있어,
+      //  클라가 자기 신원만으로는 판정할 근거가 없다. 서버는 위에서 이미 계산해 뒀다.
+      res.json({ from: log.from, bytes: log.bytes, isOwner, items: renderTranscript(text, 5000, { includeSidechain }) });
       return;
     }
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
@@ -311,5 +340,53 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       return;
     }
     throw new HttpError(409, "원본 머신을 열 수 없고 연결된 프로젝트도 없어 이어받기 세션을 만들 수 없습니다.");
+  }));
+
+  // 세션 기록 **완전 삭제**(#1850) — 소유자가 자기 대화 전문을 남김없이 지운다. 되돌릴 수 없다(휴지통 없음).
+  //  왜 휴지통이 없나: 지식·프로젝트 삭제는 감사 스냅샷(org_content_audit.before)에 전문을 남겨 복원하지만,
+  //  그 구조를 여기 그대로 쓰면 "지웠는데 내용이 감사 테이블에 그대로 있는" 상태가 된다 — 개인정보 파기 요구에
+  //  대한 답이 못 된다. 그래서 이 경로만은 **스냅샷을 남기지 않는다**. 감사에는 '누가 언제 무엇을 지웠나'만.
+  //  지우는 범위(세 겹):
+  //   ① 중앙 — 대화 청크·워터마크·세션 레지스트리(제목 포함)·서브에이전트 대화록·프로젝트 귀속
+  //   ② 로컬 — 이 박스의 대화 파일(<cwd 인코딩>/<uuid>.jsonl + 서브에이전트 폴더)
+  //   ③ 앞으로 — 묘비를 세워 캡처 훅의 재수집을 거부(안 그러면 살아 있는 세션이 다음 턴에 전문을 다시 올린다)
+  //  ⚠ 원격 노드(node_id≠'') 세션의 **로컬 파일은 그 컴퓨터에 있어 여기서 못 지운다** — 응답에 사실대로 싣는다.
+  app.delete("/api/ui/v6/sessions/:id", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    const sessionId = String(req.params.id ?? "");
+    if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+    const nodeId = String(req.query.node ?? "");
+    if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+
+    const owner = await sessionOwner(nodeId, sessionId);
+    const denied = checkPurgeGate({ requester, owner });
+    if (denied) throw new HttpError(denied.status, denied.message);
+
+    // 로컬 파일을 지우려면 그 세션의 cwd 가 필요한데, 그 값은 **로그 본문에만** 있다(session 행엔 없다).
+    //  지우고 나면 알아낼 방법이 없으므로 반드시 먼저 회수한다. 앞부분만 읽으면 충분하다(cwd 는 첫 줄들에 있다).
+    let cwd: string | null = null;
+    try { cwd = firstTranscriptCwd((await readSessionLog(nodeId, sessionId, 0, 256 * 1024)).data.toString("utf8")); }
+    catch { /* 본문을 못 읽어도 중앙 삭제는 진행한다 — 로컬 파일만 못 지운다(응답에 표시) */ }
+
+    const purged = await purgeSessionLog(nodeId, sessionId, requester);
+
+    // 로컬 파일 — 게이트웨이 로컬 세션(node_id='')만. 실패해도 중앙 삭제를 되돌리지 않는다(부분 성공을 사실대로 보고).
+    let localFiles = 0;
+    if (nodeId === "" && cwd) {
+      try { localFiles = await deleteTranscriptFiles(cwd, sessionId, requester); }
+      catch { /* 권한 등으로 못 지움 — localFiles=0 이 그대로 사실이다 */ }
+    }
+
+    // 감사 — before 는 **null**(스냅샷 없음, 위 주석). after 도 내용이 아니라 '얼마를 지웠나'뿐이다.
+    await auditOrgContent("session_log", `${nodeId}|${sessionId}`, "delete", null,
+      { bytes: purged.bytes, chunks: purged.chunks, subagents: purged.subagents, local_files: localFiles },
+      { actor: requester, source: "web" });
+
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true, ...purged, localFiles,
+      // 원격 노드면 그 컴퓨터의 파일은 남는다 — 화면이 이걸 그대로 사람에게 말한다(#1582: 실제로 일어난 일만).
+      localPending: nodeId !== "" ? nodeId : null,
+    });
   }));
 }

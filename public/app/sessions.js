@@ -1,7 +1,9 @@
 // sessions.ts — 세션이력 웹뷰(#905 C1 슬⑤b). `#/sessions`(내 세션 목록) · `#/sessions/<sid>[?node=&q=&ln=]`(대화록·공유).
 //  설계(사용자 요청): 스키밍 — 질문·답변 모두 10줄 하드 캡(더보기)·질문 사이드바 네비·마크다운 렌더·질문/줄 단위 링크.
 //  ⚠ 트랜스크립트 본문은 신뢰 불가 → el({text})(textContent) 또는 renderMarkdown(core, textContent 기반)로만 렌더(innerHTML 금지, XSS 방어).
-import { api, el, toast, renderMarkdown } from './core.js';
+import { api, el, state, toast, renderMarkdown } from './core.js';
+// #1850 완전 삭제 — 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약: 같은 동작은 한 정의).
+import { confirmSessionPurge, purgeSessionRecord, purgedToast } from './session-actions.js';
 const PAGE_SIZE = 15; // 목록 페이지당 세션 수(페이지네이션).
 const fmtBytes = (b) => !b ? '비어있음' : b >= 1048576 ? (b / 1048576).toFixed(1) + 'MB' : b >= 1024 ? Math.round(b / 1024) + 'KB' : b + 'B';
 function fmtWhen(iso) {
@@ -20,6 +22,10 @@ function fmtWhen(iso) {
     return new Date(iso).toISOString().slice(0, 10);
 }
 const shortId = (sid) => sid.length > 12 ? sid.slice(0, 8) + '…' : sid;
+// 나(서버 idOf 와 같은 규칙: userId 우선, 없으면 email) — 완전 삭제 버튼을 **내 기록에만** 보이기 위해.
+//  ⚠ 이 목록면은 내 세션만 오지만, 프로젝트 세션 모달(openProjectSessionsModal)은 **팀원 전원의 세션**을 싣는다.
+//   판정 없이 버튼을 달면 남의 대화에 삭제 버튼이 보인다(서버가 403 으로 막지만, 눌러서 거절당할 버튼은 안 보인다).
+const meId = () => String((state.me && (state.me.userId || state.me.email)) || '');
 // #/sessions/<sid>[?node=&q=&ln=] 파싱 — 없으면(=목록) null. q=질문(턴) 앵커, ln=줄/블록 앵커.
 function parseSel() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -58,12 +64,25 @@ export function renderSessionListInto(container, sessions, emptyMsg, onGo) {
         container.replaceChildren(el('p', { class: 'admin-hint', text: emptyMsg }));
         return;
     }
-    const pages = Math.ceil(rows.length / PAGE_SIZE);
     let page = 0;
     const listBox = el('div');
     const pager = el('div', { style: 'display:flex;gap:10px;align-items:center;justify-content:center;margin-top:12px' });
     const draw = () => {
-        listBox.replaceChildren(...rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((s) => sessionRowEl(s, onGo)));
+        listBox.replaceChildren(...rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((s) => sessionRowEl(s, onGo, () => {
+            const i = rows.indexOf(s);
+            if (i >= 0)
+                rows.splice(i, 1);
+            // 마지막 페이지의 마지막 행을 지우면 그 페이지가 사라진다 — 빈 페이지에 남지 않게 한 칸 당긴다.
+            const lastPage = Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1);
+            if (page > lastPage)
+                page = lastPage;
+            if (!rows.length) {
+                container.replaceChildren(el('p', { class: 'admin-hint', text: emptyMsg }));
+                return;
+            }
+            draw();
+        })));
+        const pages = Math.ceil(rows.length / PAGE_SIZE); // 삭제로 줄어들 수 있다 — 그릴 때마다 다시 센다
         if (pages <= 1) {
             pager.replaceChildren();
             return;
@@ -85,7 +104,7 @@ export function renderSessionListInto(container, sessions, emptyMsg, onGo) {
     draw();
     container.replaceChildren(listBox, pager);
 }
-function sessionRowEl(s, onGo) {
+function sessionRowEl(s, onGo, onPurged) {
     const link = '#/sessions/' + encodeURIComponent(s.session_id) + (s.node_id ? '?node=' + encodeURIComponent(s.node_id) : '');
     const title = s.title || shortId(s.session_id);
     const who = s.owner_name || s.owner || '(알 수 없음)';
@@ -97,10 +116,35 @@ function sessionRowEl(s, onGo) {
     catch { /* */ } if (onGo)
         onGo(); };
     const open = el('a', { class: 'btn btn-ghost btn-sm', href: link, text: '이어보기 →' });
+    // 완전 삭제(#1850) — 내 기록일 때만 보인다(서버도 소유자만 허용하지만, 누를 수 없는 버튼을 보이지 않는다).
+    const mine = !!s.owner && s.owner === meId();
+    const purge = el('button', { class: 'btn-text', style: 'color:var(--danger,#dc2626)', text: '완전 삭제',
+        title: '이 세션의 대화 전문을 중앙 기록에서 영구 삭제합니다(되돌릴 수 없음).' });
+    purge.addEventListener('click', async () => {
+        const okd = await confirmSessionPurge({
+            title: '이 세션 기록을 완전히 지울까요?',
+            lines: [`${title} · ${fmtBytes(s.bytes)}`],
+            remoteNode: s.node_id || null,
+        });
+        if (!okd)
+            return;
+        purge.disabled = true;
+        purge.textContent = '지우는 중…';
+        try {
+            toast(purgedToast(await purgeSessionRecord(s.session_id, s.node_id)));
+            if (onPurged)
+                onPurged();
+        }
+        catch (e) {
+            toast(e?.message || '지우지 못했습니다.');
+            purge.disabled = false;
+            purge.textContent = '완전 삭제';
+        }
+    });
     const titleLink = el('a', { href: link, style: 'font-weight:600;text-decoration:none;color:inherit', text: title });
     open.addEventListener('click', remember);
     titleLink.addEventListener('click', remember);
-    return el('div', { class: 'sess-row', style: 'display:flex;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(127,127,127,.15)' }, el('div', { style: 'flex:1;min-width:0' }, el('div', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, titleLink), el('div', { class: 'admin-hint', style: 'font-size:12px;margin-top:2px', text: meta })), open);
+    return el('div', { class: 'sess-row', style: 'display:flex;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(127,127,127,.15)' }, el('div', { style: 'flex:1;min-width:0' }, el('div', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, titleLink), el('div', { class: 'admin-hint', style: 'font-size:12px;margin-top:2px', text: meta })), ...(mine ? [purge] : []), open);
 }
 // 세션 기록 모달(버튼→모달, 공간 절약) — 페이지네이션·빈세션 제외. 진입 시 오버레이 닫고 현재 페이지를 '돌아갈 곳'으로.
 //  프로젝트용(모두의 세션)·터미널탭용(내 세션)이 공유. url 만 다르다.
@@ -217,6 +261,32 @@ async function renderTranscriptPage(view, sel) {
         return;
     }
     const items = Array.isArray(data?.items) ? data.items : [];
+    // 완전 삭제(#1850) — 서버가 판정한 isOwner 일 때만 헤더에 단다. 이 화면은 공유 링크로도 열리므로
+    //  '내가 로그인해 있다'가 '내 대화다'를 뜻하지 않는다(view_policy=attach 면 팀원의 대화도 여기서 열린다).
+    if (data?.isOwner) {
+        const purgeBtn = el('button', { class: 'btn btn-ghost btn-sm', style: 'color:var(--danger,#dc2626)', text: '완전 삭제' });
+        purgeBtn.addEventListener('click', async () => {
+            const okd = await confirmSessionPurge({
+                title: '이 세션 기록을 완전히 지울까요?',
+                lines: [document.getElementById('sess-title')?.textContent || shortId(sid)],
+                remoteNode: node || null,
+            });
+            if (!okd)
+                return;
+            purgeBtn.disabled = true;
+            purgeBtn.textContent = '지우는 중…';
+            try {
+                toast(purgedToast(await purgeSessionRecord(sid, node)));
+                location.hash = '#/sessions'; // 지운 대화록에 머물러 있으면 화면이 사실과 어긋난다 — 목록으로 돌아간다.
+            }
+            catch (e) {
+                toast(e?.message || '지우지 못했습니다.');
+                purgeBtn.disabled = false;
+                purgeBtn.textContent = '완전 삭제';
+            }
+        });
+        copyBtn.parentElement?.insertBefore(purgeBtn, back);
+    }
     if (!items.length) {
         convo.replaceChildren(el('p', { class: 'admin-hint', text: '표시할 대화가 없습니다.' }));
         return;

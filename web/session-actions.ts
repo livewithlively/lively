@@ -118,3 +118,45 @@ export function sessionLogLink(text?: string): HTMLElement {
     href: location.pathname + '#/sessions', text: text || '📜 세션 기록 열어보기 →',
   }) as HTMLElement;
 }
+
+// ── 세션 기록 **완전 삭제**(#1850) ── 위 두 확인창과 잃는 것이 근본적으로 다르다.
+//  · '종료'·'지우기' 는 **대화록을 건드리지 않는다**(그게 위 문구들의 핵심 약속이다).
+//  · 이건 그 대화록 자체를 지운다 — 그래서 위 keepNote 를 재사용하면 정반대를 말하게 된다. 문구를 따로 짠다.
+//  개인정보를 지우려는 사람이 이 버튼을 누른다. 그러므로 확인창은 **안 지워지는 것**을 반드시 함께 말해야 한다 —
+//  이 세션에서 만든 지식·프로젝트·작업 기록은 별개 자산이라 그대로 남는다. 그걸 안 말하면 "다 지웠다"가 거짓이 된다.
+export async function confirmSessionPurge(opts: { title: string; lines?: string[]; remoteNode?: string | null; live?: boolean }): Promise<boolean> {
+  const kept = [
+    '작업 폴더·파일·커밋은 그대로 남습니다.',
+    '이 세션에서 만든 지식·프로젝트·작업 기록은 지워지지 않아요 — 필요하면 각각 따로 지우세요.',
+  ];
+  // 원격 노드 세션이면 그 컴퓨터의 대화 파일은 여기서 못 지운다 — 있지도 않은 완전함을 약속하지 않는다.
+  if (opts.remoteNode) kept.push(`대화 파일이 다른 컴퓨터(${opts.remoteNode})에도 있다면 그건 여기서 지울 수 없어요.`);
+  // 아직 도는 세션을 지우면 **이후 대화도 중앙에 안 올라간다**(지운 기록이 다시 수집돼 되살아나는 걸 막는 장치라
+  //  그 세션 전체가 수집 대상에서 빠진다). 사람이 이걸 모르고 누르면 나중에 "왜 기록이 없지?"가 된다 — 미리 말한다.
+  if (opts.live) kept.push('이 세션은 계속 쓸 수 있지만, 앞으로의 대화도 중앙 기록에 남지 않습니다.');
+  return confirmDialog({
+    title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
+    message: '대화 전문이 중앙 기록에서 영구 삭제됩니다. 휴지통에 남지 않아 되돌릴 수 없어요.',
+    lines: opts.lines || [],
+    note: kept.join(' '),
+  });
+}
+
+// 완전 삭제 실행 — 서버가 실제로 지운 양을 돌려준다(화면은 그 값으로만 말한다, 추정 금지).
+export interface PurgeResult { bytes: number; subagents: number; localFiles: number; localPending: string | null }
+export async function purgeSessionRecord(sid: string, node: string): Promise<PurgeResult> {
+  const r: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}?node=${encodeURIComponent(node || '')}`, { method: 'DELETE' });
+  return {
+    bytes: Number(r?.bytes) || 0, subagents: Number(r?.subagents) || 0,
+    localFiles: Number(r?.localFiles) || 0, localPending: r?.localPending || null,
+  };
+}
+
+// 완전 삭제 뒤 토스트 — 실제로 일어난 일만. 원격 노드 파일이 남았으면 그것도 숨기지 않는다.
+export function purgedToast(r: PurgeResult): string {
+  const kb = r.bytes >= 1024 ? `${Math.round(r.bytes / 1024).toLocaleString()}KB` : `${r.bytes}B`;
+  const parts = [`대화 기록을 완전히 지웠어요 (${kb}${r.subagents ? ` · 서브에이전트 ${r.subagents}개` : ''})`];
+  if (r.localFiles) parts.push(`이 박스의 대화 파일 ${r.localFiles}개도 삭제`);
+  if (r.localPending) parts.push(`⚠ ${r.localPending} 컴퓨터의 파일은 그대로입니다`);
+  return parts.join(' · ');
+}
