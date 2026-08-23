@@ -414,7 +414,14 @@
 /* 갈 데가 없으면 끈다 — 눌러도 아무 일 없는 단추를 켜 둔 채로 두지 않는다. */
 .pn-web-btn:disabled { color: var(--muted-3); border-color: var(--line-row); cursor: default; }
 .pn-web-btn:disabled:hover { color: var(--muted-3); border-color: var(--line-row); }
+/* ── 무대(stage) — 프레임을 넓게 잡고 줄여 그리는 자리 (원준 2026-08-21 '폭 맞춤') ────────────
+   프레임의 **논리 폭**을 1/배율 로 키우고 그만큼 축소하면, 사이트는 넓은 화면인 줄 알고 데스크톱 배치를
+   펴고 그게 칸 안에 통째로 들어온다(가로가 안 잘린다). 무대는 넘치는 부분을 잘라 담는 그릇이다. */
+.pn-webstage { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; background: var(--surface); }
+.pn-webstage > .pn-webframe { position: absolute; top: 0; left: 0; transform-origin: top left; }
 .pn-webframe { flex: 1; min-height: 0; min-width: 0; width: 100%; border: 0; background: var(--surface); }
+/* 배율 칩 — 숫자가 들어가므로 정사각(ic)이 아니라 조금 넓다. 누르면 맞춤↔100% 를 오간다. */
+.pn-web-btn.zl { min-width: 44px; padding: 0 6px; font-variant-numeric: tabular-nums; }
 /* 데스크톱 앱(#1829)에서는 이 칸이 <webview> 다 — 교체 요소라 내재 크기로 버티므로 flex 자식임을 명시한다. */
 webview.pn-webframe { display: flex; }
 .pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }

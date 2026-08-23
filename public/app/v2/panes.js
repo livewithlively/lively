@@ -672,6 +672,11 @@ export function mountPanes(host, opts) {
     const timer = window.setInterval(() => {
         if (dead)
             return;
+        // 안 보이는 셸 탭에서는 돌지 않는다 — 탭은 갈아 껴도 살아 있으므로(대화 보존), 열어 둔 탭 수만큼
+        //  8초마다 문패를 다시 그리고 부품을 갱신하는 값이 그대로 붙는다. 지금 아무도 안 보는 화면이다.
+        //  (다시 보이면 다음 틱에 따라잡는다 — 본디 8초 간격이라 사람이 느낄 차이가 아니다.)
+        if (!wrap.isConnected || wrap.getClientRects().length === 0)
+            return;
         for (const pane of panes.values()) {
             const act = lay.act[pane.zone];
             if (!act)

@@ -694,6 +694,16 @@ export function openInWebPart(ctx: PartCtx, url: string): void {
 function webPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-web' });
   const KEY = WEB_URL_KEY;
+  // 재우기 상태(아래 '안 보이면 재운다') — 주소를 싣는 모든 길(load·adopt·reload)이 이걸 만지므로 맨 위에 둔다.
+  //  ⚠ 아래쪽에 선언하면 adopt() 가 초기화 전에 읽어 TDZ 로 죽는다.
+  let hiddenSince = 0;
+  let asleep = '';                               // 재우기 전에 보던 주소('' = 깨어 있음)
+  // 배율 — 세션마다 따로(곁칸 부품은 그 세션의 것). null = **폭 맞춤**(칸 폭에 맞춰 자동).
+  const zooms = new Map<string, number | null>();
+  const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+  //  폭 맞춤의 기준 폭 — 데스크톱 배치가 통째로 들어오는 폭이다. 이보다 좁은 칸에서는 그만큼 줄여서
+  //  **가로가 잘리지 않게** 보여 준다(원준 2026-08-21: "곁칸 가로 폭을 인식해서 가로화면이 잘리지 않게").
+  const FIT_BASE = 1280;
   const store = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (_) { return {}; } };
   // 주소는 **세션마다** 따로 기억한다 — 옆 세션에서 열어 둔 페이지가 이 세션 칸에 뜨면 그건 남의 화면이다(원준 2026-08-20).
   const keyOf = (): string => ctx.memKey();
@@ -733,6 +743,7 @@ function webPart(ctx: PartCtx): Part {
   };
   /** 이 칸에 주소를 싣는 **유일한 자리** — 주소칸·기억·다닌 길·단추 상태가 한 번에 맞는다. */
   const load = (u: string, record: boolean): void => {
+    asleep = '';                                 // 사람이 새 주소로 갔다 — 재우기 전 주소로 되돌릴 이유가 없어졌다
     input.value = u;
     frame.setAttribute('src', u);
     if (record) pushTrail(u);
@@ -762,6 +773,7 @@ function webPart(ctx: PartCtx): Part {
   // 지금 프레임에 실린 **그 주소를 다시** 싣는다 — go() 는 주소칸의 글자로 '가는' 것이라 뜻이 다르다.
   //  같은 주소를 src 에 그대로 넣는 것만으로는 #조각만 다른 주소에서 다시 싣지 않으므로, 남의 사이트면 빈 화면을 한 번 거친다.
   const reload = (): void => {
+    if (asleep) { const u0 = asleep; asleep = ''; frame.setAttribute('src', u0); return; }   // 자고 있었다 → 깨우는 것이 곧 다시 싣기다
     const u = frame.getAttribute('src') || norm(input.value);
     if (!u) return;
     // 프레임은 둘 중 하나다(위 live). ⚠ webview 엔 contentWindow 가 없어 iframe 길로 가면 `?.` 가 조용히 빠지고
@@ -788,16 +800,62 @@ function webPart(ctx: PartCtx): Part {
   const fwdBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '앞으로',
     title: live ? '뒤로 오기 전 화면으로 갑니다.' : '뒤로 오기 전에 보던 주소로 다시 갑니다.',
     onclick: () => step(1) }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  // 배율 조절 — [－][지금 배율][＋]. 가운데를 누르면 **폭 맞춤 ↔ 100%** 를 오간다(브라우저에서 배율을 눌러 되돌리는 관용).
+  //  ⚠ [열기] 단추는 뺐다(원준 2026-08-21 재배치) — 주소칸에서 Enter 가 같은 일을 하고, 좁은 곁칸에서 그 자리는
+  //   주소가 보이는 폭이 더 값지다. 밖으로 내보내는 [↗]는 그대로 둔다(그건 Enter 로 못 하는 일이다).
+  const zoomOut = el('button', { class: 'pn-web-btn ic', type: 'button', title: '축소합니다.', 'aria-label': '축소', onclick: () => stepZoom(-1) }) as HTMLButtonElement;
+  zoomOut.textContent = '−';
+  const zoomIn = el('button', { class: 'pn-web-btn ic', type: 'button', title: '확대합니다.', 'aria-label': '확대', onclick: () => stepZoom(1) }) as HTMLButtonElement;
+  zoomIn.textContent = '+';
+  const zoomLbl = el('button', { class: 'pn-web-btn zl', type: 'button', onclick: () => { setZoom(zooms.get(keyOf()) == null ? 1 : null); } }) as HTMLButtonElement;
+  const stage = el('div', { class: 'pn-webstage' }, frame);
   root.append(
     el('div', { class: 'pn-web-bar' },
       el('span', { class: 'pn-web-navs' },
         backBtn, fwdBtn,
         el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm'))),
       input,
-      el('button', { class: 'pn-web-btn', type: 'button', text: '열기', onclick: () => go() }),
+      el('span', { class: 'pn-web-navs' }, zoomOut, zoomLbl, zoomIn),
       openTab),
-    frame,
+    stage,
     live ? null : el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요. 데스크톱 앱에서는 이 칸 안에 그대로 뜹니다.' }));
+  /** 지금 실제로 걸리는 배율 — 폭 맞춤이면 칸 폭에서 계산한다(1 을 넘겨 키우지는 않는다). */
+  function effZoom(): number {
+    const z = zooms.get(keyOf());
+    if (z != null) return z;
+    const w = stage.clientWidth || root.clientWidth || FIT_BASE;
+    return Math.max(0.25, Math.min(1, Math.round((w / FIT_BASE) * 100) / 100));
+  }
+  /** 배율을 화면에 입힌다. 앱은 <webview> 의 진짜 배율, 웹은 프레임을 넓게 잡고 줄여 그린다.
+   *  ⚠ 웹(iframe)에서 폭을 그대로 두고 축소만 하면 오른쪽에 빈 자리가 생긴다 — **논리 폭을 1/배율 로 키워야**
+   *   사이트가 그만큼 넓은 화면인 줄 알고 데스크톱 배치를 펴고, 그게 칸 안에 통째로 들어온다. */
+  function applyZoom(): void {
+    const z = effZoom();
+    const fit = zooms.get(keyOf()) == null;
+    zoomLbl.textContent = fit ? '맞춤' : Math.round(z * 100) + '%';
+    zoomLbl.title = fit
+      ? '칸 폭에 맞춰 자동으로 줄입니다 — 누르면 100% 로 돌아갑니다.'
+      : Math.round(z * 100) + '% 로 보고 있습니다 — 누르면 칸 폭에 맞춥니다.';
+    zoomOut.disabled = z <= ZOOM_STEPS[0] + 0.001;
+    zoomIn.disabled = z >= ZOOM_STEPS[ZOOM_STEPS.length - 1] - 0.001;
+    if (live) {
+      try { (frame as any).setZoomFactor?.(z); } catch (_) { /* 아직 안 붙었다 — dom-ready 에서 다시 건다 */ }
+      frame.removeAttribute('style');
+      return;
+    }
+    const pct = (100 / z).toFixed(4) + '%';
+    frame.setAttribute('style', `width:${pct};height:${pct};transform:scale(${z});`);
+  }
+  function setZoom(z: number | null): void { zooms.set(keyOf(), z); applyZoom(); }
+  function stepZoom(d: -1 | 1): void {
+    const cur = effZoom();
+    const i = ZOOM_STEPS.findIndex((v) => (d > 0 ? v > cur + 0.001 : v >= cur - 0.001));
+    const next = d > 0
+      ? (i < 0 ? ZOOM_STEPS[ZOOM_STEPS.length - 1] : ZOOM_STEPS[i])
+      : (i <= 0 ? ZOOM_STEPS[0] : ZOOM_STEPS[i - 1]);
+    setZoom(next);
+  }
+
   /** 단추가 갈 수 있는지 — 갈 데가 없으면 끈다(눌러도 아무 일 없는 단추를 켜 두지 않는다). */
   function syncNav(): void {
     if (live) {
@@ -820,6 +878,7 @@ function webPart(ctx: PartCtx): Part {
   // 이 세션이 보던 주소로 맞춘다 — 세션을 갈아 끼우면 그 세션이 보던 페이지로 갈아입는다(아무것도 없으면 빈 칸).
   //  길도 그 세션의 것으로 바뀐다(trail 이 memKey 로 갈린다) — 옆 세션에서 다닌 길로 뒤로 가면 그게 남의 화면이다.
   function adopt(): void {
+    asleep = '';                                 // 세션이 바뀌면 그 세션의 주소가 정답이다(재우기 전 주소는 남의 것)
     const u = store()[keyOf()] || '';
     const t = trail();
     if (u && t.urls[t.at] !== u) pushTrail(u);      // 이 세션의 길이 비어 있으면 지금 주소를 첫 걸음으로
@@ -829,7 +888,42 @@ function webPart(ctx: PartCtx): Part {
     syncNav();
   }
   adopt();
-  const offSess = ctx.onSession(() => adopt());
+  applyZoom();
+  // 칸 폭이 바뀌면(경계 끌기·곁칸 여닫기·창 크기) 폭 맞춤을 다시 잰다 — '맞춤'은 고정값이 아니라 관계다.
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { if (zooms.get(keyOf()) == null) applyZoom(); }) : null;
+  ro?.observe(stage);
+  if (live) frame.addEventListener('dom-ready', () => applyZoom());
+  const offSess = ctx.onSession(() => { adopt(); applyZoom(); });
+
+  // ── 안 보이면 재운다 (원준 2026-08-21 신고: "웹에 뭘 띄워 놓으면 그 다음부터 랙이 걸린다") ─────────
+  //  프레임 안 페이지는 **칸을 안 보고 있어도 계속 돈다** — 타이머·폴링·애니메이션·영상이 그대로 살아서
+  //  같은 화면(같은 렌더러 프로세스)의 자원을 나눠 쓴다. 특히 **라이블리 자신을 띄우면 앱이 한 벌 더 도는 셈**이다
+  //  (실측 2026-08-21 dev: 프리뷰를 칸에 띄우자 DOM 1,835→7,119 노드 · 이벤트 리스너 319→1,245 개,
+  //   바깥과 안쪽이 같은 API 를 각자 폴링). 셸은 탭을 갈아 끼워도 이전 탭을 살려 두므로(대화 보존이 그 설계의 목적)
+  //  띄워 둔 칸이 쌓일수록 그 값이 계속 붙는다.
+  //  그래서 **안 보이는 동안만** 프레임을 비우고(about:blank) 다시 보일 때 그 주소로 되돌린다.
+  //  ⚠ 곧바로 재우지 않는다 — 탭을 잠깐 오갈 때마다 안쪽 페이지가 다시 로드되면 그게 더 나쁘다(스크롤·입력이 날아간다).
+  //   유예를 두고, 그 안에 돌아오면 아무 일도 없던 것처럼 그대로다.
+  const SLEEP_AFTER_MS = 30000;
+  const visible = (): boolean => !!root.isConnected && root.getClientRects().length > 0;
+  const wake = (): void => {
+    if (!asleep) return;
+    const u = asleep;
+    asleep = '';
+    frame.setAttribute('src', u);                // 재우기 전 그 주소로 — 다닌 길·주소칸은 그대로였다
+  };
+  const sleep = (): void => {
+    const u = frame.getAttribute('src') || '';
+    if (!u || u === 'about:blank') return;
+    asleep = u;
+    frame.setAttribute('src', 'about:blank');    // 안쪽 페이지를 통째로 내린다(타이머·폴링·소켓이 함께 끊긴다)
+  };
+  const watch = window.setInterval(() => {
+    if (visible()) { hiddenSince = 0; wake(); return; }
+    if (asleep) return;
+    if (!hiddenSince) { hiddenSince = Date.now(); return; }
+    if (Date.now() - hiddenSince >= SLEEP_AFTER_MS) sleep();
+  }, 5000);
 
   // ── ⌘R 은 이 칸만(원준 2026-08-20 신고: "웹을 고른 채 새로고침하면 화면 전체가 다시 실린다") ─────
   //  ⌘R 은 본디 브라우저의 것이다. 이 칸이 열려 있다는 이유만으로 늘 뺏으면 세션·자료를 보던 사람의 새로고침까지 먹는다.
@@ -854,8 +948,12 @@ function webPart(ctx: PartCtx): Part {
   window.addEventListener('keydown', onKey, true);
   return {
     root,
+    // 칸이 다시 보이면 셸이 알려 준다 — 5초 감시를 기다리지 않고 그 자리에서 깨운다.
+    tick: () => { if (visible()) { hiddenSince = 0; wake(); } },
     destroy: () => {
       offSess();
+      ro?.disconnect();
+      window.clearInterval(watch);
       evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
       document.removeEventListener('pointerdown', mark, true);
       document.removeEventListener('focusin', mark, true);
