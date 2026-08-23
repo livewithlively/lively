@@ -67,6 +67,17 @@ export async function purgeSessions(owner: string, ids: string[]): Promise<numbe
   return (u.rowCount || 0) + (i.rowCount || 0);
 }
 
+/** 주어진 이름 중 **내 휴지통 표식이 있는** 것 — purged 여부 무관. 되돌리기·완전 삭제의 소유 근거.
+ *  ⚠ 왜 이게 필요한가(#1851 실측, 원준 2026-08-24): 완전 삭제는 ①대화 기록 파기 → ②표식 purge 순인데, ② 의 소유자 판정이
+ *  desired-state 나 **중앙 기록**을 보므로 ① 이 지운 직후엔 "없는 세션"으로 거부됐다 — 자기가 지워 놓고 못 알아본다.
+ *  휴지통에 넣을 때 이미 owner 를 확정해 표식에 적어 뒀으니, **표식 자체가 소유 증거**다. */
+export async function trashMarkedIds(owner: string, ids: string[]): Promise<string[]> {
+  const list = clean(ids);
+  if (!owner || !list.length) return [];
+  const r = await itemsPool.query(`SELECT session_id FROM org_session_trash WHERE owner=$1 AND session_id = ANY($2::text[])`, [owner, list]);
+  return r.rows.map((x) => String(x.session_id));
+}
+
 /** 휴지통에 있는(아직 purged 아닌) 이 사람의 세션 id — 비우기가 한 번에 지울 목록. */
 export async function listTrashedIds(owner: string): Promise<string[]> {
   if (!owner) return [];

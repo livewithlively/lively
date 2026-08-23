@@ -86,10 +86,18 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   let busy = false;
   const guard = async (fn: () => Promise<void>): Promise<void> => { if (busy) return; busy = true; try { await fn(); } finally { busy = false; } };
 
+  // ⚠ 서버는 못 한 이름을 **200 + skipped** 로 돌려준다(남의 것·없는 것·아직 도는 것). 그걸 안 읽으면 아무것도 안 됐는데
+  //  "됐어요"라고 말하게 된다 — 실측(원준 2026-08-24): 완전 삭제를 눌러도 행이 그대로 남고 [되돌리기]가 살아 있는데 토스트는
+  //  "완전히 지웠어요"였다. 한 이름도 처리되지 않았으면 실패로, 일부만 됐으면 그 사실대로 말한다(사이드바 '휴지통으로'와 같은 규칙).
+  const outcome = (r: { done: string[]; skipped: Array<{ id: string; why: string }> }, okMsg: string, failMsg: string): boolean => {
+    if (!r.done.length) { toast(failMsg + ' — ' + (r.skipped[0]?.why || '처리된 세션이 없어요'), true); return false; }
+    toast(okMsg + (r.skipped.length ? ` (일부는 건너뜀 — ${r.skipped[0].why})` : ''));
+    return true;
+  };
   const restore = (s: Sess): Promise<void> => guard(async () => {
     try {
-      await sessionTrashOp('untrash', sessionNames(s));
-      toast('지난 세션으로 되돌렸어요.');
+      const r = await sessionTrashOp('untrash', sessionNames(s));
+      if (!outcome(r, '지난 세션으로 되돌렸어요.', '되돌리지 못했어요')) return;
       hooks.onChanged?.();
     } catch (e: any) { toast('되돌리지 못했어요 — ' + (e?.message || e), true); }
   });
@@ -104,12 +112,15 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
         const choice = await confirmSessionPurge({ sid, node: logNode(s), title: `「${name}」을(를) 완전히 지울까요?`, lines: [s.label || sid], remoteNode: logNode(s) || null });
         if (!choice) return;
         const r = await purgeSessionRecord(sid, logNode(s), choice);
-        await sessionTrashOp('purge', sessionNames(s));   // 되살리기 좌표까지 — 기록만 지우면 '지난 세션'으로 되돌아온다
+        // 되살리기 좌표·휴지통 표식까지 — 기록만 지우면 '지난 세션'으로 되돌아온다. 기록은 이미 지워졌으므로 여기서 막히면
+        //  "기록은 지웠는데 행은 남았다"는 **부분 성공**이다 — 그걸 성공으로 포장하지 않는다.
+        const m = await sessionTrashOp('purge', sessionNames(s));
+        if (!m.done.length) { toast('대화 기록은 지웠지만 휴지통에서 빼지 못했어요 — ' + (m.skipped[0]?.why || '처리된 세션이 없어요'), true); hooks.onChanged?.(); return; }
         toast(purgedToast(r));
       } else {
         if (!await confirmSessionPurgeLocal({ title: `「${name}」을(를) 완전히 지울까요?` })) return;
-        await sessionTrashOp('purge', sessionNames(s));
-        toast('완전히 지웠어요.');
+        const m = await sessionTrashOp('purge', sessionNames(s));
+        if (!outcome(m, '완전히 지웠어요.', '지우지 못했어요')) return;
       }
       hooks.onChanged?.();
     } catch (e: any) { toast('지우지 못했어요 — ' + (e?.message || e), true); }

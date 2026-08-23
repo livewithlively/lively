@@ -18,7 +18,7 @@ import { nodeSessionsFor } from "../node/registry.js";
 import { getSessionState, deleteSessionState } from "./session-state.js";
 import { clearSessionWorkspace } from "../org/tenancy/registry.js";
 import { itemsPool } from "../db/client.js";
-import { trashSessions, untrashSessions, purgeSessions, listTrashedIds } from "./session-trash.js";
+import { trashSessions, untrashSessions, purgeSessions, listTrashedIds, trashMarkedIds } from "./session-trash.js";
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -69,15 +69,25 @@ export function registerSessionTrashRoutes(app: express.Express, auth: express.R
       liveIds = new Set([...live.map((s) => s.id), ...nodeSessionsFor(me).map((s) => s.id)]);
     }
 
+    // 소유 근거 ① — **내 휴지통 표식**. 되돌리기·완전 삭제는 휴지통 안의 것에 하는 일이고, 넣을 때 이미 owner 를 확정했다.
+    //  desired-state·중앙 기록은 완전 삭제 도중 먼저 사라질 수 있어(① 기록 파기 → ② 표식) 그것만 보면 ② 가 "없는 세션"으로
+    //  거부된다(#1851 실측 — 화면은 그 거부를 삼키고 "지웠어요"라고 했다). 표식이 있으면 그 이름은 내 것이다.
+    const marked = new Set(op === "trash" ? [] : await trashMarkedIds(me, ids));
+
     const done: string[] = [];
     const skipped: Array<{ id: string; why: string }> = [];
     for (const id of ids) {
-      const r = await resolveMine(id, me);
+      let r = await resolveMine(id, me);
+      if (!r && marked.has(id)) r = { ids: [id], hasState: false };
       if (!r) { skipped.push({ id, why: "본인 세션이 아니거나 없는 세션" }); continue; }
       if (liveIds.has(id)) { skipped.push({ id, why: "아직 돌고 있는 세션 — 먼저 지난 세션으로 보내 주세요" }); continue; }
-      if (op === "trash") await trashSessions(me, r.ids);
-      else if (op === "untrash") await untrashSessions(me, r.ids);
-      else {
+      // 표식 저장소는 **바꾼 행 수**를 돌려준다 — 0 이면 한 것이 없다(이미 완전 삭제된 이름은 trash/untrash 가 건드리지 않는다).
+      //  그걸 done 으로 올리면 화면이 "되돌렸어요"라고 말한다(실측: 완전 삭제한 직후 되돌리기가 done 으로 왔다).
+      if (op === "trash") {
+        if (!(await trashSessions(me, r.ids))) { skipped.push({ id, why: "완전 삭제된 세션은 휴지통에 다시 넣을 수 없어요" }); continue; }
+      } else if (op === "untrash") {
+        if (!(await untrashSessions(me, r.ids))) { skipped.push({ id, why: "이미 완전 삭제됐거나 휴지통에 없는 세션" }); continue; }
+      } else {
         // 완전 삭제 — desired-state(되살리기 좌표)는 실제로 지운다. 워크스페이스 소속 맵도 함께(종전 DELETE 와 같은 뒷정리).
         if (r.hasState) {
           await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "휴지통 완전 삭제 — desired-state 삭제 실패(비치명)"));
