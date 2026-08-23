@@ -1077,5 +1077,8 @@ function openProjectPicker(anchor, sessionId, tab) {
 // 미사용 경고 방지 — 라우터 밖에서도 뷰를 갱신하고 싶을 때 쓰는 진입점(툴바 등 후속용).
 export function v2Refresh() { void loadData().then(() => { drawSide(); if (tabsApi)
     void renderRoute(tabsApi.active()); }); }
+// 사이드바에서 세션 기록을 완전 삭제하면(#1850) 목록·카운트를 서버 기준으로 다시 맞춘다.
+//  side.ts 가 여기를 직접 import 하면 순환(main→side→main)이라 이벤트로 받는다.
+window.addEventListener('lively:session-purged', () => { v2Refresh(); });
 export function v2Toast(msg) { toast(msg); }
 export function v2View() { return $view(); }

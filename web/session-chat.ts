@@ -21,6 +21,8 @@
 import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, sv, toast } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { toolLabel } from './session-tool-labels.js';
+// #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
+import { confirmSessionPurge, purgeSessionRecord, purgedToast } from './session-actions.js';
 import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
 import { effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
@@ -516,6 +518,24 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   window.addEventListener('message', onTermMsg);
 
   // ── [⋯] — 겉에 두기엔 가끔 쓰는 것들. 열 때마다 지금 상태로 다시 그린다(보기 전환 라벨이 모드를 따른다). ──
+  // 기록 완전 삭제 실행(#1850) — 확인창·실행·토스트는 session-actions 의 단일 정의(#1582 규약).
+  async function purgeThis(): Promise<void> {
+    const sid = target.logId || (!target.live ? target.id : '');
+    const node = (target.logNode ?? target.node) || '';
+    if (!sid) { toast('아직 중앙에 올라온 대화 기록이 없어요 — 지울 것이 없습니다.'); return; }
+    const ok = await confirmSessionPurge({
+      title: '이 세션 기록을 완전히 지울까요?',
+      lines: [target.label || sid],
+      remoteNode: node || null,
+      live: target.live && target.alive,
+    });
+    if (!ok) return;
+    try {
+      toast(purgedToast(await purgeSessionRecord(sid, node)));
+      window.dispatchEvent(new CustomEvent('lively:session-purged', { detail: { id: target.id } }));
+    } catch (e: any) { toast(e?.message || '지우지 못했습니다.'); }
+  }
+
   function openMore(): void {
     const rows: HTMLElement[] = [];
     const row = (label: string, desc: string, onClick: () => void): HTMLElement =>
@@ -546,6 +566,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // 보관 — 터미널만 내려놓고 대화·설정은 남긴다. 살아 있는 내 세션에만(내릴 것이 있어야 보관이다).
     if (opts.onArchive && target.owned && target.live && !target.raw?.restorable)
       rows.push(row('이 세션 보관', '터미널을 내려놓고 대화·설정은 남겨요 — [보관한 세션]에서 되살립니다', () => opts.onArchive!()));
+    // 기록 완전 삭제(#1850) — 보관 **바로 다음** 자리다. 둘은 같은 축의 양 끝이고(되돌릴 수 있음 ↔ 없음),
+    //  사람이 '보관'을 찾다가 '완전 삭제'를 발견하는 순서가 곧 우리가 권하는 순서다(먼저 보관, 그 다음 삭제).
+    //  ⚠ 사이드바(지난 세션 전용)와 달리 **도는 세션도 허용**한다 — 메뉴를 열어 고르는 자리라 실수로 눌리지 않고,
+    //   확인창이 '앞으로의 대화도 기록되지 않는다'까지 말한다(live 플래그).
+    if (target.owned && (target.logId || !target.live)) {
+      rows.push(row('대화 기록 완전 삭제', '중앙에 저장된 이 대화를 영구히 지워요 — 되돌릴 수 없어요', () => void purgeThis()));
+    }
     rows.push(row('링크 복사', '지금 보고 있는 이 화면의 주소', async () => {
       try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); }
       catch { window.prompt('이 링크를 복사하세요:', location.href); }
