@@ -139,9 +139,11 @@ export function sessionLogLink(text?: string): HTMLElement {
 //  개인정보를 지우려는 사람이 이 버튼을 누른다. 그러므로 확인창은 **안 지워지는 것**을 반드시 함께 말해야 한다 —
 //  이 세션에서 만든 지식·프로젝트·작업 기록은 별개 자산이라 그대로 남는다. 그걸 안 말하면 "다 지웠다"가 거짓이 된다.
 export async function confirmSessionPurge(opts: { title: string; lines?: string[]; remoteNode?: string | null; live?: boolean }): Promise<boolean> {
+  // ⚠ 여기서 **지시하지 않는다**. "필요하면 각각 따로 지우세요"는 지우겠다고 온 사람에게 숙제를 떠넘기는 말이고,
+  //  실제로 그 경로가 제대로 지워 주지도 않는다(지식 삭제는 감사 스냅샷에 전문이 남는다). 지금 이 확인창이 할 수
+  //  있는 정직한 말은 **무엇이 남는지 사실대로 알리는 것**까지다 — 범위를 골라 함께 지우는 것은 후속(#1850 P2).
   const kept = [
-    '작업 폴더·파일·커밋은 그대로 남습니다.',
-    '이 세션에서 만든 지식·프로젝트·작업 기록은 지워지지 않아요 — 필요하면 각각 따로 지우세요.',
+    '작업 폴더·파일·커밋, 그리고 이 세션이 만든 지식·프로젝트·작업 기록은 그대로 남습니다.',
   ];
   // 원격 노드 세션이면 그 컴퓨터의 대화 파일은 여기서 못 지운다 — 있지도 않은 완전함을 약속하지 않는다.
   if (opts.remoteNode) kept.push(`대화 파일이 다른 컴퓨터(${opts.remoteNode})에도 있다면 그건 여기서 지울 수 없어요.`);
@@ -150,7 +152,7 @@ export async function confirmSessionPurge(opts: { title: string; lines?: string[
   if (opts.live) kept.push('이 세션은 계속 쓸 수 있지만, 앞으로의 대화도 중앙 기록에 남지 않습니다.');
   return confirmDialog({
     title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
-    message: '대화 전문이 중앙 기록에서 영구 삭제됩니다. 휴지통에 남지 않아 되돌릴 수 없어요.',
+    message: '대화 전문이 중앙 기록에서 영구히 지워지고, 되돌릴 수 없어요.',
     lines: opts.lines || [],
     note: kept.join(' '),
   });
