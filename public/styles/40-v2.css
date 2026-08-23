@@ -7,6 +7,17 @@
 /* ── 임베드 모드: 새 셸이 클래식 화면을 iframe 에 실을 때. 크롬만 걷고 화면 코드는 그대로. ── */
 body.embed #org-banner, body.embed #desktop-update, body.embed header.topbar, body.embed footer.app-foot, body.embed #skip-link { display: none !important; }
 body.embed #view { padding-top: 12px; }
+/* #1841 임베드(액자 안)에서 클래식 상단바(64px)를 전제한 값들을 되돌린다 — 상단바가 없으니 sticky top:64 는 64px 빈칸이 되고,
+   main padding-top(32) 상쇄용 margin-top:-32 는 위 12px 패딩보다 커서 빵부스러기 윗줄이 액자 밖으로 잘렸다(실측 crumb top -10 / 사이드바 머리 84). */
+body.embed .pjv-listboard.pjv-has-side { margin-top: -12px; }
+body.embed .pjv-has-side .pjv-side-nav-inner { top: 0; max-height: 100vh; padding-top: 10px; }
+body.embed .pjv-has-side .pjv-side-main { min-height: 100vh; }
+body.embed .kn-shell { min-height: 100vh; }
+body.embed .kn-side { top: 0; max-height: 100vh; padding-top: 14px; }
+/* 액자 띠 없는 앱(FRAMELESS) — 새 탭 열기만 우상단 작은 아이콘으로 남긴다(기능 유지). */
+.v2-app-frameless { position: relative; }
+.v2-frame-pop { position: absolute; top: 6px; right: 10px; z-index: 2; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--muted-2); text-decoration: none; font-size: 13px; background: var(--bg); opacity: .7; }
+.v2-frame-pop:hover { color: var(--ink); background: var(--bg-tint-2); opacity: 1; }
 body.embed .liv-head { display: none; } /* 리브 페이지도 임베드되면 '← 라이블리'가 이중이 된다 */
 
 /* ── 새 셸 켜짐: 클래식 크롬 숨김, 뿌리 전체 화면 ── */
