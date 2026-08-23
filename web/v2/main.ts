@@ -14,7 +14,7 @@ import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { bySeen, drawSide as drawSideTree, markNav, projectOrder, sessText } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
-import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
+import { loadBins, renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면 + 재료(삭제됨·보관 지식)
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { createTimeline, type TimelineHandle } from '../timeline.js';
@@ -290,7 +290,7 @@ let lastLive: any[] = [];
 let lastLogs: any[] = [];
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
   const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
-  const [pj, live, logs] = await Promise.all([
+  const [pj, live, logs, bins] = await Promise.all([
     // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
     //  archived=include(#1851) — 보관한 프로젝트도 받는다: 그 아래 세션이 '프로젝트 없는 세션'으로 떨어지지 않게, 그리고
     //  「아카이브」 화면이 같은 데이터로 그려지게. 사이드바는 archived_at 을 보고 스스로 가른다(side.ts).
@@ -298,6 +298,8 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
     // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
     api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
     api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => null),
+    // 아카이브·휴지통 재료(#1851) — 프로젝트와 같은 결(TTL)로만 받는다(20초마다 감사 표를 훑지 않는다).
+    wantProj ? loadBins().catch(() => null) : Promise.resolve(null),
   ]);
   let projects = data.projects;
   if (Array.isArray(pj)) {
@@ -317,7 +319,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   if (Array.isArray(logs)) lastLogs = logs as any[];
   const sessions = mergeSessions(lastLive, lastLogs);
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
-  data = { projects, sessions, loadedAt: Date.now() };
+  data = { projects, sessions, loadedAt: Date.now(), bins: bins || data.bins };
   if (!wantProj) {
     const known = new Set(projects.map((p) => p.id));
     const fresh = sessions.filter((s) => s.projectId && !known.has(s.projectId) && !projRetried.has(s.projectId)).map((s) => s.projectId as number);

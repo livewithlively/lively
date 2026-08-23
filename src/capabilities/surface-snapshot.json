@@ -3347,6 +3347,16 @@
   "input_hash": "6cf966c863571d19"
  },
  {
+  "name": "content_purge",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/deleted/purge"
+  ],
+  "input_hash": "4c25afc0f7d6f4c3"
+ },
+ {
   "name": "vis_axis_list",
   "scope": "admin",
   "mcp": true,

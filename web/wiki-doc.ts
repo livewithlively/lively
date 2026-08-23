@@ -148,6 +148,17 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
           k.props_ui = Object.assign({}, k.props_ui || {}, { full_width: next }); } catch (_) { /* 화면만 */ }
       }
     }));
+    // 📦 보관(#1851) — 지식도 프로젝트처럼 통째로 치워 둔다(lifecycle=archived): 트리엔 흐리게 남고 새 셸 [아카이브] 화면에 모인다.
+    //  삭제(휴지통)와 다르다 — 검색·주입에서 빠질 뿐 본문·연결은 그대로고 언제든 되돌린다. 미러(observed)는 원본 쪽 상태라 여기서 안 건드린다.
+    if (canEdit && !observed) pop.append(item(k.lifecycle === 'archived' ? '📦 보관 해제' : '📦 보관(아카이브)', async () => {
+      const next = k.lifecycle === 'archived' ? 'active' : 'archived';
+      try {
+        await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/lifecycle', { method: 'POST', body: JSON.stringify({ lifecycle: next }) });
+        knInvalidateTreeCaches();
+        toast(next === 'archived' ? '보관했습니다 — 새 셸 [아카이브]에서 볼 수 있어요' : '보관을 해제했습니다');
+        reload();
+      } catch (e: any) { toast('실패 — ' + e.message, true); }
+    }));
     if (canEdit) pop.append(item('✕ 삭제', () => knDelete(k.name, opts.onDeleted), true));
     document.body.append(pop);
     const r = moreBtn.getBoundingClientRect();

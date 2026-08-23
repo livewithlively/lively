@@ -120,7 +120,7 @@ export async function confirmSessionTrash(opts: { title: string; n?: number }): 
 // ── 완전 삭제(휴지통 안에서만, #1851) — 두 창. 어느 쪽도 keepNote(종료·지우기용)를 쓰지 않는다: 그 문구는 "대화 기록은 안 지워진다"가
 //  핵심 약속인데, 여기선 **지운다**(중앙 기록이 있으면 #1850 파기까지 함께 간다). 사실과 반대인 안심 문구가 제일 나쁘다(#1582 규약).
 //  · confirmSessionPurgeLocal — 중앙 기록이 **없는** 세션 하나(되살리기 좌표만 있는 것). 잃는 것 = 되살리기.
-//  · confirmTrashEmpty      — 휴지통 비우기(여러 개). 기록이 있는 것은 기록까지 지운다고 말한다.
+//  (휴지통 비우기 창은 bins.ts 가 세션·프로젝트·지식 개수를 모아 직접 띄운다.)
 export async function confirmSessionPurgeLocal(opts: { title: string }): Promise<boolean> {
   return confirmDialog({
     title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
@@ -128,17 +128,6 @@ export async function confirmSessionPurgeLocal(opts: { title: string }): Promise
     note: '작업 폴더·파일·커밋은 그대로 남습니다. 이 세션은 중앙 대화 기록이 없어 지울 기록도 없어요.',
   });
 }
-export async function confirmTrashEmpty(opts: { n: number; withLog: number }): Promise<boolean> {
-  return confirmDialog({
-    title: '휴지통을 비울까요?', danger: true, confirmText: '완전 삭제', cancelText: '취소',
-    message: `휴지통의 세션 ${opts.n}개가 목록에서 영영 사라지고, [되살리기]로는 다시 열 수 없어요.`,
-    lines: opts.withLog
-      ? [`그중 ${opts.withLog}개는 중앙 대화 기록도 함께 지워집니다 — 되돌릴 수 없어요.`, '이 세션들이 만든 지식·프로젝트는 건드리지 않아요. 그것까지 정리하려면 행마다 [완전 삭제]를 쓰세요.']
-      : [],
-    note: '작업 폴더·파일·커밋은 그대로 남습니다.',
-  });
-}
-
 /** 휴지통 조작 한 곳(#1851) — POST /api/ui/terminal/session-trash. ids 는 그 세션의 모든 이름(박스 id + 대화 uuid)을 넘긴다
  *  (서버도 desired-state 의 uuid 를 덧붙이지만, 기록만 남은 세션은 프론트가 아는 uuid 가 전부다). */
 export async function sessionTrashOp(op: 'trash' | 'untrash' | 'purge' | 'empty', ids: string[] = []): Promise<{ done: string[]; skipped: Array<{ id: string; why: string }> }> {
