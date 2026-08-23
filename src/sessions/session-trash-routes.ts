@@ -13,8 +13,8 @@ import type express from "express";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
-import { listSessions } from "../terminal/terminal-sessions.js";
-import { nodeSessionsFor } from "../node/registry.js";
+import { listSessions, killSession, sessionGone } from "../terminal/terminal-sessions.js";
+import { nodeSessionsFor, nodeRpc, nodeOnline } from "../node/registry.js";
 import { getSessionState, deleteSessionState } from "./session-state.js";
 import { clearSessionWorkspace } from "../org/tenancy/registry.js";
 import { itemsPool } from "../db/client.js";
@@ -30,6 +30,27 @@ async function logOwnerOf(sessionId: string): Promise<string | null> {
     const r = await itemsPool.query(`SELECT owner FROM session WHERE session_id=$1 LIMIT 1`, [sessionId]);
     return (r.rows[0]?.owner as string | null) ?? null;
   } catch { return null; }
+}
+
+/** 완전 삭제 직전 — 돌고 있는 세션을 멈춘다(× 와 같은 동작, DELETE /terminal/sessions/:id 의 kill 경로를 따른다).
+ *  왜 여기서 하나(원준 2026-08-24): 휴지통에 넣은 세션을 제목 클릭으로 열면 되살아나는데(#1820 '열면 살아난다'), 휴지통엔
+ *  × 버튼이 없어 "먼저 지난 세션으로 보내 주세요"를 따를 길이 없었다. 완전 삭제는 '멈추고 지운다'가 맞다.
+ *  반환: true=멈췄거나 이미 멈춰 있음 · string=못 멈춘 이유(그 id 는 건너뛴다). 노드가 꺼져 있으면 tmux 는 못 건드리지만
+ *  × 의 기본(완전 삭제) 경로와 같은 규칙으로 진행한다 — 표식이 purged 면 그 노드가 돌아와 다시 보고해도 이 사람 목록엔 안 뜬다. */
+async function stopForPurge(u: LivelyUser, me: string, id: string, nodeId: string | null): Promise<true | string> {
+  if (nodeId) {
+    if (!nodeOnline(nodeId)) return true;
+    const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
+    if (gone === true) return true;
+    try { await nodeRpc(nodeId, "kill", { user: { userId: me }, id }); return true; }
+    catch (e) {
+      const goneNow = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
+      return goneNow === true ? true : `돌고 있는 세션을 멈추지 못했어요 — ${(e as Error)?.message ?? e}`;
+    }
+  }
+  if (await sessionGone(id).catch(() => true)) return true;
+  try { await killSession(u, id, { preserveState: true }); return true; }
+  catch (e) { return `돌고 있는 세션을 멈추지 못했어요 — ${(e as Error)?.message ?? e}`; }
 }
 
 /** id 하나를 '내 것'으로 확정하고, 같은 세션의 다른 이름(대화 uuid)까지 모은다. 내 것이 아니면 null. */
@@ -80,7 +101,14 @@ export function registerSessionTrashRoutes(app: express.Express, auth: express.R
       let r = await resolveMine(id, me);
       if (!r && marked.has(id)) r = { ids: [id], hasState: false };
       if (!r) { skipped.push({ id, why: "본인 세션이 아니거나 없는 세션" }); continue; }
-      if (liveIds.has(id)) { skipped.push({ id, why: "아직 돌고 있는 세션 — 먼저 지난 세션으로 보내 주세요" }); continue; }
+      if (liveIds.has(id)) {
+        // 휴지통으로 보내는 것(trash)만 거부한다 — 휴지통은 '지난 세션'의 다음 단계다. 완전 삭제는 **멈추고 지운다**.
+        if (op !== "purge") { skipped.push({ id, why: "아직 돌고 있는 세션 — 먼저 지난 세션으로 보내 주세요" }); continue; }
+        const st = await getSessionState(id).catch(() => undefined);
+        const nodeId = st?.node_id || nodeSessionsFor(me).find((x) => x.id === id)?.node.id || null;
+        const stopped = await stopForPurge(u, me, id, nodeId);
+        if (stopped !== true) { skipped.push({ id, why: stopped }); continue; }
+      }
       // 표식 저장소는 **바꾼 행 수**를 돌려준다 — 0 이면 한 것이 없다(이미 완전 삭제된 이름은 trash/untrash 가 건드리지 않는다).
       //  그걸 done 으로 올리면 화면이 "되돌렸어요"라고 말한다(실측: 완전 삭제한 직후 되돌리기가 done 으로 왔다).
       if (op === "trash") {

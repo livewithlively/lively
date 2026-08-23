@@ -159,7 +159,10 @@ export function renderSession(host, data, id, vopts = {}) {
         //  사고(#1808)의 처방이었는데, 그 처방이 "열어도 아무 일도 안 난다"를 기본 경험으로 만들었다(dev 실측:
         //  내 세션 219건 중 복원 가능 198건). 어긋남의 원인은 '자동'이 아니라 **프레임이 몰래 갈아탄 것**이었으므로,
         //  셸이 라우팅까지 쥐고 되살리면 둘 다 만족한다. 실패하면 그 기록 화면과 버튼이 그대로 남는다.
-        autoResume: shouldRestoreOnOpen({ restorable: !!s.raw?.restorable, owned: s.owned }),
+        //  ⚠ 단 **휴지통에 있는 세션은 예외** — 휴지통 행의 제목은 '내용이 뭔지 보려고' 누르는 자리인데, 그 클릭이 세션을
+        //  몰래 되살려 [완전 삭제]가 "아직 돌고 있는 세션"으로 막히는 막다른 길을 만들었다(원준 실측 2026-08-24: 휴지통엔
+        //  ×(멈춤) 버튼이 없어 안내를 따를 방법이 없다). 휴지통 것은 기록 화면으로만 열고, 되살리려면 [되돌리기]를 거친다.
+        autoResume: !isTrashedSess(s) && shouldRestoreOnOpen({ restorable: !!s.raw?.restorable, owned: s.owned }),
         isVisible: vopts.isVisible,
         onResumed: vopts.onResumed,
     });
