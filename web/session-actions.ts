@@ -104,17 +104,32 @@ export async function confirmSessionForget(opts: {
 
 // ── 휴지통(#1851) — 지난 세션의 다음 단계. 잃는 것이 **없다**(표식 하나가 붙어 목록에서 빠질 뿐) → 위험 색 없이, 되돌릴 수 있다고 말한다. ──
 //  원준 2026-08-23: "휴지통으로 보낸다는 내용이 떠야" — 종전 '지울까요?'(완전 삭제) 창과 반드시 달라야 한다.
+//  원준 2026-08-24: "처음에는 팝업을 띄우되 [다시 보지 않기]를 체크하면 다음부턴 버튼만 눌러 바로 보내게" — 잃는 것이 없는
+//  동작이라 매번 묻는 게 마찰이다. 체크는 **[휴지통으로]를 눌러 확정했을 때만** 기억한다(취소하면 안 남는다 — 웹터미널
+//  첫 진입 안내의 '다시 보지 않기'와 같은 규칙). 되돌리는 문은 휴지통 화면 머리의 [다시 묻기](bins.ts).
+const TRASH_SKIP_KEY = 'lively.v2.trash.skipConfirm';   // '1' = 묻지 않고 바로 휴지통으로. 브라우저 로컬(기기별).
+export function trashConfirmSkipped(): boolean {
+  try { return localStorage.getItem(TRASH_SKIP_KEY) === '1'; } catch (_) { return false; }   // 스토리지 차단 — 그냥 묻는다
+}
+export function setTrashConfirmSkipped(on: boolean): void {
+  try { if (on) localStorage.setItem(TRASH_SKIP_KEY, '1'); else localStorage.removeItem(TRASH_SKIP_KEY); } catch (_) { /* noop */ }
+}
 export async function confirmSessionTrash(opts: { title: string; n?: number }): Promise<boolean> {
+  if (trashConfirmSkipped()) return true;
   const n = opts.n || 1;
-  return confirmDialog({
+  const skip = checkRow('sess-trash-skip', '다음부터는 묻지 않고 바로 휴지통으로 보내기', [], '휴지통 화면에서 다시 묻도록 되돌릴 수 있어요');
+  const ok = await confirmDialog({
     title: opts.title, confirmText: '휴지통으로', cancelText: '취소',
     message: n > 1 ? `${n}개 세션이 목록에서 빠지고 휴지통으로 갑니다.` : '이 세션이 목록에서 빠지고 휴지통으로 갑니다.',
     lines: [
       '대화·설정은 그대로 남아요 — 휴지통에서 [되돌리기]를 누르면 지난 세션으로 돌아옵니다.',
       '완전히 지우는 건 휴지통 안에서만 할 수 있어요.',
     ],
+    extra: el('div', { class: 'sess-purge' }, skip.el),
     note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
   });
+  if (ok && skip.box.checked) setTrashConfirmSkipped(true);
+  return ok;
 }
 
 // ── 완전 삭제(휴지통 안에서만, #1851) — 두 창. 어느 쪽도 keepNote(종료·지우기용)를 쓰지 않는다: 그 문구는 "대화 기록은 안 지워진다"가

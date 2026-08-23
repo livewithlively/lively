@@ -11,7 +11,7 @@
 import { api, el, relTime, sv, toast } from '../core.js';
 // 완전 삭제는 두 갈래(#1851 ⟶ #1850): 중앙 기록이 있는 세션은 #1850 의 범위 선택 확인창 + 기록 파기(purgeSessionRecord)를 그대로
 //  쓰고, 그 위에 되살리기 좌표(desired-state)까지 지우는 휴지통 op('purge')를 얹는다. 기록이 없는 세션은 좌표만 지운다.
-import { confirmSessionPurge, confirmSessionPurgeLocal, confirmTrashEmpty, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp } from '../session-actions.js';
+import { confirmSessionPurge, confirmSessionPurgeLocal, confirmTrashEmpty, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped } from '../session-actions.js';
 import { sessText } from './side.js';
 import { dotCls, isArchivedProj, isLiveSess, isTrashedSess, projName } from './views.js';
 const when = (iso) => (iso ? relTime(iso) : '');
@@ -160,7 +160,9 @@ export function renderTrash(host, data, hooks = {}) {
             el('button', { class: 'btn-text danger', type: 'button', text: '완전 삭제', title: '되살릴 수 없게 지웁니다', onclick: () => void purge(s) }),
         ], (s.projectId ? pn + ' · ' : '') + '버림 ' + when(s.trashedAt));
     });
-    host.replaceChildren(el('div', { class: 'v2-center v2-binpage' }, el('div', { class: 'v2-bin-top' }, el('div', {}, el('h1', { class: 'v2-title', text: '휴지통' }), el('p', { class: 'v2-desc', text: '프로젝트에서 떼어내 버린 세션이에요. [되돌리기]면 그 프로젝트의 지난 세션으로 돌아가고, 완전히 지우는 건 여기서만 할 수 있어요.' })), ss.length ? el('button', { class: 'btn btn-ghost btn-sm v2-bin-emptyb', type: 'button', text: '휴지통 비우기', title: '휴지통의 세션을 전부 완전히 지웁니다', onclick: () => void empty() }) : null), el('section', { class: 'v2-bin-sec' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `세션 · ${ss.length}` })), ss.length
+    host.replaceChildren(el('div', { class: 'v2-center v2-binpage' }, el('div', { class: 'v2-bin-top' }, el('div', {}, el('h1', { class: 'v2-title', text: '휴지통' }), el('p', { class: 'v2-desc', text: '프로젝트에서 떼어내 버린 세션이에요. [되돌리기]면 그 프로젝트의 지난 세션으로 돌아가고, 완전히 지우는 건 여기서만 할 수 있어요.' }), 
+    // '다음부터 묻지 않기'(confirmSessionTrash)를 켜 둔 사람에게 되돌리는 문 — 확인창이 더는 안 뜨니 여기가 유일한 자리다.
+    trashConfirmSkipped() ? el('p', { class: 'v2-desc v2-bin-skipnote' }, el('span', { text: '휴지통으로 보낼 때 묻지 않고 바로 보내도록 해 두셨어요. ' }), el('button', { class: 'btn-text', type: 'button', text: '다시 묻기', onclick: (ev) => { setTrashConfirmSkipped(false); ev.currentTarget.closest('p')?.remove(); toast('다음부터 휴지통으로 보낼 때 다시 확인해요.'); } })) : null), ss.length ? el('button', { class: 'btn btn-ghost btn-sm v2-bin-emptyb', type: 'button', text: '휴지통 비우기', title: '휴지통의 세션을 전부 완전히 지웁니다', onclick: () => void empty() }) : null), el('section', { class: 'v2-bin-sec' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `세션 · ${ss.length}` })), ss.length
         ? el('div', { class: 'v2-bin-list' }, ...sessRows)
         : el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '휴지통이 비어 있어요.' }), el('p', { class: 'sub', text: '사이드바 [지난 세션]의 행 오른쪽 끝 휴지통 단추로 보낼 수 있어요.' }))), el('p', { class: 'v2-bin-fine', text: '프로젝트·지식·카테고리를 삭제한 것은 WIKI 앱의 휴지통에 있어요.' }, el('a', { class: 'btn-text', href: location.pathname + '?ui=classic#/trash', target: '_blank', rel: 'noopener', text: '열기 ↗' }))));
 }
