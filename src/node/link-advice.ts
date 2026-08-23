@@ -20,13 +20,17 @@ export function humanDur(sec: number): string {
   return `${h}시간 ${min % 60}분`;
 }
 
-/** 자동으로 못 막는 구멍 → 사람이 읽는 한 조각. 표시 순서는 호출부가 정한다. */
-export function gapNote(gap: KeepAwakeGap, platform: string | null): string {
+/**
+ * 자동으로 못 막는 구멍 → 사람이 읽는 **완결 문장**.
+ *  ⚠ 절(어미 없는 조각)로 두고 접속사로 이으면 개수·순서에 따라 문장이 깨진다 — e2e 에서 실제로
+ *   "…막을 수 없습니다이고, …" 가 나왔다. 조각을 잇지 말고 **문장을 나열**한다(조직 규칙: 어미까지 끝맺는다).
+ */
+export function gapNote(gap: KeepAwakeGap, _platform: string | null): string {
   switch (gap) {
-    case "clamshell": return "뚜껑을 닫으면 잠자기를 막을 수 없습니다";
-    case "battery":   return "배터리로 쓰는 동안에는 (배터리 보호를 위해) 막지 않습니다";
-    case "modern-standby": return "이 PC 가 최신 대기(modern standby) 방식이면 막히지 않을 수 있습니다";
-    default: return platform ? `알 수 없는 제약(${gap})` : `알 수 없는 제약(${gap})`;
+    case "clamshell": return "뚜껑을 닫으면 잠자기를 막을 수 없습니다.";
+    case "battery":   return "배터리로 쓰는 동안에는 배터리 보호를 위해 막지 않습니다.";
+    case "modern-standby": return "이 PC 가 최신 대기(modern standby) 방식이면 막히지 않을 수 있습니다.";
+    default: return `알 수 없는 제약(${gap})이 있습니다.`;
   }
 }
 
@@ -50,7 +54,7 @@ export function keepAwakeLine(keepAwake: KeepAwakeStatus | null | undefined, pla
     return `잠자기 억제가 걸려 있지 않습니다 — ${why}.`;
   }
   const gaps = (keepAwake.gaps ?? []).map((g) => gapNote(g, platform));
-  const tail = gaps.length ? ` 다만 ${gaps.join("이고, ")}.` : "";
+  const tail = gaps.length ? ` 다만 ${gaps.join(" ")}` : "";
   return `라이블리가 전원 연결 상태에서 이 PC 가 자지 않도록 붙잡고 있습니다.${tail}`;
 }
 
@@ -68,10 +72,22 @@ export function linkDiagMessage(
   const evidence = `최근 24시간 동안 ${diag.cycles}번 붙었는데 한 번에 평균 ${humanDur(diag.medianUpSec)}만 연결되고 ${humanDur(diag.medianGapSec)}씩 끊겼습니다`;
   const cause = "이 컴퓨터가 잠자기에 든 것으로 보입니다";
   const fix = platform === "darwin"
-    ? `전원을 연결한 채 뚜껑을 열어 두시거나, 그 맥에서 \`${cmd}\` 를 실행하면 잠자기를 끌 수 있습니다.`
+    // ⚠ 명령 뒤에 조사를 바로 붙이지 않는다 — 명령이 숫자·영문으로 끝나 조사가 어색해진다(e2e 실측: "…1 를").
+    ? `전원을 연결한 채 뚜껑을 열어 두시거나, 그 맥에서 \`${cmd}\` 명령을 실행하면 잠자기를 끌 수 있습니다.`
     : platform === "win32"
-      ? `그 PC 에서 \`${cmd}\` 를 실행하면 전원 연결 시 절전을 끌 수 있습니다.`
+      ? `그 PC 에서 \`${cmd}\` 명령을 실행하면 전원 연결 시 절전을 끌 수 있습니다.`
       : "그 컴퓨터의 절전 설정을 확인해 주세요.";
   const ka = keepAwakeLine(opts.keepAwake, platform);
   return `${evidence} — ${cause}. ${ka} ${fix}`;
+}
+
+/**
+ * 같은 판정의 **한 줄 요약** — 목록처럼 폭이 좁은 자리를 위한 것.
+ *  ⚠ 화면 실측(프리뷰, 2026-08-23): 전문을 행 안에 넣었더니 좁은 열에 갇혀 한 줄에 서너 글자씩
+ *   세로로 흘렀다. 폭을 CSS 로 억지로 넓히는 대신, **자리에 맞는 길이를 서버가 함께 준다**
+ *   (문구 출처를 하나로 두는 원칙은 그대로 — 웹이 전문을 잘라 쓰면 문장이 중간에서 끊긴다).
+ */
+export function linkDiagSummary(diag: LinkDiagnosis | null | undefined): string | null {
+  if (!diag || diag.suspected !== "sleep") return null;
+  return `평균 ${humanDur(diag.medianUpSec)} 연결되고 ${humanDur(diag.medianGapSec)}씩 끊깁니다 — 잠자기로 보입니다.`;
 }
