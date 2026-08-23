@@ -7,7 +7,7 @@
 //   등록 블록이 그 유일한 접점이다. 새 패널을 붙일 땐 여기 한 줄만 늘린다.
 //  병합 섹션 껍데기(membersSection·toolsSection…)도 셸이 갖는다 — 그건 패널이 아니라 **화면 구성**이기 때문이다
 //   (#837: 합치는 건 화면이지 데이터가 아니다 — 새 진실 출처 0).
-import { applyReveal, cardHead, el, errorNote, hasScope, keepSideScroll, state, toast } from './core.js';
+import { applyReveal, cardHead, el, errorNote, hasScope, keepSideScroll, state, toast, uiMode } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { visibilityAxesPanel } from './visibility-axes.js';
 import { loadAdmin, registerPanel, rerenderPanel } from './admin-rerender.js';         // 패널 재렌더 레지스트리(셸↔패널 순환 절단)
@@ -317,6 +317,11 @@ const PERSONAL_HIDDEN = [
 // ui_profile 판정 — me 응답(#1454 S2~S5 동승) 한 곳만 본다. 값을 못 받았으면(구 서버) 'full'(현행) 취급.
 const uiProfilePersonal = () => !!(state.me && state.me.ui_profile === 'personal');
 function sectionHidden(key, data) {
+  // [외부 서비스 관리] — 새 셸에서는 **사이드바 [외부 앱 연결]** 이 그 자리다(#1719, 원준 2026-08-21).
+  //  같은 화면이 두 자리에 있으면 어느 쪽이 진짜인지 아무도 모르고, 고칠 때 한쪽만 고쳐진다.
+  //  ⚠ 그렇다고 지우지는 않는다 — 클래식 화면에는 사이드바가 없어서, 지우면 그쪽 사람은 갈 곳이 사라진다.
+  //   그래서 '새 셸에서만 감춘다'. 옛 링크로 들어오면 아래 registerPanel 이 새 자리를 가리킨다.
+  if (key === 'me-logins' && uiMode() === 'v2') return true;
   if (uiProfilePersonal() && PERSONAL_HIDDEN.includes(key)) return true; // #1454 S4 — 심플 어드민
   if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
   if (RUNTIME_ONLY.includes(key) && !data.canRuntime) return true;
@@ -350,6 +355,14 @@ async function renderAdmin(view, sub) {
   const visibleSections = ADMIN_SECTIONS.filter((s) => !sectionHidden(s.key, data));
   let sel = sub || state.admin.sel;
   // 관리탭을 떠난 섹션(구 [검토 큐] → WIKI)의 옛 URL — 리다이렉트하고 렌더를 넘긴다(라우터가 다시 돈다).
+  // [외부 서비스 관리] — 새 셸에서는 사이드바 [외부 앱 연결]이 그 자리다(#1719, 원준 2026-08-21). 조건부라
+  //  SECTION_EXIT 표에 넣지 않는다: 클래식 화면에는 사이드바가 없어 넘길 곳이 없고, 거기선 이 화면이 제 자리다.
+  //  ⚠ 창 맨 바깥을 움직인다 — 이 화면은 새 셸 안에서 iframe(?embed=1)으로 실릴 수 있고, 그 안에서 주소를
+  //   바꾸면 프레임만 이동해 빈 화면이 된다.
+  if (sel === 'me-logins' && uiMode() === 'v2') {
+    try { (window.top || window).location.hash = '#/connect'; } catch (_) { location.hash = '#/connect'; }
+    return;
+  }
   if (sel && SECTION_EXIT[sel]) { location.replace(SECTION_EXIT[sel]); return; }
   if (sel && SECTION_REMAP[sel]) sel = SECTION_REMAP[sel]; // 병합·흡수된 구 섹션 URL → 새 섹션
   if (!sel || !visibleSections.some((s) => s.key === sel)) sel = (visibleSections[0] || ADMIN_SECTIONS[0]).key;
@@ -409,7 +422,7 @@ async function renderAdmin(view, sub) {
 // '내 정보'는 관리에서 분리(#762) — 옛 링크(#/system/me-profile) 호환: 팝업 열고 안내만 남긴다.
 registerPanel('me-profile', (detail) => { openMyProfileModal(); detail.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: "'내 정보'는 우측 상단 프로필 버튼을 눌러 편집해요." }))); });
 registerPanel('me-ai', (detail) => void myAiSection(detail));
-registerPanel('me-logins', (detail) => void myLoginsSection(detail));
+registerPanel('me-logins', (detail) => void myLoginsSection(detail));   // 클래식 전용 자리(새 셸은 위 exit 가 넘긴다)
 registerPanel('me-assets', (detail) => void myAssetsSection(detail));
 registerPanel('member-add', (detail, data) => memberAddSection(detail, data));
 registerPanel('member-access', (detail, data) => memberAccessSection(detail, data));
