@@ -6,8 +6,10 @@
 import { api, busy, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
 import { skeleton, skeletonRows } from './learn.js';
 import { KN_TYPE_LABEL, KN_UNCAT, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
+import { pjvTbIcon } from './projects/icons.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
-import { wkDayLabel, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
+import { wkDayLabel, wkEmpty } from './wiki-ui.js';
+import { wkBoardHeader, wkDocCols, wkSurfaceTabs, wkTableGroup, wkTableRow, wkTbPill, wkTbPrimary, wkTbSearch } from './wiki-table.js';   // #1841 프로젝트 표 문법
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
 import { renderCategorySurface } from './wiki-category.js';
 import { reviewQueuePanel } from './review.js';   // #837 검토 큐 — 관리탭에서 이관(지식의 대기열이니 집은 WIKI)
@@ -30,10 +32,9 @@ async function renderWiki(view, sub, params) {
 //  없으면 패널 안에서 서버가 403 을 돌려주고 그대로 안내된다.
 async function renderReviewQueue(view) {
   const host = el('div', {});
-  // '자료'와 같은 관례 — 사이드바 없는 보조 표면이므로 위키로 돌아가는 링크를 단다.
-  const back = el('div', { class: 'wk-src-filters', style: 'justify-content:flex-end' },
-    el('a', { class: 'wk-sec-act', href: '#/knowledge', text: '← 위키' }));
-  view.replaceChildren(el('div', { class: 'wk-plainpad' }, back, host));
+  // #1841 — 보조 표면도 같은 머리 3층(빵부스러기 · 문서/자료/검토 대기/휴지통 탭 · 툴바). 패널 자체(행·승인·diff)는 그대로.
+  const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: '검토 대기' }], sub: '인입 게이트에 걸린 지식·수정 제안을 승인·반려합니다', tabs: wkSurfaceTabs('review'), left: [], right: [] });
+  view.replaceChildren(el('div', { class: 'wk-plainpad wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, el('div', { class: 'wk-board-body' }, host))));
   await reviewQueuePanel(host);
 }
 
@@ -151,40 +152,39 @@ async function renderFilterList(box: HTMLElement, ctx: any) {
 
   const uncat = f.category === KN_UNCAT && !f.indexed;
   const title = f.indexed ? '인덱스' : (f.q ? '검색' : uncat ? '미분류' : '전체 지식');
-  const clearBits: any[] = [];
-  if (uncat) clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '미분류 필터 지우기', text: '미분류 ×',
-    onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
-  if (f.q) clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '검색 지우기', text: '"' + f.q + '" ×',
-    onclick: () => { f.q = ''; ctx.syncHash(); ctx.repaint(); } }));
-  if (f.type) clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '유형 필터 지우기', text: (KN_TYPE_LABEL[f.type] || f.type) + ' ×',
-    onclick: () => { f.type = ''; ctx.syncHash(); ctx.repaint(); } }));
+  const hint = f.indexed ? '매 대화 첫머리에 항상 깔리는 핀 문서'
+    : (f.q ? '제목·본문 일치(정확 검색) — 의미로 찾으려면 ⌘K'
+      : uncat ? '카테고리가 없어 소환(recall)에 안 잡히는 지식 — 문서를 열어 분류를 지정하세요' : '');
   const cat = f.category ? ctx.findCat(f.category) : null;
-  if (cat) clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '카테고리 필터 지우기', text: (cat.name || cat.key) + ' ×',
-    onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
-
-  const sec = wkSection(title, {
-    count: entries.length,
-    hint: f.indexed ? '매 대화 첫머리에 항상 깔리는 핀 문서'
-      : (f.q ? '제목·본문 일치(정확 검색) — 의미로 찾으려면 ⌘K'
-        : uncat ? '카테고리가 없어 소환(recall)에 안 잡히는 지식 — 문서를 열어 분류를 지정하세요' : null),
-    actions: clearBits,
-  });
   const names = entries.map((e) => e.name);
+  const openDoc = (x, rowEl) => { setWikiPeekList(names); openWikiPeek(x.name, { onRefresh: ctx.repaint, originEl: rowEl }); };
+
+  // #1841 머리 3층 — 빵부스러기(WIKI › 전체 지식) · 뷰 탭(문서·자료·검토 대기·휴지통) · 툴바(좌: 유형 알약 + 걸린 필터 / 우: 검색 · ＋ 새 페이지).
+  const typePills = [['', '전체'], ...Object.entries(KN_TYPE_LABEL)].map(([k, label]) =>
+    wkTbPill(label as string, { active: (f.type || '') === k, title: k ? (label + ' 유형만') : '모든 유형', onClick: () => { f.type = k; ctx.syncHash(); ctx.repaint(); } }));
+  const left: any[] = [...typePills];
+  if (uncat) left.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '미분류 필터 지우기', text: '미분류 ×', onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
+  if (cat) left.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '카테고리 필터 지우기', text: (cat.name || cat.key) + ' ×', onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
+  const right: any[] = [
+    wkTbSearch(f.q || '', '제목·본문 검색…', (q) => { if (q === (f.q || '')) return; f.q = q; ctx.syncHash(); ctx.repaint(); }),
+    el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }),
+    wkTbPrimary('새 페이지', () => { location.hash = '#/knowledge/new' + (f.category && !uncat ? '?category=' + encodeURIComponent(f.category) : ''); }),
+  ];
+  const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: title }], sub: hint, tabs: wkSurfaceTabs('docs'), left, right });
+
+  const body = el('div', { class: 'wk-board-body' });
+  const cols = wkDocCols({ category: !cat || uncat, catName: (e) => e.category_name || '' });
   if (!entries.length) {
-    sec.body.append(wkEmpty(f.q ? '일치하는 문서가 없어요 — ⌘K 의미검색으로 시도해 보세요.' : '문서가 없습니다.'));
+    body.append(wkEmpty(f.q ? '일치하는 문서가 없어요 — ⌘K 의미검색으로 시도해 보세요.' : '문서가 없습니다.'));
+  } else if (f.q) {
+    body.append(wkTableGroup('검색 결과', entries, { cols, open: openDoc, count: entries.length }));
   } else {
-    let curDay = '';
-    for (const e of entries) {
-      if (!f.q) {
-        const day = wkDayLabel(e.updated_at);
-        if (day !== curDay) { curDay = day; sec.body.append(el('div', { class: 'wk-day-label', text: day })); }
-      }
-      sec.body.append(wkRow(e, {
-        open: (x, rowEl) => { setWikiPeekList(names); openWikiPeek(x.name, { onRefresh: ctx.repaint, originEl: rowEl }); },
-      }));
-    }
+    // 날짜 묶음 = 표의 그룹(프로젝트 표의 상태 그룹 자리). 접을 수 있고 건수는 남는다.
+    const byDay: Array<[string, any[]]> = [];
+    for (const e of entries) { const day = wkDayLabel(e.updated_at); const last = byDay[byDay.length - 1]; if (last && last[0] === day) last[1].push(e); else byDay.push([day, [e]]); }
+    for (const [day, list] of byDay) body.append(wkTableGroup(day, list, { cols, open: openDoc }));
   }
-  box.replaceChildren(el('div', { class: 'wk-home' }, sec.el));
+  box.replaceChildren(el('div', { class: 'wk-home wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, body)));
 }
 
 // ════════════════════════════════════════════
@@ -202,17 +202,15 @@ async function renderWikiTrash(view) {
     return;
   }
   if (document.body.dataset.route !== 'trash') return;   // 로딩 중 라우트 이탈 — 늦은 mount 방지
-  const sec = wkSection('휴지통', {
-    count: entries.length,
-    hint: '삭제된 지식·프로젝트·카테고리 — 본체만 복원됩니다(삭제 시 정리된 연결은 제외)',
-    actions: [el('a', { class: 'wk-sec-act', href: '#/knowledge', text: '← 위키' })],
-  });
+  const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: '휴지통' }], sub: '삭제된 지식·프로젝트·카테고리 — 본체만 복원됩니다(삭제 시 정리된 연결은 제외)', tabs: wkSurfaceTabs('trash'), left: [], right: [] });
+  const body = el('div', { class: 'wk-board-body' });
   if (!entries.length) {
-    sec.body.append(wkEmpty('휴지통이 비어 있습니다.'));
+    body.append(wkEmpty('휴지통이 비어 있습니다.'));
   } else {
-    for (const e of entries) {
-      const restoreBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '복원' });
-      restoreBtn.onclick = async () => {
+    const restoreCell = (e) => {
+      const restoreBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '복원' });
+      restoreBtn.onclick = async (ev) => {
+        ev.stopPropagation();
         (restoreBtn as any).disabled = true;
         try {
           await api('/api/ui/deleted/restore', { method: 'POST', body: JSON.stringify({ entity: e.entity, key: e.key }) });
@@ -224,17 +222,18 @@ async function renderWikiTrash(view) {
           toast('복원 실패 — ' + err.message, true);
         }
       };
-      const who = (e.actor ? e.actor : '') + (e.actor_kind ? ' (' + (e.actor_kind === 'ai' ? 'AI' : '사람') + ')' : '');
-      sec.body.append(el('div', { class: 'wk-trash-row' },
-        el('span', { class: 'wk-trash-kind', text: TRASH_ENTITY_LABEL[e.entity] || e.entity }),
-        el('span', { class: 'wk-trash-title', text: e.label || e.key }),
-        el('span', { class: 'wk-row-meta' },
-          who ? el('span', { class: 'wk-row-m', text: who }) : null,
-          el('span', { class: 'wk-row-m', text: '삭제 ' + relTime(e.at) })),
-        restoreBtn));
-    }
+      return restoreBtn;
+    };
+    const cols = [
+      { key: 'kind', label: '종류', width: '88px', render: (e) => el('span', { class: 'pjv-fval', text: TRASH_ENTITY_LABEL[e.entity] || e.entity }) },
+      { key: 'who', label: '삭제한 사람', width: '140px', render: (e) => el('span', { class: 'pjv-fval', text: (e.actor ? e.actor : '') + (e.actor_kind ? ' (' + (e.actor_kind === 'ai' ? 'AI' : '사람') + ')' : '') }) },
+      { key: 'at', label: '삭제', width: '92px', render: (e) => el('span', { class: 'pjv-fval', title: e.at || '', text: relTime(e.at) }) },
+      { key: 'restore', label: '', width: '84px', render: (e) => restoreCell(e) },
+    ];
+    const rows = entries.map((e) => ({ ...e, name: e.key, title: e.label || e.key, lifecycle: 'archived' }));
+    body.append(wkTableGroup(null, rows, { cols, open: () => { /* 삭제된 문서는 열 수 없다 — 복원이 먼저 */ }, menu: () => [] }));
   }
-  view.replaceChildren(el('div', { class: 'wk-plainpad wk-trash' }, sec.el));
+  view.replaceChildren(el('div', { class: 'wk-plainpad wk-trash wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, body)));
 }
 
 // ════════════════════════════════════════════
@@ -249,15 +248,23 @@ async function renderSources(view, params?: URLSearchParams) {
   kindSel.setAttribute('aria-label', '종류');
   const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');
   provSel.setAttribute('aria-label', '출처');
-  const qIn = el('input', { type: 'search', class: 'wk-src-q', placeholder: '제목·본문 검색', 'aria-label': '검색', value: seedQ });
-  const listBox = el('div', { class: 'wk-sec-body' });
-  const sec = wkSection('자료', {
-    hint: '아직 정리하기 전의 원본 — 여기서 다듬으면 지식이 됩니다',
-    actions: [el('a', { class: 'wk-sec-act', href: '#/knowledge', text: '← 위키' })],
-  });
+  const qIn = el('input', { type: 'text', class: 'pjv-tb-search-input', placeholder: '제목·본문 검색…', 'aria-label': '검색', value: seedQ });
+  const listBox = el('div', { class: 'wk-board-body' });
   const moreBox = el('div', { class: 'wk-src-more' });
-  sec.body.append(el('div', { class: 'wk-src-filters' }, qIn, kindSel, provSel), listBox, moreBox);
-  view.replaceChildren(el('div', { class: 'wk-plainpad' }, sec.el));
+  // #1841 머리 3층 — 툴바 좌: 종류·출처 셀렉트 / 우: 검색(펼침). 자료는 지식이 아니라 '만들기'가 없다.
+  const qBox = el('div', { class: 'pjv-tb-search' + (seedQ ? ' open' : '') });
+  const qBtn = el('button', { class: 'pjv-tb-btn pjv-search-btn' + (seedQ ? ' active' : ''), type: 'button', title: '검색 — 제목·본문으로 좁혀 보기', 'aria-label': '검색' }, pjvTbIcon('search'));
+  qBtn.onclick = () => { qBox.classList.toggle('open'); if (qBox.classList.contains('open')) qIn.focus(); else if ((qIn as any).value) { (qIn as any).value = ''; loadPage(true); } };
+  qBox.append(qBtn, qIn);
+  const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: '자료' }], sub: '아직 정리하기 전의 원본 — 여기서 다듬으면 지식이 됩니다', tabs: wkSurfaceTabs('sources'), left: [kindSel, provSel], right: [qBox] });
+  view.replaceChildren(el('div', { class: 'wk-plainpad wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, listBox, moreBox)));
+  const srcCols = [
+    { key: 'kind', label: '종류', width: '96px', render: (x) => el('span', { class: 'pjv-fval', text: SOURCE_KIND_LABEL[x.kind] || x.kind }) },
+    { key: 'chan', label: '채널', width: '140px', align: 'left' as const, render: (x) => el('span', { class: 'pjv-fval wk-src-chan', text: (x.fields && x.fields.container_name) ? '#' + x.fields.container_name : '' }) },
+    { key: 'who', label: '작성자', width: '110px', render: (x) => el('span', { class: 'pjv-fval', text: (x.fields && x.fields.author_name) ? '@' + x.fields.author_name : '' }) },
+    { key: 'at', label: '시각', width: '92px', render: (x) => el('span', { class: 'pjv-fval', text: relTime(x.occurred_at || x.updated_at) }) },
+  ];
+  let tableBody: HTMLElement | null = null;   // 그룹 하나에 행을 이어 붙인다([더 보기]가 같은 표에 덧붙이게)
 
   const PAGE = 100;
   let offset = 0, loading = false;
@@ -265,20 +272,7 @@ async function renderSources(view, params?: URLSearchParams) {
   // 행 렌더 — 채널명(container_name)·작성자(author_name)는 커넥터-불가지 구조화 메타(source.fields)에서 표시(#735).
   //  slack=채널, 다른 커넥터도 각자 container/author 를 fields 에 담으면 동일하게 노출된다.
   function rowOf(s: any) {
-    const f = (s.fields || {}) as any;
-    const meta = el('span', { class: 'wk-row-meta' },
-      el('span', { class: 'wk-row-m', text: SOURCE_KIND_LABEL[s.kind] || s.kind }));
-    if (f.container_name) meta.append(el('span', { class: 'wk-row-m wk-src-chan', text: '#' + f.container_name }));
-    if (f.author_name) meta.append(el('span', { class: 'wk-row-m', text: '@' + f.author_name }));
-    meta.append(el('span', { class: 'wk-row-m', text: relTime(s.occurred_at || s.updated_at) }));
-    const row = el('div', { class: 'wk-row', role: 'button', tabindex: '0' },
-      el('span', { class: 'wk-tick' + (s.provenance === 'observed' ? ' mirror' : '') }),
-      el('span', { class: 'wk-row-title', text: s.title || ('자료 #' + s.id) }),
-      meta);
-    const open = () => openSourceDetail(s.id);
-    row.addEventListener('click', open);
-    row.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') open(); });
-    return row;
+    return wkTableRow({ ...s, name: 'src:' + s.id, title: s.title || ('자료 #' + s.id) }, { cols: srcCols, open: () => openSourceDetail(s.id), menu: () => [] });
   }
 
   // 페이지네이션 — 서버 기본 100건 cap + has_more 를 [더 보기]로 이어붙인다(#735: 예전엔 limit/offset 미전송으로
@@ -296,13 +290,14 @@ async function renderSources(view, params?: URLSearchParams) {
       p.set('offset', String(offset));
       const r = await api('/api/ui/sources?' + p.toString());
       const entries = (r && r.entries) || [];
-      if (reset) listBox.replaceChildren();
+      if (reset) { listBox.replaceChildren(); tableBody = null; }
       if (offset === 0 && !entries.length) {
         listBox.replaceChildren(wkEmpty('자료가 없습니다. 커넥터(이메일·슬랙)나 회의록이 여기로 들어옵니다.'));
         moreBox.replaceChildren();
         return;
       }
-      for (const s of entries) listBox.append(rowOf(s));
+      if (!tableBody) { const g = wkTableGroup(null, [], { cols: srcCols }); tableBody = g.querySelector('.wk-tbody') as HTMLElement; listBox.append(g); }
+      for (const s of entries) tableBody.append(rowOf(s));
       offset += entries.length;
       const total = (r && typeof r.total === 'number') ? r.total : offset;
       if (r && r.has_more) {
