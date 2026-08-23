@@ -26,7 +26,7 @@ import { anchoredPopover, api, el, loadPeopleAvatars, navOn, personFace, profile
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { binCounts, dotCls, isArchivedProj, isLiveSess, isPastSess, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, isArchivedProj, isLiveSess, isPastSess, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { confirmProjectArchive, confirmSessionTrash, sessionNames, sessionTrashOp } from '../session-actions.js';   // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
 import { switcherTop } from './switcher.js';
@@ -670,17 +670,17 @@ function renderTree(rowsIn?: Row[]): void {
 //  오른쪽 끝 압정 = [아래 고정] — 켜면 두 행이 트리 밖 발치에 서서 스크롤과 무관하게 늘 보인다(브라우저에 기억).
 function binRows(data: V2Data): HTMLElement[] {
   const me = meId();
-  // 세션 개수는 **내 것**만 — 세션 휴지통은 소유자 단위다(서버 표식이 owner 별). 프로젝트·지식은 bins.ts 가 합친다.
-  const trashedSess = data.sessions.filter((s) => isTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length;
-  const { archive: archivedN, trash: trashedN } = binCounts(data, trashedSess);
+  const archivedN = data.projects.filter((p) => isArchivedProj(p)).length;
+  // 휴지통 개수는 **내 것**만 — 휴지통은 소유자 단위다(서버 표식이 owner 별).
+  const trashedN = data.sessions.filter((s) => isTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length;
   const ak = last ? last.activeKey() : '';
   const row = (key: 'archive' | 'trash', label: string, n: number, title: string): HTMLElement =>
     el('a', { class: 'v2-bin' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title },
       glyph(key, 'v2-bin-ic'), el('span', { class: 'n', text: label }), n ? el('span', { class: 'v2-cnt', text: String(n) }) : null,
       binPinBtn());
   return [
-    row('archive', '아카이브', archivedN, '아카이브 — 보관한 프로젝트(와 그 세션)·지식'),
-    row('trash', '휴지통', trashedN, '휴지통 — 버린 세션·프로젝트·지식을 되돌리거나 완전히 지웁니다'),
+    row('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'),
+    row('trash', '휴지통', trashedN, '휴지통 — 버린 세션을 되돌리거나 완전히 지웁니다'),
   ];
 }
 function binPinBtn(): HTMLElement {

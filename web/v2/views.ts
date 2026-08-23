@@ -30,18 +30,7 @@ export interface Sess {
   // #1851 휴지통 — 휴지통에 있는 시각(ISO). 있으면 사이드바 '지난 세션'에서 빠지고 「휴지통」 화면(#/trash)에만 보인다.
   trashedAt?: string | null;
 }
-// 아카이브·휴지통(#1851)의 나머지 재료 — 삭제된 항목(감사 스냅샷 = 서버 휴지통)과 보관한 지식(lifecycle=archived).
-//  프로젝트 목록과 같은 결(TTL)로 main.ts 가 받아 둔다(bins.ts loadBins). 없으면(구 게이트웨이·실패) 빈 배열.
-export interface DeletedRow { entity: string; key: string; label: string; at: string; level?: string | null; title?: string | null; locked?: boolean }
-export interface ArchivedKn { name: string; title: string | null; updated_at?: string | null; category?: string | null }
-export interface Bins { deleted: DeletedRow[]; archivedKn: ArchivedKn[] }
-export interface V2Data { projects: Proj[]; sessions: Sess[]; loadedAt: number; bins?: Bins }
-/** 사이드바 개수(#1851) — 아카이브 = 보관 프로젝트 + 보관 지식, 휴지통 = 내 버린 세션 + 삭제된 프로젝트·지식.
- *  여기(views) 에 두는 이유: side.ts 가 bins.ts 를 import 하면 순환(bins → side.sessText)이라 import 경계 게이트에 걸린다. */
-export function binCounts(data: V2Data, trashedSessions: number): { archive: number; trash: number } {
-  const b = data.bins || { deleted: [], archivedKn: [] };
-  return { archive: data.projects.filter((p) => isArchivedProj(p)).length + b.archivedKn.length, trash: trashedSessions + b.deleted.length };
-}
+export interface V2Data { projects: Proj[]; sessions: Sess[]; loadedAt: number; }
 
 const dot = (k: string) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 // 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).

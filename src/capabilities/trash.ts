@@ -4,8 +4,7 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { listDeleted, getDeleteSnapshot, purgeDeleted, isDeletedNow, type DeletedRow } from "../v6/trash-store.js";
-import { auditOrgContent } from "../v6/content-audit.js";
+import { listDeleted, getDeleteSnapshot, type DeletedRow } from "../v6/trash-store.js";
 import { restoreKnowledge } from "../v6/knowledge-store.js";
 import { restoreProject } from "../v6/project-store.js";
 import { restoreCategory } from "../v6/category-store.js";
@@ -136,42 +135,4 @@ const contentRestore: Capability = {
   },
 };
 
-// ── 완전 삭제(파기, #1851) — 휴지통 항목의 본문 스냅샷을 비운다(행은 남는다). 되돌릴 수 없다. ──
-//  권한은 **복원할 수 있는 사람만**(canRestore 와 같은 근거 — 볼 수 없는 것을 지울 수도 없어야 한다). 에이전트(MCP) 금지. admin 특권 없음.
-//  ⚠ 자식(프로젝트의 태스크 등)은 삭제 때 CASCADE 로 스냅샷 없이 사라졌으므로 여기서 비울 것이 없다(#1850 F3 — 남은 결함).
-const contentPurge: Capability = {
-  name: "content_purge",
-  title: "삭제 항목 완전 삭제(파기)",
-  description:
-    "휴지통(삭제됨)에 있는 지식/프로젝트의 감사 스냅샷 본문을 비워 되돌릴 수 없게 한다(행은 남아 '누가 언제 파기했나'만 남는다). " +
-    "entity=knowledge|project, key=name(지식)|id(프로젝트). 지금 삭제 상태가 아니면 409. ⚠ 사람(웹)만 — 에이전트(MCP)는 403.",
-  scope: "memory",
-  input: { entity: z.enum(["knowledge", "project"]), key: z.string().min(1) },
-  expose: {
-    mcp: true,
-    rest: [{ method: "POST", paths: ["/api/ui/deleted/purge"],
-      parse: (req) => {
-        const b = (req.body ?? {}) as Record<string, unknown>;
-        const entity = String(b.entity ?? "");
-        if (entity !== "knowledge" && entity !== "project") throw new HttpError(400, "entity 는 knowledge|project");
-        const key = String(b.key ?? "").trim();
-        if (!key) throw new HttpError(400, "key 가 필요합니다");
-        return { entity, key };
-      } }],
-  },
-  handler: async (input: any, user: any, ctx: any) => {
-    if (ctx?.source === "mcp") throw new HttpError(403, "완전 삭제는 사람(웹)만 가능합니다 — 에이전트는 거부됩니다");
-    const before = await getDeleteSnapshot(input.entity, input.key);
-    if (!before) throw new HttpError(404, `휴지통에 없는 항목입니다(entity=${input.entity}, key=${input.key})`);
-    if (!(await canRestore(before, input.entity, ctx?.viewer ?? null))) {
-      throw new HttpError(404, `휴지통에 없는 항목입니다(entity=${input.entity}, key=${input.key})`);
-    }
-    if (!(await isDeletedNow(input.entity, input.key))) throw new HttpError(409, "지금 삭제 상태가 아닙니다 — 살아 있는 항목은 먼저 지워야 파기할 수 있어요");
-    const scrubbed = await purgeDeleted(input.entity, input.key);
-    await auditOrgContent(input.entity, input.key, "purge", null, { scrubbed_rows: scrubbed },
-      { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" });
-    return { purged: true, entity: input.entity, key: input.key, scrubbed_rows: scrubbed };
-  },
-};
-
-export const trashCapabilities: Capability[] = [deletedList, contentRestore, contentPurge];
+export const trashCapabilities: Capability[] = [deletedList, contentRestore];

@@ -20,9 +20,6 @@ export interface DeletedRow {
   //  **판정에 필요한 두 필드만** 꺼내 온다.
   visibility: string | null;   // knowledge
   list_id: number | null;      // project
-  // #1851 — 프로젝트 엔티티의 level(project|task|subtask). 태스크 삭제도 entity='project' 로 쌓이므로(#1850 F4) 화면이 이걸로 라벨을 가른다.
-  level: string | null;
-  title: string | null;        // knowledge — 목록에 보일 제목(없으면 label 과 같다)
 }
 
 // before 스냅샷에서 사람이 읽을 라벨 — 엔티티별 표시 필드.
@@ -59,8 +56,6 @@ export async function listDeleted(limit = 200, offset = 0): Promise<DeletedRow[]
     actor_kind: r.actor_kind ?? null,
     visibility: (r.before?.visibility as string) ?? null,
     list_id: r.before?.list_id == null ? null : Number(r.before.list_id),
-    level: (r.before?.level as string) ?? null,
-    title: (r.before?.title as string) ?? null,
   }));
 }
 
@@ -71,24 +66,4 @@ export async function getDeleteSnapshot(entity: string, key: string): Promise<Re
       WHERE entity=$1 AND entity_key=$2 AND op='delete'
       ORDER BY at DESC, id DESC LIMIT 1`, [entity, key]);
   return row ? (row.before as Record<string, unknown>) : undefined;
-}
-
-// ── 파기(#1851, 설계는 #1850 trash-flow-redesign 계약 1) — **본문만 지우고 행은 남긴다.** ─────────────────
-//  그 키의 **모든** 감사 행(delete 만이 아니라 insert·update·link 의 before/after 전부 — 지식 변경이력이 같은 표를 읽는다)을
-//  비우고, op='purge' 행을 하나 남긴다(after={scrubbed_rows:N}). 그래서 "누가 언제 무엇을 파기했다"는 남고 내용은 어디에도 없다.
-//  ⚠ append-only 를 깨는 **유일한 UPDATE** — 이 함수 밖에서 org_content_audit 를 UPDATE 하지 마라(before/after 외 컬럼은 건드리지 않는다).
-//  전제: 지금 삭제 상태(최신 op='delete')여야 한다 — 활성 행이 있는 것을 파기하면 '지웠는데 살아 있는' 모순이 된다. 호출자가 확인한다.
-export async function purgeDeleted(entity: string, key: string): Promise<number> {
-  const r = await itemsPool.query(
-    `UPDATE org_content_audit SET before = NULL, after = NULL
-      WHERE entity = $1 AND entity_key = $2 AND (before IS NOT NULL OR after IS NOT NULL)`,
-    [entity, key]);
-  return r.rowCount || 0;
-}
-
-// 지금 삭제 상태인가 — (entity,key) 의 최신 감사 op 가 'delete' 인지. listDeleted 와 같은 판정(한 건용).
-export async function isDeletedNow(entity: string, key: string): Promise<boolean> {
-  const row = await one(itemsPool,
-    `SELECT op FROM org_content_audit WHERE entity=$1 AND entity_key=$2 ORDER BY at DESC, id DESC LIMIT 1`, [entity, key]);
-  return !!row && row.op === "delete";
 }

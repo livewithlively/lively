@@ -8,12 +8,6 @@ import { createRunPicker } from './run-picker.js';
 import { mountSessionChat } from '../session-chat.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { soloSessionUrl, terminalUrl } from './apps.js';
-/** 사이드바 개수(#1851) — 아카이브 = 보관 프로젝트 + 보관 지식, 휴지통 = 내 버린 세션 + 삭제된 프로젝트·지식.
- *  여기(views) 에 두는 이유: side.ts 가 bins.ts 를 import 하면 순환(bins → side.sessText)이라 import 경계 게이트에 걸린다. */
-export function binCounts(data, trashedSessions) {
-    const b = data.bins || { deleted: [], archivedKn: [] };
-    return { archive: data.projects.filter((p) => isArchivedProj(p)).length + b.archivedKn.length, trash: trashedSessions + b.deleted.length };
-}
 const dot = (k) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 // 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
 //  나머지 살아 있는 것(대기·오프라인·셸)은 회색 계열로 조용히, 끝난 것(중단됨·종료됨·기록)은 빈 점.
