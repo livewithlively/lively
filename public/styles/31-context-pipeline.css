@@ -338,3 +338,55 @@ a.ctx-preview-t:hover { color: var(--blue); }
   background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line);
 }
 .ctx-perm-line .pill { flex: none; }
+
+/* ══ #1841 — 머리 3층(프로젝트 탭 동형) 안에 단계 줄 ══
+ *  좌측 단계 사이드바(.ctx-side, #1584)는 더 이상 그리지 않는다(규칙은 check-css-drops 때문에 남긴다).
+ *  단계 줄 = 탭이자 다이어그램: [번호 원][이름][건강 점] › [번호 원][이름][건강 점] › … 탭 사이 '›' 가 흐름이다.
+ *  건강 점의 색·판정은 개요 카드(.ctxp-dot-*)와 같은 한 벌 — 탭에서 본 점과 카드에서 본 띠가 어긋나지 않는다. */
+.ctx-board-wrap { max-width: none; }
+.ctx-board { margin-bottom: 18px; }
+.ctx-board .ctx-body { max-width: none; padding: 6px 0 28px; }
+.ctx-board .ctx-body > .section-head:first-child { margin-top: 8px; }
+.ctx-crumb-leaf { display: inline-flex; align-items: center; gap: 7px; }
+.ctx-crumb-ic { width: 17px; height: 17px; color: var(--ink-sub); flex: none; }
+.ctx-crumb-sub { font-size: 12.5px; color: var(--muted); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.ctx-vtabs { gap: 0; }
+.ctx-vtab { text-decoration: none; gap: 8px; padding: 9px 10px 10px; }
+.ctx-vtab:hover .ctx-vtab-step { border-color: var(--ink-sub); color: var(--ink); }
+.ctx-vtab-ov { padding-left: 6px; }
+.ctx-vtab-ov-ic { width: 18px; height: 18px; flex: none; color: var(--muted-2); }
+.ctx-vtab-ov.active .ctx-vtab-ov-ic, .ctx-vtab-ov:hover .ctx-vtab-ov-ic { color: var(--ink); }
+.ctx-vtab-step {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 19px; height: 19px; border-radius: 999px; box-sizing: border-box;
+  border: 1.5px solid var(--line-net-2); color: var(--ink-sub);
+  font-size: 11px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.ctx-vtab.active .ctx-vtab-step { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.ctx-vtab-label { white-space: nowrap; }
+.ctx-vtab-flow { flex: none; color: var(--muted-2); font-size: 15px; font-weight: 600; line-height: 1; padding-bottom: 2px; margin: 0 -2px; user-select: none; }
+.ctx-vtab-dot { width: 7px; height: 7px; border-radius: 999px; flex: none; display: inline-block; background: var(--line-net-2); transition: background .2s ease; }
+.ctx-vtab-dot.is-ok   { background: var(--mint); }
+.ctx-vtab-dot.is-note { background: var(--node-blue-soft); }
+.ctx-vtab-dot.is-warn { background: var(--coral); }
+.ctx-vtab-dot.is-off  { background: var(--muted-2); }
+.ctx-vtab-lock { display: inline-flex; flex: none; color: var(--muted-2); }
+.ctx-vtab-lock svg { width: 12px; height: 12px; }
+.ctx-vtab.active .ctx-vtab-lock { color: var(--ink-sub); }
+
+.ctx-board .pjv-board-toolbar { min-height: 42px; padding-top: 4px; }
+.ctx-pill { text-decoration: none; }
+.ctx-pill:not(.active) { color: var(--ink-sub); }
+.ctx-tb-link { font-size: 12.5px; font-weight: 600; color: var(--blue); text-decoration: none; padding: 0 6px; }
+.ctx-tb-link:hover { text-decoration: underline; }
+/* 툴바가 없는 개요에서 탭 줄과 본문 사이 숨 */
+.ctx-board .ctx-vtabs + .ctx-body { padding-top: 18px; }
+
+/* 개요 다이어그램의 번호 원을 탭의 번호 원과 같은 꼴로 — 한 화면에 번호 원이 두 꼴이면 둘 중 하나는 장식으로 보인다. */
+.ctx-board .ctxp-step { width: 19px; height: 19px; box-sizing: border-box; border: 1.5px solid var(--line-net-2); background: none; color: var(--ink-sub); font-size: 11px; font-weight: 800; }
+.ctx-board .ctxp-stage:hover .ctxp-step { border-color: var(--ink-sub); color: var(--ink); }
+
+@media (max-width: 960px) { .ctx-crumb-sub { display: none; } }
+@media (max-width: 720px) { .ctx-vtab-label { font-size: 13px; } .ctx-vtab { padding: 9px 7px 10px; } }

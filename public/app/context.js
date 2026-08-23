@@ -11,17 +11,21 @@
 //   · 저장 경로(API)는 하나도 안 바꿨다 — **합치는 건 화면이지 데이터가 아니다**(#837 불변식).
 //     증류기 화면은 관리탭의 distillersPanel 을 그대로 부른다(복제 0).
 //
-//  ⚠ 내비게이션(#1584) — 위계 2단(**단계 ▸ 그 단계의 화면**)을 **좌측 사이드바 하나**가 전담한다.
+//  ⚠ 내비게이션(#1841, 2026-08-24) — 위계 2단(**단계 ▸ 그 단계의 화면**)을 **프로젝트 탭과 같은 머리 3층**이 전담한다:
+//   뷰 탭 줄 = 단계(흐름 화살·건강 점 포함), 툴바 = 그 단계의 화면 알약. 아래 #1584 의 좌측 사이드바 결정은 이로써 뒤집혔다 —
+//   이 탭만 홀로 좌측 내비를 가져 "사이드바가 여기만 또 있어 어색하다"(원준). 세 앱이 같은 머리를 가지면 2층이 본문을 민다는 걱정은
+//   '밀림'이 아니라 규칙이 된다.
+//  (구) 내비게이션(#1584) — 위계 2단(**단계 ▸ 그 단계의 화면**)을 **좌측 사이드바 하나**가 전담한다.
 //   종전엔 페이지 안에 가로 탭이 2층(단계 바 + 세그먼티드 바)으로 쌓여 있었다. 그래서 ① 다른 탭
 //   (프로젝트·WIKI·관리)은 전부 좌측 내비인데 이 탭만 홀로 달랐고 ② 2층 아래 화면이 시작하니 본문이
 //   그만큼 밀렸으며 ③ 2층은 1층을 눌러야만 드러나서, '수집 안에 자료 공개범위가 있다'는 사실이
 //   들어가 보기 전에는 보이지 않았다. 좌측으로 펴면 화면 11개가 항상 한눈에 보인다
 //   (관리탭이 #827 에서 가로 중분류 바를 폐지하고 .docs-side 로 편 것과 같은 방향·같은 시각 언어).
 //   위→아래 순서가 곧 파이프라인 순서라 '순서 자체가 정보'라는 성질도 그대로 남는다(번호로 못박는다).
-import { el, hasScope, keepSideScroll, sv } from './core.js';
+import { api, el, hasScope, sv } from './core.js';
 import { sectionHead } from './admin-widgets.js';
 import { skeleton } from './ui-primitives.js';
-import { renderPipeline } from './context-pipeline.js';
+import { renderPipeline, stageHealthLevels } from './context-pipeline.js';
 import { renderCollectors } from './context-collectors.js';
 import { renderClassifiers } from './context-classify.js';
 import { renderFindings, renderManagers } from './context-manage.js';
@@ -149,10 +153,16 @@ export async function renderContext(view, sub, sub2) {
     const asked = stage.items.find((i) => i.key === sub2);
     const item = (asked && canSee(asked) ? asked : null) ?? visible[0] ?? stage.items[0];
     const host = el('div', {}, skeleton('불러오는 중'));
-    const body = el('div', { class: 'ctx-body' }, stageCrumb(stage), item.head ? sectionHead(item.head.title, item.head.hint || null) : null, host);
-    // .docs-layout = 사이드바 + 본문 2단(반응형 세로 스택까지 그 안에 있다). 관리탭이 'docs-layout admin-layout'
-    //  으로 쓰는 것과 같은 짝이다 — 골격은 공유하고, 이 탭 사정(본문 폭)만 .ctx-layout 이 덧쓴다.
-    view.replaceChildren(el('div', { class: 'docs-layout ctx-layout' }, buildSide(stage, item), body));
+    // 개요는 탭 이름이 곧 제목이고 한 줄 설명은 빵부스러기 옆에 있다 — 본문 머리를 또 세우면 같은 말이 세 번(탭·머리·요약) 난다.
+    const body = el('div', { class: 'ctx-body' }, item.head && !stage.solo ? sectionHead(item.head.title, item.head.hint || null) : null, host);
+    // #1841 — 좌측 단계 사이드바(#1584)를 걷고, **프로젝트 탭과 같은 머리 3층**으로 올린다:
+    //  ① 빵부스러기(앱 이름) ② 뷰 탭 = 단계 줄(개요 · ①수집 › ②증류 › ③분류 › ④관리 › ⑤전달 — 탭 사이 화살이 흐름을,
+    //     탭 안 점이 그 단계의 건강을 말한다 = 개요 다이어그램의 축약판) ③ 툴바 = 그 단계의 화면 알약(수집기 · 수집 방식 · …).
+    //  원준 지적(2026-08-24): "좌측 사이드바가 여기만 또 있어 어색하다 — 세로 단계를 상단 가로 줄로 보내고 탭처럼 고르게".
+    //  #1584 가 좌측으로 간 이유('2층 아래 화면이 시작해 본문이 밀린다·2층이 숨어 있다')는 머리 3층이 프로젝트·WIKI·AI 세션과
+    //  같은 높이로 고정되면서 사라진다 — 모든 앱이 같은 자리에 같은 두께의 머리를 가지면 그건 밀림이 아니라 규칙이다.
+    view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap' }, el('div', { class: 'card pjv-listboard ctx-board' }, buildHeader(stage, item), body)));
+    void paintStageHealth(view);
     // 화면 본문. 실패는 자기 자리에서 처리한다(내비까지 죽이지 않는다 — 다른 화면으로는 갈 수 있어야 한다).
     try {
         await item.draw(host);
@@ -162,98 +172,75 @@ export async function renderContext(view, sub, sub2) {
     }
 }
 /**
- * 본문 머리의 위치 한 줄 — '맥락 관리 › ③ 분류'.
- *
- * ⚠ 왜 필요한가(#1584 사용자 지적): 좌측 내비로 옮기고 나니 **지금 어느 단계인지 감각이 죽었다**.
- *  종전 가로 탭은 본문 바로 위에서 '분류' 탭이 켜져 있어 위치가 눈에 박혔는데, 좌측으로 가면 그 정보가
- *  시선 밖(왼쪽 끝)으로 밀린다 — 본문만 보고 있으면 '분류축'이라는 제목뿐이라 어느 단계에 속한 화면인지
- *  본문 안에는 아무 단서가 없다. 증류기 설정 페이지(#1564)가 같은 이유로 이미 크럼(.dst-crumb)을 쓰고 있어
- *  같은 문법을 그대로 따른다(새 문법 발명 0).
- *  개요는 그리지 않는다 — 단계가 아니라 전체 조망이고, 사이드바 맨 위 단독 항목이라 위치가 이미 명확하다.
+ * 머리 3층(#1841) — 프로젝트 탭 .pjv-board-header 동형.
+ *  단계 줄은 **탭이면서 다이어그램**이다: 번호 원 · 이름 · 건강 점(수집·증류·분류·관리)이 한 탭이고, 탭 사이 '›' 가 흐름이다.
+ *  개요는 단계가 아니라 전체 조망이라 맨 앞에 떨어져 선다(흐름 화살 없이). 관리자 편집 단계는 자물쇠 배지.
  */
-function stageCrumb(stage) {
-    if (stage.solo)
-        return null;
-    return el('nav', { class: 'ctx-crumb', 'aria-label': '위치' }, el('a', { href: '#/context/overview', text: '맥락 관리' }), el('span', { class: 'ctx-crumb-sep', 'aria-hidden': 'true', text: '›' }), 
-    // 단계 이름도 링크다 — 그 단계 첫 화면으로. '옆 화면으로 가려면 왼쪽까지 시선을 옮겨야 하나'를 없앤다.
-    el('a', { class: 'ctx-crumb-stage', href: '#/context/' + stage.key + '/' + stage.items[0].key }, stage.step ? el('span', { class: 'ctx-crumb-step', 'aria-hidden': 'true', text: String(stage.step) }) : null, el('span', { text: stage.label })));
-}
-/**
- * 좌측 내비 — 관리탭·사용 가이드의 .docs-side 를 그대로 쓴다(탭 사이 시각 언어 통일).
- *
- * 그 위에 **단계 레일**을 얹는다(#1584): 번호 원을 세로선으로 잇고, 지나온 단계·현재 단계·아직인 단계를
- *  세 상태로 칠한다. 번호만 붙여 뒀을 땐 '수집 → 증류 → 분류 → 관리'가 흐름으로 안 읽혔다 — 가로 배열이
- *  공짜로 주던 순서·진행 감각을 세로에서 되찾으려면 선이 필요하다(사용자 지적).
- *  ⚠ 개요를 보는 중이면 현재 단계가 없다(step 0). 이때 넷을 전부 '아직'으로 흐리면 사이드바가 통째로
- *  죽은 화면이 된다 — 개요는 **전체 조망**이라 파이프라인이 오히려 또렷해야 한다. 그래서 별도 상태
- *  (is-idle)로 두고 '지나온'과 같은 톤으로 칠한다: 어느 한 단계도 강조하지 않되 넷 다 살아 있다.
- */
-function buildSide(selStage, selItem) {
-    const side = el('nav', { class: 'docs-side ctx-side', 'aria-label': '맥락 관리 단계' });
-    keepSideScroll(side, 'context'); // 단계를 고르면 화면을 다시 그려 사이드바가 새 노드가 된다(#1635)
-    const curStep = selStage.step ?? 0;
+function buildHeader(selStage, selItem) {
+    const crumbBar = el('div', { class: 'pjv-crumbbar' }, el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' }, el('span', { class: 'pjv-crumb is-leaf ctx-crumb-leaf' }, ctxAppIcon(), el('span', { class: 'pjv-crumb-label', text: '맥락 관리' })), el('span', { class: 'ctx-crumb-sub', text: '자료가 지식이 되어 AI 에 닿는 길 — 수집 › 증류 › 분류 › 관리 › 전달' })));
+    const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': '파이프라인 단계' });
     for (const s of STAGES) {
-        // 개요는 목록의 한 줄이 아니라 **눌러서 들어가는 입구**다(#1584 사용자 지적: "누를 수 있는 버튼 같지가
-        //  않다"). 굵은 잉크 한 줄로 두니 아래 단계 머리글(수집·증류…)과 같은 모양이라 라벨로 읽혔다 —
-        //  머리글은 안 눌리는 것이므로, 같은 모양이면 안 눌리는 것으로 학습된다. 그래서 카드로 세운다:
-        //  테두리·틴트가 클릭 대상임을 말하고, 아이콘이 '흐름 전체'를, 부제가 '눌러서 무엇을 보는지'를 말한다.
-        if (s.solo) {
-            side.append(overviewCard(s, selStage.key === s.key));
-            continue;
-        }
-        const railState = !s.step ? ''
-            : !curStep ? ' is-idle' // 개요 — 강조 없이 넷 다 또렷하게
-                : s.step < curStep ? ' is-done' : s.step === curStep ? ' is-current' : ' is-todo';
-        const box = el('div', { class: 'docs-side-group ctx-stage' + railState });
-        {
-            box.append(el('div', { class: 'docs-side-title' }, s.step ? el('span', { class: 'ctx-side-step', 'aria-hidden': 'true', text: String(s.step) }) : null, el('span', { text: s.label }), 
-            // 배지 문구는 '관리자' 하나로 통일한다(#1085) — admin·memory 같은 내부 scope 이름은 보는 사람에게
-            //  아무 뜻이 아니고, 실제로 그 자리를 고칠 수 있는 사람은 관리 권한을 받은 사람이다.
-            //  머리글은 링크가 아니라 읽히는 이름이라, 배지는 aria-hidden 으로 이름에 섞이지 않게 두고
-            //  뜻은 title 로 준다(종전 가로 탭에서 '수집관리자'로 붙어 읽히던 문제와 같은 처리).
-            s.adminEdit
-                ? el('span', { class: 'admin-only-badge', text: '관리자', 'aria-hidden': 'true',
-                    title: '보는 것은 모든 구성원이 할 수 있고, 만들고 고치는 것은 관리자만 할 수 있는 단계입니다.' })
-                : null));
-        }
-        for (const it of s.items) {
+        const on = s.key === selStage.key;
+        const first = s.items.filter((i) => !i.adminOnly || hasScope('admin'))[0] || s.items[0];
+        if (s.step && s.step > 1)
+            tabs.append(el('span', { class: 'ctx-vtab-flow', 'aria-hidden': 'true', text: '›' }));
+        const tab = el('a', {
+            class: 'pjv-vtab ctx-vtab' + (on ? ' active' : '') + (s.solo ? ' ctx-vtab-ov' : ''),
+            href: s.solo ? '#/context/' + s.key : '#/context/' + s.key + '/' + first.key,
+            role: 'tab', 'aria-selected': String(on), 'data-stage': s.key,
+            title: s.adminEdit ? s.label + ' — 보는 것은 모든 구성원, 만들고 고치는 것은 관리자' : s.label,
+        }, s.step ? el('span', { class: 'ctx-vtab-step', 'aria-hidden': 'true', text: String(s.step) }) : ctxFlowIcon(), el('span', { class: 'ctx-vtab-label', text: s.label }), s.step && s.step <= 4 ? el('span', { class: 'ctx-vtab-dot', 'aria-hidden': 'true' }) : null, s.adminEdit ? el('span', { class: 'ctx-vtab-lock', 'aria-hidden': 'true', title: '관리자만 고칠 수 있습니다' }, ctxLockIcon()) : null);
+        tabs.append(tab);
+        if (s.solo)
+            tabs.append(el('span', { class: 'pjv-vtab-sep', 'aria-hidden': 'true' })); // 개요 | ①›②›③›④›⑤ — 조망과 흐름을 한 칸 띄운다
+    }
+    // 툴바 좌측 — 이 단계의 화면들(알약). 개요는 화면이 하나뿐이라 알약을 세우지 않는다.
+    const left = el('div', { class: 'pjv-tasks-head-left' });
+    if (!selStage.solo) {
+        for (const it of selStage.items) {
             if (it.adminOnly && !hasScope('admin'))
                 continue; // #1618 — 눌러도 403 인 자리는 아예 안 그린다
-            const on = s.key === selStage.key && it.key === selItem.key;
-            box.append(el('a', {
-                class: 'docs-item' + (on ? ' active' : ''),
-                href: '#/context/' + s.key + '/' + it.key,
-                'aria-current': on ? 'page' : null,
-            }, el('span', { text: it.label })));
+            const on = it.key === selItem.key;
+            left.append(el('a', { class: 'pjv-tb-btn pjv-tb-pill ctx-pill' + (on ? ' active' : ''), href: '#/context/' + selStage.key + '/' + it.key, 'aria-current': on ? 'page' : null }, el('span', { class: 'pjv-view-btn-label', text: it.label })));
         }
-        side.append(box);
     }
-    return side;
+    const right = el('div', { class: 'card-head-actions' });
+    // 개요는 화면 알약도 우측 동작도 없으니 툴바 층을 아예 세우지 않는다(주기 설정 → 은 본문 '자동 실행' 줄에 이미 있다).
+    const toolbar = selStage.solo ? null : el('div', { class: 'card-head pjv-board-toolbar' }, left, right);
+    return el('div', { class: 'pjv-board-header ctx-board-header' }, crumbBar, tabs, toolbar);
 }
-/**
- * 개요 입구 카드 — 사이드바 맨 위에서 '전체 흐름을 보러 들어가는 자리'임을 스스로 말한다.
- *
- * 네 조각이 각자 다른 일을 한다:
- *   ① 테두리 + 틴트 배경 — 이 행이 **눌린다**는 신호(아래 단계 머리글은 안 눌리는 텍스트다).
- *   ② 흐름 아이콘 — 점 셋을 선으로 이어 '단계가 이어진 전체'를 그린다(개요 화면의 4단계 트랙 은유).
- *   ③ 부제 — 눌러서 **무엇을 보는지**. '개요'라는 이름만으로는 목차처럼 읽혀 들어갈 이유가 안 생긴다.
- *              단, 담는 것은 화면의 내용물뿐이다(아래 주석 참조).
- *   ④ '›' — 이동한다는 마지막 힌트.
- */
-function overviewCard(s, on) {
-    const it = s.items[0];
-    const ic = sv('svg', { class: 'ctx-side-ov-ic', viewBox: '0 0 24 24', width: '19', height: '19', 'aria-hidden': 'true' });
-    ic.append(sv('path', { d: 'M6.4 12h3.2M14.4 12h3.2', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round', opacity: '0.6' }), sv('circle', { cx: '4', cy: '12', r: '2.6', fill: 'currentColor' }), sv('circle', { cx: '12', cy: '12', r: '2.6', fill: 'currentColor', opacity: '0.85' }), sv('circle', { cx: '20', cy: '12', r: '2.6', fill: 'currentColor', opacity: '0.7' }));
-    return el('a', {
-        // 개요는 화면이 하나뿐이라 단계 키까지면 충분하다 — '#/context/overview/overview' 는 같은 말을 두 번 한다.
-        //  (라우터가 하위 화면 미지정이면 첫 화면으로 폴백하므로 동작은 같다.)
-        class: 'ctx-side-ov' + (on ? ' active' : ''),
-        href: '#/context/' + s.key,
-        'aria-current': on ? 'page' : null,
-    }, ic, el('span', { class: 'ctx-side-ov-t' }, el('span', { class: 'ctx-side-ov-label', text: it.label }), 
-    // 부제는 **이 화면에 무엇이 있는지**만 말한다 — '한눈에'·'찾습니다' 같은 말은 기능이 아니라 광고다.
-    //  네 단계를 그대로 적으면 '이 넷을 한 화면에서 본다'가 읽히고, '현황'은 이 탭이 이미 쓰는 말이다
-    //  (분류 현황 · 증류 현황 · 종류별 현황).
-    el('span', { class: 'ctx-side-ov-sub', text: '수집 · 증류 · 분류 · 관리 현황' })), el('span', { class: 'ctx-side-ov-go', 'aria-hidden': 'true', text: '›' }));
+/** 단계 탭의 건강 점 — 개요 카드와 같은 판정(stageHealthLevels)으로 칠한다. 머리는 먼저 뜨고 점은 뒤따라 들어온다. */
+async function paintStageHealth(view) {
+    let d;
+    try {
+        d = await api('/api/ui/org/pipeline');
+    }
+    catch {
+        return;
+    }
+    const lv = stageHealthLevels(d);
+    const map = { collect: lv.collect, distill: lv.distill, classify: lv.classify, manage: lv.manage };
+    for (const [key, level] of Object.entries(map)) {
+        const dotEl = view.querySelector('.ctx-vtab[data-stage="' + key + '"] .ctx-vtab-dot');
+        if (!dotEl || !dotEl.isConnected)
+            continue;
+        dotEl.classList.add('is-' + level);
+        dotEl.title = level === 'ok' ? '정상' : level === 'note' ? '참고' : level === 'warn' ? '확인 필요' : '멈춤';
+    }
+}
+function ctxAppIcon() {
+    const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+    n.append(sv('path', { d: 'M4 5h16l-6.2 7.2V18l-3.6 2v-7.8z' })); // 깔때기 — 런치패드 유리 아이콘과 같은 형태(맥락 관리 = 수집·증류·분류)
+    return n;
+}
+function ctxFlowIcon() {
+    const n = sv('svg', { class: 'ctx-vtab-ov-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    n.append(sv('path', { d: 'M6.4 12h3.2M14.4 12h3.2', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round', opacity: '0.6' }), sv('circle', { cx: '4', cy: '12', r: '2.6', fill: 'currentColor' }), sv('circle', { cx: '12', cy: '12', r: '2.6', fill: 'currentColor', opacity: '0.85' }), sv('circle', { cx: '20', cy: '12', r: '2.6', fill: 'currentColor', opacity: '0.7' }));
+    return n;
+}
+function ctxLockIcon() {
+    const n = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+    n.append(sv('rect', { x: 5, y: 10.5, width: 14, height: 10, rx: 2 }), sv('path', { d: 'M8 10.5V8a4 4 0 0 1 8 0v2.5' }));
+    return n;
 }
 export { renderContext as default };
