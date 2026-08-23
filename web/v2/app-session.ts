@@ -18,6 +18,8 @@ export interface SessionApp {
   scopes: string[];   // 매니페스트 선언 상한(동의 창 표시용)
   tools: string[];    // 〃 (permissions.tools ∪ ext_tools)
   pages: Array<{ key: string; title: string }>;  // #1780 PR5 — ui.pages(있으면 UI 앱). 없으면 [](세션 앱).
+  sites: string[];   // csp.frame_domains — 이 앱이 **화면에 싣는** 사이트(동의 창에 보여 준다)
+  net: string[];     // csp.connect_domains ∪ permissions.hosts — 이 앱이 **직접 연결하는** 곳
 }
 
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
@@ -31,8 +33,11 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         const perm = (a.manifest && a.manifest.permissions) || {};
         const tools = [...(perm.tools || []), ...(perm.ext_tools || [])].map(String);
         const pages = (((a.manifest && a.manifest.ui) || {}).pages || []).map((p: any) => ({ key: String(p.key), title: String(p.title || p.key) }));
+        const csp = (a.manifest && a.manifest.csp) || {};
+        const sites = (csp.frame_domains || []).map(String);
+        const net = [...(csp.connect_domains || []), ...(perm.hosts || [])].map(String);
         return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-          scopes: (perm.scopes || []).map(String), tools, pages };
+          scopes: (perm.scopes || []).map(String), tools, pages, sites, net };
       });
   } catch (e: any) {
     // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
@@ -48,6 +53,28 @@ export function isSpawningApp(): boolean { return spawning; }
  *  UI 중립 — **행선지는 호출자가 정한다**: 런치패드는 openAppSession 으로 #/s/<id> 로 간다.
  *  opts.projectId 를 주면 만든 뒤 그 프로젝트에 붙인다.
  */
+/**
+ * 이 앱에 대한 내 동의(grant)를 확보한다 — 없으면 **동의 창을 띄우고** 승인 시 grant 를 만든다.
+ *  세션 스폰(403)·앱 UI 의 첫 도구 호출(403) 양쪽이 같은 창을 쓴다(동의는 한 번, 이후 계속 유효).
+ *  반환 false = 사람이 취소함(호출부는 조용히 멈춘다).
+ *  ⚠ **single-flight**: 앱이 시작하자마자 도구를 여러 개 부르면 403 도 여러 개 온다(실측: 브라우저 앱이
+ *   북마크·최근주소를 동시에 읽어 동의 창이 두 겹으로 떴다). 앱당 진행 중인 동의는 하나로 합친다.
+ */
+const grantInFlight = new Map<string, Promise<boolean>>();
+export function ensureAppGrant(appId: string, title?: string): Promise<boolean> {
+  const cur = grantInFlight.get(appId);
+  if (cur) return cur;
+  const run = (async (): Promise<boolean> => {
+    const app = (await listSessionApps()).find((a) => a.id === appId)
+      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [] };
+    if (!(await appConsent(app))) return false;
+    await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
+    return true;
+  })().finally(() => { grantInFlight.delete(appId); });
+  grantInFlight.set(appId, run);
+  return run;
+}
+
 export async function spawnAppSession(
   appId: string,
   opts?: { title?: string; projectId?: number | null; initialPrompt?: string },
@@ -59,11 +86,7 @@ export async function spawnAppSession(
     try { id = await postAppSession(appId, opts); }
     catch (e: any) {
       if (e && e.status === 403) {
-        // grant 없음 → 동의 창 → grant → 재시도 1회.
-        const app = (await listSessionApps()).find((a) => a.id === appId)
-          || { id: appId, title: opts?.title || appId, version: '', scopes: [], tools: [], pages: [] };
-        if (!(await appConsent(app))) return null;   // 취소 = 조용히 멈춤
-        await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
+        if (!(await ensureAppGrant(appId, opts?.title))) return null;   // 취소 = 조용히 멈춤
         id = await postAppSession(appId, opts);
       } else throw e;
     }
@@ -121,6 +144,11 @@ function appConsent(app: SessionApp): Promise<boolean> {
         el('p', { class: 'v2-consent-sub', text: '이 앱이 여는 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }),
         el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))),
         el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))),
+        // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
+        app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }),
+          el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null,
+        app.net.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '연결' }),
+          el('div', { class: 'v2-consent-chips' }, ...chips(app.net, ''))) : null,
         el('div', { class: 'v2-consent-acts' },
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => finish(false) }),
           el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '동의하고 열기', onclick: () => finish(true) }))));

@@ -22,7 +22,7 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { anchoredPopover, api, el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
+import { anchoredPopover, api, el, keepSideScroll, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
@@ -121,6 +121,12 @@ export function sessText(s: Sess, projName: string): { main: string; sub: string
   if (name || job) return { main: name || job, sub: '' };
   return { main: (isIdLabel(label) ? '' : label) || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '' };
 }
+// ★내 세션인가 — 얼굴(남의 세션 표시)과 보관(×)이 **같은 판정**을 써야 한다(상민님 2026-08-19:
+//  "윤상민 아바타 같은 게 있는데 왜 있는지 모르겠고, 그것 때문인지 x 버튼이 보이질 않음").
+//  종전엔 둘 다 s.owned 만 봤는데, 그 값이 한 번이라도 false 로 오면 **내 세션에 내 얼굴이 뜨고
+//  보관 단추는 사라지는** 짝이 된다 — 사용자가 본 그림이 정확히 그것이다. 그래서 소유자 id 로도 확인한다.
+const meId = (): string => String((state.me && state.me.userId) || '');
+const isMine = (s: Sess): boolean => !!s.owned || (!!meId() && String((s.raw && s.raw.owner) || '') === meId());
 const rankOf = (k: string) => (SESS_STATES[k] ? SESS_STATES[k].rank : 9);
 /** 사이드바 세션 정렬 — 상태 순위(답 기다림이 위) 다음 최근 순. **'맨 위 세션'의 정의는 여기 하나뿐**이다
  *  (라우터가 프로젝트 → 세션으로 보낼 때도 이걸 쓴다 — 사이드바에서 보이는 순서와 어긋나면 안 된다). */
@@ -337,6 +343,11 @@ function render(): void {
       el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
   renderTree(rows);
   treeEl!.scrollTop = prevScroll;
+  // 위 한 줄(prevScroll)은 **이번 렌더**의 이어붙이기다. 그런데 트리가 통째로 다시 만들어지는 길이 하나라도
+  //  남으면(패널 재마운트·화면 전환 뒤 복귀 등) prevScroll 은 0 을 읽는다 — detach 된 노드의 scrollTop 은 0 이므로.
+  //  그래서 **노드 신원과 무관하게** 위치를 key 로 기억해 두는 팀 원시함수를 겹쳐 둔다(#1635 ⓑ).
+  //  사람이 휠·키로 움직이면 복원은 즉시 손을 뗀다(사람 조작을 덮지 않는다).
+  keepSideScroll(treeEl!, 'v2-side');
   if (findHad) { findIn.focus(); if (findSel && findSel[0] != null) findIn.setSelectionRange(findSel[0], findSel[1]); }
   else if (findFocusWanted) { findFocusWanted = false; findIn.focus(); }
   bindFindKey();
@@ -699,16 +710,18 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
   const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' },
     el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }),
     el('span', { class: 'v2-ss-main' }, nameEl),
-    s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),
+    isMine(s) ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),
     // 오른쪽 끝은 **한 자리**로 고정한다 — 상태어를 조건부로 넣으면 행마다 길이가 달라 목록이 들쭉날쭉해진다(상민님 2026-08-18).
     //  상태는 왼쪽 점이, 개수는 프로젝트 행이 말한다. 여기는 '누르면 대화로 간다'는 표식만(hover 때 보인다).
     //  ⚠ 지난 세션 묶음은 그 한 자리를 **'언제'**가 받는다 — 멈춘 것들을 고르는 축은 시간이고(어제 것인가 3주 전 것인가),
     //   묶음 안 모든 행이 똑같이 시각을 가지므로 '행마다 길이가 달라진다'는 그 규칙의 사유엔 걸리지 않는다.
-    pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : glyph('chat', 'v2-ss-go'),
+    //  ⚠ 돌고 있는 세션의 그 자리엔 **보관(×) 하나만** 둔다 — 종전엔 장식용 말풍선(누르면 대화로 간다)이 ×
+    //   바로 옆에 같이 떠서, 뜻 없는 아이콘이 조작 단추와 섞여 보였다(상민님 2026-08-19).
+    pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : null,
     // 보관(×) — **도는 세션에만**(지난 세션은 이미 거기 있다), **내 세션에만**(서버도 소유자만 허용).
     //  자리는 늘 차지한다(hover 때만 보인다) — 나타나며 행을 밀면 목록이 흔들린다(압정과 같은 규약).
-    !pastRow && s.owned ? archiveBtn(s) : null);
-  if (s.owned) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
+    !pastRow && isMine(s) ? archiveBtn(s) : null);
+  if (isMine(s)) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
   return row;
 }
 

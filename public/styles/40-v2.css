@@ -239,8 +239,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-row.on::before { content: ''; position: absolute; left: calc(3px + var(--nest, 14px)); top: 7px; bottom: 7px; width: 2.5px; border-radius: 2px; background: var(--blue-fill); }
 .v2-ss-go { width: 14px; height: 14px; margin-left: 6px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
 /* 보관(×) — 자리는 늘 차지하고 hover 때만 보인다(압정과 같은 규약: 나타나며 행을 밀면 목록이 흔들린다). */
-.v2-ss-x { width: 18px; height: 18px; margin-left: 4px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
+.v2-ss-x { width: 18px; height: 18px; margin-left: 6px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2); cursor: pointer; display: inline-grid; place-items: center; opacity: .45; }
 .v2-ss-row:hover .v2-ss-x, .v2-ss-x:focus-visible { opacity: 1; }
+/* 모바일·터치엔 hover 가 없다 — 늘 또렷하게. */
+@media (hover: none) { .v2-ss-x { opacity: 1; } }
 .v2-ss-x:hover { color: var(--danger); background: var(--bg-tint-2); }
 .v2-ss-x-ic { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 /* 이름 인라인 편집 — 행의 글자 자리를 그대로 쓴다(칸이 튀어나오면 목록이 흔들린다). */
