@@ -708,16 +708,56 @@ function webPart(ctx: PartCtx): Part {
     ? el('webview', { class: 'pn-webframe' })
     : el('iframe', { class: 'pn-webframe', referrerpolicy: 'no-referrer-when-downgrade' })) as HTMLElement;
   const input = el('input', { class: 'pn-web-in', type: 'text', placeholder: '주소 또는 검색어 — 예: docs.google.com', 'aria-label': '주소' }) as HTMLInputElement;
-  const go = (raw?: string): void => {
-    const u = norm(raw ?? input.value);
-    if (!u) return;
+  // 주소칸을 누르면 통째로 잡힌다 — 긴 주소 중간에 커서가 꽂히면 다시 치기가 번거롭다(브라우저 관용).
+  input.onfocus = () => input.select();
+
+  // ── 다닌 길 — 뒤로·앞으로의 재료 (원준 2026-08-21 요청) ────────────────────────
+  //  ⚠ 앱과 웹이 할 수 있는 일이 다르다. 데스크톱 앱의 <webview> 는 **진짜 방문기록**을 가져(별도 WebContents)
+  //   사이트 안에서 링크를 눌러 이동한 것까지 뒤로 간다. 브라우저의 iframe 은 남의 사이트라 그 기록을 읽을 수도
+  //   조작할 수도 없다(cross-origin) — 그래서 **이 칸이 실은 주소들**만으로 길을 만든다.
+  //   못 하는 것을 하는 척하지 않는다: 갈 곳이 없으면 단추를 끈다(회색), 툴팁도 그 뜻으로 갈라 적는다.
+  //  길은 **세션마다 따로**다 — 곁칸 부품은 그 세션의 것이라는 규칙 그대로(memKey).
+  const trails = new Map<string, { urls: string[]; at: number }>();
+  const trail = (): { urls: string[]; at: number } => {
+    const k = keyOf();
+    let t = trails.get(k);
+    if (!t) { t = { urls: [], at: -1 }; trails.set(k, t); }
+    return t;
+  };
+  const pushTrail = (u: string): void => {
+    const t = trail();
+    if (t.urls[t.at] === u) return;      // 같은 주소를 다시 = 새로고침이지 이동이 아니다
+    t.urls.splice(t.at + 1);             // 뒤로 간 뒤 새 곳으로 가면 앞길은 사라진다(브라우저와 같다)
+    t.urls.push(u);
+    t.at = t.urls.length - 1;
+  };
+  /** 이 칸에 주소를 싣는 **유일한 자리** — 주소칸·기억·다닌 길·단추 상태가 한 번에 맞는다. */
+  const load = (u: string, record: boolean): void => {
     input.value = u;
     frame.setAttribute('src', u);
+    if (record) pushTrail(u);
+    syncNav();
     // ⚠ 끼워 넣은 판(미리보기 프레임 안)에서는 **기억하지 않는다** — 저장소를 바깥과 공유하므로
     //  여기서 저장하면 바깥 사람이 그 세션에서 보던 주소를 덮어쓴다.
     if (EMBEDDED) return;
     const m = store(); m[keyOf()] = u;
     try { localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
+  };
+  const go = (raw?: string): void => {
+    const u = norm(raw ?? input.value);
+    if (!u) return;
+    load(u, true);
+  };
+  const step = (d: -1 | 1): void => {
+    if (live) {
+      const v = frame as any;
+      try { if (d < 0 ? v.canGoBack?.() : v.canGoForward?.()) { if (d < 0) v.goBack(); else v.goForward(); return; } } catch (_) { /* 아래 길로 */ }
+    }
+    const t = trail();
+    const i = t.at + d;
+    if (i < 0 || i >= t.urls.length) return;
+    t.at = i;
+    load(t.urls[i], false);              // 길 위를 걷는 것이지 새 길을 내는 게 아니다
   };
   // 지금 프레임에 실린 **그 주소를 다시** 싣는다 — go() 는 주소칸의 글자로 '가는' 것이라 뜻이 다르다.
   //  같은 주소를 src 에 그대로 넣는 것만으로는 #조각만 다른 주소에서 다시 싣지 않으므로, 남의 사이트면 빈 화면을 한 번 거친다.
@@ -738,22 +778,55 @@ function webPart(ctx: PartCtx): Part {
   //   같은 신호를 받아 다 같이 그 주소로 갈아입는다(그리고 저마다 자기 세션 열쇠에 그걸 저장한다).
   const evtHost = ctx.paneRoot();
   evtHost.addEventListener(WEB_OPEN_EVT, onOpen);
-  const openTab = el('a', { class: 'pn-web-btn', target: '_blank', rel: 'noopener', title: '새 탭에서 엽니다', href: '#' }, pnIcon('ext', 'pn-i sm')) as HTMLAnchorElement;
+  const openTab = el('a', { class: 'pn-web-btn ic', target: '_blank', rel: 'noopener', title: '지금 주소를 새 탭에서 엽니다.', 'aria-label': '새 탭에서 열기', href: '#' }, pnIcon('ext', 'pn-i sm')) as HTMLAnchorElement;
   openTab.onclick = (e: Event) => { const u = norm(input.value); if (!u) { e.preventDefault(); return; } openTab.href = u; };
+  // 뒤로·앞으로·다시 불러오기 — 브라우저와 같은 순서·같은 자리(왼쪽 묶음). 주소칸이 그 오른쪽을 다 쓴다.
+  const backBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '뒤로',
+    title: live ? '앞 화면으로 돌아갑니다.' : '이 칸에서 앞서 열었던 주소로 돌아갑니다.',
+    onclick: () => step(-1) }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  backBtn.classList.add('back');
+  const fwdBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '앞으로',
+    title: live ? '뒤로 오기 전 화면으로 갑니다.' : '뒤로 오기 전에 보던 주소로 다시 갑니다.',
+    onclick: () => step(1) }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
   root.append(
     el('div', { class: 'pn-web-bar' },
-      el('button', { class: 'pn-web-btn', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm')),
+      el('span', { class: 'pn-web-navs' },
+        backBtn, fwdBtn,
+        el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm'))),
       input,
       el('button', { class: 'pn-web-btn', type: 'button', text: '열기', onclick: () => go() }),
       openTab),
     frame,
     live ? null : el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요. 데스크톱 앱에서는 이 칸 안에 그대로 뜹니다.' }));
+  /** 단추가 갈 수 있는지 — 갈 데가 없으면 끈다(눌러도 아무 일 없는 단추를 켜 두지 않는다). */
+  function syncNav(): void {
+    if (live) {
+      const v = frame as any;
+      try { backBtn.disabled = !v.canGoBack?.(); fwdBtn.disabled = !v.canGoForward?.(); return; } catch (_) { /* 아직 안 붙었다 — 아래 길로 */ }
+    }
+    const t = trail();
+    backBtn.disabled = t.at <= 0;
+    fwdBtn.disabled = t.at < 0 || t.at >= t.urls.length - 1;
+  }
+  // 앱의 <webview> 는 스스로도 움직인다(사이트 안 링크·리다이렉트·SPA 라우팅) — 그때마다 주소칸과 단추를 맞춘다.
+  if (live) {
+    const sync = (): void => {
+      try { const u = (frame as any).getURL?.(); if (u && u !== 'about:blank') input.value = u; } catch (_) { /* noop */ }
+      syncNav();
+    };
+    for (const ev of ['did-navigate', 'did-navigate-in-page', 'did-finish-load', 'dom-ready']) frame.addEventListener(ev, sync);
+  }
+
   // 이 세션이 보던 주소로 맞춘다 — 세션을 갈아 끼우면 그 세션이 보던 페이지로 갈아입는다(아무것도 없으면 빈 칸).
+  //  길도 그 세션의 것으로 바뀐다(trail 이 memKey 로 갈린다) — 옆 세션에서 다닌 길로 뒤로 가면 그게 남의 화면이다.
   function adopt(): void {
     const u = store()[keyOf()] || '';
-    if (u === (frame.getAttribute('src') || '')) { input.value = u; return; }
+    const t = trail();
+    if (u && t.urls[t.at] !== u) pushTrail(u);      // 이 세션의 길이 비어 있으면 지금 주소를 첫 걸음으로
+    if (u === (frame.getAttribute('src') || '')) { input.value = u; syncNav(); return; }
     input.value = u;
     if (u) frame.setAttribute('src', u); else frame.removeAttribute('src');
+    syncNav();
   }
   adopt();
   const offSess = ctx.onSession(() => adopt());

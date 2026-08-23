@@ -405,6 +405,15 @@
 .pn-web-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
 .pn-web-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; text-decoration: none; flex: none; }
 .pn-web-btn:hover { color: var(--blue); border-color: var(--blue); }
+/* ── 주소줄 왼쪽 묶음 = [뒤로][앞으로][다시] (원준 2026-08-21) ──────────────────
+   브라우저와 같은 순서·같은 자리에 둔다 — 여기서 배우지 않아도 아는 배치가 제일 빠르다.
+   셋은 아이콘만이라 정사각으로 붙이고(묶음), 주소칸이 남은 폭을 다 쓴다. */
+.pn-web-navs { flex: none; display: inline-flex; align-items: center; gap: 3px; }
+.pn-web-btn.ic { width: 28px; padding: 0; }
+.pn-web-btn.back svg { transform: rotate(180deg); }
+/* 갈 데가 없으면 끈다 — 눌러도 아무 일 없는 단추를 켜 둔 채로 두지 않는다. */
+.pn-web-btn:disabled { color: var(--muted-3); border-color: var(--line-row); cursor: default; }
+.pn-web-btn:disabled:hover { color: var(--muted-3); border-color: var(--line-row); }
 .pn-webframe { flex: 1; min-height: 0; min-width: 0; width: 100%; border: 0; background: var(--surface); }
 /* 데스크톱 앱(#1829)에서는 이 칸이 <webview> 다 — 교체 요소라 내재 크기로 버티므로 flex 자식임을 명시한다. */
 webview.pn-webframe { display: flex; }
