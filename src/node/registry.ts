@@ -13,7 +13,7 @@ import {
   NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
-import { authNodeToken, getNode, touchNode, type OrgNode } from "./store.js";
+import { authNodeToken, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
 
 // 웹터미널 close 코드 확장(#869) — 로컬 4410(session-gone)/4403(no-access) 체계에 노드 사유를 더한다.
@@ -308,8 +308,11 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     // #1713 — 이 PC 에서 실제로 띄울 수 있는 하네스. 미전송(구 번들) → 기준선(claude·codex·shell)으로 본다.
     //  세션 폼이 이 값으로 선택지를 거른다 — 없는 하네스를 고르고 [생성하기] 뒤에 502 를 보던 것을 사전에 막는다.
     c.harnesses = nodeHarnesses(m.harnesses);
-    void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host, caps: [...c.caps], harnesses: [...c.harnesses] })
-      .catch(() => { /* 비치명 */ });
+    // #1849 — 잠자기 억제 결과도 함께 기록한다(미보고면 COALESCE 가 기존 값을 지키고, 그건 '모름'으로 남는다).
+    void touchNode(c.node.id, {
+      platform: m.platform, agentVer: m.agentVer, host: m.host, caps: [...c.caps], harnesses: [...c.harnesses],
+      keepAwake: m.keepAwake,
+    }).catch(() => { /* 비치명 */ });
     // #1713 — "지금 서빙 중인 번들의 지문". 노드가 이걸 받아 자기와 비교해 스스로 갱신한다.
     //  구 노드는 모르는 t 를 무시하므로 안전하다(무회귀).
     try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); }
@@ -347,6 +350,8 @@ function onNodeDisconnected(c: NodeConn): void {
   for (const { browser } of c.chans.values()) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
   c.chans.clear();
   void touchNode(c.node.id).catch(() => { /* 비치명 */ });
+  // #1849 — 이력에 남긴다. 로그 파일에만 있던 시절엔 "왜 끊기나"를 사람이 ssh 로 grep 해야 했다.
+  void appendNodeLinkEvent(c.node.id, "down").catch(() => { /* 비치명 — 이력 때문에 정리 경로가 죽으면 안 된다 */ });
   logger.info({ node: c.node.id }, "노드 연결 해제");
 }
 
@@ -381,6 +386,7 @@ export function setupNodeUpgrade(server: Server): void {
         ws.on("close", () => onNodeDisconnected(c));
         ws.on("error", () => onNodeDisconnected(c));
         void touchNode(node.id).catch(() => { /* 비치명 */ });
+        void appendNodeLinkEvent(node.id, "up").catch(() => { /* 비치명 */ });   // #1849
         logger.info({ node: node.id, kind: node.kind, owner: node.owner_member }, "노드 연결");
       });
     })();

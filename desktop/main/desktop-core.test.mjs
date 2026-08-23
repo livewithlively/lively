@@ -794,6 +794,11 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(statusLabel({ ...base, nodeConnected: false }), /연결 끊김/);
   assert.match(statusLabel({ ...base, nodeConnected: true }), /실행 중/);
   assert.match(statusLabel({ ...base, nodeConnected: null }), /실행 중/, '모름은 종전대로 — 게이트웨이에 못 물었다고 끊김이라 하면 거짓말');
+  // #1849 — 원인을 아는 끊김은 '다시 시작 필요'라고 하면 안 된다(자는 PC 는 재시작해도 또 잔다).
+  assert.match(statusLabel({ ...base, nodeConnected: false, nodeSleepNote: '…잠자기로 보입니다…' }), /잠자기/,
+    '잠자기로 추정되면 그 사실을 먼저 말한다');
+  assert.doesNotMatch(statusLabel({ ...base, nodeConnected: false, nodeSleepNote: '…' }), /다시 시작 필요/,
+    '자는 PC 에 재시작을 시키면 사용자는 같은 일을 반복하게 된다');
   assert.match(statusLabel({ ...base }), /실행 중/, '축이 아예 없어도(구 CLI) 종전대로');
   const z = trayMenuModel({ ...base, nodeConnected: false });
   const i = z.findIndex((m) => m.id === 'node-start');
@@ -805,6 +810,8 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(main, /nodeConnected: typeof n\.connected === "boolean" \? n\.connected : null/, 'connected 를 boolean 일 때만 옮기지 않는다');
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
   assert.match(js, /nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
+  assert.match(js, /nodeSleepNote/, '렌더러가 잠자기 원인 문구를 띄우지 않는다(#1849)');
+  assert.match(main, /nodeSleepNote:/, 'main 이 status 의 sleep.note 를 앱 상태로 옮기지 않는다(#1849)');
   assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
   assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
 });
