@@ -1169,3 +1169,15 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-ss-del { color: var(--danger); opacity: .38; }
 .v2-ss-row:hover .v2-ss-del { opacity: .85; }
 .v2-ss-del:hover { opacity: 1; }
+
+/* 완전 삭제 확인창의 범위 선택(#1850 P2) — '무엇을 지울지'를 개수만이 아니라 이름까지 보여준다.
+   개수만 보이면 사람은 무엇이 사라지는지 모른 채 체크한다. */
+.sess-purge { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.sess-purge-h { font-size: 13px; font-weight: 600; color: var(--ink); margin: 2px 0 0; }
+.sess-purge-row { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; padding: 6px 8px; border-radius: 8px; background: var(--bg-tint-2, #F4F6FA); }
+.sess-purge-row:hover { background: var(--bg-tint, #F6FAFF); }
+.sess-purge-row input { margin-top: 2px; flex: none; }
+.sess-purge-row .b { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sess-purge-row .n { font-size: 13px; font-weight: 600; }
+.sess-purge-row .h { font-size: 12px; color: var(--blue); }
+.sess-purge-row .l { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }

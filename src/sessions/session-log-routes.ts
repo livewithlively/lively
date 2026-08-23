@@ -13,7 +13,8 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { getRuntimeConfig } from "../org/store.js";
-import { auditOrgContent } from "../v6/content-audit.js";   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
+import { auditOrgContent } from "../v6/content-audit.js";
+import { sessionFootprint, purgeFootprint, type PurgeSelection } from "../v6/session-footprint-store.js";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
 import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged } from "../v6/session-log-store.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
@@ -361,6 +362,74 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       return;
     }
     throw new HttpError(409, "원본 머신을 열 수 없고 연결된 프로젝트도 없어 이어받기 세션을 만들 수 없습니다.");
+  }));
+
+  // 이 세션이 조직에 남긴 것(#1850 P2) — 확인창이 "무엇을 지울지" 사람에게 고르게 하려면 먼저 보여줘야 한다.
+  //  소유자만. 목록일 뿐이라 아무것도 바꾸지 않는다.
+  app.get("/api/ui/v6/sessions/:id/footprint", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    const sessionId = String(req.params.id ?? "");
+    if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+    const nodeId = String(req.query.node ?? "");
+    if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+    const owner = await sessionOwner(nodeId, sessionId);
+    const denied = checkPurgeGate({ requester, owner });
+    if (denied) throw new HttpError(denied.status, denied.message);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await sessionFootprint(nodeId, sessionId));
+  }));
+
+  // 고른 범위까지 함께 지운다(#1850 P2) — 대화 기록 + 이 세션이 만든 지식·프로젝트·작업 기록,
+  //  그리고 이 세션이 **고친** 지식은 세션 직전 판으로 되돌린다.
+  //  ⚠ DELETE(대화만)와 나눠 둔 이유: 지울 목록이 본문에 실려야 하고, 대화만 지우는 종전 경로를 깨지 않기 위해.
+  app.post("/api/ui/v6/sessions/:id/purge", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    const sessionId = String(req.params.id ?? "");
+    if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+    const nodeId = String(req.query.node ?? "");
+    if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+    const owner = await sessionOwner(nodeId, sessionId);
+    const denied = checkPurgeGate({ requester, owner });
+    if (denied) throw new HttpError(denied.status, denied.message);
+
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const strArr = (v: unknown): string[] => Array.isArray(v) ? v.map(String).filter((x) => x.length > 0 && x.length <= 200).slice(0, 500) : [];
+    const numArr = (v: unknown): number[] => Array.isArray(v) ? v.map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 500) : [];
+
+    // ⚠ 사람이 고른 것만 지운다 — 그런데 그 목록을 **그대로 믿지 않는다**. 지금 다시 발자국을 조회해
+    //  '이 세션이 실제로 남긴 것' 안에 있는 이름만 남긴다. 안 그러면 이 엔드포인트가 임의의 지식·프로젝트를
+    //  지우는 통로가 된다(자기 세션 하나만 있으면 남의 지식 이름을 실어 보낼 수 있다).
+    const fp = await sessionFootprint(nodeId, sessionId);
+    const okCreated = new Set(fp.knowledge_created.map((k) => k.name));
+    const okEdited = new Set(fp.knowledge_edited.map((k) => k.name));
+    const okProjects = new Set(fp.projects.map((p) => p.id));
+    const sel: PurgeSelection = {
+      knowledge: strArr(b.knowledge).filter((n) => okCreated.has(n)),
+      revert: strArr(b.revert).filter((n) => okEdited.has(n)),
+      projects: numArr(b.projects).filter((i) => okProjects.has(i)),
+      activities: b.activities === true,
+    };
+
+    const footprint = await purgeFootprint(sel, fp.tmux_session_id, fp.window?.from ?? null, requester);
+
+    // 대화 기록은 기본으로 함께 지운다(이 흐름의 출발점이다). log:false 면 남긴다.
+    let log: Awaited<ReturnType<typeof purgeSessionLog>> | null = null;
+    let localFiles = 0;
+    if (b.log !== false) {
+      let cwd: string | null = null;
+      try { cwd = firstTranscriptCwd((await readSessionLog(nodeId, sessionId, 0, 256 * 1024)).data.toString("utf8")); }
+      catch { /* 본문을 못 읽어도 중앙 삭제는 진행한다 */ }
+      log = await purgeSessionLog(nodeId, sessionId, requester);
+      if (nodeId === "" && cwd) { try { localFiles = await deleteTranscriptFiles(cwd, sessionId, requester); } catch { /* 권한 등 */ } }
+    }
+
+    // 감사 — 내용 없이 '무엇을 얼마나 지웠나'만(이 경로가 지우려는 게 바로 내용이다).
+    await auditOrgContent("session_log", `${nodeId}|${sessionId}`, "delete", null,
+      { bytes: log?.bytes ?? 0, chunks: log?.chunks ?? 0, subagents: log?.subagents ?? 0, local_files: localFiles, ...footprint },
+      { actor: requester, source: "web" });
+
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, log, localFiles, localPending: nodeId !== "" ? nodeId : null, ...footprint });
   }));
 
   // 세션 기록 **완전 삭제**(#1850) — 소유자가 자기 대화 전문을 남김없이 지운다. 되돌릴 수 없다(휴지통 없음).
