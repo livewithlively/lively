@@ -18,12 +18,16 @@ import { confirmDialog, skeleton } from '../ui-primitives.js';
 import { svcTile } from '../svc-icons.js';
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard } from '../me-logins.js';
+//  관리자 절반(조직에 앱 열기) — 같은 화면의 다른 층. 관리자가 아니면 통째로 null 이라 화면에 자국도 남지 않는다.
+import { loadOrgMcp, orgAdminSection, presetOf } from './connect-admin.js';
 import { overlay } from '../ui-primitives.js';
 // 화면이 그때그때 서버에서 읽는다 — 연결 상태는 서버에만 있고 셸 데이터(V2Data)에는 없다.
 async function load() {
     const creds = await api('/api/ui/me/credentials');
     const oauth = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
-    return partition(oauth, creds);
+    //  조직 쪽(등록된 MCP 서버·프리셋)은 **관리자에게만** 내려온다 — 아니면 null 이고 화면의 그 층이 사라진다.
+    const org = await loadOrgMcp().catch(() => null);
+    return { v: partition(oauth, creds), org };
 }
 //  ⚠ 표(LOGIN_SERVICES)만 뒤지면 안 된다 — 관리자가 등록한 커넥터는 서버에서 와서 v.all 에만 있다.
 const findSvc = (v, key) => v.all.find((s) => s.key === key) || LOGIN_SERVICES.find((s) => s.key === key);
@@ -37,14 +41,16 @@ function stateOf(v, svc) {
 // ══ 목록 (#/connect) ═══════════════════════════════════════════════════════════
 export async function renderConnect(host) {
     host.replaceChildren(el('div', { class: 'v2-center' }, skeleton('연결 상태를 불러오는 중')));
-    let v;
+    let v, org;
     try {
-        v = await load();
+        ({ v, org } = await load());
     }
     catch (e) {
         host.replaceChildren(el('div', { class: 'v2-center' }, errorNote(e, '연결 상태를 불러오지 못했습니다')));
         return;
     }
+    //  관리자에게는 셋째 묶음이 '남에게 부탁할 것'이 아니라 **내가 지금 할 수 있는 일**이다 — 이름부터 바꾼다.
+    const iAmAdmin = !!(org && org.admin);
     let q = '';
     const listHost = el('div', { class: 'cn-groups' });
     const search = el('input', {
@@ -52,7 +58,7 @@ export async function renderConnect(host) {
         oninput: (e) => { q = String(e.target.value || '').trim().toLowerCase(); paint(); },
     });
     // 요약 — 세 숫자가 이 화면의 전부다("몇 개 켜져 있나 · 더 켤 수 있나 · 내가 못 켜는 게 있나").
-    const sum = el('div', { class: 'cn-sum' }, el('span', { class: 'cn-sum-i on' }, el('b', { text: String(v.connected.length) }), el('span', { text: '연결됨' })), el('span', { class: 'cn-sum-i' }, el('b', { text: String(v.available.length) }), el('span', { text: '연결할 수 있음' })), ...(v.blockedOAuth.length ? [el('span', { class: 'cn-sum-i' }, el('b', { text: String(v.blockedOAuth.length) }), el('span', { text: '관리자 필요' }))] : []));
+    const sum = el('div', { class: 'cn-sum' }, el('span', { class: 'cn-sum-i on' }, el('b', { text: String(v.connected.length) }), el('span', { text: '연결됨' })), el('span', { class: 'cn-sum-i' }, el('b', { text: String(v.available.length) }), el('span', { text: '연결할 수 있음' })), ...(v.blockedOAuth.length ? [el('span', { class: 'cn-sum-i' }, el('b', { text: String(v.blockedOAuth.length) }), el('span', { text: iAmAdmin ? '내가 열 수 있음' : '관리자 필요' }))] : []), ...(iAmAdmin ? [el('span', { class: 'cn-sum-i cn-sum-adm' }, el('b', { text: String(org.servers.length) }), el('span', { text: '조직에 열어 둠' }))] : []));
     function group(title, note, items, st) {
         const hit = items.filter((s) => !q || s.label.toLowerCase().includes(q) || s.key.includes(q));
         if (!hit.length)
@@ -62,7 +68,9 @@ export async function renderConnect(host) {
     function row(svc, st) {
         const how = svc.oauth ? '계정 로그인' : '토큰';
         const meta = st === 'on' ? connMeta(v, svc)
-            : st === 'blocked' ? '관리자가 조직에 등록해야 연결할 수 있어요'
+            : st === 'blocked' ? (iAmAdmin
+                ? (presetOf(org, svc.key) ? '조직에 열면 팀 전체가 쓸 수 있어요 — 내가 열 수 있습니다' : '조직에 열어야 해요 — 관리탭에서 직접 등록')
+                : '관리자가 조직에 등록해야 연결할 수 있어요')
                 : how + '으로 연결';
         return el('a', { class: 'cn-row' + (st === 'blocked' ? ' blocked' : ''), href: '#/connect/' + svc.key, title: svc.label }, svcTile(svc.key, svc.label, st === 'on'), el('div', { class: 'cn-row-main' }, el('div', { class: 't' }, el('span', { text: svc.label }), st === 'on' ? el('span', { class: 'cn-dot on', 'aria-label': '연결됨' }) : null), el('div', { class: 'm', text: meta })), el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
     }
@@ -70,7 +78,7 @@ export async function renderConnect(host) {
         const kids = [
             group('연결된 앱', 'AI가 지금 내 계정으로 쓸 수 있어요', v.connected, 'on'),
             group('연결할 수 있는 앱', '지금 바로 내가 켤 수 있어요', v.available, 'off'),
-            group('관리자가 등록해야 하는 앱', '내 힘으로는 켤 수 없어요', v.blockedOAuth, 'blocked'),
+            group(iAmAdmin ? '아직 조직에 열지 않은 앱' : '관리자가 등록해야 하는 앱', iAmAdmin ? '열면 팀 전체가 각자 계정으로 연결할 수 있어요' : '내 힘으로는 켤 수 없어요', v.blockedOAuth, 'blocked'),
         ].filter(Boolean);
         if (!kids.length)
             kids.push(el('p', { class: 'v2-empty', text: `'${q}' 와(과) 맞는 앱이 없어요.` }));
@@ -101,9 +109,9 @@ function connMeta(v, svc) {
 export async function renderConnectApp(host, key) {
     //  먼저 읽고 나서 앱을 찾는다 — 이 키가 표에 없는 커넥터일 수 있고, 그건 서버 응답에만 있다.
     host.replaceChildren(el('div', { class: 'v2-center' }, backLink(), skeleton('연결 상태를 불러오는 중')));
-    let v;
+    let v, org;
     try {
-        v = await load();
+        ({ v, org } = await load());
     }
     catch (e) {
         host.replaceChildren(el('div', { class: 'v2-center' }, backLink(), errorNote(e, '연결 상태를 불러오지 못했습니다')));
@@ -158,8 +166,10 @@ export async function renderConnectApp(host, key) {
             else
                 openToken(svc, reload); } }));
     }
-    else {
+    else if (!(org && org.admin)) {
         // 관리자 필요 — 눌러도 안 되는 버튼을 내밀지 않는다. 대신 **그대로 전달할 수 있는 문장**을 복사해 준다.
+        //  ⚠ 관리자에게는 이 버튼을 주지 않는다 — 자기가 열 수 있는데 자기에게 부탁 문구를 복사시키는 꼴이 된다.
+        //   그 자리는 아래 '조직 설정' 구역(orgAdminSection)이 받는다.
         const ask = `라이블리에서 ${svc.label} 을(를) 쓰고 싶습니다. 관리 ▸ 외부 서비스에서 ${svc.label} 커넥터를 등록해 주세요.`;
         acts.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '요청 문구 복사',
             onclick: () => { void navigator.clipboard?.writeText(ask).then(() => toast('요청 문구를 복사했어요 — 관리자에게 그대로 보내세요')).catch(() => toast('복사하지 못했습니다', true)); } }));
@@ -176,12 +186,17 @@ export async function renderConnectApp(host, key) {
         facts.push(['연결한 때', relTime(cred.updated_at)]);
     // ── 설정 — 앱마다 다르다. 지금은 슬랙만(대화별 허용). 없으면 그 자리를 만들지 않는다. ──
     const settings = [];
+    //  조직 쪽 손잡이(관리자만) — 이 앱을 팀 전체에 열고 닫는 자리. 개인 설정보다 위에 둔다:
+    //  아직 안 열린 앱이면 **여기가 먼저 해결돼야** 아래 내 연결이 의미를 갖는다.
+    const orgSec = orgAdminSection(svc, org, reload);
+    if (orgSec)
+        settings.push(orgSec);
     if (svc.key === 'slack' && st === 'on') {
         settings.push(el('section', { class: 'cn-sec' }, el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '이 앱의 설정' })), el('div', { class: 'cn-slack' }, slackChannelPolicyCard())));
     }
     host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' }, backLink(), el('div', { class: 'cn-head' }, svcTile(svc.key, svc.label, st === 'on'), el('div', { class: 'cn-head-tt' }, el('h1', { class: 'v2-title', text: svc.label }), el('div', { class: 'cn-head-st' + (st === 'on' ? ' on' : '') }, st === 'on' ? [el('span', { class: 'cn-dot on', 'aria-hidden': 'true' }), el('span', { text: '연결됨' })]
         : st === 'off' ? el('span', { text: '연결 안 됨' })
-            : el('span', { text: '관리자가 등록해야 해요' })))), el('p', { class: 'v2-desc' }, ...uiText(svc.blurb)), el('div', { class: 'cn-acts' }, ...acts), 
+            : el('span', { text: org && org.admin ? '아직 조직에 열지 않음' : '관리자가 등록해야 해요' })))), el('p', { class: 'v2-desc' }, ...uiText(svc.blurb)), el('div', { class: 'cn-acts' }, ...acts), 
     // 아래 절반은 **두 칸**이다(넓은 화면에서만 — 좁으면 CSS 가 한 칸으로 되돌린다): 왼쪽 = 이 연결의 사실과
     //  발급 방법, 오른쪽 = 그 앱의 설정. 세로로 쌓으면 슬랙처럼 설정이 긴 앱은 사실 표가 화면 밖으로 밀린다.
     el('div', { class: 'cn-body' }, el('div', { class: 'cn-col' }, el('dl', { class: 'cn-facts' }, ...facts.flatMap(([k, val]) => [el('dt', { text: k }), el('dd', { text: val })])), 
