@@ -29,7 +29,9 @@ async function load(): Promise<SvcView> {
   return partition(oauth, creds);
 }
 
-const findSvc = (key: string): Svc | undefined => LOGIN_SERVICES.find((s) => s.key === key);
+//  ⚠ 표(LOGIN_SERVICES)만 뒤지면 안 된다 — 관리자가 등록한 커넥터는 서버에서 와서 v.all 에만 있다.
+const findSvc = (v: SvcView, key: string): Svc | undefined =>
+  (v.all as Svc[]).find((s) => s.key === key) || LOGIN_SERVICES.find((s) => s.key === key);
 
 /** 이 앱이 지금 어떤 상태인가 — 세 갈래. 목록의 구역도, 상세의 문구도 이 하나로 갈린다. */
 type State = 'on' | 'off' | 'blocked';
@@ -125,12 +127,13 @@ function connMeta(v: SvcView, svc: Svc): string {
 // ══ 앱 상세 (#/connect/<key>) ══════════════════════════════════════════════════
 //  이 앱에 대한 모든 것이 여기 있다 — 상태 · 무엇을 허용하는지 · 발급 방법 · 설정 · 연결/해제.
 export async function renderConnectApp(host: HTMLElement, key: string): Promise<void> {
-  const svc = findSvc(key);
-  if (!svc) { host.replaceChildren(el('div', { class: 'v2-center' }, backLink(), el('p', { class: 'v2-empty', text: '그런 앱이 없어요.' }))); return; }
+  //  먼저 읽고 나서 앱을 찾는다 — 이 키가 표에 없는 커넥터일 수 있고, 그건 서버 응답에만 있다.
   host.replaceChildren(el('div', { class: 'v2-center' }, backLink(), skeleton('연결 상태를 불러오는 중')));
   let v: SvcView;
   try { v = await load(); }
   catch (e) { host.replaceChildren(el('div', { class: 'v2-center' }, backLink(), errorNote(e, '연결 상태를 불러오지 못했습니다'))); return; }
+  const svc = findSvc(v, key);
+  if (!svc) { host.replaceChildren(el('div', { class: 'v2-center' }, backLink(), el('p', { class: 'v2-empty', text: '그런 앱이 없어요.' }))); return; }
 
   const st = stateOf(v, svc);
   const reload = () => { void renderConnectApp(host, key); };

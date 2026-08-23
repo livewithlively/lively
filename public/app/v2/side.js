@@ -861,7 +861,10 @@ async function doArchive(s) {
         const q = '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : '');
         await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + q, { method: 'DELETE' });
         toast('지난 세션으로 보냈어요 — 열면 이어서 할 수 있습니다');
-        hooks.onArchived?.();
+        //  id 를 넘긴다 — 받는 쪽이 **서버 되읽기를 기다리지 않고** 이 세션을 곧바로 지난 세션으로 옮긴다.
+        //  종전엔 되읽기만 했는데, tmux 종료가 목록 API 에 반영되기까지 시차가 있어 몇 초 동안 그대로 살아 있는
+        //  것처럼 보였다(원준 2026-08-21 "새로고침해야 이동한다").
+        hooks.onArchived?.(s.id);
     }
     catch (e) {
         toast((e && e.message) || '보관하지 못했습니다', true);

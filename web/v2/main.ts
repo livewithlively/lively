@@ -316,6 +316,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   if (Array.isArray(logs)) lastLogs = logs as any[];
   const sessions = mergeSessions(lastLive, lastLogs);
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
+  applyArchivePins(sessions);  // 방금 보관한 세션을 **되살리지 않게**(아래 archivePins)
   data = { projects, sessions, loadedAt: Date.now() };
   if (!wantProj) {
     const known = new Set(projects.map((p) => p.id));
@@ -589,7 +590,11 @@ function drawSide(): void {
     // 사이드바에서 고친 이름은 **화면 전체**에 반영한다 — 목록만 바뀌고 탭·대화창 제목이 옛 이름이면 그게 더 혼란스럽다.
     onRenameSession: (id, label) => renameSessionEverywhere(id, label),
     // 보관(×) 뒤 — 그 세션은 이제 '지난 세션'이라 목록의 자리가 바뀐다. 서버가 정답이므로 다시 읽는다.
-    onArchived: () => { void loadData().then(() => { drawSide(); tabsApi?.paint(); }); },
+    //  ⚠ 서버 응답을 기다린 뒤에 옮기면 **몇 초 동안 그대로 살아 있는 것처럼 보인다**(원준 2026-08-21:
+    //   "바로 없어지는 게 아니라 시간이 좀 지나거나 새로고침해야 이동한다"). tmux 가 실제로 죽고 그게 목록
+    //   API 에 반영되기까지 시차가 있어서다. 그래서 **먼저 화면에서 옮기고**(pinArchived) 나서 다시 읽는다.
+    //   되읽기가 아직 '살아 있다'고 해도 30초 동안은 이 결정이 이긴다(applyArchivePins).
+    onArchived: (id?: string) => { if (id) { pinArchived(id); drawSide(); } void loadData().then(() => { drawSide(); tabsApi?.paint(); }); },
     // [새 작업] — **늘 새 탭**에 홈을 연다. 이미 열린 홈 탭으로 되돌아가면(find→activate) 거기 쓰던 지시가 덮이고,
     //  '새로 시작한다'는 이름과 동작이 어긋난다. 빈 홈 탭이 남으면 세션을 열 때 그 자리가 세션이 되어 정리된다.
     onNewTask: () => { tabsApi?.add('#/'); },
@@ -723,6 +728,26 @@ async function archiveSession(sessionId: string): Promise<void> {
 //  도착하면 방금 고친 이름을 도로 옛것으로 되돌린다(실측: 4초 뒤 옛 이름, 13초 뒤 새 이름으로 복귀).
 //  자가 치유되긴 하지만 "내가 바꿨는데 안 바뀌네" 로 읽히는 몇 초다 — 그래서 짧게 고정해 둔다.
 //  서버가 정답이라는 원칙은 지킨다: 고정은 **내가 방금 쓴 값**에 대해서만, 30초만.
+// 보관(×) 고정 — 방금 지난 세션으로 보낸 것을 **떠 있던 응답이 되살리지 않게**(renamePins 와 같은 규율).
+//  30초면 tmux 종료가 목록 API 에 반영되기 충분하고(실측 수 초), 그 안에 서버가 따라잡으면 즉시 해제한다.
+const archivePins = new Map<string, number>();
+function markArchived(s: Sess): void { s.alive = false; if (s.raw) s.raw.alive = false; }
+function pinArchived(id: string): void {
+  archivePins.set(id, Date.now() + 30_000);
+  const s = data.sessions.find((x) => x.id === id);
+  if (s) markArchived(s);                      // 지금 그리는 목록에 곧바로 반영 — 되읽기를 기다리지 않는다
+}
+function applyArchivePins(sessions: Sess[]): void {
+  if (!archivePins.size) return;
+  const now = Date.now();
+  for (const [id, until] of [...archivePins]) {
+    const s = sessions.find((x) => x.id === id);
+    if (until < now || !s) { archivePins.delete(id); continue; }
+    if (!s.alive) { archivePins.delete(id); continue; }   // 서버가 따라잡았다 — 고정 해제
+    markArchived(s);
+  }
+}
+
 const renamePins = new Map<string, { label: string; until: number }>();
 function pinRename(id: string, label: string): void { renamePins.set(id, { label, until: Date.now() + 30_000 }); }
 function applyRenamePins(sessions: Sess[]): void {
