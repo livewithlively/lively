@@ -1182,3 +1182,56 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .sess-purge-row .n { font-size: 13px; font-weight: 600; }
 .sess-purge-row .h { font-size: 12px; color: var(--blue); }
 .sess-purge-row .l { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 아카이브 · 휴지통(#1851) — 사이드바 발치의 두 행 + 가운데 화면. web/v2/side.ts binRows() · web/v2/bins.ts ── */
+/* 두 행은 프로젝트 행과 같은 기둥(아이콘 16 → 글자)·같은 높이를 쓰되 **보통 글씨·흐린 아이콘** — 폴더(내용)가 아니라
+   '치워 둔 곳'이라 목록보다 먼저 읽히면 안 된다. 트리 맨 아래(기본)에서는 위와 구분선으로 띄우고, 발치에 고정하면
+   트리 밖(스크롤 무관)에 같은 모양으로 선다. */
+.v2-bins { margin-top: 14px; padding-top: 8px; border-top: 1px solid var(--line); }
+.v2-bins-fixed { margin: 0; padding: 6px var(--side-x, 8px) 6px; border-top: 1px solid var(--line); flex: none; }
+.v2-bin { display: flex; align-items: center; gap: 4px; padding: 7px 10px 7px 8px; min-height: var(--row-h, 34px); border-radius: 8px; font-size: 13.5px; font-weight: 600; line-height: 1.4; color: var(--ink-sub); text-decoration: none; }
+.v2-bin + .v2-bin { margin-top: 2px; }
+.v2-bin:hover { background: var(--bg); color: var(--ink); }
+.v2-bin.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-bin-ic { width: 16px; height: 16px; flex: none; margin-left: 20px; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.v2-bins-fixed .v2-bin-ic { margin-left: 4px; }
+.v2-bin:hover .v2-bin-ic, .v2-bin.on .v2-bin-ic { stroke: var(--blue); }
+.v2-bin .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 4px; }
+/* 아래 고정 압정 — 프로젝트 행의 압정과 같은 규약(자리는 늘 차지, 손을 얹으면 보임, 켜져 있으면 늘 보임). */
+.v2-bin:hover .v2-bin-pin, .v2-bin-pin:focus-visible { opacity: 1; }
+/* 지난 세션 행의 휴지통 단추 — 보관(×)과 같은 자리·같은 크기, 손을 얹으면 위험색. */
+.v2-ss-trash .v2-ss-x-ic { width: 13px; height: 13px; stroke-width: 1.8; stroke-linejoin: round; }
+
+/* 가운데 화면 — 홈·확인할 것(v2-now-row)과 같은 행 문법. 아카이브는 프로젝트 카드(머리 + 세션 목록), 휴지통은 묶음 둘. */
+.v2-bin-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.v2-bin-top > div { min-width: 0; }
+.v2-bin-emptyb { flex: none; margin-top: 14px; }
+.v2-bin-sec { margin-top: 26px; }
+.v2-bin-cards { margin-top: 22px; display: flex; flex-direction: column; gap: 14px; }
+.v2-bin-card { border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg); overflow: hidden; }
+.v2-bin-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.v2-bin-head .tw { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.v2-bin-head .t { font-size: 14.5px; font-weight: 750; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-bin-head .t:hover { text-decoration: underline; }
+.v2-bin-head .p { font-size: 12px; color: var(--muted); }
+.v2-bin-fold { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
+.v2-bin-fold.sm { width: 15px; height: 15px; margin: 0 3px 0 1px; }
+.v2-bin-list { padding: 6px; }
+.v2-bin-card .v2-bin-list { padding: 6px 8px; }
+.v2-bin-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 9px; color: inherit; }
+.v2-bin-row:hover { background: var(--bg-tint); }
+.v2-bin-row .tw { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; text-decoration: none; color: inherit; }
+.v2-bin-row .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.v2-bin-row.past .t { font-weight: 500; }
+.v2-bin-row a.tw:hover .t { text-decoration: underline; }
+.v2-bin-row .p { font-size: 11.5px; color: var(--muted-2); flex: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-bin-row .st { font-size: 12px; color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+.v2-bin-row .btn-text { flex: none; }
+.v2-bin-row .btn-text.danger { color: var(--danger); }
+.v2-bin-more { margin: 4px 8px 2px; }
+.v2-bin-empty { margin: 6px 8px; font-size: 12.5px; color: var(--muted); }
+.v2-bin-fine { margin-top: 28px; font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+@media (max-width: 900px) {
+  .v2-bin-row { flex-wrap: wrap; }
+  .v2-bin-row .p { max-width: 100%; }
+}

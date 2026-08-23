@@ -34,7 +34,7 @@ const PROJECT_COLS =
    list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
-   sort, created_at, updated_at, completed_at`;
+   sort, created_at, updated_at, completed_at, archived_at`;
 
 export interface ProjectRow {
   id: number; level: string; parent_id: number | null;
@@ -50,6 +50,8 @@ export interface ProjectRow {
   external_system: string | null; external_instance: string | null;
   external_id: string | null; external_url: string | null;
   sort: number; created_at: string; updated_at: string; completed_at: string | null;
+  // #1851 — 아카이브 표식(보관 시각). NULL=평소 화면. 목록은 기본으로 이 행을 뺀다(ProjectFilter.archived).
+  archived_at: string | null;
   members?: unknown[]; // listProjects 가 facepile 용으로 채움(상세 getProject 의 members 와 별개)
 }
 
@@ -97,7 +99,9 @@ export async function syncTaskAssignees(taskId: number, assignees: string[]): Pr
 //  ⚠ #1291 이후 규약: `null`=특권(admin·내부 경로, 필터 없음) / 문자열=그 멤버로 필터.
 //   구 주석의 "MCP 는 신원 없이 전체 열람"은 사실이 아니었다 — MCP 도 bearer 신원이 항상 있어 이미 필터되고 있었다.
 //   판정은 v6/visibility.ts 로 일원화한다(리스트 자기 설정 ∩ 상위 스페이스 — 상속을 한 곳에서만 계산).
-export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string; viewerVis?: Viewer }
+// archived(#1851): exclude(기본 — 보관한 프로젝트는 평소 목록에서 빠진다) · include(전부) · only(아카이브 화면).
+export type ArchivedFilter = "exclude" | "include" | "only";
+export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string; viewerVis?: Viewer; archived?: ArchivedFilter }
 
 // ── 내 할 일(#1232) — 사람 축으로 뒤집은 태스크 조회. ─────────────────────
 //  listProjects 는 `level='project'` 고정이라 "내가 맡은 태스크"를 프로젝트 가로질러 볼 방법이 없었다(프로젝트를
@@ -268,6 +272,11 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
     wh.push(`(p.created_by=$${params.length} OR EXISTS(SELECT 1 FROM project_member pmv WHERE pmv.project_id=p.id AND pmv.member_id=$${params.length}))`);
   }
   wh.push("p.folder IS DISTINCT FROM '__board_anchor__'"); // 보드 커스텀 컬럼 앵커(숨김 프로젝트) 제외
+  // 아카이브(#1851) — 기본은 **뺀다**. 보관은 '평소 화면에서 치운다'는 뜻이라 보드·사이드바·자동 스코프 어디에도
+  //  안 보이는 게 맞고, 보려면 호출자가 archived=include|only 로 명시한다(새 셸 사이드바는 include 로 받아 스스로 가른다).
+  const arch: ArchivedFilter = filter.archived || "exclude";
+  if (arch === "exclude") wh.push("p.archived_at IS NULL");
+  else if (arch === "only") wh.push("p.archived_at IS NOT NULL");
   // 공개범위 시행(#475→#1291) — 안 보이는 리스트의 프로젝트는 뺀다. 미분류(list_id NULL)는 잠글 상위가 없어 전원 열람.
   wh.push(listIdPredicate("p.list_id", visIds));
   const where = `WHERE ${wh.join(" AND ")}`;
@@ -552,6 +561,20 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven]);
   await auditProject(String(id), "set_status", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
+  return after;
+}
+
+// 아카이브(#1851) — 프로젝트를 통째로 보관(archived_at=now())하거나 되돌린다(NULL). 삭제가 아니다: 태스크·팀원·지식 연결·
+//  세션 전부 그대로고, 목록(listProjects 기본 exclude)과 새 셸 사이드바에서만 빠진다. 감사는 op='archive'|'unarchive'.
+export async function setProjectArchived(id: number, archived: boolean, ctx?: WriteCtx): Promise<ProjectRow> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+  if (!before) throw new Error(`프로젝트 #${id} 없음`);
+  if (!!before.archived_at === archived) return before;   // 이미 그 상태 — 멱등(감사도 남기지 않는다)
+  const after: ProjectRow = await one(itemsPool,
+    `UPDATE project SET archived_at = CASE WHEN $2::bool THEN now() ELSE NULL END, updated_at=now()
+     WHERE id=$1 AND level='project' RETURNING ${PROJECT_COLS}`, [id, archived]);
+  await auditProject(String(id), archived ? "archive" : "unarchive", before, after, ctx);
   return after;
 }
 

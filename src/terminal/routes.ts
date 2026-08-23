@@ -38,6 +38,8 @@ import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../se
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta } from "./session-meta.js";                 // #1820 — 죽은 세션이 '복원 가능'을 말하는 단일 판정
+import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
+import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
 function themeOf(req: { headers: Record<string, unknown> }, b: Record<string, unknown>): "dark" | "light" | undefined {
@@ -110,6 +112,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerSessionCrudRoutes(app, auth);
   registerRestoreReportRoutes(app, auth);
   registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys (CRUD 뒤 — 경로가 겹치지 않는다)
+  registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
   registerTerminalFiles(app, verifier);
@@ -296,7 +299,23 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
-    res.json({ sessions: mergeSessionViews(local, remote, localRestorable) });
+    // #1851 휴지통 — 내 표식을 행에 얹는다: 휴지통에 있으면 trashedAt(화면이 사이드바에서 빼고 휴지통 화면에 그린다),
+    //  완전 삭제(purged)면 행 자체를 뺀다. 박스 id 와 대화 uuid 어느 이름으로든 표식이 있으면 그 세션의 것이다.
+    //  DB 가 죽어도 목록은 나간다(best-effort — 표식 없이).
+    let merged = mergeSessionViews(local, remote, localRestorable);
+    try {
+      const marks = await trashMapFor(idOf(userOf(req)));
+      if (marks.size) {
+        merged = merged.filter((s) => {
+          const m = marks.get(s.id) || (s.claudeSessionId ? marks.get(s.claudeSessionId) : undefined);
+          if (!m) return true;
+          if (m.purged) return false;
+          s.trashedAt = m.trashed_at;
+          return true;
+        });
+      }
+    } catch { /* 표식 조회 실패 — 휴지통 없이 나간다 */ }
+    res.json({ sessions: merged });
   }));
   // 세션 종료 확인창이 '대화 기록이 남는지'를 **사실대로** 말하기 위한 최소 정책 조회(#1582).
   //  왜 필요한가: 종전 확인창은 전 화면에서 "되돌릴 수 없어요"라고 단언했지만, 종료(DELETE)는 tmux 를 죽이고

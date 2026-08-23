@@ -16,6 +16,8 @@ export interface Proj {
   created_by?: string | null; member_ids?: string[];
   // 사이드바 '방금 만든 것 잠깐 맨 위'(side.ts freshMs) — 서버 목록이 늘 싣는 값(PROJECT_COLS).
   created_at?: string | null;
+  // #1851 아카이브 — 보관 시각. 있으면 사이드바·보드에서 빠지고 「아카이브」 화면(#/archive)에만 보인다.
+  archived_at?: string | null;
 }
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
@@ -25,6 +27,8 @@ export interface Sess {
   // 접힌 기록의 **대화 제목**(= 그 세션에 처음 시킨 말). 멈춘 세션은 pane 제목(raw.title)이 비어 있어 이름 자리가
   //  프로젝트명 되풀이로 떨어지는데(dev 실측: 한 프로젝트의 지난 세션 7건 중 5건이 같은 이름), 이 값이 그 자리를 받는다.
   logTitle?: string | null;
+  // #1851 휴지통 — 휴지통에 있는 시각(ISO). 있으면 사이드바 '지난 세션'에서 빠지고 「휴지통」 화면(#/trash)에만 보인다.
+  trashedAt?: string | null;
 }
 export interface V2Data { projects: Proj[]; sessions: Sess[]; loadedAt: number; }
 
@@ -49,6 +53,9 @@ const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
 //    사용자에겐 넷 다 "다시 이어서 할 수 있는 지난 세션"이라 한 묶음으로 다룬다(구분은 상태점·툴팁·세션 화면이 말한다).
 export const isLiveSess = (s: Sess): boolean => s.live && s.alive;
 export const isPastSess = (s: Sess): boolean => !isLiveSess(s);
+// 휴지통(#1851) — 멈춘 세션 중 사람이 휴지통으로 보낸 것. 사이드바·홈·확인할 것 어디에도 안 나오고 휴지통 화면에만 있다.
+export const isTrashedSess = (s: Sess): boolean => !!s.trashedAt;
+export const isArchivedProj = (p: Proj | null | undefined): boolean => !!(p && p.archived_at);
 
 /** 그 세션이 '하던 일' — 하네스 pane 제목이 정본이고, 없으면(멈춘 세션) 중앙 기록의 대화 제목(= 처음 시킨 말). */
 export const sessWork = (s: Sess): string => String((s.raw && s.raw.title) || s.logTitle || '').trim();
@@ -228,6 +235,7 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       node: r.node && typeof r.node === 'object' ? (String(r.node.id || '') || null) : (r.node ? String(r.node) : null),
       live: true, alive: !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
       lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
+      trashedAt: r.trashedAt ? String(r.trashedAt) : null,   // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
     };
     out.set(s.id, s);
     if (r.claudeSessionId && !byUuid.has(String(r.claudeSessionId))) byUuid.set(String(r.claudeSessionId), s);
@@ -240,11 +248,13 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       owner.logId = id; owner.logNode = r.node_id || '';
       if (r.title) owner.logTitle = String(r.title);   // 이름 자리의 폴백(위 logTitle 주석)
       if (!owner.projectId && r.project_id != null) owner.projectId = Number(r.project_id);
+      if (!owner.trashedAt && r.trashed_at) owner.trashedAt = String(r.trashed_at);   // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
       continue;
     }
     out.set(id, {
       id, label: String(r.title || id), projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
       live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,
+      trashedAt: r.trashed_at ? String(r.trashed_at) : null,
     });
   }
   return [...out.values()];

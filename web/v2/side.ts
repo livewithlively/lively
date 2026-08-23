@@ -24,11 +24,11 @@
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
 import { anchoredPopover, api, el, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
-// #1850 기록 완전 삭제 — 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약).
-import { confirmSessionPurge, purgeSessionRecord, purgedToast } from '../session-actions.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { dotCls, isLiveSess, isPastSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, isArchivedProj, isLiveSess, isPastSess, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
+import { confirmProjectArchive, confirmSessionTrash, sessionNames, sessionTrashOp } from '../session-actions.js';   // #1851 휴지통·아카이브
+import { ctxMenu } from './panes-kit.js';
 import { switcherTop } from './switcher.js';
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
@@ -39,13 +39,17 @@ const OPEN_KEY = 'lively_v2_opened';
 const DONE_KEY = 'lively_v2_side_done';   // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
 const PAST_KEY = 'lively_v2_side_past';   // '지난 세션' 묶음을 펴 둔 프로젝트 키
-const ALL_KEY = 'lively_v2_side_all';     // '1' = 「전체 프로젝트」 묶음을 펴 둠 (기본 접힘 — 매일 화면은 '진행 중'만)
+// ⚠ 「전체 프로젝트」 펼침은 **기억하지 않는다**(원준 2026-08-23 — "사용자가 변경하기 전에는 디폴트로 접힌 상태").
+//  종전엔 lively_v2_side_all 로 브라우저에 남겨, 한 번 편 사람은 그 뒤로 늘 수백 행이 펼쳐진 채 열렸다. 이제 페이지 수명만.
+const ALL_KEY_LEGACY = 'lively_v2_side_all';
 const PIN_KEY = 'lively_v2_side_pin';     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
+const BINS_KEY = 'lively_v2_side_bins';   // '1' = 아카이브·휴지통 두 행을 **발치에 고정**(목록을 내려도 늘 보인다, #1851)
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 
 let openSet = new Set<string>();
 let pastSet = new Set<string>();            // '지난 세션'을 펴 둔 프로젝트 — 브라우저에 기억(도는 세션과 따로 접힌다)
-let allOpen = false;                        // 「전체 프로젝트」 펼침 — 브라우저에 기억
+let allOpen = false;                        // 「전체 프로젝트」 펼침 — 페이지 수명만(새로 열면 늘 접힘)
+let binsPinned = false;                     // 아카이브·휴지통 행을 발치에 고정(#1851) — 브라우저에 기억
 let pinnedSet = new Set<string>();          // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
 const closedSelected = new Set<string>();   // 선택 프로젝트를 일부러 접은 것 — 세션(페이지) 수명만
 let showDone = false;
@@ -66,7 +70,7 @@ function init(): void {
   inited = true;
   openSet = loadSet(OPEN_KEY);
   pastSet = loadSet(PAST_KEY);
-  try { allOpen = localStorage.getItem(ALL_KEY) === '1'; } catch (_) { /* noop */ }
+  try { localStorage.removeItem(ALL_KEY_LEGACY); binsPinned = localStorage.getItem(BINS_KEY) === '1'; } catch (_) { /* noop */ }
   pinnedSet = loadSet(PIN_KEY);
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
   void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
@@ -142,7 +146,7 @@ function ownerName(s: Sess): string {
 }
 
 // ── 프로젝트 행 하나의 재료: 도는 세션 · 지난 세션 · 마지막 작업 시각 · 내 것인가 ──
-interface Row { key: string; proj: Proj | null; live: Sess[]; past: Sess[]; lastWork: number; mine: boolean; done: boolean; fresh: boolean; }
+interface Row { key: string; proj: Proj | null; live: Sess[]; past: Sess[]; lastWork: number; mine: boolean; done: boolean; fresh: boolean; archived: boolean; }
 
 // ── 방금 만든 프로젝트는 잠깐 맨 위 (원준 2026-08-20 신고) ──────────────────────
 //  사이드바 순서는 '마지막 작업 시각'인데 갓 만든 프로젝트는 그 값이 0이다 — 그래서 만들자마자
@@ -162,14 +166,15 @@ function buildRows(data: V2Data): Row[] {
   const me = String((state.me && state.me.userId) || '');
   const byProj = new Map<number, Sess[]>();
   const noProj: Sess[] = [];
-  for (const s of data.sessions) { if (s.projectId) { const arr = byProj.get(s.projectId) || []; arr.push(s); byProj.set(s.projectId, arr); } else noProj.push(s); }
+  // 휴지통에 있는 세션(#1851)은 트리의 재료가 아니다 — 휴지통 화면에만 있다.
+  for (const s of data.sessions) { if (isTrashedSess(s)) continue; if (s.projectId) { const arr = byProj.get(s.projectId) || []; arr.push(s); byProj.set(s.projectId, arr); } else noProj.push(s); }
   const lastOf = (arr: Sess[]) => arr.reduce((m, s) => Math.max(m, s.lastSeen || 0), 0);
   const rows: Row[] = data.projects.map((p) => {
     const all = byProj.get(p.id) || [];
     const fresh = freshMs(p);
     return { key: 'p:' + p.id, proj: p, live: all.filter(isLive).sort(bySeen), past: all.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen),
       // 갓 만든 프로젝트는 생성 시각을 '마지막 작업'으로 친다 — 세션이 아직 없어도 맨 위에 선다.
-      lastWork: Math.max(lastOf(all), fresh), done: p.status_category === 'done', fresh: fresh > 0,
+      lastWork: Math.max(lastOf(all), fresh), done: p.status_category === 'done', fresh: fresh > 0, archived: isArchivedProj(p),
       mine: !!me && (p.created_by === me || (p.member_ids || []).includes(me)) };
   });
   // 프로젝트 없는 세션 — 가짜 프로젝트 한 줄로 같은 정렬에 섞는다(맨 아래 고정이면 프로젝트 수백 개 밑에 묻힌다).
@@ -177,7 +182,7 @@ function buildRows(data: V2Data): Row[] {
   //   전부 멈추는 순간 그 묶음이 통째로 사라졌다. dev 실측으로 그게 가장 큰 덩어리였다(멈춘 세션 202건 중 183건).
   const loose = noProj.filter(isLive).sort(bySeen);
   const loosePast = noProj.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen);
-  if (loose.length || loosePast.length) rows.push({ key: 'p:0', proj: null, live: loose, past: loosePast, lastWork: lastOf(noProj), done: false, fresh: false, mine: true });
+  if (loose.length || loosePast.length) rows.push({ key: 'p:0', proj: null, live: loose, past: loosePast, lastWork: lastOf(noProj), done: false, fresh: false, archived: false, mine: true });
   return rows;
 }
 
@@ -185,7 +190,7 @@ function buildRows(data: V2Data): Row[] {
 //  완료 프로젝트는 뒤로 보낸다(트리는 기본 숨김이라 "보이는 순서"가 곧 미완료 순서 — 드롭다운은 숨기는 대신 가라앉힌다).
 export function projectOrder(data: V2Data): Array<{ proj: Proj; done: boolean; mine: boolean; lastWork: number }> {
   const byWork = (a: Row, b: Row) => b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || ''));
-  return buildRows(data).filter((r) => r.proj)
+  return buildRows(data).filter((r) => r.proj && !r.archived)   // 보관한 프로젝트는 연결 후보가 아니다(#1851)
     .sort((a, b) => Number(a.done) - Number(b.done) || byWork(a, b))
     .map((r) => ({ proj: r.proj as Proj, done: r.done, mine: r.mine, lastWork: r.lastWork }));
 }
@@ -196,7 +201,8 @@ export interface SideHooks {
   onNewSession?: (projectId: number) => void;
   /** 세션 이름 바꾸기(더블클릭 인라인 편집) — 서버 반영 + 탭·대화창·우패널까지 셸이 갱신한다. */
   onRenameSession?: (sessionId: string, label: string) => Promise<void>;
-  /** 세션을 '지난 세션'으로 보냄(보관) — tmux 만 내리고 복원 좌표는 남긴다. 목록 재적재는 셸이 한다. */
+  /** 세션을 '지난 세션'으로 보냄(보관) — tmux 만 내리고 복원 좌표는 남긴다. 목록 재적재는 셸이 한다.
+   *  휴지통으로 보내기·프로젝트 아카이브(#1851)도 같은 훅을 쓴다 — 어느 쪽이든 '서버가 바뀌었으니 다시 읽어라'다. */
   onArchived?: () => void;
   /** [새 작업] — **늘 새 탭**에 홈(시키는 자리)을 연다. 이미 열린 홈 탭으로 되돌아가지 않는다(그러면 쓰던 걸 덮는다). */
   onNewTask?: () => void;
@@ -269,7 +275,7 @@ let filterOpen = false;            // [필터] 팝오버 — 열림은 잠깐의
 let outsideBound = false;
 
 // 위계 아이콘 — 프로젝트는 폴더(펼치면 열린 폴더), 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
-function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'link', cls: string): SVGElement {
+function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'link' | 'archive' | 'trash', cls: string): SVGElement {
   const D: Record<string, string[]> = {
     folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
     // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
@@ -283,6 +289,9 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
     // 외부 앱 연결 — 고리 둘이 맞물린 모양(연결). 자물쇠·플러그는 '잠금'·'전원'으로 읽혀 뜻이 어긋난다.
     link: ['M10.5 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.3 1.3', 'M13.5 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 1 0 5.7 5.7l1.3-1.3'],
     home: ['M3.5 11.2 12 4.5l8.5 6.7', 'M6 10v9h12v-9'],
+    // 아카이브 = 뚜껑 있는 상자, 휴지통 = 통(#1851). 둘 다 '치워 둔 곳'이라 같은 붓(24 뷰박스·스트로크)으로.
+    archive: ['M3 6h18v4H3z', 'M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9', 'M10 14h4'],
+    trash: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13', 'M10 11v6M14 11v6'],
   };
   return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
 }
@@ -369,6 +378,9 @@ function render(): void {
     ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []),
     ...(fltN ? [filterSummary(fltN)] : []),
     treeEl!,
+    // 아카이브·휴지통 두 행(#1851) — 기본은 트리 맨 아래(renderTree 가 붙인다). 사람이 [아래 고정]을 켜면 여기(트리 밖,
+    //  스크롤과 무관한 자리)에 선다 — 목록이 수백 행이어도 늘 닿는다.
+    ...(binsPinned ? [el('div', { class: 'v2-bins v2-bins-fixed' }, ...binRows(data))] : []),
     el('div', { class: 'v2-side-foot' },
       // 앱 업데이트(#1838) — 데스크톱 앱이 받아 둔 새 버전이 있을 때만 뜬다(브라우저에선 늘 접혀 있다).
       //  발치에 두는 이유: 이 줄은 '보고 있는 것'이 아니라 **이 앱 자체**에 관한 일이라, 계정·클래식 전환과
@@ -598,6 +610,9 @@ function renderTree(rowsIn?: Row[]): void {
   let hiddenDone = 0;
   const shown = rows.filter((r) => {
     if (!hit(r)) return false;
+    // 보관한 프로젝트(#1851)는 트리에 없다 — 「아카이브」 화면이 그 자리다. 단 **도는 세션이 있으면** 보인다(완료 프로젝트와
+    //  같은 예외): 답을 기다리는 세션을 아카이브가 감추면 그게 곧 사고다(보관 해제 없이 그 세션을 끝낼 길이 있어야 한다).
+    if (r.archived && !r.live.length) return false;
     if (mineOnly && !r.mine) return false;
     if (stateFilter && !stateOf(r).length && !pastOf(r).length) return false;
     if (r.done && !showDone && !r.live.length && !isPinned(r.key)) { hiddenDone++; return false; }
@@ -615,7 +630,7 @@ function renderTree(rowsIn?: Row[]): void {
   const restRows = splitting ? shown.filter((r) => !isActiveRow(r)) : [];
   if (countEl) countEl.textContent = splitting
     ? `진행 중 · ${activeRows.length}`
-    : `프로젝트 · ${shown.filter((r) => r.proj).length}${q || mineOnly || stateFilter ? ` / ${rows.filter((r) => r.proj && (showDone || !r.done || r.live.length)).length}` : ''}`;
+    : `프로젝트 · ${shown.filter((r) => r.proj).length}${q || mineOnly || stateFilter ? ` / ${rows.filter((r) => r.proj && !r.archived && (showDone || !r.done || r.live.length)).length}` : ''}`;
   const kids: HTMLElement[] = activeRows.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk));
   const firstLoose = activeRows.findIndex((r) => !isPinned(r.key));
   if (firstLoose > 0 && kids[firstLoose]) kids[firstLoose].classList.add('after-pins');
@@ -630,7 +645,7 @@ function renderTree(rowsIn?: Row[]): void {
     kids.push(el('button', {
       class: 'v2-all-h' + (allOpen ? ' open' : ''), type: 'button', 'aria-expanded': String(allOpen),
       title: allOpen ? '전체 프로젝트 접기' : '진행 중이 아닌 프로젝트까지 모두 폅니다',
-      onclick: () => { allOpen = !allOpen; saveFlag(ALL_KEY, allOpen); renderTree(); } },
+      onclick: () => { allOpen = !allOpen; renderTree(); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }),
       el('span', { class: 'n', text: '전체 프로젝트' }), el('span', { class: 'v2-cnt', text: String(totalN) })));
     if (allOpen) kids.push(...restRows.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk)));
@@ -643,7 +658,38 @@ function renderTree(rowsIn?: Row[]): void {
   }
   // 숨긴 완료 N개 — 전체 묶음이 접혀 있으면 그 안의 일이라 보이지 않는 게 맞다(펴면 맨 아래).
   if (hiddenDone && (!splitting || allOpen)) kids.push(el('button', { class: 'v2-tree-more', type: 'button', text: `숨긴 완료 프로젝트 ${hiddenDone}개 보기`, onclick: () => { showDone = true; saveFlag(DONE_KEY, true); redraw(); } }));
+  // 아카이브·휴지통(#1851) — 트리 맨 아래 두 행(검색·필터 중에도 남는다: 치워 둔 것을 찾는 길이 렌즈에 가려지면 안 된다).
+  //  발치에 고정해 두었으면 여기엔 없다(render() 가 트리 밖에 세운다).
+  if (!binsPinned) kids.push(el('div', { class: 'v2-bins' }, ...binRows(last.data)));
   treeEl.replaceChildren(...kids);
+}
+
+// ── 아카이브 · 휴지통 행(#1851) ───────────────────────────────────────────────
+//  두 행은 프로젝트 행과 같은 모양(아이콘 + 이름 + 개수)이되 **폴더가 아니다** — 누르면 오른쪽에 그 화면이 열린다
+//  (#/archive: 보관한 프로젝트와 그 아래 세션 목록 · #/trash: 버린 세션·삭제된 프로젝트, 되돌리기·완전 삭제).
+//  오른쪽 끝 압정 = [아래 고정] — 켜면 두 행이 트리 밖 발치에 서서 스크롤과 무관하게 늘 보인다(브라우저에 기억).
+function binRows(data: V2Data): HTMLElement[] {
+  const me = meId();
+  const archivedN = data.projects.filter((p) => isArchivedProj(p)).length;
+  // 휴지통 개수는 **내 것**만 — 휴지통은 소유자 단위다(서버 표식이 owner 별).
+  const trashedN = data.sessions.filter((s) => isTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length;
+  const ak = last ? last.activeKey() : '';
+  const row = (key: 'archive' | 'trash', label: string, n: number, title: string): HTMLElement =>
+    el('a', { class: 'v2-bin' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title },
+      glyph(key, 'v2-bin-ic'), el('span', { class: 'n', text: label }), n ? el('span', { class: 'v2-cnt', text: String(n) }) : null,
+      binPinBtn());
+  return [
+    row('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'),
+    row('trash', '휴지통', trashedN, '휴지통 — 버린 세션을 되돌리거나 완전히 지웁니다'),
+  ];
+}
+function binPinBtn(): HTMLElement {
+  const on = binsPinned;
+  return el('button', { class: 'v2-pinb v2-bin-pin' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on),
+    'aria-label': on ? '아래 고정 해제' : '아래에 고정', title: on ? '아래 고정 해제 — 목록 맨 아래로 돌아갑니다' : '아래에 고정 — 목록을 내려도 늘 보입니다',
+    onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); binsPinned = !binsPinned; saveFlag(BINS_KEY, binsPinned); redraw(); } },
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-pinb-ic', 'aria-hidden': 'true' },
+      sv('path', { d: 'M9 4h6l-1 5 3.2 3.2a1 1 0 0 1-.7 1.7H12v5l-1 1-1-1v-5H6.5a1 1 0 0 1-.7-1.7L9 9z' })));
 }
 
 function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selectedPk: string): HTMLElement {
@@ -674,10 +720,22 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
   // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' },
     caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
-    r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
+    r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '아카이브에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
     p ? newSessBtn(p.id) : null,
     p ? pinBtn(pk) : null);
+  // 우클릭 = 이 프로젝트의 조작 메뉴(#1851) — 아카이브로 보내기/해제·고정·새 세션. 행에 단추를 더 얹지 않는다(이미 둘이다).
+  if (p) row.addEventListener('contextmenu', (e: MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    ctxMenu(e.clientX, e.clientY, [
+      { label: '새 세션', run: () => hooks.onNewSession?.(p.id) },
+      { label: isPinned(pk) ? '고정 해제' : '위에 고정', run: () => togglePin(pk) },
+      { sep: true, label: '' },
+      r.archived
+        ? { label: '보관 해제 — 원래 자리로', run: () => void setArchived(p, false, 0) }
+        : { label: '아카이브로 보내기', run: () => void setArchived(p, true, r.live.filter(isMine).length) },
+    ]);
+  });
   const head = sess.slice(0, MAX_SESS);
   const pastHead = past.slice(0, MAX_SESS);
   const list = has ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen },
@@ -766,9 +824,8 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
     pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : null,
     // 보관(×) — **도는 세션에만**(지난 세션은 이미 거기 있다), **내 세션에만**(서버도 소유자만 허용).
     //  자리는 늘 차지한다(hover 때만 보인다) — 나타나며 행을 밀면 목록이 흔들린다(압정과 같은 규약).
-    !pastRow && isMine(s) ? archiveBtn(s) : null,
-    // 완전 삭제 — **지난 세션에만**. 보관과 자리는 같고 뜻은 정반대다(아래 purgeBtn 주석).
-    pastRow && isMine(s) ? purgeBtn(s) : null);
+    //  지난 세션의 그 자리엔 **휴지통**(#1851) — 도는 세션 → × → 지난 세션 → 휴지통 → (휴지통 안에서) 완전 삭제의 사슬.
+    !pastRow && isMine(s) ? archiveBtn(s) : pastRow && isMine(s) ? trashBtn(s) : null);
   if (isMine(s)) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
   return row;
 }
@@ -819,49 +876,6 @@ function archiveBtn(s: Sess): HTMLElement {
   });
   return btn;
 }
-// ── 완전 삭제(🗑) — 지난 세션의 대화 기록을 영구히 지운다 (#1850) ──────────────
-//  보관(×)과 **같은 자리**에 서지만 뜻이 정반대다: 보관은 되돌릴 수 있고, 이건 못 되돌린다.
-//  그래서 모양을 ×가 아니라 **휴지통**으로 둔다 — 같은 ×면 손이 먼저 기억한 자리로 가서 잘못 누른다.
-//  **지난 세션에만** 붙는 이유: 사람이 말한 "지난 세션으로 보낸 다음 완전 삭제"라는 순서를 화면이 그대로
-//  강제한다(원준 2026-08-23). 도는 세션은 먼저 [×]로 보관하고, 그 다음에 지운다.
-//  중앙 기록이 없는 세션엔 아예 안 붙인다 — 눌러도 지울 것이 없는 단추는 두지 않는다.
-function purgeBtn(s: Sess): HTMLElement | null {
-  const sid = s.logId || (!s.live ? s.id : '');
-  if (!sid) return null;
-  const node = (s.logNode ?? s.node) || '';
-  const btn = el('button', {
-    class: 'v2-ss-x v2-ss-del', type: 'button',
-    'aria-label': s.label + ' 대화 기록 완전 삭제',
-    title: '대화 기록 완전 삭제 — 되돌릴 수 없어요',
-  }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-ss-x-ic', 'aria-hidden': 'true' },
-    sv('path', { d: 'M5 7h14' }), sv('path', { d: 'M10 7V5h4v2' }), sv('path', { d: 'M6.5 7l.9 12h9.2l.9-12' }))) as HTMLButtonElement;
-  btn.addEventListener('click', (e: MouseEvent) => {
-    // ⚠ 행 전체가 <a> 라 이 둘이 없으면 확인창을 띄우면서 **동시에** 그 세션으로 이동한다.
-    e.preventDefault(); e.stopPropagation();
-    void doPurge(s, sid, node, btn);
-  });
-  return btn;
-}
-async function doPurge(s: Sess, sid: string, node: string, btn: HTMLButtonElement): Promise<void> {
-  const choice = await confirmSessionPurge({
-    sid, node,
-    title: '이 세션 기록을 완전히 지울까요?',
-    lines: [s.label || sid],
-    remoteNode: node || null,
-  });
-  if (!choice) return;
-  btn.disabled = true;
-  try {
-    toast(purgedToast(await purgeSessionRecord(sid, node, choice)));
-    // 목록·카운트를 서버 기준으로 다시 맞춘다. side → main 을 직접 import 하면 순환이라(import 경계 게이트)
-    //  이벤트로 알린다 — main 이 듣고 loadData → drawSide 한다.
-    window.dispatchEvent(new CustomEvent('lively:session-purged', { detail: { id: s.id } }));
-  } catch (err: any) {
-    toast(err?.message || '지우지 못했습니다.');
-    btn.disabled = false;
-  }
-}
-
 async function doArchive(s: Sess): Promise<void> {
   let ack = false;
   try { ack = localStorage.getItem(ARCHIVE_ACK_KEY) === '1'; } catch (_) { /* noop */ }
@@ -888,5 +902,47 @@ async function doArchive(s: Sess): Promise<void> {
     toast('지난 세션으로 보냈어요 — 열면 이어서 할 수 있습니다');
     hooks.onArchived?.();
   } catch (e: any) { toast((e && e.message) || '보관하지 못했습니다', true); }
+}
+
+
+// ── 휴지통으로(#1851) — 지난 세션 행의 오른쪽 끝. 잃는 것은 없다(표식만) — 창은 '휴지통으로 보낸다'고 말한다(완전 삭제 창과 다르다). ──
+function trashBtn(s: Sess): HTMLElement {
+  const btn = el('button', {
+    class: 'v2-ss-x v2-ss-trash', type: 'button', 'aria-label': s.label + ' 휴지통으로',
+    title: '휴지통으로 보내기 — 목록에서 빠지고, 휴지통에서 되돌리거나 완전히 지울 수 있어요',
+  }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-ss-x-ic', 'aria-hidden': 'true' },
+    sv('path', { d: 'M4 7h16' }), sv('path', { d: 'M9 7V4h6v3' }), sv('path', { d: 'M6 7l1 13h10l1-13' })));
+  btn.addEventListener('click', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); void doTrash(s); });
+  return btn;
+}
+async function doTrash(s: Sess): Promise<void> {
+  const name = sessText(s, '').main || s.label || s.id;
+  if (!await confirmSessionTrash({ title: `「${name}」을(를) 휴지통으로 보낼까요?` })) return;
+  try {
+    const r = await sessionTrashOp('trash', sessionNames(s));
+    if (r.skipped.length && !r.done.length) { toast(r.skipped[0].why || '휴지통으로 보내지 못했습니다', true); return; }
+    toast('휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요');
+    hooks.onArchived?.();
+  } catch (e: any) { toast((e && e.message) || '휴지통으로 보내지 못했습니다', true); }
+}
+
+// ── 프로젝트 아카이브(#1851) — 통째로 보관. 내 도는 세션은 먼저 멈춘다(지난 세션으로). 남의 세션은 건드릴 수 없어 그대로 두고,
+//  그런 프로젝트는 트리에 '보관됨' 태그를 달고 남는다(renderTree 의 예외). 끝나면 아카이브 화면으로 데려간다(어디로 갔는지 보이게).
+async function setArchived(p: Proj, archived: boolean, myLiveN: number): Promise<void> {
+  if (archived && !await confirmProjectArchive({ name: p.name, liveN: myLiveN })) return;
+  try {
+    if (archived && last) {
+      const mine = last.data.sessions.filter((s) => Number(s.projectId) === p.id && isLive(s) && isMine(s));
+      for (const s of mine) {
+        const q = '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : '');
+        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + q, { method: 'DELETE' }); }
+        catch (e: any) { toast(`「${sessText(s, p.name).main}」을(를) 멈추지 못했어요 — ${(e && e.message) || e}`, true); }
+      }
+    }
+    await api('/api/ui/v6/projects/' + p.id + '/archive', { method: 'POST', body: JSON.stringify({ archived }) });
+    toast(archived ? '아카이브로 보냈어요 — 사이드바 아래 [아카이브]에서 볼 수 있어요' : '보관을 해제했어요 — 원래 자리로 돌아왔어요');
+    hooks.onArchived?.();
+    if (archived) location.hash = '#/archive';
+  } catch (e: any) { toast((e && e.message) || (archived ? '아카이브로 보내지 못했습니다' : '보관을 해제하지 못했습니다'), true); }
 }
 
