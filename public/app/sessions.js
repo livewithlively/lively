@@ -121,17 +121,18 @@ function sessionRowEl(s, onGo, onPurged) {
     const purge = el('button', { class: 'btn-text', style: 'color:var(--danger,#dc2626)', text: '완전 삭제',
         title: '이 세션의 대화 전문을 중앙 기록에서 영구 삭제합니다(되돌릴 수 없음).' });
     purge.addEventListener('click', async () => {
-        const okd = await confirmSessionPurge({
+        const choice = await confirmSessionPurge({
+            sid: s.session_id, node: s.node_id,
             title: '이 세션 기록을 완전히 지울까요?',
             lines: [`${title} · ${fmtBytes(s.bytes)}`],
             remoteNode: s.node_id || null,
         });
-        if (!okd)
+        if (!choice)
             return;
         purge.disabled = true;
         purge.textContent = '지우는 중…';
         try {
-            toast(purgedToast(await purgeSessionRecord(s.session_id, s.node_id)));
+            toast(purgedToast(await purgeSessionRecord(s.session_id, s.node_id, choice)));
             if (onPurged)
                 onPurged();
         }
@@ -266,17 +267,18 @@ async function renderTranscriptPage(view, sel) {
     if (data?.isOwner) {
         const purgeBtn = el('button', { class: 'btn btn-ghost btn-sm', style: 'color:var(--danger,#dc2626)', text: '완전 삭제' });
         purgeBtn.addEventListener('click', async () => {
-            const okd = await confirmSessionPurge({
+            const choice = await confirmSessionPurge({
+                sid, node,
                 title: '이 세션 기록을 완전히 지울까요?',
                 lines: [document.getElementById('sess-title')?.textContent || shortId(sid)],
                 remoteNode: node || null,
             });
-            if (!okd)
+            if (!choice)
                 return;
             purgeBtn.disabled = true;
             purgeBtn.textContent = '지우는 중…';
             try {
-                toast(purgedToast(await purgeSessionRecord(sid, node)));
+                toast(purgedToast(await purgeSessionRecord(sid, node, choice)));
                 location.hash = '#/sessions'; // 지운 대화록에 머물러 있으면 화면이 사실과 어긋난다 — 목록으로 돌아간다.
             }
             catch (e) {

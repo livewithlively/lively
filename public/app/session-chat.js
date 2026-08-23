@@ -532,16 +532,17 @@ export function mountSessionChat(host, first, opts) {
             toast('아직 중앙에 올라온 대화 기록이 없어요 — 지울 것이 없습니다.');
             return;
         }
-        const ok = await confirmSessionPurge({
+        const choice = await confirmSessionPurge({
+            sid, node,
             title: '이 세션 기록을 완전히 지울까요?',
             lines: [target.label || sid],
             remoteNode: node || null,
             live: target.live && target.alive,
         });
-        if (!ok)
+        if (!choice)
             return;
         try {
-            toast(purgedToast(await purgeSessionRecord(sid, node)));
+            toast(purgedToast(await purgeSessionRecord(sid, node, choice)));
             window.dispatchEvent(new CustomEvent('lively:session-purged', { detail: { id: target.id } }));
         }
         catch (e) {

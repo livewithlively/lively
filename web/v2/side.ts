@@ -843,15 +843,16 @@ function purgeBtn(s: Sess): HTMLElement | null {
   return btn;
 }
 async function doPurge(s: Sess, sid: string, node: string, btn: HTMLButtonElement): Promise<void> {
-  const ok = await confirmSessionPurge({
+  const choice = await confirmSessionPurge({
+    sid, node,
     title: '이 세션 기록을 완전히 지울까요?',
     lines: [s.label || sid],
     remoteNode: node || null,
   });
-  if (!ok) return;
+  if (!choice) return;
   btn.disabled = true;
   try {
-    toast(purgedToast(await purgeSessionRecord(sid, node)));
+    toast(purgedToast(await purgeSessionRecord(sid, node, choice)));
     // 목록·카운트를 서버 기준으로 다시 맞춘다. side → main 을 직접 import 하면 순환이라(import 경계 게이트)
     //  이벤트로 알린다 — main 이 듣고 loadData → drawSide 한다.
     window.dispatchEvent(new CustomEvent('lively:session-purged', { detail: { id: s.id } }));
