@@ -2604,7 +2604,7 @@
   "rest": [
    "GET /api/ui/v6/projects"
   ],
-  "input_hash": "2234c00a4e11657b"
+  "input_hash": "f29130509728e732"
  },
  {
   "name": "project_grep",
@@ -2705,6 +2705,16 @@
    "POST /api/ui/v6/projects/:id/status"
   ],
   "input_hash": "27e5ef225edfec2d"
+ },
+ {
+  "name": "project_archive_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/archive"
+  ],
+  "input_hash": "5dff7098b6704bed"
  },
  {
   "name": "project_set_members_v6",
