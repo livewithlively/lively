@@ -24,6 +24,8 @@
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
 import { anchoredPopover, api, el, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
+// #1850 기록 완전 삭제 — 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약).
+import { confirmSessionPurge, purgeSessionRecord, purgedToast } from '../session-actions.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork } from './views.js';
@@ -797,7 +799,9 @@ function sessRow(s, activeKey, text, pastRow = false) {
     pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : null, 
     // 보관(×) — **도는 세션에만**(지난 세션은 이미 거기 있다), **내 세션에만**(서버도 소유자만 허용).
     //  자리는 늘 차지한다(hover 때만 보인다) — 나타나며 행을 밀면 목록이 흔들린다(압정과 같은 규약).
-    !pastRow && isMine(s) ? archiveBtn(s) : null);
+    !pastRow && isMine(s) ? archiveBtn(s) : null, 
+    // 완전 삭제 — **지난 세션에만**. 보관과 자리는 같고 뜻은 정반대다(아래 purgeBtn 주석).
+    pastRow && isMine(s) ? purgeBtn(s) : null);
     if (isMine(s))
         row.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
     return row;
@@ -866,6 +870,50 @@ function archiveBtn(s) {
         void doArchive(s);
     });
     return btn;
+}
+// ── 완전 삭제(🗑) — 지난 세션의 대화 기록을 영구히 지운다 (#1850) ──────────────
+//  보관(×)과 **같은 자리**에 서지만 뜻이 정반대다: 보관은 되돌릴 수 있고, 이건 못 되돌린다.
+//  그래서 모양을 ×가 아니라 **휴지통**으로 둔다 — 같은 ×면 손이 먼저 기억한 자리로 가서 잘못 누른다.
+//  **지난 세션에만** 붙는 이유: 사람이 말한 "지난 세션으로 보낸 다음 완전 삭제"라는 순서를 화면이 그대로
+//  강제한다(원준 2026-08-23). 도는 세션은 먼저 [×]로 보관하고, 그 다음에 지운다.
+//  중앙 기록이 없는 세션엔 아예 안 붙인다 — 눌러도 지울 것이 없는 단추는 두지 않는다.
+function purgeBtn(s) {
+    const sid = s.logId || (!s.live ? s.id : '');
+    if (!sid)
+        return null;
+    const node = (s.logNode ?? s.node) || '';
+    const btn = el('button', {
+        class: 'v2-ss-x v2-ss-del', type: 'button',
+        'aria-label': s.label + ' 대화 기록 완전 삭제',
+        title: '대화 기록 완전 삭제 — 되돌릴 수 없어요',
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-ss-x-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M5 7h14' }), sv('path', { d: 'M10 7V5h4v2' }), sv('path', { d: 'M6.5 7l.9 12h9.2l.9-12' })));
+    btn.addEventListener('click', (e) => {
+        // ⚠ 행 전체가 <a> 라 이 둘이 없으면 확인창을 띄우면서 **동시에** 그 세션으로 이동한다.
+        e.preventDefault();
+        e.stopPropagation();
+        void doPurge(s, sid, node, btn);
+    });
+    return btn;
+}
+async function doPurge(s, sid, node, btn) {
+    const ok = await confirmSessionPurge({
+        title: '이 세션 기록을 완전히 지울까요?',
+        lines: [s.label || sid],
+        remoteNode: node || null,
+    });
+    if (!ok)
+        return;
+    btn.disabled = true;
+    try {
+        toast(purgedToast(await purgeSessionRecord(sid, node)));
+        // 목록·카운트를 서버 기준으로 다시 맞춘다. side → main 을 직접 import 하면 순환이라(import 경계 게이트)
+        //  이벤트로 알린다 — main 이 듣고 loadData → drawSide 한다.
+        window.dispatchEvent(new CustomEvent('lively:session-purged', { detail: { id: s.id } }));
+    }
+    catch (err) {
+        toast(err?.message || '지우지 못했습니다.');
+        btn.disabled = false;
+    }
 }
 async function doArchive(s) {
     let ack = false;
