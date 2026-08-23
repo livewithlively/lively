@@ -66,7 +66,11 @@ export async function sessionParent(nodeId: string, sessionId: string): Promise<
 
 // 제목 유도(#905 C1 슬⑤b) — 트랜스크립트 JSONL 에서 **첫 사람 발화**를 뽑아 세션 제목으로(uuid 대신 읽을 수 있게).
 //  주입/툴결과/메타 라인은 건너뛴다. 첫 append(offset 0)에서만 계산해 COALESCE 로 굳힌다(한 번 정해지면 불변).
-const TITLE_INJECTED = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
+//  ⚠ 마지막 항목은 **세션 이름 짓기 프롬프트**다(src/terminal/session-name-ai.ts PROMPT). 그 내부 호출은 이제
+//   캡처 자체가 막히지만(LIVELY_NO_CAPTURE), 옛 훅이 도는 박스에서 들어오면 이 프롬프트가 첫 사람 발화로 잡혀
+//   **사람의 지시 원문이 제목에 박힌다**(dev 실측 2026-08-23: 200건 중 35건). 제목은 목록에 그대로 뜨는 값이라
+//   여기서도 막는다 — 이 줄이 걸러지면 제목은 null 이 되고 목록엔 읽을 수 있는 이름 대신 id 가 뜬다(그게 낫다).
+const TITLE_INJECTED = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued|다음은 사람이 AI 세션에 처음 시킨 말이다)/;
 export function firstUserPromptTitle(jsonl: string): string | null {
   for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue;

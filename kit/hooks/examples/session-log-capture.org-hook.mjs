@@ -26,6 +26,10 @@ const BUDGET_MS = Math.floor(HOOK_TIMEOUT_MS * 0.7);   // 이 지점 넘기면 �
 const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 상한과 동일) — 넘으면 이번엔 여기까지만.
 
 (async () => {
+  // 0) 제품 내부 호출(세션 이름 짓기 등)은 사람의 세션이 아니다 — 중앙 기록에 남기지 않는다(#1850).
+  //  표식은 그 호출을 spawn 하는 쪽이 심고(src/terminal/session-name-ai.ts), env 는 자식에게 상속되므로 여기서 보인다.
+  //  ★ 조직 스위치(capture.enabled)보다 **앞**에 둔다 — 내부 호출을 안 남기는 건 조직 설정과 무관한 불변식이다.
+  if (process.env.LIVELY_NO_CAPTURE === "1") return;
   const startedAt = Date.now();
   // 1) Stop 이벤트 stdin — session_id·transcript_path·cwd.
   const stdinData = await new Promise((resolve) => {

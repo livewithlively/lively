@@ -49,6 +49,12 @@ export function aiSessionName(text: string, opts?: { bin?: string; configDir?: s
     try {
       const env: NodeJS.ProcessEnv = { ...process.env };
       if (opts?.configDir) env.CLAUDE_CONFIG_DIR = opts.configDir;
+      // 이건 **제품 내부 호출**이지 사람의 세션이 아니다 — 중앙 대화기록에 남기지 않는다(#1850).
+      //  이 프롬프트에는 사람의 첫 지시 원문이 600자까지 들어간다(PROMPT). 캡처가 켜져 있으면 이름 짓기
+      //  한 번마다 **그림자 세션**이 하나씩 중앙에 쌓이고 그 제목·본문에 그 원문이 박힌다 — 게다가 uuid 가
+      //  달라 사람이 자기 세션을 완전 삭제해도 함께 지워지지 않는다(dev 실측 2026-08-23: 200건 중 35건).
+      //  cwd 를 tmpdir 로 둔 것만으로는 못 막는다 — 훅·MCP 배선은 cwd 가 아니라 HOME 밑 설정이라 그대로 붙는다.
+      env.LIVELY_NO_CAPTURE = "1";
       const p = spawn(bin, ["-p", "--model", model, PROMPT(text)], { cwd: os.tmpdir(), env, stdio: ["ignore", "pipe", "ignore"] });
       let out = "";
       p.stdout.on("data", (c: Buffer) => { out += c.toString("utf8"); if (out.length > 4000) p.kill("SIGKILL"); });

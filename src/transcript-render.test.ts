@@ -90,7 +90,17 @@ const J = (o: unknown) => JSON.stringify(o);
   // 아주 길면 120자로 자른다.
   const longQ = firstUserPromptTitle(J({ type: "user", message: { content: "가".repeat(300) } }));
   assert.ok(longQ && longQ.length <= 121 && longQ.endsWith("…"), "긴 발화는 120자+… 로 절단");
-  ok("제목 유도 — 첫 사람 발화(주입·툴결과·AI 제외) · 없으면 null · 장문 절단");
+  // ★ 세션 이름 짓기 프롬프트는 제목이 되지 않는다 (#1850). 그 프롬프트에는 사람의 첫 지시 원문이 실려 있어서,
+  //  제목으로 굳으면 목록 화면에 지시 원문이 그대로 뜬다(dev 실측 2026-08-23: 200건 중 35건이 그 상태였다).
+  const namingPrompt = "다음은 사람이 AI 세션에 처음 시킨 말이다. 이 세션의 이름을 지어라.\n"
+    + "규칙: 한국어 명사구 한 줄 · 공백 포함 10자 이내 · 조사·서술어·따옴표·마침표 없이 · 설명 말고 이름만 출력.\n\n"
+    + "시킨 말: 내 개인정보가 어디까지 저장되는지 알려줘";
+  assert.equal(firstUserPromptTitle(J({ type: "user", message: { content: namingPrompt } })), null, "이름 짓기 프롬프트는 제목이 되지 않는다(#1850)");
+  // 그 뒤에 진짜 발화가 있으면 그건 정상적으로 제목이 된다(과잉 차단 아님).
+  assert.equal(
+    firstUserPromptTitle([J({ type: "user", message: { content: namingPrompt } }), J({ type: "user", message: { content: "진짜 지시" } })].join("\n")),
+    "진짜 지시", "이름짓기 프롬프트를 건너뛰고 다음 사람 발화를 잡는다");
+  ok("제목 유도 — 첫 사람 발화(주입·툴결과·AI 제외) · 없으면 null · 장문 절단 · 이름짓기 프롬프트 차단(#1850)");
 }
 
 // ── 취소된 턴(esc) — 보낸 질문 + 부분답변을 버리고 재작성본만 남긴다(사용자 요청) ──
