@@ -57,13 +57,22 @@ export function isSpawningApp(): boolean { return spawning; }
  * 이 앱에 대한 내 동의(grant)를 확보한다 — 없으면 **동의 창을 띄우고** 승인 시 grant 를 만든다.
  *  세션 스폰(403)·앱 UI 의 첫 도구 호출(403) 양쪽이 같은 창을 쓴다(동의는 한 번, 이후 계속 유효).
  *  반환 false = 사람이 취소함(호출부는 조용히 멈춘다).
+ *  ⚠ **single-flight**: 앱이 시작하자마자 도구를 여러 개 부르면 403 도 여러 개 온다(실측: 브라우저 앱이
+ *   북마크·최근주소를 동시에 읽어 동의 창이 두 겹으로 떴다). 앱당 진행 중인 동의는 하나로 합친다.
  */
-export async function ensureAppGrant(appId: string, title?: string): Promise<boolean> {
-  const app = (await listSessionApps()).find((a) => a.id === appId)
-    || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [] };
-  if (!(await appConsent(app))) return false;
-  await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
-  return true;
+const grantInFlight = new Map<string, Promise<boolean>>();
+export function ensureAppGrant(appId: string, title?: string): Promise<boolean> {
+  const cur = grantInFlight.get(appId);
+  if (cur) return cur;
+  const run = (async (): Promise<boolean> => {
+    const app = (await listSessionApps()).find((a) => a.id === appId)
+      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [] };
+    if (!(await appConsent(app))) return false;
+    await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
+    return true;
+  })().finally(() => { grantInFlight.delete(appId); });
+  grantInFlight.set(appId, run);
+  return run;
 }
 
 export async function spawnAppSession(
