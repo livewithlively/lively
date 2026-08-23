@@ -135,7 +135,11 @@ async function refreshNodeStatus(cli) {
   const n = r.result?.node;
   if (!r.ok || !n) { renderTray(); send(IPC.STATE, state); return; }   // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
   // nodeConnected: 게이트웨이가 보는 연결 여부(true/false/null=모름). running 과 다른 축 — 프로세스가 돌아도 안 붙어 있을 수 있다.
-  patchState({ nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null, nodeConnected: typeof n.connected === "boolean" ? n.connected : null });
+  // nodeSleepNote(#1849): 게이트웨이가 연결 이력으로 판정한 "왜 안 붙어 있나"(잠자기 추정). 없으면 null(모름).
+  //  ⚠ 문구는 서버가 만든다 — 앱이 지으면 웹·CLI 와 다른 말을 하게 된다.
+  patchState({ nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null,
+    nodeConnected: typeof n.connected === "boolean" ? n.connected : null,
+    nodeSleepNote: (n.sleep && typeof n.sleep.note === "string" && n.sleep.note) ? n.sleep.note : null });
   renderTray(); send(IPC.STATE, state);
 }
 /** 상태 일부를 바꾸면 `ready` 도 같이 다시 잰다 — 이걸 빼먹은 자리가 하나라도 있으면 트레이·창이 옛 판정으로 움직인다. */

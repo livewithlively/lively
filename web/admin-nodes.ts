@@ -36,6 +36,20 @@ function versionBadge(n) {
     text: n.agent_latest === false ? '프로그램 구버전' : '프로그램 버전 확인 불가' });
 }
 
+// 잠자기 진단(#1849) — 서버가 최근 24시간 연결 이력으로 판정한 결과를 **그대로** 보여준다(문구도 서버가 만든다).
+//  왜 화면에 두나: 종전엔 "꺼져 있음" 배지가 끝이었다. 그런데 사용자의 PC 는 **켜져 있었고**, 자고 있었을 뿐이다
+//  (실측 2026-08-23). 사람은 "전원도 인터넷도 멀쩡한데 왜?" 에서 막혔다 — 그 답을 여기서 한다.
+function sleepBadge(n) {
+  if (!n.link_note) return null;
+  return el('span', { class: 'tsess-badge warn', title: n.link_note, text: '잠자기로 끊김' });
+}
+// 억제 상태 한 줄 — 무엇이 이미 막혀 있고 무엇이 안 막히는지. 노드가 붙어 있을 때도 유용하다(뚜껑 닫기 등).
+function keepAwakeLine(n) {
+  if (!n.keep_awake_note) return null;
+  return el('span', { class: 'wikicat-should' },
+    el('span', { class: 'wikicat-should-label', text: '잠자기' }), n.keep_awake_note);
+}
+
 // 이 노드에서 열 수 있는 AI(#1713) — 노드가 스스로 보고한 목록(그 PC 에 실제로 깔린 것). 세션 만들기 폼이
 //  같은 값으로 선택지를 거르므로, 여기 보이는 것과 거기 고를 수 있는 것이 항상 같다.
 function harnessLine(n) {
@@ -54,8 +68,10 @@ function nodeRow(n, ownerLabel, acts) {
     ownerLabel ? el('span', { class: 'wikicat-should' },
       el('span', { class: 'wikicat-should-label', text: '연결한 사람' }), ownerLabel) : null,
     harnessLine(n),
+    keepAwakeLine(n),
+    n.link_note ? el('div', { class: 'wikicat-empty', text: n.link_note }) : null,   // #1849 — 원인·조치를 펼쳐서
   );
-  return el('div', { class: 'wikicat-row' }, main, versionBadge(n), statusBadge(n), acts || null);
+  return el('div', { class: 'wikicat-row' }, main, sleepBadge(n), versionBadge(n), statusBadge(n), acts || null);
 }
 
 // 그룹(제목·개수·한 줄 설명 + 행들). 빈 그룹도 '사실 + 다음에 할 일'로 말한다.
