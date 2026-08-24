@@ -1,6 +1,34 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { installTenantSlugResolver, roots, sharedRoot } from "./catalog.js";
+import { HARNESSES, installTenantSlugResolver, roots, sharedRoot } from "./catalog.js";
+
+test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그가 보존한다", () => {
+  const c = HARNESSES.find((h) => h.key === "codex")!;
+  const models = c.flags.find((f) => f.name === "--model")?.choices ?? [];
+  assert.ok(models.includes("gpt-5.6-sol") && models.includes("gpt-5.6-terra") && models.includes("gpt-5.6-luna"));
+  assert.ok(c.effortsByModel?.["gpt-5.6-sol"]?.includes("ultra"));
+  assert.ok(!c.effortsByModel?.["gpt-5.6-luna"]?.includes("ultra"));
+  assert.ok(c.effortsByModel?.["gpt-5.4-mini"]?.includes("xhigh"));
+});
+
+test("설치된 각 하네스의 현행 모델 목록을 반영한다", () => {
+  const models = (key: string): string[] => HARNESSES.find((h) => h.key === key)!
+    .flags.find((f) => f.name === "--model")!.choices!.filter(Boolean);
+  assert.ok(models("claude").includes("fable"));
+  assert.deepEqual(models("grok"), ["grok-4.6"]);
+  assert.ok(HARNESSES.find((h) => h.key === "grok")!.flags.find((f) => f.name === "--effort")?.choices?.includes("xhigh"));
+  assert.ok(models("antigravity").includes("gemini-3.7-flash-high"));
+  assert.ok(models("antigravity").includes("gemini-3.6-flash-medium"));
+  assert.ok(models("antigravity").includes("gemini-3.5-flash-low"));
+  assert.ok(models("opencode").includes("opencode/nemotron-3.5-lightning-free"));
+});
+
+test("모든 AI 하네스는 상단 전환에 쓸 제공자와 모델 선택지를 가진다", () => {
+  for (const h of HARNESSES.filter((x) => x.key !== "shell")) {
+    assert.ok(h.provider?.label, `${h.key}: 제공자 이름 없음`);
+    assert.ok(h.flags.some((f) => f.name === "--model"), `${h.key}: 모델 선택지 없음`);
+  }
+});
 
 // ── ★★ 루트는 상수가 아니라 호출 시점 값이다 ────────────────────────────────
 // 종전엔 `export const ROOTS` 라 모듈 로드 때 env 한 번 읽고 끝이었다 — 즉 "프로세스 하나 =

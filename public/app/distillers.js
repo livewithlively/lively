@@ -310,7 +310,7 @@ function editorPage(d, isNew) {
         modeSel.value = v('mode');
     const sessIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('session_ref'), placeholder: '실행 방식이 상시 세션일 때만' });
     const modelSel = el('select', { class: 'dst-in dst-in-sm' });
-    for (const m of ['', 'opus', 'sonnet', 'haiku'])
+    for (const m of ['', 'fable', 'opus', 'sonnet', 'haiku'])
         modelSel.append(el('option', { value: m, text: m || '(계정 기본)' }));
     if (v('model'))
         modelSel.value = v('model');
