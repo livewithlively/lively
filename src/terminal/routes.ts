@@ -42,6 +42,12 @@ import { deadSessionMeta } from "./session-meta.js";                 // #1820 �
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 
+/** #1683 후속2 — 그 세션이 어느 하네스로 떴나(tmux 세션 옵션 @box_harness). 모르면 빈 문자열. */
+async function sessionHarnessKey(id: string): Promise<string> {
+  try { const { getOpt } = await import("./tmux-exec.js"); return String((await getOpt(id, "@box_harness")) || ""); }
+  catch { return ""; }
+}
+
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
 function themeOf(req: { headers: Record<string, unknown> }, b: Record<string, unknown>): "dark" | "light" | undefined {
   return normalizeTheme(req.headers["x-lively-theme"]) ?? normalizeTheme(b.theme);
@@ -410,6 +416,32 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   //  ⚠ 인가는 **canAttach 와 동급**이다 — 입장할 수 있는 사람은 어차피 터미널에서 직접 칠 수 있으므로 더 좁힐 이유가
   //   없고, 더 넓히면 남의 AI 에게 명령하는 통로가 된다. 노드 세션은 nodeCanAttach(정책=게이트웨이).
   //  실행은 node/session-inject 가 로컬/원격을 갈라 맡는다 — 크론 주입과 **같은 경로**다(두 벌 두면 한쪽만 고쳐진다).
+  // 열려 있는 탭의 테마를 지금 바꾼다(#1683 후속2) — 화면의 '현재 열린 탭 모두 적용' 이 켜진 상태에서
+  //  사람이 테마를 바꾼 순간에만 불린다(자동 주입 금지 — send-keys.applyLiveTheme 주석).
+  //  ⚠ 한 세션이라도 실패하면 **그 사실을 그대로 돌려준다** — 화면이 "3개 바꿨어요 · 1개는 지원 안 해요" 를
+  //   말해야 하기 때문이다. 조용히 성공으로 접으면 사용자는 왜 한 탭만 다른지 알 길이 없다.
+  app.post("/api/ui/terminal/sessions/theme", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const theme = normalizeTheme(b.theme);
+    if (!theme) throw new HttpError(400, "테마 값이 dark|light 가 아닙니다");
+    const ids = Array.isArray(b.ids) ? b.ids.map((x) => String(x)).filter(Boolean).slice(0, 40) : [];
+    if (!ids.length) throw new HttpError(400, "대상 세션이 없습니다");
+    const { applyLiveTheme } = await import("./send-keys.js");
+    const { nodeOfSession } = await import("../node/registry.js");
+    const results: Array<{ id: string; status: string; detail?: string; harness?: string }> = [];
+    for (const id of ids) {
+      // 노드(멤버 PC) 세션은 이 게이트웨이의 tmux 에 없다 — 아직 이 통로가 없어 정직하게 미지원으로 돌려준다.
+      if (nodeOfSession(id)) { results.push({ id, status: "unsupported", detail: "노드 세션은 아직 지원하지 않습니다" }); continue; }
+      if (!(await canAttach(id, uid))) { results.push({ id, status: "error", detail: "접근할 수 없는 세션입니다" }); continue; }
+      const harness = await sessionHarnessKey(id);
+      const r = await applyLiveTheme(id, harness, theme);
+      results.push({ id, harness, ...r });
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ results, applied: results.filter((r) => r.status === "applied").length });
+  }));
+
   app.post("/api/ui/terminal/sessions/:id/prompt", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     const text = String(((req.body ?? {}) as Record<string, unknown>).text ?? "");
