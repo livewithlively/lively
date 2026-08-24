@@ -103,7 +103,7 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //   Windows 노드는 mux 가 psmux 라 입력 표면이 다른데, 그 인코딩은 terminal/send-keys 가 흡수한다.
 //  setProject = 그 세션의 프로젝트 소속을 바꾼다(#1719 — 세션 전용 폴더에서 연 세션을 나중에 프로젝트에 붙이거나 뗀다).
 //   노드 tmux 의 @box_project 와 세션 폴더 안의 마커·링크·셔틀을 노드가 자기 파일시스템에 적용한다(정책=게이트웨이 F7).
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "sendKeys", "setProject"] as const;
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "sendKeys", "setProject", "createAppSession"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;

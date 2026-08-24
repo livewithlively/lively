@@ -48,6 +48,7 @@ export function toUrl(input: string): string {
 export interface SurfaceOpts {
   url: string;           // 처음 열 주소
   title?: string;        // 머리에 적을 이름
+  onUrl?: (url: string) => void; // AppInstance 복원 상태 등 호스트가 현재 주소를 기록할 때
 }
 
 /**
@@ -79,6 +80,7 @@ export function browserSurface(opts: SurfaceOpts): HTMLElement {
     if (!u) return;
     addr.value = u;
     outLink.href = u;
+    opts.onUrl?.(u);
     if (view) { try { view.loadURL(u); } catch { view.setAttribute('src', u); } }
     else fallbackUrl(u);
   };
@@ -124,7 +126,7 @@ export function browserSurface(opts: SurfaceOpts): HTMLElement {
     const sync = () => {
       try {
         const u = view.getURL();
-        if (u && u !== 'about:blank') { addr.value = u; outLink.href = u; }
+        if (u && u !== 'about:blank') { addr.value = u; outLink.href = u; opts.onUrl?.(u); }
         back.disabled = !(view.canGoBack && view.canGoBack());
         fwd.disabled = !(view.canGoForward && view.canGoForward());
       } catch { /* 아직 안 붙었다 — 다음 이벤트에서 다시 맞는다 */ }

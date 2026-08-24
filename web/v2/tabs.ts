@@ -27,6 +27,9 @@ export interface ShellTab {
   rendered: boolean;           // 게으른 렌더 — 처음 활성화될 때 그린다
   noAside: boolean;            // 앱 프레임 탭은 우패널이 없다
   chat: { id: string; destroy(): void; update(t: any): void; setFilesOn(on: boolean): void } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
+  appInstanceId: string | null; // 이 탭이 연 AppInstance — 탭:인스턴스 = 1:1. legacy 화면은 null.
+  appId: string | null;
+  appView: { destroy(): void } | null; // generic 앱 iframe 등 탭별 정리 핸들
   seq: number;                 // 이 탭의 렌더 순번(늦게 온 비동기 렌더 무시)
 }
 
@@ -52,7 +55,7 @@ export function routeKey(route: string): string {
   const segs = (q >= 0 ? h.slice(0, q) : h).split('/').filter(Boolean);
   const p = segs[0] || '';
   if (!p || p === 'dashboard') return 'home';
-  if (p === 'p' || p === 's' || p === 'app') return p + ':' + decodeURIComponent(segs[1] || '');
+  if (p === 'p' || p === 's' || p === 'i' || p === 'app') return p + ':' + decodeURIComponent(segs[1] || '');
   return 'raw:' + h;
 }
 
@@ -85,7 +88,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       route, title: title || hooks.titleFor(route).title, noAside: hooks.titleFor(route).noAside,
       center: el('div', { class: 'v2-tabpane', hidden: true }),
       aside: el('div', { class: 'v2-aside-pane', hidden: true }),
-      rendered: false, chat: null, seq: 0,
+      rendered: false, chat: null, appInstanceId: null, appId: null, appView: null, seq: 0,
     };
     centerHost.append(t.center);
     asideHost.append(t.aside);

@@ -49,6 +49,10 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
 
   const contentHash = (await hashAppPackage(root)).hash;
 
+  // runtime.entry 는 실행 시점이 아니라 설치 시점에 패키지 안의 실제 파일로 확정한다.
+  // 스테이지가 사라진 뒤에야 "파일 없음"을 발견하면 active 앱이 실행 불능이 되므로 앞에서 거부한다.
+  await assertRuntimeEntry(manifest, root);
+
   // 1) 매니페스트 선언 component(ui·host·section·data·cron·mcp_server·tool).
   const declared = planDeclaredComponents(manifest);
   const items: DeployItem[] = declared.map((comp) => ({ comp, payload: payloadForDeclared(manifest, comp) }));
@@ -63,6 +67,22 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   const uiAssets = await readUiAssets(manifest, root);
 
   return { manifest, contentHash, items, uiAssets };
+}
+
+const RUNTIME_MAX_BYTES = 8 * 1024 * 1024; // v2.1 worker entry 는 의존성을 포함한 단일 ESM 번들이다.
+
+async function assertRuntimeEntry(m: LivelyAppManifest, root: string): Promise<void> {
+  if (!m.runtime) return;
+  const abs = path.resolve(root, m.runtime.entry);
+  if (abs !== root && !abs.startsWith(root + path.sep)) {
+    throw new HttpError(400, `runtime entry 가 패키지 밖을 가리킵니다: ${m.runtime.entry}`);
+  }
+  let st;
+  try { st = await stat(abs); } catch { throw new HttpError(400, `runtime entry 파일이 없습니다: ${m.runtime.entry}`); }
+  if (!st.isFile()) throw new HttpError(400, `runtime entry 가 파일이 아닙니다: ${m.runtime.entry}`);
+  if (st.size > RUNTIME_MAX_BYTES) {
+    throw new HttpError(400, `runtime entry 가 너무 큽니다(${m.runtime.entry}, ${st.size}B > ${RUNTIME_MAX_BYTES}B)`);
+  }
 }
 
 const UI_MAX_BYTES = 2 * 1024 * 1024; // entry HTML 상한(자체완결 HTML 가정 — 초과는 거부).

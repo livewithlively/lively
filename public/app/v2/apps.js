@@ -7,7 +7,7 @@
 import { el, navOn } from '../core.js';
 import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession } from './app-session.js';
-import { openAppUi } from './app-ui.js';
+import { openInstalledApp } from './app-instance.js';
 // 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(홈·AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
 export const APPS = [
     { key: 'dashboard', title: '홈(클래식)', desc: '옛 대시보드 — 내 프로젝트·알림·세션·팀 로그 위젯', route: 'dashboard', tab: 'dashboard', icon: 'home' },
@@ -17,8 +17,6 @@ export const APPS = [
     { key: 'context', title: '맥락 관리', desc: '수집(연결) · 증류 · 분류 · 자동 관리 파이프라인', route: 'context', tab: 'context', icon: 'ctx' },
     { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
     { key: 'system', title: '설정', desc: '내 설정 · 조직 · 구성원 · 운영', route: 'system', tab: 'system', icon: 'sys' },
-    { key: 'web', title: '웹', desc: '주소를 넣으면 이 화면 안에서 그대로 — 데스크톱 앱에서만 안에 열립니다', route: 'web', tab: null, icon: 'web',
-        kind: 'browser', home: 'https://www.google.com/' },
     { key: 'learn', title: '사용 가이드', desc: '둘러보기 · 문서 · 시작하기', route: 'learn', tab: null, icon: 'learn' },
 ];
 // 클래식 라우트 첫 세그먼트 → 앱 키. 새 셸에서 옛 딥링크(#/knowledge/…, #/projects2/p/12 …)가 들어오면
@@ -94,12 +92,12 @@ export function openLaunchpad() {
     const draw = () => {
         const q = input.value.trim().toLowerCase();
         const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, onclick: () => closeLaunchpad() }, el('span', { class: 'v2-pad-ico' }, appIcon(a.icon)), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: a.desc })));
-        const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => {
+        const session = sApps.filter((a) => a.id !== 'ai-session').filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => {
             const hasUi = a.pages.length > 0; // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
             return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
                 title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
-                onclick: () => { closeLaunchpad(); if (hasUi)
-                    void openAppUi(a.id, { title: a.title });
+                onclick: () => { closeLaunchpad(); if (hasUi || a.system)
+                    void openInstalledApp(a);
                 else
                     void openAppSession(a.id, { title: a.title }); } }, el('span', { class: 'v2-pad-ico' }, appIcon(hasUi ? 'liv' : 'term')), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: hasUi ? '앱 화면 — 창으로 열려요' : '앱 세션 — 열면 이 앱으로 대화가 시작돼요' }), el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
         });

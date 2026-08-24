@@ -8,6 +8,11 @@
           "type": "string",
           "maxLength": 500
         },
+        "schema_version": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
         "id": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]{1,31}$"
@@ -223,6 +228,56 @@
           "additionalProperties": false,
           "default": {}
         },
+        "instances": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "enum": [
+                "global",
+                "optional",
+                "required"
+              ],
+              "default": "optional"
+            },
+            "multiplicity": {
+              "type": "string",
+              "enum": [
+                "single",
+                "multiple"
+              ],
+              "default": "multiple"
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "system": {
+          "type": "object",
+          "properties": {
+            "renderer": {
+              "type": "string",
+              "enum": [
+                "session",
+                "browser",
+                "classic"
+              ]
+            },
+            "route": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "home": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2000
+            }
+          },
+          "required": [
+            "renderer"
+          ],
+          "additionalProperties": false
+        },
         "csp": {
           "type": "object",
           "properties": {
@@ -386,7 +441,7 @@
         "title",
         "version"
       ],
-      "additionalProperties": false
+      "additionalProperties": true
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#",

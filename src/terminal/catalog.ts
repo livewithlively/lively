@@ -219,6 +219,7 @@ export interface SessionInfo {
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
+  appId?: string; // 이 세션을 실행한 AppPackage. 일반 AI 세션은 undefined이고 셸이 ai-session builtin으로 해석한다.
   // 에이전트 실행 상태(#1015 E 에서 '오프라인' 한 칸에 섞여 있던 '셸로 빠짐'을 exited 로 분리):
   //  busy=스피너 관측(작업중) · waiting=화면에 사용자 선택/승인 대기(확인 필요) — 이 둘은 **접속 무관**.
   //   탭을 닫아도 AI 는 계속 일하고, waiting 은 사용자 결정을 기다리는 알림이라 회색으로 덮으면 놓친다.
@@ -275,6 +276,13 @@ export interface SessionInfo {
   //  프론트는 이 값으로 &node= 를 릴레이한다(입장·삭제·복원 결과 열기).
   node?: { id: string; name: string; online: boolean };
 }
+export interface PreparedAppSession {
+  appId: string;
+  token: string;
+  gatewayUrl: string | null;
+  assets: Array<{ path: string; body: string; mode: number }>;
+}
+
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
   // #1291 v2 — 기록 범위(write cap)와 read 축소. 미지정이면 실행 폴더에서 파생한다(신규·복원이 같은 규칙).
   //  writeVis: 'open'|'audience'|'private' — 이 세션이 **사용자 승인 없이** 만들 수 있는 맥락의 최대 가시성.
@@ -311,7 +319,10 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
   //  세션 폴더에 앱 홈(.lively/token·gateway-url)·앱 하네스 자산(.claude/{skills,agents,commands})을 물질화하고
   //  pane env LIVELY_HOME=<sessionDir>·LIVELY_APP_ID=<id> 를 주입한다(design D3·D4). 미설정=일반 세션(무변경).
-  appId?: string; }
+  appId?: string;
+  // 게이트웨이가 정책·grant·DB를 확인해 준비한 원격 실행용 봉투. HTTP body에서는 받지 않고 내부 node relay만 사용한다.
+  appSession?: PreparedAppSession;
+}
 
 // ── 세션 런처(#1516) — 하네스가 죽어도 세션은 산다 ──
 //

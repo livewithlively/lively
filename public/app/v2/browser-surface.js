@@ -63,6 +63,7 @@ export function browserSurface(opts) {
             return;
         addr.value = u;
         outLink.href = u;
+        opts.onUrl?.(u);
         if (view) {
             try {
                 view.loadURL(u);
@@ -114,6 +115,7 @@ export function browserSurface(opts) {
                 if (u && u !== 'about:blank') {
                     addr.value = u;
                     outLink.href = u;
+                    opts.onUrl?.(u);
                 }
                 back.disabled = !(view.canGoBack && view.canGoBack());
                 fwd.disabled = !(view.canGoForward && view.canGoForward());

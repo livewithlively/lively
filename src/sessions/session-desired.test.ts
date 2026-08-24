@@ -12,6 +12,7 @@ const TM: TmuxDesired = {
   flags: { "--model": "sonnet" },
   invites: ["u-old"],
   projectId: 11,
+  appId: "tmux-app",
 };
 
 const db = (p: Partial<SessionState> = {}): SessionState => ({
@@ -38,6 +39,7 @@ test("DB 행이 있으면 DB 가 이긴다", () => {
   assert.equal(d.autoApprove, true);
   assert.deepEqual(d.invites, ["u-new"]);
   assert.equal(d.projectId, 22);
+  assert.equal(d.appId, "tmux-app");
   assert.deepEqual(d.flags, { "--model": "opus" });
 });
 
@@ -49,6 +51,12 @@ test("★ DB 의 null/빈 값은 tmux 로 메운다 — '옮겼더니 정보가 
   assert.equal(d.projectId, 11);
   assert.deepEqual(d.flags, { "--model": "sonnet" });
   assert.deepEqual(d.invites, ["u-old"]);
+  assert.equal(d.appId, "tmux-app");
+});
+
+test("app_id도 DB가 정본이고 구 행 null일 때만 tmux 값을 쓴다", () => {
+  assert.equal(resolveDesired(db({ app_id: "db-app" }), TM).appId, "db-app");
+  assert.equal(resolveDesired(db({ app_id: null }), TM).appId, "tmux-app");
 });
 
 // ★ 소유자는 접근 제어의 근거다. tmux 값으로 덮이면 권한이 뒤집힌다.
