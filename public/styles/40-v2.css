@@ -302,8 +302,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-pj-row:hover .v2-pinb, .v2-pinb:focus-visible { opacity: 1; }
 .v2-pinb:hover { color: var(--ink); background: var(--bg-tint-2); }
 .v2-pinb.on { opacity: 1; color: var(--blue); }
-.v2-pinb-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
-.v2-pinb.on .v2-pinb-ic { fill: currentColor; stroke: none; }
+.v2-pinb-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linejoin: round; stroke-linecap: round; }
+/* 고정됨 = 속이 찬 핀. ⚠ stroke 를 끄지 않는다 — 바늘(M12 17v5)은 선이라 fill 로는 안 그려져서,
+   stroke:none 이면 바늘이 통째로 사라진 '머리만 남은 핀'이 된다. */
+.v2-pinb.on .v2-pinb-ic { fill: currentColor; }
 /* 고정 묶음과 나머지 사이 — 실선 하나면 충분하다(머리글을 두지 않는다). */
 .v2-pj.after-pins { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-net); }
 
