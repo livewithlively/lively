@@ -28,6 +28,8 @@ export const WIN = process.platform === "win32";
 //   유일한 차단이고, 스텁 게이트웨이가 필요한 테스트는 이 조각 **뒤에** 자기 값을 세우면 된다(뒤 키가 이긴다).
 export const offlineLivelyEnv = () => ({
   LIVELY_TOKEN: "", LIVELY_SESSION_ID: "", LIVELY_GATEWAY_URL: "", LIVELY_NODE_TOKEN: "",
+  // 파일 홈과 무관한 레지스트리 등 영속 호스트 효과 + 부모 셸의 allow 상속을 함께 차단한다.
+  LIVELY_HOST_EFFECTS: "deny",
 });
 
 // 자식 프로세스의 os.homedir()/os.tmpdir() 를 **실제로** 샌드박스로 돌리는 env 조각.

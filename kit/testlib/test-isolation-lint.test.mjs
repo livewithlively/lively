@@ -14,13 +14,15 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { violatesR1, violatesR2, RULES } from "./test-isolation-rules.mjs";
+import { violatesR1, violatesR2, violatesR3, violatesR4, RULES } from "./test-isolation-rules.mjs";
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 이 두 파일은 스캔 대상에서 뺀다 — 규칙 문자열(픽스처)이 본문에 있어 자기 자신을 위반으로 읽는다.
 const SELF = new Set([
   join("testlib", "test-isolation-lint.test.mjs"),
   join("testlib", "test-isolation-rules.mjs"),
+  // fake executor로 capability의 양쪽을 검증하므로 allow 리터럴이 의도적으로 존재한다(실 HKCU 호출 없음).
+  join("setup", "host-effects.test.mjs"),
 ]);
 
 let pass = 0, fail = 0;
@@ -51,6 +53,14 @@ const R2_CASES = [
 ];
 for (const [name, src, want] of R2_CASES) eq(`R2 ${name}`, violatesR2(src), want);
 
+const R3_CASES = [
+  ["#14 allow 플래그", 'args: ["--allow-host-effects"]', true],
+  ["#15 allow env", 'env: { LIVELY_HOST_EFFECTS: "allow" }', true],
+  ["#16 deny env", 'env: { LIVELY_HOST_EFFECTS: "deny" }', false],
+  ["#17 host-effects 언급만", 'import "./host-effects.mjs"', false],
+];
+for (const [name, src, want] of R3_CASES) eq(`R3 ${name}`, violatesR3(src), want);
+
 // ── ② 실제 kit 트리 ────────────────────────────────────────────────────────────
 const files = readdirSync(KIT, { recursive: true })
   .filter((p) => /\.test\.mjs$/.test(p) && !SELF.has(p))
@@ -68,6 +78,21 @@ for (const rule of RULES) {
     ? ok(`#15 ${rule.id} ${rule.title}`)
     : bad(`#15 ${rule.id}`, `${bads.length}건 — ${rule.fix}\n` + bads.map(({ rel }) => `        kit${sep}${rel}`).join("\n"));
 }
+
+// E12/R4 — User PATH registry primitive는 단일 adapter 밖에 두지 않는다. 테스트 파일은 픽스처 문자열을
+// 가질 수 있어 제외하고, 제품 kit/*.mjs만 스캔한다. adapter 자체가 수집됐는지도 별도로 단언해 vacuous green을 막는다.
+const HOST_ADAPTER = join("setup", "host-effects.mjs");
+const productMjs = readdirSync(KIT, { recursive: true })
+  .filter((p) => p.endsWith(".mjs") && !p.endsWith(".test.mjs") && !p.endsWith(".itest.mjs"))
+  .sort()
+  .map((p) => ({ rel: p, src: readFileSync(join(KIT, p), "utf8") }));
+productMjs.some(({ rel }) => rel === HOST_ADAPTER)
+  ? ok("#18 R4 배선 — host-effects adapter를 제품 스캔에서 읽었다")
+  : bad("#18 R4 배선", "setup/host-effects.mjs가 수집되지 않았다");
+const registryBads = productMjs.filter(({ rel, src }) => rel !== HOST_ADAPTER && violatesR4(src));
+registryBads.length === 0
+  ? ok("#19 R4 Windows User PATH registry primitive가 adapter 한 곳에만 존재")
+  : bad("#19 R4 직접 registry 접근", registryBads.map(({ rel }) => `kit${sep}${rel}`).join("\n"));
 
 console.log(`test-isolation lint: ${pass} passed${fail ? `, ${fail} FAILED` : ""}  (kit 스캔 ${files.length}개)`);
 if (fail) process.exit(1);
