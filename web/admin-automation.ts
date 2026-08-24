@@ -108,6 +108,8 @@ async function openCronForm(job, actions, reload, tz) {
   const cronInp = el('input', { type: 'text', style: psInputStyle, value: (job && job.cron_expr) || '', placeholder: '예: 0 9 * * 1-5 (비우면 위 주기초 사용)' });
   const enabledChk = el('input', { type: 'checkbox', ...((job ? job.enabled : false) ? { checked: true } : {}) });
   const onceChk = el('input', { type: 'checkbox', ...((job && job.run_once) ? { checked: true } : {}) });
+  // #1675 ④ 서킷 브레이커 임계 — 잡마다 적정값이 다르다(자주 도는 잡은 짧게, 외부 API 는 길게). 0=이 잡만 끔.
+  const breakerInp = el('input', { type: 'number', style: psInputStyle, value: String((job && job.max_fail_streak != null) ? job.max_fail_streak : 5), min: '0', max: '100' });
 
   // 액션별 파라미터 — 레지스트리의 params 스펙에서 동적 생성. kind=session → 상시 세션 피커, 그 외 → 텍스트.
   const paramsWrap = el('div');
@@ -189,6 +191,7 @@ async function openCronForm(job, actions, reload, tz) {
     psBlock('주기 (초)', '이 간격마다 실행(최소 60). cron식이 있으면 그게 우선.', intervalInp),
     psBlock('cron식 (선택)', '벽시계 스케줄 — 시각은 ' + tz + ' 기준입니다. 예: 0 9 * * 1-5 = 평일 ' + tz + ' 09:00. 비우면 주기초.', cronInp),
     psBlock('한 번만 실행', '체크 시 주기·cron 무시 → 1회 실행 후 자동으로 꺼짐(반복 안 함). 부트스트랩 등 일회성 잡용.', el('label', { class: 'inline' }, onceChk, el('span', { text: ' run once (1회 실행 후 비활성)' }))),
+    psBlock('연속 실패 시 자동 중지', '이 횟수만큼 잇달아 실패하면 잡이 스스로 멈추고 알림을 보냅니다. 한 번이라도 성공하면 0으로 돌아갑니다. 0을 넣으면 이 잡은 자동으로 멈추지 않습니다.', breakerInp),
     psBlock('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))),
     el('div', { class: 'ps-rules-actions' }, saveBtn));
   const back = overlayBox(isNew ? '스케줄 잡 추가' : '스케줄 잡 수정 — ' + job.id, form);
@@ -199,7 +202,8 @@ async function openCronForm(job, actions, reload, tz) {
     const p: Record<string, string> = {};
     for (const k of Object.keys(paramInputs)) { const v = String(paramInputs[k].value || '').trim(); if (v) p[k] = v; }
     const body = { id, label: labelInp.value.trim() || null, action: actionSel.value, params: p,
-      interval_sec: Number(intervalInp.value) || 1800, cron_expr: cronInp.value.trim(), run_once: onceChk.checked, enabled: enabledChk.checked };
+      interval_sec: Number(intervalInp.value) || 1800, cron_expr: cronInp.value.trim(), run_once: onceChk.checked, enabled: enabledChk.checked,
+      max_fail_streak: Math.max(0, Math.min(100, Number(breakerInp.value) || 0)) };
     saveBtn.disabled = true;
     try { await api('/api/ui/cron', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '잡을 추가했습니다' : '저장했습니다'); back.remove(); reload(); }
     catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
@@ -246,7 +250,14 @@ async function managedSessionsPanel(detail, data) {
       el('span', { class: 'wikicat-name', text: m.label || m.id }),
       el('span', { class: 'wikicat-key mono', text: (m.account || '계정 미지정') + ' · ' + (m.harness || 'claude') }),
       el('span', { class: 'dm-tag', text: m.enabled ? (alive ? '실행중' : '대기(재생성 예정)') : '비활성' }),
-      el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '세션' }), m.session_id || '미생성'));
+      el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '세션' }), m.session_id || '미생성'),
+      // #1675 ⑥ — 같은 워크스페이스에 등록분 말고 몇 개가 더 떠 있나. keep-alive 가 다음 점검(2분)에 정리한다.
+      //  종전엔 이 사실이 어느 화면에도 없어서, 30개까지 쌓이는 동안 아무도 몰랐다(claude 프로세스 29개 = 5.7GB).
+      (Number(m.orphan_count) > 0)
+        ? withTip(el('span', { class: 'pill pill-warn', text: '중복 ' + m.orphan_count + '개' }),
+          '이 에이전트의 작업 폴더에 등록된 세션 말고 ' + m.orphan_count + '개가 더 떠 있습니다.'
+          + ' 다음 점검(2분 이내)에서 자동으로 정리되고, 가장 오래된 하나만 남습니다.')
+        : null);
     const acts = el('div', { class: 'wikicat-row-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', text: '시작/재생성', onclick: () => managedEnsure(m.id, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: m.enabled ? '끄기' : '켜기', onclick: () => managedToggle(m, reload) }),

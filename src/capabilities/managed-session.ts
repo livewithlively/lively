@@ -19,7 +19,28 @@ const list: Capability = {
   scope: "admin",
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/managed-sessions"], parse: () => ({}) }] },
-  handler: async () => ({ sessions: await listManagedSessions() }),
+  handler: async () => {
+    const sessions = await listManagedSessions();
+    // #1675 ⑥ — 각 상시세션의 워크스페이스에 실제로 몇 개가 떠 있는지. 레지스트리는 1건인데 tmux 에 30개가
+    //  떠 있던 실측이 있었고(claude 프로세스 29개 = 5.7GB), 그 사실이 **어느 화면에도 보이지 않았다**.
+    //  keepalive 가 자동으로 정리하지만, 정리가 도는지·무엇을 걷었는지는 사람이 볼 수 있어야 한다.
+    //  ⚠ tmux 를 못 보면(조회 실패) 0 이 아니라 **null**(모름)이다 — '없음'으로 단정하면 안 되는 자리다.
+    try {
+      const { listSessionsRaw } = await import("../terminal/terminal-sessions.js");
+      const { classifyManagedLive, managedSubpath } = await import("../sessions/managed-sessions.js");
+      const live = await listSessionsRaw();
+      return {
+        sessions: sessions.map((m) => ({
+          ...m,
+          orphan_count: classifyManagedLive({
+            live, subpath: managedSubpath(m), registered: m.session_id,
+          }).orphans.length,
+        })),
+      };
+    } catch {
+      return { sessions: sessions.map((m) => ({ ...m, orphan_count: null })) };
+    }
+  },
 };
 
 const set: Capability = {

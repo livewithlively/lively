@@ -20,6 +20,8 @@ export interface CronJobInsert {
   enabled: boolean | null; // null=기본값(true)
   note: string | null;
   run_once: boolean | null; // null=기본값(false)
+  /** #1675 ④ 연속 실패 자동 정지 임계. null=기본값(5), 0=이 잡은 브레이커 끔. */
+  max_fail_streak?: number | null;
   actor: string | null;     // created_by/updated_by 동시 세팅($10 재사용)
 }
 
@@ -34,6 +36,8 @@ export interface CronJobUpdate {
   enabled: boolean | null;
   note: string | null;
   run_once: boolean | null;
+  /** #1675 ④ — null=변경 안 함(기존 유지). */
+  max_fail_streak?: number | null;
   actor: string | null;
 }
 
@@ -49,10 +53,10 @@ export async function getCronJob(id: string): Promise<{ id: string } | undefined
 
 export async function insertCronJob(v: CronJobInsert): Promise<CronJobRow> {
   const r = await itemsPool.query(
-    `INSERT INTO org_cron(id,label,action,params,interval_sec,cron_expr,enabled,note,run_once,created_by,updated_by)
-     VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,true),$8,COALESCE($9,false),$10,$10) RETURNING *`,
+    `INSERT INTO org_cron(id,label,action,params,interval_sec,cron_expr,enabled,note,run_once,max_fail_streak,created_by,updated_by)
+     VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,true),$8,COALESCE($9,false),COALESCE($11,5),$10,$10) RETURNING *`,
     [v.id, v.label, v.action, v.params,
-     v.interval_sec, v.cron_expr, v.enabled, v.note, v.run_once, v.actor]);
+     v.interval_sec, v.cron_expr, v.enabled, v.note, v.run_once, v.actor, v.max_fail_streak ?? null]);
   return r.rows[0];
 }
 
@@ -65,6 +69,7 @@ export async function updateCronJob(v: CronJobUpdate): Promise<CronJobRow> {
        params=COALESCE($4,params), interval_sec=COALESCE($5,interval_sec),
        cron_expr = CASE WHEN $6::boolean THEN $7::text ELSE cron_expr END,
        enabled=COALESCE($8,enabled), note=COALESCE($9,note), run_once=COALESCE($11,run_once),
+       max_fail_streak=COALESCE($12,max_fail_streak),
        -- #1675 ④ — **사람이 다시 켜면 서킷 브레이커를 초기화한다.** 안 그러면 streak 가 임계 직전인 채로
        --  재개되어 한 번만 더 실패해도 즉시 다시 꺼진다(사람 눈엔 "켜도 안 켜진다"로 보인다).
        --  끄는 방향(enabled=false)에는 손대지 않는다 — 자동 정지 흔적을 사람 조작이 지우면 안 된다.
@@ -76,7 +81,7 @@ export async function updateCronJob(v: CronJobUpdate): Promise<CronJobRow> {
     [v.id, v.label, v.action,
      v.params,
      v.interval_sec, v.cron_provided, v.cron_expr,
-     v.enabled, v.note, v.actor, v.run_once]);
+     v.enabled, v.note, v.actor, v.run_once, v.max_fail_streak ?? null]);
   return r.rows[0];
 }
 
