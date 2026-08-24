@@ -147,4 +147,15 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
     "E25 달았던 그 자리에서 끊는다");
 }
 
+
+// ══ 웹 칸 무대 — 프레임에 크기를 주는가 (2026-08-23 회귀) ═══════════════════════════
+//  iframe·webview 는 대체 요소라 크기를 안 주면 300×150px 로 앉는다. position:absolute 로 바꾸는 순간
+//  flex 가 손을 떼므로 이 규칙이 유일한 크기 근거다 — 앱(webview)은 인라인 style 을 쓰지 않아 여기에만 걸린다.
+{
+  const CSS = read("public/styles/42-v2-panes.css");
+  const rule = (CSS.match(/\.pn-webstage > \.pn-webframe \{[^}]*\}/) || [""])[0];
+  ok(/width:\s*100%/.test(rule) && /height:\s*100%/.test(rule),
+    "E26 무대 안 프레임은 폭·높이를 갖는다 — 없으면 칸이 아무리 커도 페이지가 150px 만 그려진다");
+}
+
 console.log(`\n# ${pass} passed`);
