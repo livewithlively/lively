@@ -34,8 +34,15 @@
 .pvg-sk.w3 { width: 58%; }
 .pvg-card.st-stopped .pvg-sk { background: var(--bg-tint); }   /* 꺼진 창은 화면도 옅게 — 켜짐/꺼짐이 골격 농도로도 읽힌다 */
 
+/* 어느 작업의 화면인지 + 언제 봤는지 — 얼굴 안 한 줄(발치는 액션에 밀려 글자가 잘렸다 — 실측). */
+.pvg-meta { display: flex; align-items: baseline; gap: 7px; margin-top: auto; padding-top: 10px; min-width: 0; font-size: 11.5px; font-weight: 600; color: var(--muted-head); white-space: nowrap; }
+.pvg-meta-w { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pvg-when { flex: none; color: var(--muted-2); }
+
 /* 상태줄 — 점 + 라벨(색만으로 말하지 않는다) + 우측 동사(누르면 무슨 일이 나는지). */
-.pvg-state { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 10px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pvg-state { display: flex; align-items: center; gap: 6px; padding-top: 5px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+/* 메타가 없으면 상태줄이 밀대 노릇을 한다 */
+.pvg-state:first-of-type { margin-top: auto; padding-top: 10px; }
 .pvg-verb { margin-left: auto; flex: none; font-size: 12.5px; font-weight: 700; color: var(--blue); }
 .pvg-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--muted-2); }
 .pvg-dot.running { background: var(--mint); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint) 20%, transparent); }
@@ -47,13 +54,10 @@
 /* 문제 안내 — 오류 잉크로 한 줄(원인은 서버 문구 그대로). */
 .pvg-err { display: block; padding: 0 14px 10px; font-size: 12px; line-height: 1.55; color: var(--coral-text); word-break: break-word; }
 
-/* 발치 — 메타(어느 작업의 화면인지) + 보조 액션. 액션은 wikicat 문법대로 평소 옅게, 카드에 손이 가면 또렷하게
+/* 발치 — 좌 레포 칩, 우 보조 액션. 액션은 wikicat 문법대로 평소 옅게, 카드에 손이 가면 또렷하게
    (숨기는 게 아니라 농도만 — hover 없이도 늘 보이고 누를 수 있다). */
-.pvg-foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-top: 1px solid var(--line-row); min-width: 0; }
-.pvg-meta { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--muted-head); overflow: hidden; white-space: nowrap; }
-.pvg-meta > span { overflow: hidden; text-overflow: ellipsis; }
+.pvg-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 8px 14px; border-top: 1px solid var(--line-row); min-width: 0; }
 .pvg-repo { flex: none; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 11px; font-weight: 500; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; }
-.pvg-when { flex: none; color: var(--muted-2); }
 .pvg-acts { flex: none; display: inline-flex; align-items: center; gap: 2px; opacity: .6; transition: opacity 120ms ease; }
 .pvg-card:hover .pvg-acts, .pvg-card:focus-within .pvg-acts { opacity: 1; }
 .pvg-acts .btn-text { font-size: 12px; padding: 3px 5px; }

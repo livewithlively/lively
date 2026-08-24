@@ -26,8 +26,15 @@ function previewCard(p, reload) {
     // 상태줄 — 점 + 라벨(색만으로 말하지 않는다) + 우측에 '누르면 무슨 일이 나는지'를 동사로.
     const verb = running ? '열기 ↗' : preparing ? '' : status === 'error' ? '다시 띄우기' : '띄우기';
     const state = el('span', { class: 'pvg-state' }, el('i', { class: 'pvg-dot ' + status, 'aria-hidden': 'true' }), el('span', { text: statusText }), verb ? el('b', { class: 'pvg-verb', text: verb }) : null);
+    // 어느 작업의 화면인지 + 언제 봤는지 — 발치가 아니라 얼굴 안에 둔다(발치는 액션에 밀려 글자가 잘렸다 — 실측).
+    const where = [
+        p.project_name || (p.project_id ? '프로젝트 #' + p.project_id : null),
+        p.kind === 'stage' ? '여러 작업 합침' : null,
+    ].filter(Boolean).join(' · ');
+    const seen = p.last_active_at ? relTime(p.last_active_at) + ' 봄' : (p.updated_at ? relTime(p.updated_at) : '');
+    const meta = (where || seen) ? el('span', { class: 'pvg-meta' }, where ? el('span', { class: 'pvg-meta-w', text: where }) : null, seen ? el('span', { class: 'pvg-when', text: seen }) : null) : null;
     // 화면 골격 — "이 카드는 화면이다"를 말하는 추상 미니어처(내용을 아는 척하지 않는다 — 스크린샷이 없다).
-    const face = el('span', { class: 'pvg-face' }, el('i', { class: 'pvg-sk w1', 'aria-hidden': 'true' }), el('i', { class: 'pvg-sk w2', 'aria-hidden': 'true' }), el('i', { class: 'pvg-sk w3', 'aria-hidden': 'true' }), state);
+    const face = el('span', { class: 'pvg-face' }, el('i', { class: 'pvg-sk w1', 'aria-hidden': 'true' }), el('i', { class: 'pvg-sk w2', 'aria-hidden': 'true' }), el('i', { class: 'pvg-sk w3', 'aria-hidden': 'true' }), meta, state);
     const bar = el('span', { class: 'pvg-bar' }, el('span', { class: 'pvg-lights', 'aria-hidden': 'true' }, el('i'), el('i'), el('i')), el('span', { class: 'pvg-name', text: p.label || p.id }));
     // 카드의 주 행동 — 실행 중이면 진짜 링크(새 탭), 꺼짐·문제면 띄우기, 준비 중이면 기다림(누를 것 없음).
     const open = running
@@ -37,12 +44,7 @@ function previewCard(p, reload) {
             ? el('span', { class: 'pvg-open wait', title: '화면을 준비하고 있습니다 — 끝나면 여기서 바로 열립니다' }, bar, face)
             : el('button', { class: 'pvg-open', type: 'button', title: (p.label || p.id) + ' — 누르면 띄웁니다',
                 onclick: () => previewEnsure(p.id, reload) }, bar, face);
-    const where = [
-        p.project_name || (p.project_id ? '프로젝트 #' + p.project_id : null),
-        p.kind === 'stage' ? '여러 작업 합침' : null,
-    ].filter(Boolean).join(' · ');
-    const seen = p.last_active_at ? relTime(p.last_active_at) + ' 봄' : (p.updated_at ? relTime(p.updated_at) : '');
-    const foot = el('span', { class: 'pvg-foot' }, el('span', { class: 'pvg-meta' }, p.repo ? el('code', { class: 'pvg-repo', text: p.repo }) : null, where ? el('span', { text: where }) : null, seen ? el('span', { class: 'pvg-when', text: seen }) : null), el('span', { class: 'pvg-acts' }, running ? el('button', { class: 'btn-text', type: 'button', text: '새로 만들기', title: '최신 작업으로 다시 준비합니다', onclick: () => previewEnsure(p.id, reload) }) : null, (running || preparing) ? el('button', { class: 'btn-text', type: 'button', text: '끄기', onclick: () => previewStop(p.id, reload) }) : null, el('button', { class: 'btn-text', type: 'button', text: '설정', onclick: () => openPreviewEnvForm(p, reload) }), el('button', { class: 'btn-text pvg-del', type: 'button', text: '삭제', onclick: () => previewDelete(p, reload) })));
+    const foot = el('span', { class: 'pvg-foot' }, p.repo ? el('code', { class: 'pvg-repo', text: p.repo }) : el('span'), el('span', { class: 'pvg-acts' }, running ? el('button', { class: 'btn-text', type: 'button', text: '새로 만들기', title: '최신 작업으로 다시 준비합니다', onclick: () => previewEnsure(p.id, reload) }) : null, (running || preparing) ? el('button', { class: 'btn-text', type: 'button', text: '끄기', onclick: () => previewStop(p.id, reload) }) : null, el('button', { class: 'btn-text', type: 'button', text: '설정', onclick: () => openPreviewEnvForm(p, reload) }), el('button', { class: 'btn-text pvg-del', type: 'button', text: '삭제', onclick: () => previewDelete(p, reload) })));
     const err = (status === 'error' && p.last_error)
         ? el('span', { class: 'pvg-err', text: String(p.last_error) }) : null;
     return el('div', { class: 'pvg-card st-' + status }, open, err, foot);
