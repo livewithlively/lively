@@ -40,12 +40,12 @@ test("deploy: 알 수 없는 kind 는 HttpError(500) 로 거부(DB 접근 전에
   );
 });
 
-test("reclaim: 알 수 없는 kind 는 HttpError(500) 로 거부(DB 접근 전에)", async () => {
+// #1780 v2 §7-1(사양 H7) — 회수는 미지 kind 에 관대하다: 실전개를 모르니 손대지 않고(경고) 조인 제거만 남긴다.
+//  v2 코어가 심은 kind(예: worker) 를 이 코어가 만나도 앱 삭제·재설치가 500 으로 막히면 안 된다(롤백 안전).
+//  DB 배선 없이 resolve 해야 한다 = 실전개 스토어를 부르지 않았다는 증거.
+test("reclaim: 알 수 없는 kind 는 예외 없이 통과(조인 제거만 — 롤백 안전)", async () => {
   const deps = makeDeployDeps("app1", { actor: "system", source: "migration" });
-  await assert.rejects(
-    () => deps.reclaim(comp("bogus", "x")),
-    (err: unknown) => err instanceof HttpError && err.status === 500,
-  );
+  await assert.doesNotReject(() => deps.reclaim(comp("worker", "x")));
 });
 
 // no-op kind 는 실전개가 없으므로 DB 배선 없이도 resolve 해야 한다(이 테스트가 DB 를 안 띄우고도 통과 = 증거).

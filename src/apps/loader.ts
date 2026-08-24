@@ -12,7 +12,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { HttpError } from "../http-error.js";
-import { parseAppManifest, appAssetId, type LivelyAppManifest } from "./manifest.js";
+import { parseAppManifest, assertInstallableManifest, appAssetId, type LivelyAppManifest } from "./manifest.js";
 import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
 import { hashAppPackage } from "./package-hash.js";
 import type { DeployItem } from "./install.js";
@@ -40,6 +40,7 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   let manifest: LivelyAppManifest;
   try {
     manifest = parseAppManifest(JSON.parse(await readFile(manifestPath, "utf8")));
+    assertInstallableManifest(manifest); // 설치 경로에서만 — 재파싱(grant)은 버전 불문(롤백 안전)
   } catch (e) {
     if ((e as { code?: string }).code === "ENOENT") throw new HttpError(400, "lively-app.json 이 없습니다");
     if (e instanceof HttpError) throw e;

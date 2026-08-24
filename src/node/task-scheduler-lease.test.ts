@@ -30,18 +30,20 @@ function store(rows: Record<string, string | null>): {
 }
 
 const fail = async (): Promise<never> => { throw new Error("저장소 장애"); };
+// 멤버 상태 조회기(#1780 v2 §7-1) — 기본값은 DB(getMember)라 테스트는 명시 주입한다.
+const ACTIVE = async (): Promise<string | null> => "active";
 
 // L1 — 등록된 의뢰자는 토큰이 env 로 실린다.
 {
   const { lookup } = store({ [memberOwner("lively1")]: "sk-ant-oat-TEST" });
-  assert.deepEqual(await leaseEnvFor("lively1", lookup), { [ENV_KEY]: "sk-ant-oat-TEST" },
+  assert.deepEqual(await leaseEnvFor("lively1", lookup, ACTIVE), { [ENV_KEY]: "sk-ant-oat-TEST" },
     "등록된 셋업토큰이 env 리스로 실려야 한다");
 }
 
 // L2 — 조회 키가 저장 키와 같다(raw 멤버 id 로 찾지 않는다). 이번 결함의 급소.
 {
   const { lookup, calls } = store({ [memberOwner("lively1")]: "sk-ant-oat-TEST" });
-  await leaseEnvFor("lively1", lookup);
+  await leaseEnvFor("lively1", lookup, ACTIVE);
   assert.equal(calls.length, 1, "저장소를 한 번은 실제로 조회해야 한다(관측 장치 배선 확인)");
   assert.equal(calls[0].owner, memberOwner("lively1"),
     `owner 키가 저장 키와 달라 조회가 0행이 된다 — 실제로 넘긴 값: ${calls[0].owner}`);
@@ -53,7 +55,7 @@ const fail = async (): Promise<never> => { throw new Error("저장소 장애"); 
 // L3 — 자격 없는 의뢰자는 정상 동작한다(리스 없음). 자격은 선택이다.
 {
   const { lookup } = store({});
-  assert.equal(await leaseEnvFor("nobody", lookup), undefined, "자격이 없으면 env 없이 진행한다");
+  assert.equal(await leaseEnvFor("nobody", lookup, ACTIVE), undefined, "자격이 없으면 env 없이 진행한다");
   assert.equal(remoteDelegateAllowed({ owner_member: "someone_else", shared: false }, "nobody", false), false,
     "리스 없으면 남의 노드는 후보 제외");
   assert.equal(remoteDelegateAllowed({ owner_member: "nobody", shared: false }, "nobody", false), true,
@@ -74,12 +76,32 @@ const fail = async (): Promise<never> => { throw new Error("저장소 장애"); 
 }
 
 // L5 — 저장소가 던져도 태스크를 죽이지 않는다(자격 없음으로 강등).
-assert.equal(await leaseEnvFor("lively1", fail), undefined, "저장소 장애는 삼켜서 자격 없음으로 강등해야 한다");
+assert.equal(await leaseEnvFor("lively1", fail, ACTIVE), undefined, "저장소 장애는 삼켜서 자격 없음으로 강등해야 한다");
 
 // L6 — 행은 있으나 값이 비면 env 를 붙이지 않는다(빈 토큰 전송은 더 나쁜 실패).
 for (const [label, v] of [["빈 문자열", ""], ["null", null]] as const) {
   const { lookup } = store({ [memberOwner("lively1")]: v });
-  assert.equal(await leaseEnvFor("lively1", lookup), undefined, `시크릿이 ${label}이면 env 를 붙이지 않는다`);
+  assert.equal(await leaseEnvFor("lively1", lookup, ACTIVE), undefined, `시크릿이 ${label}이면 env 를 붙이지 않는다`);
+}
+
+// L7 — #1780 v2 §7-1(사양 H3): 의뢰자가 active 멤버가 아니면 시크릿이 있어도 **리스하지 않는다**.
+//  토큰은 verifyDbToken 이 막지만 벤더 자격 리스는 별도 축 — 안 보면 퇴사자의 setup-token 으로 새 런이 계속 배치된다.
+{
+  const rows = { [memberOwner("lively1")]: "sk-ant-oat-TEST" };
+  for (const [label, stateOf] of [
+    ["inactive", async (): Promise<string | null> => "inactive"],
+    ["삭제(null)", async (): Promise<string | null> => null],
+    ["조회 실패(예외)", async (): Promise<string | null> => { throw new Error("db down"); }],
+  ] as const) {
+    const { lookup, calls } = store(rows);
+    assert.equal(await leaseEnvFor("lively1", lookup, stateOf), undefined, `멤버 ${label} 이면 리스 없음(fail-closed)`);
+    assert.equal(calls.length, 0, `멤버 ${label} 이면 시크릿 저장소를 아예 조회하지 않는다`);
+  }
+  // 배선 확인 — 상태 조회기가 실제로 의뢰자 id 로 불린다.
+  const seen: string[] = [];
+  const { lookup } = store(rows);
+  await leaseEnvFor("lively1", lookup, async (id) => { seen.push(id); return "active"; });
+  assert.deepEqual(seen, ["lively1"], "상태 조회는 의뢰자 멤버 id 로 1회");
 }
 
 console.log("task-scheduler-lease.test: ok");

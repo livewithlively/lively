@@ -122,11 +122,22 @@ const sectionSchema = z.object({
   file: z.string().min(1).max(512),                  // 패키지 내 상대경로(예: persona.md)
 }).strict();
 
+// 이 코어가 **설치**할 줄 아는 매니페스트 스키마 버전. 파싱은 어떤 버전이든 받는다(아래 주석) — 설치만 이 값으로 게이트.
+export const SUPPORTED_MANIFEST_SCHEMA = 1;
+
 // 매니페스트 전체.
+//  ★ 최상위는 **passthrough**(미지 키 통과), 중첩은 strict — #1780 v2 §7-1 전방호환(설계 R2-C4).
+//   v2 코어가 `runtime`·`triggers`·`config` 같은 최상위 키를 더한 매니페스트를 설치한 뒤 이 코어로 **롤백**하면
+//   저장된 매니페스트가 grant 시점에 다시 파싱된다(capabilities/apps.ts) — strict 면 거기서 400 → 동의 불가·
+//   빌트인 앱 failed. 최상위 미지 키는 "이 코어가 모르는 선언" 일 뿐 위험이 아니므로 통과시키고, 중첩(permissions 등)
+//   은 오타가 곧 권한 오해라 종전대로 거부한다. 미지 키는 값 그대로 보존된다(재저장 시 유실 없음).
 export const appManifestSchema = z.object({
-  // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다(strict 스키마라 명시적으로 받아 줘야 거부되지 않는다).
+  // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다.
   //  앱 개발자가 "$schema": "<게이트웨이>/ui/lively-app.schema.json" 를 적으면 VS Code 등이 그 자리에서 검증해 준다.
   $schema: z.string().max(500).optional(),
+  // 매니페스트 스키마 버전 — 없으면 1. 파싱은 어떤 정수든 받고(롤백 재파싱 안전), 설치는 assertInstallableManifest 가
+  //  SUPPORTED_MANIFEST_SCHEMA 초과를 거부한다("이 코어가 모르는 버전" 을 절반만 전개하지 않게).
+  schema_version: z.number().int().min(1).default(1),
   id: idSchema,
   title: z.string().min(1).max(200),
   version: semverSchema,
@@ -148,9 +159,20 @@ export const appManifestSchema = z.object({
   jobs: z.array(jobSchema).default([]),
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
   sections: z.array(sectionSchema).default([]),
-}).strict();
+}).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
+
+/**
+ * 설치 게이트 — 파싱은 통과했지만 이 코어가 **설치**하기엔 너무 새로운 매니페스트를 거부한다(400).
+ *  재파싱(grant·표시)은 이걸 부르지 않는다: 이미 설치된 것은 버전과 무관하게 계속 읽혀야 한다(롤백 안전).
+ */
+export function assertInstallableManifest(m: LivelyAppManifest): void {
+  if (m.schema_version > SUPPORTED_MANIFEST_SCHEMA) {
+    throw new HttpError(400,
+      `매니페스트 오류 [schema_version]: ${m.schema_version} 은 이 코어가 지원하지 않는 버전입니다(지원: ≤${SUPPORTED_MANIFEST_SCHEMA}) — 코어를 업데이트하세요`);
+  }
+}
 
 // ── 파서 ─────────────────────────────────────────────────────────────────────
 
