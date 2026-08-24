@@ -28,7 +28,9 @@ const list: Capability = {
     try {
       const { listSessionsRaw } = await import("../terminal/terminal-sessions.js");
       const { classifyManagedLive, managedSubpath } = await import("../sessions/managed-sessions.js");
-      const live = await listSessionsRaw();
+      // ⚠ **strict 필수.** 기본 모드는 tmux 실패를 빈 목록으로 돌려주므로, 그대로 쓰면 장애 중에도
+      //  "중복 0개"로 보고하게 된다 — 이 응답이 없애려던 '없음 vs 모름' 혼동을 그대로 재현한다(#1675 리뷰).
+      const live = await listSessionsRaw({ strict: true });
       return {
         sessions: sessions.map((m) => ({
           ...m,

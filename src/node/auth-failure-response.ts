@@ -55,6 +55,11 @@ export async function lastAuthFailureFor(requester: string): Promise<LastAuthFai
       `SELECT id, finished_at, result->'auth_failure'->>'label' AS label
          FROM org_task
         WHERE requester = $1 AND result -> 'auth_failure' IS NOT NULL
+          -- ⚠ 기간을 자른다(#1675 리뷰). 두 가지를 동시에 막는다:
+          --  ① org_task 는 지우는 경로가 없어 계속 자란다 — 이 조회는 '내 로그인' 화면을 열 때마다 돈다.
+          --  ② 노드 **로컬** 자격으로 돌던 위탁의 실패도 여기 잡히는데, 그건 member_secret 을 다시 등록해도
+          --     안 사라진다(그 자격이 아니므로). 기간이 없으면 그 경고가 영원히 붙는다.
+          AND finished_at > now() - interval '30 days'
         ORDER BY finished_at DESC NULLS LAST, id DESC
         LIMIT 1`, [requester]);
     const row = r.rows[0] as { id: number; finished_at: string | null; label: string | null } | undefined;

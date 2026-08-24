@@ -392,4 +392,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // 레포 자동 provision(#869 P2 후속) — 기존 org_task 테이블에도 소급(CREATE IF NOT EXISTS 는 컬럼 추가 안 함).
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS repo TEXT`);
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS git_ref TEXT`);
+  // #1675 리뷰 — '내 로그인' 화면이 매 렌더마다 그 사람의 마지막 자격 실패를 찾는다(lastAuthFailureFor).
+  //  org_task 는 지우는 경로가 없어 계속 자라는 테이블이라(증류 크론만으로 하루 ~1,300행), 인덱스 없이
+  //  seq scan 하면 그 조회가 곧 부하다 — 이미 Postgres 타임아웃을 겪은 박스에서는 특히.
+  //  ⚠ 반드시 org_task DDL **뒤**에 둔다(같은 초기화 안에서 순차 실행이라, 앞에 두면 테이블이 없어 실패한다).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_task_requester_finished_idx ON org_task(requester, finished_at DESC)`);
 }

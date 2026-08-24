@@ -70,7 +70,12 @@ async function cronPanel(detail, data) {
                 : el('span', { class: 'dm-tag', text: '꺼짐' })), el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last), 
         // 연속 실패가 쌓이는 중이면 그 자리에서 보이게 — 임계에 닿기 전에 사람이 손 쓸 수 있는 유일한 신호다.
         (j.enabled && Number(j.fail_streak) > 0)
-            ? withTip(el('span', { class: 'pill', text: '연속 실패 ' + j.fail_streak + '회' }), '연속 실패가 ' + (j.max_fail_streak || 5) + '회에 닿으면 이 잡은 스스로 멈추고 알림을 보냅니다. 성공 1회로 0이 됩니다.')
+            ? withTip(el('span', { class: 'pill', text: '연속 실패 ' + j.fail_streak + '회' }), 
+            // ⚠ `|| 5` 를 쓰면 **0(자동 정지 끔)이 5 로 표시된다** — 사람이 일부러 면제한 잡 옆에서 화면이
+            //  "5회에 닿으면 멈춥니다"라고 거짓말을 한다(#1675 리뷰). 0 은 별도 문장으로 말한다.
+            (Number(j.max_fail_streak) === 0
+                ? '이 잡은 자동으로 멈추지 않도록 설정돼 있습니다. 성공 1회로 이 숫자는 0이 됩니다.'
+                : '연속 실패가 ' + (j.max_fail_streak == null ? 5 : j.max_fail_streak) + '회에 닿으면 이 잡은 스스로 멈추고 알림을 보냅니다. 성공 1회로 0이 됩니다.'))
             : null);
         const acts = el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, actions, reload, tz) }), el('button', { class: 'btn btn-ghost btn-sm btn-ghost-danger', text: '삭제', onclick: () => cronDelete(j.id, reload, autoSys) }));
         rows.append(el('div', { class: 'wikicat-row' }, main, acts));
@@ -239,9 +244,12 @@ async function openCronForm(job, actions, reload, tz) {
             if (v)
                 p[k] = v;
         }
+        const breakerRaw = String(breakerInp.value ?? '').trim();
         const body = { id, label: labelInp.value.trim() || null, action: actionSel.value, params: p,
             interval_sec: Number(intervalInp.value) || 1800, cron_expr: cronInp.value.trim(), run_once: onceChk.checked, enabled: enabledChk.checked,
-            max_fail_streak: Math.max(0, Math.min(100, Number(breakerInp.value) || 0)) };
+            // ⚠ 빈 칸은 **기본값(5)** 이지 0(끔)이 아니다(#1675 리뷰). 다른 칸들처럼 `|| 0` 을 쓰면, 값을 지운 채
+            //  저장한 순간 그 잡의 폭주 보호가 조용히 꺼진다 — 0 은 사람이 **명시적으로 골랐을 때만** 0 이어야 한다.
+            max_fail_streak: breakerRaw === '' ? 5 : Math.max(0, Math.min(100, Math.round(Number(breakerRaw) || 0))) };
         saveBtn.disabled = true;
         try {
             await api('/api/ui/cron', { method: 'POST', body: JSON.stringify(body) });
@@ -321,10 +329,19 @@ async function managedSessionsPanel(detail, data) {
         const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: m.label || m.id }), el('span', { class: 'wikicat-key mono', text: (m.account || '계정 미지정') + ' · ' + (m.harness || 'claude') }), el('span', { class: 'dm-tag', text: m.enabled ? (alive ? '실행중' : '대기(재생성 예정)') : '비활성' }), el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '세션' }), m.session_id || '미생성'), 
         // #1675 ⑥ — 같은 워크스페이스에 등록분 말고 몇 개가 더 떠 있나. keep-alive 가 다음 점검(2분)에 정리한다.
         //  종전엔 이 사실이 어느 화면에도 없어서, 30개까지 쌓이는 동안 아무도 몰랐다(claude 프로세스 29개 = 5.7GB).
-        (Number(m.orphan_count) > 0)
-            ? withTip(el('span', { class: 'pill pill-warn', text: '중복 ' + m.orphan_count + '개' }), '이 에이전트의 작업 폴더에 등록된 세션 말고 ' + m.orphan_count + '개가 더 떠 있습니다.'
-                + ' 다음 점검(2분 이내)에서 자동으로 정리되고, 가장 오래된 하나만 남습니다.')
-            : null);
+        // #1675 ⑥ + 리뷰 — 세 상태를 **구분해서** 말한다.
+        //  ① null = 지금 tmux 를 못 봤다(모름) — '없음'으로 그리면 장애 중에 "중복 없음"으로 읽힌다.
+        //  ② 중복 있음 + 에이전트 켜짐 = keep-alive 가 다음 점검에 정리한다.
+        //  ③ 중복 있음 + 에이전트 꺼짐 = **정리되지 않는다**(ensureAllManagedSessions 가 disabled 를 건너뛴다).
+        //     그런데도 "2분 안에 자동 정리"라고 적으면, 영원히 안 지워질 프로세스를 기다리게 만든다.
+        (m.orphan_count == null)
+            ? withTip(el('span', { class: 'pill', text: '중복 확인 불가' }), '지금 터미널 목록을 읽지 못해 중복 여부를 확인하지 못했습니다 — 중복이 없다는 뜻이 아닙니다. 잠시 뒤 다시 열어보세요.')
+            : (Number(m.orphan_count) > 0
+                ? withTip(el('span', { class: 'pill pill-warn', text: '중복 ' + m.orphan_count + '개' }), '이 에이전트의 작업 폴더에 등록된 세션 말고 ' + m.orphan_count + '개가 더 떠 있습니다. '
+                    + (m.enabled
+                        ? '다음 점검(2분 이내)에서 자동으로 정리되고, 가장 오래된 하나만 남습니다.'
+                        : '이 에이전트가 꺼져 있어 자동 정리는 돌지 않습니다 — 켜면 다음 점검에서 정리되고, 그럴 생각이 없다면 터미널에서 직접 종료하세요.'))
+                : null));
         const acts = el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: '시작/재생성', onclick: () => managedEnsure(m.id, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: m.enabled ? '끄기' : '켜기', onclick: () => managedToggle(m, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openManagedSessionForm(m, reload) }), el('button', { class: 'btn btn-ghost btn-sm btn-ghost-danger', text: '삭제', onclick: () => managedDelete(m.id, reload) }));
         rows.append(el('div', { class: 'wikicat-row' }, main, acts));
     }

@@ -120,8 +120,12 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
 // 노드 에이전트용(#869) — 뷰어 필터 없이 이 호스트의 전 box-* 세션+메타를 반환한다. 가시성 판정(정책)은
 //  게이트웨이가 소유하므로(F7 정책/실행 분리) 노드는 원자료만 상태 push 하고, 게이트웨이가 뷰어별로 거른다.
 //  게이트웨이 로컬 경로에선 쓰지 말 것 — listSessions(user)가 정문.
-export async function listSessionsRaw(): Promise<SessionInfo[]> {
-  return collectSessions(null);
+/**
+ * @param strict listSessions 와 같은 의미 — **tmux 를 못 본 것**을 삼키지 않고 throw 한다.
+ *  "없음"과 "모름"을 구분해야 하는 읽기(예: 중복 세션 수 보고)는 반드시 strict 여야 한다.
+ */
+export async function listSessionsRaw(opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  return collectSessions(null, opts?.strict === true);
 }
 
 // 빈 tmux 서버 정리(#869 노드 자가치유) — 세션이 0개면 서버를 죽인다. 노드 데몬(launchd/systemd)이 과거 최소 PATH 로

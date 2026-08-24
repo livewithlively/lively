@@ -176,8 +176,11 @@ function connectedRow(svc, v, reload) {
         const setAt = cred?.updated_at ? new Date(cred.updated_at).getTime() : 0;
         if (failAt > setAt) {
             authWarn = el('div', { class: 'svc-conn-blurb' }, el('span', { class: 'pill pill-warn', text: '인증 실패' }), el('span', { text: ' ' + relTime(v.authFailure.at) + ' · ' + v.authFailure.label
-                    + ' — 토큰이 더 이상 유효하지 않습니다. `claude setup-token` 으로 다시 발급해 [토큰 교체]를 누르세요.'
-                    + ' 이 자격으로 돌던 예약 작업은 자동으로 멈춰 있으니, 교체한 뒤 관리 ▸ 자동화에서 다시 켜세요.' }));
+                    + ' — 내 계정으로 실행된 작업이 인증에 실패했습니다. 여기 등록한 토큰이 원인이라면'
+                    + ' `claude setup-token` 으로 다시 발급해 [토큰 교체]를 누르세요.'
+                    + ' 내 PC(노드)에서 실행된 작업이었다면 그 PC 의 Claude 로그인을 다시 하셔야 합니다 —'
+                    + ' 그 경우 이 안내는 30일 뒤 저절로 사라집니다.'
+                    + ' 이 실패로 멈춘 예약 작업이 있다면 관리 ▸ 자동화에서 다시 켜세요.' }));
         }
     }
     box.append(el('div', { class: 'svc-conn-row' }, svcTile(svc.key, svc.label, true), el('div', { class: 'svc-conn-main' }, el('div', { class: 'svc-conn-nm' }, el('span', { text: svc.label }), el('span', { class: 'svc-state', text: '연결됨' }), metaBits.length ? el('span', { class: 'svc-meta', text: metaBits.join(' · ') }) : null), el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb)), authWarn), el('div', { class: 'svc-conn-acts' }, ...acts)), expand);
