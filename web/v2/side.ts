@@ -22,14 +22,14 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { anchoredPopover, api, el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
+import { anchoredPopover, api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { switcherTop } from './switcher.js';
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
-import { THEME_ORDER, setThemePref, themePref, type ThemePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
+import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
@@ -121,6 +121,12 @@ export function sessText(s: Sess, projName: string): { main: string; sub: string
   if (name || job) return { main: name || job, sub: '' };
   return { main: (isIdLabel(label) ? '' : label) || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '' };
 }
+// ★내 세션인가 — 얼굴(남의 세션 표시)과 보관(×)이 **같은 판정**을 써야 한다(상민님 2026-08-19:
+//  "윤상민 아바타 같은 게 있는데 왜 있는지 모르겠고, 그것 때문인지 x 버튼이 보이질 않음").
+//  종전엔 둘 다 s.owned 만 봤는데, 그 값이 한 번이라도 false 로 오면 **내 세션에 내 얼굴이 뜨고
+//  보관 단추는 사라지는** 짝이 된다 — 사용자가 본 그림이 정확히 그것이다. 그래서 소유자 id 로도 확인한다.
+const meId = (): string => String((state.me && state.me.userId) || '');
+const isMine = (s: Sess): boolean => !!s.owned || (!!meId() && String((s.raw && s.raw.owner) || '') === meId());
 const rankOf = (k: string) => (SESS_STATES[k] ? SESS_STATES[k].rank : 9);
 /** 사이드바 세션 정렬 — 상태 순위(답 기다림이 위) 다음 최근 순. **'맨 위 세션'의 정의는 여기 하나뿐**이다
  *  (라우터가 프로젝트 → 세션으로 보낼 때도 이걸 쓴다 — 사이드바에서 보이는 순서와 어긋나면 안 된다). */
@@ -189,7 +195,7 @@ export interface SideHooks {
   /** 세션 이름 바꾸기(더블클릭 인라인 편집) — 서버 반영 + 탭·대화창·우패널까지 셸이 갱신한다. */
   onRenameSession?: (sessionId: string, label: string) => Promise<void>;
   /** 세션을 '지난 세션'으로 보냄(보관) — tmux 만 내리고 복원 좌표는 남긴다. 목록 재적재는 셸이 한다. */
-  onArchived?: () => void;
+  onArchived?: (sessionId?: string) => void;   // id 가 오면 그 세션은 **즉시** 지난 세션 취급(보관 ×)
   /** [새 작업] — **늘 새 탭**에 홈(시키는 자리)을 연다. 이미 열린 홈 탭으로 되돌아가지 않는다(그러면 쓰던 걸 덮는다). */
   onNewTask?: () => void;
   /** 통합검색(⌘K) 열기 — 지식·프로젝트·자료·세션·세션이력을 한 칸에서(web/v2/omni.ts). */
@@ -329,14 +335,25 @@ function render(): void {
       // 「도구」 — 앱(런치패드)은 콘텐츠가 아니라 도구다. 계정(신원)과 결을 갈라, 푸터가 잡동사니로 읽히지 않게 한다.
       el('div', { class: 'v2-foot-k', text: '도구' }),
       el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
-      el('div', { class: 'v2-me' },
+      // [나] — 한 줄 전체가 **내 프로필 · 환경설정**을 여는 단추다(#1843, 원준 2026-08-21).
+      //  종전엔 이름 옆에 [로그아웃]만 있었고 그 아래로 테마 3단·클래식 링크가 늘어서, 발치가 '내 것'을 모아 둔
+      //  자리가 아니라 잡동사니 줄이 되어 있었다. 슬랙·노션·리니어가 다 그렇듯 개인 설정은 **얼굴을 눌러 여는 창**
+      //  하나로 모은다 — 테마·클래식 전환·로그아웃은 전부 그 창 안에 있다(v2/me-modal.ts).
+      el('div', { class: 'v2-foot-k', text: '나' }),
+      el('button', { class: 'v2-me', type: 'button', title: '내 프로필 · 환경설정', 'aria-haspopup': 'dialog',
+        onclick: () => openMeModal({ onSaved: () => redraw() }) },
         profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
         el('span', { class: 'v2-me-name', text: name }),
-        el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })),
-      themeSeg(),
-      el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
+        sv('svg', { viewBox: '0 0 24 24', class: 'v2-me-ic', 'aria-hidden': 'true' },
+          sv('path', { d: 'M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z' }),
+          sv('path', { d: 'M19.4 13.6a7.6 7.6 0 0 0 0-3.2l1.9-1.4-1.9-3.3-2.2.9a7.7 7.7 0 0 0-2.8-1.6L14 2.5h-4l-.4 2.5a7.7 7.7 0 0 0-2.8 1.6l-2.2-.9L2.7 9l1.9 1.4a7.6 7.6 0 0 0 0 3.2L2.7 15l1.9 3.3 2.2-.9a7.7 7.7 0 0 0 2.8 1.6l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.8-1.6l2.2.9 1.9-3.3z' })))));
   renderTree(rows);
   treeEl!.scrollTop = prevScroll;
+  // 위 한 줄(prevScroll)은 **이번 렌더**의 이어붙이기다. 그런데 트리가 통째로 다시 만들어지는 길이 하나라도
+  //  남으면(패널 재마운트·화면 전환 뒤 복귀 등) prevScroll 은 0 을 읽는다 — detach 된 노드의 scrollTop 은 0 이므로.
+  //  그래서 **노드 신원과 무관하게** 위치를 key 로 기억해 두는 팀 원시함수를 겹쳐 둔다(#1635 ⓑ).
+  //  사람이 휠·키로 움직이면 복원은 즉시 손을 뗀다(사람 조작을 덮지 않는다).
+  keepSideScroll(treeEl!, 'v2-side');
   if (findHad) { findIn.focus(); if (findSel && findSel[0] != null) findIn.setSelectionRange(findSel[0], findSel[1]); }
   else if (findFocusWanted) { findFocusWanted = false; findIn.focus(); }
   bindFindKey();
@@ -699,16 +716,18 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
   const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' },
     el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }),
     el('span', { class: 'v2-ss-main' }, nameEl),
-    s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),
+    isMine(s) ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),
     // 오른쪽 끝은 **한 자리**로 고정한다 — 상태어를 조건부로 넣으면 행마다 길이가 달라 목록이 들쭉날쭉해진다(상민님 2026-08-18).
     //  상태는 왼쪽 점이, 개수는 프로젝트 행이 말한다. 여기는 '누르면 대화로 간다'는 표식만(hover 때 보인다).
     //  ⚠ 지난 세션 묶음은 그 한 자리를 **'언제'**가 받는다 — 멈춘 것들을 고르는 축은 시간이고(어제 것인가 3주 전 것인가),
     //   묶음 안 모든 행이 똑같이 시각을 가지므로 '행마다 길이가 달라진다'는 그 규칙의 사유엔 걸리지 않는다.
-    pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : glyph('chat', 'v2-ss-go'),
+    //  ⚠ 돌고 있는 세션의 그 자리엔 **보관(×) 하나만** 둔다 — 종전엔 장식용 말풍선(누르면 대화로 간다)이 ×
+    //   바로 옆에 같이 떠서, 뜻 없는 아이콘이 조작 단추와 섞여 보였다(상민님 2026-08-19).
+    pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : null,
     // 보관(×) — **도는 세션에만**(지난 세션은 이미 거기 있다), **내 세션에만**(서버도 소유자만 허용).
     //  자리는 늘 차지한다(hover 때만 보인다) — 나타나며 행을 밀면 목록이 흔들린다(압정과 같은 규약).
-    !pastRow && s.owned ? archiveBtn(s) : null);
-  if (s.owned) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
+    !pastRow && isMine(s) ? archiveBtn(s) : null);
+  if (isMine(s)) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
   return row;
 }
 
@@ -782,19 +801,10 @@ async function doArchive(s: Sess): Promise<void> {
     const q = '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : '');
     await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + q, { method: 'DELETE' });
     toast('지난 세션으로 보냈어요 — 열면 이어서 할 수 있습니다');
-    hooks.onArchived?.();
+    //  id 를 넘긴다 — 받는 쪽이 **서버 되읽기를 기다리지 않고** 이 세션을 곧바로 지난 세션으로 옮긴다.
+    //  종전엔 되읽기만 했는데, tmux 종료가 목록 API 에 반영되기까지 시차가 있어 몇 초 동안 그대로 살아 있는
+    //  것처럼 보였다(원준 2026-08-21 "새로고침해야 이동한다").
+    hooks.onArchived?.(s.id);
   } catch (e: any) { toast((e && e.message) || '보관하지 못했습니다', true); }
 }
 
-
-// ── 테마 3단 토글(#1683) — 사이드바 하단. 시스템/라이트/다크 세그먼트, 저장·적용은 theme.ts. ──
-function themeSeg(): HTMLElement {
-  const cur = themePref();
-  const lab: Record<ThemePref, string> = { system: '시스템', light: '라이트', dark: '다크' };
-  return el('div', { class: 'v2-theme', role: 'group', 'aria-label': '테마' },
-    ...THEME_ORDER.map((k) => el('button', {
-      class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
-      title: k === 'system' ? '시스템 설정을 따릅니다' : `${lab[k]} 테마로 봅니다`,
-      'aria-pressed': String(cur === k),
-      onclick: () => { setThemePref(k); redraw(); } })));
-}

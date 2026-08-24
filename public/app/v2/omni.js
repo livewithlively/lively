@@ -41,6 +41,14 @@ const KIND_PATH = {
     app: ['M4 5h16v12H4z', 'M4 9h16'],
 };
 const icon = (k, cls) => sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...KIND_PATH[k].map((d) => sv('path', { d })));
+/** 프로젝트 검색 결과의 이동 자리 — **행의 층에 맞는 화면**으로.
+ *  ⚠ 응답의 `project_id` 는 비어 있다(실측 2026-08-24: 태스크 행도 null). 그래서 `project_id || id` 로 폴백하면
+ *   **태스크 id 를 프로젝트 id 로 착각해** 엉뚱한 프로젝트로 간다(없는 번호면 빈 화면). 층을 보고 갈라 준다:
+ *   프로젝트는 셸의 프로젝트 화면, 태스크·서브태스크는 제 주소를 가진 클래식 태스크 모달(#/projects2/t/<id>). */
+function projHref(p) {
+    const id = Number(p.id);
+    return p.level === 'task' || p.level === 'subtask' ? '#/projects2/t/' + id : '#/p/' + id;
+}
 let hooks = null;
 export function setOmniHooks(h) { hooks = h; }
 // ── 한 줄로 줄이기 ── 스니펫은 `L12: …` 꼴로 오고 줄바꿈이 섞여 있다. 목록은 한 줄이 한 결과여야 훑을 수 있다.
@@ -166,9 +174,14 @@ export function omniOpen(seed) {
         hits = [];
         for (const src of SRC_ORDER) {
             for (const h of buckets.get(src) || []) {
-                if (seen.has(h.key))
+                // 같은 것으로 치는 기준 셋 — ⓐ같은 항목(key) ⓑ**같은 곳으로 가는 줄**(href) ⓒ같은 종류의 같은 이름.
+                //  ⓑ·ⓒ 가 없으면 같은 줄이 두 번 뜬다(실측 2026-08-24 'tmux': 1·2위가 글자 그대로 같은 제목이었다) —
+                //  소스가 둘이고(의미검색·grep) 프로젝트/태스크가 이름을 공유할 때 생긴다. 먼저 온 쪽(더 높은 순위)이 남는다.
+                const ids = [h.key, 'href:' + h.href, 'name:' + h.kind + '|' + h.title.trim().toLowerCase()];
+                if (ids.some((k) => seen.has(k)))
                     continue;
-                seen.add(h.key);
+                for (const k of ids)
+                    seen.add(k);
                 hits.push(h);
             }
         }
@@ -227,8 +240,7 @@ export function omniOpen(seed) {
             kind: 'proj', key: 'p:' + p.id,
             title: String(p.name || p.title || ('프로젝트 #' + p.id)),
             sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-            // 태스크·서브태스크 히트도 **그 프로젝트**로 데려간다 — 셸엔 태스크 화면이 없다(클래식 모달은 앱 프레임 안쪽).
-            href: '#/p/' + Number(p.project_id || p.id),
+            href: projHref(p),
         })), my), () => put('proj:sem', [], my));
         const knowRow = (e) => ({
             kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e), href: '#/k/' + encodeURIComponent(e.name),
@@ -247,7 +259,7 @@ export function omniOpen(seed) {
             kind: 'proj', key: 'p:' + p.id,
             title: String(p.name || p.title || ('프로젝트 #' + p.id)),
             sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-            href: '#/p/' + Number(p.project_id || p.id),
+            href: projHref(p),
         })).filter(isTitleHit), my), () => put('proj:grep', [], my));
         api('/api/ui/sources?limit=6&q=' + qs).then((r) => put('src', ((r && r.entries) || []).map((s) => ({
             kind: 'src', key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),

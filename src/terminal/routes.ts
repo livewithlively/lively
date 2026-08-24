@@ -625,6 +625,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  복원 경로(POST …/restore)가 st.node_id 를 보고 그 노드에 다시 create 를 릴레이하므로 노드 세션도 되살아난다.
       //  기본(완전 삭제)은 종전과 같다: 노드가 꺼져 있어 tmux 를 못 건드려도 사용자가 '복원 안 함'을 명시했으니 행은 지운다.
       if (reclaimQ) {
+        // ⚠ 노드가 꺼져 있으면 **아무것도 못 했으면서 ok 를 주지 않는다**(상민님 2026-08-21 "여전히 X 안 된다").
+        //  종전엔 kill 을 건너뛰고 {ok:true} 를 돌려줘, 화면은 "지난 세션으로 보냈어요" 를 띄우는데 목록은 그대로였다
+        //  — 사용자에겐 '눌러도 안 없어지는 ×' 였다. 그 PC 가 켜져야 그 세션을 멈출 수 있다는 게 사실이므로 그대로 말한다.
+        if (!killed && !nodeOnline(nodeId)) {
+          throw new HttpError(503, "그 컴퓨터(" + nodeId + ")가 지금 연결돼 있지 않아 이 세션을 멈출 수 없어요 — 켜지면 다시 시도해 주세요");
+        }
         res.json({ ok: true, reclaimed: true, killed });
         return;
       }
