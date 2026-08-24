@@ -178,6 +178,8 @@ async function download(gw, token, dest) {
 function verifyBundle(root) {
   const installer = join(root, "setup", "user-install.mjs");
   if (!existsSync(installer)) throw new Error("번들 손상 — setup/user-install.mjs 없음");
+  const hostEffects = join(root, "setup", "host-effects.mjs");
+  if (!existsSync(hostEffects)) throw new Error("번들 손상 — setup/host-effects.mjs 없음");
   const hooksDir = join(root, ".claude", "hooks");
   for (const f of REQUIRED_HOOKS) {
     const p = join(hooksDir, f);
@@ -192,7 +194,7 @@ function verifyBundle(root) {
 //   번들을 '손상'으로 오판하면 롤백이 막힌다). 대신 **있으면 구문검사한다**: 훅들이 import 하는 모듈이라
 //   여기서 깨진 채 통과하면 설치 후 sync-harness-assets 가 통째로 죽는다(구문오류는 import 시점에 터진다).
   const runners = [...REQUIRED_HOOKS, "self-update.mjs", "harness-registry.mjs"].filter((f) => existsSync(join(hooksDir, f)));
-  for (const p of [installer, ...runners.map((f) => join(hooksDir, f))]) {
+  for (const p of [installer, hostEffects, ...runners.map((f) => join(hooksDir, f))]) {
     try { execFileSync(process.execPath, ["--check", p], { stdio: "ignore", timeout: 20_000 }); }
     catch { throw new Error(`번들 손상 — 구문 오류: ${p.replace(root, "")}`); }
   }
@@ -356,7 +358,7 @@ async function main() {
 
     // 번들 동봉 설치기 — 비파괴(백업 후 센티넬/‌dedup 머지)·멱등. 이 안에서 ~/.lively/hooks/*, settings.json,
     //  codex config.toml, auto-approve, work-roots 가 최신 상태로 수렴한다.
-    const out = execFileSync(process.execPath, [installer, "--clone-root", tmp, "--harness", harnesses.join(",")], {
+    const out = execFileSync(process.execPath, [installer, "--allow-host-effects", "--clone-root", tmp, "--harness", harnesses.join(",")], {
       encoding: "utf8", timeout: INSTALL_MS, stdio: ["ignore", "pipe", "pipe"], env: process.env,
     });
     log(String(out || "").trim().split("\n").map((l) => "  " + l).join("\n"));

@@ -562,13 +562,15 @@ async function downloadBundle() {
 function verifyBundle(root) {
   const installer = join(root, "setup", "user-install.mjs");
   if (!existsSync(installer)) throw new Error("번들 손상 — setup/user-install.mjs 없음");
+  const hostEffects = join(root, "setup", "host-effects.mjs");
+  if (!existsSync(hostEffects)) throw new Error("번들 손상 — setup/host-effects.mjs 없음");
   const hooksDir = join(root, ".claude", "hooks");
   for (const h of REQUIRED_HOOKS) {
     const p = join(hooksDir, h);
     if (!existsSync(p)) throw new Error(`번들 손상 — 훅 누락: ${h}`);
     if (statSync(p).size < 64) throw new Error(`번들 손상 — 훅이 비었음: ${h}`);
   }
-  const files = [installer];
+  const files = [installer, hostEffects];
   try { for (const f of readdirSync(hooksDir)) if (f.endsWith(".mjs")) files.push(join(hooksDir, f)); } catch { /* */ }
   const cli = join(root, "cli", "lively.mjs");
   if (existsSync(cli)) files.push(cli);   // CLI 가 자기 후임을 검증한다(자기 발등 찍기 방지)
@@ -845,7 +847,7 @@ async function syncKit({ label, offerHarness }) {
     //  ⚠ LIVELY_TOKEN 을 **명시 주입**한다: user-install.mjs 의 org-seed fetch 는 아직 env 우선이라(그쪽:539),
     //   안 주면 이 셸의 스테일 env 로 시드를 받아 **번들은 새 신원·시드는 옛 신원**으로 갈린다(#916 계열).
     //   token() 이 정본(파일)을 이미 풀었으니 그 값을 그대로 물려준다 — process.env 전역을 덮지 않는 이유는 afterLogin 주석 참조.
-    run(process.execPath, [join(root, "setup", "user-install.mjs"), "--clone-root", root, "--harness", harnesses.join(",")],
+    run(process.execPath, [join(root, "setup", "user-install.mjs"), "--allow-host-effects", "--clone-root", root, "--harness", harnesses.join(",")],
       { env: { LIVELY_TOKEN: token() } });
 
     step("kit-install", "설치 중", "done", 2);
@@ -1121,6 +1123,7 @@ async function cmdUpdate(opts) {
 }
 
 const uninstallArgs = (o) => [
+  "--allow-host-effects",
   ...(o.dryRun ? ["--dry-run"] : []), ...(o.purge ? ["--purge"] : []), ...(o.yes ? ["--yes"] : []),
   ...(o.harness ? ["--harness", o.harness] : []),
 ];

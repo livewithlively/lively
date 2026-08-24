@@ -34,7 +34,23 @@ export function violatesR2(src) {
   return callsClaude.test(src) && !/CLAUDE_CONFIG_DIR/.test(src);
 }
 
+/**
+ * R3 — 일반 테스트는 영속 호스트 효과 capability를 올릴 수 없다. 실제 registry 왕복은 기본 수집에서
+ * 제외되는 *.itest.mjs + disposable Windows CI 전용이다. fake executor로 capability 자체를 검증하는
+ * setup/host-effects.test.mjs만 스캐너에서 명시적으로 면제한다.
+ */
+export function violatesR3(src) {
+  return /--allow-host-effects/.test(src)
+    || /LIVELY_HOST_EFFECTS\s*[:=]\s*["']allow["']/.test(src);
+}
+
+/** R4 — Windows User PATH registry primitive는 setup/host-effects.mjs 한 곳에만 존재해야 한다. */
+export function violatesR4(src) {
+  return /\[Environment\]::(?:Get|Set)EnvironmentVariable\(\s*['"]PATH['"]\s*,\s*['"]User['"]/.test(src);
+}
+
 export const RULES = [
   { id: "R1", violates: violatesR1, title: "자식 env 의 HOME 은 USERPROFILE 과 함께 준다(윈도우 격리 무효 방지)", fix: "sandboxEnv({home,tmp}) 를 쓰세요 — kit/testlib/os-sandbox.mjs" },
   { id: "R2", violates: violatesR2, title: "실 claude 를 부르는 테스트는 CLAUDE_CONFIG_DIR 를 명시한다(실 프로필 오염 방지)", fix: '샌드박스 안 값 또는 "" 로 덮으세요' },
+  { id: "R3", violates: violatesR3, title: "일반 테스트는 영속 호스트 효과 capability를 올리지 않는다", fix: "fake executor를 쓰거나 *.itest.mjs + disposable Windows CI로 옮기세요" },
 ];
