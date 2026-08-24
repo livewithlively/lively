@@ -9,6 +9,7 @@ import {
   spawnSync as nodeSpawnSync,
 } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, resolve, sep } from "node:path";
 
 export const HOST_EFFECTS_ALLOW_FLAG = "--allow-host-effects";
@@ -60,7 +61,8 @@ const sandboxProcessAllowed = ({ command, args = [], options = {} }, env) => {
   const name = commandName(command);
   if (["where", "command", "hostname", "whoami"].includes(name)) return true;
   const resolved = resolvedCommand(command, env);
-  const roots = [env.LIVELY_HOME, env.TEMP, env.TMP, env.TMPDIR].filter(Boolean);
+  // Linux CI에는 TMPDIR가 없을 수 있지만 테스트의 mkdtemp(tmpdir())는 여전히 /tmp 아래다.
+  const roots = [env.LIVELY_HOME, env.TEMP, env.TMP, env.TMPDIR, tmpdir()].filter(Boolean);
   if (name === "node" && (pathKey(resolved) === pathKey(process.execPath)
     || roots.some((root) => inside(resolved, root)))) return true;
   if (roots.some((root) => inside(resolved, root))) return true;

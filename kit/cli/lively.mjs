@@ -94,12 +94,13 @@ const inlineSandboxNetworkAllowed = (input) => {
   try {
     const u = new URL(typeof input === "string" ? input : input?.url);
     const port = Number(u.port);
-    return ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && port >= 49152 && port <= 65535;
+    return ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && port >= 32768 && port <= 65535;
   } catch { return false; }
 };
 const hostEffectGuard = (kind, operation, detail) => {
   if (HOST_EFFECTS_MODE === "native") return;
   if (HOST_EFFECTS_MODE === "sandbox" && kind === "external-cli" && inlineSandboxProcessAllowed(detail)) return;
+  if (HOST_EFFECTS_MODE === "sandbox" && kind === "scheduler" && inlineSandboxProcessAllowed(detail)) return;
   if (HOST_EFFECTS_MODE === "sandbox" && kind === "network" && inlineSandboxNetworkAllowed(detail)) return;
   {
     const e = new Error(`HostEffects denied ${kind}: ${operation}`);

@@ -144,6 +144,17 @@ eq("P-W2 제품 entrypoint → native capability 명시",
 }
 {
   const calls = [];
+  const tempStub = join(tmpdir(), "lively-host-effects-temp", process.platform === "win32" ? "tool.exe" : "tool");
+  const sandbox = entrypointHostEffects({
+    env: { LIVELY_HOST_EFFECTS: "deny", LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox" },
+    execFile: (...a) => { calls.push(a); return "ok"; },
+  });
+  eq("P-W1e2 sandbox → TMPDIR env가 없어도 os.tmpdir 내부 stub 허용",
+    { result: sandbox.execFileSync(tempStub), calls: calls.length },
+    { result: "ok", calls: 1 });
+}
+{
+  const calls = [];
   const env = { LIVELY_HOST_EFFECTS: "deny", LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", LIVELY_HOME: "C:\\sandbox" };
   const sandbox = entrypointHostEffects({ env, execFile: (...a) => { calls.push(a); return "ok"; }, spawnSync: (...a) => { calls.push(a); return { status: 0 }; } });
   eq("P-W1e sandbox → 샌드박스 절대경로 stub 허용",
@@ -223,6 +234,10 @@ eq("E2 adapter allow → changed 상태",
   ];
   eq("E9b 생산 설치·업데이트 진입점이 capability를 명시",
     sources.map((src) => src.includes("--allow-host-effects")), [true, true, true, true, true]);
+  const bootstrap = sources[0];
+  eq("P-W3 부트스트랩 인라인 경계가 공용 sandbox 포트·스케줄러 정책과 패리티",
+    { ephemeral: bootstrap.includes("port >= 32768"), schedulerStub: bootstrap.includes('kind === "scheduler" && inlineSandboxProcessAllowed') },
+    { ephemeral: true, schedulerStub: true });
 }
 
 console.log(`host-effects tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
