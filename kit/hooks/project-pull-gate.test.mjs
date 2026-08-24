@@ -163,6 +163,47 @@ async function main() {
         ok(`[${id}] sync:"both" → down-sync 수행(up 은 C3)`);
       }
 
+      // ── #1856 세션 폴더 리다이렉트 — cwd 가 세션 폴더인 세션에서도 프로젝트 폴더로 pull 이 가야 한다 ──
+      //  cwd 가 프로젝트 폴더 → 세션 폴더로 바뀌면서(#1719) 이 탐색이 세션 마커(sync:"none")에서 멈춰
+      //  **문서 싱크가 통째로 죽어 있었다**. 세션 마커의 project_dir 로 갈아타는 것이 그 복구다.
+      {
+        // E6 — 갈아타서 프로젝트 폴더에 받는다. 세션 폴더에는 아무것도 쓰지 않는다(sync:"none" 의 뜻).
+        const proj = await mkProjectDir(root, `${id}/sd6/proj`, { project_id: PROJECT_ID, sync: "pull" });
+        const sess = await mkProjectDir(root, `${id}/sd6/sess`, { kind: "session", session_id: "box-x", project_id: PROJECT_ID, project_dir: proj, sync: "none" });
+        await runHook(hookPath, sess, base);
+        assert.equal(readOrNull(path.join(proj, "AGENTS.md")), SERVER_FILES["AGENTS.md"], `[${id}] 세션 폴더 세션에서 프로젝트 폴더로 pull 이 안 됨(#1856 회귀)`);
+        assert.equal(readOrNull(path.join(proj, "docs", "spec.md")), SERVER_FILES["docs/spec.md"], `[${id}] 하위 문서 pull 누락`);
+        assert.equal(readOrNull(path.join(sess, "AGENTS.md")), null, `[${id}] 세션 폴더에 서버 파일을 쏟았다(sync:"none" 위반)`);
+        ok(`[${id}] 세션 폴더 마커 → project_dir 로 갈아타 pull(#1856)`);
+      }
+      {
+        // E7 — 이 컴퓨터에 프로젝트 폴더가 없다(project_dir 부재) → 아무 데도 안 쓴다.
+        const sess = await mkProjectDir(root, `${id}/sd7/sess`, { kind: "session", project_id: PROJECT_ID, project_dir: null, sync: "none" });
+        await runHook(hookPath, sess, base);
+        assert.equal(readOrNull(path.join(sess, "AGENTS.md")), null, `[${id}] project_dir 이 없는데 세션 폴더에 받았다`);
+        ok(`[${id}] 세션 마커 + project_dir 부재 → no-op`);
+      }
+      {
+        // E8 — 폴더는 있는데 마커가 없다 = 싱크 대상이 아니다(fail-safe). 넓히면 남의 폴더를 덮는다.
+        const proj = path.join(root, `${id}/sd8/proj`);
+        await fsp.mkdir(proj, { recursive: true });
+        const claude = path.join(proj, "CLAUDE.md");
+        await fsp.writeFile(claude, USER_CLAUDE_MD);
+        const sess = await mkProjectDir(root, `${id}/sd8/sess`, { kind: "session", project_id: PROJECT_ID, project_dir: proj, sync: "none" });
+        await runHook(hookPath, sess, base);
+        assert.equal(readOrNull(path.join(proj, "AGENTS.md")), null, `[${id}] 마커 없는 폴더에 서버 파일을 썼다(fail-safe 위반)`);
+        assert.equal(readOrNull(claude), USER_CLAUDE_MD, `[${id}] 마커 없는 폴더의 사용자 파일이 덮어써짐`);
+        ok(`[${id}] 세션 마커 + 대상 폴더에 마커 없음 → no-op(fail-safe)`);
+      }
+      {
+        // E10 — 갈아탄 마커도 세션 마커면 잘못된 상태다. 한 번만 따라가고 멈춘다.
+        const proj = await mkProjectDir(root, `${id}/sd10/proj`, { kind: "session", project_id: PROJECT_ID, project_dir: null, sync: "none" });
+        const sess = await mkProjectDir(root, `${id}/sd10/sess`, { kind: "session", project_id: PROJECT_ID, project_dir: proj, sync: "none" });
+        await runHook(hookPath, sess, base);
+        assert.equal(readOrNull(path.join(proj, "AGENTS.md")), null, `[${id}] 세션 마커가 세션 마커를 가리키는데 받았다`);
+        ok(`[${id}] 갈아탄 마커도 kind:"session" → no-op`);
+      }
+
       // ── 알 수 없는 sync 값은 폴백 규칙으로 — 오타가 fail-open 되면 안 된다 ──
       {
         const dir = await mkProjectDir(root, `${id}/typo`, { project_id: PROJECT_ID, sync: "PULL-ALL" });
