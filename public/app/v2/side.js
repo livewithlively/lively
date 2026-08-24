@@ -27,6 +27,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isArchivedProj, isLiveSess, isPastSess, isTrashedSess, sessWork } from './views.js';
+import { makeSplitter, readSplit, writeSplit } from './split.js'; // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js'; // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
 import { switcherTop } from './switcher.js';
@@ -396,10 +397,9 @@ function render() {
     const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
     // 확인할 것 = 확인 필요(waiting, 보이는 것 전부 — 프로젝트 세션은 팀 누구든 답할 수 있다) + 작업 완료 미열람(내 것만).
     const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
-    host.replaceChildren(navRow(), // 맨 위 — 뒤로/앞으로 + 통합검색(상민님 2026-08-20, 클로드 데스크톱 문법)
-    switcherTop({ people, faces: faceOwners }), // 좌상단 워크스페이스 **문패 카드**(#1750 메뉴 + 얼굴 스택) — 여기가 어느 집인지 말하는 자리
-    // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
-    el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' }, 
+    // ⚠ 바로 가기 칸은 **밖에서 잡아 두어야** 한다 — 아래 나눔선(navSplitter)이 이 칸의 높이를 조정한다.
+    //  칸을 인라인으로 두면 손잡이가 가리킬 대상을 못 잡는다.
+    const navEl = el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' }, 
     // [새 작업](원준 2026-08-20) — 홈은 이제 **고정 탭이 아니라 새 탭으로 여는 화면**이다. 그래서 이 줄은
     //  '홈으로 돌아가기'가 아니라 '새 일을 벌이는 자리'이고, 누를 때마다 빈 탭이 하나 열린다(브라우저 ⌘T 문법).
     //  Alt+클릭·가운데클릭과 결이 어긋나지 않도록 href 는 그대로 두고(주소는 여전히 #/), 기본 이동만 가로챈다.
@@ -421,7 +421,13 @@ function render() {
     //  알아야 하고 안 되면 그 자리에서 켜야 해서, 관리탭 안쪽이 아니라 여기 상시 자리로 올렸다.
     el('a', { class: 'v2-nav' + (last.activeKey() === 'connect' ? ' on' : ''), href: '#/connect', 'data-nav': 'connect',
         title: '외부 앱 연결 — AI가 내 계정으로 쓸 수 있는 앱' }, glyph('link', 'v2-nav-ic'), el('span', { class: 'n', text: '외부 앱 연결' })), ...(livOn ? [el('a', { class: 'v2-nav' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv',
-            title: '리브 — 이 워크스페이스를 맡아 보는 담당자' }, el('span', { class: 'v2-nav-lm', text: 'L' }), el('span', { class: 'n', text: '리브' }))] : [])), el('div', { class: 'v2-side-sec' }, countEl, findBtn(), filterBtn(fltN, liveAll, doneCount), 
+            title: '리브 — 이 워크스페이스를 맡아 보는 담당자' }, el('span', { class: 'v2-nav-lm', text: 'L' }), el('span', { class: 'n', text: '리브' }))] : []));
+    host.replaceChildren(navRow(), // 맨 위 — 뒤로/앞으로 + 통합검색(상민님 2026-08-20, 클로드 데스크톱 문법)
+    switcherTop({ people, faces: faceOwners }), // 좌상단 워크스페이스 **문패 카드**(#1750 메뉴 + 얼굴 스택) — 여기가 어느 집인지 말하는 자리
+    // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
+    navEl, 
+    // 리브|진행 중 사이의 가로 구분선 = 끌 수 있는 경계. 위로 올리면 세션 목록이 그만큼 길어진다.
+    navSplitter(navEl), el('div', { class: 'v2-side-sec' }, countEl, findBtn(), filterBtn(fltN, liveAll, doneCount), 
     // [정리](#1719 안 C) — 프로젝트를 여러 개 골라 한 번에 치운다. 219개 중 「진행 중」은 열 몇 개뿐이라,
     //  하나씩 우클릭해서는 정리가 끝나지 않는다. 이 버튼이 그 일을 '한 번에'로 바꾼다.
     tidyBtn(), 
@@ -447,6 +453,7 @@ function render() {
     //  하나로 모은다 — 테마·클래식 전환·로그아웃은 전부 그 창 안에 있다(v2/me-modal.ts).
     el('div', { class: 'v2-foot-k', text: '나' }), el('button', { class: 'v2-me', type: 'button', title: '내 프로필 · 환경설정', 'aria-haspopup': 'dialog',
         onclick: () => openMeModal({ onSaved: () => redraw() }) }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-me-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z' }), sv('path', { d: 'M19.4 13.6a7.6 7.6 0 0 0 0-3.2l1.9-1.4-1.9-3.3-2.2.9a7.7 7.7 0 0 0-2.8-1.6L14 2.5h-4l-.4 2.5a7.7 7.7 0 0 0-2.8 1.6l-2.2-.9L2.7 9l1.9 1.4a7.6 7.6 0 0 0 0 3.2L2.7 15l1.9 3.3 2.2-.9a7.7 7.7 0 0 0 2.8 1.6l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.8-1.6l2.2.9 1.9-3.3z' })))));
+    navFit(navEl); // 붙고 나서야 실제 높이를 알 수 있다 — 저장값을 지금 줄 수에 맞춰 앉힌다
     renderTree(rows);
     //  ① 보던 줄을 같은 자리에 → ② 그 줄이 사라졌으면 옛 픽셀값으로(그래도 아무것도 안 하는 것보단 낫다).
     if (!anchorApply(anchor))
@@ -593,6 +600,40 @@ function paintTidyBar() {
         go.disabled = true;
     go.onclick = () => void tidyArchive();
     tidyBarEl.replaceChildren(el('span', { class: 'v2-tidybar-k', text: n ? `${n}개 선택됨` : '정리할 프로젝트를 고르세요' }), go, el('button', { class: 'btn-text', type: 'button', text: '끝내기', onclick: () => setTidy(false) }));
+}
+// ── 바로 가기 칸의 아래 경계 = 끌 수 있는 나눔선(원준 2026-08-24) ────────────────
+//  "세션을 보여줄 수 있는 길이를 더 길게 하고 싶다 — 리브와 진행 중 사이 가로 구분선을 잡아 위로 올려서,
+//   확인할 것까지 숨겨질 만큼 올라갔다가 자석처럼 착 붙게. 대신 새 작업 버튼은 보일 수 있을 때까지."
+//  그래서 범위는 [새 작업 한 줄, 네 줄 전부]다. 아래로 다 내리면 지금 화면 그대로, 위로 다 올리면
+//  세션 목록이 그 높이(실측 149px ≈ 세션 네 줄)만큼 길어진다.
+//  ⚠ **0(완전히 감추기)까지 가지 않는다** — 다 감추면 되돌릴 손잡이만 남고 여기가 무슨 자리였는지 사라진다.
+//   「새 작업」 한 줄이 늘 남으면 그 줄이 곧 '여기가 바로 가기 칸'이라는 표식이자 되돌아오는 길이다.
+const NAV_SPLIT_KEY = 'side-nav';
+const NAV_MIN = 40; // 「새 작업」 한 줄(34) + 아래 여백(6)
+const NAV_SNAP = 14; // 손끝이 이 안에 들어오면 착 붙는다(자석)
+const navNatural = (nav) => (nav.scrollHeight > 0 ? nav.scrollHeight : 149);
+const navSnap = (px, nat) => (px <= NAV_MIN + NAV_SNAP ? NAV_MIN : px >= nat - 12 ? nat : px);
+/** 저장된 값(또는 기본=전부 펼침)을 지금 칸 높이에 맞춰 앉힌다 — 줄 수가 바뀌어도(리브 off) 어긋나지 않게. */
+function navFit(nav) {
+    const nat = navNatural(nav);
+    nav.style.setProperty('--v2-navh', Math.min(readSplit(NAV_SPLIT_KEY, nat), nat) + 'px');
+}
+function navSplitter(nav) {
+    //  ⚠ 제 클래스를 하나 더 붙인다 — 이 손잡이가 앉는 자리(사이드바 패널 안)는 선택자로 집기 어렵고,
+    //   자리로 고르면(.v2-side > …) 패널 구조가 바뀌는 순간 조용히 스타일이 빠진다.
+    const h = makeSplitter({
+        axis: 'y', key: NAV_SPLIT_KEY, cssVar: '--v2-navh', target: nav,
+        def: 9999, // 기본 = 전부 펼침(아래 max 가 자연 높이로 깎는다)
+        min: NAV_MIN, max: () => navNatural(nav),
+        grow: 1, // 손잡이 위쪽 칸이 조정 대상 — 위로 끌면 줄어든다
+        label: '바로 가기 칸 높이 — 위로 올리면 세션 목록이 길어집니다',
+        // 자석: 끄는 동안에도 붙여 보여 준다(놓고 나서야 붙으면 그건 자석이 아니라 보정이다).
+        onDrag: (px) => { const v = navSnap(px, navNatural(nav)); if (v !== px)
+            nav.style.setProperty('--v2-navh', v + 'px'); },
+        onEnd: (px) => { writeSplit(NAV_SPLIT_KEY, nav, '--v2-navh', navSnap(px, navNatural(nav))); },
+    });
+    h.classList.add('v2-navsplit');
+    return h;
 }
 function newBtn() {
     const b = el('button', { class: 'v2-add', type: 'button', title: '새 프로젝트 — 만들고 그 작업대로 갑니다', 'aria-label': '새 프로젝트' }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
