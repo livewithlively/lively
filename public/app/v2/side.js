@@ -29,7 +29,7 @@ import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork } from './views.js';
 import { switcherTop } from './switcher.js';
 import { mountDesktopUpdate } from '../desktop-update.js'; // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
-import { THEME_ORDER, harnessThemeSync, setHarnessThemeSync, setThemePref, themePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
+import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, pushThemeToOpenTabs, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
 const OPEN_KEY = 'lively_v2_opened';
@@ -878,6 +878,24 @@ async function doArchive(s) {
         toast((e && e.message) || '보관하지 못했습니다', true);
     }
 }
+// 테마를 바꾼 직후 — '현재 열린 탭 모두 적용' 이 켜져 있으면 열린 세션 탭의 하네스까지 그 자리에서 바꾼다(#1683 후속2).
+//  결과는 토스트로 **그대로** 알린다("3개 탭을 바꿨어요 · 1개는 …") — 하네스마다 지원 여부가 달라
+//  조용히 성공으로 접으면 사용자가 왜 한 탭만 다른지 알 수 없다.
+async function pushThemeIfOn() {
+    if (!applyToOpenTabs())
+        return;
+    try {
+        const { v2OpenSessionIds } = await import('./main.js');
+        const ids = v2OpenSessionIds();
+        if (!ids.length)
+            return;
+        const r = await pushThemeToOpenTabs(ids);
+        toast([r.applied ? `${r.applied}개 탭을 바꿨어요` : '바꾼 탭이 없어요', ...r.notes].join(' · '));
+    }
+    catch (e) {
+        toast((e && e.message) || '열린 탭에 적용하지 못했습니다', true);
+    }
+}
 // ── 테마 3단 토글(#1683) — 사이드바 하단. 시스템/라이트/다크 세그먼트, 저장·적용은 theme.ts. ──
 //  아래 줄은 'AI 세션도 이 테마로' 스위치다(#1683 후속) — 터미널 **안에서 도는 하네스**까지 맞출지.
 //  화면(사이드바·터미널 칠)은 이 스위치와 무관하게 늘 위 선택을 따르므로, 스위치를 세그먼트와 한 묶음으로 둔다.
@@ -889,8 +907,10 @@ function themeSeg() {
         class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
         title: k === 'system' ? '시스템 설정을 따릅니다' : `${lab[k]} 테마로 봅니다`,
         'aria-pressed': String(cur === k),
-        onclick: () => { setThemePref(k); redraw(); }
+        onclick: () => { setThemePref(k); redraw(); void pushThemeIfOn(); }
     }))), el('label', { class: 'v2-theme-ai',
+        title: '켜면 테마를 바꿀 때 **지금 열려 있는 세션 탭**의 하네스까지 그 자리에서 바꿉니다.\n세션 입력창에 하네스의 테마 명령을 넣는 방식이라, 쓰던 글 뒤에 한 줄이 붙을 수 있어요.\n하네스마다 지원 여부가 달라 바꾼 개수와 못 바꾼 이유를 알려드립니다.' }, el('input', { type: 'checkbox', class: 'v2-theme-ai-cb', ...(applyToOpenTabs() ? { checked: '' } : {}),
+        onchange: (e) => { setApplyToOpenTabs(!!e.target.checked); redraw(); } }), el('span', { text: '현재 열린 탭 모두 적용' })), el('label', { class: 'v2-theme-ai',
         title: '켜면 새로 여는 AI 세션이 이 테마로 뜹니다. 끄면 하네스가 저마다 저장해 둔 테마를 씁니다.\n이미 열려 있는 세션은 바뀌지 않아요 — 하네스는 시작할 때 테마를 정합니다.' }, el('input', { type: 'checkbox', class: 'v2-theme-ai-cb', ...(on ? { checked: '' } : {}),
         onchange: (e) => { setHarnessThemeSync(!!e.target.checked); redraw(); } }), el('span', { text: 'AI 세션도 이 테마로' })));
 }

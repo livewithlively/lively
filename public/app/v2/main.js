@@ -1061,4 +1061,17 @@ function openProjectPicker(anchor, sessionId, tab) {
 export function v2Refresh() { void loadData().then(() => { drawSide(); if (tabsApi)
     void renderRoute(tabsApi.active()); }); }
 export function v2Toast(msg) { toast(msg); }
+// 지금 열려 있는 **세션 탭**의 세션 id 들(#1683 후속2) — '현재 열린 탭 모두 적용' 이 이걸 대상으로 삼는다.
+//  세션 탭만 골라낸다(홈·프로젝트·앱 탭은 하네스가 없다). chat 핸들이 곧 그 탭이 붙어 있는 세션이다.
+export function v2OpenSessionIds() {
+    if (!tabsApi)
+        return [];
+    const out = [];
+    for (const t of tabsApi.tabs) {
+        const id = t.chat?.id;
+        if (id && !out.includes(id))
+            out.push(id);
+    }
+    return out;
+}
 export function v2View() { return $view(); }
