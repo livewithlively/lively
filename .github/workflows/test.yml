@@ -134,6 +134,12 @@ jobs:
       #  이제 desktop-core 의 J8('진짜로 띄워 본다')이 이 러너에서 돌아 같은 계열을 막는다.
       - name: kit·desktop 테스트 (윈도우)
         shell: pwsh
+        # scripts/run-tests.mjs 를 거치지 않는 직접 실행 루프도 공통 러너와 같은 capability를 강제한다.
+        # 테스트가 필요한 자식 프로세스·loopback mock만 sandbox가 허용하고, 실 호스트 효과는 계속 deny다.
+        env:
+          LIVELY_HOST_EFFECTS: deny
+          LIVELY_HOST_EFFECTS_TEST_MODE: sandbox
+          LIVELY_NO_BROWSER: '1'
         run: |
           $files = Get-ChildItem -Path kit,desktop -Recurse -Filter *.test.mjs |
                    Where-Object { $_.Name -notlike '*.itest.mjs' -and $_.FullName -notlike '*node_modules*' } | Sort-Object FullName
