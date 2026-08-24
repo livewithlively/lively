@@ -37,6 +37,7 @@ const OPEN_KEY = 'lively_v2_opened';
 const DONE_KEY = 'lively_v2_side_done';   // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
 const PAST_KEY = 'lively_v2_side_past';   // '지난 세션' 묶음을 펴 둔 프로젝트 키
+const SELCLOSED_KEY = 'lively_v2_side_selclosed';   // 선택된 프로젝트인데도 **일부러 접어 둔** 것
 const ALL_KEY = 'lively_v2_side_all';     // '1' = 「전체 프로젝트」 묶음을 펴 둠 (기본 접힘 — 매일 화면은 '진행 중'만)
 const PIN_KEY = 'lively_v2_side_pin';     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
@@ -45,7 +46,11 @@ let openSet = new Set<string>();
 let pastSet = new Set<string>();            // '지난 세션'을 펴 둔 프로젝트 — 브라우저에 기억(도는 세션과 따로 접힌다)
 let allOpen = false;                        // 「전체 프로젝트」 펼침 — 브라우저에 기억
 let pinnedSet = new Set<string>();          // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
-const closedSelected = new Set<string>();   // 선택 프로젝트를 일부러 접은 것 — 세션(페이지) 수명만
+// 선택된 프로젝트인데도 사람이 **일부러 접어 둔** 것. ⚠ 종전엔 페이지 수명만 기억했다(new Set 만 두고 저장 안 함)
+//  — '선택은 늘 보이는 게 기본'이라는 뜻이었지만, 실제로는 **접어도 새로고침하면 도로 열렸다**(원준 2026-08-24
+//  "한 번 닫아둔 지난 세션이 계속 열려서 내가 보는 걸 가린다"). 접는 건 사람이 한 명시적 결정이라 기본값이
+//  덮을 값이 아니다. 그래서 브라우저에 남긴다 — 다시 펴면 그 자리에서 지워진다(펴 두는 게 다시 기본이 된다).
+let closedSelected = new Set<string>();
 let showDone = false;
 let mineOnly = false;
 let sideFilter = '';
@@ -64,6 +69,7 @@ function init(): void {
   inited = true;
   openSet = loadSet(OPEN_KEY);
   pastSet = loadSet(PAST_KEY);
+  closedSelected = loadSet(SELCLOSED_KEY);
   try { allOpen = localStorage.getItem(ALL_KEY) === '1'; } catch (_) { /* noop */ }
   pinnedSet = loadSet(PIN_KEY);
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
@@ -625,7 +631,10 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
   const caret = has
     ? el('button', { class: 'v2-car', type: 'button', 'aria-label': isOpen ? '접기' : '펼치기', 'aria-expanded': String(isOpen), text: '›', onclick: (e: Event) => {
       e.preventDefault(); e.stopPropagation();
-      if (isSel) { if (isOpen) closedSelected.add(pk); else closedSelected.delete(pk); }
+      if (isSel) {
+        if (isOpen) closedSelected.add(pk); else closedSelected.delete(pk);
+        saveSet(SELCLOSED_KEY, closedSelected);   // 접은 결정을 새로고침 너머로 지킨다
+      }
       if (isOpen) openSet.delete(pk); else openSet.add(pk);
       saveSet(OPEN_KEY, openSet); renderTree(); } })
     : el('span', { class: 'v2-car none', 'aria-hidden': 'true' });
