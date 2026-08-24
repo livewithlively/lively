@@ -271,19 +271,19 @@ function splitFootprint(fps: Footprint[]): { groups: FpGroup[]; keep: FpKeep[] }
   for (const fp of fps) {
     for (const k of fp.knowledge_created) {
       const key = 'k:' + k.name; if (seen.has(key)) continue; seen.add(key);
-      if (k.touched_after) keep.push({ label: k.title || k.name, why: '이 세션 뒤에 누군가 고쳐서 그대로 둡니다' });
+      if (k.touched_after) keep.push({ label: k.title || k.name, why: '이 세션이 끝난 뒤에 수정된 문서라 남겨요' });
       else kc.push({ key: k.name, label: k.title || k.name });
     }
     for (const k of fp.knowledge_edited) {
       const key = 'k:' + k.name; if (seen.has(key)) continue; seen.add(key);
-      if (k.touched_after) keep.push({ label: k.title || k.name, why: '이 세션 뒤에 누군가 또 고쳐서 되돌리지 않습니다' });
+      if (k.touched_after) keep.push({ label: k.title || k.name, why: '이 세션이 끝난 뒤에 또 수정된 문서라 되돌리지 않아요' });
       else ke.push({ key: k.name, label: k.title || k.name });
     }
     for (const p of fp.projects) {
       const key = 'p:' + p.id; if (seen.has(key)) continue; seen.add(key);
       if (!p.created_here) continue;                       // 이 세션이 만들지 않은 프로젝트는 애초에 대상이 아니다(붙어만 있던 것)
-      if (p.other_sessions) keep.push({ label: `#${p.id} ${p.name}`, why: `다른 세션 ${p.other_sessions}개가 붙어 있어 그대로 둡니다` });
-      else if (p.touched_after) keep.push({ label: `#${p.id} ${p.name}`, why: '이 세션 뒤에 누군가 손대서 그대로 둡니다' });
+      if (p.other_sessions) keep.push({ label: `#${p.id} ${p.name}`, why: `다른 세션 ${p.other_sessions}개가 붙어 있는 프로젝트라 남겨요` });
+      else if (p.touched_after) keep.push({ label: `#${p.id} ${p.name}`, why: '이 세션이 끝난 뒤에 수정된 프로젝트라 남겨요' });
       else pj.push({ key: String(p.id), label: `#${p.id} ${p.name}` });
     }
     for (const x of fp.sources) {
@@ -294,9 +294,10 @@ function splitFootprint(fps: Footprint[]): { groups: FpGroup[]; keep: FpKeep[] }
   }
   const groups: FpGroup[] = [];
   if (kc.length) groups.push({ kind: 'kc', title: `만든 지식 ${kc.length}건 지우기`, items: kc, count: kc.length });
-  if (ke.length) groups.push({ kind: 'ke', title: `고친 지식 ${ke.length}건 이 세션 직전 내용으로 되돌리기`, hint: '지우지 않습니다 — 고치기 전으로 돌아갑니다', items: ke, count: ke.length });
+  if (ke.length) groups.push({ kind: 'ke', title: `고친 지식 ${ke.length}건 이 세션 전 내용으로 되돌리기`, items: ke, count: ke.length });
   if (pj.length) groups.push({ kind: 'pj', title: `만든 프로젝트 ${pj.length}건 지우기`, hint: '그 안의 작업·첨부·폴더도 함께', items: pj, count: pj.length });
-  if (src.length) groups.push({ kind: 'src', title: `만든 자료 ${src.length}건 지우기`, hint: '이 세션이 만든 지식에만 붙어 있던 원본', items: src, count: src.length });
+  // 자료는 세션이 '만든' 것이 아니다 — 올렸거나 수집된 원본이 이 세션의 지식에 붙어 있는 것이다(원준 지적). 붙어 있는 관계로 말한다.
+  if (src.length) groups.push({ kind: 'src', title: `원본 자료 ${src.length}건 지우기`, hint: '위에서 지우는 지식에만 붙어 있는 자료예요', items: src, count: src.length });
   if (acts) groups.push({ kind: 'ac', title: `작업 기록 ${acts}건 지우기`, items: [], count: acts });
   return { groups, keep };
 }
@@ -318,7 +319,7 @@ async function purgeDialog(opts: {
     }
     // 한 번에 전부 풀기 — 체크를 하나씩 풀지 않아도 "세션만 지우기"로 갈 수 있게.
     const only = el('button', { class: 'btn-text sess-purge-only', type: 'button', text: '결과물은 남기고 대화 기록만 지우기' });
-    only.addEventListener('click', () => { for (const b of boxes) b.box.checked = false; });
+    only.addEventListener('click', () => { for (const b of boxes) { b.box.checked = false; b.box.dispatchEvent(new Event('change')); } });
     rows.push(only);
   } else if (opts.noFootprint) {
     // 다리(대화 uuid ↔ tmux 세션)가 없으면 작업 기록을 **찾을 수 없다**. 없다고 단언하지 않는다.
@@ -326,11 +327,27 @@ async function purgeDialog(opts: {
       el('span', { text: '이 세션이 만든 지식·프로젝트·작업 기록은 찾지 못했어요' }),
       el('span', { class: 'sub', text: '있더라도 이 삭제로는 지워지지 않고 그대로 남습니다' })));
   }
-  if (opts.keep.length) {
-    rows.push(el('p', { class: 'sess-purge-h' }, el('span', { text: '남는 것' })));
-    for (const k of opts.keep.slice(0, 6)) rows.push(el('p', { class: 'sess-purge-keep' }, el('span', { class: 'n', text: k.label }), el('span', { class: 'w', text: k.why })));
-    if (opts.keep.length > 6) rows.push(el('p', { class: 'sess-purge-keep' }, el('span', { class: 'w', text: `외 ${opts.keep.length - 6}건` })));
-  }
+  // 「남는 것」은 **선택을 따라 움직인다**(원준 2026-08-24: "내가 위에서 선택하는 것에 따라 동적으로 바뀌어야").
+  //  고를 수 없는 것(남이 손댄 것)에 더해, 체크를 푼 묶음의 항목이 그 이유("체크를 풀어서")와 함께 여기로 내려온다.
+  //  확인 직전에 "결국 무엇이 남나"를 한 자리에서 읽게 — 체크 상태를 머릿속에서 합산시키지 않는다.
+  const keepBox = el('div', { class: 'sess-purge-keepbox' });
+  const paintKeep = () => {
+    const list: FpKeep[] = [...opts.keep];
+    for (const g of opts.groups) {
+      const b = boxes.find((x) => x.kind === g.kind);
+      if (!b || b.box.checked) continue;
+      if (g.items.length) for (const it of g.items) list.push({ label: it.label, why: g.kind === 'ke' ? '체크를 풀어서 이 세션이 고친 내용 그대로 남겨요' : '체크를 풀어서 남겨요' });
+      else list.push({ label: g.title.replace(/ 지우기$/, ''), why: '체크를 풀어서 남겨요' });
+    }
+    keepBox.replaceChildren();
+    if (!list.length) return;
+    keepBox.append(el('p', { class: 'sess-purge-h' }, el('span', { text: `남는 것 · ${list.length}` })));
+    for (const k of list.slice(0, 8)) keepBox.append(el('p', { class: 'sess-purge-keep' }, el('span', { class: 'n', text: k.label }), el('span', { class: 'w', text: k.why })));
+    if (list.length > 8) keepBox.append(el('p', { class: 'sess-purge-keep' }, el('span', { class: 'w', text: `외 ${list.length - 8}건` })));
+  };
+  for (const b of boxes) b.box.addEventListener('change', paintKeep);
+  rows.push(keepBox);
+  paintKeep();
   const ok = await confirmDialog({
     title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
     message: opts.message,
