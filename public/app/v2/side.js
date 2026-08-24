@@ -37,7 +37,12 @@ import { mountDesktopUpdate } from '../desktop-update.js'; // 데스크톱 앱�
 const OPEN_KEY = 'lively_v2_opened';
 const DONE_KEY = 'lively_v2_side_done'; // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine'; // '1' = 내 프로젝트만
-const PAST_KEY = 'lively_v2_side_past'; // '지난 세션' 묶음을 펴 둔 프로젝트 키
+// ⚠ 「지난 세션」 펼침은 **기억하지 않는다**(원준 2026-08-24 — "난 연 적이 없는데 지멋대로 펼쳐져 있어").
+//  종전엔 lively_v2_side_past 로 브라우저에 남겨서, 언젠가 한 번(실수로라도) 편 묶음이 **그 뒤로 영원히**
+//  펼쳐진 채 열렸다. 편 사람은 그걸 기억하지 못하니 화면이 저 혼자 펼친 것으로 읽힌다.
+//  지난 세션은 배경이지 본문이 아니다 — 기본은 늘 접힘이고, 편 것은 그 페이지 동안만 산다.
+//  「전체 프로젝트」가 같은 이유로 같은 처방을 받았다(2026-08-23).
+const PAST_KEY_LEGACY = 'lively_v2_side_past';
 const SELCLOSED_KEY = 'lively_v2_side_selclosed'; // 선택된 프로젝트인데도 **일부러 접어 둔** 것
 // ⚠ 「전체 프로젝트」 펼침은 **기억하지 않는다**(원준 2026-08-23 — "사용자가 변경하기 전에는 디폴트로 접힌 상태").
 //  종전엔 lively_v2_side_all 로 브라우저에 남겨, 한 번 편 사람은 그 뒤로 늘 수백 행이 펼쳐진 채 열렸다. 이제 페이지 수명만.
@@ -46,7 +51,7 @@ const PIN_KEY = 'lively_v2_side_pin'; // 위에 고정한 프로젝트 키('p:12
 const BINS_KEY = 'lively_v2_side_bins'; // '1' = 아카이브·휴지통 두 행을 **발치에 고정**(목록을 내려도 늘 보인다, #1851)
 const MAX_SESS = 12; // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 let openSet = new Set();
-let pastSet = new Set(); // '지난 세션'을 펴 둔 프로젝트 — 브라우저에 기억(도는 세션과 따로 접힌다)
+const pastSet = new Set(); // '지난 세션'을 펴 둔 프로젝트 — **페이지 수명만**(위 주석)
 let allOpen = false; // 「전체 프로젝트」 펼침 — 페이지 수명만(새로 열면 늘 접힘)
 let binsPinned = false; // 아카이브·휴지통 행을 발치에 고정(#1851) — 브라우저에 기억
 let pinnedSet = new Set(); // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
@@ -95,7 +100,10 @@ function init() {
         return;
     inited = true;
     openSet = loadSet(OPEN_KEY);
-    pastSet = loadSet(PAST_KEY);
+    try {
+        localStorage.removeItem(PAST_KEY_LEGACY);
+    }
+    catch (_) { /* noop */ } // 예전에 남긴 펼침 기록을 치운다
     closedSelected = loadSet(SELCLOSED_KEY);
     try {
         localStorage.removeItem(ALL_KEY_LEGACY);
@@ -873,7 +881,11 @@ function projRow(r, sess, past, activeKey, selectedPk) {
             } })
         : el('span', { class: 'v2-car none', 'aria-hidden': 'true' });
     // '지난 세션' 묶음 — 도는 세션 아래에 접힌 한 줄. 상태 필터로 지난 상태를 골랐으면 이미 그걸 보러 온 것이니 편다.
-    const pastOpen = past.length > 0 && (pastSet.has(pk) || (!!stateFilter && !sess.length));
+    //  ⚠ 필터 때문에 저절로 펴지는 길은 **걸러 놓은 그 상태가 지난 세션 안에 실제로 있을 때**로 좁힌다.
+    //   종전엔 '필터가 켜져 있고 도는 세션이 없으면' 이었다 — 그래서 '확인 필요'(도는 상태)로 걸러도
+    //   멈춘 세션만 있는 프로젝트들의 묶음이 우수수 펼쳐졌다. 걸러 놓은 것이 그 안에 없으면 펼 이유가 없다.
+    const pastHasFiltered = !!stateFilter && past.some((s) => s.stateKey === stateFilter);
+    const pastOpen = past.length > 0 && (pastSet.has(pk) || (pastHasFiltered && !sess.length));
     const tipBits = p
         ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
         : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
@@ -935,8 +947,7 @@ function pastHead2(pk, n, open) {
                 pastSet.delete(pk);
             else
                 pastSet.add(pk);
-            saveSet(PAST_KEY, pastSet);
-            renderTree();
+            renderTree(); // 저장하지 않는다 — 이 페이지 동안만 편 채로 둔다
         }
     }, el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }), el('span', { class: 'n', text: '지난 세션' }), el('span', { class: 'v2-cnt', text: String(n) }));
 }
