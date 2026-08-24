@@ -1,0 +1,43 @@
+/* 약관·방침 페이지 — **셸 조각만** 담는다.
+   토큰·타이포·카드·표·콜아웃은 전부 제품 디자인 시스템(public/styles/01-base·03-components·26-docs-guide)이 낸다.
+   여기서 색·크기·radius 를 새로 정의하지 않는다(DS 지침 §5 토큰 외 값 금지).
+
+   이 페이지들은 앱 셸 밖에 서는 독립 문서라, 앱이 주는 상단바·본문 컨테이너가 없다.
+   그 두 가지만 Docs 패턴 규격(문서 컬럼 920)에 맞춰 여기서 세운다. */
+
+/* 상단바 — 셸의 탭 줄과 같은 결(한 톤 낮은 띠 + 헤어라인). 문서가 앱의 일부로 읽히게 한다. */
+.doc-top {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 16px;
+  height: 52px; padding: 0 20px;
+  background: var(--bg-tint); border-bottom: 1px solid var(--line);
+}
+.doc-brand { display: inline-flex; align-items: baseline; gap: 9px; font-size: 17px; font-weight: 800; letter-spacing: -.35px; color: var(--ink); }
+.doc-brand i { width: 7px; height: 7px; border-radius: 999px; background: var(--mint); align-self: center; }
+.doc-nav { margin-left: auto; display: flex; gap: 2px; }
+.doc-nav a { display: inline-flex; align-items: center; height: 34px; padding: 0 13px; border-radius: 9px; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+.doc-nav a:hover { background: var(--bg); color: var(--ink); }
+.doc-nav a[aria-current="page"] { background: var(--bg); color: var(--ink); font-weight: 700; box-shadow: inset 0 0 0 1px var(--line-net); }
+
+/* 본문 — 읽기 폭(920)과 한글 어절 줄바꿈은 .docs-body 가 낸다(Docs 패턴). 여기선 사이드바가 없어
+   가운데로 세우는 것과 바깥 여백만 맡는다. ⚠ .docs-body 를 <body> 에 붙이면 페이지 전체가 920 으로 잘린다. */
+.doc-wrap { margin: 0 auto; padding: 40px 24px 0; }
+.doc-cards { display: flex; flex-direction: column; gap: 16px; margin-top: 24px; }
+
+/* 조문 머리 — 카드 안에서 조를 가르는 자리. .md-h3 와 같은 급이되 첫 조는 위 여백을 없앤다. */
+.docs-md .md-h3:first-child { margin-top: 0; }
+
+/* 채울 것 표시 — 아직 확정되지 않은 값.
+   DS-EXCEPTION: '사람이 채워야 하는 빈칸'을 나타내는 표현이 시스템에 없어 새로 둔다. 2026-08-20, #1813
+   단 **새 색은 만들지 않는다** — 점선 테두리와 선언된 중립 토큰만으로 '비어 있음'을 말한다
+   (앰버는 이 시스템에 선언된 토큰이 아니다 — 40-v2.css 의 var(--amber, …) 는 폴백 금지 규칙 위반분이다).
+   문서가 확정되면 이 클래스와 함께 사라진다. */
+.doc-fill { border-radius: 6px; padding: 1px 7px; font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  color: var(--ink-sub); background: var(--bg-tint); border: 1px dashed var(--line-net-2); }
+
+.doc-foot { margin: 28px 0 72px; font-size: 13px; line-height: 1.8; color: var(--muted); }
+
+@media (max-width: 760px) {
+  .doc-top { padding: 0 14px; gap: 10px; }
+  .doc-wrap { padding: 26px 16px 0; }
+}
