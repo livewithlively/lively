@@ -237,7 +237,8 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       return { ok: true };
     }
     // #1719 — 세션 프로젝트 소속(붙이기·떼기). 게이트웨이가 소유·프로젝트 멤버십을 검증하고 프로젝트 폴더(상대경로 folder)를
-    //  실어 보낸다 — 노드는 자기 워크스페이스에서 그 폴더를 찾아(있으면) 링크를 걸고, 없으면 마커·옵션만 적용한다.
+    //  실어 보낸다 — 노드는 자기 워크스페이스에서 그 폴더를 찾고, **없으면 만들어**(#1856) 링크를 건다. 폴더가 곧
+    //  문서 pull 의 진입 조건이라, 안 만들면 그 노드는 프로젝트 문서를 못 받는다(bind 에 실려온 AGENTS.md 를 씨앗으로 심는다).
     case "setProject": {
       const b = args.bind as { projectId: number; folder: string; name?: string | null; src?: "v6" | "org" } | null | undefined;
       return applySessionProject(user, String(args.id), b && Number(b.projectId) > 0 ? b : null);
