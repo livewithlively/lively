@@ -143,22 +143,12 @@ export async function confirmSessionTrash(opts: { title: string; n?: number }): 
 // ── 완전 삭제(휴지통 안에서만, #1851) — 두 창. 어느 쪽도 keepNote(종료·지우기용)를 쓰지 않는다: 그 문구는 "대화 기록은 안 지워진다"가
 //  핵심 약속인데, 여기선 **지운다**(중앙 기록이 있으면 #1850 파기까지 함께 간다). 사실과 반대인 안심 문구가 제일 나쁘다(#1582 규약).
 //  · confirmSessionPurgeLocal — 중앙 기록이 **없는** 세션 하나(되살리기 좌표만 있는 것). 잃는 것 = 되살리기.
-//  · confirmTrashEmpty      — 휴지통 비우기(여러 개). 기록이 있는 것은 기록까지 지운다고 말한다.
+//  · confirmSessionPurgeMany — 휴지통 비우기·여러 개 선택. 발자국을 모아 한 창에서 고른다(단일 창과 같은 모양·규칙).
 export async function confirmSessionPurgeLocal(opts: { title: string }): Promise<boolean> {
   return confirmDialog({
     title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
     message: '이 세션이 목록에서 영영 사라지고, [되살리기]로는 다시 열 수 없어요.',
     note: '작업 폴더·파일·커밋은 그대로 남습니다. 이 세션은 중앙 대화 기록이 없어 지울 기록도 없어요.',
-  });
-}
-export async function confirmTrashEmpty(opts: { n: number; withLog: number }): Promise<boolean> {
-  return confirmDialog({
-    title: '휴지통을 비울까요?', danger: true, confirmText: '완전 삭제', cancelText: '취소',
-    message: `휴지통의 세션 ${opts.n}개가 목록에서 영영 사라지고, [되살리기]로는 다시 열 수 없어요.`,
-    lines: opts.withLog
-      ? [`그중 ${opts.withLog}개는 중앙 대화 기록도 함께 지워집니다 — 되돌릴 수 없어요.`, '이 세션들이 만든 지식·프로젝트는 건드리지 않아요. 그것까지 정리하려면 행마다 [완전 삭제]를 쓰세요.']
-      : [],
-    note: '작업 폴더·파일·커밋은 그대로 남습니다.',
   });
 }
 
@@ -229,12 +219,13 @@ export function sessionLogLink(text?: string): HTMLElement {
 //  고친 지식은 지우지 않고 **세션 직전 판으로 되돌린다**(세션 전에도 있던 남의 것이므로).
 export interface Footprint {
   tmux_session_id: string | null;
-  knowledge_created: Array<{ name: string; title: string | null }>;
-  knowledge_edited: Array<{ name: string; title: string | null }>;
-  projects: Array<{ id: number; name: string; created_here: boolean }>;
+  knowledge_created: Array<{ name: string; title: string | null; touched_after?: boolean }>;
+  knowledge_edited: Array<{ name: string; title: string | null; touched_after?: boolean }>;
+  projects: Array<{ id: number; name: string; created_here: boolean; touched_after?: boolean; other_sessions?: number }>;
+  sources: Array<{ id: number; title: string | null; kind: string | null }>;
   activities: number;
 }
-export interface PurgeChoice { log: boolean; knowledge: string[]; revert: string[]; projects: number[]; activities: boolean }
+export interface PurgeChoice { log: boolean; knowledge: string[]; revert: string[]; projects: number[]; sources: number[]; activities: boolean }
 
 async function fetchFootprint(sid: string, node: string): Promise<Footprint | null> {
   try {
@@ -244,6 +235,7 @@ async function fetchFootprint(sid: string, node: string): Promise<Footprint | nu
       knowledge_created: Array.isArray(d?.knowledge_created) ? d.knowledge_created : [],
       knowledge_edited: Array.isArray(d?.knowledge_edited) ? d.knowledge_edited : [],
       projects: Array.isArray(d?.projects) ? d.projects : [],
+      sources: Array.isArray(d?.sources) ? d.sources : [],
       activities: Number(d?.activities) || 0,
     };
   } catch { return null; }   // 못 읽으면 대화 기록만 지우는 종전 흐름으로(있지도 않은 목록을 지어내지 않는다)
@@ -261,75 +253,169 @@ function checkRow(id: string, label: string, names: string[], hint?: string): { 
   return { el: el('label', { class: 'sess-purge-row', for: id }, box, el('span', { class: 'b' }, ...kids)), box };
 }
 
-export async function confirmSessionPurge(opts: {
-  sid: string; node?: string | null; title: string; lines?: string[]; remoteNode?: string | null; live?: boolean;
-}): Promise<PurgeChoice | null> {
-  const fp = await fetchFootprint(opts.sid, opts.node || '');
-  const kept = ['작업 폴더·파일·커밋은 그대로 남습니다.'];
-  if (opts.remoteNode) kept.push(`대화 파일이 다른 컴퓨터(${opts.remoteNode})에도 있다면 그건 여기서 지울 수 없어요.`);
-  // 아직 도는 세션을 지우면 **이후 대화도 중앙에 안 올라간다**(재수집을 막는 장치라 그 세션 전체가 대상에서 빠진다).
-  if (opts.live) kept.push('이 세션은 계속 쓸 수 있지만, 앞으로의 대화도 중앙 기록에 남지 않습니다.');
+// ── 결과물까지 함께 (원준 결정 2026-08-24) ──
+//  "보관할 거면 아카이브로 보낼 거다. 휴지통으로 보내고 지우는 건 이 세션이 맘에 안 들 때니까 결과도 되돌려야 한다."
+//  → 완전 삭제 창은 이 세션이 남긴 것(만든 지식·고친 지식·만든 프로젝트·자료·작업 기록)을 **기본 체크**로 보여 주고,
+//    사람이 풀어서 남긴다. 규칙 B: **그 뒤에 남이 손댄 것은 고를 수 없다** — "남는 것"으로 이유와 함께 보여 준다.
+//  세션 하나를 버리며 남의 작업을 날릴 수는 없다(서버도 같은 판정으로 한 번 더 거른다).
+type FpItem = { key: string; label: string; sub?: string };
+type FpGroup = { kind: 'kc' | 'ke' | 'pj' | 'src' | 'ac'; title: string; hint?: string; items: FpItem[]; count: number };
+type FpKeep = { label: string; why: string };
 
+// 발자국을 '고를 수 있는 묶음'과 '남는 것'으로 가른다 — 단일·일괄 확인창이 같은 판정을 쓴다.
+function splitFootprint(fps: Footprint[]): { groups: FpGroup[]; keep: FpKeep[] } {
+  const kc: FpItem[] = [], ke: FpItem[] = [], pj: FpItem[] = [], src: FpItem[] = [];
+  const keep: FpKeep[] = [];
+  let acts = 0;
+  const seen = new Set<string>();
+  for (const fp of fps) {
+    for (const k of fp.knowledge_created) {
+      const key = 'k:' + k.name; if (seen.has(key)) continue; seen.add(key);
+      if (k.touched_after) keep.push({ label: k.title || k.name, why: '이 세션 뒤에 누군가 고쳐서 그대로 둡니다' });
+      else kc.push({ key: k.name, label: k.title || k.name });
+    }
+    for (const k of fp.knowledge_edited) {
+      const key = 'k:' + k.name; if (seen.has(key)) continue; seen.add(key);
+      if (k.touched_after) keep.push({ label: k.title || k.name, why: '이 세션 뒤에 누군가 또 고쳐서 되돌리지 않습니다' });
+      else ke.push({ key: k.name, label: k.title || k.name });
+    }
+    for (const p of fp.projects) {
+      const key = 'p:' + p.id; if (seen.has(key)) continue; seen.add(key);
+      if (!p.created_here) continue;                       // 이 세션이 만들지 않은 프로젝트는 애초에 대상이 아니다(붙어만 있던 것)
+      if (p.other_sessions) keep.push({ label: `#${p.id} ${p.name}`, why: `다른 세션 ${p.other_sessions}개가 붙어 있어 그대로 둡니다` });
+      else if (p.touched_after) keep.push({ label: `#${p.id} ${p.name}`, why: '이 세션 뒤에 누군가 손대서 그대로 둡니다' });
+      else pj.push({ key: String(p.id), label: `#${p.id} ${p.name}` });
+    }
+    for (const x of fp.sources) {
+      const key = 's:' + x.id; if (seen.has(key)) continue; seen.add(key);
+      src.push({ key: String(x.id), label: x.title || `자료 #${x.id}` });
+    }
+    acts += fp.activities || 0;
+  }
+  const groups: FpGroup[] = [];
+  if (kc.length) groups.push({ kind: 'kc', title: `만든 지식 ${kc.length}건 지우기`, items: kc, count: kc.length });
+  if (ke.length) groups.push({ kind: 'ke', title: `고친 지식 ${ke.length}건 이 세션 직전 내용으로 되돌리기`, hint: '지우지 않습니다 — 고치기 전으로 돌아갑니다', items: ke, count: ke.length });
+  if (pj.length) groups.push({ kind: 'pj', title: `만든 프로젝트 ${pj.length}건 지우기`, hint: '그 안의 작업·첨부·폴더도 함께', items: pj, count: pj.length });
+  if (src.length) groups.push({ kind: 'src', title: `만든 자료 ${src.length}건 지우기`, hint: '이 세션이 만든 지식에만 붙어 있던 원본', items: src, count: src.length });
+  if (acts) groups.push({ kind: 'ac', title: `작업 기록 ${acts}건 지우기`, items: [], count: acts });
+  return { groups, keep };
+}
+
+// 확인창 한 판 — 단일·일괄이 같은 모양. 돌려주는 것은 kind 별 on/off (이름 목록은 호출자가 fp 로 다시 푼다).
+async function purgeDialog(opts: {
+  title: string; message: string; lines?: string[]; groups: FpGroup[]; keep: FpKeep[]; noFootprint?: boolean; kept: string[];
+}): Promise<Set<string> | null> {
   const boxes: { kind: string; box: HTMLInputElement }[] = [];
   const rows: HTMLElement[] = [];
-  const kc = fp?.knowledge_created ?? [];
-  const ke = fp?.knowledge_edited ?? [];
-  const pjMine = (fp?.projects ?? []).filter((p) => p.created_here);   // 이 세션이 **만든** 프로젝트만 대상이다
-  const acts = fp?.activities ?? 0;
-  // ⚠ 먼저 항목을 만들고, **하나라도 있을 때만** 머리글을 붙인다. 종전엔 머리글 조건에 `projects.length` 를 써서,
-  //  이 세션이 만들지 않은 프로젝트만 붙어 있는 세션에서 **머리글만 뜨고 고를 것이 하나도 없는 화면**이 됐다
-  //  (원준 실측 2026-08-23). 고를 것이 없으면 묻지도 않는다.
-  if (kc.length) { const r = checkRow('pg-kc', `이 세션이 만든 지식 ${kc.length}건 지우기`, kc.map((k) => k.title || k.name)); rows.push(r.el); boxes.push({ kind: 'kc', box: r.box }); }
-  if (ke.length) { const r = checkRow('pg-ke', `이 세션이 고친 지식 ${ke.length}건 되돌리기`, ke.map((k) => k.title || k.name), '지우지 않고 이 세션 직전 내용으로 되돌립니다'); rows.push(r.el); boxes.push({ kind: 'ke', box: r.box }); }
-  if (pjMine.length) { const r = checkRow('pg-pj', `이 세션이 만든 프로젝트 ${pjMine.length}건 지우기`, pjMine.map((p) => `#${p.id} ${p.name}`)); rows.push(r.el); boxes.push({ kind: 'pj', box: r.box }); }
-  if (acts) { const r = checkRow('pg-ac', `이 세션의 작업 기록 ${acts}건 지우기`, []); rows.push(r.el); boxes.push({ kind: 'ac', box: r.box }); }
-  if (rows.length) {
-    // ⚠ **질문형으로 쓰지 않는다.** "…도 함께 정리할까요?" 라고 물으면 사람은 그 물음에 답하는 [예]/[아니오] 를
-    //  찾는데, 아래 버튼은 [취소]/[완전 삭제] 뿐이라 "정리는 원치 않는다"를 고를 데가 없어 보인다(원준 지적).
-    //  체크박스 묶음의 머리글은 **질문이 아니라 이름표**다 — 답은 체크박스가 하고, 안 고르면 그게 '아니오'다.
-    rows.unshift(el('p', { class: 'sess-purge-h' },
-      el('span', { text: '함께 지울 것을 고르세요' }),
-      el('span', { class: 'sub', text: '고르지 않으면 대화 기록만 지웁니다' })));
-  } else if (fp && !fp.tmux_session_id) {
+  if (opts.groups.length) {
+    rows.push(el('p', { class: 'sess-purge-h' },
+      el('span', { text: '함께 지울 것' }),
+      el('span', { class: 'sub', text: '풀면 그것만 남겨요' })));
+    for (const g of opts.groups) {
+      const r = checkRow('pg-' + g.kind, g.title, g.items.map((i) => i.label), g.hint);
+      r.box.checked = true;                                 // 기본 체크(원준 결정 ②) — "버린다 = 결과도 버린다"
+      rows.push(r.el); boxes.push({ kind: g.kind, box: r.box });
+    }
+    // 한 번에 전부 풀기 — 체크를 하나씩 풀지 않아도 "세션만 지우기"로 갈 수 있게.
+    const only = el('button', { class: 'btn-text sess-purge-only', type: 'button', text: '결과물은 남기고 대화 기록만 지우기' });
+    only.addEventListener('click', () => { for (const b of boxes) b.box.checked = false; });
+    rows.push(only);
+  } else if (opts.noFootprint) {
     // 다리(대화 uuid ↔ tmux 세션)가 없으면 작업 기록을 **찾을 수 없다**. 없다고 단언하지 않는다.
     rows.push(el('p', { class: 'sess-purge-h' },
       el('span', { text: '이 세션이 만든 지식·프로젝트·작업 기록은 찾지 못했어요' }),
       el('span', { class: 'sub', text: '있더라도 이 삭제로는 지워지지 않고 그대로 남습니다' })));
   }
-
+  if (opts.keep.length) {
+    rows.push(el('p', { class: 'sess-purge-h' }, el('span', { text: '남는 것' })));
+    for (const k of opts.keep.slice(0, 6)) rows.push(el('p', { class: 'sess-purge-keep' }, el('span', { class: 'n', text: k.label }), el('span', { class: 'w', text: k.why })));
+    if (opts.keep.length > 6) rows.push(el('p', { class: 'sess-purge-keep' }, el('span', { class: 'w', text: `외 ${opts.keep.length - 6}건` })));
+  }
   const ok = await confirmDialog({
     title: opts.title, danger: true, confirmText: '완전 삭제', cancelText: '취소',
-    message: '대화 전문이 중앙 기록에서 영구히 지워지고, 되돌릴 수 없어요.',
-    lines: opts.lines || [],
-    note: kept.join(' '),
+    message: opts.message,
+    lines: [...(opts.lines || []), ...opts.kept],
     extra: rows.length ? el('div', { class: 'sess-purge' }, ...rows) : null,
   });
   if (!ok) return null;
-  const on = (k: string): boolean => boxes.some((b) => b.kind === k && b.box.checked);
+  return new Set(boxes.filter((b) => b.box.checked).map((b) => b.kind));
+}
+
+// fp + kind 선택 → 이 세션의 실제 이름 목록(서버는 어차피 발자국 밖 이름을 거른다).
+function choiceOf(fp: Footprint | null, on: Set<string>): PurgeChoice {
+  const kc = (fp?.knowledge_created ?? []).filter((k) => !k.touched_after);
+  const ke = (fp?.knowledge_edited ?? []).filter((k) => !k.touched_after);
+  const pj = (fp?.projects ?? []).filter((p) => p.created_here && !p.touched_after && !p.other_sessions);
   return {
     log: true,
-    knowledge: on('kc') ? kc.map((k) => k.name) : [],
-    revert: on('ke') ? ke.map((k) => k.name) : [],
-    projects: on('pj') ? pjMine.map((p) => p.id) : [],
-    activities: on('ac'),
+    knowledge: on.has('kc') ? kc.map((k) => k.name) : [],
+    revert: on.has('ke') ? ke.map((k) => k.name) : [],
+    projects: on.has('pj') ? pj.map((p) => p.id) : [],
+    sources: on.has('src') ? (fp?.sources ?? []).map((x) => x.id) : [],
+    activities: on.has('ac'),
   };
+}
+
+function keptLines(opts: { remoteNode?: string | null; live?: boolean }): string[] {
+  const kept = ['작업 폴더의 파일·커밋은 그대로 남아요.'];
+  if (opts.remoteNode) kept.push(`대화 파일이 다른 컴퓨터(${opts.remoteNode})에도 있다면 그건 여기서 지울 수 없어요.`);
+  // 아직 도는 세션을 지우면 **이후 대화도 중앙에 안 올라간다**(재수집을 막는 장치라 그 세션 전체가 대상에서 빠진다).
+  if (opts.live) kept.push('이 세션은 계속 쓸 수 있지만, 앞으로의 대화도 중앙 기록에 남지 않아요.');
+  return kept;
+}
+
+export async function confirmSessionPurge(opts: {
+  sid: string; node?: string | null; title: string; lines?: string[]; remoteNode?: string | null; live?: boolean;
+}): Promise<PurgeChoice | null> {
+  const fp = await fetchFootprint(opts.sid, opts.node || '');
+  const { groups, keep } = splitFootprint(fp ? [fp] : []);
+  const on = await purgeDialog({
+    title: opts.title,
+    message: '대화 기록이 영구히 지워지고, 되돌릴 수 없어요.',
+    lines: opts.lines, groups, keep, noFootprint: !!fp && !fp.tmux_session_id, kept: keptLines(opts),
+  });
+  return on ? choiceOf(fp, on) : null;
+}
+
+// 일괄(비우기·여러 개 선택) — 발자국을 전부 모아 **한 창**에서 고른다. 결과는 세션별 선택으로 풀어 돌려준다.
+export async function confirmSessionPurgeMany(opts: {
+  sessions: Array<{ sid: string | null; node: string; label: string }>; title: string;
+}): Promise<Map<string, PurgeChoice> | null> {
+  const fps = new Map<string, Footprint | null>();
+  await Promise.all(opts.sessions.filter((s) => s.sid).map(async (s) => { fps.set(s.sid!, await fetchFootprint(s.sid!, s.node)); }));
+  const withLog = opts.sessions.filter((s) => s.sid).length;
+  const { groups, keep } = splitFootprint([...fps.values()].filter((x): x is Footprint => !!x));
+  const on = await purgeDialog({
+    title: opts.title,
+    message: `세션 ${opts.sessions.length}개가 영영 사라지고, 되돌릴 수 없어요.`,
+    lines: withLog ? [`그중 ${withLog}개는 중앙 대화 기록도 함께 지워져요.`] : [],
+    groups, keep, kept: ['작업 폴더의 파일·커밋은 그대로 남아요.'],
+  });
+  if (!on) return null;
+  const out = new Map<string, PurgeChoice>();
+  for (const s of opts.sessions) if (s.sid) out.set(s.sid, choiceOf(fps.get(s.sid) ?? null, on));
+  return out;
 }
 
 // 완전 삭제 실행 — 서버가 실제로 지운 양을 돌려준다(화면은 그 값으로만 말한다, 추정 금지).
 export interface PurgeResult {
   bytes: number; subagents: number; localFiles: number; localPending: string | null;
   knowledge_deleted: number; knowledge_reverted: number; knowledge_revert_failed: string[];
-  projects_deleted: number; activities_deleted: number;
+  projects_deleted: number; folders_deleted: number; sources_deleted: number; activities_deleted: number;
 }
 export async function purgeSessionRecord(sid: string, node: string, choice?: PurgeChoice | null): Promise<PurgeResult> {
+  // ⚠ content-type 을 여기서 또 넣지 마라 — api() 가 'Content-Type' 을 넣는데 대소문자가 다른 키가 하나 더 있으면 fetch 가
+  //  둘을 합쳐 `application/json, application/json` 으로 보내고, 서버 express.json 이 그걸 JSON 으로 안 읽어 **본문이 통째로
+  //  빈다**(실측 2026-08-24: 완전 삭제 창의 선택이 서버에 한 번도 닿지 않았다 — knowledge_deleted 가 늘 0). api() 가 이제
+  //  대소문자 무관하게 하나로 정리하지만, 호출처도 넣지 않는 게 맞다.
   const r: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/purge?node=${encodeURIComponent(node || '')}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(choice || { log: true }),
+    method: 'POST', body: JSON.stringify(choice || { log: true }),
   });
   return {
     bytes: Number(r?.log?.bytes) || 0, subagents: Number(r?.log?.subagents) || 0,
     localFiles: Number(r?.localFiles) || 0, localPending: r?.localPending || null,
     knowledge_deleted: Number(r?.knowledge_deleted) || 0,
+    folders_deleted: Number(r?.folders_deleted) || 0, sources_deleted: Number(r?.sources_deleted) || 0,
     knowledge_reverted: Number(r?.knowledge_reverted) || 0,
     knowledge_revert_failed: Array.isArray(r?.knowledge_revert_failed) ? r.knowledge_revert_failed : [],
     projects_deleted: Number(r?.projects_deleted) || 0,
@@ -343,7 +429,8 @@ export function purgedToast(r: PurgeResult): string {
   const parts = [`대화 기록을 완전히 지웠어요 (${kb}${r.subagents ? ` · 서브에이전트 ${r.subagents}개` : ''})`];
   if (r.knowledge_deleted) parts.push(`지식 ${r.knowledge_deleted}건 삭제`);
   if (r.knowledge_reverted) parts.push(`지식 ${r.knowledge_reverted}건 되돌림`);
-  if (r.projects_deleted) parts.push(`프로젝트 ${r.projects_deleted}건 삭제`);
+  if (r.projects_deleted) parts.push(`프로젝트 ${r.projects_deleted}건 삭제` + (r.folders_deleted ? ` (폴더 ${r.folders_deleted}개 포함)` : ''));
+  if (r.sources_deleted) parts.push(`자료 ${r.sources_deleted}건 삭제`);
   if (r.activities_deleted) parts.push(`작업 기록 ${r.activities_deleted}건 삭제`);
   if (r.localFiles) parts.push(`이 박스의 대화 파일 ${r.localFiles}개도 삭제`);
   if (r.knowledge_revert_failed.length) parts.push(`⚠ 되돌릴 판을 못 찾은 지식 ${r.knowledge_revert_failed.length}건은 그대로예요`);

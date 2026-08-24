@@ -19,14 +19,22 @@
 import { itemsPool, withTx } from "../db/client.js";
 import { auditOrgContent } from "./content-audit.js";
 
-export interface FootprintKnowledge { name: string; title: string | null; created_at: string }
-export interface FootprintProject { id: number; name: string; created_here: boolean }
+//  ── 규칙 B(원준 결정 2026-08-24): 그 뒤에 남이 손댄 것은 건드리지 않는다 ──
+//   세션 하나를 버리며 남의 작업을 날릴 수는 없다. 세션 활동 창이 끝난 **뒤**에 그 지식·프로젝트에 감사 행이
+//   하나라도 더 붙었으면(누가 됐든 — 같은 사람의 다른 세션도 '그 뒤'다) touched_after=true 로 표시하고,
+//   화면은 그것을 고를 수 없게 "남는 것"으로 보여 주며, 서버는 골라 보내도 걸러 낸다(아래 purge 라우트).
+export interface FootprintKnowledge { name: string; title: string | null; created_at: string; touched_after: boolean }
+export interface FootprintProject { id: number; name: string; created_here: boolean; touched_after: boolean; other_sessions: number }
+//  자료(source)는 세션 좌표를 안 가진다(표에 session_id 가 없다). 그래서 **이 세션이 만든 지식에만 붙은 자료**를
+//  이 세션의 것으로 본다 — 다른 지식이 그 자료를 인용하면 남의 근거이므로 뺀다(touched_after 와 같은 뜻).
+export interface FootprintSource { id: number; title: string | null; kind: string | null }
 export interface SessionFootprint {
   tmux_session_id: string | null;
   window: { from: string; to: string } | null;
   knowledge_created: FootprintKnowledge[];
   knowledge_edited: FootprintKnowledge[];
   projects: FootprintProject[];
+  sources: FootprintSource[];
   activities: number;
 }
 
@@ -41,7 +49,7 @@ export async function tmuxSessionIdFor(sessionId: string): Promise<string | null
 export async function sessionFootprint(nodeId: string, sessionId: string): Promise<SessionFootprint> {
   const empty: SessionFootprint = {
     tmux_session_id: null, window: null,
-    knowledge_created: [], knowledge_edited: [], projects: [], activities: 0,
+    knowledge_created: [], knowledge_edited: [], projects: [], sources: [], activities: 0,
   };
 
   // 활동 창 — 이 세션이 살아 있던 구간. '만든 것' 판정의 기준자다.
@@ -55,36 +63,54 @@ export async function sessionFootprint(nodeId: string, sessionId: string): Promi
   // 프로젝트 귀속은 두 id 어느 쪽으로도 기록될 수 있다(캡처 훅은 대화 uuid, 세션 바인딩은 tmux id).
   const ids = [sessionId, ...(tmux ? [tmux] : [])];
   const proj = await itemsPool.query(
-    `SELECT DISTINCT p.id, p.name, (p.created_at >= $2 AND p.created_at <= $3) AS created_here
+    `SELECT DISTINCT p.id, p.name, (p.created_at >= $2 AND p.created_at <= $3) AS created_here,
+            EXISTS (SELECT 1 FROM org_content_audit a WHERE a.entity='project' AND a.entity_key = p.id::text AND a.at > $3) AS touched_after,
+            (SELECT count(DISTINCT sp2.session_id)::int FROM session_project sp2
+              WHERE sp2.project_id = p.id AND NOT (sp2.session_id = ANY($1))) AS other_sessions
        FROM session_project sp JOIN project p ON p.id = sp.project_id
       WHERE sp.session_id = ANY($1)
       ORDER BY p.id`,
     [ids, from, to]);
+  const projRows = (): FootprintProject[] => proj.rows.map((r) => ({
+    id: Number(r.id), name: String(r.name), created_here: !!r.created_here,
+    touched_after: !!r.touched_after, other_sessions: Number(r.other_sessions ?? 0),
+  }));
 
-  if (!tmux) {
-    return { ...empty, window: { from, to },
-      projects: proj.rows.map((r) => ({ id: Number(r.id), name: String(r.name), created_here: !!r.created_here })) };
-  }
+  if (!tmux) return { ...empty, window: { from, to }, projects: projRows() };
 
   const act = await itemsPool.query(`SELECT count(*)::int AS n FROM activity WHERE session_id = $1`, [tmux]);
 
   // 이 세션의 작업이 **산출(produced)** 로 연결한 지식만 본다. references/decided 는 '읽은 것·근거로 삼은 것'이라
   //  지우거나 되돌릴 대상이 아니다.
   const kn = await itemsPool.query(
-    `SELECT DISTINCT k.name, k.title, k.created_at
+    `SELECT DISTINCT k.name, k.title, k.created_at,
+            EXISTS (SELECT 1 FROM org_content_audit a2 WHERE a2.entity='knowledge' AND a2.entity_key = k.name AND a2.at > $2) AS touched_after
        FROM activity a
        JOIN activity_knowledge ak ON ak.activity_id = a.id AND ak.relation = 'produced'
        JOIN knowledge k ON k.name = ak.name
       WHERE a.session_id = $1
       ORDER BY k.created_at`,
-    [tmux]);
+    [tmux, to]);
 
   const created: FootprintKnowledge[] = [];
   const edited: FootprintKnowledge[] = [];
   for (const r of kn.rows) {
-    const row: FootprintKnowledge = { name: String(r.name), title: (r.title as string) ?? null, created_at: String(r.created_at) };
+    const row: FootprintKnowledge = { name: String(r.name), title: (r.title as string) ?? null, created_at: String(r.created_at), touched_after: !!r.touched_after };
     // 창 안에서 태어났으면 이 세션이 만든 것, 아니면 원래 있던 것을 이 세션이 고친 것.
     (r.created_at >= from && r.created_at <= to ? created : edited).push(row);
+  }
+
+  // 자료 — 이 세션이 만든 지식에만 붙은 것(다른 지식이 같이 인용하면 뺀다). 만든 지식이 없으면 자료도 없다.
+  let sources: FootprintSource[] = [];
+  if (created.length) {
+    const src = await itemsPool.query(
+      `SELECT s.id, s.title, s.kind
+         FROM source s
+        WHERE EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id AND ks.name = ANY($1))
+          AND NOT EXISTS (SELECT 1 FROM knowledge_source ks2 WHERE ks2.source_id = s.id AND NOT (ks2.name = ANY($1)))
+        ORDER BY s.id`,
+      [created.map((k) => k.name)]);
+    sources = src.rows.map((r) => ({ id: Number(r.id), title: (r.title as string) ?? null, kind: (r.kind as string) ?? null }));
   }
 
   return {
@@ -92,7 +118,8 @@ export async function sessionFootprint(nodeId: string, sessionId: string): Promi
     window: { from, to },
     knowledge_created: created,
     knowledge_edited: edited,
-    projects: proj.rows.map((r) => ({ id: Number(r.id), name: String(r.name), created_here: !!r.created_here })),
+    projects: projRows(),
+    sources,
     activities: Number(act.rows[0]?.n ?? 0),
   };
 }
@@ -114,11 +141,12 @@ export interface PurgeSelection {
   knowledge?: string[];    // 완전 삭제할 지식 name (이 세션이 만든 것)
   revert?: string[];       // 세션 직전 판으로 되돌릴 지식 name (이 세션이 고친 것)
   projects?: number[];     // 완전 삭제할 프로젝트 id
+  sources?: number[];      // 완전 삭제할 자료 id (이 세션이 만든 지식에만 붙은 것)
   activities?: boolean;    // 이 세션의 작업 기록을 지운다
 }
 export interface PurgeFootprintResult {
   knowledge_deleted: number; knowledge_reverted: number; knowledge_revert_failed: string[];
-  projects_deleted: number; activities_deleted: number;
+  projects_deleted: number; project_folders: string[]; sources_deleted: number; activities_deleted: number;
 }
 
 // 고른 것만 지운다. **전부 한 트랜잭션** — 절반만 지워진 상태(지식은 사라졌는데 감사엔 본문이 남는 등)를 만들지 않는다.
@@ -129,10 +157,11 @@ export async function purgeFootprint(
   const kNames = sel.knowledge ?? [];
   const rNames = sel.revert ?? [];
   const pIds = sel.projects ?? [];
+  const sIds = sel.sources ?? [];
   return withTx(async (client) => {
     const out: PurgeFootprintResult = {
       knowledge_deleted: 0, knowledge_reverted: 0, knowledge_revert_failed: [],
-      projects_deleted: 0, activities_deleted: 0,
+      projects_deleted: 0, project_folders: [], sources_deleted: 0, activities_deleted: 0,
     };
 
     // ① 되돌리기 — 세션이 손대기 **직전**의 스냅샷을 감사에서 찾아 그 본문으로 되돌린다.
@@ -170,11 +199,24 @@ export async function purgeFootprint(
     }
 
     // ③ 프로젝트 완전 삭제 — 같은 원칙(활성 행 + 감사 스냅샷 + 내용 없는 삭제 기록).
+    //   폴더(첨부·자료 파일이 사는 곳)는 여기서 지우지 않고 **경로만 돌려준다** — 트랜잭션 밖에서 라우트가 지운다
+    //   (DB 롤백은 되지만 디스크 삭제는 되돌릴 수 없으니, DB 가 확정된 뒤에만 손댄다). 원준 결정: 프로젝트를 완전히
+    //   지우면 그 안의 자료도 함께.
     if (pIds.length) {
+      const f = await client.query(`SELECT folder FROM project WHERE id = ANY($1) AND folder IS NOT NULL`, [pIds]);
+      out.project_folders = f.rows.map((r) => String(r.folder)).filter(Boolean);
       const r = await client.query(`DELETE FROM project WHERE id = ANY($1)`, [pIds]);
       out.projects_deleted = r.rowCount ?? 0;
       await blankAuditSnapshots(client, "project", pIds.map((n) => String(n)));
       for (const id of pIds) await auditOrgContent("project", String(id), "delete", null, null, ctx);
+    }
+
+    // ③-b 자료 완전 삭제 — 같은 원칙. knowledge_source 는 FK CASCADE.
+    if (sIds.length) {
+      const r = await client.query(`DELETE FROM source WHERE id = ANY($1)`, [sIds]);
+      out.sources_deleted = r.rowCount ?? 0;
+      await blankAuditSnapshots(client, "source", sIds.map((n) => String(n)));
+      for (const id of sIds) await auditOrgContent("source", String(id), "delete", null, null, ctx);
     }
 
     // ④ 작업 기록 — activity_knowledge·activity_touch 는 FK CASCADE 로 함께 정리된다.

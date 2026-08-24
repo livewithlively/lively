@@ -88,7 +88,15 @@ async function api(path, opts = {}) {
         headers['x-lively-theme'] = dark ? 'dark' : 'light';
     }
     catch (_) { /* 스토리지·matchMedia 없는 문맥 — 헤더 생략(서버는 미지정으로 본다) */ }
-    if (opts.body)
+    // 호출처가 'content-type'(소문자)을 넘겨 온 자리가 있었다 — 키가 둘이면 fetch 가 값을 쉼표로 합쳐 서버가 JSON 으로 못 읽는다.
+    //  대소문자 변형을 전부 걷어내고 하나만 둔다(실측 2026-08-24, 세션 완전 삭제 선택이 서버에 안 닿던 원인).
+    for (const k of Object.keys(headers))
+        if (k.toLowerCase() === 'content-type' && k !== 'Content-Type') {
+            if (!('Content-Type' in headers))
+                headers['Content-Type'] = headers[k];
+            delete headers[k];
+        }
+    if (opts.body && !headers['Content-Type'])
         headers['Content-Type'] = 'application/json';
     const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
     if (res.status === 401) {

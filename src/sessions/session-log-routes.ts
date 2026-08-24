@@ -7,6 +7,7 @@
 //   ③ 소유자: 로그는 **첫 append 한 멤버**가 소유(session.owner). 이후 그 사람만 append — 남이 남의 세션 로그를 오염 못 함.
 //      (세션 uuid 는 사실상 유일하지만, 위조 방어로 명시 게이트를 둔다.)
 //   회수(GET)는 슬2d(웹뷰)에서 열람권한(view_policy)까지 붙인다 — 이 슬라이스는 append 를 위한 최소 GET(watermark)만.
+import { logger } from "../log.js";
 import type express from "express";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
@@ -14,7 +15,9 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
-import { sessionFootprint, purgeFootprint, type PurgeSelection } from "../v6/session-footprint-store.js";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
+import { sessionFootprint, purgeFootprint, type PurgeSelection } from "../v6/session-footprint-store.js";
+import { projectDirOnThisHost } from "../terminal/session-project.js";   // #1850 — 완전 삭제한 프로젝트의 폴더(첨부·자료 파일)
+import { rm as fsRm } from "node:fs/promises";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
 import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
 import { trashMapFor } from "./session-trash.js";   // #1851 — 내 세션 목록에 휴지통 표식
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
@@ -414,18 +417,32 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // ⚠ 사람이 고른 것만 지운다 — 그런데 그 목록을 **그대로 믿지 않는다**. 지금 다시 발자국을 조회해
     //  '이 세션이 실제로 남긴 것' 안에 있는 이름만 남긴다. 안 그러면 이 엔드포인트가 임의의 지식·프로젝트를
     //  지우는 통로가 된다(자기 세션 하나만 있으면 남의 지식 이름을 실어 보낼 수 있다).
+    //  규칙 B(원준 2026-08-24) 도 여기서 **서버가** 지킨다 — 그 뒤에 남이 손댄 지식·프로젝트, 다른 세션이 붙은 프로젝트는
+    //  화면이 못 고르게 하지만, 화면을 믿지 않고 한 번 더 거른다. 세션 하나를 버리며 남의 작업을 날릴 수는 없다.
     const fp = await sessionFootprint(nodeId, sessionId);
-    const okCreated = new Set(fp.knowledge_created.map((k) => k.name));
-    const okEdited = new Set(fp.knowledge_edited.map((k) => k.name));
-    const okProjects = new Set(fp.projects.map((p) => p.id));
+    const okCreated = new Set(fp.knowledge_created.filter((k) => !k.touched_after).map((k) => k.name));
+    const okEdited = new Set(fp.knowledge_edited.filter((k) => !k.touched_after).map((k) => k.name));
+    const okProjects = new Set(fp.projects.filter((p) => p.created_here && !p.touched_after && p.other_sessions === 0).map((p) => p.id));
+    const okSources = new Set(fp.sources.map((x) => x.id));
     const sel: PurgeSelection = {
       knowledge: strArr(b.knowledge).filter((n) => okCreated.has(n)),
       revert: strArr(b.revert).filter((n) => okEdited.has(n)),
       projects: numArr(b.projects).filter((i) => okProjects.has(i)),
+      sources: numArr(b.sources).filter((i) => okSources.has(i)),
       activities: b.activities === true,
     };
 
     const footprint = await purgeFootprint(sel, fp.tmux_session_id, fp.window?.from ?? null, requester);
+
+    // 지운 프로젝트의 폴더 — DB 가 확정된 **뒤에** 디스크를 지운다(디스크는 롤백이 없다). 이 호스트에 없으면(원격 노드·
+    //  이미 없음) 건너뛰고 개수로 말한다. 워크스페이스 밖 경로는 projectDirOnThisHost 가 null 을 준다(밖은 절대 안 지운다).
+    let folders_deleted = 0;
+    for (const folder of footprint.project_folders) {
+      const abs = projectDirOnThisHost(folder);
+      if (!abs) continue;
+      try { await fsRm(abs, { recursive: true, force: true }); folders_deleted++; }
+      catch (e) { logger.warn({ err: e, folder }, "완전 삭제 — 프로젝트 폴더 삭제 실패(비치명)"); }
+    }
 
     // 대화 기록은 기본으로 함께 지운다(이 흐름의 출발점이다). log:false 면 남긴다.
     let log: Awaited<ReturnType<typeof purgeSessionLog>> | null = null;
@@ -444,7 +461,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       { actor: requester, source: "web" });
 
     res.setHeader("Cache-Control", "no-store");
-    res.json({ ok: true, log, localFiles, localPending: nodeId !== "" ? nodeId : null, ...footprint });
+    res.json({ ok: true, log, localFiles, localPending: nodeId !== "" ? nodeId : null, ...footprint, folders_deleted });
   }));
 
   // 세션 기록 **완전 삭제**(#1850) — 소유자가 자기 대화 전문을 남김없이 지운다. 되돌릴 수 없다(휴지통 없음).

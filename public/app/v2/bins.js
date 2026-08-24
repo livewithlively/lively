@@ -11,7 +11,7 @@
 import { api, el, relTime, sv, toast } from '../core.js';
 // 완전 삭제는 두 갈래(#1851 ⟶ #1850): 중앙 기록이 있는 세션은 #1850 의 범위 선택 확인창 + 기록 파기(purgeSessionRecord)를 그대로
 //  쓰고, 그 위에 되살리기 좌표(desired-state)까지 지우는 휴지통 op('purge')를 얹는다. 기록이 없는 세션은 좌표만 지운다.
-import { confirmSessionPurge, confirmSessionPurgeLocal, confirmTrashEmpty, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
+import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
 import { sessText } from './side.js';
 import { dotCls, isArchivedProj, isLiveSess, isTrashedSess, projName } from './views.js';
 const when = (iso) => (iso ? relTime(iso) : '');
@@ -19,9 +19,9 @@ const whenMs = (ms) => (ms ? relTime(new Date(ms).toISOString()) : '');
 const dot = (k) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 const MAX_ROWS = 8; // 프로젝트 하나 아래 펼쳐 보이는 세션 상한 — 넘치면 '외 n개'가 그 자리에서 편다
 // 세션 한 줄 — 이름(프로젝트명 되풀이 걷어낸 것) · 상태 · 시각. 오른쪽 끝은 호출자가 준 조작 단추.
-function sessRow(s, pn, actions = [], tail) {
+function sessRow(s, pn, actions = [], tail, lead) {
     const t = sessText(s, pn);
-    return el('div', { class: 'v2-bin-row' + (isLiveSess(s) ? '' : ' past') }, dot(s.stateKey), el('a', { class: 'tw', href: '#/s/' + encodeURIComponent(s.id), title: (s.label || '') + '\n세션 대화를 엽니다' }, el('span', { class: 't', text: t.main }), 
+    return el('div', { class: 'v2-bin-row' + (isLiveSess(s) ? '' : ' past') }, lead || null, dot(s.stateKey), el('a', { class: 'tw', href: '#/s/' + encodeURIComponent(s.id), title: (s.label || '') + '\n세션 대화를 엽니다' }, el('span', { class: 't', text: t.main }), 
     // 부제('하던 일')가 이름의 되풀이면 생략 — 이름이 첫 지시에서 잘려 나온 세션은 둘이 같은 문장으로 시작한다(실측).
     t.sub && !t.sub.startsWith(t.main.replace(/…$/, '')) && !t.main.startsWith(t.sub) ? el('span', { class: 'p', text: t.sub }) : null), el('span', { class: 'st', text: tail || `${s.stateLabel} · ${whenMs(s.lastSeen)}` }), ...actions);
 }
@@ -96,7 +96,7 @@ export function renderTrash(host, data, hooks = {}) {
         const sid = logSid(s);
         try {
             if (sid) {
-                const choice = await confirmSessionPurge({ sid, node: logNode(s), title: `「${name}」${eulReul(name)} 완전히 지울까요?`, lines: [s.label || sid], remoteNode: logNode(s) || null });
+                const choice = await confirmSessionPurge({ sid, node: logNode(s), title: `「${name}」${eulReul(name)} 완전히 지울까요?`, remoteNode: logNode(s) || null }); // 제목이 이미 이름을 말한다 — 같은 줄을 본문에 되풀이하지 않는다
                 if (!choice)
                     return;
                 const r = await purgeSessionRecord(sid, logNode(s), choice);
@@ -123,46 +123,97 @@ export function renderTrash(host, data, hooks = {}) {
             toast('지우지 못했어요 — ' + (e?.message || e), true);
         }
     });
-    const empty = () => guard(async () => {
-        if (!ss.length)
+    // 일괄 완전 삭제 — [휴지통 비우기]와 [선택 완전 삭제]가 같은 길. 발자국을 모아 한 창에서 고르고(결과물 기본 체크 —
+    //  원준 결정 2026-08-24), 세션마다 그 선택을 풀어 기록을 파기한 뒤 표식을 purged 로 바꾼다.
+    const purgeMany = (list, title) => guard(async () => {
+        if (!list.length)
             return;
-        // 비우기는 한 번의 확인으로 전부 — 범위 선택(지식·프로젝트)은 세션마다 달라 여기서 묻지 않는다: **대화 기록만** 지운다
-        //  (기본값과 같다). 지식·프로젝트까지 함께 정리하려면 행별 [완전 삭제]로.
-        if (!await confirmTrashEmpty({ n: ss.length, withLog: ss.filter((s) => !!logSid(s)).length }))
+        const choices = await confirmSessionPurgeMany({
+            sessions: list.map((s) => ({ sid: logSid(s) || null, node: logNode(s), label: sessText(s, projName(data, s.projectId)).main || s.id })),
+            title,
+        });
+        if (!choices)
             return;
-        let logs = 0;
-        let failed = 0;
-        for (const s of ss) {
+        let logs = 0, failed = 0;
+        const sum = { kn: 0, rv: 0, pj: 0, src: 0 };
+        for (const s of list) {
             const sid = logSid(s);
             if (!sid)
                 continue;
             try {
-                await purgeSessionRecord(sid, logNode(s), { log: true, knowledge: [], revert: [], projects: [], activities: false });
+                const r = await purgeSessionRecord(sid, logNode(s), choices.get(sid) || { log: true, knowledge: [], revert: [], projects: [], sources: [], activities: false });
                 logs++;
+                sum.kn += r.knowledge_deleted;
+                sum.rv += r.knowledge_reverted;
+                sum.pj += r.projects_deleted;
+                sum.src += r.sources_deleted;
             }
             catch {
                 failed++;
             }
         }
         try {
-            const r = await sessionTrashOp('empty');
-            toast(`${r.done.length}개 세션을 완전히 지웠어요.` + (logs ? ` 대화 기록 ${logs}건 파기.` : '') + (failed ? ` ⚠ 기록 ${failed}건은 지우지 못했어요.` : '') + (r.skipped.length ? ` (${r.skipped.length}개는 건너뜀)` : ''));
+            const r = await sessionTrashOp('purge', list.flatMap((s) => sessionNames(s)));
+            const parts = [`세션 ${r.done.length}개를 완전히 지웠어요.`];
+            if (logs)
+                parts.push(`대화 기록 ${logs}건 파기`);
+            if (sum.kn)
+                parts.push(`지식 ${sum.kn}건 삭제`);
+            if (sum.rv)
+                parts.push(`지식 ${sum.rv}건 되돌림`);
+            if (sum.pj)
+                parts.push(`프로젝트 ${sum.pj}건 삭제`);
+            if (sum.src)
+                parts.push(`자료 ${sum.src}건 삭제`);
+            if (failed)
+                parts.push(`⚠ 기록 ${failed}건은 지우지 못했어요`);
+            if (r.skipped.length)
+                parts.push(`(${r.skipped.length}개는 건너뜀 — ${r.skipped[0].why})`);
+            toast(parts.join(' · '), !r.done.length);
+            sel.clear();
             hooks.onChanged?.();
         }
         catch (e) {
-            toast('비우지 못했어요 — ' + (e?.message || e), true);
+            toast('지우지 못했어요 — ' + (e?.message || e), true);
         }
     });
+    const restoreMany = (list) => guard(async () => {
+        if (!list.length)
+            return;
+        try {
+            const r = await sessionTrashOp('untrash', list.flatMap((s) => sessionNames(s)));
+            if (!outcome(r, `세션 ${r.done.length}개를 지난 세션으로 되돌렸어요.`, '되돌리지 못했어요'))
+                return;
+            sel.clear();
+            hooks.onChanged?.();
+        }
+        catch (e) {
+            toast('되돌리지 못했어요 — ' + (e?.message || e), true);
+        }
+    });
+    // 여러 개 선택 — 행 앞 체크박스. 고른 것이 있으면 목록 위에 [되돌리기]·[완전 삭제] 줄이 뜬다.
+    const sel = new Set();
+    const selbar = el('div', { class: 'v2-bin-selbar', hidden: true });
+    const paintSel = () => {
+        selbar.hidden = sel.size === 0;
+        const picked = ss.filter((s) => sel.has(s.id));
+        selbar.replaceChildren(el('span', { class: 'n', text: `${sel.size}개 선택` }), el('button', { class: 'btn-text', type: 'button', text: '되돌리기', onclick: () => void restoreMany(picked) }), el('button', { class: 'btn-text danger', type: 'button', text: '완전 삭제', onclick: () => void purgeMany(picked, `선택한 세션 ${picked.length}개를 완전히 지울까요?`) }), el('button', { class: 'btn-text', type: 'button', text: '선택 해제', onclick: () => { sel.clear(); host.querySelectorAll('.v2-bin-row .sel').forEach((b) => { b.checked = false; }); paintSel(); } }));
+    };
     const sessRows = ss.map((s) => {
         const pn = projName(data, s.projectId);
+        const box = el('input', { type: 'checkbox', class: 'sel', 'aria-label': (s.label || s.id) + ' 선택' });
+        box.addEventListener('change', () => { if (box.checked)
+            sel.add(s.id);
+        else
+            sel.delete(s.id); paintSel(); });
         return sessRow(s, pn, [
             el('button', { class: 'btn-text', type: 'button', text: '되돌리기', title: '지난 세션으로 되돌립니다', onclick: () => void restore(s) }),
             el('button', { class: 'btn-text danger', type: 'button', text: '완전 삭제', title: '되살릴 수 없게 지웁니다', onclick: () => void purge(s) }),
-        ], (s.projectId ? pn + ' · ' : '') + '버림 ' + when(s.trashedAt));
+        ], (s.projectId ? pn + ' · ' : '') + '버림 ' + when(s.trashedAt), box);
     });
     host.replaceChildren(el('div', { class: 'v2-center v2-binpage' }, el('div', { class: 'v2-bin-top' }, el('div', {}, el('h1', { class: 'v2-title', text: '휴지통' }), el('p', { class: 'v2-desc', text: '프로젝트에서 떼어내 버린 세션이에요. [되돌리기]면 그 프로젝트의 지난 세션으로 돌아가고, 완전히 지우는 건 여기서만 할 수 있어요.' }), 
     // '다음부터 묻지 않기'(confirmSessionTrash)를 켜 둔 사람에게 되돌리는 문 — 확인창이 더는 안 뜨니 여기가 유일한 자리다.
-    trashConfirmSkipped() ? el('p', { class: 'v2-desc v2-bin-skipnote' }, el('span', { text: '휴지통으로 보낼 때 묻지 않고 바로 보내도록 해 두셨어요. ' }), el('button', { class: 'btn-text', type: 'button', text: '다시 묻기', onclick: (ev) => { setTrashConfirmSkipped(false); ev.currentTarget.closest('p')?.remove(); toast('다음부터 휴지통으로 보낼 때 다시 확인해요.'); } })) : null), ss.length ? el('button', { class: 'btn btn-ghost btn-sm v2-bin-emptyb', type: 'button', text: '휴지통 비우기', title: '휴지통의 세션을 전부 완전히 지웁니다', onclick: () => void empty() }) : null), el('section', { class: 'v2-bin-sec' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `세션 · ${ss.length}` })), ss.length
-        ? el('div', { class: 'v2-bin-list' }, ...sessRows)
+    trashConfirmSkipped() ? el('p', { class: 'v2-desc v2-bin-skipnote' }, el('span', { text: '휴지통으로 보낼 때 묻지 않고 바로 보내도록 해 두셨어요. ' }), el('button', { class: 'btn-text', type: 'button', text: '다시 묻기', onclick: (ev) => { setTrashConfirmSkipped(false); ev.currentTarget.closest('p')?.remove(); toast('다음부터 휴지통으로 보낼 때 다시 확인해요.'); } })) : null), ss.length ? el('button', { class: 'btn btn-ghost btn-sm v2-bin-emptyb', type: 'button', text: '휴지통 비우기', title: '휴지통의 세션을 전부 완전히 지웁니다', onclick: () => void purgeMany(ss, '휴지통을 비울까요?') }) : null), el('section', { class: 'v2-bin-sec' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `세션 · ${ss.length}` })), ss.length
+        ? el('div', { class: 'v2-bin-list' }, selbar, ...sessRows)
         : el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '휴지통이 비어 있어요.' }), el('p', { class: 'sub', text: '사이드바 [지난 세션]의 행 오른쪽 끝 휴지통 단추로 보낼 수 있어요.' }))), el('p', { class: 'v2-bin-fine', text: '프로젝트·지식·카테고리를 삭제한 것은 WIKI 앱의 휴지통에 있어요.' }, el('a', { class: 'btn-text', href: location.pathname + '?ui=classic#/trash', target: '_blank', rel: 'noopener', text: '열기 ↗' }))));
 }
