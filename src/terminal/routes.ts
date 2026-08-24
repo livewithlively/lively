@@ -412,11 +412,16 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const { nodeOfSession } = await import("../node/registry.js");
     const results: Array<{ id: string; status: string; detail?: string; harness?: string }> = [];
     for (const id of ids) {
-      // 노드(멤버 PC) 세션은 이 게이트웨이의 tmux 에 없다 — 아직 이 통로가 없어 정직하게 미지원으로 돌려준다.
-      if (nodeOfSession(id)) { results.push({ id, status: "unsupported", detail: "노드 세션은 아직 지원하지 않습니다" }); continue; }
       if (!(await canAttach(id, uid))) { results.push({ id, status: "error", detail: "접근할 수 없는 세션입니다" }); continue; }
       const harness = await sessionHarnessKey(id);
       const r = await applyLiveTheme(id, harness, theme);
+      // ⚠ 노드(멤버 PC) 세션 판정은 **라이브 관측 뒤에** 한다(#1716 과 같은 함정): 게이트웨이 박스가 노드로도
+      //  등록돼 있으면 그 박스의 로컬 세션이 노드 스냅샷에도 잡혀, 먼저 물어보면 로컬 세션까지 '노드'로 접힌다.
+      //  applyLiveTheme 이 로컬 tmux 에서 못 찾았을 때만(gone) 노드인지 되짚어 사유를 정확히 바꿔 준다.
+      if (r.status === "gone" && nodeOfSession(id)) {
+        results.push({ id, harness, status: "unsupported", detail: "노드 세션은 아직 지원하지 않습니다" });
+        continue;
+      }
       results.push({ id, harness, ...r });
     }
     res.setHeader("Cache-Control", "no-store");
