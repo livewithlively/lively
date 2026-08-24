@@ -14,7 +14,7 @@ const SANDBOX = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-sp-"));
 const SHARED = path.join(SANDBOX, "workspace");
 await fsp.mkdir(SHARED, { recursive: true });
 process.env.TERMINAL_ROOT_SHARED = SHARED;
-const { applySessionProjectFs, planSessionProjectFs, PROJECT_LINK_NAME, MEMBER_JS } = await import("./session-project.js");
+const { applySessionProjectFs, planSessionProjectFs, projectDirPath, projectDirOnThisHost, PROJECT_LINK_NAME, MEMBER_JS } = await import("./session-project.js");
 import { spawnSync } from "node:child_process";
 
 let pass = 0;
@@ -210,6 +210,16 @@ await t("[14:E5] 프로젝트 폴더가 워크스페이스 밖 → 프로젝트 
   assert.equal(r.createdProjectDir, false); assert.equal(r.projectDir, null);
   assert.ok(!fs.existsSync(path.join(path.dirname(SHARED), "escape")), "워크스페이스 밖에는 아무것도 만들지 않는다");
   assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_dir, null);
+});
+
+await t("[15:E11] projectDirOnThisHost 는 실재하는 폴더만 준다 — projectDirPath 와 다른 함수다", async () => {
+  // ⚠ 둘을 한 이름으로 합치면 조용한 사고가 난다: 세션 완전삭제(#1850)가 이 값으로 폴더를 rm -rf 하므로,
+  //  '존재 확인'이 빠지면 그 안전 가정이 사라진다. 바인딩(#1856)은 반대로 '없으면 만든다'가 목적이다.
+  assert.equal(projectDirOnThisHost("project/12"), P12, "실재하면 경로");
+  assert.equal(projectDirOnThisHost("project/9999"), null, "없으면 null — 삭제 경로가 유령 폴더를 만지지 않는다");
+  assert.equal(projectDirPath("project/9999"), path.join(SHARED, "project", "9999"), "경로 계산은 존재와 무관");
+  assert.equal(projectDirPath("../escape/9"), null, "워크스페이스 밖은 둘 다 null");
+  assert.equal(projectDirOnThisHost("../escape/9"), null);
 });
 
 console.log(`session-project: ${pass} passed`);
