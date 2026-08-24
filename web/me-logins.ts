@@ -43,6 +43,20 @@ interface SvcView {
   connected: any[];       // 지금 AI 가 쓸 수 있는 서비스
   available: any[];       // 내가 지금 바로 켤 수 있는 서비스
   blockedOAuth: any[];    // 관리자가 조직에 등록해야만 켤 수 있는 서비스(내 힘으로 안 되는 것)
+  all: any[];             // 위 셋 전부 — 상세 화면(#/connect/<key>)이 키로 되찾을 때 쓴다
+}
+
+/** 표에 없는 커넥터를 화면에 세울 최소 정보로 감싼다 — 관리자가 방금 등록한 앱이 여기로 들어온다. */
+function svcFromConnector(server: string, c: any): any {
+  //  이름: 커넥터 이름이 곧 사람이 아는 이름인 경우가 많다('notion' → 'Notion'). 아니면 관리자가 note 에 쓴다.
+  const label = String(server || '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase()).trim() || server;
+  const used = Array.isArray(c && c.used_by) && c.used_by.length ? ` (${c.used_by.join(', ')})` : '';
+  return {
+    key: server, label, icon: '',
+    oauth: server,
+    blurb: String((c && c.note) || `관리자가 조직에 등록한 앱이에요. 연결하면 AI가 내 ${label} 계정으로 직접 일할 수 있습니다.`) + used,
+    dynamic: true,   // 표에 없던 것 — 로고가 없어 이름 첫 글자 타일로 그려진다
+  };
 }
 
 function partition(oauth: any, creds: any): SvcView {
@@ -58,7 +72,17 @@ function partition(oauth: any, creds: any): SvcView {
     else if (selfServe(s)) available.push(s);
     else blockedOAuth.push(s);   // OAuth 전용인데 조직 미등록 → 카드로 내밀면 눌러도 안 되는 버튼이 된다
   }
-  return { oauthMap, credMap, connected, available, blockedOAuth };
+  // ── 표에 없는 커넥터도 흘려보내지 않는다(원준 2026-08-21) ────────────────────────────
+  //  종전엔 이 반복문이 LOGIN_SERVICES 만 돌아서, **관리자가 새 MCP 서버를 등록해도 이 화면엔 안 떴다** —
+  //  코드를 고쳐 표에 한 줄 넣어야 보였다. "내가 연결한 앱·안 한 앱을 하나하나 본다"는 이 화면의 약속과
+  //  어긋난다. 그래서 서버가 내려준 커넥터 중 표가 못 덮는 것을 그대로 세운다(로고만 없을 뿐 연결은 된다).
+  const covered = new Set(LOGIN_SERVICES.map((s) => s.oauth).filter(Boolean) as string[]);
+  for (const [server, c] of oauthMap) {
+    if (covered.has(server)) continue;
+    const svc = svcFromConnector(server, c);
+    (c && c.connected ? connected : available).push(svc);
+  }
+  return { oauthMap, credMap, connected, available, blockedOAuth, all: [...connected, ...available, ...blockedOAuth] };
 }
 
 // ── 화면 그리기 ──
