@@ -31,8 +31,11 @@ import {
   readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, rmSync,
   existsSync, statSync, openSync, closeSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
+import { hostEffects } from "./host-effects-port.mjs";
+
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 import { join } from "node:path";
 
 if (process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1") process.exit(0);

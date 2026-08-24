@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { spawnSync } from "node:child_process";
+import { createHostEffects, entrypointHostEffects } from "./host-effects.mjs";
 
 // lively.mjs 와 같은 계약(LIVELY_HOME 은 HOME 리다이렉트 — 샌드박스/테스트).
 const HOME = process.env.LIVELY_HOME || homedir();
@@ -57,9 +57,13 @@ export function projectsDirFor(cwd) {
 
 // ctx 주입 슬롯 — 아래 함수 본문은 lively.mjs 원문 그대로다(이름·들여쓰기 무변경).
 let say, dim, bold, green, yellow, red, gateway, token, has;
+let hostEffects = createHostEffects();
+const spawnSync = (...args) => hostEffects.spawnSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 export function sessionCommands(ctx) {
   ({ say, dim, bold, green, yellow, red, gateway, token, has } = ctx);
+  hostEffects = ctx.hostEffects || entrypointHostEffects();
   return { cmdResume, cmdBackfill, cmdShare };
 }
 

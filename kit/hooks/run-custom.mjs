@@ -17,10 +17,13 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
 // 주입 봉투는 하네스별 규약이다 — 표에서 파생한다. ⚠ HARNESS 상수는 종전 계산식 유지(빈 문자열 가능):
 //  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
 import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
+import { hostEffects } from "./host-effects-port.mjs";
+
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 // #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
 //  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의

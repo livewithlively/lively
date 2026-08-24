@@ -49,6 +49,23 @@ export function violatesR4(src) {
   return /\[Environment\]::(?:Get|Set)EnvironmentVariable\(\s*['"]PATH['"]\s*,\s*['"]User['"]/.test(src);
 }
 
+/**
+ * R5 — 사용자 머신에서 실행되는 kit 제품 코드의 외부 CLI·네트워크·스케줄러 primitive는
+ * HostEffects 포트 또는 부트스트랩/단독 플러그인의 동등한 인라인 경계를 가져야 한다.
+ */
+export function violatesR5(src) {
+  const code = String(src).replace(/^\s*\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const primitive = /node:child_process/.test(code)
+    || /\bfetch\s*\(/.test(code)
+    || /["'](?:schtasks|launchctl|systemctl|loginctl)(?:\.exe)?["']/i.test(code);
+  if (!primitive) return false;
+  const wired = /hostEffects\.(?:execFileSync|spawnSync|spawn|fetch|schedulerSync)/.test(code)
+    || /host-effects(?:-port)?\.mjs/.test(code)
+    || /HOST_EFFECTS_NATIVE/.test(code)
+    || /LIVELY_HOST_EFFECTS\s*===\s*["']deny["']/.test(code);
+  return !wired;
+}
+
 export const RULES = [
   { id: "R1", violates: violatesR1, title: "자식 env 의 HOME 은 USERPROFILE 과 함께 준다(윈도우 격리 무효 방지)", fix: "sandboxEnv({home,tmp}) 를 쓰세요 — kit/testlib/os-sandbox.mjs" },
   { id: "R2", violates: violatesR2, title: "실 claude 를 부르는 테스트는 CLAUDE_CONFIG_DIR 를 명시한다(실 프로필 오염 방지)", fix: '샌드박스 안 값 또는 "" 로 덮으세요' },

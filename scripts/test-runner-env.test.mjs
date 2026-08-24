@@ -5,7 +5,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const got = testChildEnv({ LIVELY_HOST_EFFECTS: "allow", LIVELY_NO_BROWSER: "", KEEP: "yes" });
-const ok = got.LIVELY_HOST_EFFECTS === "deny" && got.LIVELY_NO_BROWSER === "1" && got.KEEP === "yes";
+const ok = got.LIVELY_HOST_EFFECTS === "deny"
+  && got.LIVELY_HOST_EFFECTS_TEST_MODE === "sandbox"
+  && got.LIVELY_NO_BROWSER === "1"
+  && got.KEEP === "yes";
 if (!ok) {
   console.error(`FAIL E10 러너 자식 env가 capability를 닫지 못함: ${JSON.stringify(got)}`);
   process.exit(1);

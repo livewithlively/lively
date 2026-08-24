@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Windows User PATH host-effect 경계 단위테스트. 실제 PowerShell/HKCU는 절대 호출하지 않고 순수 포트+fake executor만 쓴다.
 import {
-  addWindowsUserPath, hostEffectsAllowed, mutateWindowsUserPath, removeWindowsUserPath,
+  addWindowsUserPath, createHostEffects, entrypointHostEffects, hostEffectsAllowed,
+  mutateWindowsUserPath, removeWindowsUserPath,
 } from "./host-effects.mjs";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -12,6 +13,133 @@ const eq = (name, got, want) => {
   if (JSON.stringify(got) === JSON.stringify(want)) { pass++; console.log(`ok  ${name}`); }
   else { fail++; console.error(`FAIL ${name} — got=${JSON.stringify(got)} want=${JSON.stringify(want)}`); }
 };
+const denied = async (fn) => {
+  try { await fn(); return null; } catch (e) { return { code: e.code, kind: e.kind }; }
+};
+
+// 외부 CLI 포트 — native/fake만 실행하고, 기본/deny는 executor를 호출하기 전에 막는다.
+{
+  const calls = [];
+  const native = createHostEffects({ mode: "native", execFile: (...a) => { calls.push(a); return "ok"; } });
+  eq("P-E1 native CLI → executor 1회·결과 보존", { result: native.execFileSync("tool", ["a"]), calls },
+    { result: "ok", calls: [["tool", ["a"], {}]] });
+}
+{
+  let calls = 0;
+  const effect = createHostEffects({ mode: "deny", execFile: () => { calls++; } });
+  eq("P-E2 deny CLI → executor 0회", { error: await denied(() => effect.execFileSync("tool")), calls },
+    { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "external-cli" }, calls: 0 });
+}
+{
+  const calls = [];
+  const fake = createHostEffects({ mode: "fake", execFile: (...a) => { calls.push(a); return 7; } });
+  eq("P-E3 fake CLI → fake만 1회", { result: fake.execFileSync("stub", ["x"]), calls },
+    { result: 7, calls: [["stub", ["x"], {}]] });
+}
+{
+  let calls = 0;
+  const effect = createHostEffects({ execFile: () => { calls++; } });
+  eq("P-E4 capability 부재 CLI → 기본 deny", { error: await denied(() => effect.execFileSync("tool")), calls },
+    { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "external-cli" }, calls: 0 });
+}
+{
+  const calls = [];
+  const effect = createHostEffects({ mode: "native", execFile: (...a) => { calls.push(a); return 0; } });
+  effect.execFileSync("tool");
+  eq("P-E5 argv 0개 경계 → 빈 argv 그대로", calls, [["tool", [], {}]]);
+}
+
+// 네트워크 포트 — 실제 소켓 대신 URL·init 호출 기록만 관찰한다.
+{
+  const calls = [], response = { ok: true };
+  const native = createHostEffects({ mode: "native", fetcher: async (...a) => { calls.push(a); return response; } });
+  eq("P-N1 native network → fetcher 1회·응답 보존", { same: await native.fetch("https://example.test") === response, calls },
+    { same: true, calls: [["https://example.test", undefined]] });
+}
+for (const [id, mode] of [["P-N2", "deny"], ["P-N4", undefined]]) {
+  let calls = 0;
+  const effect = createHostEffects({ ...(mode ? { mode } : {}), fetcher: async () => { calls++; } });
+  eq(`${id} network → 요청 0회`, { error: await denied(() => effect.fetch("https://example.test")), calls },
+    { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "network" }, calls: 0 });
+}
+{
+  const calls = [];
+  const fake = createHostEffects({ mode: "fake", fetcher: async (...a) => { calls.push(a); return "fake"; } });
+  eq("P-N3 fake network → fake만 1회", { result: await fake.fetch("https://example.test", { method: "POST" }), calls },
+    { result: "fake", calls: [["https://example.test", { method: "POST" }]] });
+}
+{
+  const calls = [];
+  const native = createHostEffects({ mode: "native", fetcher: async (...a) => { calls.push(a); return "ok"; } });
+  await native.fetch("https://example.test", { timeout: 0 });
+  eq("P-N5 timeout=0 경계 → init 그대로 전달", calls, [["https://example.test", { timeout: 0 }]]);
+}
+
+// 스케줄러 포트 — command 이름으로도 scheduler 종류를 유지한다.
+{
+  const calls = [];
+  const native = createHostEffects({ mode: "native", spawnSync: (...a) => { calls.push(a); return { status: 0 }; } });
+  eq("P-S1 native scheduler → 1회", { result: native.schedulerSync("schtasks", ["/Query"]), calls },
+    { result: { status: 0 }, calls: [["schtasks", ["/Query"], {}]] });
+}
+for (const [id, mode] of [["P-S2", "deny"], ["P-S4", undefined]]) {
+  let calls = 0;
+  const effect = createHostEffects({ ...(mode ? { mode } : {}), spawnSync: () => { calls++; } });
+  eq(`${id} scheduler → 실행 0회`, { error: await denied(() => effect.schedulerSync("schtasks")), calls },
+    { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "scheduler" }, calls: 0 });
+}
+{
+  const calls = [];
+  const fake = createHostEffects({ mode: "fake", spawnSync: (...a) => { calls.push(a); return "fake"; } });
+  eq("P-S3 fake scheduler → fake만 1회", { result: fake.schedulerSync("schtasks", ["/Run"]), calls },
+    { result: "fake", calls: [["schtasks", ["/Run"], {}]] });
+}
+{
+  let calls = 0;
+  const native = createHostEffects({ mode: "native", spawnSync: () => { calls++; return { status: 1 }; } });
+  native.schedulerSync("schtasks", [], { retries: 0 });
+  eq("P-S5 재시도 0회 경계 → 최초 호출만", calls, 1);
+}
+
+eq("P-W1 테스트 env deny → entrypoint도 승격 안 됨",
+  entrypointHostEffects({ env: { LIVELY_HOST_EFFECTS: "deny" } }).mode, "deny");
+eq("P-W2 제품 entrypoint → native capability 명시",
+  entrypointHostEffects({ env: {} }).mode, "native");
+{
+  const calls = [];
+  const sandbox = entrypointHostEffects({
+    env: { LIVELY_HOST_EFFECTS: "deny", LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox" },
+    fetcher: async (...a) => { calls.push(a); return "mock"; },
+    execFile: (...a) => { calls.push(a); return "node"; },
+    spawnSync: (...a) => { calls.push(a); return "scheduler"; },
+  });
+  eq("P-W1a sandbox → 고포트 loopback mock 허용",
+    { mode: sandbox.mode, result: await sandbox.fetch("http://127.0.0.1:49152/mock"), calls: calls.length },
+    { mode: "sandbox", result: "mock", calls: 1 });
+  eq("P-W1b sandbox → 현재 Node helper 허용",
+    { result: sandbox.execFileSync(process.execPath, []), calls: calls.length },
+    { result: "node", calls: 2 });
+  eq("P-W1c sandbox → 기본 로컬 서비스 포트 차단",
+    { error: await denied(() => sandbox.fetch("http://127.0.0.1:8080/api")), calls: calls.length },
+    { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "network" }, calls: 2 });
+  eq("P-W1d sandbox → 작업 스케줄러 차단",
+    { error: await denied(() => sandbox.schedulerSync("schtasks", ["/Create"])), calls: calls.length },
+    { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "scheduler" }, calls: 2 });
+}
+{
+  const calls = [];
+  const env = { LIVELY_HOST_EFFECTS: "deny", LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", LIVELY_HOME: "C:\\sandbox" };
+  const sandbox = entrypointHostEffects({ env, execFile: (...a) => { calls.push(a); return "ok"; }, spawnSync: (...a) => { calls.push(a); return { status: 0 }; } });
+  eq("P-W1e sandbox → 샌드박스 절대경로 stub 허용",
+    { result: sandbox.execFileSync("C:\\sandbox\\bin\\stub.exe"), calls: calls.length },
+    { result: "ok", calls: 1 });
+  eq("P-W1f sandbox → 샌드박스 cwd의 git 허용",
+    { result: sandbox.spawnSync("git", ["status"], { cwd: "C:\\sandbox\\repo" }), calls: calls.length },
+    { result: { status: 0 }, calls: 2 });
+  eq("P-W1g sandbox → 샌드박스 밖 외부 CLI 차단",
+    { error: await denied(() => sandbox.execFileSync("C:\\real\\tool.exe")), calls: calls.length },
+    { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "external-cli" }, calls: 2 });
+}
 
 // E1/E8 — 기본 deny이며 LIVELY_HOME은 capability가 아니다.
 eq("E1 기본/임시 LIVELY_HOME → 호스트 효과 권한 없음",
