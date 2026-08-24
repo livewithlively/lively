@@ -253,6 +253,14 @@ let countEl = null;
 let filterOpen = false; // [필터] 팝오버 — 열림은 잠깐의 상태라 브라우저에 기억하지 않는다
 let outsideBound = false;
 // 위계 아이콘 — 프로젝트는 폴더(펼치면 열린 폴더), 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
+// 핀 아이콘 경로 — Lucide 의 pin(ISC). **우리가 그리지 않는다.**
+//  종전엔 손으로 그린 도형이었는데 가운데 축이 세 개로 갈라져 있었다(원준 2026-08-23 "좌우대칭도 안 맞고
+//  그냥 너무 이상해"). 실측: 머리 x 9~15(중심 12) · 몸통 가로대 6.5~16.5(중심 11.5) · 바늘 10~12(중심 11).
+//  아이콘은 1px 어긋남이 '뭔가 이상하다'로 읽히는 자리라, 눈대중 대신 검증된 세트의 경로를 그대로 쓴다
+//  (서비스 로고를 공식 마크로 바꾼 것과 같은 규율 — svc-logos.ts).
+//  ⚠ 바늘과 몸통을 **따로** 둔다: 고정됨(on)일 때 몸통만 채워지고 바늘은 선으로 남아야 핀으로 읽힌다.
+const PIN_NEEDLE = 'M12 17v5';
+const PIN_BODY = 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4a1 1 0 0 1 1 1z';
 function glyph(kind, cls) {
     const D = {
         folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
@@ -714,7 +722,7 @@ function pinBtn(pk) {
     const on = isPinned(pk);
     return el('button', { class: 'v2-pinb' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on),
         'aria-label': on ? '고정 해제' : '위에 고정', title: on ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
-        onclick: (e) => { e.preventDefault(); e.stopPropagation(); togglePin(pk); } }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-pinb-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M9 4h6l-1 5 3.2 3.2a1 1 0 0 1-.7 1.7H12v5l-1 1-1-1v-5H6.5a1 1 0 0 1-.7-1.7L9 9z' })));
+        onclick: (e) => { e.preventDefault(); e.stopPropagation(); togglePin(pk); } }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-pinb-ic', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY })));
 }
 // 프로젝트 행 오른쪽 — 숫자를 늘어놓지 않는다. **볼 일이 있는 것만**: 확인 필요(호박)·작업 중(파랑).
 //  그 밖의 살아 있는 세션은 개수 하나(회색). 상태별 전체 분포는 [필터] 팝오버가 보여 준다.
