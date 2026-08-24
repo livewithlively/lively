@@ -336,7 +336,7 @@ function openManagedSessionForm(m, reload) {
     const mflags = (m && m.flags) || {};
     const flagsWrap = el('div', {}); // 선택한 하네스의 플래그(모델·effort…)를 여기에 그린다
     let hcat = [{ key: 'claude', label: 'claude', flags: [
-                { name: '--model', label: '모델', choices: ['', 'opus', 'sonnet', 'haiku'], type: 'select' },
+                { name: '--model', label: '모델', choices: ['', 'fable', 'opus', 'sonnet', 'haiku'], type: 'select' },
                 { name: '--effort', label: 'effort', choices: ['', 'low', 'medium', 'high', 'xhigh', 'max'], type: 'select' },
             ] }, { key: 'codex', label: 'codex', flags: [] }, { key: 'shell', label: 'shell', flags: [] }];
     const flagCtrls = {};

@@ -380,6 +380,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const cmd: string[] = [];
   const appliedFlags: Record<string, string> = {}; // 생성 시 적용한 플래그 — @box_flags 로 저장(수정 팝업 표시용).
   if (harness.bin) {
+    // 모델을 명시해서 띄울 때는 그 모델이 받는 추론강도 조합까지 검증한다. 화면은 모델 변경 때 목록을 좁히지만,
+    // API 직접 호출·오래 열린 브라우저도 있으므로 서버가 마지막 경계다(예: Luna + Ultra 는 Codex 카탈로그상 불가).
+    const selectedModel = String(input.flags?.["--model"] ?? "");
+    const selectedEffort = String(input.flags?.["--effort"] ?? "");
+    const modelEfforts = selectedModel ? harness.effortsByModel?.[selectedModel] : undefined;
+    if (selectedEffort && modelEfforts && !modelEfforts.includes(selectedEffort)) {
+      throw new HttpError(400, `${selectedModel} 모델은 ${selectedEffort} 추론강도를 지원하지 않습니다`);
+    }
     cmd.push(harness.bin);
     // 이어받기(#905 C1 · #1711 표 구동) — 그 하네스의 이어받기 수단을 **카탈로그에서** 만든다.
     //  ⚠ 여기의 <sid> 는 **그 하네스 자신의 대화 id** 여야 한다(claude UUID · agy conversationId · opencode sessionID).
@@ -398,7 +406,16 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       if (raw === undefined || raw === null || raw === "") continue;
       if (def.type === "bool") { if (raw) { cmd.push(def.name); appliedFlags[def.name] = "1"; } continue; }
       const v = String(raw);
-      if (def.type === "select") { if (!def.choices?.includes(v)) throw new HttpError(400, `${def.label} 값이 허용 목록에 없습니다`); cmd.push(def.name, v); appliedFlags[def.name] = v; continue; }
+      if (def.type === "select") {
+        if (!def.choices?.includes(v)) throw new HttpError(400, `${def.label} 값이 허용 목록에 없습니다`);
+        // Codex는 추론강도를 일반 CLI 플래그로 받지 않는다. CLI 0.149.1이 보장하는
+        // `--config key=value` 경로로 바꾸되, 화면·저장 상태는 다른 하네스와 같은
+        // --effort 키를 유지한다. 따라서 생성폼/상단 제어가 하네스별 argv 문법을 알 필요가 없다.
+        if (harness.key === "codex" && def.name === "--effort") cmd.push("--config", `model_reasoning_effort=${v}`);
+        else cmd.push(def.name, v);
+        appliedFlags[def.name] = v;
+        continue;
+      }
       if (!SAFE_VALUE_RE.test(v) || v.length > 64) throw new HttpError(400, `${def.label} 값 형식이 잘못되었습니다`);
       cmd.push(def.name, v); appliedFlags[def.name] = v;
     }
