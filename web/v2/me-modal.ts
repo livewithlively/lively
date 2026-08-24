@@ -122,10 +122,13 @@ export function openMeModal(opts: MeModalOpts = {}): void {
     // 로그인 수단(#1520)은 있으면 [계정]에 얹고, 없으면(OIDC 미설정 배포) 그 칸만 안 그린다 — 나머지는 그대로 쓴다.
     let logins: any = null;
     try { logins = await api('/api/ui/me/logins'); } catch (_) { /* 부가 정보 — 조용히 넘어간다 */ }
+    // 리브가 온보딩에서 알게 된 것(#1843). 실패해도 [AI 개인 규칙]은 종전대로 열린다 — 그 칸만 안 그린다.
+    let liv: any = null;
+    try { liv = await api('/api/ui/me/liv-profile'); } catch (_) { /* 옛 서버·조회 실패 — 칸을 접는다 */ }
 
     const saved = (): void => { paintHead(); opts.onSaved?.(); };
     panes.set('profile', profilePane(data, saved));
-    panes.set('ai', aiPane(data));
+    panes.set('ai', aiPane(data, liv));
     panes.set('look', lookPane(close));
     panes.set('account', accountPane(data, logins, close));
     contEl.replaceChildren(...panes.values());
@@ -178,10 +181,48 @@ function profilePane(data: any, onSaved: () => void): HTMLElement {
     saveRow(btn, status));
 }
 
+// ── 온보딩에서 알려주신 것(#1843) — 리브가 대화로 알게 된 것을 이 창이 되읽는다. ──
+//
+//  **버튼이 없는 것이 설계다**(원준 2026-08-21: "사람이 굳이 직접 저장을 누르지 않고 자연스럽게 그냥
+//   반영되게"). 리브가 알아낸 것은 주입 시점에 개인 층으로 합쳐진다(publish.ts renderLivOnboarding) —
+//   여기서 [추가 메모]로 옮겨 담게 하면 ⓐ 안 누른 사람에겐 안 가고 ⓑ 누른 순간 사본이 생겨 나중에
+//   리브가 알아낸 것이 갱신돼도 그 사본만 낡는다. 그래서 이 칸은 **거울**이지 입력칸이 아니다.
+//  그러니 문구도 '반영하세요'가 아니라 '이미 반영되고 있습니다'여야 한다 — 화면이 사실을 말해야 한다.
+function onboardingCard(liv: any): HTMLElement {
+  const work = (liv && liv.work) || null;
+  const answers: any[] = (liv && Array.isArray(liv.answers) ? liv.answers : []);
+  const rows: Array<{ k: string; v: string }> = [];
+  if (work && String(work.asis || '').trim()) rows.push({ k: '지금 하는 일', v: String(work.asis).trim() });
+  if (work && String(work.tobe || '').trim()) rows.push({ k: '이렇게 하고 싶어요', v: String(work.tobe).trim() });
+  answers.forEach((a) => {
+    // 고른 값은 id 로 저장된다(선택지 라벨은 답한 순간 사라진다) — 있는 그대로 보여준다. 직접 적은 것은 뒤에 잇는다.
+    const picked = [...(Array.isArray(a.choices) ? a.choices : []), ...(a.other ? [String(a.other)] : [])]
+      .map((c: any) => String(c).trim()).filter(Boolean);
+    if (!picked.length) return;
+    rows.push({ k: String(a.question || a.key || '').trim() || String(a.key || ''), v: picked.join(' · ') });
+  });
+
+  const head = el('div', { class: 'v2me-ob-h' }, el('span', { class: 'v2me-ob-t', text: '온보딩에서 알려주신 것' }));
+  const card = el('section', { class: 'v2me-ob' }, head);
+  if (!rows.length) {
+    card.append(
+      el('p', { class: 'v2me-ob-d' }, ...uiText('아직 리브와 나눈 이야기가 없어요. 리브가 묻는 것에 답하면 하는 일·일하는 방식이 여기에 저절로 모이고, 그대로 내 AI 세션에 실립니다.')),
+      el('a', { class: 'btn btn-ghost btn-sm', href: '#/liv', text: '리브와 이야기하기' }));
+    return card;
+  }
+
+  head.append(el('span', { class: 'pill pill-ok', text: '반영 중' }));
+  card.append(
+    el('p', { class: 'v2me-ob-d' }, ...uiText('리브와 이야기하며 알려주신 내용이에요. 따로 저장하지 않아도 내 AI 가 매 세션 시작할 때 아래 항목들과 함께 읽습니다. 고치려면 리브에게 말씀하세요.')),
+    el('dl', { class: 'v2me-ob-l' }, ...rows.map((r) => el('div', { class: 'v2me-ob-r' },
+      el('dt', { text: r.k }), el('dd', { text: r.v })))));
+  return card;
+}
+
 // ── ② AI 개인 규칙 — 내 AI 가 매 세션 시작에 읽는 개인 레이어(org_member.body_md). ──
 //  선택지·직렬화·복원은 me-profile.ts 소유를 그대로 쓴다(PROF_* · profChips · parseMyProfile) —
 //  규약이 두 벌이 되면 관리탭 [내 AI 설정]과 이 창의 저장이 서로를 지운다.
-function aiPane(data: any): HTMLElement {
+function aiPane(data: any, liv: any): HTMLElement {
   const pr = parseMyProfile(data.body_md || '');
   const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
   const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 원준님 / 대표님' });
@@ -230,6 +271,8 @@ function aiPane(data: any): HTMLElement {
   });
 
   return pane('AI 개인 규칙', '내 AI 가 나에 대해 무엇을 알고 일할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.',
+    onboardingCard(liv),
+    el('div', { class: 'v2me-k', text: '내가 적는 것' }),
     field('역할', roleIn),
     field('개발 이해도', el('div', {}, devChips, devHint)),
     field('호칭 (AI 가 나를 부르는 말)', addressIn),

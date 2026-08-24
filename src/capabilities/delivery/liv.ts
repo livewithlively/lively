@@ -161,6 +161,28 @@ export const livCapabilities: Capability[] = [
         .describe("사람이 '안 하겠다'고 한 카드 key(예: org.embeddings). 그 카드는 이후 뜨지 않는다."),
     }),
 
+  // ── 리브가 나에 대해 아는 것을 **화면이 읽는다**(#1843) ──────────────────────────────
+  //
+  //  왜 따로 필요한가: 이 값들은 리브 홈(me_liv_home)이 이미 실어 나르지만, 그건 온보딩 판정·노드 목록·
+  //   AI 로그인 프로브까지 한꺼번에 도는 무거운 조회다. [내 프로필 · 환경설정] 창은 "리브가 나에 대해
+  //   알게 된 것"만 있으면 되므로 그 한 조각만 얇게 연다(POST /api/ui/me/liv-profile 과 같은 경로의 GET).
+  //
+  //  ⚠ 이 값들은 **세션에 주입되지 않는다** — 주입되는 개인 층은 org_member.body_md 뿐이다(publish.ts).
+  //   그래서 창은 이걸 '이미 반영된 것'처럼 보여주면 안 되고, [내 규칙에 반영]으로 body_md 에 담게 한다.
+  //  대기 중인 요청(secret_ask)·대화 세션(chat)은 리브 화면 소관이라 여기서 내보내지 않는다.
+  restRead("me_liv_profile_get", "리브가 나에 대해 아는 것",
+    "리브가 온보딩 대화에서 알게 된 내 업무 방식(asis/tobe)과 내가 고른 답들을 돌려준다 — **본인 것만**. " +
+    "[내 프로필 · 환경설정] 창의 [AI 개인 규칙]이 이 값으로 '온보딩에서 알려주신 것' 칸을 채운다.",
+    [{ method: "GET", paths: ["/api/ui/me/liv-profile"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile } = await import("../../org/store.js");
+      // fail-open — 리브를 한 번도 안 쓴 사람(행 없음)은 빈 프로필이 정답이다. 창이 안 열리면 안 된다.
+      const p: LivProfile = await getLivProfile(userId).catch(() => ({}));
+      return { work: p.work ?? null, answers: p.answers ?? [], decisions: p.decisions ?? [] };
+    }),
+
   // ── 자격 받기(#1631) — **사람을 다른 탭으로 보내지 않기 위한 자리** ────────────────────
   //
   //  왜 이게 필요한가(실측 2회): 리브는 두 번 다 시크릿을 **채팅에 붙여넣으라고** 했고, 사람이 겁먹고

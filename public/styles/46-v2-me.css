@@ -45,6 +45,21 @@
 .v2me-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .v2me .v2-theme { max-width: 300px; }
 
+/* ── 온보딩에서 알려주신 것(#1843) — 리브가 알게 된 것을 되읽는 칸. ──
+   내가 적는 칸들과 **면이 갈려야 한다**: 이건 내가 쓴 것이 아니라 대화에서 모인 것이고,
+   아직 세션에 실리지도 않는다. 그래서 틴트 면 + 점선 없는 실선 테두리로 한 덩어리로 묶는다. */
+.v2me-ob { margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--line-note); border-radius: 12px; background: var(--bg-note); }
+.v2me-ob-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.v2me-ob-t { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 800; color: var(--ink-note); }
+.v2me-ob-d { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-sub); line-height: 1.55; }
+.v2me-ob-l { margin: 12px 0 0; display: flex; flex-direction: column; gap: 9px; }
+.v2me-ob-r { display: flex; gap: 10px; align-items: baseline; }
+.v2me-ob-r dt { flex: none; width: 132px; font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+.v2me-ob-r dd { flex: 1; min-width: 0; margin: 0; font-size: 13px; color: var(--ink); line-height: 1.5; overflow-wrap: anywhere; }
+.v2me-ob .btn { flex: none; }
+/* 「내가 적는 것」 — 위 칸(모여 온 것)과 아래 폼(내가 쓰는 것)의 경계를 한 줄로 말한다. */
+.v2me-k { margin: 0 0 2px; font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
+
 /* 더 자세한 설정 — 여기서 다 하지 않고 어디로 가면 되는지만 말하는 줄. */
 .v2me-more-k { margin: 22px 0 8px; font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
 .v2me-more { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line);
@@ -66,4 +81,6 @@
   .v2me-nav-b { width: auto; flex: none; white-space: nowrap; }
   .v2me-nav-sp { display: none; }
   .v2me-cont { padding: 16px 16px 24px; }
+  .v2me-ob-r { flex-direction: column; gap: 2px; }
+  .v2me-ob-r dt { width: auto; }
 }
