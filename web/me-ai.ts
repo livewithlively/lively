@@ -1,16 +1,15 @@
-// me-ai.ts — [내 설정 ▸ 내 AI 설정] 패널: 연결된 AI 계정(무엇으로·누구 계정으로) + AI 개인 규칙
+// me-ai.ts — [내 설정 ▸ 내 AI 계정] 패널: 연결된 AI 계정(무엇으로·누구 계정으로)
 //  (#1313 R38, admin.ts 에서 verbatim 분리).
-//  개인 레이어(org_member.body_md)의 선택지·직렬화·복원은 me-profile.ts 소유를 그대로 쓴다(PROF_* · profChips ·
-//   parseMyProfile) — 규약이 두 벌이 되면 [내 정보] 모달과 이 화면의 저장이 서로를 지운다.
+//  AI 개인 규칙(org_member.body_md) 편집 폼도 여기 있었는데, 좌하단 내 프로필 창의 [AI 개인 규칙] 탭으로
+//   옮겨 갔다(#1843 이 그 창을 만들고 #1898 이 이쪽 사본을 걷었다) — 같은 레코드를 고치는 폼이 두 화면에
+//   있으면 어느 쪽이 정본인지 아무도 모른다. 직렬화 규약(PROF_* · profChips · parseMyProfile)은 그대로
+//   me-profile.ts 소유이고, 이제 그 창(v2/me-modal.ts)만 쓴다.
 import { api, busy, cardHead, el, errorNote, state, toast, uiText, withTip } from './core.js';
 import { sessionTermUrl } from './lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
-import { field, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
-import { PROF_DEV, PROF_LANG, PROF_TONE, parseMyProfile, profChips } from './me-profile.js';
 
-// ── [내 설정 ▸ 내 AI 설정] 상단 박스 — 내 AI 계정(#1085). ──
-//  아래 박스가 '내 AI 에게 무엇을 알려줄까'(개인 규칙)라면, 이 박스는 '내 AI 가 **무엇으로, 누구 계정으로** 도는가'다.
-//  성격이 달라 한 박스에 섞지 않고 위에 별도 카드로 둔다(사용자 요구).
+// ── [내 설정 ▸ 내 AI 계정] 박스 — 내 AI 계정(#1085). ──
+//  '내 AI 에게 무엇을 알려줄까'(개인 규칙, 내 프로필 창)와 달리 이 박스는 '내 AI 가 **무엇으로, 누구 계정으로** 도는가'다.
 //  · 무엇으로 — 하네스(Claude Code · Codex). 지금 내 세션이 실제로 어느 것으로 떠 있는지 개수로 보여준다.
 //  · 누구 계정으로 — 서버가 보는 자격증명 존재 여부(scope=isolated/profile/shared, /api/ui/me/ai-accounts).
 //  로그인은 그 AI 를 띄운 **개인 세션**을 새 탭으로 열어 사람이 직접 한다(OAuth 는 브라우저 흐름이라 대행 불가) —
@@ -113,93 +112,15 @@ function myAiAccountsCard() {
   return card;
 }
 
-// ── [내 설정 ▸ 내 AI 설정] — 개인 레이어(org_member.body_md). ──
-//  #846 이 배선을 완성했다: previewMemberContext 가 `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)` 블록으로
-//  **본인 세션에만** 싣는다(memberId = bearer principal — 남의 개인 규칙이 새지 않는다). 그 전엔 저장은 됐지만
-//  **어떤 주입 경로도 읽지 않았다** — 그래서 개인 규칙을 올릴 데가 없어 injection='always' 지식(=전원 공유)
-//  밖에 선택지가 없었다(남의 세션까지 오염). 이제 진짜로 반영되므로, 여기서 **실제 주입 전문**을 그대로 보여 준다.
-//
-//  필드는 4개로 줄였다(#837 · 사용자 지적: "응답길이랑 담당영역, 자주쓰는레포는 좀 불필요한거같아").
-//   · 응답 길이 — 대화에서 그때그때 말하면 되는 것(고정하면 오히려 방해).
-//   · 담당 영역 — 팀·카테고리 오너십(${team})이 이미 주입한다(중복).
-//   · 자주 쓰는 도구·레포 — 세션이 열린 폴더·레포가 말해 준다(중복).
-async function myAiSection(detail) {
-  busy(detail, el('div', { class: 'card' }, skeleton('내 AI 설정을 불러오는 중')));
-  let data: any;
-  try { data = await api('/api/ui/me/profile'); }
-  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '불러오지 못했습니다'))); return; }
-  const pr = parseMyProfile(data.body_md || '');
-
-  const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
-  const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 상민님 / 대표님' });
-  // 플레이스홀더는 **넣을 것만** 말한다 — 넣지 말 것(시크릿)은 아래 힌트로 따로 뗀다. 한 문장에 뭉쳐 놓으니
-  //  '나만의 규칙·선호·맥락(도) 넣지 마세요'로 읽혔다(사용자 지적).
-  const memoTa = el('textarea', { class: 'admin-ta admin-ta-prose', rows: '5',
-    placeholder: '내 AI 가 알아두면 좋은 규칙·선호·맥락을 자유롭게 적어주세요.\n예: 금액은 항상 원 단위로 / 보고는 결론부터 / 화요일 오전엔 회의라 답이 늦어요' });
-  memoTa.value = pr.memo;
-
-  const devSel = { v: pr.dev };
-  const devHint = el('p', { class: 'prof-hint' });
-  const renderDevHint = () => { const d = PROF_DEV.find((x) => x.v === devSel.v); devHint.textContent = d ? d.hint : '항목을 고르면 AI가 그 수준에 맞춰 기술 설명의 자세한 정도를 조절해요.'; };
-  const devChips = profChips(PROF_DEV, devSel, (o) => o.label, (o) => o.v, renderDevHint);
-  renderDevHint();
-  const toneSel = { v: pr.tone };
-  const toneChips = profChips(PROF_TONE.map((t) => ({ v: t })), toneSel, (o) => o.v, (o) => o.v);
-  // 사용 언어 — 프리셋 칩과 '직접 입력'이 한 값(langSel.v)을 공유한다. 칩을 고르면 입력칸을 비우고, 직접 입력하면 칩 선택이 풀린다.
-  const langSel = { v: pr.lang };
-  // 직접 입력 = 칩 줄의 마지막 칸. 칩과 같은 알약 모양·높이로 맞춰 한 줄에 이어 붙인다(#1085).
-  const langCustom = el('input', { type: 'text', class: 'prof-chip-input', placeholder: '직접 입력 (예: Français)' });
-  if (langSel.v && !PROF_LANG.includes(langSel.v)) langCustom.value = langSel.v;   // 프리셋 밖 값이면 입력칸에 복원
-  const langChips = profChips(PROF_LANG.map((t) => ({ v: t })), langSel, (o) => o.v, (o) => o.v, () => { langCustom.value = ''; });
-  langChips.append(langCustom);   // 칩 wrap(.prof-chips) 안 — 폭이 좁아지면 자연히 다음 줄로 넘어간다
-  langCustom.addEventListener('input', () => { langSel.v = langCustom.value.trim(); (langChips as any).repaint(); });
-
-  const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
-  const status = el('span', { class: 'admin-status' });
-  saveBtn.addEventListener('click', async () => {
-    // 선택·입력 → canonical markdown(AI가 읽기 좋고 parseMyProfile 로 복원 가능). 빈 항목은 생략.
-    const lines: string[] = [];
-    if (roleIn.value.trim()) lines.push('- 역할: ' + roleIn.value.trim());
-    const d = PROF_DEV.find((x) => x.v === devSel.v);
-    if (d) lines.push('- 개발 이해도: ' + d.label + ' — ' + d.hint);
-    if (addressIn.value.trim()) lines.push('- 호칭: ' + addressIn.value.trim());
-    if (toneSel.v) lines.push('- 말투: ' + toneSel.v);
-    if (langSel.v) lines.push('- 사용 언어: ' + langSel.v + ' — 되도록 이 언어로 답하고, 다른 언어는 쓰지 마세요');
-    let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
-    const memo = memoTa.value.trim();
-    if (memo) body += (body ? '\n' : '') + '## 추가 메모\n' + memo + '\n';
-    saveBtn.disabled = true;
-    // display_name·아바타는 **안 보낸다** — 서버가 보존하므로 [내 정보]가 지워지지 않는다.
-    try {
-      await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ body_md: body }) });
-      toast('저장됨 — 다음 세션부터 내 AI 가 반영합니다'); status.textContent = '저장됨';
-    } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); }
-    saveBtn.disabled = false;
-  });
-
+// ── [내 설정 ▸ 내 AI 계정] — 화면 조립. ──
+//  AI 개인 규칙 편집 폼(개인 레이어 org_member.body_md — #846 이 주입 배선을 완성)은 좌하단 내 프로필 창의
+//  [AI 개인 규칙] 탭으로 옮겨 갔다(#1843·#1898). 여기는 계정 카드만 남고, 규칙은 안내 한 줄로 그 창을 가리킨다.
+function myAiSection(detail) {
   detail.replaceChildren(
-    // 페이지 제목 = 이 화면 전체(계정 + 개인 규칙). 개별 박스 설명은 각 박스의 .caption 이 맡는다.
-    //  (설명은 hint 한 줄만 — meaning 인자도 화면에 한 줄로 깔려서 둘 다 주면 같은 말이 두 줄로 겹친다.)
-    sectionHead('내 AI 설정', '내 AI 세션이 어떤 계정으로 실행되는지, 그리고 내 AI 가 나에 대해 무엇을 알고 일할지 정합니다. 여기 설정은 나에게만 적용되고 팀에는 공유되지 않습니다.'),
-    // 두 박스는 성격이 다르다 — 붙여 놓으면 한 덩어리로 읽힌다. .admin-stack 으로 간격을 준다(관리탭 공용 규약).
+    sectionHead('내 AI 계정', '내 AI 세션이 어떤 AI 로, 누구 계정으로 실행되는지 보고 필요하면 로그인합니다.'),
     el('div', { class: 'admin-stack' },
-      myAiAccountsCard(),   // 위 박스 = 내 AI 가 '무엇으로·누구 계정으로' 도는가(#1085)
-      el('div', { class: 'card admin-form-narrow' },
-        // 섹션 제목은 서술문('~할 것')이 아니라 **명사구**로 — 관리탭 다른 섹션(구성원·조직 정보·세션 주입)과 같은 규격.
-        //  설명 한 줄은 위 [AI 계정 연결] 박스와 같은 자리(.caption)에 둔다: 박스마다 [제목 · 한 줄 설명 · 내용].
-        cardHead('AI 개인 규칙', '내 역할·호칭·말투·사용 언어입니다. 내 AI 가 매 세션을 시작할 때 이 내용을 읽고 따릅니다 — 나에게만 적용되고 팀에는 공유되지 않습니다.'),
-        // 필드는 종전 그대로 — 라벨 + 입력칸 + 회색 힌트(사용자: "필드들은 ⓘ 규격 바꾸지 말고 이전 유지").
-        field('역할', roleIn),
-        field('개발 이해도', el('div', {}, devChips, devHint)),
-        field('호칭 (AI가 나를 부르는 말)', addressIn),
-        field('말투', toneChips),
-        // 직접 입력칸은 칩과 **같은 줄**에 칩 모양으로 붙인다(#1085) — '한국어·English·…' 다음에 오는
-        //  또 하나의 선택지지, 아래 딸린 별개 입력이 아니다. 실제 배치는 profChips 가 wrap 안에 넣어 준다.
-        field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips,
-          el('p', { class: 'prof-hint' }, ...uiText('고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.')))),
-        field('추가 메모', el('div', {}, memoTa,
-          el('p', { class: 'prof-hint' }, ...uiText('비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.')))),
-        el('div', { class: 'admin-actions' }, saveBtn, status))));
+      myAiAccountsCard(),
+      el('p', { class: 'admin-hint' }, ...uiText('역할·호칭·말투·사용 언어 같은 **AI 개인 규칙**은 화면 왼쪽 아래의 내 이름을 눌러 열리는 내 프로필 창 [AI 개인 규칙] 에서 편집합니다.'))));
 }
 
 export {

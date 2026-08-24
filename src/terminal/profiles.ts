@@ -314,7 +314,7 @@ export async function memberOsStatus(memberId: string): Promise<MemberOsStatus> 
   return { ready, provisioned, osUser, ...judgeMemberOs({ ready, provisioned, homeExists, credExists }) };
 }
 
-// ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
+// ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 계정] 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
 //  누구 계정으로 뜨나" 를 한 자리에서 보고 로그인/로그아웃한다. 자격증명이 **어디 사는지**(scope)가 셋으로 갈리고,
 //  로그아웃 가능 여부는 전적으로 거기서 결정된다:
 //   · isolated — 멤버 OS 계정(box_) 홈(#524). 게이트웨이는 700 홈을 못 읽으니 drop-priv 로 존재확인·삭제만 한다.
