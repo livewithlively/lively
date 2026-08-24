@@ -263,7 +263,7 @@ export function closeLaunchpad() { if (padEl) {
 // ── 앱 프레임 — 중앙에 iframe 하나. 헤더 한 줄(앱 이름 · 새 탭 · 클래식으로) 외엔 크롬이 없다. ──
 //  #1841 — 안의 화면이 프로젝트 탭 문법의 머리(빵부스러기·뷰 탭·툴바)를 스스로 그리는 앱(FRAMELESS)은 이 띠를 안 단다.
 //   '클래식 화면 · 그대로 실림' 띠가 그 머리 위에 한 줄 더 얹히면 제목이 두 번 보이고 액자 티가 난다. 새 탭 열기는 그 화면의 ⋯ 메뉴가 든다.
-const FRAMELESS = new Set(['terminal', 'projects2', 'knowledge', 'context']);
+const FRAMELESS = new Set(['terminal', 'projects2', 'knowledge', 'context', 'learn', 'start', 'onboarding']);
 export function appFrame(hash, title, opts) {
     const src = opts?.src || embedUrl(hash);
     const frame = el('iframe', { class: 'v2-frame', src, title, loading: 'eager', allow: 'clipboard-read; clipboard-write' });
