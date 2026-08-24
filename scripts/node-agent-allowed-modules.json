@@ -11,6 +11,7 @@
  "dist/log.js",
  "dist/node/agent.js",
  "dist/node/protocol.js",
+ "dist/node/reconnect-delay.js",
  "dist/node/registry.js",
  "dist/node/store.js",
  "dist/node/tasks.js",
