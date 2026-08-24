@@ -418,7 +418,12 @@
    프레임의 **논리 폭**을 1/배율 로 키우고 그만큼 축소하면, 사이트는 넓은 화면인 줄 알고 데스크톱 배치를
    펴고 그게 칸 안에 통째로 들어온다(가로가 안 잘린다). 무대는 넘치는 부분을 잘라 담는 그릇이다. */
 .pn-webstage { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; background: var(--surface); }
-.pn-webstage > .pn-webframe { position: absolute; top: 0; left: 0; transform-origin: top left; }
+/* ⚠ width·height 를 **여기서 반드시** 준다. 프레임(iframe·webview)은 '대체 요소'라 크기를 안 주면
+   CSS 기본값 300×150px 로 앉는다 — 자리를 잡아 주던 flex 는 position:absolute 가 되는 순간 손을 뗀다.
+   브라우저 경로는 배율 때문에 인라인 style 로 늘 크기를 주지만, **앱 경로(<webview>)는 진짜 줌을 쓰므로
+   인라인 style 을 지운다** — 그때 이 규칙이 없으면 칸이 아무리 커도 페이지는 150px 만 그려진다
+   (원준 2026-08-23 신고 "로드가 계속 이 정도까지만 돼": 아티팩트 머리글 44px + 본문 106px = 정확히 150px). */
+.pn-webstage > .pn-webframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-origin: top left; }
 .pn-webframe { flex: 1; min-height: 0; min-width: 0; width: 100%; border: 0; background: var(--surface); }
 /* 배율 칩 — 숫자가 들어가므로 정사각(ic)이 아니라 조금 넓다. 누르면 맞춤↔100% 를 오간다. */
 .pn-web-btn.zl { min-width: 44px; padding: 0 6px; font-variant-numeric: tabular-nums; }
