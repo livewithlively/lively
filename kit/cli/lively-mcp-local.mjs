@@ -44,11 +44,15 @@
 import { readFileSync, realpathSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, dirname, resolve, basename } from "node:path";
 import { homedir } from "node:os";
-import { execFileSync } from "node:child_process";
+import { entrypointHostEffects } from "./host-effects.mjs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { repoList, repoWorktree, repoWorktreeRemove, repoPin, repoPinRemove } from "./repo-worktree-core.mjs";
 import { projectInit } from "./project-init-core.mjs"; // #905 C2a 코어 공유(CLI `lively init` 과 동일) // #900 코어 공유(CLI `lively repo` 와 동일)
+
+const hostEffects = entrypointHostEffects();
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 const PROTOCOL = "2025-06-18";
 const HOME = process.env.LIVELY_HOME || homedir();

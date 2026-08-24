@@ -18,8 +18,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { readFileSync, realpathSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
-import { execFileSync } from "node:child_process";
 import { findProjectMarkerUp } from "./repo-worktree-core.mjs";
+import { entrypointHostEffects } from "./host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
 
 // origin URL 에서 자격(userinfo)을 벗긴다 — 게이트웨이로 토큰을 보내지 않기 위한 방어.
 //  ⚠ 정규화(신원 키 산출)는 여기서 하지 않는다 — 서버(project-origin.ts)가 유일 SoT 다.

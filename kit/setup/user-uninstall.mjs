@@ -26,8 +26,12 @@ import {
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
-import { hostEffectsAllowed, removeWindowsUserPath } from "./host-effects.mjs";
+import { entrypointHostEffects, hostEffectsAllowed, removeWindowsUserPath } from "./host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const spawnSync = (...args) => hostEffects.spawnSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");

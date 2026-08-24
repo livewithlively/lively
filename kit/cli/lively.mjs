@@ -25,8 +25,12 @@ import {
   readdirSync, statSync, realpathSync, openSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, relative } from "node:path";
-import { spawnSync, spawn } from "node:child_process";
+import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  execFileSync as nodeExecFileSync,
+  spawn as nodeSpawn,
+  spawnSync as nodeSpawnSync,
+} from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import crypto from "node:crypto";
@@ -34,6 +38,104 @@ import crypto from "node:crypto";
 // ── 0. 상수 · 경로 ──────────────────────────────────────────────────────────
 const CLI_VERSION = "1.0.0";
 const WIN = process.platform === "win32";
+// 부트스트랩은 이 단일 파일만 내려받으므로 공용 setup/host-effects.mjs 를 정적 import할 수 없다.
+// 같은 deny/native 계약을 인라인 포트로 유지하고, 설치 뒤 동적 모듈에는 이 객체 자체를 capability로 넘긴다.
+const HOST_EFFECTS_MODE = process.env.LIVELY_HOST_EFFECTS !== "deny"
+  ? "native"
+  : (process.env.LIVELY_HOST_EFFECTS_TEST_MODE === "sandbox" ? "sandbox" : "deny");
+const SANDBOX_EXEC_ALLOW = new Set(["where", "command", "hostname", "whoami"]);
+const inlineUnquote = (value) => String(value || "").replace(/^"|"$/g, "");
+const inlineCommandName = (command) => inlineUnquote(command).replace(/^.*[\\/]/, "").replace(/\.exe$/i, "").toLowerCase();
+const inlineInside = (file, root) => {
+  if (!file || !root) return false;
+  const norm = (p) => process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p);
+  const f = norm(file), r = norm(root);
+  return f === r || f.startsWith(r.endsWith(sep) ? r : r + sep);
+};
+const inlineResolvedCommand = (command) => {
+  const raw = inlineUnquote(command);
+  if (isAbsolute(raw)) return raw;
+  const exts = WIN ? String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+  for (const dir of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
+    for (const ext of ["", ...exts]) {
+      const p = resolve(dir, raw + ext);
+      if (existsSync(p)) return p;
+    }
+    try {
+      const wanted = new Set([raw, ...exts.map((ext) => raw + ext)].map((v) => v.toLowerCase()));
+      const found = readdirSync(dir).find((name) => wanted.has(name.toLowerCase()));
+      if (found) return resolve(dir, found);
+    } catch { /* PATH 항목 부재/접근불가 */ }
+  }
+  return "";
+};
+const inlineSandboxProcessAllowed = ({ command, args = [], options = {} }) => {
+  const name = inlineCommandName(command);
+  if (SANDBOX_EXEC_ALLOW.has(name)) return true;
+  const file = inlineResolvedCommand(command);
+  const roots = [process.env.LIVELY_HOME, process.env.TEMP, process.env.TMP, process.env.TMPDIR, tmpdir()].filter(Boolean);
+  if (name === "node" && (inlineInside(file, process.execPath) || roots.some((root) => inlineInside(file, root)))) return true;
+  if (roots.some((root) => inlineInside(file, root))) return true;
+  const cleanArgs = args.map(inlineUnquote);
+  if (name === "git" && !cleanArgs.some((a) => a === "--global" || a === "--system")) {
+    const at = cleanArgs.indexOf("-C");
+    const cloneDest = cleanArgs[0] === "clone" ? cleanArgs.at(-1) : "";
+    return roots.some((root) => inlineInside(options.cwd, root)
+      || (at >= 0 && inlineInside(cleanArgs[at + 1], root))
+      || inlineInside(cloneDest, root));
+  }
+  if (name === "tar") {
+    const at = cleanArgs.indexOf("-C");
+    return at >= 0 && roots.some((root) => inlineInside(cleanArgs[at + 1], root));
+  }
+  return false;
+};
+const inlineSandboxNetworkAllowed = (input) => {
+  try {
+    const u = new URL(typeof input === "string" ? input : input?.url);
+    const port = Number(u.port);
+    return ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && port >= 32768 && port <= 65535;
+  } catch { return false; }
+};
+const hostEffectGuard = (kind, operation, detail) => {
+  if (HOST_EFFECTS_MODE === "native") return;
+  if (HOST_EFFECTS_MODE === "sandbox" && kind === "external-cli" && inlineSandboxProcessAllowed(detail)) return;
+  if (HOST_EFFECTS_MODE === "sandbox" && kind === "scheduler" && inlineSandboxProcessAllowed(detail)) return;
+  if (HOST_EFFECTS_MODE === "sandbox" && kind === "network" && inlineSandboxNetworkAllowed(detail)) return;
+  {
+    const e = new Error(`HostEffects denied ${kind}: ${operation}`);
+    e.name = "HostEffectDeniedError";
+    e.code = "LIVELY_HOST_EFFECT_DENIED";
+    throw e;
+  }
+};
+const schedulerCommand = (command) => /^(schtasks|launchctl|systemctl|loginctl)(\.exe)?$/i.test(String(command).replace(/^.*[\\/]/, ""));
+const hostEffects = Object.freeze({
+  mode: HOST_EFFECTS_MODE,
+  execFileSync(command, args = [], options = {}) {
+    hostEffectGuard(schedulerCommand(command) ? "scheduler" : "external-cli", command, { command, args, options });
+    return nodeExecFileSync(command, args, options);
+  },
+  spawnSync(command, args = [], options = {}) {
+    hostEffectGuard(schedulerCommand(command) ? "scheduler" : "external-cli", command, { command, args, options });
+    return nodeSpawnSync(command, args, options);
+  },
+  spawn(command, args = [], options = {}) {
+    hostEffectGuard(schedulerCommand(command) ? "scheduler" : "external-cli", command, { command, args, options });
+    return nodeSpawn(command, args, options);
+  },
+  schedulerSync(command, args = [], options = {}) {
+    hostEffectGuard("scheduler", command, command);
+    return nodeSpawnSync(command, args, options);
+  },
+  fetch(input, init) {
+    hostEffectGuard("network", typeof input === "string" ? input : (input?.url || String(input)), input);
+    return globalThis.fetch(input, init);
+  },
+});
+const spawnSync = (...args) => hostEffects["spawnSync"](...args);
+const spawn = (...args) => hostEffects["spawn"](...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 // 셸 env(LIVELY_TOKEN·PATH)를 새로 읽게 하는 방법은 OS 마다 다르다 — 윈도우에 `source ~/.zshrc` 를 안내하면
 //  사용자는 실행조차 못 한다(#1087 실측: 윈도우 설치 화면에 그대로 나갔다).
 const RELOAD_SHELL_HINT = WIN ? "새 PowerShell 창을 여세요" : "새 터미널을 열거나  source ~/.zshrc";
@@ -304,7 +406,22 @@ function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeou
   }
   return { code: r.status ?? -1, out: String(r.stdout || ""), err: String(r.stderr || "") };
 }
-const has = (bin) => spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", bin], { stdio: "ignore", shell: !WIN }).status === 0;
+const has = (bin) => {
+  if (HOST_EFFECTS_MODE === "sandbox") {
+    if (SANDBOX_EXEC_ALLOW.has(inlineCommandName(bin))) return true;
+    const found = inlineResolvedCommand(bin);
+    const roots = [process.env.LIVELY_HOME, process.env.TEMP, process.env.TMP, process.env.TMPDIR, tmpdir()].filter(Boolean);
+    if (inlineCommandName(bin) === "node" && found && inlineInside(found, process.execPath)) return true;
+    if (!found || !roots.some((root) => inlineInside(found, root))) return false;
+    SANDBOX_EXEC_ALLOW.add(inlineCommandName(bin));
+    return true;
+  }
+  const r = spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", bin], {
+    stdio: ["ignore", "pipe", "ignore"], encoding: "utf8", shell: !WIN,
+  });
+  if (r.status !== 0) return false;
+  return true;
+};
 // claude CLI 호출 — **자식 HOME 을 모듈 HOME(=LIVELY_HOME or os.homedir())으로 명시 주입한다.**
 //  ⚠ 이걸 빠뜨리면 샌드박스(LIVELY_HOME)로 돌린 login·install 이 **실사용자 ~/.claude.json** 을 고친다.
 //   등록하는 command 값은 LIVELY_HOME 기반인데 기록되는 파일만 실 HOME 이라 둘이 어긋나고, 남는 건
@@ -466,7 +583,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 //   설치 이후 표면만 뗄 수 있다. 최상위 static import 는 그 첫 실행을 ERR_MODULE_NOT_FOUND 로 죽인다.
 const cliCtx = () => ({
   say, ok, info, warn, fail, die, bold, dim, red, green, yellow,
-  run, has, api, sleep, gateway, token, readLively, writeLively,
+  run, has, api, sleep, gateway, token, readLively, writeLively, hostEffects,
 });
 
 // ── 위탁(delegate, #869 §11) — 세션이 무거운 1회성 작업을 워커/중앙에 위탁하는 클라이언트 프로세스. ──

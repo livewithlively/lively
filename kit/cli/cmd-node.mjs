@@ -15,8 +15,8 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, chmodSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join, dirname, win32 as pwin, posix as pposix } from "node:path";
-import { spawnSync, spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createHostEffects, entrypointHostEffects } from "./host-effects.mjs";
 
 // lively.mjs 와 같은 계약(LIVELY_HOME 은 HOME 리다이렉트 — 샌드박스/테스트).
 const HOME = process.env.LIVELY_HOME || homedir();
@@ -24,9 +24,15 @@ const LIVELY = join(HOME, ".lively");
 
 // ctx 주입 슬롯 — 아래 함수 본문은 lively.mjs 원문 그대로다(이름·들여쓰기 무변경).
 let say, dim, green, yellow, die, has, api, gateway, token, writeLively;
+let hostEffects = createHostEffects();
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const spawnSync = (...args) => hostEffects.spawnSync(...args);
+const spawn = (...args) => hostEffects.spawn(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 export function nodeCommands(ctx) {
   ({ say, dim, green, yellow, die, has, api, gateway, token, writeLively } = ctx);
+  hostEffects = ctx.hostEffects || entrypointHostEffects();
   return { cmdNode };
 }
 
