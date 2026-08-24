@@ -112,5 +112,23 @@ export async function requireAppTool(user: LivelyUser, toolName: string): Promis
   }
 }
 
+// ── 앱 토큰의 MCP 도구 표면 — EXEMPT 는 **REST 배관 전용**(설계 v2.1 R4-M1) ──────────────────────────
+//  EXEMPT 8종은 kit 스크립트(session-preload·run-custom·sync-harness-assets)가 REST 로 부르는 세션 배관이라 grant 무관
+//  통과한다. 그런데 같은 토큰으로 LLM 이 **도구로** 부르면 scopes=[]·tools=[] 로 동의한 앱 세션에서도 `whoami`(외부 계정·팀)
+//  ·`org_runner_hooks`(멤버 타깃 커스텀 훅 소스)를 읽는다 — 동의 모델을 조용히 뚫는 구멍. 그래서 앱 토큰엔
+//  (1) tools/list 에서 이 이름들을 감추고 (2) MCP tools/call 은 403 으로 막는다. REST 경로(web.ts requireAppTool)는 종전 그대로.
+//  kit 이 whoami 를 REST 로 부르는 곳은 없고 나머지 7종은 REST 만 쓴다(실측) — 배관은 하나도 안 끊긴다.
+/** 순수 판정 — 앱 토큰이면 EXEMPT 이름은 MCP 표면에서 감춘다. appId 없음(일반 세션)은 항상 false(무회귀). */
+export function appMcpHidden(appId: string | null | undefined, toolName: string): boolean {
+  return !!appId && APP_TOOL_EXEMPT.has(toolName);
+}
+
+/** MCP 핸들러 전용 게이트(registerMcpCapabilities) — 감춘 이름을 호출하면 403. REST 어댑터는 부르지 않는다. */
+export function requireAppToolMcp(user: LivelyUser, toolName: string): void {
+  if (appMcpHidden(user.appId, toolName)) {
+    throw new HttpError(403, `'${toolName}' 은 앱 세션 배관 전용(REST)입니다 — 도구로는 쓸 수 없습니다`);
+  }
+}
+
 // 테스트 훅 — grant 캐시 비우기.
 export function _clearAppToolCache(): void { grantCache.clear(); }

@@ -6,7 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope } from "../context.js";
 import { viewerOf } from "./principal.js";
-import { requireAppTool } from "../apps/principal.js";
+import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
@@ -203,6 +203,7 @@ export function registerMcpCapabilities(
   harness?: string | null,
   readOnly?: boolean,
   incognito?: boolean,
+  appId?: string | null, // 앱 토큰 세션(#1780 v2.1 R4-M1) — EXEMPT 배관 도구를 tools/list 에서 감춘다(핸들러도 403). 일반 세션 null.
 ): void {
   // 인코그니토 세션(#1007+): lively 툴을 **하나도** 등록하지 않는다 → tools/list 빈 표면 = 사실상 연결 없음(읽기·쓰기 모두 불가).
   //  (물리적 연결 차단은 per-session 으로 안 되므로 서버측 전체차단으로 대신.) 무상태 /mcp 라 요청마다 헤더로 재계산 = per-session.
@@ -212,6 +213,9 @@ export function registerMcpCapabilities(
     // 읽기전용 세션(#1007): 컨텍스트 스토어에 쓰는 툴은 아예 등록하지 않는다 → tools/list 에서 소거되어
     //  하네스가 그 툴의 존재조차 모른다(호출 시도·혼란 0). 무상태 /mcp 라 요청마다 헤더로 재계산 = per-session.
     if (readOnly && isReadOnlyBlocked(cap)) continue;
+    // 앱 토큰(#1780): EXEMPT 배관 도구는 REST 전용 — LLM 도구 표면에서 소거(appMcpHidden 주석). 등록 필터는 UX,
+    //  경계는 아래 핸들러의 requireAppToolMcp(sessioned 서버 재사용·헤더 드리프트에도 안전).
+    if (appMcpHidden(appId, cap.name)) continue;
     const meta = resolveToolMeta(cap, alwaysLoadOverrides, harness);
     server.registerTool(
       cap.name,
@@ -219,6 +223,7 @@ export function registerMcpCapabilities(
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         if (cap.scope) requireScope(u, cap.scope);
+        requireAppToolMcp(u, cap.name);    // #1780 v2.1: 앱 토큰이 EXEMPT 배관 도구를 MCP 로 부르면 403(REST 배관은 별도 어댑터)
         await requireAppTool(u, cap.name); // #1780: 앱 세션이면 그 앱 grant 의 도구 allowlist 로 축소(일반 세션은 통과)
         // 작업자(AI) — 게이트웨이가 접속 신원(x-lively-harness 헤더 우선, 없으면 User-Agent)으로 식별(프로젝트 #182). 자기보고 대신 권위 신원.
         const agent = agentFromExtra(extra) ?? undefined;
