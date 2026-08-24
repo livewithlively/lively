@@ -235,21 +235,21 @@ async function route() {
         else if (page === 'domainmap') {
             // #1153 — '도메인 맵' 탭이 '분류체계'가 됐고, #1419 에서 다시 '맥락 관리'로 넓어졌다.
             //  구 딥링크·북마크는 두 단계를 건너뛰어 최종 자리로 보낸다(중간 리다이렉트 체인 금지 — 히스토리가 지저분해진다).
-            location.replace('#/context/classify');
+            location.replace('#/context/topics');
             return;
         }
         else if (page === 'categories') {
             // #1419 T6 — 분류체계 탭이 [맥락 관리]의 '분류' 단계로 흡수됐다. 구 URL 은 그 자리로 보낸다.
             //  ⚠ 전체페이지 renderCategories 는 남겨 둔다(직접 링크·문서에서 쓰일 수 있고, 본문 구현은 공유한다).
-            location.replace('#/context/classify');
+            location.replace('#/context/topics');
             return;
         }
         else if (page === 'context') {
             setActiveTab('context'); // 맥락 관리 — 수집→증류→분류→관리 파이프라인(index.html data-tab="context")
-            // 증류기 설정(#/context/distill/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
+            // 증류기 설정(#/context/knowledge/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
             //  라우트를 세분화해 CSS 가 그 페이지에서만 캡을 풀게 한다 — 목록은 종전 본문 컬럼 그대로여야
             //  탭을 오갈 때 폭이 출렁이지 않는다(projects2 가 상세/보드를 가르는 것과 같은 수법).
-            //  ⚠ 세그먼트 3개짜리 URL 이 전부 증류기 상세는 아니다(#1584 — #/context/distill/ingest-policy 는
+            //  ⚠ 세그먼트 3개짜리 URL 이 전부 증류기 상세는 아니다(#1584 — #/context/knowledge/ingest-policy 는
             //   증류 단계의 한 화면이다). 판정은 화면 표를 가진 context.ts 한 곳에서만 한다.
             if (isDistillerDetailPath(segs[1], segs[2]))
                 document.body.dataset.route = 'context-distiller';
