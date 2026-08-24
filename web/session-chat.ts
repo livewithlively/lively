@@ -24,7 +24,8 @@ import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
 import { confirmSessionPurge, purgeSessionRecord, purgedToast } from './session-actions.js';
 import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
-import { effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
+import { sessionHandoffContext } from './session-handoff-context.js';
+import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 
 export interface SessionChatTarget {
@@ -242,8 +243,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  종전엔 이 넷이 각각 다른 옷을 입고(하네스·모델은 mono, 상태·노드는 sans) 가운뎃점으로만 이어져
   //  '애매하게 다른' 줄이었다. 구분은 글꼴이 아니라 **묶음**으로 한다 — 머리줄에 남는 축은 이제 둘뿐이다:
   //  자주 바뀌는 **상태**(점+라벨)와, 잘 안 바뀌는 **무엇으로 도는가**(이 알약).
-  //  ⚠ 여기 것은 **읽기 전용**이다. 바꾸는 자리는 입력창 아래 드롭다운 하나로 둔다 — 같은 조작을 두 자리에 두면
-  //   어느 쪽이 진짜인지 묻게 된다(막다른 컨트롤 금지의 뒷면).
+  // 살아 있지 않거나 남의 세션이면 읽기 전용으로 남고, 내가 만든 라이브 세션은 바로 아래 실행 설정 선택기가 대신한다.
   const runEl = el('span', { class: 'sc-run', hidden: true });
   const moreBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '⋯', title: '이 세션에 할 수 있는 것들', 'aria-label': '더 보기', onclick: () => openMore() }) as HTMLButtonElement;
   // ★ 프로젝트 이름은 이 줄에 두지 않는다(원준님 2026-08-20) — 세션 이름을 걷어낸 것과 **같은 이유**다.
@@ -268,19 +268,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   wrap.append(termHost);
   host.replaceChildren(wrap);
 
-  // 입력칸 아래 바(Claude Desktop 의 '자동 · Opus 5 · 엑스트라' 자리) — 이 세션이 실제로 도는 모드·제공자·모델·추론강도.
-  //  트랜스크립트 줄에서 읽어 채운다(user.permissionMode · assistant.message.model · assistant.effort).
-  //   · 모드·제공자는 **사실 표시**다. 모드는 터미널에서만 바뀌고, 제공자(어느 회사 모델)는 프로세스가 이미 그 CLI 로
-  //     떠 있어 못 바꾼다 — 다른 제공자로 가려면 새 세션을 연다(홈 입력창의 세 칸, #1758).
-  //   · 모델·추론강도는 **여기서 바꾼다**(#1758). 단 그 하네스에 인자를 받는 슬래시 명령이 있을 때만 드롭다운이 되고
-  //     (서버 catalog.ts runtimeCmd → 카탈로그 runtime), 없으면 종전 그대로 읽기 전용 칩이다 — 눌러도 되는 척하는
-  //     컨트롤은 두지 않는다(막다른 컨트롤 금지).
+  // 실행 설정 — 트랜스크립트 줄에서 현재 모델·추론강도를 읽고(user.permissionMode · assistant.message.model · assistant.effort),
+  // 상단 선택기로 바꾼다. 런타임 변경을 지원하는 CLI 는 그 자리에서 바꾸고, 지원하지 않는 CLI·다른 하네스는 같은 폴더와
+  // 최근 대화를 넘긴 새 프로세스로 이어 연다. 구현 방식과 무관하게 사용자는 여기서 고른 뒤 곧바로 이어 입력한다.
   const chipMode = el('span', { class: 'dt-chip', hidden: true });
   const chipProv = el('span', { class: 'dt-chip', hidden: true });
+  const selHarness = el('select', { class: 'dt-chip dt-chip-sel sc-run-harness', hidden: true, 'aria-label': 'AI 하네스' }) as HTMLSelectElement;
   const chipModel = el('span', { class: 'dt-chip', hidden: true });
   const chipEffort = el('span', { class: 'dt-chip', hidden: true });
   const selModel = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '모델' }) as HTMLSelectElement;
   const selEffort = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '추론강도' }) as HTMLSelectElement;
+  // 터미널 보기에서도 항상 보이는 상단 실행 설정. 제목·상태 및 세션 조작과 같은 한 줄에 욱여넣으면 가운데 칸이
+  // 좁아질 때 서로 겹친다. 헤더 안의 독립된 둘째 줄에 두어 화면 폭과 무관하게 세 축을 바로 고르게 한다.
+  head.append(el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort));
   const chip = (n: HTMLElement, v: string, tip?: string): void => { n.textContent = v; if (tip && tip !== v) n.title = tip; else n.removeAttribute('title'); n.hidden = !v; };
   const MODE_KO: Record<string, string> = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
   // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).
@@ -309,7 +309,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     thinking: 'fold',
     sendWhileBusy: true,
     style: 'desktop',
-    bar: { right: el('span', { class: 'dt-chips' }, chipMode, chipProv, chipModel, selModel, chipEffort, selEffort) },
+    bar: { right: el('span', { class: 'dt-chips' }, chipMode) },
     askHost: rxHost,                              // 처방전(#1719) — 스크롤에 떠내려가지 않는 입력칸 바로 위
     onSend: (text) => sendPrompt(text),
     onStop: canKeys() ? () => sendKey('interrupt') : undefined,
@@ -317,10 +317,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     opening: null,
   });
 
-  // 모델·추론강도 바꾸기(#1758) ————
-  //  세션은 이미 argv 로 떠 있어 플래그로는 못 바꾼다 — 서버가 사람이 터미널에서 치는 것과 **같은 슬래시 명령**을
-  //  주입한다(POST …/runtime). 어떤 하네스가 그걸 받는지는 서버 카탈로그가 정한다(runtime.model / runtime.effort).
+  // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
+  // 런타임 명령이 확인된 축은 POST …/runtime, 나머지는 POST …/handoff 로 같은 작업 자리의 새 프로세스를 연다.
   let hcat: RunHarness | null = null;          // 이 세션의 하네스 카탈로그 행(제공자 이름 · 선택지 · 바꿀 수 있나)
+  let hcats: RunHarness[] = [];
   let obsModel = ''; let obsModelTip = ''; let obsEffort = '';   // 대화 파일이 말한 **실제** 값 — 드롭다운의 '지금'은 이걸 따른다
   let switching = false;
   //  obj = 목적격 조사까지 붙인 형태('모델을'·'추론강도를') — 받침 유무로 갈리는데 축이 둘뿐이라 표에 그대로 적는다.
@@ -330,7 +330,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   } as const;
   type Axis = keyof typeof AXIS;
   const canSwitch = (a: Axis): boolean =>
-    !!hcat && canType() && !!hcat.runtime?.[a] && flagChoices(hcat, AXIS[a].flag).length > 0;
+    !!hcat && canType() && target.owned && flagChoices(hcat, AXIS[a].flag).length > 0;
 
   //  optLabel = 드롭다운 선택지 문구(모델은 **값 그대로** — 홈 입력창과 같은 말이어야 하고, antigravity 처럼
   //   'claude-…'/'gemini-…' 로 제공자가 갈리는 목록은 접두어를 지우면 무엇인지 알 수 없다).
@@ -340,7 +340,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const shown = observed ? showLabel(observed) : '';
     if (!canSwitch(a)) { box.hidden = true; chip(span, shown, a === 'model' ? obsModelTip : undefined); return; }
     span.hidden = true;
-    const choices = flagChoices(hcat, AXIS[a].flag);
+    const choices = a === 'effort' ? effortChoices(hcat, selModel.value) : flagChoices(hcat, AXIS[a].flag);
     // 관측값이 선택지 중 하나를 품고 있으면 그 칸을 고른 것으로 본다. 영숫자만 남겨 비교한다 — 관측값은
     //  'claude-opus-4-5-…' 로도 오고 화면용으로 다듬은 'Grok 4.6' 으로도 와서, 하이픈·공백을 그대로 두면 서로 안 닿는다.
     const nz = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -353,8 +353,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     box.hidden = false;
   }
   function paintRun(): void {
-    chip(chipProv, hcat ? providerLabel(hcat) : '');
-    if (hcat) chipProv.title = `이 세션은 ${providerLabel(hcat)} 의 ${hcat.label} 로 떠 있어요 — 제공자는 새 세션에서만 고를 수 있어요.`;
+    const canHandoff = canType() && target.owned && hcats.some((h) => h.key !== 'shell');
+    if (canHandoff) {
+      const keep = selHarness.value || hcat?.key || '';
+      selHarness.replaceChildren(...hcats.filter((h) => h.key !== 'shell').map((h) =>
+        el('option', { value: h.key }, `${providerLabel(h)} · ${h.label}`)));
+      selHarness.value = hcats.some((h) => h.key === keep) ? keep : (hcat?.key || '');
+      selHarness.hidden = false; chipProv.hidden = true;
+    } else {
+      selHarness.hidden = true; chip(chipProv, hcat ? `${providerLabel(hcat)} · ${hcat.label}` : '');
+    }
     paintAxis('model', selModel, chipModel, obsModel, (v) => v, prettyModel);
     paintAxis('effort', selEffort, chipEffort, obsEffort, effortKo, effortKo);
     paintRunHead();
@@ -365,6 +373,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   · 그 둘은 **터미널을 보고 있을 때만** 넣는다(대화 모드는 입력창 아래 바가 같은 사실을 이미 말한다).
   //     하네스·노드는 그 바가 말하지 않으므로 두 모드에서 늘 남는다 — 알약이 통째로 사라지지 않는 이유다.
   function paintRunHead(): void {
+    // 상단 선택기가 서면 같은 사실을 읽기 전용 알약으로 한 번 더 쓰지 않는다.
+    if (canType() && target.owned && hcats.some((h) => h.key !== 'shell')) { runEl.hidden = true; return; }
     const onTerm = !termHost.hidden;
     //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
     const vals: Array<{ v: string; cls?: string }> = [
@@ -388,6 +398,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     else { if (obsEffort === v) return; obsEffort = v; }
     paintRun();
   }
+  // 새 하네스는 원 하네스의 사설 트랜스크립트 형식을 읽지 못한다. 화면이 이미 받은 공통 ChatLine에서
+  // 사람 말과 AI의 최종 텍스트만 추려 전달한다. 도구 원문·생각은 부피가 크고 다음 AI가 이어 일하는 데 불필요하다.
+  function handoffContext(): string {
+    return sessionHandoffContext(recs);
+  }
+  async function handoff(next: RunHarness, flags: Record<string, string>): Promise<void> {
+    const body = { harness: next.key, flags, context: handoffContext() };
+    const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/handoff`, { method: 'POST', body: JSON.stringify(body) });
+    if (!r?.session?.id) throw new Error('전환된 세션 id를 받지 못했습니다.');
+    rememberCreated(r.session);
+    if (opts.onResumed) opts.onResumed(String(r.session.id));
+    else location.hash = '#/s/' + encodeURIComponent(String(r.session.id));
+  }
   async function switchAxis(a: Axis, box: HTMLSelectElement): Promise<void> {
     const v = box.value;
     if (!v) { paintRun(); return; }                       // '지난번 그대로'(빈 값)는 되돌릴 명령이 없다 — 표시만 원복
@@ -395,6 +418,22 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (switching) { paintRun(); view.setNote('앞의 변경을 보내는 중이에요 — 끝나면 다시 골라 주세요.'); return; }
     switching = true; box.disabled = true;
     try {
+      // 런타임 명령이 실증된 하네스는 그 자리에서, 나머지는 같은 폴더의 새 프로세스로 즉시 넘긴다.
+      // 사용자가 보는 조작과 결과는 동일하다: 이 선택창에서 고르고, 곧바로 이어 입력한다.
+      if (!hcat) throw new Error('현재 AI 설정을 찾지 못했습니다.');
+      if (!hcat.runtime?.[a]) {
+        view.setNote(`${AXIS[a].obj} 바꿔 이어 여는 중…`);
+        const flags: Record<string, string> = {};
+        if (selModel.value) flags['--model'] = selModel.value;
+        // 모델을 바꾸는 순간 기존 추론강도가 새 모델에서 유효하지 않을 수 있다(예: Sol Ultra → Luna).
+        // 새 모델 카탈로그에 그대로 있는 값만 함께 넘기고, 아니면 하네스 기본으로 접는다.
+        const effort = selEffort.value;
+        const effortModel = a === 'model' ? v : selModel.value;
+        if (effort && effortChoices(hcat, effortModel).includes(effort)) flags['--effort'] = effort;
+        flags[AXIS[a].flag] = v;
+        await handoff(hcat, flags);
+        return;
+      }
       const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/runtime`, { method: 'POST', body: JSON.stringify({ [a]: v }) }) as { pending?: boolean };
       // 값은 「」로 감싼다 — 'sonnet'처럼 한글이 아닌 값에 조사를 직접 붙이면 읽는 소리에 따라 '로/으로'가 갈려
       //  어느 쪽을 써도 어색해진다. 「」 뒤의 '으로'는 그 문제를 안 만든다(session-form 의 「지난번 그대로」와 같은 표기).
@@ -413,7 +452,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   selModel.addEventListener('change', () => { void switchAxis('model', selModel); });
   selEffort.addEventListener('change', () => { void switchAxis('effort', selEffort); });
-  void runCatalog().then((hs) => { hcat = findHarness(hs, String(target.raw?.harness || '')); paintRun(); });
+  selHarness.addEventListener('change', () => {
+    const next = findHarness(hcats, selHarness.value);
+    if (!next || next.key === hcat?.key || switching) { paintRun(); return; }
+    switching = true; selHarness.disabled = true; selModel.disabled = true; selEffort.disabled = true;
+    view.setNote(`${next.label}로 이어 여는 중…`);
+    void handoff(next, {}).catch((e: any) => { view.setNote(e?.message || '다른 AI로 전환하지 못했습니다.'); selHarness.value = hcat?.key || ''; paintRun(); })
+      .finally(() => { switching = false; selHarness.disabled = false; selModel.disabled = false; selEffort.disabled = false; });
+  });
+  void runCatalog().then((hs) => { hcats = hs; hcat = findHarness(hs, String(target.raw?.harness || '')); paintRun(); });
 
   // 상태 표시(헤더 점·라벨·확인 대기 배너·끝난 세션 바) ————
   const dotCls = (k: string): string => k === 'busy' ? 'busy' : k === 'waiting' ? 'wait' : (k === 'done' || k === 'idle') ? 'done' : '';
