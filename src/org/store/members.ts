@@ -2,6 +2,27 @@
 //  + person/person_identity 동기화. (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
 import { audit } from "./audit.js";
+import { logger } from "../../log.js";
+
+// ── 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) ──────────────────────────────
+//  active → 비active(inactive·삭제) 전이는 **그 사람 이름으로 도는 것**(앱 동의·앱 세션·자격 리스)을 거둬야 한다.
+//  이 저장소는 terminal/apps 를 몰라야 하므로(순환) registry.onTaskDone 선례의 단일 슬롯 콜백으로 둔다 —
+//  apps/member-deactivation.ts 가 부팅 스텝에서 건다. 콜백 실패는 삼키고 경고만(멤버 상태 변경 자체는 성공해야 한다).
+export type MemberDeactivatedReason = "inactive" | "removed";
+type MemberDeactivatedHandler = (memberId: string, reason: MemberDeactivatedReason, actor: string | null) => Promise<void>;
+let deactivatedHandler: MemberDeactivatedHandler | null = null;
+export function onMemberDeactivated(cb: MemberDeactivatedHandler | null): void { deactivatedHandler = cb; }
+
+/** 순수 판정 — 'active' 에서 벗어나는 전이만 true(inactive→inactive 재저장·inactive→삭제는 이미 거둬졌으므로 false). */
+export function isMemberDeactivation(beforeState: string | null | undefined, afterState: string | null | undefined): boolean {
+  return beforeState === "active" && afterState !== "active";
+}
+
+async function fireMemberDeactivated(memberId: string, reason: MemberDeactivatedReason, actor: string | null): Promise<void> {
+  if (!deactivatedHandler) return;
+  try { await deactivatedHandler(memberId, reason, actor); }
+  catch (err) { logger.warn({ err, member: memberId, reason }, "member deactivation hook failed (state change kept)"); }
+}
 
 export interface MemberIdentity {
   system: string;
@@ -462,6 +483,8 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   if (after) await syncMemberToPerson(after);
   // (권한 토큰 전파 폐기 — P1) 유효 권한은 verifyDbToken 이 매 인증 시 intersection(토큰,멤버)로 계산한다.
   //  멤버 권한 하향은 즉시 모든 토큰에 반영(보안), 상향은 토큰 재발급으로(최소권한 보존) — 전파 함수 불필요.
+  //  단, 앱 동의·앱 세션은 토큰 축이 아니라 별도 회수가 필요하다(위 훅).
+  if (after && isMemberDeactivation(before?.state, after.state)) await fireMemberDeactivated(m.id, "inactive", actor ?? null);
   return after as OrgMember;
 }
 
@@ -470,6 +493,7 @@ export async function removeMember(id: string, actor?: string, source?: string):
   if (!before) return;
   await itemsPool.query(`DELETE FROM org_member WHERE id=$1`, [id]);
   await audit("org_member", id, "delete", before, null, actor, source);
+  if (isMemberDeactivation(before.state, null)) await fireMemberDeactivated(id, "removed", actor ?? null);
   // person 행은 보존(아이템 actor 참조 무결성) — 멤버 제거는 org_member 에서만. 신원 정리는 별도 큐레이션.
 }
 

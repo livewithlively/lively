@@ -213,6 +213,16 @@ export async function revokeGrant(appId: string, memberId: string): Promise<void
   await itemsPool.query(`UPDATE org_app_grant SET revoked_at=now() WHERE app_id=$1 AND member_id=$2 AND revoked_at IS NULL`, [appId, memberId]);
 }
 
+/**
+ * 한 멤버의 **모든** 활성 grant 회수(#1780 v2 §7-1, 설계 R2-O8) — 멤버 비활성/삭제 전이가 부른다.
+ *  grant 는 org_member 에 FK 가 없어 멤버가 사라져도 남고, 재활성화하면 옛 동의가 그대로 부활한다 — 그래서 명시 회수.
+ *  돌려주는 값 = 회수한 행 수(로그·테스트 관측용). 부분 인덱스 org_app_grant_member_idx 가 이 술어를 받친다.
+ */
+export async function revokeAllGrantsForMember(memberId: string): Promise<number> {
+  const r = await itemsPool.query(`UPDATE org_app_grant SET revoked_at=now() WHERE member_id=$1 AND revoked_at IS NULL`, [memberId]);
+  return r.rowCount ?? 0;
+}
+
 /** 활성(미회수) grant. 앱 세션 스폰·appToolAllowed 가 소비. */
 export async function getActiveGrant(appId: string, memberId: string): Promise<AppGrantRow | null> {
   const r = await itemsPool.query(`SELECT * FROM org_app_grant WHERE app_id=$1 AND member_id=$2 AND revoked_at IS NULL`, [appId, memberId]);

@@ -56,6 +56,30 @@ export async function insertCronJob(v: CronJobInsert): Promise<CronJobRow> {
   return r.rows[0];
 }
 
+// 정의 upsert — **실행 이력(last_run_at·next_run_at)을 보존**하며 정의만 갈아 끼운다(#1780 v2 §7-1, 설계 R2-O5).
+//  앱 재설치/업그레이드의 크론 재전개가 종전엔 delete+insert 라 last_run_at 이 사라져 interval 잡이 **즉시 due**
+//  가 됐다(예정 외 실행). enabled 는 INSERT 와 같은 규칙(null=true) 이고, 켜는 방향이면 사람이 켤 때(updateCronJob)
+//  와 같이 브레이커를 초기화한다 — 재전개는 사람의 "다시 켬" 과 같은 의도.
+//  ⚠ 충돌 키는 (tenant_id, id) — CREATE TABLE 은 `id PRIMARY KEY` 지만 부팅 체인이 테넌트 복합 PK 로 다시 쓴다
+//   (connectors.ts 의 org_cron upsert 와 동일; `ON CONFLICT (id)` 는 실-DB 에서 "no unique constraint" 로 죽는다 — itest 실측).
+export async function upsertCronJob(v: CronJobInsert): Promise<CronJobRow> {
+  const r = await itemsPool.query(
+    `INSERT INTO org_cron(id,label,action,params,interval_sec,cron_expr,enabled,note,run_once,created_by,updated_by)
+     VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,true),$8,COALESCE($9,false),$10,$10)
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
+       label=EXCLUDED.label, action=EXCLUDED.action, params=EXCLUDED.params,
+       interval_sec=EXCLUDED.interval_sec, cron_expr=EXCLUDED.cron_expr, enabled=EXCLUDED.enabled,
+       note=EXCLUDED.note, run_once=EXCLUDED.run_once,
+       fail_streak = CASE WHEN EXCLUDED.enabled THEN 0 ELSE org_cron.fail_streak END,
+       auto_disabled_at = CASE WHEN EXCLUDED.enabled THEN NULL ELSE org_cron.auto_disabled_at END,
+       auto_disabled_reason = CASE WHEN EXCLUDED.enabled THEN NULL ELSE org_cron.auto_disabled_reason END,
+       version=org_cron.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by
+     RETURNING *`,
+    [v.id, v.label, v.action, v.params,
+     v.interval_sec, v.cron_expr, v.enabled, v.note, v.run_once, v.actor]);
+  return r.rows[0];
+}
+
 // 부분 수정 — COALESCE($n, col) 로 미제공 키는 보존. cron_expr 만 3상태(미제공=보존 / ""=해제 / 값=설정)라
 //  $6(제공 여부) 플래그로 CASE 분기한다(COALESCE 로는 '명시적 NULL' 을 표현할 수 없다).
 export async function updateCronJob(v: CronJobUpdate): Promise<CronJobRow> {
