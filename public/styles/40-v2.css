@@ -1344,3 +1344,30 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .cn-steps-sum { cursor: pointer; padding: 9px 0; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
 .cn-steps-sum::marker { color: var(--muted-2); }
 .cn-steps-wrap .cn-help { margin: 2px 0 8px; }
+
+/* ── 「정리」 모드(#1719 안 C, 원준 2026-08-24) ────────────────────────────────
+   머리줄에서 「필터」 글자를 뺀 자리에 [정리]가 들어왔다. 실측: 글자 있는 필터 버튼 60px,
+   아이콘 버튼 27px — 글자 하나를 내주면 넷이 되고도 머리줄이 6px 좁아진다(114 → 108). */
+.v2-side-sec .v2-flt-btn { padding: 0; width: 27px; justify-content: center; }
+.v2-side-sec .v2-flt-btn.has { padding: 0 6px; width: auto; }   /* 배지가 붙으면 그만큼만 늘어난다 */
+/* 켜진 개수 배지 — 글자를 뺀 대신 '지금 걸러져 있다'를 이게 말한다. */
+.v2-flt-n { min-width: 15px; height: 15px; padding: 0 4px; border-radius: 99px; background: var(--blue); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; font-variant-numeric: tabular-nums; }
+.v2-tidyb.on { color: #fff; background: var(--blue); border-color: var(--blue); }
+.v2-tidyb.on:hover { background: var(--blue-deep, var(--blue)); }
+
+/* 고르는 줄 — 체크칸이 캐럿 앞에 선다. 켜져 있는 동안엔 hover 단추(＋·핀)를 감춘다:
+   고르는 중에 눌러 세션이 열리면 그게 곧 모드에서 튕겨 나가는 사고다. */
+.v2-ck { flex: none; width: 15px; height: 15px; margin-right: 1px; border: 1.6px solid var(--muted-2);
+  border-radius: 4px; display: grid; place-items: center; background: var(--bg); }
+.v2-ck-ic { width: 10px; height: 10px; fill: none; stroke: #fff; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+.v2-pj-row.sel .v2-ck { background: var(--blue); border-color: var(--blue); }
+.v2-pj-row.sel .v2-ck-ic { opacity: 1; }
+.v2-pj-row.sel { background: var(--bg-tint-2); }
+.v2-pj-row.v2-pick .v2-pinb, .v2-pj-row.v2-pick .v2-newb { display: none; }
+
+/* 발치 막대 — 고른 개수와 할 일이 늘 보인다. 모드에 갇힌 느낌을 없애는 건 [끝내기]가 늘 곁에 있는 것이다. */
+.v2-tidybar { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 16px;
+  border-top: 1px solid var(--line); background: var(--bg-tint); }
+.v2-tidybar-k { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; color: var(--ink-sub);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }

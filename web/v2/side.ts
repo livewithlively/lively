@@ -57,6 +57,11 @@ let pinnedSet = new Set<string>();          // ★고정 = 사람이 고른 프�
 //  "한 번 닫아둔 지난 세션이 계속 열려서 내가 보는 걸 가린다"). 접는 건 사람이 한 명시적 결정이라 기본값이
 //  덮을 값이 아니다. 그래서 브라우저에 남긴다 — 다시 펴면 그 자리에서 지워진다(펴 두는 게 다시 기본이 된다).
 let closedSelected = new Set<string>();
+// 「정리」 모드(#1719 안 C, 원준 2026-08-24) — 프로젝트를 여러 개 골라 한 번에 아카이브로 보낸다.
+//  ⚠ **기억하지 않는다**(페이지 수명만). 모드는 켜 둔 걸 잊으면 평소 클릭이 선택으로 먹히는 함정이라,
+//   새로 열면 늘 꺼진 상태여야 한다. 사이드바를 떠나거나 끄면 고른 것도 함께 비운다.
+let tidyOn = false;
+const tidySel = new Set<string>();          // 고른 프로젝트 키('p:123')
 let showDone = false;
 let mineOnly = false;
 let sideFilter = '';
@@ -384,6 +389,9 @@ function render(): void {
     el('div', { class: 'v2-side-sec' }, countEl,
       findBtn(),
       filterBtn(fltN, liveAll, doneCount),
+      // [정리](#1719 안 C) — 프로젝트를 여러 개 골라 한 번에 치운다. 219개 중 「진행 중」은 열 몇 개뿐이라,
+      //  하나씩 우클릭해서는 정리가 끝나지 않는다. 이 버튼이 그 일을 '한 번에'로 바꾼다.
+      tidyBtn(),
       // ＋도 아이콘으로 — 돋보기가 자리를 차지하면서 글자 버튼까지 두면 헤더가 두 줄로 접힌다(#1067 의 🔍/＋ 문법).
       //  누르면 **여기서 만들고 그 작업대로 간다**(원준 2026-08-19) — 옛 프로젝트 앱(보드)으로 떠나보내지 않는다.
       //  이름은 그 자리에서 받는다(빈 판을 먼저 만들고 이름을 나중에 묻는 건 '이름 없는 프로젝트'만 늘린다).
@@ -393,6 +401,7 @@ function render(): void {
     ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []),
     ...(fltN ? [filterSummary(fltN)] : []),
     treeEl!,
+    ...(tidyOn ? [tidyBar()] : []),
     // 아카이브·휴지통 두 행(#1851) — 기본은 트리 맨 아래(renderTree 가 붙인다). 사람이 [아래 고정]을 켜면 여기(트리 밖,
     //  스크롤과 무관한 자리)에 선다 — 목록이 수백 행이어도 늘 닿는다.
     ...(binsPinned ? [el('div', { class: 'v2-bins v2-bins-fixed' }, ...binRows(data))] : []),
@@ -450,6 +459,8 @@ function bindFindKey(): void {
   if (keyBound) return;
   keyBound = true;
   document.addEventListener('keydown', (e) => {
+    // Esc = 정리 끝내기. 모드는 나가는 길이 분명해야 한다 — 버튼 제목이 Esc 를 약속하므로 실제로 되게 한다.
+    if (e.key === 'Escape' && tidyOn) { e.preventDefault(); setTidy(false); return; }
     if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
@@ -459,6 +470,85 @@ function bindFindKey(): void {
   });
 }
 /** ＋ 새 프로젝트 — 이름만 그 자리에서 받고, 만들자마자 그 프로젝트의 빈 작업대로 간다. */
+// ── 「정리」 모드 ────────────────────────────────────────────────────────────
+//  켜면 프로젝트 행이 **고르는 줄**이 된다(누르면 열리는 대신 체크). 발치에 고른 개수와 [아카이브로]가 뜬다.
+//  아이콘은 Lucide 의 list-checks(ISC) — 손으로 그리지 않는다(핀·서비스 로고와 같은 규율).
+function tidyBtn(): HTMLElement {
+  const b = el('button', {
+    class: 'v2-flt-btn v2-tidyb' + (tidyOn ? ' on' : ''), type: 'button', 'aria-pressed': String(tidyOn),
+    'aria-label': tidyOn ? '정리 끝내기' : '정리 — 여러 개 골라 한 번에',
+    title: tidyOn ? '정리 끝내기 (Esc)' : '정리 — 프로젝트를 여러 개 골라 한 번에 아카이브로 보냅니다',
+  }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-flt-ic', 'aria-hidden': 'true' },
+    sv('path', { d: 'M13 5h8m-8 7h8m-8 7h8' }), sv('path', { d: 'M3 17l2 2l4-4' }), sv('path', { d: 'M3 7l2 2l4-4' })));
+  b.onclick = (e: Event) => { e.preventDefault(); setTidy(!tidyOn); };
+  return b;
+}
+
+function setTidy(on: boolean): void {
+  tidyOn = on;
+  if (!on) tidySel.clear();   // 끄면 고른 것도 비운다 — 안 보이는 선택이 남아 있으면 다음에 켤 때 놀란다
+  redraw();
+}
+
+/** 고른 프로젝트를 한 번에 아카이브로. 확인은 **한 번만** 받는다 — N번 물으면 그건 '한 번에'가 아니다. */
+async function tidyArchive(): Promise<void> {
+  if (!last || !tidySel.size) return;
+  const rows = buildRows(last.data).filter((r) => r.proj && tidySel.has(r.key));
+  if (!rows.length) { setTidy(false); return; }
+  const myLiveN = rows.reduce((n, r) => n + r.live.filter(isMine).length, 0);
+  const names = rows.slice(0, 3).map((r) => r.proj!.name).join(' · ') + (rows.length > 3 ? ` 외 ${rows.length - 3}개` : '');
+  if (!await confirmDialog({
+    title: `프로젝트 ${rows.length}개를 아카이브로 보낼까요?`, danger: myLiveN > 0,
+    confirmText: '아카이브로', cancelText: '취소',
+    message: myLiveN > 0
+      ? `지금 돌고 있는 내 세션 ${myLiveN}개는 그 자리에서 멈추고 지난 세션이 됩니다.`
+      : '고른 프로젝트와 그 아래 세션이 사이드바·보드에서 빠집니다.',
+    lines: [names, '태스크·팀원·지식 연결·세션 기록은 전부 그대로예요.', '[아카이브] 화면에서 언제든 되돌릴 수 있어요.'],
+    note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
+  })) return;
+  let done = 0;
+  const failed: string[] = [];
+  for (const r of rows) {
+    const p = r.proj!;
+    try {
+      // 내 도는 세션을 먼저 멈춘다(단건 보관과 같은 순서) — 남의 세션은 건드릴 수 없어 그대로 둔다.
+      for (const sx of r.live.filter(isMine)) {
+        const q = '?reclaim=1' + (sx.node ? '&node=' + encodeURIComponent(sx.node) : '');
+        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sx.id) + q, { method: 'DELETE' }); } catch (_) { /* 아래 보관은 계속 */ }
+      }
+      await api('/api/ui/v6/projects/' + p.id + '/archive', { method: 'POST', body: JSON.stringify({ archived: true }) });
+      done++;
+    } catch (e: any) { failed.push(p.name); }
+  }
+  // ⚠ 단건과 달리 **[아카이브] 화면으로 데려가지 않는다** — 정리는 이어서 하는 일이라, 여기 남아야 다음 것을 고른다.
+  toast(failed.length
+    ? `${done}개를 보냈고 ${failed.length}개는 못 보냈어요 — ${failed[0]}${failed.length > 1 ? ' 외' : ''}`
+    : `${done}개를 아카이브로 보냈어요 — 발치 [아카이브]에서 볼 수 있어요`, failed.length > 0);
+  setTidy(false);
+  hooks.onArchived?.();
+}
+
+/** 발치의 정리 막대 — 켜져 있을 때만. 고른 개수와 동작이 늘 눈에 보여야 '모드에 갇힌' 느낌이 안 든다.
+ *  ⚠ 고를 때마다 트리 전체를 다시 그리지 않는다(수백 행이다) — 이 막대와 그 행 하나만 제자리에서 고친다. */
+let tidyBarEl: HTMLElement | null = null;
+function tidyBar(): HTMLElement {
+  const bar = el('div', { class: 'v2-tidybar' }) as HTMLElement;
+  tidyBarEl = bar;
+  paintTidyBar();
+  return bar;
+}
+function paintTidyBar(): void {
+  if (!tidyBarEl) return;
+  const n = tidySel.size;
+  const go = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: n > 1 ? `${n}개를 아카이브로` : '아카이브로' }) as HTMLButtonElement;
+  if (!n) go.disabled = true;
+  go.onclick = () => void tidyArchive();
+  tidyBarEl.replaceChildren(
+    el('span', { class: 'v2-tidybar-k', text: n ? `${n}개 선택됨` : '정리할 프로젝트를 고르세요' }),
+    go,
+    el('button', { class: 'btn-text', type: 'button', text: '끝내기', onclick: () => setTidy(false) }));
+}
+
 function newBtn(): HTMLElement {
   const b = el('button', { class: 'v2-add', type: 'button', title: '새 프로젝트 — 만들고 그 작업대로 갑니다', 'aria-label': '새 프로젝트' },
     sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
@@ -564,10 +654,15 @@ function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLEle
   const wrap = el('div', { class: 'v2-flt' });
   const btn = el('button', {
     class: 'v2-flt-btn' + (activeN ? ' has' : '') + (filterOpen ? ' open' : ''), type: 'button',
-    'aria-haspopup': 'true', 'aria-expanded': String(filterOpen), title: '보기 조건 — 상태·범위·완료',
+    'aria-haspopup': 'true', 'aria-expanded': String(filterOpen), 'aria-label': '필터 — 보기 조건',
+    title: '필터 — 보기 조건(상태·범위·완료)',
     onclick: (e: Event) => { e.stopPropagation(); filterOpen = !filterOpen; redraw(); } },
     sv('svg', { viewBox: '0 0 24 24', class: 'v2-flt-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M4 6h16M7 12h10M10 18h4' })),
-    el('span', { text: '필터' }), activeN ? el('b', { class: 'v2-flt-n', text: String(activeN) }) : null);
+    // ⚠ 「필터」 **글자를 두지 않는다**(원준 2026-08-24). 실측: 글자가 있는 이 버튼 하나가 60px 인데 아이콘
+    //  버튼은 27px 이다 — 글자 하나 값이 아이콘 둘보다 크다. [정리]를 넷째로 들이려면 이 60px 을 내놓아야
+    //  하고, 그러면 넷이 되고도 머리줄이 지금보다 6px 좁아진다(114 → 108).
+    //  대신 **켜진 개수는 배지로** 남긴다 — 글자를 빼면서 '지금 걸러져 있다'는 신호까지 잃으면 안 된다.
+    activeN ? el('b', { class: 'v2-flt-n', text: String(activeN) }) : null);
   wrap.append(btn);
   if (filterOpen) {
     const opt = (on: boolean, label: string, cnt: string, dot: string | null, onclick: () => void) =>
@@ -742,6 +837,25 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
     p ? newSessBtn(p.id) : null,
     p ? pinBtn(pk) : null);
+  // 정리 모드에서는 이 줄이 **여는 줄이 아니라 고르는 줄**이 된다. 링크 자체는 그대로 두고(주소·새 탭 문법 보존)
+  //  기본 이동만 가로챈다 — 모드를 끄면 아무 흔적 없이 원래대로 돌아온다.
+  //  ⚠ 「프로젝트 없는 세션」(p 없음)은 보관할 대상이 아니라 고를 수 없다 — 체크칸도 만들지 않는다.
+  if (p && tidyOn) {
+    row.classList.add('v2-pick');
+    if (tidySel.has(pk)) row.classList.add('sel');
+    row.setAttribute('aria-selected', String(tidySel.has(pk)));
+    row.insertBefore(el('span', { class: 'v2-ck', 'aria-hidden': 'true' },
+      sv('svg', { viewBox: '0 0 24 24', class: 'v2-ck-ic' }, sv('path', { d: 'M5 12.5l4.5 4.5L19 7.5' }))), row.firstChild);
+    row.addEventListener('click', (e: MouseEvent) => {
+      if (e.metaKey || e.ctrlKey) return;          // ⌘클릭으로 새 탭에 여는 길은 남긴다
+      e.preventDefault(); e.stopPropagation();
+      if (tidySel.has(pk)) tidySel.delete(pk); else tidySel.add(pk);
+      const on = tidySel.has(pk);
+      row.classList.toggle('sel', on);
+      row.setAttribute('aria-selected', String(on));
+      paintTidyBar();                              // 트리는 그대로 두고 이 줄과 막대만 고친다
+    });
+  }
   // 우클릭 = 이 프로젝트의 조작 메뉴(#1851) — 아카이브로 보내기/해제·고정·새 세션. 행에 단추를 더 얹지 않는다(이미 둘이다).
   if (p) row.addEventListener('contextmenu', (e: MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
