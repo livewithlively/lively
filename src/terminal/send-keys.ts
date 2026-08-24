@@ -14,6 +14,7 @@
 //     terminal-pty 의 인코더를 그대로 재사용한다. Enter 도 키 이름이 아니라 `0x0d` 로 보낸다.
 //     (자세한 근거는 terminal-pty.ts 의 'psmux 입력 경로' 절.)
 import { TMUX_BIN, harnessLiveThemeSteps, harnessLiveThemeSupported, type LiveThemeStep } from "./catalog.js";
+import { detectAwaiting, isSpinning } from "./phase.js";   // #1683 후속2 — 바쁜/모달 세션엔 키를 넣지 않는다
 import { tmux } from "./tmux-exec.js";
 import { isPsmuxBin, inputToSendKeysArgv } from "./terminal-pty.js";
 
@@ -90,13 +91,22 @@ export async function sendKeyToSession(id: string, key: ChatKey): Promise<void> 
 //  C-u 로 비우면 그 사람의 초안이 사라진다. 남의 글을 지우는 것보다 한 줄 덧붙는 편이 되돌리기 쉽다.
 export interface LiveThemeResult {
   /** 'applied' 이 아닌 값은 **사람에게 그대로 알린다**(조용한 실패 금지 — catalog 주석 ②). */
-  status: "applied" | "unsupported" | "gone" | "error";
+  status: "applied" | "unsupported" | "gone" | "error" | "busy";
   detail?: string;
 }
 
 export async function applyLiveTheme(id: string, harnessKey: string, theme: unknown): Promise<LiveThemeResult> {
   if (!harnessLiveThemeSupported(harnessKey)) {
     return { status: "unsupported", detail: `${harnessKey} 는 실행 중 테마 지정을 지원하지 않습니다` };
+  }
+  // ★ 바쁜 세션·모달에 걸린 세션은 **건너뛴다**(실측 사고, 2026-08-24): 하네스가 일하는 중이면 `/theme` 이
+  //  선택창을 띄우지 못하고 **그냥 프롬프트로 큐에 쌓인다** — 그 세션은 테마도 안 바뀌고 대화에 `/theme`·`2`
+  //  같은 쓰레기 지시만 남는다(상민님 세션에서 실제로 그렇게 들어갔다). 승인 대화상자에 멈춘 세션도 같다:
+  //  우리 글자가 그 모달의 답으로 먹혀 엉뚱한 선택을 누를 수 있다.
+  //  그래서 '지금 조용히 입력창을 띄우고 있는' 세션에만 넣는다. 아니면 사유를 돌려주고 화면이 사람에게 말한다.
+  {
+    const busy = await sessionBusyOrModal(id);
+    if (busy) return { status: "busy", detail: busy };
   }
   const steps = harnessLiveThemeSteps(harnessKey, theme);
   if (!steps.length) return { status: "unsupported", detail: "테마 값이 해석되지 않았습니다" };
@@ -118,4 +128,20 @@ async function runStep(id: string, st: LiveThemeStep): Promise<void> {
   const plan = sendKeysPlan(id, st.text, TMUX_BIN);
   for (const argv of plan.keys) await tmux(argv);
   await new Promise((r) => setTimeout(r, injectFlushMs(plan.oneLine.length)));
+}
+
+/** 지금 키를 넣으면 안 되는 상태인가 — 그 사유(넣어도 되면 null). 관측은 **라이브 pane** 에서 한다(기억 아님).
+ *  ① pane 타이틀 스피너 = 하네스가 일하는 중 → 넣으면 `/theme` 이 프롬프트로 큐에 쌓인다(실측 사고).
+ *  ② 승인·선택 모달 = 우리 글자가 그 모달의 답으로 먹힌다 → 엉뚱한 선택을 누를 수 있다.
+ *  둘 다 phase.ts 의 판정을 그대로 쓴다 — 같은 화면을 두 기준으로 읽지 않는다. */
+async function sessionBusyOrModal(id: string): Promise<string | null> {
+  try {
+    const title = await tmux(["display-message", "-p", "-t", id, "#{pane_title}"]);
+    if (isSpinning(String(title || ""))) return "작업 중이라 건너뛰었습니다";
+  } catch { /* 타이틀을 못 읽어도 아래 pane 관측으로 판단한다 */ }
+  try {
+    const pane = await tmux(["capture-pane", "-t", id, "-p"]);
+    if (detectAwaiting(String(pane || ""))) return "확인창이 떠 있어 건너뛰었습니다";
+    return null;
+  } catch { return "화면을 읽지 못해 건너뛰었습니다"; }
 }
