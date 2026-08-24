@@ -118,6 +118,8 @@
   --v2-gi-frost-a: .34;
   --v2-gi-punch: #DCEBF7;
   --v2-gi-punch-a: .55;
+  --v2-pad-field: rgba(26, 36, 54, .62);
+  --v2-pad-field-line: rgba(234, 240, 250, .15);
   --tint-ink: 234, 240, 250;
 
   color-scheme: dark;
@@ -234,6 +236,8 @@
   --v2-gi-frost-a: .34;
   --v2-gi-punch: #DCEBF7;
   --v2-gi-punch-a: .55;
+  --v2-pad-field: rgba(26, 36, 54, .62);
+  --v2-pad-field-line: rgba(234, 240, 250, .15);
   --tint-ink: 234, 240, 250;
 
   color-scheme: dark;2

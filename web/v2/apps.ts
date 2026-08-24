@@ -4,7 +4,7 @@
 //  중앙에 띄운다 — 클래식 코드를 한 줄도 옮기지 않고 새 셸 안에서 그대로 쓴다. 나중에 화면이 새 셸로 이식되면
 //  이 표의 항목이 `native` 로 바뀌거나 빠진다(표가 곧 '아직 안 옮긴 것' 목록이다).
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
-import { el, navOn } from '../core.js';
+import { el, navOn, sv } from '../core.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
 import { openAppUi } from './app-ui.js';
@@ -299,15 +299,26 @@ export function openLaunchpad(): void {
         el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
     });
     grid.replaceChildren(...screen, ...session);
+    grid.classList.toggle('v2-pad-grid--q', !!q);   // 검색 중이면 첫 칸이 Enter 로 열릴 자리 — 그걸 보인다.
     if (!grid.childElementCount) grid.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
   };
   input.addEventListener('input', draw);
+  // 스포트라이트처럼 Enter 는 맨 앞 결과를 연다 — 이름을 몇 글자 치고 바로 들어가는 길.
+  input.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key !== 'Enter') return;
+    const first = grid.querySelector('.v2-pad-item') as HTMLElement | null;
+    if (first) { e.preventDefault(); first.click(); }
+  });
   void listSessionApps().then((a) => { if (padEl) { sApps = a; draw(); } });
-  padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱', onclick: (e) => { if (e.target === padEl) closeLaunchpad(); } },
-    el('div', { class: 'v2-pad-top' },
-      el('div', { class: 'v2-pad-h' }, el('b', { text: '앱' }), el('span', { class: 'v2-pad-sub', text: '아직 새 화면으로 옮기지 않은 것들 — 열면 가운데에 그대로 실립니다.' })),
+  // 검색칸 하나만 띄운다(맥 스포트라이트) — 제목·설명 줄·닫기 버튼은 없앴다.
+  //  닫기는 Esc 와 배경 클릭이 이미 하고, 칸 오른쪽 esc 키캡이 그걸 알린다.
+  padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱 찾기', onclick: (e) => { if (e.target === padEl) closeLaunchpad(); } },
+    el('div', { class: 'v2-pad-field' },
+      sv('svg', { class: 'v2-pad-mag', viewBox: '0 0 24 24', 'aria-hidden': 'true' },
+        sv('circle', { cx: '11', cy: '11', r: '6.75' }),
+        sv('path', { d: 'M16.1 16.1 21 21' })),
       input,
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기 (Esc)', onclick: () => closeLaunchpad() })),
+      el('kbd', { class: 'v2-pad-esc', text: 'esc' })),
     grid);
   document.body.append(padEl as HTMLElement); draw(); input.focus();
   document.addEventListener('keydown', padKey);
