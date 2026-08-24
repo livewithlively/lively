@@ -87,11 +87,23 @@ const MIN_COSINE = 0.48;
 //   제목이 질의를 통째로 담았으면(제목 적중) 예외다 — 그건 길이와 무관하게 확실한 신호다.
 const MIN_TITLE_CHARS = 6;
 
-//  similar(절대 코사인)가 **한 번이라도** 결과를 준 적이 있나 = 그 축이 이 조직에서 살아 있나.
-//  ⚠ **모듈 스코프다**(창 수명이 아니라 페이지 수명) — 창 안에 두면 ⌘K 를 닫았다 열 때마다 초기화돼
-//   **그 창의 첫 질의는 늘 억제가 안 걸린다**(실측 2026-08-24: 뜻 없는 질의로 창을 열면 잡음 12건이 그대로 떴다).
-//   임베딩이 꺼진 조직에선 영영 false 라 아래 규칙들이 발동하지 않는다(종전 동작 그대로).
+// ── 이 조직에 '관련도 축'이 있는가 — **추론하지 말고 물어본다** ──────────────────────────────
+//  이 값이 true 여야 아래의 '무관하면 접기' 가 발동한다. 처음엔 "similar 가 한 번이라도 결과를 준 적 있나"로
+//  **추론**했는데, 그러면 **새 페이지의 첫 질의는 영영 억제되지 않는다** — 하필 그게 무관한 질의면 잡음이
+//  그대로 뜬다(실측 2026-08-24: 뜻 없는 질의로 처음 열었더니 12건이 그대로). 관측의 순서에 답이 달라지는
+//  판정은 판정이 아니다. 그래서 **min_score=0 으로 한 번 찔러 본다** — 그건 "가장 가까운 것 하나"를 뜻하므로
+//  결과가 있으면 축이 살아 있는 것이고, 비어 있으면 임베딩이 꺼진 조직이다. 둘이 확실히 갈린다.
+//  통합검색을 처음 열 때 한 번만 돌고, 페이지 수명 동안 기억한다.
 let simAlive = false;
+let axisProbed = false;
+function probeAxis(): void {
+  if (axisProbed) return;
+  axisProbed = true;
+  api('/api/ui/knowledge/similar?limit=1&min_score=0&text=lively').then(
+    (r: any) => { if (((r && r.entries) || []).length) simAlive = true; },
+    () => { /* 못 물어봤으면 모르는 채로 둔다 — 모르면 접지 않는다(있는 것을 숨기는 쪽이 더 나쁘다) */ },
+  );
+}
 
 let hooks: OmniHooks | null = null;
 export function setOmniHooks(h: OmniHooks): void { hooks = h; }
@@ -113,6 +125,7 @@ let box: HTMLElement | null = null;
 export function omniOpen(seed?: string): void {
   if (box) { const i = box.querySelector('.v2-omni-in') as HTMLInputElement | null; i?.focus(); i?.select(); return; }
   if (!hooks) return;
+  probeAxis();
 
   const input = el('input', {
     class: 'v2-omni-in', type: 'text', spellcheck: 'false', autocomplete: 'off',
