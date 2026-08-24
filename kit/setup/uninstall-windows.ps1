@@ -19,7 +19,7 @@ try {
   Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile (Join-Path $tmp "b.tgz")
   tar -xzf (Join-Path $tmp "b.tgz") -C $tmp
   $un = Join-Path $tmp "setup\user-uninstall.mjs"
-  if (Test-Path $un) { node $un } else { Write-Host "user-uninstall.mjs 없음(묶음 손상)" -ForegroundColor Red }
+  if (Test-Path $un) { node $un --allow-host-effects } else { Write-Host "user-uninstall.mjs 없음(묶음 손상)" -ForegroundColor Red }
   # #355: 번들 Node 경로(~/.lively\runtime\node-*)를 User PATH 에서 제거 — ~/.lively 삭제와 대칭. node 실행 후에 정리.
   try {
     $uPath = [Environment]::GetEnvironmentVariable("Path","User")

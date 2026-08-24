@@ -110,6 +110,20 @@ await ta("접속 맥락이 있으면 게이트웨이가 본 하네스·세션·�
   assert.equal(r.session.channel, "mcp");
 });
 
+// ── 앱 세션 토큰(#1780 v2.1 R4-M1, 사양 spec-h8) — 외부 계정·팀·카테고리는 앱에게 주지 않는다 ──
+await ta("앱 토큰: identities·teams·categories 는 비고 app 에 앱 id 가 실린다 / 일반 토큰은 app=null", async () => {
+  const appUser = { ...ghost, appId: "browser" };
+  const r = await whoami.handler({}, appUser) as any;
+  assert.equal(r.app, "browser");
+  assert.deepEqual(r.identities, []);
+  assert.deepEqual(r.teams, []);
+  assert.deepEqual(r.categories, { owner: [], stakeholder: [] });
+  assert.equal(r.member_id, ghost.userId, "사람 축 식별자는 남는다(on_behalf_of 성립)");
+  assert.deepEqual(r.scopes, ["memory"]);
+  const p = await whoami.handler({}, ghost) as any;
+  assert.equal(p.app, null);
+});
+
 // ── 주입 블록 (사양 10 / E12·E13·E14) ──
 t("E12: 멤버를 특정할 수 없으면 '나' 블록은 아예 없다(정적 산출물 불변)", () => {
   assert.equal(renderMeBlock("", { display_name: "누구", email: "a@b.c" }), "");

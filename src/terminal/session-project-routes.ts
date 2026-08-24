@@ -18,9 +18,27 @@ import { updateSessionStateMeta } from "../sessions/session-state.js";
 import { nodeOfSession, nodeRpc } from "../node/registry.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { applySessionProject, type SessionProjectBind } from "./session-project.js";
+import { ensureAgentsMd } from "../v6/agents-md.js";
+import { projectAbsPath } from "../project/project-fs.js";
+import fsp from "node:fs/promises";
+import path from "node:path";
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+/** bind 에 실어 보낼 AGENTS.md 상한 — 이걸 넘으면 안 싣고 pull 에 맡긴다(RPC payload 를 문서 싱크로 쓰지 않는다). */
+const AGENTS_MD_MAX = 128 * 1024;
+
+/** 이 프로젝트의 AGENTS.md 전문(#1856) — 세션이 사는 호스트가 프로젝트 폴더를 **처음 만들 때** 그 자리에 심을 씨앗.
+ *  ensureAgentsMd 를 먼저 불러 게이트웨이 폴더·파일을 최신으로 보장하므로, 부수적으로 게이트웨이 쪽 폴더도 여기서 생긴다.
+ *  실패는 전부 비치명(null) — 폴더만 만들어지고 문서는 pull 훅이 다음 턴에 채운다. */
+async function projectAgentsMd(id: number, folder: string): Promise<string | null> {
+  if (!folder) return null;
+  try {
+    await ensureAgentsMd(id).catch(() => { /* 생성 실패해도 기존 파일이 있으면 읽는다 */ });
+    const body = await fsp.readFile(path.join(projectAbsPath(folder), "AGENTS.md"), "utf8");
+    return body.length > AGENTS_MD_MAX ? null : body;
+  } catch { return null; }
+}
 
 /** v6 프로젝트(level=project) 한 건 — 붙일 대상의 이름·폴더. 없으면 null. */
 async function loadProject(id: number): Promise<{ id: number; name: string; folder: string } | null> {
@@ -46,7 +64,7 @@ export async function setSessionProject(u: LivelyUser, id: string, pidRaw: unkno
     // 공개범위(#1291) — 내가 못 보는 프로젝트엔 못 붙인다(붙이면 사이드바·타임라인에서 그 이름이 새어 나온다). 판정 불가면 거부(fail-closed).
     const hidden = await hiddenProjects(me).catch(() => null);
     if (!hidden || hidden.ids.has(pid)) throw new HttpError(403, "이 프로젝트에는 붙일 수 없어요(공개범위 밖입니다)");
-    bind = { projectId: p.id, folder: p.folder, name: p.name, src: "v6" };
+    bind = { projectId: p.id, folder: p.folder, name: p.name, src: "v6", agentsMd: await projectAgentsMd(p.id, p.folder) };
   }
 
   const nodeId = nodeOfSession(id);

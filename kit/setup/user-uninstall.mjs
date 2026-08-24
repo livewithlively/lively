@@ -16,7 +16,7 @@
 //  (4d) ~/.grok/                 ← hooks/lively-grok.json·rules/lively.md 삭제(전부 우리 파일) + config.toml 의 lively-managed 센티넬 블록 제거.
 //  (5) ~/.lively/               ← 기본 휴지통 이동(~/.lively.removed-<stamp>, 되돌릴 수 있음). --purge 면 하드 삭제.
 //
-// 사용법: node setup/user-uninstall.mjs [--dry-run] [--purge] [--harness claude|codex|opencode|antigravity|grok|all] [--yes]
+// 사용법: node setup/user-uninstall.mjs --allow-host-effects [--dry-run] [--purge] [--harness claude|codex|opencode|antigravity|grok|all] [--yes]
 //   (보통은 uninstall-mac.sh 가 호출. 직접 실행해도 동일.)
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 리다이렉트(라이브 보호). 미지정 시 os.homedir().
 
@@ -27,6 +27,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
+import { hostEffectsAllowed, removeWindowsUserPath } from "./host-effects.mjs";
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
@@ -282,15 +283,12 @@ function uninstallWindowsPath() {
   if (process.platform !== "win32") return 0;
   const binDir = join(LIVELY, "bin");
   if (DRY) { log(`  [dry-run] User PATH 에서 ${binDir} 제거 예정`); return 1; }
-  // 우리 항목만 제거 — 사용자의 다른 PATH 항목은 그대로 둔다(비파괴).
-  const ps = `$b='${binDir.replace(/'/g, "''")}'; $p=[Environment]::GetEnvironmentVariable('PATH','User'); `
-    + `if($p){ $c=(@($p -split ';' | Where-Object { $_ -and ($_ -ne $b) }) -join ';'); `
-    + `if($c -ne $p){ [Environment]::SetEnvironmentVariable('PATH',$c,'User'); Write-Output 'removed' } }`;
-  const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8" });
-  if (r.status === 0 && String(r.stdout || "").includes("removed")) {
+  const r = removeWindowsUserPath(binDir, { allowed: hostEffectsAllowed({ args }) });
+  if (r.status === "changed") {
     log("  ✓ User PATH 에서 ~/.lively\\bin 제거"); return 1;
   }
-  if (r.status !== 0) log("  ⚠️ User PATH 정리 실패 — 수동으로 ~/.lively\\bin 항목을 지우세요(무해하지만 죽은 경로).");
+  if (r.status === "denied") log("  · User PATH 변경 생략(영속 호스트 효과 권한 없음)");
+  else if (r.status === "failed") log("  ⚠️ User PATH 정리 실패 — 수동으로 ~/.lively\\bin 항목을 지우세요(무해하지만 죽은 경로).");
   else log("  · User PATH — lively 항목 없음(이미 제거됨/미설치)");
   return 0;
 }

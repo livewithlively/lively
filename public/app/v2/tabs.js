@@ -324,7 +324,9 @@ export function createTabs(centerHost, asideHost, hooks) {
             'aria-label': `열린 탭 ${tabs.length}개 — 목록`,
             onclick: (e) => openTabMenu(e.currentTarget),
         }, el('span', { class: 'n', text: String(tabs.length) }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 9l6 6 6-6' })));
-        strip.replaceChildren(menuBtn, ...kids);
+        // [모든 탭] 은 **줄 오른쪽 끝**(상민님 2026-08-24 — main·stage 통일). 한때 맨 왼쪽에 뒀는데,
+        //  탭이 늘면 왼쪽 단추가 탭 줄의 시작을 밀어 첫 탭 자리가 매번 달라졌다. 오른쪽은 그 자리가 고정된다.
+        strip.replaceChildren(...kids, menuBtn);
         // 탭이 줄 폭을 넘치면(모바일 상단 바·좁은 창) 활성 탭이 보이게 가로로만 굴린다 — 세로는 건드리지 않는다(nearest = 이미 보이면 0).
         const on = strip.querySelector('.v2-tab.on');
         if (on && strip.scrollWidth > strip.clientWidth)

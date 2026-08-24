@@ -8,15 +8,17 @@
 //   · mcp_server    : org_mcp_server upsert / remove             (실전개; name = 앱스코프 ref, cross-app 충돌 회피)
 //   · tool          : org_tool upsert / remove                   (실전개; name = 앱스코프 ref)
 //   · ui_page/ui_widget/section/data_table : no-op(저널만 — addComponent 가 이미 기록, DDL 은 부팅 자식)
-//   · 그 외 kind    : HttpError(500) — 알 수 없는 전개 대상은 조용히 넘기지 않는다.
+//   · 그 외 kind    : deploy = HttpError(500) — 알 수 없는 것을 심지 않는다. reclaim = 경고 + 조인 제거만
+//                     (#1780 v2 §7-1, 설계 R2-C8 — v2 코어가 심은 kind 를 이 코어가 만나도 앱 삭제·재설치가 막히지 않게).
 import { HttpError } from "../http-error.js";
+import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
 import type { AppComponentRef } from "./install-plan.js";
 import type { DeployItem, InstallDeps } from "./install.js";
 import { upsertApp, setAppStatus, addComponent, removeComponent, hostReferenceCount } from "../org/store/apps.js";
 import { upsertOrgHarnessAsset, removeOrgHarnessAsset } from "../org/store/harness-assets.js";
 import { getRuntimeConfig, updateRuntimeConfig } from "../org/store/runtime-config.js";
-import { insertCronJob, deleteCronJob } from "../org/cron-store.js";
+import { upsertCronJob, deleteCronJob } from "../org/cron-store.js";
 import { upsertMcpServer, removeMcpServer, type McpServerInput } from "../org/store/mcp-servers.js";
 import { upsertTool, removeTool, type OrgToolInput } from "../org/store/tools.js";
 
@@ -72,15 +74,15 @@ const KIND_HANDLERS: Record<string, KindHandler> = {
   },
 
   // ── 크론 — agent_headless 잡. id = 앱스코프 ref(안정 문자열 PK) → reclaim 은 그 id 로 삭제. ──
-  //  insertCronJob 은 plain INSERT 라 재전개(update seed)에서 PK 충돌한다 → delete 선행으로 멱등화(cron 전용 upsert 부재).
+  //  재전개는 upsertCronJob — 정의만 갱신하고 **last_run_at 을 보존**한다(종전 delete+insert 는 이력이 사라져
+  //  interval 잡이 업그레이드 직후 즉시 돌았다 — #1780 v2 §7-1, 설계 R2-O5).
   cron: {
     async deploy(appId, item, ctx) {
       const p = item.payload as CronPayload;
       const run = p.run ?? { kind: "", prompt: undefined, prompt_asset: undefined };
       const prompt = (run.prompt && run.prompt.trim()) ? run.prompt : (run.prompt_asset ?? "");
       if (!prompt) throw new HttpError(500, `크론 잡 프롬프트가 비어 있습니다: ${item.comp.ref}`);
-      await deleteCronJob(item.comp.ref); // 멱등 — 재전개 시 옛 정의 제거 후 재삽입
-      await insertCronJob({
+      await upsertCronJob({
         id: item.comp.ref,
         label: item.comp.orig_name ? `앱 잡: ${item.comp.orig_name}` : item.comp.ref,
         action: "agent_headless",
@@ -163,7 +165,11 @@ export function makeDeployDeps(appId: string, ctx: WriteCtx): InstallDeps {
       await handlerFor(item.comp.kind).deploy(appId, item, ctx);
     },
     async reclaim(comp) {
-      await handlerFor(comp.kind).reclaim(appId, comp, ctx);
+      // 미지 kind 는 **회수를 막지 않는다** — 실전개가 뭔지 모르니 손대지 않고(경고), 조인 제거(removeComponent)만 남긴다.
+      //  롤백 시 v2 가 심은 구성요소가 여기 걸린다; 그 실전개 흔적은 v2 다운 런북이 정리한다(설계 §7 v3).
+      const h = KIND_HANDLERS[comp.kind];
+      if (!h) { logger.warn({ app: appId, kind: comp.kind, ref: comp.ref }, "app reclaim: unknown component kind — join removed only"); return; }
+      await h.reclaim(appId, comp, ctx);
     },
   };
 }

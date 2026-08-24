@@ -305,8 +305,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-pj-row:hover .v2-pinb, .v2-pinb:focus-visible { opacity: 1; }
 .v2-pinb:hover { color: var(--ink); background: var(--bg-tint-2); }
 .v2-pinb.on { opacity: 1; color: var(--blue); }
-.v2-pinb-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
-.v2-pinb.on .v2-pinb-ic { fill: currentColor; stroke: none; }
+.v2-pinb-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linejoin: round; stroke-linecap: round; }
+/* 고정됨 = 속이 찬 핀. ⚠ stroke 를 끄지 않는다 — 바늘(M12 17v5)은 선이라 fill 로는 안 그려져서,
+   stroke:none 이면 바늘이 통째로 사라진 '머리만 남은 핀'이 된다. */
+.v2-pinb.on .v2-pinb-ic { fill: currentColor; }
 /* 고정 묶음과 나머지 사이 — 실선 하나면 충분하다(머리글을 두지 않는다). */
 .v2-pj.after-pins { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-net); }
 
@@ -337,7 +340,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
    '지금 켜진 것'과 '이름이 긴 것'이 같은 신호(넓다)로 보였다. 켜짐은 이제 **면과 밑줄**만으로 말한다.
    flex:1 1 0 이 곧 1/n 이고, 바닥 폭(min-width) 아래로 밀리면 그때부터 줄이 굴러간다 —
    글자가 아예 안 읽히는 탭 20개보다, 읽히는 탭 몇 개 + 스크롤 + [모든 탭] 목록이 낫다. */
-.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head); cursor: pointer; flex: 1 1 0; min-width: 96px; max-width: none; white-space: nowrap; user-select: none; }
+/* ⚠ max-width 상한(상민님 2026-08-24) — 종전 none 이면 `flex: 1 1 0` 이 남는 폭을 전부 먹어, **탭이 하나일 때
+   그 하나가 줄 전체로 늘어났다**(이름이 두 글자여도 화면 끝까지). 브라우저 탭 줄도 상한을 두는 이유가 같다.
+   상한을 넘긴 남는 폭은 빈 채로 남고, 그 자리가 곧 창을 끌 자리가 된다(데스크톱). */
+.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head); cursor: pointer; flex: 1 1 0; min-width: 96px; max-width: 240px; white-space: nowrap; user-select: none; }
 .v2-tab:hover { background: rgba(255,255,255,.62); color: var(--ink); }
 .v2-tab.on { background: var(--bg); box-shadow: inset 0 2px 0 var(--blue); color: var(--ink); font-weight: 700; }
 .v2-tab.on:hover { background: var(--bg); }
@@ -1096,7 +1102,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-tab-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45, 107, 240, .12); }
 
 /* [모든 탭] — 줄 오른쪽 끝에 붙어 있는 목록 단추(줄이 굴러가도 늘 보이게 sticky). */
-.v2-tab-menu { position: sticky; left: 0; z-index: 3; display: inline-flex; align-items: center; gap: 3px; height: 36px; padding: 0 9px; border: 0; border-right: 1px solid var(--line); background: var(--gray-bg-2); font: inherit; font-size: 11.5px; color: var(--muted-head); cursor: pointer; flex: none; }
+/* 줄 오른쪽 끝에 고정(상민님 2026-08-24) — 탭이 넘쳐 줄이 굴러도 이 단추는 제자리에 남는다(sticky right).
+   구분선도 그 방향에 맞춰 왼쪽에 둔다. */
+.v2-tab-menu { position: sticky; right: 0; z-index: 3; display: inline-flex; align-items: center; gap: 3px; height: 36px; padding: 0 9px; border: 0; border-left: 1px solid var(--line); background: var(--gray-bg-2); font: inherit; font-size: 11.5px; color: var(--muted-head); cursor: pointer; flex: none; }
 .v2-tab-menu:hover { color: var(--blue); }
 .v2-tab-menu .n { font-variant-numeric: tabular-nums; font-weight: 600; }
 /* [모든 탭] 목록 — anchoredPopover 의 .dash-pop 은 **자리만** 잡는다(20-dashboard.css). 배경·테두리·그림자는
@@ -1120,3 +1128,35 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-theme-opt { flex: 1; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 0; border-radius: 7px; cursor: pointer; transition: color 120ms ease, background 120ms ease; }
 .v2-theme-opt:hover { color: var(--ink-sub); }
 .v2-theme-opt.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .10); }
+
+
+/* ── [외부 앱 연결] 관리자 구역(#1719) — 같은 화면의 '조직' 층. 개인 층과 **눈에 띄게 다른 바탕**을 준다:
+      여기서 누르는 것은 나 하나가 아니라 팀 전체에 걸리는 결정이라, 착각으로 누르면 안 된다. ── */
+.cn-adm { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--bg-tint); }
+.cn-adm .cn-sec-h { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.cn-adm-badge { font-size: 11.5px; font-weight: 700; color: var(--muted-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.cn-muted { color: var(--muted-2); }
+.cn-guide { margin: 10px 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.cn-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px;
+  font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
+.cn-steps code, .cn-copy-v { font-size: 11.5px; word-break: break-all; }
+/* 콘솔에 그대로 붙여넣는 값들(콜백 주소·허용범위) — 읽으라고 두는 게 아니라 **복사하라고** 두는 자리다. */
+.cn-copy { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center;
+  background: var(--bg-sub); border-radius: 8px; padding: 8px 10px; }
+.cn-copy-k { grid-column: 1 / -1; font-size: 11.5px; font-weight: 700; color: var(--muted-2); }
+.cn-copy-v { white-space: pre-wrap; }
+.cn-fields { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.cn-f { display: flex; flex-direction: column; gap: 4px; }
+.cn-f-k { font-size: 11.5px; font-weight: 700; color: var(--muted-2); }
+.cn-in { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--ink); font-size: 13px; }
+.cn-in:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cn-sum-adm b { color: var(--ink-sub); }
+
+/* 접히는 안내 — 늘 보여야 하는 건 '콘솔에 넣을 값'이고, 읽는 절차는 처음 한 번만 필요하다. */
+.cn-steps-wrap { border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; background: var(--bg); }
+.cn-steps-wrap[open] { padding-bottom: 10px; }
+.cn-steps-sum { cursor: pointer; padding: 9px 0; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.cn-steps-sum::marker { color: var(--muted-2); }
+.cn-steps-wrap .cn-help { margin: 2px 0 8px; }

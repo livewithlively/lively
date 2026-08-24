@@ -306,6 +306,14 @@ function emitClaudeArtifact({ target, orgLabel, copied }) {
     orgLabel,
   );
   copied.push("setup/user-install.mjs");
+  // 설치·제거의 영속 호스트 효과 capability/Windows User PATH 어댑터 — 엔진과 반드시 같은 번들에 둔다.
+  copyMjsWithHeader(
+    kitAbs("setup/host-effects.mjs"),
+    join(target, "setup", "host-effects.mjs"),
+    "workflow-std/setup/host-effects.mjs",
+    orgLabel,
+  );
+  copied.push("setup/host-effects.mjs");
   // user-install 이 import 하는 공유 상수(work-roots 헤더 단일 출처, #270) — 번들 동봉 필수(누락 시 import 크래시).
   copyMjsWithHeader(
     kitAbs("setup/work-roots-header.mjs"),
