@@ -62,7 +62,7 @@ tar -xzf "$TMP/bundle.tgz" -C "$TMP"
 ok "발행 번들 다운로드·전개 ($(du -h "$TMP/bundle.tgz" | cut -f1))"
 
 # 3) user-level 설치(컨텍스트·훅·settings 비파괴 머지) — OS-무관(node). 설치 엔진을 직접 호출한다.
-node "$TMP/setup/user-install.mjs" --harness "$HARNESS"
+node "$TMP/setup/user-install.mjs" --allow-host-effects --harness "$HARNESS"
 ok "user-level 설치(~/.lively + ~/.claude/settings.json 훅 머지)"
 
 # 4) MCP 등록(lively + org_mcp_server) — 번들의 register-clients.sh(OS-무관, claude CLI).
