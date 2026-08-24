@@ -138,6 +138,9 @@ export function omniOpen(seed?: string): void {
   let pending = 0;                  // 아직 안 온 원본 수(안내 문구용)
   let timer = 0;
   let qTokens: string[] = [];       // 지금 질의의 토큰(제목 적중 판정용)
+  //  이 창에서 similar(절대 코사인)가 **한 번이라도** 결과를 준 적이 있나 = 그 축이 이 조직에서 살아 있나.
+  //  임베딩이 꺼진 조직에선 영영 false 라, 아래 '무관하면 접기' 가 발동하지 않는다(종전 동작 그대로).
+  let simAlive = false;
 
   const rowNodes: HTMLElement[] = [];
   /** 제목이 질의를 통째로 담고 있나 — **종류와 무관하게** 맨 위로 올릴 근거(2026-08-20 실측 뒤 도입).
@@ -196,9 +199,27 @@ export function omniOpen(seed?: string): void {
         kids.push(node);
       }
     };
+    // ── 축이 '무관' 이라고 말하면 그 종류를 통째로 접는다 (2026-08-24 화면 실측) ──────────────
+    //  관련도순만 고쳐 놓고 끝낼 뻔했다: 뜻 없는 질의('zxcvbnm…')에 관련도순은 0건인데 **그 아래 '프로젝트'
+    //  묶음에 무관한 6건이 그대로 떴다.** semantic(RRF)은 컷오프가 없어 무엇을 물어도 채널마다 6건을 채우기
+    //  때문이다 — 그래서 "결과가 없습니다" 가 화면에 나올 수가 없었다.
+    //  지식·프로젝트는 **무관을 판정할 수단(절대 코사인)이 있다.** 그 판정이 '없음'이면 RRF 가 채운 것도 잡음이다.
+    //  ⚠ 단, 임베딩이 꺼진 조직에서는 similar 가 늘 빈 결과다 — 그때 접으면 지식·프로젝트가 통째로 사라진다.
+    //   그래서 **이 창에서 similar 가 한 번이라도 결과를 준 적이 있을 때만** 접는다(축이 살아 있다는 증거).
+    const muted = new Set<Kind>();
+    if (simAlive) {
+      for (const [kind, src] of [['know', 'know:sim'], ['proj', 'proj:sim']] as Array<[Kind, string]>) {
+        const answered = buckets.has(src);
+        const relevant = (buckets.get(src) || []).length > 0 || hits.some((h) => h.kind === kind && isTitleHit(h));
+        if (answered && !relevant) muted.add(kind);
+      }
+    }
     // 위에 세운 것은 아래 종류별 묶음에서 뺀다 — 같은 줄이 두 번 뜨지 않게(배지가 종류를 말한다).
     draw('관련도순', top);
-    for (const g of GROUPS) draw(g.label, hits.filter((h) => h.kind === g.kind && !topKeys.has(h.key)));
+    for (const g of GROUPS) {
+      if (muted.has(g.kind)) continue;
+      draw(g.label, hits.filter((h) => h.kind === g.kind && !topKeys.has(h.key)));
+    }
     list.replaceChildren(...kids);
     if (sel >= rowNodes.length) sel = Math.max(0, rowNodes.length - 1);
     mark();
@@ -243,6 +264,7 @@ export function omniOpen(seed?: string): void {
   }
   function put(src: string, rows: Hit[], mySeq: number): void {
     if (mySeq !== seq || !box) return;
+    if (rows.length && src.endsWith(':sim')) simAlive = true;
     buckets.set(src, rows);
     pending = Math.max(0, pending - 1);
     rebuild();
