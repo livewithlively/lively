@@ -49,6 +49,20 @@ function projHref(p) {
     const id = Number(p.id);
     return p.level === 'task' || p.level === 'subtask' ? '#/projects2/t/' + id : '#/p/' + id;
 }
+// ── 관련도 축 (2026-08-24 실측) ────────────────────────────────────────────────
+//  `semantic` 이 주는 RRF 점수로는 못 가른다 — 순위역수라 채널마다 1등이 전부 1/61≈0.0164 로 동점이고,
+//  질의에 따라 12항목의 점수 폭이 0.0012 까지 좁아진다. 그래서 종전엔 종류 고정순서로 늘어놓을 수밖에 없었고,
+//  "왜 항상 프로젝트가 먼저 뜨냐"(상민님)가 거기서 나왔다.
+//  `similar` 는 **절대 코사인(0~1)** 을 준다 — 랭크가 아니라 값이라 채널을 가로질러 비교되고, 컷오프가 선다.
+//  dev 실측: 정답이 있는 질의는 0.50~0.70, 뜻 없는 질의('zxcvbnm')는 top 이 0.439 였다 → 그 사이를 끊는다.
+//   세션이 안 열려요 0.657 · 릴리스 어떻게 해 0.631 · 디스크 가득 0.575 · 통합검색 0.502 | 외계어 0.439
+//  컷오프는 **0.48** — 0.45 로 두면 뜻 없는 질의에도 2건이 새어 나왔다(실측 'zxcvbnm…' → 0.458·0.452).
+const MIN_COSINE = 0.48;
+//  ⚠ 짧은 제목은 코사인이 부풀려진다 — 임베딩이 몇 글자에 지배되기 때문. 실측에서 'ㅇㅇ'(0.522)·'ㄹㅇㄹㅁ'(0.526)·
+//   '세션찾기'(0.695) 같은 이름들이 진짜 답 위로 올라왔다. 이름만으로 아무것도 말하지 않는 항목을 상위에 세울
+//   근거가 없으므로 관련도순에서는 뺀다(종류별 묶음에는 그대로 남는다 — 정보를 버리지는 않는다).
+//   제목이 질의를 통째로 담았으면(제목 적중) 예외다 — 그건 길이와 무관하게 확실한 신호다.
+const MIN_TITLE_CHARS = 6;
 let hooks = null;
 export function setOmniHooks(h) { hooks = h; }
 // ── 한 줄로 줄이기 ── 스니펫은 `L12: …` 꼴로 오고 줄바꿈이 섞여 있다. 목록은 한 줄이 한 결과여야 훑을 수 있다.
@@ -115,9 +129,27 @@ export function omniOpen(seed) {
     function paint() {
         rowNodes.length = 0;
         const kids = [];
-        //  그 안의 순서는 **얼마나 그 이름다운가**로 — 질의가 제목 앞쪽에 있을수록, 제목이 짧을수록 위.
-        //  (실측: '통합검색' 에서 정답 문서보다 '…그리드 통합검색' 이 먼저 뜨던 것 — 삽입순이라 그랬다.)
-        const top = hits.filter(isTitleHit).sort((a, b) => titleRank(a) - titleRank(b)).slice(0, 5);
+        // ── 관련도순 — 상민님 "가장 정확도 높은 게 먼저 뜨는 게 맞지 않아?" (2026-08-24) ─────────────
+        //  들어가는 것: **제목이 그대로 맞은 것**(모든 채널) + **절대 코사인이 컷오프를 넘은 것**(지식·프로젝트).
+        //  순서: 제목 적중이 먼저(그보다 확실한 신호가 없다) — 그 안은 '얼마나 그 이름다운가'(질의 위치 + 제목 길이,
+        //   실측: '통합검색' 에서 정답보다 '…그리드 통합검색' 이 먼저 뜨던 것). 나머지는 코사인 내림차순.
+        //  ⚠ 자료·세션이력에는 이 축이 **없다**(자료는 ILIKE, 이력은 자체 스코어) — 섞으면 없는 값을 있는 척하게 되므로
+        //   그 채널들은 아래 종류별 묶음에 그대로 둔다. 축이 없는 것을 억지로 한 줄에 세우지 않는다.
+        const meaty = (h) => isTitleHit(h) || h.title.replace(/[^\p{L}\p{N}]/gu, '').length >= MIN_TITLE_CHARS;
+        const top = hits.filter((h) => (isTitleHit(h) || typeof h.score === 'number') && meaty(h))
+            .sort((a, b) => {
+            const ta = isTitleHit(a) ? 1 : 0, tb = isTitleHit(b) ? 1 : 0;
+            if (ta !== tb)
+                return tb - ta;
+            // 점수가 있으면 점수가 먼저다 — 제목 적중끼리도 그렇다. 화면에 0.585 가 0.632 위에 서면 '관련도순'이 거짓말이 된다.
+            const sa = a.score, sb = b.score;
+            if (typeof sa === 'number' && typeof sb === 'number' && sa !== sb)
+                return sb - sa;
+            if (ta)
+                return titleRank(a) - titleRank(b);
+            return (sb || 0) - (sa || 0);
+        })
+            .slice(0, 8);
         const topKeys = new Set(top.map((h) => h.key));
         const draw = (label, rows) => {
             if (!rows.length)
@@ -137,8 +169,8 @@ export function omniOpen(seed) {
                 kids.push(node);
             }
         };
-        // 제목이 그대로 맞은 것 먼저 — 아래 종류별 묶음에서는 빼서 같은 줄이 두 번 뜨지 않게 한다(배지가 종류를 말한다).
-        draw('가장 맞는 것', top);
+        // 위에 세운 것은 아래 종류별 묶음에서 뺀다 — 같은 줄이 두 번 뜨지 않게(배지가 종류를 말한다).
+        draw('관련도순', top);
         for (const g of GROUPS)
             draw(g.label, hits.filter((h) => h.kind === g.kind && !topKeys.has(h.key)));
         list.replaceChildren(...kids);
@@ -168,7 +200,9 @@ export function omniOpen(seed) {
     // ── 검색 ── 소스마다 따로 돌고, 도착하는 대로 그 소스 칸만 갈아 끼운 뒤 목록을 다시 만든다.
     //  소스 순서 = 같은 항목이 두 소스에서 오면 **먼저 온 쪽의 표현**(스니펫)을 쓴다는 뜻이다. 의미검색을 앞에 두어
     //  종전 순서를 지키고, grep 은 **의미검색이 놓친 것을 뒤에 보탠다**(그 중 제목 적중은 위 '가장 맞는 것'이 끌어올린다).
-    const SRC_ORDER = ['local', 'know:sem', 'know:grep', 'proj:sem', 'proj:grep', 'src', 'hist'];
+    //  ⚠ similar(절대 코사인)를 **먼저** 둔다 — 같은 항목이 두 소스에서 오면 먼저 온 쪽이 남는데, 점수를 가진 쪽이
+    //   남아야 관련도순에 설 수 있다(뒤에 두면 점수 없는 사본이 먼저 잡혀 그 줄이 순위에서 빠진다).
+    const SRC_ORDER = ['know:sim', 'proj:sim', 'local', 'know:sem', 'know:grep', 'proj:sem', 'proj:grep', 'src', 'hist'];
     function rebuild() {
         const seen = new Set();
         hits = [];
@@ -232,7 +266,7 @@ export function omniOpen(seed) {
         }
         localHits(q);
         paint();
-        pending = 6;
+        pending = 8;
         setNote('찾는 중…');
         const qs = encodeURIComponent(q);
         // 프로젝트(의미) — 로컬 이름 매칭을 덮어쓴다(서버가 더 넓게 본다: 태스크·본문·임베딩).
@@ -254,6 +288,18 @@ export function omniOpen(seed) {
         //  ⚠ grep 채널은 **제목이 맞은 것만** 취한다. grep 은 본문 어디든 토큰이 스치면 잡으므로 그대로 부으면
         //   무관한 문서가 목록을 늘린다(실측: '클릭업'·'임베딩' 질의에 '이용약관'·'고객사 도입 48일차'가 딸려 왔다).
         //   이 채널의 목적은 하나다 — **제목이 곧 그 이름인 문서가 RRF 에 묻히지 않게 하는 것**. 본문 회수는 의미검색 몫이다.
+        // ── similar = **절대 코사인** 채널 (2026-08-24) ────────────────────────────────────────
+        //  이 두 줄이 '관련도순' 을 가능하게 한다. semantic 의 RRF 점수로는 못 세운다(채널마다 1등이 동점).
+        //  min_score 로 **무관하면 아무것도 안 돌려준다** — "결과가 없습니다" 가 정직한 답이 되는 유일한 경로다.
+        api(`/api/ui/knowledge/similar?limit=8&min_score=${MIN_COSINE}&text=` + qs).then((r) => put('know:sim', ((r && r.entries) || []).map((e) => ({
+            kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e),
+            href: '#/k/' + encodeURIComponent(e.name), score: Number(e.similarity) || 0,
+        })), my), () => put('know:sim', [], my));
+        api(`/api/ui/v6/projects/similar?limit=8&min_score=${MIN_COSINE}&text=` + qs).then((r) => put('proj:sim', ((r && r.projects) || []).map((p) => ({
+            kind: 'proj', key: 'p:' + p.id, title: String(p.name || ('프로젝트 #' + p.id)),
+            sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
+            href: projHref(p), score: Number(p.similarity) || 0,
+        })), my), () => put('proj:sim', [], my));
         api('/api/ui/knowledge/search?limit=8&q=' + qs).then((r) => put('know:grep', ((r && r.entries) || []).map(knowRow).filter(isTitleHit), my), () => put('know:grep', [], my));
         api('/api/ui/v6/projects/search?limit=8&q=' + qs).then((r) => put('proj:grep', ((r && r.projects) || []).map((p) => ({
             kind: 'proj', key: 'p:' + p.id,
