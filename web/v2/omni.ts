@@ -105,6 +105,24 @@ function probeAxis(): void {
   );
 }
 
+// ── 종류 필터 (상민님 2026-08-24) ──────────────────────────────────────────────
+//  규칙: **빈 선택 = 모두 켜짐**(기본). 그 상태에서 하나를 누르면 **그것만**, 이어서 누르면 **누적**,
+//  켜진 것을 다시 누르면 꺼진다. 전부 꺼지거나 전부 켜지면 다시 기본(모두)으로 접는다 —
+//  '여섯 개를 다 골라 둔 상태'와 '아무것도 안 고른 기본'은 결과가 같으므로 둘을 따로 기억할 이유가 없다.
+//  ⚠ 페이지 수명으로 남긴다(창을 닫았다 열어도 유지) — 대신 칩이 늘 보이므로 **왜 결과가 짧은지 화면이 말한다**
+//   (사이드바 검색칸이 지키는 원칙과 같다). 새로고침하면 풀린다.
+const KINDS: Kind[] = ['sess', 'proj', 'know', 'src', 'hist', 'app'];
+let kindSel = new Set<Kind>();
+const kindOn = (k: Kind): boolean => kindSel.size === 0 || kindSel.has(k);
+/** 칩 하나를 눌렀을 때의 다음 상태 — 위 규칙을 한 곳에서만 구현한다(화면·테스트가 같은 것을 본다). */
+export function nextKindSel(cur: Set<Kind>, k: Kind, all: Kind[] = KINDS): Set<Kind> {
+  if (cur.size === 0) return new Set([k]);          // 기본(모두) → 그것만
+  const next = new Set(cur);
+  if (next.has(k)) next.delete(k); else next.add(k);
+  if (next.size === 0 || next.size === all.length) return new Set();   // 전부 꺼짐·전부 켜짐 → 기본
+  return next;
+}
+
 let hooks: OmniHooks | null = null;
 export function setOmniHooks(h: OmniHooks): void { hooks = h; }
 
@@ -133,6 +151,17 @@ export function omniOpen(seed?: string): void {
     'aria-label': '통합검색', 'aria-controls': 'v2-omni-list',
   }) as HTMLInputElement;
   const list = el('div', { class: 'v2-omni-list', id: 'v2-omni-list', role: 'listbox' });
+  //  종류 칩 — 각 종류에 버튼 하나. 눌리면 위 nextKindSel 규칙대로 상태가 바뀌고 **즉시 다시 찾는다**
+  //  (꺼진 종류는 아예 부르지 않으므로 오히려 빨라진다 — 세션이력처럼 느린 채널을 끄면 체감이 크다).
+  const chips = el('div', { class: 'v2-omni-filters', role: 'group', 'aria-label': '종류 필터' });
+  function paintChips(): void {
+    chips.replaceChildren(...KINDS.map((k) => el('button', {
+      class: 'v2-omni-chip' + (kindOn(k) ? ' on' : ''), type: 'button',
+      'aria-pressed': String(kindOn(k)),
+      title: kindSel.size === 0 ? `${KIND_LABEL[k]}만 보기` : (kindSel.has(k) ? `${KIND_LABEL[k]} 빼기` : `${KIND_LABEL[k]} 더하기`),
+      onclick: () => { kindSel = nextKindSel(kindSel, k); paintChips(); run(); },
+    }, icon(k, 'v2-omni-chip-ic'), el('span', { text: KIND_LABEL[k] }))));
+  }
   const note = el('div', { class: 'v2-omni-note' });
 
   box = el('div', {
@@ -145,7 +174,7 @@ export function omniOpen(seed?: string): void {
           sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
         input,
         el('kbd', { class: 'v2-omni-esc', text: 'Esc' })),
-      list, note)) as HTMLElement;
+      chips, list, note)) as HTMLElement;
 
   // ── 상태 ──
   //  결과는 **소스별로** 담는다(한 종류에 소스가 둘일 수 있다 — 지식·프로젝트는 의미검색 + grep).
@@ -311,7 +340,8 @@ export function omniOpen(seed?: string): void {
       .map((p) => ({ kind: 'proj' as const, key: 'p:' + p.id, title: p.name, sub: oneLine(String(p.description || '')), href: '#/p/' + p.id }));
     const apps: Hit[] = visibleApps().filter((a) => (a.title + ' ' + a.desc).toLowerCase().includes(nq)).slice(0, 4)
       .map((a) => ({ kind: 'app' as const, key: 'a:' + a.key, title: a.title, sub: a.desc, href: '#/app/' + a.key }));
-    buckets.set('local', [...sess, ...proj, ...apps]);
+    //  꺼진 종류는 애초에 담지 않는다 — 화면에서 거르는 게 아니라 **아예 찾지 않는다**(칩이 곧 검색 범위다).
+    buckets.set('local', [...sess, ...proj, ...apps].filter((h) => kindOn(h.kind)));
     rebuild();
   }
 
@@ -325,20 +355,28 @@ export function omniOpen(seed?: string): void {
     if (!q) { pending = 0; recent(); paint(); setNote(''); return; }
     localHits(q);
     paint();
-    pending = 8;
-    setNote('찾는 중…');
     const qs = encodeURIComponent(q);
+    //  실제로 부를 채널만 센다 — 꺼진 종류를 8 에 포함하면 '찾는 중…' 이 영영 안 걷힌다.
+    const want = (k: Kind, n: number): number => (kindOn(k) ? n : 0);
+    pending = want('know', 3) + want('proj', 3) + want('src', 1) + want('hist', 1);
+    if (!pending) { paint(); setNote(hits.length ? '' : '결과가 없습니다.'); return; }
+    setNote('찾는 중…');
+    const call = (k: Kind, fn: () => void): void => { if (kindOn(k)) fn(); };
     // 프로젝트(의미) — 로컬 이름 매칭을 덮어쓴다(서버가 더 넓게 본다: 태스크·본문·임베딩).
-    api('/api/ui/v6/projects/semantic?limit=6&q=' + qs).then((r: any) => put('proj:sem', ((r && r.projects) || []).map((p: any) => ({
-      kind: 'proj' as const, key: 'p:' + p.id,
-      title: String(p.name || p.title || ('프로젝트 #' + p.id)),
-      sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-      href: projHref(p),
-    })), my), () => put('proj:sem', [], my));
+    call('proj', () => {
+  api('/api/ui/v6/projects/semantic?limit=6&q=' + qs).then((r: any) => put('proj:sem', ((r && r.projects) || []).map((p: any) => ({
+        kind: 'proj' as const, key: 'p:' + p.id,
+        title: String(p.name || p.title || ('프로젝트 #' + p.id)),
+        sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
+        href: projHref(p),
+      })), my), () => put('proj:sem', [], my));
+    });
     const knowRow = (e: any): Hit => ({
       kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e), href: '#/k/' + encodeURIComponent(e.name),
     });
-    api('/api/ui/knowledge/semantic?limit=6&q=' + qs).then((r: any) => put('know:sem', ((r && r.entries) || []).map(knowRow), my), () => put('know:sem', [], my));
+    call('know', () => {
+  api('/api/ui/knowledge/semantic?limit=6&q=' + qs).then((r: any) => put('know:sem', ((r && r.entries) || []).map(knowRow), my), () => put('know:sem', [], my));
+    });
     // ── grep 채널을 **따로 부른다**(2026-08-20 실측) ────────────────────────────────
     //  하이브리드(semantic)는 벡터 ∪ grep 을 RRF 로 합치는데, **벡터에 없는 문서**(미임베딩)는 벡터 쪽 순위가
     //  통째로 엉뚱한 것들로 차면서 grep 이 맞게 찾은 정답을 뒤로 밀어낸다 — 즉 그 구간에선 하이브리드가
@@ -350,33 +388,45 @@ export function omniOpen(seed?: string): void {
     // ── similar = **절대 코사인** 채널 (2026-08-24) ────────────────────────────────────────
     //  이 두 줄이 '관련도순' 을 가능하게 한다. semantic 의 RRF 점수로는 못 세운다(채널마다 1등이 동점).
     //  min_score 로 **무관하면 아무것도 안 돌려준다** — "결과가 없습니다" 가 정직한 답이 되는 유일한 경로다.
-    api(`/api/ui/knowledge/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('know:sim', ((r && r.entries) || []).map((e: any): Hit => ({
-      kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e),
-      href: '#/k/' + encodeURIComponent(e.name), score: Number(e.similarity) || 0,
-    })), my), () => put('know:sim', [], my));
-    api(`/api/ui/v6/projects/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('proj:sim', ((r && r.projects) || []).map((p: any): Hit => ({
-      kind: 'proj', key: 'p:' + p.id, title: String(p.name || ('프로젝트 #' + p.id)),
-      sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-      href: projHref(p), score: Number(p.similarity) || 0,
-    })), my), () => put('proj:sim', [], my));
-    api('/api/ui/knowledge/search?limit=8&q=' + qs).then((r: any) => put('know:grep', ((r && r.entries) || []).map(knowRow).filter(isTitleHit), my), () => put('know:grep', [], my));
-    api('/api/ui/v6/projects/search?limit=8&q=' + qs).then((r: any) => put('proj:grep', ((r && r.projects) || []).map((p: any): Hit => ({
-      kind: 'proj' as const, key: 'p:' + p.id,
-      title: String(p.name || p.title || ('프로젝트 #' + p.id)),
-      sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-      href: projHref(p),
-    })).filter(isTitleHit), my), () => put('proj:grep', [], my));
-    api('/api/ui/sources?limit=6&q=' + qs).then((r: any) => put('src', ((r && r.entries) || []).map((s: any) => ({
-      kind: 'src' as const, key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),
-      sub: [s.kind, (s.fields && s.fields.container_name) ? '#' + s.fields.container_name : ''].filter(Boolean).join(' · '),
-      // 자료엔 단독 주소가 없다 — 자료 목록을 그 검색어로 연 뒤 그 자료를 펴 준다(web/wiki.ts renderSources).
-      href: '#/knowledge/sources?q=' + qs + '&src=' + s.id,
-    })), my), () => put('src', [], my));
+    call('know', () => {
+  api(`/api/ui/knowledge/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('know:sim', ((r && r.entries) || []).map((e: any): Hit => ({
+        kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e),
+        href: '#/k/' + encodeURIComponent(e.name), score: Number(e.similarity) || 0,
+      })), my), () => put('know:sim', [], my));
+    });
+    call('proj', () => {
+  api(`/api/ui/v6/projects/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('proj:sim', ((r && r.projects) || []).map((p: any): Hit => ({
+        kind: 'proj', key: 'p:' + p.id, title: String(p.name || ('프로젝트 #' + p.id)),
+        sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
+        href: projHref(p), score: Number(p.similarity) || 0,
+      })), my), () => put('proj:sim', [], my));
+    });
+    call('know', () => {
+  api('/api/ui/knowledge/search?limit=8&q=' + qs).then((r: any) => put('know:grep', ((r && r.entries) || []).map(knowRow).filter(isTitleHit), my), () => put('know:grep', [], my));
+    });
+    call('proj', () => {
+  api('/api/ui/v6/projects/search?limit=8&q=' + qs).then((r: any) => put('proj:grep', ((r && r.projects) || []).map((p: any): Hit => ({
+        kind: 'proj' as const, key: 'p:' + p.id,
+        title: String(p.name || p.title || ('프로젝트 #' + p.id)),
+        sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
+        href: projHref(p),
+      })).filter(isTitleHit), my), () => put('proj:grep', [], my));
+    });
+    call('src', () => {
+  api('/api/ui/sources?limit=6&q=' + qs).then((r: any) => put('src', ((r && r.entries) || []).map((s: any) => ({
+        kind: 'src' as const, key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),
+        sub: [s.kind, (s.fields && s.fields.container_name) ? '#' + s.fields.container_name : ''].filter(Boolean).join(' · '),
+        // 자료엔 단독 주소가 없다 — 자료 목록을 그 검색어로 연 뒤 그 자료를 펴 준다(web/wiki.ts renderSources).
+        href: '#/knowledge/sources?q=' + qs + '&src=' + s.id,
+      })), my), () => put('src', [], my));
+    });
     // 세션 이력 = 그 세션에 **내가 시킨 말**. 전 세션의 대화 파일을 훑으므로 늘 제일 늦게 온다(그래서 따로 그린다).
-    api('/api/ui/terminal/prompts/search?q=' + qs).then((r: any) => put('hist', ((r && r.results) || []).slice(0, 6).map((h: any) => ({
-      kind: 'hist' as const, key: 'h:' + h.sessionId + ':' + (h.ts || '') + ':' + oneLine(h.text, 24),
-      title: oneLine(h.text), sub: String(h.label || h.sessionId), href: '#/s/' + encodeURIComponent(h.sessionId),
-    })), my), () => put('hist', [], my));
+    call('hist', () => {
+  api('/api/ui/terminal/prompts/search?q=' + qs).then((r: any) => put('hist', ((r && r.results) || []).slice(0, 6).map((h: any) => ({
+        kind: 'hist' as const, key: 'h:' + h.sessionId + ':' + (h.ts || '') + ':' + oneLine(h.text, 24),
+        title: oneLine(h.text), sub: String(h.label || h.sessionId), href: '#/s/' + encodeURIComponent(h.sessionId),
+      })), my), () => put('hist', [], my));
+    });
   }
 
   /** 빈 칸일 때 — 최근에 본 세션. 스포트라이트를 열자마자 빈 판이면 '무엇을 칠 수 있는지'가 안 보인다. */
@@ -403,6 +453,7 @@ export function omniOpen(seed?: string): void {
   document.body.append(box);
   document.addEventListener('keydown', onEsc, true);
   if (seed) input.value = seed;
+  paintChips();
   recent(); paint(); setNote('');
   input.focus(); input.select();
   if (seed) run();
