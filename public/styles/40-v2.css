@@ -404,6 +404,15 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-run-sel:disabled { opacity: .55; cursor: default; }
 .v2-run-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 
+/* 컴포저 첨부(#1870) — [＋] 파일 첨부 버튼 + 카드 드롭 하이라이트. 칩 줄(.pn-att)은 42-v2-panes.css 의 것을
+   홈·프로젝트 칸이 같이 쓴다(같은 페이지에 둘 다 로드 — index.html). */
+.v2-launch-att { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+  border: 1px solid var(--line-net); border-radius: 9px; background: transparent; color: var(--muted); font-size: 17px; line-height: 1; cursor: pointer; }
+.v2-launch-att:hover { color: var(--ink); background: var(--bg-tint); }
+.v2-launch-att:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+/* ctl 이 좁아 두 줄로 접힐 때도 [＋] 는 [시키기]와 같은 아랫줄에 — 둘 다 줄의 고정 모서리다. */
+.v2-launch-row > .v2-launch-att { align-self: flex-end; }
+.v2-launch.drop-active { outline: 2px dashed var(--blue); outline-offset: -6px; }
 .v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: 11px; font-weight: 650; }
 .v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; font-weight: 400; }
 .v2-launch-hint { display: none; }   /* Enter 안내 줄 폐지 — placeholder 와 관례가 이미 말한다(#1756) */

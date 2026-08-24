@@ -235,6 +235,10 @@ const server = app.listen(PORT, BIND_HOST, () => {
   //  체인(boot/schemas.ts)·LIVELY_NO_SCHEDULER 게이트 단일 판정은 전부 boot/housekeeping.ts 소유.
   runBootHousekeeping({ app, server, verifier });
 });
+// 대용량 업로드(#1870 — 파일 상한 1GB): Node 기본 requestTimeout(5분)은 느린 회선의 1GB PUT 본문을 중간에 끊는다.
+//  헤더 대기(headersTimeout 60초 기본)는 그대로라 slowloris 방어는 유지된다 — 본문 정지는 receiveUpload 의
+//  무진행 타이머(#1272)가 따로 잡으므로, 여기는 '진행 중인 큰 본문'만 살리는 값이다.
+server.requestTimeout = 60 * 60 * 1000;
 // 포트 바인딩 실패(구 게이트웨이 미종료 등) → 마이그레이션 미실행 보장 + 즉시 종료(half-state 방지).
 server.on("error", (err) => {
   logger.error({ err }, `listen failed on :${PORT} — 스키마 마이그레이션 미실행, 종료`);

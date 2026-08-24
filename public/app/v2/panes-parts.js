@@ -10,11 +10,11 @@
 //   · destroy() — 폴링·구독 정리.
 import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
 import { confirmSessionForget } from '../session-actions.js';
-import { upDropZone } from '../projects/files-upload.js';
 import { mountProjectChat } from '../project-chat.js';
 import { hasBrowserSurface } from './browser-surface.js';
 import { filesPart } from './panes-files.js';
-import { NOISE_RE, TRASH_DIR, attachName, authHeaders, kindOf, pnIcon } from './panes-kit.js';
+import { NOISE_RE, TRASH_DIR, authHeaders, kindOf, pnIcon } from './panes-kit.js';
+import { composerAttach } from './compose-attach.js';
 import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js'; // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
@@ -189,61 +189,19 @@ function sessionsPart(ctx) {
         e.preventDefault();
         void spawn();
     });
-    // ── 첨부(#1819) — 그림·파일을 **붙여넣거나 끌어다 놓으면** 프로젝트 자료로 올리고 첫 지시에 딸려 보낸다.
+    // ── 첨부(#1819→#1870) — 붙여넣기·드래그앤드롭·[＋] 버튼 모두 홈 입력창과 **한 모듈**(v2/compose-attach.ts).
     //  왜 필요했나: 클로드가 도는 화면(터미널)에는 이 경로가 있는데(dropFileToAgent) 세션을 **여는** 창에는 없어서,
-    //  화면을 캡처해 놓고도 세션을 먼저 열고 다시 붙여넣어야 했다(원준 2026-08-20 신고).
-    //  세션 cwd 는 프로젝트 폴더가 아니라 세션 전용 폴더라 상대경로로는 못 찾는다 → 서버가 준 절대경로를 지시에 적는다.
-    const attached = [];
-    const chips = el('div', { class: 'pn-att', hidden: true });
-    function paintChips() {
-        chips.hidden = !attached.length;
-        chips.replaceChildren(...attached.map((a) => el('span', { class: 'pn-att-c', title: a.abs }, pnIcon('doc', 'pn-i sm'), el('span', { class: 'n', text: a.name }), el('button', { class: 'pn-att-x', type: 'button', title: '첨부 빼기', 'aria-label': '첨부 빼기', text: '✕',
-            onclick: () => { const i = attached.indexOf(a); if (i >= 0)
-                attached.splice(i, 1); paintChips(); } }))));
-    }
-    async function attachFiles(files) {
-        if (!files.length)
-            return;
-        if (!(ctx.id > 0)) {
-            toast('이 화면은 프로젝트 폴더가 없어 파일을 둘 곳이 없어요 — 세션을 연 뒤 붙여넣어 주세요.', true);
-            return;
-        }
-        toast(files.length + '개를 자료로 올리는 중이에요…');
-        for (const f of files) {
-            const nm = attachName(f, attached.map((a) => a.name));
-            try {
-                const r = await fetch(apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(nm)), { method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/octet-stream' }, body: f });
-                const j = await r.json().catch(() => null);
-                if (!r.ok)
-                    throw new Error((j && j.error) || String(r.status));
-                attached.push({ name: nm, abs: (j && j.path) || nm });
-            }
-            catch (e) {
-                toast(nm + ' 올리기 실패 — ' + (e?.message || e), true);
-            }
-        }
-        if (ctx.dead())
-            return;
-        paintChips();
-        ctx.onChanged?.(); // 자료 칸이 같은 화면에 있으면 바로 보이게
-        toast('자료에 올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.');
-    }
-    ta.addEventListener('paste', (e) => {
-        const dt = e.clipboardData;
-        if (!dt)
-            return;
-        const files = Array.from(dt.items || []).filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean);
-        if (!files.length)
-            return; // 글 붙여넣기는 평소대로 입력칸에 들어간다
-        e.preventDefault();
-        void attachFiles(files);
-    });
+    //  화면을 캡처해 놓고도 세션을 먼저 열고 다시 붙여넣어야 했다(원준 2026-08-20 신고). 프로젝트가 있으면 그
+    //  공유 폴더로, 없으면(loose 셸) 내 개인 폴더로 올라가고, 절대경로가 첫 지시 꼬리에 실린다.
+    const att = composerAttach({ projectId: () => ctx.id, onChanged: () => ctx.onChanged?.(), dead: () => ctx.dead() });
+    att.wirePaste(ta); // ⚠ 여기 한 번만 — newPane 은 다시 그려질 수 있어 거기서 걸면 붙여넣기가 두 벌씩 올라간다
     function newPane() {
         if (!runPicker)
             runPicker = createRunPicker();
-        const pane = el('div', { class: 'pn-newpane' }, el('div', { class: 'pn-launch' }, el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }), el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }), el('div', { class: 'v2-launch' }, ta, chips, el('div', { class: 'v2-launch-row' }, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send))));
-        upDropZone(pane, pane, (list) => void attachFiles(list.map((u) => u.file)));
-        paintChips();
+        const pane = el('div', { class: 'pn-newpane' }, el('div', { class: 'pn-launch' }, el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }), el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }), el('div', { class: 'v2-launch' }, ta, att.chips, 
+        // [＋] 는 ctl 밖 — 홈(views.ts)과 같은 이유(ctl 은 flex-wrap 이라 안에 넣으면 셀렉트가 통째로 밀린다).
+        el('div', { class: 'v2-launch-row' }, att.btn, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send), att.fileIn)));
+        att.wireDrop(pane, pane);
         return pane;
     }
     const mine = () => ctx.data().sessions
@@ -310,6 +268,11 @@ function sessionsPart(ctx) {
         const text = ta.value.trim();
         if (!text || sending)
             return;
+        // 올리는 중 전송 금지 — 막지 않으면 아직 안 올라간 파일이 지시에서 **조용히** 빠진다(큰 파일에서 실제로 나는 순서).
+        if (att.busy()) {
+            toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.');
+            return;
+        }
         sending = true;
         send.disabled = true;
         ta.disabled = true;
@@ -318,9 +281,7 @@ function sessionsPart(ctx) {
         // 생성은 **한 곳**에서만 한다(v2/quick-session.ts spawnSession) — 생성 전문 캐시·첫 지시 낙관 렌더·프로젝트
         //  붙이기가 거기 묶여 있다. 여기서 fetch 를 다시 짜면 그 중 하나가 빠진다(실제로 캐시가 빠져 있었다).
         // 첨부는 지시의 꼬리에 절대경로로 적는다 — 세션이 열리자마자 그 파일을 읽을 수 있게(이름은 사람이 알아보는 단서).
-        const prompt = attached.length
-            ? text + '\n\n첨부한 자료(이 프로젝트 공유 폴더):\n' + attached.map((a) => '- ' + a.abs).join('\n')
-            : text;
+        const prompt = text + att.tail();
         const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null });
         sending = false;
         idle();
@@ -333,8 +294,7 @@ function sessionsPart(ctx) {
         ctx.onSessionCreated?.(made.session);
         ta.value = '';
         ta.style.height = 'auto';
-        attached.length = 0;
-        paintChips();
+        att.clear();
         ctx.onChanged?.();
         select(made.id);
     }
