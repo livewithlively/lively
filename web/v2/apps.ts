@@ -285,11 +285,16 @@ export function openLaunchpad(): void {
   const input = el('input', { class: 'v2-pad-search', type: 'search', placeholder: '앱 찾기', 'aria-label': '앱 찾기' }) as HTMLInputElement;
   const draw = () => {
     const q = input.value.trim().toLowerCase();
-    const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) =>
+    // 이름에 맞은 것이 설명에만 맞은 것보다 앞에 온다 — Enter 가 맨 앞을 여니 순서가 곧 정답이어야 한다.
+    //  ('프' 를 치면 설명에 '프로젝트'가 든 홈이 아니라 프로젝트 앱이 먼저다.) sort 는 안정 정렬이라 동점은 원래 차례.
+    const rank = (t: string) => { const i = t.toLowerCase().indexOf(q); return i === 0 ? 0 : i > 0 ? 1 : 2; };
+    const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q))
+      .sort((a, b) => rank(a.title) - rank(b.title)).map((a) =>
       el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, title: a.desc, onclick: () => closeLaunchpad() },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)),
         el('b', { text: a.title })));
-    const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => {
+    const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
+      .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
       const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
       return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
         title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
