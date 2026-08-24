@@ -862,7 +862,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-kn-foot { flex: none; margin-top: 0; padding: 14px 16px 18px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
 
 /* ── 런치패드 ── */
-.v2-pad { position: fixed; inset: 0; z-index: 900; background: rgba(var(--tint-ink), .28); backdrop-filter: blur(10px); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto; }
+.v2-pad { position: fixed; inset: 0; z-index: 900; background: rgba(var(--tint-ink), .28); backdrop-filter: blur(11px); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto; }
 .v2-pad-top { width: min(920px, 100%); display: flex; align-items: center; gap: 12px; margin-bottom: 18px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
 .v2-pad-h { display: flex; flex-direction: column; min-width: 0; }
 .v2-pad-h b { font-size: 15px; font-weight: 800; }
