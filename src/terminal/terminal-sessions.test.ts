@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
+import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, harnessLiveThemeSteps, harnessLiveThemeSupported, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
 import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES, RESUME_ID_RE } from "./catalog.js";
 import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
@@ -181,6 +181,31 @@ t("테마 미지정이면 어떤 하네스에도 아무것도 안 얹는다(종�
     assert.deepEqual(harnessThemeArgv(h, undefined), []);  // 값이 없으면 안 얹는다
     assert.deepEqual(harnessThemeEnvArgs(h, "system"), []); // 'system' 은 해석된 값이 아니다
   }
+});
+
+// ── 실행 중 세션의 테마 전환(#1683 후속2) ───────────────────────────────────
+//  이 시퀀스는 하네스 TUI 의 **메뉴 순서**에 기댄다 — 계약이 아니라 화면 조작이다. 그래서 표로 못박는 목적이
+//  둘이다: ① 실측한 하네스만 들어있는지(미확인 하네스가 슬쩍 늘면 엉뚱한 테마로 바꾼다)
+//         ② 지원 안 하는 하네스가 **빈 배열**을 주는지(호출부가 '지원 안 함'으로 사람에게 알릴 근거).
+t("harnessLiveThemeSteps: claude 는 /theme ⏎ 뒤 번호로 고른다(2=다크 · 3=라이트, 실측)", () => {
+  assert.deepEqual(harnessLiveThemeSteps("claude", "dark"), [
+    { kind: "text", text: "/theme" }, { kind: "enter" }, { kind: "wait", ms: 1200 }, { kind: "text", text: "2" },
+  ]);
+  const light = harnessLiveThemeSteps("claude", "light");
+  assert.equal(light[light.length - 1].kind, "text");
+  assert.equal((light[light.length - 1] as any).text, "3");
+});
+t("★ 실측 안 된 하네스는 시퀀스를 주지 않는다 — 틀린 테마로 바꾸는 건 안 바꾸는 것보다 나쁘다", () => {
+  // grok: /theme 이 순환식이라 지정 불가. codex: 구문강조 한정. opencode·antigravity: 미검증.
+  for (const h of ["grok", "codex", "opencode", "antigravity", "shell", ""]) {
+    assert.equal(harnessLiveThemeSupported(h), false, `${h} 는 아직 지원으로 표시되면 안 된다`);
+    assert.deepEqual(harnessLiveThemeSteps(h, "dark"), []);
+  }
+});
+t("테마 값이 해석 안 되면 지원 하네스도 빈 배열(서버는 추측하지 않는다)", () => {
+  assert.equal(harnessLiveThemeSupported("claude"), true);
+  assert.deepEqual(harnessLiveThemeSteps("claude", "system"), []);
+  assert.deepEqual(harnessLiveThemeSteps("claude", undefined), []);
 });
 
 console.log(`\n${pass} passed`);

@@ -5,7 +5,7 @@
 //  PROF_* · profChips · parseMyProfile 은 [내 설정 ▸ 내 AI 설정](me-ai.ts)이 함께 쓴다 — 모달과 그 화면이
 //   같은 저장 경로(POST /api/ui/me/profile)를 부분 갱신으로 나눠 쓰기 때문에 직렬화 규약이 한 곳이어야 한다.
 import { api, apiUrl, el, errorNote, logout, profileAvatar, setPersonAvatar, state, toast, uiText, usernameAnchor } from './core.js';
-import { THEME_ORDER, harnessThemeSync, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from './theme.js'; // #1683 화면 테마 · AI 세션 동기화
+import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from './theme.js'; // #1683 화면 테마 · AI 세션 동기화
 import { field, skeleton } from './ui-primitives.js';
 
 // 우측 상단 '내 프로필' — 인증된 구성원이 자기 표시 이름·개인 레이어를 직접 편집(셀프 서비스, 선택형).
@@ -343,10 +343,16 @@ function themePrefRow(): any {
   paint();
   const cb = el('input', { type: 'checkbox', style: 'margin:0', ...(harnessThemeSync() ? { checked: '' } : {}),
     onchange: (e: any) => setHarnessThemeSync(!!e.target.checked) }) as HTMLInputElement;
+  // 열린 탭 일괄 적용(#1683 후속2) — 클래식 셸엔 탭이 없어 **설정만 여기서** 하고, 실제 밀기는 새 셸이 한다.
+  //  값을 브라우저에 함께 두므로 어느 화면에서 켜도 다른 화면이 그 뜻을 따른다.
+  const tabsCb = el('input', { type: 'checkbox', style: 'margin:0', ...(applyToOpenTabs() ? { checked: '' } : {}),
+    onchange: (e: any) => setApplyToOpenTabs(!!e.target.checked) }) as HTMLInputElement;
   wrap.append(seg,
     el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, cb,
-      el('span', { style: 'font-size:13px' }, ...uiText('AI 세션도 이 테마로 띄웁니다.'))),
+      el('span', { style: 'font-size:13px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))),
+    el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, tabsCb,
+      el('span', { style: 'font-size:13px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))),
     el('p', { class: 'admin-hint', style: 'margin:0' },
-      ...uiText('끄면 각 AI 하네스가 저장해 둔 테마를 그대로 씁니다. 이미 열려 있는 세션은 바뀌지 않아요 — 하네스는 시작할 때 테마를 정합니다.')));
+      ...uiText('첫째 칸을 끄면 각 AI 하네스가 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')));
   return wrap;
 }

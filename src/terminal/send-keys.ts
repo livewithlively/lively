@@ -13,7 +13,7 @@
 //     `-l`(리터럴)은 검증된 적이 없다. 실측으로 통과가 확인된 형태는 코드포인트 토큰(`0xNN`)뿐이라
 //     terminal-pty 의 인코더를 그대로 재사용한다. Enter 도 키 이름이 아니라 `0x0d` 로 보낸다.
 //     (자세한 근거는 terminal-pty.ts 의 'psmux 입력 경로' 절.)
-import { TMUX_BIN } from "./catalog.js";
+import { TMUX_BIN, harnessLiveThemeSteps, harnessLiveThemeSupported, type LiveThemeStep } from "./catalog.js";
 import { tmux } from "./tmux-exec.js";
 import { isPsmuxBin, inputToSendKeysArgv } from "./terminal-pty.js";
 
@@ -79,4 +79,43 @@ export function sendKeyPlan(id: string, key: ChatKey, bin: string): string[] {
 export async function sendKeyToSession(id: string, key: ChatKey): Promise<void> {
   await tmux(["has-session", "-t", id]);
   await tmux(sendKeyPlan(id, key, TMUX_BIN));
+}
+
+// ── 실행 중 세션의 테마 전환 (#1683 후속2) ─────────────────────────────────
+//  하네스의 자체 테마 명령을 그 pane 에 넣는다. 시퀀스는 catalog 의 HARNESS_LIVE_THEME 이 소유하고
+//  (하네스 TUI 메뉴에 기대는 값이라 한 곳에 모아 둔다) 여기는 그걸 **순서대로 흘리는 일**만 한다.
+//
+// ⚠ 사람이 입력창에 쓰던 글이 있으면 우리 글자가 그 뒤에 붙는다 — 그래서 이 함수는 **사람이 명시적으로
+//  '열린 탭 모두 적용'을 켠 순간에만** 불린다(자동 주입 금지). 지우고 시작하지 않는 이유도 같다:
+//  C-u 로 비우면 그 사람의 초안이 사라진다. 남의 글을 지우는 것보다 한 줄 덧붙는 편이 되돌리기 쉽다.
+export interface LiveThemeResult {
+  /** 'applied' 이 아닌 값은 **사람에게 그대로 알린다**(조용한 실패 금지 — catalog 주석 ②). */
+  status: "applied" | "unsupported" | "gone" | "error";
+  detail?: string;
+}
+
+export async function applyLiveTheme(id: string, harnessKey: string, theme: unknown): Promise<LiveThemeResult> {
+  if (!harnessLiveThemeSupported(harnessKey)) {
+    return { status: "unsupported", detail: `${harnessKey} 는 실행 중 테마 지정을 지원하지 않습니다` };
+  }
+  const steps = harnessLiveThemeSteps(harnessKey, theme);
+  if (!steps.length) return { status: "unsupported", detail: "테마 값이 해석되지 않았습니다" };
+  try { await tmux(["has-session", "-t", id]); }
+  catch { return { status: "gone", detail: "세션이 이미 없습니다" }; }
+  try {
+    for (const st of steps) await runStep(id, st);
+    return { status: "applied" };
+  } catch (e: any) {
+    return { status: "error", detail: (e && e.message) || "전환 중 오류" };
+  }
+}
+
+async function runStep(id: string, st: LiveThemeStep): Promise<void> {
+  if (st.kind === "wait") { await new Promise((r) => setTimeout(r, st.ms)); return; }
+  if (st.kind === "enter") { await tmux(sendKeyPlan(id, "Enter", TMUX_BIN)); return; }
+  // 글자 — sendKeysPlan 의 청크·psmux 인코딩 규약을 그대로 재사용하고 **Enter 는 붙이지 않는다**
+  //  (제출 시점을 시퀀스가 정한다. 선택창 번호처럼 '누르는 순간 적용'인 자리엔 Enter 가 오면 안 된다).
+  const plan = sendKeysPlan(id, st.text, TMUX_BIN);
+  for (const argv of plan.keys) await tmux(argv);
+  await new Promise((r) => setTimeout(r, injectFlushMs(plan.oneLine.length)));
 }

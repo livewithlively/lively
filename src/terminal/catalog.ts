@@ -601,6 +601,54 @@ export function harnessThemeArgv(harnessKey: string, theme: unknown): string[] {
   return t && h?.argv ? h.argv(t) : [];
 }
 
+// ── 실행 중 세션의 테마 전환 (#1683 후속2) ─────────────────────────────────
+//
+// 왜 별도인가: 위 harnessThemeArgv/EnvArgs 는 **새로 뜨는** 세션에만 통한다. pane env·실행 인자는 exec 시점에
+//  고정되고, 하네스는 시작할 때 테마를 정한 뒤 설정을 다시 읽지 않는다(실측). 그런데 이미 열어 둔 탭도 같이
+//  바뀌길 원하는 게 자연스럽다 — 그건 **하네스의 자체 명령**을 그 pane 에 넣어야만 된다.
+//
+// ⚠ 이건 '계약'이 아니라 '화면 조작'이다. 아래 시퀀스는 그 하네스 TUI 의 메뉴 순서·라벨에 기댄다 —
+//  하네스가 업데이트로 메뉴를 한 줄 추가하면 **그 하네스만 조용히 엉뚱한 테마로 바뀐다**. 그래서
+//   ① 실측으로 확인한 하네스만 넣는다(verified 표시). 미확인 하네스는 넣지 않는다 — 틀린 테마로 바꾸는 것이
+//      안 바꾸는 것보다 나쁘다.
+//   ② 결과를 호출부가 사람에게 그대로 알린다(조용한 실패 금지).
+//   ③ 값은 여기 한 곳 — 하네스가 UI 를 바꾸면 이 표만 고친다.
+//
+// 하네스별 실측 (2026-08-24, 이 박스 설치본):
+//  · claude      — `/theme` ⏎ 로 번호 선택창(1 Auto · 2 Dark · 3 Light · …), 번호를 누르면 **그 자리에서 적용**.
+//                  ★검증: 라이트 세션에 넣어 pane ANSI 색이 다크로 바뀌는 것 확인(38;5;137 사라지고 38;5;220·244 나타남).
+//  · grok        — `/theme` 이 **순환**이다(Grok Day → Tokyo Night → Rose Pine Moon → oscura …). 원하는 테마를
+//                  지정할 수단이 없어 **지원하지 않는다**(설정 모달은 다단계라 ① 원칙에 걸린다).
+//  · codex       — `/theme` 은 **구문 강조** 테마다(전체 크롬 아님). 미검증이라 넣지 않는다.
+//  · opencode    — `/themes` 선택창. 미검증이라 넣지 않는다.
+//  · antigravity — 전용 명령 없음(`/config` → 검색 → 값 선택 다단계). 미검증이라 넣지 않는다.
+export type LiveThemeStep =
+  | { kind: "text"; text: string }   // 입력창에 글자를 넣는다(제출은 enter 단계가 한다)
+  | { kind: "enter" }                // 제출
+  | { kind: "wait"; ms: number };    // TUI 가 그릴 시간을 준다
+
+const HARNESS_LIVE_THEME: Record<string, (t: "dark" | "light") => LiveThemeStep[]> = {
+  // `/theme` ⏎ → 선택창 → 번호. 번호를 누르는 순간 적용되고 별도 ⏎ 가 필요 없다(실측).
+  claude: (t) => [
+    { kind: "text", text: "/theme" },
+    { kind: "enter" },
+    { kind: "wait", ms: 1200 },
+    { kind: "text", text: t === "dark" ? "2" : "3" },
+  ],
+};
+
+/** 이 하네스가 **실행 중** 전환을 지원하나(실측 확인된 것만 true). */
+export function harnessLiveThemeSupported(harnessKey: string): boolean {
+  return !!HARNESS_LIVE_THEME[String(harnessKey || "")];
+}
+
+/** 실행 중 전환 시퀀스. 지원 안 하면 빈 배열 — 호출부가 '지원하지 않음'으로 사람에게 알린다. */
+export function harnessLiveThemeSteps(harnessKey: string, theme: unknown): LiveThemeStep[] {
+  const t = normalizeTheme(theme);
+  const f = HARNESS_LIVE_THEME[String(harnessKey || "")];
+  return t && f ? f(t) : [];
+}
+
 /** 하네스 테마를 env 로 주는 경우의 tmux `-e` 인자. 지원 안 하면 빈 배열. */
 export function harnessThemeEnvArgs(harnessKey: string, theme: unknown): string[] {
   const t = normalizeTheme(theme);

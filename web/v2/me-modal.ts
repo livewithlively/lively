@@ -15,7 +15,7 @@ import { field, skeleton } from '../ui-primitives.js';
 import {
   PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips,
 } from '../me-profile.js';
-import { THEME_ORDER, harnessThemeSync, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from '../theme.js';
+import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, pushThemeToOpenTabs, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from '../theme.js';
 
 export interface MeModalOpts {
   /** 저장으로 이름·프사가 바뀌었다 — 사이드바(와 부른 쪽)가 다시 그리도록. */
@@ -295,7 +295,7 @@ function lookPane(close: () => void): HTMLElement {
     seg.replaceChildren(...THEME_ORDER.map((k) => el('button', {
       class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: LAB[k], title: TIP[k],
       'aria-pressed': String(cur === k),
-      onclick: () => { setThemePref(k); paintSeg(); } })));
+      onclick: () => { setThemePref(k); paintSeg(); void pushThemeIfOn(); } })));
   };
   paintSeg();
 
@@ -306,6 +306,24 @@ function lookPane(close: () => void): HTMLElement {
       location.replace(location.pathname + '#/dashboard');
       location.reload();
     } });
+
+  // 지금 열려 있는 탭까지 그 자리에서 바꿀지(#1683 후속2). 기본 꺼짐 — 세션 입력창에 하네스의 테마 명령을
+  //  넣는 일이라(사람이 쓰던 초안 뒤에 붙을 수 있다) 사람이 켜 둔 경우에만 한다.
+  const tabsCb = el('input', { type: 'checkbox', style: 'margin:0',
+    ...(applyToOpenTabs() ? { checked: '' } : {}),
+    onchange: (e: any) => setApplyToOpenTabs(!!e.target.checked) }) as HTMLInputElement;
+
+  // 테마를 바꾼 직후 — 켜져 있으면 열린 세션 탭에 밀고 결과를 그대로 알린다(조용한 실패 금지).
+  const pushThemeIfOn = async (): Promise<void> => {
+    if (!applyToOpenTabs()) return;
+    try {
+      const { v2OpenSessionIds } = await import('./main.js');
+      const ids = v2OpenSessionIds();
+      if (!ids.length) return;
+      const r = await pushThemeToOpenTabs(ids);
+      toast([r.applied ? `${r.applied}개 탭을 바꿨어요` : '바꾼 탭이 없어요', ...r.notes].join(' · '));
+    } catch (e: any) { toast((e && e.message) || '열린 탭에 적용하지 못했습니다', true); }
+  };
 
   // 'AI 세션도 이 테마로'(#1683 후속) — 터미널 **안에서 도는 하네스**까지 맞출지. 기본 켜짐.
   //  화면(사이드바·터미널 칠)은 이 스위치와 무관하게 늘 위 테마를 따른다 — 스위치가 가리는 건 하네스 안쪽뿐이다.
@@ -319,7 +337,9 @@ function lookPane(close: () => void): HTMLElement {
     field('AI 세션', el('div', {},
       el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, aiCb,
         el('span', { style: 'font-size:13.5px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))),
-      el('p', { class: 'prof-hint' }, ...uiText('끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 이미 열려 있는 세션은 바뀌지 않아요 — 하네스는 시작할 때 테마를 정합니다.')))),
+      el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:6px;' }, tabsCb,
+        el('span', { style: 'font-size:13.5px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))),
+      el('p', { class: 'prof-hint' }, ...uiText('첫째 칸을 끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')))),
     field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn,
       el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 설정 ▸ 화면 에서 언제든 돌아옵니다.')))));
 }
