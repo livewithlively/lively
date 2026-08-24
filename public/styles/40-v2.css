@@ -1196,6 +1196,17 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .sess-purge-row .n { font-size: 13px; font-weight: 600; }
 .sess-purge-row .h { font-size: 12px; color: var(--blue); }
 .sess-purge-row .l { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 남는 것(규칙 B — 그 뒤에 남이 손댄 것)·'결과물은 남기기' 한 줄 — 체크행과 같은 결이되 고를 수 없음이 보이게 배경 없이. */
+.sess-purge-keep { display: flex; flex-direction: column; gap: 1px; margin: 0; padding: 4px 8px; font-size: 12.5px; }
+.sess-purge-keep .n { color: var(--ink); }
+.sess-purge-keep .w { font-size: 12px; color: var(--muted); }
+.sess-purge-only { align-self: flex-start; font-size: 12px; color: var(--ink-note); padding: 2px 8px; }
+/* 휴지통 여러 개 선택 — 행 앞 체크박스 + 고른 것이 있을 때만 뜨는 동작 줄 */
+.v2-bin-row .sel { margin: 0 2px 0 0; flex: none; }
+.v2-bin-selbar { display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px; margin: 0 0 4px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.v2-bin-selbar[hidden] { display: none; }
+.v2-bin-selbar .n { color: var(--ink-note); font-weight: 600; margin-right: 4px; }
+.v2-bin-selbar .btn-text.danger { color: var(--danger); }
 
 /* ── 아카이브 · 휴지통(#1851) — 사이드바 발치의 두 행 + 가운데 화면. web/v2/side.ts binRows() · web/v2/bins.ts ── */
 /* 두 행은 프로젝트 행과 같은 기둥(아이콘 16 → 글자)·같은 높이를 쓰되 **보통 글씨·흐린 아이콘** — 폴더(내용)가 아니라
