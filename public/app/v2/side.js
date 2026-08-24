@@ -29,14 +29,13 @@ import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork } from './views.js';
 import { switcherTop } from './switcher.js';
 import { mountDesktopUpdate } from '../desktop-update.js'; // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
-import { THEME_ORDER, setThemePref, themePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
+import { THEME_ORDER, harnessThemeSync, setHarnessThemeSync, setThemePref, themePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
 const OPEN_KEY = 'lively_v2_opened';
 const DONE_KEY = 'lively_v2_side_done'; // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine'; // '1' = 내 프로젝트만
 const PAST_KEY = 'lively_v2_side_past'; // '지난 세션' 묶음을 펴 둔 프로젝트 키
-const SELCLOSED_KEY = 'lively_v2_side_selclosed'; // 선택된 프로젝트인데도 **일부러 접어 둔** 것
 const ALL_KEY = 'lively_v2_side_all'; // '1' = 「전체 프로젝트」 묶음을 펴 둠 (기본 접힘 — 매일 화면은 '진행 중'만)
 const PIN_KEY = 'lively_v2_side_pin'; // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
 const MAX_SESS = 12; // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
@@ -44,11 +43,7 @@ let openSet = new Set();
 let pastSet = new Set(); // '지난 세션'을 펴 둔 프로젝트 — 브라우저에 기억(도는 세션과 따로 접힌다)
 let allOpen = false; // 「전체 프로젝트」 펼침 — 브라우저에 기억
 let pinnedSet = new Set(); // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
-// 선택된 프로젝트인데도 사람이 **일부러 접어 둔** 것. ⚠ 종전엔 페이지 수명만 기억했다(new Set 만 두고 저장 안 함)
-//  — '선택은 늘 보이는 게 기본'이라는 뜻이었지만, 실제로는 **접어도 새로고침하면 도로 열렸다**(원준 2026-08-24
-//  "한 번 닫아둔 지난 세션이 계속 열려서 내가 보는 걸 가린다"). 접는 건 사람이 한 명시적 결정이라 기본값이
-//  덮을 값이 아니다. 그래서 브라우저에 남긴다 — 다시 펴면 그 자리에서 지워진다(펴 두는 게 다시 기본이 된다).
-let closedSelected = new Set();
+const closedSelected = new Set(); // 선택 프로젝트를 일부러 접은 것 — 세션(페이지) 수명만
 let showDone = false;
 let mineOnly = false;
 let sideFilter = '';
@@ -85,7 +80,6 @@ function init() {
     inited = true;
     openSet = loadSet(OPEN_KEY);
     pastSet = loadSet(PAST_KEY);
-    closedSelected = loadSet(SELCLOSED_KEY);
     try {
         allOpen = localStorage.getItem(ALL_KEY) === '1';
     }
@@ -672,7 +666,6 @@ function projRow(r, sess, past, activeKey, selectedPk) {
                         closedSelected.add(pk);
                     else
                         closedSelected.delete(pk);
-                    saveSet(SELCLOSED_KEY, closedSelected); // 접은 결정을 새로고침 너머로 지킨다
                 }
                 if (isOpen)
                     openSet.delete(pk);
@@ -886,13 +879,18 @@ async function doArchive(s) {
     }
 }
 // ── 테마 3단 토글(#1683) — 사이드바 하단. 시스템/라이트/다크 세그먼트, 저장·적용은 theme.ts. ──
+//  아래 줄은 'AI 세션도 이 테마로' 스위치다(#1683 후속) — 터미널 **안에서 도는 하네스**까지 맞출지.
+//  화면(사이드바·터미널 칠)은 이 스위치와 무관하게 늘 위 선택을 따르므로, 스위치를 세그먼트와 한 묶음으로 둔다.
 function themeSeg() {
     const cur = themePref();
     const lab = { system: '시스템', light: '라이트', dark: '다크' };
-    return el('div', { class: 'v2-theme', role: 'group', 'aria-label': '테마' }, ...THEME_ORDER.map((k) => el('button', {
+    const on = harnessThemeSync();
+    return el('div', { class: 'v2-theme-wrap' }, el('div', { class: 'v2-theme', role: 'group', 'aria-label': '테마' }, ...THEME_ORDER.map((k) => el('button', {
         class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
         title: k === 'system' ? '시스템 설정을 따릅니다' : `${lab[k]} 테마로 봅니다`,
         'aria-pressed': String(cur === k),
         onclick: () => { setThemePref(k); redraw(); }
-    })));
+    }))), el('label', { class: 'v2-theme-ai',
+        title: '켜면 새로 여는 AI 세션이 이 테마로 뜹니다. 끄면 하네스가 저마다 저장해 둔 테마를 씁니다.\n이미 열려 있는 세션은 바뀌지 않아요 — 하네스는 시작할 때 테마를 정합니다.' }, el('input', { type: 'checkbox', class: 'v2-theme-ai-cb', ...(on ? { checked: '' } : {}),
+        onchange: (e) => { setHarnessThemeSync(!!e.target.checked); redraw(); } }), el('span', { text: 'AI 세션도 이 테마로' })));
 }

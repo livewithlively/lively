@@ -29,7 +29,7 @@ import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { switcherTop } from './switcher.js';
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
-import { THEME_ORDER, setThemePref, themePref, type ThemePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
+import { THEME_ORDER, harnessThemeSync, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
@@ -822,13 +822,22 @@ async function doArchive(s: Sess): Promise<void> {
 
 
 // ── 테마 3단 토글(#1683) — 사이드바 하단. 시스템/라이트/다크 세그먼트, 저장·적용은 theme.ts. ──
+//  아래 줄은 'AI 세션도 이 테마로' 스위치다(#1683 후속) — 터미널 **안에서 도는 하네스**까지 맞출지.
+//  화면(사이드바·터미널 칠)은 이 스위치와 무관하게 늘 위 선택을 따르므로, 스위치를 세그먼트와 한 묶음으로 둔다.
 function themeSeg(): HTMLElement {
   const cur = themePref();
   const lab: Record<ThemePref, string> = { system: '시스템', light: '라이트', dark: '다크' };
-  return el('div', { class: 'v2-theme', role: 'group', 'aria-label': '테마' },
-    ...THEME_ORDER.map((k) => el('button', {
-      class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
-      title: k === 'system' ? '시스템 설정을 따릅니다' : `${lab[k]} 테마로 봅니다`,
-      'aria-pressed': String(cur === k),
-      onclick: () => { setThemePref(k); redraw(); } })));
+  const on = harnessThemeSync();
+  return el('div', { class: 'v2-theme-wrap' },
+    el('div', { class: 'v2-theme', role: 'group', 'aria-label': '테마' },
+      ...THEME_ORDER.map((k) => el('button', {
+        class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
+        title: k === 'system' ? '시스템 설정을 따릅니다' : `${lab[k]} 테마로 봅니다`,
+        'aria-pressed': String(cur === k),
+        onclick: () => { setThemePref(k); redraw(); } }))),
+    el('label', { class: 'v2-theme-ai',
+      title: '켜면 새로 여는 AI 세션이 이 테마로 뜹니다. 끄면 하네스가 저마다 저장해 둔 테마를 씁니다.\n이미 열려 있는 세션은 바뀌지 않아요 — 하네스는 시작할 때 테마를 정합니다.' },
+      el('input', { type: 'checkbox', class: 'v2-theme-ai-cb', ...(on ? { checked: '' } : {}),
+        onchange: (e: any) => { setHarnessThemeSync(!!e.target.checked); redraw(); } }),
+      el('span', { text: 'AI 세션도 이 테마로' })));
 }

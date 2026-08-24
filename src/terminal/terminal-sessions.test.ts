@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
+import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
 import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES, RESUME_ID_RE } from "./catalog.js";
 import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
@@ -149,6 +149,38 @@ t("normalizeTheme: 대소문자·공백은 받아주고, 그 밖은 미지정으
   assert.equal(normalizeTheme("system"), undefined);   // ★ 해석되지 않은 값은 서버가 받지 않는다
   assert.equal(normalizeTheme(null), undefined);
   assert.equal(normalizeTheme(123), undefined);
+});
+
+// ── 하네스별 테마 주입(#1683 후속) ─────────────────────────────────────────
+//  왜 표로 못박나: 하네스마다 테마를 받는 방법이 다르고(플래그·env·없음), **틀려도 조용하다** —
+//  잘못된 인자는 하네스가 무시하거나 즉사시키는데, 둘 다 "테마가 안 바뀐다"로만 보인다.
+//  아래 값은 2026-08-20 이 박스의 설치본에서 실측해 정한 것이다(catalog.ts HARNESS_THEME 주석).
+t("harnessThemeArgv: claude 는 --settings 로 JSON 을 실행 시점에 얹는다(설정 파일 불변)", () => {
+  assert.deepEqual(harnessThemeArgv("claude", "dark"), ["--settings", '{"theme":"dark"}']);
+  assert.deepEqual(harnessThemeArgv("claude", "light"), ["--settings", '{"theme":"light"}']);
+});
+t("harnessThemeArgv: codex 는 -c 로 tui.theme 을 덮는다 — 값이 dark/light 가 아니라 **테마 이름**", () => {
+  assert.deepEqual(harnessThemeArgv("codex", "dark"), ["-c", "tui.theme=one-half-dark"]);
+  assert.deepEqual(harnessThemeArgv("codex", "light"), ["-c", "tui.theme=one-half-light"]);
+});
+t("harnessThemeEnvArgs: opencode 는 설정을 env 문자열로 받는다(tmux -e 쌍으로)", () => {
+  assert.deepEqual(harnessThemeEnvArgs("opencode", "dark"), ["-e", 'OPENCODE_CONFIG_CONTENT={"theme":"dark"}']);
+});
+t("★ 실행 시점 주입 경로가 없는 하네스는 **아무것도 안 한다** — 전역 설정을 대신 고치지 않는다", () => {
+  // antigravity: 테마는 있으나(colorScheme) 플래그·env 가 없다. 비격리 박스에선 그 파일이 구성원 공유라
+  //  대신 고치면 남의 화면까지 바뀐다. grok: 테마 기능 자체가 없다.
+  for (const h of ["antigravity", "grok", "shell", "모르는하네스"]) {
+    assert.deepEqual(harnessThemeArgv(h, "dark"), [], `${h} 는 argv 를 얹지 않아야 한다`);
+    assert.deepEqual(harnessThemeEnvArgs(h, "dark"), [], `${h} 는 env 를 얹지 않아야 한다`);
+    assert.equal(harnessFollowsTheme(h), false);
+  }
+});
+t("테마 미지정이면 어떤 하네스에도 아무것도 안 얹는다(종전 동작 = 무회귀)", () => {
+  for (const h of ["claude", "codex", "opencode"]) {
+    assert.equal(harnessFollowsTheme(h), true);           // 지원은 한다
+    assert.deepEqual(harnessThemeArgv(h, undefined), []);  // 값이 없으면 안 얹는다
+    assert.deepEqual(harnessThemeEnvArgs(h, "system"), []); // 'system' 은 해석된 값이 아니다
+  }
 });
 
 console.log(`\n${pass} passed`);

@@ -40,6 +40,22 @@ export function applyTheme(): void {
   document.dispatchEvent(new CustomEvent('lv:theme-change'));
 }
 
+// ── AI 하네스 테마 동기화(#1683 후속) ──────────────────────────────────────
+//  터미널 **안에서 도는 하네스**(Claude Code·Codex·OpenCode…)도 앱 테마로 띄울지. 기본 켜짐.
+//  끄면 각 하네스가 자기 설정에 저장해 둔 테마를 그대로 쓴다 — "내 하네스 테마는 내가 고른 대로" 를
+//  원하는 사람을 위한 스위치다. 터미널 **화면**(xterm·크롬)은 이 스위치와 무관하게 늘 앱을 따른다.
+//  ⚠ 이미 떠 있는 세션에는 적용되지 않는다 — 하네스는 시작할 때 테마를 정하고 실행 중엔 다시 읽지 않는다(실측).
+const HARNESS_KEY = 'lv:theme-harness';
+
+export function harnessThemeSync(): boolean {
+  try { return localStorage.getItem(HARNESS_KEY) !== '0'; } catch { return true; }
+}
+export function setHarnessThemeSync(on: boolean): void {
+  try { if (on) localStorage.removeItem(HARNESS_KEY); else localStorage.setItem(HARNESS_KEY, '0'); }
+  catch { /* 스토리지 차단 — 이 탭에선 기본값(켜짐)으로 동작한다 */ }
+  document.dispatchEvent(new CustomEvent('lv:theme-change'));
+}
+
 let watching = false;
 /** 다른 탭·임베드 iframe 에서의 변경(storage)과 OS 설정 변경(matchMedia)을 따라간다. 한 번만 배선. */
 export function watchTheme(): void {

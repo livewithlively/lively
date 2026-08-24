@@ -1098,6 +1098,10 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-theme-opt { flex: 1; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 0; border-radius: 7px; cursor: pointer; transition: color 120ms ease, background 120ms ease; }
 .v2-theme-opt:hover { color: var(--ink-sub); }
 .v2-theme-opt.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .10); }
+/* 'AI 세션도 이 테마로'(#1683 후속) — 세그먼트 바로 아래 한 줄. 화면 테마와 한 묶음으로 읽히게 붙여 둔다. */
+.v2-theme-ai { display: flex; align-items: center; gap: 6px; margin: 5px 10px 0; font-size: 11.5px; color: var(--muted); cursor: pointer; user-select: none; }
+.v2-theme-ai:hover { color: var(--ink-sub); }
+.v2-theme-ai-cb { margin: 0; width: 13px; height: 13px; accent-color: var(--blue-fill); cursor: pointer; }
 
 
 /* ── [외부 앱 연결] 관리자 구역(#1719) — 같은 화면의 '조직' 층. 개인 층과 **눈에 띄게 다른 바탕**을 준다:
