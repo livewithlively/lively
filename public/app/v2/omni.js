@@ -267,7 +267,10 @@ export function omniOpen(seed) {
         pending = Math.max(0, pending - 1);
         rebuild();
         paint();
-        setNote(pending ? '찾는 중…' : (hits.length ? '' : '결과가 없습니다.'));
+        // ⚠ **그려진 줄**로 판정한다(hits 가 아니라). 무관한 종류를 접고 나면 hits 는 남아 있는데 화면은 비어 있어,
+        //  hits 로 보면 안내문이 안 뜨고 **아무 설명 없는 빈 판**이 된다(실측 2026-08-24: 뜻 없는 질의에 0줄 + 무문구).
+        //  "결과가 없습니다" 는 이 검색의 결론이지 부작용이 아니다 — 화면이 비면 그 말이 있어야 한다.
+        setNote(pending ? '찾는 중…' : (rowNodes.length ? '' : '결과가 없습니다.'));
     }
     function localHits(q) {
         const d = hooks.data();
