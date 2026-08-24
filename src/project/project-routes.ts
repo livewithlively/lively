@@ -309,6 +309,20 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       await ensureAgentsMd(project.id, base, rules);
       res.json({ ok: true });
     }));
+
+    // ── ①-d AGENTS.md 전문(#1856 B) — **실행 중** 세션에 프로젝트 규칙을 주입하는 훅이 읽는다. ──
+    //  왜 /file?path=AGENTS.md 로 안 쓰나: 그 라우트는 ensureAgentsMd 를 부르지 않아 **stale digest**
+    //   (태스크 인덱스·필요지식이 낡은 판)가 갈 수 있다. 여기선 먼저 최신화한 뒤 읽는다.
+    //  왜 매니페스트로 안 쓰나: 매니페스트는 폴더 전체를 순회한다 — 훅은 파일 하나만 필요하다.
+    //  규칙(rules)만 주는 /rules 와도 다르다 — 주입에는 digest(레포·태스크·필요지식)까지 있어야 쓸모가 있다.
+    app.get(`${prefix}/:id/agents`, auth, wrap(async (req, res) => {
+      const { project, base } = await projBase(Number(req.params.id), req);
+      await ensureAgentsMd(project.id, base).catch(() => { /* 비치명 — 기존 파일이라도 준다 */ });
+      res.setHeader("Cache-Control", "no-store");
+      let content = "";
+      try { content = await fsp.readFile(path.join(base, "AGENTS.md"), "utf8"); } catch { /* 아직 없음 → 빈 문자열 */ }
+      res.json({ project_id: project.id, name: project.name, content, bytes: Buffer.byteLength(content) });
+    }));
   }
 
   // ── ② 터미널 세션(공동) — 목록·생성 모두 어사이니/멤버십 무관 전원(#452). projBase 가 게이트 안 함. ──
