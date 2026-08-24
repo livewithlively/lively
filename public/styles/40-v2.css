@@ -686,6 +686,37 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   font-variant-numeric: tabular-nums; line-height: 18px; cursor: pointer; }
 .tl-kidsn:hover { color: var(--blue); }
 .tl-kidsn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+/* ── 산출물 결과 줄(#1819 안 A · 원준 2026-08-24) ─────────────────────────────────
+   "눌러서 따로 볼 수 있는 것이 나왔으면 타임라인에서도 눌리게, 눈에 잘 보이게."
+   답 바로 아래 한 줄씩. 34px 타일(그림이면 진짜 축소본, 아니면 종류 아이콘) + 이름 + 열기.
+   ⚠ '간단히'로 접어도 이 줄은 남는다 — 접는 것은 과정이지 결과가 아니다.
+   색은 토큰 직참조(폴백 금지 — 폴백 불일치가 실버그를 만든 전례가 있다). */
+.tl-outs { display: flex; flex-direction: column; gap: 6px; margin-top: 7px; }
+.tl-out {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.tl-out:hover { border-color: var(--blue); background: var(--bg-tint); }
+.tl-out:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.tl-out-tile {
+  flex: none; width: 34px; height: 34px; border-radius: 6px; background: var(--bg-tint-2);
+  display: grid; place-items: center; color: var(--blue); overflow: hidden;
+}
+.tl-out-tile.img { background: var(--bg); border: 1px solid var(--line); }
+.tl-out-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tl-out-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tl-out-meta b {
+  font-size: 12.5px; font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tl-out-meta span {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .05em; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tl-out-go { flex: none; display: grid; place-items: center; color: var(--muted-3); }
+.tl-out:hover .tl-out-go { color: var(--blue); }
 .tl-wrap .v2-aside-h .v2-k { margin-left: auto; }
 .tl-list { display: flex; flex-direction: column; min-height: 0; gap: 2px; }
 .tl-day { display: flex; align-items: center; gap: 10px; padding: 22px 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--muted-2); }
@@ -1000,6 +1031,12 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-side, .v2-aside { position: fixed; top: 0; bottom: 0; z-index: 40; width: min(86vw, 336px); max-width: 100vw; visibility: hidden;
     transition: transform .22s ease, visibility 0s linear .22s; overscroll-behavior: contain; }
   .v2-side { left: 0; transform: translateX(-100%); border-right: 0; padding-top: env(safe-area-inset-top, 0px); }
+  /* ⚠ 위 서랍 규칙은 파일 뒤쪽의 .stu-side(같은 특정도, position: relative)에 뒤늦게 덮인다 —
+     미디어쿼리는 특정도를 올리지 않으므로 '나중에 쓴 쪽'이 이긴다. position 이 relative 로 돌아가면
+     사이드바가 흐름에 남아 세로를 통째로 먹고 본문(.v2-main)이 화면 밖으로 밀린다
+     (실측 611px 폭: 사이드바 1128px · 본문 26px → 사실상 빈 화면. 곁칸 웹 칸이 늘 이 폭이다).
+     클래스를 둘 겹쳐 되찾는다 — .stu-side 를 미디어쿼리 위로 옮기면 스튜디오 레이아웃이 깨진다. */
+  .v2-side.stu-side { position: fixed; }
   .v2-aside { display: flex; right: 0; transform: translateX(100%); border-left: 0; padding-top: env(safe-area-inset-top, 0px); }
   #v2-root.m-side .v2-side, #v2-root.m-aside .v2-aside { transform: none; visibility: visible; transition: transform .22s ease, visibility 0s;
     box-shadow: 0 0 0 1px var(--line), 0 18px 48px rgba(var(--shadow-ink), .24); }
