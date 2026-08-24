@@ -196,12 +196,16 @@ export function wkTbSearch(value: string, placeholder: string, onCommit: (q: str
   box.append(btn, input);
   return box;
 }
-// 위키 보조 표면 공통 뷰 탭 — 문서 · 자료 · 검토 대기. 같은 세 탭이 어느 목록 위에도 선다(앱 안에서 자리가 바뀌지 않는다).
-export function wkSurfaceTabs(active: 'docs' | 'sources' | 'review' | 'trash', reviewCount?: number) {
+// 위키 표면 탭(#1841 안 4) — **최근**이 첫 화면이고 카테고리는 그 옆 한 탭이다.
+//  왜 순서가 이런가: 위키를 여는 이유의 대부분은 "방금 뭐가 남았나"이고, "어디에 무엇이 있나"는 그 다음이다
+//  (원준 2026-08-24 결정 — 최상단 분류를 카테고리에서 시간으로). 자리는 어느 목록 위에서도 바뀌지 않는다.
+export function wkSurfaceTabs(active: 'recent' | 'cats' | 'docs' | 'sources' | 'review' | 'trash', reviewCount?: number) {
+  const cur = active === 'docs' ? 'recent' : active;   // 'docs'(옛 호출부) = 최근
   return [
-    { key: 'docs', label: '문서', icon: 'list' as const, href: '#/knowledge?all=1', active: active === 'docs' },
-    { key: 'sources', label: '자료', icon: 'table' as const, href: '#/knowledge/sources', active: active === 'sources' },
-    { key: 'review', label: reviewCount ? '검토 대기 ' + reviewCount : '검토 대기', iconNode: pjvTbIcon('check', 'pjv-vtab-ic wk-vtab-ic'), href: '#/knowledge/review', active: active === 'review' },
-    { key: 'trash', label: '휴지통', iconNode: pjvTbIcon('trash', 'pjv-vtab-ic wk-vtab-ic'), href: '#/trash', active: active === 'trash' },
+    { key: 'recent', label: '최근', icon: 'list' as const, href: '#/knowledge', active: cur === 'recent' },
+    { key: 'cats', label: '카테고리', iconNode: pjvTbIcon('group', 'pjv-vtab-ic wk-vtab-ic'), href: '#/knowledge?cats=1', active: cur === 'cats' },
+    { key: 'sources', label: '자료', icon: 'table' as const, href: '#/knowledge/sources', active: cur === 'sources' },
+    { key: 'review', label: reviewCount ? '검토 대기 ' + reviewCount : '검토 대기', iconNode: pjvTbIcon('check', 'pjv-vtab-ic wk-vtab-ic'), href: '#/knowledge/review', active: cur === 'review' },
+    { key: 'trash', label: '휴지통', iconNode: pjvTbIcon('trash', 'pjv-vtab-ic wk-vtab-ic'), href: '#/trash', active: cur === 'trash' },
   ];
 }

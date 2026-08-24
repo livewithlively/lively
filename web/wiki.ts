@@ -1,20 +1,22 @@
-// wiki.ts — #764 WIKI 탭 진입점(라우터 대면). "위키에는 페이지와, 페이지를 찾는 팝업뿐이다."
-//  셸 = [사이드바(유지 표면 — wiki-side)] + [콘텐츠 한 장]: 홈(wiki-home) / 카테고리 페이지(wiki-category) /
-//  필터 목록(검색·인덱스·전체 — 이 파일) / 휴지통 / 자료. 문서(#/k)·드래프트는 wiki-doc.
-//  URL 계약(구 딥링크 호환): #/knowledge?category=N&folder=&type=&q=&indexed=1&all=1&peek=<name>
+// wiki.ts — WIKI 탭 진입점(라우터 대면). "위키에는 페이지와, 페이지를 찾는 팝업뿐이다."
+//  ⚠ 셸(#1841, 2026-08-24) — **좌측 위키 사이드바를 걷었다.** 셸 사이드바(프로젝트·세션) 옆에 같은 폭의 세로 목록이
+//   하나 더 서던 이중 내비가 어색하다는 지적(원준). 카테고리 트리가 하던 일은 ① 첫 화면(최근)의 행 칩 ② 「카테고리」 탭이 맡는다.
+//   콘텐츠 한 장 = 최근(wiki-front) / 카테고리 표(wiki-front) / 카테고리 서고(wiki-category) / 필터 목록(이 파일) / 휴지통 / 자료.
+//   문서(#/k)·드래프트는 wiki-doc. 옛 홈(오로라 카드 격자 — wiki-home)은 이 경로에서 더 쓰지 않는다.
+//  URL 계약(구 딥링크 호환): #/knowledge?cats=1&category=N&folder=&type=&q=&indexed=1&all=1&peek=<name>
 //  (?tab= 은 #657 대문/문서 탭의 잔재 — 파싱 시 무시한다. 탭이라는 모드 자체를 폐지했다.)
 import { api, busy, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
 import { skeleton, skeletonRows } from './learn.js';
 import { KN_TYPE_LABEL, KN_UNCAT, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
 import { pjvTbIcon } from './projects/icons.js';
-import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
+import { KN_INDEXED } from './wiki-side.js';
+import { knFindCatIn, knLoadCats, renderCatsSurface, renderRecentSurface } from './wiki-front.js';   // #1841 안 4 — 첫 화면 = 최근(시간순) + 조건부 [검토할 것] / 카테고리는 탭 하나
 import { wkDayLabel, wkEmpty } from './wiki-ui.js';
 import { wkBoardHeader, wkDocCols, wkSurfaceTabs, wkTableGroup, wkTableRow, wkTbPill, wkTbPrimary, wkTbSearch } from './wiki-table.js';   // #1841 프로젝트 표 문법
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
 import { renderCategorySurface } from './wiki-category.js';
 import { reviewQueuePanel } from './review.js';   // #837 검토 큐 — 관리탭에서 이관(지식의 대기열이니 집은 WIKI)
 import { renderClassificationReview } from './classifications.js';   // #1102 분류 검토 대기 — 분류기 제안 확정/재분류/반려
-import { renderHomeSurface } from './wiki-home.js';
 
 // ── 라우터 진입 — sub ∈ { ''|new|pinned|sources|review|기타(구 space URL — 무시) } ──
 async function renderWiki(view, sub, params) {
@@ -40,15 +42,16 @@ async function renderReviewQueue(view) {
 
 // ── WIKI 셸 — 사이드바 + 콘텐츠 한 장. 상태 f 는 세션 전역(state.wiki). ──
 async function renderWikiSpace(view, params) {
-  const f = (state as any).wiki = (state as any).wiki || { category: '', folder: '', type: '', q: '', indexed: false, all: false };
+  const f = (state as any).wiki = (state as any).wiki || { category: '', folder: '', type: '', q: '', indexed: false, all: false, cats: false };
   // 파라미터 없는 진입 = 상단 WIKI 탭 클릭 등 '맨 진입' — 홈으로 리셋(이전 카테고리가 복원되면 놀란다).
   if (!params || Array.from(params.keys()).length === 0) {
-    f.category = ''; f.folder = ''; f.type = ''; f.q = ''; f.indexed = false; f.all = false;
+    f.category = ''; f.folder = ''; f.type = ''; f.q = ''; f.indexed = false; f.all = false; f.cats = false;
   }
   if (params) {
     // category 딥링크는 폴더 드릴다운을 리셋 — 세션 잔존 f.folder 가 다른 카테고리로 새면
     //  '폴더가 비어 있어요' 빈 화면이 뜬다. ?category=..&folder=.. 조합은 아래 folder 절이 다시 채운다.
-    if (params.has('category')) { f.category = params.get('category') || ''; f.indexed = false; f.all = false; f.folder = ''; }
+    if (params.has('cats')) { f.cats = params.get('cats') === '1'; if (f.cats) { f.category = ''; f.folder = ''; f.indexed = false; f.all = false; f.q = ''; } }
+    if (params.has('category')) { f.category = params.get('category') || ''; f.indexed = false; f.all = false; f.folder = ''; f.cats = false; }
     if (params.has('folder')) f.folder = params.get('folder') || '';
     if (params.has('type')) f.type = params.get('type') || '';
     if (params.has('q')) f.q = params.get('q') || '';
@@ -62,7 +65,8 @@ async function renderWikiSpace(view, params) {
   // URL 동기화 — replaceState(피크 파라미터는 승계). 피크 기준 해시 재앵커.
   function syncHash() {
     const p = new URLSearchParams();
-    if (f.indexed) p.set('indexed', '1');
+    if (f.cats) p.set('cats', '1');
+    else if (f.indexed) p.set('indexed', '1');
     else if (f.all) p.set('all', '1');
     else if (f.category) p.set('category', f.category);
     if (f.folder) p.set('folder', f.folder);
@@ -77,56 +81,49 @@ async function renderWikiSpace(view, params) {
   }
 
   const main = el('section', { class: 'wk-main' });
-  const sideCtl = createWikiSide({
-    selected: () => (f.indexed ? KN_INDEXED : f.category),
-    onSelect: (v) => selectCategory(v),
-    onOpen: (name) => { setWikiPeekList(null); openWikiPeek(name, { onRefresh: repaint }); },
-    tools: true,
-    uncategorized: true,
-  });
+  // 카테고리 목록은 화면이 직접 읽는다(사이드바가 없어졌다) — 세션 캐시 1콜, 카테고리 서고·행 칩이 같은 벌을 본다.
+  let bySpace: any = { business: [], product: [], system: [] };
   const ctx = {
     f,
     syncHash,
     repaint,
     selectCategory,
-    onCatChanged: () => sideCtl.rebuild(),
-    bySpace: sideCtl.bySpace,
-    findCat: sideCtl.findCat,
+    onCatChanged: () => { void knLoadCats(true).then((b) => { bySpace = b; }); },
+    bySpace: () => bySpace,
+    findCat: (v: string) => knFindCatIn(bySpace, v),
   };
 
   function selectCategory(v: string) {
     if (v === KN_INDEXED) { f.indexed = true; f.category = ''; }
     else { f.indexed = false; f.category = v || ''; }
-    f.folder = ''; f.type = ''; f.q = ''; f.all = false;
+    f.folder = ''; f.type = ''; f.q = ''; f.all = false; f.cats = false;
     syncHash();
-    sideCtl.rebuild();
     repaint();
   }
 
-  // repaint 는 매번 새 surface 박스를 깐다 — 사이드바 연타 등으로 비동기 렌더가 겹쳐도
-  //  늦게 끝난 이전 렌더는 자기(분리된) 박스에 그릴 뿐 최신 화면을 덮지 못한다.
+  // repaint 는 매번 새 surface 박스를 깐다 — 연타로 비동기 렌더가 겹쳐도 늦게 끝난 이전 렌더는
+  //  자기(분리된) 박스에 그릴 뿐 최신 화면을 덮지 못한다.
   function repaint() {
     const box = el('div', { class: 'wk-surface' });
     main.replaceChildren(box);
+    if (f.cats) return renderCatsSurface(box, ctx);
     // type 이 category 와 함께면 카테고리 페이지의 인라인 필터가 처리 — 단독 딥링크만 목록으로.
     //  미분류(#1091)는 대문·폴더가 있을 수 없는 '남은 것' 묶음이라 카테고리 페이지가 아니라 평면 목록으로 간다.
     if (f.q || f.all || f.indexed || f.category === KN_UNCAT || (f.type && !f.category)) return renderFilterList(box, ctx);
     if (f.category) {
-      const cat = sideCtl.findCat(f.category);
+      const cat = knFindCatIn(bySpace, f.category);
       if (cat) return renderCategorySurface(box, cat, ctx);
-      // 카테고리를 못 찾음(삭제/딥링크 오류) — 홈으로 조용히 폴백.
+      // 카테고리를 못 찾음(삭제/딥링크 오류) — 첫 화면으로 조용히 폴백.
       f.category = ''; f.folder = '';
       syncHash();
-      sideCtl.rebuild();
     }
-    return renderHomeSurface(box, ctx);
+    return renderRecentSurface(box, ctx);   // #1841 첫 화면 = 최근(시간순) + 조건부 [검토할 것]
   }
 
-  const shell = el('div', { class: 'kn-shell' }, sideCtl.side, main);
-  knApplySideW(shell); shell.append(knSideResizeHandle(shell));
-  await sideCtl.ready;   // 카테고리 해석(findCat)·홈 지도(bySpace)에 필요
-  // 로딩(카테고리 fetch) 중 사용자가 다른 탭으로 떠났으면 여기서 멈춘다 — 늦은 mount 가
-  //  남의 화면을 덮고 replaceState 로 주소까지 되돌리는 경합 방지(라우터가 dataset.route 를 즉시 세팅).
+  const shell = el('div', { class: 'kn-shell kn-shell-flat' }, main);
+  bySpace = await knLoadCats();   // 카테고리 해석(findCat)·행 칩에 필요
+  // 로딩 중 사용자가 다른 탭으로 떠났으면 여기서 멈춘다 — 늦은 mount 가 남의 화면을 덮고
+  //  replaceState 로 주소까지 되돌리는 경합 방지(라우터가 dataset.route 를 즉시 세팅).
   if (document.body.dataset.route !== 'knowledge') return;
   view.replaceChildren(shell);
   syncHash();
