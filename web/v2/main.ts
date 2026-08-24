@@ -589,6 +589,7 @@ function drawSide(): void {
     onNewSession: newSessionFor,
     // 사이드바에서 고친 이름은 **화면 전체**에 반영한다 — 목록만 바뀌고 탭·대화창 제목이 옛 이름이면 그게 더 혼란스럽다.
     onRenameSession: (id, label) => renameSessionEverywhere(id, label),
+    onRenameProject: (pid, name) => renameProject(pid, name),
     // 보관(×) 뒤 — 그 세션은 이제 '지난 세션'이라 목록의 자리가 바뀐다. 서버가 정답이므로 다시 읽는다.
     //  ⚠ 서버 응답을 기다린 뒤에 옮기면 **몇 초 동안 그대로 살아 있는 것처럼 보인다**(원준 2026-08-21:
     //   "바로 없어지는 게 아니라 시간이 좀 지나거나 새로고침해야 이동한다"). tmux 가 실제로 죽고 그게 목록
@@ -770,6 +771,17 @@ async function renameSessionEverywhere(sessionId: string, label: string): Promis
   //  우패널이 남의 세션 것으로 갈아 끼워진다(겉과 속이 어긋난 화면의 또 다른 입구). 목록만 고치면 된다.
   const tab = tabsApi?.tabs.find((t) => routeKey(t.route) === 's:' + sessionId) || null;
   await renameSession(sessionId, label, tab);
+}
+
+/** 프로젝트 이름(#1719 원준 2026-08-24) — 사이드바 줄 더블클릭·문패 제목 클릭이 같은 이 경로로 온다.
+ *  이름은 사이드바·탭 제목·문패·세션 상단바(프로젝트 링크)에 흩어져 있으므로 **한곳만 고치고 나머지가 옛 이름**이면
+ *  안 고친 것보다 나쁘다 — 그래서 로컬 목록을 먼저 손보고(즉시 반응) 서버에서 다시 읽어 맞춘다. */
+async function renameProject(projectId: number, name: string): Promise<void> {
+  await api('/api/ui/v6/projects/' + projectId, { method: 'POST', body: JSON.stringify({ name }) });
+  const pj0 = data.projects.find((x: any) => Number(x.id) === Number(projectId));
+  if (pj0) pj0.name = name;
+  drawSide(); tabsApi?.paint();
+  void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
 }
 
 async function renameSession(sessionId: string, label: string, tab: ShellTab | null): Promise<void> {

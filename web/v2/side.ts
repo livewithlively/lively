@@ -205,6 +205,8 @@ export interface SideHooks {
   onNewSession?: (projectId: number) => void;
   /** 세션 이름 바꾸기(더블클릭 인라인 편집) — 서버 반영 + 탭·대화창·우패널까지 셸이 갱신한다. */
   onRenameSession?: (sessionId: string, label: string) => Promise<void>;
+  /** 프로젝트 줄을 더블클릭해 고친 이름 — 세션과 같은 자리·같은 편집기(원준 2026-08-24). */
+  onRenameProject?: (projectId: number, name: string) => Promise<void>;
   /** 세션을 '지난 세션'으로 보냄(보관) — tmux 만 내리고 복원 좌표는 남긴다. 목록 재적재는 셸이 한다. */
   onArchived?: (sessionId?: string) => void;   // id 가 오면 그 세션은 **즉시** 지난 세션 취급(보관 ×)
   /** [새 작업] — **늘 새 탭**에 홈(시키는 자리)을 연다. 이미 열린 홈 탭으로 되돌아가지 않는다(그러면 쓰던 걸 덮는다). */
@@ -269,6 +271,9 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
 
 function render(): void {
   if (!last) return;
+  // 이름을 고치는 중이면 이번 판은 건너뛴다 — 20초 폴링이 입력 중인 칸을 지우면 치던 이름이 사라진다.
+  //  (편집은 blur·Enter·Esc 로 반드시 끝나고, 끝나면 그 경로가 다시 그린다.)
+  if (renaming) return;
   const { host, data } = last;
   // 개인 워크스페이스 = 웜 캔버스(안3 문패의 온도축) — 클래스는 사이드바 뿌리(.v2-side)에 건다.
   const wsReg: any = (state.me as any)?.workspace_registry || {};
@@ -691,12 +696,14 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
     ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
     : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
   // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
-  const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' },
+  const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' + (p ? '\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요' : '') },
     caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
     r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
     p ? newSessBtn(p.id) : null,
     p ? pinBtn(pk) : null);
+  // 세션 줄과 같은 손짓 — 더블클릭하면 그 자리에서 이름을 고친다(문패 제목 클릭과 같은 편집).
+  if (p) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRenameProject(pk, p); });
   const head = sess.slice(0, MAX_SESS);
   const pastHead = past.slice(0, MAX_SESS);
   const list = has ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen },
@@ -786,29 +793,29 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
     // 보관(×) — **도는 세션에만**(지난 세션은 이미 거기 있다), **내 세션에만**(서버도 소유자만 허용).
     //  자리는 늘 차지한다(hover 때만 보인다) — 나타나며 행을 밀면 목록이 흔들린다(압정과 같은 규약).
     !pastRow && isMine(s) ? archiveBtn(s) : null);
-  if (isMine(s)) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
+  if (isMine(s)) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRename(nameEl, s); });
   return row;
 }
 
-// ── 세션 이름 인라인 편집 ────────────────────────────────────────────────────
-//  ⚠ 이름 자리에 그려진 글(main)은 **원래 이름이 아닐 수 있다** — sessText 가 프로젝트명 되풀이를 걷어내고
+// ── 이름 인라인 편집 — 세션 줄과 프로젝트 줄이 **같은 편집기**를 쓴다(원준 2026-08-24) ──────
+//  ⚠ 세션은 이름 자리에 그려진 글(main)이 **원래 이름이 아닐 수 있다** — sessText 가 프로젝트명 되풀이를 걷어내고
 //   pane 제목·첫 지시를 그 자리에 올리기 때문이다(#1808). 그래서 편집칸의 초기값은 화면 글이 아니라
-//   **s.label(진짜 세션 이름)** 이다. 그리지 않은 것을 고치게 하면 사용자는 자기가 안 쓴 글을 지우게 된다.
+//   **진짜 이름**(세션 s.label · 프로젝트 p.name)이다. 그리지 않은 것을 고치게 하면 사용자는 자기가 안 쓴 글을 지우게 된다.
 let renaming = false;
-function beginRename(row: HTMLElement, nameEl: HTMLElement, s: Sess): void {
+function inlineRename(nameEl: HTMLElement, cfg: { value: string; label: string; save: (next: string) => Promise<void> }): void {
   if (renaming) return;
   renaming = true;
   const shown = nameEl.textContent || '';
-  const input = el('input', { class: 'v2-ss-edit', type: 'text', value: String(s.label || shown), 'aria-label': '세션 이름' }) as HTMLInputElement;
+  const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label }) as HTMLInputElement;
   nameEl.replaceChildren(input);
   input.focus(); input.select();
   let done = false;
   const finish = async (save: boolean): Promise<void> => {
     if (done) return; done = true; renaming = false;
     const next = input.value.trim();
-    if (!save || !next || next === s.label) { nameEl.replaceChildren(document.createTextNode(shown)); return; }
+    if (!save || !next || next === cfg.value) { nameEl.replaceChildren(document.createTextNode(shown)); return; }
     nameEl.replaceChildren(document.createTextNode(next));
-    try { await hooks.onRenameSession?.(s.id, next); }
+    try { await cfg.save(next); }
     catch (e: any) { toast((e && e.message) || '이름을 바꾸지 못했습니다', true); nameEl.replaceChildren(document.createTextNode(shown)); }
   };
   input.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -818,7 +825,16 @@ function beginRename(row: HTMLElement, nameEl: HTMLElement, s: Sess): void {
   });
   input.addEventListener('blur', () => { void finish(true); });
   input.addEventListener('click', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); });   // 편집 중 클릭이 행 이동으로 새지 않게
-  void row;
+}
+function beginRename(nameEl: HTMLElement, s: Sess): void {
+  inlineRename(nameEl, { value: String(s.label || nameEl.textContent || ''), label: '세션 이름', save: async (next) => { await hooks.onRenameSession?.(s.id, next); } });
+}
+/** 프로젝트 줄 더블클릭 — 첫 클릭이 그 프로젝트로 **이동시키며 트리를 다시 그리므로**, 잡아 둔 노드가 아니라
+ *  지금 화면에 서 있는 그 줄을 다시 찾아 연다(옛 노드에 열면 아무 일도 안 일어난 것처럼 보인다). */
+function beginRenameProject(pk: string, p: Proj): void {
+  const nameEl = document.querySelector<HTMLElement>('.v2-pj-row[data-nav="' + pk + '"] .n');
+  if (!nameEl) return;
+  inlineRename(nameEl, { value: String(p.name || ''), label: '프로젝트 이름', save: async (next) => { await hooks.onRenameProject?.(Number(p.id), next); } });
 }
 
 // ── 보관(×) — 세션을 '지난 세션'으로 보낸다 ──────────────────────────────────

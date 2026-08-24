@@ -67,6 +67,20 @@
 .pn-state.done { color: var(--mint-deep); font-weight: 700; }
 .pn-state.todo { color: var(--muted); }
 .pn-title { margin: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
+/* 제목 = 프로젝트 이름을 고치는 자리(원준 2026-08-24). 세션 제목(.sc-title-btn)과 같은 문법 —
+   평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 연필이 떠서 '고칠 수 있다'고 말한다. */
+.pn-title-btn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin-left: -8px; padding: 2px 8px;
+  border: 0; border-radius: 9px; background: none; font: inherit; color: inherit; text-align: left; cursor: text; }
+.pn-title-btn .pn-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pn-title-pen { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linejoin: round;
+  opacity: 0; transition: opacity .12s ease; }
+.pn-title-btn:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
+.pn-title-btn:hover .pn-title-pen, .pn-title-btn:focus-visible .pn-title-pen { opacity: 1; }
+.pn-title-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.pn-title-in { width: min(46ch, 100%); margin-left: -8px; padding: 2px 8px; border: 1px solid var(--blue); border-radius: 9px;
+  background: var(--bg); font: inherit; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; color: var(--ink); }
+.pn-title-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.pn-title-in:disabled { opacity: .6; }
 .pn-door-r { display: flex; align-items: center; gap: 8px; flex: none; }
 .pn-faces { display: inline-flex; margin-right: 4px; }
 .pn-face { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--bg); margin-left: -6px; }
