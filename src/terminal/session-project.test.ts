@@ -7,9 +7,14 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-const SHARED = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-sp-shared-"));
+// 워크스페이스를 샌드박스 **안쪽**에 둔다 — '워크스페이스 밖'(E5)을 재는 테스트가 탈출 경로를 만들려 시도하므로,
+//  그 자리가 공용 os.tmpdir() 이면 실행 간 잔재가 남아 다음 실행을 오염시킨다(실측: mutation 실행이 남긴 폴더가
+//  다음 green 실행을 빨갛게 만들었다). 한 겹 깊게 잡으면 탈출 시도도 이 샌드박스 안에 갇힌다.
+const SANDBOX = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-sp-"));
+const SHARED = path.join(SANDBOX, "workspace");
+await fsp.mkdir(SHARED, { recursive: true });
 process.env.TERMINAL_ROOT_SHARED = SHARED;
-const { applySessionProjectFs, planSessionProjectFs, PROJECT_LINK_NAME, MEMBER_JS } = await import("./session-project.js");
+const { applySessionProjectFs, planSessionProjectFs, projectDirPath, projectDirOnThisHost, PROJECT_LINK_NAME, MEMBER_JS } = await import("./session-project.js");
 import { spawnSync } from "node:child_process";
 
 let pass = 0;
@@ -108,18 +113,30 @@ const runMember = (input: unknown): any => {
   if (r.status !== 0) throw new Error("member js exit " + r.status + " " + r.stderr);
   return JSON.parse(r.stdout);
 };
+// probe 대상 경로 한 벌 — 프로젝트 폴더 쪽(#1856)까지 함께 묻는다(계획 함수는 파일시스템을 직접 안 본다).
+const pathsOf = (dir: string, projDir: string | null): Record<string, string> => ({
+  link: path.join(dir, PROJECT_LINK_NAME), agents: path.join(dir, "AGENTS.md"), claude: path.join(dir, "CLAUDE.md"),
+  ...(projDir ? { projDir, projAgents: path.join(projDir, "AGENTS.md"), projMarker: path.join(projDir, ".lively", "project.json") } : {}),
+});
 await t("[8] MEMBER_JS probe — 링크 없음·셔틀 없음이면 {false,null,null} · 우리 셔틀이 있으면 head 로 표식이 보인다", async () => {
   const dir = await mkSession();
   const paths = { link: path.join(dir, PROJECT_LINK_NAME), agents: path.join(dir, "AGENTS.md"), claude: path.join(dir, "CLAUDE.md") };
-  assert.deepEqual(runMember({ probe: paths }), { linkIsSymlink: false, agentsHead: null, claudeHead: null });
+  // 프로젝트 경로를 안 물으면 proj* 는 전부 false — 계획 함수가 "폴더 없음"으로 읽는 그 값이다(#1856).
+  assert.deepEqual(runMember({ probe: paths }), {
+    linkIsSymlink: false, agentsHead: null, claudeHead: null,
+    projDirExists: false, projAgentsExists: false, projMarkerExists: false,
+  });
   await fsp.writeFile(paths.agents, "<!-- lively:session-project -->\n# x\n");
   await fsp.symlink(P12, paths.link, "dir");
   const pr = runMember({ probe: paths });
   assert.equal(pr.linkIsSymlink, true); assert.ok(String(pr.agentsHead).startsWith("<!-- lively:session-project -->")); assert.equal(pr.claudeHead, null);
+  // 프로젝트 폴더 쪽 관측 — 격리 통로도 같은 사실을 본다(12 는 폴더·AGENTS.md 있음, 마커는 없음).
+  const pp = runMember({ probe: pathsOf(dir, P12) });
+  assert.equal(pp.projDirExists, true); assert.equal(pp.projAgentsExists, true); assert.equal(pp.projMarkerExists, false);
 });
 await t("[9] MEMBER_JS ops — 로컬 io 와 같은 계획을 실행하면 같은 결과(마커·링크·셔틀) · 뗌 계획도 같다", async () => {
   const dir = await mkSession();
-  const paths = { link: path.join(dir, PROJECT_LINK_NAME), agents: path.join(dir, "AGENTS.md"), claude: path.join(dir, "CLAUDE.md") };
+  const paths = pathsOf(dir, P12);
   const plan = planSessionProjectFs(dir, "box-yoon-9", { projectId: 12, folder: "project/12", name: "온보딩" }, P12, runMember({ probe: paths }));
   assert.deepEqual(runMember({ ops: plan.ops }), { linkFailed: false });
   assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_id, 12);
@@ -127,7 +144,7 @@ await t("[9] MEMBER_JS ops — 로컬 io 와 같은 계획을 실행하면 같�
   assert.ok(fs.readFileSync(paths.claude, "utf8").includes(`@${PROJECT_LINK_NAME}/AGENTS.md`));
   // 실패한 링크는 linkFailed 로 보고(진짜 폴더가 자리를 차지) — 나머지 op 는 그대로 수행
   const dir2 = await mkSession(); await fsp.mkdir(path.join(dir2, PROJECT_LINK_NAME));
-  const paths2 = { link: path.join(dir2, PROJECT_LINK_NAME), agents: path.join(dir2, "AGENTS.md"), claude: path.join(dir2, "CLAUDE.md") };
+  const paths2 = pathsOf(dir2, P12);
   const plan2 = planSessionProjectFs(dir2, "box-yoon-9b", { projectId: 12, folder: "project/12" }, P12, runMember({ probe: paths2 }));
   assert.deepEqual(runMember({ ops: plan2.ops }), { linkFailed: true });
   assert.ok(fs.existsSync(path.join(dir2, ".lively", "project.json")));
@@ -135,6 +152,74 @@ await t("[9] MEMBER_JS ops — 로컬 io 와 같은 계획을 실행하면 같�
   const unplan = planSessionProjectFs(dir, "box-yoon-9", null, null, runMember({ probe: paths }));
   assert.deepEqual(runMember({ ops: unplan.ops }), { linkFailed: false });
   assert.ok(!fs.existsSync(paths.link) && !fs.existsSync(paths.agents) && !fs.existsSync(path.join(dir, ".lively", "project.json")));
+});
+
+// ── #1856 A — 프로젝트 폴더 확보 + AGENTS.md 씨앗 (사양 S1·S2·S3 / 엣지 E1~E5) ──
+//  배경: cwd 가 세션 폴더로 바뀌면서(#1719) 원격 노드엔 프로젝트 폴더가 **아예 만들어지지 않았고**,
+//   그래서 링크도 문서 pull 도 성립하지 않았다. 여기서 그 확보 규칙을 못박는다.
+const P21 = path.join(SHARED, "project", "21");
+const P22 = path.join(SHARED, "project", "22");
+const P23 = path.join(SHARED, "project", "23");
+
+await t("[10:E1] 폴더생성=on · 폴더 없음 · AGENTS.md 전문 있음 → 폴더·마커(sync:pull)·씨앗·링크·@project", async () => {
+  const dir = await mkSession();
+  const seed = "# 프로젝트 21 digest\n";
+  const r = await applySessionProjectFs(dir, "box-yoon-10", { projectId: 21, folder: "project/21" }, undefined, { createProjectDir: true, agentsMd: seed });
+  assert.equal(r.createdProjectDir, true);
+  assert.equal(r.linked, true); assert.equal(r.projectDir, P21);
+  assert.equal(fs.readFileSync(path.join(P21, "AGENTS.md"), "utf8"), seed, "씨앗이 프로젝트 폴더에 심긴다");
+  const pm = readJson(path.join(P21, ".lively", "project.json"));
+  assert.equal(pm.project_id, 21); assert.equal(pm.sync, "pull", "로컬 사본은 받기만 한다");
+  assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_dir, P21);
+  assert.equal(linkTarget(path.join(dir, PROJECT_LINK_NAME)), P21);
+  assert.ok(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8").includes(`@${PROJECT_LINK_NAME}/AGENTS.md`));
+});
+
+await t("[11:E2] 폴더생성=on · 전문 부재 → 폴더·마커는 생기고 AGENTS.md 는 안 쓰며 @project import 도 없다", async () => {
+  const dir = await mkSession();
+  const r = await applySessionProjectFs(dir, "box-yoon-11", { projectId: 22, folder: "project/22" }, undefined, { createProjectDir: true });
+  assert.equal(r.createdProjectDir, true); assert.equal(r.linked, true);
+  assert.ok(fs.existsSync(path.join(P22, ".lively", "project.json")), "폴더·마커는 만든다(pull 진입 조건)");
+  assert.ok(!fs.existsSync(path.join(P22, "AGENTS.md")), "전문이 없으면 AGENTS.md 를 만들지 않는다 — pull 이 채운다");
+  assert.ok(!fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8").includes(`@${PROJECT_LINK_NAME}/`), "없는 파일을 import 하지 않는다");
+});
+
+await t("[12:E3] 폴더·마커가 이미 있으면 마커도 AGENTS.md 도 덮지 않는다", async () => {
+  const dir = await mkSession();
+  await fsp.mkdir(path.join(P23, ".lively"), { recursive: true });
+  const existing = { project_id: 23, sync: "both", last_pull: 12345 };
+  await fsp.writeFile(path.join(P23, ".lively", "project.json"), JSON.stringify(existing) + "\n");
+  await fsp.writeFile(path.join(P23, "AGENTS.md"), "# 기존 digest\n");
+  const r = await applySessionProjectFs(dir, "box-yoon-12", { projectId: 23, folder: "project/23" }, undefined, { createProjectDir: true, agentsMd: "# 새 씨앗\n" });
+  assert.equal(r.createdProjectDir, false, "이미 있으면 만들지 않는다");
+  assert.deepEqual(readJson(path.join(P23, ".lively", "project.json")), existing, "last_pull·사람이 정한 sync 를 보존한다");
+  assert.equal(fs.readFileSync(path.join(P23, "AGENTS.md"), "utf8"), "# 기존 digest\n", "정본은 pull 이 관리 — 씨앗이 덮지 않는다");
+});
+
+await t("[13:E4] 폴더생성=off(격리·기본값) · 폴더 없음 → 공유폴더를 만들지 않는다", async () => {
+  const dir = await mkSession();
+  const r = await applySessionProjectFs(dir, "box-yoon-13", { projectId: 24, folder: "project/24" }, undefined, { agentsMd: "# 씨앗\n" });
+  assert.equal(r.createdProjectDir, false); assert.equal(r.linked, false); assert.equal(r.projectDir, null);
+  assert.ok(!fs.existsSync(path.join(SHARED, "project", "24")), "격리 통로에선 공유폴더를 멤버 권한으로 만들지 않는다");
+  assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_dir, null);
+});
+
+await t("[14:E5] 프로젝트 폴더가 워크스페이스 밖 → 프로젝트 폴더 op 0건 · project_dir=null", async () => {
+  const dir = await mkSession();
+  const r = await applySessionProjectFs(dir, "box-yoon-14", { projectId: 25, folder: "../escape/25" }, undefined, { createProjectDir: true, agentsMd: "# 씨앗\n" });
+  assert.equal(r.createdProjectDir, false); assert.equal(r.projectDir, null);
+  assert.ok(!fs.existsSync(path.join(path.dirname(SHARED), "escape")), "워크스페이스 밖에는 아무것도 만들지 않는다");
+  assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_dir, null);
+});
+
+await t("[15:E11] projectDirOnThisHost 는 실재하는 폴더만 준다 — projectDirPath 와 다른 함수다", async () => {
+  // ⚠ 둘을 한 이름으로 합치면 조용한 사고가 난다: 세션 완전삭제(#1850)가 이 값으로 폴더를 rm -rf 하므로,
+  //  '존재 확인'이 빠지면 그 안전 가정이 사라진다. 바인딩(#1856)은 반대로 '없으면 만든다'가 목적이다.
+  assert.equal(projectDirOnThisHost("project/12"), P12, "실재하면 경로");
+  assert.equal(projectDirOnThisHost("project/9999"), null, "없으면 null — 삭제 경로가 유령 폴더를 만지지 않는다");
+  assert.equal(projectDirPath("project/9999"), path.join(SHARED, "project", "9999"), "경로 계산은 존재와 무관");
+  assert.equal(projectDirPath("../escape/9"), null, "워크스페이스 밖은 둘 다 null");
+  assert.equal(projectDirOnThisHost("../escape/9"), null);
 });
 
 console.log(`session-project: ${pass} passed`);
