@@ -19,6 +19,7 @@
 //  게이트웨이가 `setProject` op 로 릴레이하면 노드가 이 모듈의 applySessionProject 를 자기 파일시스템·mux 에 그대로 적용한다
 //  (정책=게이트웨이 F7, 실행=노드). 프로젝트 폴더가 그 머신에 없으면 **만든다**(#1856) — 종전엔 건너뛰어서 원격 노드는
 //  링크도 문서 pull 도 성립하지 않았고, 그래서 프로젝트 문서를 영영 못 받았다(폴더를 만드는 경로가 레포 provision 뿐이었다).
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_SHARED_BASE } from "../project/project-fs.js";
@@ -48,6 +49,15 @@ export function projectDirPath(folder: string): string | null {
   const abs = path.resolve(PROJECT_SHARED_BASE, rel);
   if (abs !== PROJECT_SHARED_BASE && !abs.startsWith(PROJECT_SHARED_BASE + path.sep)) return null;   // 워크스페이스 밖이면 안 잇는다
   return abs;
+}
+
+/** 이 호스트에 **실재하는** 프로젝트 폴더의 절대경로(없으면 null).
+ *  ⚠ projectDirPath 와 의도적으로 다른 함수다 — 이름 하나로 합치지 마라. "있는 것만 만진다"가 곧 안전인 자리가 쓴다:
+ *   세션 완전삭제(#1850)는 이 값으로 폴더를 `rm -rf` 하므로, 존재 확인 없이 경로만 받으면 그 안전 가정이 사라진다.
+ *   반대로 바인딩(#1856)은 "없으면 만든다"가 목적이라 존재 판정을 probe 로 미뤄야 한다. 그래서 둘 다 남는다. */
+export function projectDirOnThisHost(folder: string): string | null {
+  const abs = projectDirPath(folder);
+  return abs && fs.existsSync(abs) ? abs : null;
 }
 
 // ── 폴더 안 표현의 실행 통로(io) — 게이트웨이 자신(fs) 또는 격리 멤버 uid(terminal-member-fs.memberNodeJson) ──
