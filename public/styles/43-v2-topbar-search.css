@@ -33,7 +33,9 @@
   padding-right: 0;
   -webkit-app-region: no-drag;
 }
-.v2-tb-grip { flex: 0 0 128px; min-width: 56px; }   /* 창을 끌 자리(늘 빈 채로 둔다) */
+/* 창을 끌 자리 — 늘 빈 채로 둔다. 128px 은 마지막 탭과 최소화 단추 사이가 휑했고(2026-08-20), 56px 로 줄였더니
+   이번엔 잡을 데가 모자랐다(상민님 2026-08-24). 그 사이값으로 둔다. */
+.v2-tb-grip { flex: 0 0 88px; min-width: 48px; }
 /* 탭이 줄 맨 위에 닿으므로 켜진 탭의 파란 밑줄은 **아래쪽**에 긋는다 — 위에 그으면 창 모서리와 붙어 선이 잘려 보인다. */
 #v2-root.has-topbar > .v2-topbar .v2-tab.on { box-shadow: inset 0 -2px 0 var(--blue); }
 /* 데스크톱 앱은 맨 윗줄이 이미 탭 줄이다 — 가운데 열 위에 또 한 줄이 생기지 않게 [모든 탭] 도 같은 줄에서 산다. */

@@ -343,7 +343,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
    '지금 켜진 것'과 '이름이 긴 것'이 같은 신호(넓다)로 보였다. 켜짐은 이제 **면과 밑줄**만으로 말한다.
    flex:1 1 0 이 곧 1/n 이고, 바닥 폭(min-width) 아래로 밀리면 그때부터 줄이 굴러간다 —
    글자가 아예 안 읽히는 탭 20개보다, 읽히는 탭 몇 개 + 스크롤 + [모든 탭] 목록이 낫다. */
-.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head); cursor: pointer; flex: 1 1 0; min-width: 96px; max-width: none; white-space: nowrap; user-select: none; }
+/* ⚠ max-width 상한(상민님 2026-08-24) — 종전 none 이면 `flex: 1 1 0` 이 남는 폭을 전부 먹어, **탭이 하나일 때
+   그 하나가 줄 전체로 늘어났다**(이름이 두 글자여도 화면 끝까지). 브라우저 탭 줄도 같은 이유로 상한을 둔다.
+   상한을 넘긴 남는 폭은 빈 채로 남고, 데스크톱에선 그 자리가 곧 창을 끌 자리가 된다. */
+.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head); cursor: pointer; flex: 1 1 0; min-width: 96px; max-width: 240px; white-space: nowrap; user-select: none; }
 .v2-tab:hover { background: rgba(255,255,255,.62); color: var(--ink); }
 .v2-tab.on { background: var(--bg); box-shadow: inset 0 2px 0 var(--blue); color: var(--ink); font-weight: 700; }
 .v2-tab.on:hover { background: var(--bg); }
