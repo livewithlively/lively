@@ -2479,6 +2479,13 @@ let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecti
 // ⚠ 세션이 '진짜 종료'된 경우는 4403 이 아니라 4410(session-gone)으로 온다(#835) — 서버가 tmux 에게 확답을
 //  받았을 때만 보낸다. 그래야 '살아있는데 죽었다고 오인'(#687) 없이 '죽었는데 영원히 재접속중'을 없앨 수 있다.
 let denyRetries = 0; const MAX_DENY_RETRIES = 5;
+// 4462(노드 오프라인) 전용 예산(#1865). 이 코드는 '곧 풀릴 수 있는 일시 상태'다 — 게이트웨이를 재배포하면
+//  노드도 함께 끊기고, 노드가 다시 붙기까지 최악 33초 걸린다(노드 백오프 + 상태 push). 그 창에서는 일반
+//  백오프(1.5s→×1.6→5s)로 뜸하게 두드릴 이유가 없다: **1초 고정**으로 촘촘히 두드려 노드가 붙는 즉시 붙는다.
+//  ⚠ 이 구간은 **일반 재시도 예산(attempts)을 쓰지 않는다** — 안 그러면 40회를 40초 만에 소진해, 노드가
+//   잠깐 꺼진 것뿐인데 화면이 '포기'로 넘어간다(종전 정책은 '노드가 켜지면 그대로 붙는다'였다).
+//  촘촘한 구간이 끝나면 종전 백오프로 넘어간다 — 노드가 정말 꺼져 있는 경우의 동작은 그대로다.
+let offlineTries = 0; const OFFLINE_FAST_TRIES = 45, OFFLINE_FAST_MS = 1000;
 let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 영구 중단(아래 endSession)
 // 게이트웨이가 아예 응답하지 않을 때 **언젠가는 포기한다**. 예전엔 5초 간격으로 영원히 재시도했는데,
 //  그러면 서버가 죽었든 노트북이 절전에서 깼든 화면은 똑같이 '재연결 중… (417회째)' 만 돈다 —
@@ -2550,7 +2557,7 @@ function showRetryBar() {
       onclick: () => {
         const b = document.getElementById('retry-bar');
         if (b && b.parentNode) b.parentNode.removeChild(b);
-        gaveUp = false; attempts = 0; reconnectDelay = 1500;
+        gaveUp = false; attempts = 0; reconnectDelay = 1500; offlineTries = 0;
         connectNow();
       },
     }));
@@ -2794,7 +2801,12 @@ async function connectNow() {
     // 4462(노드 오프라인) — 재시도는 **유지**한다(노드가 켜지면 그대로 붙는다. 그게 이 코드의 정책이다).
     //  다만 이유는 말한다: 지금까지는 원인 불명의 '재연결 중…' 만 떠서, 사용자도 우리도 무엇이 문제인지
     //  화면만 보고는 알 수 없었다(실측 #1541 — 노드가 다른 게이트웨이에 붙어 있던 걸 이 화면으로는 끝내 못 봤다).
-    if (e && e.code === 4462) { scheduleReconnect('이 세션의 노드가 연결돼 있지 않습니다 — 재연결 중…'); return; }
+    if (e && e.code === 4462) {
+      // 초기 구간은 1초 고정으로 촘촘히(위 offlineTries 주석) — 재배포로 노드가 잠깐 끊긴 경우가 대부분이다.
+      if (++offlineTries <= OFFLINE_FAST_TRIES) { reconnectDelay = OFFLINE_FAST_MS; attempts = Math.max(0, attempts - 1); }
+      scheduleReconnect('이 세션의 노드가 연결돼 있지 않습니다 — 재연결 중…');
+      return;
+    }
     scheduleReconnect(wasConnected ? '연결 끊김 — 재연결 중…' : '재연결 중…');
   };
   sock.onerror = () => { /* onclose 가 뒤따른다 */ };

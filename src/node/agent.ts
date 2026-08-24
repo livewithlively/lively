@@ -13,6 +13,7 @@ import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";   // #1713 자가 갱신 — 받은 tar.gz 해제
 import { linkIsStale, LINK_CHECK_MS, LINK_STALE_MS } from "./link-liveness.js";   // #1541 — 클라이언트 쪽 생존 감시
+import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연결 지연(두 구간)
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,
@@ -98,8 +99,9 @@ if (!GW_URL || !TOKEN) {
 }
 
 const STATE_PUSH_MS = 3_000;
-const BACKOFF_MIN_MS = 1_000;
-const BACKOFF_MAX_MS = 30_000;
+// 재연결 지연은 reconnect-delay.ts 가 계산한다(#1865) — 왜 두 구간(촘촘/느슨)으로 갈랐는지는 그 파일 머리말.
+//  ⚠ 상수를 여기 다시 두지 마라: 종전엔 여기 하나뿐이라 '재배포 직후'와 '오래 죽어 있음'을 같은 곡선으로 다뤘고,
+//   그래서 게이트웨이가 살아난 뒤에도 노드가 8~16초를 더 기다렸다.
 
 // ── attach 채널 어댑터 — 게이트웨이행 단일 WSS 위의 가상 채널을 AttachSocket 으로 위장해
 //    terminal-pty.attachSession(tmux -CC · 큐잉 · 정리)을 그대로 재사용한다. ──
@@ -410,7 +412,7 @@ function connect(): void {
     if (watch) { clearInterval(watch); watch = null; }
     for (const sock of chans.values()) sock.feedClose(); // attach pty 정리(#687 — 고아 방지)
     chans.clear();
-    const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** Math.min(attempt++, 5));
+    const delay = reconnectDelayMs(attempt++);
     logger.warn({ delay }, "게이트웨이 연결 끊김 — 재연결 예약");
     // ⚠ unref 금지(#1541 실기기 로그로 확정): teardown 뒤엔 이 타이머가 이벤트 루프를 지탱하는 유일한 핸들이라,
     //  unref 면 **재연결이 실행되기 전에 프로세스가 끝난다**. hammurabi 로그의 모든 "연결 끊김 — 재연결 예약" 뒤에
