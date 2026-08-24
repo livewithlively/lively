@@ -5,7 +5,7 @@
 //  ⚠ 재수출(하위호환): skeleton·skeletonRows·overlayBox 는 **이 파일 소유가 아니다** — ui-primitives.ts 가 소유하고
 //   여기서 그대로 재수출할 뿐이다(#1313 R27). 18개 파일이 옛 경로 './learn.js' 로 가져가고 있어 남겨 뒀다.
 //   새 소비자는 ui-primitives.ts 에서 직접 받아라 — 이 배럴 몫은 줄어드는 방향으로만 간다.
-import { api, el, errorNote, keepSideScroll, navOn, pageHead, renderMarkdown, state, sv } from './core.js';
+import { api, el, errorNote, navOn, pageHead, renderMarkdown, state, sv } from './core.js';
 // 관리탭 조각 4개를 **실체 모듈에서 직접** 받는다(#1313 R40). 종전엔 넷 다 './admin.js' 배럴 경유였고,
 //  admin.ts 가 review/visibility-axes 를 import 하는 한 그 배럴이 learn 으로 되돌아오는 순환 4건을 만들었다
 //  (check-imports 의 ALLOWED_CYCLES 에 'R37/R40 이 나가면 사라진다'로 예약돼 있던 바로 그것).
@@ -27,71 +27,84 @@ import { DOC_PAGES } from './docs-content.js'; // 사용설명서 원고(#780) �
 // 가이드(#/learn) — 비개발자가 이 서비스 '전체'와 '각 메뉴'를 한 번에 이해하도록 재구성(2026-06-30).
 //  두 기둥: ① 히어로 = 서비스를 관통하는 한 문장 + 작동 3단계 ② 메뉴 한눈에 보기 = 탭별 친절 설명.
 //  보조: 처음이라면(순서 경로) + WIKI 에 쌓이는 '지식 한 덩어리'(R·K·H·W) 예시. 정적 — API 불필요.
-// ── 사용 가이드 = 문서 사이트(#780) — code.claude.com/docs/ko 형식: 좌측 사이드바(그룹>페이지) + 본문. ──
-//  옛 서브탭 바(.sub-cats)는 폐지 — 사이드바가 내비를 전담한다. 원고(md)는 docs-content.ts, 렌더는
-//  core.renderMarkdown(:::tabs 지원). 설치·둘러보기·메뉴 한눈에 보기는 인터랙티브 화면 그대로 셸 안에 들어간다.
-//  active 키: 'overview'(=#/learn) | DOC_PAGES slug(#/learn/docs/<slug>) | 'install' | 'tour' | 'menu'.
-const DOCS_NAV = [
-  // 라이블리가 '무엇이고 어떻게 도는지' — 먼저 읽고 이해하는 개괄 정보(액션 아님). 그래서 '시작하기'가 아니라 '라이블리 소개'.
-  { group: '라이블리 소개', items: [
-    { key: 'overview', label: '라이블리 개요', href: '#/learn' },
-    { key: 'how-it-works', label: '라이블리가 동작하는 방식', href: '#/learn/docs/how-it-works' },
+// ── 사용 가이드(#1841 재설정) — 프로젝트·AI 세션·WIKI·맥락 관리와 같은 머리 3층 안에 문서를 싣는다. ──
+//  ① 빵부스러기(사용 가이드 + 한 줄) ② 뷰 탭 = 문서 묶음(시작하기 · 매일 쓰는 것 · 연결하기 · 팀 운영 · 레퍼런스)
+//  ③ 툴바 = 그 묶음의 문서 알약. 좌측 사이드바(.docs-side)는 이 화면에서 더 쓰지 않는다(관리탭·증류기가 그 CSS 를 쓰므로 규칙은 남긴다).
+//  원고는 docs-content.ts(DOC_PAGES) — 2026-08-24 v2 셸 기준으로 처음부터 다시 썼다(옛 원고는 폐기, 원준 지시).
+//  active 키: DOC_PAGES slug | 'start' | 'start-project' | 'tour' | 'install'(start.ts·둘러보기가 같은 셸을 쓴다).
+interface GuideNavItem { key: string; label: string; href: string }
+interface GuideNavGroup { key: string; group: string; hint: string; items: GuideNavItem[] }
+const GUIDE_NAV: GuideNavGroup[] = [
+  { key: 'begin', group: '시작하기', hint: '처음 10분 — 무엇이고, 어떻게 첫 일을 시키나', items: [
+    { key: 'overview', label: '라이블리란', href: '#/learn' },
+    { key: 'first-run', label: '첫 작업 시키기', href: '#/learn/docs/first-run' },
+    { key: 'screen-map', label: '화면 한눈에', href: '#/learn/docs/screen-map' },
+    { key: 'start', label: '설치·설정 체크', href: '#/start' },
   ] },
-  // 읽는 문서가 아니라 '직접 해서 시작하는' 것들 — 온보딩 입구·예시·프로젝트 체험·화면 위 투어. '시작하기'(온보딩
-  //  입구, #846/850)가 맨 위인 이유: 여기 없으면 홈 칩(미완일 때만)이 사라진 뒤 URL 직접 치는 것 말고 들어갈 길이 없다.
-  //  #1000 URI 통일: 직접 해보기 그룹은 전부 #/start/* — '시작하기'(#/start) 아래로 examples·project·tour 를 모은다
-  //  (옛 #/learn/docs/examples · #/learn/tour 는 리다이렉트로 보존, main.ts). 첫 항목 라벨을 '시작하기'로 바꿔(옛 'AI
-  //  세션 체험') 그룹명 '직접 해보기'와 겹치지 않게 하고 페이지 H1(start.ts)과 맞춘다.
-  { group: '직접 해보기', items: [
-    { key: 'start', label: 'AI 세션 시작하기', href: '#/start' },
-    // #req examples 탭 숨김(사용자 요청) — 본문을 #/start 블록 ③ 로 인라인 이동. 라우트는 유지(직접 URL 접근 가능). 복원: 아래 줄 주석 해제.
-    // { key: 'examples', label: '이런 걸 시켜보세요', href: '#/start/examples' },
-    { key: 'start-project', label: '프로젝트 시작하기', href: '#/start/project' },   // #853 프로젝트 한 바퀴 손수 투어 + 직접 만들기(#1104)
-    // #req tour 탭 숨김(사용자 요청). 라우트는 유지. 복원: 아래 줄 주석 해제.
-    // { key: 'tour', label: 'Lively 둘러보기', href: '#/start/tour' },
-  ] },
-  // #1107 상단 탭 현행화 — 사이드바 라벨은 실제 상단 탭 이름 그대로(내 AI 세션→AI 세션 · 도메인 맵→맥락 관리 ·
-  //  관리→설정, #1153/#1419 개편 반영). slug 는 URL 안정성 위해 terminal·admin 유지, domainmap 만 context 로
-  //  교체(구 #/learn/docs/domainmap 은 renderLearnDocs 가 리다이렉트).
-  { group: '화면별 안내', items: [
-    { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
-    { key: 'terminal', label: 'AI 세션', href: '#/learn/docs/terminal' },
+  { key: 'daily', group: '매일 쓰는 것', hint: '일을 시키고, 답하고, 결과를 정리하는 네 화면', items: [
+    { key: 'sessions', label: '새 작업과 세션', href: '#/learn/docs/sessions' },
+    { key: 'inbox', label: '확인할 것', href: '#/learn/docs/inbox' },
     { key: 'projects', label: '프로젝트', href: '#/learn/docs/projects' },
     { key: 'wiki', label: 'WIKI', href: '#/learn/docs/wiki' },
-    { key: 'context', label: '맥락 관리', href: '#/learn/docs/context' },
-    { key: 'admin', label: '설정', href: '#/learn/docs/admin' },
+    { key: 'search', label: '검색', href: '#/learn/docs/search' },
   ] },
-  { group: '레퍼런스', items: [
-    { key: 'cli', label: 'AI 세션 명령어', href: '#/learn/docs/cli' },
+  { key: 'connect', group: '연결하기', hint: 'AI 가 내 계정·내 컴퓨터로 일하게 만드는 법', items: [
+    { key: 'connect', label: '외부 앱 연결', href: '#/learn/docs/connect' },
+    { key: 'nodes', label: '내 컴퓨터 연결', href: '#/learn/docs/nodes' },
+    { key: 'liv', label: '리브', href: '#/learn/docs/liv' },
+  ] },
+  { key: 'team', group: '팀 운영', hint: '관리자·팀장이 맥락과 설정을 돌보는 곳', items: [
+    { key: 'context', label: '맥락 관리', href: '#/learn/docs/context' },
+    { key: 'settings', label: '설정', href: '#/learn/docs/settings' },
+  ] },
+  { key: 'ref', group: '레퍼런스', hint: '찾아볼 때', items: [
+    { key: 'states', label: '상태와 표시', href: '#/learn/docs/states' },
+    { key: 'commands', label: '명령어·단축키', href: '#/learn/docs/commands' },
     { key: 'glossary', label: '용어집', href: '#/learn/docs/glossary' },
-    // #762 '문서 안내(IA·규칙)'(plan) 가이드 항목 숨김(사용자 요청) — 복원: 아래 줄 주석 해제(라우트 리다이렉트도 renderLearnDocs 에서 제거).
-    // { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
   ] },
 ];
-
-function docsSidebar(active) {
-  const side = el('nav', { class: 'docs-side', 'aria-label': '사용 가이드 문서' });
-  keepSideScroll(side, 'learn');     // 문서를 고르면 화면을 다시 그려 사이드바가 새 노드가 된다(#1635)
-  for (const g of DOCS_NAV) {
-    const box = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: g.group }));
-    for (const it of g.items) {
-      box.append(el('a', { class: 'docs-item' + (it.key === active ? ' active' : ''), href: it.href,
-        'aria-current': it.key === active ? 'page' : null, text: it.label }));
-    }
-    side.append(box);
-  }
-  return side;
+// start.ts·둘러보기가 쓰는 키를 묶음에 붙인다(탭 강조·알약 표시용). 'tour'·'install' 은 알약엔 없고 탭만 시작하기로 켠다.
+const GUIDE_KEY_GROUP: Record<string, string> = { 'start-project': 'begin', tour: 'begin', install: 'begin' };
+function guideGroupOf(active: string): GuideNavGroup {
+  const direct = GUIDE_NAV.find((g) => g.items.some((i) => i.key === active));
+  if (direct) return direct;
+  const k = GUIDE_KEY_GROUP[active];
+  return GUIDE_NAV.find((g) => g.key === k) || GUIDE_NAV[0];
 }
 
-// 문서 셸 — 사이드바 + 본문. 모든 사용 가이드 화면(문서·설치·둘러보기·메뉴·온보딩)이 이 셸 안에서 렌더된다.
-//  export: #/start(start.ts)도 이 셸을 쓴다 — 사이드바에서 들어갔는데 사이드바가 사라지면 길을 잃는다.
+/** 머리 3층(프로젝트 탭 동형) — 빵부스러기 › 묶음 탭 › 문서 알약. */
+function guideHeader(active: string): HTMLElement {
+  const grp = guideGroupOf(active);
+  const crumbBar = el('div', { class: 'pjv-crumbbar' },
+    el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
+      el('span', { class: 'pjv-crumb is-leaf lg-crumb-leaf' }, tabIcon('book-open', 'pjv-crumb-ic lg-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: '사용 가이드' })),
+      el('span', { class: 'lg-crumb-sub', text: grp.hint })));
+  const tabs = el('div', { class: 'pjv-vtabs lg-vtabs', role: 'tablist', 'aria-label': '문서 묶음' });
+  for (const g of GUIDE_NAV) {
+    const on = g.key === grp.key;
+    tabs.append(el('a', { class: 'pjv-vtab lg-vtab' + (on ? ' active' : ''), href: g.items[0].href, role: 'tab', 'aria-selected': String(on) },
+      el('span', { class: 'lg-vtab-label', text: g.group })));
+  }
+  const left = el('div', { class: 'pjv-tasks-head-left' });
+  for (const it of grp.items) {
+    const on = it.key === active;
+    left.append(el('a', { class: 'pjv-tb-btn pjv-tb-pill lg-pill' + (on ? ' active' : ''), href: it.href, 'aria-current': on ? 'page' : null },
+      el('span', { class: 'pjv-view-btn-label', text: it.label })));
+  }
+  const right = el('div', { class: 'card-head-actions' },
+    el('a', { class: 'pjv-tb-btn lg-tb-open', href: location.href.split('#')[0] + (location.hash || '#/learn'), target: '_blank', rel: 'noopener', title: '새 브라우저 탭에서 열기' }, tabIcon('external', 'pjv-tb-ic')));
+  return el('div', { class: 'pjv-board-header lg-board-header' }, crumbBar, tabs, el('div', { class: 'card-head pjv-board-toolbar' }, left, right));
+}
+
+// 문서 셸 — 머리 3층 + 본문. 모든 사용 가이드 화면(문서·시작하기·둘러보기·온보딩)이 이 셸 안에서 렌더된다.
+//  export: #/start(start.ts)도 이 셸을 쓴다 — 시그니처(view, active, ...content)는 그대로.
 export function docsShell(view, active, ...content) {
-  const article = el('article', { class: 'docs-body' }, ...content);
+  const article = el('article', { class: 'docs-body lg-article' }, ...content);
   wireGuideLinks(article);   // #780 원고 링크 동작: 같은 페이지=부드러운 스크롤 / 다른 카테고리·탭·외부=새 브라우저 탭
-  view.replaceChildren(el('div', { class: 'docs-layout' },
-    docsSidebar(active),
-    article));
+  view.replaceChildren(el('div', { class: 'pjv-board-wrap lg-wrap' },
+    el('div', { class: 'card pjv-listboard lg-board' }, guideHeader(String(active || 'overview')), el('div', { class: 'lg-body' }, article))));
   document.getElementById('view')!.focus?.();
+  try { view.scrollTop = 0; window.scrollTo({ top: 0 }); } catch { /* noop */ }
 }
 
 // 해시 라우트를 페이지 키/쿼리/프래그먼트로 분해. '#/learn/docs/wiki?focus=required' → {page:'/learn/docs/wiki', query:'focus=required', frag:''}
@@ -137,10 +150,10 @@ function wireGuideLinks(article: any) {
     }
   });
 }
-// 페이지 아이브로 — 사이드바 그룹명을 히어로(guide-hero-eyebrow)와 같은 언어로 머리 위에 얹는다(#780 디자인 통일).
+// 페이지 아이브로 — 묶음 이름을 제목 위에 얹는다(start.ts 가 같은 함수를 쓴다).
 export function docsEyebrow(key) {
-  for (const g of DOCS_NAV) if (g.items.some((i) => i.key === key)) return el('div', { class: 'docs-eyebrow', text: g.group });
-  return null;
+  const g = guideGroupOf(String(key || ''));
+  return el('div', { class: 'docs-eyebrow', text: g.group });
 }
 
 // ── 원고(md) → 가이드 카드의 연속(#780 디자인 통일). ────────────────────────────────────────
@@ -266,11 +279,9 @@ function docsDecorate(root: any) {
 // md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
 //  머리(아이브로+제목)는 원고의 첫 # 제목을 승격해 그린다 — 문구는 원고 그대로, 표현만 히어로 문법.
 async function renderLearnDocs(view, slug) {
-  // #762 '문서 안내(IA·규칙)'(#/learn/docs/plan) 페이지 숨김(사용자 요청) — 개요로 리다이렉트. 원고(DOC_PAGES['plan'])는 보존.
-  //  복원: 이 줄 삭제 + learn.ts nav 의 plan 항목 주석 해제.
-  if (slug === 'plan') { location.replace('#/learn'); return; }
-  // #1107 — '도메인 맵' 문서는 '맥락 관리'(context)로 흡수(#1153/#1419 탭 개편 반영). 구 딥링크 보존.
-  if (slug === 'domainmap') { location.replace('#/learn/docs/context'); return; }
+  // 옛 slug 보존 — 링크가 밖에 박혀 있을 수 있다(홈 칩·WIKI 부제·지식 본문). 새 문서로 보낸다.
+  const LEGACY: Record<string, string> = { plan: '', domainmap: 'context', home: 'sessions', terminal: 'sessions', admin: 'settings', cli: 'commands', 'how-it-works': '' };
+  if (slug in LEGACY) { location.replace(LEGACY[slug] ? '#/learn/docs/' + LEGACY[slug] : '#/learn'); return; }
   const page = DOC_PAGES.find((p) => p.slug === slug);
   if (!page) { location.replace('#/learn'); return; }
   const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
@@ -281,10 +292,7 @@ async function renderLearnDocs(view, slug) {
     docsBody(md),
   ];
   if (slug === 'wiki') {
-    body.push(el('div', { class: 'guide-cards', style: 'margin-top:18px' },
-      // kindsCard(지식 한 덩어리)는 #1107 새 원고의 '문서 속성' 섹션이 흡수 — 중복이라 제거.
-      projectKnowledgeCard()  // 필요지식을 연결하면 뭐가 좋나 — #/learn/docs/wiki?focus=required 대상
-    ));
+    body.push(el('div', { class: 'guide-cards', style: 'margin-top:18px' }, projectKnowledgeCard()));   // #/learn/docs/wiki?focus=required 대상(프로젝트 '연결된 지식' 부제 링크)
   }
   docsShell(view, slug, ...body);
   // 프로젝트 '연결된 지식' 부제의 [자세히]로 들어오면 해당 카드로 스크롤 + 잠깐 강조(#317).
@@ -305,38 +313,37 @@ async function renderLearn(view) {
   // 구 딥링크 #/learn?focus=required(#317) — 필요지식 카드는 WIKI 문서 페이지로 이사했다.
   if (/[?&]focus=required(?:&|$)/.test(location.hash)) { location.replace('#/learn/docs/wiki?focus=required'); return; }
   const page = DOC_PAGES.find((p) => p.slug === 'overview');
-  // 다른 문서 페이지와 통일 — 상단에 아이브로(중분류)+docs-title(제목). 개요 md 는 h1(#) 이 없어 page.title 을 쓴다.
+  const md = page ? page.md.replace(/^#\s+.+\r?\n/, '') : '';   // 원고의 H1 은 docs-title 이 대신한다(다른 문서와 같은 규칙)
   docsShell(view, 'overview',
     docsEyebrow('overview'),
-    el('h1', { class: 'docs-title', text: page ? page.title : '라이블리 개요' }),
-    docsBody(page ? page.md : '', heroCard())); // 히어로 = 같은 카드 흐름의 첫 장(간격 통일)
+    el('h1', { class: 'docs-title', text: page ? page.title : '라이블리란' }),
+    docsBody(md, heroCard())); // 히어로 = 같은 카드 흐름의 첫 장(간격 통일)
 }
 
-// ── ① 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 작동 원리 3단계 ──
+// ── 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 하루의 순환 4단계. 개요 문서의 첫 카드. ──
+//  #1841: 모노캡 아이브로('LIVELY CONTEXT') 폐지 — 장식이지 정보가 아니었다. 제목·리드·순환·핵심 한 줄만.
 function heroCard() {
-  return el('div', { class: 'card guide-hero' },
-    el('div', { class: 'guide-hero-eyebrow', text: 'LIVELY CONTEXT' }),
+  return el('div', { class: 'card guide-hero lg-hero' },
     el('h2', { class: 'guide-hero-title' },
-      'Lively는 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 맥락 저장소' }), '예요.'),
-    el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 범용 지식은 풍부하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }),
-    // 4단계 순환(#780) — 일한 결과가 다시 ①로 쌓인다. 되돌아가는 레일(guide-loop)이 그 순환을 그린다.
+      '회사가 쓰는 AI 를 위한 ', el('span', { class: 'accent', text: '공용 맥락 저장소' }), '.'),
+    el('p', { class: 'guide-hero-lead', text: 'AI 는 세상 지식은 많지만 우리 회사가 무슨 일을 하는지, 어떤 규칙이 있는지, 지금 무엇이 진행 중인지는 모릅니다. 라이블리는 그 배경을 한곳에 모아 두고 구성원이 AI 를 켤 때마다 자동으로 건네줍니다 — 그래서 누가 켜든 회사를 이미 아는 상태에서 일이 시작됩니다.' }),
     el('div', { class: 'guide-cycle' },
       el('div', { class: 'guide-flow' },
-        flowStep('layers', '모아두기', '회사의 규칙·지식·할 일을 이곳에 정리해 둡니다.'),
+        flowStep('layers', '모아두기', '규칙·지식·진행 상황이 WIKI 와 프로젝트에 쌓입니다.'),
         flowArrow(),
-        flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'),
+        flowStep('send', '자동 전달', '세션을 켜면 그 내용이 AI 에게 먼저 들어갑니다.'),
         flowArrow(),
-        flowStep('zap', '바로 일 시작', 'AI가 회사 상황을 아는 상태로, 별도 설명 없이 바로 일을 시작합니다.'),
+        flowStep('zap', '바로 일 시작', '배경 설명 없이 한 줄만 시키면 됩니다.'),
         flowArrow(),
-        flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 기록합니다.')),
+        flowStep('save', '다시 쌓기', '결정·결과를 AI 가 지식으로 남깁니다.')),
       el('div', { class: 'guide-loop' },
         el('span', { class: 'guide-loop-label' },
           el('span', { class: 'guide-loop-key', 'aria-hidden': 'true', text: '↻' }),
-          el('b', { text: '남긴 지식은 다시 [모아두기]로' }),
-          el('span', { class: 'guide-loop-sub', text: '쓸수록 AI가 받는 맥락이 정확해집니다' })))),
+          el('b', { text: '남긴 지식은 다시 모아두기로' }),
+          el('span', { class: 'guide-loop-sub', text: '쓸수록 AI 가 받는 맥락이 정확해집니다' })))),
     el('div', { class: 'guide-remember' },
       el('span', { class: 'guide-remember-key', text: '핵심 한 줄' }),
-      el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사의 모든 AI 세션이 더 정확한 맥락을 받고 시작합니다.' })));
+      el('p', { text: '어디서 켜든 같습니다 — 라이블리 웹이든 내 터미널이든, 같은 회사 맥락이 들어갑니다.' })));
 }
 
 // 작동 3단계 — 아이콘 + 제목 + 한 줄.
@@ -371,6 +378,7 @@ function projectKnowledgeCard() {
 
 // 탭/단계 아이콘 — feather 스타일 라인 아이콘(taskmodal 의 sv 패턴 재사용). 무채 스트로크, currentColor 상속.
 const GUIDE_ICONS = {
+  external: [['path', { d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }], ['polyline', { points: '15 3 21 3 21 9' }], ['line', { x1: 10, y1: 14, x2: 21, y2: 3 }]],
   home: [['path', { d: 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' }], ['polyline', { points: '9 22 9 12 15 12 15 22' }]],
   'play-circle': [['circle', { cx: 12, cy: 12, r: 10 }], ['polygon', { points: '10 8 16 12 10 16 10 8' }]],
   terminal: [['polyline', { points: '4 17 10 11 4 5' }], ['line', { x1: 12, y1: 19, x2: 20, y2: 19 }]],
@@ -389,8 +397,8 @@ const GUIDE_ICONS = {
   save: [['path', { d: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' }],
     ['polyline', { points: '17 21 17 13 7 13 7 21' }], ['polyline', { points: '7 3 7 8 15 8' }]],
 };
-function tabIcon(name) {
-  const svg = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7,
+function tabIcon(name, cls?: string) {
+  const svg = sv('svg', { class: cls || null, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7,
     'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
   for (const [t, a] of (GUIDE_ICONS[name] || [])) svg.append(sv(t, a));
   return svg;

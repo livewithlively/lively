@@ -228,3 +228,35 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 @media (prefers-reduced-motion: reduce) { .docs-side a.docs-item, .md-tab-btn { transition: none; } }
 /* (:::tabs hue — 구 5색 스크린샷 구역과 연동하던 변형은 #1107 shot v2 전환으로 폐지) */
 
+
+/* ══ #1841 — 사용 가이드 재설정: 머리 3층(프로젝트 동형) + 본문 한 컬럼 ══
+ *  좌측 .docs-side 는 이 화면에서 더 쓰지 않는다(관리탭·증류기가 같은 CSS 를 쓰므로 규칙은 남긴다).
+ *  본문은 읽는 폭(≤ 960px)으로 가운데 — 표·카드가 넓은 화면에서 끝없이 늘어나 읽기 나빠지는 것을 막는다. */
+.lg-wrap { max-width: none; }
+.lg-board { margin-bottom: 18px; }
+.lg-crumb-leaf { display: inline-flex; align-items: center; gap: 7px; }
+.lg-crumb-ic { width: 17px; height: 17px; color: var(--ink-sub); flex: none; }
+.lg-crumb-sub { font-size: 12.5px; color: var(--muted); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lg-vtabs { gap: 0; }
+.lg-vtab { text-decoration: none; padding: 9px 12px 10px; }
+.lg-vtab-label { white-space: nowrap; }
+.lg-board .pjv-board-toolbar { min-height: 42px; padding-top: 4px; }
+.lg-pill { text-decoration: none; }
+.lg-pill:not(.active) { color: var(--ink-sub); }
+.lg-tb-open .pjv-tb-ic { width: 16px; height: 16px; }
+.lg-body { padding: 14px 0 36px; }
+.lg-article { max-width: 960px; margin: 0 auto; width: 100%; }
+.lg-article .docs-eyebrow { display: none; }              /* 묶음 이름은 탭이 이미 말한다 */
+.lg-article .docs-title { margin: 6px 0 10px; font-size: 26px; letter-spacing: -.4px; }
+.lg-article .docs-lead { max-width: 760px; }
+.lg-article .docs-card { padding: 22px 24px; }
+.lg-article .docs-card .card-head h2 { font-size: 17px; letter-spacing: -.2px; }
+.lg-article .md-shot { margin: 10px 0 4px; }
+/* 문서 끝 '다음 문서' 이동 카드 */
+.lg-next { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.lg-next a { flex: 1 1 260px; display: flex; flex-direction: column; gap: 3px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: inherit; text-decoration: none; }
+.lg-next a:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.lg-next-k { font-size: 11.5px; color: var(--muted-head); }
+.lg-next-t { font-size: 14px; font-weight: 700; color: var(--ink); }
+.lg-next-d { font-size: 12.5px; color: var(--ink-sub); }
+@media (max-width: 960px) { .lg-crumb-sub { display: none; } .lg-article { max-width: none; } }
