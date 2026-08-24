@@ -784,7 +784,7 @@ function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add
 const KEY = 'lively-ob-v2';
 const fresh = () => ({
   scene: 'name', name: '', nameSet: false, stage: null, job: null,
-  sources: [], connected: [], ai: null, aiConnected: false, terminal: null,
+  sources: [], connected: [], ai: null, aiConnected: false, terminal: null, app: null,
   read: { total: 0, done: 0, finished: false }, drawersOn: false,
   b2: null, b3: null, nowline: null, decisions: [], notes: [],
   chatDone: [],           // 막3에서 끝난 단계들
@@ -842,6 +842,7 @@ function sbHTML() {
     : ssRow('busy', '자료 읽는 중', `${S.read.done}/${S.read.total}`));
   if (S.ai && S.ai !== '아직 없어요') rows.push(ssRow(S.aiConnected ? 'done' : 'wait', `${esc(S.ai)} ${S.aiConnected ? '연결됨' : '연결 대기'}`));
   if (S.terminal === 'yes') rows.push(ssRow('done', '내 컴퓨터 노드 연결'));
+  if (S.app === 'yes') rows.push(ssRow('done', '데스크톱 앱 받음'));
   if (S.chatDone.includes('b1')) rows.push(ssRow('done', '자료함 7갈래로 나눔'));
   if (S.chatDone.includes('can')) rows.push(ssRow(S.scene === 'done' ? 'done' : 'busy', '첫 지시 준비'));
   /* '자료함' 카드 — b1 확인 때 태어나고, 읽기 진행에 따라 숫자가 오른다 */
@@ -872,10 +873,10 @@ function sbHTML() {
 function renderSB() { $('#sb').innerHTML = sbHTML(); }
 
 /* ══════════════ 장면 차례 ══════════════ */
-const ORDER = ['name', 'stage', 'role', 'sources', 'upload', 'ai', 'claude', 'terminal', 'read', 'b1', 'b2', 'b3', 'nowline', 'can', 'done'];
+const ORDER = ['name', 'stage', 'role', 'sources', 'upload', 'ai', 'claude', 'terminal', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can', 'done'];
 const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
 const CHAT_FROM = STEP_OF.read;          // 여기부터 막3(채팅)
-const QPROG = ['stage', 'role', 'sources', 'upload', 'ai', 'claude', 'terminal'];   // 막2 진행 눈금
+const QPROG = ['stage', 'role', 'sources', 'upload', 'ai', 'claude', 'terminal', 'app'];   // 막2 진행 눈금
 
 /* ── 막1·막2: 가운데 질문 기둥 ── */
 function qHead(prog, lead, title, help) {
@@ -1049,8 +1050,26 @@ const SCENES = {
         <button class="btn btn-pri" id="tYes">네, 씁니다</button>
         <button class="btn btn-sub" id="tNo">아니요</button>`,
     bind: (el) => {
-      $('#tYes', el).onclick = () => { S.terminal = 'yes'; S.decisions.push('내 컴퓨터 노드 연결 — 터미널의 Claude Code에도 같은 자료'); save(); renderSB(); toast('홈에서 한 줄 설치를 안내할게요 — lively node --daemon'); goScene('read'); };
-      $('#tNo', el).onclick = () => { S.terminal = 'no'; save(); goScene('read'); };
+      $('#tYes', el).onclick = () => { S.terminal = 'yes'; S.decisions.push('내 컴퓨터 노드 연결 — 터미널의 Claude Code에도 같은 자료'); save(); renderSB(); toast('홈에서 한 줄 설치를 안내할게요 — lively node --daemon'); goScene('app'); };
+      $('#tNo', el).onclick = () => { S.terminal = 'no'; save(); goScene('app'); };
+    },
+  },
+  /* 노션 p4 '앱 유도' 그대로의 자리 — 질문이 끝나고 채팅(컨설팅)에 들어가기 직전. [새문구] 전체 */
+  app: {
+    html: () => qHead('app',
+      S.terminal === 'yes' ? '터미널 연결까지 받아 뒀어요. 마지막으로 하나 권해 드릴게요.' : '마지막으로 하나 권해 드릴게요.',
+      '라이블리 앱을 받아 두시면 더 편해요.',
+      '웹으로도 전부 됩니다 — 앱은 이런 게 더해져요.')
+      + `<div class="benefits">
+          <p class="benefit">⚡ 더 빠르게 열리고, 로그인이 유지돼요</p>
+          <p class="benefit">🔔 리브가 확인이 필요할 때 바로 알려 드려요</p>
+          <p class="benefit">🖥️ 터미널·미리보기까지 한 화면에서 봅니다</p>
+        </div>
+        <button class="btn btn-pri" id="appGet">앱 받기</button>
+        <button class="btn btn-sub" id="appSkip">지금은 웹으로 할게요</button>`,
+    bind: (el) => {
+      $('#appGet', el).onclick = () => { S.app = 'yes'; S.decisions.push('데스크톱 앱 받기'); save(); renderSB(); toast('실제 서비스에서는 여기서 내려받기가 시작됩니다.'); goScene('read'); };
+      $('#appSkip', el).onclick = () => { S.app = 'web'; save(); goScene('read'); };
     },
   },
 };
@@ -1236,7 +1255,7 @@ function replayChatTo(key, token) {
   if (!S.sources.length) S.sources = ['gdrive', 'notion'];
   if (!S.connected.length) S.connected = S.sources.filter((x) => x !== 'none');
   S.ai = S.ai || 'Claude'; S.aiConnected = S.ai !== '아직 없어요';
-  S.terminal = S.terminal || 'no';
+  S.terminal = S.terminal || 'no'; S.app = S.app || 'web';
   if (!S.read.total) S.read.total = 41;
   const past = [];
   const target = key === 'read' ? 'b1' : key;
@@ -1260,7 +1279,7 @@ function replayChatTo(key, token) {
 
 /* ══════════════ 프로토타입 컨트롤 ══════════════ */
 const TOUR = [['name', '이름'], ['stage', '무대'], ['role', '직무'], ['sources', '자료 위치'], ['upload', '자료 넘기기'],
-  ['ai', 'AI 고르기'], ['claude', 'AI 연결'], ['terminal', '터미널'], ['read', '채팅 시작·읽기'],
+  ['ai', 'AI 고르기'], ['claude', 'AI 연결'], ['terminal', '터미널'], ['app', '앱 받기'], ['read', '채팅 시작·읽기'],
   ['b1', '되묻기1 갈래'], ['b2', '되묻기2 주기'], ['b3', '되묻기3 협업'], ['nowline', '되묻기4 시간'],
   ['can', '시킬 수 있는 일'], ['done', '마무리']];
 function renderProto() {
