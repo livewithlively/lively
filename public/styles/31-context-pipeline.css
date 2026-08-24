@@ -390,3 +390,62 @@ a.ctx-preview-t:hover { color: var(--blue); }
 
 @media (max-width: 960px) { .ctx-crumb-sub { display: none; } }
 @media (max-width: 720px) { .ctx-vtab-label { font-size: 13px; } .ctx-vtab { padding: 9px 7px 10px; } }
+
+/* ══ #1841 — 맥락 관리 첫 화면(현황). 지표가 아니라 '아는 것 + 할 일'을 말한다 ══ */
+.cxh { display: flex; flex-direction: column; gap: 30px; max-width: 1080px; padding: 6px 0 40px; }
+.cxh-sec { display: flex; flex-direction: column; gap: 12px; }
+.cxh-h { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); display: flex; align-items: center; gap: 7px; }
+.cxh-h-n { font-size: 12px; font-weight: 800; color: var(--on-fill); background: var(--coral); border-radius: 999px; padding: 1px 8px; }
+
+/* 아는 것 — 큰 숫자 셋 */
+.cxh-know { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.cxh-know-card { display: flex; flex-direction: column; gap: 2px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); text-decoration: none; color: inherit; }
+.cxh-know-card:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.cxh-know-n { font-size: 30px; font-weight: 800; letter-spacing: -1px; color: var(--ink); line-height: 1.1; font-variant-numeric: tabular-nums; }
+.cxh-know-l { font-size: 13.5px; font-weight: 700; color: var(--ink-sub); }
+.cxh-know-s { font-size: 12px; color: var(--muted-head); line-height: 1.45; }
+
+/* 할 일 — 막힌 것만. 색은 심각도에만 쓴다(§0.5 컬러 예산). */
+.cxh-todos { display: flex; flex-direction: column; gap: 8px; }
+.cxh-todo { display: flex; align-items: center; gap: 16px; padding: 14px 16px 14px 18px; border: 1px solid var(--line); border-left: 3px solid var(--muted-2); border-radius: 12px; background: var(--surface); }
+.cxh-todo.is-off { border-left-color: var(--coral); }
+.cxh-todo.is-warn { border-left-color: var(--warn); }
+.cxh-todo.is-note { border-left-color: var(--node-blue-soft); }
+.cxh-todo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cxh-todo-t { font-size: 14px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
+.cxh-todo-l { margin: 0; font-size: 13px; color: var(--ink-sub); line-height: 1.5; }
+.cxh-todo .btn { flex: none; }
+.cxh-allok { display: flex; flex-direction: column; gap: 3px; padding: 18px 20px; border: 1px solid var(--ok-line); border-radius: 12px; background: var(--ok-bg); }
+.cxh-allok b { font-size: 14px; color: var(--mint-deep); }
+.cxh-allok span { font-size: 13px; color: var(--ink-sub); }
+
+/* 흐름 네 칸 — 자료가 AI 에 닿기까지. 칸을 누르면 그 탭. */
+.cxh-flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; align-items: stretch; gap: 0; }
+.cxh-step { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-decoration: none; color: inherit; min-width: 0; }
+.cxh-step:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.cxh-step-n { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; border-radius: 999px; border: 1.5px solid var(--line-net-2); color: var(--ink-sub); font-size: 11px; font-weight: 800; box-sizing: border-box; }
+.cxh-step-l { font-size: 13.5px; font-weight: 700; color: var(--ink); margin-top: 4px; }
+.cxh-step-v { font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -.4px; font-variant-numeric: tabular-nums; }
+.cxh-step-vl { font-size: 11.5px; color: var(--muted-head); }
+.cxh-step-dot { position: absolute; top: 14px; right: 14px; width: 7px; height: 7px; border-radius: 999px; background: var(--mint); }
+.cxh-step.is-note .cxh-step-dot { background: var(--node-blue-soft); }
+.cxh-step.is-warn .cxh-step-dot { background: var(--warn); }
+.cxh-step.is-off .cxh-step-dot { background: var(--coral); }
+.cxh-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 0 10px; min-width: 72px; }
+.cxh-arrow-l { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.cxh-arrow-a { font-size: 14px; color: var(--muted-2); }
+
+/* 자동 실행 — '설정했다'와 '돌고 있다'는 다르다 */
+.cxh-jobs { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); }
+.cxh-jobs-t { font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.cxh-job { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted-head); }
+.cxh-job b { color: var(--ink); font-weight: 700; }
+.cxh-job-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--mint); flex: none; }
+.cxh-job.is-off .cxh-job-dot { background: var(--muted-2); }
+.cxh-job.is-off b { color: var(--ink-sub); }
+
+@media (max-width: 900px) {
+  .cxh-know { grid-template-columns: 1fr; }
+  .cxh-flow { grid-template-columns: 1fr 1fr; }
+  .cxh-arrow { display: none; }
+}

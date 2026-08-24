@@ -16,6 +16,7 @@ import { renderLearn, renderLearnDocs, renderLearnTour, renderOnboarding } from 
 import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 웹뷰(#905 C1 이어보기)
+import { renderPreviewPage } from './admin-preview.js'; // #/preview — 미리보기 갤러리(#1841 앱 독립)
 import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
@@ -188,6 +189,11 @@ async function route() {
       // #/sessions — 세션이력 웹뷰(#905 C1 이어보기). 내 세션 목록 + 트랜스크립트 회수(렌더).
       setActiveTab('sessions');
       await renderSessions(view);
+    } else if (page === 'preview') {
+      // #/preview — 미리보기 갤러리(#1841). 설정 안 섹션이던 것을 독립 화면으로 꺼냈다 — 새 셸 런치패드의
+      //  [미리보기] 앱이 이 해시를 프레임에 싣는다. 클래식 단독으로 열려도 어느 상단 탭 소속도 아니다.
+      setActiveTab('');
+      await renderPreviewPage(view);
     } else if (page === 'install') {
       // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).
       location.replace('#/learn/install');
@@ -195,19 +201,19 @@ async function route() {
     } else if (page === 'domainmap') {
       // #1153 — '도메인 맵' 탭이 '분류체계'가 됐고, #1419 에서 다시 '맥락 관리'로 넓어졌다.
       //  구 딥링크·북마크는 두 단계를 건너뛰어 최종 자리로 보낸다(중간 리다이렉트 체인 금지 — 히스토리가 지저분해진다).
-      location.replace('#/context/classify');
+      location.replace('#/context/topics');
       return;
     } else if (page === 'categories') {
       // #1419 T6 — 분류체계 탭이 [맥락 관리]의 '분류' 단계로 흡수됐다. 구 URL 은 그 자리로 보낸다.
       //  ⚠ 전체페이지 renderCategories 는 남겨 둔다(직접 링크·문서에서 쓰일 수 있고, 본문 구현은 공유한다).
-      location.replace('#/context/classify');
+      location.replace('#/context/topics');
       return;
     } else if (page === 'context') {
       setActiveTab('context'); // 맥락 관리 — 수집→증류→분류→관리 파이프라인(index.html data-tab="context")
-      // 증류기 설정(#/context/distill/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
+      // 증류기 설정(#/context/knowledge/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
       //  라우트를 세분화해 CSS 가 그 페이지에서만 캡을 풀게 한다 — 목록은 종전 본문 컬럼 그대로여야
       //  탭을 오갈 때 폭이 출렁이지 않는다(projects2 가 상세/보드를 가르는 것과 같은 수법).
-      //  ⚠ 세그먼트 3개짜리 URL 이 전부 증류기 상세는 아니다(#1584 — #/context/distill/ingest-policy 는
+      //  ⚠ 세그먼트 3개짜리 URL 이 전부 증류기 상세는 아니다(#1584 — #/context/knowledge/ingest-policy 는
       //   증류 단계의 한 화면이다). 판정은 화면 표를 가진 context.ts 한 곳에서만 한다.
       if (isDistillerDetailPath(segs[1], segs[2])) document.body.dataset.route = 'context-distiller';
       await renderContext(view!, segs[1] || null, segs[2] || null);

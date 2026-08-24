@@ -25,7 +25,8 @@
 import { api, el, hasScope, sv } from './core.js';
 import { sectionHead } from './admin-widgets.js';
 import { skeleton } from './ui-primitives.js';
-import { renderPipeline, stageHealthLevels } from './context-pipeline.js';
+import { stageHealthLevels } from './context-pipeline.js';
+import { renderContextHome } from './context-home.js'; // #1841 새 첫 화면 — 아는 것 + 할 일
 import { renderCollectors } from './context-collectors.js';
 import { renderClassifiers } from './context-classify.js';
 import { renderFindings, renderManagers } from './context-manage.js';
@@ -49,91 +50,85 @@ async function adminData() {
     }
 }
 /**
- * 정보구조 표 — 단계(그룹) ▸ 화면(항목). URL 은 `#/context/<stage>/<item>`.
+ * 정보구조(#1841 전면 재설계, 2026-08-24) — **사람이 하는 일** 단위의 탭 ▸ 그 안의 화면. URL 은 `#/context/<tab>/<item>`.
  *
- * ⚠ 왜 이 단계들 안에 설정이 모여 있나(어니스트 실박스 지적, #1419): 파이프라인 단계에 속한 설정이
- *  [설정] 탭에도 남아 있으면 입구가 둘이 되고, 무엇보다 **그 단계를 보면서 앞뒤를 못 본다**. 수집기를
- *  고치다 '수집 방식'을 정의하려고 다른 탭으로 나가야 했고, 자료 공개범위는 수집 지점(mirror INSERT)에
- *  걸리는데 [설정 ▸ AI 맥락]에 있었다. 지식 검토 정책도 증류 산출물이 통과하는 밸브다.
- *  옛 URL 은 admin-shell 의 SECTION_EXIT 가 여기로 넘긴다(북마크 보존).
+ * ⚠ 왜 갈아엎었나: 원준 지적 "사용자 입장에서 뭐하는건지 감이 안 옴". 옛 구조는 파이프라인 **부품 이름**
+ *  (수집기·증류기·분류기·관리기·주입)으로 5단계 13화면을 늘어놓았다. 부품 이름은 만든 사람의 언어지 쓰는 사람의 언어가 아니다
+ *  — "증류기가 없습니다"를 읽고도 그게 나쁜 상태인지, 뭘 해야 하는지 알 수 없었다.
+ *  새 구조의 규칙 셋:
+ *   ① 탭 이름은 **하는 일**이다(가져오는 곳 · 지식 만들기 · 갈래 · 점검 · AI 에 전달).
+ *   ② 첫 화면(현황)은 지표가 아니라 **아는 것 + 할 일**을 말한다(context-home).
+ *   ③ 기계 이름은 화면 안에서 필요할 때만 쓰고, 항목 알약은 그 화면에서 **정하는 것**으로 이름 붙인다.
+ *  기능은 하나도 버리지 않았다 — 13화면의 패널을 그대로 부르고, 옛 URL 은 아래 LEGACY 표가 새 자리로 넘긴다.
  */
 const STAGES = [
     {
-        key: 'overview', label: '개요', solo: true,
-        items: [{
-                key: 'overview', label: '개요',
-                head: { title: '개요', hint: '수집부터 관리까지 흐름 전체를 한눈에 보고, 막힌 곳을 찾습니다.' },
-                draw: (b) => renderPipeline(b),
-            }],
+        key: 'home', label: '현황', solo: true,
+        hint: '우리 AI 가 무엇을 알고, 지금 무엇이 막혀 있나',
+        items: [{ key: 'home', label: '현황', draw: (b) => renderContextHome(b) }],
     },
     {
-        key: 'collect', label: '수집', step: 1, adminEdit: true,
+        key: 'sources', label: '가져오는 곳', adminEdit: true,
+        hint: '슬랙·노션 같은 도구에서 무엇을 가져올지 — 자료가 여기서 들어옵니다',
         items: [
-            { key: 'collectors', label: '수집기', head: { title: '수집기' }, draw: (b) => renderCollectors(b) },
-            // 수집 '방식'(프리셋) — 수집기와 다른 객체다(틀 vs 인스턴스). 드물게 정의하지만 수집기 화면이
-            //  가리키는 자리라, 나가지 않고 이 안에서 정의할 수 있어야 한다.
-            { key: 'presets', label: '수집 방식', draw: (b) => collectorPresetEditor(b) },
-            // 자료 공개범위 — match_system(+채널)으로 매칭해 **자료가 태어날 때** 공개범위를 새긴다(#1291 v4).
-            //  생산 지점이 곧 수집이라 여기 있는 게 맞다.
-            { key: 'source-vis', label: '자료 공개범위', draw: async (b) => { await sourceVisPolicyPanel(b); } },
+            { key: 'collectors', label: '연결', draw: (b) => renderCollectors(b) },
+            // 수집 '방식'(프리셋) — 연결이 고를 수 있는 틀. 드물게 정의하지만 연결 화면이 가리키는 자리라 같은 탭에 둔다.
+            { key: 'presets', label: '새 소스 만들기', draw: (b) => collectorPresetEditor(b) },
+            // 자료 공개범위 — 자료가 **태어날 때** 공개범위를 새긴다(#1291 v4). 서버가 GET 부터 admin 이라 adminOnly.
+            { key: 'source-vis', label: '자료를 볼 사람', adminOnly: true, draw: async (b) => { await sourceVisPolicyPanel(b); } },
         ],
     },
     {
-        key: 'distill', label: '증류', step: 2,
+        key: 'knowledge', label: '지식 만들기',
+        hint: '들어온 자료 중 무엇을 어떤 형식의 지식으로 남길지',
         items: [
-            { key: 'distillers', label: '증류기', draw: async (b) => { await distillersPanel(b, await adminData()); } },
-            // 지식 검토 정책 — 증류가 만든 지식이 통과하는 밸브(#638). 생산 라인 바로 뒤가 제자리다.
-            { key: 'ingest-policy', label: '지식 검토 정책', draw: async (b) => { await ingestPolicyPanel(b, await adminData()); } },
+            { key: 'distillers', label: '만드는 기준', draw: async (b) => { await distillersPanel(b, await adminData()); } },
+            // 지식 검토 정책 — 만들어진 지식이 통과하는 밸브(#638). 만드는 기준 바로 뒤가 제자리다.
+            { key: 'ingest-policy', label: '사람 확인', draw: async (b) => { await ingestPolicyPanel(b, await adminData()); } },
         ],
     },
     {
-        key: 'classify', label: '분류', step: 3,
+        key: 'topics', label: '갈래',
+        hint: '지식을 어떤 갈래로 나눌지 — 갈래가 없으면 AI 가 검색해도 안 나옵니다',
         items: [
-            { key: 'classifiers', label: '분류기', head: { title: '분류기' }, draw: (b) => renderClassifiers(b) },
-            { key: 'categories', label: '분류축', head: { title: '분류축' }, draw: (b) => renderCategoryList(b) },
+            // 갈래 정의가 먼저다 — 배정 규칙은 이 정의를 기준으로 판단한다(정의가 비면 기준도 없다).
+            { key: 'categories', label: '갈래 정하기', draw: (b) => renderCategoryList(b) },
+            { key: 'classifiers', label: '자동 배정', draw: (b) => renderClassifiers(b) },
         ],
     },
     {
-        key: 'manage', label: '관리', step: 4,
+        key: 'checks', label: '점검',
+        hint: '쌓인 지식이 낡거나 어긋나지 않게 — 찾아낸 것을 확인하고 고칩니다',
         items: [
-            { key: 'findings', label: '발견', head: { title: '발견' }, draw: (b) => renderFindings(b) },
-            { key: 'managers', label: '관리기', head: { title: '관리기' }, draw: (b) => renderManagers(b) },
+            // 발견이 먼저 — 여기 오는 사람 대부분은 설정을 바꾸러가 아니라 쌓인 것을 처리하러 온다.
+            { key: 'findings', label: '확인할 것', draw: (b) => renderFindings(b) },
+            { key: 'managers', label: '검사 규칙', draw: (b) => renderManagers(b) },
         ],
     },
-    // ── 5단계 전달(#1618) — 설정탭 'AI 맥락' 그룹 3화면을 여기로 옮겼다. ─────────────────────────
-    //  왜 5단계인가: 1~4 는 '자료를 쓸 만한 지식으로 만드는' 생산 라인이고, 이 셋은 **그 지식이 실제로
-    //   AI 에게 닿는 경로**다 — 항상 주입되는 것(세션 주입) · 필요할 때 찾아지는 것(의미 검색) · 누구에게
-    //   닿는지(공개범위). 라인이 아무리 잘 돌아도 이 단계가 비면 AI 는 그 지식을 못 쓴다. 실제로 임베딩
-    //   기본값이 off 라, 새 조직은 의미 검색이 꺼진 채 출발하는데 knowledge_search 는 실패하지 않고
-    //   조용히 단어 일치로 폴백한다 — 이 자리가 없으면 그 사실을 알 방법이 없었다.
-    //  왜 옮겼나: 맥락 화면이 두 탭에 갈려 있었다. 이 탭의 존재 이유가 '단계를 보면서 앞뒤를 함께 보는 것'
-    //   인데(위 STAGES 주석), 정작 맥락이 AI 에 닿는 마지막 구간만 다른 탭에 있었다. 복제가 아니라 이관이다
-    //   — 관리탭의 같은 패널을 그대로 부르고(코드 복제 0), 옛 URL 은 admin-shell 의 SECTION_EXIT 가 여기로 넘긴다.
     {
-        key: 'deliver', label: '전달', step: 5, adminEdit: true,
+        key: 'deliver', label: 'AI 에 전달', adminEdit: true,
+        hint: '쌓인 지식이 실제로 AI 에 닿는 마지막 구간',
         items: [
-            // 세션 주입 — 매 세션 항상 들어가는 조직 정체성(org-defaults 등 injection='always').
-            //  구 [설정]에서도 ADMIN_ONLY 가 아니었다(전 구성원이 무엇이 주입되는지 볼 수 있어야 한다) → 그대로.
-            { key: 'injection', label: '세션 주입', draw: async (b) => { await injectionMap(b, await adminData()); } },
-            // 의미 검색 — 임베딩 provider·백필. 기본 off(뜻으로 찾기가 꺼진 상태). 서버가 GET 부터 admin.
-            { key: 'embeddings', label: '의미 검색', adminOnly: true, draw: async (b) => { await embeddingsEditor(b, await adminData()); } },
-            // 공개범위 — 어떤 유형에 공개범위 축을 쓸지. 자료 축은 이미 [수집 ▸ 자료 공개범위]에 있다(생산 지점).
-            //  누가 무엇을 볼 수 있는지를 정하는 보안 경계라 구 [설정]에서도 ADMIN_ONLY 였다 → 그대로.
-            { key: 'visibility', label: '공개범위', adminOnly: true, draw: async (b) => { await visibilityAxesPanel(b); } },
+            { key: 'injection', label: '매번 읽는 것', draw: async (b) => { await injectionMap(b, await adminData()); } },
+            { key: 'embeddings', label: '뜻으로 찾기', adminOnly: true, draw: async (b) => { await embeddingsEditor(b, await adminData()); } },
+            { key: 'visibility', label: '공개 범위', adminOnly: true, draw: async (b) => { await visibilityAxesPanel(b); } },
         ],
     },
 ];
+/** 옛 주소(단계 이름) → 새 자리. 북마크·문서·화면 안 링크가 살아 있어야 한다. */
+const LEGACY_STAGE = { overview: 'home', collect: 'sources', distill: 'knowledge', classify: 'topics', manage: 'checks', deliver: 'deliver' };
+const LEGACY_ITEM = { overview: 'home' };
 /**
- * `#/context/distill/<sub2>` 가 **증류기 설정 페이지**를 가리키나(#1564).
+ * `#/context/knowledge/<sub2>` 가 **증류기 설정 페이지**를 가리키나(#1564).
  *  증류 단계의 화면 키('distillers'·'ingest-policy')가 아니면 증류기 식별자로 읽는다 — 그 URL 은
  *  이 셸 밖의 전용 페이지라 라우터도 레이아웃(전폭)을 달리 잡아야 해서, 판정을 여기 한 곳에 둔다.
  *  (증류기 key 가 하필 화면 키와 같으면 목록이 뜬다. 서버가 막지는 않지만 실사용에서 겹칠 이름이 아니고,
  *   겹쳐도 잃는 것은 딥링크 하나뿐이라 URL 을 한 단 더 깊게 만드는 비용보다 싸다.)
  */
 export function isDistillerDetailPath(sub, sub2) {
-    if (sub !== 'distill' || !sub2)
-        return false;
-    const stage = STAGES.find((s) => s.key === 'distill');
+    if ((sub !== 'knowledge' && sub !== 'distill') || !sub2)
+        return false; // 'distill' 은 옛 주소(#1841 이전)
+    const stage = STAGES.find((s) => s.key === 'knowledge');
     return !stage.items.some((i) => i.key === sub2);
 }
 export async function renderContext(view, sub, sub2) {
@@ -142,6 +137,12 @@ export async function renderContext(view, sub, sub2) {
     //  대신 그 페이지의 크럼이 '맥락 관리 › 증류'라는 위치 정보를 대신 진다.
     if (isDistillerDetailPath(sub, sub2)) {
         await distillerPage(view, String(sub2));
+        return;
+    }
+    // 옛 주소(단계 이름)로 들어오면 새 자리로 조용히 옮긴다 — 북마크·문서·화면 안 링크 보존.
+    if (sub && !STAGES.some((s) => s.key === sub) && LEGACY_STAGE[sub]) {
+        const it = sub2 ? (LEGACY_ITEM[sub2] || sub2) : '';
+        location.replace('#/context/' + LEGACY_STAGE[sub] + (it ? '/' + it : ''));
         return;
     }
     const stage = STAGES.find((s) => s.key === sub) ?? STAGES[0];
@@ -177,24 +178,22 @@ export async function renderContext(view, sub, sub2) {
  *  개요는 단계가 아니라 전체 조망이라 맨 앞에 떨어져 선다(흐름 화살 없이). 관리자 편집 단계는 자물쇠 배지.
  */
 function buildHeader(selStage, selItem) {
-    const crumbBar = el('div', { class: 'pjv-crumbbar' }, el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' }, el('span', { class: 'pjv-crumb is-leaf ctx-crumb-leaf' }, ctxAppIcon(), el('span', { class: 'pjv-crumb-label', text: '맥락 관리' })), el('span', { class: 'ctx-crumb-sub', text: '자료가 지식이 되어 AI 에 닿는 길 — 수집 › 증류 › 분류 › 관리 › 전달' })));
-    const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': '파이프라인 단계' });
+    const crumbBar = el('div', { class: 'pjv-crumbbar' }, el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' }, el('span', { class: 'pjv-crumb is-leaf ctx-crumb-leaf' }, ctxAppIcon(), el('span', { class: 'pjv-crumb-label', text: '맥락 관리' })), el('span', { class: 'ctx-crumb-sub', text: selStage.hint })));
+    const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': '맥락 관리' });
     for (const s of STAGES) {
         const on = s.key === selStage.key;
         const first = s.items.filter((i) => !i.adminOnly || hasScope('admin'))[0] || s.items[0];
-        if (s.step && s.step > 1)
-            tabs.append(el('span', { class: 'ctx-vtab-flow', 'aria-hidden': 'true', text: '›' }));
         const tab = el('a', {
             class: 'pjv-vtab ctx-vtab' + (on ? ' active' : '') + (s.solo ? ' ctx-vtab-ov' : ''),
             href: s.solo ? '#/context/' + s.key : '#/context/' + s.key + '/' + first.key,
             role: 'tab', 'aria-selected': String(on), 'data-stage': s.key,
-            title: s.adminEdit ? s.label + ' — 보는 것은 모든 구성원, 만들고 고치는 것은 관리자' : s.label,
-        }, s.step ? el('span', { class: 'ctx-vtab-step', 'aria-hidden': 'true', text: String(s.step) }) : ctxFlowIcon(), el('span', { class: 'ctx-vtab-label', text: s.label }), s.step && s.step <= 4 ? el('span', { class: 'ctx-vtab-dot', 'aria-hidden': 'true' }) : null, s.adminEdit ? el('span', { class: 'ctx-vtab-lock', 'aria-hidden': 'true', title: '관리자만 고칠 수 있습니다' }, ctxLockIcon()) : null);
+            title: s.hint + (s.adminEdit ? ' — 보는 것은 모든 구성원, 만들고 고치는 것은 관리자' : ''),
+        }, el('span', { class: 'ctx-vtab-label', text: s.label }), 
+        // 건강 점은 '지금 문제가 있는 탭'에만 붙는다(paintStageHealth 가 ok 면 지운다) — 늘 켜진 점은 신호가 아니라 장식이다.
+        HEALTH_TAB[s.key] ? el('span', { class: 'ctx-vtab-dot', 'aria-hidden': 'true' }) : null, s.adminEdit ? el('span', { class: 'ctx-vtab-lock', 'aria-hidden': 'true', title: '관리자만 고칠 수 있습니다' }, ctxLockIcon()) : null);
         tabs.append(tab);
-        if (s.solo)
-            tabs.append(el('span', { class: 'pjv-vtab-sep', 'aria-hidden': 'true' })); // 개요 | ①›②›③›④›⑤ — 조망과 흐름을 한 칸 띄운다
     }
-    // 툴바 좌측 — 이 단계의 화면들(알약). 개요는 화면이 하나뿐이라 알약을 세우지 않는다.
+    // 툴바 좌측 — 이 탭에서 정하는 것들(알약). 현황은 화면이 하나뿐이라 알약을 세우지 않는다.
     const left = el('div', { class: 'pjv-tasks-head-left' });
     if (!selStage.solo) {
         for (const it of selStage.items) {
@@ -205,11 +204,14 @@ function buildHeader(selStage, selItem) {
         }
     }
     const right = el('div', { class: 'card-head-actions' });
-    // 개요는 화면 알약도 우측 동작도 없으니 툴바 층을 아예 세우지 않는다(주기 설정 → 은 본문 '자동 실행' 줄에 이미 있다).
     const toolbar = selStage.solo ? null : el('div', { class: 'card-head pjv-board-toolbar' }, left, right);
     return el('div', { class: 'pjv-board-header ctx-board-header' }, crumbBar, tabs, toolbar);
 }
-/** 단계 탭의 건강 점 — 개요 카드와 같은 판정(stageHealthLevels)으로 칠한다. 머리는 먼저 뜨고 점은 뒤따라 들어온다. */
+/** 건강 점을 붙일 수 있는 탭 — 파이프라인 4단계에 대응하는 탭만(현황·AI 에 전달은 판정이 없다). */
+const HEALTH_TAB = {
+    sources: 'collect', knowledge: 'distill', topics: 'classify', checks: 'manage',
+};
+/** 탭의 건강 점 — 개요 카드와 같은 판정(stageHealthLevels). **ok 면 점을 지운다** — 문제 있는 탭만 눈에 띄어야 한다. */
 async function paintStageHealth(view) {
     let d;
     try {
@@ -219,23 +221,22 @@ async function paintStageHealth(view) {
         return;
     }
     const lv = stageHealthLevels(d);
-    const map = { collect: lv.collect, distill: lv.distill, classify: lv.classify, manage: lv.manage };
-    for (const [key, level] of Object.entries(map)) {
-        const dotEl = view.querySelector('.ctx-vtab[data-stage="' + key + '"] .ctx-vtab-dot');
+    for (const [tabKey, stageKey] of Object.entries(HEALTH_TAB)) {
+        const dotEl = view.querySelector('.ctx-vtab[data-stage="' + tabKey + '"] .ctx-vtab-dot');
         if (!dotEl || !dotEl.isConnected)
             continue;
+        const level = lv[stageKey];
+        if (level === 'ok') {
+            dotEl.remove();
+            continue;
+        }
         dotEl.classList.add('is-' + level);
-        dotEl.title = level === 'ok' ? '정상' : level === 'note' ? '참고' : level === 'warn' ? '확인 필요' : '멈춤';
+        dotEl.title = level === 'note' ? '살펴볼 것이 있습니다' : level === 'warn' ? '확인이 필요합니다' : '멈춰 있습니다';
     }
 }
 function ctxAppIcon() {
     const n = sv('svg', { class: 'pjv-crumb-ic ctx-crumb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
     n.append(sv('path', { d: 'M4 5h16l-6.2 7.2V18l-3.6 2v-7.8z' })); // 깔때기 — 런치패드 유리 아이콘과 같은 형태(맥락 관리 = 수집·증류·분류)
-    return n;
-}
-function ctxFlowIcon() {
-    const n = sv('svg', { class: 'ctx-vtab-ov-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
-    n.append(sv('path', { d: 'M6.4 12h3.2M14.4 12h3.2', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round', opacity: '0.6' }), sv('circle', { cx: '4', cy: '12', r: '2.6', fill: 'currentColor' }), sv('circle', { cx: '12', cy: '12', r: '2.6', fill: 'currentColor', opacity: '0.85' }), sv('circle', { cx: '20', cy: '12', r: '2.6', fill: 'currentColor', opacity: '0.7' }));
     return n;
 }
 function ctxLockIcon() {

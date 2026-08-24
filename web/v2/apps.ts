@@ -15,7 +15,7 @@ export interface AppDef {
   desc: string;       // 한 줄
   route: string;      // 클래식 해시(#/ 뒤) — iframe 에 실릴 경로
   tab: string | null; // navOn 게이팅에 쓸 클래식 탭 키(없으면 항상 노출)
-  icon: 'home' | 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'hist' | 'web' | 'apps';
+  icon: 'home' | 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'hist' | 'web' | 'apps' | 'preview';
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
@@ -31,6 +31,9 @@ export const APPS: AppDef[] = [
   { key: 'knowledge', title: 'WIKI', desc: '지식 트리 · 문서 · 검토 큐', route: 'knowledge', tab: 'knowledge', icon: 'wiki' },
   { key: 'context', title: '맥락 관리', desc: '수집(연결) · 증류 · 분류 · 자동 관리 파이프라인', route: 'context', tab: 'context', icon: 'ctx' },
   { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'hist' },
+  // 미리보기(#1841) — 설정 안 섹션이던 것을 앱으로 꺼냈다. "띄워 둔 화면을 골라 여는" 일은 설정 편집이
+  //  아니라 그 자체가 하나의 갈 곳이라서다. 옛 자리(#/system/preview-envs)는 admin-shell 이 여기로 보낸다.
+  { key: 'preview', title: '미리보기', desc: '작업 중인 화면을 따로 띄워 확인 — 만들어 둔 미리보기를 열고 켜고 끕니다', route: 'preview', tab: 'system', icon: 'preview' },
   { key: 'system', title: '설정', desc: '내 설정 · 조직 · 구성원 · 운영', route: 'system', tab: 'system', icon: 'sys' },
   { key: 'web', title: '웹', desc: '주소를 넣으면 이 화면 안에서 그대로 — 데스크톱 앱에서만 안에 열립니다', route: 'web', tab: null, icon: 'web',
     kind: 'browser', home: 'https://www.google.com/' },
@@ -44,7 +47,7 @@ export const CLASSIC_PAGES: Record<string, string> = {
   knowledge: 'knowledge', k: 'knowledge', 'k-edit': 'knowledge', trash: 'knowledge',
   context: 'context', domainmap: 'context', categories: 'context',
   system: 'system', learn: 'learn', start: 'learn', onboarding: 'learn', install: 'learn',
-  sessions: 'sessions', activate: 'system', f: 'knowledge',
+  sessions: 'sessions', activate: 'system', f: 'knowledge', preview: 'preview',
 };
 
 export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.tab || navOn(a.tab)); }
@@ -112,6 +115,9 @@ const ICON_PATHS: Record<AppDef['icon'], string> = {
   web: '<circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2"/><path d="M12 3.4a4.7 8.6 0 0 1 0 17.2 4.7 8.6 0 0 1 0-17.2z"/>',
   // 앱 = 타일 넷. 사이드바 [앱] 단추와 설치된 앱 타일이 함께 쓴다.
   apps: '<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>',
+  // 뷰파인더 = 프레이밍해서 확인하는 중 = 미리보기 — 미리보기 파비콘(#1572)의 모서리 문법을 이 격자로 옮겼다.
+  //  모서리 넷은 사각 키라인 17.2(3.4~20.6)·바깥 r 2.4, 중앙 원이 조준점(살아 있는 화면).
+  preview: '<path d="M8.6 3.4H5.8A2.4 2.4 0 0 0 3.4 5.8v2.8"/><path d="M15.4 3.4h2.8a2.4 2.4 0 0 1 2.4 2.4v2.8"/><path d="M8.6 20.6H5.8a2.4 2.4 0 0 1-2.4-2.4v-2.8"/><path d="M15.4 20.6h2.8a2.4 2.4 0 0 0 2.4-2.4v-2.8"/><circle cx="12" cy="12" r="3.5"/>',
 };
 /** 앱 아이콘 하나.
  *  ⚠ 선 속성(fill·stroke·굵기·캡)을 **SVG 자체에** 박는다 — CSS 에만 맡기면 안 된다.
@@ -273,6 +279,21 @@ const GLASS_ART: Record<string, GlassArt> = {
     frost: '<circle cx="32" cy="32" r="16"/>',
     over: '<circle cx="32" cy="32" r="8.4"/>',
   },
+  // 미리보기 — 색 화면판 + 유리 렌즈 + 흰 뷰파인더 모서리(punch). 미리보기 파비콘(#1572 민트 뷰파인더)의
+  //  '프레이밍해서 확인한다' 모티프를 유리 문법으로 옮긴 것: 화면 위에 렌즈를 대고 조준점을 본다.
+  //  모서리는 punch(흰 채움 — L자를 둥근 사각 두 장으로 조립. stroke 는 punch CSS 가 fill 만 알아서 못 쓴다).
+  //  조준점은 over 단색 깊은 끝 — 옅은 렌즈 위에서 읽히려면 이 대비가 필요하다(hist 바늘과 같은 판단).
+  preview: {
+    span: [8, 8, 56, 56],
+    color: '<rect x="8" y="8" width="48" height="48" rx="10"/>',
+    frost: '<circle cx="32" cy="32" r="15.5"/>',
+    punch: '<rect x="13.5" y="13.5" width="10" height="3.4" rx="1.7"/><rect x="13.5" y="13.5" width="3.4" height="10" rx="1.7"/>'
+      + '<rect x="40.5" y="13.5" width="10" height="3.4" rx="1.7"/><rect x="47.1" y="13.5" width="3.4" height="10" rx="1.7"/>'
+      + '<rect x="13.5" y="47.1" width="10" height="3.4" rx="1.7"/><rect x="13.5" y="40.5" width="3.4" height="10" rx="1.7"/>'
+      + '<rect x="40.5" y="47.1" width="10" height="3.4" rx="1.7"/><rect x="47.1" y="40.5" width="3.4" height="10" rx="1.7"/>',
+    overSolid: 3,
+    over: '<circle cx="32" cy="32" r="4.6"/>',
+  },
 };
 
 let glassSeq = 0;
@@ -370,7 +391,7 @@ export function closeLaunchpad(): void { if (padEl) { padEl.remove(); padEl = nu
 // ── 앱 프레임 — 중앙에 iframe 하나. 헤더 한 줄(앱 이름 · 새 탭 · 클래식으로) 외엔 크롬이 없다. ──
 //  #1841 — 안의 화면이 프로젝트 탭 문법의 머리(빵부스러기·뷰 탭·툴바)를 스스로 그리는 앱(FRAMELESS)은 이 띠를 안 단다.
 //   '클래식 화면 · 그대로 실림' 띠가 그 머리 위에 한 줄 더 얹히면 제목이 두 번 보이고 액자 티가 난다. 새 탭 열기는 그 화면의 ⋯ 메뉴가 든다.
-const FRAMELESS = new Set(['terminal', 'projects2', 'knowledge', 'context', 'learn', 'start', 'onboarding']);
+const FRAMELESS = new Set(['terminal', 'projects2', 'knowledge', 'context', 'learn', 'start', 'onboarding', 'preview']);
 export function appFrame(hash: string, title: string, opts?: { live?: boolean; src?: string }): HTMLElement {
   const src = opts?.src || embedUrl(hash);
   const frame = el('iframe', { class: 'v2-frame', src, title, loading: 'eager', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;

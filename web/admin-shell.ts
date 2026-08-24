@@ -254,11 +254,11 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
   //  그 단계를 보면서 앞뒤를 못 본다. 옛 딥링크·북마크는 여기서 새 자리로 넘긴다(끊지 않는다).
   //  #1584 — 그 단계의 **어느 화면**인지까지 주소가 말한다(단계 안 하위 탭이 좌측 사이드바 항목이 되면서
   //  화면마다 주소가 생겼다). 종전엔 단계까지만 보내 놓고 첫 화면에 떨어뜨렸다.
-  'distillers': '#/context/distill/distillers',
-  'ingest-policy': '#/context/distill/ingest-policy',
-  'connectors': '#/context/collect/collectors',
-  'collector-presets': '#/context/collect/presets',
-  'source-vis-policy': '#/context/collect/source-vis',
+  'distillers': '#/context/knowledge/distillers',
+  'ingest-policy': '#/context/knowledge/ingest-policy',
+  'connectors': '#/context/sources/collectors',
+  'collector-presets': '#/context/sources/presets',
+  'source-vis-policy': '#/context/sources/source-vis',
   // #1618 — 구 [설정 ▸ AI 맥락] 3화면이 [맥락 관리 ▸ 전달]로. 같은 이유(입구 이중화 + 앞뒤를 못 봄)에
   //  같은 처방이다. injection-map 은 온보딩·가이드 문서가 '#/system' 으로 보내던 자리라 특히 중요하다.
   'injection-map': '#/context/deliver/injection',
@@ -322,6 +322,9 @@ function sectionHidden(key, data) {
   //  ⚠ 그렇다고 지우지는 않는다 — 클래식 화면에는 사이드바가 없어서, 지우면 그쪽 사람은 갈 곳이 사라진다.
   //   그래서 '새 셸에서만 감춘다'. 옛 링크로 들어오면 아래 registerPanel 이 새 자리를 가리킨다.
   if (key === 'me-logins' && uiMode() === 'v2') return true;
+  // [미리보기] — 새 셸에서는 런치패드의 [미리보기] 앱(#/preview)이 그 자리다(#1841). me-logins 와 같은 처방:
+  //  클래식에는 런치패드가 없어 여기 섹션이 제 자리이므로 지우지 않고, 새 셸에서만 감춘다.
+  if (key === 'preview-envs' && uiMode() === 'v2') return true;
   if (uiProfilePersonal() && PERSONAL_HIDDEN.includes(key)) return true; // #1454 S4 — 심플 어드민
   if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
   if (RUNTIME_ONLY.includes(key) && !data.canRuntime) return true;
@@ -361,6 +364,11 @@ async function renderAdmin(view, sub) {
   //   바꾸면 프레임만 이동해 빈 화면이 된다.
   if (sel === 'me-logins' && uiMode() === 'v2') {
     try { (window.top || window).location.hash = '#/connect'; } catch (_) { location.hash = '#/connect'; }
+    return;
+  }
+  // [미리보기] 옛 딥링크(#/system/preview-envs) — 새 셸에서는 독립 앱(#/app/preview)으로(#1841). 위와 같은 사유·같은 방식.
+  if (sel === 'preview-envs' && uiMode() === 'v2') {
+    try { (window.top || window).location.hash = '#/app/preview'; } catch (_) { location.hash = '#/app/preview'; }
     return;
   }
   if (sel && SECTION_EXIT[sel]) { location.replace(SECTION_EXIT[sel]); return; }
