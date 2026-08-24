@@ -70,6 +70,20 @@
 .v2me-more-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; }
 .v2me-more:hover .v2me-more-ic { stroke: var(--blue); }
 
+/* ── 알림(#1842) — 한 줄 = [체크박스 | 제목·설명]. **누르는 순간 저장된다**(저장 버튼 없음).
+   커스텀 토글을 만들지 않고 네이티브 체크박스를 쓴다 — 디자인 시스템이 부품 언어를 하나로 묶는다.
+   행 전체가 <label> 이라 설명 줄을 눌러도 켜지고 꺼진다(누를 수 있는 면이 넓어야 한다). */
+.v2me-sw-list { display: flex; flex-direction: column; gap: 10px; }
+.v2me-sw { display: flex; align-items: flex-start; gap: 11px; padding: 13px 14px; border: 1px solid var(--line);
+  border-radius: 11px; cursor: pointer; }
+.v2me-sw:hover { border-color: var(--blue); background: var(--bg-tint); }
+.v2me-sw:focus-within { border-color: var(--blue); }
+.v2me-sw-in { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--blue); cursor: pointer; }
+.v2me-sw-in:disabled { cursor: default; opacity: .55; }
+.v2me-sw-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.v2me-sw-l { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.v2me-sw-d { font-size: 12.5px; color: var(--ink-sub); line-height: 1.55; }
+
 /* ── 좁은 화면 — 목록이 위로 눕는다(기능은 하나도 접지 않는다). ── */
 @media (max-width: 760px) {
   .v2me-back { padding: 0; }

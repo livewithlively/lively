@@ -24,13 +24,14 @@ export interface MeModalOpts {
   tab?: SecKey;
 }
 
-type SecKey = 'profile' | 'ai' | 'look' | 'account';
+type SecKey = 'profile' | 'ai' | 'notify' | 'look' | 'account';
 interface Sec { key: SecKey; label: string; icon: string[] }
 
-// 좌 목록 — 순서가 곧 위계다. 나를 가리키는 것(프로필) → 내 AI 가 나를 대하는 법 → 내가 보는 화면 → 계정.
+// 좌 목록 — 순서가 곧 위계다. 나를 가리키는 것(프로필) → 내 AI 가 나를 대하는 법 → 나를 부르는 법(알림) → 내가 보는 화면 → 계정.
 const SECS: Sec[] = [
   { key: 'profile', label: '프로필', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'] },
   { key: 'ai', label: 'AI 개인 규칙', icon: ['M12 3.4l1.9 5.7 5.7 1.9-5.7 1.9L12 18.6l-1.9-5.7-5.7-1.9 5.7-1.9z', 'M18.5 16.5l.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7z'] },
+  { key: 'notify', label: '알림', icon: ['M12 4.2a5 5 0 0 0-5 5v3.1l-1.5 2.7h13L17 12.3V9.2a5 5 0 0 0-5-5z', 'M10.1 18a1.95 1.95 0 0 0 3.8 0'] },
   { key: 'look', label: '화면', icon: ['M4 5.5h16v10H4z', 'M9 19.5h6', 'M12 15.5v4'] },
   { key: 'account', label: '계정 · 보안', icon: ['M12 3.4 19 6v5.6c0 4.2-2.9 7.4-7 9-4.1-1.6-7-4.8-7-9V6z', 'M9.3 12.1l1.9 1.9 3.5-3.6'] },
 ];
@@ -129,6 +130,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
     const saved = (): void => { paintHead(); opts.onSaved?.(); };
     panes.set('profile', profilePane(data, saved));
     panes.set('ai', aiPane(data, liv));
+    panes.set('notify', notifyPane());
     panes.set('look', lookPane(close));
     panes.set('account', accountPane(data, logins, close));
     contEl.replaceChildren(...panes.values());
@@ -285,6 +287,60 @@ function aiPane(data: any, liv: any): HTMLElement {
 }
 
 // ── ③ 화면 — 이 브라우저에서 내가 보는 모습. 서버에 저장되지 않는다(기기별 취향). ──
+// ── 알림(#1842) — 어떤 순간에 데스크톱 앱이 OS 배너를 띄울지. ──
+//  ⚠ **기기가 아니라 사람 단위**다(서버 저장). 기기별로 두면 사무실 맥에서 끈 것이 노트북에선 그대로 떠
+//   "껐는데 뜬다"가 된다. 그래서 끄고 켜는 자리도 여기 하나뿐이고, 앱은 이 값을 읽기만 한다.
+//  ⚠ 스위치는 **누르는 순간 저장한다**(저장 버튼 없음). 스위치를 내린 것 자체가 결정이라, 한 번 더 누르게
+//   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인 규칙]이 저장 버튼을 쓰는 것과 다른
+//   이유이고, 그 구분은 일반적인 관례와 같다.
+const NOTIFY_ROWS: Array<{ key: string; label: string; desc: string }> = [
+  { key: 'session_waiting', label: 'AI 가 확인을 기다릴 때',
+    desc: '승인이나 선택을 물어놓고 멈춰 있을 때 알려 줍니다. 놓치면 AI 가 그대로 서 있게 됩니다.' },
+  { key: 'session_done', label: 'AI 가 작업을 마쳤을 때',
+    desc: '맡겨 둔 작업이 끝나는 순간 알려 줍니다. 세션을 여러 개 동시에 돌릴 때 가장 자주 받게 됩니다.' },
+  { key: 'person', label: '사람이 나를 부를 때',
+    desc: '댓글에서 나를 언급하거나, 내가 참여한 일에 댓글이 달리면 알려 줍니다.' },
+];
+
+function notifyPane(): HTMLElement {
+  const status = el('span', { class: 'v2me-status' });
+  const list = el('div', { class: 'v2me-sw-list' }, skeleton('알림 설정을 불러오는 중'));
+  const body = pane('알림',
+    '라이블리 데스크톱 앱이 화면 밖에 띄우는 알림입니다. 여기서 정한 값은 **내가 쓰는 모든 컴퓨터에 함께** 적용됩니다.',
+    list,
+    el('p', { class: 'prof-hint', style: 'margin-top:14px' },
+      ...uiText('알림은 데스크톱 앱이 띄웁니다 — 앱을 아직 안 쓰신다면 이 설정만으로는 알림이 오지 않습니다. 앱은 창을 닫아도 메뉴막대에 남아 있어, 라이블리를 보고 있지 않을 때도 알려 줍니다.')));
+
+  const paint = (prefs: Record<string, boolean>): void => {
+    list.replaceChildren(...NOTIFY_ROWS.map((r) => {
+      const box = el('input', { type: 'checkbox', class: 'v2me-sw-in' }) as HTMLInputElement;
+      box.checked = prefs[r.key] !== false;
+      box.addEventListener('change', () => {
+        const on = box.checked;
+        box.disabled = true;
+        status.textContent = '저장 중…';
+        void api('/api/ui/me/notify-prefs', { method: 'POST', body: JSON.stringify({ [r.key]: on }) })
+          .then(() => { status.textContent = on ? '켰습니다' : '껐습니다'; })
+          .catch((e: any) => {
+            box.checked = !on;                       // 서버가 못 받았으면 화면도 되돌린다(거짓 상태를 남기지 않는다)
+            status.textContent = '';
+            toast((e && e.message) || '저장하지 못했습니다', true);
+          })
+          .finally(() => { box.disabled = false; });
+      });
+      return el('label', { class: 'v2me-sw' }, box,
+        el('span', { class: 'v2me-sw-txt' },
+          el('span', { class: 'v2me-sw-l', text: r.label }),
+          el('span', { class: 'v2me-sw-d' }, ...uiText(r.desc))));
+    }), status);
+  };
+
+  void api('/api/ui/me/notify-prefs')
+    .then((r: any) => paint((r && r.prefs) || {}))
+    .catch((e) => list.replaceChildren(errorNote(e, '알림 설정을 불러오지 못했습니다')));
+  return body;
+}
+
 function lookPane(close: () => void): HTMLElement {
   const LAB: Record<ThemePref, string> = { system: '시스템', light: '라이트', dark: '다크' };
   const TIP: Record<ThemePref, string> = { system: '기기 설정을 따릅니다', light: '항상 밝은 화면으로 봅니다', dark: '항상 어두운 화면으로 봅니다' };
