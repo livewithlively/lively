@@ -155,16 +155,19 @@ eq("P-W2 제품 entrypoint → native capability 명시",
 }
 {
   const calls = [];
-  const env = { LIVELY_HOST_EFFECTS: "deny", LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", LIVELY_HOME: "C:\\sandbox" };
+  const sandboxRoot = process.platform === "win32" ? "C:\\sandbox" : "/sandbox/lively-host-effects";
+  const sandboxStub = join(sandboxRoot, "bin", process.platform === "win32" ? "stub.exe" : "stub");
+  const outsideStub = process.platform === "win32" ? "C:\\real\\tool.exe" : "/real/tool";
+  const env = { LIVELY_HOST_EFFECTS: "deny", LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", LIVELY_HOME: sandboxRoot };
   const sandbox = entrypointHostEffects({ env, execFile: (...a) => { calls.push(a); return "ok"; }, spawnSync: (...a) => { calls.push(a); return { status: 0 }; } });
   eq("P-W1e sandbox → 샌드박스 절대경로 stub 허용",
-    { result: sandbox.execFileSync("C:\\sandbox\\bin\\stub.exe"), calls: calls.length },
+    { result: sandbox.execFileSync(sandboxStub), calls: calls.length },
     { result: "ok", calls: 1 });
   eq("P-W1f sandbox → 샌드박스 cwd의 git 허용",
-    { result: sandbox.spawnSync("git", ["status"], { cwd: "C:\\sandbox\\repo" }), calls: calls.length },
+    { result: sandbox.spawnSync("git", ["status"], { cwd: join(sandboxRoot, "repo") }), calls: calls.length },
     { result: { status: 0 }, calls: 2 });
   eq("P-W1g sandbox → 샌드박스 밖 외부 CLI 차단",
-    { error: await denied(() => sandbox.execFileSync("C:\\real\\tool.exe")), calls: calls.length },
+    { error: await denied(() => sandbox.execFileSync(outsideStub)), calls: calls.length },
     { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "external-cli" }, calls: 2 });
 }
 
