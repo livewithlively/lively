@@ -17,7 +17,6 @@ export const UPDATE_OPT_OUT_ENV = "LIVELY_DESKTOP_NO_UPDATE";
  * @param {boolean} o.hasPublishConfig 빌드에 배포처(publish) 설정이 박혀 있나. 없으면 확인할 곳이 없다.
  * @param {boolean} o.macSigned       mac 은 **서명 없으면 자동 업데이트가 원리적으로 불가**하다(Squirrel.Mac).
  * @param {string}  [o.optOut]        UPDATE_OPT_OUT_ENV 값
- * @param {boolean} [o.failedBefore]  이번 세션에 이미 실패했나 — 반복 팝업을 만들지 않는다.
  * @returns {{ok:boolean, reason:string}}
  */
 export function shouldCheckForUpdates(o) {
@@ -25,14 +24,31 @@ export function shouldCheckForUpdates(o) {
   if (String(s.optOut || "").trim() && String(s.optOut) !== "0") return { ok: false, reason: "opt-out" };
   if (!s.packaged) return { ok: false, reason: "dev-run" };
   if (!s.hasPublishConfig) return { ok: false, reason: "no-publish-config" };
-  if (s.failedBefore) return { ok: false, reason: "failed-before" };
   // ⚠ mac 미서명은 '실패' 가 아니라 **구조적 불가**다. 시도하면 매번 같은 오류가 난다 — 아예 묻지 않는다.
   if (s.platform === "darwin" && !s.macSigned) return { ok: false, reason: "mac-unsigned" };
   return { ok: true, reason: "ok" };
 }
 
-/** 재확인 간격 — 너무 잦으면 레이트리밋, 너무 뜸하면 보안 픽스가 안 퍼진다. 6시간. */
-export const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** 정상 재확인 간격 — 공개 GitHub 릴리스 메타데이터만 읽으며, 설치기는 새 버전이 있을 때 한 번만 받는다. */
+export const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+/** 연속 실패 횟수 1·2·3+ 에 대응하는 재시도 간격. 순간 장애가 영구 중단으로 굳지 않게 하되 오프라인 때 두드리지 않는다. */
+export const UPDATE_RETRY_DELAYS_MS = Object.freeze([5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000]);
+/** 로그인 시각이 비슷한 PC가 GitHub 를 같은 순간에 두드리지 않도록 다음 예약에 더하는 최대 지터. */
+export const UPDATE_CHECK_JITTER_MS = 30_000;
+
+/**
+ * 다음 자동 확인까지 기다릴 시간. 정상·첫 실패는 5분, 이후 15분·60분(상한)으로 물러난다.
+ * @param {number} consecutiveFailures 연속 실패 횟수
+ * @param {number} jitterUnit 테스트 가능한 0~1 난수(Math.random())
+ */
+export function updateCheckDelayMs(consecutiveFailures = 0, jitterUnit = 0) {
+  const failures = Math.max(0, Math.floor(Number(consecutiveFailures) || 0));
+  const retryIndex = Math.min(Math.max(0, failures - 1), UPDATE_RETRY_DELAYS_MS.length - 1);
+  const base = failures === 0 ? UPDATE_INTERVAL_MS : UPDATE_RETRY_DELAYS_MS[retryIndex];
+  const n = Number(jitterUnit);
+  const jitter = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
+  return base + Math.floor(jitter * UPDATE_CHECK_JITTER_MS);
+}
 
 /**
  * 왜 확인하지 않(았)나 — **사람에게 보여줄 문구**.
@@ -47,7 +63,6 @@ export function updateStatusNote(reason) {
     case "opt-out": return `자동 업데이트가 꺼져 있습니다(${UPDATE_OPT_OUT_ENV}).`;
     case "dev-run": return "개발 실행 중이라 업데이트를 확인하지 않습니다.";
     case "no-publish-config": return "이 빌드에는 업데이트 받을 곳이 없습니다(설치기로 깐 버전이 아닙니다).";
-    case "failed-before": return "이번 실행에서 이미 실패해 다시 시도하지 않습니다. 앱을 다시 켜면 재시도합니다.";
     case "mac-unsigned": return "서명되지 않은 빌드라 자동 업데이트를 쓸 수 없습니다. 새 버전은 받아서 덮어써 주세요.";
     default: return "업데이트를 확인하지 않습니다.";
   }
