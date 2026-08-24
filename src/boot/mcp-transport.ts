@@ -27,7 +27,10 @@ async function buildRegisteredServer(req: express.Request): Promise<McpServer> {
   const incognito = incognitoFromHeaders(req.headers);
   if (incognito) logger.info({ harness }, "인코그니토 세션 — lively 툴 전부 소거(빈 표면, 읽기·쓰기 차단)(#1007+)");
   else if (readOnly) logger.info({ harness }, "읽기전용 세션 — 컨텍스트 스토어 쓰기 툴 소거(#1007)");
-  const server = buildServer(overrides, alwaysLoad, harness, readOnly, incognito);
+  // 앱 토큰(#1780 v2.1 R4-M1) — 인증이 req.auth.extra 에 실은 LivelyUser.appId. 세션 배관(EXEMPT) 도구를 tools/list 에서 감춘다.
+  //  sessioned 모드는 initialize 시점 토큰으로 서버를 굽는데 앱 토큰의 appId 는 세션 동안 불변이라 안전(경계는 핸들러 재판정).
+  const appId = ((req as unknown as { auth?: { extra?: { appId?: string } } }).auth?.extra?.appId) ?? null;
+  const server = buildServer(overrides, alwaysLoad, harness, readOnly, incognito, appId);
   // 인코그니토면 외부 프록시·동적 툴도 노출하지 않는다(ext__*·http_proxy 도 lively 게이트웨이 표면 — 클린룸이면 전부 차단).
   if (!incognito) {
     try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }

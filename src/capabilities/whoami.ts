@@ -119,7 +119,13 @@ const whoami: Capability = {
     const scopes = Array.isArray(user?.scopes) ? user.scopes : [];
     const cat = (c: { category_id: number; space: string; key: string; name: string | null }) =>
       ({ id: Number(c.category_id), space: c.space, key: c.key, name: c.name });
+    // 앱 세션 토큰(#1780 v2.1 R4-M1) — 앱(제3자 코드)에게는 사람의 **외부 시스템 계정·팀·카테고리**를 주지 않는다.
+    //  동의한 도구가 0 이어도 whoami 는 배관이라 열려 있으므로, 여기서 축약하지 않으면 동의 모델이 뚫린다.
+    //  member_id·이름·이메일·scopes 는 남긴다(앱이 "누구 이름으로 도는가" 를 알아야 on_behalf_of 가 성립).
+    const isApp = !!user?.appId;
     return {
+      // ── 앱 세션이면 그 앱 id(일반 세션 null) — 응답을 읽는 쪽이 축약 사실을 알 수 있게 ──
+      app: user?.appId ?? null,
       // ── 사람 축 식별자 ── (member_id = org_member.id. lively 전 표면의 조인 키)
       member_id: memberId,
       display_name: member?.display_name ?? null,
@@ -134,13 +140,13 @@ const whoami: Capability = {
       is_admin: scopes.includes("admin"),
       member_scopes: member?.scopes ?? null,
       // ── 외부 시스템에서 나를 가리키는 키(클릭업 assignee·슬랙 user·깃랩 계정 …) ──
-      identities: (member?.identities ?? []).map((i) => ({
+      identities: isApp ? [] : (member?.identities ?? []).map((i) => ({
         system: i.system, instance: i.instance ?? null, external_id: i.external_id,
         email: i.email ?? null, display_name: i.display_name ?? null,
       })),
       // ── 소속(오너십은 우선순위 신호일 뿐 접근제한이 아니다 — 다른 팀 맥락도 열람·검색 가능) ──
-      teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
-      categories: {
+      teams: isApp ? [] : teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
+      categories: isApp ? { owner: [], stakeholder: [] } : {
         owner: cats.filter((c) => c.owner).map(cat),
         stakeholder: cats.filter((c) => !c.owner).map(cat),
       },
