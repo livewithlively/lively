@@ -15,7 +15,7 @@ import { field, skeleton } from '../ui-primitives.js';
 import {
   PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips,
 } from '../me-profile.js';
-import { THEME_ORDER, setThemePref, themePref, type ThemePref } from '../theme.js';
+import { THEME_ORDER, harnessThemeSync, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from '../theme.js';
 
 export interface MeModalOpts {
   /** 저장으로 이름·프사가 바뀌었다 — 사이드바(와 부른 쪽)가 다시 그리도록. */
@@ -307,9 +307,19 @@ function lookPane(close: () => void): HTMLElement {
       location.reload();
     } });
 
+  // 'AI 세션도 이 테마로'(#1683 후속) — 터미널 **안에서 도는 하네스**까지 맞출지. 기본 켜짐.
+  //  화면(사이드바·터미널 칠)은 이 스위치와 무관하게 늘 위 테마를 따른다 — 스위치가 가리는 건 하네스 안쪽뿐이다.
+  const aiCb = el('input', { type: 'checkbox', style: 'margin:0',
+    ...(harnessThemeSync() ? { checked: '' } : {}),
+    onchange: (e: any) => setHarnessThemeSync(!!e.target.checked) }) as HTMLInputElement;
+
   return pane('화면', '이 브라우저에서 화면이 어떻게 보일지 정합니다. 기기마다 따로 기억되고 팀에는 영향이 없습니다.',
     field('테마', el('div', {}, seg,
       el('p', { class: 'prof-hint' }, ...uiText('시스템을 고르면 기기의 밝게·어둡게 설정을 그대로 따라갑니다.')))),
+    field('AI 세션', el('div', {},
+      el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, aiCb,
+        el('span', { style: 'font-size:13.5px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))),
+      el('p', { class: 'prof-hint' }, ...uiText('끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 이미 열려 있는 세션은 바뀌지 않아요 — 하네스는 시작할 때 테마를 정합니다.')))),
     field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn,
       el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 설정 ▸ 화면 에서 언제든 돌아옵니다.')))));
 }

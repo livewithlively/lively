@@ -31,7 +31,7 @@ import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials
 import { mintAppToken } from "../apps/principal.js";
 import { writeAppHome, materializeAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, getSessionLabel, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -385,6 +385,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       cmd.push(def.name, v); appliedFlags[def.name] = v;
     }
     if (input.autoApprove && harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
+    // 화면 테마(#1683 후속) — 이 하네스가 실행 시점 주입을 지원하면 그 인자를 얹는다(사람의 설정 파일은
+    //  건드리지 않는다 — harnessThemeArgv 주석). 지원 안 하는 하네스면 빈 배열이라 종전 그대로다.
+    cmd.push(...harnessThemeArgv(harness.key, input.theme));
   }
   // pane 이 실제로 실행할 argv(#1516). 세 갈래:
   //  · 로그인 세션(loginFor) — 하네스 TUI 대신 그 하네스의 **로그인 명령**을 셸에서 돌린다(만료 자격으로는
@@ -418,6 +421,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 화면 테마(#1683) — 이 pane 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 고르게 한다(COLORFGBG·LIVELY_THEME).
   //  판정·조립은 themeEnvArgs(순수·단위테스트됨)에. ⚠ pane env 는 exec 시점 고정 → 새 세션부터 적용.
   args.push(...themeEnvArgs(input.theme));
+  args.push(...harnessThemeEnvArgs(harness.key, input.theme));   // 하네스가 env 로 테마를 받는 경우(#1683 후속)
   // 테넌트 소속(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스할 때, **세션 spawn 훅이
   //  어느 테넌트의 브로커 소켓에 붙어야 하는지**를 알려준다. 훅은 게이트웨이 프로세스의 env 를 물려받는데
   //  공유 게이트웨이에서는 그 env 가 전역이라 테넌트를 구분할 수 없다 — 세션스코프 -e 가 유일한 통로다.

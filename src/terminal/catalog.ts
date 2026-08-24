@@ -561,3 +561,50 @@ export function themeEnvArgs(theme: unknown): string[] {
   // COLORFGBG "<fg>;<bg>" ANSI 번호 — 다크는 밝은 글자(15) on 검정(0), 라이트는 그 반대.
   return ["-e", `COLORFGBG=${t === "dark" ? "15;0" : "0;15"}`, "-e", `LIVELY_THEME=${t}`];
 }
+
+// ── 하네스별 테마 주입 (#1683 후속) ─────────────────────────────────────────
+//
+// 왜 따로 필요한가: 위 COLORFGBG·OSC 11 은 "터미널이 배경을 알려주는" 표준 통로인데, **AI 하네스 대부분은
+//  그걸 묻지 않고 자기 설정에 저장한 테마를 쓴다**(실측: Claude Code 는 settings.json 의 theme 을 읽고
+//  터미널에 묻지 않는다 — 그래서 앱을 다크로 바꿔도 하네스 화면은 라이트 그대로였다).
+//
+// 원칙 — **사람의 설정 파일을 고치지 않는다.** 하네스 설정의 theme 은 그 사람이 고른 값이고 킷이 보존하기로
+//  한 키다(kit/adapters/*/uninstall.mjs). 대신 **실행 시점에만 얹는 방법**(플래그·env)이 있는 하네스에만
+//  세션 스코프로 준다. 그 방법이 없는 하네스는 **손대지 않는다** — 전역 설정을 대신 고치면 라이블리 밖에서
+//  쓰는 그 사람의 세션까지 바뀌고, 비격리 박스에서는 그 파일이 **구성원 공유**라 남의 화면까지 바꾼다.
+//
+// 하네스별 실측 (2026-08-20, 이 박스의 설치본 기준):
+//  · claude      — `--settings '{"theme":"dark"}'`  ★검증: 다크·라이트로 각각 띄워 pane ANSI 색이 갈리는 것 확인
+//  · codex       — `-c tui.theme=<이름>`             (`-c key=value` 오버라이드. 테마는 dark/light 가 아니라 **이름**)
+//  · opencode    — `OPENCODE_CONFIG_CONTENT` env     (설정을 통째로 문자열로 받는다)
+//  · antigravity — 없음. 테마는 있으나(~/.gemini/antigravity-cli/settings.json 의 colorScheme) 실행 시점
+//                  주입 경로가 없다(플래그·env 스캔 음성). 위 원칙대로 손대지 않는다.
+//  · grok        — 테마 기능 자체가 없다(--help·inspect·바이너리 스캔 모두 음성).
+//
+// ⚠ 값은 여기 한 곳에서만 고친다. codex 의 이름은 그 하네스가 가진 테마 목록에서 고른 것이라
+//  하네스가 목록을 바꾸면 여기만 손보면 된다.
+const HARNESS_THEME: Record<string, { argv?: (t: "dark" | "light") => string[]; env?: (t: "dark" | "light") => string[] }> = {
+  claude: { argv: (t) => ["--settings", JSON.stringify({ theme: t })] },
+  codex: { argv: (t) => ["-c", `tui.theme=${t === "dark" ? "one-half-dark" : "one-half-light"}`] },
+  opencode: { env: (t) => [`OPENCODE_CONFIG_CONTENT=${JSON.stringify({ theme: t })}`] },
+};
+
+/** 이 하네스가 실행 시점 테마 주입을 지원하나 — 화면이 "이 하네스는 앱 테마를 따릅니다"를 말할 근거. */
+export function harnessFollowsTheme(harnessKey: string): boolean {
+  return !!HARNESS_THEME[String(harnessKey || "")];
+}
+
+/** 하네스 실행 argv 에 덧붙일 테마 인자. 지원 안 하면 빈 배열(무회귀). */
+export function harnessThemeArgv(harnessKey: string, theme: unknown): string[] {
+  const t = normalizeTheme(theme);
+  const h = HARNESS_THEME[String(harnessKey || "")];
+  return t && h?.argv ? h.argv(t) : [];
+}
+
+/** 하네스 테마를 env 로 주는 경우의 tmux `-e` 인자. 지원 안 하면 빈 배열. */
+export function harnessThemeEnvArgs(harnessKey: string, theme: unknown): string[] {
+  const t = normalizeTheme(theme);
+  const h = HARNESS_THEME[String(harnessKey || "")];
+  if (!t || !h?.env) return [];
+  return h.env(t).flatMap((kv) => ["-e", kv]);
+}

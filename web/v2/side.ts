@@ -936,6 +936,7 @@ function trashBtn(s: Sess): HTMLElement {
   btn.addEventListener('click', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); void doTrash(s); });
   return btn;
 }
+
 async function doTrash(s: Sess): Promise<void> {
   const name = sessText(s, '').main || s.label || s.id;
   if (!await confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` })) return;
