@@ -9,14 +9,15 @@
 //   **사람이 · 나를 지목해서 · 한 행위**. 셋 중 하나라도 빠지면 알림이 아니다.
 //   - AI 에이전트의 작업 로그(activity)는 뺀다 — 사람의 행위가 아니다. 실측(#1571): 알림 화면의 89%가 이것이었다.
 //   - 필드 변경(설명 편집·상태·마감)도 뺀다 — 나를 지목한 것이 아니다. 프로젝트 상세의 감사 피드가 담당한다.
-//   남는 것은 셋: mention · comment · assign.
+//   남는 것은 둘: mention · comment. (담당 지정은 원준 2026-08-24 판단으로 뺐다 — 배너로 부를 만큼
+//   지금 당장 해야 할 일이 아니고, 프로젝트 화면에서 확인하면 된다.)
 //
 // ⚠ 내가 한 일은 나에게 알리지 않는다(actor = me 는 전부 제외) — 자기 행위가 배너로 돌아오면 그건 고장이다.
 import { itemsPool } from "../db/client.js";
 import { q } from "../db/client.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
 
-export type NotifyKind = "mention" | "comment" | "assign";
+export type NotifyKind = "mention" | "comment";
 
 export interface NotifyItem {
   /** 안정 키 — 같은 사건은 언제 조회해도 같은 값이다(앱이 이미 띄운 것을 다시 안 띄우는 근거). */
@@ -27,7 +28,7 @@ export interface NotifyItem {
   actor_name: string | null;
   project_id: number | null;
   project_name: string | null;
-  /** 댓글 본문(한 줄로 눌러 240자까지). assign 은 빈 문자열. */
+  /** 댓글 본문(한 줄로 눌러 240자까지). */
   body: string;
   /** 이 알림이 가리키는 화면(웹 UI 해시). 만들 수 없으면 null — **가짜 링크를 만들지 않는다**(#1571 §9). */
   link: string | null;
@@ -93,25 +94,6 @@ export async function listMyNotifications(
      ORDER BY c.created_at DESC
      LIMIT $4`, [me, name, since, limit]);
 
-  // ② 담당 지정 — 감사 로그에서 assignee 가 **나로 바뀐** 전이만. 이미 나였던 행(다른 필드 수정)은 사건이 아니다.
-  //  entity_key 는 text 라 숫자가 아닌 값이 섞일 수 있다 — 캐스트 전에 걸러야 22P02 로 쿼리 전체가 죽지 않는다.
-  const assigns = await q(itemsPool, `
-    SELECT a.id, a.at, a.actor, m.display_name, p.id AS project_id, p.name AS project_name, p.level,
-           root.id AS root_id
-      FROM org_content_audit a
-      JOIN project p ON p.id = a.entity_key::int
-      ${ROOT_JOIN}
-      LEFT JOIN org_member m ON m.id = a.actor
-     WHERE a.entity = 'project'
-       AND a.entity_key ~ '^[0-9]+$'
-       AND a.at > $2::timestamptz
-       AND a.actor IS DISTINCT FROM $1
-       AND a.after->>'assignee' = $1
-       AND COALESCE(a.before->>'assignee', '') <> $1
-       AND ${visWhere}
-     ORDER BY a.at DESC
-     LIMIT $3`, [me, since, limit]);
-
   const items: NotifyItem[] = [];
   for (const c of comments) {
     const pid = c.project_id ?? null;
@@ -124,20 +106,6 @@ export async function listMyNotifications(
       project_id: pid,
       project_name: c.project_name ?? null,
       body: snippet(c.body),
-      link: pid ? "#/projects2/p/" + pid : null,
-    });
-  }
-  for (const a of assigns) {
-    const pid = a.root_id ?? a.project_id ?? null;
-    items.push({
-      key: "assign:" + a.id,
-      kind: "assign",
-      ts: new Date(a.at).toISOString(),
-      actor: a.actor ?? null,
-      actor_name: a.display_name ?? null,
-      project_id: pid,
-      project_name: a.project_name ?? null,
-      body: "",
       link: pid ? "#/projects2/p/" + pid : null,
     });
   }
@@ -156,6 +124,5 @@ export function notifyText(it: NotifyItem): { title: string; body: string } {
   const subj = who + (hangul ? ((last - 0xac00) % 28 ? "이" : "가") : "가");   // 한글이 아니면 '가'(영문 이름)
   const where = it.project_name ? ` · ${it.project_name}` : "";
   if (it.kind === "mention") return { title: `${subj} 나를 언급했어요${where}`, body: it.body || "(내용 없음)" };
-  if (it.kind === "assign") return { title: `${subj} 나에게 일을 맡겼어요`, body: it.project_name || "" };
   return { title: `${subj} 댓글을 남겼어요${where}`, body: it.body || "(내용 없음)" };
 }

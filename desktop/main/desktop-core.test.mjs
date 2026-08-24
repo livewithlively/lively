@@ -1617,10 +1617,13 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const a = snap([S({ working: true })]), b = snap([S({ working: false, awaiting: true })]);
     assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
   });
-  t("A6 종료 — 예기치 않은 종료만 알리고, 사람이 스스로 끝낸 것(exitedByUser)은 뺀다", () => {
-    const a = snap([S({ agentState: "busy" })]);
-    assert.deepEqual(kinds(diffSessions(a, snap([S({ agentState: "exited" })]))), [NOTIFY.EXITED]);
-    assert.deepEqual(diffSessions(a, snap([S({ agentState: "exited", exitedByUser: true })])), [], "내가 /exit 한 걸 되알리지 않는다");
+  t("A6 ★ 세션이 끝나는 것은 알리지 않는다 (원준 2026-08-24) — 정상·강제 어느 쪽도", () => {
+    // 끝난 세션은 목록에서 확인하면 되고, 배너로 부를 만큼 지금 해야 할 일이 없다.
+    //  ⚠ working 이 돌던 세션이 exited 로 가면 '완료'로는 잡힌다 — 그건 작업이 끝난 것이라 맞다.
+    const idle = snap([S({ agentState: "idle" })]);
+    assert.deepEqual(diffSessions(idle, snap([S({ agentState: "exited" })])), []);
+    assert.deepEqual(diffSessions(idle, snap([S({ agentState: "exited", oomKilled: true })])), [], "강제 종료도 알리지 않는다");
+    assert.ok(!("EXITED" in NOTIFY), "종료 알림 종류가 되살아났다");
   });
   t("A7 새 세션 — 곧장 승인을 물으면 알리고, 그냥 생긴 것은 안 알린다", () => {
     const before = snap([]);
@@ -1653,12 +1656,11 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(many[0].body, /4개/);
   });
   t("A13 문구 — 본문은 어미까지 끝맺는다(ui-copy-complete-sentence-endings)", () => {
-    for (const k of [NOTIFY.WAITING, NOTIFY.DONE, NOTIFY.EXITED]) {
+    for (const k of [NOTIFY.WAITING, NOTIFY.DONE]) {
       const b = bannerFor({ kind: k, name: "테스트 세션" });
       assert.ok(b.title && b.body, k + " 문구가 비었다");
       assert.ok(b.body.includes("테스트 세션"), k + " 본문에 세션 이름이 없다");
     }
-    assert.match(bannerFor({ kind: NOTIFY.EXITED, name: "s", oom: true }).title, /강제/);
   });
   t("A14 세션 해시 — 형식이 아닌 id 는 주소로 만들지 않는다(응답을 그대로 믿지 않는다)", () => {
     assert.equal(sessionHash("box-jang-8abcdb3b"), "#/s/box-jang-8abcdb3b");
@@ -1670,21 +1672,13 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(/new Notification\(/.test(main), "OS 알림을 띄우지 않는다");
     assert.ok(/setAppUserModelId/.test(main), "Windows 는 AppUserModelId 가 없으면 배너가 안 뜬다");
   });
-  t("A16 트레이 — 갖춰졌을 때만 알림 서브메뉴가 서고, 체크는 현재 설정을 그대로 비춘다", () => {
+  t("A16 ★ 트레이엔 알림 설정이 없다 — 설정 자리는 [내 정보 ▸ 알림] 한 곳이다", () => {
+    // 두 자리에서 끄고 켜면 저장소가 갈라져 "껐는데 뜬다"가 난다. 사람 단위(서버)로 한 곳에 모은다.
     const ready = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true };
-    const on = trayMenuModel({ ...ready, notifyPrefs: { [NOTIFY.WAITING]: false } });
-    const menu = on.find((m) => m.id === "notify");
-    assert.ok(menu && Array.isArray(menu.submenu), "알림 서브메뉴가 없다 — 끌 수단 없는 알림은 만들지 않는다");
-    assert.equal(menu.submenu.length, 4);
-    assert.equal(menu.submenu.find((m) => m.id === `notify:${NOTIFY.WAITING}`).checked, false, "끈 설정이 체크로 남아 있다");
-    assert.equal(menu.submenu.find((m) => m.id === `notify:${NOTIFY.DONE}`).checked, true, "설정이 없는 축은 기본 켜짐이다");
-    assert.ok(!trayMenuModel({ cliFound: false }).some((m) => m.id === "notify"), "설치 전에는 못 쓰는 스위치를 보여주지 않는다");
-  });
-  t("A17 배선 — 트레이가 서브메뉴를 그리고, 토글이 설정 파일로 간다", () => {
+    assert.ok(!trayMenuModel(ready).some((m) => m.id === "notify" || String(m.id || "").startsWith("notify:")),
+      "트레이에 알림 토글이 남아 있다");
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
-    assert.ok(/submenu:\s*m\.submenu\.map/.test(main), "renderTray 가 서브메뉴를 그리지 않는다 — 항목이 조용히 사라진다");
-    assert.ok(/id\.startsWith\("notify:"\)/.test(main), "알림 토글 클릭이 배선되지 않았다");
-    assert.ok(/notifyPrefs\(\)/.test(main), "트레이가 현재 설정을 읽지 않는다");
+    assert.ok(!/notify-prefs-local|desktop-notify\.json/.test(main), "앱이 아직 기기별 설정 파일을 본다 — 서버가 정본이다");
   });
   t("A18 사람 알림 — 콜드스타트는 기준선만(지난 24시간이 배너로 쏟아지면 안 된다)", () => {
     const items = [{ key: "comment:1", link: "#/projects2/p/7", text: { title: "밥이 나를 언급했어요", body: "확인해 주세요" } }];

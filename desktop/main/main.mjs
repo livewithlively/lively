@@ -78,7 +78,6 @@ async function refreshState({ deep = false } = {}) {
   const cliPath = locateCli(existsSync);
   const next = { ...state, cliPath, cliFound: !!cliPath };
   next.gatewayUrl = readTrim(join(LIVELY_DIR, "gateway-url"));
-  next.notifyPrefs = notifyPrefs();   // 트레이 알림 서브메뉴의 체크 상태(#1842)
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
   // 토큰이 **있다**와 **먹힌다**는 다르다 — 게이트웨이가 401 로 거부한 그 토큰이 그대로면 로그인이 필요한 상태다.
   //  파일의 토큰이 바뀌면(다시 로그인) 저절로 풀린다 — 따로 초기화할 자리가 없어 빠뜨릴 일이 없다.
@@ -241,13 +240,6 @@ function onMenu(id) {
   // 노드의 자동 시작 = OS 데몬 등록. `node --daemon` 이 켜고 `node stop` 이 끈다(등록·번들은 남는다).
   if (id === "node-autostart") return start(state.nodeDaemon ? "node-stop" : "node-start", {});
   if (id === "app-autolaunch") return setAppAutoLaunch(!state.appAutoLaunch);
-  // 알림 유형 토글(#1842) — 파일에 남기고 트레이를 다시 그린다(체크 표시가 곧 현재 설정이다).
-  if (id.startsWith("notify:")) {
-    const kind = id.slice("notify:".length);
-    const cur = notifyPrefs();
-    state = { ...state, notifyPrefs: setNotifyPref(kind, !cur[kind]) };
-    return renderTray();
-  }
 }
 
 // ── 앱 자동 시작 (#1541 T4) ─────────────────────────────────────────────────
@@ -528,7 +520,9 @@ function pushWebUpdate() {
 // 트레이 상주 앱만이 **창 없이도** 살아 있다(window-all-closed = noop). 그래서 "화면을 안 보고 있을 때 부르는"
 //  알림은 여기서만 만들 수 있다 — 웹 화면이 하면 창을 닫는 순간 눈이 먼다. 판정은 전부 notify.mjs(순수·표로 검증).
 const NOTIFY_POLL_MS = 30_000;      // 세션 상태 조회는 tmux 를 훑는다 — 상태 폴링(refreshState)과 같은 리듬으로 둔다
-const NOTIFY_PREFS_FILE = "desktop-notify.json";   // { session_waiting: true, ... } — 트레이에서 끄면 여기 남는다
+// 설정은 **서버가 정본**이다(#1842) — 사람 단위. 기기별 파일에 두면 사무실 맥에서 끈 것이 노트북에선
+//  그대로 떠 "껐는데 뜬다"가 된다. 끄고 켜는 자리는 웹 [내 정보 ▸ 알림] 한 곳이고, 앱은 읽기만 한다.
+//  이 캐시는 폴링이 갱신한다 — 서버를 못 읽는 동안에도 마지막으로 받은 값으로 계속 동작한다.
 let notifySnapshot = null;          // 직전 세션 스냅샷. null = 콜드스타트(첫 폴은 기준선만 잡고 아무것도 안 띄운다)
 let notifyPolling = false;
 let personSince = null;             // 사람 알림 커서 — 서버가 준 `now`. null 이면 아직 한 번도 안 받았다
@@ -540,19 +534,10 @@ let streamTries = 0;                // 연속 실패 횟수(백오프)
 let streamTimer = null;             // 재연결 예약
 const streamSeen = new Set();       // 이미 띄운 스트림 사건 key(재연결 직후 중복 방지)
 
-/** 유형별 켜짐 — 파일이 없거나 깨졌으면 기본값(전부 켜짐). 설정을 못 읽었다고 알림이 멎으면 안 된다. */
-function notifyPrefs() {
-  try {
-    const raw = readFileSync(join(LIVELY_DIR, NOTIFY_PREFS_FILE), "utf8");
-    const o = JSON.parse(raw);
-    return o && typeof o === "object" ? { ...NOTIFY_DEFAULTS, ...o } : { ...NOTIFY_DEFAULTS };
-  } catch { return { ...NOTIFY_DEFAULTS }; }
-}
-function setNotifyPref(kind, on) {
-  const next = { ...notifyPrefs(), [kind]: !!on };
-  try { mkdirSync(LIVELY_DIR, { recursive: true }); writeFileSync(join(LIVELY_DIR, NOTIFY_PREFS_FILE), JSON.stringify(next, null, 2)); } catch { /* 못 써도 이번 세션엔 적용된다 */ }
-  return next;
-}
+let notifyPrefsCache = { ...NOTIFY_DEFAULTS };   // 서버에서 마지막으로 받은 값. 받기 전엔 전부 켜짐.
+
+/** 유형별 켜짐 — 서버 값. 아직 못 받았으면 기본값(전부 켜짐): 설정을 못 읽었다고 알림이 멎으면 안 된다. */
+function notifyPrefs() { return notifyPrefsCache; }
 
 /** 배너 한 장. 클릭하면 그 세션 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
 function showBanner({ title, body, event }) {
@@ -642,7 +627,7 @@ async function pollNotifications() {
   if (notifyPolling) return;
   const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
   const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
-  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; streamSeen.clear(); return; }
+  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
   notifyPolling = true;
   try {
     const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
@@ -652,13 +637,13 @@ async function pollNotifications() {
     if (!res.ok) return;                               // 401 은 watchTokenRejection 이 따로 처리한다
     const data = await res.json();
     const next = snapshotSessions(data && data.sessions);
+    await pollPersonFeed(gw, token);                     // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
     const prefs = notifyPrefs();
     const events = diffSessions(notifySnapshot, next, prefs);
     notifySnapshot = next;                               // ★ 기준선은 스트림 유무와 무관하게 늘 갱신한다 —
     //  연결이 끊기는 순간 폴링이 그 자리에서 이어받아야 하는데, 기준선이 낡아 있으면 그 사이 전이를 통째로
     //  놓치거나(오래된 스냅샷과 비교) 과거를 한꺼번에 다시 띄운다.
     if (!streamAlive) for (const b of planBanners(events)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
-    await pollPersonFeed(gw, token, prefs);
   } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
   finally { notifyPolling = false; }
 }
@@ -667,12 +652,14 @@ async function pollNotifications() {
  * 사람이 나를 부른 것(멘션·댓글·담당) — 판정은 서버가 한다(/api/ui/notify/feed). 앱은 커서를 들고 다니며
  *  새로 온 것만 띄운다. **커서 전진은 성공했을 때만** 한다 — 실패했는데 전진시키면 그 사이 알림이 영영 사라진다.
  */
-async function pollPersonFeed(gw, token, prefs) {
+async function pollPersonFeed(gw, token) {
   const url = `${gw}/api/ui/notify/feed` + (personSince ? `?since=${encodeURIComponent(personSince)}` : "");
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) return;                                 // 구 게이트웨이엔 이 엔드포인트가 없다(404) — 조용히 넘긴다
   const data = await res.json();
-  const events = pickPersonEvents(data && data.items, personSeen, prefs);
+  // 서버가 실어 보낸 알림 설정을 캐시에 반영한다(왕복을 하나 더 만들지 않는다).
+  if (data && data.prefs && typeof data.prefs === "object") notifyPrefsCache = { ...NOTIFY_DEFAULTS, ...data.prefs };
+  const events = pickPersonEvents(data && data.items, personSeen, notifyPrefs());
   if (!personSeen) personSeen = new Set();             // 첫 폴 = 기준선(위 pickPersonEvents 가 이미 빈 배열을 줬다)
   rememberSeen(personSeen, events);
   personSince = (data && data.now) || personSince;     // 서버 시계를 쓴다 — 앱 시계와 어긋나도 사건을 건너뛰지 않게
