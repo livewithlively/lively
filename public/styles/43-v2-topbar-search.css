@@ -92,6 +92,15 @@
 .v2-omni-in:focus { outline: none; }
 .v2-omni-esc { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; padding: 2px 6px;
   border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--canvas); }
+/* 종류 칩 — 검색창 바로 아래 한 줄. 기본(선택 없음)은 **전부 켜진 모습**이다(모두 포함이므로).
+   하나를 누르면 그것만 켜지고 나머지가 꺼진 모습이 된다 — 지금 무엇을 찾고 있는지 화면이 늘 말한다. */
+.v2-omni-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 14px; border-bottom: 1px solid var(--line, #E6ECF5); }
+.v2-omni-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px 0 7px;
+  border: 1px solid var(--line-net, #DCE6F5); border-radius: 999px; background: var(--bg, #fff);
+  font: inherit; font-size: 11.5px; color: var(--muted, #8A99B5); cursor: pointer; white-space: nowrap; }
+.v2-omni-chip:hover { border-color: var(--blue); color: var(--ink-sub, #5A6B85); }
+.v2-omni-chip.on { border-color: var(--blue); background: var(--bg-tint-2, #EEF5FF); color: var(--ink); font-weight: 600; }
+.v2-omni-chip-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-omni-list { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
 .v2-omni-gh { padding: 8px 8px 4px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
 .v2-omni-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 9px; cursor: pointer; }
