@@ -87,6 +87,12 @@ const MIN_COSINE = 0.48;
 //   제목이 질의를 통째로 담았으면(제목 적중) 예외다 — 그건 길이와 무관하게 확실한 신호다.
 const MIN_TITLE_CHARS = 6;
 
+//  similar(절대 코사인)가 **한 번이라도** 결과를 준 적이 있나 = 그 축이 이 조직에서 살아 있나.
+//  ⚠ **모듈 스코프다**(창 수명이 아니라 페이지 수명) — 창 안에 두면 ⌘K 를 닫았다 열 때마다 초기화돼
+//   **그 창의 첫 질의는 늘 억제가 안 걸린다**(실측 2026-08-24: 뜻 없는 질의로 창을 열면 잡음 12건이 그대로 떴다).
+//   임베딩이 꺼진 조직에선 영영 false 라 아래 규칙들이 발동하지 않는다(종전 동작 그대로).
+let simAlive = false;
+
 let hooks: OmniHooks | null = null;
 export function setOmniHooks(h: OmniHooks): void { hooks = h; }
 
@@ -138,9 +144,6 @@ export function omniOpen(seed?: string): void {
   let pending = 0;                  // 아직 안 온 원본 수(안내 문구용)
   let timer = 0;
   let qTokens: string[] = [];       // 지금 질의의 토큰(제목 적중 판정용)
-  //  이 창에서 similar(절대 코사인)가 **한 번이라도** 결과를 준 적이 있나 = 그 축이 이 조직에서 살아 있나.
-  //  임베딩이 꺼진 조직에선 영영 false 라, 아래 '무관하면 접기' 가 발동하지 않는다(종전 동작 그대로).
-  let simAlive = false;
 
   const rowNodes: HTMLElement[] = [];
   /** 제목이 질의를 통째로 담고 있나 — **종류와 무관하게** 맨 위로 올릴 근거(2026-08-20 실측 뒤 도입).
@@ -178,7 +181,7 @@ export function omniOpen(seed?: string): void {
         if (ta) return titleRank(a) - titleRank(b);
         return (sb || 0) - (sa || 0);
       })
-      .slice(0, 8);
+      .slice(0, 10);
     const topKeys = new Set(top.map((h) => h.key));
     const draw = (label: string, rows: Hit[]): void => {
       if (!rows.length) return;
@@ -206,12 +209,14 @@ export function omniOpen(seed?: string): void {
     //  지식·프로젝트는 **무관을 판정할 수단(절대 코사인)이 있다.** 그 판정이 '없음'이면 RRF 가 채운 것도 잡음이다.
     //  ⚠ 단, 임베딩이 꺼진 조직에서는 similar 가 늘 빈 결과다 — 그때 접으면 지식·프로젝트가 통째로 사라진다.
     //   그래서 **이 창에서 similar 가 한 번이라도 결과를 준 적이 있을 때만** 접는다(축이 살아 있다는 증거).
+    //  축이 살아 있고 그 채널이 **답을 했으면**, 그 종류는 관련도순이 유일한 창구다.
+    //  남는 것(코사인 컷오프 아래 + 제목도 안 맞음)은 RRF 가 채운 것뿐이고, 그건 무엇을 물어도 6건씩 나온다 —
+    //  실측: '세션이 안 열려요' 의 관련도순 8건 아래에 무관한 프로젝트 11건이 더 붙어 있었다.
+    //  아직 답이 안 온 채널은 건드리지 않는다(흘려 그리는 중에 목록이 사라지면 안 된다).
     const muted = new Set<Kind>();
     if (simAlive) {
       for (const [kind, src] of [['know', 'know:sim'], ['proj', 'proj:sim']] as Array<[Kind, string]>) {
-        const answered = buckets.has(src);
-        const relevant = (buckets.get(src) || []).length > 0 || hits.some((h) => h.kind === kind && isTitleHit(h));
-        if (answered && !relevant) muted.add(kind);
+        if (buckets.has(src)) muted.add(kind);
       }
     }
     // 위에 세운 것은 아래 종류별 묶음에서 뺀다 — 같은 줄이 두 번 뜨지 않게(배지가 종류를 말한다).
@@ -329,11 +334,11 @@ export function omniOpen(seed?: string): void {
     // ── similar = **절대 코사인** 채널 (2026-08-24) ────────────────────────────────────────
     //  이 두 줄이 '관련도순' 을 가능하게 한다. semantic 의 RRF 점수로는 못 세운다(채널마다 1등이 동점).
     //  min_score 로 **무관하면 아무것도 안 돌려준다** — "결과가 없습니다" 가 정직한 답이 되는 유일한 경로다.
-    api(`/api/ui/knowledge/similar?limit=8&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('know:sim', ((r && r.entries) || []).map((e: any): Hit => ({
+    api(`/api/ui/knowledge/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('know:sim', ((r && r.entries) || []).map((e: any): Hit => ({
       kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e),
       href: '#/k/' + encodeURIComponent(e.name), score: Number(e.similarity) || 0,
     })), my), () => put('know:sim', [], my));
-    api(`/api/ui/v6/projects/similar?limit=8&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('proj:sim', ((r && r.projects) || []).map((p: any): Hit => ({
+    api(`/api/ui/v6/projects/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r: any) => put('proj:sim', ((r && r.projects) || []).map((p: any): Hit => ({
       kind: 'proj', key: 'p:' + p.id, title: String(p.name || ('프로젝트 #' + p.id)),
       sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
       href: projHref(p), score: Number(p.similarity) || 0,
