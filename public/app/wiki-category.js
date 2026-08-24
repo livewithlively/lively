@@ -11,6 +11,7 @@ import { hasScope } from './admin.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import { HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc, knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, } from './wiki-data.js';
 import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkRow, wkSection, wkTick } from './wiki-ui.js';
+import { wkBoardHeader, wkSurfaceTabs } from './wiki-table.js'; // #1841 — 사이드바가 없어졌으니 이 화면도 같은 머리 3층을 스스로 인다
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 import { wkColHead, wkDocCols, wkTableRow } from './wiki-table.js'; // #1841 프로젝트 표 문법
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
@@ -765,7 +766,15 @@ async function renderCategorySurface(box, cat, ctx) {
     }
     libToggle.onclick = () => { libOpen = !libOpen; paintLibSec(); };
     paintLibSec();
-    const root = el('div', { class: 'wk-cat wk-cat-v2 wk-cat-v6' }, cover, el('div', { class: 'wk-cat-inner' }, ...[
+    // #1841 — ① 오로라 커버 폐지(카테고리마다 다른 그라디언트가 표면을 제각각으로 만들었다. 아이콘·제목·설명은 그대로)
+    //  ② 머리 3층을 인다 — 좌측 사이드바가 없어졌으니 여기서 나가는 길(WIKI › 스페이스 › 이 카테고리 · 표면 탭)이 화면 안에 있어야 한다.
+    const SPACE_KO = { business: '사업', product: '제품', system: '시스템' };
+    const catHeader = wkBoardHeader({
+        crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: SPACE_KO[cat.space] || '카테고리', href: '#/knowledge?cats=1' }, { label: cat.name || cat.key }],
+        sub: Number.isFinite(Number(cat.knowledge_count)) ? '문서 ' + Number(cat.knowledge_count) + '건' : '',
+        tabs: wkSurfaceTabs('cats'),
+    });
+    const root = el('div', { class: 'wk-cat wk-cat-v2 wk-cat-v6 wk-cat-flat' }, el('div', { class: 'card pjv-listboard wk-board wk-cat-board' }, catHeader), el('div', { class: 'wk-cat-inner' }, ...[
         iconBtn,
         el('div', { class: 'wk-cat-headrow' }, el('div', { class: 'wk-cat-headmain' }, titleEl, descEl), actions),
         inDrill ? null : editHint,

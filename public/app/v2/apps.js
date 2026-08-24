@@ -318,7 +318,10 @@ const FRAMELESS = new Set(['terminal', 'projects2', 'knowledge', 'context', 'lea
 export function appFrame(hash, title, opts) {
     const src = opts?.src || embedUrl(hash);
     const frame = el('iframe', { class: 'v2-frame', src, title, loading: 'eager', allow: 'clipboard-read; clipboard-write' });
-    const key = hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+    // 하위 라우트(#/k/… · #/trash · #/start/…)도 같은 앱이다 — CLASSIC_PAGES 로 앱 키를 먼저 접고 판정한다.
+    //  (안 접으면 문서 페이지에만 '클래식 화면 · 그대로 실림' 띠가 되살아난다 — #1841 실측)
+    const seg = hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+    const key = CLASSIC_PAGES[seg] || seg;
     if (!opts?.live && FRAMELESS.has(key)) {
         const pop = el('a', { class: 'v2-frame-pop', href: classicUrl(hash), target: '_blank', rel: 'noopener', title: '새 탭에서 열기', 'aria-label': '새 탭에서 열기', text: '↗' });
         return el('div', { class: 'v2-app v2-app-frameless' }, pop, frame);
