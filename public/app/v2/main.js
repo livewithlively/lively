@@ -28,6 +28,8 @@ import { ASIDE_MSG, setAsideGuestOpener } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js'; // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { mountTitlebar } from './titlebar.js'; // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
+import { mountAppUiFrame } from './app-ui.js';
+import { cachedAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, updateAppInstance } from './app-instance.js';
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
 const SOLO = new URLSearchParams(location.search).get('solo') === '1';
@@ -50,6 +52,14 @@ function dropProjView(tab) { const pv = projViews.get(tab); if (pv) {
     pv.destroy();
     projViews.delete(tab);
 } }
+function setTabAppInstance(tab, id, appId) {
+    tab.appInstanceId = id;
+    tab.appId = appId;
+}
+function clearTabAppInstance(tab) {
+    tab.appInstanceId = null;
+    tab.appId = null;
+}
 // ── 프로젝트 = 세션이 놓인 방(원준 2026-08-20) ────────────────────────────────
 /** 그 프로젝트의 **맨 위 세션** — 사이드바에서 보이는 순서와 같은 정의(side.ts bySeen). */
 /** 세션 주소를 그 세션의 **정본 id**(박스 id)로 맞춘다 — 기록 uuid 로 들어와도 같은 탭이 되도록. */
@@ -200,10 +210,19 @@ export async function bootV2() {
                 markActive(routeKey(tab.route));
             drawSide();
         },
-        onClose: (tab) => { if (tab.chat) {
-            tab.chat.destroy();
-            tab.chat = null;
-        } dropProjView(tab); drawSide(); },
+        onClose: (tab) => {
+            if (tab.chat) {
+                tab.chat.destroy();
+                tab.chat = null;
+            }
+            if (tab.appView) {
+                tab.appView.destroy();
+                tab.appView = null;
+            }
+            // 탭 닫기 = AppWindow 연결 해제. AppInstance·세션·worker 생애주기는 별도라 여기서 종료 API를 부르지 않는다.
+            dropProjView(tab);
+            drawSide();
+        },
         // 탭 두 번 눌러 이름 바꾸기(원준 2026-08-20) — 세션 탭만. 판정은 세션 화면의 규칙과 같다:
         //  내 세션이고 살아 있고 복원 대기가 아닐 때(session-chat canRename).
         canRename: (tab) => {
@@ -472,6 +491,10 @@ function titleFor(route) {
         // 아이콘 색이 될 상태 — 사이드바 점과 같은 판정(dotCls): 도는 중·확인 필요·끝남만 색을 갖는다.
         return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: !SOLO, state: dotCls(s.stateKey) };
     }
+    if (p === 'i') {
+        const instance = cachedAppInstance(decodeURIComponent(segs[1] || ''));
+        return { title: instance?.title || instance?.app?.title || '앱', noAside: true };
+    }
     if (p === 'app') {
         const a = appByKey(segs[1]);
         return { title: a ? a.title : segs[1], noAside: true };
@@ -542,13 +565,15 @@ async function onHash() {
     // ⓪ **홈에서 출발하면 그 자리에서 간다**(상민님 2026-08-20) — 홈은 [새 작업]이 새 탭으로 여는 **빈 탭**이라,
     //  거기서 연 화면이 그 탭이 된다(브라우저 새 탭 페이지 문법). 아래 ①·②보다 먼저 본다: 안 그러면 [새 작업]을
     //  누를 때마다 쓰지 않은 홈 탭이 하나씩 남는다.
-    //  새 탭에서 여는 두 경우(원준 2026-08-20):
-    //  ① **세션으로 간다** — 여러 세션이 탭으로 나란히 살아야 한다. 지금 탭을 덮어쓰면 보던 세션이 사라진다.
-    //  ② **세션에서 출발** — 세션 탭도 세션으로 남는다. 안 그러면 사이드바에서 프로젝트 한 번 눌렀다고
+    //  새 탭에서 여는 두 경우(원준 2026-08-20 + #1780 AppInstance):
+    //  ① **실행 인스턴스로 간다** — 세션(s:)·일반 앱 인스턴스(i:)가 탭으로 나란히 살아야 한다.
+    //  ② **실행 인스턴스에서 출발** — 그 탭은 해당 AppInstance 창으로 남는다. 안 그러면 다른 앱을 열었다고
     //     열어 둔 대화가 통째로 사라진다(실측: dev 에서 '안뇽' 세션 탭이 프로젝트로 바뀌어 없어졌다).
     //  나머지(프로젝트 → 프로젝트·앱 등)는 종전대로 그 탭 안에서 이동한다 — 클릭마다 탭이 불어나면 그것도 못 쓴다.
     const fromHome = routeKey(cur.route) === 'home';
-    if (!hop && !fromHome && (routeKey(hash).startsWith('s:') || routeKey(cur.route).startsWith('s:'))) {
+    const targetInstance = /^(s|i):/.test(routeKey(hash));
+    const currentInstance = /^(s|i):/.test(routeKey(cur.route));
+    if (!hop && !fromHome && (targetInstance || currentInstance)) {
         tabsApi.add(hash);
         return;
     }
@@ -585,6 +610,13 @@ async function renderRoute(tab) {
     const seq = ++tab.seq;
     const { segs, raw, params } = parseRoute(tab.route);
     const page = segs[0] || '';
+    // 한 탭에는 한 AppInstance 화면만 산다. 같은 탭이 다른 route로 이동하면 이전 iframe/브리지를 먼저 정리한다.
+    if (tab.appView) {
+        tab.appView.destroy();
+        tab.appView = null;
+    }
+    if (page !== 's' && page !== 'i')
+        clearTabAppInstance(tab);
     markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === 'connect' ? 'connect' : page === 'archive' ? 'archive' : page === 'trash' ? 'trash' : page === '' || page === 'dashboard' ? 'home' : '');
     try {
         if (page === '' || page === 'dashboard') {
@@ -667,6 +699,20 @@ async function renderRoute(tab) {
             }
             if (seq !== tab.seq)
                 return;
+            // 기존 공개 route(#/s/:id)는 유지하되 실행 정체성은 세션을 실제로 띄운 AppPackage의 AppInstance로 확보한다.
+            // 일반 세션만 ai-session builtin으로 접힌다 — 종전의 '세션 앱'과 일반 앱이 같은 package/instance 모델을 쓴다.
+            // 인스턴스 메타 실패가 살아 있는 세션 자체를 가리지 않도록 화면 렌더와는 분리한다.
+            try {
+                const title = s ? (sessText(s, projName(data, s.projectId)).main || s.label || 'AI 세션') : 'AI 세션';
+                const appId = String(s?.raw?.appId || s?.raw?.app_id || 'ai-session');
+                const instance = await ensureSessionAppInstance(appId, s?.id || id, { projectId: s?.projectId ? Number(s.projectId) : null, title });
+                if (seq !== tab.seq)
+                    return;
+                setTabAppInstance(tab, instance.id, instance.app_id);
+            }
+            catch (error) {
+                console.warn('[app-instance] AI 세션 인스턴스 확보 실패', error);
+            }
             // 팝아웃 창(?solo=1)은 **세션 하나만 담은 창**이다 — 프로젝트 셸을 두르지 않는다(그게 이 창의 정의).
             if (SOLO) {
                 const trail = drawAsideSession(tab, s || null);
@@ -681,7 +727,74 @@ async function renderRoute(tab) {
             }
             await mountProjectShell(tab, s && s.projectId ? Number(s.projectId) : 0, id, seq);
         }
+        else if (page === 'i' && segs[1]) {
+            const instance = await getAppInstance(decodeURIComponent(segs[1]));
+            if (seq !== tab.seq)
+                return;
+            setTabAppInstance(tab, instance.id, instance.app_id);
+            const renderer = instance.app.system?.renderer;
+            if (renderer === 'browser') {
+                let lastSaved = String(instance.state?.url || '');
+                let timer = 0;
+                const saveUrl = (url) => {
+                    if (!url || url === lastSaved)
+                        return;
+                    lastSaved = url;
+                    window.clearTimeout(timer);
+                    timer = window.setTimeout(() => { void updateAppInstance(instance.id, { state: { url } }).catch(() => { }); }, 300);
+                };
+                const root = browserSurface({
+                    url: String(instance.state?.url || instance.app.system?.home || 'https://www.google.com/'),
+                    title: instance.title || instance.app.title,
+                    onUrl: saveUrl,
+                });
+                tab.center.replaceChildren(root);
+                tab.appView = { destroy: () => { window.clearTimeout(timer); root.remove(); } };
+            }
+            else if (instance.subject_kind === 'session' && instance.subject_ref) {
+                // 현재 세션의 공개·공유 링크는 #/s/:id가 정본이다. 복원된 #/i route만 같은 탭 안에서 그 정본으로 넘긴다.
+                goSession(instance.subject_ref, tab);
+                return;
+            }
+            else {
+                const frame = await mountAppUiFrame(instance.app_id, {
+                    page: instance.page_key || undefined,
+                    title: instance.title || instance.app.title,
+                    instanceId: instance.id,
+                });
+                if (seq !== tab.seq) {
+                    frame.destroy();
+                    return;
+                }
+                tab.center.replaceChildren(frame.root);
+                tab.appView = frame;
+            }
+            tab.aside.replaceChildren();
+            markActive('app-instance:' + instance.app_id);
+        }
         else if (page === 'app' && segs[1]) {
+            // 구 브라우저 route를 저장한 탭/북마크는 새 browser AppPackage 인스턴스로 한 번 이관한다.
+            if (segs[1] === 'web') {
+                let url = 'https://www.google.com/';
+                if (segs[2]) {
+                    try {
+                        url = decodeURIComponent(segs[2]);
+                    }
+                    catch {
+                        url = segs[2];
+                    }
+                }
+                const instance = await createAppInstance('browser', { title: '웹 브라우저', state: { url } });
+                const href = '#/i/' + encodeURIComponent(instance.id);
+                tab.route = href;
+                if (tabsApi?.current() === tab && location.hash !== href) {
+                    suppressHash++;
+                    location.replace(location.pathname + location.search + href);
+                }
+                tabsApi?.routed(tab);
+                void renderRoute(tab);
+                return;
+            }
             const a = appByKey(segs[1]);
             const rest = segs.slice(2).join('/');
             // 브라우저 앱(#1829)은 우리 화면이 아니라 남의 웹이다 — iframe(appFrame)이 아니라 서피스로 띄운다.

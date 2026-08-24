@@ -13,6 +13,7 @@ import { stageAppSource, parseAppSource } from "../apps/install-source.js";
 import { installLoadedApp } from "../apps/install-run.js";
 import { makeDeployDeps } from "../apps/deploy.js";
 import { dropAppTables } from "../apps/store-schema.js";
+import { pruneAppInstances } from "../org/store/app-instances.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
 const wctx = (u: { userId?: string; email?: string } | undefined, ctx?: { source?: string }) => ({ actor: actorOf(u), source: ctx?.source ?? "web" });
@@ -183,6 +184,7 @@ const appRemove: Capability = {
       // 앱 데이터 테이블(app 스키마)도 명시 DROP(소유자) — 매니페스트 선언분. best-effort.
       const dataTables = ((app.manifest as { data?: { tables?: Array<{ name?: string }> } })?.data?.tables ?? []).map((t) => String(t.name));
       try { await dropAppTables(id, dataTables); } catch { /* best-effort */ }
+      await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
       await store.deleteApp(id, wctx(user, ctx));
       return { ok: true, removed: id, components: comps.length };
     });

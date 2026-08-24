@@ -15,6 +15,8 @@ test("최소 매니페스트 통과 + 기본값 채움(새 필드 부재 엣지)
   assert.deepEqual(m.permissions.tools, []);
   assert.deepEqual(m.permissions.hosts, []);
   assert.deepEqual(m.ui.pages, []);
+  assert.deepEqual(m.instances, { project: "optional", multiplicity: "multiple" });
+  assert.equal(m.system, undefined);
   assert.deepEqual(m.jobs, []);
   assert.deepEqual(m.data.tables, []);
 });
@@ -136,13 +138,41 @@ test("$schema 는 통과(편집기 자동완성) — 최상위 미지 키도 통
   assert.throws(() => parseAppManifest({ ...base(), ui: { nope: 1 } }), /매니페스트/);
 });
 
+// ── AppInstance 선언(#1780 v2.1) ────────────────────────────────────────────
+test("instances.project 3정책과 multiplicity를 정규화한다", () => {
+  for (const project of ["global", "optional", "required"] as const) {
+    const m = parseAppManifest({ ...base(), instances: { project, multiplicity: "single" } });
+    assert.deepEqual(m.instances, { project, multiplicity: "single" });
+  }
+});
+
+test("instances 중첩 미지 키와 잘못된 정책은 거부한다", () => {
+  assert.throws(() => parseAppManifest({ ...base(), instances: { project: "sometimes" } }), /instances/);
+  assert.throws(() => parseAppManifest({ ...base(), instances: { project: "optional", typo: true } }), /instances/);
+});
+
+test("builtin system renderer 선언은 파싱·보존하고 형식은 제한한다", () => {
+  const m = parseAppManifest({ ...base(), system: { renderer: "browser", home: "https://www.google.com/" } });
+  assert.deepEqual(m.system, { renderer: "browser", home: "https://www.google.com/" });
+  assert.throws(() => parseAppManifest({ ...base(), system: { renderer: "native-code" } }), /system/);
+  assert.throws(() => parseAppManifest({ ...base(), system: { renderer: "session", secret: true } }), /system/);
+});
+
+test("runtime은 worker 하나만 — entry 단축형과 중앙·원격 동일 계약을 정규화한다", () => {
+  const m = parseAppManifest({ ...base(), runtime: { entry: "main.mjs", placement: "remote" } });
+  assert.deepEqual(m.runtime, { kind: "worker", entry: "main.mjs", placement: "remote", idle_timeout_sec: 300, memory_mb: 256 });
+  assert.throws(() => parseAppManifest({ ...base(), runtime: { kind: "external", entry: "main.mjs" } }), /runtime/);
+  assert.throws(() => parseAppManifest({ ...base(), runtime: { kind: "worker", entry: "../main.mjs" } }), /runtime/);
+  assert.throws(() => parseAppManifest({ ...base(), runtime: { kind: "worker", entry: "main.mjs", placement: "gateway-only" } }), /runtime/);
+});
+
 // ── #1780 v2 §7-1(사양 H6) — 전방호환: 최상위 미지 키 통과 · schema_version · 설치 게이트 ──
 import { assertInstallableManifest, SUPPORTED_MANIFEST_SCHEMA } from "./manifest.js";
 import { HttpError } from "../http-error.js";
 
-test("최상위 미지 키(runtime 등)는 통과하고 값이 보존된다(롤백 재파싱 안전)", () => {
+test("정식 runtime은 정규화되고, 그 밖의 최상위 미지 키는 보존된다(롤백 재파싱 안전)", () => {
   const m = parseAppManifest({ ...base(), runtime: { kind: "worker", entry: "main.js" }, triggers: [{ kind: "cron" }] });
-  assert.deepEqual((m as Record<string, unknown>).runtime, { kind: "worker", entry: "main.js" });
+  assert.deepEqual((m as Record<string, unknown>).runtime, { kind: "worker", entry: "main.js", placement: "any", idle_timeout_sec: 300, memory_mb: 256 });
   assert.deepEqual((m as Record<string, unknown>).triggers, [{ kind: "cron" }]);
 });
 

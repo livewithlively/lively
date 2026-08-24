@@ -1,0 +1,16 @@
+{
+  "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
+  "id": "ai-session",
+  "title": "AI 세션",
+  "version": "0.1.0",
+  "publisher": { "name": "Lively" },
+  "permissions": {},
+  "instances": {
+    "project": "optional",
+    "multiplicity": "multiple"
+  },
+  "system": {
+    "renderer": "session",
+    "route": "#/s/{subject_ref}"
+  }
+}

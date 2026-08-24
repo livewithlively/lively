@@ -1,8 +1,9 @@
 // org 스키마 조각 — apps: 라이블리 앱 레지스트리(#1780). "OS/앱 계층 분리"의 저장층.
-//  org_app(설치된 앱 + 저널 상태) · org_app_component(앱→전개된 구성요소 행 조인) · org_app_grant(멤버별 동의).
+//  org_app(package) · org_app_component(전개 저널) · org_app_grant(동의) · org_app_ui_asset(UI) ·
+//  org_app_instance(실행 단위) · org_app_instance_project(프로젝트 귀속 이력).
 //  설계: project/1780/design-v1.md (R1·R2 적대검증 반영). 신규 조각 규약 — org/schema.ts 오케스트레이터 **맨 끝**에서 호출.
 //
-// 멀티테넌트: 이 세 테이블은 전부 public 스키마 → ensureTenantColumn/ensureTenantPolicies 가 tenant_id + 복합 UNIQUE +
+// 멀티테넌트: 이 표들은 전부 public 스키마 → ensureTenantColumn/ensureTenantPolicies 가 tenant_id + 복합 UNIQUE +
 //  RLS 를 **자동** 부착한다(initAllSchemas 끝에서). ⚠ 그 자동은 public 전용이다(activate.ts:97 nspname='public') —
 //  앱의 **데이터 테이블**(app 스키마)은 이 자동을 못 받으므로 별도 처리한다(design D6, 이 파일 밖).
 //
@@ -109,6 +110,46 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ui_asset_app_idx ON org_app_ui_asset(app_id);`);
+
+  // ── org_app_instance — 설치된 package 와 실제 실행 단위를 분리(#1780 v2.1) ──
+  //  project_id NULL = 프로젝트 비소속. 프로젝트 귀속은 package 가 아니라 instance 별 현재 맥락이며 권한이 아니다.
+  //  subject_kind/ref 는 외부 정체성을 가진 인스턴스(첫 기준: session)를 멱등 확보하는 키다.
+  //  신규 앱 표는 기존 org_app 에 FK 를 걸지 않는다(v2.1 K 규칙) — 제거 시 store.pruneAppInstances 가 명시 회수한다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_instance(
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      owner_member TEXT NOT NULL,
+      project_id INT,
+      subject_kind TEXT,
+      subject_ref TEXT,
+      page_key TEXT,
+      title TEXT,
+      state JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (octet_length(state::text) <= 131072),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      closed_at TIMESTAMPTZ,
+      CHECK ((subject_kind IS NULL) = (subject_ref IS NULL))
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_instance_app_owner_idx ON org_app_instance(app_id, owner_member, updated_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_instance_project_idx ON org_app_instance(project_id) WHERE project_id IS NOT NULL;`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS org_app_instance_subject_uq
+    ON org_app_instance(app_id, owner_member, subject_kind, subject_ref)
+    WHERE subject_kind IS NOT NULL AND subject_ref IS NOT NULL;`);
+
+  // 귀속 시간구간 — 인스턴스를 옮겨도 과거 활동의 프로젝트 맥락을 소급 변경하지 않는다.
+  // project_id NULL 행은 명시적인 비소속 전환이다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_instance_project(
+      id BIGSERIAL PRIMARY KEY,
+      instance_id TEXT NOT NULL,
+      project_id INT,
+      valid_from TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_instance_project_instance_idx ON org_app_instance_project(instance_id, valid_from DESC);`);
 
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.

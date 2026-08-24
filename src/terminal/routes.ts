@@ -9,7 +9,6 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { assertAppSessionPlacement } from "./session-create-guards.js";
 import { logger } from "../log.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -42,6 +41,9 @@ import { deadSessionMeta } from "./session-meta.js";                 // #1820 �
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
+import { mintAppToken } from "../apps/principal.js";
+import { prepareAppAssets } from "../apps/session-assets.js";
+import { gatewayUrl } from "../gateway-url.js";
 
 /** #1683 후속2 — 그 세션이 어느 하네스로 떴나(tmux 세션 옵션 @box_harness). 모르면 빈 문자열. */
 async function sessionHarnessKey(id: string): Promise<string> {
@@ -52,6 +54,15 @@ async function sessionHarnessKey(id: string): Promise<string> {
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
 function themeOf(req: { headers: Record<string, unknown> }, b: Record<string, unknown>): "dark" | "light" | undefined {
   return normalizeTheme(req.headers["x-lively-theme"]) ?? normalizeTheme(b.theme);
+}
+
+/** 원격 ExecutionHost에는 조직 DB가 없다. 게이트웨이가 앱 권한·토큰·자산을 확정해 내부 봉투로 넘긴다. */
+async function prepareRemoteAppSession(input: CreateInput, memberId: string): Promise<CreateInput> {
+  if (!input.appId) return input;
+  // 자산 무결성을 먼저 확인한 뒤 토큰을 굽는다. 자산 오류 때문에 사용되지 않는 자격이 생기는 시간을 줄인다.
+  const [assets, gw] = await Promise.all([prepareAppAssets(input.appId), gatewayUrl()]);
+  const { token } = await mintAppToken(memberId, input.appId, "app-spawn-remote");
+  return { ...input, appSession: { appId: input.appId, token, gatewayUrl: gw, assets } };
 }
 
 // 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
@@ -605,13 +616,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
     if (nodeId) {
-      assertAppSessionPlacement(input, nodeId); // #1780 v2 §7-1 — 앱 세션은 노드에 못 싣는다(relay 전에 400)
       await requireCreatableNode(req, nodeId);
       const me = idOf(userOf(req));
       const invites = await validateInvites(b.invites, me);
       // #1541 hostProfile — member 노드 && 생성자=주인이면 그 PC 의 네이티브 하네스 설정 그대로(CreateInput 주석). 조회 실패 = false(주입 유지).
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
-      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites });
+      const remoteInput = await prepareRemoteAppSession(input, me);
+      const op: NodeOp = input.appId ? "createAppSession" : "create";
+      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...remoteInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
       // #1791 — desired-state 정본은 게이트웨이가 쓴다(노드엔 DB 가 없다). 죽어도 '복원 가능(그 노드)'로 남는 근거.
       await mirrorNodeSession({ ...session, invites }, nodeId, input, me);
@@ -793,13 +805,16 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
         projectId: st.project_id || undefined, projectSrc: st.project_src === "org" ? "org" : "v6",
         readOnly: st.read_only, incognito: st.incognito,
         writeVis: st.write_vis ?? undefined, restrictRead: !!st.restrict_read,
+        appId: st.app_id || undefined,
         ...(resumeId ? { resume: resumeId } : { resumePick: true }),
       };
       const owner = st.owner;
       // #1541 hostProfile — 원 소유자 기준(생성 때와 같은 판정). 조회 실패 = false(주입 유지).
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, owner)).catch(() => false);
       const invites = Array.isArray(st.invites) ? st.invites : [];
-      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: owner }, input: { ...input, invites: [], hostProfile }, invites });
+      const remoteInput = await prepareRemoteAppSession(input, owner);
+      const op: NodeOp = input.appId ? "createAppSession" : "create";
+      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: owner }, input: { ...remoteInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
       if (st.claude_session_id) {

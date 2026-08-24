@@ -58,7 +58,7 @@ export interface AppUiFrame { root: HTMLElement; destroy(): void }
  * 앱 UI 를 샌드박스 iframe 으로 만들어 **프레임 + 정리 함수**를 돌려준다(호출부가 원하는 자리에 붙인다).
  *  브리지(postMessage)는 이 프레임에만 반응하는 핸들러로 걸리고 destroy() 가 떼어 낸다 — 여러 앱 UI 공존 안전.
  */
-export async function mountAppUiFrame(appId: string, opts?: { page?: string; title?: string }): Promise<AppUiFrame> {
+export async function mountAppUiFrame(appId: string, opts?: { page?: string; title?: string; instanceId?: string }): Promise<AppUiFrame> {
   const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
   const data = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
   if (!data || typeof data.html !== 'string') throw new Error('UI 를 받지 못했습니다');
@@ -75,7 +75,7 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
     if (!msg || typeof msg !== 'object' || typeof msg.method !== 'string') return;
     const reply = (payload: unknown): void => frame.contentWindow?.postMessage(payload, '*');
     if (msg.method === 'ui/initialize') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, page: data.page_key ?? null, capabilities: { tools: true } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, capabilities: { tools: true } } });
     } else if (msg.method === 'tools/call') {
       const name = String(msg.params?.name ?? '');
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;

@@ -15,7 +15,7 @@
 //   내부 공유용 승격 export(tmux()·paneAwaitingInput 등)는 각 모듈에서 직접 import 한다(배럴 비노출).
 export {
   TMUX_BIN, PANE_LOCALE, roots, sharedRoot, HARNESSES, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, harnessLiveThemeSteps, harnessLiveThemeSupported,
-  type Root, type FlagDef, type Harness, type SessionInfo, type CreateInput,
+  type Root, type FlagDef, type Harness, type SessionInfo, type CreateInput, type PreparedAppSession,
 } from "./catalog.js";
 export {
   listSessionPanePids, isSessionGoneError, sessionGone, tidyHistory,

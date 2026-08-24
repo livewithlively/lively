@@ -33,6 +33,15 @@ export const APP_WIDGET_SURFACES = ["home", "aside", "launchpad"] as const;
 // 잡 실행 종류(design D4 — v1 은 headless 만 실효, inject/managed 는 스펙 예약).
 export const APP_JOB_KINDS = ["headless", "inject"] as const;
 
+// 앱 **실행 인스턴스**가 프로젝트 맥락을 갖는 방식(#1780 v2.1).
+//  package 설치와 instance 실행은 다른 축이다: 같은 package 에서 프로젝트가 다른 인스턴스가 여러 개 열릴 수 있다.
+export const APP_PROJECT_AFFINITIES = ["global", "optional", "required"] as const;
+export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
+
+// OS가 직접 그리는 builtin 전용 renderer. 매니페스트에는 기록되지만, 소비자는 source.kind='builtin' 일 때만 신뢰한다.
+//  외부 앱이 같은 문자열을 선언해도 generic opaque iframe 경로를 벗어나지 못한다.
+export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic"] as const;
+
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
 const idSchema = z.string().regex(APP_ID_RE, "id 는 소문자 영숫자/- 2~32자(소문자·숫자로 시작)여야 합니다");
@@ -97,6 +106,30 @@ const uiSchema = z.object({
   widgets: z.array(uiWidgetSchema).default([]),
 }).strict();
 
+const instancesSchema = z.object({
+  project: z.enum(APP_PROJECT_AFFINITIES).default("optional"),
+  multiplicity: z.enum(APP_INSTANCE_MULTIPLICITIES).default("multiple"),
+}).strict().default({});
+
+const systemSchema = z.object({
+  renderer: z.enum(APP_SYSTEM_RENDERERS),
+  route: z.string().max(512).optional(),
+  home: z.string().url().max(2000).optional(),
+}).strict().optional();
+
+// 서버측 앱 코드는 worker 한 종류만(v2.1). external은 후속으로 미뤘으므로 어휘에도 넣지 않는다.
+// runtime 부재는 "실행 코드 없음"이 아니라 별도 서버 worker 없음(UI/system renderer만 실행 가능)을 뜻한다.
+const runtimeEntrySchema = z.string().min(1).max(512)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*\.(?:m?js)$/, "entry 는 패키지 안의 .js/.mjs 상대경로여야 합니다")
+  .refine((entry) => !entry.split("/").includes(".."), "entry 에 '..' 경로를 쓸 수 없습니다");
+const runtimeSchema = z.object({
+  kind: z.literal("worker").default("worker"),
+  entry: runtimeEntrySchema,
+  placement: z.enum(["any", "central", "remote"]).default("any"),
+  idle_timeout_sec: z.number().int().min(30).max(3600).default(300),
+  memory_mb: z.number().int().min(64).max(512).default(256),
+}).strict().optional();
+
 const jobSchema = z.object({
   key: slugSchema,
   schedule: z.string().min(1).max(120),              // cron 식 — 스케줄러가 재검증
@@ -155,6 +188,11 @@ export const appManifestSchema = z.object({
     http_tools: z.array(z.record(z.unknown())).default([]),  // org_tool 프리셋 형식(설치가 재검증)
   }).strict().default({}),
   ui: uiSchema.default({}),
+  // 실행 인스턴스 정책. 기존 v1 앱은 optional+multiple 로 해석해 무회귀.
+  instances: instancesSchema,
+  // builtin/system app 만 소비하는 셸 renderer 선언. 설치 파서는 보존하고 실행 경계가 source.kind 로 제한한다.
+  system: systemSchema,
+  runtime: runtimeSchema,
   csp: cspSchema,
   jobs: z.array(jobSchema).default([]),
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),

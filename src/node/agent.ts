@@ -245,7 +245,8 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       const b = args.bind as { projectId: number; folder: string; name?: string | null; src?: "v6" | "org" } | null | undefined;
       return applySessionProject(user, String(args.id), b && Number(b.projectId) > 0 ? b : null);
     }
-    case "create": {
+    case "create":
+    case "createAppSession": {
       const session = await createSession(user, args.input as CreateInput);
       // 초대는 게이트웨이가 구성원 디렉터리로 검증해 넘긴다 — 노드엔 DB 가 없어 createSession 내부 검증이 빈 배열이 됨.
       const invites = Array.isArray(args.invites) ? (args.invites as string[]) : [];

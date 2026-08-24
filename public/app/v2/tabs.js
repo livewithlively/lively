@@ -30,7 +30,7 @@ export function routeKey(route) {
     const p = segs[0] || '';
     if (!p || p === 'dashboard')
         return 'home';
-    if (p === 'p' || p === 's' || p === 'app')
+    if (p === 'p' || p === 's' || p === 'i' || p === 'app')
         return p + ':' + decodeURIComponent(segs[1] || '');
     return 'raw:' + h;
 }
@@ -51,7 +51,7 @@ export function createTabs(centerHost, asideHost, hooks) {
             route, title: title || hooks.titleFor(route).title, noAside: hooks.titleFor(route).noAside,
             center: el('div', { class: 'v2-tabpane', hidden: true }),
             aside: el('div', { class: 'v2-aside-pane', hidden: true }),
-            rendered: false, chat: null, seq: 0,
+            rendered: false, chat: null, appInstanceId: null, appId: null, appView: null, seq: 0,
         };
         centerHost.append(t.center);
         asideHost.append(t.aside);

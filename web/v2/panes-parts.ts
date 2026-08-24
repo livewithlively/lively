@@ -23,8 +23,8 @@ import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 import { sessText } from './side.js';
-import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
-import { mountAppUiFrame, type AppUiFrame } from './app-ui.js';
+import { listSessionApps, openAppSession } from './app-session.js';
+import { openInstalledApp } from './app-instance.js';
 import { type Sess, type V2Data } from './views.js';
 
 // 아이콘은 곁칸 곳곳(panes.ts · proj-settings.ts)이 여기서 받아 왔다 — 잎으로 옮긴 뒤에도 그 자리를 유지한다.
@@ -93,7 +93,7 @@ export const PART_DEFS: PartDef[] = [
   { type: 'web', name: '웹', icon: 'globe', hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'globe', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
   { type: 'editor', name: '뷰어', icon: 'eye', hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상.' },
-  { type: 'apps', name: '앱', icon: 'grid', hint: '설치된 앱을 이 칸에서 엽니다 — 화면 있는 앱은 여기 바로, 세션 앱은 새 세션으로.' },
+  { type: 'apps', name: '앱', icon: 'grid', hint: '설치된 앱을 고르면 각 앱이 상단의 자기 탭에서 열립니다.' },
 ];
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
@@ -1175,33 +1175,16 @@ function viewerPart(ctx: PartCtx): Part {
   };
 }
 
-// ══ 앱 — 설치된 앱을 이 칸에서 연다 (#1780 panes 정합) ═══════════════════════════
-//  화면 있는 앱(ui.pages)은 **이 칸 안에** 샌드박스 iframe 으로 연다(모달 아님 — panes 탭 문법). 세션 앱은 새 세션으로.
-//  브리지·격리는 app-ui.mountAppUiFrame 이 그대로 — 여러 칸에 앱을 열어도 프레임별 핸들러라 안전.
+// ══ 앱 — 이 칸은 런처, 실제 앱은 AppInstance 상단 탭(#1780 v2.1) ════════════════
+//  앱 UI를 이 pane에 직접 끼우면 한 실행이 어떤 때는 top-level 앱, 어떤 때는 세션의 부품이 되어 앱 개념이 다시 둘로 갈린다.
+//  그래서 이 칸은 목록만 소유하고, 화면 앱은 AppInstance를 만들어 #/i/:id 탭으로, headless 앱은 앱 세션 탭으로 연다.
 function appsPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-apps' });
-  let frame: AppUiFrame | null = null;
-  const drop = (): void => { if (frame) { frame.destroy(); frame = null; } };
-
-  const openInPane = async (a: SessionApp): Promise<void> => {
-    drop();
-    root.replaceChildren(el('p', { class: 'pn-fine', text: '여는 중…' }));
-    try {
-      const f = await mountAppUiFrame(a.id, { title: a.title });
-      if (ctx.dead()) { f.destroy(); return; }
-      frame = f;
-      root.replaceChildren(
-        el('div', { class: 'pn-apps-bar' },
-          el('button', { class: 'btn-text', type: 'button', text: '← 앱 목록', onclick: () => void list() }),
-          el('b', { class: 'pn-apps-cur', text: a.title })),
-        f.root);
-    } catch (e: any) { root.replaceChildren(el('p', { class: 'pn-fine', text: '앱을 열지 못했어요 — ' + (e?.message || e) })); }
-  };
 
   const list = async (): Promise<void> => {
-    drop();
     root.replaceChildren(el('p', { class: 'pn-fine', text: '불러오는 중…' }));
-    const apps = await listSessionApps();
+    // ai-session은 OS의 기본 새 작업/세션 진입이 이미 정본이다. 설치 앱 목록에 중복 런처로 노출하지 않는다.
+    const apps = (await listSessionApps()).filter((a) => a.id !== 'ai-session');
     if (ctx.dead()) return;
     if (!apps.length) {
       root.replaceChildren(el('div', { class: 'pn-empty' },
@@ -1210,18 +1193,19 @@ function appsPart(ctx: PartCtx): Part {
       return;
     }
     root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
-      const hasUi = a.pages.length > 0;
+      const hasUi = a.pages.length > 0 || a.system?.renderer === 'browser';
+      const projectId = a.instances.project === 'global' ? null : ctx.id;
       return el('button', { class: 'pn-app', type: 'button',
-        title: hasUi ? '이 칸에서 앱 화면을 엽니다' : '이 앱 전용 AI 세션을 엽니다',
-        onclick: () => { if (hasUi) void openInPane(a); else void openAppSession(a.id, { title: a.title }); } },
+        title: hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
+        onclick: () => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); } },
         el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'grid' : 'chat', 'pn-i')),
         el('b', { text: a.title }),
-        el('span', { class: 'pn-fine', text: hasUi ? '앱 화면' : '앱 세션' }));
+        el('span', { class: 'pn-fine', text: hasUi ? '앱 탭' : '앱 세션 탭' }));
     })));
   };
 
   void list();
-  return { root, destroy: drop };
+  return { root };
 }
 
 // ══ 미리보기 — 띄워 둔 화면을 웹 칸으로 보낸다 (원준 2026-08-21) ══════════

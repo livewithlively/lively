@@ -36,6 +36,7 @@ export interface TmuxDesired {
   flags: Record<string, string>;
   invites: string[];
   projectId: number | null;
+  appId: string | null;
 }
 
 /** 조회 결과 — 어느 축에서 왔는지까지 알려준다(진단·정리기 판단용). */
@@ -67,6 +68,7 @@ export function resolveDesired(db: SessionState | undefined, tmux: TmuxDesired):
     flags: Object.keys(db.flags || {}).length ? db.flags : tmux.flags,
     invites: db.invites.length ? db.invites : tmux.invites,
     projectId: pick(db.project_id, tmux.projectId),
+    appId: pick(db.app_id, tmux.appId),
   };
 }
 

@@ -73,7 +73,7 @@ export async function mountAppUiFrame(appId, opts) {
             return;
         const reply = (payload) => frame.contentWindow?.postMessage(payload, '*');
         if (msg.method === 'ui/initialize') {
-            reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, page: data.page_key ?? null, capabilities: { tools: true } } });
+            reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, capabilities: { tools: true } } });
         }
         else if (msg.method === 'tools/call') {
             const name = String(msg.params?.name ?? '');

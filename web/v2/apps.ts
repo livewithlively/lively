@@ -7,7 +7,7 @@
 import { el, navOn, sv } from '../core.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
-import { openAppUi } from './app-ui.js';
+import { openInstalledApp } from './app-instance.js';
 
 export interface AppDef {
   key: string;        // 안정 키(= 클래식 data-tab 슬러그 또는 페이지 이름)
@@ -32,8 +32,6 @@ export const APPS: AppDef[] = [
   { key: 'context', title: '맥락 관리', desc: '수집(연결) · 증류 · 분류 · 자동 관리 파이프라인', route: 'context', tab: 'context', icon: 'ctx' },
   { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
   { key: 'system', title: '설정', desc: '내 설정 · 조직 · 구성원 · 운영', route: 'system', tab: 'system', icon: 'sys' },
-  { key: 'web', title: '웹', desc: '주소를 넣으면 이 화면 안에서 그대로 — 데스크톱 앱에서만 안에 열립니다', route: 'web', tab: null, icon: 'web',
-    kind: 'browser', home: 'https://www.google.com/' },
   { key: 'learn', title: '사용 가이드', desc: '둘러보기 · 문서 · 시작하기', route: 'learn', tab: null, icon: 'learn' },
 ];
 
@@ -293,12 +291,13 @@ export function openLaunchpad(): void {
       el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, title: a.desc, onclick: () => closeLaunchpad() },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)),
         el('b', { text: a.title })));
-    const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
+    const session = sApps.filter((a) => a.id !== 'ai-session')
+      .filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
       const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
       return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
         title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
-        onclick: () => { closeLaunchpad(); if (hasUi) void openAppUi(a.id, { title: a.title }); else void openAppSession(a.id, { title: a.title }); } },
+        onclick: () => { closeLaunchpad(); if (hasUi || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title }); } },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(hasUi ? 'liv' : 'term')),
         el('b', { text: a.title }),
         el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
