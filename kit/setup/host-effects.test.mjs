@@ -6,6 +6,7 @@ import {
 } from "./host-effects.mjs";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 let pass = 0, fail = 0;
@@ -113,8 +114,8 @@ eq("P-W2 제품 entrypoint → native capability 명시",
     execFile: (...a) => { calls.push(a); return "node"; },
     spawnSync: (...a) => { calls.push(a); return "scheduler"; },
   });
-  eq("P-W1a sandbox → 고포트 loopback mock 허용",
-    { mode: sandbox.mode, result: await sandbox.fetch("http://127.0.0.1:49152/mock"), calls: calls.length },
+  eq("P-W1a sandbox → Linux 하한 포함 동적 고포트 loopback mock 허용",
+    { mode: sandbox.mode, result: await sandbox.fetch("http://127.0.0.1:32768/mock"), calls: calls.length },
     { mode: "sandbox", result: "mock", calls: 1 });
   eq("P-W1b sandbox → 현재 Node helper 허용",
     { result: sandbox.execFileSync(process.execPath, []), calls: calls.length },
@@ -122,9 +123,24 @@ eq("P-W2 제품 entrypoint → native capability 명시",
   eq("P-W1c sandbox → 기본 로컬 서비스 포트 차단",
     { error: await denied(() => sandbox.fetch("http://127.0.0.1:8080/api")), calls: calls.length },
     { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "network" }, calls: 2 });
+  eq("P-W1c2 sandbox → 동적 고포트 바로 아래 경계 차단",
+    { error: await denied(() => sandbox.fetch("http://127.0.0.1:32767/api")), calls: calls.length },
+    { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "network" }, calls: 2 });
   eq("P-W1d sandbox → 작업 스케줄러 차단",
     { error: await denied(() => sandbox.schedulerSync("schtasks", ["/Create"])), calls: calls.length },
     { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "scheduler" }, calls: 2 });
+}
+{
+  const calls = [];
+  const sandboxRoot = join(tmpdir(), "lively-host-effects-sandbox");
+  const scheduler = join(sandboxRoot, "bin", process.platform === "win32" ? "schtasks.exe" : "systemctl");
+  const sandbox = entrypointHostEffects({
+    env: { LIVELY_HOST_EFFECTS: "deny", LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", LIVELY_HOME: sandboxRoot },
+    spawnSync: (...a) => { calls.push(a); return { status: 0 }; },
+  });
+  eq("P-W1d2 sandbox → 샌드박스 내부 스케줄러 stub만 허용",
+    { result: sandbox.schedulerSync(scheduler, ["status"]), calls: calls.length },
+    { result: { status: 0 }, calls: 1 });
 }
 {
   const calls = [];

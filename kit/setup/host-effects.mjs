@@ -85,7 +85,9 @@ const sandboxNetworkAllowed = (input) => {
     const u = new URL(typeof input === "string" ? input : input?.url);
     const loopback = u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "[::1]";
     const port = Number(u.port);
-    return loopback && Number.isInteger(port) && port >= 49152 && port <= 65535;
+    // Linux의 listen(0)은 통상 32768부터 배정된다. IANA의 49152만 가정하면 CI의 실제
+    // loopback fixture를 차단한다. 기본 서비스 포트는 이 범위 밖이라 계속 닫힌다.
+    return loopback && Number.isInteger(port) && port >= 32768 && port <= 65535;
   } catch { return false; }
 };
 
@@ -107,6 +109,7 @@ export function createHostEffects({
   const guard = (kind, operation, detail) => {
     if (enabled) return;
     if (mode === "sandbox" && kind === "external-cli" && sandboxProcessAllowed(detail, env)) return;
+    if (mode === "sandbox" && kind === "scheduler" && sandboxProcessAllowed(detail, env)) return;
     if (mode === "sandbox" && kind === "network" && sandboxNetworkAllowed(detail)) return;
     throw new HostEffectDeniedError(kind, operation);
   };
@@ -125,7 +128,7 @@ export function createHostEffects({
       return spawnSync(command, args, options);
     },
     schedulerSync(command, args = [], options = {}) {
-      guard("scheduler", commandName(command), command);
+      guard("scheduler", commandName(command), { command, args, options });
       return spawnSync(command, args, options);
     },
     fetch(input, init) {
