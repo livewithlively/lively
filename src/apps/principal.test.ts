@@ -67,3 +67,28 @@ test("EXEMPT 는 읽기/보고/인프라만(콘텐츠 쓰기 이름 0건) — �
 test("앱 토큰 TTL 은 유한·양수(고아 토큰 방지)", () => {
   assert.ok(APP_TOKEN_TTL_SEC > 0 && Number.isFinite(APP_TOKEN_TTL_SEC));
 });
+
+// ── 앱 토큰의 MCP 표면(#1780 v2.1 R4-M1, 사양 spec-h8) — EXEMPT 는 REST 배관 전용: MCP 로는 감추고(403) 일반 세션은 무회귀 ──
+import { appMcpHidden, requireAppToolMcp } from "./principal.js";
+import { HttpError } from "../http-error.js";
+
+test("appMcpHidden: 앱 토큰이면 EXEMPT 8종 전부 감춤, 그 외 도구는 감추지 않음", () => {
+  for (const ex of APP_TOOL_EXEMPT) assert.equal(appMcpHidden("browser", ex), true, ex);
+  assert.equal(appMcpHidden("browser", "knowledge_search"), false);
+  assert.equal(appMcpHidden("browser", "store_query"), false);
+});
+
+test("appMcpHidden: appId 없음(undefined/null/'')은 항상 false(무회귀)", () => {
+  for (const id of [undefined, null, ""]) {
+    for (const ex of APP_TOOL_EXEMPT) assert.equal(appMcpHidden(id, ex), false, `${String(id)}:${ex}`);
+  }
+});
+
+test("requireAppToolMcp: 앱 토큰 + EXEMPT → 403, 앱 토큰 + 일반 도구 → 통과, 일반 세션 → 통과", () => {
+  const app = { userId: "m", email: "", scopes: [], projects: [], appId: "browser" } as any;
+  const plain = { userId: "m", email: "", scopes: [], projects: [] } as any;
+  assert.throws(() => requireAppToolMcp(app, "whoami"), (e: unknown) => e instanceof HttpError && e.status === 403);
+  assert.throws(() => requireAppToolMcp(app, "org_runner_hooks"), (e: unknown) => e instanceof HttpError && e.status === 403);
+  assert.doesNotThrow(() => requireAppToolMcp(app, "knowledge_search"));
+  assert.doesNotThrow(() => requireAppToolMcp(plain, "whoami"));
+});

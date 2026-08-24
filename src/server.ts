@@ -65,6 +65,7 @@ export function buildServer(
   harness?: string | null,
   readOnly?: boolean, // 읽기전용 세션(#1007) — true 면 registerMcpCapabilities 가 쓰기 capability 를 등록 스킵(tools/list 소거).
   incognito?: boolean, // 인코그니토 세션(#1007+) — true 면 capability·db 툴 전부 스킵(빈 표면 = 사실상 연결없음).
+  appId?: string | null, // 앱 토큰 세션(#1780 v2.1) — EXEMPT 배관 도구를 tools/list 에서 감춘다. 일반 토큰 null.
 ): McpServer {
   const server = new McpServer({ name: "context-ontology", version: "0.1.0" });
   // registerTool 단일 wrap — 두 일을 한 경로에서 한다(capability·db·dynamic 모든 등록이 여길 지난다):
@@ -77,6 +78,6 @@ export function buildServer(
     return (orig as (...a: unknown[]) => unknown)(name, config, cb);
   }) as typeof server.registerTool;
   if (!incognito) registerDbTools(server, harness); // 제품 DB (읽기전용 — SELECT-only). 읽기전용 세션엔 유지, 인코그니토엔 스킵(읽기도 차단 = 클린룸).
-  registerMcpCapabilities(server, overrides, alwaysLoadOverrides, harness, readOnly, incognito); // 읽기전용 쓰기 스킵 / 인코그니토 전체 스킵(#1007)
+  registerMcpCapabilities(server, overrides, alwaysLoadOverrides, harness, readOnly, incognito, appId); // 읽기전용 쓰기 스킵 / 인코그니토 전체 스킵(#1007) / 앱 토큰 배관 소거(#1780)
   return server;
 }
