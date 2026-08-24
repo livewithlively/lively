@@ -69,6 +69,11 @@ export async function initOrgCore(pool: Pool): Promise<void> {
     -- 라이블리 스킬 opt-out(org_asset_pref)과 다르다: 그건 멤버 단위(모든 머신 배포분), 이건 **그 머신의 로컬 파일만**.
     -- 세션훅(sync-harness-assets)이 자기 machine_id 지시를 pull 해 로컬 파일을 비파괴 rename 한다(원본 보존).
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS harness_local_pref JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- local_mode_pref = 이 멤버의 컴퓨터별 lively run 기본 연결 상태(#1869). 형태:
+    --   { "<machine_id>": { "mode": "normal"|"readonly"|"incognito", "updated_at": "<iso>" } }
+    -- 웹에서 바꾸면 CLI 가 **하네스를 띄우기 전에** pull 해 ~/.lively/mode 에 반영한다. incognito 는 세션훅을
+    -- 끄므로 harness_local_pref 경로에 섞으면 웹에서 다시 켤 수 없다 — 그래서 훅과 독립된 CLI preflight 설정이다.
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS local_mode_pref JSONB NOT NULL DEFAULT '{}'::jsonb;
     -- harness_machine_alias = 머신별 사용자 지정 별명(#893 후속). 형태: { "<machine_id>": "집 맥북" }.
     --  관측(host)과 별개다 — 세션 report 는 host 만 관측하고 이 별명은 안 건드린다(사용자가 직접 지정, 리포트에 안 실림).
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS harness_machine_alias JSONB NOT NULL DEFAULT '{}'::jsonb;

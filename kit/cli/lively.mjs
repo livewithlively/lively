@@ -1738,10 +1738,40 @@ async function cmdSelfcheck(opts) {
 //  incognito: 주입 ✗ / 읽기 ✗ / 쓰기 ✗ (게이트웨이가 x-lively-mode=incognito 로 lively 툴 0개+전체 차단 = 사실상 연결없음) + 훅 off
 const MODES = ["normal", "readonly", "incognito"];
 const MODE_FILE = "mode";
+const MODE_PENDING_FILE = "mode-local-pending";
 // 디폴트 모드(~/.lively/mode) — 유효하지 않거나 없으면 normal.
 function defaultMode() { const m = readLively(MODE_FILE); return MODES.includes(m) ? m : "normal"; }
+function localMachineId() {
+  const cur = readLively("machine-id");
+  if (/^[a-f0-9-]{8,64}$/i.test(cur)) return cur;
+  try { const id = crypto.randomUUID(); writeLively("machine-id", id + "\n"); return id; }
+  catch { return ""; }
+}
+// 웹 기본값은 하네스를 띄우기 **전**에 당긴다. incognito 는 LIVELY_OFF 로 세션훅 자체가 멈추므로 훅에서
+// 이 값을 당기면 웹에서 다시 켤 수 없다. 서버가 안 닿으면 마지막 로컬값을 보존한다.
+// `lively mode` 가 오프라인에서 바뀌었으면 pending 이 남는다 — 다음 온라인 run 이 그 로컬 선택을 먼저 서버에 올린다.
+async function syncDefaultMode() {
+  const local = defaultMode();
+  const machineId = localMachineId();
+  if (!machineId) return local;
+  const pending = readLively(MODE_PENDING_FILE);
+  if (MODES.includes(pending)) {
+    try {
+      await api("/api/ui/me/local-mode", { timeoutMs: 1500, method: "POST", body: { machine_id: machineId, mode: pending } });
+      rmSync(join(LIVELY, MODE_PENDING_FILE), { force: true });
+      return pending;
+    } catch { return local; }
+  }
+  try {
+    const out = await api(`/api/ui/me/local-mode?machine_id=${encodeURIComponent(machineId)}`, { timeoutMs: 1500 });
+    const remote = out?.preference?.mode;
+    if (!MODES.includes(remote)) return local; // 명시값 부재·잡값은 로컬을 덮지 않는다.
+    if (remote !== local) writeLively(MODE_FILE, remote + "\n");
+    return remote;
+  } catch { return local; }
+}
 // rest 에서 모드 플래그(--mode M / --readonly / --incognito / --normal)를 뽑고 나머지를 돌려준다. 플래그 없으면 디폴트, 여러 개면 마지막이 이긴다.
-function extractMode(rest) {
+function extractMode(rest, fallback = defaultMode()) {
   let mode = null; const out = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -1751,7 +1781,12 @@ function extractMode(rest) {
     else if (a === "--normal") mode = "normal";
     else out.push(a);
   }
-  return { mode: mode ?? defaultMode(), rest: out };
+  return { mode: mode ?? fallback, rest: out };
+}
+// 이번 실행에서 모드를 명시했다면 웹 기본값을 조회하지 않는다. 특히 --incognito 는
+// "연결을 끄고 시작"하겠다는 clean-room 선택이므로, 시작 전 기본값 조회조차 발생하면 안 된다.
+function hasExplicitMode(rest) {
+  return rest.some((a) => a === "--mode" || a === "--readonly" || a === "--read-only" || a === "--incognito" || a === "--normal");
 }
 // 모드 → 세션 env(하네스가 상속 → MCP 헤더 x-lively-mode 가 이 env 를 확장 → 게이트웨이 강제). 단일 헤더라 미래 모드 추가 시 재등록 불요(#1007+). incognito 는 LIVELY_OFF 로 훅(주입·넛지)도 끈다.
 //  ⚠ **전이기 dual-env**: 새 LIVELY_MODE(주 신호) 와 함께 구 LIVELY_READONLY/LIVELY_INCOGNITO 도 세팅한다 — 이 사용자의 claude.json MCP 설정에
@@ -1767,8 +1802,9 @@ function modeEnv(mode) {
 //  · 프로젝트# 있으면 work.mjs(공유폴더 pull · 레포 clone/worktree · 하네스 실행) — 종전 표면.
 //  · 없으면 하네스를 **바로** 실행한다(프로젝트 없이 — 사용자 요청). 기본 claude, --harness 로 변경.
 //  두 경로 모두 모드 env 를 세팅 → 그 세션만 읽기전용/인코그니토가 헤더로 게이트웨이에 전달된다(per-session).
-function cmdRun(rest0) {
-  const { mode, rest } = extractMode(rest0);
+async function cmdRun(rest0) {
+  const syncedDefault = hasExplicitMode(rest0) ? defaultMode() : await syncDefaultMode();
+  const { mode, rest } = extractMode(rest0, syncedDefault);
   const env = { ...process.env, ...modeEnv(mode) };
   const badge = mode === "normal" ? "" : dim(` [${mode}]`);
   const onExit = (child) => child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
@@ -1791,7 +1827,7 @@ function cmdRun(rest0) {
 }
 
 // `lively mode [normal|readonly|incognito]` — 디폴트 실행 모드 조회/설정(~/.lively/mode). lively run 이 --mode 없을 때 이걸 읽는다.
-function cmdMode(rest) {
+async function cmdMode(rest) {
   const m = rest[0];
   if (!m) {
     const cur = defaultMode();
@@ -1801,9 +1837,21 @@ function cmdMode(rest) {
   }
   if (!MODES.includes(m)) die(`모드는 ${MODES.join("|")} 중 하나여야 합니다.`, 2);
   mkdirSync(LIVELY, { recursive: true });
-  writeFileSync(join(LIVELY, MODE_FILE), m + "\n", { mode: 0o600 });
+  writeLively(MODE_FILE, m + "\n");
+  // 로컬 선택이 웹의 옛 값에 되덮이지 않게 먼저 pending 을 남기고, 서버 반영 성공 뒤에만 지운다.
+  writeLively(MODE_PENDING_FILE, m + "\n");
+  let synced = false;
+  const machineId = localMachineId();
+  if (machineId) {
+    try {
+      await api("/api/ui/me/local-mode", { timeoutMs: 1500, method: "POST", body: { machine_id: machineId, mode: m } });
+      rmSync(join(LIVELY, MODE_PENDING_FILE), { force: true });
+      synced = true;
+    } catch { /* 오프라인 복구는 로컬에서 성립 — 다음 run 이 재시도 */ }
+  }
   const hint = m === "incognito" ? "  (주입·읽기·쓰기 모두 off — 클린룸)" : m === "readonly" ? "  (읽기 O · 쓰기 X)" : "  (주입·읽기·쓰기 모두 on)";
   say(green(`디폴트 실행 모드 → ${bold(m)}`) + dim(hint));
+  if (!synced) say(dim("  웹 설정 동기화는 다음 온라인 실행 때 다시 시도합니다."));
 }
 
 // `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
@@ -2181,4 +2229,4 @@ const DIRECT_RUN = (() => {
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
 export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, winSpawnArgs, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
-export { MODES, extractMode, modeEnv, defaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용
+export { MODES, extractMode, hasExplicitMode, modeEnv, defaultMode, syncDefaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용
