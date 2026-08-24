@@ -9,6 +9,7 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
+import { assertAppSessionPlacement } from "./session-create-guards.js";
 import { logger } from "../log.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -546,6 +547,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
     if (nodeId) {
+      assertAppSessionPlacement(input, nodeId); // #1780 v2 §7-1 — 앱 세션은 노드에 못 싣는다(relay 전에 400)
       await requireCreatableNode(req, nodeId);
       const me = idOf(userOf(req));
       const invites = await validateInvites(b.invites, me);

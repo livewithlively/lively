@@ -13,6 +13,7 @@ import { sharedRoot } from "../terminal/terminal-sessions.js";
 import { effectiveDelegatePolicy, type DelegatePolicy } from "../org/policies/delegate-policy.js";
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
 import { getRuntimeConfig } from "../org/store.js";
+import { getMember } from "../org/store/members.js";
 import { resolveRepoInject } from "../project/project-provision.js";
 import { nodeOnline, nodeRpc, schedulableRemotes, onTaskDone } from "./registry.js";
 import { getNode, listNodes } from "./store.js";
@@ -190,10 +191,17 @@ function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need
 //  아무 오류도 안 난다(자격 없음으로 강등될 뿐). 실제로 그렇게 새고 있었다: 등록해도 리스가 영영 안 붙어
 //  워커 디스크의 로그인 자격이 대신 쓰였고, 후보도 central 로 좁혀졌다(#1289 실측 — last_used_at 이 계속 null).
 //  lookup 주입은 테스트용(저장소 없이 owner 키·강등 경로를 못박는다).
+//  #1780 v2 §7-1(설계 R2-O8) — **의뢰자가 active 멤버일 때만** 리스한다. 토큰은 verifyDbToken 이 비활성 즉시
+//  401 로 막지만, 이 리스는 토큰이 아니라 그 사람의 **벤더 구독 자격**이라 별도 축이다 — 안 보면 퇴사자의
+//  setup-token 으로 새 런이 계속 배치된다(앱 무인 실행이 생기면 그 구멍이 곧 앱 통로가 된다). 조회 실패·삭제·
+//  비활성 전부 "자격 없음"(undefined) 으로 접는다 — 종전 '시크릿 없음' 과 같은 강등 경로(fail-closed).
 export async function leaseEnvFor(
   requester: string,
   lookup: (owner: string, kind: string, scope: string) => Promise<{ secret: string | null } | null> = getMemberSecret,
+  stateOf: (memberId: string) => Promise<string | null> = (id) => getMember(id).then((m) => m?.state ?? null),
 ): Promise<Record<string, string> | undefined> {
+  const state = await stateOf(requester).catch(() => null);
+  if (state !== "active") return undefined;
   const sec = await lookup(memberOwner(requester), SECRET_KIND, "").catch(() => null);
   return sec?.secret ? { CLAUDE_CODE_OAUTH_TOKEN: sec.secret } : undefined;
 }

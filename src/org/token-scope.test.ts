@@ -8,6 +8,30 @@ assert.deepStrictEqual(
   ["items", "context"],
 );
 
+// ── #1780 v2 §7-1(사양 H4) — 멤버 없는 앱 토큰은 **앱이 라이브 상한** ──
+// 앱 켜짐·active → 토큰 scope 그대로.
+assert.deepStrictEqual(
+  computeEffectiveScopes({ memberId: null, memberState: null, tokenScopes: ["items"], memberScopes: [], appId: "bot", appLive: true }),
+  ["items"],
+);
+// 앱 꺼짐/비active/행 없음(null) → 거부.
+for (const live of [false, null, undefined] as const) {
+  assert.strictEqual(
+    computeEffectiveScopes({ memberId: null, memberState: null, tokenScopes: ["items"], memberScopes: [], appId: "bot", appLive: live }),
+    null, `멤버 없는 앱 토큰은 appLive=${String(live)} 면 거부`,
+  );
+}
+// 멤버 연결 앱 토큰(v1 앱 세션)은 앱 상태와 무관하게 종전 멤버 축(무회귀).
+assert.deepStrictEqual(
+  computeEffectiveScopes({ memberId: "jang", memberState: "active", tokenScopes: ["items", "context"], memberScopes: ["items"], appId: "browser", appLive: false }),
+  ["items"],
+);
+// 앱도 멤버도 없는 서비스 토큰은 appLive 를 보지 않는다(무회귀).
+assert.deepStrictEqual(
+  computeEffectiveScopes({ memberId: null, memberState: null, tokenScopes: ["items"], memberScopes: [], appId: null, appLive: null }),
+  ["items"],
+);
+
 // 활성 멤버 → 교집합(토큰이 멤버 이하).
 assert.deepStrictEqual(
   computeEffectiveScopes({
