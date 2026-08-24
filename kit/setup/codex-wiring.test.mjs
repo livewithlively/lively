@@ -46,7 +46,7 @@ function makeBundle({ withCli = true, mcpServers = [], autoApprove = ["mcp__live
   mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
   mkdirSync(join(BUNDLE, "setup"), { recursive: true });
   for (const h of HOOKS) cpSync(join(KIT, "hooks", h), join(BUNDLE, ".claude", "hooks", h));
-  for (const f of ["user-install.mjs", "user-uninstall.mjs", "work.mjs", "work-roots-header.mjs"]) {
+  for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) {
     cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
   }
   if (withCli) { // stdio 프록시 판정에 필요한 둘(+CLI 본체). 없으면 http 폴백 경로가 된다 = 엣지 ②

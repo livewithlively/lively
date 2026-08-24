@@ -13,6 +13,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { entrypointHostEffects } from "../setup/host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const fetch = (...args) => hostEffects.fetch(...args);
 
 const scopeKey = (process.argv[2] || "").trim(); // 선택: 여러 role 등록 시 대상 구분
 const HOME = process.env.LIVELY_HOME || os.homedir();
