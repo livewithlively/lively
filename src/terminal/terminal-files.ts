@@ -26,7 +26,12 @@ import {
   type SharedFolderGate,
 } from "../v6/shared-folder-store.js";
 
-const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB
+// 업로드 상한(#1870) — 종전 50MB 는 화면 녹화·데이터셋이 걸렸다. receiveUpload 가 임시파일로 **스트리밍**하므로
+//  (RAM 상주 없음, upload-file.ts) 상한을 올려도 메모리 위험이 없다. project-routes.ts MAX_UPLOAD 와 같은 값이어야 한다.
+const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB
+// ⚠ 노드 세션 릴레이(아래 PUT 의 ?node= 분기)만은 예외 — 본문을 통째로 RAM 에 모아 ws 청크로 중계하므로
+//  거기까지 1GB 로 열면 게이트웨이 메모리가 업로드 하나에 잡아먹힌다. 그 경로는 종전 상한을 유지한다.
+const NODE_RELAY_MAX = 50 * 1024 * 1024; // 50MB
 // 인라인 미리보기 상한 — 프로젝트 파일 라우트(project-routes.ts MAX_PREVIEW)와 **같은 값**이어야 한다(#1436):
 //  공유 링크는 root+path 하나로 공유/개인/프로젝트 폴더를 똑같이 가리키는데, 같은 파일이 어느 라우트를 타는지에
 //  따라 "미리보기엔 너무 큽니다"가 갈리면 링크를 받은 사람에게는 그게 그냥 고장으로 보인다.
@@ -236,8 +241,10 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   app.put("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
     const { abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
-    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
-    res.json({ ok: true });
+    catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
+    // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
+    //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).
+    res.json({ ok: true, path: abs });
   }));
 
   // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).
@@ -333,10 +340,10 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       const u = { userId: idOf(userOf(req)) };
       const bufs: Buffer[] = []; let total = 0; let over = false;
       await new Promise<void>((resolve, reject) => {
-        req.on("data", (c: Buffer) => { total += c.length; if (total > MAX_UPLOAD) { over = true; req.destroy(); return; } bufs.push(c); });
+        req.on("data", (c: Buffer) => { total += c.length; if (total > NODE_RELAY_MAX) { over = true; req.destroy(); return; } bufs.push(c); });
         req.on("end", () => resolve()); req.on("error", reject);
       });
-      if (over) throw new HttpError(413, "파일이 너무 큽니다");
+      if (over) throw new HttpError(413, "파일이 너무 큽니다(개인 PC 노드 세션 업로드는 50MB까지 — 큰 파일은 그 PC에서 직접 넣어주세요)");
       const bodyBuf = Buffer.concat(bufs);
       let offset = 0;
       do {
@@ -349,7 +356,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const { abs } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
     const osUser = await sessionOsUser(req.params.id);
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
-    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
+    catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     res.json({ ok: true, path: abs }); // abs = 세션 작업폴더 기준 절대경로(드롭 업로드가 입력창에 꽂아 cwd 무관하게 찾게)
   }));
 }

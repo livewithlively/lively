@@ -25,7 +25,7 @@ import { recordSessionProject } from "../v6/project-store.js";
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
 
-const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
+const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 // 신원 id — 터미널/세션로그 라우트와 동일 헬퍼(userId 우선, email 폴백). 노드 세션 소유/가시성 판정이 그 라우트들과
@@ -204,7 +204,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const { base } = await projBase(Number(req.params.id), req);
     const abs = resolveIn(base, nfcPath(req.query.path), true);   // 저장 이름은 NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, null); }
-    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
+    catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     // 게이트웨이(lively)가 쓴 파일(644)·폴더 업로드가 만든 중간 폴더(755)에 그룹 rw — 격리 박스의 box_ 세션이
     //  lively-shared 그룹으로 이 폴더를 쓰므로, 이게 없으면 세션 클로드가 업로드 파일을 못 고친다(#1246).
     await grantSharedGroupWrite(abs, base, "file");
