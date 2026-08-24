@@ -182,8 +182,10 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .room-body { flex:1; min-height:0; overflow-y:auto; display:grid;
   grid-template-columns:minmax(0,1fr) minmax(272px,316px); gap:28px;
   width:100%; max-width:var(--room-w); margin:0 auto;
-  padding:clamp(20px,4vh,44px) 24px;
+  padding:clamp(20px,4vh,44px) 24px clamp(48px,9vh,104px);
   align-content:safe center; align-items:start; }
+  /* 아래 여백을 위보다 크게 둬서 덩어리를 **기하학적 가운데보다 조금 위**에 세운다.
+     정확히 반반으로 맞추면 사람 눈에는 아래로 처져 보인다(원준님 2026-08-21). */
   /* ★ 세로는 **화면 가운데**다. 위에서 고정 거리로 매달면 화면이 커질수록 아래만 비어
      덩어리가 천장에 붙어 보인다 — 1100 높이에서 위 165 / 아래 289 로 벌어졌다(원준님 2026-08-21).
      가운데 정렬은 장면 높이가 다르면 질문 줄이 튀는 게 문제였는데(334→230), 그건 .scene 의
@@ -305,11 +307,10 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .compose textarea:focus-visible { outline:2px solid var(--mint-deep); outline-offset:1px; border-color:transparent; }
 
 /* 오른쪽 — 만들어지는 내 워크스페이스 (답할수록 채워지는 장부) */
-/* 장부는 질문 칸과 **같은 줄에서 시작해 같은 줄에서 끝난다**. 카드 수만큼만 세우면 왼쪽은 길고
-   오른쪽은 중간에 뚝 끊겨 오른쪽 아래가 통째로 비었다(원준님 2026-08-21).
-   칸 높이만큼 늘리고 맺음말을 바닥에 붙여 두 기둥이 한 덩어리로 읽히게 한다. */
-.build { align-self:stretch; display:flex; flex-direction:column; gap:8px; }
-.build-foot { margin-top:auto; }
+/* 장부는 카드 수만큼만 세운다. 맺음말을 칸 바닥에 붙여 두 기둥의 끝을 맞춰 봤더니, 카드가 적은
+   화면에서 카드와 맺음말 사이에 180px 짜리 구멍이 생겨 '빠진 내용'처럼 읽혔다 — 기둥이 짧은 것보다
+   기둥 안이 비는 게 더 눈에 걸린다. 끝 맞추기는 포기하고 자연스러운 높이로 둔다(2026-08-21). */
+.build { display:flex; flex-direction:column; gap:8px; }
 .build-h { display:flex; align-items:center; gap:8px; padding:2px 4px 0; }
 .build-h b { display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:700; letter-spacing:-.01em; }
 .build-h .k { margin-left:auto; }
@@ -539,8 +540,10 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
 .stage { min-width:0; display:flex; justify-content:center; padding:0; }
 /* min-height 는 **가운데 정렬을 붙박아 두는 장치**다. 장면마다 내용 높이가 다르면(무대 293 · 자료 출처 476)
    가운데를 맞출 때마다 질문 줄이 위아래로 튄다. 짧은 장면도 이만한 자리를 미리 잡아 두면
-   화면을 넘겨도 질문이 거의 같은 높이에 선다 — 남는 자리는 내용 아래에 조용히 남는다. */
-.scene { margin:0 auto; width:100%; max-width:600px; min-height:470px; display:flex; flex-direction:column; align-items:center; text-align:center; animation:sc-in .36s cubic-bezier(.16,.84,.32,1) both; }
+   화면을 넘겨도 질문이 거의 같은 높이에 선다 — 남는 자리는 내용 아래에 조용히 남는다.
+   값은 **제일 긴 질문 화면**(자료 출처 537)에 맞춘다. 그보다 낮게 잡으면 그 화면만 위로 튄다.
+   왼쪽이 짧아도 오른쪽 장부가 같은 높이로 늘어나므로(.build align-self:stretch) 덩어리는 안 비어 보인다. */
+.scene { margin:0 auto; width:100%; max-width:600px; min-height:540px; display:flex; flex-direction:column; align-items:center; text-align:center; animation:sc-in .36s cubic-bezier(.16,.84,.32,1) both; }
 .scene.wide { max-width:min(780px, 100%); }   /* 룸이 가운데 기둥으로 좁아졌다 — 칸을 넘지 않게 100% 로 잠근다 */
 .scene.left { align-items:stretch; text-align:left; }
 @keyframes sc-in { from { opacity:0; transform:translateY(16px); } }
@@ -812,3 +815,12 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
   .srcrow { grid-template-columns:minmax(0,1fr); gap:4px; }
   .srcrow-k { padding-top:0; }
 }
+
+/* 장면 바로가기 — PROTOTYPE 메뉴 안. 15개가 세로로 늘어지면 메뉴가 화면을 넘는다(3열 격자). */
+.proto-menu { width:288px; }
+.proto-scenes { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; margin:2px 4px 8px; }
+.proto-scenes button { display:flex; flex-direction:column; align-items:flex-start; gap:1px; width:auto; padding:5px 6px; border:1px solid var(--line-row); border-radius:7px; font-size:10.5px; line-height:1.25; font-weight:600; color:var(--ink-sub); }
+.proto-scenes button i { font-style:normal; font-size:9px; font-weight:700; color:var(--muted-2); letter-spacing:.02em; }
+.proto-scenes button:hover { background:var(--bg-tint); color:var(--ink); border-color:var(--line); }
+.proto-scenes button.on { background:var(--ink); border-color:var(--ink); color:#fff; }
+.proto-scenes button.on i { color:rgba(255,255,255,.6); }
