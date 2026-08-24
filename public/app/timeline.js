@@ -16,11 +16,11 @@
 //    1 중요한 것(기본 보기) — 파일 씀·고침 · 지식 남김 · 커밋 · 작업 기록 · 태스크 끝냄 · 상태 바뀜
 //    2 한 일 — 읽음 · 찾아봄 · 검사(빌드·테스트)
 //    3 뒷일 — 지시·잔 편집·배관(머지·푸시·서버 반영)
-import { el, personFace } from './core.js';
+import { el, personFace, sv } from './core.js';
 // ── 위계표 ──────────────────────────────────────────────────────────────────
 const KEEP_VERBS = new Set(['씀', '고침', '남김', '덧붙임', '만듦', '끝냄', '커밋', '기록', '바꿈']);
 const KIND_TIER = {
-    file: 2, cmd: 2, knowledge: 2, activity: 1, project: 2, task: 2, source: 2, say: 3, reply: 3, meta: 3,
+    file: 2, cmd: 2, knowledge: 2, activity: 1, project: 2, task: 2, source: 2, say: 3, reply: 3, out: 1, meta: 3,
 };
 export function tierOf(it) {
     if (it.tier)
@@ -39,7 +39,7 @@ export const TL_KINDS = [
 //    그 단어가 또 소음이 된다(같은 이유로 세션 뷰의 지시도 비움). 단어는 **소수파일 때만 정보**다.
 const KIND_WORD = {
     task: '끝낸 일', knowledge: '지식', activity: '', cmd: '커밋', file: '파일',
-    project: '프로젝트', say: '', reply: '답', source: '자료', meta: '설정',
+    project: '프로젝트', say: '', reply: '답', out: '산출물', source: '자료', meta: '설정',
 };
 const hhmm = (iso) => {
     if (!iso)
@@ -327,22 +327,32 @@ export function createTimeline(host, ctx) {
         let cur = null;
         for (const it of items) {
             if (isHead(it)) {
-                cur = { q: it, a: null, kids: [] };
+                cur = { q: it, a: null, kids: [], outs: [] };
                 out.push(cur);
                 continue;
             }
             if (!cur) {
-                cur = { q: null, a: null, kids: [] };
+                cur = { q: null, a: null, kids: [], outs: [] };
                 out.push(cur);
-            } // 창 첫머리(되그린 꼬리) — 버리지 않는다
+            } // 창 첫머리(되그린 꼬리)
             if (it.kind === 'reply') {
                 cur.a = it;
                 continue;
             }
+            // 산출물은 '남은 것' 줄이 아니라 **결과 줄**로 따로 선다. 같은 것을 두 번 세우지 않는다.
+            if (it.out && ctx.onOpen) {
+                const key = String(it.out.path || it.out.url || it.out.label);
+                const i = cur.outs.findIndex((x) => String(x.out.path || x.out.url || x.out.label) === key);
+                if (i >= 0)
+                    cur.outs[i] = it;
+                else
+                    cur.outs.push(it); // 만들고 또 고쳤으면 마지막 것으로
+                continue; // 결과 줄로 섰으면 '남은 것' 줄에 또 세우지 않는다 — 같은 파일이 두 번 보이면 그게 소음이다
+            }
             cur.kids.push(it);
         }
         // allSays 면 아직 아무 결과도 없는 지시도 선다(세션 발자취의 줄기는 '내가 뭘 시켰나'다).
-        return out.filter((c) => (c.q ? (ctx.allSays || !!c.a || c.kids.length > 0) : (!!c.a || c.kids.length > 0)));
+        return out.filter((c) => (c.q ? (ctx.allSays || !!c.a || c.kids.length > 0 || c.outs.length > 0) : (!!c.a || c.kids.length > 0 || c.outs.length > 0)));
     }
     /** 질문 한 줄 — 붙여넣은 덩어리는 칩으로 접고, 전문은 눌러서 편다. */
     function askRow(it) {
@@ -367,14 +377,50 @@ export function createTimeline(host, ctx) {
         }
         return box;
     }
-    /** 대답 — 한 줄 + 그 지시에서 남은 것. 둘 다 없으면 줄 자체가 없다(아직 도는 중인 장). */
+    // ── 결과 줄(#1819 안 A) ─────────────────────────────────────────────────────
+    //  [34px 타일][이름 · 종류][열기]. 그림이면 타일에 진짜 축소본이 들어가고, 아니면 종류 아이콘이다
+    //  (없는 그림을 지어내지 않는다 — 디자인 시스템 규칙). '간단히'로 접어도 이 줄은 남는다: 접는 것은
+    //  과정('남은 것')이지 결과가 아니다.
+    const OUT_ICON = {
+        html: 'M18 16l4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16',
+        pdf: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6',
+        img: 'M3 3h18v18H3zM8.5 8.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3M21 15l-5-5L5 21',
+        url: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7L12 5M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7L12 19',
+    };
+    const IMG_EXT = /^(png|jpe?g|gif|webp|svg)$/i;
+    const iconFor = (o) => o.kind === 'url' ? OUT_ICON.url : IMG_EXT.test(o.ext) ? OUT_ICON.img : o.ext === 'pdf' ? OUT_ICON.pdf : OUT_ICON.html;
+    const extWord = (o) => o.ext === 'artifact' ? '아티팩트' : o.ext === 'preview' ? '미리보기 환경' : o.ext === 'link' ? '링크' : o.ext.toUpperCase();
+    /** 라인 아이콘 — 디자인 시스템 규약(stroke 1.7, 이모지 금지). ⚠ SVG 는 el() 이 아니라 sv() 로 만든다(네임스페이스). */
+    const lineIcon = (d, size) => sv('svg', {
+        width: String(size), height: String(size), viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+        'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true',
+    }, sv('path', { d }));
+    function outRow(it) {
+        const o = it.out;
+        const tile = el('span', { class: 'tl-out-tile' }, lineIcon(iconFor(o), 17));
+        const box = el('button', {
+            class: 'tl-out', type: 'button', title: (o.path || o.url || o.label) + ' — 눌러서 엽니다.',
+            onclick: (e) => { e.stopPropagation(); ctx.onOpen?.(o); },
+        }, tile, el('span', { class: 'tl-out-meta' }, el('b', { text: o.label }), el('span', { text: extWord(o) })), el('span', { class: 'tl-out-go' }, lineIcon('M7 17 17 7M7 7h10v10', 15)));
+        // 그림이면 진짜 축소본을 올린다 — 못 만들면 아이콘 그대로 둔다(빈 네모를 남기지 않는다).
+        if (ctx.thumb && o.kind === 'file' && IMG_EXT.test(o.ext)) {
+            void ctx.thumb(o).then((src) => {
+                if (!src || !tile.isConnected)
+                    return;
+                tile.classList.add('img');
+                tile.replaceChildren(el('img', { src, alt: '', loading: 'lazy' }));
+            }).catch(() => { });
+        }
+        return box;
+    }
+    /** 대답 — 한 줄 + 산출물 + 그 지시에서 남은 것. 전부 없으면 줄 자체가 없다(아직 도는 중인 장). */
     function ansRow(c) {
-        if (!c.a && !c.kids.length)
+        if (!c.a && !c.kids.length && !c.outs.length)
             return null;
         // 간단히에서 접는 것은 **답이 있는 장의 남은 것**뿐이다 — 답이 없으면 남은 것이 그 장의 유일한 내용이라
         //  접으면 빈 줄만 남는다(접기가 화면에서 사건을 지워 버리면 안 된다).
         const cid = 'kids:' + String((c.q && c.q.id) || (c.a && c.a.id) || (c.kids[0] && c.kids[0].id) || '');
-        const canHide = compact && !!c.a && c.kids.length > 0;
+        const canHide = compact && (!!c.a || c.outs.length > 0) && c.kids.length > 0;
         const openKids = !canHide || open.has(cid);
         const chip = canHide
             ? el('button', {
@@ -386,7 +432,7 @@ export function createTimeline(host, ctx) {
                     open.add(cid); paint(); },
             }, (openKids ? '−' : '+') + c.kids.length)
             : null;
-        return el('div', { class: 'tl-card tl-a tlk-reply' + (c.a && c.a.error ? ' err' : '') }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-kw', text: '답' })), el('div', { class: 'tl-main' }, c.a ? el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl tl-ans', text: c.a.label, title: c.a.label }), chip) : null, c.kids.length && openKids ? el('div', { class: 'tl-kids' }, ...c.kids.map(sub)) : null));
+        return el('div', { class: 'tl-card tl-a tlk-reply' + (c.a && c.a.error ? ' err' : '') }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-kw', text: '답' })), el('div', { class: 'tl-main' }, c.a ? el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl tl-ans', text: c.a.label, title: c.a.label }), chip) : null, c.outs.length ? el('div', { class: 'tl-outs' }, ...c.outs.map(outRow)) : null, c.kids.length && openKids ? el('div', { class: 'tl-kids' }, ...c.kids.map(sub)) : null));
     }
     function paintQA() {
         const chaps = chapters();

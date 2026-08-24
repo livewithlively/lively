@@ -23,7 +23,8 @@
 //  서랍에서 세션을 갈아 끼울 때 이 셸은 다시 그리지 않는다(자료·지식·문패가 그대로 산다) — 주소만 바뀐다.
 //
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
-import { anchoredPopover, api, el, personFace, toast } from '../core.js';
+import { anchoredPopover, api, apiUrl, el, personFace, toast, TOKEN_KEY } from '../core.js';
+import { canOpenInAside, openInAside } from './aside-slot.js';
 import { makeSplitter } from './split.js';
 import { mountSideSwap } from './side-swap.js'; // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon } from './panes-parts.js';
@@ -194,6 +195,66 @@ export function mountPanes(host, opts) {
     const trailHost = el('div', { class: 'pn-tlhost' });
     let trailSid = null;
     let trailW = null;
+    // ── 산출물 열기(#1819 안 A) ─────────────────────────────────────────────────
+    //  타임라인은 '무엇이 나왔나'만 안다. **어디로 여는지는 여기가 안다** — 세션 폴더·프로젝트 자료·곁칸을 아는 건 셸이다.
+    //  ⚠ 도구가 준 경로는 절대·상대가 섞여 온다. 세션 폴더(row.dir) 기준으로 상대화해야 파일 API 가 연다.
+    const sessRow = (sid) => opts.data().sessions.find((x) => x.id === sid) || null;
+    /** 세션 폴더 기준 상대경로. 그 밖(다른 폴더의 절대경로)이면 null — 열 수 없는 것에 버튼을 달지 않기 위해서다. */
+    function relOf(sid, p) {
+        const raw = String(p || '');
+        if (!raw)
+            return null;
+        if (!raw.startsWith('/'))
+            return raw.replace(/^\.\//, ''); // 이미 상대경로
+        const dir = String((sessRow(sid) || {}).dir || '');
+        if (dir && raw.startsWith(dir + '/'))
+            return raw.slice(dir.length + 1);
+        return null;
+    }
+    const fileUrlOf = (sid, rel) => '/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/file?path=' + encodeURIComponent(rel);
+    function openOut(sid, o) {
+        if (o.kind === 'url' && o.url) {
+            // 앱이면 곁칸에 띄우고(작업하던 자리를 안 떠난다), 브라우저면 새 탭 — aside-slot 규약 그대로.
+            if (canOpenInAside() && openInAside({ key: 'out:' + o.url, title: o.label, url: o.url }))
+                return;
+            window.open(o.url, '_blank', 'noopener');
+            return;
+        }
+        const rel = relOf(sid, String(o.path || ''));
+        if (!rel) {
+            toast('이 파일은 세션 폴더 밖에 있어 여기서 열 수 없어요.', true);
+            return;
+        }
+        // 프로젝트 자료(세션 폴더의 ./project)면 뷰어 칸에서 연다 — 자료 칸이 쓰는 것과 같은 신호다.
+        const inProject = rel === 'project' || rel.startsWith('project/');
+        if (inProject && id > 0) {
+            window.dispatchEvent(new CustomEvent('pn-viewer-open', { detail: { id, path: rel.replace(/^project\/?/, '') } }));
+            return;
+        }
+        window.open(apiUrl(fileUrlOf(sid, rel)), '_blank', 'noopener');
+    }
+    /** 그림 산출물의 축소본 — <img src> 는 Authorization 을 못 실으므로 받아서 blob 으로 물린다. */
+    async function thumbOf(sid, o) {
+        const rel = relOf(sid, String(o.path || ''));
+        if (!rel)
+            return null;
+        const headers = {};
+        const tok = localStorage.getItem(TOKEN_KEY);
+        if (tok)
+            headers.Authorization = 'Bearer ' + tok;
+        try {
+            const res = await fetch(apiUrl(fileUrlOf(sid, rel)), { headers, credentials: 'same-origin' });
+            if (!res.ok)
+                return null;
+            const b = await res.blob();
+            if (b.size > 4_000_000)
+                return null; // 너무 큰 그림은 타일로 쓰지 않는다
+            return URL.createObjectURL(b);
+        }
+        catch (_) {
+            return null;
+        }
+    }
     function trailFor(sid) {
         if (!sid) {
             trailSid = null;
@@ -208,6 +269,8 @@ export function mountPanes(host, opts) {
         trailHost.replaceChildren();
         const nm = opts.data().sessions.find((x) => x.id === sid);
         const w = createTimeline(trailHost, {
+            onOpen: (o) => openOut(sid, o),
+            thumb: (o) => thumbOf(sid, o),
             scope: (nm && nm.label) || '이 세션',
             chapters: true, // 지시 하나 = 한 장, 그 아래 그 지시로 일어난 일
             allSays: true, // 아직 아무것도 안 남은 지시도 그 자리에 — 내가 뭘 시켰나가 이 화면의 줄기다

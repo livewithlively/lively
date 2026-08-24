@@ -4,7 +4,7 @@
 //  중앙에 띄운다 — 클래식 코드를 한 줄도 옮기지 않고 새 셸 안에서 그대로 쓴다. 나중에 화면이 새 셸로 이식되면
 //  이 표의 항목이 `native` 로 바뀌거나 빠진다(표가 곧 '아직 안 옮긴 것' 목록이다).
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
-import { el, navOn } from '../core.js';
+import { el, navOn, sv } from '../core.js';
 import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession } from './app-session.js';
 import { openAppUi } from './app-ui.js';
@@ -228,8 +228,13 @@ export function openLaunchpad() {
     const input = el('input', { class: 'v2-pad-search', type: 'search', placeholder: '앱 찾기', 'aria-label': '앱 찾기' });
     const draw = () => {
         const q = input.value.trim().toLowerCase();
-        const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, title: a.desc, onclick: () => closeLaunchpad() }, el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)), el('b', { text: a.title })));
-        const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => {
+        // 이름에 맞은 것이 설명에만 맞은 것보다 앞에 온다 — Enter 가 맨 앞을 여니 순서가 곧 정답이어야 한다.
+        //  ('프' 를 치면 설명에 '프로젝트'가 든 홈이 아니라 프로젝트 앱이 먼저다.) sort 는 안정 정렬이라 동점은 원래 차례.
+        const rank = (t) => { const i = t.toLowerCase().indexOf(q); return i === 0 ? 0 : i > 0 ? 1 : 2; };
+        const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q))
+            .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, title: a.desc, onclick: () => closeLaunchpad() }, el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)), el('b', { text: a.title })));
+        const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
+            .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
             const hasUi = a.pages.length > 0; // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
             return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
                 title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
@@ -239,16 +244,29 @@ export function openLaunchpad() {
                     void openAppSession(a.id, { title: a.title }); } }, el('span', { class: 'v2-pad-ico' }, appGlassIcon(hasUi ? 'liv' : 'term')), el('b', { text: a.title }), el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
         });
         grid.replaceChildren(...screen, ...session);
+        grid.classList.toggle('v2-pad-grid--q', !!q); // 검색 중이면 첫 칸이 Enter 로 열릴 자리 — 그걸 보인다.
         if (!grid.childElementCount)
             grid.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
     };
     input.addEventListener('input', draw);
+    // 스포트라이트처럼 Enter 는 맨 앞 결과를 연다 — 이름을 몇 글자 치고 바로 들어가는 길.
+    input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter')
+            return;
+        const first = grid.querySelector('.v2-pad-item');
+        if (first) {
+            e.preventDefault();
+            first.click();
+        }
+    });
     void listSessionApps().then((a) => { if (padEl) {
         sApps = a;
         draw();
     } });
-    padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱', onclick: (e) => { if (e.target === padEl)
-            closeLaunchpad(); } }, el('div', { class: 'v2-pad-top' }, el('div', { class: 'v2-pad-h' }, el('b', { text: '앱' }), el('span', { class: 'v2-pad-sub', text: '아직 새 화면으로 옮기지 않은 것들 — 열면 가운데에 그대로 실립니다.' })), input, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기 (Esc)', onclick: () => closeLaunchpad() })), grid);
+    // 검색칸 하나만 띄운다(맥 스포트라이트) — 제목·설명 줄·닫기 버튼은 없앴다.
+    //  닫기는 Esc 와 배경 클릭이 이미 하고, 칸 오른쪽 esc 키캡이 그걸 알린다.
+    padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱 찾기', onclick: (e) => { if (e.target === padEl)
+            closeLaunchpad(); } }, el('div', { class: 'v2-pad-field' }, sv('svg', { class: 'v2-pad-mag', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('circle', { cx: '11', cy: '11', r: '6.75' }), sv('path', { d: 'M16.1 16.1 21 21' })), input, el('kbd', { class: 'v2-pad-esc', text: 'esc' })), grid);
     document.body.append(padEl);
     draw();
     input.focus();
