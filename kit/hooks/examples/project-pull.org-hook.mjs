@@ -100,6 +100,20 @@ function untouched(st, base) {
   if (!marker) return; // 프로젝트 세션 아님
 
   let meta; try { meta = JSON.parse(fs.readFileSync(marker, "utf8")); } catch { return; }
+  // ── 세션 폴더 마커면 **프로젝트 폴더로 건너뛴다**(#1856). ──
+  //  cwd 가 프로젝트 폴더에서 세션 폴더로 바뀌면서(#1719) 위 탐색이 세션 폴더 마커에서 멈춘다 — 그 마커는
+  //  sync:"none"(세션 폴더에 서버 파일을 쏟지 않으려는 fail-safe)이라 아래 게이트에서 즉시 return 됐고,
+  //  그래서 **문서 싱크가 통째로 죽어 있었다**(원격 노드는 프로젝트 문서를 영영 못 받음). 세션 마커는
+  //  "프로젝트 폴더는 저기"(project_dir)를 알고 있으니, 그 폴더와 그 폴더의 마커로 갈아타 원래 대상에 적용한다.
+  if (meta && meta.kind === "session") {
+    const pd = meta.project_dir;
+    if (!pd || typeof pd !== "string") return;                  // 이 컴퓨터에 프로젝트 폴더가 없다 → 할 일 없음
+    const pm = path.join(pd, ".lively", "project.json");
+    if (!fs.existsSync(pm)) return;                             // 폴더만 있고 마커가 없다 → 싱크 대상 아님(fail-safe)
+    projDir = pd; marker = pm;
+    try { meta = JSON.parse(fs.readFileSync(marker, "utf8")); } catch { return; }
+    if (!meta || meta.kind === "session") return;               // 세션 마커가 세션 마커를 가리킨다 → 잘못된 상태
+  }
   const projectId = meta && meta.project_id;
   const lastPull = Number(meta && meta.last_pull) || 0;
   if (!projectId) return;
