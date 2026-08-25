@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { parseAppManifest } from "./manifest.js";
-import { resolveWorkerPlacement, runWorkerRecoveryBatch, validateRemoteWorkerSnapshot } from "./worker-service.js";
+import { assertWorkerGrant, resolveWorkerPlacement, runWorkerRecoveryBatch, validateRemoteWorkerSnapshot } from "./worker-service.js";
 
 const manifest = (runtime?: Record<string, unknown>) => parseAppManifest({ id: "worker-app", title: "Worker", version: "1.0.0", ...(runtime ? { runtime } : {}) });
 
@@ -42,4 +42,9 @@ test("원격 worker push는 run 식별자·상태·시각이 완전한 snapshot�
   assert.deepEqual(validateRemoteWorkerSnapshot(good), good);
   assert.throws(() => validateRemoteWorkerSnapshot({ ...good, status: "unknown" }), /snapshot-invalid/);
   assert.throws(() => validateRemoteWorkerSnapshot({ ...good, stoppedAt: "not-a-date" }), /snapshot-invalid/);
+});
+
+test("worker 시작은 모든 경로에서 활성 사용자 grant를 요구한다", async () => {
+  await assert.doesNotReject(() => assertWorkerGrant("worker-app", "member-a", async () => ({ active: true })));
+  await assert.rejects(() => assertWorkerGrant("worker-app", "member-a", async () => null), /worker-grant-required/);
 });

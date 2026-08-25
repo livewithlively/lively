@@ -988,6 +988,33 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-appui-spacer { flex: 1; }
 .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
 
+/* ── worker 앱 실행 위치 선택·상태(#1780 Stage B) ── */
+.v2-exec-ov { position: fixed; inset: 0; z-index: 91; display: grid; place-items: center; background: rgba(var(--shadow-ink), .34); padding: 20px; }
+.v2-exec { width: min(520px, 100%); background: var(--bg); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(var(--shadow-ink), .14)); padding: 22px; }
+.v2-exec h3 { margin: 0 0 6px; font-size: 16px; line-height: 1.45; color: var(--ink); }
+.v2-exec > p { margin: 0 0 16px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.v2-exec-list { display: grid; gap: 8px; max-height: min(380px, 52vh); overflow: auto; }
+.v2-exec-opt { position: relative; display: grid; gap: 3px; width: 100%; padding: 12px 14px; text-align: left; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.v2-exec-opt:hover, .v2-exec-opt:focus-visible { border-color: var(--blue); background: var(--bg-tint); outline: none; }
+.v2-exec-opt b { font-size: 13px; }
+.v2-exec-opt span { font-size: 12px; color: var(--muted); }
+.v2-exec-opt small { font: 10.5px/1.4 var(--mono, ui-monospace, monospace); color: var(--muted-2); }
+.v2-exec-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.v2-worker-app { min-height: 0; height: 100%; display: flex; flex-direction: column; background: var(--surface); }
+.v2-worker-bar { flex: none; min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.v2-worker-place { font-size: 11.5px; color: var(--ink-sub); }
+.v2-worker-state { flex: none; font-size: 10.5px; font-weight: 800; border: 1px solid var(--ok-line-2); border-radius: 999px; padding: 1px 7px; color: var(--ok-ink); background: var(--ok-bg); }
+.v2-worker-state.is-terminal { color: var(--danger-ink); border-color: var(--danger-line); background: var(--danger-bg-2); }
+.v2-worker-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
+.v2-worker-spacer { flex: 1; }
+.v2-worker-restart { flex: none; }
+.v2-worker-app > .v2-appui-frame { min-height: 0; }
+
+@media (max-width: 700px) {
+  .v2-worker-detail { display: none; }
+  .v2-worker-bar { padding-inline: 9px; }
+}
+
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로
    우측 위에 카드로 떠오르고, 밖 클릭·Esc·화면 이동이면 물러난다. 우패널이 있는 화면(프로젝트·세션·리브)에선

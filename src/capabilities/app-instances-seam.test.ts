@@ -51,3 +51,11 @@ test("인스턴스 id는 URL params가 항상 권위다", () => {
   const parsed = parse("app_instance_update", { params: { id: "from-route" }, body: { instance_id: "spoofed", title: "제목" } });
   assert.equal(parsed.instance_id, "from-route");
 });
+
+test("실패한 worker는 기존 AppInstance 정체성을 유지한 채 명시적으로 재시작한다", () => {
+  const restart = cap("app_instance_restart");
+  const rest = restart.expose.rest;
+  assert.ok(Array.isArray(rest) && rest[0]);
+  assert.deepEqual(rest[0].paths, ["/api/ui/app-instances/:id/restart"]);
+  assert.equal(parse("app_instance_restart", { params: { id: "from-route" }, body: { instance_id: "spoofed" } }).instance_id, "from-route");
+});
