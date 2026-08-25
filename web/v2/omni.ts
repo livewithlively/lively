@@ -132,12 +132,52 @@ export function nextKindSel(cur: Set<Kind>, k: Kind, all: Kind[] = KINDS): Set<K
 //  지목한 이름이 맞았으면 그건 검색이 아니라 **호명**이다 — 맨 위에 세운다.
 //  · 번호는 **정확일치**(`183` 이 1835 를 잡으면 안 된다) · key 는 **부분일치**(`omni-unified` 로도 찾는다)
 //  · 토큰이 둘 이상이면 지목이 아니라 검색이다(`1835 탭`) · `#` 은 사람 표기라 벗긴다
-export function identHit(ident: string | undefined, qTokens: string[]): boolean {
-  if (!ident || qTokens.length !== 1) return false;
+export type IdentKind = 'exact' | 'partial' | null;
+export function identKind(ident: string | undefined, qTokens: string[]): IdentKind {
+  if (!ident || qTokens.length !== 1) return null;
   const q = qTokens[0].replace(/^#/, '');
-  if (!q) return false;
+  if (!q) return null;
   const id = ident.toLowerCase();
-  return /^[0-9]+$/.test(id) ? id === q : id.includes(q);
+  if (id === q) return 'exact';
+  //  번호는 부분일치를 주지 않는다 — `183` 이 1835 를 잡으면 안 된다(idEquals 와 같은 규약).
+  if (/^[0-9]+$/.test(id)) return null;
+  return id.includes(q) ? 'partial' : null;
+}
+export function identHit(ident: string | undefined, qTokens: string[]): boolean {
+  return identKind(ident, qTokens) !== null;
+}
+
+// ── 일치 부분 색칠 (2026-08-25 상민님) ────────────────────────────────────────
+//  "왜 이 줄이 떴나"를 글자로 보여 준다. 스니펫이 잘려 있으면 매치가 어디였는지 알 길이 없었다.
+//  정규식을 쓰지 않는다 — 질의에 `c++`·`(`·`.` 같은 글자가 들어오면 정규식은 깨지거나 엉뚱한 데를 칠한다.
+//  겹치는 구간은 합쳐서 한 번만 칠한다(토큰 둘이 같은 자리를 덮을 때 조각이 잘게 쪼개지지 않게).
+export function hlParts(text: string, qTokens: string[]): Array<{ t: string; hit: boolean }> {
+  const s = String(text ?? '');
+  if (!s) return [];
+  const toks = qTokens.map((t) => t.replace(/^#/, '')).filter((t) => t.length > 0);
+  if (!toks.length) return [{ t: s, hit: false }];
+  const low = s.toLowerCase();
+  const spans: Array<[number, number]> = [];
+  for (const tok of toks) {
+    for (let i = low.indexOf(tok); i >= 0; i = low.indexOf(tok, i + tok.length)) spans.push([i, i + tok.length]);
+  }
+  if (!spans.length) return [{ t: s, hit: false }];
+  spans.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged: Array<[number, number]> = [];
+  for (const sp of spans) {
+    const last = merged[merged.length - 1];
+    if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]);
+    else merged.push([sp[0], sp[1]]);
+  }
+  const out: Array<{ t: string; hit: boolean }> = [];
+  let at = 0;
+  for (const [a, b] of merged) {
+    if (a > at) out.push({ t: s.slice(at, a), hit: false });
+    out.push({ t: s.slice(a, b), hit: true });
+    at = b;
+  }
+  if (at < s.length) out.push({ t: s.slice(at), hit: false });
+  return out;
 }
 
 let hooks: OmniHooks | null = null;
@@ -214,7 +254,9 @@ export function omniOpen(seed?: string): void {
    *  왜 필요한가: 채널 간 순서가 타입 고정이라 '정확히 그 이름인 문서'가 프로젝트 6건 아래 묻혔다. 게다가
    *  하이브리드(RRF)는 순위역수라 채널마다 1등이 전부 같은 점수(1/61≈0.0164)가 되어 **점수로는 못 가른다**
    *  (실측: 질의에 따라 12항목의 점수 폭이 0.0012 까지 좁아진다). 제목 적중은 그 애매함이 없는 유일한 신호다. */
-  const isIdentHit = (h: Hit): boolean => identHit(h.ident, qTokens);
+  const identOf = (h: Hit): IdentKind => identKind(h.ident, qTokens);
+  const isIdentHit = (h: Hit): boolean => identOf(h) !== null;
+  const identRank = (h: Hit): number => { const k = identOf(h); return k === 'exact' ? 0 : k === 'partial' ? 1 : 2; };
   function isTitleHit(h: Hit): boolean {
     if (!qTokens.length) return false;
     const t = h.title.toLowerCase();
@@ -225,6 +267,22 @@ export function omniOpen(seed?: string): void {
     const t = h.title.toLowerCase();
     const at = qTokens.length ? t.indexOf(qTokens[0]) : -1;
     return (at < 0 ? 999 : at) * 10 + Math.min(99, h.title.length);
+  }
+  /** 글자를 조각내 일치 부분만 <mark> 로. HTML 을 만들지 않는다 — 전부 텍스트 노드라 주입이 원천적으로 없다. */
+  const hl = (text: string): Node[] => hlParts(text, qTokens).map((p) =>
+    (p.hit ? el('mark', { class: 'v2-omni-hl', text: p.t }) : document.createTextNode(p.t)) as Node);
+  /** 둘째 줄 — **비워 두지 않는다**. similar 응답엔 스니펫이 없어서(실측) 관련도순 상위가 제목만 덩그러니 남았다.
+   *  key 로 찾았으면 **그 key 를 보여 준다** — 내가 친 것과 화면이 이어져야 '이게 그건가'를 다시 안 묻는다. */
+  function subLine(h: Hit): HTMLElement | null {
+    const kind = identOf(h);
+    const bits: Node[] = [];
+    if (kind && h.ident) {
+      const isNum = /^[0-9]+$/.test(h.ident);
+      bits.push(el('code', { class: 'v2-omni-key' + (kind === 'exact' ? ' exact' : '') }, ...hl(isNum ? '#' + h.ident : h.ident)));
+    }
+    if (h.sub) { if (bits.length) bits.push(document.createTextNode(' · ')); bits.push(...hl(h.sub)); }
+    if (!bits.length && h.ident) bits.push(el('code', { class: 'v2-omni-key' }, ...hl(/^[0-9]+$/.test(h.ident) ? '#' + h.ident : h.ident)));
+    return bits.length ? el('span', { class: 'v2-omni-s' }, ...bits) : null;
   }
   function paint(): void {
     rowNodes.length = 0;
@@ -239,8 +297,10 @@ export function omniOpen(seed?: string): void {
     const meaty = (h: Hit): boolean => isIdentHit(h) || isTitleHit(h) || h.title.replace(/[^\p{L}\p{N}]/gu, '').length >= MIN_TITLE_CHARS;
     const top = hits.filter((h) => (isIdentHit(h) || isTitleHit(h) || typeof h.score === 'number') && meaty(h))
       .sort((a, b) => {
-        const ia = isIdentHit(a) ? 1 : 0, ib = isIdentHit(b) ? 1 : 0;
-        if (ia !== ib) return ib - ia;                        // 호명이 먼저다
+        //  **정확히 그 이름/번호인 것**이 먼저다(상민님 2026-08-25). 종전엔 정확·부분을 한 티어로 묶어서,
+        //  `1835` 로 치면 key 에 1835 가 든 지식 2건이 먼저 서고 정작 **번호가 맞는 프로젝트가 3위**로 밀렸다.
+        const ra = identRank(a), rb = identRank(b);
+        if (ra !== rb) return ra - rb;                        // 0=정확 · 1=부분 · 2=아님
         const ta = isTitleHit(a) ? 1 : 0, tb = isTitleHit(b) ? 1 : 0;
         if (ta !== tb) return tb - ta;
         // 점수가 있으면 점수가 먼저다 — 제목 적중끼리도 그렇다. 화면에 0.585 가 0.632 위에 서면 '관련도순'이 거짓말이 된다.
@@ -263,8 +323,8 @@ export function omniOpen(seed?: string): void {
         },
           el('span', { class: 'v2-omni-ic' }, icon(h.kind, 'v2-omni-kic')),
           el('span', { class: 'v2-omni-tt' },
-            el('b', { class: 'v2-omni-t', text: h.title }),
-            h.sub ? el('span', { class: 'v2-omni-s', text: h.sub }) : null),
+            el('b', { class: 'v2-omni-t' }, ...hl(h.title)),
+            subLine(h)),
           el('span', { class: 'v2-omni-badge', text: KIND_LABEL[h.kind] })) as HTMLElement;
         rowNodes.push(node);
         rowHits.push(h);
@@ -378,6 +438,7 @@ export function omniOpen(seed?: string): void {
     const my = seq;
     buckets.clear();
     hits = [];
+    sel = 0;   // 목록이 통째로 바뀐다 — 선택을 물려주면 3번째를 고른 채로 글자를 더 쳤을 때 **다른 항목**이 열린다
     qTokens = q.toLowerCase().split(/\s+/).filter(Boolean);
     if (!q) { pending = 0; recent(); paint(); setNote(''); return; }
     localHits(q);
