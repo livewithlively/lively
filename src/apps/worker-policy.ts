@@ -26,7 +26,11 @@ export const WORKER_POLICY_DEFAULT: WorkerPolicy = {
   max_wall_sec: 0,
 };
 
-const MAX = { max_concurrent: 4096, max_per_member: 4096, max_memory_mb: 1_048_576, cpu_percent_max: 6400, max_wall_sec: 2_592_000 } as const;
+/** 항목별 상한 — 오타 하나가 사실상 무제한이 되지 않게 접는 지점.
+ *  ⚠ 이 값은 **표면 검증(capabilities/delivery/runtime-config)과 공유**한다. 두 곳에 숫자를 따로 적으면
+ *   한쪽만 바뀌어 "400 은 안 나는데 조용히 접히는" 구간이 생긴다. 반드시 여기서 import 해 쓸 것. */
+export const WORKER_POLICY_MAX = { max_concurrent: 4096, max_per_member: 4096, max_memory_mb: 1_048_576, cpu_percent_max: 6400, max_wall_sec: 2_592_000 } as const;
+const MAX = WORKER_POLICY_MAX;
 
 /** 음수·소수·NaN·범위초과를 기본값 쪽으로 접는다(관리 입력은 신뢰하지 않는다). */
 function clamp(value: unknown, fallback: number, max: number): number {
