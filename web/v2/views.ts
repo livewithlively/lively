@@ -1,6 +1,6 @@
 // v2/views.ts — 새 셸의 중앙 화면 셋(#1719): 홈(미선택) · 프로젝트 · 세션. 데이터는 main.ts 가 모아 넘긴다(V2Data).
 //  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
-//  프로젝트는 v2/project-view.ts(#1757 — 짧은 개요 + 리브 대화), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 에 있다.
+//  프로젝트는 v2/panes.ts(칸 셸 — main.ts mountProjectShell 이 그걸 마운트한다), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 와 칸 「리브」(panes-parts.ts)에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
 import { el, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
@@ -203,7 +203,7 @@ export function projName(data: V2Data, id: number | null): string {
   return p ? p.name : `프로젝트 #${id}`;
 }
 
-// ── 프로젝트 화면은 v2/project-view.ts(#1757) — 짧은 개요 + 리브 대화. 여기 있던 renderProject(개요+세션+태스크 나열)는 거기로 갈음했다.
+// ── 프로젝트 화면은 v2/panes.ts(칸 셸) — 여기 있던 renderProject 는 #1757 에서 project-view.ts 로 옮겼고, 그 뒤 칸 셸이 그 자리를 가져갔다(project-view.ts 는 도달 경로가 없어져 삭제). 리브 대화는 칸 「리브」가 싣는다.
 
 // ── 세션 — 그 세션 자체를 가운데에: 터미널 기본 + 대화(베타)(web/session-chat.ts) ─────────
 //  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].
