@@ -81,3 +81,84 @@ export function parseJsonLines(text: string): unknown[] {
 export function toNdjson(lines: ChatLine[]): string {
   return lines.length ? lines.map((l) => JSON.stringify(l)).join("\n") + "\n" : "";
 }
+
+// ── 얇은 판(#1819) — 타임라인이 세션 **전체**를 볼 수 있게 ────────────────────────────────
+//  타임라인(우패널)의 재료는 이 대화록인데, 대화창은 성능 때문에 꼬리 1.5MB 만 읽는다. 긴 세션에서는 그게
+//  전체의 몇 %라, 타임라인이 "내가 시킨 것"의 대부분을 **알 수조차 없었다**(실측 #1819: 20.3MB 세션에서
+//  질문 15개 중 14개가 창 밖 — 화면엔 2줄만 떴다).
+//  그렇다고 20MB 를 브라우저로 보낼 수는 없다. 그래서 **덩치만 버린 같은 모양**을 만든다:
+//    · 버리는 것 — 도구 결과 본문(제일 크다) · 도구 입력의 파일 내용 · 생각(thinking) · 화면이 안 보는 type
+//    · 남기는 것 — 사람 말 · AI 가 한 말 · 어떤 도구를 무엇에 썼나 · 턴 마감
+//  실측(같은 20.3MB 파일): 455KB = 2.24%, 44배. 모양은 ChatLine 그대로라 **화면의 분류 규칙을 그대로 쓴다**
+//  (규칙을 서버에 또 적으면 두 벌이 갈라진다).
+/** 도구 입력에서 남길 열쇠 — 화면의 분류기(web/session-trail.ts classifyToolUse)가 실제로 읽는 것만. */
+const THIN_INPUT_KEYS = new Set(["file_path", "notebook_path", "command", "name", "title", "mode", "id", "status"]);
+const THIN_TEXT_MAX = 600;       // 답 한 줄이면 충분하다(화면도 첫 문장만 쓴다)
+const THIN_SAY_MAX = 4000;       // 사람 말은 '전문 보기'가 있어 조금 넉넉히
+const THIN_CMD_MAX = 4000;       // Bash 는 명령 안쪽(heredoc·커밋 메시지)을 정규식으로 훑는다
+const clip = (v: string, n: number): string => (v.length > n ? v.slice(0, n) : v);
+
+function thinInput(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== "object") return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (!THIN_INPUT_KEYS.has(k)) continue;
+    out[k] = typeof v === "string" ? clip(v, k === "command" ? THIN_CMD_MAX : 400) : v;
+  }
+  return out;
+}
+
+/** ChatLine 한 줄 → 얇은 줄. 타임라인이 볼 것이 없으면 null(그 줄은 아예 안 보낸다). */
+export function thinLine(line: ChatLine): ChatLine | null {
+  const o = line as any;
+  if (!o || typeof o !== "object") return null;
+  if (o.type === "system") {
+    return { type: "system", subtype: o.subtype, timestamp: o.timestamp ?? "", ...(o.durationMs !== undefined ? { durationMs: o.durationMs } : {}) } as ChatLine;
+  }
+  if (o.type === "user") {
+    const c = o.message?.content;
+    const blocks: ChatBlock[] = [];
+    if (typeof c === "string") { if (c.trim()) blocks.push({ type: "text", text: clip(c, THIN_SAY_MAX) }); }
+    else if (Array.isArray(c)) {
+      for (const b of c) {
+        if (!b || typeof b !== "object") continue;
+        if (b.type === "text" && String(b.text ?? "").trim()) blocks.push({ type: "text", text: clip(String(b.text), THIN_SAY_MAX) });
+        // 도구 결과는 **본문을 버리고 성패만** 남긴다 — 화면은 실패 표시에만 쓴다(본문이 이 파일 덩치의 대부분이다).
+        else if (b.type === "tool_result") blocks.push({ type: "tool_result", tool_use_id: String(b.tool_use_id ?? ""), content: "", ...(b.is_error ? { is_error: true } : {}) } as ChatBlock);
+      }
+    }
+    if (!blocks.length) return null;
+    const out: any = { type: "user", timestamp: o.timestamp ?? "", message: { role: "user", content: blocks } };
+    if (o.uuid) out.uuid = o.uuid;
+    if (o.isMeta) out.isMeta = true;
+    if (o.isSidechain) out.isSidechain = true;
+    return out as ChatLine;
+  }
+  if (o.type === "assistant") {
+    const c = o.message?.content;
+    const blocks: ChatBlock[] = [];
+    if (Array.isArray(c)) {
+      for (const b of c) {
+        if (!b || typeof b !== "object") continue;
+        if (b.type === "text" && String(b.text ?? "").trim()) blocks.push({ type: "text", text: clip(String(b.text), THIN_TEXT_MAX) });
+        else if (b.type === "tool_use") blocks.push({ type: "tool_use", id: String(b.id ?? ""), name: String(b.name ?? ""), input: thinInput(b.input) });
+        // thinking 은 버린다 — 타임라인이 안 쓴다.
+      }
+    }
+    if (!blocks.length) return null;
+    const out: any = { type: "assistant", timestamp: o.timestamp ?? "", message: { role: "assistant", content: blocks } };
+    if (o.uuid) out.uuid = o.uuid;
+    if (o.isSidechain) out.isSidechain = true;
+    return out as ChatLine;
+  }
+  return null;                                  // summary·file-history-snapshot 등 — 타임라인이 안 본다
+}
+
+export function toThinNdjson(lines: ChatLine[]): string {
+  const out: string[] = [];
+  for (const l of lines) { const t = thinLine(l); if (t) out.push(JSON.stringify(t)); }
+  return out.length ? out.join("\n") + "\n" : "";
+}
+
+/** 얇은 판이 한 번에 훑는 상한 — 이보다 큰 파일은 **꼬리부터** 이만큼만 본다(화면이 X-Log-From 으로 알아챈다). */
+export const THIN_MAX_BYTES = 64 * 1024 * 1024;

@@ -15,7 +15,7 @@ import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
 import type { AppComponentRef } from "./install-plan.js";
 import type { DeployItem, InstallDeps } from "./install.js";
-import { upsertApp, setAppStatus, addComponent, removeComponent, hostReferenceCount } from "../org/store/apps.js";
+import { upsertApp, setAppStatus, addComponent, removeComponent, hostReferenceCount, upsertRuntimeAsset, pruneRuntimeAssets } from "../org/store/apps.js";
 import { upsertOrgHarnessAsset, removeOrgHarnessAsset } from "../org/store/harness-assets.js";
 import { getRuntimeConfig, updateRuntimeConfig } from "../org/store/runtime-config.js";
 import { upsertCronJob, deleteCronJob } from "../org/cron-store.js";
@@ -26,6 +26,7 @@ import { upsertTool, removeTool, type OrgToolInput } from "../org/store/tools.js
 interface HarnessAssetPayload { kind: "skill" | "subagent" | "command"; harness: "claude"; body: string; label: string }
 // cron payload 계약(loader.ts) — { schedule, run:{ kind, prompt?, prompt_asset? } }.
 interface CronPayload { schedule: string; run: { kind: string; prompt?: string; prompt_asset?: string } }
+interface RuntimeWorkerPayload { entry: string; code: Buffer; code_hash: string; package_hash: string }
 
 // 한 kind 의 전개/회수 한 쌍. appId·ctx 는 배선 클로저가 주입한다.
 interface KindHandler {
@@ -120,6 +121,18 @@ const KIND_HANDLERS: Record<string, KindHandler> = {
     },
     async reclaim(_appId, comp, ctx) {
       await removeTool(comp.ref, ctx);
+    },
+  },
+
+  // ── worker 번들 — 설치 stage가 사라지기 전에 DB에 정확한 package hash의 바이트를 고정한다. ──
+  runtime_worker: {
+    async deploy(appId, item) {
+      const p = item.payload as RuntimeWorkerPayload;
+      if (!p || !Buffer.isBuffer(p.code)) throw new HttpError(500, `worker 번들 payload가 없습니다: ${item.comp.ref}`);
+      await upsertRuntimeAsset(appId, p);
+    },
+    async reclaim(appId) {
+      await pruneRuntimeAssets(appId, null);
     },
   },
 

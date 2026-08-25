@@ -25,22 +25,50 @@
 .pn-pane[data-zone="side"] { border-left: 1px solid var(--line); }
 .pn-pane[hidden] { display: none; }
 
-/* ── 탭 줄 — 얇게, 그러나 무엇이 켜졌는지는 분명하게(활성 탭 위 파란 마디) ── */
-.pn-tabs { flex: none; display: flex; align-items: stretch; gap: 1px; height: 37px; padding: 0 6px 0 0; background: var(--gray-bg-2); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+/* ── 탭 줄 — 얇게, 그러나 무엇이 켜졌는지는 분명하게(활성 탭 위 파란 마디) ──
+   ★ 줄은 두 조각이다: **미끄러지는 탭 띠(.pn-tabs)** + **못 박은 손잡이(.pn-tabtail — 모두 보기·＋·접기)**.
+   종전엔 셋이 한 띠 안에 있어서, 탭이 칸 폭을 넘기는 순간 ＋·접기까지 같이 밀려 화면 밖으로 나갔다
+   (원준 2026-08-20 신고 — 곁칸 기본 폭 339px 에 부품 9개면 띠가 884px, ＋는 x=1918 로 칸 밖이었다).
+   손잡이를 띠 밖에 두면 탭이 몇 개든 제자리다. 가려진 탭은 [모두 보기]에서 켜거나 거기서 뺀다. */
+.pn-tabbar { position: relative; flex: none; display: flex; align-items: stretch; height: 37px; background: var(--gray-bg-2); border-bottom: 1px solid var(--line); }
+.pn-tabbar[hidden] { display: none; }
+.pn-tabbar.drop { background: var(--bg-punch); box-shadow: inset 0 -2px 0 var(--blue); }
+.pn-tabs { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 1px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
 .pn-tabs::-webkit-scrollbar { display: none; }
-.pn-tabs.drop { background: var(--bg-punch); box-shadow: inset 0 -2px 0 var(--blue); }
+.pn-tabtail { flex: none; display: flex; align-items: stretch; padding-right: 6px; background: inherit; }
+/* 탭 자체는 **안 줄인다**(flex: none). 부품 이름은 두세 글자라 조금만 줄여도 '할 일'이 '할 …'이 되어
+   무슨 탭인지 못 읽는다(실측 2026-08-20: 줄여서 번 자리는 탭 0.5개뿐이었다). 대신 넘치면 띠가 미끄러지고,
+   가려진 탭은 손잡이의 [모두 보기]로 간다 — 이름은 온전히 두고 통로를 따로 낸 것이 이 줄의 규칙이다. */
 .pn-tabwrap { position: relative; display: inline-flex; align-items: center; flex: none; border-right: 1px solid var(--line); }
 .pn-tabwrap.on { background: var(--bg); box-shadow: inset 0 2px 0 var(--blue); }
 .pn-tab { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px 0 12px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--muted-head); cursor: pointer; white-space: nowrap; }
 .pn-tab:hover { color: var(--ink); }
 .pn-tabwrap.on .pn-tab { color: var(--ink); font-weight: 700; }
 .pn-tab.drag { opacity: .45; }
-.pn-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 36px; padding: 0 8px 0 0; border: 0; background: none; color: var(--muted-3); cursor: pointer; }
+.pn-tab-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 36px; padding: 0 8px 0 0; border: 0; background: none; color: var(--muted-3); cursor: pointer; }
 .pn-tabwrap:hover .pn-tab-x { color: var(--muted); }
 .pn-tab-x:hover { color: var(--coral-text); }
-.pn-tab-add, .pn-pane-hide { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 36px; border: 0; background: none; color: var(--muted-2); cursor: pointer; }
-.pn-tab-add:hover, .pn-pane-hide:hover { color: var(--blue); background: var(--bg-punch); }
-.pn-pane-hide { margin-left: auto; }
+.pn-tab-add, .pn-pane-hide, .pn-tab-more { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 36px; border: 0; background: none; color: var(--muted-2); cursor: pointer; }
+.pn-tab-add:hover, .pn-pane-hide:hover, .pn-tab-more:hover { color: var(--blue); background: var(--bg-punch); }
+/* [모두 보기]는 **띠가 넘칠 때만** 나온다(안 넘치면 군더더기다). 아래를 가리키는 꺾쇠 = '여기 더 있다'
+   (브라우저·에디터 탭 줄의 공통 문법). ⚠ 이 두 줄은 위 공용 버튼 규칙보다 **뒤**에 있어야 한다 —
+   명시도가 같아 앞에 두면 display: inline-flex 가 이겨 늘 보인다(2026-08-20 실측). */
+.pn-tab-more { display: none; }
+.pn-tab-more svg { transform: rotate(90deg); }
+.pn-tabbar.has-more .pn-tab-more { display: inline-flex; }
+/* 손잡이 왼쪽 그늘 = 왼쪽에 가려진 탭이 더 있다는 신호 */
+.pn-tabbar.has-more .pn-tabtail { box-shadow: -9px 0 9px -7px rgba(16, 24, 40, .22); }
+
+/* ── 좁으면 접는다 — 켜진 탭만 이름, 나머지는 아이콘만 (원준 2026-08-20) ──────────
+   브라우저 탭이 많아지면 파비콘만 남는 문법. **폭이 아니라 넘침으로** 정한다(panes.ts fit):
+   이름을 다 편 채로 재서 들어가면 절대 접지 않는다 — "충분히 보여줄 수 있는데 접는 일은 없게".
+   접힌 탭의 이름은 툴팁(title)과 손잡이의 [모두 보기]가 말한다. 켜진 탭은 이름도 ×도 그대로 둔다
+   (지금 보는 것이 무엇인지와, 그걸 닫는 길은 접혀도 남아야 한다). */
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab { gap: 0; padding: 0 9px; }
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab > span { display: none; }
+.pn-tabbar.compact .pn-tabwrap:not(.on) .pn-tab-x { display: none; }
+/* 접혔으면 이름을 읽을 곳이 필요하다 — 넘치지 않아도 [모두 보기]를 남긴다(거기서 빼기도 한다). */
+.pn-tabbar.compact .pn-tab-more { display: inline-flex; }
 
 /* 세션 탭 — 부품 탭과 한 줄에 서지만 결이 다르다: **상태점 + 이름**, 닫기(×)는 없다(세션은 '열어 둔 문서'가
    아니라 프로젝트에 속한 실체다). 이름이 길어도 탭 줄이 무너지지 않게 폭을 묶는다. */
@@ -98,6 +126,7 @@
 .pn-head.end { justify-content: flex-end; border-top: 1px solid var(--line-row); }
 .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ell2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ell1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* ── 팝오버(칸 고르기·보기 메뉴) ──
    ⚠ anchoredPopover 는 **위치만** 잡는다(.dash-pop = position:fixed·z-index). 배경·테두리·그림자는 패널이
@@ -112,6 +141,13 @@
 .pn-pop-row .n { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .pn-pop-row .n b { font-size: 12.5px; }
 .pn-pop-row svg { margin-top: 2px; color: var(--muted-head); }
+/* [모두 보기]의 한 줄 = **고르기(행) + 빼기(×)**. 띠에서 손이 안 닿는 탭도 여기선 늘 닿는다. */
+.pn-pop-line { display: flex; align-items: stretch; gap: 2px; border-radius: 8px; }
+.pn-pop-line.on { background: var(--bg-tint); }
+.pn-pop-line > .pn-pop-row { flex: 1; min-width: 0; }
+.pn-pop-line.on > .pn-pop-row b { color: var(--blue); }
+.pn-pop-x { flex: none; width: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted-3); cursor: pointer; }
+.pn-pop-x:hover { background: var(--bg-punch); color: var(--coral-text); }
 .pn-pop-foot { margin-top: 6px; padding-top: 7px; border-top: 1px solid var(--line-row); display: flex; justify-content: flex-end; gap: 14px; }
 .pn-check { width: 15px; height: 15px; margin-top: 1px; border: 1.5px solid var(--muted-3); border-radius: 4px; flex: none; }
 .pn-check.on { border-color: var(--blue); background: var(--blue-fill); position: relative; }
@@ -201,6 +237,8 @@
 
 .pn-ftools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .pn-fsp { flex: 1; }
+/* 올리기 두 입구(파일·폴더째)는 한 덩이 — 떨어뜨리면 폴더 아이콘이 옆의 [새 폴더](만들기)에 붙어 읽힌다. */
+.pn-upgrp { display: inline-flex; align-items: center; gap: 3px; }
 .pn-fbtn { flex: none; height: 24px; min-width: 24px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
   border: 1px solid var(--line-net); border-radius: 7px; background: var(--bg); font: inherit; font-size: 11.5px; color: var(--muted-head); cursor: pointer; }
 .pn-fbtn:hover { border-color: var(--blue); color: var(--ink); }
@@ -222,8 +260,12 @@
 .pn-fic { width: 100%; aspect-ratio: 1 / .82; border: 1px solid var(--line); border-radius: 8px; background: var(--gray-bg); display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--muted-2); }
 .pn-fic img { width: 100%; height: 100%; object-fit: cover; }
 .pn-fic video { width: 100%; height: 100%; object-fit: cover; }
-.pn-fic.dir { border-style: none; background: none; color: #E0A42B; }
-.pn-fic.dir svg { width: 62%; height: 62%; }
+/* 폴더는 채운 그림이라 카드 테두리·바탕이 필요 없다 — 그림 자체가 덩어리다. */
+.pn-fic.dir { border-style: none; background: none; }
+.pn-folder { width: 76%; height: auto; filter: drop-shadow(0 1px 1.5px rgba(21,35,59,.10)) drop-shadow(0 3px 6px rgba(21,35,59,.10)); }
+.pn-folder.sm { width: 20px; height: 20px; filter: none; }
+.pn-fic.dir.sm { width: 20px; height: 20px; }
+.pn-fcard.on .pn-folder, .pn-frow2.on .pn-folder { filter: drop-shadow(0 2px 4px rgba(45,107,240,.35)); }
 .pn-fic.sm { width: 20px; height: 20px; flex: none; aspect-ratio: auto; border-radius: 5px; }
 .pn-fic.sm svg { width: 13px; height: 13px; }
 .pn-fname { font-size: 11.5px; font-weight: 600; line-height: 1.35; text-align: center; word-break: break-all; }
@@ -263,7 +305,7 @@
 
 /* ══ 지식 · 할 일 · 개요 · 타임라인 ══════════════════════════════════════════ */
 .pn-knlist, .pn-tlist { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 14px; display: flex; flex-direction: column; gap: 1px; }
-.pn-knrow { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border-radius: 8px; text-decoration: none; color: var(--ink); font-size: 12.5px; }
+.pn-knrow { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border: 0; border-radius: 8px; width: 100%; text-align: left; background: none; font: inherit; font-size: 12.5px; text-decoration: none; color: var(--ink); cursor: pointer; }
 .pn-knrow:hover { background: var(--bg-punch); }
 .pn-knrow svg { color: var(--muted-2); }
 .pn-knrow .n { min-width: 0; flex: 1; }
@@ -284,6 +326,10 @@
 .pn-md h1 { font-size: 18px; } .pn-md h2 { font-size: 15.5px; } .pn-md h3 { font-size: 14px; }
 .pn-md p, .pn-md ul, .pn-md ol { margin: 0 0 10px; }
 .pn-md code { font-size: 12px; background: var(--gray-bg); padding: 1px 4px; border-radius: 4px; }
+/* 코드·표는 제 안에서 가로로 흐른다 — 칸(또는 창)을 밀어 본문 글줄이 잘리지 않게. */
+.pn-md pre { margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: var(--gray-bg); overflow-x: auto; }
+.pn-md pre code { background: none; padding: 0; }
+.pn-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 /* 타임라인 칸 = 그 세션의 발자취 위젯(web/timeline.ts) 통째. 위젯이 [머리 바 + 자기 스크롤]을 이미 갖고 있으니
    여기서는 높이만 내주고 스크롤은 겹치지 않게 둔다 — 겉과 속이 둘 다 스크롤하면 휠이 어디로 갈지 사람이 못 읽는다. */
 .pn-tl { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -370,23 +416,50 @@
 
 /* ── 웹 · 파일 편집(원준 2026-08-20) ─────────────────────────────────────────── */
 .pn-web, .pn-ed { display: flex; flex-direction: column; min-height: 0; }
+/* 뷰어에 파일을 끌어다 놓는 중 — 자료 칸과 같은 신호로(같은 일이 일어나므로). */
+.pn-ed.drop-active { outline: 2px dashed var(--blue); outline-offset: -6px; background: var(--bg-tint); }
 .pn-web-bar, .pn-ed-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .pn-web-in { flex: 1; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
 .pn-web-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
 .pn-web-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; text-decoration: none; flex: none; }
 .pn-web-btn:hover { color: var(--blue); border-color: var(--blue); }
+/* ── 주소줄 왼쪽 묶음 = [뒤로][앞으로][다시] (원준 2026-08-21) ──────────────────
+   브라우저와 같은 순서·같은 자리에 둔다 — 여기서 배우지 않아도 아는 배치가 제일 빠르다.
+   셋은 아이콘만이라 정사각으로 붙이고(묶음), 주소칸이 남은 폭을 다 쓴다. */
+.pn-web-navs { flex: none; display: inline-flex; align-items: center; gap: 3px; }
+.pn-web-btn.ic { width: 28px; padding: 0; }
+.pn-web-btn.back svg { transform: rotate(180deg); }
+/* 갈 데가 없으면 끈다 — 눌러도 아무 일 없는 단추를 켜 둔 채로 두지 않는다. */
+.pn-web-btn:disabled { color: var(--muted-3); border-color: var(--line-row); cursor: default; }
+.pn-web-btn:disabled:hover { color: var(--muted-3); border-color: var(--line-row); }
+/* ── 무대(stage) — 프레임을 넓게 잡고 줄여 그리는 자리 (원준 2026-08-21 '폭 맞춤') ────────────
+   프레임의 **논리 폭**을 1/배율 로 키우고 그만큼 축소하면, 사이트는 넓은 화면인 줄 알고 데스크톱 배치를
+   펴고 그게 칸 안에 통째로 들어온다(가로가 안 잘린다). 무대는 넘치는 부분을 잘라 담는 그릇이다. */
+.pn-webstage { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; background: var(--surface); }
+/* ⚠ width·height 를 **여기서 반드시** 준다. 프레임(iframe·webview)은 '대체 요소'라 크기를 안 주면
+   CSS 기본값 300×150px 로 앉는다 — 자리를 잡아 주던 flex 는 position:absolute 가 되는 순간 손을 뗀다.
+   브라우저 경로는 배율 때문에 인라인 style 로 늘 크기를 주지만, **앱 경로(<webview>)는 진짜 줌을 쓰므로
+   인라인 style 을 지운다** — 그때 이 규칙이 없으면 칸이 아무리 커도 페이지는 150px 만 그려진다
+   (원준 2026-08-23 신고 "로드가 계속 이 정도까지만 돼": 아티팩트 머리글 44px + 본문 106px = 정확히 150px). */
+.pn-webstage > .pn-webframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-origin: top left; }
 .pn-webframe { flex: 1; min-height: 0; min-width: 0; width: 100%; border: 0; background: var(--surface); }
+/* 배율 칩 — 숫자가 들어가므로 정사각(ic)이 아니라 조금 넓다. 누르면 맞춤↔100% 를 오간다. */
+.pn-web-btn.zl { min-width: 44px; padding: 0 6px; font-variant-numeric: tabular-nums; }
 /* 데스크톱 앱(#1829)에서는 이 칸이 <webview> 다 — 교체 요소라 내재 크기로 버티므로 flex 자식임을 명시한다. */
 webview.pn-webframe { display: flex; }
 .pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
-.pn-ed-pick { max-width: 46%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
-.pn-ed-body { flex: 1; min-height: 0; display: flex; }
-.pn-ed-split { flex: 1; min-height: 0; display: grid; grid-template-rows: 1fr 1fr; }
-.pn-ed-ta { flex: 1; min-height: 0; width: 100%; border: 0; padding: 10px 12px; resize: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--ink); background: var(--bg); }
-.pn-ed-ta:focus { outline: none; }
-.pn-ed-split .pn-ed-ta { border-bottom: 1px solid var(--line); }
+.pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.pn-ed-name { flex: 1; min-width: 0; font-size: 12.5px; }
 .pn-ed-pv { width: 100%; height: 100%; border: 0; background: var(--surface); }
 .pn-ed-img { width: 100%; height: 100%; object-fit: contain; background: var(--gray-bg); }
+.pn-ed-pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* 뷰어의 '무엇을 열까' 화면 — 드롭다운을 대신하는 목록(검색 + 종류·크기·시각) */
+.pn-ed-pick2 { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pn-ed-find { flex: none; margin: 9px 12px 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-net); border-radius: 9px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
+.pn-ed-find:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.pn-ed-pick2 .pn-flist { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; }
+.pn-ed-pick2 .pn-frow2 { width: 100%; border: 1px solid transparent; background: none; font: inherit; text-align: left; cursor: pointer; }
+.pn-ed-pick2 .pn-frow2:hover { border-color: var(--line-net); background: var(--bg-tint); }
 
 /* ── 앱 부품(#1780 panes 정합) — 설치된 앱을 곁칸에서 목록·열기 ── */
 .pn-apps { display: flex; flex-direction: column; overflow: hidden; }
@@ -399,3 +472,45 @@ webview.pn-webframe { display: flex; }
 .pn-apps-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2); }
 .pn-apps-cur { font-size: 12.5px; }
 .pn-apps .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
+
+/* ══ 지식 상세 창 — 위키로 튀지 않고 그 자리에서 먼저 본다 (#1819) ═══════════ */
+.pn-knm { width: min(680px, 96vw); }
+.pn-knm .pn-modal-h h2 { font-size: 17px; line-height: 1.35; }
+.pn-knm-full { margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--muted-head); }
+.pn-knm-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.pn-knm-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
+.pn-knm-sum { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--bg-sel); font-size: 13px; line-height: 1.6; color: var(--ink); }
+.pn-knm-body .pn-md { padding: 0; }
+.pn-knm .pn-modal-f .pn-fine { min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+
+/* ══ 문패 버튼 — 크기·글자는 그대로 두고 '무게'만 준다 (#1819 원준) ═══════════ */
+/*  ghost 둘이 나란히 있으면 어느 것이 주된 동작인지 색이 말해 주지 않는다. 주된 동작만 칠한다. */
+.pn-door-sep { width: 1px; height: 20px; margin: 0 2px; background: var(--line); }
+.pn-door-btn { gap: 6px; }
+.pn-door-btn svg { width: 15px; height: 15px; }
+.pn-door-r .btn-primary.pn-door-btn { box-shadow: 0 1px 2px rgba(45,107,240,.30), 0 2px 8px rgba(45,107,240,.16); }
+.pn-door-r .btn-primary.pn-door-btn:hover { box-shadow: 0 1px 2px rgba(45,107,240,.34), 0 4px 12px rgba(45,107,240,.22); }
+.pn-door-r .btn-ghost.pn-door-btn { border-color: var(--line-net); color: var(--ink); font-weight: 600; }
+.pn-door-r .btn-ghost.pn-door-btn svg { color: var(--muted-2); }
+.pn-door-r .btn-ghost.pn-door-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
+.pn-door-r .btn-ghost.pn-door-btn:hover svg { color: var(--blue); }
+
+/* ── 미리보기 칸 (previewPart) ─────────────────────────────────────────────
+   띄워 둔 화면 목록. 누르면 웹 칸이 그 주소를 문다 — 이 칸은 '무엇을 띄울지 고르는' 자리다. */
+.pn-prev{display:flex;flex-direction:column;min-height:0;overflow:auto}
+.pn-prev-list{display:flex;flex-direction:column;gap:2px;padding:6px}
+.pn-prev-msg{padding:14px 10px;font-size:12.5px;color:var(--muted-2)}
+.pn-prev-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  background:none;border:1px solid transparent;border-radius:8px;padding:7px 8px;cursor:pointer;font:inherit;color:inherit}
+.pn-prev-row:hover{background:var(--bg-punch);border-color:var(--line)}
+.pn-prev-row:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.pn-prev-row.is-on{background:var(--bg-punch);border-color:var(--blue)}
+.pn-prev-dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px;background:var(--muted-3)}
+.pn-prev-dot--on{background:#0e9f87}
+.pn-prev-dot--busy{background:#a9660c}
+.pn-prev-dot--bad{background:#b3261e}
+.pn-prev-b{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.pn-prev-t{font-size:12.5px;font-weight:600;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pn-prev-m{font-size:11px;color:var(--muted-2);line-height:1.45;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pn-prev-go{flex:0 0 auto;opacity:0;transition:opacity .12s}
+.pn-prev-row:hover .pn-prev-go,.pn-prev-row.is-on .pn-prev-go{opacity:.6}

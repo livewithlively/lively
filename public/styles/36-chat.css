@@ -131,6 +131,28 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-meta a { color: var(--ink-sub); text-decoration: none; }
 .sc-meta a:hover { color: var(--blue); }
 .sc-sep { color: var(--muted-2); }
+/* 런타임 신원 알약 — 하네스 · 모델 · 추론강도 · 노드가 한 덩어리라는 것을 **묶음**으로 말한다.
+   종전엔 넷이 각각 다른 옷(하네스·모델 mono, 상태·노드 sans)을 입고 가운뎃점으로만 이어져 '애매하게 다른'
+   줄이었다(원준님 2026-08-21). 그래서 ①글꼴을 한 벌로 통일하고(한글에 mono 금지) ②크기도 줄 전체와 같은
+   12px 로 두고 ③구분은 오직 틴트 배경으로 한다 — 채운 색 필이 아니라 틴트+진한 글자(디자인시스템 금지 #11).
+   [hidden] 을 다시 적는 것은 display:inline-flex 가 hidden 속성의 기본 display:none 을 이기기 때문이다. */
+.sc-run { display: inline-flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; overflow: hidden;
+  padding: 1px 9px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg-tint); color: var(--ink-sub); }
+.sc-run[hidden] { display: none; }
+.sc-run > * { flex: none; }
+/* 줄어드는 칸은 노드 이름 하나 — 나머지 셋(하네스·모델·강도)은 짧고 폭이 고정이라 잘리면 읽을 수 없다.
+   전체 이름은 title 로 남는다(hover 로만 접근 가능한 정보를 만들지 않기 위해, 잘리지 않으면 그대로 다 보인다). */
+.sc-run .sc-run-node { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 이 줄에 남은 값은 전부 짧고 폭이 고정이다(상태 · 하네스 · 모델 · 추론강도) — 좁아질 때 줄어드는 쪽은
+   제목(.sc-titlebox) 하나다. 길어서 오른쪽 조작부를 타고 넘던 프로젝트 이름은 이 줄에서 내려갔다
+   (2026-08-20 — 1440px 에서 '최대'가 '연결됨' 위에 겹쳐 찍혔다. 지금은 [⋯ ▸ 이 세션]). */
+/* ⚠ 좁아질 때의 규칙 — 두 짝이 **함께** 있어야 한다(하나만 있으면 실측에서 둘 다 깨졌다, 2026-08-21).
+   ① min-width:0 로 압력이 알약까지 전달되게 하고(없으면 알약이 안 줄어 오른쪽 조작부 박스를 타고 넘는다)
+   ② 알약에 overflow:hidden 을 줘서 못 줄어든 내용이 **밖으로 새지 않게** 한다(없으면 '재연결 중…' 글자
+      위에 알약 글자가 겹쳐 찍힌다 — 박스 간격만 재면 12px 로 멀쩡해 보여 이 증상을 못 잡는다).
+   줄어드는 칸은 제목(.sc-titlebox)과 알약 속 노드 이름(.sc-run-node) 둘, 그 순서다. */
+.sc-meta { min-width: 0; }
 .sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
@@ -282,7 +304,6 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   button.sc-title { font-size: 15px; max-width: 100%; }
   .sc-title-in { font-size: 16px; width: 100%; }
   .sc-meta { flex: 1 1 100%; overflow: hidden; }
-  .sc-meta .sc-proj > a { max-width: min(240px, 46vw); }
   .sc-head-r { flex: 1 1 100%; justify-content: flex-start; gap: 2px; margin-left: -6px; }
   .sc-act { font-size: 13px; padding: 7px 9px; min-height: 36px; }
   .sc-wait { flex-wrap: wrap; padding: 9px 12px; }

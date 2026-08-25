@@ -61,6 +61,7 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
       : apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent('uploads/' + nm));
   };
 
+  let srcCount = 0;   // 이번 배치에서 자료(source)로 등록된 파일 수(#1881) — 서버 PUT 응답의 source_id 로 센다.
   async function attachFiles(files: File[]): Promise<void> {
     if (!files.length) return;
     let ok = 0;
@@ -73,6 +74,7 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
       try {
         // 순차 업로드(upSend 와 같은 이유) — 병렬로 쏘면 큰 파일 여럿이 회선을 나눠 서로 오래 걸린다.
         const j: any = await authUploadProgress(urlFor(nm), f, (pct: number) => { if (items.indexOf(a) >= 0) { a.pct = pct; paint(); } }, ctl.signal);
+        if (j && j.source_id) srcCount++;
         if (items.indexOf(a) < 0) continue;   // 올리는 중에 ✕(취소)로 이미 뺐다
         a.pct = null; a.ctl = null; a.abs = (j && j.path) || nm;
         ok++; paint();
@@ -82,7 +84,12 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
         if (!upIsAbort(e)) toast(nm + ' 올리기 실패 — ' + (e && e.message ? e.message : e), true);
       }
     }
-    if (ok && !opts.dead?.()) toast(opts.projectId() > 0 ? '자료에 올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.' : '올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.');
+    if (ok && !opts.dead?.()) {
+      // 자료가 된 파일은 그 사실을 말한다(#1881) — 라이블리가 읽고 정리해 두는 대상임을 올린 순간 알린다.
+      const n = srcCount; srcCount = 0;
+      toast(n > 0 ? `올렸어요 — 자료함에 ${n}건 담았고, 라이블리가 읽어 둡니다. 이 세션에 시킬 때도 함께 넘어갑니다.`
+        : (opts.projectId() > 0 ? '자료에 올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.' : '올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.'));
+    }
   }
 
   const fileIn = el('input', { type: 'file', multiple: '', hidden: true, 'aria-hidden': 'true', tabindex: '-1' }) as HTMLInputElement;

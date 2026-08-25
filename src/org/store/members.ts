@@ -336,7 +336,8 @@ export async function appendLivProfile(
 //  ⚠ **머신별 맵**이다 — 한 멤버가 PC 여러 대(집·회사)를 쓰면 각각 다른 로컬 환경이다. machine_id(훅이
 //   ~/.lively/machine-id 에 UUID 로 1회 생성)를 키로 각 머신 관측을 따로 보관 → 새 머신이 남의 관측을 안 덮는다.
 export interface HarnessSnapshotAsset { id: string; kind: string; managed: boolean }
-export interface HarnessSnapshot { at?: string; host?: string; harness?: string; assets: HarnessSnapshotAsset[] }
+export type LocalSessionMode = "normal" | "readonly" | "incognito";
+export interface HarnessSnapshot { at?: string; host?: string; harness?: string; default_mode?: LocalSessionMode; assets: HarnessSnapshotAsset[] }
 export type HarnessSnapshots = Record<string, HarnessSnapshot>; // machine_id → 관측
 
 export async function getHarnessSnapshots(id: string): Promise<HarnessSnapshots> {
@@ -368,6 +369,7 @@ export async function removeHarnessMachine(id: string, machineId: string): Promi
     `UPDATE org_member
         SET harness_snapshot      = COALESCE(harness_snapshot,'{}'::jsonb)      - $2::text,
             harness_local_pref    = COALESCE(harness_local_pref,'{}'::jsonb)    - $2::text,
+            local_mode_pref       = COALESCE(local_mode_pref,'{}'::jsonb)       - $2::text,
             harness_machine_alias = COALESCE(harness_machine_alias,'{}'::jsonb) - $2::text
       WHERE id=$1 RETURNING id`, [id, machineId]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
@@ -419,6 +421,35 @@ export async function setHarnessLocalPref(id: string, machineId: string, assetKe
        WHERE id=$1 RETURNING id`;
   const r = await itemsPool.query(sql, [id, machineId, assetKey]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+}
+
+// ── 로컬 세션 기본 연결 상태(#1869) — 머신별. 웹이 저장하고 `lively run` preflight 가 pull ──
+//  세션훅으로 당기지 않는다: incognito 는 LIVELY_OFF 로 그 훅 자체가 멈추므로, 그 길에 두면 웹에서 다시 켤 수 없다.
+export interface LocalModePreference { mode: LocalSessionMode; updated_at: string }
+export type LocalModePreferences = Record<string, LocalModePreference>;
+
+export async function getLocalModePreferences(id: string): Promise<LocalModePreferences> {
+  const r = await itemsPool.query(`SELECT local_mode_pref FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.local_mode_pref as unknown;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: LocalModePreferences = {};
+  for (const [machineId, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const row = raw as Record<string, unknown>;
+    if (row.mode !== "normal" && row.mode !== "readonly" && row.mode !== "incognito") continue;
+    out[machineId] = { mode: row.mode, updated_at: typeof row.updated_at === "string" ? row.updated_at : "" };
+  }
+  return out;
+}
+
+export async function setLocalModePreference(id: string, machineId: string, mode: LocalSessionMode): Promise<LocalModePreference> {
+  const pref = { mode, updated_at: new Date().toISOString() };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET local_mode_pref =
+       COALESCE(local_mode_pref,'{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+     WHERE id=$1 RETURNING id`, [id, machineId, JSON.stringify(pref)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return pref;
 }
 
 // 주어진 id 중 **실재하는 활성 구성원**만 골라낸다(#1313 R45) — 공개범위 대상(audience) 검증 공용.

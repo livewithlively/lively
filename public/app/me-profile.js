@@ -5,6 +5,7 @@
 //  PROF_* · profChips · parseMyProfile 은 [내 설정 ▸ 내 AI 설정](me-ai.ts)이 함께 쓴다 — 모달과 그 화면이
 //   같은 저장 경로(POST /api/ui/me/profile)를 부분 갱신으로 나눠 쓰기 때문에 직렬화 규약이 한 곳이어야 한다.
 import { api, apiUrl, el, errorNote, logout, profileAvatar, setPersonAvatar, state, toast, uiText, usernameAnchor } from './core.js';
+import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref } from './theme.js'; // #1683 화면 테마 · AI 세션 동기화
 import { field, skeleton } from './ui-primitives.js';
 // 우측 상단 '내 프로필' — 인증된 구성원이 자기 표시 이름·개인 레이어를 직접 편집(셀프 서비스, 선택형).
 //  관리자 경로(관리▸구성원) 없이 본인이 채운다. 권한·이메일·상태·계정연결·내부 아이디는 admin 전용(여기 없음).
@@ -298,7 +299,7 @@ export async function openMyProfileModal() {
         }
         saveBtn.disabled = false;
     });
-    bodyWrap.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0 0 14px' }, ...uiText('이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.')), field('프로필 사진', ava.node), field('이름', nameIn), field('닉네임 (활동 로그 등에 표시)', nickIn), data.email ? field('이메일 (로그인 아이디 · 변경은 관리자)', el('div', { class: 'admin-ro', text: data.email })) : null, data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }), el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText('현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.')))) : null, logins && logins.oidcAvailable ? field('회사 계정 로그인', companyLoginRow(logins)) : null, el('div', { class: 'admin-actions' }, saveBtn, status));
+    bodyWrap.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0 0 14px' }, ...uiText('이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.')), field('프로필 사진', ava.node), field('이름', nameIn), field('닉네임 (활동 로그 등에 표시)', nickIn), data.email ? field('이메일 (로그인 아이디 · 변경은 관리자)', el('div', { class: 'admin-ro', text: data.email })) : null, data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }), el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText('현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.')))) : null, logins && logins.oidcAvailable ? field('회사 계정 로그인', companyLoginRow(logins)) : null, field('화면 테마', themePrefRow()), el('div', { class: 'admin-actions' }, saveBtn, status));
 }
 // 회사 계정(외부 IdP) 연결 — 붙이면 그 계정 버튼 한 번으로 들어오고, 떼면 비밀번호로만 들어온다(#1520 A).
 //  '연결'은 IdP 왕복이 필요해 페이지 이동으로 시작하고, '해제'는 그 자리에서 끝난다.
@@ -340,4 +341,30 @@ function companyLoginRow(logins) {
     render(logins);
     return row;
 }
-export { PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, parseMyProfile, profChips, };
+export { PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, // 새 셸의 [내 프로필 · 환경설정] 창(v2/me-modal.ts)이 같은 줄을 쓴다 — 연결/해제 규칙이 두 벌이 되지 않게
+parseMyProfile, profChips, };
+// ── 화면 테마(#1683) — 클래식·v2 어디서 열어도 같은 자리에서 고른다. ─────────────
+//  상단바 버튼(클래식)·사이드바 세그먼트(v2)는 빠른 전환이고, 여기는 **'AI 세션도 이 테마로'를 끄고 켜는 곳**이다.
+//  값은 이 브라우저에 남는다(사람마다·기기마다 다를 수 있는 취향이라 서버에 올리지 않는다).
+function themePrefRow() {
+    const wrap = el('div', { style: 'display:flex; flex-direction:column; gap:8px;' });
+    const seg = el('div', { style: 'display:flex; gap:6px; flex-wrap:wrap;' });
+    const lab = { system: '시스템 설정을 따릅니다', light: '라이트', dark: '다크' };
+    const paint = () => {
+        const cur = themePref();
+        seg.replaceChildren(...THEME_ORDER.map((k) => el('button', {
+            type: 'button', class: 'btn btn-sm ' + (cur === k ? 'btn-primary' : 'btn-ghost'), text: lab[k],
+            'aria-pressed': String(cur === k),
+            onclick: () => { setThemePref(k); paint(); }
+        })));
+    };
+    paint();
+    const cb = el('input', { type: 'checkbox', style: 'margin:0', ...(harnessThemeSync() ? { checked: '' } : {}),
+        onchange: (e) => setHarnessThemeSync(!!e.target.checked) });
+    // 열린 탭 일괄 적용(#1683 후속2) — 클래식 셸엔 탭이 없어 **설정만 여기서** 하고, 실제 밀기는 새 셸이 한다.
+    //  값을 브라우저에 함께 두므로 어느 화면에서 켜도 다른 화면이 그 뜻을 따른다.
+    const tabsCb = el('input', { type: 'checkbox', style: 'margin:0', ...(applyToOpenTabs() ? { checked: '' } : {}),
+        onchange: (e) => setApplyToOpenTabs(!!e.target.checked) });
+    wrap.append(seg, el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, cb, el('span', { style: 'font-size:13px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))), el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, tabsCb, el('span', { style: 'font-size:13px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))), el('p', { class: 'admin-hint', style: 'margin:0' }, ...uiText('첫째 칸을 끄면 각 AI 하네스가 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')));
+    return wrap;
+}

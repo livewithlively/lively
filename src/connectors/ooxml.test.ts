@@ -4,7 +4,7 @@
 //        해소·zip-bomb 노출 축소·printableRatio 가드). ⚠ Claude Read 는 docx/xlsx 를 못 뽑으므로 이 결정적 추출이 정답.
 import assert from "node:assert/strict";
 import { deflateRawSync } from "node:zlib";
-import { extractOoxml, printableRatio, ooxmlKindFromMime } from "./ooxml.js";
+import { extractOoxml, printableRatio, ooxmlKindFromMime, ooxmlKindFromName } from "./ooxml.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -128,4 +128,16 @@ t("printableRatio: 정상 한글/영문 high, 깨진 제어문자 low", () => {
   assert.equal(printableRatio(""), 0);
 });
 
-console.log(`\n${pass} passed (ooxml 추출 골든 + zip-bomb 스코핑 + printableRatio 가드)`);
+t("hwpx: Contents/section*.xml 의 <hp:t> 를 문단 개행으로 — 구역 순서 유지 (#1881 로컬 자료)", () => {
+  const zip = makeZip([
+    { name: "Contents/section1.xml", data: '<hs:sec><hp:p><hp:run><hp:t>둘째 구역</hp:t></hp:run></hp:p></hs:sec>' },
+    { name: "Contents/section0.xml", data: '<hs:sec><hp:p><hp:run><hp:t>안녕</hp:t></hp:run><hp:run><hp:t>하세요</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>둘째 &amp; 문단</hp:t></hp:run></hp:p></hs:sec>' },
+    { name: "BinData/image1.png", data: "\x89PNG" },
+  ]);
+  assert.equal(extractOoxml("hwpx", zip), "안녕하세요\n둘째 & 문단\n\n둘째 구역");
+  assert.equal(ooxmlKindFromName("계약.HWPX"), "hwpx");
+  assert.equal(ooxmlKindFromName("보고서.docx"), "docx");
+  assert.equal(ooxmlKindFromName("메모.txt"), undefined);
+});
+
+console.log(`\n${pass} passed (ooxml 추출 골든 + zip-bomb 스코핑 + printableRatio 가드 + hwpx)`);

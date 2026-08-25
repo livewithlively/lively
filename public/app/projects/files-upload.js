@@ -369,4 +369,4 @@ function upProgress(total, onCancel, opts) {
         },
     };
 }
-export { UP_CONFIRM, UP_MANY, authDownload, authUpload, authUploadProgress, upControl, upDropZone, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast };
+export { UP_CONFIRM, UP_MANY, authDownload, authUpload, authUploadProgress, upControl, upDirSupported, upDropZone, upFromInput, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast };

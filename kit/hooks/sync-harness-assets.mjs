@@ -400,7 +400,7 @@ async function reportLocalInventory(managedIds) {
     await fetch(`${GW}/api/ui/me/harness-report`, {
       method: "POST", signal: ctrl.signal,
       headers: { "Authorization": `Bearer ${TOKEN}`, ...SCOPE_HDRS, "Content-Type": "application/json" },
-      body: JSON.stringify({ harness: HARNESS, host, machine_id: machineId(), assets }),
+      body: JSON.stringify({ harness: HARNESS, host, machine_id: machineId(), default_mode: readLocal("mode") || "normal", assets }),
     }).catch(() => {});
     clearTimeout(t);
   } catch { /* 관측 실패는 비치명 — 배포/정리에 영향 없음 */ }

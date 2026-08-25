@@ -327,3 +327,74 @@
   .tsess-name { max-width: 200px; }
 }
 
+
+/* ══ #1841 AI 세션 = 프로젝트 표 문법 ══════════════════════════════════════════
+   세 앱의 통일감은 콘텐츠를 다시 그리는 게 아니라 **같은 머리(빵부스러기·뷰 탭·툴바)·같은 표·같은 크롬**에서 온다(원준 2026-08-24).
+   아래는 프로젝트 표(13/15/16/29 CSS)를 그대로 쓰면서 세션에만 있는 것(상태점·사실 칩·지금 하는 일·액션 칸)을 맞춘 규칙뿐이다.
+   위의 .tsess-card 계열(옛 카드)은 check-css-drops 게이트 때문에 셀렉터를 남겨 둔다 — 더는 그려지지 않는다. */
+.tsess-board-wrap { max-width: none; }
+.tsess-board { margin-bottom: 18px; }
+.tsess-board .pjv-board-header { margin-bottom: 0; }
+/* 빵부스러기 — 앱 이름 + 한 줄 설명(설명문 h1 폐지). */
+.tsess-crumb { cursor: default; }
+.tsess-crumb .pjv-crumb-ic { width: 16px; height: 16px; color: var(--ink-sub); }
+.tsess-crumb-sub { font-size: 12.5px; color: var(--muted); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 툴바 좌측의 축 필터(상태·소속·기간·프로젝트) — 프로젝트 툴바의 알약(.pjv-tb-pill)과 같은 높이·라운드·굵기. */
+.tsess-board .tsess-projfilter-btn { height: 30px; padding: 0 11px 0 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); font-size: 13px; font-weight: 700; color: var(--ink-sub); }
+.tsess-board .tsess-projfilter-btn:hover { background: var(--bg-tint-2); color: var(--ink); border-color: var(--line); }
+.tsess-board .tsess-projfilter-btn.active { color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); border-color: transparent; }
+.tsess-board .tsess-projfilter-btn.active .tsess-projfilter-chev { color: inherit; }
+.tsess-board .pjv-tasks-head-left { gap: 6px; }
+/* 그룹(소유 섹션) 머리 — 클릭으로 접기. */
+.tsess-sect-head { cursor: pointer; user-select: none; }
+.tsess-sect-head:hover { background: var(--bg-tint); }
+/* 행 — 제목 셀 안의 상태점·이름·지금 하는 일·사실 칩. 프로젝트 행(min-height 46)과 같은 높이. */
+.tsess-row { min-height: 46px; }
+.tsess-row .tsess-dot { flex: none; width: 11px; height: 11px; margin: 0 1px; }
+.tsess-row .tsess-name { font-weight: 600; letter-spacing: -.1px; }
+.tsess-work { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tsess-chip { font-weight: 600; }
+.tsess-chip.live { color: var(--mint-deep); background: var(--bg-success); }
+.tsess-chip.warn { color: var(--warn-text); background: var(--warn-bg); }
+/* 선택 체크박스 — 프로젝트 행의 체크(.pjv-row-check)와 같은 자리(16px 선두). 평소 숨김, hover·선택모드·선택됨에 노출. */
+.tsess-row .tsess-checkwrap { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .12s ease; }
+.tsess-row:hover .tsess-checkwrap, .tsess-list.selectmode .tsess-checkwrap, .tsess-list.has-sel .tsess-checkwrap, .tsess-row.sel .tsess-checkwrap { opacity: 1; }
+.tsess-row .tsess-check { width: 15px; height: 15px; margin: 0; accent-color: var(--blue-fill); cursor: pointer; }
+.tsess-row.sel { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
+/* 값 셀 — 상태·프로젝트·노드·시각·하네스·폴더. 프로젝트 표의 값 셀처럼 가운데 정렬, 13.5px. */
+.tsess-row > .tsess-cell { justify-content: center; padding: 0 6px; }
+.tsess-row > .tsess-cell[data-col="proj"], .tsess-row > .tsess-cell[data-col="dir"] { justify-content: flex-start; }
+.tsess-row .tsess-stat { font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.tsess-row .tsess-proj { font-size: 13px; color: var(--ink-sub); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.tsess-row .tsess-proj.mine { color: var(--ink); }
+.tsess-row .tsess-proj:hover { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; }
+.tsess-row .tsess-node.off { color: var(--coral-text); }
+.tsess-row .tsess-muted { color: var(--muted-2); font-size: 12.5px; }
+.tsess-row .tsess-dir { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--muted); }
+.tsess-row .tsess-empty { width: 14px; height: 1px; }
+/* 액션 칸 — [열기] + ⋯. 프로젝트 행의 마지막 칸(⋯)보다 넓어 버튼이 들어간다. */
+.tsess-actcell { justify-content: flex-end; gap: 2px; padding-right: 2px; }
+.tsess-actcell .tsess-open { height: 28px; padding: 0 11px; font-size: 12.5px; border-radius: 8px; white-space: nowrap; }
+.tsess-actcell .pjv-trow-more { flex: none; }
+/* hover 액션(질문·수정·종료)은 제목 셀 오른쪽 끝에 — 프로젝트 행과 같은 그라데이션 위에. */
+.tsess-row .pjv-act-ic { width: 17px; height: 17px; }
+/* 컬럼 헤더 — 행과 같은 트랙. 정렬·숨김 ⋯ 은 없다. */
+.tsess-colhead .pjv-thcol-name { white-space: nowrap; }
+/* 로그인 배너(격리 계정 미로그인)는 표 위 카드 그대로. */
+.tsess-board-wrap > .card:first-child:not(.tsess-board) { margin-bottom: 12px; }
+/* 좁은 화면 — 표가 안으로 가로 스크롤(프로젝트 표와 동일 규칙). */
+.tsess-board .tsess-body { overflow-x: auto; }
+.tsess-board .tsess-sects { min-width: 980px; }
+@media (max-width: 720px) { .tsess-crumb-sub { display: none; } }
+/* 옛 카드 목록의 간격 규칙(.tsess-list/.tsess-sects 의 flex gap)이 표에 새지 않게 — 표 안에서는 행이 붙는다. */
+.tsess-board .tsess-sects { display: block; }
+.tsess-board .tsess-sect { display: block; }
+.tsess-board .tsess-list { display: block; }
+.tsess-board .tsess-sect-head { font-size: inherit; color: inherit; }
+/* 제목 셀 안 배분 — 이름이 먼저, '지금 하는 일'은 남는 폭에서만. 옛 카드의 프로젝트 칩(.tsess-proj) 테두리는 표에서 안 쓴다. */
+.tsess-row .tsess-name { flex: 0 1 auto; max-width: 100%; }
+.tsess-row .tsess-work { flex: 0 1 42%; }
+.tsess-row .tsess-proj { border: 0; background: none; padding: 0; border-radius: 0; font-weight: 500; }
+.tsess-row .tsess-proj.mine { font-weight: 600; }
+.tsess-row > .tsess-cell { overflow: hidden; }
+.tsess-row > .tsess-cell > * { min-width: 0; }

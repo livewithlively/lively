@@ -5,8 +5,8 @@
 //  결과 형식을 표현할 데가 없었다. 그래서 '증류기'를 n개 세우고 각각을 여기서 설정한다.
 //
 //  화면은 둘로 나뉜다(#1564 — 종전엔 목록 위에 카드를 인라인 확장했다):
-//   · **목록** `#/context/distill` — 사각지대·잔량을 비교하고, 켜고 끄고, 들어간다.
-//   · **설정** `#/context/distill/<key>`(신규는 `/new`) — 3단 전폭 페이지(distillerPage).
+//   · **목록** `#/context/knowledge` — 사각지대·잔량을 비교하고, 켜고 끄고, 들어간다.
+//   · **설정** `#/context/knowledge/<key>`(신규는 `/new`) — 3단 전폭 페이지(distillerPage).
 //
 //  왜 별도 페이지인가: 인라인 카드는 폼이 702px 밖에 못 썼다(1440 실측: main 1200 캡 → .ctx-layout 1160 →
 //  카드 안 2열 = 폼 702 + 반사판 340). 필드 20개를 그 폭에 5단계 가로 탭으로 쪼개 넣고, 6천 자짜리 지시문
@@ -24,9 +24,9 @@ import { api, busy, cardHead, el, keepSideScroll, relTime, toast } from './core.
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
-const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'other'];
+const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'local_file', 'other'];
 /** 목록 주소. */
-const LIST_HREF = '#/context/distill';
+const LIST_HREF = '#/context/knowledge';
 /** 설정 페이지 주소 — 목록·크럼·저장 후 이동이 전부 이걸 쓴다(해시 문자열 조립이 흩어지지 않게). */
 const pageHref = (key) => LIST_HREF + '/' + encodeURIComponent(key);
 /** 신규 생성의 자리표시 key — 그래서 이 문자열은 실제 증류기 key 가 될 수 없다(저장 시 거부). */
@@ -50,7 +50,7 @@ window.addEventListener('hashchange', () => {
         dirtyGuard = null;
 });
 // ══════════════════════════════════════════════════════════════════════════
-//  목록 — #/context/distill
+//  목록 — #/context/knowledge
 // ══════════════════════════════════════════════════════════════════════════
 export async function distillersPanel(detail, data) {
     const head = () => el('div', { class: 'admin-sechead' }, el('div', { class: 'section-title' }, el('h2', { text: '자료 증류기' })), el('p', { class: 'admin-hint', text: '수집된 원본 자료를 무슨 기준으로 어떤 형식의 지식으로 만들지 정합니다. 팀·채널마다 다르게 여러 개 만들 수 있습니다.' }));
@@ -158,7 +158,7 @@ function settable(d) {
     };
 }
 // ══════════════════════════════════════════════════════════════════════════
-//  설정 페이지 — #/context/distill/<key>
+//  설정 페이지 — #/context/knowledge/<key>
 // ══════════════════════════════════════════════════════════════════════════
 /** 위치 + 되돌아갈 자리. 이 페이지엔 좌측 단계 내비(.ctx-side)를 그리지 않으므로 이 한 줄이 그 몫을 한다. */
 function crumb() {

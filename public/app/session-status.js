@@ -52,6 +52,18 @@ export function sessStateKey(s, nowMs = Date.now()) {
     //  종전엔 후자를 '종료됨'이라 불러 **살아 있는 세션이 죽은 것처럼** 보였다(감사 P1-①: 고객사 A '종료됨' 3건이 전부 셸).
     if (k === 'shell' || k === 'exited')
         return 'shell';
+    // ★ 지금 돌고 있다/기다린다는 **사실**이 접속 기반 판정을 이긴다 (#1819 원준 신고 2026-08-21).
+    //  왜 필요한가: agentState 는 '그 세션 화면을 지금 누가 보고 있나'(attached)로 offline 이 덮어쓴다. 그래서
+    //  25분째 도는 세션도 탭을 안 보고 있으면 offline 이 되고, 그 offline 이 바로 아래 '작업 완료' 승격에 걸려
+    //  **돌고 있는 세션이 초록 '작업 완료'로** 떴다(실측: @box_state=busy 가 8초 전 갱신된 세션이 그러했다).
+    //  '완료'는 사람이 결과를 보러 들어가게 만드는 문구다 — 아직 안 끝난 일에 그 말을 붙이면 그건 오보다.
+    //  서버는 이 두 신호를 접속과 무관하게 이미 내려준다(#1221 working/awaiting) — 화면이 안 보고 있었을 뿐이다.
+    //  ⚠ 위 세 갈래(셸·AI 종료·복원 가능) 뒤에 둔다: 셸 세션의 working 은 AI 작업이 아니고(shellWorking),
+    //   박스가 없어진 세션은 옛 신호로 되살아나면 안 된다.
+    if (s.awaiting)
+        return 'waiting';
+    if (s.working)
+        return 'busy';
     if ((k === 'idle' || k === 'offline') && isUnreadDone(s, nowMs))
         return 'done';
     return SESS_STATES[k] ? k : 'shell';
@@ -85,6 +97,10 @@ export const SESS_DEAD_KEYS = ['restorable', 'oom_killed', 'exited_user'];
  *  이어받기는 곧 '새 세션 만들기'인데, 지난 대화를 읽으러 들어온 사람에게 세션을 하나 띄우는 건 과하다.
  *  그건 버튼으로 남긴다(사용자가 뜻을 밝힌 뒤에).
  */
+//  ⚠ trashed — **휴지통에 있는 세션은 열어도 되살리지 않는다**(#1851, 원준 2026-08-24). 휴지통 행의 제목은 '내용이 뭔지
+//  보려고' 누르는 자리인데, 그 클릭이 새 박스로 복원되고(같은 대화 uuid resume) 목록 병합이 휴지통 표식을 그 라이브
+//  박스에 접어 "휴지통에 있는데 돌고 있는" 행을 만들었다 — [완전 삭제]가 '아직 돌고 있는 세션'으로 막히는데 휴지통엔
+//  ×(멈춤)가 없어 막다른 길이었다. 휴지통 것은 기록 화면으로만 열고, 되살리려면 [되돌리기]를 거친다.
 export function shouldRestoreOnOpen(s) {
-    return !!s && !!s.restorable && !!s.owned;
+    return !!s && !!s.restorable && !!s.owned && !s.trashed;
 }
