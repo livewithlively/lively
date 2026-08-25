@@ -28,6 +28,26 @@ import { sessionHandoffContext } from './session-handoff-context.js';
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 
+// ── 자동복원 연쇄 상한 판정 (#1820 후속) — 순수 함수(스토리지·DOM 의존 없음) ────────────────────
+// 자동복원은 성공하면 새 세션으로 주소를 옮기고, 그때 화면이 새로 떠 화면 단위 가드가 리셋된다. 되살린
+//  세션이 또 죽어 있으면 연쇄가 끝나지 않는다(실측 2026-08-25 매니지드: 컨테이너가 사라진 뒤 무한 반복).
+//  그래서 '최근 창(sessionStorage) 안에서 자동복원을 몇 번 했나'로 상한을 건다.
+//  · 창(WINDOW) 밖이면 새 창을 연다 — 한참 뒤의 정상적인 자동복원까지 막지 않는다.
+//  · 창 안에서 MAX 회까지만 허용 — 그 뒤엔 사람이 버튼을 누르게 한다(막다른 길을 만들지 않는다).
+export const AUTO_RESUME_MAX = 2;
+export const AUTO_RESUME_WINDOW_MS = 60_000;
+export function judgeAutoResume(
+  rec: { n: number; at: number } | null | undefined,
+  now: number,
+): { allow: boolean; next: { n: number; at: number } } {
+  const n = rec && Number.isFinite(rec.n) ? Number(rec.n) : 0;
+  const at = rec && Number.isFinite(rec.at) ? Number(rec.at) : 0;
+  // 창이 없거나 지났으면 새 창 — 첫 시도로 센다.
+  if (!n || !at || now - at > AUTO_RESUME_WINDOW_MS) return { allow: true, next: { n: 1, at: now } };
+  if (n < AUTO_RESUME_MAX) return { allow: true, next: { n: n + 1, at } };
+  return { allow: false, next: { n, at } };   // 상한 — 기록은 그대로 둔다(창이 지나면 저절로 풀린다)
+}
+
 export interface SessionChatTarget {
   id: string; label: string; live: boolean; alive: boolean; node: string | null; owned: boolean;
   stateKey: string; stateLabel: string; projectId: number | null; projectName: string;
@@ -497,7 +517,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // ★ #1820 — 열면 되살린다. 이 화면에 온 것 자체가 "이 세션을 쓰겠다"는 뜻이라, 버튼을 한 번 더 누르게 하지
     //  않는다. 되살아나면 새 id 로 주소가 옮겨 가고(셸이 라우팅을 쥔다 — 프레임이 몰래 갈아타지 않는다, #1808),
     //  실패하면 이 기록 화면과 버튼이 그대로 남는다(자동이 막다른 길을 만들지 않는다).
-    if (opts.autoResume && !resumeAuto && visibleNow()) {
+    if (opts.autoResume && !resumeAuto && visibleNow() && autoResumeAllowed()) {
       resumeAuto = true;
       view.setNote('세션을 이어서 여는 중…');
       void resumeSession(btn);
@@ -534,6 +554,23 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let termReady = false;                       // 프레임이 첫 신호(상태)를 보냈나 — 그 전에 보낸 명령은 사라진다
   let termQueue: string[] = [];
   let resumeAuto = false;                      // #1820 — 자동 복원을 이미 걸었나(한 화면에서 한 번만)
+  // ── 자동복원 연쇄 상한 (#1820 후속 · 실측 2026-08-25 매니지드) ──────────────────────────────
+  // 위 resumeAuto 는 **화면 단위** 가드다. 그런데 자동복원은 성공하면 새 세션 id 로 주소를 옮기고, 그러면
+  //  화면이 새로 떠 가드가 리셋된다. 되살린 세션이 또 죽어 있으면(컨테이너가 사라진 뒤·노드가 없어진 뒤)
+  //  그 연쇄가 끝나지 않는다 — 사용자에겐 '이어받기'가 무한히 반복되는 화면으로 보인다.
+  //  #1820 이 스스로 적어 둔 불변식("자동이 막다른 길을 만들지 않는다")을 지키려면 **화면을 넘어 사는**
+  //  상한이 필요하다. 창을 닫으면 리셋되는 sessionStorage 에 '최근 창 안의 자동복원 횟수'를 센다.
+  //  ⚠ 사람이 버튼을 누른 복원은 세지 않는다 — 상한은 '자동'에만 건다(사람은 언제든 다시 시도할 수 있어야 한다).
+  const AUTO_RESUME_KEY = 'lively_auto_resume';
+  function autoResumeAllowed(): boolean {
+    let rec: { n: number; at: number } | null = null;
+    try { rec = JSON.parse(sessionStorage.getItem(AUTO_RESUME_KEY) || 'null'); } catch { rec = null; }
+    const d = judgeAutoResume(rec, Date.now());
+    try { sessionStorage.setItem(AUTO_RESUME_KEY, JSON.stringify(d.next)); } catch { /* 스토리지가 막힌 브라우저 — 상한만 못 셀 뿐 동작은 같다 */ }
+    if (!d.allow) view.setNote('자동으로 이어받기를 여러 번 시도했어요 — [이어서 대화하기]를 눌러 주세요.');
+    return d.allow;
+  }
+
   /** 지금 이 화면이 보이나 — **자동** 복원의 전제(opts.isVisible 주석). 사람이 버튼을 누른 복원은 이걸 안 본다. */
   const visibleNow = (): boolean => !opts.isVisible || opts.isVisible();
   function termSend(cmd: string): void {
@@ -553,7 +590,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  자기 주소만 갈아타면 셸 주소·탭 제목·사이드바는 옛 세션 그대로인 어긋난 화면이 된다(#1808 사고).
     //  여기서 부르는 resumeSession 은 [이어서 대화하기]와 같은 경로라 주소(#/s/<새 id>)까지 함께 옮긴다.
     if (m && m.type === 'lively-term-gone' && String(m.id || '') === target.id) {
-      if (m.canRestore && !resumeAuto && visibleNow()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(); }
+      if (m.canRestore && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(); }
       return;
     }
     if (!m || m.type !== 'lively-term-status') return;

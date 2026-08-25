@@ -61,6 +61,20 @@ interface ProjectDeps {
   ensureFolder?: (project: { id: number; name: string }) => Promise<string>;
 }
 
+/**
+ * 디렉터리를 못 읽었을 때 무엇으로 답할 것인가(순수 판정).
+ *
+ * 프로젝트의 물리 폴더는 **첫 세션·첫 업로드가 만들기 전까지 없다** — DB(project.folder)엔 경로가 배정돼
+ *  있는데 디스크엔 없는 창이 정상 경로에 존재한다(실측 2026-08-25 매니지드: 대화로 만든 프로젝트를 열자
+ *  자료 화면이 404 로 깨졌다). 그 상태의 사실은 "**빈 폴더**"이지 "없는 프로젝트"가 아니다.
+ * ⚠ 루트일 때만 빈 목록이다 — 없는 **하위 경로**까지 빈 목록으로 덮으면 오타·죽은 링크가 조용히
+ *  "빈 폴더"로 보인다(그건 404 보다 더 나쁜 거짓말이다).
+ * @returns 루트면 빈 목록 응답, 하위 경로면 null(= 호출자가 404)
+ */
+export function missingDirResponse(base: string, abs: string): { path: string; parent: null; items: never[] } | null {
+  return path.relative(base, abs) === "" ? { path: "", parent: null, items: [] } : null;
+}
+
 // base 기준 안전 경로 해소(.. 탈출 차단). requireFile=true 면 루트 자신 거부(파일 경로 필요).
 function resolveIn(base: string, rel: unknown, requireFile: boolean): string {
   const r = String(rel ?? "").replace(/^[/\\]+/, "");
@@ -143,7 +157,18 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     if (q) { res.json({ search: q, items: await searchFiles(base, q) }); return; }
     const abs = resolveIn(base, req.query.path, false);
     let entries: fs.Dirent[];
-    try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new HttpError(404, "디렉터리 없음"); }
+    try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch {
+      // ★ 프로젝트 폴더가 아직 **디스크에 없는** 경우(실측 2026-08-25 매니지드): 폴더 경로는 배정돼 있고
+      //  (위 projBase 의 ensureFolder 는 `project.folder` 값만 정한다 — mkdir 은 세션·업로드가 처음 할 때 한다)
+      //  파일만 하나도 없는 상태다. 그건 "**빈 폴더**"이지 "없는 프로젝트"가 아니다 — 404 를 던지면 자료 화면이
+      //  통째로 에러가 되어, 방금 만든 프로젝트를 열자마자 깨진 화면을 본다(대화로 만든 프로젝트는 세션이 뜨기
+      //  전까지 폴더가 없으므로 **정상 경로에서 재현된다**).
+      //  ⚠ 루트일 때만 빈 목록이다. 하위 경로가 없는 건 진짜로 없는 경로이므로 404 를 유지한다(오타·죽은 링크를
+      //   조용히 빈 화면으로 덮으면 그게 더 나쁜 거짓말이다).
+      const empty = missingDirResponse(base, abs);
+      if (empty) { res.json(empty); return; }
+      throw new HttpError(404, "디렉터리 없음");
+    }
     const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number; repo?: boolean }> = [];
     for (const e of entries) {
       if (e.name.startsWith(".")) continue;
