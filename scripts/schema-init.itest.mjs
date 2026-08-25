@@ -158,6 +158,21 @@ try {
     ok("구 배포 세션 구제 — current 만 세우고 이력·기존 행은 건드리지 않는다");
   }
 
+  // ── 자동 생성 껍데기는 세션마다 별개여야 한다(#1867) ──
+  //  임시 이름("새 작업")은 서로 같으므로 이름 기반 중복차단(#1819)이 켜져 있으면 30초 안에 연 두 세션이 **한 프로젝트를
+  //  공유**한다(dev 실측: 빈 세션과 슬래시 세션이 project/2009 를 함께 받았다) — 그러면 작업면까지 같이 쓰게 된다.
+  {
+    const { createProject } = await import("../dist/v6/project-store.js");
+    const ctx = { actor: "itest-dedupe", source: "web" };
+    const a = await createProject({ name: "새 작업", description: "x", dedupe: false }, ctx);
+    const b = await createProject({ name: "새 작업", description: "x", dedupe: false }, ctx);
+    assert.notEqual(a.id, b.id, "자동 생성 껍데기는 세션마다 자기 프로젝트를 가져야 한다");
+    const c = await createProject({ name: "사람이 지은 이름", description: "x" }, ctx);
+    const d = await createProject({ name: "사람이 지은 이름", description: "x" }, ctx);
+    assert.equal(c.id, d.id, "사람 경로의 중복 차단(#1819)은 그대로 — IME 이중 Enter·에이전트 재시도가 실재한다");
+    ok("자동 생성 껍데기 = 세션마다 별개 · 사람이 지은 이름 = 종전대로 중복 차단");
+  }
+
   await itemsPool.end();
   console.log(`\n${pass} passed`);
 } finally {
