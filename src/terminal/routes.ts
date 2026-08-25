@@ -12,7 +12,7 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
@@ -175,6 +175,9 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       // runtime — 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만). 화면이 컨트롤 노출을 이걸로 정한다.
       harnesses: HARNESSES.map((h) => ({
         key: h.key, label: h.label, bin: h.bin, provider: h.provider,
+        // login — 이 AI 에 '로그인' 개념이 있나(#1884, profiles.ts HARNESS_CRED 표). 세션 폼의 [내 계정 로그인]이
+        //  이걸로 선택지를 만든다. 종전엔 그 버튼이 claude 고정이라 codex 사용자가 눌러도 claude 세션이 떴다.
+        login: harnessHasCredential(h.key),
         hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags,
         effortsByModel: h.effortsByModel,
         runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },

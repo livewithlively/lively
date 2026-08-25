@@ -17,13 +17,14 @@ import type { AppComponentRef } from "./install-plan.js";
 import type { DeployItem, InstallDeps } from "./install.js";
 import { upsertApp, setAppStatus, addComponent, removeComponent, hostReferenceCount, upsertRuntimeAsset, pruneRuntimeAssets } from "../org/store/apps.js";
 import { upsertOrgHarnessAsset, removeOrgHarnessAsset } from "../org/store/harness-assets.js";
+import type { HookHarness } from "../org/store/hooks.js";   // 자산·훅이 공유하는 하네스 값(“all” 포함)
 import { getRuntimeConfig, updateRuntimeConfig } from "../org/store/runtime-config.js";
 import { upsertCronJob, deleteCronJob } from "../org/cron-store.js";
 import { upsertMcpServer, removeMcpServer, type McpServerInput } from "../org/store/mcp-servers.js";
 import { upsertTool, removeTool, type OrgToolInput } from "../org/store/tools.js";
 
 // harness_asset payload 계약(loader.ts) — { kind, harness, body, label }.
-interface HarnessAssetPayload { kind: "skill" | "subagent" | "command"; harness: "claude"; body: string; label: string }
+interface HarnessAssetPayload { kind: "skill" | "subagent" | "command"; harness: HookHarness; body: string; label: string }
 // cron payload 계약(loader.ts) — { schedule, run:{ kind, prompt?, prompt_asset? } }.
 interface CronPayload { schedule: string; run: { kind: string; prompt?: string; prompt_asset?: string } }
 interface RuntimeWorkerPayload { entry: string; code: Buffer; code_hash: string; package_hash: string }
@@ -46,7 +47,9 @@ const KIND_HANDLERS: Record<string, KindHandler> = {
     async deploy(_appId, item, ctx) {
       const p = item.payload as HarnessAssetPayload;
       await upsertOrgHarnessAsset(
-        { id: item.comp.ref, kind: p.kind, harness: "claude", body: p.body, label: p.label, enabled: true },
+        // harness 는 loader 가 정한 값을 **그대로** 쓴다(#1884) — 여기서 "claude" 로 덮으면
+        //  loader 가 무엇을 정하든 앱 자산이 claude 세션에만 깔린다. 미지정이면 스토어 기본("all").
+        { id: item.comp.ref, kind: p.kind, harness: p.harness || "all", body: p.body, label: p.label, enabled: true },
         ctx,
       );
     },
