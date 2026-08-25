@@ -40,6 +40,17 @@ await t("[C5] ownerHomes — linux 는 공유 홈 + /home/box_<owner> · mac 은
     assert.equal(ownerHomes("yoon", "linux")[0], os.homedir());
   } finally { if (prev !== undefined) process.env.LIVELY_MEMBER_HOME_BASE = prev; }
 });
+await t("[C5b] ownerHomes — 멤버 홈은 코어 slug 규칙(24자·소문자·비영숫자→-)을 따른다: 긴 멤버 id 로도 실제 홈을 가리킨다 (#1884)", () => {
+  const prev = process.env.LIVELY_MEMBER_HOME_BASE; delete process.env.LIVELY_MEMBER_HOME_BASE;
+  try {
+    // 실측 2026-08-25(매니지드 e2e): 멤버 id `e2e-b-codex7-20260825-073656` 의 실제 홈은 `box_e2e-b-codex7-20260825-07`
+    //  (useradd 는 profiles.slug 로 만든다). 여기서 id 를 그대로 붙이면 뿌리가 어긋나 훅이 보고한 정상 경로가
+    //  reportedPathOk 에서 탈락하고 대화창이 404 가 된다 — 하네스 무관(claude·codex 둘 다).
+    assert.deepEqual(ownerHomes("e2e-b-codex7-20260825-073656", "linux").slice(1), [path.join("/home", "box_e2e-b-codex7-20260825-07")]);
+    assert.deepEqual(ownerHomes("Sangmin.Yoon", "linux").slice(1), [path.join("/home", "box_sangmin-yoon")]);
+    assert.deepEqual(ownerHomes("yoon", "linux").slice(1), [path.join("/home", "box_yoon")]);   // 짧은 id 는 종전과 동일
+  } finally { if (prev !== undefined) process.env.LIVELY_MEMBER_HOME_BASE = prev; }
+});
 await t("[C6] locateTranscript — 보고 경로가 뿌리 안이고 존재 → reported · 뿌리 밖(존재해도) → 규약 폴백 · 둘 다 없음 → null", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hio-"));
   const home = path.join(tmp, "home"); const outside = path.join(tmp, "outside");
