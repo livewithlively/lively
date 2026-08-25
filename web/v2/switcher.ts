@@ -152,6 +152,53 @@ async function refreshMine(wrap: HTMLElement): Promise<void> {
   }
 }
 
+// ── 레일(#2016)에서 쓰는 출구 셋 ────────────────────────────────────────────
+//  좌측 레일이 접혀 있을 때 문패는 **타일 하나**로 서고, 워크스페이스가 여럿이면 그 타일이 세로로 쌓인다.
+//  그 셋 다 이 모듈이 이미 갖고 있던 것(메뉴·전환·목록)을 밖으로 여는 것뿐이다 — 전환 규약을 두 벌로 두지 않는다.
+
+/** 접힌 레일의 문패 = 조직 이니셜(팀) 또는 내 얼굴(개인) 타일. 누르면 종전 전환 메뉴가 그대로 뜬다. */
+export function switcherTile(): HTMLElement {
+  const w = ws();
+  const me: any = (state && state.me) || {};
+  const kindText = w.kind === 'personal' ? '개인' : '팀';
+  const face = w.kind === 'personal'
+    ? profileAvatar(me.avatar, w.name, me.userId, 'v2-wscard-big round', { char: me.avatar_char, color: me.avatar_color })
+    : el('span', { class: 'v2-wscard-big', text: (w.name || '?').trim().slice(0, 1) });
+  const btn = el('button', { class: 'v2-ws v2-rail-tile', type: 'button', 'aria-haspopup': 'menu',
+    title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` }, face) as HTMLButtonElement;
+  btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } void openMenu(btn); };
+  return btn;
+}
+
+/** 레일이 접혀 있을 때 워크스페이스 **이름**이 서는 자리 = 사이드바 머리(슬랙의 「HonestAI ▾」 그 자리).
+ *  펼친 레일에는 문패 카드가 있으므로 그때는 그리지 않는다 — 같은 것을 두 자리에 두지 않는다. */
+export function switcherName(): HTMLElement {
+  const w = ws();
+  const kindText = w.kind === 'personal' ? '개인' : '팀';
+  const btn = el('button', { class: 'v2-ws v2-side-wsn', type: 'button', 'aria-haspopup': 'menu',
+    title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` },
+    el('span', { class: 'v2-side-wsn-t', text: w.name }),
+    el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })) as HTMLButtonElement;
+  btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } void openMenu(btn); };
+  return btn;
+}
+
+/** 이 게이트웨이의 워크스페이스 목록. registry 가 꺼져 있으면 빈 배열(전환할 목록 자체가 없다). */
+export async function listWorkspaces(): Promise<Array<{ slug: string; name: string; kind: string; is_primary?: boolean }>> {
+  const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
+  if (!reg.active) return [];
+  try {
+    const d: any = await api('/api/ui/me/workspaces');
+    return ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean }>;
+  } catch (_) { return []; }
+}
+
+/** 지금 워크스페이스의 slug('primary' 폴백) — 레일 타일 스택의 활성 표시가 이걸로 판정한다. */
+export function activeWorkspaceSlug(): string { return currentWorkspace() || 'primary'; }
+
+/** 그 워크스페이스로 전환(헤더 선택 + 리로드). 메뉴 안의 전환과 **같은 경로**다. */
+export function switchWorkspace(slug: string): void { switchTo(slug); }
+
 function switchTo(slug: string): void {
   setCurrentWorkspace(slug === 'primary' ? '' : slug);
   location.hash = '#/';

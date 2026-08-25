@@ -1,0 +1,175 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   47-v2-rail.css — 새 셸 **좌측 끝 레일**(#2016, 원준 2026-08-26 "안 1 · 슬랙 그대로").
+
+   레일은 사이드바보다 한 층 위다: **어느 워크스페이스의 · 어느 구역에 있는가**를 말한다.
+   그 아래 사이드바는 레일이 고른 구역(홈 · AI 세션 · 프로젝트 · 위키)의 목록을 그린다.
+
+   슬랙 데스크톱 좌측 탭 레일의 문법을 우리 토큰으로 옮긴 것 —
+    · 접힘(68px) = 아이콘 **위**, 이름 **아래**(10.5px). 슬랙 홈·DM·내 활동 격자 그대로.
+      접혀도 이름이 남는 게 이 안의 요지다(툴팁만 두면 넷 중 무엇인지 손을 올려봐야 안다).
+    · 펼침(232px) = 워크스페이스 문패 카드 + 가로 행(아이콘 · 이름 · 개수/배지).
+    · 톤 3단 — 레일 `--canvas` › 사이드바 `--bg-tint` › 본문 `--bg`. 슬랙이 레일을 한 단계
+      어둡게 깔아 '틀'과 '내용'을 가르는 것과 같다. 새 색은 없다(전부 01-base 토큰).
+    · 기본 넷 아래 헤어라인, 그 밑이 **최근 연 앱**(맥 독의 최근 사용 구간).
+
+   ⚠ 이 레일은 걷을 수 있어도 **사이드바는 걷을 수 없다**(원준 2026-08-25). 사이드바에 닫기
+     단추를 두지 않고 폭 손잡이만 남기는 규칙은 40-v2.css 쪽 계약이다.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* 그리드 한 칸을 더 쓴다 — 폭은 접힘/펼침 두 값뿐이라 손잡이가 없다(사이드바만 끌어 조절).
+   ⚠ 열 정의는 40-v2.css 에 일곱 벌 있고 그중 **실제로 서는 건 `.rail-mode`** 다(bootV2 가 늘 켠다).
+    같은 명시도라 이 파일이 뒤에 오는 것으로 이긴다 — 40 을 고치지 않는다(그쪽 규칙은 롤백 대조용으로 남긴다).
+   ⚠ 팝아웃 창(`.solo`, #1744)에는 레일도 사이드바도 없다 — `.rail-mode` 와 함께 붙으므로 여기서 되돌린다. */
+#v2-root { --v2-rail-w: 68px; }
+#v2-root.rail-open { --v2-rail-w: 232px; }
+#v2-root.rail-mode { grid-template-columns: var(--v2-rail-w) var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.no-aside { grid-template-columns: var(--v2-rail-w) var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
+#v2-root.rail-mode.solo { grid-template-columns: minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.solo.no-aside { grid-template-columns: minmax(0, 1fr) 0 0; }
+
+.v2-rail {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  background: var(--canvas); border-right: 1px solid var(--line);
+  user-select: none;
+}
+/* 폭 전환만 움직인다 — 안의 글자·아이콘은 같이 흐르지 않는다(따라 움직이면 어지럽다). */
+@media (prefers-reduced-motion: no-preference) {
+  #v2-root { transition: grid-template-columns 160ms ease; }
+}
+
+.v2-rail-top { flex: none; padding: 10px 8px 2px; }
+.v2-rail-mid { flex: 1; min-height: 0; overflow: hidden auto; padding: 2px 0 6px; scrollbar-width: none; }
+.v2-rail-mid::-webkit-scrollbar { width: 0; height: 0; }
+.v2-rail-foot { flex: none; padding: 6px 0 8px; border-top: 1px solid var(--line-net); }
+
+/* 층 사이 실선 하나 — 머리글은 접힘에서 자리를 못 쓴다(펼침에서만 라벨을 얹는다). */
+.v2-rail-hr { height: 1px; background: var(--line-net); margin: 8px 14px; }
+.v2-rail.closed .v2-rail-hr { width: 28px; margin: 8px auto; }
+.v2-rail-k { padding: 10px 14px 3px; font-size: 11px; font-weight: 700; color: var(--muted); }
+
+/* ── 워크스페이스 문패 ────────────────────────────────────────────────────────
+   펼침 = switcher.ts 의 문패 카드 그대로(부품을 두 벌로 만들지 않는다).
+   접힘 = 타일. 여럿이면 세로로 쌓이고 활성은 파란 고리 — 슬랙 워크스페이스 스위처 문법. */
+.v2-rail .v2-side-top { padding: 0 0 4px; }
+.v2-rail-ws { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0 0 4px; }
+.v2-rail-tile { position: relative; display: inline-grid; place-items: center; padding: 0; border: 0; background: none; border-radius: 11px; cursor: pointer; }
+.v2-rail-tile .v2-wscard-big { width: 36px; height: 36px; border-radius: 10px; font-size: 16px; }
+.v2-rail-tile:hover .v2-wscard-big { border-radius: 12px; }
+.v2-rail-tile.on .v2-wscard-big { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--blue); }
+.v2-rail-tile:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+
+/* 펼친 레일의 「다른 워크스페이스」 — 팝오버를 그 자리에 편 것. 전환이 한 번의 클릭이 된다. */
+.v2-rail-wsl { display: flex; flex-direction: column; gap: 1px; padding-bottom: 4px; }
+.v2-rail-wsr { display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 0 8px; padding: 5px 8px;
+  border: 0; border-radius: 8px; background: none; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); text-align: left; cursor: pointer; }
+.v2-rail-wsr:hover { background: var(--bg); color: var(--ink); }
+.v2-rail-wsr:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-rail-wsr .v2-wscard-big { width: 22px; height: 22px; border-radius: 6px; font-size: 10px; }
+.v2-rail-wsr .v2-rail-t { font-size: 12.5px; font-weight: 600; }
+.v2-rail-kd { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 9.5px; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+
+/* ── 항목(구역 넷 · 최근 앱 · 발치) — 접힘은 세로 격자, 펼침은 가로 행 ── */
+.v2-rail-it {
+  position: relative; display: flex; align-items: center; gap: 9px; width: calc(100% - 16px);
+  margin: 2px 8px; padding: 6px 8px; min-height: 34px;
+  border: 0; border-radius: 8px; background: none; font: inherit; text-align: left;
+  color: var(--ink); text-decoration: none; cursor: pointer;
+}
+.v2-rail-it:hover { background: var(--bg); }
+.v2-rail-it:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-rail-it.on { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-rail-it.on::before { content: ''; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 3px; border-radius: 999px; background: var(--blue); }
+.v2-rail-ic { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted-head); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-rail-it:hover .v2-rail-ic, .v2-rail-it.on .v2-rail-ic { stroke: var(--blue); }
+.v2-rail-t { flex: 1; min-width: 0; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-rail-m { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 확인할 것 — 사이드바의 앰버 숫자 배지와 같은 뜻. 접히면 자리가 없어 **점**으로 준다(슬랙 홈의 읽지 않음 점). */
+.v2-rail-bd { flex: none; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--warn-deep); color: var(--on-fill); font-size: 10.5px; font-weight: 800; display: inline-grid; place-items: center; font-variant-numeric: tabular-nums; }
+.v2-rail-pip { position: absolute; top: 5px; right: 12px; width: 8px; height: 8px; border-radius: 50%; background: var(--warn-deep); box-shadow: 0 0 0 2px var(--canvas); }
+/* 최근 앱의 '실행 중' — 맥 독의 그 점. 상태색이 아니라 무채색이다(무엇인지만 말하고 상태는 사이드바가 말한다). */
+.v2-rail-run { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--muted-head); }
+
+.v2-rail.closed .v2-rail-it { flex-direction: column; gap: 3px; width: calc(100% - 12px); margin: 2px 6px; padding: 6px 2px 5px; }
+.v2-rail.closed .v2-rail-t { width: 100%; flex: none; font-size: 10.5px; font-weight: 700; color: var(--ink-sub); text-align: center; }
+.v2-rail.closed .v2-rail-it.on .v2-rail-t { color: var(--ink); }
+.v2-rail.closed .v2-rail-ic { width: 20px; height: 20px; }
+.v2-rail.closed .v2-rail-m, .v2-rail.closed .v2-rail-bd { display: none; }
+.v2-rail.closed .v2-rail-it.on::before { display: none; }
+.v2-rail.closed .v2-rail-run { position: absolute; left: 50%; bottom: 2px; margin-left: -2.5px; }
+
+/* ── 발치 — 접기/펼치기 · 앱(런치패드) · 나(내 프로필·환경설정 창 #1843) ── */
+.v2-rail-tg { display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 2px 8px; padding: 6px 8px; min-height: 30px;
+  border: 0; border-radius: 8px; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); text-align: left; cursor: pointer; }
+.v2-rail-tg:hover { background: var(--bg); color: var(--ink); }
+.v2-rail-tg:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-rail-tg .v2-rail-ic { width: 16px; height: 16px; stroke: currentColor; }
+.v2-rail.closed .v2-rail-tg { justify-content: center; width: calc(100% - 12px); margin: 2px 6px; }
+.v2-rail.closed .v2-rail-tg .v2-rail-t { display: none; }
+
+.v2-rail-me .v2-ava { position: relative; width: 24px; height: 24px; font-size: 10px; flex: none; }
+.v2-rail-me .v2-rail-t { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+.v2-rail-gear { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; color: var(--muted-2); }
+.v2-rail-me:hover .v2-rail-gear { color: var(--ink-sub); }
+.v2-rail.closed .v2-rail-me { padding: 6px 2px; }
+.v2-rail.closed .v2-rail-me .v2-ava { width: 30px; height: 30px; font-size: 12px; }
+.v2-rail.closed .v2-rail-me .v2-rail-gear { display: none; }
+
+/* ── 접힘 툴팁 — 이름이 잘리는 자리(최근 앱의 긴 이름)와 발치 단추용.
+      hover 로만 접근되는 '정보'가 아니라 **이미 보이는 이름의 전문**이라 규칙에 어긋나지 않는다. */
+.v2-rail-it[data-tip]:hover::after, .v2-rail-tg[data-tip]:hover::after {
+  content: attr(data-tip); position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  padding: 5px 9px; border-radius: 7px; background: var(--chip-dark); color: #FFFFFF;
+  font-size: 12px; font-weight: 600; white-space: nowrap; z-index: 9; pointer-events: none;
+  box-shadow: 0 4px 14px rgba(var(--shadow-ink), .2);
+}
+.v2-rail-tg { position: relative; }
+.v2-rail.open .v2-rail-it[data-tip]:hover::after { display: none; }
+
+/* ── 사이드바 머리의 워크스페이스 이름 — 레일이 접혀 있을 때만(슬랙의 「HonestAI ▾」 자리).
+      톤은 이미 3단이다: 레일 `--canvas` › 사이드바 `.stu-panel`(--gray-bg-2) › 본문 `--bg`. */
+.v2-side-wsn { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 46%; margin-left: -4px; padding: 4px 6px;
+  border: 1px solid transparent; border-radius: 7px; background: none; font: inherit; font-size: 14px; font-weight: 800; color: var(--ink); cursor: pointer; }
+.v2-side-wsn:hover { background: var(--bg); border-color: var(--line); }
+.v2-side-wsn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-side-wsn-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-side-wsn + .v2-k { color: var(--muted); font-weight: 700; }
+
+/* ── [AI 세션] 상태 칩 — 이 구역의 첫 질문이 '무엇이 나를 기다리나'라 숫자를 밖에 둔다.
+      (홈 목록에서는 반대로 [필터] 팝오버 안에 둔다 — 거기선 목록이 주인공이다.) */
+.v2-schips { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 4px 8px; flex: none; }
+.v2-schip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg); font: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
+.v2-schip:hover { color: var(--ink); border-color: var(--line-net-2); }
+.v2-schip.on { background: var(--bg-punch); border-color: var(--line-net-2); color: var(--ink); }
+.v2-schip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-schip .n { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/*  ×·압정이 없는 행에서는 상태 점이 손을 올려도 남는다 — 가릴 단추가 없는데 숨을 이유도 없다. */
+.v2-app-inst--plain:hover .v2-app-inst-st, .v2-app-inst--plain.on .v2-app-inst-st { visibility: visible; }
+
+/* ── [위키] 분류 행 ── */
+.v2-wcat { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 12px; min-height: 30px; border-radius: 8px;
+  font-size: 13px; font-weight: 600; color: var(--ink-sub); text-decoration: none; }
+.v2-wcat:hover { background: var(--bg); color: var(--ink); }
+.v2-wcat .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-fixed--wiki { border-bottom: 0; padding-bottom: 2px; }
+
+/* ── 발치의 '갈 곳' 한 줄(세션 이력 등) ── */
+.v2-foot-link { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+.v2-foot-link .v2-cnt { margin-left: auto; }
+
+/* ── 좁은 화면 — 레일은 서랍 뒤로 숨지 않고 **아이콘만 남아 왼쪽에 붙어 선다**.
+      구역 전환은 여기서도 가장 자주 하는 동작이라 서랍 뒤에 두면 두 번 눌러야 한다.
+      ⚠ ≤900 은 그리드가 아니라 flex 세로 배치다(40-v2.css:1210) — 위 `.rail-mode` 열 정의가
+       그걸 되돌리지 않도록 여기서 다시 flex 로 못 박고, 레일은 흐름에서 빼(fixed) 본문을 밀지 않는다. */
+@media (max-width: 900px) {
+  #v2-root.rail-mode, #v2-root.rail-mode.no-aside { display: flex; flex-direction: column; grid-template-columns: none; padding-left: 56px; }
+  .v2-rail { position: fixed; left: 0; top: 0; bottom: 0; width: 56px; z-index: 41; padding-top: env(safe-area-inset-top, 0px); }
+  .v2-side, .v2-aside { z-index: 40; }
+  #v2-root.rail-mode .v2-side { left: 56px; }
+  .v2-rail .v2-side-top, .v2-rail-k, .v2-rail-m, .v2-rail-bd { display: none; }
+  .v2-rail-it, .v2-rail-tg { flex-direction: column; gap: 3px; width: calc(100% - 10px); margin: 2px 5px; padding: 6px 2px 5px; }
+  .v2-rail-t { width: 100%; flex: none; font-size: 10px; font-weight: 700; color: var(--ink-sub); text-align: center; }
+  .v2-rail-tg { display: none; }   /* 접기/펼치기는 좁은 폭에서 뜻이 없다(늘 아이콘만) */
+  .v2-rail-it.on::before { display: none; }
+  .v2-rail-me .v2-rail-t, .v2-rail-me .v2-rail-gear { display: none; }
+}
