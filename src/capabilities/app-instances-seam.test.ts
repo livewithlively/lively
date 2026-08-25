@@ -39,6 +39,14 @@ test("인스턴스 생성 parse는 인증 주체를 body owner로 받지 않는�
   assert.ok(!("owner" in cap("app_instance_open").input));
 });
 
+test("인스턴스 생성은 worker 실행 위치를 명시적으로만 받는다", () => {
+  assert.deepEqual(parse("app_instance_open", { body: { app_id: "worker-app", execution: { kind: "remote", node_id: "node-a" } } }).execution,
+    { kind: "remote", node_id: "node-a" });
+  const execution = cap("app_instance_open").input.execution;
+  assert.ok(execution.safeParse({ kind: "remote", node_id: "node-a" }).success);
+  assert.equal(execution.safeParse({ kind: "external" }).success, false);
+});
+
 test("인스턴스 id는 URL params가 항상 권위다", () => {
   const parsed = parse("app_instance_update", { params: { id: "from-route" }, body: { instance_id: "spoofed", title: "제목" } });
   assert.equal(parsed.instance_id, "from-route");

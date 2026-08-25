@@ -76,6 +76,9 @@ try {
     assert.ok(await has("session", "owner"), "session.owner 존재");
     assert.ok(await has("org_app_instance", "project_id"), "org_app_instance.project_id 존재(nullable 프로젝트 맥락)");
     assert.ok(await has("org_app_instance_project", "valid_from"), "org_app_instance_project.valid_from 존재(귀속 이력)");
+    assert.ok(await has("org_app_instance", "execution_host_kind"), "org_app_instance.execution_host_kind 존재(실행 위치)");
+    assert.ok(await has("org_app_runtime_asset", "code_hash"), "org_app_runtime_asset.code_hash 존재(worker 번들)");
+    assert.ok(await has("org_app_worker_run", "status"), "org_app_worker_run.status 존재(worker 생애주기)");
     const cron = await itemsPool.query(`SELECT params FROM org_cron WHERE id='push-wiki-notion'`);
     assert.equal(cron.rowCount, 1, "push-wiki-notion 시드 삽입됨");
     assert.ok(cron.rows[0].params !== null, "push-wiki-notion params 는 NOT NULL(제약 준수)");

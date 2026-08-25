@@ -11,6 +11,11 @@ test("빈 매니페스트 → 구성요소 0", () => {
   assert.deepEqual(planDeclaredComponents(mani()), []);
 });
 
+test("runtime.worker → 영속 번들 component", () => {
+  const c = planDeclaredComponents(mani({ runtime: { entry: "dist/worker.mjs" } }));
+  assert.ok(c.some((x) => x.kind === "runtime_worker" && x.ref === "dist/worker.mjs"));
+});
+
 test("ui.pages/widgets → ui_page/ui_widget (ref=key)", () => {
   const m = mani({ ui: { pages: [{ key: "main", title: "M", entry: "i.html" }], widgets: [{ key: "sum", title: "S", entry: "w.html" }] } });
   const c = planDeclaredComponents(m);

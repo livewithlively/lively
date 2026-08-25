@@ -191,6 +191,38 @@ export async function pruneUiAssets(appId: string, keep: string[], client?: pg.P
   await exec.query(`DELETE FROM org_app_ui_asset WHERE app_id=$1 AND page_key <> ALL($2::text[])`, [appId, keep]);
 }
 
+// ── org_app_runtime_asset — 실행할 worker 번들(Stage B) ──────────────────────
+export interface AppRuntimeAssetRow {
+  app_id: string; package_hash: string; entry: string; code: Buffer; code_hash: string; size_bytes: number; created_at: string;
+}
+
+export async function upsertRuntimeAsset(appId: string, asset: {
+  package_hash: string; entry: string; code: Buffer; code_hash: string;
+}, client?: pg.PoolClient): Promise<void> {
+  const exec: Q = client ?? itemsPool;
+  await exec.query(
+    `INSERT INTO org_app_runtime_asset(app_id,package_hash,entry,code,code_hash,size_bytes,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,now())
+     ON CONFLICT (tenant_id,app_id,package_hash) DO UPDATE SET
+       entry=EXCLUDED.entry, code=EXCLUDED.code, code_hash=EXCLUDED.code_hash, size_bytes=EXCLUDED.size_bytes, created_at=now()`,
+    [appId, asset.package_hash, asset.entry, asset.code, asset.code_hash, asset.code.length],
+  );
+}
+
+export async function getRuntimeAsset(appId: string, packageHash: string): Promise<AppRuntimeAssetRow | null> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_runtime_asset WHERE app_id=$1 AND package_hash=$2`, [appId, packageHash]);
+  const x = r.rows[0];
+  if (!x) return null;
+  return { app_id: String(x.app_id), package_hash: String(x.package_hash), entry: String(x.entry), code: Buffer.from(x.code),
+    code_hash: String(x.code_hash), size_bytes: Number(x.size_bytes), created_at: String(x.created_at) };
+}
+
+export async function pruneRuntimeAssets(appId: string, keepPackageHash: string | null, client?: pg.PoolClient): Promise<void> {
+  const exec: Q = client ?? itemsPool;
+  if (!keepPackageHash) { await exec.query(`DELETE FROM org_app_runtime_asset WHERE app_id=$1`, [appId]); return; }
+  await exec.query(`DELETE FROM org_app_runtime_asset WHERE app_id=$1 AND package_hash<>$2`, [appId, keepPackageHash]);
+}
+
 // ── org_app_grant ──────────────────────────────────────────────────────────────
 
 export async function upsertGrant(

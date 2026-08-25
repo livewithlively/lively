@@ -10,6 +10,7 @@
 //  - host:          null                                                                     ← 실전개(url_allowlist 병합)
 //  - ui_page/ui_widget/section/data_table: null                                              ← 저널만(surfaces 는 manifest 에서 읽음, DDL 은 부팅자식)
 import { readdir, readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { HttpError } from "../http-error.js";
 import { parseAppManifest, assertInstallableManifest, appAssetId, type LivelyAppManifest } from "./manifest.js";
@@ -18,12 +19,14 @@ import { hashAppPackage } from "./package-hash.js";
 import type { DeployItem } from "./install.js";
 
 export interface LoadedUiAsset { page_key: string; kind: "page" | "widget"; title: string; entry: string; html: string }
+export interface LoadedRuntimeAsset { entry: string; code: Buffer; code_hash: string }
 
 export interface LoadedApp {
   manifest: LivelyAppManifest;
   contentHash: string;
   items: DeployItem[];
   uiAssets: LoadedUiAsset[];   // #1780 PR5 — ui.pages/widgets entry HTML(설치 시 보존 대상). 없으면 [].
+  runtimeAsset: LoadedRuntimeAsset | null; // Stage B — 임시 stage가 사라져도 실행할 정확한 단일 ESM 번들.
 }
 
 // 하네스 자산 종류 → 디스크 레이아웃(Claude 플러그인 트리 규약).
@@ -51,11 +54,11 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
 
   // runtime.entry 는 실행 시점이 아니라 설치 시점에 패키지 안의 실제 파일로 확정한다.
   // 스테이지가 사라진 뒤에야 "파일 없음"을 발견하면 active 앱이 실행 불능이 되므로 앞에서 거부한다.
-  await assertRuntimeEntry(manifest, root);
+  const runtimeAsset = await readRuntimeEntry(manifest, root);
 
   // 1) 매니페스트 선언 component(ui·host·section·data·cron·mcp_server·tool).
   const declared = planDeclaredComponents(manifest);
-  const items: DeployItem[] = declared.map((comp) => ({ comp, payload: payloadForDeclared(manifest, comp) }));
+  const items: DeployItem[] = declared.map((comp) => ({ comp, payload: payloadForDeclared(manifest, comp, runtimeAsset, contentHash) }));
 
   // 2) 플러그인 트리 harness_asset 스캔(skills·agents·commands).
   const pluginRel = manifest.harness?.plugin ?? "./";
@@ -66,13 +69,13 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   // 3) UI entry HTML 보존 — ui.pages/widgets 의 entry 파일을 읽어 담는다(소스 무관 서빙 대비, PR5).
   const uiAssets = await readUiAssets(manifest, root);
 
-  return { manifest, contentHash, items, uiAssets };
+  return { manifest, contentHash, items, uiAssets, runtimeAsset };
 }
 
 const RUNTIME_MAX_BYTES = 8 * 1024 * 1024; // v2.1 worker entry 는 의존성을 포함한 단일 ESM 번들이다.
 
-async function assertRuntimeEntry(m: LivelyAppManifest, root: string): Promise<void> {
-  if (!m.runtime) return;
+async function readRuntimeEntry(m: LivelyAppManifest, root: string): Promise<LoadedRuntimeAsset | null> {
+  if (!m.runtime) return null;
   const abs = path.resolve(root, m.runtime.entry);
   if (abs !== root && !abs.startsWith(root + path.sep)) {
     throw new HttpError(400, `runtime entry 가 패키지 밖을 가리킵니다: ${m.runtime.entry}`);
@@ -83,6 +86,8 @@ async function assertRuntimeEntry(m: LivelyAppManifest, root: string): Promise<v
   if (st.size > RUNTIME_MAX_BYTES) {
     throw new HttpError(400, `runtime entry 가 너무 큽니다(${m.runtime.entry}, ${st.size}B > ${RUNTIME_MAX_BYTES}B)`);
   }
+  const code = await readFile(abs);
+  return { entry: m.runtime.entry, code, code_hash: createHash("sha256").update(code).digest("hex") };
 }
 
 const UI_MAX_BYTES = 2 * 1024 * 1024; // entry HTML 상한(자체완결 HTML 가정 — 초과는 거부).
@@ -107,7 +112,8 @@ async function readUiAssets(m: LivelyAppManifest, root: string): Promise<LoadedU
 }
 
 // 선언 component 의 payload — 실전개 kind 는 매니페스트 조각, 저널 kind 는 null.
-function payloadForDeclared(m: LivelyAppManifest, comp: AppComponentRef): unknown {
+function payloadForDeclared(m: LivelyAppManifest, comp: AppComponentRef, runtime: LoadedRuntimeAsset | null, packageHash: string): unknown {
+  if (comp.kind === "runtime_worker") return runtime ? { ...runtime, package_hash: packageHash } : null;
   if (comp.kind === "cron") {
     const job = m.jobs.find((j) => j.key === comp.orig_name);
     return job ? { schedule: job.schedule, run: job.run } : null;

@@ -1,6 +1,7 @@
 // org 스키마 조각 — apps: 라이블리 앱 레지스트리(#1780). "OS/앱 계층 분리"의 저장층.
 //  org_app(package) · org_app_component(전개 저널) · org_app_grant(동의) · org_app_ui_asset(UI) ·
-//  org_app_instance(실행 단위) · org_app_instance_project(프로젝트 귀속 이력).
+//  org_app_runtime_asset(worker 번들) · org_app_instance(실행 단위) · org_app_worker_run(실행 이력) ·
+//  org_app_instance_project(프로젝트 귀속 이력).
 //  설계: project/1780/design-v1.md (R1·R2 적대검증 반영). 신규 조각 규약 — org/schema.ts 오케스트레이터 **맨 끝**에서 호출.
 //
 // 멀티테넌트: 이 표들은 전부 public 스키마 → ensureTenantColumn/ensureTenantPolicies 가 tenant_id + 복합 UNIQUE +
@@ -27,6 +28,7 @@ export const APP_COMPONENT_KINDS = [
   "ui_widget",     // 매니페스트 ui.widgets[].key
   "data_table",    // app 스키마 테이블명(design D6 — DDL 은 부팅 자식)
   "section",       // 앱 페르소나 섹션 key
+  "runtime_worker",// org_app_runtime_asset 의 entry
 ] as const;
 
 export async function initAppRegistry(pool: Pool): Promise<void> {
@@ -60,7 +62,7 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     CREATE TABLE IF NOT EXISTS org_app_component(
       app_id TEXT NOT NULL REFERENCES org_app(id) ON DELETE CASCADE,
       kind TEXT NOT NULL
-        CHECK (kind IN ('harness_asset','hook','tool','mcp_server','cron','host','ui_page','ui_widget','data_table','section')),
+        CHECK (kind IN ('harness_asset','hook','tool','mcp_server','cron','host','ui_page','ui_widget','data_table','section','runtime_worker')),
       ref TEXT NOT NULL,
       orig_name TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -68,6 +70,10 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_component_app_idx ON org_app_component(app_id);`);
+  // 기존 DB의 자동 생성 CHECK도 새 kind를 받아야 한다(CREATE TABLE IF NOT EXISTS만으로는 갱신되지 않음).
+  await pool.query(`ALTER TABLE org_app_component DROP CONSTRAINT IF EXISTS org_app_component_kind_check;`);
+  await pool.query(`ALTER TABLE org_app_component ADD CONSTRAINT org_app_component_kind_check
+    CHECK (kind IN ('harness_asset','hook','tool','mcp_server','cron','host','ui_page','ui_widget','data_table','section','runtime_worker'));`);
   // host 참조카운트 회수(design R1-F5) — kind='host' 행을 ref(호스트)로 역조회.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_component_host_idx ON org_app_component(kind, ref) WHERE kind = 'host';`);
 
@@ -111,6 +117,22 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ui_asset_app_idx ON org_app_ui_asset(app_id);`);
 
+  // ── org_app_runtime_asset — 설치 stage가 사라진 뒤에도 정확한 package hash의 worker를 실행한다 ──
+  //  코드는 단일 ESM 번들(8MiB 이하). FK 대신 remove/reclaim에서 명시 회수(v2.1 신규표 규약).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_runtime_asset(
+      app_id TEXT NOT NULL,
+      package_hash TEXT NOT NULL,
+      entry TEXT NOT NULL,
+      code BYTEA NOT NULL CHECK (octet_length(code) <= 8388608),
+      code_hash TEXT NOT NULL CHECK (code_hash ~ '^[0-9a-f]{64}$'),
+      size_bytes INT NOT NULL CHECK (size_bytes BETWEEN 1 AND 8388608),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (app_id, package_hash)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_runtime_asset_app_idx ON org_app_runtime_asset(app_id);`);
+
   // ── org_app_instance — 설치된 package 와 실제 실행 단위를 분리(#1780 v2.1) ──
   //  project_id NULL = 프로젝트 비소속. 프로젝트 귀속은 package 가 아니라 instance 별 현재 맥락이며 권한이 아니다.
   //  subject_kind/ref 는 외부 정체성을 가진 인스턴스(첫 기준: session)를 멱등 확보하는 키다.
@@ -126,13 +148,28 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       page_key TEXT,
       title TEXT,
       state JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (octet_length(state::text) <= 131072),
+      execution_host_kind TEXT CHECK (execution_host_kind IN ('central','remote')),
+      execution_host_id TEXT,
       status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       closed_at TIMESTAMPTZ,
-      CHECK ((subject_kind IS NULL) = (subject_ref IS NULL))
+      CHECK ((subject_kind IS NULL) = (subject_ref IS NULL)),
+      CONSTRAINT org_app_instance_execution_host_pair_check CHECK ((execution_host_kind IS NULL AND execution_host_id IS NULL)
+          OR (execution_host_kind='central' AND execution_host_id IS NULL)
+          OR (execution_host_kind='remote' AND execution_host_id IS NOT NULL))
     );
   `);
+  await pool.query(`ALTER TABLE org_app_instance ADD COLUMN IF NOT EXISTS execution_host_kind TEXT;`);
+  await pool.query(`ALTER TABLE org_app_instance ADD COLUMN IF NOT EXISTS execution_host_id TEXT;`);
+  await pool.query(`ALTER TABLE org_app_instance DROP CONSTRAINT IF EXISTS org_app_instance_execution_host_kind_check;`);
+  await pool.query(`ALTER TABLE org_app_instance ADD CONSTRAINT org_app_instance_execution_host_kind_check
+    CHECK (execution_host_kind IS NULL OR execution_host_kind IN ('central','remote'));`);
+  await pool.query(`ALTER TABLE org_app_instance DROP CONSTRAINT IF EXISTS org_app_instance_execution_host_pair_check;`);
+  await pool.query(`ALTER TABLE org_app_instance ADD CONSTRAINT org_app_instance_execution_host_pair_check
+    CHECK ((execution_host_kind IS NULL AND execution_host_id IS NULL)
+        OR (execution_host_kind='central' AND execution_host_id IS NULL)
+        OR (execution_host_kind='remote' AND execution_host_id IS NOT NULL));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_instance_app_owner_idx ON org_app_instance(app_id, owner_member, updated_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_instance_project_idx ON org_app_instance(project_id) WHERE project_id IS NOT NULL;`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS org_app_instance_subject_uq
@@ -150,6 +187,34 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_instance_project_instance_idx ON org_app_instance_project(instance_id, valid_from DESC);`);
+
+  // ── org_app_worker_run — AppInstance와 별도인 worker 생애주기/실행 위치/예산 결과 ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_worker_run(
+      id TEXT PRIMARY KEY,
+      instance_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      owner_member TEXT NOT NULL,
+      project_id INT,
+      host_kind TEXT NOT NULL CHECK (host_kind IN ('central','remote')),
+      host_id TEXT,
+      package_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('prepared','starting','ready','idle','running','stopping','stopped','failed')),
+      pid INT,
+      exit_code INT,
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      started_at TIMESTAMPTZ,
+      ready_at TIMESTAMPTZ,
+      last_active_at TIMESTAMPTZ,
+      stopped_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK ((host_kind='central' AND host_id IS NULL) OR (host_kind='remote' AND host_id IS NOT NULL))
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_worker_run_instance_idx ON org_app_worker_run(instance_id, created_at DESC);`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS org_app_worker_run_active_uq ON org_app_worker_run(instance_id)
+    WHERE status IN ('prepared','starting','ready','idle','running','stopping');`);
 
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.
