@@ -14,6 +14,7 @@
 import { itemsPool } from "../db/client.js";
 import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js";
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
+import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
 export interface ConnectorField {
@@ -96,7 +97,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "notion",
     label: "Notion",
     guide: {
-      intro: "노션은 '내부(Internal) 통합'의 시크릿 토큰으로 읽습니다. 통합 생성은 워크스페이스 오너만 가능합니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Notion] 에서 '팀 자료로 모으기'를 켜면 노션이 여는 화면에서 모을 페이지만 고르면 됩니다 — 이 수집기가 자동으로 만들어지고 토큰 칸은 비워 둡니다('토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우(셀프호스팅 등)입니다. 노션은 '내부(Internal) 통합'의 시크릿 토큰으로 읽습니다. 통합 생성은 워크스페이스 오너만 가능합니다.",
       steps: [
         "notion.so/profile/integrations → [+ 새 통합] — 이름 자유, 연결된 워크스페이스 = 싱크할 워크스페이스, 종류 = 내부(Internal). (Internal 이 안 보이면 그 워크스페이스 오너가 아닌 것 — 오너에게 생성을 요청하세요)",
         "통합 ▸ 기능(Capabilities): '콘텐츠 읽기' 필수 + '댓글 읽기'·'사용자 정보(이메일 포함) 읽기' 권장",
@@ -109,6 +110,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     fields: [
       { key: "token", env: "NOTION_TOKEN", secret: true, required: true, label: "Integration Token", hint: "secret_..." },
       { key: "instance", env: "NOTION_INSTANCE", secret: false, label: "Instance", hint: "워크스페이스 식별자 (기본 default)" },
+      // #1881 — 붙여넣기 대신 금고에서: [팀 자료로 모으기]로 저장된 Lively 연결을 그대로 쓴다. 값이 있으면 위 토큰 칸·env 를 덮어쓴다.
+      { key: "token_source", env: "NOTION_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = [팀 자료로 모으기]로 저장된 Lively 연결(워크스페이스가 둘이면 org:<workspace_id>) · 비우면 위 Integration Token 칸을 씁니다" },
       // #551 무손실 싱크 옵션
       { key: "root_pages", env: "NOTION_ROOT_PAGES", secret: false, label: "루트 페이지", picker: "notion_pages", hint: "페이지 URL·슬러그·id 아무 형태나 쉼표구분 — 지정 시 그 서브트리만 싱크(비우면 통합에 공유된 전체). 공유 직후엔 search 인덱싱 지연이 있어 루트 지정이 즉시 반영에 유리" },
       { key: "exclude_pages", env: "NOTION_EXCLUDE_PAGES", secret: false, label: "제외 페이지", picker: "notion_pages", hint: "여기 지정한 페이지·DB 와 그 하위 전체를 싱크에서 제외(쉼표구분). 루트 안의 특정 서브트리를 빼거나 전체 공유 중 일부만 뺄 때. 이미 싱크된 항목은 다음 전체 싱크에서 자동 보관 처리(제외 해제 시 복원)" },
@@ -352,6 +355,14 @@ async function loadConnectorConfig(
       if (r.warning) console.warn(`slack token_source: ${r.warning}`);
       out.user_token = r.user_token;
       out.bot_token = r.bot_token;
+    }
+  }
+  // ── 노션 토큰 출처(#1881 N3) — 같은 규약: 출처를 명시했으면 그 출처만(붙여넣기·env 덮어씀). ──
+  if (system === "notion" && out.token_source) {
+    const r = await resolveNotionTokenSource(out.token_source, notionVaultReader);
+    if (r) {
+      if (r.warning) console.warn(`notion token_source: ${r.warning}`);
+      out.token = r.token;
     }
   }
   return out;
