@@ -318,7 +318,7 @@ const SCENES = {
     at: 2,
     right: () => `<section class="ld-panel">
       <h3>워크스페이스를 만들고 있습니다</h3>
-      <p class="ld-panel-d">가입이 끝났습니다. 이제 <b>${esc(S.email || 'you@company.com')}</b>님의 공간을 준비합니다. 이 화면을 닫으셔도 계속 진행됩니다.</p>
+      <p class="ld-panel-d">가입이 끝났습니다. 이제 <b>${esc(S.email || 'you@company.com')}</b>님의 공간을 준비합니다. 잠깐만 이 화면에 머물러 주세요.</p>
       <div class="ld-bar"><i data-bar></i></div>
       <div class="ld-prov" style="margin-top:10px">
         ${[['계정 만들기', '완료'], ['공간 확보', ''], ['자료 저장소 준비', ''], ['첫 화면 준비', '']].map(([t], i) => `
@@ -350,7 +350,7 @@ const SCENES = {
     at: 3,
     right: () => `<section class="ld-panel">
       <h3>준비됐습니다</h3>
-      <p class="ld-panel-d">이제 리브가 몇 가지를 여쭙고 올려주시는 자료를 정리합니다. 3분이면 끝납니다.</p>
+      <p class="ld-panel-d">이제 리브가 몇 가지를 여쭙고 올려주시는 자료를 정리합니다.</p>
       <div class="ld-done" style="margin-bottom:4px"><span class="pd"></span><div><b>${esc(S.email || 'you@company.com')}</b><p>이 주소로 로그인하시면 언제든 이 워크스페이스로 돌아옵니다.</p></div></div>
       <div class="ld-form">
         <a class="ld-btn ld-btn-primary" href="v2.html?scene=name">처음 설정 시작하기</a>
