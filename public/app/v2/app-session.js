@@ -24,8 +24,12 @@ export async function listSessionApps() {
             const csp = (a.manifest && a.manifest.csp) || {};
             const sites = (csp.frame_domains || []).map(String);
             const net = [...(csp.connect_domains || []), ...(perm.hosts || [])].map(String);
+            const instances = (a.manifest && a.manifest.instances) || { project: 'optional', multiplicity: 'multiple' };
+            const source = (a.source && typeof a.source === 'object') ? a.source : {};
+            // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
+            const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
             return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-                scopes: (perm.scopes || []).map(String), tools, pages, sites, net };
+                scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, system, source };
         });
     }
     catch (e) {
@@ -54,7 +58,8 @@ export function ensureAppGrant(appId, title) {
         return cur;
     const run = (async () => {
         const app = (await listSessionApps()).find((a) => a.id === appId)
-            || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [] };
+            || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [],
+                instances: { project: 'optional', multiplicity: 'multiple' }, system: null, source: {} };
         if (!(await appConsent(app)))
             return false;
         await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });

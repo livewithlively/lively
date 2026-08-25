@@ -29,9 +29,9 @@ import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
 // #1780 D3·D4 — 앱 세션: 앱 토큰 발급 + 세션 폴더에 앱 홈·앱 하네스 자산 물질화.
 import { mintAppToken } from "../apps/principal.js";
-import { writeAppHome, materializeAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
+import { writeAppHome, materializeAppAssets, materializePreparedAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, getSessionLabel, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -101,7 +101,7 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       id: s.id, label: s.label || s.id, harness: s.harness || "shell", dir: s.dir || "",
       autoApprove: s.auto_approve, owner: s.owner, owned: s.owner === me,
       created: s.created || 0, attached: false, invites: s.invites, flags: s.flags,
-      projectId: s.project_id || 0,
+      projectId: s.project_id || 0, appId: s.app_id || undefined,
       agentState: "offline", title: "",
       lastActive: s.last_busy || undefined,
       restorable: true,
@@ -120,8 +120,12 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
 // 노드 에이전트용(#869) — 뷰어 필터 없이 이 호스트의 전 box-* 세션+메타를 반환한다. 가시성 판정(정책)은
 //  게이트웨이가 소유하므로(F7 정책/실행 분리) 노드는 원자료만 상태 push 하고, 게이트웨이가 뷰어별로 거른다.
 //  게이트웨이 로컬 경로에선 쓰지 말 것 — listSessions(user)가 정문.
-export async function listSessionsRaw(): Promise<SessionInfo[]> {
-  return collectSessions(null);
+/**
+ * @param strict listSessions 와 같은 의미 — **tmux 를 못 본 것**을 삼키지 않고 throw 한다.
+ *  "없음"과 "모름"을 구분해야 하는 읽기(예: 중복 세션 수 보고)는 반드시 strict 여야 한다.
+ */
+export async function listSessionsRaw(opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  return collectSessions(null, opts?.strict === true);
 }
 
 // 빈 tmux 서버 정리(#869 노드 자가치유) — 세션이 0개면 서버를 죽인다. 노드 데몬(launchd/systemd)이 과거 최소 PATH 로
@@ -185,7 +189,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -225,6 +229,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
         flags: decodeOptJson<Record<string, string>>(flagsRaw, {} as Record<string, string>),
         invites,
         projectId: Number(projectRaw) || null,
+        appId: appRaw || null,
       },
     });
   }
@@ -246,7 +251,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
       reportedFresh: p.reportedFresh, lastAttached: p.lastAttached,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
-      flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, label: d.label,
+      flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
     });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
@@ -282,7 +287,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       id: r.name, label: (r.label || r.name), harness: r.harness || "shell", dir: r.dir || "",
       autoApprove: r.autoApprove, owner: r.owner || "", owned: r.owned,
       created: Number(r.created) || 0, attached: Number(r.attached) > 0, invites: r.invites, flags,
-      projectId: r.projectId || 0,
+      projectId: r.projectId || 0, appId: r.appId || undefined,
       agentState: state,
       // 회수(F)가 보는 두 신호는 **접속과 무관**해야 하고(탭=온라인 규칙이 busy·waiting 을 offline 으로 덮으므로),
       //  두 출처를 **합집합**으로 본다 — 죽이면 되돌릴 수 없는 판정이라 과보호가 옳은 실패 방향이다.
@@ -362,13 +367,20 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   let appEnv: string[] = [];
   if (input.appId) {
     const appId = input.appId;
-    const memberId = ownerId(user);
-    // mintAppToken 이 앱 존재·활성·grant 를 재검하고 없으면 HttpError(404/409/403) 를 던진다 — 그대로 전파(사용자 메시지).
-    const { token } = await mintAppToken(memberId, appId, "app-spawn");
-    const gwUrl = await gatewayUrl();   // org 프로필/PUBLIC_URL 기준(요청 헤더 불요) — 프록시가 이 base 로 게이트웨이에 붙는다.
     const writer: AppFsWriter = osUser ? { mkdirp: (d) => memberMkdir(osUser, d), writeFile: (p, data, mode) => memberWriteFile(osUser, p, data, mode) } : directFsWriter;
-    await writeAppHome(target, token, gwUrl, writer);          // <sessionDir>/.lively/{token,gateway-url}(D3)
-    await materializeAppAssets(target, appId, writer);         // <sessionDir>/.claude/{skills,agents,commands}(D4)
+    if (input.appSession) {
+      // 원격 노드에는 DB가 없다. 게이트웨이가 grant 재검·토큰 발급·자산 수집을 끝낸 봉투만 기계적으로 쓴다.
+      if (input.appSession.appId !== appId) throw new HttpError(400, "앱 세션 준비 봉투의 appId가 요청과 다릅니다");
+      await writeAppHome(target, input.appSession.token, input.appSession.gatewayUrl, writer);
+      await materializePreparedAppAssets(target, input.appSession.assets, writer);
+    } else {
+      const memberId = ownerId(user);
+      // 중앙 실행은 종전대로 이 호스트에서 grant 를 재검하고 토큰·자산을 준비한다.
+      const { token } = await mintAppToken(memberId, appId, "app-spawn");
+      const gwUrl = await gatewayUrl();
+      await writeAppHome(target, token, gwUrl, writer);
+      await materializeAppAssets(target, appId, writer);
+    }
     // pane env — 다른 세션스코프 -e 와 같은 통로(아래 args 에 합류). LIVELY_HOME 은 프록시가 앱 토큰 파일을 찾는 뿌리,
     //  LIVELY_APP_ID 는 귀속(x-lively-app → mcp_call_log.app). ⚠ 격리 분기는 sudoers env_keep 이 두 값을 통과시켜야 실효한다
     //  (deploy/linux/sudoers-lively — 별도 PR3d, 이 커밋 범위 밖).
@@ -380,6 +392,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const cmd: string[] = [];
   const appliedFlags: Record<string, string> = {}; // 생성 시 적용한 플래그 — @box_flags 로 저장(수정 팝업 표시용).
   if (harness.bin) {
+    // 모델을 명시해서 띄울 때는 그 모델이 받는 추론강도 조합까지 검증한다. 화면은 모델 변경 때 목록을 좁히지만,
+    // API 직접 호출·오래 열린 브라우저도 있으므로 서버가 마지막 경계다(예: Luna + Ultra 는 Codex 카탈로그상 불가).
+    const selectedModel = String(input.flags?.["--model"] ?? "");
+    const selectedEffort = String(input.flags?.["--effort"] ?? "");
+    const modelEfforts = selectedModel ? harness.effortsByModel?.[selectedModel] : undefined;
+    if (selectedEffort && modelEfforts && !modelEfforts.includes(selectedEffort)) {
+      throw new HttpError(400, `${selectedModel} 모델은 ${selectedEffort} 추론강도를 지원하지 않습니다`);
+    }
     cmd.push(harness.bin);
     // 이어받기(#905 C1 · #1711 표 구동) — 그 하네스의 이어받기 수단을 **카탈로그에서** 만든다.
     //  ⚠ 여기의 <sid> 는 **그 하네스 자신의 대화 id** 여야 한다(claude UUID · agy conversationId · opencode sessionID).
@@ -398,11 +418,23 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       if (raw === undefined || raw === null || raw === "") continue;
       if (def.type === "bool") { if (raw) { cmd.push(def.name); appliedFlags[def.name] = "1"; } continue; }
       const v = String(raw);
-      if (def.type === "select") { if (!def.choices?.includes(v)) throw new HttpError(400, `${def.label} 값이 허용 목록에 없습니다`); cmd.push(def.name, v); appliedFlags[def.name] = v; continue; }
+      if (def.type === "select") {
+        if (!def.choices?.includes(v)) throw new HttpError(400, `${def.label} 값이 허용 목록에 없습니다`);
+        // Codex는 추론강도를 일반 CLI 플래그로 받지 않는다. CLI 0.149.1이 보장하는
+        // `--config key=value` 경로로 바꾸되, 화면·저장 상태는 다른 하네스와 같은
+        // --effort 키를 유지한다. 따라서 생성폼/상단 제어가 하네스별 argv 문법을 알 필요가 없다.
+        if (harness.key === "codex" && def.name === "--effort") cmd.push("--config", `model_reasoning_effort=${v}`);
+        else cmd.push(def.name, v);
+        appliedFlags[def.name] = v;
+        continue;
+      }
       if (!SAFE_VALUE_RE.test(v) || v.length > 64) throw new HttpError(400, `${def.label} 값 형식이 잘못되었습니다`);
       cmd.push(def.name, v); appliedFlags[def.name] = v;
     }
     if (input.autoApprove && harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
+    // 화면 테마(#1683 후속) — 이 하네스가 실행 시점 주입을 지원하면 그 인자를 얹는다(사람의 설정 파일은
+    //  건드리지 않는다 — harnessThemeArgv 주석). 지원 안 하는 하네스면 빈 배열이라 종전 그대로다.
+    cmd.push(...harnessThemeArgv(harness.key, input.theme));
   }
   // pane 이 실제로 실행할 argv(#1516). 세 갈래:
   //  · 로그인 세션(loginFor) — 하네스 TUI 대신 그 하네스의 **로그인 명령**을 셸에서 돌린다(만료 자격으로는
@@ -443,6 +475,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 같은 성질).
   //   즉 이미 떠 있는 세션의 하네스는 테마를 바꿔도 그대로다 — 그 세션을 다시 만들어야 바뀐다.
   args.push(...themeEnvArgs(input.theme));
+  args.push(...harnessThemeEnvArgs(harness.key, input.theme));   // 하네스가 env 로 테마를 받는 경우(#1683 후속)
   // 테넌트 소속(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스할 때, **세션 spawn 훅이
   //  어느 테넌트의 브로커 소켓에 붙어야 하는지**를 알려준다. 훅은 게이트웨이 프로세스의 env 를 물려받는데
   //  공유 게이트웨이에서는 그 env 가 전역이라 테넌트를 구분할 수 없다 — 세션스코프 -e 가 유일한 통로다.

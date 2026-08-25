@@ -11,7 +11,7 @@
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 //  ④ **화면은 웹 UI 그대로다**(web-shell.mjs) — 설치·로그인·키트가 갖춰지면 창에 게이트웨이의 /ui/ 를 싣는다.
 //     앱에 화면 코드를 한 벌 더 두지 않는다(웹이 곧 앱). 마법사(renderer/)는 갖춰지기 전과 노드·점검 설정에만 쓴다.
-import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session, clipboard } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -21,6 +21,7 @@ import { locateCli, cliMissingHelp, cliLaunchSpec } from "./cli-locate.mjs";
 import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
+import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
@@ -541,7 +542,10 @@ function showApp() {
     // 마법사 창과 같은 수명 규약 — 닫아도 앱은 트레이에 남는다(노드 리모컨이 사라지면 안 된다).
     appWin.on("close", (e) => { saveAppBounds(); if (!quitting) { e.preventDefault(); appWin.hide(); } });
     appWin.on("hide", () => scheduleAutoApply());
-    appWin.on("show", () => { if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; } });
+    appWin.on("show", () => {
+      if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; }
+      void reloadIfStale();   // #1841 — 창은 닫아도 안 죽는다. 다시 보일 때 낡았으면 스스로 다시 싣는다.
+    });
     appWin.on("closed", () => { appWin = null; appLoaded = { url: null, token: null }; });
     appWin.on("moved", saveAppBounds);
     appWin.on("resized", saveAppBounds);
@@ -564,6 +568,35 @@ function showApp() {
   appWin.show(); appWin.focus();
   return { ok: true };
 }
+/**
+ * 낡은 화면 자가복구 (#1841) — 창이 다시 보일 때 게이트웨이 자산 세대가 바뀌었으면 다시 싣는다.
+ *
+ *  ⚠ 이게 없으면 앱은 **처음 뜬 판을 영영 들고 있다**. 창을 닫아도 죽지 않고(위 close 훅이 hide 만 한다),
+ *   다시 열 때 showApp() 이 주소·토큰이 같으면 loadURL 을 건너뛰기 때문이다. 실측(2026-08-21):
+ *   앱이 든 세대 7964959ed50d, 서버 882a0a3d262e — 그 사이 dev 에 올라간 변경이 앱에는 하나도 안 보였다.
+ *
+ *  웹에도 같은 자가복구가 있다(web/gen-watch.ts, visibilitychange). 둘 다 두는 이유:
+ *   웹 쪽은 **이미 낡은 판에는 그 코드가 없어서** 한 번은 사람이 새로고침해야 한다. 여기(메인 프로세스)는
+ *   페이지 내용과 무관하게 돌아서 그 첫 한 번까지 메꾼다.
+ *
+ *  실패는 조용히 넘긴다 — 게이트웨이가 꺼져 있거나 오프라인이면 그냥 지금 화면을 그대로 둔다.
+ */
+let lastGen = null;
+async function reloadIfStale() {
+  if (!appWin || appWin.isDestroyed() || !state.gatewayUrl) return;
+  const base = String(state.gatewayUrl).replace(/\/+$/, "");
+  let v = null;
+  try {
+    const r = await fetch(`${base}/ui/__gen`, { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    v = typeof j?.v === "string" ? j.v : null;
+  } catch { return; }
+  if (!v) return;
+  if (lastGen && lastGen !== v) { try { appWin.webContents.reload(); } catch { /* 창이 사라졌으면 그만 */ } }
+  lastGen = v;
+}
+
 function loadAppBounds() {
   const opts = { defaultSize: APP_WINDOW_DEFAULT, minSize: APP_WINDOW_MIN };
   try { return normalizeBounds(JSON.parse(readFileSync(APP_BOUNDS_FILE, "utf8")), workAreas(), opts); }
@@ -775,6 +808,16 @@ async function reloadInstalledExtensions(sess) {
 //  · 브라우저 서피스 게스트(#1829): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
 //  그래서 게스트를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
 app.on("web-contents-created", (_e, wc) => {
+  // ── 우클릭 메뉴(#1870) — 모든 webContents 공통(웹 UI·자식 창·서피스 게스트). 앱은 브라우저와 달리
+  //  기본 우클릭 메뉴가 없어 링크 주소를 복사할 길이 없었다. 항목 판정은 context-menu.mjs(순수 모델)가 한다.
+  wc.on("context-menu", (_ev, params) => {
+    const model = contextMenuModel(params);
+    if (!model.length) return;
+    Menu.buildFromTemplate(model.map((m) => (m.type === "separator"
+      ? { type: "separator" }
+      : { label: m.label, click: () => runContextMenuAction(m.id, params, wc, clipboard) }))).popup();
+  });
+
   // ── 브라우저 서피스 안(=`<webview>` 게스트)은 규칙이 정반대다 ───────────────────────────────────────
   //  아래 웹 UI 규칙(openTargetFor)은 "남의 사이트를 앱에 들이지 않는다" 라 **게이트웨이 밖 이동을 전부 밖으로 던진다**.
   //  그걸 서피스에도 걸면 남의 사이트를 보려고 만든 화면이 첫 이동에서 통째로 시스템 브라우저로 튄다 — 기능이 죽는다.

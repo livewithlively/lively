@@ -5,8 +5,8 @@
 //  결과 형식을 표현할 데가 없었다. 그래서 '증류기'를 n개 세우고 각각을 여기서 설정한다.
 //
 //  화면은 둘로 나뉜다(#1564 — 종전엔 목록 위에 카드를 인라인 확장했다):
-//   · **목록** `#/context/distill` — 사각지대·잔량을 비교하고, 켜고 끄고, 들어간다.
-//   · **설정** `#/context/distill/<key>`(신규는 `/new`) — 3단 전폭 페이지(distillerPage).
+//   · **목록** `#/context/knowledge` — 사각지대·잔량을 비교하고, 켜고 끄고, 들어간다.
+//   · **설정** `#/context/knowledge/<key>`(신규는 `/new`) — 3단 전폭 페이지(distillerPage).
 //
 //  왜 별도 페이지인가: 인라인 카드는 폼이 702px 밖에 못 썼다(1440 실측: main 1200 캡 → .ctx-layout 1160 →
 //  카드 안 2열 = 폼 702 + 반사판 340). 필드 20개를 그 폭에 5단계 가로 탭으로 쪼개 넣고, 6천 자짜리 지시문
@@ -25,10 +25,10 @@ import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
-const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'other'];
+const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'local_file', 'other'];
 
 /** 목록 주소. */
-const LIST_HREF = '#/context/distill';
+const LIST_HREF = '#/context/knowledge';
 /** 설정 페이지 주소 — 목록·크럼·저장 후 이동이 전부 이걸 쓴다(해시 문자열 조립이 흩어지지 않게). */
 const pageHref = (key: string) => LIST_HREF + '/' + encodeURIComponent(key);
 /** 신규 생성의 자리표시 key — 그래서 이 문자열은 실제 증류기 key 가 될 수 없다(저장 시 거부). */
@@ -52,7 +52,7 @@ window.addEventListener('hashchange', () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════
-//  목록 — #/context/distill
+//  목록 — #/context/knowledge
 // ══════════════════════════════════════════════════════════════════════════
 export async function distillersPanel(detail, data) {
   const head = () => el('div', { class: 'admin-sechead' },
@@ -175,7 +175,7 @@ function settable(d) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  설정 페이지 — #/context/distill/<key>
+//  설정 페이지 — #/context/knowledge/<key>
 // ══════════════════════════════════════════════════════════════════════════
 
 /** 위치 + 되돌아갈 자리. 이 페이지엔 좌측 단계 내비(.ctx-side)를 그리지 않으므로 이 한 줄이 그 몫을 한다. */
@@ -332,7 +332,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
   if (v('mode')) modeSel.value = v('mode');
   const sessIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('session_ref'), placeholder: '실행 방식이 상시 세션일 때만' });
   const modelSel = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
-  for (const m of ['', 'opus', 'sonnet', 'haiku']) modelSel.append(el('option', { value: m, text: m || '(계정 기본)' }));
+  for (const m of ['', 'fable', 'opus', 'sonnet', 'haiku']) modelSel.append(el('option', { value: m, text: m || '(계정 기본)' }));
   if (v('model')) modelSel.value = v('model');
   const effortSel = el('select', { class: 'dst-in dst-in-sm' }) as HTMLSelectElement;
   for (const m of ['', 'low', 'medium', 'high', 'xhigh', 'max']) effortSel.append(el('option', { value: m, text: m || '(기본)' }));

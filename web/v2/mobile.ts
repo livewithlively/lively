@@ -21,6 +21,8 @@ export interface MobileChrome {
   adoptStrip(strip: HTMLElement, restore: () => void): void;
   /** 우측 서랍 버튼 — false 면 숨긴다(no-aside 화면). */
   setAside(on: boolean): void;
+  /** 우측 서랍을 연다 — 곁칸에 무언가를 실었을 때(미리보기). 데스크톱에선 상주 열이라 할 일이 없다. */
+  openAside(): void;
   closeAll(): void;
   isMobile(): boolean;
 }
@@ -105,5 +107,6 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       asideBtn.hidden = !on;
       if (!on && open === 'aside') closeAll();
     },
+    openAside(): void { if (isMobile() && !asideBtn.hidden && open !== 'aside') openOne('aside'); },
   };
 }

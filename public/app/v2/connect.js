@@ -191,6 +191,9 @@ export async function renderConnectApp(host, key) {
     const orgSec = orgAdminSection(svc, org, reload);
     if (orgSec)
         settings.push(orgSec);
+    //  #1881 "팀 자료로 모으기" — 관리자에게만. 연결이 곧 토큰이라 여기서 켜면 수집기가 그 연결로 돈다(관리탭·토큰 복사 없음).
+    if (svc.key === 'slack' && st === 'on' && org && org.admin)
+        settings.push(slackTeamCollectCard());
     if (svc.key === 'slack' && st === 'on') {
         settings.push(el('section', { class: 'cn-sec' }, el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '이 앱의 설정' })), el('div', { class: 'cn-slack' }, slackChannelPolicyCard())));
     }
@@ -203,6 +206,50 @@ export async function renderConnectApp(host, key) {
     // 발급 방법 — CRED_KINDS 의 help·docUrl 을 그대로 읽는다. 토큰형인데 아직 연결 안 했을 때 가장 막히는 자리다.
     ...(spec && (spec.help || spec.docUrl) && st !== 'on' ? [el('section', { class: 'cn-sec' }, el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '토큰 발급 방법' })), el('p', { class: 'cn-help' }, ...uiText(String(spec.help || ''))), ...(spec.docUrl ? [el('a', { class: 'btn btn-ghost btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' })] : []))] : [])), ...(settings.length ? [el('div', { class: 'cn-col' }, ...settings)] : []))));
 }
+// ── 팀 자료로 모으기(#1881) — 슬랙 수집을 토글 하나로. 상태·토글·비공개 채널 안내를 한 카드에. ──
+function slackTeamCollectCard() {
+    const body = el('div', { class: 'cn-help' }, ...uiText('불러오는 중…'));
+    const box = el('section', { class: 'cn-sec' }, el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '팀 자료로 모으기' })), body);
+    const paint = async () => {
+        let s;
+        try {
+            s = await api('/api/ui/org/slack/collect');
+        }
+        catch (e) {
+            body.replaceChildren(errorNote(e, '수집 상태를 불러오지 못했습니다'));
+            return;
+        }
+        const chk = el('input', { type: 'checkbox' });
+        chk.checked = !!(s.search && s.search.enabled);
+        const lab = el('label', { class: 'cn-toggle' }, chk, el('span', { text: ' 공개 채널의 대화를 팀 자료함에 자동으로 모읍니다' }));
+        const notes = [];
+        if (s.search && s.search.enabled) {
+            notes.push((s.search.member ? `${s.search.member} 님의 연결로 모으고 있어요.` : '모으고 있어요.')
+                + (s.search.member_connected === false ? ' 그 연결이 끊겼습니다 — 껐다 켜면 내 연결로 바뀝니다.' : ''));
+        }
+        else {
+            notes.push('켜면 내 Slack 연결로 공개 채널을 읽어 옵니다. 팀원 모두의 AI가 그 자료를 찾아볼 수 있어요.');
+        }
+        notes.push(s.bot && s.bot.available
+            ? (s.bot.enabled ? '비공개 채널도 모으려면 그 채널에서 `/invite @Lively` 를 입력하세요 — 초대된 채널만 읽습니다.'
+                : '비공개 채널은 켜면 함께 모읍니다 — 그 채널에서 `/invite @Lively` 로 초대한 것만.')
+            : '비공개 채널까지 모으려면 Lively 봇이 필요해요 — [다시 연결]하면 봇이 함께 설치됩니다.');
+        chk.onchange = async () => {
+            chk.disabled = true;
+            try {
+                await api('/api/ui/org/slack/collect', { method: 'POST', body: JSON.stringify({ enabled: chk.checked }) });
+                toast(chk.checked ? '팀 자료 모으기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다' : '팀 자료 모으기를 껐어요');
+            }
+            catch (e) {
+                toast((e && e.message) || '바꾸지 못했습니다', true);
+            }
+            await paint();
+        };
+        body.replaceChildren(lab, ...notes.map((t) => el('p', { class: 'cn-help' }, ...uiText(t))));
+    };
+    void paint();
+    return box;
+}
 function backLink() {
     return el('a', { class: 'cn-back', href: '#/connect' }, el('span', { 'aria-hidden': 'true', text: '←' }), el('span', { text: '외부 앱 연결' }));
 }
@@ -212,8 +259,14 @@ function backLink() {
 async function startOAuth(svc, reload) {
     try {
         const r = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
-        if (r && r.url) {
-            window.open(r.url, '_blank', 'noopener');
+        const url = r && (r.authorization_url || r.url); // 서버는 authorization_url 을 준다(me-logins 와 동일) — r.url 만 보던 v2 는 늘 실패했다(#1881)
+        if (r && r.authorized) {
+            toast('이미 연결돼 있어요');
+            reload();
+            return;
+        }
+        if (url) {
+            window.open(url, '_blank', 'noopener');
             toast('새 탭에서 ' + svc.label + ' 로그인을 마치면 이 화면이 자동으로 갱신됩니다');
             window.addEventListener('focus', () => reload(), { once: true });
         }

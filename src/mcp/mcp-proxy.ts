@@ -18,12 +18,7 @@ import { makeSsrfFetch } from "../net/mcp-ssrf-fetch.js";
 import { makeSigv4Fetch } from "../net/aws/aws-sigv4-fetch.js";
 import { assumeMemberRole } from "../net/aws/aws-resolve.js";
 import { providerForServer } from "../org/credentials/oauth-broker.js";
-import { type ChannelSystem } from "../org/channels/channel-policy-store.js";
-import {
-  checkChannelCall, filterChannelContent, channelToolKind, extractChannelTargets, extractResponseTargets,
-  type ChannelToolKind,
-} from "../org/channels/channel-guard.js";
-import { openChannelGate, type ChannelGate } from "../org/channels/channel-resolver.js";
+import { channelSystemOf, channelPreCheck, channelPostFilter } from "../org/channels/channel-enforce.js";
 import type { AwsCreds } from "../net/aws/aws-sigv4.js";
 import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { EXT_PREFIX, markExternalTool } from "../org/policies/tool-log.js";
@@ -178,43 +173,24 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
   }
 }
 
-// 이 프록시가 '대화 시스템'인가 — 채널별 개인 정책(#1226)의 집행 대상 판별. 서버 이름은 운영자가 바꿀 수 있으므로
-//  자격 종류(auth_kind)를 1차로, 상류 호스트를 2차로 본다(둘 중 하나만 맞아도 슬랙).
-export function channelSystemOf(server: { auth_kind?: string | null; url?: string | null }): ChannelSystem | null {
-  if ((server.auth_kind ?? "").toLowerCase().startsWith("slack")) return "slack";
-  try { if (server.url && /(^|\.)slack\.com$/i.test(new URL(server.url).hostname)) return "slack"; } catch { /* url 파싱 실패 = 판별 불가 */ }
-  return null;
-}
+// 이 프록시가 '대화 시스템'인가 — 판별은 channel-enforce 로 옮겼다(#1881: B 어댑터와 공유). 재수출은 기존 호출자 보호.
+export { channelSystemOf };
 
 // tools/call 프록시 — per-member 자격 해소·주입 → 상류 호출 → (옵션) 응답 PII 스크럽 + 주입자격 리터럴 스크럽. 통제는 등록 핸들러(scope)가 선행.
-//  #1226 채널 정책도 여기서 집행한다 — callProxyTool·등록 핸들러가 전부 이 함수를 지나므로 우회로가 없는 유일한 자리.
+//  #1226 채널 정책도 여기서 집행한다 — callProxyTool·등록 핸들러가 전부 이 함수를 지나므로 A 어댑터에선 우회로가 없는 유일한 자리.
+//  집행 순서(사전 게이트 → 상류 → 사후 필터)는 channel-enforce 가 정의하고 http_proxy(dynamic-tools)와 **같은 함수**를 쓴다(#1881).
 async function callUpstream(server: McpServerRow, toolName: string, args: Record<string, unknown>, callerId: string | null, level?: "L0" | "L1" | "L2"): Promise<{ content: unknown[]; isError: boolean }> {
   if (!server.url) throw new Error("proxy url 미설정");
   const effLevel = level ?? server.level; // per-tool 등급 우선(없으면 서버 기본) — 폴백 정책 결정
 
-  // ── 채널별 개인 열람/발송 정책(#1226 · 기본값 #1262) ── 슬랙엔 채널 단위 OAuth 권한이 없어 여기서만 거를 수 있다.
-  //  #1262 부터 **비공개 채널·그룹DM·DM 은 사람이 켜기 전까지 기본 거부**다. 그래서 '정책 행이 없으면
-  //  그냥 통과' 하던 #1226 의 지름길이 더는 성립하지 않는다 — 대화 종류를 알아야 판정할 수 있고,
-  //  채널 id 로는 종류를 알 수 없어(비공개도 C 로 시작) 게이트가 캐시·슬랙 조회로 해소한다.
-  //  조회 실패는 fail-closed — '못 읽었으니 일단 보여준다' 는 이 기능의 목적을 정면으로 배신한다.
-  const chSystem = channelSystemOf(server);
-  let gate: ChannelGate | null = null;
-  let toolKind: ChannelToolKind = "read";
-  let argTargets = new Set<string>();
-  if (chSystem && callerId) {
-    toolKind = channelToolKind(toolName, effLevel);
-    // meta(채널·사용자 목록/검색)는 대화 내용이 아니라 정책 대상 밖 — 가드도 응답 필터도 태우지 않는다.
-    //  막았더니 허용 채널 검색까지 죽고 비허용 채널 이름이 되레 노출됐다(#1226 실박스). 기본이 '거부' 로
-    //  바뀐 지금은 더 중요하다 — 메타까지 막으면 무엇을 켜야 할지조차 알 수 없게 된다.
-    if (toolKind !== "meta") {
-      try { gate = await openChannelGate(callerId, chSystem); }
-      catch (err) { throw new Error(`채널 허용 설정을 확인하지 못해 호출을 중단했습니다(${(err as Error).message}).`); }
-      argTargets = extractChannelTargets(args ?? {});
-      const policy = await gate.resolve(argTargets);
-      const verdict = checkChannelCall(toolName, args ?? {}, policy, toolKind);
-      if (!verdict.allowed) return { content: [{ type: "text", text: verdict.reason ?? "허용되지 않은 대화입니다" }], isError: true };
-    }
+  // ── 채널별 개인 열람/발송 정책(#1226 · 기본값 #1262) ── ① 인자 게이트. 조회 실패는 fail-closed(에러).
+  const pre = await channelPreCheck({ callerId, system: channelSystemOf(server), toolName, level: effLevel, args });
+  if (!pre.ok) {
+    // 게이트 자체를 못 연 것(설정 조회 실패)과 정책 거부를 구분한다 — 전자는 예외(종전 동작), 후자는 isError 응답.
+    if (pre.reason.startsWith("채널 허용 설정을 확인하지 못해")) throw new Error(pre.reason);
+    return { content: [{ type: "text", text: pre.reason }], isError: true };
   }
+  const enforcement = pre.enf;
 
   const headers: Record<string, string> = {};
   let authProvider: OAuthClientProvider | undefined;
@@ -246,23 +222,8 @@ async function callUpstream(server: McpServerRow, toolName: string, args: Record
   try {
     const res = await client.callTool({ name: toolName, arguments: args ?? {} }, undefined, { timeout: CALL_TIMEOUT_MS });
     let content = (res.content as unknown[]) ?? [];
-    // 채널 정책 2차 방벽(#1226 · #1262) — 응답에서 열람이 허용되지 않은 대화의 항목을 도려낸다.
-    //  ⚠ PII 스크럽·자격 스크럽보다 **먼저** — 저들이 텍스트를 고치면 JSON 구조가 깨져 항목 단위로 못 도려낸다.
-    //  발송(write)은 인자 게이트에서 이미 판정됐고, 여기서 또 거르면 '보내긴 했는데 결과를 못 보는' 꼴이 된다.
-    //
-    //  **판정 기준이 두 갈래다**(#1262). 호출이 대화를 지목했는지로 갈린다:
-    //   · 지목함(read_channel 등) — 인자 게이트를 이미 통과한 그 대화의 정상 응답이다. 여기서 '허용 확인'을
-    //     또 요구하면 방금 허용한 채널의 본문(귀속 표시가 없는 메시지들)까지 통째로 지워진다 → 차단된 것만 제거.
-    //   · 안 지목함(전역 검색) — 무엇이 섞여 올지 모른다 → **허용이 확인된 항목만** 남긴다. 귀속을 못 읽는
-    //     항목은 뺀다. 기본이 '거부' 인 이상, 못 읽는 항목을 통과시키면 그 구멍으로 비공개 내용이 샌다.
-    if (gate && toolKind === "read") {
-      const allowOnly = argTargets.size === 0;
-      // 응답이 지목한 대화의 종류도 알아야 판정할 수 있다(캐시에 없으면 게이트가 슬랙에 물어 채운다).
-      const policy = await gate.resolve(extractResponseTargets(content));
-      const f = filterChannelContent(content, policy, allowOnly);
-      if (f.removed || f.blocked) logger.info({ tool: toolName, removed: f.removed, blocked: f.blocked, allowOnly }, "채널 정책 — 응답에서 비허용 대화 제거");
-      content = f.content;
-    }
+    // 채널 정책 2차 방벽(#1226 · #1262) — ② 응답 필터. ⚠ PII 스크럽·자격 스크럽보다 **먼저**(구조 보존). 규칙은 channel-enforce.
+    content = await channelPostFilter(enforcement, toolName, content);
     // 응답 text 블록: 주입 자격 리터럴 스크럽(항상) + (옵션) 비정형 PII 마스킹(#746 P3). 구조는 보존.
     content = content.map((b) => {
       const blk = b as { type?: string; text?: string };

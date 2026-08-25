@@ -47,6 +47,27 @@ function openLinkFromTerminal(uri: string): void {
       window.parent.location.hash = u.hash;   // 같은 출처 부모(셸) — 교차 출처면 아래 catch 로
       return;
     }
+    // 미리보기 주소는 새 탭이 아니라 **곁칸의 웹 칸**으로 보낸다(원준 2026-08-21).
+    //  종전엔 여기가 그대로 window.open 으로 빠져 라이블리 창이 하나 더 떴다 — 화면을 고치는 동안
+    //  터미널↔새 탭 왕복이 계속 일어난다. 셸이 이 알림을 받아 웹 칸을 켜고 주소를 싣는다.
+    //  ⚠ 부모가 안 듣는 판(구 셸·단독 페이지)에서는 아무 일도 안 일어나면 안 되므로, 셸이 받았다고
+    //   답하지 않으면 잠시 뒤 새 탭으로 떨어진다.
+    //  아티팩트도 같은 길로 보낸다(원준 2026-08-21). 다만 claude.ai 는 남의 사이트라 **브라우저에서는
+    //  iframe 임베드를 스스로 막는다**(CSP frame-ancestors 'self') — 그래서 곁칸에 넣을지 새 탭으로 열지는
+    //  여기서 정하지 않고 **부모가 정한다**(앱이면 webview 라 뚫린다, #1829). 터미널은 넘기기만 한다.
+    const toPane = (u.origin === location.origin && /\/preview\/[^/]+\//.test(u.pathname))
+      || (/(^|\.)claude\.ai$/.test(u.hostname) && /^\/code\/artifact\//.test(u.pathname));
+    if (toPane && window.parent !== window) {
+      let taken = false;
+      const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
+      window.addEventListener('message', ack);
+      window.parent.postMessage({ type: 'lively:open-in-pane', url: u.href }, location.origin);
+      window.setTimeout(() => {
+        window.removeEventListener('message', ack);
+        if (!taken) window.open(uri, '_blank', 'noopener');
+      }, 400);
+      return;
+    }
   } catch (_) { /* URL 파싱·부모 접근 실패 — 새 창 폴백 */ }
   window.open(uri, '_blank', 'noopener');
 }
@@ -814,16 +835,41 @@ let copyHintAt = 0;
 function copyHintToast() {
   if (Date.now() - copyHintAt < 8000) return;
   copyHintAt = Date.now();
-  toast('복사할 선택이 없어요 — 드래그로 선택한 뒤 ⌘C (웹 선택은 Shift+드래그)');
+  toast('복사할 선택이 없어요 — 드래그하거나 더블클릭으로 선택한 뒤 ⌘C 하세요 (안 되면 Shift+드래그로 선택)');
 }
-// 앱(마우스모드) 화면의 '드래그 선택' 관측(#1117 버그C) — xterm 이 앱으로 보내는 SGR 마우스 리포트(onData 로
-//  나가는 \e[<b;x;y M/m)를 읽어 누름(버튼 0~2) → 눌린 채 이동 → 뗌 이면 앱에 선택이 생겼다고 본다. 제자리
-//  클릭(이동 없이 뗌)이나 일반 키보드 입력이 오면 해제 — Claude 는 클릭·타이핑에 선택을 잃는다. 휠(64+)과
+// 브리지는 됐는데 앱이 복사 신호(OSC52)를 안 보낸 경우의 안내(#1646). 종전엔 아무 반응이 없어서
+//  "⌘C 를 눌렀는데 아무 일도 안 일어난다"가 됐다 — 사용자는 실패했다는 사실조차 알 수 없었다.
+//  사파리 사전 커밋(armClipboardPromise)의 2초 창보다 뒤에 뜬다. OSC52 가 오면 조용히 취소된다(성공은 무음).
+let bridgeMissTimer = null;
+function armBridgeMissHint() {
+  clearTimeout(bridgeMissTimer);
+  bridgeMissTimer = setTimeout(() => {
+    bridgeMissTimer = null;
+    dlog('bridge-miss');
+    toast('복사되지 않았어요 — 화면에서 Shift+드래그로 선택한 뒤 ⌘C 하시면 확실히 복사됩니다', true);
+  }, 2500);
+}
+function cancelBridgeMissHint() {
+  if (!bridgeMissTimer) return;
+  clearTimeout(bridgeMissTimer); bridgeMissTimer = null;
+}
+// 앱(마우스모드) 화면의 '선택 제스처' 관측(#1117 버그C) — xterm 이 앱으로 보내는 SGR 마우스 리포트(onData 로
+//  나가는 \e[<b;x;y M/m)를 읽어 앱 화면에 선택이 생겼는지 본다. 선택을 만드는 제스처는 둘이다:
+//   ① 드래그 — 누름(버튼 0~2) → 눌린 채 이동 → 뗌.
+//   ② 같은 자리 연속 클릭 — 더블클릭=단어, 트리플클릭=줄(#1646 제보: 더블클릭으로 선택했는데 ⌘C 가 먹지
+//      않고 "복사할 선택이 없어요"만 떴다. 종전 관측기는 ①만 알아서 연타를 '제자리 클릭'으로 흘렸다).
+//  제자리 단일 클릭·일반 키보드 입력은 해제 — Claude 는 클릭·타이핑에 선택을 잃는다. 휠(64+)과
 //  호버 이동(버튼비트 3)은 선택 상태와 무관. ESC 로 시작하는 onData(방향키 등)는 선택을 건드리지 않는다.
 let dragPress = null, dragMoved = false;
+// 연속 클릭 판정 — 같은 셀에서 임계 안에 이어진 클릭만 한 묶음으로 센다. 임계를 넘거나 자리가 바뀌면 새 묶음(=단일 클릭).
+const MULTI_CLICK_MS = 600;
+let clickRun = 0, clickAt = 0, clickPos = '';
+// 앱 선택 해제 — 관측 상태를 한 군데서 지운다(클릭 이력까지: 타이핑 직후 클릭 1회가 직전 연타에 이어붙어
+//  '더블클릭'으로 오인되면 선택 없는 ^C 가 나간다).
+function clearAppSelect() { appDragSelect = false; clickRun = 0; clickAt = 0; clickPos = ''; }
 function trackAppMouse(d) {
   if (!(d.charCodeAt(0) === 0x1b && d.charCodeAt(1) === 0x5b && d.charCodeAt(2) === 0x3c)) { // '\e[<' 아님
-    if (d.charCodeAt(0) !== 0x1b) appDragSelect = false; // 일반 타이핑/IME — 앱 선택 해제로 간주
+    if (d.charCodeAt(0) !== 0x1b) clearAppSelect(); // 일반 타이핑/IME — 앱 선택 해제로 간주
     return;
   }
   const re = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
@@ -835,8 +881,16 @@ function trackAppMouse(d) {
     if (b >= 32) { if (!isUp && (b & 3) !== 3 && dragPress) dragMoved = true; continue; } // 눌린 채 이동(호버 3 제외)
     if (!isUp) { dragPress = m[2] + ',' + m[3]; dragMoved = false; }
     else {
-      appDragSelect = !!(dragPress && (dragMoved || dragPress !== (m[2] + ',' + m[3])));
-      if (appDragSelect) dlog('app-drag-select');
+      const pos = m[2] + ',' + m[3];
+      const now = Date.now();
+      if (dragPress && (dragMoved || dragPress !== pos)) {     // ① 드래그 — 연타 이력과는 무관한 새 선택
+        appDragSelect = true; clickRun = 0; clickAt = 0; clickPos = '';
+      } else {                                                 // ② 제자리 클릭 — 연타면 앱이 단어·줄을 선택한다
+        clickRun = (clickPos === pos && now - clickAt <= MULTI_CLICK_MS) ? clickRun + 1 : 1;
+        clickAt = now; clickPos = pos;
+        appDragSelect = clickRun >= 2;
+      }
+      if (appDragSelect) dlog('app-drag-select', 'run=' + clickRun);
       dragPress = null; dragMoved = false;
     }
   }
@@ -902,7 +956,7 @@ export function setupWebkitImeAdapter() {
       sendInput(d);                                              // 즉시 에코 — 지연 없음
       imeEcho = (d.length === 1 && HANGUL_CH_RE.test(d)) ? d : ''; // 한글이면 이후 치환 대상, 비한글(숫자 등)은 불변
       imeEchoDone = '';                                          // 새 입력 시작 — 직전 커밋 기억은 무효
-      appDragSelect = false;                                     // 타이핑 = 앱 선택 해제 — 이 경로는 handleTermData(trackAppMouse)를 안 지나므로 여기서(#1117 Cmd+C 게이팅과 정합)
+      clearAppSelect();                                          // 타이핑 = 앱 선택 해제 — 이 경로는 handleTermData(trackAppMouse)를 안 지나므로 여기서(#1117 Cmd+C 게이팅과 정합)
       dlog('ime', 'echo ' + diagPreview(d, 8));
     }
   }, true);
@@ -951,6 +1005,7 @@ export function setupOscClipboard() {
           try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
           if (text) {
             dlog('osc52', 'len=' + text.length);
+            cancelBridgeMissHint(); // 앱 복사 신호 도착 — 브리지는 성공했다(안내 취소, 성공은 무음)
             // 사파리에서 Ctrl/Cmd+C 제스처가 promise 를 미리 커밋해 뒀으면(armClipboardPromise) 그걸 resolve —
             //  제스처 밖 writeText 거부를 우회해 앱 복사가 실제로 클립보드에 닿는다. 그 외(크롬 등)는 직접 쓴다.
             if (osc52Resolve) { const r = osc52Resolve; osc52Resolve = null; clearTimeout(osc52Timer); r(text); }
@@ -1244,7 +1299,7 @@ export function setupClipboard() {
           // ⚠ 관측은 '1회용'이다(#1117 후속, 사파리 실기기 사고): 앱(CC)은 복사 후·출력 후 선택을 스스로 잃는데
           //  우리는 그걸 볼 수 없다. 관측을 소비하지 않으면 Cmd+C 연타의 2번째부터가 선택 없는 ^C(= 취소,
           //  두 번이면 CC 종료)로 들어간다. 그래서 브리지 1회마다 소비하고, 다시 복사하려면 다시 드래그해야 한다.
-          if (appDragSelect) { appDragSelect = false; armClipboardPromise(); sendInput('\x03'); dlog('cmdc-bridge', 'consume'); }
+          if (appDragSelect) { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); dlog('cmdc-bridge', 'consume'); }
           else { dlog('cmdc-skip', 'no-app-selection'); copyHintToast(); }
           return false;
         }
@@ -1960,7 +2015,8 @@ function openHelp() {
         kb(['휠 ↑'], '위로 스크롤해 지난 출력 보기')),
       sec('복사',
         kb(['드래그 → ⌘/Ctrl C'], '드래그로 선택한 뒤 복사 — 자동 복사는 없어요(클립보드 안 덮임)'),
-        kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그로 선택'),
+        kb(['더블클릭'], '단어 하나만 빠르게 — 세 번 누르면 그 줄 전체가 선택됩니다'),
+        kb(['Shift 드래그'], 'Claude 안에서 선택이 잘 안 될 때는 Shift 누른 채 드래그'),
         kb(['Claude 복사'], 'Claude 가 복사한 내용은 내 컴퓨터 클립보드에도 자동으로 올라가요'),
         kb(['⌘C (선택 없이)'], 'Claude 화면에서 선택 없이 ⌘C 를 눌러도 이제 Claude 가 종료되지 않아요')),
       // 파일 전달은 이 화면에서 가장 안 알려진 기능이라 별도 섹션으로 앞에 둔다(#1235 — 종전엔 '파일 탐색기' 한 줄이 전부였다).

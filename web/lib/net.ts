@@ -77,12 +77,19 @@ async function api(path: string, opts: any = {}): Promise<any> {
   //  (홈 입력창·새 세션 폼·프로젝트·me-ai…) payload 마다 넣으면 하나씩 빠진다.
   //  ⚠ 해석 로직을 web/theme.ts 에서 import 하지 않고 여기 3줄로 되풀이한다 — 이 모듈은 **우리 모듈 import 0 인
   //   leaf** 가 계약이기 때문이다(파일 머리 주석). 키 이름('lv:theme')과 규칙(없음=시스템 따름)이 계약면이다.
+  //  ⚠ 사람이 '하네스는 내 설정대로'(lv:theme-harness='0')를 골랐으면 **아예 싣지 않는다** — 서버는
+  //   미지정으로 보고 아무것도 주입하지 않는다(종전 동작). 터미널 화면 자체는 이 스위치와 무관하게 앱을 따른다.
   try {
-    const pref = localStorage.getItem('lv:theme');
-    const dark = pref === 'dark' || (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    headers['x-lively-theme'] = dark ? 'dark' : 'light';
+    if (localStorage.getItem('lv:theme-harness') !== '0') {
+      const pref = localStorage.getItem('lv:theme');
+      const dark = pref === 'dark' || (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      headers['x-lively-theme'] = dark ? 'dark' : 'light';
+    }
   } catch (_) { /* 스토리지·matchMedia 없는 문맥 — 헤더 생략(서버는 미지정으로 본다) */ }
-  if (opts.body) headers['Content-Type'] = 'application/json';
+  // 호출처가 'content-type'(소문자)을 넘겨 온 자리가 있었다 — 키가 둘이면 fetch 가 값을 쉼표로 합쳐 서버가 JSON 으로 못 읽는다.
+  //  대소문자 변형을 전부 걷어내고 하나만 둔다(실측 2026-08-24, 세션 완전 삭제 선택이 서버에 안 닿던 원인).
+  for (const k of Object.keys(headers)) if (k.toLowerCase() === 'content-type' && k !== 'Content-Type') { if (!('Content-Type' in headers)) headers['Content-Type'] = headers[k]; delete headers[k]; }
+  if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
   if (res.status === 401) {
     localStorage.removeItem(TOKEN_KEY);   // 토큰은 이 모듈 소관 — 죽은 토큰을 다음 요청에 다시 싣지 않는다

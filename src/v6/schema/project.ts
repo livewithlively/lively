@@ -76,6 +76,23 @@ export async function initV6ProjectCore(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS project_status_category_idx ON project(status_category);
   `);
 
+  // ── 5e) 아카이브(#1851, 2026-08-23) — 프로젝트를 **통째로 보관**하는 표식. 삭제가 아니라 '평소 화면에서 뺀다'. ──
+  //  archived_at 이 있으면 목록(project_list_v6)은 기본으로 그 행을 빼고(archived=include|only 로 본다), 새 셸은
+  //  사이드바에서 감추고 「아카이브」 화면에서 그 프로젝트와 그 아래 세션을 보여 준다. 되돌리면(NULL) 그대로 복귀.
+  //  클래식 프로젝트 탭의 '아카이브 폴더'(#1067, project_folder.settings.kind='archive')와는 별개 표식 — 그쪽은 이동(리스트
+  //  소속 변경)이고, 이쪽은 프로젝트 자신의 상태라 원래 리스트를 잃지 않는다.
+  await pool.query(`
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS project_archived_idx ON project(archived_at) WHERE archived_at IS NOT NULL;
+  `);
+  // ── 5f) 휴지통(#1851, 원준 2026-08-24) — 프로젝트를 **폴더처럼 통째로** 버린 표식. 행은 남는다(복원 가능) — 하드 삭제(project_delete_v6,
+  //  감사 스냅샷)와 다르다. 버릴 때 그 아래 세션도 같은 묶음(org_session_trash.project_id)으로 휴지통에 들어가고, 복원하면 함께 돌아온다.
+  //  완전 삭제(project_purge_v6)가 그 뒤의 하드 삭제다. 목록은 기본으로 이 행을 뺀다(trashed=include|only).
+  await pool.query(`
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS trashed_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS project_trashed_idx ON project(trashed_at) WHERE trashed_at IS NOT NULL;
+  `);
+
   // ── 5d) task_assignee(2026-06-26, #177) — 단일 assignee 컬럼 → n:n **가산**. 멀티담당자(ClickUp/Notion people) 무손실용. ──
   //  전환기: 기존 `assignee` 컬럼이 primary(UI·리스트뷰 호환), task_assignee 는 가산 섀도(쓰기경로가 동기, 백필로 시드).
   //  member_id = org_member.id 또는 외부 신원(FK 없음 — 미러/외부 담당자 허용, project_member·assignee 관례와 동일).

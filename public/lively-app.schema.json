@@ -8,6 +8,11 @@
           "type": "string",
           "maxLength": 500
         },
+        "schema_version": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
         "id": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]{1,31}$"
@@ -223,6 +228,97 @@
           "additionalProperties": false,
           "default": {}
         },
+        "instances": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "enum": [
+                "global",
+                "optional",
+                "required"
+              ],
+              "default": "optional"
+            },
+            "multiplicity": {
+              "type": "string",
+              "enum": [
+                "single",
+                "multiple"
+              ],
+              "default": "multiple"
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "system": {
+          "type": "object",
+          "properties": {
+            "renderer": {
+              "type": "string",
+              "enum": [
+                "session",
+                "browser",
+                "classic"
+              ]
+            },
+            "route": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "home": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2000
+            }
+          },
+          "required": [
+            "renderer"
+          ],
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "worker",
+              "default": "worker"
+            },
+            "entry": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*\\.(?:m?js)$"
+            },
+            "placement": {
+              "type": "string",
+              "enum": [
+                "any",
+                "central",
+                "remote"
+              ],
+              "default": "any"
+            },
+            "idle_timeout_sec": {
+              "type": "integer",
+              "minimum": 30,
+              "maximum": 3600,
+              "default": 300
+            },
+            "memory_mb": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 512,
+              "default": 256
+            }
+          },
+          "required": [
+            "entry"
+          ],
+          "additionalProperties": false
+        },
         "csp": {
           "type": "object",
           "properties": {
@@ -386,7 +482,7 @@
         "title",
         "version"
       ],
-      "additionalProperties": false
+      "additionalProperties": true
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#",

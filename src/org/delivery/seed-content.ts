@@ -75,7 +75,9 @@ export async function seedDefaultContent(): Promise<SeedResult> {
       //   버튼을 눌렀나'일 뿐이고, 실제로 그 조건 때문에 우리 dev 는 시드 훅 13개 전부가 갱신 대상에서 빠져
       //   5건이 한 달 낡아 있었다(#1836 실측). 실행 본문은 어차피 effectiveHook 이 코드로 덮으므로, 여기 갱신은
       //   DB 행을 화면·감사와 일치시키는 정리다. 조직의 결정(enabled·target_members)은 아래에서 그대로 보존한다.
-      if (before.source_code === h.source_code) continue;
+      //  #1884 — harness·matcher 도 시드가 정본이다(하네스 개방·툴명 보강이 여기로 내려간다). 종전엔 source_code 만 비교해
+      //   `harness: claude → all` 같은 타깃 변경이 **이미 뜬 박스엔 영영 안 닿았다**(코덱스 멤버에게 훅이 안 가는 채로).
+      if (before.source_code === h.source_code && before.harness === h.harness && (before.matcher ?? null) === (h.matcher ?? null)) continue;
       await upsertOrgHook({
         id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
         source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary,

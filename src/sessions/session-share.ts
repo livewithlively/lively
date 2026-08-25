@@ -39,7 +39,9 @@ export const RETENTION_MAX_DAYS = 3650;   // 상한(10년) — 0=무제한과 �
 
 export const DEFAULT_SESSION_SHARE: SessionShareConfig = {
   enabled: true,          // #1752 — 기본 켬(중앙 보관·오프라인 읽기). 명시 false 만 끈다.
-  harnesses: ["claude"],
+  // #1884 — codex 도 기본 캡처. 파서(harness-io/codex.ts, #1759)가 있어 화면으로 읽히고 Stop 훅이 transcript_path 를 싣는다(0.149 실측).
+  //  claude 만 기본이면 매니지드 신규 테넌트의 codex 세션 기록은 관리자가 손대기 전까지 조용히 안 남는다(하네스 패리티 불변식 ②).
+  harnesses: ["claude", "codex"],
   scope: "main",
   store: "slim",
   retention_days: 0,      // #1752 — 기본 무제한('중앙에서 관리'가 30일 시한부면 반쪽 — 기록은 남는 게 기본). 관리탭에서 조절.

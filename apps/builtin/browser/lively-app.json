@@ -4,6 +4,14 @@
   "title": "웹 브라우저",
   "version": "0.1.0",
   "publisher": { "name": "Lively" },
+  "instances": {
+    "project": "optional",
+    "multiplicity": "multiple"
+  },
+  "system": {
+    "renderer": "browser",
+    "home": "https://www.google.com/"
+  },
   "permissions": {
     "scopes": [],
     "tools": ["store_insert", "store_query", "store_update", "store_delete", "store_tables"]

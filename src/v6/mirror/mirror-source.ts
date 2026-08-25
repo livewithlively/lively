@@ -15,6 +15,7 @@ function sourceKindOf(system: string): string {
     case "clickup": return "clickup_doc";
     case "gdrive": return "drive_file"; // #541 Drive 파일 = raw 자료(source) → distill 대상
     case "discord": return "discord";   // #735 커넥터별 kind 충실화(종전 'other' 로 뭉뚱그려져 UI 필터 불가)
+    case "local": return "local_file";  // #1881 내 컴퓨터 업로드(폴더·파일) — drive_file 과 섞이면 자료함 필터·증류기 match_kinds 가 갈린다
     default: return "other";
   }
 }

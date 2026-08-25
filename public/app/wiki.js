@@ -1,18 +1,22 @@
-// wiki.ts — #764 WIKI 탭 진입점(라우터 대면). "위키에는 페이지와, 페이지를 찾는 팝업뿐이다."
-//  셸 = [사이드바(유지 표면 — wiki-side)] + [콘텐츠 한 장]: 홈(wiki-home) / 카테고리 페이지(wiki-category) /
-//  필터 목록(검색·인덱스·전체 — 이 파일) / 휴지통 / 자료. 문서(#/k)·드래프트는 wiki-doc.
-//  URL 계약(구 딥링크 호환): #/knowledge?category=N&folder=&type=&q=&indexed=1&all=1&peek=<name>
+// wiki.ts — WIKI 탭 진입점(라우터 대면). "위키에는 페이지와, 페이지를 찾는 팝업뿐이다."
+//  ⚠ 셸(#1841, 2026-08-24) — **좌측 위키 사이드바를 걷었다.** 셸 사이드바(프로젝트·세션) 옆에 같은 폭의 세로 목록이
+//   하나 더 서던 이중 내비가 어색하다는 지적(원준). 카테고리 트리가 하던 일은 ① 첫 화면(최근)의 행 칩 ② 「카테고리」 탭이 맡는다.
+//   콘텐츠 한 장 = 최근(wiki-front) / 카테고리 표(wiki-front) / 카테고리 서고(wiki-category) / 필터 목록(이 파일) / 휴지통 / 자료.
+//   문서(#/k)·드래프트는 wiki-doc. 옛 홈(오로라 카드 격자 — wiki-home)은 이 경로에서 더 쓰지 않는다.
+//  URL 계약(구 딥링크 호환): #/knowledge?cats=1&category=N&folder=&type=&q=&indexed=1&all=1&peek=<name>
 //  (?tab= 은 #657 대문/문서 탭의 잔재 — 파싱 시 무시한다. 탭이라는 모드 자체를 폐지했다.)
 import { api, busy, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
 import { skeleton, skeletonRows } from './learn.js';
 import { KN_TYPE_LABEL, KN_UNCAT, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
-import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
-import { wkDayLabel, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
+import { pjvTbIcon } from './projects/icons.js';
+import { KN_INDEXED } from './wiki-side.js';
+import { knFindCatIn, knLoadCats, renderCatsSurface, renderRecentSurface } from './wiki-front.js'; // #1841 안 4 — 첫 화면 = 최근(시간순) + 조건부 [검토할 것] / 카테고리는 탭 하나
+import { wkDayLabel, wkEmpty } from './wiki-ui.js';
+import { wkBoardHeader, wkDocCols, wkSurfaceTabs, wkTableGroup, wkTableRow, wkTbPill, wkTbPrimary, wkTbSearch } from './wiki-table.js'; // #1841 프로젝트 표 문법
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
 import { renderCategorySurface } from './wiki-category.js';
 import { reviewQueuePanel } from './review.js'; // #837 검토 큐 — 관리탭에서 이관(지식의 대기열이니 집은 WIKI)
 import { renderClassificationReview } from './classifications.js'; // #1102 분류 검토 대기 — 분류기 제안 확정/재분류/반려
-import { renderHomeSurface } from './wiki-home.js';
 // ── 라우터 진입 — sub ∈ { ''|new|pinned|sources|review|기타(구 space URL — 무시) } ──
 async function renderWiki(view, sub, params) {
     if (sub === 'new')
@@ -35,14 +39,14 @@ async function renderWiki(view, sub, params) {
 //  없으면 패널 안에서 서버가 403 을 돌려주고 그대로 안내된다.
 async function renderReviewQueue(view) {
     const host = el('div', {});
-    // '자료'와 같은 관례 — 사이드바 없는 보조 표면이므로 위키로 돌아가는 링크를 단다.
-    const back = el('div', { class: 'wk-src-filters', style: 'justify-content:flex-end' }, el('a', { class: 'wk-sec-act', href: '#/knowledge', text: '← 위키' }));
-    view.replaceChildren(el('div', { class: 'wk-plainpad' }, back, host));
+    // #1841 — 보조 표면도 같은 머리 3층(빵부스러기 · 문서/자료/검토 대기/휴지통 탭 · 툴바). 패널 자체(행·승인·diff)는 그대로.
+    const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: '검토 대기' }], sub: '인입 게이트에 걸린 지식·수정 제안을 승인·반려합니다', tabs: wkSurfaceTabs('review'), left: [], right: [] });
+    view.replaceChildren(el('div', { class: 'wk-plainpad wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, el('div', { class: 'wk-board-body' }, host))));
     await reviewQueuePanel(host);
 }
 // ── WIKI 셸 — 사이드바 + 콘텐츠 한 장. 상태 f 는 세션 전역(state.wiki). ──
 async function renderWikiSpace(view, params) {
-    const f = state.wiki = state.wiki || { category: '', folder: '', type: '', q: '', indexed: false, all: false };
+    const f = state.wiki = state.wiki || { category: '', folder: '', type: '', q: '', indexed: false, all: false, cats: false };
     // 파라미터 없는 진입 = 상단 WIKI 탭 클릭 등 '맨 진입' — 홈으로 리셋(이전 카테고리가 복원되면 놀란다).
     if (!params || Array.from(params.keys()).length === 0) {
         f.category = '';
@@ -51,15 +55,27 @@ async function renderWikiSpace(view, params) {
         f.q = '';
         f.indexed = false;
         f.all = false;
+        f.cats = false;
     }
     if (params) {
         // category 딥링크는 폴더 드릴다운을 리셋 — 세션 잔존 f.folder 가 다른 카테고리로 새면
         //  '폴더가 비어 있어요' 빈 화면이 뜬다. ?category=..&folder=.. 조합은 아래 folder 절이 다시 채운다.
+        if (params.has('cats')) {
+            f.cats = params.get('cats') === '1';
+            if (f.cats) {
+                f.category = '';
+                f.folder = '';
+                f.indexed = false;
+                f.all = false;
+                f.q = '';
+            }
+        }
         if (params.has('category')) {
             f.category = params.get('category') || '';
             f.indexed = false;
             f.all = false;
             f.folder = '';
+            f.cats = false;
         }
         if (params.has('folder'))
             f.folder = params.get('folder') || '';
@@ -90,7 +106,9 @@ async function renderWikiSpace(view, params) {
     // URL 동기화 — replaceState(피크 파라미터는 승계). 피크 기준 해시 재앵커.
     function syncHash() {
         const p = new URLSearchParams();
-        if (f.indexed)
+        if (f.cats)
+            p.set('cats', '1');
+        else if (f.indexed)
             p.set('indexed', '1');
         else if (f.all)
             p.set('all', '1');
@@ -111,21 +129,16 @@ async function renderWikiSpace(view, params) {
         reanchorWikiPeek();
     }
     const main = el('section', { class: 'wk-main' });
-    const sideCtl = createWikiSide({
-        selected: () => (f.indexed ? KN_INDEXED : f.category),
-        onSelect: (v) => selectCategory(v),
-        onOpen: (name) => { setWikiPeekList(null); openWikiPeek(name, { onRefresh: repaint }); },
-        tools: true,
-        uncategorized: true,
-    });
+    // 카테고리 목록은 화면이 직접 읽는다(사이드바가 없어졌다) — 세션 캐시 1콜, 카테고리 서고·행 칩이 같은 벌을 본다.
+    let bySpace = { business: [], product: [], system: [] };
     const ctx = {
         f,
         syncHash,
         repaint,
         selectCategory,
-        onCatChanged: () => sideCtl.rebuild(),
-        bySpace: sideCtl.bySpace,
-        findCat: sideCtl.findCat,
+        onCatChanged: () => { void knLoadCats(true).then((b) => { bySpace = b; }); },
+        bySpace: () => bySpace,
+        findCat: (v) => knFindCatIn(bySpace, v),
     };
     function selectCategory(v) {
         if (v === KN_INDEXED) {
@@ -140,37 +153,36 @@ async function renderWikiSpace(view, params) {
         f.type = '';
         f.q = '';
         f.all = false;
+        f.cats = false;
         syncHash();
-        sideCtl.rebuild();
         repaint();
     }
-    // repaint 는 매번 새 surface 박스를 깐다 — 사이드바 연타 등으로 비동기 렌더가 겹쳐도
-    //  늦게 끝난 이전 렌더는 자기(분리된) 박스에 그릴 뿐 최신 화면을 덮지 못한다.
+    // repaint 는 매번 새 surface 박스를 깐다 — 연타로 비동기 렌더가 겹쳐도 늦게 끝난 이전 렌더는
+    //  자기(분리된) 박스에 그릴 뿐 최신 화면을 덮지 못한다.
     function repaint() {
         const box = el('div', { class: 'wk-surface' });
         main.replaceChildren(box);
+        if (f.cats)
+            return renderCatsSurface(box, ctx);
         // type 이 category 와 함께면 카테고리 페이지의 인라인 필터가 처리 — 단독 딥링크만 목록으로.
         //  미분류(#1091)는 대문·폴더가 있을 수 없는 '남은 것' 묶음이라 카테고리 페이지가 아니라 평면 목록으로 간다.
         if (f.q || f.all || f.indexed || f.category === KN_UNCAT || (f.type && !f.category))
             return renderFilterList(box, ctx);
         if (f.category) {
-            const cat = sideCtl.findCat(f.category);
+            const cat = knFindCatIn(bySpace, f.category);
             if (cat)
                 return renderCategorySurface(box, cat, ctx);
-            // 카테고리를 못 찾음(삭제/딥링크 오류) — 홈으로 조용히 폴백.
+            // 카테고리를 못 찾음(삭제/딥링크 오류) — 첫 화면으로 조용히 폴백.
             f.category = '';
             f.folder = '';
             syncHash();
-            sideCtl.rebuild();
         }
-        return renderHomeSurface(box, ctx);
+        return renderRecentSurface(box, ctx); // #1841 첫 화면 = 최근(시간순) + 조건부 [검토할 것]
     }
-    const shell = el('div', { class: 'kn-shell' }, sideCtl.side, main);
-    knApplySideW(shell);
-    shell.append(knSideResizeHandle(shell));
-    await sideCtl.ready; // 카테고리 해석(findCat)·홈 지도(bySpace)에 필요
-    // 로딩(카테고리 fetch) 중 사용자가 다른 탭으로 떠났으면 여기서 멈춘다 — 늦은 mount 가
-    //  남의 화면을 덮고 replaceState 로 주소까지 되돌리는 경합 방지(라우터가 dataset.route 를 즉시 세팅).
+    const shell = el('div', { class: 'kn-shell kn-shell-flat' }, main);
+    bySpace = await knLoadCats(); // 카테고리 해석(findCat)·행 칩에 필요
+    // 로딩 중 사용자가 다른 탭으로 떠났으면 여기서 멈춘다 — 늦은 mount 가 남의 화면을 덮고
+    //  replaceState 로 주소까지 되돌리는 경합 방지(라우터가 dataset.route 를 즉시 세팅).
     if (document.body.dataset.route !== 'knowledge')
         return;
     view.replaceChildren(shell);
@@ -204,47 +216,49 @@ async function renderFilterList(box, ctx) {
     }
     const uncat = f.category === KN_UNCAT && !f.indexed;
     const title = f.indexed ? '인덱스' : (f.q ? '검색' : uncat ? '미분류' : '전체 지식');
-    const clearBits = [];
-    if (uncat)
-        clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '미분류 필터 지우기', text: '미분류 ×',
-            onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
-    if (f.q)
-        clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '검색 지우기', text: '"' + f.q + '" ×',
-            onclick: () => { f.q = ''; ctx.syncHash(); ctx.repaint(); } }));
-    if (f.type)
-        clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '유형 필터 지우기', text: (KN_TYPE_LABEL[f.type] || f.type) + ' ×',
-            onclick: () => { f.type = ''; ctx.syncHash(); ctx.repaint(); } }));
+    const hint = f.indexed ? '매 대화 첫머리에 항상 깔리는 핀 문서'
+        : (f.q ? '제목·본문 일치(정확 검색) — 의미로 찾으려면 ⌘K'
+            : uncat ? '카테고리가 없어 소환(recall)에 안 잡히는 지식 — 문서를 열어 분류를 지정하세요' : '');
     const cat = f.category ? ctx.findCat(f.category) : null;
-    if (cat)
-        clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '카테고리 필터 지우기', text: (cat.name || cat.key) + ' ×',
-            onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
-    const sec = wkSection(title, {
-        count: entries.length,
-        hint: f.indexed ? '매 대화 첫머리에 항상 깔리는 핀 문서'
-            : (f.q ? '제목·본문 일치(정확 검색) — 의미로 찾으려면 ⌘K'
-                : uncat ? '카테고리가 없어 소환(recall)에 안 잡히는 지식 — 문서를 열어 분류를 지정하세요' : null),
-        actions: clearBits,
-    });
     const names = entries.map((e) => e.name);
+    const openDoc = (x, rowEl) => { setWikiPeekList(names); openWikiPeek(x.name, { onRefresh: ctx.repaint, originEl: rowEl }); };
+    // #1841 머리 3층 — 빵부스러기(WIKI › 전체 지식) · 뷰 탭(문서·자료·검토 대기·휴지통) · 툴바(좌: 유형 알약 + 걸린 필터 / 우: 검색 · ＋ 새 페이지).
+    const typePills = [['', '전체'], ...Object.entries(KN_TYPE_LABEL)].map(([k, label]) => wkTbPill(label, { active: (f.type || '') === k, title: k ? (label + ' 유형만') : '모든 유형', onClick: () => { f.type = k; ctx.syncHash(); ctx.repaint(); } }));
+    const left = [...typePills];
+    if (uncat)
+        left.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '미분류 필터 지우기', text: '미분류 ×', onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
+    if (cat)
+        left.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '카테고리 필터 지우기', text: (cat.name || cat.key) + ' ×', onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
+    const right = [
+        wkTbSearch(f.q || '', '제목·본문 검색…', (q) => { if (q === (f.q || ''))
+            return; f.q = q; ctx.syncHash(); ctx.repaint(); }),
+        el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }),
+        wkTbPrimary('새 페이지', () => { location.hash = '#/knowledge/new' + (f.category && !uncat ? '?category=' + encodeURIComponent(f.category) : ''); }),
+    ];
+    const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: title }], sub: hint, tabs: wkSurfaceTabs('docs'), left, right });
+    const body = el('div', { class: 'wk-board-body' });
+    const cols = wkDocCols({ category: !cat || uncat, catName: (e) => e.category_name || '' });
     if (!entries.length) {
-        sec.body.append(wkEmpty(f.q ? '일치하는 문서가 없어요 — ⌘K 의미검색으로 시도해 보세요.' : '문서가 없습니다.'));
+        body.append(wkEmpty(f.q ? '일치하는 문서가 없어요 — ⌘K 의미검색으로 시도해 보세요.' : '문서가 없습니다.'));
+    }
+    else if (f.q) {
+        body.append(wkTableGroup('검색 결과', entries, { cols, open: openDoc, count: entries.length }));
     }
     else {
-        let curDay = '';
+        // 날짜 묶음 = 표의 그룹(프로젝트 표의 상태 그룹 자리). 접을 수 있고 건수는 남는다.
+        const byDay = [];
         for (const e of entries) {
-            if (!f.q) {
-                const day = wkDayLabel(e.updated_at);
-                if (day !== curDay) {
-                    curDay = day;
-                    sec.body.append(el('div', { class: 'wk-day-label', text: day }));
-                }
-            }
-            sec.body.append(wkRow(e, {
-                open: (x, rowEl) => { setWikiPeekList(names); openWikiPeek(x.name, { onRefresh: ctx.repaint, originEl: rowEl }); },
-            }));
+            const day = wkDayLabel(e.updated_at);
+            const last = byDay[byDay.length - 1];
+            if (last && last[0] === day)
+                last[1].push(e);
+            else
+                byDay.push([day, [e]]);
         }
+        for (const [day, list] of byDay)
+            body.append(wkTableGroup(day, list, { cols, open: openDoc }));
     }
-    box.replaceChildren(el('div', { class: 'wk-home' }, sec.el));
+    box.replaceChildren(el('div', { class: 'wk-home wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, body)));
 }
 // ════════════════════════════════════════════
 // 휴지통 #/trash — 죽은 문서는 바랜다(전 행 dim). 복원은 본체만(cascade 링크는 안 돌아옴).
@@ -262,18 +276,16 @@ async function renderWikiTrash(view) {
     }
     if (document.body.dataset.route !== 'trash')
         return; // 로딩 중 라우트 이탈 — 늦은 mount 방지
-    const sec = wkSection('휴지통', {
-        count: entries.length,
-        hint: '삭제된 지식·프로젝트·카테고리 — 본체만 복원됩니다(삭제 시 정리된 연결은 제외)',
-        actions: [el('a', { class: 'wk-sec-act', href: '#/knowledge', text: '← 위키' })],
-    });
+    const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: '휴지통' }], sub: '삭제된 지식·프로젝트·카테고리 — 본체만 복원됩니다(삭제 시 정리된 연결은 제외)', tabs: wkSurfaceTabs('trash'), left: [], right: [] });
+    const body = el('div', { class: 'wk-board-body' });
     if (!entries.length) {
-        sec.body.append(wkEmpty('휴지통이 비어 있습니다.'));
+        body.append(wkEmpty('휴지통이 비어 있습니다.'));
     }
     else {
-        for (const e of entries) {
-            const restoreBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '복원' });
-            restoreBtn.onclick = async () => {
+        const restoreCell = (e) => {
+            const restoreBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '복원' });
+            restoreBtn.onclick = async (ev) => {
+                ev.stopPropagation();
                 restoreBtn.disabled = true;
                 try {
                     await api('/api/ui/deleted/restore', { method: 'POST', body: JSON.stringify({ entity: e.entity, key: e.key }) });
@@ -287,11 +299,18 @@ async function renderWikiTrash(view) {
                     toast('복원 실패 — ' + err.message, true);
                 }
             };
-            const who = (e.actor ? e.actor : '') + (e.actor_kind ? ' (' + (e.actor_kind === 'ai' ? 'AI' : '사람') + ')' : '');
-            sec.body.append(el('div', { class: 'wk-trash-row' }, el('span', { class: 'wk-trash-kind', text: TRASH_ENTITY_LABEL[e.entity] || e.entity }), el('span', { class: 'wk-trash-title', text: e.label || e.key }), el('span', { class: 'wk-row-meta' }, who ? el('span', { class: 'wk-row-m', text: who }) : null, el('span', { class: 'wk-row-m', text: '삭제 ' + relTime(e.at) })), restoreBtn));
-        }
+            return restoreBtn;
+        };
+        const cols = [
+            { key: 'kind', label: '종류', width: '88px', render: (e) => el('span', { class: 'pjv-fval', text: TRASH_ENTITY_LABEL[e.entity] || e.entity }) },
+            { key: 'who', label: '삭제한 사람', width: '140px', render: (e) => el('span', { class: 'pjv-fval', text: (e.actor ? e.actor : '') + (e.actor_kind ? ' (' + (e.actor_kind === 'ai' ? 'AI' : '사람') + ')' : '') }) },
+            { key: 'at', label: '삭제', width: '92px', render: (e) => el('span', { class: 'pjv-fval', title: e.at || '', text: relTime(e.at) }) },
+            { key: 'restore', label: '', width: '84px', render: (e) => restoreCell(e) },
+        ];
+        const rows = entries.map((e) => ({ ...e, name: e.key, title: e.label || e.key, lifecycle: 'archived' }));
+        body.append(wkTableGroup(null, rows, { cols, open: () => { }, menu: () => [] }));
     }
-    view.replaceChildren(el('div', { class: 'wk-plainpad wk-trash' }, sec.el));
+    view.replaceChildren(el('div', { class: 'wk-plainpad wk-trash wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, body)));
 }
 // ════════════════════════════════════════════
 // 자료 #/knowledge/sources — 정제 전 원본(회의록·이메일·슬랙). 지식의 보조 입력층.
@@ -305,33 +324,34 @@ async function renderSources(view, params) {
     kindSel.setAttribute('aria-label', '종류');
     const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');
     provSel.setAttribute('aria-label', '출처');
-    const qIn = el('input', { type: 'search', class: 'wk-src-q', placeholder: '제목·본문 검색', 'aria-label': '검색', value: seedQ });
-    const listBox = el('div', { class: 'wk-sec-body' });
-    const sec = wkSection('자료', {
-        hint: '아직 정리하기 전의 원본 — 여기서 다듬으면 지식이 됩니다',
-        actions: [el('a', { class: 'wk-sec-act', href: '#/knowledge', text: '← 위키' })],
-    });
+    const qIn = el('input', { type: 'text', class: 'pjv-tb-search-input', placeholder: '제목·본문 검색…', 'aria-label': '검색', value: seedQ });
+    const listBox = el('div', { class: 'wk-board-body' });
     const moreBox = el('div', { class: 'wk-src-more' });
-    sec.body.append(el('div', { class: 'wk-src-filters' }, qIn, kindSel, provSel), listBox, moreBox);
-    view.replaceChildren(el('div', { class: 'wk-plainpad' }, sec.el));
+    // #1841 머리 3층 — 툴바 좌: 종류·출처 셀렉트 / 우: 검색(펼침). 자료는 지식이 아니라 '만들기'가 없다.
+    const qBox = el('div', { class: 'pjv-tb-search' + (seedQ ? ' open' : '') });
+    const qBtn = el('button', { class: 'pjv-tb-btn pjv-search-btn' + (seedQ ? ' active' : ''), type: 'button', title: '검색 — 제목·본문으로 좁혀 보기', 'aria-label': '검색' }, pjvTbIcon('search'));
+    qBtn.onclick = () => { qBox.classList.toggle('open'); if (qBox.classList.contains('open'))
+        qIn.focus();
+    else if (qIn.value) {
+        qIn.value = '';
+        loadPage(true);
+    } };
+    qBox.append(qBtn, qIn);
+    const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: '자료' }], sub: '아직 정리하기 전의 원본 — 여기서 다듬으면 지식이 됩니다', tabs: wkSurfaceTabs('sources'), left: [kindSel, provSel], right: [qBox] });
+    view.replaceChildren(el('div', { class: 'wk-plainpad wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, listBox, moreBox)));
+    const srcCols = [
+        { key: 'kind', label: '종류', width: '96px', render: (x) => el('span', { class: 'pjv-fval', text: SOURCE_KIND_LABEL[x.kind] || x.kind }) },
+        { key: 'chan', label: '채널', width: '140px', align: 'left', render: (x) => el('span', { class: 'pjv-fval wk-src-chan', text: (x.fields && x.fields.container_name) ? '#' + x.fields.container_name : '' }) },
+        { key: 'who', label: '작성자', width: '110px', render: (x) => el('span', { class: 'pjv-fval', text: (x.fields && x.fields.author_name) ? '@' + x.fields.author_name : '' }) },
+        { key: 'at', label: '시각', width: '92px', render: (x) => el('span', { class: 'pjv-fval', text: relTime(x.occurred_at || x.updated_at) }) },
+    ];
+    let tableBody = null; // 그룹 하나에 행을 이어 붙인다([더 보기]가 같은 표에 덧붙이게)
     const PAGE = 100;
     let offset = 0, loading = false;
     // 행 렌더 — 채널명(container_name)·작성자(author_name)는 커넥터-불가지 구조화 메타(source.fields)에서 표시(#735).
     //  slack=채널, 다른 커넥터도 각자 container/author 를 fields 에 담으면 동일하게 노출된다.
     function rowOf(s) {
-        const f = (s.fields || {});
-        const meta = el('span', { class: 'wk-row-meta' }, el('span', { class: 'wk-row-m', text: SOURCE_KIND_LABEL[s.kind] || s.kind }));
-        if (f.container_name)
-            meta.append(el('span', { class: 'wk-row-m wk-src-chan', text: '#' + f.container_name }));
-        if (f.author_name)
-            meta.append(el('span', { class: 'wk-row-m', text: '@' + f.author_name }));
-        meta.append(el('span', { class: 'wk-row-m', text: relTime(s.occurred_at || s.updated_at) }));
-        const row = el('div', { class: 'wk-row', role: 'button', tabindex: '0' }, el('span', { class: 'wk-tick' + (s.provenance === 'observed' ? ' mirror' : '') }), el('span', { class: 'wk-row-title', text: s.title || ('자료 #' + s.id) }), meta);
-        const open = () => openSourceDetail(s.id);
-        row.addEventListener('click', open);
-        row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter')
-            open(); });
-        return row;
+        return wkTableRow({ ...s, name: 'src:' + s.id, title: s.title || ('자료 #' + s.id) }, { cols: srcCols, open: () => openSourceDetail(s.id), menu: () => [] });
     }
     // 페이지네이션 — 서버 기본 100건 cap + has_more 를 [더 보기]로 이어붙인다(#735: 예전엔 limit/offset 미전송으로
     //  100건에서 잘려 나머지가 안 보였다). 필터 변경/검색은 reset(offset=0), 더보기는 append.
@@ -356,15 +376,22 @@ async function renderSources(view, params) {
             p.set('offset', String(offset));
             const r = await api('/api/ui/sources?' + p.toString());
             const entries = (r && r.entries) || [];
-            if (reset)
+            if (reset) {
                 listBox.replaceChildren();
+                tableBody = null;
+            }
             if (offset === 0 && !entries.length) {
                 listBox.replaceChildren(wkEmpty('자료가 없습니다. 커넥터(이메일·슬랙)나 회의록이 여기로 들어옵니다.'));
                 moreBox.replaceChildren();
                 return;
             }
+            if (!tableBody) {
+                const g = wkTableGroup(null, [], { cols: srcCols });
+                tableBody = g.querySelector('.wk-tbody');
+                listBox.append(g);
+            }
             for (const s of entries)
-                listBox.append(rowOf(s));
+                tableBody.append(rowOf(s));
             offset += entries.length;
             const total = (r && typeof r.total === 'number') ? r.total : offset;
             if (r && r.has_more) {

@@ -18,6 +18,7 @@ import { initAllSchemas } from "./schemas.js";
 import { ensureSelfRls } from "../db/self-rls.js";
 import { seedDefaultContent } from "../org/delivery/seed-content.js";
 import { seedBuiltinApps } from "../apps/seed.js";
+import { armWorkerRecovery } from "../apps/worker-service.js";
 import { armMemberDeactivationHook } from "../apps/member-deactivation.js";
 import { runAutoBackfillSweep } from "../v6/embedding-backfill.js";
 import { registerTerminal } from "../terminal/routes.js";
@@ -164,6 +165,11 @@ export const DB_BOOT_STEPS: BootStep[] = [
   { name: "seed-builtin-apps", gate: "always", run: () => seedBuiltinApps()
       .then((r) => { if (r.seeded.length || r.updated.length) logger.info(r, "빌트인 앱 시딩"); })
       .catch((err) => logger.warn({ err }, "빌트인 앱 시딩 실패(비치명)")) },
+  // AppInstance worker 부팅복구(#1780 Stage B) — 시딩 뒤 최신 package hash가 확정된 다음 중앙 run을 되살리고,
+  // 이미 연결됐거나 이후 연결되는 최신 RemoteNode의 fail-closed 종료 run도 같은 계약으로 재시작한다.
+  { name: "app-worker-recovery", gate: "always", run: () => armWorkerRecovery()
+      .then((r) => { if (r.central.restarted || r.central.failed || r.remote.some((x) => x.restarted || x.failed)) logger.info(r, "앱 worker 복구"); })
+      .catch((err) => logger.warn({ err }, "앱 worker 복구 실패(비치명 — 인스턴스 조회/노드 재연결이 재시도)")) },
   // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
   //  members.ts 의 단일 슬롯에 건다. 순수 배선(동기·DB 무접근)이라 어디 붙어도 되지만, 요청이 들어오기 전에 걸려야 한다.
   { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },

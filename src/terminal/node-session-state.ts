@@ -38,6 +38,7 @@ export function nodeSessionStateInput(session: SessionInfo, nodeId: string, inpu
     write_vis: input.writeVis ?? null, restrict_read: !!input.restrictRead,
     created: session.created || Math.floor(Date.now() / 1000), last_busy: null,
     node_id: nodeId,
+    app_id: input.appId || null,
   };
 }
 

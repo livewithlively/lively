@@ -9,7 +9,6 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { assertAppSessionPlacement } from "./session-create-guards.js";
 import { logger } from "../log.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -39,10 +38,31 @@ import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../se
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta } from "./session-meta.js";                 // #1820 — 죽은 세션이 '복원 가능'을 말하는 단일 판정
+import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
+import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
+import { sessionHandoffInput } from "./session-handoff.js";
+import { mintAppToken } from "../apps/principal.js";
+import { prepareAppAssets } from "../apps/session-assets.js";
+import { gatewayUrl } from "../gateway-url.js";
+
+/** #1683 후속2 — 그 세션이 어느 하네스로 떴나(tmux 세션 옵션 @box_harness). 모르면 빈 문자열. */
+async function sessionHarnessKey(id: string): Promise<string> {
+  try { const { getOpt } = await import("./tmux-exec.js"); return String((await getOpt(id, "@box_harness")) || ""); }
+  catch { return ""; }
+}
 
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
 function themeOf(req: { headers: Record<string, unknown> }, b: Record<string, unknown>): "dark" | "light" | undefined {
   return normalizeTheme(req.headers["x-lively-theme"]) ?? normalizeTheme(b.theme);
+}
+
+/** 원격 ExecutionHost에는 조직 DB가 없다. 게이트웨이가 앱 권한·토큰·자산을 확정해 내부 봉투로 넘긴다. */
+async function prepareRemoteAppSession(input: CreateInput, memberId: string): Promise<CreateInput> {
+  if (!input.appId) return input;
+  // 자산 무결성을 먼저 확인한 뒤 토큰을 굽는다. 자산 오류 때문에 사용되지 않는 자격이 생기는 시간을 줄인다.
+  const [assets, gw] = await Promise.all([prepareAppAssets(input.appId), gatewayUrl()]);
+  const { token } = await mintAppToken(memberId, input.appId, "app-spawn-remote");
+  return { ...input, appSession: { appId: input.appId, token, gatewayUrl: gw, assets } };
 }
 
 // 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
@@ -111,6 +131,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerSessionCrudRoutes(app, auth);
   registerRestoreReportRoutes(app, auth);
   registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys (CRUD 뒤 — 경로가 겹치지 않는다)
+  registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
   registerTerminalFiles(app, verifier);
@@ -149,6 +170,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       harnesses: HARNESSES.map((h) => ({
         key: h.key, label: h.label, bin: h.bin, provider: h.provider,
         hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags,
+        effortsByModel: h.effortsByModel,
         runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },
       })),
       members,
@@ -297,7 +319,24 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
-    res.json({ sessions: mergeSessionViews(local, remote, localRestorable) });
+    // #1851 휴지통 — 내 표식을 행에 얹는다: 휴지통에 있으면 trashedAt(화면이 사이드바에서 빼고 휴지통 화면에 그린다),
+    //  완전 삭제(purged)면 행 자체를 뺀다. 박스 id 와 대화 uuid 어느 이름으로든 표식이 있으면 그 세션의 것이다.
+    //  DB 가 죽어도 목록은 나간다(best-effort — 표식 없이).
+    let merged = mergeSessionViews(local, remote, localRestorable);
+    try {
+      const marks = await trashMapFor(idOf(userOf(req)));
+      if (marks.size) {
+        merged = merged.filter((s) => {
+          const m = marks.get(s.id) || (s.claudeSessionId ? marks.get(s.claudeSessionId) : undefined);
+          if (!m) return true;
+          if (m.purged) return false;
+          s.trashedAt = m.trashed_at;
+          if (m.project_id != null) s.trashedWith = m.project_id;   // 프로젝트와 함께 버림(묶음) — 화면이 따로 버린 것과 가른다
+          return true;
+        });
+      }
+    } catch { /* 표식 조회 실패 — 휴지통 없이 나간다 */ }
+    res.json({ sessions: merged });
   }));
   // 세션 종료 확인창이 '대화 기록이 남는지'를 **사실대로** 말하기 위한 최소 정책 조회(#1582).
   //  왜 필요한가: 종전 확인창은 전 화면에서 "되돌릴 수 없어요"라고 단언했지만, 종료(DELETE)는 tmux 를 죽이고
@@ -391,6 +430,37 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   //  ⚠ 인가는 **canAttach 와 동급**이다 — 입장할 수 있는 사람은 어차피 터미널에서 직접 칠 수 있으므로 더 좁힐 이유가
   //   없고, 더 넓히면 남의 AI 에게 명령하는 통로가 된다. 노드 세션은 nodeCanAttach(정책=게이트웨이).
   //  실행은 node/session-inject 가 로컬/원격을 갈라 맡는다 — 크론 주입과 **같은 경로**다(두 벌 두면 한쪽만 고쳐진다).
+  // 열려 있는 탭의 테마를 지금 바꾼다(#1683 후속2) — 화면의 '현재 열린 탭 모두 적용' 이 켜진 상태에서
+  //  사람이 테마를 바꾼 순간에만 불린다(자동 주입 금지 — send-keys.applyLiveTheme 주석).
+  //  ⚠ 한 세션이라도 실패하면 **그 사실을 그대로 돌려준다** — 화면이 "3개 바꿨어요 · 1개는 지원 안 해요" 를
+  //   말해야 하기 때문이다. 조용히 성공으로 접으면 사용자는 왜 한 탭만 다른지 알 길이 없다.
+  app.post("/api/ui/terminal/sessions/theme", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const theme = normalizeTheme(b.theme);
+    if (!theme) throw new HttpError(400, "테마 값이 dark|light 가 아닙니다");
+    const ids = Array.isArray(b.ids) ? b.ids.map((x) => String(x)).filter(Boolean).slice(0, 40) : [];
+    if (!ids.length) throw new HttpError(400, "대상 세션이 없습니다");
+    const { applyLiveTheme } = await import("./send-keys.js");
+    const { nodeOfSession } = await import("../node/registry.js");
+    const results: Array<{ id: string; status: string; detail?: string; harness?: string }> = [];
+    for (const id of ids) {
+      if (!(await canAttach(id, uid))) { results.push({ id, status: "error", detail: "접근할 수 없는 세션입니다" }); continue; }
+      const harness = await sessionHarnessKey(id);
+      const r = await applyLiveTheme(id, harness, theme);
+      // ⚠ 노드(멤버 PC) 세션 판정은 **라이브 관측 뒤에** 한다(#1716 과 같은 함정): 게이트웨이 박스가 노드로도
+      //  등록돼 있으면 그 박스의 로컬 세션이 노드 스냅샷에도 잡혀, 먼저 물어보면 로컬 세션까지 '노드'로 접힌다.
+      //  applyLiveTheme 이 로컬 tmux 에서 못 찾았을 때만(gone) 노드인지 되짚어 사유를 정확히 바꿔 준다.
+      if (r.status === "gone" && nodeOfSession(id)) {
+        results.push({ id, harness, status: "unsupported", detail: "노드 세션은 아직 지원하지 않습니다" });
+        continue;
+      }
+      results.push({ id, harness, ...r });
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ results, applied: results.filter((r) => r.status === "applied").length });
+  }));
+
   app.post("/api/ui/terminal/sessions/:id/prompt", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     const text = String(((req.body ?? {}) as Record<string, unknown>).text ?? "");
@@ -547,13 +617,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
     if (nodeId) {
-      assertAppSessionPlacement(input, nodeId); // #1780 v2 §7-1 — 앱 세션은 노드에 못 싣는다(relay 전에 400)
       await requireCreatableNode(req, nodeId);
       const me = idOf(userOf(req));
       const invites = await validateInvites(b.invites, me);
       // #1541 hostProfile — member 노드 && 생성자=주인이면 그 PC 의 네이티브 하네스 설정 그대로(CreateInput 주석). 조회 실패 = false(주입 유지).
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
-      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites });
+      const remoteInput = await prepareRemoteAppSession(input, me);
+      const op: NodeOp = input.appId ? "createAppSession" : "create";
+      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...remoteInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
       // #1791 — desired-state 정본은 게이트웨이가 쓴다(노드엔 DB 가 없다). 죽어도 '복원 가능(그 노드)'로 남는 근거.
       await mirrorNodeSession({ ...session, invites }, nodeId, input, me);
@@ -563,6 +634,39 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const session = await createSession(userOf(req), input);
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
     res.json({ session });
+  }));
+  // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
+  // CLI마다 런타임 설정 수단이 다르고(Codex는 /model 피커, Antigravity는 launch flag),
+  // 같은 프로세스 안에서 정직하게 통일할 수 없다. 대신 같은 작업 폴더·프로젝트·권한으로 새 세션을 띄우고,
+  // 화면이 보내 준 최근 공통 ChatLine 요약을 첫 지시로 주입한다. 사용자는 새 세션으로 곧바로 이동하고 계속 입력한다.
+  // 원 세션은 건드리지 않는다 — 새 세션 생성이나 첫 지시가 실패해도 진행 중 작업을 잃지 않는 안전망이다.
+  app.post("/api/ui/terminal/sessions/:id/handoff", auth, wrap(async (req, res) => {
+    const id = String(req.params.id || "");
+    const me = idOf(userOf(req));
+    const st = await getSessionState(id);
+    if (!st) throw new HttpError(409, "이 세션의 실행 설정을 찾지 못해 전환할 수 없습니다 — 새 세션으로 열어 주세요.");
+    if (st.owner !== me) throw new HttpError(403, "본인이 만든 세션만 다른 AI로 전환할 수 있습니다.");
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const harness = String(b.harness ?? st.harness ?? "").trim();
+    if (!HARNESSES.some((h) => h.key === harness && h.key !== "shell")) throw new HttpError(400, "전환할 AI가 올바르지 않습니다.");
+    const flags = (b.flags && typeof b.flags === "object" && !Array.isArray(b.flags)) ? b.flags as Record<string, unknown> : {};
+    const input = sessionHandoffInput(st, harness, flags, b.context);
+    input.theme = themeOf(req, b);
+    res.setHeader("Cache-Control", "no-store");
+    const nodeId = st.node_id || nodeOfSession(id) || "";
+    if (nodeId) {
+      await requireCreatableNode(req, nodeId);
+      const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
+      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites: st.invites });
+      await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      await mirrorNodeSession({ ...session, invites: st.invites }, nodeId, input, me);
+      res.json({ ok: true, from: id, session: { ...session, node: { id: nodeId, online: true } } });
+      return;
+    }
+    if (!(await canAttach(id, me))) throw new HttpError(409, "원래 세션이 이미 닫혀 전환할 수 없습니다 — 이어서 열기를 사용해 주세요.");
+    const session = await createSession(userOf(req), input);
+    await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
+    res.json({ ok: true, from: id, session });
   }));
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
@@ -704,13 +808,16 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
         projectId: st.project_id || undefined, projectSrc: st.project_src === "org" ? "org" : "v6",
         readOnly: st.read_only, incognito: st.incognito,
         writeVis: st.write_vis ?? undefined, restrictRead: !!st.restrict_read,
+        appId: st.app_id || undefined,
         ...(resumeId ? { resume: resumeId } : { resumePick: true }),
       };
       const owner = st.owner;
       // #1541 hostProfile — 원 소유자 기준(생성 때와 같은 판정). 조회 실패 = false(주입 유지).
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, owner)).catch(() => false);
       const invites = Array.isArray(st.invites) ? st.invites : [];
-      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: owner }, input: { ...input, invites: [], hostProfile }, invites });
+      const remoteInput = await prepareRemoteAppSession(input, owner);
+      const op: NodeOp = input.appId ? "createAppSession" : "create";
+      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: owner }, input: { ...remoteInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
       if (st.claude_session_id) {

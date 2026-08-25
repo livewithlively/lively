@@ -26,6 +26,9 @@ export interface AppFsWriter {
   writeFile(absPath: string, data: string, mode: number): Promise<void>;
 }
 
+/** 게이트웨이가 DB에서 준비해 원격 ExecutionHost에 넘길 수 있는 자산. 절대경로·자격은 싣지 않는다. */
+export interface PreparedAppAsset { path: string; body: string; mode: number }
+
 // 기본 writer — 게이트웨이 프로세스가 직접 쓴다(비격리 세션·단위/통합 테스트).
 export const directFsWriter: AppFsWriter = {
   mkdirp: async (d) => { await fsp.mkdir(d, { recursive: true, mode: 0o700 }); },   // mkdir 은 created path 를 반환 → void 로 삼킨다
@@ -100,6 +103,12 @@ export async function writeAppHome(sessionDir: string, token: string, gatewayUrl
  *  경로안전: orig_name 이 STRICT_SLUG(`/`·`.`·`..`·절대경로·공백 원천차단)가 아니면 거부(traversal 2차 방어).
  */
 export async function materializeAppAssets(sessionDir: string, appId: string, writer: AppFsWriter = directFsWriter): Promise<void> {
+  await materializePreparedAppAssets(sessionDir, await prepareAppAssets(appId), writer);
+}
+
+/** 정책/DB 쪽(게이트웨이)이 앱 자산을 직렬화 가능한 번들로 준비한다. */
+export async function prepareAppAssets(appId: string): Promise<PreparedAppAsset[]> {
+  const out: PreparedAppAsset[] = [];
   const comps = (await listComponents(appId)).filter((c) => c.kind === "harness_asset");
   for (const c of comps) {
     const origName = assertOrigNameSafe(appId, c.orig_name);
@@ -107,8 +116,28 @@ export async function materializeAppAssets(sessionDir: string, appId: string, wr
     if (!asset) throw new HttpError(500, `앱 '${appId}' 자산 행 없음: ${c.ref}`);
     const rel = assetDiskPath(asset.kind, origName);
     if (!rel) continue; // harness_asset 인데 kind 가 skill/subagent/command 가 아님(있을 수 없지만 방어) — skip
-    const abs = path.join(sessionDir, rel);
+    out.push({ path: rel, body: composeAssetFile(asset, origName), mode: 0o644 });
+  }
+  return out;
+}
+
+/** 실행 호스트가 준비된 번들을 자기 세션 디렉터리에 쓴다. 네트워크 입력이라 상대경로를 다시 봉쇄한다. */
+export async function materializePreparedAppAssets(sessionDir: string, assets: PreparedAppAsset[], writer: AppFsWriter = directFsWriter): Promise<void> {
+  const root = path.resolve(sessionDir);
+  for (const asset of assets) {
+    // 봉투 경로는 게이트웨이가 만든 POSIX 정본 형식만 받는다. 단순 prefix 검사는
+    // `.claude/skills/../../.lively/token`도 통과시키므로, 종류별 최종 모양과 slug를 모두 확인한다.
+    const rel = String(asset.path ?? "");
+    const parts = rel.split("/");
+    const skill = parts.length === 4 && parts[0] === ".claude" && parts[1] === "skills" && parts[3] === "SKILL.md" ? parts[2] : null;
+    const leaf = parts.length === 3 && parts[0] === ".claude" && (parts[1] === "agents" || parts[1] === "commands") && parts[2].endsWith(".md")
+      ? parts[2].slice(0, -3) : null;
+    if (rel.includes("\\") || !(skill ? STRICT_SLUG.test(skill) : leaf ? STRICT_SLUG.test(leaf) : false)) {
+      throw new HttpError(400, `허용되지 않은 앱 자산 경로입니다: ${asset.path}`);
+    }
+    const abs = path.resolve(root, asset.path);
+    if (abs !== root && !abs.startsWith(root + path.sep)) throw new HttpError(400, `앱 자산 경로가 세션 밖을 가리킵니다: ${asset.path}`);
     await writer.mkdirp(path.dirname(abs));
-    await writer.writeFile(abs, composeAssetFile(asset, origName), 0o644);
+    await writer.writeFile(abs, asset.body, asset.mode === 0o600 ? 0o600 : 0o644);
   }
 }

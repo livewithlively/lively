@@ -460,6 +460,20 @@
         window.parent.location.hash = u.hash;
         return;
       }
+      const toPane = u.origin === location.origin && /\/preview\/[^/]+\//.test(u.pathname) || /(^|\.)claude\.ai$/.test(u.hostname) && /^\/code\/artifact\//.test(u.pathname);
+      if (toPane && window.parent !== window) {
+        let taken = false;
+        const ack = (e) => {
+          if (e.data && e.data.type === "lively:open-in-pane:ok") taken = true;
+        };
+        window.addEventListener("message", ack);
+        window.parent.postMessage({ type: "lively:open-in-pane", url: u.href }, location.origin);
+        window.setTimeout(() => {
+          window.removeEventListener("message", ack);
+          if (!taken) window.open(uri, "_blank", "noopener");
+        }, 400);
+        return;
+      }
     } catch (_) {
     }
     window.open(uri, "_blank", "noopener");
@@ -659,7 +673,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build d611c591",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 2c667e07",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -1221,12 +1235,34 @@
   function copyHintToast() {
     if (Date.now() - copyHintAt < 8e3) return;
     copyHintAt = Date.now();
-    toast("\uBCF5\uC0AC\uD560 \uC120\uD0DD\uC774 \uC5C6\uC5B4\uC694 \u2014 \uB4DC\uB798\uADF8\uB85C \uC120\uD0DD\uD55C \uB4A4 \u2318C (\uC6F9 \uC120\uD0DD\uC740 Shift+\uB4DC\uB798\uADF8)");
+    toast("\uBCF5\uC0AC\uD560 \uC120\uD0DD\uC774 \uC5C6\uC5B4\uC694 \u2014 \uB4DC\uB798\uADF8\uD558\uAC70\uB098 \uB354\uBE14\uD074\uB9AD\uC73C\uB85C \uC120\uD0DD\uD55C \uB4A4 \u2318C \uD558\uC138\uC694 (\uC548 \uB418\uBA74 Shift+\uB4DC\uB798\uADF8\uB85C \uC120\uD0DD)");
+  }
+  var bridgeMissTimer = null;
+  function armBridgeMissHint() {
+    clearTimeout(bridgeMissTimer);
+    bridgeMissTimer = setTimeout(() => {
+      bridgeMissTimer = null;
+      dlog("bridge-miss");
+      toast("\uBCF5\uC0AC\uB418\uC9C0 \uC54A\uC558\uC5B4\uC694 \u2014 \uD654\uBA74\uC5D0\uC11C Shift+\uB4DC\uB798\uADF8\uB85C \uC120\uD0DD\uD55C \uB4A4 \u2318C \uD558\uC2DC\uBA74 \uD655\uC2E4\uD788 \uBCF5\uC0AC\uB429\uB2C8\uB2E4", true);
+    }, 2500);
+  }
+  function cancelBridgeMissHint() {
+    if (!bridgeMissTimer) return;
+    clearTimeout(bridgeMissTimer);
+    bridgeMissTimer = null;
   }
   var dragPress = null, dragMoved = false;
+  var MULTI_CLICK_MS = 600;
+  var clickRun = 0, clickAt = 0, clickPos = "";
+  function clearAppSelect() {
+    appDragSelect = false;
+    clickRun = 0;
+    clickAt = 0;
+    clickPos = "";
+  }
   function trackAppMouse(d) {
     if (!(d.charCodeAt(0) === 27 && d.charCodeAt(1) === 91 && d.charCodeAt(2) === 60)) {
-      if (d.charCodeAt(0) !== 27) appDragSelect = false;
+      if (d.charCodeAt(0) !== 27) clearAppSelect();
       return;
     }
     const re = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
@@ -1243,8 +1279,20 @@
         dragPress = m[2] + "," + m[3];
         dragMoved = false;
       } else {
-        appDragSelect = !!(dragPress && (dragMoved || dragPress !== m[2] + "," + m[3]));
-        if (appDragSelect) dlog("app-drag-select");
+        const pos = m[2] + "," + m[3];
+        const now = Date.now();
+        if (dragPress && (dragMoved || dragPress !== pos)) {
+          appDragSelect = true;
+          clickRun = 0;
+          clickAt = 0;
+          clickPos = "";
+        } else {
+          clickRun = clickPos === pos && now - clickAt <= MULTI_CLICK_MS ? clickRun + 1 : 1;
+          clickAt = now;
+          clickPos = pos;
+          appDragSelect = clickRun >= 2;
+        }
+        if (appDragSelect) dlog("app-drag-select", "run=" + clickRun);
         dragPress = null;
         dragMoved = false;
       }
@@ -1308,7 +1356,7 @@
         sendInput(d);
         imeEcho = d.length === 1 && HANGUL_CH_RE.test(d) ? d : "";
         imeEchoDone = "";
-        appDragSelect = false;
+        clearAppSelect();
         dlog("ime", "echo " + diagPreview(d, 8));
       }
     }, true);
@@ -1366,6 +1414,7 @@
             }
             if (text) {
               dlog("osc52", "len=" + text.length);
+              cancelBridgeMissHint();
               if (osc52Resolve) {
                 const r = osc52Resolve;
                 osc52Resolve = null;
@@ -1668,9 +1717,10 @@
         if (e.metaKey && !e.ctrlKey) {
           if (mouseOn) {
             if (appDragSelect) {
-              appDragSelect = false;
+              clearAppSelect();
               armClipboardPromise();
               sendInput("");
+              armBridgeMissHint();
               dlog("cmdc-bridge", "consume");
             } else {
               dlog("cmdc-skip", "no-app-selection");
@@ -2583,7 +2633,8 @@
         sec(
           "\uBCF5\uC0AC",
           kb(["\uB4DC\uB798\uADF8 \u2192 \u2318/Ctrl C"], "\uB4DC\uB798\uADF8\uB85C \uC120\uD0DD\uD55C \uB4A4 \uBCF5\uC0AC \u2014 \uC790\uB3D9 \uBCF5\uC0AC\uB294 \uC5C6\uC5B4\uC694(\uD074\uB9BD\uBCF4\uB4DC \uC548 \uB36E\uC784)"),
-          kb(["Shift \uB4DC\uB798\uADF8"], "Claude \uC548\uC5D0\uC11C\uB294 Shift \uB204\uB978 \uCC44 \uB4DC\uB798\uADF8\uB85C \uC120\uD0DD"),
+          kb(["\uB354\uBE14\uD074\uB9AD"], "\uB2E8\uC5B4 \uD558\uB098\uB9CC \uBE60\uB974\uAC8C \u2014 \uC138 \uBC88 \uB204\uB974\uBA74 \uADF8 \uC904 \uC804\uCCB4\uAC00 \uC120\uD0DD\uB429\uB2C8\uB2E4"),
+          kb(["Shift \uB4DC\uB798\uADF8"], "Claude \uC548\uC5D0\uC11C \uC120\uD0DD\uC774 \uC798 \uC548 \uB420 \uB54C\uB294 Shift \uB204\uB978 \uCC44 \uB4DC\uB798\uADF8"),
           kb(["Claude \uBCF5\uC0AC"], "Claude \uAC00 \uBCF5\uC0AC\uD55C \uB0B4\uC6A9\uC740 \uB0B4 \uCEF4\uD4E8\uD130 \uD074\uB9BD\uBCF4\uB4DC\uC5D0\uB3C4 \uC790\uB3D9\uC73C\uB85C \uC62C\uB77C\uAC00\uC694"),
           kb(["\u2318C (\uC120\uD0DD \uC5C6\uC774)"], "Claude \uD654\uBA74\uC5D0\uC11C \uC120\uD0DD \uC5C6\uC774 \u2318C \uB97C \uB20C\uB7EC\uB3C4 \uC774\uC81C Claude \uAC00 \uC885\uB8CC\uB418\uC9C0 \uC54A\uC544\uC694")
         ),
@@ -2598,7 +2649,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "d611c591 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "2c667e07 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
