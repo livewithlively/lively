@@ -368,27 +368,9 @@ function instanceIcon(inst: SideInstance): SVGElement {
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
  * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
  */
-function render(): void {
-  if (!last) return;
-  // SideHooks.instances 를 모르는 이전 임베더는 기존 프로젝트 트리를 그대로 받는다.
-  if (!hooks.instances) { renderLegacy(); return; }
-  const { host, data } = last;
-  const wsReg: any = (state.me as any)?.workspace_registry || {};
-  const wsKind = (wsReg.active && wsReg.kind) || ((state.me as any)?.workspace?.kind);
-  host.closest('.v2-side')?.classList.toggle('ws-personal', wsKind === 'personal');
-
-  const me: any = state.me || {};
-  const name = String(me.display_name || me.email || me.userId || '');
-  const faceOwners = [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
-  const instances = hooks.instances();
-  const q = sideFilter.trim().toLowerCase();
-  const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
-  const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
-
-  const prevScroll = appListEl ? appListEl.scrollTop : 0;
-  const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
-  const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
-  const rowEl = (inst: SideInstance): HTMLElement => el('div',
+/** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다. */
+function appRowEl(inst: SideInstance): HTMLElement {
+  return el('div',
     { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : ''), role: 'listitem', 'data-instance': inst.id },
     el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id) },
@@ -410,34 +392,86 @@ function render(): void {
           onclick: () => hooks.onOpenProject?.(inst.project!.id) },
           glyph('folder', 'v2-app-inst-project-ic'),
           el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
-      : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' }));
+      : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
+}
 
+/** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
+function appListKids(shown: SideInstance[], q: string): HTMLElement[] {
+  const kids: HTMLElement[] = [];
   //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
-  const rows: HTMLElement[] = [];
   let lastGroup = '';
   for (const inst of shown) {
     const g = inst.group || '';
-    if (g && g !== lastGroup) { rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g })); lastGroup = g; }
-    rows.push(rowEl(inst));
+    if (g && g !== lastGroup) { kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g }) as HTMLElement); lastGroup = g; }
+    kids.push(appRowEl(inst));
   }
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' },
-    ...rows,
-    ...(!shown.length ? [el('div', { class: 'v2-app-empty' },
-      el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }),
-      q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
-        : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() }))] : []));
+  if (shown.length) return kids;
+  return [el('div', { class: 'v2-app-empty' },
+    el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }),
+    q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
+      : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() })) as HTMLElement];
+}
+
+/** 검색어를 칠 때의 갱신 — **목록만** 갈아 끼운다. 검색칸·머리글은 손대지 않는다(살아 있는 노드 = 살아 있는 IME 조합).
+ *  머리글의 개수 배지는 거르기 전 전체 수라 검색어로 변하지 않으므로 여기서 손댈 것이 없다. */
+function paintAppList(): void {
+  if (!appListEl || !hooks.instances) return;
+  const q = sideFilter.trim().toLowerCase();
+  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  appListEl.replaceChildren(...appListKids(shown, q));
+  appListEl.scrollTop = 0;   // 거르고 나면 맨 위가 첫 결과다
+}
+
+/** 검색칸에서 글자를 조합하는 중(한글 등). 이때 전면 재렌더가 돌면 입력칸이 새로 나 조합이 끊긴다(#1958). */
+let findComposing = false;
+
+function render(): void {
+  if (!last) return;
+  // SideHooks.instances 를 모르는 이전 임베더는 기존 프로젝트 트리를 그대로 받는다.
+  if (!hooks.instances) { renderLegacy(); return; }
+  // 검색칸에서 한글을 조합하는 중이면 이번 판은 건너뛴다 — 20초 폴링이 입력칸을 새로 만들면 그 글자가 자모로
+  //  흩어진다(실측: 아무것도 안 해도 30초에 한 번 입력칸이 새로 난다). renderLegacy 의 `renaming` 가드와 같은 규율:
+  //  갱신은 **다시 오지만**, 사람이 치던 글자는 다시 오지 않는다. 조합이 끝나면 다음 폴링이 곧 따라잡는다.
+  if (findComposing) return;
+  const { host, data } = last;
+  const wsReg: any = (state.me as any)?.workspace_registry || {};
+  const wsKind = (wsReg.active && wsReg.kind) || ((state.me as any)?.workspace?.kind);
+  host.closest('.v2-side')?.classList.toggle('ws-personal', wsKind === 'personal');
+
+  const me: any = state.me || {};
+  const name = String(me.display_name || me.email || me.userId || '');
+  const faceOwners = [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
+  const instances = hooks.instances();
+  const q = sideFilter.trim().toLowerCase();
+  const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
+
+  const prevScroll = appListEl ? appListEl.scrollTop : 0;
+  const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
+  const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
+  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' }, ...appListKids(shown, q));
   appListEl = listEl;
   listEl.scrollTop = prevScroll;
 
   const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '열린 앱 찾기', 'aria-label': '열린 앱 찾기', value: sideFilter,
-    oninput: (e: any) => { sideFilter = e.target.value; redraw(); markFind(); },
+    // ⚠ 타이핑 중에는 **목록만** 갈아 끼운다 — 사이드바를 통째로 다시 그리면 이 입력칸도 새로 나고,
+    //  그 순간 브라우저의 IME 조합이 끊긴다. 한글은 한 글자가 여러 타건의 조합이라 매 타건이 따로 확정되어
+    //  "안녕"이 "ㅇㅏㄴㄴㅕㅇ"로 흩어진다(원준 2026-08-25 신고 · 앱·크롬 공통 = 브라우저 문제가 아니다).
+    //  포커스를 복원해도 소용없다 — 조합 상태는 노드에 붙어 있어 노드가 죽으면 같이 죽는다.
+    oninput: (e: any) => { sideFilter = e.target.value; paintAppList(); markFind(); },
     onkeydown: (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      // 한글 조합 중의 Esc 는 '조합 취소'지 '검색 지우기'가 아니다(레포 불변식 #505) — 치던 글자만 물러난다.
+      if (e.isComposing || (e as any).keyCode === 229) return;
       e.stopPropagation();
       if (sideFilter) sideFilter = ''; else findOpen = false;
       redraw();
     },
-    onblur: () => { if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
+    //  조합 중엔 전면 재렌더를 멈춘다(위 render() 머리의 가드). 조합이 끝나면 바로 푼다.
+    oncompositionstart: () => { findComposing = true; },
+    oncompositionend: () => { findComposing = false; },
+    //  칸을 떠나면 조합도 끝난 것 — compositionend 를 못 받는 환경이 있어도 사이드바가 굳지 않게 여기서도 푼다.
+    onblur: () => { findComposing = false; if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
 
   //  데스크톱 앱이면 이 줄은 창 맨 윗줄로 간다(#1954 상민님: 상단 탭이 빠져 그 자리가 비었다).
   //  브라우저에선 navHost 가 null 이라 종전대로 사이드바 맨 위에 남는다.
