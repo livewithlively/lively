@@ -25,6 +25,7 @@ import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
+import { autoTrustWorkspace } from "./session-create-guards.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
 // #1780 D3·D4 — 앱 세션: 앱 토큰 발급 + 세션 폴더에 앱 홈·앱 하네스 자산 물질화.
 import { mintAppToken } from "../apps/principal.js";
@@ -646,15 +647,18 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  노드를 골라 연 세션의 첫 지시가 안 들어가던 원인, #1744). 노드에선 DB 없이 로컬 tmux 로 바로 넣는 injectFirstPrompt 를
     //  쓴다 — 입력창·신뢰 대화상자 판정이 그 안에 있고(session-first-prompt.ts), 파일·tmux 가 그 컴퓨터에 있어 로컬이 맞다.
     //  게이트웨이(중앙 박스) 세션은 종전대로 아웃박스: 로그인 화면이면 큐가 들고 있다가 입력창이 뜨면 넣고, 못 넣으면 failed
-    //  로 남아 화면이 재시도를 준다. 동적 import — 정적이면 순환(check-imports). cwd는 사용자 workspace라 trust를 자동 승인하지 않는다.
+    //  로 남아 화면이 재시도를 준다. 동적 import — 정적이면 순환(check-imports).
+    //  신뢰 대화상자 자동 수락은 **라이블리가 만든 자리에서만**(#1867) — 루트 그 자체이거나 그 프로젝트의 canonical 폴더.
+    //   사람이 고른 임의 폴더면 사람이 답한다(autoTrustWorkspace). 이 판정을 빼면 프로젝트 세션의 첫 지시가 대화상자에 막힌다(실측).
+    const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
     const onNode = !!process.env.LIVELY_NODE_TOKEN;   // 노드 에이전트 프로세스에만 있는 값(게이트웨이엔 없다 — 안전한 판별자)
     if (onNode) {
       void import("./session-first-prompt.js")
-        .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk: false }))
+        .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk }))
         .catch((e) => { console.warn(`[terminal] 노드 첫 지시 주입 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
     } else {
       void import("../sessions/session-outbox.js")
-        .then(({ enqueuePrompt }) => enqueuePrompt(id, prompt, { trustOk: false }))
+        .then(({ enqueuePrompt }) => enqueuePrompt(id, prompt, { trustOk }))
         .catch((e) => { console.warn(`[terminal] 첫 지시 큐 등록 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
     }
   }
