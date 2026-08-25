@@ -1061,7 +1061,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   /* ── 부팅 ── */
   $('#composeGo').onclick = composeSend;
   $('#composeIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) composeSend(); });
-  const want = new URLSearchParams(location.search).get('scene');
+  // 장면 바로 열기 — 셸에선 질의가 해시 뒤에 붙는다(#/welcome?scene=b1). 검토용.
+  const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
   if (want && STEP_OF[want] != null) { goScene(want); }
   else { renderSB(); goScene(S.scene || 'name'); }
   return { destroy() { clearInterval(readTimer); clearTimeout(toastT); ctx.onBare && ctx.onBare(false); } };
