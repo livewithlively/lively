@@ -1747,6 +1747,10 @@ export function v2Refresh(): void { void loadData().then(() => { drawSide(); if 
 // 사이드바에서 세션 기록을 완전 삭제하면(#1850) 목록·카운트를 서버 기준으로 다시 맞춘다.
 //  side.ts 가 여기를 직접 import 하면 순환(main→side→main)이라 이벤트로 받는다.
 window.addEventListener('lively:session-purged', () => { v2Refresh(); });
+// #1875 — 구성원이 바뀌면(초대 수락·구성원 제거) 문패 배지가 즉시 따라와야 한다. 개인/팀은 인원 수에서
+//  나오므로, 인원이 변한 순간 사이드바를 다시 그리지 않으면 '개인'이라 적힌 채로 둘이 쓰는 화면이 된다.
+//  switcher 가 main 을 직접 import 하면 순환이라 위와 같은 이유로 이벤트로 받는다.
+document.addEventListener('lively:ws-people-changed', () => { drawSide(); });
 export function v2Toast(msg: string): void { toast(msg); }
 // 지금 열려 있는 **세션 탭**의 세션 id 들(#1683 후속2) — '현재 열린 탭 모두 적용' 이 이걸 대상으로 삼는다.
 //  세션 탭만 골라낸다(홈·프로젝트·앱 탭은 하네스가 없다). chat 핸들이 곧 그 탭이 붙어 있는 세션이다.

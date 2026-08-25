@@ -102,6 +102,31 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ws-promo-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .v2-ws-promo-acts { flex: none; display: flex; gap: 4px; }
 
+/* ── #1875 구성원 · 초대 ── 스위처 메뉴 안. 사람을 부르는 일은 관리 업무가 아니라 '여기가 어느 집인가'의
+   뒷면이라 같은 자리에 산다. 행 규격은 위 promo 줄과 같게 — 같은 층은 같은 모양이어야 한다. */
+.v2-ws-people, .v2-ws-inbox { display: flex; flex-direction: column; gap: 1px; }
+.v2-ws-person { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px; }
+.v2-ws-person:hover { background: var(--bg-tint); }
+.v2-ws-person-face { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center;
+  background: var(--bg-tint-2); color: var(--ink-sub); font-size: 10px; font-weight: 800; }
+/* 대기 중인 사람은 얼굴이 아직 없다 — 점선 테두리가 '아직 사람이 아니다'를 말한다(빈 원은 오류로 읽힌다). */
+.v2-ws-person-face.waiting { background: none; border: 1px dashed var(--muted-3); color: var(--muted-2); font-weight: 400; }
+.v2-ws-person-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.v2-ws-person-tt b { font-size: 12.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-ws-person-tt span { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-ws-person.pending .v2-ws-person-tt b { color: var(--ink-sub); font-weight: 500; }
+.v2-ws-invite { display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 4px; }
+/* 목록 행의 '수락 대기 n' — 배지가 아니라 꼬리표다(배지는 개인/팀 축이 이미 쓰고 있다). */
+.v2-ws-pend { flex: none; font-size: 10px; font-weight: 700; color: var(--warn-deep); background: var(--warn-bg);
+  border: 1px solid var(--warn-line, var(--line)); border-radius: 5px; padding: 1px 5px; }
+/* 나에게 온 초대 — 메뉴 맨 위. 내가 결정해 줘야 저쪽이 기다림을 멈추므로 눈에 먼저 들어와야 한다. */
+.v2-ws-invite-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px;
+  background: var(--bg-punch); border: 1px solid var(--line-net-2); margin: 0 0 2px; }
+.v2-ws-invite-main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.v2-ws-invite-main b { font-size: 12.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-ws-invite-main span { font-size: 10.5px; color: var(--blue); }
+.v2-ws-invite-acts { flex: none; display: flex; gap: 4px; }
+
 /* ── 사이드바 ── */
 /* ★사이드바 좌표계(상민님 2026-08-19 "여백·폰트·스크롤바 밸런스가 하나도 안 맞는다") — 규칙 셋만 지킨다.
    ① **글자 기둥 하나**: 모든 행의 글자가 --rail 에서 시작한다. 실측(재설계 전)은 헤더 18 · 리브 54 ·
