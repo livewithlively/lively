@@ -774,9 +774,17 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     /* 앱 고르기 — 로컬 파일은 앞에서 받았으므로 '내 컴퓨터 폴더' 항목은 뺀다. */
     sources: {
       html: () => {
-        const rows = DATA.SOURCE_ROWS
-          .map((r) => ({ k: r.k, items: r.items.filter((it) => it.id !== 'folder') }))
-          .filter((r) => r.items.length);
+        // 뺀 둘: '내 컴퓨터 폴더'는 앞 단계(파일 올리기)가 대신하고, '딱히 없어요'는 아래 건너뛰기가 이미 그 자리다
+        //  (버튼으로 두면 글이 길어 두 줄로 잘린다). 남은 '로컬 깃 저장소'는 하나뿐이라 '그 밖'으로 합친다(원준님 2026-08-25).
+        const DROP = new Set(['folder', 'none']);
+        const rows = [];
+        for (const r of DATA.SOURCE_ROWS) {
+          const items = r.items.filter((it) => !DROP.has(it.id));
+          if (!items.length) continue;
+          const k = r.k === '내 컴퓨터' ? '그 밖' : r.k;
+          const hit = rows.find((x) => x.k === k);
+          if (hit) hit.items = hit.items.concat(items); else rows.push({ k, items });
+        }
         return qHead('sources',
           S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 그동안 하나 더요.` : '알겠습니다. 하나 더 여쭐게요.',
           '그동안 쌓아 두신 자료도 가져올까요?',
@@ -814,7 +822,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           + `<div class="ob-opt-cards">${picked.map((id) => { const it = all.find((s) => s.id === id) || { label: id };
               const on = S.connected.includes(id);
               return `<button class="ob-opt-card ${on ? 'ob-on' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span class="ob-oc-st"><span class="v2-dot ${on ? 'done' : 'off'}" style="margin:0"></span></span>
-                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '가져오는 중이에요. 새 자료도 따라옵니다.' : '눌러서 잇기 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
+                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '연결이 완료됐어요.' : '눌러서 잇기 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
           <button class="ob-btn ob-btn-pri" id="upGo" ${S.connected.length ? '' : 'disabled'}>${left > 0 && S.connected.length ? `${left}개는 나중에, 계속` : '다 이었어요, 계속'}</button>
           <button class="ob-q-skip" data-skip>나중에 가져올게요</button>`;
       },
