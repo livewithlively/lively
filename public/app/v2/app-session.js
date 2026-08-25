@@ -10,6 +10,7 @@
 //   **한 번** 재시도한다. 거절하면 조용히 멈춘다(세션 안 뜸).
 import { api, el, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
+import { chooseAppExecution, ensureSessionAppInstance } from './app-instance.js';
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
 export async function listSessionApps() {
     try {
@@ -25,11 +26,17 @@ export async function listSessionApps() {
             const sites = (csp.frame_domains || []).map(String);
             const net = [...(csp.connect_domains || []), ...(perm.hosts || [])].map(String);
             const instances = (a.manifest && a.manifest.instances) || { project: 'optional', multiplicity: 'multiple' };
+            const runtime = a.manifest?.runtime?.kind === 'worker' ? {
+                kind: 'worker',
+                placement: a.manifest.runtime.placement,
+                idle_timeout_sec: Number(a.manifest.runtime.idle_timeout_sec || 300),
+                memory_mb: Number(a.manifest.runtime.memory_mb || 256),
+            } : null;
             const source = (a.source && typeof a.source === 'object') ? a.source : {};
             // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
             const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
             return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-                scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, system, source };
+                scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, runtime, system, source };
         });
     }
     catch (e) {
@@ -59,7 +66,7 @@ export function ensureAppGrant(appId, title) {
     const run = (async () => {
         const app = (await listSessionApps()).find((a) => a.id === appId)
             || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [],
-                instances: { project: 'optional', multiplicity: 'multiple' }, system: null, source: {} };
+                instances: { project: 'optional', multiplicity: 'multiple' }, runtime: null, system: null, source: {} };
         if (!(await appConsent(app)))
             return false;
         await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
@@ -73,6 +80,17 @@ export async function spawnAppSession(appId, opts) {
         return null;
     spawning = true;
     try {
+        const app = (await listSessionApps()).find((item) => item.id === appId);
+        let execution;
+        if (app?.runtime) {
+            // worker는 화면을 보기만 하는 것과 달리 실제 코드를 실행하므로 세션을 만들기 전에 grant와 위치를 확정한다.
+            if (!(await ensureAppGrant(appId, opts?.title || app.title)))
+                return null;
+            const selected = await chooseAppExecution(opts?.title || app.title, app.runtime);
+            if (!selected)
+                return null;
+            execution = selected;
+        }
         let id = '';
         try {
             id = await postAppSession(appId, opts);
@@ -92,6 +110,19 @@ export async function spawnAppSession(appId, opts) {
                 await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + '/project', { method: 'POST', body: JSON.stringify({ projectId: Number(opts.projectId) }) });
             }
             catch (_) { /* noop */ }
+        }
+        try {
+            await ensureSessionAppInstance(appId, id, {
+                projectId: opts?.projectId ?? null,
+                title: opts?.title || app?.title || appId,
+                execution,
+            });
+        }
+        catch (error) {
+            // 세션은 이미 만들어졌다. AppInstance/worker 메타 실패가 대화 자체를 회수하지 않게 하되 원인은 숨기지 않는다.
+            console.warn('[app-instance] 앱 세션 인스턴스 확보 실패', error);
+            if (app?.runtime)
+                toast('세션은 열렸지만 앱 worker를 시작하지 못했어요 — ' + (error?.message || error), true);
         }
         return { id };
     }
@@ -142,7 +173,7 @@ function appConsent(app) {
             : [el('span', { class: 'v2-consent-chip none', text: empty })]);
         const ov = el('div', { class: 'v2-consent-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': app.title + ' 사용 동의',
             onclick: (e) => { if (e.target === ov)
-                finish(false); } }, el('div', { class: 'v2-consent' }, el('h3', { class: 'v2-consent-t', text: '「' + app.title + '」을(를) 내 자격으로 실행할까요?' }), el('p', { class: 'v2-consent-sub', text: '이 앱이 여는 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }), el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))), el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))), 
+                finish(false); } }, el('div', { class: 'v2-consent' }, el('h3', { class: 'v2-consent-t', text: '「' + app.title + '」을(를) 내 자격으로 실행할까요?' }), el('p', { class: 'v2-consent-sub', text: '이 앱의 화면·worker·AI 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }), el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))), el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))), 
         // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
         app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null, app.net.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '연결' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.net, ''))) : null, el('div', { class: 'v2-consent-acts' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => finish(false) }), el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '동의하고 열기', onclick: () => finish(true) }))));
         document.body.append(ov);

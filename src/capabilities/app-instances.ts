@@ -102,6 +102,15 @@ function requestedExecution(value: unknown): { kind: "central" | "remote"; node_
   return { kind: x.kind, ...(nodeId ? { node_id: nodeId } : {}) };
 }
 
+async function assertRemoteExecution(nodeId: string, user: LivelyUser): Promise<void> {
+  const node = await getNode(nodeId);
+  if (!node || !node.enabled) throw new HttpError(409, "선택한 원격 노드가 비활성 상태입니다");
+  if (!nodeOpenTo(node, actorOf(user))) throw new HttpError(403, "본인 노드 또는 관리자가 공유한 노드에서만 앱을 실행할 수 있습니다");
+  if (!nodeOnline(nodeId) || !nodeSupports(nodeId, "startWorker") || !nodeSupports(nodeId, "stageWorkerChunk")) {
+    throw new HttpError(409, !nodeOnline(nodeId) ? "선택한 원격 노드가 오프라인입니다" : "원격 노드가 worker 실행을 지원하지 않습니다");
+  }
+}
+
 const listInput = {
   app_id: z.string().optional(),
   project_id: z.number().int().positive().nullable().optional(),
@@ -156,19 +165,15 @@ const appInstanceOpen: Capability = {
   expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/app-instances"], parse: (req) => ({ ...((req.body ?? {}) as Record<string, unknown>) }) }] },
   handler: async (input: z.infer<z.ZodObject<typeof createInput>>, user: LivelyUser, ctx?: CapabilityCtx) => {
     const { app, manifest } = await activeApp(input.app_id);
+    if (manifest.runtime && !(await apps.getActiveGrant(app.id, actorOf(user)))) {
+      throw new HttpError(403, `앱 '${app.id}' 사용 동의(grant)가 없습니다`);
+    }
     let projectId = normalizeInstanceProject(manifest, input.project_id);
     const requested = requestedExecution(input.execution);
     let placement: ReturnType<typeof resolveWorkerPlacement>;
     try { placement = resolveWorkerPlacement(manifest, requested); }
     catch (error) { throw new HttpError(400, error instanceof Error ? error.message : "worker placement 오류"); }
-    if (placement?.kind === "remote") {
-      const node = await getNode(placement.nodeId!);
-      if (!node || !node.enabled) throw new HttpError(409, "선택한 원격 노드가 비활성 상태입니다");
-      if (!nodeOpenTo(node, actorOf(user))) throw new HttpError(403, "본인 노드 또는 관리자가 공유한 노드에서만 앱을 실행할 수 있습니다");
-      if (!nodeOnline(placement.nodeId!) || !nodeSupports(placement.nodeId!, "startWorker") || !nodeSupports(placement.nodeId!, "stageWorkerChunk")) {
-        throw new HttpError(409, !nodeOnline(placement.nodeId!) ? "선택한 원격 노드가 오프라인입니다" : "원격 노드가 worker 실행을 지원하지 않습니다");
-      }
-    }
+    if (placement?.kind === "remote") await assertRemoteExecution(placement.nodeId!, user);
 
     let subjectKind: string | null = input.subject_kind ?? null;
     let subjectRef = input.subject_ref ? String(input.subject_ref).trim() : null;
@@ -281,6 +286,31 @@ const appInstanceSetProject: Capability = {
 };
 
 const closeInput = { instance_id: z.string() };
+const appInstanceRestart: Capability = {
+  name: "app_instance_restart",
+  title: "앱 worker 다시 실행",
+  description: "기존 AppInstance 정체성과 실행 위치를 유지한 채 종료된 worker를 새 WorkerRun으로 다시 실행한다.",
+  scope: null,
+  input: closeInput,
+  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/app-instances/:id/restart"], parse: (req) => ({ instance_id: (req.params as Record<string, string>)?.id }) }] },
+  handler: async (input: z.infer<z.ZodObject<typeof closeInput>>, user: LivelyUser) => {
+    const id = instanceId(input.instance_id);
+    const found = await instances.getAppInstance(id, actorOf(user));
+    if (!found) throw new HttpError(404, "앱 인스턴스가 없습니다");
+    if (found.status !== "active") throw new HttpError(409, "닫힌 앱 인스턴스는 다시 열어야 합니다");
+    const { app, manifest } = await activeApp(found.app_id);
+    if (!manifest.runtime) throw new HttpError(409, "이 앱에는 다시 실행할 worker가 없습니다");
+    if (!(await apps.getActiveGrant(app.id, actorOf(user)))) throw new HttpError(403, `앱 '${app.id}' 사용 동의(grant)가 없습니다`);
+    if (found.execution_host_kind === "remote") {
+      if (!found.execution_host_id) throw new HttpError(409, "원격 실행 노드가 지정되지 않았습니다");
+      await assertRemoteExecution(found.execution_host_id, user);
+    }
+    try { await startWorkerForInstance(app, manifest, found); }
+    catch (error) { throw new HttpError(503, `worker 시작 실패: ${error instanceof Error ? error.message : String(error)}`); }
+    return { instance: await decorate(found) };
+  },
+};
+
 const appInstanceClose: Capability = {
   name: "app_instance_close",
   title: "앱 인스턴스 닫기",
@@ -300,5 +330,5 @@ const appInstanceClose: Capability = {
 };
 
 export const appInstanceCapabilities: Capability[] = [
-  appInstanceList, appInstanceOpen, appInstanceGet, appInstanceUpdate, appInstanceSetProject, appInstanceClose,
+  appInstanceList, appInstanceOpen, appInstanceGet, appInstanceUpdate, appInstanceSetProject, appInstanceRestart, appInstanceClose,
 ];

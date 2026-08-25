@@ -4128,6 +4128,16 @@
   "input_hash": "031a2b509fdb98b3"
  },
  {
+  "name": "app_instance_restart",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/restart"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
+ },
+ {
   "name": "app_instance_close",
   "scope": null,
   "mcp": false,
