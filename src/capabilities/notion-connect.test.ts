@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { __notionCollectTestables, LEGACY_INSTANCE_KEY } from "./notion-connect.js";
 import type { CollectorView } from "../org/store/collectors.js";
 
-const { boundWorkspace, adoptable, keyForWorkspace } = __notionCollectTestables;
+const { boundWorkspace, adoptable, keyForWorkspace, shouldStampInstance } = __notionCollectTestables;
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -69,8 +69,33 @@ t("노션 아닌 프리셋은 후보에서 제외된다", () => {
   assert.equal(adoptable([slack], true), null);
 });
 
+// ── 스탬프(external_instance) — 이 규칙이 틀리면 두 워크스페이스가 같은 축을 공유해 서로를 아카이브한다. ──
+t("신규 수집기는 workspace_id 로 스탬프한다", () => {
+  assert.equal(shouldStampInstance(null), true);
+});
+
+t("빈 껍데기 접수는 **반드시** 새로 스탬프한다 — 안 박으면 둘 다 'default' 를 써서 서로를 아카이브한다", () => {
+  const shell = col({ instance_key: "_", config: {} });
+  assert.equal(shouldStampInstance(shell), true);
+});
+
+t("옛 단일 인스턴스 접수는 스탬프를 **그대로 둔다** — 그 축으로 이미 자료를 쌓아 뒀다", () => {
+  const legacy = col({ instance_key: LEGACY_INSTANCE_KEY, config: { token_source: "org" } });
+  assert.equal(shouldStampInstance(legacy), false);
+});
+
+t("이미 묶인 수집기는 스탬프를 다시 박지 않는다(관리자가 바꿔 뒀을 수 있다)", () => {
+  const bound = col({ instance_key: "notion-testws", config: { token_source: "org:ws-1", instance: "손댄값" } });
+  assert.equal(shouldStampInstance(bound), false);
+});
+
+t("스탬프를 일부러 지정해 둔 칸은 접수 후보가 아니다 — 그 밑에 자료가 있다", () => {
+  const curated = col({ instance_key: "_", config: { instance: "acme" } });
+  assert.equal(adoptable([curated], true), null);
+});
+
 t("워크스페이스 키는 uuid 앞 8자 — 짧고 사람이 읽을 수 있다", () => {
-  assert.equal(keyForWorkspace("3c7d872b-594c-8149-9d80-00372459727f"), "notion-3c7d872b");
+  assert.equal(keyForWorkspace("11112222-3333-4444-5555-666677778888"), "notion-11112222");
   assert.notEqual(keyForWorkspace("aaaaaaaa-0000-0000-0000-000000000000"), keyForWorkspace("bbbbbbbb-0000-0000-0000-000000000000"));
 });
 
