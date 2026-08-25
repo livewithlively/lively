@@ -48,6 +48,10 @@ export interface HttpToolPreset {
   input_schema: Record<string, unknown>;
   pii_scrub: boolean;
   note?: string;
+  // 도구별 등급(#1881) — 묶음 기본(group.level)을 덮는다. 발송(chat.postMessage)처럼 조직 밖으로 **내보내는** 도구는
+  //  L2 여야 한다: ① per-user 자격 필수(통합 폴백 금지 — 사칭 방지) ② 채널 정책이 'write' 로 판정(발송 fail-closed).
+  //  A 어댑터는 classifyToolLevel 이 동사(send)로 자동 분류하지만 B 는 행의 level 이 전부라 여기서 명시한다.
+  level?: "L0" | "L1" | "L2";
 }
 
 export interface HttpToolPresetGroup {
@@ -69,6 +73,19 @@ const obj = (properties: Record<string, unknown>, required: string[] = []): Reco
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1";
 const CAL = "https://www.googleapis.com/calendar/v3";
+const SLACK = "https://slack.com/api";
+
+// ── 슬랙을 B 로 내린 이유 (#1881, 2026-08-25) ──────────────────────────────────────────────────
+//  슬랙 공식 MCP(mcp.slack.com)는 **마켓플레이스 등록 앱·내부 앱만** 쓸 수 있다("unlisted apps are prohibited from
+//  using MCP" — docs.slack.dev/ai/slack-mcp-server). 라이블리가 소유한 공개배포 앱(구성원이 [Slack 연결] 한 번으로
+//  붙는 경로)은 고객 워크스페이스 입장에선 unlisted 라 MCP 서버가 거부한다. 도구 면을 클래식 Web API 로 내리면
+//  그 제약과 DCR 부재에서 벗어난다. 금고 슬롯(auth_kind=slack_oauth)은 A 와 같아 연결이 그대로 승계된다.
+//  ⚠ 슬랙은 실패도 HTTP 200 + {ok:false} 다 — runHttpProxyTool 의 envelopeFailed 가 잡는다. 채널별 개인 정책(#1226)은
+//   channel-enforce 가 이 도구들에도 건다(auth_kind 가 slack 으로 시작 + 호스트 slack.com). 도구 이름은 channelToolKind 의
+//   판정표와 맞춘다: `*_search_channels|users|emojis` = meta(정책 밖) · 발송 = level L2(write) · 나머지 = read.
+//  인자 이름은 슬랙 파라미터명 그대로다(runHttpProxyTool 은 매핑 계층이 없다). GET 은 query, POST 는 JSON 본문 — 슬랙
+//   Web API 는 둘 다 받는다(chat.postMessage 는 JSON + Bearer). 응답 상한 256KiB 라 limit/count 를 낮게 박아 둔다.
+//  빠진 것: MCP 의 `slack_send_message_draft`(발송 안 하는 초안) — Web API 에 대응물이 없고 발송 전 확인은 P2 컨펌(L2)이 맡는다.
 
 export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
   {
@@ -209,6 +226,154 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
       },
     ],
   },
+  {
+    key: "slack", label: "Slack (Web API)", auth_kind: "slack_oauth",
+    hosts: ["slack.com"], scope: "items", level: "L0",
+    tools: [
+      {
+        name: "slack_search_messages",
+        title: "슬랙 메시지 검색",
+        description:
+          "내 슬랙 계정으로 메시지를 검색한다(내가 볼 수 있는 대화 — 비공개·DM 은 개인 설정에서 허용한 것만 결과에 남는다). " +
+          "query 는 슬랙 검색 문법 그대로 — 예: \"배포 in:#dev\", \"from:@name 계약\", \"after:2026-08-01\". " +
+          "결과의 channel.id·ts 로 slack_read_thread 를 부르면 스레드 전체를 읽는다.",
+        url: `${SLACK}/search.messages?count=20&sort=timestamp&sort_dir=desc`,
+        input_schema: obj({
+          query: S("검색어(슬랙 검색 문법 — in:#채널 · from:@사람 · after:YYYY-MM-DD 조합 가능)"),
+          count: I("한 번에 받을 개수(기본 20, 최대 100 — 응답 상한 256KiB)"),
+          page: I("쪽 번호(기본 1)"),
+          sort: S("정렬 기준: score | timestamp(기본)"),
+          sort_dir: S("정렬 방향: asc | desc(기본)"),
+        }, ["query"]),
+        pii_scrub: true,
+      },
+      {
+        name: "slack_search_channels",
+        title: "슬랙 채널 목록",
+        description:
+          "내가 볼 수 있는 채널 목록(공개 + 내가 속한 비공개). 이름으로 channel id 를 찾을 때 쓴다 — 읽기·발송 도구는 " +
+          "id(C…)를 받는다. 목록은 대화 내용이 아니라 개인 열람 설정의 대상이 아니다.",
+        url: `${SLACK}/conversations.list?types=public_channel,private_channel&exclude_archived=true&limit=200`,
+        input_schema: obj({
+          limit: I("한 번에 받을 개수(기본 200, 최대 1000)"),
+          cursor: S("다음 쪽 커서(이전 응답의 response_metadata.next_cursor)"),
+          types: S("대화 종류(쉼표구분): public_channel, private_channel, mpim, im — 기본 public_channel,private_channel"),
+        }),
+        pii_scrub: false,
+      },
+      {
+        name: "slack_search_users",
+        title: "슬랙 사용자 목록",
+        description: "워크스페이스 사용자 목록(id·이름·표시명). 멘션·DM 상대의 user id(U…)를 찾을 때 쓴다.",
+        url: `${SLACK}/users.list?limit=200`,
+        input_schema: obj({
+          limit: I("한 번에 받을 개수(기본 200)"),
+          cursor: S("다음 쪽 커서(response_metadata.next_cursor)"),
+        }),
+        pii_scrub: true,
+      },
+      {
+        name: "slack_search_emojis",
+        title: "슬랙 커스텀 이모지 목록",
+        description: "워크스페이스 커스텀 이모지 이름 목록.",
+        url: `${SLACK}/emoji.list`,
+        input_schema: obj({}),
+        pii_scrub: false,
+      },
+      {
+        name: "slack_read_channel",
+        title: "슬랙 채널 메시지 읽기",
+        description:
+          "채널(또는 DM) 최근 메시지를 읽는다. channel 은 id(C…/D…). 스레드 답글은 여기 안 실린다 — 부모 메시지의 ts 로 " +
+          "slack_read_thread 를 부른다. oldest/latest 는 슬랙 ts(예: 1723456789.000100).",
+        url: `${SLACK}/conversations.history?limit=50`,
+        input_schema: obj({
+          channel: S("채널 id(C…, D…, G…)"),
+          limit: I("한 번에 받을 개수(기본 50, 최대 200)"),
+          cursor: S("다음 쪽 커서"),
+          oldest: S("이 ts 이후만"),
+          latest: S("이 ts 이전만"),
+        }, ["channel"]),
+        pii_scrub: true,
+      },
+      {
+        name: "slack_read_thread",
+        title: "슬랙 스레드 읽기",
+        description: "부모 메시지(channel + ts)의 스레드 답글 전체를 읽는다. ts 는 검색/채널 읽기 결과의 ts 값 그대로.",
+        url: `${SLACK}/conversations.replies?limit=100`,
+        input_schema: obj({
+          channel: S("채널 id"),
+          ts: S("부모 메시지 ts"),
+          limit: I("한 번에 받을 개수(기본 100)"),
+          cursor: S("다음 쪽 커서"),
+        }, ["channel", "ts"]),
+        pii_scrub: true,
+      },
+      {
+        name: "slack_list_channel_members",
+        title: "슬랙 채널 멤버",
+        description: "채널에 속한 사용자 id 목록. 이름은 slack_search_users 로 푼다.",
+        url: `${SLACK}/conversations.members?limit=200`,
+        input_schema: obj({
+          channel: S("채널 id"),
+          limit: I("한 번에 받을 개수(기본 200)"),
+          cursor: S("다음 쪽 커서"),
+        }, ["channel"]),
+        pii_scrub: false,
+      },
+      {
+        // 이름에 react… 가 들어가면 채널 정책이 '발송'(react 동사)으로 오판해 지목 없는 호출을 막는다 → emoji 로.
+        name: "slack_read_message_emoji",
+        title: "슬랙 메시지 반응(이모지)",
+        description: "메시지 하나(channel + timestamp)에 달린 이모지 반응과 누른 사람.",
+        url: `${SLACK}/reactions.get?full=true`,
+        input_schema: obj({
+          channel: S("채널 id"),
+          timestamp: S("메시지 ts"),
+        }, ["channel", "timestamp"]),
+        pii_scrub: false,
+      },
+      {
+        name: "slack_read_file",
+        title: "슬랙 파일 정보",
+        description: "파일 id(F…)의 메타데이터(이름·형식·크기·올린 사람·공유된 채널·다운로드 링크). 본문은 주지 않는다.",
+        url: `${SLACK}/files.info`,
+        input_schema: obj({ file: S("파일 id(F…)") }, ["file"]),
+        pii_scrub: true,
+      },
+      {
+        name: "slack_send_message",
+        title: "슬랙 메시지 보내기",
+        description:
+          "내 계정으로 채널·DM 에 메시지를 보낸다(조직 밖으로 나가는 발송 — 보내기 전에 대상과 내용을 확인한다). " +
+          "channel 은 id. 스레드에 답글로 달려면 thread_ts 에 부모 ts.",
+        url: `${SLACK}/chat.postMessage`,
+        method: "POST",
+        input_schema: obj({
+          channel: S("보낼 채널 id(C…) 또는 DM id(D…)"),
+          text: S("메시지 본문(슬랙 mrkdwn)"),
+          thread_ts: S("스레드 답글이면 부모 메시지 ts"),
+        }, ["channel", "text"]),
+        pii_scrub: false,
+        level: "L2",
+      },
+      {
+        name: "slack_schedule_message",
+        title: "슬랙 메시지 예약 발송",
+        description: "내 계정으로 지정 시각(post_at, epoch 초)에 메시지를 보내도록 예약한다(발송 — 대상·내용·시각을 확인한다).",
+        url: `${SLACK}/chat.scheduleMessage`,
+        method: "POST",
+        input_schema: obj({
+          channel: S("보낼 채널 id"),
+          text: S("메시지 본문"),
+          post_at: I("보낼 시각(Unix epoch 초, 지금부터 120일 이내)"),
+          thread_ts: S("스레드 답글이면 부모 메시지 ts"),
+        }, ["channel", "text", "post_at"]),
+        pii_scrub: false,
+        level: "L2",
+      },
+    ],
+  },
 ];
 
 /**
@@ -247,7 +412,7 @@ export function httpToolPresetToInput(group: HttpToolPresetGroup, tool: HttpTool
     input_schema: tool.input_schema,
     method: tool.method ?? "GET",
     url: tool.url,
-    level: group.level,
+    level: tool.level ?? group.level, // 도구별 등급 우선(#1881 — 발송은 L2)
     auth_kind: group.auth_kind,   // A 어댑터와 같은 슬롯 — 이미 연결한 멤버는 재로그인이 필요 없다
     auth_scope_key: "",
     pii_scrub: tool.pii_scrub,

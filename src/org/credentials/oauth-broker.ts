@@ -17,6 +17,7 @@ import { getMemberSecret, setMemberSecret, deleteMemberSecret, memberOwner, GATE
 import { getMcpServer, getRuntimeConfig, getOrgProfile } from "../store.js";
 import { presetOAuthScope } from "../delivery/mcp-server-presets.js";
 import { makeSsrfFetch } from "../../net/mcp-ssrf-fetch.js";
+import { isSlackOAuthKind, buildSlackAuthorizeUrl, exchangeSlackCode, slackInstallToSlots, parseSlackAccessResponse, relayStartUrl, SLACK_BOT_KIND, type SlackInstall } from "./slack-oauth.js";
 
 const STATE_KEY_ENV = "CONNECTOR_SECRET_KEY"; // 상태 서명키는 봉투암호화 키와 같은 마스터에서 도메인 분리 파생(신규 env 불요).
 const STATE_INFO = "lively-oauth-state-v1";
@@ -217,10 +218,67 @@ export async function providerForServer(
 }
 
 export interface ConsentStart { authorized: boolean; authorizationUrl?: string; state?: string }
+
+// ── 슬랙 직결(#1881) — 표준 OAuth 2.1 디스커버리가 아니라 슬랙 설치 플로우(봇+유저 토큰 동시). 규칙은 slack-oauth.ts. ──
+//  사전등록 client(관리탭 OAuth 클라이언트 → gateway 슬롯 oauth:client)가 없으면 시작하지 않는다 — 셀프호스팅은 매니페스트
+//  링크로 자기 앱을 만들어 그 client 를 넣고, 매니지드는 CP 가 시딩한다(T5).
+async function loadOAuthClient(authKind: string): Promise<{ client_id: string; client_secret?: string } | null> {
+  const r = await getMemberSecret(GATEWAY_OWNER, authKind, CLIENT_SCOPE);
+  if (!r?.secret) return null;
+  try {
+    const ci = JSON.parse(r.secret) as { client_id?: unknown; client_secret?: unknown };
+    return typeof ci.client_id === "string" && ci.client_id ? { client_id: ci.client_id, ...(typeof ci.client_secret === "string" && ci.client_secret ? { client_secret: ci.client_secret } : {}) } : null;
+  } catch { return null; }
+}
+async function startSlackConsent(memberId: string, serverName: string, srv: { authKind: string; scopeKey: string }, redirectUrl: string): Promise<ConsentStart> {
+  const existing = await getMemberSecret(memberOwner(memberId), srv.authKind, srv.scopeKey);
+  if (decodeTokenBlob(existing?.secret)) return { authorized: true };
+  const nonce = crypto.randomBytes(16).toString(B64);
+  const state = signState({ m: memberId, s: serverName, k: srv.scopeKey, n: nonce });
+  // 매니지드(#1881 T5): 라이블리 CP 가 슬랙 앱(client)을 쥐고 콜백을 받는다 — 이 게이트웨이는 client 를 모른다.
+  //  서명 state 를 들고 CP 시작점으로 보내면 CP 가 슬랙 동의 → 교환 → 이 게이트웨이의 /api/ui/org/slack/oauth-complete 로
+  //  결과를 넣어 준다(state 검증은 여기서 — CP 는 state 를 열어 보지 않는다). gw 는 CP 가 테넌트를 알아보는 열쇠.
+  const relay = process.env.SLACK_OAUTH_RELAY_URL?.trim();
+  if (relay) {
+    const gatewayUrl = (await getOrgProfile()).gateway_url ?? "";
+    return { authorized: false, state, authorizationUrl: relayStartUrl(relay, state, gatewayUrl) };
+  }
+  const client = await loadOAuthClient(srv.authKind);
+  if (!client?.client_id || !client.client_secret) {
+    throw new Error("Slack 앱이 아직 등록되지 않았습니다 — 관리자가 [AI 도구 ▸ 외부 도구 서버 ▸ Slack] 에 Slack 앱의 Client ID/Secret 을 넣어야 구성원이 연결할 수 있습니다.");
+  }
+  return { authorized: false, state, authorizationUrl: buildSlackAuthorizeUrl({ clientId: client.client_id, redirectUri: redirectUrl, state }) };
+}
+// 설치 결과 → 금고. 유저 토큰 → 그 사람의 금고(A/B 어댑터가 읽는 슬롯). 봇 토큰 → 조직 슬롯(수집기 봇 모드가 읽는다, team_id 로 구분).
+async function saveSlackInstall(p: StatePayload, authKind: string, install: SlackInstall, actor?: string): Promise<void> {
+  const slots = slackInstallToSlots(install);
+  await setMemberSecret(memberOwner(p.m), authKind, p.k, { secret: slots.user.secret, meta: slots.user.meta }, actor ?? "oauth");
+  if (slots.bot) await setMemberSecret(GATEWAY_OWNER, SLACK_BOT_KIND, slots.bot.scopeKey, { secret: slots.bot.secret, meta: slots.bot.meta }, actor ?? "oauth");
+}
+async function finishSlackConsent(p: StatePayload, srv: { authKind: string }, code: string, redirectUrl: string, actor?: string): Promise<void> {
+  const client = await loadOAuthClient(srv.authKind);
+  if (!client?.client_id || !client.client_secret) throw new Error("Slack 앱 client 가 없어 토큰을 교환할 수 없습니다(연결 도중 설정이 지워졌습니다).");
+  const install = await exchangeSlackCode({ clientId: client.client_id, clientSecret: client.client_secret, code, redirectUri: redirectUrl, fetchFn: await gatewaySsrfFetch() });
+  await saveSlackInstall(p, srv.authKind, install, actor);
+}
+/**
+ * 릴레이 완료(#1881 T5) — CP 가 슬랙과 교환한 `oauth.v2.access` 응답 원문을 들고 온다. state 는 이 게이트웨이가 서명한 것이라
+ *  위조·만료·멤버 귀속을 여기서 검증한다(CP 는 통과만 시킨다). 슬랙 직결 서버가 아니면 거부.
+ */
+export async function completeSlackInstall(stateToken: string, access: unknown, actor?: string): Promise<{ ok: true; memberId: string; serverName: string; team_id: string | null }> {
+  const p = verifyState(stateToken);
+  const srv = await loadProxyServer(p.s);
+  if (!isSlackOAuthKind(srv.authKind)) throw new Error(`'${p.s}' 는 슬랙 연결 창구가 아닙니다`);
+  const install = parseSlackAccessResponse(access);
+  await saveSlackInstall(p, srv.authKind, install, actor);
+  return { ok: true, memberId: p.m, serverName: p.s, team_id: install.team?.id ?? null };
+}
+
 // 동의 개시 — PKCE·서명 state 로 authorization URL 생성(브라우저 오픈용). 이미 토큰 있으면 authorized:true.
 export async function startConsent(memberId: string, serverName: string, actor?: string): Promise<ConsentStart> {
   const srv = await loadProxyServer(serverName);
   const redirectUrl = await callbackUrl();
+  if (isSlackOAuthKind(srv.authKind)) return startSlackConsent(memberId, serverName, srv, redirectUrl);
   const provider = new VaultOAuthProvider({ memberId, serverName, authKind: srv.authKind, tokenScopeKey: srv.scopeKey, redirectUrl, clientName: srv.clientName, scope: srv.scope, actor });
   const res = await auth(provider, { serverUrl: srv.url, scope: srv.scope, fetchFn: await gatewaySsrfFetch() });
   if (res === "AUTHORIZED") return { authorized: true }; // 유효 토큰 이미 있음
@@ -232,6 +290,10 @@ export async function finishConsent(stateToken: string, code: string, actor?: st
   const p = verifyState(stateToken); // 위변조/만료 검증(HMAC)
   const srv = await loadProxyServer(p.s);
   const redirectUrl = await callbackUrl();
+  if (isSlackOAuthKind(srv.authKind)) { // #1881 슬랙 직결 — PKCE 없음, 교환·저장은 finishSlackConsent
+    await finishSlackConsent(p, srv, code, redirectUrl, actor);
+    return { ok: true, memberId: p.m, serverName: p.s };
+  }
   const provider = new VaultOAuthProvider({ memberId: p.m, serverName: p.s, authKind: srv.authKind, tokenScopeKey: p.k, redirectUrl, state: stateToken, actor });
   try {
     const res = await auth(provider, { serverUrl: srv.url, authorizationCode: code, fetchFn: await gatewaySsrfFetch() });

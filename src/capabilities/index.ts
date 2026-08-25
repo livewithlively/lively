@@ -51,6 +51,7 @@ import { recallCapabilities } from "./recall.js";
 import { memberSecretCapabilities } from "./member-secret.js";
 import { awsCredentialCapabilities } from "./aws-credentials.js";
 import { oauthConnectCapabilities } from "./oauth-connect.js";
+import { slackConnectCapabilities } from "./slack-connect.js";
 import { channelPolicyCapabilities } from "./channel-policy.js";
 import { brokerCapabilities } from "./broker.js";
 import { meCapabilities, whoamiCapabilities } from "./whoami.js";
@@ -116,6 +117,7 @@ const all: Capability[] = [
   ...memberSecretCapabilities, // P1(#746): per-user 백엔드 자격 vault — me_credential(s)(본인, 인증만)+org_credential(s)(통합, admin). 커넥터 툴이 resolveMemberSecret 로 해소. MCP+REST(/api/ui/{me,org}/credential*).
   ...awsCredentialCapabilities, // #746 파도2: AWS STS 브로커 — me_aws_credentials(role 가정→credential_process JSON, RoleSessionName=요청자). scope=null, MCP+REST(/api/ui/me/aws-credentials).
   ...oauthConnectCapabilities, // #746 T2: OAuth 커넥터 연결 — me_oauth_connect/disconnect(scope=null). auth_mode=oauth 프록시 MCP 에 per-user 동의. 콜백은 /oauth/callback(index.ts).
+  ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
   ...channelPolicyCapabilities, // #1226: 대화 채널별 개인 열람/발송 허용 — me_slack_channels·me_channel_policy_set. **REST 전용·변경은 사람만**(AI 가 자기 차단을 못 풀게). 집행은 org/channels/channel-guard ← mcp-proxy.
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
   ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.
