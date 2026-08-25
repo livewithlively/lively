@@ -31,6 +31,7 @@ import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js'; // 통합검색
 import { mountTitlebar } from './titlebar.js'; // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, listAppInstances, updateAppInstance } from './app-instance.js';
+import { startNotificationBanners } from './notifications.js'; // #1891 — 배너는 화면과 무관하게 뜬다
 import { activeNavKey } from './shell-surfaces.js';
 import { ensureSingletonAppInstance } from './app-instance.js'; // #1891 — inbox 앱 인스턴스 멱등 확보   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
@@ -227,6 +228,9 @@ export async function bootV2() {
         }
     }
     watchStaleShell(); // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
+    // #1891 — 받은 알림 배너. 화면과 무관하게 돈다(「확인할 것」 안에서만 띄우면 보고 있어야 알림이 뜬다).
+    //  데스크톱 앱 안에서는 스스로 물러난다 — 그 앱이 트레이에서 같은 사건을 이미 띄운다(#1842).
+    startNotificationBanners();
     // 실험장(#1719 원준): 작업대 골격(rail-mode)은 그대로 두되 **좌측 사이드바는 늘 보인다**(원준 2026-08-20:
     //  "새로고침하다 보면 사라질 때가 있다 — 항상 표시하고, 없앨 수는 없게. 폭만 끌어 조절"). 그래서
     //  여닫는 길(알약·×·핀)을 전부 걷고 **폭 손잡이 하나**만 남긴다 — 사라지지 않으니 되찾는 길도 필요 없다.

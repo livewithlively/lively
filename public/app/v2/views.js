@@ -9,7 +9,7 @@ import { createRunPicker } from './run-picker.js';
 import { mountSessionChat } from '../session-chat.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
-import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, raiseBanners } from './notifications.js'; // #1891 받은 알림 이력
+import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow } from './notifications.js'; // #1891 받은 알림 이력
 const dot = (k) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 // 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
 //  나머지 살아 있는 것(대기·오프라인·셸)은 회색 계열로 조용히, 끝난 것(중단됨·종료됨·기록)은 빈 점.
@@ -168,7 +168,7 @@ async function paintNotifications(host) {
         host.replaceChildren();
         return;
     }
-    raiseBanners(feed.notifications);
+    // 배너는 셸이 전역으로 띄운다(startNotificationBanners) — 여기서 또 띄우면 이 화면을 열 때마다 두 번 뜬다.
     const perm = notificationPermission();
     const head = el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `받은 알림 · ${feed.notifications.length}${feed.unread ? ` (안 읽음 ${feed.unread})` : ''}` }), 
     //  ⚠ 권한은 사람이 누를 때만 묻는다 — 들어오자마자 뜨는 권한 창은 거의 거부당하고, 거부되면 다시 못 묻는다.

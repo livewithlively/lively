@@ -13,7 +13,7 @@
 import { api, el, errorNote, logout, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
 import { field, skeleton } from '../ui-primitives.js';
 import { PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips, } from '../me-profile.js';
-import { THEME_ORDER, setThemePref, themePref } from '../theme.js';
+import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, pushThemeToOpenTabs, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref } from '../theme.js';
 // 좌 목록 — 순서가 곧 위계다. 나를 가리키는 것(프로필) → 내 AI 가 나를 대하는 법 → 나를 부르는 법(알림) → 내가 보는 화면 → 계정.
 const SECS = [
     { key: 'profile', label: '프로필', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'] },
@@ -309,7 +309,7 @@ function lookPane(close) {
         seg.replaceChildren(...THEME_ORDER.map((k) => el('button', {
             class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: LAB[k], title: TIP[k],
             'aria-pressed': String(cur === k),
-            onclick: () => { setThemePref(k); paintSeg(); }
+            onclick: () => { setThemePref(k); paintSeg(); void pushThemeIfOn(); }
         })));
     };
     paintSeg();
@@ -320,7 +320,33 @@ function lookPane(close) {
             location.replace(location.pathname + '#/dashboard');
             location.reload();
         } });
-    return pane('화면', '이 브라우저에서 화면이 어떻게 보일지 정합니다. 기기마다 따로 기억되고 팀에는 영향이 없습니다.', field('테마', el('div', {}, seg, el('p', { class: 'prof-hint' }, ...uiText('시스템을 고르면 기기의 밝게·어둡게 설정을 그대로 따라갑니다.')))), field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn, el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 설정 ▸ 화면 에서 언제든 돌아옵니다.')))));
+    // 지금 열려 있는 탭까지 그 자리에서 바꿀지(#1683 후속2). 기본 꺼짐 — 세션 입력창에 하네스의 테마 명령을
+    //  넣는 일이라(사람이 쓰던 초안 뒤에 붙을 수 있다) 사람이 켜 둔 경우에만 한다.
+    const tabsCb = el('input', { type: 'checkbox', style: 'margin:0',
+        ...(applyToOpenTabs() ? { checked: '' } : {}),
+        onchange: (e) => setApplyToOpenTabs(!!e.target.checked) });
+    // 테마를 바꾼 직후 — 켜져 있으면 열린 세션 탭에 밀고 결과를 그대로 알린다(조용한 실패 금지).
+    const pushThemeIfOn = async () => {
+        if (!applyToOpenTabs())
+            return;
+        try {
+            const { v2OpenSessionIds } = await import('./main.js');
+            const ids = v2OpenSessionIds();
+            if (!ids.length)
+                return;
+            const r = await pushThemeToOpenTabs(ids);
+            toast([r.applied ? `${r.applied}개 탭을 바꿨어요` : '바꾼 탭이 없어요', ...r.notes].join(' · '));
+        }
+        catch (e) {
+            toast((e && e.message) || '열린 탭에 적용하지 못했습니다', true);
+        }
+    };
+    // 'AI 세션도 이 테마로'(#1683 후속) — 터미널 **안에서 도는 하네스**까지 맞출지. 기본 켜짐.
+    //  화면(사이드바·터미널 칠)은 이 스위치와 무관하게 늘 위 테마를 따른다 — 스위치가 가리는 건 하네스 안쪽뿐이다.
+    const aiCb = el('input', { type: 'checkbox', style: 'margin:0',
+        ...(harnessThemeSync() ? { checked: '' } : {}),
+        onchange: (e) => setHarnessThemeSync(!!e.target.checked) });
+    return pane('화면', '이 브라우저에서 화면이 어떻게 보일지 정합니다. 기기마다 따로 기억되고 팀에는 영향이 없습니다.', field('테마', el('div', {}, seg, el('p', { class: 'prof-hint' }, ...uiText('시스템을 고르면 기기의 밝게·어둡게 설정을 그대로 따라갑니다.')))), field('AI 세션', el('div', {}, el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, aiCb, el('span', { style: 'font-size:13.5px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))), el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:6px;' }, tabsCb, el('span', { style: 'font-size:13.5px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))), el('p', { class: 'prof-hint' }, ...uiText('첫째 칸을 끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')))), field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn, el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 설정 ▸ 화면 에서 언제든 돌아옵니다.')))));
 }
 // ── ④ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
 function accountPane(data, logins, close) {

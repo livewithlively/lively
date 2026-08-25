@@ -63,6 +63,11 @@ export async function askNotificationPermission(): Promise<boolean> {
  * @returns 실제로 띄운 건수
  */
 export function raiseBanners(list: readonly AppNotification[]): number {
+  // ⚠ 데스크톱 앱 안에서는 **배너를 만들지 않는다** — 그 앱(#1842)이 트레이에서 SSE 로 같은 사건을
+  //  이미 배너로 띄운다. 여기서도 띄우면 한 사건에 배너가 두 장 뜬다. 능력 감지는 다리의 유무로만
+  //  한다(플랫폼·UA 추측 금지 — 구 앱·새 웹 조합에서 어긋난다).
+  //  앱이 창을 닫아도 알려 주는 반면 브라우저는 탭이 열려 있을 때만 알 수 있다 — 그게 두 표면의 차이다.
+  if ((window as any).livelyDesktop) return 0;
   if (notificationPermission() !== 'granted') return 0;
   const already = seen();
   const fresh = list.filter((n) => !n.read_at && !already.has(n.id));
@@ -77,6 +82,23 @@ export function raiseBanners(list: readonly AppNotification[]): number {
   }
   remember(fresh.map((n) => n.id));
   return show.length;
+}
+
+// ── 셸 전역 폴링 ────────────────────────────────────────────────────────────
+//  ⚠ 배너를 「확인할 것」 화면 안에서만 띄우면 **보고 있어야 알림이 뜬다** — 알림의 목적과 정반대다
+//   (2026-08-25 상민님 신고: "왜 알림 안 오냐"). 그래서 셸이 켜져 있는 동안 어느 화면에서든 돈다.
+let bannerTimer = 0;
+
+/** 셸 부팅 때 한 번. 데스크톱 앱 안이면 아무것도 하지 않는다(그 앱이 이미 띄운다). */
+export function startNotificationBanners(intervalMs = 30_000): void {
+  if (bannerTimer) return;
+  if ((window as any).livelyDesktop) return;
+  const tick = (): void => {
+    if (notificationPermission() !== 'granted') return;   // 권한이 없으면 서버를 부를 이유도 없다
+    void loadNotifications({ limit: 20 }).then((feed) => raiseBanners(feed.notifications)).catch(() => { /* 다음 tick */ });
+  };
+  tick();
+  bannerTimer = window.setInterval(tick, intervalMs);
 }
 
 // ── 표현 ────────────────────────────────────────────────────────────────────
