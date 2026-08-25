@@ -105,6 +105,30 @@ export async function setExecutionSessionProject(input: {
   } finally { client.release(); }
 }
 
+/**
+ * 구 배포에서 넘어온 세션 구제 — `session_project` 에만 바인딩이 있는 **살아 있는** 세션의 current 를 세운다.
+ *
+ *  왜 필요한가(실측 2026-08-25, dev): 이 표가 생기기 전에 프로젝트에 붙은 세션이 794개다. 그 세션이 업그레이드 뒤
+ *   다음 프롬프트를 보내면 훅이 DB 를 보고 **미연결로 판정**해 새 프로젝트를 만들어 붙인다 — 사람이 이미 고른
+ *   소속이 조용히 갈리고 빈 껍데기가 는다. 그래서 조회 시점에 한 번 구제한다(마이그레이션은 owner 를 모르는
+ *   구 세션 575개를 못 옮긴다 — 소유권은 요청자가 증명할 때만 확정할 수 있다).
+ *
+ *  이력(`session_project`)은 이미 그 바인딩을 말하고 있으므로 **새 이력 행을 만들지 않는다**(중복 구간 방지).
+ *  applied_revision 은 0 으로 둔다 — 도는 세션은 아직 그 프로젝트 규칙을 못 받았을 수 있으니 다음 턴에 한 번 주입된다.
+ *  이미 행이 있으면 아무것도 하지 않는다(DO NOTHING) — 정상 경로가 언제나 이긴다.
+ */
+export async function adoptLegacyExecutionSession(input: {
+  id: string; owner: string; harness?: string | null; nodeId?: string | null; projectId: number;
+}): Promise<ExecutionSessionProject | null> {
+  if (ON_NODE || !input.id || !input.owner || !(Number(input.projectId) > 0)) return null;
+  await itemsPool.query(
+    `INSERT INTO execution_session(id, owner, harness, managed_node_id, desired_project_id, desired_revision, applied_revision, binding_epoch)
+       VALUES($1,$2,COALESCE(NULLIF($3,''),'unknown'),$4,$5,1,0,1)
+     ON CONFLICT (tenant_id, id) DO NOTHING`,
+    [input.id, input.owner, input.harness ?? null, input.nodeId ?? null, input.projectId]);
+  return await executionSessionProject(input.id, input.owner);
+}
+
 /** 프로젝트 문맥을 실행 세션에 전달한 revision을 단조 증가로 확인한다. */
 export async function markExecutionSessionApplied(id: string, owner: string, revision: number): Promise<void> {
   if (ON_NODE || !id || !owner || !Number.isSafeInteger(revision) || revision < 0) return;
