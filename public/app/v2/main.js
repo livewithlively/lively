@@ -31,7 +31,7 @@ import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js'; // 통합검색
 import { mountTitlebar } from './titlebar.js'; // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, listAppInstances, updateAppInstance } from './app-instance.js';
-import { mountAppRuntimeView } from './app-runtime.js';
+import { activeNavKey } from './shell-surfaces.js'; // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
 const SOLO = new URLSearchParams(location.search).get('solo') === '1';
@@ -50,6 +50,10 @@ let suppressHash = 0; // 탭 전환이 만든 hashchange 를 라우터가 다시
 //  탭 전환(숨김)에는 살려 둔다 — 탭의 존재 이유(상태 보존)와 같은 원칙.
 //  뷰가 둘(기본·캔버스)이라 핸들은 공통 계약 하나로만 본다 — 셸이 아는 것은 '언젠가 정리해야 한다'뿐이다.
 const projViews = new Map();
+// 그 탭의 셸이 **어느 프로젝트로** 마운트됐나(#1834 후속). 세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데,
+//  종전엔 그 상태가 그대로 굳어 문패가 '프로젝트 없는 세션'이 되고 그 셸의 세션 목록도 남의 것이 됐다.
+//  20초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
+const shellProject = new Map();
 function dropProjView(tab) { const pv = projViews.get(tab); if (pv) {
     pv.destroy();
     projViews.delete(tab);
@@ -95,6 +99,24 @@ function goSession(sid, tab) {
 }
 /** 같은 탭 안에서 이어지는 이동(리다이렉트)의 수 — onHash 의 '새 탭' 규칙만 건너뛴다(다시 그리기는 그대로 한다). */
 let inTabHops = 0;
+/**
+ * 복원(이어받기)으로 새 세션이 생겼다 — **그 탭만** 새 세션으로 옮긴다(#1834 후속).
+ *
+ * 종전엔 세션 화면이 location.hash 를 직접 바꿨다. 셸 안에서 그건 **활성 탭의 주소**라, 숨은 탭에서
+ *  일어난 복원이 지금 보고 있는 탭을 남의 새 세션으로 끌고 갔다(상민님 지적 2026-08-20).
+ *  활성 탭이면 주소까지 맞추고, 숨은 탭이면 그 탭의 라우트·제목·화면만 바꾼다(그 탭을 열면 맞는 화면이다).
+ */
+function resumedInTab(tab, sid) {
+    const href = '#/s/' + encodeURIComponent(sid);
+    tab.route = href;
+    if (tabsApi?.current() === tab && location.hash !== href) {
+        suppressHash++;
+        location.hash = href;
+    }
+    tabsApi?.routed(tab);
+    void renderRoute(tab);
+    drawSide();
+}
 /** 프로젝트 셸(문패 + 칸 + 세션 서랍)을 이 탭에 마운트한다. 세션 화면은 그 안 '세션' 칸에 통째로 들어간다. */
 async function mountProjectShell(tab, projectId, sessionId, seq) {
     let detail = null;
@@ -111,6 +133,7 @@ async function mountProjectShell(tab, projectId, sessionId, seq) {
     if (detail && !data.projects.some((p) => p.id === projectId))
         void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
     dropProjView(tab);
+    shellProject.set(tab, projectId);
     if (tab.chat) {
         tab.chat.destroy();
         tab.chat = null;
@@ -161,6 +184,9 @@ async function mountProjectShell(tab, projectId, sessionId, seq) {
                 onPickProject: (anchor) => openProjectPicker(anchor, sid, tab),
                 onRename: (label) => renameSession(sid, label, tab),
                 onArchive: () => void archiveSession(sid),
+                // 자동 복원은 **보이는 탭에서만**, 복원 뒤 이동은 **그 탭만**(#1834 후속 — session-chat.ts isVisible/onResumed 주석).
+                isVisible: () => tabsApi?.current() === tab,
+                onResumed: (nid) => resumedInTab(tab, nid),
             });
             tab.chat = h; // 20초 목록 갱신이 이 핸들로 상태를 흘려보낸다
             return h;
@@ -175,7 +201,6 @@ export async function bootV2() {
     if (!root)
         return;
     root.hidden = false;
-    watchStaleShell(); // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
     // 릴레이 복귀 알림(#1881) — CP OAuth 릴레이(슬랙·노션)가 테넌트로 돌려보낼 때 ?slack=ok|slack_error= /
     //  ?notion=ok|notion_error= 를 붙인다(해시 라우트 #/connect/<앱> 은 그대로 열린다). 여기서 한 번 알리고
     //  주소에서 지운다 — 안 지우면 새로고침·탭 복제 때마다 같은 토스트가 또 뜬다.
@@ -200,6 +225,7 @@ export async function bootV2() {
             history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash);
         }
     }
+    watchStaleShell(); // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
     // 실험장(#1719 원준): 작업대 골격(rail-mode)은 그대로 두되 **좌측 사이드바는 늘 보인다**(원준 2026-08-20:
     //  "새로고침하다 보면 사라질 때가 있다 — 항상 표시하고, 없앨 수는 없게. 폭만 끌어 조절"). 그래서
     //  여닫는 길(알약·×·핀)을 전부 걷고 **폭 손잡이 하나**만 남긴다 — 사라지지 않으니 되찾는 길도 필요 없다.
@@ -249,6 +275,7 @@ export async function bootV2() {
             }
             // 탭 닫기 = AppWindow 연결 해제. AppInstance·세션·worker 생애주기는 별도라 여기서 종료 API를 부르지 않는다.
             dropProjView(tab);
+            shellProject.delete(tab);
             drawSide();
         },
         // 탭 두 번 눌러 이름 바꾸기(원준 2026-08-20) — 세션 탭만. 판정은 세션 화면의 규칙과 같다:
@@ -390,6 +417,18 @@ export async function bootV2() {
                     continue;
                 const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
                 const s = sid ? findSess(sid) : null;
+                // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
+                //  재시작 창에 세션을 못 찾으면 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
+                //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
+                //  뿌리가 여기였다. 목록에서 그 세션을 **찾았을 때만** 판단하므로 빈 판에 흔들리지 않는다.
+                if (s) {
+                    const want = s.projectId ? Number(s.projectId) : 0;
+                    const have = shellProject.get(t);
+                    if (have !== undefined && have !== want) {
+                        void renderRoute(t);
+                        continue;
+                    }
+                }
                 // ★ 탭이 보는 세션(라우트)과 **실제로 붙어 있는 화면**(chat.id)이 다르면 덧칠하지 않는다.
                 //  어긋남 자체는 panes-parts.ts sessionsPart.paint 에서 막았지만, 어떤 경로로든 어긋나면 이 갱신이
                 //  '상단바만 남의 세션'인 화면을 20초마다 다시 만든다(상민님 신고 2026-08-20).
@@ -685,7 +724,9 @@ async function renderRoute(tab) {
     }
     if (page !== 's' && page !== 'i')
         clearTabAppInstance(tab);
-    markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === 'connect' ? 'connect' : page === 'archive' ? 'archive' : page === 'trash' ? 'trash' : page === '' || page === 'dashboard' ? 'home' : '');
+    // 활성 표시 키는 화면 대장(shell-surfaces)이 정한다 — 새 화면을 만들면 대장을 거치게 되고,
+    //  그때 '이건 앱인가 OS 표면인가'를 반드시 고르게 된다(가드: scripts/shell-surface-registry.test.mjs).
+    markActive(activeNavKey(page, page === 's' ? decodeURIComponent(segs[1] || '') : segs[1]));
     try {
         if (page === '' || page === 'dashboard') {
             renderHome(tab.center, data);
@@ -845,9 +886,8 @@ async function renderRoute(tab) {
                     frame.destroy();
                     return;
                 }
-                const view = instance.app.runtime ? mountAppRuntimeView(instance, frame) : frame;
-                tab.center.replaceChildren(view.root);
-                tab.appView = view;
+                tab.center.replaceChildren(frame.root);
+                tab.appView = frame;
             }
             tab.aside.replaceChildren();
             markActive('app-instance:' + instance.app_id);
