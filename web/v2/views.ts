@@ -22,6 +22,8 @@ export interface Proj {
   // #1851 휴지통 — 통째로 버린 시각. 있으면 어디에도 안 보이고 「휴지통」 화면(#/trash)의 '프로젝트' 묶음에만(그 아래 내 세션과 함께).
   trashed_at?: string | null;
 }
+export interface ProjList { id: number; name: string; folder_id?: number | null; category?: { space?: string | null; name?: string | null } | null; }
+export interface ProjFolder { id: number; name: string; parent_id?: number | null; settings?: Record<string, unknown> | null; external_id?: string | null; }
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
   live: boolean; alive: boolean; owned: boolean; stateKey: string; stateLabel: string; lastSeen: number; raw: any;
@@ -35,7 +37,14 @@ export interface Sess {
   // #1851 — 프로젝트를 통째로 버릴 때 함께 들어간 세션이면 그 프로젝트 id. 없으면 '지난 세션'에서 따로 버린 것 — 휴지통 화면이 둘을 가른다.
   trashedWith?: number | null;
 }
-export interface V2Data { projects: Proj[]; sessions: Sess[]; loadedAt: number; }
+export interface V2Data {
+  projects: Proj[];
+  sessions: Sess[];
+  loadedAt: number;
+  /** 열린 앱 행의 프로젝트 경로(스페이스 › 리스트 › 프로젝트)에만 쓰는 가벼운 계층 메타. */
+  lists?: ProjList[];
+  folders?: ProjFolder[];
+}
 
 const dot = (k: string) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 // 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).

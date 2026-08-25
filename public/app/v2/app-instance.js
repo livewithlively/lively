@@ -4,6 +4,18 @@ import { api, toast } from '../core.js';
 const cache = new Map();
 export function cachedAppInstance(id) { return cache.get(id) || null; }
 function remember(instance) { cache.set(instance.id, instance); return instance; }
+/**
+ * 내 앱 인스턴스 목록(#1780 v2.2 §2.2) — status=active 만. 창(탭)이 없어도 인스턴스는 살아 있으므로
+ *  좌측 목록은 이 서버 사실을 읽는다(브라우저 탭 목록이 아니다, #1883).
+ */
+export async function listAppInstances() {
+    const out = await api('/api/ui/app-instances');
+    const rows = Array.isArray(out?.instances) ? out.instances : [];
+    for (const r of rows)
+        if (r && r.id)
+            remember(r);
+    return rows;
+}
 export async function getAppInstance(id) {
     const out = await api('/api/ui/app-instances/' + encodeURIComponent(id));
     if (!out?.instance?.id)
