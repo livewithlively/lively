@@ -42,9 +42,41 @@ const STALL_MS = 15 * 60_000;      // 로그 무출력 15분 = 행 걸림(레이
 const HARD_CAP_MS = 12 * 3_600_000; // 12시간 — 런어웨이 백스톱
 
 let schemaReady: Promise<void> | null = null;
+
+/**
+ * 이 표가 **이미 완성돼 있나**(#1750 후속) — 있으면 DDL 을 아예 치지 않는다.
+ *
+ * ★ 왜 필요한가(실측 2026-08-25, dev): 다중 워크스페이스(registry)를 켜면 게이트웨이는 소유자(items)가 아니라
+ *  **앱 role(lvly_app_<db>)** 로 붙는다(org/tenancy/state.ts 의 app_dsn). 그 역은 NOSUPERUSER 라 public 스키마에
+ *  CREATE 권한이 없고 표의 소유자도 아니다 → `CREATE TABLE IF NOT EXISTS` 는 **존재 검사보다 ACL 검사가 먼저**라
+ *  표가 멀쩡히 있어도 `permission denied for schema public` 으로 죽고, ALTER 는 `must be owner of table` 로 죽는다.
+ *  connector_run 은 스키마 체인 밖에서 **지연 생성**되는 유일한 표라(#1750 이 같은 이름을 이미 짚었다) 이 경로만
+ *  이 함정에 빠졌고, 그 결과 **수집기 실행이 통째로 막혔다**(모든 커넥터의 크론·수동 싱크가 시작조차 못 함).
+ *  고쳐야 할 것은 권한이 아니라 **런타임 DDL 자체**다 — 표가 이미 있으면 확인만 하고 지나간다(introspection).
+ *  없을 때만 DDL 을 친다: 자가호스팅 단일 워크스페이스는 소유자 역으로 붙으므로 종전 그대로 만들어진다.
+ */
+export const RUN_REQUIRED_COLS = ["id", "system", "mode", "trigger", "status", "started_at", "finished_at",
+  "exit_code", "stats", "log", "started_by", "pid", "heartbeat_at", "log_total", "collector_id"] as const;
+
+/** 순수 판정 — 관측된 컬럼 집합이 이 표를 '완성'으로 볼 수 있나. 하나라도 없으면 DDL 이 필요하다. */
+export function runSchemaColumnsComplete(cols: Iterable<string>): boolean {
+  const have = new Set(cols);
+  return RUN_REQUIRED_COLS.every((c) => have.has(c));
+}
+
+async function runSchemaComplete(): Promise<boolean> {
+  try {
+    const r = await itemsPool.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name='connector_run'`);
+    return runSchemaColumnsComplete(r.rows.map((x) => String((x as { column_name: string }).column_name)));
+  } catch { return false; } // 조회 자체가 막히면 DDL 로 넘겨 원래 오류를 그대로 보여준다
+}
+
 function ensureRunSchema(): Promise<void> {
   if (!schemaReady) {
-    schemaReady = itemsPool.query(`
+    schemaReady = (async () => {
+      if (await runSchemaComplete()) return; // 이미 완성 — 권한 없는 역으로도 통과한다
+      await itemsPool.query(`
       CREATE TABLE IF NOT EXISTS connector_run(
         id BIGSERIAL PRIMARY KEY,
         system TEXT NOT NULL,
@@ -68,7 +100,13 @@ function ensureRunSchema(): Promise<void> {
       ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS collector_id BIGINT;
       CREATE INDEX IF NOT EXISTS connector_run_collector_idx ON connector_run(collector_id, started_at DESC)
         WHERE collector_id IS NOT NULL;
-    `).then(() => undefined);
+    `);
+    })();
+    // ⚠ **실패한 프라미스를 캐시하지 않는다**(같은 실측에서 함께 드러난 두 번째 결함): 캐시해 두면 부팅 때 한 번
+    //  실패한 뒤로 그 프로세스가 사는 내내 **모든 호출이 그 옛 거절을 그대로 다시 던진다** — 스택이 부팅 시점을
+    //  가리켜 원인 추적도 어긋난다(실측: /api/ui/org/connector/runs 실패 스택이 boot/housekeeping 을 가리켰다).
+    //  권한·마이그레이션이 나중에 갖춰지면 다음 호출이 다시 시도해 스스로 회복하게 둔다.
+    schemaReady = schemaReady.catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
 }
