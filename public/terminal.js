@@ -673,7 +673,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 6ef7dbf7",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 3a0b8ac2",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -737,7 +737,7 @@
     }
     function handleLine(s, e0) {
       let e = e0;
-      if (e > s && pending[e - 1] === 13) e--;
+      while (e > s && pending[e - 1] === 13) e--;
       if (inBlock && blockAt && Date.now() - blockAt > BLOCK_MAX_MS) {
         inBlock = false;
         blockParts = [];
@@ -834,32 +834,11 @@
   var ctrl = null, didBackfill = false;
   var syncedThisConn = false;
   var pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
-  var CURSOR_RESYNC_TRIES = 3, CURSOR_RESYNC_MS = 400;
-  var cursorResyncLeft = 0, cursorResyncTimer = null, lastOutputAt = 0, backfillAt = 0;
-  function clearCursorResync() {
-    cursorResyncLeft = 0;
-    if (cursorResyncTimer) {
-      clearTimeout(cursorResyncTimer);
-      cursorResyncTimer = null;
-    }
-  }
   function writeCursor(st) {
     try {
       term.write("\x1B[" + (st.cy + 1) + ";" + (st.cx + 1) + "H");
     } catch (_) {
     }
-  }
-  function armCursorResync() {
-    if (cursorResyncTimer) clearTimeout(cursorResyncTimer);
-    cursorResyncTimer = setTimeout(() => {
-      cursorResyncTimer = null;
-      if (cursorResyncLeft <= 0) return;
-      cursorResyncLeft--;
-      try {
-        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: "st" }));
-      } catch (_) {
-      }
-    }, CURSOR_RESYNC_MS);
   }
   var BACKFILL_WAIT_MS = 900;
   var MAX_NUDGES = 3;
@@ -933,7 +912,7 @@
       const n = parseInt(m[k], 10);
       return Number.isFinite(n) ? n : null;
     };
-    const any = num("any"), btn = num("btn"), std = num("std"), sgr = num("sgr"), cx = num("cx"), cy = num("cy"), cf = num("cf");
+    const any = num("any"), btn = num("btn"), std = num("std"), sgr = num("sgr"), cx = num("cx"), cy = num("cy");
     return {
       alt: num("alt") === 1,
       mouseOn: any === 1 || btn === 1 || std === 1,
@@ -951,23 +930,8 @@
       // foreground 프로세스 — flag 가 stale 인지 가리는 단서(paneMouseMode)
       cx,
       cy,
-      hasCursor: cx !== null && cy !== null,
-      // cf(#{cursor_flag}, #1943) — '이 좌표를 믿어도 되는가'. 커서가 숨겨져 있으면 앱이 다시 그리는 중이고 커서는
-      //  의미 없는 자리(대개 0열)에 주차돼 있다. ⚠ 없음(구 서버)을 '숨김'으로 읽지 않는다 — 그 오독이 #1535 의 함정이다.
-      cursorVisible: cf === 1,
-      hasCursorFlag: cf !== null
+      hasCursor: cx !== null && cy !== null
     };
-  }
-  function backfillCursorAction(st) {
-    if (!st || !st.hasCursor) return "skip";
-    if (!st.hasCursorFlag) return "apply";
-    return st.cursorVisible ? "apply" : "defer";
-  }
-  function cursorResyncAction(st, opts) {
-    const o = opts || {};
-    if (o.outputSinceBackfill) return "stop";
-    if (st && st.hasCursor && st.cursorVisible) return "apply";
-    return (o.triesLeft || 0) > 0 ? "retry" : "stop";
   }
   function paneMouseMode(st) {
     if (!st) return "none";
@@ -2691,7 +2655,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "6ef7dbf7 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "3a0b8ac2 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -3556,9 +3520,7 @@
     sock.binaryType = "arraybuffer";
     ws = sock;
     ctrl = makeControl({
-      // 라이브 %output — 앱이 지금 화면을 그리고 있다는 유일한 신호다(#1943 재동기가 이걸로 '덮지 말 것'을 판정).
       write: (str) => {
-        lastOutputAt = Date.now();
         try {
           term.write(str);
         } catch (_) {
@@ -3570,15 +3532,6 @@
           dlog("state", diagPreview(line, 96));
           const st = parsePaneState(line);
           applyPaneState(st);
-          if (cursorResyncLeft > 0 || cursorResyncTimer) {
-            const act = cursorResyncAction(st, { triesLeft: cursorResyncLeft, outputSinceBackfill: lastOutputAt > backfillAt });
-            dlog("cursor", "\uC7AC\uB3D9\uAE30 " + act + " (\uB0A8\uC740 " + cursorResyncLeft + ")");
-            if (act === "apply") {
-              writeCursor(st);
-              clearCursorResync();
-            } else if (act === "retry") armCursorResync();
-            else clearCursorResync();
-          }
           const wantCap = needBackfill || wantRedrawCap;
           needBackfill = false;
           wantRedrawCap = false;
@@ -3619,15 +3572,7 @@
           }
           term.write("\x1B[H\x1B[2J\x1B[3J\x1B[0m");
           term.write(text);
-          backfillAt = Date.now();
-          clearCursorResync();
-          const act = backfillCursorAction(st);
-          if (act === "apply") writeCursor(st);
-          else if (act === "defer") {
-            dlog("cursor", "\uC88C\uD45C \uBD88\uC2E0(\uC571 \uB80C\uB354 \uC911 \xB7 cf=0) \u2192 \uC7AC\uB3D9\uAE30 \uC608\uC57D");
-            cursorResyncLeft = CURSOR_RESYNC_TRIES;
-            armCursorResync();
-          }
+          if (st && st.hasCursor) writeCursor(st);
         } catch (_) {
         }
       },
@@ -3655,9 +3600,6 @@
       needBackfill = !didBackfill;
       wantRedrawCap = false;
       lastKnownState = null;
-      clearCursorResync();
-      backfillAt = 0;
-      lastOutputAt = 0;
       mouseResetTries = 0;
       statusEl.textContent = "\uC5F0\uACB0\uB428";
       statusEl.className = "status ok";
