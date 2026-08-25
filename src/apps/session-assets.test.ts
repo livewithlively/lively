@@ -3,7 +3,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   APP_PLUGIN_MANIFEST_REL, appPluginArgs, appPluginManifest, assetDiskPath, assertOrigNameSafe, composeAssetFile,
-  materializePreparedAppAssets,
+  materializePreparedAppAssets, splitLeadingFrontmatter,
 } from "./session-assets.js";
 
 // 순수 — 자산 종류 → cwd 밖 private plugin 상대경로 디스패치(#1867: cwd `.claude/` 가 아니라 session_home/plugin).
@@ -87,4 +87,45 @@ test("원격 실행 자산 봉투는 plugin/ 아래(+manifest)만 쓰고 travers
       p,
     );
   }
+});
+
+// ── #1867 실측: 앱 스킬이 세션에 안 실리던 원인 — body 에 frontmatter 가 든 자산 ────────────────
+//  dev 라이브(2026-08-25): 앱 'hello' 의 greet 이 `description: ""` + frontmatter 두 벌로 깔려
+//  Claude 의 호출 가능 스킬 목록에 아예 없었다. description 이 빈 스킬은 무효다.
+test("splitLeadingFrontmatter — 블록을 떼고 스칼라 값을 돌려준다 · 수평선 본문은 안 자른다", () => {
+  const withFm = '---\nname: greet\ndescription: 인사한다\n---\n\n# 본문\n내용';
+  assert.deepEqual(splitLeadingFrontmatter(withFm), { body: '# 본문\n내용', fields: { name: 'greet', description: '인사한다' } });
+  assert.deepEqual(splitLeadingFrontmatter('# 그냥 본문'), { body: '# 그냥 본문', fields: {} });
+  // 첫 비공백 줄이 `key:` 가 아니면 frontmatter 가 아니다 — 수평선으로 시작하는 마크다운을 잘라먹지 않는다.
+  const rule = '---\n본문이 수평선으로 시작한다\n---\n뒤 본문';
+  assert.equal(splitLeadingFrontmatter(rule).body, rule);
+  assert.deepEqual(splitLeadingFrontmatter(null), { body: '', fields: {} });
+});
+
+test("composeAssetFile — body frontmatter 를 두 벌로 심지 않는다", () => {
+  const out = composeAssetFile(
+    { description: "", body: '---\nname: greet\ndescription: 인사한다\n---\n\n# greet\n본문', frontmatter: {} },
+    "greet",
+  );
+  assert.equal(out.split(/^---$/m).length - 1, 2, "frontmatter 블록은 정확히 한 벌(--- 두 줄)이어야 한다");
+  assert.ok(!out.includes("\nname: greet\ndescription: 인사한다\n---"), "body 쪽 블록이 남으면 본문 첫 단락이 YAML 로 샌다");
+  assert.match(out, /# greet/);
+});
+
+test("composeAssetFile — 빈 description 을 심지 않는다(컬럼 없으면 body 블록에서 가져온다)", () => {
+  const out = composeAssetFile(
+    { description: "", body: '---\nname: greet\ndescription: 사용자에게 인사한다\n---\n본문', frontmatter: {} },
+    "greet",
+  );
+  assert.match(out, /description: "사용자에게 인사한다"/, "빈 description 스킬은 하네스가 싣지 않는다");
+  // 컬럼이 있으면 컬럼이 이긴다(중앙 편집이 조용히 무시되면 안 된다).
+  const col = composeAssetFile(
+    { description: "컬럼 설명", body: '---\ndescription: 본문 설명\n---\n본문', frontmatter: { description: "fm 설명" } },
+    "greet",
+  );
+  assert.match(col, /description: "컬럼 설명"/);
+  // 셋 다 비면 빈 값이지만 본문은 보존된다(그 이상은 데이터 문제).
+  const none = composeAssetFile({ description: "", body: "본문만", frontmatter: {} }, "greet");
+  assert.match(none, /description: ""/);
+  assert.match(none, /본문만/);
 });
