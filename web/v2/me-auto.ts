@@ -53,7 +53,7 @@ export interface AutoPaneDeps {
 export function autoPane(deps: AutoPaneDeps): { node: HTMLElement; init: () => void } {
   const host = el('div');
   const node = deps.pane('AI가 자동으로 하는 일',
-    '내가 시키지 않아도 AI가 알아서 하는 것들입니다 — 대화를 시작할 때, 일하는 동안, 대화를 끝낼 때.',
+    '대화를 시작할 때, 일하는 동안, 대화를 끝낼 때 AI가 알아서 하는 일입니다.',
     host);
   node.classList.add('v2me-pane-wide');
   return { node, init: () => { void load(host, deps); } };
@@ -89,7 +89,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   function sw(getter: () => boolean, save: (v: boolean) => Promise<void>, chip?: HTMLElement): HTMLElement {
     const b = el('button', { class: 'v2a-sw' + (getter() ? '' : ' off'), type: 'button',
       'aria-label': getter() ? '켜짐' : '꺼짐' }) as HTMLButtonElement;
-    if (!canEdit) { b.disabled = true; b.classList.add('ro'); b.title = '수정은 관리자만 할 수 있어요'; return b; }
+    if (!canEdit) { b.disabled = true; b.classList.add('ro'); b.title = '관리자만 바꿀 수 있습니다'; return b; }
     b.addEventListener('click', async () => {
       const next = b.classList.contains('off');
       b.disabled = true;
@@ -107,9 +107,9 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
 
   // ── 위쪽 큰 칸 세 개 — 상태를 여기서 한눈에 보고, 눌러 아래 내용을 바꾼다. ──
   const MOMENTS = [
-    { key: 'a', ord: '첫째', title: '대화를 시작할 때', sub: '내가 적어둔 메모를 먼저 읽어요', hook: 'session_preload' },
-    { key: 'b', ord: '둘째', title: '일하는 동안', sub: '일한 흔적을 표시해 둬요', hook: 'work_flag' },
-    { key: 'c', ord: '셋째', title: '대화를 끝낼 때', sub: '기록 남기라고 알려줘요', hook: 'stop_writeback_gate' },
+    { key: 'a', ord: '첫째', title: '대화를 시작할 때', sub: '적어둔 메모를 먼저 읽습니다', hook: 'session_preload' },
+    { key: 'b', ord: '둘째', title: '일하는 동안', sub: '일한 흔적을 표시해 둡니다', hook: 'work_flag' },
+    { key: 'c', ord: '셋째', title: '대화를 끝낼 때', sub: '기록 남기라고 알려줍니다', hook: 'stop_writeback_gate' },
   ];
   const tiles = el('div', { class: 'v2a-tiles' });
   const bodies = new Map<string, HTMLElement>();
@@ -135,10 +135,10 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   const aBody = el('div', { class: 'v2a-detail' },
     el('div', { class: 'v2a-d-h' },
       el('div', {}, el('div', { class: 'v2a-d-t', text: '대화를 시작할 때' }),
-        el('p', { class: 'v2a-d-s' }, ...uiText('새 대화를 열면 AI가 아래 메모부터 읽습니다. 그래서 매번 같은 설명을 안 해도 됩니다.'))),
+        el('p', { class: 'v2a-d-s' }, ...uiText('새 대화를 열면 AI가 아래 메모부터 읽습니다. 매번 같은 설명을 하지 않아도 됩니다.'))),
       sw(() => on('session_preload'),
         (v) => saveRuntime({ hooks: { ...hooks, session_preload: v } },
-          v ? '대화를 시작할 때 메모를 읽습니다' : '메모를 읽지 않습니다 — 다음 대화부터'),
+          v ? '이제 대화를 시작할 때 메모를 읽습니다' : '메모를 읽지 않습니다. 다음 대화부터 적용됩니다'),
         chips.get('a'))));
 
   mine.forEach((s, i) => aBody.append(memoBlock(s, i)));
@@ -147,10 +147,10 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       el('div', { class: 'v2a-mini-m' },
         el('div', { class: 'v2a-mini-t' }, el('span', { text: '라이블리 사용 설명서' }),
           el('span', { class: 'v2a-tag lock', text: '기본 제공' })),
-        el('div', { class: 'v2a-mini-s' }, ...uiText('AI가 라이블리를 다루는 법 — 우리가 고칠 수 없고, 새 버전이 나오면 알아서 바뀝니다.'))),
+        el('div', { class: 'v2a-mini-s' }, ...uiText('AI가 라이블리를 다루는 법입니다. 고칠 수 없고 새 버전이 나오면 자동으로 바뀝니다.'))),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '보기', onclick: () => viewGuide(guide) }),
       sw(() => guideOn, (v) => saveRuntime({ inject_ontology_guide: v },
-        v ? '사용 설명서를 함께 읽습니다' : '사용 설명서를 읽지 않습니다 — AI가 라이블리 사용법 안내를 못 받아요'))));
+        v ? '사용 설명서를 함께 읽습니다' : '사용 설명서를 읽지 않습니다. AI가 라이블리 쓰는 법을 모르게 됩니다'))));
   }
   aBody.append(el('div', { class: 'v2a-acts' },
     canEdit ? el('button', { class: 'btn btn-sm', type: 'button', text: '＋ 메모 하나 더', onclick: () => openEditor(null) }) : null,
@@ -161,7 +161,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   const bBody = el('div', { class: 'v2a-detail', hidden: true },
     el('div', { class: 'v2a-d-h' },
       el('div', {}, el('div', { class: 'v2a-d-t', text: '일하는 동안' }),
-        el('p', { class: 'v2a-d-s' }, ...uiText('AI가 파일을 고치거나 외부 서비스를 쓰면 “이 대화에서 일을 했다”고 표시해 둡니다. 대화를 끝낼 때 알려줄지 판단하는 데만 쓰고, AI가 읽는 내용에는 아무것도 더하지 않습니다.'))),
+        el('p', { class: 'v2a-d-s' }, ...uiText('AI가 파일을 고치거나 외부 서비스를 쓰면 이 대화에서 일했다고 표시해 둡니다. 대화를 끝낼 때 알려줄지 판단하는 데만 씁니다.'))),
       sw(() => on('work_flag'),
         (v) => saveRuntime({ hooks: { ...hooks, work_flag: v } }, v ? '일한 흔적을 표시합니다' : '표시하지 않습니다'),
         chips.get('b'))),
@@ -172,14 +172,14 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   const cBody = el('div', { class: 'v2a-detail', hidden: true },
     el('div', { class: 'v2a-d-h' },
       el('div', {}, el('div', { class: 'v2a-d-t', text: '대화를 끝낼 때' }),
-        el('p', { class: 'v2a-d-s' }, ...uiText('일은 했는데 아무 기록도 안 남기고 끝내려 하면, AI에게 한 번 알려 줍니다 — “기록 남기고 마치세요”.'))),
+        el('p', { class: 'v2a-d-s' }, ...uiText('일은 했는데 기록 없이 끝내려 하면 AI에게 한 번 알려 줍니다.'))),
       sw(() => on('stop_writeback_gate'),
         (v) => saveRuntime({ hooks: { ...hooks, stop_writeback_gate: v } }, v ? '끝낼 때 알려줍니다' : '알려주지 않습니다'),
         chips.get('c'))),
     el('div', { class: 'v2a-mini' },
       el('div', { class: 'v2a-mini-m' },
         el('div', { class: 'v2a-mini-t' }, el('span', { text: '알려줄 때 쓰는 문구' })),
-        el('div', { class: 'v2a-mini-s' }, ...uiText(rc && rc.writeback_notice ? '직접 고친 문구를 쓰고 있어요.' : '기본 문구를 쓰고 있어요.'))),
+        el('div', { class: 'v2a-mini-s' }, ...uiText(rc && rc.writeback_notice ? '직접 고친 문구를 씁니다.' : '기본 문구를 씁니다.'))),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '문구 보기', onclick: () => viewNotice() })));
   bodies.set('c', cBody);
 
@@ -188,7 +188,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
     el('div', { class: 'v2a-mini' },
       el('div', { class: 'v2a-mini-m' },
         el('div', { class: 'v2a-mini-t' }, el('span', { text: '라이블리를 최신 상태로 유지하기' })),
-        el('div', { class: 'v2a-mini-s' }, ...uiText('대화를 시작할 때 조용히 확인하고, 다음 대화부터 반영됩니다.'))),
+        el('div', { class: 'v2a-mini-s' }, ...uiText('대화를 시작할 때 새 버전이 있는지 확인하고 다음 대화부터 반영합니다.'))),
       sw(() => on('self_update'),
         (v) => saveRuntime({ hooks: { ...hooks, self_update: v } }, v ? '최신 상태로 유지합니다' : '자동 업데이트를 끕니다'))),
     el('div', { class: 'v2a-more' },
@@ -199,11 +199,11 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   //   그대로 세면 사람 수와 어긋난다(v2/switcher.ts 가 같은 이유로 명부 대신 '세션을 가진 사람'을 쓴다).
   //   그래서 숫자 없이, 어느 워크스페이스에서도 참인 문장으로 범위만 말한다.
   const head = el('div', { class: 'v2a-who' },
-    ...uiText('여기서 바꾸면 이 워크스페이스에서 여는 **모든 대화**에 적용됩니다 — 팀으로 쓰고 있다면 팀원의 AI에도 함께 적용돼요.'));
+    ...uiText('여기서 바꾸면 이 워크스페이스에서 여는 모든 대화에 적용됩니다. 팀이면 팀원의 AI도 같이 따릅니다.'));
 
   const wrap = el('div', {}, head, tiles, aBody, bBody, cBody, foot);
   if (!canEdit) {
-    wrap.prepend(el('p', { class: 'v2a-ro' }, ...uiText('보기만 할 수 있어요 — 바꾸는 것은 관리자만 됩니다.')));
+    wrap.prepend(el('p', { class: 'v2a-ro' }, ...uiText('보기만 됩니다. 바꾸려면 관리자 권한이 필요합니다.')));
   }
   show('a');
   return wrap;
@@ -239,8 +239,9 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
     const names: string[] = [];
     if (b.includes('${team}')) names.push('내 팀 이름');
     if (b.includes('${categories}')) names.push('우리가 쓰는 주제 목록');
-    if (b.includes('${wiki}')) names.push('📌 꽂아둔 문서 제목');
-    return uiText('메모 안의 표시된 자리에는 ' + names.join(' · ') + '이(가) 대화마다 자동으로 채워집니다.');
+    if (b.includes('${wiki}')) names.push('핀 꽂은 문서 제목');
+    const last = names[names.length - 1] || '';
+    return uiText('메모 안의 표시된 자리에는 대화마다 ' + names.join(', ') + josa(last) + ' 채워집니다.');
   }
 
   async function move(s: Sec, dir: number): Promise<void> {
@@ -255,7 +256,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   async function del(s: Sec): Promise<void> {
     const ok = await confirmDialog({
       title: '이 메모를 지울까요?',
-      message: '‘' + titleOf(s) + '’ 을(를) 지우면 다음 대화부터 AI가 읽지 않습니다. 휴지통에서 되살릴 수 있어요.',
+      message: '‘' + titleOf(s) + '’ 를 지우면 다음 대화부터 AI가 읽지 않습니다. 휴지통에서 되살릴 수 있습니다.',
       confirmText: '지우기', danger: true,
     });
     if (!ok) return;
@@ -268,15 +269,15 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
     const isNew = !s;
     const keyIn = el('input', { type: 'text', class: 'v2a-in', placeholder: '영문 소문자·숫자·하이픈 (예: team-rules)' }) as HTMLInputElement;
     const ta = el('textarea', { class: 'v2a-ta', rows: '16',
-      placeholder: 'AI가 늘 알아야 할 것을 적습니다. 예)\n- 우리는 3명이 함께 일하는 팀입니다.\n- 보고는 결론부터.\n- 금액은 원 단위로.' }) as HTMLTextAreaElement;
+      placeholder: 'AI가 늘 알아야 할 것을 적습니다.\n\n보고는 결론부터.\n금액은 원 단위로 말한다.\n지우기 전에 먼저 묻는다.' }) as HTMLTextAreaElement;
     ta.value = s ? (s.body_md || '') : '';
     const status = el('span', { class: 'v2me-status' });
     const save = el('button', { class: 'btn btn-primary', type: 'button', text: isNew ? '만들기' : '저장' }) as HTMLButtonElement;
     const body = el('div', { class: 'v2a-editor' },
       isNew ? el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '메모 이름' }), keyIn,
-        el('p', { class: 'v2a-fh' }, ...uiText('AI에게는 안 보이는 이름표입니다 — 나중에 목록에서 찾을 때 씁니다.'))) : null,
+        el('p', { class: 'v2a-fh' }, ...uiText('AI는 이 이름을 읽지 않습니다. 목록에서 찾을 때만 씁니다.'))) : null,
       el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '내용' }), ta),
-      el('p', { class: 'v2a-fh' }, ...uiText('비밀번호·API 키 같은 비밀값은 적지 마세요. 저장하면 다음 대화부터 적용됩니다.')),
+      el('p', { class: 'v2a-fh' }, ...uiText('비밀번호나 API 키는 적지 마세요. 저장하면 다음 대화부터 적용됩니다.')),
       el('div', { class: 'v2a-editor-a' }, save, status));
     const back = overlay(isNew ? '메모 만들기' : '메모 고치기 · ' + titleOf(s as Sec), body);
     save.addEventListener('click', async () => {
@@ -285,7 +286,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       save.disabled = true; status.textContent = '저장 중…';
       try {
         await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section, body_md: ta.value }) });
-        toast('저장했습니다 — 다음 대화부터 적용됩니다.');
+        toast('저장했습니다. 다음 대화부터 적용됩니다.');
         back.remove();
         reload();
       } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); save.disabled = false; status.textContent = ''; }
@@ -294,14 +295,14 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
 
   function viewGuide(g: Sec): void {
     overlay('라이블리 사용 설명서', el('div', { class: 'v2a-read' },
-      el('p', { class: 'v2a-fh' }, ...uiText('제품이 관리하는 문서입니다 — 고칠 수 없고, 새 버전이 나오면 자동으로 바뀝니다.')),
+      el('p', { class: 'v2a-fh' }, ...uiText('제품이 관리하는 문서라 고칠 수 없습니다. 새 버전이 나오면 자동으로 바뀝니다.')),
       el('div', { class: 'md-rendered v2a-md' }, renderMarkdown(g.body_md || ''))));
   }
 
   function viewNotice(): void {
     const text = (rc && rc.writeback_notice) || data.writebackNoticeDefault || '';
     overlay('알려줄 때 쓰는 문구', el('div', { class: 'v2a-read' },
-      el('p', { class: 'v2a-fh' }, ...uiText('대화를 끝낼 때 AI에게 이 문장이 한 번 전달됩니다. 문구를 직접 고치려면 맥락 관리 화면에서 하세요.')),
+      el('p', { class: 'v2a-fh' }, ...uiText('대화를 끝낼 때 AI에게 이 문장이 한 번 전달됩니다. 문구는 맥락 관리 화면에서 고칩니다.')),
       el('div', { class: 'v2a-notice', text }),
       el('div', { class: 'v2a-editor-a' },
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '맥락 관리에서 고치기 →',
@@ -345,10 +346,17 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       el('div', { class: 'v2a-dev-b' },
         el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '이 폴더에서 연 대화만 ‘일’로 셈하기' }), roots),
         el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl', text: '외부에서 가져온 내용 감지 (툴 이름 앞부분)' }), pull),
-        el('p', { class: 'v2a-fh' }, ...uiText('직접 만든 자동 동작(훅) ' + ((data.orgHooks || []).length) + '개는 맥락 관리 화면에서 관리합니다.')),
+        el('p', { class: 'v2a-fh' }, ...uiText('직접 만든 자동 동작 ' + ((data.orgHooks || []).length) + '개는 맥락 관리 화면에서 관리합니다.')),
         canEdit ? el('div', { class: 'v2a-editor-a' }, save) : null));
     return d;
   }
+}
+
+/** 받침 유무로 '이/가'를 고른다 — 목록 끝 낱말이 무엇이든 문장이 어색해지지 않게. */
+function josa(word: string): string {
+  const c = (word || '').trim().slice(-1).charCodeAt(0);
+  if (!c || c < 0xac00 || c > 0xd7a3) return '가';
+  return (c - 0xac00) % 28 ? '이' : '가';
 }
 
 function paintChip(c: HTMLElement, v: boolean): void {
