@@ -117,7 +117,9 @@ export async function createShellProject(
   spec: { name: string; description: string }, actor: string,
 ): Promise<{ id: number; folder: string } | null> {
   try {
-    const project = await createProject({ name: spec.name, description: spec.description }, { actor, source: "web" });
+    // ⚠ dedupe:false — 이름이 임시값("새 작업")이라 서로 같아서, 켜 두면 30초 안에 연 두 세션이 **한 프로젝트를 공유**한다
+    //  (2026-08-25 dev 실측: 빈 세션과 슬래시 세션이 project/2009 를 함께 받았다). 세션마다 자기 작업면이어야 한다.
+    const project = await createProject({ name: spec.name, description: spec.description, dedupe: false }, { actor, source: "web" });
     // 폴더·AGENTS.md 확보 + project.folder 확정(resolveProjectBase) — 이게 있어야 cwd 로 쓸 수 있다.
     await ensureAgentsMd(project.id);
     const folder = (await getProjectRow(project.id))?.folder ?? "";

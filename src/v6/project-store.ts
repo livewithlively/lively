@@ -432,7 +432,14 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
 export const CREATE_DEDUPE_SEC = 30;
 
 export async function createProject(
-  input: { name: string; description?: string; folder?: string; members?: string[]; list_id?: number | null },
+  input: {
+    name: string; description?: string; folder?: string; members?: string[]; list_id?: number | null;
+    /** 이름 기반 중복 차단(#1819)을 끈다 — **세션마다 자기 프로젝트를 가져야 하는 자동 생성**에만 쓴다(#1867).
+     *  그 경로는 이름이 임시값("새 작업")이라 서로 같다: 30초 안에 두 세션을 열면 dedupe 가 **같은 프로젝트를
+     *  돌려줘 두 세션이 한 폴더를 공유**한다(2026-08-25 dev 실측 — 빈 세션과 슬래시 세션이 project/2009 를 공유).
+     *  사람이 이름을 지어 만드는 경로에서는 절대 끄지 마라 — 그 자리는 IME 이중 Enter·에이전트 재시도가 실재한다. */
+    dedupe?: boolean;
+  },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   // folder = 평범한 선택 컬럼값(물리 폴더 생성 없음). TODO: 필요 시 capability 계층에서 createProjectFolder 선행.
@@ -454,7 +461,7 @@ export async function createProject(
     await c.query(
       `SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|' || $1))`,
       [`${ctx?.actor ?? ""}|${input.name}`]);
-    const dup: ProjectRow | undefined = await one(c,
+    const dup: ProjectRow | undefined = input.dedupe === false ? undefined : await one(c,
       `SELECT ${PROJECT_COLS} FROM project
         WHERE level='project' AND name=$1 AND created_by IS NOT DISTINCT FROM $2
           AND created_at > now() - ($3 || ' seconds')::interval
