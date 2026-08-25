@@ -28,10 +28,14 @@ const MAX_DRAWERS = 10;
 const SAMPLE_CAP = 200;
 const TURN_ID_RE = /^t[0-9a-f]{16}$/;
 
-/** 자료 kind → 사람이 읽는 이름. source.ts 의 SOURCE_KINDS 와 짝이다. */
+/**
+ * 자료 kind → 사람이 읽는 이름. source.ts 의 SOURCE_KINDS 와 짝이다.
+ *  ⚠ 여기에 **없는** kind(= 파일류)는 이름 대신 **확장자**로 가른다 — 아래 tallySources 참조.
+ *   `local_file`·`other` 를 여기 넣으면 안 된다: 넣는 순간 올린 파일이 전부 한 서랍이 된다.
+ */
 const KIND_LABEL: Record<string, string> = {
   transcript: "회의 전사록", minutes: "회의록", email: "메일", slack: "슬랙", discord: "디스코드",
-  notion_doc: "노션 문서", clickup_doc: "클릭업 문서", drive_file: "드라이브 파일", other: "그 밖의 자료",
+  notion_doc: "노션 문서", clickup_doc: "클릭업 문서", drive_file: "드라이브 파일",
 };
 
 /** 갈래 key — 사람이 적은 이름에서 슬러그를 뽑는다. 한글이면 해시로 떨어뜨려도 이름은 그대로 남는다. */
@@ -108,9 +112,11 @@ export function tallySources(entries: Array<{ kind?: string | null; title?: stri
   const byKind = new Map<string, number>();
   for (const e of entries) {
     const kind = String(e.kind || "other");
-    // 'other' 는 올린 파일이 대부분 떨어지는 자리라, 확장자로 한 겹 더 가른다 — 안 그러면 전부 한 서랍이다.
-    let bucket = KIND_LABEL[kind] ?? KIND_LABEL.other!;
-    if (kind === "other") {
+    // 이름이 붙은 kind(슬랙·메일 …)는 그대로. **그 밖은 전부 파일류**로 보고 확장자로 한 겹 더 가른다.
+    //  ⚠ 실측(2026-08-26): 온보딩 업로드는 `local_file` 로 들어온다. 'other' 만 갈랐더니
+    //   올린 파일이 통째로 '그 밖의 자료' 한 서랍에 뭉쳤다 — 그래서 화이트리스트가 아니라 **여집합**으로 판정한다.
+    let bucket = KIND_LABEL[kind];
+    if (!bucket) {
       const ext = (String(e.title || "").match(/\.([A-Za-z0-9]{1,8})$/)?.[1] || "").toLowerCase();
       bucket = EXT_BUCKET[ext] ?? "그 밖의 자료";
     }

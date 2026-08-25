@@ -158,5 +158,29 @@ t("㉒ 올린 게 없으면 빈 배열", () => {
   assert.deepEqual(tallySources([]), []);
 });
 
+
+// ㉓ 실측에서 잡힌 것 — 온보딩 업로드는 kind='local_file' 로 들어온다(2026-08-26, 프리뷰에서 실제로 올려 봄).
+//    'other' 만 확장자로 가르면 **올린 파일이 전부 한 서랍**이 된다. 파일류는 전부 확장자로 가른다.
+t("㉓ 업로드는 kind=local_file 로 온다 — 이것도 확장자로 갈라야 한다", () => {
+  const out = tallySources([
+    { kind: "local_file", title: "주간회의_2026-08-4주.md" },
+    { kind: "local_file", title: "월간_매출.csv" },
+    { kind: "local_file", title: "매출.xlsx" },
+  ]);
+  const m = new Map(out.map((x) => [x.name, x.n]));
+  assert.equal(m.get("표·수치"), 2, `local_file 이 확장자로 안 갈렸다 — ${JSON.stringify(out)}`);
+  assert.equal(m.get("문서"), 1);
+});
+
+t("㉔ 모르는 kind 도 파일류로 보고 확장자로 가른다 — 새 kind 가 생겨도 한 서랍에 뭉치지 않는다", () => {
+  const out = tallySources([{ kind: "brand_new_kind", title: "a.docx" }, { kind: "brand_new_kind", title: "b.csv" }]);
+  assert.deepEqual(out.map((x) => x.name).sort(), ["문서", "표·수치"]);
+});
+
+t("㉕ 이름 있는 kind 는 그대로 둔다 — 확장자로 덮어쓰지 않는다", () => {
+  const out = tallySources([{ kind: "slack", title: "무엇.csv" }, { kind: "email", title: "메일.docx" }]);
+  assert.deepEqual(out.map((x) => x.name).sort(), ["메일", "슬랙"]);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
