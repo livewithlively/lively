@@ -86,6 +86,35 @@ export function appPluginArgs(harnessKey: string, sessionHome: string): string[]
 }
 
 /**
+ * body 앞머리의 frontmatter 블록을 떼어낸다(순수) — 떼어낸 스칼라 키/값도 함께 돌려준다.
+ *
+ *  왜: 자산을 올리는 경로 중에 **파일 전문(frontmatter 포함)을 body 에 통째로** 넣은 것이 실재한다(킷 쪽 #278 과 같은 뿌리).
+ *   그대로 심으면 frontmatter 가 두 벌인 파일이 되고, 로더는 첫 블록만 먹으므로 두 번째 블록이 본문 첫 단락으로 샌다.
+ *  ⚠ 실측(#1867, 2026-08-25 dev): 앱 `hello` 의 greet 스킬이 `description: ""` + 이중 frontmatter 로 깔려
+ *   **Claude 가 그 스킬을 아예 싣지 않았다**(세션의 호출 가능 스킬 목록에 부재). description 이 빈 스킬은 무효다.
+ *   그래서 컬럼이 비었을 때만 body 블록의 값을 **폴백**으로 쓴다(컬럼이 있으면 컬럼이 진실원천 — 중앙 편집이 이긴다).
+ *
+ *  YAML 파서를 들이지 않는다. 블록의 **첫 비공백 줄**이 `key:` 꼴일 때만 frontmatter 로 본다 — 본문이 `---`
+ *   수평선으로 시작하는 마크다운을 잘라먹지 않기 위한 조건이다(kit stripLeadingFrontmatter 와 같은 규약).
+ */
+export function splitLeadingFrontmatter(body: string | null | undefined): { body: string; fields: Record<string, string> } {
+  const t = String(body ?? "");
+  const m = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(t);
+  if (!m) return { body: t, fields: {} };
+  const lines = m[1].split(/\r?\n/);
+  const head = lines.find((l) => l.trim() !== "");
+  if (!head || !/^[ \t]*[A-Za-z_][\w-]*[ \t]*:(?:[ \t]|$)/.test(head)) return { body: t, fields: {} };
+  const fields: Record<string, string> = {};
+  for (const line of lines) {
+    const kv = /^[ \t]*([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.*)$/.exec(line);
+    if (!kv) continue;                                   // 중첩·리스트 줄은 폴백 대상이 아니다(스칼라만 본다)
+    const raw = kv[2].trim().replace(/^["']|["']$/g, "");
+    if (raw) fields[kv[1]] = raw;
+  }
+  return { body: t.slice(m[0].length).replace(/^\s*\n/, ""), fields };
+}
+
+/**
  * 순수 — 자산 본문 조립(claude frontmatter + 본문 + provenance). name 은 **origName(앱 슬러그)로 강제**한다:
  *  중앙 저장 id 는 app-<hash>-<slug> 라, 그걸 name 으로 두면 앱 내부에서 `@<slug>` 상호참조가 안 맞물린다.
  *  frontmatter 의 나머지 키(model·tools 등)는 순서 보존해 그대로 옮긴다(kit composeFile 과 동형).
@@ -93,14 +122,19 @@ export function appPluginArgs(harnessKey: string, sessionHome: string): string[]
 export function composeAssetFile(asset: Pick<OrgHarnessAsset, "description" | "body" | "frontmatter">, origName: string): string {
   const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter))
     ? asset.frontmatter : {};
+  // body 가 파일 전문(frontmatter 포함)이면 그 블록을 떼어낸다 — 안 떼면 두 벌이 되어 로더가 두 번째를 본문으로 읽는다.
+  const split = splitLeadingFrontmatter(asset.body);
   const ordered: Array<[string, unknown]> = [];
   const seen = new Set<string>();
   const push = (k: string, v: unknown): void => { if (!seen.has(k)) { ordered.push([k, v]); seen.add(k); } };
   push("name", origName);                                                       // 앱 슬러그 강제(내부 상호참조)
-  push("description", asset.description != null && asset.description !== "" ? asset.description : (fm.description ?? ""));
+  // description 우선순위: 컬럼 > frontmatter 컬럼 > body 블록. 빈 description 스킬은 하네스가 싣지 않는다(#1867 실측).
+  const desc = [asset.description, fm.description, split.fields.description]
+    .find((v) => typeof v === "string" && v.trim() !== "");
+  push("description", desc ?? "");
   for (const k of Object.keys(fm)) if (k !== "name" && k !== "description") push(k, fm[k]);
   const lines = ordered.map(([k, v]) => `${k}: ${yamlValue(v)}`);
-  return `---\n${lines.join("\n")}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+  return `---\n${lines.join("\n")}\n---\n\n<!-- ${PROVENANCE} -->\n\n${split.body || ""}\n`;
 }
 
 /**
