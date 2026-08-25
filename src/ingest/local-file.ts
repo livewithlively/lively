@@ -23,6 +23,7 @@ import { extractOoxml, ooxmlKindFromName, printableRatio } from "../connectors/o
 import { memberReadRange, memberReadTo, memberStat } from "../terminal/terminal-member-fs.js";
 import { resolveRootPath, userSlug } from "../terminal/profiles.js";
 import { resolveMemberOsUser } from "../terminal/terminal-isolation.js";
+import { ensureLocalFilesDistillerOnce } from "../org/distill/local-preset.js";   // #1881 L3 — 첫 업로드 때 증류기 프리셋(꺼진 채)
 import {
   LOCAL_SYSTEM, LOCAL_INSTANCE, type LocalRoot, type LocalIngestKind,
   localExternalId, parseLocalExternalId, normalizeLocalRel, classifyLocalPath, localChannelOf, localFileUrl, localMimeOf,
@@ -173,6 +174,8 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
     }
     return row.id;
   });
+  // 자료가 생겼으면 그걸 지식으로 만들 증류기가 있어야 한다 — 없으면 꺼진 채로 만들어 둔다(승인 때 켠다). 실패해도 자료 등록엔 무관.
+  void ensureLocalFilesDistillerOnce(u.uploader.id);
   return { ingested: true, kind: built.kind, reason: built.reason, source_id: id, external_id: extId };
 }
 
