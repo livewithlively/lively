@@ -4037,6 +4037,36 @@
   "input_hash": "8b4d5e8760e7510b"
  },
  {
+  "name": "app_notify",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-notifications"
+  ],
+  "input_hash": "38808f62c5d06ce5"
+ },
+ {
+  "name": "me_notifications",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/notifications"
+  ],
+  "input_hash": "0e5d23d8a5038cf4"
+ },
+ {
+  "name": "me_notifications_read",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/notifications/read"
+  ],
+  "input_hash": "62ff2ece42e18912"
+ },
+ {
   "name": "me_slack_channels",
   "scope": null,
   "mcp": false,

@@ -31,7 +31,8 @@ import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검�
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
-import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
+import { activeNavKey } from './shell-surfaces.js';
+import { ensureSingletonAppInstance } from './app-instance.js';   // #1891 — inbox 앱 인스턴스 멱등 확보   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
@@ -571,6 +572,12 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       markActive('inbox');
       renderInbox(tab.center, data);
       tab.aside.replaceChildren();
+      // #1891 — inbox 는 앱이다(builtin, project=global, single). 주소는 #/inbox 를 정본으로 두고
+      //  인스턴스는 **뒤에서** 멱등 확보한다(세션의 #/s/ 와 같은 규칙, v2.2 §7).
+      //  ⚠ 실패해도 화면은 그대로 산다 — 인스턴스는 정체성·귀속을 주는 것이지 화면을 그리는 조건이 아니다.
+      void ensureSingletonAppInstance('inbox', '확인할 것')
+        .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
+        .catch(() => { /* 앱이 아직 안 깔린 게이트웨이 — 무회귀 */ });
     } else if (page === 'archive' || page === 'trash') {
       // 아카이브·휴지통(#1851) — 사이드바 발치의 두 행이 여는 화면. ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
       //  이 분기가 그보다 **앞에** 서야 한다(뒤에 두면 WIKI 앱 프레임의 옛 휴지통이 열린다 — 그쪽은 화면 안 링크로 간다).
