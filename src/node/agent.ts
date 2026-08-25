@@ -21,6 +21,7 @@ import {
 } from "../terminal/terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/terminal-pty.js";
 import { sendKeysToSession } from "../terminal/send-keys.js";
+import { injectFirstPrompt } from "../terminal/session-first-prompt.js";
 import { applySessionProject } from "../terminal/session-project.js";   // #1719 세션 프로젝트 소속(노드 로컬 적용)
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
@@ -238,12 +239,19 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       await sendKeysToSession(String(args.id), String(args.text ?? ""));
       return { ok: true };
     }
-    // #1719 — 세션 프로젝트 소속(붙이기·떼기). 게이트웨이가 소유·프로젝트 멤버십을 검증하고 프로젝트 폴더(상대경로 folder)를
-    //  실어 보낸다 — 노드는 자기 워크스페이스에서 그 폴더를 찾고, **없으면 만들어**(#1856) 링크를 건다. 폴더가 곧
-    //  문서 pull 의 진입 조건이라, 안 만들면 그 노드는 프로젝트 문서를 못 받는다(bind 에 실려온 AGENTS.md 를 씨앗으로 심는다).
+    // 세션 프로젝트 소속(붙이기·떼기). 게이트웨이가 소유권·공개범위를 검증하고 DB desired를 먼저 기록한다.
+    // 노드는 tmux 실행 캐시만 갱신하며 cwd나 프로젝트 표현 파일을 만들지 않는다.
     case "setProject": {
       const b = args.bind as { projectId: number; folder: string; name?: string | null; src?: "v6" | "org" } | null | undefined;
       return applySessionProject(user, String(args.id), b && Number(b.projectId) > 0 ? b : null);
+    }
+    case "injectFirstPrompt": {
+      const id = String(args.id);
+      const harness = String(args.harness || "claude");
+      const prompt = String(args.text || "");
+      if (prompt.trim()) void injectFirstPrompt(id, harness, prompt, { trustOk: false })
+        .catch((e) => console.warn(`[node] 첫 지시 주입 실패(${id}):`, (e as Error)?.message ?? e));
+      return { ok: true };
     }
     case "create": {
       const session = await createSession(user, args.input as CreateInput);

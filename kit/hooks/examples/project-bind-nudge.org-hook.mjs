@@ -31,13 +31,8 @@ import os from "node:os";
 // #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
 //  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
 //  훅 호출이 조용히 primary 데이터를 읽고 쓴다.
-const SCOPE_HDRS = {
-  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
-  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
-};
-
 const FLAG_DIR = path.join(os.tmpdir(), "lively-hooks");   // work-flag.mjs·stop-writeback-gate 와 같은 per-user tmp
-const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const FETCH_MS = 4000;
 // project-auto-bind 가 본문 끝에 남기는 표식 — 이 문자열이 두 훅과 GC 의 유일한 계약이다(바꾸려면 셋 다 함께).
 const AUTO_MARK = "lively:auto-created-from-first-prompt";
@@ -51,22 +46,17 @@ const readStdin = () => new Promise((resolve) => {
   } catch { fin(); }
 });
 
-/** cwd 에서 위로 올라가며 .lively/project.json 을 찾는다(CLI·훅 공통 계약).
- *  반환: null = 마커 없음(미연결) · 0 = 마커는 있으나 id 를 못 읽음 · N = 그 프로젝트 소속. */
-function boundProjectId(startDir) {
-  let dir = startDir;
-  for (let i = 0; i < 40; i++) {
-    const p = path.join(dir, ".lively", "project.json");
-    try {
-      if (fs.existsSync(p)) {
-        const id = Number(JSON.parse(fs.readFileSync(p, "utf8")).project_id);
-        return Number.isInteger(id) && id > 0 ? id : 0;
-      }
-    } catch { return 0; }        // 마커는 있는데 읽을 수 없다 → '소속이긴 하다'로 보고 침묵(오탐 금지)
-    const up = path.dirname(dir);
-    if (!up || up === dir) break;
-    dir = up;
-  }
+function executionSessionId(input = {}, env = process.env) {
+  const direct = String(env.LIVELY_SESSION_ID || "").trim();
+  if (direct && SID_RE.test(direct)) return direct;
+  const native = String(input.session_id || input.sessionId || "").trim();
+  const harness = String(env.LIVELY_HARNESS || "").trim().toLowerCase();
+  if (native && harness === "codex" && SID_RE.test(`codex-${native}`)) return `codex-${native}`;
+  if (native && harness === "claude" && SID_RE.test(`claude-${native}`)) return `claude-${native}`;
+  const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
+  if (codex && SID_RE.test(`codex-${codex}`)) return `codex-${codex}`;
+  const claude = String(env.CLAUDE_SESSION_ID || "").trim();
+  if (claude && SID_RE.test(`claude-${claude}`)) return `claude-${claude}`;
   return null;
 }
 
@@ -90,13 +80,10 @@ function projectIdFromToolInput(toolName, ti) {
 
 (async () => {
   if (process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1") return;
-  const boxId = (process.env.LIVELY_SESSION_ID || "").trim();
-  if (!boxId || !SID_RE.test(boxId)) return;      // 라이블리 세션이 아니다 → 조용히 끝
-
   const stdinData = await readStdin();
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { return; }
-  const cwd = String(input.cwd || process.cwd() || "");
-  if (!cwd) return;
+  const boxId = executionSessionId(input);
+  if (!boxId) return;
 
   // 세션당 1회 — 이미 봤으면 끝.
   const flag = path.join(FLAG_DIR, `${boxId}.projbind`);
@@ -106,7 +93,6 @@ function projectIdFromToolInput(toolName, ti) {
     catch { return false; }                        // 이미 누가 만들었다 → 중복 안내 안 함
   };
 
-  const pid = boundProjectId(cwd);
   const detId = projectIdFromToolInput(input.tool_name, input.tool_input);
   const emit = (text) => process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: text },
@@ -121,8 +107,30 @@ function projectIdFromToolInput(toolName, ti) {
     `  4) 빈 껍데기 #${from} 에는 어디로 갔는지 한 줄 남깁니다 — \`project_update_v6 {id: ${from}, append_description: "→ #<대상> 으로 이관됨(이 프로젝트는 비어 있습니다)."}\`\n` +
     "     (자동 삭제 장치는 없습니다 — 사람이 보드에서 보고 지웁니다. 그래서 '어디로 갔는지'가 본문에 남아 있어야 합니다.)\n";
 
-  // ── (c) 미연결 — project-auto-bind 가 꺼졌거나 실패한 폴백. 종전대로 '새로 만들어 붙여라'. ──
-  if (pid === null) {
+  const HOME = process.env.LIVELY_HOME || os.homedir();
+  const readLocal = (rel) => { try { return fs.readFileSync(path.join(HOME, ".lively", rel), "utf8").trim() || null; } catch { return null; } };
+  const token = (process.env.LIVELY_TOKEN || "").trim() || readLocal("token");
+  if (!token) return;
+  let base = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080");
+  base = base.replace(/\/?(mcp)?\/*$/i, "").replace(/\/+$/, "");
+  const SCOPE_HDRS = {
+    "x-lively-session": boxId,
+    ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+  };
+  let binding = null;
+  {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), FETCH_MS);
+    try {
+      const res = await fetch(`${base}/api/ui/execution-sessions/${encodeURIComponent(boxId)}/project-context?knownRevision=-1`, { signal: ctl.signal, headers: { authorization: "Bearer " + token, ...SCOPE_HDRS } });
+      if (res.ok) binding = await res.json();
+    } catch { /* 다음 쓰기에서 재시도 */ }
+    finally { clearTimeout(t); }
+  }
+  if (!binding) return;
+  const pid = Number(binding.project_id || 0);
+
+  // ── (c) 미연결 — project-auto-bind 가 꺼졌거나 실패한 폴백. 종전대로 붙이라고 안내한다. ──
+  if (!(pid > 0)) {
     if (!consume()) return;
     emit(
       "[이 세션은 라이블리 프로젝트에 안 붙어 있습니다 — 세션당 1회 안내]\n" +
@@ -132,20 +140,11 @@ function projectIdFromToolInput(toolName, ti) {
         : "**기본 동작은 새 프로젝트 생성입니다.** 기존 프로젝트를 검색해 골라 붙이려 하지 마세요 — 유사도 매칭은 오연결이 잦고 후보 검토로 맥락만 낭비합니다. 기존 프로젝트에 붙이는 건 사람이 그 프로젝트를 직접 지목했을 때만 하세요.\n" +
           "`project_create_v6` 로 새 프로젝트를 만들되 ① 소속 리스트(`project_list_index_v6` 의 `list_id`, 필수) ② 선행·후속(`follow_up` 또는 `project_link_project_v6`) ③ 필요·산출지식(`project_link_knowledge_v6`)을 함께 챙기고, " +
           "`session_set_project {project_id: <새 id>}` 로 이 세션을 붙이세요.\n") +
-      "⚠ 붙인 직후 `AGENTS.md` 와 `project/AGENTS.md` 를 **직접 읽으세요** — 실행 중 세션은 CLAUDE.md 를 다시 읽지 않아, 파일은 바뀌어도 당신의 맥락엔 안 들어옵니다.\n" +
+      "프로젝트를 붙이면 다음 턴에 해당 AGENTS.md가 동적으로 주입됩니다.\n" +
       "지금 호출하려던 툴은 그대로 진행하면 됩니다(이 안내는 아무것도 막지 않습니다).");
     return;
   }
-  if (pid === 0) { consume(); return; }            // 마커는 있는데 id 불명 — 판단하지 않는다(침묵)
-
   // ── 붙은 프로젝트가 '자동 생성 껍데기'인지 본다. 조회 실패면 판정 불가 → 플래그를 쓰지 않고 다음 기회에. ──
-  const HOME = process.env.LIVELY_HOME || os.homedir();
-  const readLocal = (rel) => { try { return fs.readFileSync(path.join(HOME, ".lively", rel), "utf8").trim() || null; } catch { return null; } };
-  const token = (process.env.LIVELY_TOKEN || "").trim() || readLocal("token");
-  if (!token) return;
-  let base = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080");
-  base = base.replace(/\/?(mcp)?\/*$/i, "").replace(/\/+$/, "");
-
   let proj = null;
   {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), FETCH_MS);

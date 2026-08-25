@@ -28,10 +28,21 @@ const fetch = (...args) => hostEffects.fetch(...args);
 // #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
 //  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
 //  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
-const SCOPE_HDRS = {
-  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
-  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+const executionSessionId = (input = {}) => {
+  const direct = String(process.env.LIVELY_SESSION_ID || "").trim();
+  if (direct) return direct;
+  const native = String(input.session_id || input.sessionId || "").trim();
+  if (native && HARNESS === "codex") return `codex-${native}`;
+  if (native && HARNESS === "claude") return `claude-${native}`;
+  const codex = String(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim();
+  if (codex) return `codex-${codex}`;
+  const claude = String(process.env.CLAUDE_SESSION_ID || "").trim();
+  return claude ? `claude-${claude}` : "";
 };
+const scopeHeaders = (input = {}) => ({
+  ...(executionSessionId(input) ? { "x-lively-session": executionSessionId(input) } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+});
 
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 러너 엔트리를 그대로 실행한 사본이면
@@ -101,13 +112,13 @@ function readStdin(ms = 800) {
 }
 
 // → { hooks, relay } | null(게이트웨이 미도달). relay 는 org 정책(관리탭) — 구버전 게이트웨이면 기본값.
-async function fetchHooks() {
+async function fetchHooks(input) {
   if (!TOKEN) return null;
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), SESSIONEND ? FETCH_MS_SESSIONEND : FETCH_MS);
   try {
     const url = `${GW}/api/ui/org/runner/hooks?harness=${encodeURIComponent(HARNESS || "")}&event=${encodeURIComponent(EVENT)}`;
-    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...SCOPE_HDRS } });
+    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...scopeHeaders(input) } });
     if (!res.ok) return null;
     const j = await res.json();
     if (!Array.isArray(j?.hooks)) return { hooks: [], relay: DEFAULT_RELAY };
@@ -138,14 +149,14 @@ function throttleFailures(fails) {
 
 // 훅 실패를 게이트웨이에 보고(fire-and-forget) — 관리탭이 '이 훅이 어느 멤버 머신에서 죽는지' 보게 한다(#892 결함 C).
 //  실패했을 때만 호출되므로 정상 경로 비용 0. 보고 실패는 무시한다(관측이 세션을 막아선 안 된다).
-async function reportFailures(fails) {
+async function reportFailures(fails, input) {
   if (!TOKEN || !fails.length) return;
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), REPORT_MS);
   try {
     await fetch(`${GW}/api/ui/org/runner/hook-report`, {
       method: "POST", signal: ctl.signal,
-      headers: { authorization: `Bearer ${TOKEN}`, ...SCOPE_HDRS, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${TOKEN}`, ...scopeHeaders(input), "content-type": "application/json" },
       body: JSON.stringify({ event: EVENT, harness: HARNESS || null, failures: fails }),
     });
   } catch { /* 관측은 best-effort */ }
@@ -291,7 +302,11 @@ function spawnHook(hook, stdin, ext, expectHash) {
       //  없으면 훅이 상한을 추측해 하드코딩하게 되고, 관리자가 timeout_sec 을 줄이는 순간 조용히 어긋난다.
       return { out: execFileSync("node", [tmp], {
         input: stdin, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, LIVELY_HOOK_TIMEOUT_MS: String(timeout) }, maxBuffer: 4 * 1024 * 1024,
+        env: {
+          ...process.env,
+          ...(HARNESS ? { LIVELY_HARNESS: HARNESS } : {}),
+          LIVELY_HOOK_TIMEOUT_MS: String(timeout),
+        }, maxBuffer: 4 * 1024 * 1024,
       }), fail: null, parses: true };
     } catch (e) {
       // 타임아웃/비정상 종료여도 세션을 막지 않는다(fail-open) — 부분 stdout 만 회수하고 실패는 따로 보고한다.
@@ -360,10 +375,10 @@ function mergePreToolUse(outputs, relay) {
 async function main() {
   if (!EVENT) return;
   const stdin = await readStdin(SESSIONEND ? STDIN_MS_SESSIONEND : undefined);
-  let toolName = "";
-  try { const o = JSON.parse(stdin || "{}"); toolName = o.tool_name || o.toolName || ""; } catch { /* */ }
+  let input = {}, toolName = "";
+  try { input = JSON.parse(stdin || "{}"); toolName = input.tool_name || input.toolName || ""; } catch { /* */ }
 
-  const fetched = await fetchHooks();
+  const fetched = await fetchHooks(input);
   const cfg = fetched === null ? (loadCache() || { hooks: [], relay: DEFAULT_RELAY }) : fetched; // 미도달 → grace 캐시
   if (fetched !== null) saveCache(fetched.hooks, fetched.relay);                                  // 성공 → 캐시 갱신
   const relay = cfg.relay.filter((d) => RANK[d]); // 잡값 방어
@@ -399,7 +414,7 @@ async function main() {
   // 게이트웨이 보고와 사용자 알림엔 스로틀을 건다 — 러너는 툴콜마다 도므로, 없으면 고장난 훅 하나가
   //  매 툴콜에 왕복 1회 + 배너 1개를 붙여 세션을 시끄럽고 느리게 만든다.
   const notable = fails.length ? throttleFailures(fails) : [];
-  if (notable.length) await reportFailures(notable);
+  if (notable.length) await reportFailures(notable, input);
 
   // PreToolUse 는 결정 이벤트 — 파싱·병합해 단일 결정 JSON 으로 전파(exit 0 + JSON stdout = 하네스 계약).
   //  훅이 죽었으면 systemMessage 로 사용자에게도 알린다(조용한 죽음 방지 — 이 이벤트는 이미 JSON 출력이라 무위험).

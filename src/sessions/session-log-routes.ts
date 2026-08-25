@@ -19,6 +19,18 @@ import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import { parseWindow } from "../terminal/harness-io/parse-cache.js";
 import { toNdjson } from "../terminal/harness-io/chat-line.js";
 import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
+import { executionSessionProject } from "../v6/execution-session-store.js";
+
+/** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
+export function sessionLogProjectClaim(
+  current: { project_id: number | null; binding_epoch: number } | null,
+  legacyProject: number,
+): { projectId: number | null; bindingEpoch: number | undefined } | null {
+  if (current) return { projectId: current.project_id, bindingEpoch: current.binding_epoch };
+  return Number.isInteger(legacyProject) && legacyProject > 0
+    ? { projectId: legacyProject, bindingEpoch: undefined }
+    : null;
+}
 import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } from "../terminal/terminal-transcript.js";
 import { createSession, editSession, sharedRoot } from "../terminal/terminal-sessions.js";
 import { autoNameUnnamedSession } from "./session-autoname.js";
@@ -135,10 +147,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // 서브에이전트 트리(#905 C1 슬⑥) — parent=부모(주) 세션 id. 최상위 목록엔 안 나오고 부모 대화록 아래에 붙는다.
     const parentSessionId = req.query.parent !== undefined && SID_RE.test(String(req.query.parent)) ? String(req.query.parent) : null;
     const r = await appendSessionLog({ nodeId, sessionId, atOffset, data, harness, owner: requester, store: cfg.store, parentSessionId });
-    // 프로젝트 귀속(#905 C1 슬⑤b) — 클라(훅·백필)가 **`.lively/project.json` 마커에서 읽어** 선언한 project 로 매핑한다
-    //  (경로 휴리스틱 아님 — 구조화된 값이 정본). claude uuid 세션을 프로젝트 탭 '세션 기록'에 잇는 다리
-    //  (recordSessionProject 의 tmux-id 매핑은 session_log 의 claude-uuid 와 안 붙으므로 이 경로가 필요).
-    //  위조 방어: 요청자가 그 프로젝트 멤버일 때만 기록. recordSessionProject 는 멱등(재백필·중복 append 에도 안전).
+    // 프로젝트 귀속(#905 C1 슬⑤b) — 대화 id(sessionId)와 실행 세션 id(execution)는 별개이므로,
+    //  execution_session의 현재 DB 바인딩을 대화 이력에 투영한다. cwd·project.json은 보지 않는다.
+    //  구 백필 클라이언트의 project query는 멤버십 검사 뒤에만 허용하는 전환 호환 경로다.
     // 세션 자동 이름(#1808) — 첫 청크에서 '처음 시킨 말'을 알아낸 순간, 아직 이름이 없는 박스에 그 이름을 붙인다.
     //  이름을 안 주고 만든 세션(= 새 세션 폼이 프로젝트명을 프리필하지 않게 된 뒤의 기본)이 여기서 이름을 얻는다.
     //  사람이 지은 이름은 손대지 않고(autoNameUnnamedSession 이 판정), 실패는 전부 삼킨다 — 대화 기록 저장이 먼저다.
@@ -154,10 +165,18 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
         });
       }
     }
-    const claimProject = req.query.project !== undefined ? Number(req.query.project) : NaN;
-    if (Number.isInteger(claimProject) && claimProject > 0) {
-      try { if (await isProjectMember(claimProject, requester)) await recordSessionProject(sessionId, claimProject); }
-      catch { /* 귀속 실패는 비치명 — 로그 저장은 이미 끝났다 */ }
+    const executionId = req.query.execution !== undefined ? String(req.query.execution) : "";
+    const headerExecution = String(req.headers["x-lively-session"] ?? "");
+    // 같은 소유자의 다른 실행 id를 대입해 귀속을 바꾸지 못하게, 전송 주체 헤더와 query가 같은 경우만 DB 바인딩을 쓴다.
+    const currentBinding = executionId && executionId === headerExecution
+      ? await executionSessionProject(executionId, requester).catch(() => null) : null;
+    const claim = sessionLogProjectClaim(currentBinding, req.query.project !== undefined ? Number(req.query.project) : NaN);
+    if (claim) {
+      try {
+        if (currentBinding || (claim.projectId != null && await isProjectMember(claim.projectId, requester))) {
+          await recordSessionProject(sessionId, claim.projectId, claim.bindingEpoch);
+        }
+      } catch { /* 귀속 실패는 비치명 — 로그 저장은 이미 끝났다 */ }
     }
     res.setHeader("Cache-Control", "no-store");
     res.json(r);   // { ok, verdict, bytes } — 보낸 쪽이 bytes 로 로컬 오프셋을 정정한다.

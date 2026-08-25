@@ -80,6 +80,51 @@ try {
     ok("핵심 컬럼·시드 실재(session.title·owner · push-wiki-notion params 비-null)");
   }
 
+  // ── 실행 세션 ↔ 프로젝트 DB SoT(#1867) ──
+  // cwd를 전혀 쓰지 않고 전환·해제·물리삭제가 revision/epoch과 이력을 함께 옮기는지 실 PG로 고정한다.
+  {
+    const { setExecutionSessionProject, executionSessionProject } = await import("../dist/v6/execution-session-store.js");
+    const { upsertProjectFolderBinding, listProjectFolderBindings } = await import("../dist/v6/project-session-store.js");
+    const made = await itemsPool.query(
+      `INSERT INTO project(name, created_by) VALUES ('binding-e2e-a','itest'),('binding-e2e-b','itest') RETURNING id ORDER BY id`);
+    const [a, b] = made.rows.map((r) => Number(r.id));
+    const sid = "codex-thr-binding-e2e";
+
+    const first = await setExecutionSessionProject({ id: sid, owner: "itest", harness: "codex", projectId: a });
+    assert.deepEqual([first?.project_id, first?.desired_revision, first?.binding_epoch], [a, 1, 1]);
+    const same = await setExecutionSessionProject({ id: sid, owner: "itest", harness: "codex", projectId: a });
+    assert.deepEqual([same?.desired_revision, same?.binding_epoch], [1, 1], "같은 프로젝트 재지정은 멱등");
+    const switched = await setExecutionSessionProject({ id: sid, owner: "itest", harness: "codex", projectId: b });
+    assert.deepEqual([switched?.project_id, switched?.desired_revision, switched?.binding_epoch], [b, 2, 2]);
+    const detached = await setExecutionSessionProject({ id: sid, owner: "itest", harness: "codex", projectId: null });
+    assert.deepEqual([detached?.project_id, detached?.desired_revision, detached?.binding_epoch], [null, 3, 3]);
+    const history = await itemsPool.query(
+      `SELECT project_id, binding_epoch FROM session_project WHERE session_id=$1 ORDER BY binding_epoch`, [sid]);
+    assert.deepEqual(history.rows.map((r) => [r.project_id == null ? null : Number(r.project_id), Number(r.binding_epoch)]),
+      [[a, 1], [b, 2], [null, 3]], "해제까지 append-only 이력으로 남아야");
+
+    await setExecutionSessionProject({ id: sid, owner: "itest", harness: "codex", projectId: a });
+    await itemsPool.query(`DELETE FROM project WHERE id=$1`, [a]);
+    const afterDelete = await executionSessionProject(sid, "itest");
+    assert.deepEqual([afterDelete?.project_id, afterDelete?.desired_revision, afterDelete?.binding_epoch], [null, 5, 5],
+      "프로젝트 물리삭제도 명시 detach 전환으로 보여야");
+    const deleteTail = await itemsPool.query(
+      `SELECT project_id, binding_epoch FROM session_project WHERE session_id=$1 ORDER BY binding_epoch DESC LIMIT 1`, [sid]);
+    assert.equal(deleteTail.rows[0].project_id, null);
+    assert.equal(Number(deleteTail.rows[0].binding_epoch), 5);
+
+    await upsertProjectFolderBinding({ projectId: b, memberId: "u1", nodeId: "node-1", absPath: "/work/shared", bindingKind: "canonical" });
+    await upsertProjectFolderBinding({ projectId: b, memberId: "u1", nodeId: "node-1", absPath: "/work/new", bindingKind: "canonical" });
+    await upsertProjectFolderBinding({ projectId: b, memberId: "u1", nodeId: "node-2", absPath: "/work/shared", bindingKind: "canonical" });
+    const folders = await listProjectFolderBindings(b);
+    assert.deepEqual(folders.map((x) => [x.node_id, x.abs_path, x.binding_kind]), [
+      ["node-1", "/work/new", "canonical"],
+      ["node-1", "/work/shared", "ephemeral"],
+      ["node-2", "/work/shared", "canonical"],
+    ]);
+    ok("실행 DB SoT — 전환·해제·삭제 revision 이력 + 프로젝트당 노드 canonical cwd 1개");
+  }
+
   await itemsPool.end();
   console.log(`\n${pass} passed`);
 } finally {

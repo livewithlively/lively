@@ -40,7 +40,8 @@ const server = http.createServer((req, res) => {
     if (req.method === "POST") {   // append
       const at = Number(u.searchParams.get("at"));
       const body = Buffer.concat(chunks);
-      appends.push({ sid, at, harness: u.searchParams.get("harness"), node: u.searchParams.get("node"), body: body.toString() });
+      appends.push({ sid, at, harness: u.searchParams.get("harness"), node: u.searchParams.get("node"),
+        execution: u.searchParams.get("execution"), headerSession: req.headers["x-lively-session"], body: body.toString() });
       if (at === s.bytes) { s.bytes += body.length; s.chunks.push({ at, body: body.toString() }); res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: true, verdict: "append", bytes: s.bytes })); }
       res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: false, verdict: "gap", bytes: s.bytes }));
     }
@@ -51,13 +52,14 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-slog-"));
-async function runHook(ev, { harness = "claude" } = {}) {
+async function runHook(ev, { harness = "claude", env = {} } = {}) {
   const home = await fsp.mkdtemp(path.join(root, "home-"));
   await fsp.mkdir(path.join(home, ".lively"), { recursive: true });
   await fsp.writeFile(path.join(home, ".lively", "token"), "t\n");
   await fsp.writeFile(path.join(home, ".lively", "gateway-url"), BASE + "\n");
   const c = spawn(process.execPath, [HOOK], {
-    cwd: root, env: { ...process.env, LIVELY_HOME: home, LIVELY_HARNESS: harness, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" }, stdio: ["pipe", "pipe", "pipe"],
+    cwd: root, env: { ...process.env, LIVELY_HOME: home, LIVELY_HARNESS: harness, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t",
+      LIVELY_SESSION_ID: "box-log-e2e", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "", ...env }, stdio: ["pipe", "pipe", "pipe"],
   });
   c.stdin.end(JSON.stringify(ev));
   const code = await new Promise((r) => c.on("exit", r));
@@ -98,6 +100,8 @@ try {
     assert.equal(appends.length, 1, "첫 턴에 한 번 전송");
     assert.equal(appends[0].at, 0, "워터마크 0 부터");
     assert.equal(appends[0].harness, "claude");
+    assert.equal(appends[0].execution, "box-log-e2e", "대화 id와 별개인 실행 세션 id를 명시");
+    assert.equal(appends[0].headerSession, "box-log-e2e", "query 실행 id와 인증 헤더가 일치");
     assert.equal(appends[0].body, body, "트랜스크립트 전문을 보냄");
     assert.equal(SERVER["s3"].bytes, Buffer.byteLength(body), "서버 워터마크가 그만큼 전진");
     ok("첫 캡처 → 워터마크 0부터 전문 전송 + 서버 전진");

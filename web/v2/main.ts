@@ -816,8 +816,8 @@ function openProjectPicker(anchor: HTMLElement, sessionId: string, tab: ShellTab
     busyPick = true;
     note.textContent = pid ? '붙이는 중…' : '떼는 중…';
     try {
-      const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid }) });
-      toast(pid ? `프로젝트에 붙였어요${r && r.linked ? ' — 세션 폴더의 ./project 로 프로젝트 폴더에 갑니다' : ''}.` : '프로젝트에서 뗐어요.');
+      await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid }) });
+      toast(pid ? '프로젝트에 붙였어요. 다음 질문부터 프로젝트 맥락이 반영됩니다.' : '프로젝트에서 뗐어요.');
       if (closePop) closePop();
       await loadData(); drawSide(); tabsApi?.paint();
       const cur = data.sessions.find((x) => x.id === sessionId) || null;

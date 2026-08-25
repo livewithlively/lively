@@ -1,12 +1,21 @@
 import { strict as assert } from "node:assert";
+import path from "node:path";
 import test from "node:test";
-import { assetDiskPath, assertOrigNameSafe, composeAssetFile } from "./session-assets.js";
+import { appPluginArgs, appPluginManifest, assetDiskPath, assertOrigNameSafe, composeAssetFile } from "./session-assets.js";
 
-// 순수 — 자산 종류 → 세션 폴더 상대경로 디스패치(design D4, kit placement 규약과 동일).
+// 순수 — 자산 종류 → cwd 밖 private plugin 상대경로 디스패치.
 test("assetDiskPath — skill/subagent/command 디스패치", () => {
-  assert.equal(assetDiskPath("skill", "greet"), ".claude/skills/greet/SKILL.md");
-  assert.equal(assetDiskPath("subagent", "reviewer"), ".claude/agents/reviewer.md");
-  assert.equal(assetDiskPath("command", "deploy"), ".claude/commands/deploy.md");
+  assert.equal(assetDiskPath("skill", "greet"), "plugin/skills/greet/SKILL.md");
+  assert.equal(assetDiskPath("subagent", "reviewer"), "plugin/agents/reviewer.md");
+  assert.equal(assetDiskPath("command", "deploy"), "plugin/commands/deploy.md");
+});
+
+test("앱 plugin manifest와 Claude 세션 전용 --plugin-dir 배선", () => {
+  assert.deepEqual(JSON.parse(appPluginManifest("hello")), {
+    name: "hello", description: "Lively app session assets for hello", version: "1.0.0",
+  });
+  assert.deepEqual(appPluginArgs("claude", "/private/session"), ["--plugin-dir", path.join("/private/session", "plugin")]);
+  assert.deepEqual(appPluginArgs("codex", "/private/session"), [], "Claude plugin을 다른 하네스 argv에 넘기지 않는다");
 });
 
 test("assetDiskPath — 알 수 없는 종류 → null(skip)", () => {

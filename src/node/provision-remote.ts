@@ -75,6 +75,15 @@ export function normalizeProvisionResult(raw: unknown): ProvisionResult {
   return { provisioned: Array.isArray(o.provisioned) ? o.provisioned : [], failed: Array.isArray(o.failed) ? o.failed : [] };
 }
 
+/** 새 노드는 create에서 첫 지시를 빼 DB 바인딩 뒤 별도 op로 넣는다. 구 노드는 종전 동작을 보존한다. */
+export function nodeProjectCreatePlan(input: CreateInput, supportsDeferredPrompt: boolean): {
+  createInput: CreateInput; deferredPrompt: string | null;
+} {
+  const prompt = typeof input.initialPrompt === "string" && input.initialPrompt.trim() ? input.initialPrompt : null;
+  if (!supportsDeferredPrompt || !prompt) return { createInput: input, deferredPrompt: null };
+  return { createInput: { ...input, initialPrompt: undefined }, deferredPrompt: prompt };
+}
+
 // 노드 사용 게이트(#905 C4) — "이 요청자가 이 노드에 프로젝트 작업(provision·세션생성)을 시킬 수 있는가"의 단일 판정.
 //  provision·create 두 경로가 **같은 게이트**를 써야 한쪽만 통과하는 불일치(provision 됐는데 세션 못 열기, 그 반대)가
 //  안 난다. 레지스트리(online/supports)·DB(getNode)는 싱글턴이라 못 mock → 주입형으로 분리해 판정을 단위검증한다
@@ -176,15 +185,17 @@ export async function provisionStatusOnNode(nodeId: string, projectId: number): 
 //  무지 — DB 없음 → createSession 내부 검증이 빈 배열이 되므로, 노드 create 핸들러가 이 별도 invites 를 적용한다).
 export async function createProjectSessionOnNode(
   nodeId: string, requesterId: string, input: CreateInput, invites: string[],
-): Promise<SessionInfo> {
+): Promise<{ session: SessionInfo; deferredPrompt: string | null }> {
   await assertNodeUsable(liveNodeDeps, nodeId, requesterId);
   try {
     // #1541 hostProfile — member 노드 && 생성자=주인이면 그 PC 의 네이티브 하네스 설정을 그대로 쓴다(CreateInput 주석).
     //  판정을 못 하면(조회 실패) false — 프로필 주입(안전측) 유지.
     const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, requesterId)).catch(() => false);
-    return await nodeRpc<SessionInfo>(nodeId, "create", {
-      user: { userId: requesterId }, input: { ...input, invites: [], hostProfile }, invites,
+    const plan = nodeProjectCreatePlan(input, nodeSupports(nodeId, "injectFirstPrompt"));
+    const session = await nodeRpc<SessionInfo>(nodeId, "create", {
+      user: { userId: requesterId }, input: { ...plan.createInput, invites: [], hostProfile }, invites,
     });
+    return { session, deferredPrompt: plan.deferredPrompt };
   } catch (e) {
     // 네트워크·미지원을 사람 말로(래핑 없으면 bare 500 로 샌다) — relayNodeOp 와 같은 **분기 구성**(문구는 이 사이트 것).
     //  (#1313 R46) relayNodeOp 와 달리 offline 에 `|| !nodeOnline(nodeId)` 추가조건이 있고, unsupported 문구는 op 을
