@@ -46,6 +46,34 @@ export const CLASSIC_PAGES: Record<string, string> = {
 };
 
 export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.tab || navOn(a.tab)); }
+
+// ── 최근 쓴 앱(#1954) — 홈 한 줄이 읽는 기억. 이 기기의 내 습관이라 브라우저에 둔다(서버 저장 아님). ──
+//  ⚠ 이름을 `*_KEY` 로 두지 않는다 — gitleaks 의 generic-api-key 룰이 브라우저 저장소 이름을 시크릿으로 오인해
+//   CI 시크릿 스캔이 떨어진다(#1954 실측). 값은 localStorage 칸 이름일 뿐이다.
+const RECENT_STORE = 'lively_v2_recent_apps';
+const RECENT_MAX = 12;
+function readRecent(): string[] {
+  try { const v = JSON.parse(localStorage.getItem(RECENT_STORE) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; }
+  catch { return []; }
+}
+/** 앱을 열었다 — 맨 앞으로. 같은 앱을 되풀이 열어도 줄이 늘지 않는다. */
+export function noteAppUse(key: string): void {
+  if (!key || !appByKey(key)) return;
+  const next = [key, ...readRecent().filter((k) => k !== key)].slice(0, RECENT_MAX);
+  try { localStorage.setItem(RECENT_STORE, JSON.stringify(next)); } catch { /* 못 남겨도 이번 화면은 된다 */ }
+}
+/**
+ * 최근 쓴 앱 n개. 기록이 모자라면 **표 순서로 채운다** — 처음 온 사람에게 빈 줄을 보이지 않기 위해서다
+ * (빈 줄은 '아직 아무것도 없다'가 아니라 '고장'으로 읽힌다).
+ */
+export function recentApps(n: number): AppDef[] {
+  const vis = visibleApps();
+  const byKey = new Map(vis.map((a) => [a.key, a]));
+  const out: AppDef[] = [];
+  for (const k of readRecent()) { const a = byKey.get(k); if (a && !out.includes(a)) out.push(a); if (out.length >= n) return out; }
+  for (const a of vis) { if (!out.includes(a)) out.push(a); if (out.length >= n) break; }
+  return out;
+}
 export function appByKey(key: string): AppDef | null { return APPS.find((a) => a.key === key) || null; }
 
 // 임베드 URL — **같은 문서**를 ?embed=1 로. location.pathname 은 이미 프리뷰 프리픽스(/preview/<id>/ui/)를 포함하므로

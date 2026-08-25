@@ -11,7 +11,7 @@ import { renderOnboarding, onboardingDone } from './onboarding.js'; // #/welcome
 import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { renderLiv } from '../liv.js';
-import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
+import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { bySeen, drawSide as drawSideTree, markNav, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
@@ -286,7 +286,14 @@ export async function bootV2(): Promise<void> {
     },
   });
   bindOmniKey();
-  // 사이드바 상태점 — 라이브 세션은 자주 바뀐다. 20초 폴링. 탭이 숨어 있으면(브라우저 탭) 건너뛴다.
+  //  화면으로 돌아오면 즉시 최신으로 — 다음 틱을 기다리면 그 몇 초가 '멈춘 화면'으로 보인다.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !tabsApi) return;
+    void loadData().then(() => { drawSide(); tabsApi!.paint(); });
+  });
+  // 사이드바 상태 — 라이브 세션은 자주 바뀐다. 8초 폴링(#1954: 20초는 '방금 끝난 것'이 한참 뒤에야 떠서
+  //  화면이 묵은 것으로 읽혔다). 탭이 숨어 있으면 건너뛰고, **돌아온 순간 바로 한 판 당긴다**(아래 visibilitychange)
+  //  — 건너뛴 동안 쌓인 지연이 사람 눈에 그대로 보이던 자리가 거기다.
   setInterval(() => {
     if (document.hidden || !tabsApi) return;
     void loadData().then(() => {
@@ -308,7 +315,7 @@ export async function bootV2(): Promise<void> {
           drawAsideSession(t, s); }
       }
     });
-  }, 20000);
+  }, 8000);
 }
 
 // 아카이브·휴지통 화면(#1851)의 배선 — 무엇을 바꾸든 서버가 정답이므로 다시 읽고 사이드바·탭을 되그린다.
@@ -663,6 +670,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         return;
       }
       const a = appByKey(segs[1]);
+      if (a) noteAppUse(a.key);   // 홈 한 줄이 읽는 '최근에 연 앱'(#1954)
       const rest = segs.slice(2).join('/');
       // 브라우저 앱(#1829)은 우리 화면이 아니라 남의 웹이다 — iframe(appFrame)이 아니라 서피스로 띄운다.
       //  ⚠ 주소는 **한 세그먼트에 encodeURIComponent 로** 싣는다(`#/app/web/https%3A%2F%2Fexample.com`).
@@ -680,6 +688,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       }
     } else if (CLASSIC_PAGES[page]) {
       const a = appByKey(CLASSIC_PAGES[page]);
+      if (a) noteAppUse(a.key);
       tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
       markActive('app:' + (a ? a.key : ''));
     } else {
@@ -734,31 +743,11 @@ function projectIdForRoute(route: string): number {
   return 0;
 }
 
-/**
- * 프로젝트 경로 — 조상(스페이스 › 리스트)과 **프로젝트 이름**을 따로 돌려준다.
- *  한 줄로 이어 붙이면 좁은 사이드바에서 뒤가 잘려 정작 필요한 이름이 사라진다(dev 실측: 380px 짜리가 216px 칸에).
- *  그리는 쪽이 둘을 따로 줄이도록 나눠 준다 — 조상이 먼저 줄고 이름이 남는다.
- *  리스트가 없으면 '미분류' 같은 자리표시는 넣지 않는다(좁은 줄에서 이름 자리를 뺏는다).
- */
-function projectPath(id: number): { id: number; anc: string; ancSegs: string[]; name: string } | null {
+/** 소속 프로젝트 — **이름 하나**. 스페이스 › 리스트 계층은 좁은 줄에서 뒤가 잘려 읽히지 않아 걷었다(#1954). */
+function projectPath(id: number): { id: number; name: string } | null {
   if (!(id > 0)) return null;
   const p = data.projects.find((x) => Number(x.id) === id);
-  if (!p) return { id, anc: '', ancSegs: [], name: `프로젝트 #${id}` };
-  const list = (data.lists || []).find((x) => Number(x.id) === Number(p.list_id));
-  const folderById = new Map((data.folders || []).map((f) => [Number(f.id), f]));
-  const chain: string[] = [];
-  let fid = list && list.folder_id != null ? Number(list.folder_id) : 0;
-  const seen = new Set<number>();
-  while (fid > 0 && !seen.has(fid)) {
-    seen.add(fid);
-    const f = folderById.get(fid);
-    if (!f) break;
-    chain.unshift(String(f.name || ''));
-    fid = f.parent_id != null ? Number(f.parent_id) : 0;
-  }
-  if (list && list.name) chain.push(String(list.name));
-  const segs = chain.filter(Boolean);
-  return { id, anc: segs.join(' › '), ancSegs: segs, name: p.name || `프로젝트 #${id}` };
+  return { id, name: (p && p.name) || `프로젝트 #${id}` };
 }
 
 /** 좌측 목록의 행 키 — 창·인스턴스·세션 중 무엇에서 왔든 **같은 대상이면 같은 한 행**으로 접힌다(#1883). */
@@ -798,32 +787,92 @@ function sideRowFace(route: string): Omit<SideInstance, 'id' | 'active'> {
 
 //  행 키 → 그 행을 여는 route · 그 행이 쥔 AppInstance. 활성화·닫기가 이 두 표로 되돌아간다.
 const sideRowRoute = new Map<string, string>();
+const lastSideRows = new Map<string, SideInstance>();   // 방금 그린 행 — × 가 '그때 어떤 상태였나'를 읽는다
 const sideRowInstance = new Map<string, string>();
 
+/** 지금 사람이 볼 일이 있는 상태 — 이 셋만 위 묶음으로 올라간다(#1954). */
+const PRIORITY_ST: Record<string, { label: string; rank: number }> = {
+  waiting: { label: '확인 필요', rank: 0 },   // 내 승인·선택을 기다린다
+  done:    { label: '작업 완료', rank: 1 },   // 끝났는데 아직 안 봤다 — 들어가 보면 사라진다
+  busy:    { label: '작업 중',   rank: 2 },   // 지금 돌고 있다
+};
+const PRIORITY_GROUP = '지금 볼 것';
+
+/** 마지막 작업 일시 → 묶음 이름. 오늘·어제는 그렇게 부르고, 그 앞은 날짜로. */
+function dayGroup(at: number, now: number): string {
+  if (!at) return '언젠가';
+  const d = new Date(at); const n = new Date(now);
+  const day = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(n) - day(d)) / 86400000);
+  if (diff <= 0) return '오늘';
+  if (diff === 1) return '어제';
+  return d.getFullYear() === n.getFullYear() ? `${d.getMonth() + 1}월 ${d.getDate()}일`
+    : `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
+
 /**
- * 좌측 목록의 정본(#1883 · #1780 v2.2 §2.2·§2.3).
+ * 목록 안에서 **행이 스스로 움직이지 않게** 하는 자물쇠(#1954).
+ *  돌고 있는 세션은 20초마다 lastSeen 이 갱신되므로, 그 값을 정렬에 그대로 쓰면 볼 때마다 순서가 뒤바뀐다
+ *  (상민님 지적: "코덱스는 안 바뀌던데"). 그래서 정렬 키는 **그 행이 지금 묶음에 들어온 순간의 값**으로 얼린다.
+ *  묶음이 바뀔 때만(상태가 변해 위로 올라가거나 날짜가 넘어갈 때) 다시 잰다 — 그때는 움직이는 게 맞다.
+ */
+/**
+ * 목록에서 **치운 행**(#1954 상민님: "왜 어떤 건 닫을 수 있고 어떤 건 안 되냐").
+ *  세션은 닫아도 박스에서 계속 돈다 — 그래서 × 의 뜻은 '끝내기'가 아니라 **'지금은 안 볼래'**다.
+ *  치울 때의 상태를 함께 적어 두고, 그 상태가 바뀌면(작업 중 → 확인 필요·작업 완료) **다시 올라온다** —
+ *  그게 이 목록이 하는 일이기 때문이다. 같은 상태로 계속 도는 동안엔 조용하다.
+ *  기기별 습관이라 브라우저에 둔다.
+ */
+const DISMISS_STORE = 'lively_v2_side_dismissed';   // 이름을 `*_KEY` 로 두지 않는다 — 위 apps.ts 주석과 같은 이유(gitleaks 오탐)
+let dismissed: Record<string, string> = (() => {
+  try { const v = JSON.parse(localStorage.getItem(DISMISS_STORE) || '{}'); return v && typeof v === 'object' ? v : {}; }
+  catch { return {}; }
+})();
+function saveDismissed(): void {
+  try { localStorage.setItem(DISMISS_STORE, JSON.stringify(dismissed)); } catch { /* 못 남겨도 이번 화면은 된다 */ }
+}
+
+const orderPin = new Map<string, { group: string; at: number }>();
+function pinnedAt(key: string, group: string, at: number): number {
+  const had = orderPin.get(key);
+  if (had && had.group === group) return had.at;
+  orderPin.set(key, { group, at });
+  return at;
+}
+
+/**
+ * 좌측 목록의 정본(#1883 · #1780 v2.2 §2.2·§2.3) + 묶음·순서 규칙(#1954).
  *  **창(탭)이 아니라 살아 있는 것**을 센다 — 탭은 AppWindow 일 뿐이고 인스턴스는 창 없이도 산다(1:0..1).
  *  세 줄기를 한 목록으로 접는다:
  *   ① 돌고 있는 내 세션 — 이 브라우저에서 안 열었어도 박스에서 돌고 있으면 내 앱이다.
  *   ② 세션이 아닌 활성 인스턴스 — 창을 닫아도 서버에 살아 있다.
  *   ③ 지금 열려 있는 창 — 홈·확인할 것처럼 인스턴스가 없는 화면도 보고 있는 동안은 목록에 있어야 한다.
- *  끝난 세션의 인스턴스는 세우지 않는다(창이 붙어 있으면 ③이 세운다) — 아니면 지난 세션이 목록을 덮는다(dev 실측 30건).
+ *  끝난 세션의 인스턴스는 세우지 않는다(창이 붙어 있으면 ③이 세운다) — 아니면 지난 세션이 목록을 덮는다.
+ *  묶음: 사람이 볼 일 있는 것(작업 중·확인 필요·완료 미확인)이 맨 위, 나머지는 마지막 작업 날짜별로.
  */
 function sideInstances(): SideInstance[] {
   const activeTab = tabsApi ? tabsApi.current() : null;
   const activeKey = activeTab ? sideRowKey(activeTab.route) : '';
+  const now = Date.now();
   sideRowRoute.clear(); sideRowInstance.clear();
-  const rows = new Map<string, SideInstance & { at: number }>();
-  const put = (key: string, route: string, at: number, closable: boolean): void => {
+  interface Row extends SideInstance { at: number; rank: number }
+  const rows = new Map<string, Row>();
+  const put = (key: string, route: string, at: number, stateKey?: string, force?: boolean): void => {
     const prev = rows.get(key);
+    //  치운 행은 **그 상태 그대로인 동안** 숨는다. 창이 열려 있으면(force) 늘 보인다 — 보고 있는 화면이 목록에 없으면 그게 고장이다.
+    if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === (stateKey || '')) return;
     sideRowRoute.set(key, route);
+    const st = stateKey ? PRIORITY_ST[stateKey] : undefined;
+    const rawAt = Math.max(at, prev ? prev.at : 0);
+    const group = st ? PRIORITY_GROUP : dayGroup(rawAt, now);
     rows.set(key, { ...sideRowFace(route), id: key, active: key === activeKey,
-      at: Math.max(at, prev ? prev.at : 0), closable: prev ? prev.closable : closable });
+      status: st ? { key: stateKey!, label: st.label } : null,
+      group, rank: st ? st.rank : 9, at: pinnedAt(key, group, rawAt) });
   };
 
   for (const s of data.sessions) {                                   // ① 돌고 있는 내 세션
     if (!s.live || !s.alive || !s.owned || isTrashedSess(s)) continue;
-    put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, false);   // 돌고 있는 건 닫아서 없앨 수 없다
+    put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, s.stateKey);   // lastSeen 은 ms(views.ts)
   }
   for (const inst of appInstances) {                                 // ② 세션 아닌 활성 인스턴스
     if (inst.status !== 'active') continue;
@@ -833,20 +882,42 @@ function sideInstances(): SideInstance[] {
       continue;
     }
     sideRowInstance.set('inst:' + inst.id, inst.id);
-    put('inst:' + inst.id, '#/i/' + encodeURIComponent(inst.id), at, true);
+    put('inst:' + inst.id, '#/i/' + encodeURIComponent(inst.id), at);
   }
-  const now = Date.now();
   (tabsApi ? tabsApi.tabs : []).forEach((tab, i) => {                // ③ 지금 열린 창
     const key = sideRowKey(tab.route);
-    put(key, tab.route, rows.has(key) ? rows.get(key)!.at : now - i, true);
+    put(key, tab.route, rows.has(key) ? rows.get(key)!.at : now - i, rows.get(key)?.status?.key, true);
   });
-  return [...rows.values()].sort((a, b) => b.at - a.at).map(({ at: _at, ...row }) => row);
+
+  // 살아 있는 행만 자물쇠에 남긴다 — 안 그러면 닫힌 세션의 옛 자리가 영영 쌓인다.
+  for (const k of [...orderPin.keys()]) if (!rows.has(k)) orderPin.delete(k);
+
+  const all = [...rows.values()];
+  const dayOf = new Map<string, number>();   // 묶음 이름 → 그 묶음의 최신 시각(묶음끼리의 순서)
+  for (const r of all) if (r.group !== PRIORITY_GROUP) dayOf.set(r.group!, Math.max(dayOf.get(r.group!) || 0, r.at));
+  const out = all.sort((a, b) => {
+    const ap = a.group === PRIORITY_GROUP, bp = b.group === PRIORITY_GROUP;
+    if (ap !== bp) return ap ? -1 : 1;                       // 볼 일 있는 것이 늘 위
+    if (ap) return a.rank - b.rank || b.at - a.at;           // 확인 필요 → 작업 완료 → 작업 중
+    if (a.group !== b.group) return (dayOf.get(b.group!) || 0) - (dayOf.get(a.group!) || 0);   // 날짜 내림차순
+    return b.at - a.at;
+  }).map(({ at: _at, rank: _rank, ...row }) => row);
+  lastSideRows.clear();
+  for (const r of out) lastSideRows.set(r.id, r);
+  return out;
 }
 
-/** 좌측 행의 × — 창을 떼고(UI detach) 인스턴스가 있으면 그것도 닫는다. 세션·worker 는 여기서 죽이지 않는다(v2.2 §2.3). */
+/**
+ * 좌측 행의 × = **목록에서 치우기**(#1954). 어느 행이든 같은 뜻이라 전부 닫을 수 있다.
+ *  하는 일: ① 창이 있으면 뗀다(UI detach) ② 인스턴스가 있으면 닫는다 ③ 그 행을 지금 상태로 치워 둔다.
+ *  ⚠ 세션·worker 는 죽이지 않는다(#1780 v2.2 §2.3) — 돌던 일은 그대로 돌고, 상태가 바뀌면 목록에 다시 올라온다.
+ */
 async function closeSideRow(key: string): Promise<void> {
   const route = sideRowRoute.get(key);
   const instanceId = sideRowInstance.get(key);
+  const row = lastSideRows.get(key);
+  dismissed[key] = row?.status?.key || '';
+  saveDismissed();
   if (route && tabsApi) { const hit = tabsApi.find(route); if (hit) tabsApi.close(hit); }
   if (instanceId) {
     try { await closeAppInstance(instanceId); appInstances = appInstances.filter((x) => x.id !== instanceId); }
@@ -909,6 +980,8 @@ function drawSide(): void {
     onActivateInstance: openSideRow,
     onCloseInstance: (key) => { void closeSideRow(key); },
     onOpenProject: openProjectPage,
+    //  창 맨 윗줄이 우리 것이면 뒤로·앞으로·검색을 거기 건다 — 상단 탭이 빠져 비어 있던 자리다(#1954).
+    navHost: () => (titlebar ? titlebar.host : null),
   });
 }
 

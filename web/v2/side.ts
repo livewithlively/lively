@@ -25,9 +25,8 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { anchoredPopover, api, el, keepSideScroll, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
+import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
-import { THEME_ORDER, setThemePref, themePref, type ThemePref } from '../theme.js';   // 계정 팝오버의 테마 3단(#1683)
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
@@ -240,6 +239,8 @@ export interface SideHooks {
   onActivateInstance?: (id: string) => void;
   onCloseInstance?: (id: string) => void;
   onOpenProject?: (projectId: number) => void;
+  /** 뒤로·앞으로·검색 줄을 사이드바 대신 여기(데스크톱 창 맨 윗줄)에 건다 — null 이면 종전대로 사이드바 맨 위(#1954). */
+  navHost?: () => HTMLElement | null;
 }
 
 export interface SideInstance {
@@ -249,10 +250,12 @@ export interface SideInstance {
   icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'app';
   state?: string;
   meta?: string;
-  /** 소속 프로젝트 — anc(스페이스 › 리스트)와 name 을 나눠 받아 좁은 줄에서 조상부터 줄인다. self=이 화면이 그 프로젝트다. */
-  project?: { id: number; anc: string; ancSegs?: string[]; name: string; self?: boolean } | null;
-  /** 닫을 수 있는가 — 돌고 있는 세션은 false(닫아도 계속 도니 목록에서 뺄 수 없다, #1883). */
-  closable?: boolean;
+  /** 소속 프로젝트 — 이름 하나만. 스페이스 › 리스트 계층은 좁은 줄에서 읽히지 않아 걷었다(#1954). self=이 화면이 그 프로젝트다. */
+  project?: { id: number; name: string; self?: boolean } | null;
+  /** 이 행이 속한 묶음의 이름 — '지금 볼 것' 또는 날짜(오늘·어제·M월 D일). 목록은 이 순서로 나뉜다(#1954). */
+  group?: string;
+  /** 상태를 **글자로** 말한다(#1954) — 색만으로는 진행 중과 완료를 못 가른다. 없으면 조용한 행이다. */
+  status?: { key: string; label: string } | null;
 }
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
@@ -348,22 +351,6 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
 
 let appListEl: HTMLElement | null = null;
 
-/**
- * 조상 경로(스페이스 › 리스트)를 칸에 맞춘다 — 넘치면 **앞 단계부터** '…' 로 접는다(#1883).
- *  기준은 조상 자신이 아니라 **프로젝트 이름이 온전히 보이는가**다. 한 줄에 둘 다 넣을 수 없을 때
- *  무엇을 살릴지가 요점이고, 그건 늘 이름이다(어느 프로젝트인지 알아야 누를 수 있다).
- *  계층은 뒤로 갈수록 구체적이라 앞에서부터 접는다 — 전체 경로는 행의 툴팁에 그대로 남는다.
- */
-function fitAncestors(node: HTMLElement): void {
-  let segs: string[] = [];
-  try { segs = JSON.parse(node.dataset.segs || '[]'); } catch { return; }
-  if (!segs.length) return;
-  for (let i = 0; i < segs.length; i++) {
-    node.textContent = (i ? '… › ' : '') + segs.slice(i).join(' › ');
-    if (node.scrollWidth <= node.clientWidth) return;   // 다 들어갔다
-  }
-  // 마지막 한 단계도 넘치면 그대로 둔다 — CSS ellipsis 가 그 한 단계를 줄인다.
-}
 
 function instanceIcon(inst: SideInstance): SVGElement {
   const cls = 'v2-app-inst-ic' + (inst.state ? ' st-' + inst.state : '');
@@ -376,28 +363,6 @@ function instanceIcon(inst: SideInstance): SVGElement {
   return appIcon(k as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web', cls);
 }
 
-function profileButton(me: any, name: string): HTMLElement {
-  const btn = el('button', { class: 'v2-profile-btn', type: 'button', 'aria-label': '내 계정과 화면 설정' },
-    profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
-    el('span', { class: 'v2-profile-name', text: name }),
-    el('span', { class: 'v2-profile-more', 'aria-hidden': 'true', text: '•••' })) as HTMLButtonElement;
-  btn.onclick = () => {
-    let close = (): void => {};
-    const cur = themePref();
-    const lab: Record<ThemePref, string> = { system: '시스템', light: '라이트', dark: '다크' };
-    const panel = el('div', { class: 'v2-profile-pop' },
-      el('div', { class: 'v2-profile-who' }, el('b', { text: name }), me.email ? el('span', { text: String(me.email) }) : null),
-      el('div', { class: 'v2-profile-theme', role: 'group', 'aria-label': '테마' },
-        ...THEME_ORDER.map((k) => el('button', { class: 'v2-profile-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
-          'aria-pressed': String(cur === k), onclick: () => { setThemePref(k); close(); redraw(); } }))),
-      el('button', { class: 'v2-profile-action', type: 'button', text: '클래식 화면으로 보기', onclick: () => {
-        setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload();
-      } }),
-      el('button', { class: 'v2-profile-action', type: 'button', text: '로그아웃', onclick: () => void logout() }));
-    close = anchoredPopover(btn, panel);
-  };
-  return btn;
-}
 
 /**
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
@@ -417,35 +382,47 @@ function render(): void {
   const faceOwners = [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
   const instances = hooks.instances();
   const q = sideFilter.trim().toLowerCase();
-  const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.anc, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
   const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
   const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
-  const rows = shown.map((inst) => el('div', { class: 'v2-app-inst' + (inst.active ? ' on' : ''), role: 'listitem', 'data-instance': inst.id },
+  const rowEl = (inst: SideInstance): HTMLElement => el('div',
+    { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : ''), role: 'listitem', 'data-instance': inst.id },
     el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
-    inst.closable === false
-      ? null
-      : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 닫기`, title: '앱 닫기',
-          onclick: () => hooks.onCloseInstance?.(inst.id) },
-          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
+    //  상태는 글자로 — 파란 점 하나로 '작업 중'과 '작업 완료'를 가르게 하지 않는다(#1954).
+    inst.status
+      ? el('span', { class: 'v2-app-inst-st', 'data-st': inst.status.key },
+          el('span', { class: 'v2-app-inst-st-dot', 'aria-hidden': 'true' }),
+          el('span', { text: inst.status.label }))
+      : null,
+    //  × 는 어느 행에나 있고 뜻도 하나다 — **목록에서 치우기**(#1954). 돌던 세션은 계속 돌고, 상태가 바뀌면 다시 올라온다.
+    el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
+      title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
+      onclick: () => hooks.onCloseInstance?.(inst.id) },
+      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
     inst.project && !inst.project.self
       ? el('button', { class: 'v2-app-inst-project', type: 'button',
-          title: `${[inst.project.anc, inst.project.name].filter(Boolean).join(' › ')}\n프로젝트 페이지를 엽니다`,
+          title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
           onclick: () => hooks.onOpenProject?.(inst.project!.id) },
-          el('span', { class: 'v2-app-inst-pline' },
-            glyph('folder', 'v2-app-inst-project-ic'),
-            el('span', { class: 'v2-app-inst-pname', text: inst.project.name })),
-          inst.project.anc ? el('span', { class: 'v2-app-inst-anc', text: inst.project.anc,
-            'data-segs': JSON.stringify(inst.project.ancSegs || [inst.project.anc]) }) : null)
-      : el('span', { class: 'v2-app-inst-meta', title: (inst.project && inst.project.anc) || undefined,
-          text: (inst.project && inst.project.anc) || inst.meta || '라이블리 앱' })));
+          glyph('folder', 'v2-app-inst-project-ic'),
+          el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
+      : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' }));
+
+  //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
+  const rows: HTMLElement[] = [];
+  let lastGroup = '';
+  for (const inst of shown) {
+    const g = inst.group || '';
+    if (g && g !== lastGroup) { rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g })); lastGroup = g; }
+    rows.push(rowEl(inst));
+  }
   const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' },
     ...rows,
-    ...(!rows.length ? [el('div', { class: 'v2-app-empty' },
+    ...(!shown.length ? [el('div', { class: 'v2-app-empty' },
       el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }),
       q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
         : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() }))] : []));
@@ -462,22 +439,25 @@ function render(): void {
     },
     onblur: () => { if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
 
+  //  데스크톱 앱이면 이 줄은 창 맨 윗줄로 간다(#1954 상민님: 상단 탭이 빠져 그 자리가 비었다).
+  //  브라우저에선 navHost 가 null 이라 종전대로 사이드바 맨 위에 남는다.
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+
   host.replaceChildren(
-    navRow(),
+    ...(navHost ? [] : [navEl]),
     switcherTop({ people, faces: faceOwners }),
-    el('div', { class: 'v2-new-task-wrap' },
-      el('button', { class: 'v2-new-task', type: 'button', onclick: () => hooks.onNewTask?.() },
-        sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })),
-        el('span', { text: '새 작업' })) ),
     el('section', { class: 'v2-app-space', 'aria-label': '앱' },
       el('div', { class: 'v2-app-space-head' },
         el('span', { class: 'v2-k', text: '앱' }),
         el('span', { class: 'v2-app-count', text: String(instances.length) }),
-        findBtn(),
-        el('button', { class: 'v2-app-open', type: 'button', 'aria-label': '앱 열기', title: '앱 열기', onclick: () => openLaunchpad() },
-          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' },
-            sv('rect', { x: '4', y: '4', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '4', width: '6', height: '6', rx: '1' }),
-            sv('rect', { x: '4', y: '14', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '14', width: '6', height: '6', rx: '1' })))),
+        //  새 작업은 목록 위 큰 버튼이 아니라 머리글의 ＋ 하나다(#1954) — 목록이 세로를 더 쓴다.
+        el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 작업 열기', title: '새 작업 — 무엇이든 시키거나 앱을 고릅니다',
+          onclick: () => hooks.onNewTask?.() },
+          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
+        //  ⊞ 모든 앱은 여기 두지 않는다(#1954) — 같은 버튼이 발치 도크에 이미 있다. 한 화면에 같은 문 둘은 문이 아니라 헷갈림이다.
+        findBtn()),
       ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findIn)] : []),
       listEl),
     el('footer', { class: 'v2-side-foot v2-side-foot--apps' },
@@ -495,10 +475,17 @@ function render(): void {
           sv('svg', { viewBox: '0 0 24 24', class: 'v2-dock-ic', 'aria-hidden': 'true' },
             sv('rect', { x: '4', y: '4', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '4', width: '6', height: '6', rx: '1' }),
             sv('rect', { x: '4', y: '14', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '14', width: '6', height: '6', rx: '1' })))),
-      profileButton(me, name)));
+      // [나] — 한 줄 전체가 **내 프로필 · 환경설정**을 여는 단추다(#1843, 원준 2026-08-21).
+      //  ⚠ 테마 3단·클래식 전환·로그아웃은 전부 그 창 안에 산다 — 발치에 다시 늘어놓지 않는다(#1954 회귀 복구).
+      el('button', { class: 'v2-me', type: 'button', title: '내 프로필 · 환경설정', 'aria-haspopup': 'dialog',
+        onclick: () => openMeModal({ onSaved: () => redraw() }) },
+        profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
+        el('span', { class: 'v2-me-name', text: name }),
+        sv('svg', { viewBox: '0 0 24 24', class: 'v2-me-ic', 'aria-hidden': 'true' },
+          sv('path', { d: 'M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z' }),
+          sv('path', { d: 'M19.4 13.6a7.6 7.6 0 0 0 0-3.2l1.9-1.4-1.9-3.3-2.2.9a7.7 7.7 0 0 0-2.8-1.6L14 2.5h-4l-.4 2.5a7.7 7.7 0 0 0-2.8 1.6l-2.2-.9L2.7 9l1.9 1.4a7.6 7.6 0 0 0 0 3.2L2.7 15l1.9 3.3 2.2-.9a7.7 7.7 0 0 0 2.8 1.6l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.8-1.6l2.2.9 1.9-3.3z' })))));
 
   listEl.scrollTop = prevScroll;
-  [...listEl.querySelectorAll('.v2-app-inst-anc')].forEach((n) => fitAncestors(n as HTMLElement));
   keepSideScroll(listEl, 'v2-app-list');
   if (findHad) { findIn.focus(); if (findSel && findSel[0] != null) findIn.setSelectionRange(findSel[0], findSel[1]); }
   else if (findFocusWanted) { findFocusWanted = false; findIn.focus(); }

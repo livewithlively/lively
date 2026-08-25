@@ -2,13 +2,13 @@
 //  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
 //  프로젝트는 v2/project-view.ts(#1757 — 짧은 개요 + 리브 대화), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
-import { el, relTime, state, toast } from '../core.js';
+import { el, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat } from '../session-chat.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
-import { soloSessionUrl, terminalUrl } from './apps.js';
+import { appGlassIcon, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
 const dot = (k) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 // 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
 //  나머지 살아 있는 것(대기·오프라인·셸)은 회색 계열로 조용히, 끝난 것(중단됨·종료됨·기록)은 빈 점.
@@ -114,7 +114,10 @@ export function renderHome(host, data) {
     });
     host.replaceChildren(el('section', { class: 'v2-home v2-home-launch' }, el('div', { class: 'v2-home-eyebrow' }, el('span', { text: `${d.getMonth() + 1}월 ${d.getDate()}일 ${KO_DAY[d.getDay()]}요일` }), 
     // 세션이 하나도 안 돌면 그 말 자체를 안 한다 — '도는 세션 없음'은 정보가 아니라 빈자리 채우기다.
-    busy ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st busy' }, dot('busy'), `작업 중 ${busy}`)] : null, waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null), el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }), el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }), card));
+    busy ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st busy' }, dot('busy'), `작업 중 ${busy}`)] : null, waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null), el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }), el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }), card, 
+    // 시키는 칸 아래 한 줄 = **최근에 연 앱**(#1954). 전부 깔지 않는다 — 다 깔면 고르는 화면이 되어
+    //  '무엇이든 시키세요'라는 이 화면의 첫 문장과 다툰다. 전체는 [모든 앱]이 런치패드로 연다.
+    el('div', { class: 'v2-home-apps' }, el('div', { class: 'v2-home-apps-head' }, el('span', { class: 'v2-home-apps-k', text: '최근에 연 앱' }), el('button', { class: 'v2-home-apps-all', type: 'button', onclick: () => openLaunchpad() }, el('span', { text: '모든 앱' }), sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' })))), el('div', { class: 'v2-home-apps-row', role: 'list' }, ...recentApps(6).map((a) => el('a', { class: 'v2-home-app', role: 'listitem', href: '#/app/' + a.key, title: a.desc }, el('span', { class: 'v2-home-app-ico' }, appGlassIcon(a.icon)), el('span', { class: 'v2-home-app-t', text: a.title })))))));
     // ★ 홈에서 세션 목록을 걷었다(원준 2026-08-20 "이 부분 내용 빼고, 텍스트 치는 칸을 자연스러운 위치로").
     //  왜: 같은 목록이 **사이드바(프로젝트 폴더 안 세션)**·**[확인할 것]**·**AI 세션 앱** 셋에 이미 있고,
     //  홈은 '무엇이든 시키는 자리' 하나로 충분하다. 게다가 그 목록에는 자동 이름짓기 프롬프트처럼 사람이 시킨 적
