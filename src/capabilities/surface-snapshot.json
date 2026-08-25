@@ -3657,6 +3657,16 @@
   "input_hash": "38416a6a566515b3"
  },
  {
+  "name": "session_rename",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/rename"
+  ],
+  "input_hash": "b6f9caef520909c3"
+ },
+ {
   "name": "preview_env_list",
   "scope": "code",
   "mcp": true,
