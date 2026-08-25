@@ -157,7 +157,7 @@ button{cursor:pointer;background:none;border:0}
   <main class="ld-main" id="main"></main>
   <footer class="ld-foot">
     <span id="foot">내 워크스페이스의 자료는 내가 초대한 구성원만 봅니다.</span>
-    <span><a href="https://app.lvly.io/terms" target="_blank" rel="noopener">이용약관</a> · <a href="https://app.lvly.io/privacy" target="_blank" rel="noopener">개인정보 처리방침</a></span>
+    <span><a href="https://lvly.io/terms" target="_blank" rel="noopener">이용약관</a> · <a href="https://lvly.io/privacy" target="_blank" rel="noopener">개인정보 처리방침</a></span>
   </footer>
 </div>
 <span class="pt-tag">프로토타입 · 실제 가입 아님</span>
@@ -196,7 +196,7 @@ function railHTML(at) {
    ⚠ 문안은 초안이다(위키 legal-terms-privacy-draft-1813). 게시 전 사람 검토 필요. */
 function agreeHTML(kind) {
   // 링크는 항목 이름에 건다 — 문장 꼬리에 '무엇을 왜 받는지'를 달았더니 줄이 넘어가고 읽는 순서도 어색했다(원준님 2026-08-25).
-  const href = 'https://app.lvly.io/privacy#consent';
+  const href = 'https://lvly.io/privacy';
   return `<label class="ld-agree"><input type="checkbox" data-agree>
       <span><span class="req">필수</span> <a href="${href}" target="_blank" rel="noopener">개인정보 수집·이용</a>에 동의합니다.</span></label>`;
 }
