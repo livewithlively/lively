@@ -1328,6 +1328,14 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
    내렸지만(지식: canvas-view-retired-1719) **이 규칙들은 사이드바가 쓰고 있어 살아 있다** — 이름만 옛것이다. */
 #v2-root.rail-mode { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); }
 #v2-root.rail-mode.no-aside { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
+/*  사이드바 접기(#1954 3차) — 창 맨 윗줄 맨 왼쪽 ☰ 가 켠다. 열과 손잡이를 0 으로 접고 안의 것은 감춘다
+    (폭만 0 으로 두면 내용이 삐져나온다).
+    ⚠ **rail-mode 뒤에 와야 한다** — 같은 명시도면 나중 규칙이 이긴다. 앞에 두면 rail-mode 가 열 폭을 되돌려
+    ☰ 를 눌러도 아무 일도 일어나지 않는다(실측: 클릭 후에도 사이드바 316px 그대로였다).
+    좁은 폭은 서랍이 담당하므로 그 미디어 블록에서 이 클래스를 무시한다(43-v2-topbar-search.css). */
+#v2-root.side-off, #v2-root.rail-mode.side-off { grid-template-columns: 0 0 minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.side-off.no-aside, #v2-root.rail-mode.side-off.no-aside { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; }
+#v2-root.side-off > .v2-side, #v2-root.side-off > .v2-split-x:first-of-type { overflow: hidden; visibility: hidden; }
 .stu-side { position: relative; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; padding: 0; background: var(--bg); border: 0; }
 .stu-panel { position: relative; width: 100%; flex: 1 1 auto; min-width: 0; min-height: 0; background: var(--gray-bg-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .stu-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 14px 6px; }
