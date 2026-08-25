@@ -240,12 +240,12 @@ function sessionsPart(ctx: PartCtx): Part {
     class: 'v2-launch-in', rows: '2', 'aria-label': '새 세션에 시킬 일',
     placeholder: ctx.id > 0 ? '무엇이든 시키세요 — 이 프로젝트에 붙은 새 세션이 열려요.' : '무엇이든 시키세요 — 새 세션이 열려요.',
   }) as HTMLTextAreaElement;
-  const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', onclick: () => void spawn() },
-    el('span', { text: '시키기' }), el('kbd', { text: '⏎' })) as HTMLButtonElement;
+  const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', title: 'Enter 로도 보낼 수 있어요', onclick: () => void spawn() },
+    el('span', { text: '시키기' })) as HTMLButtonElement;
   // 제공자·모델·추론강도·실행 노드 — 홈과 같은 부품이고 **같은 기억**을 쓴다(여기서 고른 값이 다음 기본이 된다).
   //  새 세션 자리를 처음 그릴 때만 만든다(서버 /terminal/config 를 한 번 부른다 — 세션을 보고 있을 뿐인 칸이 부를 이유가 없다).
   let runPicker: ReturnType<typeof createRunPicker> | null = null;
-  const idle = (): void => { send.disabled = false; ta.disabled = false; runPicker?.disable(false); send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); };
+  const idle = (): void => { send.disabled = false; ta.disabled = false; runPicker?.disable(false); send.replaceChildren(el('span', { text: '시키기' })); };
   const grow = (): void => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
   ta.addEventListener('input', grow);
   ta.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -267,8 +267,10 @@ function sessionsPart(ctx: PartCtx): Part {
         el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }),
         el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }),
         el('div', { class: 'v2-launch' }, ta, att.chips,
-          // [＋] 는 ctl 밖 — 홈(views.ts)과 같은 이유(ctl 은 flex-wrap 이라 안에 넣으면 셀렉트가 통째로 밀린다).
-          el('div', { class: 'v2-launch-row' }, att.btn, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send), att.fileIn)));
+          // 줄 구성은 홈(views.ts)과 같다 — 왼쪽 '무엇으로 열까', 오른쪽 '행동([＋]·[시키기])'.
+          el('div', { class: 'v2-launch-row' },
+            el('div', { class: 'v2-launch-ctl' }, runPicker.el),
+            el('div', { class: 'v2-launch-act' }, att.btn, send)), att.fileIn)));
     att.wireDrop(pane, pane);
     return pane;
   }

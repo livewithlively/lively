@@ -15,8 +15,10 @@
 //  ── 기본값 = 직전 세팅 ──
 //  칸들의 기본은 **내가 지난번에 고른 값**이다 — 클래식 '새 AI 세션' 폼이 쓰는 것과 **같은 localStorage 키**
 //  (lively_term_create_prefs, 사용자별)를 읽고, 여기서 고른 값도 거기에 되쓴다. 두 화면이 서로의 기억을 잇는다.
-//  모델·추론강도의 빈 값은 '(자동)' 이 아니라 **'지난번 그대로'** 다 — 그 플래그를 아예 안 넘겨 그 AI 가 자기
-//  설정(마지막에 고른 모델)으로 뜬다는 뜻이고, 화면은 그 뜻을 그대로 적는다(session-form.ts 와 같은 문구).
+//  모델·추론강도의 빈 값은 **'AI 기본값'** 이다 — 그 플래그를 아예 안 넘겨 그 AI 가 자기 설정(마지막에 고른
+//  모델)으로 뜬다는 뜻이다. 종전 문구는 '지난번 그대로'(클래식 session-form.ts 가 아직 쓴다)였는데, 무엇이
+//  지난번이었는지는 이 줄만 봐서는 알 수 없어 '그래서 지금 뭔데'가 남았다(원준 2026-08-25). 짧기도 하다 —
+//  넷이 한 줄에 서는 칸이라 문구 길이가 곧 옆 칸의 잘림이다.
 //  실행 노드는 기억하되 **지금 온라인인 노드일 때만** 기본으로 되살린다(오프라인 노드에는 세션을 못 만든다 — 서버 409).
 //
 //  ── 소비자 ──
@@ -101,7 +103,7 @@ export function createRunPicker(opts) {
     let harnessKey = String(prefs.harness && prefs.harness !== 'shell' ? prefs.harness : 'claude');
     let nodeKey = String(prefs.node || ''); // 도착한 노드 목록으로 온라인 검증 후 확정(오프라인·삭제된 노드면 중앙으로).
     const sel = (cls, title) => el('select', { class: 'v2-run-sel ' + cls, title, 'aria-label': title });
-    const nodeSel = sel('v2-run-node', '어느 컴퓨터에서 실행할까요');
+    const nodeSel = sel('v2-run-node', '어느 컴퓨터에서 실행할까요 — 기본은 중앙 컴퓨터예요');
     const provSel = sel('v2-run-prov', '어느 회사 모델로 열까요');
     const modelSel = sel('v2-run-model', '모델을 고릅니다');
     const effortSel = sel('v2-run-effort', '추론강도를 고릅니다');
@@ -141,7 +143,7 @@ export function createRunPicker(opts) {
         }
         if (nodeKey && !(nodeOf(nodeKey)?.online))
             nodeKey = ''; // 오프라인·삭제된 노드엔 못 만든다 → 중앙
-        nodeSel.replaceChildren(el('option', { value: '' }, '중앙 컴퓨터 (기본)'), ...nodes.map((n) => {
+        nodeSel.replaceChildren(el('option', { value: '' }, '중앙 컴퓨터'), ...nodes.map((n) => {
             const label = '🖥 ' + (n.name || n.id) + (n.shared ? ' (공유)' : '') + (n.online ? '' : ' — 오프라인');
             const o = el('option', { value: n.id }, label);
             if (!n.online)
@@ -166,8 +168,13 @@ export function createRunPicker(opts) {
             harnessKey = list[0].key; // 그 노드가 못 띄우는 하네스였으면 첫 후보로
         provSel.replaceChildren(...list.map((h) => el('option', { value: h.key }, providerLabel(h) + ' · ' + h.label)));
         provSel.value = harnessKey;
-        paintFlag(modelSel, '--model', '모델 · 지난번 그대로', (v) => v);
-        paintFlag(effortSel, '--effort', '추론강도 · 지난번 그대로', effortKo);
+        // 문구는 **짧게** 쓴다 — <select> 의 폭은 고른 값이 아니라 가장 긴 선택지가 정하고, 넷이 한 줄에 서야 하므로
+        //  긴 문구 하나가 옆 칸까지 …로 잘라 먹는다(원준 2026-08-25 실측: 넷 다 잘려 무엇을 고른 건지 못 읽었다).
+        //  · 모델은 다듬어 적는다(prettyModel) — 'claude-opus-4-5-20251101' 은 칸을 통째로 먹고도 안 보인다.
+        //  · 안 넘기는 값(빈 값)은 '지난번 그대로' 대신 **AI 기본값** — 세션 머리줄과 같은 말이고 더 짧다.
+        //  · 추론강도는 고른 뒤에도 축 이름을 달고 다닌다('매우 높음' 만 남으면 무엇의 값인지 줄에서 안 읽힌다).
+        paintFlag(modelSel, '--model', '모델 · AI 기본값', prettyModel);
+        paintFlag(effortSel, '--effort', '추론강도 · AI 기본값', (v) => '추론강도 · ' + effortKo(v));
     }
     const changed = () => {
         for (const n of AXES)
@@ -179,7 +186,7 @@ export function createRunPicker(opts) {
     };
     nodeSel.addEventListener('change', () => { nodeKey = nodeSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
     provSel.addEventListener('change', () => { harnessKey = provSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
-    modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론강도 · 지난번 그대로', effortKo); changed(); });
+    modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론강도 · AI 기본값', (v) => '추론강도 · ' + effortKo(v)); changed(); });
     effortSel.addEventListener('change', changed);
     const pick = () => {
         const flags = {};
