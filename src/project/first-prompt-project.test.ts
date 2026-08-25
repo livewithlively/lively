@@ -23,15 +23,21 @@ test("이름은 첫 비어있지 않은 줄 · 공백 정규화 · 70자 상한"
 });
 
 test("프로젝트가 될 자격이 없는 지시 → null(빈 껍데기를 만들지 않는다)", () => {
-  for (const bad of ["", "   ", "ㄱㄱ", "계속", "짧은지시", null, undefined]) {
-    assert.equal(shellProjectFromPrompt(bad as string), null, `짧거나 없음: ${JSON.stringify(bad)}`);
+  for (const bad of ["", "   ", null, undefined]) {
+    assert.equal(shellProjectFromPrompt(bad as string), null, `빈 지시: ${JSON.stringify(bad)}`);
   }
   assert.equal(shellProjectFromPrompt("/status 를 확인해줘"), null, "슬래시 커맨드는 사람의 실질 지시가 아니다");
   assert.equal(shellProjectFromPrompt("!ls -la /tmp/somewhere"), null, "뱅 커맨드");
   assert.equal(shellProjectFromPrompt("<system-reminder>주입물입니다</system-reminder>"), null, "하네스 주입물");
-  // 경계: 정확히 12자는 통과, 11자는 아니다.
-  assert.equal(shellProjectFromPrompt("가".repeat(11)), null);
-  assert.ok(shellProjectFromPrompt("가".repeat(12)));
+});
+
+// ⚠ 실측(2026-08-25, dev): 상민님이 "안뇽 너느누구"(7자)로 새 세션을 열었더니 개인 루트에서 떴다.
+//  훅의 12자 게이트는 '제목이 될 만한가'인데 그걸 **작업 폴더 결정**에 쓰면, 짧게 말을 건 세션의 산출물이
+//  프로젝트 밖에 쌓인다. 여기는 '새 세션의 첫 지시'가 확정된 자리라 길이로 거르지 않는다.
+test("짧은 첫 지시도 프로젝트를 만든다 — 제목 품질과 작업면은 다른 축", () => {
+  assert.equal(shellProjectFromPrompt("안뇽 너느누구")?.name, "안뇽 너느누구");
+  assert.ok(shellProjectFromPrompt("ㄱㄱ"), "두 글자라도 새 세션의 첫 지시다(제목은 정련이 고친다)");
+  assert.ok(firstPromptProjectPlan({ initialPrompt: "안뇽 너느누구" }), "홈 컴포저의 짧은 인사도 프로젝트 폴더에서 연다");
 });
 
 test("홈 컴포저(첫 지시 있음·폴더 안 고름) → 선생성", () => {
