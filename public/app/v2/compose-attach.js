@@ -3,10 +3,11 @@
 //  '새 세션 여는 말풍선'인데 한쪽만 파일을 받는 건 화면 문법이 갈라진 것이라, 붙여넣기·드래그앤드롭에
 //  [＋] 버튼(파일 피커)까지 이 모듈로 합친다. 두 컴포저가 이걸 같이 쓰므로 한쪽만 고쳐질 일이 없다.
 //
-//  올릴 곳 — 컴포저가 선 자리에 따라 갈린다(둘 다 세션이 열리기 **전**에 존재하는 안정된 workspace다):
+//  올릴 곳 — 컴포저가 선 자리에 따라 갈린다(둘 다 세션이 열리기 **전**에 존재하는 폴더라야 한다 — 세션 폴더는
+//  생성 후에야 생기고, 첫 지시는 생성 시점에 확정되므로 '만든 뒤 올리기'는 큰 파일에서 지시가 파일보다 먼저 든다):
 //   · 프로젝트가 있으면 — 그 프로젝트 공유 폴더(PUT /api/ui/v6/projects/:id/file — 자료 칸에 바로 보인다)
 //   · 없으면(홈 런처·프로젝트 없는 칸) — 내 개인 폴더 uploads/ (PUT /api/ui/terminal/browse/file?root=personal)
-//  어느 쪽이든 서버가 준 **절대경로**를 첫 지시 꼬리에 적는다 — 사용자가 어느 cwd를 골라도 첨부 좌표가 흔들리지 않는다.
+//  어느 쪽이든 서버가 준 **절대경로**를 첫 지시 꼬리에 적는다 — 세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다.
 //
 //  업로드는 authUploadProgress(XHR) — 상한이 1GB 로 열려(#1870) 진행률 없는 업로드는 멈춘 것과 구분이 안 된다.
 //  진행률은 그 파일의 칩에 % 로 얹고, 올리는 중엔 ✕ 가 취소를 겸한다. 올리는 중 전송(Enter)은 호출자가
@@ -32,6 +33,7 @@ export function composerAttach(opts) {
             ? apiUrl('/api/ui/v6/projects/' + pid + '/file?path=' + encodeURIComponent(nm))
             : apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent('uploads/' + nm));
     };
+    let srcCount = 0; // 이번 배치에서 자료(source)로 등록된 파일 수(#1881) — 서버 PUT 응답의 source_id 로 센다.
     async function attachFiles(files) {
         if (!files.length)
             return;
@@ -52,6 +54,8 @@ export function composerAttach(opts) {
                     a.pct = pct;
                     paint();
                 } }, ctl.signal);
+                if (j && j.source_id)
+                    srcCount++;
                 if (items.indexOf(a) < 0)
                     continue; // 올리는 중에 ✕(취소)로 이미 뺐다
                 a.pct = null;
@@ -71,8 +75,13 @@ export function composerAttach(opts) {
                     toast(nm + ' 올리기 실패 — ' + (e && e.message ? e.message : e), true);
             }
         }
-        if (ok && !opts.dead?.())
-            toast(opts.projectId() > 0 ? '자료에 올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.' : '올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.');
+        if (ok && !opts.dead?.()) {
+            // 자료가 된 파일은 그 사실을 말한다(#1881) — 라이블리가 읽고 정리해 두는 대상임을 올린 순간 알린다.
+            const n = srcCount;
+            srcCount = 0;
+            toast(n > 0 ? `올렸어요 — 자료함에 ${n}건 담았고, 라이블리가 읽어 둡니다. 이 세션에 시킬 때도 함께 넘어갑니다.`
+                : (opts.projectId() > 0 ? '자료에 올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.' : '올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.'));
+        }
     }
     const fileIn = el('input', { type: 'file', multiple: '', hidden: true, 'aria-hidden': 'true', tabindex: '-1' });
     fileIn.addEventListener('change', () => { void attachFiles(Array.from(fileIn.files || [])); fileIn.value = ''; });

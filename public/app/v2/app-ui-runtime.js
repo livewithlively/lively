@@ -40,6 +40,7 @@ export const APP_RUNTIME_JS = `
   var api = {
     version: 1,
     app: null,
+    instance: null,
     page: null,
     tools: {
       call: function (name, args) { return post('tools/call', { name: String(name), arguments: args || {} }); }
@@ -61,6 +62,7 @@ export const APP_RUNTIME_JS = `
   };
   api.ready = post('ui/initialize', {}).then(function (r) {
     api.app = (r && r.app) || null;
+    api.instance = (r && r.instance) || null;
     api.page = (r && r.page) || null;
     return r;
   });

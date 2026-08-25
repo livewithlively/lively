@@ -88,13 +88,18 @@ function pinnedLookup(hostname: string, options: { all?: boolean } | undefined, 
   });
 }
 
-function hostAllowed(hostname: string, allowlist: string[]): boolean {
-  const h = hostname.toLowerCase();
+export function urlHostAllowed(url: URL, allowlist: string[]): boolean {
+  const h = url.hostname.toLowerCase();
+  const effectivePort = url.port || (url.protocol === "https:" ? "443" : url.protocol === "http:" ? "80" : "");
   return allowlist.some((raw) => {
     const e = raw.toLowerCase().trim();
     if (!e) return false;
-    if (e.startsWith(".")) return h === e.slice(1) || h.endsWith(e); // ".example.com" = 서브도메인 허용
-    return h === e;
+    const match = /^(.*?)(?::(\d+))?$/.exec(e);
+    const allowedHost = match?.[1] ?? e;
+    const allowedPort = match?.[2] ?? "";
+    if (allowedPort && allowedPort !== effectivePort) return false;
+    if (allowedHost.startsWith(".")) return h === allowedHost.slice(1) || h.endsWith(allowedHost); // ".example.com" = 서브도메인 허용
+    return h === allowedHost;
   });
 }
 
@@ -108,7 +113,7 @@ function once(url: string, opts: SafeFetchOpts, redirectsLeft: number): Promise<
     }
     const host = u.hostname.toLowerCase();
     if (opts.selfHosts?.some((s) => s.toLowerCase() === host)) return reject(new SsrfError(`게이트웨이 자기 자신 호출 금지: ${host}`));
-    if (!hostAllowed(host, opts.allowlist)) return reject(new SsrfError(`허용 목록(url_allowlist)에 없는 호스트: ${host}`));
+    if (!urlHostAllowed(u, opts.allowlist)) return reject(new SsrfError(`허용 목록(url_allowlist)에 없는 호스트: ${host}`));
     const hostBare = host.replace(/^\[|\]$/g, ""); // IPv6 리터럴은 hostname 에 대괄호 포함 → 제거 후 isIP 검사
     if (net.isIP(hostBare) && isBlockedIp(hostBare)) return reject(new SsrfError(`차단된 IP: ${host}`));
 

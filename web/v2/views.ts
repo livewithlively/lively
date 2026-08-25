@@ -17,6 +17,10 @@ export interface Proj {
   created_by?: string | null; member_ids?: string[];
   // 사이드바 '방금 만든 것 잠깐 맨 위'(side.ts freshMs) — 서버 목록이 늘 싣는 값(PROJECT_COLS).
   created_at?: string | null;
+  // #1851 아카이브 — 보관 시각. 있으면 사이드바·보드에서 빠지고 「아카이브」 화면(#/archive)에만 보인다.
+  archived_at?: string | null;
+  // #1851 휴지통 — 통째로 버린 시각. 있으면 어디에도 안 보이고 「휴지통」 화면(#/trash)의 '프로젝트' 묶음에만(그 아래 내 세션과 함께).
+  trashed_at?: string | null;
 }
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
@@ -26,6 +30,10 @@ export interface Sess {
   // 접힌 기록의 **대화 제목**(= 그 세션에 처음 시킨 말). 멈춘 세션은 pane 제목(raw.title)이 비어 있어 이름 자리가
   //  프로젝트명 되풀이로 떨어지는데(dev 실측: 한 프로젝트의 지난 세션 7건 중 5건이 같은 이름), 이 값이 그 자리를 받는다.
   logTitle?: string | null;
+  // #1851 휴지통 — 휴지통에 있는 시각(ISO). 있으면 사이드바 '지난 세션'에서 빠지고 「휴지통」 화면(#/trash)에만 보인다.
+  trashedAt?: string | null;
+  // #1851 — 프로젝트를 통째로 버릴 때 함께 들어간 세션이면 그 프로젝트 id. 없으면 '지난 세션'에서 따로 버린 것 — 휴지통 화면이 둘을 가른다.
+  trashedWith?: number | null;
 }
 export interface V2Data { projects: Proj[]; sessions: Sess[]; loadedAt: number; }
 
@@ -50,6 +58,12 @@ const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
 //    사용자에겐 넷 다 "다시 이어서 할 수 있는 지난 세션"이라 한 묶음으로 다룬다(구분은 상태점·툴팁·세션 화면이 말한다).
 export const isLiveSess = (s: Sess): boolean => s.live && s.alive;
 export const isPastSess = (s: Sess): boolean => !isLiveSess(s);
+// 휴지통(#1851) — 멈춘 세션 중 사람이 휴지통으로 보낸 것. 사이드바·홈·확인할 것 어디에도 안 나오고 휴지통 화면에만 있다.
+export const isTrashedSess = (s: Sess): boolean => !!s.trashedAt;
+export const isArchivedProj = (p: Proj | null | undefined): boolean => !!(p && p.archived_at);
+export const isTrashedProj = (p: Proj | null | undefined): boolean => !!(p && p.trashed_at);
+/** 따로 버린 세션(프로젝트 묶음이 아닌 것) — 휴지통 '세션' 묶음·사이드바 개수의 재료. */
+export const isLooseTrashedSess = (s: Sess): boolean => isTrashedSess(s) && s.trashedWith == null;
 
 /** 그 세션이 '하던 일' — 하네스 pane 제목이 정본이고, 없으면(멈춘 세션) 중앙 기록의 대화 제목(= 처음 시킨 말). */
 export const sessWork = (s: Sess): string => String((s.raw && s.raw.title) || s.logTitle || '').trim();
@@ -119,45 +133,17 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
         waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null),
       el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }),
       el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }),
-      card,
-      nowList(data)));
+      card));
+  // ★ 홈에서 세션 목록을 걷었다(원준 2026-08-20 "이 부분 내용 빼고, 텍스트 치는 칸을 자연스러운 위치로").
+  //  왜: 같은 목록이 **사이드바(프로젝트 폴더 안 세션)**·**[확인할 것]**·**AI 세션 앱** 셋에 이미 있고,
+  //  홈은 '무엇이든 시키는 자리' 하나로 충분하다. 게다가 그 목록에는 자동 이름짓기 프롬프트처럼 사람이 시킨 적
+  //  없는 기록까지 이름으로 올라와(실측) 첫 화면이 잡동사니로 읽혔다. 시키는 칸은 화면 가운데로 올린다.
   window.setTimeout(() => { grow(); ta.focus(); }, 30);
 }
 
-function nowList(data: V2Data): HTMLElement {
-  // 홈의 두 번째 존재 — 상태별 두 결(#1756): **답을 기다리는 것**은 내가 움직여야 풀리는 일이라 앰버 카드로
-  //  도드라지고, 나머지는 조용한 목록이다. 종전엔 일곱 행이 같은 무게로 나열돼 급한 것이 안 보였다.
-  const rank = (s: Sess): number => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : 2);
-  const live = data.sessions.filter(isLiveSess).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen);
-  // 지난 세션(#1808) — 홈에서 **이어서 하기**로 곧장 갈 수 있어야 한다. 되살리는 건 소유자만 가능하므로(서버
-  //  restore/resume 이 owner-gated) 내 것만 올린다. 넷까지 — 그 이상은 사이드바의 '지난 세션'과 AI 세션 앱이 받는다.
-  const past = data.sessions.filter((s) => isPastSess(s) && s.owned).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 4);
-  if (!live.length && !past.length) return el('div', {});
-  const waits = live.filter((s) => s.stateKey === 'waiting');
-  const rest = live.filter((s) => s.stateKey !== 'waiting').slice(0, 7 - Math.min(waits.length, 4));
-  const rowOf = (s: Sess): HTMLElement => {
-    const pn = projName(data, s.projectId);
-    const title = sessDisplayName(s, pn);
-    const showProj = !!s.projectId && title !== pn;
-    return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) },
-      dot(s.stateKey),
-      el('span', { class: 'tw' }, el('span', { class: 't', text: title }), showProj ? el('span', { class: 'p', text: pn }) : null),
-      el('span', { class: 'st', text: s.stateKey === 'waiting' ? when(s.lastSeen) : `${s.stateLabel} · ${when(s.lastSeen)}` }),
-      s.stateKey === 'waiting' ? el('span', { class: 'go btn btn-sm', text: '답하기' }) : null);
-  };
-  return el('div', { class: 'v2-now' },
-    waits.length ? el('section', { class: 'v2-now-wait' },
-      el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })),
-      ...waits.slice(0, 4).map(rowOf)) : null,
-    rest.length ? el('section', {},
-      el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `돌고 있어요 · ${rest.length}` }),
-        el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })),
-      ...rest.map(rowOf)) : null,
-    past.length ? el('section', { class: 'v2-now-past' },
-      el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: '이어서 할 수 있어요' }),
-        el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })),
-      ...past.map(rowOf)) : null);
-}
+// nowList(돌고 있어요 · 답을 기다려요 · 이어서 할 수 있어요)는 홈에서 걷었다(원준 2026-08-20).
+//  그 세 결은 다른 자리가 이미 맡고 있다 — 답 기다림·완료는 [확인할 것], 살아 있는 세션은 사이드바의 프로젝트 폴더,
+//  지난 세션은 그 폴더의 '지난 세션'과 AI 세션 앱. 홈에 네 번째 사본을 두지 않는다.
 
 // ── 확인할 것(#1719 사이드바 개편 안2) — 시키다→기다리다→**확인**의 병목을 한 화면에 모은다 ───────
 //  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — 보이는 것 전부(프로젝트 세션은 팀 누구든 답할 수 있다).
@@ -246,7 +232,8 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     //  사고(#1808)의 처방이었는데, 그 처방이 "열어도 아무 일도 안 난다"를 기본 경험으로 만들었다(dev 실측:
     //  내 세션 219건 중 복원 가능 198건). 어긋남의 원인은 '자동'이 아니라 **프레임이 몰래 갈아탄 것**이었으므로,
     //  셸이 라우팅까지 쥐고 되살리면 둘 다 만족한다. 실패하면 그 기록 화면과 버튼이 그대로 남는다.
-    autoResume: shouldRestoreOnOpen({ restorable: !!s.raw?.restorable, owned: s.owned }),
+    //  휴지통에 있는 것은 예외(trashed — 판정표 session-status.ts 참조, #1851).
+    autoResume: shouldRestoreOnOpen({ restorable: !!s.raw?.restorable, owned: s.owned, trashed: isTrashedSess(s) }),
     isVisible: vopts.isVisible,
     onResumed: vopts.onResumed,
   });
@@ -267,6 +254,8 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       node: r.node && typeof r.node === 'object' ? (String(r.node.id || '') || null) : (r.node ? String(r.node) : null),
       live: true, alive: !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
       lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
+      trashedAt: r.trashedAt ? String(r.trashedAt) : null,   // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
+      trashedWith: r.trashedWith != null ? Number(r.trashedWith) : null,
     };
     out.set(s.id, s);
     if (r.claudeSessionId && !byUuid.has(String(r.claudeSessionId))) byUuid.set(String(r.claudeSessionId), s);
@@ -279,11 +268,14 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       owner.logId = id; owner.logNode = r.node_id || '';
       if (r.title) owner.logTitle = String(r.title);   // 이름 자리의 폴백(위 logTitle 주석)
       if (!owner.projectId && r.project_id != null) owner.projectId = Number(r.project_id);
+      if (!owner.trashedAt && r.trashed_at) { owner.trashedAt = String(r.trashed_at); owner.trashedWith = r.trashed_with != null ? Number(r.trashed_with) : null; }   // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
       continue;
     }
     out.set(id, {
       id, label: String(r.title || id), projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
       live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,
+      trashedAt: r.trashed_at ? String(r.trashed_at) : null,
+      trashedWith: r.trashed_with != null ? Number(r.trashed_with) : null,
     });
   }
   return [...out.values()];

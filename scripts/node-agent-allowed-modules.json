@@ -1,4 +1,5 @@
 [
+ "dist/apps/worker-host.js",
  "dist/auth/scopes.js",
  "dist/connectors/config.js",
  "dist/db/client.js",
@@ -9,6 +10,7 @@
  "dist/domainmap/db.js",
  "dist/http-error.js",
  "dist/log.js",
+ "dist/net/ssrf.js",
  "dist/node/agent.js",
  "dist/node/protocol.js",
  "dist/node/reconnect-delay.js",

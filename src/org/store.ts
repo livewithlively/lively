@@ -29,12 +29,14 @@ export {
   getHarnessSnapshots, setHarnessSnapshot, removeHarnessMachine,
   getHarnessMachineAlias, setHarnessMachineAlias,
   getHarnessLocalPref, setHarnessLocalPref,
+  getLocalModePreferences, setLocalModePreference,
   getLivProfile, appendLivProfile, setLivSecretAsk, appendLivAnswer, livAnswerStats, setLivChat, appendLivTurn,
   memberIdByEmail, upsertMember, removeMember,
 } from "./store/members.js";
 export type {
   MemberIdentity, OrgMember, ReportedStep,
   HarnessSnapshotAsset, HarnessSnapshot, HarnessSnapshots, HarnessMachineAlias, HarnessLocalPref,
+  LocalSessionMode, LocalModePreference, LocalModePreferences,
   LivWork, LivDecision, LivDeclined, LivProfile, LivChat, LivTurnRef,
   MemberInput,
 } from "./store/members.js";

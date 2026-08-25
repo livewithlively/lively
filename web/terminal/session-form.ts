@@ -44,8 +44,9 @@ function profileNoteEl(cfg) {
   if (os.ready) {
     const who = os.osUser || 'box_…';
     if (os.provisioned && os.loggedIn) return el('div', { class: 'caption', text: '🔐 내 AI 세션은 내 격리 계정(' + who + ')으로 실행됩니다 — 자격증명이 구성원 간 격리됩니다.' });
-    if (os.provisioned) return el('div', { class: 'caption', text: '🔐 내 격리 계정(' + who + ') · Claude 로그인 전입니다 — 세션에서  claude  실행 후 /login (한 번만).' });
-    return el('div', { class: 'caption', text: '🔐 첫 세션을 열면 내 격리 계정(' + who + ')이 자동 생성돼 격리 실행됩니다. 세션에서  claude  실행 후 /login 하세요.' });
+    // #1884 — AI 로그인은 하네스마다 명령이 다르다(claude: `claude` 후 /login · codex: `codex login --device-auth`). 한쪽만 적으면 다른 쪽 사용자를 엉뚱한 곳으로 보낸다.
+    if (os.provisioned) return el('div', { class: 'caption', text: '🔐 내 격리 계정(' + who + ') · AI 로그인 전입니다 — 세션에서 claude 는  claude  실행 후 /login, codex 는  codex login --device-auth  (한 번만).' });
+    return el('div', { class: 'caption', text: '🔐 첫 세션을 열면 내 격리 계정(' + who + ')이 자동 생성돼 격리 실행됩니다. 세션에서 claude 는  claude  실행 후 /login, codex 는  codex login --device-auth  하세요.' });
   }
   // 격리 인프라 미설치 = 비격리(공유) — 레거시 #346 멀티프로필 안내(폴백).
   const p = (cfg && cfg.profile) || {};
@@ -77,7 +78,7 @@ function loginBannerEl(cfg, view) {
     if (os.loggedIn) return null;  // 이미 로그인됨(box_ creds 존재) → 버튼 숨김
     return el('div', { class: 'card' },
       el('button', { class: 'btn btn-primary btn-sm', text: '🔑 내 계정 로그인', onclick: () => openLoginSession(view) }),
-      el('span', { class: 'caption', text: '  처음 한 번 — 개인 세션을 열어 claude 에서 /login (이후 내가 만드는 세션은 내 격리 계정으로 뜹니다).' }));
+      el('span', { class: 'caption', text: '  처음 한 번 — 개인 세션을 열어 claude 에서 /login (codex 는 codex 세션에서 codex login --device-auth). 이후 내가 만드는 세션은 내 격리 계정으로 뜹니다.' }));
   }
   // 레거시 비격리(#346): 프로필 프로비저닝됐지만 미로그인일 때만.
   const p = (cfg && cfg.profile) || {};

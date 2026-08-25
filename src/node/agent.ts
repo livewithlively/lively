@@ -33,10 +33,16 @@ import {
 import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
+import { WorkerHost, WorkerBundleStager, type WorkerStartSpec, type WorkerStopReason } from "../apps/worker-host.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
 const TOKEN = process.env.LIVELY_NODE_TOKEN || "";
 const NODE_ID = process.env.LIVELY_NODE_ID || ""; // 표시용 — 신원은 서버가 토큰으로 특정한다
+let workerStateSocket: WebSocket | null = null;
+const nodeWorkerHost = new WorkerHost({ onSnapshot: (snapshot) => {
+  const ws = workerStateSocket;
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "workerState", snapshot } satisfies NodeToGwMsg));
+} });
 
 // 도는 번들 자신의 지문(#905 C4) — 키트 kit-version 과 같은 모델: **실행 중인 바이트가 곧 버전**이라
 //  사람이 숫자를 올릴 필요도, 빠뜨릴 일도 없다. 게이트웨이가 서빙본 지문과 비교해 이 노드가 최신인지 안다.
@@ -87,7 +93,7 @@ async function maybeSelfUpdate(latest: string | null | undefined): Promise<void>
       if (ver !== latest) { logger.warn({ got: ver, want: latest }, "받은 번들 지문이 다르다 — 교체하지 않는다"); return; }
       fs.renameSync(got, self);   // 같은 파일시스템 → 원자적
       logger.info({ ver }, "노드 프로그램 갱신 완료 — 다시 시작한다(런처가 되살린다)");
-      setTimeout(() => process.exit(0), 300);   // 로그가 나갈 틈만 주고 종료
+      setTimeout(() => { void nodeWorkerHost.shutdown().finally(() => process.exit(0)); }, 300); // worker 회수 뒤 런처가 되살린다
     } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
   } catch (e) {
     logger.warn({ err: (e as Error)?.message }, "자가 갱신 실패 — 다음 연결에 다시 시도");
@@ -152,6 +158,8 @@ type ProvisionJob = { state: "running" | "done" | "error"; result?: unknown; err
 const provisionJobs = new Map<number, ProvisionJob>();
 const PROVISION_JOB_TTL_MS = 60 * 60 * 1000;   // done/error 는 1시간 뒤 정리(맵 무한증식 방지 — 프로젝트 수는 적다)
 
+const workerBundleStages = new WorkerBundleStager();
+
 // started:true = 새로 시작 · false = 이미 진행 중이라 이 요청 specs 를 안 받음(coalesce). 게이트웨이가 이 구분을 로그에 쓴다.
 async function startProvision(args: Record<string, unknown>): Promise<{ started: boolean }> {
   const projectId = Number(args.projectId);
@@ -203,6 +211,25 @@ async function nodeSessionAbs(id: string, sub: string, requireSub = false): Prom
 async function runOp(op: string, args: Record<string, unknown>): Promise<unknown> {
   const user = (args.user ?? {}) as LivelyUser;
   switch (op) {
+    case "stageWorkerChunk": return workerBundleStages.stage(args);
+    case "startWorker": {
+      const runId = String(args.runId ?? "");
+      const codeHash = String(args.codeHash ?? "");
+      const spec: WorkerStartSpec = {
+        runId, appId: String(args.appId ?? ""), instanceId: String(args.instanceId ?? ""),
+        entry: String(args.entry ?? ""), code: workerBundleStages.take(runId, codeHash), codeHash,
+        memoryMb: Number(args.memoryMb), idleTimeoutSec: Number(args.idleTimeoutSec),
+        allowedHosts: Array.isArray(args.allowedHosts) ? args.allowedHosts.map(String) : [],
+        selfHosts: Array.isArray(args.selfHosts) ? args.selfHosts.map(String) : [],
+      };
+      return nodeWorkerHost.start(spec);
+    }
+    case "workerStatus": return nodeWorkerHost.status(String(args.runId ?? ""));
+    case "stopWorker": {
+      const runId = String(args.runId ?? "");
+      workerBundleStages.delete(runId);
+      return nodeWorkerHost.stop(runId, String(args.reason ?? "explicit") as WorkerStopReason);
+    }
     case "runTask": {
       const input = args as unknown as RunTaskInput;
       const r = await spawnTaskSession(input);
@@ -253,7 +280,8 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
         .catch((e) => console.warn(`[node] 첫 지시 주입 실패(${id}):`, (e as Error)?.message ?? e));
       return { ok: true };
     }
-    case "create": {
+    case "create":
+    case "createAppSession": {
       const session = await createSession(user, args.input as CreateInput);
       // 초대는 게이트웨이가 구성원 디렉터리로 검증해 넘긴다 — 노드엔 DB 가 없어 createSession 내부 검증이 빈 배열이 됨.
       const invites = Array.isArray(args.invites) ? (args.invites as string[]) : [];
@@ -361,6 +389,7 @@ function connect(): void {
 
   ws.on("open", () => {
     attempt = 0;
+    workerStateSocket = ws;
     lastBeat = Date.now();
     // 소켓 keepalive — 절전이 아니라 NAT 만료 같은 조용한 단절도 OS 가 알아채게(belt and braces).
     try { (ws as unknown as { _socket?: { setKeepAlive?: (on: boolean, ms: number) => void } })._socket?.setKeepAlive?.(true, 15_000); } catch { /* noop */ }
@@ -417,10 +446,15 @@ function connect(): void {
   });
 
   const teardown = (): void => {
+    if (workerStateSocket === ws) workerStateSocket = null;
     if (pusher) { clearInterval(pusher); pusher = null; }
     if (watch) { clearInterval(watch); watch = null; }
     for (const sock of chans.values()) sock.feedClose(); // attach pty 정리(#687 — 고아 방지)
     chans.clear();
+    // 제어 링크가 끊긴 동안에는 앱 disable/grant 회수를 받을 수 없다. 옛 권한 봉투로 계속 HTTP broker를 쓰지 못하게
+    // remote worker를 전부 fail-closed 정지한다. 재연결 뒤 명시 open이 같은 run 계약으로 다시 시작한다.
+    void nodeWorkerHost.shutdown();
+    workerBundleStages.clear();
     const delay = reconnectDelayMs(attempt++);
     logger.warn({ delay }, "게이트웨이 연결 끊김 — 재연결 예약");
     // ⚠ unref 금지(#1541 실기기 로그로 확정): teardown 뒤엔 이 타이머가 이벤트 루프를 지탱하는 유일한 핸들이라,
@@ -435,7 +469,11 @@ function connect(): void {
 
 // 종료 시 attach pty 일괄 회수(#687 — 게이트웨이와 동일 불변식: 자식이 init 로 재부모화돼 PTY 점유하지 않게).
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
-  process.once(sig, () => { try { killAttachedPtys(); } catch { /* noop */ } process.exit(0); });
+  process.once(sig, () => {
+    try { killAttachedPtys(); } catch { /* noop */ }
+    void nodeWorkerHost.shutdown().finally(() => setTimeout(() => process.exit(0), 50));
+    setTimeout(() => process.exit(0), 1_500).unref();
+  });
 }
 
 logger.info({ gw: GW_URL, node: NODE_ID || "(token-derived)" }, "노드 에이전트 시작");

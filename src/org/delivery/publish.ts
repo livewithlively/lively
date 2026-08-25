@@ -17,7 +17,7 @@ import { installBundleTarArgs } from "./bundle-tar.js";
 // (#1313 R18) 구 동적 import("../store.js") 5건을 정적으로 환원 — store 는 publish/materialize 를 import 하지
 //  않아 순환이 없다(scripts/check-imports.mjs 게이트로 확인). 동적 유지 대상은 진짜 지연이 필요한 것들만
 //  (generator .mjs 경로 해석·v6 등).
-import { getOrgProfile, getRuntimeConfig, listMcpServers, listAutoApproveTools, listSections, getMember } from "../store.js";
+import { getOrgProfile, getRuntimeConfig, listMcpServers, listAutoApproveTools, listSections, getMember, getLivProfile } from "../store.js";
 import { logger } from "../../log.js";
 
 // generator 의 buildStaticContext 를 in-process import — DB 진실원천을 stale 파일기반 lively-org 대신
@@ -298,13 +298,49 @@ export function renderMeBlock(
     + " — 내가 맡은 프로젝트는 `project_list_v6 {mine:true}`, 상세 신원(외부계정·팀·권한)은 `whoami`.";
 }
 
+// 온보딩에서 알게 된 것(#1843) — **리브가 물어서 알아낸 것이 내 AI 에게 그대로 간다.**
+//
+//  왜 이게 주입 경로에 있어야 하나: 종전엔 리브가 온보딩 대화로 "무슨 일을 어떻게 하는가"를 알아내
+//   liv_profile 에 남겼는데, **주입되는 개인 층은 body_md 하나뿐**이라 그 앎이 정작 그 사람의 AI 세션엔
+//   한 줄도 가지 않았다. 물어본 보람이 화면 안에서 끝나던 것이다.
+//   화면에 [내 규칙에 반영] 버튼을 두는 방식도 검토했지만 폐기했다(원준 2026-08-21: "사람이 굳이 직접
+//   저장을 누르지 않고 자연스럽게 그냥 반영되게") — 사람이 한 번 더 눌러야 반영되는 설계는 ⓐ 안 누른
+//   사람에겐 여전히 안 가고 ⓑ 누른 순간 body_md 에 **사본**이 생겨, 나중에 리브가 알아낸 것이 갱신돼도
+//   그 사본은 낡은 채로 남는다(진실이 둘). 그래서 옮겨 담지 않고 **주입 시점에 합친다**.
+//
+//  ⚠ body_md 를 **덮지 않는다.** 사람이 직접 적은 것이 먼저 오고, 이건 그 뒤에 붙는 별도 소절이다 —
+//   둘이 어긋나면 사람이 적은 쪽이 위에 있어 먼저 읽힌다.
+//  ⚠ 고른 값은 선택지 id 로 저장된다(라벨은 답한 순간 사라진다). 있는 그대로 싣는다 — 지어내지 않는다.
+const LIV_INJECT_MAX = 12;   // 매 세션 첫머리에 실리는 줄이다 — 질문이 늘어도 컨텍스트가 불어나지 않게 자른다.
+export function renderLivOnboarding(liv: { work?: { asis?: string; tobe?: string } | null;
+  answers?: Array<{ key?: string; question?: string; choices?: string[]; other?: string }> } | null): string {
+  const lines: string[] = [];
+  const asis = strip(liv?.work?.asis || "");
+  const tobe = strip(liv?.work?.tobe || "");
+  if (asis) lines.push(`- 지금 하는 일: ${asis}`);
+  if (tobe) lines.push(`- 이렇게 하고 싶어요: ${tobe}`);
+  for (const a of liv?.answers ?? []) {
+    if (lines.length >= LIV_INJECT_MAX) break;
+    const picked = [...(Array.isArray(a?.choices) ? a.choices : []), ...(a?.other ? [a.other] : [])]
+      .map((c) => strip(String(c || ""))).filter(Boolean);
+    const label = strip(String(a?.question || a?.key || ""));
+    if (!picked.length || !label) continue;
+    lines.push(`- ${label}: ${picked.join(" · ")}`);
+  }
+  return lines.length ? `### 온보딩에서 알려주신 것 (리브와의 대화에서)\n${lines.join("\n")}` : "";
+}
+
 async function buildMemberBlocks(memberId: string): Promise<{ me: string; personal: string }> {
   try {
     const m = await getMember(memberId);
     const body = strip(m?.body_md || "");
+    // 리브 프로필 조회 실패는 개인 층 전체를 죽이지 않는다(fail-open) — 사람이 적은 규칙은 그대로 나가야 한다.
+    const liv = await getLivProfile(memberId).catch(() => null);
+    const onboarding = renderLivOnboarding(liv);
+    const inner = [body, onboarding].filter(Boolean).join("\n\n");
     return {
       me: renderMeBlock(memberId, m),
-      personal: body ? `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)\n\n${body}` : "",
+      personal: inner ? `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)\n\n${inner}` : "",
     };
   } catch { return { me: "", personal: "" }; }
 }

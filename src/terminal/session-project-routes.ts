@@ -23,6 +23,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { getOpt } from "./tmux-exec.js";
 import { executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
+import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -109,6 +110,9 @@ export async function setSessionProject(
   }
   await markExecutionSessionApplied(id, me, current.desired_revision);
   await updateSessionStateMeta(id, { project_id: bind ? bind.projectId : null, project_src: bind ? "v6" : null }).catch(() => { /* 레코드 없음 등 비치명 */ });
+  // 세션 화면은 ai-session AppInstance다. 세션 바인딩이 권위이므로 열린/복원 인스턴스의 현재 맥락도 같은 값으로 맞춘다.
+  // 시간 이력은 app-instances 스토어가 별도로 남겨, 옮긴 뒤에도 과거 활동의 소속을 소급 변경하지 않는다.
+  await syncSessionAppInstanceProject(id, bind ? bind.projectId : null).catch(() => { /* UI 메타데이터 실패는 세션 바인딩을 되돌리지 않는다 */ });
   return { ...out, revision: current.desired_revision, bindingEpoch: current.binding_epoch };
 }
 

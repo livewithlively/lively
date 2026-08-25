@@ -98,18 +98,14 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     //   (im:history 는 '읽기'라 목록 권한이 안 된다.) 이 scope 가 없던 시절에 연결해 둔 사람의 토큰엔 없으므로
     //   slack-channels 가 missing_scope 를 만나면 DM 을 빼고 한 번 더 부른다 — [다시 연결]하면 DM 도 잡힌다.
     oauth_scope: "search:read.public search:read.private search:read.mpim search:read.im search:read.files search:read.users channels:history groups:history im:history mpim:history channels:read groups:read mpim:read im:read users:read files:read reactions:read emoji:read chat:write",
-    note: "Slack 공식 MCP 는 DCR 미지원(사전등록 client 필요) — 2026-07-29 재실측: AS 메타데이터에 registration_endpoint 없음 + token_endpoint_auth_methods=client_secret_post(public client 불가). ⚠ app.slack.com 의 [Add MCP Server] 는 **반대 방향**(Slackbot 이 외부 MCP 를 호출하는 Slackbot MCP Client)이라 여기와 무관하다. 대안: 정적 사용자토큰 xoxp(slack_user_token) — search.messages 는 봇 불가.",
+    note: "#1881 — 슬랙 도구는 이 서버(mcp.slack.com)가 아니라 Web API 프리셋 'slack'(http_proxy)이 제공한다: 슬랙 공식 MCP 는 마켓플레이스 등록 앱·내부 앱만 허용(unlisted 금지)하고 DCR 도 없다. 이 행은 **OAuth 연결 창구**(auth_kind=slack_oauth 의 [연결] 버튼)로만 쓴다 — 발행 불필요, 켜 두면 A 툴이 등록되므로 B 적용 후 enabled=false 권장. 연결 한 번에 유저 토큰(개인 도구)+봇 토큰(비공개 채널 수집)이 함께 저장된다.",
     guide: {
       url: "https://api.slack.com/apps",
-      intro: "슬랙은 앱을 만들어 그 앱의 OAuth client 로 붙습니다. ⚠ 슬랙에는 'MCP 접근 활성화'와 'User Token Scopes' 라는 두 개의 필수 단계가 있고, 둘 다 빠뜨리면 발행이나 검색이 실패합니다. 또한 **디렉터리 게시 앱 또는 내부 앱만** MCP 를 쓸 수 있습니다(unlisted 앱 불가 — 슬랙 문서 명시).",
+      intro: "매니지드(app.lvly.io)는 라이블리 Slack 앱이 이미 있어 이 설정이 필요 없습니다. 셀프호스팅은 자기 Slack 앱을 하나 만듭니다 — 아래 링크가 이름·권한·봇·콜백을 전부 채워 줘서 사람이 고를 것은 없습니다.",
       steps: [
-        "api.slack.com/apps ▸ [Create New App] ▸ From scratch — 이름을 정하고 이 워크스페이스를 고릅니다(기존 앱이 있으면 그걸 열어도 됩니다)",
-        "⚠ 앱 설정 ▸ [Agents & AI Apps] 에서 **MCP 서버 접근을 활성화**합니다 — 이걸 안 켜면 [발행]이 'App is not enabled for Slack MCP server access' 로 실패합니다(실측)",
-        "⚠ [OAuth & Permissions] ▸ **User Token Scopes** 에 아래 '필요한 OAuth 허용범위'를 붙여넣습니다 — Bot Token Scopes 가 아닙니다. 봇 토큰은 search 를 거부합니다(not_allowed_token_type)",
-        "같은 화면 ▸ [Redirect URLs] 에 게이트웨이 콜백 추가 → {callback}",
-        "[Basic Information] ▸ App Credentials 의 Client ID·Client Secret 을 아래 [OAuth 클라이언트] 필드에 입력하고 저장합니다",
-        "⚠ 저장 후 **본인이 먼저 [외부 서비스 관리 ▸ Slack ▸ 연결]** 을 마칩니다 — [발행]은 설정자의 개인 토큰으로 상류에 붙기 때문에, 아무도 연결돼 있지 않으면 발행이 실패합니다",
-        "[발행] — 상류 도구 목록을 캡처합니다. 서비스당 1회면 충분하고, 이후 구성원은 각자 [연결]만 하면 됩니다",
+        "아래 [Slack 앱 만들기 링크 열기] — 채워진 생성 화면이 뜹니다. 워크스페이스를 고르고 [Create] (콜백 {callback} 이 이미 들어 있습니다)",
+        "[Basic Information] ▸ App Credentials 의 Client ID·Client Secret 을 아래 [OAuth 클라이언트] 칸에 넣고 저장",
+        "[외부 앱 연결 ▸ Slack ▸ 계정으로 연결] — 관리자가 먼저 연결하면 '팀 자료로 모으기'를 켤 수 있고, 구성원은 각자 [연결]만 하면 됩니다. [발행]은 누르지 않습니다(도구는 Web API 프리셋).",
       ],
     },
   },

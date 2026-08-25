@@ -1,5 +1,5 @@
 // 크론 액션: 미매핑 코드 분류(map_unmapped·map_unmapped_headless)·레포 is 최초 부트스트랩(bootstrap_is) — R16 원문 이동.
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 
 // LLM 판단주체 — 상시 LLM 세션(라이블리 시드, **팀플랜 과금 내**)에 분류 태스크를 주입한다.
 //  ⚠ 원 결정("headless `claude -p`+토큰 = API 별도 과금이라 폐기")은 스테일 — F5 실측(2026-07-15)에서 headless claude -p 는
@@ -39,7 +39,7 @@ export async function runMapHeadless(params: Record<string, unknown>, jobId: str
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), repo } }; }
   if (!inbox.length) return { status: "ok", summary: { skipped: "인박스 비어있음", unmapped: 0, repo } };
   const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildMapPrompt(repo, inbox.length);
-  return enqueueHeadlessTask({ prompt, requester, jobId, repo, flags: headlessFlags(params), extra: { unmapped: inbox.length, repo } });
+  return enqueueHeadlessTask({ prompt, requester, jobId, repo, harness: headlessHarness(params), flags: headlessFlags(params), extra: { unmapped: inbox.length, repo } });
 }
 
 // 최초 is 부트스트랩 주입 — 결정론 사실(collectFacts=dm scan)을 파일로 떨구고, runbook-bootstrap-domains 를 따라

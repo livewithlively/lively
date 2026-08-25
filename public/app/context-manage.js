@@ -113,7 +113,7 @@ function findingRow(f, reload) {
             text: (f.target_title || f.target_ref) + ' →' }));
     }
     else if (f.target_kind === 'category') {
-        card.append(el('a', { class: 'ctx-finding-target', href: '#/context/classify', text: `분류축 ${f.target_ref} →` }));
+        card.append(el('a', { class: 'ctx-finding-target', href: '#/context/topics', text: `분류축 ${f.target_ref} →` }));
     }
     if (f.evidence) {
         const det = el('details', { class: 'ctx-evidence' }, el('summary', { text: '근거 보기' }), el('p', { class: 'ctx-evidence-b', text: f.evidence }));

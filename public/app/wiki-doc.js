@@ -11,7 +11,6 @@ import { skeleton } from './learn.js';
 import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import { HOME_EMPTY, KN_TYPE_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, isCategoryHomeDoc, knChildrenPanel, knCommentsSection, knDelete, knFolderChildrenBlock, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knSimilarItem, openKnMetaPicker, openKnowledgeMoveTo, wkTrackEditor, } from './wiki-data.js';
-import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle, wireSideCollapse } from './wiki-side.js';
 import { wkMarkRead, wkRecordVisit, wkTick } from './wiki-ui.js';
 import { openKnHistory } from './wiki-history.js'; // #1546 변경 이력 패널(속성 줄의 '갱신 …'에서 연다)
 // 시딩 지식 편집 경고(#846) — 저장 응답에 seed_warning 이 오면(서버가 canonical 게이트웨이에서만 실어
@@ -842,20 +841,9 @@ document.addEventListener('keydown', (e) => {
 // 문서 페이지 #/k/<name> — 접이식 사이드바 + 캔버스.
 // ════════════════════════════════════════════
 async function renderWikiDocPage(view, name) {
-    const sideCtl = createWikiSide({
-        selected: () => '',
-        onSelect: (v) => {
-            location.hash = v === KN_INDEXED ? '#/knowledge?indexed=1' : (v ? '#/knowledge?category=' + encodeURIComponent(v) : '#/knowledge');
-        },
-        uncategorized: true,
-        collapsible: true,
-    });
+    // #1841 — 좌측 위키 사이드바 폐지(셸 사이드바와 이중이었다). 문서 위 빵부스러기(WIKI › 카테고리 › 문서)가 내비를 전담한다.
     const canvas = el('article', { class: 'wk-doc' });
-    const shell = el('div', { class: 'kn-shell' }, sideCtl.side, sideCtl.reopenBtn, canvas);
-    knApplySideW(shell);
-    shell.append(knSideResizeHandle(shell));
-    wireSideCollapse(shell, sideCtl);
-    view.replaceChildren(shell);
+    view.replaceChildren(el('div', { class: 'kn-shell kn-shell-flat' }, canvas));
     buildWikiDoc(canvas, name, { mode: 'page' });
 }
 // ════════════════════════════════════════════
@@ -872,20 +860,8 @@ async function renderWikiDraft(view, params) {
     const preTitle = (params && params.get && params.get('title')) || '';
     const preProject = (params && params.get && params.get('project')) || '';
     const preRelation = (params && params.get && params.get('relation')) || 'produced';
-    const sideCtl = createWikiSide({
-        selected: () => '',
-        onSelect: (v) => {
-            location.hash = v === KN_INDEXED ? '#/knowledge?indexed=1' : (v ? '#/knowledge?category=' + encodeURIComponent(v) : '#/knowledge');
-        },
-        uncategorized: true,
-        collapsible: true,
-    });
     const canvas = el('article', { class: 'wk-doc wk-doc-page wk-doc-draft' });
-    const shell = el('div', { class: 'kn-shell' }, sideCtl.side, sideCtl.reopenBtn, canvas);
-    knApplySideW(shell);
-    shell.append(knSideResizeHandle(shell));
-    wireSideCollapse(shell, sideCtl);
-    view.replaceChildren(shell);
+    view.replaceChildren(el('div', { class: 'kn-shell kn-shell-flat' }, canvas));
     // ── 드래프트 상태 ──
     let created = null; // 생성된 knowledge(서버 응답) — 이후부터는 일반 upsert
     let catKey = preCatKey;

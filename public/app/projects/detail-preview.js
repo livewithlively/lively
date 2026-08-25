@@ -5,6 +5,7 @@
 //  본문은 원문 그대로 옮겼다(verbatim).
 import { api, busy, el, toast } from '../core.js';
 import { overlayBox } from '../learn.js';
+import { openInAside } from '../v2/aside-slot.js';
 // ── 미리보기(#1036) — 작업 중인 화면을 운영 화면·남의 작업과 섞지 않고 이 프로젝트 몫으로 따로 띄워 본다. ──
 //  **자리**: 관리탭에만 두면 정작 화면을 확인할 작업자가 만나지 못한다. 그렇다고 프로젝트 상세에 섹션을 하나 더
 //  붙이면 그 페이지가 이미 너무 길다 → 터미널 세션 섹션 헤더의 [🖥 미리보기] 버튼 → 모달(세션 기록 #905 C1 과 같은 형태).
@@ -19,7 +20,7 @@ function openProjectPreviewModal(id, projectName, repos0) {
     if (repoSel)
         for (const n of repos)
             repoSel.append(el('option', { value: n, text: n }));
-    const back = overlayBox('미리보기' + (projectName ? ' — ' + projectName : ''), el('div', { class: 'proj-settings' }, el('section', { class: 'ps-block' }, el('p', { class: 'ps-block-hint', text: '작업 중인 화면을 운영 화면이나 다른 사람 작업에 영향 없이 따로 띄워 봅니다. 만들면 주소가 나오고, 그 주소를 팀원에게 보내 확인받을 수 있어요.' }), body), el('div', { class: 'ps-rules-actions' }, ...(repoSel ? [repoSel] : []), addBtn)));
+    const back = overlayBox('미리보기' + (projectName ? ' — ' + projectName : ''), el('div', { class: 'proj-settings' }, el('section', { class: 'ps-block' }, el('p', { class: 'ps-block-hint', text: '작업 중인 화면을 운영 화면이나 다른 사람 작업에 영향 없이 따로 띄워 봅니다. [화면 열기]를 누르면 오른쪽 곁칸에 떠서 이 자리를 떠나지 않고 볼 수 있고, [↗]로 새 창에 띄우거나 그 주소를 팀원에게 보내 확인받을 수도 있어요.' }), body), el('div', { class: 'ps-rules-actions' }, ...(repoSel ? [repoSel] : []), addBtn)));
     let timer = null;
     async function load() {
         if (timer) {
@@ -48,8 +49,16 @@ function openProjectPreviewModal(id, projectName, repos0) {
         }
         const rows = envs.map((env) => {
             const statusText = PJV_PREVIEW_STATUS[env.status] || (env.status || '알 수 없음');
+            const href = '/preview/' + encodeURIComponent(env.id) + '/ui/';
             const acts = [
-                env.status === 'running' ? el('a', { class: 'btn btn-primary btn-sm', href: '/preview/' + encodeURIComponent(env.id) + '/ui/', target: '_blank', text: '화면 열기 ↗' }) : null,
+                // [화면 열기] 는 **오른쪽 곁칸**에 띄운다(원준님 2026-08-20) — 종전엔 새 창이었다. 화면을 고치며 확인하는 일은
+                //  작업하던 자리를 떠나지 않는 것이 맞다(새 창은 탭을 하나 늘리고, 돌아오면 어디였는지 다시 찾게 만든다).
+                //  곁칸이 없는 화면(팝아웃 창·구 페이지)에서는 openInAside 가 false 를 돌려주므로 그 땐 새 창으로 간다.
+                //  새 창을 원하는 사람을 막지는 않는다 — 옆의 [↗] 가 그대로 남는다.
+                env.status === 'running' ? el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '화면 열기',
+                    title: '오른쪽 곁칸에서 봅니다 — 끌어서 넓힐 수 있어요', onclick: () => openHere(env, href) }) : null,
+                env.status === 'running' ? el('a', { class: 'btn btn-ghost btn-sm', href, target: '_blank', rel: 'noopener', text: '↗',
+                    title: '새 창으로 열기', 'aria-label': '새 창으로 열기' }) : null,
                 env.status !== 'preparing' ? el('button', { class: 'btn btn-ghost btn-sm', text: env.status === 'running' ? '새로 만들기' : '띄우기', onclick: (e) => act(e.target, '/ensure', env.id) }) : null,
                 (env.status === 'running' || env.status === 'preparing') ? el('button', { class: 'btn btn-ghost btn-sm', text: '끄기', onclick: (e) => act(e.target, '/stop', env.id) }) : null,
             ].filter(Boolean);
@@ -61,6 +70,14 @@ function openProjectPreviewModal(id, projectName, repos0) {
             timer = setTimeout(() => { if (document.body.contains(back))
                 load(); }, 5000);
     }
+    //  곁칸에 실었으면 이 모달은 물러난다 — 안 그러면 방금 띄운 화면을 자기가 덮는다.
+    function openHere(env, href) {
+        if (openInAside({ key: 'preview:' + env.id, title: env.label || env.id, url: href })) {
+            back.remove();
+            return;
+        }
+        window.open(href, '_blank', 'noopener');
+    }
     async function act(btn, suffix, envId) {
         if (btn)
             btn.disabled = true;
@@ -69,7 +86,7 @@ function openProjectPreviewModal(id, projectName, repos0) {
             if (suffix === '/stop')
                 toast('껐습니다');
             else if (r && r.status === 'running')
-                toast('준비됐습니다 — ‘화면 열기’로 확인하세요');
+                toast('준비됐습니다 — ‘화면 열기’를 누르면 오른쪽 곁칸에 뜹니다');
             else if (r && r.status === 'preparing')
                 toast('준비를 시작했습니다 — 끝나면 여기에 표시됩니다');
             else

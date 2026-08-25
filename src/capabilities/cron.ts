@@ -56,6 +56,9 @@ const cronSet: Capability = {
     run_once: z.boolean().optional(), // true = 1회 실행 후 자동 비활성(반복 안 함). interval/cron 무시.
     enabled: z.boolean().optional(),
     note: z.string().max(2000).optional(),
+    // #1675 ④ — 이 잡이 연속 몇 번 실패하면 스스로 멈출지. 0=이 잡만 브레이커 끔.
+    //  적정값이 잡마다 다르다: 증류처럼 자주 도는 잡은 짧게, 외부 API 커넥터는 일시 장애를 견디게 길게.
+    max_fail_streak: z.number().int().min(0).max(100).optional(),
   },
   expose: {
     mcp: true,
@@ -68,6 +71,7 @@ const cronSet: Capability = {
         run_once: typeof b.run_once === "boolean" ? b.run_once : undefined,
         enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
         note: b.note,
+        max_fail_streak: b.max_fail_streak != null ? Number(b.max_fail_streak) : undefined,
       };
     } }],
   },
@@ -90,7 +94,8 @@ const cronSet: Capability = {
       const job = await insertCronJob({
         id, label: input.label ?? null, action: input.action, params: JSON.stringify(input.params ?? {}),
         interval_sec: input.interval_sec ?? 600, cron_expr: cronVal,
-        enabled: input.enabled ?? null, note: input.note ?? null, run_once: input.run_once ?? null, actor,
+        enabled: input.enabled ?? null, note: input.note ?? null, run_once: input.run_once ?? null,
+        max_fail_streak: input.max_fail_streak ?? null, actor,
       });
       return { job };
     }
@@ -98,7 +103,8 @@ const cronSet: Capability = {
       id, label: input.label ?? null, action: input.action ?? null,
       params: input.params != null ? JSON.stringify(input.params) : null,
       interval_sec: input.interval_sec ?? null, cron_provided: cronProvided, cron_expr: cronVal,
-      enabled: input.enabled ?? null, note: input.note ?? null, run_once: input.run_once ?? null, actor,
+      enabled: input.enabled ?? null, note: input.note ?? null, run_once: input.run_once ?? null,
+      max_fail_streak: input.max_fail_streak ?? null, actor,
     });
     return { job };
   },

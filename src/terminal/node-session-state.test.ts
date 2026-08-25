@@ -78,3 +78,13 @@ test("A1 정체성 — node_id 는 노드, owner 는 요청자(응답의 owner �
   assert.deepEqual(a.invites, ["jang"]);
   assert.equal(a.last_busy, null);
 });
+
+test("A2 앱 세션 — app_id만 desired-state에 남고 원격 준비 봉투의 토큰은 저장 모델에 없다", () => {
+  const a = nodeSessionStateInput(sess(), "n1", req({
+    appId: "review-app",
+    appSession: { appId: "review-app", token: "secret", gatewayUrl: "https://gw.example", assets: [] },
+  }), "yoon");
+  assert.equal(a.app_id, "review-app");
+  assert.ok(!("appSession" in a));
+  assert.doesNotMatch(JSON.stringify(a), /secret/);
+});

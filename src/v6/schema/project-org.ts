@@ -140,6 +140,18 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
     --  목록(내 세션·프로젝트)엔 최상위만, 서브에이전트는 부모 대화록 아래에서만 보인다.
     ALTER TABLE session ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
     CREATE INDEX IF NOT EXISTS session_parent_idx ON session(parent_session_id) WHERE parent_session_id IS NOT NULL;
+
+    -- ④ session_purged — 소유자가 **완전 삭제**한 세션의 묘비(#1850). 내용은 담지 않는다(그게 삭제의 목적이다).
+    --  왜 필요한가: 완전 삭제는 session/session_log 행을 통째로 지우므로 **워터마크가 0으로 돌아간다**. 그런데
+    --  캡처 훅은 매 턴 "서버 워터마크부터" 올리므로, 그 세션이 아직 살아 있으면 다음 턴에 **대화 전문을 처음부터
+    --  다시 올린다** — 지운 것이 스스로 부활한다. 이 묘비가 그 재수집을 거부하는 근거다(append 게이트).
+    --  담는 것은 좌표(node_id·session_id)와 '누가 언제 지웠나'뿐 — 대화·제목·바이트 어느 것도 남기지 않는다.
+    CREATE TABLE IF NOT EXISTS session_purged(
+      node_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      purged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      purged_by TEXT,
+      PRIMARY KEY (node_id, session_id));
   `);
 
   // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──

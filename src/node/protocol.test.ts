@@ -60,6 +60,10 @@ assert.equal(nodeSessionVisible({ owner: "yoon", invites: [] }, "jang"), false);
   // 기준선 ⊆ NODE_OPS — 이 빌드가 기준선을 전부 안다(구 노드와 최소한 같은 일은 한다).
   for (const op of NODE_BASELINE_OPS) assert.ok((NODE_OPS as readonly string[]).includes(op), `NODE_OPS 에서 기준선 op '${op}' 가 사라졌다`);
   assert.ok((NODE_OPS as readonly string[]).includes("injectFirstPrompt"), "프로젝트 DB 바인딩 뒤 첫 지시를 넣는 노드 op가 필요하다");
+  for (const op of ["stageWorkerChunk", "startWorker", "workerStatus", "stopWorker"]) {
+    assert.ok((NODE_OPS as readonly string[]).includes(op), `worker op '${op}' 가 capability 목록에 없다`);
+    assert.ok(!(NODE_BASELINE_OPS as readonly string[]).includes(op), `구 노드가 못 하는 worker op '${op}' 를 기준선에 넣었다`);
+  }
 }
 
 // ── caps 로 선언한 op 는 **에이전트가 실제로 구현**해야 한다(선언과 구현의 드리프트 방지). ──
