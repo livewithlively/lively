@@ -567,15 +567,25 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-launch-in { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15.5px; line-height: 1.65; min-height: 56px; }
 .v2-launch-in::placeholder { color: var(--muted-2); }
 .v2-launch-in:disabled { opacity: .55; }
-.v2-launch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 0; border-top: 0; }
-
-.v2-launch-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; flex: 1; min-width: 0; }
-.v2-launch-row > .v2-launch-send { align-self: flex-end; }
-.v2-run { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-width: 0; }
-.v2-run-sel { appearance: none; -webkit-appearance: none; height: 30px; padding: 0 18px 0 8px; border: 0; border-radius: 8px;
-  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23A6B2C8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 6px center;
-  font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-run-sel:hover:not(:disabled) { color: var(--ink); background-color: var(--bg-tint); }
+/*  컴포저 아랫줄(원준 2026-08-25 재배치) — 왼쪽 '무엇으로 열까'(셀렉트 넷) · 오른쪽 '행동'([＋]·[시키기]).
+    ★ 셀렉트는 **한 줄에 넷 다** 보여야 한다. <select> 의 자동 폭은 고른 값이 아니라 **가장 긴 선택지** 기준이라
+    (노드 이름·'추론강도 · 지난번 그대로' 같은 것) 넷이 저마다 상한 180px 를 먹고 줄이 접혔다 — 그래서 nowrap 으로
+    한 줄을 못 박고, 좁아지면 각 칸이 저마다 줄며 …로 접히게 한다(전체 문구는 툴팁·펼친 목록이 말한다). */
+.v2-launch-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding-top: 0; border-top: 0; }
+.v2-launch-ctl { display: flex; align-items: center; flex-wrap: nowrap; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.v2-launch-act { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
+.v2-run { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; min-width: 0; }
+.v2-run-sel { appearance: none; -webkit-appearance: none; flex: 0 1 auto; min-width: 56px; height: 30px; padding: 0 20px 0 9px; border: 0; border-radius: 8px;
+  background: var(--bg-tint) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23A6B2C8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 7px center;
+  font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-run-sel:hover:not(:disabled) { color: var(--ink); background-color: var(--line-net-2); }
+/*  칸마다 상한이 다르다 — 줄이 좁아질 때 **무엇을 먼저 줄일지**의 순서다. 노드는 기본값('중앙 컴퓨터')이 짧은데
+    선택지에 긴 PC 이름이 섞여 자동 폭만 크므로 제일 먼저·가장 많이 양보하고(shrink 3), 지금 무엇으로 도는지를
+    말하는 제공자·모델·추론강도가 그 자리를 받는다. */
+.v2-run-node { max-width: 124px; flex-shrink: 3; }
+.v2-run-prov { max-width: 200px; }
+.v2-run-model { max-width: 176px; }
+.v2-run-effort { max-width: 176px; flex-shrink: 1.4; }
 .v2-run-sel:disabled { opacity: .55; cursor: default; }
 .v2-run-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 
@@ -585,11 +595,8 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
   border: 1px solid var(--line-net); border-radius: 9px; background: transparent; color: var(--muted); font-size: 17px; line-height: 1; cursor: pointer; }
 .v2-launch-att:hover { color: var(--ink); background: var(--bg-tint); }
 .v2-launch-att:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
-/* ctl 이 좁아 두 줄로 접힐 때도 [＋] 는 [시키기]와 같은 아랫줄에 — 둘 다 줄의 고정 모서리다. */
-.v2-launch-row > .v2-launch-att { align-self: flex-end; }
 .v2-launch.drop-active { outline: 2px dashed var(--blue); outline-offset: -6px; }
-.v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: 11px; font-weight: 650; }
-.v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; font-weight: 400; }
+.v2-launch-send { flex: none; display: inline-flex; align-items: center; height: 34px; padding: 0 18px; border-radius: 11px; font-weight: 650; }
 .v2-launch-hint { display: none; }   /* Enter 안내 줄 폐지 — placeholder 와 관례가 이미 말한다(#1756) */
 /* 프로젝트 연결 드롭다운(#1749) — 여는 자리는 [⋯ ▸ 이 세션] 이다(머리줄 칩은 2026-08-20 폐지).
    드롭다운 본체(.v2-pjpick)는 그대로 anchoredPopover .dash-pop 위에 얹힌다. */
@@ -1308,8 +1315,12 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-home-launch .v2-h1, .v2-home-sub { font-size: 24px; }
   .v2-launch { margin-top: 18px; padding: 12px 12px 10px; border-radius: 16px; }
   .v2-launch-in { min-height: 64px; }
-  .v2-launch-row { flex-wrap: wrap; }
-  .v2-launch-row > .v2-launch-send { margin-left: auto; height: 38px; }
+  /* 폰에서는 한 줄을 고집하지 않는다 — 설정 넷이 윗줄에서 저희끼리 접히고, [＋]·[시키기]가 아랫줄 오른쪽에 선다. */
+  .v2-launch-row { flex-wrap: wrap; row-gap: 8px; }
+  .v2-launch-ctl { flex: 1 1 100%; flex-wrap: wrap; gap: 4px 6px; }
+  .v2-run { flex-wrap: wrap; gap: 4px 6px; }
+  .v2-launch-act { margin-left: auto; }
+  .v2-launch-send { height: 38px; }
   .v2-now { margin-top: 26px; }
   .v2-now-row { padding: 10px 8px; }
   .v2-now-row .tw { flex-wrap: wrap; row-gap: 2px; }

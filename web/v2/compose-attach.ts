@@ -23,7 +23,7 @@ interface Att { name: string; abs: string; pct: number | null; ctl: AbortControl
 export interface ComposerAttach {
   /** 첨부 칩 줄 — 입력칸과 버튼 줄 사이에 넣는다(비면 숨김). */
   chips: HTMLElement;
-  /** [＋] 파일 첨부 버튼 — .v2-launch-ctl 맨 앞에 넣는다. */
+  /** [＋] 파일 첨부 버튼 — 줄 오른쪽 행동 묶음(.v2-launch-act)에서 [시키기] 왼쪽에 선다. */
   btn: HTMLElement;
   /** 숨은 파일 피커 — 카드 어딘가에 함께 붙여야 클릭이 동작한다. */
   fileIn: HTMLElement;
