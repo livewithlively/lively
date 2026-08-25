@@ -257,6 +257,7 @@ export async function bootV2() {
         });
         mountRail(railEl, {
             counts: railCounts,
+            activeKey: () => activeKey(),
             openApps: openAppKeys,
             onSection: (sec, o) => {
                 drawSide();
@@ -1345,7 +1346,7 @@ function openAppKeys() {
     return out;
 }
 function sectionRoute(sec) {
-    return sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? '#/app/projects2' : sec === 'wiki' ? '#/app/knowledge' : '#/';
+    return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? '#/app/projects2' : sec === 'wiki' ? '#/app/knowledge' : '#/';
 }
 /** 문패 카드 얼굴 = **세션을 가진 사람들**(멤버 명부가 아니다 — 더미 계정이 먼저 잡힌다, #1719). */
 function sideFaces() {
@@ -1399,6 +1400,8 @@ function drawSide() {
         onPinChanged: () => { orderPin.clear(); }, // 고정이 바뀌면 자물쇠를 푼다 — 새 묶음에서 자리를 다시 잡아야 한다
         //  #2016 — 사이드바가 무엇을 그릴지는 레일이 고른 구역이 정한다(홈 · AI 세션 · 프로젝트 · 위키).
         section: railSection,
+        onToggleRail: () => { toggleRail(); syncRailBtn(); },
+        railOpen: railIsOpen,
     });
 }
 // ── 뒤로/앞으로가 켜져 있어야 하는가 ─────────────────────────────────────────────
