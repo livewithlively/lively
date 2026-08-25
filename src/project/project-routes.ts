@@ -19,10 +19,8 @@ import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — �
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
-import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions } from "../node/provision-remote.js";
-import { nodeRpc } from "../node/registry.js";
+import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions, bindNodeSessionProjectOrKill, injectDeferredFirstPrompt } from "../node/provision-remote.js";
 import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
-import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
 import { assertAppSessionPlacement, autoTrustWorkspace } from "../terminal/session-create-guards.js";
@@ -421,25 +419,21 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       const memberIds = await deps.listProjectMembers(project.id);
       const invites = await validateInvites(memberIds, requester); // 실제 org 멤버만·요청자(owner) 제외·중복 제거
       const { session, deferredPrompt } = await createProjectSessionOnNode(nodeId, requester, input, invites);
-      // 노드는 DB 무접속이므로 게이트웨이가 실행 세션 current + 전환 이력을 한 번에 기록한다.
+      // 노드는 DB 무접속이므로 게이트웨이가 실행 세션 current 를 확정한다(실패 시 세션 롤백 — 공용 헬퍼).
       if (input.projectSrc !== "org") {
-        try {
-          const current = await setExecutionSessionProject({ id: session.id, owner: requester, harness: session.harness || input.harness, nodeId, projectId: project.id });
-          if (!current) throw new Error("execution session owner claim failed");
-          await markExecutionSessionApplied(session.id, requester, current.desired_revision).catch(() => { /* desired가 정본 */ });
-        } catch (e) {
-          // DB SoT 없이 떠 있는 노드 세션을 남기지 않는다. 방금 만든 세션이고 첫 응답 전이라 안전한 생성 롤백이다.
-          await nodeRpc(nodeId, "kill", { user: { userId: requester }, id: session.id }).catch(() => { /* 노드 이탈 시 진단 로그에 남는다 */ });
-          throw new HttpError(503, `프로젝트 소속을 기록하지 못해 노드 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
-        }
+        await bindNodeSessionProjectOrKill({
+          nodeId, sessionId: session.id, requester, harness: session.harness || input.harness, projectId: project.id,
+        });
       }
       // #1791 — desired-state 정본(node_id) — 죽어도 '복원 가능(그 노드)'로 남는 근거. 노드엔 DB 가 없어 게이트웨이가 쓴다.
       await mirrorNodeSession({ ...session, invites }, nodeId, input, requester);
       // 새 노드는 create 시 첫 지시를 보류했다. execution_session current와 desired-state가 모두 생긴 뒤에만 주입을 시작한다.
-      if (deferredPrompt) await nodeRpc(nodeId, "injectFirstPrompt", {
-        id: session.id, harness: session.harness || input.harness, text: deferredPrompt,
-        trustOk: autoTrustWorkspace({ projectId: project.id, subpath: input.subpath }),   // 프로젝트 canonical 폴더 = 우리가 만든 자리(#1867)
-      }).catch((e) => console.warn(`[project] 노드 첫 지시 예약 실패(${session.id}) — 세션은 살아 있습니다:`, (e as Error)?.message ?? e));
+      if (deferredPrompt) {
+        await injectDeferredFirstPrompt({
+          nodeId, sessionId: session.id, harness: session.harness || input.harness, text: deferredPrompt,
+          trustOk: autoTrustWorkspace({ projectId: project.id, subpath: input.subpath }),   // 프로젝트 canonical 폴더 = 우리가 만든 자리
+        });
+      }
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }

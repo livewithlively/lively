@@ -120,6 +120,14 @@
 .v2-omni-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .v2-omni-t { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-omni-s { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 일치 부분 — 바탕만 옅게 깐다(글자색·굵기는 그대로). 한 줄에 여러 군데가 칠해져도 줄이 시끄러워지지 않는다.
+   ⚠ <mark> 의 브라우저 기본값(노랑 바탕·검정 글자)은 다크모드를 그대로 뚫고 나오므로 둘 다 덮어쓴다. */
+.v2-omni-hl { background: var(--bg-tint-2); color: inherit; border-radius: 3px; padding: 0 1px; box-shadow: inset 0 -1px 0 var(--blue); }
+.v2-omni-row.on .v2-omni-hl { background: var(--bg); }
+/* key(지식 이름 · 프로젝트 번호) — 사람이 옮겨 적는 이름이라 고정폭으로. 정확히 맞았으면 테두리로 그렇다고 말한다. */
+.v2-omni-key { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-head);
+  background: var(--gray-bg-2); border: 1px solid transparent; border-radius: 4px; padding: 0 4px; }
+.v2-omni-key.exact { border-color: var(--blue); color: var(--ink-sub); }
 .v2-omni-badge { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); }
 .v2-omni-note { padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
 .v2-omni-note[hidden] { display: none; }

@@ -31,6 +31,9 @@ import { getNode, listNodes } from "../node/store.js";
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
+import { bindNodeSessionProjectOrKill, injectDeferredFirstPrompt, nodeProjectCreatePlan } from "../node/provision-remote.js";
+import { createShellProject, firstPromptProjectPlan } from "../project/first-prompt-project.js";
+import { autoTrustWorkspace } from "./session-create-guards.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
@@ -613,6 +616,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  (없으면 일반 세션, 종전 경로 무변경). 존재·활성·grant 검증은 createSession(mintAppToken)이 하고 404/409/403 을 던진다.
       appId: String(b.appId ?? "").trim() || undefined,
     };
+    // 홈 컴포저(첫 지시를 이미 들고 여는 미소속 세션)는 **프로젝트를 먼저 만들고 그 폴더에서** 연다(#1867).
+    //  종전엔 개인 루트에서 열고 훅이 뒤늦게 소속만 붙여, 그 세션의 파일·워크트리가 개인 루트에 흩어졌다.
+    //  실패하면 그냥 종전 경로(개인 루트) — 세션 생성을 막지 않는다. 빈 세션·앱·로그인·읽기전용은 대상이 아니다(순수 판정).
+    const shellSpec = firstPromptProjectPlan(input);
+    if (shellSpec) {
+      const made = await createShellProject(shellSpec, idOf(userOf(req)));
+      if (made) { input.projectId = made.id; input.projectSrc = "v6"; input.rootKey = "shared"; input.subpath = made.folder; }
+    }
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
     if (nodeId) {
@@ -623,10 +634,24 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
       const remoteInput = await prepareRemoteAppSession(input, me);
       const op: NodeOp = input.appId ? "createAppSession" : "create";
-      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...remoteInput, invites: [], hostProfile }, invites });
+      // 프로젝트 세션이면 첫 지시를 create 에서 떼어 **DB 소속을 쓴 뒤** 넣는다(#1867) — 안 그러면 노드의 첫 훅이
+      //  아직 없는 소속을 보고 또 프로젝트를 만든다. 소속 없는 세션은 종전대로 create 가 바로 넣는다(무회귀).
+      const plan = nodeProjectCreatePlan(remoteInput, !!input.projectId && nodeSupports(nodeId, "injectFirstPrompt"));
+      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...plan.createInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      if (input.projectId && input.projectSrc !== "org") {
+        await bindNodeSessionProjectOrKill({
+          nodeId, sessionId: session.id, requester: me, harness: session.harness || input.harness, projectId: input.projectId,
+        });
+      }
       // #1791 — desired-state 정본은 게이트웨이가 쓴다(노드엔 DB 가 없다). 죽어도 '복원 가능(그 노드)'로 남는 근거.
       await mirrorNodeSession({ ...session, invites }, nodeId, input, me);
+      if (plan.deferredPrompt) {
+        await injectDeferredFirstPrompt({
+          nodeId, sessionId: session.id, harness: session.harness || input.harness, text: plan.deferredPrompt,
+          trustOk: autoTrustWorkspace({ projectId: input.projectId, subpath: input.subpath }),
+        });
+      }
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }

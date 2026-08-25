@@ -390,8 +390,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-group { padding: 12px 8px 4px; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0; }
 .v2-app-group:first-child { padding-top: 2px; }
 
-.v2-app-inst { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto auto 24px; grid-template-rows: minmax(32px, auto) auto;
-  column-gap: 3px; padding: 6px 5px 6px 7px; border-radius: 9px; color: var(--ink-sub); }
+/*  두 칸이면 된다: 제목 | 상태 점. 압정·닫기는 **그리드 밖**(절대위치)에 뜬다 — 그리드 칸으로 두면
+    안 보이는 동안에도 폭을 먹어 점이 오른쪽 끝에 못 붙었다(#1954 3차). */
+.v2-app-inst { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: minmax(32px, auto) auto;
+  column-gap: 3px; padding: 6px 8px 6px 7px; border-radius: 9px; color: var(--ink-sub); }
 .v2-app-inst + .v2-app-inst { margin-top: 2px; }
 .v2-app-inst:hover { background: var(--bg); color: var(--ink); }
 .v2-app-inst.on { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-net); color: var(--ink); }
@@ -402,13 +404,15 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 650; line-height: 1.4; }
 .v2-app-inst-ic { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-app-inst:hover .v2-app-inst-ic, .v2-app-inst.on .v2-app-inst-ic { stroke: var(--ink-sub); }
-.v2-app-inst-close { grid-column: 4; grid-row: 1; align-self: center; width: 22px; height: 22px; display: inline-grid; place-items: center; padding: 0; border: 0;
-  border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; opacity: 0; }
-.v2-app-inst:hover .v2-app-inst-close, .v2-app-inst.on .v2-app-inst-close, .v2-app-inst-close:focus-visible { opacity: 1; }
-/*  압정(#1954) — 호버·포커스나 이미 고정된 행에서만 보인다. 늘 보이면 행마다 단추 둘이 늘어서 목록이 도구모음이 된다. */
-.v2-app-inst-pin { grid-column: 3; grid-row: 1; align-self: center; width: 22px; height: 22px; display: inline-grid; place-items: center; padding: 0; border: 0;
-  border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; opacity: 0; }
-.v2-app-inst:hover .v2-app-inst-pin, .v2-app-inst-pin:focus-visible, .v2-app-inst-pin.on { opacity: 1; }
+/*  압정·닫기 — 첫 줄 오른쪽에 겹쳐 뜬다. 안 보일 땐 display:none 이라 **자리도 안 먹는다**(#1954 3차).
+    호버·포커스나 이미 고정된 행에서만 보인다 — 늘 보이면 행마다 단추 둘이 늘어서 목록이 도구모음이 된다. */
+.v2-app-inst-close, .v2-app-inst-pin { position: absolute; top: 7px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;
+  border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
+.v2-app-inst-close { right: 5px; }
+.v2-app-inst-pin { right: 29px; }
+.v2-app-inst:hover .v2-app-inst-close, .v2-app-inst.on .v2-app-inst-close, .v2-app-inst-close:focus-visible,
+.v2-app-inst:hover .v2-app-inst-pin, .v2-app-inst-pin:focus-visible, .v2-app-inst-pin.on { display: inline-grid; }
+/*  고정된 행은 압정이 늘 보이므로 닫기와 겹치지 않게 자리를 지켜 준다(호버 때만 닫기가 그 옆에 선다). */
 .v2-app-inst-pin.on { color: var(--blue); }
 .v2-app-inst-pin:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-pin.on:hover { color: var(--blue); }
@@ -416,11 +420,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-pin.on svg { fill: currentColor; fill-opacity: .18; }
 .v2-app-inst-close:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-close svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
-.v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / 5; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
+.v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
 
 /*  상태 = **점 하나**(#1954 2차). 글자 칩은 줄을 먹어 제목이 잘렸다 — 이름은 툴팁·aria-label 에 남는다.
     확인한 완료는 점이 없다 — 그 없음이 곧 '더 볼 것 없음'이다. */
-.v2-app-inst-st { grid-column: 2; grid-row: 1; align-self: center; flex: none; width: 7px; height: 7px; margin: 0 3px;
+.v2-app-inst-st { grid-column: 2; grid-row: 1; align-self: center; justify-self: end; flex: none; width: 7px; height: 7px; margin-left: 6px;
   border-radius: 999px; background: currentColor; }
 .v2-app-inst-st[data-st="busy"] { color: var(--blue); animation: v2-app-pulse 1.4s ease-in-out infinite; }
 .v2-app-inst-st[data-st="waiting"] { color: var(--warn); }
