@@ -3807,6 +3807,46 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "org_slack_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/slack/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_slack_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/slack/collect"
+  ],
+  "input_hash": "6115cebec72e3d5d"
+ },
+ {
+  "name": "org_slack_app_manifest",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/slack/app-manifest"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_slack_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/slack/oauth-complete"
+  ],
+  "input_hash": "c186cbfc4573638d"
+ },
+ {
   "name": "me_slack_channels",
   "scope": null,
   "mcp": false,
