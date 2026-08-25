@@ -21,7 +21,6 @@ import { ensureAgentsMd } from "../v6/agents-md.js";
 
 /** 자동 생성 표식 — 정련 훅(project-bind-nudge)이 "아직 임시 껍데기"를 판별하는 유일한 근거(훅과 같은 문자열). */
 export const AUTO_CREATED_MARK = "<!-- lively:auto-created-from-first-prompt -->";
-const MIN_PROMPT_CHARS = 12;   // 이보다 짧으면 제목이 될 수 없다("ㄱㄱ"·"응"·"계속")
 const MAX_TITLE = 70;
 const MAX_BODY = 3500;
 
@@ -57,10 +56,19 @@ export function firstPromptProjectPlan(input: FirstPromptPlanInput): { name: str
   return shellProjectFromPrompt(input.initialPrompt);
 }
 
-/** 순수 — 첫 지시 한 덩이에서 '임시 껍데기 프로젝트'의 이름·본문. 자격이 없으면 null(훅과 같은 규칙·같은 형식). */
+/**
+ * 순수 — 첫 지시 한 덩이에서 '임시 껍데기 프로젝트'의 이름·본문. 자격이 없으면 null.
+ *
+ *  ⚠ **길이로 거르지 않는다**(2026-08-25 실측으로 바로잡음): 훅(`project-auto-bind`)의 12자 게이트는 "이 프롬프트가
+ *   제목이 될 만한가"를 보는 규칙인데, 그것을 **작업 폴더를 정하는 데** 쓰면 짧게 말을 건 세션("안뇽 너느누구")이
+ *   개인 루트에서 열려 그 세션의 산출물이 프로젝트 밖에 쌓인다 — 제목 품질과 작업면은 다른 축이다.
+ *   길이 게이트가 훅에 필요한 이유는 훅이 **세션 도중 아무 프롬프트에서나** 발화하기 때문이고("응"·"계속"으로
+ *   프로젝트가 생기면 안 된다), 여기는 **새 세션의 첫 지시**라는 것이 이미 확정된 자리다. 그래서 게이트가 다르다.
+ *   짧은 제목은 정련(project-bind-nudge)이 고친다 — 되돌리기 싼 쪽이다.
+ */
 export function shellProjectFromPrompt(promptRaw: string | null | undefined): { name: string; description: string } | null {
   const prompt = String(promptRaw ?? "").trim();
-  if (!prompt || prompt.length < MIN_PROMPT_CHARS) return null;
+  if (!prompt) return null;
   if (prompt.startsWith("/") || prompt.startsWith("!") || prompt.startsWith("<")) return null;
   const first = prompt.split(/\r?\n/).map((s) => s.trim()).find((s) => s) || prompt;
   const t = first.replace(/\s+/g, " ").trim();
