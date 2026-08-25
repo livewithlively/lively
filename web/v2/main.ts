@@ -7,6 +7,7 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
+import { renderOnboarding, onboardingDone } from './onboarding.js'; // #/welcome 처음 설정(#1813)
 import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { renderLiv } from '../liv.js';
@@ -240,7 +241,9 @@ export async function bootV2(): Promise<void> {
   await loadData();
 
   // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
-  const boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
+  let boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
+  // 처음 설정을 아직 안 끝낸 사람은 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
+  if (!boot && !onboardingDone()) boot = '#/welcome';
   if (boot && tabsApi.find(boot)) { const hit = tabsApi.find(boot)!; hit.route = boot; tabsApi.activate(hit); }
   else {
     const saved = tabsApi.initial();
@@ -370,6 +373,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'trash') return { title: '휴지통', noAside: true };
   if (p === 'connect') return { title: segs[1] ? '앱 연결' : '외부 앱 연결', noAside: true };
   if (p === 'liv') return { title: '리브', noAside: true };
+  if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
   // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
   //  위젯·앱은 도크 ⊞(런치패드)로 옮겨 갔다(web/v2/studio.ts 머리 주석).
   //  #/p/0 = 프로젝트 없는 세션들의 작업대(사이드바의 그 폴더) — 프로젝트가 아니라 '자투리 묶음'이다.
@@ -477,6 +481,7 @@ function bindAltOpen(): void {
 
 async function renderRoute(tab: ShellTab): Promise<void> {
   const seq = ++tab.seq;
+  if ((tab as any).ob) { (tab as any).ob.destroy(); (tab as any).ob = null; }   // 처음 설정 화면을 떠나면 읽기 타이머·사이드바 숨김을 푼다
   const { segs, raw, params } = parseRoute(tab.route);
   const page = segs[0] || '';
 
@@ -512,6 +517,16 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       tab.center.append(host);
       tab.aside.replaceChildren();
       await renderLiv(host, { rail: null, embedded: true });   // rail 없음 = 카드·편지는 본문에(종전 drawAsideLiv 도 null 을 돌려줬다)
+    } else if (page === 'welcome') {
+      // 처음 설정(#1813) — 리브가 이름·무대·자료·AI 를 묻고 채팅으로 이어진다. 막1(이름)에서는 사이드바·탭 줄을 숨긴다(노션 p1).
+      tab.center.replaceChildren();
+      const host = el('div', { class: 'ob-root' });
+      tab.center.append(host);
+      markActive('liv');
+      (tab as any).ob = renderOnboarding(host, {
+        onBare: (bare) => root?.classList.toggle('ob-bare', bare),
+        onDone: () => { void loadData().then(() => drawSide()); },
+      });
     } else if (page === 'p' && segs[1]) {
       // ★ 프로젝트 전용 화면은 없앴다(원준 2026-08-20) — 프로젝트는 세션이 놓인 방이고, 주소는 늘 세션이다.
       //  그 프로젝트의 **맨 위 세션**(사이드바와 같은 정렬)으로 보낸다. 세션이 하나도 없으면 그때만 이 주소가

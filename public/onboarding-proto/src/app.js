@@ -334,8 +334,8 @@
     academy: { label: '학교·연구', axis: '어느 단계이신가요?', opts: [
       ['학부연구생', '연구·대학원'], ['석사', '연구·대학원'], ['박사', '연구·대학원'], ['포닥·연구원', '연구·대학원'], ['교원', '연구·대학원'],
     ] },
-    student: { label: '학생', axis: '지금 어느 쪽에 가까우세요?', opts: [
-      ['수업·과제', '학생'], ['시험·자격', '학생'], ['학회·동아리', '학생'], ['창업·사이드 프로젝트', '학생'], ['취업', '학생'],
+    student: { label: '학생', axis: '어떤 일에 주로 사용하실 예정인가요?', opts: [
+      ['수업·과제', '학생'], ['외부 시험(자격 시험 등)', '학생'], ['학회·동아리', '학생'], ['창업·사이드 프로젝트', '학생'], ['취업', '학생'],
     ] },
   };
   /* ── 자료 갈래 7축 (2026-08-21 재설계) ─────────────────────────────
@@ -347,6 +347,11 @@
     ['산출물', '내보낸 결과물 자체'], ['조사·자료', '남이 만든 것을 모아 둔 것'],
     ['거래·정산', '돈이 오간 것'],
   ];
+  /* 시간을 어디에 쓰는가 — **일의 형태** 축(직무 무관). 마지막 되묻기의 보기이자 can 화면의 재료.
+     갈래(KINDS7)가 '무엇이 남았나'라면 이쪽은 '무엇을 하느라 시간이 갔나'다 — 둘은 겹치지 않는다.
+     자유 입력 한 줄만 두었더니 무엇을 적으라는 건지 감이 안 온다는 말을 들었다(원준님 2026-08-24). */
+  const NOW_KINDS = ['지난 자료를 찾아 확인하는 일', '문서를 처음부터 쓰는 일', '같은 양식을 매번 다시 채우는 일',
+    '사람들과 맞추고 공유하는 일', '숫자를 모아 맞춰 보는 일', '길게 읽고 요약하는 일'];
   /* 직무가 실제로 쌓는 갈래 상위 3개 — 자료를 읽고 나서 "이렇게 보여요"로 내민다. */
   const TALLY7 = {
     '기획·PO': [['기획·설계', 18], ['기록', 13], ['보고·분석', 10]],
@@ -482,18 +487,18 @@
   let stageEl = null, buildEl = null, ingestTimer = null, buildTimer = null, sceneToken = 0, readTimer = null;
 
   const SCENE_DOT = { name: 1, stage: 1, role: 1, sources: 2, upload: 2, ai: 3, claude: 3, terminal: 3,
-    reading: 4, guess: 4, b1: 4, b2: 4, b3: 4, b4: 4, nowline: 4, can: 5, found: 4, firstq: 5, answer: 5, done: 5 };
+    reading: 4, b1: 4, b2: 4, b3: 4, nowline: 4, can: 5, found: 4, firstq: 5, answer: 5, done: 5 };
   const SCENE_BACK = {
     stage: () => 'name', role: () => 'stage', sources: () => 'role', upload: () => 'sources',
     ai: () => (S.sources.length && !(S.sources.length === 1 && S.sources[0] === 'none') ? 'upload' : 'sources'),
     claude: () => 'ai', terminal: () => (S.ai && S.ai !== '아직 없어요' && !S.aiConnected ? 'claude' : 'ai'),
-    guess: () => 'terminal', b1: () => 'guess', b2: () => 'b1', b3: () => 'b2', b4: () => 'b3', nowline: () => 'b4',
+    b1: () => 'terminal', b2: () => 'b1', b3: () => 'b2', nowline: () => 'b3',
     can: () => 'nowline', found: () => 'nowline',
     firstq: () => (S.ingest.total ? 'found' : 'terminal'), answer: () => 'firstq',
   };
   function setDots(cur, allDone) { S.ob.step = cur; S.ob.doneSteps = allDone ? [1, 2, 3, 4, 5] : Array.from({ length: Math.max(0, cur - 1) }, (_, i) => i + 1); save(); renderDots(); }
   function renderDots() { $$('#dots li').forEach((li) => { const i = +li.dataset.i; const done = S.ob.doneSteps.includes(i); li.classList.toggle('done', done); li.classList.toggle('now', S.ob.step === i && !done); li.title = done ? '이 단계로 돌아가 고치기' : ''; }); }
-  const DOT_SCENE = { 1: 'name', 2: 'sources', 3: 'ai', 4: 'guess' };
+  const DOT_SCENE = { 1: 'name', 2: 'sources', 3: 'ai', 4: 'b1' };
   /* '나중에 하기'는 **아직 안 끝낸 일을 미루는 문**이다. 그래서 묻는 동안에만 연다.
      리브가 다 읽고 결과를 보여주는 단계(찾은 것·첫 질문·답·요약)에서는 미룰 일이 남아 있지 않다 —
      요약 화면에는 '홈으로 가기'가 이미 있어 같은 자리에 나가는 문이 둘이 된다(원준님 2026-08-21). */
@@ -624,7 +629,7 @@
     },
     /* A1 — 무대. 직무 목록을 이걸로 가른다. */
     stage: {
-      html: () => scHead('안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다. 몇 가지만 여쭙고, 나머지는 자료를 보고 <b>제가 알아서 세팅할게요</b>.', '어디에서 일하고 계세요?', '자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.')
+      html: () => scHead('안녕하세요, 저는 리브예요. <b>이 워크스페이스를 계속 돌봐 드릴 담당자입니다.</b> 몇 가지만 여쭙고, 나머지는 자료를 보고 제가 알아서 세팅할게요.', '어디에서 일하고 계세요?', '자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.')
         + choiceHTML({ options: Object.entries(STAGES).map(([id, s]) => ({ id, label: s.label })), sel: S.stage ? [S.stage] : [], skip: '나중에 정할게요' }),
       bind: (el) => bindChoice(el, {
         onCommit: (sel) => { if (S.stage !== sel[0]) { S.job = null; S.role = null; S.pain = null; } S.stage = sel[0]; save(); renderBuild(); flashCard('#bcMe'); goScene('role'); },
@@ -708,13 +713,12 @@
       },
     },
     terminal: {
-      html: () => scHead(S.ob.noai ? `AI 구독이 아직 없으셔도 괜찮아요 — 자료 쌓기·정리·검색은 지금부터 됩니다. 첫 질문 <b>3회</b>는 라이블리 계정으로 열어 드릴게요.` : (S.aiConnected ? '연결됐어요. 거의 끝났습니다.' : '거의 끝났습니다.'), '터미널에서 Claude Code나 Codex를 쓰시나요?', '쓰신다면 거기에도 같은 자료가 실리게 할 수 있어요.') + choiceHTML({ options: [{ id: 'yes', label: '네, 씁니다' }, { id: 'no', label: '아니요' }] }),
+      html: () => scHead(S.ob.noai ? `AI 구독이 아직 없으셔도 괜찮아요 — 자료 쌓기·정리·검색은 지금부터 됩니다. 첫 질문 <b>3회</b>는 라이블리 계정으로 열어 드릴게요.` : (S.aiConnected ? '연결됐어요. 거의 끝났습니다.' : '거의 끝났습니다.'), '터미널에서 Claude Code나 Codex 등을 쓰시나요?', '쓰신다면 거기에도 같은 자료가 실리게 할 수 있어요.') + choiceHTML({ options: [{ id: 'yes', label: '네, 씁니다' }, { id: 'no', label: '아니요' }] }),
       bind: (el) => bindChoice(el, { onCommit: async (sel) => {
         const yes = sel[0] === 'yes'; S.terminal = yes ? 'yes' : 'no';
         if (yes) { S.node = true; S.decisions.push('내 컴퓨터 노드 연결 — 터미널의 Claude Code에도 같은 자료'); toast('홈에서 한 줄 설치를 안내할게요 — lively node --daemon'); } else { S.declined.push('terminal'); }
         save(); renderBuild();
-        if (S.ingest.total && !S.ingest.finished) return goScene(S.ingest.total ? 'guess' : 'found');
-        goScene(S.ingest.total ? 'found' : 'firstq');
+        goScene('b1');   // 맞혀보기를 없앴다 — 읽는 동안 되묻기가 돌고, 다 읽으면 can 으로 간다
       } }),
     },
     reading: {
@@ -728,24 +732,23 @@
       },
     },
     /* ═════ B블록 — 되묻기. 자료를 읽은 **뒤**에 근거를 들고 묻는다(#1813 재설계) ═════
-       종전엔 맞혀보기가 A블록 끝(자료 0건)에 있어 근거 없는 짐작이었고, 몇 분 뒤 found 화면과 내용이 겹쳤다.
-       읽은 뒤로 옮기니 같은 질문이 "자료에서 봤는데 맞나요?"가 된다 — 틀리면 고쳐 주고 싶어지는 것이 답할 이유다. */
-    guess: {
-      html: () => scHead(`${S.ingest.total || 0}건을 훑어봤어요.`, '이게 제일 손이 가는 일 아닌가요?', '틀렸으면 고쳐 주세요. 그대로 제 판단이 됩니다.')
-        + `<div class="sc-guess">${P().guess.line(detailOf())}</div>`
-        + choiceHTML({ options: [{ id: '0', label: '맞아요, 그게 제일 큽니다' }, { id: '1', label: P().guess.alt[0] }, { id: '2', label: P().guess.alt[1] }], sel: S.pain != null ? [String(S.pain)] : [] }),
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.pain = +sel[0]; save(); renderBuild(); goScene('b1'); } }),
-    },
-    /* B1 산출물 — 실제로 읽은 갈래를 보여주고 맞는지만 묻는다. */
+       · 맞혀보기(guess)를 없앴다 — 바로 뒤 b1 이 같은 것을 "자료에서 세어 보니"로 다시 물어 두 번 묻는 꼴이었다.
+       · 최신본 되묻기(b4)도 없앴다 — 파일이 두 벌이라는 이야기는 온보딩에서 감이 안 잡히고,
+         실제로 겹치는 순간 그 자리에서 물으면 늦지 않다. (둘 다 원준님 2026-08-24 지시) */
+    /* B1 산출물 — 실제로 읽은 갈래를 보여주고 맞는지만 묻는다.
+       '이 갈래가 맞나요'는 무슨 뜻인지 안 통했다 → "이렇게 나눠 둘까요"로 바꾸고 숫자의 뜻도 밝혀 적는다. */
     b1: {
-      html: () => scHead('만드시는 게 이렇게 보여요.', '이 갈래가 맞나요?', '맞으면 이 갈래로 자료함을 나눠 둘게요.')
+      html: () => scHead(S.ingest.total
+        ? `${esc(S.name)}님 자료를 종류별로 세어 봤어요.`
+        : `${esc(detailOf())} 하시는 분들은 보통 이런 것들을 만드세요.`,
+        '자료함을 이렇게 나눠 둘까요?', '옆의 숫자는 그 종류로 본 자료 수예요. 이대로 서랍을 만들어 두면 다음부터 새 자료가 알아서 제자리로 들어갑니다.')
         + `<div class="sc-tally">${((S.ingest.tally && S.ingest.tally.length ? S.ingest.tally : tally7())).map(([n, c]) => `<span class="tag">${esc(n)} <b class="num">${c}</b></span>`).join('')}</div>`
-        + choiceHTML({ options: [{ id: 'ok', label: '맞아요' }, { id: 'add', label: '빠진 게 있어요. 직접 적을게요' }], sel: [] }),
+        + choiceHTML({ options: [{ id: 'ok', label: '네, 이대로 나눠 주세요' }, { id: 'add', label: '빠진 종류가 있어요' }], sel: [] }),
       bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0] !== 'ok') S.decisions.unshift('갈래 추가 요청'); save(); renderBuild(); goScene('b2'); } }),
     },
-    /* B2 주기 — 같은 양식이 반복되면 자동화 후보다. */
+    /* B2 주기 — 같은 양식이 반복되면 자동화 후보다. 아직 안 만들고 있어도 "만들고 싶은 것"이면 후보다. */
     b2: {
-      html: () => scHead(`같은 양식 문서가 여러 달치 있네요. ${esc((P().files[0] || '보고서'))} 같은 것들이요.`, '정해진 주기로 만드시나요?', '주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.')
+      html: () => scHead(`같은 양식 문서가 여러 달치 있네요. ${esc((P().files[0] || '보고서'))} 같은 것들이요.`, '정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?', '주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.')
         + choiceHTML({ options: [{ id: 'month', label: '네, 매달' }, { id: 'week', label: '네, 매주' }, { id: 'no', label: '아니요' }], sel: [] }),
       bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0] !== 'no') S.decisions.unshift(sel[0] === 'month' ? '매달 반복 작업으로 봄' : '매주 반복 작업으로 봄'); save(); renderBuild(); goScene('b3'); } }),
     },
@@ -753,28 +756,25 @@
     b3: {
       html: () => scHead('문서에 같은 이름이 반복해서 나와요.', '같이 보는 팀이 있나요?', '있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.')
         + choiceHTML({ options: [{ id: 'me', label: '나만 봐요' }, { id: 'team', label: '우리 팀이 같이 봐요' }, { id: 'dept', label: '회사의 여러 부서와 나눠요' }, { id: 'ext', label: '고객·외부에 냅니다' }], sel: [] }),
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.decisions.unshift(sel[0] === 'me' ? '나만 보는 자료로 봄' : sel[0] === 'team' ? '팀과 함께 보는 자료로 봄' : sel[0] === 'dept' ? '여러 부서와 나누는 자료로 봄' : '고객·외부로 나가는 자료로 봄'); save(); renderBuild(); goScene('b4'); } }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.decisions.unshift(sel[0] === 'me' ? '나만 보는 자료로 봄' : sel[0] === 'team' ? '팀과 함께 보는 자료로 봄' : sel[0] === 'dept' ? '여러 부서와 나누는 자료로 봄' : '고객·외부로 나가는 자료로 봄'); save(); renderBuild(); goScene('nowline'); } }),
     },
-    /* B4 최신본 — 같은 문서가 두 벌일 때 무엇을 정답으로 삼을지. 한 번 답하면 계속 그 기준으로 답한다. */
-    b4: {
-      html: () => scHead(`${esc((P().files[1] || '문서'))} 가 두 벌이에요.`, '나중 것이 최신 맞나요?', '한 번 정해 두면 다음부터 그 기준으로 답합니다.')
-        + choiceHTML({ options: [{ id: 'new', label: '네, 나중 것이 최신입니다' }, { id: 'old', label: '아니요, 예전 것이 기준이에요' }, { id: 'both', label: '둘 다 살려 두세요' }], sel: [] }),
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.decisions.unshift(sel[0] === 'both' ? '겹치는 문서는 둘 다 보관' : `최신 기준: ${sel[0] === 'new' ? '나중 것' : '예전 것'}`); save(); renderBuild(); goScene('nowline'); } }),
-    },
-    /* B5 — 유일한 자유 입력. 지금 붙잡고 있는 일 한 줄이 첫 질문·첫 제안의 재료가 된다. */
+    /* B4 — 시간을 어디에 쓰는가. 마지막 되묻기이자 바로 다음 화면(can)의 재료다.
+       보기 6개는 **일의 형태**라 직무를 안 가린다 — 어느 직무로 들어왔든 하나는 짚인다.
+       직접 적기는 남겨 둔다: 고른 것보다 제 말로 적은 한 줄이 언제나 낫다. */
     nowline: {
-      html: () => scHead('마지막 하나예요.', '지금 제일 붙잡고 계신 일은 무엇인가요?', '한 줄이면 됩니다 — 이걸로 첫 제안을 만들어 드릴게요.')
-        + `<div class="sc-write" hidden><input class="in" type="text" placeholder="예: ${esc((P().firstq[0] || '이번 주 보고서').replace(/\?$/, ''))}" aria-label="지금 하는 일"><button type="button" class="btn btn-primary" data-write-go>계속</button></div>`
-        + `<div class="sc-opts"><button type="button" class="chip chip-esc" data-esc="write">＋ 직접 적기</button></div>`
-        + `<div class="sc-skip"><button type="button" class="btn-text" data-esc="skip">지금은 건너뛰기</button></div>`,
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0]) { S.nowline = sel[0]; S.decisions.unshift(`지금 하는 일: ${sel[0]}`); } save(); renderBuild(); goScene(S.ingest.finished ? 'can' : 'reading'); }, onSkip: () => goScene(S.ingest.finished ? 'can' : 'reading') }),
+      html: () => scHead('마지막 하나예요.', '평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?', '한 주를 놓고 볼 때 제일 자주, 제일 오래 붙잡고 계신 일이요. 여기부터 제가 손을 보탭니다.')
+        + choiceHTML({ options: NOW_KINDS.map((t) => ({ id: t, label: t })), other: '직접 적을게요', skip: '지금은 건너뛰기', sel: S.nowline ? [S.nowline] : [] }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0]) { S.nowline = sel[0]; S.decisions.unshift(`시간을 가장 많이 쓰는 일: ${sel[0]}`); } save(); renderBuild(); goScene(S.ingest.finished ? 'can' : 'reading'); }, onSkip: () => goScene(S.ingest.finished ? 'can' : 'reading') }),
     },
     /* E — 발견·첫질문·답을 걷어낸 자리. 고른 직무로 "이런 것까지 됩니다"를 보여주고 끝낸다. */
     can: {
       cls: 'wide',
       html: () => {
         const C = canFor();
-        return scHead(`다 읽었어요. ${esc(S.name)}님이 하시는 일이라면,`, '이런 것까지 저한테 맡기실 수 있어요.', '보통은 몇 번씩 왔다 갔다 해야 하는 일이에요. 여기서는 한 문장이면 됩니다.')
+        return scHead(S.nowline
+          ? `다 읽었어요. <b>${esc(S.nowline)}</b>에 시간을 제일 많이 쓰신다고 하셨죠.`
+          : `다 읽었어요. ${esc(S.name)}님이 하시는 일이라면,`,
+          '이런 것까지 저한테 맡기실 수 있어요.', '보통은 몇 번씩 왔다 갔다 해야 하는 일이에요. 여기서는 한 문장이면 됩니다.')
           + `<div class="sc-body"><div class="found">
             <article class="fnd"><div class="fnd-n">1</div><div class="fnd-b">
               <div class="fnd-t">${esc(C[0][0])}</div>
@@ -1262,7 +1262,7 @@
   const KIND_LEAD = { tidy: '자료함을 어떻게 나누고 접어 둘지', auto: '반복되는 일은 리브가 돌립니다', watch: '리브가 먼저 말을 거는 조건', conn: '살아 있는 서비스는 연결해 두면 계속 따라옵니다', ask: '지금 어떻게 돼 있는지 묻기', undo: '리브가 정한 건 전부 되돌릴 수 있어요', share: '동료가 들어오면 팀의 기억이 됩니다', ai: '자료 내용을 묻는 건 리브가 아니라 내 AI — 홈으로 넘겨 드려요' };
   const MAP_ROLE = fromP('map');
   function livMap() {
-    const r = roleOf(); const R = P().map; const T = pick(TALLY_BY_ROLE, r);
+    const r = roleOf(); const R = P().map; const T = tally7();
     const files = S.ingest.total > 0; const onFiles = files ? `자료 ${S.knowledge}건` : '자료 넣은 뒤';
     const notion = S.conn.notion === 'on', gd = S.conn.gdrive === 'on';
     const it = (kind, say, then, on) => ({ kind, say, then, on });
@@ -1302,7 +1302,7 @@
   const sugBtn = (i) => `<button type="button" class="sug" data-open-say="${esc(i.say)}" ${i.kind === 'ai' ? 'data-to-home="1"' : ''}><span class="kind k-${i.kind}">${KIND[i.kind]}</span><span class="say">${esc(i.say)}</span><span class="then">→ ${esc(i.then)}</span><span class="on">${esc(i.on)}</span></button>`;
   const mapGridHTML = () => { const g = livMap(); return `<div class="map-grid">${['auto', 'watch', 'tidy', 'conn', 'ask', 'undo', 'share', 'ai'].map((k) => `<section class="mg mg-${k}"><header class="mg-h"><span class="kind k-${k}">${KIND[k]}</span><span class="mg-t">${KIND_LEAD[k]}</span></header>${g[k].map(sugBtn).join('')}</section>`).join('')}</div>`; };
   function livOpeningHTML() {
-    const r = roleOf(); const T = pick(TALLY_BY_ROLE, r); const files = S.ingest.total > 0;
+    const r = roleOf(); const T = tally7(); const files = S.ingest.total > 0;
     const conns = Object.entries(S.conn).filter(([, v]) => v === 'on').map(([k]) => SOURCES.find((s) => s.id === k).label);
     const state = [files ? `자료 <b>${S.knowledge}건</b>(${T.map((t) => `${t[0]} ${t[1]}`).join(' · ')})` : '자료는 아직 비어 있고', conns.length ? `${conns.join('·')} 연결` : '연결한 서비스는 아직 없고', S.aiConnected ? 'Claude로 답합니다' : 'AI는 연결 전이에요'].join(', ');
     return `<div class="liv-open">
@@ -1488,16 +1488,50 @@
     </div>`;
   }
 
+  /* ═════════════════════════ 장면 바로가기 ═════════════════════════
+     화면을 눈으로 보시려는 것이지 클릭 노동을 하시려는 게 아니다 — 15장면 중 아무 데나 바로 연다.
+     주소로도 열린다: index.html?scene=b1  (링크로 특정 장면만 짚어 드릴 때 쓴다)
+     각 장면이 서려면 앞 장면의 답이 있어야 해서, 고른 장면까지의 답만 대충 채워 넣는다. */
+  const SCENE_TOUR = [
+    ['name', '이름'], ['stage', '무대'], ['role', '직무'], ['sources', '자료 위치'], ['upload', '자료 넘기기'],
+    ['ai', 'AI 고르기'], ['claude', 'AI 연결'], ['terminal', '터미널'], ['reading', '읽는 중'],
+    ['b1', '되묻기1 갈래'], ['b2', '되묻기2 주기'], ['b3', '되묻기3 협업'], ['nowline', '되묻기4 시간'],
+    ['can', '시킬 수 있는 일'], ['done', '마무리'],
+  ];
+  const sceneIdx = (k) => SCENE_TOUR.findIndex(([x]) => x === k);
+  function seedTo(key) {
+    const i = sceneIdx(key);
+    S.ob.started = true; S.ob.startedAt = S.ob.startedAt || Date.now() - 120000;
+    if (i >= 1 && !S.nameSet) { S.name = '원준'; S.nameSet = true; }
+    if (i >= 2) S.stage = S.stage || 'company';
+    if (i >= 3) { S.job = S.job || STAGES[S.stage].opts[1][0]; S.role = S.role || personaFor(S.stage, S.job); }
+    if (i >= 4 && !S.sources.length) S.sources = ['gdrive', 'notion'];
+    if (i >= 5) { S.conn.gdrive = 'on'; if (!S.files.length) S.files = pick(FILES_BY_ROLE, S.role).concat(Array.from({ length: 33 }, (_, k) => `file-${k}`)); }
+    if (i >= 6) S.ai = S.ai || 'Claude';
+    // 'AI 연결' 장면 자신은 **아직 연결 안 된** 상태여야 화면이 선다.
+    if (i >= 7 && key !== 'claude') S.aiConnected = true;
+    if (key === 'reading') { startIngest(41); return; }
+    if (i >= 9) Object.assign(S.ingest, { total: 41, done: 41, running: false, finished: true, tally: tally7().slice() });
+    else if (i >= 5 && !S.ingest.total) Object.assign(S.ingest, { total: 41, done: 12, running: true, finished: false, tally: [] });
+  }
+  function jumpScene(key) {
+    if (sceneIdx(key) < 0) return;
+    if (key === 'done') { quickFinish(); } else { seedTo(key); S.ob.finished = false; S.ob.scene = key; }
+    save(); go('#/welcome'); render();
+  }
+
   /* ═════════════════════════ 프로토타입 컨트롤 ═════════════════════════ */
   function renderProto() {
     let el = $('#proto'); if (!el) { el = document.createElement('div'); el.id = 'proto'; el.className = 'proto'; document.body.appendChild(el); }
     el.innerHTML = `<button class="proto-btn" id="protoBtn" aria-expanded="false">PROTOTYPE ${ic('chev', 'ic-sm')}</button><div class="proto-menu" id="protoMenu" hidden>
       <span class="k">화면</span><button data-p="start">진입 화면</button><button data-p="welcome">온보딩 룸 <span class="st">${S.ob.finished ? '끝남' : S.ob.started ? `${S.ob.doneSteps.length}/5` : ''}</span></button><button data-p="home">홈</button><button data-p="library">자료함</button><button data-p="work">진행 중인 일</button><button data-p="liv">리브</button><hr>
       <span class="k">시나리오</span><button data-p="day2">다음 날 아침으로 <span class="st">${S.day >= 2 ? '켜짐' : ''}</span></button><button data-p="team">동료가 초대를 수락 <span class="st">${S.team ? '켜짐' : ''}</span></button><button data-p="fast">온보딩 결과 채워 두기</button><hr>
+      <span class="k">온보딩 장면 바로 열기</span><div class="proto-scenes">${SCENE_TOUR.map(([k, t], i) => `<button data-sc="${k}"${S.ob.scene === k && !S.ob.finished ? ' class="on"' : ''}><i>${i + 1}</i>${esc(t)}</button>`).join('')}</div>
       <button data-p="reset">처음부터(전부 지우기)</button></div>`;
     const btn = $('#protoBtn'), menu = $('#protoMenu');
     btn.onclick = () => { menu.hidden = !menu.hidden; btn.setAttribute('aria-expanded', String(!menu.hidden)); };
     document.addEventListener('click', (e) => { if (!el.contains(e.target)) menu.hidden = true; }, { once: true });
+    $$('[data-sc]', menu).forEach((b) => b.onclick = () => { menu.hidden = true; jumpScene(b.dataset.sc); });
     $$('[data-p]', menu).forEach((b) => b.onclick = () => { const p = b.dataset.p; menu.hidden = true;
       if (p === 'reset') { sessionStorage.removeItem(KEY); S = fresh(); go('#/start'); render(); return; }
       if (p === 'day2') { if (!S.ob.finished) quickFinish(); seedDay2(); go('#/home'); render(); return; }
@@ -1506,9 +1540,9 @@
       go('#/' + p); });
   }
   function quickFinish() {
-    if (S.ob.finished) return; S.ob.started = true; S.ob.startedAt = S.ob.startedAt || Date.now() - 220000; S.stage = S.stage || 'company'; S.job = S.job || STAGES[S.stage].opts[1][0]; S.role = S.role || personaFor(S.stage, S.job); if (S.pain == null) S.pain = 0; S.nowline = S.nowline || '이번 주 캠페인 회고 정리'; S.sources = S.sources.length ? S.sources : ['gdrive', 'notion']; S.files = S.files.length ? S.files : pick(FILES_BY_ROLE, S.role).concat(Array.from({ length: 33 }, (_, i) => `file-${i}`)); S.conn.gdrive = 'on'; S.ai = 'Claude'; S.aiConnected = true; S.terminal = S.terminal || 'no';
-    Object.assign(S.ingest, { total: 41, done: 41, running: false, finished: true, tally: pick(TALLY_BY_ROLE, S.role).slice() }); S.knowledge = 42; S.usage = 1;
-    S.decisions = [`분류 3갈래(${pick(TALLY_BY_ROLE, S.role).map((t) => t[0]).join('·')})`, '회의록은 결정·할 일만 남김', '최신 기준: 가격 정책 7월', '드라이브 새 파일 자동 반영'];
+    if (S.ob.finished) return; S.ob.started = true; S.ob.startedAt = S.ob.startedAt || Date.now() - 220000; S.stage = S.stage || 'company'; S.job = S.job || STAGES[S.stage].opts[1][0]; S.role = S.role || personaFor(S.stage, S.job); if (S.pain == null) S.pain = 0; S.nowline = S.nowline || NOW_KINDS[0]; S.sources = S.sources.length ? S.sources : ['gdrive', 'notion']; S.files = S.files.length ? S.files : pick(FILES_BY_ROLE, S.role).concat(Array.from({ length: 33 }, (_, i) => `file-${i}`)); S.conn.gdrive = 'on'; S.ai = 'Claude'; S.aiConnected = true; S.terminal = S.terminal || 'no';
+    Object.assign(S.ingest, { total: 41, done: 41, running: false, finished: true, tally: tally7().slice() }); S.knowledge = 42; S.usage = 1;
+    S.decisions = [`분류 3갈래(${tally7().map((t) => t[0]).join('·')})`, '회의록은 결정·할 일만 남김', '최신 기준: 가격 정책 7월', '드라이브 새 파일 자동 반영'];
     S.ob.finished = true; S.ob.finishedAt = Date.now(); S.ob.doneSteps = [1, 2, 3, 4, 5]; S.ob.step = 5; if (!S.fixes.length) { S.fixes = [PERSONA[S.role].bottle[0].slip]; } S.ob.skipped = false;
     if (!S.work.find((w) => w.id === 'firstq')) S.work.unshift({ id: 'firstq', t: pick(FIRSTQ_BY_ROLE, S.role)[0].replace(/\?$/, ''), st: 'done', when: '방금', m: '결과 → 자료함' });
     if (!S.work.find((w) => w.id === 'ob')) S.work.push({ id: 'ob', t: '처음 설정 (리브)', st: 'done', when: '방금', m: '3분 40초 · 되돌리기 가능' });
@@ -1516,5 +1550,7 @@
     save();
   }
 
-  render();
+  // ?scene=b1 로 들어오면 그 장면부터 — 링크로 특정 화면만 짚어 드릴 때.
+  const wantScene = new URLSearchParams(location.search).get('scene');
+  if (wantScene && sceneIdx(wantScene) >= 0) jumpScene(wantScene); else render();
 })();

@@ -815,3 +815,12 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
   .srcrow { grid-template-columns:minmax(0,1fr); gap:4px; }
   .srcrow-k { padding-top:0; }
 }
+
+/* 장면 바로가기 — PROTOTYPE 메뉴 안. 15개가 세로로 늘어지면 메뉴가 화면을 넘는다(3열 격자). */
+.proto-menu { width:288px; }
+.proto-scenes { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; margin:2px 4px 8px; }
+.proto-scenes button { display:flex; flex-direction:column; align-items:flex-start; gap:1px; width:auto; padding:5px 6px; border:1px solid var(--line-row); border-radius:7px; font-size:10.5px; line-height:1.25; font-weight:600; color:var(--ink-sub); }
+.proto-scenes button i { font-style:normal; font-size:9px; font-weight:700; color:var(--muted-2); letter-spacing:.02em; }
+.proto-scenes button:hover { background:var(--bg-tint); color:var(--ink); border-color:var(--line); }
+.proto-scenes button.on { background:var(--ink); border-color:var(--ink); color:#fff; }
+.proto-scenes button.on i { color:rgba(255,255,255,.6); }
