@@ -14,7 +14,7 @@ import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
 import { listSecretsByKindPublic, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
 import { NOTION_PUBLIC_KIND } from "../org/credentials/notion-oauth.js";
-import { startNotionPublicConsent, completeNotionInstall, notionPublicReady } from "../org/credentials/oauth-broker.js";
+import { startNotionPublicConsent, completeNotionInstall, notionPublicReady, onNotionInstalled } from "../org/credentials/oauth-broker.js";
 
 export const NOTION_INSTANCE = "lively-notion";
 
@@ -76,6 +76,20 @@ async function enableCollector(actor: string, source: string): Promise<{ collect
   }, actor, source);
   return { collector_id: saved.id, token_source: tokenSource };
 }
+
+// ★ 동의가 끝나면 그 자리에서 끝난다 — 연결이 저장되는 순간 수집기를 준비한다.
+//
+//  사람이 [팀 자료로 모으기]를 켜서 시작한 흐름이다. 그런데 저장은 OAuth 콜백(다른 탭·매니지드면 다른
+//  도메인)에서 끝나므로, 아무도 수집기를 켜 주지 않으면 **돌아온 화면의 체크박스가 풀려 있다**. 사용자는
+//  실패한 줄 알고 한 번 더 누른다(#1881 매니지드 실측). 의도는 이미 표현됐으니 서버가 마무리한다.
+//
+//  ⚠ **이미 있는 수집기의 enabled 는 건드리지 않는다.** 관리자가 일부러 꺼 둔 것을 [페이지 더 고르기]
+//   재동의가 조용히 되살리면 안 된다 — 없을 때만 만들고 켠다.
+onNotionInstalled(async (memberId) => {
+  const inst = findInstance(await listCollectors());
+  if (inst) return; // 이미 있다 — 켜짐/꺼짐은 그 관리자의 결정이다
+  await enableCollector(memberId, "oauth");
+});
 
 const orgNotionCollect: Capability = {
   name: "org_notion_collect", title: "노션 팀 자료 수집 상태",
