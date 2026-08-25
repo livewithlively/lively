@@ -58,6 +58,8 @@ const SELCLOSED_KEY = 'lively_v2_side_selclosed';   // 선택된 프로젝트인
 //   실제로 처방을 적용한 이쪽(페이지 수명만)을 취한다.
 const ALL_KEY_LEGACY = 'lively_v2_side_all';
 const PIN_KEY = 'lively_v2_side_pin';     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
+//  앱 인스턴스 핀(#1954)은 키 공간이 달라(sess:/inst:/route:) 따로 둔다 — 한 통에 섞으면 트리를 걷어낼 때 같이 사라진다.
+const APP_PIN_STORE = 'lively_v2_app_pin';
 const BINS_KEY = 'lively_v2_side_bins';   // '1' = 아카이브·휴지통 두 행을 **발치에 고정**(목록을 내려도 늘 보인다, #1851)
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 
@@ -66,6 +68,7 @@ const pastSet = new Set<string>();          // '지난 세션'을 펴 둔 프로
 let allOpen = false;                        // 「전체 프로젝트」 펼침 — 페이지 수명만(새로 열면 늘 접힘)
 let binsPinned = false;                     // 아카이브·휴지통 행을 발치에 고정(#1851) — 브라우저에 기억
 let pinnedSet = new Set<string>();          // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
+let appPinned = new Set<string>();          // ★고정 = 사람이 고른 앱 인스턴스를 맨 위로(#1954)
 // 선택된 프로젝트인데도 사람이 **일부러 접어 둔** 것. ⚠ 종전엔 페이지 수명만 기억했다(new Set 만 두고 저장 안 함)
 //  — '선택은 늘 보이는 게 기본'이라는 뜻이었지만, 실제로는 **접어도 새로고침하면 도로 열렸다**(원준 2026-08-24
 //  "한 번 닫아둔 지난 세션이 계속 열려서 내가 보는 걸 가린다"). 접는 건 사람이 한 명시적 결정이라 기본값이
@@ -97,6 +100,7 @@ function init(): void {
   closedSelected = loadSet(SELCLOSED_KEY);
   try { localStorage.removeItem(ALL_KEY_LEGACY); binsPinned = localStorage.getItem(BINS_KEY) === '1'; } catch (_) { /* noop */ }
   pinnedSet = loadSet(PIN_KEY);
+  appPinned = loadSet(APP_PIN_STORE);
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
   void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
 }
@@ -246,6 +250,8 @@ export interface SideHooks {
   onOpenProject?: (projectId: number) => void;
   /** 뒤로·앞으로·검색 줄을 사이드바 대신 여기(데스크톱 창 맨 윗줄)에 건다 — null 이면 종전대로 사이드바 맨 위(#1954). */
   navHost?: () => HTMLElement | null;
+  /** 앱 인스턴스 고정이 바뀌었다 — 목록을 다시 계산해야 한다(정렬은 main 이 안다). */
+  onPinChanged?: () => void;
 }
 
 export interface SideInstance {
@@ -259,8 +265,10 @@ export interface SideInstance {
   project?: { id: number; name: string; self?: boolean } | null;
   /** 이 행이 속한 묶음의 이름 — '지금 볼 것' 또는 날짜(오늘·어제·M월 D일). 목록은 이 순서로 나뉜다(#1954). */
   group?: string;
-  /** 상태를 **글자로** 말한다(#1954) — 색만으로는 진행 중과 완료를 못 가른다. 없으면 조용한 행이다. */
+  /** 상태 점(#1954) — busy·waiting·done 만. 없으면 조용한 행이다. */
   status?: { key: string; label: string } | null;
+  /** 사람이 맨 위로 고정했는가(#1954). */
+  pinned?: boolean;
 }
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
@@ -357,8 +365,10 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
 let appListEl: HTMLElement | null = null;
 
 
+//  아이콘은 **무엇인가**(세션·프로젝트·위키)만 말한다 — 상태는 오른쪽 점이 전담한다(#1954 2차).
+//  둘이 같은 사실을 두 번 칠하면 목록이 알록달록해지고 정작 점이 안 읽힌다.
 function instanceIcon(inst: SideInstance): SVGElement {
-  const cls = 'v2-app-inst-ic' + (inst.state ? ' st-' + inst.state : '');
+  const cls = 'v2-app-inst-ic';
   if (inst.icon === 'home') return glyph('home', cls);
   if (inst.icon === 'chat') return glyph('chat', cls);
   if (inst.icon === 'inbox') return glyph('inbox', cls);
@@ -398,12 +408,18 @@ function render(): void {
     el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
-    //  상태는 글자로 — 파란 점 하나로 '작업 중'과 '작업 완료'를 가르게 하지 않는다(#1954).
+    //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
+    //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
     inst.status
-      ? el('span', { class: 'v2-app-inst-st', 'data-st': inst.status.key },
-          el('span', { class: 'v2-app-inst-st-dot', 'aria-hidden': 'true' }),
-          el('span', { text: inst.status.label }))
+      ? el('span', { class: 'v2-app-inst-st', 'data-st': inst.status.key, title: inst.status.label,
+          role: 'img', 'aria-label': inst.status.label })
       : null,
+    //  압정 — 고른 것만 맨 위로(#1954). 호버·고정 상태에서만 보인다(늘 보이면 행마다 단추 둘이 늘어선다).
+    el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
+      'aria-label': inst.pinned ? `「${inst.title}」 고정 해제` : `「${inst.title}」 위에 고정`,
+      title: inst.pinned ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
+      onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); toggleAppPin(inst.id); } },
+      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY }))),
     //  × 는 어느 행에나 있고 뜻도 하나다 — **목록에서 치우기**(#1954). 돌던 세션은 계속 돌고, 상태가 바뀌면 다시 올라온다.
     el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
       title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
@@ -1196,6 +1212,15 @@ function newSessBtn(projectId: number): HTMLElement {
 
 // 고정 단추 — 자리는 늘 차지한다(눌러야 보이는 것이 나타나며 행을 밀면 목록 전체가 흔들린다).
 //  고정된 것은 늘 보이고, 아닌 것은 그 행에 손을 얹었을 때만 보인다.
+/** 앱 인스턴스 고정 — 사람이 고른 것만 맨 위로. 자동으로 뭘 올려 두지 않는다(#1954). */
+export function isAppPinned(key: string): boolean { return appPinned.has(key); }
+function toggleAppPin(key: string): void {
+  if (appPinned.has(key)) appPinned.delete(key); else appPinned.add(key);
+  saveSet(APP_PIN_STORE, appPinned);
+  hooks.onPinChanged?.();
+  redraw();
+}
+
 function pinBtn(pk: string): HTMLElement {
   const on = isPinned(pk);
   return el('button', { class: 'v2-pinb' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on),
