@@ -156,7 +156,7 @@ export async function buildWorkerSpawnPlan(input: {
   const nodePath = input.nodePath ?? process.execPath;
   const heapMb = Math.max(16, input.memoryMb - 32);
   const nodeArgs = [
-    "--experimental-permission",
+    "--permission", // Node 22.13+ stable 이름. Node 24는 experimental 별칭을 제거했다.
     `--allow-fs-read=${input.entryPath}`,
     `--max-old-space-size=${heapMb}`,
     input.entryPath,
