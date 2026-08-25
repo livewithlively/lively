@@ -16,7 +16,7 @@ import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
 import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  type GrepPlan, parseGrep, grepWhere, idEquals, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
 } from "./search-util.js";
 
 // 세션·폴더 바인딩(#1313 R21) — 구현은 project-session-store.ts 로 분리(터미널 척추가 PM 스토어 전체를 안 끌게).
@@ -1020,8 +1020,13 @@ const P_GREP_NAMES_SEL = ["id", "level", "parent_id", "name", "status", "status_
 const P_SEARCH_BASE = "p.folder IS DISTINCT FROM '__board_anchor__'";
 
 // 공통 WHERE(grep 매처 + 앵커 제외 + level/list_id/status 필터). params 에 push 하고 절 문자열 반환.
-function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], visIds?: Set<number> | null): string {
-  const wh: string[] = [grepWhere(["p.name", "p.description"], plan, params), P_SEARCH_BASE];
+function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], visIds?: Set<number> | null, raw?: string): string {
+  //  **번호로도 찾는다**(2026-08-25 상민님). 사람은 프로젝트를 번호로 부른다(#1835) — 그런데 종전엔 이름·본문만 봐서,
+  //   본문에 우연히 그 숫자가 없으면 자기 번호로 자기를 못 찾았다. 정확일치만 OR 로 얹는다(부분일치는 idEquals 주석 참고).
+  //   공개범위·앵커 제외 같은 **기본 필터는 그대로 AND** 다 — 번호를 안다고 안 보이는 것이 보이면 안 된다.
+  const idPred = raw ? idEquals("p.id", raw, params) : null;
+  const match = grepWhere(["p.name", "p.description"], plan, params);
+  const wh: string[] = [idPred ? `((${match}) OR ${idPred})` : match, P_SEARCH_BASE];
   if (opts.level) { params.push(opts.level); wh.push(`p.level=$${params.length}`); }
   if (opts.listId != null) { params.push(opts.listId); wh.push(`p.list_id=$${params.length}`); }
   if (opts.status) { params.push(opts.status); wh.push(`p.status=$${params.length}`); }
@@ -1051,7 +1056,7 @@ export async function countProjectGrep(qstr: string, opts: ProjectSearchOpts = {
   const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
   const { result } = await grepExec(qstr, async (plan) => {
     const params: unknown[] = [];
-    const where = projectGrepWhere(plan, opts, params, visIds);
+    const where = projectGrepWhere(plan, opts, params, visIds, qstr);
     const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM project p WHERE ${where}`, params);
     return Number(rows[0]?.n ?? 0);
   });
@@ -1065,7 +1070,7 @@ export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {})
   const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
   const { result: rows, plan } = await grepExec(qstr, async (p) => {
     const params: unknown[] = [];
-    const where = projectGrepWhere(p, opts, params, visIds);
+    const where = projectGrepWhere(p, opts, params, visIds, qstr);
     params.push(Math.min(opts.limit ?? 20, 100));
     return q(itemsPool, `SELECT ${sel} FROM project p WHERE ${where} ORDER BY p.updated_at DESC LIMIT $${params.length}`, params);
   });
@@ -1105,7 +1110,7 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
   //  ⚠ 공개범위 술어는 여기(후보 CTE)가 아니라 **최종 SELECT** 에 건다(아래) — 벡터 채널이 HNSW 근사탐색이라
   //   후보 단계에서 걸러내면 이웃 상위 N 개가 비가시 문서로 채워졌을 때 결과가 통째로 비는 리콜 붕괴가 난다.
   //   이름이 DB 밖으로 나가지 않으므로 최종 필터로도 누출은 없다.
-  const lexWhere = projectGrepWhere(plan, opts, params);
+  const lexWhere = projectGrepWhere(plan, opts, params, undefined, qstr);
   // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
   const vecWh: string[] = [P_SEARCH_BASE, `p.embedding_vector IS NOT NULL`];
   if (opts.level) { params.push(opts.level); vecWh.push(`p.level=$${params.length}`); }
