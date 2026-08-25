@@ -231,19 +231,24 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
     hosts: ["slack.com"], scope: "items", level: "L0",
     tools: [
       {
+        // ⚠ search.messages 가 아니다 — 그 메서드는 legacy `search:read` 전용이고 새 앱 토큰(search:read.* 분할형)을 거부한다.
+        //  현행 검색 표면은 assistant.search.context(유저 토큰은 action_token 불요). 응답 항목에 channel_id 가 실려
+        //  채널 정책 응답 필터(#1226)가 항목 단위로 도려낼 수 있다.
         name: "slack_search_messages",
         title: "슬랙 메시지 검색",
         description:
           "내 슬랙 계정으로 메시지를 검색한다(내가 볼 수 있는 대화 — 비공개·DM 은 개인 설정에서 허용한 것만 결과에 남는다). " +
-          "query 는 슬랙 검색 문법 그대로 — 예: \"배포 in:#dev\", \"from:@name 계약\", \"after:2026-08-01\". " +
-          "결과의 channel.id·ts 로 slack_read_thread 를 부르면 스레드 전체를 읽는다.",
-        url: `${SLACK}/search.messages?count=20&sort=timestamp&sort_dir=desc`,
+          "query 는 자연어 또는 키워드. 기간은 after/before(Unix 초). 결과의 channel_id·message_ts 로 slack_read_thread 를 부르면 스레드 전체를 읽는다.",
+        url: `${SLACK}/assistant.search.context`,
+        method: "POST",
         input_schema: obj({
-          query: S("검색어(슬랙 검색 문법 — in:#채널 · from:@사람 · after:YYYY-MM-DD 조합 가능)"),
-          count: I("한 번에 받을 개수(기본 20, 최대 100 — 응답 상한 256KiB)"),
-          page: I("쪽 번호(기본 1)"),
-          sort: S("정렬 기준: score | timestamp(기본)"),
-          sort_dir: S("정렬 방향: asc | desc(기본)"),
+          query: S("검색어(자연어·키워드)"),
+          limit: I("한 번에 받을 개수(기본 20 — 응답 상한 256KiB 라 크게 잡지 말 것)"),
+          cursor: S("다음 쪽 커서(이전 응답의 response_metadata.next_cursor)"),
+          sort: S("정렬 기준: score(기본) | timestamp"),
+          sort_dir: S("정렬 방향: desc(기본) | asc"),
+          after: I("이 시각(Unix 초) 이후만"),
+          before: I("이 시각(Unix 초) 이전만"),
         }, ["query"]),
         pii_scrub: true,
       },
