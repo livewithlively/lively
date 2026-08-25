@@ -659,7 +659,7 @@ p { margin: 0 0 8px; }
 .mock .v2-gi { display: block; color: var(--v2-gi-frost); }
 .mock .v2-gi-frost { fill-opacity: var(--v2-gi-frost-a); }
 .mock .v2-gi-punch { fill: var(--v2-gi-punch); fill-opacity: var(--v2-gi-punch-a); }
-.mock .tile { display: inline-grid; place-items: center; border-radius: 9px; background: var(--ink); color: var(--on-fill); font-weight: 800; flex: none; overflow: hidden; }
+.mock .tile { display: inline-grid; place-items: center; border-radius: 9px; background: var(--ink); color: var(--bg); font-weight: 800; flex: none; overflow: hidden; }
 .mock .tile.round { border-radius: 50%; }
 .mock .tile.p { background: var(--warn-deep); }
 .mock .tile.h { background: var(--blue-fill-deep); }
@@ -709,9 +709,9 @@ p { margin: 0 0 8px; }
 .r-ws { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px 6px; }
 .r-wst { position: relative; border: 0; padding: 0; background: none; border-radius: 10px; }
 .r-wst .tile { width: 36px; height: 36px; font-size: 16px; border-radius: 10px; }
-.r-wst.on .tile { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--blue); }
-.rail.tone-bg .r-wst.on .tile { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--blue); }
-.r-wst.on::before { content: ''; position: absolute; left: -14px; top: 8px; bottom: 8px; width: 3px; border-radius: 999px; background: var(--blue); }
+/* 활성 워크스페이스 — 안 1·2 는 고리(슬랙 스위처), 안 3 은 왼쪽 막대(디스코드). 하나뿐이면 표시 없음. */
+.rail:not(.v3) .r-wst.on .tile { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--blue); }
+.rail.v3 .r-wst.on::before { content: ''; position: absolute; left: -14px; top: 8px; bottom: 8px; width: 3px; border-radius: 999px; background: var(--blue); }
 .r-wst[data-tip]:hover::after { content: attr(data-tip); position: absolute; left: calc(100% + 12px); top: 50%; transform: translateY(-50%); background: var(--chip-dark); color: #fff; font-size: 12px; font-weight: 600; padding: 5px 9px; border-radius: 7px; white-space: nowrap; z-index: 9; pointer-events: none; }
 .r-wst .car { position: absolute; right: -3px; bottom: -3px; width: 14px; height: 14px; border-radius: 50%; background: var(--bg); border: 1px solid var(--line-net); display: grid; place-items: center; color: var(--muted); }
 .r-wst .car svg { width: 8px; height: 8px; }
@@ -1249,7 +1249,7 @@ ol.req li .q { display: inline-block; margin-right: 6px; padding: 0 6px; border-
   }
   function wsTiles(showCaret) {
     const list = st.multi ? WS : [ws()];
-    return `<div class="r-ws">${list.map((w) => `<button class="r-wst ${w.id === st.ws ? 'on' : ''}" data-act="${st.multi ? 'ws' : 'wsmenu'}" data-ws="${w.id}" data-tip="${w.name} · ${w.kind === 'personal' ? '개인' : '팀'}" aria-label="${w.name}">${tile(w, w.kind === 'personal' ? 'round' : '')}${showCaret && !st.multi ? `<span class="car">${ln('chevD')}</span>` : ''}</button>`).join('')}</div>`;
+    return `<div class="r-ws">${list.map((w) => `<button class="r-wst ${st.multi && w.id === st.ws ? 'on' : ''}" data-act="${st.multi ? 'ws' : 'wsmenu'}" data-ws="${w.id}" data-tip="${w.name} · ${w.kind === 'personal' ? '개인' : '팀'}" aria-label="${w.name}">${tile(w, w.kind === 'personal' ? 'round' : '')}${showCaret && !st.multi ? `<span class="car">${ln('chevD')}</span>` : ''}</button>`).join('')}</div>`;
   }
   function wsList() {
     const o = others();
