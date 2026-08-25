@@ -3827,6 +3827,16 @@
   "input_hash": "6115cebec72e3d5d"
  },
  {
+  "name": "org_slack_app_manifest",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/slack/app-manifest"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "me_slack_channels",
   "scope": null,
   "mcp": false,

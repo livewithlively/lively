@@ -98,6 +98,32 @@ export async function exchangeSlackCode(p: {
   return parseSlackAccessResponse(j);
 }
 
+/**
+ * Slack 앱 매니페스트(#1881 §5) — 이 게이트웨이(또는 라이블리 CP)가 콜백을 받는 앱을 **한 클릭**에 만들게 한다.
+ *  `https://api.slack.com/apps?new_app=1&manifest_json=<urlencoded>` 로 열면 이름·봇 유저·스코프·redirect 가 채워진 생성 화면이
+ *  뜬다(docs.slack.dev/app-manifests). 셀프호스팅 관리자가 하는 일은 [Create] 와 Client ID/Secret 복사뿐이다.
+ *  `is_mcp_enabled` 는 넣지 않는다 — 도구 면은 Web API(B)라 슬랙 MCP 서버를 안 쓰고, 마켓플레이스 미등록 앱은 어차피 거부된다.
+ *  토큰 회전은 끈다(비가역·갱신에 client_secret 필요 → 매니지드에선 CP 왕복).
+ */
+export function buildSlackAppManifest(redirectUrls: string[], opts: { name?: string; description?: string } = {}): Record<string, unknown> {
+  return {
+    display_information: {
+      name: opts.name ?? "Lively",
+      description: opts.description ?? "내 일을 아는 AI — 슬랙 대화를 라이블리 워크스페이스의 맥락으로 모으고, AI가 내 계정으로 슬랙을 검색·발송합니다.",
+      background_color: "#1f2937",
+    },
+    features: { bot_user: { display_name: opts.name ?? "Lively", always_online: false } },
+    oauth_config: {
+      redirect_urls: [...new Set(redirectUrls)],
+      scopes: { bot: [...SLACK_BOT_SCOPES], user: [...SLACK_USER_SCOPES] },
+    },
+    settings: { org_deploy_enabled: false, socket_mode_enabled: false, token_rotation_enabled: false },
+  };
+}
+export function slackAppCreateUrl(manifest: Record<string, unknown>): string {
+  return "https://api.slack.com/apps?new_app=1&manifest_json=" + encodeURIComponent(JSON.stringify(manifest));
+}
+
 /** 금고에 넣을 모양 — 브로커가 그대로 setMemberSecret 에 넘긴다. 유저 블롭은 OAuthTokens 형식(oauth-proxy-auth 가 access_token 만 뽑아 싣는다). */
 export function slackInstallToSlots(i: SlackInstall): {
   user: { secret: string; meta: Record<string, unknown> };

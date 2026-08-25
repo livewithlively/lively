@@ -54,7 +54,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "slack",
     label: "Slack",
     guide: {
-      intro: "토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Slack] 에서 계정을 연결한 뒤 '팀 자료로 모으기'를 켜면 이 수집기가 자동으로 만들어집니다(토큰 칸 비움, '토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우입니다. 토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
       steps: [
         "api.slack.com/apps ▸ 앱 선택(없으면 [Create New App] ▸ From scratch — 워크스페이스 선택)",
         "[공개채널 전체를 훑을 때] OAuth & Permissions ▸ 'User Token Scopes': search:read, channels:read, users:read, users:read.email → [Install to Workspace] → 'User OAuth Token'(xoxp-…) 을 아래 User Token 에 저장. 채널 초대 불필요.",

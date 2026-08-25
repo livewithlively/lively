@@ -107,4 +107,23 @@ await t("C2' 교환 호출 — oauth.v2.access 에 form-urlencoded POST, client_
   assert.ok(!calls[0].url.includes("shh"));
 });
 
+await t("C11 매니페스트 — redirect·스코프가 인가 URL 과 같은 상수에서 나오고, 봇 유저가 있고, MCP·회전은 꺼져 있다", async () => {
+  const { buildSlackAppManifest, slackAppCreateUrl } = await import("./slack-oauth.js");
+  const m = buildSlackAppManifest(["https://gw.example/oauth/callback", "https://gw.example/oauth/callback"]) as {
+    oauth_config: { redirect_urls: string[]; scopes: { bot: string[]; user: string[] } };
+    features: { bot_user: { display_name: string } };
+    settings: Record<string, unknown>;
+  };
+  assert.deepEqual(m.oauth_config.redirect_urls, ["https://gw.example/oauth/callback"], "중복 redirect 는 접힌다");
+  assert.deepEqual(m.oauth_config.scopes.bot, [...SLACK_BOT_SCOPES]);
+  assert.deepEqual(m.oauth_config.scopes.user, [...SLACK_USER_SCOPES]);
+  assert.equal(m.features.bot_user.display_name, "Lively");
+  assert.equal(m.settings.token_rotation_enabled, false);
+  assert.ok(!("is_mcp_enabled" in m.settings));
+  const u = new URL(slackAppCreateUrl(m));
+  assert.equal(u.hostname, "api.slack.com");
+  assert.equal(u.searchParams.get("new_app"), "1");
+  assert.deepEqual(JSON.parse(u.searchParams.get("manifest_json") ?? "{}"), m, "링크 안의 매니페스트가 원본과 같다(인코딩 왕복)");
+});
+
 console.log(`\nslack-oauth tests: ${pass} passed`);

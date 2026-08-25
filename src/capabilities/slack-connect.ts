@@ -13,7 +13,8 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
 import { getMemberSecret, listSecretsByKindPublic, memberOwner, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
-import { SLACK_BOT_KIND } from "../org/credentials/slack-oauth.js";
+import { SLACK_BOT_KIND, buildSlackAppManifest, slackAppCreateUrl } from "../org/credentials/slack-oauth.js";
+import { getOrgProfile } from "../org/store.js";
 
 export const SEARCH_INSTANCE = "lively-search";
 export const BOT_INSTANCE = "lively-bot";
@@ -130,4 +131,19 @@ const orgSlackCollectSet: Capability = {
   },
 };
 
-export const slackConnectCapabilities: Capability[] = [orgSlackCollect, orgSlackCollectSet];
+// 셀프호스팅용 — 이 게이트웨이의 콜백이 박힌 Slack 앱 매니페스트 + 한 클릭 생성 링크(#1881 §4). 관리탭 슬랙 셋업이 연다.
+const orgSlackAppManifest: Capability = {
+  name: "org_slack_app_manifest", title: "Slack 앱 매니페스트(한 클릭 생성 링크)",
+  description: "이 게이트웨이의 OAuth 콜백(org_profile.gateway_url + /oauth/callback)이 redirect 로 박힌 Slack 앱 매니페스트와 api.slack.com 생성 링크. 셀프호스팅 관리자는 링크를 열어 [Create] → Client ID/Secret 만 [AI 도구 ▸ Slack ▸ OAuth 클라이언트] 에 넣으면 된다(구 7단계 → 3단계).",
+  scope: "admin", input: {},
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/slack/app-manifest"], parse: () => ({}) }] },
+  handler: async () => {
+    const p = await getOrgProfile();
+    if (!p.gateway_url) throw new HttpError(400, "게이트웨이 URL(org_profile.gateway_url)이 없어 콜백을 만들 수 없습니다 — 관리탭 ▸ 조직 정보에서 먼저 설정하세요.");
+    const redirect = new URL("/oauth/callback", p.gateway_url).toString();
+    const manifest = buildSlackAppManifest([redirect], { name: p.display_name ? `Lively (${p.display_name})` : "Lively" });
+    return { redirect_url: redirect, manifest, create_url: slackAppCreateUrl(manifest) };
+  },
+};
+
+export const slackConnectCapabilities: Capability[] = [orgSlackCollect, orgSlackCollectSet, orgSlackAppManifest];
