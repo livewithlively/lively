@@ -299,8 +299,28 @@ function notionTeamCollectCard(): HTMLElement {
     if (s && s.enabled) notes.push(ws ? `'${ws.name || ws.id}' 워크스페이스에서 모으고 있어요 — 노션에서 고른 페이지(와 그 하위)만 읽습니다.` : '모으고 있어요.');
     else if (wsAll.length) notes.push('연결은 돼 있어요 — 켜면 바로 모으기 시작합니다.');
     else if (s && s.ready) notes.push('켜면 노션 화면이 열려요 — 거기서 모을 페이지를 고르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
-    else notes.push('노션 연결 준비가 아직 안 됐어요 — 라이블리 Notion 통합 설정이 필요합니다. 지금은 관리 화면의 외부 자료 수집에서 토큰 방식으로 연결할 수 있어요.');
+    else notes.push('노션 연결 준비가 아직 안 됐어요 — 아래에 Lively Notion 통합의 값 두 개를 넣으면 열립니다. 지금 당장은 관리 화면의 외부 자료 수집에서 토큰 방식으로도 연결할 수 있어요.');
     const extra: HTMLElement[] = [];
+    if (!(s && s.ready) && !wsAll.length) {
+      // 직결(셀프호스팅·dev) 준비 폼 — 슬랙 T7 의 client 2칸과 대칭. 매니지드 테넌트는 CP 가 릴레이를 주입해 이 폼이 보일 일이 없다.
+      //  client_secret 은 이 사이트 계정의 비밀번호가 아니다 — type=password 금지(#1250), 텍스트칸+CSS 가림.
+      const idIn = el('input', { type: 'text', placeholder: 'OAuth client ID', autocomplete: 'off', style: 'width:100%' }) as HTMLInputElement;
+      const secIn = el('input', { type: 'text', class: 'secret-input', placeholder: 'OAuth client secret', autocomplete: 'off', style: 'width:100%' }) as HTMLInputElement;
+      const saveBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '통합 값 저장' }) as HTMLButtonElement;
+      saveBtn.onclick = async () => {
+        const cid = idIn.value.trim(), sec = secIn.value.trim();
+        if (!cid || !sec) { toast('ID 와 시크릿을 모두 넣어 주세요', true); return; }
+        saveBtn.disabled = true;
+        try {
+          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: 'notion_public', scope_key: 'oauth:client', secret: JSON.stringify({ client_id: cid, client_secret: sec }) }) });
+          toast('저장했어요 — 이제 토글을 켜면 노션 화면이 열립니다');
+        } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; return; }
+        await paint();
+      };
+      extra.push(el('div', { class: 'cn-sec-form' },
+        idIn, secIn, saveBtn,
+        el('p', { class: 'cn-help' }, ...uiText('notion.so/my-integrations 의 Lively 공개 통합 ▸ 구성(Configuration)에서 ID 와 시크릿을 복사해 넣으세요. 그 통합의 redirect URI 에는 ' + location.origin + '/oauth/callback 이 등록돼 있어야 합니다.'))));
+    }
     if (wsAll.length) {
       extra.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '페이지 더 고르기',
         onclick: async () => {
