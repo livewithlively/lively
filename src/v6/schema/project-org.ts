@@ -87,7 +87,7 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
          RETURNING id, binding_epoch)
       INSERT INTO session_project(session_id, project_id, binding_epoch)
         SELECT id, NULL, binding_epoch FROM changed
-      ON CONFLICT (tenant_id, session_id, valid_from) DO NOTHING;
+      ON CONFLICT DO NOTHING;   -- 중재자 없이 — 스키마 초기화 SQL 은 tenant_id 재작성 전/후 두 모양에 다 맞아야 한다(tenant-column.test)
       RETURN OLD;
     END;
     $$ LANGUAGE plpgsql;

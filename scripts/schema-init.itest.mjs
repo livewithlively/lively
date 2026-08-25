@@ -91,8 +91,8 @@ try {
     const { setExecutionSessionProject, executionSessionProject } = await import("../dist/v6/execution-session-store.js");
     const { upsertProjectFolderBinding, listProjectFolderBindings } = await import("../dist/v6/project-session-store.js");
     const made = await itemsPool.query(
-      `INSERT INTO project(name, created_by) VALUES ('binding-e2e-a','itest'),('binding-e2e-b','itest') RETURNING id ORDER BY id`);
-    const [a, b] = made.rows.map((r) => Number(r.id));
+      `INSERT INTO project(name, created_by) VALUES ('binding-e2e-a','itest'),('binding-e2e-b','itest') RETURNING id`);
+    const [a, b] = made.rows.map((r) => Number(r.id)).sort((x, y) => x - y);
     const sid = "codex-thr-binding-e2e";
 
     const first = await setExecutionSessionProject({ id: sid, owner: "itest", harness: "codex", projectId: a });
