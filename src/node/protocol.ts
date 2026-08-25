@@ -6,6 +6,7 @@
 //    (tmux -CC 출력은 멀티바이트가 프레임 경계에서 쪼개질 수 있어 서버가 디코드하지 않고
 //     바이트 그대로 릴레이한다 — terminal-pty 와 동일 원칙.)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
+import type { WorkerRunSnapshot } from "../apps/worker-host.js";
 
 export const NODE_WS_PATH = "/node/ws";
 export const PROTO_VER = 1;
@@ -69,6 +70,7 @@ export interface OpenedMsg { t: "opened"; chan: number }
 export interface OpenFailMsg { t: "openfail"; chan: number; code: number; reason: string }
 // 위탁 태스크 종결 보고(P2) — 노드가 exit 파일 감지·결과 수집 후 1회 push. summary 는 상한 잘라 전송.
 export interface TaskDoneMsg { t: "taskdone"; taskId: number; ok: boolean; exit: number | null; summary?: string; error?: string }
+export interface WorkerStateMsg { t: "workerState"; snapshot: WorkerRunSnapshot }
 // 게이트웨이 → 노드
 export interface ReqMsg { t: "req"; id: number; op: NodeOp; args?: Record<string, unknown> }
 export interface OpenMsg { t: "open"; chan: number; session: string }
@@ -143,7 +145,7 @@ export function agentIsLatest(nodeVer: string | null | undefined, servedVer: str
   return nodeVer === servedVer;
 }
 
-export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg;
+export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg | WorkerStateMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg | HelloOkMsg;
 
 export function parseMsg<T>(raw: unknown): T | null {
