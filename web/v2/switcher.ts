@@ -5,21 +5,38 @@
 //  워크스페이스 1개 = 게이트웨이 1개라, '전환'은 그 게이트웨이 주소를 새 탭으로 여는 것이다(개인↔팀은 서로 다른 게이트웨이).
 //  메뉴는 body 에 떠서(fixed) 사이드바 20초 재렌더에 지워지지 않는다. 데이터(연결·승격)는 **열 때** 한 번만 당긴다.
 import { api, currentWorkspace, el, personFace, profileAvatar, setCurrentWorkspace, state, toast } from '../core.js';
+import { inboxSection, peopleSection, type InviteForMe } from './ws-people.js';   // #1875 구성원·초대
 
 let openPanel: HTMLElement | null = null;
 function closeMenu(): void { if (openPanel) { openPanel.remove(); openPanel = null; document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); } }
 function onDoc(e: MouseEvent): void { if (openPanel && !openPanel.contains(e.target as Node) && !(e.target as HTMLElement).closest('.v2-ws')) closeMenu(); }
 function onKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeMenu(); }
 
-function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string } {
+// #1875 — 인원 수가 최근에 확인된 값. status 를 부를 때마다 갱신하고, 문패는 이 값으로 배지를 그린다.
+//  ⚠ 서버(kindEffective)와 **같은 식**이어야 한다 — 두 곳이 다르면 화면과 게이트가 다른 말을 한다.
+let liveCount: number | null = null;
+export function kindFromCount(n: number): 'personal' | 'team' { return n >= 2 ? 'team' : 'personal'; }
+
+function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string; count: number | null } {
   const m: any = (state && state.me) || {};
   const w = m.workspace || {};
-  // registry(다중 워크스페이스)가 켜져 있으면 **등록부의 이름·종류가 정답**이다 — org_name 을 쓰면
+  // registry(다중 워크스페이스)가 켜져 있으면 **등록부의 이름이 정답**이다 — org_name 을 쓰면
   //  버튼("Lively")과 메뉴 목록("라이블리")이 같은 워크스페이스를 두 이름으로 부른다(2026-08-19 실측 신고).
   const reg: any = m.workspace_registry || {};
   const name = (reg.active && reg.name) ? String(reg.name) : String(m.org_name || m.email || '내 워크스페이스');
-  const kind = (reg.active && reg.kind) ? (reg.kind === 'personal' ? 'personal' : 'team') : (w.kind === 'personal' ? 'personal' : 'team');
-  return { kind, hub: w.hub_url || null, name };
+  // ★ 종류는 **저장된 값이 아니라 지금 몇 명인가**에서 나온다(#1875). 컬럼(reg.kind)은 만들 때의 의도라
+  //  사람이 들고 나면 조용히 거짓이 된다 — 혼자 남은 '팀', 둘이 쓰는 '개인'이 거기서 생긴다.
+  //  인원을 아직 못 받았을 때만(첫 그리기) 컬럼으로 임시 표시하고, status 가 오면 바로 정정된다.
+  const n = liveCount ?? (typeof reg.member_count === 'number' ? reg.member_count : null);
+  const kind = n !== null ? kindFromCount(n)
+    : (reg.active && reg.kind) ? (reg.kind === 'personal' ? 'personal' : 'team')
+    : (w.kind === 'personal' ? 'personal' : 'team');
+  return { kind, hub: w.hub_url || null, name, count: n };
+}
+
+/** 문패를 다시 그리게 만드는 신호 — 인원이 바뀌면(초대 수락·구성원 제거) 배지가 즉시 따라와야 한다. */
+function repaintCard(): void {
+  document.dispatchEvent(new CustomEvent('lively:ws-people-changed'));
 }
 
 // 상단 노드 — **워크스페이스 문패 카드**(2026-08-20 원준, 사이드바 개편 안3의 문패 채택).
@@ -36,8 +53,11 @@ export function switcherTop(opts?: { people?: Record<string, any>; faces?: strin
   const kindText = w.kind === 'personal' ? '개인' : '팀';
   const people = (opts && opts.people) || {};
   const ids = Object.keys(people);
+  // 부제도 같은 값에서 — 명부 인원(count)이 있으면 그걸 쓰고, 아직 없으면 얼굴 수로 폴백한다.
+  //  두 숫자가 다르면 명부가 정답이다(얼굴은 '세션을 가진 사람'이라 명부의 부분집합).
+  const shown = w.count ?? (ids.length || null);
   const sub = w.kind === 'personal' ? '개인 워크스페이스 · 나만'
-    : `팀 워크스페이스${ids.length ? ' · ' + ids.length + '명' : ''}`;
+    : `팀 워크스페이스${shown ? ' · ' + shown + '명' : ''}`;
   // 아바타 — 개인은 내 얼굴(계정 아바타 그대로), 팀은 조직 이니셜 타일. 팀 로고 이미지는 아직 없다(있으면 여기).
   const face = w.kind === 'personal'
     ? profileAvatar(me.avatar, w.name, me.userId, 'v2-wscard-big round', { char: me.avatar_char, color: me.avatar_color })
@@ -89,6 +109,7 @@ async function openMenu(anchor: HTMLElement): Promise<void> {
       el('div', { class: 'v2-ws-cur' },
         el('span', { class: 'v2-ws-badge ' + w.kind, text: w.kind === 'personal' ? '개인' : '팀' }),
         el('span', { class: 'v2-ws-name', text: w.name }),
+        // (registry 비활성 — 명부 축이 없으므로 인원을 적지 않는다)
         el('span', { class: 'v2-ws-check', 'aria-hidden': 'true', text: '✓ 지금 여기' })));
     // 비활성(= 부팅 자동 활성화 대기/실패 또는 매니지드) — **조용히 숨기지 않는다.** 만들기 섹션이
     //  없는 이유를 화면이 답하지 못하면 "기능이 없다"로 읽힌다. 매니지드(mode=managed)는 허브 링크가
@@ -121,6 +142,17 @@ async function openMenu(anchor: HTMLElement): Promise<void> {
 
   if (w.hub) panel.append(el('a', { class: 'v2-ws-item', href: w.hub, target: '_blank', rel: 'noopener', text: '다른 워크스페이스 · 새로 만들기 →' }));
 
+  // #1875 — 나에게 온 초대. 제일 위에 온다: 내가 결정해 줘야 다른 사람이 기다림을 멈춘다.
+  const inboxWrap = el('div', { class: 'v2-ws-inbox-slot' });
+  panel.prepend(inboxWrap);
+  void refreshInbox(inboxWrap);
+
+  // #1875 — 이 워크스페이스의 구성원 · 초대. primary 는 명부가 없어 서버가 400 을 주므로 아예 걸지 않는다.
+  const curSlug = currentWorkspace() || 'primary';
+  if (curSlug !== 'primary') {
+    panel.append(peopleSection(curSlug, () => { void refreshStatusCount(); repaintCard(); }));
+  }
+
   const promoWrap = el('div', { class: 'v2-ws-promos' });
   panel.append(promoWrap);
 
@@ -136,6 +168,32 @@ async function openMenu(anchor: HTMLElement): Promise<void> {
 
   void refreshTeam(teamWrap).then((n) => { if (openPanel === panel && (w.kind === 'personal' || n > 0)) teamSection.hidden = false; });
   void refreshPromos(promoWrap);
+}
+
+// ── #1875 인원 수 · 나에게 온 초대 ─────────────────────────────────────────
+
+/** 지금 워크스페이스의 명부 인원을 받아 문패 배지를 정정한다. 메뉴를 열지 않아도 부팅 때 한 번 돈다. */
+export async function refreshStatusCount(): Promise<void> {
+  try {
+    const d: any = await api('/api/ui/me/workspaces');
+    const cur = currentWorkspace() || 'primary';
+    const row = (d?.workspaces || []).find((w: any) => w.slug === cur || (w.is_primary && cur === 'primary'));
+    // primary 는 명부를 쓰지 않는다(박스 로그인 = 접근) — 서버가 member_count:null 을 준다. 배지는 종전대로.
+    if (row && typeof row.member_count === 'number') { liveCount = row.member_count; repaintCard(); }
+  } catch (_) { /* 배지 정정 실패는 침묵 — 종전 표시가 남는다 */ }
+}
+
+async function refreshInbox(wrap: HTMLElement): Promise<void> {
+  try {
+    const d: any = await api('/api/ui/me/workspaces');
+    const list: InviteForMe[] = (d && d.invites_for_me) || [];
+    const sec = inboxSection(list, (accepted) => {
+      if (!accepted) { void refreshInbox(wrap); return; }
+      // 수락했으면 그 워크스페이스로 간다 — 들어왔다고 말해 놓고 원래 자리에 두면 사람이 길을 잃는다.
+      switchTo(accepted.slug);
+    });
+    wrap.replaceChildren(...(sec ? [sec] : []));
+  } catch (_) { wrap.replaceChildren(); }
 }
 
 // ── 내 워크스페이스(registry) — 전환·이름변경·보관 ──────────────────────────
@@ -184,14 +242,22 @@ export function switcherName(): HTMLElement {
 }
 
 /** 이 게이트웨이의 워크스페이스 목록. registry 가 꺼져 있으면 빈 배열(전환할 목록 자체가 없다). */
-export async function listWorkspaces(): Promise<Array<{ slug: string; name: string; kind: string; is_primary?: boolean }>> {
+export async function listWorkspaces(): Promise<Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string }>> {
   const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
   if (!reg.active) return [];
   try {
     const d: any = await api('/api/ui/me/workspaces');
-    return ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean }>;
+    //  #1875 — 같은 응답이 「나에게 온 초대」도 싣고 온다. 그 하나를 위해 같은 주소를 두 번 부르지 않는다.
+    lastInvites = ((d && d.invites_for_me) || []) as InviteForMe[];
+    return ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string }>;
   } catch (_) { return []; }
 }
+
+// #1875 — 마지막으로 받아 둔 「나에게 온 초대」. 목록을 그리는 쪽(레일 팝오버)이 같은 조회를 또 하지 않게
+//  여기 남긴다. **비어 있음이 곧 '없음'은 아니다** — 아직 한 번도 안 불렀을 수 있으므로, 부르는 쪽이
+//  listWorkspaces() 를 먼저 await 한 뒤 읽는다.
+let lastInvites: InviteForMe[] = [];
+export function myInvites(): InviteForMe[] { return lastInvites; }
 
 /** 지금 워크스페이스의 slug('primary' 폴백) — 레일 타일 스택의 활성 표시가 이걸로 판정한다. */
 export function activeWorkspaceSlug(): string { return currentWorkspace() || 'primary'; }
@@ -214,8 +280,12 @@ function switchTo(slug: string): void {
 function mineRow(w: any, active: boolean, wrap: HTMLElement): HTMLElement {
   const open = el('button', { class: 'v2-ws-team-open', type: 'button', title: active ? '지금 이 워크스페이스예요' : '이 워크스페이스로 전환',
     onclick: () => { if (!active) switchTo(String(w.slug)); } },
-    el('span', { class: 'v2-ws-badge ' + (w.kind === 'personal' ? 'personal' : 'team'), text: w.kind === 'personal' ? '개인' : '팀' }),
+    // #1875 — 서버가 준 파생값(kind_effective)을 그대로 쓴다. 목록과 문패가 같은 규칙을 지나가야
+    //  "여기선 팀인데 저기선 개인"이 생기지 않는다. 인원도 함께 적어 판정 근거를 감추지 않는다.
+    el('span', { class: 'v2-ws-badge ' + (w.kind_effective === 'team' ? 'team' : 'personal'),
+      text: w.kind_effective === 'team' ? (typeof w.member_count === 'number' ? '팀 ' + w.member_count : '팀') : '개인' }),
     el('span', { class: 'v2-ws-name', text: String(w.name || w.slug) }),
+    w.pending_invites ? el('span', { class: 'v2-ws-pend', title: `수락 대기 ${w.pending_invites}명`, text: '대기 ' + w.pending_invites }) : null,
     active ? el('span', { class: 'v2-ws-check', 'aria-hidden': 'true', text: '✓ 지금 여기' }) : null) as HTMLButtonElement;
   const acts: HTMLElement[] = [];
   if (w.role === 'owner' && !w.is_primary) {
@@ -250,7 +320,7 @@ function buildCreateForm(form: HTMLElement): void {
     } catch (e: any) { note.textContent = e?.message || String(e); go.removeAttribute('disabled'); }
   } });
   form.replaceChildren(name, kind, el('div', { class: 'v2-ws-formrow' }, go, note),
-    el('p', { class: 'v2-ws-hint', text: '개인 워크스페이스는 관리자를 포함해 다른 사람에게 보이지 않아요. 팀은 만든 뒤 멤버를 초대할 수 있어요.' }));
+    el('p', { class: 'v2-ws-hint', text: '개인 워크스페이스는 관리자를 포함해 다른 사람에게 보이지 않아요. 나중에 사람을 부르면 그때 팀이 됩니다 — 지금 고르는 건 시작 모습일 뿐이에요.' }));
 }
 
 async function refreshTeam(wrap: HTMLElement): Promise<number> {

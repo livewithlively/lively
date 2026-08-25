@@ -22,7 +22,8 @@ import { APPS, openLaunchpad, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
-import { activeWorkspaceSlug, listWorkspaces, openWorkspaceMenu, switchWorkspace, workspaceInfo } from './switcher.js';
+import { activeWorkspaceSlug, listWorkspaces, myInvites, openWorkspaceMenu, switchWorkspace, workspaceInfo } from './switcher.js';
+import { inboxSection, peopleSection } from './ws-people.js';   // #1875 — 구성원·초대(이 워크스페이스) / 나에게 온 초대
 
 export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
 
@@ -188,7 +189,15 @@ function openPopover(anchor: HTMLElement): void {
   const rows: Array<{ slug: string; name: string; kind: string; active: boolean }> = spaces.length
     ? spaces.map((w) => ({ slug: String(w.slug), name: String(w.name || w.slug), kind: String(w.kind || 'team'), active: w.slug === curSlug || (!!w.is_primary && curSlug === 'primary') }))
     : [{ slug: 'primary', name: cur.name, kind: cur.kind, active: true }];
+  //  #1875 — 나에게 온 초대는 **맨 위**다. 내가 결정해 줘야 저쪽이 기다림을 멈추고,
+  //   무엇보다 '내가 갈 수 있는 곳'이라 워크스페이스 목록과 같은 질문에 답한다.
+  const inbox = inboxSection(myInvites(), (accepted) => {
+    closePopover();
+    if (accepted) switchWorkspace(accepted.slug);   // 들어왔다고 말해 놓고 원래 자리에 두면 길을 잃는다
+    else void refreshSpaces();
+  });
   const pop = el('div', { class: 'v2-wspop', role: 'menu', 'aria-label': '워크스페이스' },
+    ...(inbox ? [inbox, el('div', { class: 'v2-wspop-hr', role: 'separator' })] : []),
     ...rows.map((w) => el('button', {
       class: 'v2-wspop-row' + (w.active ? ' cur' : ''), type: 'button', role: 'menuitemradio', 'aria-checked': String(w.active),
       title: w.active ? '지금 이 워크스페이스예요' : `${w.name} 워크스페이스로 전환`,
@@ -196,6 +205,19 @@ function openPopover(anchor: HTMLElement): void {
     },
       wsTile(w, 'v2-wscard-big'),
       el('span', { class: 'v2-wspop-tt' }, el('b', { text: w.name }), el('span', { text: w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스' })))),
+    el('div', { class: 'v2-wspop-hr', role: 'separator' }),
+    //  #1875 구성원 — 슬랙의 「Invite people to …」 자리다. 사람을 부르는 일은 '워크스페이스 추가'와
+    //   다른 축인데, 여기 없으면 그 ＋ 뒤에 묻혀 아무도 찾지 못한다(실측: 그렇게 묻혀 있었다).
+    //   primary 는 명부가 없다(박스 로그인 = 접근) — 고를 것이 없으므로 그리지 않는다.
+    curSlug === 'primary' ? null : el('button', {
+      class: 'v2-wspop-row', type: 'button', role: 'menuitem',
+      title: '이 워크스페이스의 구성원 — 보기 · 이메일로 초대',
+      onclick: () => { closePopover(); openPeoplePopover(anchor, curSlug); },
+    },
+      el('span', { class: 'v2-wspop-ic' }, icon('group')),
+      el('span', { class: 'v2-wspop-tt' },
+        el('b', { text: '구성원 · 초대' }),
+        el('span', { text: peopleSub(curSlug) }))),
     el('div', { class: 'v2-wspop-hr', role: 'separator' }),
     //  ＋ — 만들기·연결 폼은 종전 메뉴(switcher.ts)가 이미 갖고 있다. 여기서 두 벌 만들지 않고 그 메뉴를 연다.
     el('button', { class: 'v2-wspop-row', type: 'button', role: 'menuitem', onclick: () => { closePopover(); openWorkspaceMenu(anchor); } },
@@ -208,6 +230,27 @@ function openPopover(anchor: HTMLElement): void {
       el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }))) as HTMLElement;
   //  레일에서 열면 오른쪽 옆, 사이드바 머리에서 열면 그 아래(슬랙의 「HonestAI ▾」 메뉴 자리).
   place(pop, anchor, !!anchor.closest('.v2-side'));
+}
+
+/** 팝오버 행의 부제 — 목록에서 이미 받아 둔 인원 수로 '개인/팀'을 말한다(#1875 파생 규칙). */
+function peopleSub(slug: string): string {
+  const w = spaces.find((x: any) => x.slug === slug) as any;
+  const n = w && typeof w.member_count === 'number' ? w.member_count : null;
+  if (n === null) return '보기 · 이메일로 초대';
+  return n >= 2 ? `팀 · ${n}명` : '나만 — 초대하면 팀이 됩니다';
+}
+
+/** 이 워크스페이스의 구성원 — 명부 · 수락 대기 · 이메일 초대(#1875). 부품은 ws-people.ts 것 그대로다. */
+function openPeoplePopover(anchor: HTMLElement, slug: string): void {
+  const pop = el('div', { class: 'v2-wspop v2-wspop--people', role: 'menu', 'aria-label': '구성원' },
+    peopleSection(slug, () => { void refreshSpaces(); })) as HTMLElement;
+  place(pop, anchor, !!anchor.closest('.v2-side'));
+}
+
+/** 목록·인원을 다시 받아 레일을 고쳐 그린다 — 구성원이 바뀌면 문패 부제(팀 · N명)가 따라와야 한다. */
+async function refreshSpaces(): Promise<void> {
+  const rows = await listWorkspaces();
+  if (rows.length) { spaces = rows as any; drawRail(); }
 }
 
 /** 레일을 숨겼을 때 사이드바 머리의 **구역 드롭다운**(안 B) — 메인 그룹 순서 그대로(구역 · 리브 · 고정한 앱) + 「레일 펼치기」. */
