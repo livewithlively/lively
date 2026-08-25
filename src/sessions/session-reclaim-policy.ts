@@ -39,6 +39,25 @@ export interface SessionReclaimPolicy {
    * ⚠ 이 값이 0 이어도 회수 안전 불변식(managed·접속중·작업중·복원가능)은 그대로 적용된다 — 정책이 못 푸는 하드락이다.
    */
   pressure_idle_minutes: number;
+  /**
+   * #1675 ⑤ **스왑 압박 회수** — 스왑 **사용률(%)** 이 이 값 이상이면 압박으로 본다. 0 = 끔(기본).
+   *
+   * 왜 축이 하나 더 필요한가(어니스트 2026-08-12 실측): 그 박스는 `pressure_used_pct=95` 로 켜져 있었는데
+   *  **한 번도 발동하지 못했다.** 사고 당시 물리 메모리는 13.0/15.8GB(≈82%)로 임계에 한참 못 미쳤지만
+   *  **스왑은 8,185/8,191MB — 99.9%로 사실상 고갈**이었다. 그 상태에서 전 시스템이 스와핑에 묶여
+   *  Postgres 응답이 3초를 넘겼고 "DB 연결 불가"가 떴다. 즉 **이 박스가 벼랑에 있다는 사실은 물리 메모리
+   *  지표에 나타나지 않았다** — 스왑에만 나타났다.
+   *
+   *  같은 통찰이 host-mem.ts 의 `parseProcMeminfoSwap` 주석에 이미 적혀 있었다("MemAvailable 이 넉넉해도
+   *  스왑이 바닥이면 그 박스는 이미 벼랑이다"). 지표는 있었는데 **회수 판정이 그걸 안 봤다.**
+   *
+   * earlyoom 과의 경합에도 이쪽이 유리하다: earlyoom 은 통상 물리 가용률로 발동하므로, 스왑 축은 그와
+   *  겹치지 않는 더 이른 신호다. 물리 축만으로 earlyoom 을 앞지르려면 임계를 계속 낮춰야 하는데
+   *  그건 평시 오발동을 부른다.
+   *
+   * 스왑이 없는 박스(SwapTotal=0)·못 재는 플랫폼에서는 이 축이 자동으로 비활성이다.
+   */
+  pressure_swap_pct: number;
 }
 
 export type SessionReclaimPolicyPatch = Partial<SessionReclaimPolicy>;
@@ -48,14 +67,47 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   idle_ttl_minutes: 0,
   pressure_used_pct: 0,      // 0 = 압박 회수 끔(무회귀)
   pressure_idle_minutes: 60, // 켰을 때의 기본 하한 — '한 시간 넘게 손 안 댄 세션'
+  pressure_swap_pct: 0,      // #1675 ⑤ — 0 = 끔(무회귀). 켜는 값은 90 안팎을 권한다(그 아래는 평시에도 닿는 박스가 있다)
 };
 
 // 관리탭·검증 노출 상수 — 0(끔) ~ 43200분(30일; 그 이상은 사실상 안 켠 것).
 export const RECLAIM_TTL_MIN_MIN = 0;
 export const RECLAIM_TTL_MIN_MAX = 43_200;
-// 압박 임계(%) — 0(끔) ~ 99. 100 은 '절대 발동 안 함'이라 0(끔)과 뜻이 겹쳐 막는다(설정 실수 방지).
+/**
+ * #1675 ⑤ — **earlyoom 발동선**(사용률 %). `deploy/lib/common.sh` 의 `EARLYOOM_ARGS="-m 6 …"` 와 짝이다:
+ *  earlyoom 은 `MemAvailable ≤ 6%` 에서 발동하므로 사용률로는 **94%** 다.
+ *  (짝이 어긋나지 않게 `session-reclaim-earlyoom.test.ts` 가 두 파일의 값을 함께 못박는다.)
+ */
+export const EARLYOOM_TRIGGER_USED_PCT = 94;
+
+// 압박 임계(%) — 0(끔) ~ 90.
+//
+// ⚠ 상한이 99 가 아니라 **90** 인 이유(어니스트 2026-08-12): 그 박스는 `pressure_used_pct=95` 로 켜져 있었는데
+//  **한 번도 발동하지 못했다.** earlyoom 이 94% 에서 먼저 프로세스를 죽여버리기 때문이다 — 95 는 94 보다
+//  늦으므로 그 설정은 처음부터 무의미했다. 슬랙 알림은 "메모리 압박 회수를 켜면 이 지경에 이르기 전에
+//  게이트웨이가 먼저 정리합니다"라고 안내하는데 **그 약속이 지켜질 수 없는 값을 고를 수 있었다.**
+//  그래서 '고를 수 없게' 만든다 — 관리탭이든 REST 든 94 이상은 들어올 수 없다.
+//
+// 왜 하필 90(= earlyoom −4%p)인가: 회수 tick 이 **5분 주기**(boot/housekeeping)라, 임계를 넘은 뒤 우리가
+//  손을 쓰기까지 최대 5분이 뜬다. 그 사이 4%p(16GB 박스 기준 640MB)를 더 먹으면 earlyoom 이 이긴다.
+//  만성 누적(이 기능이 겨냥하는 것)은 그 속도가 아니고, 그보다 빠른 급성 스파이크는 애초에 earlyoom 몫이다.
+//  더 앞서고 싶으면 85 안팎으로 **낮추면** 된다 — 이 상한은 '늦게 잡는 것'만 막는다.
 export const RECLAIM_PRESSURE_PCT_MIN = 0;
-export const RECLAIM_PRESSURE_PCT_MAX = 99;
+export const RECLAIM_PRESSURE_PCT_MAX = EARLYOOM_TRIGGER_USED_PCT - 4;
+
+/**
+ * 스왑 축 임계 상한(%) — 물리 축과 달리 **99 까지 허용한다.**
+ *
+ * 왜 여기엔 earlyoom 여유가 필요 없나: 우리 earlyoom 은 `-s 100,100` 으로 깔린다(= **스왑 조건을 끈다**).
+ *  earlyoom 의 발동식은 `MemAvailable% ≤ -m` **AND** `SwapFree% ≤ -s` 인데, `-s 100` 이면 그 항이 항상 참이라
+ *  실질 발동축은 물리 메모리 하나뿐이다(#1220 이 `-s 6` → `-s 100,100` 으로 바꾼 이유가 그것이다:
+ *  스왑 8G 를 깐 뒤로 스왑이 다 찰 때까지 방어가 잠들어 있었다).
+ *
+ * → **스왑 축은 earlyoom 과 아예 경합하지 않는다.** 어니스트 사고 시점의 값(물리 82% / 스왑 99.9%)이 정확히
+ *  그 사각지대였다: 물리 축으로는 어떤 임계를 골라도 안 걸렸고, earlyoom 도 스왑을 안 봤다. 이 축만이 그 상태를
+ *  '벼랑'으로 읽는다. 그래서 늦게 잡을 걱정 없이 원하는 값을 그대로 쓸 수 있다(권장 90 안팎).
+ */
+export const RECLAIM_SWAP_PCT_MAX = 99;
 
 // 노브 선언(#1313 R47) — 범위·env 시드는 이 표가 전부. 클램프/시드/우선순위 골격은 knob.ts 가 맡는다.
 //  loose: R47 이전 이 모듈의 숫자 해석(Number(v) 직행)을 그대로 보존(byte-compat). 새 정책은 쓰지 마라 — knob.ts 참조.
@@ -65,6 +117,9 @@ const policy = definePolicy<SessionReclaimPolicy>({
     idle_ttl_minutes: { env: "LIVELY_SESSION_IDLE_TTL_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX, loose: true },
     pressure_used_pct: { env: "LIVELY_SESSION_PRESSURE_PCT", min: RECLAIM_PRESSURE_PCT_MIN, max: RECLAIM_PRESSURE_PCT_MAX, loose: true },
     pressure_idle_minutes: { env: "LIVELY_SESSION_PRESSURE_IDLE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX, loose: true },
+    // #1675 ⑤ — 신규 노브라 loose 를 쓰지 않는다(knob.ts 의 방어적 해석이 정본). 0 은 '끔'이라는 의미 있는 선택이라
+    //  null/"" 이 0 으로 뒤집히면 안 된다.
+    pressure_swap_pct: { env: "LIVELY_SESSION_PRESSURE_SWAP_PCT", min: RECLAIM_PRESSURE_PCT_MIN, max: RECLAIM_SWAP_PCT_MAX },
   },
 });
 

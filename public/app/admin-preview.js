@@ -4,6 +4,7 @@
 import { api, busy, cardHead, el, errorNote, memberCombo, relTime, toast, uiText } from './core.js';
 import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle, sectionHead } from './admin-widgets.js';
+import { openInAside } from './v2/aside-slot.js';
 // ── 미리보기 — 작업 중인 화면을 운영 화면·남의 작업과 분리해 따로 띄워 본다. ──
 //  사람이 고르는 건 '무엇을 미리볼지'(프로젝트·레포)뿐이고, 작업 폴더 준비·빌드는 서버가 알아서 한다(비동기).
 //  대개는 AI 가 작업 중 자동으로 만들어 쓰고, 이 화면은 그것을 **보고·열고·끄는** 창구다.
@@ -42,8 +43,17 @@ async function previewEnvsPanel(detail, data) {
             el('span', { class: 'dm-tag', text: p.enabled ? statusText : '꺼둠' }),
             p.last_error ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '안내' }), p.last_error) : null,
         ].filter(Boolean);
+        const href = '/preview/' + encodeURIComponent(p.id) + '/ui/';
         const acts = [
-            (p.status === 'running') ? el('a', { class: 'btn btn-primary btn-sm', href: '/preview/' + encodeURIComponent(p.id) + '/ui/', target: '_blank', text: '화면 열기 ↗' }) : null,
+            // [화면 열기] 는 **오른쪽 곁칸**에 띄운다(원준님 2026-08-20) — 종전엔 새 창이었다. 이 패널은 앱 프레임 안이라
+            //  곁칸은 껍데기(v2/main)가 postMessage 를 받아 연다(v2/aside-slot.ts). 껍데기가 없으면(구 UI·직접 연 주소)
+            //  openInAside 가 false 를 돌려주므로 그 자리에서 새 창으로 간다 — 누름과 같은 틱이라 팝업 차단에 안 걸린다.
+            (p.status === 'running') ? el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '화면 열기',
+                title: '오른쪽 곁칸에서 봅니다 — 끌어서 넓힐 수 있어요',
+                onclick: () => { if (!openInAside({ key: 'preview:' + p.id, title: p.label || p.id, url: href }))
+                    window.open(href, '_blank', 'noopener'); } }) : null,
+            (p.status === 'running') ? el('a', { class: 'btn btn-ghost btn-sm', href, target: '_blank', rel: 'noopener', text: '↗',
+                title: '새 창으로 열기', 'aria-label': '새 창으로 열기' }) : null,
             (p.status !== 'preparing') ? el('button', { class: 'btn btn-ghost btn-sm', text: p.status === 'running' ? '새로 만들기' : '띄우기', onclick: () => previewEnsure(p.id, reload) }) : null,
             (p.status === 'running' || p.status === 'preparing') ? el('button', { class: 'btn btn-ghost btn-sm', text: '끄기', onclick: () => previewStop(p.id, reload) }) : null,
             el('button', { class: 'btn btn-ghost btn-sm', text: '설정', onclick: () => openPreviewEnvForm(p, reload) }),

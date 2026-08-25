@@ -34,6 +34,18 @@ const LOGIN_SERVICES = [
     { key: 'prometheus', label: 'Prometheus', icon: '📊', token: 'prometheus_bearer', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
     { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', token: 'claude_setup_token', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
 ];
+/** 표에 없는 커넥터를 화면에 세울 최소 정보로 감싼다 — 관리자가 방금 등록한 앱이 여기로 들어온다. */
+function svcFromConnector(server, c) {
+    //  이름: 커넥터 이름이 곧 사람이 아는 이름인 경우가 많다('notion' → 'Notion'). 아니면 관리자가 note 에 쓴다.
+    const label = String(server || '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase()).trim() || server;
+    const used = Array.isArray(c && c.used_by) && c.used_by.length ? ` (${c.used_by.join(', ')})` : '';
+    return {
+        key: server, label, icon: '',
+        oauth: server,
+        blurb: String((c && c.note) || `관리자가 조직에 등록한 앱이에요. 연결하면 AI가 내 ${label} 계정으로 직접 일할 수 있습니다.`) + used,
+        dynamic: true, // 표에 없던 것 — 로고가 없어 이름 첫 글자 타일로 그려진다
+    };
+}
 function partition(oauth, creds) {
     const oauthMap = new Map((oauth.connectors || []).map((c) => [c.server, c]));
     const credMap = new Map((creds.credentials || []).filter((c) => c.kind !== 'aws_role_arn').map((c) => [c.kind, c]));
@@ -50,7 +62,20 @@ function partition(oauth, creds) {
         else
             blockedOAuth.push(s); // OAuth 전용인데 조직 미등록 → 카드로 내밀면 눌러도 안 되는 버튼이 된다
     }
-    return { oauthMap, credMap, connected, available, blockedOAuth };
+    // ── 표에 없는 커넥터도 흘려보내지 않는다(원준 2026-08-21) ────────────────────────────
+    //  종전엔 이 반복문이 LOGIN_SERVICES 만 돌아서, **관리자가 새 MCP 서버를 등록해도 이 화면엔 안 떴다** —
+    //  코드를 고쳐 표에 한 줄 넣어야 보였다. "내가 연결한 앱·안 한 앱을 하나하나 본다"는 이 화면의 약속과
+    //  어긋난다. 그래서 서버가 내려준 커넥터 중 표가 못 덮는 것을 그대로 세운다(로고만 없을 뿐 연결은 된다).
+    const covered = new Set(LOGIN_SERVICES.map((s) => s.oauth).filter(Boolean));
+    for (const [server, c] of oauthMap) {
+        if (covered.has(server))
+            continue;
+        const svc = svcFromConnector(server, c);
+        (c && c.connected ? connected : available).push(svc);
+    }
+    // #1675 ③ — 헤드리스 자격이 마지막으로 **실패**한 기록(서버가 org_task 에서 뽑아 준다). 없으면 null.
+    const authFailure = creds.headless_auth_failure ?? null;
+    return { oauthMap, credMap, connected, available, blockedOAuth, authFailure, all: [...connected, ...available, ...blockedOAuth] };
 }
 // ── 화면 그리기 ──
 //  host 하나를 통째로 다시 그린다(상태가 서버에 있고 화면엔 없어서, 부분 갱신할 게 없다).
@@ -142,7 +167,23 @@ function connectedRow(svc, v, reload) {
         metaBits.push('마지막 사용 ' + relTime(cred.last_used_at));
     else if (viaToken && cred?.updated_at)
         metaBits.push('연결 ' + relTime(cred.updated_at));
-    box.append(el('div', { class: 'svc-conn-row' }, svcTile(svc.key, svc.label, true), el('div', { class: 'svc-conn-main' }, el('div', { class: 'svc-conn-nm' }, el('span', { text: svc.label }), el('span', { class: 'svc-state', text: '연결됨' }), metaBits.length ? el('span', { class: 'svc-meta', text: metaBits.join(' · ') }) : null), el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb))), el('div', { class: 'svc-conn-acts' }, ...acts)), expand);
+    // #1675 ③ — **이 토큰이 지금 살아 있나.** '마지막 사용'만으로는 성공했는지 실패했는지 알 수 없어서,
+    //  토큰이 폐기돼도 이 화면은 멀쩡해 보였다(전면장애 때 사람이 그 사실을 알 길이 알림 하나뿐이었다).
+    //  실패가 **마지막 등록보다 나중**일 때만 경고한다 — 다시 등록했으면 지난 실패는 이미 해결된 것이다.
+    let authWarn = null;
+    if (svc.key === 'claude-headless' && viaToken && v.authFailure) {
+        const failAt = v.authFailure.at ? new Date(v.authFailure.at).getTime() : 0;
+        const setAt = cred?.updated_at ? new Date(cred.updated_at).getTime() : 0;
+        if (failAt > setAt) {
+            authWarn = el('div', { class: 'svc-conn-blurb' }, el('span', { class: 'pill pill-warn', text: '인증 실패' }), el('span', { text: ' ' + relTime(v.authFailure.at) + ' · ' + v.authFailure.label
+                    + ' — 내 계정으로 실행된 작업이 인증에 실패했습니다. 여기 등록한 토큰이 원인이라면'
+                    + ' `claude setup-token` 으로 다시 발급해 [토큰 교체]를 누르세요.'
+                    + ' 내 PC(노드)에서 실행된 작업이었다면 그 PC 의 Claude 로그인을 다시 하셔야 합니다 —'
+                    + ' 그 경우 이 안내는 30일 뒤 저절로 사라집니다.'
+                    + ' 이 실패로 멈춘 예약 작업이 있다면 관리 ▸ 자동화에서 다시 켜세요.' }));
+        }
+    }
+    box.append(el('div', { class: 'svc-conn-row' }, svcTile(svc.key, svc.label, true), el('div', { class: 'svc-conn-main' }, el('div', { class: 'svc-conn-nm' }, el('span', { text: svc.label }), el('span', { class: 'svc-state', text: '연결됨' }), metaBits.length ? el('span', { class: 'svc-meta', text: metaBits.join(' · ') }) : null), el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb)), authWarn), el('div', { class: 'svc-conn-acts' }, ...acts)), expand);
     return box;
 }
 // ── 구역 2 · 연결할 수 있는 서비스 ──
@@ -320,4 +361,5 @@ async function myLoginsSection(detail) {
     detail.replaceChildren(sectionHead('외부 서비스 관리', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 여기 설정은 나에게만 적용되고 팀에는 공유되지 않습니다.'), el('div', { class: 'admin-stack' }, svcHost, gitCard));
     await renderServices(svcHost);
 }
-export { CH_TYPE_LABEL, LOGIN_SERVICES, channelRuleExplainer, myLoginsSection, renderServices, slackChannelPolicyCard, };
+export { CH_TYPE_LABEL, LOGIN_SERVICES, channelRuleExplainer, myLoginsSection, partition, // #1719 새 셸 [외부 앱 연결](v2/connect.ts)이 **같은 판정**을 쓴다 — 표도 술어도 두 벌이 되면 어긋난다
+renderServices, slackChannelPolicyCard, };

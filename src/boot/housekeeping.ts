@@ -17,11 +17,14 @@ import { reapOAuth } from "../org/store/oauth.js";
 import { initAllSchemas } from "./schemas.js";
 import { ensureSelfRls } from "../db/self-rls.js";
 import { seedDefaultContent } from "../org/delivery/seed-content.js";
+import { seedBuiltinApps } from "../apps/seed.js";
+import { armWorkerRecovery } from "../apps/worker-service.js";
+import { armMemberDeactivationHook } from "../apps/member-deactivation.js";
 import { runAutoBackfillSweep } from "../v6/embedding-backfill.js";
 import { registerTerminal } from "../terminal/routes.js";
 import { liveAttachCount, scanAttachProcs } from "../terminal/terminal-pty.js";
 import { selfPtmxFdCount } from "../terminal/host-pty.js";
-import { setupNodeUpgrade } from "../node/registry.js";
+import { setupNodeUpgrade, hydrateNodeStates } from "../node/registry.js";
 import { setupPreviewWsUpgrade } from "../preview/ws-proxy.js";
 import { startTaskScheduler } from "../node/task-scheduler.js";
 import { backfillMarkerSync, backfillSharedGroupWrite } from "../project/project-fs.js";
@@ -35,6 +38,7 @@ import { loadStoragePolicy, loadCallLogPolicy } from "../org/policies/runtime-lo
 import { getRuntimeConfig } from "../org/store.js";
 import { reapSessionLogs, backfillSessionTitles } from "../v6/session-log-store.js";
 import { reapIdleSessions } from "../sessions/session-reaper.js"; // #1059 F — idle 세션 자동 회수(정책 0=끔 기본)
+import { sweepAwaitingNotifications } from "../sessions/awaiting-notifier.js"; // #1891 — 세션이 답을 기다리게 되면 알림
 import { backfillSessionStates } from "../sessions/session-state-backfill.js"; // #1059 F 후속 — 레코드 없는 라이브 세션에 desired-state 미러
 import { ensureSharedCache } from "../ops/build-cache.js";
 import { startBoxWatch } from "../ops/box-watch.js";
@@ -133,6 +137,11 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  실패해도 부팅을 막지 않는다(그 경우 self 는 v2 처럼 '잠긴 맥락이 있으면 닫힘'으로 폴백).
   //  registry 모드에선 자식(schema-init-child)이 소유자로 이미 돌렸다 — 여기서 또 하면 DDL 권한 오류만 난다.
   { name: "self-rls", gate: "always", run: () => registryModeActive() ? Promise.resolve() : ensureSelfRls().then((ok) => logger.info({ rowLevel: ok }, "self 소스 공개범위 준비됨")) },
+  // 노드 세션 스냅샷 복구(#1834) — 정본(org_node_state)에서 메모리 캐시를 채운다. **재배포가 목록에 보이지 않게
+  //  하는 자리**다: 종전엔 이 캐시가 유일한 저장소라 재배포마다 노드 세션이 통째로 사라졌고, 노드가 다시 붙을
+  //  때까지(최악 33초) 살아 있는 세션이 화면에서 빠졌다. 스키마 체인 **직후**여야 표가 있고, 세션 목록 API 가
+  //  처음 불리기 전에 끝나도록 시딩·스케줄러보다 앞에 둔다. 비치명 — 실패해도 노드가 붙으면 3초 뒤 채워진다.
+  { name: "node-state-hydrate", gate: "always", run: () => hydrateNodeStates().catch((err) => logger.warn({ err }, "노드 스냅샷 복구 실패(비치명 — 노드 재연결 시 채워짐)")) },
   // ── 다중 워크스페이스 자동 활성화(#1750 후속) — **사람 손 0.** 단일 모드 부팅이 여기서 스스로 활성화하고
   //  1회 재기동한다(앱 role 재배선은 첫 import 시점이라 살아 있는 프로세스에선 불가). 신규 설치는 첫 부팅에,
   //  기존 박스는 다음 업데이트에 자동으로 넘어온다 — 설치·업데이트 스크립트는 이 존재를 몰라도 된다.
@@ -151,6 +160,20 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  가리키는 project-closeout 스킬(#878), 도메인맵 is-부트스트랩 런북 2개, 커스텀훅·스킬)을 신규 게이트웨이에
   //  idempotent 주입한다(없을 때만 — 운영자 토글·편집 보존). org(훅·스킬)+v6(지식) 스키마가 모두 준비된 뒤. 비치명.
   { name: "seed-default-content", gate: "always", run: () => seedDefaultContent().catch((err) => logger.warn({ err }, "디폴트 콘텐츠 시딩 실패(비치명)")) },
+  // 빌트인 앱 시딩(#1780) — 코드 소유(apps/builtin/<id>) 앱을 게이트웨이에 idempotent 설치/갱신한다(content_hash 변경 시만).
+  //  seed-default-content 의 형제 best-effort 스텝: 앱 레지스트리(org_app)+전개 대상(org_harness_asset·org_cron 등)
+  //  스키마가 준비된 뒤(스키마 체인 완료 후 이 자리). 실패는 부팅을 막지 않는다(비치명 — 다음 부팅 시딩이 재시도).
+  { name: "seed-builtin-apps", gate: "always", run: () => seedBuiltinApps()
+      .then((r) => { if (r.seeded.length || r.updated.length) logger.info(r, "빌트인 앱 시딩"); })
+      .catch((err) => logger.warn({ err }, "빌트인 앱 시딩 실패(비치명)")) },
+  // AppInstance worker 부팅복구(#1780 Stage B) — 시딩 뒤 최신 package hash가 확정된 다음 중앙 run을 되살리고,
+  // 이미 연결됐거나 이후 연결되는 최신 RemoteNode의 fail-closed 종료 run도 같은 계약으로 재시작한다.
+  { name: "app-worker-recovery", gate: "always", run: () => armWorkerRecovery()
+      .then((r) => { if (r.central.restarted || r.central.failed || r.remote.some((x) => x.restarted || x.failed)) logger.info(r, "앱 worker 복구"); })
+      .catch((err) => logger.warn({ err }, "앱 worker 복구 실패(비치명 — 인스턴스 조회/노드 재연결이 재시도)")) },
+  // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
+  //  members.ts 의 단일 슬롯에 건다. 순수 배선(동기·DB 무접근)이라 어디 붙어도 되지만, 요청이 들어오기 전에 걸려야 한다.
+  { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },
   // 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 .lively/project.json 에 sync:"pull" 을 stamp.
   //  pull 훅이 '이 폴더에 서버 파일을 써도 되나'를 마커의 sync 로 판정하게 됐는데, sync 없는 구 마커의 폴백은
   //  ~/lively/projects/<id>(꼴 고정) 만 인정한다 — 박스 폴더는 folder 가 임의(예: 'project/관리탭 수정')라
@@ -269,6 +292,14 @@ function startBackgroundSweeps(): void {
       .then(() => reapIdleSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
+  // #1891 — "하네스가 작업을 마치고 유저의 액션을 필요로 하는 상태가 되면 알림".
+  //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
+  //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.
+  setInterval(() => {
+    void sweepAwaitingNotifications()
+      .catch((err) => logger.warn({ err }, "awaiting 알림 스윕 실패(비치명 — 다음 tick 재시도)"));
+  }, 30_000).unref();
+
   // 부팅 직후 1회 백필(회수는 하지 않는다 — 재부팅 복원과 겹쳐 갓 뜬 세션을 오판하지 않게). 40초 뒤: 스키마·tmux 안정 후.
   setTimeout(() => { void backfillSessionStates().catch((err) => logger.warn({ err }, "session-state 백필(부팅) 실패")); }, 40_000).unref();
 }

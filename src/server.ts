@@ -21,8 +21,11 @@ function instrument(name: string, handler: ToolHandler, harness?: string | null)
   return async (args, extra) => {
     const started = Date.now();
     let actor: string | null = null;
+    let app: string | null = null;
     try {
-      actor = resolveUser(extra)?.userId ?? null;
+      const u = resolveUser(extra);
+      actor = u?.userId ?? null;
+      app = u?.appId ?? null;   // #1780 D3-5 — 앱 세션/UI 의 tools/call 이면 그 앱 id 로 귀속(관측 전용)
     } catch {
       // 인증 컨텍스트 해석 실패 → actor 미상으로 기록(/mcp 는 bearer 필수라 보통 도달 안 함)
     }
@@ -30,7 +33,7 @@ function instrument(name: string, handler: ToolHandler, harness?: string | null)
       const out = await handler(args, extra);
       const failure = toolResultFailure(out); // 정상 반환이어도 isError:true 면 실패로 적재(#1653)
       logToolCall({
-        tool: name, harness: harness ?? null, actor, args,
+        tool: name, harness: harness ?? null, actor, app, args,
         ok: failure === null, error: failure, durationMs: Date.now() - started,
       });
       return out;
@@ -39,6 +42,7 @@ function instrument(name: string, handler: ToolHandler, harness?: string | null)
         tool: name,
         harness: harness ?? null,
         actor,
+        app,
         args,
         ok: false,
         error: err instanceof Error ? err.message : String(err),
@@ -61,6 +65,7 @@ export function buildServer(
   harness?: string | null,
   readOnly?: boolean, // 읽기전용 세션(#1007) — true 면 registerMcpCapabilities 가 쓰기 capability 를 등록 스킵(tools/list 소거).
   incognito?: boolean, // 인코그니토 세션(#1007+) — true 면 capability·db 툴 전부 스킵(빈 표면 = 사실상 연결없음).
+  appId?: string | null, // 앱 토큰 세션(#1780 v2.1) — EXEMPT 배관 도구를 tools/list 에서 감춘다. 일반 토큰 null.
 ): McpServer {
   const server = new McpServer({ name: "context-ontology", version: "0.1.0" });
   // registerTool 단일 wrap — 두 일을 한 경로에서 한다(capability·db·dynamic 모든 등록이 여길 지난다):
@@ -73,6 +78,6 @@ export function buildServer(
     return (orig as (...a: unknown[]) => unknown)(name, config, cb);
   }) as typeof server.registerTool;
   if (!incognito) registerDbTools(server, harness); // 제품 DB (읽기전용 — SELECT-only). 읽기전용 세션엔 유지, 인코그니토엔 스킵(읽기도 차단 = 클린룸).
-  registerMcpCapabilities(server, overrides, alwaysLoadOverrides, harness, readOnly, incognito); // 읽기전용 쓰기 스킵 / 인코그니토 전체 스킵(#1007)
+  registerMcpCapabilities(server, overrides, alwaysLoadOverrides, harness, readOnly, incognito, appId); // 읽기전용 쓰기 스킵 / 인코그니토 전체 스킵(#1007) / 앱 토큰 배관 소거(#1780)
   return server;
 }

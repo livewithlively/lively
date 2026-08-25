@@ -27,12 +27,39 @@ const rawPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, 
 // 왜 트랜잭션인가는 tenant-binding.ts 머리말 참조 — `SET LOCAL` 은 커밋/롤백에서 Postgres 가
 //  되돌리므로 **커넥션 재사용 누출이 구조적으로 불가능**하다.
 
-function wrapClient(client: pg.PoolClient): pg.PoolClient {
+export function wrapClient(client: pg.PoolClient): pg.PoolClient {
   const origQuery = client.query.bind(client);
+  const runRaw = origQuery as unknown as (s: string, p?: unknown[]) => Promise<unknown>;
+  // 이 체크아웃에서 세션 바인딩을 이미 걸었나(1회). 아래 ★ 참조.
+  let sessionBound = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const patched: any = (...args: any[]) => {
     const first = args[0];
     const text = typeof first === "string" ? first : (first && typeof first === "object" ? String(first.text ?? "") : "");
+    // ★★ 체크아웃 **첫 쿼리 앞에** 세션 스코프로 한 번 건다 — 트랜잭션 밖 쿼리까지 덮기 위해.
+    //
+    //  왜 BEGIN 만으로는 부족한가(2026-08-25 실측): 체크아웃한 클라이언트를 **트랜잭션 없이** 쓰는 호출부가
+    //   있다(items/store.ts 의 ingestItems 가 그렇다 — 아이템마다 조회·미러를 그냥 던진다). 그 쿼리들은
+    //   바인딩 없이 나가고, 거기서 두 가지가 갈린다:
+    //    · 그 커넥션이 **처음** 쓰이면 GUC 는 NULL → 컬럼 기본값 COALESCE 가 primary 로 채운다
+    //      = **남의 워크스페이스에 조용히 쓴다**(가장 나쁜 결말).
+    //    · 앞서 그 커넥션에서 트랜잭션이 한 번이라도 돌았으면, SET LOCAL 이 커밋에서 되돌아가며 GUC 가
+    //      **빈 문자열('')로 남는다**(unset 이 아니다 — 커스텀 GUC 의 reset 값이 ''다). 그러면 엄격 정책
+    //      `current_setting('app.tenant_id')::uuid` 가 `invalid input syntax for type uuid: ""` 로 죽는다.
+    //      실측: 노션 수집이 페이지를 다 받아 놓고 이 오류로 전량 유실됐다.
+    //
+    //  그래서 바인딩 범위를 **트랜잭션이 아니라 체크아웃**으로 넓힌다(세션 스코프 = set_config 3번째 인자 false).
+    //  누출 걱정은 아래 release 초기화가 받는다. BEGIN 의 SET LOCAL 은 그대로 두고(중복이지만 무해),
+    //  트랜잭션 안팎 어느 경로로 와도 같은 값이 걸리게 한다.
+    if (!sessionBound) {
+      const sb = bindingSql(false);
+      if (sb) {
+        sessionBound = true;
+        // await 하지 않는다 — pg 클라이언트는 쿼리를 **FIFO 로 직렬화**하므로 먼저 던진 이 문장이 먼저 실행된다.
+        //  실패는 삼킨다: 그러면 뒤 쿼리가 정책에서 시끄럽게 죽는다(조용한 오귀속보다 낫다).
+        void runRaw(sb.sql, sb.params).catch(() => { /* 아래 실제 쿼리가 드러낸다 */ });
+      }
+    }
     const out = origQuery(...(args as Parameters<typeof origQuery>));
     // BEGIN 직후에 바인딩을 건다. 반환 프라미스를 이어 붙여야 순서가 보장된다 —
     //  호출부가 await 하기 전에 다른 쿼리를 던져도 이 체인이 먼저 실행된다.
@@ -53,6 +80,16 @@ function wrapClient(client: pg.PoolClient): pg.PoolClient {
   return new Proxy(client, {
     get(target, prop, recv) {
       if (prop === "query") return patched;
+      // 반납 전에 세션 값을 지운다 — 이 커넥션이 다음 차례에게 **남의 테넌트를 물려주지 않게**.
+      //  ''(빈 값)로 되돌리는 건 unset 과 같은 자리다(커스텀 GUC 의 reset 값이 ''): 다음 借主가 바인딩 없이
+      //  쓰면 엄격 정책이 곧바로 죽는다 = fail-closed. release 는 동기 API 라 결과를 기다리지 않지만,
+      //  pg 의 쿼리 큐가 직렬이라 다음 차례의 쿼리는 이 초기화 뒤에 실행된다.
+      if (prop === "release" && sessionBound) {
+        return (...a: unknown[]) => {
+          void runRaw("SELECT set_config('app.tenant_id', '', false)").catch(() => { /* 반납은 막지 않는다 */ });
+          return (Reflect.get(target, prop, recv) as (...x: unknown[]) => unknown).apply(target, a);
+        };
+      }
       const v = Reflect.get(target, prop, recv);
       return typeof v === "function" ? v.bind(target) : v;
     },
@@ -142,10 +179,16 @@ export function tenantBindingActive(): boolean {
  *  막는 주체는 **DB 의 정책**이다(`''::uuid` 에서 오류가 난다). 이 층이 던지면 시스템 경로
  *  (부팅 스키마·마이그레이션)까지 막혀 기동 자체가 불가능해진다.
  */
-export function tenantBindingSql(): TenantBindingSql | null {
+function bindingSql(local: boolean): TenantBindingSql | null {
   const id = resolver?.() ?? null;
   if (!id) return null;
-  return { sql: "SELECT set_config('app.tenant_id', $1, true)", params: [id] };
+  //  local=true  → SET LOCAL 상당(트랜잭션이 끝나면 되돌아간다)
+  //  local=false → 세션 스코프(이 커넥션이 반납될 때까지 유지) — 트랜잭션 밖 쿼리를 덮는 유일한 방법이다.
+  return { sql: `SELECT set_config('app.tenant_id', $1, ${local ? "true" : "false"})`, params: [id] };
+}
+
+export function tenantBindingSql(): TenantBindingSql | null {
+  return bindingSql(true);
 }
 
 // ── ★★ 고정 바인딩은 **여기서 자가 설치**한다 ────────────────────────────────

@@ -18,6 +18,7 @@
 //  (terminal/node-session-state.ts). 노드가 이 표를 읽지 않아도 되는 이유: 노드는 자기 tmux(@box_*)로 충분하고,
 //  가시성·복원 판정은 전부 게이트웨이 몫이다(F7 정책/실행 분리).
 import { itemsPool } from "../db/client.js";
+import { type LabelSource } from "./session-label-source.js";
 
 // 노드 에이전트 프로세스 판별자 — sessions.ts 의 첫 지시 주입 분기와 같은 값(게이트웨이엔 없다).
 const ON_NODE = !!process.env.LIVELY_NODE_TOKEN;
@@ -26,6 +27,10 @@ export interface SessionState {
   id: string;                 // 세션 id(box-<slug>-<hex>) = tmux 세션명 = claude --resume 인자(#905 C1)
   owner: string;              // @box_owner
   label: string | null;
+  // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 낮은 쪽이 높은 쪽을 못 덮는 걸쇠의 근거
+  //  (표는 session-label-source.ts). 입력에선 선택 — 안 실어 보내면 이전 값 보존(upsert COALESCE).
+  //  NULL = 이 컬럼 이전 행 → 읽는 쪽이 `rule` 로 정규화한다.
+  label_source?: string | null;
   harness: string;            // claude·codex·shell
   dir: string | null;         // @box_dir(작업 절대경로)
   root_key: string | null;    // 재생성 좌표 — createSession(input.rootKey)
@@ -35,6 +40,7 @@ export interface SessionState {
   invites: string[];          // @box_invites
   project_id: number | null;  // @box_project
   project_src: string | null; // @box_project_src(v6|org)
+  app_id?: string | null;     // #1780 D4 — 이 세션이 어느 앱으로 떴나(@box_app 미러). null=일반 세션. 입력에선 선택(미전송=null).
   read_only: boolean;         // 실행 모드(#1007+)
   incognito: boolean;
   // #1291 v2 — 기록 범위(write cap)·read 축소. tmux 가 권위, 여기는 미러(재부팅 후 복원이 캡을 잃지 않게).
@@ -62,13 +68,15 @@ export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session
 // export: session-desired.ts 가 자기 쿼리 결과를 같은 규칙으로 해석해야 한다(파싱이 두 벌이 되면 갈린다).
 export function rowToState(r: Record<string, any>): SessionState {
   return {
-    id: r.id, owner: r.owner, label: r.label ?? null, harness: r.harness || "claude",
+    id: r.id, owner: r.owner, label: r.label ?? null, label_source: (r.label_source as string | null) ?? null, harness: r.harness || "claude",
     dir: r.dir ?? null, root_key: r.root_key ?? null, subpath: r.subpath ?? null,
     flags: (r.flags && typeof r.flags === "object" && !Array.isArray(r.flags)) ? r.flags : {},
     auto_approve: !!r.auto_approve,
     invites: Array.isArray(r.invites) ? r.invites.filter((x: unknown): x is string => typeof x === "string") : [],
     project_id: r.project_id != null ? Number(r.project_id) : null,
     project_src: r.project_src ?? null,
+    app_id: r.app_id ?? null,   // #1780 D4
+
     read_only: !!r.read_only, incognito: !!r.incognito,
     write_vis: (r.write_vis as string | null) ?? null, restrict_read: !!r.restrict_read,
     created: r.created != null ? Number(r.created) : null,
@@ -173,6 +181,16 @@ export async function claudeSessionIdsFor(ids: string[]): Promise<Map<string, st
   return out;
 }
 
+/** 대화 uuid → 그 대화를 돌린(돌리는) 박스의 desired-state. 훅이 보고한 매핑을 거꾸로 탄다(session-autoname #1808).
+ *  같은 uuid 가 여러 박스에 붙어 있으면(복원으로 승계) **가장 최근에 본 것**이 정본이다. 없으면 undefined. */
+export async function sessionStateByClaudeUuid(uuid: string): Promise<SessionState | undefined> {
+  const u = String(uuid || "").trim();
+  if (!u) return undefined;
+  const r = await itemsPool.query(
+    "SELECT * FROM org_session_state WHERE claude_session_id=$1 ORDER BY COALESCE(last_busy, created, 0) DESC LIMIT 1", [u]);
+  return r.rows[0] ? rowToState(r.rows[0]) : undefined;
+}
+
 export async function getSessionState(id: string): Promise<SessionState | undefined> {
   const r = await itemsPool.query("SELECT * FROM org_session_state WHERE id=$1", [id]);
   return r.rows[0] ? rowToState(r.rows[0]) : undefined;
@@ -194,8 +212,8 @@ export async function listAllSessionStates(): Promise<SessionState[]> {
 export async function upsertSessionState(s: SessionStateInput): Promise<void> {
   if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다. 노드 세션의 행은 게이트웨이가 릴레이 직후 쓴다(헤더).
   await itemsPool.query(
-    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, last_seen, updated_at)
-     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,now(),now())
+    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, label_source, last_seen, updated_at)
+     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,$21,now(),now())
      ON CONFLICT (tenant_id, id) DO UPDATE SET
        owner=EXCLUDED.owner, label=EXCLUDED.label, harness=EXCLUDED.harness, dir=EXCLUDED.dir,
        root_key=EXCLUDED.root_key, subpath=EXCLUDED.subpath, flags=EXCLUDED.flags, auto_approve=EXCLUDED.auto_approve,
@@ -204,32 +222,59 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
        -- write_vis 는 **덮어쓰지 않는다**(COALESCE): 재생성 때 캡을 안 실어 보내도 이전에 좁혀둔 값이 살아남아야 한다.
        --  넓히는 방향으로 조용히 풀리면 그게 곧 사고다. 명시적으로 넓히려면 세션 편집 경로를 쓴다.
        write_vis=COALESCE(EXCLUDED.write_vis, org_session_state.write_vis),
+       -- #1979 label_source 는 **이 경로로 절대 안 바뀐다**(INSERT 때만 정해진다). 이 upsert 는 생성·복원의
+       --  미러인데, 복원(restore)은 createSession 을 다시 타면서 저장된 이름을 input.label 로 실어 보낸다
+       --  (routes.ts 의 label: st.label || id) — 출처 계산만 보면 그건 '사람이 준 이름'이라 human 으로 승격되고,
+       --  반대로 이름 없이 복원되면 rule 로 내려앉는다. 어느 쪽이든 **복원 한 번에 걸쇠가 풀린다.**
+       --  이름의 출처가 바뀌는 자리는 개명(claimSessionLabel·updateSessionStateMeta) 하나뿐이다.
        restrict_read=EXCLUDED.restrict_read,
        created=EXCLUDED.created,
        -- node_id 는 세션 정체성의 일부다(같은 id 가 다른 노드로 옮겨 가는 일은 없다) — 그래도 EXCLUDED 로 그대로 쓴다:
        --  백필(중앙 tmux 만 훑는다)이 박스 세션에 NULL 을 넣고, 노드 릴레이가 노드 세션에 그 노드를 넣는다. 둘이 한 id 를 두고
        --  다투는 경우는 id 가 무작위라 없다.
        node_id=EXCLUDED.node_id,
-       last_busy=EXCLUDED.last_busy, last_seen=now(), updated_at=now()`,
+       last_busy=EXCLUDED.last_busy, app_id=EXCLUDED.app_id, last_seen=now(), updated_at=now()`,
     [s.id, s.owner, s.label, s.harness, s.dir, s.root_key, s.subpath, JSON.stringify(s.flags || {}),
      s.auto_approve, JSON.stringify(s.invites || []), s.project_id, s.project_src, s.read_only, s.incognito,
      s.write_vis ?? null, s.restrict_read ?? false,
-     s.created, s.last_busy, s.node_id ?? null],
+     s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null, s.label_source ?? null],
   );
 }
 
 // 라벨/초대 변경(editSession) 미러. 레코드 없으면 no-op(구 세션은 다음 upsert 계기에 편입).
-export async function updateSessionStateMeta(id: string, patch: { label?: string; invites?: string[]; project_id?: number | null; project_src?: "v6" | "org" | null }): Promise<void> {
+export async function updateSessionStateMeta(id: string, patch: { label?: string; label_source?: LabelSource; invites?: string[]; project_id?: number | null; project_src?: "v6" | "org" | null }): Promise<void> {
   if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다(게이트웨이가 릴레이 뒤 자기 행을 고친다)
   const sets: string[] = [];
   const vals: unknown[] = [id];
   if (patch.label !== undefined) { vals.push(patch.label); sets.push(`label=$${vals.length}`); }
+  // #1979 — 이름과 **출처**는 같이 움직인다. 출처 없는 개명은 종전 호출자(웹 편집)뿐이라 human 으로 본다.
+  if (patch.label !== undefined) { vals.push(patch.label_source ?? "human"); sets.push(`label_source=$${vals.length}`); }
   if (patch.invites !== undefined) { vals.push(JSON.stringify(patch.invites)); sets.push(`invites=$${vals.length}::jsonb`); }
   // #1719 — 프로젝트 소속 변경(session-project). 복원(restore)이 이 값으로 @box_project 를 되살린다. null = 뗌.
   if (patch.project_id !== undefined) { vals.push(patch.project_id); sets.push(`project_id=$${vals.length}`); vals.push(patch.project_id ? (patch.project_src ?? "v6") : null); sets.push(`project_src=$${vals.length}`); }
   if (!sets.length) return;
   sets.push("updated_at=now()");
   await itemsPool.query(`UPDATE org_session_state SET ${sets.join(", ")} WHERE id=$1`, vals);
+}
+
+// 세션 이름 **걸쇠**(#1979) — `source` 가 지금 출처를 이길 때만 이름을 바꾸고, 이겼는지 돌려준다.
+//
+//  왜 SQL 한 방인가: 읽고-판정하고-쓰면 그 사이에 다른 쓰는 자리가 끼어든다(이름 쓰는 자리가 넷이다).
+//   순위 비교를 UPDATE 의 WHERE 에 넣으면 판정과 쓰기가 한 문장이라 낄 틈이 없다. 순위표는
+//   session-label-source.ts 의 RANK 와 **같은 값**이어야 한다 — 한쪽만 바꾸면 DB 와 코드가 다르게 판정한다.
+//  반환 false 의 뜻은 셋이다: ⓐ 졌다(이미 같거나 높은 출처가 지었다) ⓑ 행이 없다(구 세션·미러 실패) ⓒ 내 세션이 아니다.
+//  owner 게이트는 setClaudeSessionId 와 같은 규칙 — 호출자가 앞에서 한 번 더 막지만 쓰기 문장 자체가 닫혀 있어야 한다.
+//   둘 다 **실패가 아니다** — 호출자는 지금 이름을 그대로 두면 된다(이름은 화면 장식이지 작업이 아니다).
+export async function claimSessionLabel(id: string, label: string, source: LabelSource, owner: string): Promise<boolean> {
+  if (ON_NODE) return false;   // #1791 — 노드엔 DB 가 없다. 걸쇠는 게이트웨이가 쥔다(노드는 tmux 반영만).
+  const RANK = "CASE $4 WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'rule' THEN 2 ELSE 1 END";
+  const CUR = "CASE COALESCE(label_source,'rule') WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'rule' THEN 2 ELSE 1 END";
+  const r = await itemsPool.query(
+    `UPDATE org_session_state SET label=$2, label_source=$3, updated_at=now()
+      WHERE id=$1 AND owner=$5 AND ($3='human' OR ${RANK} > ${CUR})`,
+    [id, label, source, source, owner],
+  );
+  return (r.rowCount ?? 0) > 0;
 }
 
 // 마지막 작업 시각 갱신(#1059 E) — collectSessions 의 @box_last_busy 30초 스로틀 쓰기부에 편승(같은 주기).

@@ -47,6 +47,10 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
     canEdit ? '무엇이 언제 수집되는지는 모든 구성원이 볼 수 있습니다.'
             : '무엇이 언제 수집되는지는 아래에서 그대로 보실 수 있습니다.'));
 
+  // '내 컴퓨터' 정보 타일(#1881 L5) — 수집기 인스턴스가 아니다(자격 0·싱크 잡 0): 사람이 파일을 끌어다 놓는
+  //  순간이 곧 수집이라, 여기선 '들어오고 있는지'만 보여준다. 로컬이 첫 번째 수집원이라는 결정(0824 회의)대로 맨 앞.
+  body.append(await localTile());
+
   if (!collectors.length && !creatingPreset && !choosingPreset) {
     body.append(el('div', { class: 'card ctx-empty' },
       el('p', { class: 'ctx-empty-t', text: '아직 수집기가 없습니다' }),
@@ -92,6 +96,34 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
     missingLine: '자동 수집이 아직 없습니다 — 켜진 수집기가 없기 때문입니다.',
     managedElsewhere: '수집은 잡을 따로 만들지 않습니다. 위에서 수집기를 켜면 그 수집기의 자동 싱크가 함께 등록되고, 끄면 같이 멈춥니다.',
   }, reload));
+}
+
+// ── '내 컴퓨터' 타일(#1881 L5) — 로컬 업로드가 자료로 쌓이는 현황. 만들 것도 켤 것도 없다. ──
+//  숫자 셋: 자료 n건(source_list kind=local_file total) · 마지막 접수 · 읽지 않은 폴더(local 채널 중 미증류 남은 것).
+async function localTile() {
+  const card = el('div', { class: 'card ctx-row' });
+  card.append(el('div', { class: 'ctx-row-head' },
+    el('span', { class: 'ctx-row-title', text: '내 컴퓨터' }),
+    el('span', { class: 'ctx-tag', text: '올리는 순간 수집' })));
+  let meta = '파일이나 폴더를 자료 칸·세션 입력창에 끌어다 놓으면 그대로 자료가 됩니다.';
+  let folders = '';
+  try {
+    const [src, ch] = await Promise.all([
+      api('/api/ui/sources?kind=local_file&limit=1'),
+      api('/api/ui/org/source-channels?limit=200'),
+    ]);
+    const total = Number(src?.total || 0);
+    const last = src?.entries?.[0]?.updated_at ? new Date(src.entries[0].updated_at) : null;
+    const undone = (ch?.channels || []).filter((c: any) => c.kind === 'local_file' && Number(c.undistilled) > 0);
+    if (total > 0) {
+      meta = `자료 ${total.toLocaleString()}건` + (last ? ` · 마지막 접수 ${last.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '');
+      if (undone.length) folders = `읽지 않은 폴더 ${undone.length}개 — ` + undone.slice(0, 4).map((c: any) => `${c.channel ?? '(폴더 없음)'} ${c.undistilled}건`).join(' · ') + (undone.length > 4 ? ' …' : '');
+    }
+  } catch { /* 조회 실패 — 안내 문구만 남긴다 */ }
+  card.append(el('div', { class: 'ctx-row-meta', text: meta }));
+  if (folders) card.append(el('div', { class: 'ctx-row-meta', text: folders }));
+  card.append(el('p', { class: 'admin-hint', text: '데스크톱 앱으로 프로젝트 폴더를 쓰면 그 안의 문서도 저절로 따라 들어옵니다. 올린 파일 가운데 남길 가치가 있는 것은 라이블리가 읽어 지식으로 정리합니다.' }));
+  return card;
 }
 
 /** 접힌 카드 — 무엇을·어디서·어떻게 내보내는지 한 줄로. canEdit=false 면 상태만 보이고 액션 줄은 없다. */

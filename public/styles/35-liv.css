@@ -13,7 +13,7 @@ body[data-route="liv"] { height: 100vh; overflow: hidden; }
 body[data-route="liv"] #app { height: 100%; display: flex; flex-direction: column; }
 body[data-route="liv"] .topbar,
 body[data-route="liv"] .app-foot { display: none; }
-body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: #F4F7FC; }
+body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: var(--gray-bg); }
 
 /* 상단 내비의 [리브] 버튼 — 탭이 아니라 오른쪽 보조 버튼(축이 다르다: 탭=무엇을 보는가 / 리브=누구에게 맡기는가). */
 .liv-nav { display: inline-flex; align-items: center; gap: 5px; }
@@ -24,32 +24,69 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-title { display: flex; align-items: center; gap: 8px; font-size: 16px; }
 .liv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mint-deep); display: inline-block; }
 
-/* 본문 2열 — 왼쪽은 할 일 레일(이슈 목록), 오른쪽이 대화. **이 화면의 주인공은 대화**라서
-   대화가 남은 폭·높이를 전부 먹는다. 카드를 위에 쌓으면 대화가 절반으로 눌려 정작 말하기가 불편해진다. */
-.liv-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 10px; }
-.liv-rail { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
-/* 카드가 바깥(셸의 우측 패널)에 살 때 — 본문은 대화 한 열(#1719 v2). */
-.liv-body-solo { grid-template-columns: minmax(0, 1fr); }
-.liv-title-sub { font-size: 12px; font-weight: 500; color: var(--ink-sub); margin-left: 4px; }
+/* ── 본문 = 한 열 ────────────────────────────────────────────────────────────────
+   왼쪽 '할 일 레일'을 걷었다(#1719 재구성, 2026-08-19). 목록이 있으면 그게 곧 현황판이 되고,
+   0818 대표 결정("리브는 대시보드가 아니라 컨설턴트다")과 어긋난다. 그래서 편지 한 통 + 대화 한 칸이다.
+   편지는 내용맞춤(길면 자기 안에서 스크롤), 대화가 남은 높이를 전부 먹는다 — 말하기가 이 화면의 본업이다. */
+.liv-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px;
+  width: 100%; max-width: 760px; margin: 0 auto; }
+.liv-body-solo { max-width: 760px; }
 
-.liv-cards { display: flex; flex-direction: column; gap: 6px; }
-.liv-cards-title { font-size: 11px; color: var(--muted); letter-spacing: .02em; margin: 2px 0 2px 2px; }
-/* 레일 카드 = 목록 행에 가깝다. 여백을 줄이고 제목을 먼저 읽히게 한다. */
-.liv-card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: var(--bg); }
-.liv-card-skel { height: 52px; opacity: .5; }
-.liv-card-title { display: flex; align-items: baseline; gap: 6px; font-size: 13px; line-height: 1.45; }
-/* 등급은 **색이 아니라 표식**으로 가른다 — 색만으로 구분하면 색각 이상에서 그 차이가 사라진다. */
-.liv-card-mark { font-weight: 700; width: 12px; text-align: center; color: var(--muted-2); }
-.liv-card-p0 .liv-card-mark { color: var(--ink); }
-.liv-card-p0 { border-color: var(--line-net-2); }
-.liv-card-detail { color: var(--ink-sub); font-size: 12px; margin: 4px 0 0 16px; line-height: 1.5; }
-/* 좁은 레일이라 버튼이 줄바꿈된다 — 오른쪽 정렬 대신 왼쪽에서 흐르게 둔다(잘리는 것보다 낫다). */
-.liv-card-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 16px; }
-/* 맡긴 카드는 지우지 않고 흐린다 — 무엇을 맡겼는지가 화면에 남아야 사람이 진행을 따라갈 수 있다. */
-.liv-card-done { opacity: .55; }
+/* ── 머리 — 처음 온 사람이 3초 안에 '여기가 무엇을 하는 곳인지' 알아야 한다 ── */
+.liv-top { width: 100%; max-width: 760px; margin: 0 auto 2px; }
+.liv-top-row { display: flex; align-items: center; gap: 10px; }
+.liv-face {
+  width: 30px; height: 30px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: var(--bg-success); border: 1px solid var(--ok-line-2); color: var(--mint-deep);
+  font-weight: 800; font-size: 13px; letter-spacing: .02em;
+}
+.liv-top-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.liv-top-name b { font-size: 18px; letter-spacing: -.01em; }
+.liv-top-role { font-size: 12px; color: var(--muted); }
+.liv-top-out { margin-left: auto; }
+/* 약속 한 문장 — 기능 목록이 아니다. 굵은 앞머리가 '무엇을 해 주는가', 뒷문장이 '어떻게'다. */
+.liv-top-say { margin: 8px 0 0; font-size: 13.5px; line-height: 1.7; color: var(--ink-sub); }
+.liv-top-say b { color: var(--ink); font-weight: 700; }
+
+/* ── 편지 — 이 화면의 본문 ──────────────────────────────────────────────────────
+   카드 목록이 아니라 글 한 통이다. 목록은 훑게 만들고, 훑으면 결정하지 않는다. */
+.liv-letter { border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg-tint);
+  padding: 20px 22px; max-height: 46vh; overflow: auto; flex: none; }
+.liv-letter-skel { height: 84px; opacity: .35;
+  background: linear-gradient(var(--line-row) 0 0) no-repeat; border-radius: 8px; }
+.liv-lead { margin: 0 0 14px; font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.liv-sign { margin: 16px 0 0; font-size: 13px; color: var(--muted); }
+
+/* 문단 하나 = 제안 하나. 번호는 '몇 개인지'가 아니라 '어디까지 읽었는지'를 위한 것이라 둘 이상일 때만 붙는다. */
+.liv-para { display: flex; gap: 10px; padding: 13px 0; border-top: 1px solid var(--line-row); }
+.liv-para:first-of-type { border-top: 0; padding-top: 0; }
+.liv-para-no { flex: none; width: 22px; font-size: 12px; font-weight: 700; color: var(--muted-2); padding-top: 2px; }
+.liv-para-b { min-width: 0; flex: 1; }
+.liv-para-t { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 1.6; letter-spacing: -.01em; }
+.liv-para-d { margin: 5px 0 0; font-size: 13px; line-height: 1.7; color: var(--ink-sub); }
+.liv-para-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
+/* 급한 것은 색이 아니라 글자 굵기·표식으로 — 색만으로 가르면 색각 이상에서 그 차이가 사라진다. */
+.liv-para-p0 .liv-para-t::before { content: '! '; color: var(--coral-text); font-weight: 800; }
+.liv-para-done { opacity: .55; }
+
+/* 할 말이 없는 날 = 기본 상태. 목록으로 채우지 않는다 — 대신 '부탁할 수 있는 것'을 셋 둔다. */
+.liv-letter-quiet { text-align: center; padding: 6px 2px 2px; }
+.liv-quiet-say { margin: 0 0 6px; font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
+.liv-quiet-sub { margin: 0; font-size: 13px; color: var(--ink-sub); line-height: 1.7; }
+.liv-can { margin: 18px auto 0; max-width: 420px; text-align: left; }
+.liv-can-h { font-size: 11.5px; color: var(--muted); letter-spacing: .04em; margin: 0 0 6px 2px; }
+.liv-can-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg);
+  padding: 9px 11px; font-size: 13px; color: var(--ink); cursor: pointer; margin-bottom: 6px;
+}
+.liv-can-row { background: var(--bg); }
+.liv-can-row:hover { border-color: var(--line-net); background: var(--bg-sel); }
+.liv-can-row:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.liv-can-mark { color: var(--muted-2); flex: none; }
 
 /* 대화 — 터미널이 자체 툴바(세션명·파일 탐색기)를 이미 그리므로 여기서 제목을 또 얹지 않는다(중복 크롬). */
-.liv-chat { min-height: 0; display: flex; flex-direction: column;
+.liv-chat { min-height: 0; flex: 1; display: flex; flex-direction: column;
   border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
 .liv-chat-body { flex: 1; min-height: 0; display: flex; }
 .liv-chat-boot { margin: auto; color: var(--muted); font-size: 13px; }
@@ -60,7 +97,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-note { border: 1px dashed var(--line-net); border-radius: 10px; padding: 12px; color: var(--ink-sub); font-size: 13px; background: var(--bg); }
 .liv-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9999;
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
-  font-size: 13px; box-shadow: 0 4px 16px rgba(21, 35, 59, .18); }
+  font-size: 13px; box-shadow: 0 4px 16px rgba(var(--shadow-ink), .18); }
 
 /* 좁은 화면 — 무스크롤 코크핏은 데스크톱 계약이다(대시보드와 같은 폴백). 세로로 쌓고 스크롤을 허용한다. */
 @media (max-width: 900px), (max-height: 640px) {
@@ -85,7 +122,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-ask-note { color: var(--muted); font-size: 11px; margin-top: 6px; line-height: 1.5; }
 .liv-ask-msg:not(:empty) { font-size: 12px; margin-top: 6px; line-height: 1.5; }
 .liv-ask-ok { color: var(--mint-deep); }
-.liv-ask-err { color: var(--danger, #B4433A); }
+.liv-ask-err { color: var(--danger); }
 
 /* 객관식 — **고르는 것이 기본**이다(자유서술은 사람이 가장 오래 멈추는 자리였다).
    버튼을 세로로 쌓는다: 좁은 레일에서 가로로 흘리면 라벨이 잘리고, 잘린 선택지는 안 골라진다. */
@@ -252,7 +289,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
   z-index: 2; font-family: inherit; font-size: 12px; line-height: 1;
   padding: 8px 14px; border-radius: 999px; cursor: pointer;
   color: var(--ink); background: var(--bg); border: 1px solid var(--line-net);
-  box-shadow: 0 2px 10px rgba(21, 35, 59, .12); }
+  box-shadow: 0 2px 10px rgba(var(--shadow-ink), .12); }
 .livc-jump:hover { border-color: var(--mint-deep); }
 .livc-jump:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 2px; }
 .livc-jump[hidden] { display: none; }

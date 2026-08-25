@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>내 AI 세션 · Lively Box</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231e1e2e'/%3E%3Cpath d='M4 5l3 3-3 3M8 11h4' stroke='%2316C79A' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
@@ -13,19 +13,24 @@
   /* 한글 코딩 글꼴 D2Coding — 자체호스팅(public/fonts, OFL). #279 한글 가독성 */
   @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
   @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding-Bold.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: swap; }
+  /* 크롬 팔레트(#1683) — 앱(public/styles/01-base.css·90-dark.css)과 같은 브랜드 축. 이 페이지는 앱 셸 밖에서
+     뜨므로 토큰을 import 할 수 없어 값을 옮겨 적는다(같은 값을 두 곳에 두는 대신, 축을 하나로 유지한다).
+     data-theme 은 terminal.ts 의 applyChrome 이 찍는다 — 기본 테마 auto 면 앱 테마를 그대로 따른다.
+     --term-bg 도 applyChrome 이 실제 xterm 배경으로 덮으므로, 여기 값은 스크립트 전 첫 페인트용이다. */
   :root {
-    --bg: #ffffff; --bg2: #f4f5f7; --fg: #1f2328; --fg-dim: #6b7280; --border: #e5e7eb;
-    --accent: #16a37f; --danger: #c0392b; --term-bg: #1e1e2e;
+    --bg: #FFFFFF; --bg2: #F6FAFF; --fg: #15233B; --fg-dim: #5A6B85; --border: #E6ECF5;
+    --accent: #0FA37E; --danger: #B84E44; --term-bg: #FFFFFF;
   }
   html[data-theme="dark"] {
-    --bg: #181825; --bg2: #1e1e2e; --fg: #cdd6f4; --fg-dim: #9399b2; --border: #313244;
-    --accent: #16C79A; --danger: #f38ba8; --term-bg: #1e1e2e;
+    --bg: #111726; --bg2: #1A2336; --fg: #EAF0FA; --fg-dim: #B0BDD5; --border: #273349;
+    --accent: #2BD3A5; --danger: #F49B91; --term-bg: #111726;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body { font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background: var(--bg); color: var(--fg); overflow: hidden; }
-  #ws { display: flex; height: 100vh; }
+  #ws { display: flex; height: 100vh; height: 100dvh; }
+  html, body { overscroll-behavior: none; }
 
   /* 좌측 파일 익스플로러 (VSCode식, 기본 접힘) */
   #explorer { width: 0; flex: 0 0 auto; overflow: hidden; border-right: 1px solid var(--border);
@@ -193,6 +198,39 @@
   .gate-cta:hover { filter: brightness(1.08); }
   .gate-retry { background: none; border: 0; color: var(--fg-dim); font-size: 12.5px; cursor: pointer; padding: 4px; text-decoration: underline; }
   .gate-retry:hover { color: var(--fg); }
+  /* ── 모바일 입력 바(#1719) — 보이는 입력칸에서 네이티브 IME 로 쓰고 한 번에 보낸다. 데스크톱엔 안 그린다(body.mobile 에서만). ── */
+  #mdock { flex: none; display: flex; flex-direction: column; background: var(--bg2); border-top: 1px solid var(--border);
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); gap: 6px; }
+  #mdock[hidden] { display: none; }
+  .mkeys { display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 1px; }
+  .mkeys::-webkit-scrollbar { display: none; }
+  .mkey { flex: none; min-width: 44px; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; font-family: ui-monospace, "D2Coding", monospace;
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  .mkey:active { background: var(--border); }
+  .mrow { display: flex; gap: 8px; align-items: flex-end; }
+  .mcomp { flex: 1; min-height: 38px; max-height: 112px; resize: none; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--bg); color: var(--fg); font: inherit; font-size: 16px; line-height: 1.4; }  /* 16px 미만이면 iOS 가 포커스 때 화면을 확대한다 */
+  .mcomp:focus { outline: none; border-color: var(--accent); }
+  .msend { flex: none; height: 38px; padding: 0 14px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: inherit; font-size: 14px; font-weight: 600;
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  .msend:active { filter: brightness(.92); }
+  body.mobile .toolbar { overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; }
+  body.mobile .toolbar::-webkit-scrollbar { display: none; }
+  body.mobile .toolbar .tbtn { flex: none; white-space: nowrap; }
+  body.mobile .toolbar .title, body.mobile .toolbar .status { flex: none; white-space: nowrap; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+  body.mobile #term-host { padding: 4px 6px; }
+  /* 복사 시트 — 화면 글자를 OS 선택이 되는 일반 텍스트로 */
+  .copy-sheet { width: 640px; max-width: 94vw; max-height: 80vh; display: flex; flex-direction: column; padding: 14px 14px 12px; }
+  .copy-sheet-head { display: flex; align-items: center; gap: 8px; }
+  .copy-sheet-head h3 { margin: 0; flex: none; }
+  .copy-sheet-hint { font-size: 12px; color: var(--fg-dim); margin: 6px 0 8px; }
+  .copy-sheet-pre { flex: 1; min-height: 0; margin: 0; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); color: var(--fg);
+    font-family: ui-monospace, "D2Coding", monospace; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-all;
+    user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; }
+  .pop .field-row { display: flex; align-items: flex-start; gap: 8px; }
+  .pop .field-row label { margin: 0; line-height: 1.5; }
+  .pop .field-row input { width: 18px; height: 18px; margin: 1px 0 0; }
   .unsupported { display: flex; align-items: center; justify-content: center; height: 100%; }
   .unsupported-card { text-align: center; padding: 28px 32px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg2); }
   .unsupported-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
@@ -219,6 +257,9 @@
     .pop.pop-help, .pop.pop-hint { width: min(460px, 94vw); }
   }
 </style>
+<!-- 테마 pre-paint(#1683) — 저장된 앱 테마(lv:theme)를 CSS 로드 전에 찍는다. 이 페이지는 앱 셸 밖이지만
+     같은 출처라 그 키가 보인다. 키 없음 = 시스템 따름(@media 가 받는다). 그 뒤 terminal.js 의 applyChrome 이 실제 테마(auto면 앱 테마)로 다시 찍는다. -->
+<script>(function(){try{var t=localStorage.getItem('lv:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
 </head>
 <body>
 <div id="root"></div>

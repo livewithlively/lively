@@ -67,6 +67,16 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
     -- run_once = 1회 실행 후 자동 비활성(반복 안 함). 부트스트랩 등 일회성 잡용. 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS run_once BOOLEAN NOT NULL DEFAULT false;
+    -- ── 연속 실패 서킷 브레이커(#1675 ④) ──
+    --  어니스트 2026-08-12: 증류 크론이 **200건 넘게 연속 실패**하는 동안 아무 제동이 없었다. 잡 하나가
+    --  10분마다 계속 실패하는 상태는 그 자체로 고장이지, 다음 주기에 나아질 일이 아니다.
+    --  fail_streak = 연속 실패 횟수(성공 1회로 0 리셋) · max_fail_streak = 이 값에 닿으면 자동 정지(0=끔).
+    --  잡별 컬럼인 이유: 적정 임계가 잡마다 다르다(증류는 짧게, 외부 API 커넥터는 일시 장애를 견디게 길게).
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS fail_streak INT NOT NULL DEFAULT 0;
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS max_fail_streak INT NOT NULL DEFAULT 5;
+    -- 자동 정지 흔적 — 관리탭이 "누가 껐나"를 사람 손과 구분해 보여줘야 재개 버튼을 낼 수 있다.
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS auto_disabled_at TIMESTAMPTZ;
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS auto_disabled_reason TEXT;
   `);
   // 기본 잡 시드(최초 1회만 — 운영자 변경 보존).
   //  refresh_all: 커밋→is 자동 반영(결정적, LLM 없음). map_unmapped: 미매핑→도메인 LLM 분류(라이블리 시드 에이전트) — 토큰 설정 전이라 기본 OFF.
@@ -190,6 +200,28 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  write_vis: 'open'|'audience'|'private' (NULL=미설정 → 실행 폴더에서 재파생). restrict: read 축소(owner∪invites) 여부.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS write_vis TEXT;`);
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS restrict_read BOOLEAN NOT NULL DEFAULT false;`);
+  // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 세션 이름이 한 번만 지어지고 그대로 가게 하는 걸쇠다:
+  //  낮은 쪽이 높은 쪽을 못 덮는다(session-label-source.ts 의 표가 정본). NULL = 이 컬럼 이전 행 → `rule` 로 읽는다.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS label_source TEXT;`);
+
+  // ── org_session_trash — 세션 휴지통(#1851). ──
+  //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)
+  //   행은 남아 '기록' 세션으로 다시 떠올랐다(같은 대화가 지웠는데도 목록에 돌아온다). 그래서 **두 단계**로 나눈다:
+  //   휴지통으로(trashed_at) → 거기서 되돌리기 / 완전 삭제(purged_at). 목록 응답은 trashed 행에 표식만 얹고(화면이 가른다),
+  //   purged 행은 아예 빼서(desired-state 는 지우고, 중앙 기록은 조직 보존정책대로 남되 이 사람 목록에선 안 보인다) '지웠는데
+  //   돌아오는' 일을 막는다. 세션 하나가 두 id(박스 id·대화 uuid)로 잡히므로 **둘 다** 행으로 둔다(한쪽만 두면 다른 쪽으로 되살아난다).
+  //  owner 게이트 — 자기 세션만(복원·되살리기와 같은 규칙).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_trash(
+      session_id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      trashed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      purged_at TIMESTAMPTZ);
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_session_trash_owner_idx ON org_session_trash(owner);`);
+  // #1851 — 프로젝트를 통째로 버릴 때 함께 들어간 세션의 **묶음 표식**(project_id). NULL = '지난 세션'에서 따로 버린 것.
+  //  휴지통 화면이 둘을 갈라 그리고, 프로젝트 [복원]은 이 묶음의 세션만 되돌린다(따로 버린 건 그대로).
+  await pool.query(`ALTER TABLE org_session_trash ADD COLUMN IF NOT EXISTS project_id INT;`);
 
   // ── org_session_outbox — 세션 프롬프트 아웃박스(#1719 #1753). ──
   //  왜: send-keys 는 ack 가 없는 통로 — 로그인·대화상자에 멈춘 세션에 밀어 넣은 프롬프트가 조용히 사라졌다(실측).
@@ -382,4 +414,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // 레포 자동 provision(#869 P2 후속) — 기존 org_task 테이블에도 소급(CREATE IF NOT EXISTS 는 컬럼 추가 안 함).
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS repo TEXT`);
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS git_ref TEXT`);
+  // #1675 리뷰 — '내 로그인' 화면이 매 렌더마다 그 사람의 마지막 자격 실패를 찾는다(lastAuthFailureFor).
+  //  org_task 는 지우는 경로가 없어 계속 자라는 테이블이라(증류 크론만으로 하루 ~1,300행), 인덱스 없이
+  //  seq scan 하면 그 조회가 곧 부하다 — 이미 Postgres 타임아웃을 겪은 박스에서는 특히.
+  //  ⚠ 반드시 org_task DDL **뒤**에 둔다(같은 초기화 안에서 순차 실행이라, 앞에 두면 테이블이 없어 실패한다).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_task_requester_finished_idx ON org_task(requester, finished_at DESC)`);
 }

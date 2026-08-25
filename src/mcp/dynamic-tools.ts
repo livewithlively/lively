@@ -12,7 +12,9 @@ import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { markExternalTool } from "../org/policies/tool-log.js";
 import { resolveMemberSecret } from "../org/credentials/member-secret-store.js";
 import { resolveProxyBearer } from "../org/credentials/oauth-proxy-auth.js";
+import { channelSystemOf, channelPreCheck, channelPostFilter } from "../org/channels/channel-enforce.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
+import { requireAppTool } from "../apps/principal.js";
 import { HttpError } from "../http/rest-util.js";
 import { isScope } from "../auth/scopes.js";
 import { logger } from "../log.js";
@@ -147,11 +149,32 @@ export function buildProxyAuthHeaders(meta: Record<string, unknown> | undefined,
   return { headers: { [headerName]: `${prefix}${secret}` }, headerName };
 }
 
+// 상류가 HTTP 2xx 로 실패를 돌려주는가 — 봉투(envelope) 판정(#1881).
+//  슬랙 Web API 는 **모든 실패가 HTTP 200 + `{"ok":false,"error":"…"}`** 다(not_in_channel·missing_scope·invalid_auth 전부).
+//  HTTP 상태만 보면 실패가 성공으로 보이고, 그 뒤의 계측(mcp_call_log.ok)·isError 가 전부 거짓이 된다 — #1652 에서 구글
+//  403 이 `ok=true` 로 찍혀 관리탭 오류 수가 0 이던 것과 같은 함정. 최상위 `ok === false` 는 어느 상류든 실패라는 뜻이
+//  분명하므로(성공 응답에 ok:false 를 싣는 API 는 없다) 벤더 분기 없이 일반 규칙으로 둔다. JSON 이 아니거나 ok 필드가
+//  없으면 판정하지 않는다(모르는 걸 실패로 단정하면 멀쩡한 응답을 에러로 만든다).
+export function envelopeFailed(body: string): boolean {
+  const s = body.trimStart();
+  if (!s.startsWith("{")) return false;
+  try {
+    const j = JSON.parse(s) as { ok?: unknown };
+    return j !== null && typeof j === "object" && j.ok === false;
+  } catch { return false; }
+}
+
 // http_proxy 툴 1회 호출 — 인증(env 또는 per-user vault) + url 고정 + args 는 query/body 로만 + 응답 redact(+옵션 PII 스크럽).
 //  callerId(P1 #746): tool.auth_kind 설정 시 이 멤버의 vault 자격으로 인증(요청자 귀속). 미설정이면 종전 auth_env(조직 공용).
+//  #1881: 대화 시스템(슬랙) 도구면 채널별 개인 정책(#1226)을 A 어댑터와 **같은 함수**로 집행한다 — 사전 게이트·사후 필터.
 export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unknown>, callerId?: string | null): Promise<ProxyResult> {
   if (!tool.url) throw new Error("툴 url 미설정");
   const cfg = await getRuntimeConfig();
+
+  // ── 채널별 개인 열람/발송 정책 ① 인자 게이트 — 설정 조회 실패도, 정책 거부도 호출을 내보내지 않는다(fail-closed).
+  const pre = await channelPreCheck({ callerId, system: channelSystemOf(tool), toolName: tool.name, level: tool.level, args });
+  if (!pre.ok) throw new Error(pre.reason);
+  const enforcement = pre.enf;
   const selfHosts: string[] = [];
   try {
     const profile = await getOrgProfile();
@@ -203,11 +226,22 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
     maxRedirects: 2,
     sensitiveHeaders, // 커스텀 자격 헤더명도 크로스-오리진 리다이렉트에서 벗긴다(#746)
   });
-  let cleanBody = redactDeep(res.body).slice(0, 256 * 1024); // 응답 본문 redact(에코된 토큰 등 차단)
+  // 봉투 판정은 **원문**으로 — 스크럽이 `"ok":false` 를 건드리진 않지만, 판정 근거는 상류가 준 그대로가 맞다.
+  const httpOk = res.status >= 200 && res.status < 300;
+  const ok = httpOk && !envelopeFailed(res.body);
+  // 채널 정책 ② 응답 필터 — ⚠ redact·PII 스크럽보다 **먼저**(저들이 텍스트를 고치면 JSON 이 깨져 항목 단위로 못 도려낸다).
+  //  http_proxy 응답은 본문 문자열 하나라 text 블록 하나로 감싸 같은 필터를 태우고 다시 꺼낸다.
+  let rawBody = res.body;
+  if (enforcement.gate) {
+    const filtered = await channelPostFilter(enforcement, tool.name, [{ type: "text", text: rawBody }]);
+    const blk = filtered[0] as { type?: string; text?: string } | undefined;
+    rawBody = typeof blk?.text === "string" ? blk.text : "";
+  }
+  let cleanBody = redactDeep(rawBody).slice(0, 256 * 1024); // 응답 본문 redact(에코된 토큰 등 차단)
   // 주입한 자격이 응답에 그대로 에코될 경우 대비 — redactDeep 의 정적 패턴이 못 잡는 임의 벤더 토큰을 리터럴로 스크럽(#746 리뷰).
   if (injectedSecret && injectedSecret.length >= 8) cleanBody = cleanBody.split(injectedSecret).join("[REDACTED]");
   if (tool.pii_scrub) cleanBody = scrubPii(cleanBody).text; // P3(#746) 비정형 PII 마스킹(응답에 섞인 개인정보, 평문 문자열)
-  return { status: res.status, body: cleanBody, truncated: res.truncated, ok: res.status >= 200 && res.status < 300 };
+  return { status: res.status, body: cleanBody, truncated: res.truncated, ok };
 }
 
 // 요청별 buildServer 후 호출 — enabled http_proxy 툴을 server 에 등록. fail-open: 실패해도 게이트웨이는 동작.
@@ -234,6 +268,7 @@ export async function registerDynamicTools(server: McpServer): Promise<void> {
       async (args: Record<string, unknown>, extra: unknown) => {
         const u: LivelyUser = resolveUser(extra);
         requireScope(u, callScope);
+        await requireAppTool(u, tool.name); // #1780: 앱 세션이면 ext_tools allowlist 로 축소(일반 세션 통과)
         try {
           const r = await runHttpProxyTool(tool, args ?? {}, u.userId); // P1: 요청자 신원으로 vault 자격 해소
           return {

@@ -21,11 +21,45 @@ export interface DelegatePolicy {
    *  error=null 로 죽어 단서가 남지 않는다(#1101 고객사 A 실측: 32분 무진척).
    */
   stall_ms: number;
+  /**
+   * **실패로 종결된 위탁의 tmux 세션을 몇 건까지 남길지**(#1675 ①). 0 = 즉시 전량 회수.
+   *
+   * 왜 남기나: 실패 세션은 사후 검시용이다 — 워커 세션이 셸로 남아 있어 웹터미널로 열어 그 자리에서
+   *  재현·탐색할 수 있다(`tasks.ts` 의 `exec $SHELL` 이 그 목적). 이건 의도된 설계였고 실제로 쓰인다.
+   *
+   * 왜 상한이 필요한가(어니스트 2026-08-12): 그 보존에 **상한이 없었다.** 토큰이 폐기되자 위탁이 10분마다
+   *  9건씩 전량 실패했고, 실패 세션이 24시간 동안 2,300여 개 쌓였다. 세션 1건당 프로세스 3개(sudo 2 + bash 1)
+   *  라 프로세스 4,771개·메모리 요구 21GB(물리 15.7GB)가 되어 스왑 8GB 를 완전히 고갈시켰고, Postgres 응답이
+   *  3초를 넘겨 박스 전체가 무너졌다. **검시는 최근 몇 건이면 충분하다** — 같은 실패 2,300건을 다 열어보는
+   *  사람은 없고, 원문(stream.jsonl·stderr.log)은 세션과 무관하게 taskDir 에 그대로 남는다.
+   *
+   * 기본 5: 한 배치(증류 9레인)의 절반 정도 — 무엇이 실패했는지 보기엔 충분하고, 쌓여도 프로세스 15개다.
+   */
+  keep_failed_sessions: number;
+  /**
+   * 남겨둔 실패 세션도 **이 분(minute)을 넘기면 회수**(#1675 ①). 0 = 무기한(개수 상한만 적용).
+   *
+   * 개수 상한만으로는 '실패가 드문드문 나는 박스'에서 오래된 세션이 영원히 남는다 — 검시는 사고 직후에
+   *  하지, 이틀 뒤에 하지 않는다. 기본 120(2시간).
+   */
+  failed_session_ttl_min: number;
+  /**
+   * 자격(인증) 실패를 감지하면 **그 위탁을 낸 크론을 자동으로 정지**할지(#1675 ③). 기본 켬.
+   *
+   * 끄면 알림만 가고 크론은 계속 돈다(= 어니스트 당시 동작). 오탐이 걱정되는 운영에서 끌 수 있게 두되,
+   *  기본은 켬이다 — 이번 사고의 24시간은 "아무도 안 멈췄다"가 만든 시간이다.
+   */
+  auth_fail_stop_cron: boolean;
 }
 
 export type DelegatePolicyPatch = Partial<DelegatePolicy>;
 
-export const DEFAULT_DELEGATE_POLICY: DelegatePolicy = { stall_ms: 300_000 };
+export const DEFAULT_DELEGATE_POLICY: DelegatePolicy = {
+  stall_ms: 300_000,
+  keep_failed_sessions: 5,
+  failed_session_ttl_min: 120,
+  auth_fail_stop_cron: true,
+};
 
 // 관리탭·검증 노출 상수.
 export const STALL_MS_MIN = 0;              // 0 = 끔
@@ -39,6 +73,15 @@ export const STALL_MS_MAX = 3_600_000;      // 1시간 — 그 이상은 timeout
  */
 export const STALL_MS_FLOOR = 60_000;
 
+// #1675 ① — 실패 세션 보존 상한. 0(즉시 전량 회수) ~ 200.
+//  상한 200 은 '사실상 안 건 것'을 막는 선이다: 세션 1건 = 프로세스 3개 + claude 프로세스 메모리이므로
+//  200 이면 이미 어니스트 사고의 1/10 규모다. 검시가 그만큼 필요한 운영은 없다.
+export const KEEP_FAILED_MIN = 0;
+export const KEEP_FAILED_MAX = 200;
+// 남긴 실패 세션의 TTL(분). 0 = 무기한(개수 상한만) ~ 7일.
+export const FAILED_TTL_MIN_MIN = 0;
+export const FAILED_TTL_MIN_MAX = 10_080;
+
 // 노브 선언(#1313 R47) — 범위·하한·env 시드는 이 표가 전부. 클램프/시드/우선순위 골격은 knob.ts 가 맡는다.
 //  floor 는 knob.ts 의 '켰다면 최소 이만큼' 규칙: MIN 이하면 끔(MIN), 그 위면 [FLOOR, MAX] 로 접는다.
 //  env 이름은 liveness 가드 최초 릴리스(v0.1.272)의 것을 그대로 승계한다.
@@ -47,6 +90,11 @@ const policy = definePolicy<DelegatePolicy>({
   defaults: DEFAULT_DELEGATE_POLICY,
   fields: {
     stall_ms: { env: "LIVELY_TASK_STALL_MS", min: STALL_MS_MIN, max: STALL_MS_MAX, floor: STALL_MS_FLOOR, loose: true },
+    // #1675 ① — 신규 노브라 loose 를 쓰지 않는다(knob.ts 의 방어적 숫자 해석 = 정본). null/""/false 가 0 으로
+    //  뒤집히면 안 되는 자리다: 여기서 0 은 '즉시 전량 회수'라는 **의미 있는 선택**이지 잡값의 착지점이 아니다.
+    keep_failed_sessions: { env: "LIVELY_KEEP_FAILED_SESSIONS", min: KEEP_FAILED_MIN, max: KEEP_FAILED_MAX },
+    failed_session_ttl_min: { env: "LIVELY_FAILED_SESSION_TTL_MIN", min: FAILED_TTL_MIN_MIN, max: FAILED_TTL_MIN_MAX },
+    auth_fail_stop_cron: { kind: "bool", env: "LIVELY_AUTH_FAIL_STOP_CRON" },
   },
 });
 

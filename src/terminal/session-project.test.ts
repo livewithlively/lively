@@ -1,140 +1,82 @@
-// 세션 폴더 안 프로젝트 표현(#1719 session-project.applySessionProjectFs) — mkdtemp 샌드박스에서 부작용으로 단언한다.
-//  사양(스크래치 spec.md §B) 7행. tmux·DB 는 안 만진다(applySessionProject 는 tmux 를 띄우므로 여기서 안 잰다).
-//  ⚠ 프로젝트 폴더 존재 판정은 PROJECT_SHARED_BASE(TERMINAL_ROOT_SHARED) 기준이라, import 전에 env 를 샌드박스로 돌린다.
+// 세션 프로젝트 적용은 tmux 호환 캐시만 갱신하고 파일시스템/cwd를 건드리지 않는다는 계약(#1867).
+//  + 프로젝트 폴더 경로 헬퍼(projectDirPath·projectDirOnThisHost — #1850 완전삭제가 rm -rf 하는 자리) — 존재 판정은 별도 함수.
+//  ⚠ 프로젝트 폴더 판정은 PROJECT_SHARED_BASE(TERMINAL_ROOT_SHARED) 기준이라, import 전에 env 를 샌드박스로 돌린다.
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { LivelyUser } from "../context.js";
 
-const SHARED = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-sp-shared-"));
+const SANDBOX = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-sp-"));
+const SHARED = path.join(SANDBOX, "workspace");
+await fsp.mkdir(path.join(SHARED, "project", "12"), { recursive: true });
 process.env.TERMINAL_ROOT_SHARED = SHARED;
-const { applySessionProjectFs, planSessionProjectFs, PROJECT_LINK_NAME, MEMBER_JS } = await import("./session-project.js");
-import { spawnSync } from "node:child_process";
+const { applySessionProject, projectDirPath, projectDirOnThisHost } = await import("./session-project.js");
+type SessionProjectRuntime = NonNullable<Parameters<typeof applySessionProject>[3]>;
 
 let pass = 0;
-const t = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
-const readJson = (f: string): any => JSON.parse(fs.readFileSync(f, "utf8"));
-const linkTarget = (p: string): string | null => { try { return fs.readlinkSync(p); } catch { return null; } };
-const mkSession = async (): Promise<string> => fsp.mkdtemp(path.join(os.tmpdir(), "lively-sp-sess-"));
+const ok = (name: string): void => { pass++; console.log(`ok  ${name}`); };
+const user = { userId: "yoon" } as LivelyUser;
 
-// 프로젝트 폴더 둘 — 12 는 AGENTS.md 있음, 13 은 없음, 99 는 없는 폴더.
-await fsp.mkdir(path.join(SHARED, "project", "12"), { recursive: true });
-await fsp.writeFile(path.join(SHARED, "project", "12", "AGENTS.md"), "# 프로젝트 12\n");
-await fsp.mkdir(path.join(SHARED, "project", "13"), { recursive: true });
-const P12 = path.join(SHARED, "project", "12");
-const P13 = path.join(SHARED, "project", "13");
+function runtime(owner = "yoon"): { port: SessionProjectRuntime; writes: string[][]; quiet: string[][] } {
+  const writes: string[][] = [], quiet: string[][] = [];
+  return {
+    writes, quiet,
+    port: {
+      getOpt: async () => owner,
+      tmux: async (args) => { writes.push(args); },
+      tmuxQuiet: async (args) => { quiet.push(args); },
+    },
+  };
+}
 
-await t("[1] 빈 세션 폴더 + 프로젝트 폴더 있음 → 마커·링크·셔틀·@project/AGENTS.md · linked=true", async () => {
-  const dir = await mkSession();
-  const r = await applySessionProjectFs(dir, "box-yoon-1", { projectId: 12, folder: "project/12", name: "온보딩" });
-  assert.equal(r.linked, true); assert.equal(r.projectDir, P12);
-  const m = readJson(path.join(dir, ".lively", "project.json"));
-  assert.equal(m.kind, "session"); assert.equal(m.session_id, "box-yoon-1"); assert.equal(m.project_id, 12);
-  assert.equal(m.project_dir, P12); assert.equal(m.sync, "none");
-  assert.equal(linkTarget(path.join(dir, PROJECT_LINK_NAME)), P12);
-  assert.ok(fs.existsSync(path.join(dir, PROJECT_LINK_NAME, "AGENTS.md")), "링크를 타고 프로젝트 AGENTS.md 가 보인다");
-  const agents = fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8");
-  assert.ok(agents.startsWith("<!-- lively:session-project -->"), "우리 표식으로 시작");
-  assert.ok(agents.includes("#12") && agents.includes("온보딩"));
-  const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8");
-  assert.ok(claude.includes("@AGENTS.md") && claude.includes(`@${PROJECT_LINK_NAME}/AGENTS.md`));
-});
+try {
+  {
+    const r = runtime();
+    const out = await applySessionProject(user, "box-yoon-12345678", { projectId: 12, folder: "project/12", src: "v6" }, r.port);
+    assert.equal(out.projectId, 12);
+    assert.deepEqual(r.writes, [
+      ["set-option", "-t", "box-yoon-12345678", "@box_project", "12"],
+      ["set-option", "-t", "box-yoon-12345678", "@box_project_src", "v6"],
+    ]);
+    assert.deepEqual({ linked: out.linked, projectDir: out.projectDir, sessionDir: out.sessionDir }, { linked: false, projectDir: null, sessionDir: false });
+    ok("프로젝트 지정 → tmux 표시만 갱신하고 파일 표현 없음");
+  }
 
-await t("[2] 프로젝트 폴더가 이 호스트에 없음 → 마커 project_dir=null · 링크 없음 · CLAUDE.md 에 @project 없음 · linked=false", async () => {
-  const dir = await mkSession();
-  const r = await applySessionProjectFs(dir, "box-yoon-2", { projectId: 99, folder: "project/99" });
-  assert.equal(r.linked, false); assert.equal(r.projectDir, null);
-  assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_dir, null);
-  assert.equal(linkTarget(path.join(dir, PROJECT_LINK_NAME)), null);
-  assert.ok(!fs.existsSync(path.join(dir, PROJECT_LINK_NAME)));
-  assert.ok(!fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8").includes(`@${PROJECT_LINK_NAME}/`));
-  assert.ok(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8").includes("이 컴퓨터에 없습니다"));
-});
+  {
+    const r = runtime();
+    const out = await applySessionProject(user, "box-yoon-12345678", null, r.port);
+    assert.equal(out.projectId, null);
+    assert.deepEqual(r.quiet, [
+      ["set-option", "-t", "box-yoon-12345678", "-u", "@box_project"],
+      ["set-option", "-t", "box-yoon-12345678", "-u", "@box_project_src"],
+    ]);
+    ok("소속 해제 → tmux 표시 해제만 수행");
+  }
 
-await t("[3] 다른 프로젝트로 재바인딩 → 링크가 새 폴더 · 마커 project_id 갱신", async () => {
-  const dir = await mkSession();
-  await applySessionProjectFs(dir, "box-yoon-3", { projectId: 12, folder: "project/12" });
-  const r = await applySessionProjectFs(dir, "box-yoon-3", { projectId: 13, folder: "project/13" });
-  assert.equal(r.linked, true);
-  assert.equal(linkTarget(path.join(dir, PROJECT_LINK_NAME)), P13);
-  assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_id, 13);
-});
+  {
+    const r = runtime("other");
+    await assert.rejects(
+      () => applySessionProject(user, "box-yoon-12345678", { projectId: 12, folder: "project/12" }, r.port),
+      /본인 세션이 아닙니다/,
+    );
+    assert.equal(r.writes.length + r.quiet.length, 0);
+    ok("남의 세션 → 적용 전 거부");
+  }
 
-await t("[4] 뗌(null) → 마커·링크·우리 셔틀 제거", async () => {
-  const dir = await mkSession();
-  await applySessionProjectFs(dir, "box-yoon-4", { projectId: 12, folder: "project/12" });
-  const r = await applySessionProjectFs(dir, "box-yoon-4", null);
-  assert.equal(r.linked, false);
-  assert.ok(!fs.existsSync(path.join(dir, ".lively", "project.json")));
-  assert.ok(!fs.existsSync(path.join(dir, PROJECT_LINK_NAME)));
-  assert.ok(!fs.existsSync(path.join(dir, "AGENTS.md")));
-  assert.ok(!fs.existsSync(path.join(dir, "CLAUDE.md")));
-});
+  {
+    // #1850 — 완전삭제가 rm -rf 하는 경로: 실재하는 폴더만 준다. 경로 계산(projectDirPath)은 존재와 무관하고, 워크스페이스 밖은 둘 다 null.
+    const P12 = path.join(SHARED, "project", "12");
+    assert.equal(projectDirOnThisHost("project/12"), P12, "실재하면 경로");
+    assert.equal(projectDirOnThisHost("project/9999"), null, "없으면 null — 삭제 경로가 유령 폴더를 만지지 않는다");
+    assert.equal(projectDirPath("project/9999"), path.join(SHARED, "project", "9999"), "경로 계산은 존재와 무관");
+    assert.equal(projectDirPath("../escape/9"), null, "워크스페이스 밖은 둘 다 null");
+    assert.equal(projectDirOnThisHost("../escape/9"), null);
+    assert.equal(projectDirPath(""), null, "빈 folder 는 null(루트를 가리키지 않는다)");
+    ok("projectDirOnThisHost 는 실재하는 폴더만 · projectDirPath 는 경로만 · 밖·빈값은 null");
+  }
+} finally {
+  await fsp.rm(SANDBOX, { recursive: true, force: true }).catch(() => {});
+}
 
-await t("[5] 사용자 AGENTS.md(표식 없음)는 바인딩·뗌 모두 보존", async () => {
-  const dir = await mkSession();
-  const mine = "# 내 규칙\n건드리지 마\n";
-  await fsp.writeFile(path.join(dir, "AGENTS.md"), mine);
-  await applySessionProjectFs(dir, "box-yoon-5", { projectId: 12, folder: "project/12" });
-  assert.equal(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"), mine, "바인딩이 사용자 파일을 덮지 않는다");
-  await applySessionProjectFs(dir, "box-yoon-5", null);
-  assert.equal(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"), mine, "뗌이 사용자 파일을 지우지 않는다");
-});
-
-await t("[6] `project` 가 링크가 아니라 진짜 폴더면 건드리지 않는다 · linked=false", async () => {
-  const dir = await mkSession();
-  await fsp.mkdir(path.join(dir, PROJECT_LINK_NAME));
-  await fsp.writeFile(path.join(dir, PROJECT_LINK_NAME, "keep.txt"), "x");
-  const r = await applySessionProjectFs(dir, "box-yoon-6", { projectId: 12, folder: "project/12" });
-  assert.equal(r.linked, false);
-  assert.ok(fs.lstatSync(path.join(dir, PROJECT_LINK_NAME)).isDirectory() && !fs.lstatSync(path.join(dir, PROJECT_LINK_NAME)).isSymbolicLink());
-  assert.equal(fs.readFileSync(path.join(dir, PROJECT_LINK_NAME, "keep.txt"), "utf8"), "x");
-  await applySessionProjectFs(dir, "box-yoon-6", null);
-  assert.equal(fs.readFileSync(path.join(dir, PROJECT_LINK_NAME, "keep.txt"), "utf8"), "x", "뗌도 진짜 폴더는 지우지 않는다");
-});
-
-await t("[7] 프로젝트 폴더는 있으나 AGENTS.md 없음 → CLAUDE.md 는 표식 + @AGENTS.md 만", async () => {
-  const dir = await mkSession();
-  const r = await applySessionProjectFs(dir, "box-yoon-7", { projectId: 13, folder: "project/13" });
-  assert.equal(r.linked, true);
-  const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8").trim().split("\n");
-  assert.deepEqual(claude, ["<!-- lively:session-project -->", "@AGENTS.md"]);
-});
-
-// ── 멤버 uid 실행기(MEMBER_JS) — 격리 홈에선 이 고정 리터럴이 같은 계획을 실행한다. 여기선 로컬 uid 로 돌려 계약(probe→ops)을 검증 ──
-const runMember = (input: unknown): any => {
-  const r = spawnSync(process.execPath, ["-e", MEMBER_JS], { input: JSON.stringify(input), encoding: "utf8" });
-  if (r.status !== 0) throw new Error("member js exit " + r.status + " " + r.stderr);
-  return JSON.parse(r.stdout);
-};
-await t("[8] MEMBER_JS probe — 링크 없음·셔틀 없음이면 {false,null,null} · 우리 셔틀이 있으면 head 로 표식이 보인다", async () => {
-  const dir = await mkSession();
-  const paths = { link: path.join(dir, PROJECT_LINK_NAME), agents: path.join(dir, "AGENTS.md"), claude: path.join(dir, "CLAUDE.md") };
-  assert.deepEqual(runMember({ probe: paths }), { linkIsSymlink: false, agentsHead: null, claudeHead: null });
-  await fsp.writeFile(paths.agents, "<!-- lively:session-project -->\n# x\n");
-  await fsp.symlink(P12, paths.link, "dir");
-  const pr = runMember({ probe: paths });
-  assert.equal(pr.linkIsSymlink, true); assert.ok(String(pr.agentsHead).startsWith("<!-- lively:session-project -->")); assert.equal(pr.claudeHead, null);
-});
-await t("[9] MEMBER_JS ops — 로컬 io 와 같은 계획을 실행하면 같은 결과(마커·링크·셔틀) · 뗌 계획도 같다", async () => {
-  const dir = await mkSession();
-  const paths = { link: path.join(dir, PROJECT_LINK_NAME), agents: path.join(dir, "AGENTS.md"), claude: path.join(dir, "CLAUDE.md") };
-  const plan = planSessionProjectFs(dir, "box-yoon-9", { projectId: 12, folder: "project/12", name: "온보딩" }, P12, runMember({ probe: paths }));
-  assert.deepEqual(runMember({ ops: plan.ops }), { linkFailed: false });
-  assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_id, 12);
-  assert.equal(linkTarget(paths.link), P12);
-  assert.ok(fs.readFileSync(paths.claude, "utf8").includes(`@${PROJECT_LINK_NAME}/AGENTS.md`));
-  // 실패한 링크는 linkFailed 로 보고(진짜 폴더가 자리를 차지) — 나머지 op 는 그대로 수행
-  const dir2 = await mkSession(); await fsp.mkdir(path.join(dir2, PROJECT_LINK_NAME));
-  const paths2 = { link: path.join(dir2, PROJECT_LINK_NAME), agents: path.join(dir2, "AGENTS.md"), claude: path.join(dir2, "CLAUDE.md") };
-  const plan2 = planSessionProjectFs(dir2, "box-yoon-9b", { projectId: 12, folder: "project/12" }, P12, runMember({ probe: paths2 }));
-  assert.deepEqual(runMember({ ops: plan2.ops }), { linkFailed: true });
-  assert.ok(fs.existsSync(path.join(dir2, ".lively", "project.json")));
-  // 뗌
-  const unplan = planSessionProjectFs(dir, "box-yoon-9", null, null, runMember({ probe: paths }));
-  assert.deepEqual(runMember({ ops: unplan.ops }), { linkFailed: false });
-  assert.ok(!fs.existsSync(paths.link) && !fs.existsSync(paths.agents) && !fs.existsSync(path.join(dir, ".lively", "project.json")));
-});
-
-console.log(`session-project: ${pass} passed`);
+console.log(`\n${pass} passed`);

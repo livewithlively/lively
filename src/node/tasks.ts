@@ -99,6 +99,13 @@ export interface RunTaskInput {
   extraFlags?: string[];
   // 승인 우회(기본 true = 위탁). 리브는 false — 사람이 화면에서 보고 있다(taskScript 주석 참조).
   bypassPermissions?: boolean;
+  // 세션 목록에 보일 이름(@box_label). 없으면 `위탁 #<taskId>`. 프로젝트 화면의 리브 대화(#1757)는 턴이 도는 몇 초 동안
+  //  사이드바에 그 프로젝트의 세션으로 잠깐 보이므로 사람 말로 이름을 준다("리브 · 프로젝트 대화").
+  label?: string;
+  // 시스템 프롬프트에 **덧붙일** 지문(#1757 프로젝트 도우미 역할). 코드가 만든 텍스트만 — 사람 텍스트 금지(프롬프트 파일로).
+  //  구현: 턴 폴더에 system.md 로 쓰고 `--append-system-prompt-file <path>` 로 싣는다(셸 인용 없음 — 경로만 인자에 간다).
+  //  claude 만 안다(다른 하네스는 무시 — 실측하지 않은 플래그를 추측해 넣지 않는다).
+  systemPrompt?: string;
   env?: Record<string, string>;    // 자격 리스(CLAUDE_CODE_OAUTH_TOKEN 등) — 값은 세션 env 로만
   // 레포 provision 주입(#905 C4) — **노드엔 DB 가 없다**. 게이트웨이가 레지스트리 git_url + (의뢰자 본인) git 자격을
   //  조회해 실어 보낸다. 없으면 노드는 종전대로 DB 를 읽으려다 실패하고 "레지스트리에 없다"는 오진을 낸다.
@@ -316,6 +323,20 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   //  **안전선이 조용히 반쪽이 된다**(그래도 실행은 되고 답도 나온다 = 무증상). 그래서 livTurnArgs 가 거부 목록
   //  **다음에** --session-id/--resume 를 두어 그 자리에서 끊고, 그 순서를 liv-turn.test 가 고정한다.
   if (input.extraFlags?.length) flags.push(...input.extraFlags);
+  // 시스템 프롬프트 조각(#1757) — 파일로 두고 경로만 인자에. extraFlags **뒤**에 둔다(리브 거부 목록의 가변인자를
+  //  --session-id/--resume 가 이미 끊은 뒤라 안전). 파일 권한은 prompt.txt 와 같다(워커 uid 가 읽어야 한다).
+  if (input.systemPrompt) {
+    if (harness.key === "claude") {
+      const sp = path.join(taskDir, "system.md");
+      await fsp.writeFile(sp, input.systemPrompt, { mode: 0o660 });
+      await fsp.chmod(sp, SHARED_FILE_MODE).catch(() => { /* best-effort */ });
+      flags.push("--append-system-prompt-file", `"${sp}"`);
+    } else {
+      // 다른 하네스의 대응 플래그는 실측하지 않았다 — 추측해 넣지 않되 **조용히 버리지도 않는다**(#1884). 이 파일엔
+      //  logger 가 없다(노드 번들 공용) — console 로 남겨 stderr 에서 보이게 한다.
+      console.warn(`[tasks] systemPrompt 은 claude 만 지원 — ${harness.key} 에선 무시됨(task ${input.taskId})`);
+    }
+  }
 
   const args = ["new-session", "-d", "-s", id];
   args.push("-e", `LANG=${PANE_LOCALE}`, "-e", `LC_CTYPE=${PANE_LOCALE}`, "-e", `LC_ALL=${PANE_LOCALE}`);
@@ -352,7 +373,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   await tmux(args);
   const ownerId = user.userId || user.email || "";
   await tmux(["set-option", "-t", id, "@box_owner", ownerId]);
-  await tmux(["set-option", "-t", id, "@box_label", `위탁 #${input.taskId}`]);
+  await tmux(["set-option", "-t", id, "@box_label", input.label?.trim() || `위탁 #${input.taskId}`]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
   await tmux(["set-option", "-t", id, "@box_dir", workspace]);
   await tmux(["set-option", "-t", id, "@box_auto", "1"]);

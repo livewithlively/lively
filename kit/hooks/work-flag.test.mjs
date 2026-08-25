@@ -38,6 +38,16 @@ function flagsFor(tool) {
 }
 const eq = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
+// ⓪ 격리 회귀 가드(2026-08-18) — 이 테스트는 훅을 **실제 프로세스로** 띄운다. env 에 진짜 신원이 남아 있으면
+//  가짜 session_id("s1"…)가 실 게이트웨이로 POST 돼 **살아 있는 세션의 대화 매핑을 덮는다**(실측: 세션 3개가 "s7"이 됐다).
+//  HOME 샌드박스로는 못 막는다 — 훅이 토큰을 env 우선으로 읽기 때문이다. 그래서 sandboxEnv 가 값을 비운다.
+{
+  const e = sandboxEnv({ home: HOME, tmp: TMP });
+  (e.LIVELY_TOKEN === "" && e.LIVELY_SESSION_ID === "" && e.LIVELY_GATEWAY_URL === "")
+    ? ok("\u24ea 샌드박스 env 가 라이블리 신원·게이트웨이를 지운다(실 게이트웨이 유출 차단)")
+    : bad("\u24ea 실 게이트웨이 유출 차단", JSON.stringify(e));
+}
+
 // ── pull_tools 켜짐(기본값과 동일) ──
 cfg({ pull_tools: ["mcp__lively__ext__"] });
 
@@ -86,6 +96,29 @@ cfg({ pull_tools: ["mcp__lively__ext__"] });
   rmSync(join(HOME, ".lively", "hooks-config.json"));
   const f = flagsFor("mcp__lively__ext__notion__notion-fetch");
   eq(f, ["lively"]) ? ok("⑦ 설정 부재 → fail-safe 로 꺼짐") : bad("⑦ 설정 부재", `flags=${f}`);
+}
+
+// ⑧ #1884 — 셸로 오는 편집(codex 0.149.1 + gpt-5.6: tool_name=Bash · command="apply_patch <<'EOF' …")도 .worked.
+//  툴명(edit 축)만 보면 그 세션의 편집이 전부 셸로 분류돼 종료 게이트를 조용히 통과한다(실측). 하네스별로 답이 다르다 —
+//  claude 의 Bash 에 같은 문자열이 와도 편집이 아니다(claude 는 편집을 셸로 안 낸다 · 표에 editShellRe 없음).
+function flagsForInput(tool, toolInput, extraEnv = {}) {
+  const id = `s${++sid}`;
+  execFileSync(process.execPath, [HOOK], {
+    input: JSON.stringify({ session_id: id, tool_name: tool, tool_input: toolInput }),
+    env: { ...process.env, ...sandboxEnv({ home: HOME, tmp: TMP }), LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", ...extraEnv },
+  });
+  return ["worked", "writeback", "lively"].filter((f) => existsSync(join(TMP, "lively-hooks", `${id}.${f}`)));
+}
+{
+  const patch = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\nEOF";
+  const a = flagsForInput("Bash", { command: patch }, { LIVELY_HARNESS: "codex" });
+  eq(a, ["worked"]) ? ok("⑧a codex Bash apply_patch 히어독 → worked") : bad("⑧a codex 셸 편집", `flags=${a}`);
+  const b = flagsForInput("Bash", { command: "echo apply_patch is a word" }, { LIVELY_HARNESS: "codex" });
+  eq(b, []) ? ok("⑧b codex Bash 일반 명령(apply_patch 가 인자에만) → 없음") : bad("⑧b 오탐 방지", `flags=${b}`);
+  const c = flagsForInput("Bash", { command: patch }, { LIVELY_HARNESS: "claude" });
+  eq(c, []) ? ok("⑧c claude Bash 에 같은 문자열 → 없음(표에 editShellRe 없음)") : bad("⑧c 하네스별 판정", `flags=${c}`);
+  const d = flagsForInput("apply_patch", { command: "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n" }, { LIVELY_HARNESS: "codex" });
+  eq(d, ["worked"]) ? ok("⑧d codex apply_patch 툴(gpt-5.4 계열) → worked(edit 축)") : bad("⑧d 툴 편집", `flags=${d}`);
 }
 
 rmSync(SANDBOX, { recursive: true, force: true });

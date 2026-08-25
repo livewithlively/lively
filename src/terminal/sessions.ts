@@ -10,8 +10,7 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
 import { dirToProjectFolder } from "../project/project-fs.js";
 import { hiddenProjects, type HiddenProjects } from "../v6/visibility.js";
-import { recordSessionProject } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
-import { SESSION_DIR_SUBDIR } from "./session-project.js";                // #1719 — 세션 전용 폴더 이름(<루트>/sessions/<id>)
+import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 // 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
 import { sessionCacheEnv } from "../ops/build-cache.js";
@@ -24,25 +23,33 @@ import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시�
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
-import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
-import { memberMkdir } from "./terminal-member-fs.js";
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
+import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
+import { autoTrustWorkspace } from "./session-create-guards.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
+// #1780 D3·D4 — 앱 세션: 앱 토큰 발급 + 세션 폴더에 앱 홈·앱 하네스 자산 물질화.
+import { mintAppToken } from "../apps/principal.js";
+import { appPluginArgs, writeAppHome, materializeAppAssets, materializePreparedAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
+import { gatewayUrl } from "../gateway-url.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
 } from "./phase.js";
-import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir } from "./profiles.js";
+import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
+import { sessionNameFromPrompt } from "./session-name.js";
+import { type LabelSource, canRelabel } from "../sessions/session-label-source.js";   // #1979 — 세션 이름 걸쇠
 
 export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
 const SAFE_VALUE_RE = /^[A-Za-z0-9][A-Za-z0-9._\-:/]*$/;
 const cleanLabel = (s: string): string => (s || "").replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
+const SESSION_HOME_SUBDIR = "sessions"; // 앱 자격·하네스 자산용 private home. cwd와 프로젝트 소속을 표현하지 않는다.
 
 // @box_invites → 멤버 id 배열. 깨진 값·구버전 메타는 빈 배열(=비공개로 안전 폴백).
 //  값 표현은 decodeOptJson 이 흡수한다(신=base64 · 구=평문 JSON — #1541 psmux 따옴표 소실 대응).
@@ -60,8 +67,8 @@ async function validInvites(ids: unknown, ownerUid: string): Promise<string[]> {
   return out;
 }
 
-export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
-  return collectSessions(ownerId(user));
+export async function listSessions(user: LivelyUser, opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  return collectSessions(ownerId(user), opts?.strict === true);
 }
 
 // 복원 가능(restorable) 세션(#1059 E) — DB desired-state 에는 있으나 지금 tmux 에 **없는** 이 사용자 소유 세션.
@@ -95,7 +102,7 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       id: s.id, label: s.label || s.id, harness: s.harness || "shell", dir: s.dir || "",
       autoApprove: s.auto_approve, owner: s.owner, owned: s.owner === me,
       created: s.created || 0, attached: false, invites: s.invites, flags: s.flags,
-      projectId: s.project_id || 0,
+      projectId: s.project_id || 0, appId: s.app_id || undefined,
       agentState: "offline", title: "",
       lastActive: s.last_busy || undefined,
       restorable: true,
@@ -114,8 +121,12 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
 // 노드 에이전트용(#869) — 뷰어 필터 없이 이 호스트의 전 box-* 세션+메타를 반환한다. 가시성 판정(정책)은
 //  게이트웨이가 소유하므로(F7 정책/실행 분리) 노드는 원자료만 상태 push 하고, 게이트웨이가 뷰어별로 거른다.
 //  게이트웨이 로컬 경로에선 쓰지 말 것 — listSessions(user)가 정문.
-export async function listSessionsRaw(): Promise<SessionInfo[]> {
-  return collectSessions(null);
+/**
+ * @param strict listSessions 와 같은 의미 — **tmux 를 못 본 것**을 삼키지 않고 throw 한다.
+ *  "없음"과 "모름"을 구분해야 하는 읽기(예: 중복 세션 수 보고)는 반드시 strict 여야 한다.
+ */
+export async function listSessionsRaw(opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  return collectSessions(null, opts?.strict === true);
 }
 
 // 빈 tmux 서버 정리(#869 노드 자가치유) — 세션이 0개면 서버를 죽인다. 노드 데몬(launchd/systemd)이 과거 최소 PATH 로
@@ -129,13 +140,22 @@ export async function listSessionsRaw(): Promise<SessionInfo[]> {
 //   ② box-* 만이 아니라 **어떤 세션이든** 있으면 빈 서버가 아니다. 사용자의 개인 tmux 세션이 같은 서버에 있으면
 //      그건 무손실이 아니고, Windows psmux 는 소켓 격리가 없어 kill-server 가 곧 'PC 의 모든 세션 종료'다
 //      (2026-08-18 실측 — 테스트 한 줄의 kill-server 로 그 PC 의 라이블리 세션 5개가 한 번에 죽었다).
+/**
+ * tmux 실패가 **'서버가 없다'(정상 — 세션 0개)** 인가, **'못 봤다'(장애)** 인가.
+ *  이 구분이 곧 "없다"와 "모른다"의 구분이다. 섞으면 모르는 상태를 '없음'으로 단정해 파괴적 결정을 내린다
+ *  (#1675 ⑥ 실측: 상시세션 ensure 가 조회 실패를 '세션 없음'으로 읽고 2분마다 새 세션을 만들어 30개까지 쌓였다).
+ */
+export function isNoTmuxServer(e: unknown): boolean {
+  const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
+  return /no server running|error connecting/i.test(stderr);
+}
+
 export async function killEmptyTmuxServer(): Promise<void> {
   let raw: string;
   try { raw = await tmux(["list-sessions", "-F", "#{session_name}"]); }
   catch (e) {   // 못 봤다 ≠ 비었다
     // 서버가 없는 건 정상(부팅 직후 대부분) — 조용히. 그 밖의 실패(타임아웃·과부하)는 '왜 자가치유가 안 됐나'의 단서라 남긴다.
-    const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
-    if (!/no server running|error connecting/i.test(stderr)) console.warn(`[terminal] 빈 tmux 서버 판정 보류 — list-sessions 실패(죽이지 않는다): ${(e as Error)?.message}`);
+    if (!isNoTmuxServer(e)) console.warn(`[terminal] 빈 tmux 서버 판정 보류 — list-sessions 실패(죽이지 않는다): ${(e as Error)?.message}`);
     return;
   }
   if (raw.split("\n").some((line) => line.trim() !== "")) return;   // 무엇이든 살아 있으면 보존
@@ -143,9 +163,18 @@ export async function killEmptyTmuxServer(): Promise<void> {
 }
 
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
-async function collectSessions(me: string | null): Promise<SessionInfo[]> {
+/**
+ * @param strict true 면 **tmux 를 못 본 것**(서버 없음이 아닌 실패)을 삼키지 않고 throw 한다.
+ *  기본(false)은 종전 동작 — 화면 목록은 빈 목록으로 떨어지는 편이 낫다. 반면 "없으면 만든다" 류의
+ *  **파괴적/생성적 결정**을 내리는 호출부는 반드시 strict 여야 한다(모르는 상태를 '없음'으로 읽으면 안 된다).
+ */
+async function collectSessions(me: string | null, strict = false): Promise<SessionInfo[]> {
   let out = "";
-  try { out = await tmux(["list-sessions", "-F", LIST_FMT]); } catch { return []; }
+  try { out = await tmux(["list-sessions", "-F", LIST_FMT]); }
+  catch (e) {
+    if (strict && !isNoTmuxServer(e)) throw e;   // 못 봤다 — 호출부가 '없음'으로 오해하면 안 된다
+    return [];
+  }
   // 가려진 프로젝트 집합을 **한 번** 조회(#1291) — 세션 수와 무관하게 쿼리 1회, 15초 캐시.
   //  조회조차 실패하면(DB 다운) 프로젝트 세션을 통째로 감춘다(fail-closed): 개인 세션은 tmux 만으로 판정되므로 그대로 뜬다.
   let hidden: HiddenProjects | undefined;
@@ -161,7 +190,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -201,6 +230,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
         flags: decodeOptJson<Record<string, string>>(flagsRaw, {} as Record<string, string>),
         invites,
         projectId: Number(projectRaw) || null,
+        appId: appRaw || null,
       },
     });
   }
@@ -222,7 +252,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
       offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
       reportedFresh: p.reportedFresh, lastAttached: p.lastAttached,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
-      flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, label: d.label,
+      flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
     });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
@@ -258,7 +288,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
       id: r.name, label: (r.label || r.name), harness: r.harness || "shell", dir: r.dir || "",
       autoApprove: r.autoApprove, owner: r.owner || "", owned: r.owned,
       created: Number(r.created) || 0, attached: Number(r.attached) > 0, invites: r.invites, flags,
-      projectId: r.projectId || 0,
+      projectId: r.projectId || 0, appId: r.appId || undefined,
       agentState: state,
       // 회수(F)가 보는 두 신호는 **접속과 무관**해야 하고(탭=온라인 규칙이 busy·waiting 을 offline 으로 덮으므로),
       //  두 출처를 **합집합**으로 본다 — 죽이면 되돌릴 수 없는 판정이라 과보호가 옳은 실패 방향이다.
@@ -308,15 +338,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       logger.warn({ err: e, osUser }, "멤버 홈 키트 시딩 실패(비치명) — 세션은 뜨나 훅·대화창 매핑이 비어 있을 수 있다"));
   }
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
-  // 세션 전용 폴더(#1719 홈 입력창) — cwd = <루트>/sessions/<세션id>. subpath 는 안 받는다(폴더를 고르지 않는 진입이라).
-  //  루트는 rootKey 그대로(기본 personal) — 격리 박스면 멤버 홈/box 아래, 관리형이면 멤버 홈이 그대로 마운트되는 자리다.
-  //  프로젝트 소속은 여기서 정하지 않는다: 나중에 session-project.ts 가 이 폴더 **안에** 마커·링크를 둔다(cwd 는 불변).
-  const rootKeyUsed = input.sessionDir ? (input.rootKey || "personal") : input.rootKey;
-  const subpathUsed = input.sessionDir ? `${SESSION_DIR_SUBDIR}/${id}` : input.subpath;
+  // cwd는 사용자가 고른 workspace 좌표 그대로다. 미지정이면 personal workspace 루트이며,
+  // 세션 id 폴더나 프로젝트 표현 파일을 만들지 않는다.
+  const rootKeyUsed = input.rootKey || "personal";
+  const subpathUsed = input.subpath || "";
   let { abs: target } = await resolveRootPath(user, rootKeyUsed, subpathUsed, osUser);
-  // 복원(restore)은 desired-state 의 root_key/subpath 로 같은 폴더에 **새 id** 로 다시 뜬다 — 그때도 세션 전용 폴더임을 알아야
-  //  프로젝트 붙이기가 계속 되므로, 플래그가 아니라 **자리**(<루트>/sessions/…)로 판정한다.
-  const isSessionDir = !!input.sessionDir || String(subpathUsed || "").replace(/^[/\\]+/, "").split(/[/\\]/)[0] === SESSION_DIR_SUBDIR;
   // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);
   else await fsp.mkdir(target, { recursive: true, mode: 0o700 });
@@ -330,12 +356,55 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     if (mid) await materializeMemberGit(osUser, mid).catch((e) => console.warn(`[terminal] git 자격 materialize 실패(${mid}) — 세션은 계속:`, (e as Error)?.message ?? e));
   }
 
+  // ── 앱 세션(#1780 D3·D4) — appId가 있으면 grant 검사 → 앱 토큰 발급 → cwd와 분리된 private app home에 자산 물질화. ──
+  //  일반 세션(appId 미설정)은 이 블록을 통째로 건너뛴다 → 종전 경로 무변경(핫패스 무회귀).
+  //  ⚠ hard-fail: grant 없음(403/409)·토큰 발급 실패·자산 물질화 실패는 **세션 생성을 중단**한다 — 스킬·토큰 없는
+  //   앱 세션은 틀린 상태다(일반 세션이라면 best-effort 인 자리들과 대비). 실패해도 tmux new-session 은 아직 안 돌았다.
+  //  격리(멤버 700 홈) 세션은 게이트웨이가 그 안에 직접 못 쓰므로 멤버 uid 백엔드 writer 를 넘긴다(비격리는 직접 fs).
+  let appEnv: string[] = [];
+  let appSessionHome: string | null = null;
+  if (input.appId) {
+    const appId = input.appId;
+    const writer: AppFsWriter = osUser ? { mkdirp: (d) => memberMkdir(osUser, d), writeFile: (p, data, mode) => memberWriteFile(osUser, p, data, mode) } : directFsWriter;
+    // 앱 홈·자산은 cwd 가 아니라 세션별 private home(<personal>/sessions/<id>)에 둔다(#1867) — 같은 cwd 를 쓰는 다른 세션과
+    //  토큰·자산이 섞이지 않고, 사용자가 고른 workspace 에는 파일을 만들지 않는다. Claude 에는 --plugin-dir 로만 싣는다.
+    const { abs: sessionHome } = await resolveRootPath(user, "personal", `${SESSION_HOME_SUBDIR}/${id}`, osUser);
+    appSessionHome = sessionHome;
+    if (osUser) await memberMkdir(osUser, sessionHome); else await fsp.mkdir(sessionHome, { recursive: true, mode: 0o700 });
+    if (input.appSession) {
+      // 원격 노드에는 DB가 없다. 게이트웨이가 grant 재검·토큰 발급·자산 수집을 끝낸 봉투만 기계적으로 쓴다.
+      if (input.appSession.appId !== appId) throw new HttpError(400, "앱 세션 준비 봉투의 appId가 요청과 다릅니다");
+      await writeAppHome(sessionHome, input.appSession.token, input.appSession.gatewayUrl, writer);
+      await materializePreparedAppAssets(sessionHome, input.appSession.assets, writer);
+    } else {
+      const memberId = ownerId(user);
+      // 중앙 실행은 종전대로 이 호스트에서 grant 를 재검하고 토큰·자산을 준비한다.
+      const { token } = await mintAppToken(memberId, appId, "app-spawn");
+      const gwUrl = await gatewayUrl();
+      await writeAppHome(sessionHome, token, gwUrl, writer);
+      await materializeAppAssets(sessionHome, appId, writer);
+    }
+    // pane env — 다른 세션스코프 -e 와 같은 통로(아래 args 에 합류). LIVELY_HOME 은 프록시가 앱 토큰 파일을 찾는 뿌리,
+    //  LIVELY_APP_ID 는 귀속(x-lively-app → mcp_call_log.app). ⚠ 격리 분기는 sudoers env_keep 이 두 값을 통과시켜야 실효한다
+    //  (deploy/linux/sudoers-lively — 별도 PR3d, 이 커밋 범위 밖).
+    appEnv = ["-e", `LIVELY_HOME=${sessionHome}`, "-e", `LIVELY_APP_ID=${appId}`];
+  }
+
   const harness = HARNESSES.find((h) => h.key === input.harness);
   if (!harness) throw new HttpError(400, "허용되지 않은 하네스입니다");
   const cmd: string[] = [];
   const appliedFlags: Record<string, string> = {}; // 생성 시 적용한 플래그 — @box_flags 로 저장(수정 팝업 표시용).
   if (harness.bin) {
+    // 모델을 명시해서 띄울 때는 그 모델이 받는 추론강도 조합까지 검증한다. 화면은 모델 변경 때 목록을 좁히지만,
+    // API 직접 호출·오래 열린 브라우저도 있으므로 서버가 마지막 경계다(예: Luna + Ultra 는 Codex 카탈로그상 불가).
+    const selectedModel = String(input.flags?.["--model"] ?? "");
+    const selectedEffort = String(input.flags?.["--effort"] ?? "");
+    const modelEfforts = selectedModel ? harness.effortsByModel?.[selectedModel] : undefined;
+    if (selectedEffort && modelEfforts && !modelEfforts.includes(selectedEffort)) {
+      throw new HttpError(400, `${selectedModel} 모델은 ${selectedEffort} 추론강도를 지원하지 않습니다`);
+    }
     cmd.push(harness.bin);
+    if (appSessionHome) cmd.push(...appPluginArgs(harness.key, appSessionHome));
     // 이어받기(#905 C1 · #1711 표 구동) — 그 하네스의 이어받기 수단을 **카탈로그에서** 만든다.
     //  ⚠ 여기의 <sid> 는 **그 하네스 자신의 대화 id** 여야 한다(claude UUID · agy conversationId · opencode sessionID).
     //   세션이력 캡처도 같은 id 로 키잉된다(#905). tmux box-id 를 주면 하네스가 못 찾아 "검색 결과 없음"이 된다
@@ -353,11 +422,23 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       if (raw === undefined || raw === null || raw === "") continue;
       if (def.type === "bool") { if (raw) { cmd.push(def.name); appliedFlags[def.name] = "1"; } continue; }
       const v = String(raw);
-      if (def.type === "select") { if (!def.choices?.includes(v)) throw new HttpError(400, `${def.label} 값이 허용 목록에 없습니다`); cmd.push(def.name, v); appliedFlags[def.name] = v; continue; }
+      if (def.type === "select") {
+        if (!def.choices?.includes(v)) throw new HttpError(400, `${def.label} 값이 허용 목록에 없습니다`);
+        // Codex는 추론강도를 일반 CLI 플래그로 받지 않는다. CLI 0.149.1이 보장하는
+        // `--config key=value` 경로로 바꾸되, 화면·저장 상태는 다른 하네스와 같은
+        // --effort 키를 유지한다. 따라서 생성폼/상단 제어가 하네스별 argv 문법을 알 필요가 없다.
+        if (harness.key === "codex" && def.name === "--effort") cmd.push("--config", `model_reasoning_effort=${v}`);
+        else cmd.push(def.name, v);
+        appliedFlags[def.name] = v;
+        continue;
+      }
       if (!SAFE_VALUE_RE.test(v) || v.length > 64) throw new HttpError(400, `${def.label} 값 형식이 잘못되었습니다`);
       cmd.push(def.name, v); appliedFlags[def.name] = v;
     }
     if (input.autoApprove && harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
+    // 화면 테마(#1683 후속) — 이 하네스가 실행 시점 주입을 지원하면 그 인자를 얹는다(사람의 설정 파일은
+    //  건드리지 않는다 — harnessThemeArgv 주석). 지원 안 하는 하네스면 빈 배열이라 종전 그대로다.
+    cmd.push(...harnessThemeArgv(harness.key, input.theme));
   }
   // pane 이 실제로 실행할 argv(#1516). 세 갈래:
   //  · 로그인 세션(loginFor) — 하네스 TUI 대신 그 하네스의 **로그인 명령**을 셸에서 돌린다(만료 자격으로는
@@ -388,6 +469,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 명시 보존해야 한다(deploy/linux/sudoers-lively).
   //   구 sudoers 면 미보존 → 헤더 빈 값 → 미기록 = 종전 동작(무회귀).
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
+  // 화면 테마(#1683) — 이 pane 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 고르게 한다.
+  //  두 경로로 알린다(둘 다 터미널이 앱에게 알려주는 표준 방식이고, 어느 쪽을 읽는지는 도구마다 다르다):
+  //   · COLORFGBG — 오래된 관습(vim/neovim 의 background 자동판정, less 등). "<fg>;<bg>" ANSI 번호.
+  //   · LIVELY_THEME — 우리 훅·스킬이 읽는 명시 값(위 관습은 값이 모호해 해석이 갈린다).
+  //  ⚠ 하네스의 설정 파일(theme 키)은 고치지 않는다 — 그건 사람의 선택이고 킷이 보존하는 값이다(CreateInput.theme 주석).
+  //   대신 xterm 이 OSC 11 질의에 실제 배경색을 답하므로(터미널 화면이 그 색을 싣는다) 배경을 물어보는 TUI 는
+  //   이 env 없이도 맞게 고른다 — env 는 '물어보지 않는' 도구를 위한 보강이다.
+  //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 같은 성질).
+  //   즉 이미 떠 있는 세션의 하네스는 테마를 바꿔도 그대로다 — 그 세션을 다시 만들어야 바뀐다.
+  args.push(...themeEnvArgs(input.theme));
+  args.push(...harnessThemeEnvArgs(harness.key, input.theme));   // 하네스가 env 로 테마를 받는 경우(#1683 후속)
   // 테넌트 소속(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스할 때, **세션 spawn 훅이
   //  어느 테넌트의 브로커 소켓에 붙어야 하는지**를 알려준다. 훅은 게이트웨이 프로세스의 env 를 물려받는데
   //  공유 게이트웨이에서는 그 env 가 전역이라 테넌트를 구분할 수 없다 — 세션스코프 -e 가 유일한 통로다.
@@ -402,6 +494,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 동일 성질).
   //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 LIVELY_MODE(+전이기 구 LIVELY_READONLY/INCOGNITO)를 명시 보존해야 한다(deploy/linux/sudoers-lively).
   args.push(...modeEnvArgs(input)); // 분기·전이기 dual-env 는 modeEnvArgs(순수·단위테스트됨)에
+  // #1780 D3 — 앱 세션이면 LIVELY_HOME=<private app home>·LIVELY_APP_ID=<id>(위 앱 블록에서 조립). 일반 세션은 빈 배열=무변경.
+  //  ⚠ LANG·TZ·SESSION_ID 와 같은 세션스코프 -e 성질(exec 시점 고정, 새 세션부터 적용). 격리 분기 env_keep 는 별도 PR3d.
+  args.push(...appEnv);
   // 공유 빌드 캐시(#813 T3) — 생태계별 다운로드/의존성 캐시를 박스 전역 한 곳으로. LANG/TZ 와 같은 세션스코프 -e
   //  (전역/타세션 누수 없음). 목적은 부피 감소가 아니라 **회수를 싸게 만드는 것**: 워크트리 파생물을 회수해도
   //  캐시가 warm 이라 재설치가 금방 끝난다. 부수로 멤버 격리(#524)로 갈린 홈들의 캐시 중복도 하나로 접는다.
@@ -455,13 +550,27 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     }
+    // 훅 신원(#1719 후속) — 이 pane 의 훅이 **그 세션 주인**으로 보고하게 한다(대화 uuid 매핑·활동/단계·정상종료).
+    //  왜 여기만인지·왜 MCP 신원은 안 바뀌는지는 profiles.mintSessionHookToken 주석. 격리 경로는 멤버 홈의
+    //  ~/.lively/token 이 이미 그 멤버 것이고 sudo env_reset 도 지나야 해서 넣지 않는다.
+    //  best-effort — 못 구우면 종전대로 공유 토큰으로 떨어진다(무회귀).
+    const hookToken = await mintSessionHookToken(ownerId(user), id).catch(() => null);
+    if (hookToken) args.push("-e", `LIVELY_TOKEN=${hookToken}`);
     if (launch.length) args.push(...launch);
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
   await tmuxQuiet(["set-option", "-g", "default-terminal", "xterm-256color"]);
   await tmux(args);
-  const label = cleanLabel(input.label) || id;
+  // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
+  //  화면은 그때 pane 제목·중앙 기록 첫 지시로 이름 자리를 채우고, 대화가 시작되면 session-autoname 이 진짜 이름을 박는다).
+  //  ⚠ 여기에 '프로젝트명'은 없다 — 한 프로젝트 아래 세션이 전부 같은 이름이 되던 뿌리였다(실측 71%).
+  const label = cleanLabel(input.label) || cleanLabel(sessionNameFromPrompt(input.initialPrompt || "")) || id;
+  // #1979 — 이름 옆에 **누가 지었나**를 같이 남긴다. 이게 "한 번만 짓고 고정"의 걸쇠다(session-label-source.ts).
+  //  사람이 준 이름 = human(에이전트가 못 덮는다) · 첫 지시 규칙 이름 = rule(에이전트가 한 번 다듬는다) · id = 아직 이름 없음.
+  //  ⚠ 복원(restore)도 이 함수를 타지만 그때는 이 값이 무시된다 — upsert 의 ON CONFLICT 가 label_source 를
+  //   손대지 않는다(안 그러면 복원 한 번에 걸쇠가 풀린다. 근거는 session-state.ts 의 그 주석).
+  const labelSource: LabelSource = cleanLabel(input.label) ? "human" : (label === id ? "id" : "rule");
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
@@ -469,18 +578,25 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
   await tmux(["set-option", "-t", id, "@box_flags", encodeOptJson(appliedFlags)]);
   await tmux(["set-option", "-t", id, "@box_invites", encodeOptJson(invites)]);
-  // 세션 전용 폴더 표식(#1719) — session-project.ts 가 **이 표식이 있을 때만** 폴더 안에 마커·링크를 쓴다
-  //  (cwd 가 프로젝트 폴더인 종전 세션에 같은 걸 쓰면 프로젝트 폴더를 오염시킨다).
-  if (isSessionDir) await tmux(["set-option", "-t", id, "@box_session_dir", "1"]);
+  // 앱 세션이면 앱 id 를 박아둔다(#1780 D4) — @box_project 등과 같은 자리·같은 규약(desired 미러는 app_id 컬럼). 관측·귀속용.
+  if (input.appId) await tmux(["set-option", "-t", id, "@box_app", String(input.appId)]);
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
   //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
     await tmux(["set-option", "-t", id, "@box_project", String(input.projectId)]);
     await tmux(["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"]);
-    // v6 프로젝트 세션이면 세션↔프로젝트를 영속 기록 — 작업 타임라인이 이 세션의 AI 작업을 프로젝트로 귀속(끝난 세션 포함).
-    //  (org 프로젝트는 session_project FK 대상이 아니라 제외.) best-effort: 실패해도 세션 생성은 진행.
-    if (input.projectSrc !== "org") {
-      try { await recordSessionProject(id, input.projectId); } catch { /* 비치명 */ }
+    // v6 프로젝트 세션은 실행 전에 DB current가 반드시 존재해야 한다. DB가 SoT인데 이 기록을 best-effort로
+    // 삼키면 첫 훅이 미연결로 보고 새 프로젝트를 중복 생성한다. 노드는 DB가 없으므로 게이트웨이 릴레이가 기록한다.
+    if (input.projectSrc !== "org" && !process.env.LIVELY_NODE_TOKEN) {
+      try {
+        const cur = await setExecutionSessionProject({ id, owner: ownerId(user), harness: harness.key, projectId: input.projectId });
+        if (!cur) throw new Error("execution session owner claim failed");
+        await markExecutionSessionApplied(id, ownerId(user), cur.desired_revision).catch(() => { /* desired가 정본이고 applied는 진단값 */ });
+      } catch (e) {
+        // 방금 만든 세션만 롤백한다. 사용자 작업이 시작되기 전이며 첫 지시도 아직 큐에 넣지 않았다.
+        await tmuxQuiet(["kill-session", "-t", id]);
+        throw new HttpError(503, `프로젝트 소속을 기록하지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
+      }
     }
   }
   // #1291 v2 — 기록 범위(write cap)·read 축소를 세션에 박는다. tmux user-option 이 권위(모드와 같은 자리).
@@ -500,15 +616,26 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     try {
       await upsertSessionState({
         id, owner: ownerId(user), label, harness: harness.key, dir: target,
-        root_key: rootKeyUsed || null, subpath: subpathUsed || null,   // 세션 전용 폴더는 실제 자리(sessions/<id>)를 남긴다 — 복원이 같은 폴더로 돌아오게
+        root_key: rootKeyUsed || null, subpath: subpathUsed || null,   // 복원은 사용자가 고른 같은 workspace 좌표로 돌아간다.
         flags: appliedFlags, auto_approve: !!input.autoApprove, invites,
         project_id: input.projectId || null, project_src: input.projectId ? (input.projectSrc === "org" ? "org" : "v6") : null,
         read_only: !!input.readOnly, incognito: !!input.incognito,
         write_vis: input.writeVis ?? null, restrict_read: !!input.restrictRead,
+        app_id: input.appId || null,   // #1780 D4 — 앱 세션 desired-state 미러(복원이 앱 축을 잃지 않게)
+        label_source: labelSource,     // #1979 — 이름 걸쇠. INSERT 때만 정해진다(복원은 저장된 출처를 유지)
         created: createdSec, last_busy: null,
       });
     } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
   }
+  // 이름을 **AI 가 다시 짓는 일은 여기서 하지 않는다**(#1979 — 발의 윤상민 2026-08-25).
+  //  종전(#1719)엔 여기서 하네스를 **헤드리스로 따로 스폰**해 이름을 지었다(구 src/terminal/session-name-ai.ts).
+  //  그 스폰이 `{ ...process.env }` 로 부모 세션의 LIVELY_SESSION_ID·LIVELY_TOKEN·훅 배선을 통째로 상속해서,
+  //  시드 훅 project-auto-bind 가 **이름짓기 프롬프트를 '첫 실질 지시'로 오인** → 프로젝트를 만들어 이 세션에 붙였다.
+  //  프로덕션 실측 2026-08-25: 쓰레기 프로젝트 #1946·#1957(제목이 이름짓기 프롬프트 첫 줄 그대로), 그 중 하나는
+  //  실사용자 세션. 즉 **세션이 자기 이름을 짓는 행위가 자기를 엉뚱한 프로젝트에 바인딩했다.**
+  //  이제 이름은 **이미 도는 그 세션 자신**이 짓는다 — 첫 지시 턴에 훅(session-name-ask)이 지시를 주입하고
+  //  세션이 `session_rename` 으로 등록한다(capabilities/session-rename.ts). 스폰이 0이면 그 오염 경로는
+  //  완화가 아니라 **구조적으로 없다**. 여기 남는 이름은 규칙 이름(label)뿐이고 그게 바닥값이다.
   // 첫 지시(#1719 홈 입력창) — 응답을 막지 않고 백그라운드에서 하네스 입력창이 뜨길 기다렸다 넣는다.
   //  ⚠ 응답을 기다리게 하면 안 된다: 하네스 부팅(수 초)+신뢰 대화상자 동안 화면이 멈추고, 실패해도 세션은 이미 살아 있다.
   //  동적 import — 정적으로 걸면 sessions → session-first-prompt → send-keys → terminal-pty → terminal-sessions → sessions 순환(check-imports).
@@ -519,18 +646,23 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  노드를 골라 연 세션의 첫 지시가 안 들어가던 원인, #1744). 노드에선 DB 없이 로컬 tmux 로 바로 넣는 injectFirstPrompt 를
     //  쓴다 — 입력창·신뢰 대화상자 판정이 그 안에 있고(session-first-prompt.ts), 파일·tmux 가 그 컴퓨터에 있어 로컬이 맞다.
     //  게이트웨이(중앙 박스) 세션은 종전대로 아웃박스: 로그인 화면이면 큐가 들고 있다가 입력창이 뜨면 넣고, 못 넣으면 failed
-    //  로 남아 화면이 재시도를 준다. 동적 import — 정적이면 순환(check-imports). trust_ok: 세션 전용 폴더만.
+    //  로 남아 화면이 재시도를 준다. 동적 import — 정적이면 순환(check-imports).
+    //  신뢰 대화상자 자동 수락은 **라이블리가 만든 자리에서만**(#1867) — 루트 그 자체이거나 그 프로젝트의 canonical 폴더.
+    //   사람이 고른 임의 폴더면 사람이 답한다(autoTrustWorkspace). 이 판정을 빼면 프로젝트 세션의 첫 지시가 대화상자에 막힌다(실측).
+    const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
     const onNode = !!process.env.LIVELY_NODE_TOKEN;   // 노드 에이전트 프로세스에만 있는 값(게이트웨이엔 없다 — 안전한 판별자)
     if (onNode) {
       void import("./session-first-prompt.js")
-        .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk: !!input.sessionDir }))
+        .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk }))
         .catch((e) => { console.warn(`[terminal] 노드 첫 지시 주입 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
     } else {
       void import("../sessions/session-outbox.js")
-        .then(({ enqueuePrompt }) => enqueuePrompt(id, prompt, { trustOk: !!input.sessionDir }))
+        .then(({ enqueuePrompt }) => enqueuePrompt(id, prompt, { trustOk }))
         .catch((e) => { console.warn(`[terminal] 첫 지시 큐 등록 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
     }
   }
+  //  ⚠ 앱 인스턴스 등록은 여기가 아니라 **게이트웨이 라우트**가 한다(routes.ts afterSessionCreated).
+  //   이 파일은 노드 에이전트 번들에 실리고 노드엔 DB 가 없다('DB 없음' 계약, scripts/build-node-agent.mjs 화이트리스트).
   return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
 }
 
@@ -570,7 +702,14 @@ async function assertManage(user: LivelyUser, id: string): Promise<void> {
 // tmux 세션만 종료(권한·DB desired-state 미터치) — 회수(reaper)·관리자 회수가 각자 정책 적용 후 부른다.
 async function tmuxKill(id: string): Promise<void> {
   if (!ID_RE.test(id)) throw new HttpError(400, "세션 id 형식 오류");
-  await tmux(["kill-session", "-t", id]);
+  // ★이미 죽은 세션을 다시 죽이는 것은 **성공**이다(멱등). tmux 는 "can't find session" 으로 실패를 내는데,
+  //  그 예외가 그대로 500 으로 새어 나가 화면에선 보관(×)이 먹지 않는 것으로 보였다 — 그리고 하필 사람들이
+  //  가장 자주 보관하려는 것이 **이미 끝나 tmux 가 사라진 세션**이라, 보관이 필요한 자리에서만 실패했다
+  //  (상민님 2026-08-21 실측: 끝난 세션 보관 → HTTP 500 internal_error, 로그에 can't find session).
+  //  보관·회수의 목표 상태는 '그 tmux 가 없음' 이므로, 이미 없으면 목표는 이미 이뤄진 것이다.
+  //  소켓 접속불가·타임아웃은 판정 불가라 isSessionGoneError 가 false 를 주고 그대로 던진다(모르면 성공이라 말하지 않는다).
+  try { await tmux(["kill-session", "-t", id]); }
+  catch (err) { if (!isSessionGoneError(err)) throw err; }
 }
 // #1059 F — reaper 전용 중앙 세션 회수: tmux 만 죽이고 **desired-state 는 보존**(org_session_state 유지 → restorable
 //  로 남아 열 때 lazy resume). 노드 세션 회수는 게이트웨이 라우트의 relayNodeOp{op:'kill'} 이 담당(F 는 소스별 dispatch).
@@ -583,16 +722,32 @@ export async function reapCentralSession(id: string): Promise<void> {
 export async function killSession(user: LivelyUser, id: string, opts?: { admin?: boolean; preserveState?: boolean }): Promise<void> {
   if (!opts?.admin) await assertManage(user, id);
   await tmuxKill(id);
-  if (!opts?.preserveState) await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
+  // 세션 스코프 자격 회수 — 이 box 에 실어 준 훅 토큰은 세션과 함께 죽는다(회수/삭제 둘 다. 복원은 새 box id 라 새로 굽는다).
+  await revokeSessionHookToken(id).catch((e) => console.warn(`[terminal] 세션 훅 토큰 회수 실패(${id}):`, (e as Error)?.message ?? e));
+  if (opts?.preserveState) return;   // 보관(회수)은 **복원 가능**하다 — desired-state 를 남긴다
+  await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
 }
-export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
+/**
+ * 세션 이름·초대 변경. `opts.source`(#1979) = **누가 이 이름을 지었나** — 기본 human(웹 편집·직접 호출).
+ *  human 이 아니면 걸쇠(session-label-source.ts)를 먼저 본다: 지금 출처를 못 이기면 tmux 도 DB 도 안 건드린다.
+ *  ⚠ 자동 이름(session-autoname, source=rule)이 기본값 human 을 쓰면 그 순간 **사람이 지은 이름으로 굳어져**
+ *   에이전트가 영영 못 다듬는다 — 자동 경로는 반드시 자기 출처를 실어 보내야 한다.
+ */
+export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }, opts?: { source?: LabelSource }): Promise<void> {
   await assertManage(user, id);
-  const mirror: { label?: string; invites?: string[] } = {};
+  const source: LabelSource = opts?.source ?? "human";
+  const mirror: { label?: string; label_source?: LabelSource; invites?: string[] } = {};
   if (patch.label !== undefined) {
     const clean = cleanLabel(patch.label);
     if (!clean) throw new HttpError(400, "이름이 필요합니다");
+    if (source !== "human") {
+      const cur = await getSessionState(id).catch(() => undefined);
+      // 미러 행이 없으면(구 세션·managed) 걸쇠를 걸 근거가 없다 — 종전대로 붙인다(무회귀).
+      if (cur && !canRelabel(cur.label_source, source)) return;
+    }
     await tmux(["set-option", "-t", id, "@box_label", clean]);
     mirror.label = clean;
+    mirror.label_source = source;
   }
   if (patch.invites !== undefined) {
     const invites = await validInvites(patch.invites, ownerId(user));

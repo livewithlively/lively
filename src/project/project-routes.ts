@@ -19,13 +19,14 @@ import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — �
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
-import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions } from "../node/provision-remote.js";
+import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions, bindNodeSessionProjectOrKill, injectDeferredFirstPrompt } from "../node/provision-remote.js";
 import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
-import { recordSessionProject } from "../v6/project-store.js";
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
+import { assertAppSessionPlacement, autoTrustWorkspace } from "../terminal/session-create-guards.js";
+import { ingestLocalUpload, supersedeLocalPath } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
 
-const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
+const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 // 신원 id — 터미널/세션로그 라우트와 동일 헬퍼(userId 우선, email 폴백). 노드 세션 소유/가시성 판정이 그 라우트들과
@@ -58,6 +59,20 @@ interface ProjectDeps {
   listProjectActivities: (id: number, authorPerson?: string, limit?: number, offset?: number) => Promise<unknown[]>;
   // folder 가 비었을 때 물리 폴더를 생성하고 DB 에 반영 후 상대경로 반환(v6 보강용). 없으면 폴더 없음 400.
   ensureFolder?: (project: { id: number; name: string }) => Promise<string>;
+}
+
+/**
+ * 디렉터리를 못 읽었을 때 무엇으로 답할 것인가(순수 판정).
+ *
+ * 프로젝트의 물리 폴더는 **첫 세션·첫 업로드가 만들기 전까지 없다** — DB(project.folder)엔 경로가 배정돼
+ *  있는데 디스크엔 없는 창이 정상 경로에 존재한다(실측 2026-08-25 매니지드: 대화로 만든 프로젝트를 열자
+ *  자료 화면이 404 로 깨졌다). 그 상태의 사실은 "**빈 폴더**"이지 "없는 프로젝트"가 아니다.
+ * ⚠ 루트일 때만 빈 목록이다 — 없는 **하위 경로**까지 빈 목록으로 덮으면 오타·죽은 링크가 조용히
+ *  "빈 폴더"로 보인다(그건 404 보다 더 나쁜 거짓말이다).
+ * @returns 루트면 빈 목록 응답, 하위 경로면 null(= 호출자가 404)
+ */
+export function missingDirResponse(base: string, abs: string): { path: string; parent: null; items: never[] } | null {
+  return path.relative(base, abs) === "" ? { path: "", parent: null, items: [] } : null;
 }
 
 // base 기준 안전 경로 해소(.. 탈출 차단). requireFile=true 면 루트 자신 거부(파일 경로 필요).
@@ -142,14 +157,43 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     if (q) { res.json({ search: q, items: await searchFiles(base, q) }); return; }
     const abs = resolveIn(base, req.query.path, false);
     let entries: fs.Dirent[];
-    try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new HttpError(404, "디렉터리 없음"); }
-    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number }> = [];
+    try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch {
+      // ★ 프로젝트 폴더가 아직 **디스크에 없는** 경우(실측 2026-08-25 매니지드): 폴더 경로는 배정돼 있고
+      //  (위 projBase 의 ensureFolder 는 `project.folder` 값만 정한다 — mkdir 은 세션·업로드가 처음 할 때 한다)
+      //  파일만 하나도 없는 상태다. 그건 "**빈 폴더**"이지 "없는 프로젝트"가 아니다 — 404 를 던지면 자료 화면이
+      //  통째로 에러가 되어, 방금 만든 프로젝트를 열자마자 깨진 화면을 본다(대화로 만든 프로젝트는 세션이 뜨기
+      //  전까지 폴더가 없으므로 **정상 경로에서 재현된다**).
+      //  ⚠ 루트일 때만 빈 목록이다. 하위 경로가 없는 건 진짜로 없는 경로이므로 404 를 유지한다(오타·죽은 링크를
+      //   조용히 빈 화면으로 덮으면 그게 더 나쁜 거짓말이다).
+      const empty = missingDirResponse(base, abs);
+      if (empty) { res.json(empty); return; }
+      throw new HttpError(404, "디렉터리 없음");
+    }
+    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number; repo?: boolean }> = [];
     for (const e of entries) {
       if (e.name.startsWith(".")) continue;
       const isDir = e.isDirectory();
       let size = 0, mtime = 0;
       try { const s = await fsp.stat(path.join(abs, e.name)); mtime = Math.floor(s.mtimeMs); if (!isDir) size = s.size; } catch { /* skip */ }
-      items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
+      // repo — provision 된 레포/워크트리(.git 보유)임을 표시한다. 매니페스트가 이미 서브트리째 빼는 것과 같은
+      //  대상이다(project-manifest.ts): 코드는 git 이 소유하므로 '자료'가 아니다. 지우지는 않고 **표시만** 한다 —
+      //  파일 탐색기(v2/files.ts)는 코드를 보러 들어가는 화면이라 그대로 보여야 하고, 자료 칸만 이 표시로 가린다.
+      let repo = false;
+      if (isDir) { try { await fsp.stat(path.join(abs, e.name, ".git")); repo = true; } catch { /* 레포 아님 */ } }
+      // empty — 폴더가 비었는지. 화면이 빈 폴더와 든 폴더를 **다른 그림**으로 그린다(맥 파인더 문법, #1819).
+      //  ⚠ readdir 로 전부 읽지 않는다 — 목록의 폴더마다 한 번씩 도는 자리라, 수천 개가 든 폴더가 섞이면
+      //   목록 한 번에 그 전부를 읽게 된다. opendir 로 **처음 보이는 것 하나**만 확인하고 즉시 닫는다.
+      let empty = false;
+      if (isDir && !repo) {
+        try {
+          const d = await fsp.opendir(path.join(abs, e.name));
+          try {
+            empty = true;
+            for await (const c of d) { if (!c.name.startsWith(".")) { empty = false; break; } }
+          } finally { await d.close().catch(() => { /* for-await 가 이미 닫았으면 여기서 끝 */ }); }
+        } catch { /* 못 읽으면 '비었다'고 단정하지 않는다 — 기본값 false */ }
+      }
+      items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime, ...(repo ? { repo: true } : {}), ...(empty ? { empty: true } : {}) });
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     const rel = path.relative(base, abs);
@@ -183,15 +227,24 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  변경으로 오인해 영구 거짓충돌이 나거나(수렴 불가), 크기·시각 추측으로 동일성을 때려맞히다 **남의 최신본을
   //  덮는다**(같은 바이트 크기 · 다른 내용은 흔하다). 기존 클라이언트는 이 필드를 무시하므로 하위호환.
   app.put(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), req);
+    const { project, base } = await projBase(Number(req.params.id), req);
     const abs = resolveIn(base, nfcPath(req.query.path), true);   // 저장 이름은 NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, null); }
-    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
+    catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     // 게이트웨이(lively)가 쓴 파일(644)·폴더 업로드가 만든 중간 폴더(755)에 그룹 rw — 격리 박스의 box_ 세션이
     //  lively-shared 그룹으로 이 폴더를 쓰므로, 이게 없으면 세션 클로드가 업로드 파일을 못 고친다(#1246).
     await grantSharedGroupWrite(abs, base, "file");
+    // 올린 파일 = 자료 1건(#1881 L1) — 다른 수집기와 같은 길(자료 → 증류기 → 지식·근거 칩). 실패해도 업로드는 성공이다.
+    const u = userOf(req);
+    const ing = await ingestLocalUpload({ root: { kind: "project", id: project.id }, folder: project.folder, base, abs, osUser: null,
+      uploader: { id: viewerOf(u), name: u?.email ?? null }, channelFallback: project.name })
+      .catch((e) => { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); return null; });
     const st = await fsp.stat(abs).catch(() => null);
-    res.json({ ok: true, ...(st ? { mtime: Math.floor(st.mtimeMs), size: st.size } : {}) });
+    // path(절대경로) — 올린 것을 **그 자리에서 AI 에게 넘기는** 화면이 쓴다(새 세션 창의 붙여넣기 첨부, #1819).
+    //  세션 cwd 는 프로젝트 폴더가 아니라 세션 전용 폴더라 상대경로로는 못 찾는다. 터미널 업로드 라우트가 이미
+    //  같은 계약을 갖고 있다(web/standalone/terminal.ts dropFileToAgent 가 j.path 를 그대로 입력창에 꽂는다).
+    // source_id — 이 파일이 자료로 등록됐으면 그 id(#1881). 화면이 "자료함에 담김"을 폴링 없이 알린다. 구 클라이언트는 무시.
+    res.json({ ok: true, path: abs, ...(st ? { mtime: Math.floor(st.mtimeMs), size: st.size } : {}), ...(ing?.ingested ? { source_id: ing.source_id } : {}) });
   }));
 
   // 새 폴더 생성
@@ -222,11 +275,48 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     res.json({ ok: true });
   }));
 
+  // 이동 — 다른 폴더로 옮긴다(자료 앱의 '폴더로 정리', #1819). body: { paths: string[], to: string }.
+  //  to = 목적지 **폴더**의 상대경로(""=루트). 이름은 그대로 두고 자리만 옮긴다 — 이름 변경은 /rename 이 맡는다.
+  //  왜 여러 개를 한 번에 받나: 사각형 선택으로 고른 여러 자료를 한 번에 끌어다 놓는 게 이 기능의 본래 쓰임이라,
+  //  건별 왕복이면 중간에 실패했을 때 사용자가 '어디까지 갔는지' 알 길이 없다. 건별 결과를 모아 돌려준다.
+  app.post(`${prefix}/:id/move`, auth, wrap(async (req, res) => {
+    const { base } = await projBase(Number(req.params.id), req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const list = Array.isArray(b.paths) ? b.paths : (b.path != null ? [b.path] : []);
+    if (!list.length) throw new HttpError(400, "옮길 대상이 필요합니다");
+    const destDir = resolveIn(base, nfcPath(b.to ?? ""), false);
+    const dstat = await fsp.stat(destDir).catch(() => null);
+    if (!dstat || !dstat.isDirectory()) throw new HttpError(400, "목적지가 폴더가 아닙니다");
+    const moved: string[] = [];
+    const failed: Array<{ path: string; error: string }> = [];
+    for (const raw of list) {
+      const fromAbs = resolveIn(base, raw, true);
+      const name = path.basename(fromAbs);
+      const toAbs = path.join(destDir, name);
+      try {
+        if (toAbs === fromAbs) { moved.push(path.relative(base, toAbs)); continue; }   // 제자리 — 성공으로 친다
+        // 폴더를 자기 안으로 넣으면 트리가 사라진다(rename 이 EINVAL 을 주기도, 조용히 먹기도 한다) — 먼저 막는다.
+        if (toAbs.startsWith(fromAbs + path.sep)) throw new HttpError(400, "폴더를 자기 안으로 옮길 수 없습니다");
+        try { await fsp.access(toAbs); throw new HttpError(409, "같은 이름이 이미 있습니다"); }
+        catch (e) { if (e instanceof HttpError) throw e; }
+        await fsp.rename(fromAbs, toAbs);
+        await grantSharedGroupWrite(toAbs, base, dstat.isDirectory() && (await fsp.stat(toAbs)).isDirectory() ? "dir" : "file");
+        moved.push(path.relative(base, toAbs));
+      } catch (e) {
+        failed.push({ path: String(raw), error: e instanceof HttpError ? e.message : String((e as Error)?.message || e) });
+      }
+    }
+    res.json({ ok: failed.length === 0, moved, failed });
+  }));
+
   // 삭제 — 파일/폴더(폴더는 내용까지 재귀). 루트 자신은 거부(requireFile). path 필수.
   app.delete(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), req);
+    const { project, base } = await projBase(Number(req.params.id), req);
     const abs = resolveIn(base, req.query.path, true);
     await fsp.rm(abs, { recursive: true, force: true });
+    // 자료 전파(#1881) — 그 경로(폴더면 하위 전부)의 자료를 superseded 로. 파생 지식은 그대로(지식은 사람 결정).
+    await supersedeLocalPath({ kind: "project", id: project.id }, path.relative(base, abs))
+      .catch((e) => console.warn(`[local-ingest] 삭제 전파 실패 ${abs}: ${(e as Error)?.message ?? e}`));
     res.json({ ok: true });
   }));
 
@@ -253,6 +343,20 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       const rules = String(((req.body ?? {}) as Record<string, unknown>).rules ?? "");
       await ensureAgentsMd(project.id, base, rules);
       res.json({ ok: true });
+    }));
+
+    // ── ①-d AGENTS.md 전문(#1856 B) — **실행 중** 세션에 프로젝트 규칙을 주입하는 훅이 읽는다. ──
+    //  왜 /file?path=AGENTS.md 로 안 쓰나: 그 라우트는 ensureAgentsMd 를 부르지 않아 **stale digest**
+    //   (태스크 인덱스·필요지식이 낡은 판)가 갈 수 있다. 여기선 먼저 최신화한 뒤 읽는다.
+    //  왜 매니페스트로 안 쓰나: 매니페스트는 폴더 전체를 순회한다 — 훅은 파일 하나만 필요하다.
+    //  규칙(rules)만 주는 /rules 와도 다르다 — 주입에는 digest(레포·태스크·필요지식)까지 있어야 쓸모가 있다.
+    app.get(`${prefix}/:id/agents`, auth, wrap(async (req, res) => {
+      const { project, base } = await projBase(Number(req.params.id), req);
+      await ensureAgentsMd(project.id, base).catch(() => { /* 비치명 — 기존 파일이라도 준다 */ });
+      res.setHeader("Cache-Control", "no-store");
+      let content = "";
+      try { content = await fsp.readFile(path.join(base, "AGENTS.md"), "utf8"); } catch { /* 아직 없음 → 빈 문자열 */ }
+      res.json({ project_id: project.id, name: project.name, content, bytes: Buffer.byteLength(content) });
     }));
   }
 
@@ -300,6 +404,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       restrictRead: !!b.restrictRead,
       // 세션에 프로젝트 id 를 박아 입장 게이트가 폴더가 아닌 멤버십(id)으로 판정하게 한다(폴더 드리프트 면역).
       projectId: project.id, projectSrc: prefix.includes("/v6/") ? "v6" : "org",
+      initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
+      appId: String(b.appId ?? "").trim() || undefined,
     };
     res.setHeader("Cache-Control", "no-store");
     // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 중앙 프로젝트 세션은
@@ -308,15 +414,26 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //  (멤버십 변경은 세션 재생성 전까지 미반영 — 중앙 세션은 동적. 알려진 한계.)
     const nodeId = String(b.node ?? "").trim();
     if (nodeId) {
+      assertAppSessionPlacement(input, nodeId);
       const requester = idOf(userOf(req));
       const memberIds = await deps.listProjectMembers(project.id);
       const invites = await validateInvites(memberIds, requester); // 실제 org 멤버만·요청자(owner) 제외·중복 제거
-      const session = await createProjectSessionOnNode(nodeId, requester, input, invites);
-      // 노드측은 DB 무접속이라 createSession 내부 recordSessionProject 가 no-op → 게이트웨이가 대신 세션↔프로젝트
-      //  매핑을 남긴다(멱등). 이게 있어야 활동 타임라인 귀속·경로무관 resume(latestProjectForSession)이 노드 세션도 인지.
-      await recordSessionProject(session.id, project.id).catch(() => { /* 비치명 */ });
+      const { session, deferredPrompt } = await createProjectSessionOnNode(nodeId, requester, input, invites);
+      // 노드는 DB 무접속이므로 게이트웨이가 실행 세션 current 를 확정한다(실패 시 세션 롤백 — 공용 헬퍼).
+      if (input.projectSrc !== "org") {
+        await bindNodeSessionProjectOrKill({
+          nodeId, sessionId: session.id, requester, harness: session.harness || input.harness, projectId: project.id,
+        });
+      }
       // #1791 — desired-state 정본(node_id) — 죽어도 '복원 가능(그 노드)'로 남는 근거. 노드엔 DB 가 없어 게이트웨이가 쓴다.
       await mirrorNodeSession({ ...session, invites }, nodeId, input, requester);
+      // 새 노드는 create 시 첫 지시를 보류했다. execution_session current와 desired-state가 모두 생긴 뒤에만 주입을 시작한다.
+      if (deferredPrompt) {
+        await injectDeferredFirstPrompt({
+          nodeId, sessionId: session.id, harness: session.harness || input.harness, text: deferredPrompt,
+          trustOk: autoTrustWorkspace({ projectId: project.id, subpath: input.subpath }),   // 프로젝트 canonical 폴더 = 우리가 만든 자리
+        });
+      }
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }

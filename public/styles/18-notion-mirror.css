@@ -2,14 +2,14 @@
 /* 인라인 확장 — 이미지·취소선·밑줄·하이라이트. 이미지는 본문 폭 안에서만(넘침 금지). */
 .md-img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; margin: 6px 0; display: block; }
 p.md-p > .md-img:only-child { margin: 10px 0; }
-.md-del { color: var(--muted, #6b7a90); }
+.md-del { color: var(--muted); }
 .md-u { text-decoration: underline; text-underline-offset: 2px; }
-.md-mark { background: #FFF3C4; color: inherit; border-radius: 3px; padding: 0 2px; }
+.md-mark { background: var(--md-mark-bg); color: inherit; border-radius: 3px; padding: 0 2px; }
 
 /* 체크박스(할 일) — 노션 to_do. 불릿 대신 체크박스만(이중 마커 방지). */
 .md-list li.md-task { list-style: none; margin-left: -18px; }
 .md-check { width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px; accent-color: var(--blue); pointer-events: none; }
-.md-list li.md-task-done { color: var(--muted, #6b7a90); }
+.md-list li.md-task-done { color: var(--muted); }
 .md-list li.md-task-done > .md-check + * { text-decoration: none; }
 
 /* 토글(details) — 노션 toggle/토글헤딩. 헤어라인 카드 + 삼각 마커. */
@@ -25,21 +25,21 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .md-callout-ic { flex: none; font-size: 16px; line-height: 1.5; }
 .md-callout-body { min-width: 0; flex: 1; }
 .md-callout-body > :last-child, .md-callout-body .md > :last-child { margin-bottom: 0; }
-.md-callout-gray, .md-callout-brown { background: #F7F8FA; }
-.md-callout-orange, .md-callout-yellow { background: #FFF9EC; border-color: #F3E8CE; }
-.md-callout-green { background: var(--bg-success); border-color: #DCF0E8; }
+.md-callout-gray, .md-callout-brown { background: var(--gray-bg); }
+.md-callout-orange, .md-callout-yellow { background: var(--warn-bg); border-color: var(--warn-line-2); }
+.md-callout-green { background: var(--bg-success); border-color: var(--ok-line); }
 .md-callout-blue, .md-callout-default { background: var(--bg-note); }
-.md-callout-purple, .md-callout-pink { background: #FAF6FD; border-color: #EDE4F6; }
-.md-callout-red { background: #FDF3F2; border-color: #F4DEDB; }
+.md-callout-purple, .md-callout-pink { background: var(--callout-purple-bg); border-color: var(--callout-purple-line); }
+.md-callout-red { background: var(--danger-bg-2); border-color: var(--danger-line); }
 /* 설명서 CTA 버튼(#879 :::button) — 문서 흐름 간격 + .docs-md a(블루)에 글자색을 뺏기지 않게 흰색 고정. */
 .md-cta { margin: 6px 0 14px; }
-.md-cta.btn-primary, .md-cta.btn-primary:hover { color: #fff; text-decoration: none; }
+.md-cta.btn-primary, .md-cta.btn-primary:hover { color: var(--on-fill); text-decoration: none; }
 /* 설명서 단계 흐름(#879 :::steps) — 설치 가이드 .step-list 와 같은 시각언어(파란 번호 배지·행 구분선). 번호는 CSS 카운터. */
 .md-steps { display: flex; flex-direction: column; counter-reset: mdstep; margin: 12px 0; }
 .md-step { display: flex; gap: 14px; align-items: flex-start; padding: 16px 0; border-top: 1px solid var(--line-row); counter-increment: mdstep; }
 .md-step:first-child { border-top: none; padding-top: 4px; }
 .md-step-num { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue); border-radius: 999px; }
+  font-size: 14px; font-weight: 800; color: var(--on-fill); background: var(--blue-fill); border-radius: 999px; }
 .md-step-num::before { content: counter(mdstep); }
 .md-step-body { min-width: 0; flex: 1; }
 .md-step-body > :first-child { margin-top: 0; }
@@ -68,10 +68,10 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 /* 동기화 블록 — 대시 보더(참조 콘텐츠임을 표시). */
 .md-synced { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
 .md-synced-body > :last-child { margin-bottom: 0; }
-.md-synced-missing { color: var(--muted, #6b7a90); font-size: 13px; margin-top: 6px; }
+.md-synced-missing { color: var(--muted); font-size: 13px; margin-top: 6px; }
 
 /* 블록 칩 — toc/unsupported/synced 라벨(채운 필 금지 관례 → 옅은 보더 칩). */
-.md-block-chip { display: inline-block; font-size: 11.5px; font-weight: 600; color: var(--muted, #6b7a90);
+.md-block-chip { display: inline-block; font-size: 11.5px; font-weight: 600; color: var(--muted);
   border: 1px solid var(--line); border-radius: 7px; padding: 2px 8px; margin: 4px 0; background: var(--bg); }
 .md-unsup { border-style: dashed; }
 
@@ -81,7 +81,7 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .md-eq code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--ink); }
 
 /* 상세 — 보관됨 배지 · 하위 페이지 행 · 브레드크럼 현재 페이지. */
-.kn-chip.kn-archived { color: var(--muted, #6b7a90); border: 1px solid var(--line); background: var(--bg); }
+.kn-chip.kn-archived { color: var(--muted); border: 1px solid var(--line); background: var(--bg); }
 .kn-linkrow.kn-row-archived { opacity: .55; }
 .kn-link-child { background: var(--bg-tint); color: var(--ink); }
 .crumb-cur { font-weight: 600; color: var(--ink); }
@@ -160,7 +160,7 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .pjv-kb-head { display: flex; align-items: center; gap: 7px; padding: 4px 6px 8px; font-weight: 700; font-size: 13px; }
 .pjv-kb-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* #762 후속 — 칸반 헤더 라벨을 상태 알약(흰 글자+상태색 배경)으로: 리스트 상태보드 pill·개요 칩과 톤 통일(기존 검은 라벨 해소). flex:1 대신 내용폭. */
-.pjv-kb-label.pjv-status-pill { flex: 0 1 auto; color: #fff; background: var(--sc, var(--muted-2)); font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; letter-spacing: -.1px; min-width: 0; }
+.pjv-kb-label.pjv-status-pill { flex: 0 1 auto; color: var(--on-fill); background: var(--sc); font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; letter-spacing: -.1px; min-width: 0; }
 .pjv-kb-count { font-size: 11.5px; color: var(--muted-2); font-weight: 600; }
 .pjv-kb-body { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
 .pjv-kb-card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; cursor: pointer; }
@@ -172,15 +172,15 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .pjv-kb-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--bg-tint); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-kb-meta { display: flex; align-items: center; gap: 8px; margin-top: 7px; min-height: 20px; }
 .pjv-kb-due { font-size: 11.5px; color: var(--muted-2); }
-.pjv-kb-due.overdue { color: var(--red, #e11d48); font-weight: 700; }
+.pjv-kb-due.overdue { color: var(--coral-text); font-weight: 700; }
 .pjv-kb-prio { font-size: 11px; font-weight: 700; }
-.pjv-kb-prio.urgent { color: #e11d48; } .pjv-kb-prio.high { color: #f59e0b; } .pjv-kb-prio.normal { color: var(--blue); } .pjv-kb-prio.low { color: var(--muted-2); }
+.pjv-kb-prio.urgent { color: var(--coral-text); } .pjv-kb-prio.high { color: var(--warn); } .pjv-kb-prio.normal { color: var(--blue); } .pjv-kb-prio.low { color: var(--muted-2); }
 .pjv-kb-faces { margin-left: auto; display: inline-flex; }
 .pjv-kb-faces .pjv-kb-face { width: 20px; height: 20px; border-radius: 50%; font-size: 9px; margin-left: -5px; border: 1.5px solid var(--bg); }
 .pjv-kb-empty { font-size: 12px; color: var(--muted-3); text-align: center; padding: 14px 0; }
 .pjv-thcol-src { font-size: 9px; font-weight: 800; letter-spacing: .04em; color: var(--muted-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; margin-left: 4px; }
 
 /* ── #541 스페이스(ClickUp Space 이관) 사이드바 구분 스타일 ── */
-.pjv-side-space-avatar { width: 18px; height: 18px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #fff; flex: none; }
+.pjv-side-space-avatar { width: 18px; height: 18px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: var(--on-fill); flex: none; }
 .pjv-side-navspace .pjv-side-navlabel { font-weight: 750; }
 .pjv-side-navspace { margin-top: 4px; }

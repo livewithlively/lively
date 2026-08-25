@@ -5,6 +5,7 @@
 import type { BackfillOpts, PostSyncCtx, PostSyncResult } from "../types.js";
 import type { NotionRunStats } from "./state.js";
 import { itemsPool } from "../../db/client.js";
+import { resolveNotionInstance } from "./client.js";
 import {
   applyNotionChildrenOrder, loadNotionLedger, materializeNotionLinks, sweepNotionArchived,
 } from "../../v6/connector-mirror.js";
@@ -24,8 +25,10 @@ function readRetryIds(cursor: Record<string, unknown> | null): string[] {
 export async function prepareNotionSync(cursor: Record<string, unknown> | null): Promise<Partial<BackfillOpts>> {
   const prevRetry = readRetryIds(cursor);
   try {
-    const ledger = await loadNotionLedger(itemsPool);
-    logger.info({ entries: ledger.byId.size, dataSources: ledger.dsToDb.size, retryCarried: prevRetry.length }, "notion 원장 로드(델타/가속 full 기준)");
+    // #1881 — 원장은 **이 수집기의 워크스페이스**만. 남의 인스턴스가 섞이면 델타가 '이미 안다'로 오판한다.
+    const instance = await resolveNotionInstance();
+    const ledger = await loadNotionLedger(itemsPool, instance);
+    logger.info({ instance, entries: ledger.byId.size, dataSources: ledger.dsToDb.size, retryCarried: prevRetry.length }, "notion 원장 로드(델타/가속 full 기준)");
     return { ...(ledger.byId.size ? { ledger } : {}), ...(prevRetry.length ? { retryIds: prevRetry } : {}) };
   } catch (err) {
     logger.warn({ err: (err as Error)?.message ?? String(err) }, "notion 원장 로드 실패 — 전체 트래버스로 진행(안전 폴백)");
@@ -45,8 +48,9 @@ export async function notionPostSync(ctx: PostSyncCtx, stats: NotionRunStats | n
   try {
     if (stats) {
       const m = await pool.query(
-        `SELECT count(*)::int AS n FROM knowledge WHERE external_system='notion' AND last_synced_at >= $1::timestamptz`,
-        [runStartIso]);
+        `SELECT count(*)::int AS n FROM knowledge
+          WHERE external_system='notion' AND external_instance=$2 AND last_synced_at >= $1::timestamptz`,
+        [runStartIso, stats.instance]);
       mirrorShortfall = Math.max(0, stats.emitted - Number((m.rows[0] as { n: number } | undefined)?.n ?? 0));
     }
     // 가속 full 관측 갱신 — 원장 일치로 스킵(미방출)한 항목의 last_synced_at 을 올린다(스윕 오탐 방지).
@@ -54,8 +58,9 @@ export async function notionPostSync(ctx: PostSyncCtx, stats: NotionRunStats | n
     if (stats?.observedIds?.length) {
       for (let i = 0; i < stats.observedIds.length; i += 5000) {
         await pool.query(
-          `UPDATE knowledge SET last_synced_at = now() WHERE external_system='notion' AND external_id = ANY($1::text[])`,
-          [stats.observedIds.slice(i, i + 5000)]);
+          `UPDATE knowledge SET last_synced_at = now()
+            WHERE external_system='notion' AND external_instance=$2 AND external_id = ANY($1::text[])`,
+          [stats.observedIds.slice(i, i + 5000), stats.instance]);
       }
       logger.info({ observed: stats.observedIds.length }, "가속 full — 미변경 관측 갱신(last_synced_at)");
     }
@@ -63,9 +68,9 @@ export async function notionPostSync(ctx: PostSyncCtx, stats: NotionRunStats | n
     const reordered = await applyNotionChildrenOrder(pool);
     let archived = 0;
     if (!incremental && stats && stats.failures === 0 && mirrorShortfall === 0) {
-      archived = await sweepNotionArchived(pool, runStartIso); // full + 완전 무실패에서만(오탐 아카이브 방지)
+      archived = await sweepNotionArchived(pool, runStartIso, stats.instance); // full + 완전 무실패 + **이 워크스페이스만**(오탐 아카이브 방지)
     }
-    logger.info({ system: "notion", links, reordered, archived, mirrorShortfall,
+    logger.info({ system: "notion", instance: stats?.instance ?? null, links, reordered, archived, mirrorShortfall,
       stats: { ...stats, observedIds: stats?.observedIds?.length, retryIds: stats?.retryIds?.length } }, "notion 후처리 완료(링크·순서·스윕)");
   } catch (err) {
     logger.error({ err: (err as Error)?.message ?? String(err) }, "notion 후처리 실패 — 커서 동결(다음 run 재수집)");

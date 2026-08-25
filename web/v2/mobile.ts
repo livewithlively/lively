@@ -5,9 +5,8 @@
 //   · 가운데가 화면 전부를 쓴다(1열).
 //   · 사이드바 = 왼쪽 **서랍**(오프캔버스). ☰ 로 열고, 배경 탭·Esc·**어디로든 이동**(hashchange)하면 닫힌다.
 //   · 우패널(타임라인) = 오른쪽 서랍. 상단 바 오른쪽 [타임라인] 으로 연다. no-aside 화면(앱 프레임)에선 버튼이 없다.
-//   · 상단 바 하나(.v2-mbar): [☰] [셸 탭 줄] [타임라인]. 탭 줄(web/v2/tabs.ts)은 데스크톱에선 가운데 열 맨 위에 살고,
-//     모바일에선 **이 바 가운데로 옮겨 온다**(같은 DOM — 상태 그대로). 제목을 따로 두지 않는다 — 활성 탭이 곧 제목이고,
-//     한 줄을 아낀다(폰에서 크롬 한 줄은 대화 세 줄이다).
+//   · 상단 바 하나(.v2-mbar): [☰] [현재 앱 이름] [타임라인]. 열린 앱 사이 이동·닫기는 왼쪽 서랍의 앱 목록이 맡고,
+//     바에는 현재 위치만 한 줄로 보여 준다(폰에서 크롬 한 줄은 대화 세 줄이다).
 //  데스크톱(>900px)에선 바·배경막이 display:none 이고 서랍 클래스도 무시된다(40-v2.css) — 데스크톱 그림은 그대로다.
 //  판정은 CSS 미디어쿼리 하나(MQ)와 같은 문턱을 JS 도 본다(matchMedia) — 두 곳이 어긋나면 서랍이 열렸는데 안 보인다.
 import { el, sv } from '../core.js';
@@ -17,10 +16,14 @@ export const MOBILE_MQ = '(max-width: 900px)';   // = 40-v2.css 모바일 블록
 export interface MobileChrome {
   bar: HTMLElement;
   scrim: HTMLElement;
-  /** 셸 탭 줄을 맡긴다 — 모바일이면 바 가운데로 옮기고, 데스크톱으로 돌아가면 restore() 로 제자리에 돌려놓는다. */
+  /** 이전 셸 호환용 — 전달된 탭 줄을 모바일 바로 옮기고 데스크톱에서 제자리로 돌린다. 새 셸은 호출하지 않는다. */
   adoptStrip(strip: HTMLElement, restore: () => void): void;
   /** 우측 서랍 버튼 — false 면 숨긴다(no-aside 화면). */
   setAside(on: boolean): void;
+  /** 우측 서랍을 연다 — 곁칸에 무언가를 실었을 때(미리보기). 데스크톱에선 상주 열이라 할 일이 없다. */
+  openAside(): void;
+  /** 사이드바 서랍 여닫이(☰) — 데스크톱 앱에선 이 단추가 창 맨 윗줄 맨 왼쪽으로 간다(#1954 3차). */
+  menuBtn: HTMLElement;
   closeAll(): void;
   isMobile(): boolean;
 }
@@ -34,6 +37,8 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   const icon = (paths: string[]): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic', 'aria-hidden': 'true' }, ...paths.map((d) => sv('path', { d })));
   const menuBtn = el('button', { class: 'v2-mbar-btn v2-mbar-menu', type: 'button', 'aria-label': '탐색 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-side' },
     icon(['M4 7h16M4 12h16M4 17h16'])) as HTMLButtonElement;
+  //  제목은 두지 않는다(#1954 3차 상민님) — 창 맨 윗줄은 폭이 넓든 좁든 **같은 것**이어야 한다.
+  //  지금 무엇을 보고 있는지는 좌측 목록의 활성 행이 이미 말하고, 화면 제목은 본문 문패가 든다.
   const slot = el('div', { class: 'v2-mbar-slot' });
   const asideBtn = el('button', { class: 'v2-mbar-btn v2-mbar-aside', type: 'button', 'aria-label': '타임라인 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-aside', title: '이 화면의 타임라인' },
     icon(['M12 4v16', 'M12 8h6', 'M12 14h6', 'M6 6h2', 'M6 12h2', 'M6 18h2'])) as HTMLButtonElement;
@@ -105,5 +110,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       asideBtn.hidden = !on;
       if (!on && open === 'aside') closeAll();
     },
+    openAside(): void { if (isMobile() && !asideBtn.hidden && open !== 'aside') openOne('aside'); },
+    menuBtn,
   };
 }

@@ -1,0 +1,291 @@
+// 라이블리 앱 매니페스트 — 계약(#1780). "앱 = 매니페스트로 묶인 구성요소 번들"의 정본 스키마.
+//  발주(윤상민 2026-08-19): OS/앱 계층 분리 — 앱은 하네스 설정(스킬·훅·서브에이전트) + MCP/도구 + UI +
+//  스케줄 잡 + 데이터를 선언하는 응용프로그램. 형식은 발명하지 않고 **Claude Code 플러그인 상위호환**으로 둔다
+//  (plugin.json 은 그 파일이 담당, 이 파일은 라이블리 확장: permissions·ui·jobs·data·sections).
+//
+// 설계 근거: 지식 lively-os-app-layer-analysis-2026-08 · 설계문서 project/1780/design-v1.md (R1·R2 적대검증 반영).
+// 핵심 불변식:
+//  - permissions 는 **상한 선언**이다(설치 시 사람이 보고 동의, 실행 시 이 범위로 축소). admin·runtime scope 선언은 거부.
+//  - id 는 워크스페이스 유일·32자 상한(자산 id 합성 `app-<hash10>-<slug>` 이 64자 STRICT_SLUG 를 넘지 않게 — design R1-F4).
+//  - 검증은 **순수**(DB·FS 무접근). 설치 파이프라인(별도)이 이 파서를 먼저 태운 뒤 전개한다.
+import { z } from "zod";
+import { createHash } from "node:crypto";
+import { HttpError } from "../http-error.js";
+import { SCOPES_ALLOWED } from "../auth/scopes.js";
+import { STRICT_SLUG, assertAssetId } from "../org/asset-id.js";
+
+// ── 상수 ──────────────────────────────────────────────────────────────────────
+
+// 앱 id: STRICT_SLUG 와 같은 charset 이되 **32자 상한**(자산 id 합성 여유).
+//  appAssetId = `app-<sha256(id).slice(0,10)>-<자산슬러그>` → 4+3+10+1+최대? ; 앱 id 자체는 해시로 접히므로
+//  실제 상한 압박은 자산 슬러그 쪽이지만, 매니페스트 id 를 짧게 강제해 두면 사람이 읽는 식별자가 안정적이다.
+export const APP_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+
+// 앱이 **선언조차 할 수 없는** scope — 관리면·런타임 노브는 앱의 몫이 아니다(design D3 불변식).
+export const APP_FORBIDDEN_SCOPES: ReadonlySet<string> = new Set(["admin", "runtime"]);
+
+// UI 표시 모드(MCP Apps 차용 — design D5-2). 발명하지 않는다.
+export const APP_DISPLAY_MODES = ["inline", "fullscreen", "pip"] as const;
+
+// 위젯이 붙을 수 있는 셸 표면(design D5-1).
+export const APP_WIDGET_SURFACES = ["home", "aside", "launchpad"] as const;
+
+// 잡 실행 종류(design D4 — v1 은 headless 만 실효, inject/managed 는 스펙 예약).
+export const APP_JOB_KINDS = ["headless", "inject"] as const;
+
+// 앱 **실행 인스턴스**가 프로젝트 맥락을 갖는 방식(#1780 v2.1).
+//  package 설치와 instance 실행은 다른 축이다: 같은 package 에서 프로젝트가 다른 인스턴스가 여러 개 열릴 수 있다.
+export const APP_PROJECT_AFFINITIES = ["global", "optional", "required"] as const;
+export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
+
+// OS가 직접 그리는 builtin 전용 renderer. 매니페스트에는 기록되지만, 소비자는 source.kind='builtin' 일 때만 신뢰한다.
+//  외부 앱이 같은 문자열을 선언해도 generic opaque iframe 경로를 벗어나지 못한다.
+export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox"] as const;
+/** #1891 — 알림 권한이 함의하는 능력 이름. 이 이름이 바뀌면 파생도 같이 바뀌어야 한다. */
+export const NOTIFY_TOOL = "app_notify";
+
+// ── zod 스키마 ────────────────────────────────────────────────────────────────
+
+const idSchema = z.string().regex(APP_ID_RE, "id 는 소문자 영숫자/- 2~32자(소문자·숫자로 시작)여야 합니다");
+
+// semver(major.minor.patch[-prerelease][+build]) — 느슨하지만 3-파트는 강제.
+const semverSchema = z.string().regex(
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/,
+  "version 은 semver(예: 1.2.0)여야 합니다",
+);
+
+// 자산 슬러그(스킬/에이전트/커맨드/위젯/페이지 key) — STRICT_SLUG 그대로.
+const slugSchema = z.string().regex(STRICT_SLUG, "key/name 은 소문자 영숫자/_/- 1~64자여야 합니다");
+
+// 호스트: 외부 백엔드·프록시 도구가 나갈 수 있는 호스트(url_allowlist 에 등록될 값). 스킴 없음.
+//  대소문자 관대 입력 + **소문자 정규화**(url_allowlist·SSRF 는 소문자 비교라 저장은 소문자로 굳힌다).
+const hostSchema = z.string().regex(/^[A-Za-z0-9.-]+(?::\d+)?$/, "host 는 호스트[:포트] 형식(스킴 없이)이어야 합니다")
+  .transform((s) => s.toLowerCase());
+
+// 도구 이름 또는 글롭(예: "knowledge_search", "ext__slack__*").
+const toolGlobSchema = z.string().min(1).max(128).regex(/^[a-z0-9_*]+$/i, "tool 이름/글롭 형식이 아닙니다");
+
+const permissionsSchema = z.object({
+  scopes: z.array(z.string()).default([]),
+  tools: z.array(toolGlobSchema).default([]),        // lively 능력(빌트인) allowlist. 빈 배열 = lively 툴 0
+  ext_tools: z.array(toolGlobSchema).default([]),    // 프록시(ext__*)·HTTP 도구 allowlist(글롭)
+  hosts: z.array(hostSchema).default([]),            // 자체 백엔드 — 설치 시 url_allowlist 병합
+  db_sources: z.array(z.string().min(1).max(128)).default([]), // 읽을 소스 뷰(src.*)
+  // #1891 — 이 앱이 사용자에게 알림을 보낼 수 있나. 기본 false(fail-closed): 선언하지 않은 앱은 못 쏜다.
+  //  선언만으로도 부족하고 그 멤버의 활성 grant 가 함께 있어야 한다(src/apps/notify-policy.ts).
+  notifications: z.boolean().default(false),
+}).strict();
+
+const uiPageSchema = z.object({
+  key: slugSchema,
+  title: z.string().min(1).max(200),
+  entry: z.string().min(1).max(512),                 // 패키지 내 상대경로(예: ui/index.html) — 검증 단계가 탈출 거부
+  display: z.array(z.enum(APP_DISPLAY_MODES)).default(["inline"]),
+}).strict();
+
+const uiWidgetSchema = z.object({
+  key: slugSchema,
+  title: z.string().min(1).max(200),
+  entry: z.string().min(1).max(512),
+  surfaces: z.array(z.enum(APP_WIDGET_SURFACES)).default(["launchpad"]),
+}).strict();
+
+// ── CSP 선언 (MCP Apps `csp{connectDomains,resourceDomains,frameDomains}` 채택 — 발명하지 않는다) ──
+//  앱 UI 의 기본값은 **네트워크 0 · 프레임 0** 이다(app-ui.ts 가 srcdoc 에 CSP meta 를 박는다).
+//  그보다 넓은 것이 필요하면 매니페스트에 적어 **설치(관리자)·동의(사용자) 때 사람이 보게** 한다.
+//   · frame_domains   — 이 앱 화면 안에 실을 사이트(브라우저형 앱). `*` 허용 = https 전체.
+//     남의 페이지는 **불투명 오리진**으로 실려 우리 오리진·토큰엔 닿지 못하고, 앱도 그 안을 읽지 못한다(교차출처).
+//   · connect_domains — 앱 UI 가 직접 fetch 할 곳. ⚠ `*` **금지** — 그 하나가 곧 데이터 유출 통로다(명시 호스트만).
+//   · resource_domains — 이미지·폰트·미디어 출처.
+const cspHostSchema = z.string().min(1).max(253)
+  .regex(/^(\*|\*\.[a-z0-9-]+(\.[a-z0-9-]+)+|[a-z0-9-]+(\.[a-z0-9-]+)+|localhost)$/i,
+    "csp 도메인은 호스트·*.호스트·* 형식이어야 합니다");
+const cspSchema = z.object({
+  connect_domains: z.array(cspHostSchema).default([]),
+  resource_domains: z.array(cspHostSchema).default([]),
+  frame_domains: z.array(cspHostSchema).default([]),
+}).strict().default({});
+
+const uiSchema = z.object({
+  pages: z.array(uiPageSchema).default([]),
+  widgets: z.array(uiWidgetSchema).default([]),
+}).strict();
+
+const instancesSchema = z.object({
+  project: z.enum(APP_PROJECT_AFFINITIES).default("optional"),
+  multiplicity: z.enum(APP_INSTANCE_MULTIPLICITIES).default("multiple"),
+}).strict().default({});
+
+const systemSchema = z.object({
+  renderer: z.enum(APP_SYSTEM_RENDERERS),
+  route: z.string().max(512).optional(),
+  home: z.string().url().max(2000).optional(),
+}).strict().optional();
+
+// 서버측 앱 코드는 worker 한 종류만(v2.1). external은 후속으로 미뤘으므로 어휘에도 넣지 않는다.
+// runtime 부재는 "실행 코드 없음"이 아니라 별도 서버 worker 없음(UI/system renderer만 실행 가능)을 뜻한다.
+const runtimeEntrySchema = z.string().min(1).max(512)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*\.(?:m?js)$/, "entry 는 패키지 안의 .js/.mjs 상대경로여야 합니다")
+  .refine((entry) => !entry.split("/").includes(".."), "entry 에 '..' 경로를 쓸 수 없습니다");
+const runtimeSchema = z.object({
+  kind: z.literal("worker").default("worker"),
+  entry: runtimeEntrySchema,
+  placement: z.enum(["any", "central", "remote"]).default("any"),
+  idle_timeout_sec: z.number().int().min(30).max(3600).default(300),
+  memory_mb: z.number().int().min(64).max(512).default(256),
+}).strict().optional();
+
+const jobSchema = z.object({
+  key: slugSchema,
+  schedule: z.string().min(1).max(120),              // cron 식 — 스케줄러가 재검증
+  run: z.object({
+    kind: z.enum(APP_JOB_KINDS),
+    prompt_asset: z.string().min(1).max(512).optional(), // 패키지 내 프롬프트 파일 상대경로
+    prompt: z.string().max(20000).optional(),
+  }).strict(),
+}).strict();
+
+const dataColumnSchema = z.object({
+  name: z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "컬럼명은 소문자 영숫자/_(소문자·_로 시작)"),
+  type: z.string().min(1).max(64),                   // 선언형 — DDL 생성기가 화이트리스트 검증(별도)
+}).strict();
+
+const dataTableSchema = z.object({
+  name: z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "테이블명은 소문자 영숫자/_(소문자·_로 시작)"),
+  columns: z.array(dataColumnSchema).min(1),
+}).strict();
+
+const sectionSchema = z.object({
+  key: slugSchema,
+  file: z.string().min(1).max(512),                  // 패키지 내 상대경로(예: persona.md)
+}).strict();
+
+// 이 코어가 **설치**할 줄 아는 매니페스트 스키마 버전. 파싱은 어떤 버전이든 받는다(아래 주석) — 설치만 이 값으로 게이트.
+export const SUPPORTED_MANIFEST_SCHEMA = 1;
+
+// 매니페스트 전체.
+//  ★ 최상위는 **passthrough**(미지 키 통과), 중첩은 strict — #1780 v2 §7-1 전방호환(설계 R2-C4).
+//   v2 코어가 `runtime`·`triggers`·`config` 같은 최상위 키를 더한 매니페스트를 설치한 뒤 이 코어로 **롤백**하면
+//   저장된 매니페스트가 grant 시점에 다시 파싱된다(capabilities/apps.ts) — strict 면 거기서 400 → 동의 불가·
+//   빌트인 앱 failed. 최상위 미지 키는 "이 코어가 모르는 선언" 일 뿐 위험이 아니므로 통과시키고, 중첩(permissions 등)
+//   은 오타가 곧 권한 오해라 종전대로 거부한다. 미지 키는 값 그대로 보존된다(재저장 시 유실 없음).
+export const appManifestSchema = z.object({
+  // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다.
+  //  앱 개발자가 "$schema": "<게이트웨이>/ui/lively-app.schema.json" 를 적으면 VS Code 등이 그 자리에서 검증해 준다.
+  $schema: z.string().max(500).optional(),
+  // 매니페스트 스키마 버전 — 없으면 1. 파싱은 어떤 정수든 받고(롤백 재파싱 안전), 설치는 assertInstallableManifest 가
+  //  SUPPORTED_MANIFEST_SCHEMA 초과를 거부한다("이 코어가 모르는 버전" 을 절반만 전개하지 않게).
+  schema_version: z.number().int().min(1).default(1),
+  id: idSchema,
+  title: z.string().min(1).max(200),
+  version: semverSchema,
+  publisher: z.object({
+    name: z.string().min(1).max(200),
+    url: z.string().url().max(500).optional(),
+  }).strict().optional(),
+  min_core: semverSchema.optional(),                 // 최소 코어(build-info.version) — 설치가 대조
+  harness: z.object({
+    plugin: z.string().min(1).max(512).default("./"), // Claude 플러그인 루트(상대경로)
+  }).strict().optional(),
+  permissions: permissionsSchema.default({}),
+  tools: z.object({
+    mcp_servers: z.array(z.record(z.unknown())).default([]), // org_mcp_server 프리셋 형식(설치가 재검증)
+    http_tools: z.array(z.record(z.unknown())).default([]),  // org_tool 프리셋 형식(설치가 재검증)
+  }).strict().default({}),
+  ui: uiSchema.default({}),
+  // 실행 인스턴스 정책. 기존 v1 앱은 optional+multiple 로 해석해 무회귀.
+  instances: instancesSchema,
+  // builtin/system app 만 소비하는 셸 renderer 선언. 설치 파서는 보존하고 실행 경계가 source.kind 로 제한한다.
+  system: systemSchema,
+  runtime: runtimeSchema,
+  csp: cspSchema,
+  jobs: z.array(jobSchema).default([]),
+  data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
+  sections: z.array(sectionSchema).default([]),
+}).passthrough();
+
+export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
+
+/**
+ * 설치 게이트 — 파싱은 통과했지만 이 코어가 **설치**하기엔 너무 새로운 매니페스트를 거부한다(400).
+ *  재파싱(grant·표시)은 이걸 부르지 않는다: 이미 설치된 것은 버전과 무관하게 계속 읽혀야 한다(롤백 안전).
+ */
+export function assertInstallableManifest(m: LivelyAppManifest): void {
+  if (m.schema_version > SUPPORTED_MANIFEST_SCHEMA) {
+    throw new HttpError(400,
+      `매니페스트 오류 [schema_version]: ${m.schema_version} 은 이 코어가 지원하지 않는 버전입니다(지원: ≤${SUPPORTED_MANIFEST_SCHEMA}) — 코어를 업데이트하세요`);
+  }
+}
+
+// ── 파서 ─────────────────────────────────────────────────────────────────────
+
+/**
+ * 원시 매니페스트(파싱된 JSON)를 검증해 정규 매니페스트를 돌려준다. 순수(DB·FS 무접근).
+ *  실패는 HttpError(400) — 설치 파이프라인이 그대로 사용자에게 전달한다.
+ *  scope 상한(admin·runtime 거부, 알 수 없는 scope 거부)은 zod 밖에서 명시적으로(더 나은 메시지).
+ */
+export function parseAppManifest(raw: unknown): LivelyAppManifest {
+  const parsed = appManifestSchema.safeParse(raw);
+  if (!parsed.success) {
+    const first = parsed.error.issues[0];
+    const path = first?.path.join(".") || "(root)";
+    throw new HttpError(400, `매니페스트 오류 [${path}]: ${first?.message ?? "형식이 올바르지 않습니다"}`);
+  }
+  const m = parsed.data;
+
+  // #1891 — `notifications: true` 는 `app_notify` 도구를 **함의한다**.
+  //  앱 토큰의 도구 allowlist(permissions.tools)가 비면 lively 툴이 0개라, 알림 권한만 선언한 앱은
+  //  정작 app_notify 를 못 부른다(dev 실측: 403 "앱 권한 밖"). 개발자가 같은 뜻을 두 군데 적게 하는 대신
+  //  여기서 파생한다 — 사람에게 보이는 권한은 '알림'이고, 도구 이름은 배관이다.
+  if (m.permissions.notifications && !m.permissions.tools.includes(NOTIFY_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, NOTIFY_TOOL];
+  }
+
+  // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.
+  for (const s of m.permissions.scopes) {
+    if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `매니페스트 오류 [permissions.scopes]: 알 수 없는 scope '${s}'`);
+    if (APP_FORBIDDEN_SCOPES.has(s)) throw new HttpError(400, `매니페스트 오류 [permissions.scopes]: '${s}' 는 앱이 요청할 수 없는 scope 입니다(관리·런타임)`);
+  }
+
+  // connect_domains 의 `*` 는 거부한다 — 프레임(남의 페이지를 보여줌)과 달리 connect 는 **우리 안의 데이터를
+  //  임의 서버로 보내는 통로**다. 넓게 열고 싶다는 선언을 그대로 받아 주면 동의 화면이 의미를 잃는다.
+  if (m.csp.connect_domains.includes("*")) {
+    throw new HttpError(400, "매니페스트 오류 [csp.connect_domains]: '*' 는 허용되지 않습니다 — 연결할 호스트를 명시하세요");
+  }
+
+  // UI/잡/자산 key 중복 거부(같은 표면 안에서).
+  assertUniqueKeys("ui.pages", m.ui.pages.map((p) => p.key));
+  assertUniqueKeys("ui.widgets", m.ui.widgets.map((w) => w.key));
+  assertUniqueKeys("jobs", m.jobs.map((j) => j.key));
+  assertUniqueKeys("data.tables", m.data.tables.map((t) => t.name));
+  assertUniqueKeys("sections", m.sections.map((s) => s.key));
+
+  // 잡 run 은 prompt_asset 또는 prompt 중 하나가 있어야 한다.
+  for (const j of m.jobs) {
+    if (!j.run.prompt_asset && !j.run.prompt) {
+      throw new HttpError(400, `매니페스트 오류 [jobs.${j.key}.run]: prompt_asset 또는 prompt 가 필요합니다`);
+    }
+  }
+  return m;
+}
+
+function assertUniqueKeys(where: string, keys: string[]): void {
+  const seen = new Set<string>();
+  for (const k of keys) {
+    if (seen.has(k)) throw new HttpError(400, `매니페스트 오류 [${where}]: key '${k}' 가 중복입니다`);
+    seen.add(k);
+  }
+}
+
+// ── 자산 id 합성 (design D1/R1-F4) ────────────────────────────────────────────
+
+/**
+ * 앱 자산의 물질화 id — `app-<sha256(appId).slice(0,10)>-<slug>`.
+ *  draftAssetId(#990) 와 동형: 하이픈 구분자 모호성 제거(앱id는 고정 10hex로 접힘) + STRICT_SLUG(≤64·ASCII) 보장.
+ *  원 슬러그(앱 번들 내 이름)는 org_app_component.orig_name 이 보존 → 세션 물질화 시 원명으로 복원(앱 내부 상호참조 유지).
+ */
+export function appAssetId(appId: string, slug: string): string {
+  if (!APP_ID_RE.test(appId)) throw new HttpError(400, `앱 id 형식 오류: '${appId}'`);
+  const h = createHash("sha256").update(appId).digest("hex").slice(0, 10);
+  return assertAssetId(`app-${h}-${slug}`); // 총길이(≤64)·charset 최종 검증(방어적)
+}

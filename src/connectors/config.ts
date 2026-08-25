@@ -13,6 +13,8 @@
 //     커넥터는 서브프로세스(run-sync/run-push)로 짧게 살다 죽으므로 stale 우려 없음.
 import { itemsPool } from "../db/client.js";
 import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js";
+import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
+import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
 export interface ConnectorField {
@@ -53,7 +55,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "slack",
     label: "Slack",
     guide: {
-      intro: "토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Slack] 에서 계정을 연결한 뒤 '팀 자료로 모으기'를 켜면 이 수집기가 자동으로 만들어집니다(토큰 칸 비움, '토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우입니다. 토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
       steps: [
         "api.slack.com/apps ▸ 앱 선택(없으면 [Create New App] ▸ From scratch — 워크스페이스 선택)",
         "[공개채널 전체를 훑을 때] OAuth & Permissions ▸ 'User Token Scopes': search:read, channels:read, users:read, users:read.email → [Install to Workspace] → 'User OAuth Token'(xoxp-…) 을 아래 User Token 에 저장. 채널 초대 불필요.",
@@ -68,6 +70,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       //  "둘 중 하나는 있어야 한다"를 검사하고 어느 쪽을 넣어야 하는지 알려준다(빈 값 = 조용한 무수집 방지).
       { key: "user_token", env: "SLACK_USER_TOKEN", secret: true, label: "User Token", hint: "xoxp-... — 검색 스윕(전 공개채널). 비공개 채널을 원하면 아래 Bot Token 을 쓰세요" },
       { key: "bot_token", env: "SLACK_BOT_TOKEN", secret: true, label: "Bot Token", hint: "xoxb-... — 봇이 초대된 채널만 수집(**비공개 채널 포함**). User Token 을 함께 넣으면 그쪽이 우선합니다" },
+      // #1881 — 붙여넣기 대신 금고에서: [Slack 연결]로 저장된 토큰을 그대로 쓴다. 값이 있으면 위 두 칸·env 를 덮어쓴다.
+      { key: "token_source", env: "SLACK_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Slack 연결]로 저장한 계정(공개채널 검색 수집) · bot = Lively 봇(초대된 채널·비공개 포함, 워크스페이스가 둘이면 bot:<team_id>) · 비우면 위 토큰 칸을 씁니다" },
       { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "봇 모드 전용 — 채널명·id 를 공백·쉼표로 구분(비우면 봇이 초대된 전체). 예: hai솔루션_front hai솔루션_closing" },
       { key: "noise_exclude", env: "SLACK_NOISE_EXCLUDE", secret: false, label: "제외 채널", hint: "수집에서 제외할 채널명을 공백·쉼표로 구분해 입력 (예: alerts monitoring) — 모니터링·알람 등 메시지가 많은 봇 채널에 사용합니다." },
       { key: "backfill_since", env: "SLACK_BACKFILL_SINCE", secret: false, label: "최초 수집 시작일", hint: "이 날짜 이후의 자료만 수집합니다 (YYYY-MM-DD, 비우면 활동이 있는 과거 전체를 자동 수집)" },
@@ -93,7 +97,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "notion",
     label: "Notion",
     guide: {
-      intro: "노션은 '내부(Internal) 통합'의 시크릿 토큰으로 읽습니다. 통합 생성은 워크스페이스 오너만 가능합니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Notion] 에서 '팀 자료로 모으기'를 켜면 노션이 여는 화면에서 모을 페이지만 고르면 됩니다 — 이 수집기가 자동으로 만들어지고 토큰 칸은 비워 둡니다('토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우(셀프호스팅 등)입니다. 노션은 '내부(Internal) 통합'의 시크릿 토큰으로 읽습니다. 통합 생성은 워크스페이스 오너만 가능합니다.",
       steps: [
         "notion.so/profile/integrations → [+ 새 통합] — 이름 자유, 연결된 워크스페이스 = 싱크할 워크스페이스, 종류 = 내부(Internal). (Internal 이 안 보이면 그 워크스페이스 오너가 아닌 것 — 오너에게 생성을 요청하세요)",
         "통합 ▸ 기능(Capabilities): '콘텐츠 읽기' 필수 + '댓글 읽기'·'사용자 정보(이메일 포함) 읽기' 권장",
@@ -106,6 +110,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     fields: [
       { key: "token", env: "NOTION_TOKEN", secret: true, required: true, label: "Integration Token", hint: "secret_..." },
       { key: "instance", env: "NOTION_INSTANCE", secret: false, label: "Instance", hint: "워크스페이스 식별자 (기본 default)" },
+      // #1881 — 붙여넣기 대신 금고에서: [팀 자료로 모으기]로 저장된 Lively 연결을 그대로 쓴다. 값이 있으면 위 토큰 칸·env 를 덮어쓴다.
+      { key: "token_source", env: "NOTION_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = [팀 자료로 모으기]로 저장된 Lively 연결(워크스페이스가 둘이면 org:<workspace_id>) · 비우면 위 Integration Token 칸을 씁니다" },
       // #551 무손실 싱크 옵션
       { key: "root_pages", env: "NOTION_ROOT_PAGES", secret: false, label: "루트 페이지", picker: "notion_pages", hint: "페이지 URL·슬러그·id 아무 형태나 쉼표구분 — 지정 시 그 서브트리만 싱크(비우면 통합에 공유된 전체). 공유 직후엔 search 인덱싱 지연이 있어 루트 지정이 즉시 반영에 유리" },
       { key: "exclude_pages", env: "NOTION_EXCLUDE_PAGES", secret: false, label: "제외 페이지", picker: "notion_pages", hint: "여기 지정한 페이지·DB 와 그 하위 전체를 싱크에서 제외(쉼표구분). 루트 안의 특정 서브트리를 빼거나 전체 공유 중 일부만 뺄 때. 이미 싱크된 항목은 다음 전체 싱크에서 자동 보관 처리(제외 해제 시 복원)" },
@@ -341,6 +347,23 @@ async function loadConnectorConfig(
     }
     if (v == null || v === "") v = process.env[f.env]; // env 폴백
     out[f.key] = v != null && v !== "" ? v : undefined;
+  }
+  // ── 슬랙 토큰 출처(#1881) — token_source 가 있으면 붙여넣기·env 값을 **덮어쓴다**(출처를 명시했으면 그 출처만). ──
+  if (system === "slack" && out.token_source) {
+    const r = await resolveSlackTokenSource(out.token_source, vaultReader);
+    if (r) {
+      if (r.warning) console.warn(`slack token_source: ${r.warning}`);
+      out.user_token = r.user_token;
+      out.bot_token = r.bot_token;
+    }
+  }
+  // ── 노션 토큰 출처(#1881 N3) — 같은 규약: 출처를 명시했으면 그 출처만(붙여넣기·env 덮어씀). ──
+  if (system === "notion" && out.token_source) {
+    const r = await resolveNotionTokenSource(out.token_source, notionVaultReader);
+    if (r) {
+      if (r.warning) console.warn(`notion token_source: ${r.warning}`);
+      out.token = r.token;
+    }
   }
   return out;
 }

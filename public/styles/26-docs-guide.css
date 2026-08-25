@@ -157,7 +157,7 @@ body[data-route="onboarding"] main { max-width: none; }
 a.docs-linkcard { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
   background: var(--bg); text-decoration: none; color: inherit;
   transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease; }
-a.docs-linkcard:hover { border-color: var(--line-net-2); box-shadow: 0 6px 20px rgba(21,35,59,.07); transform: translateY(-2px); text-decoration: none; }
+a.docs-linkcard:hover { border-color: var(--line-net-2); box-shadow: 0 6px 20px rgba(var(--shadow-ink), .07); transform: translateY(-2px); text-decoration: none; }
 a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .docs-linkcard-t { display: flex; align-items: center; justify-content: space-between; gap: 8px;
   font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
@@ -190,9 +190,9 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
    #780 뷰티파이: 납작한 틴트 박스 → 아이콘 타일 + 부드러운 그림자 카드(호버 시 살짝 뜸). 아래 콜아웃(.md-quote)과 뚜렷이 구분. */
 .md-prompt { display: flex; align-items: flex-start; gap: 12px; position: relative;
   background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin: 10px 0;
-  box-shadow: 0 1px 2px rgba(21,35,59,.04); transition: border-color .14s, box-shadow .14s, transform .14s; }
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04); transition: border-color .14s, box-shadow .14s, transform .14s; }
 .md-prompt:hover { border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
-  box-shadow: 0 6px 18px rgba(21,35,59,.08); transform: translateY(-1px); }
+  box-shadow: 0 6px 18px rgba(var(--shadow-ink), .08); transform: translateY(-1px); }
 .md-prompt::before { content: '💬'; flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; border-radius: 9px; margin-top: 1px; font-size: 15px; line-height: 1;
   background: color-mix(in srgb, var(--blue) 9%, var(--bg-punch)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 14%, transparent); }
@@ -219,12 +219,44 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .md-tab-btn { appearance: none; border: 1px solid transparent; background: none; padding: 7px 13px;
   font-size: 13.5px; font-weight: 700; color: var(--ink-sub); cursor: pointer; border-radius: 9px;
   transition: background .12s ease, color .12s ease, border-color .12s ease; }
-.md-tab-btn:hover { color: var(--ink); background: rgba(255,255,255,.75); }
+.md-tab-btn:hover { color: var(--ink); background: var(--overlay-pill-2); }
 .md-tab-btn.active { background: var(--bg); color: var(--blue); border-color: var(--line-net-2);
-  box-shadow: 0 1px 4px rgba(21,35,59,.06); }
+  box-shadow: 0 1px 4px rgba(var(--shadow-ink), .06); }
 .md-tab-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .md-tabs-body { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; padding: 16px 18px 8px; }
 .md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .docs-side a.docs-item, .md-tab-btn { transition: none; } }
 /* (:::tabs hue — 구 5색 스크린샷 구역과 연동하던 변형은 #1107 shot v2 전환으로 폐지) */
 
+
+/* ══ #1841 — 사용 가이드 재설정: 머리 3층(프로젝트 동형) + 본문 한 컬럼 ══
+ *  좌측 .docs-side 는 이 화면에서 더 쓰지 않는다(관리탭·증류기가 같은 CSS 를 쓰므로 규칙은 남긴다).
+ *  본문은 읽는 폭(≤ 960px)으로 가운데 — 표·카드가 넓은 화면에서 끝없이 늘어나 읽기 나빠지는 것을 막는다. */
+.lg-wrap { max-width: none; }
+.lg-board { margin-bottom: 18px; }
+.lg-crumb-leaf { display: inline-flex; align-items: center; gap: 7px; }
+.lg-crumb-ic { width: 17px; height: 17px; color: var(--ink-sub); flex: none; }
+.lg-crumb-sub { font-size: 12.5px; color: var(--muted); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lg-vtabs { gap: 0; }
+.lg-vtab { text-decoration: none; padding: 9px 12px 10px; }
+.lg-vtab-label { white-space: nowrap; }
+.lg-board .pjv-board-toolbar { min-height: 42px; padding-top: 4px; }
+.lg-pill { text-decoration: none; }
+.lg-pill:not(.active) { color: var(--ink-sub); }
+.lg-tb-open .pjv-tb-ic { width: 16px; height: 16px; }
+.lg-body { padding: 14px 0 36px; }
+.lg-article { max-width: 960px; margin: 0 auto; width: 100%; }
+.lg-article .docs-eyebrow { display: none; }              /* 묶음 이름은 탭이 이미 말한다 */
+.lg-article .docs-title { margin: 6px 0 10px; font-size: 26px; letter-spacing: -.4px; }
+.lg-article .docs-lead { max-width: 760px; }
+.lg-article .docs-card { padding: 22px 24px; }
+.lg-article .docs-card .card-head h2 { font-size: 17px; letter-spacing: -.2px; }
+.lg-article .md-shot { margin: 10px 0 4px; }
+/* 문서 끝 '다음 문서' 이동 카드 */
+.lg-next { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.lg-next a { flex: 1 1 260px; display: flex; flex-direction: column; gap: 3px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: inherit; text-decoration: none; }
+.lg-next a:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.lg-next-k { font-size: 11.5px; color: var(--muted-head); }
+.lg-next-t { font-size: 14px; font-weight: 700; color: var(--ink); }
+.lg-next-d { font-size: 12.5px; color: var(--ink-sub); }
+@media (max-width: 960px) { .lg-crumb-sub { display: none; } .lg-article { max-width: none; } }

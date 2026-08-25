@@ -1,27 +1,51 @@
 // v2/views.ts — 새 셸의 중앙 화면 셋(#1719): 홈(미선택) · 프로젝트 · 세션. 데이터는 main.ts 가 모아 넘긴다(V2Data).
 //  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
-//  프로젝트는 개요+세션, 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 에 있다.
+//  프로젝트는 v2/panes.ts(칸 셸 — main.ts mountProjectShell 이 그걸 마운트한다), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 와 칸 「리브」(panes-parts.ts)에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
-import { api, el, errorNote, relTime, state, toast } from '../core.js';
+import { el, relTime, state, sv, toast } from '../core.js';
+import { composerAttach } from './compose-attach.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
-import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
-import { soloSessionUrl, terminalUrl } from './apps.js';
+import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
+import { appGlassIcon, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
+import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
 
 export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
   // 사이드바 '내 프로젝트만'(side.ts) — 만든 사람 + 팀원 id. 서버 mine=1 과 같은 술어(생성자이거나 팀원)를 프론트에서 그대로 판정한다.
   created_by?: string | null; member_ids?: string[];
+  // 사이드바 '방금 만든 것 잠깐 맨 위'(side.ts freshMs) — 서버 목록이 늘 싣는 값(PROJECT_COLS).
+  created_at?: string | null;
+  // #1851 아카이브 — 보관 시각. 있으면 사이드바·보드에서 빠지고 「아카이브」 화면(#/archive)에만 보인다.
+  archived_at?: string | null;
+  // #1851 휴지통 — 통째로 버린 시각. 있으면 어디에도 안 보이고 「휴지통」 화면(#/trash)의 '프로젝트' 묶음에만(그 아래 내 세션과 함께).
+  trashed_at?: string | null;
 }
+export interface ProjList { id: number; name: string; folder_id?: number | null; category?: { space?: string | null; name?: string | null } | null; }
+export interface ProjFolder { id: number; name: string; parent_id?: number | null; settings?: Record<string, unknown> | null; external_id?: string | null; }
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
   live: boolean; alive: boolean; owned: boolean; stateKey: string; stateLabel: string; lastSeen: number; raw: any;
   // 중앙 기록 좌표(대화 uuid) — 라이브 행에 접힌 기록(mergeSessions). 기록만 있는 행은 id 자체가 uuid 라 비어 있다.
   logId?: string | null; logNode?: string | null;
+  // 접힌 기록의 **대화 제목**(= 그 세션에 처음 시킨 말). 멈춘 세션은 pane 제목(raw.title)이 비어 있어 이름 자리가
+  //  프로젝트명 되풀이로 떨어지는데(dev 실측: 한 프로젝트의 지난 세션 7건 중 5건이 같은 이름), 이 값이 그 자리를 받는다.
+  logTitle?: string | null;
+  // #1851 휴지통 — 휴지통에 있는 시각(ISO). 있으면 사이드바 '지난 세션'에서 빠지고 「휴지통」 화면(#/trash)에만 보인다.
+  trashedAt?: string | null;
+  // #1851 — 프로젝트를 통째로 버릴 때 함께 들어간 세션이면 그 프로젝트 id. 없으면 '지난 세션'에서 따로 버린 것 — 휴지통 화면이 둘을 가른다.
+  trashedWith?: number | null;
 }
-export interface V2Data { projects: Proj[]; sessions: Sess[]; loadedAt: number; }
+export interface V2Data {
+  projects: Proj[];
+  sessions: Sess[];
+  loadedAt: number;
+  /** 열린 앱 행의 프로젝트 경로(스페이스 › 리스트 › 프로젝트)에만 쓰는 가벼운 계층 메타. */
+  lists?: ProjList[];
+  folders?: ProjFolder[];
+}
 
 const dot = (k: string) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 // 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
@@ -36,6 +60,30 @@ export function dotCls(stateKey: string): string {
   return '';
 }
 const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
+
+// ── '지금 도는 세션' vs '지난 세션' — 화면 셋이 같은 술어를 쓴다(#1808) ───────────────
+//  · 도는 세션 = 박스가 tmux 에 살아 있는 것.
+//  · 지난 세션 = **되살릴 수 있는 것 전부** — 자동회수·재부팅으로 멈춘 박스(중단됨), 내가 끝낸 박스(종료됨),
+//    메모리 부족으로 죽은 박스(메모리 부족), 그리고 박스는 없고 중앙에 대화만 남은 것(기록).
+//    사용자에겐 넷 다 "다시 이어서 할 수 있는 지난 세션"이라 한 묶음으로 다룬다(구분은 상태점·툴팁·세션 화면이 말한다).
+export const isLiveSess = (s: Sess): boolean => s.live && s.alive;
+export const isPastSess = (s: Sess): boolean => !isLiveSess(s);
+// 휴지통(#1851) — 멈춘 세션 중 사람이 휴지통으로 보낸 것. 사이드바·홈·확인할 것 어디에도 안 나오고 휴지통 화면에만 있다.
+export const isTrashedSess = (s: Sess): boolean => !!s.trashedAt;
+export const isArchivedProj = (p: Proj | null | undefined): boolean => !!(p && p.archived_at);
+export const isTrashedProj = (p: Proj | null | undefined): boolean => !!(p && p.trashed_at);
+/** 따로 버린 세션(프로젝트 묶음이 아닌 것) — 휴지통 '세션' 묶음·사이드바 개수의 재료. */
+export const isLooseTrashedSess = (s: Sess): boolean => isTrashedSess(s) && s.trashedWith == null;
+
+/** 그 세션이 '하던 일' — 하네스 pane 제목이 정본이고, 없으면(멈춘 세션) 중앙 기록의 대화 제목(= 처음 시킨 말). */
+export const sessWork = (s: Sess): string => String((s.raw && s.raw.title) || s.logTitle || '').trim();
+/** 화면에 쓸 세션 이름 — 이름이 프로젝트명 그대로면 '하던 일'이 그 자리를 받는다(같은 이름 대여섯 줄 방지). */
+export function sessDisplayName(s: Sess, projectName: string): string {
+  const label = String(s.label || '').trim();
+  const work = sessWork(s);
+  if (work && work !== label && label === projectName) return work;
+  return label || work || '이름 없는 세션';
+}
 
 // ── 홈 = 런처 (#1719 재설계 · #1798 행선지 제거) — 입력창이 주인공이다 ──────────
 //  · 입력은 **항상 프로젝트 없는 세션**으로 열린다(세션 전용 폴더). 종전의 행선지 자동매칭·프로젝트 드롭다운은
@@ -58,16 +106,26 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
   // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 기본은 내가 지난번에 고른 값이고,
   //  여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts — '새 AI 세션' 폼과 같은 기억을 쓴다).
   const runPicker = createRunPicker();
-  const card = el('div', { class: 'v2-launch' }, ta,
-    el('div', { class: 'v2-launch-row' }, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send));
+  // 첨부(#1870) — 프로젝트 칸의 새 세션 자리와 **같은 모듈**(v2/compose-attach.ts). 홈은 프로젝트가 없으므로
+  //  내 개인 폴더 uploads/ 로 올라가고, 절대경로가 첫 지시 꼬리에 실린다. 홈 화면은 20초 틱에 다시 그리지
+  //  않으므로(main.ts — inbox 만 덧칠) 칩·입력 글자와 같은 수명으로 산다.
+  const att = composerAttach({ projectId: () => 0 });
+  // [＋] 는 ctl **밖**(줄의 독립 첫 요소) — ctl 은 flex-wrap 이라 안에 넣으면 좁은 화면에서 셀렉트가 통째로
+  //  다음 줄로 밀려 [＋] 혼자 한 줄을 차지한다. 밖에 두면 셀렉트만 저희끼리 줄바꿈한다.
+  const card = el('div', { class: 'v2-launch' }, ta, att.chips,
+    el('div', { class: 'v2-launch-row' }, att.btn, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send), att.fileIn);
+  att.wirePaste(ta);
+  att.wireDrop(card, card);
 
   const grow = (): void => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
   const submit = async (): Promise<void> => {
     const text = ta.value.trim();
     if (!text || isCreatingQuickSession()) return;
+    // 올리는 중 전송 금지 — 막지 않으면 아직 안 올라간 파일이 지시에서 조용히 빠진다.
+    if (att.busy()) { toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.'); return; }
     send.disabled = true; ta.disabled = true; runPicker.disable(true);
     send.replaceChildren(el('span', { text: '여는 중…' }));
-    const ok = await openQuickSession(text, { run: runPicker.value() });
+    const ok = await openQuickSession(text + att.tail(), { run: runPicker.value() });
     if (!ok) { send.disabled = false; ta.disabled = false; runPicker.disable(false); send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); ta.focus(); }
   };
   send.onclick = () => { void submit(); };
@@ -86,37 +144,95 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
       el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }),
       el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }),
       card,
-      nowList(data)));
+      // 시키는 칸 아래 한 줄 = **최근에 연 앱**(#1954). 전부 깔지 않는다 — 다 깔면 고르는 화면이 되어
+      //  '무엇이든 시키세요'라는 이 화면의 첫 문장과 다툰다. 전체는 [모든 앱]이 런치패드로 연다.
+      el('div', { class: 'v2-home-apps' },
+        el('div', { class: 'v2-home-apps-head' },
+          el('span', { class: 'v2-home-apps-k', text: '최근에 연 앱' }),
+          el('button', { class: 'v2-home-apps-all', type: 'button', onclick: () => openLaunchpad() },
+            el('span', { text: '모든 앱' }),
+            sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' })))),
+        el('div', { class: 'v2-home-apps-row', role: 'list' },
+          ...recentApps(6).map((a) => el('a', { class: 'v2-home-app', role: 'listitem', href: '#/app/' + a.key, title: a.desc },
+            el('span', { class: 'v2-home-app-ico' }, appGlassIcon(a.icon)),
+            el('span', { class: 'v2-home-app-t', text: a.title })))))));
+  // ★ 홈에서 세션 목록을 걷었다(원준 2026-08-20 "이 부분 내용 빼고, 텍스트 치는 칸을 자연스러운 위치로").
+  //  왜: 같은 목록이 **사이드바(프로젝트 폴더 안 세션)**·**[확인할 것]**·**AI 세션 앱** 셋에 이미 있고,
+  //  홈은 '무엇이든 시키는 자리' 하나로 충분하다. 게다가 그 목록에는 자동 이름짓기 프롬프트처럼 사람이 시킨 적
+  //  없는 기록까지 이름으로 올라와(실측) 첫 화면이 잡동사니로 읽혔다. 시키는 칸은 화면 가운데로 올린다.
   window.setTimeout(() => { grow(); ta.focus(); }, 30);
 }
 
-function nowList(data: V2Data): HTMLElement {
-  // 홈의 두 번째 존재 — 상태별 두 결(#1756): **답을 기다리는 것**은 내가 움직여야 풀리는 일이라 앰버 카드로
-  //  도드라지고, 나머지는 조용한 목록이다. 종전엔 일곱 행이 같은 무게로 나열돼 급한 것이 안 보였다.
-  const rank = (s: Sess): number => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : 2);
-  const live = data.sessions.filter((s) => s.live && s.alive).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen);
-  if (!live.length) return el('div', {});
-  const waits = live.filter((s) => s.stateKey === 'waiting');
-  const rest = live.filter((s) => s.stateKey !== 'waiting').slice(0, 7 - Math.min(waits.length, 4));
+// nowList(돌고 있어요 · 답을 기다려요 · 이어서 할 수 있어요)는 홈에서 걷었다(원준 2026-08-20).
+//  그 세 결은 다른 자리가 이미 맡고 있다 — 답 기다림·완료는 [확인할 것], 살아 있는 세션은 사이드바의 프로젝트 폴더,
+//  지난 세션은 그 폴더의 '지난 세션'과 AI 세션 앱. 홈에 네 번째 사본을 두지 않는다.
+
+// ── 확인할 것(#1719 사이드바 개편 안2) — 시키다→기다리다→**확인**의 병목을 한 화면에 모은다 ───────
+//  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — 보이는 것 전부(프로젝트 세션은 팀 누구든 답할 수 있다).
+//  · 끝났어요: 시킨 작업이 끝났는데 아직 안 본 세션(stateKey 'done') — 내 것만(남의 완료를 내가 '확인'할 일은 없다).
+//  행은 홈의 nowList 와 같은 문법(v2-now-row) — 새 시각 언어를 만들지 않는다. 들어가 보면(lastAttached 갱신) 목록에서 빠진다.
+/**
+ * 「확인할 것」 = **받은 알림의 이력**(#1891) + 지금 내 답을 기다리는 세션.
+ *
+ * 종전엔 라이브 세션에서 파생만 했다 — 화면을 안 보고 있으면 지나갔고 이력이 없었다.
+ * 이제 위쪽은 서버가 남긴 알림(앱이 보낸 것 전부), 아래쪽은 지금 상태다. 둘은 겹칠 수 있지만
+ *  성격이 다르다: 알림은 **그때 무슨 일이 있었나**, 대기 세션은 **지금 무엇이 막혀 있나**.
+ */
+export function renderInbox(host: HTMLElement, data: V2Data): void {
+  const waits = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
+  const dones = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
   const rowOf = (s: Sess): HTMLElement => {
     const pn = projName(data, s.projectId);
-    const raw = (s.raw || {}) as any;
-    const title = s.label === pn && raw.title && String(raw.title) !== s.label ? String(raw.title) : s.label;
-    const showProj = !!s.projectId && title !== pn;
+    const title = sessDisplayName(s, pn);
     return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) },
       dot(s.stateKey),
-      el('span', { class: 'tw' }, el('span', { class: 't', text: title }), showProj ? el('span', { class: 'p', text: pn }) : null),
-      el('span', { class: 'st', text: s.stateKey === 'waiting' ? when(s.lastSeen) : `${s.stateLabel} · ${when(s.lastSeen)}` }),
-      s.stateKey === 'waiting' ? el('span', { class: 'go btn btn-sm', text: '답하기' }) : null);
+      el('span', { class: 'tw' }, el('span', { class: 't', text: title }), s.projectId && title !== pn ? el('span', { class: 'p', text: pn }) : null),
+      el('span', { class: 'st', text: when(s.lastSeen) }),
+      el('span', { class: 'go btn btn-sm', text: s.stateKey === 'waiting' ? '답하기' : '보기' }));
   };
-  return el('div', { class: 'v2-now' },
-    waits.length ? el('section', { class: 'v2-now-wait' },
-      el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })),
-      ...waits.slice(0, 4).map(rowOf)) : null,
-    rest.length ? el('section', {},
-      el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `돌고 있어요 · ${rest.length}` }),
-        el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })),
-      ...rest.map(rowOf)) : null);
+  const notiHost = el('section', { class: 'v2-noti-sec' });
+  const shell = el('div', { class: 'v2-center v2-inbox' },
+    el('h1', { class: 'v2-title', text: '확인할 것' }),
+    el('p', { class: 'v2-desc', text: '받은 알림과, 지금 내 답을 기다리는 세션이에요.' }),
+    notiHost,
+    (!waits.length && !dones.length)
+      ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '지금 확인할 것이 없어요.' }),
+          el('p', { class: 'sub', text: '세션이 답을 기다리거나 작업을 끝내면 여기에 모입니다.' }))
+      : el('div', { class: 'v2-now' },
+          waits.length ? el('section', { class: 'v2-now-wait' },
+            el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })),
+            ...waits.map(rowOf)) : null,
+          dones.length ? el('section', {},
+            el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `끝났어요 — 확인만 하면 돼요 · ${dones.length}` })),
+            ...dones.map(rowOf)) : null));
+  host.replaceChildren(shell);
+  void paintNotifications(notiHost);
+}
+
+/** 알림 이력 칸 — 비동기라 화면을 먼저 세우고 도착하면 채운다(빈 목록이면 칸 자체를 비운다). */
+async function paintNotifications(host: HTMLElement): Promise<void> {
+  let feed: NotificationFeed;
+  try { feed = await loadNotifications({ limit: 100 }); }
+  catch { host.replaceChildren(); return; }   // 이력을 못 읽어도 아래 '대기 세션'은 그대로 쓸 수 있다
+  if (!feed.notifications.length) { host.replaceChildren(); return; }
+
+  // 배너는 셸이 전역으로 띄운다(startNotificationBanners) — 여기서 또 띄우면 이 화면을 열 때마다 두 번 뜬다.
+
+  const perm = notificationPermission();
+  const head = el('div', { class: 'v2-now-h' },
+    el('span', { class: 'v2-k', text: `받은 알림 · ${feed.notifications.length}${feed.unread ? ` (안 읽음 ${feed.unread})` : ''}` }),
+    //  ⚠ 권한은 사람이 누를 때만 묻는다 — 들어오자마자 뜨는 권한 창은 거의 거부당하고, 거부되면 다시 못 묻는다.
+    perm === 'default'
+      ? el('button', { class: 'btn btn-sm', type: 'button', text: '알림 켜기',
+          onclick: (e: Event) => { void askNotificationPermission().then(() => { (e.target as HTMLElement)?.remove(); }); } })
+      : null,
+    feed.unread
+      ? el('button', { class: 'btn btn-sm', type: 'button', text: '모두 읽음',
+          onclick: () => { void markNotificationsRead().then(() => paintNotifications(host)); } })
+      : null);
+
+  host.replaceChildren(el('div', { class: 'v2-now' },
+    el('section', {}, head, ...feed.notifications.map(notificationRow))));
 }
 
 export function projName(data: V2Data, id: number | null): string {
@@ -125,43 +241,7 @@ export function projName(data: V2Data, id: number | null): string {
   return p ? p.name : `프로젝트 #${id}`;
 }
 
-// ── 프로젝트 — 개요 + 세션 + 여는 길 ────────────────────────────────────────
-export async function renderProject(host: HTMLElement, data: V2Data, id: number, detailIn?: any): Promise<void> {
-  const p = data.projects.find((x) => Number(x.id) === id);
-  let detail: any = detailIn ?? null;
-  if (!detail) {
-    host.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '불러오는 중…' })));
-    try { detail = await api('/api/ui/v6/projects/' + id); } catch (e) { host.replaceChildren(el('div', { class: 'v2-center' }, errorNote(e, '프로젝트를 불러오지 못했습니다'))); return; }
-  }
-  const pj = (detail && detail.project) || p || { id, name: `프로젝트 #${id}` };
-  const tasks: any[] = Array.isArray(detail?.project?.tasks) ? detail.project.tasks : (Array.isArray(detail?.tasks) ? detail.tasks : []);
-  const done = tasks.filter((t) => t.status_category === 'done' || t.status === 'done').length;
-  const sess = data.sessions.filter((s) => Number(s.projectId) === id).sort((a, b) => Number(b.live) - Number(a.live) || b.lastSeen - a.lastSeen);
-  const st = pj.status_category === 'done' ? '끝남' : pj.status_category === 'unstarted' ? '시작 전' : '진행 중';
-  host.replaceChildren(el('div', { class: 'v2-center' },
-    el('div', { class: 'v2-eyebrow' }, el('span', { class: 'mono', text: '#' + pj.id }), el('span', { text: '·' }), el('span', { class: 'state ' + (pj.status_category === 'done' ? 'done' : 'busy'), text: st }),
-      pj.list && pj.list.name ? [el('span', { text: '·' }), el('span', { text: pj.list.name })] : null),
-    el('h1', { class: 'v2-title', text: pj.name }),
-    pj.description ? el('p', { class: 'v2-desc', text: String(pj.description).slice(0, 600) }) : null,
-    el('div', { class: 'v2-actrow' },
-      el('a', { class: 'btn btn-primary btn-sm', href: '#/app/terminal', text: '새 AI 세션' }),
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + pj.id, text: '프로젝트 앱에서 열기(보드·태스크)' }),
-      el('span', { class: 'v2-muted', text: tasks.length ? `태스크 ${tasks.length} · 끝남 ${done}` : '태스크 없음' })),
-    el('section', { class: 'v2-sec' },
-      el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `세션 · ${sess.length}` })),
-      sess.length ? el('div', { class: 'v2-list' }, ...sess.map((s) => el('a', { class: 'v2-row', href: '#/s/' + encodeURIComponent(s.id) },
-        dot(s.stateKey), el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: s.label }), el('div', { class: 'm', text: `${s.stateLabel}${s.live ? '' : ' · 기록만'} · ${when(s.lastSeen)}` })),
-        el('span', { class: 'v2-row-r', text: '›' }))))
-        : el('p', { class: 'v2-empty', text: '이 프로젝트에 붙은 세션이 아직 없어요. [새 AI 세션] 으로 시작하면 여기에 쌓입니다.' })),
-    tasks.length ? el('section', { class: 'v2-sec' },
-      el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `태스크 · ${tasks.length}` })),
-      el('div', { class: 'v2-list' }, ...tasks.slice(0, 8).map((t) => el('a', { class: 'v2-row', href: '#/projects2/t/' + t.id },
-        el('span', { class: 'v2-dot ' + (t.status_category === 'done' ? 'done' : t.status_category === 'started' ? 'busy' : '') }),
-        el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: t.name }), el('div', { class: 'm', text: t.status || t.status_category || '' })),
-        el('span', { class: 'v2-row-r', text: '›' }))),
-        tasks.length > 8 ? el('a', { class: 'v2-more', href: '#/projects2/p/' + pj.id, text: `외 ${tasks.length - 8}개 — 프로젝트 앱에서` }) : null)) : null,
-  ));
-}
+// ── 프로젝트 화면은 v2/panes.ts(칸 셸) — 여기 있던 renderProject 는 #1757 에서 project-view.ts 로 옮겼고, 그 뒤 칸 셸이 그 자리를 가져갔다(project-view.ts 는 도달 경로가 없어져 삭제). 리브 대화는 칸 「리브」가 싣는다.
 
 // ── 세션 — 그 세션 자체를 가운데에: 터미널 기본 + 대화(베타)(web/session-chat.ts) ─────────
 //  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].
@@ -177,13 +257,24 @@ export interface SessionViewOpts {
   onToggleFiles?: () => boolean;
   /** 팝아웃 창(?solo=1) — 왼쪽 사이드바 없이 이 화면만 띄운 창(#1744). */
   solo?: boolean;
+  /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄 폐지(원준 2026-08-20)로 보관의 입구가 이 메뉴로 모였다. */
+  onArchive?: () => void;
+  /** 이 탭이 지금 활성인가 — 자동 복원은 보이는 탭에서만(session-chat.ts isVisible 주석). */
+  isVisible?: () => boolean;
+  /** 복원으로 새 세션이 생겼다 — 그 탭만 새 세션으로 옮긴다(전역 주소를 건드리지 않는다). */
+  onResumed?: (newId: string) => void;
 }
 export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts: SessionViewOpts = {}): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
   const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
   if (!s) { host.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '세션을 찾을 수 없어요. 목록을 새로고침해 주세요.' }))); return null; }
   // 프레임에 실을 터미널은 embed=1 — 그 안의 상단바·파일 탐색기는 이 화면의 상단바·우패널로 이미 합쳐졌다(#1744).
-  const termSrc = s.live ? terminalUrl(s.id, s.label, s.node, { embed: true }) : null;
+  //  ⚠ **살아 있는 박스에만** 물린다. 종전엔 `s.live`(= terminal/sessions 행이면 참, 중단된 박스도 참)만 봐서
+  //   멈춘 세션을 열면 없는 tmux 에 붙었고, terminal.html 이 4410 → **iframe 안에서 자동 복원 + location.replace**
+  //   를 해 버렸다: 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 프레임만 새 세션인 어긋난 화면이
+  //   되고, 그 뒤 [이어서 대화하기] 를 누르면 옛 desired-state 가 이미 지워져 404 가 났다. 멈춘 세션의 정답은
+  //   **읽기전용 기록 + [이어서 대화하기] 한 번**(session-chat.ts paintDeadFooter)이다.
+  const termSrc = s.live && s.alive ? terminalUrl(s.id, s.label, s.node, { embed: true }) : null;
   return mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
     terminalSrc: termSrc,
     // 나가는 문: 본 화면이면 이 세션만 담은 **팝아웃 창**(같은 컴포넌트, 사이드바만 없다), 팝아웃 창이면 반대로 전체 화면.
@@ -193,8 +284,17 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     trail: vopts.trail || null,
     onPickProject: vopts.onPickProject,   // 상단바 [프로젝트 연결] 드롭다운(#1749)
     onRename: vopts.onRename,             // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
+    onArchive: vopts.onArchive,
     onToggleFiles: vopts.onToggleFiles,   // 상단바 [파일] → 우패널 파일 탐색기(#1744)
     solo: vopts.solo,
+    // ★ #1820 — 멈춘 내 세션은 **열면 바로 되살린다**. 위 주석의 '읽기전용 기록 + 버튼 한 번'은 화면이 어긋나던
+    //  사고(#1808)의 처방이었는데, 그 처방이 "열어도 아무 일도 안 난다"를 기본 경험으로 만들었다(dev 실측:
+    //  내 세션 219건 중 복원 가능 198건). 어긋남의 원인은 '자동'이 아니라 **프레임이 몰래 갈아탄 것**이었으므로,
+    //  셸이 라우팅까지 쥐고 되살리면 둘 다 만족한다. 실패하면 그 기록 화면과 버튼이 그대로 남는다.
+    //  휴지통에 있는 것은 예외(trashed — 판정표 session-status.ts 참조, #1851).
+    autoResume: shouldRestoreOnOpen({ restorable: !!s.raw?.restorable, owned: s.owned, trashed: isTrashedSess(s) }),
+    isVisible: vopts.isVisible,
+    onResumed: vopts.onResumed,
   });
 }
 
@@ -213,6 +313,8 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       node: r.node && typeof r.node === 'object' ? (String(r.node.id || '') || null) : (r.node ? String(r.node) : null),
       live: true, alive: !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
       lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
+      trashedAt: r.trashedAt ? String(r.trashedAt) : null,   // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
+      trashedWith: r.trashedWith != null ? Number(r.trashedWith) : null,
     };
     out.set(s.id, s);
     if (r.claudeSessionId && !byUuid.has(String(r.claudeSessionId))) byUuid.set(String(r.claudeSessionId), s);
@@ -223,12 +325,16 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
     const owner = byUuid.get(id);
     if (owner) {                                   // 라이브(또는 복원 가능) 박스가 이 대화를 돌린다 — 그 카드에 접는다
       owner.logId = id; owner.logNode = r.node_id || '';
+      if (r.title) owner.logTitle = String(r.title);   // 이름 자리의 폴백(위 logTitle 주석)
       if (!owner.projectId && r.project_id != null) owner.projectId = Number(r.project_id);
+      if (!owner.trashedAt && r.trashed_at) { owner.trashedAt = String(r.trashed_at); owner.trashedWith = r.trashed_with != null ? Number(r.trashed_with) : null; }   // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
       continue;
     }
     out.set(id, {
       id, label: String(r.title || id), projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
       live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,
+      trashedAt: r.trashed_at ? String(r.trashed_at) : null,
+      trashedWith: r.trashed_with != null ? Number(r.trashed_with) : null,
     });
   }
   return [...out.values()];

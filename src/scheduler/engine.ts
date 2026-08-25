@@ -10,7 +10,41 @@ import { itemsPool, q } from "../db/client.js";
 import { parseCron, cronMatches, nextCronTime } from "./cron-expr.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 cron 벽시계 = 조직 시간대(서버 로컬 TZ 아님)
 import { CRON_ACTIONS, type CronJob } from "./registry.js";
+import { cronBreakerDecision } from "./cron-breaker.js";
+import { sendBoxAlert } from "../ops/alerts.js";
 import { logger } from "../log.js";
+
+/** 구 DB(컬럼 부재)에서 쓸 기본 임계 — 스키마 마이그레이션 전에도 보호가 걸리게. */
+const DEFAULT_MAX_FAIL_STREAK = 5;
+
+/**
+ * 브레이커 발동(#1675 ④) — 잡을 끄고 흔적을 남기고 알린다.
+ *  **throw 하지 않는다**: 여기서 던지면 정작 크론 실행 기록이 날아간다.
+ */
+async function tripBreaker(job: CronJob, streak: number): Promise<void> {
+  const reason = `연속 실패 ${streak}회 — 자동 정지(마지막 상태: error)`;
+  try {
+    const r = await itemsPool.query(
+      `UPDATE org_cron SET enabled=false, auto_disabled_at=now(), auto_disabled_reason=$2, updated_at=now()
+        WHERE id=$1 AND enabled=true`, [job.id, reason]);
+    if (!(r.rowCount ?? 0)) return;   // 이미 꺼져 있었다 — 알림도 보내지 않는다(중복 방지)
+  } catch (e) {
+    logger.warn({ err: (e as Error)?.message, job: job.id }, "크론 자동 정지 실패");
+    return;
+  }
+  logger.warn({ job: job.id, action: job.action, streak }, "크론 연속 실패 — 자동 정지");
+  try {
+    await sendBoxAlert({
+      severity: "warn",
+      title: `크론 자동 정지 — ${job.id}`,
+      text:
+        `'${job.id}'(${job.action}) 가 ${streak}회 연속 실패해 자동으로 멈췄습니다.\n`
+        + `조치: 관리탭 ▸ 스케줄에서 마지막 실행 요약(last_summary)으로 원인을 확인하고, 고친 뒤 다시 켜세요.`
+        + ` 다시 켜면 실패 카운터도 0 으로 초기화됩니다.`,
+      detail: { job: job.id, action: job.action, fail_streak: streak },
+    });
+  } catch (e) { logger.warn({ err: (e as Error)?.message, job: job.id }, "크론 자동 정지 알림 실패"); }
+}
 
 const TICK_MS = 30_000;             // 폴 주기(잡 due 판정 해상도). interval 잡 최소 60s 앱 강제. cron 은 분당 2틱이라 매치분 안 놓침.
 const running = new Set<string>();  // 잡당 인메모리 락 — 느린 잡이 다음 틱과 중첩되지 않게.
@@ -43,13 +77,27 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
     try { res = await runJob(job); }
     catch (e) { res = { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
     const nextIso = computeNextRun(job, await orgTimezone());
+    // #1675 ④ — 연속 실패 서킷 브레이커. 판정은 순수 함수(cron-breaker)가, 기록은 여기가 한다.
+    //  임계가 컬럼에 없으면(구 DB) 기본 5 로 본다 — 스키마 마이그레이션 전에도 보호가 걸리게.
+    const brk = cronBreakerDecision({
+      status: res.status,
+      streak: Number(job.fail_streak ?? 0),
+      max: job.max_fail_streak == null ? DEFAULT_MAX_FAIL_STREAK : Number(job.max_fail_streak),
+    });
     try {
       await itemsPool.query(
         `UPDATE org_cron SET last_run_at=$2, last_status=$3, last_summary=$4, next_run_at=$5, updated_at=now() WHERE id=$1`,
         [job.id, startedIso, res.status, JSON.stringify(res.summary), nextIso]);
       if (job.run_once) await itemsPool.query(`UPDATE org_cron SET enabled=false, updated_at=now() WHERE id=$1`, [job.id]); // 1회성: 실행 후 자동 비활성(반복 방지)
     } catch (e) { logger.warn({ err: e, job: job.id }, "org_cron 상태 갱신 실패"); }
-    logger.info({ job: job.id, action: job.action, status: res.status }, "cron job done");
+    // ⚠ 서킷 브레이커 카운터는 **따로** 쓴다(#1675 리뷰). 위 UPDATE 에 fail_streak 를 끼워 넣으면 그 컬럼이 없는 DB
+    //  (마이그레이션 미실행·롤백)에서 **문 전체가 실패**해 last_run_at 이 안 써지고, 그러면 isDue 가 매 틱 due 로 읽어
+    //  잡이 30초마다 돈다 — 고장을 막으려던 장치가 폭주를 만든다. 기록(위)과 보호(아래)는 서로를 깨뜨리면 안 된다.
+    try {
+      await itemsPool.query(`UPDATE org_cron SET fail_streak=$2 WHERE id=$1`, [job.id, brk.nextStreak]);
+    } catch (e) { logger.warn({ err: (e as Error)?.message, job: job.id }, "연속 실패 카운터 갱신 실패(브레이커만 비활성)"); }
+    logger.info({ job: job.id, action: job.action, status: res.status, streak: brk.nextStreak }, "cron job done");
+    if (brk.disable && !job.run_once) await tripBreaker(job, brk.nextStreak);
     return res;
   } finally { running.delete(job.id); }
 }
@@ -119,3 +167,6 @@ export function startScheduler(): void {
     } catch (e) { logger.warn({ err: (e as Error)?.message }, "notion full 스윕 잡 보장 실패(비치명)"); }
   })();
 }
+
+// #1780 v2 §7-1 — 실-DB 스모크(scripts/app-cron-redeploy.itest.mjs)가 "재전개 직후 due 아님" 경계를 재기 위한 노출. 운영 호출 금지.
+export const __test_isDue = isDue;

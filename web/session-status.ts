@@ -10,6 +10,9 @@
 export interface SessLike {
   agentState?: string; restorable?: boolean; exitedByUser?: boolean; oomKilled?: boolean; harness?: string;
   lastActive?: number; lastAttached?: number; attached?: boolean;
+  // #1221 — **접속과 무관한** 실행 신호(하네스 훅 보고 ∪ 관측). agentState 는 탭이 없으면 offline 으로 덮이지만
+  //  이 둘은 안 덮인다. 아래 sessStateKey 가 이 사실을 접속 기반 판정보다 먼저 본다(#1819 신고).
+  working?: boolean; awaiting?: boolean;
 }
 
 // 표시 문구 · CSS 클래스 · 정렬 우선순위(작을수록 먼저) · 필터 설명.
@@ -56,6 +59,16 @@ export function sessStateKey(s: SessLike, nowMs: number = Date.now()): string {
   // 셸 세션과 'AI 가 끝나 셸만 남은' 세션을 한 칸('셸')으로 — 둘 다 살아 있고, 사용자가 할 일도 같다(들어가서 쓴다).
   //  종전엔 후자를 '종료됨'이라 불러 **살아 있는 세션이 죽은 것처럼** 보였다(감사 P1-①: 고객사 A '종료됨' 3건이 전부 셸).
   if (k === 'shell' || k === 'exited') return 'shell';
+  // ★ 지금 돌고 있다/기다린다는 **사실**이 접속 기반 판정을 이긴다 (#1819 원준 신고 2026-08-21).
+  //  왜 필요한가: agentState 는 '그 세션 화면을 지금 누가 보고 있나'(attached)로 offline 이 덮어쓴다. 그래서
+  //  25분째 도는 세션도 탭을 안 보고 있으면 offline 이 되고, 그 offline 이 바로 아래 '작업 완료' 승격에 걸려
+  //  **돌고 있는 세션이 초록 '작업 완료'로** 떴다(실측: @box_state=busy 가 8초 전 갱신된 세션이 그러했다).
+  //  '완료'는 사람이 결과를 보러 들어가게 만드는 문구다 — 아직 안 끝난 일에 그 말을 붙이면 그건 오보다.
+  //  서버는 이 두 신호를 접속과 무관하게 이미 내려준다(#1221 working/awaiting) — 화면이 안 보고 있었을 뿐이다.
+  //  ⚠ 위 세 갈래(셸·AI 종료·복원 가능) 뒤에 둔다: 셸 세션의 working 은 AI 작업이 아니고(shellWorking),
+  //   박스가 없어진 세션은 옛 신호로 되살아나면 안 된다.
+  if (s.awaiting) return 'waiting';
+  if (s.working) return 'busy';
   if ((k === 'idle' || k === 'offline') && isUnreadDone(s, nowMs)) return 'done';
   return SESS_STATES[k] ? k : 'shell';
 }
@@ -73,5 +86,30 @@ export function sessRank(s: SessLike, nowMs?: number): number {
 export function sessIsDead(s: SessLike, nowMs?: number): boolean {
   const k = sessStateKey(s, nowMs);
   // 셸이 떠 있는 세션은 '끝남'이 아니다 — 들어가서 계속 쓸 수 있다. 진짜 끝난 것은 tmux 에서 사라진 것들뿐.
-  return k === 'restorable' || k === 'exited_user';
+  //  ⚠ oom_killed 도 여기 든다 — #1251 이 '중단됨'에서 갈라 낸 **같은 사실의 하위 갈래**(restorable=true, tmux 에 없음)인데
+  //   이 목록에서 빠져 있어 메모리로 죽은 세션이 화면마다 '살아 있는 것'으로 세어졌다(v2 사이드바는 그걸 라이브 행으로
+  //   그려 터미널까지 붙였다 — 없는 tmux 라 4410). 세 key 는 전부 '박스가 없다' 는 한 사실이다.
+  return k === 'restorable' || k === 'exited_user' || k === 'oom_killed';
 }
+
+/** 되살릴 수 있는(=박스가 없어 지금은 안 도는) 세션인가 — 화면들이 '지난 세션' 묶음을 만들 때 쓰는 같은 술어. */
+export const SESS_DEAD_KEYS = ['restorable', 'oom_killed', 'exited_user'] as const;
+
+/**
+ * 이 세션을 **열자마자 되살릴** 대상인가 (#1820).
+ *
+ * 세션을 여는 것은 "이걸 쓰겠다"는 의사표시다 — 박스가 없어졌을 뿐 되살릴 좌표(desired-state)가 남아 있고
+ *  내가 그 주인이면, 화면에 도착한 그 자리에서 되살린다. 종전엔 [이어서 대화하기]를 한 번 더 눌러야 했다.
+ *
+ * ⚠ '기록만 남은 세션'(restorable=false, 중앙 기록만)은 **자동으로 하지 않는다.** 되살릴 박스 좌표가 없어
+ *  이어받기는 곧 '새 세션 만들기'인데, 지난 대화를 읽으러 들어온 사람에게 세션을 하나 띄우는 건 과하다.
+ *  그건 버튼으로 남긴다(사용자가 뜻을 밝힌 뒤에).
+ */
+//  ⚠ trashed — **휴지통에 있는 세션은 열어도 되살리지 않는다**(#1851, 원준 2026-08-24). 휴지통 행의 제목은 '내용이 뭔지
+//  보려고' 누르는 자리인데, 그 클릭이 새 박스로 복원되고(같은 대화 uuid resume) 목록 병합이 휴지통 표식을 그 라이브
+//  박스에 접어 "휴지통에 있는데 돌고 있는" 행을 만들었다 — [완전 삭제]가 '아직 돌고 있는 세션'으로 막히는데 휴지통엔
+//  ×(멈춤)가 없어 막다른 길이었다. 휴지통 것은 기록 화면으로만 열고, 되살리려면 [되돌리기]를 거친다.
+export function shouldRestoreOnOpen(s: { restorable?: boolean; owned?: boolean; trashed?: boolean } | null | undefined): boolean {
+  return !!s && !!s.restorable && !!s.owned && !s.trashed;
+}
+

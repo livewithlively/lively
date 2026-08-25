@@ -17,6 +17,9 @@ import { getMemberSecret, setMemberSecret, deleteMemberSecret, memberOwner, GATE
 import { getMcpServer, getRuntimeConfig, getOrgProfile } from "../store.js";
 import { presetOAuthScope } from "../delivery/mcp-server-presets.js";
 import { makeSsrfFetch } from "../../net/mcp-ssrf-fetch.js";
+import { logger } from "../../log.js";
+import { isSlackOAuthKind, buildSlackAuthorizeUrl, exchangeSlackCode, slackInstallToSlots, parseSlackAccessResponse, relayStartUrl, SLACK_BOT_KIND, type SlackInstall } from "./slack-oauth.js";
+import { isNotionPublicServer, buildNotionAuthorizeUrl, exchangeNotionCode, parseNotionTokenResponse, refreshNotionToken, notionInstallToSlot, NOTION_PUBLIC_KIND, NOTION_PUBLIC_SERVER, type NotionInstall } from "./notion-oauth.js";
 
 const STATE_KEY_ENV = "CONNECTOR_SECRET_KEY"; // 상태 서명키는 봉투암호화 키와 같은 마스터에서 도메인 분리 파생(신규 env 불요).
 const STATE_INFO = "lively-oauth-state-v1";
@@ -217,10 +220,153 @@ export async function providerForServer(
 }
 
 export interface ConsentStart { authorized: boolean; authorizationUrl?: string; state?: string }
+
+// ── 슬랙 직결(#1881) — 표준 OAuth 2.1 디스커버리가 아니라 슬랙 설치 플로우(봇+유저 토큰 동시). 규칙은 slack-oauth.ts. ──
+//  사전등록 client(관리탭 OAuth 클라이언트 → gateway 슬롯 oauth:client)가 없으면 시작하지 않는다 — 셀프호스팅은 매니페스트
+//  링크로 자기 앱을 만들어 그 client 를 넣고, 매니지드는 CP 가 시딩한다(T5).
+async function loadOAuthClient(authKind: string): Promise<{ client_id: string; client_secret?: string } | null> {
+  const r = await getMemberSecret(GATEWAY_OWNER, authKind, CLIENT_SCOPE);
+  if (!r?.secret) return null;
+  try {
+    const ci = JSON.parse(r.secret) as { client_id?: unknown; client_secret?: unknown };
+    return typeof ci.client_id === "string" && ci.client_id ? { client_id: ci.client_id, ...(typeof ci.client_secret === "string" && ci.client_secret ? { client_secret: ci.client_secret } : {}) } : null;
+  } catch { return null; }
+}
+async function startSlackConsent(memberId: string, serverName: string, srv: { authKind: string; scopeKey: string }, redirectUrl: string): Promise<ConsentStart> {
+  const existing = await getMemberSecret(memberOwner(memberId), srv.authKind, srv.scopeKey);
+  if (decodeTokenBlob(existing?.secret)) return { authorized: true };
+  const nonce = crypto.randomBytes(16).toString(B64);
+  const state = signState({ m: memberId, s: serverName, k: srv.scopeKey, n: nonce });
+  // 매니지드(#1881 T5): 라이블리 CP 가 슬랙 앱(client)을 쥐고 콜백을 받는다 — 이 게이트웨이는 client 를 모른다.
+  //  서명 state 를 들고 CP 시작점으로 보내면 CP 가 슬랙 동의 → 교환 → 이 게이트웨이의 /api/ui/org/slack/oauth-complete 로
+  //  결과를 넣어 준다(state 검증은 여기서 — CP 는 state 를 열어 보지 않는다). gw 는 CP 가 테넌트를 알아보는 열쇠.
+  const relay = process.env.SLACK_OAUTH_RELAY_URL?.trim();
+  if (relay) {
+    const gatewayUrl = (await getOrgProfile()).gateway_url ?? "";
+    return { authorized: false, state, authorizationUrl: relayStartUrl(relay, state, gatewayUrl) };
+  }
+  const client = await loadOAuthClient(srv.authKind);
+  if (!client?.client_id || !client.client_secret) {
+    throw new Error("Slack 앱이 아직 등록되지 않았습니다 — 관리자가 [AI 도구 ▸ 외부 도구 서버 ▸ Slack] 에 Slack 앱의 Client ID/Secret 을 넣어야 구성원이 연결할 수 있습니다.");
+  }
+  return { authorized: false, state, authorizationUrl: buildSlackAuthorizeUrl({ clientId: client.client_id, redirectUri: redirectUrl, state }) };
+}
+// 설치 결과 → 금고. 유저 토큰 → 그 사람의 금고(A/B 어댑터가 읽는 슬롯). 봇 토큰 → 조직 슬롯(수집기 봇 모드가 읽는다, team_id 로 구분).
+async function saveSlackInstall(p: StatePayload, authKind: string, install: SlackInstall, actor?: string): Promise<void> {
+  const slots = slackInstallToSlots(install);
+  await setMemberSecret(memberOwner(p.m), authKind, p.k, { secret: slots.user.secret, meta: slots.user.meta }, actor ?? "oauth");
+  if (slots.bot) await setMemberSecret(GATEWAY_OWNER, SLACK_BOT_KIND, slots.bot.scopeKey, { secret: slots.bot.secret, meta: slots.bot.meta }, actor ?? "oauth");
+}
+async function finishSlackConsent(p: StatePayload, srv: { authKind: string }, code: string, redirectUrl: string, actor?: string): Promise<void> {
+  const client = await loadOAuthClient(srv.authKind);
+  if (!client?.client_id || !client.client_secret) throw new Error("Slack 앱 client 가 없어 토큰을 교환할 수 없습니다(연결 도중 설정이 지워졌습니다).");
+  const install = await exchangeSlackCode({ clientId: client.client_id, clientSecret: client.client_secret, code, redirectUri: redirectUrl, fetchFn: await gatewaySsrfFetch() });
+  await saveSlackInstall(p, srv.authKind, install, actor);
+}
+
+// ── 노션 공개 통합 직결(#1881 N2) — org_mcp_server 행이 아니라 예약 서버명(notion-public)으로 콜백을 라우팅한다.
+//  개인 MCP 연결(notion, DCR)과 별개: 이 플로우의 산출은 **조직 수집 슬롯**(gateway, notion_public, scope_key=workspace_id).
+//  규칙(인가 URL·교환·슬롯 모양)은 notion-oauth.ts. 재동의(=[페이지 더 고르기])가 정상 경로라 기존 토큰이 있어도
+//  항상 새 동의를 시작한다(노션은 인가마다 새 토큰쌍 — 덮어써도 안전).
+export async function notionPublicReady(): Promise<boolean> {
+  if (process.env.NOTION_OAUTH_RELAY_URL?.trim()) return true;
+  const c = await loadOAuthClient(NOTION_PUBLIC_KIND);
+  return !!(c?.client_id && c.client_secret);
+}
+export async function startNotionPublicConsent(memberId: string): Promise<ConsentStart> {
+  const nonce = crypto.randomBytes(16).toString(B64);
+  const state = signState({ m: memberId, s: NOTION_PUBLIC_SERVER, k: "", n: nonce });
+  // 매니지드(N4): 라이블리 CP 가 노션 통합(client)을 쥐고 콜백을 받는다 — 슬랙 릴레이와 같은 규약(gw=테넌트 열쇠).
+  const relay = process.env.NOTION_OAUTH_RELAY_URL?.trim();
+  if (relay) {
+    const gatewayUrl = (await getOrgProfile()).gateway_url ?? "";
+    return { authorized: false, state, authorizationUrl: relayStartUrl(relay, state, gatewayUrl) };
+  }
+  const client = await loadOAuthClient(NOTION_PUBLIC_KIND);
+  if (!client?.client_id || !client.client_secret) {
+    throw new Error("Notion 연결이 아직 준비되지 않았습니다 — 관리자가 Lively Notion 통합의 Client ID/Secret 을 조직 자격(kind notion_public, scope_key oauth:client)에 넣어야 합니다.");
+  }
+  return { authorized: false, state, authorizationUrl: buildNotionAuthorizeUrl({ clientId: client.client_id, redirectUri: await callbackUrl(), state }) };
+}
+/**
+ * 노션 연결이 저장된 직후에 부를 후처리 — **상위 계층이 꽂는다**(capabilities/notion-connect.ts).
+ *
+ *  왜 훅인가: 동의가 끝나면 사용자 입장에서 그 일은 **끝나야 한다.** 그런데 저장 자체는 자격 계층의 일이고
+ *  "그래서 수집기를 켠다"는 수집 계층의 일이라, 여기서 직접 부르면 순환 import 가 된다(notion-connect 는
+ *  이 모듈의 startNotionPublicConsent 를 쓴다). 그래서 방향을 뒤집어 훅으로 받는다.
+ *
+ *  ★ 이게 없으면 무슨 일이 나는가(2026-08-25 매니지드 실측): 토글을 켜면 동의 화면으로 갔다가 돌아오는데
+ *   **체크박스가 풀린 채**다 — 연결은 저장됐지만 수집기는 아무도 안 켰기 때문이다. 사용자는 "안 됐나?" 하고
+ *   한 번 더 누르고, 그제야 켜진다(그땐 이미 연결이 있으니 동의 화면도 안 뜬다). 두 번 누르게 만드는 UX 는
+ *   컴맹 페르소나(#1881)에서 그대로 이탈 지점이다.
+ */
+export type NotionInstalledHook = (memberId: string) => Promise<void>;
+let notionInstalledHook: NotionInstalledHook | null = null;
+export function onNotionInstalled(fn: NotionInstalledHook): void { notionInstalledHook = fn; }
+
+// 설치 결과 → 조직 슬롯. connected_by 로 '누가 연결했나'를 남긴다(이탈 시 "다른 관리자로 다시 연결" 안내의 근거).
+async function saveNotionInstall(p: StatePayload, install: NotionInstall, actor?: string): Promise<void> {
+  const slot = notionInstallToSlot(install);
+  await setMemberSecret(GATEWAY_OWNER, NOTION_PUBLIC_KIND, slot.scopeKey,
+    { secret: slot.secret, meta: { ...slot.meta, connected_by: p.m } }, actor ?? "oauth");
+  // 후처리는 **연결 저장을 막지 않는다** — 수집기 준비가 실패해도 토큰은 이미 저장됐고, 화면에서 토글을
+  //  한 번 더 켜면 된다(그때는 연결이 있으니 동의 없이 켜진다). 실패를 삼키되 로그로 남긴다.
+  if (notionInstalledHook) {
+    await notionInstalledHook(p.m).catch((e) =>
+      logger.warn({ err: (e as Error)?.message }, "노션 연결 후 수집기 준비 실패 — 화면에서 토글로 켤 수 있습니다"));
+  }
+}
+async function finishNotionPublicConsent(p: StatePayload, code: string, actor?: string): Promise<void> {
+  const client = await loadOAuthClient(NOTION_PUBLIC_KIND);
+  if (!client?.client_id || !client.client_secret) throw new Error("Notion 통합 client 가 없어 토큰을 교환할 수 없습니다(연결 도중 설정이 지워졌습니다).");
+  const install = await exchangeNotionCode({ clientId: client.client_id, clientSecret: client.client_secret, code, redirectUri: await callbackUrl(), fetchFn: await gatewaySsrfFetch() });
+  await saveNotionInstall(p, install, actor);
+}
+/**
+ * 릴레이 완료(#1881 N4) — CP 가 노션과 교환한 /v1/oauth/token 응답 원문을 들고 온다. state 는 이 게이트웨이가
+ *  서명한 것이라 위조·만료·멤버 귀속을 여기서 검증한다(CP 는 통과만 시킨다). 노션 공개 통합 state 가 아니면 거부.
+ */
+export async function completeNotionInstall(stateToken: string, tokenResponse: unknown, actor?: string): Promise<{ ok: true; memberId: string; workspace_id: string; workspace_name: string | null }> {
+  const p = verifyState(stateToken);
+  if (!isNotionPublicServer(p.s)) throw new Error("이 state 는 노션 팀 자료 연결이 아닙니다");
+  const install = parseNotionTokenResponse(tokenResponse);
+  await saveNotionInstall(p, install, actor);
+  return { ok: true, memberId: p.m, workspace_id: install.workspace.id, workspace_name: install.workspace.name };
+}
+/**
+ * 만료 갱신(직결 모드) — 노션은 회전형(이전 refresh_token 즉시 무효)이라 새 쌍을 **받는 즉시** 저장한다.
+ *  refresh_token 이 없거나 client 가 없으면(매니지드 테넌트) null — 호출자가 "다시 연결" 실패 클래스로 안내한다.
+ *  ⚠ 아직 호출부 없음: access_token 만료 여부가 미확정(N1 실측 대기 — 지식 §1③)이라 401 배선은 실측 후 잇는다.
+ */
+export async function refreshNotionPublicToken(workspaceId: string, actor?: string): Promise<string | null> {
+  const cur = await getMemberSecret(GATEWAY_OWNER, NOTION_PUBLIC_KIND, workspaceId);
+  const blob = decodeTokenBlob(cur?.secret);
+  if (!blob?.refresh_token) return null;
+  const client = await loadOAuthClient(NOTION_PUBLIC_KIND);
+  if (!client?.client_id || !client.client_secret) return null;
+  const install = await refreshNotionToken({ clientId: client.client_id, clientSecret: client.client_secret, refreshToken: blob.refresh_token, fetchFn: await gatewaySsrfFetch() });
+  const connectedBy = typeof cur?.meta?.connected_by === "string" ? (cur.meta.connected_by as string) : "";
+  await saveNotionInstall({ m: connectedBy, s: NOTION_PUBLIC_SERVER, k: "", n: "", e: 0 }, install, actor ?? "oauth-refresh");
+  return install.access_token;
+}
+/**
+ * 릴레이 완료(#1881 T5) — CP 가 슬랙과 교환한 `oauth.v2.access` 응답 원문을 들고 온다. state 는 이 게이트웨이가 서명한 것이라
+ *  위조·만료·멤버 귀속을 여기서 검증한다(CP 는 통과만 시킨다). 슬랙 직결 서버가 아니면 거부.
+ */
+export async function completeSlackInstall(stateToken: string, access: unknown, actor?: string): Promise<{ ok: true; memberId: string; serverName: string; team_id: string | null }> {
+  const p = verifyState(stateToken);
+  const srv = await loadProxyServer(p.s);
+  if (!isSlackOAuthKind(srv.authKind)) throw new Error(`'${p.s}' 는 슬랙 연결 창구가 아닙니다`);
+  const install = parseSlackAccessResponse(access);
+  await saveSlackInstall(p, srv.authKind, install, actor);
+  return { ok: true, memberId: p.m, serverName: p.s, team_id: install.team?.id ?? null };
+}
+
 // 동의 개시 — PKCE·서명 state 로 authorization URL 생성(브라우저 오픈용). 이미 토큰 있으면 authorized:true.
 export async function startConsent(memberId: string, serverName: string, actor?: string): Promise<ConsentStart> {
   const srv = await loadProxyServer(serverName);
   const redirectUrl = await callbackUrl();
+  if (isSlackOAuthKind(srv.authKind)) return startSlackConsent(memberId, serverName, srv, redirectUrl);
   const provider = new VaultOAuthProvider({ memberId, serverName, authKind: srv.authKind, tokenScopeKey: srv.scopeKey, redirectUrl, clientName: srv.clientName, scope: srv.scope, actor });
   const res = await auth(provider, { serverUrl: srv.url, scope: srv.scope, fetchFn: await gatewaySsrfFetch() });
   if (res === "AUTHORIZED") return { authorized: true }; // 유효 토큰 이미 있음
@@ -230,8 +376,16 @@ export async function startConsent(memberId: string, serverName: string, actor?:
 // 콜백 완료 — state 검증 → code→token 교환 → 멤버 vault 저장. serverName·memberId·scopeKey 는 state 에서 복원.
 export async function finishConsent(stateToken: string, code: string, actor?: string): Promise<{ ok: true; memberId: string; serverName: string }> {
   const p = verifyState(stateToken); // 위변조/만료 검증(HMAC)
+  if (isNotionPublicServer(p.s)) { // #1881 N2 노션 공개 통합 — MCP 서버 행 없음, Basic 교환
+    await finishNotionPublicConsent(p, code, actor);
+    return { ok: true, memberId: p.m, serverName: p.s };
+  }
   const srv = await loadProxyServer(p.s);
   const redirectUrl = await callbackUrl();
+  if (isSlackOAuthKind(srv.authKind)) { // #1881 슬랙 직결 — PKCE 없음, 교환·저장은 finishSlackConsent
+    await finishSlackConsent(p, srv, code, redirectUrl, actor);
+    return { ok: true, memberId: p.m, serverName: p.s };
+  }
   const provider = new VaultOAuthProvider({ memberId: p.m, serverName: p.s, authKind: srv.authKind, tokenScopeKey: p.k, redirectUrl, state: stateToken, actor });
   try {
     const res = await auth(provider, { serverUrl: srv.url, authorizationCode: code, fetchFn: await gatewaySsrfFetch() });
@@ -247,6 +401,7 @@ export async function finishConsent(stateToken: string, code: string, actor?: st
 export async function abandonConsent(stateToken: string): Promise<void> {
   let p: StatePayload;
   try { p = verifyState(stateToken); } catch { return; }
+  if (isNotionPublicServer(p.s)) return; // #1881 노션 공개 통합 — PKCE 슬롯이 없어 정리할 것도 없다
   try {
     const srv = await loadProxyServer(p.s);
     const provider = new VaultOAuthProvider({ memberId: p.m, serverName: p.s, authKind: srv.authKind, tokenScopeKey: p.k, redirectUrl: await callbackUrl(), state: stateToken });

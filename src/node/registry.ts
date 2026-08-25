@@ -14,6 +14,7 @@ import {
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
 import { authNodeToken, getNode, touchNode, type OrgNode } from "./store.js";
+import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
 
 // 웹터미널 close 코드 확장(#869) — 로컬 4410(session-gone)/4403(no-access) 체계에 노드 사유를 더한다.
 export const CLOSE_NODE_OFFLINE = 4462; // 노드 미연결(꺼짐·절전·네트워크) — 클라는 재시도 유지(일시 상태일 수 있음)
@@ -44,12 +45,39 @@ interface NodeConn {
   harnesses: string[];   // #1713 — 이 노드가 실제로 띄울 수 있는 하네스(hello 보고 · 미보고면 기준선)
 }
 
-// 노드 세션 스냅샷 — 노드가 끊겨도 유지해 '오프라인 노드의 세션'을 계속 보여준다(게이트웨이 재시작 시 리셋, 도그푸드 OK).
+// 노드 세션 스냅샷 — 노드가 끊겨도 유지해 '오프라인 노드의 세션'을 계속 보여준다.
 //  res = 상시 노출 리소스(§10) — 스케줄러의 배치 입력(오프라인이면 후보 제외라 stale 무해).
+// ★ #1834 — 이 Map 은 **정본이 아니라 캐시**다. 정본은 DB(org_node_state)이고 부팅 때 hydrateNodeStates 가
+//  여기를 채운다. 종전엔 이게 유일한 저장소라 게이트웨이를 재배포할 때마다 노드 세션 목록이 통째로 비었고,
+//  노드가 다시 붙을 때까지(최악 33초) 살아 있는 세션이 화면에서 사라졌다 — 그 빈 판을 본 세션 화면이
+//  '이 세션은 없어졌다'로 오판해 다른 세션으로 갈아타는 사고까지 났다(web/v2/panes-parts.ts 주석).
+//  조회는 계속 이 캐시가 답한다(동기 API 유지 — 목록 API 가 조회마다 DB 를 때리지 않는다).
 interface NodeState { ts: number; sessions: SessionInfo[]; name: string; kind: string; owner: string; res: NodeResources | null }
 
 const conns = new Map<string, NodeConn>();
 const states = new Map<string, NodeState>();
+// 정본에 마지막으로 쓴 것 — 같은 목록을 3초마다 다시 쓰지 않기 위한 기억(node-state-store.shouldPersist).
+const persisted = new Map<string, { digest: string; at: number }>();
+
+/**
+ * 부팅 hydrate — 정본(org_node_state)에서 캐시를 채운다. **재배포가 목록에 보이지 않게 하는 자리**다.
+ *
+ * 이미 그 노드가 붙어 상태를 보고했으면 건너뛴다(라이브 보고가 정본보다 신선하다 — 부팅 레이스 안전).
+ *  복구한 스냅샷의 ts 는 과거라, 그 노드에 attach 할 때는 nodeCanAttach 가 STATE_STALE_MS 로 걸러 노드에
+ *  목록을 다시 물어본다(오래된 근거로 attach 를 통과시키지 않는다).
+ */
+export async function hydrateNodeStates(): Promise<number> {
+  const rows = await loadNodeStates();
+  let n = 0;
+  for (const r of rows) {
+    if (states.has(r.nodeId)) continue;
+    states.set(r.nodeId, { ts: r.reportedAt, sessions: r.sessions, name: r.name, kind: r.kind, owner: r.owner, res: r.res });
+    persisted.set(r.nodeId, { digest: sessionsDigest(r.sessions), at: r.reportedAt });
+    n++;
+  }
+  logger.info({ nodes: n, sessions: rows.reduce((a, r) => a + r.sessions.length, 0) }, "노드 세션 스냅샷 복구(정본 org_node_state)");
+  return n;
+}
 let heartbeat: NodeJS.Timeout | null = null;
 
 export interface NodePublic { id: string; name: string; kind: string; owner: string; online: boolean; lastStateTs: number | null; sessions: number }
@@ -207,12 +235,30 @@ function applyState(nodeId: string, sessions: SessionInfo[], res?: NodeResources
     res: res ?? prev?.res ?? null,
   };
   states.set(nodeId, st);
+  // 정본(org_node_state)으로 흘려보낸다(#1834) — 이 게이트웨이가 재배포로 죽어도 다음 부팅이 여기서 목록을 되찾는다.
+  //  세션 목록이 바뀌었을 때 즉시, 그대로면 최소 간격마다(node-state-store.shouldPersist). 비치명 —
+  //  실패하면 기억을 지워 다음 보고(3초 뒤)가 곧바로 다시 시도한다.
+  const digest = sessionsDigest(sessions);
+  if (shouldPersist(persisted.get(nodeId), digest, st.ts)) {
+    persisted.set(nodeId, { digest, at: st.ts });
+    void saveNodeState(nodeId, sessions, st.res, st.ts).catch((err) => {
+      persisted.delete(nodeId);
+      logger.warn({ err, node: nodeId }, "노드 스냅샷 정본 저장 실패(비치명 — 다음 보고에 재시도)");
+    });
+  }
   return st;
 }
 
 // 위탁 태스크 종결 훅(P2) — 스케줄러가 구독(순환 import 회피: registry 는 태스크 로직을 모른다).
 let taskDoneHandler: ((nodeId: string, m: TaskDoneMsg) => void) | null = null;
 export function onTaskDone(cb: (nodeId: string, m: TaskDoneMsg) => void): void { taskDoneHandler = cb; }
+
+// worker 복구 훅 — registry가 앱/DB 계층을 import하지 않게 단일 콜백으로 역전한다.
+// 최신 에이전트 hello가 확정된 뒤 호출돼, 연결 단절 때 fail-closed 정지한 AppInstance worker를 다시 맞춘다.
+let nodeReadyHandler: ((nodeId: string) => void | Promise<void>) | null = null;
+export function onNodeReady(cb: (nodeId: string) => void | Promise<void>): void { nodeReadyHandler = cb; }
+let workerStateHandler: ((nodeId: string, snapshot: unknown) => void | Promise<void>) | null = null;
+export function onWorkerState(cb: (nodeId: string, snapshot: unknown) => void | Promise<void>): void { workerStateHandler = cb; }
 
 // 스케줄러용 원격 노드 뷰(§10) — 온라인 노드만(오프라인은 후보 자체가 아님).
 // 스케줄러가 여기서 얻는 것은 **지금 붙어 있는가 + 그 머신의 리소스**뿐이다(liveness). 소유자·공유·활성 같은
@@ -275,10 +321,20 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     //  구 노드는 모르는 t 를 무시하므로 안전하다(무회귀).
     try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); }
     catch { /* 전송 실패는 비치명 — 다음 재연결에 다시 알린다 */ }
+    const latest = servedAgentVersion();
+    if (c.caps.has("startWorker") && c.caps.has("stageWorkerChunk") && (!latest || m.agentVer === latest)) {
+      void Promise.resolve(nodeReadyHandler?.(c.node.id)).catch((err) =>
+        logger.warn({ err, node: c.node.id }, "노드 worker 복구 실패(비치명 — 다음 재연결/조회가 재시도)"));
+    }
     return;
   }
   if (m.t === "taskdone") {
     try { taskDoneHandler?.(c.node.id, m); } catch { /* 스케줄러 오류는 태스크 1건에 한정 */ }
+    return;
+  }
+  if (m.t === "workerState") {
+    void Promise.resolve(workerStateHandler?.(c.node.id, m.snapshot)).catch((err) =>
+      logger.warn({ err, node: c.node.id }, "원격 worker 상태 저장 실패(다음 push/조회에서 재시도)"));
     return;
   }
   if (m.t === "opened") {

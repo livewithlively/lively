@@ -24,16 +24,16 @@
 .storage-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .storage-head code { font-size: 12px; color: var(--muted); word-break: break-all; }
 
-.gauge { height: 10px; border-radius: 999px; background: var(--bg-tint, #eef0f3); overflow: hidden; margin: 7px 0 5px; }
+.gauge { height: 10px; border-radius: 999px; background: var(--bg-tint); overflow: hidden; margin: 7px 0 5px; }
 .gauge-fill { height: 100%; border-radius: 999px; transition: width .35s ease; }
-.gauge-ok { background: #22c55e; }
-.gauge-warn { background: #f59e0b; }
+.gauge-ok { background: var(--mint); }
+.gauge-warn { background: var(--warn); }
 .gauge-critical { background: #ef4444; }
 
 .storage-lv { font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
-.storage-lv-ok { background: #dcfce7; color: #14532d; }
-.storage-lv-warn { background: #fef3c7; color: #78350f; }
-.storage-lv-critical { background: #fee2e2; color: #7f1d1d; }
+.storage-lv-ok { background: var(--ok-bg); color: var(--ok-ink); }
+.storage-lv-warn { background: var(--warn-bg); color: var(--warn-ink); }
+.storage-lv-critical { background: var(--danger-bg); color: var(--danger-ink); }
 
 .storage-calc { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
 .storage-fields { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 4px; }
@@ -46,41 +46,41 @@
 .sess-admin-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
 .sess-admin-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
 .sess-admin-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
-.sess-admin-dot-busy { background: #f59e0b; }
-.sess-admin-dot-waiting { background: var(--coral, #e5484d); }
+.sess-admin-dot-busy { background: var(--warn); }
+.sess-admin-dot-waiting { background: var(--coral); }
 .sess-admin-dot-idle { background: var(--mint-deep); }
 .sess-admin-dot-exited, .sess-admin-dot-offline { background: var(--muted-2); }
 .sess-admin-main { flex: 1; min-width: 0; }
 .sess-admin-title { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-admin-meta { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-admin-st { flex: none; font-size: 11.5px; font-weight: 700; min-width: 52px; text-align: right; }
-.sess-admin-st-busy { color: #d97706; }
-.sess-admin-st-waiting { color: var(--coral, #e5484d); }
+.sess-admin-st-busy { color: var(--warn); }
+.sess-admin-st-waiting { color: var(--coral); }
 .sess-admin-st-idle { color: var(--mint-deep); }
 .sess-admin-st-exited, .sess-admin-st-offline { color: var(--muted); }
 .sess-admin-when { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; min-width: 68px; text-align: right; }
-.storage-warn { border-left: 3px solid #f59e0b; padding-left: 9px; }
+.storage-warn { border-left: 3px solid var(--warn); padding-left: 9px; }
 .ws-badges { display: flex; align-items: center; gap: 6px; }
-.ws-plan { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--bg-tint, #f6f7f9); }
+.ws-plan { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--bg-tint); }
 /* 워크트리 옵트인 — 파생물 체크박스와 눈으로 구분되어야 한다(되돌리기 비용이 다르다). */
 .ws-wt-opt { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); cursor: pointer; }
 .ws-wt-opt input { margin: 0; }
-.ws-wt-opt:has(input:checked) { color: var(--coral, #e5484d); font-weight: 700; }
+.ws-wt-opt:has(input:checked) { color: var(--coral); font-weight: 700; }
 .ws-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
 .storage-banner { padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; }
 .storage-banner strong { display: block; font-size: 14px; }
 .storage-banner p { margin: 6px 0 0; font-size: 12.5px; opacity: .9; }
-.storage-banner-critical { background: #fee2e2; color: #7f1d1d; border: 1px solid #fca5a5; }
-.storage-banner-warn { background: #fef3c7; color: #78350f; border: 1px solid #fcd34d; }
+.storage-banner-critical { background: var(--danger-bg); color: var(--danger-ink); border: 1px solid var(--danger-line); }
+.storage-banner-warn { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line); }
 
 /* #735 자료 목록 — 채널칩 + 더보기 페이지네이션(source.fields 구조화 메타 표시) */
 .wk-src-more { display: flex; justify-content: center; padding: 10px 0; }
 .wk-more-btn { font: inherit; cursor: pointer; padding: 6px 16px; border-radius: 8px; font-weight: 600;
-  border: 1px solid color-mix(in srgb, var(--accent, #5b6cff) 40%, var(--bg, #fff));
-  background: color-mix(in srgb, var(--accent, #5b6cff) 8%, transparent); color: var(--accent, #5b6cff); }
-.wk-more-btn:hover { background: color-mix(in srgb, var(--accent, #5b6cff) 16%, transparent); }
-.wk-src-count { color: var(--muted, #8a94a6); font-size: 12px; padding: 4px 0; }
-.wk-src-chan { color: var(--accent, #5b6cff); font-weight: 600; }
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--bg));
+  background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); }
+.wk-more-btn:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.wk-src-count { color: var(--muted); font-size: 12px; padding: 4px 0; }
+.wk-src-chan { color: var(--accent); font-weight: 600; }
 
 /* ── 시작하기(#/start) 온보딩 — #/learn 과 같은 카드 언어. 인라인 스타일 대신 여기(#870). ── */
 /* 진행률 요약 카드 */
@@ -88,7 +88,7 @@
 .ob-progress-count { font-size: 17px; font-weight: 800; color: var(--ink); letter-spacing: -.3px; }
 .ob-progress-note { font-size: 13px; color: var(--ink-sub); }
 .ob-bar { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; }
-.ob-bar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), #3a9d6e); border-radius: 999px; transition: width .35s ease; }
+.ob-bar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), var(--ok-2)); border-radius: 999px; transition: width .35s ease; }
 /* 배너(회사 설정 미완·준비 끝) — guide-remember 계열 틴트 박스 */
 .ob-banner { display: block; text-decoration: none; color: inherit; border-radius: 14px; padding: 14px 16px; border: 1px solid var(--line-note); }
 .ob-banner.amber { background: rgba(217,164,65,.07); border-color: rgba(217,164,65,.3); }
@@ -118,8 +118,8 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 /* 미완 점 = 속 빈 파란 링. 필수는 채운 파란 원 + 흰 중심('지금 여기'). */
 .ob-step-dot { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 999px; background: var(--bg); border: 2px solid var(--blue); }
-.ob-step.req .ob-step-dot { background: var(--blue); border-color: var(--blue); }
-.ob-step.req .ob-step-dot::after { content: ''; width: 6px; height: 6px; border-radius: 999px; background: #fff; }
+.ob-step.req .ob-step-dot { background: var(--blue-fill); border-color: var(--blue); }
+.ob-step.req .ob-step-dot::after { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--surface); }
 .ob-step-label { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
 
 /* 완료 = 접힌 얇은 줄 — 초록 체크 + 라벨(회색) + 상태 pill + ⋯. 설명·버튼 없음(끝난 일). */
@@ -127,22 +127,22 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-done-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
 .ob-done-row + .ob-done-row { border-top: 1px solid var(--line); }
 .ob-done-check { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 999px; background: #3a9d6e; color: #fff; font-size: 11px; font-weight: 800; }
+  border-radius: 999px; background: var(--ok-2); color: var(--on-fill); font-size: 11px; font-weight: 800; }
 .ob-done-row.skipped .ob-done-check { background: var(--bg-tint); color: var(--muted-2); border: 1px solid var(--line-net); }
 .ob-done-label { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink-sub);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ob-done-tag { flex: none; font-size: 11px; font-weight: 700; color: #3a9d6e; background: rgba(58,157,110,.1);
+.ob-done-tag { flex: none; font-size: 11px; font-weight: 700; color: var(--ok-ink); background: rgba(58,157,110,.1);
   border-radius: 999px; padding: 1px 9px; }
 .ob-done-row.skipped .ob-done-tag { color: var(--muted-head); background: var(--bg-tint); }
 .ob-step-badge { font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint);
   border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; }
 .ob-step-badge.req { color: var(--blue); background: var(--bg-punch); border-color: var(--line-net-2); }
 /* 필수 미완의 '필수' 뱃지 = 채운 파랑(지금 해야 할 것). 완료된 필수는 조용한 틴트 그대로. */
-.ob-step.todo.req .ob-step-badge.req { color: #fff; background: var(--blue); border-color: var(--blue); }
+.ob-step.todo.req .ob-step-badge.req { color: var(--on-fill); background: var(--blue-fill); border-color: var(--blue); }
 /* 하네스 관리(#891) 대조 뱃지 — off(내가 끔)·muted(라이블리가 설치)·warn(가림)·own(내 것). */
 .ob-step-badge.off { color: var(--ink-faint); background: transparent; }
 .ob-step-badge.muted { color: var(--ink-faint); }
-.ob-step-badge.warn { color: #a86a00; background: #fff6e6; border-color: #f0d59a; }
+.ob-step-badge.warn { color: var(--warn-ink); background: var(--warn-bg); border-color: var(--warn-line); }
 .ob-step-badge.own { color: var(--blue); background: var(--bg-punch); }
 /* 하네스 항목 펼침(#893) — summary(이름·설명·뱃지·토글) + 펼치면 본문 md. 설명은 잘리지 않고 2줄 clamp. */
 .harness-row.expandable > .harness-summary { cursor: pointer; list-style: none; }
@@ -165,7 +165,7 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-more > summary::-webkit-details-marker { display: none; }
 .ob-more > summary:hover { background: var(--bg-tint); color: var(--ink-sub); }
 .ob-more-pop { position: absolute; right: 0; top: 28px; z-index: 5; padding: 6px; min-width: 152px;
-  display: flex; flex-direction: column; gap: 2px; box-shadow: 0 8px 24px rgba(21,35,59,.12); }
+  display: flex; flex-direction: column; gap: 2px; box-shadow: 0 8px 24px rgba(var(--shadow-ink), .12); }
 .ob-more-pop .btn { justify-content: flex-start; }
 
 /* ── 시작하기 = '도장깨기' 순차 여정(#/start). 위→아래 한 단계씩 깨며 스탬프를 모은다. #req ── */
@@ -173,10 +173,10 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-journey-count { font-size: 15.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
 .ob-journey-count b { color: var(--blue); font-size: 18px; }
 .ob-journey-note { flex: none; font-size: 12.5px; font-weight: 700; color: var(--muted-2); }
-.ob-journey-note.ok { color: var(--mint-deep, #16a37f); }
+.ob-journey-note.ok { color: var(--mint-deep); }
 .ob-journey-bar { height: 7px; border-radius: 999px; background: var(--bg-tint); overflow: hidden; margin: 9px 0 20px; }
 .ob-journey-bar-fill { height: 100%; border-radius: 999px; min-width: 7px;
-  background: linear-gradient(90deg, var(--mint-deep, #16a37f), var(--blue)); transition: width .5s cubic-bezier(.2,.8,.2,1); }
+  background: linear-gradient(90deg, var(--mint-fill), var(--blue-fill)); transition: width .5s cubic-bezier(.2,.8,.2,1); }
 .ob-journey-steps { display: flex; flex-direction: column; }
 
 /* 스텝 = 레일 노드 + 본문 */
@@ -187,10 +187,10 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-quest-line { flex: 1; width: 2px; min-height: 14px; margin: 5px 0; border-radius: 2px; background: var(--line); }
 
 /* 노드 상태 — 깬 도장(민트)·지금 단계(파랑 맥동)·다음 차례(흐린 링) */
-.ob-quest.is-done .ob-quest-node { background: var(--mint-deep, #16a37f); color: #fff;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mint-deep, #16a37f) 14%, transparent); }
-.ob-quest.is-skipped .ob-quest-node { background: var(--bg-tint); color: var(--muted-2); border: 1.5px dashed var(--line-net, #d9dee6); }
-.ob-quest.is-active .ob-quest-node { background: var(--blue); color: #fff;
+.ob-quest.is-done .ob-quest-node { background: var(--mint-fill); color: var(--on-fill);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mint-deep) 14%, transparent); }
+.ob-quest.is-skipped .ob-quest-node { background: var(--bg-tint); color: var(--muted-2); border: 1.5px dashed var(--line-net); }
+.ob-quest.is-active .ob-quest-node { background: var(--blue-fill); color: var(--on-fill);
   box-shadow: 0 0 0 5px color-mix(in srgb, var(--blue) 16%, transparent); animation: obPulse 2.1s ease-in-out infinite; }
 .ob-quest.is-upcoming .ob-quest-node { background: var(--bg); color: var(--muted-2); border: 2px solid var(--line); }
 /* 프로젝트 체험(#/start/project) — 진행판정 없는 손수 투어라 번호 노드로 정적 표시(흐리지 않게). */
@@ -200,7 +200,7 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-journey-lead { margin: 10px 0 20px; font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); }
 .ob-journey .step-cta { margin: 4px 0 0; padding-top: 16px; border-top: 1px solid var(--line); justify-content: center; }
 /* 지나온 구간 레일 = 채워짐 */
-.ob-quest.is-done .ob-quest-line, .ob-quest.is-skipped .ob-quest-line { background: color-mix(in srgb, var(--mint-deep, #16a37f) 50%, var(--line)); }
+.ob-quest.is-done .ob-quest-line, .ob-quest.is-skipped .ob-quest-line { background: color-mix(in srgb, var(--mint-deep) 50%, var(--line)); }
 @keyframes obPulse { 0%,100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--blue) 16%, transparent); }
   50% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--blue) 7%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .ob-quest.is-active .ob-quest-node { animation: none; } }
@@ -211,13 +211,13 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-quest-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ob-quest-name { font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
 .ob-quest-badge { flex: none; font-size: 10.5px; font-weight: 800; border-radius: 999px; padding: 2px 9px; letter-spacing: -.01em; }
-.ob-quest-badge.now { background: var(--blue); color: #fff; }
+.ob-quest-badge.now { background: var(--blue-fill); color: var(--on-fill); }
 .ob-quest-badge.req { color: var(--blue); background: var(--bg-punch); }
 
 /* 지금 이 단계 — 크게, 강조 카드 */
 .ob-quest.is-active .ob-quest-body { margin: 1px 0 18px; padding: 15px 16px; border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line)); background: color-mix(in srgb, var(--blue) 4%, var(--bg));
-  box-shadow: 0 3px 12px rgba(21,35,59,.06); }
+  box-shadow: 0 3px 12px rgba(var(--shadow-ink), .06); }
 .ob-quest.is-active:last-child .ob-quest-body { margin-bottom: 1px; }
 .ob-quest.is-active .ob-quest-name { font-size: 15.5px; }
 .ob-quest-desc { margin: 8px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); }
@@ -237,7 +237,7 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-quest-body.open { margin: 2px 0 18px; border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line));
   background: color-mix(in srgb, var(--blue) 4%, var(--bg));
-  box-shadow: 0 3px 12px rgba(21,35,59,.06); }
+  box-shadow: 0 3px 12px rgba(var(--shadow-ink), .06); }
 /* 접힘용 padding-top:6px/bottom:20px(아래 규칙, 0,3,0)를 이기려 상태까지 스코프(0,4,0) — active 카드처럼 위아래 균일 */
 .ob-quest.is-upcoming .ob-quest-body.open,
 .ob-quest.is-done .ob-quest-body.open,
@@ -251,7 +251,7 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-quest.is-upcoming .ob-quest-body { padding-top: 6px; padding-bottom: 20px; }
 .ob-quest.is-done .ob-quest-name, .ob-quest.is-skipped .ob-quest-name, .ob-quest.is-upcoming .ob-quest-name { font-size: 14px; font-weight: 700; }
 .ob-quest.is-skipped .ob-quest-name { color: var(--muted); }
-.ob-quest-tag { flex: none; font-size: 11.5px; font-weight: 700; color: var(--mint-deep, #16a37f); }
+.ob-quest-tag { flex: none; font-size: 11.5px; font-weight: 700; color: var(--mint-deep); }
 .ob-quest.is-skipped .ob-quest-tag { color: var(--muted-2); }
 
 /* 다음 차례 — 흐리게(잠긴 느낌) */
@@ -262,7 +262,7 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 /* 완주 축하 */
 .ob-done-all { text-align: center; padding: 6px 0 18px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
 .ob-done-all-stamp { width: 46px; height: 46px; margin: 0 auto; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  font-size: 24px; font-weight: 800; color: #fff; background: var(--mint-deep, #16a37f); box-shadow: 0 0 0 5px color-mix(in srgb, var(--mint-deep, #16a37f) 14%, transparent); }
+  font-size: 24px; font-weight: 800; color: var(--on-fill); background: var(--mint-deep); box-shadow: 0 0 0 5px color-mix(in srgb, var(--mint-deep) 14%, transparent); }
 .ob-done-all-title { margin-top: 8px; font-size: 17px; font-weight: 800; color: var(--ink); letter-spacing: -.3px; }
 .ob-done-all-sub { margin: 5px 0 0; font-size: 13px; line-height: 1.55; color: var(--ink-sub); }
 

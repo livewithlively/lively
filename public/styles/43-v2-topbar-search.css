@@ -1,0 +1,165 @@
+/* 43-v2-topbar-search.css — 새 셸(#1719)의 **맨 윗줄**과 **통합검색**(상민님 2026-08-20).
+   ⚠ 로드 순서는 public/index.html 의 <link> 나열이 정본이다(이 파일은 40~42 v2 규칙 뒤 = 맨 뒤).
+
+   담는 것 셋:
+    ① .v2-topbar   — 데스크톱 앱 창의 맨 윗줄(최소화·창모드·닫기와 같은 줄). 탭 줄이 여기 산다.
+    ② .v2-side-nav — 사이드바 맨 윗줄: [뒤로][앞으로] + [검색] (클로드 데스크톱 문법).
+    ③ .v2-omni     — 통합검색 스포트라이트(지식·프로젝트·자료·세션·세션이력 한 결과).
+*/
+
+/* ════════════════════════════════════════════════════════════════════════
+   ① 창 맨 윗줄 — 데스크톱 앱에서만(웹에선 .has-topbar 가 안 붙어 이 블록이 통째로 잠잠하다).
+   preload 가 그리던 빈 36px 띠를 셸이 가져와(web/v2/titlebar.ts) 탭 줄을 그리로 올린다.
+   좌·우 안쪽 여백(--v2-tb-left/right)은 OS 창 버튼이 얹히는 폭이다 — 맥은 왼쪽 신호등, 윈도우는 오른쪽 WCO.
+   줄 전체가 드래그 영역이고, 실제로 누르는 것들(탭·닫기·[모든 탭])만 no-drag 로 되돌린다.
+   ⚠ 탭이 줄을 꽉 채우면 창을 옮길 데가 없다 → 오른쪽 .v2-tb-grip 이 늘 빈 손잡이로 남는다(크롬과 같은 이유).
+   ════════════════════════════════════════════════════════════════════════ */
+.v2-topbar { display: none; }
+#v2-root.has-topbar { grid-template-rows: var(--v2-tb-h, 36px) minmax(0, 1fr); }
+#v2-root.has-topbar > .v2-topbar {
+  display: flex; align-items: stretch;
+  grid-column: 1 / -1; grid-row: 1;
+  height: var(--v2-tb-h, 36px);
+  padding-left: var(--v2-tb-left, 0px); padding-right: var(--v2-tb-right, 0px);
+  background: var(--gray-bg-2); border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag; -webkit-user-select: none; user-select: none;
+}
+#v2-root.has-topbar > .v2-topbar > .v2-tabs {
+  order: -1;                 /* 손잡이는 늘 오른쪽 — 탭 줄이 DOM 뒤에 붙어도 자리는 앞이다 */
+  flex: 1 1 auto; min-width: 0; height: 100%;
+  border-bottom: 0; background: none;
+  /* 가운데 열에 있을 때 붙던 오른쪽 여백(타임라인 서랍 버튼 자리, 40-v2.css `#v2-root.no-aside:not(.no-tl) .v2-tabs`)은
+     창 줄에서는 뜻이 없다 — 그 버튼은 가운데 열 위에 뜬다. 여기선 끌 손잡이(.v2-tb-grip)가 그 자리를 맡는다. */
+  padding-right: 0;
+  -webkit-app-region: no-drag;
+}
+/* 창을 끌 자리 — 늘 빈 채로 둔다. 폭은 '끌 수 있는 최소'에 맞춘다: 종전 128px 은 윈도우에서 마지막 탭과
+   최소화 단추 사이가 휑해 보였다(상민님 2026-08-20). 창버튼 여백(--v2-tb-right)이 그 옆에 또 붙는다는 걸
+   감안하면 이 손잡이는 짧아도 충분하다. */
+/* 창을 끌 자리 — 늘 빈 채로 둔다. 128px 은 마지막 탭과 최소화 단추 사이가 휑했고(2026-08-20), 56px 로 줄였더니
+   이번엔 잡을 데가 모자랐다(상민님 2026-08-24). 그 사이값으로 둔다 — 끌기에 충분하면서 빈 자리로 보이지 않는 폭. */
+.v2-tb-grip { flex: 0 0 88px; min-width: 48px; }
+/*  #1954 — 상단 탭이 빠지면서 이 줄이 비었다. 뒤로·앞으로·검색이 그 자리로 올라온다(side.ts navHost).
+    ⚠ 줄 전체가 drag 라 그 안의 버튼·입력은 no-drag 로 되돌려야 눌린다. 손잡이는 오른쪽에 그대로 남는다. */
+#v2-root.has-topbar > .v2-topbar > .v2-side-nav {
+  order: -1; flex: 1 1 auto; min-width: 0; align-items: center; padding: 0 8px;
+  -webkit-app-region: no-drag;
+}
+/*  창 줄의 검색칸은 사이드바 때보다 넓게 쓸 수 있지만 줄을 가로지를 이유는 없다 — 절반으로(#1954 2차). */
+#v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: 210px; }
+/* 탭이 줄 맨 위에 닿으므로 켜진 탭의 파란 밑줄은 **아래쪽**에 긋는다 — 위에 그으면 창 모서리와 붙어 선이 잘려 보인다. */
+#v2-root.has-topbar > .v2-topbar .v2-tab.on { box-shadow: inset 0 -2px 0 var(--blue); }
+/* 데스크톱 앱은 맨 윗줄이 이미 탭 줄이다 — 가운데 열 위에 또 한 줄이 생기지 않게 [모든 탭] 도 같은 줄에서 산다.
+   자리는 줄 맨 왼쪽이라(tabs.ts) 창 버튼과 안 겹친다. 맥에선 그 왼쪽이 신호등 자리이므로 --v2-tb-left 가 이미 비켜 준다. */
+#v2-root.has-topbar > .v2-topbar .v2-tab-menu { background: none; border-left-color: var(--line); -webkit-app-region: no-drag; }
+/* 좁은 폭(≤900px)에서도 **창 줄은 그대로 있다**(#1954 3차 상민님: "창모드든 아니든 타이틀바는 똑같게").
+   종전엔 이 폭에서 창 줄을 감추고 모바일 바(☰·제목·타임라인)가 드래그까지 대신 맡았는데, 그러면 같은 자리가
+   두 얼굴을 갖는다 — 넓을 땐 뒤로·앞으로·검색, 좁을 땐 세션명. 이제 ☰ 는 창 줄 맨 왼쪽에 살고(main.ts 가 옮긴다)
+   모바일 바에는 남길 것이 [타임라인] 하나뿐이라, 그 바는 **버튼이 있을 때만** 선다. */
+@media (max-width: 900px) {
+  #v2-root.has-topbar { display: flex; flex-direction: column; }
+  #v2-root.has-topbar > .v2-topbar { display: flex; flex: none; }
+  /* 창 줄이 살아 있으므로 모바일 바는 드래그를 대신 맡지 않는다 — 창버튼 여백도 창 줄이 이미 비켜 준다. */
+  #v2-root.has-topbar > .v2-mbar { padding-left: 4px; padding-right: 4px; }
+  /*  좁은 폭은 서랍이 담당한다 — 데스크톱 접기 클래스는 여기서 무시한다(안 그러면 서랍까지 안 보인다). */
+  #v2-root.has-topbar.side-off > .v2-side { visibility: visible; overflow: auto; }
+  /* 좁은 폭에선 검색칸이 줄을 다 쓰게 둔다 — 210px 캡은 넓을 때 '줄을 가로지르지 않게' 하는 값이다. */
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: none; }
+  /* 끌 자리는 좁은 화면에서 사치다 — 창버튼 여백(--v2-tb-right)이 이미 비어 있어 그리로 끈다. */
+  #v2-root.has-topbar > .v2-topbar > .v2-tb-grip { display: none; }
+}
+/* ☰ 는 창 줄 맨 왼쪽 — 폭과 무관하게 늘 같은 자리다(#1954 3차). 맥 신호등·윈도우 WCO 여백 안쪽에 앉는다. */
+#v2-root.has-topbar > .v2-topbar > .v2-mbar-menu {
+  order: -2; flex: none; width: 34px; height: 100%; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 0; background: none; color: var(--ink-sub); cursor: pointer; -webkit-app-region: no-drag;
+}
+#v2-root.has-topbar > .v2-topbar > .v2-mbar-menu:hover { background: var(--bg); color: var(--ink); }
+/*  ⚠ 획 스타일(fill:none·stroke)은 40-v2.css 의 **모바일 미디어 블록 안**에만 있다 — ☰ 가 그 바를 떠나
+    창 줄로 오면서 그 규칙 밖으로 나가, 넓은 폭에서 아이콘이 stroke:none·fill:black 이 되어 안 보였다(#1954 3차 실측).
+    여기서 폭과 무관하게 다시 준다. */
+#v2-root.has-topbar > .v2-topbar > .v2-mbar-menu .v2-mbar-ic {
+  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+/* 모바일 바는 [타임라인] 하나만 남는다 — 그 버튼이 숨으면 바 자체가 설 이유가 없다. */
+#v2-root.has-topbar > .v2-mbar:not(:has(.v2-mbar-btn:not([hidden]))) { display: none; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ② 사이드바 맨 윗줄 — [뒤로][앞으로] + [검색]
+   내용(프로젝트·세션)보다 위, 워크스페이스 문패보다도 위. '움직이는 손잡이'라 목록의 일부가 아니다.
+   ════════════════════════════════════════════════════════════════════════ */
+.v2-side-nav { display: flex; align-items: center; gap: 4px; padding: 8px var(--side-x, 8px) 2px; }
+.v2-navb { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; padding: 0;
+  border: 0; border-radius: 8px; background: none; color: var(--muted-head); cursor: pointer; }
+.v2-navb:hover:not(:disabled) { background: var(--bg); color: var(--ink); }
+.v2-navb:disabled { color: var(--muted-2); cursor: default; }
+.v2-navb-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* 검색은 **칸처럼 생긴 버튼**이다 — 진짜 입력칸을 두면 사이드바 20초 재렌더가 입력·한글 조합을 끊는다. */
+.v2-omnib { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 28px; padding: 0 8px;
+  border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg);
+  font: inherit; font-size: 12.5px; color: var(--muted); cursor: pointer; text-align: left; }
+.v2-omnib:hover { border-color: var(--blue); color: var(--ink-sub); }
+.v2-omnib-ic { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+.v2-omnib-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-omnib-k { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; letter-spacing: .02em;
+  padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--canvas); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ③ 통합검색(스포트라이트) — 화면 가운데 위. 한 칸에 치고, 종류는 결과가 말한다.
+   ════════════════════════════════════════════════════════════════════════ */
+/*  크기 — 상민님 2026-08-25 "30~50% 키우되 창모드(작은 윈도우)에서도 대응". 옛 값은 640px / 상단 12vh / 70vh.
+    치수를 그냥 키우면 작은 창에서 카드 몫이 여백에 눌리므로, 셋 다 **화면에 비례시키되 위아래로 물린다**:
+     · 폭   = 880px + max-width:100%  — 640→880(+37.5%). 좁은 창에선 스스로 준다(760px 창에서 740px 실측).
+     · 상단 = clamp(18px, 9vh, 108px) — 12vh 고정은 세로로 긴 창에서 여백만 늘었다(1440×1600 에서 192px 실측 → 108px).
+     · 높이 = min(78vh, 100%)         — 78vh 가 평소 값이고, 100% 는 이 덮개의 **패딩 안쪽**이라 어떤 창에서도
+       '상단 여백 + 카드'가 화면을 넘을 수 없다는 보험이다(현실 창 크기에선 78vh 쪽이 이긴다).
+    실측(dev, 결과 20행): 1440×900 폭 640→880·카드 630→702px / 1100×620 434→484px / 960×560 392→437px, 넘침 0. */
+.v2-omni { position: fixed; inset: 0; z-index: 120; display: flex; justify-content: center; align-items: flex-start;
+  padding: clamp(18px, 9vh, 108px) 16px 24px; background: rgba(var(--shadow-ink), .34); }
+.v2-omni-card { width: 880px; max-width: 100%; max-height: min(78vh, 100%); display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  box-shadow: 0 24px 64px rgba(16, 32, 64, .26), 0 3px 10px rgba(16, 32, 64, .10); }
+.v2-omni-top { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.v2-omni-lens { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-in { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 16px; color: var(--ink); }
+.v2-omni-in:focus { outline: none; }
+.v2-omni-esc { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; padding: 2px 6px;
+  border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--canvas); }
+/* 종류 칩 — 검색창 바로 아래 한 줄. 기본(선택 없음)은 **전부 켜진 모습**이다(모두 포함이므로).
+   하나를 누르면 그것만 켜지고 나머지가 꺼진 모습이 된다 — 지금 무엇을 찾고 있는지 화면이 늘 말한다. */
+.v2-omni-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 14px; border-bottom: 1px solid var(--line, #E6ECF5); }
+.v2-omni-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px 0 7px;
+  border: 1px solid var(--line-net, #DCE6F5); border-radius: 999px; background: var(--bg, #fff);
+  font: inherit; font-size: 11.5px; color: var(--muted, #8A99B5); cursor: pointer; white-space: nowrap; }
+.v2-omni-chip:hover { border-color: var(--blue); color: var(--ink-sub, #5A6B85); }
+.v2-omni-chip.on { border-color: var(--blue); background: var(--bg-tint-2, #EEF5FF); color: var(--ink); font-weight: 600; }
+/*  보조 축(자료·세션이력)은 구분선 뒤에 선다 — 켜진 모습이 기본인 왼쪽 칩들과 성격이 다르다(더하는 손잡이).
+    꺼져 있을 때가 기본이라 점선 테두리로 '아직 안 켠 것'임을 말한다(꺼진 주 축 칩과 헷갈리지 않게). */
+.v2-omni-chipsep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--line, #E6ECF5); }
+.v2-omni-chip.aux:not(.on) { border-style: dashed; }
+.v2-omni-chip-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-list { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
+.v2-omni-gh { padding: 8px 8px 4px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
+.v2-omni-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 9px; cursor: pointer; }
+.v2-omni-row.on { background: var(--bg-tint-2); }
+.v2-omni-ic { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 7px;
+  background: var(--canvas); color: var(--muted-head); }
+.v2-omni-row.on .v2-omni-ic { background: var(--bg); color: var(--blue); }
+.v2-omni-kic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.v2-omni-t { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-omni-s { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 일치 부분 — 바탕만 옅게 깐다(글자색·굵기는 그대로). 한 줄에 여러 군데가 칠해져도 줄이 시끄러워지지 않는다.
+   ⚠ <mark> 의 브라우저 기본값(노랑 바탕·검정 글자)은 다크모드를 그대로 뚫고 나오므로 둘 다 덮어쓴다. */
+.v2-omni-hl { background: var(--bg-tint-2); color: inherit; border-radius: 3px; padding: 0 1px; box-shadow: inset 0 -1px 0 var(--blue); }
+.v2-omni-row.on .v2-omni-hl { background: var(--bg); }
+/* key(지식 이름 · 프로젝트 번호) — 사람이 옮겨 적는 이름이라 고정폭으로. 정확히 맞았으면 테두리로 그렇다고 말한다. */
+.v2-omni-key { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-head);
+  background: var(--gray-bg-2); border: 1px solid transparent; border-radius: 4px; padding: 0 4px; }
+.v2-omni-key.exact { border-color: var(--blue); color: var(--ink-sub); }
+.v2-omni-badge { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); }
+.v2-omni-note { padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+.v2-omni-note[hidden] { display: none; }
+@media (max-width: 900px) {
+  .v2-omni { padding: clamp(14px, 6vh, 64px) 10px 16px; }
+  .v2-omni-card { max-height: min(86vh, 100%); }
+}

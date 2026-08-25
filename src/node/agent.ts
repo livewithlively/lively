@@ -13,6 +13,7 @@ import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";   // #1713 자가 갱신 — 받은 tar.gz 해제
 import { linkIsStale, LINK_CHECK_MS, LINK_STALE_MS } from "./link-liveness.js";   // #1541 — 클라이언트 쪽 생존 감시
+import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연결 지연(두 구간)
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,
@@ -20,6 +21,7 @@ import {
 } from "../terminal/terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/terminal-pty.js";
 import { sendKeysToSession } from "../terminal/send-keys.js";
+import { injectFirstPrompt } from "../terminal/session-first-prompt.js";
 import { applySessionProject } from "../terminal/session-project.js";   // #1719 세션 프로젝트 소속(노드 로컬 적용)
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
@@ -31,10 +33,16 @@ import {
 import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
+import { WorkerHost, WorkerBundleStager, type WorkerStartSpec, type WorkerStopReason } from "../apps/worker-host.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
 const TOKEN = process.env.LIVELY_NODE_TOKEN || "";
 const NODE_ID = process.env.LIVELY_NODE_ID || ""; // 표시용 — 신원은 서버가 토큰으로 특정한다
+let workerStateSocket: WebSocket | null = null;
+const nodeWorkerHost = new WorkerHost({ onSnapshot: (snapshot) => {
+  const ws = workerStateSocket;
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "workerState", snapshot } satisfies NodeToGwMsg));
+} });
 
 // 도는 번들 자신의 지문(#905 C4) — 키트 kit-version 과 같은 모델: **실행 중인 바이트가 곧 버전**이라
 //  사람이 숫자를 올릴 필요도, 빠뜨릴 일도 없다. 게이트웨이가 서빙본 지문과 비교해 이 노드가 최신인지 안다.
@@ -85,7 +93,7 @@ async function maybeSelfUpdate(latest: string | null | undefined): Promise<void>
       if (ver !== latest) { logger.warn({ got: ver, want: latest }, "받은 번들 지문이 다르다 — 교체하지 않는다"); return; }
       fs.renameSync(got, self);   // 같은 파일시스템 → 원자적
       logger.info({ ver }, "노드 프로그램 갱신 완료 — 다시 시작한다(런처가 되살린다)");
-      setTimeout(() => process.exit(0), 300);   // 로그가 나갈 틈만 주고 종료
+      setTimeout(() => { void nodeWorkerHost.shutdown().finally(() => process.exit(0)); }, 300); // worker 회수 뒤 런처가 되살린다
     } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
   } catch (e) {
     logger.warn({ err: (e as Error)?.message }, "자가 갱신 실패 — 다음 연결에 다시 시도");
@@ -98,8 +106,9 @@ if (!GW_URL || !TOKEN) {
 }
 
 const STATE_PUSH_MS = 3_000;
-const BACKOFF_MIN_MS = 1_000;
-const BACKOFF_MAX_MS = 30_000;
+// 재연결 지연은 reconnect-delay.ts 가 계산한다(#1865) — 왜 두 구간(촘촘/느슨)으로 갈랐는지는 그 파일 머리말.
+//  ⚠ 상수를 여기 다시 두지 마라: 종전엔 여기 하나뿐이라 '재배포 직후'와 '오래 죽어 있음'을 같은 곡선으로 다뤘고,
+//   그래서 게이트웨이가 살아난 뒤에도 노드가 8~16초를 더 기다렸다.
 
 // ── attach 채널 어댑터 — 게이트웨이행 단일 WSS 위의 가상 채널을 AttachSocket 으로 위장해
 //    terminal-pty.attachSession(tmux -CC · 큐잉 · 정리)을 그대로 재사용한다. ──
@@ -148,6 +157,8 @@ const trackedTasks = new Map<number, TaskWatch>();
 type ProvisionJob = { state: "running" | "done" | "error"; result?: unknown; error?: string; at: number };
 const provisionJobs = new Map<number, ProvisionJob>();
 const PROVISION_JOB_TTL_MS = 60 * 60 * 1000;   // done/error 는 1시간 뒤 정리(맵 무한증식 방지 — 프로젝트 수는 적다)
+
+const workerBundleStages = new WorkerBundleStager();
 
 // started:true = 새로 시작 · false = 이미 진행 중이라 이 요청 specs 를 안 받음(coalesce). 게이트웨이가 이 구분을 로그에 쓴다.
 async function startProvision(args: Record<string, unknown>): Promise<{ started: boolean }> {
@@ -200,6 +211,29 @@ async function nodeSessionAbs(id: string, sub: string, requireSub = false): Prom
 async function runOp(op: string, args: Record<string, unknown>): Promise<unknown> {
   const user = (args.user ?? {}) as LivelyUser;
   switch (op) {
+    case "stageWorkerChunk": return workerBundleStages.stage(args);
+    case "startWorker": {
+      const runId = String(args.runId ?? "");
+      const codeHash = String(args.codeHash ?? "");
+      const spec: WorkerStartSpec = {
+        runId, appId: String(args.appId ?? ""), instanceId: String(args.instanceId ?? ""),
+        entry: String(args.entry ?? ""), code: workerBundleStages.take(runId, codeHash), codeHash,
+        memoryMb: Number(args.memoryMb), idleTimeoutSec: Number(args.idleTimeoutSec),
+        allowedHosts: Array.isArray(args.allowedHosts) ? args.allowedHosts.map(String) : [],
+        selfHosts: Array.isArray(args.selfHosts) ? args.selfHosts.map(String) : [],
+        // 조직 예산(#1780 Stage B) — 구 게이트웨이는 이 필드를 안 보내므로 부재 시 0(감시 끔)이다.
+        //  숫자가 아니면 0으로 접는다: 감시를 못 켜는 것이 멀쩡한 worker 를 잘못된 값으로 죽이는 것보다 낫다.
+        cpuPercentMax: Number.isFinite(Number(args.cpuPercentMax)) ? Math.max(0, Number(args.cpuPercentMax)) : 0,
+        maxWallSec: Number.isFinite(Number(args.maxWallSec)) ? Math.max(0, Number(args.maxWallSec)) : 0,
+      };
+      return nodeWorkerHost.start(spec);
+    }
+    case "workerStatus": return nodeWorkerHost.status(String(args.runId ?? ""));
+    case "stopWorker": {
+      const runId = String(args.runId ?? "");
+      workerBundleStages.delete(runId);
+      return nodeWorkerHost.stop(runId, String(args.reason ?? "explicit") as WorkerStopReason);
+    }
     case "runTask": {
       const input = args as unknown as RunTaskInput;
       const r = await spawnTaskSession(input);
@@ -226,8 +260,11 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     //  확인)는 게이트웨이가 이미 끝냈다(F7 — runOp 는 기계적 실행만). 모르는 state 는 무시하고 활동 시각만 갱신.
     case "markActive": {
       const st = args.state;
-      await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
-      return { ok: true };
+      // #1842 — 전이(prev→phase)를 게이트웨이에 **돌려준다**. 노드 세션의 tmux 는 이 PC 에 있어 게이트웨이가
+      //  직접 볼 수 없으므로, 이 응답이 없으면 다른 PC 에서 도는 세션만 실시간 알림에서 빠져 30초 폴링에 묶인다.
+      //  구 게이트웨이는 이 필드를 모르고 무시한다(무회귀).
+      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
+      return { ok: true, change: change ?? null };
     }
     // #1664 — 게이트웨이가 이 노드의 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). 인가(소유·초대)는
     //  게이트웨이가 끝냈다는 전제(F7). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와 flush 지연 규약은
@@ -236,13 +273,23 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       await sendKeysToSession(String(args.id), String(args.text ?? ""));
       return { ok: true };
     }
-    // #1719 — 세션 프로젝트 소속(붙이기·떼기). 게이트웨이가 소유·프로젝트 멤버십을 검증하고 프로젝트 폴더(상대경로 folder)를
-    //  실어 보낸다 — 노드는 자기 워크스페이스에서 그 폴더를 찾아(있으면) 링크를 걸고, 없으면 마커·옵션만 적용한다.
+    // 세션 프로젝트 소속(붙이기·떼기). 게이트웨이가 소유권·공개범위를 검증하고 DB desired를 먼저 기록한다.
+    // 노드는 tmux 실행 캐시만 갱신하며 cwd나 프로젝트 표현 파일을 만들지 않는다.
     case "setProject": {
       const b = args.bind as { projectId: number; folder: string; name?: string | null; src?: "v6" | "org" } | null | undefined;
       return applySessionProject(user, String(args.id), b && Number(b.projectId) > 0 ? b : null);
     }
-    case "create": {
+    case "injectFirstPrompt": {
+      const id = String(args.id);
+      const harness = String(args.harness || "claude");
+      const prompt = String(args.text || "");
+      // 신뢰 대화상자 자동 수락 여부는 **게이트웨이가 판정해 실어 보낸다**(#1867 autoTrustWorkspace) — 노드엔 프로젝트 폴더 규약이 없다.
+      if (prompt.trim()) void injectFirstPrompt(id, harness, prompt, { trustOk: args.trustOk === true })
+        .catch((e) => console.warn(`[node] 첫 지시 주입 실패(${id}):`, (e as Error)?.message ?? e));
+      return { ok: true };
+    }
+    case "create":
+    case "createAppSession": {
       const session = await createSession(user, args.input as CreateInput);
       // 초대는 게이트웨이가 구성원 디렉터리로 검증해 넘긴다 — 노드엔 DB 가 없어 createSession 내부 검증이 빈 배열이 됨.
       const invites = Array.isArray(args.invites) ? (args.invites as string[]) : [];
@@ -350,6 +397,7 @@ function connect(): void {
 
   ws.on("open", () => {
     attempt = 0;
+    workerStateSocket = ws;
     lastBeat = Date.now();
     // 소켓 keepalive — 절전이 아니라 NAT 만료 같은 조용한 단절도 OS 가 알아채게(belt and braces).
     try { (ws as unknown as { _socket?: { setKeepAlive?: (on: boolean, ms: number) => void } })._socket?.setKeepAlive?.(true, 15_000); } catch { /* noop */ }
@@ -406,11 +454,16 @@ function connect(): void {
   });
 
   const teardown = (): void => {
+    if (workerStateSocket === ws) workerStateSocket = null;
     if (pusher) { clearInterval(pusher); pusher = null; }
     if (watch) { clearInterval(watch); watch = null; }
     for (const sock of chans.values()) sock.feedClose(); // attach pty 정리(#687 — 고아 방지)
     chans.clear();
-    const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** Math.min(attempt++, 5));
+    // 제어 링크가 끊긴 동안에는 앱 disable/grant 회수를 받을 수 없다. 옛 권한 봉투로 계속 HTTP broker를 쓰지 못하게
+    // remote worker를 전부 fail-closed 정지한다. 재연결 뒤 명시 open이 같은 run 계약으로 다시 시작한다.
+    void nodeWorkerHost.shutdown();
+    workerBundleStages.clear();
+    const delay = reconnectDelayMs(attempt++);
     logger.warn({ delay }, "게이트웨이 연결 끊김 — 재연결 예약");
     // ⚠ unref 금지(#1541 실기기 로그로 확정): teardown 뒤엔 이 타이머가 이벤트 루프를 지탱하는 유일한 핸들이라,
     //  unref 면 **재연결이 실행되기 전에 프로세스가 끝난다**. hammurabi 로그의 모든 "연결 끊김 — 재연결 예약" 뒤에
@@ -424,7 +477,11 @@ function connect(): void {
 
 // 종료 시 attach pty 일괄 회수(#687 — 게이트웨이와 동일 불변식: 자식이 init 로 재부모화돼 PTY 점유하지 않게).
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
-  process.once(sig, () => { try { killAttachedPtys(); } catch { /* noop */ } process.exit(0); });
+  process.once(sig, () => {
+    try { killAttachedPtys(); } catch { /* noop */ }
+    void nodeWorkerHost.shutdown().finally(() => setTimeout(() => process.exit(0), 50));
+    setTimeout(() => process.exit(0), 1_500).unref();
+  });
 }
 
 logger.info({ gw: GW_URL, node: NODE_ID || "(token-derived)" }, "노드 에이전트 시작");

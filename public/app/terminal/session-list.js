@@ -1,7 +1,9 @@
-// terminal/session-list.ts — 목록을 이루는 것들: 프로젝트 **트리 필터**(폴더›리스트›프로젝트) · **세션 카드** · 질문 팝아웃/통합검색.
+// terminal/session-list.ts — 목록을 이루는 것들: 프로젝트 **트리 필터**(폴더›리스트›프로젝트) · **세션 행**(프로젝트 표 문법, #1841) · 질문 팝아웃/통합검색.
 //  소비자: terminal/routes.ts + 대시보드 '내 AI 세션'(openSessPrompts — 배럴 terminal.ts 경유).
 //  import 방향: status-filter·select-bar·session-form(전부 아래층)만 본다 — routes.ts 는 보지 않는다.
-import { api, appUrl, el, toast } from '../core.js';
+import { api, el, sv, toast } from '../core.js';
+import { pjvPopover } from '../projects/popover.js'; // #1841 행 ⋯ 메뉴 — 프로젝트 표와 같은 팝오버(리프 모듈, 순환 없음)
+import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlay } from '../admin.js';
 // #1582 — 세션 종료·목록제거 확인창은 전 화면 공용 정의 하나만 쓴다.
 import { confirmSessionForget, endedToast } from '../session-actions.js';
@@ -230,143 +232,189 @@ function buildSessProjFilter(opts) {
     wrap.append(btn, dd);
     return wrap;
 }
-// 세션 카드(#745) — 라이브 상태점 + 라벨(작업) / 상태·시각·하네스·모델·폴더 + 프로젝트 칩 + 열기/관리.
-//  선택(일괄삭제) 모드면 내 소유 카드에 체크박스(카드 전체가 토글 = label). 남의 세션은 체크박스 없음(삭제 불가).
-function tsessCard(s, ctx) {
+// 세션 행(#1841) — 프로젝트 탭의 리스트 행(.pjv-trow/.pjv-proj-row)과 **같은 문법**으로 그린다.
+//  왜: 세 앱(AI 세션·프로젝트·WIKI)의 통일감은 콘텐츠를 다시 그리는 게 아니라 **같은 표 엔진·같은 머리·같은 크롬**에서 온다(원준 2026-08-24).
+//  종전 카드(상태색 좌측 테두리 + 칩 + 버튼 4개)는 이 표의 한 행이 된다: [상태점 · 이름 · 지금 하는 일 · 사실 칩 | 상태 | 프로젝트 | 노드 | 마지막 작업 | 하네스 | 폴더 | 열기 ⋯].
+//  행 hover 에 프로젝트 행과 같은 자리의 액션(질문·수정·종료)이 뜨고, ⋯ 메뉴가 같은 항목을 한 번 더 든다(hover 못 하는 기기).
+//  선택(일괄) 모드면 앞에 체크박스(소유 세션만). 그리드 트랙은 TSESS_GRID 한 곳.
+const TSESS_GRID = 'minmax(var(--pjv-name-min, 240px), 1fr) 96px 160px 120px 92px 100px 140px 112px';
+const TSESS_COLS = [['state', '상태'], ['proj', '프로젝트'], ['node', '노드'], ['last', '마지막 작업'], ['harness', '하네스'], ['dir', '폴더']];
+// 컬럼 헤더 한 줄 — 프로젝트 리스트의 pjvListColHead 와 같은 껍데기(.pjv-list-colhead). 정렬·숨김은 없다(고정 7열).
+function tsessColHead() {
+    const head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead tsess-colhead' }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '세션' })), ...TSESS_COLS.map(([key, label]) => el('div', { class: 'pjv-tcell pjv-colhead pjv-stdcol', 'data-col': key }, el('span', { class: 'pjv-thcol-name', text: label, title: label }))), el('div', { class: 'pjv-tcell pjv-tcell-add' }, el('span', {})));
+    head.style.gridTemplateColumns = TSESS_GRID;
+    return head;
+}
+// 행 액션 아이콘(선) — 프로젝트 행의 .pjv-row-act 와 같은 자리·크기. 이모지 대신 선 아이콘(질문=말풍선 · 수정=연필 · 종료=×).
+function tsessActIcon(kind) {
+    const n = sv('svg', { class: 'pjv-act-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+    if (kind === 'q')
+        n.append(sv('path', { d: 'M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5z' }));
+    else if (kind === 'edit')
+        n.append(sv('path', { d: 'M4 20h4.5L19 9.5a2 2 0 0 0 0-2.8l-1.7-1.7a2 2 0 0 0-2.8 0L4 15.5z' }), sv('path', { d: 'M13 6.5l4.5 4.5' }));
+    else
+        n.append(sv('path', { d: 'M6.5 6.5l11 11M17.5 6.5l-11 11' }));
+    return n;
+}
+function tsessRow(s, ctx) {
     const { cfg, view, projName, myProjIds, reRender, sel } = ctx;
     const st = TSESS_STATUS[s._st] || TSESS_STATUS.offline;
-    // #1059 — restorable 이 '사용자 정상 종료(/exit)'로 생긴 경우 라벨·버튼을 구분한다('종료됨 · 대화 이어보기').
-    //  재부팅·자동회수로 중단된 것은 기존대로 '복원 가능'. 복원(POST …/restore) 경로 자체는 둘 다 동일.
     const exitedByUser = !!(s.restorable && s.exitedByUser);
-    const stLabel = st.label; // #1059 P1 — 라벨은 공용 정의가 결정한다(exited_user key 가 이미 '종료됨')
-    // #1059 — 버튼은 '무엇을 할까'(행동). 상태 배지가 '무슨 일이 있었나'(중단됨/종료됨)를 말하므로 여기선 행동만.
-    //  '복원'은 백업 복구 뉘앙스라 대화를 이어가는 일과 어긋난다(상민님 결정 2026-07-28).
+    const stLabel = st.label;
+    // '복원'은 백업 복구 뉘앙스라 대화를 이어가는 일과 어긋난다(상민님 결정 2026-07-28) — 동사가 곧 상태.
     const restoreVerb = exitedByUser ? '다시 열기' : '이어서 열기';
     const harnessLabel = ((cfg.harnesses || []).find((h) => h.key === s.harness) || {}).label || s.harness || '셸';
     const model = (s.flags && s.flags['--model']) || '';
     const owner = memberName(cfg, s.owner) || s.owner || '?';
     const pid = Number(s.projectId) || 0;
-    // ── 1행: 상태점 + 이름 + 프로젝트 칩 + 배지 ──
-    const title = el('div', { class: 'tsess-title' }, el('span', { class: 'tsess-dot tsess-dot-' + st.cls, title: stLabel }), el('span', { class: 'tsess-name', title: s.label, text: s.label || '(이름 없음)' }));
+    const openUrl = () => termUrl(s.id, s.label, s.node && s.node.id);
+    // ── 동작(카드 때와 동일) ──
+    const doOpen = () => window.open(openUrl(), '_blank');
+    const doRestore = async (btn) => {
+        btn.disabled = true;
+        const keep = btn.textContent;
+        btn.textContent = '여는 중…';
+        try {
+            const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
+            if (r && r.already) {
+                doOpen();
+                toast('세션이 이미 살아있어 그대로 엽니다');
+                reRender();
+                return;
+            }
+            const ns = r && r.session;
+            if (ns && ns.id)
+                window.open(termUrl(ns.id, ns.label || s.label, ns.node && ns.node.id), '_blank');
+            toast('열었어요 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 목록에서 고르세요).');
+            reRender();
+        }
+        catch (e) {
+            toast('열지 못했어요 — ' + (e && e.message || e), true);
+            btn.disabled = false;
+            btn.textContent = keep;
+        }
+    };
+    const doEnd = async () => {
+        const ok = s.restorable
+            ? await confirmSessionForget({ title: '‘' + (s.label || '이름 없음') + '’ 을(를) 복원 목록에서 지울까요?', sessions: [s] })
+            : await tsessConfirmEnd('‘' + (s.label || '이름 없음') + '’ 세션을 종료할까요?', [], [s]);
+        if (!ok)
+            return;
+        try {
+            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
+            toast(s.restorable ? '복원 목록에서 지웠어요' : await endedToast(1, [s]));
+            reRender();
+        }
+        catch (e) {
+            toast('실패 — ' + e.message, true);
+        }
+    };
+    // ── 제목 셀: [체크] 상태점 · 이름 · 지금 하는 일 · 사실 칩 · (hover) 액션 ──
+    const lead = el('span', { class: 'tsess-dot tsess-dot-' + st.cls, title: stLabel, 'aria-hidden': 'true' });
+    const title = el('span', { class: 'pjv-trow-title clickable tsess-name', title: s.label, text: s.label || '(이름 없음)' });
+    title.onclick = (e) => { e.stopPropagation(); if (s.restorable && !s.owned)
+        return; if (s.restorable)
+        return; doOpen(); };
+    // '지금 하는 일'(백엔드 title = Claude Code pane 요약) — 라벨과 다를 때만, 이름 뒤에 흐리게(행 한 줄 유지).
+    const work = (s.title && s.title !== s.label) ? el('span', { class: 'tsess-work', title: s.title, text: s.title }) : null;
+    // 사실 칩 — 프로젝트 행의 하위 개수 칩(.pjv-trow-subcount)과 같은 모양. 접속중=민트 · 자동승인=앰버 · 노드 끊김=코랄 · 초대/소유자=회색.
+    const chips = [];
+    if (s.attached)
+        chips.push(el('span', { class: 'pjv-trow-subcount tsess-chip live', text: '접속중' }));
+    if (s.autoApprove)
+        chips.push(el('span', { class: 'pjv-trow-subcount tsess-chip warn', text: '자동승인' }));
+    if (!s.owned)
+        chips.push(el('span', { class: 'pjv-trow-subcount tsess-chip', title: '소유: ' + owner, text: owner + (pid ? ' · 공동' : ' · 초대받음') }));
+    else if ((s.invites || []).length)
+        chips.push(el('span', { class: 'pjv-trow-subcount tsess-chip', title: s.invites.map((id) => memberName(cfg, id)).join(', '), text: '초대 ' + s.invites.length }));
+    // hover 액션 — 프로젝트 행의 .pjv-row-actions/.pjv-row-act 와 같은 껍데기. 소유자면 수정·종료까지.
+    const acts = el('span', { class: 'pjv-row-actions' });
+    const act = (title, kind, fn) => { const b = el('button', { class: 'pjv-row-act', type: 'button', title, 'aria-label': title }, tsessActIcon(kind)); b.onclick = (e) => { e.stopPropagation(); fn(b); }; acts.append(b); };
+    act('이 세션의 질문 모아보기', 'q', () => openSessPrompts(s));
+    if (s.owned && !s.restorable)
+        act('이름·초대 수정', 'edit', () => openTermEdit(s, cfg, view));
+    if (s.owned)
+        act(s.restorable ? '복원 목록에서 지우기' : '세션 종료', 'x', () => doEnd());
+    let check = null;
+    if (sel && s.owned) {
+        // 선택 체크박스 — 대시보드 '내 AI 세션'과 같은 방식(#853): 평소 숨었다가 행 hover·선택모드·선택됨에 나온다. 드래그 범위 선택(#1140)은 routes 가 건다.
+        check = el('input', { type: 'checkbox', class: 'tsess-check dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' });
+        check.checked = sel.ids.has(s.id);
+    }
+    const titleCell = el('div', { class: 'pjv-trow-title-cell' }, check ? el('label', { class: 'tsess-checkwrap', title: '선택 — 누른 채 위아래로 끌면 여러 개가 한 번에 선택돼요 (Shift+클릭도 범위 선택)' }, check) : el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), lead, title, work, ...chips, acts);
+    // 제목 셀 전체가 클릭 영역(프로젝트 행과 동일) — 컨트롤은 제외.
+    titleCell.addEventListener('click', (e) => {
+        if (e.target.closest('button, input, label, a, .pjv-row-actions, .pjv-trow-title'))
+            return;
+        if (sel && sel.mode && check) {
+            check.click();
+            return;
+        }
+        if (!s.restorable)
+            doOpen();
+    });
+    // ── 나머지 셀 ──
+    const cell = (col, child, cls) => el('div', { class: 'pjv-tcell tsess-cell' + (cls ? ' ' + cls : ''), 'data-col': col }, child);
+    const stateCell = cell('state', el('span', { class: 'tsess-stat tsess-stat-' + st.cls, text: stLabel }));
+    let projEl = el('span', { class: 'pjv-fval tsess-empty', 'aria-hidden': 'true' });
     if (pid) {
         const mine = myProjIds.has(pid);
-        title.append(el('span', { class: 'tsess-proj' + (mine ? ' mine' : ''), title: (mine ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || ('#' + pid)), text: '🗂 ' + (projName.get(pid) || ('프로젝트 #' + pid)) }));
+        projEl = el('a', { class: 'tsess-proj' + (mine ? ' mine' : ''), href: '#/projects2/p/' + pid, target: '_blank', rel: 'noopener', title: (mine ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || ('#' + pid)), text: projName.get(pid) || ('프로젝트 #' + pid) });
+        projEl.onclick = (e) => e.stopPropagation();
     }
-    if (s.attached)
-        title.append(el('span', { class: 'tsess-badge live', text: '접속중' }));
-    if (s.autoApprove)
-        title.append(el('span', { class: 'tsess-badge danger', text: '자동승인' }));
-    // 분산 노드(#869) — 원격 노드에서 도는 세션 표시. 노드가 끊겨 있으면(꺼짐·절전) 위험 배지로 구분.
-    if (s.node)
-        title.append(el('span', { class: 'tsess-badge' + (s.node.online ? '' : ' danger'), title: '실행 노드: ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' — 연결 끊김(꺼짐/절전)'), text: '🖥 ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' · 끊김') }));
-    // 남의 세션이면 소유자 배지 — 보이는 사유를 정확히: 개인 세션은 '초대받음', 프로젝트 세션은 '공동'(초대 무관 전원 공개 #452).
-    if (!s.owned)
-        title.append(el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + (pid ? ' · 공동' : ' · 초대받음') }));
-    else if ((s.invites || []).length)
-        title.append(el('span', { class: 'tsess-badge', title: s.invites.map((id) => memberName(cfg, id)).join(', '), text: '초대 ' + s.invites.length + '명' }));
-    // ── 2행(있으면): '지금 하는 일' 실시간 요약(백엔드 title = Claude Code pane 요약) — 라벨과 다를 때만 ──
-    const workTitle = (s.title && s.title !== s.label) ? el('div', { class: 'tsess-worktitle', title: s.title, text: '💬 ' + s.title }) : null;
-    // ── 3행: 상태 · 시각 · 하네스·모델 · 폴더 ──
-    const bits = [];
-    bits.push(el('span', { class: 'tsess-stat tsess-stat-' + st.cls, text: stLabel }));
+    const projCell = cell('proj', projEl);
+    const nodeCell = cell('node', s.node
+        ? el('span', { class: 'pjv-fval tsess-node' + (s.node.online ? '' : ' off'), title: '실행 노드: ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' — 연결 끊김(꺼짐/절전)'), text: (s.node.name || s.node.id) + (s.node.online ? '' : ' · 끊김') })
+        : el('span', { class: 'pjv-fval tsess-muted', text: '박스' }));
     const when = relAgo(s.lastActive || s.created);
-    if (when)
-        bits.push(el('span', { text: (s.lastActive ? '작업 ' : '') + when }));
-    bits.push(el('span', { text: harnessLabel + (model ? '·' + model : '') }));
-    if (s.dir)
-        bits.push(el('span', { class: 'tsess-dir', title: s.dir, text: '📁 ' + shortDir(s.dir) }));
-    const meta = el('div', { class: 'tsess-meta' });
-    bits.forEach((b, i) => { if (i)
-        meta.append(el('span', { class: 'tsess-sep', text: '·' })); meta.append(b); });
-    const info = el('div', { class: 'tsess-info' }, ...[title, workTitle, meta].filter(Boolean));
-    // 액션 — 열기/복원(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·종료/제거.
-    const acts = el('div', { class: 'tsess-acts' });
+    const lastCell = cell('last', el('span', { class: 'pjv-fval', title: s.lastActive ? '마지막 작업' : '만든 시각', text: when }));
+    const harnessCell = cell('harness', el('span', { class: 'pjv-fval', title: harnessLabel + (model ? ' · ' + model : ''), text: harnessLabel + (model ? ' · ' + model : '') }));
+    const dirCell = cell('dir', s.dir ? el('span', { class: 'pjv-fval tsess-dir', title: s.dir, text: shortDir(s.dir) }) : el('span', { class: 'pjv-fval tsess-empty' }));
+    // ── 마지막 칸: [열기 / 이어서 열기 / 다시 열기] + ⋯ ──
+    const addCell = el('div', { class: 'pjv-tcell pjv-tcell-add tsess-actcell' });
     if (s.restorable && !s.owned) {
-        // #1059 — 남의 중단된 세션: **보이지만** 되살리는 건 소유자 몫이다(restore 는 owner/admin 게이트).
-        //  이제 프로젝트 세션의 중단된 것도 팀원 전원에게 보이므로(가시성=라이브 규칙) 이 분기가 필요하다.
-        acts.append(el('span', { class: 'tsess-meta', title: '이 세션을 만든 사람만 다시 열 수 있어요', text: '소유자만 열기' }));
+        addCell.append(el('span', { class: 'tsess-muted', title: '이 세션을 만든 사람만 다시 열 수 있어요', text: '소유자만' }));
     }
     else if (s.restorable) {
-        // #1059 E — 복원: 재부팅·회수로 꺼진 세션을 저장된 desired-state 로 재생성(claude 는 대화 이어받기). 새 세션을 연다.
-        const rb = el('button', { class: 'tsess-open', text: restoreVerb, title: exitedByUser ? '내가 종료한 세션 — 저장된 대화를 이어서 엽니다 (같은 폴더·설정)' : '재부팅·자동회수로 중단된 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)' });
-        rb.onclick = async () => {
-            rb.disabled = true;
-            rb.textContent = '여는 중…';
-            try {
-                const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
-                // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
-                if (r && r.already) {
-                    window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank');
-                    toast('세션이 이미 살아있어 그대로 엽니다');
-                    reRender();
-                    return;
-                }
-                const ns = r && r.session;
-                // #1791 — 노드에서 복원된 세션은 그 노드로 붙는다(서버가 session.node 를 준다). 없으면 박스.
-                if (ns && ns.id)
-                    window.open(termUrl(ns.id, ns.label || s.label, ns.node && ns.node.id), '_blank');
-                // 정밀복원(UUID 매핑 有)이면 바로 그 대화로 이어지고, 미상이면 이어보기 목록이 뜬다 — 둘 다 안내.
-                toast('열었어요 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 목록에서 고르세요).');
-                reRender();
-            }
-            catch (e) {
-                toast('열지 못했어요 — ' + (e && e.message || e), true);
-                rb.disabled = false;
-                rb.textContent = restoreVerb;
-            }
-        };
-        acts.append(rb);
+        const rb = el('button', { class: 'btn btn-ghost btn-sm tsess-open', type: 'button', text: restoreVerb, title: exitedByUser ? '내가 종료한 세션 — 저장된 대화를 이어서 엽니다 (같은 폴더·설정)' : '재부팅·자동회수로 중단된 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)' });
+        rb.onclick = (e) => { e.stopPropagation(); doRestore(rb); };
+        addCell.append(rb);
     }
     else {
-        acts.append(el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
+        addCell.append(el('button', { class: 'btn btn-ghost btn-sm tsess-open', type: 'button', text: '열기', onclick: (e) => { e.stopPropagation(); doOpen(); } }));
     }
-    acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) 순서대로 모아보기', text: '질문', onclick: () => openSessPrompts(s) }));
-    if (s.owned) {
-        if (!s.restorable)
-            acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
-        // restorable 은 '복원 목록에서 지우기'(desired-state 삭제), 라이브는 '종료'(tmux 종료, 대화록은 세션 기록에 남아 이어받기 가능). 둘 다 DELETE(백엔드가 gone→forget 처리).
-        acts.append(el('button', { class: 'tsess-icon danger', title: s.restorable ? '이 세션 카드를 복원 목록에서 지운다(대화록은 세션 기록에 남는다)' : '이 세션을 끝낸다(작업 폴더·파일은 그대로, 대화록은 세션 기록에 남아 나중에 이어받을 수 있음)', text: s.restorable ? '지우기' : '종료', onclick: async () => {
-                // #1582 — restorable 쪽 확인창도 공용 정의로. 종전엔 '더는 복원할 수 없어요'만 말해서, 잃는 것이
-                //  세션 카드(폴더·설정)뿐인데 **대화록까지 사라지는 것처럼** 읽혔다.
-                const ok = s.restorable
-                    ? await confirmSessionForget({ title: '‘' + (s.label || '이름 없음') + '’ 을(를) 복원 목록에서 지울까요?', sessions: [s] })
-                    : await tsessConfirmEnd('‘' + (s.label || '이름 없음') + '’ 세션을 종료할까요?', [], [s]);
-                if (!ok)
-                    return;
-                try {
-                    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
-                    toast(s.restorable ? '복원 목록에서 지웠어요' : await endedToast(1, [s]));
-                    reRender();
-                }
-                catch (e) {
-                    toast('실패 — ' + e.message, true);
-                }
-            } }));
-    }
-    const box = el('div', { class: 'tsess-card tsess-' + st.cls + (s.attached ? ' attached' : '') + (sel && sel.ids.has(s.id) ? ' sel' : '') }, info, acts);
-    // 선택 체크박스 — 대시보드 '내 AI 세션'과 같은 방식(#853 패턴, CSS도 한 벌을 공유):
-    //  평소엔 폭 0 으로 숨어 있다가 카드에 호버(또는 포커스·선택됨·선택모드)하면 왼쪽에서 밀려 나온다.
-    //  체크 하나만 해도 하단 플로팅 바가 뜨고, 다 풀면 사라진다 — '선택' 모드로 먼저 들어갈 필요가 없다.
-    //  소유 세션만 — 종료는 소유자만 되므로(서버 403) 남의 카드엔 체크박스를 안 단다.
-    if (sel && s.owned) {
-        const cb = el('input', { type: 'checkbox', class: 'tsess-check dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' });
-        cb.checked = sel.ids.has(s.id);
-        cb.addEventListener('change', () => {
-            if (cb.checked)
+    const more = el('button', { class: 'pjv-trow-more', type: 'button', title: '더보기', 'aria-label': '세션 작업', text: '⋯' });
+    more.onclick = (e) => {
+        e.stopPropagation();
+        const menu = el('div', { class: 'pjv-menu' });
+        const close = pjvPopover(more, menu, { align: 'right' });
+        const mk = (label, fn, danger) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = () => { close(); fn(); }; return b; };
+        menu.append(mk('질문 모아보기', () => openSessPrompts(s)));
+        menu.append(mk('새 탭에서 열기', () => doOpen()));
+        if (s.owned && !s.restorable)
+            menu.append(mk('이름·초대 수정', () => openTermEdit(s, cfg, view)));
+        if (s.owned)
+            menu.append(mk(s.restorable ? '복원 목록에서 지우기' : '종료', () => doEnd(), true));
+    };
+    addCell.append(more);
+    const row = el('div', { class: 'pjv-trow pjv-proj-row tsess-row tsess-' + st.cls + (s.attached ? ' attached' : '') + (sel && sel.ids.has(s.id) ? ' sel' : '') }, titleCell, stateCell, projCell, nodeCell, lastCell, harnessCell, dirCell, addCell);
+    row.style.gridTemplateColumns = TSESS_GRID;
+    if (check) {
+        check.addEventListener('change', () => {
+            if (check.checked)
                 sel.ids.add(s.id);
             else
                 sel.ids.delete(s.id);
-            box.classList.toggle('sel', cb.checked);
+            row.classList.toggle('sel', check.checked);
             for (const l of sel.listEls || [])
                 l.classList.toggle('has-sel', sel.ids.size > 0);
             if (sel.onToggle)
                 sel.onToggle();
         });
-        const wrap = el('label', { class: 'tsess-checkwrap', title: '선택 — 누른 채 위아래로 끌면 여러 개가 한 번에 선택돼요 (Shift+클릭도 범위 선택)' }, cb);
-        wrap.addEventListener('click', (ev) => ev.stopPropagation());
-        box.prepend(wrap);
+        check.parentElement.addEventListener('click', (ev) => ev.stopPropagation());
     }
-    return box;
+    const wrap = el('div', { class: 'pjv-trow-wrap tsess-wrap', 'data-sess-id': s.id }, row);
+    return wrap;
 }
 function qWhen(ts) {
     const ms = Date.parse(ts || '');
@@ -597,7 +645,7 @@ function openGlobalPromptSearch(ctx) {
                 const meta = el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-gsess', title: r.label, text: r.label || r.sessionId }), pid ? el('span', { class: 'tsess-proj' + (myProjIds.has(pid) ? ' mine' : ''), title: (projName.get(pid) || ('#' + pid)), text: '🗂 ' + (projName.get(pid) || ('프로젝트 #' + pid)) }) : null, el('span', { text: qWhen(r.ts) }), el('span', { class: 'tsess-gopen', text: '열기 ↗' }));
                 const txt = qHighlight(r.text, ql);
                 const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, txt);
-                item.onclick = () => window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(r.sessionId) + '&label=' + encodeURIComponent(r.label || ''), '_blank');
+                item.onclick = () => window.open(sessionTermUrl(r.sessionId, { label: r.label }), '_blank');
                 results.append(item);
                 qClampText(item, txt);
             });
@@ -612,4 +660,4 @@ function openGlobalPromptSearch(ctx) {
     setTimeout(() => input.focus(), 30);
 }
 // ── routes 가 쓰는 것 재수출(openSessPrompts 는 위에서 이미 export — 대시보드도 배럴로 그대로 쓴다). ──
-export { buildSessProjFilter, tsessCard, openGlobalPromptSearch };
+export { buildSessProjFilter, tsessRow, tsessColHead, TSESS_GRID, openGlobalPromptSearch };

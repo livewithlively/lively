@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Lively Context</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%2316C79A'/%3E%3C/svg%3E">
+<!-- 테마 pre-paint(#1683) — 저장된 선호(lv:theme)를 CSS 로드 전에 <html data-theme> 으로 찍는다.
+     키 없음 = 시스템 따름(@media prefers-color-scheme). 런타임 전환·동기화는 web/theme.ts 가 맡는다. -->
+<script>(function(){try{var t=localStorage.getItem('lv:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css">
 <!-- 스타일시트 — 옛 단일 public/styles.css(8,600줄)를 섹션 주석 경계에서 화면별로 분할한 것(#1313 R50).
      ⚠ 이 <link> 나열 **순서가 곧 계약**이다: 파일 순서대로 이어붙인 합본이 옛 styles.css 와 byte 동일하며,
@@ -48,6 +51,12 @@
 <link rel="stylesheet" href="./styles/36-chat.css">
 <link rel="stylesheet" href="./styles/40-v2.css">
 <link rel="stylesheet" href="./styles/41-onboarding.css">
+<link rel="stylesheet" href="./styles/42-v2-panes.css">
+<link rel="stylesheet" href="./styles/43-v2-topbar-search.css">
+<link rel="stylesheet" href="./styles/44-desktop-update.css">
+<link rel="stylesheet" href="./styles/45-v2-side-swap.css">
+<link rel="stylesheet" href="./styles/46-v2-me.css">
+<link rel="stylesheet" href="./styles/90-dark.css">
 <style>
   /* 한글 코딩 글꼴 D2Coding — 자체호스팅(public/fonts, OFL). #279 한글 가독성 (터미널 탭) */
   @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
@@ -55,38 +64,38 @@
   /* 터미널 세션 매니저 — 도그푸드 스코프 스타일 */
   .term-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
   .term-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 12px 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--bg-tint, #fafafa); }
+    padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); }
   .term-row-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
   .term-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
-  .term-badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg, #eee); color: var(--fg-muted, #555); border: 1px solid var(--border, #ddd); }
-  .term-badge.danger { background: #fdecec; color: #c0392b; border-color: #f5c6c6; }
-  .term-badge.author { background: var(--bg-tint, #f6faff); color: var(--muted-head, #7a88a3); border-color: var(--line, #e6ecf5); }
+  .term-badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+  .term-badge.danger { background: var(--danger-bg); color: var(--danger-deep); border-color: var(--danger-line); }
+  .term-badge.author { background: var(--bg-tint); color: var(--muted-head); border-color: var(--line); }
   .term-row-name { flex: 0 0 200px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .term-fold { display: flex; align-items: center; gap: 5px; width: 100%; margin-top: 10px; padding: 8px 12px;
-    background: var(--bg-tint, #f6faff); border: 1px solid var(--line, #e6ecf5); border-radius: 10px;
-    font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub, #5a6b85); cursor: pointer; text-align: left; }
-  .term-fold:hover { border-color: var(--blue, #2d6bf0); color: var(--ink, #15233b); }
+    background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px;
+    font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); cursor: pointer; text-align: left; }
+  .term-fold:hover { border-color: var(--blue); color: var(--ink); }
   .term-fold-caret { font-size: 10px; width: 12px; }
   .term-section { margin-top: 18px; }
-  .term-section--div { border-top: 1px solid var(--line, #e6ecf5); padding-top: 18px; }
+  .term-section--div { border-top: 1px solid var(--line); padding-top: 18px; }
   .term-section .term-section-title { margin: 0 0 4px; }
   .term-section-desc { font-size: 13.5px; margin: 0; }
   .term-lock-note { display: flex; gap: 7px; align-items: flex-start; margin: 4px 0 2px; padding: 10px 12px;
-    font-size: 13.5px; line-height: 1.5; color: var(--ink-sub, #5a6b85); background: var(--bg-tint, #f6faff);
-    border: 1px solid var(--line, #e6ecf5); border-radius: 9px; }
-  .term-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border, #ccc);
-    border-radius: 8px; font: inherit; background: var(--bg, #fff); color: inherit; }
+    font-size: 13.5px; line-height: 1.5; color: var(--ink-sub); background: var(--bg-tint);
+    border: 1px solid var(--line); border-radius: 9px; }
+  .term-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 8px; font: inherit; background: var(--bg); color: inherit; }
   .term-flags { display: flex; flex-direction: column; gap: 8px; }
   .term-picker { display: flex; flex-direction: column; gap: 5px; }
   .term-crumb { font-size: 12px; }
-  .term-crumb .crumb { color: var(--accent, #16a37f); cursor: pointer; }
+  .term-crumb .crumb { color: var(--accent); cursor: pointer; }
   .term-crumb .crumb:hover { text-decoration: underline; }
-  .term-crumb .crumb-sep { color: var(--fg-muted, #999); }
-  .term-auto { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; font-size: 13.5px; color: #b04a3a; line-height: 1.45; }
+  .term-crumb .crumb-sep { color: var(--muted); }
+  .term-auto { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; font-size: 13.5px; color: var(--coral-text); line-height: 1.45; }
   .term-wrap { display: flex; flex-direction: column; height: calc(100vh - 120px); min-height: 360px; }
   .term-bar { display: flex; align-items: center; gap: 10px; padding: 6px 0 10px; }
-  .term-bar-id { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--fg-muted, #777); }
-  .term-host { flex: 1; min-height: 0; background: #1e1e2e; border-radius: 10px; padding: 8px; overflow: hidden; }
+  .term-bar-id { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .term-host { flex: 1; min-height: 0; background: var(--code-surface); border-radius: 10px; padding: 8px; overflow: hidden; }
 </style>
 </head>
 <body>
@@ -120,6 +129,10 @@
        topbar 가 sticky(top:0)라 배너는 일반 블록으로 그 위에 둔다 — 스크롤하면 배너만 말려 올라가고
        topbar 는 그대로 상단에 붙는다(같은 스택에서 자연스럽게, 단순하게). -->
   <div id="org-banner" hidden></div>
+  <!-- 데스크톱 앱 업데이트 띠(#1838) — 앱이 **이미 받아 둔** 새 버전이 있을 때만 web/desktop-update.ts 가 채운다.
+       브라우저에서 연 웹 UI 에는 그 다리가 없어 늘 접혀 있다(hidden 유지). 공지 배너와 같은 층·같은 이유로
+       topbar(sticky) 위의 일반 블록이다 — 스크롤하면 띠만 말려 올라가고 상단바는 붙어 있는다. -->
+  <div id="desktop-update" hidden></div>
   <header class="topbar">
     <!-- 태그라인은 boot() 가 /api/ui/me 의 org_name 으로 채운다(관리탭 [조직 정보] 미설정이면 숨김 유지). -->
     <a class="wordmark" href="#/dashboard">Lively<span class="pulse-dot" aria-hidden="true"></span><span class="wordmark-sub" id="org-tagline" hidden></span></a>
@@ -142,6 +155,7 @@
            같은 줄에 두면 축이 섞인다. 살아있음 표시 점을 달아 사람이 아니라 담당자임을 알린다. -->
       <a class="help-link liv-nav" href="#/liv" data-tab="liv" title="리브 — 이 워크스페이스를 대신 손봐 드립니다"><span class="liv-nav-dot" aria-hidden="true"></span>리브</a>
       <a class="help-link" href="#/learn" data-tab="learn">사용 가이드</a>
+      <button type="button" id="theme-btn" class="help-link theme-btn" aria-label="테마 전환"></button>
       <button type="button" class="user-email" id="user-email" hidden aria-haspopup="dialog" title="내 프로필 — 표시 이름·개인 레이어 편집"></button>
       <button type="button" id="logout-btn" class="logout-btn" hidden>로그아웃</button>
     </div>

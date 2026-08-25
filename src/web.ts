@@ -8,6 +8,7 @@
 import express from "express";
 import { runSchedulerTickOnce } from "./scheduler/engine.js";
 import { seedDefaultContent } from "./org/delivery/seed-content.js";
+import { requireAppTool } from "./apps/principal.js";
 import { pruneCallLog } from "./org/policies/call-log-prune.js";
 import { getRuntimeConfig } from "./org/store/runtime-config.js";
 import { backfillSessionStates } from "./sessions/session-state-backfill.js";
@@ -18,6 +19,7 @@ import { createHash } from "node:crypto";
 import { stateDir } from "./ops/state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
+import { registerNotifyRoutes } from "./v6/notify-routes.js";
 import type { LivelyUser } from "./context.js";
 import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
 import { viewerOf } from "./capabilities/principal.js";
@@ -270,6 +272,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       if (cap.scope && DANGEROUS_SCOPES.has(cap.scope) && user.tokenSource === "static") {
         throw new HttpError(403, "정적 토큰으로는 관리/런타임 변경이 불가합니다 — 접속 해제할 수 있는 발급 토큰(lvk_)을 사용하세요");
       }
+      // #1780: 앱 세션 토큰이면 그 앱 grant 의 도구 allowlist 로 축소(MCP 핸들러와 같은 판정 — 표면 간 일관). 일반 세션은 통과.
+      await requireAppTool(user, cap.name);
       // /api/ui 응답은 전부 비공개(토큰 발급 평문 포함) — 프록시/브라우저 캐시 금지.
       res.setHeader("Cache-Control", "no-store");
       res.json(await cap.handler(input, user, {
@@ -350,6 +354,10 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  우리 토큰을 갖고 있지 않다. 인증 대신 수집기 id + HMAC 서명 + 본문 상한으로 막는다.
   registerWebhookRoutes(app);
 
+  // ── 알림 실시간 스트림(#1842) — 앱이 물고 있으면 세션이 끝나는 그 순간 배너가 뜬다(SSE). ──
+  //  capability(JSON 응답 전제) 로는 못 만드는 표면이라 라우트로 직접 연다. 인증은 다른 표면과 같은 미들웨어.
+  registerNotifyRoutes(app, mw("memory"), (req) => userOf(req)?.userId || "");
+
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));
   // #1017 — 콘텐츠 해시 불변 캐싱: mtime·재검증 의존을 폐기한다.
@@ -406,8 +414,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   // 상대 자산 참조에 버전 주입.
   //  JS: 정적 import/re-export(`… from './x.js'`)·동적 import(`import('./x.js')`) 의 상대 스펙파이어. CDN(https://)·bare 는 제외(`./` 필수).
   //  HTML: <script src>·<link href> 의 상대 로컬 자산. 삽입은 문자열 리터럴 내부라 문법을 깨지 않는다(최악의 오탐도 무해한 쿼리 추가).
-  const JS_IMPORT_RE = /((?:\bfrom|\bimport)\s*|\bimport\s*\(\s*)(['"])(\.\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
-  const HTML_ASSET_RE = /(\s(?:src|href)\s*=\s*)(['"])(\.\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
+  //  ⚠ `../` 도 받는다(#1841). 종전엔 `./` 로 시작하는 것만 잡아서, web/v2/* 가 부모 폴더를 부르는
+  //   `from '../core.js'` 류가 통째로 스탬프를 못 받았다 — 그 모듈들은 버전이 안 붙어 캐시 정책 밖으로 샜고,
+  //   같은 파일이 `?v=` 있는 판과 없는 판 **두 벌로 로드**돼 모듈 인스턴스가 갈렸다(실측: gen-watch 가
+  //   두 번 로드돼 v2 쪽 인스턴스는 자기 세대를 못 읽었다).
+  const JS_IMPORT_RE = /((?:\bfrom|\bimport)\s*|\bimport\s*\(\s*)(['"])(\.{1,2}\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
+  const HTML_ASSET_RE = /(\s(?:src|href)\s*=\s*)(['"])(\.{1,2}\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
   const stampJs = (src: string, v: string): string => src.replace(JS_IMPORT_RE, (_m, pre, q1, spec, q2) => `${pre}${q1}${spec}?v=${v}${q2}`);
   const stampHtml = (src: string, v: string): string => src.replace(HTML_ASSET_RE, (_m, pre, q1, spec, q2) => `${pre}${q1}${spec}?v=${v}${q2}`);
   // 모듈 rewrite 결과 캐시(버전·mtime 키) — 큰 번들(projects.js 700KB+)의 매요청 정규식 치환 회피. immutable 이라 재요청도 드묾.
@@ -448,6 +460,15 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Cache-Control", cacheHdr);
     res.sendFile(full, { cacheControl: false }); return; // cacheControl:false — express 가 우리 헤더를 덮어쓰지 않도록
   };
+  // 세대 알림(#1841) — 지금 서빙 중인 자산 세대를 한 줄로 알려준다. 화면이 자기 세대와 비교해
+  //  낡았으면 스스로 다시 싣는다(web/gen-watch.ts). 인증 불요(정적 자산과 같은 급), 캐시 금지.
+  //  ⚠ 이게 필요한 이유: 데스크톱 앱 창은 닫아도 죽지 않고(hide) 다시 열 때 loadURL 을 건너뛴다.
+  //   그래서 게이트웨이가 갱신돼도 앱은 처음 뜬 판을 영영 들고 있었다(실측 2026-08-21: 앱 세대
+  //   7964959ed50d vs 서버 882a0a3d262e — 원준이 "반영 안 된 것 같다"를 세 번 말한 진짜 원인).
+  app.get("/ui/__gen", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ v: assetVersion() });
+  });
   app.use("/ui", serveStatic);
   app.get("/", (_req, res) => res.redirect("/ui/"));
 }

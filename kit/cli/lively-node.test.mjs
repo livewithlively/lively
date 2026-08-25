@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // `lively node --daemon` 상시화(#869) e2e — **픽스처 게이트웨이 + 샌드박스 HOME + launchctl/systemctl 스텁** 으로
 //  등록→번들 pull→데몬 등록(plist/systemd unit)→`node stop` 해제를 통째로 돈다.
-//  ⚠ 실제 사용자 launchd/systemd 는 절대 건드리지 않는다: 데몬 제어 바이너리(launchctl·systemctl·pkill)를 PATH 스텁으로
+//  ⚠ 실제 사용자 launchd/systemd 는 절대 건드리지 않는다: 데몬 제어 바이너리(launchctl·systemctl·loginctl·pkill)를 PATH 스텁으로
 //    가로채 호출 인자만 로그에 적는다. HOME 도 LIVELY_HOME 으로 샌드박스 → ~/.lively·~/Library 무접촉.
 //  실행: node kit/cli/lively-node.test.mjs   (npm test 체인에 포함)
 import { createServer } from "node:http";
@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";
 
 // 이 파일은 **POSIX 상시화 경로의 e2e** 다 — tmux + launchd/systemd + pkill 을 스텁으로 가로채 검증한다.
 //  ⚠ 2026-08-05(#1541) 사양 변경: Windows 는 더 이상 비목표가 아니다. psmux(ConPTY 네이티브 tmux 구현) +
@@ -83,7 +84,7 @@ function newHome(name) {
   const bin = join(home, "stub-bin");
   mkdirSync(bin, { recursive: true });
   const log = join(home, "daemonctl.log");
-  for (const tool of ["launchctl", "systemctl", "pkill"]) {
+  for (const tool of ["launchctl", "systemctl", "loginctl", "pkill"]) {
     writeFileSync(join(bin, tool), `#!/bin/sh\nprintf '%s %s\\n' "${tool}" "$*" >> ${JSON.stringify(log)}\nexit 0\n`);
     chmodSync(join(bin, tool), 0o755);
   }
@@ -95,7 +96,7 @@ async function lively(h, args, { expectFail = false } = {}) {
     const r = await pExecFile(process.execPath, [CLI, ...args], {
       env: {
         ...process.env,
-        HOME: h.home, LIVELY_HOME: h.home,
+        ...sandboxEnv({ home: h.home }), LIVELY_HOME: h.home,
         PATH: `${h.bin}:${process.env.PATH}`,
         LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
       },

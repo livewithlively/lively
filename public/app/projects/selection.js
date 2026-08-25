@@ -8,7 +8,8 @@
 //    · pjvDrag._init — pjvDragInit() 이 pointerover/pointerup 을 1회만
 //    · pjvReorder._init — pjvReorderInit() 이 pointermove/pointerup 을 1회만
 //   따라서 플래그(pjvDrag·pjvReorder·pjvBulkBarEl)와 그 init 함수는 절대 갈라놓지 않는다.
-import { api, appUrl, el, infoPop, personFace, state, sv, toast } from '../core.js';
+import { api, el, infoPop, personFace, state, sv, toast } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlayBox } from '../learn.js';
 //  ⚠ 배럴(../projects.js) 경유 — copyText·openLocalWorkModal 의 소유는 projects/detail-sections.ts(R35) 지만
 //   그쪽은 detail.ts 를 되짚는 상세 서브트리라, 직결하면 selection→detail-sections→detail→selection 순환이
@@ -270,7 +271,7 @@ async function pjvBulkRunClaude(btn) {
             localStorage.setItem('lively:autosend:' + sid, prompt);
         }
         catch (_) { /* */ }
-        window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(sid) + '&label=' + encodeURIComponent((r.session && r.session.label) || label) + '&autosend=1', '_blank');
+        window.open(sessionTermUrl(sid, { label: (r.session && r.session.label) || label, autosend: true }), '_blank');
         toast(ids.length + '개 태스크(본문·하위·첨부 포함)를 클로드에게 맡겼어요 — 새 탭에서 실행됩니다');
         pjvSelReset();
     }
@@ -332,8 +333,8 @@ async function pjvBulkRunDefaultsModal(ctx) {
     }
     catch (_) { /* 레포 조회 실패 — 레포 선택 없이 */ }
     const harnessCat = {
-        claude: { label: 'Claude Code', prov: 'Anthropic', models: ['', 'opus', 'sonnet', 'haiku'], efforts: [], hasAuto: true },
-        codex: { label: 'Codex', prov: 'OpenAI', models: ['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], efforts: [], hasAuto: true },
+        claude: { label: 'Claude Code', prov: 'Anthropic', models: ['', 'fable', 'opus', 'sonnet', 'haiku'], efforts: [], hasAuto: true },
+        codex: { label: 'Codex', prov: 'OpenAI', models: ['', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], hasAuto: true },
     };
     // #1758 — 목록·이름은 서버 카탈로그가 준다(v2/run-picker 가 캐시). 홈 입력창과 **같은 표**를 읽어야 두 화면의 말이 갈리지 않는다.
     const cat = await runCatalog();
@@ -629,7 +630,7 @@ async function pjvBulkList(anchor) {
     catch (_) { /* graceful */ }
     menu.replaceChildren(headEl);
     const mkItem = (label, listId, color) => {
-        const item = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line, #2a2a33)') }), el('span', { class: 'pjv-asg-mname', text: label }));
+        const item = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line)') }), el('span', { class: 'pjv-asg-mname', text: label }));
         item.onclick = () => { close(); pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }), '리스트로 이동됨'); };
         return item;
     };

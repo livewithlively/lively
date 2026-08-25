@@ -6,6 +6,7 @@
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
 import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state } from './core.js';
+import { watchStaleShell } from './gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
@@ -26,7 +27,9 @@ import { endTour } from './tour.js';
 import { installGlobalUndo } from './undo.js';
 import { setUnauthorizedHandler } from './lib/net.js';
 import { uiMode } from './lib/state.js';
+import { mountDesktopUpdate } from './desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 클래식 셸 상단 띠(#1838)
 import { bootV2 } from './v2/main.js'; // #1719 새 1탭 셸 — boot() 가 ui_mode 로 고른다. 정적 import(스탬프 경로 단일화), 부르기 전엔 아무 일도 안 함.
+import { applyTheme, nextTheme, setThemePref, themeIconSvg, themePref, themeTitle, watchTheme } from './theme.js'; // #1683 다크모드 — 3단 테마
 
 // ── 401(세션 만료) 처리 배선(R29a) — **이 파일에서 가장 먼저 실행되는 문장이어야 한다.** ──
 //  lib/net.ts 의 api() 는 401 을 만나면 토큰만 지우고 여기 등록된 처리기를 부른다(미배선이면 아무것도 안 하고
@@ -38,6 +41,23 @@ setUnauthorizedHandler(() => {
   state.me = null;
   showGate('세션이 만료되었습니다. 다시 로그인하세요.');
 });
+
+// ── 테마(#1683) — 로그인 게이트까지 포함해 문서 전체에 적용되므로 인증과 무관하게 여기서 배선한다. ──
+//  pre-paint(index.html)가 이미 첫 페인트 전에 data-theme 을 찍었고, 여기는 런타임 전환·다른 탭 동기화 담당.
+applyTheme();
+watchTheme();
+{
+  // 클래식 상단바 순환 버튼(시스템→라이트→다크). v2 셸은 사이드바에 자체 토글(web/v2/side.ts).
+  const tb = document.getElementById('theme-btn');
+  const paintThemeBtn = () => {
+    if (!tb) return;
+    const p = themePref();
+    tb.innerHTML = themeIconSvg(p);
+    tb.title = themeTitle(p);
+  };
+  if (tb) tb.addEventListener('click', () => { setThemePref(nextTheme(themePref())); paintThemeBtn(); });
+  paintThemeBtn();
+}
 
 // ── 라우터 ──
 function parseHash() {
@@ -176,19 +196,19 @@ async function route() {
     } else if (page === 'domainmap') {
       // #1153 — '도메인 맵' 탭이 '분류체계'가 됐고, #1419 에서 다시 '맥락 관리'로 넓어졌다.
       //  구 딥링크·북마크는 두 단계를 건너뛰어 최종 자리로 보낸다(중간 리다이렉트 체인 금지 — 히스토리가 지저분해진다).
-      location.replace('#/context/classify');
+      location.replace('#/context/topics');
       return;
     } else if (page === 'categories') {
       // #1419 T6 — 분류체계 탭이 [맥락 관리]의 '분류' 단계로 흡수됐다. 구 URL 은 그 자리로 보낸다.
       //  ⚠ 전체페이지 renderCategories 는 남겨 둔다(직접 링크·문서에서 쓰일 수 있고, 본문 구현은 공유한다).
-      location.replace('#/context/classify');
+      location.replace('#/context/topics');
       return;
     } else if (page === 'context') {
       setActiveTab('context'); // 맥락 관리 — 수집→증류→분류→관리 파이프라인(index.html data-tab="context")
-      // 증류기 설정(#/context/distill/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
+      // 증류기 설정(#/context/knowledge/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
       //  라우트를 세분화해 CSS 가 그 페이지에서만 캡을 풀게 한다 — 목록은 종전 본문 컬럼 그대로여야
       //  탭을 오갈 때 폭이 출렁이지 않는다(projects2 가 상세/보드를 가르는 것과 같은 수법).
-      //  ⚠ 세그먼트 3개짜리 URL 이 전부 증류기 상세는 아니다(#1584 — #/context/distill/ingest-policy 는
+      //  ⚠ 세그먼트 3개짜리 URL 이 전부 증류기 상세는 아니다(#1584 — #/context/knowledge/ingest-policy 는
       //   증류 단계의 한 화면이다). 판정은 화면 표를 가진 context.ts 한 곳에서만 한다.
       if (isDistillerDetailPath(segs[1], segs[2])) document.body.dataset.route = 'context-distiller';
       await renderContext(view!, segs[1] || null, segs[2] || null);
@@ -329,6 +349,12 @@ async function boot() {
       banner.hidden = true; // 재부팅(재로그인) 시 내려간 공지가 남지 않게 — 대칭 처리
     }
   }
+  // 데스크톱 앱 업데이트(#1838) — 앱이 뒤에서 받아 둔 새 버전이 있으면 여기서 알리고 **그 자리에서** 반영한다.
+  //  종전엔 트레이·설치 마법사에만 입구가 있어, 이 화면을 띄워 두고 일하는 사람에게는 아무 신호도 가지 않았다.
+  //  브라우저에서 연 웹 UI 에는 다리가 없어 접힌 채로 남는다. 임베드(런치패드가 클래식 페이지를 iframe 으로 실은 것)는
+  //  크롬을 걷은 화면이라 띄우지 않는다 — 새 셸의 사이드바가 이미 같은 것을 들고 있다(v2/side.ts).
+  const deskUp = document.getElementById('desktop-update');
+  if (deskUp && !embedded) mountDesktopUpdate(deskUp, 'bar');
   // 사용량 칩(#1454 S5) — usage_url 설정 시에만 상단바에 노출(기본 null = 종전 그대로 칩 없음).
   const usageChip = document.getElementById('usage-chip') as any;
   if (usageChip) {
@@ -480,6 +506,7 @@ function showAuthErrorFromHash() {
 renderAuthProviders();
 showAuthErrorFromHash();
 
+watchStaleShell();   // #1841 낡은 화면 자가복구 — 다시 보이는 순간에 세대를 묻고 낡았으면 다시 싣는다.
 installGlobalUndo(); // #702 전역 실행취소(Cmd/Ctrl+Z) — 텍스트 편집 밖에서 '내 마지막 웹 변경'을 되돌린다.
 boot();
 

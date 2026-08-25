@@ -116,7 +116,7 @@ export async function reresolveMirrorMembers(
       //  INSERT·삭제 안 함) 둘 다 같은 mid 로 바뀌며 유니크 위반이 난다. INSERT-then-DELETE 는 그 collapse 를 흡수한다.
       const pk = [
         { table: "task_assignee", col: "member_id", cols: "task_id, member_id, sort", sel: "t.task_id, m.mid, t.sort", conflict: "task_id, member_id" },
-        { table: "project_member", col: "member_id", cols: "project_id, member_id, role, sort, status_message", sel: "t.project_id, m.mid, t.role, t.sort, t.status_message", conflict: "tenant_id, project_id, member_id" },
+        { table: "project_member", col: "member_id", cols: "project_id, member_id, role, sort, status_message", sel: "t.project_id, m.mid, t.role, t.sort, t.status_message", conflict: "project_id, member_id" },
         { table: "task_comment_reaction", col: "member", cols: "comment_id, emoji, member", sel: "t.comment_id, t.emoji, m.mid", conflict: "comment_id, emoji, member" },
       ];
       for (const s of pk) {
@@ -171,7 +171,7 @@ export async function reresolveMirrorMembers(
           [row.id, m, sort]);
         if (row.level === "project") {
           await client.query(
-            `INSERT INTO project_member(project_id, member_id, role, sort) VALUES($1,$2,'member',$3) ON CONFLICT (tenant_id, project_id, member_id) DO NOTHING`,
+            `INSERT INTO project_member(project_id, member_id, role, sort) VALUES($1,$2,'member',$3) ON CONFLICT (project_id, member_id) DO NOTHING`,
             [row.id, m, sort]);
         }
         sort++;

@@ -1,0 +1,40 @@
+/* ══ 데스크톱 앱 업데이트 알림 (#1838) — web/desktop-update.ts ═══════════════════════════════
+   앱이 뒤에서 이미 받아 둔 새 버전을 **일하는 화면에서** 알리고 그 자리에서 반영한다.
+   두 셸에 같은 부품이 서로 다른 모양으로 들어간다:
+     · .deskup-bar  클래식 셸 — 상단바 위의 전폭 한 줄(공지 배너와 같은 층·같은 문법).
+     · .deskup-row  새 셸(v2) — 사이드바 발치의 작은 칸(계정·클래식 전환과 같은 층).
+   색은 '좋은 소식' 한 점(민트 dot)만 쓴다 — 채운 블루 primary 는 화면당 하나라는 예산(디자인 시스템 §0.5)을
+   이 크롬이 가져가면 안 되므로 버튼은 기성 고스트(.btn-ghost.btn-sm)를 그대로 쓴다. */
+
+/* 공통 — 점 하나. 상태는 색이 아니라 '있다/없다'로 말한다(안 받아 뒀으면 이 띠 자체가 없다). */
+.deskup-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); }
+
+/* ── 클래식 셸: 상단 띠 ── */
+/* #org-banner 와 같은 문법(좌측 3px 컬러 보더 + 옅은 배경)을 쓰되 색만 민트 계열로 — 공지(파랑)와 나란히
+   떠도 서로 다른 일이라는 것이 한눈에 보이게. */
+#desktop-update.deskup-bar {
+  display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 24px; font-size: 13px;
+  border-bottom: 1px solid var(--line); border-left: 3px solid var(--mint); background: var(--bg-success);
+}
+#desktop-update .deskup-txt { color: var(--ink-note); font-weight: 500; min-width: 0; }
+#desktop-update .deskup-ver { color: var(--ink-sub); font-size: 12px; }
+#desktop-update .deskup-btn { flex: none; }
+
+/* ── 새 셸(v2): 사이드바 발치 칸 ── */
+/* 사이드바 폭이 좁아(최소 200px) 두 줄로 쌓는다. 카드 테두리를 두르지 않고 옅은 면 + 헤어라인 하나로만 —
+   푸터에 카드가 들어가면 그 층이 갑자기 무거워진다(카드 안 카드 금지와 같은 결). */
+.deskup-row {
+  display: flex; flex-direction: column; gap: 6px;
+  margin: 2px 0 6px; padding: 8px 10px;
+  border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg-success);
+}
+.deskup-row .deskup-t { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--ink-note); }
+.deskup-row .deskup-sub { margin: 0; padding-left: 14px; font-size: 11.5px; color: var(--ink-sub); }
+.deskup-row .deskup-btn { width: 100%; }
+
+/* 좁은 화면(모바일 서랍·작은 창) — 띠는 가운데 정렬을 풀고 왼쪽부터 읽히게, 버튼은 다음 줄 전폭으로. */
+@media (max-width: 640px) {
+  #desktop-update.deskup-bar { justify-content: flex-start; padding: 8px 14px; }
+  #desktop-update.deskup-bar .deskup-btn { width: 100%; }
+}

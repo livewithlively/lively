@@ -58,6 +58,7 @@ export interface ToolCallRecord {
   ok: boolean;
   error?: string | null;
   durationMs: number;
+  app?: string | null;   // #1780 D3-5 — 앱 세션/UI 의 tools/call 귀속(관측 전용, 권한 판정 불사용). 없으면 null.
 }
 
 const MAX_STR = 500; // 인자 내 개별 문자열 값의 보존 상한(초과분은 절단 + 잔여 길이 표기)
@@ -193,9 +194,9 @@ export function logToolCall(rec: ToolCallRecord): void {
   const durationMs = Number.isFinite(rec.durationMs) ? Math.round(rec.durationMs) : null;
   itemsPool
     .query(
-      `INSERT INTO mcp_call_log(tool, harness, actor, args, ok, error, duration_ms)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)`,
-      [rec.tool, rec.harness, rec.actor, argsJson, rec.ok, error, durationMs],
+      `INSERT INTO mcp_call_log(tool, harness, actor, args, ok, error, duration_ms, app)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`,
+      [rec.tool, rec.harness, rec.actor, argsJson, rec.ok, error, durationMs, rec.app ?? null],
     )
     .catch((err) => logger.warn({ err, tool: rec.tool }, "mcp_call_log INSERT 실패(무시)"));
 }

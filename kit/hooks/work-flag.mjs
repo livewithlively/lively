@@ -24,7 +24,10 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 // 툴 이름은 하네스마다 다르다(대소문자·MCP 접두어 형태까지) — 문자열을 여기 박으면 그 하네스에서 판정이
 //  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
-import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation } from "./harness-registry.mjs";
+import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit } from "./harness-registry.mjs";
+import { hostEffects } from "./host-effects-port.mjs";
+
+const fetch = (...args) => hostEffects.fetch(...args);
 
 // #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
 //  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
@@ -206,7 +209,9 @@ try {
     //  정확일치 + `__` 경계 suffix 둘 다 본다: 전자는 우리 v6 툴(knowledge_save), 후자는 ext 프록시
     //  (ext__slack__send_message)를 덮는다 — 종전 `tool.endsWith("__"+w)` 와 같은 결과다.
     if (effectiveWriteTools().some((w) => bare === w || bare.endsWith(`__${w}`))) flags.add("writeback");
-  } else if (EDIT_TOOLS.has(tool)) {
+  } else if (EDIT_TOOLS.has(tool) || isShellEdit(HARNESS, tool, input?.tool_input)) {
+    // 두 번째 갈래(#1884): codex 0.149.1+gpt-5.6 은 편집을 `apply_patch` **툴이 아니라 셸 명령**으로 낸다(tool_name=Bash).
+    //  툴명만 보면 그 세션의 편집이 전부 셸로 분류돼 .worked 가 안 서고 종료 게이트를 조용히 통과한다. 표의 editShellRe 가 판정.
     flags.add("worked");
   }
   // 외부 맥락 인입(#906) — 파일 편집과 동급의 '의미있는 작업'으로 본다.

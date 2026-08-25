@@ -22,16 +22,16 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 .fpg-crumb { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 12px; color: var(--muted-2);
   overflow: hidden; white-space: nowrap; }
 .fpg-crumb-seg { color: var(--muted-2); text-decoration: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.fpg-crumb-seg:hover { color: var(--blue, #2d6bf0); text-decoration: underline; }
+.fpg-crumb-seg:hover { color: var(--blue); text-decoration: underline; }
 .fpg-crumb-sep { color: var(--line); }
 
 .fpg-acts { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .fpg-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line);
-  border-radius: 9px; background: var(--bg); color: var(--ink-sub, #5a6b85); font: inherit; font-size: 13px;
+  border-radius: 9px; background: var(--bg); color: var(--ink-sub); font: inherit; font-size: 13px;
   font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; }
 .fpg-btn:hover { border-color: var(--muted-2); color: var(--ink); background: var(--bg-tint); }
-.fpg-btn-primary { background: var(--blue, #2d6bf0); border-color: var(--blue, #2d6bf0); color: #fff; }
-.fpg-btn-primary:hover { background: color-mix(in srgb, var(--blue, #2d6bf0) 88%, #000); border-color: transparent; color: #fff; }
+.fpg-btn-primary { background: var(--blue-fill); border-color: var(--blue-fill); color: var(--on-fill); }
+.fpg-btn-primary:hover { background: var(--blue-fill-deep); border-color: transparent; color: var(--on-fill); }
 .fpg-btn-ghost { border-color: transparent; color: var(--muted-2); }
 .fpg-btn-lg { margin-top: 14px; padding: 10px 18px; font-size: 14px; }
 
@@ -45,8 +45,8 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 .fpg-msg-path { margin-top: 4px; font-size: 12px; color: var(--muted-2); word-break: break-all; max-width: 520px; }
 
 /* 타입별 표시면 */
-.fpg-img { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; box-shadow: 0 2px 14px rgba(21, 35, 59, .14); }
-.fpg-pdf, .fpg-html { width: 100%; flex: 1 1 auto; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.fpg-img { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; box-shadow: 0 2px 14px rgba(var(--shadow-ink), .14); }
+.fpg-pdf, .fpg-html { width: 100%; flex: 1 1 auto; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .fpg-video { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; background: #000; }
 .fpg-audio { width: min(560px, 100%); margin: auto; }
 .fpg-code { margin: 0; width: 100%; max-width: 1100px; box-sizing: border-box; background: var(--bg-tint);
@@ -61,7 +61,7 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 /* 폴더 목록 — 편집 없는 읽기 전용 행. */
 .fpg-list { width: 100%; max-width: 1100px; }
 .fpg-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px;
-  color: inherit; text-decoration: none; border-bottom: 1px solid var(--bg-tint-2, var(--line)); }
+  color: inherit; text-decoration: none; border-bottom: 1px solid var(--bg-tint-2); }
 .fpg-row:hover { background: var(--bg-tint); }
 .fpg-row-head { font-size: 11.5px; font-weight: 700; color: var(--muted-2); text-transform: none;
   border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
@@ -87,9 +87,9 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
    비보안 컨텍스트(http)나 권한 거부에서 navigator.clipboard 가 없는데, 그때 아무 일도 안 일어나면
    사용자는 버튼이 고장 났다고 읽는다. */
 .sharelink-back { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center;
-  background: rgba(21, 35, 59, .38); padding: 20px; }
+  background: rgba(var(--shadow-ink), .38); padding: 20px; }
 .sharelink-box { width: min(560px, 100%); background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
-  box-shadow: 0 12px 40px rgba(21, 35, 59, .22); padding: 18px 20px 16px; }
+  box-shadow: 0 12px 40px rgba(var(--shadow-ink), .22); padding: 18px 20px 16px; }
 .sharelink-title { font-size: 15px; font-weight: 700; color: var(--ink); }
 .sharelink-hint { margin: 6px 0 12px; font-size: 13px; color: var(--muted-2); line-height: 1.55; }
 .sharelink-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line);
@@ -103,7 +103,7 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
    ⚠ 기존 셀렉터는 지우지 않는다 — scripts/check-css-drops.mjs 가 HEAD 셀렉터 유실을 실패로 잡는다. */
 .fp-wrap { width: 100%; }
 .fp-img { display: block; max-width: 100%; margin: 0 auto; border-radius: 8px; }
-.fp-pdf, .fp-html { display: block; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.fp-pdf, .fp-html { display: block; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .fp-video { display: block; max-width: 100%; margin: 0 auto; border-radius: 8px; background: #000; }
 .fp-audio { display: block; width: min(560px, 100%); margin: 12px auto; }
 .fp-code { margin: 0; width: 100%; box-sizing: border-box; overflow: auto; background: var(--bg-tint);

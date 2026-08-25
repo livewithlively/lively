@@ -40,12 +40,15 @@ import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { snapshotRealHome, verifyRealHome, formatChanges } from "./testguard-real-home.mjs";
+import { testChildEnv } from "./test-runner-env.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
 // 기본 동시 실행수 — 코어 수를 그대로 쓰지 않고 8 에서 끊는다. 실측(160건 120초)에서 최장 1건이 36초라
 //  병렬 상한이 그 파일에 걸려 j=4 와 j=10 의 wall 이 같다. 낮게 잡을수록 부하로 인한 타이밍 flake 가 적다.
 const DEFAULT_JOBS = Math.min(availableParallelism(), 8);
+const TEST_ENV = testChildEnv();
 
 const opts = { list: false, itest: false, build: false, failFast: false, verbose: false, slowest: 0, jobs: null };
 const filters = [];
@@ -83,7 +86,14 @@ for (let i = 0; i < argv.length; i++) {
 let buildFailed = null;
 if (opts.build) {
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const r = spawnSync(npm, ["run", "build"], { cwd: ROOT, stdio: "inherit" });
+  // ⚠ shell:true 가 윈도우에선 필수다 — Node 는 CVE-2024-27980 이후 **shell 없는 .cmd/.bat 실행을 거부**한다
+  //  (`spawnSync npm.cmd EINVAL`, status=null). 그래서 여기서 `npm test` 의 빌드 단계가 **출력 한 줄 없이**
+  //  실패했고, 러너는 설계대로 "빌드 실패지만 계속"으로 넘어가 **스테일하거나 없는 dist 로** 테스트를 돌렸다
+  //  (실측 2026-08-20: 첫 실행에서 src 테스트 190여 건이 전부 '빌드 산출물 없음'). CI 는 ubuntu 라 안 걸렸고,
+  //  windows 잡은 러너 대신 PowerShell 로 kit·desktop 만 순회해서 이 경로를 지나지 않는다.
+  //  같은 계열을 데스크톱 앱에서 이미 겪었다(#1541 — 심이 lively.cmd 라 앱이 CLI 를 한 번도 못 불렀다).
+  //  인자가 고정 리터럴("run","build")이라 shell 경유로 인한 인젝션 여지는 없다.
+  const r = spawnSync(npm, ["run", "build"], { cwd: ROOT, stdio: "inherit", shell: process.platform === "win32" });
   if (r.status !== 0) {
     buildFailed = r.signal ? `signal ${r.signal}` : `exit ${r.status ?? 1}`;
     console.error(`\n✗ 빌드 실패 (${buildFailed}) — 그래도 돌 수 있는 테스트는 계속 돌린다(#1431).`);
@@ -125,12 +135,44 @@ if (!files.length) {
   process.exit(1);
 }
 
+// 테스트를 하나라도 띄우기 전에 격리 린트를 선행한다. R3 위반 테스트가 setup/에 추가돼도 알파벳 순서나
+// 병렬 스케줄 때문에 린트보다 먼저 실행되어 capability를 얻는 창이 없어야 한다. 필터로 한 파일만 돌려도 동일하다.
+if (!opts.itest) {
+  const isolationPreflight = path.join(ROOT, "kit", "testlib", "test-isolation-lint.test.mjs");
+  const r = spawnSync(process.execPath, [isolationPreflight], { cwd: ROOT, stdio: "inherit", env: TEST_ENV });
+  if (r.status !== 0) {
+    console.error("\n✗ 테스트 격리 preflight 실패 — 어떤 테스트도 실행하지 않았습니다.");
+    process.exit(r.status ?? 1);
+  }
+}
+
 // 빌드 산출물 누락 — 종전엔 여기서 즉시 exit 해 **한 건 때문에 전체가 안 돌았다**. 이제 누락분만 실패로
 //  기록하고(조용히 건너뛰면 거짓 green) 나머지는 그대로 돌린다.
 const missing = new Set(files.filter((f) => !existsSync(path.join(ROOT, f))));
 if (missing.size) {
   console.error(`빌드 산출물이 없습니다 (npm run build 먼저?):\n  ${[...missing].join("\n  ")}\n`);
 }
+
+// ── 실 홈 오염 가드 (전역 안전망) ────────────────────────────────────────────
+//  아래 LIVELY_NO_BROWSER 와 같은 자리의 같은 논리다 — 개별 테스트가 각자 격리하는 게 원칙이지만,
+//  **관례를 모르는 새 테스트**가 뚫는 걸 러너에서 한 번 더 막는다. 다만 브라우저와 달리 홈 오염은
+//  막을 지점이 하나가 아니라(env 상속·PATH·직접 쓰기…) 사전 차단이 불가능하다. 그래서 결과를 본다:
+//  실행 전 지문을 떠 두고, 끝나고 달라졌으면 되돌린 뒤 실패로 보고한다. 상세 근거는 testguard-real-home.mjs.
+const homeSnap = snapshotRealHome();
+let homeChanges = null;
+const checkRealHome = () => {
+  if (homeChanges) return homeChanges;               // 한 번만 — exit 핸들러와 보고부가 둘 다 부른다
+  homeChanges = verifyRealHome(homeSnap);
+  return homeChanges;
+};
+//  어떤 경로로 끝나도(예외·중단 포함) 사람의 환경은 원상태로 돌려준다. 보고는 아래 정상 경로가 맡는다.
+process.on("exit", () => {
+  const c = checkRealHome();
+  if (c.length) {
+    console.error(formatChanges(c));
+    if (!process.exitCode) process.exitCode = 1;
+  }
+});
 
 const jobs = Math.max(1, Math.min(opts.jobs ?? (opts.itest ? 1 : DEFAULT_JOBS), files.length));
 const argsFor = (f) => (opts.itest || ENV_FILE_TESTS.has(f) ? ["--env-file-if-exists=.env", f] : [f]);
@@ -167,7 +209,7 @@ if (jobs === 1) {
       record(idx, { f, ms: 0, status: 1, signal: null, missing: true });
     } else {
       const t = Date.now();
-      const r = spawnSync(process.execPath, argsFor(f), { cwd: ROOT, stdio: "inherit" });
+      const r = spawnSync(process.execPath, argsFor(f), { cwd: ROOT, stdio: "inherit", env: TEST_ENV });
       record(idx, { f, ms: Date.now() - t, status: r.status, signal: r.signal });
     }
     const r = results[idx];
@@ -203,7 +245,7 @@ if (jobs === 1) {
         //  한다(#1717 — device 로그인이 승인 URL 을 `open` 으로 띄워 `npm test` 한 번에 실 탭 5개가 떴다).
         //  개별 테스트도 noBrowserEnv() 로 각자 거는 게 원칙이지만(직접 실행 경로), 여기서 한 번 더 덮어
         //  **새로 추가되는 테스트가 이 관례를 몰라도** 러너 경로에선 안 뚫린다.
-        const child = spawn(process.execPath, argsFor(f), { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LIVELY_NO_BROWSER: "1" } });
+        const child = spawn(process.execPath, argsFor(f), { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: TEST_ENV });
         live.set(child, idx);
         const chunks = [];
         child.stdout.on("data", (d) => chunks.push(d));
@@ -232,6 +274,9 @@ const wall = `${((Date.now() - t0) / 1000).toFixed(1)}s`;
 const ran = results.filter(Boolean);
 const fails = ran.filter((r) => r.status !== 0);
 const notRun = files.length - ran.length;
+// 실 홈이 더럽혀졌으면 **테스트가 전부 통과해도 green 이 아니다** — 격리 실패는 그 자체로 결함이다.
+//  상세 출력·원복은 exit 핸들러가 한다(여기선 판정만 — 두 번 찍지 않도록).
+const homeDirty = checkRealHome();
 
 if (opts.slowest) {
   const top = ran.filter((r) => !r.missing).sort((a, b) => b.ms - a.ms).slice(0, opts.slowest);
@@ -241,15 +286,16 @@ if (opts.slowest) {
 }
 
 const suffix = `${wall}${jobs > 1 ? `, -j ${jobs}` : ", 직렬"}`;
-if (!fails.length && !buildFailed && !interrupted) {
+if (!fails.length && !buildFailed && !interrupted && !homeDirty.length) {
   console.log(`\n✓ ${ran.length} test files passed (${suffix})`);
   process.exitCode = 0;
 } else {
   // 테스트는 다 통과했는데 빌드만 깨졌거나 중간에 중단된 경우가 있다 — 그때 "0/N 실패"는 오독을 부른다.
+  const onlyCause = buildFailed ? "빌드 실패" : interrupted ? "중단" : "실 홈 오염(테스트 격리 실패)";
   console.error(
     fails.length
       ? `\n✗ ${fails.length}/${files.length} 실패 (${suffix})`
-      : `\n✗ ${buildFailed ? "빌드 실패" : "중단"} — 실행한 ${ran.length}건은 전부 통과 (${suffix})`,
+      : `\n✗ ${onlyCause} — 실행한 ${ran.length}건은 전부 통과 (${suffix})`,
   );
   for (const r of fails) console.error(`   ${r.f} — ${label(r)}`);
   if (buildFailed) console.error(`   [빌드] npm run build — ${buildFailed}`);

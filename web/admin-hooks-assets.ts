@@ -15,11 +15,13 @@ function customHookEditor(detail, data) {
   const listCol = el('div', { class: 'admin-sublist' });
   listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 추가',
     onclick: () => { state.admin.hookSel = '__new__'; rerenderPanel(detail, 'custom-hooks', data); } }));
+  const lockedIds = data.lockedHookIds || [];   // #1836 — 라이블리가 배포하는 훅(코드가 SoT). 조직은 켜고 끄기만.
   for (const h of hooks) {
     const failed = Object.keys(h.health || {}).length; // #892 — 죽은 훅을 목록에서 바로 보이게(조용한 죽음 방지)
     listCol.append(el('div', { class: 'mini-row' + (h.id === sel ? ' sel' : ''),
       onclick: () => { state.admin.hookSel = h.id; rerenderPanel(detail, 'custom-hooks', data); } },
       el('div', { class: 'mini-title', text: h.id },
+        lockedIds.includes(h.id) ? el('span', { class: 'pill', text: '제품 기본' }) : null,
         h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null,
         failed ? el('span', { class: 'pill pill-warn', text: '⚠ 실패 ' + failed + '대' }) : null),
       el('div', { class: 'mini-meta', text: h.event + (h.matcher ? ' · ' + h.matcher : '') + ' · ' + (h.harness || 'all')
@@ -29,10 +31,10 @@ function customHookEditor(detail, data) {
   const editing = sel === '__new__'
     ? { id: '', label: '', harness: 'all', event: 'PostToolUse', matcher: '', source_code: '', timeout_sec: 10, note: '', target_members: null, enabled: true }
     : hooks.find((h) => h.id === sel);
-  if (editing) hookForm(right, editing, data, detail, sel === '__new__');
+  if (editing) hookForm(right, editing, data, detail, sel === '__new__', lockedIds.includes(editing.id));
   else right.append(
     // origin/main(#968 계열)의 개선된 안내 문구 + #892 의 정책 카드 — 둘 다 유지.
-    el('p', { class: 'admin-hint' }, ...uiText('구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.')),
+    el('p', { class: 'admin-hint' }, ...uiText('구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다. 「제품 기본」 표시가 붙은 훅은 라이블리가 배포하는 것이라 본문은 볼 수만 있고, 조직은 켜고 끄는 것과 대상 구성원만 정합니다.')),
     relayPolicyCard(data, detail),
     gracePolicyCard(data, detail));
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('커스텀 훅'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
@@ -115,7 +117,7 @@ function gracePolicyCard(data, detail) {
     el('div', { class: 'admin-actions' }, save));
 }
 
-function hookForm(root, h, data, detail, isNew) {
+function hookForm(root, h, data, detail, isNew, locked) {
   const idIn = el('input', { type: 'text', value: h.id, placeholder: '훅 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
   const labelIn = el('input', { type: 'text', value: h.label || '', placeholder: '표시 이름(선택)' });
   // 구성원 화면([내 스킬·훅])에 보이는 쉬운 한 줄(#1085) — 스킬과 같은 규격.
@@ -132,24 +134,38 @@ function hookForm(root, h, data, detail, isNew) {
   const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
-    if (!idIn.value.trim()) { toast('id 필수', true); return; }
+    if (!locked && !idIn.value.trim()) { toast('id 필수', true); return; }
     const bad = tm.validate(); if (bad) { toast(bad, true); return; }
-    if (!confirm('이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다. 저장할까요?')) return;
+    if (!locked && !confirm('이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다. 저장할까요?')) return;
     saveBtn.disabled = true;
     try {
-      const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, summary: hSumIn.value, target_members: tm.targetMembers(), enabled: tm.enabled() };
+      // #1836 — 시드 훅은 본문·실행정의를 코드가 소유한다. 조직이 정하는 것만 보낸다(잠긴 필드를 보내면 409).
+      const payload = locked
+        ? { id: h.id, target_members: tm.targetMembers(), enabled: tm.enabled() }
+        : { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, summary: hSumIn.value, target_members: tm.targetMembers(), enabled: tm.enabled() };
       await api('/api/ui/org/hook', { method: 'POST', body: JSON.stringify(payload) });
       await loadAdmin(true); state.admin.hookSel = payload.id; toast('저장됨 — 구성원 다음 세션부터'); rerenderPanel(detail, 'custom-hooks', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
   });
   const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
-  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+  if (!isNew && !locked) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
     if (!confirm(`커스텀 훅 '${h.id}' 제거? 다음 세션부터 실행되지 않습니다(미접속 머신은 직전 상태 유지).`)) return;
     try { await api('/api/ui/org/hook/remove', { method: 'POST', body: JSON.stringify({ id: h.id }) }); await loadAdmin(true); state.admin.hookSel = null; toast('제거됨'); rerenderPanel(detail, 'custom-hooks', state.admin.data); }
     catch (e) { toast(e.message, true); }
   } }));
+  // #1836 — 잠긴(제품 기본) 훅: 코드가 단일 출처라 본문·실행정의 입력을 읽기 전용으로 둔다.
+  //  숨기지 않고 **보여주되 못 고치게** 한다 — 무엇이 도는지는 조직이 알아야 하고(감사), 못 바꾼다는 사실만 분명하면 된다.
+  if (locked) {
+    for (const inp of [idIn, labelIn, hSumIn, harnessSel, eventSel, matcherIn, codeTa, timeoutIn]) {
+      inp.setAttribute('disabled', '');
+    }
+  }
   root.replaceChildren(
-    el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }),
+    locked
+      ? el('div', { class: 'admin-subcard' },
+          el('h4', { text: '제품 소유 · 자동 갱신' }),
+          el('p', { class: 'admin-hint' }, ...uiText('라이블리가 배포하는 기본 훅입니다. 본문과 실행 조건은 제품 코드가 단일 출처이고 업데이트마다 자동으로 갱신되므로 여기서 고칠 수 없습니다. 조직이 정하는 것은 **쓸지 말지**입니다 — 아래에서 끄면 그 상태는 업데이트에도 그대로 유지됩니다. 동작을 바꾸고 싶으면 이 훅을 끄고 [+ 추가]로 새 훅을 만드세요.')))
+      : el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }),
     hookHealthCard(h),
     field('id', idIn), field('표시 이름', labelIn),
     field('쉬운 한 줄 (구성원 화면에 보이는 말)', hSumIn),

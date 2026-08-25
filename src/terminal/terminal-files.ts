@@ -19,6 +19,7 @@ import { canAttach, sessionDir, resolveRootPath, rootRelOf, sessionOsUser, userO
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, type LsEntry } from "./terminal-member-fs.js";
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
+import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
 import { nodeCanAttach, nodeRpc } from "../node/registry.js";
 import { folderVariants } from "../project/project-fs.js";
 import {
@@ -26,7 +27,12 @@ import {
   type SharedFolderGate,
 } from "../v6/shared-folder-store.js";
 
-const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB
+// 업로드 상한(#1870) — 종전 50MB 는 화면 녹화·데이터셋이 걸렸다. receiveUpload 가 임시파일로 **스트리밍**하므로
+//  (RAM 상주 없음, upload-file.ts) 상한을 올려도 메모리 위험이 없다. project-routes.ts MAX_UPLOAD 와 같은 값이어야 한다.
+const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB
+// ⚠ 노드 세션 릴레이(아래 PUT 의 ?node= 분기)만은 예외 — 본문을 통째로 RAM 에 모아 ws 청크로 중계하므로
+//  거기까지 1GB 로 열면 게이트웨이 메모리가 업로드 하나에 잡아먹힌다. 그 경로는 종전 상한을 유지한다.
+const NODE_RELAY_MAX = 50 * 1024 * 1024; // 50MB
 // 인라인 미리보기 상한 — 프로젝트 파일 라우트(project-routes.ts MAX_PREVIEW)와 **같은 값**이어야 한다(#1436):
 //  공유 링크는 root+path 하나로 공유/개인/프로젝트 폴더를 똑같이 가리키는데, 같은 파일이 어느 라우트를 타는지에
 //  따라 "미리보기엔 너무 큽니다"가 갈리면 링크를 받은 사람에게는 그게 그냥 고장으로 보인다.
@@ -202,9 +208,14 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   }));
   // 삭제(파일/폴더 재귀). 루트 자체는 거부.
   app.delete("/api/ui/terminal/browse", auth, wrap(async (req, res) => {
-    const { abs, osUser } = await resolveBrowse(req, true);
+    const { base, abs, osUser } = await resolveBrowse(req, true);
     if (osUser) await memberRm(osUser, abs);
     else await fsp.rm(abs, { recursive: true, force: true });
+    // 자료 전파(#1881) — 그 경로(폴더면 하위 전부)의 자료를 superseded 로.
+    try {
+      const loc = await localRootForBrowse(String(req.query.root ?? ""), userOf(req), base, abs);
+      if (loc) await supersedeLocalPath(loc.root, path.relative(loc.base, abs));
+    } catch (e) { console.warn(`[local-ingest] 삭제 전파 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
     res.json({ ok: true });
   }));
   // 미리보기/다운로드(?download=1). 격리 멤버면 그 uid 로 stat+cat.
@@ -234,10 +245,21 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   // 업로드(raw 스트림 → 임시파일 → rename). 격리 멤버면 그 uid 로 써서 파일 소유자=멤버(세션 셸이 이후 편집 가능).
   //  취소·끊김이면 목적지는 손대지 않는다 — 덮어쓰기 업로드를 끊어도 원본이 살아있다(#797 — upload-file.ts).
   app.put("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
-    const { abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
+    const { base, abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
-    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
-    res.json({ ok: true });
+    catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
+    // 올린 파일 = 자료 1건(#1881 L1) — 개인 폴더는 올린 사람만 보는 자료, 공유 루트의 project/<id>/… 는 프로젝트 자료로 접는다.
+    //  실패해도 업로드는 성공이다(로그만).
+    let ing: Awaited<ReturnType<typeof ingestLocalUpload>> | null = null;
+    try {
+      const u = userOf(req);
+      const loc = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs);
+      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } });
+    } catch (e) { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
+    // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
+    //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).
+    // source_id — 자료로 등록됐으면 그 id(#1881). 구 클라이언트는 무시.
+    res.json({ ok: true, path: abs, ...(ing?.ingested ? { source_id: ing.source_id } : {}) });
   }));
 
   // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).
@@ -333,10 +355,10 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       const u = { userId: idOf(userOf(req)) };
       const bufs: Buffer[] = []; let total = 0; let over = false;
       await new Promise<void>((resolve, reject) => {
-        req.on("data", (c: Buffer) => { total += c.length; if (total > MAX_UPLOAD) { over = true; req.destroy(); return; } bufs.push(c); });
+        req.on("data", (c: Buffer) => { total += c.length; if (total > NODE_RELAY_MAX) { over = true; req.destroy(); return; } bufs.push(c); });
         req.on("end", () => resolve()); req.on("error", reject);
       });
-      if (over) throw new HttpError(413, "파일이 너무 큽니다");
+      if (over) throw new HttpError(413, "파일이 너무 큽니다(개인 PC 노드 세션 업로드는 50MB까지 — 큰 파일은 그 PC에서 직접 넣어주세요)");
       const bodyBuf = Buffer.concat(bufs);
       let offset = 0;
       do {
@@ -349,7 +371,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const { abs } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
     const osUser = await sessionOsUser(req.params.id);
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
-    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
+    catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     res.json({ ok: true, path: abs }); // abs = 세션 작업폴더 기준 절대경로(드롭 업로드가 입력창에 꽂아 cwd 무관하게 찾게)
   }));
 }

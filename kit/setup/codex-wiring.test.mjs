@@ -46,7 +46,7 @@ function makeBundle({ withCli = true, mcpServers = [], autoApprove = ["mcp__live
   mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
   mkdirSync(join(BUNDLE, "setup"), { recursive: true });
   for (const h of HOOKS) cpSync(join(KIT, "hooks", h), join(BUNDLE, ".claude", "hooks", h));
-  for (const f of ["user-install.mjs", "user-uninstall.mjs", "work.mjs", "work-roots-header.mjs"]) {
+  for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) {
     cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
   }
   if (withCli) { // stdio 프록시 판정에 필요한 둘(+CLI 본체). 없으면 http 폴백 경로가 된다 = 엣지 ②
@@ -87,7 +87,8 @@ function hookEntries(toml) {
     const cm = /\n[ \t]*command[ \t]*=[ \t]*("(?:[^"\\]|\\.)*")/.exec(blk);
     if (!cm) continue;
     let command = ""; try { command = JSON.parse(cm[1]); } catch { command = cm[1]; }
-    out.push({ event: ev[1], command });
+    const tm = /\n[ \t]*timeout[ \t]*=[ \t]*(\d+)/.exec(blk);
+    out.push({ event: ev[1], command, timeout: tm ? Number(tm[1]) : null });
   }
   return out;
 }
@@ -127,8 +128,8 @@ let toml = install();
 // ── ⑧ 하네스 패리티 — claude 러너 이벤트 중 codex 지원분은 **전부** ─────────
 {
   const { runnerHooksBlock } = await import("./user-install.mjs");
-  // codex 0.142.0 미지원(바이너리 실측: SessionEnd·Notification 문자열 부재). 지원 목록이 바뀌면 여기만 고친다.
-  const CODEX_UNSUPPORTED = new Set(["SessionEnd", "Notification"]);
+  // codex 미지원 — Notification 뿐(#1884 실측: SessionEnd 는 0.149.1 부터 발화, 0.142 는 키를 무시). 지원 목록이 바뀌면 여기만 고친다.
+  const CODEX_UNSUPPORTED = new Set(["Notification"]);
   const wantEvents = Object.keys(runnerHooksBlock()).filter((e) => !CODEX_UNSUPPORTED.has(e));
   const got = new Set(hookEntries(toml).map(runnerEventOf).filter(Boolean));
   const missing = wantEvents.filter((e) => !got.has(e));
@@ -141,8 +142,15 @@ let toml = install();
 // ── ⑨ codex 가 모르는 이벤트는 배선하지 않는다 ──────────────────────────────
 {
   const evs = new Set(hookEntries(toml).map((e) => e.event));
-  const strays = ["SessionEnd", "Notification"].filter((e) => evs.has(e));
-  strays.length === 0 ? ok("⑨ codex 미지원 이벤트 미배선(SessionEnd·Notification)") : bad("⑨ 미지원 이벤트", `배선됨: ${strays.join(",")}`);
+  const strays = ["Notification"].filter((e) => evs.has(e));
+  strays.length === 0 ? ok("⑨ codex 미지원 이벤트 미배선(Notification)") : bad("⑨ 미지원 이벤트", `배선됨: ${strays.join(",")}`);
+  // #1884 — SessionEnd 는 이제 배선 대상(work-flag 종료 보고 #1059 + 러너). timeout 은 codex 클램프 상한(3s) 이하여야 한다.
+  const se = hookEntries(toml).filter((e) => e.event === "SessionEnd");
+  const seOk = se.length >= 2 && se.every((e) => Number(e.timeout) <= 3);
+  seOk ? ok(`⑨b SessionEnd 배선(work-flag+러너, timeout≤3s) — ${se.length}개`) : bad("⑨b SessionEnd 배선", JSON.stringify(se));
+  // #1884 — lively-local(로컬 조작 MCP) 도 codex 에 심는다(stdio 경로일 때 — 이 번들은 CLI 동봉이라 stdio).
+  /\[mcp_servers\.lively-local\]\s*\ncommand = "[^"]+"\s*\nargs = \["mcp-local"\]/.test(toml)
+    ? ok("⑨c lively-local stdio MCP 등록") : bad("⑨c lively-local", "config.toml 에 [mcp_servers.lively-local] 없음");
 }
 
 // ── ⑬ auto-approve 목록 반영 ────────────────────────────────────────────────
@@ -175,13 +183,23 @@ makeBundle();
 // ── ④ 추가 stdio MCP(인자 있는 명령) ────────────────────────────────────────
 //  ⚠ 회귀 방지: 배열을 command 에 넣으면 codex 가 `invalid type: sequence, expected a string` 로
 //   **config.toml 전체**를 못 읽는다 → [mcp_servers.lively]·[hooks.*] 까지 동반 사망.
-makeBundle({ mcpServers: [{ name: "lively-local", transport: "stdio", command: "lively mcp-local", enabled: true }] });
+makeBundle({ mcpServers: [{ name: "acme-local", transport: "stdio", command: "acme mcp-local", enabled: true }] });
 {
   const t = install();
-  const b = serverBlock(t, "lively-local") || "";
-  const shape = /^command = "lively"$/m.test(b) && /^args = \["mcp-local"\]$/m.test(b);
+  const b = serverBlock(t, "acme-local") || "";
+  const shape = /^command = "acme"$/m.test(b) && /^args = \["mcp-local"\]$/m.test(b);
   const noArrayCmd = !/command = \[/.test(t);
   shape && noArrayCmd ? ok("④ 추가 stdio MCP → command=문자열 + args=배열") : bad("④ stdio MCP 형식", `shape=${shape} noArrayCmd=${noArrayCmd} · ${b.slice(0, 120)}`);
+}
+
+// ── ④b 조직 MCP 에 lively-local 을 수동 등록해 둔 박스(#1884 이전 우회로) → 테이블 중복 0 ───────
+//  TOML 은 같은 테이블이 두 번이면 **파일 전체** 로드 실패 = 코덱스 배선 전멸. 네이티브 블록이 정본이고 조직 항목은 건너뛴다.
+makeBundle({ mcpServers: [{ name: "lively-local", transport: "stdio", command: "lively mcp-local", enabled: true }, { name: "lively", transport: "http", url: "https://x.example/mcp", enabled: true }] });
+{
+  const t = install();
+  const nLocal = (t.match(/^\[mcp_servers\.lively-local\]$/gm) || []).length;
+  const nLively = (t.match(/^\[mcp_servers\.lively\]$/gm) || []).length;
+  nLocal === 1 && nLively === 1 ? ok("④b 예약 이름(lively·lively-local) 조직 등록 → 네이티브 블록만(중복 테이블 0)") : bad("④b 예약 이름 중복", `lively-local=${nLocal} lively=${nLively}`);
 }
 
 // ── ⑤ 인자 **없는** 명령(경계) → args 항목 없음 ────────────────────────────

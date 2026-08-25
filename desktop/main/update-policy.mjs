@@ -17,7 +17,6 @@ export const UPDATE_OPT_OUT_ENV = "LIVELY_DESKTOP_NO_UPDATE";
  * @param {boolean} o.hasPublishConfig 빌드에 배포처(publish) 설정이 박혀 있나. 없으면 확인할 곳이 없다.
  * @param {boolean} o.macSigned       mac 은 **서명 없으면 자동 업데이트가 원리적으로 불가**하다(Squirrel.Mac).
  * @param {string}  [o.optOut]        UPDATE_OPT_OUT_ENV 값
- * @param {boolean} [o.failedBefore]  이번 세션에 이미 실패했나 — 반복 팝업을 만들지 않는다.
  * @returns {{ok:boolean, reason:string}}
  */
 export function shouldCheckForUpdates(o) {
@@ -25,14 +24,31 @@ export function shouldCheckForUpdates(o) {
   if (String(s.optOut || "").trim() && String(s.optOut) !== "0") return { ok: false, reason: "opt-out" };
   if (!s.packaged) return { ok: false, reason: "dev-run" };
   if (!s.hasPublishConfig) return { ok: false, reason: "no-publish-config" };
-  if (s.failedBefore) return { ok: false, reason: "failed-before" };
   // ⚠ mac 미서명은 '실패' 가 아니라 **구조적 불가**다. 시도하면 매번 같은 오류가 난다 — 아예 묻지 않는다.
   if (s.platform === "darwin" && !s.macSigned) return { ok: false, reason: "mac-unsigned" };
   return { ok: true, reason: "ok" };
 }
 
-/** 재확인 간격 — 너무 잦으면 레이트리밋, 너무 뜸하면 보안 픽스가 안 퍼진다. 6시간. */
-export const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** 정상 재확인 간격 — 공개 GitHub 릴리스 메타데이터만 읽으며, 설치기는 새 버전이 있을 때 한 번만 받는다. */
+export const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+/** 연속 실패 횟수 1·2·3+ 에 대응하는 재시도 간격. 순간 장애가 영구 중단으로 굳지 않게 하되 오프라인 때 두드리지 않는다. */
+export const UPDATE_RETRY_DELAYS_MS = Object.freeze([5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000]);
+/** 로그인 시각이 비슷한 PC가 GitHub 를 같은 순간에 두드리지 않도록 다음 예약에 더하는 최대 지터. */
+export const UPDATE_CHECK_JITTER_MS = 30_000;
+
+/**
+ * 다음 자동 확인까지 기다릴 시간. 정상·첫 실패는 5분, 이후 15분·60분(상한)으로 물러난다.
+ * @param {number} consecutiveFailures 연속 실패 횟수
+ * @param {number} jitterUnit 테스트 가능한 0~1 난수(Math.random())
+ */
+export function updateCheckDelayMs(consecutiveFailures = 0, jitterUnit = 0) {
+  const failures = Math.max(0, Math.floor(Number(consecutiveFailures) || 0));
+  const retryIndex = Math.min(Math.max(0, failures - 1), UPDATE_RETRY_DELAYS_MS.length - 1);
+  const base = failures === 0 ? UPDATE_INTERVAL_MS : UPDATE_RETRY_DELAYS_MS[retryIndex];
+  const n = Number(jitterUnit);
+  const jitter = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
+  return base + Math.floor(jitter * UPDATE_CHECK_JITTER_MS);
+}
 
 /**
  * 왜 확인하지 않(았)나 — **사람에게 보여줄 문구**.
@@ -47,7 +63,6 @@ export function updateStatusNote(reason) {
     case "opt-out": return `자동 업데이트가 꺼져 있습니다(${UPDATE_OPT_OUT_ENV}).`;
     case "dev-run": return "개발 실행 중이라 업데이트를 확인하지 않습니다.";
     case "no-publish-config": return "이 빌드에는 업데이트 받을 곳이 없습니다(설치기로 깐 버전이 아닙니다).";
-    case "failed-before": return "이번 실행에서 이미 실패해 다시 시도하지 않습니다. 앱을 다시 켜면 재시도합니다.";
     case "mac-unsigned": return "서명되지 않은 빌드라 자동 업데이트를 쓸 수 없습니다. 새 버전은 받아서 덮어써 주세요.";
     default: return "업데이트를 확인하지 않습니다.";
   }
@@ -107,6 +122,27 @@ export function shouldAutoApplyUpdate(o) {
   if ((s.promptsPending || 0) > 0) return false;
   if (s.windowVisible) return false;
   return true;
+}
+
+// ── 메인 화면(웹 UI)에 알리기 (#1838) ────────────────────────────────────────────────
+// ★ 실측(2026-08-20 상민님): "트레이에서 설치 노드 설정 들어가서 업데이트 확인을 눌러야 되는데, 유저가 명시적으로
+//  업데이트해야 하는 게 너무 복잡하고 현실성 낮다." — 받기는 이미 자동이었다(6시간마다 확인 + autoDownload).
+//  빠진 것은 **알리는 자리**였다: 받아 둔 업데이트의 입구가 트레이와 마법사뿐이라, 라이블리 화면을 띄워 두고
+//  일하는 사람에게는 아무 신호도 가지 않았다. 게다가 창이 보이는 동안엔 자동 적용을 하지 않으므로
+//  (shouldAutoApplyUpdate — 창 앞에서 앱이 사라지면 고장으로 읽힌다) 업데이트는 그 창이 닫힐 때까지 앉아 있었다.
+//  → 웹 UI 에 같은 사실을 그대로 넘겨, 사람이 보고 있는 화면에서 "준비됐습니다 · 다시 시작하여 반영하기" 를 준다.
+
+/**
+ * 웹 UI 에 넘기는 업데이트 상태 — **세 값뿐**(순수).
+ *  version 은 준비됐을 때만 채운다: 받는 중인 버전을 흘리면 화면이 '준비됨' 으로 앞서 말하게 된다.
+ *  busy 는 '지금은 못 누른다'(CLI 작업 중 — applyUpdate 가 거절한다)를 화면이 미리 알기 위한 것이다.
+ * @param {{ready?:any, version?:any, busy?:any}} o
+ * @returns {{ready:boolean, version:string, busy:boolean}}
+ */
+export function webUpdateState(o) {
+  const s = o || {};
+  const ready = !!s.ready;
+  return { ready, version: ready ? String(s.version || "").trim() : "", busy: !!s.busy };
 }
 
 // ── 받는 동안의 문구 — "확인합니다"에 멈춰 보이던 자리 (#1541) ──────────────────────────

@@ -289,6 +289,32 @@ const EMBEDDABLE_TABLES = new Set(["knowledge", "project", "category"]);
 //  기본 table='knowledge'. 프로젝트 등 다른 임베딩 타깃도 같은 컬럼셋을 재사용(#631).
 //  fail-open: 확장 없거나 실패해도 false 반환 + 경고만(부팅·렉시컬 검색 무손상). 멱등(ADD COLUMN/INDEX IF NOT EXISTS).
 //  ⚠ 기존 컬럼의 차원은 IF NOT EXISTS 가 못 바꾼다 — 차원 변경(모델 스왑)은 enable/backfill 경로(P2)가 drop+recreate 처리.
+/**
+ * 이 테이블에 임베딩 스키마가 **이미** 갖춰져 있나 — 컬럼 3개 + (차원이 HNSW 범위면) 인덱스.
+ * 읽기(카탈로그 조회)만 하므로 **소유권이 필요 없다.** 차원까지 본다: 모델이 바뀌어 차원이 달라졌으면
+ * 갖춰진 것이 아니다(그 경로는 아래 drop+recreate 가 맡는다).
+ */
+async function hasEmbeddingSchema(pool: pg.Pool, table: string, dim: number): Promise<boolean> {
+  try {
+    const cols = await pool.query(
+      `SELECT a.attname, COALESCE(information_schema._pg_char_max_length(a.atttypid, a.atttypmod), a.atttypmod) AS dim
+         FROM pg_attribute a
+        WHERE a.attrelid = to_regclass($1) AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.attname = ANY($2)`,
+      [table, ["embedding_vector", "embedding_model", "embedding_updated_at"]],
+    );
+    if (cols.rowCount !== 3) return false;
+    // vector(N) 의 atttypmod 는 N 이다(pgvector). 차원이 다르면 '갖춰짐' 이 아니다.
+    const vec = cols.rows.find((r: { attname: string }) => r.attname === "embedding_vector") as { dim: number } | undefined;
+    if (vec && Number(vec.dim) > 0 && Number(vec.dim) !== dim) return false;
+    if (dim > HNSW_MAX_DIMS) return true;   // 인덱스를 애초에 안 만드는 구간
+    const idx = await pool.query(`SELECT 1 FROM pg_indexes WHERE tablename = $1 AND indexname = $2`, [table, `${table}_embedding_hnsw`]);
+    return (idx.rowCount ?? 0) > 0;
+  } catch {
+    return false;   // 못 읽으면 '없다' 로 보고 아래 생성 경로가 판단하게 둔다(종전 동작)
+  }
+}
+
 export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number, table = "knowledge"): Promise<boolean> {
   if (!EMBEDDABLE_TABLES.has(table)) {
     console.warn(`[embeddings] 알 수 없는 임베딩 테이블(${table}) — 스키마 준비 건너뜀`);
@@ -299,6 +325,15 @@ export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number, t
     console.warn(`[embeddings] 잘못된 dimensions(${dimensions}) — 스키마 준비 건너뜀`);
     return false;
   }
+  // ── 이미 갖춰져 있으면 손대지 않는다 (2026-08-20 실측) ─────────────────────────────
+  //  `ALTER TABLE … ADD COLUMN IF NOT EXISTS` 는 **컬럼이 이미 있어도 소유권을 요구한다** — Postgres 가
+  //  no-op 이 되기 전에 소유자 검사를 먼저 하기 때문이다. 그래서 게이트웨이 DB 롤이 테이블 소유자가 아닌
+  //  배포에서는(우리 dev 가 그랬다) 이 함수가 **늘** false 를 내고, 그 뒤 백필이 통째로 막힌다:
+  //  `runEmbeddingBackfill` 이 reason:"schema" 로 11ms 만에 죽어 **새로 쓴 지식이 영영 임베딩되지 않는다**
+  //  (실측 dev: 미임베딩 64건 적체, 그 문서들은 벡터 채널에 없어 하이브리드 검색이 grep 단독보다 나빴다).
+  //  벡터검색 자체는 멀쩡했다 — 컬럼도 인덱스도 이미 있었다. 없는 것을 만들 권한이 없었을 뿐이다.
+  //  → **먼저 있는지 보고, 없을 때만 만든다.** 다 있으면 권한과 무관하게 true.
+  if (await hasEmbeddingSchema(pool, table, dim)) return true;
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
   } catch (e) {

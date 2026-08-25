@@ -40,17 +40,16 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
   if (!sessionId || !transcriptPath) return;   // 이 정보가 없으면(구 하네스·비Claude) 캡처 불가 — 조용히 종료.
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(sessionId)) return;
 
-  // 프로젝트 귀속(#905 C1) — **`.lively/project.json` 마커에서 project_id 를 읽는다**(경로 휴리스틱 아님, 구조화된 정본).
-  //  세션 cwd 에서 위로 올라가며 마커를 찾는다. 서버는 이 값을 받아 '요청자가 그 프로젝트 멤버일 때만' 귀속한다(위조 방어).
-  const cwd = String(ev.cwd || ev.cwd || "").trim() || process.cwd();
-  const projectId = (() => {
-    let dir = cwd;
-    for (let i = 0; i < 40 && dir; i++) {
-      try { const m = JSON.parse(fs.readFileSync(path.join(dir, ".lively", "project.json"), "utf8")); if (m && Number.isInteger(m.project_id) && m.project_id > 0) return m.project_id; } catch { /* 마커 없음·파손 */ }
-      const p = path.dirname(dir); if (p === dir) break; dir = p;
-    }
-    return null;
-  })();
+  // 대화 id(sessionId)와 실행 세션 id는 별개다. 프로젝트 귀속은 cwd가 아니라 실행 세션 DB 바인딩으로 서버가 해석한다.
+  const directExecution = String(process.env.LIVELY_SESSION_ID || "").trim();
+  const harness = String(process.env.LIVELY_HARNESS || "claude").trim().toLowerCase();
+  const codexExecution = String(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim();
+  const claudeExecution = String(process.env.CLAUDE_SESSION_ID || "").trim();
+  const executionId = directExecution
+    || (harness === "codex" ? `codex-${sessionId}` : "")
+    || (harness === "claude" ? `claude-${sessionId}` : "")
+    || (codexExecution ? `codex-${codexExecution}` : "")
+    || (claudeExecution ? `claude-${claudeExecution}` : "");
 
   // 2) 게이트웨이 base + 토큰 (project-push 와 동일 출처).
   const HOME = process.env.LIVELY_HOME || os.homedir();
@@ -60,7 +59,6 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
   let base = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080");
   base = base.replace(/\/?(mcp)?\/*$/i, "").replace(/\/+$/, "");
   const nodeId = (process.env.LIVELY_NODE_ID || "").trim() || readLocal("node-id") || "";   // '' = 게이트웨이 로컬(박스)
-  const harness = (process.env.LIVELY_HARNESS || "claude").trim().toLowerCase();
   // #1750 S3 — 셀프호스트 다중 워크스페이스: 이 세션의 소속(spawn 이 pane env 로 심음)을 헤더로 알린다.
   //  없으면 안 붙인다(primary = 종전). 안 붙이면 secondary 세션의 기록이 primary 에 쌓인다(소속 불일치).
   const wsSlug = (process.env.LVLY_TENANT_SLUG || "").trim();
@@ -69,7 +67,8 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
     const t = setTimeout(() => ctl.abort(), Math.max(500, Math.min(6000, BUDGET_MS - (Date.now() - startedAt))));
     try {
       return await fetch(base + p, { ...opts, signal: ctl.signal, headers: {
-        authorization: "Bearer " + token, ...(wsSlug ? { "x-lively-workspace": wsSlug } : {}), ...(opts.headers || {}) } });
+        authorization: "Bearer " + token, ...(executionId ? { "x-lively-session": executionId } : {}),
+        ...(wsSlug ? { "x-lively-workspace": wsSlug } : {}), ...(opts.headers || {}) } });
     } finally { clearTimeout(t); }
   };
   const q = (o) => new URLSearchParams(o).toString();
@@ -98,7 +97,7 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
     } catch { return; }
     if (!buf || !buf.length) return;
     try {
-      await jfetch(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${q({ at: String(from), node: nodeId, harness, ...(projectId ? { project: String(projectId) } : {}), ...(extra || {}) })}`, {
+      await jfetch(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${q({ at: String(from), node: nodeId, harness, ...(executionId ? { execution: executionId } : {}), ...(extra || {}) })}`, {
         method: "POST", headers: { "content-type": "application/octet-stream" }, body: buf,
       });
     } catch { /* 전송 실패 → 다음 턴 재시도(영구 누락 없음: 서버 워터마크 기준) */ }

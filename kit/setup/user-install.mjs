@@ -13,7 +13,7 @@
 //  (f) ~/.lively/lib+bin      ← lively CLI + 런처 심 + PATH rc 배선 (#864 — installCli)
 //  MCP 등록은 `lively install`(CLI) 또는 박스의 register-clients.sh 가 담당(여기서 호출 안 함).
 //
-// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs [--harness claude|codex|opencode|antigravity|grok|claude,codex,…] [--work-root <abs>]…
+// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs --allow-host-effects [--harness claude|codex|opencode|antigravity|grok|claude,codex,…] [--work-root <abs>]…
 //   --clone-root <dir> 로 발행물 루트 지정(기본: 이 스크립트의 ../). --harness 미지정 시 claude.
 //   Codex(--harness codex): 같은 ~/.lively 자산 + ~/.codex/config.toml([hooks]+[mcp_servers.*]) + ~/.codex/AGENTS.md.
 //     **codex 배선의 정본은 이 파일 하나다** — adapters/codex/install.mjs 라는 형제 설치기가 있었지만 아무도
@@ -25,9 +25,13 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WORK_ROOTS_HEADER } from "./work-roots-header.mjs";
+import { addWindowsUserPath, entrypointHostEffects, hostEffectsAllowed } from "./host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const spawnSync = (...args) => hostEffects.spawnSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 const args = process.argv.slice(2);
 const getOpt = (n) => { const i = args.indexOf(n); return i !== -1 ? args[i + 1] : null; };
@@ -60,7 +64,7 @@ const CLAUDE_DIR = claudeConfigDir(HOME);
 //  복사되므로 같은 목록에 있어야 하고, 빠지면 sync-harness-assets 가 ERR_MODULE_NOT_FOUND 로 **통째로 죽는다**
 //  (그러면 조직 자산이 한 개도 안 깔린다 — 게다가 자산 sync 는 조용히 실패하는 게 설계라 아무 신호가 없다).
 //  이 등재 누락은 kit/hooks/harness-registry.test.mjs 가 잡는다.
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "host-effects-port.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -103,7 +107,14 @@ function userLevelHooksBlock() {
       //  호출마다 훅이 스폰된다(실측 46ms/회 — playwright 200콜이면 ~9s). 그래서 확대는 보류하고, 넓힐 땐 matcher 를
       //  pull_tools 에서 파생해 '관리자가 적은 서버만' 뜨게 하는 게 맞다(후속 태스크 — 매처 회수 설계 동반 필요).
       { matcher: "mcp__lively__.*", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
-      { matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+      // ★ 셸(Bash)을 함께 본다(원준 2026-08-20 신고: "돌아가고 있는데 파란불이 안 들어온다").
+      //  왜 필요했나 — 실측: 세션이 16분 동안 Bash·남의 MCP(playwright)만 쓰는 구간에서 이 훅이 **한 번도 안 돌아**
+      //  마지막 busy 보고가 만료(PHASE_TTL_SEC 10분)되고 세션이 '대기 중'(회색)으로 떨어졌다. 실제로는 쉬지 않고 일하는 중이었다.
+      //  예비 수단(pane 제목 스피너 훔쳐보기)도 지금 죽어 있다 — 요즘 클로드코드는 **일하든 말든** 제목이 `✳ …` 라
+      //  isSpinning(점자 스피너 판정)에 안 걸린다(실측: 도는 세션·쉬는 세션 14개 전부 ✳). 그러니 훅이 유일한 진실이다.
+      //  비용: 툴 호출마다 훅 스폰 46ms. Bash 는 MCP 처럼 한 턴에 수백 번 불리지 않아 감당할 만하고, 네트워크 왕복은
+      //  work-flag 자체의 60초 스로틀이 막는다(같은 상태 반복은 안 보낸다).
+      { matcher: "Edit|Write|MultiEdit|NotebookEdit|Bash", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
     ],
     // #1221 세션 실행 단계 보고 — 턴 시작(UserPromptSubmit)·확인 필요(Notification)·턴 종료(Stop). 이 셋이 붙어야
     //  게이트웨이가 화면 스크래핑(스피너 유니코드·capture-pane 패턴)을 안 하고도 '작업 중/확인 필요/대기 중'을 안다.
@@ -296,11 +307,12 @@ const CLI_PATH_END = "# <<< lively-managed (PATH: cli) <<<";
 //  같은 리터럴을 bootstrap.sh 가 쓰고 user-uninstall.mjs 가 제거한다 — 세 곳이 한 센티넬을 공유한다.
 function wireCliPath() {
   if (WIN) {
-    // Windows 는 rc 가 없다 — User PATH(레지스트리)에 넣는다. 관리자 권한 불필요. 실패해도 설치는 계속(fail-soft).
+    // Windows 는 rc 가 없다 — User PATH(레지스트리)에 넣는다. 영속 호스트 효과는 명시 capability가 있어야 한다.
     const binDir = join(LIVELY, "bin");
-    const ps = `$b='${binDir.replace(/'/g, "''")}'; $p=[Environment]::GetEnvironmentVariable('PATH','User'); if(-not $p){$p=''}; if(($p -split ';') -notcontains $b){ [Environment]::SetEnvironmentVariable('PATH', ($b+';'+$p).TrimEnd(';'), 'User') }`;
-    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { stdio: "ignore" });
-    if (r.status === 0) console.log("  ✓ User PATH 에 ~/.lively/bin 추가(새 창부터 적용)");
+    const r = addWindowsUserPath(binDir, { allowed: hostEffectsAllowed({ args }) });
+    if (r.status === "changed") console.log("  ✓ User PATH 에 ~/.lively/bin 추가(새 창부터 적용)");
+    else if (r.status === "unchanged") console.log("  · User PATH 에 ~/.lively/bin 이미 있음");
+    else if (r.status === "denied") console.log("  · User PATH 변경 생략(영속 호스트 효과 권한 없음)");
     else console.warn("  ⚠️ User PATH 등록 실패 — 새 PowerShell 에서 `lively` 가 안 잡히면 수동으로 추가하세요.");
     return;
   }
@@ -368,6 +380,8 @@ function installCli() {
   // 제거기 로컬 사본 — 로그아웃·오프라인 상태에서도 `lively uninstall` 이 되도록(제거는 언제나 가능해야 한다).
   const un = cloneAbs(join("setup", "user-uninstall.mjs"));
   if (existsSync(un)) { copyFileSync(un, join(lib, "user-uninstall.mjs")); chmodSync(join(lib, "user-uninstall.mjs"), 0o755); }
+  const hostEffects = cloneAbs(join("setup", "host-effects.mjs"));
+  if (existsSync(hostEffects)) copyFileSync(hostEffects, join(lib, "host-effects.mjs"));
   if (WIN) {
     writeFileSync(join(bin, "lively.cmd"), CLI_SHIM_CMD);
   } else {
@@ -438,15 +452,21 @@ const cdxHook = (event, command, timeout, matcher) => [
 ];
 
 // 커스텀 훅 런너를 배선할 codex 이벤트 — **claude 의 runnerHooksBlock 과 같은 자리**(하네스 패리티 불변식 ②).
-//  이벤트 집합이 하네스마다 다르다(codex 0.142.0 바이너리 실측):
-//   · codex 에 **없는 것**: SessionEnd · Notification → 배선 불가(claude 전용).
+//  이벤트 집합이 하네스마다 다르다(codex 0.142.0 → 0.149.1 바이너리·스텁모델 E2E 실측, #1475 → #1884):
+//   · **SessionEnd 는 0.149.1 부터 발화한다**(payload: session_id·transcript_path·cwd·reason — #1884 실측). 0.142 는
+//     이 키를 **조용히 무시**한다(config 로드 에러 없음 — 실측)라 버전 분기 없이 배선해도 안전하다. 단 codex 가
+//     SessionEnd 훅 timeout 을 **3s 로 클램프**한다(경고 문구 실측) → 그 이상 적어도 의미 없다.
+//   · codex 에 **없는 것**: Notification(config 키는 받되 발화 미관측 — exec 모드엔 승인 프롬프트가 없어 관측 불가).
+//     claude 의 Notification(='확인 필요') 자리는 PermissionRequest 가 대신한다.
 //   · codex 에**만** 있는 것: PermissionRequest · SubagentStart → 서버 org_hook 의 event 허용목록(delivery/hooks.ts
 //     HOOK_EVENTS)에 아직 없어 조직 훅을 만들 수 없다 → 러너는 배선하지 않는다(등록 불가능한 이벤트에 러너를
 //     붙이면 툴콜마다 빈 왕복만 생긴다). PermissionRequest 는 work-flag(세션 상태)로만 쓴다.
-//  그래서 여기 8개 = 'codex 가 지원' ∩ '조직 훅으로 등록 가능' 의 전부다. 특히 **PreToolUse 가 핵심** —
+//  그래서 여기 9개 = 'codex 가 지원' ∩ '조직 훅으로 등록 가능' 의 전부다. 특히 **PreToolUse 가 핵심** —
 //  이게 없던 동안 코덱스엔 조직 거버넌스(쓰기게이트·승인차단)가 통째로 없었다(claude 만 적용, 불변식 ② 위반).
+//  실측 장치: kit/setup/codex-e2e.test.mjs(실 codex 바이너리 + 로컬 스텁 모델 — 계정 불요).
 const CODEX_RUNNER_EVENTS = [
   ["SessionStart", "startup|resume|clear", 10],
+  ["SessionEnd", null, 3],
   ["UserPromptSubmit", null, 15],
   ["PreToolUse", ".*", 15],
   ["PostToolUse", ".*", 15],
@@ -468,6 +488,10 @@ function codexExtraMcpLines() {
       if (!/^[A-Za-z0-9_-]+$/.test(s.name)) continue; // TOML 키 안전
       if (seen.has(s.name)) continue; // 중복 이름 스킵
       seen.add(s.name);
+      // #1884 — 우리가 네이티브로 심는 이름(lively·lively-local)은 건너뛴다. TOML 은 **같은 테이블이 두 번 나오면 파일 전체가
+      //  로드 실패**하므로(위 배열 command 결함과 같은 클래스), 조직이 종전 우회로(org MCP 에 lively-local 수동 등록)를
+      //  남겨 둔 채 이 버전을 받으면 코덱스 배선이 통째로 죽는다. 네이티브 블록이 정본이다.
+      if (s.name === "lively" || s.name === "lively-local") continue;
       out.push(`[mcp_servers.${s.name}]`);
       if (s.transport === "stdio" && s.command) {
         // ⚠ codex 스키마는 **command=문자열 + args=배열**이다(0.142.0 실측: `codex mcp add probe -- lively mcp-local`
@@ -543,11 +567,28 @@ function codexLivelyServerLines(mcpUrl) {
   ];
 }
 
+// lively-local — 로컬 조작 stdio MCP(#899, 레포·워크트리 툴). claude 는 `lively mcp add` 로 심는데(cli/lively.mjs
+//  registerClaudeMcpIn) codex 엔 그 자리가 없었다 → 코덱스 멤버는 로컬 레포 툴이 통째로 없었다(#1884 패리티 홀).
+//  lively 본체와 같은 조건(심+프록시 파일 존재 = stdio 경로)에서만 싣는다 — http 폴백 상태에선 CLI 자체가 없어 서버도 못 뜬다.
+function codexLocalServerLines() {
+  const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
+  const proxy = join(LIVELY, "lib", "lively-mcp-gateway.mjs");
+  let transport = "";
+  try { transport = readFileSync(join(LIVELY, "mcp-transport"), "utf8").trim(); } catch { /* 기본 = stdio */ }
+  if (transport === "http" || !existsSync(shim) || !existsSync(proxy)) return [];
+  return [
+    "[mcp_servers.lively-local]",
+    `command = ${JSON.stringify(fwd(shim))}`,
+    'args = ["mcp-local"]', "",
+  ];
+}
+
 function codexManagedBlock(mcpUrl) {
   const wf = codexHookCmd("work-flag.mjs");
   return [
     CDX_BEGIN, "",
     ...codexLivelyServerLines(mcpUrl),
+    ...codexLocalServerLines(),
     ...codexAutoApproveLines(), // [mcp_servers.lively.tools.X] approval_mode="approve" — 자동승인 툴
     ...codexExtraMcpLines(),
     // ── 전용 훅 — claude 의 userLevelHooksBlock 과 같은 자리 ──
@@ -561,10 +602,13 @@ function codexManagedBlock(mcpUrl) {
     ...cdxHook("SessionStart", wf, 5, "startup|resume|clear"),
     ...cdxHook("UserPromptSubmit", wf, 5),
     ...cdxHook("PostToolUse", wf, 5, "mcp__lively__.*"),
-    ...cdxHook("PostToolUse", wf, 5, "Edit|Write|MultiEdit|NotebookEdit|apply_patch"),
+    ...cdxHook("PostToolUse", wf, 5, "Edit|Write|MultiEdit|NotebookEdit|apply_patch|Bash"),   // 셸도 — 위 claude 쪽 주석과 같은 이유
     ...cdxHook("PermissionRequest", wf, 5),
     ...cdxHook("Stop", codexHookCmd("stop-writeback-gate.mjs"), 10),
     ...cdxHook("Stop", wf, 5),
+    // #1059 사용자 정상 종료 보고 — claude 의 SessionEnd 자리. codex 0.149.1 부터 발화(0.142 는 무시 — 위 CODEX_RUNNER_EVENTS
+    //  주석). timeout 3 = codex 가 클램프하는 상한.
+    ...cdxHook("SessionEnd", wf, 3),
     // ── 커스텀 훅 런너 — 이벤트별 고정 엔트리 1개(훅 본문은 런너가 런타임에 fetch) ──
     ...CODEX_RUNNER_EVENTS.flatMap(([event, matcher, timeout]) =>
       cdxHook(event, codexRunnerCmd(event), timeout, matcher)),
@@ -1149,6 +1193,11 @@ async function installShared(workRoots) {
   else console.log(`  · ~/.lively/context.md 시드 보류(오프라인/게이트웨이 미응답) — 첫 세션 훅이 채움 · org-name=${orgName}`);
 
   const hooksDir = join(LIVELY, "hooks");
+  const sharedHostEffects = cloneAbs(join("setup", "host-effects.mjs"));
+  if (existsSync(sharedHostEffects)) {
+    mkdirSync(join(LIVELY, "lib"), { recursive: true });
+    copyFileSync(sharedHostEffects, join(LIVELY, "lib", "host-effects.mjs"));
+  }
   mkdirSync(hooksDir, { recursive: true });
   let missing = 0;
   for (const f of HOOK_SCRIPTS) {
@@ -1167,7 +1216,13 @@ async function installShared(workRoots) {
   //  이제 `lively run <프로젝트번호>` 가 이걸 부른다(웹이 건네던 `node ~/.lively/work.mjs …` 를 대체).
   {
     const wsrc = cloneAbs(join("setup", "work.mjs"));
-    if (existsSync(wsrc)) { copyFileSync(wsrc, join(LIVELY, "work.mjs")); chmodSync(join(LIVELY, "work.mjs"), 0o755); console.log("  ✓ ~/.lively/work.mjs"); }
+    const hsrc = cloneAbs(join("setup", "host-effects.mjs"));
+    if (existsSync(wsrc) && existsSync(hsrc)) {
+      copyFileSync(wsrc, join(LIVELY, "work.mjs"));
+      copyFileSync(hsrc, join(LIVELY, "host-effects.mjs"));
+      chmodSync(join(LIVELY, "work.mjs"), 0o755);
+      console.log("  ✓ ~/.lively/work.mjs + HostEffects");
+    }
     else console.log("  · ~/.lively/work.mjs 보류(번들에 setup/work.mjs 없음 — 구버전 번들)");
   }
 

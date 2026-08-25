@@ -7,16 +7,24 @@
       --svc-brand 는 svc-icons.ts 가 서비스마다 인라인으로 넣는다(외부 브랜드 자산 예외). ── */
 .svc-tile { flex: none; width: 40px; height: 40px; border-radius: 12px;
   display: inline-flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--svc-brand, var(--muted-3)) 12%, var(--bg));
-  color: var(--svc-brand, var(--muted));
+  background: color-mix(in srgb, var(--svc-brand) 12%, var(--bg));
+  color: var(--svc-brand);
   transition: background-color 140ms ease, color 140ms ease; }
-.svc-tile svg { display: block; width: 23px; height: 23px; }
+.svc-tile svg { display: block; width: 23px; height: 23px; transition: filter 140ms ease, opacity 140ms ease; }
 .svc-tile-ini { font-size: 17px; font-weight: 800; line-height: 1; }
-/* 미연결 — 무채색으로 잠들어 있다가, 카드에 손을 올리면 그 서비스의 색으로 깨어난다(켤 수 있다는 어포던스). */
+/* 미연결 — 색이 빠진 채 잠들어 있다가, 카드에 손을 올리면 그 서비스의 색으로 깨어난다(켤 수 있다는 어포던스).
+   ⚠ 색을 color 로 죽이지 않는다 — 로고가 제 색을 여러 개 갖고 있어 currentColor 가 안 먹는다(#1597 개편,
+   2026-08-21 공식 로고 도입). grayscale 로 **색만** 빼면 모양은 남아서 무슨 서비스인지는 계속 읽힌다. */
 .svc-tile.off { background: var(--bg-tint-2); color: var(--muted-2); }
-.svc-card:hover .svc-tile.off, .svc-card:focus-visible .svc-tile.off {
-  background: color-mix(in srgb, var(--svc-brand, var(--muted-3)) 12%, var(--bg));
-  color: var(--svc-brand, var(--muted)); }
+.svc-tile.off svg { filter: grayscale(1); opacity: .5; }
+.svc-card:hover .svc-tile.off, .svc-card:focus-visible .svc-tile.off,
+.cn-row:hover .svc-tile.off, .cn-row:focus-visible .svc-tile.off {
+  background: color-mix(in srgb, var(--svc-brand) 12%, var(--bg));
+  color: var(--svc-brand); }
+/* .cn-row 는 새 셸 [외부 앱 연결]의 행이다 — 카드(.svc-card)와 다른 자리라 같이 적어 주지 않으면
+   그 화면에서만 '손을 올려도 색이 안 깨어나는' 반쪽 어포던스가 된다(#1719). */
+.svc-card:hover .svc-tile.off svg, .svc-card:focus-visible .svc-tile.off svg,
+.cn-row:hover .svc-tile.off svg, .cn-row:focus-visible .svc-tile.off svg { filter: none; opacity: 1; }
 
 /* ── 연결된 서비스 — 전폭 행(관리 동작이 붙고, 슬랙은 아래로 펼쳐진다) ── */
 .svc-conn-list { display: flex; flex-direction: column; gap: 10px; }

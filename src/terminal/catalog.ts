@@ -112,6 +112,8 @@ export interface FlagDef { name: string; label: string; desc: string; type: "sel
 export interface HarnessProvider { id: string; label: string }
 export interface Harness {
   key: string; label: string; bin: string; provider: HarnessProvider; autoApproveFlag?: string; flags: FlagDef[];
+  /** 모델마다 허용 추론강도가 다를 때 UI가 잘못된 조합을 만들지 않게 하는 표. 미지정 모델은 --effort 전체 선택지를 쓴다. */
+  effortsByModel?: Record<string, string[]>;
   // #1516 런처 안내의 하네스별 부분(harnessFailNotice 가 읽는다 — 문구를 그 함수에 하드코딩하지 않는다).
   //  · loginCmd: 비정상 종료의 주원인이 '자격 만료'이고 **셸에서 한 줄로** 복구되는 하네스(codex)만. 있으면
   //    안내가 재시작 대신 이 명령을 준다.
@@ -131,8 +133,8 @@ export interface Harness {
   //  플래그로는 못 바꾼다 — 사람이 터미널에서 치는 것과 같은 슬래시 명령을 주입하는 수밖에 없다(POST …/runtime).
   //  ⚠ **인자를 받는 명령이 실증된 하네스에만 둔다.** codex 의 `/models`·opencode 의 `/model` 은 고르는 팝업이라
   //   인자를 안 받고(실측: codex 바이너리에 `/model <arg>` 문자열 없음, 추론강도는 키보드 단축키), antigravity 는
-  //   슬래시로 바꾸는 경로가 확인되지 않았다. 없는 하네스는 화면이 컨트롤을 아예 안 그린다 — 효과 없는 컨트롤을
-  //   남기면 사람은 그게 먹는다고 믿는다(session-form.ts '기록 범위' 잠금과 같은 원칙).
+  //   슬래시로 바꾸는 경로가 확인되지 않았다. 없는 하네스도 화면 선택기는 보이되, 같은 프로세스에 거짓 명령을 넣지 않고
+  //   같은 작업 자리의 새 프로세스로 맥락을 넘긴다(session-chat.ts handoff).
   runtimeCmd?: { model?: (v: string) => string; effort?: (v: string) => string };
 }
 // 이어받기 대화 id 형식 — 하네스가 만든 값이라 제각각이다(claude·agy=UUID · opencode=`ses_…`).
@@ -145,7 +147,13 @@ export const HARNESSES: Harness[] = [
     autoApproveFlag: "--dangerously-skip-permissions",
     flags: [
       // desc 는 폼에서 드롭다운 아래 회색 캡션으로 붙는다 — '비우면 기본' 류는 빈 값 옵션 라벨('(자동)')이 이미 말하므로 두지 않는다(#1145).
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "opus", "sonnet", "haiku"] },
+      // 2026-08-24 Claude Code 2.1.241 --help 가 현행 별칭으로 fable·opus·sonnet 을 직접 안내한다.
+      // haiku 는 빠른 기존 별칭으로 유지하고, 기본 표기만 현재 세션 기본인 fable 로 올린다(argv 고정은 하지 않는다).
+      //  ⚠ 별칭 목록은 CLI 도움말을 실측해 맞춘다 — fable 이 빠져 있었다(원준님 2026-08-21 지적).
+      //   실측(claude 2.1.238 `--help`): "Provide an alias for the latest model (e.g. 'fable', 'opus', or
+      //   'sonnet') or a model's full name (e.g. 'claude-fable-5')." 목록에 없어도 터미널에서 `/model fable`
+      //   로는 바뀌었기 때문에(이 박스 최근 대화 claude-fable-5 5,059줄) 폼만 모르고 있던 상태였다.
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "fable" },
       { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
     ],
     failHint: ["로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요."],
@@ -157,19 +165,36 @@ export const HARNESSES: Harness[] = [
   {
     key: "codex", label: "Codex", bin: "codex", provider: { id: "openai", label: "OpenAI" },
     autoApproveFlag: "--yolo",
-    // default 는 **표기용**이다(#1145) — 빈 값 옵션을 '(자동 · gpt-5.5)' 로 보여줄 뿐, 이 값을 argv 로 넘기지는 않는다.
+    // 2026-08-24 Codex CLI 0.149.1 기준 현행 카탈로그. gpt-5.5를 기본 표기로 남기면
+    // 새 세션 화면에서 5.6 계열을 애초에 고를 수 없어, 실제 설치본보다 UI가 뒤처진다.
+    // default 는 **표기용**이다(#1145) — 빈 값 옵션을 '(자동 · gpt-5.6-sol)' 로 보여줄 뿐, 이 값을 argv 로 넘기지는 않는다.
     //  넘기는 순간 그 모델에 고정돼, codex 가 기본을 올려도 여기 적힌 낡은 문자열에 사용자가 묶인다.
-    flags: [{ name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.5" }],
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.6-sol" },
+      // Codex CLI는 현재 launch-time reasoning effort를 config로 받는다. 일반 --effort 플래그가 아니라
+      // session 생성기에서 별도 argv로 정규화한다. UI 계약은 다른 하네스와 동일하게 유지한다.
+      { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max", "ultra"] },
+    ],
+    effortsByModel: {
+      "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
+      "gpt-5.5": ["low", "medium", "high", "xhigh"],
+      "gpt-5.4": ["low", "medium", "high", "xhigh"],
+      "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
+    },
     loginCmd: "codex logout && codex login --device-auth",
     resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
   },
   {
     // #1519 로 배선(훅·MCP·자산)은 이미 붙어 있는데 **웹 세션 카탈로그에만** 빠져 있던 자리(#1695).
-    //  모델은 `provider/model` 형식이라 화이트리스트로 못 박기 어렵다(제공자마다 다름) → 여기선 안 받는다.
-    //  opencode 안에서 고르면 되고, 반쯤 맞는 목록을 주는 것보다 안 주는 게 정직하다.
+    // 2026-08-24 설치본 `opencode models` 실측의 기본 제공 모델. 계정별 추가 provider 모델은 이 목록에 없지만,
+    // 적어도 설치 직후 누구나 쓸 수 있는 모델은 상단에서 고를 수 있게 한다. 선택 뒤에는 새 OpenCode 프로세스로 핸드오프된다.
     key: "opencode", label: "OpenCode", bin: "opencode", provider: { id: "other", label: "그 밖의 제공자" },
     autoApproveFlag: "--auto",   // 실측(1.18.x --help): 명시 deny 가 아닌 권한을 자동 승인
-    flags: [],
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "opencode/big-pickle", "opencode/hy3-free", "opencode/mimo-v2.5-free", "opencode/muse-spark-1.2-contributor-free", "opencode/nemotron-3-ultra-free", "opencode/nemotron-3.5-lightning-free", "opencode/x-preview-f-free"] },
+    ],
     // 셸에서 그대로 치는 명령은 **명령 줄**로 준다(복사해 붙여넣게) — claude 의 /login 은 TUI 안 입력이라 문장으로 둔다.
     failHint: ["로그인이 필요하다고 나오면 아래를 입력해 제공자를 고르세요:", "", "    opencode auth login"],
     resumeArgv: (id) => (id ? ["--session", id] : ["--continue"]),
@@ -179,10 +204,11 @@ export const HARNESSES: Harness[] = [
     //  bin 은 key 와 다르다(agy). 안내·재시작 문구를 key 로 만들면 없는 명령을 안내하게 된다(harnessFailNotice 참조).
     key: "antigravity", label: "Antigravity", bin: "agy", provider: { id: "google", label: "Google Gemini" },
     autoApproveFlag: "--dangerously-skip-permissions",   // 실측(agy 1.1.13 --help)
-    // 모델은 `agy models` 실측 목록에서 **현행 대표만** 큐레이트한다(구세대 flash 3.5/3.6 은 뺀다).
-    //  codex 와 같은 이유로 빈 값(=하네스 기본)을 기본으로 두어 낡은 문자열에 사용자를 묶지 않는다.
+    // 모델은 `agy models` 실측 목록을 그대로 싣는다. 최신 3.7만 남기면 이미 설치본이 지원하는 3.5/3.6을
+    // 상단에서 고를 수 없으므로, 새 모델 추가와 기존 지원 모델 보존을 함께 반영한다.
+    // codex 와 같은 이유로 빈 값(=하네스 기본)을 기본으로 두어 특정 문자열에 사용자를 묶지 않는다.
     flags: [
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"] },
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3.5-flash-high", "gemini-3.5-flash-medium", "gemini-3.5-flash-low", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"] },
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"] },   // claude 와 달리 3단계(실측)
     ],
     failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
@@ -196,15 +222,14 @@ export const HARNESSES: Harness[] = [
     // #1701 로 배선 완료(hook-file + config.toml 센티넬 + rules 주입) — 5번째 하네스.
     key: "grok", label: "Grok Build", bin: "grok", provider: { id: "xai", label: "xAI" },
     autoApproveFlag: "--always-approve",   // 실측(grok 1.0.3 --help; --yolo 는 별칭이지만 제품 표기가 always-approve)
-    // 모델은 실측으로 확인된 현행 id 만 큐레이트한다(기본 grok-4.5 · 실세션 관측 grok-4.6). codex 와 같은 이유로
-    //  빈 값(=하네스 기본)을 기본으로 두어 낡은 문자열에 사용자를 묶지 않는다. effort 는 모델마다 허용 단계가
-    //  달라(문서: "a model only accepts the levels its menu advertises") 반쯤 맞는 목록을 주느니 안 준다(opencode 판단).
+    // 2026-08-24 Grok Build 1.0.5 `grok models` 실측: 사용 가능·기본 모델 모두 grok-4.6 하나다.
+    // 더는 목록에 없는 4.5 를 남기면 선택 즉시 실패하므로 제거한다. 빈 값은 하네스 기본을 계속 따른다.
     flags: [
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "grok-4.6", "grok-4.5"] },
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "grok-4.6"], default: "grok-4.6" },
+      { name: "--effort", label: "추론강도(effort)", desc: "모델이 지원하는 단계만 적용됩니다", type: "select", choices: ["", "low", "medium", "high", "xhigh"] },
     ],
     failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-code"],
     // 실측(grok 바이너리 도움말 문자열): `/model <모델id>  # Switch model` · `/effort <level>` 둘 다 인자를 받는다.
-    //  추론강도는 위 flags 에 선택지를 안 두므로(모델마다 단계가 달라) 지금은 화면에 안 뜬다 — 선택지가 생기면 그대로 선다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
     // 실측(#1701): `-r <id>` 는 세션 id(UUID) 재개, id 없으면 `-c` = 이 폴더의 최근 세션. 어댑터가 sessionId 를
     //  세션 매핑으로 보고하므로 id 복원이 정상 경로다(antigravity 와 같은 구조).
@@ -219,6 +244,7 @@ export interface SessionInfo {
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
+  appId?: string; // 이 세션을 실행한 AppPackage. 일반 AI 세션은 undefined이고 셸이 ai-session builtin으로 해석한다.
   // 에이전트 실행 상태(#1015 E 에서 '오프라인' 한 칸에 섞여 있던 '셸로 빠짐'을 exited 로 분리):
   //  busy=스피너 관측(작업중) · waiting=화면에 사용자 선택/승인 대기(확인 필요) — 이 둘은 **접속 무관**.
   //   탭을 닫아도 AI 는 계속 일하고, waiting 은 사용자 결정을 기다리는 알림이라 회색으로 덮으면 놓친다.
@@ -257,6 +283,10 @@ export interface SessionInfo {
   // #1059 — restorable 이 **사용자 정상 종료**(/exit·logout, SessionEnd 훅 보고)로 생겼나. true=내가 종료('종료됨·대화 이어보기'),
   //  false=재부팅·강제kill·reaper 회수('복원 가능·중단됨'). 프론트가 라벨·버튼을 구분(둘 다 복원 경로는 동일).
   exitedByUser?: boolean;
+  // #1851 — 휴지통에 있는 세션(소유자 자신의 표식, ISO 시각). 목록엔 그대로 실리되 새 셸은 사이드바에서 빼고 휴지통 화면에 그린다.
+  //  완전 삭제(purged)된 세션은 이 목록에서 아예 빠진다.
+  trashedAt?: string;
+  trashedWith?: number;   // #1851 — 프로젝트를 통째로 버릴 때 함께 들어간 세션이면 그 프로젝트 id(따로 버린 것은 없음)
   // #1251 — **earlyoom(OS 보호장치)이 죽인** 세션. exitedByUser 와 배타다(사용자가 끝낸 게 아니라 당한 것).
   //  이걸 구분해 주지 않으면 사용자는 자기 세션이 왜 사라졌는지 모른 채 재부팅·자동회수와 같은 '중단됨'으로만 본다.
   //  ⚠ 관측 기반 **추정**이라, 확신이 서지 않으면 아예 안 붙인다(box-watch 의 매핑 조건 참조).
@@ -275,6 +305,13 @@ export interface SessionInfo {
   //  프론트는 이 값으로 &node= 를 릴레이한다(입장·삭제·복원 결과 열기).
   node?: { id: string; name: string; online: boolean };
 }
+export interface PreparedAppSession {
+  appId: string;
+  token: string;
+  gatewayUrl: string | null;
+  assets: Array<{ path: string; body: string; mode: number }>;
+}
+
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
   // #1291 v2 — 기록 범위(write cap)와 read 축소. 미지정이면 실행 폴더에서 파생한다(신규·복원이 같은 규칙).
   //  writeVis: 'open'|'audience'|'private' — 이 세션이 **사용자 승인 없이** 만들 수 있는 맥락의 최대 가시성.
@@ -295,14 +332,21 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   //  자격이 만료된 상태에서 그 하네스로 세션을 열면 즉사해 로그인 자체가 불가능하기 때문(harnessLoginArgv 주석).
   //  harness 는 'shell' 로 보낸다 — 이 세션은 AI 세션이 아니라 로그인 절차용이다.
   loginFor?: string;
-  // #1719 홈 입력창 — **세션 전용 폴더**에서 연다: cwd = <rootKey 루트>/sessions/<세션id>(폴더를 고르지 않는다).
-  //  프로젝트 소속은 만들 때 정하지 않고 나중에 POST /terminal/sessions/:id/project 로 붙인다(session-project.ts) —
-  //  cwd 는 세션의 것이라 프로젝트가 바뀌어도 그대로다(실행 중 프로세스의 cwd 는 inode 참조라 어차피 안 따라온다).
-  //  subpath 는 무시된다. 라벨·하네스·플래그는 종전과 같다.
-  sessionDir?: boolean;
+  // #1683 다크모드 — 이 세션을 만든 **브라우저 화면의 테마**(해석된 값: dark|light). pane env 로 내려보내
+  //  안에서 도는 하네스·TUI 가 배경에 맞는 색을 고르게 한다(COLORFGBG·LIVELY_THEME — sessions.ts 참조).
+  //  ⚠ 하네스 설정 파일(~/.claude/settings.json 의 theme 등)은 **건드리지 않는다** — 그건 사람의 설정이고
+  //   킷이 보존하기로 한 키다(kit/adapters/*/uninstall.mjs). 우리는 터미널이 하는 표준 신호만 준다.
+  theme?: "dark" | "light";
   // #1719 홈 입력창 — 첫 지시. 세션을 띄운 뒤 하네스 입력창이 뜨는 걸 **보고 나서** 주입한다(session-first-prompt.ts).
   //  생성 응답은 기다리지 않는다(주입은 백그라운드) — 화면은 세션 대화창으로 가서 대화 파일에 나타나는 걸 따라간다.
-  initialPrompt?: string; }
+  initialPrompt?: string;
+  // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
+  //  cwd와 분리된 private app runtime home에 토큰·앱 하네스 자산을 물질화하고
+  //  pane env LIVELY_HOME=<private session_home>·LIVELY_APP_ID=<id> 를 주입한다. session_home은 cwd와 분리된다.
+  appId?: string;
+  // 게이트웨이가 정책·grant·DB를 확인해 준비한 원격 실행용 봉투. HTTP body에서는 받지 않고 내부 node relay만 사용한다.
+  appSession?: PreparedAppSession;
+}
 
 // ── 세션 런처(#1516) — 하네스가 죽어도 세션은 산다 ──
 //
@@ -521,4 +565,122 @@ export function modeEnvArgs(input: { readOnly?: boolean; incognito?: boolean }):
   if (input.incognito) return ["-e", "LIVELY_MODE=incognito", "-e", "LIVELY_INCOGNITO=1", "-e", "LIVELY_OFF=1"];
   if (input.readOnly) return ["-e", "LIVELY_MODE=readonly", "-e", "LIVELY_READONLY=1"];
   return [];
+}
+
+// 화면 테마(#1683) — 값 정규화와 `-e` env 조립. modeEnvArgs 와 같은 자리·같은 모양(순수 함수 → 계약을 테스트로 못박는다).
+//
+// 왜 pane 에 내려보내나: 터미널 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 골라야 읽힌다. 밝은 배경에
+//  밝은 회색으로 쓰면 안 보이고, 그 반대도 마찬가지다. 터미널이 앱에게 배경을 알려주는 표준 통로는 둘이다 —
+//   · OSC 11 질의 응답 — 앱이 물어보면 터미널이 답한다. 웹터미널은 xterm 이 자동으로 답한다
+//     (실증: 배경 #111726 → `ESC]11;rgb:1111/1717/2626`). **물어보는** 도구는 이 env 없이도 맞게 고른다.
+//   · COLORFGBG env — 물어보지 않고 env 를 읽는 도구(vim/neovim 의 background 자동판정, less 등)를 위한 보강.
+//  LIVELY_THEME 은 우리 훅·스킬이 읽을 명시 값이다(COLORFGBG 는 값 규약이 느슨해 해석이 갈린다).
+//
+// ⚠ 하네스의 설정 파일(~/.claude/settings.json 의 theme 등)은 **고치지 않는다** — 사람의 설정이고 킷이
+//  보존하기로 한 키다(kit/adapters/*/uninstall.mjs). 터미널이 하는 표준 신호까지가 우리 몫이다.
+// ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용된다(LANG #633·TZ #778·SESSION_ID #852 와 같은 성질).
+export function normalizeTheme(v: unknown): "dark" | "light" | undefined {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "dark" || s === "light" ? s : undefined;
+}
+export function themeEnvArgs(theme: unknown): string[] {
+  const t = normalizeTheme(theme);
+  if (!t) return [];   // 모르면 아무것도 안 넣는다 — 종전 동작(무회귀). 억지 기본값이 더 나쁘다.
+  // COLORFGBG "<fg>;<bg>" ANSI 번호 — 다크는 밝은 글자(15) on 검정(0), 라이트는 그 반대.
+  return ["-e", `COLORFGBG=${t === "dark" ? "15;0" : "0;15"}`, "-e", `LIVELY_THEME=${t}`];
+}
+
+// ── 하네스별 테마 주입 (#1683 후속) ─────────────────────────────────────────
+//
+// 왜 따로 필요한가: 위 COLORFGBG·OSC 11 은 "터미널이 배경을 알려주는" 표준 통로인데, **AI 하네스 대부분은
+//  그걸 묻지 않고 자기 설정에 저장한 테마를 쓴다**(실측: Claude Code 는 settings.json 의 theme 을 읽고
+//  터미널에 묻지 않는다 — 그래서 앱을 다크로 바꿔도 하네스 화면은 라이트 그대로였다).
+//
+// 원칙 — **사람의 설정 파일을 고치지 않는다.** 하네스 설정의 theme 은 그 사람이 고른 값이고 킷이 보존하기로
+//  한 키다(kit/adapters/*/uninstall.mjs). 대신 **실행 시점에만 얹는 방법**(플래그·env)이 있는 하네스에만
+//  세션 스코프로 준다. 그 방법이 없는 하네스는 **손대지 않는다** — 전역 설정을 대신 고치면 라이블리 밖에서
+//  쓰는 그 사람의 세션까지 바뀌고, 비격리 박스에서는 그 파일이 **구성원 공유**라 남의 화면까지 바꾼다.
+//
+// 하네스별 실측 (2026-08-20, 이 박스의 설치본 기준):
+//  · claude      — `--settings '{"theme":"dark"}'`  ★검증: 다크·라이트로 각각 띄워 pane ANSI 색이 갈리는 것 확인
+//  · codex       — `-c tui.theme=<이름>`             (`-c key=value` 오버라이드. 테마는 dark/light 가 아니라 **이름**)
+//  · opencode    — `OPENCODE_CONFIG_CONTENT` env     (설정을 통째로 문자열로 받는다)
+//  · antigravity — 없음. 테마는 있으나(~/.gemini/antigravity-cli/settings.json 의 colorScheme) 실행 시점
+//                  주입 경로가 없다(플래그·env 스캔 음성). 위 원칙대로 손대지 않는다.
+//  · grok        — 테마 기능 자체가 없다(--help·inspect·바이너리 스캔 모두 음성).
+//
+// ⚠ 값은 여기 한 곳에서만 고친다. codex 의 이름은 그 하네스가 가진 테마 목록에서 고른 것이라
+//  하네스가 목록을 바꾸면 여기만 손보면 된다.
+const HARNESS_THEME: Record<string, { argv?: (t: "dark" | "light") => string[]; env?: (t: "dark" | "light") => string[] }> = {
+  claude: { argv: (t) => ["--settings", JSON.stringify({ theme: t })] },
+  codex: { argv: (t) => ["-c", `tui.theme=${t === "dark" ? "one-half-dark" : "one-half-light"}`] },
+  opencode: { env: (t) => [`OPENCODE_CONFIG_CONTENT=${JSON.stringify({ theme: t })}`] },
+};
+
+/** 이 하네스가 실행 시점 테마 주입을 지원하나 — 화면이 "이 하네스는 앱 테마를 따릅니다"를 말할 근거. */
+export function harnessFollowsTheme(harnessKey: string): boolean {
+  return !!HARNESS_THEME[String(harnessKey || "")];
+}
+
+/** 하네스 실행 argv 에 덧붙일 테마 인자. 지원 안 하면 빈 배열(무회귀). */
+export function harnessThemeArgv(harnessKey: string, theme: unknown): string[] {
+  const t = normalizeTheme(theme);
+  const h = HARNESS_THEME[String(harnessKey || "")];
+  return t && h?.argv ? h.argv(t) : [];
+}
+
+// ── 실행 중 세션의 테마 전환 (#1683 후속2) ─────────────────────────────────
+//
+// 왜 별도인가: 위 harnessThemeArgv/EnvArgs 는 **새로 뜨는** 세션에만 통한다. pane env·실행 인자는 exec 시점에
+//  고정되고, 하네스는 시작할 때 테마를 정한 뒤 설정을 다시 읽지 않는다(실측). 그런데 이미 열어 둔 탭도 같이
+//  바뀌길 원하는 게 자연스럽다 — 그건 **하네스의 자체 명령**을 그 pane 에 넣어야만 된다.
+//
+// ⚠ 이건 '계약'이 아니라 '화면 조작'이다. 아래 시퀀스는 그 하네스 TUI 의 메뉴 순서·라벨에 기댄다 —
+//  하네스가 업데이트로 메뉴를 한 줄 추가하면 **그 하네스만 조용히 엉뚱한 테마로 바뀐다**. 그래서
+//   ① 실측으로 확인한 하네스만 넣는다(verified 표시). 미확인 하네스는 넣지 않는다 — 틀린 테마로 바꾸는 것이
+//      안 바꾸는 것보다 나쁘다.
+//   ② 결과를 호출부가 사람에게 그대로 알린다(조용한 실패 금지).
+//   ③ 값은 여기 한 곳 — 하네스가 UI 를 바꾸면 이 표만 고친다.
+//
+// 하네스별 실측 (2026-08-24, 이 박스 설치본):
+//  · claude      — `/theme` ⏎ 로 번호 선택창(1 Auto · 2 Dark · 3 Light · …), 번호를 누르면 **그 자리에서 적용**.
+//                  ★검증: 라이트 세션에 넣어 pane ANSI 색이 다크로 바뀌는 것 확인(38;5;137 사라지고 38;5;220·244 나타남).
+//  · grok        — `/theme` 이 **순환**이다(Grok Day → Tokyo Night → Rose Pine Moon → oscura …). 원하는 테마를
+//                  지정할 수단이 없어 **지원하지 않는다**(설정 모달은 다단계라 ① 원칙에 걸린다).
+//  · codex       — `/theme` 은 **구문 강조** 테마다(전체 크롬 아님). 미검증이라 넣지 않는다.
+//  · opencode    — `/themes` 선택창. 미검증이라 넣지 않는다.
+//  · antigravity — 전용 명령 없음(`/config` → 검색 → 값 선택 다단계). 미검증이라 넣지 않는다.
+export type LiveThemeStep =
+  | { kind: "text"; text: string }   // 입력창에 글자를 넣는다(제출은 enter 단계가 한다)
+  | { kind: "enter" }                // 제출
+  | { kind: "wait"; ms: number };    // TUI 가 그릴 시간을 준다
+
+const HARNESS_LIVE_THEME: Record<string, (t: "dark" | "light") => LiveThemeStep[]> = {
+  // `/theme` ⏎ → 선택창 → 번호. 번호를 누르는 순간 적용되고 별도 ⏎ 가 필요 없다(실측).
+  claude: (t) => [
+    { kind: "text", text: "/theme" },
+    { kind: "enter" },
+    { kind: "wait", ms: 1200 },
+    { kind: "text", text: t === "dark" ? "2" : "3" },
+  ],
+};
+
+/** 이 하네스가 **실행 중** 전환을 지원하나(실측 확인된 것만 true). */
+export function harnessLiveThemeSupported(harnessKey: string): boolean {
+  return !!HARNESS_LIVE_THEME[String(harnessKey || "")];
+}
+
+/** 실행 중 전환 시퀀스. 지원 안 하면 빈 배열 — 호출부가 '지원하지 않음'으로 사람에게 알린다. */
+export function harnessLiveThemeSteps(harnessKey: string, theme: unknown): LiveThemeStep[] {
+  const t = normalizeTheme(theme);
+  const f = HARNESS_LIVE_THEME[String(harnessKey || "")];
+  return t && f ? f(t) : [];
+}
+
+/** 하네스 테마를 env 로 주는 경우의 tmux `-e` 인자. 지원 안 하면 빈 배열. */
+export function harnessThemeEnvArgs(harnessKey: string, theme: unknown): string[] {
+  const t = normalizeTheme(theme);
+  const h = HARNESS_THEME[String(harnessKey || "")];
+  if (!t || !h?.env) return [];
+  return h.env(t).flatMap((kv) => ["-e", kv]);
 }

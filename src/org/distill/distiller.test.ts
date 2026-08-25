@@ -997,3 +997,13 @@ t("FI3 지식이 된 스레드가 0 이면 유실률은 잴 수 없다(null) —
   assert.equal(unfilteredImpact([], 3, 20, 0).loss_pct, null,
     "분모가 0인데 0% 라고 표시하면 '안전하다'는 거짓 신호가 된다");
 });
+
+// #1881 — 개인 폴더 자료는 digest 머리글에 그 사실이 붙는다(증류기가 조직 지식과 섞지 않도록). 다른 커넥터는 무변경.
+{
+  const one = buildSourceDigest([{ id: 7, title: '비밀.md', body_md: '내용', occurred_at: '2026-08-25T00:00:00Z',
+    fields: { author_name: '윤상민', container_name: '개인메모', root: 'personal' } }]);
+  assert.ok(one.includes('개인 폴더(올린 사람만 봄)'), one.slice(0, 200));
+  const other = buildSourceDigest([{ id: 8, title: 'x', body_md: 'y', fields: { container_name: 'general' } }]);
+  assert.ok(!other.includes('개인 폴더'), other.slice(0, 200));
+  console.log('ok  #1881 digest: 개인 폴더 표시(로컬 자료만)');
+}

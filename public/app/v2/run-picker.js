@@ -21,10 +21,10 @@
 //
 //  ── 소비자 ──
 //  홈 입력창(v2/views.ts) · 프로젝트 '클로드로 실행' 기본값(projects/selection.ts) · 세션 대화창(session-chat.ts —
-//  거기선 제공자·노드가 고정이고 모델·추론강도만 바꾼다: 이미 뜬 프로세스는 다른 회사 모델·다른 컴퓨터로 못 옮긴다).
+//  거기서는 하네스까지 같은 선택 문법으로 바꾸고, 런타임 변경이 안 되는 축은 맥락 핸드오프로 이어 연다).
 import { api, el, state } from '../core.js';
 /** 추론강도 값 → 사람 말. 서버가 주는 값은 low|medium|high|xhigh|max 로 하네스마다 일부만 쓴다. */
-export const EFFORT_KO = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대' };
+export const EFFORT_KO = { none: '없음', low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대', ultra: '울트라' };
 export const effortKo = (v) => EFFORT_KO[v] || v;
 /** 모델 id 를 읽을 만하게 — 'claude-opus-4-5-20251101' → 'Opus 4 5'. 대화창 칩이 쓰던 규칙 그대로. */
 export function prettyModel(m) {
@@ -62,6 +62,10 @@ export function runNodes() { return loadConfig().then((c) => c.nodes); }
 /** 이 하네스가 카탈로그에 있나 — 없으면 null(모르는 하네스로 다룬다, claude 로 추측하지 않는다). */
 export const findHarness = (hs, key) => hs.find((h) => h.key === key) || null;
 export const flagChoices = (h, name) => ((h && h.flags) || []).find((f) => f.name === name)?.choices?.filter(Boolean) ?? [];
+export const effortChoices = (h, model) => {
+    const scoped = h?.effortsByModel?.[model];
+    return Array.isArray(scoped) ? scoped : flagChoices(h, '--effort');
+};
 // ── 실행 설정 기억 — 클래식 '새 AI 세션' 폼과 **같은 키**(사용자별 → 옛 전역 키 폴백) ──
 //  그 모듈(terminal/session-form.ts)을 import 하지 않는 이유: v2 → terminal 방향의 런타임 의존을 만들지 않으려고
 //  (check-imports 순환 게이트). 키 규약만 공유한다 — quick-session.ts 가 종전에 하던 것과 같은 약속이다.
@@ -120,7 +124,7 @@ export function createRunPicker(opts) {
     //  화면은 고른 대로 됐다고 믿게 된다. 대신 기억(savedFlags)에는 남겨 둬서 그 하네스로 돌아오면 되살아난다.
     const visVal = (name) => (boxOf(name).hidden ? '' : boxOf(name).value);
     function paintFlag(box, name, emptyText, label) {
-        const choices = flagChoices(cur(), name);
+        const choices = name === '--effort' ? effortChoices(cur(), modelSel.value) : flagChoices(cur(), name);
         box.hidden = !choices.length;
         if (!choices.length)
             return;
@@ -175,7 +179,7 @@ export function createRunPicker(opts) {
     };
     nodeSel.addEventListener('change', () => { nodeKey = nodeSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
     provSel.addEventListener('change', () => { harnessKey = provSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
-    modelSel.addEventListener('change', changed);
+    modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론강도 · 지난번 그대로', effortKo); changed(); });
     effortSel.addEventListener('change', changed);
     const pick = () => {
         const flags = {};

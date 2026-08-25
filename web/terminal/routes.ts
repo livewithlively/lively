@@ -1,7 +1,9 @@
 // terminal/routes.ts — #/terminal **진입점**: renderTerminal(데이터 로드 → 3축 필터·소유 섹션·카드 조립 → 일괄 바)과 온보딩 투어.
 //  소비자: web/main.ts(라우팅) · 대시보드(따라하기 투어) — 전부 배럴 terminal.ts 를 거친다.
 //  import 방향: terminal/ 4모듈을 **위에서 아래로만** 본다(아래 모듈은 이 파일을 import 하지 않는다 — 폼의 목록 재렌더는 아래 훅 등록으로 해소).
-import { api, el, errorNote, initDragRangeSelect, pageHead, state, toast } from '../core.js';
+import { api, el, errorNote, initDragRangeSelect, state, sv, toast } from '../core.js';
+import { pjvTbIcon, pjvTabIcon } from '../projects/icons.js';   // #1841 프로젝트 표와 같은 툴바·탭 아이콘(리프 모듈)
+import { pjvPopover } from '../projects/popover.js';
 import { openMySessionsModal } from '../sessions.js';   // #905 C1 — 터미널 탭 '내 세션 기록' 버튼→모달
 import { skeleton } from '../learn.js';
 import { confirmDialog } from '../admin.js';
@@ -14,7 +16,7 @@ import {
 import type { TsessBasis, TsessPeriod } from './status-filter.js';
 import { openGridPicker, openSessionSelectPicker, termUrl } from './select-bar.js';
 import { loginBannerEl, openNodeManager, openTermCreateForm, setTerminalRerender } from './session-form.js';
-import { buildSessProjFilter, openGlobalPromptSearch, tsessCard } from './session-list.js';
+import { buildSessProjFilter, openGlobalPromptSearch, tsessColHead, tsessRow } from './session-list.js';
 
 // 폼·다이얼로그(session-form)가 끝난 뒤 목록을 다시 그리게 등록 — 이 방향(위→아래)이라야 순환이 안 생긴다.
 setTerminalRerender(renderTerminal);
@@ -51,7 +53,7 @@ async function renderTerminal(view) {
   const ownedSessions = sessions.filter((s) => s.owned);
   const sel: any = { mode: false, ids: new Set() };
   // #1140 체크박스를 누른 채 위아래로 끌면 지나온 카드가 한 번에 선택된다(대시보드 '내 AI 세션'과 같은 헬퍼 한 벌).
-  initDragRangeSelect('.tsess-card', '.tsess-check');
+  initDragRangeSelect('.tsess-row', '.tsess-check');
   // 3축 필터 — 상태(다중) · 소속(단일) · 기간(단일). 전부 드롭다운. 소유 축은 필터가 아니라 섹션이다(#1229).
   const filt = tsessFilter();
   const fState = new Set<string>(filt.state);
@@ -66,10 +68,12 @@ async function renderTerminal(view) {
   let projF = 0;                      // 0=전체 · >0=projectId (소속 축은 fScope 가 전담 — #1229)
 
   let shownNow: any[] = [];           // 지금 필터에 걸려 화면에 있는 세션 — 벌크바의 '보이는 것 전체 선택' 범위
-  const headActions = el('div', { class: 'term-head-actions' });
   const bulkBar = el('div', { class: 'dash-bulkbar dash-bulkbar--sess', hidden: true });
-  const controls = el('div', { class: 'tsess-controls' });
-  const listWrap = el('div', {});
+  // #1841 — 프로젝트 탭과 **같은 머리 3층**(빵부스러기 · 뷰 탭 · 툴바)과 같은 표. 세 앱의 통일은 콘텐츠가 아니라 틀·크롬에서 온다.
+  const tbLeft = el('div', { class: 'pjv-tasks-head-left' });
+  const tbRight = el('div', { class: 'card-head-actions' });
+  const toolbar = el('div', { class: 'card-head pjv-board-toolbar' }, tbLeft, tbRight);
+  const listWrap = el('div', { class: 'tsess-body' });
 
   // 하단 플로팅 바 — 대시보드 '내 AI 세션'과 같은 컴포넌트(.dash-bulkbar, 스타일 한 벌 공유).
   //  표시 조건도 동일: 선택이 하나라도 있거나 '선택' 모드일 때. 다 풀면 자동으로 사라진다.
@@ -118,15 +122,31 @@ async function renderTerminal(view) {
   //  (#1098 에서 배운 것: 재렌더가 앵커를 갈아치우면 팝오버가 '바깥 클릭'으로 판정돼 닫힌다).
   //  기간은 프리셋을 고르면 닫히는 게 맞지만, 날짜·기준을 만질 땐(직접 고르기) 닫히면 못 쓴다 → 'period' 로 다시 편다.
   function draw(reopen: '' | 'state' | 'scope' | 'period' = '') {
-    // 헤더 우측 — [+ 새 세션] + (내 세션 0개면) 따라하기. data-tour 앵커 유지(#517 온보딩).
-    const newBtn = el('button', { class: 'btn btn-primary', 'data-tour': 'new-session', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) });
-    const nodeBtn = el('button', { class: 'btn btn-ghost', title: '내 PC·서버를 노드로 연결/관리(#869)', text: '🖥 노드', onclick: () => openNodeManager(view) });
-    // 내 세션 기록(#905 C1) — 중앙에 기록된 내 세션 대화록(끝난 세션 포함). 프로젝트 탭과 동일 화면, 단 '내 세션'만.
-    const logBtn = el('button', { class: 'btn btn-ghost', title: '중앙에 기록된 내 AI 세션 대화록(끝난 세션 포함)', text: '📜 세션 기록', onclick: () => openMySessionsModal() });
+    // 툴바 우측 — 프로젝트 탭 툴바와 같은 부품: 아이콘 버튼(30px) + 구분선 + 채운 분할 버튼. 이모지 버튼(📜🖥🧭) 폐지.
+    //  data-tour 앵커는 유지(#517 온보딩 — [+ 새 세션] 이 첫 스텝).
+    const iconBtn = (cls, label, icon, fn) => { const b = el('button', { class: 'pjv-tb-btn ' + cls, type: 'button', title: label, 'aria-label': label }, icon); b.onclick = (e) => { e.stopPropagation(); fn(b); }; return b; };
+    const qBtn = iconBtn('tsess-q-btn', '질문 검색 — 여러 세션에서 내가 보낸 질문을 한 번에 찾기', pjvTbIcon('search'), () => openGlobalPromptSearch(ctx));
+    const selBtn = iconBtn('tsess-sel-btn' + (sel.mode ? ' active' : ''), sel.mode ? '선택 모드 끝내기' : '선택 — 여러 세션을 골라 한 탭 그리드로 열거나 한 번에 종료', pjvTbIcon('check'), () => { if (sel.mode) { sel.mode = false; sel.ids.clear(); } else sel.mode = true; draw(); });
+    if (!sessions.length) selBtn.setAttribute('aria-disabled', 'true');
+    const logBtn = iconBtn('tsess-log-btn', '세션 기록 — 중앙에 기록된 내 AI 세션 대화록(끝난 세션 포함)', tsessHistoryIcon(), () => openMySessionsModal());
+    const nodeBtn = iconBtn('tsess-node-btn', '노드 — 내 PC·서버를 노드로 연결/관리', tsessNodeIcon(), () => openNodeManager(view));
     const tourBtn = ownedSessions.length === 0
-      ? el('button', { class: 'btn btn-ghost', text: '🧭 따라하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => startTerminalTour() })
+      ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '따라하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => startTerminalTour() })
       : null;
-    headActions.replaceChildren(...[tourBtn, logBtn, nodeBtn, newBtn].filter(Boolean));
+    const newBtn = el('button', { class: 'pjv-tb-primary', type: 'button', 'data-tour': 'new-session', title: '새 세션' }, pjvTbIcon('plus', 'sm'), el('span', { text: '새 세션' }));
+    newBtn.onclick = () => openTermCreateForm(cfg, view);
+    const newMore = el('button', { class: 'pjv-tb-primary-more', type: 'button', title: '더 만들기', 'aria-label': '새로 만들기 더보기' }, pjvTbIcon('caret', 'sm'));
+    newMore.onclick = (e) => {
+      e.stopPropagation();
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(newMore, menu, { align: 'right' });
+      const mk = (label, fn) => { const b = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { text: label })); b.onclick = (ev) => { ev.stopPropagation(); close(); fn(); }; return b; };
+      menu.append(mk('새 세션 (웹)', () => openTermCreateForm(cfg, view)));
+      menu.append(mk('노드 관리', () => openNodeManager(view)));
+      menu.append(mk('세션 기록 열기', () => openMySessionsModal()));
+    };
+    const addGroup = el('div', { class: 'pjv-tb-primary-group' }, newBtn, newMore);
+    tbRight.replaceChildren(...[qBtn, selBtn, el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }), logBtn, nodeBtn, tourBtn, el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }), addGroup].filter(Boolean));
 
     // ── 상태 축 — **출처·기간과 같은 드롭다운(다중 선택)**. 종전엔 칩을 늘어놓았는데 상태가 8개로 늘면서
     //  ('확인 필요·작업 완료·작업 중·대기 중·오프라인·셸·중단됨·종료됨' + 전체) 한 줄을 다 먹었다(상민님 지적).
@@ -134,8 +154,9 @@ async function renderTerminal(view) {
     //  0건 항목도 숨기지 않는다(사라지면 '왜 없지'로 헷갈린다 — #1098 대시보드와 같은 규칙).
     const statePool = sessions.filter((s) => matchScope(s) && matchPeriod(s));
 
-    // 우측 — 상태·소속·기간 축(드롭다운) + 질문검색 + 프로젝트 필터 + 선택. (한 줄 레이아웃)
-    const right = el('div', { class: 'tsess-controls-right' });
+    // 툴바 좌측 — 상태·소속·기간 축(드롭다운) + 프로젝트 필터. 프로젝트 탭의 그룹·하위·컬럼 자리(데이터 구조 층).
+    const right = tbLeft;
+    right.replaceChildren();
     const stateDD = buildSessAxisFilter({
       title: '상태', multi: true, sel: fState, allCount: statePool.length,
       items: TSESS_STATE_OPTS.map((o) => ({ key: o.key, label: o.label, hint: o.hint, count: statePool.filter((s) => s._st === o.key).length })),
@@ -200,19 +221,12 @@ async function renderTerminal(view) {
       onChange: (k: string) => { fPeriod.preset = k; fPeriod.from = ''; fPeriod.to = ''; persist(); draw(); },
     });
     right.append(periodDD.wrap);
-    right.append(el('button', { class: 'btn btn-ghost btn-sm tsess-gbtn', text: '질문 검색', title: '여러 세션에서 내가 클로드에게 보낸 질문을 통합 검색하고 어느 세션인지 찾기', onclick: () => openGlobalPromptSearch(ctx) }));
     // 고를 수 있는 프로젝트는 **소속 축을 적용한 뒤** 남는 것들 — '프로젝트 비소속'이면 목록이 비어 드롭다운이
     //  통째로 사라진다(고를 게 없는 컨트롤을 남겨 두면 골랐다가 빈 화면을 보게 된다). 걸려 있던 프로젝트가
     //  그렇게 사라지면 자동 해제한다 — 안 그러면 아무것도 안 보이는데 그 원인이 화면에 없다.
     const projIds = [...new Set(sessions.filter(matchScope).map((s) => Number(s.projectId) || 0).filter(Boolean))];
     if (projF && !projIds.includes(projF)) projF = 0;
     if (projIds.length) right.append(buildSessProjFilter({ projects: projects || [], projIds, projName, lists: projLists || [], folders: projFolders || [], current: projF, onPick: (v) => { projF = v; draw(); } }));
-    const selToggle = sel.mode
-      ? el('button', { class: 'btn btn-ghost btn-sm', text: '취소', onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } })
-      : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 종료', onclick: () => { sel.mode = true; draw(); } }) : null);
-    if (selToggle) right.append(selToggle);
-
-    controls.replaceChildren(el('div', { class: 'tsess-controls-top' }, right));
     // ⚠ 재오픈은 **여기서**(DOM 에 붙은 뒤) 한다. 붙기 전에 open() 하면 getBoundingClientRect 가 전부 0 이라
     //  화면경계 보정이 '왼쪽으로 넘쳤다'고 오판해 앵커 왼쪽정렬로 뒤집어버린다 → 기준 버튼 한 번 눌렀는데
     //  드롭다운이 반대쪽으로 튀어 보인다(상민님 신고).
@@ -228,26 +242,27 @@ async function renderTerminal(view) {
         || (Number(b.lastActive || b.created) || 0) - (Number(a.lastActive || a.created) || 0));
     shownNow = shown;   // 벌크바 '보이는 것 전체 선택' 범위(필터 결과와 항상 일치)
 
-    if (!sessions.length) { sel.ids.clear(); listWrap.replaceChildren(el('div', { class: 'empty', text: '아직 세션이 없습니다. "+ 새 세션"으로 만드세요.' })); repaintBulk(); return; }
-    if (!shown.length) { sel.ids.clear(); listWrap.replaceChildren(el('div', { class: 'empty', text: '이 필터에 해당하는 세션이 없습니다.' })); repaintBulk(); return; }
-    // ── 소유 섹션(#1229). 비어 있는 섹션은 헤더째 안 그린다 — 0건 헤더가 남으면 '왜 여기만 비었지'로 읽힌다.
+    if (!sessions.length) { sel.ids.clear(); listWrap.replaceChildren(el('div', { class: 'pjv-empty-hint', text: '아직 세션이 없습니다. [+ 새 세션]으로 만드세요.' })); repaintBulk(); return; }
+    if (!shown.length) { sel.ids.clear(); listWrap.replaceChildren(el('div', { class: 'pjv-empty-hint', text: '이 필터에 해당하는 세션이 없습니다.' })); repaintBulk(); return; }
+    // ── 소유 섹션(#1229) = 프로젝트 표의 그룹(.pjv-tgroup: 머리 + 컬럼 헤더 + 행). 비어 있는 섹션은 헤더째 안 그린다.
     //  접기는 이 기기에 영속. 접어도 **거른 건 아니라서** 헤더의 개수는 그대로 보인다(있다는 사실은 안 감춘다).
     const sects = el('div', { class: 'tsess-sects' });
-    sel.listEls = [];   // 카드 체크박스가 has-sel 을 갱신할 대상(섹션마다 하나씩)
-    const rendered: any[] = [];   // 실제로 그려진 카드 = 벌크바의 선택 후보(접힌 섹션은 빠진다 — #1150)
+    sel.listEls = [];   // 행 체크박스가 has-sel 을 갱신할 대상(섹션마다 하나씩)
+    const rendered: any[] = [];   // 실제로 그려진 행 = 벌크바의 선택 후보(접힌 섹션은 빠진다 — #1150)
     for (const sect of TSESS_SECTIONS) {
       const items = shown.filter(sect.match);
       if (!items.length) continue;
       const off = collapsed.has(sect.key);
-      const head = el('button', { class: 'tsess-sect-head', type: 'button', title: sect.hint,
-        'aria-expanded': off ? 'false' : 'true',
-        onclick: () => { if (off) collapsed.delete(sect.key); else collapsed.add(sect.key); saveTsessCollapsed(collapsed); draw(); } },
-        el('span', { class: 'tsess-sect-chev' + (off ? ' off' : ''), text: '▾' }),
-        el('span', { class: 'tsess-sect-name', text: sect.label }),
-        el('span', { class: 'tsess-sect-n', text: String(items.length) }));
-      const list = el('div', { class: 'tsess-list' + (sel.mode ? ' selectmode' : '') + (sel.ids.size ? ' has-sel' : '') });
-      if (!off) { for (const s of items) { list.append(tsessCard(s, ctx)); rendered.push(s); } sel.listEls.push(list); }
-      sects.append(el('div', { class: 'tsess-sect' }, head, ...(off ? [] : [list])));
+      const caret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: off ? '▸' : '▾', 'aria-expanded': off ? 'false' : 'true', title: off ? '펼치기' : '접기' });
+      caret.onclick = (e) => { e.stopPropagation(); if (off) collapsed.delete(sect.key); else collapsed.add(sect.key); saveTsessCollapsed(collapsed); draw(); };
+      const head = el('div', { class: 'pjv-tgroup-head tsess-sect-head', title: sect.hint },
+        el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), caret,
+        el('span', { class: 'pjv-tgroup-label', text: sect.label }),
+        el('span', { class: 'pjv-tgroup-count', text: String(items.length) }));
+      head.onclick = () => caret.click();
+      const body = el('div', { class: 'pjv-tgroup-body tsess-list' + (sel.mode ? ' selectmode' : '') + (sel.ids.size ? ' has-sel' : '') });
+      if (!off) { body.append(tsessColHead()); for (const s of items) { body.append(tsessRow(s, ctx)); rendered.push(s); } sel.listEls.push(body); }
+      sects.append(el('div', { class: 'pjv-tgroup tsess-sect' }, head, ...(off ? [] : [body])));
     }
     // 섹션을 접었으면 그 세션은 **화면에 없다** → 벌크바 '조건으로 선택' 후보에서도 빠져야 한다(#1150 불변식:
     //  '3개 선택'인데 보이는 카드가 1장이면 무엇을 종료하는지 확인할 길이 없다). 넓게 고르려면 섹션을 편다.
@@ -318,9 +333,30 @@ async function renderTerminal(view) {
     reRender();
   }
 
-  const head = pageHead('AI 세션', 'AI 세션이 지금 무슨 작업을 하는지 · 어떤 프로젝트 할당인지 · 어떤 게 끝났는지 한눈에.', [headActions], '세션');
-  view.replaceChildren(...[loginBannerEl(cfg, view), head, controls, listWrap, bulkBar].filter(Boolean));  // 바는 맨 아래 — sticky bottom 플로팅(대시보드와 동일)
+  // ── 머리 3층(#1841, 프로젝트 탭 pjv-board-header 동형) — ① 빵부스러기(앱 이름) ② 뷰 탭 ③ 툴바. 그 아래 표 하나.
+  const crumbBar = el('div', { class: 'pjv-crumbbar' },
+    el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
+      el('span', { class: 'pjv-crumb is-leaf tsess-crumb' }, tsessNodeIcon('pjv-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: 'AI 세션' })),
+      el('span', { class: 'tsess-crumb-sub', text: '박스와 노드에서 도는 AI 세션 전체' })));
+  const viewTabs = el('div', { class: 'pjv-vtabs', role: 'tablist', 'aria-label': '뷰' },
+    el('button', { class: 'pjv-vtab active', type: 'button', role: 'tab', 'aria-selected': 'true' }, pjvTabIcon('list'), el('span', { text: '리스트' })));
+  const headerStack = el('div', { class: 'pjv-board-header' }, crumbBar, viewTabs, toolbar);
+  const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card pjv-listboard tsess-board' }, headerStack, listWrap);
+  const wrapper = el('div', { class: 'pjv-board-wrap tsess-board-wrap' }, ...[loginBannerEl(cfg, view), card, bulkBar].filter(Boolean));  // 바는 맨 아래 — sticky bottom 플로팅(대시보드와 동일)
+  view.replaceChildren(wrapper);
   draw();
+}
+
+// 툴바·빵부스러기용 선 아이콘(프로젝트 아이콘 팩에 없는 둘) — 같은 광학 상자(24 · stroke 1.6 · round).
+function tsessHistoryIcon() {
+  const n = sv('svg', { class: 'pjv-tb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: 'M3.5 12a8.5 8.5 0 1 0 2.6-6.1' }), sv('path', { d: 'M3.5 4.5v4.2h4.2' }), sv('path', { d: 'M12 8v4.4l3 1.8' }));
+  return n;
+}
+function tsessNodeIcon(cls?) {
+  const n = sv('svg', { class: cls || 'pjv-tb-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('rect', { x: 3, y: 4.5, width: 18, height: 12, rx: 2.4 }), sv('path', { d: 'M8.5 20h7M12 16.5V20' }), sv('path', { d: 'M7.5 9l2.5 2.2-2.5 2.2M12 13.4h4' }));
+  return n;
 }
 
 function startTerminalTour(firstStep?, opts?) {
@@ -335,7 +371,7 @@ function startTerminalTour(firstStep?, opts?) {
     {
       target: '[data-tour="label"]',
       title: '② 세션 이름 정하기',
-      body: [el('p', { class: 'tour-p' }, '나중에 알아보기 쉽게 이름을 적어요. 예: ', el('b', { text: '랜딩 카피 수정' }), '.')],
+      body: [el('p', { class: 'tour-p' }, '나중에 알아보기 쉽게 이름을 적어요. 예: ', el('b', { text: '랜딩 카피 수정' }), '. 비워 두면 처음 시킨 말로 지어집니다.')],
       placement: 'right', scrollIntoView: true,
     },
     {

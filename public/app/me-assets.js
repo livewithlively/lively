@@ -1,11 +1,11 @@
-// me-assets.ts — [내 설정 ▸ 내 스킬·훅] 패널: 라이블리 배포분 opt-on/off + 내 컴퓨터별 로컬 하네스 조회·토글
+// me-assets.ts — [내 설정 ▸ 내 스킬·훅] 패널: 컴퓨터별 라이블리 연결 + 배포분 opt-on/off + 로컬 하네스 조회·토글
 //  (#1313 R38, admin.ts 에서 verbatim 분리).
 //  ⚠ myAssetsSection 안의 클로저(pcChips·summarize·onOffSeg·livelyRow·group)는 **일부러 그대로 뒀다** —
 //   전부 reload/machines 클로저에 묶여 있어 최상위 승격은 인자 계약을 새로 세워야 한다(별도 항목). 이번엔 통짜 이동만.
 import { api, busy, cardHead, el, infoPop, renderMarkdown, toast, uiText } from './core.js';
 import { overlay } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
-// ── [내 설정 ▸ 내 스킬·훅] — 라이블리 배포분 opt-on/off(#699) + 내 컴퓨터별 로컬 하네스 조회·토글(#891/893). ──
+// ── [내 설정 ▸ 내 스킬·훅] — 컴퓨터별 연결(#1869) + 배포분 opt-on/off(#699) + 로컬 하네스 조회·토글(#891/893). ──
 //  #893: 온보딩(#/start/harness)에 있던 걸 여기로 통합 — 하네스 관리는 상시라 관리탭이 정주소(온보딩은 링크).
 const HARNESS_KIND_LABEL = { skill: '스킬', subagent: '서브에이전트', command: '커맨드', hook: '훅' };
 // 라이블리가 배포한 스킬·훅 본문(설명 전문 + md)을 모달로 — 로컬 것은 서버에 본문 없음(메타만).
@@ -35,7 +35,7 @@ async function myAssetsSection(detail) {
     //  이 패널을 통째로 다시 그리는데, 펼침이 매번 초기화되면 목록이 접히며 문서가 짧아져 보던 자리가 사라진다
     //  (실측: 문서 6082→2362px, 방금 누른 행이 화면 밖으로). 켜고 끄기는 목록을 접는 동작이 아니다.
     const openGroups = new Set();
-    detail.replaceChildren(sectionHead('내 스킬 · 훅', '내 AI가 쓰는 스킬·훅이 어느 컴퓨터에 설치됐는지 보고, 켜고 끕니다. 켜고 끈 변경은 다음 세션부터 적용됩니다.'), el('div', { class: 'card' }, cardHead('설치 상태'), bodyBox));
+    detail.replaceChildren(sectionHead('내 스킬 · 훅', '컴퓨터별 라이블리 연결과 내 AI가 쓰는 스킬·훅을 관리합니다. 변경은 다음에 여는 AI부터 적용됩니다.'), el('div', { class: 'card' }, cardHead('설치 상태'), bodyBox));
     const reload = async () => {
         busy(bodyBox, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
         let d;
@@ -56,6 +56,45 @@ async function myAssetsSection(detail) {
                 map.set(`${a.kind}:${a.id}`, a);
             return { m, map };
         });
+        const modeControl = (m) => {
+            const modes = [
+                ['normal', '연결 켬', '회사 맥락을 읽고 필요한 내용을 기록합니다.'],
+                ['readonly', '읽기만', '회사 맥락은 읽지만 기록하지 않습니다.'],
+                ['incognito', '연결 끔', '라이블리에서 읽거나 기록하지 않습니다.'],
+            ];
+            let current = m.mode_pref?.mode || m.default_mode || 'normal';
+            const seg = el('div', { class: 'tm-seg', role: 'group', 'aria-label': '라이블리 연결 기본값' });
+            const hint = el('div', { class: 'tm-hint' });
+            const paint = () => {
+                for (const b of seg.children) {
+                    const on = b.dataset.mode === current;
+                    b.classList.toggle('on', on);
+                    b.setAttribute('aria-pressed', String(on));
+                }
+                const found = modes.find(([mode]) => mode === current) || modes[0];
+                hint.replaceChildren(...uiText(found[2] + ' 다음에 여는 AI부터 적용됩니다.'));
+            };
+            for (const [mode, label] of modes) {
+                const b = el('button', { type: 'button', class: 'tm-seg-btn', text: label, 'aria-pressed': 'false' });
+                b.dataset.mode = mode;
+                b.addEventListener('click', async () => {
+                    if (mode === current)
+                        return;
+                    try {
+                        await api('/api/ui/me/local-mode', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, mode }) });
+                        current = mode;
+                        paint();
+                        toast('연결 설정을 바꿨습니다. 다음에 여는 AI부터 적용됩니다.');
+                    }
+                    catch (e) {
+                        toast((e && e.message) || '실패', true);
+                    }
+                });
+                seg.append(b);
+            }
+            paint();
+            return el('div', { class: 'tm-policy', style: 'margin:8px 0 12px' }, el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap' }, el('b', { style: 'font-size:13px; margin-right:auto', text: '라이블리 연결' }), seg), hint);
+        };
         // 라이블리가 준 것 1건이 각 PC 에 어떻게 있는지 칩으로. 훅=중앙 디스패치(배선된 PC 전부 실행), 스킬=파일 설치 대조.
         const pcChips = (it, kind) => {
             let missing = false;
@@ -184,7 +223,7 @@ async function myAssetsSection(detail) {
             rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 설치되지 않은 PC(‘미설치’ 표시)가 있습니다. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동으로 설치됩니다.'));
         // ── 내 컴퓨터별: 내가 직접 만든 로컬 스킬·훅만 (라이블리가 준 건 위에서 PC 칩으로 봤어요). ──
         if (machines.length) {
-            const myLayer = el('div', { class: 'hlayer' }, el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 로컬 스킬 · 훅' }), infoPop('내가 각 컴퓨터에 직접 만들어 둔 스킬·훅입니다(라이블리 배포분은 위 목록에서 PC 칩으로 확인합니다). 컴퓨터마다 따로 보입니다.')));
+            const myLayer = el('div', { class: 'hlayer' }, el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 컴퓨터별 연결 · 로컬 스킬 · 훅' }), infoPop('각 컴퓨터의 라이블리 연결 상태와 직접 만들어 둔 스킬·훅입니다. 컴퓨터마다 따로 설정합니다.')));
             rows.push(myLayer);
             for (const m of machines) {
                 const nm = machineName(m);
@@ -223,6 +262,7 @@ async function myAssetsSection(detail) {
                 });
                 head.append(del);
                 myLayer.append(head);
+                myLayer.append(modeControl(m));
                 const own = (m.assets || []).filter((a) => a.overlap === 'local-only');
                 if (!own.length) {
                     myLayer.append(el('p', { class: 'admin-hint' }, ...uiText('이 컴퓨터에 직접 만든 스킬·훅은 없습니다(라이블리 배포분만 있습니다).')));

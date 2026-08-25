@@ -1,7 +1,8 @@
 // terminal/session-form.ts — 세션 **생성·수정 폼**과 그 부속: 실행 설정 기억(#673/#782) · 초대 피커 · 노드 관리 · 로그인 배너/프로필 안내.
 //  소비자: terminal/{session-list,routes}.ts + 프로젝트·대시보드 탭(배럴 terminal.ts 경유).
 //  import 방향: select-bar(아래층)만 본다. 목록 재렌더는 routes.ts 를 직접 import 하지 않고 아래 훅으로 부른다(순환 방지).
-import { api, appUrl, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
+import { api, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { field, overlay } from '../admin.js';
 import { isTourActive } from '../tour.js';
 import { termUrl } from './select-bar.js';
@@ -46,9 +47,10 @@ function profileNoteEl(cfg) {
         const who = os.osUser || 'box_…';
         if (os.provisioned && os.loggedIn)
             return el('div', { class: 'caption', text: '🔐 내 AI 세션은 내 격리 계정(' + who + ')으로 실행됩니다 — 자격증명이 구성원 간 격리됩니다.' });
+        // #1884 — AI 로그인은 하네스마다 명령이 다르다(claude: `claude` 후 /login · codex: `codex login --device-auth`). 한쪽만 적으면 다른 쪽 사용자를 엉뚱한 곳으로 보낸다.
         if (os.provisioned)
-            return el('div', { class: 'caption', text: '🔐 내 격리 계정(' + who + ') · Claude 로그인 전입니다 — 세션에서  claude  실행 후 /login (한 번만).' });
-        return el('div', { class: 'caption', text: '🔐 첫 세션을 열면 내 격리 계정(' + who + ')이 자동 생성돼 격리 실행됩니다. 세션에서  claude  실행 후 /login 하세요.' });
+            return el('div', { class: 'caption', text: '🔐 내 격리 계정(' + who + ') · AI 로그인 전입니다 — 세션에서 claude 는  claude  실행 후 /login, codex 는  codex login --device-auth  (한 번만).' });
+        return el('div', { class: 'caption', text: '🔐 첫 세션을 열면 내 격리 계정(' + who + ')이 자동 생성돼 격리 실행됩니다. 세션에서 claude 는  claude  실행 후 /login, codex 는  codex login --device-auth  하세요.' });
     }
     // 격리 인프라 미설치 = 비격리(공유) — 레거시 #346 멀티프로필 안내(폴백).
     const p = (cfg && cfg.profile) || {};
@@ -62,35 +64,74 @@ function profileNoteEl(cfg) {
         return el('div', { class: 'caption', text: '⚠ 내 AI 실행 계정이 아직 로그인 안 돼 공유 계정으로 실행됩니다 — 상단 [내 계정 로그인] 버튼으로 한 번 로그인하세요.' });
     return el('div', { class: 'caption', text: '⚠ 공유 계정으로 실행됩니다(구성원 격리 미설치). 박스에서 deploy/linux/install-isolation.sh 실행 시 구성원별 격리가 켜집니다.' });
 }
-// 최초 로그인 세션 — loginProfile 로 게이트를 우회해 내 프로필 dir 로 claude 를 띄운다(닭-달걀 해소). 새 탭으로 열어 로그인.
-async function openLoginSession(view) {
+// 하네스마다 로그인하는 법이 다르다(#1884 · me-ai.ts 와 같은 규약).
+//  · claude 등 — 그 하네스 세션을 열고 사람이 그 안에서 /login (TUI 안이라 자동화 불가).
+//  · codex   — **셸 세션 + loginFor** 로 연다(#1516): 자격이 만료된 codex 는 로그인 화면을 띄우는 대신 즉시
+//    종료해 버려서, codex 세션으로 열면 로그인하려고 연 세션이 로그인 화면을 못 보여주는 데드락이 된다.
+//    서버가 loginFor 를 보고 그 하네스의 로그인 명령(codex login --device-auth)을 셸에서 돌린다(catalog.harnessLoginArgv).
+const LOGIN_HINT = {
+    claude: '뜨는 claude 에서 /login 을 실행하세요',
+    codex: '뜨는 화면의 주소와 일회용 코드를 브라우저에 입력하세요',
+    grok: '뜨는 grok 에서 로그인을 진행하세요',
+};
+// 최초 로그인 세션 — loginProfile 로 게이트를 우회해 내 프로필/격리 홈으로 그 AI 를 띄운다(닭-달걀 해소). 새 탭으로 연다.
+async function openLoginSession(view, harnessKey = 'claude', harnessLabel = '') {
+    const viaShell = harnessKey === 'codex';
     try {
         const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-                label: '내 계정 로그인', rootKey: 'personal', subpath: '', harness: 'claude', flags: {}, autoApprove: false, loginProfile: true,
+                label: '내 계정 로그인' + (harnessLabel ? ' (' + harnessLabel + ')' : ''), rootKey: 'personal', subpath: '',
+                harness: viaShell ? 'shell' : harnessKey, loginFor: viaShell ? harnessKey : undefined,
+                flags: {}, autoApprove: false, loginProfile: true,
             }) });
-        toast('로그인 터미널을 열었습니다 — 뜨는 claude 에서 로그인을 진행하세요');
+        toast('로그인 터미널을 열었습니다 — ' + (LOGIN_HINT[harnessKey] || '그 세션에서 로그인하세요'));
         if (out && out.session)
-            window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || ''), '_blank');
+            window.open(sessionTermUrl(out.session.id, { label: out.session.label }), '_blank');
         renderTerminal(view);
     }
     catch (e) {
         toast('로그인 터미널 열기 실패 — ' + e.message, true);
     }
 }
-// 상단 '내 계정 로그인' 버튼 — 개인 claude 세션을 열어 거기서 로그인. box_ 격리면 그 세션이 내 격리 계정(box_)으로
+// 아직 로그인 안 된 AI 들 — 카탈로그의 login 플래그(서버 HARNESS_CRED 표)와 os.loggedInHarnesses 의 차집합.
+//  표에 없는 하네스(opencode·antigravity)는 로그인 여부를 정직하게 말할 수 없어 애초에 고르게 하지 않는다.
+function loginTargets(cfg) {
+    const done = new Set((cfg && cfg.os && cfg.os.loggedInHarnesses) || []);
+    return ((cfg && cfg.harnesses) || []).filter((h) => h && h.login && !done.has(h.key))
+        .map((h) => ({ key: h.key, label: h.label || h.key }));
+}
+// 상단 '내 계정 로그인' 버튼 — 고른 AI 로 개인 세션을 열어 거기서 로그인한다. box_ 격리면 그 세션이 내 격리 계정(box_)으로
 //  떠서 로그인이 box_ 홈에 저장돼 이후 내 세션에 재사용된다. 게이트웨이가 box_ 로그인 여부를 못 봐서(격리) 상시 노출.
 function loginBannerEl(cfg, view) {
     const os = (cfg && cfg.os) || {};
     if (os.ready) {
-        if (os.loggedIn)
-            return null; // 이미 로그인됨(box_ creds 존재) → 버튼 숨김
-        return el('div', { class: 'card' }, el('button', { class: 'btn btn-primary btn-sm', text: '🔑 내 계정 로그인', onclick: () => openLoginSession(view) }), el('span', { class: 'caption', text: '  처음 한 번 — 개인 세션을 열어 claude 에서 /login (이후 내가 만드는 세션은 내 격리 계정으로 뜹니다).' }));
+        // #1884 — '로그인됨'은 하네스마다 따로다. 종전엔 os.loggedIn(=아무거나 하나) 이면 배너를 통째로 감췄고
+        //  버튼도 claude 고정이라, **claude 만 로그인한 codex 사용자는 로그인할 입구가 아예 없었다**.
+        //  아직 안 된 AI 만 고르게 하고, 하나도 안 남으면 그때 감춘다.
+        const need = loginTargets(cfg);
+        if (!need.length)
+            return null;
+        const sel = el('select', { class: 'term-input ig-sel' }, ...need.map((h) => el('option', { value: h.key }, h.label)));
+        const pref = termCreatePrefs().harness; // 직전에 쓴 AI 를 기본 선택으로
+        if (pref && need.some((h) => h.key === pref))
+            sel.value = pref;
+        const pick = () => need.find((h) => h.key === sel.value) || need[0];
+        // 하나도 로그인 안 됨 = 지금 당장 해야 하는 일(채운 버튼). 하나라도 돼 있으면 = 다른 AI 도 쓸 수 있다는 **안내**로
+        //  낮춘다(고스트) — 종전에 배너가 사라지던 자리라, 여기서 primary 를 계속 띄우면 claude 만 쓰는 사람에게 잔소리가 된다.
+        const urgent = !os.loggedIn;
+        return el('div', { class: 'card' }, el('button', { class: 'btn btn-sm ' + (urgent ? 'btn-primary' : 'btn-ghost'),
+            text: urgent ? '🔑 내 계정 로그인' : '🔑 다른 AI 계정 로그인',
+            onclick: () => { const h = pick(); openLoginSession(view, h.key, h.label); } }), need.length > 1 ? sel : null, el('span', { class: 'caption', text: urgent
+                ? '  처음 한 번 — 개인 세션이 열립니다(claude 는 그 안에서 /login, codex 는 뜨는 주소·코드를 브라우저에 입력). 이후 내가 만드는 세션은 내 격리 계정으로 뜹니다.'
+                : '  ' + need.map((h) => h.label).join('·') + ' 는 아직 로그인 전입니다 — 그 AI 로 세션을 열려면 한 번만 로그인하세요.' }));
     }
     // 레거시 비격리(#346): 프로필 프로비저닝됐지만 미로그인일 때만.
     const p = (cfg && cfg.profile) || {};
     if (!p.multiprofile || !p.provisioned || p.loggedIn)
         return null;
-    return el('div', { class: 'card' }, el('div', { class: 'caption', text: '⚠ 내 Claude 계정이 아직 로그인되지 않았습니다. 한 번 로그인하면 이후 내가 만드는 세션은 내 계정으로 뜹니다.' }), el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view) }));
+    return el('div', { class: 'card' }, el('div', { class: 'caption', text: '⚠ 내 Claude 계정이 아직 로그인되지 않았습니다. 한 번 로그인하면 이후 내가 만드는 세션은 내 계정으로 뜹니다.' }), 
+    // 레거시 멀티프로필(#346)은 claude 전용 경로다(CLAUDE_CONFIG_DIR) — 여기선 하네스를 고르게 하지 않는다.
+    //  비격리 배포의 codex 멤버별 홈(CODEX_HOME)은 아직 없다(profiles.ts 머리말 ⚠).
+    el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view, 'claude') }));
 }
 // 라벨 옆 ⓘ 로 설명을 접는 필드(#1145) — 회색 캡션을 한 줄 더 늘리면 폼만 길어지고 정작 안 읽힌다.
 //  관리탭 카드 제목(cardHead)과 같은 infoPop 이라 '이 아이콘은 설명'이라는 감각이 화면 사이에서 이어진다.
@@ -112,11 +153,12 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     const roots = cfg.roots || [];
     const harnesses = cfg.harnesses || [];
     const prefs = termCreatePrefs();
-    // 프로젝트에서 열었으면 이름을 **프로젝트 제목으로 프리필**한다(#1145) — 그대로 [생성하기] 를 눌러 끝낼 수 있게.
-    //  (데모는 호출부가 '이 세션이 하는 일' 예시를 projectName 으로 넘긴다 — 투어가 가르치려는 작명이 그거다, #1009.)
-    const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
-    if (project && project.name)
-        labelI.value = project.name;
+    // ⚠ 이름칸은 **비워 둔다**(#1808). 종전엔 프로젝트에서 열면 프로젝트 제목을 프리필했는데(#1145 — 그대로
+    //  [생성하기] 를 눌러 끝낼 수 있게), 실제로 대다수가 그대로 눌러 **프로젝트 세션 147건 중 104건(71%)이
+    //  이름이 프로젝트명 그대로**가 됐다(dev 실측 2026-08-20). 한 프로젝트 아래 세션 예닐곱이 전부 같은 이름이라
+    //  목록에서 서로 구분이 안 된다 — 이름이 '어디에 속하나'를 말하면 정보가 0이다(그건 트리·칩이 이미 말한다).
+    //  비워 두면 서버가 **처음 시킨 말**로 이름을 짓는다(src/terminal/session-name.ts · session-autoname.ts).
+    const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '비워 두면 처음 시킨 말로 지어져요 (예: 랜딩 카피 수정)' });
     // #853 작업 위치 = 공유/개인 2택 → 드롭다운 대신 세그먼트 토글(둘 중 하나를 명확히 고르게). 아래 '폴더'는 이 안의 하위 폴더.
     let rootKey = (roots[0] && roots[0].key) || 'personal';
     const rootBtns = {};
@@ -546,7 +588,7 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
                 back.remove();
                 toast('세션 생성됨');
                 if (out && out.session)
-                    window.open(termUrl(out.session.id, out.session.label, nodeId, fromTour ? '&welcome=1' : ''), '_blank');
+                    window.open(termUrl(out.session.id, out.session.label, nodeId, { welcome: !!fromTour }), '_blank');
                 if (onCreated)
                     onCreated(out);
                 else
@@ -574,7 +616,7 @@ function openNodeManager(view) {
     const body = el('div', {});
     const back = overlay('🖥 노드 관리', body);
     const gw = location.origin;
-    const codeStyle = 'background:var(--bg-subtle,#0d1117);color:#c9d1d9;padding:10px 12px;border-radius:8px;white-space:pre;overflow-x:auto;font-size:12px;line-height:1.6;margin:6px 0';
+    const codeStyle = 'background:var(--code-surface);color:#c9d1d9;padding:10px 12px;border-radius:8px;white-space:pre;overflow-x:auto;font-size:12px;line-height:1.6;margin:6px 0';
     async function load() {
         busy(body, el('div', { class: 'caption', text: '노드를 불러오는 중…' }));
         let nodes = [];

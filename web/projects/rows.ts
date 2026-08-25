@@ -10,7 +10,8 @@
 //   · 행 본체: pjvProjRow · pjvProjTaskRow · pjvProjGroup · 인라인 추가행(pjvProjAddRow)
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유**로 받는다 — 기존 projects↔taskmodal 순환을 새 직접
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
-import { api, appUrl, busy, el, personFace, toast } from '../core.js';
+import { api, busy, el, personFace, toast } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import {
   openProjectSessionForm, pjvAddTask, pjvOpenTaskModal,
   pjvRowMore, pjvSetProjStatusCustom,
@@ -417,7 +418,7 @@ function pjvProjSessionCell(p, reload) {
           item.onclick = (ev) => {
             ev.stopPropagation(); close();
             // 노드 세션(#905 C4)은 &node= 로 열어야 attach 가 그 노드로 릴레이된다.
-            window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank');
+            window.open(sessionTermUrl(s.id, { label: s.label, node: s.node && s.node.id }), '_blank');
           };
           menu.append(item);
         }

@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope } from "../context.js";
 import { viewerOf } from "./principal.js";
+import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
@@ -21,12 +22,16 @@ import { projectV6Capabilities } from "./projects-v6.js";
 import { listV6Capabilities } from "./lists-v6.js";
 import { statusTemplateV6Capabilities } from "./status-templates-v6.js";
 import { favoritesCapabilities } from "./favorites.js";
+import { appCapabilities } from "./apps.js";
+import { appToolCallCapabilities } from "./app-tool-call.js";
+import { appStoreCapabilities } from "./app-store.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
 import { folderV6Capabilities } from "./folders-v6.js";
 import { sharedFolderCapabilities } from "./shared-folder.js";
 import { viewV6Capabilities } from "./views-v6.js";
 import { taskDetailV6Capabilities } from "./task-detail-v6.js";
+import { notifyCapabilities } from "./notify.js";
 import { taskFieldV6Capabilities } from "./task-field-v6.js";
 import { teamCapabilities } from "./teams.js";
 import { trashCapabilities } from "./trash.js";
@@ -37,6 +42,7 @@ import { feedTargetCapabilities } from "./feed-targets.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
 import { sessionProjectCapabilities } from "./session-project.js";
+import { sessionRenameCapabilities } from "./session-rename.js";
 import { previewEnvCapabilities } from "./preview-env.js";
 import { stackProfileCapabilities } from "./stack-profiles.js";
 import { delegateCapabilities } from "./delegate.js";
@@ -46,6 +52,10 @@ import { recallCapabilities } from "./recall.js";
 import { memberSecretCapabilities } from "./member-secret.js";
 import { awsCredentialCapabilities } from "./aws-credentials.js";
 import { oauthConnectCapabilities } from "./oauth-connect.js";
+import { slackConnectCapabilities } from "./slack-connect.js";
+import { notionConnectCapabilities } from "./notion-connect.js";
+import { appInstanceCapabilities } from "./app-instances.js";
+import { appNotificationCapabilities } from "./app-notifications.js";
 import { channelPolicyCapabilities } from "./channel-policy.js";
 import { brokerCapabilities } from "./broker.js";
 import { meCapabilities, whoamiCapabilities } from "./whoami.js";
@@ -79,6 +89,7 @@ const all: Capability[] = [
   ...sharedFolderCapabilities, // #1291 v2: 공유폴더 경로 공개범위(shared_folder_acl_get/_set — /api/ui/terminal/browse/acl). scope=memory, MCP+REST. 집행은 terminal-files.ts 가, 술어는 v6/shared-folder-store.ts 가.
   ...viewV6Capabilities, // v6(#541): 저장 뷰 조회(ClickUp 이관 뷰 — /api/ui/v6/project-views). 보드 '뷰' 피커 소비.
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).
+  ...notifyCapabilities, // #1842: 나에게 온 알림(멘션·댓글·담당) — 데스크톱 앱이 OS 배너를 띄우려고 폴링한다. scope=memory. REST(/api/ui/notify/feed).
   ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId). task_field_delete_v6 는 org_tool 기본 OFF(값 손실).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6). #1291: 조회·복원 모두 공개범위 판정을 탄다(지우면 열린다가 되지 않게).
   // (커넥터별 자료 공개범위 **정책 정의·소급 백필**(source_vis_policy_*)은 #1601 로 Enterprise 로 갔다 —
@@ -98,7 +109,8 @@ const all: Capability[] = [
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
-  ...sessionProjectCapabilities, // #1798 후속: session_set_project — 세션↔프로젝트 소속 변경(MCP 전용, scope=null). 기본 대상 = 이 요청의 세션(x-lively-session). REST 는 terminal/session-project-routes 가 별도 서빙.
+  ...sessionProjectCapabilities, // 세션↔프로젝트 변경(MCP+REST) + 실행 세션 동적 문맥(REST 전용). cwd가 아니라 x-lively-session/DB를 쓴다.
+  ...sessionRenameCapabilities,  // #1979 세션 이름 짓기 — 세션이 자기 이름을 짓는다(헤드리스 스폰 없음). 세션당 1회 걸쇠.
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).
@@ -111,8 +123,15 @@ const all: Capability[] = [
   ...memberSecretCapabilities, // P1(#746): per-user 백엔드 자격 vault — me_credential(s)(본인, 인증만)+org_credential(s)(통합, admin). 커넥터 툴이 resolveMemberSecret 로 해소. MCP+REST(/api/ui/{me,org}/credential*).
   ...awsCredentialCapabilities, // #746 파도2: AWS STS 브로커 — me_aws_credentials(role 가정→credential_process JSON, RoleSessionName=요청자). scope=null, MCP+REST(/api/ui/me/aws-credentials).
   ...oauthConnectCapabilities, // #746 T2: OAuth 커넥터 연결 — me_oauth_connect/disconnect(scope=null). auth_mode=oauth 프록시 MCP 에 per-user 동의. 콜백은 /oauth/callback(index.ts).
+  ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
+  ...notionConnectCapabilities, // #1881: 노션 "팀 자료로 모으기" — org_notion_collect(상태)/set(토글=동의 시작)/connect(페이지 더 고르기)/oauth_complete(CP 릴레이). 동의 화면의 페이지 선택이 곧 수집 범위, 수집기는 token_source=org 로 조직 슬롯을 가리킨다. 토큰 복사 0.
+  ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
+  ...appNotificationCapabilities, // #1891: 앱이 쏘는 알림(권한 fail-closed) + 내 알림 이력·읽음. inbox 앱이 소비한다.
   ...channelPolicyCapabilities, // #1226: 대화 채널별 개인 열람/발송 허용 — me_slack_channels·me_channel_policy_set. **REST 전용·변경은 사람만**(AI 가 자기 차단을 못 풀게). 집행은 org/channels/channel-guard ← mcp-proxy.
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
+  ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.
+  ...appToolCallCapabilities, // #1780 PR5b: 앱 UI 브리지 tools/call(org_app_tool_call, REST 전용) — 앱 UI 의 도구 호출을 앱 principal 로 재판정 실행.
+  ...appStoreCapabilities, // #1780 D6: 앱 데이터 store_*(insert/query/tables) — 앱이 자기 app 스키마 테이블을 RLS 격리 하에 읽고 쓴다.
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
@@ -196,6 +215,7 @@ export function registerMcpCapabilities(
   harness?: string | null,
   readOnly?: boolean,
   incognito?: boolean,
+  appId?: string | null, // 앱 토큰 세션(#1780 v2.1 R4-M1) — EXEMPT 배관 도구를 tools/list 에서 감춘다(핸들러도 403). 일반 세션 null.
 ): void {
   // 인코그니토 세션(#1007+): lively 툴을 **하나도** 등록하지 않는다 → tools/list 빈 표면 = 사실상 연결 없음(읽기·쓰기 모두 불가).
   //  (물리적 연결 차단은 per-session 으로 안 되므로 서버측 전체차단으로 대신.) 무상태 /mcp 라 요청마다 헤더로 재계산 = per-session.
@@ -205,6 +225,9 @@ export function registerMcpCapabilities(
     // 읽기전용 세션(#1007): 컨텍스트 스토어에 쓰는 툴은 아예 등록하지 않는다 → tools/list 에서 소거되어
     //  하네스가 그 툴의 존재조차 모른다(호출 시도·혼란 0). 무상태 /mcp 라 요청마다 헤더로 재계산 = per-session.
     if (readOnly && isReadOnlyBlocked(cap)) continue;
+    // 앱 토큰(#1780): EXEMPT 배관 도구는 REST 전용 — LLM 도구 표면에서 소거(appMcpHidden 주석). 등록 필터는 UX,
+    //  경계는 아래 핸들러의 requireAppToolMcp(sessioned 서버 재사용·헤더 드리프트에도 안전).
+    if (appMcpHidden(appId, cap.name)) continue;
     const meta = resolveToolMeta(cap, alwaysLoadOverrides, harness);
     server.registerTool(
       cap.name,
@@ -212,6 +235,8 @@ export function registerMcpCapabilities(
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         if (cap.scope) requireScope(u, cap.scope);
+        requireAppToolMcp(u, cap.name);    // #1780 v2.1: 앱 토큰이 EXEMPT 배관 도구를 MCP 로 부르면 403(REST 배관은 별도 어댑터)
+        await requireAppTool(u, cap.name); // #1780: 앱 세션이면 그 앱 grant 의 도구 allowlist 로 축소(일반 세션은 통과)
         // 작업자(AI) — 게이트웨이가 접속 신원(x-lively-harness 헤더 우선, 없으면 User-Agent)으로 식별(프로젝트 #182). 자기보고 대신 권위 신원.
         const agent = agentFromExtra(extra) ?? undefined;
         // 작업이 이뤄진 터미널 세션 — 같은 원리로 접속 헤더(x-lively-session)에서(#852). 세션 밖이면 undefined.

@@ -2,7 +2,7 @@
 //  project = level='project'(팀원·카테고리·필요/산출지식 보유) | task/subtask = 하위 작업(구 W ku 대체).
 //  itemsPool 직접 + q/one 헬퍼(domainmap/db) 재사용. 감사 org_content_audit(entity='project', entity_key=id).
 import { itemsPool } from "../db/client.js";
-import { q, one } from "../db/client.js";
+import { q, one, withTx } from "../db/client.js";
 import { listProjectFields, getFieldValuesForTasks } from "./task-field-store.js";
 import { getTaskTags, getTaskTime, getTaskAttachments } from "./task-detail-store.js"; // 프로젝트 노드(project.id)도 같은 task_tag_link/task_time_entry/task_attachment 테이블 사용
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
@@ -16,7 +16,7 @@ import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
 import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  type GrepPlan, parseGrep, grepWhere, idEquals, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
 } from "./search-util.js";
 
 // 세션·폴더 바인딩(#1313 R21) — 구현은 project-session-store.ts 로 분리(터미널 척추가 PM 스토어 전체를 안 끌게).
@@ -34,7 +34,7 @@ const PROJECT_COLS =
    list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
-   sort, created_at, updated_at, completed_at`;
+   sort, created_at, updated_at, completed_at, archived_at, trashed_at`;
 
 export interface ProjectRow {
   id: number; level: string; parent_id: number | null;
@@ -50,6 +50,10 @@ export interface ProjectRow {
   external_system: string | null; external_instance: string | null;
   external_id: string | null; external_url: string | null;
   sort: number; created_at: string; updated_at: string; completed_at: string | null;
+  // #1851 — 아카이브 표식(보관 시각). NULL=평소 화면. 목록은 기본으로 이 행을 뺀다(ProjectFilter.archived).
+  archived_at: string | null;
+  // #1851 — 휴지통 표식(버린 시각). NULL=평소. 목록은 기본으로 이 행을 뺀다(ProjectFilter.trashed). 하드 삭제 전 단계.
+  trashed_at: string | null;
   members?: unknown[]; // listProjects 가 facepile 용으로 채움(상세 getProject 의 members 와 별개)
 }
 
@@ -97,7 +101,9 @@ export async function syncTaskAssignees(taskId: number, assignees: string[]): Pr
 //  ⚠ #1291 이후 규약: `null`=특권(admin·내부 경로, 필터 없음) / 문자열=그 멤버로 필터.
 //   구 주석의 "MCP 는 신원 없이 전체 열람"은 사실이 아니었다 — MCP 도 bearer 신원이 항상 있어 이미 필터되고 있었다.
 //   판정은 v6/visibility.ts 로 일원화한다(리스트 자기 설정 ∩ 상위 스페이스 — 상속을 한 곳에서만 계산).
-export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string; viewerVis?: Viewer }
+// archived(#1851): exclude(기본 — 보관한 프로젝트는 평소 목록에서 빠진다) · include(전부) · only(아카이브 화면).
+export type ArchivedFilter = "exclude" | "include" | "only";
+export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string; viewerVis?: Viewer; archived?: ArchivedFilter; trashed?: ArchivedFilter }
 
 // ── 내 할 일(#1232) — 사람 축으로 뒤집은 태스크 조회. ─────────────────────
 //  listProjects 는 `level='project'` 고정이라 "내가 맡은 태스크"를 프로젝트 가로질러 볼 방법이 없었다(프로젝트를
@@ -268,6 +274,15 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
     wh.push(`(p.created_by=$${params.length} OR EXISTS(SELECT 1 FROM project_member pmv WHERE pmv.project_id=p.id AND pmv.member_id=$${params.length}))`);
   }
   wh.push("p.folder IS DISTINCT FROM '__board_anchor__'"); // 보드 커스텀 컬럼 앵커(숨김 프로젝트) 제외
+  // 아카이브(#1851) — 기본은 **뺀다**. 보관은 '평소 화면에서 치운다'는 뜻이라 보드·사이드바·자동 스코프 어디에도
+  //  안 보이는 게 맞고, 보려면 호출자가 archived=include|only 로 명시한다(새 셸 사이드바는 include 로 받아 스스로 가른다).
+  const arch: ArchivedFilter = filter.archived || "exclude";
+  if (arch === "exclude") wh.push("p.archived_at IS NULL");
+  else if (arch === "only") wh.push("p.archived_at IS NOT NULL");
+  // 휴지통(#1851) — 같은 규칙. 버린 프로젝트는 어디에도 안 보이고 휴지통 화면(trashed=include 로 받아 화면이 가른다)에만.
+  const tr: ArchivedFilter = filter.trashed || "exclude";
+  if (tr === "exclude") wh.push("p.trashed_at IS NULL");
+  else if (tr === "only") wh.push("p.trashed_at IS NOT NULL");
   // 공개범위 시행(#475→#1291) — 안 보이는 리스트의 프로젝트는 뺀다. 미분류(list_id NULL)는 잠글 상위가 없어 전원 열람.
   wh.push(listIdPredicate("p.list_id", visIds));
   const where = `WHERE ${wh.join(" AND ")}`;
@@ -413,22 +428,65 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────
+/** 같은 사람이 같은 이름으로 이 시간 안에 또 만들면 '사고'로 보고 먼저 만든 것을 돌려준다(#1819). */
+export const CREATE_DEDUPE_SEC = 30;
+
 export async function createProject(
-  input: { name: string; description?: string; folder?: string; members?: string[]; list_id?: number | null },
+  input: {
+    name: string; description?: string; folder?: string; members?: string[]; list_id?: number | null;
+    /** 이름 기반 중복 차단(#1819)을 끈다 — **세션마다 자기 프로젝트를 가져야 하는 자동 생성**에만 쓴다(#1867).
+     *  그 경로는 이름이 임시값("새 작업")이라 서로 같다: 30초 안에 두 세션을 열면 dedupe 가 **같은 프로젝트를
+     *  돌려줘 두 세션이 한 폴더를 공유**한다(2026-08-25 dev 실측 — 빈 세션과 슬래시 세션이 project/2009 를 공유).
+     *  사람이 이름을 지어 만드는 경로에서는 절대 끄지 마라 — 그 자리는 IME 이중 Enter·에이전트 재시도가 실재한다. */
+    dedupe?: boolean;
+  },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   // folder = 평범한 선택 컬럼값(물리 폴더 생성 없음). TODO: 필요 시 capability 계층에서 createProjectFolder 선행.
   //  list_id = 소속 리스트(영역). nullable(웹은 미지정 허용, MCP 는 capability 에서 필수). FK 는 project_list(ON DELETE SET NULL).
-  const row: ProjectRow = await one(itemsPool,
-    `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, created_at, updated_at)
-     VALUES('project',$1,$2,$3,$4,$5,'active','started',now(),now())
-     RETURNING ${PROJECT_COLS}`,
-    [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null]);
+  //
+  // ── 중복 생성 차단(#1819) ────────────────────────────────────────────────
+  //  같은 사람이 **같은 이름**을 몇 초 안에 두 번 만들면 그건 의도가 아니라 사고다 — 이미 만들어진 것을 돌려준다.
+  //  실측(2026-08-20): 한글 이름을 치고 Enter 를 누르면 IME 조합 확정 Enter 와 진짜 Enter 가 잇달아 들어와
+  //   같은 밀리초에 프로젝트가 두 개 생겼다(#1818/#1819 · #1806/#1807 · #1812/#1813). 그 입구(웹 사이드바)는
+  //   따로 고쳤지만, 입구는 넷이고 앞으로도 는다(웹 모달·인라인 행·MCP·REST) — 그래서 **여기**서 구조로 막는다.
+  //   에이전트 재시도(응답을 못 받고 다시 호출)도 같은 사고이므로 창을 초 단위로 넉넉히 잡는다.
+  //  창 밖의 동명 프로젝트는 그대로 만들어진다(같은 이름을 일부러 여럿 두는 것은 사람의 자유다).
+  //
+  //  ⚠ **사전 조회만으로는 못 막는다** — 사고의 실제 모습이 '같은 밀리초에 도착한 두 요청'이라(위 실측 세 쌍의
+  //   created_at 간격은 0.15~0.2ms) 둘 다 조회에서 아무것도 못 보고 둘 다 INSERT 한다. 그래서 조회와 삽입을
+  //   한 트랜잭션에 넣고 (테넌트·만든이·이름) 키로 **직렬화**한다. 자문 락은 클러스터 전역이므로 키에 테넌트를
+  //   반드시 섞는다(안 섞으면 남의 워크스페이스가 같은 이름을 만들 때 서로 기다린다).
+  const made = await withTx(async (c): Promise<{ row: ProjectRow; deduped: boolean }> => {
+    await c.query(
+      `SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|' || $1))`,
+      [`${ctx?.actor ?? ""}|${input.name}`]);
+    const dup: ProjectRow | undefined = input.dedupe === false ? undefined : await one(c,
+      `SELECT ${PROJECT_COLS} FROM project
+        WHERE level='project' AND name=$1 AND created_by IS NOT DISTINCT FROM $2
+          AND created_at > now() - ($3 || ' seconds')::interval
+        ORDER BY id DESC LIMIT 1`,
+      [input.name, ctx?.actor ?? null, String(CREATE_DEDUPE_SEC)]);
+    if (dup) return { row: dup, deduped: true };
+    const fresh: ProjectRow = await one(c,
+      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, created_at, updated_at)
+       VALUES('project',$1,$2,$3,$4,$5,'active','started',now(),now())
+       RETURNING ${PROJECT_COLS}`,
+      [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null]);
+    return { row: fresh, deduped: false };
+  });
+  // 이미 있던 것을 돌려주는 길에서는 뒷일(팀원 등록·감사·외부 푸시·임베딩)을 다시 하지 않는다 — 첫 생성이 이미 했다.
+  if (made.deduped) return made.row;
+  const row = made.row;
   // 팀원 초기 등록(project_member).
+  //  ⚠ ON CONFLICT 에 tenant_id 를 넣지 마라 — 이 PK 는 (tenant_id, …) 로 **재작성되지 않는다**
+  //   (project_id 가 project.id 대리키를 가리키는 FK 라 이미 전역 유일 — db/tenant-column.ts isNaturalKey ⓑ).
+  //   넣으면 컬럼은 있는데 제약이 없어 42P10 으로 members 동반 생성이 전부 죽는다(#1821 실측).
+  //   회귀 방어: db/tenant-column.test.ts 의 "재작성 제외 테이블" 테스트.
   for (const memberId of input.members ?? []) {
     await itemsPool.query(
       `INSERT INTO project_member(project_id, member_id, role, added_at)
-       VALUES($1,$2,'member',now()) ON CONFLICT (tenant_id, project_id, member_id) DO NOTHING`,
+       VALUES($1,$2,'member',now()) ON CONFLICT (project_id, member_id) DO NOTHING`,
       [row.id, memberId]);
   }
   await auditProject(String(row.id), "insert", null, row, ctx);
@@ -453,7 +511,7 @@ export async function setProjectMemberStatus(projectId: number, memberId: string
   const msg = (message ?? '').trim() || null;
   await itemsPool.query(
     `INSERT INTO project_member(project_id, member_id, status_message) VALUES($1,$2,$3)
-     ON CONFLICT (tenant_id, project_id, member_id) DO UPDATE SET status_message=EXCLUDED.status_message`,
+     ON CONFLICT (project_id, member_id) DO UPDATE SET status_message=EXCLUDED.status_message`,
     [projectId, memberId, msg]);
   return msg;
 }
@@ -520,6 +578,34 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven]);
   await auditProject(String(id), "set_status", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
+  return after;
+}
+
+// 아카이브(#1851) — 프로젝트를 통째로 보관(archived_at=now())하거나 되돌린다(NULL). 삭제가 아니다: 태스크·팀원·지식 연결·
+//  세션 전부 그대로고, 목록(listProjects 기본 exclude)과 새 셸 사이드바에서만 빠진다. 감사는 op='archive'|'unarchive'.
+export async function setProjectArchived(id: number, archived: boolean, ctx?: WriteCtx): Promise<ProjectRow> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+  if (!before) throw new Error(`프로젝트 #${id} 없음`);
+  if (!!before.archived_at === archived) return before;   // 이미 그 상태 — 멱등(감사도 남기지 않는다)
+  const after: ProjectRow = await one(itemsPool,
+    `UPDATE project SET archived_at = CASE WHEN $2::bool THEN now() ELSE NULL END, updated_at=now()
+     WHERE id=$1 AND level='project' RETURNING ${PROJECT_COLS}`, [id, archived]);
+  await auditProject(String(id), archived ? "archive" : "unarchive", before, after, ctx);
+  return after;
+}
+
+// 휴지통(#1851) — 프로젝트를 통째로 버리거나(trashed_at=now()) 되돌린다(NULL). 행은 남는다 — 하드 삭제는 완전 삭제(deleteProject)에서.
+//  세션 묶음은 capability 가 함께 처리한다(sessions/session-trash-ops). 감사 op='trash'|'untrash'.
+export async function setProjectTrashed(id: number, trashed: boolean, ctx?: WriteCtx): Promise<ProjectRow> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+  if (!before) throw new Error(`프로젝트 #${id} 없음`);
+  if (!!before.trashed_at === trashed) return before;
+  const after: ProjectRow = await one(itemsPool,
+    `UPDATE project SET trashed_at = CASE WHEN $2::bool THEN now() ELSE NULL END, updated_at=now()
+     WHERE id=$1 AND level='project' RETURNING ${PROJECT_COLS}`, [id, trashed]);
+  await auditProject(String(id), trashed ? "trash" : "untrash", before, after, ctx);
   return after;
 }
 
@@ -941,8 +1027,13 @@ const P_GREP_NAMES_SEL = ["id", "level", "parent_id", "name", "status", "status_
 const P_SEARCH_BASE = "p.folder IS DISTINCT FROM '__board_anchor__'";
 
 // 공통 WHERE(grep 매처 + 앵커 제외 + level/list_id/status 필터). params 에 push 하고 절 문자열 반환.
-function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], visIds?: Set<number> | null): string {
-  const wh: string[] = [grepWhere(["p.name", "p.description"], plan, params), P_SEARCH_BASE];
+function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], visIds?: Set<number> | null, raw?: string): string {
+  //  **번호로도 찾는다**(2026-08-25 상민님). 사람은 프로젝트를 번호로 부른다(#1835) — 그런데 종전엔 이름·본문만 봐서,
+  //   본문에 우연히 그 숫자가 없으면 자기 번호로 자기를 못 찾았다. 정확일치만 OR 로 얹는다(부분일치는 idEquals 주석 참고).
+  //   공개범위·앵커 제외 같은 **기본 필터는 그대로 AND** 다 — 번호를 안다고 안 보이는 것이 보이면 안 된다.
+  const idPred = raw ? idEquals("p.id", raw, params) : null;
+  const match = grepWhere(["p.name", "p.description"], plan, params);
+  const wh: string[] = [idPred ? `((${match}) OR ${idPred})` : match, P_SEARCH_BASE];
   if (opts.level) { params.push(opts.level); wh.push(`p.level=$${params.length}`); }
   if (opts.listId != null) { params.push(opts.listId); wh.push(`p.list_id=$${params.length}`); }
   if (opts.status) { params.push(opts.status); wh.push(`p.status=$${params.length}`); }
@@ -972,7 +1063,7 @@ export async function countProjectGrep(qstr: string, opts: ProjectSearchOpts = {
   const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
   const { result } = await grepExec(qstr, async (plan) => {
     const params: unknown[] = [];
-    const where = projectGrepWhere(plan, opts, params, visIds);
+    const where = projectGrepWhere(plan, opts, params, visIds, qstr);
     const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM project p WHERE ${where}`, params);
     return Number(rows[0]?.n ?? 0);
   });
@@ -986,7 +1077,7 @@ export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {})
   const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
   const { result: rows, plan } = await grepExec(qstr, async (p) => {
     const params: unknown[] = [];
-    const where = projectGrepWhere(p, opts, params, visIds);
+    const where = projectGrepWhere(p, opts, params, visIds, qstr);
     params.push(Math.min(opts.limit ?? 20, 100));
     return q(itemsPool, `SELECT ${sel} FROM project p WHERE ${where} ORDER BY p.updated_at DESC LIMIT $${params.length}`, params);
   });
@@ -1026,7 +1117,7 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
   //  ⚠ 공개범위 술어는 여기(후보 CTE)가 아니라 **최종 SELECT** 에 건다(아래) — 벡터 채널이 HNSW 근사탐색이라
   //   후보 단계에서 걸러내면 이웃 상위 N 개가 비가시 문서로 채워졌을 때 결과가 통째로 비는 리콜 붕괴가 난다.
   //   이름이 DB 밖으로 나가지 않으므로 최종 필터로도 누출은 없다.
-  const lexWhere = projectGrepWhere(plan, opts, params);
+  const lexWhere = projectGrepWhere(plan, opts, params, undefined, qstr);
   // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
   const vecWh: string[] = [P_SEARCH_BASE, `p.embedding_vector IS NOT NULL`];
   if (opts.level) { params.push(opts.level); vecWh.push(`p.level=$${params.length}`); }

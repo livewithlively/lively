@@ -80,6 +80,7 @@ export const codexIo: HarnessSessionAdapter = {
   roots: (homes) => homes.map((h) => path.join(h, ".codex", "sessions")),
   filePattern: /^rollout-.*\.jsonl$/,
   pathFor: null,   // 파일 이름에 시각이 들어 규약으로 못 만든다 — 훅 보고 경로만
+  convIdOk: null,  // 대화 id 규약 미확정 — 판단 보류(보고를 종전대로 받는다)
   parse: parseCodex,
   answer: null,    // 승인 UI 미실측(관리 세션은 auto-approve) — 있는 척하지 않는다
   // 실측 2026-08-18(box-yoon-355e7d10): 업데이트·신뢰 대화상자는 메뉴 꼬리가 공통("Press enter to continue"),

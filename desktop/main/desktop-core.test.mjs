@@ -12,10 +12,10 @@ import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
 import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
-import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
+import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState } from "./update-policy.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
@@ -23,6 +23,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay } from "./notify.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
 
@@ -499,8 +500,8 @@ t('U4 ★ mac 미서명은 구조적 불가 — 시도조차 하지 않는다', 
   assert.equal(shouldCheckForUpdates({ ...UOK, platform: 'linux', macSigned: false }).ok, true);
 });
 
-t('U5 한 번 실패하면 이 세션엔 다시 묻지 않는다', () => {
-  assert.equal(shouldCheckForUpdates({ ...UOK, failedBefore: true }).reason, 'failed-before');
+t('U5 순간 실패는 구조적 차단 사유가 아니다 — 다음 예약에서 다시 확인한다', () => {
+  assert.deepEqual(shouldCheckForUpdates({ ...UOK, failedBefore: true }), { ok: true, reason: 'ok' });
 });
 
 t('U6 opt-out 은 무엇보다 먼저 이긴다 · 0 은 opt-out 이 아니다', () => {
@@ -517,7 +518,28 @@ t('U7 실패 문구는 원인별로 다르고, 앱을 못 쓰게 됐다고 말�
   for (const e of [new Error('Could not get code signature'), new Error('ENOTFOUND')]) {
     assert.ok(!/설치|재설치|중단/.test(updateFailureNote(e)), '자동 업데이트 실패는 치명이 아니다');
   }
-  assert.ok(UPDATE_INTERVAL_MS >= 60 * 60 * 1000, '너무 잦으면 레이트리밋에 걸린다');
+  assert.equal(UPDATE_INTERVAL_MS, 5 * 60 * 1000, '정상 확인은 5분마다여야 한다');
+});
+
+t('U7b 확인 실패는 5→15→60분으로 백오프하고, 각 예약에 30초 이하 지터를 더한다', () => {
+  assert.deepEqual(UPDATE_RETRY_DELAYS_MS, [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000]);
+  assert.equal(UPDATE_CHECK_JITTER_MS, 30_000);
+  assert.equal(updateCheckDelayMs(0, 0), 5 * 60 * 1000, '정상 뒤 다음 확인');
+  assert.equal(updateCheckDelayMs(1, 0), 5 * 60 * 1000, '첫 실패 뒤 재시도');
+  assert.equal(updateCheckDelayMs(2, 0), 15 * 60 * 1000, '두 번째 연속 실패 뒤 재시도');
+  assert.equal(updateCheckDelayMs(3, 0), 60 * 60 * 1000, '세 번째 연속 실패 뒤 재시도');
+  assert.equal(updateCheckDelayMs(99, 0), 60 * 60 * 1000, '백오프 상한');
+  assert.equal(updateCheckDelayMs(0, 1), 5 * 60 * 1000 + 30_000, '최대 지터');
+  assert.equal(updateCheckDelayMs(2, 0.5), 15 * 60 * 1000 + 15_000, '결정적 지터');
+});
+
+t('U7c ★ 예약 배선 — setInterval 고정 루프가 아니라 결과 기반 setTimeout이고 실패 영구 래치가 없다', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  assert.ok(!/\bupdateFailed\b|failedBefore:/.test(main), '한 번 실패하면 앱 재시작까지 영구 정지하는 래치가 남아 있다');
+  assert.ok(!/setInterval\(\(\) => void checkUpdates\(\), UPDATE_INTERVAL_MS\)/.test(main), '고정 간격은 실패 백오프를 표현하지 못한다');
+  assert.match(main, /updateCheckDelayMs\(updateCheckFailures, Math\.random\(\)\)/, '확인 결과·지터 기반 다음 간격 계산이 없다');
+  assert.match(main, /updateCheckTimer\s*=\s*setTimeout\(/, '다음 확인을 동적 타이머로 예약하지 않는다');
+  assert.match(main, /if \(result\?\.downloadPromise\) await result\.downloadPromise/, '설치기 다운로드가 끝나기 전에 다음 5분 타이머를 시작하면 중복 확인이 겹친다');
 });
 
 t('U8 빌드 설정 — 배포처·아이콘·무인 설치 계약', () => {
@@ -628,6 +650,58 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
   const seg = js.slice(js.indexOf('$("check-update").addEventListener'), js.indexOf('// ── 로그 두 축'));
   assert.ok(!/upd-note"\)\.textContent = r\.note/.test(seg), '렌더러가 IPC 응답 문구로 진행률 문구를 덮는다');
+});
+
+// ── U14~U15. 받아 둔 업데이트를 **메인 화면(웹 UI)에서** 알리고 반영한다 (#1838) ────────────────
+// 실측(2026-08-20 상민님): "트레이에서 설치 노드 설정 들어가서 업데이트 확인을 눌러야 되는데, 유저가 명시적으로
+//  업데이트해야 하는 게 너무 복잡하고 현실성 낮다." — 받기는 이미 자동이었다(켤 때 + 6시간 · autoDownload).
+//  빠진 건 **알리는 자리**다: 입구가 트레이·마법사뿐이라 라이블리 화면을 띄워 두고 일하는 사람에겐 신호가 없었고,
+//  창이 보이는 동안엔 자동 적용도 하지 않으므로(U10) 업데이트가 그 창이 닫힐 때까지 앉아 있었다.
+t('U14 웹에 넘기는 상태 — 세 값뿐이고, 받는 중인 버전을 준비된 것처럼 말하지 않는다', () => {
+  assert.deepEqual(webUpdateState({ ready: true, version: ' 0.1.331 ', busy: false }), { ready: true, version: '0.1.331', busy: false });
+  // ⚠ 아직 안 받았으면 버전을 비운다 — 화면이 '준비됨' 을 앞서 말하는 유일한 경로를 여기서 막는다.
+  assert.deepEqual(webUpdateState({ ready: false, version: '0.1.331', busy: false }), { ready: false, version: '', busy: false });
+  assert.deepEqual(webUpdateState({ ready: true, version: null, busy: true }), { ready: true, version: '', busy: true });
+  assert.deepEqual(webUpdateState(undefined), { ready: false, version: '', busy: false });
+  assert.deepEqual(Object.keys(webUpdateState({ ready: true, version: 'v' })), ['ready', 'version', 'busy'], '웹에 넘기는 값이 늘었다 — 원격 페이지에 주는 면은 최소로');
+});
+
+t('U15 ★ 배선 — 웹 창이 상태를 받고(밀기+물어보기) 그 자리에서 적용하며, 두 셸 모두 그 자리를 가진다', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  // 채널 셋 — 이름은 계약 한 곳에서만 온다
+  assert.equal(IPC_WEB.UPDATE_STATE, 'lively-web:update-state');
+  assert.equal(IPC_WEB.UPDATE_APPLY, 'lively-web:update-apply');
+  assert.equal(IPC_WEB.UPDATE, 'lively-web:update');
+  // 메인: 두 핸들러 모두 **게이트웨이 출처**에서 온 요청만 — 창이 잠깐 남의 사이트를 싣고 있을 수 있다
+  const st = main.slice(main.indexOf('ipcMain.handle(IPC_WEB.UPDATE_STATE'), main.indexOf('ipcMain.handle(IPC_WEB.LOGOUT'));
+  assert.match(st, /fromGateway\(e\)/, 'UPDATE_STATE 가 출처를 안 본다');
+  assert.match(st, /ipcMain\.handle\(IPC_WEB\.UPDATE_APPLY/, 'UPDATE_APPLY 핸들러가 없다');
+  assert.match(st, /if \(!fromGateway\(e\)\) return \{ ok: false/, 'UPDATE_APPLY 가 출처를 안 본다');
+  assert.match(st, /return applyUpdate\(\)/, '웹의 적용이 트레이와 다른 경로를 탄다 — quitAndInstall 한 자리(U12)로 모아야 한다');
+  // 밀기: 상태가 바뀔 때마다(refreshState) 웹 창들에 보내고, **게이트웨이 출처를 실은 창에만** 보낸다
+  assert.match(main, /renderTray\(\); send\(IPC\.STATE, state\); pushWebUpdate\(\);/, 'refreshState 가 웹에 밀지 않는다');
+  const sw = main.slice(main.indexOf('function sendWeb'), main.indexOf('function sendWeb') + 900);
+  assert.match(sw, /new URL\(u\)\.origin !== origin/, 'sendWeb 이 창의 출처를 안 본다');
+  assert.match(main, /webUpdateSent/, '같은 값을 반복해 밀고 있다(30초 폴링마다 재렌더)');
+  // preload: 세 다리(get·apply·onChange) + **구독 해제**. 인자를 받는 자리가 없어야 한다(페이지가 정할 값이 없다).
+  const web = readFileSync(fileURLToPath(new URL('../preload/web.cjs', import.meta.url)), 'utf8');
+  assert.match(web, /get: \(\) => ipcRenderer\.invoke\("lively-web:update-state"\)/);
+  assert.match(web, /apply: \(\) => ipcRenderer\.invoke\("lively-web:update-apply"\)/, '적용에 인자가 붙었다');
+  assert.match(web, /removeListener\("lively-web:update", h\)/, 'onChange 가 구독 해제를 안 준다 — 리스너가 쌓인다');
+  // 웹: 다리의 유무로만 능력을 판정하고, **받아 둔 게 있을 때만** 그린다
+  const ui = readFileSync(fileURLToPath(new URL('../../web/desktop-update.ts', import.meta.url)), 'utf8');
+  assert.match(ui, /livelyDesktop/, '웹이 데스크톱 다리를 안 본다');
+  assert.match(ui, /if \(!cur\.ready\)/, '받아 두지 않았는데도 무언가 그린다');
+  assert.match(ui, /다시 시작하여 반영하기/, '사람이 누를 문구가 없다');
+  assert.ok(!/다시 켜|직접 켜/.test(ui), '사람에게 앱을 켜라고 말하면 종전 경쟁(U10 머리말)이 재현된다');
+  // 두 셸 모두 그 자리를 가진다 — 클래식이 제품 기본이고(web/lib/state.ts uiMode), v2 는 사이드바 발치.
+  const classic = readFileSync(fileURLToPath(new URL('../../web/main.ts', import.meta.url)), 'utf8');
+  assert.match(classic, /mountDesktopUpdate\(deskUp, 'bar'\)/, '클래식 셸에 자리가 없다');
+  const side = readFileSync(fileURLToPath(new URL('../../web/v2/side.ts', import.meta.url)), 'utf8');
+  assert.match(side, /mountDesktopUpdate\(host, 'row'\)/, '새 셸 사이드바에 자리가 없다');
+  const html = readFileSync(fileURLToPath(new URL('../../public/index.html', import.meta.url)), 'utf8');
+  assert.match(html, /id="desktop-update" hidden/, '클래식 셸의 자리가 문서에 없다(기본은 접힘)');
+  assert.match(html, /44-desktop-update\.css/, '스타일이 문서에 안 걸렸다');
 });
 
 // ── S. Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs) ────────────────────
@@ -1090,7 +1164,7 @@ t("V4 로그아웃·키트 업데이트 argv — 로그아웃은 게이트웨이
 
 t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'와 '지금은 안 함'을 갈라 말한다", () => {
   const seen = new Set();
-  for (const r of ["ok", "opt-out", "dev-run", "no-publish-config", "failed-before", "mac-unsigned"]) {
+  for (const r of ["ok", "opt-out", "dev-run", "no-publish-config", "mac-unsigned"]) {
     const s = updateStatusNote(r);
     assert.ok(s && s.length > 5, r);
     assert.ok(!seen.has(s), `문구가 겹친다: ${r}`);
@@ -1277,7 +1351,10 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(main, /app\.on\("web-contents-created"/, "web-contents-created 훅이 없다 — 자식 창은 규칙 밖이 된다");
     assert.match(main, /setWindowOpenHandler/, "window.open 을 다루지 않는다 — 터미널 새 창이 시스템 브라우저로 나간다");
     assert.match(main, /wc\.on\("will-navigate"/, "최상위 이동을 막지 않는다 — 앱 창이 남의 사이트로 넘어갈 수 있다");
-    const seg = main.slice(main.indexOf("setWindowOpenHandler"), main.indexOf('wc.on("will-navigate"'));
+    // ⚠ 앵커는 **웹 UI 쪽** 핸들러다. #1829 로 같은 훅 안에 브라우저 서피스(webview 게스트)용 핸들러가
+    //  하나 더 생겼고 그게 먼저 온다(게스트를 먼저 갈라 조기 return 해야 서피스가 안 죽는다 — browser-surface.test.mjs F1).
+    //  indexOf 로 잡으면 게스트 쪽이 잡혀 여기 단언이 통째로 엉뚱한 코드를 본다 → 마지막 것을 잡는다.
+    const seg = main.slice(main.lastIndexOf("setWindowOpenHandler"), main.lastIndexOf('wc.on("will-navigate"'));
     assert.match(seg, /openTargetFor\(url, state\.gatewayUrl\)/, "핸들러가 openTargetFor 를 안 쓴다");
     assert.match(seg, /shell\.openExternal\(url\); return \{ action: "deny" \}/, "외부 링크를 브라우저로 넘긴 뒤 거부하지 않는다");
     assert.match(seg, /preload: WEB_PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true/, "자식 창에 같은 preload·격리를 안 준다");
@@ -1360,7 +1437,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     for (const ch of Object.values(IPC_WEB)) assert.ok(ch.startsWith("lively-web:") && !Object.values(IPC).includes(ch));
     // 메인: BOOT 는 동기 응답, LOGOUT 은 CLI logout, 둘 다 게이트웨이 출처에서 온 요청에만
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
-    assert.match(main, /ipcMain\.on\(IPC_WEB\.BOOT, \(e\) => \{[\s\S]*?e\.returnValue = \{ \.\.\.webBootPayload\(/, "BOOT 가 동기 응답이 아니다(비동기면 웹이 토큰 없이 부팅해 로그인 화면이 깜빡인다)");
+    assert.match(main, /ipcMain\.on\(IPC_WEB\.BOOT, \(e\) => \{[\s\S]*?e\.returnValue = \{\s*\.\.\.webBootPayload\(/, "BOOT 가 동기 응답이 아니다(비동기면 웹이 토큰 없이 부팅해 로그인 화면이 깜빡인다)");
     assert.match(main, /frameless: framelessOn\(process\.platform\)/, "BOOT 가 frameless 를 안 준다 — preload 가 타이틀바를 언제 그릴지 모른다");
     const bootSeg = main.slice(main.indexOf("ipcMain.on(IPC_WEB.BOOT"), main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"));
     assert.match(bootSeg, /fromGateway\(e\)/, "BOOT 가 보내는 프레임의 출처를 안 본다");
@@ -1506,6 +1583,191 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(chainAt >= 0, "노드 자동 시작 판정(nextAfterSetup)이 배선되지 않았다");
     assert.ok(rest.slice(chainAt).includes('start("node-start"'), "판정이 참일 때 node-start 를 잇지 않는다");
     assert.ok(rest.indexOf("!r.ok") < chainAt, "실패 가드보다 먼저 노드를 시작하려 한다");
+  });
+}
+
+// ── 앱 알림 판정 (#1842) ─────────────────────────────────────────────────────
+{
+  const S = (over) => ({ id: "box-jang-1", label: "세션", harness: "claude", owned: true, agentState: "idle", awaiting: false, working: false, ...over });
+  const snap = (arr) => snapshotSessions(arr);
+  const kinds = (evs) => evs.map((e) => e.kind);
+
+  t("A1 콜드스타트 — 앱을 켠 첫 폴은 **아무것도 알리지 않는다**(과거가 배너로 되살아나면 안 된다)", () => {
+    assert.deepEqual(diffSessions(null, snap([S({ awaiting: true })])), []);
+  });
+  t("A2 대기 진입 — awaiting false→true 에서만 뜬다(계속 대기 중이면 다시 안 뜬다)", () => {
+    const a = snap([S({ awaiting: false })]), b = snap([S({ awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+    assert.deepEqual(diffSessions(b, b), [], "같은 대기가 폴링마다 반복되면 30초마다 같은 배너가 된다");
+  });
+  t("A3 ★ 탭이 없어도(agentState=offline) 대기는 알린다 — 이 프로젝트의 핵심 함정", () => {
+    // catalog.ts: agentState 는 탭이 없으면 busy·waiting 을 offline 으로 덮는다. 그 값으로 판정하면
+    //  화면을 열어 둔 사람에게만 알림이 가고, 자리를 뜬 사람(=알림이 필요한 사람)에겐 안 뜬다.
+    const a = snap([S({ agentState: "offline", awaiting: false })]);
+    const b = snap([S({ agentState: "offline", awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+    const src = readFileSync(fileURLToPath(new URL("./notify.mjs", import.meta.url)), "utf8");
+    const body = src.slice(src.indexOf("export function diffSessions"));
+    assert.ok(!/\.state\s*===\s*"waiting"|agentState\s*===\s*"waiting"/.test(body), "waiting 판정에 agentState 를 쓰고 있다");
+  });
+  t("A4 완료 — working true→false", () => {
+    assert.deepEqual(kinds(diffSessions(snap([S({ working: true })]), snap([S({ working: false })]))), [NOTIFY.DONE]);
+  });
+  t("A5 완료와 대기가 같은 순간이면 **대기가 이긴다**(질문은 완료가 아니다)", () => {
+    const a = snap([S({ working: true })]), b = snap([S({ working: false, awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+  });
+  t("A6 ★ 세션이 끝나는 것은 알리지 않는다 (원준 2026-08-24) — 정상·강제 어느 쪽도", () => {
+    // 끝난 세션은 목록에서 확인하면 되고, 배너로 부를 만큼 지금 해야 할 일이 없다.
+    //  ⚠ working 이 돌던 세션이 exited 로 가면 '완료'로는 잡힌다 — 그건 작업이 끝난 것이라 맞다.
+    const idle = snap([S({ agentState: "idle" })]);
+    assert.deepEqual(diffSessions(idle, snap([S({ agentState: "exited" })])), []);
+    assert.deepEqual(diffSessions(idle, snap([S({ agentState: "exited", oomKilled: true })])), [], "강제 종료도 알리지 않는다");
+    assert.ok(!("EXITED" in NOTIFY), "종료 알림 종류가 되살아났다");
+  });
+  t("A7 새 세션 — 곧장 승인을 물으면 알리고, 그냥 생긴 것은 안 알린다", () => {
+    const before = snap([]);
+    assert.deepEqual(kinds(diffSessions(before, snap([S({ awaiting: true })]))), [NOTIFY.WAITING]);
+    assert.deepEqual(diffSessions(before, snap([S({})])), []);
+  });
+  t("A8 사라진 세션(회수·정리)은 사건이 아니다", () => {
+    assert.deepEqual(diffSessions(snap([S({ working: true })]), snap([])), []);
+  });
+  t("A9 남의 세션(owned=false)·셸 세션(harness=shell)은 스냅샷에서 빠진다", () => {
+    assert.equal(snap([S({ owned: false, awaiting: true })]).size, 0);
+    assert.equal(snap([S({ harness: "shell", awaiting: true })]).size, 0);
+  });
+  t("A10 유형별 끄기 — 끈 종류는 만들지 않는다", () => {
+    const a = snap([S({ awaiting: false })]), b = snap([S({ awaiting: true })]);
+    assert.deepEqual(diffSessions(a, b, { [NOTIFY.WAITING]: false }), []);
+    assert.deepEqual(kinds(diffSessions(a, b, { [NOTIFY.DONE]: false })), [NOTIFY.WAITING], "다른 종류를 꺼도 대기는 산다");
+  });
+  t("A11 이름 폴백 — title 없으면 label, 둘 다 없으면 '이름 없는 세션'", () => {
+    assert.equal(snap([S({ title: "지금 하는 일" })]).get("box-jang-1").name, "지금 하는 일");
+    assert.equal(snap([S({ title: "", label: "라벨" })]).get("box-jang-1").name, "라벨");
+    assert.equal(snap([S({ title: "", label: "" })]).get("box-jang-1").name, "이름 없는 세션");
+  });
+  t("A12 배너 계획 — 적으면 개별, 많으면 한 장으로 묶는다(알림 폭탄 방지)", () => {
+    const ev = (i) => ({ kind: NOTIFY.WAITING, id: "s" + i, name: "세션" + i });
+    assert.equal(planBanners([ev(1), ev(2)]).length, 2);
+    const many = planBanners([ev(1), ev(2), ev(3), ev(4)]);
+    assert.equal(many.length, 1);
+    assert.equal(many[0].event, null, "묶음 배너는 특정 세션으로 보내지 않는다");
+    assert.match(many[0].body, /4개/);
+  });
+  t("A13 문구 — 본문은 어미까지 끝맺는다(ui-copy-complete-sentence-endings)", () => {
+    for (const k of [NOTIFY.WAITING, NOTIFY.DONE]) {
+      const b = bannerFor({ kind: k, name: "테스트 세션" });
+      assert.ok(b.title && b.body, k + " 문구가 비었다");
+      assert.ok(b.body.includes("테스트 세션"), k + " 본문에 세션 이름이 없다");
+    }
+  });
+  t("A14 세션 해시 — 형식이 아닌 id 는 주소로 만들지 않는다(응답을 그대로 믿지 않는다)", () => {
+    assert.equal(sessionHash("box-jang-8abcdb3b"), "#/s/box-jang-8abcdb3b");
+    for (const bad of ["", null, "a b", "../../etc", "javascript:alert(1)", "x".repeat(200)]) assert.equal(sessionHash(bad), null, String(bad));
+  });
+  t("A15 배선 — main.mjs 가 알림 폴러를 실제로 걸고 Notification 을 띄운다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(/from "\.\/notify\.mjs"/.test(main), "notify.mjs 를 쓰지 않는다");
+    assert.ok(/new Notification\(/.test(main), "OS 알림을 띄우지 않는다");
+    assert.ok(/setAppUserModelId/.test(main), "Windows 는 AppUserModelId 가 없으면 배너가 안 뜬다");
+  });
+  t("A16 ★ 트레이엔 알림 설정이 없다 — 설정 자리는 [내 정보 ▸ 알림] 한 곳이다", () => {
+    // 두 자리에서 끄고 켜면 저장소가 갈라져 "껐는데 뜬다"가 난다. 사람 단위(서버)로 한 곳에 모은다.
+    const ready = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true };
+    assert.ok(!trayMenuModel(ready).some((m) => m.id === "notify" || String(m.id || "").startsWith("notify:")),
+      "트레이에 알림 토글이 남아 있다");
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(!/notify-prefs-local|desktop-notify\.json/.test(main), "앱이 아직 기기별 설정 파일을 본다 — 서버가 정본이다");
+  });
+  t("A18 사람 알림 — 콜드스타트는 기준선만(지난 24시간이 배너로 쏟아지면 안 된다)", () => {
+    const items = [{ key: "comment:1", link: "#/projects2/p/7", text: { title: "밥이 나를 언급했어요", body: "확인해 주세요" } }];
+    assert.deepEqual(pickPersonEvents(items, null), [], "seen 이 null(첫 폴)인데 배너를 만들었다");
+    assert.equal(pickPersonEvents(items, new Set()).length, 1);
+  });
+  t("A19 사람 알림 — 이미 띄운 것은 다시 안 띄운다(커서만으로는 폴 경계 중복을 못 막는다)", () => {
+    const items = [{ key: "comment:1", link: "#/projects2/p/7", text: { title: "t", body: "b" } }];
+    const seen = new Set();
+    const first = pickPersonEvents(items, seen);
+    assert.equal(first.length, 1);
+    rememberSeen(seen, first);
+    assert.deepEqual(pickPersonEvents(items, seen), [], "같은 key 가 두 번 떴다");
+  });
+  t("A20 사람 알림 — 끄면 안 뜨고, key 기억은 상한에서 오래된 것부터 잊는다", () => {
+    const items = [{ key: "k1", text: { title: "t", body: "b" } }];
+    assert.deepEqual(pickPersonEvents(items, new Set(), { [NOTIFY.PERSON]: false }), []);
+    const seen = new Set();
+    rememberSeen(seen, Array.from({ length: SEEN_MAX + 50 }, (_, i) => ({ key: "k" + i })));
+    assert.equal(seen.size, SEEN_MAX);
+    assert.ok(!seen.has("k0"), "가장 오래된 key 가 남아 있다 — 상한이 안 먹었다");
+    assert.ok(seen.has("k" + (SEEN_MAX + 49)), "가장 최근 key 가 사라졌다");
+  });
+  t("A21 사람 알림 링크 — 해시 형태만 통과시킨다(서버가 준 값이라도 다시 본다)", () => {
+    assert.equal(personLink("#/projects2/p/7"), "#/projects2/p/7");
+    for (const bad of ["", null, "https://evil.example/x", "javascript:alert(1)", "#/a b", "#/" + "x".repeat(300)]) {
+      assert.equal(personLink(bad), null, String(bad));
+    }
+    assert.equal(pickPersonEvents([{ key: "k", link: "https://evil.example", text: { title: "t", body: "b" } }], new Set())[0].link, null,
+      "바깥 주소가 알림 클릭 대상으로 살아남았다");
+  });
+  t("A22 사람 알림 — 많으면 한 장으로 묶고, 묶음은 특정 화면으로 보내지 않는다", () => {
+    const ev = Array.from({ length: 5 }, (_, i) => ({ key: "k" + i, title: "t" + i, body: "b", link: "#/x" }));
+    const plan = planPersonBanners(ev);
+    assert.equal(plan.length, 1);
+    assert.equal(plan[0].event, null);
+    assert.match(plan[0].body, /5개/);
+  });
+  t("A23 배선 — 앱이 사람 알림 피드를 폴링하고, 실패하면 커서를 전진시키지 않는다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const fn = main.slice(main.indexOf("async function pollPersonFeed("));
+    assert.ok(/\/api\/ui\/notify\/feed/.test(fn), "알림 피드를 부르지 않는다");
+    const guardAt = fn.indexOf("if (!res.ok) return;");
+    const cursorAt = fn.indexOf("personSince =");
+    assert.ok(guardAt >= 0 && guardAt < cursorAt, "실패 가드보다 먼저 커서를 전진시킨다 — 그 사이 알림이 영영 사라진다");
+    assert.ok(/personSeen = null/.test(main), "로그아웃에서 기준선을 버리지 않는다 — 다시 로그인하면 과거가 쏟아진다");
+  });
+  t("A24 실시간 전이표 — 병렬 세션에서 가장 자주 기다리는 신호는 busy→idle(끝났다)", () => {
+    assert.equal(phaseEventKind("busy", "idle"), NOTIFY.DONE);
+    assert.equal(phaseEventKind("idle", "waiting"), NOTIFY.WAITING);
+    assert.equal(phaseEventKind("busy", "waiting"), NOTIFY.WAITING);
+    assert.equal(phaseEventKind(null, "waiting"), NOTIFY.WAITING, "첫 보고가 대기면 알린다");
+    assert.equal(phaseEventKind(null, "idle"), null, "첫 보고가 idle 인 건 '끝난 것'이 아니라 그냥 쉬는 것이다");
+    assert.equal(phaseEventKind("idle", "busy"), null, "일을 시작한 건 알릴 일이 아니다");
+    assert.equal(phaseEventKind("waiting", "waiting"), null);
+  });
+  t("A25 스트림 사건 — 끈 종류·이미 본 key·모르는 형식은 배너가 되지 않는다", () => {
+    const ev = { type: "session", id: "box-jang-1", name: "빌드", prev: "busy", phase: "idle", key: "s:1:idle:100" };
+    assert.equal(streamEvent(ev, new Set()).kind, NOTIFY.DONE);
+    assert.equal(streamEvent(ev, new Set([ev.key])), null, "재연결 직후 같은 사건이 다시 떴다");
+    assert.equal(streamEvent(ev, new Set(), { [NOTIFY.DONE]: false }), null);
+    assert.equal(streamEvent({ type: "other", id: "x" }, new Set()), null);
+    assert.equal(streamEvent({ type: "session", prev: "busy", phase: "idle" }, new Set()), null, "id 없는 사건은 갈 곳이 없다");
+    assert.equal(streamEvent({ ...ev, name: "" }, new Set()).name, "이름 없는 세션");
+  });
+  t("A26 SSE 파싱 — 미완성 프레임은 버퍼에 남긴다(반쪽 JSON 을 파싱하면 사건을 잃는다)", () => {
+    const a = parseSse("event: session\ndata: {\"id\":1}\n\n: ping\n\nevent: session\ndata: {\"id\":2");
+    assert.deepEqual(a.events, [{ id: 1 }], "ping 주석이 사건으로 잡히거나 반쪽 프레임이 파싱됐다");
+    assert.ok(a.rest.includes("\"id\":2"), "미완성 프레임이 버려졌다 — 다음 조각과 이어지지 못한다");
+    const b = parseSse(a.rest + "}\n\n");
+    assert.deepEqual(b.events, [{ id: 2 }], "이어붙인 프레임이 복원되지 않았다");
+    assert.deepEqual(parseSse("data: {깨진\n\n").events, [], "깨진 프레임 하나가 예외로 스트림을 끊으면 안 된다");
+  });
+  t("A27 재연결 — 지수 백오프에 상한(게이트웨이 재시작 중 초당 재접속 금지)", () => {
+    assert.equal(reconnectDelay(0), 1000);
+    assert.equal(reconnectDelay(1), 2000);
+    assert.ok(reconnectDelay(3) < reconnectDelay(4));
+    assert.equal(reconnectDelay(99), 30_000, "상한이 없다");
+  });
+  t("A28 배선 — 스트림이 살아 있으면 폴링은 배너를 만들지 않되 기준선은 늘 갱신한다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(/\/api\/ui\/notify\/stream/.test(main), "실시간 스트림에 붙지 않는다");
+    const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
+    const snapAt = poll.indexOf("notifySnapshot = next;");
+    const gateAt = poll.indexOf("if (!streamAlive)");
+    assert.ok(snapAt >= 0 && gateAt > snapAt, "게이팅이 기준선 갱신보다 앞이다 — 연결이 끊기면 폴링이 못 이어받는다");
+    assert.ok(/streamAlive = true/.test(main) && /streamAlive = false/.test(main), "연결 상태를 갱신하지 않는다");
+    assert.ok(/finally\s*{[^}]*streamAlive = false/s.test(main), "끊길 때 상태를 되돌리지 않는다 — 영영 폴링 배너가 막힌다");
+    assert.ok(/scheduleStreamRetry/.test(main), "재연결이 배선되지 않았다");
   });
 }
 

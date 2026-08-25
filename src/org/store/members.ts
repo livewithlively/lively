@@ -2,6 +2,27 @@
 //  + person/person_identity 동기화. (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
 import { audit } from "./audit.js";
+import { logger } from "../../log.js";
+
+// ── 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) ──────────────────────────────
+//  active → 비active(inactive·삭제) 전이는 **그 사람 이름으로 도는 것**(앱 동의·앱 세션·자격 리스)을 거둬야 한다.
+//  이 저장소는 terminal/apps 를 몰라야 하므로(순환) registry.onTaskDone 선례의 단일 슬롯 콜백으로 둔다 —
+//  apps/member-deactivation.ts 가 부팅 스텝에서 건다. 콜백 실패는 삼키고 경고만(멤버 상태 변경 자체는 성공해야 한다).
+export type MemberDeactivatedReason = "inactive" | "removed";
+type MemberDeactivatedHandler = (memberId: string, reason: MemberDeactivatedReason, actor: string | null) => Promise<void>;
+let deactivatedHandler: MemberDeactivatedHandler | null = null;
+export function onMemberDeactivated(cb: MemberDeactivatedHandler | null): void { deactivatedHandler = cb; }
+
+/** 순수 판정 — 'active' 에서 벗어나는 전이만 true(inactive→inactive 재저장·inactive→삭제는 이미 거둬졌으므로 false). */
+export function isMemberDeactivation(beforeState: string | null | undefined, afterState: string | null | undefined): boolean {
+  return beforeState === "active" && afterState !== "active";
+}
+
+async function fireMemberDeactivated(memberId: string, reason: MemberDeactivatedReason, actor: string | null): Promise<void> {
+  if (!deactivatedHandler) return;
+  try { await deactivatedHandler(memberId, reason, actor); }
+  catch (err) { logger.warn({ err, member: memberId, reason }, "member deactivation hook failed (state change kept)"); }
+}
 
 export interface MemberIdentity {
   system: string;
@@ -320,7 +341,8 @@ export async function appendLivProfile(
 //  ⚠ **머신별 맵**이다 — 한 멤버가 PC 여러 대(집·회사)를 쓰면 각각 다른 로컬 환경이다. machine_id(훅이
 //   ~/.lively/machine-id 에 UUID 로 1회 생성)를 키로 각 머신 관측을 따로 보관 → 새 머신이 남의 관측을 안 덮는다.
 export interface HarnessSnapshotAsset { id: string; kind: string; managed: boolean }
-export interface HarnessSnapshot { at?: string; host?: string; harness?: string; assets: HarnessSnapshotAsset[] }
+export type LocalSessionMode = "normal" | "readonly" | "incognito";
+export interface HarnessSnapshot { at?: string; host?: string; harness?: string; default_mode?: LocalSessionMode; assets: HarnessSnapshotAsset[] }
 export type HarnessSnapshots = Record<string, HarnessSnapshot>; // machine_id → 관측
 
 export async function getHarnessSnapshots(id: string): Promise<HarnessSnapshots> {
@@ -352,6 +374,7 @@ export async function removeHarnessMachine(id: string, machineId: string): Promi
     `UPDATE org_member
         SET harness_snapshot      = COALESCE(harness_snapshot,'{}'::jsonb)      - $2::text,
             harness_local_pref    = COALESCE(harness_local_pref,'{}'::jsonb)    - $2::text,
+            local_mode_pref       = COALESCE(local_mode_pref,'{}'::jsonb)       - $2::text,
             harness_machine_alias = COALESCE(harness_machine_alias,'{}'::jsonb) - $2::text
       WHERE id=$1 RETURNING id`, [id, machineId]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
@@ -403,6 +426,35 @@ export async function setHarnessLocalPref(id: string, machineId: string, assetKe
        WHERE id=$1 RETURNING id`;
   const r = await itemsPool.query(sql, [id, machineId, assetKey]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+}
+
+// ── 로컬 세션 기본 연결 상태(#1869) — 머신별. 웹이 저장하고 `lively run` preflight 가 pull ──
+//  세션훅으로 당기지 않는다: incognito 는 LIVELY_OFF 로 그 훅 자체가 멈추므로, 그 길에 두면 웹에서 다시 켤 수 없다.
+export interface LocalModePreference { mode: LocalSessionMode; updated_at: string }
+export type LocalModePreferences = Record<string, LocalModePreference>;
+
+export async function getLocalModePreferences(id: string): Promise<LocalModePreferences> {
+  const r = await itemsPool.query(`SELECT local_mode_pref FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.local_mode_pref as unknown;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: LocalModePreferences = {};
+  for (const [machineId, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const row = raw as Record<string, unknown>;
+    if (row.mode !== "normal" && row.mode !== "readonly" && row.mode !== "incognito") continue;
+    out[machineId] = { mode: row.mode, updated_at: typeof row.updated_at === "string" ? row.updated_at : "" };
+  }
+  return out;
+}
+
+export async function setLocalModePreference(id: string, machineId: string, mode: LocalSessionMode): Promise<LocalModePreference> {
+  const pref = { mode, updated_at: new Date().toISOString() };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET local_mode_pref =
+       COALESCE(local_mode_pref,'{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+     WHERE id=$1 RETURNING id`, [id, machineId, JSON.stringify(pref)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return pref;
 }
 
 // 주어진 id 중 **실재하는 활성 구성원**만 골라낸다(#1313 R45) — 공개범위 대상(audience) 검증 공용.
@@ -467,6 +519,8 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   if (after) await syncMemberToPerson(after);
   // (권한 토큰 전파 폐기 — P1) 유효 권한은 verifyDbToken 이 매 인증 시 intersection(토큰,멤버)로 계산한다.
   //  멤버 권한 하향은 즉시 모든 토큰에 반영(보안), 상향은 토큰 재발급으로(최소권한 보존) — 전파 함수 불필요.
+  //  단, 앱 동의·앱 세션은 토큰 축이 아니라 별도 회수가 필요하다(위 훅).
+  if (after && isMemberDeactivation(before?.state, after.state)) await fireMemberDeactivated(m.id, "inactive", actor ?? null);
   return after as OrgMember;
 }
 
@@ -475,6 +529,7 @@ export async function removeMember(id: string, actor?: string, source?: string):
   if (!before) return;
   await itemsPool.query(`DELETE FROM org_member WHERE id=$1`, [id]);
   await audit("org_member", id, "delete", before, null, actor, source);
+  if (isMemberDeactivation(before.state, null)) await fireMemberDeactivated(id, "removed", actor ?? null);
   // person 행은 보존(아이템 actor 참조 무결성) — 멤버 제거는 org_member 에서만. 신원 정리는 별도 큐레이션.
 }
 

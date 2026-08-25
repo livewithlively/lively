@@ -36,6 +36,10 @@ export async function collectorPresetEditor(detail: HTMLElement, _data?: unknown
       el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + (e as Error).message })));
     return;
   }
+  // #1841 — 서버 판정을 그대로 받는다. 이게 없어서 비-admin 에게 [만들기]·[설정 열기]·[삭제] 가 보이고
+  //  누르면 403 이 났다(수집기·검토 정책 화면은 이미 canEdit 로 막고 있었다 — 여기만 빠져 있었다).
+  //  "누를 수 없는 버튼은 안내가 아니라 미끼다".
+  const canEdit = !!d.canEdit;
   const presets: any[] = d.presets || [];
   const custom = presets.filter((p) => !p.builtin);
   const builtin = presets.filter((p) => p.builtin);
@@ -60,14 +64,16 @@ export async function collectorPresetEditor(detail: HTMLElement, _data?: unknown
 
   for (const p of custom) {
     const used = collectors.filter((c) => c.preset_key === p.key).length;
-    body.append(editingKey === p.key ? presetForm(p, builtin, reload) : presetSummary(p, used, reload));
+    body.append(editingKey === p.key && canEdit ? presetForm(p, builtin, reload) : presetSummary(p, used, reload, canEdit));
   }
 
-  if (creating) body.append(presetForm(null, builtin, reload));
-  else {
+  if (creating && canEdit) body.append(presetForm(null, builtin, reload));
+  else if (canEdit) {
     const add = el('button', { class: 'btn btn-primary', text: '+ 수집 방식 만들기' });
     add.addEventListener('click', () => { creating = true; editingKey = null; reload(); });
     body.append(el('div', { class: 'ctx-actions' }, add));
+  } else {
+    body.append(el('p', { class: 'admin-hint', text: '※ 새 소스를 정의하고 고치는 일은 관리자만 할 수 있습니다 — 사내 API 주소·토큰과 서버에서 도는 코드를 다루기 때문입니다.' }));
   }
   detail.replaceChildren(head(), body);
 }
@@ -77,7 +83,7 @@ function head() {
     '기본 제공에 없는 소스를 코드 없이 붙입니다. 여기서 정의한 방식으로 [맥락 관리 ▸ 수집]에서 수집기를 만듭니다.');
 }
 
-function presetSummary(p: any, used: number, reload: () => void) {
+function presetSummary(p: any, used: number, reload: () => void, canEdit = true) {
   const card = el('div', { class: 'card ctx-row' });
   card.append(el('div', { class: 'ctx-row-head' },
     el('span', { class: 'ctx-row-title', text: p.label }),
@@ -104,7 +110,7 @@ function presetSummary(p: any, used: number, reload: () => void) {
     catch (e) { toast((e as Error).message, true); }
   });
   acts.append(edit, del);
-  card.append(acts);
+  if (canEdit) card.append(acts);
   return card;
 }
 

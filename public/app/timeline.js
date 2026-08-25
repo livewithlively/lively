@@ -16,11 +16,11 @@
 //    1 중요한 것(기본 보기) — 파일 씀·고침 · 지식 남김 · 커밋 · 작업 기록 · 태스크 끝냄 · 상태 바뀜
 //    2 한 일 — 읽음 · 찾아봄 · 검사(빌드·테스트)
 //    3 뒷일 — 지시·잔 편집·배관(머지·푸시·서버 반영)
-import { el, personFace } from './core.js';
+import { el, personFace, sv } from './core.js';
 // ── 위계표 ──────────────────────────────────────────────────────────────────
 const KEEP_VERBS = new Set(['씀', '고침', '남김', '덧붙임', '만듦', '끝냄', '커밋', '기록', '바꿈']);
 const KIND_TIER = {
-    file: 2, cmd: 2, knowledge: 2, activity: 1, project: 2, task: 2, source: 2, say: 3, meta: 3,
+    file: 2, cmd: 2, knowledge: 2, activity: 1, project: 2, task: 2, source: 2, say: 3, reply: 3, out: 1, meta: 3,
 };
 export function tierOf(it) {
     if (it.tier)
@@ -39,7 +39,7 @@ export const TL_KINDS = [
 //    그 단어가 또 소음이 된다(같은 이유로 세션 뷰의 지시도 비움). 단어는 **소수파일 때만 정보**다.
 const KIND_WORD = {
     task: '끝낸 일', knowledge: '지식', activity: '', cmd: '커밋', file: '파일',
-    project: '프로젝트', say: '', source: '자료', meta: '설정',
+    project: '프로젝트', say: '', reply: '답', out: '산출물', source: '자료', meta: '설정',
 };
 const hhmm = (iso) => {
     if (!iso)
@@ -123,7 +123,61 @@ export function createTimeline(host, ctx) {
     // 골격은 가운데 화면과 같다(#1756): [머리 바][사실 한 줄] + 본문만 스크롤.
     //  가운데 대화창(sc-head → sc-chat)과 같은 자리에 같은 선이 지나가야 두 열이 한 판으로 읽힌다.
     const factsEl = el('div', { class: 'tl-facts', hidden: true });
-    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl), factsEl, el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl));
+    // ── 보는 차례(#1819 원준 2026-08-21) ────────────────────────────────────────
+    //  items 는 늘 시간순(오래된 → 최신)으로 쌓이고, **그리는 차례만** 이 스위치가 정한다.
+    //  기본은 최신이 위 — 세션을 열면 방금 있었던 일이 먼저 보여야 한다. 과거순은 처음부터 훑어 읽을 때 쓴다.
+    //  취향이라 브라우저에 남긴다(칸 배치와 같은 급). 프라이빗 모드에선 저장이 막히므로 조용히 기본값으로 간다.
+    const ORDER_KEY = 'lively_tl_order';
+    let newestFirst = true;
+    try {
+        newestFirst = localStorage.getItem(ORDER_KEY) !== 'old';
+    }
+    catch (_) { /* 저장이 막힌 브라우저 */ }
+    /** 그리는 차례 — 최신순이면 뒤집어 그린다(원본은 건드리지 않는다). */
+    const inOrder = (arr) => (newestFirst ? arr.slice().reverse() : arr);
+    const ordBtn = el('button', { class: 'tl-ord', type: 'button' });
+    // ── 얼마나 자세히(#1819 원준 2026-08-21) ─────────────────────────────────────
+    //  "답 밑에 고침·고침·커밋 이런 거, 컴팩트하게 보고 싶어하는 사람한테는 굳이 안 보여줄 수 있으면."
+    //  무엇이 남았나는 어떤 사람에겐 본론이고 어떤 사람에겐 소음이다 — 한쪽으로 정하지 말고 **사람이 고르게** 한다.
+    //  ⚠ 간단히에서도 **지우지는 않는다**: 남은 것이 있는 장에는 답 끝에 `+N` 칩이 서고, 그 장만 펼칠 수 있다.
+    //   안 보이는 것과 없는 것은 다르다(결과물 보기의 '접힘 줄'과 같은 규약).
+    const COMPACT_KEY = 'lively_tl_compact';
+    let compact = false;
+    try {
+        compact = localStorage.getItem(COMPACT_KEY) === '1';
+    }
+    catch (_) { /* 저장이 막힌 브라우저 */ }
+    const cmpBtn = el('button', { class: 'tl-ord tl-cmp', type: 'button', hidden: !ctx.chapters });
+    function paintHeadBtns() {
+        ordBtn.replaceChildren(el('span', { class: 'tl-ord-i', 'aria-hidden': 'true', text: '⇅' }), el('span', { text: newestFirst ? '최신순' : '과거순' }));
+        ordBtn.title = newestFirst
+            ? '지금은 최신이 맨 위에 있습니다. 누르면 과거순으로 바뀝니다.'
+            : '지금은 과거가 맨 위에 있습니다. 누르면 최신순으로 바뀝니다.';
+        cmpBtn.replaceChildren(el('span', { class: 'tl-ord-i', 'aria-hidden': 'true', text: '≡' }), el('span', { text: compact ? '간단히' : '자세히' }));
+        cmpBtn.title = compact
+            ? '지금은 질문과 답만 보입니다. 누르면 남은 것(파일·커밋·지식)까지 펼칩니다.'
+            : '지금은 남은 것(파일·커밋·지식)까지 보입니다. 누르면 접어서 질문과 답만 봅니다.';
+    }
+    cmpBtn.addEventListener('click', () => {
+        compact = !compact;
+        try {
+            localStorage.setItem(COMPACT_KEY, compact ? '1' : '0');
+        }
+        catch (_) { /* noop */ }
+        paint();
+    });
+    const scrollEl = el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl);
+    ordBtn.addEventListener('click', () => {
+        newestFirst = !newestFirst;
+        try {
+            localStorage.setItem(ORDER_KEY, newestFirst ? 'new' : 'old');
+        }
+        catch (_) { /* noop */ }
+        paint();
+        // 차례를 뒤집으면 '지금'이 반대편 끝으로 간다 — 그 자리로 데려간다(안 그러면 옛날 얘기만 보인 채로 남는다).
+        scrollEl.scrollTop = newestFirst ? 0 : scrollEl.scrollHeight;
+    });
+    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), ordBtn, cmpBtn, countEl), factsEl, scrollEl);
     host.append(root);
     const isHead = (it) => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
     // ── 한 항목 = 원장(ledger) 한 줄 ──────────────────────────────────────
@@ -146,6 +200,9 @@ export function createTimeline(host, ctx) {
         const kindWord = it.kind === 'cmd' && it.detail ? it.detail + '번' : (KIND_WORD[it.kind] || '');
         const box = el(it.href && !canOpen ? 'a' : 'div', {
             class: 'tl-card tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
+            // 실험장(#1719 원준): 지식 카드는 판(작업대)으로 끌어다 문서 위젯이 된다.
+            draggable: it.href && String(it.href).startsWith('#/k/') ? 'true' : null,
+            ondragstart: it.href && String(it.href).startsWith('#/k/') ? ((e) => { e.dataTransfer?.setData('text/plain', 'tl:' + JSON.stringify({ href: it.href, label: it.label })); }) : null,
             href: it.href && !canOpen ? it.href : null,
             title: [it.label, it.detail, it.actor && it.actor.name ? String(it.actor.name) : ''].filter(Boolean).join('\n'),
         }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-tm', text: hhmm(it.ts) }), kindWord ? el('span', { class: 'tl-kw', text: kindWord }) : null), el('div', { class: 'tl-main' }, el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, face, canOpen ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null), body));
@@ -168,7 +225,7 @@ export function createTimeline(host, ctx) {
     }
     /** 펼친 카드 안의 한 줄 — 맥락은 카드가 잡았으니 여기서는 촘촘해도 된다. */
     function sub(it) {
-        return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : ''), href: it.href || null, title: it.label }, el('span', { class: 'tl-sub-v tlk-' + it.kind, text: it.verb }), el('span', { class: 'tl-sub-t', text: it.label }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) }));
+        return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : '') + (it.error ? ' err' : ''), href: it.href || null, title: it.label }, el('span', { class: 'tl-sub-v tlk-' + it.kind, text: it.verb }), el('span', { class: 'tl-sub-t', text: it.label }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) }));
     }
     function childLine(c) {
         return el(c.href ? 'a' : 'div', { class: 'tl-sub' + (c.href ? ' go' : ''), href: c.href || null, title: c.label }, el('span', { class: 'tl-sub-v', text: c.verb }), el('span', { class: 'tl-sub-t', text: c.label }));
@@ -215,7 +272,7 @@ export function createTimeline(host, ctx) {
     function outcomes() {
         const by = new Map();
         for (const it of items) {
-            if (it.kind === 'say')
+            if (it.kind === 'say' || it.kind === 'reply')
                 continue;
             const k = it.kind + '|' + it.label;
             const cur = by.get(k);
@@ -243,8 +300,7 @@ export function createTimeline(host, ctx) {
         let lastWho = '\u0000';
         let rail = el('div', { class: 'tl-rail' });
         const shown = restOpen ? [...keep, ...rest].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts)) : keep;
-        for (let i = shown.length - 1; i >= 0; i--) { // 최신이 위
-            const it = shown[i];
+        for (const it of inOrder(shown)) { // 차례는 머리 바의 [최신순/과거순]이 정한다
             const d = dayOf(it.ts);
             if (d !== day) {
                 day = d;
@@ -266,12 +322,155 @@ export function createTimeline(host, ctx) {
         }
         list.replaceChildren(...kids);
     }
-    // ── 그리기 ──
-    function paint() {
-        if (ctx.outcomes) {
-            paintOutcomes();
-            return;
+    function chapters() {
+        const out = [];
+        let cur = null;
+        for (const it of items) {
+            if (isHead(it)) {
+                cur = { q: it, a: null, kids: [], outs: [] };
+                out.push(cur);
+                continue;
+            }
+            if (!cur) {
+                cur = { q: null, a: null, kids: [], outs: [] };
+                out.push(cur);
+            } // 창 첫머리(되그린 꼬리)
+            if (it.kind === 'reply') {
+                cur.a = it;
+                continue;
+            }
+            // 산출물은 '남은 것' 줄이 아니라 **결과 줄**로 따로 선다. 같은 것을 두 번 세우지 않는다.
+            if (it.out && ctx.onOpen) {
+                const key = String(it.out.path || it.out.url || it.out.label);
+                const i = cur.outs.findIndex((x) => String(x.out.path || x.out.url || x.out.label) === key);
+                if (i >= 0)
+                    cur.outs[i] = it;
+                else
+                    cur.outs.push(it); // 만들고 또 고쳤으면 마지막 것으로
+                continue; // 결과 줄로 섰으면 '남은 것' 줄에 또 세우지 않는다 — 같은 파일이 두 번 보이면 그게 소음이다
+            }
+            cur.kids.push(it);
         }
+        // allSays 면 아직 아무 결과도 없는 지시도 선다(세션 발자취의 줄기는 '내가 뭘 시켰나'다).
+        return out.filter((c) => (c.q ? (ctx.allSays || !!c.a || c.kids.length > 0 || c.outs.length > 0) : (!!c.a || c.kids.length > 0 || c.outs.length > 0)));
+    }
+    /** 질문 한 줄 — 붙여넣은 덩어리는 칩으로 접고, 전문은 눌러서 편다. */
+    function askRow(it) {
+        const isOpen = open.has(it.id);
+        const box = el('div', {
+            class: 'tl-card tl-q tlk-say' + (it.full ? ' can' : '') + (isOpen ? ' open' : ''),
+            title: it.label,
+        }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-tm', text: hhmm(it.ts) }), el('span', { class: 'tl-kw', text: '질문' })), el('div', { class: 'tl-main' }, it.pasteLines ? el('div', { class: 'tl-paste' }, el('span', { text: '붙여넣은 글 ' + it.pasteLines + '줄' })) : null, el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl', text: it.label || '(빈 지시)' }), it.full ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null), it.full ? el('pre', { class: 'tl-full', hidden: !isOpen, text: it.full }) : null));
+        if (it.full) {
+            box.setAttribute('role', 'button');
+            box.setAttribute('tabindex', '0');
+            box.setAttribute('aria-expanded', String(isOpen));
+            const toggle = () => { if (isOpen)
+                open.delete(it.id);
+            else
+                open.add(it.id); paint(); };
+            box.addEventListener('click', toggle);
+            box.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            } });
+        }
+        return box;
+    }
+    // ── 결과 줄(#1819 안 A) ─────────────────────────────────────────────────────
+    //  [34px 타일][이름 · 종류][열기]. 그림이면 타일에 진짜 축소본이 들어가고, 아니면 종류 아이콘이다
+    //  (없는 그림을 지어내지 않는다 — 디자인 시스템 규칙). '간단히'로 접어도 이 줄은 남는다: 접는 것은
+    //  과정('남은 것')이지 결과가 아니다.
+    const OUT_ICON = {
+        html: 'M18 16l4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16',
+        pdf: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6',
+        img: 'M3 3h18v18H3zM8.5 8.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3M21 15l-5-5L5 21',
+        url: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7L12 5M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7L12 19',
+    };
+    const IMG_EXT = /^(png|jpe?g|gif|webp|svg)$/i;
+    const iconFor = (o) => o.kind === 'url' ? OUT_ICON.url : IMG_EXT.test(o.ext) ? OUT_ICON.img : o.ext === 'pdf' ? OUT_ICON.pdf : OUT_ICON.html;
+    const extWord = (o) => o.ext === 'artifact' ? '아티팩트' : o.ext === 'preview' ? '미리보기 환경' : o.ext === 'link' ? '링크' : o.ext.toUpperCase();
+    /** 라인 아이콘 — 디자인 시스템 규약(stroke 1.7, 이모지 금지). ⚠ SVG 는 el() 이 아니라 sv() 로 만든다(네임스페이스). */
+    const lineIcon = (d, size) => sv('svg', {
+        width: String(size), height: String(size), viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+        'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true',
+    }, sv('path', { d }));
+    function outRow(it) {
+        const o = it.out;
+        const tile = el('span', { class: 'tl-out-tile' }, lineIcon(iconFor(o), 17));
+        const box = el('button', {
+            class: 'tl-out', type: 'button', title: (o.path || o.url || o.label) + ' — 눌러서 엽니다.',
+            onclick: (e) => { e.stopPropagation(); ctx.onOpen?.(o); },
+        }, tile, el('span', { class: 'tl-out-meta' }, el('b', { text: o.label }), el('span', { text: extWord(o) })), el('span', { class: 'tl-out-go' }, lineIcon('M7 17 17 7M7 7h10v10', 15)));
+        // 그림이면 진짜 축소본을 올린다 — 못 만들면 아이콘 그대로 둔다(빈 네모를 남기지 않는다).
+        if (ctx.thumb && o.kind === 'file' && IMG_EXT.test(o.ext)) {
+            void ctx.thumb(o).then((src) => {
+                if (!src || !tile.isConnected)
+                    return;
+                tile.classList.add('img');
+                tile.replaceChildren(el('img', { src, alt: '', loading: 'lazy' }));
+            }).catch(() => { });
+        }
+        return box;
+    }
+    /** 대답 — 한 줄 + 산출물 + 그 지시에서 남은 것. 전부 없으면 줄 자체가 없다(아직 도는 중인 장). */
+    function ansRow(c) {
+        if (!c.a && !c.kids.length && !c.outs.length)
+            return null;
+        // 간단히에서 접는 것은 **답이 있는 장의 남은 것**뿐이다 — 답이 없으면 남은 것이 그 장의 유일한 내용이라
+        //  접으면 빈 줄만 남는다(접기가 화면에서 사건을 지워 버리면 안 된다).
+        const cid = 'kids:' + String((c.q && c.q.id) || (c.a && c.a.id) || (c.kids[0] && c.kids[0].id) || '');
+        const canHide = compact && (!!c.a || c.outs.length > 0) && c.kids.length > 0;
+        const openKids = !canHide || open.has(cid);
+        const chip = canHide
+            ? el('button', {
+                class: 'tl-kidsn', type: 'button', 'aria-expanded': String(openKids),
+                title: openKids ? '남은 것을 다시 접습니다.' : `이 지시에서 남은 것 ${c.kids.length}개를 폅니다.`,
+                onclick: (e) => { e.stopPropagation(); if (openKids)
+                    open.delete(cid);
+                else
+                    open.add(cid); paint(); },
+            }, (openKids ? '−' : '+') + c.kids.length)
+            : null;
+        return el('div', { class: 'tl-card tl-a tlk-reply' + (c.a && c.a.error ? ' err' : '') }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-kw', text: '답' })), el('div', { class: 'tl-main' }, c.a ? el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl tl-ans', text: c.a.label, title: c.a.label }), chip) : null, c.outs.length ? el('div', { class: 'tl-outs' }, ...c.outs.map(outRow)) : null, c.kids.length && openKids ? el('div', { class: 'tl-kids' }, ...c.kids.map(sub)) : null));
+    }
+    function paintQA() {
+        const chaps = chapters();
+        countEl.textContent = String(chaps.length);
+        emptyEl.hidden = chaps.length > 0;
+        const kids = [];
+        let day = ' ';
+        let rail = el('div', { class: 'tl-rail' });
+        for (const c of inOrder(chaps)) { // 차례는 머리 바의 [최신순/과거순]이 정한다
+            const it0 = c.q || c.a || c.kids[0];
+            const d = dayOf(it0 && it0.ts);
+            if (d !== day) {
+                day = d;
+                if (d)
+                    kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
+                rail = el('div', { class: 'tl-rail' });
+                kids.push(el('div', { class: 'tl-group' }, rail)); // 하루 = 한 판(다른 보기와 같은 골격)
+            }
+            rail.append(el('div', { class: 'tl-qa' }, c.q ? askRow(c.q) : null, ansRow(c)));
+        }
+        list.replaceChildren(...kids);
+    }
+    // ── 그리기 ──
+    //  갈래(질문·대답 / 결과물 / 옛 목록)를 고르고, **차례에 딸린 뒷일**은 여기서 한 번만 한다.
+    function paint() {
+        // 과거순은 새 항목이 **아래**로 붙는다 — 바닥을 보고 있던 사람은 계속 바닥에 있어야 방금 일어난 일이 보인다.
+        const stick = !newestFirst && scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 24;
+        paintHeadBtns();
+        if (ctx.chapters)
+            paintQA();
+        else if (ctx.outcomes)
+            paintOutcomes();
+        else
+            paintRows();
+        if (stick)
+            scrollEl.scrollTop = scrollEl.scrollHeight;
+    }
+    function paintRows() {
         const rows = [];
         let cur = null;
         for (const it of items) {
@@ -286,8 +485,9 @@ export function createTimeline(host, ctx) {
                 rows.push({ solo: it });
         }
         // 장은 안에 남은 것이 있을 때만 세운다 — 아무것도 안 남은 지시는 타임라인의 사건이 아니다.
-        const shownRows = rows.filter((r) => ('solo' in r ? true : r.kids.length > 0));
-        const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length), 0);
+        //  단 allSays 면 반대로 **모든 지시가 선다**(세션 발자취 — 위 TimelineCtx.allSays 주석).
+        const shownRows = rows.filter((r) => ('solo' in r ? true : ctx.allSays || r.kids.length > 0));
+        const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length + (ctx.allSays ? 1 : 0)), 0);
         countEl.textContent = String(shownCount);
         emptyEl.hidden = shownCount > 0;
         // 하루가 **한 판**이다. 종전엔 항목마다 흰 카드가 서서 말풍선이 줄줄이 붙은 꼴이었다(상민님: "다다다닥 붙어 거슬린다").
@@ -296,8 +496,7 @@ export function createTimeline(host, ctx) {
         let day = ' ';
         let lastWho = '\u0000';
         let rail = el('div', { class: 'tl-rail' });
-        for (let i = shownRows.length - 1; i >= 0; i--) { // 최신이 위
-            const r = shownRows[i];
+        for (const r of inOrder(shownRows)) { // 차례는 머리 바의 [최신순/과거순]이 정한다
             const it0 = 'solo' in r ? r.solo : r.head;
             const d = dayOf(it0.ts);
             if (d !== day) {
@@ -343,6 +542,10 @@ export function createTimeline(host, ctx) {
     const h = {
         root,
         add(raw, at = 'end') {
+            // 같은 사건(id)은 한 번만 싣는다 — 세션 전체 되감기(#1819)와 라이브 대화가 같은 줄을 겹쳐 넣기 때문이다.
+            //  ⚠ ×N(같은 파일을 열 번 고침)은 **id 가 서로 다른** 항목들이 같은 key 로 합쳐지는 것이라 그대로 산다.
+            if (byId.has(raw.id))
+                return;
             const it = { count: 1, ...raw, kind: raw.kind || 'cmd' };
             if (!merge(it, at)) {
                 if (at === 'end')
@@ -351,10 +554,8 @@ export function createTimeline(host, ctx) {
                     items.unshift(it);
                 byId.set(it.id, it);
                 byKey.set(it.key, it);
-                if (isHead(it) && at === 'end') {
-                    open.clear();
-                    open.add(it.id);
-                } // 지금 하는 일만 펼친 채로
+                // #1819 — 장 머리를 자동으로 펼치던 규칙은 뺐다. 이제 접는 것은 '장의 몸'이 아니라 **지시 전문**이고,
+                //  그건 기본이 접힘이어야 한다(붙여넣은 로그가 열린 채로 뜨면 그 한 장이 화면을 다 먹는다).
             }
             schedule();
         },
@@ -381,6 +582,7 @@ export function createTimeline(host, ctx) {
             schedule();
         },
         setNote(note) { noteEl.textContent = note || ''; noteEl.hidden = !note; },
+        sortByTime() { items.sort((a, b) => tsNum(a.ts) - tsNum(b.ts)); schedule(); },
         setMeta(node) { factsEl.replaceChildren(...(node ? [node] : [])); factsEl.hidden = !node; },
         clear() { items = []; byId.clear(); byKey.clear(); open.clear(); schedule(); },
     };
