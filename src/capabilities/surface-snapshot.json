@@ -1178,6 +1178,16 @@
   "input_hash": "bdebee72196a940a"
  },
  {
+  "name": "org_distiller_local_ensure",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers/local"
+  ],
+  "input_hash": "331ca51692372057"
+ },
+ {
   "name": "org_source_channels",
   "scope": "memory",
   "mcp": true,
@@ -2516,7 +2526,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "14d61751ca713e02"
+  "input_hash": "d2ebd46df8b2e243"
  },
  {
   "name": "source_undistilled",
@@ -2546,7 +2556,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "869f8253de96ae5b"
+  "input_hash": "42805a361906679b"
  },
  {
   "name": "source_link_knowledge",

@@ -14,6 +14,7 @@ import {
   describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller
 } from "../../org/distill/distiller.js";
 import { actorOf, restOnly, restRead, restWork } from "./shared.js";
+import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";   // #1881 L3
 
 export const ingestDistillersCapabilities: Capability[] = [
   // ── 인입 허용선 정책 (#638, #783) — 지식이 라이브에 박히기 전 게이트. 오너가 관리탭에서 조절(디폴트 auto=현행 무변). ──
@@ -248,6 +249,23 @@ export const ingestDistillersCapabilities: Capability[] = [
         label: z.string().optional(),
         rules: z.record(z.any()).describe("{min_msgs,min_authors,min_chars,min_decisive,keywords[],match:'all'|'any'}"),
       })).optional().describe("직접 시뮬레이션할 후보 조합들(생략하면 대표 조합). 키워드를 바꿔가며 좁힐 때 쓴다."),
+    }),
+  // #1881 L3 — 내 컴퓨터(로컬 업로드) 자료 증류기. 첫 업로드가 꺼진 채로 만들어 두고, 온보딩 W6 "이렇게 나눴는데 맞나요?"
+  //  승인이 enable=true 로 켠다(+ 전용 헤드리스 크론 잡). 셀프서브 사용자에게 '증류기'라는 단어가 화면에 나오지 않게 하는 자리.
+  restWork("org_distiller_local_ensure", "내 컴퓨터 자료 증류기 준비",
+    "내 컴퓨터에서 올린 파일(자료 kind=local_file)을 지식으로 만드는 catch-all 증류기 'local-files' 를 준비한다 — 없으면 프리셋으로 만든다(기본은 **꺼진 채**). " +
+    "enable=true 면 켜고(의뢰자=requester, 없으면 호출자) 전용 헤드리스 잡(distill-local-files, 10분)까지 등록한다 — 온보딩의 표본 승인 단계가 이걸 부른다. " +
+    "이미 켜져 있으면 no-op. 기준·형식은 org_distiller_upsert 로 언제든 손볼 수 있다(여긴 건드리지 않는다).",
+    [{ method: "POST", paths: ["/api/ui/org/distillers/local"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const r = await ensureLocalFilesDistiller({
+        actor: actorOf(user), enable: !!input.enable,
+        requester: typeof input.requester === "string" && input.requester.trim() ? input.requester.trim() : null, source: "web",
+      });
+      return { key: LOCAL_DISTILLER_KEY, created: r.created, enabled: r.enabled, job: r.job, distiller: { ...r.distiller, scope_text: describeScope(r.distiller as unknown as Parameters<typeof describeScope>[0]) } };
+    }, {
+      enable: z.boolean().optional().describe("true=켜고 잡 등록(승인). 미지정=없을 때만 꺼진 채로 만든다."),
+      requester: z.string().optional().describe("헤드리스 실행 신원(멤버 id/이메일) — 켤 때만. 없으면 호출자."),
     }),
   restWork("org_source_channels", "자료 채널 목록",
     "수집된 자료에 실제로 존재하는 채널(fields.container_name)별 총건수·미증류 건수 — 증류기 스코프를 실재하는 채널로만 짜게 하는 재료. " +
