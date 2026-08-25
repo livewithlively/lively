@@ -25,7 +25,7 @@ import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-st
 import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
-import { assertAppSessionPlacement } from "../terminal/session-create-guards.js";
+import { assertAppSessionPlacement, autoTrustWorkspace } from "../terminal/session-create-guards.js";
 import { ingestLocalUpload, supersedeLocalPath } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
@@ -413,6 +413,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       // 새 노드는 create 시 첫 지시를 보류했다. execution_session current와 desired-state가 모두 생긴 뒤에만 주입을 시작한다.
       if (deferredPrompt) await nodeRpc(nodeId, "injectFirstPrompt", {
         id: session.id, harness: session.harness || input.harness, text: deferredPrompt,
+        trustOk: autoTrustWorkspace({ projectId: project.id, subpath: input.subpath }),   // 프로젝트 canonical 폴더 = 우리가 만든 자리(#1867)
       }).catch((e) => console.warn(`[project] 노드 첫 지시 예약 실패(${session.id}) — 세션은 살아 있습니다:`, (e as Error)?.message ?? e));
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
