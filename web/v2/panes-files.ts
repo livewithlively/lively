@@ -9,8 +9,8 @@
 import { anchoredPopover, api, apiUrl, el, relTime, toast } from '../core.js';
 import { fmtSize, openFileViewer } from '../projects/files.js';
 import { confirmDialog } from '../ui-primitives.js';
-import { upDropZone, upSend, upToast, type UpItem } from '../projects/files-upload.js';
-import { FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
+import { upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
+import { FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
 export function filesPart(ctx: PartCtx): Part {
@@ -48,24 +48,36 @@ export function filesPart(ctx: PartCtx): Part {
     el('button', { class: 'pn-fnote-x', type: 'button', title: '안내 접기', 'aria-label': '안내 접기', text: '✕', onclick: () => { lsSet(FV_NOTE, '0'); noteEl.hidden = true; } }));
   noteEl.hidden = lsGet(FV_NOTE, '1') === '0';
 
-  // ── 올리기 ──
+  // ── 올리기 — 파일 **또는 폴더** (#1819 원준) ─────────────────────────────────
+  //  끌어다 놓는 길은 처음부터 폴더를 받았는데(upDropZone → 하위 구조 그대로), 버튼 길만 파일 전용이었다.
+  //  같은 자리에서 할 수 있는 일이 입력 방식에 따라 갈리면 사람은 '안 되는 것'으로 배운다 — 둘을 맞춘다.
+  //  폴더 입력은 webkitRelativePath 로 하위 경로를 들고 오므로(upFromInput) 구조가 그대로 올라간다.
   const upIn = el('input', { type: 'file', multiple: 'true', hidden: true }) as HTMLInputElement;
-  upIn.addEventListener('change', () => {
-    const fs = Array.from(upIn.files || []);
-    upIn.value = '';
-    void upload(fs.map((f) => ({ file: f, rel: rel(f.name) })));
-  });
+  const upDirIn = el('input', { type: 'file', multiple: 'true', webkitdirectory: '', hidden: true }) as HTMLInputElement;
+  upIn.addEventListener('change', () => { const items = upFromInput(upIn); upIn.value = ''; void upload(items.map((u) => ({ file: u.file, rel: rel(u.rel) }))); });
+  upDirIn.addEventListener('change', () => { const items = upFromInput(upDirIn); upDirIn.value = ''; void upload(items.map((u) => ({ file: u.file, rel: rel(u.rel) }))); });
+  // ⚠ 왜 버튼이 둘인가 — 브라우저가 **한 창에서 파일과 폴더를 같이 고르게 해주지 않는다.**
+  //  `<input type=file>` 은 파일만, `webkitdirectory` 는 폴더만 받는다(File System Access API 도
+  //  showOpenFilePicker/showDirectoryPicker 로 갈려 있다). 맥 네이티브 창은 둘 다 되지만 웹엔 안 열려 있다.
+  //  그래서 팀은 #781 에서 팝오버 메뉴로 풀었는데, 그러면 **가장 흔한 일(파일 올리기)에 클릭이 하나 더 붙는다**
+  //  (원준 2026-08-20: "드롭다운으로 나누지 말고"). 메뉴를 걷고 입구를 둘로 벌린다 — 각각 누르면 창이 바로 뜬다.
+  //  본 버튼은 파일(자료 칸에서 압도적으로 흔하다), 옆 아이콘은 폴더째. 폴더 입력을 못 받치는 브라우저면 옆 버튼을 숨긴다.
 
   // ── 머리 — 경로 / 개수 / 도구 ──
-  const upBtn = el('button', { class: 'btn-text', type: 'button', text: '＋ 올리기', title: '컴퓨터에서 파일을 고릅니다', onclick: () => upIn.click() });
+  const upBtn = el('button', { class: 'btn-text', type: 'button', text: '＋ 올리기', title: '컴퓨터에서 파일을 고릅니다 — 여러 개 고르거나 더블클릭으로 하나만', onclick: () => upIn.click() });
+  const upDirBtn = el('button', {
+    class: 'pn-fbtn', type: 'button', title: '폴더째 올리기 — 하위 구조 그대로 올라갑니다', 'aria-label': '폴더째 올리기',
+    onclick: () => upDirIn.click(),
+  }, pnIcon('folderup', 'pn-i sm')) as HTMLElement;
+  upDirBtn.hidden = !upDirSupported();
   const mkBtn = el('button', { class: 'btn-text', type: 'button', text: '새 폴더', title: '이 폴더 안에 폴더를 만듭니다', onclick: () => void newFolder() });
   const viewBtn = el('button', { class: 'pn-fbtn', type: 'button' }) as HTMLButtonElement;
   const sizeIn = el('input', { type: 'range', class: 'pn-fsize', min: '0', max: String(ICON_STEPS.length - 1), step: '1', title: '아이콘 크기', 'aria-label': '아이콘 크기' }) as HTMLInputElement;
   const sortBtn = el('button', { class: 'pn-fbtn wide', type: 'button', title: '정렬 순서' }) as HTMLButtonElement;
   const head = el('div', { class: 'pn-fhead' },
     el('div', { class: 'pn-frow1' }, crumbs, count),
-    el('div', { class: 'pn-ftools' }, upBtn, mkBtn, el('span', { class: 'pn-fsp' }), viewBtn, sizeIn, sortBtn));
-  root.append(upIn, noteEl, head, body);
+    el('div', { class: 'pn-ftools' }, el('span', { class: 'pn-upgrp' }, upBtn, upDirBtn), mkBtn, el('span', { class: 'pn-fsp' }), viewBtn, sizeIn, sortBtn));
+  root.append(upIn, upDirIn, noteEl, head, body);
 
   viewBtn.onclick = () => { view = view === 'icon' ? 'list' : 'icon'; lsSet(FV_VIEW, view); paintTools(); render(); };
   sizeIn.addEventListener('input', () => {
@@ -218,7 +230,7 @@ export function filesPart(ctx: PartCtx): Part {
         if (MACHINE_FILES.has(nm)) return false;
         return !NOISE_RE.test('/' + nm + '/');
       })
-      .map((it) => ({ name: String(it.name), path: rel(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0) } as FileItem));
+      .map((it) => ({ name: String(it.name), path: rel(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0), empty: !!it.empty } as FileItem));
   }
   function sortItems(list: FileItem[]): FileItem[] {
     const dir = sortAsc ? 1 : -1;
@@ -290,6 +302,14 @@ export function filesPart(ctx: PartCtx): Part {
     const rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean; off?: boolean }> = [];
     if (f) {
       rows.push({ label: many.length > 1 ? `${many.length}개 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => { for (const x of many.slice(0, 8)) open(x); } });
+      if (f.type !== 'dir') rows.push({ label: '뷰어에서 보기', run: () => {
+        // ⚠ **이 곁칸 안에서만** 찾고 이 곁칸에만 알린다(웹 칸과 같은 규칙 — pane-signal-scope-and-embed-isolation-1819).
+        //  window 로 쏘면 열려 있는 모든 세션 탭의 뷰어가 같은 파일을 함께 열고 각자 자기 열쇠에 그 파일을 기억한다.
+        //  찾는 것도 document 로 하면 안 된다 — 옆 세션에 뷰어가 있다는 이유로 이 세션에서는 아무 일도 안 일어난 채
+        //  안내조차 안 뜬다(있는 줄 알고 쏘고 끝난다).
+        if (!ctx.paneRoot().querySelector('.pn-ed')) { toast('먼저 어느 칸에든 [뷰어]를 넣어 주세요 — 칸 위의 ＋ 에서 고릅니다.', true); return; }
+        ctx.paneRoot().dispatchEvent(new CustomEvent('pn-viewer-open', { detail: { id: ctx.id, path: f.path } }));
+      } });
       if (f.type !== 'dir') rows.push({ label: '내려받기', run: () => { for (const x of many) if (x.type !== 'dir') download(x); } });
       rows.push({ label: '이름 바꾸기', off: many.length !== 1, run: () => { renameAt = f.path; render(); } });
       if (cwd) rows.push({ label: '상위 폴더로 옮기기', run: () => void moveMany(many.map((x) => x.path), cwd.includes('/') ? cwd.slice(0, cwd.lastIndexOf('/')) : '') });
@@ -300,6 +320,7 @@ export function filesPart(ctx: PartCtx): Part {
     rows.push({ label: '붙여넣기', run: () => void pasteFromApi() });
     rows.push({ label: '새 폴더', run: () => void newFolder() });
     rows.push({ label: '파일 올리기…', run: () => upIn.click() });
+    if (upDirSupported()) rows.push({ label: '폴더째 올리기…', run: () => upDirIn.click() });
     rows.push({ sep: true, label: '' });
     rows.push({ label: view === 'icon' ? '목록으로 보기' : '아이콘으로 보기', run: () => { view = view === 'icon' ? 'list' : 'icon'; lsSet(FV_VIEW, view); paintTools(); render(); } });
     ctxMenu(e.clientX, e.clientY, rows);
@@ -477,7 +498,9 @@ export function filesPart(ctx: PartCtx): Part {
   }
 
   function thumb(f: FileItem, small: boolean): HTMLElement {
-    if (f.type === 'dir') return el('span', { class: 'pn-fic dir' + (small ? ' sm' : '') }, pnIcon('folder', 'pn-i')) as HTMLElement;
+    // 목록 보기(20px)에선 서류를 그리지 않는다 — 그 크기에선 뭉개져 얼룩으로만 보인다.
+    if (f.type === 'dir') return el('span', { class: 'pn-fic dir' + (small ? ' sm' : '') },
+      folderIcon('pn-folder' + (small ? ' sm' : ''), { empty: f.empty, plain: small })) as HTMLElement;
     const k = kindOf(f.path);
     const box = el('span', { class: 'pn-fic ' + k.kind + (small ? ' sm' : ''), 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
       pnIcon(k.kind === 'page' ? 'note' : k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
@@ -572,7 +595,7 @@ export function filesPart(ctx: PartCtx): Part {
       body.replaceChildren(marquee, el('div', { class: 'pn-empty' },
         pnIcon('drop', 'pn-i big'),
         el('b', { text: cwd ? '이 폴더는 비어 있어요.' : '아직 자료가 없어요.' }),
-        el('p', { class: 'pn-fine', text: '파일을 이 칸에 끌어다 놓거나, 그림을 복사해 ⌘V 로 붙여넣거나, [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' })));
+        el('p', { class: 'pn-fine', text: '파일이나 폴더를 이 칸에 끌어다 놓거나, 그림을 복사해 ⌘V 로 붙여넣거나, [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' })));
       paintSel();
       return;
     }

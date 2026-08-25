@@ -52,6 +52,20 @@ eqk({ agentState: "busy", lastActive: nowSec - 60, lastAttached: nowSec - 600 },
   "⑯작업 중이면 '작업 완료'로 덮지 않는다(아직 안 끝났다)", NOW);
 eqk({ restorable: true, lastActive: nowSec - 60, lastAttached: nowSec - 600 }, "restorable",
   "⑰복원 가능 세션은 '작업 완료'로 승격하지 않는다", NOW);
+
+// ── 탭이 없어도 '지금 돌고 있다/기다린다'는 사실이 이긴다 (#1819 원준 신고 2026-08-21) ──
+//  실측: 25분째 도는 세션(@box_state=busy, 8초 전 갱신)이 사이드바엔 초록 '작업 완료'로 떠 있었다.
+//  경로: 탭을 안 보고 있으면 agentState 가 offline 으로 덮이고(접속=온라인 규칙), 그 offline 이
+//  '마지막 작업 > 마지막 열람'에 걸려 '작업 완료'로 승격됐다. 서버는 접속과 무관한 working/awaiting 을
+//  이미 내려주는데(#1221) 이 표가 그걸 안 봤다.
+eqk({ agentState: "offline", working: true, lastActive: nowSec - 60, lastAttached: nowSec - 600 }, "busy",
+  "⑱탭이 없어도 지금 돌고 있으면 '작업 중' — '작업 완료'로 거짓말하지 않는다", NOW);
+eqk({ agentState: "offline", awaiting: true, lastActive: nowSec - 60, lastAttached: nowSec - 600 }, "waiting",
+  "⑲탭이 없어도 사람 결정을 기다리면 '확인 필요' — 탭이 없다고 결정을 잃지 않는다", NOW);
+eqk({ agentState: "idle", working: true }, "busy", "⑳보고가 도착하기 전 idle 로 보이던 순간도 working 이 이긴다");
+eqk({ agentState: "shell", harness: "shell", working: true }, "shell",
+  "㉑셸 세션은 그대로 '셸' — 셸에서 명령이 도는 것(shellWorking)은 AI 작업이 아니다");
+eqk({ restorable: true, working: true }, "restorable", "㉒박스가 없는 세션은 옛 working 신호로 되살아나지 않는다");
 assert.equal(isUnreadDone({ agentState: "idle", lastActive: 0, lastAttached: 0 }, NOW), false);
 ok("⑱작업 기록이 없으면 '작업 완료' 판정 불가(false)");
 

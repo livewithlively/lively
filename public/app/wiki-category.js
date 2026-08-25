@@ -11,7 +11,9 @@ import { hasScope } from './admin.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import { HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc, knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, } from './wiki-data.js';
 import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkRow, wkSection, wkTick } from './wiki-ui.js';
+import { wkBoardHeader, wkSurfaceTabs } from './wiki-table.js'; // #1841 — 사이드바가 없어졌으니 이 화면도 같은 머리 3층을 스스로 인다
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
+import { wkColHead, wkDocCols, wkTableRow } from './wiki-table.js'; // #1841 프로젝트 표 문법
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
 function openFolderForm(cat, parentFolder, done) {
     const nameIn = el('input', { type: 'text', placeholder: '폴더 이름', maxlength: '200' });
@@ -371,24 +373,28 @@ async function renderCategorySurface(box, cat, ctx) {
         if (!sel.mode)
             secActions.push(el('button', { class: 'wk-sec-act', type: 'button', text: '선택',
                 title: '여러 문서를 골라 프로젝트 연결·삭제', onclick: () => { sel.mode = true; paintLibrary(); } }));
-        const sec = wkSection('문서', { count: list.length, actions: secActions });
+        // #1841 — 문서 목록은 프로젝트 표 문법(컬럼 헤더 + 행 + ⋯). 발췌는 제목 옆 한 줄, 선택 모드면 행 앞 체크박스.
+        const secHead = el('div', { class: 'wk-sec-head wk-doclist-head' }, el('span', { class: 'wk-sec-title', text: '문서' }), el('span', { class: 'wk-sec-count', text: String(list.length) }), el('span', { class: 'wk-sec-sp' }), ...secActions);
+        const docBox = el('div', { class: 'card pjv-listboard wk-board wk-board-inline' });
         if (!list.length)
-            sec.body.append(wkEmpty(topicFilter ? '이 주제의 문서가 없어요.' : f.type ? '이 유형의 문서가 없어요.' : '문서가 없어요.'));
+            docBox.append(wkEmpty(topicFilter ? '이 주제의 문서가 없어요.' : f.type ? '이 유형의 문서가 없어요.' : '문서가 없어요.'));
         else {
+            const cols = wkDocCols({ category: false });
+            const tbody = el('div', { class: 'pjv-tgroup-body wk-tbody' }, wkColHead(cols));
             for (const r of list)
-                sec.body.append(wkRow(r, {
-                    open: openDoc,
+                tbody.append(wkTableRow(r, {
+                    cols, open: openDoc,
                     select: sel.mode ? { names: sel.names, onToggle: repaintBulk } : null,
                     deck: sel.mode ? '' : wkDeck(r.body_md || '', 110), // 발췌 한 줄 — 목록이 피드처럼 읽히게(#764v2)
-                    metas: [r.is_wiki ? '인덱스' : null, !f.type && r.type ? (KN_TYPE_LABEL[r.type] || r.type) : null, relTime(r.updated_at)],
                 }));
+            docBox.append(el('div', { class: 'pjv-tgroup wk-tgroup' }, tbody));
             if (!sel.mode)
                 setWikiPeekList(list.map((r) => r.name));
         }
         // 주제 필터 크럼 — 색인에서 온 조종간(해제 ×).
         const topicCrumb = topicFilter ? el('div', { class: 'wk-topic-crumb' }, el('span', { class: 'wk-row-m', text: '주제' }), el('span', { class: 'wk-topic-crumb-name', text: '「' + topicFilter.label + '」' }), el('button', { class: 'wk-topic-crumb-x', type: 'button', 'aria-label': '주제 필터 해제', title: '주제 필터 해제', text: '×',
             onclick: () => { topicFilter = null; paintLibrary(); } })) : null;
-        const wrap = el('div', { class: 'wk-doclist-wrap' }, ...[topicCrumb, typeRow, sec.el].filter(Boolean));
+        const wrap = el('div', { class: 'wk-doclist-wrap' }, ...[topicCrumb, typeRow, secHead, docBox].filter(Boolean));
         library.append(wrap);
     }
     paintLibrary();
@@ -760,7 +766,15 @@ async function renderCategorySurface(box, cat, ctx) {
     }
     libToggle.onclick = () => { libOpen = !libOpen; paintLibSec(); };
     paintLibSec();
-    const root = el('div', { class: 'wk-cat wk-cat-v2 wk-cat-v6' }, cover, el('div', { class: 'wk-cat-inner' }, ...[
+    // #1841 — ① 오로라 커버 폐지(카테고리마다 다른 그라디언트가 표면을 제각각으로 만들었다. 아이콘·제목·설명은 그대로)
+    //  ② 머리 3층을 인다 — 좌측 사이드바가 없어졌으니 여기서 나가는 길(WIKI › 스페이스 › 이 카테고리 · 표면 탭)이 화면 안에 있어야 한다.
+    const SPACE_KO = { business: '사업', product: '제품', system: '시스템' };
+    const catHeader = wkBoardHeader({
+        crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: SPACE_KO[cat.space] || '카테고리', href: '#/knowledge?cats=1' }, { label: cat.name || cat.key }],
+        sub: Number.isFinite(Number(cat.knowledge_count)) ? '문서 ' + Number(cat.knowledge_count) + '건' : '',
+        tabs: wkSurfaceTabs('cats'),
+    });
+    const root = el('div', { class: 'wk-cat wk-cat-v2 wk-cat-v6 wk-cat-flat' }, el('div', { class: 'card pjv-listboard wk-board wk-cat-board' }, catHeader), el('div', { class: 'wk-cat-inner' }, ...[
         iconBtn,
         el('div', { class: 'wk-cat-headrow' }, el('div', { class: 'wk-cat-headmain' }, titleEl, descEl), actions),
         inDrill ? null : editHint,

@@ -36,25 +36,52 @@ export function cleanAiName(out: string): string {
 }
 
 /**
+ * 하네스별 이름짓기 argv(#1884, 순수 — 테스트 seam). 이름은 **그 세션의 하네스**로 짓는다 — codex 로만 로그인한 멤버의
+ *  세션을 claude 로 지으려 들면 자격이 없어 늘 실패(규칙 이름)였다. 미지정/빈 값은 claude(종전 호출자 무회귀).
+ *  · claude  `-p --model <m> <프롬프트>` — 종전과 바이트 동일.
+ *  · codex   `exec --skip-git-repo-check -s read-only <프롬프트>` — 실측(0.149.1, 2026-08-25): 최종 답만 stdout,
+ *            진행(헤더·훅·토큰)은 전부 stderr. cwd 가 git 밖(임시 폴더)이라 --skip-git-repo-check 가 필수.
+ *  · 그 밖(antigravity·grok·opencode·shell·모름) → null: 규약을 실측하지 않았으니 추측해 부르지 않는다(규칙 이름 유지).
+ */
+export function nameArgvFor(harness: string | null | undefined, model: string, prompt: string): string[] | null {
+  switch (String(harness || "claude")) {
+    case "claude": return ["-p", "--model", model, prompt];
+    case "codex": return ["exec", "--skip-git-repo-check", "-s", "read-only", prompt];
+    default: return null;
+  }
+}
+
+/** stdout 의 **마지막** 비어있지 않은 줄 — codex exec 는 최종 답을 끝에 두므로(위 실측) 앞에 무엇이 붙어도 그 줄이 이름이다. */
+const lastLine = (out: string): string => String(out || "").split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+
+/**
  * 첫 지시 → AI 가 지은 짧은 이름. 못 지으면 "" (호출자는 규칙 이름을 그대로 둔다).
- *  bin — 부를 CLI(기본 claude). configDir — 그 멤버의 CLAUDE_CONFIG_DIR(자격이 거기 있다).
+ *  bin — 부를 CLI(claude 전용 override, 기본 claude). configDir — 그 멤버의 CLAUDE_CONFIG_DIR(자격이 거기 있다 — claude 전용).
+ *  harness — 세션의 하네스(#1884). claude 경로는 종전과 바이트 동일, codex 는 nameArgvFor 의 규약, 그 밖은 즉시 "".
  *  cwd 는 임시 폴더다: 프로젝트 폴더에서 부르면 그 폴더의 CLAUDE.md·훅이 딸려 와 느려지고 이름과 무관한 맥락이 섞인다.
  */
-export function aiSessionName(text: string, opts?: { bin?: string; configDir?: string | null }): Promise<string> {
-  const bin = opts?.bin || process.env.LIVELY_AI_SESSION_NAME_BIN || "claude";
+export function aiSessionName(text: string, opts?: { bin?: string; configDir?: string | null; harness?: string | null }): Promise<string> {
+  const harness = String(opts?.harness || "claude");
   const model = process.env.LIVELY_AI_SESSION_NAME_MODEL || "haiku";
+  const argv = nameArgvFor(harness, model, PROMPT(text));
+  if (!argv) return Promise.resolve("");
+  const claude = harness === "claude";
+  const bin = claude ? (opts?.bin || process.env.LIVELY_AI_SESSION_NAME_BIN || "claude") : harness;
   return new Promise<string>((resolve) => {
     let done = false;
     const finish = (v: string): void => { if (!done) { done = true; resolve(v); } };
     try {
       const env: NodeJS.ProcessEnv = { ...process.env };
-      if (opts?.configDir) env.CLAUDE_CONFIG_DIR = opts.configDir;
-      const p = spawn(bin, ["-p", "--model", model, PROMPT(text)], { cwd: os.tmpdir(), env, stdio: ["ignore", "pipe", "ignore"] });
+      if (claude && opts?.configDir) env.CLAUDE_CONFIG_DIR = opts.configDir;
+      // codex 는 stderr 에 진행을 계속 쓴다 — 파이프로 받아 버린다(ignore 로 두면 되지만 stdin 은 확실히 닫아야 한다:
+      //  "instructions are read from stdin" 이라 열려 있으면 EOF 를 기다리며 매달린다).
+      const p = spawn(bin, argv, { cwd: os.tmpdir(), env, stdio: ["ignore", "pipe", claude ? "ignore" : "pipe"] });
       let out = "";
-      p.stdout.on("data", (c: Buffer) => { out += c.toString("utf8"); if (out.length > 4000) p.kill("SIGKILL"); });
+      p.stdout?.on("data", (c: Buffer) => { out += c.toString("utf8"); if (out.length > 4000) p.kill("SIGKILL"); });
+      p.stderr?.on("data", () => { /* 버린다 — 파이프가 차서 막히지 않게 소비만 */ });
       const t = setTimeout(() => { p.kill("SIGKILL"); finish(""); }, TIMEOUT_MS);
       p.on("error", () => { clearTimeout(t); finish(""); });         // CLI 가 없다 — 규칙 이름으로 산다
-      p.on("close", (code) => { clearTimeout(t); finish(code === 0 ? cleanAiName(out) : ""); });
+      p.on("close", (code) => { clearTimeout(t); finish(code === 0 ? cleanAiName(claude ? out : lastLine(out)) : ""); });
     } catch { finish(""); }
   });
 }

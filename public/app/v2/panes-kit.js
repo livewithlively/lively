@@ -22,10 +22,13 @@ const ICON_PATHS = {
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
     cols: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M15 5v14"/>',
     drop: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/>',
+    up: '<path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M5 5h14"/>',
     box: '<path d="M3 7h18v4H3z"/><path d="M5 11v8h14v-8"/><path d="M10 15h4"/>',
     undo: '<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>',
     globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
     pencil: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14 6l4 4"/>',
+    eye: '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/>',
+    folderup: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 18v-6"/><path d="M9.4 14.4L12 11.8l2.6 2.6"/>',
     save: '<path d="M5 4h11l3 3v13H5z"/><path d="M9 4v5h6V4"/><path d="M8 20v-6h8v6"/>',
     ext: '<path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
 };
@@ -157,4 +160,68 @@ export function attachName(f, taken) {
     const sub = (f.type || '').split('/')[1] || 'png';
     const ext = (sub.split('+')[0].replace(/[^a-z0-9]/gi, '') || 'png').toLowerCase(); // image/svg+xml → svg
     return freeName(new Set(taken), `붙여넣은 그림 ${stamp()}.${ext}`);
+}
+// ── 칸 머리의 안내 한 줄 (#1819) ─────────────────────────────────────────────
+//  칸이 "무엇을 담는 곳인지"가 아니라 **그래서 나에게 무슨 이득인지**를 말한다. 자료·지식처럼 계약이
+//  눈에 안 보이는 칸은 이걸 모르면 덜 쓰게 된다(자료를 '이 세션 첨부'로 오해해 딱 한 개만 올리는 식).
+//  접으면 그 선택을 기억한다 — 한 번 읽은 사람에게 같은 문장을 계속 보일 이유는 없다.
+export function pnNote(key, text) {
+    const note = el('div', { class: 'pn-fnote' }, pnIcon('spark', 'pn-i sm'), el('p', { text }), el('button', {
+        class: 'pn-fnote-x', type: 'button', title: '안내 접기', 'aria-label': '안내 접기', text: '✕',
+        onclick: () => { lsSet(key, '0'); note.hidden = true; },
+    }));
+    note.hidden = lsGet(key, '1') === '0';
+    return note;
+}
+// ── 지식 제목을 사람이 한눈에 읽는 한 줄로 (#1819) ───────────────────────────
+//  위키 제목은 「짧은 이름 — 긴 설명」 규약을 따른다(실측: 표본 18건 중 15건이 ' — ' 를 가졌고 앞머리는
+//  11~44자). 곁칸은 폭이 300px 남짓이라 전문을 그대로 걸면 슬러그처럼 읽히는 글자 덩어리가 된다.
+//  그래서 **앞머리만** 남기고 이슈번호 같은 기계용 표식을 턴다. 전문은 title 속성과 상세 창이 갖는다.
+//  ⚠ 저장된 제목을 바꾸지 않는다 — 화면에서만 줄인다(위키·검색·외부 미러의 정본은 그대로여야 한다).
+export function knTitle(raw, name) {
+    let t = String(raw || '').trim();
+    if (!t)
+        t = String(name || '').replace(/[-_]+/g, ' '); // 제목이 없으면 슬러그를 말처럼 편다
+    t = t.split(/\s+[—–]\s+/)[0]; // 「이름 — 설명」의 이름만
+    t = t.replace(/\(?#\d+[^)]*\)?/g, ' '); // (#1819) · #1819 같은 표식은 사람에게 뜻이 없다
+    t = t.replace(/^(as-built|as built)\s*[::]\s*/i, ''); // 문서 종류 접두어는 아래 배지가 말한다
+    t = t.replace(/\s{2,}/g, ' ').replace(/[\s·,:;]+$/, '').trim();
+    return t || String(name || '');
+}
+// ── 폴더 아이콘 — 맥 파인더 결 (#1819 원준) ──────────────────────────────────
+//  다른 아이콘은 전부 선(stroke)이지만 폴더만은 **채운 그림**이다. 자료 격자에서 폴더는 아이콘이 아니라
+//  파일 미리보기와 나란히 서는 한 장의 그림이라, 선 하나로 그리면 옆 카드의 실제 내용에 눌려 빈 칸이 된다.
+//
+//  ── 그라디언트를 낮게 잡는 이유 (초판이 "조잡하다"고 반려됨, 원준 2026-08-20) ──
+//   초판은 위아래 명도차를 크게 주고(밝은 하늘색→진한 파랑) 앞판 위에 곡선 광택 덩어리를 얹었다. 그 결과
+//   ⓐ 색이 아래로 갈수록 탁해져 '플라스틱' 느낌이 나고 ⓑ 광택 곡선이 어디서 왔는지 모를 얼룩으로 읽혔다.
+//   파인더 폴더는 사실 **명도차가 아주 작은 한 톤**이고, 빛은 앞판 윗변의 **가는 선 하나**로만 표현된다.
+//   그래서 여기서도: 낮은 대비 세로 그라디언트 + 윗변 1px 하이라이트. 광택 덩어리는 없앤다.
+//
+//  ── 빈 폴더 / 든 폴더 (원준: "맥은 둘이 다르다") ──
+//   든 폴더는 뒤판과 앞판 **사이로 서류가 비쳐 나온다**. 목록을 훑을 때 "여긴 뭔가 있다"가 열어보기 전에 읽힌다.
+//   서류는 흰 종이 두 장을 살짝 어긋나게 겹쳐 그린다(각도는 고정 — 무작위면 다시 그릴 때마다 흔들린다).
+//  ⚠ 그라디언트 id 는 문서에 유일해야 한다 — 같은 id 가 여러 개면 브라우저가 첫 것만 쓴다(색이 굳는다).
+let folderSeq = 0;
+export function folderIcon(cls = 'pn-folder', opts) {
+    const n = ++folderSeq;
+    const back = `pnf-b${n}`, front = `pnf-f${n}`;
+    const papers = !opts?.empty && !opts?.plain;
+    const svg = sv('svg', { viewBox: '0 0 48 40', class: cls, 'aria-hidden': 'true' });
+    svg.innerHTML = `<defs>
+      <linearGradient id="${back}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#8AC4F2"/><stop offset="1" stop-color="#6FB0E8"/>
+      </linearGradient>
+      <linearGradient id="${front}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#A6D6F8"/><stop offset="1" stop-color="#7CBBEF"/>
+      </linearGradient>
+    </defs>
+    <path d="M2 9.6A3.6 3.6 0 0 1 5.6 6h11.5c.97 0 1.9.39 2.58 1.08l2.5 2.52H42.4A3.6 3.6 0 0 1 46 13.2v20.2a3.6 3.6 0 0 1-3.6 3.6H5.6A3.6 3.6 0 0 1 2 33.4z" fill="url(#${back})"/>
+    ${papers ? `<g>
+      <rect x="18.6" y="8.2" width="14.5" height="11" rx="1.5" fill="#EDF3FA" stroke="#D3E1F0" stroke-width=".6" transform="rotate(-6 25.8 13.7)"/>
+      <rect x="26" y="9.2" width="14.5" height="11" rx="1.5" fill="#FFFFFF" stroke="#DAE5F3" stroke-width=".6" transform="rotate(5 33.2 14.7)"/>
+    </g>` : ''}
+    <path d="M2 17.6A3.6 3.6 0 0 1 5.6 14h36.8a3.6 3.6 0 0 1 3.6 3.6v15.8a3.6 3.6 0 0 1-3.6 3.6H5.6A3.6 3.6 0 0 1 2 33.4z" fill="url(#${front})"/>
+    <path d="M5.9 14.75h36.2" stroke="#FFFFFF" stroke-opacity=".5" stroke-width="1.1" stroke-linecap="round" fill="none"/>`;
+    return svg;
 }

@@ -17,18 +17,23 @@ export interface DelegateTask {
 
 export async function createTask(input: {
   requester: string; requesterSession?: string | null; prompt: string; subpath?: string;
+  // 실행 하네스(#1884) — 헤드리스 규약을 아는 키(tasks.ts HEADLESS). 비우면 **DB 기본('claude')** — 구 호출자 무회귀.
+  //  값 검증은 호출자(headless-harness.resolveHeadlessHarness · delegate_run 의 400)와 실행 직전 spawnTaskSession 이 한다.
+  harness?: string | null;
   repo?: string | null; gitRef?: string | null;
   flags?: Record<string, string>; needCpu?: number | null; needRamMb?: number | null; needDiskMb?: number | null;
   needsDocker?: boolean; nodePref?: string | null; timeoutSec?: number; maxAttempts?: number;
 }): Promise<DelegateTask> {
+  const harness = (input.harness ?? "").trim();   // 빈 값은 컬럼을 아예 안 써서 DB DEFAULT 가 살아 있게 한다
   const r = await itemsPool.query(
     `INSERT INTO org_task(requester, requester_session, prompt, subpath, repo, git_ref, flags, need_cpu, need_ram_mb, need_disk_mb,
-                          needs_docker, node_pref, timeout_sec, max_attempts)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+                          needs_docker, node_pref, timeout_sec, max_attempts${harness ? ", harness" : ""})
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14${harness ? ",$15" : ""}) RETURNING *`,
     [input.requester, input.requesterSession ?? null, input.prompt, input.subpath ?? "", input.repo ?? null, input.gitRef ?? null,
      JSON.stringify(input.flags ?? {}), input.needCpu ?? null, input.needRamMb ?? null, input.needDiskMb ?? null,
      !!input.needsDocker, input.nodePref ?? null,
-     Math.min(Math.max(60, input.timeoutSec ?? 3600), 6 * 3600), Math.min(Math.max(1, input.maxAttempts ?? 2), 5)],
+     Math.min(Math.max(60, input.timeoutSec ?? 3600), 6 * 3600), Math.min(Math.max(1, input.maxAttempts ?? 2), 5),
+     ...(harness ? [harness] : [])],
   );
   return r.rows[0] as DelegateTask;
 }
@@ -102,17 +107,21 @@ export async function setNodeLost(id: number, lost: boolean): Promise<void> {
 }
 
 // ── 리소스-적합 매칭(§10, 순수 함수) ──
-//  후보 = online·enabled + (node_pref 일치) + (needs_docker→hasDocker) + 용량 슬롯 여유 + 리소스 적합.
+//  후보 = online·enabled + (node_pref 일치) + **하네스 지원**(#1884) + (needs_docker→hasDocker) + 용량 슬롯 여유 + 리소스 적합.
 //  적합: mem_free ≥ need_ram(+여유 512MB) · disk_free ≥ need_disk(+1GB) · 유휴코어(cpus−load1) ≥ need_cpu(soft).
 //  점수 = 남는 메모리 큰 순(단순 최빈 자원) — central 은 저용량 워커(⑶·§9-8)라 동점 시 후순위.
 export interface SchedulableNode {
   id: string; kind: string; central?: boolean; hasDocker: boolean;
   res: NodeResources | null; capacity: number; running: number;
+  /** 이 노드가 실제로 띄울 수 있는 하네스(#1884) — 원격=hello 가 보고한 agent_harnesses(미보고면 기준선) · 중앙=detectHarnesses.
+   *  종전엔 이 축이 없어 codex 위탁이 claude 만 깔린 노드에 배정돼 즉사했다(리소스는 남아도 바이너리가 없다). */
+  harnesses: readonly string[];
 }
-export function matchNode(task: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker" | "node_pref">,
+export function matchNode(task: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker" | "node_pref" | "harness">,
   nodes: SchedulableNode[]): SchedulableNode | null {
   const fit = nodes.filter((n) => {
     if (task.node_pref && n.id !== task.node_pref) return false;
+    if (!n.harnesses.includes(task.harness)) return false;   // 그 하네스가 없는 노드 — "모르면 못 한다고 본다"(protocol.nodeHarnesses)
     if (task.needs_docker && !n.hasDocker) return false;
     if (n.running >= n.capacity) return false;
     if (!n.res) return task.need_ram_mb == null && task.need_disk_mb == null && task.need_cpu == null;

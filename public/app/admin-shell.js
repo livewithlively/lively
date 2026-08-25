@@ -125,7 +125,8 @@ const ADMIN_SECTIONS = [
     //  서버 me_profile_update 가 **부분 갱신(patch)** 이라(미전송 필드 보존) 화면을 쪼개도 한쪽이 다른쪽을 안 지운다.
     //  전 구성원 노출·전 구성원 편집 가능(내 것이니까) — 아래 어떤 권한 게이트에도 걸지 않는다.
     // '내 정보'(프사·이름·닉네임·비번)는 관리에서 분리 — 우측 상단 프로필 클릭 시 팝업(openMyProfileModal, #762). 여기 nav엔 두지 않는다.
-    { key: 'me-ai', label: '내 AI 설정', meaning: null, group: 'me' },
+    // AI 개인 규칙 편집도 좌하단 내 프로필 창 [AI 개인 규칙] 탭으로 옮겨 갔다(#1843·#1898) — 여기는 계정(로그인)만 남는다.
+    { key: 'me-ai', label: '내 AI 계정', meaning: null, group: 'me' },
     // #1226 — '로그인'이 아니라 '관리'다. 이 화면이 하는 일이 로그인 하나가 아니게 됐다:
     //  연결·해제에 더해 **연결한 뒤 무엇까지 허용할지**(슬랙 채널별 열람/발송)를 여기서 고른다.
     { key: 'me-logins', label: '외부 서비스 관리', meaning: null, group: 'me' },
@@ -253,11 +254,11 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
     //  그 단계를 보면서 앞뒤를 못 본다. 옛 딥링크·북마크는 여기서 새 자리로 넘긴다(끊지 않는다).
     //  #1584 — 그 단계의 **어느 화면**인지까지 주소가 말한다(단계 안 하위 탭이 좌측 사이드바 항목이 되면서
     //  화면마다 주소가 생겼다). 종전엔 단계까지만 보내 놓고 첫 화면에 떨어뜨렸다.
-    'distillers': '#/context/distill/distillers',
-    'ingest-policy': '#/context/distill/ingest-policy',
-    'connectors': '#/context/collect/collectors',
-    'collector-presets': '#/context/collect/presets',
-    'source-vis-policy': '#/context/collect/source-vis',
+    'distillers': '#/context/knowledge/distillers',
+    'ingest-policy': '#/context/knowledge/ingest-policy',
+    'connectors': '#/context/sources/collectors',
+    'collector-presets': '#/context/sources/presets',
+    'source-vis-policy': '#/context/sources/source-vis',
     // #1618 — 구 [설정 ▸ AI 맥락] 3화면이 [맥락 관리 ▸ 전달]로. 같은 이유(입구 이중화 + 앞뒤를 못 봄)에
     //  같은 처방이다. injection-map 은 온보딩·가이드 문서가 '#/system' 으로 보내던 자리라 특히 중요하다.
     'injection-map': '#/context/deliver/injection',

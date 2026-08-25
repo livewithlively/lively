@@ -22,6 +22,7 @@ import { ensureAgentsMd } from "../v6/agents-md.js";
 import { projectAbsPath } from "../project/project-fs.js";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -86,6 +87,8 @@ export async function setSessionProject(u: LivelyUser, id: string, pidRaw: unkno
   // DB(게이트웨이만) — 시간구간 기록(붙일 때만; 뗌은 구간 모델에 없다 — 과거 귀속은 그대로 남는다) + 복원용 미러.
   if (bind) await recordSessionProject(id, bind.projectId).catch(() => { /* 비치명 */ });
   await updateSessionStateMeta(id, { project_id: bind ? bind.projectId : null, project_src: bind ? "v6" : null }).catch(() => { /* 레코드 없음 등 비치명 */ });
+  // 세션 화면은 ai-session AppInstance다. 세션 바인딩이 권위이므로 열린/복원 인스턴스의 현재 맥락도 같은 값으로 맞춘다.
+  // 시간 이력은 app-instances 스토어가 별도로 남겨, 옮긴 뒤에도 과거 활동의 소속을 소급 변경하지 않는다.
+  await syncSessionAppInstanceProject(id, bind ? bind.projectId : null).catch(() => { /* UI 메타데이터 실패는 세션 바인딩을 되돌리지 않는다 */ });
   return out;
 }
-

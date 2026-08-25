@@ -65,7 +65,7 @@ function makeBundle(version, { corrupt = false, mcpServers = [] } = {}) {
 }
 
 // ── 픽스처 게이트웨이 ─────────────────────────────────────────────────────────
-let serving = { version: "v-aaa", body: null, installHits: 0, selfUpdate: true };
+let serving = { version: "v-aaa", body: null, installHits: 0, selfUpdate: true, localMode: null, localModeStatus: 200, localModeQueries: [] };
 const server = createServer((req, res) => {
   const path = (req.url || "").split("?")[0];
   const auth = String(req.headers.authorization || "");
@@ -84,6 +84,20 @@ const server = createServer((req, res) => {
       .end(JSON.stringify({ id: "tester", display_name: "테스터", email: "t@example.com" }));
   } else if (path === "/api/ui/org/preview") {
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ context: "# 테스트 컨텍스트\n" }));
+  } else if (path === "/api/ui/me/local-mode") {
+    serving.localModeQueries.push(req.url || "");
+    if (serving.localModeStatus !== 200) { res.writeHead(serving.localModeStatus).end(); return; }
+    if (req.method === "POST") {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        let body = {}; try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* 잘못된 body 는 아래 null */ }
+        serving.localMode = { mode: body.mode, updated_at: new Date().toISOString() };
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ preference: serving.localMode }));
+      });
+    } else {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ preference: serving.localMode }));
+    }
   } else if (path === "/cli/lively.mjs") {
     res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end(readFileSync(CLI, "utf8"));
   } else {
@@ -452,6 +466,45 @@ try {
     const r2 = await lively(H, ["run", "--incognito", "--harness", fakeH]);
     check("⑮ run --incognito → LIVELY_MODE=incognito + 전이기 INC=1 + LIVELY_OFF=1 세션 env 주입",
       r2.out.includes("MODE=incognito") && r2.out.includes("INC=1") && r2.out.includes("OFF=1"), r2.out.trim());
+  }
+  // ⑮-b 웹의 컴퓨터별 기본 연결 상태 → 다음 lively run preflight 에서 반영(#1869).
+  //  각 행은 /private/tmp/lively-1869-spec.md 의 입력 조합 한 행과 대응한다. 하네스 스텁의 env 가 부작용 관측점.
+  {
+    const modeRun = async (name, { local = "normal", remote = null, flag = null, status = 200, machine = true } = {}) => {
+      const h = newHome("mode-" + name);
+      const lv = join(h.home, ".lively"); mkdirSync(lv, { recursive: true });
+      writeFileSync(join(lv, "gateway-url"), GW + "\n"); writeFileSync(join(lv, "token"), TOKEN + "\n");
+      writeFileSync(join(lv, "mode"), local + "\n");
+      if (machine) writeFileSync(join(lv, "machine-id"), "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n");
+      writeStubBin(h.bin, "fake-mode-harness",
+        "process.stdout.write('MODE='+(process.env.LIVELY_MODE||'normal')+' OFF='+(process.env.LIVELY_OFF||''));");
+      serving.localMode = remote == null ? null : { mode: remote, updated_at: new Date().toISOString() };
+      serving.localModeStatus = status; serving.localModeQueries = [];
+      const args = ["run", ...(flag ? [flag] : []), "--harness", "fake-mode-harness"];
+      const result = await lively(h, args);
+      return { h, out: result.out, saved: readFileSync(join(lv, "mode"), "utf8").trim(), queries: [...serving.localModeQueries] };
+    };
+    const r1 = await modeRun("remote-readonly", { remote: "readonly" });
+    check("⑮-b1 웹 기본값 readonly → readonly 실행", r1.out.includes("MODE=readonly"), r1.out);
+    const r2 = await modeRun("reactivate", { local: "incognito", remote: "normal" });
+    check("⑮-b2 로컬 incognito 여도 웹에서 normal 로 다시 켬", r2.out.includes("MODE=normal") && !r2.out.includes("OFF=1") && r2.saved === "normal", r2.out);
+    const r3 = await modeRun("explicit", { remote: "incognito", flag: "--normal" });
+    check("⑮-b3 이번 실행 --normal 은 웹 incognito 보다 우선", r3.out.includes("MODE=normal") && !r3.out.includes("OFF=1"), r3.out);
+    const r4 = await modeRun("absent", { local: "readonly", remote: null });
+    check("⑮-b4 웹 명시값 부재 → 로컬 readonly 유지", r4.out.includes("MODE=readonly") && r4.saved === "readonly", r4.out);
+    const r5 = await modeRun("offline", { local: "incognito", remote: "normal", status: 500 });
+    check("⑮-b5 서버 미도달 → 로컬 incognito 유지", r5.out.includes("MODE=incognito") && r5.out.includes("OFF=1") && r5.saved === "incognito", r5.out);
+    const r6 = await modeRun("invalid", { local: "normal", remote: "mystery" });
+    check("⑮-b6 웹 잡값 → 로컬 normal 유지", r6.out.includes("MODE=normal") && r6.saved === "normal", r6.out);
+    const r7 = await modeRun("new-machine", { remote: "readonly", machine: false });
+    check("⑮-b7 machine-id 최초 부재 → 생성 후 웹 기본값 적용", r7.out.includes("MODE=readonly")
+      && existsSync(join(r7.h.home, ".lively", "machine-id")) && r7.queries.some((q) => q.includes("machine_id=")), r7.out);
+    const r8 = await modeRun("normal-boundary", { local: "readonly", remote: "normal" });
+    check("⑮-b8 웹 normal 경계값도 유효", r8.out.includes("MODE=normal") && r8.saved === "normal", r8.out);
+    const r9 = await modeRun("explicit-incognito", { remote: "readonly", flag: "--incognito" });
+    check("⑮-b9 이번 실행 --incognito 는 서버 기본값 조회도 하지 않음", r9.out.includes("MODE=incognito")
+      && r9.out.includes("OFF=1") && r9.queries.length === 0, `queries=${JSON.stringify(r9.queries)} ${r9.out}`);
+    serving.localMode = null; serving.localModeStatus = 200; serving.localModeQueries = [];
   }
   {
     const r = await lively(H, ["run", "--harness", "definitely-not-real-xyz-123"], { expectFail: true });

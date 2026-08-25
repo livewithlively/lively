@@ -576,6 +576,26 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "me_local_mode_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/local-mode"
+  ],
+  "input_hash": "47124ddf6bd11a3a"
+ },
+ {
+  "name": "me_local_mode_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/local-mode"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "me_harness_local_pref",
   "scope": null,
   "mcp": false,
@@ -1326,6 +1346,16 @@
    "POST /api/ui/me/liv-profile"
   ],
   "input_hash": "28ae905489e3aa6c"
+ },
+ {
+  "name": "me_liv_profile_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/liv-profile"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "me_liv_ask_secret",
@@ -2614,7 +2644,7 @@
   "rest": [
    "GET /api/ui/v6/projects"
   ],
-  "input_hash": "2234c00a4e11657b"
+  "input_hash": "ed787db9358eb149"
  },
  {
   "name": "project_grep",
@@ -2715,6 +2745,36 @@
    "POST /api/ui/v6/projects/:id/status"
   ],
   "input_hash": "27e5ef225edfec2d"
+ },
+ {
+  "name": "project_archive_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/archive"
+  ],
+  "input_hash": "5dff7098b6704bed"
+ },
+ {
+  "name": "project_trash_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/trash"
+  ],
+  "input_hash": "101095875948a369"
+ },
+ {
+  "name": "project_purge_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/purge"
+  ],
+  "input_hash": "4dc36ab67eecb455"
  },
  {
   "name": "project_set_members_v6",
@@ -3454,7 +3514,7 @@
   "rest": [
    "POST /api/ui/cron"
   ],
-  "input_hash": "d2d671f0d76c545f"
+  "input_hash": "848fdb990f675fbc"
  },
  {
   "name": "cron_delete",
@@ -3644,7 +3704,7 @@
   "rest": [
    "POST /api/ui/delegate"
   ],
-  "input_hash": "6dd39bac3d57de58"
+  "input_hash": "ea747e74d50cc418"
  },
  {
   "name": "delegate_status",
@@ -3895,6 +3955,66 @@
    "POST /api/ui/org/notion/oauth-complete"
   ],
   "input_hash": "1333f0dfc135b86a"
+ },
+ {
+  "name": "app_instance_list",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-instances"
+  ],
+  "input_hash": "b3c909be092af25e"
+ },
+ {
+  "name": "app_instance_open",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances"
+  ],
+  "input_hash": "d984e2cee148b08f"
+ },
+ {
+  "name": "app_instance_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-instances/:id"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
+ },
+ {
+  "name": "app_instance_update",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/update"
+  ],
+  "input_hash": "db60c134f163ed47"
+ },
+ {
+  "name": "app_instance_set_project",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/project"
+  ],
+  "input_hash": "031a2b509fdb98b3"
+ },
+ {
+  "name": "app_instance_close",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/close"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
  },
  {
   "name": "me_slack_channels",

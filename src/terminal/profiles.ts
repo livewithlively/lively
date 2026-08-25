@@ -264,9 +264,13 @@ async function memberFileExists(osUser: string, rel: string): Promise<boolean> {
 async function memberFileRemove(osUser: string, rel: string): Promise<void> {
   await memberSh(osUser, `rm -f "/home/${osUser}/${rel}"`);
 }
-// UI 로그인 배너 숨김 판정용(claude 전용 축약 — 기존 호출부 유지).
-async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
-  return memberFileExists(osUser, HARNESS_CRED.claude);
+// box_ 홈에 자격 파일이 있는 하네스들(#1884) — 종전 `memberClaudeLoggedIn` 은 claude 파일만 봐서, codex 로만 로그인한
+//  멤버는 memberOsStatus.loggedIn=false → 컨트롤플레인 T9 관문(자율 파이프라인 가동)이 영영 안 열렸다. 표(HARNESS_CRED)의
+//  하네스를 전부 본다(drop-priv 존재확인 n회 — 세션 생성 경로가 아니라 상태 조회라 비용은 무시할 만하다).
+async function memberLoggedInHarnesses(osUser: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const [key, rel] of Object.entries(HARNESS_CRED)) if (await memberFileExists(osUser, rel)) out.push(key);
+  return out;
 }
 // box_ 홈 dir 존재 — **OS 유저와 별개**로 본다. 홈 부모(/home)는 755 라 게이트웨이가 stat 할 수 있고
 //  (내용은 700 이라 여전히 못 읽는다), 이 한 비트가 아래 '고아 홈' 판정의 유일한 근거다.
@@ -277,13 +281,15 @@ async function memberHomeExists(osUser: string): Promise<boolean> {
 
 // OS 격리 상태(#524) — UI 표시용 + 컨트롤플레인의 '이 멤버가 로그인했나' 판정 입력.
 //  ready=인프라 준비(활성+Linux+box-spawn) · provisioned=이 멤버 box_<slug> 존재 · loggedIn=box_ 홈에
-//  claude 자격증명 있음(drop-priv 확인) · orphanHome=홈은 남았는데 OS 유저가 없음(아래).
+//  **어느 하네스든**(claude·codex·grok — HARNESS_CRED) 자격증명 있음(drop-priv 확인, #1884) · orphanHome=홈은 남았는데 OS 유저가 없음(아래).
 export interface MemberOsStatus {
   ready: boolean;
   provisioned: boolean;
   osUser: string;
   /** null = **알 수 없음**(orphanHome). false 는 '확실히 미로그인'일 때만 — aiAccountStatus 와 같은 교리. */
   loggedIn: boolean | null;
+  /** 자격 파일이 확인된 하네스 key 목록(#1884). loggedIn=true 면 ≥1개. 컨트롤플레인·화면이 "어느 AI 로 로그인됐나"를 말할 때 쓴다. */
+  loggedInHarnesses: string[];
   /** 홈(/home/box_<slug>)은 실재하는데 그 OS 유저가 없다 = passwd 초기화 드리프트. 아래 판정 주석 참조. */
   orphanHome: boolean;
 }
@@ -309,12 +315,13 @@ export async function memberOsStatus(memberId: string): Promise<MemberOsStatus> 
   const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
   const ready = isolationInfraReady();
   const provisioned = await osUserExists(osUser);
-  const credExists = provisioned ? await memberClaudeLoggedIn(osUser) : false;
+  const loggedInHarnesses = provisioned ? await memberLoggedInHarnesses(osUser) : [];
+  const credExists = loggedInHarnesses.length > 0;
   const homeExists = provisioned ? true : await memberHomeExists(osUser);
-  return { ready, provisioned, osUser, ...judgeMemberOs({ ready, provisioned, homeExists, credExists }) };
+  return { ready, provisioned, osUser, loggedInHarnesses, ...judgeMemberOs({ ready, provisioned, homeExists, credExists }) };
 }
 
-// ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
+// ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 계정] 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
 //  누구 계정으로 뜨나" 를 한 자리에서 보고 로그인/로그아웃한다. 자격증명이 **어디 사는지**(scope)가 셋으로 갈리고,
 //  로그아웃 가능 여부는 전적으로 거기서 결정된다:
 //   · isolated — 멤버 OS 계정(box_) 홈(#524). 게이트웨이는 700 홈을 못 읽으니 drop-priv 로 존재확인·삭제만 한다.
@@ -342,8 +349,9 @@ async function macClaudeKeychainHas(): Promise<boolean> {
     return true;
   } catch { return false; }
 }
-export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus[]> {
-  const osSt = await memberOsStatus(ownerId(user));
+//  osSt — 호출자가 방금 잰 OS 격리 상태를 넘기면 다시 재지 않는다(drop-priv 확인을 아낀다 — memberLoggedInHarnessesAny).
+export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): Promise<AiAccountStatus[]> {
+  osSt ??= await memberOsStatus(ownerId(user));
   const isolated = osSt.ready && osSt.provisioned;
   const darwin = process.platform === "darwin";
   const out: AiAccountStatus[] = [];
@@ -354,7 +362,7 @@ export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus
     let loggedIn: boolean | null;
     if (isolated) {
       scope = "isolated"; where = `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
-      loggedIn = await memberFileExists(osSt.osUser, rel);
+      loggedIn = osSt.loggedInHarnesses.includes(h.key);   // memberOsStatus 가 같은 표(HARNESS_CRED)로 이미 drop-priv 확인했다
     } else if (h.key === "claude" && darwin) {
       // 맥 = 키체인(OS 유저 단위) → 멤버별로 갈릴 수 없다. 공용으로 **정직하게** 표시한다.
       scope = "shared"; where = "이 서버 macOS 키체인(Claude Code-credentials)";
@@ -372,6 +380,17 @@ export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus
     out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared" });
   }
   return out;
+}
+
+// #1884 헤드리스 하네스 선택 입력 — 이 멤버가 **어느 하네스로든** 로그인돼 있나. 격리 홈(box_) drop-priv 확인과
+//  비격리 프로필/공유 경로 판정을 aiAccountStatus 한 번으로 합친다(격리면 그 안에서 memberOsStatus 결과를 재사용).
+//  loggedIn=null('모름' — 맥 키체인 접근 불가 등)은 넣지 않는다: 모르는 걸 로그인으로 치면 자격 없는 하네스로 잡이
+//  나가 무출력 hang 이 된다(#1101 부류). 못 찾으면 [] — 호출자(node/headless-harness)가 claude 기본으로 접는다.
+export async function memberLoggedInHarnessesAny(memberId: string): Promise<string[]> {
+  const user = { userId: memberId, email: "", scopes: [], projects: [] } as LivelyUser;
+  const osSt = await memberOsStatus(memberId);
+  const accts = await aiAccountStatus(user, osSt);
+  return [...new Set([...osSt.loggedInHarnesses, ...accts.filter((a) => a.loggedIn === true).map((a) => a.key)])];
 }
 
 // 로그아웃 = 자격증명 파일 삭제(재로그인으로 되돌릴 수 있다). **본인 것만** — 호출자(라우트)가 principal 을 넘긴다.

@@ -14,6 +14,7 @@ import { runClassifyKnowledgeInject, runClassifyKnowledgeHeadless } from "./acti
 import { runDistillInject, runDistillHeadless } from "./actions/distill.js";
 import { runAgentInject, runAgentHeadless } from "./actions/agent.js";
 import { runCanaryJob } from "./actions/canary.js"; // #1657 상류 회귀 탐지
+import { HEADLESS_KEYS } from "../node/headless-harness.js"; // #1884 헤드리스 하네스 선택지(표에서 파생)
 
 export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea" | "select" | "distiller" | "classifier" | "manager"; choices?: string[]; hint?: string }
 export interface CronActionDef { key: string; label: string; params: CronActionParam[]; run: CronActionRun }
@@ -35,11 +36,16 @@ export interface CronJob {
 // 실행 시그니처 — runJob(engine.ts)이 (job.params ?? {}, job) 를 넘긴다. 헤드리스판 어댑터가 job.id·created_by 를 뽑아 쓴다.
 export type CronActionRun = (params: Record<string, unknown>, job: CronJob) => Promise<{ status: string; summary: unknown }>;
 
+// 헤드리스 실행 하네스(#1884) — 비우면 자동: 의뢰자가 로그인한 하네스 ∩ 헤드리스 가능(둘 이상이면 claude 우선) → claude.
+//  종전엔 이 축이 없어 모든 헤드리스 잡이 claude 고정이었고, codex 로만 로그인한 매니지드 테넌트의 파이프라인이 통째로 죽었다.
+//  choices 는 tasks.ts HEADLESS 표(헤드리스 규약을 실측한 하네스)에서 파생 — 표에 없는 하네스는 여기 안 보인다.
+const HEADLESS_HARNESS_PARAM: CronActionParam = { name: "harness", label: "하네스", kind: "select", choices: ["", ...HEADLESS_KEYS], hint: "비우면 자동(의뢰자가 로그인한 하네스 기준 — 둘 이상이면 claude). 아래 모델·effort 는 claude 에만 적용된다." };
 // 헤드리스(claude -p) 실행 모델·추론강도 — claude 하네스 플래그(--model/--effort)와 동일 choices(terminal-sessions.ts HARNESSES).
 //  비우면 계정 기본 모델(관리세션의 sonnet/xhigh 같은 설정이 헤드리스엔 전달 안 돼 기본으로 떨어지던 #1101 갭을 메움).
-//  런타임 값은 tasks.ts FLAG_WHITELIST 가 한 번 더 화이트리스트 검증하므로 여기 choices 가 UI 가드, 그쪽이 실행 가드다.
-const HEADLESS_MODEL_PARAM: CronActionParam = { name: "model", label: "모델", kind: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], hint: "헤드리스 claude -p 실행 모델. 비우면 계정 기본. 분류·판단 무거운 배치는 sonnet+ 권장." };
-const HEADLESS_EFFORT_PARAM: CronActionParam = { name: "effort", label: "effort(추론 강도)", kind: "select", choices: ["", "low", "medium", "high", "xhigh", "max"], hint: "비우면 기본. 분류·부트스트랩 등 판단 무거운 배치는 high+ 권장." };
+//  런타임 값은 tasks.ts FLAG_WHITELIST 가 **그 하네스의 표**로 한 번 더 검증하므로 여기 choices 가 UI 가드, 그쪽이 실행 가드다
+//  (claude 별칭은 codex 표에 없어 codex 실행에선 자연히 탈락 — 그래서 'claude 에만 적용').
+const HEADLESS_MODEL_PARAM: CronActionParam = { name: "model", label: "모델 (claude)", kind: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], hint: "헤드리스 claude -p 실행 모델(claude 에만 적용). 비우면 계정 기본. 분류·판단 무거운 배치는 sonnet+ 권장." };
+const HEADLESS_EFFORT_PARAM: CronActionParam = { name: "effort", label: "effort(추론 강도, claude)", kind: "select", choices: ["", "low", "medium", "high", "xhigh", "max"], hint: "claude 에만 적용. 비우면 기본. 분류·부트스트랩 등 판단 무거운 배치는 high+ 권장." };
 export const CRON_ACTIONS: CronActionDef[] = [
   { key: "refresh_all", label: "전 repo is 신선화", params: [], run: runRefreshAll },
   { key: "refresh_repo", label: "한 repo is 신선화", params: [{ name: "repo", label: "repo", kind: "repo", hint: "context-ontology" }], run: runRefreshRepo },
@@ -54,7 +60,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "run_managers", label: "관리기 실행 (지식 유지보수 — 어긋남·아웃데이티드·모순·코드괴리)", params: [
     { name: "manager", label: "관리기 (선택)", kind: "manager", hint: "[맥락 관리 ▸ 관리기]에서 등록한 관리기. 비우면 **켜진 관리기 전부**를 순서대로 실행." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "모순·코드괴리 판정에만 필요(그 멤버의 AI 계정으로 실행·과금). 어긋남·아웃데이티드만 쓰면 비워도 된다." },
-    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
+    HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runManagers(p, job.id, job.created_by ?? null) },
   // #907 본문 [[위키링크]] → 지식 엣지 수렴. 저장 시 그 문서는 이미 수렴하니 이 잡의 값어치는 **시간이 푸는 것들**이다:
   //  붕 뜬 링크의 대상이 나중에 생기거나(그때 저장을 다시 하지 않는다), 대상이 지워졌다 되살아나거나, 저장 중
@@ -69,7 +75,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "repo", label: "repo", kind: "repo", hint: "분류 대상 레포(비우면 context-ontology). 지정 레포의 base clone→worktree 를 작업 cwd 로 자동 준비 → 코드를 Read/Grep 할 수 있다." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 분류 프롬프트. 인박스 비면 접수 안 함." },
-    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
+    HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runMapHeadless(p, job.id, job.created_by ?? null) },
   // #982 미분류 지식 분류 — map_unmapped 의 지식판. 카테고리 0건 지식(노션 미러 등)을 상시세션에 주입해 분류. 인박스 있을 때만 주입.
   { key: "classify_knowledge", label: "미분류 지식 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션(map_unmapped 와 공용 가능)." }], run: runClassifyKnowledgeInject },
@@ -78,7 +84,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "classifier", label: "분류기 (선택)", kind: "classifier", hint: "[맥락 관리 ▸ 분류기]에서 등록한 분류기. 비우면 **켜져 있는 분류기 전부**를 각각 접수(병렬). 분류기가 하나도 없으면 종전 전역 분류로 동작." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 분류 프롬프트(관성 대응 — 매 배치 should 재조회·근거 인용 강제 포함). 인박스 비면 접수 안 함." },
-    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
+    HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runClassifyKnowledgeHeadless(p, job.id, job.created_by ?? null) },
   // 최초 is 부트스트랩 — 결정론 사실(dm scan)을 파일로 뽑고 runbook-bootstrap-domains 를 세션에 주입(map_unmapped 동형). 유닛 0 인 신규 레포 콜드스타트용.
   { key: "bootstrap_is", label: "레포 is 최초 부트스트랩 (세션 주입)", params: [
@@ -100,7 +106,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "node", label: "실행 노드 (선택)", kind: "text", hint: "비우면 스케줄러가 램 여유가 큰 노드를 고른다(중앙 후순위). 'central' = 게이트웨이 박스에서, 또는 특정 노드 id. 그 노드가 꺼져 있으면 배치가 큐에 대기한다." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 증류기 설정값 → 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 증류기 설정으로 조립. 직접 쓰면 기준·형식만 갈린다 — 대상 자료 지정(스코프)은 서버가 앞에 붙여 유지한다." },
-    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
+    HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runDistillHeadless(p, job.id, job.created_by ?? null) },
   // 일반 에이전트 태스크 — (세션=환경·맥락·계정) × (프롬프트=작업)으로 잡마다 임의 작업. recurring 에이전트 잡을 코드 없이 데이터로.
   { key: "agent_inject", label: "에이전트 태스크 (상시 세션에 프롬프트 주입)", params: [
@@ -114,7 +120,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "prompt", label: "프롬프트 (작업 지시)", kind: "textarea", hint: "매 실행 새 헤드리스 세션(빈 컨텍스트)에서 lively MCP 로 수행. 상시세션 주입과 달리 관성이 없어 매번 최신 SoT 를 다시 읽는다(개행 허용 — 파일로 전달)." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "이 헤드리스 실행의 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)로 실행." },
     { name: "repo", label: "레포 (선택)", kind: "repo", hint: "지정하면 공유 base clone→worktree 를 자동 준비해 작업 cwd 로 삼는다(프롬프트에 클론 지시 불필요). 비우면 빈 워크스페이스." },
-    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
+    HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runAgentHeadless(p, job.id, job.created_by ?? null) },
   { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [], run: runEnsureManagedSessions },
   // #1036 프리뷰 환경 — 유휴 TTL 회수 + auto 트리거 stage 재-merge(작업 브랜치 갱신 반영). 정지된 건 안 켬(온디맨드).

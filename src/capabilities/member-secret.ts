@@ -9,6 +9,7 @@ import {
   GATEWAY_OWNER, memberOwner, listMemberSecretsPublic, listSecretsByKindPublic,
   setMemberSecret, deleteMemberSecret,
 } from "../org/credentials/member-secret-store.js";
+import { lastAuthFailureFor } from "../node/auth-failure-response.js"; // #1675 ③ 자격 건강 상태
 
 // 알려진 kind — 표면 문서/검증용(스토어는 형식만 검증하므로 신규 커넥터가 kind 를 늘려도 되지만, 오타 방지 힌트).
 const KNOWN_KINDS = [
@@ -46,7 +47,14 @@ const meCredentials: Capability = {
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/me/credentials"], parse: () => ({}) }] },
   handler: async (_input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
-    return { credentials: await listMemberSecretsPublic(memberOwner(user.userId)), encryption_ready: secretsEnabled() };
+    // #1675 ③ — 헤드리스 자격이 **지금 살아 있나**. last_used_at 만으로는 성공/실패가 구분되지 않아,
+    //  토큰이 폐기돼도 화면은 멀쩡해 보였다(사고 때 사람이 그걸 알 방법이 알림 하나뿐이었다).
+    const authFailure = await lastAuthFailureFor(user.userId).catch(() => null);
+    return {
+      credentials: await listMemberSecretsPublic(memberOwner(user.userId)),
+      encryption_ready: secretsEnabled(),
+      headless_auth_failure: authFailure,
+    };
   },
 };
 const meCredentialSet: Capability = {
