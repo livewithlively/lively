@@ -1,7 +1,7 @@
 // 로드된 앱 패키지 1건을 설치/업데이트한다 — 저널드 2-phase(runInstall) + update-diff(빠진 component 회수).
 //  builtin 시더(seed.ts)와 설치 verb(delivery/apps.ts org_app_install)의 **공용 코어** — 두 경로가 같은
 //  설치 시맨틱을 쓰도록 한 곳에 둔다(선례: seed 가 인라인하던 diff/runInstall 블록을 여기로 승격).
-import { getApp, listComponents, upsertUiAsset, pruneUiAssets } from "../org/store/apps.js";
+import { getApp, listComponents, upsertUiAsset, pruneUiAssets, upsertRuntimeAsset, pruneRuntimeAssets } from "../org/store/apps.js";
 import type { LoadedApp } from "./loader.js";
 import { ensureAppTables } from "./store-schema.js";
 import { logger } from "../log.js";
@@ -39,6 +39,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // UI entry HTML 보존(PR5) — 설치가 active 로 저널된 뒤. best-effort: 실패해도 앱(하네스·principal)은 유효하고
   //  다음 설치/시드가 재보존한다. seed 의 skip 경로도 같은 헬퍼로 백필한다(마이그레이션 — 기존 설치 앱).
   await persistUiAssets(loaded);
+  await persistRuntimeAsset(loaded);
 
   // 앱 데이터 테이블(app 스키마, D6) — 선언 테이블을 소유자 커넥션으로 생성(tenant_id+RLS 한 몸). best-effort per-table.
   try { await ensureAppTables(id, loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns }))); }
@@ -63,5 +64,20 @@ export async function persistUiAssets(loaded: LoadedApp): Promise<void> {
     await pruneUiAssets(id, loaded.uiAssets.map((u) => u.page_key));
   } catch (err) {
     logger.warn({ err, id }, "앱 UI 자산 보존 실패(비치명 — 다음 설치/부팅이 재보존)");
+  }
+}
+
+/** worker bundle 보존/백필. install의 runtime_worker deploy와 중복이어도 멱등이며, builtin skip 마이그레이션 경로가 쓴다. */
+export async function persistRuntimeAsset(loaded: LoadedApp): Promise<void> {
+  const id = loaded.manifest.id;
+  try {
+    if (loaded.runtimeAsset) {
+      await upsertRuntimeAsset(id, { ...loaded.runtimeAsset, package_hash: loaded.contentHash });
+      await pruneRuntimeAssets(id, loaded.contentHash);
+    } else {
+      await pruneRuntimeAssets(id, null);
+    }
+  } catch (err) {
+    logger.warn({ err, id }, "앱 worker 번들 보존 실패(비치명 — 다음 설치/부팅이 재보존)");
   }
 }

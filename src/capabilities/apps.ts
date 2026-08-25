@@ -14,6 +14,7 @@ import { installLoadedApp } from "../apps/install-run.js";
 import { makeDeployDeps } from "../apps/deploy.js";
 import { dropAppTables } from "../apps/store-schema.js";
 import { pruneAppInstances } from "../org/store/app-instances.js";
+import { stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
 const wctx = (u: { userId?: string; email?: string } | undefined, ctx?: { source?: string }) => ({ actor: actorOf(u), source: ctx?.source ?? "web" });
@@ -58,11 +59,11 @@ const appGet: Capability = {
 };
 
 // ── 앱 활성/비활성 토글(관리자) ──
-//  ⚠ 비파괴 토글 — 새 스폰만 막고, 도는 세션·물질화된 자산·살아있는 토큰엔 안 닿는다(design R2-6). 즉시 중단은 별도.
+//  비파괴 토글 — 세션·물질화 자산·토큰은 보존하되, 별도 worker는 새 실행을 막고 현재 run도 정지한다.
 const appSetEnabled: Capability = {
   name: "org_app_set_enabled",
   title: "앱 활성/비활성",
-  description: "앱을 켜거나 끈다(비파괴). 끄면 새 앱 세션 스폰만 막힌다 — 이미 도는 세션·설치된 구성요소는 그대로(즉시 중단 아님).",
+  description: "앱을 켜거나 끈다(비파괴). 끄면 새 실행을 막고 현재 worker run은 정지한다. AI 세션·설치 자산은 보존한다.",
   scope: "admin",
   input: { app_id: z.string(), enabled: z.boolean() },
   expose: {
@@ -74,6 +75,7 @@ const appSetEnabled: Capability = {
     const id = appId(input.app_id);
     if (!(await store.getApp(id))) throw new HttpError(404, `앱 없음: ${id}`);
     await store.setAppEnabled(id, !!input.enabled, wctx(user, ctx));
+    if (!input.enabled) await stopWorkersForApp(id, "app_disabled");
     return { ok: true, app_id: id, enabled: !!input.enabled };
   },
 };
@@ -121,7 +123,9 @@ const appRevoke: Capability = {
   },
   handler: async (input: Record<string, unknown>, user) => {
     const id = appId(input.app_id);
-    await store.revokeGrant(id, actorOf(user));
+    const owner = actorOf(user);
+    await store.revokeGrant(id, owner);
+    await stopWorkersForMemberApp(owner, id, "grant_revoked");
     return { ok: true, app_id: id };
   },
 };
@@ -174,6 +178,7 @@ const appRemove: Capability = {
       if (!app) throw new HttpError(404, `앱 없음: ${id}`);
       const src = (app.source ?? {}) as { kind?: string };
       if (src.kind === "builtin") throw new HttpError(409, `builtin 앱 '${id}' 은 제거 대신 org_app_set_enabled 로 끄세요(부팅 시 재시드됩니다)`);
+      await stopWorkersForApp(id, "app_removed");
       const deps = makeDeployDeps(id, wctx(user, ctx));
       const comps = await store.listComponents(id);
       for (const c of comps) {

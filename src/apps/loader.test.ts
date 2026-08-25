@@ -77,6 +77,12 @@ test("runtime worker entry 는 설치할 단일 ESM 번들로 실제 존재해�
   });
   const loaded = await loadAppPackage(ok);
   assert.equal(loaded.manifest.runtime?.entry, "dist/worker.mjs");
+  assert.equal(loaded.runtimeAsset?.entry, "dist/worker.mjs");
+  assert.equal(loaded.runtimeAsset?.code.toString("utf8"), "export default {};");
+  assert.match(loaded.runtimeAsset?.code_hash ?? "", /^[0-9a-f]{64}$/);
+  const runtime = loaded.items.find((i) => i.comp.kind === "runtime_worker");
+  assert.equal(runtime?.comp.ref, "dist/worker.mjs");
+  assert.equal((runtime?.payload as { package_hash?: string }).package_hash, loaded.contentHash);
   await rm(ok, { recursive: true });
 
   const missing = await stage({ "lively-app.json": MANIFEST({ runtime: { entry: "dist/missing.mjs" } }) });

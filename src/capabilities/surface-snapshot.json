@@ -3945,7 +3945,7 @@
   "rest": [
    "POST /api/ui/app-instances"
   ],
-  "input_hash": "fc111730181835f5"
+  "input_hash": "d984e2cee148b08f"
  },
  {
   "name": "app_instance_get",

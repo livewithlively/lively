@@ -1,0 +1,177 @@
+// 게이트웨이의 worker 정책/배치 계층(#1780 Stage B). 중앙·원격 모두 worker-host.ts의 같은 실행 계약을 쓴다.
+import type { LivelyAppManifest } from "./manifest.js";
+import { WorkerHost, WORKER_RPC_CHUNK_BYTES, type WorkerRunSnapshot, type WorkerStopReason } from "./worker-host.js";
+import type { OrgApp } from "../org/store/apps.js";
+import { getApp, getRuntimeAsset } from "../org/store/apps.js";
+import type { AppInstanceRow } from "../org/store/app-instances.js";
+import * as runs from "../org/store/app-worker-runs.js";
+import { nodeOnline, nodeRpc, nodeSupports } from "../node/registry.js";
+import { getRuntimeConfig } from "../org/store/runtime-config.js";
+import { getOrgProfile } from "../org/store/profile.js";
+
+const gatewayWorkerHost = new WorkerHost({ onSnapshot: (snapshot) => runs.applyWorkerSnapshot(snapshot) });
+
+export interface WorkerPlacement { kind: "central" | "remote"; nodeId: string | null }
+
+export function resolveWorkerPlacement(manifest: LivelyAppManifest, requested?: { kind: "central" | "remote"; node_id?: string } | null): WorkerPlacement | null {
+  const runtime = manifest.runtime;
+  if (!runtime) {
+    if (requested) throw new Error("worker-placement-without-runtime");
+    return null;
+  }
+  const kind = requested?.kind ?? (runtime.placement === "remote" ? "remote" : "central");
+  if (runtime.placement === "central" && kind !== "central") throw new Error("worker-placement-central-only");
+  if (runtime.placement === "remote" && kind !== "remote") throw new Error("worker-placement-remote-only");
+  const nodeId = kind === "remote" ? String(requested?.node_id ?? "").trim() : null;
+  if (kind === "remote" && !nodeId) throw new Error("worker-remote-node-required");
+  if (kind === "central" && requested?.node_id) throw new Error("worker-central-node-forbidden");
+  return { kind, nodeId };
+}
+
+function startEnvelope(runId: string, app: OrgApp, manifest: LivelyAppManifest, instance: AppInstanceRow,
+  asset: NonNullable<Awaited<ReturnType<typeof getRuntimeAsset>>>, allowedHosts: string[], selfHosts: string[]): Record<string, unknown> {
+  const runtime = manifest.runtime!;
+  return {
+    runId, appId: app.id, instanceId: instance.id, entry: asset.entry,
+    codeHash: asset.code_hash, memoryMb: runtime.memory_mb, idleTimeoutSec: runtime.idle_timeout_sec, allowedHosts, selfHosts,
+  };
+}
+
+async function stageRemoteBundle(nodeId: string, runId: string, codeHash: string, code: Buffer): Promise<void> {
+  const total = Math.ceil(code.length / WORKER_RPC_CHUNK_BYTES);
+  for (let index = 0; index < total; index++) {
+    const chunk = code.subarray(index * WORKER_RPC_CHUNK_BYTES, (index + 1) * WORKER_RPC_CHUNK_BYTES);
+    await nodeRpc(nodeId, "stageWorkerChunk", { runId, codeHash, index, total, chunkBase64: chunk.toString("base64") });
+  }
+}
+
+const starts = new Map<string, Promise<runs.AppWorkerRunRow | null>>();
+
+async function startWorkerForInstanceCore(app: OrgApp, manifest: LivelyAppManifest, instance: AppInstanceRow): Promise<runs.AppWorkerRunRow | null> {
+  if (!manifest.runtime) return null;
+  const currentApp = await getApp(app.id);
+  if (!currentApp || !currentApp.enabled || currentApp.status !== "active" || currentApp.content_hash !== app.content_hash) {
+    throw new Error("worker-app-no-longer-active");
+  }
+  if (!app.content_hash) throw new Error("worker-package-hash-missing");
+  const asset = await getRuntimeAsset(app.id, app.content_hash);
+  if (!asset) throw new Error("worker-runtime-asset-missing");
+  const kind = instance.execution_host_kind;
+  const nodeId = instance.execution_host_id;
+  if (kind !== "central" && kind !== "remote") throw new Error("worker-placement-missing");
+  if (kind === "remote" && (!nodeId || !nodeOnline(nodeId) || !nodeSupports(nodeId, "startWorker") || !nodeSupports(nodeId, "stageWorkerChunk"))) {
+    throw new Error(!nodeId || !nodeOnline(nodeId) ? "worker-node-offline" : "worker-node-unsupported");
+  }
+  const existing = await runs.activeWorkerRun(instance.id);
+  if (existing) {
+    const samePlacement = existing.host_kind === kind && existing.host_id === nodeId && existing.package_hash === app.content_hash;
+    if (samePlacement) {
+      const observed = await workerRunForInstance(instance.id);
+      if (observed) return observed;
+    } else {
+      await stopWorkerForInstance(instance.id, existing.package_hash === app.content_hash ? "placement_changed" : "package_updated");
+    }
+  }
+  const run = await runs.prepareWorkerRun({ instanceId: instance.id, appId: app.id, owner: instance.owner_member,
+    projectId: instance.project_id, hostKind: kind, hostId: nodeId, packageHash: app.content_hash });
+  try {
+    let snapshot: WorkerRunSnapshot;
+    const orgHosts = new Set((await getRuntimeConfig()).url_allowlist.map((h) => h.toLowerCase()));
+    const allowedHosts = manifest.permissions.hosts.map((h) => h.toLowerCase()).filter((h) => orgHosts.has(h));
+    const selfHosts: string[] = [];
+    try { const url = (await getOrgProfile()).gateway_url; if (url) selfHosts.push(new URL(url).hostname.toLowerCase()); } catch { /* 프로필 없음 */ }
+    const envelope = startEnvelope(run.id, app, manifest, instance, asset, allowedHosts, selfHosts);
+    if (kind === "central") {
+      snapshot = await gatewayWorkerHost.start({
+        runId: String(envelope.runId), appId: String(envelope.appId), instanceId: String(envelope.instanceId), entry: String(envelope.entry),
+        code: asset.code, codeHash: String(envelope.codeHash),
+        memoryMb: Number(envelope.memoryMb), idleTimeoutSec: Number(envelope.idleTimeoutSec),
+        allowedHosts,
+        selfHosts,
+      });
+      // onSnapshot은 순서 보장 비동기 관측이다. 응답 전에 ready 상태를 한 번 확정해 prepared 노출을 막는다.
+      await runs.applyWorkerSnapshot(snapshot);
+    } else {
+      await stageRemoteBundle(nodeId!, run.id, asset.code_hash, asset.code);
+      snapshot = await nodeRpc<WorkerRunSnapshot>(nodeId!, "startWorker", envelope);
+      await runs.applyWorkerSnapshot(snapshot);
+    }
+    return (await runs.activeWorkerRun(instance.id)) ?? { ...run, status: snapshot.status };
+  } catch (error) {
+    await runs.failPreparedWorkerRun(run.id, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+}
+
+export async function startWorkerForInstance(app: OrgApp, manifest: LivelyAppManifest, instance: AppInstanceRow): Promise<runs.AppWorkerRunRow | null> {
+  const current = starts.get(instance.id);
+  if (current) return current;
+  const task = startWorkerForInstanceCore(app, manifest, instance);
+  starts.set(instance.id, task);
+  try { return await task; }
+  finally { if (starts.get(instance.id) === task) starts.delete(instance.id); }
+}
+
+/** 조회 시 원격 호스트의 실제 상태를 한 번 접어, 게이트웨이 재시작/idle 종료 뒤 stale active를 숨기지 않는다. */
+export async function workerRunForInstance(instanceId: string): Promise<runs.AppWorkerRunRow | null> {
+  const run = await runs.activeWorkerRun(instanceId);
+  if (!run) return null;
+  let snapshot: WorkerRunSnapshot | null = null;
+  try {
+    snapshot = run.host_kind === "central"
+      ? gatewayWorkerHost.status(run.id)
+      : (run.host_id && nodeOnline(run.host_id) && nodeSupports(run.host_id, "workerStatus"))
+        ? await nodeRpc<WorkerRunSnapshot | null>(run.host_id, "workerStatus", { runId: run.id }) : null;
+  } catch { return run; }
+  if (!snapshot) {
+    await runs.failActiveWorkerRun(run.id, "worker-host-lost-run");
+    return null;
+  }
+  await runs.applyWorkerSnapshot(snapshot);
+  return await runs.activeWorkerRun(instanceId);
+}
+
+export async function stopWorkerForInstance(instanceId: string, reason: WorkerStopReason = "explicit"): Promise<void> {
+  const run = await runs.activeWorkerRun(instanceId);
+  if (!run) return;
+  if (run.host_kind === "central") {
+    const snapshot = await gatewayWorkerHost.stop(run.id, reason);
+    if (snapshot) await runs.applyWorkerSnapshot(snapshot);
+    else await runs.failActiveWorkerRun(run.id, "worker-host-lost-run");
+    return;
+  }
+  if (!run.host_id) { await runs.failActiveWorkerRun(run.id, "worker-host-missing"); return; }
+  try {
+    const snapshot = await nodeRpc<WorkerRunSnapshot | null>(run.host_id, "stopWorker", { runId: run.id, reason });
+    if (snapshot) await runs.applyWorkerSnapshot(snapshot);
+    else await runs.failActiveWorkerRun(run.id, "worker-host-lost-run");
+  } catch (error) {
+    await runs.failActiveWorkerRun(run.id, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+}
+
+export async function stopWorkersForApp(appId: string, reason: WorkerStopReason): Promise<void> {
+  const failed: string[] = [];
+  for (const run of await runs.listActiveWorkerRuns({ appId })) {
+    await stopWorkerForInstance(run.instance_id, reason).catch(() => { failed.push(run.id); });
+  }
+  if (failed.length) throw new Error(`worker-stop-failed:${failed.length}`);
+}
+
+export async function stopWorkersForMemberApp(owner: string, appId: string, reason: WorkerStopReason): Promise<number> {
+  const active = await runs.listActiveWorkerRuns({ appId, owner });
+  const failed: string[] = [];
+  for (const run of active) await stopWorkerForInstance(run.instance_id, reason).catch(() => { failed.push(run.id); });
+  if (failed.length) throw new Error(`worker-stop-failed:${failed.length}`);
+  return active.length;
+}
+
+export async function stopWorkersForMember(owner: string, reason: WorkerStopReason): Promise<number> {
+  const active = await runs.listActiveWorkerRuns({ owner });
+  let stopped = 0;
+  for (const run of active) await stopWorkerForInstance(run.instance_id, reason).then(() => { stopped++; }).catch(() => { /* 멤버의 나머지 세션·grant 회수는 계속 */ });
+  return stopped;
+}
+
+export async function shutdownGatewayWorkers(): Promise<void> { await gatewayWorkerHost.shutdown(); }

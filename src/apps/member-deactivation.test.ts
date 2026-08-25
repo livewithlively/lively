@@ -4,13 +4,14 @@ import test from "node:test";
 import { reclaimMemberAppFootprint, type ReclaimDeps, type ReclaimSessionRow } from "./member-deactivation.js";
 
 function fakes(rows: ReclaimSessionRow[], opts?: { failCentral?: string[] }) {
-  const calls = { revoke: [] as string[], central: [] as string[], node: [] as string[], deleted: [] as string[], list: [] as string[] };
+  const calls = { revoke: [] as string[], workers: [] as string[], central: [] as string[], node: [] as string[], deleted: [] as string[], list: [] as string[] };
   const deps: ReclaimDeps = {
     revokeGrants: async (m) => { calls.revoke.push(m); return 2; },
     listSessions: async (o) => { calls.list.push(o); return rows; },
     killCentral: async (id) => { if (opts?.failCentral?.includes(id)) throw new Error("tmux 죽음"); calls.central.push(id); },
     killNode: async (n, id) => { calls.node.push(`${n}:${id}`); },
     deleteState: async (id) => { calls.deleted.push(id); },
+    stopWorkers: async (m) => { calls.workers.push(m); return 1; },
   };
   return { deps, calls };
 }
@@ -23,12 +24,13 @@ test("앱 세션만 회수하고 일반 세션은 건드리지 않는다 · gran
   ]);
   const r = await reclaimMemberAppFootprint("jieun", deps);
   assert.deepEqual(calls.revoke, ["jieun"], "grant 회수는 멤버 단위 1회");
+  assert.deepEqual(calls.workers, ["jieun"], "별도 worker도 멤버 단위로 회수");
   assert.deepEqual(calls.list, ["jieun"], "세션 목록은 owner=멤버 로 조회");
   assert.deepEqual(calls.central, ["s-app"], "중앙 앱 세션만 중앙 kill");
   assert.deepEqual(calls.node, ["mac-1:s-app-node"], "노드 앱 세션은 그 노드로 kill");
   assert.deepEqual(calls.deleted.sort(), ["s-app", "s-app-node"], "회수한 앱 세션의 상태행 삭제(복원 카드 없음)");
   assert.ok(!calls.deleted.includes("s-plain") && !calls.central.includes("s-plain"), "일반 세션은 무변경");
-  assert.deepEqual(r, { grants: 2, sessions: ["s-app", "s-app-node"], failed: [] });
+  assert.deepEqual(r, { grants: 2, workers: 1, sessions: ["s-app", "s-app-node"], failed: [] });
 });
 
 test("한 세션의 kill 실패는 나머지 회수를 막지 않는다(failed 에 격리)", async () => {

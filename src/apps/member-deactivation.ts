@@ -20,13 +20,15 @@ export interface ReclaimDeps {
   killCentral(id: string): Promise<void>;
   killNode(nodeId: string, id: string, owner: string): Promise<void>;
   deleteState(id: string): Promise<void>;
+  stopWorkers(memberId: string): Promise<number>;
 }
 
-export interface ReclaimResult { grants: number; sessions: string[]; failed: string[] }
+export interface ReclaimResult { grants: number; workers: number; sessions: string[]; failed: string[] }
 
 /** 순수 오케스트레이션 — 한 세션의 회수 실패가 나머지를 막지 않는다(failed 에 모아 돌려준다). */
 export async function reclaimMemberAppFootprint(memberId: string, deps: ReclaimDeps): Promise<ReclaimResult> {
   const grants = await deps.revokeGrants(memberId);
+  const workers = await deps.stopWorkers(memberId);
   const rows = await deps.listSessions(memberId);
   const sessions: string[] = [];
   const failed: string[] = [];
@@ -42,7 +44,7 @@ export async function reclaimMemberAppFootprint(memberId: string, deps: ReclaimD
       logger.warn({ err, member: memberId, session: s.id, node: s.node_id ?? null }, "member deactivation: app session reclaim failed");
     }
   }
-  return { grants, sessions, failed };
+  return { grants, workers, sessions, failed };
 }
 
 export function defaultReclaimDeps(): ReclaimDeps {
@@ -58,6 +60,10 @@ export function defaultReclaimDeps(): ReclaimDeps {
       await nodeRpc(nodeId, "kill", { user: { userId: owner }, id });
     },
     deleteState: deleteSessionState,
+    stopWorkers: async (memberId) => {
+      const { stopWorkersForMember } = await import("./worker-service.js");
+      return stopWorkersForMember(memberId, "member_deactivated");
+    },
   };
 }
 
@@ -65,7 +71,7 @@ export function defaultReclaimDeps(): ReclaimDeps {
 export function armMemberDeactivationHook(deps: ReclaimDeps = defaultReclaimDeps()): void {
   onMemberDeactivated(async (memberId, reason, actor) => {
     const r = await reclaimMemberAppFootprint(memberId, deps);
-    if (r.grants || r.sessions.length || r.failed.length) {
+    if (r.grants || r.workers || r.sessions.length || r.failed.length) {
       logger.info({ member: memberId, reason, actor, ...r }, "member deactivated — app grants revoked, app sessions reclaimed");
     }
   });

@@ -35,6 +35,7 @@ import { registerMcpTransport } from "./boot/mcp-transport.js";
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
 import { loadEnterprise } from "./enterprise/load.js";
 import { logger } from "./log.js";
+import { shutdownGatewayWorkers } from "./apps/worker-service.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 // 바인드 주소(#250) — 기본은 종전과 동일한 전 인터페이스(회귀 없음). SG 같은 방화벽 계층이 없는 호스트
@@ -45,11 +46,21 @@ const BIND_HOST = process.env.BIND_HOST || "0.0.0.0";
 //  unhandledRejection: 미처리 promise 거부로 프로세스가 통째로 죽지 않게 — 로그만 남기고 계속(요청 1건 실패 ≠ 전체 다운).
 //  uncaughtException: 상태가 오염됐을 수 있으니 로그 후 종료 → launchd 가 즉시 새 프로세스로 재기동(깨끗한 상태).
 process.on("unhandledRejection", (reason) => logger.error({ reason }, "unhandledRejection — 무시하고 계속"));
-process.on("uncaughtException", (err) => { logger.error({ err }, "uncaughtException — 종료 후 재기동"); try { killAttachedPtys(); } catch { /* noop */ } process.exit(1); });
+process.on("uncaughtException", (err) => {
+  logger.error({ err }, "uncaughtException — 종료 후 재기동");
+  try { killAttachedPtys(); } catch { /* noop */ }
+  void shutdownGatewayWorkers().finally(() => process.exit(1));
+  setTimeout(() => process.exit(1), 1_500).unref();
+});
 // 정상 종료(재배포 SIGTERM·Ctrl+C SIGINT) 시 attach node-pty 를 전부 kill 하고 나간다(#687). 안 하면 자식이 init 로
 //  재부모화돼 PTY 를 영구 점유(고아). 재시작이 잦은 게이트웨이라 이게 없으면 매 배포가 PTY 를 흘린다.
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
-  process.once(sig, () => { logger.info({ sig }, "shutdown — attach PTY 정리 후 종료"); try { killAttachedPtys(); } catch { /* noop */ } process.exit(0); });
+  process.once(sig, () => {
+    logger.info({ sig }, "shutdown — attach PTY·앱 worker 정리 후 종료");
+    try { killAttachedPtys(); } catch { /* noop */ }
+    void shutdownGatewayWorkers().finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1_500).unref();
+  });
 }
 
 // Enterprise(src/ee) 적재 — **툴 표면을 굳히기 전에** 끝나야 한다(EE capability 가 registry 에 합류할 기회).

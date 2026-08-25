@@ -12,6 +12,10 @@ import { parseAppManifest, type LivelyAppManifest } from "../apps/manifest.js";
 import { normalizeInstanceProject, normalizeInstanceState } from "../apps/instance-policy.js";
 import * as apps from "../org/store/apps.js";
 import * as instances from "../org/store/app-instances.js";
+import { resolveWorkerPlacement, startWorkerForInstance, stopWorkerForInstance, workerRunForInstance } from "../apps/worker-service.js";
+import { nodeOnline, nodeSupports } from "../node/registry.js";
+import { getNode } from "../node/store.js";
+import { nodeOpenTo } from "../node/node-access.js";
 
 const INSTANCE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SUBJECT_RE = /^[A-Za-z0-9._:-]{1,160}$/;
@@ -78,13 +82,24 @@ function publicAppMeta(app: apps.OrgApp, manifest: LivelyAppManifest): Record<st
     source: { kind: builtin ? "builtin" : "installed" },
     instances: manifest.instances,
     system: builtin ? (manifest.system ?? null) : null,
+    runtime: manifest.runtime ? { kind: "worker", placement: manifest.runtime.placement,
+      idle_timeout_sec: manifest.runtime.idle_timeout_sec, memory_mb: manifest.runtime.memory_mb } : null,
     ui: { pages: manifest.ui.pages.map((p) => ({ key: p.key, title: p.title, display: p.display })) },
   };
 }
 
 async function decorate(instance: instances.AppInstanceRow): Promise<Record<string, unknown>> {
   const { app, manifest } = await activeApp(instance.app_id);
-  return { ...instance, app: publicAppMeta(app, manifest) };
+  return { ...instance, app: publicAppMeta(app, manifest), worker: await workerRunForInstance(instance.id) };
+}
+
+function requestedExecution(value: unknown): { kind: "central" | "remote"; node_id?: string } | null {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "execution 은 객체여야 합니다");
+  const x = value as Record<string, unknown>;
+  if (x.kind !== "central" && x.kind !== "remote") throw new HttpError(400, "execution.kind 는 central 또는 remote 여야 합니다");
+  const nodeId = x.node_id == null ? undefined : String(x.node_id).trim();
+  return { kind: x.kind, ...(nodeId ? { node_id: nodeId } : {}) };
 }
 
 const listInput = {
@@ -130,6 +145,7 @@ const createInput = {
   page_key: z.string().optional(),
   title: z.string().optional(),
   state: z.record(z.unknown()).optional(),
+  execution: z.object({ kind: z.enum(["central", "remote"]), node_id: z.string().optional() }).optional(),
 };
 const appInstanceOpen: Capability = {
   name: "app_instance_open",
@@ -141,6 +157,18 @@ const appInstanceOpen: Capability = {
   handler: async (input: z.infer<z.ZodObject<typeof createInput>>, user: LivelyUser, ctx?: CapabilityCtx) => {
     const { app, manifest } = await activeApp(input.app_id);
     let projectId = normalizeInstanceProject(manifest, input.project_id);
+    const requested = requestedExecution(input.execution);
+    let placement: ReturnType<typeof resolveWorkerPlacement>;
+    try { placement = resolveWorkerPlacement(manifest, requested); }
+    catch (error) { throw new HttpError(400, error instanceof Error ? error.message : "worker placement 오류"); }
+    if (placement?.kind === "remote") {
+      const node = await getNode(placement.nodeId!);
+      if (!node || !node.enabled) throw new HttpError(409, "선택한 원격 노드가 비활성 상태입니다");
+      if (!nodeOpenTo(node, actorOf(user))) throw new HttpError(403, "본인 노드 또는 관리자가 공유한 노드에서만 앱을 실행할 수 있습니다");
+      if (!nodeOnline(placement.nodeId!) || !nodeSupports(placement.nodeId!, "startWorker") || !nodeSupports(placement.nodeId!, "stageWorkerChunk")) {
+        throw new HttpError(409, !nodeOnline(placement.nodeId!) ? "선택한 원격 노드가 오프라인입니다" : "원격 노드가 worker 실행을 지원하지 않습니다");
+      }
+    }
 
     let subjectKind: string | null = input.subject_kind ?? null;
     let subjectRef = input.subject_ref ? String(input.subject_ref).trim() : null;
@@ -168,7 +196,16 @@ const appInstanceOpen: Capability = {
       pageKey: optionalText(input.page_key, 64),
       title: optionalText(input.title, 200),
       state: normalizeInstanceState(input.state),
+      executionHostKind: placement?.kind ?? null,
+      executionHostId: placement?.nodeId ?? null,
+      // subject 기반 재-open에서 위치를 생략했다면 기존 위치를 유지한다. 새 인스턴스 INSERT에는 위 기본 위치가 들어간다.
+      preserveExecutionOnConflict: requested === null,
     });
+    try { await startWorkerForInstance(app, manifest, result.instance); }
+    catch (error) {
+      await instances.closeAppInstance(result.instance.id, actorOf(user)).catch(() => { /* 실패 인스턴스 고아 방지 best-effort */ });
+      throw new HttpError(503, `worker 시작 실패: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return { instance: await decorate(result.instance), created: result.created };
   },
 };
@@ -253,6 +290,10 @@ const appInstanceClose: Capability = {
   expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/app-instances/:id/close"], parse: (req) => ({ instance_id: (req.params as Record<string, string>)?.id }) }] },
   handler: async (input: z.infer<z.ZodObject<typeof closeInput>>, user: LivelyUser) => {
     const id = instanceId(input.instance_id);
+    const before = await instances.getAppInstance(id, actorOf(user));
+    if (!before) throw new HttpError(404, "앱 인스턴스가 없습니다");
+    try { await stopWorkerForInstance(id, "instance_closed"); }
+    catch (error) { throw new HttpError(503, `worker 종료 실패: ${error instanceof Error ? error.message : String(error)}`); }
     if (!(await instances.closeAppInstance(id, actorOf(user)))) throw new HttpError(404, "앱 인스턴스가 없습니다");
     return { ok: true, instance_id: id };
   },
