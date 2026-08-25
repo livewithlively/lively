@@ -75,7 +75,10 @@ function adoptable(all: CollectorView[], allowLegacy: boolean): CollectorView | 
     const legacy = free.find((c) => c.instance_key === LEGACY_INSTANCE_KEY);
     if (legacy) return legacy;
   }
-  return free.find((c) => c.instance_key !== LEGACY_INSTANCE_KEY && !c.secretsSet?.token && !c.last_run && !c.config?.token_source) ?? null;
+  return free.find((c) => c.instance_key !== LEGACY_INSTANCE_KEY
+    && !c.secretsSet?.token && !c.last_run && !c.config?.token_source
+    // 스탬프(instance)를 일부러 지정해 둔 칸은 건드리지 않는다 — 그 밑에 curated 자료가 있다는 뜻이다.
+    && !(c.config?.instance ?? "")) ?? null;
 }
 
 export interface NotionWorkspaceState extends NotionWorkspaceRow {
@@ -131,6 +134,13 @@ async function bindWorkspace(w: NotionWorkspaceRow, actor: string, source: strin
   // 토글 경로로 **처음 들어오는** 수집기면 안내문을 바꿔 준다 — CP 가 심어 둔 껍데기의 안내문은
   //  "노션 통합 토큰을 넣고 활성화하세요"라, 접수한 뒤에도 그대로 두면 없는 절차를 시키는 글이 남는다.
   const enteringToggle = !existing?.config?.token_source;
+  // ★ 스탬프(external_instance) 규칙 — 이 PR 의 사고 방지 지점이다.
+  //  · 신규 수집기 · 빈 껍데기 접수  → workspace_id 로 **못 박는다**. 안 박으면 둘 다 'default' 축을 써서
+  //    두 워크스페이스가 서로를 아카이브한다(이 변경이 없애려던 바로 그 사고).
+  //  · 옛 단일 인스턴스(lively-notion) 접수 → **그대로 둔다**. 그 칸은 이미 자기 축('default')으로 자료를
+  //    쌓아 뒀고, 바꾸면 그 자료가 스윕 범위 밖으로 떨어져 고아 + 중복 재수집이 된다.
+  //  · 이미 묶인 수집기 → 손대지 않는다(관리자가 바꿔 뒀을 수 있다).
+  const stampInstance = shouldStampInstance(existing ?? null);
   return upsertCollector({
     id: existing?.id,
     preset_key: "notion",
@@ -140,8 +150,7 @@ async function bindWorkspace(w: NotionWorkspaceRow, actor: string, source: strin
     config: {
       ...(existing?.config ?? {}),
       token_source: `org:${w.id}`,
-      // 신규만 스탬프 지정 — 기존 수집기는 지금 축(대개 'default')을 지킨다. 위 주석의 이유.
-      ...(existing ? {} : { instance: w.id }),
+      ...(stampInstance ? { instance: w.id } : {}),
     },
     note: enteringToggle ? note : existing.note,
   }, actor, source);
@@ -269,4 +278,11 @@ const orgNotionOauthComplete: Capability = {
 export const notionConnectCapabilities: Capability[] = [orgNotionCollect, orgNotionCollectSet, orgNotionCollectConnect, orgNotionOauthComplete];
 
 /** 테스트 훅 — 순수 판정(워크스페이스 결속·접수 대상·키 생성). 프로덕션 코드에서 사용 금지. */
-export const __notionCollectTestables = { boundWorkspace, adoptable, keyForWorkspace };
+/** 스탬프를 새로 박아야 하는가 — bindWorkspace 와 **같은 식**을 테스트가 직접 돌린다(분기 재현 금지). */
+export function shouldStampInstance(existing: CollectorView | null): boolean {
+  if (!existing) return true;
+  const enteringToggle = !existing.config?.token_source;
+  return enteringToggle && existing.instance_key !== LEGACY_INSTANCE_KEY;
+}
+
+export const __notionCollectTestables = { boundWorkspace, adoptable, keyForWorkspace, shouldStampInstance };
