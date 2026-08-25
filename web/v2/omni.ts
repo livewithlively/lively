@@ -205,6 +205,11 @@ export function omniOpen(seed?: string): void {
   let qTokens: string[] = [];       // 지금 질의의 토큰(제목 적중 판정용)
 
   const rowNodes: HTMLElement[] = [];
+  //  ⚠ **그려진 줄과 짝을 이루는 배열**. rowNodes 의 i 번째가 무엇인지는 이것만 안다 —
+  //   `hits` 는 병합·중복제거 순서라 화면 순서와 다르고(관련도순이 앞으로 끌어올리고, 종류별 묶음은
+  //   이미 나온 것을 빼므로), `hits[i]` 로 열면 **엉뚱한 줄이 열린다**
+  //   (상민님 2026-08-25 신고: "1835 치면 3번째 프로젝트를 눌렀는데 그 위 지식으로 넘어간다").
+  const rowHits: Hit[] = [];
   /** 제목이 질의를 통째로 담고 있나 — **종류와 무관하게** 맨 위로 올릴 근거(2026-08-20 실측 뒤 도입).
    *  왜 필요한가: 채널 간 순서가 타입 고정이라 '정확히 그 이름인 문서'가 프로젝트 6건 아래 묻혔다. 게다가
    *  하이브리드(RRF)는 순위역수라 채널마다 1등이 전부 같은 점수(1/61≈0.0164)가 되어 **점수로는 못 가른다**
@@ -223,6 +228,7 @@ export function omniOpen(seed?: string): void {
   }
   function paint(): void {
     rowNodes.length = 0;
+    rowHits.length = 0;
     const kids: HTMLElement[] = [];
     // ── 관련도순 — 상민님 "가장 정확도 높은 게 먼저 뜨는 게 맞지 않아?" (2026-08-24) ─────────────
     //  들어가는 것: **제목이 그대로 맞은 것**(모든 채널) + **절대 코사인이 컷오프를 넘은 것**(지식·프로젝트).
@@ -261,6 +267,7 @@ export function omniOpen(seed?: string): void {
             h.sub ? el('span', { class: 'v2-omni-s', text: h.sub }) : null),
           el('span', { class: 'v2-omni-badge', text: KIND_LABEL[h.kind] })) as HTMLElement;
         rowNodes.push(node);
+        rowHits.push(h);
         kids.push(node);
       }
     };
@@ -302,7 +309,7 @@ export function omniOpen(seed?: string): void {
   }
 
   function go(i: number, newTab: boolean): void {
-    const h = hits[i];
+    const h = rowHits[i];
     if (!h) return;
     omniClose();
     hooks!.open(h.href, newTab, h.title);
