@@ -58,7 +58,7 @@ export function headlessHarness(params: Record<string, unknown>): string | null 
 //   실행 신원 = 의뢰자(headlessRequester)의 클로드 로그인/프로필. 중앙 단일프로필 박스는 공유 로그인 폴백.
 //  중첩 가드: 같은 잡의 이전 태스크가 아직 queued/running 이면 이번 주기는 건너뛴다(requester_session='cron:<id>' 마커) → pileup 방지.
 //  fire-and-forget: 접수·배치까지가 잡 책임(실행·결과수집은 위탁 스케줄러가 5s tick 으로). 결과 요약은 org_task.result / delegate_status.
-export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; flags?: Record<string, string>; extra?: Record<string, unknown>; marker?: string }): Promise<{ status: string; summary: unknown }> {
+export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; flags?: Record<string, string>; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null }): Promise<{ status: string; summary: unknown }> {
   // 중첩 방지 마커 — 기본은 잡 단위(cron:<job>). #1289 증류기처럼 한 잡이 여러 배치를 병렬 접수하면 배치별로 갈라
   //  넘긴다(cron:<job>#<key>) — 안 그러면 첫 배치가 나머지를 전부 '진행 중'으로 막는다.
   const marker = o.marker || "cron:" + o.jobId;
@@ -80,7 +80,9 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), requester: o.requester, ...extra } }; }
 
   let task: Awaited<ReturnType<typeof createTask>>;
-  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: o.flags ?? {} }); }
+  // nodePref(#1881) — 잡이 실행 위치를 고정할 수 있다(예: node="central" = 게이트웨이 박스에서).
+  //  기본은 미지정(스케줄러 자유 배정 — 오프로드 취지). matchNode 가 node_pref 있으면 그 노드만 후보로 삼는다.
+  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: o.flags ?? {}, nodePref: o.nodePref ?? null }); }
   catch (e) { return { status: "error", summary: { error: "위탁 태스크 생성 실패: " + ((e as Error)?.message ?? String(e)), requester: o.requester, harness } }; }
 
   // 요청→즉답: 지금 배치 가능한지 그 자리에서 판정(위탁 스케줄러 tick 을 안 기다림). 안 되면 큐에 남겨 상한 내 재시도(중첩가드가 pileup 차단).

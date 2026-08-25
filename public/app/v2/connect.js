@@ -194,6 +194,9 @@ export async function renderConnectApp(host, key) {
     //  #1881 "팀 자료로 모으기" — 관리자에게만. 연결이 곧 토큰이라 여기서 켜면 수집기가 그 연결로 돈다(관리탭·토큰 복사 없음).
     if (svc.key === 'slack' && st === 'on' && org && org.admin)
         settings.push(slackTeamCollectCard());
+    //  #1881 노션 — 관리자에게만. 슬랙과 달리 개인 연결(MCP)과 무관: 토글이 여는 노션 화면(페이지 선택)이 곧 연결이자 수집 범위다.
+    if (svc.key === 'notion' && org && org.admin)
+        settings.push(notionTeamCollectCard());
     if (svc.key === 'slack' && st === 'on') {
         settings.push(el('section', { class: 'cn-sec' }, el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '이 앱의 설정' })), el('div', { class: 'cn-slack' }, slackChannelPolicyCard())));
     }
@@ -246,6 +249,111 @@ function slackTeamCollectCard() {
             await paint();
         };
         body.replaceChildren(lab, ...notes.map((t) => el('p', { class: 'cn-help' }, ...uiText(t))));
+    };
+    void paint();
+    return box;
+}
+// ── 팀 자료로 모으기(#1881 노션) — 토글이 곧 연결: 켜면 노션 화면이 열리고 거기서 고른 페이지가 수집 범위가 된다.
+//  슬랙 카드와 달리 개인 연결 상태를 보지 않는다 — 조직 슬롯(공개 통합 토큰)이 따로 있고, 이 카드가 그 전부를 다룬다.
+function notionTeamCollectCard() {
+    const body = el('div', { class: 'cn-help' }, ...uiText('불러오는 중…'));
+    const box = el('section', { class: 'cn-sec' }, el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '팀 자료로 모으기' })), body);
+    const openConsent = (url, after) => {
+        window.open(url, '_blank', 'noopener');
+        toast('노션 화면에서 모을 페이지를 고르고 [액세스 허용]을 누르세요 — 돌아오면 이 화면이 갱신됩니다');
+        window.addEventListener('focus', () => after(), { once: true });
+    };
+    const paint = async () => {
+        let s;
+        try {
+            s = await api('/api/ui/org/notion/collect');
+        }
+        catch (e) {
+            body.replaceChildren(errorNote(e, '수집 상태를 불러오지 못했습니다'));
+            return;
+        }
+        const wsAll = (s && s.workspaces) || [];
+        const ws = wsAll[0];
+        const chk = el('input', { type: 'checkbox' });
+        chk.checked = !!(s && s.enabled);
+        if (!(s && s.ready) && !wsAll.length)
+            chk.disabled = true; // 시작할 길이 없다 — 눌러도 안 되는 토글을 내밀지 않는다
+        const lab = el('label', { class: 'cn-toggle' }, chk, el('span', { text: ' 노션에서 고른 페이지를 팀 자료함에 자동으로 모읍니다' }));
+        const notes = [];
+        if (s && s.enabled)
+            notes.push(ws ? `'${ws.name || ws.id}' 워크스페이스에서 모으고 있어요 — 노션에서 고른 페이지(와 그 하위)만 읽습니다.` : '모으고 있어요.');
+        else if (wsAll.length)
+            notes.push('연결은 돼 있어요 — 켜면 바로 모으기 시작합니다.');
+        else if (s && s.ready)
+            notes.push('켜면 노션 화면이 열려요 — 거기서 모을 페이지를 고르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
+        else
+            notes.push('노션 연결 준비가 아직 안 됐어요 — 아래에 Lively Notion 통합의 값 두 개를 넣으면 열립니다. 지금 당장은 관리 화면의 외부 자료 수집에서 토큰 방식으로도 연결할 수 있어요.');
+        const extra = [];
+        if (!(s && s.ready) && !wsAll.length) {
+            // 직결(셀프호스팅·dev) 준비 폼 — 슬랙 T7 의 client 2칸과 대칭. 매니지드 테넌트는 CP 가 릴레이를 주입해 이 폼이 보일 일이 없다.
+            //  client_secret 은 이 사이트 계정의 비밀번호가 아니다 — type=password 금지(#1250), 텍스트칸+CSS 가림.
+            const idIn = el('input', { type: 'text', placeholder: 'OAuth client ID', autocomplete: 'off', style: 'width:100%' });
+            const secIn = el('input', { type: 'text', class: 'secret-input', placeholder: 'OAuth client secret', autocomplete: 'off', style: 'width:100%' });
+            const saveBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '통합 값 저장' });
+            saveBtn.onclick = async () => {
+                const cid = idIn.value.trim(), sec = secIn.value.trim();
+                if (!cid || !sec) {
+                    toast('ID 와 시크릿을 모두 넣어 주세요', true);
+                    return;
+                }
+                saveBtn.disabled = true;
+                try {
+                    await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: 'notion_public', scope_key: 'oauth:client', secret: JSON.stringify({ client_id: cid, client_secret: sec }) }) });
+                    toast('저장했어요 — 이제 토글을 켜면 노션 화면이 열립니다');
+                }
+                catch (e) {
+                    toast((e && e.message) || '저장하지 못했습니다', true);
+                    saveBtn.disabled = false;
+                    return;
+                }
+                await paint();
+            };
+            extra.push(el('div', { class: 'cn-sec-form' }, idIn, secIn, saveBtn, el('p', { class: 'cn-help' }, ...uiText('notion.so/my-integrations 의 Lively 공개 통합 ▸ 구성(Configuration)에서 ID 와 시크릿을 복사해 넣으세요. 그 통합의 redirect URI 에는 ' + location.origin + '/oauth/callback 이 등록돼 있어야 합니다.'))));
+        }
+        if (wsAll.length) {
+            extra.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '페이지 더 고르기',
+                onclick: async () => {
+                    try {
+                        const r = await api('/api/ui/org/notion/collect/connect', { method: 'POST' });
+                        if (r && r.authorization_url)
+                            openConsent(r.authorization_url, () => void paint());
+                        else
+                            toast('노션 화면을 열지 못했습니다', true);
+                    }
+                    catch (e) {
+                        toast((e && e.message) || '노션 화면을 열지 못했습니다', true);
+                    }
+                } }));
+        }
+        chk.onchange = async () => {
+            chk.disabled = true;
+            try {
+                const r = await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: chk.checked }) });
+                if (r && r.needs_connect && r.authorization_url) {
+                    // 동의가 먼저다 — 노션에서 페이지를 고르고 돌아오면 다시 켜서 수집기를 만든다(멱등).
+                    openConsent(r.authorization_url, () => {
+                        void api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: true }) })
+                            .then((rr) => { if (rr && rr.ok)
+                            toast('팀 자료 모으기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다'); })
+                            .catch(() => { })
+                            .finally(() => void paint());
+                    });
+                }
+                else if (r && r.ok) {
+                    toast(chk.checked ? '팀 자료 모으기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다' : '팀 자료 모으기를 껐어요');
+                }
+            }
+            catch (e) {
+                toast((e && e.message) || '바꾸지 못했습니다', true);
+            }
+            await paint();
+        };
+        body.replaceChildren(lab, ...notes.map((t) => el('p', { class: 'cn-help' }, ...uiText(t))), ...extra);
     };
     void paint();
     return box;

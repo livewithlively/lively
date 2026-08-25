@@ -3927,6 +3927,106 @@
   "input_hash": "c186cbfc4573638d"
  },
  {
+  "name": "org_notion_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/notion/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_notion_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/collect"
+  ],
+  "input_hash": "912fb73efbfedc37"
+ },
+ {
+  "name": "org_notion_collect_connect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/collect/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_notion_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/oauth-complete"
+  ],
+  "input_hash": "1333f0dfc135b86a"
+ },
+ {
+  "name": "app_instance_list",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-instances"
+  ],
+  "input_hash": "b3c909be092af25e"
+ },
+ {
+  "name": "app_instance_open",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances"
+  ],
+  "input_hash": "d984e2cee148b08f"
+ },
+ {
+  "name": "app_instance_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-instances/:id"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
+ },
+ {
+  "name": "app_instance_update",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/update"
+  ],
+  "input_hash": "db60c134f163ed47"
+ },
+ {
+  "name": "app_instance_set_project",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/project"
+  ],
+  "input_hash": "031a2b509fdb98b3"
+ },
+ {
+  "name": "app_instance_close",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/close"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
+ },
+ {
   "name": "me_slack_channels",
   "scope": null,
   "mcp": false,
@@ -4046,66 +4146,6 @@
    "GET /api/ui/apps/:id/ui/:page"
   ],
   "input_hash": "f48e51524b8110f6"
- },
- {
-  "name": "app_instance_list",
-  "scope": null,
-  "mcp": false,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/app-instances"
-  ],
-  "input_hash": "b3c909be092af25e"
- },
- {
-  "name": "app_instance_open",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances"
-  ],
-  "input_hash": "d984e2cee148b08f"
- },
- {
-  "name": "app_instance_get",
-  "scope": null,
-  "mcp": false,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/app-instances/:id"
-  ],
-  "input_hash": "8b4d5e8760e7510b"
- },
- {
-  "name": "app_instance_update",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances/:id/update"
-  ],
-  "input_hash": "db60c134f163ed47"
- },
- {
-  "name": "app_instance_set_project",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances/:id/project"
-  ],
-  "input_hash": "031a2b509fdb98b3"
- },
- {
-  "name": "app_instance_close",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances/:id/close"
-  ],
-  "input_hash": "8b4d5e8760e7510b"
  },
  {
   "name": "org_app_tool_call",
