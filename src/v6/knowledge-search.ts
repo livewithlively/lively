@@ -33,7 +33,12 @@ export interface KnowledgeSearchRow {
 export type KnowledgeGrepMode = "snippets" | "names" | "count";
 // 공통 WHERE(grep 매처 + lifecycle='active' + injection/provenance). params 에 push 하고 절 문자열 반환.
 function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: string }, params: unknown[]): string {
-  const wh: string[] = [grepWhere(["k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
+  //  ⚠ **name(=key)도 본다** — grepWhereSql 은 grep·count·하이브리드의 렉시컬 채널이 **전부** 지나는 한 자리다.
+  //   (2026-08-25: 같은 취지로 knowledge-store 의 *목록* 필터도 고쳤는데, 검색은 그 자리가 아니라 여기다 —
+  //    고치고도 dev 에서 안 나아져서 잡았다. 지식 검색의 WHERE 는 이 함수 하나뿐이니 여기가 정본이다.)
+  //   key 는 사람이 실제로 옮겨 적는 이름이다(위키링크 `[[key]]` · 주소 `#/k/<key>` · knowledge_get 인자).
+  //   종전엔 key 로 찾으면 **그 key 를 본문에 인용한 다른 문서**만 나오고 정작 그 문서는 안 나왔다.
+  const wh: string[] = [grepWhere(["k.name", "k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
   if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
   if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
   return wh.join(" AND ");
