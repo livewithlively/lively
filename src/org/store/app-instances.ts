@@ -201,6 +201,19 @@ export async function closeAppInstance(id: string, owner: string): Promise<boole
   return (r.rowCount ?? 0) > 0;
 }
 
+/**
+ * 세션이 끝났다 — 그 세션을 subject 로 쥔 인스턴스를 닫는다(#1954 후속).
+ *  세션은 죽었는데 인스턴스가 active 로 남으면 좌측 목록·인스턴스 조회에 유령이 쌓인다(실측 30건 중 대다수가
+ *  이미 끝난 세션이었다). 소유자를 묻지 않는다 — 세션의 죽음은 소유자와 무관한 사실이다.
+ *  이미 닫힌 것은 건너뛴다(멱등). 닫은 개수를 돌려준다.
+ */
+export async function closeSessionAppInstances(sessionId: string): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_instance SET status='closed',closed_at=now(),updated_at=now()
+      WHERE subject_kind='session' AND subject_ref=$1 AND status<>'closed'`, [sessionId]);
+  return r.rowCount ?? 0;
+}
+
 export async function pruneAppInstances(appId: string): Promise<number> {
   const client = await itemsPool.connect();
   try {
