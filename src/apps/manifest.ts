@@ -40,7 +40,7 @@ export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
 
 // OS가 직접 그리는 builtin 전용 renderer. 매니페스트에는 기록되지만, 소비자는 source.kind='builtin' 일 때만 신뢰한다.
 //  외부 앱이 같은 문자열을 선언해도 generic opaque iframe 경로를 벗어나지 못한다.
-export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic"] as const;
+export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox"] as const;
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -69,6 +69,9 @@ const permissionsSchema = z.object({
   ext_tools: z.array(toolGlobSchema).default([]),    // 프록시(ext__*)·HTTP 도구 allowlist(글롭)
   hosts: z.array(hostSchema).default([]),            // 자체 백엔드 — 설치 시 url_allowlist 병합
   db_sources: z.array(z.string().min(1).max(128)).default([]), // 읽을 소스 뷰(src.*)
+  // #1891 — 이 앱이 사용자에게 알림을 보낼 수 있나. 기본 false(fail-closed): 선언하지 않은 앱은 못 쏜다.
+  //  선언만으로도 부족하고 그 멤버의 활성 grant 가 함께 있어야 한다(src/apps/notify-policy.ts).
+  notifications: z.boolean().default(false),
 }).strict();
 
 const uiPageSchema = z.object({

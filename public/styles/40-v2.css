@@ -1528,3 +1528,14 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   border-top: 1px solid var(--line); background: var(--bg-tint); }
 .v2-tidybar-k { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; color: var(--ink-sub);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+
+/* 받은 알림(#1891) — 「확인할 것」 위 칸. 세션 줄(.v2-now-row)과 같은 골격을 쓰되 상태점만 다르다. */
+.v2-noti-sec { display: block; }
+.v2-noti-row .tw { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.v2-noti-row .t { font-size: 13.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-noti-row .p { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-noti-row.unread .t { font-weight: 700; }
+/* 안 읽음 표식은 **점 하나**다 — 줄 전체를 물들이면 목록이 시끄러워지고, 읽은 줄이 바래 보인다. */
+.v2-noti-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; flex: none; }
+.v2-noti-dot.on { background: var(--accent, #2563eb); }
+.v2-noti-row .st { font-size: 12px; color: var(--muted); flex: none; }
