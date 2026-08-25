@@ -1,6 +1,6 @@
 // 순수 단위 체크(node:assert) — 아웃박스(#1753)의 정책·에코 바늘. 배달자(파일·tmux·DB)는 여기서 안 띄운다.
 import assert from "node:assert/strict";
-import { echoNeedle, flatOneLine, retryDelayMs, READY_WINDOW_MS, NOT_READY_TTL_MS } from "./session-outbox.js";
+import { echoNeedle, flatOneLine, needsSubmitRetry, retryDelayMs, READY_WINDOW_MS, NOT_READY_TTL_MS } from "./session-outbox.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -34,3 +34,17 @@ t("[4] 창 상수 — 한 번의 준비 대기(20s)와 TTL(30분)의 관계가 �
 });
 
 console.log(`session-outbox: ${pass} passed`);
+
+// ── #1867 실측(dev 2026-08-25): 첫 지시로 프로젝트를 만들면 세션이 **새 빈 폴더**에서 시작한다 → 대화 파일이 아직
+//  없어 에코가 `unreadable` 이고, 종전 조건(timeout 만)은 Enter 를 안 눌러 지시가 입력칸에 남았다(sent/echo-unreadable).
+t("[미제출 방어] 에코를 확인 못 했으면(timeout·unreadable 둘 다) Enter 를 한 번 더 — 확인됐으면 안 누른다", () => {
+  assert.equal(needsSubmitRetry("timeout", "claude"), true);
+  assert.equal(needsSubmitRetry("unreadable", "claude"), true, "새 폴더 세션의 첫 지시가 여기서 막혔다");
+  assert.equal(needsSubmitRetry("confirmed", "claude"), false, "이미 제출됐는데 또 누르지 않는다");
+});
+t("[미제출 방어] claude 외 하네스는 입력칸 문법을 모르므로 누르지 않는다(종전과 같다)", () => {
+  for (const h of ["codex", "opencode", "antigravity", "grok", ""]) {
+    assert.equal(needsSubmitRetry("unreadable", h), false, h);
+    assert.equal(needsSubmitRetry("timeout", h), false, h);
+  }
+});
