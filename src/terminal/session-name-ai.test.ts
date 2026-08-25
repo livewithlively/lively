@@ -3,7 +3,7 @@
 //  ⚠ CLI 호출(aiSessionName) 자체는 여기서 안 부른다 — 외부 프로세스·모델 응답이라 결정적이지 않다.
 //   그 실패 경로(CLI 없음·타임아웃)는 "빈 문자열 → 규칙 이름 유지"로 설계돼 있어 호출자 쪽에서 안전하다.
 import assert from "node:assert/strict";
-import { cleanAiName, aiNamingEnabled } from "./session-name-ai.js";
+import { cleanAiName, aiNamingEnabled, nameArgvFor } from "./session-name-ai.js";
 
 // ① 그냥 이름 — 그대로.
 assert.equal(cleanAiName("채팅박스 디자인 수정"), "채팅박스 디자인 수정");
@@ -31,3 +31,16 @@ assert.equal(cleanAiName("   \n  \n"), "");
   if (before !== undefined) process.env.LIVELY_AI_SESSION_NAME = before;
 }
 console.log("ok  AI 세션 이름 정제 8갈래");
+
+// ⑨ 하네스별 argv(#1884) — 이름은 **그 세션의 하네스**로 짓는다. codex 로만 로그인한 멤버의 세션을 claude 로
+//  지으려 들면 자격이 없어 항상 실패(규칙 이름)였다. 미지정은 claude(종전 호출자 무회귀), 모르는/헤드리스 불가 하네스는 null.
+{
+  const P = "프롬프트 본문";
+  assert.deepEqual(nameArgvFor("claude", "haiku", P), ["-p", "--model", "haiku", P], "claude 는 종전 argv 와 바이트 동일");
+  assert.deepEqual(nameArgvFor(undefined, "haiku", P), ["-p", "--model", "haiku", P], "미지정 = claude");
+  assert.deepEqual(nameArgvFor("", "haiku", P), ["-p", "--model", "haiku", P]);
+  assert.deepEqual(nameArgvFor("codex", "haiku", P), ["exec", "--skip-git-repo-check", "-s", "read-only", P],
+    "codex exec 는 stdin 닫고 read-only 샌드박스, 프롬프트는 argv(짧다)");
+  for (const h of ["antigravity", "grok", "opencode", "shell", "nope"]) assert.equal(nameArgvFor(h, "haiku", P), null, `${h} → null(규칙 이름 유지)`);
+  console.log("ok  AI 세션 이름 하네스별 argv");
+}

@@ -3704,7 +3704,7 @@
   "rest": [
    "POST /api/ui/delegate"
   ],
-  "input_hash": "6dd39bac3d57de58"
+  "input_hash": "ea747e74d50cc418"
  },
  {
   "name": "delegate_status",

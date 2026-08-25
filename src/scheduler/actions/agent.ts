@@ -1,5 +1,5 @@
 // 크론 액션: 일반 에이전트 태스크(agent_inject·agent_headless) — R16 원문 이동.
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 
 // 일반 에이전트 태스크 — (세션=환경·맥락) × (params.prompt=작업)을 그대로 세션에 주입. 인박스 체크 없음(스케줄될 때마다 수행).
 //  (세션=격리 워크스페이스·계정·하네스 = 작업 환경) × (prompt=작업 지시) → 잡마다 완전히 다른 recurring 에이전트 태스크.
@@ -28,5 +28,5 @@ export async function runAgentHeadless(params: Record<string, unknown>, jobId: s
   const requester = headlessRequester(params, createdBy);
   if (!requester) return HEADLESS_REQUESTER_MISSING;
   const repo = (typeof params.repo === "string" && params.repo.trim()) ? params.repo.trim() : null;
-  return enqueueHeadlessTask({ prompt, requester, jobId, repo, flags: headlessFlags(params), extra: { repo, prompt_chars: prompt.length } });
+  return enqueueHeadlessTask({ prompt, requester, jobId, repo, harness: headlessHarness(params), flags: headlessFlags(params), extra: { repo, prompt_chars: prompt.length } });
 }

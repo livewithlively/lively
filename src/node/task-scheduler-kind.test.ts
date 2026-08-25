@@ -9,12 +9,19 @@
 // alerts.ts 의 ALERT_KIND 에는 같은 가드가 alerts.test.ts 에 있었지만 여기엔 없어서 통과된 결함이다.
 import { strict as assert } from "node:assert";
 import { normalizeKind } from "../org/credentials/member-secret-store.js";
-import { SECRET_KIND } from "./task-scheduler.js";
+import { SECRET_KIND, LEASE_SECRET } from "./task-scheduler.js";
 
 // 핵심 불변식: 저장이 받아들이는 이름과 조회가 찾는 이름이 같아야 한다(normalizeKind 가 무손실).
 assert.equal(normalizeKind(SECRET_KIND), SECRET_KIND,
   `SECRET_KIND(${SECRET_KIND})가 저장 시 정규화로 바뀌거나 거부된다 — 등록은 막히고 리스는 조용히 null 이 된다`);
 assert.match(SECRET_KIND, /^[a-z0-9_]{1,40}$/, "member_secret kind 형식(소문자·숫자·_)을 지켜야 저장이 거부되지 않는다");
+
+// #1884 — 리스 표(하네스별)의 모든 kind 에 같은 불변식. 지금은 claude 하나지만 표에 더할 때 여기서 잡힌다.
+for (const [h, l] of Object.entries(LEASE_SECRET)) {
+  assert.equal(normalizeKind(l.kind), l.kind, `LEASE_SECRET.${h}.kind(${l.kind}) 가 저장 정규화로 바뀐다`);
+  assert.match(l.env, /^[A-Z][A-Z0-9_]{0,63}$/, `LEASE_SECRET.${h}.env 는 tasks.ts 의 env 키 필터(대문자·숫자·_)를 지켜야 세션에 실린다`);
+}
+assert.equal(LEASE_SECRET.claude.kind, SECRET_KIND, "SECRET_KIND 는 리스 표의 claude 항목과 같은 좌표다");
 
 // 회귀 방향 명시 — 하이픈은 저장 단계에서 거부된다(과거 결함의 형태).
 assert.throws(() => normalizeKind("claude-setup-token"), /kind 형식 오류/,

@@ -2,7 +2,7 @@
 //  #1419 T4 — 분류기(org_classifier)가 생기면서 대상·기준·후보축이 **설정**이 됐다. 잡은 두 모드로 돈다:
 //   · params.classifier 지정 → 그 분류기 하나 · 미지정 → 켜진 분류기 전부(병렬 접수, 증류 잡과 동형)
 //   · 분류기가 하나도 없으면 **종전 전역 동작 그대로**(무중단 — listUnmappedKnowledge(50) + 기존 프롬프트)
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listClassifiers, getClassifier, classifierInbox, markClassifierSeen, recordClassifierRun, type ClassifierRow } from "../../org/store/classifiers.js";
 
 // #982 미분류 지식 분류 주입 — map_unmapped 의 지식판. 카테고리 0건 지식이 있을 때만 상시세션에 분류 프롬프트 주입.
@@ -58,6 +58,7 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
           : buildClassifierPrompt(c, inbox);
         const r = await enqueueHeadlessTask({
           prompt, requester: c.requester || requester, jobId,
+          harness: headlessHarness(params),   // 분류기 설정엔 하네스 축이 없다 — 잡 params 만(비우면 의뢰자 로그인 기준 자동)
           flags: headlessFlags({ model: c.model ?? params.model, effort: c.effort ?? params.effort }),
           extra: { classifier: c.key, unmapped: inbox.length },
         });
@@ -82,7 +83,7 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
   if (!inbox.length) return { status: "ok", summary: { skipped: "미분류 지식 없음", unmapped: 0 } };
   const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildClassifyKnowledgePrompt(inbox.length);
-  return enqueueHeadlessTask({ prompt, requester, jobId, flags: headlessFlags(params), extra: { unmapped: inbox.length } });
+  return enqueueHeadlessTask({ prompt, requester, jobId, harness: headlessHarness(params), flags: headlessFlags(params), extra: { unmapped: inbox.length } });
 }
 
 /**

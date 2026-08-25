@@ -325,11 +325,17 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   if (input.extraFlags?.length) flags.push(...input.extraFlags);
   // 시스템 프롬프트 조각(#1757) — 파일로 두고 경로만 인자에. extraFlags **뒤**에 둔다(리브 거부 목록의 가변인자를
   //  --session-id/--resume 가 이미 끊은 뒤라 안전). 파일 권한은 prompt.txt 와 같다(워커 uid 가 읽어야 한다).
-  if (input.systemPrompt && harness.key === "claude") {
-    const sp = path.join(taskDir, "system.md");
-    await fsp.writeFile(sp, input.systemPrompt, { mode: 0o660 });
-    await fsp.chmod(sp, SHARED_FILE_MODE).catch(() => { /* best-effort */ });
-    flags.push("--append-system-prompt-file", `"${sp}"`);
+  if (input.systemPrompt) {
+    if (harness.key === "claude") {
+      const sp = path.join(taskDir, "system.md");
+      await fsp.writeFile(sp, input.systemPrompt, { mode: 0o660 });
+      await fsp.chmod(sp, SHARED_FILE_MODE).catch(() => { /* best-effort */ });
+      flags.push("--append-system-prompt-file", `"${sp}"`);
+    } else {
+      // 다른 하네스의 대응 플래그는 실측하지 않았다 — 추측해 넣지 않되 **조용히 버리지도 않는다**(#1884). 이 파일엔
+      //  logger 가 없다(노드 번들 공용) — console 로 남겨 stderr 에서 보이게 한다.
+      console.warn(`[tasks] systemPrompt 은 claude 만 지원 — ${harness.key} 에선 무시됨(task ${input.taskId})`);
+    }
   }
 
   const args = ["new-session", "-d", "-s", id];

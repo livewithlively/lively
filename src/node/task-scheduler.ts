@@ -5,7 +5,8 @@
 //     아니면 재큐(attempt<max) 또는 실패 확정. 진행/결과 통지는 CLI 프로세스가 pull(§11) — 스케줄러는 상태 전이만.
 //  ④ 후보 자격(D1 의뢰자 시트 + #1540): 배치 후보는 **central · 의뢰자가 등록한 노드 · 관리자가 공유로 지정한 노드**
 //     뿐이다. 공유 노드는 그 박스에 의뢰자 프로필이 없으므로 setup-token 시크릿(member_secret
-//     kind=claude_setup_token)을 env 리스로 실을 수 있을 때만 후보다. 본인 노드는 본인 로그인이 그 머신에 있어 리스 불요.
+//     kind=claude_setup_token — claude 위탁만, LEASE_SECRET)을 env 리스로 실을 수 있을 때만 후보다. 본인 노드는 본인 로그인이 그 머신에 있어 리스 불요.
+//  ⑤ 하네스(#1884): 후보는 **그 하네스를 실제로 띄울 수 있는 노드**뿐이다(원격=hello 의 agent_harnesses · 중앙=detectHarnesses).
 //     ⚠ 종전 규칙은 `리스 있으면 아무 노드나` 였다 — 리스 하나로 남의 노트북이 열렸다(#1540 이 닫은 구멍).
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
 import { logger } from "../log.js";
@@ -22,7 +23,8 @@ import {
   queuedTasks, runningTasks, runningCountByNode, markRunning, markFinished, requeue, setNodeLost, getTask,
   matchNode, type DelegateTask, type SchedulableNode,
 } from "./task-store.js";
-import { spawnTaskSession, checkTask, killTaskSession, sampleResources, detectDocker, tailTask, type RunTaskResult, type TailResult } from "./tasks.js";
+import { spawnTaskSession, checkTask, killTaskSession, sampleResources, detectDocker, detectHarnesses, tailTask, type RunTaskResult, type TailResult } from "./tasks.js";
+import { nodeHarnesses } from "./protocol.js";
 
 export const CENTRAL_NODE_ID = "central";
 const TICK_MS = 5_000;
@@ -36,7 +38,13 @@ const CAP_WORKER = Math.max(0, Number(process.env.LIVELY_WORKER_TASK_CAP ?? 2));
 //  setMemberSecret 이 거부해 애초에 저장이 불가능한데(#1299 등록 UI 가 이 오류로 막혔었다), 조회(getMemberSecret)는
 //  정규화를 안 타 조용히 null 을 주므로 "저장도 안 되고 리스도 영영 안 붙는" 무증상 결함이 된다(#1101 의 32분 무출력 hang).
 //  export 는 테스트용 — alerts.ts 의 ALERT_KIND 와 같은 좌표상수 취급(task-scheduler-kind.test.ts 가 정규식을 못박는다).
-export const SECRET_KIND = "claude_setup_token";
+// 자격 리스 표(#1884) — **하네스별** env 리스. 지금은 claude 셋업토큰뿐이다: codex 등은 실측된 env 리스 수단이 없어
+//  워커 로컬 로그인에만 의존한다(= 공유 노드 후보에서 빠진다 — remoteDelegateAllowed 의 hasLease=false 경로, 종전과 같다).
+//  표에 더할 땐 env 키가 tasks.ts 의 env 필터(/^[A-Z][A-Z0-9_]{0,63}$/)를 지켜야 세션에 실린다(kind 테스트가 잰다).
+export const LEASE_SECRET: Readonly<Record<string, { kind: string; env: string }>> = {
+  claude: { kind: "claude_setup_token", env: "CLAUDE_CODE_OAUTH_TOKEN" },
+};
+export const SECRET_KIND = LEASE_SECRET.claude.kind;
 
 // liveness 가드(#1101 이월) — 시작 후 이 시간 동안 워커가 **한 바이트도** 못 뱉으면 조기 종결한다.
 //  `claude -p --output-format stream-json` 은 정상이면 init 이벤트를 즉시 뱉으므로, 0바이트는 프로세스가
@@ -55,6 +63,7 @@ const liveSeen = new Map<number, number>();
 
 let ticking = false;
 let centralDocker: boolean | null = null;
+let centralHarnesses: string[] | null = null;   // #1884 — 프로세스당 1회(detectHarnesses 는 하네스마다 `--version` 을 띄운다)
 
 // 무출력 stall 판정(순수) — '언제 죽일지'를 시간·바이트만으로 정한다(테스트 가능하게 분리).
 //  bytes 는 워커가 지금까지 뱉은 stream.jsonl 바이트. **경과가 상한을 넘고 그때까지 0바이트**일 때만 stall.
@@ -117,9 +126,15 @@ function armTaskDoneHook(): void {
 const QUEUE_MAX_MS = Math.max(0, Number(process.env.LIVELY_TASK_QUEUE_MAX_MS ?? 600_000));
 
 // 배치 불가 사유(하네스에게 '왜 안 되는지'를 즉답 — 로컬 폴백 판단 재료). 각 후보 노드의 탈락 이유를 모은다.
-function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker">, nodes: SchedulableNode[]): string {
+function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker" | "harness">, nodes: SchedulableNode[]): string {
   if (!nodes.length) return "가용 노드 없음(쓸 수 있는 노드가 없음 — 위탁은 중앙 + 본인이 등록한 노드 + 관리자가 공유 노드로 지정한 노드에만 갑니다. 공유 노드를 쓰려면 내 셋업토큰 등록이 필요합니다)";
+  // #1884 — 하네스를 못 띄우는 건 용량 문제가 아니다. 후보 전부가 그 사유면 그렇게 말한다(셋업토큰 안내로 헛다리 짚지 않게).
+  if (!nodes.some((n) => n.harnesses.includes(t.harness))) {
+    return `하네스 ${t.harness} 를 지원하는 노드 없음 — ` + nodes.map((n) => `${n.id}: [${n.harnesses.join(",")}]`).join(" · ")
+      + `. 그 CLI 가 깔린 노드를 등록하거나(노드는 hello 로 자기 하네스를 보고한다) 잡/위탁의 하네스를 바꾸세요.`;
+  }
   const bits = nodes.map((n) => {
+    if (!n.harnesses.includes(t.harness)) return `${n.id}: 하네스 ${t.harness} 미지원`;
     if (n.running >= n.capacity) return `${n.id}: 슬롯 만석(${n.running}/${n.capacity})`;
     if (t.needs_docker && !n.hasDocker) return `${n.id}: docker 없음`;
     if (!n.res) return `${n.id}: 리소스 미보고(오프라인?)`;
@@ -140,15 +155,19 @@ function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need
 //  401 로 막지만, 이 리스는 토큰이 아니라 그 사람의 **벤더 구독 자격**이라 별도 축이다 — 안 보면 퇴사자의
 //  setup-token 으로 새 런이 계속 배치된다(앱 무인 실행이 생기면 그 구멍이 곧 앱 통로가 된다). 조회 실패·삭제·
 //  비활성 전부 "자격 없음"(undefined) 으로 접는다 — 종전 '시크릿 없음' 과 같은 강등 경로(fail-closed).
+//  #1884 — 리스는 **태스크의 하네스**로 찾는다(LEASE_SECRET). 리스 수단이 없는 하네스(codex 등)는 저장소를 보지도 않고
+//  undefined — claude 토큰을 codex 워커에 싣는 건 무의미하고, 그걸로 공유 노드가 열리면 안 된다.
 export async function leaseEnvFor(
-  requester: string,
+  t: Pick<DelegateTask, "requester" | "harness">,
   lookup: (owner: string, kind: string, scope: string) => Promise<{ secret: string | null } | null> = getMemberSecret,
   stateOf: (memberId: string) => Promise<string | null> = (id) => getMember(id).then((m) => m?.state ?? null),
 ): Promise<Record<string, string> | undefined> {
-  const state = await stateOf(requester).catch(() => null);
+  const lease = LEASE_SECRET[t.harness];
+  if (!lease) return undefined;
+  const state = await stateOf(t.requester).catch(() => null);
   if (state !== "active") return undefined;
-  const sec = await lookup(memberOwner(requester), SECRET_KIND, "").catch(() => null);
-  return sec?.secret ? { CLAUDE_CODE_OAUTH_TOKEN: sec.secret } : undefined;
+  const sec = await lookup(memberOwner(t.requester), lease.kind, "").catch(() => null);
+  return sec?.secret ? { [lease.env]: sec.secret } : undefined;
 }
 
 // 후보/자격 정책(④ + #1540) — central 은 항상, 원격은 **본인이 등록한 노드 + 관리자가 공유로 지정한 노드**만.
@@ -157,13 +176,18 @@ export async function leaseEnvFor(
 //   **연결 시점 스냅샷**이라, 관리자가 공유를 끈 뒤에도 그 노드가 재연결하기 전까지 계속 열려 보인다 —
 //   정책 변경이 즉시 듣지 않는 건 접근통제에서 결함이다. 쿼리 1회(노드 수는 수십 규모)로 그걸 없앤다.
 async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<{ nodes: SchedulableNode[]; env?: Record<string, string> }> {
-  const env = await leaseEnvFor(t.requester);
+  const env = await leaseEnvFor(t);
   const running = (id: string): number => (counts.get(id) ?? 0) + (extra.get(id) ?? 0);
   const nodes: SchedulableNode[] = [];
   if (CAP_CENTRAL > 0) {
     if (centralDocker === null) centralDocker = await detectDocker();
+    // #1884 — 중앙 박스에 실제로 깔린 CLI ∪ 기준선(claude·codex·shell). 기준선을 합치는 이유: 게이트웨이 프로세스의 PATH 는
+    //  launchd/systemd 것이라 사람 셸의 ~/.local/bin 이 빠져 `--version` 프로브가 못 찾을 수 있는데(스폰은 로그인 셸을 타서 된다),
+    //  그때 중앙이 '아무 하네스도 못 띄움'이 되면 종전엔 돌던 claude 위탁까지 전부 배치 불가가 된다(회귀). 기준선 밖(antigravity·grok)만
+    //  프로브 결과를 믿는다 — 종전 동작(중앙은 항상 후보)을 claude·codex 에 대해 그대로 보존한다.
+    if (centralHarnesses === null) centralHarnesses = [...new Set([...await detectHarnesses(), ...nodeHarnesses(null)])];
     nodes.push({
-      id: CENTRAL_NODE_ID, kind: "central", central: true, hasDocker: centralDocker,
+      id: CENTRAL_NODE_ID, kind: "central", central: true, hasDocker: centralDocker, harnesses: centralHarnesses,
       res: await sampleResources(sharedRoot().base).catch(() => null), capacity: CAP_CENTRAL, running: running(CENTRAL_NODE_ID),
     });
   }
@@ -172,7 +196,10 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
     const row = rows.get(r.id);
     if (!row || !row.enabled) continue;                                          // 삭제·비활성(스냅샷은 모를 수 있다)
     if (!remoteDelegateAllowed(row, t.requester, Boolean(env))) continue;         // 남의 비공유 노드 · 자격 없는 공유 노드
-    nodes.push({ id: r.id, kind: row.kind, hasDocker: r.hasDocker, res: r.res, capacity: row.kind === "worker" ? CAP_WORKER : CAP_MEMBER, running: running(r.id) });
+    nodes.push({
+      id: r.id, kind: row.kind, hasDocker: r.hasDocker, res: r.res, capacity: row.kind === "worker" ? CAP_WORKER : CAP_MEMBER, running: running(r.id),
+      harnesses: nodeHarnesses(row.agent_harnesses),   // #1884 — hello 가 보고한 것(DB 미러) · 미보고(구 번들)면 기준선
+    });
   }
   return { nodes, env };
 }
@@ -255,10 +282,14 @@ async function watchRunning(): Promise<void> {
         if (isStalled({ startedAt: t.started_at, now, bytes, stallMs: STALL_MS })) {
           await killTaskAnywhere(t);
           // 재큐하지 않는다 — 자격 부재·init 실패는 재시도해도 같은 결과다(타임아웃 경로와 같은 판단).
+          // 사유는 **그 하네스** 기준으로(#1884) — 리스 시크릿이 있는 하네스만 그 등록을 말한다(codex 잡에 셋업토큰 안내는 헛다리다).
+          const lease = LEASE_SECRET[t.harness];
           await finish(t, false, null, undefined,
-            `무출력 stall(${Math.round(STALL_MS / 1000)}s) — 워커가 한 바이트도 내지 않았습니다. `
-            + `의뢰자(${t.requester})의 claude_setup_token 미등록/만료로 인증이 안 됐을 수 있습니다`
-            + `(격리 박스엔 공유 로그인 폴백이 없습니다). 레포 준비가 오래 걸리는 박스면 LIVELY_TASK_STALL_MS 를 늘리세요.`);
+            `무출력 stall(${Math.round(STALL_MS / 1000)}s) — 워커(${t.harness})가 한 바이트도 내지 않았습니다. `
+            + (lease
+              ? `의뢰자(${t.requester})의 ${lease.kind} 미등록/만료로 인증이 안 됐을 수 있습니다(격리 박스엔 공유 로그인 폴백이 없습니다). `
+              : `의뢰자(${t.requester})가 그 박스(${t.node_id ?? "?"})에서 ${t.harness} 에 로그인돼 있지 않을 수 있습니다(이 하네스는 env 리스가 없어 워커 로컬 로그인에만 의존합니다). `)
+            + `레포 준비가 오래 걸리는 박스면 LIVELY_TASK_STALL_MS 를 늘리세요.`);
           logger.warn({ task: t.id, node: t.node_id, requester: t.requester, stallMs: STALL_MS }, "위탁 태스크 무출력 stall — 조기 종결");
           continue;
         }

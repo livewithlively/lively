@@ -40,8 +40,17 @@ export function headlessFlags(params: Record<string, unknown>): Record<string, s
   return f;
 }
 
-// #1058/#1061 헤드리스 위탁 접수 — 세션 주입 대신 위탁(delegate) 파이프라인에 태스크를 넣어 **매 실행 새 `claude -p` one-shot**
-//  (빈 컨텍스트)으로 수행한다. agent_headless·map_unmapped_headless·classify_knowledge_headless 공용.
+// #1884 잡 params.harness — 헤드리스 실행 하네스. 비우면 자동(의뢰자가 로그인한 하네스 기준, claude 우선). 값 검증은 접수 시
+//  resolveHeadlessHarness 가 한다(헤드리스 불가 하네스면 error 로 보고 — 조용히 claude 로 바꾸지 않는다).
+export function headlessHarness(params: Record<string, unknown>): string | null {
+  const h = typeof params.harness === "string" ? params.harness.trim() : "";
+  return h || null;
+}
+
+// #1058/#1061 헤드리스 위탁 접수 — 세션 주입 대신 위탁(delegate) 파이프라인에 태스크를 넣어 **매 실행 새 헤드리스 one-shot**
+//  (`claude -p` · `codex exec` … — 빈 컨텍스트)으로 수행한다. agent_headless·map_unmapped_headless·classify_knowledge_headless 공용.
+//  실행 하네스(#1884): 명시(o.harness) > 의뢰자가 로그인한 하네스(claude 우선) > claude. 종전엔 org_task.harness 를 안 써
+//   DB 기본 'claude' 고정이었고, codex 로만 로그인한 의뢰자의 잡이 전부 자격 없는 claude -p 로 떠서 무출력 stall 로 죽었다.
 //  러너(node/tasks.ts)·결과수집·노드분산(중앙 내장 노드 포함)은 위탁 시스템을 그대로 재사용.
 //  왜 헤드리스: 상시세션은 컨텍스트 관성(옛 should 로 판단 — classify-knowledge-stale-session-inertia)이 있어 should 갱신
 //   직후 재분류 같은 작업에서 갱신을 통째로 무시한다. 헤드리스는 매번 fresh 라 매 배치 최신 SoT 대비 판단이 정합적.
@@ -49,7 +58,7 @@ export function headlessFlags(params: Record<string, unknown>): Record<string, s
 //   실행 신원 = 의뢰자(headlessRequester)의 클로드 로그인/프로필. 중앙 단일프로필 박스는 공유 로그인 폴백.
 //  중첩 가드: 같은 잡의 이전 태스크가 아직 queued/running 이면 이번 주기는 건너뛴다(requester_session='cron:<id>' 마커) → pileup 방지.
 //  fire-and-forget: 접수·배치까지가 잡 책임(실행·결과수집은 위탁 스케줄러가 5s tick 으로). 결과 요약은 org_task.result / delegate_status.
-export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; flags?: Record<string, string>; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null }): Promise<{ status: string; summary: unknown }> {
+export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; flags?: Record<string, string>; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null }): Promise<{ status: string; summary: unknown }> {
   // 중첩 방지 마커 — 기본은 잡 단위(cron:<job>). #1289 증류기처럼 한 잡이 여러 배치를 병렬 접수하면 배치별로 갈라
   //  넘긴다(cron:<job>#<key>) — 안 그러면 첫 배치가 나머지를 전부 '진행 중'으로 막는다.
   const marker = o.marker || "cron:" + o.jobId;
@@ -63,18 +72,24 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
 
   const { createTask } = await import("../../node/task-store.js");
   const { tryAssignNow } = await import("../../node/task-scheduler.js");
+  const { resolveHeadlessHarness } = await import("../../node/headless-harness.js");
+
+  // 실행 하네스(#1884) — 명시가 무효(헤드리스 불가)면 접수하지 않고 잡 결과로 말한다. 로그인 프로브 실패는 안에서 claude 로 접는다.
+  let harness: string;
+  try { harness = await resolveHeadlessHarness(o.requester, o.harness ?? null); }
+  catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), requester: o.requester, ...extra } }; }
 
   let task: Awaited<ReturnType<typeof createTask>>;
   // nodePref(#1881) — 잡이 실행 위치를 고정할 수 있다(예: node="central" = 게이트웨이 박스에서).
   //  기본은 미지정(스케줄러 자유 배정 — 오프로드 취지). matchNode 가 node_pref 있으면 그 노드만 후보로 삼는다.
-  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, repo: o.repo ?? null, flags: o.flags ?? {}, nodePref: o.nodePref ?? null }); }
-  catch (e) { return { status: "error", summary: { error: "위탁 태스크 생성 실패: " + ((e as Error)?.message ?? String(e)), requester: o.requester } }; }
+  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: o.flags ?? {}, nodePref: o.nodePref ?? null }); }
+  catch (e) { return { status: "error", summary: { error: "위탁 태스크 생성 실패: " + ((e as Error)?.message ?? String(e)), requester: o.requester, harness } }; }
 
   // 요청→즉답: 지금 배치 가능한지 그 자리에서 판정(위탁 스케줄러 tick 을 안 기다림). 안 되면 큐에 남겨 상한 내 재시도(중첩가드가 pileup 차단).
   let assign: Awaited<ReturnType<typeof tryAssignNow>>;
   try { assign = await tryAssignNow(task); }
   catch (e) { return { status: "error", summary: { error: "배치 오류: " + ((e as Error)?.message ?? String(e)), task_id: task.id } }; }
 
-  if (!assign.assigned) return { status: "ok", summary: { task_id: task.id, queued: true, reason: assign.reason, requester: o.requester, ...extra } };
-  return { status: "ok", summary: { task_id: task.id, assigned_node: assign.nodeId, requester: o.requester, ...extra } };
+  if (!assign.assigned) return { status: "ok", summary: { task_id: task.id, queued: true, reason: assign.reason, requester: o.requester, harness, ...extra } };
+  return { status: "ok", summary: { task_id: task.id, assigned_node: assign.nodeId, requester: o.requester, harness, ...extra } };
 }
