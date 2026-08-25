@@ -39,6 +39,7 @@ import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../se
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta } from "./session-meta.js";                 // #1820 — 죽은 세션이 '복원 가능'을 말하는 단일 판정
+import { sessionHandoffInput } from "./session-handoff.js";
 
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
 function themeOf(req: { headers: Record<string, unknown> }, b: Record<string, unknown>): "dark" | "light" | undefined {
@@ -149,6 +150,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       harnesses: HARNESSES.map((h) => ({
         key: h.key, label: h.label, bin: h.bin, provider: h.provider,
         hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags,
+        effortsByModel: h.effortsByModel,
         runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },
       })),
       members,
@@ -563,6 +565,39 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const session = await createSession(userOf(req), input);
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
     res.json({ session });
+  }));
+  // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
+  // CLI마다 런타임 설정 수단이 다르고(Codex는 /model 피커, Antigravity는 launch flag),
+  // 같은 프로세스 안에서 정직하게 통일할 수 없다. 대신 같은 작업 폴더·프로젝트·권한으로 새 세션을 띄우고,
+  // 화면이 보내 준 최근 공통 ChatLine 요약을 첫 지시로 주입한다. 사용자는 새 세션으로 곧바로 이동하고 계속 입력한다.
+  // 원 세션은 건드리지 않는다 — 새 세션 생성이나 첫 지시가 실패해도 진행 중 작업을 잃지 않는 안전망이다.
+  app.post("/api/ui/terminal/sessions/:id/handoff", auth, wrap(async (req, res) => {
+    const id = String(req.params.id || "");
+    const me = idOf(userOf(req));
+    const st = await getSessionState(id);
+    if (!st) throw new HttpError(409, "이 세션의 실행 설정을 찾지 못해 전환할 수 없습니다 — 새 세션으로 열어 주세요.");
+    if (st.owner !== me) throw new HttpError(403, "본인이 만든 세션만 다른 AI로 전환할 수 있습니다.");
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const harness = String(b.harness ?? st.harness ?? "").trim();
+    if (!HARNESSES.some((h) => h.key === harness && h.key !== "shell")) throw new HttpError(400, "전환할 AI가 올바르지 않습니다.");
+    const flags = (b.flags && typeof b.flags === "object" && !Array.isArray(b.flags)) ? b.flags as Record<string, unknown> : {};
+    const input = sessionHandoffInput(st, harness, flags, b.context);
+    input.theme = themeOf(req, b);
+    res.setHeader("Cache-Control", "no-store");
+    const nodeId = st.node_id || nodeOfSession(id) || "";
+    if (nodeId) {
+      await requireCreatableNode(req, nodeId);
+      const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
+      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites: st.invites });
+      await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      await mirrorNodeSession({ ...session, invites: st.invites }, nodeId, input, me);
+      res.json({ ok: true, from: id, session: { ...session, node: { id: nodeId, online: true } } });
+      return;
+    }
+    if (!(await canAttach(id, me))) throw new HttpError(409, "원래 세션이 이미 닫혀 전환할 수 없습니다 — 이어서 열기를 사용해 주세요.");
+    const session = await createSession(userOf(req), input);
+    await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
+    res.json({ ok: true, from: id, session });
   }));
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {

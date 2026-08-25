@@ -3,6 +3,7 @@
 //  프로젝트는 v2/project-view.ts(#1757 — 짧은 개요 + 리브 대화), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
 import { el, relTime, state, toast } from '../core.js';
+import { composerAttach } from './compose-attach.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
@@ -81,16 +82,26 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
   // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 기본은 내가 지난번에 고른 값이고,
   //  여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts — '새 AI 세션' 폼과 같은 기억을 쓴다).
   const runPicker = createRunPicker();
-  const card = el('div', { class: 'v2-launch' }, ta,
-    el('div', { class: 'v2-launch-row' }, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send));
+  // 첨부(#1870) — 프로젝트 칸의 새 세션 자리와 **같은 모듈**(v2/compose-attach.ts). 홈은 프로젝트가 없으므로
+  //  내 개인 폴더 uploads/ 로 올라가고, 절대경로가 첫 지시 꼬리에 실린다. 홈 화면은 20초 틱에 다시 그리지
+  //  않으므로(main.ts — inbox 만 덧칠) 칩·입력 글자와 같은 수명으로 산다.
+  const att = composerAttach({ projectId: () => 0 });
+  // [＋] 는 ctl **밖**(줄의 독립 첫 요소) — ctl 은 flex-wrap 이라 안에 넣으면 좁은 화면에서 셀렉트가 통째로
+  //  다음 줄로 밀려 [＋] 혼자 한 줄을 차지한다. 밖에 두면 셀렉트만 저희끼리 줄바꿈한다.
+  const card = el('div', { class: 'v2-launch' }, ta, att.chips,
+    el('div', { class: 'v2-launch-row' }, att.btn, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send), att.fileIn);
+  att.wirePaste(ta);
+  att.wireDrop(card, card);
 
   const grow = (): void => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
   const submit = async (): Promise<void> => {
     const text = ta.value.trim();
     if (!text || isCreatingQuickSession()) return;
+    // 올리는 중 전송 금지 — 막지 않으면 아직 안 올라간 파일이 지시에서 조용히 빠진다.
+    if (att.busy()) { toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.'); return; }
     send.disabled = true; ta.disabled = true; runPicker.disable(true);
     send.replaceChildren(el('span', { text: '여는 중…' }));
-    const ok = await openQuickSession(text, { run: runPicker.value() });
+    const ok = await openQuickSession(text + att.tail(), { run: runPicker.value() });
     if (!ok) { send.disabled = false; ta.disabled = false; runPicker.disable(false); send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); ta.focus(); }
   };
   send.onclick = () => { void submit(); };

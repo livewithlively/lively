@@ -21,7 +21,7 @@
 //
 //  ── 소비자 ──
 //  홈 입력창(v2/views.ts) · 프로젝트 '클로드로 실행' 기본값(projects/selection.ts) · 세션 대화창(session-chat.ts —
-//  거기선 제공자·노드가 고정이고 모델·추론강도만 바꾼다: 이미 뜬 프로세스는 다른 회사 모델·다른 컴퓨터로 못 옮긴다).
+//  거기서는 하네스까지 같은 선택 문법으로 바꾸고, 런타임 변경이 안 되는 축은 맥락 핸드오프로 이어 연다).
 import { api, el, state } from '../core.js';
 
 export interface RunFlagDef { name: string; label: string; desc?: string; type?: string; choices?: string[]; default?: string }
@@ -29,6 +29,7 @@ export interface RunHarness {
   key: string; label: string; bin?: string;
   provider?: { id: string; label: string };
   flags: RunFlagDef[];
+  effortsByModel?: Record<string, string[]>;
   hasAutoApprove?: boolean;
   // 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만 — 서버 catalog.ts runtimeCmd).
   runtime?: { model?: boolean; effort?: boolean };
@@ -37,7 +38,7 @@ export interface RunHarness {
 export interface RunNode { id: string; name?: string; kind?: string; shared?: boolean; online?: boolean; harnesses?: string[] }
 
 /** 추론강도 값 → 사람 말. 서버가 주는 값은 low|medium|high|xhigh|max 로 하네스마다 일부만 쓴다. */
-export const EFFORT_KO: Record<string, string> = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대' };
+export const EFFORT_KO: Record<string, string> = { none: '없음', low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대', ultra: '울트라' };
 export const effortKo = (v: string): string => EFFORT_KO[v] || v;
 
 /** 모델 id 를 읽을 만하게 — 'claude-opus-4-5-20251101' → 'Opus 4 5'. 대화창 칩이 쓰던 규칙 그대로. */
@@ -82,6 +83,10 @@ export function runNodes(): Promise<RunNode[]> { return loadConfig().then((c) =>
 export const findHarness = (hs: RunHarness[], key: string): RunHarness | null => hs.find((h) => h.key === key) || null;
 export const flagChoices = (h: RunHarness | null, name: string): string[] =>
   ((h && h.flags) || []).find((f) => f.name === name)?.choices?.filter(Boolean) ?? [];
+export const effortChoices = (h: RunHarness | null, model: string): string[] => {
+  const scoped = h?.effortsByModel?.[model];
+  return Array.isArray(scoped) ? scoped : flagChoices(h, '--effort');
+};
 
 // ── 실행 설정 기억 — 클래식 '새 AI 세션' 폼과 **같은 키**(사용자별 → 옛 전역 키 폴백) ──
 //  그 모듈(terminal/session-form.ts)을 import 하지 않는 이유: v2 → terminal 방향의 런타임 의존을 만들지 않으려고
@@ -149,7 +154,7 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
   const visVal = (name: string): string => (boxOf(name).hidden ? '' : boxOf(name).value);
 
   function paintFlag(box: HTMLSelectElement, name: string, emptyText: string, label: (v: string) => string): void {
-    const choices = flagChoices(cur(), name);
+    const choices = name === '--effort' ? effortChoices(cur(), modelSel.value) : flagChoices(cur(), name);
     box.hidden = !choices.length;
     if (!choices.length) return;
     const want = box.value || String(savedFlags[name] || '');
@@ -191,7 +196,7 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
   };
   nodeSel.addEventListener('change', () => { nodeKey = nodeSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
   provSel.addEventListener('change', () => { harnessKey = provSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
-  modelSel.addEventListener('change', changed);
+  modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론강도 · 지난번 그대로', effortKo); changed(); });
   effortSel.addEventListener('change', changed);
 
   const pick = (): RunPick => {

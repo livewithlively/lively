@@ -38,7 +38,7 @@ export type CronActionRun = (params: Record<string, unknown>, job: CronJob) => P
 // 헤드리스(claude -p) 실행 모델·추론강도 — claude 하네스 플래그(--model/--effort)와 동일 choices(terminal-sessions.ts HARNESSES).
 //  비우면 계정 기본 모델(관리세션의 sonnet/xhigh 같은 설정이 헤드리스엔 전달 안 돼 기본으로 떨어지던 #1101 갭을 메움).
 //  런타임 값은 tasks.ts FLAG_WHITELIST 가 한 번 더 화이트리스트 검증하므로 여기 choices 가 UI 가드, 그쪽이 실행 가드다.
-const HEADLESS_MODEL_PARAM: CronActionParam = { name: "model", label: "모델", kind: "select", choices: ["", "opus", "sonnet", "haiku"], hint: "헤드리스 claude -p 실행 모델. 비우면 계정 기본. 분류·판단 무거운 배치는 sonnet+ 권장." };
+const HEADLESS_MODEL_PARAM: CronActionParam = { name: "model", label: "모델", kind: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], hint: "헤드리스 claude -p 실행 모델. 비우면 계정 기본. 분류·판단 무거운 배치는 sonnet+ 권장." };
 const HEADLESS_EFFORT_PARAM: CronActionParam = { name: "effort", label: "effort(추론 강도)", kind: "select", choices: ["", "low", "medium", "high", "xhigh", "max"], hint: "비우면 기본. 분류·부트스트랩 등 판단 무거운 배치는 high+ 권장." };
 export const CRON_ACTIONS: CronActionDef[] = [
   { key: "refresh_all", label: "전 repo is 신선화", params: [], run: runRefreshAll },
