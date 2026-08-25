@@ -10,7 +10,7 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
-import { closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션이 사라지면 그 앱 인스턴스도 닫는다(#1954)
+import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
@@ -266,6 +266,21 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
 //  ⚠ 기록 실패는 **생성 실패로 승격**한다: 맵 없는 secondary 세션은 이후 헤더 없는 요청이 전부
 //  primary 로 오귀속된다 — dev 실측('다온')이 정확히 그 사고라, 조용히 넘기지 않는다.
 // (#1791 모듈 스코프로 올림 — 노드 세션 복원도 같은 기록을 해야 한다.)
+/**
+ * 세션이 섰다 — 그 세션의 **앱 인스턴스**를 세운다(#1954 후속 · #1780 v2.2 §2.5: 일반 세션 = ai-session 앱의 인스턴스).
+ *  종전엔 웹에서 그 세션을 처음 열 때만 만들어져(lazy), CLI 로 띄우고 웹에서 안 연 세션은 인스턴스가 없었다 —
+ *  그래서 좌측 목록이 '돌고 있는 세션'을 따로 훑어 그 구멍을 메워야 했다. 정체성은 세션이 태어날 때 정해진다.
+ *  ⚠ 이 등록은 **게이트웨이에만** 있다 — sessions.ts(createSession)는 노드 에이전트 번들에 실리고 노드엔 DB 가 없다
+ *   ('DB 없음' 계약, scripts/build-node-agent.mjs 화이트리스트). 그래서 박스·노드·핸드오프·복원이 공유하는
+ *   이 라우트 층 한 곳에 둔다.
+ *  subject 로 멱등하다(store createAppInstance) — 복원처럼 같은 세션이 다시 와도 하나다. 실패해도 세션은 산다.
+ */
+const registerSessionInstance = async (sessionId: string, owner: string, opts: { appId?: string | null; projectId?: number | null; title?: string | null }): Promise<void> => {
+  await createAppInstance({ appId: opts.appId || "ai-session", owner, projectId: opts.projectId ?? null,
+    subjectKind: "session", subjectRef: sessionId, title: opts.title || null })
+    .catch((e) => logger.warn({ err: e, sessionId }, "앱 인스턴스 등록 실패(비치명) — 세션은 살아 있다"));
+};
+
 const recordSessionTenant = async (sessionId: string, killOnFail?: () => Promise<unknown>): Promise<void> => {
   const t = currentTenant();
   if (!t || t.id === PRIMARY_TENANT_ID) return;
@@ -640,6 +655,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const plan = nodeProjectCreatePlan(remoteInput, !!input.projectId && nodeSupports(nodeId, "injectFirstPrompt"));
       const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...plan.createInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
       if (input.projectId && input.projectSrc !== "org") {
         await bindNodeSessionProjectOrKill({
           nodeId, sessionId: session.id, requester: me, harness: session.harness || input.harness, projectId: input.projectId,
@@ -658,6 +674,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     }
     const session = await createSession(userOf(req), input);
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
+    await registerSessionInstance(session.id, idOf(userOf(req)), { appId: input.appId, projectId: input.projectId, title: session.label });
     res.json({ session });
   }));
   // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
@@ -684,6 +701,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
       const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites: st.invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites: st.invites }, nodeId, input, me);
       res.json({ ok: true, from: id, session: { ...session, node: { id: nodeId, online: true } } });
       return;
@@ -691,6 +709,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (!(await canAttach(id, me))) throw new HttpError(409, "원래 세션이 이미 닫혀 전환할 수 없습니다 — 이어서 열기를 사용해 주세요.");
     const session = await createSession(userOf(req), input);
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
+    await registerSessionInstance(session.id, idOf(userOf(req)), { appId: input.appId, projectId: input.projectId, title: session.label });
     res.json({ ok: true, from: id, session });
   }));
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
@@ -847,6 +866,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const op: NodeOp = input.appId ? "createAppSession" : "create";
       const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: owner }, input: { ...remoteInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
+      await registerSessionInstance(session.id, owner, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
       if (st.claude_session_id) {
         await setClaudeSessionId(session.id, st.claude_session_id, owner, st.transcript_path)
@@ -904,6 +924,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       await setClaudeSessionId(session.id, st.claude_session_id, st.owner, st.transcript_path)   // #1746 대화 파일 경로도 승계(같은 대화 = 같은 파일)
         .catch((e) => logger.warn({ err: e, id: session.id }, "restore: claude UUID 승계 실패(비치명 — 다음 복원은 picker)"));
     }
+    //  복원도 세션 생성이다 — 새 id 로 인스턴스를 세운다(옛 세션의 인스턴스는 아래 옛 행 정리와 함께 닫힌다).
+    await registerSessionInstance(session.id, st.owner, { appId: st.app_id, projectId: st.project_id, title: st.label || session.label });
+    await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));
     await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
     res.json({ ok: true, session });
   }));
