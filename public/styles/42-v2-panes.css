@@ -88,6 +88,12 @@
    여백·제목 크기는 **캔버스 문패(.stu-door)와 정확히 같은 값**이다 — 오른쪽 끝 [기본|캔버스] 단추가 두 뷰에서
    같은 픽셀에 서야 하기 때문(1px 이라도 다르면 오갈 때 단추가 흔들린다). 한쪽을 고치면 다른 쪽도 같이 고친다. */
 .pn-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); }
+/*  왼쪽 칸은 **남는 자리를 받는다**(원준 2026-08-25 "공간이 충분한데 왜 … 으로 뜨냐").
+    안 주면 이 칸의 폭을 위 눈썹줄(#1875 · 진행 중 · 할 일 …)이 정한다 — 제목은 `overflow:hidden` 이라 폭 계산에
+    자기 길이를 보태지 못하기 때문이다. 그래서 눈썹줄보다 몇 px 긴 이름은 오른쪽이 400px 넘게 비어 있는데도
+    …로 잘렸다(실측: 눈썹 377px · 제목 필요 385px). flex:1 로 남는 자리를 먼저 받고, 그래도 모자랄 만큼 긴
+    이름일 때만 잘린다(오른쪽 단추는 그대로 지킨다). */
+.pn-door-l { min-width: 0; flex: 1 1 auto; }
 /* (원준 2026-08-20) 알약 폐지 — 좌상단을 비워 둘 이유가 없다. */
 .pn-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); margin-bottom: 7px; }
 .pn-eyebrow .sep { color: var(--muted-2); }

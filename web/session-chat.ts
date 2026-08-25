@@ -271,15 +271,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  한 번 더 적으면 같은 말이 세 자리를 차지하고, 길면(실측: 40자 넘는 프로젝트명) 조작부까지 밀어냈다.
   //  붙이기·바꾸기·떼기(#1749)는 사라지지 않고 [⋯ ▸ 이 세션] 으로 내려간다 — 세션 이름 바꾸기와 같은 자리다.
   paintTitle();
+  const headR = el('div', { class: 'sc-head-r' },
+    termStatusEl,
+    opts.onToggleFiles ? filesBtn : null,
+    opts.terminalSrc && isBox ? [fixBtn, setBtn] : null,
+    moreBtn);
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
       dot, titleHost, chatBadge,
       el('span', { class: 'sc-meta' }, stateEl, runEl)),
-    el('div', { class: 'sc-head-r' },
-      termStatusEl,
-      opts.onToggleFiles ? filesBtn : null,
-      opts.terminalSrc && isBox ? [fixBtn, setBtn] : null,
-      moreBtn));
+    headR);
 
   const chatHost = el('div', { class: 'sc-chat' });
   const termHost = el('div', { class: 'sc-term', hidden: true });
@@ -298,9 +299,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const chipEffort = el('span', { class: 'dt-chip', hidden: true });
   const selModel = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '모델' }) as HTMLSelectElement;
   const selEffort = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '추론강도' }) as HTMLSelectElement;
-  // 터미널 보기에서도 항상 보이는 상단 실행 설정. 제목·상태 및 세션 조작과 같은 한 줄에 욱여넣으면 가운데 칸이
-  // 좁아질 때 서로 겹친다. 헤더 안의 독립된 둘째 줄에 두어 화면 폭과 무관하게 세 축을 바로 고르게 한다.
-  head.append(el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort));
+  // 터미널 보기에서도 항상 보이는 상단 실행 설정. **제목 오른쪽, 세션 조작 왼쪽** — 머리줄 하나에 같이 선다
+  //  (원준 2026-08-25 "여전히 두 줄이잖아"). 종전엔 폭이 좁아질 때 겹칠까 봐 아예 둘째 줄을 강제(flex 1 1 100%)
+  //  했는데, 그러면 넓은 화면에서도 늘 두 줄이었다. 지금은 들어가면 한 줄, 안 들어가면 저절로 다음 줄로 접힌다
+  //  (.sc-head 가 flex-wrap 이라 겹칠 일은 없다 — 좁아지면 제목이 먼저 …로 줄고, 그 다음에 이 묶음이 내려간다).
+  head.insertBefore(el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort), headR);
   const chip = (n: HTMLElement, v: string, tip?: string): void => { n.textContent = v; if (tip && tip !== v) n.title = tip; else n.removeAttribute('title'); n.hidden = !v; };
   const MODE_KO: Record<string, string> = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
   // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).
