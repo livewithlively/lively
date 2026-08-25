@@ -11,6 +11,10 @@ import type { NotionLedger } from "../../v6/connector-mirror.js"; // type-only �
 
 // ── 실행 통계 — run-sync 가 커서 동결/스윕 판단에 사용 ─────────────────────────
 export interface NotionRunStats {
+  /** 이 run 이 스탬프한 external_instance(#1881 다중 워크스페이스). 후처리(스윕·대사)의 범위 축이다 —
+   *  emit 이 쓰는 `cfg.instance` **그 값 그대로** 실어 보낸다(재조회하면 둘이 어긋날 수 있고, 어긋나면
+   *  스윕이 남의 워크스페이스를 아카이브하거나 자기 것을 통째로 아카이브한다). */
+  instance: string;
   pages: number; databases: number; emitted: number;
   failures: number; failedIds: string[];
   /** 권한 경계(403/404) — 통합이 볼 수 없는 객체. 실패와 달리 커서를 동결하지 않는다(재시도 무의미·liveness 보호). */
