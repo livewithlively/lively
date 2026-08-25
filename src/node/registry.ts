@@ -253,6 +253,11 @@ function applyState(nodeId: string, sessions: SessionInfo[], res?: NodeResources
 let taskDoneHandler: ((nodeId: string, m: TaskDoneMsg) => void) | null = null;
 export function onTaskDone(cb: (nodeId: string, m: TaskDoneMsg) => void): void { taskDoneHandler = cb; }
 
+// worker 복구 훅 — registry가 앱/DB 계층을 import하지 않게 단일 콜백으로 역전한다.
+// 최신 에이전트 hello가 확정된 뒤 호출돼, 연결 단절 때 fail-closed 정지한 AppInstance worker를 다시 맞춘다.
+let nodeReadyHandler: ((nodeId: string) => void | Promise<void>) | null = null;
+export function onNodeReady(cb: (nodeId: string) => void | Promise<void>): void { nodeReadyHandler = cb; }
+
 // 스케줄러용 원격 노드 뷰(§10) — 온라인 노드만(오프라인은 후보 자체가 아님).
 // 스케줄러가 여기서 얻는 것은 **지금 붙어 있는가 + 그 머신의 리소스**뿐이다(liveness). 소유자·공유·활성 같은
 //  정책 필드는 일부러 안 싣는다(#1540) — c.node 는 **연결 시점 스냅샷**이라, 관리자가 공유를 끈 뒤에도 그 노드가
@@ -314,6 +319,11 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     //  구 노드는 모르는 t 를 무시하므로 안전하다(무회귀).
     try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); }
     catch { /* 전송 실패는 비치명 — 다음 재연결에 다시 알린다 */ }
+    const latest = servedAgentVersion();
+    if (c.caps.has("startWorker") && c.caps.has("stageWorkerChunk") && (!latest || m.agentVer === latest)) {
+      void Promise.resolve(nodeReadyHandler?.(c.node.id)).catch((err) =>
+        logger.warn({ err, node: c.node.id }, "노드 worker 복구 실패(비치명 — 다음 재연결/조회가 재시도)"));
+    }
     return;
   }
   if (m.t === "taskdone") {

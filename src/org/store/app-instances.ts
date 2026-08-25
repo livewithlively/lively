@@ -62,6 +62,24 @@ export async function listAppInstances(owner: string, opts: { appId?: string; pr
   return r.rows.map(row);
 }
 
+/** worker 복구·패키지 갱신용 내부 목록. 사용자 조회 API가 아니므로 owner 필터 대신 실행 host/app을 권위로 쓴다. */
+export async function listActiveRuntimeInstances(opts: {
+  appId?: string;
+  hostKind?: "central" | "remote";
+  hostId?: string | null;
+} = {}): Promise<AppInstanceRow[]> {
+  const args: unknown[] = [];
+  const where = ["status='active'", "execution_host_kind IS NOT NULL"];
+  if (opts.appId) { args.push(opts.appId); where.push(`app_id=$${args.length}`); }
+  if (opts.hostKind) { args.push(opts.hostKind); where.push(`execution_host_kind=$${args.length}`); }
+  if (opts.hostId !== undefined) {
+    if (opts.hostId === null) where.push("execution_host_id IS NULL");
+    else { args.push(opts.hostId); where.push(`execution_host_id=$${args.length}`); }
+  }
+  const r = await itemsPool.query(`SELECT * FROM org_app_instance WHERE ${where.join(" AND ")} ORDER BY created_at`, args);
+  return r.rows.map(row);
+}
+
 export interface CreateAppInstanceInput {
   appId: string; owner: string; projectId: number | null;
   subjectKind?: string | null; subjectRef?: string | null;

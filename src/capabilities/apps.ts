@@ -14,7 +14,7 @@ import { installLoadedApp } from "../apps/install-run.js";
 import { makeDeployDeps } from "../apps/deploy.js";
 import { dropAppTables } from "../apps/store-schema.js";
 import { pruneAppInstances } from "../org/store/app-instances.js";
-import { stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
+import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
 const wctx = (u: { userId?: string; email?: string } | undefined, ctx?: { source?: string }) => ({ actor: actorOf(u), source: ctx?.source ?? "web" });
@@ -148,10 +148,15 @@ const appInstall: Capability = {
     const staged = await stageAppSource(source);
     try {
       const loaded = await loadAppPackage(staged.dir);
-      const outcome = await store.withAppInstallLock(loaded.manifest.id, () =>
-        installLoadedApp(loaded, staged.meta, wctx(user, ctx)));
+      let previousHash: string | null = null;
+      const outcome = await store.withAppInstallLock(loaded.manifest.id, async () => {
+        previousHash = (await store.getApp(loaded.manifest.id))?.content_hash ?? null;
+        return installLoadedApp(loaded, staged.meta, wctx(user, ctx));
+      });
+      const workerRestart = !outcome.created && previousHash !== loaded.contentHash
+        ? await restartWorkersForApp(outcome.id) : null;
       const app = await store.getApp(outcome.id);
-      return { app, created: outcome.created, components: outcome.components };
+      return { app, created: outcome.created, components: outcome.components, worker_restart: workerRestart };
     } finally {
       await staged.cleanup();
     }
