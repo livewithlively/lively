@@ -150,20 +150,33 @@ async function main() {
       ok("detach 뒤 새 revision → 이전 single-flight 플래그와 무관하게 다시 자동 생성");
     }
     {
+      // 짧은 지시도 만든다(2026-08-25 상민님 지적): 종전 12자 게이트는 짧은 말만 오가는 세션을 **영영 미연결**로 남겼다.
+      //  귀속은 기본값이고, 짧은 제목은 정련이 고친다.
       const s = sid("short");
-      const before = gw.hits.length;
       const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s }, "계속");
+      assert.match(out, /프로젝트 #\d+/);
+      assert.ok(Number(gw.states.get(s)) > 0, "짧은 지시로도 바인딩된다");
+      ok("짧은 지시 → 그래도 생성·바인딩(제목은 정련이 고친다)");
+    }
+    {
+      // 슬래시·뱅·주입물은 여전히 미룬다 — 사람의 지시가 아니다. 플래그를 안 써야 다음 프롬프트에 다시 본다.
+      const s = sid("slash");
+      const before = gw.hits.length;
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s }, "/status");
       assert.equal(out, ""); assert.equal(gw.hits.length, before);
-      assert.equal(fs.existsSync(flagPath(s)), false);
-      ok("짧은 지시 → 생성·플래그 소모 없음");
+      assert.equal(fs.existsSync(flagPath(s)), false, "플래그를 소모하면 다음 실질 지시에서 못 만든다");
+      const out2 = await runHook(root, gw.base, { LIVELY_SESSION_ID: s }, "이제 진짜 지시를 준다");
+      assert.match(out2, /프로젝트 #\d+/, "미룬 뒤 다음 프롬프트에서 만든다");
+      ok("슬래시 커맨드 → 미룸(플래그 미소모) · 다음 실질 지시에서 생성");
     }
     {
       // 하네스 미지정(외부 Claude Code) + stdin session_id → claude-* 실행 ID 로 생성·바인딩(러너 규약: 미지정=claude).
       const native = `thread-${process.pid}-claude`;
       const execution = `claude-${native}`; sids.push(execution);
       const out = await runHook(root, gw.base, {}, undefined, { session_id: native });
-      assert.match(out, /프로젝트 #107/);
-      assert.equal(gw.states.get(execution), 107);
+      // ⚠ id 를 박지 않는다 — 앞 행이 몇 개를 만들었는지에 따라 번호가 밀린다(행을 더할 때마다 깨지는 자리였다).
+      assert.match(out, /프로젝트 #\d+/);
+      assert.ok(Number(gw.states.get(execution)) > 0, "그 실행 ID 로 바인딩됐다");
       ok("하네스 미지정 + stdin session_id → claude-* 실행 ID로 생성·바인딩");
     }
     console.log(`\n${pass} passed`);

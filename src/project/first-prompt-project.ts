@@ -36,15 +36,23 @@ export interface FirstPromptPlanInput {
   initialPrompt?: string;
 }
 
+/** 첫 지시가 없는 세션의 임시 이름 — 정련(project-bind-nudge)이 첫 쓰기에서 바꾼다. */
+export const UNNAMED_PROJECT = "새 작업";
+
 /**
- * 순수 — 이 세션 생성 요청이 '첫 지시로 프로젝트를 먼저 만들' 자리인가. 아니면 null.
+ * 순수 — 이 세션 생성 요청에서 만들 프로젝트(이름·본문). 안 만드는 자리면 null.
+ *
+ *  ★ **미소속 세션이면 첫 지시가 없어도 만든다**(상민님 결정 2026-08-25: "빈 세션도 플젝 만들어야지 ·
+ *   그냥 항상 만들어 · 껍데기 신경쓰지 말고"). 종전엔 '빈 세션 60%' 실측을 근거로 지시가 있을 때만 만들었는데,
+ *   그 규칙은 **cwd 를 못 정한 세션을 남긴다** — cwd 는 한 번 정하면 못 바꾸므로(실행 중 프로세스는 inode 참조)
+ *   나중에 그 세션이 진짜 작업을 시작해도 산출물이 개인 루트에 쌓인다. 빈 껍데기는 사람이 보드에서 지우면 되는
+ *   **되돌릴 수 있는 비용**이고, 잘못 고른 cwd 는 그 세션 내내 못 되돌린다 — 비대칭이 "항상 만든다"를 정당화한다.
  *
  *  만들지 않는 자리(각각 이유가 다르다):
  *   · 이미 프로젝트가 정해짐 — 그 프로젝트 폴더에서 연다(중복 생성 금지).
  *   · 사람이 폴더를 골랐다(subpath) 또는 개인 루트가 아닌 root — **그 자리에서 열겠다는 뜻**이다.
- *   · 앱 세션·로그인 세션 — 작업 세션이 아니다.
+ *   · 앱 세션 — 소속이 인스턴스 축에 따로 있다(#1780). 로그인 세션 — 자격 인증 절차지 작업이 아니다.
  *   · 읽기전용·인코그니토 — 조직에 아무것도 안 남기는 세션이다(훅과 같은 규칙).
- *   · 짧은 지시·슬래시/뱅 커맨드·하네스 주입물(`<`) — 사람의 실질 지시가 아니다.
  */
 export function firstPromptProjectPlan(input: FirstPromptPlanInput): { name: string; description: string } | null {
   if (Number(input.projectId ?? 0) > 0) return null;
@@ -53,7 +61,23 @@ export function firstPromptProjectPlan(input: FirstPromptPlanInput): { name: str
   if (String(input.subpath ?? "").trim()) return null;
   const root = String(input.rootKey ?? "").trim();
   if (root && root !== "personal") return null;
-  return shellProjectFromPrompt(input.initialPrompt);
+  // 첫 지시가 제목 재료가 못 되면(없거나 슬래시/뱅/주입물) 임시 이름으로 만든다 — **만들기는 한다**.
+  return shellProjectFromPrompt(input.initialPrompt) ?? unnamedShellProject();
+}
+
+/** 순수 — 첫 지시 없이 연 세션의 껍데기(이름은 임시, 본문이 그 사정을 말한다). */
+export function unnamedShellProject(): { name: string; description: string } {
+  return {
+    name: UNNAMED_PROJECT,
+    description: [
+      "> ⚙ 세션을 열 때 **자동 생성**된 프로젝트입니다 — 첫 지시가 없어 이름이 임시값입니다.",
+      "",
+      "이 세션의 작업 폴더가 이 프로젝트 폴더이고, 여기서 남기는 지식·작업기록·산출물이 이 프로젝트에 귀속됩니다.",
+      "무엇을 하는 일인지 정해지면 제목·본문·분류를 보강하세요(첫 쓰기 때 안내가 한 번 나갑니다).",
+      "",
+      AUTO_CREATED_MARK,
+    ].join("\n"),
+  };
 }
 
 /**
