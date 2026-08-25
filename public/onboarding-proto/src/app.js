@@ -457,7 +457,7 @@
       <input class="in start-email" type="email" placeholder="you@example.com" aria-label="이메일">
       <div class="start-invite"><span class="k">초대 코드</span><span class="code">lvi-8f2k-q7m3-xn1p</span><span class="tag mint">확인됨</span></div>
       <div class="start-fine">지금은 무료 · 초대제 베타입니다. 정식 출시 때 유료 플랜으로 바뀝니다. AI 세션은 <b>쓰시던 AI 계정을 연결해</b> 돌아갑니다 — Claude · ChatGPT · Gemini · Grok 가운데 하나를 유료로 이용 중이시면 됩니다. 라이블리가 대신 결제하지는 않습니다.
-        <label><input type="checkbox" id="agree"> <span><a href="terms.html" target="_blank" rel="noopener">이용약관</a>과 <a href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a>에 동의합니다.</span></label></div>
+        <label><input type="checkbox" id="agree"> <span><a href="https://app.lvly.io/terms" target="_blank" rel="noopener">이용약관</a>과 <a href="https://app.lvly.io/privacy" target="_blank" rel="noopener">개인정보 처리방침</a>에 동의합니다.</span></label></div>
       <div class="start-foot">초대 코드가 없으면 <a href="#" data-act="wait">대기자 등록</a>으로 남길 수 있습니다.</div>
     </div></div>`;
   }
