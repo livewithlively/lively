@@ -193,5 +193,9 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     -- workspace_hub_url(#1750): 계정의 워크스페이스 목록·만들기가 있는 허브(매니지드 = app.lvly.io/home). 좌상단 스위처가
     --   '다른 워크스페이스·새로 만들기'를 여기로 보낸다. null = 허브 없음(셀프호스트 기본 — 스위처엔 이 워크스페이스와 연결한 팀만).
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS workspace_hub_url TEXT;
+    -- worker_policy(#1780 Stage B): 앱 worker 의 조직 단위 예산 — 동시 실행 수(조직·멤버)·선언 메모리 합·
+    --   worker 1개의 CPU 사용률·수명 상한. 각 값 0 = 무제한(감시 끔). 빈 객체면 코드 기본값
+    --   (수·메모리는 폭주만 잡을 넉넉한 상한, CPU·수명은 0=끔 — 켜지 않은 조직에서 멀쩡한 worker 를 죽이지 않는다).
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS worker_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 }
