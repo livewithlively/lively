@@ -211,14 +211,15 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     await grantSharedGroupWrite(abs, base, "file");
     // 올린 파일 = 자료 1건(#1881 L1) — 다른 수집기와 같은 길(자료 → 증류기 → 지식·근거 칩). 실패해도 업로드는 성공이다.
     const u = userOf(req);
-    await ingestLocalUpload({ root: { kind: "project", id: project.id }, folder: project.folder, base, abs, osUser: null,
+    const ing = await ingestLocalUpload({ root: { kind: "project", id: project.id }, folder: project.folder, base, abs, osUser: null,
       uploader: { id: viewerOf(u), name: u?.email ?? null }, channelFallback: project.name })
-      .catch((e) => console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`));
+      .catch((e) => { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); return null; });
     const st = await fsp.stat(abs).catch(() => null);
     // path(절대경로) — 올린 것을 **그 자리에서 AI 에게 넘기는** 화면이 쓴다(새 세션 창의 붙여넣기 첨부, #1819).
     //  세션 cwd 는 프로젝트 폴더가 아니라 세션 전용 폴더라 상대경로로는 못 찾는다. 터미널 업로드 라우트가 이미
     //  같은 계약을 갖고 있다(web/standalone/terminal.ts dropFileToAgent 가 j.path 를 그대로 입력창에 꽂는다).
-    res.json({ ok: true, path: abs, ...(st ? { mtime: Math.floor(st.mtimeMs), size: st.size } : {}) });
+    // source_id — 이 파일이 자료로 등록됐으면 그 id(#1881). 화면이 "자료함에 담김"을 폴링 없이 알린다. 구 클라이언트는 무시.
+    res.json({ ok: true, path: abs, ...(st ? { mtime: Math.floor(st.mtimeMs), size: st.size } : {}), ...(ing?.ingested ? { source_id: ing.source_id } : {}) });
   }));
 
   // 새 폴더 생성
