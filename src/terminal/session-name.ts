@@ -25,3 +25,23 @@ export function isUnnamedSession(label: string, id: string): boolean {
   const l = String(label || "").trim();
   return !l || l === id;
 }
+
+// ── 에이전트가 지은 이름 (#1979) ────────────────────────────────────────────
+//  누가 짓나: **그 세션 자신**이다. 첫 지시 턴에 훅이 "이 세션의 이름을 지어 session_rename 으로 등록하라"를
+//   주입하고, 세션이 자기 맥락(첫 지시 + 주입된 프로젝트 AGENTS.md)으로 지어 툴로 등록한다.
+//   종전엔 하네스를 **헤드리스로 따로 스폰**해서 지었는데(구 session-name-ai.ts), 그 서브프로세스가 부모 세션의
+//   LIVELY_SESSION_ID·훅 배선을 env 로 상속해 project-auto-bind 가 **이름짓기 프롬프트를 첫 실질 지시로 오인**,
+//   쓰레기 프로젝트를 만들어 부모 세션에 붙였다(프로덕션 실측 2026-08-25: #1946·#1957).
+//   스폰이 0이면 그 결함은 완화가 아니라 **구조적으로 없다** — 그래서 이름짓기는 더 이상 '세션'이 아니다.
+//  ⚠ **거절하지 않는다 — 자른다.** 길이 초과·따옴표·마침표는 전부 여기서 다듬는다. 이름은 화면 장식이고
+//   실패 응답을 만들 만한 값이 아니다(모델이 다시 부르느라 사용자 턴만 길어진다). 다듬어서 남는 게 없을 때만 "".
+const AGENT_MAX = 12;   // "10자 언더"(원준 #1719) — 사이드바·탭·카드가 그 이상을 안 보여준다
+
+/** 에이전트가 준 이름 → 쓸 수 있는 라벨. 못 쓰면 ""(호출자는 지금 이름을 그대로 둔다). */
+export function sessionNameFromAgent(raw: string | null | undefined): string {
+  const first = String(raw || "").split("\n").map((l) => l.trim()).filter(Boolean)[0] || "";
+  // 끝은 **한 번에** 벗긴다 — 따옴표와 마침표가 섞여 있어(`"결제 백오프".`) 순서대로 지우면 하나가 남는다.
+  const bare = first.replace(/^[\s"'「『([]+/, "").replace(/[\s"'」』)\].。!?？…]+$/, "").trim();
+  if (!bare) return "";
+  return bare.length > AGENT_MAX ? bare.slice(0, AGENT_MAX).trimEnd() : bare;
+}

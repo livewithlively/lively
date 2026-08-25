@@ -23,7 +23,7 @@ import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시�
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
-import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
@@ -32,7 +32,7 @@ import { mintAppToken } from "../apps/principal.js";
 import { appPluginArgs, writeAppHome, materializeAppAssets, materializePreparedAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, getSessionLabel, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
@@ -43,7 +43,7 @@ import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
 import { sessionNameFromPrompt } from "./session-name.js";
-import { aiNamingEnabled, aiSessionName } from "./session-name-ai.js";
+import { type LabelSource, canRelabel } from "../sessions/session-label-source.js";   // #1979 — 세션 이름 걸쇠
 
 export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
@@ -566,6 +566,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  화면은 그때 pane 제목·중앙 기록 첫 지시로 이름 자리를 채우고, 대화가 시작되면 session-autoname 이 진짜 이름을 박는다).
   //  ⚠ 여기에 '프로젝트명'은 없다 — 한 프로젝트 아래 세션이 전부 같은 이름이 되던 뿌리였다(실측 71%).
   const label = cleanLabel(input.label) || cleanLabel(sessionNameFromPrompt(input.initialPrompt || "")) || id;
+  // #1979 — 이름 옆에 **누가 지었나**를 같이 남긴다. 이게 "한 번만 짓고 고정"의 걸쇠다(session-label-source.ts).
+  //  사람이 준 이름 = human(에이전트가 못 덮는다) · 첫 지시 규칙 이름 = rule(에이전트가 한 번 다듬는다) · id = 아직 이름 없음.
+  //  ⚠ 복원(restore)도 이 함수를 타지만 그때는 이 값이 무시된다 — upsert 의 ON CONFLICT 가 label_source 를
+  //   손대지 않는다(안 그러면 복원 한 번에 걸쇠가 풀린다. 근거는 session-state.ts 의 그 주석).
+  const labelSource: LabelSource = cleanLabel(input.label) ? "human" : (label === id ? "id" : "rule");
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
@@ -617,26 +622,20 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         read_only: !!input.readOnly, incognito: !!input.incognito,
         write_vis: input.writeVis ?? null, restrict_read: !!input.restrictRead,
         app_id: input.appId || null,   // #1780 D4 — 앱 세션 desired-state 미러(복원이 앱 축을 잃지 않게)
+        label_source: labelSource,     // #1979 — 이름 걸쇠. INSERT 때만 정해진다(복원은 저장된 출처를 유지)
         created: createdSec, last_busy: null,
       });
     } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
   }
-  // 이름을 **AI 가 다시 짓는다**(#1719 원준 2026-08-20) — 위 label 은 첫 지시 앞 28자(규칙)라 대개 조사로 채워진다.
-  //  응답을 막지 않는다: 이름은 몇 초 뒤에 붙어도 되고(화면이 폴링으로 받아 간다), 실패하면 규칙 이름 그대로 산다.
-  //  사람이 준 이름(input.label)은 손대지 않는다 — 여기 들어오는 건 '이름을 안 주고 첫 지시만 준' 경로뿐이다.
-  //  덮기 전에 지금 이름을 다시 읽어 **그 사이 사람이 고쳤으면 물러난다**(짓는 데 몇 초가 걸린다).
-  if (aiNamingEnabled() && !cleanLabel(input.label) && input.initialPrompt && String(input.initialPrompt).trim() && harness.key !== "shell" && !input.loginFor) {
-    const seed = String(input.initialPrompt);
-    const ruleName = label;
-    const cfgDir = process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile ? profileConfigDir(user) : null;
-    void (async () => {
-      const nice = cleanLabel(await aiSessionName(seed, { configDir: cfgDir, harness: harness.key }));   // #1884 — 그 세션의 하네스로 짓는다
-      if (!nice || nice === ruleName) return;
-      const now = await getSessionLabel(id).catch(() => "");
-      if (now && now !== ruleName) return;                 // 사람이 그 사이 이름을 고쳤다 — 그 이름이 정본이다
-      await editSession(user, id, { label: nice });
-    })().catch((e) => console.warn(`[terminal] 세션 AI 이름 실패(${id}) — 규칙 이름으로 남는다:`, (e as Error)?.message ?? e));
-  }
+  // 이름을 **AI 가 다시 짓는 일은 여기서 하지 않는다**(#1979 — 발의 윤상민 2026-08-25).
+  //  종전(#1719)엔 여기서 하네스를 **헤드리스로 따로 스폰**해 이름을 지었다(구 src/terminal/session-name-ai.ts).
+  //  그 스폰이 `{ ...process.env }` 로 부모 세션의 LIVELY_SESSION_ID·LIVELY_TOKEN·훅 배선을 통째로 상속해서,
+  //  시드 훅 project-auto-bind 가 **이름짓기 프롬프트를 '첫 실질 지시'로 오인** → 프로젝트를 만들어 이 세션에 붙였다.
+  //  프로덕션 실측 2026-08-25: 쓰레기 프로젝트 #1946·#1957(제목이 이름짓기 프롬프트 첫 줄 그대로), 그 중 하나는
+  //  실사용자 세션. 즉 **세션이 자기 이름을 짓는 행위가 자기를 엉뚱한 프로젝트에 바인딩했다.**
+  //  이제 이름은 **이미 도는 그 세션 자신**이 짓는다 — 첫 지시 턴에 훅(session-name-ask)이 지시를 주입하고
+  //  세션이 `session_rename` 으로 등록한다(capabilities/session-rename.ts). 스폰이 0이면 그 오염 경로는
+  //  완화가 아니라 **구조적으로 없다**. 여기 남는 이름은 규칙 이름(label)뿐이고 그게 바닥값이다.
   // 첫 지시(#1719 홈 입력창) — 응답을 막지 않고 백그라운드에서 하네스 입력창이 뜨길 기다렸다 넣는다.
   //  ⚠ 응답을 기다리게 하면 안 된다: 하네스 부팅(수 초)+신뢰 대화상자 동안 화면이 멈추고, 실패해도 세션은 이미 살아 있다.
   //  동적 import — 정적으로 걸면 sessions → session-first-prompt → send-keys → terminal-pty → terminal-sessions → sessions 순환(check-imports).
@@ -728,14 +727,27 @@ export async function killSession(user: LivelyUser, id: string, opts?: { admin?:
   if (opts?.preserveState) return;   // 보관(회수)은 **복원 가능**하다 — desired-state 를 남긴다
   await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
 }
-export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
+/**
+ * 세션 이름·초대 변경. `opts.source`(#1979) = **누가 이 이름을 지었나** — 기본 human(웹 편집·직접 호출).
+ *  human 이 아니면 걸쇠(session-label-source.ts)를 먼저 본다: 지금 출처를 못 이기면 tmux 도 DB 도 안 건드린다.
+ *  ⚠ 자동 이름(session-autoname, source=rule)이 기본값 human 을 쓰면 그 순간 **사람이 지은 이름으로 굳어져**
+ *   에이전트가 영영 못 다듬는다 — 자동 경로는 반드시 자기 출처를 실어 보내야 한다.
+ */
+export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }, opts?: { source?: LabelSource }): Promise<void> {
   await assertManage(user, id);
-  const mirror: { label?: string; invites?: string[] } = {};
+  const source: LabelSource = opts?.source ?? "human";
+  const mirror: { label?: string; label_source?: LabelSource; invites?: string[] } = {};
   if (patch.label !== undefined) {
     const clean = cleanLabel(patch.label);
     if (!clean) throw new HttpError(400, "이름이 필요합니다");
+    if (source !== "human") {
+      const cur = await getSessionState(id).catch(() => undefined);
+      // 미러 행이 없으면(구 세션·managed) 걸쇠를 걸 근거가 없다 — 종전대로 붙인다(무회귀).
+      if (cur && !canRelabel(cur.label_source, source)) return;
+    }
     await tmux(["set-option", "-t", id, "@box_label", clean]);
     mirror.label = clean;
+    mirror.label_source = source;
   }
   if (patch.invites !== undefined) {
     const invites = await validInvites(patch.invites, ownerId(user));

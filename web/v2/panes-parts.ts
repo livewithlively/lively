@@ -178,8 +178,8 @@ export function sessTitle(s: Sess, projectName: string): string {
   const dup = !!projectName && norm(t.main) === norm(projectName);
   const tailId = String(s.id).split('-').pop() || String(s.id);
   // ★ 서버가 들고 있는 이름이 **정본**이다 — 아래 nameCache 보다 먼저 본다(원준 2026-08-20).
-  //  새 세션은 첫 지시를 이름 자리에 임시로 넣어 두는데(seedSessName), 잠시 뒤 서버가 그 지시를 보고
-  //  **짧은 이름**을 지어 붙인다(src/terminal/session-name-ai.ts). 캐시를 먼저 보면 그 이름이 도착해도
+  //  새 세션은 첫 지시를 이름 자리에 임시로 넣어 두는데(seedSessName), 잠시 뒤 **그 세션 자신**이 첫 지시 턴에
+  //  **짧은 이름**을 지어 등록한다(#1979 — 훅 session-name-ask → MCP session_rename). 캐시를 먼저 보면 그 이름이 도착해도
   //  화면은 영영 첫 지시 앞부분을 그대로 달고 있게 된다.
   if (!dup && t.main) return t.main;
   return nameCache.get(s.id) || ('세션 ' + tailId.slice(0, 8));
