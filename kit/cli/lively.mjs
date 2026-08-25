@@ -174,6 +174,11 @@ const AGY_PLUGIN_DIR = join(HOME, ".gemini", "config", "plugins", "lively");
 const GROK_DIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
 // 배선 신호는 **통째로 우리 소유**인 훅 배선 파일이다(user-install.mjs installGrok 이 심는다).
 const GROK_HOOKS_JSON = join(GROK_DIR, "hooks", "lively-grok.json");
+// 자산 충족 판정 — status 색상·조치 힌트·doctor 체크가 **한 산식**을 공유한다(표면끼리 어긋나면 그게 이 판정의 결함).
+//  collision = 같은 이름의 멤버 자산이 이겨서 조직 사본을 안 깐 것(정상). null = 판정 불가 → 보수적으로 결손 취급하고
+//  불확실성은 문구로 밝힌다(아는 척 초록불로 덮지 않는다).
+const assetsSatisfied = (a) => a.local + (a.collision || 0) >= a.server;
+
 // 자동 업데이터(self-update.mjs)와 **같은 필수 훅 목록**을 쓴다 — 손상 번들 판정 기준이 갈리면 안 된다.
 //  self-update.mjs 자신은 목록에 없다(구 게이트웨이로 롤백 시 '손상'으로 오판해 영구 고착되는 걸 막기 위함 — #858).
 const REQUIRED_HOOKS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
@@ -1457,14 +1462,35 @@ async function gatherStatus() {
     //   (자산 sync 는 실패해도 조용하다 — 세션을 막지 않는 게 설계라서. 그래서 '조용한 실패'가 기본값이다.)
     //  로컬 0 / 서버 N 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻이고, 그게 곧 신고 전에 잡을 신호다.
     const manifest = (() => { try { return JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")) || {}; } catch { return {}; } })();
+    // ★ 안 깔린 이유는 둘이다 — ①materialize 실패(진짜 고장) ②**슬러그 충돌**: 같은 이름의 그 사람 자산이 이미
+    //  디스크에 있어 sync 가 비파괴 정책으로 비켜선 것(sync-harness-assets 의 collision — 멤버 파일 보존).
+    //  ②를 세지 않으면 진단이 거짓말한다: 실측(2026-08-20) 조직 스킬 51개의 **원저자 머신**에서 전량 충돌인데
+    //  doctor 가 "14/65 ✗ · 새 세션을 켜세요" 를 냈다 — 정책상 세션을 몇 번 켜도 영원히 안 깔리는 상태다.
+    //  경로 규약은 훅과 **같은 표**(harness-registry)에서 가져온다(하드코딩 복제 금지). 표를 못 읽으면 null =
+    //  '충돌인지 모른다'. null 은 판정에선 0 과 같게(=보수적으로 결손) 다루되 **사람용 문구엔 "확인 못 했다"를 적는다** —
+    //  경보를 숨기지도, 모르는 걸 정상이라 우기지도 않는다. 구분이 필요한 소비자는 --json 의 null 을 본다.
+    let placementFor = null;
+    try { ({ placementFor } = await import(new URL("../hooks/harness-registry.mjs", import.meta.url).href)); } catch { /* 발행 배치가 다르면 생략 */ }
     for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1701 — grok 도 같은 자산 축
       if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
       try {
         const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
         const server = Array.isArray(r?.assets) ? r.assets.length : null;
         if (server === null) continue;
-        const local = Object.keys((manifest[h] && typeof manifest[h] === "object") ? manifest[h] : {}).length;
-        st.harness[h].assets = { local, server };
+        const mine = (manifest[h] && typeof manifest[h] === "object") ? manifest[h] : {};
+        const local = Object.keys(mine).length;
+        let collision = null;
+        if (placementFor) {
+          collision = 0;
+          for (const a of r.assets) {
+            const id = String(a?.id || "").trim().toLowerCase();
+            if (!id || Object.hasOwn(mine, id)) continue;    // 라이블리가 심은 것은 충돌이 아니다(prototype 키 오탐 방지)
+            let place = null;
+            try { place = placementFor(h, a?.kind, id, HOME); } catch { /* 그 하네스가 안 쓰는 종류 */ }
+            if (place?.file && existsSync(place.file)) collision++;
+          }
+        }
+        st.harness[h].assets = { local, server, collision };
       } catch { /* 자산 조회 실패는 부가 정보 — 상태 전체를 죽이지 않는다 */ }
     }
   } catch (e) { st.gateway.error = e.message; }
@@ -1583,7 +1609,15 @@ async function cmdStatus(opts) {
   // 연결(#1431)은 **등록됐을 때만** 뜻이 있다. 확인 못 했으면(구버전 claude 등) 물음표로 — 모르는 걸 아는 척하지 않는다.
   const connOf = (h) => !h.mcp ? "" : h.mcpConnected === null ? `   ${dim("? 연결")}` : `   ${h.mcpConnected ? green("✓") : yellow("✘")} 연결`;
   // 자산은 **개수가 곧 진단**이다 — 0/26 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻(#1475).
-  const assetsOf = (h) => !h.assets ? "" : `   자산 ${h.assets.local === h.assets.server ? green(`${h.assets.local}/${h.assets.server}`) : yellow(`${h.assets.local}/${h.assets.server}`)}`;
+  // 충돌분(내 로컬 자산이 이겨서 조직 사본을 안 깐 것)은 **고장이 아니다** — 초록으로 두고 괄호로 사실만 덧붙인다.
+  const assetsOf = (h) => {
+    if (!h.assets) return "";
+    const a = h.assets, kept = a.collision || 0;
+    const n = `${a.local}/${a.server}`;
+    // 용어는 웹 '내 하네스'(overlap: shadow = "로컬이 가림")와 맞춘다 — 같은 사실을 두 표면이 다른 말로 부르면 대조가 안 된다.
+    const note = kept ? ` (+${kept} 로컬이 가림)` : (a.collision === null && a.local < a.server ? " (충돌 여부 미확인)" : "");
+    return `   자산 ${assetsSatisfied(a) ? green(n) : yellow(n)}${note ? dim(note) : ""}`;
+  };
   say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록${connOf(st.harness.claude)}${assetsOf(st.harness.claude)}`);
   // ★ '어딘가 등록됨' 을 통과로 쓰지 않는다 — 웹터미널 세션은 프로필 dir 을 읽으므로, 거기 없으면 세션엔 안 보인다.
   //  그 상태가 초록불로 보이던 게 실기기 오진의 원인이었다. 빠진 곳을 이름으로 말하고, 고치는 한 줄까지 준다.
@@ -1645,7 +1679,7 @@ async function cmdStatus(opts) {
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
   else {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
-    const short = ["claude", "codex", "opencode", "antigravity", "grok"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server); // #1701 — grok 포함
+    const short = ["claude", "codex", "opencode", "antigravity", "grok"].filter((h) => st.harness[h].assets && !assetsSatisfied(st.harness[h].assets)); // #1701 — grok 포함 · 충돌분 제외
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
     // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
     //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
@@ -1761,7 +1795,11 @@ async function cmdDoctor(opts) {
   for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1689 — opencode 도 종전 누락분 보강 · #1701 — grok
     const a = st.harness[h].assets;
     if (!a) continue;
-    chk(`조직 자산(${h})`, a.local >= a.server, `${a.local}/${a.server} 설치됨`,
+    const kept = a.collision || 0;   // 같은 이름의 내 로컬 자산이 있어 조직 사본을 안 깐 것 = 정상(비파괴 정책)
+    //  collision=null 이면 결손인지 충돌인지 못 가린다 → 경보는 유지하되 그 불확실성을 문구에 적는다.
+    const note = kept ? ` · ${kept}건은 로컬 동명 자산이 가려 조직 사본 미배포(정상)`
+      : (a.collision === null && a.local < a.server ? " · 로컬 충돌 여부는 확인 못 했습니다(배치표 미가용)" : "");
+    chk(`조직 자산(${h})`, assetsSatisfied(a), `${a.local}/${a.server} 설치됨${note}`,
       "새 세션을 한 번 켜세요(세션 시작 훅이 내려받습니다). 그래도 0 이면 배선·권한 문제입니다");
   }
   if (st.kit.remote) chk("키트 최신", st.kit.current, st.kit.current ? String(st.kit.local) : `${st.kit.local || "(미설치)"} → ${st.kit.remote}`, "lively update");
