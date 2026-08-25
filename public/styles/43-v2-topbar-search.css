@@ -39,6 +39,13 @@
 /* 창을 끌 자리 — 늘 빈 채로 둔다. 128px 은 마지막 탭과 최소화 단추 사이가 휑했고(2026-08-20), 56px 로 줄였더니
    이번엔 잡을 데가 모자랐다(상민님 2026-08-24). 그 사이값으로 둔다 — 끌기에 충분하면서 빈 자리로 보이지 않는 폭. */
 .v2-tb-grip { flex: 0 0 88px; min-width: 48px; }
+/*  #1954 — 상단 탭이 빠지면서 이 줄이 비었다. 뒤로·앞으로·검색이 그 자리로 올라온다(side.ts navHost).
+    ⚠ 줄 전체가 drag 라 그 안의 버튼·입력은 no-drag 로 되돌려야 눌린다. 손잡이는 오른쪽에 그대로 남는다. */
+#v2-root.has-topbar > .v2-topbar > .v2-side-nav {
+  order: -1; flex: 1 1 auto; min-width: 0; align-items: center; padding: 0 8px;
+  -webkit-app-region: no-drag;
+}
+#v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: 420px; }
 /* 탭이 줄 맨 위에 닿으므로 켜진 탭의 파란 밑줄은 **아래쪽**에 긋는다 — 위에 그으면 창 모서리와 붙어 선이 잘려 보인다. */
 #v2-root.has-topbar > .v2-topbar .v2-tab.on { box-shadow: inset 0 -2px 0 var(--blue); }
 /* 데스크톱 앱은 맨 윗줄이 이미 탭 줄이다 — 가운데 열 위에 또 한 줄이 생기지 않게 [모든 탭] 도 같은 줄에서 산다.

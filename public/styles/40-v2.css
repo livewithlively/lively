@@ -346,18 +346,19 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* ══ 열린 앱 사이드바(#1883) ════════════════════════════════════════════════════
    상단 탭과 프로젝트▸세션 트리를 한 목록으로 합친다. 한 행 = 앱 인스턴스 하나, 프로젝트 소속은 둘째 줄의
    클릭 가능한 경로(스페이스 › 리스트 › 프로젝트). 위쪽에는 새 작업만, 나머지 진입점은 아래 도크로 내린다. */
-.v2-new-task-wrap { padding: 6px 10px 8px; flex: none; }
-.v2-new-task { width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 9px;
-  background: var(--blue); color: var(--on-fill); font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; }
-.v2-new-task:hover { background: var(--blue-fill-deep); }
-.v2-new-task:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.v2-new-task svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/*  새 작업 ＋ — 목록 위 큰 버튼을 걷고 머리글로 들어왔다(#1954). 바탕은 없고 **획이 파랗다** — 머리글의
+    다른 아이콘 단추들과 같은 무게로 앉되 색 하나로 '여기가 시작'임을 말한다. */
+.v2-app-new { width: 24px; height: 24px; margin-left: auto; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 7px;
+  background: none; color: var(--blue); cursor: pointer; }
+.v2-app-new:hover { background: var(--bg); }
+.v2-app-new:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.v2-app-new svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
 
 .v2-app-space { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 8px; }
 .v2-app-space-head { min-height: 34px; display: flex; align-items: center; gap: 6px; padding: 2px 4px 4px 8px; flex: none; }
 .v2-app-space-head .v2-k { font-size: 12px; font-weight: 800; color: var(--ink); }
 .v2-app-count { min-width: 18px; font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--muted); }
-.v2-app-space-head .v2-findbtn-wrap { margin-left: auto; }
+.v2-app-space-head .v2-findbtn-wrap { margin-left: 0; }
 .v2-app-open { width: 28px; height: 28px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
 .v2-app-open:hover { background: var(--bg); color: var(--ink); }
 .v2-app-open:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
@@ -366,7 +367,30 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 
 .v2-app-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 1px 2px 12px; scrollbar-width: thin; scrollbar-color: transparent transparent; }
 .v2-app-list:hover { scrollbar-color: var(--line-strong) transparent; }
-.v2-app-inst { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 24px; grid-template-rows: minmax(32px, auto) auto;
+/*  홈 — 시키는 칸 아래 최근에 연 앱 한 줄(#1954). 전체는 [모든 앱]이 런치패드로 연다. */
+.v2-home-apps { margin-top: 26px; }
+.v2-home-apps-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.v2-home-apps-k { font-size: 12px; font-weight: 700; color: var(--muted); }
+.v2-home-apps-all { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; padding: 3px 6px 3px 8px; border: 0; border-radius: 7px;
+  background: none; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.v2-home-apps-all:hover { background: var(--bg-tint); color: var(--ink); }
+.v2-home-apps-all:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-home-apps-all svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.v2-home-apps-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; }
+.v2-home-app { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 6px 10px; border-radius: 12px;
+  color: var(--ink-sub); text-decoration: none; }
+.v2-home-app:hover { background: var(--bg-tint); color: var(--ink); }
+.v2-home-app:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-home-app-ico { width: 38px; height: 38px; display: grid; place-items: center; }
+.v2-home-app-ico svg { width: 100%; height: 100%; }
+.v2-home-app-t { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 600; }
+@media (max-width: 560px) { .v2-home-apps-row { grid-template-columns: repeat(3, 1fr); } }
+
+/*  묶음 머리글 — '지금 볼 것' · 오늘 · 어제 · M월 D일 (#1954). 목록의 리듬만 만들고 스스로 눈에 띄지 않는다. */
+.v2-app-group { padding: 12px 8px 4px; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0; }
+.v2-app-group:first-child { padding-top: 2px; }
+
+.v2-app-inst { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto 24px; grid-template-rows: minmax(32px, auto) auto;
   column-gap: 3px; padding: 6px 5px 6px 7px; border-radius: 9px; color: var(--ink-sub); }
 .v2-app-inst + .v2-app-inst { margin-top: 2px; }
 .v2-app-inst:hover { background: var(--bg); color: var(--ink); }
@@ -381,20 +405,33 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-ic.st-busy { stroke: var(--blue); }
 .v2-app-inst-ic.st-wait { stroke: var(--warn-deep); }
 .v2-app-inst-ic.st-done { stroke: var(--mint-deep); }
-.v2-app-inst-close { grid-column: 2; grid-row: 1; align-self: center; width: 22px; height: 22px; display: inline-grid; place-items: center; padding: 0; border: 0;
+.v2-app-inst-close { grid-column: 3; grid-row: 1; align-self: center; width: 22px; height: 22px; display: inline-grid; place-items: center; padding: 0; border: 0;
   border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; opacity: 0; }
 .v2-app-inst:hover .v2-app-inst-close, .v2-app-inst.on .v2-app-inst-close, .v2-app-inst-close:focus-visible { opacity: 1; }
 .v2-app-inst-close:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-close svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
-.v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
-.v2-app-inst-project { display: block; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11.5px;
-  line-height: 1.35; text-align: left; cursor: pointer; }
-.v2-app-inst-pline { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / 4; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
+
+/*  상태를 **글자로** 말한다(#1954) — 색만 쓰면 '작업 중'과 '작업 완료'가 같은 점 하나로 보인다.
+    확인한 완료는 아무 칩도 달지 않는다 — 그 없음이 곧 '더 볼 것 없음'이다. */
+.v2-app-inst-st { grid-column: 2; grid-row: 1; align-self: center; display: inline-flex; align-items: center; gap: 4px; flex: none;
+  padding: 1px 6px 1px 5px; border-radius: 999px; font-size: 10.5px; font-weight: 700; line-height: 1.6; white-space: nowrap; }
+.v2-app-inst-st-dot { width: 5px; height: 5px; border-radius: 999px; background: currentColor; flex: none; }
+/*  ⚠ *-fill 은 '채운 면'(진한 색, 위에 백색 글자가 앉는다) — 칩 배경엔 **틴트** 토큰을 쓴다.
+    fill 을 배경으로 깔면 같은 계열 글자색이 그 위에서 사라진다(실측: 초록·파란 블록만 보이고 글자가 안 읽혔다). */
+.v2-app-inst-st[data-st="busy"] { background: var(--bg-note); color: var(--blue); }
+.v2-app-inst-st[data-st="busy"] .v2-app-inst-st-dot { animation: v2-app-pulse 1.4s ease-in-out infinite; }
+.v2-app-inst-st[data-st="waiting"] { background: var(--warn-bg); color: var(--warn-deep); }
+.v2-app-inst-st[data-st="done"] { background: var(--bg-success); color: var(--mint-deep); }
+@keyframes v2-app-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .v2-app-inst-st[data-st="busy"] .v2-app-inst-st-dot { animation: none; } }
+/*  호버로 닫기 × 가 뜨면 칩과 겹칠 자리가 좁아진다 — 칩을 접어 자리를 내준다(정보는 행 전체가 이미 말한다). */
+.v2-app-inst:hover .v2-app-inst-st, .v2-app-inst.on .v2-app-inst-st { display: none; }
+.v2-app-inst:hover .v2-app-inst-st:only-child { display: inline-flex; }
+.v2-app-inst-project { display: flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: var(--muted); font: inherit;
+  font-size: 11.5px; line-height: 1.35; text-align: left; cursor: pointer; }
 .v2-app-inst-project:hover { color: var(--blue); }
 /* 조상(스페이스 › 리스트)이 먼저 줄고 **프로젝트 이름은 남는다** — 한 덩이로 두면 뒤가 잘려 이름이 사라진다(#1883 실측). */
-/*  계층은 제 줄을 쓴다 — 이름과 폭을 다투지 않는다. 넘치면 JS(side.ts fitAncestors)가 **앞 단계부터** 접는다. */
-.v2-app-inst-anc { display: block; margin-left: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 10.5px; line-height: 1.45; color: var(--muted-2); }
 .v2-app-inst-pname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-app-inst-project-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; }
 .v2-app-inst-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--muted); }
