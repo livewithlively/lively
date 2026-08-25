@@ -866,3 +866,104 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .wk-blk, .wk-galc, .wk-pal-card, .wk-blk-cbtn { transition: none; } }
 
+
+/* ══ #1841 WIKI 목록 = 프로젝트 표 문법 ══════════════════════════════════════
+   목록 표면(전체·인덱스·검색·미분류 · 자료 · 검토 대기 · 휴지통 · 카테고리 서고)을 프로젝트 탭과 같은 머리 3층(.pjv-board-header)
+   + 같은 표(.pjv-trow)로 그린다. 문서 본문·대문 카드·오로라·민트 틱은 그대로. 여기는 위키에만 있는 열·칸의 규칙뿐이다. */
+.wk-board-pad { max-width: var(--wk-wide, 1180px); }
+.wk-board { margin-bottom: 18px; }
+.wk-board .pjv-board-header { margin-bottom: 0; }
+.wk-board-body { min-height: 120px; }
+.wk-board-body .pjv-tgroup:first-child { margin-top: 8px; }
+.wk-board-inline { margin-top: 6px; }
+.wk-board-inline .wk-tgroup { margin-top: 0; }
+.wk-crumb-leaf { cursor: default; }
+.wk-crumb-sub { font-size: 12.5px; color: var(--muted); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-crumbs a.pjv-crumb { text-decoration: none; }
+.wk-vtab-ic { width: 17px; height: 17px; }
+/* 툴바 — 유형 알약은 프로젝트의 그룹 알약과 같은 모양, 걸린 필터 칩은 그 옆. 자료의 종류·출처 셀렉트는 툴바 높이(30)에 맞춘다. */
+.wk-board .pjv-tasks-head-left { gap: 4px; flex-wrap: wrap; }
+.wk-tb-pill { padding: 0 11px; font-weight: 600; color: var(--ink-sub); }
+.wk-tb-pill.active { font-weight: 700; }
+.wk-board .pjv-tasks-head-left select { height: 30px; border-radius: 999px; padding: 0 28px 0 11px; font-size: 13px; font-weight: 600; }
+.wk-board .wk-filter-chip { height: 26px; display: inline-flex; align-items: center; }
+/* 행 — 제목 셀: [체크] 틱 · 아이콘 · 제목 · 발췌. 프로젝트 행(min-height 46)과 같은 높이. */
+.wk-trow { min-height: 46px; }
+.wk-trow .wk-tick { flex: none; }
+.wk-trow .wk-trow-ic { flex: none; width: 16px; height: 16px; color: var(--muted-2); }
+.wk-trow .wk-trow-emoji { flex: none; font-size: 15px; line-height: 1; }
+.wk-trow .wk-ttitle { flex: 0 1 auto; max-width: 100%; font-weight: 600; letter-spacing: -.1px; }
+.wk-trow.folder .wk-ttitle { font-weight: 700; }
+.wk-trow.archived .wk-ttitle { color: var(--muted); font-weight: 500; }
+.wk-tsnip { flex: 0 1 46%; min-width: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wk-trow .wk-tcheckwrap { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; }
+.wk-trow .wk-tcheck { width: 15px; height: 15px; margin: 0; accent-color: var(--blue-fill); cursor: pointer; }
+.wk-trow.sel { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
+/* 값 셀 — 가운데, 왼쪽 정렬 열(분류·채널)은 .wk-col-left. */
+.wk-trow > .wk-tcell { justify-content: center; padding: 0 6px; overflow: hidden; }
+.wk-trow > .wk-tcell.wk-col-left, .wk-colhead .pjv-colhead.wk-col-left { justify-content: flex-start; text-align: left; }
+.wk-trow > .wk-tcell > * { min-width: 0; }
+.wk-trow .pjv-fval { font-size: 13px; }
+.wk-trow .wk-twho { color: var(--muted); }
+.wk-trow .wk-twho.human { color: var(--mint-deep); font-weight: 700; }
+.wk-trow .wk-tcat { color: var(--ink-sub); }
+.wk-trow .wk-src-chan { font-family: var(--wkm); font-size: 12px; }
+.wk-colhead .pjv-thcol-name { white-space: nowrap; }
+/* 자료 [더 보기] 줄은 표 아래 가운데. */
+.wk-board > .wk-src-more { padding: 10px 0 4px; text-align: center; }
+/* 검토 대기 패널은 표 머리 아래 그대로 실린다(패널 자체의 rq-* 스타일 유지). */
+.wk-board-body > .rq-gate, .wk-board-body > .rq-panel { margin-top: 10px; }
+@media (max-width: 720px) { .wk-crumb-sub { display: none; } }
+
+/* ══ #1841 안 4 — 첫 화면이 카테고리가 아니라 시간(최근). 사이드바 없는 한 컬럼 ══
+ *  ⚠ 좌측 위키 사이드바(.kn-side)는 이 앱에서 더 그리지 않는다 — 셸 사이드바와 이중이라 걷었다(원준 2026-08-24).
+ *   .kn-side* 규칙은 check-css-drops 때문에 남아 있을 뿐 마운트되지 않는다. */
+.kn-shell-flat { display: block; }
+.kn-shell-flat > .wk-main { width: 100%; min-width: 0; }
+.kn-shell-flat > .wk-doc { max-width: var(--wk-doc-w, 900px); margin: 0 auto; }
+
+/* 카테고리 칩 — 행에서 그 카테고리로 가는 링크. 스페이스는 점 색으로만 구분(채운 배지 금지 §0.5). */
+.wk-catchip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 22px; padding: 0 9px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink-sub);
+  font-size: 11.5px; font-weight: 700; text-decoration: none; white-space: nowrap; overflow: hidden; }
+.wk-catchip > span { overflow: hidden; text-overflow: ellipsis; }
+.wk-catchip:hover { border-color: var(--line-net-2); color: var(--ink); background: var(--bg-tint); }
+.wk-catchip-dot { width: 6px; height: 6px; border-radius: 2px; background: var(--muted-2); flex: none; }
+.wk-catchip.sp-product .wk-catchip-dot { background: var(--blue); }
+.wk-catchip.sp-business .wk-catchip-dot { background: var(--mint-deep); }
+.wk-catchip.sp-system .wk-catchip-dot { background: var(--warn); }
+.wk-catchip-none { color: var(--muted); border: 1px dashed var(--line-net); }
+
+/* [검토할 것] 묶음 — 첫 화면 맨 위, 내게 걸린 게 있을 때만. 줄에서 바로 승인·반려한다. */
+.wk-rv-group { border: 1px solid var(--line-note); border-radius: 12px; background: var(--bg-note); padding: 2px 8px 6px; margin-bottom: 14px; }
+.wk-rv-head { padding-top: 8px; }
+.wk-rv-hint { font-size: 12px; color: var(--muted-head); font-weight: 500; margin-left: 6px; }
+.wk-rv-all { margin-left: auto; font-size: 12.5px; font-weight: 700; color: var(--blue); text-decoration: none; padding-right: 4px; }
+.wk-rv-all:hover { text-decoration: underline; }
+.wk-rv-group .wk-trow { background: var(--bg); }
+.wk-rv-acts { display: inline-flex; gap: 6px; justify-content: flex-end; width: 100%; }
+.wk-rv-btn { height: 24px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg);
+  font-family: inherit; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); cursor: pointer; }
+.wk-rv-btn:hover { border-color: var(--muted-2); color: var(--ink); }
+.wk-rv-btn.ok { color: var(--mint-deep); border-color: color-mix(in srgb, var(--mint) 40%, transparent); }
+.wk-rv-btn.ok:hover { background: var(--ok-bg); }
+.wk-rv-btn.no { color: var(--coral-text); }
+.wk-rv-btn.no:hover { background: var(--danger-bg-2); border-color: var(--danger-line); }
+.wk-rv-pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 800; color: var(--warn-text); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+
+/* 카테고리 탭 — 카테고리 한 줄(문서 수 · 검토 대기 · 소유 팀 · 최근 갱신). 옛 오로라 카드 격자를 대신한다. */
+.wk-tbody a.wk-catrow { display: grid; align-items: center; text-decoration: none; color: inherit; }   /* 링크 행 — 표의 다른 행과 같은 격자(앵커 기본 display 를 덮는다) */
+.wk-catrow .wk-ttitle { font-weight: 700; }
+.wk-catrow .kn-cat-star { color: #f0b429; font-size: 11px; flex: none; }
+.wk-catrow-go { color: var(--muted-2); font-size: 13px; }
+.wk-catrow:hover .wk-catrow-go { color: var(--blue); }
+
+/* 툴바 드롭다운 알약이 연 메뉴에서 현재 값 표시 */
+.pjv-menu-item.on { color: var(--blue); font-weight: 700; }
+
+/* 카테고리 화면(#1841) — 커버 없이 머리 3층 + 대문/서고. 사이드바가 없으니 나가는 길이 화면 안에 있다. */
+.wk-cat-flat { padding-top: 0; }
+.wk-cat-board { margin: 0 auto 10px; max-width: var(--wk-wide, 1180px); padding-bottom: 0; }
+.wk-cat-flat .wk-cat-inner { padding-top: 6px; }
+.wk-cat-flat .wk-cat-icon { position: static; margin: 0 0 6px; }

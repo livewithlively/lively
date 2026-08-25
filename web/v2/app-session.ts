@@ -20,6 +20,9 @@ export interface SessionApp {
   pages: Array<{ key: string; title: string }>;  // #1780 PR5 — ui.pages(있으면 UI 앱). 없으면 [](세션 앱).
   sites: string[];   // csp.frame_domains — 이 앱이 **화면에 싣는** 사이트(동의 창에 보여 준다)
   net: string[];     // csp.connect_domains ∪ permissions.hosts — 이 앱이 **직접 연결하는** 곳
+  instances: { project: 'global' | 'optional' | 'required'; multiplicity: 'single' | 'multiple' };
+  system: { renderer: 'session' | 'browser' | 'classic'; home?: string; route?: string } | null;
+  source: { kind?: string };
 }
 
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
@@ -36,8 +39,12 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         const csp = (a.manifest && a.manifest.csp) || {};
         const sites = (csp.frame_domains || []).map(String);
         const net = [...(csp.connect_domains || []), ...(perm.hosts || [])].map(String);
+        const instances = (a.manifest && a.manifest.instances) || { project: 'optional', multiplicity: 'multiple' };
+        const source = (a.source && typeof a.source === 'object') ? a.source : {};
+        // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
+        const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
         return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-          scopes: (perm.scopes || []).map(String), tools, pages, sites, net };
+          scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, system, source };
       });
   } catch (e: any) {
     // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
@@ -66,7 +73,8 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   if (cur) return cur;
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
-      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [] };
+      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [],
+        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
     return true;

@@ -23,6 +23,7 @@ import { listV6Capabilities } from "./lists-v6.js";
 import { statusTemplateV6Capabilities } from "./status-templates-v6.js";
 import { favoritesCapabilities } from "./favorites.js";
 import { appCapabilities } from "./apps.js";
+import { appInstanceCapabilities } from "./app-instances.js";
 import { appToolCallCapabilities } from "./app-tool-call.js";
 import { appStoreCapabilities } from "./app-store.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
@@ -120,6 +121,7 @@ const all: Capability[] = [
   ...channelPolicyCapabilities, // #1226: 대화 채널별 개인 열람/발송 허용 — me_slack_channels·me_channel_policy_set. **REST 전용·변경은 사람만**(AI 가 자기 차단을 못 풀게). 집행은 org/channels/channel-guard ← mcp-proxy.
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
   ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.
+  ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
   ...appToolCallCapabilities, // #1780 PR5b: 앱 UI 브리지 tools/call(org_app_tool_call, REST 전용) — 앱 UI 의 도구 호출을 앱 principal 로 재판정 실행.
   ...appStoreCapabilities, // #1780 D6: 앱 데이터 store_*(insert/query/tables) — 앱이 자기 app 스키마 테이블을 RLS 격리 하에 읽고 쓴다.
 ];

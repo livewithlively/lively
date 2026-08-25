@@ -8,7 +8,7 @@ import { HttpError } from "../http-error.js";
 // 순수 디스패치 표만 검증한다 — 실전개(DB) 배선은 itest(scripts/apps-install.itest.mjs)의 몫이라 여기서 안 만진다.
 //  여기서 다루는 건 "이 kind 를 전개기가 아는가" + "모르는 kind 는 500 으로 거부하나" + "저널만(no-op) kind 는 DB 없이 통과하나".
 
-const DEPLOY_KINDS = ["harness_asset", "host", "cron", "mcp_server", "tool"] as const;
+const DEPLOY_KINDS = ["harness_asset", "host", "cron", "mcp_server", "tool", "runtime_worker"] as const;
 const NOOP_KINDS = ["ui_page", "ui_widget", "section", "data_table"] as const;
 
 test("deployKindHandled: 실전개 kind 는 전부 true", () => {

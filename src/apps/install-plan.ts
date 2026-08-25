@@ -28,6 +28,7 @@ export interface AppComponentRef {
 export function planDeclaredComponents(m: LivelyAppManifest): AppComponentRef[] {
   const out: AppComponentRef[] = [];
 
+  if (m.runtime) out.push({ kind: "runtime_worker", ref: m.runtime.entry });
   for (const p of m.ui.pages) out.push({ kind: "ui_page", ref: p.key });
   for (const w of m.ui.widgets) out.push({ kind: "ui_widget", ref: w.key });
   for (const j of m.jobs) out.push({ kind: "cron", ref: `app:${m.id}:${j.key}`, orig_name: j.key });

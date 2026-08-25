@@ -19,6 +19,7 @@ import { canAttach, sessionDir, resolveRootPath, rootRelOf, sessionOsUser, userO
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, type LsEntry } from "./terminal-member-fs.js";
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
+import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
 import { nodeCanAttach, nodeRpc } from "../node/registry.js";
 import { folderVariants } from "../project/project-fs.js";
 import {
@@ -207,9 +208,14 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   }));
   // 삭제(파일/폴더 재귀). 루트 자체는 거부.
   app.delete("/api/ui/terminal/browse", auth, wrap(async (req, res) => {
-    const { abs, osUser } = await resolveBrowse(req, true);
+    const { base, abs, osUser } = await resolveBrowse(req, true);
     if (osUser) await memberRm(osUser, abs);
     else await fsp.rm(abs, { recursive: true, force: true });
+    // 자료 전파(#1881) — 그 경로(폴더면 하위 전부)의 자료를 superseded 로.
+    try {
+      const loc = await localRootForBrowse(String(req.query.root ?? ""), userOf(req), base, abs);
+      if (loc) await supersedeLocalPath(loc.root, path.relative(loc.base, abs));
+    } catch (e) { console.warn(`[local-ingest] 삭제 전파 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
     res.json({ ok: true });
   }));
   // 미리보기/다운로드(?download=1). 격리 멤버면 그 uid 로 stat+cat.
@@ -239,12 +245,21 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   // 업로드(raw 스트림 → 임시파일 → rename). 격리 멤버면 그 uid 로 써서 파일 소유자=멤버(세션 셸이 이후 편집 가능).
   //  취소·끊김이면 목적지는 손대지 않는다 — 덮어쓰기 업로드를 끊어도 원본이 살아있다(#797 — upload-file.ts).
   app.put("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
-    const { abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
+    const { base, abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
+    // 올린 파일 = 자료 1건(#1881 L1) — 개인 폴더는 올린 사람만 보는 자료, 공유 루트의 project/<id>/… 는 프로젝트 자료로 접는다.
+    //  실패해도 업로드는 성공이다(로그만).
+    let ing: Awaited<ReturnType<typeof ingestLocalUpload>> | null = null;
+    try {
+      const u = userOf(req);
+      const loc = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs);
+      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } });
+    } catch (e) { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
     // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
     //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).
-    res.json({ ok: true, path: abs });
+    // source_id — 자료로 등록됐으면 그 id(#1881). 구 클라이언트는 무시.
+    res.json({ ok: true, path: abs, ...(ing?.ingested ? { source_id: ing.source_id } : {}) });
   }));
 
   // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).

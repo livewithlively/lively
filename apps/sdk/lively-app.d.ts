@@ -10,10 +10,12 @@ export interface LivelyApp {
   readonly version: 1;
   /** 이 UI 를 띄운 앱 id (ready 이후 채워진다). */
   readonly app: string | null;
+  /** 이 UI를 띄운 실행 인스턴스 id. 구 호스트/모달이면 null. */
+  readonly instance: string | null;
   /** 지금 페이지 key (ui.pages[].key). */
   readonly page: string | null;
   /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page 가 채워져 있다. */
-  readonly ready: Promise<{ host: string; app: string; page: string | null; capabilities: { tools: boolean } }>;
+  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; capabilities: { tools: boolean } }>;
 
   tools: {
     /** 라이블리 도구 호출. 매니페스트 permissions.tools 안 + 사용자 grant 안이어야 한다(아니면 code -32001 로 reject). */

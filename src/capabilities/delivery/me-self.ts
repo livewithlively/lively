@@ -7,7 +7,8 @@ import { assertHookId, assertAssetId, draftAssetId } from "../../org/asset-id.js
 import { assertNoHardSecrets } from "../../org/ingest/redact.js";
 import {
   getMember, upsertMember, listOrgHooks, listOrgHarnessAssets, upsertOrgHarnessAsset, countMemberDraftAssets, listAssetPrefs,
-  setAssetPref, clearAssetPref, getOrgHook, getOrgHarnessAsset, type AssetPrefKind, type HookHarness, type AssetKind
+  setAssetPref, clearAssetPref, getOrgHook, getOrgHarnessAsset, type AssetPrefKind, type HookHarness, type AssetKind,
+  type LocalSessionMode
 } from "../../org/store.js";
 import { effectiveVisible, targetsMember } from "../../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
 import { HARNESS_ASSET_KINDS, HOOK_HARNESSES, HOOK_HARNESSES_MSG, actorOf, assertPrefKind, parseAssetFrontmatter, restRead, str, wctx } from "./shared.js";
@@ -206,6 +207,8 @@ export const meSelfCapabilities: Capability[] = [
         seen.add(key);
         assets.push({ id, kind, managed: Boolean(a?.managed) });
       }
+      const defaultMode: LocalSessionMode = input.default_mode === "readonly" || input.default_mode === "incognito"
+        ? input.default_mode : "normal";
       const snap = {
         at: new Date().toISOString(),
         host: input.host == null ? undefined : str(input.host, "host", 200).trim() || undefined,
@@ -214,6 +217,7 @@ export const meSelfCapabilities: Capability[] = [
         //  화이트리스트로 받되 'all'(대상 지정자, 하네스 아님)은 제외하고, 모르는 값은 종전대로 claude 로 폴백한다.
         harness: typeof input.harness === "string" && input.harness !== "all" && HOOK_HARNESSES.has(input.harness)
           ? input.harness : "claude",
+        default_mode: defaultMode,
         assets,
       };
       // machine_id — 한 멤버의 여러 PC 를 구분(훅이 ~/.lively/machine-id 에 UUID 생성). 없으면 host 로 폴백(구 훅 호환).
@@ -230,9 +234,9 @@ export const meSelfCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { getHarnessSnapshots, getHarnessLocalPref, getHarnessMachineAlias } = await import("../../org/store.js");
-      const [assets, hooks, prefs, snaps, localPref, aliases] = await Promise.all([
-        listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshots(userId), getHarnessLocalPref(userId), getHarnessMachineAlias(userId),
+      const { getHarnessSnapshots, getHarnessLocalPref, getHarnessMachineAlias, getLocalModePreferences } = await import("../../org/store.js");
+      const [assets, hooks, prefs, snaps, localPref, aliases, modePrefs] = await Promise.all([
+        listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshots(userId), getHarnessLocalPref(userId), getHarnessMachineAlias(userId), getLocalModePreferences(userId),
       ]);
       const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
       const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
@@ -254,10 +258,38 @@ export const meSelfCapabilities: Capability[] = [
             overlap: livelyIds.has(a.id) ? (a.managed ? "managed" : "shadow") : "local-only",
             disabled: !!disabled[`${a.kind}:${a.id}`], // 이 머신에서 끄기로 지시됨(다음 세션 .disabled rename)
           }));
-          return { machine_id: machineId, host: snap.host ?? null, alias: aliases[machineId] ?? null, harness: snap.harness ?? null, at: snap.at ?? null, assets: list };
+          return { machine_id: machineId, host: snap.host ?? null, alias: aliases[machineId] ?? null, harness: snap.harness ?? null, at: snap.at ?? null,
+            default_mode: snap.default_mode ?? "normal", mode_pref: modePrefs[machineId] ?? null, assets: list };
         })
         .sort((a, b) => (b.at ?? "").localeCompare(a.at ?? "")); // 최근 관측 머신 먼저
       return { lively, machines };
+    }),
+
+  restRead("me_local_mode_get", "이 컴퓨터의 라이블리 연결 기본값 조회",
+    "`lively run`이 하네스를 띄우기 전에 이 머신의 웹 설정(normal|readonly|incognito)을 조회한다. 명시 설정이 없으면 mode=null — CLI의 마지막 로컬 값을 덮지 않는다.",
+    [{ method: "GET", paths: ["/api/ui/me/local-mode"], parse: (req) => ({ machine_id: req.query?.machine_id }) }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const machineId = str(input.machine_id ?? "", "machine_id", 64).trim();
+      if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
+      const { getLocalModePreferences } = await import("../../org/store.js");
+      return { machine_id: machineId, preference: (await getLocalModePreferences(userId))[machineId] ?? null };
+    },
+    false, { machine_id: z.string() }),
+
+  restRead("me_local_mode_set", "이 컴퓨터의 라이블리 연결 기본값 설정",
+    "웹 또는 `lively mode`가 특정 머신의 다음 세션 기본 연결 상태를 저장한다. 이미 열린 세션에는 영향을 주지 않는다.",
+    [{ method: "POST", paths: ["/api/ui/me/local-mode"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const machineId = str(input.machine_id ?? "", "machine_id", 64).trim();
+      if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
+      const mode = str(input.mode ?? "", "mode", 16).trim();
+      if (mode !== "normal" && mode !== "readonly" && mode !== "incognito") throw new HttpError(400, "mode 는 normal|readonly|incognito 만 허용됩니다");
+      const { setLocalModePreference } = await import("../../org/store.js");
+      return { machine_id: machineId, preference: await setLocalModePreference(userId, machineId, mode) };
     }),
 
   restRead("me_harness_local_pref", "로컬 하네스 파일 끄기/켜기(머신별)",

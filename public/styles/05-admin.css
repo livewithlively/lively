@@ -195,6 +195,12 @@
 /* 안내문 아래 보조 슬롯(#1582) — '대화록은 남는다'는 말을 그 자리에서 확인시켜 주는 링크가 들어간다.
    버튼줄과 붙어 보이지 않게 왼쪽 정렬로 한 칸 띄운다(확인/취소와 위계를 섞지 않는다). */
 .ov-confirm-extra { display: flex; justify-content: flex-start; margin-top: 2px; font-size: 12.5px; }
+/* 확인창의 '기억해 두기' 한 줄(예: 휴지통으로 보낼 때 다음부터 묻지 않기) — 본문(산문)과 헤어라인으로 가르고 배경을 칠하지
+   않는다. 틴트 상자로 감싸면 바로 위 note 상자와 겹쳐 입력창처럼 읽힌다(원준 2026-08-24 '딸깍 한 팝업'). */
+.ov-confirm-opt { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; width: 100%; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); cursor: pointer; }
+.ov-confirm-opt input { margin: 0; flex: none; }
+.ov-confirm-opt .n { font-size: 13px; color: var(--ink); }
+.ov-confirm-opt .h { font-size: 12px; color: var(--muted); }
 /* 기본 .btn-text 는 회색이라 확인창 안에서 '누를 수 있는 것'으로 안 읽힌다 — 여기서만 링크색을 준다. */
 .ov-confirm-extra .btn-text { color: var(--blue); text-decoration: none; }
 .ov-confirm-extra .btn-text:hover { text-decoration: underline; }

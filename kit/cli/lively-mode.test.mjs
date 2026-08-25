@@ -2,7 +2,7 @@
 // lively 실행 모드(#1007+) — extractMode(플래그 파싱)·modeEnv(모드→env) 순수 로직 단위테스트.
 //  실행: node kit/cli/lively-mode.test.mjs  (npm test 체인에 포함). 파일/네트워크 무접촉.
 import assert from "node:assert/strict";
-import { MODES, extractMode, modeEnv } from "./lively.mjs";
+import { MODES, extractMode, hasExplicitMode, modeEnv } from "./lively.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -34,6 +34,16 @@ t("extractMode: 프로젝트번호·하네스 인자는 rest 로 통과(work.mjs
 t("extractMode: 여러 모드 플래그면 마지막이 이긴다", () => {
   assert.equal(extractMode(["--readonly", "--incognito"]).mode, "incognito");
   assert.equal(extractMode(["--incognito", "--normal"]).mode, "normal");
+});
+t("extractMode: 웹에서 동기화한 기본값을 플래그가 없을 때 쓴다", () =>
+  assert.equal(extractMode(["864"], "readonly").mode, "readonly"));
+t("extractMode: 이번 실행 플래그는 웹 기본값보다 우선한다", () =>
+  assert.equal(extractMode(["--normal", "864"], "incognito").mode, "normal"));
+t("hasExplicitMode: 명시 모드 플래그만 서버 기본값 조회를 건너뛴다", () => {
+  for (const args of [["--mode", "readonly"], ["--readonly"], ["--read-only"], ["--incognito"], ["--normal"]]) {
+    assert.equal(hasExplicitMode(args), true, args.join(" "));
+  }
+  assert.equal(hasExplicitMode(["864", "--harness", "codex"]), false);
 });
 
 console.log(`\nlively-mode tests: ${pass} passed`);

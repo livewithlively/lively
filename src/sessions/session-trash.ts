@@ -1,0 +1,95 @@
+// 세션 휴지통(#1851) — org_session_trash CRUD.
+//
+// 모델: 세션 하나 = 행 0~2개. 박스 id(box-…, desired-state/tmux)와 대화 uuid(중앙 기록)가 **같은 세션의 두 이름**이라
+//  휴지통에 넣을 때 둘 다 넣는다 — 한쪽만 넣으면 목록 병합(web/v2/views.ts mergeSessions)이 다른 이름으로 그 세션을 되살린다
+//  (실측: desired-state 를 지운 뒤 중앙 기록 행이 '기록' 세션으로 다시 떠올랐다).
+//  · trashed_at  — 휴지통에 있음. 목록 응답엔 그대로 실리되 trashedAt 표식이 붙고, 새 셸은 사이드바에서 빼고 휴지통 화면에 그린다.
+//  · purged_at   — 완전 삭제. 목록 응답에서 **빠진다**(desired-state 는 실제로 지우고, 중앙 기록은 조직 보존정책대로 남되 이 사람
+//                  목록엔 안 보인다). 행은 남겨 둔다 — 지워야 할 '이름'을 잊으면 기록 행이 또 돌아온다.
+//  owner 게이트는 여기서 — 모든 쓰기는 owner 가 자기 것일 때만(WHERE owner=$1). 남의 세션은 건드릴 수 없다.
+import { itemsPool } from "../db/client.js";
+
+export interface TrashMark { trashed_at: string; purged: boolean; project_id: number | null }   // project_id = 프로젝트와 함께 버림(묶음)
+
+const clean = (ids: string[]): string[] => [...new Set((ids || []).map((x) => String(x || "").trim()).filter(Boolean))];
+
+/** 이 사람의 휴지통 표식 전부 — session_id → {trashed_at, purged}. 목록 응답에 주석을 얹을 때 한 번 읽는다. */
+export async function trashMapFor(owner: string): Promise<Map<string, TrashMark>> {
+  const out = new Map<string, TrashMark>();
+  if (!owner) return out;
+  const r = await itemsPool.query(`SELECT session_id, trashed_at, purged_at, project_id FROM org_session_trash WHERE owner=$1`, [owner]);
+  for (const row of r.rows) {
+    out.set(String(row.session_id), { trashed_at: new Date(row.trashed_at).toISOString(), purged: !!row.purged_at, project_id: row.project_id == null ? null : Number(row.project_id) });
+  }
+  return out;
+}
+
+// ⚠ upsert 에 `ON CONFLICT (session_id)` 처럼 **제약 컬럼을 적지 않는다** — 멀티테넌시 배포는 부팅 마이그레이션이 모든 표에
+//  tenant_id 를 붙이고 PK 를 (tenant_id, …) 로 다시 짜므로, 스키마 파일의 PK 로는 매칭 제약을 못 찾아 500 이 난다
+//  (#1850 이 실측으로 밟은 함정 — 이 표도 dev 에서 같은 500 을 냈다). 갱신은 UPDATE, 추가는 NOT EXISTS + ON CONFLICT DO NOTHING.
+
+/** 휴지통으로 — 이미 있던 행은 시각만 갱신(되돌렸다가 다시 넣는 경우). purged 행은 되살리지 않는다(완전 삭제는 최종). */
+//  projectId(#1851): 프로젝트를 통째로 버리며 함께 넣는 세션은 그 묶음 표식을 단다. 따로 버리는 것(지난 세션 행의 🗑)은 NULL.
+export async function trashSessions(owner: string, ids: string[], projectId: number | null = null): Promise<number> {
+  const list = clean(ids);
+  if (!owner || !list.length) return 0;
+  const u = await itemsPool.query(
+    `UPDATE org_session_trash SET trashed_at = now(), project_id = $3
+      WHERE owner = $1 AND purged_at IS NULL AND session_id = ANY($2::text[])`, [owner, list, projectId]);
+  const i = await itemsPool.query(
+    `INSERT INTO org_session_trash(session_id, owner, trashed_at, project_id)
+       SELECT x, $1, now(), $3 FROM unnest($2::text[]) AS x
+        WHERE NOT EXISTS (SELECT 1 FROM org_session_trash t WHERE t.session_id = x)
+     ON CONFLICT DO NOTHING`, [owner, list, projectId]);
+  return (u.rowCount || 0) + (i.rowCount || 0);
+}
+
+/** 프로젝트 묶음으로 들어간 내 세션 id(purged 아닌 것) — 프로젝트 [복원]·[완전 삭제]가 함께 다룰 목록. */
+export async function bundleTrashedIds(owner: string, projectId: number): Promise<string[]> {
+  if (!owner || !(projectId > 0)) return [];
+  const r = await itemsPool.query(`SELECT session_id FROM org_session_trash WHERE owner=$1 AND project_id=$2 AND purged_at IS NULL`, [owner, projectId]);
+  return r.rows.map((x) => String(x.session_id));
+}
+
+/** 되돌리기 — 휴지통 행을 지운다(purged 는 못 되돌린다). */
+export async function untrashSessions(owner: string, ids: string[]): Promise<number> {
+  const list = clean(ids);
+  if (!owner || !list.length) return 0;
+  const r = await itemsPool.query(
+    `DELETE FROM org_session_trash WHERE owner=$1 AND purged_at IS NULL AND session_id = ANY($2::text[])`, [owner, list]);
+  return r.rowCount || 0;
+}
+
+/** 완전 삭제 표식 — 행이 없으면 만들어서라도 purged 로 둔다(휴지통을 거치지 않은 호출도 같은 결과). */
+export async function purgeSessions(owner: string, ids: string[]): Promise<number> {
+  const list = clean(ids);
+  if (!owner || !list.length) return 0;
+  const u = await itemsPool.query(
+    `UPDATE org_session_trash SET purged_at = COALESCE(purged_at, now())
+      WHERE owner = $1 AND session_id = ANY($2::text[])`, [owner, list]);
+  const i = await itemsPool.query(
+    `INSERT INTO org_session_trash(session_id, owner, trashed_at, purged_at)
+       SELECT x, $1, now(), now() FROM unnest($2::text[]) AS x
+        WHERE NOT EXISTS (SELECT 1 FROM org_session_trash t WHERE t.session_id = x)
+     ON CONFLICT DO NOTHING`, [owner, list]);
+  return (u.rowCount || 0) + (i.rowCount || 0);
+}
+
+/** 주어진 이름 중 **내 휴지통 표식이 있는** 것 — purged 여부 무관. 되돌리기·완전 삭제의 소유 근거.
+ *  ⚠ 왜 이게 필요한가(#1851 실측, 원준 2026-08-24): 완전 삭제는 ①대화 기록 파기 → ②표식 purge 순인데, ② 의 소유자 판정이
+ *  desired-state 나 **중앙 기록**을 보므로 ① 이 지운 직후엔 "없는 세션"으로 거부됐다 — 자기가 지워 놓고 못 알아본다.
+ *  휴지통에 넣을 때 이미 owner 를 확정해 표식에 적어 뒀으니, **표식 자체가 소유 증거**다. */
+export async function trashMarkedIds(owner: string, ids: string[]): Promise<string[]> {
+  const list = clean(ids);
+  if (!owner || !list.length) return [];
+  const r = await itemsPool.query(`SELECT session_id FROM org_session_trash WHERE owner=$1 AND session_id = ANY($2::text[])`, [owner, list]);
+  return r.rows.map((x) => String(x.session_id));
+}
+
+/** 휴지통에 있는(아직 purged 아닌) 이 사람의 세션 id — 비우기가 한 번에 지울 목록.
+ *  ⚠ **따로 버린 것만**(project_id IS NULL) — 프로젝트 묶음의 세션은 프로젝트 [완전 삭제]가 함께 지운다(세션만 먼저 지우면 빈 프로젝트 껍데기가 남는다). */
+export async function listTrashedIds(owner: string): Promise<string[]> {
+  if (!owner) return [];
+  const r = await itemsPool.query(`SELECT session_id FROM org_session_trash WHERE owner=$1 AND purged_at IS NULL AND project_id IS NULL`, [owner]);
+  return r.rows.map((x) => String(x.session_id));
+}
