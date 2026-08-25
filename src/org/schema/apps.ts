@@ -212,6 +212,9 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       CHECK ((host_kind='central' AND host_id IS NULL) OR (host_kind='remote' AND host_id IS NOT NULL))
     );
   `);
+  // memory_mb(#1780 Stage B): 그 run 이 **선언한** 메모리(MiB). 조직 예산의 합산 근거라 run 행에 보존한다 —
+  //  매니페스트를 나중에 다시 읽으면 패키지가 업데이트된 뒤엔 당시 값을 알 수 없다.
+  await pool.query(`ALTER TABLE org_app_worker_run ADD COLUMN IF NOT EXISTS memory_mb INT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_worker_run_instance_idx ON org_app_worker_run(instance_id, created_at DESC);`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS org_app_worker_run_active_uq ON org_app_worker_run(instance_id)
     WHERE status IN ('prepared','starting','ready','idle','running','stopping');`);
