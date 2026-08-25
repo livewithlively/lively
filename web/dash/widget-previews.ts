@@ -36,7 +36,8 @@ function ensureAside(): HTMLElement {
   const close = el('button', { class: 'dash-aside-btn dash-aside-x', type: 'button', title: '닫기 (Esc)', 'aria-label': '곁칸 닫기', text: '✕' });
   const grip = el('div', { class: 'dash-aside-grip', title: '드래그해서 폭 조절' });
   asideFrame = el('iframe', { class: 'dash-aside-frame', title: '미리보기 화면' }) as HTMLIFrameElement;
-  asideEl = el('aside', { class: 'dash-aside', 'aria-label': '미리보기 곁칸' },
+  // 지역 변수로 만들고 마지막에 모듈 변수에 넣는다 — 모듈 변수(null 허용)를 바로 쓰면 이 아래가 전부 null 검사에 걸린다.
+  const box: HTMLElement = el('aside', { class: 'dash-aside', 'aria-label': '미리보기 곁칸' },
     grip,
     el('header', { class: 'dash-aside-h' }, asideTitle, el('span', { class: 'dash-aside-sp' }), asideOpenBtn, reload, close),
     asideFrame);
@@ -74,8 +75,9 @@ function ensureAside(): HTMLElement {
   grip.addEventListener('pointercancel', stop);
   window.addEventListener('resize', () => { if (document.body.classList.contains('has-dash-aside')) applyAsideWidth(asideWidth()); });
 
-  document.body.appendChild(asideEl);
-  return asideEl;
+  document.body.appendChild(box);
+  asideEl = box;
+  return box;
 }
 
 /** 오른쪽 곁칸에 주소를 띄운다. 이미 열려 있으면 내용만 바꾼다. */

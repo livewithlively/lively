@@ -97,6 +97,8 @@ export async function setMemberOnboardingStep(
 //  서버가 **볼 수 없는 것**뿐이다 — 온보딩·파이프라인·하네스 인벤토리는 각자 자기 자리에서 라이브
 //  계산되므로 여기 복제하면 두 개의 진실이 생긴다(#850 이 온보딩에서 이미 내린 결론).
 export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
+/** 처음 설정의 결과. 무엇을 만들었는지까지 남긴다 — "왜 이 서랍이 있죠?" 에 답할 유일한 근거다. */
+export interface LivWelcome { done_at: string; drawers?: string[]; first_order?: string | null }
 export interface LivDecision { at: string; what: string; why?: string; by?: string }
 /** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
 export interface LivDeclined { at: string; key: string; why?: string }
@@ -203,6 +205,8 @@ export interface LivChat {
 
 export interface LivProfile {
   work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[];
+  /** 처음 설정(#/welcome)을 끝낸 시각. 종전엔 브라우저 localStorage 표식이라 기기를 바꾸면 온보딩이 다시 떴다(#1813). */
+  welcome?: LivWelcome | null;
   /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
@@ -294,11 +298,12 @@ export async function getLivProfile(id: string): Promise<LivProfile> {
  *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
  */
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
   if (patch.work) next.work = { ...patch.work, at: patch.work.at ?? new Date().toISOString() };
+  if (patch.welcome) next.welcome = patch.welcome;
   if (patch.decision) next.decisions = [...(cur.decisions ?? []), patch.decision].slice(-LIV_LIST_CAP);
   if (patch.declined) {
     const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);

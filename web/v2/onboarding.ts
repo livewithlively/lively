@@ -7,7 +7,21 @@
 import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl } from '../core.js';
 export const OB_DONE_KEY = 'lively_ob_done';
+/** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
+/**
+ * 처음 설정을 끝냈는지 **서버에 묻는다**(#1813). 종전엔 localStorage 표식뿐이라 기기·브라우저를 바꾸면
+ *  이미 끝낸 사람에게 온보딩이 다시 떴다. 서버가 답을 주면 로컬 캐시도 그 값으로 맞춘다.
+ *  못 물으면(오프라인·구 서버) 로컬 캐시로 떨어진다 — 온보딩 때문에 앱이 안 열리는 일은 없어야 한다.
+ */
+export async function fetchOnboardingDone(): Promise<boolean> {
+  try {
+    const r: any = await api('/api/ui/me/welcome');
+    const done = !!(r && r.done);
+    try { done ? localStorage.setItem(OB_DONE_KEY, '1') : localStorage.removeItem(OB_DONE_KEY); } catch (_) { /* 사파리 프라이빗 */ }
+    return done;
+  } catch (_) { return onboardingDone(); }
+}
 
 export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boolean) => void; onDone?: () => void } = {}): { destroy(): void } {
   host.className = 'ob-root';
@@ -20,6 +34,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     </div></div>
 <div class="ob-toast" id="toast"></div>`;
   const DONE_KEY = OB_DONE_KEY;
+  /* 서버 실측 — 내가 올린 자료·종류별 집계·지금 갈래. 연출 숫자를 여기 값으로 갈아끼운다(#1813). */
+  let WS: any = null;
+  async function loadWelcome() {
+    try { WS = await api('/api/ui/me/welcome'); } catch (_) { WS = null; }
+    return WS;
+  }
+  /** 지금 아는 **진짜** 갈래 집계. 서버를 아직 못 읽었으면 빈 배열(연출 숫자를 만들지 않는다). */
+  const realKinds = () => (WS && WS.uploads && Array.isArray(WS.uploads.kinds)) ? WS.uploads.kinds : [];
+  /** 올린 자료 총수 — 업로드 카운터와 서버 총계 중 큰 쪽(막 올린 건 서버가 아직 모를 수 있다). */
+  const realTotal = () => Math.max(S.upN || 0, (WS && WS.uploads && WS.uploads.total) || 0);
   const setStage = (s) => { host.className = 'ob-root ob-' + s; ctx.onBare && ctx.onBare(s === 'stage-name'); };
   /* ══════════════ 데이터 — 기존 프로토(app.js)에서 그대로 추출한 확정본 ══════════════ */
   const DATA = {
@@ -605,6 +629,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     sources: [], connected: [], ai: null, aiConnected: false, terminal: null, app: null,
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
+    drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
     upN: 0, upBusy: 0,      // #1881 실업로드 — 자료로 등록된 파일 수 / 올리는 중 수(연출 아님)
     b2: null, b3: null, nowline: null, firstOrder: null, decisions: [], notes: [],
     chatDone: [],           // 막3에서 끝난 단계들
@@ -767,7 +792,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         upDropZone(zone, zone, (items) => void sendAll(items));
         const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub', label: '파일이나 폴더 고르기' });
         $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 반환은 {btn, fileIn, dirIn} — input 도 DOM 에 있어야 click 이 된다
-        $('#fGo', el).onclick = () => { startReading(); goScene('sources'); };   // 읽기는 여기서 시작 — 뒤 단계가 대기 시간을 덮는다
+        // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
+        $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
         $('[data-skip]', el).onclick = () => goScene('sources');
       },
     },
@@ -970,22 +996,70 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   /* 읽기 진행 — 사이드바 서랍 숫자가 실시간으로 올라간다 */
   let readTimer = null, readBarEl = null, readNEl = null;
+  /**
+   * 읽기 진행 — **서버에 물어서** 움직인다(#1813). 종전엔 240ms 타이머가 41까지 세는 연출이었다.
+   *  지금은 올린 자료를 서버가 몇 건 받았는지 폴링하고, 다 받았으면 끝난 것으로 본다.
+   *  올린 게 하나도 없으면 읽을 것도 없다 — 기다리게 하지 않고 곧바로 끝낸다.
+   */
   function startReading() {
-    if (!S.read.total) S.read.total = S.upN || 41;   // #1881 — 실제로 올린 파일이 있으면 그 수가 곧 읽을 자료 수다(가짜 41 금지)
     if (S.read.finished) return;
     clearInterval(readTimer);
-    const targets = drawerTargets();
-    readTimer = setInterval(() => {
-      S.read.done = Math.min(S.read.total, S.read.done + 1);
-      const p = S.read.done / S.read.total;
-      S._counts = {}; let shown = 0;
-      DATA.KINDS7.forEach(([k]) => { const c = Math.round((targets[k] || 0) * p); S._counts[k] = c || ''; shown += c; });
-      const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
+    const target = () => Math.max(S.upN || 0, S.read.total || 0);
+    const paint = () => {
+      const tot = Math.max(1, target());
+      const p = Math.min(1, S.read.done / tot);
       if (readBarEl) readBarEl.style.width = Math.round(p * 100) + '%';
-      if (readNEl) readNEl.textContent = `${S.read.done} / ${S.read.total}`;
-      if (S.read.done >= S.read.total) { S.read.finished = true; save(); clearInterval(readTimer); renderSB(); document.dispatchEvent(new Event('read-done')); }
-      save();
-    }, 240);
+      if (readNEl) readNEl.textContent = `${S.read.done} / ${target()}`;
+    };
+    const finish = () => {
+      S.read.finished = true; S.read.done = target(); save();
+      clearInterval(readTimer); readTimer = null; paint(); renderSB();
+      document.dispatchEvent(new Event('read-done'));
+    };
+    if (!target()) { finish(); return; }                 // 올린 자료 0건 — 기다릴 것이 없다
+    readTimer = setInterval(async () => {
+      const w = await loadWelcome();
+      const got = (w && w.uploads && w.uploads.total) || 0;
+      S.read.done = Math.min(target(), got);
+      S.read.total = target();
+      // 서버가 센 종류별 수를 사이드바에 그대로 싣는다(만들어 낸 목표치가 아니다).
+      S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
+      const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
+      paint(); save();
+      if (S.read.done >= target()) finish();
+    }, 1500);
+  }
+
+  /**
+   * 올린 자료를 **실제로 AI 에게 보여** 갈래를 받아 온다(#1813).
+   *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 헤드리스 세션이 도는 것이 유일한 길이라,
+   *  AI 를 아직 안 이었으면 여기서 실패한다 — **감추지 않고 이유를 돌려준다**(화면은 실제 집계로 내려앉는다).
+   *  기다림에 상한을 둔다: 온보딩 한복판에서 사람을 무한정 세워 둘 수는 없다.
+   */
+  const ANALYZE_TIMEOUT_MS = 75000;
+  async function analyzeUploads(token) {
+    let started;
+    try {
+      started = await api('/api/ui/me/welcome/analyze', { method: 'POST', body: JSON.stringify({ job: S.job || null }) });
+    } catch (e) {
+      const m = e && e.message ? String(e.message) : '';
+      return { drawers: null, why: /50[0-9]|시작하지 못/.test(m) ? 'AI 를 아직 잇지 않으셔서, 파일 종류로 나눈 결과예요.' : '' };
+    }
+    const id = started && started.turn_id;
+    if (!id) return { drawers: null, why: '' };
+    const until = Date.now() + ANALYZE_TIMEOUT_MS;
+    let from = 0;
+    while (Date.now() < until) {
+      if (token !== seqToken) return { drawers: null, why: '' };
+      await sleep(2000);
+      let r;
+      try { r = await api(`/api/ui/me/welcome/analyze/${encodeURIComponent(id)}?from=${from}`); } catch (_) { continue; }
+      if (typeof r.next === 'number') from = r.next;
+      if (!r.done) continue;
+      if (r.drawers && r.drawers.length) return { drawers: r.drawers, why: '' };
+      return { drawers: null, why: 'AI 판정을 읽지 못해서, 파일 종류로 나눈 결과예요.' };
+    }
+    return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
   }
 
   const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
@@ -993,16 +1067,40 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (token !== seqToken) return;
     const doneStep = (s) => { if (!S.chatDone.includes(s)) S.chatDone.push(s); save(); renderSB(); };
     if (step === 'b1') {
-      await sleep(500);
-      msgLiv(`${S.read.finished ? '' : `읽으면서 `}${esc(nick() || '')}${nick() ? '님' : ''} 자료를 종류별로 세어 봤어요.
-        <div class="ob-tags">${tally3().map(([n, c]) => `<span class="ob-tag">${esc(n)} <b>${c}</b></span>`).join('')}</div>
-        <p style="margin-top:8px"><b>자료함을 이렇게 나눠 둘까요?</b> 옆의 숫자는 그 종류로 본 자료 수예요. 이대로 서랍을 만들어 두면 다음부터 새 자료가 알아서 제자리로 들어갑니다.</p>`);
-      await sleep(300);
+      await sleep(400);
+      await loadWelcome();
+      const total = realTotal();
+      if (!total) {
+        // 올린 자료가 없으면 셀 것도 없다. 없는 숫자를 지어내지 않는다.
+        msgLiv(`올려 주신 자료가 아직 없어서 자료함은 나중에 나누겠습니다. 홈에서 파일을 올리시면 그때 제가 갈래를 잡아 드릴게요.`);
+        await sleep(200); doneStep('b1'); chatStep('b2', token); return;
+      }
+      // ① 먼저 **실제로 센 것**을 보여 준다. AI 가 없어도 이 숫자는 진짜다.
+      const bubble = msgLiv(`${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 자료 <b>${total}건</b>을 종류별로 세어 봤어요.
+        <div class="ob-tags" data-tags>${realKinds().map((k) => `<span class="ob-tag">${esc(k.name)} <b>${k.n}</b></span>`).join('')}</div>
+        <p style="margin-top:8px" data-note>AI 가 파일을 훑어보고 더 나은 갈래를 제안하는 중이에요.</p>`);
+      // ② 그 위에 **진짜 LLM 판정**을 얹는다. 실패하면 ①이 그대로 답이 된다(감추지 않고 이유를 적는다).
+      let drawers = realKinds().map((k) => ({ name: k.name, n: k.n }));
+      const llm = await analyzeUploads(token);
+      if (token !== seqToken) return;
+      const note = $('[data-note]', bubble);
+      if (llm.drawers && llm.drawers.length) {
+        drawers = llm.drawers;
+        $('[data-tags]', bubble).innerHTML = drawers.map((d) => `<span class="ob-tag">${esc(d.name)}</span>`).join('');
+        note.innerHTML = `<b>자료함을 이렇게 나눠 둘까요?</b> 파일을 훑어보고 정한 갈래예요. 이대로 서랍을 만들어 두면 다음부터 새 자료가 알아서 제자리로 들어갑니다.`;
+      } else {
+        note.innerHTML = `<b>자료함을 이렇게 나눠 둘까요?</b> 옆의 숫자는 그 종류로 본 자료 수예요.`
+          + (llm.why ? `<br><span style="color:var(--muted)">${esc(llm.why)}</span>` : '');
+      }
+      S.drawers = drawers;
+      await sleep(200);
+      const approve = (l) => { msgUser(l); S.drawersOn = true; S.decisions.push(`자료함 ${S.drawers.length}갈래로 나눔`); doneStep('b1'); renderSB(); enableLocalDistiller(); chatStep('b2', token); };
       chipsRow([
-        { label: '네, 이대로 나눠 주세요', cta: true, cb: (l) => { msgUser(l); S.drawersOn = true; S.decisions.push(`자료함 7갈래로 나눔`); doneStep('b1'); renderSB(); enableLocalDistiller(); chatStep('b2', token); } },
+        { label: '네, 이대로 나눠 주세요', cta: true, cb: approve },
         { label: '빠진 종류가 있어요', cb: (l) => { msgUser(l);
-            msgLiv('어떤 종류인가요? 아래 입력창에 적어 주세요. 서랍을 하나 더 만들어 둘게요.'); /* [새문구] */
-            armCompose('예: 고객 인터뷰', (v) => { S.drawersOn = true; S.decisions.push(`갈래 추가: ${v}`); doneStep('b1'); renderSB();
+            msgLiv('어떤 종류인가요? 아래 입력창에 적어 주세요. 서랍을 하나 더 만들어 둘게요.');
+            armCompose('예: 고객 인터뷰', (v) => { S.drawers = [...(S.drawers || []), { name: v }]; S.drawersOn = true;
+              S.decisions.push(`갈래 추가: ${v}`); doneStep('b1'); renderSB(); enableLocalDistiller();
               msgLiv(`<b>${esc(v)}</b> 서랍을 더해 뒀어요.`); chatStep('b2', token); }); } },
       ]);
     }
@@ -1058,11 +1156,33 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       await sleep(400);
       chipsRow([{ label: '준비 끝, 정리해 주세요', cta: true, cb: async (l) => {
         msgUser(l); doneStep('can'); S.scene = 'done'; save(); renderSB();
+        // ★ 여기가 온보딩이 **실제로 워크스페이스를 바꾸는** 자리다. 종전엔 localStorage 표식 하나가 전부였다.
+        const m = msgLiv('정리하고 있어요.');
+        let applied = null;
+        try {
+          applied = await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({
+            name: S.nameSet ? S.name : null,
+            stage: S.stage || null,
+            job: S.job || null,
+            drawers: (S.drawers || []).map((d) => ({ name: d.name, why: d.why || null })),
+            cadence: S.b2 || null,
+            share: S.b3 || null,
+            nowline: S.nowline || null,
+            first_order: S.firstOrder || null,
+          }) });
+        } catch (e) {
+          // 반영이 실패했으면 **끝났다고 말하지 않는다** — 다음에 다시 물을 수 있게 표식도 남기지 않는다.
+          m.querySelector('.ob-body').innerHTML = `정리하다 막혔어요 — ${esc(e && e.message ? e.message : '알 수 없는 오류')}<p style="margin-top:6px">홈에서 이어서 하실 수 있습니다.</p>`;
+          await sleep(1200); location.hash = '#/'; return;
+        }
         try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
         ctx.onDone && ctx.onDone();
-        // 요약 화면은 두지 않는다 — 정리해 달라고 했으면 정리된 워크스페이스를 보여 주는 게 맞다(원준님 2026-08-25).
-        msgLiv('정리했어요. 워크스페이스로 모시겠습니다.');
-        await sleep(900);
+        const made = (applied && applied.created) || [];
+        m.querySelector('.ob-body').innerHTML = made.length
+          ? `정리했어요. 자료함에 <b>${made.map((x) => esc(x)).join(' · ')}</b> 서랍을 만들어 뒀습니다. 워크스페이스로 모시겠습니다.`
+          : '정리했어요. 워크스페이스로 모시겠습니다.';
+        scrollChat();
+        await sleep(1100);
         location.hash = '#/';
       } }]);
       fineRow('지금 시키지 않으셔도 됩니다. 홈에서 언제든 그대로 말씀하시면 돼요.');

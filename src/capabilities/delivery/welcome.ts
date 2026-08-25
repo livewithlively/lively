@@ -1,0 +1,347 @@
+// delivery ▸ welcome — 처음 설정(#/welcome)이 쓰는 서버 문 (#1813).
+//
+//  왜 서버로 올렸나: 온보딩 화면이 지금까지 **연출만** 했다. 자료 수는 하드코딩 41,
+//   갈래 이름은 상수 표, 사람이 고른 답은 localStorage, 끝났다는 표식도 localStorage 였다.
+//   그래서 기기를 바꾸면 온보딩이 다시 뜨고, "이대로 나눠 주세요"를 눌러도 워크스페이스엔
+//   아무 일도 일어나지 않았다. 여기 셋을 두어 그 세 가지를 전부 실물로 바꾼다.
+//
+//   ① GET  /api/ui/me/welcome          — 실측 조회(내가 올린 자료·종류별 집계·지금 갈래·끝냈는지)
+//   ② POST /api/ui/me/welcome/analyze  — 올린 자료를 **LLM 에게 실제로 보여** 갈래를 제안받는다
+//      GET  /api/ui/me/welcome/analyze/:id — 그 판정을 읽는다(끝났으면 파싱된 갈래 목록)
+//   ③ POST /api/ui/me/welcome          — 사람이 승인한 것을 **진짜로 반영**(갈래 생성·프로필·완료)
+//
+//  ⚠ LLM 은 이 제품에서 **사람의 AI 구독으로 헤드리스 세션을 띄우는 것**이 유일한 길이다
+//   (박스에 API 키가 없다 — 그게 설계다). 그래서 ②는 리브 턴과 같은 spawnTaskSession 을 쓰고,
+//   AI 가 아직 안 붙었으면 **실패를 감추지 않고** 그대로 알린다. 화면은 그때 ①의 결정적 집계로
+//   내려앉는다 — 그 숫자도 가짜가 아니라 **그 사람이 방금 올린 파일을 실제로 센 것**이다.
+
+import crypto from "node:crypto";
+import { z } from "zod";
+import type { Capability } from "../types.js";
+import { HttpError } from "../rest-util.js";
+import type { LivelyUser } from "../../context.js";
+import { restRead } from "./shared.js";
+
+/** 갈래 후보 상한 — 서랍이 열 개를 넘으면 고르는 일이 일이 된다. */
+const MAX_DRAWERS = 10;
+/** LLM 에게 보여 줄 파일 목록 상한. 전량을 넣으면 프롬프트가 터지고 값도 안 좋아진다. */
+const SAMPLE_CAP = 200;
+const TURN_ID_RE = /^t[0-9a-f]{16}$/;
+
+/** 자료 kind → 사람이 읽는 이름. source.ts 의 SOURCE_KINDS 와 짝이다. */
+const KIND_LABEL: Record<string, string> = {
+  transcript: "회의 전사록", minutes: "회의록", email: "메일", slack: "슬랙", discord: "디스코드",
+  notion_doc: "노션 문서", clickup_doc: "클릭업 문서", drive_file: "드라이브 파일", other: "그 밖의 자료",
+};
+
+/** 갈래 key — 사람이 적은 이름에서 슬러그를 뽑는다. 한글이면 해시로 떨어뜨려도 이름은 그대로 남는다. */
+export function drawerKey(name: string): string {
+  const ascii = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  if (ascii) return ascii;
+  return `d-${crypto.createHash("sha1").update(name.trim()).digest("hex").slice(0, 10)}`;
+}
+
+/**
+ * LLM 이 돌려준 말에서 갈래 목록을 꺼낸다. **순수** — 파싱 실패는 예외가 아니라 빈 배열이다
+ * (온보딩 한복판에서 500 을 띄우느니 결정적 집계로 내려앉는 편이 낫다).
+ *
+ * 받아들이는 모양: ```json 펜스 안의 배열/객체, 또는 본문에 그냥 박힌 배열.
+ */
+export function parseDrawers(text: string): Array<{ name: string; why?: string }> {
+  if (!text) return [];
+  const blocks: string[] = [];
+  const fence = /```(?:json)?\s*([\s\S]*?)```/g;
+  for (let m = fence.exec(text); m; m = fence.exec(text)) blocks.push(m[1]!);
+  blocks.push(text);   // 펜스가 없으면 본문 자체에서 찾는다
+  for (const b of blocks) {
+    const start = b.indexOf("[");
+    const objStart = b.indexOf("{");
+    for (const s of [start, objStart].filter((i) => i >= 0).sort((a, z) => a - z)) {
+      const open = b[s]!, close = open === "[" ? "]" : "}";
+      const end = b.lastIndexOf(close);
+      if (end <= s) continue;
+      let parsed: unknown;
+      try { parsed = JSON.parse(b.slice(s, end + 1)); } catch { continue; }
+      const arr = Array.isArray(parsed) ? parsed
+        : (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).drawers))
+          ? (parsed as { drawers: unknown[] }).drawers : null;
+      if (!arr) continue;
+      const out: Array<{ name: string; why?: string }> = [];
+      for (const it of arr) {
+        const name = typeof it === "string" ? it
+          : (it && typeof it === "object" ? String((it as Record<string, unknown>).name ?? "") : "");
+        const t = name.trim().slice(0, 60);
+        if (!t || out.some((x) => x.name === t)) continue;
+        const why = it && typeof it === "object" ? String((it as Record<string, unknown>).why ?? "").trim().slice(0, 200) : "";
+        out.push(why ? { name: t, why } : { name: t });
+        if (out.length >= MAX_DRAWERS) break;
+      }
+      if (out.length) return out;
+    }
+  }
+  return [];
+}
+
+/** 턴 진행 JSONL 에서 **마지막 assistant 텍스트**만 뽑는다. 하네스 스트림 모양이 조금씩 달라 넓게 받는다. */
+export function lastAssistantText(chunk: string): string {
+  let out = "";
+  for (const line of chunk.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    let j: Record<string, unknown>;
+    try { j = JSON.parse(t) as Record<string, unknown>; } catch { continue; }
+    const msg = (j.message ?? j) as Record<string, unknown>;
+    if (j.type && j.type !== "assistant" && msg.role !== "assistant") continue;
+    const content = msg.content;
+    if (typeof content === "string") { out = content; continue; }
+    if (Array.isArray(content)) {
+      const text = content.filter((c) => c && typeof c === "object" && (c as Record<string, unknown>).type === "text")
+        .map((c) => String((c as Record<string, unknown>).text ?? "")).join("\n").trim();
+      if (text) out = text;
+    }
+  }
+  return out;
+}
+
+/** 올린 자료를 종류·확장자로 **실제로** 센다(순수). LLM 이 없어도 이 숫자는 진짜다. */
+export function tallySources(entries: Array<{ kind?: string | null; title?: string | null }>): Array<{ key: string; name: string; n: number }> {
+  const byKind = new Map<string, number>();
+  for (const e of entries) {
+    const kind = String(e.kind || "other");
+    // 'other' 는 올린 파일이 대부분 떨어지는 자리라, 확장자로 한 겹 더 가른다 — 안 그러면 전부 한 서랍이다.
+    let bucket = KIND_LABEL[kind] ?? KIND_LABEL.other!;
+    if (kind === "other") {
+      const ext = (String(e.title || "").match(/\.([A-Za-z0-9]{1,8})$/)?.[1] || "").toLowerCase();
+      bucket = EXT_BUCKET[ext] ?? "그 밖의 자료";
+    }
+    byKind.set(bucket, (byKind.get(bucket) ?? 0) + 1);
+  }
+  return [...byKind.entries()]
+    .map(([name, n]) => ({ key: drawerKey(name), name, n }))
+    .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+}
+
+const EXT_BUCKET: Record<string, string> = {
+  doc: "문서", docx: "문서", hwp: "문서", hwpx: "문서", pdf: "문서", txt: "문서", md: "문서", rtf: "문서", odt: "문서",
+  xls: "표·수치", xlsx: "표·수치", csv: "표·수치", tsv: "표·수치", numbers: "표·수치",
+  ppt: "발표 자료", pptx: "발표 자료", key: "발표 자료",
+  png: "이미지", jpg: "이미지", jpeg: "이미지", gif: "이미지", webp: "이미지", svg: "이미지", heic: "이미지",
+  zip: "묶음 파일", tar: "묶음 파일", gz: "묶음 파일", "7z": "묶음 파일", rar: "묶음 파일",
+  json: "데이터", xml: "데이터", yaml: "데이터", yml: "데이터",
+};
+
+/** LLM 에게 줄 지시문. 서버가 만든다 — 화면이 만들면 사람마다 다른 프롬프트가 나간다. */
+export function analyzePrompt(files: string[], job: string | null): string {
+  return [
+    "이 사람이 방금 라이블리에 올린 파일 목록입니다. 이 사람의 **자료함 서랍**을 정해 주세요.",
+    job ? `이 사람이 하는 일: ${job}` : "",
+    "",
+    "규칙",
+    `- 서랍은 3~${MAX_DRAWERS}개. 파일 이름에서 **실제로 보이는 것**만 근거로 삼습니다. 없는 종류를 지어내지 마세요.`,
+    "- 이름은 한국어 명사구로 짧게(예: 회의록, 월간 보고, 계약·견적).",
+    "- 파일 확장자가 아니라 **하는 일**로 가릅니다. pdf·docx 같은 이름은 서랍이 아닙니다.",
+    "- 어디에도 안 들어가는 것을 담을 서랍 하나(예: 그 밖의 자료)를 마지막에 둡니다.",
+    "",
+    "답은 **JSON 배열 하나만** 코드펜스에 담아 주세요. 설명은 펜스 밖에 적으세요.",
+    '```json',
+    '[{"name":"회의록","why":"주간회의_로 시작하는 파일 12개"}]',
+    '```',
+    "",
+    "파일 목록:",
+    ...files.map((f) => `- ${f}`),
+  ].filter(Boolean).join("\n");
+}
+
+export const welcomeCapabilities: Capability[] = [
+  // ── ① 실측 조회 ──────────────────────────────────────────────────────────
+  restRead("me_welcome_get", "처음 설정 현황",
+    "처음 설정(#/welcome) 화면이 쓰는 실측 — 내가 올린 자료 수와 종류별 집계, 지금 있는 갈래, " +
+    "그리고 처음 설정을 끝냈는지. **여기 숫자는 연출이 아니라 조회 결과다.**",
+    [{ method: "GET", paths: ["/api/ui/me/welcome"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getMember, getLivProfile } = await import("../../org/store.js");
+      const { listSources, countSources } = await import("../../v6/source-store.js");
+      const { listCategories } = await import("../../v6/category-store.js");
+
+      const [member, liv, entries, total, cats] = await Promise.all([
+        getMember(userId),
+        getLivProfile(userId),
+        listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>),
+        countSources({}, null).catch(() => 0),
+        listCategories(undefined, null).catch(() => [] as Array<Record<string, unknown>>),
+      ]);
+      const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
+      return {
+        done: !!liv.welcome?.done_at,
+        done_at: liv.welcome?.done_at ?? null,
+        profile: {
+          display_name: member?.display_name ?? null,
+          nickname: member?.nickname ?? null,
+          work: liv.work ?? null,
+        },
+        uploads: {
+          total,
+          sampled: rows.length,
+          kinds: tallySources(rows),
+          names: rows.map((r) => String(r.title ?? "")).filter(Boolean).slice(0, SAMPLE_CAP),
+        },
+        categories: (cats as Array<{ key?: string; name?: string; space?: string }>)
+          .map((c) => ({ key: String(c.key ?? ""), name: String(c.name ?? ""), space: String(c.space ?? "") })),
+      };
+    }),
+
+  // ── ② LLM 분석 ───────────────────────────────────────────────────────────
+  restRead("me_welcome_analyze", "올린 자료를 AI 가 본다",
+    "방금 올린 자료의 **파일 목록을 실제로 AI 에게 보여** 자료함 서랍을 제안받는다. 리브 턴과 같은 길로 " +
+    "헤드리스 세션이 돌고, 진행은 me_welcome_analyze_read 로 읽는다. " +
+    "⚠ 이 제품의 LLM 은 **그 사람 본인 AI 구독**으로 돈다 — 아직 AI 를 안 이었으면 여기서 실패한다(감추지 않는다).",
+    [{ method: "POST", paths: ["/api/ui/me/welcome/analyze"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { listSources } = await import("../../v6/source-store.js");
+      const rows = await listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>);
+      const files = (rows as Array<{ title?: string | null }>).map((r) => String(r.title ?? "")).filter(Boolean);
+      if (!files.length) throw new HttpError(400, "아직 올라온 자료가 없습니다 — 파일을 먼저 올려 주세요");
+
+      const job = input.job == null ? null : String(input.job).trim().slice(0, 200) || null;
+      const turnId = `t${crypto.randomBytes(8).toString("hex")}`;
+      const { spawnTaskSession } = await import("../../node/tasks.js");
+      const { livTurnArgs } = await import("../../org/delivery/liv-turn.js");
+      try {
+        await spawnTaskSession({
+          user, taskId: turnId, rootKey: "personal", subpath: "liv",
+          prompt: analyzePrompt(files, job), harness: "claude",
+          // 온보딩 분석은 **한 번 묻고 끝**이다 — 이어가는 대화가 아니라 새 세션으로 띄운다.
+          extraFlags: livTurnArgs({ sessionId: crypto.randomUUID(), resume: false }),
+          bypassPermissions: false,   // ⚠ 리브와 같은 안전선. 승인 우회는 여기서도 쓰지 않는다.
+        });
+      } catch (e) {
+        throw new HttpError(503, `AI 분석을 시작하지 못했습니다 — ${(e as Error).message}`);
+      }
+      return { turn_id: turnId, files: files.length };
+    }, false, {
+      job: z.string().optional().describe("이 사람이 하는 일(있으면 갈래 제안이 그 일에 맞춰진다)"),
+    }),
+
+  restRead("me_welcome_analyze_read", "AI 판정 읽기",
+    "분석 턴의 진행을 읽는다. 끝났으면 파싱된 갈래 목록(drawers)을 함께 준다. " +
+    "AI 가 형식을 안 지켰거나 실패했으면 drawers 는 비고, 화면은 조회로 센 집계로 내려앉는다.",
+    [{ method: "GET", paths: ["/api/ui/me/welcome/analyze/:id"], parse: (req) => ({
+      id: String(req.params?.id ?? ""), from: req.query?.from ? Number(req.query.from) : 0,
+    }) }],
+    async (input: { id: string; from: number }, user: LivelyUser) => {
+      if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+      if (!TURN_ID_RE.test(input.id)) throw new HttpError(400, "턴 id 형식이 아닙니다");
+      const path = await import("node:path");
+      const { resolveRootPath, ensureMemberOsUser } = await import("../../terminal/profiles.js");
+      const osUser = await ensureMemberOsUser(user).catch(() => null);
+      const { abs } = await resolveRootPath(user, "personal", "liv", osUser ?? null);
+      const dir = path.join(abs, ".lively-task", input.id);
+      const { tailTask } = await import("../../node/tasks.js");
+      const from = Number.isFinite(input.from) && input.from >= 0 ? Math.floor(input.from) : 0;
+      const t = await tailTask(dir, from) as { chunk?: string; done?: boolean; exit?: number | null; next?: number };
+      const text = lastAssistantText(String(t.chunk ?? ""));
+      return { ...t, drawers: t.done ? parseDrawers(text) : [] };
+    }, false, {
+      id: z.string().describe("me_welcome_analyze 가 준 턴 id"),
+      from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
+    }),
+
+  // ── ③ 반영 ───────────────────────────────────────────────────────────────
+  restRead("me_welcome_apply", "처음 설정 결과 반영",
+    "처음 설정에서 사람이 정한 것을 **실제로 반영한다** — 부를 이름, 자료함 갈래 생성, 업무 방식과 결정 기록, " +
+    "그리고 처음 설정 완료 표식. 갈래 생성은 이미 있는 key 를 건너뛰므로 다시 눌러도 안전하다.",
+    [{ method: "POST", paths: ["/api/ui/me/welcome"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getMember, upsertMember, appendLivProfile } = await import("../../org/store.js");
+      const { assertNoHardSecrets } = await import("../../org/ingest/redact.js");
+      const { listCategories, createCategory } = await import("../../v6/category-store.js");
+
+      const s = (v: unknown, max: number): string | null => {
+        if (v == null) return null;
+        const t = String(v).trim().slice(0, max);
+        if (!t) return null;
+        assertNoHardSecrets(t, "welcome");   // 온보딩 답도 멤버 레코드에 남는다 — 평문 시크릿 차단
+        return t;
+      };
+
+      // ── 부를 이름 ──
+      const nickname = s(input.name, 80);
+      const member = await getMember(userId);
+      if (nickname && member) {
+        await upsertMember({ id: userId, nickname }, { actor: userId, source: "welcome" } as never)
+          .catch(() => { /* 이름은 못 바꿔도 온보딩을 막지 않는다 */ });
+      }
+
+      // ── 자료함 갈래 ── 사람이 승인한 것만 만든다. 이미 있으면 건너뛴다(다시 눌러도 안전).
+      const wanted = Array.isArray(input.drawers) ? input.drawers.slice(0, MAX_DRAWERS) : [];
+      const existing = new Set((await listCategories(undefined, null).catch(() => [] as Array<{ key?: string }>)).map((c) => String(c.key ?? "")));
+      const created: string[] = [];
+      const skipped: string[] = [];
+      for (const d of wanted) {
+        const name = s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60);
+        if (!name) continue;
+        const key = drawerKey(name);
+        if (existing.has(key)) { skipped.push(name); continue; }
+        try {
+          await createCategory({
+            space: "business", key, name,
+            should: s((d as Record<string, unknown>)?.why, 400) ?? `처음 설정에서 만든 갈래입니다. ${name} 에 해당하는 자료가 여기로 모입니다.`,
+          } as never, { actor: userId, source: "welcome" } as never);
+          created.push(name); existing.add(key);
+        } catch { skipped.push(name); }   // 권한이 없거나 경합 — 온보딩을 멈추지 않는다
+      }
+
+      // ── 업무 방식과 결정 ── 리브의 기억이 사는 자리에 남긴다(다음 세션의 리브가 이걸 읽는다).
+      const job = s(input.job, 200);
+      const stage = s(input.stage, 40);
+      const nowline = s(input.nowline, 300);
+      const firstOrder = s(input.first_order, 400);
+      const asis = [stage ? STAGE_LABEL[stage] ?? stage : null, job].filter(Boolean).join(" · ") || null;
+      if (asis || nowline) {
+        await appendLivProfile(userId, {
+          work: { asis: asis ?? undefined, tobe: nowline ? `시간을 가장 많이 쓰는 일: ${nowline}` : undefined, by: "self" },
+        }).catch(() => { /* 비치명 */ });
+      }
+      const decisions: Array<{ what: string; why?: string }> = [];
+      if (created.length) decisions.push({ what: `자료함 갈래 ${created.length}개 생성`, why: created.join(" · ") });
+      const cadence = s(input.cadence, 20);
+      if (cadence && cadence !== "no") decisions.push({ what: cadence === "month" ? "매달 반복하는 문서가 있다" : "매주 반복하는 문서가 있다" });
+      const share = s(input.share, 20);
+      if (share) decisions.push({ what: `자료를 보는 범위: ${SHARE_LABEL[share] ?? share}` });
+      if (firstOrder) decisions.push({ what: "첫 지시", why: firstOrder });
+      for (const d of decisions) {
+        await appendLivProfile(userId, { decision: { at: new Date().toISOString(), what: d.what, why: d.why, by: "self" } })
+          .catch(() => { /* 비치명 */ });
+      }
+
+      // ── 완료 표식 ── 서버가 안다. 기기를 바꿔도 온보딩이 다시 뜨지 않는다.
+      const profile = await appendLivProfile(userId, {
+        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder },
+      });
+      return { ok: true, created, skipped, welcome: profile.welcome ?? null };
+    }, false, {
+      name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
+      stage: z.string().optional().describe("company|solo|academy|student"),
+      job: z.string().optional().describe("맡은 일"),
+      drawers: z.array(z.union([z.string(), z.object({ name: z.string(), why: z.string().optional() })])).optional()
+        .describe("승인한 자료함 갈래 — 실제 카테고리로 만든다"),
+      cadence: z.string().optional().describe("month|week|no — 정기 문서 주기"),
+      share: z.string().optional().describe("me|team|dept|ext — 자료를 보는 범위"),
+      nowline: z.string().optional().describe("시간을 가장 많이 쓰는 일"),
+      first_order: z.string().optional().describe("첫 지시로 고른 문장"),
+    }),
+];
+
+const STAGE_LABEL: Record<string, string> = {
+  company: "회사·조직에서 팀과 함께 일한다", solo: "1인·프리랜서로 여러 일을 한다",
+  academy: "학교·연구실에서 연구한다", student: "학생으로 수업·시험·진로를 준비한다",
+};
+const SHARE_LABEL: Record<string, string> = {
+  me: "나만 본다", team: "우리 팀이 같이 본다", dept: "여러 부서와 나눈다", ext: "고객·외부에 낸다",
+};

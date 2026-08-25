@@ -7,7 +7,7 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
-import { renderOnboarding, onboardingDone } from './onboarding.js'; // #/welcome 처음 설정(#1813)
+import { renderOnboarding, onboardingDone, fetchOnboardingDone } from './onboarding.js'; // #/welcome 처음 설정(#1813)
 import { $view, anchoredPopover, api, el, sv, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
@@ -98,7 +98,9 @@ export async function bootV2() {
     // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
     let boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
     // 처음 설정을 아직 안 끝낸 사람은 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
-    if (!boot && !onboardingDone())
+    //  ⚠ 판정은 **서버**가 한다 — 로컬 표식만 보면 기기·브라우저를 바꾼 사람에게 온보딩이 다시 뜬다.
+    //   로컬 캐시가 이미 '끝남'이면 묻지 않는다(첫 그림을 왕복 한 번만큼 늦출 이유가 없다).
+    if (!boot && !onboardingDone() && !(await fetchOnboardingDone()))
         boot = '#/welcome';
     if (boot && tabsApi.find(boot)) {
         const hit = tabsApi.find(boot);

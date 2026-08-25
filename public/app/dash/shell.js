@@ -28,6 +28,7 @@ import { fillFolders } from './widget-folders.js';
 import { fillNotifications } from './widget-notifications.js';
 import { dashModal, fillActivity, fillMyTasks, fillReviewQueue } from './widget-tasks-review-log.js';
 import { fillLivelyLog, fillLivelyLogTimeline } from './widget-lively-log.js';
+import { fillPreviews } from './widget-previews.js';
 // ── 위젯 레지스트리 + 배치(#1232) — '대시보드 편집' 모달이 이 표 하나만 보고 화면을 조립한다. ──
 //  위젯을 새로 만들면 여기에 한 줄 + fill 매핑(renderMyDashboard 의 위젯별 호출)만 추가하면 편집 모달에 자동으로 나온다.
 //  col  = 열 폭 기본 가중치(그 열 위젯들의 최댓값이 열 fr) — 기본 배치에서 5:4:3 = 예전 프리셋 그대로.
@@ -51,6 +52,8 @@ const DASH_WIDGETS = [
     { key: 'lvlog', title: '내 라이블리 사용 내역', desc: '주간 브리핑 — 근거로 쓴 지식·활동 구성', col: 3, row: 5, off: true },
     { key: 'review', title: '검토 대기 지식', desc: '승인해야 검색·세션주입에 반영돼요', col: 3, row: 4, off: true },
     { key: 'task', title: '내 할 일', desc: '내가 담당인 태스크 — 마감 임박순', col: 5, row: 4, off: true },
+    //   미리보기: 화면을 고치는 사람만 값이 찬다 — 기본 숨김, '대시보드 편집'에서 꺼내 쓴다.
+    { key: 'prev', title: '미리보기', desc: '띄워 둔 화면을 오른쪽 곁칸에서 바로', col: 4, row: 4, off: true },
 ];
 const DASH_W = Object.fromEntries(DASH_WIDGETS.map((w) => [w.key, w]));
 // 기본 배치 = 1단계 프리셋 **그대로**(좌: 내 프로젝트+팀 공유 폴더 / 중: 최신 알림+내 AI 세션 / 우: 팀 작업 로그).
@@ -231,6 +234,8 @@ async function renderMyDashboard(view) {
         fillLivelyLog(zones.lvlog);
     if (zones.lvlogd)
         fillLivelyLogTimeline(zones.lvlogd);
+    if (zones.prev)
+        fillPreviews(zones.prev);
     fillOnboarding(obSlot);
     if (!zones.proj && !zones.sess)
         drawSummary(); // 두 위젯을 다 숨기면 요약할 게 없다 — '불러오는 중…'을 남기지 않는다
