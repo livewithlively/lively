@@ -124,6 +124,14 @@ export function slackAppCreateUrl(manifest: Record<string, unknown>): string {
   return "https://api.slack.com/apps?new_app=1&manifest_json=" + encodeURIComponent(JSON.stringify(manifest));
 }
 
+/** 매니지드 릴레이 시작 URL(#1881 T5) — CP `/oauth/slack/start` 에 서명 state 와 이 게이트웨이 주소(테넌트 식별)를 실어 보낸다. */
+export function relayStartUrl(relayBase: string, state: string, gatewayUrl: string): string {
+  const u = new URL(relayBase);
+  u.searchParams.set("state", state);
+  u.searchParams.set("gw", gatewayUrl);
+  return u.toString();
+}
+
 /** 금고에 넣을 모양 — 브로커가 그대로 setMemberSecret 에 넘긴다. 유저 블롭은 OAuthTokens 형식(oauth-proxy-auth 가 access_token 만 뽑아 싣는다). */
 export function slackInstallToSlots(i: SlackInstall): {
   user: { secret: string; meta: Record<string, unknown> };

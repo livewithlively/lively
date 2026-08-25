@@ -126,4 +126,13 @@ await t("C11 매니페스트 — redirect·스코프가 인가 URL 과 같은 �
   assert.deepEqual(JSON.parse(u.searchParams.get("manifest_json") ?? "{}"), m, "링크 안의 매니페스트가 원본과 같다(인코딩 왕복)");
 });
 
+await t("C12 릴레이 시작 URL — state·gw 가 쿼리로 실리고 기존 쿼리는 보존된다", async () => {
+  const { relayStartUrl } = await import("./slack-oauth.js");
+  const u = new URL(relayStartUrl("https://app.lvly.io/oauth/slack/start?v=1", "st.sig", "https://acme.app.lvly.io"));
+  assert.equal(u.origin + u.pathname, "https://app.lvly.io/oauth/slack/start");
+  assert.equal(u.searchParams.get("state"), "st.sig");
+  assert.equal(u.searchParams.get("gw"), "https://acme.app.lvly.io");
+  assert.equal(u.searchParams.get("v"), "1");
+});
+
 console.log(`\nslack-oauth tests: ${pass} passed`);

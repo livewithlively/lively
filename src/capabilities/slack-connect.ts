@@ -15,6 +15,7 @@ import { listCollectors, upsertCollector, type CollectorView } from "../org/stor
 import { getMemberSecret, listSecretsByKindPublic, memberOwner, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
 import { SLACK_BOT_KIND, buildSlackAppManifest, slackAppCreateUrl } from "../org/credentials/slack-oauth.js";
 import { getOrgProfile } from "../org/store.js";
+import { completeSlackInstall } from "../org/credentials/oauth-broker.js";
 
 export const SEARCH_INSTANCE = "lively-search";
 export const BOT_INSTANCE = "lively-bot";
@@ -146,4 +147,23 @@ const orgSlackAppManifest: Capability = {
   },
 };
 
-export const slackConnectCapabilities: Capability[] = [orgSlackCollect, orgSlackCollectSet, orgSlackAppManifest];
+// 매니지드 릴레이 완료(#1881 T5) — CP 가 admin 토큰으로 부른다. state 검증·저장은 브로커(completeSlackInstall). 응답에 토큰 없음.
+const orgSlackOauthComplete: Capability = {
+  name: "org_slack_oauth_complete", title: "슬랙 OAuth 릴레이 완료(CP 전용)",
+  description: "라이블리 컨트롤플레인이 슬랙과 교환한 oauth.v2.access 응답을 이 게이트웨이의 서명 state 와 함께 넣는다. state 가 가리키는 구성원 금고에 유저 토큰을, 조직 슬롯에 봇 토큰을 저장한다. 사람이 직접 부를 일은 없다.",
+  scope: "admin", input: { state: z.string().describe("이 게이트웨이가 발급한 서명 state"), access: z.record(z.unknown()).describe("슬랙 oauth.v2.access 응답 JSON 원문") },
+  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/slack/oauth-complete"], parse: (req) => req.body ?? {} }] },
+  handler: async (input, user) => {
+    const i = (input ?? {}) as { state?: unknown; access?: unknown };
+    if (typeof i.state !== "string" || !i.state) throw new HttpError(400, "state 는 필수입니다");
+    if (!i.access || typeof i.access !== "object") throw new HttpError(400, "access(슬랙 응답)는 필수입니다");
+    try {
+      const r = await completeSlackInstall(i.state, i.access, user?.userId ?? "cp-relay");
+      return { ok: true, member: r.memberId, server: r.serverName, team_id: r.team_id };
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+  },
+};
+
+export const slackConnectCapabilities: Capability[] = [orgSlackCollect, orgSlackCollectSet, orgSlackAppManifest, orgSlackOauthComplete];
