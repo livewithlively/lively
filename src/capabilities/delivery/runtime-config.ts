@@ -628,6 +628,15 @@ export const runtimeConfigCapabilities: Capability[] = [
         failed_session_ttl_min: z.number().int().min(FAILED_TTL_MIN_MIN).max(FAILED_TTL_MIN_MAX).optional().describe("남겨둔 실패 세션도 이 분을 넘기면 회수(#1675 ①). 0=무제한(개수 상한만). 검시는 사고 직후에 하지 이틀 뒤에 하지 않는다"),
         auth_fail_stop_cron: z.boolean().optional().describe("자격(인증) 실패를 감지하면 그 위탁을 낸 크론을 자동 정지할지(#1675 ③). 기본 켬. 끄면 알림만 가고 크론은 계속 돌아 같은 실패를 반복한다"),
       }).optional().describe("위탁 태스크 정책(#1101) — 무출력 stall 상한. 자격 부재로 claude -p 가 hang 하면 종전엔 timeout(1h)까지 무출력으로 매달렸다. 레포 준비가 느린 박스는 늘리고, 배치 드레인은 줄여 빨리 실패를 본다"),
+      // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.
+      //  상한은 WORKER_POLICY_MAX 를 그대로 쓴다(스키마·핸들러·store clamp 가 한 상수를 공유 — 드리프트 금지).
+      worker_policy: z.object({
+        max_concurrent: z.number().int().min(0).max(WORKER_POLICY_MAX.max_concurrent).optional().describe("조직 전체 동시 활성 worker 수. 0=무제한"),
+        max_per_member: z.number().int().min(0).max(WORKER_POLICY_MAX.max_per_member).optional().describe("멤버 1인당 동시 활성 worker 수. 0=무제한"),
+        max_memory_mb: z.number().int().min(0).max(WORKER_POLICY_MAX.max_memory_mb).optional().describe("동시 worker 들이 **선언한** 메모리 합 상한(MiB). 0=무제한"),
+        cpu_percent_max: z.number().int().min(0).max(WORKER_POLICY_MAX.cpu_percent_max).optional().describe("worker 1개의 CPU 사용률 상한(%, 코어 1개=100 — 4코어를 다 쓰면 400). 0=감시 끔. 연속 5초 초과일 때만 종료한다(기동 스파이크로 정상 worker 를 죽이지 않게)"),
+        max_wall_sec: z.number().int().min(0).max(WORKER_POLICY_MAX.max_wall_sec).optional().describe("worker 1개의 최대 수명(초). 0=무제한"),
+      }).optional().describe("앱 worker 예산(#1780) — 시작 관문(수·메모리 합)은 프로세스를 띄우기 전에 막고, CPU·수명은 실행 중 감시해 그 run 만 종료한다. 기본값은 수·메모리에만 상한이 있고 CPU·수명은 0(끔) — 켜지 않은 조직에서 멀쩡한 worker 를 죽이지 않는다"),
       embedding_config: z.object({
         provider: z.enum(["off", "http"]).optional().describe("off=끄기(#688 명시적 off 마커 — .env 시드로 부활 안 함) · http=외부 임베딩 API"),
         base_url: z.string().nullable().optional().describe("provider=http 일 때 임베딩 API 주소"),
