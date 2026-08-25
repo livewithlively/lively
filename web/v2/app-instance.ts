@@ -38,6 +38,8 @@ export interface AppInstanceRecord {
   execution_host_id: string | null;
   status: 'active' | 'closed';
   worker: AppWorkerRun | null;
+  created_at?: string | null;
+  updated_at?: string | null;   // 좌측 목록의 정렬 키(#1883) — 창이 없어도 최근 활동 순으로 선다.
   app: {
     id: string;
     title: string;
@@ -52,6 +54,17 @@ export interface AppInstanceRecord {
 const cache = new Map<string, AppInstanceRecord>();
 export function cachedAppInstance(id: string): AppInstanceRecord | null { return cache.get(id) || null; }
 function remember(instance: AppInstanceRecord): AppInstanceRecord { cache.set(instance.id, instance); return instance; }
+
+/**
+ * 내 앱 인스턴스 목록(#1780 v2.2 §2.2) — status=active 만. 창(탭)이 없어도 인스턴스는 살아 있으므로
+ *  좌측 목록은 이 서버 사실을 읽는다(브라우저 탭 목록이 아니다, #1883).
+ */
+export async function listAppInstances(): Promise<AppInstanceRecord[]> {
+  const out: any = await api('/api/ui/app-instances');
+  const rows: AppInstanceRecord[] = Array.isArray(out?.instances) ? out.instances : [];
+  for (const r of rows) if (r && r.id) remember(r);
+  return rows;
+}
 
 export async function getAppInstance(id: string): Promise<AppInstanceRecord> {
   const out: any = await api('/api/ui/app-instances/' + encodeURIComponent(id));

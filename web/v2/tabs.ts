@@ -1,5 +1,6 @@
-// v2/tabs.ts — 셸 안 탭(#1719 상민님 2026-08-18: "여러 탭 띄우고 편리하게 이동, 탭은 프로젝트·대화창·메인·앱,
-//  우측 사이드바 상태까지 같이 저장되고 바뀌어야 함").
+// v2/tabs.ts — 열린 앱 인스턴스의 DOM 유지 엔진(#1719, #1883).
+//  #1883부터 눈에 보이는 목록은 좌측 사이드바가 맡고, 이 모듈의 strip은 그리지 않는다. 탭이라는 내부 이름은
+//  저장 형식과 화면별 DOM·터미널·우패널 상태를 안전하게 보존하기 위해 유지한다.
 //
 //  ── 방식: DOM 유지형 ──
 //  탭마다 가운데(center)·우패널(aside) 컨테이너 한 쌍을 만들어 **숨겼다 보였다** 한다(재렌더 없음).
@@ -72,6 +73,8 @@ export interface TabsApi {
   current(): ShellTab | null;
   add(route: string, opts?: { activate?: boolean; title?: string }): ShellTab;
   activate(tab: ShellTab): void;
+  /** 화면 표현이 상단 탭이든 좌측 앱 목록이든 같은 닫기 의미를 쓴다. */
+  close(tab: ShellTab): void;
   /** 활성 탭의 라우트가 (hashchange 로) 바뀌었다 — 제목 다시 계산·저장. */
   routed(tab: ShellTab): void;
   find(route: string): ShellTab | undefined;
@@ -432,7 +435,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     strip, tabs,
     active: () => { if (!activeTab) activate(tabs[restoredActive] || mkTab('#/')); return activeTab!; },
     current: () => activeTab,
-    add, activate,
+    add, activate, close,
     routed: (tab) => { const info = hooks.titleFor(tab.route); tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
     find: (route) => tabs.find((t) => routeKey(t.route) === routeKey(route)),
     initial: () => tabs[restoredActive] || null,

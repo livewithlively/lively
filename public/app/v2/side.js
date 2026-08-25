@@ -1,5 +1,8 @@
-// v2/side.ts — 새 셸 좌측 사이드바(#1719): 워크스페이스 **전체** 프로젝트 ▸ 살아 있는 세션 트리.
-//  규칙(상민님 2026-08-18, 같은 날 재구성 지시로 갱신):
+// v2/side.ts — 새 셸 좌측 사이드바(#1883): **열린 앱 인스턴스**가 중심이다.
+//  세션·프로젝트·위키 등 모든 화면을 동격의 한 행으로 보여 주고, 소속 프로젝트는 행 아래의 클릭 가능한
+//  `스페이스 › 리스트 › 프로젝트` 경로로 보여 준다. 위에는 새 작업만, 나머지 고정 진입점은 아래 도크에 둔다.
+//
+//  아래 규칙과 구현은 #1883 이전 프로젝트 ▸ 세션 트리의 롤백 비교용이다:
 //   · 프로젝트는 워크스페이스 전체가 보인다(내 것만이 아니다). '내 프로젝트만'은 필터 안의 토글.
 //   · **고정**은 사람이 고른다(2026-08-19) — 행의 압정을 누르면 맨 위로. 자동으로 뭘 올려 두지 않는다
 //     (열린 세션을 자동으로 띄우던 줄은 같은 날 걷었다: 내가 고르지 않은 것이 자리를 차지했다).
@@ -22,8 +25,9 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { api, el, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { anchoredPopover, api, el, keepSideScroll, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
+import { THEME_ORDER, setThemePref, themePref } from '../theme.js'; // 계정 팝오버의 테마 3단(#1683)
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isTrashedProj, isTrashedSess, sessWork } from './views.js';
@@ -342,7 +346,136 @@ function glyph(kind, cls) {
     };
     return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
 }
+let appListEl = null;
+/**
+ * 조상 경로(스페이스 › 리스트)를 칸에 맞춘다 — 넘치면 **앞 단계부터** '…' 로 접는다(#1883).
+ *  기준은 조상 자신이 아니라 **프로젝트 이름이 온전히 보이는가**다. 한 줄에 둘 다 넣을 수 없을 때
+ *  무엇을 살릴지가 요점이고, 그건 늘 이름이다(어느 프로젝트인지 알아야 누를 수 있다).
+ *  계층은 뒤로 갈수록 구체적이라 앞에서부터 접는다 — 전체 경로는 행의 툴팁에 그대로 남는다.
+ */
+function fitAncestors(node) {
+    let segs = [];
+    try {
+        segs = JSON.parse(node.dataset.segs || '[]');
+    }
+    catch {
+        return;
+    }
+    if (!segs.length)
+        return;
+    for (let i = 0; i < segs.length; i++) {
+        node.textContent = (i ? '… › ' : '') + segs.slice(i).join(' › ');
+        if (node.scrollWidth <= node.clientWidth)
+            return; // 다 들어갔다
+    }
+    // 마지막 한 단계도 넘치면 그대로 둔다 — CSS ellipsis 가 그 한 단계를 줄인다.
+}
+function instanceIcon(inst) {
+    const cls = 'v2-app-inst-ic' + (inst.state ? ' st-' + inst.state : '');
+    if (inst.icon === 'home')
+        return glyph('home', cls);
+    if (inst.icon === 'chat')
+        return glyph('chat', cls);
+    if (inst.icon === 'inbox')
+        return glyph('inbox', cls);
+    if (inst.icon === 'link')
+        return glyph('link', cls);
+    if (inst.icon === 'archive' || inst.icon === 'trash')
+        return glyph(inst.icon, cls);
+    const k = inst.icon === 'app' ? 'proj' : inst.icon;
+    return appIcon(k, cls);
+}
+function profileButton(me, name) {
+    const btn = el('button', { class: 'v2-profile-btn', type: 'button', 'aria-label': '내 계정과 화면 설정' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-profile-name', text: name }), el('span', { class: 'v2-profile-more', 'aria-hidden': 'true', text: '•••' }));
+    btn.onclick = () => {
+        let close = () => { };
+        const cur = themePref();
+        const lab = { system: '시스템', light: '라이트', dark: '다크' };
+        const panel = el('div', { class: 'v2-profile-pop' }, el('div', { class: 'v2-profile-who' }, el('b', { text: name }), me.email ? el('span', { text: String(me.email) }) : null), el('div', { class: 'v2-profile-theme', role: 'group', 'aria-label': '테마' }, ...THEME_ORDER.map((k) => el('button', { class: 'v2-profile-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
+            'aria-pressed': String(cur === k), onclick: () => { setThemePref(k); close(); redraw(); } }))), el('button', { class: 'v2-profile-action', type: 'button', text: '클래식 화면으로 보기', onclick: () => {
+                setUiModeOverride('classic');
+                location.replace(location.pathname + '#/dashboard');
+                location.reload();
+            } }), el('button', { class: 'v2-profile-action', type: 'button', text: '로그아웃', onclick: () => void logout() }));
+        close = anchoredPopover(btn, panel);
+    };
+    return btn;
+}
+/**
+ * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
+ * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
+ */
 function render() {
+    if (!last)
+        return;
+    // SideHooks.instances 를 모르는 이전 임베더는 기존 프로젝트 트리를 그대로 받는다.
+    if (!hooks.instances) {
+        renderLegacy();
+        return;
+    }
+    const { host, data } = last;
+    const wsReg = state.me?.workspace_registry || {};
+    const wsKind = (wsReg.active && wsReg.kind) || (state.me?.workspace?.kind);
+    host.closest('.v2-side')?.classList.toggle('ws-personal', wsKind === 'personal');
+    const me = state.me || {};
+    const name = String(me.display_name || me.email || me.userId || '');
+    const faceOwners = [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
+    const instances = hooks.instances();
+    const q = sideFilter.trim().toLowerCase();
+    const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.anc, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+    const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
+    const prevScroll = appListEl ? appListEl.scrollTop : 0;
+    const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
+    const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
+    const rows = shown.map((inst) => el('div', { class: 'v2-app-inst' + (inst.active ? ' on' : ''), role: 'listitem', 'data-instance': inst.id }, el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
+        onclick: () => hooks.onActivateInstance?.(inst.id) }, instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })), inst.closable === false
+        ? null
+        : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 닫기`, title: '앱 닫기',
+            onclick: () => hooks.onCloseInstance?.(inst.id) }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))), inst.project && !inst.project.self
+        ? el('button', { class: 'v2-app-inst-project', type: 'button',
+            title: `${[inst.project.anc, inst.project.name].filter(Boolean).join(' › ')}\n프로젝트 페이지를 엽니다`,
+            onclick: () => hooks.onOpenProject?.(inst.project.id) }, el('span', { class: 'v2-app-inst-pline' }, glyph('folder', 'v2-app-inst-project-ic'), el('span', { class: 'v2-app-inst-pname', text: inst.project.name })), inst.project.anc ? el('span', { class: 'v2-app-inst-anc', text: inst.project.anc,
+            'data-segs': JSON.stringify(inst.project.ancSegs || [inst.project.anc]) }) : null)
+        : el('span', { class: 'v2-app-inst-meta', title: (inst.project && inst.project.anc) || undefined,
+            text: (inst.project && inst.project.anc) || inst.meta || '라이블리 앱' })));
+    const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' }, ...rows, ...(!rows.length ? [el('div', { class: 'v2-app-empty' }, el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }), q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
+            : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() }))] : []));
+    appListEl = listEl;
+    listEl.scrollTop = prevScroll;
+    const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '열린 앱 찾기', 'aria-label': '열린 앱 찾기', value: sideFilter,
+        oninput: (e) => { sideFilter = e.target.value; redraw(); markFind(); },
+        onkeydown: (e) => {
+            if (e.key !== 'Escape')
+                return;
+            e.stopPropagation();
+            if (sideFilter)
+                sideFilter = '';
+            else
+                findOpen = false;
+            redraw();
+        },
+        onblur: () => { if (!sideFilter && findOpen)
+            window.setTimeout(() => { if (!sideFilter)
+                closeFind(); }, 120); } });
+    host.replaceChildren(navRow(), switcherTop({ people, faces: faceOwners }), el('div', { class: 'v2-new-task-wrap' }, el('button', { class: 'v2-new-task', type: 'button', onclick: () => hooks.onNewTask?.() }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })), el('span', { text: '새 작업' }))), el('section', { class: 'v2-app-space', 'aria-label': '앱' }, el('div', { class: 'v2-app-space-head' }, el('span', { class: 'v2-k', text: '앱' }), el('span', { class: 'v2-app-count', text: String(instances.length) }), findBtn(), el('button', { class: 'v2-app-open', type: 'button', 'aria-label': '앱 열기', title: '앱 열기', onclick: () => openLaunchpad() }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('rect', { x: '4', y: '4', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '4', width: '6', height: '6', rx: '1' }), sv('rect', { x: '4', y: '14', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '14', width: '6', height: '6', rx: '1' })))), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findIn)] : []), listEl), el('footer', { class: 'v2-side-foot v2-side-foot--apps' }, updateSlot(), el('nav', { class: 'v2-app-dock', 'aria-label': '앱 바로 열기' }, el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'inbox' ? ' on' : ''), href: '#/inbox', title: '확인할 것', 'aria-label': '확인할 것' }, glyph('inbox', 'v2-dock-ic'), inboxN ? el('span', { class: 'v2-dock-badge', text: String(inboxN) }) : null), el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'connect' ? ' on' : ''), href: '#/connect', title: '외부 앱 연결', 'aria-label': '외부 앱 연결' }, glyph('link', 'v2-dock-ic')), 
+    //  치워 둔 곳(#1851) — 트리 발치에 있던 두 행이 여기로 온다. 목록에 없다고 못 가는 곳이 되면 안 된다.
+    el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'archive' ? ' on' : ''), href: '#/archive', title: '아카이브', 'aria-label': '아카이브' }, glyph('archive', 'v2-dock-ic')), el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'trash' ? ' on' : ''), href: '#/trash', title: '휴지통', 'aria-label': '휴지통' }, glyph('trash', 'v2-dock-ic')), ...(navOn('liv') !== false ? [el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', title: '리브', 'aria-label': '리브' }, el('span', { class: 'v2-dock-liv', text: 'L' }))] : []), el('button', { class: 'v2-dock-btn', type: 'button', title: '모든 앱', 'aria-label': '모든 앱 열기', onclick: () => openLaunchpad() }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-dock-ic', 'aria-hidden': 'true' }, sv('rect', { x: '4', y: '4', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '4', width: '6', height: '6', rx: '1' }), sv('rect', { x: '4', y: '14', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '14', width: '6', height: '6', rx: '1' })))), profileButton(me, name)));
+    listEl.scrollTop = prevScroll;
+    [...listEl.querySelectorAll('.v2-app-inst-anc')].forEach((n) => fitAncestors(n));
+    keepSideScroll(listEl, 'v2-app-list');
+    if (findHad) {
+        findIn.focus();
+        if (findSel && findSel[0] != null)
+            findIn.setSelectionRange(findSel[0], findSel[1]);
+    }
+    else if (findFocusWanted) {
+        findFocusWanted = false;
+        findIn.focus();
+    }
+    bindFindKey();
+}
+/** #1883 이전 프로젝트 ▸ 세션 트리. 롤백 비교를 위해 한동안 남기되 현재 셸에서는 호출하지 않는다. */
+function renderLegacy() {
     if (!last)
         return;
     // 이름을 고치는 중이면 이번 판은 건너뛴다 — 20초 폴링이 입력 중인 칸을 지우면 치던 이름이 사라진다.
@@ -788,8 +921,8 @@ function findBtn() {
     const on = findShown();
     return el('span', { class: 'v2-findbtn-wrap' }, el('button', {
         class: 'v2-findbtn' + (on ? ' on' : '') + (sideFilter ? ' has' : ''), type: 'button',
-        'aria-label': on ? '프로젝트 찾기 닫기' : '프로젝트 찾기', 'aria-expanded': String(on),
-        title: on ? '닫기 (Esc)' : '프로젝트 찾기 — / 키로도 열려요',
+        'aria-label': on ? '열린 앱 찾기 닫기' : '열린 앱 찾기', 'aria-expanded': String(on),
+        title: on ? '닫기 (Esc)' : '열린 앱 찾기 — / 키로도 열려요',
         onclick: () => { if (findShown())
             closeFind();
         else
