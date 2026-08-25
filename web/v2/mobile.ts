@@ -22,8 +22,8 @@ export interface MobileChrome {
   setAside(on: boolean): void;
   /** 우측 서랍을 연다 — 곁칸에 무언가를 실었을 때(미리보기). 데스크톱에선 상주 열이라 할 일이 없다. */
   openAside(): void;
-  /** 상단 탭을 없앤 뒤 모바일 한 줄에 현재 앱 이름만 표시한다. */
-  setTitle(title: string): void;
+  /** 사이드바 서랍 여닫이(☰) — 데스크톱 앱에선 이 단추가 창 맨 윗줄 맨 왼쪽으로 간다(#1954 3차). */
+  menuBtn: HTMLElement;
   closeAll(): void;
   isMobile(): boolean;
 }
@@ -37,8 +37,9 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   const icon = (paths: string[]): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic', 'aria-hidden': 'true' }, ...paths.map((d) => sv('path', { d })));
   const menuBtn = el('button', { class: 'v2-mbar-btn v2-mbar-menu', type: 'button', 'aria-label': '탐색 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-side' },
     icon(['M4 7h16M4 12h16M4 17h16'])) as HTMLButtonElement;
-  const titleEl = el('div', { class: 'v2-mbar-title', text: '라이블리' });
-  const slot = el('div', { class: 'v2-mbar-slot' }, titleEl);
+  //  제목은 두지 않는다(#1954 3차 상민님) — 창 맨 윗줄은 폭이 넓든 좁든 **같은 것**이어야 한다.
+  //  지금 무엇을 보고 있는지는 좌측 목록의 활성 행이 이미 말하고, 화면 제목은 본문 문패가 든다.
+  const slot = el('div', { class: 'v2-mbar-slot' });
   const asideBtn = el('button', { class: 'v2-mbar-btn v2-mbar-aside', type: 'button', 'aria-label': '타임라인 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-aside', title: '이 화면의 타임라인' },
     icon(['M12 4v16', 'M12 8h6', 'M12 14h6', 'M6 6h2', 'M6 12h2', 'M6 18h2'])) as HTMLButtonElement;
   const bar = el('div', { class: 'v2-mbar' }, menuBtn, slot, asideBtn) as HTMLElement;
@@ -110,6 +111,6 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       if (!on && open === 'aside') closeAll();
     },
     openAside(): void { if (isMobile() && !asideBtn.hidden && open !== 'aside') openOne('aside'); },
-    setTitle(title: string): void { titleEl.textContent = title || '라이블리'; },
+    menuBtn,
   };
 }
