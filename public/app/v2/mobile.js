@@ -18,8 +18,9 @@ export function mountMobileChrome(root, side, aside) {
     // 아이콘 — 라인, 채움 없음(DS 규약). 24 뷰박스, 사이드바·탭과 같은 붓.
     const icon = (paths) => sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic', 'aria-hidden': 'true' }, ...paths.map((d) => sv('path', { d })));
     const menuBtn = el('button', { class: 'v2-mbar-btn v2-mbar-menu', type: 'button', 'aria-label': '탐색 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-side' }, icon(['M4 7h16M4 12h16M4 17h16']));
-    const titleEl = el('div', { class: 'v2-mbar-title', text: '라이블리' });
-    const slot = el('div', { class: 'v2-mbar-slot' }, titleEl);
+    //  제목은 두지 않는다(#1954 3차 상민님) — 창 맨 윗줄은 폭이 넓든 좁든 **같은 것**이어야 한다.
+    //  지금 무엇을 보고 있는지는 좌측 목록의 활성 행이 이미 말하고, 화면 제목은 본문 문패가 든다.
+    const slot = el('div', { class: 'v2-mbar-slot' });
     const asideBtn = el('button', { class: 'v2-mbar-btn v2-mbar-aside', type: 'button', 'aria-label': '타임라인 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-aside', title: '이 화면의 타임라인' }, icon(['M12 4v16', 'M12 8h6', 'M12 14h6', 'M6 6h2', 'M6 12h2', 'M6 18h2']));
     const bar = el('div', { class: 'v2-mbar' }, menuBtn, slot, asideBtn);
     const scrim = el('div', { class: 'v2-scrim', hidden: true, 'aria-hidden': 'true' });
@@ -114,6 +115,6 @@ export function mountMobileChrome(root, side, aside) {
         },
         openAside() { if (isMobile() && !asideBtn.hidden && open !== 'aside')
             openOne('aside'); },
-        setTitle(title) { titleEl.textContent = title || '라이블리'; },
+        menuBtn,
     };
 }
