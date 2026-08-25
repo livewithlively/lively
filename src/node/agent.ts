@@ -221,6 +221,10 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
         memoryMb: Number(args.memoryMb), idleTimeoutSec: Number(args.idleTimeoutSec),
         allowedHosts: Array.isArray(args.allowedHosts) ? args.allowedHosts.map(String) : [],
         selfHosts: Array.isArray(args.selfHosts) ? args.selfHosts.map(String) : [],
+        // 조직 예산(#1780 Stage B) — 구 게이트웨이는 이 필드를 안 보내므로 부재 시 0(감시 끔)이다.
+        //  숫자가 아니면 0으로 접는다: 감시를 못 켜는 것이 멀쩡한 worker 를 잘못된 값으로 죽이는 것보다 낫다.
+        cpuPercentMax: Number.isFinite(Number(args.cpuPercentMax)) ? Math.max(0, Number(args.cpuPercentMax)) : 0,
+        maxWallSec: Number.isFinite(Number(args.maxWallSec)) ? Math.max(0, Number(args.maxWallSec)) : 0,
       };
       return nodeWorkerHost.start(spec);
     }

@@ -8,6 +8,7 @@ import { listActiveRuntimeInstances } from "../org/store/app-instances.js";
 import * as runs from "../org/store/app-worker-runs.js";
 import { liveNodes, nodeAgentStale, nodeOnline, nodeRpc, nodeSupports, onNodeReady, onWorkerState } from "../node/registry.js";
 import { getRuntimeConfig } from "../org/store/runtime-config.js";
+import { decideWorkerBudget } from "./worker-policy.js";
 import { getOrgProfile } from "../org/store/profile.js";
 
 const gatewayWorkerHost = new WorkerHost({ onSnapshot: (snapshot) => runs.applyWorkerSnapshot(snapshot) });
@@ -66,11 +67,14 @@ export function resolveWorkerPlacement(manifest: LivelyAppManifest, requested?: 
 }
 
 function startEnvelope(runId: string, app: OrgApp, manifest: LivelyAppManifest, instance: AppInstanceRow,
-  asset: NonNullable<Awaited<ReturnType<typeof getRuntimeAsset>>>, allowedHosts: string[], selfHosts: string[]): Record<string, unknown> {
+  asset: NonNullable<Awaited<ReturnType<typeof getRuntimeAsset>>>, allowedHosts: string[], selfHosts: string[],
+  budget: { cpuPercentMax: number; maxWallSec: number }): Record<string, unknown> {
   const runtime = manifest.runtime!;
   return {
     runId, appId: app.id, instanceId: instance.id, entry: asset.entry,
     codeHash: asset.code_hash, memoryMb: runtime.memory_mb, idleTimeoutSec: runtime.idle_timeout_sec, allowedHosts, selfHosts,
+    // 조직 정책(#1780 Stage B) — 0 = 그 감시를 끈다. 정책 해석은 게이트웨이가 끝내고 호스트는 숫자만 집행한다.
+    cpuPercentMax: budget.cpuPercentMax, maxWallSec: budget.maxWallSec,
   };
 }
 
@@ -110,15 +114,23 @@ async function startWorkerForInstanceCore(app: OrgApp, manifest: LivelyAppManife
       await stopWorkerForInstance(instance.id, existing.package_hash === app.content_hash ? "placement_changed" : "package_updated");
     }
   }
+  // 조직 예산 관문(#1780 Stage B) — 여기서 막아야 자식 프로세스를 띄우기 전에 멈춘다.
+  //  사용량은 **이 인스턴스의 기존 run 을 뺀 값**이다(재시작·복구가 자기 자신에 걸려 못 살아나지 않게).
+  const memoryMb = manifest.runtime.memory_mb;
+  const workerPolicy = (await getRuntimeConfig()).worker_policy;
+  const denial = decideWorkerBudget(workerPolicy, await runs.workerBudgetUsage(instance.id, instance.owner_member), memoryMb);
+  if (denial) throw new Error(denial);
+
   const run = await runs.prepareWorkerRun({ instanceId: instance.id, appId: app.id, owner: instance.owner_member,
-    projectId: instance.project_id, hostKind: kind, hostId: nodeId, packageHash: app.content_hash });
+    projectId: instance.project_id, hostKind: kind, hostId: nodeId, packageHash: app.content_hash, memoryMb });
   try {
     let snapshot: WorkerRunSnapshot;
     const orgHosts = new Set((await getRuntimeConfig()).url_allowlist.map((h) => h.toLowerCase()));
     const allowedHosts = manifest.permissions.hosts.map((h) => h.toLowerCase()).filter((h) => orgHosts.has(h));
     const selfHosts: string[] = [];
     try { const url = (await getOrgProfile()).gateway_url; if (url) selfHosts.push(new URL(url).hostname.toLowerCase()); } catch { /* 프로필 없음 */ }
-    const envelope = startEnvelope(run.id, app, manifest, instance, asset, allowedHosts, selfHosts);
+    const envelope = startEnvelope(run.id, app, manifest, instance, asset, allowedHosts, selfHosts,
+      { cpuPercentMax: workerPolicy.cpu_percent_max, maxWallSec: workerPolicy.max_wall_sec });
     if (kind === "central") {
       snapshot = await gatewayWorkerHost.start({
         runId: String(envelope.runId), appId: String(envelope.appId), instanceId: String(envelope.instanceId), entry: String(envelope.entry),
@@ -126,6 +138,7 @@ async function startWorkerForInstanceCore(app: OrgApp, manifest: LivelyAppManife
         memoryMb: Number(envelope.memoryMb), idleTimeoutSec: Number(envelope.idleTimeoutSec),
         allowedHosts,
         selfHosts,
+        cpuPercentMax: Number(envelope.cpuPercentMax), maxWallSec: Number(envelope.maxWallSec),
       });
       // onSnapshot은 순서 보장 비동기 관측이다. 응답 전에 ready 상태를 한 번 확정해 prepared 노출을 막는다.
       await runs.applyWorkerSnapshot(snapshot);
