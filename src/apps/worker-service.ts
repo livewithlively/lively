@@ -1,17 +1,33 @@
 // 게이트웨이의 worker 정책/배치 계층(#1780 Stage B). 중앙·원격 모두 worker-host.ts의 같은 실행 계약을 쓴다.
-import type { LivelyAppManifest } from "./manifest.js";
+import { parseAppManifest, type LivelyAppManifest } from "./manifest.js";
 import { WorkerHost, WORKER_RPC_CHUNK_BYTES, type WorkerRunSnapshot, type WorkerStopReason } from "./worker-host.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { getApp, getRuntimeAsset } from "../org/store/apps.js";
 import type { AppInstanceRow } from "../org/store/app-instances.js";
+import { listActiveRuntimeInstances } from "../org/store/app-instances.js";
 import * as runs from "../org/store/app-worker-runs.js";
-import { nodeOnline, nodeRpc, nodeSupports } from "../node/registry.js";
+import { liveNodes, nodeAgentStale, nodeOnline, nodeRpc, nodeSupports, onNodeReady } from "../node/registry.js";
 import { getRuntimeConfig } from "../org/store/runtime-config.js";
 import { getOrgProfile } from "../org/store/profile.js";
 
 const gatewayWorkerHost = new WorkerHost({ onSnapshot: (snapshot) => runs.applyWorkerSnapshot(snapshot) });
 
 export interface WorkerPlacement { kind: "central" | "remote"; nodeId: string | null }
+
+export interface WorkerRecoveryResult { kept: number; restarted: number; failed: number; failures: string[] }
+
+/** 복구 한 건의 실패가 다른 AppInstance를 막지 않게 직렬 실행하고 결과를 정규화한다. */
+export async function runWorkerRecoveryBatch<T>(items: readonly T[], recover: (item: T) => Promise<"kept" | "restarted">): Promise<WorkerRecoveryResult> {
+  const result: WorkerRecoveryResult = { kept: 0, restarted: 0, failed: 0, failures: [] };
+  for (const item of items) {
+    try { result[await recover(item)]++; }
+    catch (error) {
+      result.failed++;
+      result.failures.push((error instanceof Error ? error.message : String(error)).slice(0, 500));
+    }
+  }
+  return result;
+}
 
 export function resolveWorkerPlacement(manifest: LivelyAppManifest, requested?: { kind: "central" | "remote"; node_id?: string } | null): WorkerPlacement | null {
   const runtime = manifest.runtime;
@@ -172,6 +188,62 @@ export async function stopWorkersForMember(owner: string, reason: WorkerStopReas
   let stopped = 0;
   for (const run of active) await stopWorkerForInstance(run.instance_id, reason).then(() => { stopped++; }).catch(() => { /* 멤버의 나머지 세션·grant 회수는 계속 */ });
   return stopped;
+}
+
+/** 게이트웨이 재기동·원격 노드 재연결 뒤 active AppInstance와 실제 worker를 다시 수렴시킨다. */
+export async function recoverWorkersForHost(hostKind: "central" | "remote", nodeId: string | null = null): Promise<WorkerRecoveryResult> {
+  if (hostKind === "remote" && (!nodeId || !nodeOnline(nodeId) || !nodeSupports(nodeId, "workerStatus") || !nodeSupports(nodeId, "startWorker"))) {
+    return { kept: 0, restarted: 0, failed: 0, failures: [] };
+  }
+  const instances = await listActiveRuntimeInstances({ hostKind, hostId: hostKind === "central" ? null : nodeId });
+  return runWorkerRecoveryBatch(instances, async (instance) => {
+    const app = await getApp(instance.app_id);
+    if (!app || !app.enabled || app.status !== "active") {
+      await stopWorkerForInstance(instance.id, "app_disabled").catch(() => { /* disabled 정본이 우선 */ });
+      return "kept";
+    }
+    const manifest = parseAppManifest(app.manifest);
+    if (!manifest.runtime) {
+      await stopWorkerForInstance(instance.id, "package_updated").catch(() => { /* runtime 제거가 정본 */ });
+      return "kept";
+    }
+    const active = await runs.activeWorkerRun(instance.id);
+    if (active?.package_hash !== app.content_hash) {
+      if (active) await stopWorkerForInstance(instance.id, "package_updated").catch(() => { /* 새 run 시작이 최종 판정 */ });
+    } else if (await workerRunForInstance(instance.id)) return "kept";
+    await startWorkerForInstance(app, manifest, instance);
+    return "restarted";
+  });
+}
+
+/** 패키지 내용이 바뀌면 기존 run을 새 hash로 교체한다. 설치 성공은 유지하고 인스턴스별 실패를 결과로 돌린다. */
+export async function restartWorkersForApp(appId: string): Promise<WorkerRecoveryResult> {
+  const instances = await listActiveRuntimeInstances({ appId });
+  for (const instance of instances) await stopWorkerForInstance(instance.id, "package_updated").catch(() => { /* 아래 start가 개별 실패로 기록 */ });
+  const app = await getApp(appId);
+  if (!app || !app.enabled || app.status !== "active") return { kept: instances.length, restarted: 0, failed: 0, failures: [] };
+  const manifest = parseAppManifest(app.manifest);
+  if (!manifest.runtime) return { kept: instances.length, restarted: 0, failed: 0, failures: [] };
+  return runWorkerRecoveryBatch(instances, async (instance) => {
+    await startWorkerForInstance(app, manifest, instance);
+    return "restarted";
+  });
+}
+
+let recoveryArmed = false;
+/** DB 스키마·builtin 시딩 뒤 한 번 호출. 중앙 부팅복구 + 이미 붙은/앞으로 붙을 최신 노드 복구를 함께 건다. */
+export async function armWorkerRecovery(): Promise<{ central: WorkerRecoveryResult; remote: WorkerRecoveryResult[] }> {
+  if (!recoveryArmed) {
+    recoveryArmed = true;
+    onNodeReady(async (nodeId) => { await recoverWorkersForHost("remote", nodeId); });
+  }
+  const central = await recoverWorkersForHost("central");
+  const remote: WorkerRecoveryResult[] = [];
+  for (const node of liveNodes()) if (node.online && nodeSupports(node.id, "startWorker")) {
+    if (await nodeAgentStale(node.id)) continue; // helloOk 자가갱신 뒤 최신 번들 재연결 훅이 복구한다.
+    remote.push(await recoverWorkersForHost("remote", node.id));
+  }
+  return { central, remote };
 }
 
 export async function shutdownGatewayWorkers(): Promise<void> { await gatewayWorkerHost.shutdown(); }
