@@ -11,6 +11,7 @@ import { nodeOpenTo } from "../node/node-access.js";
 import { nodeOnline, nodeRpc } from "../node/registry.js";
 import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
 import { CENTRAL_NODE_ID, tryAssignNow } from "../node/task-scheduler.js";
+import { HEADLESS_KEYS, resolveHeadlessHarness } from "../node/headless-harness.js"; // #1884 실행 하네스
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const DEFAULT_WAIT_SEC = 120; // wait 모드 기본 — 대부분의 위탁이 이 안에 끝난다. 초과분은 백그라운드 계속 + 폴백 안내.
@@ -29,10 +30,12 @@ const run: Capability = {
     "가용 노드 없으면 {no_capacity:true, reason} 즉시 반환(무한 대기 안 함), queue:true=적합 노드 날 때까지 대기 등록(장기 잡). " +
     "위탁 대상은 중앙 + **본인이 등록한 노드** + 관리자가 공유 노드로 지정한 노드뿐이다(남의 노드엔 안 간다 — 공유 노드는 내 셋업토큰 등록이 필요). " +
     "repo=대상 레포명(주면 게이트웨이가 공유 base clone→worktree 자동 준비해 워커 cwd 로 — 프롬프트 클론 지시 불필요), ref=기준 브랜치(예 main), " +
-    "prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(노드 리소스 대조), needs_docker·node(지정)·subpath, wait_sec=완료 대기 상한(기본 120s).",
+    "prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(노드 리소스 대조), needs_docker·node(지정)·subpath, wait_sec=완료 대기 상한(기본 120s). " +
+    "harness=실행 하네스(claude|codex|antigravity|grok) — 비우면 내가 로그인한 하네스 기준 자동(둘 이상이면 claude).",
   scope: "context",
   input: {
     prompt: z.string().min(1).max(20000),
+    harness: z.string().max(32).optional(),   // #1884 — 비우면 의뢰자 로그인 기준 자동. 헤드리스 불가 하네스는 400.
     subpath: z.string().max(300).optional(),
     repo: z.string().max(100).optional(),   // 지정 시 게이트웨이가 공유 base clone→worktree 자동 준비, 워커 cwd=worktree
     ref: z.string().max(100).optional(),    // worktree 분기 기준 브랜치(origin/<ref>, 예 main) — 없으면 base HEAD
@@ -66,8 +69,15 @@ const run: Capability = {
         throw new HttpError(403, `노드 '${input.node}' 에는 위탁할 수 없습니다 — 본인이 등록한 노드이거나 관리자가 공유 노드로 지정한 노드여야 합니다.`);
       }
     }
+    // 실행 하네스(#1884) — 명시는 여기서 400 으로 말한다(스케줄러까지 가면 '지원 노드 없음'이라는 엉뚱한 사유가 된다).
+    //  비우면 내가 로그인한 하네스 기준(둘 이상이면 claude · 확인 안 되면 claude = 종전 동작).
+    const explicitHarness = input.harness === undefined ? null : String(input.harness).trim() || null;
+    if (explicitHarness && !HEADLESS_KEYS.includes(explicitHarness)) {
+      throw new HttpError(400, `위탁을 지원하지 않는 하네스: ${explicitHarness}(지원: ${HEADLESS_KEYS.join(", ")})`);
+    }
+    const harness = await resolveHeadlessHarness(requester, explicitHarness);
     const task = await createTask({
-      requester, requesterSession: null, prompt: String(input.prompt),
+      requester, requesterSession: null, prompt: String(input.prompt), harness,
       subpath: input.subpath, repo: input.repo ?? null, gitRef: input.ref ?? null, flags: input.flags,
       needCpu: input.need_cpu ?? null, needRamMb: input.need_ram_mb ?? null, needDiskMb: input.need_disk_mb ?? null,
       needsDocker: !!input.needs_docker, nodePref: input.node ?? null,
