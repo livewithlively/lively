@@ -256,6 +256,8 @@ export interface SideInstance {
   meta?: string;
   /** 소속 프로젝트 — anc(스페이스 › 리스트)와 name 을 나눠 받아 좁은 줄에서 조상부터 줄인다. self=이 화면이 그 프로젝트다. */
   project?: { id: number; anc: string; ancSegs?: string[]; name: string; self?: boolean } | null;
+  /** 닫을 수 있는가 — 돌고 있는 세션은 false(닫아도 계속 도니 목록에서 뺄 수 없다, #1883). */
+  closable?: boolean;
 }
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
@@ -430,9 +432,11 @@ function render(): void {
     el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
-    el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 닫기`, title: '앱 닫기',
-      onclick: () => hooks.onCloseInstance?.(inst.id) },
-      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
+    inst.closable === false
+      ? null
+      : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 닫기`, title: '앱 닫기',
+          onclick: () => hooks.onCloseInstance?.(inst.id) },
+          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
     inst.project && !inst.project.self
       ? el('button', { class: 'v2-app-inst-project', type: 'button',
           title: `${[inst.project.anc, inst.project.name].filter(Boolean).join(' › ')}\n프로젝트 페이지를 엽니다`,

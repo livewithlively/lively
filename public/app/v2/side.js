@@ -433,8 +433,10 @@ function render() {
     const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
     const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
     const rows = shown.map((inst) => el('div', { class: 'v2-app-inst' + (inst.active ? ' on' : ''), role: 'listitem', 'data-instance': inst.id }, el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
-        onclick: () => hooks.onActivateInstance?.(inst.id) }, instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })), el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 닫기`, title: '앱 닫기',
-        onclick: () => hooks.onCloseInstance?.(inst.id) }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))), inst.project && !inst.project.self
+        onclick: () => hooks.onActivateInstance?.(inst.id) }, instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })), inst.closable === false
+        ? null
+        : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 닫기`, title: '앱 닫기',
+            onclick: () => hooks.onCloseInstance?.(inst.id) }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))), inst.project && !inst.project.self
         ? el('button', { class: 'v2-app-inst-project', type: 'button',
             title: `${[inst.project.anc, inst.project.name].filter(Boolean).join(' › ')}\n프로젝트 페이지를 엽니다`,
             onclick: () => hooks.onOpenProject?.(inst.project.id) }, el('span', { class: 'v2-app-inst-pline' }, glyph('folder', 'v2-app-inst-project-ic'), el('span', { class: 'v2-app-inst-pname', text: inst.project.name })), inst.project.anc ? el('span', { class: 'v2-app-inst-anc', text: inst.project.anc,

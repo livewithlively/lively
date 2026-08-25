@@ -30,7 +30,7 @@ import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
-import { cachedAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, updateAppInstance } from './app-instance.js';
+import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
@@ -339,11 +339,12 @@ const binHooks = { onChanged: () => { void loadData({ projects: true }).then(() 
 
 // ── 데이터 ──
 // 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
+let appInstances: AppInstanceRecord[] = [];   // #1883 — 서버가 아는 내 활성 인스턴스(창 유무와 무관)
 let lastLive: any[] = [];
 let lastLogs: any[] = [];
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
   const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
-  const [pj, lists0, folders0, live, logs] = await Promise.all([
+  const [pj, lists0, folders0, insts0, live, logs] = await Promise.all([
     // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
     //  archived=include(#1851) — 보관한 프로젝트도 받는다: 그 아래 세션이 '프로젝트 없는 세션'으로 떨어지지 않게, 그리고
     //  「아카이브」 화면이 같은 데이터로 그려지게. 사이드바는 archived_at 을 보고 스스로 가른다(side.ts).
@@ -351,6 +352,8 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
     // #1883 열린 앱의 둘째·셋째 줄 — 프로젝트가 있으면 스페이스 › 리스트 › 프로젝트 계층을 보여 준다.
     wantProj ? api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || null).catch(() => null) : Promise.resolve(null),
     wantProj ? api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || null).catch(() => null) : Promise.resolve(null),
+    // #1883 좌측 목록의 정본 — 창(탭)이 아니라 **살아 있는 앱 인스턴스**(#1780 v2.2 §2.2·§2.3).
+    listAppInstances().catch(() => null),
     // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
     api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
     api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => null),
@@ -366,6 +369,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
       created_by: p.created_by != null ? String(p.created_by) : null, member_ids: Array.isArray(p.members) ? p.members.map((m: any) => String(m && m.member_id != null ? m.member_id : m)) : [] }));
     projLoadedAt = Date.now();
   }
+  if (Array.isArray(insts0)) appInstances = insts0;
   let lists = data.lists || [];
   let folders = data.folders || [];
   if (Array.isArray(lists0)) lists = lists0 as any[];
@@ -774,36 +778,107 @@ function projectPath(id: number): { id: number; anc: string; ancSegs: string[]; 
   return { id, anc: segs.join(' › '), ancSegs: segs, name: p.name || `프로젝트 #${id}` };
 }
 
+/** 좌측 목록의 행 키 — 창·인스턴스·세션 중 무엇에서 왔든 **같은 대상이면 같은 한 행**으로 접힌다(#1883). */
+function sideRowKey(route: string): string {
+  const { segs } = parseRoute(route);
+  if (segs[0] === 's') return 'sess:' + decodeURIComponent(segs[1] || '');
+  if (segs[0] === 'i') return 'inst:' + decodeURIComponent(segs[1] || '');
+  return 'route:' + routeKey(route);
+}
+
+/** route 하나가 좌측에서 갖는 얼굴 — 이름·아이콘·부제·소속 프로젝트. */
+function sideRowFace(route: string): Omit<SideInstance, 'id' | 'active'> {
+  const { segs } = parseRoute(route);
+  const page = segs[0] || '';
+  const info = titleFor(route);
+  const base = projectPath(projectIdForRoute(route));
+  //  프로젝트 화면 자신은 제목이 곧 프로젝트명이다 — 둘째 줄에 이름을 되풀이하지 않고 조상 경로만 둔다.
+  const selfProject = !!base && (page === 'app' ? segs[1] === 'projects2' : (page === 'projects2' || CLASSIC_PAGES[page] === 'projects2'));
+  const project = base ? { ...base, self: selfProject } : null;
+  let icon: SideInstance['icon'] = 'app';
+  let meta = '라이블리 앱';
+  if (!page || page === 'dashboard') { icon = 'home'; meta = '아직 시작하지 않은 작업'; }
+  else if (page === 's' || page === 'p') { icon = 'chat'; meta = project ? '' : 'AI 세션 · 프로젝트 없음'; }
+  else if (page === 'inbox') { icon = 'inbox'; meta = '답과 확인을 기다리는 작업'; }
+  else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
+  //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
+  else if (page === 'archive') { icon = 'archive'; meta = '보관해 둔 프로젝트'; }
+  else if (page === 'trash') { icon = 'trash'; meta = '버린 세션과 프로젝트'; }
+  else if (page === 'liv') { icon = 'liv'; meta = '워크스페이스 담당자'; }
+  else {
+    const appKey = page === 'app' ? segs[1] : CLASSIC_PAGES[page];
+    const app = appByKey(appKey);
+    if (app) { icon = app.icon; meta = app.desc; }
+  }
+  return { title: (!page || page === 'dashboard') ? '새 작업' : info.title, icon, state: info.state, meta, project };
+}
+
+//  행 키 → 그 행을 여는 route · 그 행이 쥔 AppInstance. 활성화·닫기가 이 두 표로 되돌아간다.
+const sideRowRoute = new Map<string, string>();
+const sideRowInstance = new Map<string, string>();
+
+/**
+ * 좌측 목록의 정본(#1883 · #1780 v2.2 §2.2·§2.3).
+ *  **창(탭)이 아니라 살아 있는 것**을 센다 — 탭은 AppWindow 일 뿐이고 인스턴스는 창 없이도 산다(1:0..1).
+ *  세 줄기를 한 목록으로 접는다:
+ *   ① 돌고 있는 내 세션 — 이 브라우저에서 안 열었어도 박스에서 돌고 있으면 내 앱이다.
+ *   ② 세션이 아닌 활성 인스턴스 — 창을 닫아도 서버에 살아 있다.
+ *   ③ 지금 열려 있는 창 — 홈·확인할 것처럼 인스턴스가 없는 화면도 보고 있는 동안은 목록에 있어야 한다.
+ *  끝난 세션의 인스턴스는 세우지 않는다(창이 붙어 있으면 ③이 세운다) — 아니면 지난 세션이 목록을 덮는다(dev 실측 30건).
+ */
 function sideInstances(): SideInstance[] {
-  if (!tabsApi) return [];
-  const active = tabsApi.current();
-  return tabsApi.tabs.map((tab) => {
-    const { segs } = parseRoute(tab.route);
-    const page = segs[0] || '';
-    const info = titleFor(tab.route);
-    const pid = projectIdForRoute(tab.route);
-    const base = projectPath(pid);
-    //  프로젝트 화면 자신은 제목이 곧 프로젝트명이다 — 둘째 줄에 이름을 되풀이하지 않고 조상 경로만 둔다.
-    const selfProject = !!base && (page === 'app' ? segs[1] === 'projects2' : (page === 'projects2' || CLASSIC_PAGES[page] === 'projects2'));
-    const project = base ? { ...base, self: selfProject } : null;
-    let icon: SideInstance['icon'] = 'app';
-    let meta = '라이블리 앱';
-    if (!page || page === 'dashboard') { icon = 'home'; meta = '아직 시작하지 않은 작업'; }
-    else if (page === 's' || page === 'p') { icon = 'chat'; meta = project ? '' : 'AI 세션 · 프로젝트 없음'; }
-    else if (page === 'inbox') { icon = 'inbox'; meta = '답과 확인을 기다리는 작업'; }
-    else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
-    //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
-    else if (page === 'archive') { icon = 'archive'; meta = '보관해 둔 프로젝트'; }
-    else if (page === 'trash') { icon = 'trash'; meta = '버린 세션과 프로젝트'; }
-    else if (page === 'liv') { icon = 'liv'; meta = '워크스페이스 담당자'; }
-    else {
-      const appKey = page === 'app' ? segs[1] : CLASSIC_PAGES[page];
-      const app = appByKey(appKey);
-      if (app) { icon = app.icon; meta = app.desc; }
+  const activeTab = tabsApi ? tabsApi.current() : null;
+  const activeKey = activeTab ? sideRowKey(activeTab.route) : '';
+  sideRowRoute.clear(); sideRowInstance.clear();
+  const rows = new Map<string, SideInstance & { at: number }>();
+  const put = (key: string, route: string, at: number, closable: boolean): void => {
+    const prev = rows.get(key);
+    sideRowRoute.set(key, route);
+    rows.set(key, { ...sideRowFace(route), id: key, active: key === activeKey,
+      at: Math.max(at, prev ? prev.at : 0), closable: prev ? prev.closable : closable });
+  };
+
+  for (const s of data.sessions) {                                   // ① 돌고 있는 내 세션
+    if (!s.live || !s.alive || !s.owned || isTrashedSess(s)) continue;
+    put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, false);   // 돌고 있는 건 닫아서 없앨 수 없다
+  }
+  for (const inst of appInstances) {                                 // ② 세션 아닌 활성 인스턴스
+    if (inst.status !== 'active') continue;
+    const at = Date.parse(String(inst.updated_at || inst.created_at || '')) || 0;
+    if (inst.subject_kind === 'session') {
+      if (inst.subject_ref && rows.has('sess:' + inst.subject_ref)) sideRowInstance.set('sess:' + inst.subject_ref, inst.id);
+      continue;
     }
-    return { id: tab.id, title: (!page || page === 'dashboard') ? '새 작업' : info.title, active: tab === active,
-      icon, state: info.state, meta, project };
+    sideRowInstance.set('inst:' + inst.id, inst.id);
+    put('inst:' + inst.id, '#/i/' + encodeURIComponent(inst.id), at, true);
+  }
+  const now = Date.now();
+  (tabsApi ? tabsApi.tabs : []).forEach((tab, i) => {                // ③ 지금 열린 창
+    const key = sideRowKey(tab.route);
+    put(key, tab.route, rows.has(key) ? rows.get(key)!.at : now - i, true);
   });
+  return [...rows.values()].sort((a, b) => b.at - a.at).map(({ at: _at, ...row }) => row);
+}
+
+/** 좌측 행의 × — 창을 떼고(UI detach) 인스턴스가 있으면 그것도 닫는다. 세션·worker 는 여기서 죽이지 않는다(v2.2 §2.3). */
+async function closeSideRow(key: string): Promise<void> {
+  const route = sideRowRoute.get(key);
+  const instanceId = sideRowInstance.get(key);
+  if (route && tabsApi) { const hit = tabsApi.find(route); if (hit) tabsApi.close(hit); }
+  if (instanceId) {
+    try { await closeAppInstance(instanceId); appInstances = appInstances.filter((x) => x.id !== instanceId); }
+    catch (_) { toast('앱을 닫지 못했습니다'); }
+  }
+  drawSide();
+}
+
+/** 좌측 행을 누르면 그 대상에 창을 붙인다 — 이미 열려 있으면 그 창으로, 아니면 새 창. */
+function openSideRow(key: string): void {
+  const route = sideRowRoute.get(key);
+  if (!route || !tabsApi) return;
+  const hit = tabsApi.find(route);
+  if (hit) { tabsApi.activate(hit); return; }
+  tabsApi.add(route);
 }
 
 /** 프로젝트 경로를 누르면 현재 세션을 덮지 않고 '프로젝트' 앱 인스턴스를 열거나 재사용한다. */
@@ -848,8 +923,8 @@ function drawSide(): void {
     onForward: () => history.forward(),
     navState: () => ({ back: histPos > 0, forward: histPos < histSeq }),
     instances: sideInstances,
-    onActivateInstance: (id) => { const t = tabsApi?.tabs.find((x) => x.id === id); if (t) tabsApi?.activate(t); },
-    onCloseInstance: (id) => { const t = tabsApi?.tabs.find((x) => x.id === id); if (t) tabsApi?.close(t); },
+    onActivateInstance: openSideRow,
+    onCloseInstance: (key) => { void closeSideRow(key); },
     onOpenProject: openProjectPage,
   });
 }
