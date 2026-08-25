@@ -111,6 +111,10 @@
   font: inherit; font-size: 11.5px; color: var(--muted, #8A99B5); cursor: pointer; white-space: nowrap; }
 .v2-omni-chip:hover { border-color: var(--blue); color: var(--ink-sub, #5A6B85); }
 .v2-omni-chip.on { border-color: var(--blue); background: var(--bg-tint-2, #EEF5FF); color: var(--ink); font-weight: 600; }
+/*  보조 축(자료·세션이력)은 구분선 뒤에 선다 — 켜진 모습이 기본인 왼쪽 칩들과 성격이 다르다(더하는 손잡이).
+    꺼져 있을 때가 기본이라 점선 테두리로 '아직 안 켠 것'임을 말한다(꺼진 주 축 칩과 헷갈리지 않게). */
+.v2-omni-chipsep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--line, #E6ECF5); }
+.v2-omni-chip.aux:not(.on) { border-style: dashed; }
 .v2-omni-chip-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-omni-list { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
 .v2-omni-gh { padding: 8px 8px 4px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
