@@ -22,7 +22,7 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { anchoredPopover, api, el, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { api, el, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
@@ -345,6 +345,10 @@ function glyph(kind, cls) {
 function render() {
     if (!last)
         return;
+    // 이름을 고치는 중이면 이번 판은 건너뛴다 — 20초 폴링이 입력 중인 칸을 지우면 치던 이름이 사라진다.
+    //  (편집은 blur·Enter·Esc 로 반드시 끝나고, 끝나면 그 경로가 다시 그린다.)
+    if (renaming)
+        return;
     const { host, data } = last;
     // 개인 워크스페이스 = 웜 캔버스(안3 문패의 온도축) — 클래스는 사이드바 뿌리(.v2-side)에 건다.
     const wsReg = state.me?.workspace_registry || {};
@@ -364,6 +368,8 @@ function render() {
     const prevScroll = hadOld ? treeEl.scrollTop : lastScroll;
     const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
     const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
+    const newHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-npj-in') ? document.activeElement : null;
+    const newSel = newHad ? [newHad.selectionStart, newHad.selectionEnd] : null;
     countEl = el('span', { class: 'v2-k' });
     treeEl = el('div', { class: 'v2-tree', role: 'tree', 'aria-label': '프로젝트와 세션' });
     const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '프로젝트 찾기', 'aria-label': '프로젝트 찾기', value: sideFilter,
@@ -432,12 +438,14 @@ function render() {
     //  하나씩 우클릭해서는 정리가 끝나지 않는다. 이 버튼이 그 일을 '한 번에'로 바꾼다.
     tidyBtn(), 
     // ＋도 아이콘으로 — 돋보기가 자리를 차지하면서 글자 버튼까지 두면 헤더가 두 줄로 접힌다(#1067 의 🔍/＋ 문법).
-    //  누르면 **여기서 만들고 그 작업대로 간다**(원준 2026-08-19) — 옛 프로젝트 앱(보드)으로 떠나보내지 않는다.
+    //  누르면 **바로 아래 목록 맨 위에 이름칸 한 줄**이 돋는다(원준 2026-08-21) — 딴 자리에 창을 띄우지 않는다.
     //  이름은 그 자리에서 받는다(빈 판을 먼저 만들고 이름을 나중에 묻는 건 '이름 없는 프로젝트'만 늘린다).
     newBtn()), 
     // 검색칸은 돋보기를 눌렀을 때만(#1067 의 방식). 단 **검색어가 남아 있으면 계속 보인다** —
     //  #1154 가 토글을 폐지했던 사유 중 하나가 '검색 중인 줄 모른 채 짧아진 목록을 본다'였다.
-    ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []), ...(fltN ? [filterSummary(fltN)] : []), treeEl, ...(tidyOn ? [tidyBar()] : []), 
+    ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []), ...(fltN ? [filterSummary(fltN)] : []), 
+    // 새 프로젝트 줄은 트리 **밖**·바로 위다 — 안에 두면 목록을 스크롤할 때 치던 칸이 위로 사라진다.
+    ...(newOpen ? [newProjRow()] : []), treeEl, ...(tidyOn ? [tidyBar()] : []), 
     // 아카이브·휴지통 두 행(#1851) — 기본은 트리 맨 아래(renderTree 가 붙인다). 사람이 [아래 고정]을 켜면 여기(트리 밖,
     //  스크롤과 무관한 자리)에 선다 — 목록이 수백 행이어도 늘 닿는다.
     ...(binsPinned ? [el('div', { class: 'v2-bins v2-bins-fixed' }, ...binRows(data))] : []), el('div', { class: 'v2-side-foot' }, 
@@ -469,6 +477,19 @@ function render() {
     else if (findFocusWanted) {
         findFocusWanted = false;
         findIn.focus();
+    }
+    // 새 프로젝트 이름칸도 같은 처리 — 20초 폴링이 치던 이름과 커서를 삼키면 못 쓴다.
+    const newIn = host.querySelector('.v2-npj-in');
+    if (newIn) {
+        if (newHad) {
+            newIn.focus();
+            if (newSel && newSel[0] != null)
+                newIn.setSelectionRange(newSel[0], newSel[1]);
+        }
+        else if (newFocusWanted) {
+            newFocusWanted = false;
+            newIn.focus();
+        }
     }
     bindFindKey();
 }
@@ -515,7 +536,6 @@ function bindFindKey() {
         openFind();
     });
 }
-/** ＋ 새 프로젝트 — 이름만 그 자리에서 받고, 만들자마자 그 프로젝트의 빈 작업대로 간다. */
 // ── 「정리」 모드 ────────────────────────────────────────────────────────────
 //  켜면 프로젝트 행이 **고르는 줄**이 된다(누르면 열리는 대신 체크). 발치에 고른 개수와 [아카이브로]가 뜬다.
 //  아이콘은 Lucide 의 list-checks(ISC) — 손으로 그리지 않는다(핀·서비스 로고와 같은 규율).
@@ -635,56 +655,96 @@ function navSplitter(nav) {
     h.classList.add('v2-navsplit');
     return h;
 }
+// ── ＋ 새 프로젝트 — **목록 맨 위에 한 줄이 돋는다**(원준 2026-08-21) ──────────────────────
+//  종전엔 ＋를 누르면 화면 오른쪽에 팝오버가 떴다. 하는 일은 '이 목록에 줄 하나 더하기'인데 묻는 자리가
+//  목록 밖이라, 어디에 무엇이 생기는지가 끊겼다(원준 2026-08-21 "뜬금없이 오른쪽에 팝업"). 그래서 창을 걷고,
+//  **프로젝트 줄과 같은 폴더 아이콘·같은 자리**에 빈 이름칸을 세운다 — 치고 Enter 를 누르면 그 줄이 진짜가 된다.
+//  안내문·[만들기] 버튼도 걷었다: 줄 하나 만드는 일에 설명 두 줄과 버튼은 과하다(placeholder 가 이미 말한다).
+let newOpen = false; // 잠깐의 상태라 브라우저에 기억하지 않는다(＋를 다시 누르거나 Esc 로 접힌다)
+let newDraft = ''; // 20초 폴링 재렌더가 치던 이름을 지우지 않게 — 검색칸과 같은 이유
+let newSending = false;
+let newErr = '';
+let newFocusWanted = false;
+function openNew() { newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
+function closeNew() { if (!newOpen)
+    return; newOpen = false; newDraft = ''; newErr = ''; redraw(); }
 function newBtn() {
-    const b = el('button', { class: 'v2-add', type: 'button', title: '새 프로젝트 — 만들고 그 작업대로 갑니다', 'aria-label': '새 프로젝트' }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
-    b.onclick = (e) => {
-        e.preventDefault();
-        const inp = el('input', { class: 'v2-newin', type: 'text', placeholder: '새 프로젝트 이름', maxlength: '120', 'aria-label': '새 프로젝트 이름' });
-        const msg = el('p', { class: 'v2-newmsg', hidden: true });
-        const go = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '만들기' });
-        const close = anchoredPopover(b, el('div', { class: 'v2-newpop' }, el('div', { class: 'v2-newrow' }, inp, go), el('p', { class: 'v2-fine', text: '만들면 그 프로젝트의 빈 작업대가 열립니다. 이름은 나중에 바꿀 수 있어요.' }), msg));
-        window.setTimeout(() => inp.focus(), 0);
-        let sending = false; // 한 번의 '만들기'가 두 번 나가지 않게 — 아래 IME 가드와 이중 방어(둘 다 실측 사고의 원인)
-        const create = async () => {
-            const name = inp.value.trim();
-            if (sending)
-                return;
-            if (!name) {
-                inp.focus();
-                return;
-            }
-            sending = true;
-            go.disabled = true;
-            go.textContent = '만드는 중…';
-            msg.hidden = true;
-            try {
-                const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name }) }).then((d) => (d && d.project) || d);
-                if (!np || !np.id)
-                    throw new Error('생성 응답에 프로젝트가 없어요');
-                close();
-                location.hash = '#/p/' + np.id; // 그 작업대로(목록 갱신은 라우터가 새 프로젝트를 보고 알아서 당긴다)
-            }
-            catch (err) {
-                sending = false;
-                msg.hidden = false;
-                msg.textContent = '만들지 못했어요 — ' + (err?.message || err);
-                go.disabled = false;
-                go.textContent = '만들기';
-            }
-        };
-        go.onclick = () => void create();
-        // 한글(IME) 조합 중의 Enter 는 **조합 확정**이지 제출이 아니다. 그 확정 Enter 와 뒤이은 진짜 Enter 가
-        //  잇달아 들어와 create() 가 두 번 돌았고, 같은 이름의 프로젝트가 **같은 밀리초에 두 개** 만들어졌다
-        //  (실측 2026-08-20: #1818/#1819 · 앞서 #1806/#1807 · #1812/#1813 — 전부 한글로 끝나는 이름).
-        //  project-form.ts 가 #505 에서 이미 배운 가드를 여기(사이드바 빠른 생성)에도 둔다.
-        inp.addEventListener('keydown', (ev) => {
-            if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229)
-                return;
-            ev.preventDefault();
-            void create();
-        });
-    };
+    const b = el('button', {
+        class: 'v2-add' + (newOpen ? ' on' : ''), type: 'button', 'aria-label': '새 프로젝트', 'aria-expanded': String(newOpen),
+        title: newOpen ? '새 프로젝트 줄 접기' : '새 프로젝트 — 목록 맨 위에 이름칸이 생깁니다',
+        onclick: (e) => { e.preventDefault(); if (newOpen)
+            closeNew();
+        else
+            openNew(); },
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
     return b;
+}
+/** 목록 맨 위의 '새 프로젝트' 줄 — 폴더 아이콘 + 이름칸. Enter 로 만들고 곧바로 그 작업대로 간다. */
+function newProjRow() {
+    const errEl = el('p', { class: 'v2-npj-err', hidden: !newErr, text: newErr });
+    const inp = el('input', {
+        class: 'v2-npj-in', type: 'text', maxlength: '120', value: newDraft,
+        placeholder: '새 프로젝트 이름을 적고 Enter', 'aria-label': '새 프로젝트 이름',
+        oninput: (e) => { newDraft = e.target.value; if (newErr) {
+            newErr = '';
+            errEl.hidden = true;
+        } },
+        onkeydown: (e) => {
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                closeNew();
+                return;
+            }
+            // 한글(IME) 조합 중의 Enter 는 **조합 확정**이지 제출이 아니다. 그 확정 Enter 와 뒤이은 진짜 Enter 가
+            //  잇달아 들어와 create() 가 두 번 돌았고, 같은 이름의 프로젝트가 **같은 밀리초에 두 개** 만들어졌다
+            //  (실측 2026-08-20: #1818/#1819 · #1806/#1807 · #1812/#1813 — 전부 한글로 끝나는 이름).
+            //  아래 newSending 가드와 이중 방어(둘 다 실측 사고의 원인).
+            if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229)
+                return;
+            e.preventDefault();
+            void create();
+        },
+        // 빈 칸으로 딴 데를 누르면 조용히 접힌다(검색칸과 같은 규칙) — 치던 이름이 있으면 줄을 남겨 둔다.
+        onblur: () => window.setTimeout(() => { if (newOpen && !newSending && !newDraft.trim())
+            closeNew(); }, 120),
+    });
+    const line = el('div', { class: 'v2-npj-l' + (newSending ? ' sending' : '') }, el('span', { class: 'v2-car none', 'aria-hidden': 'true' }), glyph('folder', 'v2-pj-ic'), inp);
+    const create = async () => {
+        const name = newDraft.trim();
+        // 재진입 가드는 둔다 — 이 줄은 만들면 그 작업대로 **떠나므로** 연달아 적는 줄이 아니다(그래서 잠금이 아니라 가드).
+        if (newSending)
+            return;
+        if (!name) {
+            inp.focus();
+            return;
+        }
+        newSending = true;
+        newErr = '';
+        errEl.hidden = true;
+        // ⚠ 입력칸을 disabled 로 **잠그지 않는다**(인라인 추가행 규약 — 왕복 350ms 가 그대로 '멈춤'으로 온다).
+        //  다시 그리지도 않는다: 여기서 redraw 하면 치던 칸이 새로 나면서 포커스가 끊긴다. 흐리게만 알린다.
+        line.classList.add('sending');
+        try {
+            const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name }) }).then((d) => (d && d.project) || d);
+            if (!np || !np.id)
+                throw new Error('생성 응답에 프로젝트가 없어요');
+            newSending = false;
+            newOpen = false;
+            newDraft = '';
+            newErr = '';
+            location.hash = '#/p/' + np.id; // 그 작업대로(목록 갱신은 라우터가 새 프로젝트를 보고 알아서 당긴다)
+            redraw();
+        }
+        catch (err) {
+            newSending = false;
+            line.classList.remove('sending');
+            newErr = '만들지 못했어요 — ' + (err?.message || err);
+            errEl.textContent = newErr;
+            errEl.hidden = false;
+            inp.focus(); // 고쳐 쓸 수 있게 이름칸으로 손을 돌려준다(친 이름은 그대로 남는다)
+        }
+    };
+    return el('div', { class: 'v2-npj' }, line, errEl);
 }
 // ── 사이드바 맨 윗줄 — [←][→] + [통합검색] (상민님 2026-08-20 "클로드 데스크탑 앱처럼") ──────────────
 //  왜 여기인가: 데스크톱 앱에서 맨 위 줄은 이제 **탭 줄**이 가져갔고(창 버튼과 같은 줄), 탐색 도구는
@@ -943,7 +1003,7 @@ function projRow(r, sess, past, activeKey, selectedPk) {
         ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
         : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
     // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
-    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.trashed ? el('span', { class: 'v2-tag', text: '휴지통', title: '휴지통에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '아카이브에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null), p ? newSessBtn(p.id) : null, p ? pinBtn(pk) : null);
+    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' + (p ? '\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요' : '') }, caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.trashed ? el('span', { class: 'v2-tag', text: '휴지통', title: '휴지통에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '아카이브에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null), p ? newSessBtn(p.id) : null, p ? pinBtn(pk) : null);
     // 정리 모드에서는 이 줄이 **여는 줄이 아니라 고르는 줄**이 된다. 링크 자체는 그대로 두고(주소·새 탭 문법 보존)
     //  기본 이동만 가로챈다 — 모드를 끄면 아무 흔적 없이 원래대로 돌아온다.
     //  ⚠ 「프로젝트 없는 세션」(p 없음)은 보관할 대상이 아니라 고를 수 없다 — 체크칸도 만들지 않는다.
@@ -985,6 +1045,9 @@ function projRow(r, sess, past, activeKey, selectedPk) {
                 { label: '휴지통으로 보내기', danger: true, run: () => void trashProject(p, r) },
             ]);
         });
+    // 세션 줄과 같은 손짓 — 더블클릭하면 그 자리에서 이름을 고친다(문패 제목 클릭과 같은 편집).
+    if (p)
+        row.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); beginRenameProject(pk, p); });
     const head = sess.slice(0, MAX_SESS);
     const pastHead = past.slice(0, MAX_SESS);
     const list = has ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null, past.length ? pastHead2(pk, past.length, pastOpen) : null, ...(pastOpen ? pastHead.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''), true)) : []), pastOpen && past.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${past.length - MAX_SESS}개` }) : null) : null;
@@ -1071,20 +1134,20 @@ function sessRow(s, activeKey, text, pastRow = false) {
     //  지난 세션의 그 자리엔 **휴지통**(#1851) — 도는 세션 → × → 지난 세션 → 휴지통 → (휴지통 안에서) 완전 삭제의 사슬.
     !pastRow && isMine(s) ? archiveBtn(s) : pastRow && isMine(s) ? trashBtn(s) : null);
     if (isMine(s))
-        row.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
+        row.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); beginRename(nameEl, s); });
     return row;
 }
-// ── 세션 이름 인라인 편집 ────────────────────────────────────────────────────
-//  ⚠ 이름 자리에 그려진 글(main)은 **원래 이름이 아닐 수 있다** — sessText 가 프로젝트명 되풀이를 걷어내고
+// ── 이름 인라인 편집 — 세션 줄과 프로젝트 줄이 **같은 편집기**를 쓴다(원준 2026-08-24) ──────
+//  ⚠ 세션은 이름 자리에 그려진 글(main)이 **원래 이름이 아닐 수 있다** — sessText 가 프로젝트명 되풀이를 걷어내고
 //   pane 제목·첫 지시를 그 자리에 올리기 때문이다(#1808). 그래서 편집칸의 초기값은 화면 글이 아니라
-//   **s.label(진짜 세션 이름)** 이다. 그리지 않은 것을 고치게 하면 사용자는 자기가 안 쓴 글을 지우게 된다.
+//   **진짜 이름**(세션 s.label · 프로젝트 p.name)이다. 그리지 않은 것을 고치게 하면 사용자는 자기가 안 쓴 글을 지우게 된다.
 let renaming = false;
-function beginRename(row, nameEl, s) {
+function inlineRename(nameEl, cfg) {
     if (renaming)
         return;
     renaming = true;
     const shown = nameEl.textContent || '';
-    const input = el('input', { class: 'v2-ss-edit', type: 'text', value: String(s.label || shown), 'aria-label': '세션 이름' });
+    const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label });
     nameEl.replaceChildren(input);
     input.focus();
     input.select();
@@ -1095,13 +1158,13 @@ function beginRename(row, nameEl, s) {
         done = true;
         renaming = false;
         const next = input.value.trim();
-        if (!save || !next || next === s.label) {
+        if (!save || !next || next === cfg.value) {
             nameEl.replaceChildren(document.createTextNode(shown));
             return;
         }
         nameEl.replaceChildren(document.createTextNode(next));
         try {
-            await hooks.onRenameSession?.(s.id, next);
+            await cfg.save(next);
         }
         catch (e) {
             toast((e && e.message) || '이름을 바꾸지 못했습니다', true);
@@ -1121,7 +1184,17 @@ function beginRename(row, nameEl, s) {
     });
     input.addEventListener('blur', () => { void finish(true); });
     input.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); }); // 편집 중 클릭이 행 이동으로 새지 않게
-    void row;
+}
+function beginRename(nameEl, s) {
+    inlineRename(nameEl, { value: String(s.label || nameEl.textContent || ''), label: '세션 이름', save: async (next) => { await hooks.onRenameSession?.(s.id, next); } });
+}
+/** 프로젝트 줄 더블클릭 — 첫 클릭이 그 프로젝트로 **이동시키며 트리를 다시 그리므로**, 잡아 둔 노드가 아니라
+ *  지금 화면에 서 있는 그 줄을 다시 찾아 연다(옛 노드에 열면 아무 일도 안 일어난 것처럼 보인다). */
+function beginRenameProject(pk, p) {
+    const nameEl = document.querySelector('.v2-pj-row[data-nav="' + pk + '"] .n');
+    if (!nameEl)
+        return;
+    inlineRename(nameEl, { value: String(p.name || ''), label: '프로젝트 이름', save: async (next) => { await hooks.onRenameProject?.(Number(p.id), next); } });
 }
 // ── 보관(×) — 세션을 '지난 세션'으로 보낸다 ──────────────────────────────────
 //  DELETE …?reclaim=1 = tmux 만 내리고 복원 좌표(desired-state)는 남긴다 → 그 프로젝트의 '지난 세션'에 쌓이고

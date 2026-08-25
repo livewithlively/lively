@@ -28,6 +28,15 @@ import { listSessionApps, openAppSession } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
 // 아이콘은 곁칸 곳곳(panes.ts · proj-settings.ts)이 여기서 받아 왔다 — 잎으로 옮긴 뒤에도 그 자리를 유지한다.
 export { pnIcon } from './panes-kit.js';
+/** 사람이 지금 **다른 칸에 손을 대고 있나** — 그렇다면 자동 포커스는 그 손을 밀어내지 않는다.
+ *  화면을 처음 세울 때조차, 앞에 열린 창(프로젝트 상세 등)에 커서가 가 있으면 뺏지 않는다. */
+function handIsElsewhere() {
+    const a = document.activeElement;
+    if (!a || a === document.body)
+        return false;
+    const tag = a.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || a.isContentEditable;
+}
 /** 칸에 넣을 수 있는 것들 — [+] 고르기 목록의 정본. */
 export const PART_DEFS = [
     { type: 'sessions', name: '세션', icon: 'chat', hint: '이 프로젝트에서 도는 AI 세션들과 바로 말하는 자리입니다.' },
@@ -220,9 +229,14 @@ function sessionsPart(ctx) {
                 mounted.h?.destroy();
                 mounted = null;
             }
-            if (!stage.querySelector('.pn-newpane'))
+            // 칸을 **새로 세울 때만** 손을 옮긴다(원준 2026-08-25). paint() 는 주기 갱신마다 여기를 지나므로
+            //  포커스를 무조건 걸면 **다른 칸에 쓰던 글이 이 칸으로 새어 들어간다** — [프로젝트 상세] 창의 본문·
+            //  할 일을 치던 중에 커서가 이리로 튀어, 친 글자가 '새 세션에 시킬 일'에 찍히던 사고가 그것이다.
+            const fresh = !stage.querySelector('.pn-newpane');
+            if (fresh)
                 stage.replaceChildren(newPane());
-            window.setTimeout(() => { grow(); ta.focus(); }, 0);
+            window.setTimeout(() => { grow(); if (fresh && !handIsElsewhere())
+                ta.focus(); }, 0);
             return;
         }
         if (mounted && mounted.sid === sel && mounted.ok)
