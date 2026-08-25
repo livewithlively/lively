@@ -249,6 +249,13 @@ const HARNESS_CRED: Record<string, string> = {
   grok: ".grok/auth.json",
 };
 
+// #1884 — 이 하네스에 '로그인'이라는 개념이 있나(= 위 표에 자격 위치가 실측돼 있나). 세션 폼의 [내 계정 로그인]이
+//  어느 AI 를 고르게 할지 이걸로 정한다. 표에 없는 하네스(opencode·antigravity)는 로그인 여부를 정직하게 말할 수
+//  없으므로 고르게 하지 않는다 — 위 ⚠ 주석과 같은 이유다.
+export function harnessHasCredential(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(HARNESS_CRED, key);
+}
+
 // box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
 //  '존재'만 확인(내용은 안 봄). exit0=있음. 미프로비저닝/에러=false.
 //  memberSh(=memberSpawn seam)를 탄다 — 원격 중계 배포(LIVELY_MEMBER_EXEC)에서도 이 판정이 실행 노드에서

@@ -5,7 +5,7 @@
 //  홈(/home/box_<slug>)과 OS 유저(/etc/passwd)의 수명이 갈리는 배포(컨테이너)가 있고, 그때
 //  "확인할 수 없음"을 "로그인 안 함"으로 반올림하면 그 위에 얹힌 자동화가 조용히 안 켜진다.
 import assert from "node:assert/strict";
-import { judgeMemberOs } from "./profiles.js";
+import { judgeMemberOs, harnessHasCredential } from "./profiles.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -53,6 +53,21 @@ t("판정은 credExists 를 provisioned 일 때만 신뢰한다(미프로비저�
   // 미프로비저닝인데 credExists=true 는 호출부가 만들 수 없는 조합이지만, 순수함수는 그래도 결정적이어야 한다.
   assert.equal(judgeMemberOs({ ready: true, provisioned: false, homeExists: true, credExists: true }).loggedIn, null);
   assert.equal(judgeMemberOs({ ready: true, provisioned: false, homeExists: false, credExists: true }).loggedIn, false);
+});
+
+
+// ── #1884 — 세션 폼 [내 계정 로그인]이 어느 AI 를 고르게 할지의 근거 ──────────────────────────
+//  이 판정이 '표에 있나'여야 하는 이유: 표에 없는 하네스(opencode·antigravity)는 자격이 keyring·제공자별로
+//  흩어져 있어 파일 존재로 로그인 여부를 말하면 **거짓말**이 된다(profiles.ts HARNESS_CRED 머리말).
+//  그래서 그 하네스들은 목록에 넣지 않는다 — 정직한 침묵.
+t("로그인 개념이 있는 AI — claude·codex·grok", () => {
+  for (const k of ["claude", "codex", "grok"]) assert.equal(harnessHasCredential(k), true, k);
+});
+
+t("자격 위치를 실측 못 한 하네스·셸은 고르게 하지 않는다", () => {
+  for (const k of ["opencode", "antigravity", "shell", "", "toString", "__proto__"]) {
+    assert.equal(harnessHasCredential(k), false, k);
+  }
 });
 
 console.log(`\n${pass} passed`);

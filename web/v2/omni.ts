@@ -110,19 +110,51 @@ function probeAxis(): void {
 // ── 종류 필터 (상민님 2026-08-24) ──────────────────────────────────────────────
 //  규칙: **빈 선택 = 모두 켜짐**(기본). 그 상태에서 하나를 누르면 **그것만**, 이어서 누르면 **누적**,
 //  켜진 것을 다시 누르면 꺼진다. 전부 꺼지거나 전부 켜지면 다시 기본(모두)으로 접는다 —
-//  '여섯 개를 다 골라 둔 상태'와 '아무것도 안 고른 기본'은 결과가 같으므로 둘을 따로 기억할 이유가 없다.
+//  '넷을 다 골라 둔 상태'와 '아무것도 안 고른 기본'은 결과가 같으므로 둘을 따로 기억할 이유가 없다.
 //  ⚠ 페이지 수명으로 남긴다(창을 닫았다 열어도 유지) — 대신 칩이 늘 보이므로 **왜 결과가 짧은지 화면이 말한다**
 //   (사이드바 검색칸이 지키는 원칙과 같다). 새로고침하면 풀린다.
-const KINDS: Kind[] = ['sess', 'proj', 'know', 'src', 'hist', 'app'];
+//
+//  ── 축이 둘이다 (상민님 2026-08-25) ────────────────────────────────────────
+//  *"자료랑 세션이력은 그냥 관련도순에 보이지 않게 하고, 아래 전용 섹션에만 보이게 하는게 어떰?
+//    그리고 디폴트 off로 하면어때? 사람이 켰으면 그건 저장하고."*
+//  자료·세션이력은 **관련도 축이 없다**(자료는 ILIKE, 이력은 자체 스코어). 축이 없는 것을 축이 있는 것들과
+//  한 줄로 세우면 순위가 거짓말이 되고, 회의록처럼 긴 문서가 아무 단어에나 걸려 위쪽을 먹는다.
+//  그래서 **주 축**(세션·프로젝트·지식·화면)과 **보조 축**(자료·세션이력)을 나눈다:
+//   · 주 축  = 종전 계약 그대로(빈 = 모두). 관련도순 + 종류별 묶음에 나온다.
+//   · 보조 축 = **기본 꺼짐**. 켜야 채널을 부르고, 켜도 **아래 전용 묶음에만** 나온다(관련도순엔 영영 안 선다).
+//  둘은 서로 간섭하지 않는다 — '프로젝트만 보기' 로 좁혀도 켜 둔 자료는 그대로 켜져 있다.
+const MAIN_KINDS: Kind[] = ['sess', 'proj', 'know', 'app'];
+const AUX_KINDS: Kind[] = ['src', 'hist'];
+const isAux = (k: Kind): boolean => AUX_KINDS.includes(k);
 let kindSel = new Set<Kind>();
-const kindOn = (k: Kind): boolean => kindSel.size === 0 || kindSel.has(k);
+let auxSel = new Set<Kind>();
+const kindOn = (k: Kind): boolean => (isAux(k) ? auxSel.has(k) : kindSel.size === 0 || kindSel.has(k));
 /** 칩 하나를 눌렀을 때의 다음 상태 — 위 규칙을 한 곳에서만 구현한다(화면·테스트가 같은 것을 본다). */
-export function nextKindSel(cur: Set<Kind>, k: Kind, all: Kind[] = KINDS): Set<Kind> {
+export function nextKindSel(cur: Set<Kind>, k: Kind, all: Kind[] = MAIN_KINDS): Set<Kind> {
   if (cur.size === 0) return new Set([k]);          // 기본(모두) → 그것만
   const next = new Set(cur);
   if (next.has(k)) next.delete(k); else next.add(k);
   if (next.size === 0 || next.size === all.length) return new Set();   // 전부 꺼짐·전부 켜짐 → 기본
   return next;
+}
+
+// ── 보조 축은 사람의 선택이라 **남긴다** ──────────────────────────────────────
+//  주 축(kindSel)은 '지금 이 검색을 좁힌다'라 페이지 수명이면 충분하지만, 보조 축은 '나는 자료도 같이 본다'는
+//  취향이다 — 새로고침·앱 재시작마다 다시 켜게 하면 그건 기본값이 아니라 형벌이다.
+//  ⚠ 저장값을 **믿지 않는다**: 남의 탭이 덮어썼거나 옛 버전이 남긴 값일 수 있으니 배열·아는 종류만 받고,
+//   깨졌으면 조용히 기본(꺼짐)으로 돌아간다. localStorage 가 막힌 환경(프라이빗 모드)에서도 검색은 돌아야 한다.
+const AUX_LS = 'lively.omni.aux';
+function loadAux(): Set<Kind> {
+  try {
+    const raw = localStorage.getItem(AUX_LS);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((k: unknown): k is Kind => typeof k === 'string' && (AUX_KINDS as string[]).includes(k)));
+  } catch { return new Set(); }
+}
+function saveAux(): void {
+  try { localStorage.setItem(AUX_LS, JSON.stringify([...auxSel])); } catch { /* 저장 못 해도 검색은 돈다 */ }
 }
 
 // ── 식별자 적중 — 제목보다도 확실한 신호 (2026-08-25) ─────────────────────────────────
@@ -201,23 +233,42 @@ export function omniOpen(seed?: string): void {
   if (box) { const i = box.querySelector('.v2-omni-in') as HTMLInputElement | null; i?.focus(); i?.select(); return; }
   if (!hooks) return;
   probeAxis();
+  auxSel = loadAux();       // 지난번에 켜 둔 보조 축을 되살린다(다른 탭에서 바꿨을 수도 있으니 열 때마다 읽는다)
 
   const input = el('input', {
     class: 'v2-omni-in', type: 'text', spellcheck: 'false', autocomplete: 'off',
-    placeholder: '무엇이든 찾기 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력',
+    //  안내 문구는 **기본으로 찾는 것**만 적는다 — 자료·세션이력은 켜야 들어오므로 여기 적으면 거짓말이 된다.
+    placeholder: '무엇이든 찾기 — 지식 · 프로젝트 · 세션 · 화면',
     'aria-label': '통합검색', 'aria-controls': 'v2-omni-list',
   }) as HTMLInputElement;
   const list = el('div', { class: 'v2-omni-list', id: 'v2-omni-list', role: 'listbox' });
   //  종류 칩 — 각 종류에 버튼 하나. 눌리면 위 nextKindSel 규칙대로 상태가 바뀌고 **즉시 다시 찾는다**
   //  (꺼진 종류는 아예 부르지 않으므로 오히려 빨라진다 — 세션이력처럼 느린 채널을 끄면 체감이 크다).
   const chips = el('div', { class: 'v2-omni-filters', role: 'group', 'aria-label': '종류 필터' });
+  function chip(k: Kind): HTMLElement {
+    const on = kindOn(k);
+    //  제목(툴팁)이 **누르면 무슨 일이 일어나는지**를 말한다 — 두 축의 규칙이 다르므로 문구도 다르다.
+    const tip = isAux(k)
+      ? (on ? `${KIND_LABEL[k]} 결과에서 빼기` : `${KIND_LABEL[k]}도 결과에 넣기 (아래 전용 묶음에만 · 선택은 저장됩니다)`)
+      : (kindSel.size === 0 ? `${KIND_LABEL[k]}만 보기` : (kindSel.has(k) ? `${KIND_LABEL[k]} 빼기` : `${KIND_LABEL[k]} 더하기`));
+    return el('button', {
+      class: 'v2-omni-chip' + (on ? ' on' : '') + (isAux(k) ? ' aux' : ''), type: 'button',
+      'aria-pressed': String(on), title: tip,
+      onclick: () => {
+        if (isAux(k)) { if (auxSel.has(k)) auxSel.delete(k); else auxSel.add(k); saveAux(); }
+        else kindSel = nextKindSel(kindSel, k);
+        paintChips(); run();
+      },
+    }, icon(k, 'v2-omni-chip-ic'), el('span', { text: KIND_LABEL[k] })) as HTMLElement;
+  }
   function paintChips(): void {
-    chips.replaceChildren(...KINDS.map((k) => el('button', {
-      class: 'v2-omni-chip' + (kindOn(k) ? ' on' : ''), type: 'button',
-      'aria-pressed': String(kindOn(k)),
-      title: kindSel.size === 0 ? `${KIND_LABEL[k]}만 보기` : (kindSel.has(k) ? `${KIND_LABEL[k]} 빼기` : `${KIND_LABEL[k]} 더하기`),
-      onclick: () => { kindSel = nextKindSel(kindSel, k); paintChips(); run(); },
-    }, icon(k, 'v2-omni-chip-ic'), el('span', { text: KIND_LABEL[k] }))));
+    //  보조 축은 **오른쪽에 따로** 세운다(구분선). 같은 줄에 나란히 두되 '다른 성격'임이 보이게 —
+    //  주 축 칩은 좁히는 손잡이고, 보조 축 칩은 더하는 손잡이다.
+    chips.replaceChildren(
+      ...MAIN_KINDS.map(chip),
+      el('span', { class: 'v2-omni-chipsep', 'aria-hidden': 'true' }),
+      ...AUX_KINDS.map(chip),
+    );
   }
   const note = el('div', { class: 'v2-omni-note' });
 
@@ -292,10 +343,11 @@ export function omniOpen(seed?: string): void {
     //  들어가는 것: **제목이 그대로 맞은 것**(모든 채널) + **절대 코사인이 컷오프를 넘은 것**(지식·프로젝트).
     //  순서: 제목 적중이 먼저(그보다 확실한 신호가 없다) — 그 안은 '얼마나 그 이름다운가'(질의 위치 + 제목 길이,
     //   실측: '통합검색' 에서 정답보다 '…그리드 통합검색' 이 먼저 뜨던 것). 나머지는 코사인 내림차순.
-    //  ⚠ 자료·세션이력에는 이 축이 **없다**(자료는 ILIKE, 이력은 자체 스코어) — 섞으면 없는 값을 있는 척하게 되므로
-    //   그 채널들은 아래 종류별 묶음에 그대로 둔다. 축이 없는 것을 억지로 한 줄에 세우지 않는다.
+    //  ⚠ 자료·세션이력은 **한 줄도 오지 않는다**(2026-08-25). 그 둘엔 이 축이 없고(자료 ILIKE, 이력 자체 스코어),
+    //   종전엔 '제목이 맞으면' 예외로 끼워 줬는데 그게 정확히 회의록이 위를 먹던 경로였다 — 긴 전사에는
+    //   어지간한 단어가 다 들어 있어 제목 적중이 쉽게 난다. 축이 없는 것은 순위에 세우지 않는다(전용 묶음에만).
     const meaty = (h: Hit): boolean => isIdentHit(h) || isTitleHit(h) || h.title.replace(/[^\p{L}\p{N}]/gu, '').length >= MIN_TITLE_CHARS;
-    const top = hits.filter((h) => (isIdentHit(h) || isTitleHit(h) || typeof h.score === 'number') && meaty(h))
+    const top = hits.filter((h) => !isAux(h.kind) && (isIdentHit(h) || isTitleHit(h) || typeof h.score === 'number') && meaty(h))
       .sort((a, b) => {
         //  **정확히 그 이름/번호인 것**이 먼저다(상민님 2026-08-25). 종전엔 정확·부분을 한 티어로 묶어서,
         //  `1835` 로 치면 key 에 1835 가 든 지식 2건이 먼저 서고 정작 **번호가 맞는 프로젝트가 3위**로 밀렸다.
@@ -363,6 +415,12 @@ export function omniOpen(seed?: string): void {
     rowNodes[sel]?.scrollIntoView({ block: 'nearest' });
   }
   // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 빈 상태는 자식을 아예 두지 않는다.
+  //  결과가 없을 때 **왜 없는지**를 화면이 말한다 — 자료를 찾는 사람에게 그냥 '결과가 없습니다'는 거짓말에 가깝다
+  //  (그 채널을 아예 안 불렀으니까). 조사가 붙지 않는 문구로 적는다('자료'와 '세션 이력'은 받침이 다르다).
+  const emptyNote = (): string => {
+    const off = AUX_KINDS.filter((k) => !auxSel.has(k)).map((k) => KIND_LABEL[k]);
+    return '결과가 없습니다.' + (off.length ? ` (꺼진 종류: ${off.join(' · ')} — 위 칩으로 켤 수 있습니다)` : '');
+  };
   function setNote(text: string): void {
     note.hidden = !text;
     if (text) note.replaceChildren(el('span', { text })); else note.replaceChildren();
@@ -406,7 +464,7 @@ export function omniOpen(seed?: string): void {
     // ⚠ **그려진 줄**로 판정한다(hits 가 아니라). 무관한 종류를 접고 나면 hits 는 남아 있는데 화면은 비어 있어,
     //  hits 로 보면 안내문이 안 뜨고 **아무 설명 없는 빈 판**이 된다(실측 2026-08-24: 뜻 없는 질의에 0줄 + 무문구).
     //  "결과가 없습니다" 는 이 검색의 결론이지 부작용이 아니다 — 화면이 비면 그 말이 있어야 한다.
-    setNote(pending ? '찾는 중…' : (rowNodes.length ? '' : '결과가 없습니다.'));
+    setNote(pending ? '찾는 중…' : (rowNodes.length ? '' : emptyNote()));
   }
 
   function localHits(q: string): void {
@@ -447,7 +505,7 @@ export function omniOpen(seed?: string): void {
     //  실제로 부를 채널만 센다 — 꺼진 종류를 8 에 포함하면 '찾는 중…' 이 영영 안 걷힌다.
     const want = (k: Kind, n: number): number => (kindOn(k) ? n : 0);
     pending = want('know', 3) + want('proj', 3) + want('src', 1) + want('hist', 1);
-    if (!pending) { paint(); setNote(hits.length ? '' : '결과가 없습니다.'); return; }
+    if (!pending) { paint(); setNote(hits.length ? '' : emptyNote()); return; }
     setNote('찾는 중…');
     const call = (k: Kind, fn: () => void): void => { if (kindOn(k)) fn(); };
     // 프로젝트(의미) — 로컬 이름 매칭을 덮어쓴다(서버가 더 넓게 본다: 태스크·본문·임베딩).

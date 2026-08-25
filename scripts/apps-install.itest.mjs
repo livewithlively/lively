@@ -66,10 +66,11 @@ try {
     const h = await itemsPool.query(`SELECT id, kind, harness, label, enabled, body FROM org_harness_asset WHERE id=$1`, [harnessRef]);
     assert.equal(h.rowCount, 1, "org_harness_asset 에 greet 스킬 행이 있어야 한다");
     assert.equal(h.rows[0].kind, "skill", "kind=skill");
-    assert.equal(h.rows[0].harness, "claude", "harness=claude");
+    // #1884 — 앱 자산은 하네스를 가리지 않는다("all"). "claude" 로 심으면 codex 세션엔 한 개도 안 깔린다.
+    assert.equal(h.rows[0].harness, "all", "harness=all");
     assert.equal(h.rows[0].enabled, true, "enabled=true");
     assert.ok(String(h.rows[0].body).length > 0, "SKILL.md 본문이 실려야 한다");
-    ok(`org_harness_asset: greet 스킬(id=${harnessRef}, kind=skill, harness=claude, enabled)`);
+    ok(`org_harness_asset: greet 스킬(id=${harnessRef}, kind=skill, harness=all, enabled)`);
   }
 
   // ── 2회차 시딩: 변경 없음 → 멱등(skipped) ──

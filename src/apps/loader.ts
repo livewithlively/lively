@@ -141,7 +141,12 @@ async function scanHarnessAssets(m: LivelyAppManifest, pluginRoot: string): Prom
       }
       out.push({
         comp: { kind: "harness_asset", ref: appAssetId(m.id, slug), orig_name: slug },
-        payload: { kind: spec.kind, harness: "claude", body, label: slug },
+        // harness: "all" — 앱이 싣는 스킬·서브에이전트·커맨드는 **하네스를 가리지 않는다**(#1884).
+        //  종전엔 "claude" 로 못 박혀 codex·opencode 세션엔 앱 자산이 한 개도 안 깔렸다. 배치·본문 변환은
+        //  하네스 표(kit/hooks/harness-registry.mjs assets[kind])가 이미 하네스마다 알고 있고
+        //  (codex: agents/*.toml·prompts/*.md), 조직이 직접 심는 시드 자산도 이미 전부 "all" 이다
+        //  (src/org/delivery/default-content.ts). 배달은 listEnabledAssets 의 `harness=$1 OR harness='all'`.
+        payload: { kind: spec.kind, harness: "all", body, label: slug },
       });
     }
   }

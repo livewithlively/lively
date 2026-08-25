@@ -24,7 +24,7 @@ import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { confirmSessionArchive } from '../session-actions.js';
-import { mountMobileChrome, type MobileChrome } from './mobile.js';
+import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
@@ -220,6 +220,26 @@ export async function bootV2(): Promise<void> {
     // 데스크톱 앱(frameless 창)이면 **창 맨 윗줄**을 셸이 가져간다. #1883 뒤에는 탭이 아니라
     // 창 버튼·드래그 영역만 남는다. 브라우저에서 연 웹 UI 에선 null 이다.
     titlebar = mountTitlebar(root);
+    //  창 맨 윗줄은 **폭이 넓든 좁든 같은 것**이어야 한다(#1954 3차 상민님).
+    //   좁아지면 창 줄이 사라지고 모바일 바(☰·제목·타임라인)가 대신 서던 구조였는데, 그러면 이번에 올린
+    //   뒤로·앞으로·검색이 통째로 사라지고 대신 세션명이 떴다 — 같은 자리가 두 얼굴을 갖는다.
+    //   ☰ 를 창 줄 맨 왼쪽으로 데려와 한 줄로 합친다(모바일 바는 그 단추를 잃고 서랍 기계만 남는다).
+    if (titlebar) titlebar.host.prepend(mobile.menuBtn);
+    //  넓은 폭에서 그 ☰ 는 **사이드바를 접었다 편다**(좁은 폭에선 mobile.ts 가 서랍을 여닫는다 — 그쪽 핸들러는
+    //   isMobile() 가드가 있어 여기서 겹치지 않는다). 접힘은 브라우저에 기억한다 — 매번 다시 접게 하지 않는다.
+    const SIDE_OFF = 'lively_v2_side_off';
+    const applySideOff = (off: boolean): void => {
+      root!.classList.toggle('side-off', off);
+      mobile!.menuBtn.setAttribute('aria-expanded', String(!off));
+      mobile!.menuBtn.title = off ? '사이드바 펼치기' : '사이드바 접기';
+    };
+    try { if (localStorage.getItem(SIDE_OFF) === '1') applySideOff(true); } catch { /* 못 읽어도 펼친 채로 시작 */ }
+    mobile.menuBtn.addEventListener('click', () => {
+      if (window.matchMedia(MOBILE_MQ).matches) return;   // 좁은 폭 = 서랍(mobile.ts 담당)
+      const off = !root!.classList.contains('side-off');
+      applySideOff(off);
+      try { localStorage.setItem(SIDE_OFF, off ? '1' : '0'); } catch { /* 못 남겨도 이번 화면은 된다 */ }
+    });
   }
 
   // 실험장(#1719 원준): 크롬식 탭 줄은 걷는다 — 사이드바(프로젝트·열린 세션)가 이미 그 역할을 한다.
@@ -484,7 +504,6 @@ function applyTabChrome(tab: ShellTab): void {
   const guest = !!(tab.aside as AsideHost).__guest;
   root!.classList.toggle('no-aside', tab.noAside && !guest);
   if (mobile) mobile.setAside(!tab.noAside || guest);   // 모바일 상단 바의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다
-  if (mobile) mobile.setTitle(titleFor(tab.route).title);
   // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
   document.body.dataset.route = routeKey(tab.route) === 'raw:liv' || parseRoute(tab.route).segs[0] === 'liv' ? 'liv' : 'v2';
 }
