@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js'; // #1841 — 앱 창이 낡�
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText } from './side.js';
+import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, sidePeople } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession } from './views.js';
 import { renderArchive, renderTrash } from './bins.js'; // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderConnect, renderConnectApp } from './connect.js';
@@ -25,6 +25,7 @@ import { createSessionFiles } from './files.js';
 import { createTabs, routeKey } from './tabs.js';
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, MOBILE_MQ } from './mobile.js';
+import { drawRail, mountRail, railIsOpen, railSection, toggleRail } from './rail.js'; // #2016 — 좌측 끝 레일(구역 넷 + 워크스페이스 + 최근 앱)
 import { ASIDE_MSG, setAsideGuestOpener } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js'; // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
@@ -38,6 +39,7 @@ import { ensureSingletonAppInstance } from './app-instance.js'; // #1891 — inb
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
 const SOLO = new URLSearchParams(location.search).get('solo') === '1';
 let root = null;
+let railEl = null; // #2016 좌측 끝 레일 — 구역 넷·워크스페이스·최근 앱·[앱]·[나]
 let sideEl = null;
 let centerEl = null;
 let asideEl = null;
@@ -237,6 +239,8 @@ export async function bootV2() {
     root.classList.add('rail-mode');
     root.classList.toggle('solo', SOLO);
     root.replaceChildren(...(SOLO ? [] : [
+        //  #2016 — 레일이 사이드바 **왼쪽**에 한 칸 더 선다. 폭은 접힘/펼침 두 값뿐이라 손잡이가 없다.
+        railEl = el('nav', { class: 'v2-rail', 'aria-label': '구역' }),
         sideEl = el('nav', { class: 'v2-side stu-side', 'aria-label': '탐색' }),
         makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 316, min: 220, max: 560, grow: 1, label: '사이드바 너비' }),
     ]), centerEl = el('div', { class: 'v2-main', id: 'v2-main' }), makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }), asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
@@ -254,29 +258,42 @@ export async function bootV2() {
         //   ☰ 를 창 줄 맨 왼쪽으로 데려와 한 줄로 합친다(모바일 바는 그 단추를 잃고 서랍 기계만 남는다).
         if (titlebar)
             titlebar.host.prepend(mobile.menuBtn);
-        //  넓은 폭에서 그 ☰ 는 **사이드바를 접었다 편다**(좁은 폭에선 mobile.ts 가 서랍을 여닫는다 — 그쪽 핸들러는
-        //   isMobile() 가드가 있어 여기서 겹치지 않는다). 접힘은 브라우저에 기억한다 — 매번 다시 접게 하지 않는다.
-        const SIDE_OFF = 'lively_v2_side_off';
-        const applySideOff = (off) => {
-            root.classList.toggle('side-off', off);
-            mobile.menuBtn.setAttribute('aria-expanded', String(!off));
-            mobile.menuBtn.title = off ? '사이드바 펼치기' : '사이드바 접기';
-        };
-        try {
-            if (localStorage.getItem(SIDE_OFF) === '1')
-                applySideOff(true);
-        }
-        catch { /* 못 읽어도 펼친 채로 시작 */ }
+        //  넓은 폭에서 그 ☰ 는 이제 **레일을 여닫는다**(#2016 원준 2026-08-25: "지금 사이드바는 닫을 수는 없는
+        //   상태로 길이 조절 정도로 고정"). 종전엔 사이드바를 통째로 접었는데(`side-off`), 그러면 목록이 사라져
+        //   되찾는 길을 또 만들어야 했다 — 접히는 것은 레일 하나뿐이고 사이드바는 폭 손잡이로만 조절한다.
+        //   좁은 폭에선 mobile.ts 가 서랍을 여닫는다(그쪽 핸들러는 isMobile() 가드가 있어 여기서 겹치지 않는다).
         mobile.menuBtn.addEventListener('click', () => {
             if (window.matchMedia(MOBILE_MQ).matches)
                 return; // 좁은 폭 = 서랍(mobile.ts 담당)
-            const off = !root.classList.contains('side-off');
-            applySideOff(off);
-            try {
-                localStorage.setItem(SIDE_OFF, off ? '1' : '0');
-            }
-            catch { /* 못 남겨도 이번 화면은 된다 */ }
+            toggleRail();
+            syncRailBtn();
         });
+        //  ⌘⇧S — 슬랙의 '워크스페이스 스위처 표시'와 같은 자리(레일 펼치기). 입력 중에는 가로채지 않는다.
+        document.addEventListener('keydown', (e) => {
+            if (!(e.metaKey || e.ctrlKey) || !e.shiftKey)
+                return;
+            if ((e.key || '').toLowerCase() !== 's')
+                return;
+            const t = e.target;
+            if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))
+                return;
+            e.preventDefault();
+            toggleRail();
+            syncRailBtn();
+        });
+        mountRail(railEl, {
+            counts: railCounts,
+            openApps: openAppKeys,
+            onSection: (sec, o) => {
+                drawSide();
+                if (o.navigate)
+                    location.hash = sectionRoute(sec);
+            },
+            people: () => sidePeople(),
+            faces: () => sideFaces(),
+            onLayout: () => { drawSide(); syncRailBtn(); },
+        });
+        syncRailBtn();
     }
     // 실험장(#1719 원준): 크롬식 탭 줄은 걷는다 — 사이드바(프로젝트·열린 세션)가 이미 그 역할을 한다.
     //  탭 '기계'는 남긴다(화면마다 상태 보존·복귀가 이 구조에 실려 있다) — 줄만 안 그린다.
@@ -1343,7 +1360,45 @@ function openProjectPage(projectId) {
     drawSide();
     refreshSideNow();
 }
+// ── 레일(#2016)이 쓰는 값들 ──────────────────────────────────────────────────
+//  ⚠ 배지의 뜻은 사이드바와 **같은 셈**이어야 한다 — 레일이 4 라 하고 [확인할 것] 목록이 3 이면
+//   어느 쪽이 거짓말인지 화면이 말하지 못한다. inbox 는 side.ts render() 와 같은 식이다.
+function railCounts() {
+    const live = data.sessions.filter((s) => s.live && s.alive && !isTrashedSess(s));
+    const inbox = live.filter((s) => s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned)).length;
+    const busy = live.filter((s) => s.stateKey === 'busy').length;
+    const projects = new Set(live.map((s) => s.projectId).filter((x) => !!x)).size;
+    return { inbox, busy, projects };
+}
+/** 최근 앱 아이콘 아래 '실행 중' 점 — 지금 창이 열려 있는 앱 키. */
+function openAppKeys() {
+    const out = new Set();
+    for (const tab of (tabsApi ? tabsApi.tabs : [])) {
+        const seg = parseRoute(tab.route).segs;
+        if (seg[0] === 'app' && seg[1])
+            out.add(seg[1]);
+        else if (seg[0] && CLASSIC_PAGES[seg[0]])
+            out.add(CLASSIC_PAGES[seg[0]]);
+    }
+    return out;
+}
+function sectionRoute(sec) {
+    return sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? '#/app/projects2' : sec === 'wiki' ? '#/app/knowledge' : '#/';
+}
+/** 문패 카드 얼굴 = **세션을 가진 사람들**(멤버 명부가 아니다 — 더미 계정이 먼저 잡힌다, #1719). */
+function sideFaces() {
+    return [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
+}
+/** ☰ 의 뜻이 바뀌었다(사이드바 접기 → 레일 여닫기) — 툴팁·aria 도 그 뜻으로 맞춘다. */
+function syncRailBtn() {
+    if (!mobile)
+        return;
+    const open = railIsOpen();
+    mobile.menuBtn.setAttribute('aria-expanded', String(open));
+    mobile.menuBtn.title = (open ? '레일 접기' : '레일 펼치기') + ' — ⌘⇧S';
+}
 function drawSide() {
+    drawRail();
     if (!sideEl)
         return;
     if (!sideTreeHost || !sideEl.contains(sideTreeHost)) {
@@ -1380,6 +1435,8 @@ function drawSide() {
         //  창 맨 윗줄이 우리 것이면 뒤로·앞으로·검색을 거기 건다 — 상단 탭이 빠져 비어 있던 자리다(#1954).
         navHost: () => (titlebar ? titlebar.host : null),
         onPinChanged: () => { orderPin.clear(); }, // 고정이 바뀌면 자물쇠를 푼다 — 새 묶음에서 자리를 다시 잡아야 한다
+        //  #2016 — 사이드바가 무엇을 그릴지는 레일이 고른 구역이 정한다(홈 · AI 세션 · 프로젝트 · 위키).
+        section: railSection,
     });
 }
 // ── 뒤로/앞으로가 켜져 있어야 하는가 ─────────────────────────────────────────────
