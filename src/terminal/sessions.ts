@@ -11,8 +11,6 @@ import { HttpError } from "../http-error.js";
 import { dirToProjectFolder } from "../project/project-fs.js";
 import { hiddenProjects, type HiddenProjects } from "../v6/visibility.js";
 import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
-//  세션 = ai-session 앱의 인스턴스(#1780 v2.2 §2.5) — 생성·종료 때 그 정체성을 서버가 세우고 거둔다(#1954 후속).
-import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 // 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
 import { sessionCacheEnv } from "../ops/build-cache.js";
@@ -635,13 +633,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         .catch((e) => { console.warn(`[terminal] 첫 지시 큐 등록 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
     }
   }
-  //  세션이 섰으면 그 세션의 **앱 인스턴스**도 선다(#1954 후속 · #1780 v2.2 §2.5).
-  //   종전엔 웹에서 그 세션을 처음 열 때만 만들어져(lazy), CLI 로 띄우고 웹에서 안 연 세션은 인스턴스가 없었다 —
-  //   그래서 좌측 목록이 '돌고 있는 세션'을 따로 훑어 그 구멍을 메워야 했다. 정체성은 세션이 태어날 때 정해진다.
-  //   subject 로 멱등하므로(store createAppInstance) 재시도·복원에서 겹쳐도 하나다. 실패해도 세션은 산다.
-  void createAppInstance({ appId: input.appId || "ai-session", owner: ownerId(user),
-    projectId: input.projectId || null, subjectKind: "session", subjectRef: id, title: label })
-    .catch((e) => console.warn(`[terminal] 앱 인스턴스 등록 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e));
+  //  ⚠ 앱 인스턴스 등록은 여기가 아니라 **게이트웨이 라우트**가 한다(routes.ts afterSessionCreated).
+  //   이 파일은 노드 에이전트 번들에 실리고 노드엔 DB 가 없다('DB 없음' 계약, scripts/build-node-agent.mjs 화이트리스트).
   return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
 }
 
@@ -700,11 +693,8 @@ export async function killSession(user: LivelyUser, id: string, opts?: { admin?:
   await tmuxKill(id);
   // 세션 스코프 자격 회수 — 이 box 에 실어 준 훅 토큰은 세션과 함께 죽는다(회수/삭제 둘 다. 복원은 새 box id 라 새로 굽는다).
   await revokeSessionHookToken(id).catch((e) => console.warn(`[terminal] 세션 훅 토큰 회수 실패(${id}):`, (e as Error)?.message ?? e));
-  if (opts?.preserveState) return;   // 보관(회수)은 **복원 가능**하다 — 인스턴스도 남겨야 복원이 같은 정체성으로 돌아온다
+  if (opts?.preserveState) return;   // 보관(회수)은 **복원 가능**하다 — desired-state 를 남긴다
   await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
-  //  세션이 완전히 사라졌으면 그 인스턴스도 닫는다(#1954 후속) — 안 닫으면 active 인스턴스가 영영 쌓여
-  //  좌측 목록·인스턴스 조회에 유령이 남는다. best-effort: 실패해도 세션은 이미 죽었다.
-  await closeSessionAppInstances(id).catch((e) => console.warn(`[terminal] 앱 인스턴스 닫기 실패(${id}):`, (e as Error)?.message ?? e));
 }
 export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
   await assertManage(user, id);
