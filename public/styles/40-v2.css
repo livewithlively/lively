@@ -679,6 +679,8 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 연결 카드 안 소형 폼(#1881 노션 직결 client 2칸) — 입력·버튼을 세로로 좁게 쌓는다. */
 .cn-sec-form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: 420px; margin-top: 6px; }
 .cn-sec-form input { width: 100%; }
+/* 노션 워크스페이스가 둘 이상일 때 — 대표 토글 아래에 워크스페이스별 줄(#1881 N7). 들여쓰기로 종속을 보인다. */
+.cn-ws-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px 20px; }
 /* 슬랙 대화 정책은 관리탭 카드 문법으로 만들어졌다 — 셸 안에서는 테두리 한 겹만 두르고 그대로 싣는다. */
 .cn-slack { padding: 16px; border: 1px solid var(--line-net); border-radius: 12px; }
 .cn-slack .card { border: 0; padding: 0; background: none; box-shadow: none; }

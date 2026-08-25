@@ -55,6 +55,17 @@ export async function loadConfig(): Promise<NotionConfig> {
   };
 }
 
+/**
+ * external_instance 스탬프 값만 — **토큰 없이** 구한다(#1881 다중 워크스페이스).
+ *  왜 loadConfig 를 안 쓰나: 원장 로드는 backfill **전에** 돌고, loadConfig 는 토큰이 없으면 던진다.
+ *  범위 축만 필요한 자리(원장)에서 토큰 부재로 실패하면 폴백이 '전 워크스페이스 원장'이 돼 더 나쁘다.
+ *  값 산출은 loadConfig 와 **한 줄로 동일**해야 한다(`c.instance || "default"`) — 어긋나면 범위가 갈린다.
+ */
+export async function resolveNotionInstance(): Promise<string> {
+  const c = await resolveConnectorConfig("notion");
+  return c.instance || "default";
+}
+
 // ── HTTP 호출(인증/버전 헤더 + rate limit 존중 + 자발적 스로틀) ───────────────
 //  전역 슬롯 방식(#586 속도개선): 요청 '시작 시각'을 REQ_INTERVAL_MS 간격의 슬롯으로 직렬화하되,
 //  응답 대기는 겹친다(동시 in-flight) — 직렬 구현은 응답 지연만큼 실효 속도가 3rps 아래로 떨어졌다(~2rps).
