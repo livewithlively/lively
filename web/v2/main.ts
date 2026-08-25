@@ -163,6 +163,20 @@ export async function bootV2(): Promise<void> {
   root = document.getElementById('v2-root');
   if (!root) return;
   root.hidden = false;
+  // 릴레이 복귀 알림(#1881) — CP OAuth 릴레이(슬랙·노션)가 테넌트로 돌려보낼 때 ?slack=ok|slack_error= /
+  //  ?notion=ok|notion_error= 를 붙인다(해시 라우트 #/connect/<앱> 은 그대로 열린다). 여기서 한 번 알리고
+  //  주소에서 지운다 — 안 지우면 새로고침·탭 복제 때마다 같은 토스트가 또 뜬다.
+  {
+    const q = new URLSearchParams(location.search);
+    let seen = false;
+    for (const [app, label] of [['slack', 'Slack'], ['notion', '노션']] as const) {
+      if (q.get(app) === 'ok') { toast(`${label} 연결이 끝났어요`); seen = true; }
+      const err = q.get(`${app}_error`);
+      if (err) { toast(`${label} 연결에 실패했어요 — ${err}`, true); seen = true; }
+      q.delete(app); q.delete(`${app}_error`);
+    }
+    if (seen) { const rest = q.toString(); history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash); }
+  }
   // 실험장(#1719 원준): 작업대 골격(rail-mode)은 그대로 두되 **좌측 사이드바는 늘 보인다**(원준 2026-08-20:
   //  "새로고침하다 보면 사라질 때가 있다 — 항상 표시하고, 없앨 수는 없게. 폭만 끌어 조절"). 그래서
   //  여닫는 길(알약·×·핀)을 전부 걷고 **폭 손잡이 하나**만 남긴다 — 사라지지 않으니 되찾는 길도 필요 없다.
