@@ -183,7 +183,30 @@ function composeGrokAgent(asset) {
   return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
 }
 
-function composeFile(asset) {
+// 자산 body 는 **frontmatter 를 담지 않는다** — 파일의 frontmatter 는 composeFile 이 description 컬럼·frontmatter
+//  필드에서 만든다. 그런데 자산을 올리는 경로가 **파일 전문(frontmatter 포함)을 body 에 통째로** 넣은 것이 실재한다
+//  (2026-08-20 실측: 조직 자산 65개 중 8개). 그대로 심으면 frontmatter 가 두 벌인 파일이 되고, 두 번째 블록은
+//  로더가 이미 첫 블록을 먹었으므로 **본문 첫 단락으로 새어든다** — 스킬 설명이 YAML 로 시작한다.
+//  ⚠ 벗겨낸 값은 쓰지 않고 **버린다** — name·description 은 컬럼이 진실원천이라, body 사본이 이기면 중앙 편집이
+//   조용히 무시된다(관리탭에서 고쳤는데 멤버 디스크는 안 바뀌는 종류의 결함).
+//  YAML 파서를 들이지 않는다(이 훅의 계약 = 런타임 의존 0). 블록의 **첫 비공백 줄**이 `key:` 꼴일 때만
+//   frontmatter 로 본다 — 본문이 `---` 수평선으로 시작하는 마크다운을 잘라먹지 않기 위한 조건이다.
+//   ⚠ 두 조건이 다 필요하다 — ①**첫** 비공백 줄이어야 하고(블록 어딘가에 콜론 줄이 있으면 되는 게 아니다)
+//    ②콜론 뒤가 공백이나 줄끝이어야 한다(YAML 매핑 규칙). 하나라도 빠지면 수평선으로 시작해 `TODO: 고칠 것` 이나
+//    맨 URL(`https://…` 은 `^키:` 에 걸린다)을 지나 두 번째 `---` 를 만나는 본문이 잘려나간다(실측으로 확인).
+//  ⚠ 이 방어는 **앞으로 심는 것**만 고친다: 이미 두 벌로 깔린 파일은 content_hash 가 그대로라 writeAsset 이
+//   재작성을 skip 한다(변경분만 쓰는 설계). 그 머신들을 고치려면 중앙 자산의 body 를 교정해 hash 를 바꿔야 한다.
+export function stripLeadingFrontmatter(body) {
+  const t = String(body ?? "");
+  const m = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(t);
+  if (!m) return t;
+  const head = m[1].split(/\r?\n/).find((l) => l.trim() !== "");
+  if (!head || !/^[ \t]*[A-Za-z_][\w-]*[ \t]*:(?:[ \t]|$)/.test(head)) return t;
+  return t.slice(m[0].length).replace(/^\s*\n/, "");
+}
+
+function composeFile(asset0) {
+  const asset = { ...asset0, body: stripLeadingFrontmatter(asset0.body) };   // 위 참조 — 모든 composer 가 정규화된 body 를 받는다
   const spec = harness(HARNESS).assets[asset.kind];
   const custom = spec && COMPOSERS[spec.compose];
   if (custom) return custom(asset);
