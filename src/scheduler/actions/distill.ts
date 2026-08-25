@@ -54,6 +54,8 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
     const r = await enqueueHeadlessTask({
       prompt: await applyPromptOverride(params, b), requester, jobId,
       marker: b.key ? "cron:" + jobId + "#" + b.key : undefined,
+      // node(#1881) — 실행 노드 고정(예: "central" = 게이트웨이 박스). 비우면 스케줄러 자유 배정(램 여유 순).
+      nodePref: typeof params.node === "string" && params.node.trim() ? params.node.trim() : null,
       flags, extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },
     });
     if (b.distillerId) await recordDistillerRunSafe(b.distillerId, r.status, r.summary);
