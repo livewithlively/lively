@@ -203,9 +203,11 @@ export async function listSessionsForOwner(owner: string, limit = 200): Promise<
        JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
        LEFT JOIN org_member m ON m.id = s.owner
        LEFT JOIN LATERAL (
-         SELECT sp.project_id, p.name AS project_name
-           FROM session_project sp JOIN project p ON p.id = sp.project_id
-          WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1
+         -- 마지막 구간이 해제(project_id NULL)면 프로젝트 없음으로 본다(#1867) — 마지막 non-null 을 현재로 연장하지 않는다.
+         SELECT p.id AS project_id, p.name AS project_name
+           FROM (SELECT sp.project_id FROM session_project sp
+                  WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
+           JOIN project p ON p.id = last.project_id
        ) proj ON true
       WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL
       ORDER BY s.last_seen DESC

@@ -1,6 +1,5 @@
-// v2/quick-session.ts — 홈 입력창에서 **프로젝트를 묻지 않고** 세션을 연다 (#1719).
-//  Enter → POST terminal/sessions { sessionDir: true, initialPrompt } → 세션 대화 화면(#/s/<id>)으로.
-//   · sessionDir — cwd 는 세션 전용 폴더(<개인 루트>/sessions/<id>). 프로젝트는 나중에 언제든 붙인다(우측 '이 세션' ▸ 프로젝트).
+// v2/quick-session.ts — 홈 입력창에서 세션을 연다.
+// 프로젝트가 정해졌으면 생성 요청 자체가 그 프로젝트의 canonical workspace에서 시작하고, 아니면 개인 workspace 루트에서 시작한다.
 //   · initialPrompt — 서버가 하네스 입력창이 뜬 뒤 넣는다(session-first-prompt.ts). 화면은 낙관적으로 그 턴을 먼저 그린다.
 //  자동 승인은 클래식 '새 AI 세션' 폼이 기억해 둔 마지막 값을 그대로 쓴다(같은 localStorage 키 — v2/run-picker.ts
 //  runPrefs). 제공자(하네스)·모델·추론강도는 홈 입력창의 세 칸이 정해 넘긴다(#1758) — 안 넘기면 그 기억이 기본이다.
@@ -40,11 +39,14 @@ export async function spawnSession(text, opts) {
         // 실행 노드(#1744) — '' = 중앙 컴퓨터(기본, 필드 생략). 노드면 그 PC 에서 세션이 뜨고 첫 지시는 노드가 로컬로 넣는다
         //  (server createSession 이 노드에선 injectFirstPrompt 로, DB 아웃박스 대신). 노드가 없거나 안 고른 경우 run.node 는 ''.
         const node = run ? run.node : '';
-        const out = await api('/api/ui/terminal/sessions', {
+        const pid = opts && opts.projectId ? Number(opts.projectId) : 0;
+        const endpoint = pid > 0 ? `/api/ui/v6/projects/${pid}/sessions` : '/api/ui/terminal/sessions';
+        const out = await api(endpoint, {
             method: 'POST',
             body: JSON.stringify({
                 harness, flags,
-                autoApprove: !!p.autoApprove, sessionDir: true, initialPrompt: t,
+                autoApprove: !!p.autoApprove, initialPrompt: t,
+                ...(pid > 0 ? {} : { rootKey: 'personal' }),
                 ...(node ? { node } : {}),
             }),
         });
@@ -53,15 +55,6 @@ export async function spawnSession(text, opts) {
             throw new Error('세션 id 를 받지 못했습니다');
         rememberCreated(out.session); // 노드 세션은 목록 반영이 한 박자 늦다 — 라우트가 이 전문으로 먼저 그린다(created-cache 머리말)
         firstPrompts.set(id, t);
-        const pid = opts && opts.projectId ? Number(opts.projectId) : 0;
-        if (pid > 0) {
-            try {
-                await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid }) });
-            }
-            catch (e) {
-                toast(`세션은 열렸는데 「${opts?.projectName || '프로젝트'}」에 붙이지 못했어요 — 세션 상단바 [프로젝트 연결]로 다시 붙일 수 있어요. (${e && e.message ? e.message : e})`, true);
-            }
-        }
         return { id, session: out.session };
     }
     catch (e) {
@@ -74,8 +67,7 @@ export async function spawnSession(text, opts) {
 }
 /**
  * 세션을 열고 그 화면으로 간다. 실패하면 toast 로 이유를 말하고 false(입력은 호출자가 돌려준다).
- *  opts.projectId — 홈 런처가 고른 행선지(#1719). 생성 API 는 프로젝트를 받지 않으므로(catalog 계약: 소속은 나중에)
- *  만들고 나서 POST /sessions/:id/project 로 붙인다. 붙이기가 실패해도 세션은 유효하다 — 말하고 계속 간다.
+ *  opts.projectId — 홈 런처가 고른 행선지. 프로젝트 세션 API 한 번으로 cwd와 DB 소속을 함께 확정한다.
  *  opts.run — 입력창 옆 세 칸(제공자·모델·추론강도)이 고른 값(#1758). 없으면 저장된 직전 설정 그대로 연다.
  */
 export async function openQuickSession(text, opts) {
@@ -87,7 +79,7 @@ export async function openQuickSession(text, opts) {
 }
 /**
  * 프로젝트 화면의 [새 세션](#1757) — 첫 지시 없이 이 프로젝트에 붙은 세션을 열고 그 화면으로 간다(지시는 거기서 친다).
- *  cwd 는 홈 런처와 같은 세션 전용 폴더(sessionDir) — 소속만 프로젝트에 붙인다(#1748 결정: cwd 는 세션 폴더, 소속은 링크).
+ *  cwd 는 해당 노드의 프로젝트 canonical workspace다.
  *  실패하면 toast 로 이유를 말하고 false.
  */
 export async function openProjectSession(projectId, projectName) {
@@ -97,23 +89,17 @@ export async function openProjectSession(projectId, projectName) {
     try {
         const p = runPrefs();
         const harness = p.harness && p.harness !== 'shell' ? p.harness : 'claude';
-        const out = await api('/api/ui/terminal/sessions', {
+        const out = await api('/api/ui/v6/projects/' + encodeURIComponent(String(projectId)) + '/sessions', {
             method: 'POST',
             // ⚠ label 을 넘기지 않는다(#1808) — 여기에 프로젝트명을 박으면 그 프로젝트의 세션이 전부 같은 이름이 된다
             //  (실측 2026-08-20: 그 경로로 프로젝트 세션 147건 중 104건이 이름이 프로젝트명 그대로였다). 이름은 서버가
             //  **처음 시킨 말**로 짓는다 — 여기선 지시를 세션 화면에서 치므로 중앙 기록이 첫 발화를 알아내는 순간 붙는다
-            //  (src/terminal/session-name.ts · src/sessions/session-autoname.ts). 프로젝트는 소속으로만 붙인다(아래 /project).
-            body: JSON.stringify({ harness, flags: p.flags && typeof p.flags === 'object' ? p.flags : {}, autoApprove: !!p.autoApprove, sessionDir: true }),
+            //  (src/terminal/session-name.ts · src/sessions/session-autoname.ts).
+            body: JSON.stringify({ harness, flags: p.flags && typeof p.flags === 'object' ? p.flags : {}, autoApprove: !!p.autoApprove }),
         });
         const id = out && out.session && out.session.id ? String(out.session.id) : '';
         if (!id)
             throw new Error('세션 id 를 받지 못했습니다');
-        try {
-            await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + '/project', { method: 'POST', body: JSON.stringify({ projectId }) });
-        }
-        catch (e) {
-            toast(`세션은 열렸는데 「${projectName || '프로젝트'}」에 붙이지 못했어요 — 세션 상단바 [프로젝트 연결]로 다시 붙일 수 있어요. (${e && e.message ? e.message : e})`, true);
-        }
         location.hash = '#/s/' + encodeURIComponent(id);
         return true;
     }

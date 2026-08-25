@@ -20,10 +20,12 @@ import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
 import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions } from "../node/provision-remote.js";
+import { nodeRpc } from "../node/registry.js";
 import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
-import { recordSessionProject } from "../v6/project-store.js";
+import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
+import { assertAppSessionPlacement } from "../terminal/session-create-guards.js";
 import { ingestLocalUpload, supersedeLocalPath } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
@@ -379,6 +381,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       restrictRead: !!b.restrictRead,
       // 세션에 프로젝트 id 를 박아 입장 게이트가 폴더가 아닌 멤버십(id)으로 판정하게 한다(폴더 드리프트 면역).
       projectId: project.id, projectSrc: prefix.includes("/v6/") ? "v6" : "org",
+      initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
+      appId: String(b.appId ?? "").trim() || undefined,
     };
     res.setHeader("Cache-Control", "no-store");
     // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 중앙 프로젝트 세션은
@@ -387,15 +391,29 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //  (멤버십 변경은 세션 재생성 전까지 미반영 — 중앙 세션은 동적. 알려진 한계.)
     const nodeId = String(b.node ?? "").trim();
     if (nodeId) {
+      assertAppSessionPlacement(input, nodeId);
       const requester = idOf(userOf(req));
       const memberIds = await deps.listProjectMembers(project.id);
       const invites = await validateInvites(memberIds, requester); // 실제 org 멤버만·요청자(owner) 제외·중복 제거
-      const session = await createProjectSessionOnNode(nodeId, requester, input, invites);
-      // 노드측은 DB 무접속이라 createSession 내부 recordSessionProject 가 no-op → 게이트웨이가 대신 세션↔프로젝트
-      //  매핑을 남긴다(멱등). 이게 있어야 활동 타임라인 귀속·경로무관 resume(latestProjectForSession)이 노드 세션도 인지.
-      await recordSessionProject(session.id, project.id).catch(() => { /* 비치명 */ });
+      const { session, deferredPrompt } = await createProjectSessionOnNode(nodeId, requester, input, invites);
+      // 노드는 DB 무접속이므로 게이트웨이가 실행 세션 current + 전환 이력을 한 번에 기록한다.
+      if (input.projectSrc !== "org") {
+        try {
+          const current = await setExecutionSessionProject({ id: session.id, owner: requester, harness: session.harness || input.harness, nodeId, projectId: project.id });
+          if (!current) throw new Error("execution session owner claim failed");
+          await markExecutionSessionApplied(session.id, requester, current.desired_revision).catch(() => { /* desired가 정본 */ });
+        } catch (e) {
+          // DB SoT 없이 떠 있는 노드 세션을 남기지 않는다. 방금 만든 세션이고 첫 응답 전이라 안전한 생성 롤백이다.
+          await nodeRpc(nodeId, "kill", { user: { userId: requester }, id: session.id }).catch(() => { /* 노드 이탈 시 진단 로그에 남는다 */ });
+          throw new HttpError(503, `프로젝트 소속을 기록하지 못해 노드 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
+        }
+      }
       // #1791 — desired-state 정본(node_id) — 죽어도 '복원 가능(그 노드)'로 남는 근거. 노드엔 DB 가 없어 게이트웨이가 쓴다.
       await mirrorNodeSession({ ...session, invites }, nodeId, input, requester);
+      // 새 노드는 create 시 첫 지시를 보류했다. execution_session current와 desired-state가 모두 생긴 뒤에만 주입을 시작한다.
+      if (deferredPrompt) await nodeRpc(nodeId, "injectFirstPrompt", {
+        id: session.id, harness: session.harness || input.harness, text: deferredPrompt,
+      }).catch((e) => console.warn(`[project] 노드 첫 지시 예약 실패(${session.id}) — 세션은 살아 있습니다:`, (e as Error)?.message ?? e));
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }

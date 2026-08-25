@@ -8,6 +8,7 @@ import { HttpError } from "./rest-util.js";
 import { canAttach, sessionWriteCap } from "../terminal/terminal-sessions.js"; // #852 세션 귀속 검증 — 그 세션에 들어갈 수 있는 사람만 그 세션으로 기록
 import { canSeeProjectRow, hiddenProjects } from "../v6/visibility.js"; // #1291 프로젝트 공개범위
 import { PUBLIC_VIEWER } from "../v6/knowledge-store.js";
+import { executionSessionProject } from "../v6/execution-session-store.js";
 // #1442 소프트캡 — title·summary 길이 초과가 body(최대 20,000자)까지 함께 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 
@@ -111,8 +112,11 @@ const activityLog: Capability = {
     //   canAttach = 소유자·초대된 멤버, 그리고 프로젝트 폴더 세션이면 로그인한 누구나(#452 공동 세션).
     //   자격이 없거나 이미 끝난 세션이면 조용히 미기록(null) — 기록 자체를 막지는 않는다(작업 기록이 더 중요).
     const claimedSession = ctx?.session ?? input.session_id ?? null;
-    const sessionId = claimedSession && authorPerson && await canAttach(String(claimedSession), authorPerson)
-      ? String(claimedSession) : null;
+    const sessionAllowed = claimedSession && authorPerson
+      ? (await canAttach(String(claimedSession), authorPerson)
+        || !!(await executionSessionProject(String(claimedSession), authorPerson)))
+      : false;
+    const sessionId = sessionAllowed ? String(claimedSession) : null;
     // 프로젝트 귀속도 자기주장이다(#1291) — 세션은 canAttach 로 검증하면서 project_id 는 '존재하나'만 봤다.
     //  안 보이는 프로젝트에 기록을 밀어 넣으면 그 타임라인을 오염시키고, 반대로 잠긴 작업을 공개 프로젝트에
     //  붙여 내보낼 수도 있다. 세션 검증과 나란히 둔다 — 없는 것과 같은 404 로 답해 존재를 숨긴다.

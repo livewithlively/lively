@@ -42,15 +42,16 @@ export async function sessionBoundToMemberProject(sessionId: string, memberId: s
 //   - 같은 프로젝트 반복 바인딩(세션 시작마다 호출됨)은 새 구간을 안 만든다 → 구간 폭증 방지.
 //   - 재바인딩이면 새 구간이 생기고, 과거 작업은 옛 구간(옛 프로젝트)에 그대로 남는다(소급 재귀속 버그 차단).
 //   - 같은 시각 동시삽입 충돌은 DO NOTHING(멱등). 재바인딩 자체가 드물어 경쟁은 사실상 없다.
-export async function recordSessionProject(sessionId: string, projectId: number): Promise<void> {
-  if (!sessionId || !projectId) return;
+export async function recordSessionProject(sessionId: string, projectId: number | null, bindingEpoch?: number): Promise<void> {
+  if (!sessionId) return;
   await itemsPool.query(
-    `INSERT INTO session_project(session_id, project_id)
-     SELECT $1::text, $2::int
+    `INSERT INTO session_project(session_id, project_id, binding_epoch)
+     SELECT $1::text, $2::int, COALESCE($3::bigint,
+       (SELECT COALESCE(MAX(sp2.binding_epoch),0)+1 FROM session_project sp2 WHERE sp2.session_id=$1))
       WHERE (SELECT sp.project_id FROM session_project sp
               WHERE sp.session_id = $1 ORDER BY sp.valid_from DESC LIMIT 1) IS DISTINCT FROM $2::int
      ON CONFLICT (tenant_id, session_id, valid_from) DO NOTHING`,
-    [sessionId, projectId]);
+    [sessionId, projectId, bindingEpoch ?? null]);
 }
 
 // 이어받기(#905 C1) — 이 세션의 **가장 최근 바인딩** 프로젝트 id(+박스 폴더). 없으면 null. 세션이 어느 프로젝트에서
@@ -59,8 +60,9 @@ export async function latestProjectForSession(sessionId: string): Promise<{ id: 
   if (!sessionId) return null;
   const r = await itemsPool.query(
     `SELECT p.id, COALESCE(p.folder,'') AS folder
-       FROM session_project sp JOIN project p ON p.id = sp.project_id
-      WHERE sp.session_id = $1 ORDER BY sp.valid_from DESC LIMIT 1`,
+       FROM (SELECT project_id FROM session_project
+              WHERE session_id=$1 ORDER BY valid_from DESC LIMIT 1) sp
+       JOIN project p ON p.id = sp.project_id`,
     [sessionId]);
   const row = r.rows[0] as { id: number; folder: string } | undefined;
   return row ? { id: Number(row.id), folder: String(row.folder || "") } : null;
@@ -79,6 +81,7 @@ export interface ProjectFolderBinding {
   abs_path: string;
   sync: FolderSyncMode;
   origin_key: string | null;
+  binding_kind: "canonical" | "ephemeral";
   created_at: string;
   seen_at: string;
 }
@@ -87,20 +90,40 @@ export interface ProjectFolderBinding {
 //  seen_at 은 '마지막으로 이 경로가 살아있다고 보고된 시각' — 죽은 바인딩(지운 폴더)을 나중에 가려내는 신호.
 export async function upsertProjectFolderBinding(b: {
   projectId: number; memberId?: string | null; nodeId: string; absPath: string;
-  sync?: FolderSyncMode; originKey?: string | null;
+  sync?: FolderSyncMode; originKey?: string | null; bindingKind?: "canonical" | "ephemeral";
 }): Promise<void> {
   if (!b.projectId || !b.nodeId || !b.absPath) return;
-  await itemsPool.query(
-    `INSERT INTO project_folder_binding(project_id, member_id, node_id, abs_path, sync, origin_key)
-       VALUES($1,$2,$3,$4,$5,$6)
-     ON CONFLICT (project_id, member_id, node_id, abs_path) DO UPDATE
-       SET sync=EXCLUDED.sync, origin_key=COALESCE(EXCLUDED.origin_key, project_folder_binding.origin_key), seen_at=now()`,
-    [b.projectId, b.memberId ?? SHARED_BINDING_MEMBER, b.nodeId, b.absPath, b.sync ?? "none", b.originKey ?? null]);
+  const kind = b.bindingKind ?? "canonical";
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    // 서로 다른 경로를 동시에 canonical로 올려도 demote→upsert가 교차하지 않게 프로젝트 행으로 직렬화한다.
+    // 이 락이 없으면 두 트랜잭션이 모두 "기존 canonical 없음"을 본 뒤 유니크 인덱스에서 한쪽이 실패한다.
+    await client.query("SELECT id FROM project WHERE id=$1 FOR UPDATE", [b.projectId]);
+    if (kind === "canonical") {
+      await client.query(
+        `UPDATE project_folder_binding SET binding_kind='ephemeral'
+          WHERE project_id=$1 AND node_id=$2 AND binding_kind='canonical'
+            AND NOT (member_id=$3 AND abs_path=$4)`,
+        [b.projectId, b.nodeId, b.memberId ?? SHARED_BINDING_MEMBER, b.absPath]);
+    }
+    await client.query(
+      `INSERT INTO project_folder_binding(project_id, member_id, node_id, abs_path, sync, origin_key, binding_kind)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (project_id, member_id, node_id, abs_path) DO UPDATE   -- PK 는 project_id(대리키 FK) 포함이라 tenant_id 로 재작성되지 않는다(tenant-column.isNaturalKey ⓑ) — 중재자에 tenant_id 를 넣으면 42P10
+         SET sync=EXCLUDED.sync, origin_key=COALESCE(EXCLUDED.origin_key, project_folder_binding.origin_key),
+             binding_kind=EXCLUDED.binding_kind, seen_at=now()`,
+      [b.projectId, b.memberId ?? SHARED_BINDING_MEMBER, b.nodeId, b.absPath, b.sync ?? "none", b.originKey ?? null, kind]);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally { client.release(); }
 }
 
 export async function listProjectFolderBindings(projectId: number): Promise<ProjectFolderBinding[]> {
   return await q(itemsPool,
-    `SELECT project_id, member_id, node_id, abs_path, sync, origin_key, created_at, seen_at
+    `SELECT project_id, member_id, node_id, abs_path, sync, origin_key, binding_kind, created_at, seen_at
        FROM project_folder_binding WHERE project_id=$1 ORDER BY node_id, member_id, abs_path`, [projectId]);
 }
 

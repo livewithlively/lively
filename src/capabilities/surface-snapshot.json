@@ -3607,6 +3607,26 @@
   "input_hash": "7545b7dc003c8466"
  },
  {
+  "name": "session_project_context",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/execution-sessions/:id/project-context"
+  ],
+  "input_hash": "f156bdfeb971fb39"
+ },
+ {
+  "name": "session_project_context_applied",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/execution-sessions/:id/project-context/applied"
+  ],
+  "input_hash": "38416a6a566515b3"
+ },
+ {
   "name": "preview_env_list",
   "scope": "code",
   "mcp": true,

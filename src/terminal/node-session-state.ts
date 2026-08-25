@@ -6,12 +6,11 @@
 //  observed" 가 노드 세션에만 안 닿아 있던 갭이다.
 // 어떻게: 게이트웨이가 노드 create 릴레이에 **성공한 직후** 행을 쓴다(노드는 DB 를 모른다 — session-state.ts ON_NODE).
 //  행의 좌표(root_key·subpath)는 노드의 createSession 이 쓰는 규칙과 **같은 식**으로 게이트웨이가 계산한다
-//  (sessions.ts createSession: sessionDir 이면 rootKey||personal + sessions/<id>) — 복원이 그 노드에 같은 좌표로 create 를
+//  (sessions.ts createSession과 같은 rootKey/subpath) — 복원이 그 노드에 같은 좌표로 create 를
 //  다시 릴레이한다. best-effort: 행을 못 써도 세션은 이미 떠 있다(박스 세션 미러와 같은 규약).
 // 이 모듈은 **게이트웨이 전용**이다 — node/registry(WS 서버)를 import 하므로 노드 에이전트 번들에 들어가면 안 된다
 //  (sessions.ts 가 이걸 import 하지 않는 이유. routes 가 부른다).
 import type { CreateInput, SessionInfo } from "./catalog.js";
-import { SESSION_DIR_SUBDIR } from "./session-project.js";
 import { upsertSessionState, type SessionStateInput } from "../sessions/session-state.js";
 import { liveNodes } from "../node/registry.js";
 import { listNodes } from "../node/store.js";
@@ -20,12 +19,12 @@ import { logger } from "../log.js";
 /**
  * 순수 — 노드 create 릴레이 결과(session) + 그 요청 입력(input) → desired-state 행.
  *  · id·label·harness·dir·flags·invites·created 는 노드가 실제로 적용한 값(응답)을 쓴다 — 요청과 다를 수 있다(라벨 기본값·플래그 화이트리스트).
- *  · root_key/subpath 는 노드가 안 돌려주므로 createSession 과 같은 규칙으로 계산한다(세션 전용 폴더 = sessions/<id>).
+ *  · root_key/subpath 는 노드가 안 돌려주므로 createSession 과 같은 workspace 좌표 규칙으로 계산한다.
  *  · project_id 는 응답 우선(노드가 폴더로 판정), 없으면 요청값.
  */
 export function nodeSessionStateInput(session: SessionInfo, nodeId: string, input: CreateInput, ownerId: string): SessionStateInput {
-  const rootKey = input.sessionDir ? (input.rootKey || "personal") : (input.rootKey || null);
-  const subpath = input.sessionDir ? `${SESSION_DIR_SUBDIR}/${session.id}` : (input.subpath || null);
+  const rootKey = input.rootKey || "personal";
+  const subpath = input.subpath || null;
   const projectId = session.projectId || input.projectId || null;
   return {
     id: session.id, owner: ownerId, label: session.label || input.label || null,

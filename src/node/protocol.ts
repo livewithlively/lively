@@ -103,9 +103,11 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //  sendKeys = 그 세션의 PTY 에 프롬프트를 넣고 제출한다(#1664). 게이트웨이의 주입(크론·리브)은 여태
 //   **로컬 tmux 를 직접** 불렀기에 노드 세션엔 닿지 못했다 — 사람이 웹터미널에 붙어 손으로 치는 수밖에.
 //   Windows 노드는 mux 가 psmux 라 입력 표면이 다른데, 그 인코딩은 terminal/send-keys 가 흡수한다.
-//  setProject = 그 세션의 프로젝트 소속을 바꾼다(#1719 — 세션 전용 폴더에서 연 세션을 나중에 프로젝트에 붙이거나 뗀다).
-//   노드 tmux 의 @box_project 와 세션 폴더 안의 마커·링크·셔틀을 노드가 자기 파일시스템에 적용한다(정책=게이트웨이 F7).
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker"] as const;
+//  setProject = 그 세션의 프로젝트 소속을 바꾼다. DB current는 게이트웨이가 먼저 기록하고,
+//   노드는 tmux @box_project 실행 캐시만 적용한다(cwd·project.json·링크·셔틀은 건드리지 않는다).
+//  injectFirstPrompt = 프로젝트 세션 create와 첫 지시를 둘로 나눠, 게이트웨이가 DB current를 기록한 뒤에만
+//   노드의 입력창 대기·주입을 시작한다. 즉답 후 백그라운드 실행이라 90초 폴링이 RPC 상한을 잡아먹지 않는다.
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;
