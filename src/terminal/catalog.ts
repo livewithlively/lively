@@ -112,6 +112,8 @@ export interface FlagDef { name: string; label: string; desc: string; type: "sel
 export interface HarnessProvider { id: string; label: string }
 export interface Harness {
   key: string; label: string; bin: string; provider: HarnessProvider; autoApproveFlag?: string; flags: FlagDef[];
+  /** 모델마다 허용 추론강도가 다를 때 UI가 잘못된 조합을 만들지 않게 하는 표. 미지정 모델은 --effort 전체 선택지를 쓴다. */
+  effortsByModel?: Record<string, string[]>;
   // #1516 런처 안내의 하네스별 부분(harnessFailNotice 가 읽는다 — 문구를 그 함수에 하드코딩하지 않는다).
   //  · loginCmd: 비정상 종료의 주원인이 '자격 만료'이고 **셸에서 한 줄로** 복구되는 하네스(codex)만. 있으면
   //    안내가 재시작 대신 이 명령을 준다.
@@ -131,8 +133,8 @@ export interface Harness {
   //  플래그로는 못 바꾼다 — 사람이 터미널에서 치는 것과 같은 슬래시 명령을 주입하는 수밖에 없다(POST …/runtime).
   //  ⚠ **인자를 받는 명령이 실증된 하네스에만 둔다.** codex 의 `/models`·opencode 의 `/model` 은 고르는 팝업이라
   //   인자를 안 받고(실측: codex 바이너리에 `/model <arg>` 문자열 없음, 추론강도는 키보드 단축키), antigravity 는
-  //   슬래시로 바꾸는 경로가 확인되지 않았다. 없는 하네스는 화면이 컨트롤을 아예 안 그린다 — 효과 없는 컨트롤을
-  //   남기면 사람은 그게 먹는다고 믿는다(session-form.ts '기록 범위' 잠금과 같은 원칙).
+  //   슬래시로 바꾸는 경로가 확인되지 않았다. 없는 하네스도 화면 선택기는 보이되, 같은 프로세스에 거짓 명령을 넣지 않고
+  //   같은 작업 자리의 새 프로세스로 맥락을 넘긴다(session-chat.ts handoff).
   runtimeCmd?: { model?: (v: string) => string; effort?: (v: string) => string };
 }
 // 이어받기 대화 id 형식 — 하네스가 만든 값이라 제각각이다(claude·agy=UUID · opencode=`ses_…`).
@@ -145,7 +147,9 @@ export const HARNESSES: Harness[] = [
     autoApproveFlag: "--dangerously-skip-permissions",
     flags: [
       // desc 는 폼에서 드롭다운 아래 회색 캡션으로 붙는다 — '비우면 기본' 류는 빈 값 옵션 라벨('(자동)')이 이미 말하므로 두지 않는다(#1145).
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "opus", "sonnet", "haiku"] },
+      // 2026-08-24 Claude Code 2.1.241 --help 가 현행 별칭으로 fable·opus·sonnet 을 직접 안내한다.
+      // haiku 는 빠른 기존 별칭으로 유지하고, 기본 표기만 현재 세션 기본인 fable 로 올린다(argv 고정은 하지 않는다).
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "fable" },
       { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
     ],
     failHint: ["로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요."],
@@ -157,19 +161,36 @@ export const HARNESSES: Harness[] = [
   {
     key: "codex", label: "Codex", bin: "codex", provider: { id: "openai", label: "OpenAI" },
     autoApproveFlag: "--yolo",
-    // default 는 **표기용**이다(#1145) — 빈 값 옵션을 '(자동 · gpt-5.5)' 로 보여줄 뿐, 이 값을 argv 로 넘기지는 않는다.
+    // 2026-08-24 Codex CLI 0.149.1 기준 현행 카탈로그. gpt-5.5를 기본 표기로 남기면
+    // 새 세션 화면에서 5.6 계열을 애초에 고를 수 없어, 실제 설치본보다 UI가 뒤처진다.
+    // default 는 **표기용**이다(#1145) — 빈 값 옵션을 '(자동 · gpt-5.6-sol)' 로 보여줄 뿐, 이 값을 argv 로 넘기지는 않는다.
     //  넘기는 순간 그 모델에 고정돼, codex 가 기본을 올려도 여기 적힌 낡은 문자열에 사용자가 묶인다.
-    flags: [{ name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.5" }],
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.6-sol" },
+      // Codex CLI는 현재 launch-time reasoning effort를 config로 받는다. 일반 --effort 플래그가 아니라
+      // session 생성기에서 별도 argv로 정규화한다. UI 계약은 다른 하네스와 동일하게 유지한다.
+      { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max", "ultra"] },
+    ],
+    effortsByModel: {
+      "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
+      "gpt-5.5": ["low", "medium", "high", "xhigh"],
+      "gpt-5.4": ["low", "medium", "high", "xhigh"],
+      "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
+    },
     loginCmd: "codex logout && codex login --device-auth",
     resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
   },
   {
     // #1519 로 배선(훅·MCP·자산)은 이미 붙어 있는데 **웹 세션 카탈로그에만** 빠져 있던 자리(#1695).
-    //  모델은 `provider/model` 형식이라 화이트리스트로 못 박기 어렵다(제공자마다 다름) → 여기선 안 받는다.
-    //  opencode 안에서 고르면 되고, 반쯤 맞는 목록을 주는 것보다 안 주는 게 정직하다.
+    // 2026-08-24 설치본 `opencode models` 실측의 기본 제공 모델. 계정별 추가 provider 모델은 이 목록에 없지만,
+    // 적어도 설치 직후 누구나 쓸 수 있는 모델은 상단에서 고를 수 있게 한다. 선택 뒤에는 새 OpenCode 프로세스로 핸드오프된다.
     key: "opencode", label: "OpenCode", bin: "opencode", provider: { id: "other", label: "그 밖의 제공자" },
     autoApproveFlag: "--auto",   // 실측(1.18.x --help): 명시 deny 가 아닌 권한을 자동 승인
-    flags: [],
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "opencode/big-pickle", "opencode/hy3-free", "opencode/mimo-v2.5-free", "opencode/muse-spark-1.2-contributor-free", "opencode/nemotron-3-ultra-free", "opencode/nemotron-3.5-lightning-free", "opencode/x-preview-f-free"] },
+    ],
     // 셸에서 그대로 치는 명령은 **명령 줄**로 준다(복사해 붙여넣게) — claude 의 /login 은 TUI 안 입력이라 문장으로 둔다.
     failHint: ["로그인이 필요하다고 나오면 아래를 입력해 제공자를 고르세요:", "", "    opencode auth login"],
     resumeArgv: (id) => (id ? ["--session", id] : ["--continue"]),
@@ -179,10 +200,11 @@ export const HARNESSES: Harness[] = [
     //  bin 은 key 와 다르다(agy). 안내·재시작 문구를 key 로 만들면 없는 명령을 안내하게 된다(harnessFailNotice 참조).
     key: "antigravity", label: "Antigravity", bin: "agy", provider: { id: "google", label: "Google Gemini" },
     autoApproveFlag: "--dangerously-skip-permissions",   // 실측(agy 1.1.13 --help)
-    // 모델은 `agy models` 실측 목록에서 **현행 대표만** 큐레이트한다(구세대 flash 3.5/3.6 은 뺀다).
-    //  codex 와 같은 이유로 빈 값(=하네스 기본)을 기본으로 두어 낡은 문자열에 사용자를 묶지 않는다.
+    // 모델은 `agy models` 실측 목록을 그대로 싣는다. 최신 3.7만 남기면 이미 설치본이 지원하는 3.5/3.6을
+    // 상단에서 고를 수 없으므로, 새 모델 추가와 기존 지원 모델 보존을 함께 반영한다.
+    // codex 와 같은 이유로 빈 값(=하네스 기본)을 기본으로 두어 특정 문자열에 사용자를 묶지 않는다.
     flags: [
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"] },
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3.5-flash-high", "gemini-3.5-flash-medium", "gemini-3.5-flash-low", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"] },
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"] },   // claude 와 달리 3단계(실측)
     ],
     failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
@@ -196,15 +218,14 @@ export const HARNESSES: Harness[] = [
     // #1701 로 배선 완료(hook-file + config.toml 센티넬 + rules 주입) — 5번째 하네스.
     key: "grok", label: "Grok Build", bin: "grok", provider: { id: "xai", label: "xAI" },
     autoApproveFlag: "--always-approve",   // 실측(grok 1.0.3 --help; --yolo 는 별칭이지만 제품 표기가 always-approve)
-    // 모델은 실측으로 확인된 현행 id 만 큐레이트한다(기본 grok-4.5 · 실세션 관측 grok-4.6). codex 와 같은 이유로
-    //  빈 값(=하네스 기본)을 기본으로 두어 낡은 문자열에 사용자를 묶지 않는다. effort 는 모델마다 허용 단계가
-    //  달라(문서: "a model only accepts the levels its menu advertises") 반쯤 맞는 목록을 주느니 안 준다(opencode 판단).
+    // 2026-08-24 Grok Build 1.0.5 `grok models` 실측: 사용 가능·기본 모델 모두 grok-4.6 하나다.
+    // 더는 목록에 없는 4.5 를 남기면 선택 즉시 실패하므로 제거한다. 빈 값은 하네스 기본을 계속 따른다.
     flags: [
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "grok-4.6", "grok-4.5"] },
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "grok-4.6"], default: "grok-4.6" },
+      { name: "--effort", label: "추론강도(effort)", desc: "모델이 지원하는 단계만 적용됩니다", type: "select", choices: ["", "low", "medium", "high", "xhigh"] },
     ],
     failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-code"],
     // 실측(grok 바이너리 도움말 문자열): `/model <모델id>  # Switch model` · `/effort <level>` 둘 다 인자를 받는다.
-    //  추론강도는 위 flags 에 선택지를 안 두므로(모델마다 단계가 달라) 지금은 화면에 안 뜬다 — 선택지가 생기면 그대로 선다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
     // 실측(#1701): `-r <id>` 는 세션 id(UUID) 재개, id 없으면 `-c` = 이 폴더의 최근 세션. 어댑터가 sessionId 를
     //  세션 매핑으로 보고하므로 id 복원이 정상 경로다(antigravity 와 같은 구조).

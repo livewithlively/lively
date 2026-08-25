@@ -2,5 +2,6 @@
 export const testChildEnv = (parent = process.env) => ({
   ...parent,
   LIVELY_HOST_EFFECTS: "deny",
+  LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox",
   LIVELY_NO_BROWSER: "1",
 });

@@ -28,6 +28,9 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //  ⚠ 이 import 가 성립하려면 harness-registry.mjs 가 이 파일과 **같은 디렉터리**로 설치돼야 한다
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
 import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, claudeConfigDir } from "./harness-registry.mjs";
+import { hostEffects } from "./host-effects-port.mjs";
+
+const fetch = (...args) => hostEffects.fetch(...args);
 
 // #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
 //  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의

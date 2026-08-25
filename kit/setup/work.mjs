@@ -16,7 +16,12 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { spawn, spawnSync } from "node:child_process";
+import { entrypointHostEffects } from "./host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const spawn = (...args) => hostEffects.spawn(...args);
+const spawnSync = (...args) => hostEffects.spawnSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 const HOME = os.homedir();
 const die = (m) => { console.error("[work] " + m); process.exit(1); };

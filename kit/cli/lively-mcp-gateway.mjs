@@ -33,6 +33,10 @@ import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
+import { entrypointHostEffects } from "./host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const fetch = (...args) => hostEffects.fetch(...args);
 import { fileURLToPath } from "node:url";
 
 const PROTOCOL = "2025-06-18";

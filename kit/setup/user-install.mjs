@@ -25,10 +25,13 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WORK_ROOTS_HEADER } from "./work-roots-header.mjs";
-import { addWindowsUserPath, hostEffectsAllowed } from "./host-effects.mjs";
+import { addWindowsUserPath, entrypointHostEffects, hostEffectsAllowed } from "./host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const spawnSync = (...args) => hostEffects.spawnSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 const args = process.argv.slice(2);
 const getOpt = (n) => { const i = args.indexOf(n); return i !== -1 ? args[i + 1] : null; };
@@ -61,7 +64,7 @@ const CLAUDE_DIR = claudeConfigDir(HOME);
 //  복사되므로 같은 목록에 있어야 하고, 빠지면 sync-harness-assets 가 ERR_MODULE_NOT_FOUND 로 **통째로 죽는다**
 //  (그러면 조직 자산이 한 개도 안 깔린다 — 게다가 자산 sync 는 조용히 실패하는 게 설계라 아무 신호가 없다).
 //  이 등재 누락은 kit/hooks/harness-registry.test.mjs 가 잡는다.
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "host-effects-port.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -1160,6 +1163,11 @@ async function installShared(workRoots) {
   else console.log(`  · ~/.lively/context.md 시드 보류(오프라인/게이트웨이 미응답) — 첫 세션 훅이 채움 · org-name=${orgName}`);
 
   const hooksDir = join(LIVELY, "hooks");
+  const sharedHostEffects = cloneAbs(join("setup", "host-effects.mjs"));
+  if (existsSync(sharedHostEffects)) {
+    mkdirSync(join(LIVELY, "lib"), { recursive: true });
+    copyFileSync(sharedHostEffects, join(LIVELY, "lib", "host-effects.mjs"));
+  }
   mkdirSync(hooksDir, { recursive: true });
   let missing = 0;
   for (const f of HOOK_SCRIPTS) {
@@ -1178,7 +1186,13 @@ async function installShared(workRoots) {
   //  이제 `lively run <프로젝트번호>` 가 이걸 부른다(웹이 건네던 `node ~/.lively/work.mjs …` 를 대체).
   {
     const wsrc = cloneAbs(join("setup", "work.mjs"));
-    if (existsSync(wsrc)) { copyFileSync(wsrc, join(LIVELY, "work.mjs")); chmodSync(join(LIVELY, "work.mjs"), 0o755); console.log("  ✓ ~/.lively/work.mjs"); }
+    const hsrc = cloneAbs(join("setup", "host-effects.mjs"));
+    if (existsSync(wsrc) && existsSync(hsrc)) {
+      copyFileSync(wsrc, join(LIVELY, "work.mjs"));
+      copyFileSync(hsrc, join(LIVELY, "host-effects.mjs"));
+      chmodSync(join(LIVELY, "work.mjs"), 0o755);
+      console.log("  ✓ ~/.lively/work.mjs + HostEffects");
+    }
     else console.log("  · ~/.lively/work.mjs 보류(번들에 setup/work.mjs 없음 — 구버전 번들)");
   }
 

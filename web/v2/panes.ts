@@ -437,6 +437,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   // ── 문패 ──
   function paintDoor(): void {
+    if (titleRenaming) return;   // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다 — 세션 제목과 같은 규칙)
     const p = pj();
     const tasks: any[] = Array.isArray(p.tasks) ? p.tasks : [];
     const doneN = tasks.filter((t) => t.status_category === 'done').length;
@@ -458,7 +459,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           loose ? null : el('span', { text: `할 일 ${tasks.length - doneN}/${tasks.length}` }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
           loose ? null : el('span', { text: `지식 ${knN}` })),
-        el('h1', { class: 'pn-title', text: p.name || '프로젝트 #' + id })),
+        titleNode(String(p.name || '프로젝트 #' + id))),
       el('div', { class: 'pn-door-r' },
         el('span', { class: 'pn-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'pn-face', String(m.display_name || m.member_id || '')))),
         // [칸]은 뺐고(원준 2026-08-20) 이름은 '설정'이 아니라 **정보** — 창의 내용물이 동작 옵션이 아니라
@@ -467,6 +468,53 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         // [＋ 세션] — 탭 줄을 없애면서 '새 세션'의 유일한 입구가 사라졌다(원준 2026-08-20). 문패로 옮긴다.
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('plus', 'pn-i sm'), el('span', { text: '세션' })),
         loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '정보' }))));
+  }
+
+  // ── 프로젝트 이름 = 문패 제목을 눌러 고친다(원준 2026-08-24) ────────────────────────
+  //  세션 이름과 **같은 UI** 로 맞춘다: 평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 연필이 떠서
+  //  '고칠 수 있다'고 말한다(session-chat.ts 의 sc-title-btn 과 같은 문법). 클릭하면 그 자리에 입력칸이
+  //  열리고 Enter·포커스 이동으로 저장, Esc 로 취소한다. 사이드바 줄 더블클릭(side.ts)도 같은 편집이다.
+  //  '프로젝트 없는 세션'(loose)은 고칠 이름이 없으므로 평범한 제목으로 둔다.
+  let titleRenaming = false;
+  function titleNode(name: string): HTMLElement {
+    if (loose) return el('h1', { class: 'pn-title', text: name });
+    return el('h1', { class: 'pn-title' },
+      el('button', { class: 'pn-title-btn', type: 'button', title: '프로젝트 이름 — 눌러서 바꿉니다', onclick: () => startTitleRename() },
+        el('span', { class: 'pn-title-t', text: name }),
+        pnIcon('pencil', 'pn-title-pen')));
+  }
+  function startTitleRename(): void {
+    if (loose || titleRenaming) return;
+    const h = door.querySelector('.pn-title');
+    if (!h) return;
+    titleRenaming = true;
+    const cur = String(pj().name || '');
+    const input = el('input', { class: 'pn-title-in', type: 'text', maxlength: '120', value: cur, spellcheck: 'false', 'aria-label': '프로젝트 이름' }) as HTMLInputElement;
+    h.replaceChildren(input);
+    input.focus(); input.select();
+    let closed = false;
+    const stop = (): void => { titleRenaming = false; paintDoor(); };
+    const cancel = (): void => { if (closed) return; closed = true; stop(); };
+    const save = async (): Promise<void> => {
+      if (closed) return;
+      const to = input.value.replace(/\s+/g, ' ').trim();
+      if (!to || to === cur) { cancel(); return; }
+      closed = true; input.disabled = true;
+      try {
+        await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ name: to }) });
+        const cp = pj(); if (cp) cp.name = to;
+        toast('프로젝트 이름을 바꿨어요.');
+        opts.onProjectChanged?.();       // 사이드바·탭 제목까지 새 이름으로
+        void refreshDetail();
+      } catch (e: any) { toast('이름을 바꾸지 못했어요 — ' + (e?.message || e), true); }
+      stop();
+    };
+    input.onkeydown = (e: KeyboardEvent) => {
+      if (e.isComposing) return;         // 한글 조합 중의 Enter 는 확정이지 저장이 아니다
+      if (e.key === 'Enter') { e.preventDefault(); void save(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    };
+    input.onblur = () => { void save(); };   // 다른 데를 누르면 그대로 저장(취소는 Esc)
   }
 
   function resetLayout(): void {
