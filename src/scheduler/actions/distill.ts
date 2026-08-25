@@ -55,6 +55,8 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
       prompt: await applyPromptOverride(params, b), requester, jobId,
       harness: headlessHarness(params),   // 증류기 설정엔 하네스 축이 없다 — 잡 params 만(비우면 의뢰자 로그인 기준 자동)
       marker: b.key ? "cron:" + jobId + "#" + b.key : undefined,
+      // node(#1881) — 실행 노드 고정(예: "central" = 게이트웨이 박스). 비우면 스케줄러 자유 배정(램 여유 순).
+      nodePref: typeof params.node === "string" && params.node.trim() ? params.node.trim() : null,
       flags, extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },
     });
     if (b.distillerId) await recordDistillerRunSafe(b.distillerId, r.status, r.summary);
