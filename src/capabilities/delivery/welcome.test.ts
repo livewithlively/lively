@@ -3,7 +3,7 @@
 // red 입증은 mutation(신규 파일이라 '변경 전 코드'가 없다).
 // 실행: npm run build && node dist/capabilities/delivery/welcome.test.js
 import assert from "node:assert/strict";
-import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms } from "./welcome.js";
+import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt } from "./welcome.js";
 
 let pass = 0, fail = 0;
 // 실패해도 멈추지 않는다 — 어느 행이 빨간불인지 **전부** 봐야 red 입증이 된다.
@@ -217,6 +217,33 @@ t("㉚ 구분자가 달라도(밑줄·하이픈·공백) 같은 꼴로 본다", 
 t("㉛ 묶음이 여럿이면 큰 것부터", () => {
   const g = repeatedForms(["A 1.md", "A 2.md", "A 3.md", "B 1.md", "B 2.md"]);
   assert.deepEqual(g.map((x) => x.names.length), [3, 2]);
+});
+
+// ── 프롬프트 비용 ───────────────────────────────────────────────────────────
+//  실측(2026-08-26): 파일 이름 200개(21KB)를 그대로 넣었더니 온보딩 한 번에 $1.22 가 나갔다.
+
+t("㉜ 프롬프트에 넣는 파일 이름은 120개로 자르고, 자른 사실을 밝힌다", () => {
+  const many = Array.from({ length: 300 }, (_, i) => `파일_${i}.md`);
+  const p = analyzePrompt(many, null);
+  const lines = p.split("\n").filter((l) => l.startsWith("- 파일_"));
+  assert.equal(lines.length, 120, `${lines.length}개가 들어갔다`);
+  assert.match(p, /그 밖에 180건 더 있습니다/);
+});
+
+t("㉝ 긴 이름은 잘라서 넣는다 — 이름 하나가 프롬프트를 먹지 않게", () => {
+  const long = "가".repeat(300) + ".md";
+  const p = analyzePrompt([long], null);
+  const line = p.split("\n").find((l) => l.startsWith("- 가"));   // 규칙 줄도 "- " 로 시작한다 — 파일 줄만 고른다
+  assert.ok(line!.length < 120, `안 잘렸다(${line!.length}자)`);
+  assert.match(line!, /…$/);
+});
+
+t("㉞ 파일이 적으면 자르지 않고 '더 있습니다' 도 안 붙인다", () => {
+  const p = analyzePrompt(["a.md", "b.csv"], "제품·기획");
+  assert.match(p, /- a\.md/);
+  assert.match(p, /- b\.csv/);
+  assert.doesNotMatch(p, /더 있습니다/);
+  assert.match(p, /이 사람이 하는 일: 제품·기획/);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -24,8 +24,13 @@ import { restRead } from "./shared.js";
 
 /** 갈래 후보 상한 — 서랍이 열 개를 넘으면 고르는 일이 일이 된다. */
 const MAX_DRAWERS = 10;
-/** LLM 에게 보여 줄 파일 목록 상한. 전량을 넣으면 프롬프트가 터지고 값도 안 좋아진다. */
+/** 집계·목록에 쓰는 자료 표본 상한. */
 const SAMPLE_CAP = 200;
+/** LLM 에게 **보여 줄** 파일 이름 수·길이 상한.
+ *  실측(2026-08-26): 이름 200개(21KB)를 그대로 넣었더니 한 번에 $1.22 가 나갔다. 온보딩 한 번에 그 값은 과하다.
+ *  갈래를 정하는 데는 이름 120개면 충분하고, 긴 이름은 앞부분만으로도 무엇인지 드러난다. */
+const PROMPT_FILE_CAP = 120;
+const PROMPT_NAME_CAP = 80;
 const TURN_ID_RE = /^t[0-9a-f]{16}$/;
 
 /**
@@ -178,7 +183,8 @@ export function analyzePrompt(files: string[], job: string | null): string {
     '```',
     "",
     "파일 목록:",
-    ...files.map((f) => `- ${f}`),
+    ...files.slice(0, PROMPT_FILE_CAP).map((f) => `- ${f.length > PROMPT_NAME_CAP ? f.slice(0, PROMPT_NAME_CAP) + "…" : f}`),
+    files.length > PROMPT_FILE_CAP ? `(그 밖에 ${files.length - PROMPT_FILE_CAP}건 더 있습니다)` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -275,8 +281,15 @@ export const welcomeCapabilities: Capability[] = [
       const { tailTask } = await import("../../node/tasks.js");
       const from = Number.isFinite(input.from) && input.from >= 0 ? Math.floor(input.from) : 0;
       const t = await tailTask(dir, from) as { chunk?: string; done?: boolean; exit?: number | null; next?: number };
-      const text = lastAssistantText(String(t.chunk ?? ""));
-      return { ...t, drawers: t.done ? parseDrawers(text) : [] };
+      // ⚠ 판정은 **스트림 전체**에서 읽는다. 화면은 진행을 이어 읽느라 from 을 앞으로 밀어서,
+      //  끝났을 때의 조각에는 정작 답이 안 들어 있다(실측 2026-08-26: AI 는 제대로 답했는데
+      //  화면은 "판정을 읽지 못했다"로 떨어졌다 — 우리 읽기 쪽 결함이었다).
+      //  done 일 때 한 번 더 처음부터 읽는 비용은 턴 하나 분량이라 무시할 만하다.
+      if (!t.done) return { ...t, drawers: [] };
+      const full = from > 0
+        ? await tailTask(dir, 0) as { chunk?: string }
+        : t;
+      return { ...t, drawers: parseDrawers(lastAssistantText(String(full.chunk ?? ""))) };
     }, false, {
       id: z.string().describe("me_welcome_analyze 가 준 턴 id"),
       from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),

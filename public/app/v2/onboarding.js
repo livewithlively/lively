@@ -660,27 +660,8 @@ export function renderOnboarding(host, ctx = {}) {
     const stageOf = () => DATA.STAGES[S.stage] || DATA.STAGES.company;
     const jobOf = () => S.job || stageOf().opts[0][0];
     const personaOf = () => { const hit = stageOf().opts.find(([l]) => l === S.job); return hit ? hit[1] : stageOf().opts[0][1]; };
-    const tally3 = () => DATA.TALLY7[jobOf()] || DATA.TALLY7[personaOf()] || DATA.TALLY7.default;
     const canOf = () => DATA.CAN[jobOf()] || DATA.CAN[S.stage] || DATA.CAN['제품·기획'];
-    /* b2 는 '같은 양식 문서' 이야기 — 녹음·이미지 파일이 예시로 뽑히면 문장이 안 맞는다(실측: 8/12 팀 회의.m4a) */
-    const fileOf = (i) => {
-        const raw = DATA.FILES[personaOf()] || DATA.FILES['마케팅'] || [];
-        const docs = raw.filter((f) => !/\.(m4a|mp3|wav|mp4|mov|png|jpe?g|gif)$/i.test(String(f)));
-        return docs[i] || raw[i] || ['보고서', '문서'][i];
-    };
     const nick = () => S.nameSet && S.name ? S.name : '';
-    /* 자료 41건을 7갈래에 나눠 담는 목표치 — 상위 3개는 직무 표, 나머지는 잔량 */
-    function drawerTargets() {
-        const top = tally3();
-        const t = {};
-        DATA.KINDS7.forEach(([k]) => { t[k] = 0; });
-        let sum = 0;
-        top.forEach(([k, c]) => { t[k] = c; sum += c; });
-        const rest = DATA.KINDS7.map(([k]) => k).filter((k) => !t[k]);
-        let left = Math.max(0, 41 - sum);
-        rest.forEach((k, i) => { const c = i < rest.length - 1 ? Math.min(left, [2, 1, 1][i] ?? 1) : left; t[k] = c; left -= c; });
-        return t;
-    }
     let pendingChips = null; // 지금 답을 기다리는 칩들 — 입력창 해석이 본다
     function renderSB() { }
     /* ══════════════ 장면 차례 ══════════════ */
@@ -974,7 +955,16 @@ export function renderOnboarding(host, ctx = {}) {
           <button class="ob-btn ob-btn-pri" id="appGet">앱 받기</button>
           <button class="ob-btn ob-btn-sub" id="appSkip">지금은 웹으로 할게요</button>`,
             bind: (el) => {
-                $('#appGet', el).onclick = () => { S.app = 'yes'; S.decisions.push('데스크톱 앱 받기'); save(); renderSB(); toast('실제 서비스에서는 여기서 내려받기가 시작됩니다.'); goScene('read'); };
+                // ⚠ 종전엔 "실제 서비스에서는 여기서 내려받기가 시작됩니다" 라는 **프로토 잔재**를 실서비스에서 띄웠다.
+                //  내려받기 주소가 아직 이 화면에 없으므로, 없는 것을 있는 척하지 않고 어디서 받는지만 알린다.
+                $('#appGet', el).onclick = () => {
+                    S.app = 'yes';
+                    S.decisions.push('데스크톱 앱 받기');
+                    save();
+                    renderSB();
+                    toast('설정 ▸ 데스크톱 앱에서 받으실 수 있어요. 지금은 웹으로 이어서 진행할게요.');
+                    goScene('read');
+                };
                 $('#appSkip', el).onclick = () => { S.app = 'web'; save(); goScene('read'); };
             },
         },
@@ -1279,7 +1269,9 @@ export function renderOnboarding(host, ctx = {}) {
                 S.decisions.push(`첫 지시: ${t.slice(0, 40)}…`);
                 save();
                 renderSB();
-                msgLiv('이 문장으로 세션을 하나 열어 뒀어요. 왼쪽에 보이죠? 온보딩이 끝나면 바로 시작됩니다. 다 됐으면 아래 <b>준비 끝, 정리해 주세요</b>를 눌러 주세요.'); /* [새문구] */
+                // ⚠ 종전엔 "세션을 하나 열어 뒀어요. 왼쪽에 보이죠?" 라고 했는데 **세션을 만들지 않았다**.
+                //  적어 두는 것은 실제로 한다(마무리에서 프로필의 결정으로 남는다) — 그 사실만 말한다.
+                msgLiv('적어 뒀어요. 정리가 끝나면 홈에서 이 문장으로 바로 시작하실 수 있어요. 다 됐으면 아래 <b>준비 끝, 정리해 주세요</b>를 눌러 주세요.');
             });
             await sleep(400);
             chipsRow([{ label: '준비 끝, 정리해 주세요', cta: true, cb: async (l) => {
@@ -1446,9 +1438,10 @@ export function renderOnboarding(host, ctx = {}) {
                 past.push([`평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?`, S.nowline]);
             }
             Object.assign(S.read, { done: S.read.total, finished: true });
-            const targets = drawerTargets();
+            // 장면 건너뛰기(?scene=)로 중간에 들어온 경우에도 사이드바 숫자는 **실측**을 쓴다 —
+            //  여기만 상수 목표치를 쓰면 같은 화면이 두 가지 숫자를 말한다.
             S._counts = {};
-            DATA.KINDS7.forEach(([k]) => { S._counts[k] = targets[k] || ''; });
+            realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
         }
         save();
         renderSB();
