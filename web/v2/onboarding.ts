@@ -5,7 +5,7 @@
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
 import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
-import { apiUrl } from '../core.js';
+import { api, apiUrl } from '../core.js';
 export const OB_DONE_KEY = 'lively_ob_done';
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
 
@@ -918,8 +918,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   //  서버는 멱등(이미 켜져 있으면 no-op)이고, 실패해도 온보딩을 막지 않는다 — 관리 화면에서 언제든 켤 수 있다.
   function enableLocalDistiller() {
     if (!S.upN) return;
-    fetch(apiUrl('/api/ui/org/distillers/local'), { method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enable: true }) })
+    // 생 fetch 금지 — 데스크톱 앱·토큰 주입 환경은 쿠키가 아니라 localStorage 토큰으로 인증한다(api 가 헤더를 붙인다).
+    Promise.resolve(api('/api/ui/org/distillers/local', { method: 'POST', body: JSON.stringify({ enable: true }) }))
       .catch(() => { /* 비치명 — 크론·관리 화면이 남은 길 */ });
   }
 
