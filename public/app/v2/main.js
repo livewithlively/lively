@@ -31,6 +31,7 @@ import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js'; // 통합검색
 import { mountTitlebar } from './titlebar.js'; // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, listAppInstances, updateAppInstance } from './app-instance.js';
+import { activeNavKey } from './shell-surfaces.js'; // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
 const SOLO = new URLSearchParams(location.search).get('solo') === '1';
@@ -723,7 +724,9 @@ async function renderRoute(tab) {
     }
     if (page !== 's' && page !== 'i')
         clearTabAppInstance(tab);
-    markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === 'connect' ? 'connect' : page === 'archive' ? 'archive' : page === 'trash' ? 'trash' : page === '' || page === 'dashboard' ? 'home' : '');
+    // 활성 표시 키는 화면 대장(shell-surfaces)이 정한다 — 새 화면을 만들면 대장을 거치게 되고,
+    //  그때 '이건 앱인가 OS 표면인가'를 반드시 고르게 된다(가드: scripts/shell-surface-registry.test.mjs).
+    markActive(activeNavKey(page, page === 's' ? decodeURIComponent(segs[1] || '') : segs[1]));
     try {
         if (page === '' || page === 'dashboard') {
             renderHome(tab.center, data);
