@@ -196,9 +196,11 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       if (t) {
         void autoNameUnnamedSession(sessionId, t, {
           lookup: (uuid) => sessionStateByClaudeUuid(uuid),
-          renameLocal: (owner, id, label) => editSession({ userId: owner } as LivelyUser, id, { label }),
+          // #1979 — 출처는 **rule**(첫 지시 앞부분을 자른 규칙 이름)이다. 기본값 human 을 쓰면 이 자동 이름이
+          //  '사람이 지은 이름'으로 굳어져 그 세션이 스스로 짓는 이름(agent)을 영영 막는다.
+          renameLocal: (owner, id, label) => editSession({ userId: owner } as LivelyUser, id, { label }, { source: "rule" }),
           renameNode: (nodeId2, owner, id, label) => nodeRpc(nodeId2, "edit", { user: { userId: owner }, id, patch: { label } }).then(() => undefined),
-          saveLabel: (id, label) => updateSessionStateMeta(id, { label }),
+          saveLabel: (id, label) => updateSessionStateMeta(id, { label, label_source: "rule" }),
           warn: (msg, err) => console.warn(`[session-log] ${msg}:`, (err as Error)?.message ?? err),
         });
       }

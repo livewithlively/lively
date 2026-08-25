@@ -441,7 +441,8 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   //  이 주소가 그대로 살아 있는 경우는 '＋ 세션'을 눌러 새 세션을 여는 중일 때뿐이다). 그래서 탭에는
   //  폴더+프로젝트명이 아니라 **새 세션**이라고 쓴다(원준 2026-08-20) — 프로젝트 이름은 바로 아래 문패가 말하고 있고,
   //  탭이 프로젝트명을 달고 있으면 '무엇을 하는 탭인지'가 아니라 '어디 있는지'만 되풀이된다.
-  //  이름은 첫 지시를 넣는 순간 그 세션의 이름으로 바뀐다(서버가 지어 붙인다 — src/terminal/session-name-ai.ts).
+  //  이름은 첫 지시를 넣은 뒤 그 세션의 이름으로 바뀐다 — #1979 부터는 **그 세션 자신**이 첫 지시 턴에 짓는다
+  //  (훅 session-name-ask → MCP session_rename). 서버가 하네스를 따로 스폰하던 종전 경로는 사라졌다.
   if (p === 'p') return { title: '새 세션', noAside: true, kind: 'new' };
   if (p === 's') {
     // 탭 제목도 사이드바와 **같은 규칙**(side.ts sessText)을 쓴다(#1744) — 종전엔 s.label 을 날것으로 써서

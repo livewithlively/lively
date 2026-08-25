@@ -190,6 +190,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  write_vis: 'open'|'audience'|'private' (NULL=미설정 → 실행 폴더에서 재파생). restrict: read 축소(owner∪invites) 여부.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS write_vis TEXT;`);
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS restrict_read BOOLEAN NOT NULL DEFAULT false;`);
+  // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 세션 이름이 한 번만 지어지고 그대로 가게 하는 걸쇠다:
+  //  낮은 쪽이 높은 쪽을 못 덮는다(session-label-source.ts 의 표가 정본). NULL = 이 컬럼 이전 행 → `rule` 로 읽는다.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS label_source TEXT;`);
 
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)
