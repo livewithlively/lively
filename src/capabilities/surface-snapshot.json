@@ -3514,7 +3514,7 @@
   "rest": [
    "POST /api/ui/cron"
   ],
-  "input_hash": "d2d671f0d76c545f"
+  "input_hash": "848fdb990f675fbc"
  },
  {
   "name": "cron_delete",
