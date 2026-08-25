@@ -418,7 +418,9 @@ function renderPt() {
 }
 
 const want = new URLSearchParams(location.search).get('scene');
-if (want && SCENES[want] && want !== 'landing') S.email = 'wonjun@company.com';
+const qEmail = (new URLSearchParams(location.search).get('email') || '').trim();
+if (qEmail) S.email = qEmail;                                   // 앞 화면(start.html)에서 넘어온 주소
+else if (want && SCENES[want] && want !== 'landing') S.email = 'wonjun@company.com';
 go(want && SCENES[want] ? want : 'landing');
 </script>
 </body>

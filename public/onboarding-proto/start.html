@@ -206,6 +206,7 @@ html:not(.js) .ld-cnt .c0,html:not(.js) .ld-cnt .c1{opacity:0} html:not(.js) .ld
 .ld-done .ld-pd{margin-top:6px}
 .ld-done p{margin-top:2px;color:var(--ink-sub);line-height:1.5}
 [hidden]{display:none!important}   /* .ld-done 의 display:flex 가 hidden 을 이기던 것 */
+.ld-err{margin-top:8px;font-size:12.5px;color:#B84E44;font-weight:600}
 .ld-agree{display:flex;gap:9px;align-items:flex-start;margin-top:2px;font-size:12.5px;line-height:1.5;color:var(--ink-sub);cursor:pointer}
 .ld-form .ld-agree input[type=checkbox]{width:16px;height:16px;min-width:16px;padding:0;margin:2px 0 0;flex:none;accent-color:var(--blue);border-radius:4px}
 .ld-agree a{color:var(--blue);font-weight:600;text-decoration:underline}
@@ -323,13 +324,14 @@ html:not(.js) .ld-cnt .c0,html:not(.js) .ld-cnt .c1{opacity:0} html:not(.js) .ld
     </section>
 
     <section class="ld-panel" aria-label="시작하기">
-      <h3>초대 코드로 시작</h3>
-      <p class="ld-panel-d">초대장 메일에 있는 코드를 넣어 주세요. 확인되면 이어서 가입을 마칩니다.</p>
+      <h3>초대받은 이메일로 시작</h3>
+      <p class="ld-panel-d">초대장을 보내 드린 이메일 주소를 넣어 주세요. 그 주소가 아이디가 됩니다.</p>
       <form class="ld-form" id="codeForm">
-        <input class="mono" type="text" name="code" placeholder="lvi-xxxx-xxxx-xxxx-xxxx" aria-label="초대 코드" autocomplete="off" spellcheck="false" required>
+        <input type="email" name="email" placeholder="you@company.com" aria-label="초대받은 이메일" autocomplete="email" required>
         <button class="ld-btn ld-btn-primary" type="submit">시작하기</button>
       </form>
-      <p class="ld-hint">이미 계정이 있으면 <a href="/login">로그인</a>하세요.</p>
+      <p class="ld-err" id="startErr" hidden>초대장을 보낸 기록이 없는 주소입니다. 아래에서 대기자로 등록해 주세요.</p>
+      <p class="ld-hint">비밀번호를 이미 만드셨다면 <a href="signup-proto.html?scene=login">로그인</a>하세요.</p>
 
       <div class="ld-or" aria-hidden="true">또는</div>
 
@@ -392,7 +394,18 @@ html:not(.js) .ld-cnt .c0,html:not(.js) .ld-cnt .c1{opacity:0} html:not(.js) .ld
 /* 프로토타입 배선 — 서버가 없으니 폼을 화면 안에서 처리한다. 코드는 아무거나 넣어도 다음 화면으로 간다. */
 (function(){
   var cf = document.getElementById('codeForm');
-  if (cf) cf.addEventListener('submit', function(e){ e.preventDefault(); location.href = 'signup-proto.html?scene=signup'; });
+  if (cf) cf.addEventListener('submit', function(e){
+    e.preventDefault();
+    var v = (cf.email.value || '').trim().toLowerCase();
+    var btn = cf.querySelector('button');
+    document.getElementById('startErr').hidden = true;
+    btn.disabled = true; btn.textContent = '확인 중';
+    setTimeout(function(){
+      // 프로토타입: '초대 없음' 화면을 보시려면 주소를 no- 로 시작하세요(예: no-me@company.com).
+      if (v.indexOf('no-') === 0) { btn.disabled = false; btn.textContent = '시작하기'; document.getElementById('startErr').hidden = false; return; }
+      location.href = 'signup-proto.html?scene=signup&email=' + encodeURIComponent(v);
+    }, 700);
+  });
   var wf = document.getElementById('waitForm'), ag = document.getElementById('agree');
   if (wf && ag) {
     var btn = wf.querySelector('button');
