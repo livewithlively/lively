@@ -138,7 +138,7 @@ export const HARNESS = {
       command: { root: (h) => j(h, "prompts"), dir: false, ext: ".md", compose: "codex-prompt" },
     },
     tools: {
-      edit: ["apply_patch"],               // codex 는 편집 툴이 이것 하나다
+      edit: ["apply_patch"],               // codex 편집 툴 — 단 0.149.1+gpt-5.6 계열은 편집이 **셸로** 온다(아래 editShellRe)
       shell: ["Bash"],
       read: [],                            // 전용 툴 없음(셸로 한다)
       skill: [],                           // Skill 툴 없음 — 스킬은 프롬프트 인라인(#1475 §3 의 tracker 갭 원인)
@@ -150,9 +150,14 @@ export const HARNESS = {
     autoApprove: { kind: "toml-approval", key: (_s, tool) => tool },
     contextEnvelope: "json",               // SessionStart 는 JSON 봉투 필수(raw 는 무시된다)
     reloadAssets: false,                   // 재시작해야 반영
-    // codex 에 없는 것: SessionEnd · Notification. codex 에만 있는 것: PermissionRequest · SubagentStart
+    // #1884 실측(0.149.1 스텁모델 E2E): 편집이 모델 계열에 따라 두 얼굴이다 — gpt-5.4 는 apply_patch **툴**로,
+    //  gpt-5.6(현 기본)·미상 모델은 셸 명령 `apply_patch <<'EOF' …` 로 온다(tool_name=Bash). 툴명 목록(edit)만 보면
+    //  5.6 세션의 편집이 전부 '셸'로 분류돼 기록 인정·편집 게이트가 조용히 빠진다 → 셸 명령 형태를 이 축이 답한다.
+    editShellRe: "^\\s*apply_patch\\b",
+    // codex 에 없는 것: Notification(승인 대기는 PermissionRequest). SessionEnd 는 **0.149.1 부터 발화**(#1884 실측 —
+    //  0.142 는 그 config 키를 조용히 무시하므로 배선해도 안전). codex 에만 있는 것: PermissionRequest · SubagentStart
     //  (후자는 서버 org_hook event 허용목록에 없어 러너 배선 대상이 아니다 — #1475 CODEX_RUNNER_EVENTS 주석 참조).
-    events: ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "PreCompact", "PostCompact"],
+    events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "PreCompact", "PostCompact"],
   },
 
   opencode: {
@@ -383,6 +388,18 @@ export function toolMatcher(id, group) {
 // MCP 서버 툴 matcher(우리 서버 호출 관측용).
 export function mcpMatcher(id, server = "lively") {
   return harness(id).tools.mcpMatcher(server);
+}
+
+// 셸 명령으로 오는 파일 편집(#1884) — codex 0.149.1 + gpt-5.6 계열은 apply_patch 를 **툴이 아니라 셸 명령**으로 낸다
+//  (tool_name=Bash · tool_input.command="apply_patch <<'EOF' …"). 툴명(edit 축)만 보면 그 세션의 편집이 전부 '셸'로
+//  분류돼 작업 인정(.worked)·편집 게이트가 조용히 빠진다. 표의 editShellRe 축이 있는 하네스에서만 참이 될 수 있다.
+//  ⚠ 하네스가 `apply_patch` 라는 **툴**을 낼 때(gpt-5.4 계열)는 edit 축이 잡는다 — 둘은 배타가 아니라 보완이다.
+export function isShellEdit(id, toolName, toolInput) {
+  const h = harness(id);
+  if (!h.editShellRe || !(h.tools.shell || []).includes(String(toolName || ""))) return false;
+  const c = toolInput && toolInput.command;
+  const cmd = Array.isArray(c) ? c.join(" ") : String(c ?? toolInput?.cmd ?? "");
+  return new RegExp(h.editShellRe).test(cmd);
 }
 
 // 전 하네스의 툴 이름 합집합 — "어느 하네스에서 왔든 이건 편집 툴이다" 같은 **하네스 무관 판정**에 쓴다.

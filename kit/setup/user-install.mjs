@@ -445,15 +445,21 @@ const cdxHook = (event, command, timeout, matcher) => [
 ];
 
 // 커스텀 훅 런너를 배선할 codex 이벤트 — **claude 의 runnerHooksBlock 과 같은 자리**(하네스 패리티 불변식 ②).
-//  이벤트 집합이 하네스마다 다르다(codex 0.142.0 바이너리 실측):
-//   · codex 에 **없는 것**: SessionEnd · Notification → 배선 불가(claude 전용).
+//  이벤트 집합이 하네스마다 다르다(codex 0.142.0 → 0.149.1 바이너리·스텁모델 E2E 실측, #1475 → #1884):
+//   · **SessionEnd 는 0.149.1 부터 발화한다**(payload: session_id·transcript_path·cwd·reason — #1884 실측). 0.142 는
+//     이 키를 **조용히 무시**한다(config 로드 에러 없음 — 실측)라 버전 분기 없이 배선해도 안전하다. 단 codex 가
+//     SessionEnd 훅 timeout 을 **3s 로 클램프**한다(경고 문구 실측) → 그 이상 적어도 의미 없다.
+//   · codex 에 **없는 것**: Notification(config 키는 받되 발화 미관측 — exec 모드엔 승인 프롬프트가 없어 관측 불가).
+//     claude 의 Notification(='확인 필요') 자리는 PermissionRequest 가 대신한다.
 //   · codex 에**만** 있는 것: PermissionRequest · SubagentStart → 서버 org_hook 의 event 허용목록(delivery/hooks.ts
 //     HOOK_EVENTS)에 아직 없어 조직 훅을 만들 수 없다 → 러너는 배선하지 않는다(등록 불가능한 이벤트에 러너를
 //     붙이면 툴콜마다 빈 왕복만 생긴다). PermissionRequest 는 work-flag(세션 상태)로만 쓴다.
-//  그래서 여기 8개 = 'codex 가 지원' ∩ '조직 훅으로 등록 가능' 의 전부다. 특히 **PreToolUse 가 핵심** —
+//  그래서 여기 9개 = 'codex 가 지원' ∩ '조직 훅으로 등록 가능' 의 전부다. 특히 **PreToolUse 가 핵심** —
 //  이게 없던 동안 코덱스엔 조직 거버넌스(쓰기게이트·승인차단)가 통째로 없었다(claude 만 적용, 불변식 ② 위반).
+//  실측 장치: kit/setup/codex-e2e.test.mjs(실 codex 바이너리 + 로컬 스텁 모델 — 계정 불요).
 const CODEX_RUNNER_EVENTS = [
   ["SessionStart", "startup|resume|clear", 10],
+  ["SessionEnd", null, 3],
   ["UserPromptSubmit", null, 15],
   ["PreToolUse", ".*", 15],
   ["PostToolUse", ".*", 15],
@@ -475,6 +481,10 @@ function codexExtraMcpLines() {
       if (!/^[A-Za-z0-9_-]+$/.test(s.name)) continue; // TOML 키 안전
       if (seen.has(s.name)) continue; // 중복 이름 스킵
       seen.add(s.name);
+      // #1884 — 우리가 네이티브로 심는 이름(lively·lively-local)은 건너뛴다. TOML 은 **같은 테이블이 두 번 나오면 파일 전체가
+      //  로드 실패**하므로(위 배열 command 결함과 같은 클래스), 조직이 종전 우회로(org MCP 에 lively-local 수동 등록)를
+      //  남겨 둔 채 이 버전을 받으면 코덱스 배선이 통째로 죽는다. 네이티브 블록이 정본이다.
+      if (s.name === "lively" || s.name === "lively-local") continue;
       out.push(`[mcp_servers.${s.name}]`);
       if (s.transport === "stdio" && s.command) {
         // ⚠ codex 스키마는 **command=문자열 + args=배열**이다(0.142.0 실측: `codex mcp add probe -- lively mcp-local`
@@ -550,11 +560,28 @@ function codexLivelyServerLines(mcpUrl) {
   ];
 }
 
+// lively-local — 로컬 조작 stdio MCP(#899, 레포·워크트리 툴). claude 는 `lively mcp add` 로 심는데(cli/lively.mjs
+//  registerClaudeMcpIn) codex 엔 그 자리가 없었다 → 코덱스 멤버는 로컬 레포 툴이 통째로 없었다(#1884 패리티 홀).
+//  lively 본체와 같은 조건(심+프록시 파일 존재 = stdio 경로)에서만 싣는다 — http 폴백 상태에선 CLI 자체가 없어 서버도 못 뜬다.
+function codexLocalServerLines() {
+  const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
+  const proxy = join(LIVELY, "lib", "lively-mcp-gateway.mjs");
+  let transport = "";
+  try { transport = readFileSync(join(LIVELY, "mcp-transport"), "utf8").trim(); } catch { /* 기본 = stdio */ }
+  if (transport === "http" || !existsSync(shim) || !existsSync(proxy)) return [];
+  return [
+    "[mcp_servers.lively-local]",
+    `command = ${JSON.stringify(fwd(shim))}`,
+    'args = ["mcp-local"]', "",
+  ];
+}
+
 function codexManagedBlock(mcpUrl) {
   const wf = codexHookCmd("work-flag.mjs");
   return [
     CDX_BEGIN, "",
     ...codexLivelyServerLines(mcpUrl),
+    ...codexLocalServerLines(),
     ...codexAutoApproveLines(), // [mcp_servers.lively.tools.X] approval_mode="approve" — 자동승인 툴
     ...codexExtraMcpLines(),
     // ── 전용 훅 — claude 의 userLevelHooksBlock 과 같은 자리 ──
@@ -572,6 +599,9 @@ function codexManagedBlock(mcpUrl) {
     ...cdxHook("PermissionRequest", wf, 5),
     ...cdxHook("Stop", codexHookCmd("stop-writeback-gate.mjs"), 10),
     ...cdxHook("Stop", wf, 5),
+    // #1059 사용자 정상 종료 보고 — claude 의 SessionEnd 자리. codex 0.149.1 부터 발화(0.142 는 무시 — 위 CODEX_RUNNER_EVENTS
+    //  주석). timeout 3 = codex 가 클램프하는 상한.
+    ...cdxHook("SessionEnd", wf, 3),
     // ── 커스텀 훅 런너 — 이벤트별 고정 엔트리 1개(훅 본문은 런너가 런타임에 fetch) ──
     ...CODEX_RUNNER_EVENTS.flatMap(([event, matcher, timeout]) =>
       cdxHook(event, codexRunnerCmd(event), timeout, matcher)),

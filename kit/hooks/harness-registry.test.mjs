@@ -294,5 +294,20 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
   eq("H11[E33] antigravity 정규화 이름을 벗긴다", mcpToolName("antigravity", "lively", "mcp__lively__knowledge_save"), "knowledge_save");
 }
 
+// ── I. 셸로 오는 편집(#1884) — codex 0.149.1+gpt-5.6 실측: tool_name=Bash · command="apply_patch <<'EOF' …" ──
+//  edit 축(툴명)만으론 그 세션의 편집이 전부 셸로 분류된다. editShellRe 축이 있는 하네스에서만 참.
+{
+  const { isShellEdit, HARNESS } = await import("./harness-registry.mjs");
+  const heredoc = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\nEOF";
+  eq("I1 codex Bash apply_patch 히어독 → 편집", isShellEdit("codex", "Bash", { command: heredoc }), true);
+  eq("I2 codex Bash 선행 공백 허용", isShellEdit("codex", "Bash", { command: "  apply_patch <<'EOF'\nx\nEOF" }), true);
+  eq("I3 codex Bash 인자에만 apply_patch → 아님", isShellEdit("codex", "Bash", { command: "echo apply_patch" }), false);
+  eq("I4 codex 배열 command 도 본다", isShellEdit("codex", "Bash", { command: ["apply_patch", "<<'EOF'"] }), true);
+  eq("I5 codex apply_patch **툴**은 셸 편집 아님(edit 축 담당)", isShellEdit("codex", "apply_patch", { command: "*** Begin Patch" }), false);
+  eq("I6 claude Bash 에 같은 문자열 → 아님(표에 editShellRe 없음)", isShellEdit("claude", "Bash", { command: heredoc }), false);
+  eq("I7 입력 없음 → 아님(fail-open)", isShellEdit("codex", "Bash", undefined), false);
+  eq("I8 codex 이벤트에 SessionEnd 포함(0.149.1 실측)", HARNESS.codex.events.includes("SessionEnd"), true);
+}
+
 console.log(`\n${fail ? "✗" : "✓"} harness-registry: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

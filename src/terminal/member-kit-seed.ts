@@ -59,10 +59,15 @@ export interface KitSeedDeps {
 const defaultDeps: KitSeedDeps = {
   getMember: (id) => getMember(id),
   mintToken: (memberId, scopes, slug) => mintCentralBoxToken(memberId, scopes, slug, false),
-  buildBundle: async () => (await buildInstallBundle("claude")).buffer,
+  // #1884 — claude·codex 양쪽 배선(하네스 패리티 불변식 ②). 종전엔 claude 만 심어 매니지드 codex 세션은 MCP·훅·대화 uuid
+  //  매핑이 통째로 없었다(대화창 404). 발행은 다중 하네스 스펙("claude,codex")을 받는다(generator dispatchEmit).
+  buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer,
 };
+/** 멤버 홈에 배선할 하네스 — 테넌트 이미지가 싣는 바이너리와 같은 집합(lvly-cloud tenant-image/Dockerfile). 없는 하네스를
+ *  적어도 설치기는 설정 파일만 쓰므로 해가 없지만(그 하네스를 띄우면 그때 catalog 의 미설치 안내), 있는 하네스를 빠뜨리면 조용히 반쪽이다. */
+export const SEED_HARNESSES = "claude,codex";
 
-// 설치 스크립트 — 고정 리터럴(값은 홈 경로뿐, osUser 는 slug 문자셋). tar·node·claude 는 테넌트 이미지에 있다.
+// 설치 스크립트 — 고정 리터럴(값은 홈 경로뿐, osUser 는 slug 문자셋). tar·node·claude(·codex) 는 테넌트 이미지에 있다.
 //  실패 시 어떤 단계였는지 stderr 로 남긴다(memberSh 가 에러 메시지로 전달).
 export function installScript(home: string): string {
   return [
@@ -74,7 +79,7 @@ export function installScript(home: string): string {
     `trap 'rm -rf "$K"' EXIT`,
     `tar -xzf "$H/${BUNDLE_TMP}" -C "$K"`,
     `[ -f "$K/setup/user-install.mjs" ] || { echo "번들에 user-install 없음" >&2; exit 1; }`,
-    `node "$K/setup/user-install.mjs" --harness claude >/dev/null`,
+    `node "$K/setup/user-install.mjs" --harness ${SEED_HARNESSES} >/dev/null`,
     `STORE_URL="http://localhost:8080/mcp" bash "$K/setup/register-clients.sh" >/dev/null`,
     `rm -f "$H/${BUNDLE_TMP}"`,
     `printf %s ok > "$H/${MARKER}"`,
