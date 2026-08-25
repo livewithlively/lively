@@ -11,6 +11,7 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
+import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
@@ -943,6 +944,19 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //  #1221 — 같은 경로로 **실행 단계**(state: busy·waiting·idle)까지 받는다. 새 엔드포인트를 따로 두지 않은 이유는
   //   훅과 게이트웨이가 **따로 업데이트되기 때문**이다: 새 훅 + 구 게이트웨이는 모르는 필드를 무시하고 활동 보고만
   //   되고(무회귀), 구 훅 + 새 게이트웨이는 state 없이 종전대로 동작한다. 새 경로였다면 앞 조합이 404 로 죽는다.
+  // 전이 하나를 그 세션 주인에게 민다(#1842). **무엇이 알림인지는 여기서 정하지 않는다** — 앱이 해석한다.
+  //  이름은 지금 하는 일(pane 제목)이 있으면 그걸, 없으면 세션 라벨을 준다(앱이 다시 폴백한다).
+  const notifyPhaseChange = async (id: string, owner: string, change: { prev: string | null; phase: string; at: number }, nameHint?: string): Promise<void> => {
+    try {
+      // 노드 세션의 tmux 는 그 PC 에 있어 getSessionLabel(로컬 tmux)이 못 읽는다 → 호출자가 아는 이름을 준다.
+      publishNotify(owner, {
+        type: "session", id, name: nameHint || (await getSessionLabel(id).catch(() => "")) || "",
+        prev: change.prev, phase: change.phase,
+        key: sessionEventKey(id, change.phase, change.at), ts: change.at,
+      });
+    } catch (e) { logger.warn({ err: e, id }, "알림 전달 실패(비치명)"); }
+  };
+
   app.post("/api/ui/terminal/sessions/:id/active", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const id = req.params.id;
@@ -953,7 +967,10 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     // #1791 — 노드 세션도 이제 행이 있다(node_id). 그 세션의 tmux 는 노드에 있으니 아래 릴레이 분기로(여기서 로컬 tmux 를 만지면 안 된다).
     if (st && !st.node_id) {
       if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
-      await markSessionActive(id, phase).catch((e) => logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"));
+      const change = await markSessionActive(id, phase).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
+      // #1842 — 단계가 **바뀐** 순간 그 자리에서 앱으로 민다. 폴링이 30초 뒤에 같은 사실을 다시 발견하는 대신,
+      //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
+      if (change) void notifyPhaseChange(id, me, change);   // 응답을 막지 않는다 — 훅은 핫패스다
       res.json({ ok: true });
       return;
     }
@@ -967,8 +984,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (ns.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     // 구 노드(caps 미선언)는 이 op 를 모른다 → 보내지 않는다. 그 노드 세션은 종전대로 자기 tmux 스크래핑으로 판정된다(무회귀).
     if (nodeSupports(ns.node.id, "markActive")) {
-      await nodeRpc(ns.node.id, "markActive", { id, state: phase })
-        .catch((e) => logger.warn({ err: e, id }, "노드 활동 보고 릴레이 실패(비치명)"));
+      const relay = await nodeRpc(ns.node.id, "markActive", { id, state: phase })
+        .catch((e) => { logger.warn({ err: e, id }, "노드 활동 보고 릴레이 실패(비치명)"); return null; });
+      // #1842 — 노드가 돌려준 전이를 그대로 민다. 구 노드는 change 를 안 보내므로 undefined → 폴링이 커버한다(무회귀).
+      const change = (relay as { change?: { prev: string | null; phase: string; at: number } | null } | null)?.change;
+      if (change) void notifyPhaseChange(id, me, change, ns.label);
     }
     res.json({ ok: true });
   }));

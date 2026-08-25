@@ -11,7 +11,7 @@
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 //  ④ **화면은 웹 UI 그대로다**(web-shell.mjs) — 설치·로그인·키트가 갖춰지면 창에 게이트웨이의 /ui/ 를 싣는다.
 //     앱에 화면 코드를 한 벌 더 두지 않는다(웹이 곧 앱). 마법사(renderer/)는 갖춰지기 전과 노드·점검 설정에만 쓴다.
-import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session, clipboard } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session, clipboard, Notification } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -31,6 +31,8 @@ import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReady
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
+import { APP_ID } from "./win-stale-install.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, SEEN_MAX } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -216,9 +218,13 @@ function renderTray() {
   if (!tray) return;
   const model = trayMenuModel(state);
   tray.setToolTip(`라이블리 — ${model[0]?.label ?? ""}`);
-  tray.setContextMenu(Menu.buildFromTemplate(model.map((m) => (m.type === "separator"
+  // 서브메뉴(알림 #1842)를 위해 재귀로 그린다 — 항목이 submenu 를 가지면 클릭이 아니라 펼침이다.
+  const toTemplate = (m) => (m.type === "separator"
     ? { type: "separator" }
-    : { label: m.label, type: m.type, checked: m.checked, enabled: m.enabled !== false, click: () => onMenu(m.id) }))));
+    : m.submenu
+      ? { label: m.label, enabled: m.enabled !== false, submenu: m.submenu.map(toTemplate) }
+      : { label: m.label, type: m.type, checked: m.checked, enabled: m.enabled !== false, click: () => onMenu(m.id) });
+  tray.setContextMenu(Menu.buildFromTemplate(model.map(toTemplate)));
 }
 function onMenu(id) {
   if (id === "open") return showMain();          // 갖춰졌으면 라이블리 화면, 아니면 마법사
@@ -508,6 +514,156 @@ function pushWebUpdate() {
   if (key === webUpdateSent) return;
   webUpdateSent = key;
   sendWeb(IPC_WEB.UPDATE, payload);
+}
+
+// ── 앱 알림 (#1842) ─────────────────────────────────────────────────────────
+// 트레이 상주 앱만이 **창 없이도** 살아 있다(window-all-closed = noop). 그래서 "화면을 안 보고 있을 때 부르는"
+//  알림은 여기서만 만들 수 있다 — 웹 화면이 하면 창을 닫는 순간 눈이 먼다. 판정은 전부 notify.mjs(순수·표로 검증).
+const NOTIFY_POLL_MS = 30_000;      // 세션 상태 조회는 tmux 를 훑는다 — 상태 폴링(refreshState)과 같은 리듬으로 둔다
+// 설정은 **서버가 정본**이다(#1842) — 사람 단위. 기기별 파일에 두면 사무실 맥에서 끈 것이 노트북에선
+//  그대로 떠 "껐는데 뜬다"가 된다. 끄고 켜는 자리는 웹 [내 정보 ▸ 알림] 한 곳이고, 앱은 읽기만 한다.
+//  이 캐시는 폴링이 갱신한다 — 서버를 못 읽는 동안에도 마지막으로 받은 값으로 계속 동작한다.
+let notifySnapshot = null;          // 직전 세션 스냅샷. null = 콜드스타트(첫 폴은 기준선만 잡고 아무것도 안 띄운다)
+let notifyPolling = false;
+let personSince = null;             // 사람 알림 커서 — 서버가 준 `now`. null 이면 아직 한 번도 안 받았다
+let personSeen = null;              // 이미 띄운 사람 알림 key. null = 콜드스타트(첫 폴은 기준선만)
+// 실시간 스트림(#1842 3차) — 이게 붙어 있으면 세션 배너는 **스트림만** 만든다(폴링은 기준선만 갱신).
+let streamCtl = null;               // 현재 연결의 AbortController
+let streamAlive = false;            // 붙어 있나 — 폴링 배너 게이팅의 유일한 근거
+let streamTries = 0;                // 연속 실패 횟수(백오프)
+let streamTimer = null;             // 재연결 예약
+const streamSeen = new Set();       // 이미 띄운 스트림 사건 key(재연결 직후 중복 방지)
+
+let notifyPrefsCache = { ...NOTIFY_DEFAULTS };   // 서버에서 마지막으로 받은 값. 받기 전엔 전부 켜짐.
+
+/** 유형별 켜짐 — 서버 값. 아직 못 받았으면 기본값(전부 켜짐): 설정을 못 읽었다고 알림이 멎으면 안 된다. */
+function notifyPrefs() { return notifyPrefsCache; }
+
+/** 배너 한 장. 클릭하면 그 세션 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
+function showBanner({ title, body, event }) {
+  try {
+    if (!Notification.isSupported()) return;          // 리눅스 등 알림 데몬이 없는 환경 — 조용히 넘긴다
+    const n = new Notification({ title, body });
+    n.on("click", () => {
+      if (event && event.id) return openSessionInApp(event.id);        // 세션 알림 → 그 세션 화면
+      if (event && event.link) return openHashInApp(event.link);       // 사람 알림 → 그 프로젝트 화면
+      showMain();                                                      // 묶음 배너 — 갈 곳이 하나가 아니다
+    });
+    n.show();
+  } catch { /* OS 가 알림을 막았어도 앱은 계속 돈다 */ }
+}
+
+/** 알림 클릭 → 앱 창을 띄우고 그 화면으로. 이미 실려 있으면 해시만 바꾼다(전체 리로드는 보던 화면을 날린다). */
+function openHashInApp(hash) {
+  const r = showApp();
+  if (!r || !r.ok || !hash || !appWin || appWin.isDestroyed()) return;
+  const wc = appWin.webContents;
+  const go = () => { try { void wc.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`).catch(() => {}); } catch { /* 창이 사라졌다 */ } };
+  if (wc.isLoading()) wc.once("did-finish-load", go); else go();
+}
+/** 세션 알림 클릭 — id 형식을 먼저 본다(응답을 그대로 주소로 쓰지 않는다). */
+function openSessionInApp(id) { openHashInApp(sessionHash(id)); }
+
+/**
+ * 실시간 스트림에 붙는다 (#1842). 게이트웨이가 하네스 훅 보고를 받는 **그 순간** 사건을 밀어 주므로,
+ *  "AI 를 여러 개 병렬로 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다(폴링은 폴백으로 남는다).
+ *
+ * ⚠ 이 함수는 연결이 끊길 때까지 돌아온다 — 호출자는 await 하지 않고 재연결만 예약한다.
+ */
+async function connectNotifyStream() {
+  const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
+  const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
+  if (!token) { scheduleStreamRetry(); return; }
+  const ctl = new AbortController();
+  streamCtl = ctl;
+  try {
+    const res = await fetch(`${gw}/api/ui/notify/stream`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+      signal: ctl.signal,
+    });
+    // 구 게이트웨이엔 이 표면이 없다(404) — 조용히 폴링만 쓴다(그래서 폴링을 없애지 않았다).
+    if (!res.ok || !res.body) { scheduleStreamRetry(); return; }
+    streamAlive = true; streamTries = 0;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const { events, rest } = parseSse(buf);
+      buf = rest;
+      const prefs = notifyPrefs();
+      for (const ev of events) {
+        const hit = streamEvent(ev, streamSeen, prefs);
+        if (!hit) continue;
+        streamSeen.add(hit.key);
+        while (streamSeen.size > SEEN_MAX) streamSeen.delete(streamSeen.values().next().value);
+        showBanner({ ...bannerFor(hit), event: hit });
+      }
+    }
+  } catch { /* 끊김·타임아웃·게이트웨이 재시작 — 아래에서 다시 붙는다 */ }
+  finally {
+    streamAlive = false;
+    if (streamCtl === ctl) streamCtl = null;
+    scheduleStreamRetry();
+  }
+}
+
+/** 재연결 예약 — 지수 백오프. 게이트웨이가 재시작 중일 때 초당 재접속으로 때리지 않는다. */
+function scheduleStreamRetry() {
+  if (quitting || streamTimer) return;
+  const wait = reconnectDelay(streamTries++);
+  streamTimer = setTimeout(() => { streamTimer = null; void connectNotifyStream(); }, wait);
+  if (streamTimer.unref) streamTimer.unref();
+}
+
+/**
+ * 한 번의 폴 — 세션 목록을 받아 직전 스냅샷과 견주고, 생긴 사건만 배너로 띄운다.
+ *  ⚠ 준비 안 됐거나(설치·로그인 전) 토큰이 없으면 **기준선을 버린다** — 다시 로그인했을 때 그 사이 사건이
+ *   한꺼번에 되살아나지 않게(콜드스타트로 되돌린다). 반대로 네트워크 실패는 기준선을 **유지**한다(다음 폴에서 이어 본다).
+ */
+async function pollNotifications() {
+  if (notifyPolling) return;
+  const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
+  const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
+  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
+  notifyPolling = true;
+  try {
+    const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return;                               // 401 은 watchTokenRejection 이 따로 처리한다
+    const data = await res.json();
+    const next = snapshotSessions(data && data.sessions);
+    await pollPersonFeed(gw, token);                     // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
+    const prefs = notifyPrefs();
+    const events = diffSessions(notifySnapshot, next, prefs);
+    notifySnapshot = next;                               // ★ 기준선은 스트림 유무와 무관하게 늘 갱신한다 —
+    //  연결이 끊기는 순간 폴링이 그 자리에서 이어받아야 하는데, 기준선이 낡아 있으면 그 사이 전이를 통째로
+    //  놓치거나(오래된 스냅샷과 비교) 과거를 한꺼번에 다시 띄운다.
+    if (!streamAlive) for (const b of planBanners(events)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
+  } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
+  finally { notifyPolling = false; }
+}
+
+/**
+ * 사람이 나를 부른 것(멘션·댓글·담당) — 판정은 서버가 한다(/api/ui/notify/feed). 앱은 커서를 들고 다니며
+ *  새로 온 것만 띄운다. **커서 전진은 성공했을 때만** 한다 — 실패했는데 전진시키면 그 사이 알림이 영영 사라진다.
+ */
+async function pollPersonFeed(gw, token) {
+  const url = `${gw}/api/ui/notify/feed` + (personSince ? `?since=${encodeURIComponent(personSince)}` : "");
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) return;                                 // 구 게이트웨이엔 이 엔드포인트가 없다(404) — 조용히 넘긴다
+  const data = await res.json();
+  // 서버가 실어 보낸 알림 설정을 캐시에 반영한다(왕복을 하나 더 만들지 않는다).
+  if (data && data.prefs && typeof data.prefs === "object") notifyPrefsCache = { ...NOTIFY_DEFAULTS, ...data.prefs };
+  const events = pickPersonEvents(data && data.items, personSeen, notifyPrefs());
+  if (!personSeen) personSeen = new Set();             // 첫 폴 = 기준선(위 pickPersonEvents 가 이미 빈 배열을 줬다)
+  rememberSeen(personSeen, events);
+  personSince = (data && data.now) || personSince;     // 서버 시계를 쓴다 — 앱 시계와 어긋나도 사건을 건너뛰지 않게
+  for (const b of planPersonBanners(events)) showBanner(b);
 }
 
 // ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────
@@ -1095,6 +1251,9 @@ else {
     //  이건 호출자 쪽 근본 방어 — 둘이 겹쳐야 setup·tmux 탐색까지 안전하다). 실패는 무해(현재 PATH 유지).
     enrichPathFromLoginShell(process.env, process.platform, (sh, argv) =>
       execFileSync(sh, argv, { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] }));
+    // Windows: 이게 없으면 배너가 아예 안 뜨거나 'electron.app.Electron' 이름으로 뜬다(알림 센터가 앱을 못 묶는다).
+    //  설치본의 appId(package.json build.appId)와 **같은 문자열**이어야 한다 — 다르면 알림 설정이 두 앱으로 갈린다.
+    try { app.setAppUserModelId(APP_ID); } catch { /* 비치명 */ }
     tray = new Tray(trayImage());
     tray.on("click", () => showMain());            // Windows·Linux 는 좌클릭이 자연스럽다
     try { startedHidden = startedHiddenFrom({ platform: process.platform, argv: process.argv, loginItem: app.getLoginItemSettings({ args: AUTOLAUNCH_ARGS }) }); } catch { startedHidden = false; }
@@ -1115,6 +1274,12 @@ else {
     void startUpdateCheckLoop();
     // Windows: 다른 자리에 옛 설치본이 남아 있나 — 있으면 정리 카드·트레이 항목이 뜬다(옛 바로가기가 옛 버전을 여는 것의 뿌리).
     void detectStaleInstall({ force: true });
+    // 앱 알림(#1842) — 첫 폴은 기준선만 잡는다(콜드스타트). 이후 30초마다 '지금 사람을 불러야 할 사건'만 배너로.
+    void pollNotifications();
+    const ntf = setInterval(() => void pollNotifications(), NOTIFY_POLL_MS);
+    if (ntf.unref) ntf.unref();
+    // 실시간 스트림 — 이게 주 경로다(위 폴링은 연결이 끊긴 동안의 폴백).
+    void connectNotifyStream();
   });
   // ★ 창을 다 닫아도 종료하지 않는다(트레이 상주). 기본 동작(win/linux 종료)을 반드시 덮어야 한다.
   app.on("window-all-closed", () => { /* noop — 트레이로 산다 */ });

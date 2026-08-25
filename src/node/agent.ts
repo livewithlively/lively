@@ -260,8 +260,11 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     //  확인)는 게이트웨이가 이미 끝냈다(F7 — runOp 는 기계적 실행만). 모르는 state 는 무시하고 활동 시각만 갱신.
     case "markActive": {
       const st = args.state;
-      await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
-      return { ok: true };
+      // #1842 — 전이(prev→phase)를 게이트웨이에 **돌려준다**. 노드 세션의 tmux 는 이 PC 에 있어 게이트웨이가
+      //  직접 볼 수 없으므로, 이 응답이 없으면 다른 PC 에서 도는 세션만 실시간 알림에서 빠져 30초 폴링에 묶인다.
+      //  구 게이트웨이는 이 필드를 모르고 무시한다(무회귀).
+      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
+      return { ok: true, change: change ?? null };
     }
     // #1664 — 게이트웨이가 이 노드의 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). 인가(소유·초대)는
     //  게이트웨이가 끝냈다는 전제(F7). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와 flush 지연 규약은

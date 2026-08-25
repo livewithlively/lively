@@ -128,6 +128,16 @@ export async function initV6UiVis(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
   `);
 
+  // ── 알림 설정(#1842) — 어떤 순간에 OS 배너를 받을지. **사람 단위**(기기 단위가 아니다).
+  //  기기별로 두면 사무실 맥에서 끈 것이 노트북에선 그대로 떠 "껐는데 뜬다"가 된다. 끄고 켜는 자리도
+  //  [내 정보 ▸ 알림] 한 곳이라, 데스크톱 앱은 이 값을 읽기만 한다(자기 파일에 따로 두지 않는다).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS member_notify_pref(
+      member_id TEXT PRIMARY KEY,
+      prefs JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+
   // ── 맥락 가시성(#1291) — 열람 가시성(read)을 프로젝트 계층 밖(지식·자료)까지 확장하고, 대상(audience)에 팀 축을 연다. ──
   //  전부 additive + 기본값이 현행 동치('open') → 아무도 잠그지 않으면 동작 변화 0.
   //  ⚠ project_list_member(멤버 grant)는 **건드리지 않는다**: PK 를 (list_id, subject_kind, member_id) 로 확장하면
