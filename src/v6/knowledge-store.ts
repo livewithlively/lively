@@ -100,7 +100,11 @@ export function knowledgeListFilter(f: KnowledgeFilter): { join: string; where: 
     params.push(lcs);
     wh.push(`k.lifecycle = ANY($${params.length}::text[])`);
   } else wh.push(`k.lifecycle='active'`);
-  if (f.q) wh.push(grepWhere(["k.title", "k.body_md"], parseGrep(f.q), params));  // grep 매처(regex|토큰 AND) — knowledge_grep 과 동일 의미
+  //  ⚠ **name(=key)도 본다**(2026-08-25 상민님 신고: "지식 key 로 검색하면 안 뜬다"). 종전엔 title·body_md 만 봐서,
+  //   key 로 찾으면 **그 key 를 본문에 인용한 다른 문서**만 나오고 정작 그 문서는 안 나왔다(실측:
+  //   `omni-unified-search-spotlight-1835` → 그 위키링크를 담은 다른 지식 1건). key 는 사람이 실제로 옮겨 적는 이름이다
+  //   (위키링크 `[[key]]`·URL `#/k/<key>`·에이전트의 knowledge_get 인자) — 그걸로 못 찾는 검색은 반쪽이다.
+  if (f.q) wh.push(grepWhere(["k.name", "k.title", "k.body_md"], parseGrep(f.q), params));  // grep 매처(regex|토큰 AND) — knowledge_grep 과 동일 의미
   const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
   return { join, where, params };
 }
