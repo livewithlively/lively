@@ -35,6 +35,7 @@ import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessio
 import { ctxMenu } from './panes-kit.js';
 import { switcherName, switcherTop } from './switcher.js';
 import { railIsOpen, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
+import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 //  ⚠ 병합 판단(2026-08-25): main 의 **사이드바 3단 테마 토글**(#1683 themeSeg)은 여기 두지 않는다 — 그 기능은
 //   me-modal 안으로 옮겨 갔고(테마 + 열린 탭 적용 + 하네스 동기화까지) 같은 조작을 사이드바 발치에 둘로 두지 않는다.
@@ -253,8 +254,12 @@ export interface SideHooks {
   navHost?: () => HTMLElement | null;
   /** 앱 인스턴스 고정이 바뀌었다 — 목록을 다시 계산해야 한다(정렬은 main 이 안다). */
   onPinChanged?: () => void;
-  /** #2016 — 레일이 고른 구역(홈 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). */
+  /** #2016 — 레일이 고른 구역(홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). */
   section?: () => RailSection;
+  /** #2016 — 레일 여닫기. 슬랙처럼 **맨 윗줄 맨 왼쪽**(패널 아이콘)에 선다 — navHost 가 없는 브라우저에서만 여기 그린다
+   *  (데스크톱은 창 맨 윗줄의 ☰ 자리가 이미 그 단추다). */
+  onToggleRail?: () => void;
+  railOpen?: () => boolean;
 }
 
 export interface SideInstance {
@@ -362,7 +367,8 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
     archive: ['M3 6h18v4H3z', 'M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9', 'M10 14h4'],
     trash: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13', 'M10 11v6M14 11v6'],
   };
-  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
+  //  #2016 — 모양은 icons.ts 한 벌에서 온다(레일·도크·행이 같은 붓). 위 D 는 그 표에 없을 때의 폴백이다.
+  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d: ICONS[kind] || D[kind].join(' ') }));
 }
 
 let appListEl: HTMLElement | null = null;
@@ -400,6 +406,7 @@ function render(): void {
   //    사이드바가 갈아엎이면 방금 보던 목록이 사라진다.
   const sec: RailSection = hooks.section?.() || 'home';
   sideRoot?.setAttribute('data-sec', sec);
+  if (sec === 'inbox') { renderInboxSide(); return; }
   if (sec === 'sess') { renderSessions(); return; }
   if (sec === 'proj') { renderProjects(); return; }
   if (sec === 'wiki') { renderWiki(); return; }
@@ -433,9 +440,27 @@ function findInput(ph: string): HTMLInputElement {
   return inp;
 }
 
-/** 구역 발치 — 데스크톱 업데이트 알림(#1838)은 어느 구역에서나 같은 자리에 선다. */
+/** 구역 발치 — 어느 구역에서나 같다: 데스크톱 업데이트 알림(#1838) + **도크 셋**(아카이브 · 휴지통 · 외부 앱 연결).
+ *  원준 2026-08-26: "이전에 아래에 있었던 아카이브랑 휴지통은 어디 감? 거기에 외부 앱 연결도 만들자." — 치워 둔 곳과
+ *  바깥으로 나가는 문은 **어느 구역에서든 같은 자리**에 있어야 찾는다. 아이콘 아래 이름을 둔다(아이콘만 늘어선
+ *  도크는 무엇인지 안 읽혔다 — 종전 도크 여섯의 교훈). */
 function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
-  return el('footer', { class: 'v2-side-foot v2-side-foot--apps' }, updateSlot(), ...rows);
+  const data = last ? last.data : null;
+  const ak = last ? last.activeKey() : '';
+  const me = meId();
+  const archivedN = data ? data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p)).length : 0;
+  const trashedN = data ? data.projects.filter((p) => isTrashedProj(p)).length
+    + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length : 0;
+  const dock = (key: 'archive' | 'trash' | 'connect', label: string, n: number, title: string): HTMLElement =>
+    el('a', { class: 'v2-dock-btn' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title, 'aria-label': label + (n ? ` ${n}` : '') },
+      icon(key === 'connect' ? 'link' : key, 'v2-dock-ic'),
+      el('span', { class: 'v2-dock-t', text: label }),
+      n ? el('span', { class: 'v2-dock-n', text: String(n) }) : null);
+  return el('footer', { class: 'v2-side-foot v2-side-foot--apps' }, updateSlot(), ...rows,
+    el('nav', { class: 'v2-app-dock v2-app-dock--3', 'aria-label': '치워 둔 곳 · 연결' },
+      dock('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'),
+      dock('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'),
+      dock('connect', '외부 앱 연결', 0, '외부 앱 연결 — 슬랙·노션·드라이브 같은 바깥 서비스를 잇습니다')));
 }
 
 /** 발치의 '갈 곳' 한 줄(세션 이력 · 아카이브 · 휴지통) — 목록의 항목이 아니라 같은 급의 문이다. */
@@ -449,11 +474,10 @@ function footLink(href: string, icon: Parameters<typeof glyph>[0], text: string,
 
 function renderHomeApps(): void {
   if (!last) return;
-  const { host, data } = last;
+  const { host } = last;
   const instances = hooks.instances!();
   const q = sideFilter.trim().toLowerCase();
   const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
-  const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
@@ -525,16 +549,10 @@ function renderHomeApps(): void {
   //   대신 발치 도크에 있던 넷 중 **확인할 것 · 리브 · 외부 앱 연결**이 목록 위 고정 행으로 돌아온다 —
   //   셋 다 '홈에서 늘 가는 곳'이고, 아이콘만 여섯 늘어선 도크에서는 무엇인지 읽히지 않았다.
   //   아카이브 · 휴지통은 [프로젝트] 구역 발치로, 모든 앱은 레일의 [앱]으로 갔다.
+  //  #2016 2차 — 확인할 것·리브는 **레일**로 갔다(슬랙의 내 활동 자리). 홈 사이드바는 열린 앱 목록뿐이다.
+  //   아카이브·휴지통·외부 앱 연결은 어느 구역에서나 **발치 도크**(secFoot)에 있다.
   host.replaceChildren(
     ...(navHost ? [] : [navEl]),
-    el('div', { class: 'v2-fixed' },
-      el('a', { class: 'v2-nav' + (last.activeKey() === 'inbox' ? ' on' : ''), href: '#/inbox' },
-        glyph('inbox', 'v2-nav-ic'), el('span', { class: 'n', text: '확인할 것' }),
-        inboxN ? el('span', { class: 'v2-nav-cnt', text: String(inboxN) }) : null),
-      ...(navOn('liv') !== false ? [el('a', { class: 'v2-nav' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv' },
-        el('span', { class: 'v2-nav-lm', 'aria-hidden': 'true', text: 'L' }), el('span', { class: 'n', text: '리브' }))] : []),
-      el('a', { class: 'v2-nav' + (last.activeKey() === 'connect' ? ' on' : ''), href: '#/connect' },
-        glyph('link', 'v2-nav-ic'), el('span', { class: 'n', text: '외부 앱 연결' }))),
     el('section', { class: 'v2-app-space', 'aria-label': '앱' },
       secHead('앱', instances.length,
         //  새 작업은 목록 위 큰 버튼이 아니라 머리글의 ＋ 하나다(#1954) — 목록이 세로를 더 쓴다.
@@ -639,6 +657,34 @@ function renderSessions(): void {
   bindFindKey();
 }
 
+// ══ [확인할 것] 구역 (#2016 2차) — 슬랙 '내 활동'의 자리. 답을 기다리는 것과 끝났는데 아직 안 본 것. ══
+function renderInboxSide(): void {
+  if (!last) return;
+  const { host, data } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+  const live = data.sessions.filter((s) => isLive(s) && !isTrashedSess(s));
+  const waits = live.filter((s) => s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
+  const dones = live.filter((s) => s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
+  const rows: HTMLElement[] = [];
+  if (waits.length) { rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: `답 기다림 · ${waits.length}` })); rows.push(...waits.map((s) => sessInstRow(s, false))); }
+  if (dones.length) { rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: `작업 완료 · ${dones.length}` })); rows.push(...dones.map((s) => sessInstRow(s, false))); }
+  if (!rows.length) rows.push(el('p', { class: 'v2-empty', text: '지금 확인할 것이 없어요. 답을 기다리거나 막 끝난 세션이 여기 모입니다.' }));
+  const prevScroll = appListEl ? appListEl.scrollTop : 0;
+  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '확인할 것' }, ...rows);
+  appListEl = listEl;
+  host.replaceChildren(
+    ...(navHost ? [] : [navEl]),
+    el('section', { class: 'v2-app-space', 'aria-label': '확인할 것' },
+      secHead('확인할 것', waits.length + dones.length,
+        el('a', { class: 'v2-app-open', href: '#/inbox', title: '받은 알림까지 한 화면에서', 'aria-label': '확인할 것 화면 열기' }, icon('inbox'))),
+      listEl),
+    secFoot());
+  listEl.scrollTop = prevScroll;
+  keepSideScroll(listEl, 'v2-app-list');
+}
+
 // ══ [프로젝트] 구역 (#2016) — #1883 이전의 프로젝트 트리를 그대로 되살린다. ══════
 //  트리 기계(renderTree·projRow·sessRow·binRows)는 지우지 않고 남아 있었다 — 새 구역은 그 자리를 되찾은 것이다.
 function renderProjects(): void {
@@ -663,7 +709,7 @@ function renderProjects(): void {
       ...(fltCount() ? [filterSummary(fltCount())] : []),
       ...(newOpen ? [newProjRow()] : []),
       treeEl),
-    secFoot(...(binsPinned ? [el('div', { class: 'v2-bins v2-bins-fixed' }, ...binRows(data))] : [])));
+    secFoot());
 
   renderTree(rows);
   keepSideScroll(treeEl, 'v2-tree');
@@ -1124,7 +1170,18 @@ function navRow(): HTMLElement {
   //  맥이 아니면 **Alt+K** 를 적는다: Ctrl+K 도 먹지만 터미널이 포커스면 안 먹는다(그건 셸의 kill-line 이다).
   //  '거의 되는 키'를 적어 두면 안 될 때 고장으로 읽히므로, 화면에는 **어디서나 되는 쪽**을 적는다.
   const mac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '');
+  //  #2016 — 레일 여닫기는 슬랙처럼 **맨 윗줄 맨 왼쪽**의 패널 아이콘이다. 데스크톱(navHost 있음)은 창 맨 윗줄의
+  //   그 자리를 mobile.menuBtn 이 이미 차지하고 있어(같은 아이콘, 같은 동작) 여기선 브라우저에서만 그린다.
+  const railOn = !!hooks.railOpen?.();
+  const railBtn = hooks.onToggleRail && !hooks.navHost?.()
+    ? el('button', {
+        class: 'v2-navb v2-railtg', type: 'button', 'aria-expanded': String(railOn),
+        title: (railOn ? '레일 접기' : '레일 펼치기') + ' — ⌘⇧S', 'aria-label': railOn ? '레일 접기' : '레일 펼치기',
+        onclick: () => hooks.onToggleRail?.() },
+        icon('panel', 'v2-navb-ic'))
+    : null;
   return el('div', { class: 'v2-side-nav' },
+    railBtn,
     navArrow('back', st.back, hooks.onBack),
     navArrow('fwd', st.forward, hooks.onForward),
     el('button', {
@@ -1291,7 +1348,8 @@ function renderTree(rowsIn?: Row[]): void {
   if (hiddenDone && (!splitting || allOpen)) kids.push(el('button', { class: 'v2-tree-more', type: 'button', text: `숨긴 완료 프로젝트 ${hiddenDone}개 보기`, onclick: () => { showDone = true; saveFlag(DONE_KEY, true); redraw(); } }));
   // 아카이브·휴지통(#1851) — 트리 맨 아래 두 행(검색·필터 중에도 남는다: 치워 둔 것을 찾는 길이 렌즈에 가려지면 안 된다).
   //  발치에 고정해 두었으면 여기엔 없다(render() 가 트리 밖에 세운다).
-  if (!binsPinned) kids.push(el('div', { class: 'v2-bins' }, ...binRows(last.data)));
+  //  #2016 — 새 셸(구역이 있는 쪽)에서는 발치 도크가 아카이브·휴지통을 든다. 트리 안에 또 세우면 같은 문이 둘이다.
+  if (!binsPinned && !hooks.section) kids.push(el('div', { class: 'v2-bins' }, ...binRows(last.data)));
   treeEl.replaceChildren(...kids);
 }
 

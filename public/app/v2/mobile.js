@@ -10,6 +10,7 @@
 //  데스크톱(>900px)에선 바·배경막이 display:none 이고 서랍 클래스도 무시된다(40-v2.css) — 데스크톱 그림은 그대로다.
 //  판정은 CSS 미디어쿼리 하나(MQ)와 같은 문턱을 JS 도 본다(matchMedia) — 두 곳이 어긋나면 서랍이 열렸는데 안 보인다.
 import { el, sv } from '../core.js';
+import { ICONS } from './icons.js';
 export const MOBILE_MQ = '(max-width: 900px)'; // = 40-v2.css 모바일 블록의 문턱(종전 우패널 숨김 문턱과 같다 — 태블릿 세로 포함)
 /** #v2-root 에 모바일 크롬을 단다. bar 는 root 맨 앞, scrim 은 맨 뒤에 호출자가 끼운다(그리드 열 순서를 안 건드리게). */
 export function mountMobileChrome(root, side, aside) {
@@ -17,7 +18,9 @@ export function mountMobileChrome(root, side, aside) {
     const isMobile = () => mq.matches;
     // 아이콘 — 라인, 채움 없음(DS 규약). 24 뷰박스, 사이드바·탭과 같은 붓.
     const icon = (paths) => sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic', 'aria-hidden': 'true' }, ...paths.map((d) => sv('path', { d })));
-    const menuBtn = el('button', { class: 'v2-mbar-btn v2-mbar-menu', type: 'button', 'aria-label': '탐색 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-side' }, icon(['M4 7h16M4 12h16M4 17h16']));
+    const menuBtn = el('button', { class: 'v2-mbar-btn v2-mbar-menu', type: 'button', 'aria-label': '탐색 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-side' }, 
+    //  좁은 폭 = ☰(서랍) · 넓은 폭 = 패널 아이콘(레일 여닫기 — 슬랙 창 맨 윗줄 맨 왼쪽의 그것, #2016). 둘 중 하나만 보인다(CSS).
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic v2-mbar-ic--m', 'aria-hidden': 'true' }, sv('path', { d: 'M4 7h16M4 12h16M4 17h16' })), sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic v2-mbar-ic--w', 'aria-hidden': 'true' }, sv('path', { d: ICONS.panel })));
     //  제목은 두지 않는다(#1954 3차 상민님) — 창 맨 윗줄은 폭이 넓든 좁든 **같은 것**이어야 한다.
     //  지금 무엇을 보고 있는지는 좌측 목록의 활성 행이 이미 말하고, 화면 제목은 본문 문패가 든다.
     const slot = el('div', { class: 'v2-mbar-slot' });
