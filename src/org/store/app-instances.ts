@@ -16,6 +16,8 @@ export interface AppInstanceRow {
   page_key: string | null;
   title: string | null;
   state: Record<string, unknown>;
+  execution_host_kind: "central" | "remote" | null;
+  execution_host_id: string | null;
   status: AppInstanceStatus;
   created_at: string;
   updated_at: string;
@@ -31,6 +33,8 @@ function row(r: Record<string, unknown>): AppInstanceRow {
     page_key: r.page_key == null ? null : String(r.page_key),
     title: r.title == null ? null : String(r.title),
     state: r.state && typeof r.state === "object" && !Array.isArray(r.state) ? r.state as Record<string, unknown> : {},
+    execution_host_kind: r.execution_host_kind == null ? null : r.execution_host_kind as "central" | "remote",
+    execution_host_id: r.execution_host_id == null ? null : String(r.execution_host_id),
     status: r.status as AppInstanceStatus,
     created_at: new Date(String(r.created_at)).toISOString(), updated_at: new Date(String(r.updated_at)).toISOString(),
     closed_at: r.closed_at == null ? null : new Date(String(r.closed_at)).toISOString(),
@@ -62,6 +66,8 @@ export interface CreateAppInstanceInput {
   appId: string; owner: string; projectId: number | null;
   subjectKind?: string | null; subjectRef?: string | null;
   pageKey?: string | null; title?: string | null; state?: Record<string, unknown>;
+  executionHostKind?: "central" | "remote" | null; executionHostId?: string | null;
+  preserveExecutionOnConflict?: boolean;
 }
 
 /** subject가 있으면 멱등 확보, 없으면 매번 새 인스턴스. */
@@ -84,11 +90,11 @@ async function createAppInstanceTx(client: pg.PoolClient, input: CreateAppInstan
   const subject = !!input.subjectKind && !!input.subjectRef;
   const id = crypto.randomUUID();
   const inserted = await client.query(
-    `INSERT INTO org_app_instance(id,app_id,owner_member,project_id,subject_kind,subject_ref,page_key,title,state,status,closed_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,'active',NULL)
+    `INSERT INTO org_app_instance(id,app_id,owner_member,project_id,subject_kind,subject_ref,page_key,title,state,execution_host_kind,execution_host_id,status,closed_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,'active',NULL)
      ON CONFLICT DO NOTHING RETURNING *`,
     [id, input.appId, input.owner, input.projectId, input.subjectKind ?? null, input.subjectRef ?? null,
-     input.pageKey ?? null, input.title ?? null, JSON.stringify(input.state ?? {})],
+     input.pageKey ?? null, input.title ?? null, JSON.stringify(input.state ?? {}), input.executionHostKind ?? null, input.executionHostId ?? null],
   );
   if (inserted.rows[0]) {
     const instance = row(inserted.rows[0]);
@@ -98,10 +104,13 @@ async function createAppInstanceTx(client: pg.PoolClient, input: CreateAppInstan
   if (!subject) throw new Error("앱 인스턴스를 만들지 못했습니다");
   const found = await client.query(
     `UPDATE org_app_instance SET status='active', closed_at=NULL, updated_at=now(),
-        project_id=$5, page_key=COALESCE($6,page_key), title=COALESCE($7,title), state=$8::jsonb
+        project_id=$5, page_key=COALESCE($6,page_key), title=COALESCE($7,title), state=$8::jsonb,
+        execution_host_kind=CASE WHEN $11 THEN execution_host_kind ELSE $9 END,
+        execution_host_id=CASE WHEN $11 THEN execution_host_id ELSE $10 END
       WHERE app_id=$1 AND owner_member=$2 AND subject_kind=$3 AND subject_ref=$4 RETURNING *`,
     [input.appId, input.owner, input.subjectKind, input.subjectRef, input.projectId, input.pageKey ?? null,
-     input.title ?? null, JSON.stringify(input.state ?? {})],
+     input.title ?? null, JSON.stringify(input.state ?? {}), input.executionHostKind ?? null, input.executionHostId ?? null,
+     input.preserveExecutionOnConflict === true],
   );
   if (!found.rows[0]) throw new Error("앱 인스턴스를 찾지 못했습니다");
   const instance = row(found.rows[0]);
