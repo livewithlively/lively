@@ -143,10 +143,10 @@ function render(data, reload, deps) {
     // ── 발치 — 순간에 매이지 않는 것 하나. ──
     const foot = el('div', { class: 'v2a-foot' }, el('div', { class: 'v2a-mini' }, el('div', { class: 'v2a-mini-m' }, el('div', { class: 'v2a-mini-t' }, el('span', { text: '라이블리를 최신 상태로 유지하기' })), el('div', { class: 'v2a-mini-s' }, ...uiText('대화를 시작할 때 조용히 확인하고, 다음 대화부터 반영됩니다.'))), sw(() => on('self_update'), (v) => saveRuntime({ hooks: { ...hooks, self_update: v } }, v ? '최신 상태로 유지합니다' : '자동 업데이트를 끕니다'))), el('div', { class: 'v2a-more' }, el('button', { class: 'btn-text', type: 'button', text: '맥락 관리에서 더 자세히 보기 →',
         onclick: () => { deps.close(); location.hash = DEEP; } })));
-    const who = (data.members || []).length;
-    const head = el('div', { class: 'v2a-who' }, ...uiText(who > 1
-        ? `나와 팀원 ${who - 1}명이 함께 씁니다 — 여기서 바꾸면 모두의 AI에 적용됩니다.`
-        : '내 모든 대화에 적용됩니다.'));
+    //  범위 한 줄 — **인원 수를 세지 않는다**. 멤버 명부에는 봇·연동 계정·테스트 계정이 섞여 있어
+    //   그대로 세면 사람 수와 어긋난다(v2/switcher.ts 가 같은 이유로 명부 대신 '세션을 가진 사람'을 쓴다).
+    //   그래서 숫자 없이, 어느 워크스페이스에서도 참인 문장으로 범위만 말한다.
+    const head = el('div', { class: 'v2a-who' }, ...uiText('여기서 바꾸면 이 워크스페이스에서 여는 **모든 대화**에 적용됩니다 — 팀으로 쓰고 있다면 팀원의 AI에도 함께 적용돼요.'));
     const wrap = el('div', {}, head, tiles, aBody, bBody, cBody, foot);
     if (!canEdit) {
         wrap.prepend(el('p', { class: 'v2a-ro' }, ...uiText('보기만 할 수 있어요 — 바꾸는 것은 관리자만 됩니다.')));
