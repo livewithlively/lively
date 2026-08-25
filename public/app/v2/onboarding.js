@@ -824,7 +824,8 @@ export function renderOnboarding(host, ctx = {}) {
                     renderSB();
                 };
                 upDropZone(zone, zone, (items) => void sendAll(items));
-                $('#upPick', el).appendChild(upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub', label: '파일이나 폴더 고르기' }));
+                const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub', label: '파일이나 폴더 고르기' });
+                $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn); // 반환은 {btn, fileIn, dirIn} — input 도 DOM 에 있어야 click 이 된다
                 $('#upGo', el).onclick = () => goScene('ai');
                 $('[data-skip]', el).onclick = () => goScene('ai');
             },
