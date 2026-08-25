@@ -147,3 +147,33 @@ test("N21 처음 보는 세션이 이미 awaiting 이면 알린다 — 사용자
   const r = T([], [["새세션", true]]);
   assert.deepEqual(r.notify, ["새세션"]);
 });
+
+// ── 파생 규칙(#1891, dev 실측으로 발견) ────────────────────────────────────
+// 앱 토큰의 도구 allowlist 가 비면 lively 툴이 0개라, 알림 권한만 선언한 앱이 정작 app_notify 를
+// 못 부른다(403 "앱 권한 밖"). 그래서 매니페스트 파서가 notifications → app_notify 를 파생한다.
+// 이 규칙이 사라지면 알림 기능 전체가 조용히 죽는다 — 권한은 있는데 도구가 없어서.
+
+test("N22 ★notifications:true 는 app_notify 도구를 함의한다 — 없으면 알림이 통째로 막힌다", async () => {
+  const { parseAppManifest } = await import("./manifest.js");
+  const m = parseAppManifest({
+    id: "notify-app", title: "알림 앱", version: "1.0.0",
+    permissions: { notifications: true },
+  });
+  assert.ok(m.permissions.tools.includes("app_notify"), "app_notify 가 도구 allowlist 에 파생돼야 한다");
+});
+
+test("N23 알림 권한이 없으면 app_notify 도 파생되지 않는다", async () => {
+  const { parseAppManifest } = await import("./manifest.js");
+  const m = parseAppManifest({ id: "plain", title: "그냥 앱", version: "1.0.0" });
+  assert.equal(m.permissions.notifications, false);
+  assert.ok(!m.permissions.tools.includes("app_notify"));
+});
+
+test("N24 이미 적어 둔 도구 목록에 중복으로 넣지 않는다", async () => {
+  const { parseAppManifest } = await import("./manifest.js");
+  const m = parseAppManifest({
+    id: "both", title: "둘 다", version: "1.0.0",
+    permissions: { notifications: true, tools: ["app_notify", "knowledge_get"] },
+  });
+  assert.deepEqual(m.permissions.tools.filter((t: string) => t === "app_notify").length, 1);
+});
