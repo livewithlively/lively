@@ -34,6 +34,7 @@ import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.
 import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
 import { ee } from "../../enterprise/registry.js"; // #1601 — SSO 구현은 EE. 설정 표면은 코어에 남지만 '켜지나'는 EE 유무에 달렸다
 import { actorOf, restOnly, restRead, str } from "./shared.js";
+import { WORKER_POLICY_MAX, type WorkerPolicyPatch } from "../../apps/worker-policy.js";
 
 // #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
 //  source 가 중요하다: 관리탭에 값을 넣었는데 enabled 를 안 켰거나, 켰는데 env 가 먹고 있는 상황을
@@ -111,6 +112,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         session_memory_policy?: SessionMemoryPolicyPatch;
         session_reclaim_policy?: SessionReclaimPolicyPatch;
         delegate_policy?: DelegatePolicyPatch;
+        worker_policy?: WorkerPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
         hook_grace_ms?: number | null;
@@ -168,6 +170,27 @@ export const runtimeConfigCapabilities: Capability[] = [
       }
       // per-session cgroup 메모리 정책(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한. 잡값·범위는 아래 + normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 여기(관리탭)가 유일한 조절 창구(storage_policy 와 동일 교리).
+      // 앱 worker 조직 예산(#1780 Stage B) — 각 값 0 = 무제한/감시 끔. 상한 자체는 store 의 normalize 가 접지만,
+      //  **여기서 형태를 먼저 거른다**: 객체가 아니거나 숫자가 아닌 값이 오면 조용히 기본값으로 접히는 대신 400 으로 알린다
+      //  (관리자가 오타를 쳤을 때 "저장됐는데 안 먹는다"가 가장 나쁜 결과다).
+      if (input.worker_policy !== undefined) {
+        const raw = input.worker_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "worker_policy 는 객체여야 합니다");
+        const w = raw as Record<string, unknown>;
+        const num = (v: unknown, field: string, max: number): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n < 0 || n > max) throw new HttpError(400, `worker_policy.${field} 는 0~${max} 정수여야 합니다 (0=무제한)`);
+          return Math.floor(n);
+        };
+        const patchIn: WorkerPolicyPatch = {};
+        if (w.max_concurrent !== undefined) patchIn.max_concurrent = num(w.max_concurrent, "max_concurrent", WORKER_POLICY_MAX.max_concurrent);
+        if (w.max_per_member !== undefined) patchIn.max_per_member = num(w.max_per_member, "max_per_member", WORKER_POLICY_MAX.max_per_member);
+        if (w.max_memory_mb !== undefined) patchIn.max_memory_mb = num(w.max_memory_mb, "max_memory_mb", WORKER_POLICY_MAX.max_memory_mb);
+        if (w.cpu_percent_max !== undefined) patchIn.cpu_percent_max = num(w.cpu_percent_max, "cpu_percent_max", WORKER_POLICY_MAX.cpu_percent_max);
+        if (w.max_wall_sec !== undefined) patchIn.max_wall_sec = num(w.max_wall_sec, "max_wall_sec", WORKER_POLICY_MAX.max_wall_sec);
+        patch.worker_policy = patchIn;
+      }
+
       if (input.session_memory_policy !== undefined) {
         const raw = input.session_memory_policy;
         if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "session_memory_policy 는 객체여야 합니다");
