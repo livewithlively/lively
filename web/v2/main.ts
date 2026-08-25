@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, markNav, projectOrder, sessText, type SideInstance } from './side.js';
+import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderConnect, renderConnectApp } from './connect.js';
@@ -828,6 +828,7 @@ const PRIORITY_ST: Record<string, { label: string; rank: number }> = {
   busy:    { label: '작업 중',   rank: 2 },   // 지금 돌고 있다
 };
 const PRIORITY_GROUP = '지금 볼 것';
+const PINNED_GROUP = '고정';   // 사람이 고른 것 — 상태·날짜와 무관하게 맨 위(#1954)
 
 /** 마지막 작업 일시 → 묶음 이름. 오늘·어제는 그렇게 부르고, 그 앞은 날짜로. */
 function dayGroup(at: number, now: number): string {
@@ -893,11 +894,19 @@ function sideInstances(): SideInstance[] {
     //  치운 행은 **그 상태 그대로인 동안** 숨는다. 창이 열려 있으면(force) 늘 보인다 — 보고 있는 화면이 목록에 없으면 그게 고장이다.
     if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === (stateKey || '')) return;
     sideRowRoute.set(key, route);
-    const st = stateKey ? PRIORITY_ST[stateKey] : undefined;
+    let sk = stateKey;
+    //  ★ 보고 있는 행은 **그 자리에 머문다**(#1954 2차 상민님: "누르고 보고 있는 동안엔 위치 유지").
+    //   초록점(작업 완료)을 눌러 들어가면 서버가 lastAttached 를 갱신해 그 즉시 '확인함'이 되고, 목록이
+    //   눈앞에서 그 행을 아래로 내려보냈다 — 방금 연 것이 도망가는 화면이다. 활성인 동안엔 직전 상태를 쓰고,
+    //   다른 곳으로 나가는 순간 제 자리를 찾아간다(그때는 옮겨도 사람이 안 놓친다).
+    if (key === activeKey) { const was = lastSideRows.get(key); if (was && !sk) sk = was.status?.key; }
+    const st = sk ? PRIORITY_ST[sk] : undefined;
     const rawAt = Math.max(at, prev ? prev.at : 0);
-    const group = st ? PRIORITY_GROUP : dayGroup(rawAt, now);
-    rows.set(key, { ...sideRowFace(route), id: key, active: key === activeKey,
-      status: st ? { key: stateKey!, label: st.label } : null,
+    //  고정한 것은 상태·날짜와 무관하게 맨 위 제 묶음에 선다 — 사람이 고른 자리를 자동 규칙이 흔들지 않는다.
+    const pin = isAppPinned(key);
+    const group = pin ? PINNED_GROUP : st ? PRIORITY_GROUP : dayGroup(rawAt, now);
+    rows.set(key, { ...sideRowFace(route), id: key, active: key === activeKey, pinned: pin,
+      status: st ? { key: sk!, label: st.label } : null,
       group, rank: st ? st.rank : 9, at: pinnedAt(key, group, rawAt) });
   };
 
@@ -925,10 +934,13 @@ function sideInstances(): SideInstance[] {
 
   const all = [...rows.values()];
   const dayOf = new Map<string, number>();   // 묶음 이름 → 그 묶음의 최신 시각(묶음끼리의 순서)
-  for (const r of all) if (r.group !== PRIORITY_GROUP) dayOf.set(r.group!, Math.max(dayOf.get(r.group!) || 0, r.at));
+  for (const r of all) if (r.group !== PRIORITY_GROUP && r.group !== PINNED_GROUP) dayOf.set(r.group!, Math.max(dayOf.get(r.group!) || 0, r.at));
   const out = all.sort((a, b) => {
+    const af = a.group === PINNED_GROUP, bf = b.group === PINNED_GROUP;
+    if (af !== bf) return af ? -1 : 1;                       // 고정한 것이 맨 위 — 사람이 고른 자리다
+    if (af) return b.at - a.at;
     const ap = a.group === PRIORITY_GROUP, bp = b.group === PRIORITY_GROUP;
-    if (ap !== bp) return ap ? -1 : 1;                       // 볼 일 있는 것이 늘 위
+    if (ap !== bp) return ap ? -1 : 1;                       // 볼 일 있는 것이 그다음
     if (ap) return a.rank - b.rank || b.at - a.at;           // 확인 필요 → 작업 완료 → 작업 중
     if (a.group !== b.group) return (dayOf.get(b.group!) || 0) - (dayOf.get(a.group!) || 0);   // 날짜 내림차순
     return b.at - a.at;
@@ -955,6 +967,15 @@ async function closeSideRow(key: string): Promise<void> {
     catch (_) { toast('앱을 닫지 못했습니다'); }
   }
   drawSide();
+  refreshSideNow();
+}
+
+/**
+ * 사이드바에서 무언가를 한 **직후**에는 다음 틱을 기다리지 않고 그 자리에서 다시 읽는다(#1954 2차).
+ *  8초 틱만 믿으면 방금 누른 결과가 몇 초 뒤에야 반영돼 화면이 굼떠 보인다 — 사람이 만든 변화는 즉시 비춘다.
+ */
+function refreshSideNow(): void {
+  void loadData().then(() => { drawSide(); tabsApi?.paint(); });
 }
 
 /** 좌측 행을 누르면 그 대상에 창을 붙인다 — 이미 열려 있으면 그 창으로, 아니면 새 창. */
@@ -962,8 +983,8 @@ function openSideRow(key: string): void {
   const route = sideRowRoute.get(key);
   if (!route || !tabsApi) return;
   const hit = tabsApi.find(route);
-  if (hit) { tabsApi.activate(hit); return; }
-  tabsApi.add(route);
+  if (hit) tabsApi.activate(hit); else tabsApi.add(route);
+  refreshSideNow();
 }
 
 /** 프로젝트 경로를 누르면 현재 세션을 덮지 않고 '프로젝트' 앱 인스턴스를 열거나 재사용한다. */
@@ -979,6 +1000,7 @@ function openProjectPage(projectId: number): void {
   tabsApi.routed(hit);
   if (wasRendered) void renderRoute(hit);
   drawSide();
+  refreshSideNow();
 }
 
 function drawSide(): void {
@@ -1013,6 +1035,7 @@ function drawSide(): void {
     onOpenProject: openProjectPage,
     //  창 맨 윗줄이 우리 것이면 뒤로·앞으로·검색을 거기 건다 — 상단 탭이 빠져 비어 있던 자리다(#1954).
     navHost: () => (titlebar ? titlebar.host : null),
+    onPinChanged: () => { orderPin.clear(); },   // 고정이 바뀌면 자물쇠를 푼다 — 새 묶음에서 자리를 다시 잡아야 한다
   });
 }
 

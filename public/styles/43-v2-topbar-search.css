@@ -45,7 +45,8 @@
   order: -1; flex: 1 1 auto; min-width: 0; align-items: center; padding: 0 8px;
   -webkit-app-region: no-drag;
 }
-#v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: 420px; }
+/*  창 줄의 검색칸은 사이드바 때보다 넓게 쓸 수 있지만 줄을 가로지를 이유는 없다 — 절반으로(#1954 2차). */
+#v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: 210px; }
 /* 탭이 줄 맨 위에 닿으므로 켜진 탭의 파란 밑줄은 **아래쪽**에 긋는다 — 위에 그으면 창 모서리와 붙어 선이 잘려 보인다. */
 #v2-root.has-topbar > .v2-topbar .v2-tab.on { box-shadow: inset 0 -2px 0 var(--blue); }
 /* 데스크톱 앱은 맨 윗줄이 이미 탭 줄이다 — 가운데 열 위에 또 한 줄이 생기지 않게 [모든 탭] 도 같은 줄에서 산다.
