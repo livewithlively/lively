@@ -199,6 +199,12 @@ export function activeWorkspaceSlug(): string { return currentWorkspace() || 'pr
 /** 그 워크스페이스로 전환(헤더 선택 + 리로드). 메뉴 안의 전환과 **같은 경로**다. */
 export function switchWorkspace(slug: string): void { switchTo(slug); }
 
+/** 지금 워크스페이스의 이름·종류 — 레일의 스택 타일·팝오버가 쓴다. */
+export function workspaceInfo(): { kind: 'personal' | 'team'; hub: string | null; name: string } { return ws(); }
+
+/** 종전 전환·만들기·연결 메뉴를 그대로 연다 — 레일 팝오버의 [＋ 워크스페이스 추가]가 여기로 온다(폼을 두 벌 만들지 않는다). */
+export function openWorkspaceMenu(anchor: HTMLElement): void { if (openPanel) { closeMenu(); return; } void openMenu(anchor); }
+
 function switchTo(slug: string): void {
   setCurrentWorkspace(slug === 'primary' ? '' : slug);
   location.hash = '#/';
