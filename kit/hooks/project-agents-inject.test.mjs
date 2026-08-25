@@ -135,6 +135,17 @@ async function main() {
       ok("B2 외부 Codex stdin session_id → codex-* 실행 ID");
     }
     {
+      // 외부 Claude Code(러너가 --harness 를 못 받은 설치) — 러너 규약상 하네스 미지정=claude. 실행 ID 가 없어 no-op 이 되면
+      //  안 된다(그러면 임의 cwd 에서 연 세션은 영영 프로젝트 맥락을 못 받는다).
+      const native = `thread-${process.pid}-claude`;
+      const execution = `claude-${native}`; sids.push(execution);
+      gw.states.set(execution, { found: true, project_id: 22, revision: 1, binding_epoch: 1 });
+      const out = await runHook(root, gw.base, {}, { session_id: native });
+      assert.ok(out.includes("프로젝트 22"));
+      assert.equal(gw.hits.at(-1).session, execution);
+      ok("B2' 하네스 미지정 + stdin session_id → claude-* 실행 ID(러너 기본값 규약)");
+    }
+    {
       const s = sid("f7"); gw.states.set(s, { found: true, project_id: 11, revision: 1, binding_epoch: 1 });
       gw.setFail(true); const out1 = await runHook(root, gw.base, { LIVELY_SESSION_ID: s }); gw.setFail(false);
       assert.equal(out1.trim(), ""); assert.equal(fs.existsSync(statePathOf(s)), false);

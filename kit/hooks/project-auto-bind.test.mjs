@@ -157,6 +157,15 @@ async function main() {
       assert.equal(fs.existsSync(flagPath(s)), false);
       ok("짧은 지시 → 생성·플래그 소모 없음");
     }
+    {
+      // 하네스 미지정(외부 Claude Code) + stdin session_id → claude-* 실행 ID 로 생성·바인딩(러너 규약: 미지정=claude).
+      const native = `thread-${process.pid}-claude`;
+      const execution = `claude-${native}`; sids.push(execution);
+      const out = await runHook(root, gw.base, {}, undefined, { session_id: native });
+      assert.match(out, /프로젝트 #107/);
+      assert.equal(gw.states.get(execution), 107);
+      ok("하네스 미지정 + stdin session_id → claude-* 실행 ID로 생성·바인딩");
+    }
     console.log(`\n${pass} passed`);
   } finally {
     gw.server.close();

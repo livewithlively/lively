@@ -33,7 +33,7 @@ const executionSessionId = (input = {}) => {
   if (direct) return direct;
   const native = String(input.session_id || input.sessionId || "").trim();
   if (native && HARNESS === "codex") return `codex-${native}`;
-  if (native && HARNESS === "claude") return `claude-${native}`;
+  if (native && (HARNESS || "claude") === "claude") return `claude-${native}`;   // 미지정=claude(resolveHarness 규약)
   const codex = String(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim();
   if (codex) return `codex-${codex}`;
   const claude = String(process.env.CLAUDE_SESSION_ID || "").trim();

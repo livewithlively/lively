@@ -28,7 +28,8 @@ export function executionSessionId(input = {}, env = process.env) {
   const direct = String(env.LIVELY_SESSION_ID || "").trim();
   if (direct && SID_RE.test(direct)) return direct;
   const native = String(input.session_id || input.sessionId || "").trim();
-  const harness = String(env.LIVELY_HARNESS || "").trim().toLowerCase();
+  // 러너 규약(harness-registry.resolveHarness)과 같이 미지정=claude — 외부 Claude Code(--harness 없는 배선)도 실행 ID 를 갖는다.
+  const harness = String(env.LIVELY_HARNESS || "claude").trim().toLowerCase();
   if (native && harness === "codex" && SID_RE.test(`codex-${native}`)) return `codex-${native}`;
   if (native && harness === "claude" && SID_RE.test(`claude-${native}`)) return `claude-${native}`;
   const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
