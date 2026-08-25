@@ -1106,7 +1106,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     }
     if (step === 'b2') {
       await sleep(600);
-      msgLiv(`같은 양식 문서가 여러 달치 있네요. ${esc(fileOf(0) || '보고서')} 같은 것들이요.<p style="margin-top:6px"><b>정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?</b> 주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.</p>`);
+      // 관찰은 **실제 파일 이름에서 본 것만** 말한다. 못 봤으면 관찰을 지어내지 않고 그냥 묻는다.
+      const forms = (WS && WS.uploads && WS.uploads.forms) || [];   // 서버가 실제 파일 이름에서 본 것
+      const seen = forms.length
+        ? `같은 꼴 이름이 여러 개 보여요. ${forms.slice(0, 2).map((g) => `<b>${esc(g.names[0])}</b> 같은 것 ${g.names.length}개`).join(', ')}요.`
+        : '';
+      msgLiv(`${seen}<p style="margin-top:${seen ? '6px' : '0'}"><b>정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?</b> 주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.</p>`);
       await sleep(300);
       const pickB2 = (id, label) => { msgUser(label); S.b2 = id; if (id !== 'no') S.decisions.push(id === 'month' ? '매달 반복 작업으로 봄' : '매주 반복 작업으로 봄'); doneStep('b2'); chatStep('b3', token); };
       chipsRow([
@@ -1117,7 +1122,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     }
     if (step === 'b3') {
       await sleep(600);
-      msgLiv(`문서에 같은 이름이 반복해서 나와요.<p style="margin-top:6px"><b>같이 보는 팀이 있나요?</b> 있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.</p>`);
+      // 종전엔 "문서에 같은 이름이 반복해서 나와요"라고 했는데, 우리는 문서 **안**을 아직 안 읽었다.
+      //  근거 없는 관찰을 앞세우지 않고 묻기만 한다.
+      msgLiv(`<b>이 자료를 같이 보는 팀이 있나요?</b><p style="margin-top:6px">있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.</p>`);
       await sleep(300);
       const pickB3 = (id, label, dec) => { msgUser(label); S.b3 = id; S.decisions.push(dec); doneStep('b3'); renderSB(); chatStep('nowline', token); };
       chipsRow([
@@ -1142,7 +1149,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (step === 'can') {
       await sleep(500);
       const C = canOf();
-      msgLiv(`다 읽었어요.${S.nowline ? ` <b>${esc(S.nowline)}</b>에 시간을 제일 많이 쓰신다고 하셨죠.` : (nick() ? ` ${esc(nick())}님이 하시는 일이라면,` : '')}
+      const readN = realTotal();
+      msgLiv(`${readN ? `자료 <b>${readN}건</b>을 다 읽었어요.` : '준비됐어요.'}${S.nowline ? ` <b>${esc(S.nowline)}</b>에 시간을 제일 많이 쓰신다고 하셨죠.` : (nick() ? ` ${esc(nick())}님이 하시는 일이라면,` : '')}
         <p style="margin-top:6px"><b>이런 것까지 저한테 맡기실 수 있어요.</b> 보통은 몇 번씩 왔다 갔다 해야 하는 일이에요. 여기서는 한 문장이면 됩니다.</p>
         <div class="ob-excard" data-ex="0"><div class="ob-xt">“${esc(C[0][0])}”</div><div class="ob-xd"><b>보통은</b> ${esc(C[0][1])}</div></div>
         <div class="ob-excard" data-ex="1"><div class="ob-xt">“${esc(C[1][1])}”</div><div class="ob-xd"><b>${esc(C[1][0])} 쪽도</b> 이런 것까지 이어서 물으실 수 있어요.</div></div>`);
@@ -1201,10 +1209,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   async function enterChat(token) {
     setStage('stage-chat');
     $('#thread').innerHTML = '';
-    if (!S.read.total) S.read.total = 41;
+    await loadWelcome();
+    S.read.total = Math.max(S.upN || 0, 0);
     startReading();
     await sleep(300);
-    msgLiv(`${nick() ? esc(nick()) + '님, ' : ''}연결까지 끝났어요.<p style="margin-top:6px">지금 자료 <b>${S.read.total}건</b>을 읽고 있어요. 읽는 동안 몇 가지만 확인할게요.</p>`); /* [새문구] 채팅 도입부 */
+    const n = S.read.total;
+    msgLiv(`${nick() ? esc(nick()) + '님, ' : ''}연결까지 끝났어요.`
+      + (n ? `<p style="margin-top:6px">지금 자료 <b>${n}건</b>을 읽고 있어요. 읽는 동안 몇 가지만 확인할게요.</p>`
+           : `<p style="margin-top:6px">몇 가지만 확인하고 바로 시작할게요.</p>`));
     chatStep('b1', token);
   }
 

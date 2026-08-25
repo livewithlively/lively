@@ -3,7 +3,7 @@
 // red 입증은 mutation(신규 파일이라 '변경 전 코드'가 없다).
 // 실행: npm run build && node dist/capabilities/delivery/welcome.test.js
 import assert from "node:assert/strict";
-import { drawerKey, parseDrawers, lastAssistantText, tallySources } from "./welcome.js";
+import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms } from "./welcome.js";
 
 let pass = 0, fail = 0;
 // 실패해도 멈추지 않는다 — 어느 행이 빨간불인지 **전부** 봐야 red 입증이 된다.
@@ -180,6 +180,43 @@ t("㉔ 모르는 kind 도 파일류로 보고 확장자로 가른다 — 새 kin
 t("㉕ 이름 있는 kind 는 그대로 둔다 — 확장자로 덮어쓰지 않는다", () => {
   const out = tallySources([{ kind: "slack", title: "무엇.csv" }, { kind: "email", title: "메일.docx" }]);
   assert.deepEqual(out.map((x) => x.name).sort(), ["메일", "슬랙"]);
+});
+
+// ── 같은 꼴 이름 찾기 ───────────────────────────────────────────────────────
+//  이 판정이 곧 온보딩이 "같은 양식 문서가 여러 달치 있네요" 라고 말할 **근거**다.
+//  근거 없이 말하면 그건 사람의 자료를 지어내는 것이다.
+
+t("㉖ 날짜·번호만 다른 이름을 한 묶음으로 본다", () => {
+  const g = repeatedForms(["주간회의_2026-08-1주.md", "주간회의_2026-08-2주.md", "주간회의_2026-08-3주.md"]);
+  assert.equal(g.length, 1);
+  assert.equal(g[0]!.names.length, 3);
+});
+
+t("㉗ 확장자가 달라도 같은 꼴이면 묶는다", () => {
+  const g = repeatedForms(["월간보고 1.docx", "월간보고 2.pdf"]);
+  assert.equal(g.length, 1);
+  assert.equal(g[0]!.names.length, 2);
+});
+
+t("㉘ 하나뿐인 이름은 묶음이 아니다 — 근거가 없으면 말하지 않는다", () => {
+  assert.deepEqual(repeatedForms(["계약서.pdf", "제안서.docx", "사진.png"]), []);
+  assert.deepEqual(repeatedForms([]), []);
+});
+
+t("㉙ 숫자만 있는 이름은 '같은 양식 문서'가 아니다 — 1.pdf·2.pdf 를 그렇게 부르면 지어낸 관찰이다", () => {
+  assert.deepEqual(repeatedForms(["1.pdf", "2.pdf", "3.pdf"]), []);
+  assert.deepEqual(repeatedForms(["2026-08-01.png", "2026-08-02.png"]), []);
+});
+
+t("㉚ 구분자가 달라도(밑줄·하이픈·공백) 같은 꼴로 본다", () => {
+  const g = repeatedForms(["매출_보고_1.xlsx", "매출-보고-2.xlsx", "매출 보고 3.xlsx"]);
+  assert.equal(g.length, 1, JSON.stringify(g));
+  assert.equal(g[0]!.names.length, 3);
+});
+
+t("㉛ 묶음이 여럿이면 큰 것부터", () => {
+  const g = repeatedForms(["A 1.md", "A 2.md", "A 3.md", "B 1.md", "B 2.md"]);
+  assert.deepEqual(g.map((x) => x.names.length), [3, 2]);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

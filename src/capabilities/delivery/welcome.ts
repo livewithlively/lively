@@ -136,6 +136,30 @@ const EXT_BUCKET: Record<string, string> = {
   json: "데이터", xml: "데이터", yaml: "데이터", yml: "데이터",
 };
 
+/**
+ * 올린 파일 이름에서 **같은 꼴이 여러 개**인 묶음을 찾는다(순수).
+ *  날짜·번호만 다른 것들(주간회의_2026-08-1주 / -2주 …)이 곧 '주기적으로 만드는 문서'다.
+ *  ⚠ 온보딩이 "같은 양식 문서가 여러 달치 있네요" 라고 말하려면 **실제로 본 것**이어야 한다 —
+ *   종전엔 그 관찰을 상수 표에서 꺼내 써서, 사람의 파일과 무관한 이름을 대며 단정했다.
+ */
+export function repeatedForms(names: string[]): Array<{ skel: string; names: string[] }> {
+  const groups = new Map<string, { skel: string; names: string[] }>();
+  for (const raw of names || []) {
+    const base = String(raw).replace(/\.[A-Za-z0-9]{1,8}$/, "");
+    // 숫자 자리를 지우고 남는 뼈대가 같으면 같은 꼴이다.
+    const skel = base.replace(/\d+/g, "#").replace(/[\s_\-\u2013\u2014.]+/g, " ").trim();
+    // 뼈대에 숫자 아닌 글자가 **하나도 없으면** 이름이라 할 것이 없다 —
+    //  '1.pdf'·'2.pdf'·'2026-08-01.png' 를 '같은 양식 문서'라고 부르면 그건 지어낸 관찰이다.
+    //  ⚠ 두 자 이상을 요구하면 'A 1.md' 같은 한 글자 이름이 통째로 빠진다(테스트 ㉛에서 잡혔다).
+    if (skel.replace(/[#\s]/g, "").length < 1) continue;
+    const g = groups.get(skel) ?? { skel, names: [] };
+    g.names.push(String(raw));
+    groups.set(skel, g);
+  }
+  return [...groups.values()].filter((g) => g.names.length >= 2)
+    .sort((a, b) => b.names.length - a.names.length || a.skel.localeCompare(b.skel));
+}
+
 /** LLM 에게 줄 지시문. 서버가 만든다 — 화면이 만들면 사람마다 다른 프롬프트가 나간다. */
 export function analyzePrompt(files: string[], job: string | null): string {
   return [
@@ -192,6 +216,8 @@ export const welcomeCapabilities: Capability[] = [
           sampled: rows.length,
           kinds: tallySources(rows),
           names: rows.map((r) => String(r.title ?? "")).filter(Boolean).slice(0, SAMPLE_CAP),
+          // '주기적으로 만드는 문서' 를 말할 근거 — 실제 파일 이름에서 본 것만 담는다.
+          forms: repeatedForms(rows.map((r) => String(r.title ?? "")).filter(Boolean)).slice(0, 5),
         },
         categories: (cats as Array<{ key?: string; name?: string; space?: string }>)
           .map((c) => ({ key: String(c.key ?? ""), name: String(c.name ?? ""), space: String(c.space ?? "") })),
