@@ -101,6 +101,22 @@ export function nextKindSel(cur, k, all = KINDS) {
         return new Set(); // 전부 꺼짐·전부 켜짐 → 기본
     return next;
 }
+// ── 식별자 적중 — 제목보다도 확실한 신호 (2026-08-25) ─────────────────────────────────
+//  key(`omni-unified-search-spotlight-1835`)·번호(`1835`·`#1960`)로 찾는 사람이 있다. 서버는 이제 그걸 찾아
+//  주는데(#336·#342) **화면이 버리고 있었다** — grep 채널을 제목 적중으로만 걸러서, key 는 title 이 아니라
+//  name 에, 번호는 id 에 있으니 통째로 떨어져 나갔다(실측: key 로 치면 정답이 아예 안 떴다).
+//  지목한 이름이 맞았으면 그건 검색이 아니라 **호명**이다 — 맨 위에 세운다.
+//  · 번호는 **정확일치**(`183` 이 1835 를 잡으면 안 된다) · key 는 **부분일치**(`omni-unified` 로도 찾는다)
+//  · 토큰이 둘 이상이면 지목이 아니라 검색이다(`1835 탭`) · `#` 은 사람 표기라 벗긴다
+export function identHit(ident, qTokens) {
+    if (!ident || qTokens.length !== 1)
+        return false;
+    const q = qTokens[0].replace(/^#/, '');
+    if (!q)
+        return false;
+    const id = ident.toLowerCase();
+    return /^[0-9]+$/.test(id) ? id === q : id.includes(q);
+}
 let hooks = null;
 export function setOmniHooks(h) { hooks = h; }
 // ── 한 줄로 줄이기 ── 스니펫은 `L12: …` 꼴로 오고 줄바꿈이 섞여 있다. 목록은 한 줄이 한 결과여야 훑을 수 있다.
@@ -164,6 +180,7 @@ export function omniOpen(seed) {
      *  왜 필요한가: 채널 간 순서가 타입 고정이라 '정확히 그 이름인 문서'가 프로젝트 6건 아래 묻혔다. 게다가
      *  하이브리드(RRF)는 순위역수라 채널마다 1등이 전부 같은 점수(1/61≈0.0164)가 되어 **점수로는 못 가른다**
      *  (실측: 질의에 따라 12항목의 점수 폭이 0.0012 까지 좁아진다). 제목 적중은 그 애매함이 없는 유일한 신호다. */
+    const isIdentHit = (h) => identHit(h.ident, qTokens);
     function isTitleHit(h) {
         if (!qTokens.length)
             return false;
@@ -185,9 +202,12 @@ export function omniOpen(seed) {
         //   실측: '통합검색' 에서 정답보다 '…그리드 통합검색' 이 먼저 뜨던 것). 나머지는 코사인 내림차순.
         //  ⚠ 자료·세션이력에는 이 축이 **없다**(자료는 ILIKE, 이력은 자체 스코어) — 섞으면 없는 값을 있는 척하게 되므로
         //   그 채널들은 아래 종류별 묶음에 그대로 둔다. 축이 없는 것을 억지로 한 줄에 세우지 않는다.
-        const meaty = (h) => isTitleHit(h) || h.title.replace(/[^\p{L}\p{N}]/gu, '').length >= MIN_TITLE_CHARS;
-        const top = hits.filter((h) => (isTitleHit(h) || typeof h.score === 'number') && meaty(h))
+        const meaty = (h) => isIdentHit(h) || isTitleHit(h) || h.title.replace(/[^\p{L}\p{N}]/gu, '').length >= MIN_TITLE_CHARS;
+        const top = hits.filter((h) => (isIdentHit(h) || isTitleHit(h) || typeof h.score === 'number') && meaty(h))
             .sort((a, b) => {
+            const ia = isIdentHit(a) ? 1 : 0, ib = isIdentHit(b) ? 1 : 0;
+            if (ia !== ib)
+                return ib - ia; // 호명이 먼저다
             const ta = isTitleHit(a) ? 1 : 0, tb = isTitleHit(b) ? 1 : 0;
             if (ta !== tb)
                 return tb - ta;
@@ -361,11 +381,12 @@ export function omniOpen(seed) {
                 kind: 'proj', key: 'p:' + p.id,
                 title: String(p.name || p.title || ('프로젝트 #' + p.id)),
                 sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-                href: projHref(p),
+                href: projHref(p), ident: String(p.id),
             })), my), () => put('proj:sem', [], my));
         });
         const knowRow = (e) => ({
-            kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e), href: '#/k/' + encodeURIComponent(e.name),
+            kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e),
+            href: '#/k/' + encodeURIComponent(e.name), ident: String(e.name || ''),
         });
         call('know', () => {
             api('/api/ui/knowledge/semantic?limit=6&q=' + qs).then((r) => put('know:sem', ((r && r.entries) || []).map(knowRow), my), () => put('know:sem', [], my));
@@ -384,26 +405,26 @@ export function omniOpen(seed) {
         call('know', () => {
             api(`/api/ui/knowledge/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r) => put('know:sim', ((r && r.entries) || []).map((e) => ({
                 kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e),
-                href: '#/k/' + encodeURIComponent(e.name), score: Number(e.similarity) || 0,
+                href: '#/k/' + encodeURIComponent(e.name), score: Number(e.similarity) || 0, ident: String(e.name || ''),
             })), my), () => put('know:sim', [], my));
         });
         call('proj', () => {
             api(`/api/ui/v6/projects/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r) => put('proj:sim', ((r && r.projects) || []).map((p) => ({
                 kind: 'proj', key: 'p:' + p.id, title: String(p.name || ('프로젝트 #' + p.id)),
                 sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-                href: projHref(p), score: Number(p.similarity) || 0,
+                href: projHref(p), score: Number(p.similarity) || 0, ident: String(p.id),
             })), my), () => put('proj:sim', [], my));
         });
         call('know', () => {
-            api('/api/ui/knowledge/search?limit=8&q=' + qs).then((r) => put('know:grep', ((r && r.entries) || []).map(knowRow).filter(isTitleHit), my), () => put('know:grep', [], my));
+            api('/api/ui/knowledge/search?limit=8&q=' + qs).then((r) => put('know:grep', ((r && r.entries) || []).map(knowRow).filter((h) => isTitleHit(h) || isIdentHit(h)), my), () => put('know:grep', [], my));
         });
         call('proj', () => {
             api('/api/ui/v6/projects/search?limit=8&q=' + qs).then((r) => put('proj:grep', ((r && r.projects) || []).map((p) => ({
                 kind: 'proj', key: 'p:' + p.id,
                 title: String(p.name || p.title || ('프로젝트 #' + p.id)),
                 sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-                href: projHref(p),
-            })).filter(isTitleHit), my), () => put('proj:grep', [], my));
+                href: projHref(p), ident: String(p.id),
+            })).filter((h) => isTitleHit(h) || isIdentHit(h)), my), () => put('proj:grep', [], my));
         });
         call('src', () => {
             api('/api/ui/sources?limit=6&q=' + qs).then((r) => put('src', ((r && r.entries) || []).map((s) => ({
