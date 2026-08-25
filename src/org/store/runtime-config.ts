@@ -28,6 +28,8 @@ import {
   type SessionReclaimPolicy, type SessionReclaimPolicyPatch, resolveSessionReclaimPolicy, normalizeSessionReclaimPolicy,
   sessionReclaimPolicySource, invalidateSessionReclaimPolicyCache,
 } from "../../sessions/session-reclaim-policy.js";
+// 앱 worker 조직 예산 정책(#1780 Stage B) — 동시 실행 수·메모리 합·CPU·수명. storage_policy 와 같은 seam(DB 우선, 비면 코드 기본값).
+import { type WorkerPolicy, type WorkerPolicyPatch, resolveWorkerPolicy, normalizeWorkerPolicy } from "../../apps/worker-policy.js";
 // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 같은 seam(DB 우선, 비면 env 시드 → 코드 기본값).
 import {
   type DelegatePolicy, type DelegatePolicyPatch, resolveDelegatePolicy, normalizeDelegatePolicy,
@@ -67,6 +69,7 @@ export interface OrgRuntimeConfig {
   ui_mode: UiMode; // #1719 — 기본 화면 셸. 'classic'(종전 탭 셸, 기본) | 'v2'(새 1탭 셸 — 베타 opt-in). 사람별 로컬 오버라이드는 프론트가 해석.
   workspace_kind: WorkspaceKind; // #1750 — 이 워크스페이스(=게이트웨이)의 종류. 'team'(기본 = 기존 셀프호스트) | 'personal'(개인).
   workspace_hub_url: string | null; // #1750 — 계정의 워크스페이스 목록·만들기 허브(매니지드 app.lvly.io/home). null = 없음(셀프호스트 기본).
+  worker_policy: WorkerPolicy; // #1780 Stage B — 앱 worker 조직 예산(동시 수·메모리 합·CPU·수명). 각 0=무제한. DB 우선, 비면 코드 기본값.
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -132,7 +135,7 @@ const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -174,6 +177,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     ui_mode: uiModeSafe(row?.ui_mode), // #1719 — 잡값/부재면 'classic'(제품 기본 — v2 는 베타 opt-in)
     workspace_kind: workspaceKindSafe(row?.workspace_kind), // #1750 — 잡값/부재면 'team'(기존 박스 = 팀)
     workspace_hub_url: usageUrlSafe(row?.workspace_hub_url), // #1750 — 빈값/부재면 null(허브 없음)
+    worker_policy: resolveWorkerPolicy(row?.worker_policy), // #1780 Stage B — DB 우선, 비면 코드 기본값(수·메모리 상한 / CPU·수명 0=끔)
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -211,6 +215,7 @@ export async function updateRuntimeConfig(
     ui_mode?: UiMode;
     workspace_kind?: WorkspaceKind;        // #1750
     workspace_hub_url?: string | null;     // #1750
+    worker_policy?: WorkerPolicyPatch;     // #1780 Stage B
   },
   actor?: string,
   source?: string,
@@ -284,6 +289,15 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT session_memory_policy FROM org_runtime_config WHERE id=1`);
     sessionMemoryPolicy = (raw.rows[0] as { session_memory_policy?: unknown } | undefined)?.session_memory_policy ?? {};
   }
+  // 앱 worker 예산 정책(#1780 Stage B) — 위와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
+  //  before(resolved) 를 되쓰면 코드 기본값이 DB 로 굳어 '미설정'(= 기본값을 따라감)이 사라진다.
+  let workerPolicy: unknown;
+  if (patch.worker_policy !== undefined) {
+    workerPolicy = normalizeWorkerPolicy({ ...before.worker_policy, ...patch.worker_policy });
+  } else {
+    const raw = await itemsPool.query(`SELECT worker_policy FROM org_runtime_config WHERE id=1`);
+    workerPolicy = (raw.rows[0] as { worker_policy?: unknown } | undefined)?.worker_policy ?? {};
+  }
   // idle 회수 정책(#1059 F) — storage/session-memory 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
   let sessionReclaimPolicy: unknown;
   if (patch.session_reclaim_policy !== undefined) {
@@ -317,8 +331,8 @@ export async function updateRuntimeConfig(
     : before.oidc_config;
 
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,1,now(),$13)
      ON CONFLICT (tenant_id, id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -331,13 +345,13 @@ export async function updateRuntimeConfig(
        embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
        inject_ontology_guide=EXCLUDED.inject_ontology_guide, oidc_config=EXCLUDED.oidc_config,
        ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
-       ui_mode=EXCLUDED.ui_mode, workspace_kind=EXCLUDED.workspace_kind, workspace_hub_url=EXCLUDED.workspace_hub_url,
+       ui_mode=EXCLUDED.ui_mode, workspace_kind=EXCLUDED.workspace_kind, workspace_hub_url=EXCLUDED.workspace_hub_url, worker_policy=EXCLUDED.worker_policy,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
      JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
      // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
      JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
-     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl],
+     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();

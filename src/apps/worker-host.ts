@@ -11,6 +11,7 @@ import { access, chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/
 import os from "node:os";
 import path from "node:path";
 import { safeFetch } from "../net/ssrf.js";
+import { cpuPercentBetween, parsePsCpuSeconds } from "./worker-policy.js";
 
 export const WORKER_ENTRY_MAX_BYTES = 8 * 1024 * 1024;
 export const WORKER_LINE_MAX_BYTES = 64 * 1024;
@@ -18,10 +19,13 @@ export const WORKER_RPC_CHUNK_BYTES = 512 * 1024; // base64+JSON도 노드 WS 1M
 const READY_TIMEOUT_MS = 8_000;
 const STOP_GRACE_MS = 1_000;
 const RSS_SAMPLE_MS = 1_000;
+// CPU 폭주 판정은 표본 하나로 하지 않는다 — 기동 직후 컴파일·초기화 순간 스파이크로 정상 worker 를 죽이기 때문이다.
+//  연속 CPU_BREACH_STREAK 회(= 그만큼의 초) 연속 초과일 때만 종료한다.
+const CPU_BREACH_STREAK = 5;
 const MESSAGE_RATE_MAX = 32;
 const REQUEST_CONCURRENCY_MAX = 4;
 export type WorkerRunStatus = "starting" | "ready" | "idle" | "running" | "stopping" | "stopped" | "failed";
-export type WorkerStopReason = "explicit" | "placement_changed" | "package_updated" | "instance_closed" | "app_disabled" | "app_removed" | "grant_revoked" | "member_deactivated" | "idle_timeout" | "memory_budget" | "protocol_error" | "ready_timeout" | "process_exit" | "host_shutdown";
+export type WorkerStopReason = "explicit" | "placement_changed" | "package_updated" | "instance_closed" | "app_disabled" | "app_removed" | "grant_revoked" | "member_deactivated" | "idle_timeout" | "memory_budget" | "cpu_budget" | "wall_budget" | "protocol_error" | "ready_timeout" | "process_exit" | "host_shutdown";
 
 export interface WorkerStartSpec {
   runId: string;
@@ -34,6 +38,10 @@ export interface WorkerStartSpec {
   idleTimeoutSec: number;
   allowedHosts: string[];
   selfHosts: string[];
+  /** worker 1개의 CPU 사용률 상한(%, 코어 1개=100). 0·미지정 = 감시 끔(#1780 Stage B). */
+  cpuPercentMax?: number;
+  /** worker 1개의 최대 수명(초). 0·미지정 = 무제한(#1780 Stage B). */
+  maxWallSec?: number;
 }
 
 export interface WorkerRunSnapshot {
@@ -248,6 +256,9 @@ interface LiveRun {
   idleTimer: NodeJS.Timeout | null;
   rssTimer: NodeJS.Timeout | null;
   killTimer: NodeJS.Timeout | null;
+  wallTimer: NodeJS.Timeout | null;
+  cpuSample: { cpuSec: number; atMs: number } | null;
+  cpuBreaches: number;
   messageWindowAt: number;
   messageCount: number;
   requestsInFlight: number;
@@ -312,7 +323,7 @@ export class WorkerHost {
       const live = {} as LiveRun;
       Object.assign(live, {
         spec, process: child, dir, stdout: Buffer.alloc(0), stderr: "", readyResolve, readyReject, readySettled: false,
-        idleTimer: null, rssTimer: null, killTimer: null, messageWindowAt: Date.now(), messageCount: 0, requestsInFlight: 0,
+        idleTimer: null, rssTimer: null, killTimer: null, wallTimer: null, cpuSample: null, cpuBreaches: 0, messageWindowAt: Date.now(), messageCount: 0, requestsInFlight: 0,
         readyPromise: ready, emitQueue: Promise.resolve(),
         snapshot: { runId: spec.runId, appId: spec.appId, instanceId: spec.instanceId, status: "starting", pid: child.pid ?? null,
           reason: null, exitCode: null, startedAt: now, readyAt: null, lastActiveAt: now, stoppedAt: null },
@@ -328,8 +339,14 @@ export class WorkerHost {
       child.once("error", (error) => this.fail(live, "process_exit", error));
       // spawn 자체 실패도 close로 수렴하므로 임시 디렉터리와 실행 맵을 반드시 회수한다.
       child.once("close", (code) => this.onExit(live, code));
-      live.rssTimer = setInterval(() => { void this.checkRss(live); }, RSS_SAMPLE_MS);
+      live.rssTimer = setInterval(() => { void this.checkBudget(live); }, RSS_SAMPLE_MS);
       live.rssTimer.unref?.();
+      // 수명 상한(#1780 Stage B) — 0·미지정이면 무장하지 않는다(켜지 않은 조직에 회귀를 만들지 않는다).
+      const maxWallSec = spec.maxWallSec ?? 0;
+      if (maxWallSec > 0) {
+        live.wallTimer = setTimeout(() => { void this.stop(spec.runId, "wall_budget"); }, maxWallSec * 1000);
+        live.wallTimer.unref?.();
+      }
       return await ready;
     } catch (error) {
       await rm(dir, { recursive: true, force: true }).catch(() => { /* exact private run dir */ });
@@ -441,16 +458,35 @@ export class WorkerHost {
     live.idleTimer.unref?.();
   }
 
-  private async checkRss(live: LiveRun): Promise<void> {
+  /** 메모리(RSS)와 CPU 를 한 번의 ps 로 함께 표본한다 — 프로세스마다 초당 두 번 fork 하지 않기 위해. */
+  private async checkBudget(live: LiveRun): Promise<void> {
     const pid = live.process.pid;
     if (!pid || ["stopped", "failed", "stopping"].includes(live.snapshot.status)) return;
-    const rssKb = await new Promise<number | null>((resolve) => {
-      execFile("ps", ["-o", "rss=", "-p", String(pid)], { timeout: 800 }, (error, stdout) => {
-        if (error) { resolve(null); return; }
-        const n = Number(String(stdout).trim()); resolve(Number.isFinite(n) ? n : null);
+    const sample = await new Promise<{ rssKb: number | null; cpuSec: number | null }>((resolve) => {
+      execFile("ps", ["-o", "rss=,time=", "-p", String(pid)], { timeout: 800 }, (error, stdout) => {
+        if (error) { resolve({ rssKb: null, cpuSec: null }); return; }
+        // `rss= time=` 은 "  12345 0:01.23" 처럼 공백으로 갈린다. 앞 토큰이 KiB, 나머지가 누적 CPU 시간.
+        const text = String(stdout).trim();
+        const gap = text.search(/\s/);
+        if (gap < 0) { resolve({ rssKb: Number(text) || null, cpuSec: null }); return; }
+        const rss = Number(text.slice(0, gap));
+        resolve({ rssKb: Number.isFinite(rss) ? rss : null, cpuSec: parsePsCpuSeconds(text.slice(gap + 1)) });
       });
     });
-    if (rssKb !== null && rssKb > live.spec.memoryMb * 1024) await this.stop(live.spec.runId, "memory_budget");
+    if (["stopped", "failed", "stopping"].includes(live.snapshot.status)) return; // ps 대기 중 종료됐다
+    if (sample.rssKb !== null && sample.rssKb > live.spec.memoryMb * 1024) { await this.stop(live.spec.runId, "memory_budget"); return; }
+
+    // CPU 상한(#1780 Stage B) — 0·미지정이면 감시하지 않는다. 표본을 못 읽으면 판정도 하지 않는다(worker 는 살린다).
+    const cpuMax = live.spec.cpuPercentMax ?? 0;
+    if (cpuMax <= 0 || sample.cpuSec === null) { live.cpuSample = null; return; }
+    const next = { cpuSec: sample.cpuSec, atMs: Date.now() };
+    const prev = live.cpuSample;
+    live.cpuSample = next;
+    if (!prev) return; // 첫 표본은 비교 대상이 없다
+    const percent = cpuPercentBetween(prev, next);
+    if (percent === null) { live.cpuBreaches = 0; return; }
+    live.cpuBreaches = percent > cpuMax ? live.cpuBreaches + 1 : 0;
+    if (live.cpuBreaches >= CPU_BREACH_STREAK) await this.stop(live.spec.runId, "cpu_budget");
   }
 
   private fail(live: LiveRun, reason: WorkerStopReason, error: Error): void {
@@ -486,6 +522,7 @@ export class WorkerHost {
     if (live.idleTimer) clearTimeout(live.idleTimer);
     if (live.rssTimer) clearInterval(live.rssTimer);
     if (live.killTimer) clearTimeout(live.killTimer);
+    if (live.wallTimer) clearTimeout(live.wallTimer);
   }
 
   private emit(live: LiveRun): void {
