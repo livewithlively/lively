@@ -38,6 +38,12 @@
 
 .v2me-cont { flex: 1; min-width: 0; overflow-y: auto; padding: 20px 24px 26px; }
 .v2me-pane { max-width: 520px; }
+/* 넓은 화면(#1898) — [내 AI 계정]·[외부 서비스]는 '이름 · 배지 · 버튼' 한 줄짜리 행을 쓴다. 520px 에서는
+   그 줄이 접혀 버튼이 이름 아래로 내려가고, 그러면 '무엇을 누르면 되나'가 안 읽힌다. 본문 폭을 다 준다. */
+.v2me-pane-wide { max-width: none; }
+/* 관리탭에서 데려온 카드(.card)를 이 창의 리듬에 맞춘다 — 카드 자체는 그쪽 소유라 여기서 자리만 좁힌다. */
+.v2me-pane .card { padding: 16px 18px; border-radius: 12px; }
+.v2me-pane .card-head h3, .v2me-pane .card h2 { font-size: 14px; }
 .v2me-t { margin: 0; font-size: 16px; font-weight: 800; color: var(--ink); }
 .v2me-hint { margin: 6px 0 16px; font-size: 13px; color: var(--ink-sub); line-height: 1.55; }
 .v2me-save { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line-row); }
