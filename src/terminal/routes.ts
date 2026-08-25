@@ -196,7 +196,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     });
   }));
 
-  // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드가 읽고 쓴다. **본인 것만**: 경로에 멤버 id 가
+  // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 계정] 카드가 읽고 쓴다. **본인 것만**: 경로에 멤버 id 가
   //  없고 principal(userOf) 로만 대상이 정해진다 → 남의 계정을 조회·로그아웃할 표면이 아예 없다(admin 도 마찬가지).
   app.get("/api/ui/me/ai-accounts", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
