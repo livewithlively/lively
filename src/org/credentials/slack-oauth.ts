@@ -18,7 +18,10 @@ export const SLACK_ACCESS_URL = "https://slack.com/api/oauth.v2.access";
 /** 개인 AI 도구·검색 수집이 쓰는 유저 토큰 스코프 — 슬랙 MCP 프리셋(#746 L2 컨펌 read/search+send)을 클래식 스코프로 옮긴 것.
  *  users:read.email(PII)은 유저 토큰에서 뺀다 — 구성원 매핑은 조직 기능이라 봇 토큰이 맡는다. */
 export const SLACK_USER_SCOPES = [
-  "search:read", "channels:read", "groups:read", "im:read", "mpim:read",
+  // ⚠ 검색은 legacy `search:read` 가 아니다 — 새(granular) 앱의 authorize 는 그 스코프를 invalid_permissions 로 거부한다
+  //  (2026-08-25 실측: 앱 생성은 통과하는데 동의 화면에서 "잘못된 권한이 요청되었습니다"). 분할형 6종 + assistant.search.context 가 현행.
+  "search:read.public", "search:read.private", "search:read.mpim", "search:read.im", "search:read.files", "search:read.users",
+  "channels:read", "groups:read", "im:read", "mpim:read",
   "channels:history", "groups:history", "im:history", "mpim:history",
   "users:read", "files:read", "reactions:read", "emoji:read", "chat:write",
 ] as const;

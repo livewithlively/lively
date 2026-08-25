@@ -76,6 +76,10 @@ t("슬랙(#1881): 발송 도구는 L2 로 심기고(per-user 필수·발송 fail
     assert.equal(channelToolKind(n, row.level), "read", `${n} 은 열람(응답 필터 대상)`);
   }
   assert.ok(slack.hosts.includes("slack.com"));
+  // 검색은 legacy search.messages 가 아니라 assistant.search.context 여야 한다(새 앱 토큰이 legacy 를 거부 — 2026-08-25 실측)
+  const search = byName.get("slack_search_messages")!;
+  assert.ok(search.url.endsWith("/assistant.search.context"), search.url);
+  assert.equal(search.method, "POST");
 });
 
 t("인자 값은 감사로그에 남기지 않는다(#1082)", () => {
@@ -86,7 +90,8 @@ t("응답 크기 방어 — 목록 계열은 개수 상한이나 필드 제한�
   // 256KiB 상한이라 기본값 없이 내보내면 첫 호출부터 잘린다. input_schema 의 default 는 아무도 안 읽으므로 URL 에 있어야 한다.
   for (const [, tool] of all) {
     const q = new URL(tool.url.replace(/\{[A-Za-z_][A-Za-z0-9_]*\}/g, "x")).searchParams;
-    const listish = /search|list|events/.test(tool.name);
+    // POST 도구(JSON body)는 URL query 와 body 를 섞으면 안 돼(slack invalid_args) 기본값을 URL 에 못 박는다 — GET 만 검사.
+    const listish = /search|list|events/.test(tool.name) && (tool.method ?? "GET") === "GET";
     // 인자가 하나도 없는 도구(emoji.list 같은 고정 목록)는 쪽을 나눌 수 없어 예외 — 응답이 작은 것만 그렇게 둔다.
     const pageable = Object.keys((tool.input_schema.properties ?? {}) as object).length > 0;
     if (listish && pageable) {
