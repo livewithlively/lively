@@ -764,6 +764,14 @@ function renderTree(rowsIn?: Row[]): void {
     const s = last.data.sessions.find((x) => x.id === sid) || last.data.sessions.find((x) => x.logId === sid);
     selectedPk = s ? 'p:' + (s.projectId || 0) : '';
   }
+  // ★ 한 번 펴진 프로젝트는 **사람이 접을 때까지** 펴져 있다(원준 2026-08-24: "프로젝트 누르면 자동으로 열렸다가 다른 프로젝트 누르면
+  //  다시 사라지는데 너무 불편함"). 종전엔 '선택된 것만 펼침'이라 선택이 옮겨 가는 순간 앞 프로젝트가 접혔다 — 폴더를 오가며
+  //  세션을 비교하는 흐름이 매번 끊겼다. 선택으로 펴진 것도 사람이 편 것과 같이 openSet 에 남긴다(접는 건 캐럿뿐).
+  //  일부러 접어 둔 선택(closedSelected)은 그대로 존중한다.
+  if (selectedPk && !closedSelected.has(selectedPk) && !openSet.has(selectedPk)) {
+    const r = rows.find((x) => x.key === selectedPk);
+    if (r && (r.live.length || r.past.length)) { openSet.add(selectedPk); saveSet(OPEN_KEY, openSet); }
+  }
   const q = sideFilter.trim().toLowerCase();
   const hit = (r: Row) => !q || (r.proj ? (r.proj.name.toLowerCase().includes(q) || String(r.proj.id) === q) : '프로젝트 없는 세션'.includes(q));
   const stateOf = (r: Row) => (stateFilter ? r.live.filter((s) => s.stateKey === stateFilter) : r.live);
