@@ -33,6 +33,21 @@ const AG_TRUST = [
   "   No, exit",
   " ↑/↓ Navigate · enter Confirm",
 ].join("\n");
+// Claude Code 2.1.245 의 **현행** 신뢰 대화상자(실측 2026-08-25, dev 노드 hammurabi/win32 pane 그대로).
+//  ⚠ 문구가 바뀌었다 — 옛 정규식(`trust the files in this folder`)은 이 화면을 못 잡아 accept-trust 가 안 나고,
+//   입력창도 아니므로 90초 give-up 으로 **첫 지시가 통째로 유실**됐다(프로젝트 폴더 세션에서 실제로 재현).
+const TRUST_2026 = [
+  "──────────────────────────────────────────────────",
+  " Accessing workspace:",
+  " C:\\Users\\amorite\\workspace\\project\\1950",
+  " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+  " project, or work from your team). If not, take a moment to review what's in this folder first.",
+  " Claude Code'll be able to read, edit, and execute files here.",
+  " Security guide",
+  " ❯ 1. Yes, I trust this folder",
+  "   2. No, exit",
+  " Enter to confirm · Esc to cancel",
+].join("\n");
 const LOGIN = "\n Welcome to Claude Code\n\n Select login method:\n ❯ 1. Claude account with subscription\n   2. Anthropic Console account\n";
 const base = { harness: "claude", paneCmd: "node", elapsedMs: 3000, maxMs: 90_000, trustOk: true };
 
@@ -40,6 +55,13 @@ t("[1] 입력창이 보이면 send", () => assert.equal(firstPromptStep({ ...bas
 t("[2] 부팅 중(아무 표식 없음)은 wait", () => assert.equal(firstPromptStep({ ...base, pane: CLAUDE_BOOT }), "wait"));
 t("[3] 신뢰 대화상자 + 세션 전용 폴더 → accept-trust", () => assert.equal(firstPromptStep({ ...base, pane: TRUST }), "accept-trust"));
 t("[4] 신뢰 대화상자 + 사람이 고른 폴더(trustOk=false) → wait(대신 안 누른다)", () => assert.equal(firstPromptStep({ ...base, pane: TRUST, trustOk: false }), "wait"));
+// ── 현행 문구(2026-08 실측) — 하네스 문구는 바뀐다. 옛 문구만 알면 그 순간부터 첫 지시가 조용히 유실된다. ──
+t("[4a] 현행 Claude 신뢰 대화상자(문구 변경) + 라이블리 workspace → accept-trust", () =>
+  assert.equal(firstPromptStep({ ...base, pane: TRUST_2026 }), "accept-trust"));
+t("[4b] 현행 신뢰 대화상자 + 사람이 고른 폴더 → wait(대화상자에 텍스트를 밀어 넣지 않는다)", () =>
+  assert.equal(firstPromptStep({ ...base, pane: TRUST_2026, trustOk: false, elapsedMs: 30_000 }), "wait"));
+t("[4c] 본문에 'trust' 라는 단어가 있을 뿐인 입력창은 신뢰 대화상자가 아니다(오탐 금지)", () =>
+  assert.equal(firstPromptStep({ ...base, pane: CLAUDE_READY + "\n 이 폴더를 trust 해도 될까요?" }), "send"));
 t("[5] 로그인 화면은 wait(입력창이 아니다) → 결국 시간 초과로 give-up", () => {
   assert.equal(firstPromptStep({ ...base, pane: LOGIN }), "wait");
   assert.equal(firstPromptStep({ ...base, pane: LOGIN, elapsedMs: 90_001 }), "give-up");
