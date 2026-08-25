@@ -22,7 +22,10 @@ import { projectAbsPath } from "../project/project-fs.js";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { getOpt } from "./tmux-exec.js";
-import { executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
+import { adoptLegacyExecutionSession, executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject, type ExecutionSessionProject } from "../v6/execution-session-store.js";
+import { latestProjectForSession } from "../v6/project-session-store.js";
+import { canAttach } from "./terminal-sessions.js";
+import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -116,6 +119,27 @@ export async function setSessionProject(
   return { ...out, revision: current.desired_revision, bindingEpoch: current.binding_epoch };
 }
 
+/**
+ * 구 배포에서 넘어온 세션 구제(#1867 후속) — `execution_session` 행이 없고 `session_project` 에만 바인딩이 있으면,
+ *  **요청자가 그 세션의 소유자임을 증명할 때만** current 를 세워 돌려준다.
+ *
+ *  없으면: 이 표가 생기기 전에 프로젝트에 붙은 세션(실측 dev 794개)이 업그레이드 뒤 첫 프롬프트에서 '미연결' 로
+ *   판정돼 **새 프로젝트가 자동 생성**된다 — 사람이 고른 소속이 조용히 갈린다.
+ *  소유 증명은 두 축 중 하나: ①desired-state 의 owner(노드 세션 포함 — 게이트웨이 tmux 엔 안 보인다) ②canAttach
+ *   (중앙 tmux 세션·프로젝트 폴더 공동 세션). 외부 실행 id(`codex-`·`claude-` 접두)는 구 이력이 있을 수 없어 제외한다.
+ */
+async function adoptLegacyBinding(id: string, me: string): Promise<ExecutionSessionProject | null> {
+  if (isExternalExecutionSessionId(id)) return null;
+  const state = await getSessionState(id).catch(() => undefined);
+  const owns = state ? state.owner === me : await canAttach(id, me).catch(() => false);
+  if (!owns) return null;
+  const legacy = await latestProjectForSession(id).catch(() => null);
+  if (!legacy) return null;
+  return await adoptLegacyExecutionSession({
+    id, owner: me, harness: state?.harness ?? null, nodeId: state?.node_id ?? null, projectId: legacy.id,
+  }).catch(() => null);
+}
+
 /** 동적 AGENTS 주입용 단일 조회. cwd를 전혀 받지 않으며 실행 세션 id와 DB current binding만 본다.
  *  조회만으로 applied_revision을 올리지 않는다 — 훅이 stdout 전달을 끝낸 뒤 별도 ACK한다. */
 export async function sessionProjectContext(
@@ -126,7 +150,7 @@ export async function sessionProjectContext(
   if (!me) throw new HttpError(403, "사용자 신원이 없습니다");
   const known = knownRevisionRaw == null || knownRevisionRaw === "" ? -1 : Number(knownRevisionRaw);
   if (!Number.isSafeInteger(known) || known < -1) throw new HttpError(400, "knownRevision 형식 오류");
-  const current = await executionSessionProject(id, me);
+  const current = (await executionSessionProject(id, me)) ?? (await adoptLegacyBinding(id, me));
   if (!current) return { found: false, changed: known !== 0, session_id: id, project_id: null, revision: 0, applied_revision: 0, binding_epoch: 0 };
   const base = {
     found: true, changed: known !== current.desired_revision, session_id: id, project_id: current.project_id,
