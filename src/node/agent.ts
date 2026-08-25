@@ -276,7 +276,8 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       const id = String(args.id);
       const harness = String(args.harness || "claude");
       const prompt = String(args.text || "");
-      if (prompt.trim()) void injectFirstPrompt(id, harness, prompt, { trustOk: false })
+      // 신뢰 대화상자 자동 수락 여부는 **게이트웨이가 판정해 실어 보낸다**(#1867 autoTrustWorkspace) — 노드엔 프로젝트 폴더 규약이 없다.
+      if (prompt.trim()) void injectFirstPrompt(id, harness, prompt, { trustOk: args.trustOk === true })
         .catch((e) => console.warn(`[node] 첫 지시 주입 실패(${id}):`, (e as Error)?.message ?? e));
       return { ok: true };
     }
