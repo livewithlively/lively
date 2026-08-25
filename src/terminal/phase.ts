@@ -136,14 +136,22 @@ export function isActivityProgress(phase: ReportedPhase | undefined, prev: Repor
 //   훅은 툴을 쓸 때마다 실제로 실행되므로 추측이 아니다.
 //  #1221 — phase 를 함께 받으면 실행 단계(busy·waiting·idle)도 tmux 메타에 싣는다. phase 없이 부르면 종전 그대로
 //   활동 시각만 갱신한다(구 훅 호환 — 새 게이트웨이 + 구 훅 조합에서 무회귀).
-export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000)): Promise<void> {
+//  #1842 — **전이(prev→phase)를 반환한다.** 이 함수가 곧 "지금 단계가 바뀌었다"를 아는 유일한 자리라서,
+//   실시간 알림은 이 값 없이는 30초 폴링으로 같은 사실을 다시 발견해야 한다. 알림 관심사를 이 파일에
+//   들이지 않으려고(여긴 tmux 계층이다) **판단은 하지 않고 사실만 돌려준다** — 무엇이 알림인지는 호출자가 정한다.
+export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000)): Promise<SessionPhaseChange | null> {
   let prev: ReportedPhase | null = null;
   if (phase) {
     prev = parseReportedPhase(await getOpt(id, "@box_state"))?.phase ?? null;   // 전이 여부 판정용(아래)
     await tmuxQuiet(["set-option", "-t", id, "@box_state", `${phase} ${nowSec}`]);
   }
-  if (!isActivityProgress(phase, prev)) return;   // 하트비트는 활동 시각을 올리지 않는다(위 표 참조)
+  const changed = !!phase && phase !== prev;
+  if (!isActivityProgress(phase, prev)) return changed ? { prev, phase: phase as ReportedPhase, at: nowSec } : null;   // 하트비트는 활동 시각을 올리지 않는다(위 표 참조)
   setLastBusy(id, nowSec);                                        // 이 프로세스 관측치도 함께 올린다
   await tmuxQuiet(["set-option", "-t", id, "@box_last_busy", String(nowSec)]);
   await touchSessionBusy(id, nowSec).catch(() => { /* 비치명 — 레코드 없음·DB 다운 */ });
+  return changed ? { prev, phase: phase as ReportedPhase, at: nowSec } : null;
 }
+
+/** 단계가 실제로 **바뀐** 순간 (#1842). 같은 단계 재보고(하트비트)는 전이가 아니라 null 이다. */
+export interface SessionPhaseChange { prev: ReportedPhase | null; phase: ReportedPhase; at: number }

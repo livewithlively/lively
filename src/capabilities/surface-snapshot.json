@@ -3337,6 +3337,36 @@
   "input_hash": "cff82a5b7bd78ee1"
  },
  {
+  "name": "notify_feed",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/notify/feed"
+  ],
+  "input_hash": "5d7a3020a5fd239c"
+ },
+ {
+  "name": "notify_prefs",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/notify-prefs"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "notify_prefs_set",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/notify-prefs"
+  ],
+  "input_hash": "59f15ec58f542936"
+ },
+ {
   "name": "task_field_create_v6",
   "scope": "memory",
   "mcp": true,

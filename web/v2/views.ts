@@ -10,7 +10,7 @@ import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
-import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, raiseBanners, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
+import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
 
 export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
@@ -220,7 +220,7 @@ async function paintNotifications(host: HTMLElement): Promise<void> {
   catch { host.replaceChildren(); return; }   // 이력을 못 읽어도 아래 '대기 세션'은 그대로 쓸 수 있다
   if (!feed.notifications.length) { host.replaceChildren(); return; }
 
-  raiseBanners(feed.notifications);
+  // 배너는 셸이 전역으로 띄운다(startNotificationBanners) — 여기서 또 띄우면 이 화면을 열 때마다 두 번 뜬다.
 
   const perm = notificationPermission();
   const head = el('div', { class: 'v2-now-h' },
