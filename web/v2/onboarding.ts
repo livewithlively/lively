@@ -779,18 +779,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           .filter((r) => r.items.length);
         return qHead('sources',
           S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 그동안 하나 더요.` : '알겠습니다. 하나 더 여쭐게요.',
-          '늘 쓰시는 서비스도 이어 둘까요?',
-          '이어 두면 거기 새 자료가 올라올 때마다 제가 따라가서 정리합니다. 파일처럼 매번 올리실 필요가 없어요. 여러 개 골라도 됩니다.')
+          '그동안 쌓아 두신 자료도 가져올까요?',
+          '고르시면 거기 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요. 그 뒤에 올라오는 것도 알아서 따라옵니다.')
           + rows.map((r) => `<p class="ob-opt-group">${esc(r.k)}</p><div class="ob-opt-grid">
               ${r.items.map((it) => card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
           + `<button class="ob-btn ob-btn-pri" id="srcGo" disabled>계속</button>
-             <button class="ob-q-skip" data-skip>이어 둘 곳이 없어요</button>`;
+             <button class="ob-q-skip" data-skip>가져올 곳이 없어요</button>`;
       },
       bind: (el) => {
         const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
         const idOf = (label) => (all.find((s) => s.label === label) || {}).id;
         const go = $('#srcGo', el);
-        const sync = () => { const n = $$('.ob-opt-card.ob-on', el).length; go.disabled = !n; go.textContent = n ? `${n}개 이어두고 계속` : '계속'; };
+        const sync = () => { const n = $$('.ob-opt-card.ob-on', el).length; go.disabled = !n; go.textContent = n ? `${n}곳에서 가져오기` : '계속'; };
         sync();
         $$('.ob-opt-card', el).forEach((c) => c.onclick = () => {
           c.classList.toggle('ob-on');
@@ -810,13 +810,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         return qHead('connect',
           reading ? `읽는 중이에요. <b>${S.read.done} / ${S.read.total}</b>` : (S.upN ? `파일 ${S.upN}개는 다 읽었어요.` : '거의 다 왔어요.'),
           '고르신 곳을 하나씩 이어 주세요.',
-          '누르면 새 탭이 열립니다. 한 번만 허용하시면 그다음부터는 알아서 따라옵니다.')
+          '새 탭에서 한 번만 허용하시면 됩니다. 허용하는 즉시 그동안 쌓인 자료를 가져오기 시작합니다.')
           + `<div class="ob-opt-cards">${picked.map((id) => { const it = all.find((s) => s.id === id) || { label: id };
               const on = S.connected.includes(id);
               return `<button class="ob-opt-card ${on ? 'ob-on' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span class="ob-oc-st"><span class="v2-dot ${on ? 'done' : 'off'}" style="margin:0"></span></span>
-                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '이어졌어요. 새 자료가 따라옵니다.' : '눌러서 잇기 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
+                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '가져오는 중이에요. 새 자료도 따라옵니다.' : '눌러서 잇기 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
           <button class="ob-btn ob-btn-pri" id="upGo" ${S.connected.length ? '' : 'disabled'}>${left > 0 && S.connected.length ? `${left}개는 나중에, 계속` : '다 이었어요, 계속'}</button>
-          <button class="ob-q-skip" data-skip>나중에 이을게요</button>`;
+          <button class="ob-q-skip" data-skip>나중에 가져올게요</button>`;
       },
       bind: (el) => {
         $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
