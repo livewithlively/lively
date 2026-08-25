@@ -62,13 +62,18 @@ export async function applyNotionChildrenOrder(db: PgRunner): Promise<number> {
  *  ⚠ 호출 조건: full 모드 + 커넥터 실패 0(부분 실패 run 에서 스윕하면 살아있는 페이지가 오탐 아카이브됨). */
 //  #1561 감사: 아카이브된 행마다 op='set_lifecycle' 을 남긴다 — 여기서 안 남기면 '언제·왜 이 문서가
 //   아카이브됐나'가 문서 이력 어디에도 없다(실측: 이 경로로 511건이 흔적 없이 아카이브돼 있었다).
-export async function sweepNotionArchived(db: PgRunner, runStartIso: string): Promise<number> {
+//  ★ instance 필수(#1881 다중 워크스페이스): 이 스윕은 "이번 run 이 못 본 것 = 사라진 것"이라는 추론인데,
+//   그 추론은 **이 커넥터가 볼 수 있는 범위 안에서만** 참이다. 범위를 external_system='notion' 으로 잡으면
+//   워크스페이스 A 의 run 이 B 의 문서를 전부(자기가 못 봤으니) 아카이브하고, 다음에 B 가 돌면 A 를 죽인다 —
+//   워크스페이스가 둘 이상이면 매 run 서로 학살한다. 그래서 스탬프 축(external_instance)으로 반드시 좁힌다.
+export async function sweepNotionArchived(db: PgRunner, runStartIso: string, instance: string): Promise<number> {
+  if (!instance) throw new Error("sweepNotionArchived: instance 가 비었습니다 — 범위 없는 스윕은 타 워크스페이스를 아카이브합니다");
   const r = await db.query(
     `UPDATE knowledge SET lifecycle='archived', updated_at=now(), updated_by='connector:notion'
-     WHERE external_system='notion' AND lifecycle='active'
+     WHERE external_system='notion' AND external_instance=$2 AND lifecycle='active'
        AND (last_synced_at IS NULL OR last_synced_at < $1::timestamptz)
      RETURNING name`,
-    [runStartIso],
+    [runStartIso, instance],
   );
   await auditLifecycleSweep(db, (r.rows as Array<{ name: string }>).map((x) => x.name),
     "connector:notion", "active", "archived");
@@ -100,7 +105,10 @@ export interface NotionLedger {
   backlinks: Map<string, string[]>;
 }
 
-export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
+//  ★ instance 필수(#1881): 원장은 "커넥터가 이미 아는 것"의 스냅샷이다. 다른 워크스페이스의 페이지가 섞이면
+//   ⓐ 델타가 남의 페이지를 '알고 있음'으로 읽어 판정이 틀어지고 ⓑ 가속 full 의 스킵/관측 판정이 남의 행을 건드린다.
+export async function loadNotionLedger(db: PgRunner, instance: string): Promise<NotionLedger> {
+  if (!instance) throw new Error("loadNotionLedger: instance 가 비었습니다");
   const r = await db.query(
     `SELECT external_id, title, lifecycle, parent_external_id, last_synced_at,
             fields->'notion'->>'kind' AS kind,
@@ -108,7 +116,8 @@ export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
             COALESCE(raw->'page'->>'last_edited_time', raw->'database'->>'last_edited_time') AS last_edited,
             (SELECT max(ds->>'last_edited_time') FROM jsonb_array_elements(COALESCE(raw->'data_sources','[]'::jsonb)) AS ds) AS ds_edited,
             fields->'notion'->'data_source_ids' AS ds_ids
-     FROM knowledge WHERE external_system='notion' AND external_id IS NOT NULL`);
+     FROM knowledge WHERE external_system='notion' AND external_instance=$1 AND external_id IS NOT NULL`,
+    [instance]);
   const byId = new Map<string, NotionLedgerEntry>();
   const dsToDb = new Map<string, string>();
   for (const row of r.rows as Array<Record<string, unknown>>) {
@@ -133,8 +142,8 @@ export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
      FROM knowledge, LATERAL (
        SELECT (regexp_matches(body_md, '/api/ui/notion-assets/([A-Za-z0-9._-]+)', 'g'))[1] AS f
      ) m
-     WHERE external_system='notion' AND external_id IS NOT NULL AND body_md LIKE '%/api/ui/notion-assets/%'
-     GROUP BY external_id`);
+     WHERE external_system='notion' AND external_instance=$1 AND external_id IS NOT NULL AND body_md LIKE '%/api/ui/notion-assets/%'
+     GROUP BY external_id`, [instance]);
   for (const row of ar.rows as Array<{ external_id: string; files: string[] }>) {
     const led = byId.get(String(row.external_id));
     if (led && Array.isArray(row.files)) led.assets = row.files.map(String);
@@ -144,9 +153,9 @@ export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
   const bl = await db.query(
     `SELECT tk.external_id AS target_ext, fk.external_id AS from_ext
      FROM knowledge_link l
-     JOIN knowledge fk ON fk.name = l.from_name AND fk.external_system='notion' AND fk.external_id IS NOT NULL
-     JOIN knowledge tk ON tk.name = l.to_name AND tk.external_system='notion' AND tk.external_id IS NOT NULL
-     WHERE l.origin = 'connector:notion'`);
+     JOIN knowledge fk ON fk.name = l.from_name AND fk.external_system='notion' AND fk.external_instance=$1 AND fk.external_id IS NOT NULL
+     JOIN knowledge tk ON tk.name = l.to_name AND tk.external_system='notion' AND tk.external_instance=$1 AND tk.external_id IS NOT NULL
+     WHERE l.origin = 'connector:notion'`, [instance]);
   for (const row of bl.rows as Array<{ target_ext: string; from_ext: string }>) {
     const arr = backlinks.get(row.target_ext);
     if (arr) arr.push(row.from_ext); else backlinks.set(row.target_ext, [row.from_ext]);
