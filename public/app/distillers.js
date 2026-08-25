@@ -24,7 +24,7 @@ import { api, busy, cardHead, el, keepSideScroll, relTime, toast } from './core.
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
-const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'other'];
+const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'local_file', 'other'];
 /** 목록 주소. */
 const LIST_HREF = '#/context/distill';
 /** 설정 페이지 주소 — 목록·크럼·저장 후 이동이 전부 이걸 쓴다(해시 문자열 조립이 흩어지지 않게). */

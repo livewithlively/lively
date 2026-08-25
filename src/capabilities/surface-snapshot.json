@@ -3857,6 +3857,46 @@
   "input_hash": "c186cbfc4573638d"
  },
  {
+  "name": "org_notion_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/notion/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_notion_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/collect"
+  ],
+  "input_hash": "912fb73efbfedc37"
+ },
+ {
+  "name": "org_notion_collect_connect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/collect/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_notion_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/oauth-complete"
+  ],
+  "input_hash": "1333f0dfc135b86a"
+ },
+ {
   "name": "me_slack_channels",
   "scope": null,
   "mcp": false,
