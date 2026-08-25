@@ -110,7 +110,7 @@ export async function upsertProjectFolderBinding(b: {
     await client.query(
       `INSERT INTO project_folder_binding(project_id, member_id, node_id, abs_path, sync, origin_key, binding_kind)
          VALUES($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (tenant_id, project_id, member_id, node_id, abs_path) DO UPDATE
+       ON CONFLICT (project_id, member_id, node_id, abs_path) DO UPDATE   -- PK 는 project_id(대리키 FK) 포함이라 tenant_id 로 재작성되지 않는다(tenant-column.isNaturalKey ⓑ) — 중재자에 tenant_id 를 넣으면 42P10
          SET sync=EXCLUDED.sync, origin_key=COALESCE(EXCLUDED.origin_key, project_folder_binding.origin_key),
              binding_kind=EXCLUDED.binding_kind, seen_at=now()`,
       [b.projectId, b.memberId ?? SHARED_BINDING_MEMBER, b.nodeId, b.absPath, b.sync ?? "none", b.originKey ?? null, kind]);
