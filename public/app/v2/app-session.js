@@ -25,11 +25,17 @@ export async function listSessionApps() {
             const sites = (csp.frame_domains || []).map(String);
             const net = [...(csp.connect_domains || []), ...(perm.hosts || [])].map(String);
             const instances = (a.manifest && a.manifest.instances) || { project: 'optional', multiplicity: 'multiple' };
+            const runtime = a.manifest?.runtime?.kind === 'worker' ? {
+                kind: 'worker',
+                placement: a.manifest.runtime.placement,
+                idle_timeout_sec: Number(a.manifest.runtime.idle_timeout_sec || 300),
+                memory_mb: Number(a.manifest.runtime.memory_mb || 256),
+            } : null;
             const source = (a.source && typeof a.source === 'object') ? a.source : {};
             // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
             const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
             return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-                scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, system, source };
+                scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, runtime, system, source };
         });
     }
     catch (e) {
@@ -59,7 +65,7 @@ export function ensureAppGrant(appId, title) {
     const run = (async () => {
         const app = (await listSessionApps()).find((a) => a.id === appId)
             || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [],
-                instances: { project: 'optional', multiplicity: 'multiple' }, system: null, source: {} };
+                instances: { project: 'optional', multiplicity: 'multiple' }, runtime: null, system: null, source: {} };
         if (!(await appConsent(app)))
             return false;
         await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });

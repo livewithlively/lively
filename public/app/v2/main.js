@@ -27,6 +27,7 @@ import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js'; // 통합검색
 import { mountTitlebar } from './titlebar.js'; // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, updateAppInstance } from './app-instance.js';
+import { mountAppRuntimeView } from './app-runtime.js';
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
 const SOLO = new URLSearchParams(location.search).get('solo') === '1';
@@ -735,8 +736,9 @@ async function renderRoute(tab) {
                     frame.destroy();
                     return;
                 }
-                tab.center.replaceChildren(frame.root);
-                tab.appView = frame;
+                const view = instance.app.runtime ? mountAppRuntimeView(instance, frame) : frame;
+                tab.center.replaceChildren(view.root);
+                tab.appView = view;
             }
             tab.aside.replaceChildren();
             markActive('app-instance:' + instance.app_id);
