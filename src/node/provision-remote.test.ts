@@ -2,13 +2,25 @@
 // provision-poll-spec.md 의 8개 행위만 검증한다. 구현 본문은 보지 않고 진입점만 import 한다.
 // sleep 은 즉시-resolve, now 는 결정적 fake clock 을 주입해 실시간 대기 0 으로 돌린다.
 import assert from "node:assert/strict";
-import { drivePollProvision, type ProvisionStatus } from "./provision-remote.js";
+import { drivePollProvision, nodeProjectCreatePlan, type ProvisionStatus } from "./provision-remote.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
 
 // 폴링 간 대기 — 즉시 resolve(실시간 대기 없음).
 const sleep = async (_ms: number): Promise<void> => {};
+
+// 프로젝트 바인딩 정본이 기록되기 전에 노드가 첫 프롬프트를 실행하지 않게, 새 노드는 prompt를 create에서 분리한다.
+{
+  const input = { label: "", rootKey: "shared", subpath: "project/1", harness: "claude", flags: {}, autoApprove: false, initialPrompt: "첫 지시" };
+  const modern = nodeProjectCreatePlan(input, true);
+  assert.equal(modern.createInput.initialPrompt, undefined);
+  assert.equal(modern.deferredPrompt, "첫 지시");
+  const legacy = nodeProjectCreatePlan(input, false);
+  assert.equal(legacy.createInput.initialPrompt, "첫 지시", "구 노드는 종전 create 주입으로 호환한다");
+  assert.equal(legacy.deferredPrompt, null);
+  ok("0 새 노드 첫 지시를 DB 바인딩 뒤로 지연");
+}
 
 // 호출마다 step 만큼 전진하는 결정적 시계. capMs 초과를 유도할 땐 step 을 크게 준다.
 function fakeClock(step = 10, start = 0): () => number {

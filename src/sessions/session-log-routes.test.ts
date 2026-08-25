@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
-import { readRawBody, MAX_DELTA, registerSessionLogRoutes } from "./session-log-routes.js";
+import { readRawBody, MAX_DELTA, registerSessionLogRoutes, sessionLogProjectClaim } from "./session-log-routes.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import { wrap } from "../http/rest-util.js";
 
@@ -53,6 +53,13 @@ const fakeVerifier = {
 
 async function main(): Promise<void> {
   let pass = 0; const ok = (n: string): void => { pass++; console.log(`ok  ${n}`); };
+
+  assert.deepEqual(sessionLogProjectClaim({ project_id: 17, binding_epoch: 3 }, 99), { projectId: 17, bindingEpoch: 3 });
+  assert.deepEqual(sessionLogProjectClaim({ project_id: null, binding_epoch: 4 }, 99), { projectId: null, bindingEpoch: 4 },
+    "실행 세션이 detach면 legacy project query로 되살아나면 안 된다");
+  assert.deepEqual(sessionLogProjectClaim(null, 99), { projectId: 99, bindingEpoch: undefined });
+  assert.equal(sessionLogProjectClaim(null, Number.NaN), null);
+  ok("⓪ 실행 바인딩이 legacy query보다 우선하며 detach도 이력에 남김");
 
   // ── ① 실제 라우트 + 전역 express.json(프로덕션 순서) — application/json POST 는 415 로 즉시 막힌다(매달리지 않음). ──
   //   가드가 getRuntimeConfig(DB) 앞에 있어 이 경로는 DB 무접촉 → 순수 라우트 계약만 본다.

@@ -1,7 +1,7 @@
 // web/v2/app-session.ts — 설치된 '세션 앱'(org_app)을 연다 (#1780 PR4b).
 //  전역 런치패드(side-rail 의 ⊞ 앱)·세션 화면 곁칸 [앱] 부품(panes-parts appsPart)이 **공유**하는 진입점이다.
 //  세션 앱 = 매니페스트로 스킬·persona·MCP·UI 를 묶은 앱. 열면 그 앱의 하네스 자산이 물질화된 tmux 세션이 뜨고
-//  (서버 createSession 이 appId 를 받아 grant 재검·앱 토큰 발급·세션폴더 앱홈/자산 물질화를 한다 — sessions.ts D3·D4),
+//  (서버 createSession 이 appId 를 받아 grant 재검·앱 토큰 발급·private session_home에 자산을 물질화한다),
 //  사용자는 그 세션과 대화한다. 일반 세션(quick-session)과 다른 점은 **appId 를 실어 보낸다**는 것 하나 —
 //  그 한 필드가 앱 세션 배관 전체를 켠다.
 //
@@ -66,7 +66,7 @@ export function isSpawningApp(): boolean { return spawning; }
 /**
  * 앱 세션을 만든다. 성공하면 { id }, 사용자가 동의를 취소했거나 실패하면 null(이유는 toast).
  *  UI 중립 — **행선지는 호출자가 정한다**: 런치패드는 openAppSession 으로 #/s/<id> 로 간다.
- *  opts.projectId 를 주면 만든 뒤 그 프로젝트에 붙인다.
+ *  opts.projectId 를 주면 생성 요청 자체가 그 프로젝트 workspace와 DB 소속을 확정한다.
  */
 /**
  * 이 앱에 대한 내 동의(grant)를 확보한다 — 없으면 **동의 창을 띄우고** 승인 시 grant 를 만든다.
@@ -115,11 +115,6 @@ export async function spawnAppSession(
         id = await postAppSession(appId, opts);
       } else throw e;
     }
-    if (opts?.projectId && Number(opts.projectId) > 0) {
-      // 세션은 이미 유효 — 붙이기 실패는 치명 아님(사용자는 우측 '이 세션'에서 나중에 붙일 수 있다).
-      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + '/project', { method: 'POST', body: JSON.stringify({ projectId: Number(opts.projectId) }) }); }
-      catch (_) { /* noop */ }
-    }
     try {
       await ensureSessionAppInstance(appId, id, {
         projectId: opts?.projectId ?? null,
@@ -146,15 +141,18 @@ export async function openAppSession(appId: string, opts?: { title?: string; pro
   return true;
 }
 
-async function postAppSession(appId: string, opts?: { title?: string; initialPrompt?: string }): Promise<string> {
+async function postAppSession(appId: string, opts?: { title?: string; projectId?: number | null; initialPrompt?: string }): Promise<string> {
   const p = runPrefs();
-  const out: any = await api('/api/ui/terminal/sessions', {
+  const projectId = Number(opts?.projectId || 0);
+  const endpoint = projectId > 0 ? `/api/ui/v6/projects/${projectId}/sessions` : '/api/ui/terminal/sessions';
+  const out: any = await api(endpoint, {
     method: 'POST',
     body: JSON.stringify({
       label: (opts?.title || appId).slice(0, 28),
       harness: p.harness && p.harness !== 'shell' ? p.harness : 'claude',
       flags: p.flags && typeof p.flags === 'object' ? p.flags : {},
-      autoApprove: !!p.autoApprove, sessionDir: true, appId,
+      autoApprove: !!p.autoApprove, appId,
+      ...(projectId > 0 ? {} : { rootKey: 'personal' }),
       ...(opts?.initialPrompt ? { initialPrompt: opts.initialPrompt } : {}),
     }),
   });

@@ -1,12 +1,25 @@
 import { strict as assert } from "node:assert";
+import path from "node:path";
 import test from "node:test";
-import { assetDiskPath, assertOrigNameSafe, composeAssetFile, materializePreparedAppAssets } from "./session-assets.js";
+import {
+  APP_PLUGIN_MANIFEST_REL, appPluginArgs, appPluginManifest, assetDiskPath, assertOrigNameSafe, composeAssetFile,
+  materializePreparedAppAssets,
+} from "./session-assets.js";
 
-// 순수 — 자산 종류 → 세션 폴더 상대경로 디스패치(design D4, kit placement 규약과 동일).
+// 순수 — 자산 종류 → cwd 밖 private plugin 상대경로 디스패치(#1867: cwd `.claude/` 가 아니라 session_home/plugin).
 test("assetDiskPath — skill/subagent/command 디스패치", () => {
-  assert.equal(assetDiskPath("skill", "greet"), ".claude/skills/greet/SKILL.md");
-  assert.equal(assetDiskPath("subagent", "reviewer"), ".claude/agents/reviewer.md");
-  assert.equal(assetDiskPath("command", "deploy"), ".claude/commands/deploy.md");
+  assert.equal(assetDiskPath("skill", "greet"), "plugin/skills/greet/SKILL.md");
+  assert.equal(assetDiskPath("subagent", "reviewer"), "plugin/agents/reviewer.md");
+  assert.equal(assetDiskPath("command", "deploy"), "plugin/commands/deploy.md");
+});
+
+test("앱 plugin manifest와 Claude 세션 전용 --plugin-dir 배선", () => {
+  assert.deepEqual(JSON.parse(appPluginManifest("hello")), {
+    name: "hello", description: "Lively app session assets for hello", version: "1.0.0",
+  });
+  assert.equal(APP_PLUGIN_MANIFEST_REL, "plugin/.claude-plugin/plugin.json");
+  assert.deepEqual(appPluginArgs("claude", "/private/session"), ["--plugin-dir", path.join("/private/session", "plugin")]);
+  assert.deepEqual(appPluginArgs("codex", "/private/session"), [], "Claude plugin을 다른 하네스 argv에 넘기지 않는다");
 });
 
 test("assetDiskPath — 알 수 없는 종류 → null(skip)", () => {
@@ -41,28 +54,37 @@ test("composeAssetFile — name 을 origName 으로 강제 + description·본문
   assert.match(out, /# 본문/);                    // 본문 포함
 });
 
-test("원격 실행 자산 봉투는 .claude 아래만 쓰고 traversal은 거부한다", async () => {
+test("원격 실행 자산 봉투는 plugin/ 아래(+manifest)만 쓰고 traversal·구 cwd 배치는 거부한다", async () => {
   const writes: string[] = [];
   const writer = {
     mkdirp: async (_path: string) => {},
     writeFile: async (file: string, body: string, mode: number) => { writes.push(`${file}:${body}:${mode}`); },
   };
-  await materializePreparedAppAssets("/session", [{ path: ".claude/skills/greet/SKILL.md", body: "hello", mode: 0o644 }], writer);
-  assert.equal(writes.length, 1);
+  await materializePreparedAppAssets("/session", [
+    { path: "plugin/.claude-plugin/plugin.json", body: "{}", mode: 0o644 },
+    { path: "plugin/skills/greet/SKILL.md", body: "hello", mode: 0o644 },
+    { path: "plugin/agents/reviewer.md", body: "r", mode: 0o644 },
+    { path: "plugin/commands/deploy.md", body: "d", mode: 0o644 },
+  ], writer);
+  assert.equal(writes.length, 4);
+  assert.ok(writes.every((w) => w.startsWith(path.resolve("/session", "plugin") + path.sep)), "전부 session_home/plugin 아래");
   await assert.rejects(
     () => materializePreparedAppAssets("/session", [{ path: "../token", body: "bad", mode: 0o600 }], writer),
     /세션 밖|허용되지 않은/,
   );
-  for (const path of [
-    ".claude/skills/../../.lively/token",
-    ".claude/agents/../commands/evil.md",
-    ".claude\\commands\\evil.md",
-    ".claude/skills/not-a-skill.md",
+  for (const p of [
+    "plugin/skills/../../.lively/token",
+    "plugin/agents/../commands/evil.md",
+    "plugin\\commands\\evil.md",
+    "plugin/skills/not-a-skill.md",
+    "plugin/.claude-plugin/../../.lively/token",
+    ".claude/skills/greet/SKILL.md",   // 종전 cwd 배치 — 사용자 workspace 에 쓰는 경로라 더 이상 받지 않는다(#1867)
+    ".claude/commands/deploy.md",
   ]) {
     await assert.rejects(
-      () => materializePreparedAppAssets("/session", [{ path, body: "bad", mode: 0o600 }], writer),
+      () => materializePreparedAppAssets("/session", [{ path: p, body: "bad", mode: 0o600 }], writer),
       /허용되지 않은/,
-      path,
+      p,
     );
   }
 });

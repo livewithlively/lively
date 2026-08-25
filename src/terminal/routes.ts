@@ -604,11 +604,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       // #1516 — 로그인 전용 세션(관리탭 [연결된 AI 계정] ▸ 로그인). 값 검증은 harnessLoginArgv 가 한다
       //  (아는 하네스만 로그인 argv 를 내주고, 모르는 값은 평범한 셸 세션으로 접힌다 — 임의 문자열이 명령이 되지 않는다).
       loginFor: String(b.loginFor ?? "") || undefined,
-      // #1719 홈 입력창 — 세션 전용 폴더(폴더를 안 고른다) + 첫 지시(하네스 입력창이 뜬 뒤 주입). 노드 세션도 input 스프레드로 그대로 전파.
+      // 첫 지시(하네스 입력창이 뜬 뒤 주입). cwd는 rootKey/subpath workspace 좌표이며 프로젝트 소속과 독립이다.
       // #1683 — 세션을 만든 브라우저 화면의 테마. 헤더가 정본이다(api() 가 모든 요청에 싣는다 — 호출부마다
       //  payload 를 고치지 않아도 전 경로가 덮인다). 바디는 헤더를 못 싣는 경로(노드 relay 재생성 등)용 폴백.
       theme: themeOf(req, b),
-      sessionDir: b.sessionDir === true,
       initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
       // #1780 D4 — 앱 세션. appId 를 주면 createSession 이 grant 검사·앱 토큰 발급·세션폴더 앱 홈/자산 물질화를 한다
       //  (없으면 일반 세션, 종전 경로 무변경). 존재·활성·grant 검증은 createSession(mintAppToken)이 하고 404/409/403 을 던진다.

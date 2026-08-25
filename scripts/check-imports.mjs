@@ -194,7 +194,9 @@ function walk(dir, out = []) {
 }
 const files = ROOTS.flatMap((r) => walk(path.join(REPO, r)));
 const fileSet = new Set(files);
-const rel = (f) => path.relative(REPO, f);
+// 룰·allowlist는 OS 무관 POSIX 경로다. Windows path.relative() 결과(\\)를 그대로 쓰면
+// 기존 허용 순환 전부를 신규 위반으로 오판하고 금지 엣지 정규식도 매칭되지 않는다.
+const rel = (f) => path.relative(REPO, f).split(path.sep).join("/");
 
 function staticSpecs(src) {
   const specs = [];

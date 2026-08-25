@@ -330,22 +330,17 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   //  자격이 만료된 상태에서 그 하네스로 세션을 열면 즉사해 로그인 자체가 불가능하기 때문(harnessLoginArgv 주석).
   //  harness 는 'shell' 로 보낸다 — 이 세션은 AI 세션이 아니라 로그인 절차용이다.
   loginFor?: string;
-  // #1719 홈 입력창 — **세션 전용 폴더**에서 연다: cwd = <rootKey 루트>/sessions/<세션id>(폴더를 고르지 않는다).
-  //  프로젝트 소속은 만들 때 정하지 않고 나중에 POST /terminal/sessions/:id/project 로 붙인다(session-project.ts) —
-  //  cwd 는 세션의 것이라 프로젝트가 바뀌어도 그대로다(실행 중 프로세스의 cwd 는 inode 참조라 어차피 안 따라온다).
-  //  subpath 는 무시된다. 라벨·하네스·플래그는 종전과 같다.
   // #1683 다크모드 — 이 세션을 만든 **브라우저 화면의 테마**(해석된 값: dark|light). pane env 로 내려보내
   //  안에서 도는 하네스·TUI 가 배경에 맞는 색을 고르게 한다(COLORFGBG·LIVELY_THEME — sessions.ts 참조).
   //  ⚠ 하네스 설정 파일(~/.claude/settings.json 의 theme 등)은 **건드리지 않는다** — 그건 사람의 설정이고
   //   킷이 보존하기로 한 키다(kit/adapters/*/uninstall.mjs). 우리는 터미널이 하는 표준 신호만 준다.
   theme?: "dark" | "light";
-  sessionDir?: boolean;
   // #1719 홈 입력창 — 첫 지시. 세션을 띄운 뒤 하네스 입력창이 뜨는 걸 **보고 나서** 주입한다(session-first-prompt.ts).
   //  생성 응답은 기다리지 않는다(주입은 백그라운드) — 화면은 세션 대화창으로 가서 대화 파일에 나타나는 걸 따라간다.
   initialPrompt?: string;
   // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
-  //  세션 폴더에 앱 홈(.lively/token·gateway-url)·앱 하네스 자산(.claude/{skills,agents,commands})을 물질화하고
-  //  pane env LIVELY_HOME=<sessionDir>·LIVELY_APP_ID=<id> 를 주입한다(design D3·D4). 미설정=일반 세션(무변경).
+  //  cwd와 분리된 private app runtime home에 토큰·앱 하네스 자산을 물질화하고
+  //  pane env LIVELY_HOME=<private session_home>·LIVELY_APP_ID=<id> 를 주입한다. session_home은 cwd와 분리된다.
   appId?: string;
   // 게이트웨이가 정책·grant·DB를 확인해 준비한 원격 실행용 봉투. HTTP body에서는 받지 않고 내부 node relay만 사용한다.
   appSession?: PreparedAppSession;
