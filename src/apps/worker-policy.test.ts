@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  WORKER_POLICY_DEFAULT, cpuPercentBetween, decideWorkerBudget, normalizeWorkerPolicy, parsePsCpuSeconds, resolveWorkerPolicy,
+  WORKER_POLICY_DEFAULT, WORKER_POLICY_MAX, cpuPercentBetween, decideWorkerBudget, normalizeWorkerPolicy, parsePsCpuSeconds, resolveWorkerPolicy,
   type WorkerPolicy,
 } from "./worker-policy.js";
 
@@ -69,11 +69,17 @@ test("E12 정책 정규화는 소수를 내림한다", () => {
 
 test("E13 정책 정규화는 터무니없이 큰 값을 항목별 최대치로 접는다", () => {
   const n = normalizeWorkerPolicy({ max_concurrent: 1e9, max_per_member: 1e9, max_memory_mb: 1e12, cpu_percent_max: 1e6, max_wall_sec: 1e12 });
-  assert.equal(n.max_concurrent, 4096);
-  assert.equal(n.max_per_member, 4096);
-  assert.equal(n.max_memory_mb, 1_048_576);
-  assert.equal(n.cpu_percent_max, 6400);
-  assert.equal(n.max_wall_sec, 2_592_000);
+  assert.deepEqual(n, { ...WORKER_POLICY_MAX });
+});
+
+// 표면 검증(capabilities/delivery/runtime-config)이 이 상한을 import 해 400 경계로 쓴다.
+// 두 곳에 숫자를 따로 적으면 한쪽만 바뀌어 "400 은 안 나는데 조용히 접히는" 구간이 생기므로,
+// 상한 자체가 normalize 의 통과 경계와 정확히 일치함을 못박는다.
+test("E13b 공유 상한은 그대로 통과하고, 그보다 1 큰 값은 상한으로 접힌다", () => {
+  for (const [field, max] of Object.entries(WORKER_POLICY_MAX)) {
+    assert.equal(normalizeWorkerPolicy({ [field]: max })[field as keyof typeof WORKER_POLICY_MAX], max, `${field} 상한값은 통과해야 한다`);
+    assert.equal(normalizeWorkerPolicy({ [field]: max + 1 })[field as keyof typeof WORKER_POLICY_MAX], max, `${field} 상한+1 은 접혀야 한다`);
+  }
 });
 
 test("E14 정책 행이 없으면(신규 조직·구 행) 기본값이다", () => {
