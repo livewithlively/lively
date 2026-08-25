@@ -444,7 +444,9 @@ function secFoot(...rows) {
 }
 /** 발치의 '갈 곳' 한 줄(세션 이력 · 아카이브 · 휴지통) — 목록의 항목이 아니라 같은 급의 문이다. */
 function footLink(href, icon, text, n) {
-    return el('a', { class: 'v2-nav v2-foot-link' + (last && last.activeKey() === href.replace('#/', '') ? ' on' : ''), href, title: text }, glyph(icon, 'v2-nav-ic'), el('span', { class: 'n', text }), n != null ? el('span', { class: 'v2-cnt', text: String(n) }) : null);
+    //  활성 표시는 걸지 않는다 — activeKey 는 `app:sessions` 꼴이라 해시(`#/app/sessions`)와 축이 달라
+    //   비교가 영영 맞지 않는다. 맞지도 않는 판정을 두면 다음 사람이 '왜 활성이 안 되지'를 뒤진다.
+    return el('a', { class: 'v2-nav v2-foot-link', href, title: text }, glyph(icon, 'v2-nav-ic'), el('span', { class: 'n', text }), n != null ? el('span', { class: 'v2-cnt', text: String(n) }) : null);
 }
 function renderHomeApps() {
     if (!last)
