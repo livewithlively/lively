@@ -11,7 +11,7 @@ export function onboardingDone(): boolean { try { return localStorage.getItem(OB
 
 export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boolean) => void; onDone?: () => void } = {}): { destroy(): void } {
   host.className = 'ob-root';
-  host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span></div>
+  host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span><button class="ob-q-back" id="obBack" data-back hidden>← 이전</button></div>
     <div class="ob-qwrap"><div class="ob-qcol" id="qcol"></div></div>
     <div class="ob-chat"><div class="ob-thread" id="thread"></div></div>
     <div class="ob-composer"><div class="ob-composer-in">
@@ -648,7 +648,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function qHead(prog, lead, title, help) {
     const at = QPROG.indexOf(prog);
     // 눈금은 지나온 자리로 돌아가는 문이기도 하다 — 앞 단계는 눌러서 고칠 수 있다(원준님 2026-08-25).
-    return `<div class="ob-q-top">${S.trail.length ? `<button class="ob-q-back" data-back>← 이전</button>` : ''}<div class="ob-q-ic">L</div></div>
+    return `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
       ${at >= 0 ? `<div class="ob-q-prog">${QPROG.map((k, i) => i < at
           ? `<button class="ob-on ob-go" data-jump="${k}" aria-label="${esc(SCENE_LABEL[k] || '')}(으)로 돌아가기"></button>`
           : `<i class="${i === at ? 'ob-on' : ''}"></i>`).join('')}</div>` : ''}
@@ -786,9 +786,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           if (hit) hit.items = hit.items.concat(items); else rows.push({ k, items });
         }
         return qHead('sources',
-          S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 그동안 하나 더요.` : '알겠습니다. 하나 더 여쭐게요.',
-          '그동안 쌓아 두신 자료도 가져올까요?',
-          '고르시면 거기 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요. 그 뒤에 올라오는 것도 알아서 따라옵니다.')
+          S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 이어서 한 가지만 더요.` : '알겠습니다. 이어서 한 가지만 더요.',
+          '그동안 쌓아 두신 자료를 가져올 외부 서비스를 연결할게요.',
+          '고르신 곳에 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요.')
           + rows.map((r) => `<p class="ob-opt-group">${esc(r.k)}</p><div class="ob-opt-grid">
               ${r.items.map((it) => card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
           + `<button class="ob-btn ob-btn-pri" id="srcGo" disabled>계속</button>
@@ -1098,7 +1098,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (animate !== false) { void col.offsetWidth; col.style.animation = ''; }
     col.classList.toggle('ob-wide', key === 'sources');
     col.innerHTML = sc.html();
-    const back = $('[data-back]', col); if (back) back.onclick = () => goBack();
+    syncBack();
     $$('[data-jump]', col).forEach((b) => b.onclick = () => goJump(b.dataset.jump));
     sc.bind && sc.bind(col);
   }
@@ -1111,6 +1111,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (i < 0) return goScene(key);
     S.trail = S.trail.slice(0, i); save(); goScene(key, { back: true });
   }
+  /* 뒤로가기 버튼은 이동줄에 하나만 두고 켜고 끈다 — 질문 기둥의 L 뱃지가 밀리지 않게(원준님 2026-08-25) */
+  function syncBack() {
+    const b = $('#obBack'); if (!b) return;
+    b.hidden = !S.trail.length;
+    b.onclick = () => goBack();
+  }
   function goScene(key, opts) {
     if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) S.trail.push(S.scene);
     S.scene = key; save(); renderSB();
@@ -1121,6 +1127,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     } else {
       renderScene(key, true);
     }
+    syncBack();
   }
 
   /* 채팅 단계로 점프·복원 — 앞 단계 문답을 압축해 깔아 놓고 그 단계부터 산다 */

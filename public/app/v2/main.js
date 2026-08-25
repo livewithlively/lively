@@ -7,6 +7,7 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
+import { renderOnboarding, onboardingDone } from './onboarding.js'; // #/welcome 처음 설정(#1813)
 import { $view, anchoredPopover, api, el, sv, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
@@ -95,7 +96,10 @@ export async function bootV2() {
     drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
     await loadData();
     // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
-    const boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
+    let boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
+    // 처음 설정을 아직 안 끝낸 사람은 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
+    if (!boot && !onboardingDone())
+        boot = '#/welcome';
     if (boot && tabsApi.find(boot)) {
         const hit = tabsApi.find(boot);
         hit.route = boot;
@@ -176,6 +180,8 @@ function titleFor(route) {
         return { title: '홈', noAside: true };
     if (p === 'liv')
         return { title: '리브', noAside: false };
+    if (p === 'welcome')
+        return { title: '처음 설정', noAside: true }; // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
     if (p === 'p') {
         const id = Number(segs[1]);
         return { title: projName(data, id), noAside: false };
@@ -265,6 +271,10 @@ function bindAltOpen() {
 }
 async function renderRoute(tab) {
     const seq = ++tab.seq;
+    if (tab.ob) {
+        tab.ob.destroy();
+        tab.ob = null;
+    } // 처음 설정 화면을 떠나면 읽기 타이머·사이드바 숨김을 푼다
     const { segs, raw } = parseRoute(tab.route);
     const page = segs[0] || '';
     markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === '' || page === 'dashboard' ? 'home' : '');
@@ -279,6 +289,17 @@ async function renderRoute(tab) {
             tab.center.append(host);
             const rail = drawAsideLiv(tab);
             await renderLiv(host, { rail, embedded: true });
+        }
+        else if (page === 'welcome') {
+            // 처음 설정(#1813) — 리브가 이름·무대·자료·AI 를 묻고 채팅으로 이어진다. 막1(이름)에서는 사이드바·탭 줄을 숨긴다(노션 p1).
+            tab.center.replaceChildren();
+            const host = el('div', { class: 'ob-root' });
+            tab.center.append(host);
+            markActive('liv');
+            tab.ob = renderOnboarding(host, {
+                onBare: (bare) => root?.classList.toggle('ob-bare', bare),
+                onDone: () => { void loadData().then(() => drawSide()); },
+            });
         }
         else if (page === 'p' && segs[1]) {
             const id = Number(segs[1]);

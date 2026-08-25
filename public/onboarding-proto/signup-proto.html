@@ -91,7 +91,7 @@ button{cursor:pointer;background:none;border:0}
 .ld-agree{display:flex;gap:9px;align-items:flex-start;margin-top:8px;font-size:12.5px;line-height:1.5;color:var(--ink-sub)}
 .ld-agree input{width:16px;height:16px;margin-top:2px;flex:none;accent-color:var(--blue)}
 .ld-agree a{color:var(--blue);font-weight:600;text-decoration:underline}
-.ld-agree .req{color:var(--coral-text);font-weight:700}
+.ld-agree .req{display:inline-block;margin-right:3px;padding:1px 6px;border-radius:999px;background:var(--line-row);color:var(--muted-head);font-size:11px;font-weight:700;letter-spacing:.01em;vertical-align:1px}
 
 /* 비밀번호 규칙 */
 .ld-rules{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
@@ -198,7 +198,7 @@ function agreeHTML(kind) {
   // 링크는 항목 이름에 건다 — 문장 꼬리에 '무엇을 왜 받는지'를 달았더니 줄이 넘어가고 읽는 순서도 어색했다(원준님 2026-08-25).
   const href = 'privacy.html#consent';
   return `<label class="ld-agree"><input type="checkbox" data-agree>
-      <span><span class="req">[필수]</span> <a href="${href}" target="_blank" rel="noopener">개인정보 수집·이용</a>에 동의합니다.</span></label>`;
+      <span><span class="req">필수</span> <a href="${href}" target="_blank" rel="noopener">개인정보 수집·이용</a>에 동의합니다.</span></label>`;
 }
 const bindAgree = (el, btn) => {
   const cb = $('[data-agree]', el);
@@ -242,7 +242,7 @@ const SCENES = {
              ${agreeHTML('waitlist')}
              <button class="ld-btn ld-btn-ghost" type="submit" disabled>대기자 등록하기</button>
            </form>`}
-      <p class="ld-note">가입은 초대로만 열려 있습니다. 세션을 돌리려면 본인 AI 구독이 필요합니다. Claude Pro 이상 또는 ChatGPT Plus 이상이면 됩니다.</p>
+      <p class="ld-note">가입은 초대로만 열려 있습니다. 세션을 돌리려면 본인 AI 구독이 필요합니다. Claude, ChatGPT, Gemini, Grok 가운데 쓰시던 것 하나가 유료 플랜이면 됩니다.</p>
     </section>`,
     bind: (el) => {
       const f = $('[data-form="start"]', el);

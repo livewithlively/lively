@@ -114,7 +114,8 @@
 
 /* 되돌아가기 + 파일 받는 자리 (2026-08-25 플로우 재배치 — 로컬 업로드를 앞으로, 앱 연결을 뒤로) */
 .ob-q-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-.ob-q-back{font-size:13px;font-weight:600;color:var(--muted);padding:5px 10px;border-radius:8px;border:1px solid transparent;order:-1;background:none;cursor:pointer}
+.ob-q-back{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--muted);padding:4px 9px;border-radius:8px;border:1px solid transparent;background:none;cursor:pointer}
+.ob-q-back[hidden]{display:none}
 .ob-q-back:hover{color:var(--ink);background:var(--bg-tint);border-color:var(--line)}
 .ob-q-prog{gap:5px;width:118px}
 .ob-q-prog button.ob-go{cursor:pointer}
