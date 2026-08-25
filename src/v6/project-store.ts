@@ -34,7 +34,7 @@ const PROJECT_COLS =
    list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
-   sort, created_at, updated_at, completed_at, archived_at`;
+   sort, created_at, updated_at, completed_at, archived_at, trashed_at`;
 
 export interface ProjectRow {
   id: number; level: string; parent_id: number | null;
@@ -52,6 +52,8 @@ export interface ProjectRow {
   sort: number; created_at: string; updated_at: string; completed_at: string | null;
   // #1851 — 아카이브 표식(보관 시각). NULL=평소 화면. 목록은 기본으로 이 행을 뺀다(ProjectFilter.archived).
   archived_at: string | null;
+  // #1851 — 휴지통 표식(버린 시각). NULL=평소. 목록은 기본으로 이 행을 뺀다(ProjectFilter.trashed). 하드 삭제 전 단계.
+  trashed_at: string | null;
   members?: unknown[]; // listProjects 가 facepile 용으로 채움(상세 getProject 의 members 와 별개)
 }
 
@@ -101,7 +103,7 @@ export async function syncTaskAssignees(taskId: number, assignees: string[]): Pr
 //   판정은 v6/visibility.ts 로 일원화한다(리스트 자기 설정 ∩ 상위 스페이스 — 상속을 한 곳에서만 계산).
 // archived(#1851): exclude(기본 — 보관한 프로젝트는 평소 목록에서 빠진다) · include(전부) · only(아카이브 화면).
 export type ArchivedFilter = "exclude" | "include" | "only";
-export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string; viewerVis?: Viewer; archived?: ArchivedFilter }
+export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string; viewerVis?: Viewer; archived?: ArchivedFilter; trashed?: ArchivedFilter }
 
 // ── 내 할 일(#1232) — 사람 축으로 뒤집은 태스크 조회. ─────────────────────
 //  listProjects 는 `level='project'` 고정이라 "내가 맡은 태스크"를 프로젝트 가로질러 볼 방법이 없었다(프로젝트를
@@ -277,6 +279,10 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
   const arch: ArchivedFilter = filter.archived || "exclude";
   if (arch === "exclude") wh.push("p.archived_at IS NULL");
   else if (arch === "only") wh.push("p.archived_at IS NOT NULL");
+  // 휴지통(#1851) — 같은 규칙. 버린 프로젝트는 어디에도 안 보이고 휴지통 화면(trashed=include 로 받아 화면이 가른다)에만.
+  const tr: ArchivedFilter = filter.trashed || "exclude";
+  if (tr === "exclude") wh.push("p.trashed_at IS NULL");
+  else if (tr === "only") wh.push("p.trashed_at IS NOT NULL");
   // 공개범위 시행(#475→#1291) — 안 보이는 리스트의 프로젝트는 뺀다. 미분류(list_id NULL)는 잠글 상위가 없어 전원 열람.
   wh.push(listIdPredicate("p.list_id", visIds));
   const where = `WHERE ${wh.join(" AND ")}`;
@@ -575,6 +581,20 @@ export async function setProjectArchived(id: number, archived: boolean, ctx?: Wr
     `UPDATE project SET archived_at = CASE WHEN $2::bool THEN now() ELSE NULL END, updated_at=now()
      WHERE id=$1 AND level='project' RETURNING ${PROJECT_COLS}`, [id, archived]);
   await auditProject(String(id), archived ? "archive" : "unarchive", before, after, ctx);
+  return after;
+}
+
+// 휴지통(#1851) — 프로젝트를 통째로 버리거나(trashed_at=now()) 되돌린다(NULL). 행은 남는다 — 하드 삭제는 완전 삭제(deleteProject)에서.
+//  세션 묶음은 capability 가 함께 처리한다(sessions/session-trash-ops). 감사 op='trash'|'untrash'.
+export async function setProjectTrashed(id: number, trashed: boolean, ctx?: WriteCtx): Promise<ProjectRow> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+  if (!before) throw new Error(`프로젝트 #${id} 없음`);
+  if (!!before.trashed_at === trashed) return before;
+  const after: ProjectRow = await one(itemsPool,
+    `UPDATE project SET trashed_at = CASE WHEN $2::bool THEN now() ELSE NULL END, updated_at=now()
+     WHERE id=$1 AND level='project' RETURNING ${PROJECT_COLS}`, [id, trashed]);
+  await auditProject(String(id), trashed ? "trash" : "untrash", before, after, ctx);
   return after;
 }
 

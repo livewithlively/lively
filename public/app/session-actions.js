@@ -176,6 +176,31 @@ export async function confirmProjectArchive(opts) {
         note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
     });
 }
+// ── 프로젝트 휴지통(#1851, 원준 2026-08-24) — 프로젝트는 폴더다. 버리면 **그 아래 내 세션이 함께** 들어가고(도는 세션은 그 자리에서 멈춤),
+//  휴지통에서 [복원]하면 함께 돌아온다. 잃는 것은 돌던 실행뿐 — 그래서 위험색은 도는 세션이 있을 때만.
+export async function confirmProjectTrash(opts) {
+    const bits = [`프로젝트와 그 안의 내 세션 ${opts.sessN}개가 함께 휴지통으로 갑니다.`];
+    if (opts.liveN > 0)
+        bits.push(`그중 돌고 있는 ${opts.liveN}개는 그 자리에서 멈춥니다.`);
+    return confirmDialog({
+        title: `「${opts.name}」${eulReul(opts.name)} 휴지통으로 보낼까요?`, danger: opts.liveN > 0, confirmText: '휴지통으로', cancelText: '취소',
+        message: bits.join(' '),
+        lines: opts.othersLive > 0
+            ? [`⚠ 다른 사람의 세션 ${opts.othersLive}개가 돌고 있어 지금은 보낼 수 없어요 — 그 세션이 끝난 뒤에 다시 시도해 주세요.`]
+            : ['휴지통에서 [복원]하면 프로젝트와 세션이 함께 원래 자리로 돌아옵니다. 완전히 지우는 건 휴지통 안에서만 할 수 있어요.'],
+        note: '태스크·팀원·지식 연결은 그대로예요 — 지우는 것이 아닙니다.',
+    });
+}
+// 휴지통 안의 프로젝트 [완전 삭제] — 프로젝트는 하드 삭제(태스크·팀원·연결까지 사라짐, 감사 스냅샷만 남음), 묶음 세션은 되살릴 수 없게.
+//  세션의 대화 기록·결과물 범위는 호출자가 confirmSessionPurgeMany 로 먼저 묻는다(기록 있는 세션이 있을 때).
+export async function confirmProjectPurge(opts) {
+    return confirmDialog({
+        title: `「${opts.name}」${eulReul(opts.name)} 완전히 지울까요?`, danger: true, confirmText: '완전 삭제', cancelText: '취소',
+        message: `프로젝트와 그 안의 태스크·팀원·연결이 지워지고, 함께 버린 세션 ${opts.sessN}개는 되살릴 수 없게 돼요.`,
+        lines: ['프로젝트 본체는 WIKI 앱 휴지통(삭제됨)에서 이름·본문만 되살릴 수 있지만, 태스크와 세션은 돌아오지 않아요.'],
+        note: '작업 폴더·파일·커밋은 그대로 남습니다.',
+    });
+}
 // ── 보관(reclaim=1) ── tmux 만 내리고 desired-state 는 남긴다. 잃는 것은 **돌던 실행뿐**이고,
 //  설정·대화 좌표가 DB 에 남아 [되살리기](POST …/restore)가 --resume 으로 그 대화를 이어 붙인다.
 //  그래서 이 약속만은 조직의 세션공유 설정과 무관하게 참이다(중앙 기록이 아니라 desired-state + 로컬 대화록에 기댄다).

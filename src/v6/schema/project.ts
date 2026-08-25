@@ -85,6 +85,13 @@ export async function initV6ProjectCore(pool: Pool): Promise<void> {
     ALTER TABLE project ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS project_archived_idx ON project(archived_at) WHERE archived_at IS NOT NULL;
   `);
+  // ── 5f) 휴지통(#1851, 원준 2026-08-24) — 프로젝트를 **폴더처럼 통째로** 버린 표식. 행은 남는다(복원 가능) — 하드 삭제(project_delete_v6,
+  //  감사 스냅샷)와 다르다. 버릴 때 그 아래 세션도 같은 묶음(org_session_trash.project_id)으로 휴지통에 들어가고, 복원하면 함께 돌아온다.
+  //  완전 삭제(project_purge_v6)가 그 뒤의 하드 삭제다. 목록은 기본으로 이 행을 뺀다(trashed=include|only).
+  await pool.query(`
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS trashed_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS project_trashed_idx ON project(trashed_at) WHERE trashed_at IS NOT NULL;
+  `);
 
   // ── 5d) task_assignee(2026-06-26, #177) — 단일 assignee 컬럼 → n:n **가산**. 멀티담당자(ClickUp/Notion people) 무손실용. ──
   //  전환기: 기존 `assignee` 컬럼이 primary(UI·리스트뷰 호환), task_assignee 는 가산 섀도(쓰기경로가 동기, 백필로 시드).

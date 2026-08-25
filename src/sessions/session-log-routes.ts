@@ -126,7 +126,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
           const m = marks.get(r.session_id);
           if (!m) return true;
           if (m.purged) return false;
-          (r as SessionListRow & { trashed_at?: string }).trashed_at = m.trashed_at;
+          (r as SessionListRow & { trashed_at?: string; trashed_with?: number }).trashed_at = m.trashed_at;
+          if (m.project_id != null) (r as SessionListRow & { trashed_with?: number }).trashed_with = m.project_id;
           return true;
         });
       }

@@ -9,7 +9,7 @@
 //  owner 게이트는 여기서 — 모든 쓰기는 owner 가 자기 것일 때만(WHERE owner=$1). 남의 세션은 건드릴 수 없다.
 import { itemsPool } from "../db/client.js";
 
-export interface TrashMark { trashed_at: string; purged: boolean }
+export interface TrashMark { trashed_at: string; purged: boolean; project_id: number | null }   // project_id = 프로젝트와 함께 버림(묶음)
 
 const clean = (ids: string[]): string[] => [...new Set((ids || []).map((x) => String(x || "").trim()).filter(Boolean))];
 
@@ -17,9 +17,9 @@ const clean = (ids: string[]): string[] => [...new Set((ids || []).map((x) => St
 export async function trashMapFor(owner: string): Promise<Map<string, TrashMark>> {
   const out = new Map<string, TrashMark>();
   if (!owner) return out;
-  const r = await itemsPool.query(`SELECT session_id, trashed_at, purged_at FROM org_session_trash WHERE owner=$1`, [owner]);
+  const r = await itemsPool.query(`SELECT session_id, trashed_at, purged_at, project_id FROM org_session_trash WHERE owner=$1`, [owner]);
   for (const row of r.rows) {
-    out.set(String(row.session_id), { trashed_at: new Date(row.trashed_at).toISOString(), purged: !!row.purged_at });
+    out.set(String(row.session_id), { trashed_at: new Date(row.trashed_at).toISOString(), purged: !!row.purged_at, project_id: row.project_id == null ? null : Number(row.project_id) });
   }
   return out;
 }
@@ -29,18 +29,26 @@ export async function trashMapFor(owner: string): Promise<Map<string, TrashMark>
 //  (#1850 이 실측으로 밟은 함정 — 이 표도 dev 에서 같은 500 을 냈다). 갱신은 UPDATE, 추가는 NOT EXISTS + ON CONFLICT DO NOTHING.
 
 /** 휴지통으로 — 이미 있던 행은 시각만 갱신(되돌렸다가 다시 넣는 경우). purged 행은 되살리지 않는다(완전 삭제는 최종). */
-export async function trashSessions(owner: string, ids: string[]): Promise<number> {
+//  projectId(#1851): 프로젝트를 통째로 버리며 함께 넣는 세션은 그 묶음 표식을 단다. 따로 버리는 것(지난 세션 행의 🗑)은 NULL.
+export async function trashSessions(owner: string, ids: string[], projectId: number | null = null): Promise<number> {
   const list = clean(ids);
   if (!owner || !list.length) return 0;
   const u = await itemsPool.query(
-    `UPDATE org_session_trash SET trashed_at = now()
-      WHERE owner = $1 AND purged_at IS NULL AND session_id = ANY($2::text[])`, [owner, list]);
+    `UPDATE org_session_trash SET trashed_at = now(), project_id = $3
+      WHERE owner = $1 AND purged_at IS NULL AND session_id = ANY($2::text[])`, [owner, list, projectId]);
   const i = await itemsPool.query(
-    `INSERT INTO org_session_trash(session_id, owner, trashed_at)
-       SELECT x, $1, now() FROM unnest($2::text[]) AS x
+    `INSERT INTO org_session_trash(session_id, owner, trashed_at, project_id)
+       SELECT x, $1, now(), $3 FROM unnest($2::text[]) AS x
         WHERE NOT EXISTS (SELECT 1 FROM org_session_trash t WHERE t.session_id = x)
-     ON CONFLICT DO NOTHING`, [owner, list]);
+     ON CONFLICT DO NOTHING`, [owner, list, projectId]);
   return (u.rowCount || 0) + (i.rowCount || 0);
+}
+
+/** 프로젝트 묶음으로 들어간 내 세션 id(purged 아닌 것) — 프로젝트 [복원]·[완전 삭제]가 함께 다룰 목록. */
+export async function bundleTrashedIds(owner: string, projectId: number): Promise<string[]> {
+  if (!owner || !(projectId > 0)) return [];
+  const r = await itemsPool.query(`SELECT session_id FROM org_session_trash WHERE owner=$1 AND project_id=$2 AND purged_at IS NULL`, [owner, projectId]);
+  return r.rows.map((x) => String(x.session_id));
 }
 
 /** 되돌리기 — 휴지통 행을 지운다(purged 는 못 되돌린다). */
@@ -78,9 +86,10 @@ export async function trashMarkedIds(owner: string, ids: string[]): Promise<stri
   return r.rows.map((x) => String(x.session_id));
 }
 
-/** 휴지통에 있는(아직 purged 아닌) 이 사람의 세션 id — 비우기가 한 번에 지울 목록. */
+/** 휴지통에 있는(아직 purged 아닌) 이 사람의 세션 id — 비우기가 한 번에 지울 목록.
+ *  ⚠ **따로 버린 것만**(project_id IS NULL) — 프로젝트 묶음의 세션은 프로젝트 [완전 삭제]가 함께 지운다(세션만 먼저 지우면 빈 프로젝트 껍데기가 남는다). */
 export async function listTrashedIds(owner: string): Promise<string[]> {
   if (!owner) return [];
-  const r = await itemsPool.query(`SELECT session_id FROM org_session_trash WHERE owner=$1 AND purged_at IS NULL`, [owner]);
+  const r = await itemsPool.query(`SELECT session_id FROM org_session_trash WHERE owner=$1 AND purged_at IS NULL AND project_id IS NULL`, [owner]);
   return r.rows.map((x) => String(x.session_id));
 }

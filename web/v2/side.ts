@@ -26,9 +26,9 @@ import { anchoredPopover, api, el, loadPeopleAvatars, navOn, personFace, profile
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { dotCls, isArchivedProj, isLiveSess, isPastSess, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
-import { confirmProjectArchive, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
+import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
 import { switcherTop } from './switcher.js';
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
@@ -163,7 +163,7 @@ function ownerName(s: Sess): string {
 }
 
 // ── 프로젝트 행 하나의 재료: 도는 세션 · 지난 세션 · 마지막 작업 시각 · 내 것인가 ──
-interface Row { key: string; proj: Proj | null; live: Sess[]; past: Sess[]; lastWork: number; mine: boolean; done: boolean; fresh: boolean; archived: boolean; }
+interface Row { key: string; proj: Proj | null; live: Sess[]; past: Sess[]; lastWork: number; mine: boolean; done: boolean; fresh: boolean; archived: boolean; trashed: boolean; }
 
 // ── 방금 만든 프로젝트는 잠깐 맨 위 (원준 2026-08-20 신고) ──────────────────────
 //  사이드바 순서는 '마지막 작업 시각'인데 갓 만든 프로젝트는 그 값이 0이다 — 그래서 만들자마자
@@ -191,7 +191,7 @@ function buildRows(data: V2Data): Row[] {
     const fresh = freshMs(p);
     return { key: 'p:' + p.id, proj: p, live: all.filter(isLive).sort(bySeen), past: all.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen),
       // 갓 만든 프로젝트는 생성 시각을 '마지막 작업'으로 친다 — 세션이 아직 없어도 맨 위에 선다.
-      lastWork: Math.max(lastOf(all), fresh), done: p.status_category === 'done', fresh: fresh > 0, archived: isArchivedProj(p),
+      lastWork: Math.max(lastOf(all), fresh), done: p.status_category === 'done', fresh: fresh > 0, archived: isArchivedProj(p), trashed: isTrashedProj(p),
       mine: !!me && (p.created_by === me || (p.member_ids || []).includes(me)) };
   });
   // 프로젝트 없는 세션 — 가짜 프로젝트 한 줄로 같은 정렬에 섞는다(맨 아래 고정이면 프로젝트 수백 개 밑에 묻힌다).
@@ -199,7 +199,7 @@ function buildRows(data: V2Data): Row[] {
   //   전부 멈추는 순간 그 묶음이 통째로 사라졌다. dev 실측으로 그게 가장 큰 덩어리였다(멈춘 세션 202건 중 183건).
   const loose = noProj.filter(isLive).sort(bySeen);
   const loosePast = noProj.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen);
-  if (loose.length || loosePast.length) rows.push({ key: 'p:0', proj: null, live: loose, past: loosePast, lastWork: lastOf(noProj), done: false, fresh: false, archived: false, mine: true });
+  if (loose.length || loosePast.length) rows.push({ key: 'p:0', proj: null, live: loose, past: loosePast, lastWork: lastOf(noProj), done: false, fresh: false, archived: false, trashed: false, mine: true });
   return rows;
 }
 
@@ -207,7 +207,7 @@ function buildRows(data: V2Data): Row[] {
 //  완료 프로젝트는 뒤로 보낸다(트리는 기본 숨김이라 "보이는 순서"가 곧 미완료 순서 — 드롭다운은 숨기는 대신 가라앉힌다).
 export function projectOrder(data: V2Data): Array<{ proj: Proj; done: boolean; mine: boolean; lastWork: number }> {
   const byWork = (a: Row, b: Row) => b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || ''));
-  return buildRows(data).filter((r) => r.proj && !r.archived)   // 보관한 프로젝트는 연결 후보가 아니다(#1851)
+  return buildRows(data).filter((r) => r.proj && !r.archived && !r.trashed)   // 보관·버린 프로젝트는 연결 후보가 아니다(#1851)
     .sort((a, b) => Number(a.done) - Number(b.done) || byWork(a, b))
     .map((r) => ({ proj: r.proj as Proj, done: r.done, mine: r.mine, lastWork: r.lastWork }));
 }
@@ -773,7 +773,7 @@ function renderTree(rowsIn?: Row[]): void {
     if (!hit(r)) return false;
     // 보관한 프로젝트(#1851)는 트리에 없다 — 「아카이브」 화면이 그 자리다. 단 **도는 세션이 있으면** 보인다(완료 프로젝트와
     //  같은 예외): 답을 기다리는 세션을 아카이브가 감추면 그게 곧 사고다(보관 해제 없이 그 세션을 끝낼 길이 있어야 한다).
-    if (r.archived && !r.live.length) return false;
+    if ((r.archived || r.trashed) && !r.live.length) return false;   // 휴지통(#1851)도 같은 예외 — 도는 세션이 남아 있으면(남의 것) 보인다
     if (mineOnly && !r.mine) return false;
     if (stateFilter && !stateOf(r).length && !pastOf(r).length) return false;
     if (r.done && !showDone && !r.live.length && !isPinned(r.key)) { hiddenDone++; return false; }
@@ -831,9 +831,10 @@ function renderTree(rowsIn?: Row[]): void {
 //  오른쪽 끝 압정 = [아래 고정] — 켜면 두 행이 트리 밖 발치에 서서 스크롤과 무관하게 늘 보인다(브라우저에 기억).
 function binRows(data: V2Data): HTMLElement[] {
   const me = meId();
-  const archivedN = data.projects.filter((p) => isArchivedProj(p)).length;
-  // 휴지통 개수는 **내 것**만 — 휴지통은 소유자 단위다(서버 표식이 owner 별).
-  const trashedN = data.sessions.filter((s) => isTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length;
+  const archivedN = data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p)).length;
+  // 휴지통 개수 = 통째로 버린 프로젝트(각 1) + **따로** 버린 내 세션(묶음 세션은 프로젝트 안에 든 것이라 안 센다). 세션은 소유자 단위.
+  const trashedN = data.projects.filter((p) => isTrashedProj(p)).length
+    + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length;
   const ak = last ? last.activeKey() : '';
   const row = (key: 'archive' | 'trash', label: string, n: number, title: string): HTMLElement =>
     el('a', { class: 'v2-bin' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title },
@@ -841,7 +842,7 @@ function binRows(data: V2Data): HTMLElement[] {
       binPinBtn());
   return [
     row('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'),
-    row('trash', '휴지통', trashedN, '휴지통 — 버린 세션을 되돌리거나 완전히 지웁니다'),
+    row('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'),
   ];
 }
 function binPinBtn(): HTMLElement {
@@ -888,7 +889,7 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
   // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' },
     caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
-    r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '아카이브에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
+    r.trashed ? el('span', { class: 'v2-tag', text: '휴지통', title: '휴지통에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '아카이브에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
     p ? newSessBtn(p.id) : null,
     p ? pinBtn(pk) : null);
@@ -921,6 +922,9 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
       r.archived
         ? { label: '보관 해제 — 원래 자리로', run: () => void setArchived(p, false, 0) }
         : { label: '아카이브로 보내기', run: () => void setArchived(p, true, r.live.filter(isMine).length) },
+      // 삭제 = 휴지통으로(#1851 원준 2026-08-24). 폴더 우클릭 메뉴의 맨 아래·위험색 — 파일 탐색기·노션과 같은 자리.
+      { sep: true, label: '' },
+      { label: '휴지통으로 보내기', danger: true, run: () => void trashProject(p, r) },
     ]);
   });
   const head = sess.slice(0, MAX_SESS);
@@ -1114,6 +1118,26 @@ async function doTrash(s: Sess): Promise<void> {
     if (r.skipped.length && !r.done.length) { toast(r.skipped[0].why || '휴지통으로 보내지 못했습니다', true); return; }
     toast('휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요');
     hooks.onArchived?.();
+  } catch (e: any) { toast((e && e.message) || '휴지통으로 보내지 못했습니다', true); }
+}
+
+// ── 프로젝트 휴지통(#1851, 원준 2026-08-24) — 폴더를 버리듯: 프로젝트 + 그 아래 내 세션(도는 것은 멈춰서)이 **한 묶음**으로 휴지통에.
+//  서버(project_trash_v6)가 세션을 멈추고 묶음 표식을 달고 프로젝트를 표시한다. 남의 도는 세션이 있으면 서버가 409 로 막는다 —
+//  확인창이 그 사실을 미리 말한다(눌러 보고 실패하지 않게). 끝나면 휴지통 화면으로(어디로 갔는지 보이게).
+export async function trashProject(p: Proj, r?: { live: Sess[]; past: Sess[] }): Promise<void> {
+  const all = last ? last.data.sessions.filter((s) => Number(s.projectId) === p.id && !isTrashedSess(s)) : [];
+  const mine = all.filter(isMine);
+  const liveMine = mine.filter(isLive).length;
+  const othersLive = all.filter((s) => isLive(s) && !isMine(s)).length;
+  void r;
+  if (!await confirmProjectTrash({ name: p.name, sessN: mine.length, liveN: liveMine, othersLive })) return;
+  if (othersLive > 0) return;   // 확인창이 이미 '지금은 안 된다'고 말했다 — 서버 409 를 굳이 맞지 않는다
+  try {
+    const res: any = await api('/api/ui/v6/projects/' + p.id + '/trash', { method: 'POST', body: JSON.stringify({ trashed: true }) });
+    const sk = Array.isArray(res?.sessions?.skipped) ? res.sessions.skipped : [];
+    toast('휴지통으로 보냈어요 — 휴지통에서 [복원]하면 세션까지 함께 돌아와요' + (sk.length ? ` (세션 ${sk.length}개는 건너뜀 — ${sk[0].why})` : ''));
+    hooks.onArchived?.();
+    location.hash = '#/trash';
   } catch (e: any) { toast((e && e.message) || '휴지통으로 보내지 못했습니다', true); }
 }
 

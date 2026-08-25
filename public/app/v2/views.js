@@ -38,6 +38,9 @@ export const isPastSess = (s) => !isLiveSess(s);
 // 휴지통(#1851) — 멈춘 세션 중 사람이 휴지통으로 보낸 것. 사이드바·홈·확인할 것 어디에도 안 나오고 휴지통 화면에만 있다.
 export const isTrashedSess = (s) => !!s.trashedAt;
 export const isArchivedProj = (p) => !!(p && p.archived_at);
+export const isTrashedProj = (p) => !!(p && p.trashed_at);
+/** 따로 버린 세션(프로젝트 묶음이 아닌 것) — 휴지통 '세션' 묶음·사이드바 개수의 재료. */
+export const isLooseTrashedSess = (s) => isTrashedSess(s) && s.trashedWith == null;
 /** 그 세션이 '하던 일' — 하네스 pane 제목이 정본이고, 없으면(멈춘 세션) 중앙 기록의 대화 제목(= 처음 시킨 말). */
 export const sessWork = (s) => String((s.raw && s.raw.title) || s.logTitle || '').trim();
 /** 화면에 쓸 세션 이름 — 이름이 프로젝트명 그대로면 '하던 일'이 그 자리를 받는다(같은 이름 대여섯 줄 방지). */
@@ -195,6 +198,7 @@ export function mergeSessions(liveRows, logRows) {
             live: true, alive: !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
             lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
             trashedAt: r.trashedAt ? String(r.trashedAt) : null, // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
+            trashedWith: r.trashedWith != null ? Number(r.trashedWith) : null,
         };
         out.set(s.id, s);
         if (r.claudeSessionId && !byUuid.has(String(r.claudeSessionId)))
@@ -212,14 +216,17 @@ export function mergeSessions(liveRows, logRows) {
                 owner.logTitle = String(r.title); // 이름 자리의 폴백(위 logTitle 주석)
             if (!owner.projectId && r.project_id != null)
                 owner.projectId = Number(r.project_id);
-            if (!owner.trashedAt && r.trashed_at)
-                owner.trashedAt = String(r.trashed_at); // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
+            if (!owner.trashedAt && r.trashed_at) {
+                owner.trashedAt = String(r.trashed_at);
+                owner.trashedWith = r.trashed_with != null ? Number(r.trashed_with) : null;
+            } // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
             continue;
         }
         out.set(id, {
             id, label: String(r.title || id), projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
             live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,
             trashedAt: r.trashed_at ? String(r.trashed_at) : null,
+            trashedWith: r.trashed_with != null ? Number(r.trashed_with) : null,
         });
     }
     return [...out.values()];

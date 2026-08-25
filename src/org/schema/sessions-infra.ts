@@ -206,6 +206,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       purged_at TIMESTAMPTZ);
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_session_trash_owner_idx ON org_session_trash(owner);`);
+  // #1851 — 프로젝트를 통째로 버릴 때 함께 들어간 세션의 **묶음 표식**(project_id). NULL = '지난 세션'에서 따로 버린 것.
+  //  휴지통 화면이 둘을 갈라 그리고, 프로젝트 [복원]은 이 묶음의 세션만 되돌린다(따로 버린 건 그대로).
+  await pool.query(`ALTER TABLE org_session_trash ADD COLUMN IF NOT EXISTS project_id INT;`);
 
   // ── org_session_outbox — 세션 프롬프트 아웃박스(#1719 #1753). ──
   //  왜: send-keys 는 ack 가 없는 통로 — 로그인·대화상자에 멈춘 세션에 밀어 넣은 프롬프트가 조용히 사라졌다(실측).

@@ -331,6 +331,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           if (!m) return true;
           if (m.purged) return false;
           s.trashedAt = m.trashed_at;
+          if (m.project_id != null) s.trashedWith = m.project_id;   // 프로젝트와 함께 버림(묶음) — 화면이 따로 버린 것과 가른다
           return true;
         });
       }

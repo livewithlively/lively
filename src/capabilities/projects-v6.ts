@@ -6,7 +6,10 @@ import { canSeeProjectRow, visibleListIds, listVisible, projectRowListId } from 
 import { HttpError, parseId } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
-import { listSessions } from "../terminal/terminal-sessions.js";
+import { listSessions, listRestorableSessions } from "../terminal/terminal-sessions.js";
+import { listSessionsForProject } from "../v6/session-log-store.js";          // #1851 — 프로젝트 휴지통: 기록만 남은 세션까지 묶음으로
+import { bundleTrashedIds } from "../sessions/session-trash.js";
+import { applySessionTrashOp } from "../sessions/session-trash-ops.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 import { syncFolderAcls } from "../v6/folder-acl-sync.js";
 // 워크스페이스 회수(#813 T3-2) — 프로젝트 마무리 시 '복구 가능한 것'만 되돌린다(파생물 + 푸시된 워크트리).
@@ -24,7 +27,7 @@ const regenAgentsForList = async (listId: number | null) => {
   try { for (const pid of await projectIdsInList(listId)) await regenAgents(pid); } catch (e) { console.error("[regenAgentsForList] fail list=" + listId + ":", e); }
 };
 import {
-  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, setProjectArchived, getBoardFields,
+  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
@@ -115,6 +118,9 @@ const projectListV6Input = {
   // #1851 아카이브 — exclude(기본: 보관한 프로젝트 제외) · include(보관 포함 전체) · only(보관한 것만).
   archived: z.enum(["exclude", "include", "only"]).optional()
     .describe("아카이브(보관) 프로젝트 처리 — exclude(기본: 제외) · include(포함) · only(보관한 것만). 보관은 project_archive_v6."),
+  // #1851 휴지통 — 버린 프로젝트(trashed_at). 기본 제외. 버리기·복원은 project_trash_v6, 완전 삭제는 project_purge_v6.
+  trashed: z.enum(["exclude", "include", "only"]).optional()
+    .describe("휴지통에 버린 프로젝트 처리 — exclude(기본: 제외) · include(포함) · only(버린 것만)."),
 };
 type ProjectListV6Input = z.infer<z.ZodObject<typeof projectListV6Input>>;
 const projectListV6: Capability = {
@@ -134,6 +140,7 @@ const projectListV6: Capability = {
           status: query.status ? String(query.status) : undefined,
           mine: query.mine === "1" || query.mine === "true",
           archived: query.archived === "include" || query.archived === "only" ? String(query.archived) as "include" | "only" : undefined,
+          trashed: query.trashed === "include" || query.trashed === "only" ? String(query.trashed) as "include" | "only" : undefined,
         };
       } }],
   },
@@ -148,6 +155,7 @@ const projectListV6: Capability = {
       viewer: input.mine ? (ctx?.actor ?? user?.userId ?? null) : undefined,
       viewerVis,
       archived: input.archived,
+      trashed: input.trashed,
     });
     // 내 세션 수(프로젝트별) — 보드의 '내 세션' 칼럼을 '있으면 활성, 없으면 비활성'으로 칠하기 위한 신호.
     //  tmux 세션 목록 한 번 호출 → owned(@box_owner=나) 세션을 projectId(@box_project) 로 집계. 실패해도 목록은 그대로.
@@ -451,6 +459,89 @@ const projectArchiveV6: Capability = {
     await assertProjectVisible(input.id, ctx);
     const project = await setProjectArchived(input.id, input.archived, writeCtx);
     return { project };
+  },
+};
+
+// ── 휴지통(#1851, 원준 2026-08-24) — 프로젝트는 폴더다: 버리면 **프로젝트와 그 아래 내 세션이 한 묶음**으로 휴지통에 들어간다.
+//  도는 세션은 지난 세션을 거치지 않고 그 자리에서 멈춰 함께 들어간다. 되돌리면(trashed=false) 묶음이 함께 돌아온다.
+//  남의 세션은 못 건드린다 — 남의 **도는** 세션이 있으면 409(그 사람이 끝내야 한다). 남의 지난 세션은 프로젝트에 붙은 채 남는다.
+//  행은 남는다(복원 가능) — 하드 삭제는 project_purge_v6. 휴지통 표식은 trashed_at, 세션 묶음은 org_session_trash.project_id.
+const projectTrashV6Input = {
+  id: z.number().int().positive(),
+  trashed: z.boolean().describe("true=휴지통으로(프로젝트+내 세션 묶음) · false=복원(묶음이 함께 돌아온다)"),
+};
+type ProjectTrashV6Input = z.infer<z.ZodObject<typeof projectTrashV6Input>>;
+async function myProjectSessionIds(user: LivelyUser, me: string, projectId: number): Promise<{ ids: string[]; liveMine: number; liveOthers: number }> {
+  const live = await listSessions(user).catch(() => []);
+  const inProj = live.filter((s) => Number(s.projectId) === projectId);
+  const liveMine = inProj.filter((s) => s.owned && s.owner === me);
+  const liveOthers = inProj.filter((s) => !(s.owned && s.owner === me));
+  const restorable = await listRestorableSessions(user, new Set(live.map((s) => s.id))).catch(() => []);
+  const pastMine = restorable.filter((s) => Number(s.projectId) === projectId && s.owned);
+  // 기록만 남은 세션(중앙 기록, 박스 없음) — 이 프로젝트에 바인딩된 내 것. 박스 id 와 겹치면 표식이 두 이름에 다 붙을 뿐 무해.
+  const logs = await listSessionsForProject(projectId).catch(() => []);
+  const logMine = logs.filter((r) => r.owner === me).map((r) => r.session_id);
+  const ids = [...new Set([...liveMine.map((s) => s.id), ...pastMine.map((s) => s.id), ...logMine])];
+  return { ids, liveMine: liveMine.length, liveOthers: liveOthers.length };
+}
+const projectTrashV6: Capability = {
+  name: "project_trash_v6",
+  title: "프로젝트 휴지통(v6)",
+  description: "프로젝트를 통째로 휴지통에 넣거나(trashed=true — 그 아래 내 세션도 함께, 도는 세션은 멈춰서) 복원한다(false — 묶음이 함께 돌아온다). 행은 남으므로 복원 가능. 남의 도는 세션이 있으면 409. 완전 삭제는 project_purge_v6. 웹 전용.",
+  scope: "memory",
+  input: projectTrashV6Input,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/trash"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return { id: parseId(req.params?.id), trashed: b.trashed === undefined ? true : !!b.trashed };
+      } }],
+  },
+  handler: async (input: ProjectTrashV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    await assertProjectVisible(input.id, ctx);
+    const me = String(ctx?.actor ?? user?.userId ?? "");
+    if (!me) throw new HttpError(401, "로그인이 필요합니다");
+    if (input.trashed) {
+      const { ids, liveOthers } = await myProjectSessionIds(user, me, input.id);
+      if (liveOthers > 0) throw new HttpError(409, `다른 사람의 세션 ${liveOthers}개가 이 프로젝트에서 돌고 있어요 — 그 세션이 끝난 뒤에 버릴 수 있습니다`);
+      // 세션 먼저(멈추고 묶음 표식) → 프로젝트. 세션 쪽이 일부 실패해도 프로젝트는 버린다 — skipped 로 알린다.
+      const sessions = ids.length ? await applySessionTrashOp(user, me, "trash", ids, { projectId: input.id, stopLive: true }) : { done: [], skipped: [] };
+      const project = await setProjectTrashed(input.id, true, writeCtx);
+      return { project, sessions };
+    }
+    const bundle = await bundleTrashedIds(me, input.id);
+    const sessions = bundle.length ? await applySessionTrashOp(user, me, "untrash", bundle) : { done: [], skipped: [] };
+    const project = await setProjectTrashed(input.id, false, writeCtx);
+    return { project, sessions };
+  },
+};
+
+// ── 완전 삭제(#1851) — 휴지통에 있는 프로젝트를 하드 삭제한다(project_delete_v6 와 같은 삭제 — 감사 스냅샷은 남는다) + 묶음 세션을
+//  완전 삭제(되살리기 좌표 제거·purged 표식). 휴지통에 없는(살아 있는) 프로젝트는 409 — 먼저 버려야 지운다(폴더 문법).
+const projectPurgeV6: Capability = {
+  name: "project_purge_v6",
+  title: "프로젝트 완전 삭제(v6)",
+  description: "휴지통에 있는 프로젝트를 완전히 지운다 — 프로젝트는 하드 삭제(자식 작업·팀원·연결 CASCADE, 감사 스냅샷은 남음), 함께 들어간 내 세션은 되살릴 수 없게 된다. 휴지통에 없으면 409(먼저 project_trash_v6). 웹 전용.",
+  scope: "memory",
+  input: { id: z.number().int().positive() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/purge"],
+      parse: (req) => ({ id: parseId(req.params?.id) }) }],
+  },
+  handler: async (input: { id: number }, user: LivelyUser, ctx?: CapabilityCtx) => {
+    await assertProjectVisible(input.id, ctx, "프로젝트");
+    const me = String(ctx?.actor ?? user?.userId ?? "");
+    if (!me) throw new HttpError(401, "로그인이 필요합니다");
+    const before = await getProjectRow(input.id);
+    if (!before) throw new HttpError(404, `프로젝트 #${input.id} 없음`);
+    if (!before.trashed_at) throw new HttpError(409, "휴지통에 없는 프로젝트예요 — 먼저 휴지통으로 보낸 뒤 완전히 지울 수 있습니다");
+    const bundle = await bundleTrashedIds(me, input.id);
+    const sessions = bundle.length ? await applySessionTrashOp(user, me, "purge", bundle) : { done: [], skipped: [] };
+    await deleteProject(input.id, { actor: me, source: ctx?.source ?? "web" });
+    return { deleted: true, id: input.id, sessions };
   },
 };
 
@@ -1337,7 +1428,7 @@ export const projectV6Capabilities: Capability[] = [
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   myTasksV6,   // #1232 정적 경로(/v6/my-tasks) — /projects/:id 계열과 세그먼트가 달라 무충돌이지만 순서 규칙대로 앞에
   projectTasksV6, // #1305 정적 경로(/v6/project-tasks) — 위와 같은 이유로 앞에
-  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectSetMembersV6,
+  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectPurgeV6, projectSetMembersV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];

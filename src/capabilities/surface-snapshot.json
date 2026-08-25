@@ -2634,7 +2634,7 @@
   "rest": [
    "GET /api/ui/v6/projects"
   ],
-  "input_hash": "f29130509728e732"
+  "input_hash": "ed787db9358eb149"
  },
  {
   "name": "project_grep",
@@ -2745,6 +2745,26 @@
    "POST /api/ui/v6/projects/:id/archive"
   ],
   "input_hash": "5dff7098b6704bed"
+ },
+ {
+  "name": "project_trash_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/trash"
+  ],
+  "input_hash": "101095875948a369"
+ },
+ {
+  "name": "project_purge_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/purge"
+  ],
+  "input_hash": "4dc36ab67eecb455"
  },
  {
   "name": "project_set_members_v6",

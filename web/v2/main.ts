@@ -309,7 +309,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
     // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
     //  archived=include(#1851) — 보관한 프로젝트도 받는다: 그 아래 세션이 '프로젝트 없는 세션'으로 떨어지지 않게, 그리고
     //  「아카이브」 화면이 같은 데이터로 그려지게. 사이드바는 archived_at 을 보고 스스로 가른다(side.ts).
-    wantProj ? api('/api/ui/v6/projects?archived=include').then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
+    wantProj ? api('/api/ui/v6/projects?archived=include&trashed=include').then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
     // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
     api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
     api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => null),
@@ -321,6 +321,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
       //  ⚠ 이 map 은 화이트리스트다. 서버가 주더라도 여기 없으면 화면엔 없는 값이다(#1819 실측: 정렬이 안 먹었다).
       created_at: p.created_at ?? null,
       archived_at: p.archived_at ?? null,   // #1851 아카이브 표식
+      trashed_at: p.trashed_at ?? null,     // #1851 휴지통 표식(통째로 버림)
       created_by: p.created_by != null ? String(p.created_by) : null, member_ids: Array.isArray(p.members) ? p.members.map((m: any) => String(m && m.member_id != null ? m.member_id : m)) : [] }));
     projLoadedAt = Date.now();
   }

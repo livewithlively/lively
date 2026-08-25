@@ -3,17 +3,18 @@
 //  사이드바 발치의 두 행이 여는 **가운데 화면**이다. 둘 다 '치워 둔 것'의 목록이고, 되돌리는 길이 화면 안에 있다.
 //   · 아카이브 — 통째로 보관한 프로젝트들. 각 프로젝트 아래 그 세션(지난 세션)이 줄줄이 보인다(원준: "프로젝트들과 그의 하부
 //     AI 세션들이 리스트로 쭉 보이는 창"). 세션을 누르면 그 대화가 열리고, 프로젝트는 [보관 해제]로 원래 자리로 돌아간다.
-//   · 휴지통 — **프로젝트에서 떼어낸 세션**(내 것)만 담는다(원준 2026-08-24 확정: "아카이브엔 프로젝트 단위로 넣고 빼면 프로젝트+하위
-//     세션이 전부 들어가고, 휴지통은 프로젝트에서 분리된 세션들이 들어가는 방식"). [되돌리기]면 지난 세션으로, [완전 삭제]는 **여기서만**
-//     (종전 '완전 삭제' ×의 새 자리). [휴지통 비우기]가 전부를 한 번에. 프로젝트·지식·카테고리의 삭제(감사 스냅샷)는 종전대로 WIKI 앱의
-//     휴지통이 맡는다 — 한때 여기 묶음으로 넣었다가(2차) 되돌렸다(지식 archive-trash-v2-shell-1851 참고).
+//   · 휴지통 — 두 묶음을 **따로** 그린다(원준 2026-08-24: "프로젝트랑 같이 들어갔는지, 지난 세션에서 프로젝트와 떼어져서 따로 보낸 건지
+//     구분해서 그 둘을 그냥 따로 표현"). ① 프로젝트(통째로 버림 — 폴더 카드, 그 안에 함께 들어간 세션) → [복원]이면 프로젝트+세션이 함께,
+//     [완전 삭제]면 프로젝트 하드 삭제+세션 파기. ② 세션(지난 세션에서 따로 버림) → [되돌리기]/[완전 삭제]. 파일 탐색기·드라이브의
+//     휴지통과 같은 문법: 지운 폴더는 폴더 하나로, 폴더 안에서 따로 지운 파일은 낱개로. [휴지통 비우기]는 둘 다.
+//     지식·카테고리의 삭제(감사 스냅샷)는 종전대로 WIKI 앱의 휴지통 — 한때 여기 묶음으로 넣었다가 되돌렸다(archive-trash-v2-shell-1851).
 //  행의 문법은 홈·확인할 것(v2-now-row)과 같다 — 새 시각 언어를 만들지 않는다.
 import { api, el, relTime, sv, toast } from '../core.js';
 // 완전 삭제는 두 갈래(#1851 ⟶ #1850): 중앙 기록이 있는 세션은 #1850 의 범위 선택 확인창 + 기록 파기(purgeSessionRecord)를 그대로
 //  쓰고, 그 위에 되살리기 좌표(desired-state)까지 지우는 휴지통 op('purge')를 얹는다. 기록이 없는 세션은 좌표만 지운다.
-import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
+import { confirmProjectPurge, confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul } from '../session-actions.js';
 import { sessText } from './side.js';
-import { dotCls, isArchivedProj, isLiveSess, isTrashedSess, projName } from './views.js';
+import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName } from './views.js';
 const when = (iso) => (iso ? relTime(iso) : '');
 const whenMs = (ms) => (ms ? relTime(new Date(ms).toISOString()) : '');
 const dot = (k) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
@@ -27,7 +28,7 @@ function sessRow(s, pn, actions = [], tail, lead) {
 }
 // ── 아카이브 ──────────────────────────────────────────────────────────────────
 export function renderArchive(host, data, hooks = {}) {
-    const projs = data.projects.filter((p) => isArchivedProj(p))
+    const projs = data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p)) // 버린 것은 휴지통이 맡는다
         .sort((a, b) => String(b.archived_at || '').localeCompare(String(a.archived_at || '')));
     const sessOf = (p) => data.sessions.filter((s) => Number(s.projectId) === p.id && !isTrashedSess(s))
         .sort((a, b) => Number(isLiveSess(b)) - Number(isLiveSess(a)) || b.lastSeen - a.lastSeen);
@@ -57,7 +58,10 @@ export function renderArchive(host, data, hooks = {}) {
 }
 // ── 휴지통 ────────────────────────────────────────────────────────────────────
 export function renderTrash(host, data, hooks = {}) {
-    const ss = data.sessions.filter(isTrashedSess).sort((a, b) => String(b.trashedAt || '').localeCompare(String(a.trashedAt || '')));
+    // 따로 버린 세션(묶음 표식 없음). 프로젝트와 함께 들어간 세션은 아래 프로젝트 카드 안에 있다.
+    const ss = data.sessions.filter(isLooseTrashedSess).sort((a, b) => String(b.trashedAt || '').localeCompare(String(a.trashedAt || '')));
+    const tps = data.projects.filter((p) => isTrashedProj(p)).sort((a, b) => String(b.trashed_at || '').localeCompare(String(a.trashed_at || '')));
+    const bundleOf = (p) => data.sessions.filter((s) => isTrashedSess(s) && Number(s.trashedWith) === p.id).sort((a, b) => b.lastSeen - a.lastSeen);
     let busy = false;
     const guard = async (fn) => { if (busy)
         return; busy = true; try {
@@ -191,6 +195,117 @@ export function renderTrash(host, data, hooks = {}) {
             toast('되돌리지 못했어요 — ' + (e?.message || e), true);
         }
     });
+    // ── 프로젝트 묶음(통째로 버린 것) ──
+    const restoreProject = (p) => guard(async () => {
+        try {
+            const res = await api('/api/ui/v6/projects/' + p.id + '/trash', { method: 'POST', body: JSON.stringify({ trashed: false }) });
+            const sk = Array.isArray(res?.sessions?.skipped) ? res.sessions.skipped : [];
+            toast(`「${p.name}」${eulReul(p.name)} 복원했어요 — 세션도 함께 돌아왔어요.` + (sk.length ? ` (세션 ${sk.length}개는 건너뜀 — ${sk[0].why})` : ''));
+            hooks.onChanged?.();
+        }
+        catch (e) {
+            toast('복원하지 못했어요 — ' + (e?.message || e), true);
+        }
+    });
+    // 완전 삭제 = 묶음 세션의 기록 파기(결과물 범위는 #1850 창에서 고름) → 프로젝트 하드 삭제 + 세션 좌표 제거(project_purge_v6).
+    const purgeProject = (p) => guard(async () => {
+        const bundle = bundleOf(p);
+        const withLog = bundle.filter((s) => !!logSid(s));
+        if (!await confirmProjectPurge({ name: p.name, sessN: bundle.length }))
+            return;
+        let logs = 0, failed = 0;
+        if (withLog.length) {
+            const choices = await confirmSessionPurgeMany({
+                sessions: withLog.map((s) => ({ sid: logSid(s) || null, node: logNode(s), label: sessText(s, p.name).main || s.id })),
+                title: `함께 버린 세션 ${withLog.length}개의 대화 기록도 지웁니다`,
+            });
+            if (!choices)
+                return;
+            for (const s of withLog) {
+                const sid = logSid(s);
+                try {
+                    await purgeSessionRecord(sid, logNode(s), choices.get(sid) || { log: true, knowledge: [], revert: [], projects: [], sources: [], activities: false });
+                    logs++;
+                }
+                catch {
+                    failed++;
+                }
+            }
+        }
+        try {
+            const res = await api('/api/ui/v6/projects/' + p.id + '/purge', { method: 'POST' });
+            const sk = Array.isArray(res?.sessions?.skipped) ? res.sessions.skipped : [];
+            const parts = [`「${p.name}」${eulReul(p.name)} 완전히 지웠어요.`];
+            if (bundle.length)
+                parts.push(`세션 ${bundle.length - sk.length}개 함께`);
+            if (logs)
+                parts.push(`대화 기록 ${logs}건 파기`);
+            if (failed)
+                parts.push(`⚠ 기록 ${failed}건은 지우지 못했어요`);
+            if (sk.length)
+                parts.push(`(세션 ${sk.length}개는 건너뜀 — ${sk[0].why})`);
+            toast(parts.join(' · '));
+            hooks.onChanged?.();
+        }
+        catch (e) {
+            toast('지우지 못했어요 — ' + (e?.message || e), true);
+        }
+    });
+    const projCard = (p) => {
+        const bundle = bundleOf(p);
+        const listEl = el('div', { class: 'v2-bin-list' });
+        const paintList = (all) => {
+            const head = all ? bundle : bundle.slice(0, MAX_ROWS);
+            listEl.replaceChildren(...head.map((s) => sessRow(s, p.name, [], `${s.stateLabel} · ${whenMs(s.lastSeen)}`)), ...(bundle.length > head.length ? [el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${bundle.length - head.length}개 더 보기`, onclick: () => paintList(true) })] : []), ...(!bundle.length ? [el('p', { class: 'v2-bin-empty', text: '함께 들어간 세션이 없어요.' })] : []));
+        };
+        paintList(false);
+        return el('section', { class: 'v2-bin-card' }, el('div', { class: 'v2-bin-head' }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-bin-fold', 'aria-hidden': 'true' }, sv('path', { d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' })), el('div', { class: 'tw' }, el('span', { class: 't', text: p.name }), el('span', { class: 'p', text: [`#${p.id}`, '버림 ' + when(p.trashed_at), `세션 ${bundle.length}개와 함께`].join(' · ') })), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '복원', title: '프로젝트와 함께 들어간 세션이 원래 자리로 돌아갑니다', onclick: () => void restoreProject(p) }), el('button', { class: 'btn-text danger', type: 'button', text: '완전 삭제', title: '프로젝트를 지우고 세션은 되살릴 수 없게 합니다', onclick: () => void purgeProject(p) })), listEl);
+    };
+    // [휴지통 비우기] — 따로 버린 세션(purgeMany) 뒤에 프로젝트 묶음을 하나씩 완전 삭제(각자 확인창 없이 한 번의 확인으로).
+    const emptyAll = () => guard(async () => {
+        const total = ss.length + tps.length;
+        if (!total)
+            return;
+        const ok = await confirmProjectPurge({ name: '휴지통', sessN: ss.length + tps.reduce((n, p) => n + bundleOf(p).length, 0) });
+        if (!ok)
+            return;
+        let logs = 0, failed = 0;
+        const allSess = [...ss, ...tps.flatMap(bundleOf)];
+        for (const s of allSess) {
+            const sid = logSid(s);
+            if (!sid)
+                continue;
+            try {
+                await purgeSessionRecord(sid, logNode(s), { log: true, knowledge: [], revert: [], projects: [], sources: [], activities: false });
+                logs++;
+            }
+            catch {
+                failed++;
+            }
+        }
+        let sessDone = 0, pjDone = 0;
+        if (ss.length) {
+            try {
+                const r = await sessionTrashOp('purge', ss.flatMap((s) => sessionNames(s)));
+                sessDone = r.done.length;
+            }
+            catch {
+                failed++;
+            }
+        }
+        for (const p of tps) {
+            try {
+                await api('/api/ui/v6/projects/' + p.id + '/purge', { method: 'POST' });
+                pjDone++;
+            }
+            catch {
+                failed++;
+            }
+        }
+        toast(`휴지통을 비웠어요 — 프로젝트 ${pjDone}개 · 세션 ${sessDone + tps.reduce((n, p) => n + bundleOf(p).length, 0)}개${logs ? ` · 대화 기록 ${logs}건 파기` : ''}${failed ? ` · ⚠ ${failed}건은 지우지 못했어요` : ''}`, failed > 0);
+        sel.clear();
+        hooks.onChanged?.();
+    });
     // 여러 개 선택 — 행 앞 체크박스. 고른 것이 있으면 목록 위에 [되돌리기]·[완전 삭제] 줄이 뜬다.
     const sel = new Set();
     const selbar = el('div', { class: 'v2-bin-selbar', hidden: true });
@@ -211,9 +326,7 @@ export function renderTrash(host, data, hooks = {}) {
             el('button', { class: 'btn-text danger', type: 'button', text: '완전 삭제', title: '되살릴 수 없게 지웁니다', onclick: () => void purge(s) }),
         ], (s.projectId ? pn + ' · ' : '') + '버림 ' + when(s.trashedAt), box);
     });
-    host.replaceChildren(el('div', { class: 'v2-center v2-binpage' }, el('div', { class: 'v2-bin-top' }, el('div', {}, el('h1', { class: 'v2-title', text: '휴지통' }), el('p', { class: 'v2-desc', text: '프로젝트에서 떼어내 버린 세션이에요. [되돌리기]면 그 프로젝트의 지난 세션으로 돌아가고, 완전히 지우는 건 여기서만 할 수 있어요.' }), 
+    host.replaceChildren(el('div', { class: 'v2-center v2-binpage' }, el('div', { class: 'v2-bin-top' }, el('div', {}, el('h1', { class: 'v2-title', text: '휴지통' }), el('p', { class: 'v2-desc', text: '통째로 버린 프로젝트(그 안의 세션과 함께)와, 지난 세션에서 따로 버린 세션이에요. [복원]·[되돌리기]면 원래 자리로 돌아가고, 완전히 지우는 건 여기서만 할 수 있어요.' }), 
     // '다음부터 묻지 않기'(confirmSessionTrash)를 켜 둔 사람에게 되돌리는 문 — 확인창이 더는 안 뜨니 여기가 유일한 자리다.
-    trashConfirmSkipped() ? el('p', { class: 'v2-desc v2-bin-skipnote' }, el('span', { text: '휴지통으로 보낼 때 묻지 않고 바로 보내도록 해 두셨어요. ' }), el('button', { class: 'btn-text', type: 'button', text: '다시 묻기', onclick: (ev) => { setTrashConfirmSkipped(false); ev.currentTarget.closest('p')?.remove(); toast('다음부터 휴지통으로 보낼 때 다시 확인해요.'); } })) : null), ss.length ? el('button', { class: 'btn btn-ghost btn-sm v2-bin-emptyb', type: 'button', text: '휴지통 비우기', title: '휴지통의 세션을 전부 완전히 지웁니다', onclick: () => void purgeMany(ss, '휴지통을 비울까요?') }) : null), el('section', { class: 'v2-bin-sec' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `세션 · ${ss.length}` })), ss.length
-        ? el('div', { class: 'v2-bin-list' }, selbar, ...sessRows)
-        : el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '휴지통이 비어 있어요.' }), el('p', { class: 'sub', text: '사이드바 [지난 세션]의 행 오른쪽 끝 휴지통 단추로 보낼 수 있어요.' }))), el('p', { class: 'v2-bin-fine', text: '프로젝트·지식·카테고리를 삭제한 것은 WIKI 앱의 휴지통에 있어요.' }, el('a', { class: 'btn-text', href: location.pathname + '?ui=classic#/trash', target: '_blank', rel: 'noopener', text: '열기 ↗' }))));
+    trashConfirmSkipped() ? el('p', { class: 'v2-desc v2-bin-skipnote' }, el('span', { text: '휴지통으로 보낼 때 묻지 않고 바로 보내도록 해 두셨어요. ' }), el('button', { class: 'btn-text', type: 'button', text: '다시 묻기', onclick: (ev) => { setTrashConfirmSkipped(false); ev.currentTarget.closest('p')?.remove(); toast('다음부터 휴지통으로 보낼 때 다시 확인해요.'); } })) : null), (ss.length || tps.length) ? el('button', { class: 'btn btn-ghost btn-sm v2-bin-emptyb', type: 'button', text: '휴지통 비우기', title: '휴지통의 프로젝트·세션을 전부 완전히 지웁니다', onclick: () => void emptyAll() }) : null), (!ss.length && !tps.length) ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '휴지통이 비어 있어요.' }), el('p', { class: 'sub', text: '프로젝트는 사이드바 행 오른쪽 클릭 ▸ [휴지통으로 보내기], 세션은 [지난 세션] 행의 휴지통 단추로 보낼 수 있어요.' })) : null, tps.length ? el('section', { class: 'v2-bin-sec' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `프로젝트 (통째로 버림) · ${tps.length}` })), el('div', { class: 'v2-bin-cards' }, ...tps.map(projCard))) : null, ss.length ? el('section', { class: 'v2-bin-sec' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `세션 (따로 버림) · ${ss.length}` })), el('div', { class: 'v2-bin-list' }, selbar, ...sessRows)) : null, el('p', { class: 'v2-bin-fine', text: '지식·카테고리를 삭제한 것은 WIKI 앱의 휴지통에 있어요.' }, el('a', { class: 'btn-text', href: location.pathname + '?ui=classic#/trash', target: '_blank', rel: 'noopener', text: '열기 ↗' }))));
 }
