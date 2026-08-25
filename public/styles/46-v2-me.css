@@ -90,3 +90,103 @@
   .v2me-ob-r { flex-direction: column; gap: 2px; }
   .v2me-ob-r dt { width: auto; }
 }
+
+/* ══════════ [자동으로 하는 일] 탭 (#1898) ══════════
+   구조: 위 큰 칸 세 개(순간) → 고른 순간의 상세. 목록이 아니라 '고르기'라 칸을 크고 눌러지게 둔다.
+   ⚠ 이 탭의 말투 규약 — 화면 문자열에 개발자 어휘(SessionStart·주입·너지·훅)를 쓰지 않는다(me-auto.ts 머리 참고). */
+.v2a-who { margin: 0 0 14px; font-size: 12.4px; color: var(--ink-sub); }
+.v2a-ro { margin: 0 0 12px; font-size: 12.4px; color: var(--muted-head); background: var(--bg-punch);
+  border-radius: 9px; padding: 8px 12px; }
+
+/* 세 칸 — 상태를 보여주는 동시에 아래 내용을 바꾸는 스위처. */
+.v2a-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.v2a-tile { display: flex; flex-direction: column; gap: 4px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 13px; background: var(--bg); padding: 13px 14px;
+  font: inherit; color: var(--ink); transition: border-color .14s, background .14s; }
+.v2a-tile:hover { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
+.v2a-tile.on { border-color: var(--blue); background: var(--bg-punch); }
+.v2a-tile-n { font-size: 10.4px; font-weight: 800; letter-spacing: .08em; color: var(--muted); }
+.v2a-tile.on .v2a-tile-n { color: var(--blue); }
+.v2a-tile-t { font-size: 13.8px; font-weight: 700; letter-spacing: -.01em; }
+.v2a-tile-s { font-size: 11.6px; color: var(--muted-head); line-height: 1.5; }
+.v2a-tile-st { margin-top: 5px; }
+
+/* 상태 칩 — '켜짐/꺼짐'을 색과 점으로 함께 말한다(색만으로 말하지 않는다). */
+.v2a-st { display: inline-flex; align-items: center; gap: 5px; font-size: 11.2px; font-weight: 700;
+  padding: 3px 9px; border-radius: 999px; background: var(--ok-bg); color: var(--ok-ink); }
+.v2a-st::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.v2a-st.off { background: var(--line); color: var(--muted-head); }
+
+/* 고른 순간의 상세 */
+.v2a-detail { margin-top: 13px; border: 1px solid var(--line); border-radius: 13px; background: var(--bg); padding: 16px 17px; }
+.v2a-d-h { display: flex; align-items: flex-start; gap: 12px; }
+.v2a-d-h > div:first-child { flex: 1; min-width: 0; }
+.v2a-d-t { font-size: 14.4px; font-weight: 700; }
+.v2a-d-s { margin: 4px 0 0; font-size: 12.4px; color: var(--ink-sub); line-height: 1.6; }
+
+/* 스위치 — 창 안 어디서나 같은 물건(계정·보안 탭의 체크박스와 달리 이 탭은 즉시 저장이라 스위치다). */
+.v2a-sw { flex: none; width: 38px; height: 22px; border: 0; padding: 0; border-radius: 999px;
+  background: var(--blue-fill); position: relative; cursor: pointer; transition: background .15s; }
+.v2a-sw::after { content: ""; position: absolute; top: 2px; left: 18px; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff; transition: left .15s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.v2a-sw.off { background: var(--muted); opacity: .45; }
+.v2a-sw.off::after { left: 2px; }
+.v2a-sw.ro { cursor: default; }
+
+/* 메모 한 덩어리 — 요약이 아니라 실제 문장을 보여주되 아래를 흐려 길이를 가둔다. */
+.v2a-memo { margin-top: 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); padding: 12px 14px; }
+.v2a-memo-h { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 8px; }
+.v2a-memo-t { font-size: 13px; font-weight: 700; }
+.v2a-memo-m { font-size: 11.5px; color: var(--muted-head); font-variant-numeric: tabular-nums; }
+.v2a-memo-a { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.v2a-memo-b { position: relative; max-height: 116px; overflow: hidden; white-space: pre-wrap;
+  font-size: 12.5px; line-height: 1.82; color: var(--ink-sub); }
+.v2a-memo-b::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 42px;
+  background: linear-gradient(transparent, var(--bg-tint)); }
+.v2a-slot-h { margin: 9px 0 0; font-size: 11.6px; color: var(--muted-head); }
+.v2a-ico { width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg);
+  color: var(--ink-sub); font-size: 10.5px; line-height: 1; cursor: pointer; padding: 0; }
+.v2a-ico:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+.v2a-ico:disabled { opacity: .35; cursor: default; }
+.v2a-del { color: var(--muted-head); }
+.v2a-del:hover { color: var(--danger-ink); }
+
+/* 한 줄짜리 항목(설명서·문구·자동 업데이트) */
+.v2a-mini { display: flex; align-items: center; gap: 11px; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--line-row); }
+.v2a-mini-m { flex: 1; min-width: 0; }
+.v2a-mini-t { font-size: 12.9px; font-weight: 600; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.v2a-mini-s { font-size: 11.6px; color: var(--muted-head); line-height: 1.5; margin-top: 2px; }
+.v2a-tag { font-size: 10.4px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+  background: var(--bg-punch); color: var(--blue); }
+.v2a-tag.lock { background: var(--line); color: var(--muted-head); }
+.v2a-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.v2a-foot { margin-top: 16px; padding-top: 4px; }
+.v2a-more { margin-top: 12px; }
+
+/* 개발자용 — 접힘이 기본. 폴더 경로·툴 이름처럼 사람 말로 못 옮기는 것만 여기 산다. */
+.v2a-dev { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.v2a-dev summary { cursor: pointer; font-size: 12.3px; font-weight: 700; color: var(--ink-sub); list-style: none; }
+.v2a-dev summary::-webkit-details-marker { display: none; }
+.v2a-dev summary::before { content: "▸ "; }
+.v2a-dev[open] summary::before { content: "▾ "; }
+.v2a-dev-b { margin-top: 11px; }
+
+/* 편집·읽기 창(오버레이 안) */
+.v2a-editor, .v2a-read { max-width: 620px; }
+.v2a-f { display: block; margin-bottom: 12px; }
+.v2a-fl { display: block; font-size: 12.3px; font-weight: 700; color: var(--ink-sub); margin-bottom: 5px; }
+.v2a-fh { margin: 7px 0 0; font-size: 11.7px; color: var(--muted-head); line-height: 1.6; }
+.v2a-in { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px;
+  font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
+.v2a-ta { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px;
+  font: inherit; font-size: 13px; line-height: 1.8; background: var(--bg); color: var(--ink); resize: vertical; }
+.v2a-in:focus-visible, .v2a-ta:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2a-editor-a { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.v2a-md { max-height: 420px; overflow: auto; font-size: 13px; }
+.v2a-notice { max-height: 300px; overflow: auto; white-space: pre-wrap; font-size: 12.4px; line-height: 1.75;
+  color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+
+@media (max-width: 760px) {
+  .v2a-tiles { grid-template-columns: 1fr; }
+}
