@@ -89,9 +89,16 @@
 /* ════════════════════════════════════════════════════════════════════════
    ③ 통합검색(스포트라이트) — 화면 가운데 위. 한 칸에 치고, 종류는 결과가 말한다.
    ════════════════════════════════════════════════════════════════════════ */
+/*  크기 — 상민님 2026-08-25 "30~50% 키우되 창모드(작은 윈도우)에서도 대응". 옛 값은 640px / 상단 12vh / 70vh.
+    치수를 그냥 키우면 작은 창에서 카드 몫이 여백에 눌리므로, 셋 다 **화면에 비례시키되 위아래로 물린다**:
+     · 폭   = 880px + max-width:100%  — 640→880(+37.5%). 좁은 창에선 스스로 준다(760px 창에서 740px 실측).
+     · 상단 = clamp(18px, 9vh, 108px) — 12vh 고정은 세로로 긴 창에서 여백만 늘었다(1440×1600 에서 192px 실측 → 108px).
+     · 높이 = min(78vh, 100%)         — 78vh 가 평소 값이고, 100% 는 이 덮개의 **패딩 안쪽**이라 어떤 창에서도
+       '상단 여백 + 카드'가 화면을 넘을 수 없다는 보험이다(현실 창 크기에선 78vh 쪽이 이긴다).
+    실측(dev, 결과 20행): 1440×900 폭 640→880·카드 630→702px / 1100×620 434→484px / 960×560 392→437px, 넘침 0. */
 .v2-omni { position: fixed; inset: 0; z-index: 120; display: flex; justify-content: center; align-items: flex-start;
-  padding: 12vh 16px 24px; background: rgba(var(--shadow-ink), .34); }
-.v2-omni-card { width: 640px; max-width: 100%; max-height: 70vh; display: flex; flex-direction: column;
+  padding: clamp(18px, 9vh, 108px) 16px 24px; background: rgba(var(--shadow-ink), .34); }
+.v2-omni-card { width: 880px; max-width: 100%; max-height: min(78vh, 100%); display: flex; flex-direction: column;
   background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
   box-shadow: 0 24px 64px rgba(16, 32, 64, .26), 0 3px 10px rgba(16, 32, 64, .10); }
 .v2-omni-top { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
@@ -132,6 +139,6 @@
 .v2-omni-note { padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
 .v2-omni-note[hidden] { display: none; }
 @media (max-width: 900px) {
-  .v2-omni { padding: 6vh 10px 16px; }
-  .v2-omni-card { max-height: 84vh; }
+  .v2-omni { padding: clamp(14px, 6vh, 64px) 10px 16px; }
+  .v2-omni-card { max-height: min(86vh, 100%); }
 }
