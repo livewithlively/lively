@@ -406,6 +406,35 @@ function profileButton(me, name) {
     };
     return btn;
 }
+/** 열린 앱 한 줄씩 — 목록 전체를 다시 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다. */
+function appRows(shown, q) {
+    const rows = shown.map((inst) => el('div', { class: 'v2-app-inst' + (inst.active ? ' on' : ''), role: 'listitem', 'data-instance': inst.id }, el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
+        onclick: () => hooks.onActivateInstance?.(inst.id) }, instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })), inst.closable === false
+        ? null
+        : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 닫기`, title: '앱 닫기',
+            onclick: () => hooks.onCloseInstance?.(inst.id) }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))), inst.project && !inst.project.self
+        ? el('button', { class: 'v2-app-inst-project', type: 'button',
+            title: `${[inst.project.anc, inst.project.name].filter(Boolean).join(' › ')}\n프로젝트 페이지를 엽니다`,
+            onclick: () => hooks.onOpenProject?.(inst.project.id) }, el('span', { class: 'v2-app-inst-pline' }, glyph('folder', 'v2-app-inst-project-ic'), el('span', { class: 'v2-app-inst-pname', text: inst.project.name })), inst.project.anc ? el('span', { class: 'v2-app-inst-anc', text: inst.project.anc,
+            'data-segs': JSON.stringify(inst.project.ancSegs || [inst.project.anc]) }) : null)
+        : el('span', { class: 'v2-app-inst-meta', title: (inst.project && inst.project.anc) || undefined,
+            text: (inst.project && inst.project.anc) || inst.meta || '라이블리 앱' })));
+    if (rows.length)
+        return rows;
+    return [el('div', { class: 'v2-app-empty' }, el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }), q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
+            : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() }))];
+}
+/** 검색어를 칠 때의 갱신 — **목록만** 갈아 끼운다. 검색칸·머리글은 손대지 않는다(살아 있는 노드 = 살아 있는 IME 조합).
+ *  머리글의 개수 배지는 거르기 전 전체 수라 검색어로 변하지 않으므로 여기서 손댈 것이 없다. */
+function paintAppList() {
+    if (!appListEl || !hooks.instances)
+        return;
+    const q = sideFilter.trim().toLowerCase();
+    const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.project?.anc, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+    appListEl.replaceChildren(...appRows(shown, q));
+    appListEl.scrollTop = 0; // 거르고 나면 맨 위가 첫 결과다
+    [...appListEl.querySelectorAll('.v2-app-inst-anc')].forEach((n) => fitAncestors(n));
+}
 /**
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
  * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
@@ -432,25 +461,20 @@ function render() {
     const prevScroll = appListEl ? appListEl.scrollTop : 0;
     const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
     const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
-    const rows = shown.map((inst) => el('div', { class: 'v2-app-inst' + (inst.active ? ' on' : ''), role: 'listitem', 'data-instance': inst.id }, el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
-        onclick: () => hooks.onActivateInstance?.(inst.id) }, instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })), inst.closable === false
-        ? null
-        : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 닫기`, title: '앱 닫기',
-            onclick: () => hooks.onCloseInstance?.(inst.id) }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))), inst.project && !inst.project.self
-        ? el('button', { class: 'v2-app-inst-project', type: 'button',
-            title: `${[inst.project.anc, inst.project.name].filter(Boolean).join(' › ')}\n프로젝트 페이지를 엽니다`,
-            onclick: () => hooks.onOpenProject?.(inst.project.id) }, el('span', { class: 'v2-app-inst-pline' }, glyph('folder', 'v2-app-inst-project-ic'), el('span', { class: 'v2-app-inst-pname', text: inst.project.name })), inst.project.anc ? el('span', { class: 'v2-app-inst-anc', text: inst.project.anc,
-            'data-segs': JSON.stringify(inst.project.ancSegs || [inst.project.anc]) }) : null)
-        : el('span', { class: 'v2-app-inst-meta', title: (inst.project && inst.project.anc) || undefined,
-            text: (inst.project && inst.project.anc) || inst.meta || '라이블리 앱' })));
-    const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' }, ...rows, ...(!rows.length ? [el('div', { class: 'v2-app-empty' }, el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }), q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
-            : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() }))] : []));
+    const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' }, ...appRows(shown, q));
     appListEl = listEl;
     listEl.scrollTop = prevScroll;
     const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '열린 앱 찾기', 'aria-label': '열린 앱 찾기', value: sideFilter,
-        oninput: (e) => { sideFilter = e.target.value; redraw(); markFind(); },
+        // ⚠ 타이핑 중에는 **목록만** 갈아 끼운다 — 사이드바를 통째로 다시 그리면 이 입력칸도 새로 나고,
+        //  그 순간 브라우저의 IME 조합이 끊긴다. 한글은 한 글자가 여러 타건의 조합이라 매 타건이 따로 확정되어
+        //  "안녕"이 "ㅇㅏㄴㄴㅕㅇ"로 흩어진다(원준 2026-08-25 신고 · 앱·크롬 공통 = 브라우저 문제가 아니다).
+        //  포커스를 복원해도 소용없다 — 조합 상태는 노드에 붙어 있어 노드가 죽으면 같이 죽는다.
+        oninput: (e) => { sideFilter = e.target.value; paintAppList(); markFind(); },
         onkeydown: (e) => {
             if (e.key !== 'Escape')
+                return;
+            // 한글 조합 중의 Esc 는 '조합 취소'지 '검색 지우기'가 아니다(레포 불변식 #505) — 치던 글자만 물러난다.
+            if (e.isComposing || e.keyCode === 229)
                 return;
             e.stopPropagation();
             if (sideFilter)
