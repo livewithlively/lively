@@ -30,6 +30,16 @@ export async function activeWorkerRun(instanceId: string): Promise<AppWorkerRunR
   return r.rows[0] ? row(r.rows[0]) : null;
 }
 
+export async function getWorkerRun(id: string): Promise<AppWorkerRunRow | null> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_worker_run WHERE id=$1`, [id]);
+  return r.rows[0] ? row(r.rows[0]) : null;
+}
+
+export async function latestWorkerRun(instanceId: string): Promise<AppWorkerRunRow | null> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_worker_run WHERE instance_id=$1 ORDER BY created_at DESC LIMIT 1`, [instanceId]);
+  return r.rows[0] ? row(r.rows[0]) : null;
+}
+
 export async function prepareWorkerRun(input: {
   instanceId: string; appId: string; owner: string; projectId: number | null;
   hostKind: WorkerHostKind; hostId: string | null; packageHash: string;

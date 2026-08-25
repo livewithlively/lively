@@ -257,6 +257,8 @@ export function onTaskDone(cb: (nodeId: string, m: TaskDoneMsg) => void): void {
 // 최신 에이전트 hello가 확정된 뒤 호출돼, 연결 단절 때 fail-closed 정지한 AppInstance worker를 다시 맞춘다.
 let nodeReadyHandler: ((nodeId: string) => void | Promise<void>) | null = null;
 export function onNodeReady(cb: (nodeId: string) => void | Promise<void>): void { nodeReadyHandler = cb; }
+let workerStateHandler: ((nodeId: string, snapshot: unknown) => void | Promise<void>) | null = null;
+export function onWorkerState(cb: (nodeId: string, snapshot: unknown) => void | Promise<void>): void { workerStateHandler = cb; }
 
 // 스케줄러용 원격 노드 뷰(§10) — 온라인 노드만(오프라인은 후보 자체가 아님).
 // 스케줄러가 여기서 얻는 것은 **지금 붙어 있는가 + 그 머신의 리소스**뿐이다(liveness). 소유자·공유·활성 같은
@@ -328,6 +330,11 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
   }
   if (m.t === "taskdone") {
     try { taskDoneHandler?.(c.node.id, m); } catch { /* 스케줄러 오류는 태스크 1건에 한정 */ }
+    return;
+  }
+  if (m.t === "workerState") {
+    void Promise.resolve(workerStateHandler?.(c.node.id, m.snapshot)).catch((err) =>
+      logger.warn({ err, node: c.node.id }, "원격 worker 상태 저장 실패(다음 push/조회에서 재시도)"));
     return;
   }
   if (m.t === "opened") {

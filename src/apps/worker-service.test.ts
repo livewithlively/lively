@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { parseAppManifest } from "./manifest.js";
-import { resolveWorkerPlacement, runWorkerRecoveryBatch } from "./worker-service.js";
+import { resolveWorkerPlacement, runWorkerRecoveryBatch, validateRemoteWorkerSnapshot } from "./worker-service.js";
 
 const manifest = (runtime?: Record<string, unknown>) => parseAppManifest({ id: "worker-app", title: "Worker", version: "1.0.0", ...(runtime ? { runtime } : {}) });
 
@@ -31,4 +31,15 @@ test("worker 복구 배치는 한 인스턴스 실패가 나머지 복구를 막
   });
   assert.deepEqual(seen, ["kept", "broken", "restarted"]);
   assert.deepEqual(result, { kept: 1, restarted: 1, failed: 1, failures: ["node-offline"] });
+});
+
+test("원격 worker push는 run 식별자·상태·시각이 완전한 snapshot만 받는다", () => {
+  const good = {
+    runId: "run-1", appId: "worker-app", instanceId: "instance-1", status: "failed", pid: 7,
+    reason: "process_exit", exitCode: 42, startedAt: "2026-08-25T00:00:00.000Z",
+    readyAt: "2026-08-25T00:00:01.000Z", lastActiveAt: "2026-08-25T00:00:02.000Z", stoppedAt: "2026-08-25T00:00:03.000Z",
+  };
+  assert.deepEqual(validateRemoteWorkerSnapshot(good), good);
+  assert.throws(() => validateRemoteWorkerSnapshot({ ...good, status: "unknown" }), /snapshot-invalid/);
+  assert.throws(() => validateRemoteWorkerSnapshot({ ...good, stoppedAt: "not-a-date" }), /snapshot-invalid/);
 });
