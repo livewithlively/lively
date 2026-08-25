@@ -87,7 +87,7 @@ ok(noAppId.length === 0, "앱으로 적힌 화면은 전부 appId 를 갖고 있
 
 // ── 4. ★ 앱화 대상은 **줄어들기만 한다** ──────────────────────────────────────────
 //  이 숫자를 올리는 변경은 곧 "이번에도 앱 밖에 화면을 하나 더 만든다"는 뜻이다. 그 결정은 사람이 해야 한다.
-const TODO_CEILING = 6;   // 2026-08-25 기준: app · inbox · liv · archive · trash · connect
+const TODO_CEILING = 5;   // 2026-08-25: inbox 를 앱으로 옮겨 6 → 5. 남은 것 — app · liv · archive · trash · connect
 const todo = Object.entries(SHELL_SURFACES).filter(([, v]) => v.kind === "todo").map(([k]) => k);
 
 ok(todo.length <= TODO_CEILING, `앱화 대상이 늘지 않았다(${todo.length} ≤ ${TODO_CEILING})`,

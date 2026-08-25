@@ -1,0 +1,19 @@
+{
+  "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
+  "id": "inbox",
+  "title": "확인할 것",
+  "version": "0.1.0",
+  "publisher": { "name": "Lively" },
+  "instances": {
+    "project": "global",
+    "multiplicity": "single"
+  },
+  "system": {
+    "renderer": "inbox",
+    "route": "#/inbox"
+  },
+  "permissions": {
+    "scopes": [],
+    "tools": ["me_notifications", "me_notifications_read"]
+  }
+}

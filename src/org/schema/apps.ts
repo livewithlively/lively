@@ -219,6 +219,27 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS org_app_worker_run_active_uq ON org_app_worker_run(instance_id)
     WHERE status IN ('prepared','starting','ready','idle','running','stopping');`);
 
+  // ── org_app_notification — 앱이 보낸 알림의 이력(#1891) ──
+  //  종전 「확인할 것」은 라이브 세션에서 파생돼 남는 게 없었다. 화면을 안 보고 있으면 지나갔고,
+  //  나중에 "무슨 알림이 왔었지"를 물을 데가 없었다. 그래서 저장한다(읽음도 멤버별로).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_notification(
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      member_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT,
+      href TEXT,
+      dedupe_key TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      read_at TIMESTAMPTZ
+    );
+  `);
+  //  받은 사람의 최신순 조회가 기본 질의다.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_notification_member_idx ON org_app_notification(member_id, created_at DESC);`);
+  //  중복 억제는 (앱·멤버·key) 의 최근 1건만 본다 — 그 조회를 받치는 인덱스.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_notification_dedupe_idx ON org_app_notification(app_id, member_id, dedupe_key, created_at DESC) WHERE dedupe_key IS NOT NULL;`);
+
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.
   await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_id TEXT;`);

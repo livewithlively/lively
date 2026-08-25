@@ -10,6 +10,7 @@ import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
+import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, raiseBanners, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
 
 export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
@@ -170,6 +171,13 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
 //  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — 보이는 것 전부(프로젝트 세션은 팀 누구든 답할 수 있다).
 //  · 끝났어요: 시킨 작업이 끝났는데 아직 안 본 세션(stateKey 'done') — 내 것만(남의 완료를 내가 '확인'할 일은 없다).
 //  행은 홈의 nowList 와 같은 문법(v2-now-row) — 새 시각 언어를 만들지 않는다. 들어가 보면(lastAttached 갱신) 목록에서 빠진다.
+/**
+ * 「확인할 것」 = **받은 알림의 이력**(#1891) + 지금 내 답을 기다리는 세션.
+ *
+ * 종전엔 라이브 세션에서 파생만 했다 — 화면을 안 보고 있으면 지나갔고 이력이 없었다.
+ * 이제 위쪽은 서버가 남긴 알림(앱이 보낸 것 전부), 아래쪽은 지금 상태다. 둘은 겹칠 수 있지만
+ *  성격이 다르다: 알림은 **그때 무슨 일이 있었나**, 대기 세션은 **지금 무엇이 막혀 있나**.
+ */
 export function renderInbox(host: HTMLElement, data: V2Data): void {
   const waits = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
   const dones = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
@@ -182,9 +190,11 @@ export function renderInbox(host: HTMLElement, data: V2Data): void {
       el('span', { class: 'st', text: when(s.lastSeen) }),
       el('span', { class: 'go btn btn-sm', text: s.stateKey === 'waiting' ? '답하기' : '보기' }));
   };
-  host.replaceChildren(el('div', { class: 'v2-center v2-inbox' },
+  const notiHost = el('section', { class: 'v2-noti-sec' });
+  const shell = el('div', { class: 'v2-center v2-inbox' },
     el('h1', { class: 'v2-title', text: '확인할 것' }),
-    el('p', { class: 'v2-desc', text: '내 답이나 확인을 기다리는 세션이에요. 들어가 보면 목록에서 빠집니다.' }),
+    el('p', { class: 'v2-desc', text: '받은 알림과, 지금 내 답을 기다리는 세션이에요.' }),
+    notiHost,
     (!waits.length && !dones.length)
       ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '지금 확인할 것이 없어요.' }),
           el('p', { class: 'sub', text: '세션이 답을 기다리거나 작업을 끝내면 여기에 모입니다.' }))
@@ -194,7 +204,35 @@ export function renderInbox(host: HTMLElement, data: V2Data): void {
             ...waits.map(rowOf)) : null,
           dones.length ? el('section', {},
             el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `끝났어요 — 확인만 하면 돼요 · ${dones.length}` })),
-            ...dones.map(rowOf)) : null)));
+            ...dones.map(rowOf)) : null));
+  host.replaceChildren(shell);
+  void paintNotifications(notiHost);
+}
+
+/** 알림 이력 칸 — 비동기라 화면을 먼저 세우고 도착하면 채운다(빈 목록이면 칸 자체를 비운다). */
+async function paintNotifications(host: HTMLElement): Promise<void> {
+  let feed: NotificationFeed;
+  try { feed = await loadNotifications({ limit: 100 }); }
+  catch { host.replaceChildren(); return; }   // 이력을 못 읽어도 아래 '대기 세션'은 그대로 쓸 수 있다
+  if (!feed.notifications.length) { host.replaceChildren(); return; }
+
+  raiseBanners(feed.notifications);
+
+  const perm = notificationPermission();
+  const head = el('div', { class: 'v2-now-h' },
+    el('span', { class: 'v2-k', text: `받은 알림 · ${feed.notifications.length}${feed.unread ? ` (안 읽음 ${feed.unread})` : ''}` }),
+    //  ⚠ 권한은 사람이 누를 때만 묻는다 — 들어오자마자 뜨는 권한 창은 거의 거부당하고, 거부되면 다시 못 묻는다.
+    perm === 'default'
+      ? el('button', { class: 'btn btn-sm', type: 'button', text: '알림 켜기',
+          onclick: (e: Event) => { void askNotificationPermission().then(() => { (e.target as HTMLElement)?.remove(); }); } })
+      : null,
+    feed.unread
+      ? el('button', { class: 'btn btn-sm', type: 'button', text: '모두 읽음',
+          onclick: () => { void markNotificationsRead().then(() => paintNotifications(host)); } })
+      : null);
+
+  host.replaceChildren(el('div', { class: 'v2-now' },
+    el('section', {}, head, ...feed.notifications.map(notificationRow))));
 }
 
 export function projName(data: V2Data, id: number | null): string {

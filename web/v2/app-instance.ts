@@ -134,6 +134,18 @@ export async function openInstalledApp(app: {
   }
 }
 
+/**
+ * single-instance 빌트인 앱의 인스턴스를 멱등 확보한다(#1891 inbox).
+ *
+ * 서버가 multiplicity='single' 인 앱을 subject(singleton, app_id) 로 멱등 처리하므로,
+ *  여러 번 불러도 같은 인스턴스가 돌아온다. 실패는 **삼킨다** — 인스턴스는 정체성·프로젝트 귀속을
+ *  주는 것이지 화면을 그리는 조건이 아니다(앱이 아직 안 깔린 게이트웨이에서도 화면은 떠야 한다).
+ */
+export async function ensureSingletonAppInstance(appId: string, title: string): Promise<AppInstanceRecord | null> {
+  try { return await createAppInstance(appId, { title }); }
+  catch { return null; }
+}
+
 export async function closeAppInstance(id: string): Promise<void> {
   cache.delete(id);
   await api('/api/ui/app-instances/' + encodeURIComponent(id) + '/close', { method: 'POST', body: '{}' });
