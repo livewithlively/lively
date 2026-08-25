@@ -6,7 +6,7 @@ import { getApp, getRuntimeAsset } from "../org/store/apps.js";
 import type { AppInstanceRow } from "../org/store/app-instances.js";
 import { listActiveRuntimeInstances } from "../org/store/app-instances.js";
 import * as runs from "../org/store/app-worker-runs.js";
-import { liveNodes, nodeAgentStale, nodeOnline, nodeRpc, nodeSupports, onNodeReady } from "../node/registry.js";
+import { liveNodes, nodeAgentStale, nodeOnline, nodeRpc, nodeSupports, onNodeReady, onWorkerState } from "../node/registry.js";
 import { getRuntimeConfig } from "../org/store/runtime-config.js";
 import { getOrgProfile } from "../org/store/profile.js";
 
@@ -27,6 +27,22 @@ export async function runWorkerRecoveryBatch<T>(items: readonly T[], recover: (i
     }
   }
   return result;
+}
+
+const WORKER_STATUSES = new Set(["starting", "ready", "idle", "running", "stopping", "stopped", "failed"]);
+export function validateRemoteWorkerSnapshot(value: unknown): WorkerRunSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("worker-snapshot-invalid");
+  const x = value as Record<string, unknown>;
+  const id = (v: unknown): boolean => typeof v === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(v);
+  const nullableInt = (v: unknown): boolean => v === null || Number.isInteger(v);
+  const date = (v: unknown, nullable = false): boolean => (nullable && v === null)
+    || (typeof v === "string" && v.length > 0 && Number.isFinite(Date.parse(v)));
+  if (!id(x.runId) || !id(x.appId) || !id(x.instanceId) || !WORKER_STATUSES.has(String(x.status))
+      || !nullableInt(x.pid) || !nullableInt(x.exitCode) || !(x.reason === null || typeof x.reason === "string")
+      || !date(x.startedAt) || !date(x.readyAt, true) || !date(x.lastActiveAt) || !date(x.stoppedAt, true)) {
+    throw new Error("worker-snapshot-invalid");
+  }
+  return value as WorkerRunSnapshot;
 }
 
 export function resolveWorkerPlacement(manifest: LivelyAppManifest, requested?: { kind: "central" | "remote"; node_id?: string } | null): WorkerPlacement | null {
@@ -82,7 +98,7 @@ async function startWorkerForInstanceCore(app: OrgApp, manifest: LivelyAppManife
   if (existing) {
     const samePlacement = existing.host_kind === kind && existing.host_id === nodeId && existing.package_hash === app.content_hash;
     if (samePlacement) {
-      const observed = await workerRunForInstance(instance.id);
+      const observed = await observeActiveWorkerRun(instance.id);
       if (observed) return observed;
     } else {
       await stopWorkerForInstance(instance.id, existing.package_hash === app.content_hash ? "placement_changed" : "package_updated");
@@ -129,7 +145,7 @@ export async function startWorkerForInstance(app: OrgApp, manifest: LivelyAppMan
 }
 
 /** 조회 시 원격 호스트의 실제 상태를 한 번 접어, 게이트웨이 재시작/idle 종료 뒤 stale active를 숨기지 않는다. */
-export async function workerRunForInstance(instanceId: string): Promise<runs.AppWorkerRunRow | null> {
+async function observeActiveWorkerRun(instanceId: string): Promise<runs.AppWorkerRunRow | null> {
   const run = await runs.activeWorkerRun(instanceId);
   if (!run) return null;
   let snapshot: WorkerRunSnapshot | null = null;
@@ -145,6 +161,11 @@ export async function workerRunForInstance(instanceId: string): Promise<runs.App
   }
   await runs.applyWorkerSnapshot(snapshot);
   return await runs.activeWorkerRun(instanceId);
+}
+
+/** UI에는 active run이 없더라도 마지막 terminal 상태·종료 사유를 보여준다. */
+export async function workerRunForInstance(instanceId: string): Promise<runs.AppWorkerRunRow | null> {
+  return (await observeActiveWorkerRun(instanceId)) ?? await runs.latestWorkerRun(instanceId);
 }
 
 export async function stopWorkerForInstance(instanceId: string, reason: WorkerStopReason = "explicit"): Promise<void> {
@@ -210,7 +231,7 @@ export async function recoverWorkersForHost(hostKind: "central" | "remote", node
     const active = await runs.activeWorkerRun(instance.id);
     if (active?.package_hash !== app.content_hash) {
       if (active) await stopWorkerForInstance(instance.id, "package_updated").catch(() => { /* 새 run 시작이 최종 판정 */ });
-    } else if (await workerRunForInstance(instance.id)) return "kept";
+    } else if (await observeActiveWorkerRun(instance.id)) return "kept";
     await startWorkerForInstance(app, manifest, instance);
     return "restarted";
   });
@@ -236,6 +257,16 @@ export async function armWorkerRecovery(): Promise<{ central: WorkerRecoveryResu
   if (!recoveryArmed) {
     recoveryArmed = true;
     onNodeReady(async (nodeId) => { await recoverWorkersForHost("remote", nodeId); });
+    onWorkerState(async (nodeId, value) => {
+      const snapshot = validateRemoteWorkerSnapshot(value);
+      const run = await runs.getWorkerRun(snapshot.runId);
+      if (!run || run.host_kind !== "remote" || run.host_id !== nodeId
+          || run.app_id !== snapshot.appId || run.instance_id !== snapshot.instanceId) {
+        if (nodeSupports(nodeId, "stopWorker")) await nodeRpc(nodeId, "stopWorker", { runId: snapshot.runId, reason: "host_shutdown" }).catch(() => { /* 고아 fail-closed */ });
+        return;
+      }
+      await runs.applyWorkerSnapshot(snapshot);
+    });
   }
   const central = await recoverWorkersForHost("central");
   const remote: WorkerRecoveryResult[] = [];

@@ -32,11 +32,16 @@ import {
 import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
-import { nodeWorkerHost, WorkerBundleStager, type WorkerStartSpec, type WorkerStopReason } from "../apps/worker-host.js";
+import { WorkerHost, WorkerBundleStager, type WorkerStartSpec, type WorkerStopReason } from "../apps/worker-host.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
 const TOKEN = process.env.LIVELY_NODE_TOKEN || "";
 const NODE_ID = process.env.LIVELY_NODE_ID || ""; // 표시용 — 신원은 서버가 토큰으로 특정한다
+let workerStateSocket: WebSocket | null = null;
+const nodeWorkerHost = new WorkerHost({ onSnapshot: (snapshot) => {
+  const ws = workerStateSocket;
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "workerState", snapshot } satisfies NodeToGwMsg));
+} });
 
 // 도는 번들 자신의 지문(#905 C4) — 키트 kit-version 과 같은 모델: **실행 중인 바이트가 곧 버전**이라
 //  사람이 숫자를 올릴 필요도, 빠뜨릴 일도 없다. 게이트웨이가 서빙본 지문과 비교해 이 노드가 최신인지 안다.
@@ -376,6 +381,7 @@ function connect(): void {
 
   ws.on("open", () => {
     attempt = 0;
+    workerStateSocket = ws;
     lastBeat = Date.now();
     // 소켓 keepalive — 절전이 아니라 NAT 만료 같은 조용한 단절도 OS 가 알아채게(belt and braces).
     try { (ws as unknown as { _socket?: { setKeepAlive?: (on: boolean, ms: number) => void } })._socket?.setKeepAlive?.(true, 15_000); } catch { /* noop */ }
@@ -432,6 +438,7 @@ function connect(): void {
   });
 
   const teardown = (): void => {
+    if (workerStateSocket === ws) workerStateSocket = null;
     if (pusher) { clearInterval(pusher); pusher = null; }
     if (watch) { clearInterval(watch); watch = null; }
     for (const sock of chans.values()) sock.feedClose(); // attach pty 정리(#687 — 고아 방지)

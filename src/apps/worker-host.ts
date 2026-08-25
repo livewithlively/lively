@@ -495,5 +495,3 @@ export class WorkerHost {
     live.emitQueue = live.emitQueue.then(() => this.onSnapshot!(snapshot)).catch(() => { /* 관측 저장 실패는 프로세스를 죽이지 않는다 */ });
   }
 }
-
-export const nodeWorkerHost = new WorkerHost();
