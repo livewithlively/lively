@@ -97,6 +97,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   //  (세션판과 달리 한 세션에 쌓이지 않는다). 프로젝트 #1289 의 기본 운전 모드.
   { key: "distill_sources_headless", label: "자료 distill (헤드리스 — 증류기별 매 배치 새 세션)", params: [
     { name: "distiller", label: "증류기 (선택)", kind: "distiller", hint: "비우면 **켜져 있는 증류기 전부**를 각각 접수(병렬). 하나만 고르면 그것만." },
+    { name: "node", label: "실행 노드 (선택)", kind: "text", hint: "비우면 스케줄러가 램 여유가 큰 노드를 고른다(중앙 후순위). 'central' = 게이트웨이 박스에서, 또는 특정 노드 id. 그 노드가 꺼져 있으면 배치가 큐에 대기한다." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 증류기 설정값 → 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 증류기 설정으로 조립. 직접 쓰면 기준·형식만 갈린다 — 대상 자료 지정(스코프)은 서버가 앞에 붙여 유지한다." },
     HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
