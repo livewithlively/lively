@@ -27,6 +27,7 @@ import { PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, chan
 import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, pushThemeToOpenTabs, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref } from '../theme.js';
 //  #1898 — 관리탭 두 화면의 본체를 그대로 부른다(소유는 그쪽 — 여기서 다시 만들지 않는다).
 import { myAiAccountsCard } from '../me-ai.js';
+import { autoPane } from './me-auto.js'; // #1898 [자동으로 하는 일] — 세션 주입 화면과 같은 행을 본다(사본 없음)
 import { renderServices } from '../me-logins.js';
 import { openGitCredentialManager } from '../admin-credentials.js';
 // 좌 목록 — 순서가 곧 위계다. 나를 가리키는 것(프로필) → 내 AI 가 나를 대하는 법 → 내 AI 가 무엇으로 도나
@@ -35,6 +36,8 @@ import { openGitCredentialManager } from '../admin-credentials.js';
 const SECS = [
     { key: 'profile', label: '프로필', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'] },
     { key: 'ai', label: 'AI 개인 규칙', icon: ['M12 3.4l1.9 5.7 5.7 1.9-5.7 1.9L12 18.6l-1.9-5.7-5.7-1.9 5.7-1.9z', 'M18.5 16.5l.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7z'] },
+    // 시계 — 이 화면은 '언제 무슨 일이 자동으로 일어나나'를 다룬다(#1898). 규칙(위)이 '무엇을'이면 이건 '언제'.
+    { key: 'auto', label: '자동으로 하는 일', icon: ['M12 4.6a7.4 7.4 0 1 0 0 14.8 7.4 7.4 0 0 0 0-14.8', 'M12 8.2V12l2.6 1.6'] },
     // 열쇠 — 이 화면이 하는 일은 '로그인' 하나다(상태 확인 + 다시 로그인). 아래 방패(계정 · 보안)와 겹치지 않는 붓.
     { key: 'aiacct', label: '내 AI 계정', icon: ['M16 4.9a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2', 'M13.5 11 5 19.5', 'M7 17.5l2 2', 'M9.5 15l2 2'] },
     // 맞물린 고리 — 사이드바 [외부 앱 연결]과 **같은 글리프**(side.ts glyph 'link'). 같은 것을 가리키니 같은 그림이어야 한다.
@@ -146,6 +149,9 @@ export function openMeModal(opts = {}) {
         const saved = () => { paintHead(); opts.onSaved?.(); };
         panes.set('profile', profilePane(data, saved));
         panes.set('ai', aiPane(data, liv));
+        const auto = autoPane({ close, pane });
+        panes.set('auto', auto.node);
+        lazy.set('auto', auto.init);
         const acct = aiAccountPane();
         panes.set('aiacct', acct.node);
         lazy.set('aiacct', acct.init);
