@@ -51,10 +51,14 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .livc-foot form[hidden] { display: none; }
 
 /* ── 세션 화면 ───────────────────────────────────────────────────────────── */
-.sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+/*  머리줄의 한 줄/두 줄은 **화면 크기가 아니라 이 칸의 폭**이 정한다 — 세션 칸은 곁칸 분할로 좁아지므로
+    미디어쿼리로는 못 잡는다(같은 1440 화면에서도 칸은 780px 일 수 있다). 그래서 컨테이너 질의를 쓴다(아래 @container). */
+.sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); container-type: inline-size; }
 /* 첫 줄은 우패널 머리(.v2-aside-h)의 38px 리듬을 유지하고, 실행 설정은 겹치지 않게 둘째 줄로 접힌다. */
 .sc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; min-height: 38px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); flex: none; }
-.sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+/*  제목 묶음은 남는 자리를 다 먹지 않는다 — 그 오른쪽에 실행 설정(.sc-run-top)이 같은 줄로 서고, 남는 자리는
+    세션 조작(.sc-head-r)을 오른쪽 끝으로 미는 데 쓴다. 좁아지면 제목이 먼저 …로 줄어든다(min-width:0). */
+.sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .sc-title { font-size: 13.5px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 /* 제목 = 세션 이름을 고치는 자리(#1719). 평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 '고칠 수 있다'고 말한다
    — 머리줄에 연필 아이콘 하나를 더 놓으면 그 줄의 조작부가 다섯 개가 된다(제목이 조작부에 밀린다). */
@@ -153,7 +157,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
       위에 알약 글자가 겹쳐 찍힌다 — 박스 간격만 재면 12px 로 멀쩡해 보여 이 증상을 못 잡는다).
    줄어드는 칸은 제목(.sc-titlebox)과 알약 속 노드 이름(.sc-run-node) 둘, 그 순서다. */
 .sc-meta { min-width: 0; }
-.sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
 .sc-act-on { background: var(--bg-punch); color: var(--ink); }
@@ -279,7 +283,13 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
     <select> 의 자동 폭은 고른 값이 아니라 가장 긴 선택지 기준이라, 셋이 저마다 상한(145·180px)을 먹고 세션 칸이
     조금만 좁아도 줄이 접혔다. nowrap 으로 한 줄을 못 박고 좁아지면 각 칸이 저마다 줄며 …로 접히게 한다
     (전체 문구는 칸의 툴팁과 펼친 목록이 말한다). */
-.sc-run-top { flex: 1 1 100%; gap: 6px; min-width: 0; flex-wrap: nowrap; }
+.sc-run-top { flex: 0 1 auto; gap: 6px; min-width: 0; flex-wrap: nowrap; }
+/*  칸이 좁으면 실행 설정 묶음이 통째로 아랫줄로 내려간다 — 그때 내려갈 것은 **이 묶음**이지 오른쪽 조작부가
+    아니다([화면 복구]·[환경 설정]·[⋯] 는 어느 폭에서나 오른쪽 위 같은 자리에 있어야 손이 간다). */
+@container (max-width: 960px) {
+  .sc-run-top { flex: 1 1 100%; order: 2; }
+  .sc-head-l { flex: 1 1 auto; }
+}
 .sc-run-top .dt-chip-sel { flex: 0 1 auto; min-width: 54px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-run-top .sc-run-harness { max-width: 190px; }
 .livc-desktop .livc-note:not(:empty) { padding: 2px 30px 0; }
