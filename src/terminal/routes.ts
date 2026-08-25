@@ -10,6 +10,7 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
+import { closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션이 사라지면 그 앱 인스턴스도 닫는다(#1954)
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
@@ -762,6 +763,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         return;
       }
       await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 desired-state 삭제 실패(비치명)"));
+      //  이 경로는 노드에 kill 을 **릴레이**하므로 게이트웨이 killSession 을 안 거친다 — 인스턴스는 여기서 닫는다(#1954 후속).
+      await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "앱 인스턴스 닫기 실패(비치명)"));
       forgetTenantMap();
       res.json({ ok: true, forgot: !killed });
       return;
@@ -778,6 +781,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (st) {
         if (st.owner !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 세션이 아닙니다");
         await deleteSessionState(req.params.id);
+        await closeSessionAppInstances(req.params.id).catch((e) => logger.warn({ err: e, id: req.params.id }, "앱 인스턴스 닫기 실패(비치명)"));
         forgetTenantMap();
         res.json({ ok: true, forgot: true });
         return;
