@@ -42,6 +42,11 @@ import { ooxmlKindFromMime, extractOoxml, printableRatio, type OoxmlKind } from 
 
 const API_BASE = "https://slack.com/api";
 
+// 토큰 형식 판별(#1881) — 토큰 회전을 켠 앱은 `xoxe.xoxp-…`/`xoxe.xoxb-…` 를 준다(라이블리 앱은 v1 회전 OFF 지만 형식은 받아 둔다).
+//  검색 스윕은 유저 토큰만(search.messages 가 봇 토큰을 거부), 봇 모드는 봇 토큰만 — 칸을 바꿔 넣은 실수를 부팅 때 잡는다.
+export const isSlackUserToken = (t: string): boolean => /^(xoxp-|xoxe\.xoxp-)/.test(t);
+export const isSlackBotToken = (t: string): boolean => /^(xoxb-|xoxe\.xoxb-)/.test(t);
+
 // ── 스윕 파라미터 ────────────────────────────────────────────────────────────
 const DAY_MS = 86_400_000;
 const WINDOW_MS = 30 * DAY_MS; // 최초 마이그레이션 스윕 기본 창(월 단위) — 대부분 상한 미만이라 이분 없이 통과.
@@ -1039,7 +1044,8 @@ export const slackConnector: Connector = {
           "Slack 토큰이 없습니다 — 관리탭 ▸ 외부 자료 수집 ▸ Slack 에 User Token(xoxp-… 전 공개채널 검색 수집) 또는 Bot Token(xoxb-… 봇이 초대된 채널·비공개 포함)을 저장하세요.",
         );
       }
-      if (!botToken.startsWith("xoxb-")) {
+      // 접두 검사 — 토큰 회전을 켠 앱은 `xoxe.xoxb-…` 를 준다(#1881: 라이블리 앱은 v1 에서 회전 OFF 지만 형식은 미리 받아 둔다).
+      if (!isSlackBotToken(botToken)) {
         throw new Error(
           "Bot Token 이 봇 토큰(xoxb-) 형식이 아닙니다 — OAuth & Permissions 의 'Bot User OAuth Token' 을 저장하세요(유저 토큰 xoxp- 는 위 User Token 칸입니다).",
         );
@@ -1047,7 +1053,7 @@ export const slackConnector: Connector = {
       yield* botBackfill(botToken, cfg, sinceMs);
       return;
     }
-    if (!token.startsWith("xoxp-")) {
+    if (!isSlackUserToken(token)) {
       throw new Error(
         "Slack 토큰이 유저 토큰(xoxp-)이 아닙니다 — search.messages 는 봇 토큰(xoxb-)을 거부합니다(not_allowed_token_type). 봇 토큰으로 비공개 채널을 수집하려면 User Token 칸을 비우고 Bot Token 칸에 저장하세요.",
       );

@@ -11,6 +11,7 @@ import {
   type HttpToolPresetGroup, type HttpToolPreset,
 } from "./http-tool-presets.js";
 import { urlTemplateKeys, buildProxyRequest } from "../../mcp/dynamic-tools.js";
+import { channelToolKind } from "../channels/channel-guard.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -18,7 +19,7 @@ const all: Array<[HttpToolPresetGroup, HttpToolPreset]> = HTTP_TOOL_PRESETS.flat
 
 t("프리셋이 비어 있지 않다(배선 단언 — 비면 아래 순회가 통째로 vacuous)", () => {
   assert.ok(all.length >= 8, `도구가 너무 적다(${all.length})`);
-  assert.deepEqual(HTTP_TOOL_PRESETS.map((g) => g.key).sort(), ["google-calendar", "google-drive", "google-gmail"]);
+  assert.deepEqual(HTTP_TOOL_PRESETS.map((g) => g.key).sort(), ["google-calendar", "google-drive", "google-gmail", "slack"]);
 });
 
 t("전 프리셋이 자기검증을 통과한다(스키마 위생·scope·https·호스트·경로 인자)", () => {
@@ -37,7 +38,7 @@ t("A 어댑터가 만드는 이름과 겹치지 않는다 — 전환기에 공�
 
 t("금고 슬롯이 A 어댑터와 같다 — 이미 연결한 멤버는 재로그인이 필요 없다", () => {
   const kinds = HTTP_TOOL_PRESETS.map((g) => g.auth_kind).sort();
-  assert.deepEqual(kinds, ["google_calendar_oauth", "google_drive_oauth", "google_gmail_oauth"]);
+  assert.deepEqual(kinds, ["google_calendar_oauth", "google_drive_oauth", "google_gmail_oauth", "slack_oauth"]);
   for (const [g] of all) assert.equal(httpToolPresetToInput(g, g.tools[0]).auth_scope_key, "", "scope_key 가 다르면 다른 금고 행을 본다");
 });
 
@@ -56,6 +57,27 @@ t("전부 읽기 등급(L0)이고 호출 가능 scope 다", () => {
   }
 });
 
+t("슬랙(#1881): 발송 도구는 L2 로 심기고(per-user 필수·발송 fail-closed), 이름이 채널 정책 판정표와 맞는다", () => {
+  const slack = HTTP_TOOL_PRESETS.find((g) => g.key === "slack")!;
+  const byName = new Map(slack.tools.map((x) => [x.name, x] as const));
+  for (const n of ["slack_send_message", "slack_schedule_message"]) {
+    const tool = byName.get(n)!;
+    const row = httpToolPresetToInput(slack, tool);
+    assert.equal(row.level, "L2", `${n} 은 L2 여야 한다`);
+    assert.equal(channelToolKind(n, row.level), "write", `${n} 이 정책에서 발송으로 안 잡힌다`);
+  }
+  for (const n of ["slack_search_channels", "slack_search_users", "slack_search_emojis"]) {
+    const row = httpToolPresetToInput(slack, byName.get(n)!);
+    assert.equal(channelToolKind(n, row.level), "meta", `${n} 은 메타(정책 밖)여야 한다`);
+  }
+  for (const n of ["slack_search_messages", "slack_read_channel", "slack_read_thread", "slack_read_file", "slack_read_message_emoji", "slack_list_channel_members"]) {
+    const row = httpToolPresetToInput(slack, byName.get(n)!);
+    assert.equal(row.level, "L0", `${n} 은 읽기 등급`);
+    assert.equal(channelToolKind(n, row.level), "read", `${n} 은 열람(응답 필터 대상)`);
+  }
+  assert.ok(slack.hosts.includes("slack.com"));
+});
+
 t("인자 값은 감사로그에 남기지 않는다(#1082)", () => {
   for (const [g, tool] of all) assert.equal(httpToolPresetToInput(g, tool).log_args, false, `${tool.name} 이 인자 값을 남긴다`);
 });
@@ -65,8 +87,10 @@ t("응답 크기 방어 — 목록 계열은 개수 상한이나 필드 제한�
   for (const [, tool] of all) {
     const q = new URL(tool.url.replace(/\{[A-Za-z_][A-Za-z0-9_]*\}/g, "x")).searchParams;
     const listish = /search|list|events/.test(tool.name);
-    if (listish) {
-      assert.ok(q.has("pageSize") || q.has("maxResults") || q.has("fields"), `${tool.name} 에 개수·필드 상한이 없다`);
+    // 인자가 하나도 없는 도구(emoji.list 같은 고정 목록)는 쪽을 나눌 수 없어 예외 — 응답이 작은 것만 그렇게 둔다.
+    const pageable = Object.keys((tool.input_schema.properties ?? {}) as object).length > 0;
+    if (listish && pageable) {
+      assert.ok(q.has("pageSize") || q.has("maxResults") || q.has("fields") || q.has("limit") || q.has("count"), `${tool.name} 에 개수·필드 상한이 없다`);
     }
   }
 });
@@ -90,7 +114,7 @@ t("URL 기본값은 인자가 덮어쓴다 — 안 주면 기본값이 산다", 
 });
 
 t("허용 호스트 목록 — 이게 url_allowlist 에 들어가야 도구가 동작한다", () => {
-  assert.deepEqual(httpToolPresetHosts(), ["gmail.googleapis.com", "www.googleapis.com"]);
+  assert.deepEqual(httpToolPresetHosts(), ["gmail.googleapis.com", "slack.com", "www.googleapis.com"]);
 });
 
 t("자기검증이 실제로 잡는다 — 경로 인자가 required 가 아니면 거부", () => {

@@ -13,6 +13,7 @@
 //     커넥터는 서브프로세스(run-sync/run-push)로 짧게 살다 죽으므로 stale 우려 없음.
 import { itemsPool } from "../db/client.js";
 import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js";
+import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
 export interface ConnectorField {
@@ -68,6 +69,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       //  "둘 중 하나는 있어야 한다"를 검사하고 어느 쪽을 넣어야 하는지 알려준다(빈 값 = 조용한 무수집 방지).
       { key: "user_token", env: "SLACK_USER_TOKEN", secret: true, label: "User Token", hint: "xoxp-... — 검색 스윕(전 공개채널). 비공개 채널을 원하면 아래 Bot Token 을 쓰세요" },
       { key: "bot_token", env: "SLACK_BOT_TOKEN", secret: true, label: "Bot Token", hint: "xoxb-... — 봇이 초대된 채널만 수집(**비공개 채널 포함**). User Token 을 함께 넣으면 그쪽이 우선합니다" },
+      // #1881 — 붙여넣기 대신 금고에서: [Slack 연결]로 저장된 토큰을 그대로 쓴다. 값이 있으면 위 두 칸·env 를 덮어쓴다.
+      { key: "token_source", env: "SLACK_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Slack 연결]로 저장한 계정(공개채널 검색 수집) · bot = Lively 봇(초대된 채널·비공개 포함, 워크스페이스가 둘이면 bot:<team_id>) · 비우면 위 토큰 칸을 씁니다" },
       { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "봇 모드 전용 — 채널명·id 를 공백·쉼표로 구분(비우면 봇이 초대된 전체). 예: hai솔루션_front hai솔루션_closing" },
       { key: "noise_exclude", env: "SLACK_NOISE_EXCLUDE", secret: false, label: "제외 채널", hint: "수집에서 제외할 채널명을 공백·쉼표로 구분해 입력 (예: alerts monitoring) — 모니터링·알람 등 메시지가 많은 봇 채널에 사용합니다." },
       { key: "backfill_since", env: "SLACK_BACKFILL_SINCE", secret: false, label: "최초 수집 시작일", hint: "이 날짜 이후의 자료만 수집합니다 (YYYY-MM-DD, 비우면 활동이 있는 과거 전체를 자동 수집)" },
@@ -341,6 +344,15 @@ async function loadConnectorConfig(
     }
     if (v == null || v === "") v = process.env[f.env]; // env 폴백
     out[f.key] = v != null && v !== "" ? v : undefined;
+  }
+  // ── 슬랙 토큰 출처(#1881) — token_source 가 있으면 붙여넣기·env 값을 **덮어쓴다**(출처를 명시했으면 그 출처만). ──
+  if (system === "slack" && out.token_source) {
+    const r = await resolveSlackTokenSource(out.token_source, vaultReader);
+    if (r) {
+      if (r.warning) console.warn(`slack token_source: ${r.warning}`);
+      out.user_token = r.user_token;
+      out.bot_token = r.bot_token;
+    }
   }
   return out;
 }
