@@ -23,7 +23,8 @@ test("Linux 계획은 bwrap network namespace와 같은 Node permission 계약�
   const p = await buildWorkerSpawnPlan({ ...base, platform: "linux", exists: async (x) => x === "/usr/bin/bwrap" });
   assert.equal(p.command, "/usr/bin/bwrap");
   assert.ok(p.args.includes("--unshare-net"));
-  assert.ok(p.args.includes("--experimental-permission"));
+  assert.ok(p.args.includes("--permission"));
+  assert.ok(!p.args.includes("--experimental-permission"));
 });
 
 test("격리기 없는 Linux와 Windows는 평문 Node 폴백 없이 fail closed", async () => {
