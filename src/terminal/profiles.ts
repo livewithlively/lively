@@ -349,8 +349,9 @@ async function macClaudeKeychainHas(): Promise<boolean> {
     return true;
   } catch { return false; }
 }
-export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus[]> {
-  const osSt = await memberOsStatus(ownerId(user));
+//  osSt — 호출자가 방금 잰 OS 격리 상태를 넘기면 다시 재지 않는다(drop-priv 확인을 아낀다 — memberLoggedInHarnessesAny).
+export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): Promise<AiAccountStatus[]> {
+  osSt ??= await memberOsStatus(ownerId(user));
   const isolated = osSt.ready && osSt.provisioned;
   const darwin = process.platform === "darwin";
   const out: AiAccountStatus[] = [];
@@ -361,7 +362,7 @@ export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus
     let loggedIn: boolean | null;
     if (isolated) {
       scope = "isolated"; where = `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
-      loggedIn = await memberFileExists(osSt.osUser, rel);
+      loggedIn = osSt.loggedInHarnesses.includes(h.key);   // memberOsStatus 가 같은 표(HARNESS_CRED)로 이미 drop-priv 확인했다
     } else if (h.key === "claude" && darwin) {
       // 맥 = 키체인(OS 유저 단위) → 멤버별로 갈릴 수 없다. 공용으로 **정직하게** 표시한다.
       scope = "shared"; where = "이 서버 macOS 키체인(Claude Code-credentials)";
@@ -379,6 +380,17 @@ export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus
     out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared" });
   }
   return out;
+}
+
+// #1884 헤드리스 하네스 선택 입력 — 이 멤버가 **어느 하네스로든** 로그인돼 있나. 격리 홈(box_) drop-priv 확인과
+//  비격리 프로필/공유 경로 판정을 aiAccountStatus 한 번으로 합친다(격리면 그 안에서 memberOsStatus 결과를 재사용).
+//  loggedIn=null('모름' — 맥 키체인 접근 불가 등)은 넣지 않는다: 모르는 걸 로그인으로 치면 자격 없는 하네스로 잡이
+//  나가 무출력 hang 이 된다(#1101 부류). 못 찾으면 [] — 호출자(node/headless-harness)가 claude 기본으로 접는다.
+export async function memberLoggedInHarnessesAny(memberId: string): Promise<string[]> {
+  const user = { userId: memberId, email: "", scopes: [], projects: [] } as LivelyUser;
+  const osSt = await memberOsStatus(memberId);
+  const accts = await aiAccountStatus(user, osSt);
+  return [...new Set([...osSt.loggedInHarnesses, ...accts.filter((a) => a.loggedIn === true).map((a) => a.key)])];
 }
 
 // 로그아웃 = 자격증명 파일 삭제(재로그인으로 되돌릴 수 있다). **본인 것만** — 호출자(라우트)가 principal 을 넘긴다.

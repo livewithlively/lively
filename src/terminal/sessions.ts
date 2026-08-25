@@ -621,7 +621,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     const ruleName = label;
     const cfgDir = process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile ? profileConfigDir(user) : null;
     void (async () => {
-      const nice = cleanLabel(await aiSessionName(seed, { configDir: cfgDir }));
+      const nice = cleanLabel(await aiSessionName(seed, { configDir: cfgDir, harness: harness.key }));   // #1884 — 그 세션의 하네스로 짓는다
       if (!nice || nice === ruleName) return;
       const now = await getSessionLabel(id).catch(() => "");
       if (now && now !== ruleName) return;                 // 사람이 그 사이 이름을 고쳤다 — 그 이름이 정본이다
