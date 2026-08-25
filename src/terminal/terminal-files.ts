@@ -250,14 +250,16 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     // 올린 파일 = 자료 1건(#1881 L1) — 개인 폴더는 올린 사람만 보는 자료, 공유 루트의 project/<id>/… 는 프로젝트 자료로 접는다.
     //  실패해도 업로드는 성공이다(로그만).
+    let ing: Awaited<ReturnType<typeof ingestLocalUpload>> | null = null;
     try {
       const u = userOf(req);
       const loc = await localRootForBrowse(String(req.query.root ?? ""), u, base, abs);
-      if (loc) await ingestLocalUpload({ ...loc, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } });
+      if (loc) ing = await ingestLocalUpload({ ...loc, abs, osUser, uploader: { id: viewerFor(req), name: u?.email ?? null } });
     } catch (e) { console.warn(`[local-ingest] 자료 등록 실패 ${abs}: ${(e as Error)?.message ?? e}`); }
     // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
     //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).
-    res.json({ ok: true, path: abs });
+    // source_id — 자료로 등록됐으면 그 id(#1881). 구 클라이언트는 무시.
+    res.json({ ok: true, path: abs, ...(ing?.ingested ? { source_id: ing.source_id } : {}) });
   }));
 
   // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).
