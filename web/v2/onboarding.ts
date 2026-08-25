@@ -4,6 +4,8 @@
 //  문구는 원준님 교정 31건 반영본. 새로 쓴 연결부는 [새문구] 주석. 상태는 sessionStorage(진행)·localStorage(끝남 표식).
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
+import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
+import { apiUrl } from '../core.js';
 export const OB_DONE_KEY = 'lively_ob_done';
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
 
@@ -596,6 +598,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, terminal: null, app: null,
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
+    upN: 0, upBusy: 0,      // #1881 실업로드 — 자료로 등록된 파일 수 / 올리는 중 수(연출 아님)
     b2: null, b3: null, nowline: null, firstOrder: null, decisions: [], notes: [],
     chatDone: [],           // 막3에서 끝난 단계들
   });
@@ -748,7 +751,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const on = S.connected.includes(id);
               return `<button class="ob-opt-card ${on ? 'ob-on' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || ''}</span><span class="ob-oc-st"><span class="v2-dot ${on ? 'done' : 'off'}" style="margin:0"></span></span>
                 <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '연결됐어요. 새 자료가 따라옵니다.' : '눌러서 연결 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
-          <button class="ob-btn ob-btn-pri" id="upGo" ${S.connected.length ? '' : 'disabled'}>다 넣었어요, 계속</button>
+          <div class="ob-opt-card" id="upZone" style="justify-content:center;flex-direction:column;gap:6px;min-height:96px;border-style:dashed;cursor:default">
+            <span class="ob-oc-t" id="upZoneT">${S.upN ? `${S.upN}개 받았어요. 더 끌어다 놓으셔도 됩니다.` : '여기에 파일이나 폴더를 끌어다 놓아 주세요.'}</span>
+            <span class="ob-oc-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개…` : '폴더 정리도, 이름 짓기도 필요 없습니다.'}</span>
+            <span id="upPick"></span>
+          </div>
+          <button class="ob-btn ob-btn-pri" id="upGo" ${(S.connected.length || S.upN) ? '' : 'disabled'}>다 넣었어요, 계속</button>
           <button class="ob-q-skip" data-skip>지금은 건너뛰기</button>`;
       },
       bind: (el) => {
@@ -759,6 +767,29 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           S.connected.push(id); if (!S.read.total) S.read.total = 41; save(); renderSB();
           renderScene('upload', false);
         });
+        // #1881 L4 — 실제 업로드: 드롭·피커 → 개인 폴더 uploads/<상대경로>. 서버가 파일을 자료(source)로 등록하고
+        //  응답 source_id 로 알려 준다 — 카운터는 그 실측이다(연출 아님). 실패는 조용히 넘어가지 않는다(toast).
+        const zone = $('#upZone', el);
+        const paintZone = () => { const t = $('#upZoneT', el), d = $('#upZoneD', el);
+          if (!t || !d) return;
+          t.textContent = S.upN ? `${S.upN}개 받았어요. 더 끌어다 놓으셔도 됩니다.` : '여기에 파일이나 폴더를 끌어다 놓아 주세요.';
+          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개…` : '폴더 정리도, 이름 짓기도 필요 없습니다.';
+          const go = $('#upGo', el); if (go && (S.connected.length || S.upN)) go.disabled = false; };
+        const sendAll = async (items) => {
+          if (!items.length) return;
+          S.upBusy += items.length; paintZone();
+          for (const it of items) {
+            const rel = 'uploads/' + String(it.rel || it.file.name).replace(/^\/+/, '');
+            try {
+              const j = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              if (j && j.source_id) S.upN++;
+            } catch (e) { toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
+            S.upBusy--; S.read.total = S.upN; save(); paintZone();
+          }
+          renderSB();
+        };
+        upDropZone(zone, zone, (items) => void sendAll(items));
+        $('#upPick', el).appendChild(upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub', label: '파일이나 폴더 고르기' }));
         $('#upGo', el).onclick = () => goScene('ai');
         $('[data-skip]', el).onclick = () => goScene('ai');
       },
@@ -882,10 +913,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     else msgLiv(`적어 두었어요.`);
   }
 
+  // #1881 L4 — 표본 승인 = '내 컴퓨터 자료' 증류기 켜기. 올린 파일이 있을 때만(없으면 켤 것도 없다).
+  //  서버는 멱등(이미 켜져 있으면 no-op)이고, 실패해도 온보딩을 막지 않는다 — 관리 화면에서 언제든 켤 수 있다.
+  function enableLocalDistiller() {
+    if (!S.upN) return;
+    fetch(apiUrl('/api/ui/org/distillers/local'), { method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enable: true }) })
+      .catch(() => { /* 비치명 — 크론·관리 화면이 남은 길 */ });
+  }
+
   /* 읽기 진행 — 사이드바 서랍 숫자가 실시간으로 올라간다 */
   let readTimer = null, readBarEl = null, readNEl = null;
   function startReading() {
-    if (!S.read.total) S.read.total = 41;
+    if (!S.read.total) S.read.total = S.upN || 41;   // #1881 — 실제로 올린 파일이 있으면 그 수가 곧 읽을 자료 수다(가짜 41 금지)
     if (S.read.finished) return;
     clearInterval(readTimer);
     const targets = drawerTargets();
@@ -913,7 +953,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         <p style="margin-top:8px"><b>자료함을 이렇게 나눠 둘까요?</b> 옆의 숫자는 그 종류로 본 자료 수예요. 이대로 서랍을 만들어 두면 다음부터 새 자료가 알아서 제자리로 들어갑니다.</p>`);
       await sleep(300);
       chipsRow([
-        { label: '네, 이대로 나눠 주세요', cta: true, cb: (l) => { msgUser(l); S.drawersOn = true; S.decisions.push(`자료함 7갈래로 나눔`); doneStep('b1'); renderSB(); chatStep('b2', token); } },
+        { label: '네, 이대로 나눠 주세요', cta: true, cb: (l) => { msgUser(l); S.drawersOn = true; S.decisions.push(`자료함 7갈래로 나눔`); doneStep('b1'); renderSB(); enableLocalDistiller(); chatStep('b2', token); } },
         { label: '빠진 종류가 있어요', cb: (l) => { msgUser(l);
             msgLiv('어떤 종류인가요? 아래 입력창에 적어 주세요. 서랍을 하나 더 만들어 둘게요.'); /* [새문구] */
             armCompose('예: 고객 인터뷰', (v) => { S.drawersOn = true; S.decisions.push(`갈래 추가: ${v}`); doneStep('b1'); renderSB();
