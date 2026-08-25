@@ -31,7 +31,7 @@ test("스킬 트리 → harness_asset(skill) item + content_hash", async () => {
   assert.equal(ha!.comp.orig_name, "greet");
   assert.match(ha!.comp.ref, /^app-[0-9a-f]{10}-greet$/);
   assert.deepEqual((ha!.payload as Record<string, unknown>).kind, "skill");
-  assert.equal((ha!.payload as Record<string, unknown>).harness, "claude");
+  assert.equal((ha!.payload as Record<string, unknown>).harness, "all");   // #1884 — 앱 자산은 하네스를 가리지 않는다
   assert.ok(String((ha!.payload as Record<string, unknown>).body).includes("# greet"));
 });
 
