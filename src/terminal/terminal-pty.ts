@@ -318,11 +318,6 @@ export function captureCmd(n: number): string {
 //  프롬프트에 마우스 이동마다 리포트가 주입돼 garbage 가 쏟아지고 **새로고침해도 안 풀린다**(붙을 때마다 되살리므로).
 //  셸은 마우스 트래킹을 켜는 일이 없다 → foreground 가 셸이면 그 flag 는 죽은 앱의 잔재다(클라가 이걸로 게이팅).
 //  ⚠ cmd 는 반드시 **마지막** 토큰: 프로세스명에 공백이 있어도 앞 항목 파싱을 깨지 않는다.
-// cf(#{cursor_flag}) 는 '지금 그 좌표를 믿어도 되는가' — 커서가 **숨겨져 있으면**(cf=0) 앱이 화면을 다시 그리는
-//  중이고 커서는 의미 없는 자리(대개 0열)에 주차돼 있다(실측 #1943: 클로드 TUI 는 idle 프롬프트에서 cf=1·cx=2,
-//  렌더 중엔 cf=0·cx=0). 그 좌표를 백필에 그대로 박으면 커서가 프롬프트 맨 앞(`>` 위)에 고정되고, 앱이 idle 이면
-//  다시 그리지 않으므로 **영영 안 풀린다** — 한글 IME 조합은 PTY 로 바이트를 안 보내 재그리기를 유발하지 못하므로
-//  조합 글자가 그 자리에 그려진다(영문은 매 타 재그리기라 증상이 안 보인다). 그래서 클라가 게이팅할 수 있게 함께 준다.
 export const STATE_MARKER = "__LTSTATE__";
 // mux= 는 **우리가 아는 사실**을 그대로 실어 보내는 리터럴이다(멀티플렉서가 그대로 되돌려준다).
 //  왜 필요한가(실측 #1541): psmux 는 alt-screen 팬에 `capture-pane` 을 걸면 **제어 스트림 전체가 멈춘다**
@@ -330,7 +325,7 @@ export const STATE_MARKER = "__LTSTATE__";
 //  물론이고 앱의 재그리기·리사이즈 응답까지 통째로 막혀 웹터미널이 하얀 화면으로 굳는다.
 //  클라가 '이 백엔드에는 캡처를 걸면 안 된다'를 알아야 그 명령을 처음부터 보내지 않을 수 있다.
 export function stateCmd(psmux = false): string {
-  return `display-message -p '${STATE_MARKER} mux=${psmux ? "psmux" : "tmux"} alt=#{alternate_on} any=#{mouse_any_flag} btn=#{mouse_button_flag} std=#{mouse_standard_flag} sgr=#{mouse_sgr_flag} cx=#{cursor_x} cy=#{cursor_y} cf=#{cursor_flag} cmd=#{pane_current_command}'`;
+  return `display-message -p '${STATE_MARKER} mux=${psmux ? "psmux" : "tmux"} alt=#{alternate_on} any=#{mouse_any_flag} btn=#{mouse_button_flag} std=#{mouse_standard_flag} sgr=#{mouse_sgr_flag} cx=#{cursor_x} cy=#{cursor_y} cmd=#{pane_current_command}'`;
 }
 // stale 마우스모드 복구 — tmux 가 아는 pane 상태 자체를 고친다(클라 게이팅은 이 클라의 garbage 만 막을 뿐,
 //  tmux 의 잘못된 진실은 그대로라 다른 클라·실 터미널 attach 는 계속 flood 를 받는다).
