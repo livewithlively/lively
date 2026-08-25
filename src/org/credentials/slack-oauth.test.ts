@@ -33,7 +33,8 @@ await t("C1 인가 URL — slack.com/oauth/v2/authorize + client_id·redirect_ur
   assert.equal(u.searchParams.get("scope"), SLACK_BOT_SCOPES.join(","));
   assert.equal(u.searchParams.get("user_scope"), SLACK_USER_SCOPES.join(","));
   // 유저 스코프엔 검색·발송이, 봇 스코프엔 이메일(구성원 매핑)이 — 유저 토큰에 PII 스코프가 새지 않는다
-  assert.ok(SLACK_USER_SCOPES.includes("search:read") && SLACK_USER_SCOPES.includes("chat:write"));
+  assert.ok(SLACK_USER_SCOPES.includes("search:read.public") && SLACK_USER_SCOPES.includes("chat:write"));
+  assert.ok(!(SLACK_USER_SCOPES as readonly string[]).includes("search:read"), "legacy search:read 는 새 앱 authorize 가 invalid_permissions 로 거부한다");
   assert.ok(SLACK_BOT_SCOPES.includes("users:read.email"));
   assert.ok(!(SLACK_USER_SCOPES as readonly string[]).includes("users:read.email"));
 });
