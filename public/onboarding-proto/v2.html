@@ -31,47 +31,50 @@ input{font:inherit; color:inherit}
 b{font-weight:600}
 .app{display:flex; height:100vh; overflow:hidden}
 
-/* ── 왼쪽 사이드바 — 실제 앱 v2 셸(40-v2.css)을 그대로 옮김: 마크+스위처 / 리브 / 프로젝트 트리 / 앱·내 계정.
-   온보딩이 채우는 것도 실제 문법으로 — 리브가 벌인 일이 '처음 설정' 카드 안 세션 행(상태점)으로 쌓인다. ── */
-.sb{width:292px; flex:0 0 292px; background:var(--canvas); border-right:1px solid var(--line);
-  display:flex; flex-direction:column; padding:0; overflow-y:auto;
+/* ── 왼쪽 = 레일 + 구역 사이드바(#2016 '슬랙 그대로') — 실제 앱 v2 셸(40-v2.css + 47-v2-rail.css)을 그대로 옮김.
+   레일 68: 워크스페이스 타일 · 구역(홈·확인할 것·AI 세션·프로젝트·위키·리브) · 발치(앱·나).
+   사이드바(홈 구역): [스페이스 이름] 앱 N ＋ 찾기 · 열린 앱 목록 · 발치 도크(아카이브·휴지통·외부 앱 연결). ── */
+.sb{width:360px; flex:0 0 360px; display:flex; flex-direction:row; padding:0; overflow:hidden;
   transition:margin-left .5s cubic-bezier(.22,.8,.3,1), opacity .5s;}
-body.stage-name .sb{margin-left:-292px; opacity:0}   /* 막1: 사이드바 없음 */
-.v2-side-top{padding:12px 8px 6px; display:flex; align-items:center; gap:10px}
-.v2-mark{flex:none; width:30px; height:30px; border-radius:9px; background:var(--ink); display:grid; place-items:center}
-.v2-mark-dot{width:9px; height:9px; border-radius:50%; background:var(--mint-deep); display:block}
-.v2-ws{flex:1; min-width:0; display:flex; align-items:center; gap:7px; padding:5px 7px; border:1px solid transparent; border-radius:8px; text-align:left}
-.v2-ws:hover{background:var(--bg); border-color:var(--line)}
-.v2-ws-name{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:700; color:var(--ink)}
-.v2-ws-badge{flex:none; font-family:ui-monospace,monospace; font-size:10px; letter-spacing:.04em; font-weight:700; padding:1px 5px; border-radius:5px; color:var(--mint-deep); background:var(--bg-success); border:1px solid #CDEFE3}
-.v2-ws-car{font-size:10px; color:var(--muted-2); flex:none}
-.v2-liv-btn{margin:4px 8px 2px; display:flex; align-items:center; gap:12px; padding:8px 10px 8px 9px; min-height:34px; border-radius:9px; border:1px solid transparent; font-weight:700; font-size:14px; color:var(--ink)}
-.v2-liv-btn.on{background:var(--bg); border-color:#CDEFE3}
-.lm{width:26px; height:26px; border-radius:50%; background:var(--bg-success); border:1px solid #CDEFE3; display:grid; place-items:center; color:var(--mint-deep); font-weight:800; font-size:11px; flex:none}
-.v2-liv-btn .sub{margin-left:auto; font-size:11px; font-weight:600; color:var(--muted)}
-.v2-side-sec{padding:14px 8px 4px 16px; display:flex; align-items:center; gap:2px; min-height:30px}
-.v2-k{flex:1; min-width:0; font-size:11px; font-weight:700; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.v2-mini{flex:none; display:inline-grid; place-items:center; min-width:27px; height:27px; padding:0 7px; border-radius:7px; color:var(--muted); font-size:12px; font-weight:700}
-.v2-tree{flex:1; min-height:0; padding:2px 8px 14px}
-/* 열린 프로젝트 = 흰 카드 (실제 앱 안 1 '방') */
-.v2-pj{margin-top:2px}
-.v2-pj.open{background:var(--bg); border:1px solid var(--line-net); border-radius:10px; margin-top:8px}
-.v2-pj-row{display:flex; align-items:center; gap:6px; padding:7px 9px 7px 7px; min-height:34px; font-size:14px; font-weight:700; color:var(--ink)}
-.v2-pj-row.dim{opacity:.8}
-.v2-pj-ic{width:16px; height:16px; flex:none; fill:none; stroke:var(--muted-2); stroke-width:1.8; stroke-linejoin:round; stroke-linecap:round}
-.v2-pj-row .n{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.v2-pj-when{font-size:11px; font-variant-numeric:tabular-nums; color:var(--muted); flex:none; margin-left:8px}
-.v2-ss-list{padding:0 9px 6px 0}
-.v2-ss{position:relative; display:flex; align-items:center; padding:6px 9px 6px 5px; margin-left:7px; border-radius:7px; font-size:13px; font-weight:500; color:var(--ink-sub); min-height:30px}
-.v2-ss .t{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.v2-ss .n{font-family:ui-monospace,monospace; font-size:11px; color:var(--muted); flex:none; margin-left:8px; font-variant-numeric:tabular-nums}
-.v2-ss-main{flex:1; min-width:0; display:flex; flex-direction:column; line-height:1.35}
-.v2-ss-main .t{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.v2-ss-main .sub{font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.v2-sums{display:inline-flex; align-items:center; gap:8px; margin-left:8px}
-.v2-sum{display:inline-flex; align-items:center; gap:4px; font-family:ui-monospace,monospace; font-size:11px; font-weight:600; color:var(--muted)}
-.v2-sum.wait{color:var(--amber)} .v2-sum.busy{color:var(--blue)} .v2-sum.done{color:var(--mint-deep)}
-.v2-car{width:16px; color:var(--muted-2); font-size:14px; transform:rotate(90deg); flex:none; text-align:center}
+body.stage-name .sb{margin-left:-360px; opacity:0}   /* 막1: 사이드바 없음 */
+.v2-out{font-size:12px; color:var(--muted)}
+.rl{width:68px; flex:none; background:var(--canvas); border-right:1px solid var(--line); display:flex; flex-direction:column; padding:10px 0 8px}
+.rl-ws{display:flex; justify-content:center; padding-bottom:6px}
+.rl-tile{position:relative; display:inline-block; width:44px; height:46px}
+.rl-tile .tile{position:relative; z-index:1; width:36px; height:36px; border-radius:10px; background:var(--ink); color:var(--bg); display:grid; place-items:center; font-size:16px; font-weight:800; box-shadow:0 1px 2px rgba(20,31,46,.18)}
+.rl-tile::after{content:''; position:absolute; left:8px; right:8px; bottom:3px; height:13px; border-radius:0 0 9px 9px; background:rgba(20,31,46,.16)}
+.rl-mid{flex:1; min-height:0; overflow:hidden}
+.rl-it{position:relative; display:flex; flex-direction:column; align-items:center; gap:3px; width:calc(100% - 12px); margin:2px 6px; padding:6px 2px 5px; border:0; border-radius:8px; background:none; color:var(--ink-sub); font-size:10.5px; font-weight:700; text-align:center; cursor:pointer}
+.rl-it span{max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.rl-it svg{width:20px; height:20px; fill:none; stroke:var(--muted-2); stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round}
+.rl-it:hover{background:var(--bg)}
+.rl-it.on{background:var(--bg); box-shadow:inset 0 0 0 1px var(--line-net); color:var(--ink)}
+.rl-it.on svg, .rl-it:hover svg{stroke:var(--blue)}
+.rl-bd{position:absolute; top:3px; right:9px; min-width:16px; height:16px; padding:0 4px; border-radius:9px; background:var(--amber); color:#fff; font-size:10px; font-weight:800; display:inline-grid; place-items:center; box-shadow:0 0 0 2px var(--canvas)}
+.rl-hr{width:28px; height:1px; margin:8px auto; background:var(--line)}
+.rl-foot{flex:none; border-top:1px solid var(--line); padding:6px 0 0}
+.rl-foot .v2-ava{margin:0 auto}
+.sd{flex:1; min-width:0; background:var(--canvas); display:flex; flex-direction:column}
+.sd-head{min-height:34px; display:flex; align-items:center; gap:6px; padding:12px 12px 4px 16px; flex:none}
+.sd-wsn{min-width:0; display:inline-flex; align-items:center; gap:4px; font-size:14px; font-weight:800; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sd-wsn i{font-style:normal; font-size:10px; color:var(--muted-2); flex:none}
+.sd-head .v2-k{flex:none; font-size:12px; font-weight:800; color:var(--ink); letter-spacing:0; text-transform:none}
+.sd-cnt{min-width:18px; font-family:ui-monospace,monospace; font-size:11px; color:var(--muted)}
+.sd-new{width:24px; height:24px; margin-left:auto; display:inline-grid; place-items:center; padding:0; border:0; border-radius:7px; background:none; color:var(--ink-sub); cursor:pointer}
+.sd-new:hover{background:var(--bg)}
+.sd-new svg{width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round}
+.sd-find{width:27px; height:27px; display:inline-grid; place-items:center; padding:0; border:1px solid transparent; border-radius:7px; background:none; color:var(--muted); cursor:pointer}
+.sd-find:hover{color:var(--ink); background:var(--bg); border-color:var(--line)}
+.sd-find svg{width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round}
+.sd-list{flex:1; min-height:0; overflow-y:auto; padding:1px 10px 12px}
+.sd-inst{position:relative; display:flex; align-items:center; gap:9px; padding:6px 8px 6px 7px; min-height:32px; border-radius:9px; color:var(--ink-sub); font-size:13.5px; font-weight:650}
+.sd-inst + .sd-inst{margin-top:2px}
+.sd-inst.on{background:var(--bg); box-shadow:inset 0 0 0 1px var(--line-net); color:var(--ink)}
+.sd-inst.on::before{content:''; position:absolute; left:0; top:9px; bottom:9px; width:3px; border-radius:999px; background:var(--blue)}
+.sd-inst svg{width:17px; height:17px; flex:none; fill:none; stroke:var(--muted); stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round}
+.sd-inst .t{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sd-inst .sub{font-size:11.5px; font-weight:500; color:var(--muted); flex:none}
+.sd-inst .v2-dot{margin:0}
 .v2-dot.idle{background:var(--muted-2)}
 .v2-tree-note{font-size:12.5px; color:var(--muted); line-height:1.6; margin:0; padding:8px 8px}
 /* 상태점 — 실제 앱 어휘: 작업 중(파랑 맥동)·확인 필요(호박)·완료(민트) */
@@ -88,12 +91,12 @@ body.stage-name .sb{margin-left:-292px; opacity:0}   /* 막1: 사이드바 없�
 @keyframes gh{0%,100%{opacity:.5}50%{opacity:1}}
 .born{animation:born .7s ease-out}
 @keyframes born{0%{background:var(--blue-soft)}100%{}}
-.v2-side-foot{padding:8px 8px 10px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:4px}
-.v2-apps-btn{display:flex; align-items:center; gap:12px; width:100%; padding:8px 10px 8px 9px; min-height:34px; border-radius:9px; border:1px solid var(--line); background:var(--bg); font-size:13px; font-weight:700; color:var(--ink)}
-.v2-apps-btn .cnt{margin-left:auto; font-family:ui-monospace,monospace; font-size:11px; color:var(--muted-2)}
-.v2-me{display:flex; align-items:center; gap:12px; padding:4px 10px; min-height:34px; font-size:13px; color:var(--ink-sub)}
+.sd-foot{flex:none; border-top:1px solid var(--line-net); padding:6px 8px 8px}
+.sd-dock{display:grid; grid-template-columns:repeat(3,1fr); gap:4px}
+.sd-dock a{display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 2px 5px; border-radius:8px; color:var(--ink-sub); font-size:10.5px; font-weight:600; text-decoration:none}
+.sd-dock a:hover{background:var(--bg); color:var(--ink)}
+.sd-dock svg{width:18px; height:18px; fill:none; stroke:var(--muted-2); stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round}
 .v2-ava{width:26px; height:26px; border-radius:50%; background:var(--blue); color:#fff; display:grid; place-items:center; font-size:11px; font-weight:700; flex:none}
-.v2-me-name{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .v2-out{font-size:12px; color:var(--muted)}
 
 /* ── 오른쪽 본문 ─────────────────────────────────────────────── */
@@ -869,34 +872,56 @@ function obSessionState() {
   if (S.read.total && !S.read.finished) return 'busy';
   return STEP_OF[S.scene] >= CHAT_FROM ? 'busy' : 'idle';
 }
+/* 아이콘 — 실제 앱 web/v2/icons.ts(#2016)의 그 획 그대로(24 뷰박스 · 1.8 · 둥근 끝 · 조각은 한 path 의 M). */
+const IC = {
+  home: 'M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8 M3 10a2 2 0 0 1 .7-1.53l7-6a2 2 0 0 1 2.6 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+  inbox: 'M22 12h-6l-2 3h-4l-2-3H2 M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z',
+  term: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M7 11l2-2-2-2 M11 13h4',
+  proj: 'M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z M8 10v4 M12 10v2 M16 10v6',
+  wiki: 'M12 7v14 M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z',
+  liv: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z',
+  apps: 'M4 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M15 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M15 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z M4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z',
+  chat: 'M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1',
+  archive: 'M3 3h18a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8 M10 12h4',
+  trash: 'M3 6h18 M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M10 11v6 M14 11v6',
+  link: 'M9 17H7A5 5 0 0 1 7 7h2 M15 7h2a5 5 0 1 1 0 10h-2 M8 12h8',
+};
+const ic = (k) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${IC[k]}"/></svg>`;
+
+/* 사이드바 = 실제 새 셸(#2016) 그대로: [레일] 워크스페이스 타일 · 구역 6 · 발치(앱·나) + [홈 구역] 열린 앱 목록.
+ *  온보딩이 실제로 바꾸는 것만 보인다 — '처음 설정' 탭이 목록의 한 행(상태점), 첫 지시를 고르면 그 세션이 한 행 더,
+ *  리브가 답을 기다리면 레일 [확인할 것]에 배지가 선다(실제 side.ts 의 inboxN 과 같은 판정). */
 function sbHTML() {
-  const sess = [];
-  // ① 리브가 일을 벌인 순간부터 세션이 보인다(자료 연결 뒤, 또는 채팅 시작)
-  if (S.connected.length || STEP_OF[S.scene] >= CHAT_FROM) {
-    const st = obSessionState();
-    const sub = st === 'done' ? '처음 설정 끝' : st === 'wait' ? '답을 기다리는 중' : (S.read.total && !S.read.finished) ? `자료 읽는 중 ${S.read.done}/${S.read.total}` : '리브와 대화 중';
-    sess.push({ dot: st, main: '처음 설정', sub });
-  }
-  // ② 첫 지시로 고른 문장 = 새 세션
-  if (S.firstOrder) sess.push({ dot: S.scene === 'done' ? 'busy' : 'idle', main: S.firstOrder.length > 34 ? S.firstOrder.slice(0, 34) + '…' : S.firstOrder, sub: S.scene === 'done' ? '시작됨' : '준비됨' });
-  const sums = () => { const c = {}; sess.forEach((x) => { c[x.dot] = (c[x.dot] || 0) + 1; });
-    return ['wait', 'done', 'busy', 'idle'].filter((k) => c[k]).map((k) => `<span class="v2-sum ${k}"><span class="v2-dot ${k}" style="margin:0"></span>${c[k]}</span>`).join(''); };
-  const tree = sess.length
-    ? `<div class="v2-pj open"><div class="v2-pj-row"><span class="v2-car">›</span>${folderIc()}<span class="n">프로젝트 없는 세션</span><span class="v2-sums">${sums()}</span></div>
-        <div class="v2-ss-list">${sess.map((x) => `<div class="v2-ss"><span class="v2-dot ${x.dot}"></span><span class="v2-ss-main"><span class="t">${esc(x.main)}</span>${x.sub ? `<span class="sub">${esc(x.sub)}</span>` : ''}</span></div>`).join('')}</div></div>`
-    : `<p class="v2-tree-note">아직 프로젝트가 없어요. 가운데 입력창에 무엇이든 시키면 세션이 열리고, 프로젝트는 나중에 붙일 수 있어요.</p>`;
+  const st = obSessionState();
+  const sub = st === 'done' ? '처음 설정 끝' : st === 'wait' ? '답을 기다리는 중' : (S.read.total && !S.read.finished) ? `자료 읽는 중 ${S.read.done}/${S.read.total}` : STEP_OF[S.scene] >= CHAT_FROM ? '리브와 대화 중' : '진행 중';
+  const rows = [`<div class="sd-inst on">${ic('chat')}<span class="t">처음 설정</span><span class="sub">${esc(sub)}</span><span class="v2-dot ${st}"></span></div>`];
+  if (S.firstOrder) rows.push(`<div class="sd-inst">${ic('chat')}<span class="t">${esc(S.firstOrder.length > 34 ? S.firstOrder.slice(0, 34) + '…' : S.firstOrder)}</span><span class="sub">${S.scene === 'done' ? '시작됨' : '준비됨'}</span><span class="v2-dot ${S.scene === 'done' ? 'busy' : 'idle'}"></span></div>`);
+  const waitN = st === 'wait' ? 1 : 0;
+  const it = (k, label, on, bd) => `<button class="rl-it${on ? ' on' : ''}" type="button">${ic(k)}<span>${label}</span>${bd ? `<span class="rl-bd">${bd}</span>` : ''}</button>`;
+  const who = nick() || '나';
   return `
-    <div class="v2-side-top">
-      <span class="v2-mark"><span class="v2-mark-dot"></span></span>
-      <button class="v2-ws"><span class="v2-ws-name">${esc(nick() ? nick() + '님의 스페이스' : '내 스페이스')}</span><span class="v2-ws-badge">개인</span><span class="v2-ws-car">▾</span></button>
+  <div class="rl">
+    <div class="rl-ws"><span class="rl-tile"><span class="tile">${esc(who[0])}</span></span></div>
+    <div class="rl-mid">
+      ${it('home', '홈', true)}
+      ${it('inbox', '확인할 것', false, waitN || '')}
+      ${it('term', 'AI 세션')}
+      ${it('proj', '프로젝트')}
+      ${it('wiki', '위키')}
+      ${it('liv', '리브')}
+      <div class="rl-hr"></div>
     </div>
-    <a class="v2-liv-btn on"><span class="lm">L</span><span>리브</span><span class="sub">워크스페이스 담당자</span></a>
-    <div class="v2-side-sec"><span class="v2-k">프로젝트 · 0</span><span class="v2-mini">찾기</span><span class="v2-mini">필터</span><span class="v2-mini">＋</span></div>
-    <div class="v2-tree">${tree}</div>
-    <div class="v2-side-foot">
-      <button class="v2-apps-btn">앱<span class="cnt">7</span></button>
-      <div class="v2-me"><span class="v2-ava">${esc((nick() || '나')[0])}</span><span class="v2-me-name">${esc(nick() || '나')}</span><span class="v2-out">로그아웃</span></div>
-    </div>`;
+    <div class="rl-foot">${it('apps', '앱')}<button class="rl-it" type="button"><span class="v2-ava">${esc(who[0])}</span><span>${esc(who)}</span></button></div>
+  </div>
+  <div class="sd">
+    <div class="sd-head"><span class="sd-wsn">${esc(nick() ? nick() + '님의 스페이스' : '내 스페이스')}<i>▾</i></span><span class="v2-k">앱</span><span class="sd-cnt">${rows.length}</span>
+      <button class="sd-new" type="button" title="새 작업"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button class="sd-find" type="button" title="찾기"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button></div>
+    <div class="sd-list">${rows.join('')}</div>
+    <div class="sd-foot"><div class="sd-dock">
+      <a>${ic('archive')}<span>아카이브</span></a><a>${ic('trash')}<span>휴지통</span></a><a>${ic('link')}<span>외부 앱 연결</span></a>
+    </div></div>
+  </div>`;
 }
 function renderSB() { $('#sb').innerHTML = sbHTML(); }
 

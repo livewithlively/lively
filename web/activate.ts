@@ -7,6 +7,11 @@
 //   · 양방향 피싱 경고: ① 남이 준 코드 승인 금지(내 계정 탈취) ② 남의 코드 승인 금지(그 기기가 나로 로그인).
 //   · client_ip 는 서버가 안 준다(trust proxy 미설정이라 프록시 IP=모든 클라 동일 → 신뢰신호 무의미).
 //   · control-plane(관리권한) 포함 승인은 비밀번호 재확인(step-up) — 서버가 검증.
+//   · ★ 그 재확인은 **비밀번호를 가진 사람에게만** 묻는다(#2044). 서버는 이미 그렇게 판정하는데
+//     (tokens-devices.ts: includeControlPlane && hasDangerous && hasCredential) 화면이 그걸 몰라서
+//     소셜/SSO 로만 들어온 사람에게 **채울 수 없는 빈 칸**을 보여줬다. 빈 채로 눌러도 사실은 통과하지만,
+//     사람은 "난 비번이 없는데" 하고 **체크를 풀어** 관리 권한 없는 토큰을 받는다 — 조용한 권한 손실이다.
+//     그래서 /api/ui/me/logins 의 hasPassword 를 보고 칸 자체를 없앤다.
 import { api, busy, el, state, toast, usernameAnchor } from './core.js';
 
 export async function renderActivate(view: any): Promise<void> {
@@ -58,17 +63,30 @@ async function drawLookup(slot: any, raw: string): Promise<void> {
   // control-plane opt-in — admin/runtime 보유 멤버만 노출.
   const scopes: string[] = Array.isArray(state.me?.scopes) ? state.me.scopes : [];
   const canCp = scopes.includes('admin') || scopes.includes('runtime');
+  // 이 계정에 **로컬 비밀번호가 있나** — step-up 을 물을지의 유일한 근거(서버 판정과 같은 축).
+  //  못 물어보면(일시 오류) **있다고 본다**: 없는데 물으면 한 번 더 누르면 되지만, 있는데 안 물으면 게이트가 사라진다.
+  let hasPassword = true;
+  if (canCp) {
+    try { hasPassword = (await api('/api/ui/me/logins'))?.hasPassword !== false; } catch { /* 보수적으로 유지 */ }
+  }
   const cpChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  // ★ 기본은 **켬**이다(#2044, 상민 결정 — 매니지드·셀프호스트 공통). 이 기기는 본인 컴퓨터이고, 관리 기능을
+  //  못 쓰는 세션은 나중에 "왜 안 되지" 로 돌아온다. 체크박스는 애초에 그 권한을 가진 사람에게만 보이고(canCp),
+  //  발급 상한도 서버가 멤버 LIVE scope 와 교집합해 정한다(확대 불가) — 그래서 기본 켬이 안전하다.
+  cpChk.checked = true;
   // 여긴 진짜 계정 비밀번호(step-up)다 → autocomplete 를 명시해 브라우저가 **제대로** 돕게 둔다.
   //  단, 아이디칸을 명시하지 않으면 크롬이 위 승인코드칸을 아이디로 오인하므로 숨은 앵커를 바로 앞에 둔다(#1250).
   const pwInput = el('input', { type: 'password', class: 'term-input', placeholder: '비밀번호 재확인',
-    autocomplete: 'current-password', style: 'margin-top:6px;display:none' }) as HTMLInputElement;
+    autocomplete: 'current-password', style: 'margin-top:6px' }) as HTMLInputElement;
   const pwAnchor = usernameAnchor();
+  // 비번이 없는 계정엔 칸 자체를 만들지 않는다 — 못 채우는 칸은 안내가 아니라 장벽이다.
   const cpBlock = canCp ? el('div', { style: 'margin:8px 0;position:relative' },
     el('label', { class: 'admin-check', style: 'cursor:pointer' }, cpChk,
       el('span', { text: ' 관리 권한(admin/runtime) 포함 — 이 CLI 세션이 관리탭 기능(구성원·토큰·훅·DB소스)을 MCP로 다룹니다.' })),
-    pwAnchor, pwInput) : null;
-  if (canCp) cpChk.addEventListener('change', () => { pwInput.style.display = cpChk.checked ? 'block' : 'none'; });
+    ...(hasPassword ? [pwAnchor, pwInput]
+      : [el('p', { class: 'admin-hint', style: 'margin:6px 0 0',
+          text: '이 계정은 비밀번호 없이(회사 계정·소셜 로그인) 들어와 있어 추가 확인이 필요 없습니다.' })])) : null;
+  if (canCp && hasPassword) cpChk.addEventListener('change', () => { pwInput.style.display = cpChk.checked ? 'block' : 'none'; });
 
   const approveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '승인' });
   const denyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '거부' });
@@ -77,7 +95,10 @@ async function drawLookup(slot: any, raw: string): Promise<void> {
     (approveBtn as HTMLButtonElement).disabled = true;
     try {
       const body: any = { user_code: code };
-      if (canCp && cpChk.checked) { body.include_control_plane = true; body.password = pwInput.value; }
+      if (canCp && cpChk.checked) {
+        body.include_control_plane = true;
+        if (hasPassword) body.password = pwInput.value;   // 비번이 없으면 필드 자체를 안 보낸다
+      }
       await api('/api/ui/cli/device/approve', { method: 'POST', body: JSON.stringify(body) });
       slot.replaceChildren(el('div', { class: 'install-ok' },
         el('p', { style: 'font-weight:600', text: '✓ 승인됐습니다.' }),

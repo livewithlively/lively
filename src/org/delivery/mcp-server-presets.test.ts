@@ -8,6 +8,9 @@ import { MCP_SERVER_PRESETS, presetOAuthScope } from "./mcp-server-presets.js";
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
 
+/** 레인(#1881) — mode 미지정은 종전대로 proxy(게이트웨이 대리). client 는 멤버 클라 직접등록이라 규칙이 다르다. */
+const isProxy = (c: { mode?: "proxy" | "client" }): boolean => (c.mode ?? "proxy") === "proxy";
+
 // Slack 이 실제 지원하는 scope (실측 26개, 사양 참고표) — 이 밖 토큰이 나오면 오타/버그.
 const SLACK_SUPPORTED = new Set([
   "search:read.public", "search:read.private", "search:read.mpim", "search:read.im",
@@ -61,13 +64,14 @@ t("presetOAuthScope: null / undefined / 빈문자열 → undefined", () => {
 });
 
 // ── 데이터 불변식 — 카탈로그 전체 ──
-t("MCP_SERVER_PRESETS: 비어있지 않은 배열, 각 엔트리에 name·auth_kind 문자열", () => {
+t("MCP_SERVER_PRESETS: 비어있지 않은 배열, 각 엔트리에 name 문자열 · proxy 레인은 auth_kind 필수", () => {
   assert.ok(Array.isArray(MCP_SERVER_PRESETS));
   assert.ok(MCP_SERVER_PRESETS.length > 0);
   for (const c of MCP_SERVER_PRESETS) {
     assert.equal(typeof c.name, "string");
     assert.ok(c.name.length > 0);
-    assert.equal(typeof c.auth_kind, "string");
+    // 금고 슬롯은 게이트웨이가 대리하는 proxy 레인에서만 의미가 있다(#1881). 레인 C 는 클라가 자체 인증한다.
+    if (isProxy(c)) assert.equal(typeof c.auth_kind, "string", `proxy 레인 ${c.name} 에 auth_kind 누락(연결 슬롯이 없다)`);
   }
 });
 // DCR 이라고 scope 를 항상 비우는 게 아니다 — 기준은 **상류가 scopes_supported 를 명시하는가** 다.
@@ -79,8 +83,9 @@ t("MCP_SERVER_PRESETS: 비어있지 않은 배열, 각 엔트리에 name·auth_k
 //  새 DCR 상류가 아무 근거 없이 scope 를 달고 들어오는 것은 계속 막힌다.
 const DCR_WITH_DECLARED_SCOPES: Record<string, string> = { gitlab: "mcp" };
 
-t("MCP_SERVER_PRESETS: DCR 상류는 oauth_scope 미지정(상류가 명시하는 gitlab 만 예외), 비-DCR(slack·google)은 지정", () => {
+t("MCP_SERVER_PRESETS: [proxy 레인] DCR 상류는 oauth_scope 미지정(상류가 명시하는 gitlab 만 예외), 비-DCR(slack·google)은 지정", () => {
   for (const c of MCP_SERVER_PRESETS) {
+    if (!isProxy(c)) continue;   // 레인 C 는 게이트웨이가 authorize 를 만들지 않아 이 불변식의 대상이 아니다
     if (!c.dcr) {
       assert.ok(c.oauth_scope && c.oauth_scope.length > 0, `비-DCR 상류 ${c.name} 에 scope 누락(authorize 가 거부됨)`);
       continue;
@@ -89,6 +94,31 @@ t("MCP_SERVER_PRESETS: DCR 상류는 oauth_scope 미지정(상류가 명시하�
     if (declared) assert.equal(c.oauth_scope, declared, `${c.name} 은 상류가 명시한 scope 를 그대로 실어야 한다`);
     else assert.ok(!c.oauth_scope, `DCR 상류 ${c.name} 에 예기치 않은 scope(넣으면 깨짐): ${c.oauth_scope}`);
   }
+});
+
+// ── 레인 C(클라 직접등록, #1881) — 게이트웨이가 대리하지 않는 상류 ──
+//  왜 이 불변식이 필요한가: 레인 C 항목에 auth_kind·oauth_scope 를 실수로 달면 bootstrap·관리탭이 그걸 보고
+//  프록시처럼 심으려 하고(금고 슬롯 생성·[발행] 시도), 상류는 클라이언트 allowlist 로 거부한다 — 조용히 깨진다.
+t("MCP_SERVER_PRESETS: [레인 C] 게이트웨이 자격이 없어야 한다(auth_kind·oauth_scope·oauth_token_url 미지정)", () => {
+  const lanC = MCP_SERVER_PRESETS.filter((c) => c.mode === "client");
+  assert.ok(lanC.length > 0, "레인 C 프리셋이 하나도 없다(figma 가 빠졌는지 확인)");
+  for (const c of lanC) {
+    assert.ok(!c.auth_kind, `레인 C ${c.name} 에 auth_kind 가 있다 — 게이트웨이는 이 상류의 토큰을 갖지 않는다`);
+    assert.ok(!c.oauth_scope, `레인 C ${c.name} 에 oauth_scope 가 있다 — authorize 를 만드는 쪽은 멤버 클라이언트다`);
+    assert.ok(!c.oauth_token_url, `레인 C ${c.name} 에 oauth_token_url 이 있다 — 갱신도 클라이언트가 한다`);
+    assert.ok(/^https:\/\//.test(c.url), `레인 C ${c.name} 의 url 은 https 여야 한다: ${c.url}`);
+  }
+});
+t("MCP_SERVER_PRESETS: [레인 C] figma 는 카탈로그 allowlist 상류라 dcr=false·seed=true 여야 한다", () => {
+  const f = MCP_SERVER_PRESETS.find((c) => c.name === "figma");
+  assert.ok(f, "figma 프리셋이 없다");
+  assert.equal(f.mode, "client", "figma 는 레인 C 다 — mcp.figma.com 은 DCR 을 403 으로 막는다(2026-08-26 실측)");
+  assert.equal(f.dcr, false, "figma 는 registration_endpoint 를 광고하지만 실제 등록이 403 이라 dcr=false 다");
+  assert.equal(f.seed, true, "figma 는 관리자 세팅이 0 이라 자동 시드 대상이다");
+});
+t("presetOAuthScope: 레인 C 는 auth_kind 가 없어 조회되지 않는다(프록시 authorize 에 섞이지 않음)", () => {
+  assert.equal(presetOAuthScope("figma_token"), undefined);
+  assert.equal(presetOAuthScope("figma_oauth"), undefined);
 });
 
 // ── Google (비-DCR, scope 요구; 인가서버 accounts.google.com) ──

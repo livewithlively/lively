@@ -50,9 +50,20 @@ export function memberExecArgv(): string[] {
 
 // box-spawn 경유로 멤버 uid 에서 프로세스 스폰. wrapAsMember = ["sudo","-n","-u",osUser,"--",BOX_SPAWN,...argv].
 //  중계 배포(memberExecConfigured)면 `<중계> <osUser> -- <argv...>` — memberExecArgv 머리말 참조.
-function memberSpawn(osUser: string, argv: string[], stdio: Array<"ignore" | "pipe">): ChildProcess {
+/**
+ * (순수 — 테스트 seam) 멤버 경계에서 argv 를 돌릴 **전체 명령**을 조립한다.
+ *  · 중계 배포(LIVELY_MEMBER_EXEC): `<중계> <osUser> -- <argv…>` — 그 멤버의 실행 환경(테넌트 컨테이너)에서 돈다.
+ *  · 로컬 격리:                      `sudo -n -u <osUser> -- box-spawn <argv…>`(wrapAsMember).
+ * 파일 op 말고도 **멤버 uid 로 떠야 하는 장수 프로세스**(#2055 codex app-server)가 같은 자리를 쓴다 —
+ * 경계 계산이 두 벌이 되면 한쪽만 고쳐져 조용히 게이트웨이 권한으로 도는 프로세스가 생긴다.
+ */
+export function memberSpawnArgv(osUser: string, argv: string[]): string[] {
   const relay = memberExecConfigured() ? memberExecArgv() : [];
-  const full = relay.length ? [...relay, osUser, "--", ...argv] : wrapAsMember(osUser, argv);
+  return relay.length ? [...relay, osUser, "--", ...argv] : wrapAsMember(osUser, argv);
+}
+
+function memberSpawn(osUser: string, argv: string[], stdio: Array<"ignore" | "pipe">): ChildProcess {
+  const full = memberSpawnArgv(osUser, argv);
   return spawn(full[0], full.slice(1), { stdio });
 }
 // 자식 stderr 를 문자열로 수집(진단). 스트림 null 이면 no-op.

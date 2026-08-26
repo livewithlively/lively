@@ -10,7 +10,7 @@
 //    감싸는 건 호출자 몫(현재 라우트는 clone 이 대개 초 단위인 사내 레포 전제로 직접 await, 상한은 아래 CAP).
 import { getNode, type OrgNode } from "./store.js";
 import { nodeOpenTo, nodeHostProfile } from "./node-access.js";
-import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo, nodeAgentStale } from "./registry.js";
+import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo, nodeAgentStale, isSelfNode } from "./registry.js";
 import type { NodeOp } from "./protocol.js";
 import { resolveRepoInject, type RepoSpec, type ProvisionedRepo, type ProvisionResult } from "../project/project-provision.js";
 import type { CreateInput, SessionInfo } from "../terminal/terminal-sessions.js"; // type-only — 런타임 순환 없음(erased)
@@ -93,8 +93,10 @@ export interface NodeUsableDeps {
   online: (nodeId: string) => boolean;
   supports: (nodeId: string, op: NodeOp) => boolean;
   getNode: (nodeId: string) => Promise<OrgNode | null | undefined>;
+  /** #2108 — 이 노드가 게이트웨이 자신인가. 생략하면 '아니다'(기존 테스트·호출부 무회귀). */
+  self?: (nodeId: string) => boolean;
 }
-const liveNodeDeps: NodeUsableDeps = { online: nodeOnline, supports: nodeSupports, getNode };
+const liveNodeDeps: NodeUsableDeps = { online: nodeOnline, supports: nodeSupports, getNode, self: isSelfNode };
 
 // 정책(🔴 트립와이어): **등록한 사람 것 · 관리자가 공유로 지정한 노드만 개방**(#1540 — nodeOpenTo 단일 술어).
 //  종전엔 개방 근거가 `kind==='worker'` 였다. 그게 두 축(개방 / git 자격·용량)을 한 컬럼에 얹은 것이어서,
@@ -106,6 +108,12 @@ export async function assertNodeUsable(
   deps: NodeUsableDeps, nodeId: string, requesterId: string, opts?: { requireProvision?: boolean },
 ): Promise<OrgNode> {
   if (!deps.online(nodeId)) throw new HttpError(409, `노드 '${nodeId}' 가 오프라인입니다 — 그 PC/서버의 lively 노드 연결을 확인하세요.`);
+  // #2108 — 게이트웨이 자신인 노드에는 원격으로 일을 시키지 않는다. 같은 박스를 원격처럼 다루면 같은 tmux 세션이
+  //  두 경로(박스 즉시확답 / 노드 3초 스냅샷)로 잡혀 새 세션이 복원으로 새 버린다. 조용히 중앙으로 옮기지는
+  //  않는다 — 워크스페이스 뿌리가 다를 수 있어 사람이 고른 것과 다른 폴더에서 열릴 수 있다(#2022 원칙).
+  if (deps.self?.(nodeId)) {
+    throw new HttpError(409, `노드 '${nodeId}' 는 이 게이트웨이가 도는 바로 그 컴퓨터입니다 — 노드가 아니라 '중앙 컴퓨터(기본)'로 여세요. (그 컴퓨터에서 \`lively node stop\` 을 실행하면 노드 목록에서도 사라집니다)`);
+  }
   // 미지원(구 번들) 노드엔 애초에 안 보낸다 — 보내면 nodeRpc 가 node-unsupported-op 로 던진다. 여기서 먼저 사람 말로.
   if (opts?.requireProvision && !deps.supports(nodeId, "provision")) {
     throw new HttpError(409, `노드 '${nodeId}' 의 에이전트가 낡아 프로젝트 provision 을 지원하지 않습니다 — 그 PC/서버에서 노드를 다시 설치·업데이트하세요.`);

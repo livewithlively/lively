@@ -20,6 +20,7 @@ import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
+import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
@@ -1141,8 +1142,9 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
 
 //  행 키 → 그 행을 여는 route · 그 행이 쥔 AppInstance. 활성화·닫기가 이 두 표로 되돌아간다.
 const sideRowRoute = new Map<string, string>();
-const lastSideRows = new Map<string, SideInstance>();   // 방금 그린 행 — × 가 '그때 어떤 상태였나'를 읽는다
+const lastSideRows = new Map<string, SideInstance>();   // 방금 그린 행 — 활성 자리 유지(activeHold)가 '누르기 직전 어디였나'를 읽는다
 const sideRowInstance = new Map<string, string>();
+const dismissBasis = new Map<string, string>();         // 행 키 → 치움 판정의 기준값(dismissKey) — × 와 put 이 같은 자를 쓴다
 
 /** 지금 사람이 볼 일이 있는 상태 — 이 셋만 위 묶음으로 올라간다(#1954). */
 const PRIORITY_ST: Record<string, { label: string; rank: number }> = {
@@ -1186,6 +1188,17 @@ let dismissed: Record<string, string> = (() => {
 function saveDismissed(): void {
   try { localStorage.setItem(DISMISS_STORE, JSON.stringify(dismissed)); } catch { /* 못 남겨도 이번 화면은 된다 */ }
 }
+/**
+ * 치움 판정의 기준값 — **적을 때와 잴 때가 반드시 같은 자여야 한다**(#2110).
+ *  세션의 stateKey 는 아홉 가지(session-status.ts SESS_STATES)인데 이 목록이 상태로 치는 건 점이 켜지는 셋뿐이다
+ *  (PRIORITY_ST). 종전엔 × 가 **점으로 걸러진 값**(status.key ?? '')을 적어 두고, 판정은 **원본 stateKey** 와 견줬다 —
+ *  그래서 점이 없는 상태(대기 중·오프라인·셸…)의 행은 `'' !== 'offline'` 이 되어 **× 를 눌러도 그 자리에 그대로 남았다**.
+ *  실측(2026-08-26, 상민님 계정): 내 세션 284건 중 271건(95%)이 offline — 사실상 × 가 안 먹는 목록이었다.
+ *  점이 없는 상태끼리 오가는 것은 '다시 볼 일이 생겼다'가 아니므로, 기준은 **점(우선상태)** 으로 통일한다.
+ */
+function dismissKey(stateKey?: string): string {
+  return stateKey && PRIORITY_ST[stateKey] ? stateKey : '';
+}
 
 // ── '지금 보고 있다'를 서버에 찍는다 (#1954 3차) ──────────────────────────────────────────────
 //  왜 화면이 찍나: '작업 완료(초록점)'의 열람 신호는 여태 tmux attach 하나뿐이었는데, 이 셸은 **탭 DOM 을 유지**해
@@ -1213,7 +1226,9 @@ function markViewedSessionSeen(): void {
   const now = Date.now();
   if (now - (seenSentAt.get(sid) || 0) < SEEN_EVERY_MS) return;
   seenSentAt.set(sid, now);
+  // #2116 — 도장의 응답이 곧 '지금 이 세션을 보고 있는 사람'이다. presence 를 위한 폴링을 따로 두지 않는다.
   void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/seen`, { method: 'POST', body: '{}' })
+    .then((r: any) => setViewers(sid, r && r.viewers))
     .catch(() => { seenSentAt.delete(sid); });   // 못 찍었으면 다음 틱에 다시 시도한다
 }
 
@@ -1258,13 +1273,17 @@ function sideInstances(): SideInstance[] {
       ? { key: activeKey, group: PRIORITY_GROUP, rank: PRIORITY_ST[was.status?.key || '']?.rank ?? 9 }
       : null;
   }
-  sideRowRoute.clear(); sideRowInstance.clear();
+  sideRowRoute.clear(); sideRowInstance.clear(); dismissBasis.clear();
   interface Row extends SideInstance { at: number; rank: number }
   const rows = new Map<string, Row>();
   const put = (key: string, route: string, at: number, stateKey?: string, force?: boolean, draft?: string): void => {
     const prev = rows.get(key);
+    //  기준값은 **그 행을 처음 세우는 줄기**(세션이면 ①)가 든 원본 stateKey 에서 뜬다. ③은 prev 의 것을 잇는다 —
+    //   ③이 넘기는 stateKey 는 이미 그려진 status.key(표시용 가공을 거친 값)라, 여기서 다시 뜨면 자가 어긋난다.
+    const basis = prev ? (dismissBasis.get(key) || '') : dismissKey(stateKey);
+    if (!prev) dismissBasis.set(key, basis);   // 아래 return 보다 먼저 — 치워진 행도 × 가 다시 읽을 수 있어야 한다
     //  치운 행은 **그 상태 그대로인 동안** 숨는다. 창이 열려 있으면(force) 늘 보인다 — 보고 있는 화면이 목록에 없으면 그게 고장이다.
-    if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === (stateKey || '')) return;
+    if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === basis) return;
     sideRowRoute.set(key, route);
     let sk = stateKey;
     //  ★ **보고 있는 세션은 '안 본 완료'가 아니다** — 초록점은 누르는 즉시 꺼진다(#1954 3차).
@@ -1344,8 +1363,9 @@ function sideInstances(): SideInstance[] {
  */
 async function closeSideRow(key: string): Promise<void> {
   const instanceId = sideRowInstance.get(key);
-  const row = lastSideRows.get(key);
-  dismissed[key] = row?.status?.key || '';
+  //  적는 값은 **판정과 같은 자**여야 한다(dismissKey 주석 · #2110). 종전엔 표시용으로 걸러진 status.key 를 적어
+  //   점 없는 상태의 행이 영영 안 치워졌고, 보고 있던 '작업 완료' 행도 그랬다(활성 행은 점을 미리 끄므로 '' 로 적혔다).
+  dismissed[key] = dismissBasis.get(key) || '';
   saveDismissed();
   //  창은 **그 행의 것을 전부** 닫는다(#2026). find() 는 첫 하나만 잡는데, 같은 화면이 두 탭에 열려 있으면
   //   (복원 잔재·옛 버그가 만든 짝 — tabs.ts 복원 dedupe 주석) 하나만 닫혀 행이 그대로 남는다 —

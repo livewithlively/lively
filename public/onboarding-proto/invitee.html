@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Lively — 초대 구성원 온보딩 프로토타입</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
+<style>
+  :root { --ink:#17212b; --sub:#65727d; --muted:#8c99a4; --line:#e5eaee; --paper:#fff; --canvas:#f6f8f9; --blue:#3169e8; --blue-pale:#edf3ff; --mint:#118a69; --mint-pale:#eaf8f3; --navy:#182840; --shadow:0 18px 50px rgba(27,43,57,.10); }
+  * { box-sizing:border-box; }
+  body { margin:0; min-width:320px; color:var(--ink); background:var(--canvas); font-family:Pretendard,system-ui,sans-serif; letter-spacing:-.018em; }
+  button,input { font:inherit; }
+  button { cursor:pointer; }
+  .frame { min-height:100vh; display:flex; flex-direction:column; }
+  .top { height:58px; display:flex; align-items:center; justify-content:space-between; padding:0 clamp(20px,5vw,72px); background:rgba(255,255,255,.92); border-bottom:1px solid var(--line); }
+  .brand { display:flex; align-items:center; gap:10px; font-size:16px; font-weight:780; }
+  .pulse { width:8px; height:8px; border-radius:50%; background:#28bb91; box-shadow:0 0 0 4px #e0f8ef; }
+  .sample { border:1px solid #d8e0e6; border-radius:999px; color:var(--sub); background:#fff; padding:5px 9px; font-size:12px; font-weight:650; }
+  main { width:min(1040px,100%); flex:1; margin:0 auto; padding:clamp(28px,7vh,86px) 24px 56px; }
+  .screen { display:none; animation:appear .28s ease-out both; }
+  .screen.active { display:block; }
+  @keyframes appear { from { opacity:0; transform:translateY(9px); } to { opacity:1; transform:none; } }
+  .eyebrow { display:inline-flex; align-items:center; gap:7px; color:var(--mint); font-size:13px; font-weight:760; }
+  .eyebrow i { width:7px; height:7px; border-radius:50%; background:currentColor; }
+  h1 { max-width:650px; margin:16px 0 12px; font-size:clamp(29px,4.4vw,47px); line-height:1.18; letter-spacing:-.052em; }
+  .lede { max-width:570px; margin:0; color:var(--sub); font-size:17px; line-height:1.7; word-break:keep-all; }
+  .welcome-grid { display:grid; grid-template-columns:minmax(0,1.18fr) minmax(275px,.82fr); gap:34px; align-items:end; }
+  .people { min-height:234px; padding:24px; border:1px solid var(--line); border-radius:18px; background:linear-gradient(145deg,#fff,#f2f8ff); box-shadow:var(--shadow); }
+  .people-label { color:var(--sub); font-size:13px; font-weight:680; }
+  .avatars { display:flex; margin:24px 0 16px; }
+  .av { width:47px; height:47px; display:grid; place-items:center; margin-right:-7px; border:3px solid #fff; border-radius:50%; color:#fff; font-size:14px; font-weight:780; }
+  .a1 { background:#5967b9; }.a2 { background:#c26b59; }.a3 { background:#349a87; }.a4 { background:#d29443; }
+  .team-name { font-size:20px; font-weight:780; }
+  .team-desc { margin:6px 0 0; color:var(--sub); font-size:14px; line-height:1.6; }
+  .choice-list { display:grid; gap:11px; margin-top:44px; }
+  .choice { width:100%; display:grid; grid-template-columns:44px 1fr auto; gap:14px; align-items:center; padding:17px; border:1px solid var(--line); border-radius:14px; background:#fff; color:inherit; text-align:left; transition:.16s ease; }
+  .choice:hover,.choice:focus-visible { border-color:#9fbbfa; box-shadow:0 0 0 3px #e5efff; outline:none; transform:translateY(-1px); }
+  .choice.primary { border-color:#b7cef9; background:var(--blue-pale); }
+  .choice-icon { width:44px; height:44px; display:grid; place-items:center; border-radius:12px; background:#fff; color:var(--blue); font-size:20px; box-shadow:0 1px 3px #ccd9ef; }
+  .choice > span:nth-child(2),.choice-title,.choice-copy { display:block; }
+  .choice-title { font-size:16px; font-weight:760; }
+  .choice-copy { margin-top:3px; color:var(--sub); font-size:13px; line-height:1.45; }
+  .arrow { color:var(--blue); font-size:21px; }
+  .skip { display:inline-block; margin:18px 0 0 3px; border:0; color:var(--sub); background:transparent; text-decoration:underline; text-underline-offset:3px; font-size:14px; }
+  .skip:hover { color:var(--ink); }
+  .note { margin-top:15px; color:var(--muted); font-size:12px; line-height:1.55; }
+  .session-layout { display:grid; grid-template-columns:minmax(0,1fr) 278px; gap:26px; align-items:start; }
+  .chat { min-height:520px; overflow:hidden; border:1px solid var(--line); border-radius:18px; background:#fff; box-shadow:var(--shadow); }
+  .chat-head { display:flex; align-items:center; gap:11px; padding:17px 20px; border-bottom:1px solid var(--line); }
+  .liv { width:32px; height:32px; display:grid; place-items:center; border-radius:10px; background:var(--mint-pale); color:var(--mint); font-size:16px; font-weight:900; }
+  .chat-head b { font-size:14px; }.chat-head span { display:block; margin-top:2px; color:var(--muted); font-size:12px; }
+  .chat-body { min-height:370px; padding:29px clamp(20px,4vw,39px); }
+  .turn-label { color:var(--mint); font-size:12px; font-weight:760; }
+  .message { margin:7px 0 0; font-size:17px; line-height:1.65; word-break:keep-all; }
+  .prompt-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:23px; }
+  .prompt { border:1px solid #cbd8e8; border-radius:999px; padding:9px 13px; color:#263a53; background:#fff; font-size:13px; font-weight:630; text-align:left; transition:.15s; }
+  .prompt:hover,.prompt:focus-visible { border-color:var(--blue); background:var(--blue-pale); outline:none; }
+  .reply { display:none; margin-top:30px; padding-top:25px; border-top:1px solid var(--line); }
+  .reply.show { display:block; animation:appear .25s ease-out; }
+  .reply-card { margin-top:13px; padding:15px 16px; border:1px solid #cce8df; border-radius:13px; background:#f5fcf9; }
+  .reply-card strong { display:block; font-size:14px; }.reply-card p { margin:6px 0 0; color:#49645e; font-size:13px; line-height:1.6; }
+  .composer { display:flex; gap:8px; padding:14px 17px 17px; border-top:1px solid var(--line); background:#fcfdfe; }
+  .composer input { flex:1; min-width:0; border:1px solid #d7e0e6; border-radius:10px; padding:11px 12px; outline:none; }
+  .composer input:focus { border-color:#86a8ef; box-shadow:0 0 0 3px #ebf1ff; }
+  .send,.modal-primary { border:0; border-radius:10px; padding:0 15px; color:#fff; background:var(--blue); font-weight:720; }
+  .send:hover,.modal-primary:hover { background:#255bcf; }
+  .side-panel { padding:18px; border:1px solid var(--line); border-radius:15px; background:#fff; }
+  .side-panel h2 { margin:0; font-size:14px; }.side-panel p { margin:7px 0 0; color:var(--sub); font-size:13px; line-height:1.55; }
+  .context-item { display:flex; align-items:center; gap:9px; margin-top:15px; padding-top:14px; border-top:1px solid var(--line); font-size:13px; }
+  .context-dot { width:8px; height:8px; border-radius:50%; background:#48ab91; }.context-dot.blue { background:#6189e8; }.context-dot.gray { background:#aebbc3; }
+  .next { display:none; margin-top:18px; padding:15px; border:1px solid #bfd2fd; border-radius:13px; background:var(--blue-pale); }
+  .next.show { display:block; animation:appear .25s ease-out; }
+  .next h3 { margin:0; font-size:14px; }.next p { margin:6px 0 11px; color:#4d6180; font-size:13px; line-height:1.55; }
+  .small-btn { border:1px solid #adc5fb; border-radius:8px; padding:8px 10px; color:#244fbb; background:#fff; font-size:13px; font-weight:700; }
+  .small-btn:hover { background:#edf3ff; }
+  .browse { max-width:650px; margin:36px auto; padding:34px; border:1px solid var(--line); border-radius:18px; background:#fff; box-shadow:var(--shadow); text-align:center; }
+  .browse h2 { margin:0; font-size:25px; letter-spacing:-.04em; }.browse p { margin:12px auto 24px; max-width:430px; color:var(--sub); line-height:1.65; }
+  .outline { border:1px solid #c6d3e0; border-radius:10px; padding:11px 15px; color:var(--ink); background:#fff; font-weight:700; }
+  dialog { width:min(420px,calc(100% - 32px)); border:0; border-radius:18px; padding:0; color:var(--ink); box-shadow:0 24px 70px rgba(21,36,52,.28); }
+  dialog::backdrop { background:rgba(16,31,45,.43); backdrop-filter:blur(2px); }
+  .modal { padding:25px; }.modal h2 { margin:0; font-size:21px; letter-spacing:-.04em; }.modal p { margin:10px 0 20px; color:var(--sub); line-height:1.65; font-size:14px; }
+  .permission { display:flex; gap:10px; padding:12px; border-radius:11px; background:var(--mint-pale); color:#356357; font-size:13px; line-height:1.5; }.permission > span:last-child,.permission b { display:block; }.permission b { color:var(--mint); }
+  .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:22px; }.modal-actions button { min-height:40px; }.modal-secondary { border:0; border-radius:10px; padding:0 13px; color:var(--sub); background:transparent; }
+  .modal-primary { padding:0 14px; }
+  @media (max-width:760px) { .top { padding:0 18px; } main { padding:30px 17px; }.welcome-grid,.session-layout { grid-template-columns:1fr; gap:22px; }.people { min-height:auto; }.choice-list { margin-top:28px; }.session-layout { display:flex; flex-direction:column; }.chat { width:100%; min-height:0; }.chat-body { min-height:390px; }.side-panel { width:100%; }.sample { font-size:11px; } }
+</style>
+</head>
+<body>
+<div class="frame">
+  <header class="top">
+    <div class="brand"><span class="pulse"></span>Lively <span aria-hidden="true">·</span> 라이블리 제품팀</div>
+    <span class="sample">예시 공간</span>
+  </header>
+  <main>
+    <section class="screen active" id="welcome" aria-labelledby="welcome-title">
+      <div class="welcome-grid">
+        <div>
+          <div class="eyebrow"><i></i>장원준님이 초대했어요</div>
+          <h1 id="welcome-title">민지님, 라이블리 제품팀에 오신 것을 환영해요.</h1>
+          <p class="lede">여기서 여는 AI는 팀이 쌓아 둔 자료와 진행 중인 일을 알고 시작합니다. 먼저 어디에서 쓸지만 골라 주세요.</p>
+        </div>
+        <aside class="people" aria-label="초대받은 팀 정보">
+          <div class="people-label">함께 일하는 사람</div>
+          <div class="avatars" aria-label="팀원 4명"><span class="av a1">윤</span><span class="av a2">장</span><span class="av a3">민</span><span class="av a4">+7</span></div>
+          <div class="team-name">라이블리 제품팀</div>
+          <p class="team-desc">제품을 설계하고, 만든 것을 팀의 기억으로 남기는 공간이에요.</p>
+        </aside>
+      </div>
+      <div class="choice-list" aria-label="시작 방법">
+        <button class="choice primary" type="button" data-go="session"><span class="choice-icon">✦</span><span><span class="choice-title">웹에서 바로 시작하기</span><span class="choice-copy">설치 없이 첫 대화를 시작합니다.</span></span><span class="arrow" aria-hidden="true">→</span></button>
+        <button class="choice" type="button" data-go="local"><span class="choice-icon">⌘</span><span><span class="choice-title">내 컴퓨터의 AI 연결하기</span><span class="choice-copy">Claude Code나 Codex를 평소에 쓴다면 연결합니다.</span></span><span class="arrow" aria-hidden="true">→</span></button>
+      </div>
+      <button class="skip" type="button" data-go="browse">지금은 둘러볼게요</button>
+      <p class="note">이 화면의 팀 이름·사람·대화는 흐름을 보기 위한 예시입니다. 실제 제품에서는 초대와 권한으로 확인된 정보만 보여야 합니다.</p>
+    </section>
+
+    <section class="screen" id="session" aria-labelledby="session-title">
+      <div class="session-layout">
+        <article class="chat">
+          <header class="chat-head"><span class="liv">L</span><div><b id="session-title">리브와 첫 대화</b><span>제품팀의 예시 맥락을 바탕으로 답합니다.</span></div></header>
+          <div class="chat-body">
+            <div class="turn-label">리브</div>
+            <p class="message">먼저 무엇을 함께 해 볼까요?</p>
+            <div class="prompt-list" aria-label="첫 질문 제안">
+              <button class="prompt" type="button" data-prompt="이번 주 진행 중인 일을 정리해 주세요.">이번 주 진행 중인 일 정리</button>
+              <button class="prompt" type="button" data-prompt="최근 결정과 다음 할 일을 알려 주세요.">최근 결정 보기</button>
+              <button class="prompt" type="button" data-prompt="제가 맡을 수 있는 일을 함께 찾아볼까요?">맡을 일 찾기</button>
+            </div>
+            <div class="reply" id="reply" aria-live="polite">
+              <div class="turn-label">리브</div>
+              <p class="message" id="reply-text">이번 주에는 온보딩 흐름을 다듬는 일이 진행 중이에요.</p>
+              <div class="reply-card"><strong>이 답은 예시입니다.</strong><p>실제 화면에서는 초대받은 사람이 읽을 수 있는 프로젝트와 지식이 있을 때만, 그 내용과 출처를 바탕으로 답합니다.</p></div>
+            </div>
+          </div>
+          <form class="composer" id="composer"><input id="question" aria-label="리브에게 물어보기" placeholder="궁금한 것을 입력하세요."><button class="send" type="submit">보내기</button></form>
+        </article>
+        <aside class="side-panel">
+          <h2>이번 대화에 함께 온 것</h2>
+          <p>예시 공간의 데이터입니다. 실제 제품에서는 권한이 있는 자료만 표시합니다.</p>
+          <div class="context-item"><i class="context-dot"></i><span>제품팀의 업무 방식</span></div>
+          <div class="context-item"><i class="context-dot blue"></i><span>진행 중인 온보딩 설계</span></div>
+          <div class="context-item"><i class="context-dot gray"></i><span>최근 결정 2건</span></div>
+          <div class="next" id="next-card"><h3>내 노션도 함께 보고 싶으세요?</h3><p>연결하면 라이블리가 읽기 권한으로만 자료를 봅니다.</p><button class="small-btn" type="button" id="connect-notion">내 노션 연결하기</button></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" id="browse" aria-labelledby="browse-title"><div class="browse"><div class="eyebrow" style="justify-content:center"><i></i>언제든 다시 시작할 수 있어요</div><h2 id="browse-title">먼저 팀을 둘러보셔도 괜찮아요.</h2><p>AI 연결이나 내 서비스 연결은 필요해질 때 하셔도 됩니다. 시작을 미뤘다고 미완료로 취급하지 않습니다.</p><button class="outline" type="button" data-go="session">첫 대화 열기</button></div></section>
+  </main>
+</div>
+<dialog id="local"><div class="modal"><h2>내 컴퓨터의 AI를 연결합니다.</h2><p>평소 Claude Code나 Codex를 쓰는 분만 연결하면 됩니다. 연결하지 않아도 웹에서 같은 팀 맥락으로 일할 수 있어요.</p><div class="permission"><span>⌘</span><span><b>한 번만 설치합니다.</b><br>다음부터 내 컴퓨터에서 여는 AI에도 팀 맥락이 함께 들어옵니다.</span></div><div class="modal-actions"><button class="modal-secondary" type="button" data-close>나중에 할게요</button><button class="modal-primary" type="button" data-install>연결 방법 보기</button></div></div></dialog>
+<dialog id="notion"><div class="modal"><h2>내 노션을 연결할까요?</h2><p>브라우저에서 노션 로그인과 권한 동의를 직접 마치면 됩니다. 리브는 비밀번호를 보거나 저장하지 않습니다.</p><div class="permission"><span>✓</span><span><b>읽기만 허용합니다.</b><br>연결한 뒤에도 언제든 해제할 수 있습니다.</span></div><div class="modal-actions"><button class="modal-secondary" type="button" data-close>취소</button><button class="modal-primary" type="button" data-confirm-notion>예시로 연결하기</button></div></div></dialog>
+<script>
+  const screens = [...document.querySelectorAll('.screen')];
+  const show = id => { screens.forEach(s => s.classList.toggle('active', s.id === id)); window.scrollTo({top:0,behavior:'smooth'}); };
+  document.addEventListener('click', event => {
+    const go = event.target.closest('[data-go]');
+    if (go) { const target = go.dataset.go; target === 'local' ? document.querySelector('#local').showModal() : show(target); }
+    if (event.target.closest('[data-close]')) event.target.closest('dialog').close();
+    if (event.target.closest('[data-install]')) { event.target.closest('dialog').close(); show('session'); document.querySelector('#question').value = '내 컴퓨터의 AI를 연결하는 방법을 알려 주세요.'; }
+  });
+  const answers = {
+    '이번 주 진행 중인 일을 정리해 주세요.':'이번 주에는 초대받은 사람이 팀 안에서 첫 일을 시작하는 흐름을 다듬고 있어요. 먼저 웹에서 한 번 써 보고, 필요할 때만 개인 AI와 자료를 연결하게 하는 방향입니다.',
+    '최근 결정과 다음 할 일을 알려 주세요.':'최근에는 온보딩을 개인 공간 만들기와 팀 입장으로 나누기로 했어요. 다음은 초대 직후 환영 화면과 첫 세션 제안을 실제 데이터에 연결하는 일입니다.',
+    '제가 맡을 수 있는 일을 함께 찾아볼까요?':'좋아요. 먼저 진행 중인 설계에서 문구와 화면 흐름을 검토해 볼 수 있어요. 팀이 정한 결정을 한 장으로 정리하는 일부터 같이 시작해 볼까요?'
+  };
+  function reply(text) { document.querySelector('#reply-text').textContent = answers[text] || '좋아요. 그 질문을 팀의 읽을 수 있는 자료와 진행 중인 일을 바탕으로 함께 살펴볼게요. 이 프로토타입에서는 실제 조회 대신 예시 답을 보여 드립니다.'; document.querySelector('#reply').classList.add('show'); document.querySelector('#next-card').classList.add('show'); }
+  document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => reply(button.dataset.prompt)));
+  document.querySelector('#composer').addEventListener('submit', event => { event.preventDefault(); const input = document.querySelector('#question'); if (input.value.trim()) { reply(input.value.trim()); input.value = ''; } });
+  document.querySelector('#connect-notion').addEventListener('click', () => document.querySelector('#notion').showModal());
+  document.querySelector('[data-confirm-notion]').addEventListener('click', () => { document.querySelector('#notion').close(); const b = document.querySelector('#connect-notion'); b.textContent = '✓ 노션이 연결됐어요'; b.disabled = true; b.style.cssText = 'color:#18735b;border-color:#9edbc9;background:#f8fffc;cursor:default'; });
+</script>
+</body>
+</html>

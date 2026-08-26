@@ -1,0 +1,51 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - text: Lively
+        - generic [ref=e6]: ·
+        - text: 라이블리 제품팀
+      - generic [ref=e7]: 예시 공간
+    - main [ref=e8]:
+      - region [ref=e9]:
+        - generic [ref=e10]:
+          - generic [ref=e11]:
+            - generic [ref=e12]: 장원준님이 초대했어요
+            - heading "민지님, 라이블리 제품팀에 오신 것을 환영해요." [level=1] [ref=e14]
+            - paragraph [ref=e15]: 여기서 여는 AI는 팀이 쌓아 둔 자료와 진행 중인 일을 알고 시작합니다. 먼저 어디에서 쓸지만 골라 주세요.
+          - complementary "초대받은 팀 정보" [ref=e16]:
+            - generic [ref=e17]: 함께 일하는 사람
+            - generic "팀원 4명" [ref=e18]:
+              - generic [ref=e19]: 윤
+              - generic [ref=e20]: 장
+              - generic [ref=e21]: 민
+              - generic [ref=e22]: "+7"
+            - generic [ref=e23]: 라이블리 제품팀
+            - paragraph [ref=e24]: 제품을 설계하고, 만든 것을 팀의 기억으로 남기는 공간이에요.
+        - generic "시작 방법" [ref=e25]:
+          - button "✦ 웹에서 바로 시작하기 설치 없이 첫 대화를 시작합니다." [ref=e26] [cursor=pointer]:
+            - generic [ref=e27]: ✦
+            - generic [ref=e28]:
+              - generic [ref=e29]: 웹에서 바로 시작하기
+              - generic [ref=e30]: 설치 없이 첫 대화를 시작합니다.
+            - generic [ref=e31]: →
+          - button "⌘ 내 컴퓨터의 AI 연결하기 Claude Code나 Codex를 평소에 쓴다면 연결합니다." [ref=e32] [cursor=pointer]:
+            - generic [ref=e33]: ⌘
+            - generic [ref=e34]:
+              - generic [ref=e35]: 내 컴퓨터의 AI 연결하기
+              - generic [ref=e36]: Claude Code나 Codex를 평소에 쓴다면 연결합니다.
+            - generic [ref=e37]: →
+        - button "지금은 둘러볼게요" [ref=e38] [cursor=pointer]
+        - paragraph [ref=e39]: 이 화면의 팀 이름·사람·대화는 흐름을 보기 위한 예시입니다. 실제 제품에서는 초대와 권한으로 확인된 정보만 보여야 합니다.
+  - dialog [ref=e40]:
+    - generic [ref=e41]:
+      - heading "내 컴퓨터의 AI를 연결합니다." [level=2] [ref=e42]
+      - paragraph [ref=e43]: 평소 Claude Code나 Codex를 쓰는 분만 연결하면 됩니다. 연결하지 않아도 웹에서 같은 팀 맥락으로 일할 수 있어요.
+      - generic [ref=e44]:
+        - generic [ref=e45]: ⌘
+        - generic [ref=e46]:
+          - generic [ref=e47]: 한 번만 설치합니다.
+          - text: 다음부터 내 컴퓨터에서 여는 AI에도 팀 맥락이 함께 들어옵니다.
+      - generic [ref=e48]:
+        - button "나중에 할게요" [active] [ref=e49] [cursor=pointer]
+        - button "연결 방법 보기" [ref=e50] [cursor=pointer]

@@ -88,7 +88,7 @@ export const collectorsCapabilities: Capability[] = [
     }, {
       id: z.number().int().positive().optional().describe("수정할 수집기 id(없으면 생성)"),
       key: z.string().optional().describe("식별 슬러그(a-z0-9._-) — 비우면 자동 생성"),
-      preset_key: z.string().optional().describe("프리셋: slack|notion|clickup|gmail|gdrive|discord|domain-wiki (생성 시 필수)"),
+      preset_key: z.string().optional().describe("프리셋: slack|notion|clickup|gmail|gdrive|discord|figma|domain-wiki (생성 시 필수)"),
       instance_key: z.string().optional().describe("커서 네임스페이스 — 생성 시에만. 비우면 key(첫 인스턴스는 '_')"),
       label: z.string().nullable().optional(),
       enabled: z.boolean().optional(),

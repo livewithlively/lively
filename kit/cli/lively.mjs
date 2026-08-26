@@ -1134,6 +1134,93 @@ async function deviceLogin(gw) {
   }
 }
 
+// ── 클라우드 로그인 (#2044) ─────────────────────────────────────────────────
+// 게이트웨이 주소를 **모르는** 사람을 위한 경로. 라이블리 클라우드(컨트롤플레인)에 디바이스 코드로 붙으면
+//  CP 가 "어느 워크스페이스인가 + 그 자격"을 함께 돌려준다 — 사람이 주소를 타이핑할 일이 없다.
+//
+// ⚠ 셀프호스팅에는 이 경로가 없다(그쪽엔 클라우드가 없다). 그래서 기본은 여전히 주소 입력이고,
+//  이건 **명시적으로 고른 사람**만 탄다(--cloud, 또는 클라우드에서 시작한 부트스트랩).
+//
+// 서버 계약은 코어 device-auth 와 **같은 모양**이라(같은 상태코드·같은 필드) 폴 루프의 분기가 한 벌이다.
+export const DEFAULT_CLOUD_URL = "https://app.lvly.io";
+
+/** 클라우드 주소 정규화 — 사람이 스킴 없이 치거나 말미 슬래시를 붙여도 받는다. */
+function normCloud(u) {
+  const s = String(u || DEFAULT_CLOUD_URL).trim().replace(/\/+$/, "");
+  return /^https?:\/\//i.test(s) ? s : "https://" + s;
+}
+
+/**
+ * 클라우드 디바이스 로그인 — 성공하면 { gateway, token, workspace }.
+ * 실패는 die()(사람이 다음에 뭘 할지 아는 문구로).
+ */
+async function cloudLogin(cloudUrl) {
+  const cloud = normCloud(cloudUrl);
+  const verifier = crypto.randomBytes(32).toString("base64url");
+  const label = `${process.env.LIVELY_HARNESS || "lively"}@${hostLabel()}`;
+
+  let start;
+  try {
+    const res = await fetch(cloud + "/cli/device/start", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code_challenge: s256(verifier), label }),
+    });
+    const text = await res.text();
+    try { start = JSON.parse(text); } catch { start = null; }
+    // 이 주소가 라이블리 클라우드가 아니면(자가호스팅 게이트웨이를 --cloud 로 준 경우 등) 여기서 걸린다.
+    if (!res.ok || !start?.device_code) {
+      die(`이 주소는 라이블리 클라우드가 아닙니다: ${cloud}\n  회사에 직접 설치한 라이블리라면 --cloud 대신 ` + bold("--gateway <주소>") + " 를 쓰세요.");
+    }
+  } catch (e) {
+    if (e?.__die) throw e;
+    die(`라이블리 클라우드에 연결하지 못했습니다 (${e.message}) — 네트워크를 확인하세요: ${cloud}`);
+  }
+
+  say(`\n${bold("라이블리 클라우드 로그인")}  ${dim(cloud)}`);
+  say("  아래 주소를 브라우저에서 열어 승인하세요:");
+  say("    " + bold(start.verification_uri_complete || start.verification_uri));
+  say("    코드: " + bold(start.user_code));
+  say(dim(PROMPTER || !NO_BROWSER
+    ? "  (브라우저가 자동으로 열립니다. 안 열리면 위 주소를 직접 여세요.)"
+    : "  (자동 열기가 꺼져 있습니다 — 위 주소를 직접 여세요.)"));
+  // 앱이 몰고 있으면 앱이 연다(중복 탭 방지 — #1717 과 같은 규약).
+  if (PROMPTER) {
+    PROMPTER.tell("device-code", "device-code", {
+      user_code: start.user_code, verification_uri: start.verification_uri,
+      verification_uri_complete: start.verification_uri_complete || null,
+      expires_in: Number(start.expires_in) || null, gateway: cloud,
+    });
+  } else openBrowser(start.verification_uri_complete || start.verification_uri);
+  say(dim("  · 브라우저에서 승인을 기다리는 중… (이 창은 열어 두세요)"));
+  if (EV) EV.step("cloud-approve", "브라우저에서 승인 대기", "start");
+
+  let interval = Math.max(2, Number(start.interval) || 5);
+  const deadline = Date.now() + (Number(start.expires_in) || 900) * 1000;
+  for (;;) {
+    await sleep(interval * 1000);
+    if (Date.now() > deadline) die("코드가 만료됐습니다 — 다시 실행하세요.");
+    let status, body;
+    try {
+      const res = await fetch(cloud + "/cli/device/poll", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_code: start.device_code, code_verifier: verifier }),
+      });
+      status = res.status;
+      const text = await res.text();
+      try { body = JSON.parse(text); } catch { body = null; }
+    } catch { status = 0; body = null; }   // 전송 오류는 일시 오류로 보고 계속(코어 폴 루프와 같은 판단)
+    if (status === 200 && body?.token && body?.gateway_url) {
+      if (EV) EV.step("cloud-approve", "브라우저에서 승인 대기", "done");   // ⚠ 토큰은 이벤트에 안 싣는다
+      return { gateway: normGw(body.gateway_url), token: body.token, workspace: body.workspace || null };
+    }
+    if (status === 202) continue;
+    if (status === 429) { interval = (Number(body?.interval) || interval) + 5; continue; }
+    if (status === 403) die("승인이 거부됐습니다.");
+    if (status === 410 || status === 401) die("코드가 만료됐습니다 — 다시 실행하세요.");
+    // 그 외(0·5xx·비-JSON) = 일시 오류 → 백오프 후 계속.
+  }
+}
+
 // 호스트 라벨(승인 화면 표시용, 자기주장 값) — 서버가 [\w .@-] 로 제한한다.
 function hostLabel() {
   try { return String(spawnSync("hostname", [], { encoding: "utf8" }).stdout || "").trim().split(".")[0] || "내PC"; }
@@ -1176,6 +1263,14 @@ function afterLogin(gw, tok) {
 }
 
 async function cmdLogin(opts) {
+  // #2044 — 클라우드 경로: 주소를 **받지 않고** 알아낸다. 승인 한 번으로 주소·자격이 함께 온다.
+  if (opts.cloud) {
+    const r = await cloudLogin(opts.cloud);
+    const me = await validateAndStore(r.gateway, r.token);
+    say(dim(`  워크스페이스: ${bold(r.workspace || r.gateway)}`));
+    afterLogin(r.gateway, r.token);
+    return me;
+  }
   if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
   const gw = gateway();
   if (!gw) die("게이트웨이 주소가 없습니다 — `lively login --gateway https://<주소>` 로 지정하세요.");
@@ -2165,6 +2260,15 @@ async function cmdSetup(opts = {}) {
   //  `login` 과 `install` 을 따로 부르는 대신 **setup 하나**로 몰 수 있어야 한다(순서·조건의 정본은 CLI 다).
   //  아래 tokenAccepted 가 **새 주소로** 판정되도록 로그인보다 먼저 쓴다 — 게이트웨이를 바꾸는 경우
   //  옛 주소의 토큰이 '먹힌다'고 나와 로그인을 통째로 건너뛰는 사고(#1087 계열)를 막는다.
+  // #2044 — 클라우드 경로면 로그인이 주소까지 정한다(사람은 주소를 모른다). 그 뒤는 종전 설치와 같다.
+  //  ★ 여기서 "이미 로그인돼 있나"를 먼저 보지 않는다: 이 경로를 고른 사람은 **어느 워크스페이스인지**를
+  //   아직 안 골랐고, 옛 토큰이 먹힌다는 이유로 그 선택을 건너뛰면 엉뚱한 워크스페이스에 설치된다.
+  if (opts.cloud) {
+    await cmdLogin({ cloud: opts.cloud });
+    await cmdInstall();
+    say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
+    return;
+  }
   if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
   // ⚠ 토큰이 **있는지**가 아니라 **먹히는지**를 본다(#1087). token() 은 파일 다음에 LIVELY_TOKEN 환경변수도
   //  보므로, 만료·회수된 토큰이나 셸에 남아 있던 옛 env 값이 로그인을 건너뛰게 만들었다. 그러면 설치는
@@ -2229,6 +2333,7 @@ ${bold("작업")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
+  --cloud [url]          라이블리 클라우드로 로그인 — 주소를 몰라도 된다 ${dim("(기본 app.lvly.io)")}
   --token <토큰>         비대화형 로그인 (스크립트 · 프로비저닝용)
   --json-events          진행 상황을 stdout 에 NDJSON 으로 ${dim("(데스크톱 앱·자동화용 — 사람용 출력은 stderr 그대로)")}
                          ${dim("확인이 필요하면 prompt 이벤트를 내고 stdin 의 {\"t\":\"answer\",\"id\":…,\"value\":…} 한 줄을 기다립니다.")}
@@ -2243,6 +2348,9 @@ function parse(argv) {
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === "--gateway") o.gateway = argv[++i];
+    // #2044 — 클라우드 로그인. 값 없이 주면 기본 주소(app.lvly.io)를 쓴다. 게이트웨이 주소를 **모르는**
+    //  사람이 쓰는 경로라, 값을 요구하면 그 자체가 이 옵션의 존재 이유를 무너뜨린다.
+    else if (t === "--cloud") { const n = argv[i + 1]; o.cloud = (n && !n.startsWith("-")) ? argv[++i] : DEFAULT_CLOUD_URL; }
     else if (t === "--token") o.token = argv[++i];
     else if (t === "--harness") o.harness = argv[++i];
     else if (t === "--check") o.check = true;
