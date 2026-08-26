@@ -120,6 +120,37 @@ t("설정하면 훅이 argv 를 받는다 — 순서는 box-cgspawn 과 동일(�
   });
 });
 
+// ── #2120 스케줄링 예약치 — argv 는 **설정됐을 때만** 하나 늘어난다 ────────────────────────────
+//  코어와 훅(테넌트 이미지 안)은 따로 굴러간다. 늘 보내면 그 인자를 모르는 구버전 훅이 "4번째가 '--' 가
+//  아니다"로 죽어 세션이 아예 안 뜬다. 미설정이면 argv 가 종전과 **바이트 단위로 같아야** 한다.
+
+t("[#2120] 예약치 미설정이면 argv 가 종전과 완전히 같다(무회귀의 근거)", () => {
+  withHook("/opt/x/session-spawn", () => {
+    assert.deepEqual(
+      sessionSpawnArgv("box_yoon", ["claude"], undefined, { highMb: 768, maxMb: 1024 }),
+      ["/opt/x/session-spawn", "box_yoon", "768M", "1024M", "--", "claude"],
+    );
+    assert.deepEqual(
+      sessionSpawnArgv("box_yoon", ["claude"], undefined, { highMb: 768, maxMb: 1024, requestMb: 0 }),
+      ["/opt/x/session-spawn", "box_yoon", "768M", "1024M", "--", "claude"],
+    );
+  });
+});
+
+t("[#2120] 예약치를 설정하면 캡 뒤에 하나 끼어 들어간다", () => {
+  withHook("/opt/x/session-spawn", () => {
+    assert.deepEqual(
+      sessionSpawnArgv("box_yoon", ["claude"], "/w", { highMb: 768, maxMb: 1024, requestMb: 512 }),
+      ["/opt/x/session-spawn", "box_yoon", "768M", "1024M", "512M", "--", "--cwd", "/w", "claude"],
+    );
+    // 캡이 무제한이어도 예약치는 실린다 — 심사는 그 값으로 한다
+    assert.deepEqual(
+      sessionSpawnArgv("box_yoon", ["claude"], undefined, { requestMb: 512 }),
+      ["/opt/x/session-spawn", "box_yoon", "0", "0", "512M", "--", "claude"],
+    );
+  });
+});
+
 t("★★ 메모리 캡이 없어도 훅은 호출된다 — box-cgspawn 갈래를 재사용 못 한 이유가 바로 이것이다", () => {
   withHook("/opt/x/session-spawn", () => {
     const got = wrapAsMember("box_yoon", ["claude"], undefined, undefined, { session: true });   // cg 없음

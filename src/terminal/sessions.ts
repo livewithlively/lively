@@ -541,7 +541,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     let cg: CgroupLimit | undefined;
     try {
       const mp = await effectiveSessionMemoryPolicy(() => getRuntimeConfig().then((c) => c.session_memory_policy));
-      if (mp.per_session_high_mb > 0 || mp.per_session_max_mb > 0) cg = { highMb: mp.per_session_high_mb, maxMb: mp.per_session_max_mb };
+      if (mp.per_session_high_mb > 0 || mp.per_session_max_mb > 0 || mp.per_session_request_mb > 0) {
+        // #2120 — 예약치는 캡과 별개로 실린다(설정 시에만 argv 에 끼어 구버전 훅과 호환된다).
+        cg = { highMb: mp.per_session_high_mb, maxMb: mp.per_session_max_mb, requestMb: mp.per_session_request_mb };
+      }
     } catch (err) {
       console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
     }
