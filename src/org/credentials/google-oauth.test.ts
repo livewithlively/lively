@@ -11,6 +11,7 @@ import {
   googleInstallToSlot, googleInstallFromBlob, googleTokenExpired, decodeIdTokenClaims,
   isGoogleServer, GOOGLE_AUTHORIZE_URL, googleConsentTier, consumesUnverifiedUserCap, type GoogleInstall,
   GOOGLE_LAUNCH_SERVICES, GOOGLE_DEFAULT_SERVICES, googleOfferedServices, isGoogleServiceOffered,
+  googleServiceForKind, googleScopeCovers, googleToolAuthHint,
 } from "./google-oauth.js";
 
 let pass = 0;
@@ -287,6 +288,54 @@ t("[31] ★ gmail 을 빼도 미검증 100명 한도는 남는다 — drive.read
   assert.equal(googleConsentTier(["drive"]), "restricted");
   assert.equal(googleConsentTier(["drive_file", "calendar"]), "sensitive", "정말 0으로 만들려면 drive_file 이어야 한다");
   assert.equal(googleConsentTier(["drive_file"]), "non_sensitive");
+});
+
+// ── 표 32~38 · 구글 도구가 막혔을 때 "다음에 뭘 누를지" (2026-08-27 dev 실측) ───
+//  실측: 슬롯이 google_drive_oauth 인 사람이 캘린더 도구를 부르면 "자격 없음 — me_credential_set 에
+//  등록하세요" 가 났다. 그 화면은 #1881 이 **없앤 경로**다 — 컴맹은 거기서 끝난다.
+t("[32] kind→서비스: 구 kind 만 안다(통합·미지 kind 는 추측하지 않는다)", () => {
+  assert.equal(googleServiceForKind("google_calendar_oauth"), "calendar");
+  assert.equal(googleServiceForKind("google_drive_oauth"), "drive");
+  assert.equal(googleServiceForKind("google_oauth"), null, "통합 kind 는 어느 서비스인지 알 수 없다");
+  assert.equal(googleServiceForKind("slack_oauth"), null);
+});
+
+t("[33] scope 판정: drive.file 도 드라이브다(비민감 경로가 막히면 안 된다)", () => {
+  assert.equal(googleScopeCovers(DRIVE_RO, "drive"), true);
+  assert.equal(googleScopeCovers(DRIVE_FILE, "drive"), true);
+});
+
+t("[34] ★ 'drive' 를 가졌다고 캘린더가 열리지 않는다", () => {
+  assert.equal(googleScopeCovers(`${DRIVE_RO} ${DRIVE_FILE}`, "calendar"), false);
+  assert.equal(googleScopeCovers(CAL_RO, "calendar"), true);
+});
+
+t("[35] scope 판정: 최광 Gmail(mail.google.com)도 Gmail 이다 — 접두가 다르다", () => {
+  assert.equal(googleScopeCovers("https://mail.google.com/", "gmail"), true);
+  assert.equal(googleScopeCovers(GMAIL_RO, "gmail"), true);
+  assert.equal(googleScopeCovers(DRIVE_RO, "gmail"), false);
+});
+
+t("[36] 안내: 슬롯이 아예 없으면 [Google 연결] 을 가리킨다 — 없앤 붙여넣기 경로가 아니라", () => {
+  const h = googleToolAuthHint("google_calendar_oauth", null) ?? "";
+  assert.ok(h.includes("[Google 연결]"), h);
+  assert.ok(!h.includes("me_credential_set"), "우리가 없앤 경로로 사람을 보내면 거기서 끝난다");
+});
+
+t("[37] ★ 안내: 연결은 있는데 범위가 없으면 [권한 넓히기] 를 가리킨다", () => {
+  const h = googleToolAuthHint("google_calendar_oauth", `${DRIVE_RO} ${DRIVE_FILE}`) ?? "";
+  assert.ok(h.includes("캘린더"), h);
+  assert.ok(h.includes("권한 넓히기"), h);
+  // 런칭에서 뺀 서비스는 눌러 봐야 안 열린다 — 그걸 누르라고 하면 안 된다
+  const g = googleToolAuthHint("google_gmail_oauth", DRIVE_RO) ?? "";
+  assert.ok(g.includes("준비 중"), g);
+  assert.ok(!g.includes("권한 넓히기"), g);
+});
+
+t("[38] 안내: 범위가 충분하거나·모르거나·구글이 아니면 막지 않는다", () => {
+  assert.equal(googleToolAuthHint("google_calendar_oauth", CAL_RO), null, "가진 사람을 막으면 안 된다");
+  assert.equal(googleToolAuthHint("google_calendar_oauth", ""), null, "모르는 것으로 막는 쪽이 더 비싸다");
+  assert.equal(googleToolAuthHint("slack_oauth", null), null, "구글 얘기가 아니다");
 });
 
 console.log(`\n${pass} passed`);

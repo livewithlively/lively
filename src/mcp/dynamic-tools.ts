@@ -10,6 +10,7 @@ import { safeFetch, SsrfError } from "../net/ssrf.js";
 import { redactDeep } from "../org/ingest/redact.js";
 import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { markExternalTool } from "../org/policies/tool-log.js";
+import { googleToolAuthHint } from "../org/credentials/google-oauth.js";
 import { resolveProxyBearer, resolveOAuthMemberSecret } from "../org/credentials/oauth-proxy-auth.js";
 import { channelSystemOf, channelPreCheck, channelPostFilter } from "../org/channels/channel-enforce.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
@@ -190,12 +191,19 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
     // #1881 G2: 구글 구 kind 3종은 통합 슬롯(google_oauth)으로 폴백한다 — 구 슬롯이 있으면 그게 먼저다(무회귀).
     const resolved = await resolveOAuthMemberSecret(callerId, tool.auth_kind, { scopeKey: tool.auth_scope_key ?? "", allowFallback });
     if (!resolved || !resolved.secret) {
+      // 구글은 붙여넣기 경로를 없앴으므로(#1881) 그쪽으로 안내하면 사람이 갈 곳이 없다 — 눌러야 할 버튼을 말해 준다.
       throw new Error(
+        googleToolAuthHint(tool.auth_kind, null) ??
         `자격 없음 — 이 툴은 '${tool.auth_kind}' 자격이 필요합니다. ` +
         (allowFallback ? "개인 자격을 '내 자격'(me_credential_set)에 등록하거나 관리자에게 통합 자격 설정을 요청하세요."
                        : "이 등급(L2/집행)은 개인 자격이 필수입니다 — '내 자격'(me_credential_set)에 등록하세요."),
       );
     }
+    // ⚠ 슬롯은 잡혔는데 그 동의에 이 서비스 범위가 없으면 호출해 봐야 상류 403 이다. 그 403 은 화면에
+    //  "권한 없음"으로만 보여서 **무엇을 눌러야 하는지**가 안 나온다 — 여기서 미리 끊고 다음 행동을 말한다.
+    //  범위를 모르면(meta.scope 없음) 막지 않는다: 모르는 것으로 사람을 막는 쪽이 더 비싸다.
+    const scopeHint = googleToolAuthHint(tool.auth_kind, String(resolved.meta?.scope ?? ""));
+    if (scopeHint) throw new Error(scopeHint);
     // OAuth 자격이면 묶음에서 access token 을 뽑고(만료면 갱신) 그것만 싣는다(#1654). 정적 토큰은 그대로 통과.
     // ⚠ tool.auth_kind 가 아니라 **실제로 잡힌 슬롯의 kind** 를 넘긴다 — 별칭으로 통합 슬롯이 잡혔는데
     //  구 kind 를 넘기면 갱신이 구 OAuth 클라이언트를 찾아 실패한다(토큰은 새 클라이언트가 발급한 것).
