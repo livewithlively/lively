@@ -67,6 +67,16 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
     -- run_once = 1회 실행 후 자동 비활성(반복 안 함). 부트스트랩 등 일회성 잡용. 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS run_once BOOLEAN NOT NULL DEFAULT false;
+    -- ── 연속 실패 서킷 브레이커(#1675 ④) ──
+    --  어니스트 2026-08-12: 증류 크론이 **200건 넘게 연속 실패**하는 동안 아무 제동이 없었다. 잡 하나가
+    --  10분마다 계속 실패하는 상태는 그 자체로 고장이지, 다음 주기에 나아질 일이 아니다.
+    --  fail_streak = 연속 실패 횟수(성공 1회로 0 리셋) · max_fail_streak = 이 값에 닿으면 자동 정지(0=끔).
+    --  잡별 컬럼인 이유: 적정 임계가 잡마다 다르다(증류는 짧게, 외부 API 커넥터는 일시 장애를 견디게 길게).
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS fail_streak INT NOT NULL DEFAULT 0;
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS max_fail_streak INT NOT NULL DEFAULT 5;
+    -- 자동 정지 흔적 — 관리탭이 "누가 껐나"를 사람 손과 구분해 보여줘야 재개 버튼을 낼 수 있다.
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS auto_disabled_at TIMESTAMPTZ;
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS auto_disabled_reason TEXT;
   `);
   // 기본 잡 시드(최초 1회만 — 운영자 변경 보존).
   //  refresh_all: 커밋→is 자동 반영(결정적, LLM 없음). map_unmapped: 미매핑→도메인 LLM 분류(라이블리 시드 에이전트) — 토큰 설정 전이라 기본 OFF.
@@ -414,4 +424,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // 레포 자동 provision(#869 P2 후속) — 기존 org_task 테이블에도 소급(CREATE IF NOT EXISTS 는 컬럼 추가 안 함).
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS repo TEXT`);
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS git_ref TEXT`);
+  // #1675 리뷰 — '내 로그인' 화면이 매 렌더마다 그 사람의 마지막 자격 실패를 찾는다(lastAuthFailureFor).
+  //  org_task 는 지우는 경로가 없어 계속 자라는 테이블이라(증류 크론만으로 하루 ~1,300행), 인덱스 없이
+  //  seq scan 하면 그 조회가 곧 부하다 — 이미 Postgres 타임아웃을 겪은 박스에서는 특히.
+  //  ⚠ 반드시 org_task DDL **뒤**에 둔다(같은 초기화 안에서 순차 실행이라, 앞에 두면 테이블이 없어 실패한다).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_task_requester_finished_idx ON org_task(requester, finished_at DESC)`);
 }

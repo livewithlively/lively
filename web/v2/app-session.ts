@@ -10,7 +10,6 @@
 //   **한 번** 재시도한다. 거절하면 조용히 멈춘다(세션 안 뜸).
 import { api, el, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
-import { chooseAppExecution, ensureSessionAppInstance, type AppExecution } from './app-instance.js';
 
 export interface SessionApp {
   id: string;
@@ -22,7 +21,6 @@ export interface SessionApp {
   sites: string[];   // csp.frame_domains — 이 앱이 **화면에 싣는** 사이트(동의 창에 보여 준다)
   net: string[];     // csp.connect_domains ∪ permissions.hosts — 이 앱이 **직접 연결하는** 곳
   instances: { project: 'global' | 'optional' | 'required'; multiplicity: 'single' | 'multiple' };
-  runtime: { kind: 'worker'; placement: 'any' | 'central' | 'remote'; idle_timeout_sec: number; memory_mb: number } | null;
   system: { renderer: 'session' | 'browser' | 'classic'; home?: string; route?: string } | null;
   source: { kind?: string };
   notifications: boolean;   // #1891 — 이 앱이 알림을 보낼 수 있나(동의 창이 제 줄로 보여 준다)
@@ -43,17 +41,11 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         const sites = (csp.frame_domains || []).map(String);
         const net = [...(csp.connect_domains || []), ...(perm.hosts || [])].map(String);
         const instances = (a.manifest && a.manifest.instances) || { project: 'optional', multiplicity: 'multiple' };
-        const runtime = a.manifest?.runtime?.kind === 'worker' ? {
-          kind: 'worker' as const,
-          placement: a.manifest.runtime.placement as 'any' | 'central' | 'remote',
-          idle_timeout_sec: Number(a.manifest.runtime.idle_timeout_sec || 300),
-          memory_mb: Number(a.manifest.runtime.memory_mb || 256),
-        } : null;
         const source = (a.source && typeof a.source === 'object') ? a.source : {};
         // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
         const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
         return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-          scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, runtime, system, source,
+          scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, system, source,
           notifications: perm.notifications === true };   // #1891 — 동의 창이 제 줄로 보여 준다
       });
   } catch (e: any) {
@@ -84,7 +76,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
       || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [], notifications: false,
-        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, runtime: null, system: null, source: {} };
+        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
     return true;
@@ -100,15 +92,6 @@ export async function spawnAppSession(
   if (spawning) return null;
   spawning = true;
   try {
-    const app = (await listSessionApps()).find((item) => item.id === appId);
-    let execution: AppExecution | undefined;
-    if (app?.runtime) {
-      // worker는 화면을 보기만 하는 것과 달리 실제 코드를 실행하므로 세션을 만들기 전에 grant와 위치를 확정한다.
-      if (!(await ensureAppGrant(appId, opts?.title || app.title))) return null;
-      const selected = await chooseAppExecution(opts?.title || app.title, app.runtime);
-      if (!selected) return null;
-      execution = selected;
-    }
     let id = '';
     try { id = await postAppSession(appId, opts); }
     catch (e: any) {
@@ -116,17 +99,6 @@ export async function spawnAppSession(
         if (!(await ensureAppGrant(appId, opts?.title))) return null;   // 취소 = 조용히 멈춤
         id = await postAppSession(appId, opts);
       } else throw e;
-    }
-    try {
-      await ensureSessionAppInstance(appId, id, {
-        projectId: opts?.projectId ?? null,
-        title: opts?.title || app?.title || appId,
-        execution,
-      });
-    } catch (error: any) {
-      // 세션은 이미 만들어졌다. AppInstance/worker 메타 실패가 대화 자체를 회수하지 않게 하되 원인은 숨기지 않는다.
-      console.warn('[app-instance] 앱 세션 인스턴스 확보 실패', error);
-      if (app?.runtime) toast('세션은 열렸지만 앱 worker를 시작하지 못했어요 — ' + (error?.message || error), true);
     }
     return { id };
   } catch (e: any) {
@@ -177,7 +149,7 @@ function appConsent(app: SessionApp): Promise<boolean> {
       onclick: (e: Event) => { if (e.target === ov) finish(false); } },
       el('div', { class: 'v2-consent' },
         el('h3', { class: 'v2-consent-t', text: '「' + app.title + '」을(를) 내 자격으로 실행할까요?' }),
-        el('p', { class: 'v2-consent-sub', text: '이 앱의 화면·worker·AI 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }),
+        el('p', { class: 'v2-consent-sub', text: '이 앱이 여는 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }),
         el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))),
         el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))),
         // 알림(#1891) — 다른 권한과 **성격이 다르다**: 나머지는 '앱이 내 데이터에 무엇을 하나'인데

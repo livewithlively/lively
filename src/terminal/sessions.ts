@@ -67,8 +67,8 @@ async function validInvites(ids: unknown, ownerUid: string): Promise<string[]> {
   return out;
 }
 
-export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
-  return collectSessions(ownerId(user));
+export async function listSessions(user: LivelyUser, opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  return collectSessions(ownerId(user), opts?.strict === true);
 }
 
 // 복원 가능(restorable) 세션(#1059 E) — DB desired-state 에는 있으나 지금 tmux 에 **없는** 이 사용자 소유 세션.
@@ -124,8 +124,12 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
 // 노드 에이전트용(#869) — 뷰어 필터 없이 이 호스트의 전 box-* 세션+메타를 반환한다. 가시성 판정(정책)은
 //  게이트웨이가 소유하므로(F7 정책/실행 분리) 노드는 원자료만 상태 push 하고, 게이트웨이가 뷰어별로 거른다.
 //  게이트웨이 로컬 경로에선 쓰지 말 것 — listSessions(user)가 정문.
-export async function listSessionsRaw(): Promise<SessionInfo[]> {
-  return collectSessions(null);
+/**
+ * @param strict listSessions 와 같은 의미 — **tmux 를 못 본 것**을 삼키지 않고 throw 한다.
+ *  "없음"과 "모름"을 구분해야 하는 읽기(예: 중복 세션 수 보고)는 반드시 strict 여야 한다.
+ */
+export async function listSessionsRaw(opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  return collectSessions(null, opts?.strict === true);
 }
 
 // 빈 tmux 서버 정리(#869 노드 자가치유) — 세션이 0개면 서버를 죽인다. 노드 데몬(launchd/systemd)이 과거 최소 PATH 로
@@ -139,13 +143,22 @@ export async function listSessionsRaw(): Promise<SessionInfo[]> {
 //   ② box-* 만이 아니라 **어떤 세션이든** 있으면 빈 서버가 아니다. 사용자의 개인 tmux 세션이 같은 서버에 있으면
 //      그건 무손실이 아니고, Windows psmux 는 소켓 격리가 없어 kill-server 가 곧 'PC 의 모든 세션 종료'다
 //      (2026-08-18 실측 — 테스트 한 줄의 kill-server 로 그 PC 의 라이블리 세션 5개가 한 번에 죽었다).
+/**
+ * tmux 실패가 **'서버가 없다'(정상 — 세션 0개)** 인가, **'못 봤다'(장애)** 인가.
+ *  이 구분이 곧 "없다"와 "모른다"의 구분이다. 섞으면 모르는 상태를 '없음'으로 단정해 파괴적 결정을 내린다
+ *  (#1675 ⑥ 실측: 상시세션 ensure 가 조회 실패를 '세션 없음'으로 읽고 2분마다 새 세션을 만들어 30개까지 쌓였다).
+ */
+export function isNoTmuxServer(e: unknown): boolean {
+  const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
+  return /no server running|error connecting/i.test(stderr);
+}
+
 export async function killEmptyTmuxServer(): Promise<void> {
   let raw: string;
   try { raw = await tmux(["list-sessions", "-F", "#{session_name}"]); }
   catch (e) {   // 못 봤다 ≠ 비었다
     // 서버가 없는 건 정상(부팅 직후 대부분) — 조용히. 그 밖의 실패(타임아웃·과부하)는 '왜 자가치유가 안 됐나'의 단서라 남긴다.
-    const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
-    if (!/no server running|error connecting/i.test(stderr)) console.warn(`[terminal] 빈 tmux 서버 판정 보류 — list-sessions 실패(죽이지 않는다): ${(e as Error)?.message}`);
+    if (!isNoTmuxServer(e)) console.warn(`[terminal] 빈 tmux 서버 판정 보류 — list-sessions 실패(죽이지 않는다): ${(e as Error)?.message}`);
     return;
   }
   if (raw.split("\n").some((line) => line.trim() !== "")) return;   // 무엇이든 살아 있으면 보존
@@ -153,9 +166,18 @@ export async function killEmptyTmuxServer(): Promise<void> {
 }
 
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
-async function collectSessions(me: string | null): Promise<SessionInfo[]> {
+/**
+ * @param strict true 면 **tmux 를 못 본 것**(서버 없음이 아닌 실패)을 삼키지 않고 throw 한다.
+ *  기본(false)은 종전 동작 — 화면 목록은 빈 목록으로 떨어지는 편이 낫다. 반면 "없으면 만든다" 류의
+ *  **파괴적/생성적 결정**을 내리는 호출부는 반드시 strict 여야 한다(모르는 상태를 '없음'으로 읽으면 안 된다).
+ */
+async function collectSessions(me: string | null, strict = false): Promise<SessionInfo[]> {
   let out = "";
-  try { out = await tmux(["list-sessions", "-F", LIST_FMT]); } catch { return []; }
+  try { out = await tmux(["list-sessions", "-F", LIST_FMT]); }
+  catch (e) {
+    if (strict && !isNoTmuxServer(e)) throw e;   // 못 봤다 — 호출부가 '없음'으로 오해하면 안 된다
+    return [];
+  }
   // 가려진 프로젝트 집합을 **한 번** 조회(#1291) — 세션 수와 무관하게 쿼리 1회, 15초 캐시.
   //  조회조차 실패하면(DB 다운) 프로젝트 세션을 통째로 감춘다(fail-closed): 개인 세션은 tmux 만으로 판정되므로 그대로 뜬다.
   let hidden: HiddenProjects | undefined;
@@ -454,8 +476,15 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 명시 보존해야 한다(deploy/linux/sudoers-lively).
   //   구 sudoers 면 미보존 → 헤더 빈 값 → 미기록 = 종전 동작(무회귀).
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
-  // 화면 테마(#1683) — 이 pane 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 고르게 한다(COLORFGBG·LIVELY_THEME).
-  //  판정·조립은 themeEnvArgs(순수·단위테스트됨)에. ⚠ pane env 는 exec 시점 고정 → 새 세션부터 적용.
+  // 화면 테마(#1683) — 이 pane 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 고르게 한다.
+  //  두 경로로 알린다(둘 다 터미널이 앱에게 알려주는 표준 방식이고, 어느 쪽을 읽는지는 도구마다 다르다):
+  //   · COLORFGBG — 오래된 관습(vim/neovim 의 background 자동판정, less 등). "<fg>;<bg>" ANSI 번호.
+  //   · LIVELY_THEME — 우리 훅·스킬이 읽는 명시 값(위 관습은 값이 모호해 해석이 갈린다).
+  //  ⚠ 하네스의 설정 파일(theme 키)은 고치지 않는다 — 그건 사람의 선택이고 킷이 보존하는 값이다(CreateInput.theme 주석).
+  //   대신 xterm 이 OSC 11 질의에 실제 배경색을 답하므로(터미널 화면이 그 색을 싣는다) 배경을 물어보는 TUI 는
+  //   이 env 없이도 맞게 고른다 — env 는 '물어보지 않는' 도구를 위한 보강이다.
+  //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 같은 성질).
+  //   즉 이미 떠 있는 세션의 하네스는 테마를 바꿔도 그대로다 — 그 세션을 다시 만들어야 바뀐다.
   args.push(...themeEnvArgs(input.theme));
   args.push(...harnessThemeEnvArgs(harness.key, input.theme));   // 하네스가 env 로 테마를 받는 경우(#1683 후속)
   // 테넌트 소속(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스할 때, **세션 spawn 훅이
@@ -681,8 +710,11 @@ async function assertManage(user: LivelyUser, id: string): Promise<void> {
 async function tmuxKill(id: string): Promise<void> {
   if (!ID_RE.test(id)) throw new HttpError(400, "세션 id 형식 오류");
   // ★이미 죽은 세션을 다시 죽이는 것은 **성공**이다(멱등). tmux 는 "can't find session" 으로 실패를 내는데,
-  //  그 예외가 그대로 500 으로 새어 나가 화면에선 보관(×)이 먹지 않는 것으로 보였다 — 하필 사람들이 가장 자주
-  //  보관하려는 것이 이미 끝나 tmux 가 사라진 세션이라, 보관이 필요한 자리에서만 실패했다(상민님 2026-08-21 실측).
+  //  그 예외가 그대로 500 으로 새어 나가 화면에선 보관(×)이 먹지 않는 것으로 보였다 — 그리고 하필 사람들이
+  //  가장 자주 보관하려는 것이 **이미 끝나 tmux 가 사라진 세션**이라, 보관이 필요한 자리에서만 실패했다
+  //  (상민님 2026-08-21 실측: 끝난 세션 보관 → HTTP 500 internal_error, 로그에 can't find session).
+  //  보관·회수의 목표 상태는 '그 tmux 가 없음' 이므로, 이미 없으면 목표는 이미 이뤄진 것이다.
+  //  소켓 접속불가·타임아웃은 판정 불가라 isSessionGoneError 가 false 를 주고 그대로 던진다(모르면 성공이라 말하지 않는다).
   try { await tmux(["kill-session", "-t", id]); }
   catch (err) { if (!isSessionGoneError(err)) throw err; }
 }

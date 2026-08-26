@@ -79,7 +79,7 @@ export function installScript(home: string): string {
     `trap 'rm -rf "$K"' EXIT`,
     `tar -xzf "$H/${BUNDLE_TMP}" -C "$K"`,
     `[ -f "$K/setup/user-install.mjs" ] || { echo "번들에 user-install 없음" >&2; exit 1; }`,
-    `node "$K/setup/user-install.mjs" --harness ${SEED_HARNESSES} >/dev/null`,
+    `node "$K/setup/user-install.mjs" --allow-host-effects --harness ${SEED_HARNESSES} >/dev/null`,
     `STORE_URL="http://localhost:8080/mcp" bash "$K/setup/register-clients.sh" >/dev/null`,
     `rm -f "$H/${BUNDLE_TMP}"`,
     `printf %s ok > "$H/${MARKER}"`,

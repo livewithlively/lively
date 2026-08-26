@@ -6,8 +6,8 @@
 //    (tmux -CC 출력은 멀티바이트가 프레임 경계에서 쪼개질 수 있어 서버가 디코드하지 않고
 //     바이트 그대로 릴레이한다 — terminal-pty 와 동일 원칙.)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
-import type { WorkerRunSnapshot } from "../apps/worker-host.js";
 import type { KeepAwakeStatus } from "./keep-awake.js";   // #1849 — hello 로 보고하는 잠자기 억제 상태(타입만)
+import type { WorkerRunSnapshot } from "../apps/worker-host.js";
 
 export const NODE_WS_PATH = "/node/ws";
 export const PROTO_VER = 1;

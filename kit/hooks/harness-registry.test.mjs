@@ -166,7 +166,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
     mkdirSync(join(BUNDLE, "setup"), { recursive: true });
     for (const f of scripts) cpSync(join(HOOKS_DIR, f), join(BUNDLE, ".claude", "hooks", f));
-    for (const f of ["user-install.mjs", "user-uninstall.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
+    for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
     writeFileSync(join(BUNDLE, ".lively-org-name"), "테스트조직\n");
     writeFileSync(join(BUNDLE, ".lively", "auto-approve.json"), JSON.stringify({ allow: [] }));
     writeFileSync(join(BUNDLE, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));

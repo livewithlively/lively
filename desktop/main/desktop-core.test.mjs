@@ -16,7 +16,7 @@ import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState } from "./update-policy.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
@@ -504,8 +504,8 @@ t('U4 ★ mac 미서명은 구조적 불가 — 시도조차 하지 않는다', 
   assert.equal(shouldCheckForUpdates({ ...UOK, platform: 'linux', macSigned: false }).ok, true);
 });
 
-t('U5 한 번 실패하면 이 세션엔 다시 묻지 않는다', () => {
-  assert.equal(shouldCheckForUpdates({ ...UOK, failedBefore: true }).reason, 'failed-before');
+t('U5 순간 실패는 구조적 차단 사유가 아니다 — 다음 예약에서 다시 확인한다', () => {
+  assert.deepEqual(shouldCheckForUpdates({ ...UOK, failedBefore: true }), { ok: true, reason: 'ok' });
 });
 
 t('U6 opt-out 은 무엇보다 먼저 이긴다 · 0 은 opt-out 이 아니다', () => {
@@ -522,7 +522,28 @@ t('U7 실패 문구는 원인별로 다르고, 앱을 못 쓰게 됐다고 말�
   for (const e of [new Error('Could not get code signature'), new Error('ENOTFOUND')]) {
     assert.ok(!/설치|재설치|중단/.test(updateFailureNote(e)), '자동 업데이트 실패는 치명이 아니다');
   }
-  assert.ok(UPDATE_INTERVAL_MS >= 60 * 60 * 1000, '너무 잦으면 레이트리밋에 걸린다');
+  assert.equal(UPDATE_INTERVAL_MS, 5 * 60 * 1000, '정상 확인은 5분마다여야 한다');
+});
+
+t('U7b 확인 실패는 5→15→60분으로 백오프하고, 각 예약에 30초 이하 지터를 더한다', () => {
+  assert.deepEqual(UPDATE_RETRY_DELAYS_MS, [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000]);
+  assert.equal(UPDATE_CHECK_JITTER_MS, 30_000);
+  assert.equal(updateCheckDelayMs(0, 0), 5 * 60 * 1000, '정상 뒤 다음 확인');
+  assert.equal(updateCheckDelayMs(1, 0), 5 * 60 * 1000, '첫 실패 뒤 재시도');
+  assert.equal(updateCheckDelayMs(2, 0), 15 * 60 * 1000, '두 번째 연속 실패 뒤 재시도');
+  assert.equal(updateCheckDelayMs(3, 0), 60 * 60 * 1000, '세 번째 연속 실패 뒤 재시도');
+  assert.equal(updateCheckDelayMs(99, 0), 60 * 60 * 1000, '백오프 상한');
+  assert.equal(updateCheckDelayMs(0, 1), 5 * 60 * 1000 + 30_000, '최대 지터');
+  assert.equal(updateCheckDelayMs(2, 0.5), 15 * 60 * 1000 + 15_000, '결정적 지터');
+});
+
+t('U7c ★ 예약 배선 — setInterval 고정 루프가 아니라 결과 기반 setTimeout이고 실패 영구 래치가 없다', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  assert.ok(!/\bupdateFailed\b|failedBefore:/.test(main), '한 번 실패하면 앱 재시작까지 영구 정지하는 래치가 남아 있다');
+  assert.ok(!/setInterval\(\(\) => void checkUpdates\(\), UPDATE_INTERVAL_MS\)/.test(main), '고정 간격은 실패 백오프를 표현하지 못한다');
+  assert.match(main, /updateCheckDelayMs\(updateCheckFailures, Math\.random\(\)\)/, '확인 결과·지터 기반 다음 간격 계산이 없다');
+  assert.match(main, /updateCheckTimer\s*=\s*setTimeout\(/, '다음 확인을 동적 타이머로 예약하지 않는다');
+  assert.match(main, /if \(result\?\.downloadPromise\) await result\.downloadPromise/, '설치기 다운로드가 끝나기 전에 다음 5분 타이머를 시작하면 중복 확인이 겹친다');
 });
 
 t('U8 빌드 설정 — 배포처·아이콘·무인 설치 계약', () => {
@@ -1154,7 +1175,7 @@ t("V4 로그아웃·키트 업데이트 argv — 로그아웃은 게이트웨이
 
 t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'와 '지금은 안 함'을 갈라 말한다", () => {
   const seen = new Set();
-  for (const r of ["ok", "opt-out", "dev-run", "no-publish-config", "failed-before", "mac-unsigned"]) {
+  for (const r of ["ok", "opt-out", "dev-run", "no-publish-config", "mac-unsigned"]) {
     const s = updateStatusNote(r);
     assert.ok(s && s.length > 5, r);
     assert.ok(!seen.has(s), `문구가 겹친다: ${r}`);

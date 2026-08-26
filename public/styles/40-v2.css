@@ -14,7 +14,6 @@ body.embed .pjv-has-side .pjv-side-nav-inner { top: 0; max-height: 100vh; paddin
 body.embed .pjv-has-side .pjv-side-main { min-height: 100vh; }
 body.embed .kn-shell { min-height: 100vh; }
 body.embed .kn-side { top: 0; max-height: 100vh; padding-top: 14px; }
-body.embed .pjv-side-btn { display: none !important; } /* #2043 — 액자 안에선 폴더·리스트 패널을 세우지 않는다(셸 사이드바가 맡는다). 여는 단추도 없어야 한다 */
 /* 액자 띠 없는 앱(FRAMELESS) — 새 탭 열기만 우상단 작은 아이콘으로 남긴다(기능 유지). */
 .v2-app-frameless { position: relative; }
 .v2-frame-pop { position: absolute; top: 6px; right: 10px; z-index: 2; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--muted-2); text-decoration: none; font-size: 13px; background: var(--bg); opacity: .7; }
@@ -504,14 +503,16 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
    flex:1 1 0 이 곧 1/n 이고, 바닥 폭(min-width) 아래로 밀리면 그때부터 줄이 굴러간다 —
    글자가 아예 안 읽히는 탭 20개보다, 읽히는 탭 몇 개 + 스크롤 + [모든 탭] 목록이 낫다. */
 /* ⚠ max-width 상한(상민님 2026-08-24) — 종전 none 이면 `flex: 1 1 0` 이 남는 폭을 전부 먹어, **탭이 하나일 때
-   그 하나가 줄 전체로 늘어났다**(이름이 두 글자여도 화면 끝까지). 브라우저 탭 줄도 같은 이유로 상한을 둔다.
-   상한을 넘긴 남는 폭은 빈 채로 남고, 데스크톱에선 그 자리가 곧 창을 끌 자리가 된다. */
+   그 하나가 줄 전체로 늘어났다**(이름이 두 글자여도 화면 끝까지). 브라우저 탭 줄도 상한을 두는 이유가 같다.
+   상한을 넘긴 남는 폭은 빈 채로 남고, 그 자리가 곧 창을 끌 자리가 된다(데스크톱). */
 .v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head); cursor: pointer; flex: 1 1 0; min-width: 96px; max-width: 240px; white-space: nowrap; user-select: none; }
 .v2-tab:hover { background: rgba(255,255,255,.62); color: var(--ink); }
 .v2-tab.on { background: var(--bg); box-shadow: inset 0 2px 0 var(--blue); color: var(--ink); font-weight: 700; }
 .v2-tab.on:hover { background: var(--bg); }
-/* 이름이 남은 폭을 다 먹는다 → ×는 **탭 오른쪽 끝**에 붙는다(원준 2026-08-20).
-   종전엔 이름 바로 뒤에 붙어 있어 이름 길이마다 ×의 자리가 달랐다. */
+/* 이름은 **남는 폭을 다 먹는다**(flex:1) — 안 그러면 글자 폭만큼만 차지해서, 이름이 짧은 탭은 닫기 ×가
+   글자 바로 뒤에 붙는다(상민님 2026-08-20: "탭 네모의 오른쪽 고정 위치에 있는 게 맞지 않나"). 탭 폭이
+   1/n 로 고정되면서 드러난 것 — 종전엔 탭이 내용만큼 좁아져 그 빈 자리가 안 보였다.
+   ×의 자리는 이제 탭마다 같은 곳(오른쪽 끝)이라 눈이 그 자리를 외운다. min-width:0 은 말줄임(…)의 전제다. */
 .v2-tab .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 .v2-tab-ic { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 /* 상태는 아이콘 색으로 — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트. 글자색은 '켜짐/꺼짐'만 말한다(두 축을 섞지 않는다). */
@@ -581,25 +582,15 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-launch-in { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15.5px; line-height: 1.65; min-height: 56px; }
 .v2-launch-in::placeholder { color: var(--muted-2); }
 .v2-launch-in:disabled { opacity: .55; }
-/*  컴포저 아랫줄(원준 2026-08-25 재배치) — 왼쪽 '무엇으로 열까'(셀렉트 넷) · 오른쪽 '행동'([＋]·[시키기]).
-    ★ 셀렉트는 **한 줄에 넷 다** 보여야 한다. <select> 의 자동 폭은 고른 값이 아니라 **가장 긴 선택지** 기준이라
-    (노드 이름·'추론강도 · 지난번 그대로' 같은 것) 넷이 저마다 상한 180px 를 먹고 줄이 접혔다 — 그래서 nowrap 으로
-    한 줄을 못 박고, 좁아지면 각 칸이 저마다 줄며 …로 접히게 한다(전체 문구는 툴팁·펼친 목록이 말한다). */
-.v2-launch-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding-top: 0; border-top: 0; }
-.v2-launch-ctl { display: flex; align-items: center; flex-wrap: nowrap; gap: 4px; flex: 1 1 auto; min-width: 0; }
-.v2-launch-act { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
-.v2-run { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; min-width: 0; }
-.v2-run-sel { appearance: none; -webkit-appearance: none; flex: 0 1 auto; min-width: 56px; height: 30px; padding: 0 20px 0 9px; border: 0; border-radius: 8px;
-  background: var(--bg-tint) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23A6B2C8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 7px center;
-  font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-run-sel:hover:not(:disabled) { color: var(--ink); background-color: var(--line-net-2); }
-/*  칸마다 상한이 다르다 — 줄이 좁아질 때 **무엇을 먼저 줄일지**의 순서다. 노드는 기본값('중앙 컴퓨터')이 짧은데
-    선택지에 긴 PC 이름이 섞여 자동 폭만 크므로 제일 먼저·가장 많이 양보하고(shrink 3), 지금 무엇으로 도는지를
-    말하는 제공자·모델·추론강도가 그 자리를 받는다. */
-.v2-run-node { max-width: 124px; flex-shrink: 3; }
-.v2-run-prov { max-width: 200px; }
-.v2-run-model { max-width: 176px; }
-.v2-run-effort { max-width: 176px; flex-shrink: 1.4; }
+.v2-launch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 0; border-top: 0; }
+
+.v2-launch-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; flex: 1; min-width: 0; }
+.v2-launch-row > .v2-launch-send { align-self: flex-end; }
+.v2-run { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-width: 0; }
+.v2-run-sel { appearance: none; -webkit-appearance: none; height: 30px; padding: 0 18px 0 8px; border: 0; border-radius: 8px;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23A6B2C8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 6px center;
+  font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-run-sel:hover:not(:disabled) { color: var(--ink); background-color: var(--bg-tint); }
 .v2-run-sel:disabled { opacity: .55; cursor: default; }
 .v2-run-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 
@@ -609,8 +600,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
   border: 1px solid var(--line-net); border-radius: 9px; background: transparent; color: var(--muted); font-size: 17px; line-height: 1; cursor: pointer; }
 .v2-launch-att:hover { color: var(--ink); background: var(--bg-tint); }
 .v2-launch-att:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+/* ctl 이 좁아 두 줄로 접힐 때도 [＋] 는 [시키기]와 같은 아랫줄에 — 둘 다 줄의 고정 모서리다. */
+.v2-launch-row > .v2-launch-att { align-self: flex-end; }
 .v2-launch.drop-active { outline: 2px dashed var(--blue); outline-offset: -6px; }
-.v2-launch-send { flex: none; display: inline-flex; align-items: center; height: 34px; padding: 0 18px; border-radius: 11px; font-weight: 650; }
+.v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: 11px; font-weight: 650; }
+.v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; font-weight: 400; }
 .v2-launch-hint { display: none; }   /* Enter 안내 줄 폐지 — placeholder 와 관례가 이미 말한다(#1756) */
 /* 프로젝트 연결 드롭다운(#1749) — 여는 자리는 [⋯ ▸ 이 세션] 이다(머리줄 칩은 2026-08-20 폐지).
    드롭다운 본체(.v2-pjpick)는 그대로 anchoredPopover .dash-pop 위에 얹힌다. */
@@ -624,7 +618,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-pjpick-row:hover { background: var(--bg-tint); }
 .v2-pjpick-row .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
 .v2-pjpick-row .m { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
-.v2-pjpick-row.cur { cursor: default; background: var(--code-surface); }
+.v2-pjpick-row.cur { cursor: default; background: var(--gray-bg); }
 .v2-pjpick-cur { color: var(--mint-deep); font-weight: 700; }
 .v2-pjpick-done { border: 1px solid var(--line-row); border-radius: 999px; padding: 0 6px; font-size: 10.5px; }
 .v2-pjpick-none .n { color: var(--coral-text); }
@@ -1138,33 +1132,6 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-appui-spacer { flex: 1; }
 .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
 
-/* ── worker 앱 실행 위치 선택·상태(#1780 Stage B) ── */
-.v2-exec-ov { position: fixed; inset: 0; z-index: 91; display: grid; place-items: center; background: rgba(var(--shadow-ink), .34); padding: 20px; }
-.v2-exec { width: min(520px, 100%); background: var(--bg); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(var(--shadow-ink), .14)); padding: 22px; }
-.v2-exec h3 { margin: 0 0 6px; font-size: 16px; line-height: 1.45; color: var(--ink); }
-.v2-exec > p { margin: 0 0 16px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
-.v2-exec-list { display: grid; gap: 8px; max-height: min(380px, 52vh); overflow: auto; }
-.v2-exec-opt { position: relative; display: grid; gap: 3px; width: 100%; padding: 12px 14px; text-align: left; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
-.v2-exec-opt:hover, .v2-exec-opt:focus-visible { border-color: var(--blue); background: var(--bg-tint); outline: none; }
-.v2-exec-opt b { font-size: 13px; }
-.v2-exec-opt span { font-size: 12px; color: var(--muted); }
-.v2-exec-opt small { font: 10.5px/1.4 var(--mono, ui-monospace, monospace); color: var(--muted-2); }
-.v2-exec-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
-.v2-worker-app { min-height: 0; height: 100%; display: flex; flex-direction: column; background: var(--surface); }
-.v2-worker-bar { flex: none; min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
-.v2-worker-place { font-size: 11.5px; color: var(--ink-sub); }
-.v2-worker-state { flex: none; font-size: 10.5px; font-weight: 800; border: 1px solid var(--ok-line-2); border-radius: 999px; padding: 1px 7px; color: var(--ok-ink); background: var(--ok-bg); }
-.v2-worker-state.is-terminal { color: var(--danger-ink); border-color: var(--danger-line); background: var(--danger-bg-2); }
-.v2-worker-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
-.v2-worker-spacer { flex: 1; }
-.v2-worker-restart { flex: none; }
-.v2-worker-app > .v2-appui-frame { min-height: 0; }
-
-@media (max-width: 700px) {
-  .v2-worker-detail { display: none; }
-  .v2-worker-bar { padding-inline: 9px; }
-}
-
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로
    우측 위에 카드로 떠오르고, 밖 클릭·Esc·화면 이동이면 물러난다. 우패널이 있는 화면(프로젝트·세션·리브)에선
@@ -1331,12 +1298,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-home-launch .v2-h1, .v2-home-sub { font-size: 24px; }
   .v2-launch { margin-top: 18px; padding: 12px 12px 10px; border-radius: 16px; }
   .v2-launch-in { min-height: 64px; }
-  /* 폰에서는 한 줄을 고집하지 않는다 — 설정 넷이 윗줄에서 저희끼리 접히고, [＋]·[시키기]가 아랫줄 오른쪽에 선다. */
-  .v2-launch-row { flex-wrap: wrap; row-gap: 8px; }
-  .v2-launch-ctl { flex: 1 1 100%; flex-wrap: wrap; gap: 4px 6px; }
-  .v2-run { flex-wrap: wrap; gap: 4px 6px; }
-  .v2-launch-act { margin-left: auto; }
-  .v2-launch-send { height: 38px; }
+  .v2-launch-row { flex-wrap: wrap; }
+  .v2-launch-row > .v2-launch-send { margin-left: auto; height: 38px; }
   .v2-now { margin-top: 26px; }
   .v2-now-row { padding: 10px 8px; }
   .v2-now-row .tw { flex-wrap: wrap; row-gap: 2px; }

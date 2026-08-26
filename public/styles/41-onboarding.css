@@ -26,7 +26,7 @@
 .ob-q-ic{width:40px; height:40px; border-radius:50%; background:var(--bg-success); border:1px solid #CDEFE3; display:grid; place-items:center; color:var(--mint-deep); font-size:15px; font-weight:800; margin-bottom:14px}
 .ob-q-prog{display:flex; gap:4px; margin:0 0 22px; width:96px}
 .ob-q-prog i{flex:1; height:3px; border-radius:2px; background:var(--ghost)}
-.ob-q-prog i.ob-on,.ob-q-prog button.ob-on{background:var(--ink)}
+.ob-q-prog i.ob-on{background:var(--ink)}
 .ob-q-lead{font-size:14px; color:var(--ink-sub); margin-bottom:8px}
 .ob-q-title{font-size:26px; font-weight:700; letter-spacing:-.01em; margin-bottom:6px}
 .ob-q-help{font-size:14px; color:var(--ink-sub); margin-bottom:26px}
@@ -111,17 +111,3 @@
 /* 막1(이름) — 노션 p1 처럼 아무것도 없는 가운데 카드. 셸(사이드바·손잡이·탭 줄)을 잠깐 숨긴다. */
 #v2-root.ob-bare { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; }
 #v2-root.ob-bare .v2-side, #v2-root.ob-bare > .v2-split-x, #v2-root.ob-bare .v2-tabs, #v2-root.ob-bare .v2-tl-btn { display: none; }
-
-/* 되돌아가기 + 파일 받는 자리 (2026-08-25 플로우 재배치 — 로컬 업로드를 앞으로, 앱 연결을 뒤로) */
-.ob-q-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-.ob-q-back{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--muted);padding:4px 9px;border-radius:8px;border:1px solid transparent;background:none;cursor:pointer}
-.ob-q-back[hidden]{display:none}
-.ob-q-back:hover{color:var(--ink);background:var(--bg-tint);border-color:var(--line)}
-.ob-q-prog{gap:5px;width:118px}
-.ob-q-prog button.ob-go{cursor:pointer}
-.ob-q-prog button.ob-go:hover{background:var(--blue)}
-.ob-drop{border:1.5px dashed var(--line-net);border-radius:14px;padding:26px 20px;text-align:center;transition:border-color .15s,background .15s;display:flex;flex-direction:column;align-items:center;gap:6px}
-.ob-drop:hover,.ob-drop.ob-over{border-color:var(--blue);background:var(--blue-soft)}
-.ob-drop.ob-has{padding:18px 20px;border-style:solid}
-.ob-drop-t{display:block;font-size:15px;font-weight:700;color:var(--ink)}
-.ob-drop-d{display:block;font-size:12.5px;color:var(--muted)}

@@ -41,12 +41,14 @@ import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { snapshotRealHome, verifyRealHome, formatChanges } from "./testguard-real-home.mjs";
+import { testChildEnv } from "./test-runner-env.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
 // 기본 동시 실행수 — 코어 수를 그대로 쓰지 않고 8 에서 끊는다. 실측(160건 120초)에서 최장 1건이 36초라
 //  병렬 상한이 그 파일에 걸려 j=4 와 j=10 의 wall 이 같다. 낮게 잡을수록 부하로 인한 타이밍 flake 가 적다.
 const DEFAULT_JOBS = Math.min(availableParallelism(), 8);
+const TEST_ENV = testChildEnv();
 
 const opts = { list: false, itest: false, build: false, failFast: false, verbose: false, slowest: 0, jobs: null };
 const filters = [];
@@ -133,6 +135,17 @@ if (!files.length) {
   process.exit(1);
 }
 
+// 테스트를 하나라도 띄우기 전에 격리 린트를 선행한다. R3 위반 테스트가 setup/에 추가돼도 알파벳 순서나
+// 병렬 스케줄 때문에 린트보다 먼저 실행되어 capability를 얻는 창이 없어야 한다. 필터로 한 파일만 돌려도 동일하다.
+if (!opts.itest) {
+  const isolationPreflight = path.join(ROOT, "kit", "testlib", "test-isolation-lint.test.mjs");
+  const r = spawnSync(process.execPath, [isolationPreflight], { cwd: ROOT, stdio: "inherit", env: TEST_ENV });
+  if (r.status !== 0) {
+    console.error("\n✗ 테스트 격리 preflight 실패 — 어떤 테스트도 실행하지 않았습니다.");
+    process.exit(r.status ?? 1);
+  }
+}
+
 // 빌드 산출물 누락 — 종전엔 여기서 즉시 exit 해 **한 건 때문에 전체가 안 돌았다**. 이제 누락분만 실패로
 //  기록하고(조용히 건너뛰면 거짓 green) 나머지는 그대로 돌린다.
 const missing = new Set(files.filter((f) => !existsSync(path.join(ROOT, f))));
@@ -196,7 +209,7 @@ if (jobs === 1) {
       record(idx, { f, ms: 0, status: 1, signal: null, missing: true });
     } else {
       const t = Date.now();
-      const r = spawnSync(process.execPath, argsFor(f), { cwd: ROOT, stdio: "inherit" });
+      const r = spawnSync(process.execPath, argsFor(f), { cwd: ROOT, stdio: "inherit", env: TEST_ENV });
       record(idx, { f, ms: Date.now() - t, status: r.status, signal: r.signal });
     }
     const r = results[idx];
@@ -232,7 +245,7 @@ if (jobs === 1) {
         //  한다(#1717 — device 로그인이 승인 URL 을 `open` 으로 띄워 `npm test` 한 번에 실 탭 5개가 떴다).
         //  개별 테스트도 noBrowserEnv() 로 각자 거는 게 원칙이지만(직접 실행 경로), 여기서 한 번 더 덮어
         //  **새로 추가되는 테스트가 이 관례를 몰라도** 러너 경로에선 안 뚫린다.
-        const child = spawn(process.execPath, argsFor(f), { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LIVELY_NO_BROWSER: "1" } });
+        const child = spawn(process.execPath, argsFor(f), { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: TEST_ENV });
         live.set(child, idx);
         const chunks = [];
         child.stdout.on("data", (d) => chunks.push(d));

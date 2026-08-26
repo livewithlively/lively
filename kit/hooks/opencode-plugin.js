@@ -18,12 +18,29 @@
 // ⚠ opencode 는 bun 으로 돈다 → `process.execPath` 는 **opencode 바이너리**이지 node 가 아니다.
 //   우리 러너는 node 스크립트이므로 node 를 따로 찾아야 한다(아래 NODE).
 
-import { spawnSync } from "node:child_process";
+import { spawnSync as nodeSpawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 
 const HARNESS = "opencode";
+const spawnSync = (command, args, options) => {
+  const norm = (p) => process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p);
+  const file = norm(command);
+  const sandboxRoots = [process.env.LIVELY_HOME, process.env.TEMP, process.env.TMP, process.env.TMPDIR, tmpdir()].filter(Boolean);
+  const inSandbox = sandboxRoots.some((root) => {
+    const r = norm(root);
+    return file === r || file.startsWith(r.endsWith(sep) ? r : r + sep);
+  });
+  const internalNode = /(?:^|[\\/])node(?:\.exe)?$/i.test(String(command));
+  const sandbox = process.env.LIVELY_HOST_EFFECTS_TEST_MODE === "sandbox" && (internalNode || inSandbox);
+  if (process.env.LIVELY_HOST_EFFECTS === "deny" && !sandbox) {
+    const e = new Error(`HostEffects denied external-cli: ${command}`);
+    e.code = "LIVELY_HOST_EFFECT_DENIED";
+    throw e;
+  }
+  return nodeSpawnSync(command, args, options);
+};
 const LIVELY = join(process.env.LIVELY_HOME || homedir(), ".lively");
 const HOOKS = join(LIVELY, "hooks");
 

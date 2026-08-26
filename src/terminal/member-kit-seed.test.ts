@@ -132,7 +132,7 @@ await t("[K7] installScript(순수) — set -e · 번들 검사 · user-install 
   const s = installScript("/home/box_x");
   const idx = (needle: string): number => { const i = s.indexOf(needle); assert.ok(i >= 0, `누락: ${needle}`); return i; };
   assert.ok(s.startsWith("set -e"));
-  const a = idx("user-install.mjs\" --harness claude");
+  const a = idx("user-install.mjs\" --allow-host-effects --harness claude");
   const b = idx("register-clients.sh");
   const c = idx(".kit-seeded");
   assert.ok(a < b && b < c, "설치 → MCP 등록 → 마커 순서");

@@ -13,8 +13,8 @@ import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";   // #1713 자가 갱신 — 받은 tar.gz 해제
 import { linkIsStale, LINK_CHECK_MS, LINK_STALE_MS } from "./link-liveness.js";   // #1541 — 클라이언트 쪽 생존 감시
-import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연결 지연(두 구간)
 import { startKeepAwake } from "./keep-awake.js";        // #1849 — 이 PC 가 자지 않게 붙잡는다
+import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연결 지연(두 구간)
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,

@@ -44,6 +44,8 @@ interface SvcView {
   available: any[];       // 내가 지금 바로 켤 수 있는 서비스
   blockedOAuth: any[];    // 관리자가 조직에 등록해야만 켤 수 있는 서비스(내 힘으로 안 되는 것)
   all: any[];             // 위 셋 전부 — 상세 화면(#/connect/<key>)이 키로 되찾을 때 쓴다
+  /** #1675 ③ 헤드리스 자격의 마지막 실패(있으면). `{ at, label, task_id }`. */
+  authFailure?: { at: string | null; label: string; task_id: number } | null;
 }
 
 /** 표에 없는 커넥터를 화면에 세울 최소 정보로 감싼다 — 관리자가 방금 등록한 앱이 여기로 들어온다. */
@@ -82,7 +84,9 @@ function partition(oauth: any, creds: any): SvcView {
     const svc = svcFromConnector(server, c);
     (c && c.connected ? connected : available).push(svc);
   }
-  return { oauthMap, credMap, connected, available, blockedOAuth, all: [...connected, ...available, ...blockedOAuth] };
+  // #1675 ③ — 헤드리스 자격이 마지막으로 **실패**한 기록(서버가 org_task 에서 뽑아 준다). 없으면 null.
+  const authFailure = creds.headless_auth_failure ?? null;
+  return { oauthMap, credMap, connected, available, blockedOAuth, authFailure, all: [...connected, ...available, ...blockedOAuth] };
 }
 
 // ── 화면 그리기 ──
@@ -169,6 +173,25 @@ function connectedRow(svc: any, v: SvcView, reload: () => void) {
   if (viaToken && cred?.last_used_at) metaBits.push('마지막 사용 ' + relTime(cred.last_used_at));
   else if (viaToken && cred?.updated_at) metaBits.push('연결 ' + relTime(cred.updated_at));
 
+  // #1675 ③ — **이 토큰이 지금 살아 있나.** '마지막 사용'만으로는 성공했는지 실패했는지 알 수 없어서,
+  //  토큰이 폐기돼도 이 화면은 멀쩡해 보였다(전면장애 때 사람이 그 사실을 알 길이 알림 하나뿐이었다).
+  //  실패가 **마지막 등록보다 나중**일 때만 경고한다 — 다시 등록했으면 지난 실패는 이미 해결된 것이다.
+  let authWarn: any = null;
+  if (svc.key === 'claude-headless' && viaToken && v.authFailure) {
+    const failAt = v.authFailure.at ? new Date(v.authFailure.at).getTime() : 0;
+    const setAt = cred?.updated_at ? new Date(cred.updated_at).getTime() : 0;
+    if (failAt > setAt) {
+      authWarn = el('div', { class: 'svc-conn-blurb' },
+        el('span', { class: 'pill pill-warn', text: '인증 실패' }),
+        el('span', { text: ' ' + relTime(v.authFailure.at) + ' · ' + v.authFailure.label
+          + ' — 내 계정으로 실행된 작업이 인증에 실패했습니다. 여기 등록한 토큰이 원인이라면'
+          + ' `claude setup-token` 으로 다시 발급해 [토큰 교체]를 누르세요.'
+          + ' 내 PC(노드)에서 실행된 작업이었다면 그 PC 의 Claude 로그인을 다시 하셔야 합니다 —'
+          + ' 그 경우 이 안내는 30일 뒤 저절로 사라집니다.'
+          + ' 이 실패로 멈춘 예약 작업이 있다면 관리 ▸ 자동화에서 다시 켜세요.' }));
+    }
+  }
+
   box.append(
     el('div', { class: 'svc-conn-row' },
       svcTile(svc.key, svc.label, true),
@@ -177,7 +200,8 @@ function connectedRow(svc: any, v: SvcView, reload: () => void) {
           el('span', { text: svc.label }),
           el('span', { class: 'svc-state', text: '연결됨' }),
           metaBits.length ? el('span', { class: 'svc-meta', text: metaBits.join(' · ') }) : null),
-        el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb))),
+        el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb)),
+        authWarn),
       el('div', { class: 'svc-conn-acts' }, ...acts)),
     expand);
   return box;

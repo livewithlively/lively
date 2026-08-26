@@ -13,7 +13,7 @@
 //  (f) ~/.lively/lib+bin      ← lively CLI + 런처 심 + PATH rc 배선 (#864 — installCli)
 //  MCP 등록은 `lively install`(CLI) 또는 박스의 register-clients.sh 가 담당(여기서 호출 안 함).
 //
-// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs [--harness claude|codex|opencode|antigravity|grok|claude,codex,…] [--work-root <abs>]…
+// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs --allow-host-effects [--harness claude|codex|opencode|antigravity|grok|claude,codex,…] [--work-root <abs>]…
 //   --clone-root <dir> 로 발행물 루트 지정(기본: 이 스크립트의 ../). --harness 미지정 시 claude.
 //   Codex(--harness codex): 같은 ~/.lively 자산 + ~/.codex/config.toml([hooks]+[mcp_servers.*]) + ~/.codex/AGENTS.md.
 //     **codex 배선의 정본은 이 파일 하나다** — adapters/codex/install.mjs 라는 형제 설치기가 있었지만 아무도
@@ -25,9 +25,13 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WORK_ROOTS_HEADER } from "./work-roots-header.mjs";
+import { addWindowsUserPath, entrypointHostEffects, hostEffectsAllowed } from "./host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const spawnSync = (...args) => hostEffects.spawnSync(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 const args = process.argv.slice(2);
 const getOpt = (n) => { const i = args.indexOf(n); return i !== -1 ? args[i + 1] : null; };
@@ -60,7 +64,7 @@ const CLAUDE_DIR = claudeConfigDir(HOME);
 //  복사되므로 같은 목록에 있어야 하고, 빠지면 sync-harness-assets 가 ERR_MODULE_NOT_FOUND 로 **통째로 죽는다**
 //  (그러면 조직 자산이 한 개도 안 깔린다 — 게다가 자산 sync 는 조용히 실패하는 게 설계라 아무 신호가 없다).
 //  이 등재 누락은 kit/hooks/harness-registry.test.mjs 가 잡는다.
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "host-effects-port.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -303,11 +307,12 @@ const CLI_PATH_END = "# <<< lively-managed (PATH: cli) <<<";
 //  같은 리터럴을 bootstrap.sh 가 쓰고 user-uninstall.mjs 가 제거한다 — 세 곳이 한 센티넬을 공유한다.
 function wireCliPath() {
   if (WIN) {
-    // Windows 는 rc 가 없다 — User PATH(레지스트리)에 넣는다. 관리자 권한 불필요. 실패해도 설치는 계속(fail-soft).
+    // Windows 는 rc 가 없다 — User PATH(레지스트리)에 넣는다. 영속 호스트 효과는 명시 capability가 있어야 한다.
     const binDir = join(LIVELY, "bin");
-    const ps = `$b='${binDir.replace(/'/g, "''")}'; $p=[Environment]::GetEnvironmentVariable('PATH','User'); if(-not $p){$p=''}; if(($p -split ';') -notcontains $b){ [Environment]::SetEnvironmentVariable('PATH', ($b+';'+$p).TrimEnd(';'), 'User') }`;
-    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { stdio: "ignore" });
-    if (r.status === 0) console.log("  ✓ User PATH 에 ~/.lively/bin 추가(새 창부터 적용)");
+    const r = addWindowsUserPath(binDir, { allowed: hostEffectsAllowed({ args }) });
+    if (r.status === "changed") console.log("  ✓ User PATH 에 ~/.lively/bin 추가(새 창부터 적용)");
+    else if (r.status === "unchanged") console.log("  · User PATH 에 ~/.lively/bin 이미 있음");
+    else if (r.status === "denied") console.log("  · User PATH 변경 생략(영속 호스트 효과 권한 없음)");
     else console.warn("  ⚠️ User PATH 등록 실패 — 새 PowerShell 에서 `lively` 가 안 잡히면 수동으로 추가하세요.");
     return;
   }
@@ -375,6 +380,8 @@ function installCli() {
   // 제거기 로컬 사본 — 로그아웃·오프라인 상태에서도 `lively uninstall` 이 되도록(제거는 언제나 가능해야 한다).
   const un = cloneAbs(join("setup", "user-uninstall.mjs"));
   if (existsSync(un)) { copyFileSync(un, join(lib, "user-uninstall.mjs")); chmodSync(join(lib, "user-uninstall.mjs"), 0o755); }
+  const hostEffects = cloneAbs(join("setup", "host-effects.mjs"));
+  if (existsSync(hostEffects)) copyFileSync(hostEffects, join(lib, "host-effects.mjs"));
   if (WIN) {
     writeFileSync(join(bin, "lively.cmd"), CLI_SHIM_CMD);
   } else {
@@ -1186,6 +1193,11 @@ async function installShared(workRoots) {
   else console.log(`  · ~/.lively/context.md 시드 보류(오프라인/게이트웨이 미응답) — 첫 세션 훅이 채움 · org-name=${orgName}`);
 
   const hooksDir = join(LIVELY, "hooks");
+  const sharedHostEffects = cloneAbs(join("setup", "host-effects.mjs"));
+  if (existsSync(sharedHostEffects)) {
+    mkdirSync(join(LIVELY, "lib"), { recursive: true });
+    copyFileSync(sharedHostEffects, join(LIVELY, "lib", "host-effects.mjs"));
+  }
   mkdirSync(hooksDir, { recursive: true });
   let missing = 0;
   for (const f of HOOK_SCRIPTS) {
@@ -1204,7 +1216,13 @@ async function installShared(workRoots) {
   //  이제 `lively run <프로젝트번호>` 가 이걸 부른다(웹이 건네던 `node ~/.lively/work.mjs …` 를 대체).
   {
     const wsrc = cloneAbs(join("setup", "work.mjs"));
-    if (existsSync(wsrc)) { copyFileSync(wsrc, join(LIVELY, "work.mjs")); chmodSync(join(LIVELY, "work.mjs"), 0o755); console.log("  ✓ ~/.lively/work.mjs"); }
+    const hsrc = cloneAbs(join("setup", "host-effects.mjs"));
+    if (existsSync(wsrc) && existsSync(hsrc)) {
+      copyFileSync(wsrc, join(LIVELY, "work.mjs"));
+      copyFileSync(hsrc, join(LIVELY, "host-effects.mjs"));
+      chmodSync(join(LIVELY, "work.mjs"), 0o755);
+      console.log("  ✓ ~/.lively/work.mjs + HostEffects");
+    }
     else console.log("  · ~/.lively/work.mjs 보류(번들에 setup/work.mjs 없음 — 구버전 번들)");
   }
 

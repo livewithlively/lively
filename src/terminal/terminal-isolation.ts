@@ -20,6 +20,12 @@ const execFileAsync = promisify(execFile);
 //  userSlug 산출물은 [a-z0-9-]{1,24} 라 box_<slug> 는 아래 SAFE_OS_USER 를 항상 만족한다.
 export const OS_USER_PREFIX = "box_";
 const SAFE_OS_USER = /^box_[a-z0-9-]+$/;
+/** 멤버 id → OS 계정 슬러그. **useradd 가 실제로 만드는 이름의 정본**(24자·소문자·비영숫자→`-`).
+ *  여기(leaf)에 두는 이유: 홈 경로를 만드는 쪽(harness-io/locate.ownerHomes)이 profiles.ts 를 못 가져온다(순환).
+ *  두 곳이 각자 규칙을 적으면 긴 멤버 id 에서 조용히 어긋난다 — 실측 2026-08-25(#1884): 대화창이 404. */
+export const memberSlug = (s: string): string =>
+  s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
+
 export function osUsername(slug: string): string { return `${OS_USER_PREFIX}${slug}`; }
 
 // 격리 활성 여부 — **secure-by-default**: 기본 활성. 실제 격리는 "인프라(box-spawn) 설치됨 AND 그 멤버 provision됨"
