@@ -368,6 +368,10 @@ export async function bootV2(): Promise<void> {
  */
 async function syncShell(): Promise<void> {
   if (!tabsApi) return;
+  //  #1954 3차 — 보고 있는 동안 열람 도장을 갱신한다. 여기 두는 이유: 8초 폴링·실시간 스트림(#2041)·화면 복귀가
+  //   **전부 이 함수 하나**를 부른다. 갱신을 못 하면 초록점(작업 완료)이 안 꺼진다(markViewedSessionSeen 주석).
+  //   서버를 읽기 **전에** 찍는다 — 그래야 바로 뒤 loadData 가 방금 찍은 값을 함께 받아 온다.
+  markViewedSessionSeen();
   await loadData();
   if (!tabsApi) return;
   drawSide(); tabsApi.paint();
@@ -1083,6 +1087,46 @@ function saveDismissed(): void {
   try { localStorage.setItem(DISMISS_STORE, JSON.stringify(dismissed)); } catch { /* 못 남겨도 이번 화면은 된다 */ }
 }
 
+// ── '지금 보고 있다'를 서버에 찍는다 (#1954 3차) ──────────────────────────────────────────────
+//  왜 화면이 찍나: '작업 완료(초록점)'의 열람 신호는 여태 tmux attach 하나뿐이었는데, 이 셸은 **탭 DOM 을 유지**해
+//   세션 하나당 attach 가 탭 수명당 한 번이다(tabs.ts) — 그래서 이미 열어 둔 세션은 사이드바에서 다시 눌러도
+//   attach 가 없어 초록점이 영영 안 꺼졌다(실측 2026-08-26: 붙어 있는 세션 5개의 last_attached 가 last_busy 보다
+//   300~440초 뒤처진 채 고정). attach 는 '붙는 순간'의 도장이고 '보고 있다'는 지속 상태라, 보는 쪽이 직접 찍는다.
+//  서버가 @box_last_seen 에 새기고, isUnreadDone(web/session-status.ts)이 attach 시각과 **둘 중 나중 것**을 본다.
+//  실패는 삼킨다 — 못 찍은 최악의 결과는 '초록점이 좀 더 오래 켜져 있다'라, 보고 있는 화면을 방해할 이유가 없다.
+const SEEN_EVERY_MS = 15_000;              // 보고 있는 동안의 갱신 주기 — 8초 틱에 편승하되 매 틱 POST 는 낭비다
+const seenSentAt = new Map<string, number>();   // 세션 id → 마지막으로 도장을 보낸 시각(ms)
+/** 지금 보고 있는 세션 — 활성 탭이 세션 화면이고 **창이 실제로 보일 때만**. 숨은 창은 보고 있는 게 아니다. */
+function viewedSessionId(): string {
+  const cur = tabsApi ? tabsApi.current() : null;
+  if (!cur || document.hidden) return '';
+  const k = routeKey(cur.route);
+  if (!k.startsWith('s:')) return '';
+  //  주소의 id 는 박스 id 일 수도, 중앙 기록 uuid 일 수도 있다(findSess 가 둘 다 받는다). 도장은 **살아 있는
+  //  박스**에만 찍힌다 — 기록 화면을 읽는 건 tmux 옵션을 건드릴 일이 아니고, 애초에 초록점도 안 뜬다.
+  const s = findSess(k.slice(2));
+  return s && s.live && s.alive ? s.id : '';
+}
+function markViewedSessionSeen(): void {
+  const sid = viewedSessionId();
+  if (!sid) return;
+  const now = Date.now();
+  if (now - (seenSentAt.get(sid) || 0) < SEEN_EVERY_MS) return;
+  seenSentAt.set(sid, now);
+  void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/seen`, { method: 'POST', body: '{}' })
+    .catch(() => { seenSentAt.delete(sid); });   // 못 찍었으면 다음 틱에 다시 시도한다
+}
+
+/**
+ * 보고 있는 행의 **자리**만 붙든다 (#1954 2차 상민님: "누르고 보고 있는 동안엔 위치 유지").
+ *  ⚠ 점(상태)까지 얼리면 안 된다 — 초록점은 누르는 즉시 꺼져야 한다. 그게 '봤다'의 뜻이고, 사람이 클릭으로
+ *   기대하는 유일한 반응이다. 그래서 **점은 지금 사실대로, 묶음·순위만 활성이 되던 순간의 것**으로 그린다.
+ *   (종전 코드는 `!sk` 일 때만 직전 상태를 썼는데 세션 행의 stateKey 는 늘 채워져 와서 한 번도 안 걸렸다 —
+ *    자리 유지가 코드로는 실현된 적이 없었다.)
+ *  활성이 다른 행으로 옮겨 가면 자물쇠를 놓는다 — 그때는 제 자리를 찾아가도 사람이 안 놓친다.
+ */
+let activeHold: { key: string; group: string; rank: number } | null = null;
+
 const orderPin = new Map<string, { group: string; at: number }>();
 function pinnedAt(key: string, group: string, at: number): number {
   const had = orderPin.get(key);
@@ -1105,6 +1149,15 @@ function sideInstances(): SideInstance[] {
   const activeTab = tabsApi ? tabsApi.current() : null;
   const activeKey = activeTab ? sideRowKey(activeTab.route) : '';
   const now = Date.now();
+  //  활성이 옮겨 갔으면 새 행이 **직전에 서 있던 자리**를 붙든다(activeHold). 씨앗을 여기서 뜨는 이유:
+  //   초록점 행을 누른 그 순간의 렌더에서는 이미 점이 꺼져(위 put) 우선 묶음 근거가 사라지므로,
+  //   '누르기 직전에 어디 있었나'는 지난 렌더(lastSideRows)에만 남아 있다.
+  if (!activeHold || activeHold.key !== activeKey) {
+    const was = activeKey ? lastSideRows.get(activeKey) : null;
+    activeHold = was && was.group === PRIORITY_GROUP && !was.pinned
+      ? { key: activeKey, group: PRIORITY_GROUP, rank: PRIORITY_ST[was.status?.key || '']?.rank ?? 9 }
+      : null;
+  }
   sideRowRoute.clear(); sideRowInstance.clear();
   interface Row extends SideInstance { at: number; rank: number }
   const rows = new Map<string, Row>();
@@ -1114,19 +1167,25 @@ function sideInstances(): SideInstance[] {
     if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === (stateKey || '')) return;
     sideRowRoute.set(key, route);
     let sk = stateKey;
-    //  ★ 보고 있는 행은 **그 자리에 머문다**(#1954 2차 상민님: "누르고 보고 있는 동안엔 위치 유지").
-    //   초록점(작업 완료)을 눌러 들어가면 서버가 lastAttached 를 갱신해 그 즉시 '확인함'이 되고, 목록이
-    //   눈앞에서 그 행을 아래로 내려보냈다 — 방금 연 것이 도망가는 화면이다. 활성인 동안엔 직전 상태를 쓰고,
-    //   다른 곳으로 나가는 순간 제 자리를 찾아간다(그때는 옮겨도 사람이 안 놓친다).
-    if (key === activeKey) { const was = lastSideRows.get(key); if (was && !sk) sk = was.status?.key; }
+    //  ★ **보고 있는 세션은 '안 본 완료'가 아니다** — 초록점은 누르는 즉시 꺼진다(#1954 3차).
+    //   서버 판정(isUnreadDone)은 열람 도장이 왕복해야 따라오므로 8초 틱만큼 늦다. 사람이 클릭에 기대하는 건
+    //   즉답이라, 보고 있는 동안엔 화면이 먼저 끈다(도장은 markViewedSessionSeen 이 서버에 찍어 나간 뒤에도 유지한다).
+    //   ⚠ 작업 중·확인 필요는 끄지 않는다 — 그건 '아직 안 봤다'가 아니라 **지금 벌어지고 있는 일**이다.
+    if (key === activeKey && sk === 'done') sk = '';
     const st = sk ? PRIORITY_ST[sk] : undefined;
     const rawAt = Math.max(at, prev ? prev.at : 0);
     //  고정한 것은 상태·날짜와 무관하게 맨 위 제 묶음에 선다 — 사람이 고른 자리를 자동 규칙이 흔들지 않는다.
     const pin = isAppPinned(key);
-    const group = pin ? PINNED_GROUP : st ? PRIORITY_GROUP : dayGroup(rawAt, now);
+    let group = pin ? PINNED_GROUP : st ? PRIORITY_GROUP : dayGroup(rawAt, now);
+    let rank = st ? st.rank : 9;
+    //  보고 있는 행은 자리를 지킨다(activeHold 주석) — 점이 꺼져도, 상태가 가라앉아도 나갈 때까지 그 묶음에 머문다.
+    if (key === activeKey && !pin) {
+      if (st) activeHold = { key, group: PRIORITY_GROUP, rank: st.rank };
+      else if (activeHold && activeHold.key === key) { group = activeHold.group; rank = activeHold.rank; }
+    }
     rows.set(key, { ...sideRowFace(route, draft), id: key, active: key === activeKey, pinned: pin,
       status: st ? { key: sk!, label: st.label } : null,
-      group, rank: st ? st.rank : 9, at: pinnedAt(key, group, rawAt) });
+      group, rank, at: pinnedAt(key, group, rawAt) });
   };
 
   for (const s of data.sessions) {                                   // ① 돌고 있는 내 세션
@@ -1203,6 +1262,7 @@ async function closeSideRow(key: string): Promise<void> {
  *  8초 틱만 믿으면 방금 누른 결과가 몇 초 뒤에야 반영돼 화면이 굼떠 보인다 — 사람이 만든 변화는 즉시 비춘다.
  */
 function refreshSideNow(): void {
+  markViewedSessionSeen();   // #1954 3차 — 세션 행을 눌러 들어온 경우가 여기다. 열람은 클릭 즉시 사실이 된다.
   void loadData().then(() => { drawSide(); tabsApi?.paint(); });
 }
 
