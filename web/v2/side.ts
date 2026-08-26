@@ -331,6 +331,7 @@ export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => strin
   init();
   hooks = h || hooks;
   last = { host, data, activeKey };
+  saveFavTop();   // 즐겨찾기·리스트가 둘 다 도착한 순간 착지 후보를 남긴다(#2061 — 다음 진입이 안 기다리게)
   render();
 }
 function redraw(): void { if (last) render(); }
@@ -995,14 +996,50 @@ function renderProjects(): void {
 interface TreeList { id: number; name: string; folder_id?: number | null; visibility?: string | null; settings?: { icon?: string | null } | null }
 interface TreeFolder { id: number; name: string; parent_id?: number | null; settings?: { kind?: string | null } | null }
 
-function loadFavLists(): void {
+export function loadFavLists(): void {
   if (favLists || favLoading) return;
   favLoading = true;
   void api('/api/ui/v6/favorites').then((d: any) => {
     favLists = new Set<number>(((d && d.project_lists) || []).map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n)));
     favLoading = false;
+    saveFavTop();
     if (last && (hooks.section?.() || 'home') === 'proj' && projLens === 'tree') redraw();
   }).catch(() => { favLoading = false; favLists = new Set<number>(); });
+}
+
+// ── [프로젝트] 구역의 기본 착지 = 즐겨찾기 맨 위 리스트 (#2061) ───────────────────────
+//  구역에 들어갔을 때 나오던 것은 **전체 프로젝트 보드**였다. 액자 안 클래식 보드에도 같은 규칙(#1114)이 있지만
+//  그건 클래식 패널(renderArea)이 설 때만 도는데, 새 셸에서는 그 패널을 접으므로(#2043) 영영 안 돌았다.
+//  그래서 규칙을 **셸의 착지 주소**로 올린다 — 주소가 리스트를 가리켜야 이 사이드바의 그 줄도 눌린 것으로 선다(projScopeKey).
+const FAV_TOP_STORE = 'lively_v2_proj_fav_top';
+
+/** 즐겨찾기 맨 위 리스트 id — 사이드바 즐겨찾기 구역과 **같은 식**(같은 순서)을 쓴다. 모르면 0. */
+function favTopListId(): number {
+  if (!favLists || !last) return 0;
+  const lists = (last.data.lists || []) as unknown as TreeList[];
+  const top = lists.find((l) => favLists!.has(l.id));
+  return top ? top.id : 0;
+}
+
+//  다음 진입이 즐겨찾기 응답을 기다리지 않게 남긴다 — 착지는 화면이 서기 전에 정해져야 해서, 늦게 온 답으로
+//  주소를 바꾸면 사용자가 보던 화면이 저절로 갈아엎힌다. 없으면 종전대로 전체 보드로 간다(무해한 폴백).
+//  ⚠ **모를 때는 지우지 않는다** — 즐겨찾기와 리스트는 따로 도착하므로, 한쪽만 온 순간의 '0' 은 '없다'가 아니라
+//   '아직 모른다'다. 그걸로 지우면 멀쩡한 캐시가 날아가 다음 진입이 또 전체 보드로 간다.
+let favTopSaved = -1;
+function saveFavTop(): void {
+  if (!favLists || !last || !(last.data.lists || []).length) return;
+  const id = favTopListId();
+  if (id === favTopSaved) return;   // 값이 그대로면 매 렌더마다 쓰지 않는다
+  favTopSaved = id;
+  try { if (id) localStorage.setItem(FAV_TOP_STORE, String(id)); else localStorage.removeItem(FAV_TOP_STORE); } catch (_) { /* 이번 화면은 된다 */ }
+}
+
+/** [프로젝트] 구역에 들어갈 때의 주소. 즐겨찾기 맨 위 리스트가 있으면 그 보드로, 없으면 종전대로 전체. */
+export function projLandingRoute(): string {
+  loadFavLists();   // 아직 모르면 지금 당겨 둔다 — 이번엔 못 써도 다음 진입은 안다
+  let id = favTopListId();
+  if (!id) { try { id = Number(localStorage.getItem(FAV_TOP_STORE)) || 0; } catch (_) { id = 0; } }
+  return id ? '#/projects2/l/' + id : '#/app/projects2';
 }
 
 /** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
