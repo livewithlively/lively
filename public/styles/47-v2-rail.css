@@ -247,3 +247,62 @@
   .v2-rail-me .v2-rail-t { display: none; }
   .v2-wspop { left: 64px !important; width: min(316px, calc(100vw - 72px)); }
 }
+
+/* ── [프로젝트] 구역 — 렌즈 스위치 + 폴더 · 리스트 트리 (#2043, web/v2/side.ts renderProjTree) ─────────── */
+.v2-lens { display: flex; gap: 2px; margin: 0 8px 8px; padding: 2px; border-radius: 9px; background: var(--bg-tint-2); flex: none; }
+.v2-lens-b { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 26px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.v2-lens-b:hover { color: var(--ink); }
+.v2-lens-b.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-lens-b:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-lens-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn-deep); flex: none; }
+.v2-ptree { display: flex; flex-direction: column; gap: 1px; }
+.v2-ptf { display: flex; align-items: center; gap: 2px; min-height: 30px; }
+.v2-ptf-a { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 4px; border-radius: 8px; font-size: 13px; font-weight: 700; color: var(--ink-sub); text-decoration: none; }
+.v2-ptf-a:hover { background: var(--bg); color: var(--ink); }
+.v2-ptf.on .v2-ptf-a { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-ptf-a .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-ptf-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
+.v2-ptf-a:hover .v2-ptf-ic, .v2-ptf.on .v2-ptf-ic { stroke: var(--blue); }
+.v2-ptf .v2-car.open { transform: rotate(90deg); }
+.v2-ptl.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-ptl-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-ptl:hover .v2-ptl-ic, .v2-ptl.on .v2-ptl-ic { stroke: var(--blue); }
+.v2-ptl-emoji { width: 16px; text-align: center; font-size: 13px; flex: none; }
+.v2-ptl-lock { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linejoin: round; }
+.v2-ptl--none { color: var(--muted); }
+
+/* ── [위키] 구역 · 서가 (#2043 안 A, web/v2/side.ts renderWiki) ───────────────────────────
+   위계를 글자 크기가 아니라 **면**으로 말한다: 뷰 줄(카드 밖) › 스페이스 카드 › 분류 행(이름+설명).
+   ⚠ 개수는 어디서나 같은 알약(.v2-kpill) — 종전의 모노 연회색 숫자는 이름과 따로 놀았다. */
+.v2-kviews { display: flex; flex-direction: column; gap: 1px; padding: 0 2px 6px; flex: none; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.v2-kview { display: flex; align-items: center; gap: 8px; min-height: 31px; padding: 4px 8px 4px 10px; border-radius: 8px; font-size: 13px; font-weight: 700; color: var(--ink-sub); text-decoration: none; }
+.v2-kview:hover { background: var(--bg); color: var(--ink); }
+.v2-kview.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-kview .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-kview-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-kview:hover .v2-kview-ic, .v2-kview.on .v2-kview-ic { stroke: var(--blue); }
+.v2-kpill { flex: none; min-width: 24px; padding: 0 7px; border-radius: 99px; background: var(--bg-tint-2); color: var(--muted); font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; }
+.v2-kshelf { display: flex; flex-direction: column; gap: 6px; padding-top: 2px; }
+.v2-ksp { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); overflow: hidden; }
+.v2-ksp:not(.open) { background: transparent; border-color: transparent; }
+.v2-ksp-h { width: 100%; display: flex; align-items: center; gap: 7px; min-height: 34px; padding: 4px 10px 4px 4px; border: 0; background: transparent; font: inherit; font-size: 12.5px; font-weight: 800; color: var(--ink); cursor: pointer; text-align: left; }
+.v2-ksp.open .v2-ksp-h { background: var(--bg-tint-2); }
+.v2-ksp-h:hover { background: var(--bg-tint-2); }
+.v2-ksp-h:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.v2-ksp-h .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-ksp-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--blue); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-ksp-n { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10px; font-weight: 400; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.v2-ksp-h .v2-car { transition: transform .15s ease; }
+.v2-ksp-h .v2-car.open { transform: rotate(90deg); }
+.v2-ksp-b { display: flex; flex-direction: column; gap: 1px; padding: 3px 4px 5px; }
+.v2-kcat { display: flex; flex-direction: column; gap: 1px; padding: 5px 8px 6px; border-radius: 8px; text-decoration: none; color: var(--ink); }
+.v2-kcat:hover { background: var(--bg-tint-2); }
+.v2-kcat.on { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-kcat-t { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.v2-kcat-t .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 700; color: var(--ink); line-height: 1.35; }
+.v2-kcat-d { font-size: 11.5px; color: var(--muted); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-kown { flex: none; padding: 0 5px; border-radius: 4px; background: var(--bg-tint-2); color: var(--muted); font-size: 9.5px; font-weight: 700; line-height: 15px; }
+.v2-kcat.on .v2-kown { background: var(--bg); }
+.v2-kmore { align-self: flex-start; margin: 2px 0 0 8px; border: 0; background: none; padding: 3px 0; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--blue); cursor: pointer; }
+.v2-kmore:hover { text-decoration: underline; }
+.v2-kmore:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
