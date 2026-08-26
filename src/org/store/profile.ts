@@ -30,6 +30,15 @@ export async function updateOrgProfile(
   source?: string,
 ): Promise<OrgProfile> {
   const before = await getOrgProfile();
+  // ★ 행이 없으면 먼저 만든다 — 아래가 `UPDATE … WHERE id=1` 이라 **행이 없으면 0행 갱신으로 조용히 사라진다**.
+  //
+  //  이 표의 단일행은 스키마 시딩(org/schema/core.ts 의 `INSERT INTO org_profile(id) VALUES(1)`)이 심는데,
+  //  **중앙 게이트웨이(매니지드)는 스키마 초기화를 통째로 건너뛴다**(LIVELY_SKIP_SCHEMA_INIT — 스키마 소유가
+  //  마이그레이터라). 그 배포에서는 테넌트에 행이 없고, 그러면 gateway_url 을 아무리 저장해도 남지 않는다.
+  //  실측(2026-08-25 app.lvly.io): CP 가 5분마다 "gateway_url 재단언: (없음) → https://…" 를 찍는데
+  //  값은 영영 비어 있었다 → OAuth 콜백 URL·릴레이 시작(gw=)·CLI 승인 링크가 전부 죽었다(#1771 과 같은 뿌리).
+  //  저장 경로 자체를 자가치유로 만든다 — 어느 배포 모드에서도 "첫 저장이 성립"해야 한다.
+  await itemsPool.query(`INSERT INTO org_profile(id) VALUES(1) ON CONFLICT DO NOTHING`);
   await itemsPool.query(
     `UPDATE org_profile SET
        name = COALESCE($1, name),

@@ -41,6 +41,162 @@ const KIND_PATH = {
     app: ['M4 5h16v12H4z', 'M4 9h16'],
 };
 const icon = (k, cls) => sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...KIND_PATH[k].map((d) => sv('path', { d })));
+/** 프로젝트 검색 결과의 이동 자리 — **행의 층에 맞는 화면**으로.
+ *  ⚠ 응답의 `project_id` 는 비어 있다(실측 2026-08-24: 태스크 행도 null). 그래서 `project_id || id` 로 폴백하면
+ *   **태스크 id 를 프로젝트 id 로 착각해** 엉뚱한 프로젝트로 간다(없는 번호면 빈 화면). 층을 보고 갈라 준다:
+ *   프로젝트는 셸의 프로젝트 화면, 태스크·서브태스크는 제 주소를 가진 클래식 태스크 모달(#/projects2/t/<id>). */
+function projHref(p) {
+    const id = Number(p.id);
+    return p.level === 'task' || p.level === 'subtask' ? '#/projects2/t/' + id : '#/p/' + id;
+}
+// ── 관련도 축 (2026-08-24 실측) ────────────────────────────────────────────────
+//  `semantic` 이 주는 RRF 점수로는 못 가른다 — 순위역수라 채널마다 1등이 전부 1/61≈0.0164 로 동점이고,
+//  질의에 따라 12항목의 점수 폭이 0.0012 까지 좁아진다. 그래서 종전엔 종류 고정순서로 늘어놓을 수밖에 없었고,
+//  "왜 항상 프로젝트가 먼저 뜨냐"(상민님)가 거기서 나왔다.
+//  `similar` 는 **절대 코사인(0~1)** 을 준다 — 랭크가 아니라 값이라 채널을 가로질러 비교되고, 컷오프가 선다.
+//  dev 실측: 정답이 있는 질의는 0.50~0.70, 뜻 없는 질의('zxcvbnm')는 top 이 0.439 였다 → 그 사이를 끊는다.
+//   세션이 안 열려요 0.657 · 릴리스 어떻게 해 0.631 · 디스크 가득 0.575 · 통합검색 0.502 | 외계어 0.439
+//  컷오프는 **0.48** — 0.45 로 두면 뜻 없는 질의에도 2건이 새어 나왔다(실측 'zxcvbnm…' → 0.458·0.452).
+const MIN_COSINE = 0.48;
+//  ⚠ 짧은 제목은 코사인이 부풀려진다 — 임베딩이 몇 글자에 지배되기 때문. 실측에서 'ㅇㅇ'(0.522)·'ㄹㅇㄹㅁ'(0.526)·
+//   '세션찾기'(0.695) 같은 이름들이 진짜 답 위로 올라왔다. 이름만으로 아무것도 말하지 않는 항목을 상위에 세울
+//   근거가 없으므로 관련도순에서는 뺀다(종류별 묶음에는 그대로 남는다 — 정보를 버리지는 않는다).
+//   제목이 질의를 통째로 담았으면(제목 적중) 예외다 — 그건 길이와 무관하게 확실한 신호다.
+const MIN_TITLE_CHARS = 6;
+// ── 이 조직에 '관련도 축'이 있는가 — **추론하지 말고 물어본다** ──────────────────────────────
+//  이 값이 true 여야 아래의 '무관하면 접기' 가 발동한다. 처음엔 "similar 가 한 번이라도 결과를 준 적 있나"로
+//  **추론**했는데, 그러면 **새 페이지의 첫 질의는 영영 억제되지 않는다** — 하필 그게 무관한 질의면 잡음이
+//  그대로 뜬다(실측 2026-08-24: 뜻 없는 질의로 처음 열었더니 12건이 그대로). 관측의 순서에 답이 달라지는
+//  판정은 판정이 아니다. 그래서 **min_score=0 으로 한 번 찔러 본다** — 그건 "가장 가까운 것 하나"를 뜻하므로
+//  결과가 있으면 축이 살아 있는 것이고, 비어 있으면 임베딩이 꺼진 조직이다. 둘이 확실히 갈린다.
+//  통합검색을 처음 열 때 한 번만 돌고, 페이지 수명 동안 기억한다.
+let simAlive = false;
+let axisProbed = false;
+function probeAxis() {
+    if (axisProbed)
+        return;
+    axisProbed = true;
+    api('/api/ui/knowledge/similar?limit=1&min_score=0&text=lively').then((r) => { if (((r && r.entries) || []).length)
+        simAlive = true; }, () => { });
+}
+// ── 종류 필터 (상민님 2026-08-24) ──────────────────────────────────────────────
+//  규칙: **빈 선택 = 모두 켜짐**(기본). 그 상태에서 하나를 누르면 **그것만**, 이어서 누르면 **누적**,
+//  켜진 것을 다시 누르면 꺼진다. 전부 꺼지거나 전부 켜지면 다시 기본(모두)으로 접는다 —
+//  '넷을 다 골라 둔 상태'와 '아무것도 안 고른 기본'은 결과가 같으므로 둘을 따로 기억할 이유가 없다.
+//  ⚠ 페이지 수명으로 남긴다(창을 닫았다 열어도 유지) — 대신 칩이 늘 보이므로 **왜 결과가 짧은지 화면이 말한다**
+//   (사이드바 검색칸이 지키는 원칙과 같다). 새로고침하면 풀린다.
+//
+//  ── 축이 둘이다 (상민님 2026-08-25) ────────────────────────────────────────
+//  *"자료랑 세션이력은 그냥 관련도순에 보이지 않게 하고, 아래 전용 섹션에만 보이게 하는게 어떰?
+//    그리고 디폴트 off로 하면어때? 사람이 켰으면 그건 저장하고."*
+//  자료·세션이력은 **관련도 축이 없다**(자료는 ILIKE, 이력은 자체 스코어). 축이 없는 것을 축이 있는 것들과
+//  한 줄로 세우면 순위가 거짓말이 되고, 회의록처럼 긴 문서가 아무 단어에나 걸려 위쪽을 먹는다.
+//  그래서 **주 축**(세션·프로젝트·지식·화면)과 **보조 축**(자료·세션이력)을 나눈다:
+//   · 주 축  = 종전 계약 그대로(빈 = 모두). 관련도순 + 종류별 묶음에 나온다.
+//   · 보조 축 = **기본 꺼짐**. 켜야 채널을 부르고, 켜도 **아래 전용 묶음에만** 나온다(관련도순엔 영영 안 선다).
+//  둘은 서로 간섭하지 않는다 — '프로젝트만 보기' 로 좁혀도 켜 둔 자료는 그대로 켜져 있다.
+const MAIN_KINDS = ['sess', 'proj', 'know', 'app'];
+const AUX_KINDS = ['src', 'hist'];
+const isAux = (k) => AUX_KINDS.includes(k);
+let kindSel = new Set();
+let auxSel = new Set();
+const kindOn = (k) => (isAux(k) ? auxSel.has(k) : kindSel.size === 0 || kindSel.has(k));
+/** 칩 하나를 눌렀을 때의 다음 상태 — 위 규칙을 한 곳에서만 구현한다(화면·테스트가 같은 것을 본다). */
+export function nextKindSel(cur, k, all = MAIN_KINDS) {
+    if (cur.size === 0)
+        return new Set([k]); // 기본(모두) → 그것만
+    const next = new Set(cur);
+    if (next.has(k))
+        next.delete(k);
+    else
+        next.add(k);
+    if (next.size === 0 || next.size === all.length)
+        return new Set(); // 전부 꺼짐·전부 켜짐 → 기본
+    return next;
+}
+// ── 보조 축은 사람의 선택이라 **남긴다** ──────────────────────────────────────
+//  주 축(kindSel)은 '지금 이 검색을 좁힌다'라 페이지 수명이면 충분하지만, 보조 축은 '나는 자료도 같이 본다'는
+//  취향이다 — 새로고침·앱 재시작마다 다시 켜게 하면 그건 기본값이 아니라 형벌이다.
+//  ⚠ 저장값을 **믿지 않는다**: 남의 탭이 덮어썼거나 옛 버전이 남긴 값일 수 있으니 배열·아는 종류만 받고,
+//   깨졌으면 조용히 기본(꺼짐)으로 돌아간다. localStorage 가 막힌 환경(프라이빗 모드)에서도 검색은 돌아야 한다.
+const AUX_LS = 'lively.omni.aux';
+function loadAux() {
+    try {
+        const raw = localStorage.getItem(AUX_LS);
+        if (!raw)
+            return new Set();
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr))
+            return new Set();
+        return new Set(arr.filter((k) => typeof k === 'string' && AUX_KINDS.includes(k)));
+    }
+    catch {
+        return new Set();
+    }
+}
+function saveAux() {
+    try {
+        localStorage.setItem(AUX_LS, JSON.stringify([...auxSel]));
+    }
+    catch { /* 저장 못 해도 검색은 돈다 */ }
+}
+export function identKind(ident, qTokens) {
+    if (!ident || qTokens.length !== 1)
+        return null;
+    const q = qTokens[0].replace(/^#/, '');
+    if (!q)
+        return null;
+    const id = ident.toLowerCase();
+    if (id === q)
+        return 'exact';
+    //  번호는 부분일치를 주지 않는다 — `183` 이 1835 를 잡으면 안 된다(idEquals 와 같은 규약).
+    if (/^[0-9]+$/.test(id))
+        return null;
+    return id.includes(q) ? 'partial' : null;
+}
+export function identHit(ident, qTokens) {
+    return identKind(ident, qTokens) !== null;
+}
+// ── 일치 부분 색칠 (2026-08-25 상민님) ────────────────────────────────────────
+//  "왜 이 줄이 떴나"를 글자로 보여 준다. 스니펫이 잘려 있으면 매치가 어디였는지 알 길이 없었다.
+//  정규식을 쓰지 않는다 — 질의에 `c++`·`(`·`.` 같은 글자가 들어오면 정규식은 깨지거나 엉뚱한 데를 칠한다.
+//  겹치는 구간은 합쳐서 한 번만 칠한다(토큰 둘이 같은 자리를 덮을 때 조각이 잘게 쪼개지지 않게).
+export function hlParts(text, qTokens) {
+    const s = String(text ?? '');
+    if (!s)
+        return [];
+    const toks = qTokens.map((t) => t.replace(/^#/, '')).filter((t) => t.length > 0);
+    if (!toks.length)
+        return [{ t: s, hit: false }];
+    const low = s.toLowerCase();
+    const spans = [];
+    for (const tok of toks) {
+        for (let i = low.indexOf(tok); i >= 0; i = low.indexOf(tok, i + tok.length))
+            spans.push([i, i + tok.length]);
+    }
+    if (!spans.length)
+        return [{ t: s, hit: false }];
+    spans.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const merged = [];
+    for (const sp of spans) {
+        const last = merged[merged.length - 1];
+        if (last && sp[0] <= last[1])
+            last[1] = Math.max(last[1], sp[1]);
+        else
+            merged.push([sp[0], sp[1]]);
+    }
+    const out = [];
+    let at = 0;
+    for (const [a, b] of merged) {
+        if (a > at)
+            out.push({ t: s.slice(at, a), hit: false });
+        out.push({ t: s.slice(a, b), hit: true });
+        at = b;
+    }
+    if (at < s.length)
+        out.push({ t: s.slice(at), hit: false });
+    return out;
+}
 let hooks = null;
 export function setOmniHooks(h) { hooks = h; }
 // ── 한 줄로 줄이기 ── 스니펫은 `L12: …` 꼴로 오고 줄바꿈이 섞여 있다. 목록은 한 줄이 한 결과여야 훑을 수 있다.
@@ -65,18 +221,53 @@ export function omniOpen(seed) {
     }
     if (!hooks)
         return;
+    probeAxis();
+    auxSel = loadAux(); // 지난번에 켜 둔 보조 축을 되살린다(다른 탭에서 바꿨을 수도 있으니 열 때마다 읽는다)
     const input = el('input', {
         class: 'v2-omni-in', type: 'text', spellcheck: 'false', autocomplete: 'off',
-        placeholder: '무엇이든 찾기 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력',
+        //  안내 문구는 **기본으로 찾는 것**만 적는다 — 자료·세션이력은 켜야 들어오므로 여기 적으면 거짓말이 된다.
+        placeholder: '무엇이든 찾기 — 지식 · 프로젝트 · 세션 · 화면',
         'aria-label': '통합검색', 'aria-controls': 'v2-omni-list',
     });
     const list = el('div', { class: 'v2-omni-list', id: 'v2-omni-list', role: 'listbox' });
+    //  종류 칩 — 각 종류에 버튼 하나. 눌리면 위 nextKindSel 규칙대로 상태가 바뀌고 **즉시 다시 찾는다**
+    //  (꺼진 종류는 아예 부르지 않으므로 오히려 빨라진다 — 세션이력처럼 느린 채널을 끄면 체감이 크다).
+    const chips = el('div', { class: 'v2-omni-filters', role: 'group', 'aria-label': '종류 필터' });
+    function chip(k) {
+        const on = kindOn(k);
+        //  제목(툴팁)이 **누르면 무슨 일이 일어나는지**를 말한다 — 두 축의 규칙이 다르므로 문구도 다르다.
+        const tip = isAux(k)
+            ? (on ? `${KIND_LABEL[k]} 결과에서 빼기` : `${KIND_LABEL[k]}도 결과에 넣기 (아래 전용 묶음에만 · 선택은 저장됩니다)`)
+            : (kindSel.size === 0 ? `${KIND_LABEL[k]}만 보기` : (kindSel.has(k) ? `${KIND_LABEL[k]} 빼기` : `${KIND_LABEL[k]} 더하기`));
+        return el('button', {
+            class: 'v2-omni-chip' + (on ? ' on' : '') + (isAux(k) ? ' aux' : ''), type: 'button',
+            'aria-pressed': String(on), title: tip,
+            onclick: () => {
+                if (isAux(k)) {
+                    if (auxSel.has(k))
+                        auxSel.delete(k);
+                    else
+                        auxSel.add(k);
+                    saveAux();
+                }
+                else
+                    kindSel = nextKindSel(kindSel, k);
+                paintChips();
+                run();
+            },
+        }, icon(k, 'v2-omni-chip-ic'), el('span', { text: KIND_LABEL[k] }));
+    }
+    function paintChips() {
+        //  보조 축은 **오른쪽에 따로** 세운다(구분선). 같은 줄에 나란히 두되 '다른 성격'임이 보이게 —
+        //  주 축 칩은 좁히는 손잡이고, 보조 축 칩은 더하는 손잡이다.
+        chips.replaceChildren(...MAIN_KINDS.map(chip), el('span', { class: 'v2-omni-chipsep', 'aria-hidden': 'true' }), ...AUX_KINDS.map(chip));
+    }
     const note = el('div', { class: 'v2-omni-note' });
     box = el('div', {
         class: 'v2-omni', role: 'dialog', 'aria-modal': 'true', 'aria-label': '통합검색',
         onmousedown: (e) => { if (e.target === box)
             omniClose(); },
-    }, el('div', { class: 'v2-omni-card' }, el('div', { class: 'v2-omni-top' }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-omni-lens', 'aria-hidden': 'true' }, sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })), input, el('kbd', { class: 'v2-omni-esc', text: 'Esc' })), list, note));
+    }, el('div', { class: 'v2-omni-card' }, el('div', { class: 'v2-omni-top' }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-omni-lens', 'aria-hidden': 'true' }, sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })), input, el('kbd', { class: 'v2-omni-esc', text: 'Esc' })), chips, list, note));
     // ── 상태 ──
     //  결과는 **소스별로** 담는다(한 종류에 소스가 둘일 수 있다 — 지식·프로젝트는 의미검색 + grep).
     //  화면에 그릴 목록(hits)은 그때그때 buckets 에서 다시 만든다(rebuild) — 소스 하나가 늦게 와도 나머지가 안 지워진다.
@@ -88,10 +279,18 @@ export function omniOpen(seed) {
     let timer = 0;
     let qTokens = []; // 지금 질의의 토큰(제목 적중 판정용)
     const rowNodes = [];
+    //  ⚠ **그려진 줄과 짝을 이루는 배열**. rowNodes 의 i 번째가 무엇인지는 이것만 안다 —
+    //   `hits` 는 병합·중복제거 순서라 화면 순서와 다르고(관련도순이 앞으로 끌어올리고, 종류별 묶음은
+    //   이미 나온 것을 빼므로), `hits[i]` 로 열면 **엉뚱한 줄이 열린다**
+    //   (상민님 2026-08-25 신고: "1835 치면 3번째 프로젝트를 눌렀는데 그 위 지식으로 넘어간다").
+    const rowHits = [];
     /** 제목이 질의를 통째로 담고 있나 — **종류와 무관하게** 맨 위로 올릴 근거(2026-08-20 실측 뒤 도입).
      *  왜 필요한가: 채널 간 순서가 타입 고정이라 '정확히 그 이름인 문서'가 프로젝트 6건 아래 묻혔다. 게다가
      *  하이브리드(RRF)는 순위역수라 채널마다 1등이 전부 같은 점수(1/61≈0.0164)가 되어 **점수로는 못 가른다**
      *  (실측: 질의에 따라 12항목의 점수 폭이 0.0012 까지 좁아진다). 제목 적중은 그 애매함이 없는 유일한 신호다. */
+    const identOf = (h) => identKind(h.ident, qTokens);
+    const isIdentHit = (h) => identOf(h) !== null;
+    const identRank = (h) => { const k = identOf(h); return k === 'exact' ? 0 : k === 'partial' ? 1 : 2; };
     function isTitleHit(h) {
         if (!qTokens.length)
             return false;
@@ -104,12 +303,57 @@ export function omniOpen(seed) {
         const at = qTokens.length ? t.indexOf(qTokens[0]) : -1;
         return (at < 0 ? 999 : at) * 10 + Math.min(99, h.title.length);
     }
+    /** 글자를 조각내 일치 부분만 <mark> 로. HTML 을 만들지 않는다 — 전부 텍스트 노드라 주입이 원천적으로 없다. */
+    const hl = (text) => hlParts(text, qTokens).map((p) => (p.hit ? el('mark', { class: 'v2-omni-hl', text: p.t }) : document.createTextNode(p.t)));
+    /** 둘째 줄 — **비워 두지 않는다**. similar 응답엔 스니펫이 없어서(실측) 관련도순 상위가 제목만 덩그러니 남았다.
+     *  key 로 찾았으면 **그 key 를 보여 준다** — 내가 친 것과 화면이 이어져야 '이게 그건가'를 다시 안 묻는다. */
+    function subLine(h) {
+        const kind = identOf(h);
+        const bits = [];
+        if (kind && h.ident) {
+            const isNum = /^[0-9]+$/.test(h.ident);
+            bits.push(el('code', { class: 'v2-omni-key' + (kind === 'exact' ? ' exact' : '') }, ...hl(isNum ? '#' + h.ident : h.ident)));
+        }
+        if (h.sub) {
+            if (bits.length)
+                bits.push(document.createTextNode(' · '));
+            bits.push(...hl(h.sub));
+        }
+        if (!bits.length && h.ident)
+            bits.push(el('code', { class: 'v2-omni-key' }, ...hl(/^[0-9]+$/.test(h.ident) ? '#' + h.ident : h.ident)));
+        return bits.length ? el('span', { class: 'v2-omni-s' }, ...bits) : null;
+    }
     function paint() {
         rowNodes.length = 0;
+        rowHits.length = 0;
         const kids = [];
-        //  그 안의 순서는 **얼마나 그 이름다운가**로 — 질의가 제목 앞쪽에 있을수록, 제목이 짧을수록 위.
-        //  (실측: '통합검색' 에서 정답 문서보다 '…그리드 통합검색' 이 먼저 뜨던 것 — 삽입순이라 그랬다.)
-        const top = hits.filter(isTitleHit).sort((a, b) => titleRank(a) - titleRank(b)).slice(0, 5);
+        // ── 관련도순 — 상민님 "가장 정확도 높은 게 먼저 뜨는 게 맞지 않아?" (2026-08-24) ─────────────
+        //  들어가는 것: **제목이 그대로 맞은 것**(모든 채널) + **절대 코사인이 컷오프를 넘은 것**(지식·프로젝트).
+        //  순서: 제목 적중이 먼저(그보다 확실한 신호가 없다) — 그 안은 '얼마나 그 이름다운가'(질의 위치 + 제목 길이,
+        //   실측: '통합검색' 에서 정답보다 '…그리드 통합검색' 이 먼저 뜨던 것). 나머지는 코사인 내림차순.
+        //  ⚠ 자료·세션이력은 **한 줄도 오지 않는다**(2026-08-25). 그 둘엔 이 축이 없고(자료 ILIKE, 이력 자체 스코어),
+        //   종전엔 '제목이 맞으면' 예외로 끼워 줬는데 그게 정확히 회의록이 위를 먹던 경로였다 — 긴 전사에는
+        //   어지간한 단어가 다 들어 있어 제목 적중이 쉽게 난다. 축이 없는 것은 순위에 세우지 않는다(전용 묶음에만).
+        const meaty = (h) => isIdentHit(h) || isTitleHit(h) || h.title.replace(/[^\p{L}\p{N}]/gu, '').length >= MIN_TITLE_CHARS;
+        const top = hits.filter((h) => !isAux(h.kind) && (isIdentHit(h) || isTitleHit(h) || typeof h.score === 'number') && meaty(h))
+            .sort((a, b) => {
+            //  **정확히 그 이름/번호인 것**이 먼저다(상민님 2026-08-25). 종전엔 정확·부분을 한 티어로 묶어서,
+            //  `1835` 로 치면 key 에 1835 가 든 지식 2건이 먼저 서고 정작 **번호가 맞는 프로젝트가 3위**로 밀렸다.
+            const ra = identRank(a), rb = identRank(b);
+            if (ra !== rb)
+                return ra - rb; // 0=정확 · 1=부분 · 2=아님
+            const ta = isTitleHit(a) ? 1 : 0, tb = isTitleHit(b) ? 1 : 0;
+            if (ta !== tb)
+                return tb - ta;
+            // 점수가 있으면 점수가 먼저다 — 제목 적중끼리도 그렇다. 화면에 0.585 가 0.632 위에 서면 '관련도순'이 거짓말이 된다.
+            const sa = a.score, sb = b.score;
+            if (typeof sa === 'number' && typeof sb === 'number' && sa !== sb)
+                return sb - sa;
+            if (ta)
+                return titleRank(a) - titleRank(b);
+            return (sb || 0) - (sa || 0);
+        })
+            .slice(0, 10);
         const topKeys = new Set(top.map((h) => h.key));
         const draw = (label, rows) => {
             if (!rows.length)
@@ -124,15 +368,37 @@ export function omniOpen(seed) {
                         mark();
                     } },
                     onclick: (e) => go(i, e.metaKey || e.ctrlKey || e.altKey),
-                }, el('span', { class: 'v2-omni-ic' }, icon(h.kind, 'v2-omni-kic')), el('span', { class: 'v2-omni-tt' }, el('b', { class: 'v2-omni-t', text: h.title }), h.sub ? el('span', { class: 'v2-omni-s', text: h.sub }) : null), el('span', { class: 'v2-omni-badge', text: KIND_LABEL[h.kind] }));
+                }, el('span', { class: 'v2-omni-ic' }, icon(h.kind, 'v2-omni-kic')), el('span', { class: 'v2-omni-tt' }, el('b', { class: 'v2-omni-t' }, ...hl(h.title)), subLine(h)), el('span', { class: 'v2-omni-badge', text: KIND_LABEL[h.kind] }));
                 rowNodes.push(node);
+                rowHits.push(h);
                 kids.push(node);
             }
         };
-        // 제목이 그대로 맞은 것 먼저 — 아래 종류별 묶음에서는 빼서 같은 줄이 두 번 뜨지 않게 한다(배지가 종류를 말한다).
-        draw('가장 맞는 것', top);
-        for (const g of GROUPS)
+        // ── 축이 '무관' 이라고 말하면 그 종류를 통째로 접는다 (2026-08-24 화면 실측) ──────────────
+        //  관련도순만 고쳐 놓고 끝낼 뻔했다: 뜻 없는 질의('zxcvbnm…')에 관련도순은 0건인데 **그 아래 '프로젝트'
+        //  묶음에 무관한 6건이 그대로 떴다.** semantic(RRF)은 컷오프가 없어 무엇을 물어도 채널마다 6건을 채우기
+        //  때문이다 — 그래서 "결과가 없습니다" 가 화면에 나올 수가 없었다.
+        //  지식·프로젝트는 **무관을 판정할 수단(절대 코사인)이 있다.** 그 판정이 '없음'이면 RRF 가 채운 것도 잡음이다.
+        //  ⚠ 단, 임베딩이 꺼진 조직에서는 similar 가 늘 빈 결과다 — 그때 접으면 지식·프로젝트가 통째로 사라진다.
+        //   그래서 **이 창에서 similar 가 한 번이라도 결과를 준 적이 있을 때만** 접는다(축이 살아 있다는 증거).
+        //  축이 살아 있고 그 채널이 **답을 했으면**, 그 종류는 관련도순이 유일한 창구다.
+        //  남는 것(코사인 컷오프 아래 + 제목도 안 맞음)은 RRF 가 채운 것뿐이고, 그건 무엇을 물어도 6건씩 나온다 —
+        //  실측: '세션이 안 열려요' 의 관련도순 8건 아래에 무관한 프로젝트 11건이 더 붙어 있었다.
+        //  아직 답이 안 온 채널은 건드리지 않는다(흘려 그리는 중에 목록이 사라지면 안 된다).
+        const muted = new Set();
+        if (simAlive) {
+            for (const [kind, src] of [['know', 'know:sim'], ['proj', 'proj:sim']]) {
+                if (buckets.has(src))
+                    muted.add(kind);
+            }
+        }
+        // 위에 세운 것은 아래 종류별 묶음에서 뺀다 — 같은 줄이 두 번 뜨지 않게(배지가 종류를 말한다).
+        draw('관련도순', top);
+        for (const g of GROUPS) {
+            if (muted.has(g.kind))
+                continue;
             draw(g.label, hits.filter((h) => h.kind === g.kind && !topKeys.has(h.key)));
+        }
         list.replaceChildren(...kids);
         if (sel >= rowNodes.length)
             sel = Math.max(0, rowNodes.length - 1);
@@ -143,6 +409,12 @@ export function omniOpen(seed) {
         rowNodes[sel]?.scrollIntoView({ block: 'nearest' });
     }
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 빈 상태는 자식을 아예 두지 않는다.
+    //  결과가 없을 때 **왜 없는지**를 화면이 말한다 — 자료를 찾는 사람에게 그냥 '결과가 없습니다'는 거짓말에 가깝다
+    //  (그 채널을 아예 안 불렀으니까). 조사가 붙지 않는 문구로 적는다('자료'와 '세션 이력'은 받침이 다르다).
+    const emptyNote = () => {
+        const off = AUX_KINDS.filter((k) => !auxSel.has(k)).map((k) => KIND_LABEL[k]);
+        return '결과가 없습니다.' + (off.length ? ` (꺼진 종류: ${off.join(' · ')} — 위 칩으로 켤 수 있습니다)` : '');
+    };
     function setNote(text) {
         note.hidden = !text;
         if (text)
@@ -151,7 +423,7 @@ export function omniOpen(seed) {
             note.replaceChildren();
     }
     function go(i, newTab) {
-        const h = hits[i];
+        const h = rowHits[i];
         if (!h)
             return;
         omniClose();
@@ -160,15 +432,22 @@ export function omniOpen(seed) {
     // ── 검색 ── 소스마다 따로 돌고, 도착하는 대로 그 소스 칸만 갈아 끼운 뒤 목록을 다시 만든다.
     //  소스 순서 = 같은 항목이 두 소스에서 오면 **먼저 온 쪽의 표현**(스니펫)을 쓴다는 뜻이다. 의미검색을 앞에 두어
     //  종전 순서를 지키고, grep 은 **의미검색이 놓친 것을 뒤에 보탠다**(그 중 제목 적중은 위 '가장 맞는 것'이 끌어올린다).
-    const SRC_ORDER = ['local', 'know:sem', 'know:grep', 'proj:sem', 'proj:grep', 'src', 'hist'];
+    //  ⚠ similar(절대 코사인)를 **먼저** 둔다 — 같은 항목이 두 소스에서 오면 먼저 온 쪽이 남는데, 점수를 가진 쪽이
+    //   남아야 관련도순에 설 수 있다(뒤에 두면 점수 없는 사본이 먼저 잡혀 그 줄이 순위에서 빠진다).
+    const SRC_ORDER = ['know:sim', 'proj:sim', 'local', 'know:sem', 'know:grep', 'proj:sem', 'proj:grep', 'src', 'hist'];
     function rebuild() {
         const seen = new Set();
         hits = [];
         for (const src of SRC_ORDER) {
             for (const h of buckets.get(src) || []) {
-                if (seen.has(h.key))
+                // 같은 것으로 치는 기준 셋 — ⓐ같은 항목(key) ⓑ**같은 곳으로 가는 줄**(href) ⓒ같은 종류의 같은 이름.
+                //  ⓑ·ⓒ 가 없으면 같은 줄이 두 번 뜬다(실측 2026-08-24 'tmux': 1·2위가 글자 그대로 같은 제목이었다) —
+                //  소스가 둘이고(의미검색·grep) 프로젝트/태스크가 이름을 공유할 때 생긴다. 먼저 온 쪽(더 높은 순위)이 남는다.
+                const ids = [h.key, 'href:' + h.href, 'name:' + h.kind + '|' + h.title.trim().toLowerCase()];
+                if (ids.some((k) => seen.has(k)))
                     continue;
-                seen.add(h.key);
+                for (const k of ids)
+                    seen.add(k);
                 hits.push(h);
             }
         }
@@ -176,11 +455,16 @@ export function omniOpen(seed) {
     function put(src, rows, mySeq) {
         if (mySeq !== seq || !box)
             return;
+        if (rows.length && src.endsWith(':sim'))
+            simAlive = true;
         buckets.set(src, rows);
         pending = Math.max(0, pending - 1);
         rebuild();
         paint();
-        setNote(pending ? '찾는 중…' : (hits.length ? '' : '결과가 없습니다.'));
+        // ⚠ **그려진 줄**로 판정한다(hits 가 아니라). 무관한 종류를 접고 나면 hits 는 남아 있는데 화면은 비어 있어,
+        //  hits 로 보면 안내문이 안 뜨고 **아무 설명 없는 빈 판**이 된다(실측 2026-08-24: 뜻 없는 질의에 0줄 + 무문구).
+        //  "결과가 없습니다" 는 이 검색의 결론이지 부작용이 아니다 — 화면이 비면 그 말이 있어야 한다.
+        setNote(pending ? '찾는 중…' : (rowNodes.length ? '' : emptyNote()));
     }
     function localHits(q) {
         const d = hooks.data();
@@ -200,7 +484,8 @@ export function omniOpen(seed) {
             .map((p) => ({ kind: 'proj', key: 'p:' + p.id, title: p.name, sub: oneLine(String(p.description || '')), href: '#/p/' + p.id }));
         const apps = visibleApps().filter((a) => (a.title + ' ' + a.desc).toLowerCase().includes(nq)).slice(0, 4)
             .map((a) => ({ kind: 'app', key: 'a:' + a.key, title: a.title, sub: a.desc, href: '#/app/' + a.key }));
-        buckets.set('local', [...sess, ...proj, ...apps]);
+        //  꺼진 종류는 애초에 담지 않는다 — 화면에서 거르는 게 아니라 **아예 찾지 않는다**(칩이 곧 검색 범위다).
+        buckets.set('local', [...sess, ...proj, ...apps].filter((h) => kindOn(h.kind)));
         rebuild();
     }
     function run() {
@@ -209,6 +494,7 @@ export function omniOpen(seed) {
         const my = seq;
         buckets.clear();
         hits = [];
+        sel = 0; // 목록이 통째로 바뀐다 — 선택을 물려주면 3번째를 고른 채로 글자를 더 쳤을 때 **다른 항목**이 열린다
         qTokens = q.toLowerCase().split(/\s+/).filter(Boolean);
         if (!q) {
             pending = 0;
@@ -219,21 +505,34 @@ export function omniOpen(seed) {
         }
         localHits(q);
         paint();
-        pending = 6;
-        setNote('찾는 중…');
         const qs = encodeURIComponent(q);
+        //  실제로 부를 채널만 센다 — 꺼진 종류를 8 에 포함하면 '찾는 중…' 이 영영 안 걷힌다.
+        const want = (k, n) => (kindOn(k) ? n : 0);
+        pending = want('know', 3) + want('proj', 3) + want('src', 1) + want('hist', 1);
+        if (!pending) {
+            paint();
+            setNote(hits.length ? '' : emptyNote());
+            return;
+        }
+        setNote('찾는 중…');
+        const call = (k, fn) => { if (kindOn(k))
+            fn(); };
         // 프로젝트(의미) — 로컬 이름 매칭을 덮어쓴다(서버가 더 넓게 본다: 태스크·본문·임베딩).
-        api('/api/ui/v6/projects/semantic?limit=6&q=' + qs).then((r) => put('proj:sem', ((r && r.projects) || []).map((p) => ({
-            kind: 'proj', key: 'p:' + p.id,
-            title: String(p.name || p.title || ('프로젝트 #' + p.id)),
-            sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-            // 태스크·서브태스크 히트도 **그 프로젝트**로 데려간다 — 셸엔 태스크 화면이 없다(클래식 모달은 앱 프레임 안쪽).
-            href: '#/p/' + Number(p.project_id || p.id),
-        })), my), () => put('proj:sem', [], my));
-        const knowRow = (e) => ({
-            kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e), href: '#/k/' + encodeURIComponent(e.name),
+        call('proj', () => {
+            api('/api/ui/v6/projects/semantic?limit=6&q=' + qs).then((r) => put('proj:sem', ((r && r.projects) || []).map((p) => ({
+                kind: 'proj', key: 'p:' + p.id,
+                title: String(p.name || p.title || ('프로젝트 #' + p.id)),
+                sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
+                href: projHref(p), ident: String(p.id),
+            })), my), () => put('proj:sem', [], my));
         });
-        api('/api/ui/knowledge/semantic?limit=6&q=' + qs).then((r) => put('know:sem', ((r && r.entries) || []).map(knowRow), my), () => put('know:sem', [], my));
+        const knowRow = (e) => ({
+            kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e),
+            href: '#/k/' + encodeURIComponent(e.name), ident: String(e.name || ''),
+        });
+        call('know', () => {
+            api('/api/ui/knowledge/semantic?limit=6&q=' + qs).then((r) => put('know:sem', ((r && r.entries) || []).map(knowRow), my), () => put('know:sem', [], my));
+        });
         // ── grep 채널을 **따로 부른다**(2026-08-20 실측) ────────────────────────────────
         //  하이브리드(semantic)는 벡터 ∪ grep 을 RRF 로 합치는데, **벡터에 없는 문서**(미임베딩)는 벡터 쪽 순위가
         //  통째로 엉뚱한 것들로 차면서 grep 이 맞게 찾은 정답을 뒤로 밀어낸다 — 즉 그 구간에선 하이브리드가
@@ -242,24 +541,48 @@ export function omniOpen(seed) {
         //  ⚠ grep 채널은 **제목이 맞은 것만** 취한다. grep 은 본문 어디든 토큰이 스치면 잡으므로 그대로 부으면
         //   무관한 문서가 목록을 늘린다(실측: '클릭업'·'임베딩' 질의에 '이용약관'·'고객사 도입 48일차'가 딸려 왔다).
         //   이 채널의 목적은 하나다 — **제목이 곧 그 이름인 문서가 RRF 에 묻히지 않게 하는 것**. 본문 회수는 의미검색 몫이다.
-        api('/api/ui/knowledge/search?limit=8&q=' + qs).then((r) => put('know:grep', ((r && r.entries) || []).map(knowRow).filter(isTitleHit), my), () => put('know:grep', [], my));
-        api('/api/ui/v6/projects/search?limit=8&q=' + qs).then((r) => put('proj:grep', ((r && r.projects) || []).map((p) => ({
-            kind: 'proj', key: 'p:' + p.id,
-            title: String(p.name || p.title || ('프로젝트 #' + p.id)),
-            sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
-            href: '#/p/' + Number(p.project_id || p.id),
-        })).filter(isTitleHit), my), () => put('proj:grep', [], my));
-        api('/api/ui/sources?limit=6&q=' + qs).then((r) => put('src', ((r && r.entries) || []).map((s) => ({
-            kind: 'src', key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),
-            sub: [s.kind, (s.fields && s.fields.container_name) ? '#' + s.fields.container_name : ''].filter(Boolean).join(' · '),
-            // 자료엔 단독 주소가 없다 — 자료 목록을 그 검색어로 연 뒤 그 자료를 펴 준다(web/wiki.ts renderSources).
-            href: '#/knowledge/sources?q=' + qs + '&src=' + s.id,
-        })), my), () => put('src', [], my));
+        // ── similar = **절대 코사인** 채널 (2026-08-24) ────────────────────────────────────────
+        //  이 두 줄이 '관련도순' 을 가능하게 한다. semantic 의 RRF 점수로는 못 세운다(채널마다 1등이 동점).
+        //  min_score 로 **무관하면 아무것도 안 돌려준다** — "결과가 없습니다" 가 정직한 답이 되는 유일한 경로다.
+        call('know', () => {
+            api(`/api/ui/knowledge/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r) => put('know:sim', ((r && r.entries) || []).map((e) => ({
+                kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e),
+                href: '#/k/' + encodeURIComponent(e.name), score: Number(e.similarity) || 0, ident: String(e.name || ''),
+            })), my), () => put('know:sim', [], my));
+        });
+        call('proj', () => {
+            api(`/api/ui/v6/projects/similar?limit=12&min_score=${MIN_COSINE}&text=` + qs).then((r) => put('proj:sim', ((r && r.projects) || []).map((p) => ({
+                kind: 'proj', key: 'p:' + p.id, title: String(p.name || ('프로젝트 #' + p.id)),
+                sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
+                href: projHref(p), score: Number(p.similarity) || 0, ident: String(p.id),
+            })), my), () => put('proj:sim', [], my));
+        });
+        call('know', () => {
+            api('/api/ui/knowledge/search?limit=8&q=' + qs).then((r) => put('know:grep', ((r && r.entries) || []).map(knowRow).filter((h) => isTitleHit(h) || isIdentHit(h)), my), () => put('know:grep', [], my));
+        });
+        call('proj', () => {
+            api('/api/ui/v6/projects/search?limit=8&q=' + qs).then((r) => put('proj:grep', ((r && r.projects) || []).map((p) => ({
+                kind: 'proj', key: 'p:' + p.id,
+                title: String(p.name || p.title || ('프로젝트 #' + p.id)),
+                sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
+                href: projHref(p), ident: String(p.id),
+            })).filter((h) => isTitleHit(h) || isIdentHit(h)), my), () => put('proj:grep', [], my));
+        });
+        call('src', () => {
+            api('/api/ui/sources?limit=6&q=' + qs).then((r) => put('src', ((r && r.entries) || []).map((s) => ({
+                kind: 'src', key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),
+                sub: [s.kind, (s.fields && s.fields.container_name) ? '#' + s.fields.container_name : ''].filter(Boolean).join(' · '),
+                // 자료엔 단독 주소가 없다 — 자료 목록을 그 검색어로 연 뒤 그 자료를 펴 준다(web/wiki.ts renderSources).
+                href: '#/knowledge/sources?q=' + qs + '&src=' + s.id,
+            })), my), () => put('src', [], my));
+        });
         // 세션 이력 = 그 세션에 **내가 시킨 말**. 전 세션의 대화 파일을 훑으므로 늘 제일 늦게 온다(그래서 따로 그린다).
-        api('/api/ui/terminal/prompts/search?q=' + qs).then((r) => put('hist', ((r && r.results) || []).slice(0, 6).map((h) => ({
-            kind: 'hist', key: 'h:' + h.sessionId + ':' + (h.ts || '') + ':' + oneLine(h.text, 24),
-            title: oneLine(h.text), sub: String(h.label || h.sessionId), href: '#/s/' + encodeURIComponent(h.sessionId),
-        })), my), () => put('hist', [], my));
+        call('hist', () => {
+            api('/api/ui/terminal/prompts/search?q=' + qs).then((r) => put('hist', ((r && r.results) || []).slice(0, 6).map((h) => ({
+                kind: 'hist', key: 'h:' + h.sessionId + ':' + (h.ts || '') + ':' + oneLine(h.text, 24),
+                title: oneLine(h.text), sub: String(h.label || h.sessionId), href: '#/s/' + encodeURIComponent(h.sessionId),
+            })), my), () => put('hist', [], my));
+        });
     }
     /** 빈 칸일 때 — 최근에 본 세션. 스포트라이트를 열자마자 빈 판이면 '무엇을 칠 수 있는지'가 안 보인다. */
     function recent() {
@@ -303,6 +626,7 @@ export function omniOpen(seed) {
     document.addEventListener('keydown', onEsc, true);
     if (seed)
         input.value = seed;
+    paintChips();
     recent();
     paint();
     setNote('');

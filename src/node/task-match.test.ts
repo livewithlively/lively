@@ -1,13 +1,14 @@
 // 위탁 스케줄러 매칭(P2 #869) 단위 테스트 — 리소스 적합·용량·도커·노드지정·central 후순위.
 import { strict as assert } from "node:assert";
 import { matchNode, type SchedulableNode } from "./task-store.js";
+import { NODE_BASELINE_HARNESSES } from "./protocol.js";
 
 const res = (mem: number, disk = 100_000, cpus = 8, load1 = 0) =>
   ({ cpus, load1, mem_total_mb: mem * 2, mem_free_mb: mem, disk_total_mb: disk * 2, disk_free_mb: disk });
 const node = (id: string, over: Partial<SchedulableNode> = {}): SchedulableNode =>
-  ({ id, kind: "member", hasDocker: false, res: res(8000), capacity: 1, running: 0, ...over });
+  ({ id, kind: "member", hasDocker: false, res: res(8000), capacity: 1, running: 0, harnesses: ["claude", "codex", "shell"], ...over });
 const need = (over: Record<string, unknown> = {}) =>
-  ({ need_cpu: null, need_ram_mb: null, need_disk_mb: null, needs_docker: false, node_pref: null, ...over }) as never;
+  ({ need_cpu: null, need_ram_mb: null, need_disk_mb: null, needs_docker: false, node_pref: null, harness: "claude", ...over }) as never;
 
 // 메모리 여유 큰 노드 우선.
 assert.equal(matchNode(need(), [node("a", { res: res(4000) }), node("b", { res: res(16000) })])?.id, "b");
@@ -30,5 +31,18 @@ assert.equal(matchNode(need({ need_ram_mb: 100 }), [node("blind", { res: null })
 assert.equal(matchNode(need(), [node("blind", { res: null })])?.id, "blind");
 // 적합 노드 없음.
 assert.equal(matchNode(need({ need_ram_mb: 999_999 }), [node("a")]), null);
+
+// ── 하네스(#1884) — 노드가 **그 하네스를 실제로 띄울 수 있어야** 후보다(원격=hello 의 agent_harnesses · 중앙=detectHarnesses).
+//  종전엔 이 축이 없어 codex 위탁이 claude 만 깔린 노드에 배정돼 즉사했다(리소스는 남아도 하네스가 없다).
+assert.equal(matchNode(need({ harness: "codex" }), [node("claude-only", { harnesses: ["claude", "shell"], res: res(64000) }), node("both")])?.id, "both",
+  "메모리가 더 남아도 codex 를 못 띄우는 노드는 후보가 아니다");
+assert.equal(matchNode(need({ harness: "codex" }), [node("claude-only", { harnesses: ["claude", "shell"] })]), null,
+  "지원 노드가 하나도 없으면 null(호출자가 '하네스 미지원' 사유를 낸다)");
+// 구 노드(hello 에 harnesses 미보고) = 기준선 — claude·codex 는 되고 grok 은 안 된다("모르면 못 한다고 본다").
+assert.equal(matchNode(need({ harness: "grok" }), [node("old", { harnesses: [...NODE_BASELINE_HARNESSES] })]), null);
+assert.equal(matchNode(need({ harness: "claude" }), [node("old", { harnesses: [...NODE_BASELINE_HARNESSES] })])?.id, "old");
+assert.equal(matchNode(need({ harness: "codex" }), [node("old", { harnesses: [...NODE_BASELINE_HARNESSES] })])?.id, "old");
+// 하네스 없는 노드(harnesses: []) 는 어떤 위탁도 못 받는다.
+assert.equal(matchNode(need(), [node("none", { harnesses: [] })]), null);
 
 console.log("node/task-match.test OK");

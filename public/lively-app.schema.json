@@ -1,0 +1,490 @@
+{
+  "$ref": "#/definitions/LivelyAppManifest",
+  "definitions": {
+    "LivelyAppManifest": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "schema_version": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,31}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        },
+        "publisher": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 500
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        "min_core": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        },
+        "harness": {
+          "type": "object",
+          "properties": {
+            "plugin": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "default": "./"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-z0-9_*]+$"
+              },
+              "default": []
+            },
+            "ext_tools": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-z0-9_*]+$"
+              },
+              "default": []
+            },
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9.-]+(?::\\d+)?$"
+              },
+              "default": []
+            },
+            "db_sources": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "mcp_servers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "default": []
+            },
+            "http_tools": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "ui": {
+          "type": "object",
+          "properties": {
+            "pages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "entry": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "display": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "inline",
+                        "fullscreen",
+                        "pip"
+                      ]
+                    },
+                    "default": [
+                      "inline"
+                    ]
+                  }
+                },
+                "required": [
+                  "key",
+                  "title",
+                  "entry"
+                ],
+                "additionalProperties": false
+              },
+              "default": []
+            },
+            "widgets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "entry": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "surfaces": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "home",
+                        "aside",
+                        "launchpad"
+                      ]
+                    },
+                    "default": [
+                      "launchpad"
+                    ]
+                  }
+                },
+                "required": [
+                  "key",
+                  "title",
+                  "entry"
+                ],
+                "additionalProperties": false
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "instances": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "enum": [
+                "global",
+                "optional",
+                "required"
+              ],
+              "default": "optional"
+            },
+            "multiplicity": {
+              "type": "string",
+              "enum": [
+                "single",
+                "multiple"
+              ],
+              "default": "multiple"
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "system": {
+          "type": "object",
+          "properties": {
+            "renderer": {
+              "type": "string",
+              "enum": [
+                "session",
+                "browser",
+                "classic"
+              ]
+            },
+            "route": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "home": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2000
+            }
+          },
+          "required": [
+            "renderer"
+          ],
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "worker",
+              "default": "worker"
+            },
+            "entry": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*\\.(?:m?js)$"
+            },
+            "placement": {
+              "type": "string",
+              "enum": [
+                "any",
+                "central",
+                "remote"
+              ],
+              "default": "any"
+            },
+            "idle_timeout_sec": {
+              "type": "integer",
+              "minimum": 30,
+              "maximum": 3600,
+              "default": 300
+            },
+            "memory_mb": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 512,
+              "default": 256
+            }
+          },
+          "required": [
+            "entry"
+          ],
+          "additionalProperties": false
+        },
+        "csp": {
+          "type": "object",
+          "properties": {
+            "connect_domains": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253,
+                "pattern": "^(\\*|\\*\\.[a-z0-9-]+(\\.[a-z0-9-]+)+|[a-z0-9-]+(\\.[a-z0-9-]+)+|localhost)$"
+              },
+              "default": []
+            },
+            "resource_domains": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253,
+                "pattern": "^(\\*|\\*\\.[a-z0-9-]+(\\.[a-z0-9-]+)+|[a-z0-9-]+(\\.[a-z0-9-]+)+|localhost)$"
+              },
+              "default": []
+            },
+            "frame_domains": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253,
+                "pattern": "^(\\*|\\*\\.[a-z0-9-]+(\\.[a-z0-9-]+)+|[a-z0-9-]+(\\.[a-z0-9-]+)+|localhost)$"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "schedule": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "run": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "headless",
+                      "inject"
+                    ]
+                  },
+                  "prompt_asset": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "maxLength": 20000
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "key",
+              "schedule",
+              "run"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "tables": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                  },
+                  "columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "name",
+                  "columns"
+                ],
+                "additionalProperties": false
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "file": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            },
+            "required": [
+              "key",
+              "file"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "version"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "라이블리 앱 매니페스트 (lively-app.json)"
+}

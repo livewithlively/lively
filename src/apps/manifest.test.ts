@@ -15,6 +15,8 @@ test("최소 매니페스트 통과 + 기본값 채움(새 필드 부재 엣지)
   assert.deepEqual(m.permissions.tools, []);
   assert.deepEqual(m.permissions.hosts, []);
   assert.deepEqual(m.ui.pages, []);
+  assert.deepEqual(m.instances, { project: "optional", multiplicity: "multiple" });
+  assert.equal(m.system, undefined);
   assert.deepEqual(m.jobs, []);
   assert.deepEqual(m.data.tables, []);
 });
@@ -31,7 +33,7 @@ const REJECTS: Array<{ what: string; patch: (m: Record<string, unknown>) => void
   { what: "admin scope 선언", patch: (m) => { m.permissions = { scopes: ["admin"] }; } },
   { what: "runtime scope 선언", patch: (m) => { m.permissions = { scopes: ["runtime"] }; } },
   { what: "알 수 없는 scope", patch: (m) => { m.permissions = { scopes: ["superuser"] }; } },
-  { what: "알 수 없는 최상위 키(strict)", patch: (m) => { (m as Record<string, unknown>).extra = 1; } },
+  // (최상위 미지 키는 #1780 v2 §7-1 전방호환으로 **통과**한다 — 아래 H6 테스트. 중첩 미지 키는 여전히 거부.)
   { what: "permissions 알 수 없는 키(strict)", patch: (m) => { m.permissions = { bogus: 1 }; } },
   { what: "host 에 스킴 포함", patch: (m) => { m.permissions = { hosts: ["https://x.com"] }; } },
   { what: "ui.pages key 중복", patch: (m) => { m.ui = { pages: [{ key: "a", title: "A", entry: "a.html" }, { key: "a", title: "B", entry: "b.html" }] }; } },
@@ -99,3 +101,101 @@ test("APP_ID_RE 경계값", () => {
   assert.ok(!APP_ID_RE.test("a"));
   assert.ok(!APP_ID_RE.test("a".repeat(33)));
 });
+
+// ── csp 선언 (#1780 SDK — MCP Apps 채택) ────────────────────────────────────
+//  「입력 × 기대」 표: 미선언 = 아무것도 안 열림 / frame 은 * 허용(남의 페이지를 불투명 오리진으로 싣기만) /
+//  connect 의 * 는 거부(데이터 유출 통로) / 호스트 형식 검증 / $schema 는 통과하되 그 밖의 미지 키는 여전히 거부.
+
+test("csp 미선언 → 기본값 빈 배열(= 네트워크·프레임 0)", () => {
+  const m = parseAppManifest(base());
+  assert.deepEqual(m.csp.connect_domains, []);
+  assert.deepEqual(m.csp.resource_domains, []);
+  assert.deepEqual(m.csp.frame_domains, []);
+});
+
+test("csp.frame_domains 는 '*' 를 허용한다(브라우저형 앱)", () => {
+  const m = parseAppManifest({ ...base(), csp: { frame_domains: ["*"] } });
+  assert.deepEqual(m.csp.frame_domains, ["*"]);
+});
+
+test("csp.connect_domains 의 '*' 는 거부한다(유출 통로 — 명시 호스트만)", () => {
+  assert.throws(() => parseAppManifest({ ...base(), csp: { connect_domains: ["*"] } }), /connect_domains/);
+  // 명시 호스트·와일드카드 서브도메인은 통과.
+  const m = parseAppManifest({ ...base(), csp: { connect_domains: ["api.example.com", "*.corp.example.com"] } });
+  assert.deepEqual(m.csp.connect_domains, ["api.example.com", "*.corp.example.com"]);
+});
+
+test("csp 도메인 형식 위반 거부(스킴·경로·공백)", () => {
+  for (const bad of ["https://x.com", "x.com/path", "a b", "http://*", ""]) {
+    assert.throws(() => parseAppManifest({ ...base(), csp: { frame_domains: [bad] } }), /csp|매니페스트/);
+  }
+});
+
+test("$schema 는 통과(편집기 자동완성) — 최상위 미지 키도 통과(#1780 v2 §7-1 전방호환), 중첩 미지 키는 거부", () => {
+  const m = parseAppManifest({ ...base(), $schema: "https://dev.lvly.io/ui/lively-app.schema.json" });
+  assert.equal(m.id, "slack-dash");
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), nope: 1 }));
+  assert.throws(() => parseAppManifest({ ...base(), ui: { nope: 1 } }), /매니페스트/);
+});
+
+// ── AppInstance 선언(#1780 v2.1) ────────────────────────────────────────────
+test("instances.project 3정책과 multiplicity를 정규화한다", () => {
+  for (const project of ["global", "optional", "required"] as const) {
+    const m = parseAppManifest({ ...base(), instances: { project, multiplicity: "single" } });
+    assert.deepEqual(m.instances, { project, multiplicity: "single" });
+  }
+});
+
+test("instances 중첩 미지 키와 잘못된 정책은 거부한다", () => {
+  assert.throws(() => parseAppManifest({ ...base(), instances: { project: "sometimes" } }), /instances/);
+  assert.throws(() => parseAppManifest({ ...base(), instances: { project: "optional", typo: true } }), /instances/);
+});
+
+test("builtin system renderer 선언은 파싱·보존하고 형식은 제한한다", () => {
+  const m = parseAppManifest({ ...base(), system: { renderer: "browser", home: "https://www.google.com/" } });
+  assert.deepEqual(m.system, { renderer: "browser", home: "https://www.google.com/" });
+  assert.throws(() => parseAppManifest({ ...base(), system: { renderer: "native-code" } }), /system/);
+  assert.throws(() => parseAppManifest({ ...base(), system: { renderer: "session", secret: true } }), /system/);
+});
+
+test("runtime은 worker 하나만 — entry 단축형과 중앙·원격 동일 계약을 정규화한다", () => {
+  const m = parseAppManifest({ ...base(), runtime: { entry: "main.mjs", placement: "remote" } });
+  assert.deepEqual(m.runtime, { kind: "worker", entry: "main.mjs", placement: "remote", idle_timeout_sec: 300, memory_mb: 256 });
+  assert.throws(() => parseAppManifest({ ...base(), runtime: { kind: "external", entry: "main.mjs" } }), /runtime/);
+  assert.throws(() => parseAppManifest({ ...base(), runtime: { kind: "worker", entry: "../main.mjs" } }), /runtime/);
+  assert.throws(() => parseAppManifest({ ...base(), runtime: { kind: "worker", entry: "main.mjs", placement: "gateway-only" } }), /runtime/);
+});
+
+// ── #1780 v2 §7-1(사양 H6) — 전방호환: 최상위 미지 키 통과 · schema_version · 설치 게이트 ──
+import { assertInstallableManifest, SUPPORTED_MANIFEST_SCHEMA } from "./manifest.js";
+import { HttpError } from "../http-error.js";
+
+test("정식 runtime은 정규화되고, 그 밖의 최상위 미지 키는 보존된다(롤백 재파싱 안전)", () => {
+  const m = parseAppManifest({ ...base(), runtime: { kind: "worker", entry: "main.js" }, triggers: [{ kind: "cron" }] });
+  assert.deepEqual((m as Record<string, unknown>).runtime, { kind: "worker", entry: "main.js", placement: "any", idle_timeout_sec: 300, memory_mb: 256 });
+  assert.deepEqual((m as Record<string, unknown>).triggers, [{ kind: "cron" }]);
+});
+
+test("중첩 미지 키(permissions.foo)는 종전대로 400", () => {
+  assert.throws(() => parseAppManifest({ ...base(), permissions: { foo: 1 } }), (e: unknown) => e instanceof HttpError && e.status === 400);
+});
+
+test("schema_version 없음 → 1 로 정규화", () => {
+  assert.equal(parseAppManifest(base()).schema_version, 1);
+});
+
+test("schema_version 2 는 파싱(재파싱)엔 성공하지만 설치 게이트는 400", () => {
+  const m = parseAppManifest({ ...base(), schema_version: 2 });
+  assert.equal(m.schema_version, 2);
+  assert.throws(() => assertInstallableManifest(m), (e: unknown) => e instanceof HttpError && e.status === 400 && /schema_version/.test(e.message));
+});
+
+test("schema_version 경계: 지원 상한(1)은 설치 통과", () => {
+  assert.doesNotThrow(() => assertInstallableManifest(parseAppManifest({ ...base(), schema_version: SUPPORTED_MANIFEST_SCHEMA })));
+});
+
+for (const [what, v] of [["0", 0], ["1.5", 1.5], ["'1'(문자열)", "1"]] as const) {
+  test(`schema_version ${what} 는 400`, () => {
+    assert.throws(() => parseAppManifest({ ...base(), schema_version: v }), (e: unknown) => e instanceof HttpError && e.status === 400);
+  });
+}

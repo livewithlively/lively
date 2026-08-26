@@ -14,8 +14,8 @@
 //  ⚠ 재수출 집합은 분할 전과 동일해야 한다(export 집합 diff 0 이 이 리팩토링의 계약). 새 심볼을 여기 늘리지 말 것 —
 //   내부 공유용 승격 export(tmux()·paneAwaitingInput 등)는 각 모듈에서 직접 import 한다(배럴 비노출).
 export {
-  TMUX_BIN, PANE_LOCALE, roots, sharedRoot, HARNESSES, modeEnvArgs, themeEnvArgs, normalizeTheme,
-  type Root, type FlagDef, type Harness, type SessionInfo, type CreateInput,
+  TMUX_BIN, PANE_LOCALE, roots, sharedRoot, HARNESSES, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, harnessLiveThemeSteps, harnessLiveThemeSupported,
+  type Root, type FlagDef, type Harness, type SessionInfo, type CreateInput, type PreparedAppSession,
 } from "./catalog.js";
 export {
   listSessionPanePids, isSessionGoneError, sessionGone, tidyHistory,
@@ -24,7 +24,7 @@ export {
 export {
   memberOsUser, resolveRootPath, rootRelOf, profileConfigDir, resolveProfileConfigDir, profileStatus, profileStatusFor,
   provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, ensureMemberOsUser,
-  sessionOsUser, userOsUser, type AiAccountStatus,
+  sessionOsUser, userOsUser, harnessHasCredential, type AiAccountStatus,
 } from "./profiles.js";
 export {
   detectAwaiting, isReportedPhase, PHASE_TTL_SEC, parseReportedPhase, isPhaseFresh, resolveAgentPhase,

@@ -123,6 +123,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: 테스트 격리 preflight (호스트 효과 권한 상승 금지)
+        run: node kit/testlib/test-isolation-lint.test.mjs
       # 끝까지 실행하고 실패를 모아 보고(run-tests 러너와 같은 정책 — 실패 1건이 나머지를 가리지 않게).
       # ⚠ desktop/ 도 포함한다 (#1541, 2026-08-11). 데스크톱 앱 코어는 kit 과 같은 성질이다 —
       #  **멤버 PC 에서 실행되고, 외부 의존성이 없다**(node 내장 + 자기 모듈). 그런데 여기서 빠져 있어서
@@ -132,6 +134,12 @@ jobs:
       #  이제 desktop-core 의 J8('진짜로 띄워 본다')이 이 러너에서 돌아 같은 계열을 막는다.
       - name: kit·desktop 테스트 (윈도우)
         shell: pwsh
+        # scripts/run-tests.mjs 를 거치지 않는 직접 실행 루프도 공통 러너와 같은 capability를 강제한다.
+        # 테스트가 필요한 자식 프로세스·loopback mock만 sandbox가 허용하고, 실 호스트 효과는 계속 deny다.
+        env:
+          LIVELY_HOST_EFFECTS: deny
+          LIVELY_HOST_EFFECTS_TEST_MODE: sandbox
+          LIVELY_NO_BROWSER: '1'
         run: |
           $files = Get-ChildItem -Path kit,desktop -Recurse -Filter *.test.mjs |
                    Where-Object { $_.Name -notlike '*.itest.mjs' -and $_.FullName -notlike '*node_modules*' } | Sort-Object FullName
@@ -150,3 +158,10 @@ jobs:
             exit 1
           }
           Write-Host "=== 윈도우 $($files.Count)건 전부 통과 ==="
+      # 실제 HKCU User PATH는 개발자 PC가 아니라 이 disposable 러너에서만 건드린다. 스크립트 자체도
+      # GITHUB_ACTIONS+RUNNER_OS+명시 capability 네 조건이 아니면 exit 2로 거부하며 install→uninstall 원복을 단언한다.
+      - name: Windows User PATH 호스트 효과 왕복 (disposable runner)
+        shell: pwsh
+        env:
+          LIVELY_HOST_EFFECTS: allow
+        run: node scripts/windows-host-effects.ci.mjs

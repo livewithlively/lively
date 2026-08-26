@@ -1,5 +1,6 @@
-// v2/tabs.ts — 셸 안 탭(#1719 상민님 2026-08-18: "여러 탭 띄우고 편리하게 이동, 탭은 프로젝트·대화창·메인·앱,
-//  우측 사이드바 상태까지 같이 저장되고 바뀌어야 함").
+// v2/tabs.ts — 열린 앱 인스턴스의 DOM 유지 엔진(#1719, #1883).
+//  #1883부터 눈에 보이는 목록은 좌측 사이드바가 맡고, 이 모듈의 strip은 그리지 않는다. 탭이라는 내부 이름은
+//  저장 형식과 화면별 DOM·터미널·우패널 상태를 안전하게 보존하기 위해 유지한다.
 //
 //  ── 방식: DOM 유지형 ──
 //  탭마다 가운데(center)·우패널(aside) 컨테이너 한 쌍을 만들어 **숨겼다 보였다** 한다(재렌더 없음).
@@ -17,6 +18,7 @@
 //    **새 탭으로** 여는 여느 화면이고, 그 탭에서 세션을 열면 그 자리가 곧 그 세션이 된다(브라우저 새 탭 문법).
 //  · **탭 끌어 순서 바꾸기** — 모든 탭이 같은 자격이라 어느 것이든 끌어 옮긴다.
 import { anchoredPopover, el, sv } from '../core.js';
+import { EMBEDDED } from './embed.js';
 
 export interface ShellTab {
   id: string;
@@ -27,13 +29,23 @@ export interface ShellTab {
   rendered: boolean;           // 게으른 렌더 — 처음 활성화될 때 그린다
   noAside: boolean;            // 앱 프레임 탭은 우패널이 없다
   chat: { id: string; destroy(): void; update(t: any): void; setFilesOn(on: boolean): void } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
+  appInstanceId: string | null; // 이 탭이 연 AppInstance — 탭:인스턴스 = 1:1. legacy 화면은 null.
+  appId: string | null;
+  appView: { destroy(): void } | null; // generic 앱 iframe 등 탭별 정리 핸들
   seq: number;                 // 이 탭의 렌더 순번(늦게 온 비동기 렌더 무시)
+  //  아직 안 보낸 지시(#2037) — 홈([새 작업])의 입력칸에 쳐 두고 아직 [시키기]를 안 누른 글.
+  //  DOM 이 곧 상태라는 이 모듈의 원칙에는 구멍이 하나 있다: **그 탭이 다른 화면으로 바뀌면 DOM 째로 사라진다**
+  //  (홈 탭은 '거쳐 가는 빈 탭'이라 그 위에 다른 화면이 덮인다 — main.ts onHash ⓪). 그래서 이 한 값만은
+  //  DOM 밖에도 둔다 — 새로고침·앱 재시작도 넘어가도록 저장본(save)에 함께 실린다.
+  draft?: string;
 }
 
 export interface TabsHooks {
   /** 라우트 → 표시 제목·우패널 유무·상태(아이콘 색)·아이콘 종류. 데이터가 늦게 와도 paint() 때마다 다시 묻는다.
    *  kind 는 라우트만으로는 안 갈리는 아이콘을 정한다 — 지금은 '새 세션 자리'(프로젝트 주소인데 아직 세션이 없다). */
-  titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string };
+  //  provisional = 돌려준 이름이 **id 꼬리 폴백**이다(이름이 아니다 — main.ts titleFor).
+  //   저장본을 그 값으로 덮으면 안 된다(#2022).
+  titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string; provisional?: boolean };
   /** 탭이 활성화됐다 — fresh 면 아직 안 그린 탭(렌더 필요). hash 반영·no-aside 토글은 호출자가 한다. */
   onActivate(tab: ShellTab, fresh: boolean): void;
   onClose(tab: ShellTab): void;
@@ -45,6 +57,10 @@ export interface TabsHooks {
 
 const STORE_KEY = 'lively_v2_tabs';
 
+//  ⚠ 끼워 넣은 판(미리보기 프레임 안)은 **탭을 기억하지도 기억되지도 않는다** — 미리보기도 주소가 같은
+//   사이트라 저장소를 바깥과 공유한다. 복원하면 바깥이 보던 탭이 프레임 안에 통째로 되살아나 정작 보려던
+//   화면이 안 뜨고(원준 2026-08-21 신고), 저장하면 바깥 사람의 탭 목록을 덮어쓴다. 자세한 배경은 embed.ts.
+
 /** 라우트 정규화 키 — 같은 화면인지 비교(홈의 '', '#/', '#/dashboard' 는 한 화면). */
 export function routeKey(route: string): string {
   const h = String(route || '').replace(/^#\/?/, '');
@@ -52,7 +68,7 @@ export function routeKey(route: string): string {
   const segs = (q >= 0 ? h.slice(0, q) : h).split('/').filter(Boolean);
   const p = segs[0] || '';
   if (!p || p === 'dashboard') return 'home';
-  if (p === 'p' || p === 's' || p === 'app') return p + ':' + decodeURIComponent(segs[1] || '');
+  if (p === 'p' || p === 's' || p === 'i' || p === 'app') return p + ':' + decodeURIComponent(segs[1] || '');
   return 'raw:' + h;
 }
 
@@ -64,6 +80,8 @@ export interface TabsApi {
   current(): ShellTab | null;
   add(route: string, opts?: { activate?: boolean; title?: string }): ShellTab;
   activate(tab: ShellTab): void;
+  /** 화면 표현이 상단 탭이든 좌측 앱 목록이든 같은 닫기 의미를 쓴다. */
+  close(tab: ShellTab): void;
   /** 활성 탭의 라우트가 (hashchange 로) 바뀌었다 — 제목 다시 계산·저장. */
   routed(tab: ShellTab): void;
   find(route: string): ShellTab | undefined;
@@ -77,15 +95,22 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   const tabs: ShellTab[] = [];
   let activeTab: ShellTab | null = null;
   let seq = 0;
-  const strip = el('div', { class: 'v2-tabs', role: 'tablist', 'aria-label': '열린 화면' });
+  // 줄은 두 겹이다(원준 2026-08-20 "[모든 탭] 단추가 다른 탭을 가린다"):
+  //  · strip(.v2-tabs) — 자리만 잡는 바깥 틀. 모바일 상단 바가 통째로 옮겨 가는 것도 이 요소다.
+  //  · scroll(.v2-tabs-scroll) — 탭이 눕고 **여기만 굴러간다**.
+  //  · [모든 탭] 은 그 바깥에 붙는 **끝막이** — 종전엔 굴러가는 줄 안에 sticky 로 얹혀 있어 지나가는 탭을 덮었고,
+  //    no-aside 모드의 오른쪽 여백(112px) 때문에 줄 끝이 아니라 어중간한 자리에 떠 있었다(실측: 1336px, 줄 끝 1500px).
+  const strip = el('div', { class: 'v2-tabs' });
+  const scroll = el('div', { class: 'v2-tabs-scroll', role: 'tablist', 'aria-label': '열린 화면' });
 
-  function mkTab(route: string, title?: string): ShellTab {
+  function mkTab(route: string, title?: string, draft?: string): ShellTab {
     const t: ShellTab = {
       id: 'tab' + (++seq),
       route, title: title || hooks.titleFor(route).title, noAside: hooks.titleFor(route).noAside,
       center: el('div', { class: 'v2-tabpane', hidden: true }),
       aside: el('div', { class: 'v2-aside-pane', hidden: true }),
-      rendered: false, chat: null, seq: 0,
+      rendered: false, chat: null, appInstanceId: null, appId: null, appView: null, seq: 0,
+      draft: draft || '',
     };
     centerHost.append(t.center);
     asideHost.append(t.aside);
@@ -94,9 +119,11 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   }
 
   function save(): void {
+    if (EMBEDDED) return;
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        tabs: tabs.map((t) => ({ route: t.route, title: t.title })),
+        //  draft(아직 안 보낸 지시)는 있을 때만 싣는다 — 빈 문자열까지 적으면 저장본이 쓸데없이 커진다.
+        tabs: tabs.map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
         active: activeTab ? tabs.indexOf(activeTab) : 0,
       }));
     } catch (_) { /* noop */ }
@@ -112,9 +139,28 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     paint(); save();
   }
 
+  // ── 연달아 닫기(원준 2026-08-20) ────────────────────────────────────────────
+  //  탭은 남은 폭을 나눠 갖는다(flex 1 1 0). 그래서 하나 닫으면 나머지가 **즉시 넓어져** ×가 커서 밑에서 달아나고,
+  //  같은 자리에서 두 번째를 닫으려면 매번 마우스를 다시 찾아가야 했다. 브라우저가 쓰는 방법을 그대로 쓴다 —
+  //  **닫는 동안에는 탭 폭을 그대로 얼려 둔다**(그러면 오른쪽 탭이 방금 닫힌 자리로 정확히 미끄러져 들어와 ×가
+  //  커서 밑에 그대로 온다). 얼음은 **줄에서 마우스가 벗어나면** 녹는다.
+  let frozenW: number | null = null;
+  function freezeWidths(): void {
+    const one = scroll.querySelector('.v2-tab') as HTMLElement | null;
+    if (one) { frozenW = Math.round(one.getBoundingClientRect().width); strip.classList.add('freeze'); }
+  }
+  function thaw(): void {
+    if (frozenW == null) return;
+    frozenW = null;
+    strip.classList.remove('freeze');
+    paint();
+  }
+  strip.addEventListener('pointerleave', thaw);
+
   function close(tab: ShellTab): void {
     const i = tabs.indexOf(tab);
     if (i < 0) return;
+    freezeWidths();
     tabs.splice(i, 1);
     hooks.onClose(tab);
     tab.center.remove(); tab.aside.remove();
@@ -126,6 +172,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   }
 
   function add(route: string, opts?: { activate?: boolean; title?: string }): ShellTab {
+    if (frozenW != null) { frozenW = null; strip.classList.remove('freeze'); }   // 탭이 늘면 언 폭은 의미가 없다
     const t = mkTab(route, opts?.title);
     if (opts?.activate !== false) activate(t); else { paint(); save(); }
     return t;
@@ -140,6 +187,9 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       : k === 'home' ? ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5']
       : k.startsWith('p:') ? ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']
       : k.startsWith('s:') ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z']
+      // 아카이브(상자)·휴지통(#1851) — 사이드바 발치의 두 행과 같은 글리프(side.ts glyph)
+      : k === 'raw:archive' ? ['M3 6h18v4H3z', 'M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9', 'M10 14h4']
+      : k === 'raw:trash' ? ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13', 'M10 11v6M14 11v6']
       : ['M4 5h16v12H4z', 'M4 9h16'];
     // 상태는 **아이콘 색**으로 말한다(원준 2026-08-20) — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트.
     //  글자·바탕은 '켜진 탭인가'만 말하므로 두 축이 섞이지 않는다.
@@ -172,7 +222,8 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     //  영영 안 불리고 **눌러도 탭이 안 닫혔다**(원준 2026-08-20 신고: 지식 탭 × 가 먹지 않음). 이름 편집칸이
     //  `onpointerdown: stopPropagation` 으로 자기를 지키는 것과 같은 방어를, 단추 쪽은 여기 한 곳에서 한다.
     if ((e.target as HTMLElement | null)?.closest('button')) return;
-    const els = tabs.map((x) => (strip as HTMLElement).querySelector('[data-tab="' + x.id + '"]') as HTMLElement);
+    // 순서 계산은 **모든 탭 기준**(다른 세션의 최신 판) + 탭 노드는 **굴러가는 안쪽 줄**에서 찾는다(끝막이 분리).
+    const els = tabs.map((x) => (scroll as HTMLElement).querySelector('[data-tab="' + x.id + '"]') as HTMLElement);
     if (els.some((n) => !n)) return;
     const from = tabs.indexOf(t);
     if (from < 0) return;
@@ -284,7 +335,11 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     if (drag || editLocked()) return; // 끌거나 고치는 중에 다시 그리면 그 동작이 끊긴다(20초 폴링도 paint 를 부른다)
     const kids: HTMLElement[] = tabs.map((t) => {
       const info = hooks.titleFor(t.route);
-      t.title = info.title; t.noAside = info.noAside;
+      // ★ id 꼬리 폴백(provisional)으로 **저장본을 덮지 않는다**(#2022). 종전엔 무조건 덮고 곧바로 save() 해서,
+      //  이름을 한 번도 못 들어 본 세션이 그 자리에서 `세션 <id꼬리>` 로 굳었다(#2028 의 기억은 그런 세션을
+      //  아직 모른다 — 그 기억은 '한 번 본 적 있는' 이름만 지킨다).
+      if (!info.provisional || !t.title) t.title = info.title;
+      t.noAside = info.noAside;
       // 줄에 눕는 이름은 **짧게** — 세션 이름이 한 문단인 경우가 흔하다(첫 지시가 그대로 이름이 된다).
       //  전문은 툴팁과 [모든 탭] 목록이 갖는다(정보를 버리지 않는다).
       const short = t.title.length > 26 ? t.title.slice(0, 26).trimEnd() + '…' : t.title;
@@ -305,6 +360,8 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
           class: 'x', type: 'button', 'aria-label': `「${t.title}」 탭 닫기`, title: '탭 닫기',
           onclick: (e: Event) => { e.stopPropagation(); close(t); },
         }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-xic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))));
+      // 닫는 중이면 폭을 얼린 값으로 고정한다(위 주석) — 오른쪽 탭이 방금 닫힌 자리로 그대로 미끄러져 온다.
+      if (frozenW != null) node.style.flex = '0 0 ' + frozenW + 'px';
       return node;
     });
     // ＋(새 빈 탭)는 줄에 두지 않는다 — 새 탭을 여는 자리는 사이드바 맨 위 [새 작업] 하나다(같은 일을 두 곳에
@@ -312,20 +369,19 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     // ── 탭이 많아지면(원준 2026-08-20 "이름이 제대로 안 보인다") ──────────────────
     //  ① 탭은 일정 폭 아래로는 줄지 않는다(CSS min-width) → 글자가 뭉개지는 대신 **줄이 굴러간다**.
     //  ② 활성 탭은 더 넓게 — 지금 보고 있는 것만은 늘 읽혀야 한다.
-    //  ③ 그래도 다 안 보이므로 **[모든 탭]** 을 둔다: 전문 이름·상태로 찾아 누르고 거기서 닫을 수도 있다.
+    //  ③ 그래도 다 안 보이므로 오른쪽 끝에 **[모든 탭]** 을 둔다: 전문 이름·상태로 찾아 누르고 거기서 닫을 수도 있다.
     //     (브라우저 탭의 ⌄ 목록과 같은 문법 — 줄 밖으로 밀린 탭이 사라진 것처럼 보이지 않게 하는 장치다.)
-    //     자리는 **줄 맨 왼쪽**(상민님 2026-08-20). 오른쪽 끝은 데스크톱에선 창 버튼(최소화·닫기)과 끌 손잡이가
-    //     쓰는 자리라, 목록 단추를 거기 두면 창 조작부와 화면 조작부가 한 덩어리로 붙어 보인다.
     const menuBtn = el('button', {
       class: 'v2-tab-menu', type: 'button', title: '열린 탭 전체를 목록으로 봅니다',
       'aria-label': `열린 탭 ${tabs.length}개 — 목록`,
       onclick: (e: MouseEvent) => openTabMenu(e.currentTarget as HTMLElement),
     }, el('span', { class: 'n', text: String(tabs.length) }),
       sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 9l6 6 6-6' })));
-    strip.replaceChildren(menuBtn, ...kids);
+    scroll.replaceChildren(...kids);
+    strip.replaceChildren(scroll, menuBtn);
     // 탭이 줄 폭을 넘치면(모바일 상단 바·좁은 창) 활성 탭이 보이게 가로로만 굴린다 — 세로는 건드리지 않는다(nearest = 이미 보이면 0).
-    const on = strip.querySelector('.v2-tab.on') as HTMLElement | null;
-    if (on && strip.scrollWidth > strip.clientWidth) on.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    const on = scroll.querySelector('.v2-tab.on') as HTMLElement | null;
+    if (on && scroll.scrollWidth > scroll.clientWidth) on.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   }
 
   /** [모든 탭] — 전문 이름으로 찾아가는 목록. 줄에서 잘린 이름을 여기서는 통째로 본다. */
@@ -359,17 +415,17 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   }
 
   // 가로 줄에서 세로 휠은 쓸모가 없다 — 트랙패드·마우스 어느 쪽으로도 줄이 굴러가게 바꿔 준다.
-  strip.addEventListener('wheel', (e: WheelEvent) => {
+  scroll.addEventListener('wheel', (e: WheelEvent) => {
     if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
-    if (strip.scrollWidth <= strip.clientWidth) return;
+    if (scroll.scrollWidth <= scroll.clientWidth) return;
     e.preventDefault();
-    strip.scrollLeft += e.deltaY;
+    scroll.scrollLeft += e.deltaY;
   }, { passive: false });
 
-  // 저장된 탭 복원 — 라우트·제목만(내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
+  // 저장된 탭 복원 — 라우트·제목·아직 안 보낸 지시만(화면 내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
   let restoredActive = 0;
   try {
-    const st = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    const st = EMBEDDED ? null : JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
     if (st && Array.isArray(st.tabs)) {
       // ⚠ 복원에는 **중복 제거**가 필요하다 — 저장본에 같은 화면이 두 번 들어 있으면(옛 버그가 만든 잔재도) 그대로
       //  탭 두 개로 되살아나고, 그 뒤로는 find() 가 첫 번째만 잡으므로 둘째가 영영 남는다(원준 2026-08-20 신고).
@@ -381,7 +437,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
         const k = routeKey(t.route);
         if (seen.has(k)) return;
         seen.add(k);
-        mkTab(t.route, typeof t.title === 'string' ? t.title : undefined);
+        mkTab(t.route, typeof t.title === 'string' ? t.title : undefined, typeof t.draft === 'string' ? t.draft : undefined);
         if (i === wantIdx) want = tabs.length - 1;
       });
       restoredActive = Math.min(Math.max(0, want >= 0 ? want : 0), Math.max(0, tabs.length - 1));
@@ -392,8 +448,8 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     strip, tabs,
     active: () => { if (!activeTab) activate(tabs[restoredActive] || mkTab('#/')); return activeTab!; },
     current: () => activeTab,
-    add, activate,
-    routed: (tab) => { const info = hooks.titleFor(tab.route); tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
+    add, activate, close,
+    routed: (tab) => { const info = hooks.titleFor(tab.route); if (!info.provisional || !tab.title) tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
     find: (route) => tabs.find((t) => routeKey(t.route) === routeKey(route)),
     initial: () => tabs[restoredActive] || null,
     paint, save,

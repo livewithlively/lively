@@ -41,6 +41,75 @@ export function applyTheme() {
         de.setAttribute('data-theme', p);
     document.dispatchEvent(new CustomEvent('lv:theme-change'));
 }
+// ── AI 하네스 테마 동기화(#1683 후속) ──────────────────────────────────────
+//  터미널 **안에서 도는 하네스**(Claude Code·Codex·OpenCode…)도 앱 테마로 띄울지. 기본 켜짐.
+//  끄면 각 하네스가 자기 설정에 저장해 둔 테마를 그대로 쓴다 — "내 하네스 테마는 내가 고른 대로" 를
+//  원하는 사람을 위한 스위치다. 터미널 **화면**(xterm·크롬)은 이 스위치와 무관하게 늘 앱을 따른다.
+//  ⚠ 이미 떠 있는 세션에는 적용되지 않는다 — 하네스는 시작할 때 테마를 정하고 실행 중엔 다시 읽지 않는다(실측).
+const HARNESS_KEY = 'lv:theme-harness';
+export function harnessThemeSync() {
+    try {
+        return localStorage.getItem(HARNESS_KEY) !== '0';
+    }
+    catch {
+        return true;
+    }
+}
+export function setHarnessThemeSync(on) {
+    try {
+        if (on)
+            localStorage.removeItem(HARNESS_KEY);
+        else
+            localStorage.setItem(HARNESS_KEY, '0');
+    }
+    catch { /* 스토리지 차단 — 이 탭에선 기본값(켜짐)으로 동작한다 */ }
+    document.dispatchEvent(new CustomEvent('lv:theme-change'));
+}
+// ── 현재 열린 탭 모두 적용(#1683 후속2) ────────────────────────────────────
+//  켜 두면 테마를 바꿀 때 **지금 열려 있는 세션 탭**의 하네스까지 그 자리에서 바꾼다.
+//  왜 옵션인가: 이건 그 세션 입력창에 하네스의 테마 명령을 넣는 일이다 — 사람이 쓰던 초안 뒤에 한 줄이
+//  붙을 수 있다. 그래서 **사람이 켜 둔 경우에만** 하고, 자동으로는 절대 하지 않는다.
+//  ⚠ 하네스마다 지원 여부가 다르다(서버 catalog 의 HARNESS_LIVE_THEME). 결과는 토스트로 그대로 알린다 —
+//   "3개 바꿨어요 · 1개는 이 하네스가 지원하지 않아요". 조용히 성공으로 접으면 왜 한 탭만 다른지 알 수 없다.
+const OPEN_TABS_KEY = 'lv:theme-open-tabs';
+export function applyToOpenTabs() {
+    try {
+        return localStorage.getItem(OPEN_TABS_KEY) === '1';
+    }
+    catch {
+        return false;
+    }
+}
+export function setApplyToOpenTabs(on) {
+    try {
+        if (on)
+            localStorage.setItem(OPEN_TABS_KEY, '1');
+        else
+            localStorage.removeItem(OPEN_TABS_KEY);
+    }
+    catch { /* 스토리지 차단 — 이 탭에선 꺼진 것으로 동작한다 */ }
+}
+/** 열린 세션 탭들의 하네스 테마를 지금 바꾼다. 호출부(테마 전환 직후)가 결과를 사람에게 알린다. */
+export async function pushThemeToOpenTabs(ids) {
+    if (!ids.length)
+        return { applied: 0, notes: [] };
+    const theme = isDark() ? 'dark' : 'light';
+    const { api } = await import('./lib/net.js');
+    const out = await api('/api/ui/terminal/sessions/theme', {
+        method: 'POST', body: JSON.stringify({ theme, ids }),
+    });
+    const rows = Array.isArray(out?.results) ? out.results : [];
+    // 같은 사유는 한 줄로 묶는다 — 탭이 여러 개면 같은 말이 반복돼 읽히지 않는다.
+    const byReason = new Map();
+    for (const r of rows) {
+        if (r.status === 'applied')
+            continue;
+        const key = String(r.detail || r.status);
+        byReason.set(key, (byReason.get(key) || 0) + 1);
+    }
+    const notes = [...byReason.entries()].map(([why, n]) => `${n}개는 ${why}`);
+    return { applied: Number(out?.applied) || 0, notes };
+}
 let watching = false;
 /** 다른 탭·임베드 iframe 에서의 변경(storage)과 OS 설정 변경(matchMedia)을 따라간다. 한 번만 배선. */
 export function watchTheme() {

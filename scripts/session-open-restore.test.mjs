@@ -69,6 +69,12 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const status = read("web/session-status.ts");
   ok(/export function shouldRestoreOnOpen/.test(status),
     "③-d 판정은 공용 모듈에 있다(화면마다 다른 술어를 쓰지 않게)");
+  // #1851 — 휴지통에 있는 세션은 열어도 되살리지 않는다(판정표 한 줄). 화면(views.ts)이 trashed 를 판정표에 넘겨야
+  //  이 규칙이 실제로 작동한다 — 판정표만 고치고 호출처가 안 넘기면 조용히 무효가 된다.
+  ok(/trashed\?:\s*boolean/.test(status) && /!s\.trashed/.test(status),
+    "③-e 판정표가 trashed 를 받아 휴지통 세션은 되살리지 않는다");
+  ok(/autoResume:\s*shouldRestoreOnOpen\(\{[^}]*trashed:\s*isTrashedSess\(s\)/.test(views),
+    "③-f 화면이 휴지통 여부를 판정표에 넘긴다");
 }
 
 // ── ④ 세션 주소를 만드는 곳은 하나다 ────────────────────────────────────────────────

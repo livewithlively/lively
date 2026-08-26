@@ -1,0 +1,76 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   45-v2-side-swap.css — 곁칸이 절반을 넘으면 **메인으로 보는 칸이 가운데로 온다** (#1819 원준 2026-08-21)
+   짝: web/v2/side-swap.ts.
+   ⚠ 자리를 바꿀 때 **요소를 옮겨 붙이지 않는다** — 세션 화면은 iframe 이라 부모가 바뀌면 통째로 다시 로드된다.
+      여기서 하는 일은 격자 칸 지정(grid-column)뿐이고, 미끄러짐은 transform 으로만 준다.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── 자리바꿈 — 곁칸이 왼쪽, 세션이 오른쪽 ── */
+.pn-body.sw-left { grid-template-columns: var(--pn-side-w) 6px minmax(0, 1fr); }
+.pn-body.sw-left > .pn-col { grid-column: 3; grid-row: 1; }
+.pn-body.sw-left > .v2-split-x { grid-column: 2; grid-row: 1; }
+.pn-body.sw-left > .pn-pane[data-zone="side"] { grid-column: 1; grid-row: 1; border-left: 0; border-right: 1px solid var(--line); }
+/* 접힌 곁칸을 펴는 손잡이도 그쪽 가장자리로 — 화살표가 가리키는 곳이 곧 열리는 곳이어야 한다. */
+.pn-body.sw-left > .pn-side-reopen { right: auto; left: 0; border-left: 0; border-right: 1px solid var(--line); }
+.pn-body.sw-left > .pn-side-reopen svg { transform: none; }
+
+/* ── 끄는 중 예고 — "지금 놓으면 이렇게 됩니다" ── */
+.sw-hint {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 70;
+  padding: 6px 12px; border-radius: 999px; background: var(--ink); color: var(--bg);
+  font-size: 12px; font-weight: 700; white-space: nowrap; pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .22);
+}
+.sw-hint[hidden] { display: none; }
+
+/* ── 문패 버튼 ── */
+.sw-btn { padding: 0 8px; }
+.sw-btn[hidden] { display: none; }
+.sw-btn-i { font-size: 14px; line-height: 1; color: var(--muted-2); }
+.sw-btn.on .sw-btn-i { color: var(--blue); }
+
+/* ── 켜고 끄는 팝오버 ──
+   ⚠ anchoredPopover 는 **위치만** 잡는다(.dash-pop = position:fixed·z-index). 배경·테두리·그림자는 패널이
+   직접 가져야 한다 — 안 주면 글자가 본문 위에 투명하게 겹쳐 읽을 수 없다(원준 신고 2026-08-20, 42-v2-panes.css 와 같은 규약). */
+.sw-pop { width: 300px; padding: 12px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(var(--shadow-ink), .16); }
+.sw-pop-h b { font-size: 13.5px; color: var(--ink); }
+.sw-pop-sub { margin: 4px 0 10px; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.sw-pop-opts { display: flex; flex-direction: column; gap: 4px; }
+.sw-opt { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; text-align: left; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; background: none; font: inherit; cursor: pointer; }
+.sw-opt:hover { background: var(--bg-punch); }
+.sw-opt.on { border-color: var(--blue); background: var(--bg-punch); }
+.sw-opt b { font-size: 12.5px; color: var(--ink); }
+.sw-opt span { font-size: 11px; line-height: 1.45; color: var(--muted); }
+.sw-pop-help { margin-top: 10px; font-size: 11.5px; }
+
+/* ── 처음 자리가 바뀔 때의 안내 ──
+   짧은 안내는 화면 한가운데에, 글 폭에 맞게. (기본 껍데기 .ov-back/.ov-box 는 긴 모달용이라 위쪽 정렬 + 760px 고정
+   이다 — 그대로 쓰면 오른쪽이 텅 비고 위로 치우친다. 전역 규칙을 바꾸지 않고 이 안내에만 클래스를 얹는다.) */
+.sw-intro-back { align-items: center; }
+.sw-intro-box { max-width: 520px; }
+.sw-intro { padding: 4px 2px 2px; }
+.sw-intro-p { margin: 0 0 10px; font-size: 13px; line-height: 1.65; color: var(--ink); }
+.sw-intro-p.muted { color: var(--muted); font-size: 12.5px; }
+.sw-intro-p b { font-weight: 700; }
+.sw-intro-again { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 14px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.sw-intro-cb { width: 14px; height: 14px; accent-color: var(--blue); cursor: pointer; }
+.sw-intro-acts { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* 도해 — 말보다 그림이 빠르다(왼쪽=바뀌기 전, 오른쪽=바뀐 뒤). */
+.sw-intro-fig { margin: 0 0 16px; }
+.sw-fig { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.sw-fig-box { display: flex; gap: 3px; width: 168px; height: 76px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--gray-bg-2); }
+.sw-fig-pane { display: flex; align-items: center; justify-content: center; border-radius: 5px; font-size: 11px; font-weight: 700; }
+.sw-fig-pane.sess { flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--muted-2); }
+.sw-fig-pane.side { flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--muted-2); }
+.sw-fig-pane.big { flex: 2.2; border-color: var(--blue); color: var(--blue); background: var(--bg-punch); }
+.sw-fig-arrow { font-size: 16px; color: var(--muted-3); }
+
+/* 좁은 화면에선 곁칸 자체가 숨는다(42-v2-panes 의 규칙) — 자리바꿈도 함께 접는다. */
+@media (max-width: 900px) {
+  .pn-body.sw-left { grid-template-columns: minmax(0, 1fr) 0 0; }
+  .sw-btn { display: none; }
+  .sw-fig-box { width: 132px; height: 64px; }
+}

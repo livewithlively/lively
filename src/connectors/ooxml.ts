@@ -6,17 +6,24 @@
 //  🔒 zip-bomb 방어 내장(unzipEntries): 필요한 파트만 압축해제 + 엔트리별/누적 maxOutputLength 캡.
 import { inflateRawSync } from "node:zlib";
 
-export type OoxmlKind = "docx" | "pptx" | "xlsx";
+export type OoxmlKind = "docx" | "pptx" | "xlsx" | "hwpx";
 
 // 업로드된 OOXML mimeType → 추출기 종류. (Google 네이티브 Docs/Sheets/Slides 는 여기 아님 — 그건 export API 로 텍스트화.)
 const OOXML_KIND: Record<string, OoxmlKind> = {
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/hwp+zip": "hwpx",   // 한글 hwpx(OWPML) — zip+XML, 본문은 Contents/section*.xml 의 <hp:t>(#1881)
 };
 // mimeType 이 업로드된 OOXML 이면 종류, 아니면 undefined. 커넥터가 "이 파일을 extractOoxml 로 처리할지" 판정에 사용.
 export function ooxmlKindFromMime(mime: string | undefined): OoxmlKind | undefined {
   return mime ? OOXML_KIND[mime] : undefined;
+}
+// 파일명(확장자)으로 판정 — 브라우저 업로드엔 신뢰할 MIME 이 없다(라우트가 octet-stream 으로 받는다, #1881 로컬 자료).
+const OOXML_EXT: Record<string, OoxmlKind> = { docx: "docx", pptx: "pptx", xlsx: "xlsx", hwpx: "hwpx" };
+export function ooxmlKindFromName(name: string | undefined): OoxmlKind | undefined {
+  const m = /\.([A-Za-z0-9]+)$/.exec(name ?? "");
+  return m ? OOXML_EXT[m[1].toLowerCase()] : undefined;
 }
 
 // zip-bomb 방어 상한 — Node inflate 는 기본 무제한(kMaxLength)이라 작은 압축본이 GB로 폭증→OOM. 엔트리별+누적 캡.
@@ -28,6 +35,7 @@ const OOXML_WANTED: Record<OoxmlKind, (name: string) => boolean> = {
   docx: (n) => n === "word/document.xml",
   pptx: (n) => /^ppt\/slides\/slide\d+\.xml$/.test(n),
   xlsx: (n) => n === "xl/sharedStrings.xml" || /^xl\/worksheets\/sheet\d+\.xml$/.test(n),
+  hwpx: (n) => /^Contents\/section\d+\.xml$/.test(n),
 };
 
 // 최소 ZIP 리더 — Map<name, 압축해제 Buffer>. deflate(8)/stored(0)만, 그 외 압축법·암호화 엔트리는 skip.
@@ -120,6 +128,14 @@ export function extractOoxml(kind: OoxmlKind, buf: Buffer): string {
     // 문단(<a:p>) 경계로 개행 유지: 문단 내 <a:t> 런은 빈문자 이어붙임(런 자체 공백 보존), 슬라이드 사이 빈 줄.
     return slides.map((k) => zip.get(k)!.toString("utf8").split(/<\/a:p>/)
       .map((para) => collectTagText(para, "a:t").join("")).filter(Boolean).join("\n"))
+      .filter(Boolean).join("\n\n");
+  }
+  if (kind === "hwpx") {
+    // 한글 hwpx — 구역(section) 순서대로, 문단(<hp:p>) 경계로 개행, 문단 안 <hp:t> 런은 이어붙임.
+    const secs = [...zip.keys()].filter((k) => /^Contents\/section\d+\.xml$/.test(k))
+      .sort((a, b) => Number(a.match(/\d+/)![0]) - Number(b.match(/\d+/)![0]));
+    return secs.map((k) => zip.get(k)!.toString("utf8").split(/<\/hp:p>/)
+      .map((para) => collectTagText(para, "hp:t").join("")).filter(Boolean).join("\n"))
       .filter(Boolean).join("\n\n");
   }
   // xlsx — sharedStrings(공유 문자열 풀) + 각 시트의 셀 값(t="s"면 풀 인덱스, 아니면 <v> 리터럴/<t> 인라인).

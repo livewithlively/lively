@@ -11,7 +11,7 @@
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 //  ④ **화면은 웹 UI 그대로다**(web-shell.mjs) — 설치·로그인·키트가 갖춰지면 창에 게이트웨이의 /ui/ 를 싣는다.
 //     앱에 화면 코드를 한 벌 더 두지 않는다(웹이 곧 앱). 마법사(renderer/)는 갖춰지기 전과 노드·점검 설정에만 쓴다.
-import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session, clipboard, Notification } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -21,15 +21,18 @@ import { locateCli, cliMissingHelp, cliLaunchSpec } from "./cli-locate.mjs";
 import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
+import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
+import { APP_ID } from "./win-stale-install.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -54,6 +57,9 @@ let updater = null;                 // electron-updater 인스턴스 — **한 �
 let autoApplyTimer = null;          // 창이 안 보일 때 자동 적용 예약
 let progressNoteAt = 0;             // 진행률 문구를 마지막으로 그린 시각(스로틀)
 let updateVersion = "";             // 지금 받는 중인 새 버전(진행률 문구용)
+let updateCheckFailures = 0;         // 연속 확인 실패 — 5→15→60분 백오프. 성공하면 0으로 돌아간다.
+let updateCheckTimer = null;         // 결과 기반 다음 확인 예약(setInterval 이면 백오프를 표현하지 못한다)
+let updateAttemptHadError = false;   // error 이벤트 + checkForUpdates reject 가 같은 실패를 두 번 세지 않게 한다
 let staleInstalls = [];             // Windows: 다른 자리에 남은 옛 설치본(win-stale-install.mjs) — 있으면 정리 카드가 뜬다
 let staleCheckedAt = 0;
 let state = {                       // 트레이·렌더러가 함께 보는 스냅샷
@@ -216,9 +222,13 @@ function renderTray() {
   if (!tray) return;
   const model = trayMenuModel(state);
   tray.setToolTip(`라이블리 — ${model[0]?.label ?? ""}`);
-  tray.setContextMenu(Menu.buildFromTemplate(model.map((m) => (m.type === "separator"
+  // 서브메뉴(알림 #1842)를 위해 재귀로 그린다 — 항목이 submenu 를 가지면 클릭이 아니라 펼침이다.
+  const toTemplate = (m) => (m.type === "separator"
     ? { type: "separator" }
-    : { label: m.label, type: m.type, checked: m.checked, enabled: m.enabled !== false, click: () => onMenu(m.id) }))));
+    : m.submenu
+      ? { label: m.label, enabled: m.enabled !== false, submenu: m.submenu.map(toTemplate) }
+      : { label: m.label, type: m.type, checked: m.checked, enabled: m.enabled !== false, click: () => onMenu(m.id) });
+  tray.setContextMenu(Menu.buildFromTemplate(model.map(toTemplate)));
 }
 function onMenu(id) {
   if (id === "open") return showMain();          // 갖춰졌으면 라이블리 화면, 아니면 마법사
@@ -256,10 +266,11 @@ function setAppAutoLaunch(on) {
 
 // ── 자동 업데이트 (#1541 T6) ─────────────────────────────────────────────────
 // ⚠ **앱 자신의 갱신**이다 — 키트 자동 업데이트(#858)와 다른 축이다(그건 CLI 가 자기 키트를 갱신한다).
-// 실패는 치명이 아니다(앱은 그대로 쓴다) → 오류 팝업을 띄우지 않고 로그·상태로만 남기고, 한 번 실패하면
-//  이 세션엔 다시 묻지 않는다(같은 팝업이 6시간마다 반복되는 것보다 낫다).
-let updateFailed = false;
+// 실패는 치명이 아니다(앱은 그대로 쓴다) → 오류 팝업을 띄우지 않고 로그·상태로만 남긴다. 순간 장애 한 번이
+//  앱 재시작까지 업데이트를 영구 정지시키면 보안 픽스도 막히므로 5→15→60분으로 백오프해 다시 확인한다.
 async function checkUpdates() {
+  // 받아 둔 버전이 있으면 적용만 남았다. 5분마다 같은 릴리스 메타데이터를 다시 읽을 이유가 없다.
+  if (updateReady) return null;
   const verdict = shouldCheckForUpdates({
     packaged: app.isPackaged, platform: process.platform,
     // 빌드에 배포처가 **실제로** 박혔나. ⚠ 상수 true 로 두면 안 된다 — 설치기 없이 만든 빌드(`--dir`,
@@ -269,18 +280,42 @@ async function checkUpdates() {
     hasPublishConfig: existsSync(join(process.resourcesPath || "", "app-update.yml")),
     // mac 서명 여부는 런타임에 확실히 알기 어렵다 — 서명된 앱만 통과하는 게이트키퍼 판정을 대신 쓴다.
     macSigned: process.platform !== "darwin" || app.isPackaged && !!process.mas === false && isMacSigned(),
-    optOut: process.env[UPDATE_OPT_OUT_ENV], failedBefore: updateFailed,
+    optOut: process.env[UPDATE_OPT_OUT_ENV],
   });
   // 왜 안 하는지도 **화면에** 남긴다 — 로그에만 적으면 사용자는 '업데이트가 되는 앱인지'조차 모른다.
   updateNote = updateStatusNote(verdict.reason);
   if (!verdict.ok) { send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); return; }
+  updateAttemptHadError = false;
   try {
     const u = await getUpdater();
     // ⚠ checkForUpdatesAndNotify 가 아니다 — 그건 OS 알림으로 "종료하면 설치됩니다" 를 띄우는데, 이제 적용은
     //  앱이 스스로 한다(applyUpdate). 그 문구가 사람을 종전의 함정(손으로 껐다 켜기)으로 다시 부른다.
-    await u.checkForUpdates();
-  } catch (e) { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); }
+    const result = await u.checkForUpdates();
+    // autoDownload 의 설치기 받기는 별도 promise 다. 완료 전에 다음 5분 타이머를 열면 느린 회선에서 확인이 겹친다.
+    if (result?.downloadPromise) await result.downloadPromise;
+    if (!updateAttemptHadError) updateCheckFailures = 0;
+  } catch (e) { recordUpdateError(e); }
   void refreshState();
+}
+function recordUpdateError(e) {
+  // electron-updater 는 같은 실패를 error 이벤트로 내고 promise 도 reject 할 수 있다. 한 시도에 한 번만 센다.
+  if (!updateAttemptHadError) { updateAttemptHadError = true; updateCheckFailures += 1; }
+  updateNote = updateFailureNote(e);
+  send(IPC.LOG, { stream: "raw", line: updateNote });
+  void refreshState();
+}
+function scheduleNextUpdateCheck() {
+  const delay = updateCheckDelayMs(updateCheckFailures, Math.random());
+  updateCheckTimer = setTimeout(async () => {
+    updateCheckTimer = null;
+    await checkUpdates();
+    scheduleNextUpdateCheck();
+  }, delay);
+  if (updateCheckTimer.unref) updateCheckTimer.unref();
+}
+async function startUpdateCheckLoop() {
+  await checkUpdates();
+  scheduleNextUpdateCheck();
 }
 /** electron-updater — 한 번만 만들고 리스너도 한 번만. (종전엔 확인할 때마다 on() 을 다시 걸어 누적됐다.) */
 async function getUpdater() {
@@ -288,7 +323,7 @@ async function getUpdater() {
   const { autoUpdater } = (await import("electron-updater")).default;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;   // 사람이 먼저 끄면 그때라도 설치한다(폴백) — 주 경로는 applyUpdate
-  autoUpdater.on("error", (e) => { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); });
+  autoUpdater.on("error", (e) => recordUpdateError(e));
   autoUpdater.on("update-not-available", () => { updateNote = "최신 버전입니다."; void refreshState(); });
   autoUpdater.on("checking-for-update", () => { updateNote = "업데이트 확인 중…"; void refreshState(); });
   autoUpdater.on("update-available", (i) => {
@@ -485,6 +520,161 @@ function pushWebUpdate() {
   sendWeb(IPC_WEB.UPDATE, payload);
 }
 
+// ── 앱 알림 (#1842) ─────────────────────────────────────────────────────────
+// 트레이 상주 앱만이 **창 없이도** 살아 있다(window-all-closed = noop). 그래서 "화면을 안 보고 있을 때 부르는"
+//  알림은 여기서만 만들 수 있다 — 웹 화면이 하면 창을 닫는 순간 눈이 먼다. 판정은 전부 notify.mjs(순수·표로 검증).
+const NOTIFY_POLL_MS = 30_000;      // 세션 상태 조회는 tmux 를 훑는다 — 상태 폴링(refreshState)과 같은 리듬으로 둔다
+// 설정은 **서버가 정본**이다(#1842) — 사람 단위. 기기별 파일에 두면 사무실 맥에서 끈 것이 노트북에선
+//  그대로 떠 "껐는데 뜬다"가 된다. 끄고 켜는 자리는 웹 [내 정보 ▸ 알림] 한 곳이고, 앱은 읽기만 한다.
+//  이 캐시는 폴링이 갱신한다 — 서버를 못 읽는 동안에도 마지막으로 받은 값으로 계속 동작한다.
+let notifySnapshot = null;          // 직전 세션 스냅샷. null = 콜드스타트(첫 폴은 기준선만 잡고 아무것도 안 띄운다)
+let notifyPolling = false;
+let personSince = null;             // 사람 알림 커서 — 서버가 준 `now`. null 이면 아직 한 번도 안 받았다
+let personSeen = null;              // 이미 띄운 사람 알림 key. null = 콜드스타트(첫 폴은 기준선만)
+// 실시간 스트림(#1842 3차) — 이게 붙어 있으면 세션 배너는 **스트림만** 만든다(폴링은 기준선만 갱신).
+let streamCtl = null;               // 현재 연결의 AbortController
+let streamAlive = false;            // 붙어 있나 — 폴링 배너 게이팅의 유일한 근거
+let streamTries = 0;                // 연속 실패 횟수(백오프)
+let streamTimer = null;             // 재연결 예약
+const streamSeen = new Set();       // 이미 띄운 스트림 사건 key(재연결 직후 중복 방지)
+
+let notifyPrefsCache = { ...NOTIFY_DEFAULTS };   // 서버에서 마지막으로 받은 값. 받기 전엔 전부 켜짐.
+
+/** 유형별 켜짐 — 서버 값. 아직 못 받았으면 기본값(전부 켜짐): 설정을 못 읽었다고 알림이 멎으면 안 된다. */
+function notifyPrefs() { return notifyPrefsCache; }
+
+/** 배너 한 장. 클릭하면 그 세션 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
+function showBanner({ title, body, event }) {
+  try {
+    if (!Notification.isSupported()) return;          // 리눅스 등 알림 데몬이 없는 환경 — 조용히 넘긴다
+    const n = new Notification({ title, body });
+    n.on("click", () => {
+      if (event && event.id) return openSessionInApp(event.id);        // 세션 알림 → 그 세션 화면
+      if (event && event.link) return openHashInApp(event.link);       // 사람 알림 → 그 프로젝트 화면
+      showMain();                                                      // 묶음 배너 — 갈 곳이 하나가 아니다
+    });
+    n.show();
+  } catch { /* OS 가 알림을 막았어도 앱은 계속 돈다 */ }
+}
+
+/** 알림 클릭 → 앱 창을 띄우고 그 화면으로. 이미 실려 있으면 해시만 바꾼다(전체 리로드는 보던 화면을 날린다). */
+function openHashInApp(hash) {
+  const r = showApp();
+  if (!r || !r.ok || !hash || !appWin || appWin.isDestroyed()) return;
+  const wc = appWin.webContents;
+  const go = () => { try { void wc.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`).catch(() => {}); } catch { /* 창이 사라졌다 */ } };
+  if (wc.isLoading()) wc.once("did-finish-load", go); else go();
+}
+/** 세션 알림 클릭 — id 형식을 먼저 본다(응답을 그대로 주소로 쓰지 않는다). */
+function openSessionInApp(id) { openHashInApp(sessionHash(id)); }
+
+/**
+ * 실시간 스트림에 붙는다 (#1842). 게이트웨이가 하네스 훅 보고를 받는 **그 순간** 사건을 밀어 주므로,
+ *  "AI 를 여러 개 병렬로 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다(폴링은 폴백으로 남는다).
+ *
+ * ⚠ 이 함수는 연결이 끊길 때까지 돌아온다 — 호출자는 await 하지 않고 재연결만 예약한다.
+ */
+async function connectNotifyStream() {
+  const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
+  const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
+  if (!token) { scheduleStreamRetry(); return; }
+  const ctl = new AbortController();
+  streamCtl = ctl;
+  let openedAt = 0;
+  try {
+    const res = await fetch(`${gw}/api/ui/notify/stream`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+      signal: ctl.signal,
+    });
+    // 구 게이트웨이엔 이 표면이 없다(404) — 조용히 폴링만 쓴다(그래서 폴링을 없애지 않았다).
+    if (!res.ok || !res.body) { scheduleStreamRetry(); return; }
+    streamAlive = true;
+    openedAt = Date.now();   // #2041 — 되돌리기는 '붙었나'가 아니라 '붙어서 살았나'로(아래 finally)
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const { events, rest } = parseSse(buf);
+      buf = rest;
+      const prefs = notifyPrefs();
+      for (const ev of events) {
+        const hit = streamEvent(ev, streamSeen, prefs);
+        if (!hit) continue;
+        streamSeen.add(hit.key);
+        while (streamSeen.size > SEEN_MAX) streamSeen.delete(streamSeen.values().next().value);
+        showBanner({ ...bannerFor(hit), event: hit });
+      }
+    }
+  } catch { /* 끊김·타임아웃·게이트웨이 재시작 — 아래에서 다시 붙는다 */ }
+  finally {
+    streamAlive = false;
+    if (streamCtl === ctl) streamCtl = null;
+    // ⚠ #2041 — 붙었다는 사실이 아니라 **버틴 시간**으로 백오프를 되돌린다. 붙자마자 끊는 서버에
+    //  성공으로 되돌리면 초당 한 번씩 재접속한다(웹 셸에서 20초에 19번 실측).
+    if (stableStream(openedAt ? Date.now() - openedAt : 0)) streamTries = 0;
+    scheduleStreamRetry();
+  }
+}
+
+/** 재연결 예약 — 지수 백오프. 게이트웨이가 재시작 중일 때 초당 재접속으로 때리지 않는다. */
+function scheduleStreamRetry() {
+  if (quitting || streamTimer) return;
+  const wait = reconnectDelay(streamTries++);
+  streamTimer = setTimeout(() => { streamTimer = null; void connectNotifyStream(); }, wait);
+  if (streamTimer.unref) streamTimer.unref();
+}
+
+/**
+ * 한 번의 폴 — 세션 목록을 받아 직전 스냅샷과 견주고, 생긴 사건만 배너로 띄운다.
+ *  ⚠ 준비 안 됐거나(설치·로그인 전) 토큰이 없으면 **기준선을 버린다** — 다시 로그인했을 때 그 사이 사건이
+ *   한꺼번에 되살아나지 않게(콜드스타트로 되돌린다). 반대로 네트워크 실패는 기준선을 **유지**한다(다음 폴에서 이어 본다).
+ */
+async function pollNotifications() {
+  if (notifyPolling) return;
+  const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
+  const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
+  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
+  notifyPolling = true;
+  try {
+    const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return;                               // 401 은 watchTokenRejection 이 따로 처리한다
+    const data = await res.json();
+    const next = snapshotSessions(data && data.sessions);
+    await pollPersonFeed(gw, token);                     // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
+    const prefs = notifyPrefs();
+    const events = diffSessions(notifySnapshot, next, prefs);
+    notifySnapshot = next;                               // ★ 기준선은 스트림 유무와 무관하게 늘 갱신한다 —
+    //  연결이 끊기는 순간 폴링이 그 자리에서 이어받아야 하는데, 기준선이 낡아 있으면 그 사이 전이를 통째로
+    //  놓치거나(오래된 스냅샷과 비교) 과거를 한꺼번에 다시 띄운다.
+    if (!streamAlive) for (const b of planBanners(events)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
+  } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
+  finally { notifyPolling = false; }
+}
+
+/**
+ * 사람이 나를 부른 것(멘션·댓글·담당) — 판정은 서버가 한다(/api/ui/notify/feed). 앱은 커서를 들고 다니며
+ *  새로 온 것만 띄운다. **커서 전진은 성공했을 때만** 한다 — 실패했는데 전진시키면 그 사이 알림이 영영 사라진다.
+ */
+async function pollPersonFeed(gw, token) {
+  const url = `${gw}/api/ui/notify/feed` + (personSince ? `?since=${encodeURIComponent(personSince)}` : "");
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) return;                                 // 구 게이트웨이엔 이 엔드포인트가 없다(404) — 조용히 넘긴다
+  const data = await res.json();
+  // 서버가 실어 보낸 알림 설정을 캐시에 반영한다(왕복을 하나 더 만들지 않는다).
+  if (data && data.prefs && typeof data.prefs === "object") notifyPrefsCache = { ...NOTIFY_DEFAULTS, ...data.prefs };
+  const events = pickPersonEvents(data && data.items, personSeen, notifyPrefs());
+  if (!personSeen) personSeen = new Set();             // 첫 폴 = 기준선(위 pickPersonEvents 가 이미 빈 배열을 줬다)
+  rememberSeen(personSeen, events);
+  personSince = (data && data.now) || personSince;     // 서버 시계를 쓴다 — 앱 시계와 어긋나도 사건을 건너뛰지 않게
+  for (const b of planPersonBanners(events)) showBanner(b);
+}
+
 // ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────
 // 게이트웨이가 서빙하는 /ui/ 를 **그대로** 싣는다 — 화면 코드를 앱에 두지 않는다. 앱이 보태는 건 토큰 주입(preload/web.cjs)·
 //  창 열기 규칙(같은 출처=앱 안 새 창, 바깥=브라우저)·401 감지(토큰 거부→마법사) 셋뿐이다.
@@ -517,7 +707,10 @@ function showApp() {
     // 마법사 창과 같은 수명 규약 — 닫아도 앱은 트레이에 남는다(노드 리모컨이 사라지면 안 된다).
     appWin.on("close", (e) => { saveAppBounds(); if (!quitting) { e.preventDefault(); appWin.hide(); } });
     appWin.on("hide", () => scheduleAutoApply());
-    appWin.on("show", () => { if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; } });
+    appWin.on("show", () => {
+      if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; }
+      void reloadIfStale();   // #1841 — 창은 닫아도 안 죽는다. 다시 보일 때 낡았으면 스스로 다시 싣는다.
+    });
     appWin.on("closed", () => { appWin = null; appLoaded = { url: null, token: null }; });
     appWin.on("moved", saveAppBounds);
     appWin.on("resized", saveAppBounds);
@@ -540,6 +733,35 @@ function showApp() {
   appWin.show(); appWin.focus();
   return { ok: true };
 }
+/**
+ * 낡은 화면 자가복구 (#1841) — 창이 다시 보일 때 게이트웨이 자산 세대가 바뀌었으면 다시 싣는다.
+ *
+ *  ⚠ 이게 없으면 앱은 **처음 뜬 판을 영영 들고 있다**. 창을 닫아도 죽지 않고(위 close 훅이 hide 만 한다),
+ *   다시 열 때 showApp() 이 주소·토큰이 같으면 loadURL 을 건너뛰기 때문이다. 실측(2026-08-21):
+ *   앱이 든 세대 7964959ed50d, 서버 882a0a3d262e — 그 사이 dev 에 올라간 변경이 앱에는 하나도 안 보였다.
+ *
+ *  웹에도 같은 자가복구가 있다(web/gen-watch.ts, visibilitychange). 둘 다 두는 이유:
+ *   웹 쪽은 **이미 낡은 판에는 그 코드가 없어서** 한 번은 사람이 새로고침해야 한다. 여기(메인 프로세스)는
+ *   페이지 내용과 무관하게 돌아서 그 첫 한 번까지 메꾼다.
+ *
+ *  실패는 조용히 넘긴다 — 게이트웨이가 꺼져 있거나 오프라인이면 그냥 지금 화면을 그대로 둔다.
+ */
+let lastGen = null;
+async function reloadIfStale() {
+  if (!appWin || appWin.isDestroyed() || !state.gatewayUrl) return;
+  const base = String(state.gatewayUrl).replace(/\/+$/, "");
+  let v = null;
+  try {
+    const r = await fetch(`${base}/ui/__gen`, { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    v = typeof j?.v === "string" ? j.v : null;
+  } catch { return; }
+  if (!v) return;
+  if (lastGen && lastGen !== v) { try { appWin.webContents.reload(); } catch { /* 창이 사라졌으면 그만 */ } }
+  lastGen = v;
+}
+
 function loadAppBounds() {
   const opts = { defaultSize: APP_WINDOW_DEFAULT, minSize: APP_WINDOW_MIN };
   try { return normalizeBounds(JSON.parse(readFileSync(APP_BOUNDS_FILE, "utf8")), workAreas(), opts); }
@@ -751,6 +973,16 @@ async function reloadInstalledExtensions(sess) {
 //  · 브라우저 서피스 게스트(#1829): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
 //  그래서 게스트를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
 app.on("web-contents-created", (_e, wc) => {
+  // ── 우클릭 메뉴(#1870) — 모든 webContents 공통(웹 UI·자식 창·서피스 게스트). 앱은 브라우저와 달리
+  //  기본 우클릭 메뉴가 없어 링크 주소를 복사할 길이 없었다. 항목 판정은 context-menu.mjs(순수 모델)가 한다.
+  wc.on("context-menu", (_ev, params) => {
+    const model = contextMenuModel(params);
+    if (!model.length) return;
+    Menu.buildFromTemplate(model.map((m) => (m.type === "separator"
+      ? { type: "separator" }
+      : { label: m.label, click: () => runContextMenuAction(m.id, params, wc, clipboard) }))).popup();
+  });
+
   // ── 브라우저 서피스 안(=`<webview>` 게스트)은 규칙이 정반대다 ───────────────────────────────────────
   //  아래 웹 UI 규칙(openTargetFor)은 "남의 사이트를 앱에 들이지 않는다" 라 **게이트웨이 밖 이동을 전부 밖으로 던진다**.
   //  그걸 서피스에도 걸면 남의 사이트를 보려고 만든 화면이 첫 이동에서 통째로 시스템 브라우저로 튄다 — 기능이 죽는다.
@@ -952,7 +1184,7 @@ ipcMain.handle(IPC.READ_LOG, (_e, { id }) => {
   try { return { ok: true, ...tailText(readFileSync(p, "utf8")), path: p }; }
   catch (e) { return { ok: false, error: String(e?.message || e) }; }
 });
-ipcMain.handle(IPC.CHECK_UPDATE, async () => { updateFailed = false; await checkUpdates(); return { ok: true, note: updateNote }; });
+ipcMain.handle(IPC.CHECK_UPDATE, async () => { await checkUpdates(); return { ok: true, note: updateNote }; });
 ipcMain.handle(IPC.APPLY_UPDATE, async () => applyUpdate());
 ipcMain.handle(IPC.CLEANUP_STALE, async () => cleanupStaleInstall());
 ipcMain.handle(IPC.OPEN_APP, () => showApp());
@@ -1028,6 +1260,9 @@ else {
     //  이건 호출자 쪽 근본 방어 — 둘이 겹쳐야 setup·tmux 탐색까지 안전하다). 실패는 무해(현재 PATH 유지).
     enrichPathFromLoginShell(process.env, process.platform, (sh, argv) =>
       execFileSync(sh, argv, { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] }));
+    // Windows: 이게 없으면 배너가 아예 안 뜨거나 'electron.app.Electron' 이름으로 뜬다(알림 센터가 앱을 못 묶는다).
+    //  설치본의 appId(package.json build.appId)와 **같은 문자열**이어야 한다 — 다르면 알림 설정이 두 앱으로 갈린다.
+    try { app.setAppUserModelId(APP_ID); } catch { /* 비치명 */ }
     tray = new Tray(trayImage());
     tray.on("click", () => showMain());            // Windows·Linux 는 좌클릭이 자연스럽다
     try { startedHidden = startedHiddenFrom({ platform: process.platform, argv: process.argv, loginItem: app.getLoginItemSettings({ args: AUTOLAUNCH_ARGS }) }); } catch { startedHidden = false; }
@@ -1045,15 +1280,19 @@ else {
     //  트레이가 옛 상태를 계속 보여준다. 30초 — 사람이 느끼기엔 실시간이고 `status` 호출은 가볍다.
     const poll = setInterval(() => { if (!running) void refreshState({ deep: true }); }, 30_000);
     if (poll.unref) poll.unref();
-    void checkUpdates();
+    void startUpdateCheckLoop();
     // Windows: 다른 자리에 옛 설치본이 남아 있나 — 있으면 정리 카드·트레이 항목이 뜬다(옛 바로가기가 옛 버전을 여는 것의 뿌리).
     void detectStaleInstall({ force: true });
-    const up = setInterval(() => void checkUpdates(), UPDATE_INTERVAL_MS);
-    if (up.unref) up.unref();
+    // 앱 알림(#1842) — 첫 폴은 기준선만 잡는다(콜드스타트). 이후 30초마다 '지금 사람을 불러야 할 사건'만 배너로.
+    void pollNotifications();
+    const ntf = setInterval(() => void pollNotifications(), NOTIFY_POLL_MS);
+    if (ntf.unref) ntf.unref();
+    // 실시간 스트림 — 이게 주 경로다(위 폴링은 연결이 끊긴 동안의 폴백).
+    void connectNotifyStream();
   });
   // ★ 창을 다 닫아도 종료하지 않는다(트레이 상주). 기본 동작(win/linux 종료)을 반드시 덮어야 한다.
   app.on("window-all-closed", () => { /* noop — 트레이로 산다 */ });
-  app.on("before-quit", () => { quitting = true; });
+  app.on("before-quit", () => { quitting = true; if (updateCheckTimer) clearTimeout(updateCheckTimer); });
   app.on("activate", () => showMain());            // macOS dock 클릭 — 갖춰졌으면 라이블리 화면
   process.on("uncaughtException", (e) => {
     try { dialog.showErrorBox("라이블리", String(e?.stack || e)); } catch { /* 다이얼로그도 못 뜨는 상황 */ }

@@ -167,3 +167,6 @@ export function startScheduler(): void {
     } catch (e) { logger.warn({ err: (e as Error)?.message }, "notion full 스윕 잡 보장 실패(비치명)"); }
   })();
 }
+
+// #1780 v2 §7-1 — 실-DB 스모크(scripts/app-cron-redeploy.itest.mjs)가 "재전개 직후 due 아님" 경계를 재기 위한 노출. 운영 호출 금지.
+export const __test_isDue = isDue;

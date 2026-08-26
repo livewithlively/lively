@@ -15,13 +15,13 @@ const req = (over: Partial<CreateInput> = {}): CreateInput => ({
   label: "요청 라벨", rootKey: "", subpath: "", harness: "codex", flags: {}, autoApprove: true, ...over,
 });
 
-test("B1·B2 세션 전용 폴더 — root 는 요청값 또는 personal, subpath 는 sessions/<세션id>(노드 createSession 규칙과 동일)", () => {
-  const a = nodeSessionStateInput(sess(), "hammurabi", req({ sessionDir: true, rootKey: "" }), "yoon");
+test("B1·B2 workspace 좌표 — 빈 root는 personal, 지정 좌표는 그대로", () => {
+  const a = nodeSessionStateInput(sess(), "hammurabi", req({ rootKey: "" }), "yoon");
   assert.equal(a.root_key, "personal");
-  assert.equal(a.subpath, "sessions/box-yoon-0a1b2c3d");
-  const b = nodeSessionStateInput(sess(), "hammurabi", req({ sessionDir: true, rootKey: "shared" }), "yoon");
+  assert.equal(a.subpath, null);
+  const b = nodeSessionStateInput(sess(), "hammurabi", req({ rootKey: "shared", subpath: "project/7" }), "yoon");
   assert.equal(b.root_key, "shared");
-  assert.equal(b.subpath, "sessions/box-yoon-0a1b2c3d");
+  assert.equal(b.subpath, "project/7");
 });
 
 test("B3·B4 일반 세션 — 요청 좌표 그대로, 빈 문자열(경계)은 null", () => {
@@ -29,7 +29,7 @@ test("B3·B4 일반 세션 — 요청 좌표 그대로, 빈 문자열(경계)은
   assert.equal(a.root_key, "shared");
   assert.equal(a.subpath, "proj/x");
   const b = nodeSessionStateInput(sess(), "n1", req({ rootKey: "", subpath: "" }), "yoon");
-  assert.equal(b.root_key, null);
+  assert.equal(b.root_key, "personal");
   assert.equal(b.subpath, null);
 });
 
@@ -77,4 +77,14 @@ test("A1 정체성 — node_id 는 노드, owner 는 요청자(응답의 owner �
   assert.equal(a.dir, "C:\\Users\\y\\box\\yoon\\sessions\\box-yoon-0a1b2c3d");
   assert.deepEqual(a.invites, ["jang"]);
   assert.equal(a.last_busy, null);
+});
+
+test("A2 앱 세션 — app_id만 desired-state에 남고 원격 준비 봉투의 토큰은 저장 모델에 없다", () => {
+  const a = nodeSessionStateInput(sess(), "n1", req({
+    appId: "review-app",
+    appSession: { appId: "review-app", token: "secret", gatewayUrl: "https://gw.example", assets: [] },
+  }), "yoon");
+  assert.equal(a.app_id, "review-app");
+  assert.ok(!("appSession" in a));
+  assert.doesNotMatch(JSON.stringify(a), /secret/);
 });

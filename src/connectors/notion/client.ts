@@ -26,7 +26,7 @@ export interface NotionConfig {
 
 export async function loadConfig(): Promise<NotionConfig> {
   const c = await resolveConnectorConfig("notion");
-  if (!c.token) throw new Error("NOTION_TOKEN 이 없습니다 — Notion integration 토큰(secret_…)을 설정하세요(관리탭 또는 .env)");
+  if (!c.token) throw new Error("Notion 토큰이 없습니다 — [외부 앱 연결 ▸ Notion ▸ 팀 자료로 모으기]로 연결하거나, Notion integration 토큰(ntn_/secret_…)을 설정하세요(관리탭 또는 .env)");
   // 루트 페이지 — URL/슬러그/uuid 어떤 형태든 관용 파싱. 파싱 불가 항목은 **조용히 버리지 않고 즉시 실패**
   //  (버리면 search 폴백으로 넘어가 '왜 0건이지' 미스터리가 됨 — 실사용에서 발생한 함정 #551).
   const parseIds = (raw: string | undefined, envName: string): string[] => {
@@ -53,6 +53,17 @@ export async function loadConfig(): Promise<NotionConfig> {
     comments: cm === "all" || cm === "off" ? (cm as "all" | "off") : "page",
     assetDir: c.asset_dir || stateDir("notion-assets"),
   };
+}
+
+/**
+ * external_instance 스탬프 값만 — **토큰 없이** 구한다(#1881 다중 워크스페이스).
+ *  왜 loadConfig 를 안 쓰나: 원장 로드는 backfill **전에** 돌고, loadConfig 는 토큰이 없으면 던진다.
+ *  범위 축만 필요한 자리(원장)에서 토큰 부재로 실패하면 폴백이 '전 워크스페이스 원장'이 돼 더 나쁘다.
+ *  값 산출은 loadConfig 와 **한 줄로 동일**해야 한다(`c.instance || "default"`) — 어긋나면 범위가 갈린다.
+ */
+export async function resolveNotionInstance(): Promise<string> {
+  const c = await resolveConnectorConfig("notion");
+  return c.instance || "default";
 }
 
 // ── HTTP 호출(인증/버전 헤더 + rate limit 존중 + 자발적 스로틀) ───────────────

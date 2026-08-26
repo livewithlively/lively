@@ -21,6 +21,23 @@ export function parseGrep(qstr: string): GrepPlan {
   const tokens = t.split(/\s+/).filter(Boolean);
   return { mode: "tokens", tokens: tokens.length ? tokens : [t] };
 }
+/**
+ * 질의가 **그 자체로 식별자(정수 id)** 인가 — 맞으면 `<col> = $n` 술어를 돌려주고 params 에 숫자를 push 한다.
+ * 아니면 null(호출부가 grep 만 쓴다).
+ *
+ * 왜 grep 컬럼에 `id::text` 를 얹지 않는가 — 그러면 부분일치가 된다. `1` 로 찾으면 1·10·100·1835 가 다 걸려
+ * 목록이 쓰레기가 된다. **번호로 찾는다는 건 그 번호를 지목한다는 뜻**이므로 정확일치만 받는다.
+ * 앞의 `#` 은 사람이 쓰는 표기라 벗겨 준다(`#1835` = `1835`). 32비트를 넘으면 id 가 아니다(int 컬럼).
+ */
+export function idEquals(col: string, q: string, params: unknown[]): string | null {
+  const t = String(q ?? "").trim().replace(/^#/, "");
+  if (!/^[0-9]{1,10}$/.test(t)) return null;
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n <= 0 || n > 2147483647) return null;
+  params.push(n);
+  return `${col} = $${params.length}`;
+}
+
 // cols 중 어느 하나에 매치(OR). regex 는 패턴 1개, tokens 는 토큰마다 (cols OR) 를 AND 로 묶는다. params 에 push 하고 WHERE 절 문자열 반환.
 export function grepWhere(cols: string[], plan: GrepPlan, params: unknown[]): string {
   const colsOr = (placeholder: string) => "(" + cols.map((c) => `${c} ${placeholder}`).join(" OR ") + ")";

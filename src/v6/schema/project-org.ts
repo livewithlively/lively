@@ -31,13 +31,16 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS session_project(
       session_id TEXT NOT NULL,
-      project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      project_id INT REFERENCES project(id) ON DELETE CASCADE,
       valid_from TIMESTAMPTZ NOT NULL DEFAULT now(),
+      binding_epoch BIGINT NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (session_id, valid_from));
     CREATE INDEX IF NOT EXISTS session_project_project_idx ON session_project(project_id);
     -- 기존 배포(단일키 PK) → 시간구간 모델 이관. 신규 설치는 위 CREATE 로 이미 복합키라 아래는 전부 no-op.
     ALTER TABLE session_project ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ;
+    ALTER TABLE session_project ADD COLUMN IF NOT EXISTS binding_epoch BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE session_project ALTER COLUMN project_id DROP NOT NULL;
     UPDATE session_project SET valid_from = created_at WHERE valid_from IS NULL;   -- 옛 바인딩은 기록 시각부터 유효했다
     ALTER TABLE session_project ALTER COLUMN valid_from SET NOT NULL;
     ALTER TABLE session_project ALTER COLUMN valid_from SET DEFAULT now();
@@ -51,6 +54,46 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
         ALTER TABLE session_project ADD CONSTRAINT session_project_pkey PRIMARY KEY (session_id, valid_from);
       END IF;
     END $$;
+  `);
+
+  // 실행 세션의 **현재** 프로젝트 소속 정본. session_project 는 과거 구간(해제 포함)을 보존하고,
+  // 이 표는 다음 턴에 적용할 desired와 실제로 전달된 applied revision을 분리한다. id는 tmux box id뿐 아니라
+  // `codex-<thread uuid>` 같은 외부 하네스 실행 id도 받는다. cwd/대화 UUID는 정체성으로 쓰지 않는다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS execution_session(
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      harness TEXT NOT NULL DEFAULT 'unknown',
+      managed_node_id TEXT,
+      desired_project_id INT REFERENCES project(id) ON DELETE SET NULL,
+      desired_revision BIGINT NOT NULL DEFAULT 0,
+      applied_revision BIGINT NOT NULL DEFAULT 0,
+      binding_epoch BIGINT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS execution_session_owner_idx ON execution_session(owner, last_seen DESC);
+    CREATE INDEX IF NOT EXISTS execution_session_project_idx ON execution_session(desired_project_id) WHERE desired_project_id IS NOT NULL;
+
+    -- 프로젝트 물리삭제도 실행 세션에는 명시 detach 전환이다. FK SET NULL만 두면 revision/epoch가 안 올라
+    -- 이미 주입된 AGENTS 맥락이 영구 잔류한다. BEFORE trigger가 null 이력까지 남긴 뒤 FK가 no-op이 되게 한다.
+    CREATE OR REPLACE FUNCTION execution_session_detach_deleted_project() RETURNS trigger AS $$
+    BEGIN
+      WITH changed AS (
+        UPDATE execution_session
+           SET desired_project_id=NULL, desired_revision=desired_revision+1, binding_epoch=binding_epoch+1,
+               last_seen=now(), updated_at=now()
+         WHERE desired_project_id=OLD.id
+         RETURNING id, binding_epoch)
+      INSERT INTO session_project(session_id, project_id, binding_epoch)
+        SELECT id, NULL, binding_epoch FROM changed
+      ON CONFLICT DO NOTHING;   -- 중재자 없이 — 스키마 초기화 SQL 은 tenant_id 재작성 전/후 두 모양에 다 맞아야 한다(tenant-column.test)
+      RETURN OLD;
+    END;
+    $$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS execution_session_project_delete_detach ON project;
+    CREATE TRIGGER execution_session_project_delete_detach BEFORE DELETE ON project
+      FOR EACH ROW EXECUTE FUNCTION execution_session_detach_deleted_project();
   `);
 
   // ── 세션이력 자산화(#905 C1) — 트랜스크립트를 중앙에 무결하게 append + 회수. 설계: [[project-905-design-assetization]] §5. ──
@@ -97,6 +140,18 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
     --  목록(내 세션·프로젝트)엔 최상위만, 서브에이전트는 부모 대화록 아래에서만 보인다.
     ALTER TABLE session ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
     CREATE INDEX IF NOT EXISTS session_parent_idx ON session(parent_session_id) WHERE parent_session_id IS NOT NULL;
+
+    -- ④ session_purged — 소유자가 **완전 삭제**한 세션의 묘비(#1850). 내용은 담지 않는다(그게 삭제의 목적이다).
+    --  왜 필요한가: 완전 삭제는 session/session_log 행을 통째로 지우므로 **워터마크가 0으로 돌아간다**. 그런데
+    --  캡처 훅은 매 턴 "서버 워터마크부터" 올리므로, 그 세션이 아직 살아 있으면 다음 턴에 **대화 전문을 처음부터
+    --  다시 올린다** — 지운 것이 스스로 부활한다. 이 묘비가 그 재수집을 거부하는 근거다(append 게이트).
+    --  담는 것은 좌표(node_id·session_id)와 '누가 언제 지웠나'뿐 — 대화·제목·바이트 어느 것도 남기지 않는다.
+    CREATE TABLE IF NOT EXISTS session_purged(
+      node_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      purged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      purged_by TEXT,
+      PRIMARY KEY (node_id, session_id));
   `);
 
   // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──
@@ -129,11 +184,27 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
       abs_path TEXT NOT NULL,
       sync TEXT NOT NULL DEFAULT 'none',
       origin_key TEXT,
+      binding_kind TEXT NOT NULL DEFAULT 'canonical',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (project_id, member_id, node_id, abs_path));
     CREATE INDEX IF NOT EXISTS project_folder_binding_member_idx ON project_folder_binding(member_id, node_id);
     CREATE INDEX IF NOT EXISTS project_folder_binding_origin_idx ON project_folder_binding(origin_key) WHERE origin_key IS NOT NULL;
+    ALTER TABLE project_folder_binding ADD COLUMN IF NOT EXISTS binding_kind TEXT NOT NULL DEFAULT 'canonical';
+    ${ensureCheck("project_folder_binding", { project_folder_binding_kind_chk: "binding_kind IN ('canonical','ephemeral')" })}
+    -- 구 데이터 정규화는 유니크 인덱스를 처음 만드는 마이그레이션에서만 한다. 매 부팅마다 전 행을 갱신하지 않는다.
+    DO $$
+    BEGIN
+      IF to_regclass('project_folder_binding_one_canonical_idx') IS NULL THEN
+        WITH ranked AS (
+          SELECT ctid, row_number() OVER (PARTITION BY project_id, node_id ORDER BY seen_at DESC, created_at DESC, abs_path) AS rn
+            FROM project_folder_binding)
+        UPDATE project_folder_binding b SET binding_kind=CASE WHEN ranked.rn=1 THEN 'canonical' ELSE 'ephemeral' END
+          FROM ranked WHERE b.ctid=ranked.ctid;
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS project_folder_binding_one_canonical_idx
+      ON project_folder_binding(project_id, node_id) WHERE binding_kind='canonical';
     ${ensureCheck("project_folder_binding", { project_folder_binding_sync_chk: "sync IN ('none','pull','both')" })}
   `);
 

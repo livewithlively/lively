@@ -33,6 +33,10 @@ import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
+import { entrypointHostEffects } from "./host-effects.mjs";
+
+const hostEffects = entrypointHostEffects();
+const fetch = (...args) => hostEffects.fetch(...args);
 import { fileURLToPath } from "node:url";
 
 const PROTOCOL = "2025-06-18";
@@ -104,7 +108,9 @@ function upstreamHeaders() {
   };
   const tok = token();
   if (tok) h.authorization = `Bearer ${tok}`;
-  const sid = (process.env.LIVELY_SESSION_ID || "").trim();
+  const sid = (process.env.LIVELY_SESSION_ID || "").trim()
+    || ((process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim() ? `codex-${(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID).trim()}` : "")
+    || ((process.env.CLAUDE_SESSION_ID || "").trim() ? `claude-${process.env.CLAUDE_SESSION_ID.trim()}` : "");
   if (sid) h["x-lively-session"] = sid;
   const mode = (process.env.LIVELY_MODE || "").trim();
   if (mode) h["x-lively-mode"] = mode;

@@ -18,6 +18,9 @@ import { initAllSchemas } from "./schemas.js";
 import { ensureSelfRls } from "../db/self-rls.js";
 import { seedDefaultContent } from "../org/delivery/seed-content.js";
 import { seedBuiltinApps } from "../apps/seed.js";
+import { armWorkerRecovery } from "../apps/worker-service.js";
+import { armMemberDeactivationHook } from "../apps/member-deactivation.js";
+import { sweepGhostSessionInstances } from "../apps/instance-janitor.js";
 import { runAutoBackfillSweep } from "../v6/embedding-backfill.js";
 import { registerTerminal } from "../terminal/routes.js";
 import { liveAttachCount, scanAttachProcs } from "../terminal/terminal-pty.js";
@@ -36,6 +39,7 @@ import { loadStoragePolicy, loadCallLogPolicy } from "../org/policies/runtime-lo
 import { getRuntimeConfig } from "../org/store.js";
 import { reapSessionLogs, backfillSessionTitles } from "../v6/session-log-store.js";
 import { reapIdleSessions } from "../sessions/session-reaper.js"; // #1059 F — idle 세션 자동 회수(정책 0=끔 기본)
+import { sweepAwaitingNotifications } from "../sessions/awaiting-notifier.js"; // #1891 — 세션이 답을 기다리게 되면 알림
 import { backfillSessionStates } from "../sessions/session-state-backfill.js"; // #1059 F 후속 — 레코드 없는 라이브 세션에 desired-state 미러
 import { ensureSharedCache } from "../ops/build-cache.js";
 import { startBoxWatch } from "../ops/box-watch.js";
@@ -163,6 +167,14 @@ export const DB_BOOT_STEPS: BootStep[] = [
   { name: "seed-builtin-apps", gate: "always", run: () => seedBuiltinApps()
       .then((r) => { if (r.seeded.length || r.updated.length) logger.info(r, "빌트인 앱 시딩"); })
       .catch((err) => logger.warn({ err }, "빌트인 앱 시딩 실패(비치명)")) },
+  // AppInstance worker 부팅복구(#1780 Stage B) — 시딩 뒤 최신 package hash가 확정된 다음 중앙 run을 되살리고,
+  // 이미 연결됐거나 이후 연결되는 최신 RemoteNode의 fail-closed 종료 run도 같은 계약으로 재시작한다.
+  { name: "app-worker-recovery", gate: "always", run: () => armWorkerRecovery()
+      .then((r) => { if (r.central.restarted || r.central.failed || r.remote.some((x) => x.restarted || x.failed)) logger.info(r, "앱 worker 복구"); })
+      .catch((err) => logger.warn({ err }, "앱 worker 복구 실패(비치명 — 인스턴스 조회/노드 재연결이 재시도)")) },
+  // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
+  //  members.ts 의 단일 슬롯에 건다. 순수 배선(동기·DB 무접근)이라 어디 붙어도 되지만, 요청이 들어오기 전에 걸려야 한다.
+  { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },
   // 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 .lively/project.json 에 sync:"pull" 을 stamp.
   //  pull 훅이 '이 폴더에 서버 파일을 써도 되나'를 마커의 sync 로 판정하게 됐는데, sync 없는 구 마커의 폴백은
   //  ~/lively/projects/<id>(꼴 고정) 만 인정한다 — 박스 폴더는 folder 가 임의(예: 'project/관리탭 수정')라
@@ -281,6 +293,19 @@ function startBackgroundSweeps(): void {
       .then(() => reapIdleSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
+  // #1891 — "하네스가 작업을 마치고 유저의 액션을 필요로 하는 상태가 되면 알림".
+  //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
+  //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.
+  setInterval(() => {
+    void sweepAwaitingNotifications()
+      .catch((err) => logger.warn({ err }, "awaiting 알림 스윕 실패(비치명 — 다음 tick 재시도)"));
+  }, 30_000).unref();
+
+  // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
+  //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.
+  setTimeout(() => { void sweepGhostSessionInstances().catch((err) => logger.warn({ err }, "유령 인스턴스 스윕(부팅) 실패")); }, 90_000).unref();
+  setInterval(() => { void sweepGhostSessionInstances().catch((err) => logger.warn({ err }, "유령 인스턴스 스윕 실패")); }, 6 * 60 * 60_000).unref();
+
   // 부팅 직후 1회 백필(회수는 하지 않는다 — 재부팅 복원과 겹쳐 갓 뜬 세션을 오판하지 않게). 40초 뒤: 스키마·tmux 안정 후.
   setTimeout(() => { void backfillSessionStates().catch((err) => logger.warn({ err }, "session-state 백필(부팅) 실패")); }, 40_000).unref();
 }

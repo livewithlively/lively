@@ -1,6 +1,6 @@
 // 크론 액션: 자료 distill(distill_sources·distill_sources_headless, #541/#1289) — R16 원문 이동.
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
 //  fire-and-forget(주입까지가 잡 책임 — 증류는 세션이 수 분에 걸쳐 knowledge_save+source_link_knowledge 로 수행).
@@ -53,7 +53,10 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
     const flags = headlessFlags({ model: params.model ?? b.model ?? undefined, effort: params.effort ?? b.effort ?? undefined });
     const r = await enqueueHeadlessTask({
       prompt: await applyPromptOverride(params, b), requester, jobId,
+      harness: headlessHarness(params),   // 증류기 설정엔 하네스 축이 없다 — 잡 params 만(비우면 의뢰자 로그인 기준 자동)
       marker: b.key ? "cron:" + jobId + "#" + b.key : undefined,
+      // node(#1881) — 실행 노드 고정(예: "central" = 게이트웨이 박스). 비우면 스케줄러 자유 배정(램 여유 순).
+      nodePref: typeof params.node === "string" && params.node.trim() ? params.node.trim() : null,
       flags, extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },
     });
     if (b.distillerId) await recordDistillerRunSafe(b.distillerId, r.status, r.summary);

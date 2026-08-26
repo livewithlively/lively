@@ -18,4 +18,8 @@ regexes = [
   '''AKIAIOSFODNN7EXAMPLE''',
   # 문서·예시의 자리표시자.
   '''<openssl-rand-hex-32-[AB]>''',
+  # 브라우저 저장소(localStorage) 칸 이름 — 자격증명이 아니다. generic-api-key 룰이 `const *_KEY = '<고엔트로피 문자열>'`
+  #  형태를 시크릿으로 오인한다(#1954 실측). 코드에서는 이름을 `*_STORE` 로 두어 재발을 막았지만, 이 스캔은
+  #  **히스토리 전수**라 옛 커밋이 남아 있는 동안 모든 PR 이 막힌다 → 그 리터럴 하나만 정확히 뺀다(파일 단위 제외 아님).
+  '''lively_v2_recent_apps''',
 ]

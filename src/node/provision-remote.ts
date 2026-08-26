@@ -17,6 +17,7 @@ import type { CreateInput, SessionInfo } from "../terminal/terminal-sessions.js"
 import { HttpError } from "../http-error.js";
 import { translateNodeRpcError } from "./rpc-error.js";
 import { logger } from "../log.js";
+import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
 
 const POLL_MS = 2_000;                    // provisionStatus 폴링 간격
 const DEFAULT_CAP_MS = 8 * 60_000;        // 완료 대기 상한(대형 레포 첫 clone 여유) — 넘으면 노드에선 계속 돌지만 여기선 포기
@@ -73,6 +74,15 @@ export function normalizeProvisionResult(raw: unknown): ProvisionResult {
   if (Array.isArray(raw)) return { provisioned: raw as ProvisionedRepo[], failed: [] };
   const o = (raw ?? {}) as Partial<ProvisionResult>;
   return { provisioned: Array.isArray(o.provisioned) ? o.provisioned : [], failed: Array.isArray(o.failed) ? o.failed : [] };
+}
+
+/** 새 노드는 create에서 첫 지시를 빼 DB 바인딩 뒤 별도 op로 넣는다. 구 노드는 종전 동작을 보존한다. */
+export function nodeProjectCreatePlan(input: CreateInput, supportsDeferredPrompt: boolean): {
+  createInput: CreateInput; deferredPrompt: string | null;
+} {
+  const prompt = typeof input.initialPrompt === "string" && input.initialPrompt.trim() ? input.initialPrompt : null;
+  if (!supportsDeferredPrompt || !prompt) return { createInput: input, deferredPrompt: null };
+  return { createInput: { ...input, initialPrompt: undefined }, deferredPrompt: prompt };
 }
 
 // 노드 사용 게이트(#905 C4) — "이 요청자가 이 노드에 프로젝트 작업(provision·세션생성)을 시킬 수 있는가"의 단일 판정.
@@ -176,15 +186,17 @@ export async function provisionStatusOnNode(nodeId: string, projectId: number): 
 //  무지 — DB 없음 → createSession 내부 검증이 빈 배열이 되므로, 노드 create 핸들러가 이 별도 invites 를 적용한다).
 export async function createProjectSessionOnNode(
   nodeId: string, requesterId: string, input: CreateInput, invites: string[],
-): Promise<SessionInfo> {
+): Promise<{ session: SessionInfo; deferredPrompt: string | null }> {
   await assertNodeUsable(liveNodeDeps, nodeId, requesterId);
   try {
     // #1541 hostProfile — member 노드 && 생성자=주인이면 그 PC 의 네이티브 하네스 설정을 그대로 쓴다(CreateInput 주석).
     //  판정을 못 하면(조회 실패) false — 프로필 주입(안전측) 유지.
     const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, requesterId)).catch(() => false);
-    return await nodeRpc<SessionInfo>(nodeId, "create", {
-      user: { userId: requesterId }, input: { ...input, invites: [], hostProfile }, invites,
+    const plan = nodeProjectCreatePlan(input, nodeSupports(nodeId, "injectFirstPrompt"));
+    const session = await nodeRpc<SessionInfo>(nodeId, "create", {
+      user: { userId: requesterId }, input: { ...plan.createInput, invites: [], hostProfile }, invites,
     });
+    return { session, deferredPrompt: plan.deferredPrompt };
   } catch (e) {
     // 네트워크·미지원을 사람 말로(래핑 없으면 bare 500 로 샌다) — relayNodeOp 와 같은 **분기 구성**(문구는 이 사이트 것).
     //  (#1313 R46) relayNodeOp 와 달리 offline 에 `|| !nodeOnline(nodeId)` 추가조건이 있고, unsupported 문구는 op 을
@@ -211,3 +223,37 @@ export function nodeProjectSessions(viewerId: string, projectId: number): NodeSe
 }
 
 function realSleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
+
+/**
+ * 노드 세션의 **프로젝트 소속을 게이트웨이가 확정한다** (노드엔 DB 가 없다 — #1867).
+ *  실패하면 방금 만든 세션을 죽이고 503 을 던진다: DB 가 소속의 정본인데 그 기록을 삼키면, 그 세션의 첫 훅이
+ *  '미연결' 로 보고 **또 다른 프로젝트를 만든다**(사람이 고른 소속이 갈린다). 첫 응답 전이라 생성 롤백이 안전하다.
+ */
+export async function bindNodeSessionProjectOrKill(args: {
+  nodeId: string; sessionId: string; requester: string; harness: string; projectId: number;
+}): Promise<void> {
+  try {
+    const current = await setExecutionSessionProject({
+      id: args.sessionId, owner: args.requester, harness: args.harness, nodeId: args.nodeId, projectId: args.projectId,
+    });
+    if (!current) throw new Error("execution session owner claim failed");
+    await markExecutionSessionApplied(args.sessionId, args.requester, current.desired_revision)
+      .catch(() => { /* desired 가 정본이고 applied 는 진단값 */ });
+  } catch (e) {
+    await nodeRpc(args.nodeId, "kill", { user: { userId: args.requester }, id: args.sessionId })
+      .catch(() => { /* 노드 이탈 시 진단 로그에 남는다 */ });
+    throw new HttpError(503, `프로젝트 소속을 기록하지 못해 노드 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
+  }
+}
+
+/**
+ * create 에서 떼어 둔 첫 지시를 **DB 소속이 확정된 뒤** 노드에 넣는다(#1867).
+ *  실패는 비치명 — 세션은 살아 있고 사람이 대화창에서 다시 칠 수 있다.
+ */
+export async function injectDeferredFirstPrompt(args: {
+  nodeId: string; sessionId: string; harness: string; text: string; trustOk: boolean;
+}): Promise<void> {
+  await nodeRpc(args.nodeId, "injectFirstPrompt", {
+    id: args.sessionId, harness: args.harness, text: args.text, trustOk: args.trustOk,
+  }).catch((e) => console.warn(`[node] 첫 지시 예약 실패(${args.sessionId}) — 세션은 살아 있습니다:`, (e as Error)?.message ?? e));
+}

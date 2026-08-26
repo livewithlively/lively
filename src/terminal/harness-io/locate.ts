@@ -12,13 +12,16 @@ import os from "node:os";
 import path from "node:path";
 import type { HarnessSessionAdapter } from "./adapter.js";
 import { MEMBER_HOME_BASE } from "../terminal-transcript.js";
+import { memberSlug, osUsername } from "../terminal-isolation.js";
 
 /** 이 소유자의 세션이 쓸 수 있는 홈들 — 공유(게이트웨이) 홈 + 격리 홈(리눅스 /home/box_<slug>, terminal-transcript 와 같은 규칙). */
 export function ownerHomes(owner: string, platform: string = process.platform): string[] {
   const homes = [os.homedir()];
   const me = String(owner || "").trim();
   const scanMemberHomes = platform === "linux" || !!process.env.LIVELY_MEMBER_HOME_BASE;
-  if (me && scanMemberHomes) homes.push(path.join(MEMBER_HOME_BASE, `box_${me}`));
+  //  ⚠ 홈 이름은 멤버 id 가 아니라 **슬러그**다(24자 절단) — id 를 그대로 붙이면 긴 id 를 가진 멤버에서 뿌리가
+  //   어긋나 훅이 보고한 정상 경로가 reportedPathOk 에서 탈락하고 대화창이 404 가 된다(실측 2026-08-25 매니지드 e2e, #1884).
+  if (me && scanMemberHomes) homes.push(path.join(MEMBER_HOME_BASE, osUsername(memberSlug(me))));
   return homes;
 }
 

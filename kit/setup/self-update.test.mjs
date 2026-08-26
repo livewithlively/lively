@@ -5,7 +5,7 @@
 //  실행: node kit/setup/self-update.test.mjs   (npm test 체인에 포함)
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -19,6 +19,8 @@ const pExecFile = promisify(execFile);
 
 const HERE = join(fileURLToPath(import.meta.url), "..");           // kit/setup
 const UPDATER = join(HERE, "..", "hooks", "self-update.mjs");
+const HOST_EFFECTS_PORT = join(HERE, "..", "hooks", "host-effects-port.mjs");
+const HOST_EFFECTS_IMPL = join(HERE, "host-effects.mjs");
 const { buildKitBundle } = await import(pathToFileURL(join(HERE, "..", "generator", "build-context.mjs")));
 
 let pass = 0, fail = 0;
@@ -104,6 +106,15 @@ const runUpdater = (home, extra = {}, args = []) =>
   pExecFile(process.execPath, [UPDATER, ...args], { env: env(home, extra), timeout: 180_000 });
 const lv = (home, f) => join(home, ".lively", f);
 const readIf = (p) => { try { return readFileSync(p, "utf8").trim(); } catch { return null; } };
+const installUpdaterFixture = (home) => {
+  const hooks = join(home, ".lively", "hooks");
+  const lib = join(home, ".lively", "lib");
+  mkdirSync(hooks, { recursive: true });
+  mkdirSync(lib, { recursive: true });
+  copyFileSync(UPDATER, join(hooks, "self-update.mjs"));
+  copyFileSync(HOST_EFFECTS_PORT, join(hooks, "host-effects-port.mjs"));
+  copyFileSync(HOST_EFFECTS_IMPL, join(lib, "host-effects.mjs"));
+};
 
 try {
   serving.body = makeBundle("v-aaa");
@@ -231,7 +242,7 @@ try {
     serving.version = "v-ddd";
     const home = freshHome("v-old");
     // '새 키트를 이미 받은 멤버' — 업데이터 파일이 있어야 훅이 띄울 수 있다(없으면 수동 업데이트가 경로).
-    execFileSync("cp", [UPDATER, join(home, ".lively", "hooks", "self-update.mjs")]);
+    installUpdaterFixture(home);
     const t0 = Date.now();
     const { stdout } = await runPreload(home);
     const hookMs = Date.now() - t0;
@@ -255,7 +266,7 @@ try {
   {
     const before = serving.installHits;
     const home = freshHome("v-ddd");
-    execFileSync("cp", [UPDATER, join(home, ".lively", "hooks", "self-update.mjs")]);
+    installUpdaterFixture(home);
     await runPreload(home);
     await new Promise((r) => setTimeout(r, 1500)); // 혹시 떴다면 도달할 시간을 준다
     (serving.installHits === before && !existsSync(lv(home, "update.log")))

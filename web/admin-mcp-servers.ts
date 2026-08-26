@@ -235,6 +235,17 @@ function mcpPresetField(f, data, isNew) {
           parts.forEach((p, i) => { li.append(...uiText(p)); if (i < parts.length - 1) li.append(el('code', { text: cb })); });
           return li;
         })));
+      // #1881 슬랙 — 매니페스트(이름·스코프·봇·콜백)가 채워진 생성 링크를 서버가 만든다(콜백이 게이트웨이마다 다르다).
+      if (c.name === 'slack') {
+        const mkBtn = el('button', { class: 'btn btn-sm', type: 'button', text: 'Slack 앱 만들기 링크 열기 ↗', style: 'margin-top:6px;margin-right:8px' });
+        mkBtn.addEventListener('click', async () => {
+          mkBtn.disabled = true;
+          try { const r = await api('/api/ui/org/slack/app-manifest'); if (r && r.create_url) window.open(r.create_url, '_blank', 'noopener'); else toast('링크를 받지 못했습니다', true); }
+          catch (e: any) { toast((e && e.message) || '링크를 만들지 못했습니다', true); }
+          finally { mkBtn.disabled = false; }
+        });
+        presetHint.append(mkBtn);
+      }
       if (c.guide.url) presetHint.append(el('a', { class: 'admin-hint', href: c.guide.url, target: '_blank', rel: 'noopener', style: 'display:inline-block;margin-top:6px', text: '설정 페이지 열기 ↗' }));
     } else {
       presetHint.append(

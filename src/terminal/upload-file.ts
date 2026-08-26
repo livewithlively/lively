@@ -108,10 +108,15 @@ export async function receiveUpload(
   }
 }
 
+// 상한을 사람이 읽는 단위로 — 413 문구가 실제 상한과 어긋나지 않게(#1870: 상수만 올리고 문구의 "50MB"가 남던 자리).
+const capText = (b?: number): string =>
+  !b ? "업로드 상한 초과" : b % (1024 ** 3) === 0 ? `${b / 1024 ** 3}GB 초과` : `${Math.round(b / 1024 ** 2)}MB 초과`;
+
 // 업로드 실패 → HTTP 에러. **취소(클라이언트가 끊음)면 null** — 응답할 상대가 없으니 조용히 끝낸다(500 로그도 남기지 않는다).
-export function uploadError(e: unknown): HttpError | null {
+//  maxBytes — 그 라우트의 상한(문구용). 안 넘기면 수치 없이 말한다.
+export function uploadError(e: unknown, maxBytes?: number): HttpError | null {
   const m = e instanceof Error ? e.message : "";
-  if (m === UPLOAD_TOO_LARGE) return new HttpError(413, "파일이 너무 큽니다(50MB 초과)");
+  if (m === UPLOAD_TOO_LARGE) return new HttpError(413, `파일이 너무 큽니다(${capText(maxBytes)})`);
   // 정지(#1272) — 요청은 살아 있는데 본문이 오지 않는다. 취소와 달리 **응답할 상대가 있으므로** 말해 준다.
   //  전형적 원인: 사내 PC 문서보안(DLP) 에이전트나 프록시가 본문 중계를 멈춘 것(브라우저엔 그쪽이 403 을 준다).
   if (m === UPLOAD_STALLED) {

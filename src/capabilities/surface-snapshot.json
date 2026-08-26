@@ -576,6 +576,26 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "me_local_mode_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/local-mode"
+  ],
+  "input_hash": "47124ddf6bd11a3a"
+ },
+ {
+  "name": "me_local_mode_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/local-mode"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "me_harness_local_pref",
   "scope": null,
   "mcp": false,
@@ -743,7 +763,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "2497f7505a86b6c2"
+  "input_hash": "9d6990858087a2d6"
  },
  {
   "name": "org_alert_status",
@@ -1158,6 +1178,16 @@
   "input_hash": "bdebee72196a940a"
  },
  {
+  "name": "org_distiller_local_ensure",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers/local"
+  ],
+  "input_hash": "331ca51692372057"
+ },
+ {
   "name": "org_source_channels",
   "scope": "memory",
   "mcp": true,
@@ -1316,6 +1346,16 @@
    "POST /api/ui/me/liv-profile"
   ],
   "input_hash": "28ae905489e3aa6c"
+ },
+ {
+  "name": "me_liv_profile_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/liv-profile"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "me_liv_ask_secret",
@@ -2486,7 +2526,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "14d61751ca713e02"
+  "input_hash": "d2ebd46df8b2e243"
  },
  {
   "name": "source_undistilled",
@@ -2516,7 +2556,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "869f8253de96ae5b"
+  "input_hash": "42805a361906679b"
  },
  {
   "name": "source_link_knowledge",
@@ -2604,7 +2644,7 @@
   "rest": [
    "GET /api/ui/v6/projects"
   ],
-  "input_hash": "2234c00a4e11657b"
+  "input_hash": "ed787db9358eb149"
  },
  {
   "name": "project_grep",
@@ -2705,6 +2745,36 @@
    "POST /api/ui/v6/projects/:id/status"
   ],
   "input_hash": "27e5ef225edfec2d"
+ },
+ {
+  "name": "project_archive_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/archive"
+  ],
+  "input_hash": "5dff7098b6704bed"
+ },
+ {
+  "name": "project_trash_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/trash"
+  ],
+  "input_hash": "101095875948a369"
+ },
+ {
+  "name": "project_purge_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/purge"
+  ],
+  "input_hash": "4dc36ab67eecb455"
  },
  {
   "name": "project_set_members_v6",
@@ -3267,6 +3337,36 @@
   "input_hash": "cff82a5b7bd78ee1"
  },
  {
+  "name": "notify_feed",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/notify/feed"
+  ],
+  "input_hash": "5d7a3020a5fd239c"
+ },
+ {
+  "name": "notify_prefs",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/notify-prefs"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "notify_prefs_set",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/notify-prefs"
+  ],
+  "input_hash": "59f15ec58f542936"
+ },
+ {
   "name": "task_field_create_v6",
   "scope": "memory",
   "mcp": true,
@@ -3444,7 +3544,7 @@
   "rest": [
    "POST /api/ui/cron"
   ],
-  "input_hash": "d2d671f0d76c545f"
+  "input_hash": "848fdb990f675fbc"
  },
  {
   "name": "cron_delete",
@@ -3535,6 +3635,36 @@
    "POST /api/ui/terminal/sessions/:id/project"
   ],
   "input_hash": "7545b7dc003c8466"
+ },
+ {
+  "name": "session_project_context",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/execution-sessions/:id/project-context"
+  ],
+  "input_hash": "f156bdfeb971fb39"
+ },
+ {
+  "name": "session_project_context_applied",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/execution-sessions/:id/project-context/applied"
+  ],
+  "input_hash": "38416a6a566515b3"
+ },
+ {
+  "name": "session_rename",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/rename"
+  ],
+  "input_hash": "b6f9caef520909c3"
  },
  {
   "name": "preview_env_list",
@@ -3634,7 +3764,7 @@
   "rest": [
    "POST /api/ui/delegate"
   ],
-  "input_hash": "6dd39bac3d57de58"
+  "input_hash": "ea747e74d50cc418"
  },
  {
   "name": "delegate_status",
@@ -3805,6 +3935,176 @@
    "GET /api/ui/me/oauth/connectors"
   ],
   "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_slack_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/slack/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_slack_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/slack/collect"
+  ],
+  "input_hash": "6115cebec72e3d5d"
+ },
+ {
+  "name": "org_slack_app_manifest",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/slack/app-manifest"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_slack_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/slack/oauth-complete"
+  ],
+  "input_hash": "c186cbfc4573638d"
+ },
+ {
+  "name": "org_notion_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/notion/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_notion_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/collect"
+  ],
+  "input_hash": "223f683383c27a6d"
+ },
+ {
+  "name": "org_notion_collect_connect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/collect/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_notion_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/oauth-complete"
+  ],
+  "input_hash": "1333f0dfc135b86a"
+ },
+ {
+  "name": "app_instance_list",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-instances"
+  ],
+  "input_hash": "b3c909be092af25e"
+ },
+ {
+  "name": "app_instance_open",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances"
+  ],
+  "input_hash": "d984e2cee148b08f"
+ },
+ {
+  "name": "app_instance_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-instances/:id"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
+ },
+ {
+  "name": "app_instance_update",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/update"
+  ],
+  "input_hash": "db60c134f163ed47"
+ },
+ {
+  "name": "app_instance_set_project",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/project"
+  ],
+  "input_hash": "031a2b509fdb98b3"
+ },
+ {
+  "name": "app_instance_close",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/close"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
+ },
+ {
+  "name": "app_notify",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-notifications"
+  ],
+  "input_hash": "38808f62c5d06ce5"
+ },
+ {
+  "name": "me_notifications",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/notifications"
+  ],
+  "input_hash": "0e5d23d8a5038cf4"
+ },
+ {
+  "name": "me_notifications_read",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/notifications/read"
+  ],
+  "input_hash": "62ff2ece42e18912"
  },
  {
   "name": "me_slack_channels",

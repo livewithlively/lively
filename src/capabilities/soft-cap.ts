@@ -98,7 +98,7 @@ export const HARD_CAP_OK: Readonly<Record<string, readonly string[]>> = {
     "author_agent", "session_id",                                          // 게이트웨이가 자동 식별(보통 미전송)
     "external_system", "external_id", "external_url", "external_instance", // PM 미러 좌표 — 잘리면 링크가 깨진다
   ],
-  delegate_run: ["subpath", "repo", "ref", "node"],                        // 실행 좌표 — 잘린 경로·브랜치로 돌면 안 된다
+  delegate_run: ["subpath", "repo", "ref", "node", "harness"],             // 실행 좌표 — 잘린 경로·브랜치·하네스 키로 돌면 안 된다
 };
 
 /**

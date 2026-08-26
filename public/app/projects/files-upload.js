@@ -38,10 +38,14 @@ const upIsAbort = (e) => !!e && (e.name === 'AbortError');
 const UP_NOT_OURS = [403, 407, 451];
 const upFailMsg = (status, bodyErr) => bodyErr || ('업로드 실패 (' + status + ')'
     + (UP_NOT_OURS.indexOf(status) >= 0 ? ' — 게이트웨이가 보낸 응답이 아닙니다(내 PC 보안프로그램(DLP)이나 사내 프록시가 막은 것으로 보입니다)' : ''));
-// 인증 fetch 업로드(PUT raw 스트림). 파일 본문 그대로 — Content-Type 비워 서버가 스트림으로 받음. signal(선택) = 취소.
+// 인증 fetch 업로드(PUT raw 스트림). 파일 본문 그대로.
+//  ⚠ Content-Type 은 **octet-stream 으로 박는다** — 비우면 브라우저가 File.type 으로 채우는데, .json 파일이면
+//  application/json 이 되어 게이트웨이 전역 express.json(1MB 상한)이 본문을 먼저 삼킨다(1MB 초과 413 · 이하는
+//  스트림이 소비돼 0바이트 저장 — src/preview/proxy-body.test.ts 가 기록한 그 사고 축). 서버 수신(receiveUpload)은
+//  Content-Type 을 안 보므로 어떤 파일이든 octet-stream 이 맞다.
 async function authUpload(url, file, signal) {
     const token = localStorage.getItem(TOKEN_KEY);
-    const res = await fetch(url, { method: 'PUT', headers: token ? { Authorization: 'Bearer ' + token } : {}, body: file, signal });
+    const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: file, signal });
     if (!res.ok) {
         let m = '';
         try {
@@ -53,6 +57,7 @@ async function authUpload(url, file, signal) {
 }
 // 진행률 콜백 업로드 — fetch 는 업로드 progress 가 없어 XHR 사용. onProgress(pct 0~100).
 //  signal(선택) — 취소되면 xhr.abort() 로 **지금 전송 중인 파일까지** 즉시 끊는다(다음 파일을 안 보내는 것만으론 큰 파일에서 한참 기다린다).
+//  성공 시 서버 응답 JSON 을 돌려준다(파싱 안 되면 null) — 새 세션 컴포저 첨부가 응답의 절대경로(path)를 쓴다(#1870).
 function authUploadProgress(url, file, onProgress, signal) {
     return new Promise((resolve, reject) => {
         if (signal && signal.aborted) {
@@ -62,6 +67,7 @@ function authUploadProgress(url, file, onProgress, signal) {
         const token = localStorage.getItem(TOKEN_KEY);
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', url);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream'); // authUpload 와 같은 이유(위 ⚠)
         if (token)
             xhr.setRequestHeader('Authorization', 'Bearer ' + token);
         const onAbort = () => xhr.abort();
@@ -70,8 +76,14 @@ function authUploadProgress(url, file, onProgress, signal) {
         xhr.upload.onprogress = (ev) => { if (ev.lengthComputable && onProgress)
             onProgress((ev.loaded / ev.total) * 100); };
         xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300)
-                resolve();
+            if (xhr.status >= 200 && xhr.status < 300) {
+                let j = null;
+                try {
+                    j = JSON.parse(xhr.responseText);
+                }
+                catch (_) { /* */ }
+                resolve(j);
+            }
             else {
                 let m = '';
                 try {
@@ -357,4 +369,4 @@ function upProgress(total, onCancel, opts) {
         },
     };
 }
-export { UP_CONFIRM, UP_MANY, authDownload, authUpload, authUploadProgress, upControl, upDropZone, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast };
+export { UP_CONFIRM, UP_MANY, authDownload, authUpload, authUploadProgress, upControl, upDirSupported, upDropZone, upFromInput, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast };

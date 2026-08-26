@@ -47,6 +47,27 @@ function openLinkFromTerminal(uri: string): void {
       window.parent.location.hash = u.hash;   // 같은 출처 부모(셸) — 교차 출처면 아래 catch 로
       return;
     }
+    // 미리보기 주소는 새 탭이 아니라 **곁칸의 웹 칸**으로 보낸다(원준 2026-08-21).
+    //  종전엔 여기가 그대로 window.open 으로 빠져 라이블리 창이 하나 더 떴다 — 화면을 고치는 동안
+    //  터미널↔새 탭 왕복이 계속 일어난다. 셸이 이 알림을 받아 웹 칸을 켜고 주소를 싣는다.
+    //  ⚠ 부모가 안 듣는 판(구 셸·단독 페이지)에서는 아무 일도 안 일어나면 안 되므로, 셸이 받았다고
+    //   답하지 않으면 잠시 뒤 새 탭으로 떨어진다.
+    //  아티팩트도 같은 길로 보낸다(원준 2026-08-21). 다만 claude.ai 는 남의 사이트라 **브라우저에서는
+    //  iframe 임베드를 스스로 막는다**(CSP frame-ancestors 'self') — 그래서 곁칸에 넣을지 새 탭으로 열지는
+    //  여기서 정하지 않고 **부모가 정한다**(앱이면 webview 라 뚫린다, #1829). 터미널은 넘기기만 한다.
+    const toPane = (u.origin === location.origin && /\/preview\/[^/]+\//.test(u.pathname))
+      || (/(^|\.)claude\.ai$/.test(u.hostname) && /^\/code\/artifact\//.test(u.pathname));
+    if (toPane && window.parent !== window) {
+      let taken = false;
+      const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
+      window.addEventListener('message', ack);
+      window.parent.postMessage({ type: 'lively:open-in-pane', url: u.href }, location.origin);
+      window.setTimeout(() => {
+        window.removeEventListener('message', ack);
+        if (!taken) window.open(uri, '_blank', 'noopener');
+      }, 400);
+      return;
+    }
   } catch (_) { /* URL 파싱·부모 접근 실패 — 새 창 폴백 */ }
   window.open(uri, '_blank', 'noopener');
 }
@@ -312,7 +333,7 @@ const STATE_MARKER = '__LTSTATE__';
 //  문자를 %output 알림 '경계'에서 쪼갤 수 있는데(문자의 앞바이트가 한 %output 끝, 뒷바이트가 다음 %output
 //  시작 — 사이에 `\n%output %<pane> ` 프레이밍이 끼어듦), 스트림을 문자열로 먼저 디코드하면 그 자리가 깨진다(�).
 //  → %output 의 '값 바이트'만 모아 streaming UTF-8 디코더(경계의 partial 바이트를 버퍼링)로 디코드해 재조립한다.
-function makeControl(opts) {
+export function makeControl(opts) {
   // opts: { write(string), backfill(string), onExit() }
   let mode = null;                  // null=미정, 'control', 'raw'
   let pending = new Uint8Array(0);  // 부분 줄/도입자 판별용 바이트 잔여
@@ -344,8 +365,19 @@ function makeControl(opts) {
     }
     return new Uint8Array(out);
   }
-  function handleLine(s, e0) { // pending[s,e0) — 줄(개행 제외). 끝 \r 제거.
-    let e = e0; if (e > s && pending[e - 1] === 0x0d) e--;
+  // 줄 끝 CR 은 **개수와 무관하게 전부** 프레이밍이다 — 값이 아니다(#1943 실측).
+  //  tmux 는 control mode 줄을 `\n` 으로 끝내고, 값 안의 제어바이트는 전부 8진(`\015`)으로 이스케이프한다
+  //  → 줄 끝에 '리터럴' CR 이 오는 경로는 PTY 의 ONLCR(`\n`→`\r\n`) 뿐이고, 그건 데이터가 아니다.
+  //  ⚠ 종전엔 CR 을 **한 개만** 벗겼다. 그 가정은 'PTY 가 하나'일 때만 맞다:
+  //   · 셀프호스팅(dev) — 코어 node-pty → tmux : `\r\n` (CR 1개) → 한 개 벗기면 정확.
+  //   · 매니지드      — 코어 node-pty → tmux-relay.cjs → docker exec(Tty:true) → tmux : PTY 가 **둘**이라
+  //     ONLCR 이 두 번 걸려 `\r\r\n` (CR 2개). 한 개만 벗기면 **남은 CR 이 pane 데이터로 xterm 에 써진다.**
+  //  증상(실측 2026-08-25, 매니지드 도그푸드): 앱이 그린 프레임은 절대 CUP(`\e[43;5H`)로 끝나는데 그 뒤에
+  //   붙은 CR 이 커서를 **매번 0열로** 밀었다 → 커서가 프롬프트 맨 왼쪽(`>` 위)에 붙박이고, 한글 IME 조합은
+  //   버퍼 커서 자리에 그려지므로 조합 글자가 거기 뜬다(확정 전까지). tmux cx=5 인데 xterm x=0 으로 실측.
+  //   dev 에서 안 나던 이유가 이것이다 — 같은 코드, 다른 PTY 층수.
+  function handleLine(s, e0) { // pending[s,e0) — 줄(개행 제외). 끝 \r 전부 제거.
+    let e = e0; while (e > s && pending[e - 1] === 0x0d) e--;
     // 닫히지 않는 블록에서 빠져나온다 — 이 줄부터는 평소대로(=%output 은 화면에 쓴다) 처리한다.
     if (inBlock && blockAt && Date.now() - blockAt > BLOCK_MAX_MS) {
       inBlock = false; blockParts = []; blockAt = 0;
@@ -417,6 +449,12 @@ let syncedThisConn = false;           // 이 연결에서 재접속 상태동기
 //  cap 을 보내면(옛 서버로의 degrade 는 예외 — 그땐 상태 자체가 안 옴), state-only(t:'st')가 남긴 stale 커서가
 //  엉뚱한 백필에 적용돼 이 버그(커서 desync)가 재발한다. 새 cap 송신부를 추가하면 st:1 을 반드시 함께.
 let pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
+// tmux 실커서로 되돌린다 — cx/cy 는 0-based·가시영역 기준, xterm CUP 은 1-based.
+// ⚠ 조건 없이 적용한다. 한때 '커서가 숨겨져 있으면(cursor_flag=0) 좌표를 못 믿는다'고 보고 적용을 미룬 적이
+//  있는데(#1943 초판), 그건 오진이었다 — 진짜 원인은 control-mode 줄 끝의 잔여 CR 이었다(handleLine 주석).
+//  게다가 커서를 숨긴 채 idle 인 TUI(선택 프롬프트·less·fzf)에선 '미루면 영영 안 맞춰져' 더 나빴다.
+//  tmux 의 cx/cy 는 커서 표시 여부와 무관하게 그 순간의 진짜 좌표다.
+function writeCursor(st) { try { term.write('\x1b[' + (st.cy + 1) + ';' + (st.cx + 1) + 'H'); } catch (_) { /* noop */ } }
 // ── 캡처가 불가능한 백엔드를 위한 폴백 (#1541 실측) ──────────────────────────────────────────
 // psmux(Windows 노드)는 **alt-screen 팬의 capture-pane 에 빈 응답**을 준다(tmux 는 내용을 준다).
 //  A/B 실측 — 같은 노드, 같은 요청: 셸 팬(alt=0) → 상태 블록 + 캡처 44줄 / claude 팬(alt=1) → 상태 블록만.
@@ -500,7 +538,7 @@ function armBackfillWatch() {
     doNudge();
   }, BACKFILL_WAIT_MS);
 }
-function parsePaneState(line) {
+export function parsePaneState(line) {
   const m: any = {};
   for (const tok of String(line).trim().split(/\s+/)) { const i = tok.indexOf('='); if (i > 0) m[tok.slice(0, i)] = tok.slice(i + 1); }
   const num = (k) => { const n = parseInt(m[k], 10); return Number.isFinite(n) ? n : null; };
@@ -814,16 +852,41 @@ let copyHintAt = 0;
 function copyHintToast() {
   if (Date.now() - copyHintAt < 8000) return;
   copyHintAt = Date.now();
-  toast('복사할 선택이 없어요 — 드래그로 선택한 뒤 ⌘C (웹 선택은 Shift+드래그)');
+  toast('복사할 선택이 없어요 — 드래그하거나 더블클릭으로 선택한 뒤 ⌘C 하세요 (안 되면 Shift+드래그로 선택)');
 }
-// 앱(마우스모드) 화면의 '드래그 선택' 관측(#1117 버그C) — xterm 이 앱으로 보내는 SGR 마우스 리포트(onData 로
-//  나가는 \e[<b;x;y M/m)를 읽어 누름(버튼 0~2) → 눌린 채 이동 → 뗌 이면 앱에 선택이 생겼다고 본다. 제자리
-//  클릭(이동 없이 뗌)이나 일반 키보드 입력이 오면 해제 — Claude 는 클릭·타이핑에 선택을 잃는다. 휠(64+)과
+// 브리지는 됐는데 앱이 복사 신호(OSC52)를 안 보낸 경우의 안내(#1646). 종전엔 아무 반응이 없어서
+//  "⌘C 를 눌렀는데 아무 일도 안 일어난다"가 됐다 — 사용자는 실패했다는 사실조차 알 수 없었다.
+//  사파리 사전 커밋(armClipboardPromise)의 2초 창보다 뒤에 뜬다. OSC52 가 오면 조용히 취소된다(성공은 무음).
+let bridgeMissTimer = null;
+function armBridgeMissHint() {
+  clearTimeout(bridgeMissTimer);
+  bridgeMissTimer = setTimeout(() => {
+    bridgeMissTimer = null;
+    dlog('bridge-miss');
+    toast('복사되지 않았어요 — 화면에서 Shift+드래그로 선택한 뒤 ⌘C 하시면 확실히 복사됩니다', true);
+  }, 2500);
+}
+function cancelBridgeMissHint() {
+  if (!bridgeMissTimer) return;
+  clearTimeout(bridgeMissTimer); bridgeMissTimer = null;
+}
+// 앱(마우스모드) 화면의 '선택 제스처' 관측(#1117 버그C) — xterm 이 앱으로 보내는 SGR 마우스 리포트(onData 로
+//  나가는 \e[<b;x;y M/m)를 읽어 앱 화면에 선택이 생겼는지 본다. 선택을 만드는 제스처는 둘이다:
+//   ① 드래그 — 누름(버튼 0~2) → 눌린 채 이동 → 뗌.
+//   ② 같은 자리 연속 클릭 — 더블클릭=단어, 트리플클릭=줄(#1646 제보: 더블클릭으로 선택했는데 ⌘C 가 먹지
+//      않고 "복사할 선택이 없어요"만 떴다. 종전 관측기는 ①만 알아서 연타를 '제자리 클릭'으로 흘렸다).
+//  제자리 단일 클릭·일반 키보드 입력은 해제 — Claude 는 클릭·타이핑에 선택을 잃는다. 휠(64+)과
 //  호버 이동(버튼비트 3)은 선택 상태와 무관. ESC 로 시작하는 onData(방향키 등)는 선택을 건드리지 않는다.
 let dragPress = null, dragMoved = false;
+// 연속 클릭 판정 — 같은 셀에서 임계 안에 이어진 클릭만 한 묶음으로 센다. 임계를 넘거나 자리가 바뀌면 새 묶음(=단일 클릭).
+const MULTI_CLICK_MS = 600;
+let clickRun = 0, clickAt = 0, clickPos = '';
+// 앱 선택 해제 — 관측 상태를 한 군데서 지운다(클릭 이력까지: 타이핑 직후 클릭 1회가 직전 연타에 이어붙어
+//  '더블클릭'으로 오인되면 선택 없는 ^C 가 나간다).
+function clearAppSelect() { appDragSelect = false; clickRun = 0; clickAt = 0; clickPos = ''; }
 function trackAppMouse(d) {
   if (!(d.charCodeAt(0) === 0x1b && d.charCodeAt(1) === 0x5b && d.charCodeAt(2) === 0x3c)) { // '\e[<' 아님
-    if (d.charCodeAt(0) !== 0x1b) appDragSelect = false; // 일반 타이핑/IME — 앱 선택 해제로 간주
+    if (d.charCodeAt(0) !== 0x1b) clearAppSelect(); // 일반 타이핑/IME — 앱 선택 해제로 간주
     return;
   }
   const re = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
@@ -835,8 +898,16 @@ function trackAppMouse(d) {
     if (b >= 32) { if (!isUp && (b & 3) !== 3 && dragPress) dragMoved = true; continue; } // 눌린 채 이동(호버 3 제외)
     if (!isUp) { dragPress = m[2] + ',' + m[3]; dragMoved = false; }
     else {
-      appDragSelect = !!(dragPress && (dragMoved || dragPress !== (m[2] + ',' + m[3])));
-      if (appDragSelect) dlog('app-drag-select');
+      const pos = m[2] + ',' + m[3];
+      const now = Date.now();
+      if (dragPress && (dragMoved || dragPress !== pos)) {     // ① 드래그 — 연타 이력과는 무관한 새 선택
+        appDragSelect = true; clickRun = 0; clickAt = 0; clickPos = '';
+      } else {                                                 // ② 제자리 클릭 — 연타면 앱이 단어·줄을 선택한다
+        clickRun = (clickPos === pos && now - clickAt <= MULTI_CLICK_MS) ? clickRun + 1 : 1;
+        clickAt = now; clickPos = pos;
+        appDragSelect = clickRun >= 2;
+      }
+      if (appDragSelect) dlog('app-drag-select', 'run=' + clickRun);
       dragPress = null; dragMoved = false;
     }
   }
@@ -902,7 +973,7 @@ export function setupWebkitImeAdapter() {
       sendInput(d);                                              // 즉시 에코 — 지연 없음
       imeEcho = (d.length === 1 && HANGUL_CH_RE.test(d)) ? d : ''; // 한글이면 이후 치환 대상, 비한글(숫자 등)은 불변
       imeEchoDone = '';                                          // 새 입력 시작 — 직전 커밋 기억은 무효
-      appDragSelect = false;                                     // 타이핑 = 앱 선택 해제 — 이 경로는 handleTermData(trackAppMouse)를 안 지나므로 여기서(#1117 Cmd+C 게이팅과 정합)
+      clearAppSelect();                                          // 타이핑 = 앱 선택 해제 — 이 경로는 handleTermData(trackAppMouse)를 안 지나므로 여기서(#1117 Cmd+C 게이팅과 정합)
       dlog('ime', 'echo ' + diagPreview(d, 8));
     }
   }, true);
@@ -951,6 +1022,7 @@ export function setupOscClipboard() {
           try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
           if (text) {
             dlog('osc52', 'len=' + text.length);
+            cancelBridgeMissHint(); // 앱 복사 신호 도착 — 브리지는 성공했다(안내 취소, 성공은 무음)
             // 사파리에서 Ctrl/Cmd+C 제스처가 promise 를 미리 커밋해 뒀으면(armClipboardPromise) 그걸 resolve —
             //  제스처 밖 writeText 거부를 우회해 앱 복사가 실제로 클립보드에 닿는다. 그 외(크롬 등)는 직접 쓴다.
             if (osc52Resolve) { const r = osc52Resolve; osc52Resolve = null; clearTimeout(osc52Timer); r(text); }
@@ -1244,7 +1316,7 @@ export function setupClipboard() {
           // ⚠ 관측은 '1회용'이다(#1117 후속, 사파리 실기기 사고): 앱(CC)은 복사 후·출력 후 선택을 스스로 잃는데
           //  우리는 그걸 볼 수 없다. 관측을 소비하지 않으면 Cmd+C 연타의 2번째부터가 선택 없는 ^C(= 취소,
           //  두 번이면 CC 종료)로 들어간다. 그래서 브리지 1회마다 소비하고, 다시 복사하려면 다시 드래그해야 한다.
-          if (appDragSelect) { appDragSelect = false; armClipboardPromise(); sendInput('\x03'); dlog('cmdc-bridge', 'consume'); }
+          if (appDragSelect) { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); dlog('cmdc-bridge', 'consume'); }
           else { dlog('cmdc-skip', 'no-app-selection'); copyHintToast(); }
           return false;
         }
@@ -1960,7 +2032,8 @@ function openHelp() {
         kb(['휠 ↑'], '위로 스크롤해 지난 출력 보기')),
       sec('복사',
         kb(['드래그 → ⌘/Ctrl C'], '드래그로 선택한 뒤 복사 — 자동 복사는 없어요(클립보드 안 덮임)'),
-        kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그로 선택'),
+        kb(['더블클릭'], '단어 하나만 빠르게 — 세 번 누르면 그 줄 전체가 선택됩니다'),
+        kb(['Shift 드래그'], 'Claude 안에서 선택이 잘 안 될 때는 Shift 누른 채 드래그'),
         kb(['Claude 복사'], 'Claude 가 복사한 내용은 내 컴퓨터 클립보드에도 자동으로 올라가요'),
         kb(['⌘C (선택 없이)'], 'Claude 화면에서 선택 없이 ⌘C 를 눌러도 이제 Claude 가 종료되지 않아요')),
       // 파일 전달은 이 화면에서 가장 안 알려진 기능이라 별도 섹션으로 앞에 둔다(#1235 — 종전엔 '파일 탐색기' 한 줄이 전부였다).
@@ -2479,6 +2552,13 @@ let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecti
 // ⚠ 세션이 '진짜 종료'된 경우는 4403 이 아니라 4410(session-gone)으로 온다(#835) — 서버가 tmux 에게 확답을
 //  받았을 때만 보낸다. 그래야 '살아있는데 죽었다고 오인'(#687) 없이 '죽었는데 영원히 재접속중'을 없앨 수 있다.
 let denyRetries = 0; const MAX_DENY_RETRIES = 5;
+// 4462(노드 오프라인) 전용 예산(#1865). 이 코드는 '곧 풀릴 수 있는 일시 상태'다 — 게이트웨이를 재배포하면
+//  노드도 함께 끊기고, 노드가 다시 붙기까지 최악 33초 걸린다(노드 백오프 + 상태 push). 그 창에서는 일반
+//  백오프(1.5s→×1.6→5s)로 뜸하게 두드릴 이유가 없다: **1초 고정**으로 촘촘히 두드려 노드가 붙는 즉시 붙는다.
+//  ⚠ 이 구간은 **일반 재시도 예산(attempts)을 쓰지 않는다** — 안 그러면 40회를 40초 만에 소진해, 노드가
+//   잠깐 꺼진 것뿐인데 화면이 '포기'로 넘어간다(종전 정책은 '노드가 켜지면 그대로 붙는다'였다).
+//  촘촘한 구간이 끝나면 종전 백오프로 넘어간다 — 노드가 정말 꺼져 있는 경우의 동작은 그대로다.
+let offlineTries = 0; const OFFLINE_FAST_TRIES = 45, OFFLINE_FAST_MS = 1000;
 let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 영구 중단(아래 endSession)
 // 게이트웨이가 아예 응답하지 않을 때 **언젠가는 포기한다**. 예전엔 5초 간격으로 영원히 재시도했는데,
 //  그러면 서버가 죽었든 노트북이 절전에서 깼든 화면은 똑같이 '재연결 중… (417회째)' 만 돈다 —
@@ -2550,7 +2630,7 @@ function showRetryBar() {
       onclick: () => {
         const b = document.getElementById('retry-bar');
         if (b && b.parentNode) b.parentNode.removeChild(b);
-        gaveUp = false; attempts = 0; reconnectDelay = 1500;
+        gaveUp = false; attempts = 0; reconnectDelay = 1500; offlineTries = 0;
         connectNow();
       },
     }));
@@ -2741,7 +2821,7 @@ async function connectNow() {
         // 커서 복원(#1092 버그2·3) — capture 텍스트엔 최종 커서위치가 없고, capture 는 pane 높이만큼(빈 줄 포함) 그려
         //  커서가 '쓴 마지막 줄'(대개 화면 맨 아래)에 남는다 → 프롬프트는 위, 입력/커서는 아래로 어긋남. tmux 실커서로 되돌린다.
         //  (cx/cy 는 0-based·가시영역 기준 → xterm CUP 은 1-based.)
-        if (st && st.hasCursor) term.write('\x1b[' + (st.cy + 1) + ';' + (st.cx + 1) + 'H');
+        if (st && st.hasCursor) writeCursor(st);
       } catch (_) { /* noop */ }
     },
     // tmux control 스트림의 %exit — 이 attach 클라가 끝났다는 뜻일 뿐, '세션이 죽었다'는 뜻은 아니다
@@ -2794,7 +2874,12 @@ async function connectNow() {
     // 4462(노드 오프라인) — 재시도는 **유지**한다(노드가 켜지면 그대로 붙는다. 그게 이 코드의 정책이다).
     //  다만 이유는 말한다: 지금까지는 원인 불명의 '재연결 중…' 만 떠서, 사용자도 우리도 무엇이 문제인지
     //  화면만 보고는 알 수 없었다(실측 #1541 — 노드가 다른 게이트웨이에 붙어 있던 걸 이 화면으로는 끝내 못 봤다).
-    if (e && e.code === 4462) { scheduleReconnect('이 세션의 노드가 연결돼 있지 않습니다 — 재연결 중…'); return; }
+    if (e && e.code === 4462) {
+      // 초기 구간은 1초 고정으로 촘촘히(위 offlineTries 주석) — 재배포로 노드가 잠깐 끊긴 경우가 대부분이다.
+      if (++offlineTries <= OFFLINE_FAST_TRIES) { reconnectDelay = OFFLINE_FAST_MS; attempts = Math.max(0, attempts - 1); }
+      scheduleReconnect('이 세션의 노드가 연결돼 있지 않습니다 — 재연결 중…');
+      return;
+    }
     scheduleReconnect(wasConnected ? '연결 끊김 — 재연결 중…' : '재연결 중…');
   };
   sock.onerror = () => { /* onclose 가 뒤따른다 */ };

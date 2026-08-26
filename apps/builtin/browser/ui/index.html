@@ -1,0 +1,185 @@
+<!doctype html><meta charset="utf-8"><title>웹 브라우저</title>
+<!--
+  라이블리 앱 — 웹 브라우저. 이 파일은 **앱 UI 하나**로 완결된다(외부 스크립트·번들 없음).
+  · 호스트가 주입한 window.lively 로 데이터를 쓴다 — 북마크·최근 주소는 이 앱 전용 표(app.browser__*)에 남고
+    테넌트 격리는 서버가 한다(다른 워크스페이스와 절대 섞이지 않는다).
+  · 남의 사이트를 이 안에 싣는 것은 매니페스트 csp.frame_domains 선언이 있어서 가능하다(기본은 프레임 0).
+  · ⚠ 정직하게: 사이트가 X-Frame-Options / frame-ancestors 로 막아 두면 우리가 뚫을 수 없다.
+    2026-08-23 실측(dev, 이 앱으로): example.com ○ · ko.wikipedia.org ○(본문 2892자 렌더) ·
+    news.ycombinator.com ✕(frame-ancestors 'self' → ERR_BLOCKED_BY_RESPONSE) · github.com ✕(XFO deny).
+    ★ **차단은 감지할 수 없다** — 같은 실측에서 허용/차단 **양쪽 다 iframe 의 load 이벤트가 발생**했다.
+    그래서 '실패를 감지해 배너를 띄우는' 코드를 두지 않는다(거짓 판정이 된다). 대신 안내를 늘 띄우고
+    ↗(새 탭)를 상시로 준다 — 새 탭은 샌드박스가 못 여는 일이라 호스트(SDK ui.openExternal)가 대신한다.
+-->
+<style>
+  :root {
+    --ink: #15233B; --muted: #6B7A90; --line: #E6ECF5; --bg: #fff; --soft: #F7F9FC; --blue: #2D6BF0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #E8EDF6; --muted: #9AA6B8; --line: #2A3446; --bg: #141A24; --soft: #1C2430; --blue: #5B8CFF; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; display: flex; flex-direction: column; font: 13px/1.5 system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif; color: var(--ink); background: var(--bg); }
+
+  .bar { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px; border-bottom: 1px solid var(--line); background: var(--soft); }
+  .ico { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: 14px; cursor: pointer; }
+  .ico:hover:not(:disabled) { background: var(--line); color: var(--ink); }
+  .ico:disabled { opacity: .35; cursor: default; }
+  .ico.on { color: #D9A32B; }
+  #addr { flex: 1; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit; }
+  #addr:focus { outline: none; border-color: var(--blue); }
+
+  .marks { flex: none; display: flex; gap: 6px; padding: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); scrollbar-width: none; }
+  .marks::-webkit-scrollbar { display: none; }
+  .marks:empty { display: none; }
+  .mark { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 190px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+  .mark span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mark:hover { border-color: var(--blue); }
+  .mark b { font-weight: 400; color: var(--muted); font-size: 11px; }
+
+  .stage { position: relative; flex: 1; min-height: 0; background: var(--bg); }
+  iframe { width: 100%; height: 100%; border: 0; background: var(--bg); }
+  .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 10px; justify-items: center; padding: 24px; text-align: center; color: var(--muted); }
+  .empty h2 { margin: 0; font-size: 14px; color: var(--ink); }
+  .empty p { margin: 0; font-size: 12px; max-width: 300px; line-height: 1.7; }
+  .quick { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .quick button { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+  .quick button:hover { border-color: var(--blue); }
+
+  .note { flex: none; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-top: 1px solid var(--line); background: var(--soft); color: var(--muted); font-size: 11px; }
+  .note button { margin-left: auto; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; font-size: 11px; cursor: pointer; }
+</style>
+
+<div class="bar">
+  <button class="ico" id="back" title="뒤로" disabled>‹</button>
+  <button class="ico" id="fwd" title="앞으로" disabled>›</button>
+  <button class="ico" id="reload" title="다시 불러오기">↻</button>
+  <input id="addr" type="text" placeholder="주소 또는 검색어" autocomplete="off" spellcheck="false" aria-label="주소">
+  <button class="ico" id="star" title="북마크에 넣기">☆</button>
+  <button class="ico" id="ext" title="새 탭에서 열기">↗</button>
+</div>
+<div class="marks" id="marks"></div>
+
+<div class="stage">
+  <iframe id="frame" referrerpolicy="no-referrer-when-downgrade" title="웹 페이지"></iframe>
+  <div class="empty" id="empty">
+    <h2>주소를 입력하세요.</h2>
+    <p>여기서 연 페이지는 이 칸 안에 그대로 뜹니다. 북마크와 최근 주소는 이 워크스페이스에만 저장돼요.</p>
+    <div class="quick" id="quick"></div>
+  </div>
+</div>
+
+<div class="note">
+  <span id="noteText">사이트가 프레임 삽입을 막으면 빈 화면이 됩니다 — 그때는 새 탭으로 여세요.</span>
+  <button id="extBtn" type="button">새 탭에서 열기 ↗</button>
+</div>
+
+<script>
+  // ── 주소 정규화 — 주소처럼 안 보이면 검색으로 보낸다(막다른 입력칸을 만들지 않는다). ──
+  function toUrl(raw) {
+    var t = String(raw || '').trim();
+    if (!t) return '';
+    var looksHost = !/\s/.test(t) && (/^https?:\/\//i.test(t) || /\.[a-z]{2,}/i.test(t));
+    if (!looksHost) return 'https://duckduckgo.com/?q=' + encodeURIComponent(t);
+    try {
+      var u = new URL(/^https?:\/\//i.test(t) ? t : 'https://' + t);
+      return (u.protocol === 'https:' || u.protocol === 'http:') ? u.href : '';
+    } catch (e) { return ''; }
+  }
+  var host = function (u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u; } };
+
+  var frame = document.getElementById('frame'), addr = document.getElementById('addr');
+  var empty = document.getElementById('empty'), marksEl = document.getElementById('marks');
+  var starBtn = document.getElementById('star');
+  var stack = [], at = -1, bookmarks = [];
+
+  function paintNav() {
+    document.getElementById('back').disabled = at <= 0;
+    document.getElementById('fwd').disabled = at < 0 || at >= stack.length - 1;
+    var cur = stack[at] || '';
+    starBtn.textContent = bookmarks.some(function (b) { return b.url === cur; }) ? '★' : '☆';
+    starBtn.classList.toggle('on', bookmarks.some(function (b) { return b.url === cur; }));
+    starBtn.disabled = !cur;
+  }
+
+  function show(url) {
+    frame.src = url;
+    addr.value = url;
+    empty.style.display = url ? 'none' : '';
+    paintNav();
+  }
+
+  /** 주소로 간다. push=true 면 방문기록 스택에 쌓고, 최근 주소(앱 데이터)에도 남긴다. */
+  function go(raw, push) {
+    var url = toUrl(raw);
+    if (!url) return;
+    if (push !== false) { stack = stack.slice(0, at + 1); stack.push(url); at = stack.length - 1; }
+    show(url);
+    remember(url);
+  }
+
+  // ── 앱 데이터(store_*) — 이 앱 전용 표. 같은 주소는 하나만 남긴다(지우고 다시 넣어 목록이 무한히 늘지 않게). ──
+  async function remember(url) {
+    try {
+      await lively.store.delete('visits', { url: url });
+      await lively.store.insert('visits', { url: url, title: host(url) });
+      drawQuick();
+    } catch (e) { /* 기록 실패가 브라우징을 막지는 않는다 */ }
+  }
+
+  async function loadBookmarks() {
+    try { bookmarks = await lively.store.query('bookmarks', { limit: 50 }); }
+    catch (e) { bookmarks = []; }
+    marksEl.replaceChildren.apply(marksEl, bookmarks.map(function (b) {
+      var el = document.createElement('button');
+      el.className = 'mark'; el.type = 'button'; el.title = b.url;
+      var s = document.createElement('span'); s.textContent = b.title || host(b.url);
+      var x = document.createElement('b'); x.textContent = '✕';
+      x.onclick = function (e) {
+        e.stopPropagation();
+        lively.store.delete('bookmarks', { id: b.id }).then(loadBookmarks);
+      };
+      el.append(s, x);
+      el.onclick = function () { go(b.url); };
+      return el;
+    }));
+    paintNav();
+  }
+
+  async function drawQuick() {
+    var q = document.getElementById('quick');
+    var rows = [];
+    try { rows = await lively.store.query('visits', { limit: 6 }); } catch (e) { /* 없으면 빈 채로 */ }
+    q.replaceChildren.apply(q, rows.map(function (r) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.textContent = r.title || host(r.url); b.title = r.url;
+      b.onclick = function () { go(r.url); };
+      return b;
+    }));
+  }
+
+  // ── 조작 ──
+  addr.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); go(addr.value); }
+  });
+  document.getElementById('back').onclick = function () { if (at > 0) { at--; show(stack[at]); } };
+  document.getElementById('fwd').onclick = function () { if (at < stack.length - 1) { at++; show(stack[at]); } };
+  document.getElementById('reload').onclick = function () { if (stack[at]) { frame.src = 'about:blank'; setTimeout(function () { frame.src = stack[at]; }, 30); } };
+  starBtn.onclick = async function () {
+    var cur = stack[at]; if (!cur) return;
+    var hit = bookmarks.filter(function (b) { return b.url === cur; })[0];
+    if (hit) await lively.store.delete('bookmarks', { id: hit.id });
+    else await lively.store.insert('bookmarks', { url: cur, title: host(cur) });
+    loadBookmarks();
+  };
+  // 새 탭 — 샌드박스 안에선 앱이 직접 못 여는 일이라 호스트에 맡긴다(SDK ui.openExternal).
+  function openOut() {
+    var u = stack[at] || toUrl(addr.value);
+    if (u) lively.ui.openExternal(u);
+  }
+  document.getElementById('ext').onclick = openOut;
+  document.getElementById('extBtn').onclick = openOut;
+
+  lively.ready.then(function () { loadBookmarks(); drawQuick(); });
+</script>

@@ -30,7 +30,7 @@ const WRITES = [
   "category_update", "source_save",
 ];
 const READS = ["knowledge_get", "knowledge_list", "knowledge_grep"];
-const POST_BUT_READ = ["recall_route", "project_find_by_origin_v6", "repo_discover", "repo_check", "org_guide_preview", "org_distiller_preview"];
+const POST_BUT_READ = ["recall_route", "project_find_by_origin_v6", "repo_discover", "repo_check", "org_guide_preview", "org_distiller_preview", "session_project_context_applied"];
 const MCP_ONLY_READ = ["context_overview", "debt_list", "source_artifact"];
 const KEEP = ["broker_run", "delegate_run", "delegate_cancel"];
 
@@ -198,7 +198,7 @@ t("isReadOnlyBlocked: KEEP 예외는 이름 기반 — KEEP 이름의 합성 쓰
 const hasPostMount = (cap: Capability): boolean =>
   Array.isArray(cap.expose.rest) && cap.expose.rest.some((m) => m.method === "POST");
 
-t("불변식: POST 마운트인데 읽기전용에서 안 막히는 집합 == 정확히 9개", () => {
+t("불변식: POST 마운트인데 읽기전용에서 안 막히는 집합 == 정확히 10개", () => {
   const notBlockedPost = [...registry.values()]
     .filter((cap) => hasPostMount(cap) && !isReadOnlyBlocked(cap))
     .map((cap) => cap.name)
@@ -207,9 +207,12 @@ t("불변식: POST 마운트인데 읽기전용에서 안 막히는 집합 == �
   //  실수로 새면 쓰기 op 이 읽기전용 세션에서 조용히 통과한다. 늘릴 때는 "왜 읽기인가"를 여기 남긴다.
   //  · org_guide_preview / org_distiller_preview — 본문이 커서(수천 자 draft·가이드 원문) GET 쿼리로
   //    못 보내는 **미리보기**. DB 를 안 건드리고 조립 결과만 돌려준다(#1419-B).
+  //  · session_project_context_applied — 동적 주입 훅이 "이 revision 의 프로젝트 문맥을 stdout 에 실었다"고 알리는
+  //    **전달 확인(ACK)**(#1867). 사용자 데이터가 아니라 진단값(applied_revision, 단조 증가)만 바뀌고, 읽기전용 세션에도
+  //    문맥 주입은 일어나므로 ACK 를 막으면 그 세션은 영영 '미적용'으로 보인다. 본문은 GET project-context 가 준다.
   assert.deepEqual(notBlockedPost, [
     "broker_run", "delegate_cancel", "delegate_run", "org_distiller_preview", "org_guide_preview",
-    "project_find_by_origin_v6", "recall_route", "repo_check", "repo_discover",
+    "project_find_by_origin_v6", "recall_route", "repo_check", "repo_discover", "session_project_context_applied",
   ]);
 });
 

@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test, { afterEach } from "node:test";
 import {
-  clearTenantResolver, installTenantResolver, tenantBindingActive, tenantBindingSql,
+  clearTenantResolver, installTenantResolver, tenantBindingActive, tenantBindingSql, wrapClient,
 } from "./client.js";
 
 afterEach(() => clearTenantResolver());
@@ -85,4 +85,72 @@ test("★ 형식이 틀린 id 면 자가 설치하지 않는다(잘못된 소속
     delete process.env.LIVELY_TENANT_BINDING;
     if (prev === undefined) delete process.env.LIVELY_TENANT_ID; else process.env.LIVELY_TENANT_ID = prev;
   }
+});
+
+// ── 체크아웃 스코프 바인딩(2026-08-25 실측 후 추가) ─────────────────────────
+//
+// 트랜잭션 밖 쿼리가 바인딩 없이 나가면 두 가지로 갈렸다: 새 커넥션이면 컬럼 기본값이 **primary 로
+//  조용히 오귀속**, 앞서 트랜잭션이 돌았던 커넥션이면 GUC 가 ''로 남아 엄격 정책이 죽는다.
+//  그래서 바인딩 범위를 트랜잭션이 아니라 **체크아웃**으로 넓혔다. 아래가 그 계약이다.
+
+interface FakeCall { sql: string; params?: unknown[] }
+function fakeClient(): { client: any; calls: FakeCall[]; released: number } {
+  const calls: FakeCall[] = [];
+  const state = { released: 0 };
+  const client: any = {
+    query: (first: any, params?: unknown[]) => {
+      calls.push({ sql: typeof first === "string" ? first : String(first?.text ?? ""), params });
+      return Promise.resolve({ rows: [] });
+    },
+    release: () => { state.released++; },
+  };
+  return { client, calls, get released() { return state.released; } } as never;
+}
+
+test("★★ 바인딩이 꺼져 있으면 아무 문장도 더하지 않는다(OSS 무회귀)", async () => {
+  const f = fakeClient();
+  const w = wrapClient(f.client);
+  await w.query("SELECT 1");
+  assert.deepEqual(f.calls.map((c) => c.sql), ["SELECT 1"]);
+});
+
+test("★★ 첫 쿼리 앞에 세션 스코프 바인딩이 한 번 들어간다 — 트랜잭션 밖 쿼리도 덮인다", async () => {
+  installTenantResolver(() => "22222222-2222-2222-2222-222222222222");
+  const f = fakeClient();
+  const w = wrapClient(f.client);
+  await w.query("SELECT a");
+  await w.query("SELECT b");
+  const sqls = f.calls.map((c) => c.sql);
+  assert.match(sqls[0], /set_config\('app\.tenant_id', \$1, false\)/, "세션 스코프(false)로 먼저 건다");
+  assert.deepEqual(f.calls[0].params, ["22222222-2222-2222-2222-222222222222"]);
+  assert.deepEqual(sqls.slice(1), ["SELECT a", "SELECT b"], "바인딩은 체크아웃당 한 번뿐");
+});
+
+test("BEGIN 은 종전대로 트랜잭션 로컬 바인딩도 건다(중복이지만 무해)", async () => {
+  installTenantResolver(() => "33333333-3333-3333-3333-333333333333");
+  const f = fakeClient();
+  const w = wrapClient(f.client);
+  await w.query("BEGIN");
+  const sqls = f.calls.map((c) => c.sql);
+  assert.match(sqls[0], /set_config.*false\)/, "체크아웃 바인딩이 먼저");
+  assert.equal(sqls[1], "BEGIN");
+  assert.match(sqls[2], /set_config.*true\)/, "BEGIN 뒤 로컬 바인딩(종전 동작)");
+});
+
+test("★★ 반납 전에 세션 값을 지운다 — 다음 차례가 남의 테넌트를 물려받지 않는다", async () => {
+  installTenantResolver(() => "44444444-4444-4444-4444-444444444444");
+  const f = fakeClient();
+  const w = wrapClient(f.client);
+  await w.query("SELECT 1");
+  w.release();
+  const last = f.calls[f.calls.length - 1].sql;
+  assert.match(last, /set_config\('app\.tenant_id', '', false\)/, "빈 값으로 되돌린다(= fail-closed)");
+});
+
+test("바인딩이 꺼져 있으면 반납도 종전 그대로(초기화 문장 없음)", async () => {
+  const f = fakeClient();
+  const w = wrapClient(f.client);
+  await w.query("SELECT 1");
+  w.release();
+  assert.deepEqual(f.calls.map((c) => c.sql), ["SELECT 1"]);
 });

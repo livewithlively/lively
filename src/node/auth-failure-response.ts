@@ -39,6 +39,37 @@ export function shouldAlertNow(last: number | undefined, now: number, cooldownMs
   return last === undefined || now - last >= cooldownMs;
 }
 
+/**
+ * 이 사람의 **마지막 자격 실패**(#1675 ③ — 관리탭 '내 로그인' 표시용).
+ *
+ * 왜 필요: 헤드리스 토큰이 죽으면 알림이 한 번 가지만, 그 알림을 놓치거나 나중에 들어온 사람은
+ *  "내 토큰이 지금 살아 있나"를 알 길이 없었다. 자격 화면이 그 답을 갖고 있어야 한다 —
+ *  `last_used_at`(마지막으로 리스된 시각)만으로는 **성공했는지 실패했는지** 구분되지 않는다.
+ *
+ * 실패 판정 근거는 종결된 위탁의 `result.auth_failure`(finish 가 남긴다). 없으면 null.
+ */
+export interface LastAuthFailure { at: string | null; label: string; task_id: number }
+export async function lastAuthFailureFor(requester: string): Promise<LastAuthFailure | null> {
+  try {
+    const r = await itemsPool.query(
+      `SELECT id, finished_at, result->'auth_failure'->>'label' AS label
+         FROM org_task
+        WHERE requester = $1 AND result -> 'auth_failure' IS NOT NULL
+          -- ⚠ 기간을 자른다(#1675 리뷰). 두 가지를 동시에 막는다:
+          --  ① org_task 는 지우는 경로가 없어 계속 자란다 — 이 조회는 '내 로그인' 화면을 열 때마다 돈다.
+          --  ② 노드 **로컬** 자격으로 돌던 위탁의 실패도 여기 잡히는데, 그건 member_secret 을 다시 등록해도
+          --     안 사라진다(그 자격이 아니므로). 기간이 없으면 그 경고가 영원히 붙는다.
+          AND finished_at > now() - interval '30 days'
+        ORDER BY finished_at DESC NULLS LAST, id DESC
+        LIMIT 1`, [requester]);
+    const row = r.rows[0] as { id: number; finished_at: string | null; label: string | null } | undefined;
+    if (!row) return null;
+    return { at: row.finished_at ?? null, label: row.label || "자격 실패", task_id: row.id };
+  } catch {
+    return null;   // org_task 부재 등 — 화면이 이것 때문에 죽으면 안 된다
+  }
+}
+
 export interface AuthFailureContext {
   taskId: number;
   requester: string;

@@ -16,7 +16,6 @@
 //   ※ Codex 는 ~/.codex/AGENTS.md 로 정적 org-context 를 네이티브 로드하므로(어댑터가 발행), 본 훅의
 //     정적 블록은 Claude 와의 동작 패리티/이중 안전망용이다(중복돼도 무해 — 같은 비밀-없는 텍스트).
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync, chmodSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +24,11 @@ import { fileURLToPath } from "node:url";
 //   여기서 "claude" 로 기본값을 채우면 종전에 인자를 안 넘기던 경로가 넘기게 되어 동작이 바뀐다.
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
 import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
+import { hostEffects } from "./host-effects-port.mjs";
+
+const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const spawn = (...args) => hostEffects.spawn(...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 
 // #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
 //  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의

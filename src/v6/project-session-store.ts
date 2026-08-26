@@ -42,25 +42,52 @@ export async function sessionBoundToMemberProject(sessionId: string, memberId: s
 //   - 같은 프로젝트 반복 바인딩(세션 시작마다 호출됨)은 새 구간을 안 만든다 → 구간 폭증 방지.
 //   - 재바인딩이면 새 구간이 생기고, 과거 작업은 옛 구간(옛 프로젝트)에 그대로 남는다(소급 재귀속 버그 차단).
 //   - 같은 시각 동시삽입 충돌은 DO NOTHING(멱등). 재바인딩 자체가 드물어 경쟁은 사실상 없다.
-export async function recordSessionProject(sessionId: string, projectId: number): Promise<void> {
-  if (!sessionId || !projectId) return;
+export async function recordSessionProject(sessionId: string, projectId: number | null, bindingEpoch?: number): Promise<void> {
+  if (!sessionId) return;
   await itemsPool.query(
-    `INSERT INTO session_project(session_id, project_id)
-     SELECT $1::text, $2::int
+    `INSERT INTO session_project(session_id, project_id, binding_epoch)
+     SELECT $1::text, $2::int, COALESCE($3::bigint,
+       (SELECT COALESCE(MAX(sp2.binding_epoch),0)+1 FROM session_project sp2 WHERE sp2.session_id=$1))
       WHERE (SELECT sp.project_id FROM session_project sp
               WHERE sp.session_id = $1 ORDER BY sp.valid_from DESC LIMIT 1) IS DISTINCT FROM $2::int
      ON CONFLICT (tenant_id, session_id, valid_from) DO NOTHING`,
-    [sessionId, projectId]);
+    [sessionId, projectId, bindingEpoch ?? null]);
 }
 
 // 이어받기(#905 C1) — 이 세션의 **가장 최근 바인딩** 프로젝트 id(+박스 폴더). 없으면 null. 세션이 어느 프로젝트에서
 //  돌았는지로 이어받기 세션의 작업 경로·멤버십 게이트를 정한다.
+/**
+ * 이어받기 승계(#1867) — **실행 세션 id 로 먼저, 없으면 그 세션이 이어받은 대화 uuid 로** 마지막 소속을 찾는다.
+ *
+ *  왜 두 축인가: 대화(conversation)와 실행 세션(execution)은 다른 엔티티다. 같은 대화를 새 세션에서 이어받으면
+ *   실행 id 는 **새로 발급**되므로 그 id 로는 아무 소속도 없다 — 그러면 첫 프롬프트에서 훅이 '미연결'로 보고
+ *   **새 프로젝트를 만든다**(2026-08-25 실측: 대화 `1bf015ec…`가 #1867 에 붙어 있었는데, 그 대화를 이어받은
+ *   `box-yoon-6178a7c3` 이 새 프로젝트 #2015 를 만들었다 — 상민님이 "왜 직전 프롬프트가 프로젝트명이지?"로 발견).
+ *  대화 uuid 축에도 소속이 남는 이유: session_log append 가 실행 세션의 현재 소속을 대화 id 로 투영한다.
+ *
+ *  ⚠ 순서가 의미다 — 실행 id 가 이겨야 한다. 세션을 옮긴 뒤(detach·재바인딩)의 정답은 그 실행 세션의 것이고,
+ *   대화 축은 그보다 낡을 수 있다.
+ */
+export async function latestProjectForSessionChain(
+  ids: Array<string | null | undefined>,
+  lookup: (id: string) => Promise<{ id: number; folder: string } | null> = latestProjectForSession,
+): Promise<{ id: number; folder: string } | null> {
+  for (const id of ids) {
+    const key = String(id ?? "").trim();
+    if (!key) continue;                       // 빈 축은 조회하지 않는다(대화 uuid 가 없는 세션이 정상이다)
+    const one = await lookup(key);
+    if (one) return one;
+  }
+  return null;
+}
+
 export async function latestProjectForSession(sessionId: string): Promise<{ id: number; folder: string } | null> {
   if (!sessionId) return null;
   const r = await itemsPool.query(
     `SELECT p.id, COALESCE(p.folder,'') AS folder
-       FROM session_project sp JOIN project p ON p.id = sp.project_id
-      WHERE sp.session_id = $1 ORDER BY sp.valid_from DESC LIMIT 1`,
+       FROM (SELECT project_id FROM session_project
+              WHERE session_id=$1 ORDER BY valid_from DESC LIMIT 1) sp
+       JOIN project p ON p.id = sp.project_id`,
     [sessionId]);
   const row = r.rows[0] as { id: number; folder: string } | undefined;
   return row ? { id: Number(row.id), folder: String(row.folder || "") } : null;
@@ -79,6 +106,7 @@ export interface ProjectFolderBinding {
   abs_path: string;
   sync: FolderSyncMode;
   origin_key: string | null;
+  binding_kind: "canonical" | "ephemeral";
   created_at: string;
   seen_at: string;
 }
@@ -87,20 +115,40 @@ export interface ProjectFolderBinding {
 //  seen_at 은 '마지막으로 이 경로가 살아있다고 보고된 시각' — 죽은 바인딩(지운 폴더)을 나중에 가려내는 신호.
 export async function upsertProjectFolderBinding(b: {
   projectId: number; memberId?: string | null; nodeId: string; absPath: string;
-  sync?: FolderSyncMode; originKey?: string | null;
+  sync?: FolderSyncMode; originKey?: string | null; bindingKind?: "canonical" | "ephemeral";
 }): Promise<void> {
   if (!b.projectId || !b.nodeId || !b.absPath) return;
-  await itemsPool.query(
-    `INSERT INTO project_folder_binding(project_id, member_id, node_id, abs_path, sync, origin_key)
-       VALUES($1,$2,$3,$4,$5,$6)
-     ON CONFLICT (project_id, member_id, node_id, abs_path) DO UPDATE
-       SET sync=EXCLUDED.sync, origin_key=COALESCE(EXCLUDED.origin_key, project_folder_binding.origin_key), seen_at=now()`,
-    [b.projectId, b.memberId ?? SHARED_BINDING_MEMBER, b.nodeId, b.absPath, b.sync ?? "none", b.originKey ?? null]);
+  const kind = b.bindingKind ?? "canonical";
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    // 서로 다른 경로를 동시에 canonical로 올려도 demote→upsert가 교차하지 않게 프로젝트 행으로 직렬화한다.
+    // 이 락이 없으면 두 트랜잭션이 모두 "기존 canonical 없음"을 본 뒤 유니크 인덱스에서 한쪽이 실패한다.
+    await client.query("SELECT id FROM project WHERE id=$1 FOR UPDATE", [b.projectId]);
+    if (kind === "canonical") {
+      await client.query(
+        `UPDATE project_folder_binding SET binding_kind='ephemeral'
+          WHERE project_id=$1 AND node_id=$2 AND binding_kind='canonical'
+            AND NOT (member_id=$3 AND abs_path=$4)`,
+        [b.projectId, b.nodeId, b.memberId ?? SHARED_BINDING_MEMBER, b.absPath]);
+    }
+    await client.query(
+      `INSERT INTO project_folder_binding(project_id, member_id, node_id, abs_path, sync, origin_key, binding_kind)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (project_id, member_id, node_id, abs_path) DO UPDATE   -- PK 는 project_id(대리키 FK) 포함이라 tenant_id 로 재작성되지 않는다(tenant-column.isNaturalKey ⓑ) — 중재자에 tenant_id 를 넣으면 42P10
+         SET sync=EXCLUDED.sync, origin_key=COALESCE(EXCLUDED.origin_key, project_folder_binding.origin_key),
+             binding_kind=EXCLUDED.binding_kind, seen_at=now()`,
+      [b.projectId, b.memberId ?? SHARED_BINDING_MEMBER, b.nodeId, b.absPath, b.sync ?? "none", b.originKey ?? null, kind]);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally { client.release(); }
 }
 
 export async function listProjectFolderBindings(projectId: number): Promise<ProjectFolderBinding[]> {
   return await q(itemsPool,
-    `SELECT project_id, member_id, node_id, abs_path, sync, origin_key, created_at, seen_at
+    `SELECT project_id, member_id, node_id, abs_path, sync, origin_key, binding_kind, created_at, seen_at
        FROM project_folder_binding WHERE project_id=$1 ORDER BY node_id, member_id, abs_path`, [projectId]);
 }
 

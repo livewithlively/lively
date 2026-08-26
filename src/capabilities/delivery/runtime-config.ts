@@ -34,6 +34,7 @@ import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.
 import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
 import { ee } from "../../enterprise/registry.js"; // #1601 — SSO 구현은 EE. 설정 표면은 코어에 남지만 '켜지나'는 EE 유무에 달렸다
 import { actorOf, restOnly, restRead, str } from "./shared.js";
+import { WORKER_POLICY_MAX, type WorkerPolicyPatch } from "../../apps/worker-policy.js";
 
 // #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
 //  source 가 중요하다: 관리탭에 값을 넣었는데 enabled 를 안 켰거나, 켰는데 env 가 먹고 있는 상황을
@@ -111,6 +112,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         session_memory_policy?: SessionMemoryPolicyPatch;
         session_reclaim_policy?: SessionReclaimPolicyPatch;
         delegate_policy?: DelegatePolicyPatch;
+        worker_policy?: WorkerPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
         hook_grace_ms?: number | null;
@@ -168,6 +170,27 @@ export const runtimeConfigCapabilities: Capability[] = [
       }
       // per-session cgroup 메모리 정책(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한. 잡값·범위는 아래 + normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 여기(관리탭)가 유일한 조절 창구(storage_policy 와 동일 교리).
+      // 앱 worker 조직 예산(#1780 Stage B) — 각 값 0 = 무제한/감시 끔. 상한 자체는 store 의 normalize 가 접지만,
+      //  **여기서 형태를 먼저 거른다**: 객체가 아니거나 숫자가 아닌 값이 오면 조용히 기본값으로 접히는 대신 400 으로 알린다
+      //  (관리자가 오타를 쳤을 때 "저장됐는데 안 먹는다"가 가장 나쁜 결과다).
+      if (input.worker_policy !== undefined) {
+        const raw = input.worker_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "worker_policy 는 객체여야 합니다");
+        const w = raw as Record<string, unknown>;
+        const num = (v: unknown, field: string, max: number): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n < 0 || n > max) throw new HttpError(400, `worker_policy.${field} 는 0~${max} 정수여야 합니다 (0=무제한)`);
+          return Math.floor(n);
+        };
+        const patchIn: WorkerPolicyPatch = {};
+        if (w.max_concurrent !== undefined) patchIn.max_concurrent = num(w.max_concurrent, "max_concurrent", WORKER_POLICY_MAX.max_concurrent);
+        if (w.max_per_member !== undefined) patchIn.max_per_member = num(w.max_per_member, "max_per_member", WORKER_POLICY_MAX.max_per_member);
+        if (w.max_memory_mb !== undefined) patchIn.max_memory_mb = num(w.max_memory_mb, "max_memory_mb", WORKER_POLICY_MAX.max_memory_mb);
+        if (w.cpu_percent_max !== undefined) patchIn.cpu_percent_max = num(w.cpu_percent_max, "cpu_percent_max", WORKER_POLICY_MAX.cpu_percent_max);
+        if (w.max_wall_sec !== undefined) patchIn.max_wall_sec = num(w.max_wall_sec, "max_wall_sec", WORKER_POLICY_MAX.max_wall_sec);
+        patch.worker_policy = patchIn;
+      }
+
       if (input.session_memory_policy !== undefined) {
         const raw = input.session_memory_policy;
         if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "session_memory_policy 는 객체여야 합니다");
@@ -605,6 +628,15 @@ export const runtimeConfigCapabilities: Capability[] = [
         failed_session_ttl_min: z.number().int().min(FAILED_TTL_MIN_MIN).max(FAILED_TTL_MIN_MAX).optional().describe("남겨둔 실패 세션도 이 분을 넘기면 회수(#1675 ①). 0=무제한(개수 상한만). 검시는 사고 직후에 하지 이틀 뒤에 하지 않는다"),
         auth_fail_stop_cron: z.boolean().optional().describe("자격(인증) 실패를 감지하면 그 위탁을 낸 크론을 자동 정지할지(#1675 ③). 기본 켬. 끄면 알림만 가고 크론은 계속 돌아 같은 실패를 반복한다"),
       }).optional().describe("위탁 태스크 정책(#1101) — 무출력 stall 상한. 자격 부재로 claude -p 가 hang 하면 종전엔 timeout(1h)까지 무출력으로 매달렸다. 레포 준비가 느린 박스는 늘리고, 배치 드레인은 줄여 빨리 실패를 본다"),
+      // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.
+      //  상한은 WORKER_POLICY_MAX 를 그대로 쓴다(스키마·핸들러·store clamp 가 한 상수를 공유 — 드리프트 금지).
+      worker_policy: z.object({
+        max_concurrent: z.number().int().min(0).max(WORKER_POLICY_MAX.max_concurrent).optional().describe("조직 전체 동시 활성 worker 수. 0=무제한"),
+        max_per_member: z.number().int().min(0).max(WORKER_POLICY_MAX.max_per_member).optional().describe("멤버 1인당 동시 활성 worker 수. 0=무제한"),
+        max_memory_mb: z.number().int().min(0).max(WORKER_POLICY_MAX.max_memory_mb).optional().describe("동시 worker 들이 **선언한** 메모리 합 상한(MiB). 0=무제한"),
+        cpu_percent_max: z.number().int().min(0).max(WORKER_POLICY_MAX.cpu_percent_max).optional().describe("worker 1개의 CPU 사용률 상한(%, 코어 1개=100 — 4코어를 다 쓰면 400). 0=감시 끔. 연속 5초 초과일 때만 종료한다(기동 스파이크로 정상 worker 를 죽이지 않게)"),
+        max_wall_sec: z.number().int().min(0).max(WORKER_POLICY_MAX.max_wall_sec).optional().describe("worker 1개의 최대 수명(초). 0=무제한"),
+      }).optional().describe("앱 worker 예산(#1780) — 시작 관문(수·메모리 합)은 프로세스를 띄우기 전에 막고, CPU·수명은 실행 중 감시해 그 run 만 종료한다. 기본값은 수·메모리에만 상한이 있고 CPU·수명은 0(끔) — 켜지 않은 조직에서 멀쩡한 worker 를 죽이지 않는다"),
       embedding_config: z.object({
         provider: z.enum(["off", "http"]).optional().describe("off=끄기(#688 명시적 off 마커 — .env 시드로 부활 안 함) · http=외부 임베딩 API"),
         base_url: z.string().nullable().optional().describe("provider=http 일 때 임베딩 API 주소"),

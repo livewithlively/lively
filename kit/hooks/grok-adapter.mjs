@@ -22,9 +22,20 @@
 //   **자립(상대 import 0)** 을 유지한다 — 툴 이름 상수는 인라인이고, harness-registry 의 grok.tools 와의
 //   일치는 kit/hooks/grok-adapter.test.mjs 가 고정한다.
 
-import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawnSync as nodeSpawnSync } from "node:child_process";
+
+const spawnSync = (command, args, options) => {
+  const sandboxNode = process.env.LIVELY_HOST_EFFECTS_TEST_MODE === "sandbox"
+    && /(?:^|[\\/])node(?:\.exe)?$/i.test(String(command));
+  if (process.env.LIVELY_HOST_EFFECTS === "deny" && !sandboxNode) {
+    const e = new Error(`HostEffects denied external-cli: ${command}`);
+    e.code = "LIVELY_HOST_EFFECT_DENIED";
+    throw e;
+  }
+  return nodeSpawnSync(command, args, options);
+};
 
 const HARNESS = "grok";
 const EVENT = process.argv[2] || "";
