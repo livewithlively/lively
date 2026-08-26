@@ -161,7 +161,7 @@ export const toolsCapabilities: Capability[] = [
       }
       return { ok: true, key, applied, added_hosts: addedHosts };
     }, {
-      key: z.string().describe("적용할 프리셋 묶음 key(google-drive · google-gmail · google-calendar)"),
+      key: z.string().describe("적용할 프리셋 묶음 key(google-drive · google-gmail · google-calendar · slack · figma)"),
     }),
   restRuntime("org_tool_remove", "AI 도구 제거",
     "조직 MCP 툴을 제거한다(http_proxy=즉시 노출 중단, builtin 게이팅 행 제거=기본값 복귀).",
