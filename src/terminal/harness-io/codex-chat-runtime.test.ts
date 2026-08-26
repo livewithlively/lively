@@ -158,6 +158,13 @@ await t("★ O5 steer 를 못 쓰는 판이면 실패를 삼키지 않고 새 �
   assert.equal(f.sentMethods.filter((m) => m === "turn/start").length, 2, "얹지 못했으면 새 턴으로라도 전한다");
 });
 
+await t("★ V5 alive 와 running 은 다르다 — 런타임이 있다고 '작업 중'이 아니다(조용한 세션이 영영 도는 것처럼 보인다)", async () => {
+  const f = fakeServer({ noTurnNotify: true });
+  await ensureCodexChat(base({ transportFactory: f.factory }));
+  assert.equal(codexChatStatus("s1")?.alive, true);
+  assert.equal(codexChatStatus("s1")?.running, false, "붙자마자 도는 중으로 보이면 입력칸까지 그 상태를 따라간다");
+});
+
 await t("★ V4 런타임이 사라지면 서 있던 승인도 거부로 닫는다 — 눌러도 아무 일 없는 버튼을 남기지 않는다", async () => {
   const f = fakeServer();
   await ensureCodexChat(base({ transportFactory: f.factory }));
