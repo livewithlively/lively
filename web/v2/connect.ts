@@ -465,7 +465,10 @@ function googleTeamCollectCard(): HTMLElement {
           } catch (e: any) { toast((e && e.message) || '구글 화면을 열지 못했습니다', true); }
         } }));
     }
-    if (!(s && s.ready) && !connected) {
+    // ★ 조건이 `!ready && !connected` 였다: 조직에 client 가 없는데 나는 (예전 방식으로) 연결돼 있으면
+    //  폼이 안 떠서 **client 를 넣을 길이 자체가 사라진다**(2026-08-26 dev 에서 이 막다른 상태를 실제로 밟았다).
+    //  client 는 조직 것이고 내 연결 여부와 독립이다 — ready 만 본다.
+    if (!(s && s.ready)) {
       // 직결(셀프호스팅·dev) 준비 폼 — 노션 카드와 대칭. 매니지드 테넌트는 CP 릴레이가 있어 이 폼이 보일 일이 없다.
       //  client_secret 은 이 사이트 계정의 비밀번호가 아니다 — type=password 금지(#1250), 텍스트칸+CSS 가림.
       const idIn = el('input', { type: 'text', placeholder: 'OAuth 클라이언트 ID', autocomplete: 'off', style: 'width:100%' }) as HTMLInputElement;
