@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, settleSideGroups, type SideInstance } from './side.js';
+import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
@@ -255,7 +255,6 @@ export async function bootV2(): Promise<void> {
       activeKey: () => activeKey(),
       openApps: openAppKeys,
       onSection: (sec, o) => {
-        settleSideGroups();   // #2033 정산 순간 ⑵ — 목록에서 눈을 뗐다 돌아온 것이므로 밀린 강등·자동접기를 여기서 판다
         drawSide();
         if (o.navigate) location.hash = sectionRoute(sec);
       },
@@ -364,7 +363,6 @@ export async function bootV2(): Promise<void> {
   //  화면으로 돌아오면 즉시 최신으로 — 다음 틱을 기다리면 그 몇 초가 '멈춘 화면'으로 보인다.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden || !tabsApi) return;
-    settleSideGroups();   // #2033 정산 순간 ⑵ — 안 보던 사이에 밀린 강등·자동접기를 여기서 판다
     markViewedSessionSeen();   // #1954 3차 — 숨은 동안엔 안 찍었다(보고 있는 게 아니므로). 돌아온 지금부터 다시.
     void syncShell();
   });

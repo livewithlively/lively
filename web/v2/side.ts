@@ -70,21 +70,9 @@ const GRPOPENED_STORE = 'lively_v2_side_grpopened';   // 사람이 **펴 둔** �
 let groupProj = false;
 let grpClosed = new Set<string>();
 let grpOpened = new Set<string>();
-const grpAuto = new Set<string>();                 // 자동으로 펴진 것 — 이 창 수명만(정산에서 걷힌다)
 
-/** 그룹의 자리 — 층(1 확인할 것 / 2 나머지)과 그 층 안의 정렬 키. */
-interface GrpOrder { tier: 1 | 2; seq: number; at: number }
-const grpOrder = new Map<string, GrpOrder>();
-let grpSeq = 0;
-//  이번 판에서 **강등·자동접기를 정산할지**. 승급·자동펼침은 늘 즉시라 이 깃발을 안 본다.
-//  main.ts 가 '목록에서 눈을 뗐다 돌아온' 두 자리(구역 전환 · visibilitychange)에서 켠다.
-let grpSettle = false;
-
-/**
- * 정산 순간 ⑵ — 목록에서 눈을 뗐다 돌아왔다(#2033).
- *  밀어 둔 강등과 자동접기를 여기서 한꺼번에 판다. 사람이 보고 있는 동안에는 아무것도 아래로 안 내려간다.
- */
-export function settleSideGroups(): void { grpSettle = true; }
+//  ⚠ 순서를 여기서 따로 기억하지 않는다. 묶음의 자리도, 펼침 여부도 **지금 사실의 함수**다
+//   (순서는 시간축이 준 정렬 그대로, 펼침은 상태·선택 그대로) — 그래서 두 축이 어긋날 자리가 없다.
 
 let openSet = new Set<string>();
 const pastSet = new Set<string>();          // '지난 세션'을 펴 둔 프로젝트 — **페이지 수명만**(위 주석)
@@ -498,25 +486,26 @@ function appRowEl(inst: SideInstance, one = false): HTMLElement {
         : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
 }
 
-// ══ 프로젝트 축 — 묶기·층·접힘 (#2033) ═════════════════════════════════════════
-/** 한 프로젝트 묶음. rows 는 이미 정렬된 상태. */
-interface ProjGrp { key: string; id: number; name: string; rows: SideInstance[]; tier: 1 | 2; seq: number; at: number; open: boolean; active: boolean; counts: Record<string, number> }
+// ══ 프로젝트 축 — 묶기·펼침 (#2033) ══════════════════════════════════════════
+/** 한 프로젝트 묶음. rows 는 이미 정렬돼 들어온다(아래 projGroups 머리말). */
+interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; counts: Record<string, number> }
 
-//  ★ 승급 조건 = 확인 필요 · 작업 완료(미확인). **busy 는 넣지 않는다.**
-//   지금 「지금 볼 것」이 흔들리는 진짜 원인이 busy 다 — 돌고 있는 세션은 매 턴 상태가 뒤집혀 행이 계속 오간다.
-//   빼도 안 묻힌다: 돌고 있는 프로젝트는 마지막 작업 시각이 가장 최신이라 층 2 맨 위에 이미 서 있다.
-//   이 정의는 레일 [확인할 것] 배지가 세는 집합과 **같다** — 정의를 두 벌 두지 않는다.
-const PROMOTES: Record<string, true> = { waiting: true, done: true };
-
-const rowRank = (r: SideInstance): number => (r.status ? (SESS_STATES[r.status.key] ? SESS_STATES[r.status.key].rank : 9) : 9);
-const rowAt = (r: SideInstance): number => Number(r.at) || 0;
+//  펼칠 상태 = **확인 필요 · 작업 완료(미확인)** 둘뿐(상민님 2026-08-26).
+//   작업 중은 「지금 볼 것」에 **서기는 하되 펴지 않는다** — 돌고 있는 건 나를 기다리는 게 아니라 알리기만 하면 되고,
+//   그건 머리글의 파란 점이 이미 한다. 묶음에 들어가고 말고(=순서)는 시간축이 정하고, 펴고 접고만 여기서 가른다.
+const OPENS: Record<string, true> = { waiting: true, done: true };
 
 /**
- * 행 목록을 프로젝트 묶음으로 접는다(#2033). 층·순서·접힘이 전부 여기서 정해진다.
- *  ⚠ 이 함수는 **한 판에 한 번만** 부른다 — grpSettle(정산 깃발)을 소비하기 때문이다.
+ * 행 목록을 프로젝트 묶음으로 접는다(#2033).
+ *
+ * ★ **순서와 묶음 이름은 시간축이 정한 그대로 쓴다.** main.ts 가 이미 행마다 묶음(고정 · 지금 볼 것 · 오늘 · 어제 …)을
+ *  붙이고 그 순서(상태 순위 → 최신순)로 정렬해서 넘긴다. 여기서는 **먼저 나온 순서대로 프로젝트를 묶기만** 한다.
+ *  그러면 프로젝트 축의 순서는 **정의상** 세션 축과 같아진다 — 한 프로젝트는 그 안에서 가장 급한 행이 서 있던 자리에 서고,
+ *  묶음 이름도 그 행의 묶음이다(그 행이 목록에서 제일 먼저 나오므로).
+ *  ⚠ 여기서 순서를 다시 매기지 마라. 종전 판은 '층 + 승급 순서'를 따로 지어냈다가 두 축의 순서가 갈렸다
+ *   (상민님: "정렬순서도 시간순정렬일때랑 너무 다른데" · "지금 볼 것 로직은 똑같이 가져가면 되잖아").
  */
 function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
-  const settle = grpSettle;
   const groups: ProjGrp[] = [];
   const byKey = new Map<string, ProjGrp>();
   for (const r of rest) {
@@ -524,48 +513,25 @@ function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
     const key = 'p:' + id;
     let g = byKey.get(key);
     if (!g) {
+      //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 프로젝트의 가장 급한 행이다.
       g = { key, id, name: id ? (r.project as { name: string }).name : '프로젝트 없음',
-        rows: [], tier: 2, seq: 0, at: 0, open: false, active: false, counts: {} };
+        bucket: r.group || '', rows: [], open: false, active: false, counts: {} };
       byKey.set(key, g); groups.push(g);
     }
     g.rows.push(r);
     if (r.active) g.active = true;
     if (r.status) g.counts[r.status.key] = (g.counts[r.status.key] || 0) + 1;
-    g.at = Math.max(g.at, rowAt(r));
   }
 
   for (const g of groups) {
-    //  층 판정 — 승급은 즉시, 강등은 **정산 순간에만**. 보고 있는 묶음은 어느 쪽으로도 안 움직인다
-    //   (#1954 가 행 단위로 갖고 있는 activeKey 가드를 묶음 단위로 올린 것).
-    const live = g.rows.some((r) => !!r.status && !!PROMOTES[r.status.key]);
-    const prev = grpOrder.get(g.key);
-    let ent: GrpOrder;
-    if (live) ent = prev && prev.tier === 1 ? prev : { tier: 1, seq: ++grpSeq, at: g.at };
-    else if (!prev) ent = { tier: 2, seq: 0, at: g.at };
-    else if (prev.tier === 1) ent = (settle && !g.active) ? { tier: 2, seq: 0, at: g.at } : prev;
-    //  층 2 의 시각은 **얼려 둔다**(폴링이 lastSeen 을 갱신해도 순서가 안 바뀐다). 정산 때만 다시 잰다 —
-    //   그래야 그 사이에 그 프로젝트에서 새로 시작한 일이 다음에 볼 때 위로 올라와 있다.
-    else ent = settle && !g.active ? { tier: 2, seq: 0, at: g.at } : prev;
-    grpOrder.set(g.key, ent);
-    g.tier = ent.tier; g.seq = ent.seq; g.at = ent.at;
-
-    //  접힘 — 사람의 결정이 언제나 이긴다. 자동은 **펴기만** 즉시 하고, 접기는 정산 순간에만.
-    if (searching) g.open = true;                       // 찾으려고 건 렌즈를 묶음이 가리면 안 된다(#1719)
-    else if (grpClosed.has(g.key)) g.open = false;      // 사람이 접었다 — 확인 필요가 생겨도 시스템이 안 뒤집는다
-    else if (grpOpened.has(g.key)) g.open = true;
-    else if (g.active || g.tier === 1) { g.open = true; grpAuto.add(g.key); }
-    else if (grpAuto.has(g.key)) { if (settle) { grpAuto.delete(g.key); g.open = false; } else g.open = true; }
-    else g.open = false;
-
-    g.rows.sort((a, b) => rowRank(a) - rowRank(b) || rowAt(b) - rowAt(a));
+    //  펼침 — 사람의 결정이 언제나 이긴다. 그 위에 자동 두 가지뿐이고, 둘 다 **지금 사실의 함수**다.
+    //   ⚠ 선택 때문에 펴진 묶음은 **선택이 풀리면 다시 접힌다**(상민님 2026-08-26). 트리의
+    //    「선택된 프로젝트만 펼침」과 같은 규율이다 — 한 번 펴진 걸 계속 붙들면 목록이 하루 종일 자라기만 한다.
+    if (searching) g.open = true;                                  // 찾으려고 건 렌즈를 묶음이 가리면 안 된다(#1719)
+    else if (grpClosed.has(g.key)) g.open = false;                 // 사람이 접었다 — 확인 필요가 생겨도 시스템이 안 뒤집는다
+    else if (grpOpened.has(g.key)) g.open = true;                  // 사람이 폈다
+    else g.open = g.rows.some((r) => !!r.status && !!OPENS[r.status.key]) || g.active;
   }
-
-  //  살아 있는 묶음만 남긴다 — 안 그러면 닫힌 프로젝트의 옛 자리가 영영 쌓인다(orderPin 과 같은 청소).
-  for (const k of [...grpOrder.keys()]) if (!byKey.has(k)) grpOrder.delete(k);
-
-  //  층 1 = 승급된 순서(오래 기다린 것이 위 · 새로 올라오는 것이 기존 순서를 안 민다) / 층 2 = 최신순.
-  groups.sort((a, b) => a.tier - b.tier || (a.tier === 1 ? a.seq - b.seq : b.at - a.at));
-  grpSettle = false;
   return groups;
 }
 
@@ -583,7 +549,8 @@ function grpSums(counts: Record<string, number>): HTMLElement | null {
 /**
  * 프로젝트 묶음 머리글.
  *  ⚠ 접기 단추와 ＋ 는 **형제 button** 이다 — 단추 안에 단추를 넣으면 유효하지 않은 마크업이고 클릭이 겹친다.
- *  ⚠ ＋ 는 트리의 것을 그대로 재사용한다(같은 아이콘·같은 훅·같은 규약: 자리는 늘 차지, 손 얹었을 때만 보임).
+ *  ⚠ ＋ 는 트리의 것을 그대로 재사용하되 **그리드/플렉스 밖(절대위치)** 에 띄운다 — 자리를 차지하면
+ *   상태 점·개수가 오른쪽 끝에 못 붙는다(#1954 ⓑ 가 앱 행에서 이미 밟은 함정, 상민님 2026-08-26 재지적).
  */
 function projGrpHead(g: ProjGrp): HTMLElement {
   return el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') },
@@ -596,39 +563,35 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       grpSums(g.counts),
       //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
       g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
-    g.id ? newSessBtn(g.id) : el('span', { class: 'v2-newb', 'aria-hidden': 'true' })) as HTMLElement;
+    g.id ? newSessBtn(g.id) : null) as HTMLElement;
 }
 
-/** 사람이 묶음을 접거나 폈다. 사람의 결정은 브라우저에 남고, 그 뒤로 자동 판정이 이 묶음을 안 뒤집는다.
- *  ⚠ 여기서는 **정산하지 않는다**(grpSettle 을 안 켠다) — 하나를 접었다고 다른 묶음들이 손 밑에서 자리를
- *   바꾸면 그게 더 놀랍다. 강등·자동접기는 목록에서 눈을 뗐다 돌아왔을 때(main.ts 두 자리)와 축을 바꿀 때만. */
+/** 사람이 묶음을 접거나 폈다. 사람의 결정은 브라우저에 남고, 그 뒤로 자동 판정이 이 묶음을 안 뒤집는다. */
 function toggleGrp(key: string, wasOpen: boolean): void {
-  if (wasOpen) { grpClosed.add(key); grpOpened.delete(key); grpAuto.delete(key); }
+  if (wasOpen) { grpClosed.add(key); grpOpened.delete(key); }
   else { grpOpened.add(key); grpClosed.delete(key); }
   saveSet(GRPCLOSED_STORE, grpClosed);
   saveSet(GRPOPENED_STORE, grpOpened);
   paintAppList();
 }
 
-/** 프로젝트 축의 목록 — 고정 → (지금 볼 것) → (그 밖) 순으로 묶음 카드를 쌓는다. */
+/** 프로젝트 축의 목록 — 시간축과 **같은 묶음 머리글**(고정 · 지금 볼 것 · 오늘 …) 아래에 프로젝트 카드를 쌓는다. */
 function projListKids(shown: SideInstance[], q: string): HTMLElement[] {
   const kids: HTMLElement[] = [];
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
   const pinned = shown.filter((r) => r.pinned);
   const rest = shown.filter((r) => !r.pinned);
+  let lastBucket = '';
   if (pinned.length) {
-    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: PINNED_LABEL }) as HTMLElement);
+    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: pinned[0].group || '고정' }) as HTMLElement);
+    lastBucket = pinned[0].group || '고정';
     for (const r of pinned) kids.push(appRowEl(r));
   }
-  const groups = projGroups(rest, !!q);
-  //  층 이름표는 **둘 다 있을 때만** 단다 — 한쪽뿐이면 이름표가 아무것도 안 가른다.
-  const both = groups.some((g) => g.tier === 1) && groups.some((g) => g.tier === 2);
-  let lastTier = 0;
-  for (const g of groups) {
-    if (both && !q && g.tier !== lastTier) {
-      kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.tier === 1 ? PRIORITY_LABEL : REST_LABEL }) as HTMLElement);
-      lastTier = g.tier;
+  for (const g of projGroups(rest, !!q)) {
+    if (g.bucket && g.bucket !== lastBucket) {
+      kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
+      lastBucket = g.bucket;
     }
     //  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
     //   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방).
@@ -638,10 +601,6 @@ function projListKids(shown: SideInstance[], q: string): HTMLElement[] {
   }
   return kids;
 }
-
-const PINNED_LABEL = '고정';
-const PRIORITY_LABEL = '지금 볼 것';
-const REST_LABEL = '그 밖';
 
 /** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
 function appListKids(shown: SideInstance[], q: string): HTMLElement[] {
@@ -1676,7 +1635,7 @@ export function markNav(st: { back: boolean; forward: boolean }): void {
 }
 
 /**
- * 묶는 축 토글(#2033) — 머리글의 아이콘 하나. 목록 · 폴더 두 얼굴로 지금 축을 말한다.
+ * 묶는 축 토글(#2033) — 머리글의 아이콘 하나(폴더 + 그 아래 들여쓴 줄 둘 = '프로젝트 밑으로 묶기').
  *  칩 두 개(「세션」「프로젝트」)로 밖에 내지 않은 이유: 세로 한 줄을 먹는다 — #1954 가 「새 작업」 큰 버튼을
  *  머리글의 ＋ 로 줄인 것과 같은 사유다(목록이 세로를 더 쓰는 게 이 화면의 이득이다).
  */
@@ -1689,10 +1648,11 @@ function axisBtn(): HTMLElement {
       groupProj = !groupProj;
       try { if (groupProj) localStorage.setItem(GROUP_STORE, 'proj'); else localStorage.removeItem(GROUP_STORE); }
       catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
-      grpSettle = true;   // 정산 순간 ⑶ — 사람이 축을 바꾼 것이므로 그 자리에서 판다
       redraw();
     } },
-    groupProj ? glyph('folder', 'v2-axisbtn-ic') : icon('list', 'v2-axisbtn-ic')) as HTMLElement;
+    //  그림은 하나다 — 켜짐/꺼짐은 **채움**이 말한다(켜지면 파랑을 채운다). 두 얼굴로 바꾸면
+    //   '지금 이 상태'인지 '누르면 이렇게 된다'인지가 애매해진다.
+    icon('group', 'v2-axisbtn-ic')) as HTMLElement;
 }
 
 function findBtn(): HTMLElement {
