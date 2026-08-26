@@ -3,8 +3,8 @@
 //  resume 실패를 새 스레드로 덮지 않는다 · release 는 프로세스를 내린다(락 반납).
 import assert from "node:assert/strict";
 import {
-  CodexChatUnavailable, codexChatStatus, dropAllCodexChats, dropSession,
-  ensureCodexChat, interruptCodexChat, releaseCodexChat, sendCodexChat,
+  answerApproval, askApproval, CodexChatUnavailable, codexChatStatus, dropAllCodexChats, dropSession,
+  ensureCodexChat, interruptCodexChat, onChatEvent, pendingApprovals, releaseCodexChat, sendCodexChat,
 } from "./codex-chat-runtime.js";
 import type { AppServerTransport } from "./codex-app-server.js";
 
@@ -158,6 +158,19 @@ await t("★ O5 steer 를 못 쓰는 판이면 실패를 삼키지 않고 새 �
   assert.equal(f.sentMethods.filter((m) => m === "turn/start").length, 2, "얹지 못했으면 새 턴으로라도 전한다");
 });
 
+await t("★ V4 런타임이 사라지면 서 있던 승인도 거부로 닫는다 — 눌러도 아무 일 없는 버튼을 남기지 않는다", async () => {
+  const f = fakeServer();
+  await ensureCodexChat(base({ transportFactory: f.factory }));
+  const decided: string[] = [];
+  void askApproval("s1", "item/commandExecution/requestApproval", { command: "rm -rf /" }).then((d) => decided.push(d));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(pendingApprovals("s1").length, 1);
+  dropSession("s1");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(pendingApprovals("s1").length, 0, "다음에 붙는 화면이 죽은 승인을 되살리면 안 된다");
+  assert.deepEqual(decided, ["decline"], "주인이 없어진 약속은 허용이 아니라 거부로 닫는다");
+});
+
 await t("★ Q1 release 는 프로세스를 내려 스레드를 TUI 에 넘긴다 — 그 id 를 돌려준다", async () => {
   const f = fakeServer();
   await ensureCodexChat(base({ transportFactory: f.factory }));
@@ -182,6 +195,57 @@ await t("Q3 세션이 끝나면 런타임도 내려간다(고아 프로세스 �
   dropSession("s1");
   assert.equal(f.closedCount(), 1);
   assert.equal(codexChatStatus("s1"), null);
+});
+
+// ── 승인 문구 계약 (#2055) — 실측 2026-08-26, dev 실서버 ────────────────────────────────
+//  `item/commandExecution/requestApproval` 의 params 실물:
+//    { threadId, turnId, itemId, startedAtMs, environmentId:"local",
+//      reason: "요청하신 /tmp/x.txt 파일을 생성하도록 허용하시겠습니까?",
+//      command: "/bin/zsh -lc 'echo hi > /tmp/x.txt'", cwd: "…" }
+//  ★ codex 가 **이미 사람에게 물을 문장(reason)을 써서 보낸다.** 그걸 버리고 우리 문구로 덮으면
+//   '왜 지금 묻는지'라는 유일한 단서를 잃는다 — 명령줄만으로는 그게 왜 에스컬레이션인지 안 보인다
+//   (같은 echo 라도 쓰는 자리에 따라 갈린다). 이 표는 그 규율이 뒤집히지 않게 잡는다.
+await t("★ V1 승인 제목은 codex 가 쓴 reason 그대로 — 우리 문구로 덮지 않는다", async () => {
+  const f = fakeServer();
+  const seen: any[] = [];
+  const off = onChatEvent("s1", (e) => { if (e.kind === "approval") seen.push(e); });
+  await ensureCodexChat(base({ transportFactory: f.factory }));
+  void askApproval("s1", "item/commandExecution/requestApproval", {
+    reason: "요청하신 /tmp/x.txt 파일을 생성하도록 허용하시겠습니까?",
+    command: "/bin/zsh -lc 'echo hi > /tmp/x.txt'",
+    cwd: "/work",
+  });
+  await new Promise((r) => setImmediate(r));
+  off();
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].title, "요청하신 /tmp/x.txt 파일을 생성하도록 허용하시겠습니까?");
+  assert.match(seen[0].detail, /echo hi > \/tmp\/x\.txt/, "무엇을 실행하려는지 **원문 그대로**여야 한다");
+  assert.match(seen[0].detail, /작업 폴더: \/work/, "어느 폴더에서 도는지도 판단 재료다");
+  assert.equal(seen[0].kindHint, "command");
+});
+
+await t("V2 reason 이 없으면 그때만 우리 문구를 세운다(빈 제목 금지)", async () => {
+  const f = fakeServer();
+  const seen: any[] = [];
+  const off = onChatEvent("s1", (e) => { if (e.kind === "approval") seen.push(e); });
+  await ensureCodexChat(base({ transportFactory: f.factory }));
+  void askApproval("s1", "item/applyPatchApproval", { changes: { "a.ts": "…" } });
+  await new Promise((r) => setImmediate(r));
+  off();
+  assert.equal(seen[0].title, "파일을 고칠까요?");
+  assert.equal(seen[0].kindHint, "patch");
+});
+
+await t("★ V3 답을 안 하면 그 승인은 계속 서 있다 — 화면이 새로 붙어도 되살아난다(새로고침 구멍 방지)", async () => {
+  const f = fakeServer();
+  await ensureCodexChat(base({ transportFactory: f.factory }));
+  void askApproval("s1", "item/commandExecution/requestApproval", { command: "rm -rf /" });
+  await new Promise((r) => setImmediate(r));
+  const waiting = pendingApprovals("s1");
+  assert.equal(waiting.length, 1, "대기 중 승인은 목록으로 남아야 한다");
+  assert.ok(answerApproval("s1", waiting[0].id, "decline"));
+  assert.equal(pendingApprovals("s1").length, 0);
+  assert.equal(answerApproval("s1", waiting[0].id, "accept"), false, "같은 승인에 두 번 답해도 안 터진다");
 });
 
 dropAllCodexChats();
