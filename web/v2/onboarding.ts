@@ -673,7 +673,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const KEY = 'lively-ob-v2';
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
-    sources: [], connected: [], ai: null, aiConnected: false, terminal: null, app: null,
+    sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
     drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
@@ -913,55 +913,47 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       },
     },
     /* AI 잇기 — **실물**이다(#1813). 종전엔 900ms 기다렸다 무조건 «연결됐어요» 라고만 했다.
-     *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 돈다(박스에 API 키가 없는 게 설계다). 그래서 이을 것은
-     *  `claude setup-token` 이 발급하는 토큰 하나이고, 그건 자격 금고(me_credential)에 봉투 암호화로 들어간다.
-     *  ⚠ 토큰은 화면에 남기지 않는다(type=password) — 어깨너머·화면 공유·스크린샷이 전부 유출 경로다. */
+     *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 돈다(박스에 API 키가 없는 게 설계다).
+     *  ⚠ 잇는 방법은 **터미널에서 그 CLI 를 한 번 띄워 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
+     *   (~/.claude/.credentials.json 등)에 남고, 헤드리스 분석도 그 프로필로 돈다.
+     *   setup-token 을 붙여넣게 하지 않는다 — 그건 자기 프로필이 없는 자리(남의 노드 위탁)용 보조 수단이라
+     *   여기서 요구하면 사람에게 더 어려운 길을 시키는 것이 된다. 관문은 '로그인' 하나다(#1437 §6).
+     *  로그인 여부는 **서버가 프로필을 보고** 답한다(ai_ready) — 화면이 지어내지 않는다. */
     claude: {
       html: () => qHead('claude',
-        `이어 두시면 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 ${esc(S.ai || 'AI')} 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`,
-        `${esc(S.ai || 'AI')} 계정을 이어 주세요.`,
-        S.ai && S.ai !== 'Claude'
-          ? `지금은 Claude 만 이 자리에서 이을 수 있어요. ${esc(S.ai)}는 터미널에서 쓰시면 그대로 이어집니다.`
-          : '터미널에 한 줄 치고, 나온 값을 아래에 붙여 넣으시면 됩니다.')
-        + (S.ai && S.ai !== 'Claude' ? '' : `<div class="ob-tok">
-            <ol>
-              <li>터미널을 열고 <code>claude setup-token</code> 을 칩니다</li>
-              <li>브라우저가 열리면 평소 쓰시는 Claude 계정으로 로그인합니다</li>
-              <li>터미널에 돌아온 값을 그대로 아래에 붙여 넣습니다</li>
-            </ol>
-            <input id="cTok" type="password" autocomplete="off" spellcheck="false"
-              placeholder="붙여 넣으면 화면에 보이지 않습니다" aria-label="Claude 설정 토큰">
-            <p class="ob-err" id="cErr"></p>
-          </div>`)
-        + `<button class="ob-btn ob-btn-pri" id="cGo">${S.aiConnected ? '이어졌어요, 계속' : (S.ai && S.ai !== 'Claude' ? '건너뛰고 계속' : '잇기')}</button>
+        `이어 두시면 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`,
+        S.aiConnected ? '이어졌어요.' : `${esc(S.ai || 'AI')} 계정을 이어 주세요.`,
+        S.aiConnected ? '' : '터미널을 열고 아래 한 줄을 치면 로그인 창이 열립니다.')
+        + (S.aiConnected
+          ? `<div class="ob-tok"><p class="ob-ok">${esc(S.aiName || 'AI')} 로그인이 확인됐어요.</p></div>`
+          : `<div class="ob-tok">
+              <ol>
+                <li>터미널을 엽니다(라이블리 안에서도, 쓰시던 터미널이어도 됩니다)</li>
+                <li><code>${esc(AI_CLI[S.ai] || 'claude')}</code> 를 치고 안내대로 로그인합니다</li>
+                <li>로그인이 끝나면 아래 버튼을 누릅니다</li>
+              </ol>
+              <p class="ob-err" id="cErr"></p>
+            </div>`)
+        + `<button class="ob-btn ob-btn-pri" id="cGo">${S.aiConnected ? '계속' : '로그인했어요'}</button>
            <button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`,
       bind: (el) => {
-        const inp = $('#cTok', el), err = $('#cErr', el), go = $('#cGo', el);
-        const fail = (m) => { if (err) err.textContent = m; go.disabled = false; go.textContent = '잇기'; };
+        const err = $('#cErr', el), go = $('#cGo', el);
         go.onclick = async () => {
-          if (!inp || S.aiConnected) return goScene('terminal');       // Claude 아님·이미 이음 → 그냥 넘어간다
-          const tok = String(inp.value || '').trim();
-          if (!tok) return fail('토큰을 붙여 넣어 주세요.');
-          go.disabled = true; go.textContent = '잇는 중…'; if (err) err.textContent = '';
-          try {
-            await api('/api/ui/me/credential', { method: 'POST', body: JSON.stringify({
-              kind: 'claude_setup_token', secret: tok, label: '처음 설정에서 이음',
-            }) });
-          } catch (e) {
-            return fail(`잇지 못했어요 — ${e && e.message ? e.message : '알 수 없는 오류'}`);
+          if (S.aiConnected) return goScene('terminal');
+          go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
+          // 서버가 프로필을 보고 답한다 — 화면이 «됐다» 고 지어내지 않는다.
+          await loadWelcome();
+          if (!WS || !WS.ai_ready) {
+            go.disabled = false; go.textContent = '다시 확인';
+            if (err) err.textContent = '아직 로그인이 안 보여요. 터미널에서 로그인을 끝내고 다시 눌러 주세요.';
+            return;
           }
-          // 저장이 곧 «쓸 수 있음» 은 아니다 — 서버가 실제로 리스를 붙일 수 있는지 되물어 확인한다.
-          //  (비활성 멤버·암호화 키 부재면 저장은 되고 리스는 안 붙는다.)
-          let ready = false;
-          try { const w = await api('/api/ui/me/welcome'); ready = !!(w && w.ai_ready); } catch (_) { ready = false; }
-          if (!ready) return fail('토큰은 저장했는데 아직 쓸 수 있는 상태가 아니에요. 값이 온전한지 다시 확인해 주세요.');
-          inp.value = '';                                              // 화면에 남기지 않는다
-          S.aiConnected = true; S.decisions.push('AI 이음'); save(); renderSB();
-          if (WS) WS.ai_ready = true;                                  // 자료 읽기 화면이 곧바로 이 사실을 본다
+          S.aiConnected = true;
+          S.aiName = (WS.ai_harnesses && WS.ai_harnesses[0]) || null;
+          S.decisions.push('AI 이음'); save(); renderSB();
           toast('이어졌어요.');
           goScene('terminal');
         };
-        if (inp) inp.onkeydown = (ev) => { if (ev.key === 'Enter') go.click(); };
         $('[data-skip]', el).onclick = () => goScene('terminal');
       },
     },
@@ -1150,6 +1142,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     }
     return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
   }
+
+  /* 고른 AI → 터미널에 칠 CLI. 헤드리스 규약을 아는 넷만 여기 있다(서버 HEADLESS 표와 짝) —
+   *  ChatGPT 는 코덱스, 제미나이는 안티그래비티가 그 자리다. 표에 없으면 claude 로 안내한다. */
+  const AI_CLI = { 'Claude': 'claude', 'ChatGPT': 'codex', 'Gemini': 'agy', 'Grok': 'grok' };
 
   const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
   async function chatStep(step, token) {

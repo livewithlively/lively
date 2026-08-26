@@ -255,27 +255,41 @@ t("㉞ 파일이 적으면 자르지 않고 '더 있습니다' 도 안 붙인다
 //   그래서 **부르는가·넘기는가**를 정적으로 잰다. 리팩터가 이 줄을 지우면 여기서 걸린다.
 const SRC = readFileSync(new URL("./welcome.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 
-t("㉟ 분석은 leaseEnvFor 로 그 사람 자격을 싣는다 — 손으로 다시 짜지 않는다", () => {
-  assert.match(SRC, /leaseEnvFor\(\{ requester: userId, harness: "claude" \}\)/,
-    "leaseEnvFor 호출이 없다 — owner 키·active 검사·fail-closed 를 통째로 잃는다");
-  // spawnTaskSession 호출부에 env 가 실제로 실려야 한다. 부르기만 하고 안 넘기면 아무 일도 안 일어난다.
+t("㉟ 판정 기준은 **로그인한 하네스**다 — setup-token 유무가 아니다", () => {
+  // 매니지드에서 사람은 웹 터미널에서 CLI 를 띄워 로그인하고, 자격은 자기 프로필에 남는다.
+  //  헤드리스는 그 프로필로 폴백한다(tasks.ts). 리스로만 판정하면 **이미 로그인한 사람을 막는다**.
+  assert.match(SRC, /memberLoggedInHarnessesAny\(userId\)/,
+    "프로필 로그인을 안 본다 — 웹 터미널에서 로그인한 사람이 «AI 안 이었음» 으로 막힌다");
+  assert.match(SRC, /ai_ready: aiHarnesses\.length > 0/, "조회의 ai_ready 가 로그인 기준이 아니다");
+  // 헤드리스로 못 돌리는 하네스를 세면 안 된다 — 로그인은 했는데 분석은 안 도는 자리가 생긴다.
+  assert.match(SRC, /HEADLESS_KEYS\.includes\(k\)/, "헤드리스 규약을 아는 하네스로 거르지 않는다");
+});
+
+t("㊱ 하네스를 claude 로 박지 않는다 — codex 만 로그인한 사람이 hang 하지 않게", () => {
+  // #1884 가 고친 사고: codex 로만 로그인한 멤버의 잡이 전부 자격 없는 `claude -p` 로 떠서
+  //  무출력 hang → stall 종결이 됐다. 같은 실수를 여기서 되풀이하지 않는다.
   const spawn = SRC.slice(SRC.indexOf("await spawnTaskSession({"));
-  assert.match(spawn.slice(0, 600), /\n\s+env,/, "리스를 구해 놓고 spawnTaskSession 에 안 넘겼다");
+  assert.doesNotMatch(spawn.slice(0, 700), /harness: "claude"/,
+    "하네스가 claude 로 박혀 있다 — codex 사용자의 분석이 무출력으로 죽는다");
+  assert.match(SRC, /resolveHeadlessHarness\(userId\)/, "크론·위탁과 같은 하네스 선택 함수를 쓰지 않는다");
+  // claude 전용 플래그를 다른 하네스에 실으면 기동이 깨진다.
+  assert.match(SRC, /harness === "claude" \? livTurnArgs/,
+    "claude 전용 플래그(livTurnArgs)를 하네스 무관하게 싣는다");
 });
 
-t("㊱ 자격이 없으면 띄우지 않고 402 로 막는다 — 무출력 hang 대신", () => {
-  assert.match(SRC, /if \(!env\) \{[\s\S]{0,200}HttpError\(402/,
-    "자격 없이 spawn 하면 5분 무출력 뒤 죽는다(#1101) — 미리 막아야 한다");
-  // 막는 자리가 spawn **앞**이어야 의미가 있다.
+t("㊲ 자격이 **아무것도** 없을 때만 막는다 — 로그인한 사람은 통과시킨다", () => {
+  assert.match(SRC, /if \(!loggedIn\.length && !env\) \{[\s\S]{0,240}HttpError\(402/,
+    "'로그인 없음 AND 리스 없음' 이 아니면 되는 사람을 막는 회귀다");
   assert.ok(SRC.indexOf("HttpError(402") < SRC.indexOf("await spawnTaskSession({"),
-    "402 가드가 spawn 뒤에 있다 — 이미 띄운 뒤라 아무것도 못 막는다");
+    "402 가드가 spawn 뒤에 있다 — 이미 띄운 뒤라 아무것도 못 막는다(#1101 hang)");
 });
 
-t("㊲ 조회는 ai_ready 를 주되 토큰 값은 절대 싣지 않는다", () => {
-  assert.match(SRC, /ai_ready: !!aiEnv/, "화면이 '누르기 전에' 알 방법이 없어진다");
-  // 리스 env 는 {CLAUDE_CODE_OAUTH_TOKEN: '<토큰>'} 이다 — 그걸 통째로 응답에 실으면 토큰 유출이다.
-  assert.doesNotMatch(SRC, /(ai|lease|env)\w*:\s*aiEnv\b/,
-    "리스 env 를 응답에 그대로 실었다 — 그 안에 토큰 원문이 들어 있다");
+t("㊳ 자격 값은 응답에 절대 싣지 않는다", () => {
+  // 리스 env 는 {CLAUDE_CODE_OAUTH_TOKEN: '<토큰>'} 이다 — 통째로 실으면 토큰 유출.
+  assert.doesNotMatch(SRC, /(ai|lease)\w*:\s*env\b/, "리스 env 를 응답에 그대로 실었다");
+  assert.doesNotMatch(SRC, /ai_env/, "자격 env 를 응답 필드로 열었다");
+  // 하네스 **이름**은 비밀이 아니다 — 화면이 '무엇으로 도는지' 말하려면 필요하다.
+  assert.match(SRC, /ai_harnesses: aiHarnesses/, "무엇으로 도는지 화면이 알 방법이 없다");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

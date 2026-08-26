@@ -2646,6 +2646,7 @@ function renderOnboarding(host2, ctx = {}) {
     connected: [],
     ai: null,
     aiConnected: false,
+    aiName: null,
     terminal: null,
     app: null,
     trail: [],
@@ -2977,68 +2978,48 @@ function renderOnboarding(host2, ctx = {}) {
       }
     },
     /* AI 잇기 — **실물**이다(#1813). 종전엔 900ms 기다렸다 무조건 «연결됐어요» 라고만 했다.
-     *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 돈다(박스에 API 키가 없는 게 설계다). 그래서 이을 것은
-     *  `claude setup-token` 이 발급하는 토큰 하나이고, 그건 자격 금고(me_credential)에 봉투 암호화로 들어간다.
-     *  ⚠ 토큰은 화면에 남기지 않는다(type=password) — 어깨너머·화면 공유·스크린샷이 전부 유출 경로다. */
+     *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 돈다(박스에 API 키가 없는 게 설계다).
+     *  ⚠ 잇는 방법은 **터미널에서 그 CLI 를 한 번 띄워 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
+     *   (~/.claude/.credentials.json 등)에 남고, 헤드리스 분석도 그 프로필로 돈다.
+     *   setup-token 을 붙여넣게 하지 않는다 — 그건 자기 프로필이 없는 자리(남의 노드 위탁)용 보조 수단이라
+     *   여기서 요구하면 사람에게 더 어려운 길을 시키는 것이 된다. 관문은 '로그인' 하나다(#1437 §6).
+     *  로그인 여부는 **서버가 프로필을 보고** 답한다(ai_ready) — 화면이 지어내지 않는다. */
     claude: {
       html: () => qHead(
         "claude",
-        `\uC774\uC5B4 \uB450\uC2DC\uBA74 \uC81C(\uB9AC\uBE0C)\uAC00 \uC77C\uD560 \uB54C\uB3C4 ${esc(nick() || "\uB2F9\uC2E0")}\uB2D8\uC758 ${esc(S.ai || "AI")} \uAD6C\uB3C5\uC744 \uC501\uB2C8\uB2E4. \uB77C\uC774\uBE14\uB9AC\uAC00 \uB530\uB85C \uC694\uAE08\uC744 \uB9E4\uAE30\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`,
-        `${esc(S.ai || "AI")} \uACC4\uC815\uC744 \uC774\uC5B4 \uC8FC\uC138\uC694.`,
-        S.ai && S.ai !== "Claude" ? `\uC9C0\uAE08\uC740 Claude \uB9CC \uC774 \uC790\uB9AC\uC5D0\uC11C \uC774\uC744 \uC218 \uC788\uC5B4\uC694. ${esc(S.ai)}\uB294 \uD130\uBBF8\uB110\uC5D0\uC11C \uC4F0\uC2DC\uBA74 \uADF8\uB300\uB85C \uC774\uC5B4\uC9D1\uB2C8\uB2E4.` : "\uD130\uBBF8\uB110\uC5D0 \uD55C \uC904 \uCE58\uACE0, \uB098\uC628 \uAC12\uC744 \uC544\uB798\uC5D0 \uBD99\uC5EC \uB123\uC73C\uC2DC\uBA74 \uB429\uB2C8\uB2E4."
-      ) + (S.ai && S.ai !== "Claude" ? "" : `<div class="ob-tok">
-            <ol>
-              <li>\uD130\uBBF8\uB110\uC744 \uC5F4\uACE0 <code>claude setup-token</code> \uC744 \uCE69\uB2C8\uB2E4</li>
-              <li>\uBE0C\uB77C\uC6B0\uC800\uAC00 \uC5F4\uB9AC\uBA74 \uD3C9\uC18C \uC4F0\uC2DC\uB294 Claude \uACC4\uC815\uC73C\uB85C \uB85C\uADF8\uC778\uD569\uB2C8\uB2E4</li>
-              <li>\uD130\uBBF8\uB110\uC5D0 \uB3CC\uC544\uC628 \uAC12\uC744 \uADF8\uB300\uB85C \uC544\uB798\uC5D0 \uBD99\uC5EC \uB123\uC2B5\uB2C8\uB2E4</li>
-            </ol>
-            <input id="cTok" type="password" autocomplete="off" spellcheck="false"
-              placeholder="\uBD99\uC5EC \uB123\uC73C\uBA74 \uD654\uBA74\uC5D0 \uBCF4\uC774\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4" aria-label="Claude \uC124\uC815 \uD1A0\uD070">
-            <p class="ob-err" id="cErr"></p>
-          </div>`) + `<button class="ob-btn ob-btn-pri" id="cGo">${S.aiConnected ? "\uC774\uC5B4\uC84C\uC5B4\uC694, \uACC4\uC18D" : S.ai && S.ai !== "Claude" ? "\uAC74\uB108\uB6F0\uACE0 \uACC4\uC18D" : "\uC787\uAE30"}</button>
+        `\uC774\uC5B4 \uB450\uC2DC\uBA74 \uC81C(\uB9AC\uBE0C)\uAC00 \uC77C\uD560 \uB54C\uB3C4 ${esc(nick() || "\uB2F9\uC2E0")}\uB2D8\uC758 \uAD6C\uB3C5\uC744 \uC501\uB2C8\uB2E4. \uB77C\uC774\uBE14\uB9AC\uAC00 \uB530\uB85C \uC694\uAE08\uC744 \uB9E4\uAE30\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`,
+        S.aiConnected ? "\uC774\uC5B4\uC84C\uC5B4\uC694." : `${esc(S.ai || "AI")} \uACC4\uC815\uC744 \uC774\uC5B4 \uC8FC\uC138\uC694.`,
+        S.aiConnected ? "" : "\uD130\uBBF8\uB110\uC744 \uC5F4\uACE0 \uC544\uB798 \uD55C \uC904\uC744 \uCE58\uBA74 \uB85C\uADF8\uC778 \uCC3D\uC774 \uC5F4\uB9BD\uB2C8\uB2E4."
+      ) + (S.aiConnected ? `<div class="ob-tok"><p class="ob-ok">${esc(S.aiName || "AI")} \uB85C\uADF8\uC778\uC774 \uD655\uC778\uB410\uC5B4\uC694.</p></div>` : `<div class="ob-tok">
+              <ol>
+                <li>\uD130\uBBF8\uB110\uC744 \uC5FD\uB2C8\uB2E4(\uB77C\uC774\uBE14\uB9AC \uC548\uC5D0\uC11C\uB3C4, \uC4F0\uC2DC\uB358 \uD130\uBBF8\uB110\uC774\uC5B4\uB3C4 \uB429\uB2C8\uB2E4)</li>
+                <li><code>${esc(AI_CLI[S.ai] || "claude")}</code> \uB97C \uCE58\uACE0 \uC548\uB0B4\uB300\uB85C \uB85C\uADF8\uC778\uD569\uB2C8\uB2E4</li>
+                <li>\uB85C\uADF8\uC778\uC774 \uB05D\uB098\uBA74 \uC544\uB798 \uBC84\uD2BC\uC744 \uB204\uB985\uB2C8\uB2E4</li>
+              </ol>
+              <p class="ob-err" id="cErr"></p>
+            </div>`) + `<button class="ob-btn ob-btn-pri" id="cGo">${S.aiConnected ? "\uACC4\uC18D" : "\uB85C\uADF8\uC778\uD588\uC5B4\uC694"}</button>
            <button class="ob-btn ob-btn-sub" data-skip>\uB098\uC911\uC5D0 \uD560\uAC8C\uC694</button>`,
       bind: (el) => {
-        const inp = $("#cTok", el), err = $("#cErr", el), go = $("#cGo", el);
-        const fail = (m) => {
-          if (err) err.textContent = m;
-          go.disabled = false;
-          go.textContent = "\uC787\uAE30";
-        };
+        const err = $("#cErr", el), go = $("#cGo", el);
         go.onclick = async () => {
-          if (!inp || S.aiConnected) return goScene("terminal");
-          const tok = String(inp.value || "").trim();
-          if (!tok) return fail("\uD1A0\uD070\uC744 \uBD99\uC5EC \uB123\uC5B4 \uC8FC\uC138\uC694.");
+          if (S.aiConnected) return goScene("terminal");
           go.disabled = true;
-          go.textContent = "\uC787\uB294 \uC911\u2026";
+          go.textContent = "\uD655\uC778 \uC911\u2026";
           if (err) err.textContent = "";
-          try {
-            await api("/api/ui/me/credential", { method: "POST", body: JSON.stringify({
-              kind: "claude_setup_token",
-              secret: tok,
-              label: "\uCC98\uC74C \uC124\uC815\uC5D0\uC11C \uC774\uC74C"
-            }) });
-          } catch (e) {
-            return fail(`\uC787\uC9C0 \uBABB\uD588\uC5B4\uC694 \u2014 ${e && e.message ? e.message : "\uC54C \uC218 \uC5C6\uB294 \uC624\uB958"}`);
+          await loadWelcome();
+          if (!WS || !WS.ai_ready) {
+            go.disabled = false;
+            go.textContent = "\uB2E4\uC2DC \uD655\uC778";
+            if (err) err.textContent = "\uC544\uC9C1 \uB85C\uADF8\uC778\uC774 \uC548 \uBCF4\uC5EC\uC694. \uD130\uBBF8\uB110\uC5D0\uC11C \uB85C\uADF8\uC778\uC744 \uB05D\uB0B4\uACE0 \uB2E4\uC2DC \uB20C\uB7EC \uC8FC\uC138\uC694.";
+            return;
           }
-          let ready = false;
-          try {
-            const w = await api("/api/ui/me/welcome");
-            ready = !!(w && w.ai_ready);
-          } catch (_) {
-            ready = false;
-          }
-          if (!ready) return fail("\uD1A0\uD070\uC740 \uC800\uC7A5\uD588\uB294\uB370 \uC544\uC9C1 \uC4F8 \uC218 \uC788\uB294 \uC0C1\uD0DC\uAC00 \uC544\uB2C8\uC5D0\uC694. \uAC12\uC774 \uC628\uC804\uD55C\uC9C0 \uB2E4\uC2DC \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
-          inp.value = "";
           S.aiConnected = true;
+          S.aiName = WS.ai_harnesses && WS.ai_harnesses[0] || null;
           S.decisions.push("AI \uC774\uC74C");
           save();
           renderSB();
-          if (WS) WS.ai_ready = true;
           toast("\uC774\uC5B4\uC84C\uC5B4\uC694.");
           goScene("terminal");
-        };
-        if (inp) inp.onkeydown = (ev) => {
-          if (ev.key === "Enter") go.click();
         };
         $("[data-skip]", el).onclick = () => goScene("terminal");
       }
@@ -3300,6 +3281,7 @@ function renderOnboarding(host2, ctx = {}) {
     }
     return { drawers: null, why: "AI \uAC00 \uC544\uC9C1 \uB2F5\uD558\uC9C0 \uC54A\uC544\uC11C, \uD30C\uC77C \uC885\uB958\uB85C \uB098\uB208 \uACB0\uACFC\uB97C \uBA3C\uC800 \uBCF4\uC5EC \uB4DC\uB824\uC694." };
   }
+  const AI_CLI = { "Claude": "claude", "ChatGPT": "codex", "Gemini": "agy", "Grok": "grok" };
   const CHAT_STEPS = ["b1", "b2", "b3", "nowline", "can"];
   async function chatStep(step, token) {
     if (token !== seqToken) return;

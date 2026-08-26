@@ -202,24 +202,32 @@ export const welcomeCapabilities: Capability[] = [
       const { listCategories } = await import("../../v6/category-store.js");
 
       // AI 가 이어져 있나 — **분석을 누르기 전에** 알아야 한다. 안 그러면 사람이 «읽어 주세요» 를 누르고
-      //  나서야 402 를 본다. 판정은 실제로 리스가 붙는지로 한다(leaseEnvFor) — 자격 행의 존재만 보면
-      //  비활성 멤버·복호화 실패에서 화면과 실제가 갈린다.
-      const { leaseEnvFor } = await import("../../node/task-scheduler.js");
+      //  나서야 거절을 본다.
+      //  ⚠ 판정 기준은 **그 사람이 로그인한 하네스**다(setup-token 이 아니다). 매니지드에서 사람은 웹 터미널에서
+      //   `claude` 를 한 번 띄워 로그인하고, 그 자격은 자기 프로필(~/.claude/.credentials.json)에 남는다.
+      //   헤드리스 실행은 그 프로필로 폴백한다(tasks.ts: "리스가 없으면 노드 로컬 프로필/자격 폴백").
+      //   setup-token 리스는 **그 프로필이 없는 자리**(남의 노드 위탁)에서 쓰는 보조 수단이라, 그걸로 판정하면
+      //   웹 터미널에서 이미 로그인한 사람을 «AI 안 이었음» 으로 잘못 막는다.
+      const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
+      const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
 
-      const [member, liv, entries, total, cats, aiEnv] = await Promise.all([
+      const [member, liv, entries, total, cats, loggedIn] = await Promise.all([
         getMember(userId),
         getLivProfile(userId),
         listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>),
         countSources({}, null).catch(() => 0),
         listCategories(undefined, null).catch(() => [] as Array<Record<string, unknown>>),
-        leaseEnvFor({ requester: userId, harness: "claude" }).catch(() => undefined),
+        memberLoggedInHarnessesAny(userId).catch(() => [] as string[]),
       ]);
+      // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
+      const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
       const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
       return {
         done: !!liv.welcome?.done_at,
         done_at: liv.welcome?.done_at ?? null,
-        // 이 사람의 AI 가 이어졌나(분석이 실제로 돌 수 있나). 값은 절대 싣지 않는다 — 여부만.
-        ai_ready: !!aiEnv,
+        // 이 사람의 AI 가 이어졌나(분석이 실제로 돌 수 있나) + 무엇으로 도는가. 자격 값은 절대 싣지 않는다.
+        ai_ready: aiHarnesses.length > 0,
+        ai_harnesses: aiHarnesses,
         profile: {
           display_name: member?.display_name ?? null,
           nickname: member?.nickname ?? null,
@@ -257,32 +265,44 @@ export const welcomeCapabilities: Capability[] = [
       const { spawnTaskSession } = await import("../../node/tasks.js");
       const { livTurnArgs } = await import("../../org/delivery/liv-turn.js");
 
-      // ── 자격 리스 ── 이 사람의 AI 구독으로 돈다. 위탁 태스크와 **같은 함수**를 쓴다(leaseEnvFor):
-      //  owner 키(`member:<id>`)·active 멤버 검사·fail-closed 가 이미 그 안에 있다. 여기서 다시 짜면
-      //  그 셋 중 하나를 빠뜨리게 되고, 빠뜨려도 아무 오류가 안 난다 — 리스가 조용히 안 붙을 뿐이다(#1289).
+      // ── 어느 AI 로 도나 ── 이 사람이 **실제로 로그인한** 하네스로 돈다. 크론·위탁과 같은 함수를 쓴다.
+      //  ⚠ `harness: "claude"` 로 박으면 안 된다: codex 로만 로그인한 사람의 잡이 전부 자격 없는 `claude -p`
+      //   로 떠서 무출력 hang → stall 종결이 된 사고가 이미 있다(#1884 가 고친 그 자리).
+      const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
+      const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
+      const { resolveHeadlessHarness } = await import("../../node/headless-harness.js");
+      const loggedIn = (await memberLoggedInHarnessesAny(userId).catch(() => [] as string[]))
+        .filter((k) => HEADLESS_KEYS.includes(k));
+
+      // ── 자격 리스(보조) ── 프로필 로그인이 주 경로이고, 이건 그게 없는 자리를 위한 것이다.
+      //  위탁과 **같은 함수**를 쓴다(leaseEnvFor): owner 키(`member:<id>`)·active 검사·fail-closed 가 그 안에 있고,
+      //  손으로 다시 짜면 그중 하나를 빠뜨려도 아무 오류가 안 난다 — 리스가 조용히 안 붙을 뿐이다(#1289).
       const { leaseEnvFor } = await import("../../node/task-scheduler.js");
       const env = await leaseEnvFor({ requester: userId, harness: "claude" }).catch(() => undefined);
 
-      // ⚠ 자격이 없으면 **미리 막는다.** 격리 컨테이너엔 공유 ~/.claude 폴백이 없어(#1014) 토큰 없이 띄우면
-      //  fast-fail 이 아니라 **hang** 한다 — 사람은 도는 줄 알고 기다리다 5분 뒤 무출력으로 죽는 걸 본다(#1101).
-      //  무엇이 없는지 여기서 그대로 말해 주는 편이 낫다. 화면은 이 402 를 받아 AI 잇기로 안내한다.
-      if (!env) {
-        throw new HttpError(402, "AI 를 아직 잇지 않으셨어요 — 분석은 본인 AI 구독으로 돕니다. Claude 를 이어 주세요");
+      // ⚠ 자격이 **아무 것도** 없으면 미리 막는다. 격리 컨테이너엔 공유 ~/.claude 폴백이 없어(#1014) 자격 없이
+      //  띄우면 fast-fail 이 아니라 **hang** 한다 — 사람은 도는 줄 알고 기다리다 5분 뒤 무출력 사망을 본다(#1101).
+      //  단 조건은 '로그인도 없고 리스도 없을 때' 다: 웹 터미널에서 이미 로그인한 사람을 막으면 안 된다.
+      if (!loggedIn.length && !env) {
+        throw new HttpError(402, "AI 를 아직 잇지 않으셨어요 — 분석은 본인 AI 구독으로 돕니다. 터미널에서 한 번 로그인해 주세요");
       }
+      const harness = loggedIn.length ? await resolveHeadlessHarness(userId).catch(() => "claude") : "claude";
 
       try {
         await spawnTaskSession({
           user, taskId: turnId, rootKey: "personal", subpath: "liv",
-          prompt: analyzePrompt(files, job), harness: "claude",
+          prompt: analyzePrompt(files, job), harness,
           // 온보딩 분석은 **한 번 묻고 끝**이다 — 이어가는 대화가 아니라 새 세션으로 띄운다.
-          extraFlags: livTurnArgs({ sessionId: crypto.randomUUID(), resume: false }),
+          //  ⚠ livTurnArgs 는 claude 플래그다(--disallowedTools·--include-partial-messages·--session-id).
+          //   다른 하네스에 실으면 인자가 안 먹거나 기동이 깨진다 — 실측하지 않은 플래그를 추측해 넣지 않는다.
+          extraFlags: harness === "claude" ? livTurnArgs({ sessionId: crypto.randomUUID(), resume: false }) : [],
           bypassPermissions: false,   // ⚠ 리브와 같은 안전선. 승인 우회는 여기서도 쓰지 않는다.
           env,
         });
       } catch (e) {
         throw new HttpError(503, `AI 분석을 시작하지 못했습니다 — ${(e as Error).message}`);
       }
-      return { turn_id: turnId, files: files.length };
+      return { turn_id: turnId, files: files.length, harness };
     }, false, {
       job: z.string().optional().describe("이 사람이 하는 일(있으면 갈래 제안이 그 일에 맞춰진다)"),
     }),
