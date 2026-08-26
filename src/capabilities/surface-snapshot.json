@@ -3957,6 +3957,16 @@
   "input_hash": "fa5bf8dd3c9d34f1"
  },
  {
+  "name": "me_credential_verify",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/credential/verify"
+  ],
+  "input_hash": "8210f8cb9a2d130f"
+ },
+ {
   "name": "me_credential_delete",
   "scope": null,
   "mcp": true,
