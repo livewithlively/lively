@@ -58,13 +58,14 @@ const PAGE = `<!doctype html>
   <li>Picker가 열리면 <b>파일이 몇 개 들어 있는 폴더</b>를 하나 고르고 [선택]</li>
   <li>판정이 자동으로 나옵니다</li>
 </ol>
-<button id="go">시작 — 구글 로그인하고 폴더 고르기</button>
+<button id="go">① 폴더 고르기 (본 실험)</button>\n<button id="goFile" style="margin-left:8px">② 파일 고르기 (대조군)</button>
 <div id="verdict"></div>
 <div id="log">대기 중…</div>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://apis.google.com/js/api.js" async defer></script>
 <script>
 const CLIENT_ID = ${JSON.stringify(CLIENT_ID)};
+const APP_ID = CLIENT_ID.split("-")[0]; // 클라이언트 ID 접두 = GCP 프로젝트 번호(=Picker 의 앱 id)
 const SCOPE = "https://www.googleapis.com/auth/drive.file"; // ★ 이것 하나만. 다른 걸 섞으면 실험이 무의미해진다.
 const logEl = document.getElementById("log");
 const lines = [];
@@ -124,8 +125,8 @@ async function probe(folderId, folderName) {
   verdict(true, "폴더를 고르니 자식 " + files.length + "개가 읽힙니다. → 드라이브를 drive.file 로 내릴 수 있습니다(심사·CASA·100명 한도 전부 0).");
 }
 
-document.getElementById("go").onclick = () => {
-  document.getElementById("go").disabled = true;
+function start(mode) {
+  document.getElementById("go").disabled = true; document.getElementById("goFile").disabled = true;
   lines.length = 0; log("구글 인증 중…");
   const tc = google.accounts.oauth2.initTokenClient({
     client_id: CLIENT_ID, scope: SCOPE,
@@ -134,22 +135,44 @@ document.getElementById("go").onclick = () => {
       token = resp.access_token;
       log("토큰 OK — 부여된 scope: " + (resp.scope || "(미표기)"));
       if (resp.scope && !resp.scope.includes("drive.file")) log("⚠ drive.file 이 안 보입니다 — 실험이 성립하지 않습니다");
-      if (resp.scope && /drive\\.readonly|drive\\.metadata|auth\\/drive\\b/.test(resp.scope)) log("⚠ 제한범위가 섞였습니다 — 이러면 결과가 무의미합니다(테스트 클라이언트를 확인하세요)");
+      // ⚠ auth/drive\\b 로 쓰면 drive.file 에도 걸린다(경계가 '.' 이라서) — 전체 드라이브 scope 만 겨눈다
+      if (resp.scope && /drive\\.readonly|drive\\.metadata|auth\\/drive(\\s|$)/.test(resp.scope)) log("⚠ 제한범위가 섞였습니다 — 이러면 결과가 무의미합니다(테스트 클라이언트를 확인하세요)");
       gapi.load("picker", () => {
-        const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
-          .setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes("application/vnd.google-apps.folder");
+        // mode='folder' = 본 실험 · mode='file' = 대조군(파일 하나). 대조군이 200 이면 설정은 정상이라는 뜻이라,
+        //  폴더 쪽 404 를 "설정 실수"가 아니라 **답**으로 읽을 수 있다.
+        const view = mode === "file"
+          ? new google.picker.DocsView(google.picker.ViewId.DOCS)
+          : new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+              .setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes("application/vnd.google-apps.folder");
         new google.picker.PickerBuilder()
+          // ★ setAppId 가 **필수**다 — 이게 없으면 Picker 선택이 앱에 권한을 붙이지 못해 무엇을 골라도 404 다.
+          //  (그걸 "폴더는 안 준다"로 오독하기 쉽다 — 실제로 1차 실행에서 그렇게 나왔다.)
+          .setAppId(APP_ID)
           .addView(view).setOAuthToken(token).setCallback((d) => {
             if (d.action !== google.picker.Action.PICKED) return;
             const doc = d.docs[0];
-            probe(doc.id, doc.name).catch((e) => log("오류: " + e.message));
+            (mode === "file" ? controlProbe(doc.id, doc.name) : probe(doc.id, doc.name)).catch((e) => log("오류: " + e.message));
           }).build().setVisible(true);
-        log("Picker 를 엽니다 — 파일이 든 폴더를 하나 고르세요");
+        log(mode === "file" ? "Picker 를 엽니다 — [대조군] 아무 파일이나 하나 고르세요" : "Picker 를 엽니다 — 파일이 든 폴더를 하나 고르세요");
       });
     },
   });
   tc.requestAccessToken({ prompt: "consent" });
-};
+}
+/** 대조군 — Picker 로 고른 **파일** 하나가 읽히는가. 이게 200 이면 클라이언트·원본·appId 설정은 정상이다.
+ *  그래야 폴더 쪽 404 를 "설정 실수"가 아니라 **drive.file 의 성질**로 읽을 수 있다. */
+async function controlProbe(fileId, name) {
+  log("\\n── [대조군] 파일 '" + name + "' (" + fileId + ")");
+  const meta = await api("files/" + fileId + "?fields=id,name,mimeType");
+  log("[C] 파일 메타 files/{id}        → HTTP " + meta.status + (meta.json?.name ? " (" + meta.json.name + ")" : " " + meta.body));
+  if (meta.status === 200) {
+    verdict(true, "대조군 통과 — 고른 **파일**은 읽힙니다. 즉 설정은 정상이고, 폴더가 404 였다면 그건 drive.file 이 폴더 내용물을 안 준다는 뜻입니다.");
+  } else {
+    verdict(false, "대조군도 HTTP " + meta.status + " — 설정 문제입니다(클라이언트 ID·JS 원본·appId·Picker API 활성화를 보세요). 이 상태의 폴더 결과는 무효입니다.");
+  }
+}
+document.getElementById("go").onclick = () => start("folder");
+document.getElementById("goFile").onclick = () => start("file");
 </script></body></html>`;
 
 http.createServer((req, res) => {
