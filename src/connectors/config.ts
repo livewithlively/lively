@@ -15,6 +15,7 @@ import { itemsPool } from "../db/client.js";
 import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js";
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
+import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
 export interface ConnectorField {
@@ -197,6 +198,31 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "instance", env: "DOMAIN_WIKI_INSTANCE", secret: false, label: "Instance", hint: "repo 식별자 (기본 domain-wiki)" },
     ],
   },
+  // 피그마(#1881 F5) — 수집 단위는 **파일의 코멘트**다(캔버스가 아니라 코멘트에 결정·피드백이 쌓인다).
+  //  범위 선언 장치가 링크와 팀 id 인 이유는 connectors/figma.ts 머리말 참조 — 피그마엔 채널 열거도
+  //  페이지 선택기도 없다(공개 OAuth 앱은 파일 열거 금지 · team_id 는 API 로 못 얻는다).
+  figma: {
+    system: "figma",
+    label: "Figma",
+    guide: {
+      intro: "피그마는 '어느 파일을 볼지'를 사람이 정해 줘야 합니다 — 피그마엔 채널 목록 같은 게 없습니다. 가장 쉬운 길은 **파일 링크를 그대로 붙여넣는 것**입니다(주소창에서 복사). 팀 전체를 훑으려면 '팀 id' 를 한 번 넣으세요. 토큰은 개인 액세스 토큰(figd_…)을 씁니다 — 발급할 때 허용범위를 고르는 화면이 나옵니다.",
+      steps: [
+        "Figma ▸ 오른쪽 위 계정 ▸ Settings ▸ Security ▸ Personal access tokens ▸ [Generate new token]",
+        "허용범위(scopes)에서 file_comments:read · file_content:read · file_metadata:read · folders:read · current_user:read 를 켭니다 — folders:read 가 없으면 팀 전체 훑기가 안 됩니다",
+        "만들어진 토큰(figd_…)을 아래 '토큰' 칸에 저장합니다. (이미 [내 설정 ▸ 외부 서비스 관리 ▸ Figma]에 저장해 뒀다면 토큰 칸을 비우고 '토큰 출처'에 member:<내 구성원 id> 를 적으세요)",
+        "수집할 대상을 정합니다 — '파일 링크'에 피그마 주소를 붙여넣거나(여러 개면 줄바꿈·공백으로 구분), '팀 id'에 팀 주소(figma.com/files/team/<여기>/…)의 id 를 넣습니다",
+        "훑고 싶지 않은 파일이 있으면 '제외 파일'에 이름 조각을 적습니다(예: archive 백업)",
+      ],
+      url: "https://www.figma.com/settings",
+    },
+    fields: [
+      { key: "token", env: "FIGMA_TOKEN", secret: true, label: "토큰", hint: "figd_... — Figma ▸ Settings ▸ Security ▸ Personal access tokens. 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "FIGMA_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = 관리탭 자격 금고의 조직 공용 figma_token · member:<구성원 id> = 그 사람이 [외부 서비스 관리 ▸ Figma]에 저장한 토큰 · 비우면 위 토큰 칸을 씁니다" },
+      { key: "file_keys", env: "FIGMA_FILE_KEYS", secret: false, label: "파일 링크", hint: "피그마 파일 주소를 그대로 붙여넣으세요(여러 개면 공백·줄바꿈으로 구분). 파일 키만 적어도 됩니다" },
+      { key: "team_ids", env: "FIGMA_TEAM_IDS", secret: false, label: "팀 id", hint: "팀 전체를 훑습니다 — figma.com/files/team/<여기>/… 주소에서 복사(피그마는 팀 id 를 API 로 주지 않습니다). 팀이 여럿이면 수집기를 팀당 하나 두는 편이 낫습니다" },
+      { key: "exclude_files", env: "FIGMA_EXCLUDE_FILES", secret: false, label: "제외 파일", hint: "이름에 이 조각이 들어간 파일은 건너뜁니다(예: archive 백업) — 공백·쉼표 구분" },
+    ],
+  },
 };
 
 // ════════ 다중 수집기 인스턴스 해소 (#1419 T1) ════════
@@ -362,6 +388,15 @@ async function loadConnectorConfig(
     const r = await resolveNotionTokenSource(out.token_source, notionVaultReader);
     if (r) {
       if (r.warning) console.warn(`notion token_source: ${r.warning}`);
+      out.token = r.token;
+    }
+  }
+  // ── 피그마 토큰 출처(#1881 F5) — 같은 규약. 다만 여기 담기는 건 OAuth 토큰이 아니라 개인 액세스 토큰(PAT)이다:
+  //  공개 OAuth 앱은 파일 열거 엔드포인트를 못 써서 팀 전체 수집이 PAT 로만 성립한다(figma-token-source.ts 참조).
+  if (system === "figma" && out.token_source) {
+    const r = await resolveFigmaTokenSource(out.token_source, figmaVaultReader);
+    if (r) {
+      if (r.warning) console.warn(`figma token_source: ${r.warning}`);
       out.token = r.token;
     }
   }

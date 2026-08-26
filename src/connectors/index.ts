@@ -8,6 +8,7 @@ import { gmailConnector } from "./gmail.js";
 import { gdriveConnector } from "./gdrive.js";
 import { domainWikiConnector } from "./domain-wiki.js";
 import { localConnector } from "./local.js";
+import { figmaConnector } from "./figma.js";
 
 export const connectors: Record<string, Connector> = {
   slack: slackConnector,
@@ -18,4 +19,5 @@ export const connectors: Record<string, Connector> = {
   gdrive: gdriveConnector,   // doc → knowledge (#541, OAuth2 refresh-token)
   "domain-wiki": domainWikiConnector, // 로컬 git md 미러 → knowledge, 링크 #/k/ 정규화 (#696)
   local: localConnector,     // 내 컴퓨터 업로드 → source (#1881) — 싱크 없음, fetchArtifact 만(업로드 라우트가 자료를 민다)
+  figma: figmaConnector,     // 디자인 파일 코멘트 → source (#1881) — 범위 선언은 링크·팀 id(피그마엔 채널 열거가 없다)
 };
