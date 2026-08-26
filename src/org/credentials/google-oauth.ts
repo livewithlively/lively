@@ -34,6 +34,24 @@ export function isGoogleServer(name: string | null | undefined): boolean {
   return String(name ?? "").toLowerCase() === GOOGLE_SERVER;
 }
 
+/**
+ * 구 kind 3종 — 서비스마다 따로 연결하던 시절의 금고 슬롯(#1652 이전 구조).
+ *  ★ **프리셋의 auth_kind 를 바꾸지 않는다.** 대신 이 셋을 `google_oauth` 의 별칭으로 읽는다(oauth-proxy-auth).
+ *   이유: 금고 행은 `(owner, kind, scope_key)` 라 kind 를 갈아치우면 **기존 연결자의 토큰이 통째로 미아가 된다.**
+ *   #1652 에서 정확히 그 사고가 났다 — 토큰은 살아 있는데 화면에서 사라져 아무도 재연결을 못 했다(어니스트 5인).
+ *   별칭 방향이 이 문제를 없앤다:
+ *     · 예전에 붙인 사람 → 자기 구 슬롯이 그대로 먼저 잡힌다(무회귀).
+ *     · 새로 붙인 사람   → 통합 슬롯 하나가 세 서비스 도구 전부를 먹인다([Google 연결] 1회).
+ *   전환이 끝나면(구 슬롯 0) 프리셋을 google_oauth 로 바꾸고 이 표를 지운다.
+ */
+export const GOOGLE_LEGACY_KINDS = ["google_drive_oauth", "google_gmail_oauth", "google_calendar_oauth"] as const;
+
+/** 이 auth_kind 가 통합 슬롯으로 폴백해도 되는 구 구글 kind 인가 → 통합 kind, 아니면 null. */
+export function googleUnifiedKindFor(authKind: string | null | undefined): string | null {
+  const k = String(authKind ?? "").toLowerCase();
+  return (GOOGLE_LEGACY_KINDS as readonly string[]).includes(k) ? GOOGLE_KIND : null;
+}
+
 /** 신원 범위 — 어느 구글 계정으로 붙었는지 화면에 보여주기 위한 것. 둘 다 **비민감**이라 심사 등급을 올리지 않는다. */
 const IDENTITY_SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email"] as const;
 
