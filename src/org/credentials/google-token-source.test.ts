@@ -64,8 +64,12 @@ await ta("★ 통합 슬롯이 없으면 그 서비스의 구 슬롯으로 폴�
   const v = vaultSpy({ slots: { google_gmail_oauth: "RT-OLD" }, clients: { google_gmail_oauth: CLIENT } });
   const r = await resolveGoogleTokenSource("member:admin", "gmail", v);
   assert.equal(r?.refresh_token, "RT-OLD");
-  // 클라이언트도 **그 슬롯의 kind** 로 읽어야 한다 — 통합 클라이언트로 구 토큰을 갱신하면 invalid_client 다
-  assert.deepEqual(v.clientCalls, ["google_gmail_oauth"]);
+  // 종전엔 "클라이언트도 **그 슬롯의 kind** 로만 읽는다" 를 잠갔는데(clientCalls === [그 kind]),
+  //  그 규칙이 실제로 수집을 죽였다(C5 참조) — 토큰과 클라이언트는 서로 다른 kind 에 있을 수 있다.
+  //  잠글 것은 호출 목록이 아니라 **결과**다: 구 클라이언트를 실제로 찾아냈는가.
+  assert.equal(r?.client_id, CLIENT.client_id);
+  assert.equal(r?.warning, undefined);
+  assert.ok(v.clientCalls.includes("google_gmail_oauth"), "구 kind 까지 훑지 않았다");
 });
 
 t("우선순위: 통합이 먼저, 그다음 그 서비스의 구 kind (다른 서비스 kind 는 안 본다)", () => {
@@ -145,6 +149,25 @@ await ta("C4 구 kind 3종을 전부 훑는다(gmail·calendar 로만 붙인 조
   assert.deepEqual([...GOOGLE_CLIENT_KINDS],
     ["google_oauth", "google_drive_oauth", "google_gmail_oauth", "google_calendar_oauth"]);
   assert.equal((await resolveGoogleOAuthClient(clientVault({ google_calendar_oauth: true })))?.kind, "google_calendar_oauth");
+});
+
+await ta("★ C5 토큰은 통합 슬롯, client 는 구 kind — 실제로 수집이 죽었던 조합(2026-08-27 run 16275)", async () => {
+  // 새 방식으로 [Google 연결]을 하면 통합 슬롯이 생기고 googleKindsFor 가 그걸 먼저 잡는다.
+  //  그런데 client 조회를 **잡힌 그 kind 로만** 하면, client 가 구 kind 에 있는 조직에서 수집이 통째로 멈춘다
+  //  ("Google OAuth 클라이언트(kind google_oauth)가 등록되지 않았습니다"). 실제로 그렇게 죽었다.
+  const vault: GoogleVaultReader = {
+    async memberOAuth(_id, kinds) {
+      for (const k of kinds) if (k === "google_oauth") return { kind: k, refresh_token: "RT" };
+      return null;
+    },
+    async oauthClient(kind) {
+      return kind === "google_drive_oauth" ? { client_id: "old-id", client_secret: "old-sec" } : null;
+    },
+  };
+  const r = await resolveGoogleTokenSource("member:yoon", "gdrive", vault);
+  assert.equal(r?.warning, undefined, `수집이 멈춘다: ${r?.warning}`);
+  assert.equal(r?.client_id, "old-id");
+  assert.equal(r?.refresh_token, "RT");
 });
 
 console.log(`\n${pass} passed`);
