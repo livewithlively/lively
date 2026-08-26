@@ -111,7 +111,14 @@ const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — �
 // @box_state = 하네스가 훅으로 보고한 실행 단계 + 그 시각(#1221, "busy 1753700000") — 화면 스크래핑을 대체하는 주신호.
 //  tmux 에 두는 이유는 @box_last_busy 와 같다: 게이트웨이가 재기동해도 살아남고(tmux 서버가 더 오래 산다),
 //  목록 조회가 어차피 읽는 이 한 줄에 딸려 와 조회 비용이 0이다.
-export const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_app}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{@box_state}\t#{pane_title}\t#{@box_label}";
+// @box_last_seen = 이 세션 **화면을 마지막으로 보고 있던** 시각 epoch초 (#1954 3차).
+//  왜 session_last_attached 로 부족한가: tmux 는 클라이언트가 **붙는 순간에만** 그 값을 찍는다. 그런데 새 셸은
+//  탭 DOM 을 유지해(v2/tabs.ts) 세션 하나당 attach 가 **탭 수명당 한 번**뿐이다 — 이미 열어 둔 세션을 다시 눌러도
+//  새 attach 가 없으니 '열람' 시각이 처음 연 순간에 얼어붙고, 그 뒤 작업이 끝날 때마다 '안 본 작업 완료'(초록점)가
+//  영영 안 꺼졌다(실측 2026-08-26: att=1 인 세션 5개의 last_attached 가 last_busy 보다 300~440초 뒤처진 채 고정).
+//  그래서 '봤다'를 attach 이벤트에서 떼어내 **보고 있는 동안 화면이 직접 찍는** 신호로 따로 둔다.
+//  tmux 에 두는 이유는 위 둘과 같다(게이트웨이 재기동 생존 + 이 한 줄에 딸려 와 조회 비용 0).
+export const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_app}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{@box_state}\t#{@box_last_seen}\t#{pane_title}\t#{@box_label}";
 
 // ── 뮤터블 관측 상태(프로세스 로컬) — Map 은 은닉하고 최소 접근 함수만 노출한다(#1313 R15) ──
 // 세션별 마지막 'busy(작업중)' 관측 시각(epoch초). 폴링 관측 기반 — '최근 작업순' 정렬용. 서버 재기동 시 리셋(도그푸드 OK).

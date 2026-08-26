@@ -107,7 +107,10 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //   노드는 tmux @box_project 실행 캐시만 적용한다(cwd·project.json·링크·셔틀은 건드리지 않는다).
 //  injectFirstPrompt = 프로젝트 세션 create와 첫 지시를 둘로 나눠, 게이트웨이가 DB current를 기록한 뒤에만
 //   노드의 입력창 대기·주입을 시작한다. 즉답 후 백그라운드 실행이라 90초 폴링이 RPC 상한을 잡아먹지 않는다.
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt"] as const;
+//  markSeen = 사람이 **그 세션 화면을 보고 있다**는 도장(#1954 3차, @box_last_seen). markActive 와 같은 이유로 릴레이가
+//   필요하다 — 노드 세션의 tmux 는 그 PC 에 있어 게이트웨이가 직접 못 쓴다. 이 op 를 모르는 구 노드에서는
+//   그 세션만 종전 동작(attach 시각만으로 판정)으로 남는다 — 안 보내면 그만이라 무회귀다.
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;

@@ -155,3 +155,20 @@ export async function markSessionActive(id: string, phase?: ReportedPhase, nowSe
 
 /** 단계가 실제로 **바뀐** 순간 (#1842). 같은 단계 재보고(하트비트)는 전이가 아니라 null 이다. */
 export interface SessionPhaseChange { prev: ReportedPhase | null; phase: ReportedPhase; at: number }
+
+/**
+ * 이 세션 화면을 **지금 보고 있다**고 기록한다 (#1954 3차, `@box_last_seen`).
+ *
+ * markSessionActive 와 같은 자리(tmux 세션 옵션)에 두는 이유도 같다 — 게이트웨이가 재기동해도 살아남고,
+ *  목록 조회가 어차피 읽는 한 줄에 딸려 온다. 다른 점은 **누가 찍느냐**다: 활동은 하네스 훅이, 열람은 화면이 찍는다.
+ *
+ * ⚠ 왜 tmux `session_last_attached` 로 안 되나: 그건 클라이언트가 **붙는 순간**의 도장이라 탭 DOM 을 유지하는
+ *  새 셸에서는 세션당 평생 한 번뿐이다(자세한 배경은 tmux-exec.ts LIST_FMT 주석). '보고 있다'는 지속 상태라
+ *  지속적으로 갱신되는 신호가 따로 있어야 한다.
+ *
+ * 실패해도 조용히 넘긴다 — 열람 도장을 못 찍은 최악의 결과는 '초록점이 좀 더 오래 켜져 있다'이지,
+ *  사람이 보고 있는 화면을 망가뜨릴 일이 아니다.
+ */
+export async function markSessionSeen(id: string, nowSec = Math.floor(Date.now() / 1000)): Promise<void> {
+  await tmuxQuiet(["set-option", "-t", id, "@box_last_seen", String(nowSec)]);
+}
