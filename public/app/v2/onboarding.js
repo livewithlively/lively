@@ -33,6 +33,61 @@ export async function fetchOnboardingDone() {
         return onboardingDone();
     }
 }
+/* ── 데스크톱 앱 내려받기 (#1813) ──────────────────────────────────────────────
+ *  종전엔 «앱 받기» 가 "설정 ▸ 데스크톱 앱에서 받으실 수 있어요" 토스트만 띄웠다. 그런데 **코어 어디에도
+ *   내려받기 주소가 없다**(실측 2026-08-26: releases/download 문자열 0건) — 안내가 가리키는 자리가 비어
+ *   있어서 사람은 앱을 끝내 못 받는다. 퍼널이 거기서 끊긴다.
+ *  릴리스는 공개라 **브라우저가 직접** 물어볼 수 있다(GitHub API 가 CORS 를 연다). 서버를 거치지 않으니
+ *   테넌트 컨테이너의 바깥 망에 기대지 않고, 게이트웨이에 새 문을 내지도 않는다.
+ *  ⚠ 실패하면 **릴리스 페이지로 보낸다** — 종전과 같은 자리이지 더 나쁘지 않다. 절대 던지지 않는다.
+ */
+const DL_API = 'https://api.github.com/repos/livewithlively/lively/releases/latest';
+const DL_PAGE = 'https://github.com/livewithlively/lively/releases/latest';
+/** 이 브라우저가 도는 OS. 못 가리면 null — 그때는 릴리스 페이지로 보낸다(추측해서 엉뚱한 파일을 주지 않는다). */
+function desktopOs() {
+    const s = `${navigator.userAgent} ${navigator.platform || ''}`.toLowerCase();
+    if (s.includes('mac'))
+        return 'mac';
+    if (s.includes('win'))
+        return 'win';
+    if (s.includes('linux') || s.includes('x11'))
+        return 'linux';
+    return null;
+}
+/** 자산 이름 → 내 OS 것인가. blockmap·업데이트 매니페스트(.yml)·코어 tgz 는 사람이 받을 것이 아니다 —
+ *  확장자로 끝나는지만 보면 `.exe.blockmap` 류는 저절로 걸러진다. */
+function pickAsset(assets, os) {
+    const ext = os === 'mac' ? '.dmg' : os === 'win' ? '.exe' : '.appimage';
+    for (const a of assets) {
+        const name = typeof (a && a.name) === 'string' ? a.name.toLowerCase() : '';
+        const url = typeof (a && a.browser_download_url) === 'string' ? a.browser_download_url : '';
+        if (name && url && name.endsWith(ext))
+            return url;
+    }
+    return null;
+}
+/** 내 OS 설치본 주소. 한 번만 묻고 그 답을 재사용한다. 실패·못 가림이면 null. */
+let dlCache;
+async function desktopLink() {
+    if (dlCache !== undefined)
+        return dlCache;
+    const os = desktopOs();
+    if (!os) {
+        dlCache = null;
+        return null;
+    }
+    try {
+        const res = await fetch(DL_API, { headers: { accept: 'application/vnd.github+json' } });
+        if (!res.ok)
+            throw new Error(String(res.status));
+        const body = await res.json();
+        dlCache = pickAsset(Array.isArray(body && body.assets) ? body.assets : [], os);
+    }
+    catch (_) {
+        dlCache = null;
+    }
+    return dlCache;
+}
 export function renderOnboarding(host, ctx = {}) {
     host.className = 'ob-root';
     host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span><button class="ob-q-back" id="obBack" data-back hidden>← 이전</button></div>
@@ -955,14 +1010,29 @@ export function renderOnboarding(host, ctx = {}) {
           <button class="ob-btn ob-btn-pri" id="appGet">앱 받기</button>
           <button class="ob-btn ob-btn-sub" id="appSkip">지금은 웹으로 할게요</button>`,
             bind: (el) => {
-                // ⚠ 종전엔 "실제 서비스에서는 여기서 내려받기가 시작됩니다" 라는 **프로토 잔재**를 실서비스에서 띄웠다.
-                //  내려받기 주소가 아직 이 화면에 없으므로, 없는 것을 있는 척하지 않고 어디서 받는지만 알린다.
+                // 주소는 **미리** 물어 둔다 — 누른 순간에 await 하면 사용자 제스처가 풀려 새 창이 막힌다.
+                let url = null;
+                desktopLink().then((u) => { url = u; });
                 $('#appGet', el).onclick = () => {
                     S.app = 'yes';
                     S.decisions.push('데스크톱 앱 받기');
                     save();
                     renderSB();
-                    toast('설정 ▸ 데스크톱 앱에서 받으실 수 있어요. 지금은 웹으로 이어서 진행할게요.');
+                    if (url) {
+                        // 같은 창에서 받는다(GitHub 가 attachment 로 내려 주므로 이 화면은 그대로 남는다).
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.rel = 'noopener';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        toast('내려받기를 시작했어요. 설치는 나중에 하셔도 됩니다.');
+                    }
+                    else {
+                        // 아직 답이 안 왔거나 못 가렸다 — 받는 곳을 그대로 열어 준다. 없는 자리를 가리키지 않는다.
+                        window.open(DL_PAGE, '_blank', 'noopener');
+                        toast('받는 곳을 새 창으로 열었어요. 지금은 웹으로 이어서 진행할게요.');
+                    }
                     goScene('read');
                 };
                 $('#appSkip', el).onclick = () => { S.app = 'web'; save(); goScene('read'); };

@@ -1985,6 +1985,42 @@ async function authUploadProgress(_url, file, _onProgress) {
 
 // web/v2/onboarding.ts
 var OB_DONE_KEY = "lively_ob_done";
+var DL_API = "https://api.github.com/repos/livewithlively/lively/releases/latest";
+var DL_PAGE = "https://github.com/livewithlively/lively/releases/latest";
+function desktopOs() {
+  const s = `${navigator.userAgent} ${navigator.platform || ""}`.toLowerCase();
+  if (s.includes("mac")) return "mac";
+  if (s.includes("win")) return "win";
+  if (s.includes("linux") || s.includes("x11")) return "linux";
+  return null;
+}
+function pickAsset(assets, os) {
+  const ext = os === "mac" ? ".dmg" : os === "win" ? ".exe" : ".appimage";
+  for (const a of assets) {
+    const name = typeof (a && a.name) === "string" ? a.name.toLowerCase() : "";
+    const url = typeof (a && a.browser_download_url) === "string" ? a.browser_download_url : "";
+    if (name && url && name.endsWith(ext)) return url;
+  }
+  return null;
+}
+var dlCache;
+async function desktopLink() {
+  if (dlCache !== void 0) return dlCache;
+  const os = desktopOs();
+  if (!os) {
+    dlCache = null;
+    return null;
+  }
+  try {
+    const res = await fetch(DL_API, { headers: { accept: "application/vnd.github+json" } });
+    if (!res.ok) throw new Error(String(res.status));
+    const body = await res.json();
+    dlCache = pickAsset(Array.isArray(body && body.assets) ? body.assets : [], os);
+  } catch (_) {
+    dlCache = null;
+  }
+  return dlCache;
+}
 function renderOnboarding(host2, ctx = {}) {
   host2.className = "ob-root";
   host2.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">\uB9AC\uBE0C</span><span class="ob-sep">/</span><span>\uCC98\uC74C \uC124\uC815</span><button class="ob-q-back" id="obBack" data-back hidden>\u2190 \uC774\uC804</button></div>
@@ -2997,12 +3033,27 @@ function renderOnboarding(host2, ctx = {}) {
           <button class="ob-btn ob-btn-pri" id="appGet">\uC571 \uBC1B\uAE30</button>
           <button class="ob-btn ob-btn-sub" id="appSkip">\uC9C0\uAE08\uC740 \uC6F9\uC73C\uB85C \uD560\uAC8C\uC694</button>`,
       bind: (el) => {
+        let url = null;
+        desktopLink().then((u) => {
+          url = u;
+        });
         $("#appGet", el).onclick = () => {
           S.app = "yes";
           S.decisions.push("\uB370\uC2A4\uD06C\uD1B1 \uC571 \uBC1B\uAE30");
           save();
           renderSB();
-          toast("\uC124\uC815 \u25B8 \uB370\uC2A4\uD06C\uD1B1 \uC571\uC5D0\uC11C \uBC1B\uC73C\uC2E4 \uC218 \uC788\uC5B4\uC694. \uC9C0\uAE08\uC740 \uC6F9\uC73C\uB85C \uC774\uC5B4\uC11C \uC9C4\uD589\uD560\uAC8C\uC694.");
+          if (url) {
+            const a = document.createElement("a");
+            a.href = url;
+            a.rel = "noopener";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            toast("\uB0B4\uB824\uBC1B\uAE30\uB97C \uC2DC\uC791\uD588\uC5B4\uC694. \uC124\uCE58\uB294 \uB098\uC911\uC5D0 \uD558\uC154\uB3C4 \uB429\uB2C8\uB2E4.");
+          } else {
+            window.open(DL_PAGE, "_blank", "noopener");
+            toast("\uBC1B\uB294 \uACF3\uC744 \uC0C8 \uCC3D\uC73C\uB85C \uC5F4\uC5C8\uC5B4\uC694. \uC9C0\uAE08\uC740 \uC6F9\uC73C\uB85C \uC774\uC5B4\uC11C \uC9C4\uD589\uD560\uAC8C\uC694.");
+          }
           goScene("read");
         };
         $("#appSkip", el).onclick = () => {
