@@ -14,13 +14,15 @@ import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
+import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
-import { sessionPrompts, searchPrompts, searchPromptsHybrid, transcriptExists } from "./terminal-transcript.js";
+import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "../v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
@@ -57,6 +59,24 @@ import { gatewayUrl } from "../gateway-url.js";
 async function sessionHarnessKey(id: string): Promise<string> {
   try { const { getOpt } = await import("./tmux-exec.js"); return String((await getOpt(id, "@box_harness")) || ""); }
   catch { return ""; }
+}
+
+// #1437 ② — 복원이 `--resume <uuid>` 로 **정밀 재개**해도 되는가(그 대화 파일이 소유자가 읽을 자리에 실제로 있나).
+//  왜 transcriptExists(terminal-transcript) 를 안 쓰나: 그건 게이트웨이 **로컬 fs** 를 stat 한다. 중계 배포(중앙 게이트웨이·
+//  파일시스템 마운트 0)에서는 대화 파일이 실행 노드의 멤버 홈에 있어 로컬 stat 이 **항상 false** → precise=false →
+//  복원이 늘 picker 로 떨어졌다(상민님 실측 2026-08-26: 복원했더니 claude 세션 선택창). 대화창(chat-routes)이 이미
+//  같은 문제를 transcriptFsFor+locateTranscript 로 풀었으므로 **같은 관문**을 쓴다: 소유자 osUser 로 멤버 중계 stat,
+//  단일호스트·격리 박스는 로컬 fs(종전과 동일 — seam 교리). 0바이트 파일은 없는 것으로 본다(claude 가 못 읽는다).
+async function transcriptResumable(id: string, st: { harness?: string | null; dir?: string | null; owner?: string | null; transcript_path?: string | null }, uuid: string): Promise<boolean> {
+  const io = harnessIo(st.harness || "claude");
+  if (!io) return false;
+  const tfs = transcriptFsFor(await sessionOsUser(id).catch(() => null));
+  const found = await locateTranscript(
+    io,
+    { cwd: st.dir || "", convId: uuid, owner: st.owner || "", reportedPath: st.transcript_path || null },
+    tfs.stat,
+  );
+  return !!found && found.size > 0;
 }
 
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
@@ -992,12 +1012,14 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   antigravity·codex·opencode 세션은 '이어서 열기'를 해도 늘 새 대화로 열렸다(상민님 신고). 매핑 컬럼
     //   claude_session_id 는 이름만 claude 일 뿐 값은 **그 하네스의 대화 id** 다 — work-flag 훅이 하네스와 무관하게
     //   보고하고(어댑터가 conversationId·sessionID 를 session_id 로 넘긴다), 이어받기 argv 는 카탈로그가 만든다.
-    //  ⚠ 대화 존재 확인(transcriptExists)은 claude 의 `~/.claude/projects` 규약 전용이라 claude 에서만 한다.
+    //  ⚠ 대화 존재 확인(transcriptResumable)은 claude 의 `~/.claude/projects` 규약 전용이라 claude 에서만 한다.
     //   다른 하네스는 저장 위치 규약을 실측하기 전까지 검사 없이 시도한다 — 없는 id 로 시작해도 #1516 런처가
     //   세션을 살려 두고 하네스의 원문 에러를 화면에 남기므로, 종전의 '복원 루프'(즉사→재복원)는 구조적으로 끊겨 있다.
+    //  ⚠ #1437 ② — 그 확인은 **소유자 실행환경**에서 한다(transcriptResumable). 종전 transcriptExists 는 게이트웨이
+    //   로컬 fs 만 봐서, 중계 배포(대화 파일이 노드 멤버 홈)에선 항상 false → **늘 picker**였다(정밀 복원이 죽어 있었다).
     const mappedId = st.claude_session_id || null;
     const resumeUuid = mappedId
-      && (st.harness !== "claude" || await transcriptExists(st.dir || "", mappedId, st.owner).catch(() => false))
+      && (st.harness !== "claude" || await transcriptResumable(id, st, mappedId).catch(() => false))
       ? mappedId : null;
     const precise = !!resumeUuid;
     const session = await createSession(owner, {
