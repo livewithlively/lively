@@ -340,7 +340,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
     } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
-    for (const s of [...local, ...localRestorable, ...remote]) s.chat = chatIoCaps(s.harness);
+    for (const s of [...local, ...localRestorable, ...remote]) {
+      s.chat = chatIoCaps(s.harness);
+      // #2055 — 이 세션의 대화가 **어디서 도나**. app-server 면 pane 이 셸이라 화면은 대화창을 먼저 열어야 한다
+      //  (터미널로 열면 사람이 말 걸 곳이 없는 화면을 먼저 본다 — 실측으로 그렇게 헤맸다).
+      s.chatMode = codexChatMode({ harness: s.harness });
+    }
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
