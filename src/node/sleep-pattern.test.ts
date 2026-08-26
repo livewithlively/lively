@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   diagnoseLink, WINDOW_MS, SHORT_UP_MS, LONG_GAP_MS, MIN_CYCLES, HEALTHY_UP_MS, type LinkEvent,
 } from "./sleep-pattern.js";
+import { reconnectDelayMs, BACKOFF_MAX_MS, JITTER } from "./reconnect-delay.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -139,6 +140,20 @@ t("D18 판정과 함께 근거 수치를 돌려준다 — 화면이 '왜 그렇�
   assert.equal(d.cycles, 3);
   assert.equal(d.medianUpSec, 60);
   assert.equal(d.medianGapSec, 3600);
+});
+
+t("D19 ★임계값의 근거를 실제 재연결 로직과 대조한다 — 백오프가 바뀌면 이 판정의 전제가 조용히 무너진다", () => {
+  // '긴 공백'의 근거는 "프로세스가 깨어 있으면 이 안에 반드시 다시 붙는다" 이다.
+  //  그 상한을 상수로 베끼지 않고 **실제 함수를 돌려** 최악값을 잰다(#1865 로 로직이 두 구간으로 갈렸다).
+  let worst = 0;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    for (const rand of [0, 0.5, 1]) worst = Math.max(worst, reconnectDelayMs(attempt, rand));
+  }
+  assert.equal(worst, Math.round(BACKOFF_MAX_MS * (1 + JITTER)), "최악 재연결 지연 = 상한 + 지터");
+  assert.ok(LONG_GAP_MS > worst * 5,
+    `'긴 공백'(${LONG_GAP_MS}ms)이 최악 재연결 지연(${worst}ms)의 5배는 돼야 깨어 있는 노드를 잠자기로 오판하지 않는다`);
+  // 반대 방향도 — 임계가 너무 크면 실측 패턴(공백 ≈ 1시간)을 못 잡는다.
+  assert.ok(LONG_GAP_MS < 30 * 60_000, "임계가 30분을 넘으면 실측 잠자기 주기(1시간)를 잡기 어려워진다");
 });
 
 console.log(`\n${pass} checks passed`);
