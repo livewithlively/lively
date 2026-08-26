@@ -476,7 +476,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     // 화면 테마(#1683 후속) + 상시세션 사용량 statusLine — claude 는 둘을 한 --settings 로 합쳐 얹는다(managed 만
     //  statusLine 주입 — 사람 세션 footer 불변). 사람 설정 파일은 건드리지 않는다(harnessSettingsArgv 주석).
     //  지원 안 하는 하네스면 빈 배열이라 종전 그대로다.
-    cmd.push(...harnessSettingsArgv(harness.key, { theme: input.theme, managed: input.managed }));
+    //  ⚠ managed 는 #2170 이후 boolean 이 아니라 **상시세션 id** 다(누구의 것인가를 말해야 해서). statusLine
+    //   주입 여부는 "상시세션인가"만 필요하므로 여기서 truthy 로 좁힌다 — id 자체는 표식(stampManagedMarker)이 쓴다.
+    cmd.push(...harnessSettingsArgv(harness.key, { theme: input.theme, managed: !!input.managed }));
   }
   // pane 이 실제로 실행할 argv(#1516). 세 갈래:
   //  · 로그인 세션(loginFor) — 하네스 TUI 대신 그 하네스의 **로그인 명령**을 셸에서 돌린다(만료 자격으로는

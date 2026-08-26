@@ -1301,6 +1301,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (!st) throw new HttpError(404, "세션 상태 기록이 없습니다");
     if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     await setLastPrompt(id, prompt, me);
+    res.json({ ok: true });
+  }));
+
   // 세션 사용량 보고 — statusLine 훅(usage-report.mjs)이 그 세션 안에서만 얻을 수 있는 rate_limits(5시간·7일 소진율)를
   //  보고한다. rate_limits 는 **statusLine stdin 에만** 실린다(hook stdin·REST 어디에도 없음) → 이 경로가 유일 수집구다.
   //  rate limit 은 계정(로그인) 단위 quota 라 세션(:id) 이 아니라 **토큰의 계정**으로 키잉한다 — 같은 계정 아무 세션이나

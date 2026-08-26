@@ -252,14 +252,12 @@ function usagePill(u) {
   const fmtReset = (r) => (typeof r === 'number' && r > 0)
     ? new Date(r * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : '미상';
-  const seg = (label, w) => w ? label + ' ' + Math.round(w.used_percentage) + '%' : null;
+  // 소진율 + 리셋 시각(KST)을 인라인으로 함께 보인다 — 툴팁 없이 목록에서 바로 읽힌다.
+  const seg = (label, w) => w ? label + ' ' + Math.round(w.used_percentage) + '% (리셋 ' + fmtReset(w.resets_at) + ')' : null;
   const parts = [seg('5시간', u.five_hour), seg('7일', u.seven_day)].filter(Boolean);
   // 경고색 판정을 표시값(반올림)과 맞춘다 — raw 79.6% 가 "80%"로 보이면서 경고색이 아닌 불일치 방지.
   const hot = (u.five_hour && Math.round(u.five_hour.used_percentage) >= 80) || (u.seven_day && Math.round(u.seven_day.used_percentage) >= 80);
-  const tipLines: string[] = [];
-  if (u.five_hour) tipLines.push('5시간 창: ' + Math.round(u.five_hour.used_percentage) + '% · 리셋 ' + fmtReset(u.five_hour.resets_at));
-  if (u.seven_day) tipLines.push('7일 창: ' + Math.round(u.seven_day.used_percentage) + '% · 리셋 ' + fmtReset(u.seven_day.resets_at));
-  return withTip(el('span', { class: 'pill' + (hot ? ' pill-warn' : ''), text: parts.join(' · ') }), tipLines.join('\n'));
+  return el('span', { class: 'pill' + (hot ? ' pill-warn' : ''), text: parts.join(' · ') });
 }
 
 async function managedSessionsPanel(detail, data) {
@@ -306,7 +304,7 @@ async function managedSessionsPanel(detail, data) {
           + '정리하려면 터미널에서 직접 확인하고 종료하세요.')
         : null),
       // 계정 rate-limit 소진율(5시간·7일) — statusLine 훅이 계정 단위로 보고(usage-store). 미보고면 '모름'으로 구분.
-      usagePill(m.usage);
+      usagePill(m.usage));
     const acts = el('div', { class: 'wikicat-row-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', text: '시작/재생성', onclick: () => managedEnsure(m.id, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: m.enabled ? '끄기' : '켜기', onclick: () => managedToggle(m, reload) }),
