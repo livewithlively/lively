@@ -83,3 +83,11 @@ button.link-btn { padding: 2px 6px; border: none; background: transparent; color
 header { -webkit-app-region: drag; user-select: none; padding-top: 14px; }
 header button, header a, header input { -webkit-app-region: no-drag; }
 body.mac header { padding-left: 76px; }
+/* 사람이 AI 에게 **말할 한 마디** (#1879). `.code` 를 재사용하지 않는 이유: 그건 8글자 디바이스 코드용이라
+   20px + letter-spacing .06em 이고, 한국어 문장에 걸면 자간이 벌어져 제목처럼 읽힌다(실측). 이건 명령줄이
+   아니라 따옴표 안의 말이므로 본문 글꼴 그대로, 눌러서 복사된다는 것만 커서·칩 모양으로 말한다. */
+.say { display: inline-block; margin: 2px 0 10px; padding: 6px 12px; border-radius: 8px;
+  background: var(--card); border: 1px solid var(--line); font-size: 14px; font-weight: 600; cursor: pointer; }
+.say::before { content: '\201C'; color: var(--muted); margin-right: 2px; }
+.say::after { content: '\201D'; color: var(--muted); margin-left: 2px; }
+.say:hover { border-color: var(--accent); }

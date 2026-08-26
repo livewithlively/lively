@@ -195,6 +195,18 @@ $("app-web").addEventListener("click", () => { if (state?.gatewayUrl) window.liv
 const openApp = async () => { const r = await window.lively.openApp(); if (r?.error) { $("app-note").textContent = r.error; log("✗ " + r.error); } };
 $("app-open").addEventListener("click", openApp);
 $("done-open").addEventListener("click", openApp);
+/* «온보딩 도와줘» 를 눌러 복사 (#1879). 클립보드가 막힌 자리(권한 거부 등)에서는 **글자를 선택해 준다** —
+   조용히 실패하면 사람은 복사가 안 된 줄도 모르고 붙여넣기를 시도한다. */
+$("onboard-say").addEventListener("click", async () => {
+  const el = $("onboard-say"); const note = $("onboard-copied");
+  try {
+    await navigator.clipboard.writeText(el.textContent.trim());
+    note.hidden = false; setTimeout(() => { note.hidden = true; }, 1800);
+  } catch {
+    const r = document.createRange(); r.selectNodeContents(el);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  }
+});
 $("cancel").addEventListener("click", () => window.lively.cancel());
 const answer = (v) => { if (!prompt) return; answeredPrompts.add(prompt.id); window.lively.answer(prompt.id, v); renderPrompt(null); };
 $("prompt-yes").addEventListener("click", () => answer(true));
