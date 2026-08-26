@@ -13,7 +13,7 @@ import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { decodeTokenBlob, encodeTokenBlob, tokenMeta, CLIENT_SCOPE, gatewaySsrfFetch } from "./oauth-broker.js";
 import { getMemberSecret, setMemberSecret, resolveMemberSecret, type MemberSecretResolved, type ResolveOpts } from "./member-secret-store.js";
 import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
-import { GOOGLE_KIND, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
+import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
 import { logger } from "../../log.js";
 
 /** 만료 여유(초) — 호출이 나가는 동안 만료돼 상류가 401 을 주는 것까지 막는다. */
@@ -56,16 +56,19 @@ export function oauthTokenUrlFor(authKind: string | null | undefined): string | 
   return presetOAuthTokenUrl(authKind) ?? DIRECT_OAUTH_TOKEN_URLS[authKind];
 }
 
+
 /**
- * 통합 kind 별칭 표(#1881 G2 전환기) — 구 kind 슬롯이 비어 있으면 통합 슬롯으로 폴백한다.
- *  방향이 중요하다: **구 kind 가 먼저 잡히고**, 없을 때만 통합으로 간다. 그래서
- *   · 예전에 붙인 사람은 자기 슬롯 그대로(무회귀) · 새로 붙인 사람은 통합 슬롯 하나로 세 서비스 전부.
- *  scope_key 는 통합 슬롯의 것(`""` — googleInstallToSlot 이 그렇게 만든다)을 쓴다. 도구의 auth_scope_key 를
- *  그대로 물려주면 다른 칸을 뒤지게 된다.
+ * ★ 구글은 **구 kind 끼리도 서로 폴백한다**(2026-08-27 dev 실측이 만든 확장).
+ *  종전엔 [자기 kind → 통합] 뿐이라, `google_drive_oauth` 로 붙어 있는 사람이 캘린더 도구를 부르면
+ *  "자격 없음"이 났다 — 슬롯은 있는데 **다른 구 kind** 라서. "[Google 연결] 한 번으로 셋"이라는 약속이
+ *  정작 기존 사용자에게만 성립하지 않던 자리다.
+ *  구글이 아닌 kind 는 **추가 조회를 하지 않는다** — 엉뚱한 kind 를 뒤지면 자격 혼선이 난다.
  */
-function unifiedAliasFor(authKind: string): { kind: string; scopeKey: string } | null {
-  const g = googleUnifiedKindFor(authKind);
-  return g ? { kind: g, scopeKey: "" } : null;
+function googleAliasChain(authKind: string): string[] {
+  const k = String(authKind ?? "").toLowerCase();
+  const isGoogle = k === GOOGLE_KIND || !!googleUnifiedKindFor(k);
+  if (!isGoogle) return [];
+  return [GOOGLE_KIND, ...GOOGLE_LEGACY_KINDS].filter((x) => x !== k);
 }
 
 /**
@@ -83,10 +86,11 @@ export async function resolveOAuthMemberSecret(
 ): Promise<MemberSecretResolved | null> {
   const direct = await resolve(memberId, authKind, opts);
   if (direct?.secret) return direct;
-  const alias = unifiedAliasFor(authKind);
-  if (!alias) return direct; // 별칭 없는 kind — 조회를 **더 하지 않는다**(엉뚱한 kind 를 뒤지면 자격 혼선)
-  const viaAlias = await resolve(memberId, alias.kind, { ...opts, scopeKey: alias.scopeKey });
-  return viaAlias?.secret ? viaAlias : direct;
+  for (const kind of googleAliasChain(authKind)) {
+    const via = await resolve(memberId, kind, { ...opts, scopeKey: "" });
+    if (via?.secret) return via;
+  }
+  return direct;
 }
 
 export interface OAuthClientInfo { client_id: string; client_secret?: string }

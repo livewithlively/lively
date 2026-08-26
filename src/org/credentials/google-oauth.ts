@@ -52,6 +52,66 @@ export function googleUnifiedKindFor(authKind: string | null | undefined): strin
   return (GOOGLE_LEGACY_KINDS as readonly string[]).includes(k) ? GOOGLE_KIND : null;
 }
 
+/**
+ * 구 kind → 그 kind 가 대표하던 서비스. **통합 kind 는 여기 없다**(어느 서비스인지 kind 만으로 알 수 없다 —
+ *  모르는 것을 추측하면 엉뚱한 범위 검사가 사람을 막는다).
+ */
+export const GOOGLE_SERVICE_BY_KIND: Record<string, GoogleService> = {
+  google_drive_oauth: "drive",
+  google_gmail_oauth: "gmail",
+  google_calendar_oauth: "calendar",
+};
+
+export function googleServiceForKind(kind: string | null | undefined): GoogleService | null {
+  return GOOGLE_SERVICE_BY_KIND[String(kind ?? "").toLowerCase()] ?? null;
+}
+
+/**
+ * 저장된 동의 scope 가 이 서비스를 덮는가. **판정을 여기 한 곳에만 둔다** — 두 벌이면 한쪽만 고쳐져서
+ *  "화면은 켤 수 있다는데 호출은 403" 같은 어긋남이 난다(google-connect 의 scopeCovers 도 이걸 부른다).
+ *  ⚠ Gmail 은 접두가 둘이다: `/auth/gmail.*` 과 **접두가 아예 다른 최광 범위 `https://mail.google.com/`**.
+ *   후자를 빠뜨리면 가장 넓은 권한을 가진 사람이 오히려 막힌다(실제로 그 버그를 냈다).
+ */
+const GOOGLE_SCOPE_MARKERS: Record<GoogleService, readonly string[]> = {
+  drive: ["/auth/drive"],
+  drive_file: ["/auth/drive"],
+  gmail: ["/auth/gmail.", "https://mail.google.com/"],
+  calendar: ["/auth/calendar"],
+};
+
+export function googleScopeCovers(scope: string | null | undefined, service: GoogleService): boolean {
+  const s = String(scope ?? "");
+  return (GOOGLE_SCOPE_MARKERS[service] ?? []).some((m) => s.includes(m));
+}
+
+/** 사람에게 보일 이름. 오류 문구가 `google_calendar_oauth` 같은 내부 이름을 뱉으면 아무도 못 알아본다. */
+const GOOGLE_SERVICE_LABEL: Record<GoogleService, string> = {
+  drive: "드라이브", drive_file: "드라이브", gmail: "Gmail", calendar: "캘린더",
+};
+
+/**
+ * ★ 구글 도구가 막혔을 때 **사람이 다음에 뭘 누를지** 말해 주는 문구. null 이면 구글 얘기가 아니다.
+ *
+ *  왜 함수로 빼나: 종전 문구가 "개인 자격을 me_credential_set 에 등록하세요" 였다 — 그건 우리가 #1881 에서
+ *  **없앤 붙여넣기 경로**다. 컴맹은 그 안내를 따라갈 수 없고, 따라가 봐야 그런 화면이 없다.
+ *  게다가 진짜 원인이 둘로 갈린다(연결이 아예 없다 / 연결은 있는데 그 범위가 없다)는 걸 한 문장으로 뭉개고 있었다.
+ *
+ *  @param scope 잡힌 슬롯의 동의 범위. **null = 슬롯 자체가 없음**, "" = 모름(그땐 막지 않는다).
+ */
+export function googleToolAuthHint(authKind: string | null | undefined, scope: string | null): string | null {
+  const kind = String(authKind ?? "").toLowerCase();
+  if (kind !== GOOGLE_KIND && !googleServiceForKind(kind)) return null;
+  if (scope === null) {
+    return "Google 연결이 없습니다 — [외부 앱 연결 ▸ Google]에서 [Google 연결]을 누르세요(토큰을 복사할 일은 없습니다).";
+  }
+  const svc = googleServiceForKind(kind);
+  if (!svc || !scope || googleScopeCovers(scope, svc)) return null; // 모르면 막지 않는다
+  const label = GOOGLE_SERVICE_LABEL[svc];
+  return isGoogleServiceOffered(svc)
+    ? `이 Google 연결에는 ${label} 권한이 없습니다 — [외부 앱 연결 ▸ Google]의 [권한 넓히기]로 한 번 더 허용하면 바로 됩니다.`
+    : `${label} 은 아직 준비 중입니다 — 구글 심사 범위라 1차 공개에서 제외했습니다.`;
+}
+
 /** 신원 범위 — 어느 구글 계정으로 붙었는지 화면에 보여주기 위한 것. 둘 다 **비민감**이라 심사 등급을 올리지 않는다. */
 const IDENTITY_SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email"] as const;
 

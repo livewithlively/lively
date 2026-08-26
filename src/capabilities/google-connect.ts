@@ -14,7 +14,7 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
-import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_DEFAULT_SERVICES, googleConsentTier, consumesUnverifiedUserCap, googleOfferedServices, isGoogleServiceOffered, type GoogleService } from "../org/credentials/google-oauth.js";
+import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_DEFAULT_SERVICES, googleConsentTier, consumesUnverifiedUserCap, googleOfferedServices, isGoogleServiceOffered, googleScopeCovers, type GoogleService } from "../org/credentials/google-oauth.js";
 import { startGoogleConsent, completeGoogleInstall, googleReady } from "../org/credentials/oauth-broker.js";
 
 /** 수집기 인스턴스 — 서비스마다 하나(캘린더는 수집 대상이 아니다: 일정은 자료가 아니라 도구 면에서 읽는다). */
@@ -53,11 +53,11 @@ export async function memberGoogleConnection(memberId: string): Promise<{ kind: 
  *   이걸 빼면 **가장 넓게 동의한 사람이 '동의 안 함'으로 판정돼** 수집기를 못 켠다(거짓 음성).
  *  판정은 넉넉한 쪽이 아니라 **정확한 쪽**이다: 없는 권한을 있다고 하면 run 은 ok 인데 자료가 0건이 된다.
  */
-const GMAIL_SCOPE_MARKERS = ["/auth/gmail.", "https://mail.google.com/"];
+// 판정 본체는 google-oauth.ts 한 곳(googleScopeCovers) — 두 벌로 두면 한쪽만 고쳐져 어긋난다.
 export function scopeCovers(scope: string, service: GoogleCollectService): boolean {
-  const s = String(scope ?? "");
-  return service === "gmail" ? GMAIL_SCOPE_MARKERS.some((m) => s.includes(m)) : s.includes("/auth/drive");
+  return googleScopeCovers(scope, service);
 }
+
 
 /**
  * 토글 저장 때 서비스 하나를 **어떻게 할지** 정하는 순수 규칙. 핸들러 안에 묻어 두면 테스트가 못 닿는데,

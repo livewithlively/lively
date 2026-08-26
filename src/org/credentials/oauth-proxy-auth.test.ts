@@ -245,7 +245,8 @@ await ta("★ L4 별칭이 없는 kind 는 추가 조회를 하지 않는다 —
 await ta("L5 둘 다 없으면 null — 호출자가 '자격 없음'으로 명확히 실패한다", async () => {
   const r = resolverSpy({});
   assert.equal(await resolveOAuthMemberSecret("sh-lee", "google_calendar_oauth", { scopeKey: "" }, r.fn), null);
-  assert.equal(r.lookups.length, 2);
+  // 2 → 4: 구 kind 끼리도 폴백하게 되면서 훑는 범위가 넓어졌다(불변식은 그대로 — 없으면 null).
+  assert.equal(r.lookups.length, 4);
 });
 
 await ta("L6 구 슬롯 행은 있는데 secret 이 비었으면(meta만) 통합으로 폴백한다", async () => {
@@ -258,6 +259,29 @@ t("L7 통합 kind 도 토큰 발급처를 안다 — MCP 서버 행이 없어 �
   assert.equal(oauthTokenUrlFor("google_oauth"), "https://oauth2.googleapis.com/token");
   assert.equal(oauthTokenUrlFor("google_drive_oauth"), "https://oauth2.googleapis.com/token"); // 구 경로 무회귀
   assert.equal(oauthTokenUrlFor("nope_kind"), undefined);
+});
+
+// ── 구 kind 끼리의 폴백 (2026-08-27 dev 실측) ─────────────────────────────────
+//  실측: 슬롯이 google_drive_oauth 뿐인데 캘린더 도구를 부르면 "자격 없음" 이 났다.
+//  [자기 → 통합] 만 있고 [구 → 다른 구] 가 없어서다. "연결 한 번으로 셋"이 기존 사용자에게만 깨져 있었다.
+await ta("★ L9 구 kind 슬롯 하나가 다른 구글 도구도 먹인다 — 드라이브로 붙은 사람의 캘린더 도구", async () => {
+  const r = resolverSpy({ google_drive_oauth: slot("google_drive_oauth") });
+  const got = await resolveOAuthMemberSecret("sh-lee", "google_calendar_oauth", { scopeKey: "" }, r.fn);
+  assert.equal(got?.kind, "google_drive_oauth", "슬롯이 있는데 '자격 없음' 이 나면 사람은 이유를 못 찾는다");
+  assert.deepEqual(r.lookups.map((l) => l.kind),
+    ["google_calendar_oauth", "google_oauth", "google_drive_oauth"], "통합이 구 kind 보다 먼저여야 한다");
+});
+
+await ta("L10 통합 kind 로 부를 때도 구 슬롯으로 내려간다(프리셋이 통합으로 바뀌어도 무회귀)", async () => {
+  const r = resolverSpy({ google_gmail_oauth: slot("google_gmail_oauth") });
+  const got = await resolveOAuthMemberSecret("sh-lee", "google_oauth", { scopeKey: "" }, r.fn);
+  assert.equal(got?.kind, "google_gmail_oauth");
+});
+
+await ta("L11 아무 구글 슬롯도 없으면 null — 여기서 '있는 척' 하면 빈 토큰으로 상류를 때린다", async () => {
+  const r = resolverSpy({});
+  assert.equal(await resolveOAuthMemberSecret("sh-lee", "google_calendar_oauth", { scopeKey: "" }, r.fn), null);
+  assert.equal(r.lookups.length, 4, "구글 4 kind 를 다 훑어야 한다");
 });
 
 console.log(`\n${pass} passed`);
