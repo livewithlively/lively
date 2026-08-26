@@ -786,7 +786,10 @@ export function drawRail(): void {
       class: 'v2-rail-it v2-rail-me', type: 'button', 'aria-haspopup': 'dialog', title: '내 프로필 · 환경설정',
       onclick: () => openMeModal({ onSaved: () => drawRail() }),
     },
-      profileAvatar(me.avatar, myName, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
+      //  접속 점은 얼굴 **바깥 껍질**에 단다(#2061) — 얼굴(.v2-ava)은 사진을 원형으로 자르려고 overflow:hidden 이라,
+      //   그 안에 ::after 로 달면 원 밖으로 나간 반쪽이 잘린다(실측: 오른쪽 아래가 초승달처럼 깎여 보였다).
+      el('span', { class: 'v2-rail-avaw' },
+        profileAvatar(me.avatar, myName, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color })),
       el('span', { class: 'v2-rail-t', text: myName })));
 
   host.replaceChildren(top, mid, foot);
