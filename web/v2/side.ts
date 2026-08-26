@@ -37,8 +37,6 @@ import { switcherName, switcherTop } from './switcher.js';
 import { openSectionMenu, railIsHidden, sectionDef, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
-//  ⚠ 병합 판단(2026-08-25): main 의 **사이드바 3단 테마 토글**(#1683 themeSeg)은 여기 두지 않는다 — 그 기능은
-//   me-modal 안으로 옮겨 갔고(테마 + 열린 탭 적용 + 하네스 동기화까지) 같은 조작을 사이드바 발치에 둘로 두지 않는다.
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
@@ -55,9 +53,6 @@ const PAST_KEY_LEGACY = 'lively_v2_side_past';
 const SELCLOSED_KEY = 'lively_v2_side_selclosed';   // 선택된 프로젝트인데도 **일부러 접어 둔** 것
 // ⚠ 「전체 프로젝트」 펼침은 **기억하지 않는다**(원준 2026-08-23 — "사용자가 변경하기 전에는 디폴트로 접힌 상태").
 //  종전엔 lively_v2_side_all 로 브라우저에 남겨, 한 번 편 사람은 그 뒤로 늘 수백 행이 펼쳐진 채 열렸다. 이제 페이지 수명만.
-//  ⚠ 병합 판단(2026-08-25): main 쪽엔 ALL_KEY 로 **아직 기억하는** 코드가 남아 있었지만, 같은 파일의 주석이 이미
-//   '「전체 프로젝트」가 같은 처방을 받았다(2026-08-23)'고 말하고 있었다 — 주석만 오고 코드가 안 따라온 것이라,
-//   실제로 처방을 적용한 이쪽(페이지 수명만)을 취한다.
 const ALL_KEY_LEGACY = 'lively_v2_side_all';
 const PIN_KEY = 'lively_v2_side_pin';     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
 //  앱 인스턴스 핀(#1954)은 키 공간이 달라(sess:/inst:/route:) 따로 둔다 — 한 통에 섞으면 트리를 걷어낼 때 같이 사라진다.
@@ -121,6 +116,8 @@ function init(): void {
   grpOpened = loadSet(GRPOPENED_STORE);
   try { groupProj = localStorage.getItem(GROUP_STORE) === 'proj'; } catch (_) { /* 못 읽어도 종전 축으로 돈다 */ }
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
+  try { projLens = localStorage.getItem(LENS_STORE) === 'active' ? 'active' : 'tree'; } catch (_) { /* 기본 렌즈(폴더 · 리스트)로 */ }
+  foldClosed = loadSet(FOLD_CLOSED_STORE);
   void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
 }
 
@@ -303,6 +300,28 @@ export interface SideInstance {
   /** 정렬 시각(ms) — main.ts 가 **얼려 둔** 값(#1954 orderPin). 프로젝트 축이 그룹 순서를 이걸로 잰다(#2033). */
   at?: number;
 }
+// ══ #2043 — [프로젝트] 구역의 **렌즈 둘**: 진행 중 ↔ 폴더 · 리스트 ═══════════════════════
+//  레일 [프로젝트]를 누르면 사이드바가 둘 떴다 — 이 트리(진행 중 · 프로젝트 › 세션)와, 액자 안 클래식 앱이 들고 온
+//  「폴더 · 리스트」 패널. 둘은 **다른 질문**에 답한다(무엇이 도나 / 어디에 정리돼 있나)라 하나를 버리지 않고 스위치로
+//  갈랐다(원준 2026-08-26, 5안 중 안 3 — 지식 project-sidebar-unify-5-proposals-2043). 클래식 패널은 액자 안에서
+//  더는 그리지 않는다(projects/board.ts renderProjectV2Board).
+//  · 기본은 폴더 · 리스트(원준 선택). 고른 렌즈는 이 브라우저가 기억한다.
+//  · 폴더 · 리스트 렌즈는 **리스트까지만**(프로젝트 행 없음) — 리스트를 누르면 가운데 보드가 그 리스트로 간다(#/projects2/l/<id>).
+//  · 끌어다 놓기·리스트 ⋯ 메뉴는 1차에서 뺐다 — 리스트 설정·즐겨찾기 토글은 보드 머리줄의 ⌄ · ☆ 가 한다(#1067).
+const LENS_STORE = 'lively_v2_proj_lens';               // 'active' | 'tree'
+const FOLD_CLOSED_STORE = 'lively_v2_proj_fold_closed'; // 접어 둔 폴더 id
+type ProjLens = 'active' | 'tree';
+let projLens: ProjLens = 'tree';
+let foldClosed = new Set<string>();
+let favLists: Set<number> | null = null;   // 내 즐겨찾기 리스트(#670) — 이 렌즈에 처음 들어올 때 한 번 당긴다
+let favLoading = false;
+type NewKind = 'proj' | 'list' | 'folder';
+let newKind: NewKind = 'proj';             // ＋ 줄이 무엇을 만드나 — 폴더 · 리스트 렌즈에서만 셋 중 고른다
+const NEW_COPY: Record<NewKind, { ph: string; label: string }> = {
+  proj: { ph: '새 프로젝트 이름을 적고 Enter', label: '새 프로젝트 이름' },
+  list: { ph: '새 리스트 이름을 적고 Enter', label: '새 리스트 이름' },
+  folder: { ph: '새 폴더 이름을 적고 Enter', label: '새 폴더 이름' },
+};
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
   init();
@@ -380,8 +399,8 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
     // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
     //  ⚠ 뒤판은 **왼쪽 세로선까지 그린다**(`M3 17V7…`). 종전엔 `M3 7…v1` 이라 (3,7)→(21,10) 으로 위쪽만 긋고
     //   끝나서, 왼쪽 y=7~17 구간이 통째로 비어 있었다 — 앞판이 (3,17) 에서 시작하므로 그 사이가 뚫린 채 남고,
-    //   16px 에서는 폴더가 **납작하게 잘려 보인다**(원준 2026-08-20 "폴더 아이콘이 좀 가려짐"). 겹침이 아니라
-    //   글리프가 덜 그려진 것이 원인이었다. 접힌 폴더와 같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채운다.
+    //   16px 에서는 폴더가 **납작하게 잘려 보인다**(원준 2026-08-20 "폴더 아이콘이 좀 가려짐"). 접힌 폴더와
+    //   같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채우면 두 아이콘의 무게가 맞는다.
     'folder-open': ['M3 17V7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
     chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
     inbox: ['M4.6 5h14.8L22 13v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4z', 'M2 13h6a4 4 0 0 0 8 0h6'],
@@ -417,7 +436,7 @@ function instanceIcon(inst: SideInstance): SVGElement {
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
  * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
  */
-/** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다(#1958).
+/** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다.
  *  ⚠ `one` = **한 줄 구조**(#2033 상민님). 프로젝트 축에서는 머리글이 이미 프로젝트를 말하므로 둘째 줄이 통째로 빈다 —
  *   정보가 줄었으니 줄도 줄인다. 그때 사라지는 것(소속·주인·시각·상태어)은 툴팁이 받는다. */
 function appRowEl(inst: SideInstance, one = false): HTMLElement {
@@ -619,8 +638,9 @@ function render(): void {
   if (!last) return;
   // SideHooks.instances 를 모르는 이전 임베더는 기존 프로젝트 트리를 그대로 받는다.
   if (!hooks.instances) { renderLegacy(); return; }
-  // 검색칸에서 한글을 조합하는 중이면 이번 판은 건너뛴다 — 폴링이 입력칸을 새로 만들면 그 글자가 자모로
-  //  흩어진다(#1958). 갱신은 **다시 오지만**, 사람이 치던 글자는 다시 오지 않는다.
+  // 검색칸에서 한글을 조합하는 중이면 이번 판은 건너뛴다 — 20초 폴링이 입력칸을 새로 만들면 그 글자가 자모로
+  //  흩어진다(실측: 아무것도 안 해도 30초에 한 번 입력칸이 새로 난다). renderLegacy 의 `renaming` 가드와 같은 규율:
+  //  갱신은 **다시 오지만**, 사람이 치던 글자는 다시 오지 않는다. 조합이 끝나면 다음 폴링이 곧 따라잡는다.
   if (findComposing) return;
   const wsReg: any = (state.me as any)?.workspace_registry || {};
   const wsKind = (wsReg.active && wsReg.kind) || ((state.me as any)?.workspace?.kind);
@@ -651,16 +671,13 @@ function secHead(title: string, count: number | null, ...acts: Array<HTMLElement
 /** 켜져 있는 필터 수 — 0이면 요약 줄을 그리지 않는다. */
 function fltCount(): number { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0); }
 
-/** 찾기 칸 — 구역마다 찾는 대상이 달라 안내 문구만 갈린다(입력 상태 `sideFilter` 는 하나다). */
+/** 찾기 칸 — 구역마다 찾는 대상이 달라 안내 문구만 갈린다(입력 상태 `sideFilter` 는 하나다).
+ *  ⚠ 한글 조합 보호는 홈 목록과 같은 규율이다(#1958): 조합 중엔 전면 재렌더를 멈추고, Esc 는 조합 취소를 먼저 존중한다. */
 function findInput(ph: string): HTMLInputElement {
-  const inp = el('input', { class: 'v2-find-in', type: 'search', placeholder: ph, 'aria-label': ph, value: sideFilter,
-    // ⚠ 타이핑 중에는 **목록만** 갈아 끼운다 — 사이드바를 통째로 다시 그리면 이 입력칸도 새로 나고,
-    //  그 순간 브라우저의 IME 조합이 끊긴다. 한글은 한 글자가 여러 타건의 조합이라 매 타건이 따로 확정되어
-    //  "안녕"이 "ㅇㅏㄴㄴㅕㅇ"로 흩어진다(#1958). 포커스를 복원해도 소용없다 — 조합 상태는 노드에 붙어 있다.
-    oninput: (e: any) => { sideFilter = e.target.value; paintAppList(); markFind(); },
+  return el('input', { class: 'v2-find-in', type: 'search', placeholder: ph, 'aria-label': ph, value: sideFilter,
+    oninput: (e: any) => { sideFilter = e.target.value; redraw(); markFind(); },
     onkeydown: (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      // 한글 조합 중의 Esc 는 '조합 취소'지 '검색 지우기'가 아니다 — 치던 글자만 물러난다.
       if (e.isComposing || (e as any).keyCode === 229) return;
       e.stopPropagation();
       if (sideFilter) sideFilter = ''; else findOpen = false;
@@ -669,8 +686,6 @@ function findInput(ph: string): HTMLInputElement {
     oncompositionstart: () => { findComposing = true; },
     oncompositionend: () => { findComposing = false; },
     onblur: () => { findComposing = false; if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
-  if (findFocusWanted) { findFocusWanted = false; window.setTimeout(() => inp.focus(), 0); }
-  return inp;
 }
 
 /** 레일을 숨겼을 때 사이드바 머리 한 줄(#2016 안 B) — [스택 타일 + 이름 ▾] … [지금 구역 ▾]. 레일이 보이면 그리지 않는다.
@@ -728,10 +743,8 @@ function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
     railIsHidden() ? footRow() : null);
 }
 
-/** 발치의 '갈 곳' 한 줄(세션 이력 · 아카이브 · 휴지통) — 목록의 항목이 아니라 같은 급의 문이다. */
+/** 발치의 '갈 곳' 한 줄(세션 이력 등) — 목록의 항목이 아니라 같은 급의 문이다. */
 function footLink(href: string, icon: Parameters<typeof glyph>[0], text: string, n?: number | null): HTMLElement {
-  //  활성 표시는 걸지 않는다 — activeKey 는 `app:sessions` 꼴이라 해시(`#/app/sessions`)와 축이 달라
-  //   비교가 영영 맞지 않는다. 맞지도 않는 판정을 두면 다음 사람이 '왜 활성이 안 되지'를 뒤진다.
   return el('a', { class: 'v2-nav v2-foot-link', href, title: text },
     glyph(icon, 'v2-nav-ic'), el('span', { class: 'n', text }),
     n != null ? el('span', { class: 'v2-cnt', text: String(n) }) : null);
@@ -747,7 +760,6 @@ function renderHomeApps(): void {
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
   const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
-
   const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' }, ...appListKids(shown, q));
   appListEl = listEl;
   listEl.scrollTop = prevScroll;
@@ -755,18 +767,21 @@ function renderHomeApps(): void {
   const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '열린 앱 찾기', 'aria-label': '열린 앱 찾기', value: sideFilter,
     // ⚠ 타이핑 중에는 **목록만** 갈아 끼운다 — 사이드바를 통째로 다시 그리면 이 입력칸도 새로 나고,
     //  그 순간 브라우저의 IME 조합이 끊긴다. 한글은 한 글자가 여러 타건의 조합이라 매 타건이 따로 확정되어
-    //  "안녕"이 "ㅇㅏㄴㄴㅕㅇ"로 흩어진다(#1958). 포커스를 복원해도 소용없다 — 조합 상태는 노드에 붙어 있다.
+    //  "안녕"이 "ㅇㅏㄴㄴㅕㅇ"로 흩어진다(원준 2026-08-25 신고 · 앱·크롬 공통 = 브라우저 문제가 아니다).
+    //  포커스를 복원해도 소용없다 — 조합 상태는 노드에 붙어 있어 노드가 죽으면 같이 죽는다.
     oninput: (e: any) => { sideFilter = e.target.value; paintAppList(); markFind(); },
     onkeydown: (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      // 한글 조합 중의 Esc 는 '조합 취소'지 '검색 지우기'가 아니다 — 치던 글자만 물러난다.
+      // 한글 조합 중의 Esc 는 '조합 취소'지 '검색 지우기'가 아니다(레포 불변식 #505) — 치던 글자만 물러난다.
       if (e.isComposing || (e as any).keyCode === 229) return;
       e.stopPropagation();
       if (sideFilter) sideFilter = ''; else findOpen = false;
       redraw();
     },
+    //  조합 중엔 전면 재렌더를 멈춘다(위 render() 머리의 가드). 조합이 끝나면 바로 푼다.
     oncompositionstart: () => { findComposing = true; },
     oncompositionend: () => { findComposing = false; },
+    //  칸을 떠나면 조합도 끝난 것 — compositionend 를 못 받는 환경이 있어도 사이드바가 굳지 않게 여기서도 푼다.
     onblur: () => { findComposing = false; if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
 
   //  데스크톱 앱이면 이 줄은 창 맨 윗줄로 간다(#1954 상민님: 상단 탭이 빠져 그 자리가 비었다).
@@ -919,6 +934,7 @@ function renderInboxSide(): void {
 //  트리 기계(renderTree·projRow·sessRow·binRows)는 지우지 않고 남아 있었다 — 새 구역은 그 자리를 되찾은 것이다.
 function renderProjects(): void {
   if (!last) return;
+  if (projLens === 'tree') { renderProjTree(); return; }   // #2043 — 렌즈가 갈린다(위 LENS_STORE 머리말)
   const { host, data } = last;
   const navEl = navRow();
   const navHost = hooks.navHost?.() || null;
@@ -935,6 +951,7 @@ function renderProjects(): void {
     ...topBits(navEl, navHost),
     el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
       secHead('프로젝트', null, countEl, newBtn(), findBtn(), filterBtn(activeN, liveAll, doneCount)),
+      lensSwitch(),
       ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('프로젝트 찾기'))] : []),
       ...(fltCount() ? [filterSummary(fltCount())] : []),
       ...(newOpen ? [newProjRow()] : []),
@@ -943,6 +960,176 @@ function renderProjects(): void {
 
   renderTree(rows);
   keepSideScroll(treeEl, 'v2-tree');
+  bindFindKey();
+}
+
+// ══ [프로젝트] 구역 · 폴더 · 리스트 렌즈 (#2043) ══════════════════════════════════
+//  클래식 프로젝트 앱의 「폴더 · 리스트」 패널(projects/board.ts renderArea)을 새 셸 문법으로 다시 그린 것 — 리스트까지만.
+//  재료는 이미 V2Data 에 있다(main.ts loadData 가 lists · folders 를 프로젝트와 함께 당긴다, #1883). 즐겨찾기만 한 번 더 당긴다.
+interface TreeList { id: number; name: string; folder_id?: number | null; visibility?: string | null; settings?: { icon?: string | null } | null }
+interface TreeFolder { id: number; name: string; parent_id?: number | null; settings?: { kind?: string | null } | null }
+
+function loadFavLists(): void {
+  if (favLists || favLoading) return;
+  favLoading = true;
+  void api('/api/ui/v6/favorites').then((d: any) => {
+    favLists = new Set<number>(((d && d.project_lists) || []).map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n)));
+    favLoading = false;
+    if (last && (hooks.section?.() || 'home') === 'proj' && projLens === 'tree') redraw();
+  }).catch(() => { favLoading = false; favLists = new Set<number>(); });
+}
+
+/** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
+function projScopeKey(): string {
+  const m = /^#\/projects2\/(l|f)\/(\d+)/.exec(location.hash);
+  if (m) return (m[1] === 'l' ? 'L' : 'F') + m[2];
+  return /^#\/projects2\/none/.test(location.hash) ? 'none' : '';
+}
+
+function setLens(k: ProjLens): void {
+  if (projLens === k) return;
+  projLens = k;
+  try { localStorage.setItem(LENS_STORE, k); } catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
+  // 찾기 칸과 ＋ 줄은 렌즈마다 다른 것을 찾고 만든다 — 넘길 때 비운다(옛 검색어가 새 목록을 조용히 줄이면 안 된다).
+  sideFilter = ''; findOpen = false; newOpen = false; newDraft = ''; newErr = '';
+  redraw();
+}
+
+/** 렌즈 스위치 — [진행 중 | 폴더 · 리스트]. 답을 기다리는 세션이 있으면 **다른 렌즈에 있을 때** 진행 중 쪽에 앰버 점(숫자는 안 단다 —
+ *  사이드바의 앰버 숫자 배지는 하나뿐이라는 #1719 규칙). 8/25 결정 ①(시간순 ↔ 프로젝트별 토글)과 같은 장치다. */
+function lensSwitch(): HTMLElement {
+  const data = last ? last.data : null;
+  const waiting = !!data && data.sessions.some((s) => isLive(s) && s.stateKey === 'waiting');
+  const tab = (k: ProjLens, label: string, dot: boolean, title: string): HTMLElement =>
+    el('button', { class: 'v2-lens-b' + (projLens === k ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(projLens === k), title,
+      onclick: () => setLens(k) },
+      el('span', { text: label }),
+      dot ? el('i', { class: 'v2-lens-dot', role: 'img', 'aria-label': '답을 기다리는 세션이 있어요' }) : null);
+  return el('div', { class: 'v2-lens', role: 'tablist', 'aria-label': '무엇을 볼지' },
+    tab('active', '진행 중', waiting && projLens !== 'active', '진행 중 — 도는 세션이 있는 프로젝트와 그 세션'),
+    tab('tree', '폴더 · 리스트', false, '폴더 · 리스트 — 프로젝트가 정리된 자리. 리스트를 누르면 가운데 보드가 그 리스트로 갑니다'));
+}
+
+/** 폴더 · 리스트 렌즈의 ＋ — 무엇을 만들지 셋 중 고른다(프로젝트 · 리스트 · 폴더). 옛 패널의 「＋ 새로 만들기 ▾」(#1067) 자리. */
+function newMenuBtn(): HTMLElement {
+  return el('button', {
+    class: 'v2-add' + (newOpen ? ' on' : ''), type: 'button', 'aria-label': '새로 만들기', 'aria-haspopup': 'menu', 'aria-expanded': String(newOpen),
+    title: newOpen ? '만들기 줄 접기' : '새로 만들기 — 프로젝트 · 리스트 · 폴더',
+    onclick: (e: MouseEvent) => {
+      e.preventDefault();
+      if (newOpen) { closeNew(); return; }
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      ctxMenu(r.left, r.bottom + 4, [
+        { label: '새 프로젝트', run: () => openNew('proj') },
+        { label: '새 리스트', run: () => openNew('list') },
+        { label: '새 폴더', run: () => openNew('folder') },
+      ]);
+    },
+  }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
+}
+
+function renderProjTree(): void {
+  if (!last) return;
+  const { host, data } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+  loadFavLists();
+
+  const lists = (data.lists || []) as unknown as TreeList[];
+  const folders = (data.folders || []) as unknown as TreeFolder[];
+  // 열린 프로젝트 수 — 보관·버림·완료는 빼고 센다. 매일 보는 숫자는 '남은 일'이다(완료까지 센 숫자는 보드의 Closed 토글이 말한다).
+  const openByList = new Map<number, number>();
+  let noneN = 0;
+  for (const p of data.projects) {
+    if (isArchivedProj(p) || isTrashedProj(p) || p.status_category === 'done') continue;
+    if (p.list_id) openByList.set(p.list_id, (openByList.get(p.list_id) || 0) + 1); else noneN++;
+  }
+  // 아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 트리에 없다 — 발치 도크 [아카이브]가 그 문이다.
+  const kids = new Map<number | null, TreeFolder[]>();
+  for (const f of folders) { const k = f.parent_id ?? null; const arr = kids.get(k) || []; arr.push(f); kids.set(k, arr); }
+  const archived = new Set<number>();
+  const markArchive = (f: TreeFolder): void => { archived.add(f.id); for (const c of kids.get(f.id) || []) markArchive(c); };
+  for (const f of folders) if (f.settings && f.settings.kind === 'archive') markArchive(f);
+  const listsIn = (folderId: number | null): TreeList[] => lists.filter((l) => (l.folder_id ?? null) === folderId);
+  const q = sideFilter.trim().toLowerCase();
+  const hit = (name: string): boolean => !q || name.toLowerCase().includes(q);
+  const sel = projScopeKey();
+  const countUnder = (f: TreeFolder): number => listsIn(f.id).reduce((n, l) => n + (openByList.get(l.id) || 0), 0)
+    + (kids.get(f.id) || []).filter((c) => !archived.has(c.id)).reduce((n, c) => n + countUnder(c), 0);
+  // 찾는 중엔 맞는 것이 아래에 하나라도 있어야 폴더가 선다(폴더 이름이 맞아도 선다).
+  const anyHit = (f: TreeFolder): boolean => hit(f.name) || listsIn(f.id).some((l) => hit(l.name)) || (kids.get(f.id) || []).some((c) => !archived.has(c.id) && anyHit(c));
+
+  const lockIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-ptl-lock', 'aria-hidden': 'true' },
+    sv('path', { d: 'M7 11V8a5 5 0 0 1 10 0v3' }), sv('rect', { x: '5', y: '11', width: '14', height: '10', rx: '2' }));
+  const listRow = (l: TreeList, depth: number): HTMLElement => {
+    const on = sel === 'L' + l.id;
+    const emoji = l.settings && l.settings.icon ? String(l.settings.icon) : '';
+    return el('a', { class: 'v2-wcat v2-ptl' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, style: 'padding-left:' + (12 + depth * 14) + 'px',
+      title: l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : ''), ...(on ? { 'aria-current': 'true' } : {}) },
+      emoji ? el('span', { class: 'v2-ptl-emoji', 'aria-hidden': 'true', text: emoji }) : icon('list', 'v2-ptl-ic'),
+      el('span', { class: 'n', text: l.name }),
+      l.visibility === 'members' ? lockIc() : null,
+      el('span', { class: 'v2-cnt', text: String(openByList.get(l.id) || 0) }));
+  };
+  const rows: HTMLElement[] = [];
+  const folderRows = (parent: number | null, depth: number): void => {
+    for (const f of (kids.get(parent) || [])) {
+      if (archived.has(f.id)) continue;
+      if (q && !anyHit(f)) continue;
+      const open = q ? true : !foldClosed.has(String(f.id));   // 찾는 중엔 전부 편다 — 접힌 폴더가 결과를 삼키면 안 된다
+      const on = sel === 'F' + f.id;
+      const isSpace = !!(f.settings && f.settings.kind === 'space');
+      rows.push(el('div', { class: 'v2-ptf' + (on ? ' on' : ''), style: 'padding-left:' + (depth * 14) + 'px' },
+        el('button', { class: 'v2-car' + (open ? ' open' : ''), type: 'button', 'aria-label': open ? f.name + ' 접기' : f.name + ' 펼치기', 'aria-expanded': String(open), text: '›',
+          onclick: (e: Event) => {
+            e.preventDefault(); e.stopPropagation();
+            if (open) foldClosed.add(String(f.id)); else foldClosed.delete(String(f.id));
+            saveSet(FOLD_CLOSED_STORE, foldClosed); redraw();
+          } }),
+        el('a', { class: 'v2-ptf-a', href: '#/projects2/f/' + f.id, title: (isSpace ? '스페이스 ' : '폴더 ') + f.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}) },
+          glyph(open ? 'folder-open' : 'folder', 'v2-ptf-ic'),
+          el('span', { class: 'n', text: f.name }),
+          el('span', { class: 'v2-cnt', text: String(countUnder(f)) }))));
+      if (!open) continue;
+      folderRows(f.id, depth + 1);
+      for (const l of listsIn(f.id)) if (hit(l.name)) rows.push(listRow(l, depth + 1));
+    }
+  };
+  // ⭐ 즐겨찾기(#670) — 폴더 안이든 밖이든 맨 위 한자리로. 찾는 중엔 생략(찾기가 우선). 비어 있으면 구역 자체를 안 그린다.
+  const favs = !q && favLists ? lists.filter((l) => favLists!.has(l.id)) : [];
+  if (favs.length) {
+    rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: '즐겨찾기' }));
+    for (const l of favs) rows.push(listRow(l, 0));
+  }
+  rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: '폴더 · 리스트' }));
+  const treeStart = rows.length;
+  folderRows(null, 0);
+  for (const l of listsIn(null)) if (hit(l.name)) rows.push(listRow(l, 0));
+  // 기타(미분류) — 리스트에 안 넣은 프로젝트. 클래식 패널의 그 줄(#475 __none__). 그런 프로젝트가 있을 때만 선다.
+  const noneLabel = '기타 (미분류)';
+  if (noneN && (!q || noneLabel.toLowerCase().includes(q))) {
+    rows.push(el('a', { class: 'v2-wcat v2-ptl v2-ptl--none' + (sel === 'none' ? ' on' : ''), href: '#/projects2/none', style: 'padding-left:12px',
+      title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(sel === 'none' ? { 'aria-current': 'true' } : {}) },
+      glyph('inbox', 'v2-ptl-ic'), el('span', { class: 'n', text: noneLabel }), el('span', { class: 'v2-cnt', text: String(noneN) })));
+  }
+  if (rows.length === treeStart) {
+    rows.push(el('p', { class: 'v2-empty', text: q ? '찾는 폴더 · 리스트가 없어요.' : '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' }));
+  }
+  const listEl = el('div', { class: 'v2-app-list v2-ptree', 'aria-label': '폴더 · 리스트' }, ...rows);
+  appListEl = listEl;
+
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
+      secHead('프로젝트', null, newMenuBtn(), findBtn()),
+      lensSwitch(),
+      ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('폴더 · 리스트 찾기'))] : []),
+      ...(newOpen ? [newProjRow()] : []),
+      listEl),
+    secFoot());
+
+  keepSideScroll(listEl, 'v2-app-list');
   bindFindKey();
 }
 
@@ -1141,9 +1328,6 @@ function renderLegacy(): void {
           sv('path', { d: 'M19.4 13.6a7.6 7.6 0 0 0 0-3.2l1.9-1.4-1.9-3.3-2.2.9a7.7 7.7 0 0 0-2.8-1.6L14 2.5h-4l-.4 2.5a7.7 7.7 0 0 0-2.8 1.6l-2.2-.9L2.7 9l1.9 1.4a7.6 7.6 0 0 0 0 3.2L2.7 15l1.9 3.3 2.2-.9a7.7 7.7 0 0 0 2.8 1.6l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.8-1.6l2.2.9 1.9-3.3z' })))));
   navFit(navEl);            // 붙고 나서야 실제 높이를 알 수 있다 — 저장값을 지금 줄 수에 맞춰 앉힌다
   renderTree(rows);
-  // ⚠ 병합 판단(2026-08-25): main 의 keepSideScroll(#288, 08-21 09:48Z)은 여기서 걷는다 — 뒤에 온 이 앵커 방식
-  //  (08-21 10:03Z)이 같은 신고를 더 정확히 고치고, 위 주석이 '픽셀 되돌리기는 이 트리에서 어긋난다'는 사유를 남겼다.
-  //  그 처방이 막던 구멍(트리가 통째로 새로 생겨 scrollTop 이 0 인 경우)은 아래 lastScroll 이 그대로 맡는다.
   //  ① 보던 줄을 같은 자리에 → ② 그 줄이 사라졌으면 옛 픽셀값으로(그래도 아무것도 안 하는 것보단 낫다).
   if (!anchorApply(anchor)) treeEl!.scrollTop = prevScroll;
   lastScroll = treeEl!.scrollTop;
@@ -1320,7 +1504,7 @@ let newSending = false;
 let newErr = '';
 let newFocusWanted = false;
 
-function openNew(): void { newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
+function openNew(kind: NewKind = 'proj'): void { newKind = kind; newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
 function closeNew(): void { if (!newOpen) return; newOpen = false; newDraft = ''; newErr = ''; redraw(); }
 
 function newBtn(): HTMLElement {
@@ -1337,7 +1521,7 @@ function newProjRow(): HTMLElement {
   const errEl = el('p', { class: 'v2-npj-err', hidden: !newErr, text: newErr });
   const inp = el('input', {
     class: 'v2-npj-in', type: 'text', maxlength: '120', value: newDraft,
-    placeholder: '새 프로젝트 이름을 적고 Enter', 'aria-label': '새 프로젝트 이름',
+    placeholder: NEW_COPY[newKind].ph, 'aria-label': NEW_COPY[newKind].label,   // #2043 — 이 줄은 프로젝트 · 리스트 · 폴더를 다 만든다
     oninput: (e: any) => { newDraft = e.target.value; if (newErr) { newErr = ''; errEl.hidden = true; } },
     onkeydown: (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); closeNew(); return; }
@@ -1353,7 +1537,7 @@ function newProjRow(): HTMLElement {
   }) as HTMLInputElement;
   const line = el('div', { class: 'v2-npj-l' + (newSending ? ' sending' : '') },
     el('span', { class: 'v2-car none', 'aria-hidden': 'true' }),
-    glyph('folder', 'v2-pj-ic'),
+    newKind === 'list' ? icon('list', 'v2-pj-ic') : glyph(newKind === 'folder' ? 'folder-open' : 'folder', 'v2-pj-ic'),
     inp);
   const create = async (): Promise<void> => {
     const name = newDraft.trim();
@@ -1365,6 +1549,21 @@ function newProjRow(): HTMLElement {
     //  다시 그리지도 않는다: 여기서 redraw 하면 치던 칸이 새로 나면서 포커스가 끊긴다. 흐리게만 알린다.
     line.classList.add('sending');
     try {
+      if (newKind === 'list' || newKind === 'folder') {
+        // #2043 — 폴더 · 리스트 렌즈의 ＋. 만든 것을 목록에 **낙관적으로** 세운다(다음 폴링이 정본으로 덮는다 — 그때까지 이 줄이 선다).
+        const isList = newKind === 'list';
+        const made = await api(isList ? '/api/ui/v6/project-lists' : '/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name }) })
+          .then((d: any) => (d && (isList ? d.list : d.folder)) || d);
+        if (!made || !made.id) throw new Error(isList ? '생성 응답에 리스트가 없어요' : '생성 응답에 폴더가 없어요');
+        if (last) {
+          if (isList) { const ls = last.data.lists || (last.data.lists = []); if (!ls.some((l) => l.id === made.id)) ls.push(made); }
+          else { const fs = last.data.folders || (last.data.folders = []); if (!fs.some((f) => f.id === made.id)) fs.push(made); }
+        }
+        newSending = false; newOpen = false; newDraft = ''; newErr = '';
+        if (isList) location.hash = '#/projects2/l/' + made.id;   // 새 리스트의 보드로 — 빈 보드가 '만들어졌다'를 말한다
+        redraw();
+        return;
+      }
       const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name }) }).then((d: any) => (d && d.project) || d);
       if (!np || !np.id) throw new Error('생성 응답에 프로젝트가 없어요');
       newSending = false; newOpen = false; newDraft = ''; newErr = '';

@@ -271,15 +271,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  한 번 더 적으면 같은 말이 세 자리를 차지하고, 길면(실측: 40자 넘는 프로젝트명) 조작부까지 밀어냈다.
   //  붙이기·바꾸기·떼기(#1749)는 사라지지 않고 [⋯ ▸ 이 세션] 으로 내려간다 — 세션 이름 바꾸기와 같은 자리다.
   paintTitle();
+  const headR = el('div', { class: 'sc-head-r' },
+    termStatusEl,
+    opts.onToggleFiles ? filesBtn : null,
+    opts.terminalSrc && isBox ? [fixBtn, setBtn] : null,
+    moreBtn);
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
       dot, titleHost, chatBadge,
       el('span', { class: 'sc-meta' }, stateEl, runEl)),
-    el('div', { class: 'sc-head-r' },
-      termStatusEl,
-      opts.onToggleFiles ? filesBtn : null,
-      opts.terminalSrc && isBox ? [fixBtn, setBtn] : null,
-      moreBtn));
+    headR);
 
   const chatHost = el('div', { class: 'sc-chat' });
   const termHost = el('div', { class: 'sc-term', hidden: true });
@@ -298,9 +299,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const chipEffort = el('span', { class: 'dt-chip', hidden: true });
   const selModel = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '모델' }) as HTMLSelectElement;
   const selEffort = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '추론강도' }) as HTMLSelectElement;
-  // 터미널 보기에서도 항상 보이는 상단 실행 설정. 제목·상태 및 세션 조작과 같은 한 줄에 욱여넣으면 가운데 칸이
-  // 좁아질 때 서로 겹친다. 헤더 안의 독립된 둘째 줄에 두어 화면 폭과 무관하게 세 축을 바로 고르게 한다.
-  head.append(el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort));
+  // 터미널 보기에서도 항상 보이는 상단 실행 설정. **제목 오른쪽, 세션 조작 왼쪽** — 머리줄 하나에 같이 선다
+  //  (원준 2026-08-25 "여전히 두 줄이잖아"). 종전엔 폭이 좁아질 때 겹칠까 봐 아예 둘째 줄을 강제(flex 1 1 100%)
+  //  했는데, 그러면 넓은 화면에서도 늘 두 줄이었다. 지금은 들어가면 한 줄, 안 들어가면 저절로 다음 줄로 접힌다
+  //  (.sc-head 가 flex-wrap 이라 겹칠 일은 없다 — 좁아지면 제목이 먼저 …로 줄고, 그 다음에 이 묶음이 내려간다).
+  head.insertBefore(el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort), headR);
   const chip = (n: HTMLElement, v: string, tip?: string): void => { n.textContent = v; if (tip && tip !== v) n.title = tip; else n.removeAttribute('title'); n.hidden = !v; };
   const MODE_KO: Record<string, string> = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
   // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).
@@ -351,25 +354,39 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   type Axis = keyof typeof AXIS;
   const canSwitch = (a: Axis): boolean =>
     !!hcat && canType() && target.owned && flagChoices(hcat, AXIS[a].flag).length > 0;
+  // ★ '지금 무엇으로 도는가'의 두 번째 근거 — 세션을 **열 때 실제로 넘긴 값**(서버가 @box_flags 에 적어 목록에 실어 준다).
+  //  대화 파일 관측(obsModel·obsEffort)이 정본이지만 그건 **한 턴은 돌아야** 생긴다. 방금 연 세션이 그 사이
+  //  '모델 · 지난번 그대로' 라고만 적혀 있던 것이 원준님 2026-08-25 신고다 — 지난번이 뭐였는지는 화면이 알면서
+  //  안 적은 셈이라, 관측이 오기 전까지 이 값을 대신 세운다. 둘 다 없으면(플래그 없이 연 세션) 그때만 'AI 기본값'.
+  const startFlag = (a: Axis): string => {
+    const f = (target.raw && (target.raw as any).flags) || null;
+    return f && typeof f === 'object' ? String(f[AXIS[a].flag] || '') : '';
+  };
 
   //  optLabel = 드롭다운 선택지 문구(모델은 **값 그대로** — 홈 입력창과 같은 말이어야 하고, antigravity 처럼
   //   'claude-…'/'gemini-…' 로 제공자가 갈리는 목록은 접두어를 지우면 무엇인지 알 수 없다).
   //  showLabel = 관측값('지금 · …') 문구 — 하네스가 뱉는 긴 id 라 읽기 좋게 다듬는다.
   function paintAxis(a: Axis, box: HTMLSelectElement, span: HTMLElement, observed: string,
                      optLabel: (v: string) => string, showLabel: (v: string) => string): void {
-    const shown = observed ? showLabel(observed) : '';
-    if (!canSwitch(a)) { box.hidden = true; chip(span, shown, a === 'model' ? obsModelTip : undefined); return; }
+    const known = observed || startFlag(a);          // 관측 > 열 때 지정 — 어느 쪽이든 '지금 이걸로 돈다'는 사실이다
+    const shown = known ? showLabel(known) : '';
+    if (!canSwitch(a)) { box.hidden = true; chip(span, shown, a === 'model' ? (obsModelTip || known) : undefined); return; }
     span.hidden = true;
     const choices = a === 'effort' ? effortChoices(hcat, selModel.value) : flagChoices(hcat, AXIS[a].flag);
     // 관측값이 선택지 중 하나를 품고 있으면 그 칸을 고른 것으로 본다. 영숫자만 남겨 비교한다 — 관측값은
     //  'claude-opus-4-5-…' 로도 오고 화면용으로 다듬은 'Grok 4.6' 으로도 와서, 하이픈·공백을 그대로 두면 서로 안 닿는다.
     const nz = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const hit = choices.find((c) => observed && nz(observed).includes(nz(c))) || '';
+    const hit = choices.find((c) => known && nz(known).includes(nz(c))) || '';
     const keep = box.value;   // 방금 고른 값이 아직 기록에 안 나타났을 수 있다 — 관측이 따라오면 그게 이긴다
+    // 빈 칸의 문구는 **지금 화면이 아는 것**을 그대로 말한다 — 고른 값이 있으면 그 칸이 대신 서므로(box.value=hit)
+    //  이 문구는 '안 바꾸기' 뜻이고, 아는 게 없으면 '지난번'이 아니라 **AI 기본값**이라고 적는다(이미 도는 세션에
+    //  '지난번 그대로'는 어느 시점을 가리키는지 알 수 없는 말이다).
     box.replaceChildren(
-      el('option', { value: '' }, hit || !shown ? `${AXIS[a].ko} · 지난번 그대로` : `지금 · ${shown}`),
+      el('option', { value: '' }, hit ? '그대로 두기' : shown ? `지금 · ${shown}` : `${AXIS[a].ko} · AI 기본값`),
       ...choices.map((c) => el('option', { value: c }, optLabel(c))));
     box.value = hit || (choices.includes(keep) ? keep : '');
+    box.title = shown ? `지금 이 세션의 ${AXIS[a].ko} — ${shown}. 골라서 바꿉니다.`
+      : `이 세션은 ${AXIS[a].ko}를 지정하지 않고 열려 AI 가 자기 설정대로 씁니다. 한 턴 돌면 실제 값이 여기 뜹니다.`;
     box.hidden = false;
   }
   function paintRun(): void {
@@ -383,13 +400,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     } else {
       selHarness.hidden = true; chip(chipProv, hcat ? `${providerLabel(hcat)} · ${hcat.label}` : '');
     }
-    paintAxis('model', selModel, chipModel, obsModel, (v) => v, prettyModel);
-    paintAxis('effort', selEffort, chipEffort, obsEffort, effortKo, effortKo);
+    //  선택지 문구 — 모델은 읽을 수 있게 다듬고(긴 id 그대로면 칸이 …로 잘려 무엇인지 못 읽는다), 추론강도는
+    //   고른 뒤에도 축 이름을 달고 다닌다('매우 높음' 만 남으면 무엇의 값인지 줄에서 안 읽힌다 — 원준 2026-08-25).
+    paintAxis('model', selModel, chipModel, obsModel, prettyModel, prettyModel);
+    paintAxis('effort', selEffort, chipEffort, obsEffort, (v) => '추론강도 · ' + effortKo(v), effortKo);
     paintRunHead();
   }
   //  알약 내용 — 왼쪽부터 '무엇이(하네스) · 어떤 모델로 · 어느 강도로 · 어디서(노드)'.
-  //   · 모델·추론강도는 **관측된 값만** 적는다. 아직 한 턴도 안 돌아 모르는 세션은 그 칸을 비운다 —
-  //     빈 자리가 틀린 값보다 낫다(카탈로그 기본값을 적으면 실제로 도는 것과 어긋난다).
+  //   · 모델·추론강도는 **이 세션에 대해 아는 값만** 적는다 — 대화 파일 관측이 먼저고, 없으면 열 때 넘긴 플래그다.
+  //     둘 다 없으면(플래그 없이 연 세션) 그 칸을 비운다: 빈 자리가 틀린 값보다 낫다(카탈로그 기본값을 적으면
+  //     실제로 도는 것과 어긋난다 — 하네스가 자기 설정으로 뜬 것을 화면이 알 길이 없다).
   //   · 그 둘은 **터미널을 보고 있을 때만** 넣는다(대화 모드는 입력창 아래 바가 같은 사실을 이미 말한다).
   //     하네스·노드는 그 바가 말하지 않으므로 두 모드에서 늘 남는다 — 알약이 통째로 사라지지 않는 이유다.
   function paintRunHead(): void {
@@ -399,8 +419,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
     const vals: Array<{ v: string; cls?: string }> = [
       { v: String(target.raw?.harness || '') },
-      { v: onTerm && obsModel ? prettyModel(obsModel) : '' },
-      { v: onTerm && obsEffort ? effortKo(obsEffort) : '' },
+      { v: onTerm ? ((m) => (m ? prettyModel(m) : ''))(obsModel || startFlag('model')) : '' },
+      { v: onTerm ? ((e) => (e ? effortKo(e) : ''))(obsEffort || startFlag('effort')) : '' },
       { v: target.node ? String(target.node) : '', cls: 'sc-run-node' },
     ].filter((x) => !!x.v);
     runEl.replaceChildren(...vals.flatMap((x, i) => {
@@ -458,7 +478,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // 값은 「」로 감싼다 — 'sonnet'처럼 한글이 아닌 값에 조사를 직접 붙이면 읽는 소리에 따라 '로/으로'가 갈려
       //  어느 쪽을 써도 어색해진다. 「」 뒤의 '으로'는 그 문제를 안 만든다(session-form 의 「지난번 그대로」와 같은 표기).
       //  pending = 아직 큐에 있다(세션이 로그인·대화상자에 멈춰 있는 경우) — '바꿨다'고 말하지 않는다.
-      const said = a === 'model' ? v : effortKo(v);
+      const said = a === 'model' ? prettyModel(v) : effortKo(v);
       const msg = r?.pending
         ? `${AXIS[a].obj} 「${said}」으로 바꾸라고 걸어 뒀어요 — AI 입력창이 뜨면 들어갑니다.`
         : `${AXIS[a].obj} 「${said}」으로 바꿨어요.`;

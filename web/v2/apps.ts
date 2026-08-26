@@ -33,8 +33,6 @@ export const APPS: AppDef[] = [
   { key: 'context', title: '맥락 관리', desc: '수집(연결) · 증류 · 분류 · 자동 관리 파이프라인', route: 'context', tab: 'context', icon: 'ctx' },
   { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
   { key: 'system', title: '설정', desc: '내 설정 · 조직 · 구성원 · 운영', route: 'system', tab: 'system', icon: 'sys' },
-  { key: 'web', title: '웹', desc: '주소를 넣으면 이 화면 안에서 그대로 — 데스크톱 앱에서만 안에 열립니다', route: 'web', tab: null, icon: 'web',
-    kind: 'browser', home: 'https://www.google.com/' },
   { key: 'learn', title: '사용 가이드', desc: '둘러보기 · 문서 · 시작하기', route: 'learn', tab: null, icon: 'learn' },
 ];
 
@@ -365,6 +363,7 @@ export function appFrame(hash: string, title: string, opts?: { live?: boolean; s
   //  (안 접으면 문서 페이지에만 '클래식 화면 · 그대로 실림' 띠가 되살아난다 — #1841 실측)
   const seg = hash.replace(/^#\/?/, '').split(/[/?]/)[0];
   const key = CLASSIC_PAGES[seg] || seg;
+  frame.dataset.appKey = key;   // #2043 — 같은 앱이면 셸이 액자를 다시 싣지 않고 안의 주소만 바꾼다(main.ts 클래식 분기)
   if (!opts?.live && FRAMELESS.has(key)) {
     const pop = el('a', { class: 'v2-frame-pop', href: classicUrl(hash), target: '_blank', rel: 'noopener', title: '새 탭에서 열기', 'aria-label': '새 탭에서 열기', text: '↗' });
     return el('div', { class: 'v2-app v2-app-frameless' }, pop, frame);
