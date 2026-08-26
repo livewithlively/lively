@@ -161,12 +161,6 @@
    기준은 리브 페르소나의 성립 조건("컴맹인 중학생도 따라올 수 있어야 한다")이다. 그래서 이 블록의
    시각 규칙은 셋뿐 — ① 걸음마다 번호가 눈에 먼저 들어온다 ② 붙여넣을 줄은 다른 무엇과도 안 헷갈리게
    한 덩어리로 떨어져 있다 ③ 누를 키는 본문 글자와 다르게 보인다. 장식은 넣지 않는다. */
-.ob-ostabs{display:flex; gap:6px; margin:0 0 20px}
-.ob-ostabs button{flex:1; border:1px solid var(--line); border-radius:9px; padding:9px 10px;
-  font-size:13.5px; font-weight:600; color:var(--ink-sub); background:var(--card)}
-.ob-ostabs button:hover{border-color:#cfcecb}
-.ob-ostabs button.ob-on{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); color:var(--ink)}
-
 .ob-ins-list{display:flex; flex-direction:column; gap:22px; margin:0 0 22px}
 .ob-ins{position:relative; padding-left:34px}
 .ob-ins::before{content:attr(data-n); position:absolute; left:0; top:0; width:23px; height:23px;
@@ -196,9 +190,6 @@
   font-family:inherit; line-height:1.6; white-space:nowrap}
 
 .ob-tok .ob-fine2{font-size:12.5px; color:var(--muted)}
-/* 윈도우 캐비엇 — 클래식 설치 가이드(web/learn.ts)가 같은 사실을 이미 말한다(bootstrap.ps1 의 실제
-   PowerShell 실행 검증은 POSIX 박스에서 돌지 않아 정적 계약 테스트뿐). 한쪽만 말하면 화면끼리 어긋난다. */
-.ob-ins-warn{margin:-8px 0 18px; color:var(--warn-ink, #8a6100)}
 /* 터미널 갈래 접힘 — 주된 길(앱) 아래에 조용히. 여는 사람만 본다. */
 .ob-ins-alt{margin-top:22px; border-top:1px solid var(--line); padding-top:14px}
 .ob-ins-alt>summary{font-size:13px; color:var(--muted); cursor:pointer; list-style:none}

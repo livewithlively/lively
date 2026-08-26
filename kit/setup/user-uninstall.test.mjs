@@ -60,58 +60,14 @@ function symlinkedBundle(prefix) {
   rmSync(box, { recursive: true, force: true });
 }
 
-// ③ 비파괴 MCP 라운드트립 — 유저가 설치 전부터 쓰던 org-겹침 MCP(linear)를 install 이 덮어써도 uninstall 이 원복.
-//    설치가 덮어쓰기 전 최초 1회 스냅샷(~/.lively/mcp-user-backup.json) → 제거가 add-json 으로 복원. 신규(설치 전 없던 notion)는 제거 유지.
-//    실제 claude 로 register-clients.sh(스냅샷+덮어쓰기)→user-uninstall(복원) 왕복. CI 에 claude 없으면 스킵(스킵도 통과로 센다).
-{
-  const hasClaude = spawnSync("claude", ["--version"], { stdio: "ignore" }).status === 0;
-  if (!hasClaude) {
-    console.log("skip ③ 비파괴 MCP 라운드트립 (claude 미설치 — 통합테스트 건너뜀)");
-  } else {
-    const box = mkdtempSync(join(tmpdir(), "uninst-mcp-"));
-    const home = join(box, "home");
-    const USER_URL = "https://user-owns-this.example/mcp"; // 유저가 설치 전부터 쓰던 linear URL
-    // ⚠ 이 블록은 **진짜 claude CLI** 를 부른다(통합 왕복이 이 케이스의 값어치다). 그래서 격리가
-    //  샌다면 실행한 사람의 실제 ~/.claude.json 을 덮어쓴다 — 2026-08-20 실측 사고가 정확히 이것이었다
-    //  (lively MCP 등록이 `http://localhost:8080/mcp` + `Bearer dummy`, 즉 아래 픽스처 값으로 덮임).
-    //  닫아야 할 구멍이 둘이다:
-    //   ① HOME 만으로는 **윈도우에서 무효** — node·claude 의 os.homedir() 는 USERPROFILE 을 본다.
-    //      sandboxEnv() 가 HOME·USERPROFILE·TMPDIR·TEMP·TMP 를 한 벌로 돌린다(#1510).
-    //   ② 셸에 CLAUDE_CONFIG_DIR 가 export 돼 있으면(웹터미널 프로필 격리 #346) **그게 HOME 을 이겨**
-    //      claude 가 실 프로필에 쓴다(#1786 윈도우 훅 전멸이 이 경로였다). 상속을 끊는다.
-    //  빈 문자열로 덮는 이유: 소비자들이 전부 `CLAUDE_CONFIG_DIR || <기본>` / `${…:-}` 로 읽으므로
-    //   빈 값이면 "없음"으로 폴백한다. delete 와 달리 **넘긴다는 사실이 코드에 남아** 다음 사람이 지운다.
-    const boxEnv = { ...process.env, ...sandboxEnv({ home, tmp: box }), CLAUDE_CONFIG_DIR: "" };
-    mkdirSync(join(home, ".claude"), { recursive: true });
-    // d.claude=true 되도록 lively 훅 심긴 settings.json(.lively/hooks/ 마커) — 없으면 uninstall 이 claude 블록을 건너뛴다.
-    writeFileSync(join(home, ".claude", "settings.json"),
-      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: 'node "$HOME/.lively/hooks/session-preload.mjs"' }] }] } }) + "\n");
-    spawnSync("claude", ["mcp", "add-json", "linear", JSON.stringify({ type: "http", url: USER_URL }), "--scope", "user"],
-      { env: boxEnv, stdio: "ignore" }); // 유저의 설치-전 linear
-    mkdirSync(join(home, ".lively"), { recursive: true });
-    writeFileSync(join(home, ".lively", "mcp-servers.json"),
-      JSON.stringify({ servers: [
-        { name: "linear", transport: "http", url: "https://mcp.linear.app/mcp", command: null, auth_env: null }, // org 겹침
-        { name: "notion", transport: "http", url: "https://mcp.notion.com/mcp", command: null, auth_env: null }, // 신규
-      ] }) + "\n");
-    writeFileSync(join(home, ".lively", "kit-version"), "test\n");
-    // 설치: register-clients.sh — 덮어쓰기 전 최초 1회 스냅샷 + 덮어쓰기
-    spawnSync("bash", [join(HERE, "register-clients.sh")],
-      { env: { ...boxEnv, STORE_URL: "http://localhost:8080/mcp", LIVELY_TOKEN: "dummy" }, stdio: "ignore" });
-    // 제거: user-uninstall — remove 후 유저 원본 복원
-    spawnSync(process.execPath, [join(HERE, "user-uninstall.mjs"), "--yes"],
-      { env: { ...boxEnv, LIVELY_HOME: home }, stdio: "ignore" });
-    let m = {};
-    try { m = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers || {}; } catch { /* */ }
-    const linearOk = !!(m.linear && m.linear.url === USER_URL); // 유저 원본으로 복원
-    const notionGone = !m.notion;   // 설치 전 없었으니 제거 유지
-    const livelyGone = !m.lively;   // 라이블리 본체 제거
-    (linearOk && notionGone && livelyGone)
-      ? ok("③ 비파괴 MCP 라운드트립 — 유저 기존 linear 원복 + 신규 notion 제거 유지 + lively 제거")
-      : bad("③ MCP 라운드트립", `linear=${m.linear && m.linear.url} notionGone=${notionGone} livelyGone=${livelyGone}`);
-    rmSync(box, { recursive: true, force: true });
-  }
-}
+// ③ 비파괴 MCP 라운드트립 — **여기 있었는데 scripts/uninstall-mcp-roundtrip.itest.mjs 로 옮겼다**(2026-08-27).
+//  그 블록은 진짜 `claude` 를 부르는데 이 계층의 자식 env 는 호스트 효과를 막는다(test-runner-env.mjs 의
+//  LIVELY_HOST_EFFECTS=deny + sandboxEnv 의 같은 값). 그래서 claude 가 깔린 머신에서는 구조적으로 통과할
+//  수 없었고("HostEffects denied external-cli: claude" → 복원 실패), claude 가 없는 리눅스 CI 는 스킵해
+//  초록불이었다 — **CI 초록 · 개발자 맥 영구 빨강**. 실 CLI 를 부르려면 호스트 효과를 열어야 하는데 그건
+//  R3 가 기본 계층에 금지하고(kit/testlib/test-isolation-rules.mjs) 처방으로 *.itest.mjs 이관을 적어 뒀다.
+//  ⚠ 되돌리지 마라 — 여기로 다시 가져오면 같은 이유로 다시 빨강이 된다. 돌리려면:
+//     node scripts/uninstall-mcp-roundtrip.itest.mjs   (또는 node scripts/run-tests.mjs --itest)
 
 console.log(`user-uninstall tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 if (fail) process.exit(1);
