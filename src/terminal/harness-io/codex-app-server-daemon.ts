@@ -40,12 +40,17 @@ export function sessionPort(sessionId: string, nth = 0): number {
  *  매니지드는 게이트웨이가 그 컨테이너에 프로세스를 직접 못 만든다 — 멤버 exec 중계로 셸을 한 번 돌릴 뿐이라,
  *  그 셸이 끝나도 서버가 남아야 한다(`nohup … &`). 로그는 멤버 홈에 남겨 사후 진단이 가능하게 한다.
  */
-export function detachedStartSh(port: number, logPath: string): string {
+export function detachedStartSh(port: number, logPath: string, env: Record<string, string> = {}): string {
+  // ★ 세션 신원 env 를 반드시 싣는다 — 훅(work-flag)이 `LIVELY_SESSION_ID` 로 **대화 파일 경로를 게이트웨이에
+  //  보고**한다. 그게 없으면 답이 rollout 에 쓰여도 **화면이 그 파일을 못 찾아 대화창이 빈 채로 남는다**
+  //  (실측 2026-08-26: 답은 파일에 있는데 사용자에게는 "답이 안 온다"로 보였다).
+  //  값은 우리가 만든 것(세션 id·하네스 키)이라 셸 메타문자가 없지만, 그래도 작은따옴표로 감싼다.
+  const envPrefix = Object.entries(env).map(([k, v]) => `${k}='${String(v).replace(/'/g, "")}'`).join(" ");
   return [
     `if command -v codex >/dev/null 2>&1; then :; else echo "codex 없음" >&2; exit 127; fi`,
     // 이미 그 포트에 살아 있으면 두 번 띄우지 않는다(두 서버가 같은 스레드를 노리면 writer 충돌이 난다).
     `if node -e 'const n=require("net");const s=n.connect(${port},"127.0.0.1");s.on("connect",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1))' 2>/dev/null; then echo already; exit 0; fi`,
-    `nohup codex app-server --listen ws://127.0.0.1:${port} >>"${logPath}" 2>&1 &`,
+    `${envPrefix ? envPrefix + " " : ""}nohup codex app-server --listen ws://127.0.0.1:${port} >>"${logPath}" 2>&1 &`,
     `echo started`,
   ].join("\n");
 }

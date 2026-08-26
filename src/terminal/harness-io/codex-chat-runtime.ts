@@ -89,7 +89,7 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
     //  게이트웨이는 그 컨테이너의 loopback 에 직접 못 닿으므로, 중계로 stdio 다리를 하나 놓아 붙는다.
     //  다리는 게이트웨이가 죽으면 같이 죽지만 **서버는 남는다** — 그게 이 구조의 요점이다.
     const log = `$HOME/.codex/lively-app-server-${o.sessionId}.log`;
-    const out = await memberSh(o.osUser, detachedStartSh(port, log)).catch((e: unknown) => {
+    const out = await memberSh(o.osUser, detachedStartSh(port, log, sessionEnv(o.sessionId))).catch((e: unknown) => {
       throw new CodexChatUnavailable(`세션 컨테이너에서 codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
     });
     if (!/started|already/.test(String(out ?? ""))) throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
@@ -101,7 +101,7 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
     let fd: number | undefined;
     try {
       fd = fs.openSync(logPath, "a");
-      spawnDetachedLocal({ port, cwd: o.cwd, logFd: fd });
+      spawnDetachedLocal({ port, cwd: o.cwd, logFd: fd, env: { ...process.env, ...sessionEnv(o.sessionId) } });
     } catch (e) {
       throw new CodexChatUnavailable(`codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
     } finally {
@@ -241,6 +241,15 @@ export function dropSession(sessionId: string): void {
 /** 테스트·종료 훅용 — 전부 내린다. */
 export function dropAllCodexChats(): void {
   for (const id of [...sessions.keys()]) dropSession(id);
+}
+
+/**
+ * 서버 프로세스에 실을 **세션 신원** — 이게 없으면 훅이 대화 파일 경로를 게이트웨이에 보고하지 못해
+ *  답이 파일에 있어도 **대화창이 비어 보인다**(실측 2026-08-26 — 사용자에겐 "답이 안 온다"로 나타났다).
+ *  pane 세션이 `-e LIVELY_SESSION_ID` 로 받는 것과 **같은 값·같은 목적**이다(sessions.ts).
+ */
+export function sessionEnv(sessionId: string): Record<string, string> {
+  return { LIVELY_SESSION_ID: sessionId, LIVELY_HARNESS: "codex" };
 }
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
