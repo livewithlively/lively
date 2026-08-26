@@ -125,6 +125,9 @@
 .v2-dock-n { position: absolute; top: 2px; right: calc(50% - 22px); min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--bg-tint-2); color: var(--muted); font-family: var(--mono, ui-monospace, monospace); font-size: 9.5px; display: inline-grid; place-items: center; }
 
 /* [AI 세션] 상태 칩 — 이 구역의 첫 질문이 '무엇이 나를 기다리나'라 숫자를 밖에 둔다. */
+/*  ⚠ 걷은 자리(#2033) — [AI 세션] 인라인 상태 칩. 상태 거르기를 [프로젝트] 구역과 같은 필터 팝오버로
+    통일하면서 뗐다(구역마다 다른 방식을 두지 않는다). 규칙을 지우지 않고 남기는 이유는
+    scripts/check-css-drops.mjs 가 셀렉터 유실을 막기 때문 — '삭제'가 아니라 '자리 폐기'다. */
 .v2-schips { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 4px 8px; flex: none; }
 .v2-schip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
 .v2-schip:hover { color: var(--ink); border-color: var(--line-net-2); }
