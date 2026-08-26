@@ -440,6 +440,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-pname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-app-inst-project-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; }
 .v2-app-inst-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--muted); }
+/* 세션 행 둘째 줄 = 내가 마지막으로 시킨 말(#2016 6차) — 인용 부호 + 한 줄. 단추가 아니다(행 전체가 세션을 연다). */
+.v2-app-inst-ask { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
+.v2-app-inst-askt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-app-inst-ask-ic { width: 11px; height: 11px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; opacity: .75; }
 .v2-app-empty { margin: 10px 4px; padding: 14px; border: 1px dashed var(--line-net); border-radius: 9px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 .v2-app-empty p { margin: 0 0 4px; }
 

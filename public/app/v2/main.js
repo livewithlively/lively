@@ -25,7 +25,8 @@ import { createSessionFiles } from './files.js';
 import { createTabs, routeKey } from './tabs.js';
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, MOBILE_MQ } from './mobile.js';
-import { drawRail, mountRail, railIsHidden, railSection, toggleRail } from './rail.js'; // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
+import { drawRail, mountRail, railIsHidden, railSection, toggleRail } from './rail.js';
+import { lastAsk } from './last-ask.js'; // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js'; // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
@@ -1053,6 +1054,7 @@ function sideRowFace(route) {
     const project = base ? { ...base, self: selfProject } : null;
     let icon = 'app';
     let meta = '라이블리 앱';
+    let ask = null;
     if (!page || page === 'dashboard') {
         icon = 'home';
         meta = '아직 시작하지 않은 작업';
@@ -1060,6 +1062,12 @@ function sideRowFace(route) {
     else if (page === 's' || page === 'p') {
         icon = 'chat';
         meta = project ? '' : 'AI 세션 · 프로젝트 없음';
+        //  둘째 줄 = 내가 마지막으로 시킨 말(#2016 6차, last-ask.ts) — 아직 모르면 null(행은 프로젝트명을 글자로 둔다).
+        if (page === 's') {
+            const s = findSess(decodeURIComponent(segs[1] || ''));
+            if (s)
+                ask = lastAsk(s);
+        }
     }
     else if (page === 'inbox') {
         icon = 'inbox';
@@ -1090,7 +1098,7 @@ function sideRowFace(route) {
             meta = app.desc;
         }
     }
-    return { title: (!page || page === 'dashboard') ? '새 작업' : info.title, icon, state: info.state, meta, project };
+    return { title: (!page || page === 'dashboard') ? '새 작업' : info.title, icon, state: info.state, meta, project, ask };
 }
 //  행 키 → 그 행을 여는 route · 그 행이 쥔 AppInstance. 활성화·닫기가 이 두 표로 되돌아간다.
 const sideRowRoute = new Map();

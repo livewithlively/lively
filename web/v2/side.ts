@@ -28,6 +28,7 @@
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
+import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
@@ -272,6 +273,8 @@ export interface SideInstance {
   status?: { key: string; label: string } | null;
   /** 사람이 맨 위로 고정했는가(#1954). */
   pinned?: boolean;
+  /** 세션 행의 둘째 줄 — 내가 마지막으로 시킨 말(#2016 6차, last-ask.ts). 아직 모르면 null. */
+  ask?: string | null;
 }
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
@@ -281,6 +284,12 @@ export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => strin
   render();
 }
 function redraw(): void { if (last) render(); }
+//  '내 마지막 말'이 도착했다 — 홈이면 목록만(검색칸은 살아 있는 IME 조합), 다른 구역은 그 구역을 다시 그린다.
+watchLastAsk(() => {
+  if (!last) return;
+  if ((hooks.section?.() || 'home') === 'home' && appListEl) { const st = appListEl.scrollTop; paintAppList(); appListEl.scrollTop = st; }
+  else redraw();
+});
 
 // ★고정 — 사람이 고른 프로젝트를 목록 맨 위로. 자동으로 뭘 올려 두지 않는다(열린 세션을 자동으로 띄우던
 //  줄은 2026-08-19 에 걷었다: 내가 고르지 않은 것이 자리를 차지했다). 브라우저에 남는다.
@@ -344,7 +353,7 @@ let outsideBound = false;
 const PIN_NEEDLE = 'M12 17v5';
 const PIN_BODY = 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4a1 1 0 0 1 1 1z';
 
-function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'link' | 'archive' | 'trash', cls: string): SVGElement {
+function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'ask' | 'home' | 'inbox' | 'link' | 'archive' | 'trash', cls: string): SVGElement {
   const D: Record<string, string[]> = {
     folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
     // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
@@ -354,6 +363,7 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
     //   같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채우면 두 아이콘의 무게가 맞는다.
     'folder-open': ['M3 17V7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
     chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
+    ask: ['M9 6H5a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a3 3 0 0 1-3 3', 'M19 6h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a3 3 0 0 1-3 3'],
     inbox: ['M4.6 5h14.8L22 13v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4z', 'M2 13h6a4 4 0 0 0 8 0h6'],
     // 외부 앱 연결 — 고리 둘이 맞물린 모양(연결). 자물쇠·플러그는 '잠금'·'전원'으로 읽혀 뜻이 어긋난다.
     link: ['M10.5 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.3 1.3', 'M13.5 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 1 0 5.7 5.7l1.3-1.3'],
@@ -387,6 +397,13 @@ function instanceIcon(inst: SideInstance): SVGElement {
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
  * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
  */
+/** 세션 행의 둘째 줄 — **내가 마지막으로 시킨 말**(#2016 6차, 원준: "밑에 2행은 내가 한 마지막 질문의 짧은 요약본으로").
+ *  단추가 아니다(종전 폴더+프로젝트명은 누르면 프로젝트로 갔다) — 행 전체가 세션을 연다. 프로젝트는 툴팁에 남긴다. */
+function askLine(ask: string, projName: string): HTMLElement {
+  return el('span', { class: 'v2-app-inst-ask', title: (projName ? projName + '\n' : '') + '내가 마지막으로 한 말 — ' + ask },
+    glyph('ask', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: ask })) as HTMLElement;
+}
+
 /** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다. */
 function appRowEl(inst: SideInstance): HTMLElement {
   return el('div',
@@ -411,13 +428,18 @@ function appRowEl(inst: SideInstance): HTMLElement {
       title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
       onclick: () => hooks.onCloseInstance?.(inst.id) },
       sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
-    inst.project && !inst.project.self
-      ? el('button', { class: 'v2-app-inst-project', type: 'button',
-          title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
-          onclick: () => hooks.onOpenProject?.(inst.project!.id) },
-          glyph('folder', 'v2-app-inst-project-ic'),
-          el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
-      : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
+    //  둘째 줄 — 세션이면 **내 마지막 말**(아직 모르면 프로젝트명을 글자로), 그 밖의 앱은 종전대로 프로젝트 단추.
+    inst.icon === 'chat'
+      ? (inst.ask
+          ? askLine(inst.ask, inst.project && !inst.project.self ? inst.project.name : '')
+          : el('span', { class: 'v2-app-inst-meta', text: (inst.project && !inst.project.self ? inst.project.name : '') || inst.meta || 'AI 세션' }))
+      : inst.project && !inst.project.self
+        ? el('button', { class: 'v2-app-inst-project', type: 'button',
+            title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
+            onclick: () => hooks.onOpenProject?.(inst.project!.id) },
+            glyph('folder', 'v2-app-inst-project-ic'),
+            el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
+        : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
 }
 
 /** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
@@ -442,7 +464,7 @@ function appListKids(shown: SideInstance[], q: string): HTMLElement[] {
 function paintAppList(): void {
   if (!appListEl || !hooks.instances) return;
   const q = sideFilter.trim().toLowerCase();
-  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.ask, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
   appListEl.replaceChildren(...appListKids(shown, q));
   appListEl.scrollTop = 0;   // 거르고 나면 맨 위가 첫 결과다
 }
@@ -571,7 +593,7 @@ function renderHomeApps(): void {
   const { host } = last;
   const instances = hooks.instances!();
   const q = sideFilter.trim().toLowerCase();
-  const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = instances.filter((i) => !q || [i.title, i.meta, i.ask, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
@@ -641,16 +663,16 @@ function sessInstRow(s: Sess, pastRow: boolean): HTMLElement {
   const ak = last!.activeKey();
   const on = ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId);
   const stKey = !pastRow && SESS_STATES[s.stateKey] ? s.stateKey : '';
+  const ask = lastAsk(s);
   return el('div', { class: 'v2-app-inst v2-app-inst--plain' + (on ? ' on' : ''), role: 'listitem' },
     el('a', { class: 'v2-app-inst-open', href: '#/s/' + encodeURIComponent(s.id), title: t.main, 'aria-current': on ? 'page' : null },
       glyph('chat', 'v2-app-inst-ic'),
       el('span', { class: 'v2-app-inst-title', text: t.main })),
     stKey ? el('span', { class: 'v2-app-inst-st', 'data-st': stKey, title: stLabel(stKey), role: 'img', 'aria-label': stLabel(stKey) }) : null,
-    p
-      ? el('button', { class: 'v2-app-inst-project', type: 'button', title: `${p.name}\n프로젝트 페이지를 엽니다`,
-          onclick: () => hooks.onOpenProject?.(p.id) },
-          glyph('folder', 'v2-app-inst-project-ic'), el('span', { class: 'v2-app-inst-pname', text: p.name }))
-      : el('span', { class: 'v2-app-inst-meta', text: t.sub || when(s.lastSeen) }));
+    //  둘째 줄 — 내 마지막 말(#2016 6차). 아직 모르면 프로젝트명 · 하는 일 · 시각 순으로 글자만.
+    ask
+      ? askLine(ask, p ? p.name : '')
+      : el('span', { class: 'v2-app-inst-meta', text: (p ? p.name : '') || t.sub || when(s.lastSeen) }));
 }
 
 function renderSessions(): void {

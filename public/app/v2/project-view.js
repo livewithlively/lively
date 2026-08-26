@@ -203,7 +203,7 @@ export function mountProjectView(host, opts) {
         } // 한글 조합 Enter 가드(레포 불변식)
     });
     // ══ 세션 — 오른쪽 아래 작업대(도는 것은 색 띠) ═══════════════════════════════════════════════════
-    const sz = zone('pv-z-sess', '세션', appIcon('term'));
+    const sz = zone('pv-z-sess', '세션', appIcon('chat'));
     {
         const btn = el('button', { class: 'pv-btn-main', type: 'button', text: '＋ 새 세션', title: '이 프로젝트에 붙은 AI 세션을 엽니다' });
         btn.onclick = () => { btn.disabled = true; void openProjectSession(id, String(pj().name || '')).then((ok) => { if (!ok)
