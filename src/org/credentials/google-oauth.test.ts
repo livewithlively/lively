@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import {
   buildGoogleAuthorizeUrl, googleScopeString, parseGoogleTokenResponse, mergeGoogleTokens,
   googleInstallToSlot, googleInstallFromBlob, googleTokenExpired, decodeIdTokenClaims,
-  isGoogleServer, GOOGLE_AUTHORIZE_URL, type GoogleInstall,
+  isGoogleServer, GOOGLE_AUTHORIZE_URL, googleConsentTier, consumesUnverifiedUserCap, type GoogleInstall,
 } from "./google-oauth.js";
 
 let pass = 0;
@@ -74,6 +74,33 @@ t("[6] scope: drive_file 은 비민감 범위만 — 제한범위(drive.readonly
 
 t("[7] scope: 빈 목록(경계)은 기본 3종으로 떨어진다 — 빈 scope 요청은 상류가 거부한다", () => {
   assert.equal(googleScopeString([]), googleScopeString(["drive", "gmail", "calendar"]));
+});
+
+// ── 표 24~27 · 심사 등급(돈과 100명 한도가 갈리는 자리, 지식 §9) ─────────────────
+t("[24] tier: 서비스별 등급 — 캘린더는 민감(CASA 밖), Gmail·drive.readonly 는 제한, drive.file 은 비민감", () => {
+  assert.equal(googleConsentTier(["calendar"]), "sensitive");
+  assert.equal(googleConsentTier(["gmail"]), "restricted");
+  assert.equal(googleConsentTier(["drive"]), "restricted");
+  assert.equal(googleConsentTier(["drive_file"]), "non_sensitive");
+});
+
+t("[25] tier: 조합은 가장 높은 등급을 따른다 — 하나라도 제한이면 전체가 제한(CASA)", () => {
+  assert.equal(googleConsentTier(["drive_file", "calendar"]), "sensitive");
+  assert.equal(googleConsentTier(["drive_file", "calendar", "gmail"]), "restricted");
+  assert.equal(googleConsentTier(["drive_file"]), "non_sensitive");
+});
+
+t("[26] ★ 100명 한도: 비민감만 고르면 한 칸도 안 태운다 — 민감·제한이 섞이면 태운다", () => {
+  // 100 은 프로젝트 수명 누적 + 리셋 불가라, 안 쓰는 서비스를 기본으로 끼우면 되돌릴 수 없는 낭비가 된다
+  assert.equal(consumesUnverifiedUserCap(["drive_file"]), false);
+  assert.equal(consumesUnverifiedUserCap(["calendar"]), true);
+  assert.equal(consumesUnverifiedUserCap(["gmail"]), true);
+  assert.equal(consumesUnverifiedUserCap(["drive_file", "gmail"]), true);
+});
+
+t("[27] tier: 빈 목록(경계)은 기본 3종과 같은 판정 — scope 규칙과 어긋나지 않는다", () => {
+  assert.equal(googleConsentTier([]), googleConsentTier(["drive", "gmail", "calendar"]));
+  assert.equal(consumesUnverifiedUserCap([]), true);
 });
 
 // ── 표 8~13 · 토큰 응답 파싱 ──────────────────────────────────────────────────

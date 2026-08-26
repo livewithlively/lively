@@ -51,6 +51,42 @@ export type GoogleService = keyof typeof GOOGLE_SERVICE_SCOPES;
 export const GOOGLE_DEFAULT_SERVICES: GoogleService[] = ["drive", "gmail", "calendar"];
 
 /**
+ * ★ 각 서비스가 어느 심사 등급을 끌고 오는가 — **돈과 한도가 여기서 갈린다**(지식 §2·§9).
+ *  · non_sensitive — 검증 0 · CASA 0 · 100명 한도 **0**
+ *  · sensitive     — 검증 필요(영업일 3~5일·무료) · CASA 없음 · 미검증이면 100명 한도
+ *  · restricted    — 검증 + **CASA**(연 $540~1,800·초회 6~12주) · 미검증이면 100명 한도
+ */
+export const GOOGLE_SERVICE_TIER = {
+  drive: "restricted",       // drive.readonly
+  drive_file: "non_sensitive", // drive.file — Picker 로 고른 것만
+  gmail: "restricted",       // 본문을 읽는 Gmail scope 는 전부 제한범위다(비제한 대안 없음)
+  calendar: "sensitive",     // 구글 제한범위 목록에 캘린더는 없다
+} as const satisfies Record<GoogleService, "non_sensitive" | "sensitive" | "restricted">;
+
+export type GoogleScopeTier = (typeof GOOGLE_SERVICE_TIER)[GoogleService];
+const TIER_RANK: Record<GoogleScopeTier, number> = { non_sensitive: 0, sensitive: 1, restricted: 2 };
+
+/** 이 조합이 끌고 오는 **가장 높은** 등급. 화면이 어떤 경고를 띄울지, 심사를 넣을지 정하는 근거. */
+export function googleConsentTier(services: readonly GoogleService[] = GOOGLE_DEFAULT_SERVICES): GoogleScopeTier {
+  const picked = services.length > 0 ? services : GOOGLE_DEFAULT_SERVICES;
+  let top: GoogleScopeTier = "non_sensitive";
+  for (const s of picked) {
+    const t = GOOGLE_SERVICE_TIER[s];
+    if (t && TIER_RANK[t] > TIER_RANK[top]) top = t;
+  }
+  return top;
+}
+
+/**
+ * ★ 이 동의가 **미검증 100명 한도를 태우는가**. 민감·제한 범위를 미검증 상태로 요청할 때만 소모되고,
+ *  그 100 은 **프로젝트 수명 누적이며 리셋·증액이 불가능**하다 — 그래서 "필요 없는 서비스를 기본으로 끼워 넣는 것"이
+ *  단순한 과잉권한이 아니라 **되돌릴 수 없는 자원 낭비**다. 캘린더만 켠 사람이 Gmail 까지 동의하면 그 한 칸이 날아간다.
+ */
+export function consumesUnverifiedUserCap(services: readonly GoogleService[] = GOOGLE_DEFAULT_SERVICES): boolean {
+  return googleConsentTier(services) !== "non_sensitive";
+}
+
+/**
  * 요청할 scope 문자열 — 신원 2종 + 고른 서비스들의 합집합. 순서는 안정적으로(중복 제거 후 입력 순).
  * 서비스를 하나도 안 고르면 기본 3종으로 떨어진다(빈 scope 로 authorize 하면 구글이 400 을 준다).
  */
