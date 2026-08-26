@@ -534,7 +534,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     });
     const send = (e: unknown): void => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* 이미 닫힘 */ } };
     // 붙자마자 지금 상태를 준다 — 새로고침에 승인이 사라지면 그 턴은 영영 선다(TTL 까지 기다렸다 거부된다).
-    send({ kind: "hello", running: !!codexChatStatus(req.params.id)?.alive });
+    // running 은 **지금 턴이 도나**다 — 런타임이 있나(alive)가 아니다. 섞으면 조용한 세션이 영영 '작업 중'이 된다.
+    send({ kind: "hello", running: !!codexChatStatus(req.params.id)?.running });
     for (const a of pendingApprovals(req.params.id)) send({ kind: "approval", ...a });
     const off = onChatEvent(req.params.id, send);
     const beat = setInterval(() => { try { res.write(": beat\n\n"); } catch { /* */ } }, 25_000);

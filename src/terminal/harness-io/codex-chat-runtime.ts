@@ -363,9 +363,11 @@ async function stopServer(sessionId: string, osUser: string | null): Promise<voi
   } catch { /* 이미 없다 */ }
 }
 
-export function codexChatStatus(sessionId: string): { alive: boolean; threadId: string; startedAt: number } | null {
+export function codexChatStatus(sessionId: string): { alive: boolean; running: boolean; threadId: string; startedAt: number } | null {
   const e = sessions.get(sessionId);
-  return e ? { alive: !e.server.isClosed, threadId: e.threadId, startedAt: e.startedAt } : null;
+  // ⚠ alive(런타임이 있나)와 running(지금 턴이 도나)은 다르다. 붙는 화면에 alive 를 running 으로 주면
+  //  **아무것도 안 도는 세션이 영영 '작업 중'** 으로 보인다(입력칸도 그 상태를 따라간다).
+  return e ? { alive: !e.server.isClosed, running: e.running, threadId: e.threadId, startedAt: e.startedAt } : null;
 }
 
 /** 세션이 끝났다 — 런타임도 같이 내린다(고아 프로세스 방지). */
