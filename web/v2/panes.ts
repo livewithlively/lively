@@ -29,6 +29,8 @@ import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { hasBrowserSurface } from './browser-surface.js';
+import { onViewers, viewersOf } from './presence.js';           // #2116 — 지금 이 세션을 보고 있는 사람
+import { openSharePopover, shareSessOf } from './share-session.js';   // #2116 — 문패 [공유]
 import { EMBEDDED } from './embed.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
@@ -202,6 +204,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  타임라인은 '무엇이 나왔나'만 안다. **어디로 여는지는 여기가 안다** — 세션 폴더·프로젝트 자료·곁칸을 아는 건 셸이다.
   //  ⚠ 도구가 준 경로는 절대·상대가 섞여 온다. 세션 폴더(row.dir) 기준으로 상대화해야 파일 API 가 연다.
   const sessRow = (sid: string): any => opts.data().sessions.find((x) => x.id === sid) || null;
+  /** 주소가 기록 uuid 로 온 경우까지 받아 **박스 행**을 찾는다 — 문패의 얼굴·공유는 박스 id 를 축으로 돈다(#2116). */
+  const boxRow = (sid: string | null): any => {
+    if (!sid) return null;
+    return sessRow(sid) || opts.data().sessions.find((x: any) => x.logId === sid) || null;
+  };
   /** 세션 폴더 기준 상대경로. 그 밖(다른 폴더의 절대경로)이면 null — 열 수 없는 것에 버튼을 달지 않기 위해서다. */
   function relOf(sid: string, p: string): string | null {
     const raw = String(p || '');
@@ -629,33 +636,55 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     paintDoor();
   }
 
+  // ⭐ 문패의 얼굴 줄은 '이 프로젝트의 구성원'이 아니라 **지금 이 세션을 보고 있는 사람**이다(#2116).
+  //  구성원 명단은 [프로젝트 상세]가 이미 갖고 있고, 문패에서 사람이 알고 싶은 건 "지금 나 말고 누가 여기 있나"다
+  //  — 구글 문서의 얼굴 줄과 같은 질문. 아무도 없으면(혼자 보는 중) 통째로 생략한다: 내 얼굴 하나는 정보가 0이다.
+  function facesNode(row: any): HTMLElement | null {
+    const vs = viewersOf(row && row.id);
+    if (vs.length < 2) return null;
+    return el('span', { class: 'pn-faces', title: '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') },
+      ...vs.slice(0, 5).map((v) => personFace(v.id, 'pn-face', v.name)));
+  }
+
+  // 공유(#2116) — 지금 보고 있는 **세션**을 함께 볼 사람을 고른다(초대는 세션 단위다).
+  //  열어 둔 세션이 없으면(새 세션 자리) 공유할 대상이 없으므로 단추도 없다 — 눌러서 "무엇을?"이 되지 않게.
+  function shareNode(row: any): HTMLElement | null {
+    const sh = shareSessOf(row);
+    if (!sh) return null;
+    const b = el('button', {
+      class: 'btn btn-ghost btn-sm pn-door-btn', type: 'button',
+      title: sh.owned ? '이 세션을 함께 볼 사람을 고릅니다' : '이 세션을 누가 볼 수 있는지 봅니다',
+      onclick: () => openSharePopover(b as HTMLElement, sh, (invites) => {
+        const cur = sessRow(sh.id);
+        if (cur && cur.raw) cur.raw.invites = invites;   // 다음 폴링 전까지 화면이 방금 정한 사실을 들고 있게
+        paintDoor();
+      }),
+    }, pnIcon('share', 'pn-i sm'), el('span', { text: '공유' }));
+    return b as HTMLElement;
+  }
+
   // ── 문패 ──
+  //  ⭐ 한 줄이다(원준 2026-08-26: "너무 높이 많이 차지해"). 종전엔 눈썹줄(#id · 상태 · 세션 n · 할 일 x/y · 지식 n)이
+  //   제목 **위에** 한 줄을 더 먹었는데, 그 네 숫자는 이미 화면이 말하고 있다 — 세션 수·지금 도는 수는 왼쪽 트리와
+  //   세션 칸이, 할 일·지식은 각자의 칸이. 문패에서 두 번 세는 대신 자리를 돌려준다. 남는 건 **좌표(#id)와 상태**뿐이고
+  //   그 둘은 제목과 같은 줄에 선다.
   function paintDoor(): void {
     if (titleRenaming) return;   // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다 — 세션 제목과 같은 규칙)
     const p = pj();
-    const tasks: any[] = Array.isArray(p.tasks) ? p.tasks : [];
-    const doneN = tasks.filter((t) => t.status_category === 'done').length;
-    const kn = p.knowledge || {};
-    const knN = (kn.required || []).length + (kn.produced || []).length;
-    const ss = opts.data().sessions.filter((s) => (loose ? !s.projectId : Number(s.projectId) === id));
-    const live = ss.filter((s) => s.live && s.alive);
-    const members: any[] = Array.isArray(p.members) ? p.members : [];
     const st = p.status_category === 'done' ? { t: '끝남', c: 'done' } : p.status_category === 'unstarted' ? { t: '시작 전', c: 'todo' } : { t: '진행 중', c: 'run' };
+    // ⚠ 주소의 id 는 **박스 id 일 수도, 중앙 기록 uuid 일 수도** 있다(main.ts findSess 와 같은 사정).
+    //  얼굴 줄도 공유도 축은 박스 id 다(열람 도장이 그 id 로 찍힌다) — 여기서 한 번 맞춰 두면 둘 다 바로 선다.
+    const doorRow = boxRow(curSession());
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
         el('div', { class: 'pn-eyebrow' },
           loose ? el('span', { text: '아직 어느 프로젝트에도 붙지 않았어요.' }) : el('span', { class: 'mono', text: '#' + p.id }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
-          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }),
-          el('span', { class: 'sep', text: '·' }),
-          el('span', { text: `세션 ${ss.length}` + (live.length ? ` · 지금 ${live.length}` : '') }),
-          loose ? null : el('span', { class: 'sep', text: '·' }),
-          loose ? null : el('span', { text: `할 일 ${tasks.length - doneN}/${tasks.length}` }),
-          loose ? null : el('span', { class: 'sep', text: '·' }),
-          loose ? null : el('span', { text: `지식 ${knN}` })),
+          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t })),
         titleNode(String(p.name || '프로젝트 #' + id))),
       el('div', { class: 'pn-door-r' },
-        el('span', { class: 'pn-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'pn-face', String(m.display_name || m.member_id || '')))),
+        facesNode(doorRow),
+        shareNode(doorRow),
         // ── 문패의 두 버튼 (원준 2026-08-20 "거의 안 보인다") ─────────────────────────
         //  자리는 그대로 둔다 — 대상(프로젝트)의 오른쪽 위는 그 대상에 대한 동작이 사는 관습적인 자리이고,
         //  옮기면 시선이 제목에서 멀어질 뿐이다. 문제는 위치가 아니라 **무게**였다: 둘 다 ghost(배경·테두리 없음)라
@@ -773,6 +802,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   }
   const onViewChanged = (): void => { if (!dead) paintPane('main'); };
   window.addEventListener('pn:sessions-view', onViewChanged);
+  // #2116 — 얼굴 줄이 바뀌면 문패만 다시 그린다. **지금 보고 있는 세션의 것일 때만** — 다른 탭의 얼굴이
+  //  바뀌었다고 이 문패를 다시 그릴 이유가 없다(presence.setViewers 가 이미 '바뀐 것'만 알려준다).
+  const offViewers = onViewers((sid) => { if (!dead && sid === boxRow(curSession())?.id) paintDoor(); });
 
   return {
     newSession,
@@ -780,6 +812,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       wrap.removeEventListener('pn:open-web', onOpenWeb);
       window.removeEventListener('message', onMsg);
       dead = true;
+      offViewers();
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
       swap?.destroy();
