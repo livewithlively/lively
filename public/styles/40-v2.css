@@ -1593,7 +1593,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-axisbtn { width: 26px; height: 26px; flex: none; display: inline-grid; place-items: center; padding: 0;
   border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer; }
 .v2-axisbtn:hover { color: var(--ink); background: var(--bg-tint-2); }
-.v2-axisbtn.on { color: var(--blue); background: var(--bg-punch); }
+/*  켜짐은 **채운 파랑** — 연한 틴트로는 켜졌는지 안 읽혔다(상민님 2026-08-26).
+    `-fill` 계열 배경 위에는 --on-fill 백색 글자가 앉는다(DS '채움 vs 글자' 축). */
+.v2-axisbtn.on { color: var(--on-fill); background: var(--blue-fill); }
+.v2-axisbtn.on:hover { color: var(--on-fill); background: var(--blue-fill-deep); }
 .v2-axisbtn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .v2-axisbtn-ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -1622,7 +1625,13 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pg.open > .v2-pg-row .v2-car { transform: rotate(90deg); }
 .v2-pg-row .v2-sums { min-width: 0; margin-left: 4px; }
 .v2-pg-row .v2-cnt { flex: none; margin-left: 2px; }
-.v2-pg-row:hover .v2-newb, .v2-pg-row .v2-newb:focus-visible { opacity: 1; }
+/*  ⚠ ＋ 는 **머리글 흐름 밖(절대위치)** 에 띄우고 안 보일 땐 display:none 이라 자리도 안 먹는다.
+    opacity:0 로 숨기면 안 보이는데도 폭(18+2px)을 그대로 차지해 **상태 점·개수가 오른쪽 끝에 못 붙는다** —
+    #1954 ⓑ 가 앱 행에서 이미 밟은 함정이고, 이 머리글에서 그대로 재발했다(상민님 2026-08-26 재지적).
+    손을 얹으면 그 오른쪽 자리를 ＋ 가 받고 점·개수는 잠깐 물러난다(앱 행의 × 규약과 같다). */
+.v2-pg-row .v2-newb { position: absolute; right: 5px; top: 50%; margin: -9px 0 0; opacity: 1; display: none; }
+.v2-pg-row:hover .v2-newb, .v2-pg-row .v2-newb:focus-visible { display: inline-grid; }
+.v2-pg-row:hover .v2-sums, .v2-pg-row:hover .v2-cnt { visibility: hidden; }
 /* 접힌 묶음 안에 **지금 보고 있는 행**이 있다 — 왼쪽 마디로 남긴다.
    그게 없으면 "지금 보는 화면이 목록에서 사라졌다"는 고장이 된다. */
 .v2-pg-row.act::before { content: ''; position: absolute; left: -1px; top: 6px; bottom: 6px; width: 3px;
