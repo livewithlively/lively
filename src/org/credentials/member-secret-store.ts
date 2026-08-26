@@ -56,7 +56,13 @@ function toPublic(r: Row): MemberSecretPublic {
 }
 
 // OAuth 브로커 내부 슬롯 — 사용자 자격이 아니라 인프라(임시 PKCE verifier·DCR 클라정보). 공개 목록에서 숨긴다(#746 리뷰 #1).
-const HIDDEN_SCOPE_KEYS = ["oauth:pkce", "oauth:client"];
+//  ★ 정본이 여기 있는 이유(#1881 G3): 이 값은 **금고 슬롯의 예약 키**라 금고 모듈의 것이다. 예전엔 oauth-broker 가
+//   따로 선언하고 여기선 문자열을 다시 적었는데, 그러면 ① 두 곳이 어긋날 수 있고 ② 금고만 읽으면 되는 모듈
+//   (google-token-source 등)이 무거운 oauth-broker 를 끌어와 **import 순환**이 생긴다(실제로 났다).
+//   oauth-broker 는 이제 여기서 재수출한다 — 기존 import 경로는 그대로 산다.
+export const CLIENT_SCOPE = "oauth:client"; // owner=gateway — 조직 공용 OAuth 클라이언트(client_id/secret)
+export const PKCE_SCOPE = "oauth:pkce";     // owner=member — 콜백까지만 사는 1회용 verifier
+const HIDDEN_SCOPE_KEYS = [PKCE_SCOPE, CLIENT_SCOPE];
 
 export async function listMemberSecretsPublic(owner: string): Promise<MemberSecretPublic[]> {
   const r = await itemsPool.query("SELECT * FROM member_secret WHERE owner=$1 AND scope_key <> ALL($2) ORDER BY kind, scope_key", [owner, HIDDEN_SCOPE_KEYS]);

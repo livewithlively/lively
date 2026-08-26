@@ -15,6 +15,7 @@ import { itemsPool } from "../db/client.js";
 import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js";
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
+import { resolveGoogleTokenSource, googleVaultReader, isGoogleCollectorSystem } from "../org/credentials/google-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
 export interface ConnectorField {
@@ -155,6 +156,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "client_id", env: "GMAIL_CLIENT_ID", secret: false, required: true, label: "OAuth Client ID", hint: "xxxx.apps.googleusercontent.com" },
       { key: "client_secret", env: "GMAIL_CLIENT_SECRET", secret: true, required: true, label: "OAuth Client Secret" },
       { key: "refresh_token", env: "GMAIL_REFRESH_TOKEN", secret: true, required: true, label: "Refresh Token", hint: "gmail.readonly scope" },
+      { key: "token_source", env: "GMAIL_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Google 연결]로 저장한 자격 · 비우면 위 세 칸(Client ID/Secret/Refresh Token)을 씁니다" },
       { key: "query", env: "GMAIL_QUERY", secret: false, label: "검색 쿼리", hint: "Gmail 검색식 (예: -from:noreply, 비우면 전체)" },
     ],
   },
@@ -173,6 +175,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "client_id", env: "GDRIVE_CLIENT_ID", secret: false, required: true, label: "OAuth Client ID", hint: "xxxx.apps.googleusercontent.com" },
       { key: "client_secret", env: "GDRIVE_CLIENT_SECRET", secret: true, required: true, label: "OAuth Client Secret" },
       { key: "refresh_token", env: "GDRIVE_REFRESH_TOKEN", secret: true, required: true, label: "Refresh Token", hint: "drive.readonly scope" },
+      { key: "token_source", env: "GDRIVE_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Google 연결]로 저장한 자격 · 비우면 위 세 칸(Client ID/Secret/Refresh Token)을 씁니다" },
       { key: "folders", env: "GDRIVE_FOLDERS", secret: false, label: "폴더 id", hint: "이 폴더들만 (쉼표구분, 비우면 전체 Drive)" },
     ],
   },
@@ -363,6 +366,20 @@ async function loadConnectorConfig(
     if (r) {
       if (r.warning) console.warn(`notion token_source: ${r.warning}`);
       out.token = r.token;
+    }
+  }
+  // ── 구글 토큰 출처(#1881 G3) — 같은 규약이되 **액세스 토큰이 아니라 갱신 자격 3칸**을 채운다.
+  //  구글 액세스 토큰은 1시간짜리라 커넥터가 들고 있으면 곧 죽는다. google-auth.ts 의 교환·만료캐시 경로는
+  //  그대로 두고 값의 출처만 붙여넣기 → 금고로 옮긴다(googleAccessToken 무변경).
+  if (isGoogleCollectorSystem(system) && out.token_source) {
+    const r = await resolveGoogleTokenSource(out.token_source, system, googleVaultReader);
+    if (r) {
+      if (r.warning) console.warn(`${system} token_source: ${r.warning}`);
+      // 명시한 출처가 못 풀리면 **비운다** — 붙여넣기 값으로 조용히 떨어지면 "연결자가 나갔는데 옛 자격으로
+      //  계속 긁는" 꼴이 된다(슬랙·노션과 같은 규약).
+      out.client_id = r.client_id;
+      out.client_secret = r.client_secret;
+      out.refresh_token = r.refresh_token;
     }
   }
   return out;
