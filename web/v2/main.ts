@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, type SideInstance } from './side.js';
+import { bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
@@ -251,6 +251,8 @@ export async function bootV2(): Promise<void> {
       toggleRail();
       syncRailBtn();
     });
+    //  즐겨찾기는 [프로젝트] 착지를 정하는 재료다(#2061) — 구역에 들어간 뒤 당기면 첫 진입이 답을 못 기다린다. 미리 당겨 둔다.
+    loadFavLists();
     mountRail(railEl!, {
       counts: railCounts,
       activeKey: () => activeKey(),
@@ -974,6 +976,19 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         void renderRoute(tab);
         return;
       }
+      //  스코프 없는 프로젝트 주소(#/app/projects2)로 들어오면 구역 첫 화면으로 보낸다(#2061) — 레일을 눌러 오든
+      //   새로고침·북마크로 오든 같은 자리에 서야 한다. replace 라 뒤로가기에 빈 칸을 남기지 않는다.
+      //   즐겨찾기를 아직 모르면 projLandingRoute 가 이 주소를 그대로 돌려주므로 아무 일도 안 일어난다(무한루프 없음).
+      if (segs[1] === 'projects2' && !segs[2]) {
+        const landing = projLandingRoute();
+        if (landing !== '#/app/projects2') {
+          tab.route = landing;   // ⚠ renderRoute 는 location 이 아니라 tab.route 를 읽는다 — 이걸 안 바꾸면 같은 주소로 다시 들어와 무한루프다
+          if (tabsApi?.current() === tab && location.hash !== landing) { suppressHash++; location.replace(location.pathname + location.search + landing); }
+          tabsApi?.routed(tab);
+          void renderRoute(tab);
+          return;
+        }
+      }
       const a = appByKey(segs[1]);
       if (a) noteAppUse(a.key);   // 홈 한 줄이 읽는 '최근에 연 앱'(#1954)
       const rest = segs.slice(2).join('/');
@@ -1397,7 +1412,9 @@ function openAppKeys(): Set<string> {
   return out;
 }
 function sectionRoute(sec: RailSection): string {
-  return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? '#/app/projects2' : sec === 'wiki' ? '#/app/knowledge' : '#/';
+  //  [프로젝트]는 구역 첫 화면이 **즐겨찾기 맨 위 리스트**다(#2061) — 전체 프로젝트 보드는 매일 여는 자리가 아니다.
+  //   주소로 착지시키는 이유: 이 사이드바의 그 줄도 눌린 것으로 서고(projScopeKey), 새로고침·북마크도 같은 자리로 돌아온다.
+  return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? projLandingRoute() : sec === 'wiki' ? '#/app/knowledge' : '#/';
 }
 /** ☰ 의 뜻이 바뀌었다(사이드바 접기 → 레일 여닫기) — 툴팁·aria 도 그 뜻으로 맞춘다. */
 function syncRailBtn(): void {
