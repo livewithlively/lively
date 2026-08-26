@@ -1179,13 +1179,17 @@ async function gatherStatus() {
     node: null,
   };
   try {
-    const { nodeCommands: _n, nodeStatus, nodeConnectedFrom } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    const { nodeCommands: _n, nodeStatus, nodeConnectedFrom, nodeSleepInfoFrom } = await import(new URL("./cmd-node.mjs", import.meta.url));
     if (typeof nodeStatus === "function") st.node = nodeStatus();
     // '붙어 있는가' 축(#1541) — 프로세스가 돌아도 게이트웨이엔 오프라인일 수 있다(절전 뒤 좀비, 실측 3시간·나흘).
     //  게이트웨이에 못 물으면 null(모름) — false 로 눕히면 정상 노드를 '끊김' 이라 거짓말한다.
     if (st.node?.registered && st.node.id && token() && gateway() && typeof nodeConnectedFrom === "function") {
-      try { st.node.connected = nodeConnectedFrom(await api("/api/ui/nodes", { timeoutMs: 5000 }), st.node.id); }
-      catch { st.node.connected = null; }
+      try {
+        const payload = await api("/api/ui/nodes", { timeoutMs: 5000 });
+        st.node.connected = nodeConnectedFrom(payload, st.node.id);
+        // #1849 — "붙어 있나" 옆의 **왜 안 붙어 있나**. 서버가 만든 문구를 그대로 나른다(문구 출처 단일화).
+        if (typeof nodeSleepInfoFrom === "function") st.node.sleep = nodeSleepInfoFrom(payload, st.node.id);
+      } catch { st.node.connected = null; }
     }
   } catch { /* 모듈 없음(부트스트랩 직후) 또는 조회 실패 — node 는 null 로 남는다 */ }
   try {
@@ -1513,6 +1517,8 @@ async function cmdStatus(opts) {
   if (st.node?.registered) {
     const run = st.node.running === null ? dim("? 실행") : st.node.running ? green("✓ 실행 중") : yellow("정지됨");
     say(`  노드          ${st.node.id || dim("(id 미상)")}   ${run}   ${st.node.daemon ? green("✓ 자동 시작") : dim("– 자동 시작")}`);
+    // #1849 — 잠자기로 끊기는 중이면 여기서 말한다. 프로세스가 '실행 중' 이어도 자는 PC 는 세션을 못 연다.
+    if (st.node.sleep?.note) say(`                ${yellow("⚠ " + st.node.sleep.note)}`);
   }
   if (st.project) { say(""); renderProjectStatus(st.project); }
   say("");

@@ -39,13 +39,15 @@ export async function createAppInstance(appId, opts) {
         throw new Error('앱 인스턴스를 만들지 못했습니다');
     return remember(out.instance);
 }
-/** 기존 세션 route를 ai-session builtin AppInstance로 멱등 등록한다. 화면 렌더 실패와 결합하지 않게 호출자가 오류를 처리한다. */
+/** 기존 세션 route를 ai-session builtin AppInstance로 멱등 등록한다. 화면 렌더 실패와 결합하지 않게 호출자가 오류를 처리한다.
+ *  ⚠ 이름을 **모르면 안 보낸다**(#2022) — 서버는 conflict 시 title 을 COALESCE 로 덮으므로, 세션 목록이 늦은
+ *   한 판이 자리표시자('AI 세션')를 저장된 멀쩡한 이름 위에 굳혀 버린다. 안 보내면 이전 값이 그대로 산다. */
 export function ensureSessionAppInstance(appId, sessionId, opts) {
     return createAppInstance(appId || 'ai-session', {
         projectId: opts?.projectId ?? null,
         subjectKind: 'session',
         subjectRef: sessionId,
-        title: opts?.title || 'AI 세션',
+        ...(opts?.title ? { title: opts.title } : {}),
         execution: opts?.execution,
     });
 }

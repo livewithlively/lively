@@ -7,6 +7,7 @@
 //     바이트 그대로 릴레이한다 — terminal-pty 와 동일 원칙.)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { WorkerRunSnapshot } from "../apps/worker-host.js";
+import type { KeepAwakeStatus } from "./keep-awake.js";   // #1849 — hello 로 보고하는 잠자기 억제 상태(타입만)
 
 export const NODE_WS_PATH = "/node/ws";
 export const PROTO_VER = 1;
@@ -60,9 +61,15 @@ export interface NodeResources {
 //  harnesses = **이 PC 에서 실제로 세션을 띄울 수 있는 하네스**(#1713) = 이 번들의 카탈로그 ∩ PATH 에 있는 실행 파일.
 //            caps 와 같은 이유로 노드가 직접 답한다 — 게이트웨이는 남의 PC 에 무엇이 깔렸는지 알 방법이 없고,
 //            번들이 낡았는지도 이 값이 스스로 말한다(옛 빌드는 이 필드를 안 보낸다 → nodeHarnesses 가 기준선으로).
+//  keepAwake = **이 PC 가 자지 않게 붙잡고 있나**(#1849). 노드가 붙어 있어야 원격 세션이 열리는데, 노트북은
+//            전원이 꽂혀 있어도 유휴 잠자기에 들어가 링크가 끊긴다(실측: 1시간에 한 번, 60초씩만 연결).
+//            에이전트가 스스로 억제를 걸고 그 결과를 여기로 보고한다 — 자동으로 못 막는 구멍(gaps: 뚜껑 닫기·
+//            배터리·modern standby)까지 함께 보내야 화면이 "왜 아직 끊기는지"와 "무엇을 더 해야 하는지"를 말한다.
+//            구 번들은 이 필드를 안 보낸다 → '모름'(undefined)이지 '안 걸림'이 아니다(그 구분은 UI 가 해야 한다).
 export interface HelloMsg {
   t: "hello"; ver: number; node: string; platform: string;
   agentVer?: string; caps?: string[]; harnesses?: string[]; host?: string; hasDocker?: boolean;
+  keepAwake?: KeepAwakeStatus;
 }
 export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources }
 export interface ResMsg { t: "res"; id: number; ok: boolean; data?: unknown; error?: string }

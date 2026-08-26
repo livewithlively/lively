@@ -32,7 +32,7 @@ import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, SEEN_MAX } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -135,7 +135,11 @@ async function refreshNodeStatus(cli) {
   const n = r.result?.node;
   if (!r.ok || !n) { renderTray(); send(IPC.STATE, state); return; }   // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
   // nodeConnected: 게이트웨이가 보는 연결 여부(true/false/null=모름). running 과 다른 축 — 프로세스가 돌아도 안 붙어 있을 수 있다.
-  patchState({ nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null, nodeConnected: typeof n.connected === "boolean" ? n.connected : null });
+  // nodeSleepNote(#1849): 게이트웨이가 연결 이력으로 판정한 "왜 안 붙어 있나"(잠자기 추정). 없으면 null(모름).
+  //  ⚠ 문구는 서버가 만든다 — 앱이 지으면 웹·CLI 와 다른 말을 하게 된다.
+  patchState({ nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null,
+    nodeConnected: typeof n.connected === "boolean" ? n.connected : null,
+    nodeSleepNote: (n.sleep && typeof n.sleep.note === "string" && n.sleep.note) ? n.sleep.note : null });
   renderTray(); send(IPC.STATE, state);
 }
 /** 상태 일부를 바꾸면 `ready` 도 같이 다시 잰다 — 이걸 빼먹은 자리가 하나라도 있으면 트레이·창이 옛 판정으로 움직인다. */
@@ -548,6 +552,7 @@ async function connectNotifyStream() {
   if (!token) { scheduleStreamRetry(); return; }
   const ctl = new AbortController();
   streamCtl = ctl;
+  let openedAt = 0;
   try {
     const res = await fetch(`${gw}/api/ui/notify/stream`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
@@ -555,7 +560,8 @@ async function connectNotifyStream() {
     });
     // 구 게이트웨이엔 이 표면이 없다(404) — 조용히 폴링만 쓴다(그래서 폴링을 없애지 않았다).
     if (!res.ok || !res.body) { scheduleStreamRetry(); return; }
-    streamAlive = true; streamTries = 0;
+    streamAlive = true;
+    openedAt = Date.now();   // #2041 — 되돌리기는 '붙었나'가 아니라 '붙어서 살았나'로(아래 finally)
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -578,6 +584,9 @@ async function connectNotifyStream() {
   finally {
     streamAlive = false;
     if (streamCtl === ctl) streamCtl = null;
+    // ⚠ #2041 — 붙었다는 사실이 아니라 **버틴 시간**으로 백오프를 되돌린다. 붙자마자 끊는 서버에
+    //  성공으로 되돌리면 초당 한 번씩 재접속한다(웹 셸에서 20초에 19번 실측).
+    if (stableStream(openedAt ? Date.now() - openedAt : 0)) streamTries = 0;
     scheduleStreamRetry();
   }
 }

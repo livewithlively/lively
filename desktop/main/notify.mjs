@@ -241,3 +241,18 @@ export function reconnectDelay(attempt) {
   const n = Math.max(0, Number(attempt) || 0);
   return Math.min(30_000, 1_000 * Math.pow(2, Math.min(n, 5)));   // 1s 2 4 8 16 32→30s 상한
 }
+
+/**
+ * 방금 끊긴 스트림이 **백오프를 되돌려도 되는 연결이었나** (#2041).
+ *
+ * ⚠ 웹 셸에서 같은 코드 모양이 실제로 폭주를 냈다(브라우저 실측 2026-08-26): 붙는 데 성공한 순간
+ *  재시도 횟수를 0 으로 되돌렸더니, 서버가 붙자마자 끊는 상황에서 **20초에 19번** 재접속했다
+ *  (연결 성공 → 즉시 종료 → 백오프 0 → 1초 뒤 또). 지수 백오프를 써 놓고 매번 첫 칸으로 돌아간 것이다.
+ *  그래서 '붙었나'가 아니라 **'붙어서 얼마나 살았나'**로 판정한다 — 잠깐 살다 죽은 연결은 실패의 한 종류다.
+ *
+ * ⚠ 같은 규칙이 웹에도 한 벌 있다(web/v2/sse.ts `stableConnection`, 같은 값). desktop/ 은 tsc 빌드를
+ *  타지 않아 그 컴파일 결과를 import 할 수 없다 — 고칠 땐 둘 다 본다.
+ */
+export function stableStream(connectedMs) {
+  return (Number(connectedMs) || 0) >= 10_000;
+}

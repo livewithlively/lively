@@ -12,7 +12,7 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
@@ -30,6 +30,7 @@ import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, live
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
+import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
@@ -174,6 +175,9 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       // runtime — 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만). 화면이 컨트롤 노출을 이걸로 정한다.
       harnesses: HARNESSES.map((h) => ({
         key: h.key, label: h.label, bin: h.bin, provider: h.provider,
+        // login — 이 AI 에 '로그인' 개념이 있나(#1884, profiles.ts HARNESS_CRED 표). 세션 폼의 [내 계정 로그인]이
+        //  이걸로 선택지를 만든다. 종전엔 그 버튼이 claude 고정이라 codex 사용자가 눌러도 claude 세션이 떴다.
+        login: harnessHasCredential(h.key),
         hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags,
         effortsByModel: h.effortsByModel,
         runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },
@@ -607,7 +611,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (!nodeOpenTo(n, idOf(userOf(req)))) {
       throw new HttpError(403, "본인이 등록한 노드가 아니고 공유 노드도 아닙니다 — 관리자가 공유 노드로 지정한 노드만 함께 쓸 수 있습니다");
     }
-    if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
+    // #1849 — 새 세션을 못 여는 것도 같은 뿌리다(실측: 사용자는 "세션도 안 열림"으로 겪었다).
+    //  왜 오프라인인지 추정이 서면 함께 말한다 — 이 자리가 사용자가 실제로 막히는 지점이다.
+    if (!nodeOnline(nodeId)) {
+      const extra = await nodeOfflineNote(nodeId).catch(() => null);
+      throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)" + (extra ? `\n\n${extra}` : ""));
+    }
   };
 
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
@@ -841,7 +850,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (st.node_id) {
       const nodeId = st.node_id;
       if (nodeSessionsFor(me).some((x) => x.node.id === nodeId && x.id === id)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
-      if (!nodeOnline(nodeId)) throw new HttpError(409, "그 세션이 있던 컴퓨터(노드)가 지금 연결돼 있지 않아 복원할 수 없습니다. 노드가 켜지면 다시 시도하세요.");
+      // #1849 — "연결돼 있지 않습니다"에서 끝내지 않는다: 게이트웨이는 그 노드의 연결 이력을 갖고 있으므로
+      //  **왜 그런지(잠자기 추정)와 무엇을 하면 되는지**까지 말할 수 있다. 진단 조회가 실패해도 원래 문구는 나간다.
+      if (!nodeOnline(nodeId)) {
+        const extra = await nodeOfflineNote(nodeId).catch(() => null);
+        throw new HttpError(409, "그 세션이 있던 컴퓨터(노드)가 지금 연결돼 있지 않아 복원할 수 없습니다. 노드가 켜지면 다시 시도하세요."
+          + (extra ? `\n\n${extra}` : ""));
+      }
       // 라이브 경합은 **노드에 묻는다**(gone op) — 스냅샷은 재시작 직후·생성 직후 비어 있고 뷰어별 필터라(admin) 살아 있는 세션을
       //  놓칠 수 있다. 확답을 못 받으면 복원하지 않는다(모르면 같은 세션을 둘로 만들지 않는다 — #835 '확답 only').
       const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);

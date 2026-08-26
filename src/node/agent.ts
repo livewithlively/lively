@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";   // #1713 자가 갱신 — 받은 tar.gz 해제
 import { linkIsStale, LINK_CHECK_MS, LINK_STALE_MS } from "./link-liveness.js";   // #1541 — 클라이언트 쪽 생존 감시
 import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연결 지연(두 구간)
+import { startKeepAwake } from "./keep-awake.js";        // #1849 — 이 PC 가 자지 않게 붙잡는다
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,
@@ -423,6 +424,8 @@ function connect(): void {
         // agentVer = 이 번들의 지문 · caps = **이 빌드가 실제로 구현한 op**(protocol.NODE_OPS — 목록과 타입이 한 출처).
         //  둘 다 없으면 게이트웨이는 "이 노드가 무엇인지·무엇을 하는지" 알 방법이 없어, 미지원을 실패와 구별 못 한다.
         ...(AGENT_VER ? { agentVer: AGENT_VER } : {}), caps: [...NODE_OPS], harnesses,
+        // #1849 — 잠자기 억제 결과. 못 막는 구멍(gaps)까지 보내야 화면이 "왜 아직 끊기나"를 말할 수 있다.
+        keepAwake: keepAwake.status,
       } satisfies NodeToGwMsg));
       await pushState(true);
       pusher = setInterval(() => { void pushState(); }, STATE_PUSH_MS);
@@ -481,10 +484,18 @@ function connect(): void {
   ws.once("error", (err) => { logger.warn({ err: (err as Error)?.message }, "노드 WSS 오류"); try { ws.terminate(); } catch { /* noop */ } });
 }
 
+// 잠자기 억제(#1849) — **connect() 보다 먼저** 건다: 이 PC 가 자면 아래 재연결 루프가 통째로 무의미해진다.
+//  실패는 비치명(억제는 부가 기능이지 노드 동작의 전제가 아니다) — 상태만 남기고 그대로 진행한다.
+//  hello 로 게이트웨이에 보고되고(HelloMsg.keepAwake), 게이트웨이가 CLI·웹·앱에 그대로 흘린다.
+const keepAwake = startKeepAwake({
+  onLog: (level, msg, extra) => { if (level === "warn") logger.warn(extra ?? {}, msg); else logger.info(extra ?? {}, msg); },
+});
 // 종료 시 attach pty 일괄 회수(#687 — 게이트웨이와 동일 불변식: 자식이 init 로 재부모화돼 PTY 점유하지 않게).
+//  잠자기 억제도 같이 푼다 — 자식은 부모 pid 를 감시해 스스로도 끝나지만(계약 ②), 여기서 끊으면 즉시 풀린다.
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.once(sig, () => {
     try { killAttachedPtys(); } catch { /* noop */ }
+    try { keepAwake.stop(); } catch { /* noop */ }   // #1849 — 억제도 즉시 푼다(자식은 스스로도 끝난다)
     void nodeWorkerHost.shutdown().finally(() => setTimeout(() => process.exit(0), 50));
     setTimeout(() => process.exit(0), 1_500).unref();
   });
