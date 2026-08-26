@@ -201,17 +201,25 @@ export const welcomeCapabilities: Capability[] = [
       const { listSources, countSources } = await import("../../v6/source-store.js");
       const { listCategories } = await import("../../v6/category-store.js");
 
-      const [member, liv, entries, total, cats] = await Promise.all([
+      // AI 가 이어져 있나 — **분석을 누르기 전에** 알아야 한다. 안 그러면 사람이 «읽어 주세요» 를 누르고
+      //  나서야 402 를 본다. 판정은 실제로 리스가 붙는지로 한다(leaseEnvFor) — 자격 행의 존재만 보면
+      //  비활성 멤버·복호화 실패에서 화면과 실제가 갈린다.
+      const { leaseEnvFor } = await import("../../node/task-scheduler.js");
+
+      const [member, liv, entries, total, cats, aiEnv] = await Promise.all([
         getMember(userId),
         getLivProfile(userId),
         listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>),
         countSources({}, null).catch(() => 0),
         listCategories(undefined, null).catch(() => [] as Array<Record<string, unknown>>),
+        leaseEnvFor({ requester: userId, harness: "claude" }).catch(() => undefined),
       ]);
       const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
       return {
         done: !!liv.welcome?.done_at,
         done_at: liv.welcome?.done_at ?? null,
+        // 이 사람의 AI 가 이어졌나(분석이 실제로 돌 수 있나). 값은 절대 싣지 않는다 — 여부만.
+        ai_ready: !!aiEnv,
         profile: {
           display_name: member?.display_name ?? null,
           nickname: member?.nickname ?? null,
@@ -248,6 +256,20 @@ export const welcomeCapabilities: Capability[] = [
       const turnId = `t${crypto.randomBytes(8).toString("hex")}`;
       const { spawnTaskSession } = await import("../../node/tasks.js");
       const { livTurnArgs } = await import("../../org/delivery/liv-turn.js");
+
+      // ── 자격 리스 ── 이 사람의 AI 구독으로 돈다. 위탁 태스크와 **같은 함수**를 쓴다(leaseEnvFor):
+      //  owner 키(`member:<id>`)·active 멤버 검사·fail-closed 가 이미 그 안에 있다. 여기서 다시 짜면
+      //  그 셋 중 하나를 빠뜨리게 되고, 빠뜨려도 아무 오류가 안 난다 — 리스가 조용히 안 붙을 뿐이다(#1289).
+      const { leaseEnvFor } = await import("../../node/task-scheduler.js");
+      const env = await leaseEnvFor({ requester: userId, harness: "claude" }).catch(() => undefined);
+
+      // ⚠ 자격이 없으면 **미리 막는다.** 격리 컨테이너엔 공유 ~/.claude 폴백이 없어(#1014) 토큰 없이 띄우면
+      //  fast-fail 이 아니라 **hang** 한다 — 사람은 도는 줄 알고 기다리다 5분 뒤 무출력으로 죽는 걸 본다(#1101).
+      //  무엇이 없는지 여기서 그대로 말해 주는 편이 낫다. 화면은 이 402 를 받아 AI 잇기로 안내한다.
+      if (!env) {
+        throw new HttpError(402, "AI 를 아직 잇지 않으셨어요 — 분석은 본인 AI 구독으로 돕니다. Claude 를 이어 주세요");
+      }
+
       try {
         await spawnTaskSession({
           user, taskId: turnId, rootKey: "personal", subpath: "liv",
@@ -255,6 +277,7 @@ export const welcomeCapabilities: Capability[] = [
           // 온보딩 분석은 **한 번 묻고 끝**이다 — 이어가는 대화가 아니라 새 세션으로 띄운다.
           extraFlags: livTurnArgs({ sessionId: crypto.randomUUID(), resume: false }),
           bypassPermissions: false,   // ⚠ 리브와 같은 안전선. 승인 우회는 여기서도 쓰지 않는다.
+          env,
         });
       } catch (e) {
         throw new HttpError(503, `AI 분석을 시작하지 못했습니다 — ${(e as Error).message}`);

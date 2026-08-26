@@ -3,6 +3,7 @@
 // red 입증은 mutation(신규 파일이라 '변경 전 코드'가 없다).
 // 실행: npm run build && node dist/capabilities/delivery/welcome.test.js
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt } from "./welcome.js";
 
 let pass = 0, fail = 0;
@@ -244,6 +245,37 @@ t("㉞ 파일이 적으면 자르지 않고 '더 있습니다' 도 안 붙인다
   assert.match(p, /- b\.csv/);
   assert.doesNotMatch(p, /더 있습니다/);
   assert.match(p, /이 사람이 하는 일: 제품·기획/);
+});
+
+// ── 자격 리스 배선 ──────────────────────────────────────────────────────────
+//  이 셋은 **소스를 읽어** 계약을 못박는다. 흔치 않은 형태지만 여기서는 그게 맞다:
+//   리스가 안 붙어도 **아무 오류가 안 난다**(#1289 — 등록해도 영영 안 붙던 결함이 last_used_at
+//   null 로만 드러났다). 격리 컨테이너에선 토큰 없이 띄우면 fast-fail 이 아니라 hang 이라(#1014·#1101)
+//   증상은 "5분 뒤 무출력 사망"이다. 런타임 테스트로 잡으려면 DB·컨테이너·벤더 인증이 다 필요하다.
+//   그래서 **부르는가·넘기는가**를 정적으로 잰다. 리팩터가 이 줄을 지우면 여기서 걸린다.
+const SRC = readFileSync(new URL("./welcome.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+
+t("㉟ 분석은 leaseEnvFor 로 그 사람 자격을 싣는다 — 손으로 다시 짜지 않는다", () => {
+  assert.match(SRC, /leaseEnvFor\(\{ requester: userId, harness: "claude" \}\)/,
+    "leaseEnvFor 호출이 없다 — owner 키·active 검사·fail-closed 를 통째로 잃는다");
+  // spawnTaskSession 호출부에 env 가 실제로 실려야 한다. 부르기만 하고 안 넘기면 아무 일도 안 일어난다.
+  const spawn = SRC.slice(SRC.indexOf("await spawnTaskSession({"));
+  assert.match(spawn.slice(0, 600), /\n\s+env,/, "리스를 구해 놓고 spawnTaskSession 에 안 넘겼다");
+});
+
+t("㊱ 자격이 없으면 띄우지 않고 402 로 막는다 — 무출력 hang 대신", () => {
+  assert.match(SRC, /if \(!env\) \{[\s\S]{0,200}HttpError\(402/,
+    "자격 없이 spawn 하면 5분 무출력 뒤 죽는다(#1101) — 미리 막아야 한다");
+  // 막는 자리가 spawn **앞**이어야 의미가 있다.
+  assert.ok(SRC.indexOf("HttpError(402") < SRC.indexOf("await spawnTaskSession({"),
+    "402 가드가 spawn 뒤에 있다 — 이미 띄운 뒤라 아무것도 못 막는다");
+});
+
+t("㊲ 조회는 ai_ready 를 주되 토큰 값은 절대 싣지 않는다", () => {
+  assert.match(SRC, /ai_ready: !!aiEnv/, "화면이 '누르기 전에' 알 방법이 없어진다");
+  // 리스 env 는 {CLAUDE_CODE_OAUTH_TOKEN: '<토큰>'} 이다 — 그걸 통째로 응답에 실으면 토큰 유출이다.
+  assert.doesNotMatch(SRC, /(ai|lease|env)\w*:\s*aiEnv\b/,
+    "리스 env 를 응답에 그대로 실었다 — 그 안에 토큰 원문이 들어 있다");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

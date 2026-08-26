@@ -125,3 +125,14 @@
 .ob-drop.ob-has{padding:18px 20px;border-style:solid}
 .ob-drop-t{display:block;font-size:15px;font-weight:700;color:var(--ink)}
 .ob-drop-d{display:block;font-size:12.5px;color:var(--muted)}
+
+/* AI 잇기 — setup-token 붙여넣기 (#1813). 토큰은 화면에 남기지 않는다(type=password). */
+.ob-tok{display:flex; flex-direction:column; gap:9px; margin:2px 0 16px}
+.ob-tok ol{margin:0; padding-left:19px; font-size:13.5px; color:var(--ink-sub); line-height:1.85}
+.ob-tok code{background:var(--line-row); border-radius:5px; padding:2px 7px; font-size:12.5px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
+.ob-tok input{border:1px solid var(--line); border-radius:9px; padding:11px 13px; outline:none;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px}
+.ob-tok input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
+.ob-tok .ob-err{font-size:13px; color:#C0392B; min-height:1px}
+.ob-tok .ob-ok{font-size:13px; color:var(--mint-text)}
