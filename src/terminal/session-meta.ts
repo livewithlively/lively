@@ -14,6 +14,8 @@ export interface DeadSessionStateLike {
   owner: string;
   label?: string | null;
   project_id?: number | null;
+  /** 실행 폴더 — **공유 판정의 축**이다(#2116). project_id 가 아니다, 아래 deadSessionMeta 머리말 참조. */
+  dir?: string | null;
   harness?: string | null;
   exited_at?: string | null;
   exit_reason?: string | null;
@@ -47,17 +49,25 @@ export type DeadSessionMetaResult =
  *
  * 노출 범위는 **복원 권한과 같은 축**이다: 소유자·admin 은 전부 보고 되살릴 수 있고, 프로젝트 세션은 전원에게
  *  보이되(#452 공동 세션) 되살리는 건 소유자 몫이다(canRestore=false → 화면이 '소유자만 열기'로 안내).
+ *
+ * ⭐ **'프로젝트 세션인가'는 `dir` 로 잰다 — `project_id` 가 아니다**(#2116, 2026-08-26 실측).
+ *  이 함수만 `project_id > 0` 을 보고 나머지 게이트는 전부 cwd 를 봤다(`canSeeSession`·`canAttach`·
+ *  `nodeSessionVisible`). 그 어긋남 때문에 **남의 개인 세션 링크를 열면 "되살릴 수 있음"이 떴다** — 정작
+ *  들어가려 하면 403 인 세션인데. 개인 세션 홈(`<personal>/sessions/…`)에서 도는데 project_id 만 붙은 세션이
+ *  268건 중 104건이라 드문 일도 아니었다. 재는 자를 하나로 맞춘다: **공유루트의 프로젝트 폴더에서 도는가.**
+ *  ⚠ 판정은 주입한다(sharedByFolder) — 이 모듈은 순수하게 두고 fs 규약은 호출자(project-fs)가 안다.
  */
 export function deadSessionMeta(
   id: string,
   st: DeadSessionStateLike | null | undefined,
   viewerId: string,
   isAdmin: boolean,
+  sharedByFolder: (dir: string) => boolean,
 ): DeadSessionMetaResult {
   if (!st || !st.owner) return { kind: "none" };
   const mine = st.owner === viewerId || isAdmin;
   const projectId = Number(st.project_id ?? 0) || 0;
-  if (!mine && projectId <= 0) return { kind: "forbidden" };
+  if (!mine && !sharedByFolder(st.dir || "")) return { kind: "forbidden" };
   return {
     kind: "ok",
     body: {
