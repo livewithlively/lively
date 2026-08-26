@@ -46,11 +46,17 @@ const HOST_EFFECTS_MODE = process.env.LIVELY_HOST_EFFECTS !== "deny"
 const SANDBOX_EXEC_ALLOW = new Set(["where", "command", "hostname", "whoami"]);
 const inlineUnquote = (value) => String(value || "").replace(/^"|"$/g, "");
 const inlineCommandName = (command) => inlineUnquote(command).replace(/^.*[\\/]/, "").replace(/\.exe$/i, "").toLowerCase();
+// ★ 심링크를 푼 형태도 함께 본다 — 공용 포트(kit/setup/host-effects.mjs inside)와 **같은 계약**이다.
+//  안 그러면 macOS 에서 모든 임시경로가 '샌드박스 밖' 으로 판정된다: tmpdir()=/var/folders/… 인데 그 안
+//  폴더의 realpath 는 /private/var/folders/… 이고, resolve() 는 심링크를 안 푼다 → git 이 막힌다.
+//  리눅스 CI(/tmp)에서는 안 나서 **CI 초록·맥 빨강**이 됐다. 자세한 실측은 공용 포트 주석 참조.
+const inlineRealish = (p) => { try { return realpathSync(p); } catch { return p; } };
+const inlinePathForms = (p) => { const r = resolve(p); const real = inlineRealish(r); return real === r ? [r] : [r, real]; };
 const inlineInside = (file, root) => {
   if (!file || !root) return false;
-  const norm = (p) => process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p);
-  const f = norm(file), r = norm(root);
-  return f === r || f.startsWith(r.endsWith(sep) ? r : r + sep);
+  const key = (p) => process.platform === "win32" ? String(p).toLowerCase() : String(p);
+  const fs_ = inlinePathForms(file).map(key), rs = inlinePathForms(root).map(key);
+  return fs_.some((f) => rs.some((r) => f === r || f.startsWith(r.endsWith(sep) ? r : r + sep)));
 };
 const inlineResolvedCommand = (command) => {
   const raw = inlineUnquote(command);
