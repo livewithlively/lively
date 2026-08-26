@@ -14,7 +14,7 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
-import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_DEFAULT_SERVICES, googleConsentTier, consumesUnverifiedUserCap, googleOfferedServices, isGoogleServiceOffered, googleScopeCovers, type GoogleService } from "../org/credentials/google-oauth.js";
+import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_DEFAULT_SERVICES, googleConsentTier, consumesUnverifiedUserCap, googleOfferedServices, isGoogleServiceOffered, googleScopeCovers, GOOGLE_SERVICE_SCOPES, type GoogleService } from "../org/credentials/google-oauth.js";
 import { startGoogleConsent, completeGoogleInstall, googleReady } from "../org/credentials/oauth-broker.js";
 
 /** 수집기 인스턴스 — 서비스마다 하나(캘린더는 수집 대상이 아니다: 일정은 자료가 아니라 도구 면에서 읽는다). */
@@ -23,6 +23,38 @@ export const GOOGLE_COLLECTORS = [
   { service: "gmail" as const, preset: "gmail", instance: "lively-gmail", label: "Gmail — 팀 메일" },
 ];
 export type GoogleCollectService = (typeof GOOGLE_COLLECTORS)[number]["service"];
+
+/**
+ * ★ **수집기가 없는 '도구 전용' 서비스.** 일정은 자료가 아니다 — 모아 두면 낡고, 필요한 건 "지금 무슨 일정이
+ *  있나"라서 그때 읽는 게 맞다. 그래서 캘린더는 수집기를 만들지 않고 **동의 범위만** 넓힌다.
+ *
+ *  ⚠ 이걸 축으로 세우지 않았던 게 결함이었다(2026-08-27 상민님 "캘린더 안떠"). 카드가 수집기 목록으로만
+ *   그려져서 캘린더는 **칸이 아예 없었고**, [권한 넓히기]가 보내는 services 에도 안 실렸다 —
+ *   즉 화면 어디를 눌러도 캘린더 권한을 받을 길이 없었다. 도구는 등록돼 있는데(google_calendar_*)
+ *   그 도구를 켤 방법이 없는 상태 = ②·③ 과 같은 '막다른 길' 계열.
+ */
+export const GOOGLE_TOOL_ONLY_SERVICES = ["calendar"] as const;
+export type GoogleToolOnlyService = (typeof GOOGLE_TOOL_ONLY_SERVICES)[number];
+
+export function isGoogleToolOnlyService(s: string): s is GoogleToolOnlyService {
+  return (GOOGLE_TOOL_ONLY_SERVICES as readonly string[]).includes(s);
+}
+
+/** 동의로 요청할 서비스 = 고른 수집 서비스 + 고른 도구 전용 서비스. 수집기 생성 대상과 **다르다**. */
+export function splitGoogleServices(picked: readonly string[]): {
+  collect: GoogleCollectService[]; toolOnly: GoogleToolOnlyService[];
+} {
+  const collect: GoogleCollectService[] = [];
+  const toolOnly: GoogleToolOnlyService[] = [];
+  for (const p of picked) {
+    if (isGoogleToolOnlyService(p)) { if (!toolOnly.includes(p)) toolOnly.push(p); }
+    else if (GOOGLE_COLLECTORS.some((c) => c.service === p)) {
+      const c = p as GoogleCollectService;
+      if (!collect.includes(c)) collect.push(c);
+    }
+  }
+  return { collect, toolOnly };
+}
 
 function findInstance(all: CollectorView[], preset: string, instance: string): CollectorView | undefined {
   return all.find((c) => c.preset_key === preset && c.instance_key === instance);
@@ -96,6 +128,8 @@ export function googleCollectAction(p: {
 export interface GoogleCollectState {
   /** 서비스별 수집기 상태. */
   collectors: Array<{ service: GoogleCollectService; enabled: boolean; collector_id: number | null; token_source: string | null; scope_ok: boolean; offered: boolean }>;
+  /** 수집기가 없는 도구 전용 서비스(캘린더) — 동의 여부만 있다. */
+  tools: Array<{ service: GoogleToolOnlyService; scope_ok: boolean; offered: boolean }>;
   /** 이 관리자의 구글 연결(없으면 null) — 수집은 이 연결로 돈다. */
   connected: { kind: string; scope: string } | null;
   /** 동의를 시작할 수 있는가 — OAuth 클라이언트(직결) 또는 CP 릴레이가 있어야 한다. */
@@ -120,9 +154,15 @@ export async function googleCollectState(memberId: string): Promise<GoogleCollec
       offered: isGoogleServiceOffered(c.service),
     };
   });
+  // 도구 전용 서비스 — 수집기가 없으니 enabled 라는 개념이 없다. 있는 것은 "동의를 받았나" 뿐이다.
+  const tools = GOOGLE_TOOL_ONLY_SERVICES.map((service) => ({
+    service,
+    scope_ok: conn ? googleScopeCovers(conn.scope, service) : false,
+    offered: isGoogleServiceOffered(service),
+  }));
   const on = collectors.filter((c) => c.enabled).map((c) => (c.service === "gmail" ? "gmail" : "drive") as GoogleService);
   return {
-    collectors, connected: conn,
+    collectors, tools, connected: conn,
     ready: await googleReady().catch(() => false),
     consumes_user_cap: on.length > 0 ? consumesUnverifiedUserCap(on) : false,
     scope_tier: on.length > 0 ? googleConsentTier(on) : "non_sensitive",
@@ -131,7 +171,7 @@ export async function googleCollectState(memberId: string): Promise<GoogleCollec
 
 // enum 에서 gmail 을 지우지 않는다 — 이미 켜 둔 조직의 저장 요청이 zod 400 으로 튕기면 드라이브까지 못 고친다.
 //  거부는 스키마가 아니라 googleCollectAction 이 **사유와 함께** 한다(skipped).
-const SERVICES = z.array(z.enum(["drive", "gmail"])).describe("모을 서비스. 비우면 드라이브만. ★Gmail 은 1차 런칭 대상이 아니라 넣어도 켜지지 않는다.");
+const SERVICES = z.array(z.enum(["drive", "gmail", "calendar"])).describe("모을 서비스. 비우면 드라이브만. ★Gmail 은 1차 런칭 대상이 아니라 넣어도 켜지지 않는다. calendar 는 수집기가 없어 동의 범위만 넓힌다(도구 전용).");
 
 const orgGoogleCollect: Capability = {
   name: "org_google_collect", title: "구글 팀 자료 수집 상태",
@@ -175,16 +215,20 @@ const orgGoogleCollectSet: Capability = {
     }
 
     // 기본은 드라이브만 — Gmail 은 제한범위(CASA·100명 한도)라 **명시적으로 골라야** 켜진다(§9).
-    const want = new Set<GoogleCollectService>(
-      Array.isArray(i.services) && i.services.length > 0 ? (i.services as GoogleCollectService[]) : ["drive"],
-    );
+    // ★ 고른 것을 둘로 가른다: 수집기를 만들 것(collect) vs 동의 범위만 넓힐 것(toolOnly=캘린더).
+    //  캘린더를 수집기 축에 섞으면 없는 프리셋으로 upsert 를 시도하게 된다.
+    const rawPicked = Array.isArray(i.services) && i.services.length > 0 ? (i.services as string[]) : ["drive"];
+    const split = splitGoogleServices(rawPicked);
+    const want = new Set<GoogleCollectService>(split.collect);
 
     const conn = await memberGoogleConnection(actor);
     if (!conn) {
       // 아직 연결 전 — 여기서 동의를 시작한다(토글이 곧 연결). 고른 서비스만 요청한다(최소 권한).
       // 파는 것만 요청한다 — googleScopeString 이 한 번 더 막지만, 동의 화면에 뜨는 목록까지 정확해야
       //  사람이 자기가 무엇을 허용하는지 안다.
-      const services: GoogleService[] = googleOfferedServices([...want].map((s) => (s === "gmail" ? "gmail" : "drive")));
+      const services: GoogleService[] = googleOfferedServices(
+        [...[...want].map((s) => (s === "gmail" ? "gmail" : "drive") as GoogleService), ...split.toolOnly],
+      );
       const c = await startGoogleConsent(actor, services.length > 0 ? services : GOOGLE_DEFAULT_SERVICES, actor);
       return { ok: false, needs_connect: true, authorization_url: c.authorizationUrl, state: await googleCollectState(actor) };
     }
@@ -228,8 +272,10 @@ const orgGoogleCollectConnect: Capability = {
   handler: async (input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const raw = (input as { services?: unknown })?.services;
+    // 도구 전용(캘린더)도 그대로 실어 보낸다 — 여기서 떨구면 [권한 넓히기] 를 눌러도 캘린더가 안 열린다
+    //  (2026-08-27 "캘린더 안떠" 의 원인이 정확히 이 자리였다).
     const asked: GoogleService[] = Array.isArray(raw) && raw.length > 0
-      ? (raw as GoogleCollectService[]).map((s) => (s === "gmail" ? "gmail" : "drive"))
+      ? (raw as string[]).filter((s): s is GoogleService => s in GOOGLE_SERVICE_SCOPES)
       : GOOGLE_DEFAULT_SERVICES;
     // 안 파는 범위가 동의 화면에 뜨면 사람이 허용해 버리고, 그 순간 한도가 탄다(불가역).
     const services: GoogleService[] = googleOfferedServices(asked);
