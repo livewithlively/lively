@@ -27,8 +27,12 @@ const regenAgentsForList = async (listId: number | null) => {
   if (listId == null) return;
   try { for (const pid of await projectIdsInList(listId)) await regenAgents(pid); } catch (e) { console.error("[regenAgentsForList] fail list=" + listId + ":", e); }
 };
+// #2031 — 세션이 자기 프로젝트의 이름을 짓는다: 걸쇠(claimProjectName)와 이름 규칙(project-name)은 아래 capability 가 쓴다.
+import { projectNameFromAgent } from "../v6/project-name.js";
+import { AUTO_CREATED_MARK } from "../project/first-prompt-project.js";
+import { executionSessionProject } from "../v6/execution-session-store.js";
 import {
-  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, setProjectArchived, setProjectTrashed, getBoardFields,
+  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
@@ -392,7 +396,12 @@ const projectCreateV6: Capability = {
     if (input.follow_up != null && !(await getProjectRow(input.follow_up))) {
       throw new HttpError(400, `선행 프로젝트 #${input.follow_up} 가 없습니다`);
     }
-    const project = await createProject(input, writeCtx);
+    // 이름의 출처(#2031) — 본문에 자동 생성 표식이 있으면 그 이름은 **첫 지시를 자른 기계값**이다(훅
+    //  project-auto-bind 가 만드는 껍데기가 이 길로 온다). 표식으로 판정하는 이유는, 이미 배포된 구 훅이
+    //  이 필드를 안 보내도 같은 판정이 나와야 하기 때문이다 — 그 표식은 이미 세 곳이 공유하는 계약이다.
+    //  그 밖(사람이 웹·MCP 로 짓는 이름)은 전부 human — 자동 이름짓기가 덮지 못한다.
+    const name_source = String(input.description ?? "").includes(AUTO_CREATED_MARK) ? "rule" as const : "human" as const;
+    const project = await createProject({ ...input, name_source }, writeCtx);
     if (input.follow_up != null) await linkProjectEdge(project.id, input.follow_up, "follow_up", writeCtx); // new --follow_up--> 선행
     await regenAgents(project.id);  // 생성 직후 AGENTS.md(+폴더) 생성 — 다음 pull 전에도 존재.
     // 잠긴 리스트 안에 만든 프로젝트면 그 폴더에도 즉시 ACL 을 건다(#1291 v2) — 폴더는 방금 생겼으므로
@@ -627,6 +636,62 @@ const projectUpdateV6: Capability = {
     const rescheduled = before ? await propagateReschedule(id, before, project, writeCtx) : [];
     await regenAgents(id);
     return { project, rescheduled };
+  },
+};
+
+// ── 자동 이름짓기(#2031) — 세션이 **자기 프로젝트**의 이름을 짓는 표면 ─────────────────────────────
+//  session_rename(capabilities/session-rename.ts)과 **같은 규약**이다:
+//   · id 를 생략하면 **이 요청을 보낸 세션이 붙어 있는 프로젝트**(게이트웨이가 x-lively-session 으로 식별).
+//   · 길이 초과·따옴표·마침표는 거절하지 않고 **다듬는다**.
+//   · 이미 이름이 지어졌으면 에러가 아니라 `applied:false` — 이 툴은 사용자 턴 **안에서** 불리므로,
+//     여기서 4xx 를 내면 모델이 고쳐 다시 부르느라 사람이 기다리는 시간만 늘어난다.
+//  왜 project_update_v6 로 안 하나: 그건 **사람이 시킨 개명**(늘 이긴다)이고, 이건 **기계값을 한 번 다듬는 것**이라
+//   걸쇠가 필요하다. 한 툴에 두 시맨틱을 넣으면 "가끔 조용히 무시되는 이름 변경"이 되어 더 위험하다.
+const projectRenameV6Input = {
+  name: z.string().max(200).describe("프로젝트 이름 — 무엇을 하는 일인지 드러나는 한국어 명사구(공백 포함 20자 안팎). 길거나 따옴표·마침표가 붙어도 서버가 다듬는다(거절하지 않는다)"),
+  id: z.number().int().positive().optional().describe("대상 프로젝트 id — 보통 생략한다(기본 = 이 세션이 붙어 있는 프로젝트)"),
+};
+type ProjectRenameV6Input = z.infer<z.ZodObject<typeof projectRenameV6Input>>;
+const projectRenameV6: Capability = {
+  name: "project_rename_v6",
+  title: "프로젝트 이름 짓기(자동)",
+  description:
+    "세션 첫 지시로 **자동 생성된** 프로젝트의 임시 이름(지시문을 자른 기계값)을 무엇을 하는 일인지 드러나는 이름으로 " +
+    "바꾼다. id 생략 시 **이 세션이 붙어 있는 프로젝트**. **프로젝트당 한 번만 적용된다**: 사람이 지은 이름·이미 " +
+    "에이전트가 지은 이름은 덮지 않고 `applied:false` 로 조용히 무시된다(에러가 아니다 — 다시 부르지 마세요). " +
+    "사람이 '이름 바꿔줘'라고 시킨 개명은 이 툴이 아니라 project_update_v6 로 한다(그건 늘 적용된다). " +
+    "REST 등가: POST /api/ui/v6/projects/:id/rename {name}.",
+  scope: "memory",
+  input: projectRenameV6Input,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/rename"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return { id: parseId(req.params?.id), name: String(b.name ?? "") };
+      } }],
+  },
+  handler: async (input: ProjectRenameV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    // 대상 결정 — 명시 id 우선, 없으면 이 세션의 소속(세션 자신이 부르는 표준 경로).
+    let id = input.id ?? 0;
+    if (!id) {
+      const sid = (ctx?.session ?? "").trim();
+      const owner = user?.userId || user?.email || "";
+      const bound = sid && owner ? await executionSessionProject(sid, owner) : null;
+      id = Number(bound?.project_id ?? 0);
+    }
+    // 붙은 프로젝트가 없으면 **에러가 아니라** 조용한 no-op 이다 — 이 자리에서 4xx 를 내면 모델이 id 를 찾아
+    //  다시 부르느라 사용자 턴만 길어진다(이 툴의 전제: 이름짓기가 응답시간을 늘리지 않는다).
+    if (!Number.isInteger(id) || id <= 0) return { ok: true as const, applied: false, id: 0, name: "", reason: "unbound" as const };
+    await assertProjectVisible(id, ctx, "프로젝트");
+    const name = projectNameFromAgent(input.name);
+    if (!name) return { ok: true as const, applied: false, id, name: "", reason: "empty" as const };
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    // 출처는 **항상 agent**. 사람이 고치는 길은 웹 편집·project_update_v6(human)이고, 그건 이 툴이 못 덮는다.
+    const { applied, project } = await claimProjectName(id, name, "agent", writeCtx);
+    if (!applied) return { ok: true as const, applied: false, id, name, reason: project ? "taken" as const : "unknown" as const };
+    await regenAgents(id);   // 제목이 AGENTS.md digest 머리글이다 — 바뀌었으면 파일도 같이 최신으로.
+    return { ok: true as const, applied: true, id, name, project };
   },
 };
 
@@ -1434,7 +1499,7 @@ export const projectV6Capabilities: Capability[] = [
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   myTasksV6,   // #1232 정적 경로(/v6/my-tasks) — /projects/:id 계열과 세그먼트가 달라 무충돌이지만 순서 규칙대로 앞에
   projectTasksV6, // #1305 정적 경로(/v6/project-tasks) — 위와 같은 이유로 앞에
-  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectPurgeV6, projectSetMembersV6,
+  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectRenameV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectPurgeV6, projectSetMembersV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];

@@ -2707,6 +2707,16 @@
   "input_hash": "dcd98f3b595ef870"
  },
  {
+  "name": "project_rename_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/rename"
+  ],
+  "input_hash": "7339e5b72ec7b0ce"
+ },
+ {
   "name": "project_set_repos_v6",
   "scope": "memory",
   "mcp": true,
