@@ -94,11 +94,19 @@ t("⑦ 설치가 아니면 로그인을 묻지 않는다 — 없는 CLI 의 답�
 });
 
 t("⑧ 격리에서 프로브는 HOME 을 **명시**한다 — 중계 exec 에는 그 유저의 passwd 항목이 없다", () => {
-  assert.match(PROFILES, /memberSh\(osUser, `HOME="\$\{MEMBER_HOME_BASE\}\/\$\{osUser\}" \$\{line\}`\)/,
+  assert.match(PROFILES, /memberSh\(osUser, `HOME="\$\{MEMBER_HOME_BASE\}\/\$\{osUser\}" \$\{cmd\}`\)/,
     "HOME 을 안 넘긴다 — agy 는 자격을 HOME 기준으로 찾으므로 판정이 통째로 뒤집힌다");
 });
 
-t("⑨ 모름(null)을 미로그인으로 접지 않는다", () => {
+t("⑨ 프로브는 stdin 을 닫는다 — 안 닫으면 agy 가 영원히 멈춰 제미나이 전원이 '모름' 이 된다", () => {
+  // 실측(2026-08-26, 프리뷰 라이브): execFile 이 준 stdin 파이프는 EOF 가 안 와서 `agy models` 가 25초 상한까지
+  //  매달렸다(→ null). `< /dev/null` 이면 3.1초 exit 0. 셸에서 손으로 치면 TTY 라 멀쩡해서 **서버에서만** 고장난다.
+  const fn = PROFILES.slice(PROFILES.indexOf("async function runAtMemberSeat"), PROFILES.indexOf("export async function aiLoginCheck"));
+  assert.match(fn, /const cmd = `\$\{line\} < \/dev\/null`;/, "stdin 을 닫지 않는다");
+  assert.doesNotMatch(fn, /execFileAsync\("sh", \["-c", line\]/, "닫지 않은 원본 line 을 그대로 돌리고 있다");
+});
+
+t("⑨b 모름(null)을 미로그인으로 접지 않는다", () => {
   const fn = PROFILES.slice(PROFILES.indexOf("async function runAtMemberSeat"), PROFILES.indexOf("export async function aiLoginCheck"));
   assert.match(fn, /return null;\s*\/\/ 게이트웨이가 윈도우면/, "확인 불가를 false 로 접고 있다");
   assert.match(fn, /Promise\.race\(\[run, timer\]\)/, "상한이 없다 — 프로브가 매달리면 요청이 함께 매달린다");

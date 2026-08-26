@@ -302,17 +302,23 @@ export interface AiLoginCheck {
 //  ⚠ 격리에서 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberFileExists
 //   머리말과 같은 함정), agy 는 자격을 HOME 기준으로 찾으므로 그 한 글자에 판정이 통째로 뒤집힌다.
 //  반환: true=exit 0 · false=exit≠0 · null=상한 초과/실행 자체 실패(=모름).
+//  ⚠ **stdin 을 반드시 닫는다**(`< /dev/null`). execFile 은 자식에게 stdin 파이프를 주고 **EOF 를 안 보내는데**,
+//   agy 는 그 자리에서 영원히 멈춘다 — 실측(2026-08-26, 프리뷰 라이브): 파이프면 25초 상한까지 매달렸고
+//   `< /dev/null` 이면 3.1초에 exit 0 이었다. 이 함정은 특히 고약하다: 셸에서 손으로 치면 TTY 라 잘 되고
+//   **서버에서만** 조용히 '모름' 이 된다 → 제미나이 사용자 전원이 «확인하지 못했어요» 를 본다(고친 것을
+//   다시 반쯤 고장 낸 셈이 된다). 로그인 프로브는 사람 입력을 받을 일이 없으므로 닫는 것이 늘 옳다.
 async function runAtMemberSeat(osUser: string | null, line: string): Promise<boolean | null> {
+  const cmd = `${line} < /dev/null`;
   let t: ReturnType<typeof setTimeout> | undefined;
   const timer = new Promise<null>((r) => { t = setTimeout(() => r(null), PROBE_TIMEOUT_MS); });
   const run = (async (): Promise<boolean | null> => {
     try {
       if (osUser) {
-        await memberSh(osUser, `HOME="${MEMBER_HOME_BASE}/${osUser}" ${line}`);
+        await memberSh(osUser, `HOME="${MEMBER_HOME_BASE}/${osUser}" ${cmd}`);
         return true;
       }
       if (process.platform === "win32") return null;   // 게이트웨이가 윈도우면 `sh -c` 가 없다 — 지어내지 않고 '모름'
-      await execFileAsync("sh", ["-c", line], { timeout: PROBE_TIMEOUT_MS });
+      await execFileAsync("sh", ["-c", cmd], { timeout: PROBE_TIMEOUT_MS });
       return true;
     } catch { return false; }
   })();
