@@ -323,6 +323,9 @@ export async function bootV2() {
             }
         },
     });
+    //  저장돼 있던 탭 이름을 **첫 그림 전에** 기억으로 옮긴다(sessNames) — 켠 직후엔 세션 목록이 아직 안 왔으므로,
+    //  이 한 줄이 없으면 탭 줄도 좌측 목록도 첫 판을 전부 `세션 1d14b3` 으로 그린다(그리고 그 값이 저장된다).
+    seedSessNamesFromTabs();
     if (!TABS_OFF) {
         // 탭 줄의 제자리 — 데스크톱 앱이면 창 맨 윗줄(타이틀바), 아니면 가운데 열 맨 위.
         //  (탭 패널들은 tabs.ts 가 이미 가운데·우패널에 붙였다 — 옮기는 건 '줄' 하나뿐이다.)
@@ -363,6 +366,7 @@ export async function bootV2() {
     });
     drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
     await loadData();
+    await repairUnknownSessNames(); // 이미 이름을 잃은 탭이 있을 때만 — 서버 기록에서 되찾아 온다(위 주석)
     // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
     let boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
     // 처음 설정을 아직 안 끝낸 사람은 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
@@ -533,6 +537,91 @@ async function loadData(opts) {
     }
 }
 const findSess = (id) => data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
+// ── 세션 이름 기억(원준 2026-08-26 신고: "켤 때마다 `세션 1564e3` 처럼 이름이 안 뜬다") ────────────────
+//  세션의 주소는 **박스(tmux) id** 다(`#/s/box-…`). 그런데 그 id 로 찾는 목록은 오래 안 산다:
+//   ① 켠 직후 — loadData 전이라 목록이 비어 있다(첫 그림에서 탭 줄·좌측 목록이 전부 이름을 잃는다).
+//   ② 되살리기(POST …/restore) — 되살린 세션은 **새 박스 id** 를 받고 옛 desired-state 는 지워진다
+//      (src/terminal/routes.ts). 그 옛 주소를 든 탭은 그 순간부터 영영 못 찾는다.
+//   ③ 완전 삭제·회수 — 목록에서 빠진다.
+//  못 찾으면 titleFor 는 id 꼬리(`세션 1d14b3`)로 물러나는데, tabs.ts paint() 가 그 값을 **탭 저장본에
+//  덮어써** 저장했다(save). 그래서 한 번 못 찾은 세션은 알던 이름까지 잃고 영영 id 로 남았다 — 실측 재현:
+//  이름을 넣어 둔 탭 3개 중 죽은 2개가 다음 판에 `세션 1d14b3`·`세션 10242a` 로 저장됐다.
+//  ⇒ 이름을 **알아낼 때마다 기억**해 두고, 못 찾는 순간엔 그 기억을 쓴다. 이름은 화면에 쓰는 값이라
+//    기기별(localStorage)로 충분하다. 서버를 더 부르지 않는다.
+const NAME_STORE = 'lively_v2_sess_names'; // `*_KEY` 로 두지 않는다(gitleaks 오탐 — DISMISS_STORE 주석과 같은 이유)
+const NAME_MAX = 300; // 넘으면 오래된 것부터 버린다(Map 은 삽입 순서를 지킨다)
+/** 이름을 못 찾았을 때 쓰는 폴백(`세션 1d14b3`) — 이 모양은 **이름이 아니므로** 기억하지 않는다. */
+const isSessIdFallback = (s) => /^세션 [0-9a-f]{4,}$/i.test(String(s || '').trim());
+const sessNames = (() => {
+    try {
+        const v = JSON.parse(localStorage.getItem(NAME_STORE) || '{}');
+        return new Map(v && typeof v === 'object' ? Object.entries(v).map(([k, n]) => [k, String(n)]) : []);
+    }
+    catch {
+        return new Map();
+    }
+})();
+let nameSaveTimer = 0;
+/** 이 세션을 뭐라고 불렀는지 기억한다. titleFor 는 매 paint 마다 불리므로 **값이 바뀔 때만** 저장한다. */
+function rememberSessName(id, name) {
+    const n = String(name || '').trim();
+    if (!id || !n || isSessIdFallback(n) || sessNames.get(id) === n)
+        return;
+    sessNames.delete(id); // 다시 넣어 '최근'으로 — 넘칠 때 오래된 것부터 버린다
+    sessNames.set(id, n);
+    while (sessNames.size > NAME_MAX)
+        sessNames.delete(sessNames.keys().next().value);
+    window.clearTimeout(nameSaveTimer);
+    nameSaveTimer = window.setTimeout(() => {
+        try {
+            localStorage.setItem(NAME_STORE, JSON.stringify(Object.fromEntries(sessNames)));
+        }
+        catch { /* 못 남겨도 이번 화면은 된다 */ }
+    }, 400);
+}
+const recallSessName = (id) => sessNames.get(id) || '';
+/** 저장돼 있던 탭 이름을 기억으로 옮긴다 — **첫 그림 전에** 부른다(그래야 켠 직후부터 이름이 제자리에 있다). */
+function seedSessNamesFromTabs() {
+    for (const t of tabsApi ? tabsApi.tabs : []) {
+        const k = routeKey(t.route);
+        if (k.startsWith('s:'))
+            rememberSessName(k.slice(2), t.title);
+    }
+}
+/** 열린 세션 탭 중 **아직 이름을 모르는** 것들의 박스 id(목록에도 없고 기억에도 없다). */
+function unknownSessTabs() {
+    const seen = new Set();
+    for (const t of tabsApi ? tabsApi.tabs : []) {
+        const k = routeKey(t.route);
+        if (!k.startsWith('s:'))
+            continue;
+        const id = k.slice(2);
+        if (id && !recallSessName(id) && !findSess(id))
+            seen.add(id);
+    }
+    return [...seen];
+}
+/**
+ * 이름을 잃은 채로 남은 탭을 서버 기록으로 되살린다 — 이 고침 **이전에** 이미 id 로 굳어 버린 탭의 복구원.
+ *  세션 창(app_instance)은 박스가 죽어도 `subject_ref`(박스 id)와 `title` 을 그대로 들고 있다(status=closed).
+ *  ⚠ 닫힌 것까지 받는 무거운 조회라 **필요할 때만·한 번만** 부른다 — 모르는 탭이 하나도 없으면 아예 안 나간다.
+ */
+async function repairUnknownSessNames() {
+    const want = new Set(unknownSessTabs());
+    if (!want.size)
+        return;
+    try {
+        const out = await api('/api/ui/app-instances?include_closed=true');
+        for (const inst of (Array.isArray(out?.instances) ? out.instances : [])) {
+            const ref = String((inst && inst.subject_ref) || '');
+            const title = String((inst && inst.title) || '').trim();
+            //  'AI 세션' 은 이름이 아니라 기본값이다 — 그걸 기억하면 탭 여럿이 도로 같은 글자가 된다.
+            if (want.has(ref) && title && title !== 'AI 세션' && !recallSessName(ref))
+                rememberSessName(ref, title);
+        }
+    }
+    catch { /* 못 찾으면 종전대로 id 꼬리로 — 이름 하나 때문에 화면을 막지 않는다 */ }
+}
 // ── 라우터 ──
 function parseRoute(route) {
     const h = String(route || '').replace(/^#\/?/, '');
@@ -589,16 +678,22 @@ function titleFor(route) {
         //  sessText 는 그런 이름을 걷어내고 pane 제목('지금 하는 일')을 그 자리에 올린다.
         //  ★ 우패널 없음 — 세션 화면은 프로젝트 셸(v2/panes.ts) 안에서 열리고, 맥락(자료·지식·타임라인)은 그 셸의
         //   곁칸이 쥔다(2026-08-20 통합). 팝아웃 창(?solo=1)만 종전대로 세션 하나 + 발자취 우패널이다.
-        const s = findSess(decodeURIComponent(segs[1] || ''));
-        // 못 찾은 세션(죽었거나 아직 목록에 안 온 것)도 **서로 구분되게** — 전부 '세션'이면 다른 탭이 같아 보인다.
+        const sid = decodeURIComponent(segs[1] || '');
+        const s = findSess(sid);
+        // 못 찾은 세션(되살려서 새 id 를 받았거나·지웠거나·아직 목록에 안 온 것)이라도 **부르던 이름은 안 버린다**
+        //  (위 sessNames 주석). 이름을 한 번도 못 들어 본 세션만 id 꼬리로 물러난다 — 그때도 서로 구분은 되게.
         if (!s) {
-            const raw = decodeURIComponent(segs[1] || '');
-            const tail = raw.split('-').pop() || raw;
+            const kept = recallSessName(sid);
+            if (kept)
+                return { title: kept, noAside: !SOLO };
+            const tail = sid.split('-').pop() || sid;
             return { title: '세션 ' + tail.slice(0, 6), noAside: !SOLO };
         }
         const t = sessText(s, projName(data, s.projectId));
+        const title = t.main || t.sub || String(s.raw?.harness || '세션');
+        rememberSessName(sid, title); // 목록에서 사라진 뒤에도 이 이름을 쓴다
         // 아이콘 색이 될 상태 — 사이드바 점과 같은 판정(dotCls): 도는 중·확인 필요·끝남만 색을 갖는다.
-        return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: !SOLO, state: dotCls(s.stateKey) };
+        return { title, noAside: !SOLO, state: dotCls(s.stateKey) };
     }
     if (p === 'i') {
         const instance = cachedAppInstance(decodeURIComponent(segs[1] || ''));
