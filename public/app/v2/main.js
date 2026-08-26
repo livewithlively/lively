@@ -1147,7 +1147,22 @@ async function renderRoute(tab) {
             const a = appByKey(CLASSIC_PAGES[page]);
             if (a)
                 noteAppUse(a.key);
-            tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
+            // #2043 — 같은 앱의 액자가 이미 서 있으면 새로 싣지 않고 **안의 주소만** 바꾼다. 셸 사이드바의 폴더 · 리스트 렌즈가
+            //  리스트마다 #/projects2/l/<id> 로 보내는데, 누를 때마다 클래식 앱을 처음부터 다시 띄우면 한 박자씩 멈춘다.
+            //  액자 안 클래식 라우터는 hashchange 로 스코프를 다시 잡는다(projects/state.ts pjvSyncUrl 주석). 못 닿으면 종전대로 새로 싣는다.
+            const cur = tab.center.querySelector('iframe.v2-frame');
+            let reused = false;
+            if (cur && a && cur.dataset.appKey === a.key && cur.contentWindow) {
+                try {
+                    cur.contentWindow.location.hash = '#/' + raw;
+                    reused = true;
+                }
+                catch {
+                    reused = false;
+                }
+            }
+            if (!reused)
+                tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
             markActive('app:' + (a ? a.key : ''));
         }
         else {
