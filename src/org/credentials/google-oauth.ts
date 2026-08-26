@@ -66,7 +66,39 @@ export const GOOGLE_SERVICE_SCOPES = {
 } as const;
 
 export type GoogleService = keyof typeof GOOGLE_SERVICE_SCOPES;
-export const GOOGLE_DEFAULT_SERVICES: GoogleService[] = ["drive", "gmail", "calendar"];
+
+/**
+ * ★ **1차 런칭에서 파는 것**(윤상민 결정 2026-08-26: "1차 런칭에서 지메일 빼").
+ *
+ *  Gmail 을 뺀 이유는 취향이 아니라 **되돌릴 수 없는 비용** 때문이다. 본문을 읽는 Gmail 범위는 전부 제한범위이고
+ *  비제한 대안이 없다 — 검증에 CASA(연 $540~1,800·초회 6~12주)가 붙고, 미검증으로 버티면 **프로젝트 수명 누적
+ *  100 계정** 한도가 걸리는데 그 100 은 리셋도 증액도 안 된다. 첫 판에 Gmail 을 끼우면 그 한도를 "쓰지도 않는
+ *  권한"으로 태우게 된다.
+ *
+ *  ⚠ **코드는 남긴다** — GOOGLE_SERVICE_SCOPES 의 gmail 행도, 수집기도 그대로다. 이미 붙여 둔 사람
+ *   (구 google_gmail_oauth 슬롯)은 계속 돌아야 하고, 한도를 지불하기로 하면 이 배열에 한 줄 되돌리는 것으로 열린다.
+ *   즉 여기 있는 것은 **기능의 유무가 아니라 지금 파는 범위의 선언**이다.
+ *
+ *  ⚠ 그리고 이걸 뺀다고 심사가 0이 되지는 않는다 — 수집용 drive 는 `drive.readonly`(제한범위)다. 정말 0으로
+ *   내리려면 `drive_file` 이어야 하는데, G6(#2075) 실측이 "폴더를 골라도 안의 파일은 안 준다"를 확정해서 폴더
+ *   단위 수집이 성립하지 않는다. 그래서 1차는 **미검증 Production + 100명**으로 간다.
+ */
+export const GOOGLE_LAUNCH_SERVICES: readonly GoogleService[] = ["drive", "drive_file", "calendar"];
+
+/** 이 서비스를 지금 파는가. */
+export function isGoogleServiceOffered(s: string | null | undefined): boolean {
+  return (GOOGLE_LAUNCH_SERVICES as readonly string[]).includes(String(s ?? ""));
+}
+
+/**
+ * 요청 가능한 것만 남긴다. **빈 배열을 그대로 돌려준다** — 여기서 기본값으로 폴백하면 "gmail 만 골랐는데
+ *  드라이브 동의 화면이 열리는" 꼴이 된다(안 고른 범위를 몰래 요청하는 것). 판단은 호출자가 한다.
+ */
+export function googleOfferedServices(services: readonly GoogleService[]): GoogleService[] {
+  return services.filter((s) => isGoogleServiceOffered(s));
+}
+
+export const GOOGLE_DEFAULT_SERVICES: GoogleService[] = ["drive", "calendar"];
 
 /**
  * ★ 각 서비스가 어느 심사 등급을 끌고 오는가 — **돈과 한도가 여기서 갈린다**(지식 §2·§9).
@@ -109,7 +141,10 @@ export function consumesUnverifiedUserCap(services: readonly GoogleService[] = G
  * 서비스를 하나도 안 고르면 기본 3종으로 떨어진다(빈 scope 로 authorize 하면 구글이 400 을 준다).
  */
 export function googleScopeString(services: readonly GoogleService[] = GOOGLE_DEFAULT_SERVICES): string {
-  const picked = services.length > 0 ? services : GOOGLE_DEFAULT_SERVICES;
+  // ★ 최종 방어선. 모든 동의 경로(직결·CP 릴레이·권한 넓히기)가 이 함수를 지나므로 여기서 막으면 새 호출자가
+  //  생겨도 안 파는 범위가 샐 수 없다. 화면의 체크박스는 안내일 뿐 게이트가 아니다.
+  const offered = googleOfferedServices(services);
+  const picked = offered.length > 0 ? offered : googleOfferedServices(GOOGLE_DEFAULT_SERVICES);
   const out: string[] = [...IDENTITY_SCOPES];
   for (const s of picked) for (const sc of GOOGLE_SERVICE_SCOPES[s] ?? []) if (!out.includes(sc)) out.push(sc);
   return out.join(" ");

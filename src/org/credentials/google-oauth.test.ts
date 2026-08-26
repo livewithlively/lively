@@ -10,6 +10,7 @@ import {
   buildGoogleAuthorizeUrl, googleScopeString, parseGoogleTokenResponse, mergeGoogleTokens,
   googleInstallToSlot, googleInstallFromBlob, googleTokenExpired, decodeIdTokenClaims,
   isGoogleServer, GOOGLE_AUTHORIZE_URL, googleConsentTier, consumesUnverifiedUserCap, type GoogleInstall,
+  GOOGLE_LAUNCH_SERVICES, GOOGLE_DEFAULT_SERVICES, googleOfferedServices, isGoogleServiceOffered,
 } from "./google-oauth.js";
 
 let pass = 0;
@@ -52,8 +53,10 @@ t("[3] 인가 URL: 챌린지가 없으면 챌린지 관련 파라미터가 하�
 
 // ── 표 4~7 · scope 합집합(= "원큐"의 실체, 동시에 심사 등급을 정하는 자리) ──────────────
 t("[4] scope: 고른 서비스의 합집합 + 신원 2종, 중복 0", () => {
-  const s = googleScopeString(["drive", "gmail", "calendar"]).split(" ");
-  for (const want of ["openid", "https://www.googleapis.com/auth/userinfo.email", DRIVE_RO, GMAIL_RO, CAL_RO]) {
+  // 예시를 gmail → drive_file 로 옮겼다(2026-08-26). 잠그려는 불변식은 "합집합·중복 0" 이고,
+  //  gmail 은 이제 런칭 목록 밖이라 이 행의 예시로 쓰면 [25] 와 충돌한다. 불변식은 그대로다.
+  const s = googleScopeString(["drive", "drive_file", "calendar"]).split(" ");
+  for (const want of ["openid", "https://www.googleapis.com/auth/userinfo.email", DRIVE_RO, DRIVE_FILE, CAL_RO]) {
     assert.ok(s.includes(want), `${want} 가 빠졌다`);
   }
   assert.equal(new Set(s).size, s.length, "중복 scope");
@@ -227,6 +230,63 @@ t("[23] isGoogleServer: 대소문자 무시, 유사 이름은 거부", () => {
   assert.equal(isGoogleServer("GOOGLE"), true);
   assert.equal(isGoogleServer("google-drive"), false, "구 MCP 서버명과 겹치면 콜백이 잘못된 분기를 탄다");
   assert.equal(isGoogleServer(null), false);
+});
+
+// ── 표 24~32 · 1차 런칭 게이트: Gmail 제외 (상민님 결정 2026-08-26) ──────────
+//  게이트를 **어디에** 두느냐가 이 묶음의 전부다. 화면의 체크박스만 지우면
+//  startGoogleConsent 를 부르는 다른 경로(권한 넓히기·CP 릴레이·앞으로 생길 호출자)가 gmail 을
+//  실어 보낼 수 있고, 그 한 번이 **되돌릴 수 없는 100명 한도**를 한 칸 태운다.
+//  그래서 최종 방어선을 모든 동의 경로가 반드시 지나는 조립부(googleScopeString)에 둔다.
+t("[24] 런칭 목록에 gmail 이 없다 — 이 배열이 곧 '지금 파는 것'의 계약이다", () => {
+  assert.ok(!(GOOGLE_LAUNCH_SERVICES as readonly string[]).includes("gmail"));
+  assert.ok((GOOGLE_LAUNCH_SERVICES as readonly string[]).includes("drive"));
+  assert.equal(isGoogleServiceOffered("gmail"), false);
+  assert.equal(isGoogleServiceOffered("drive"), true);
+});
+
+t("[25] ★ scope 조립이 gmail 을 통째로 떨군다 — 태운 한도는 되돌릴 수 없다", () => {
+  const sc = googleScopeString(["gmail"]);
+  assert.ok(!sc.includes("gmail"), `gmail 범위가 새면 100명 한도가 탄다: ${sc}`);
+  assert.ok(!sc.includes("mail.google.com"), "가장 넓은 Gmail 범위도 같이 막혀야 한다");
+});
+
+t("[26] drive+gmail 을 주면 drive 는 살리고 gmail 만 뺀다 — 전량 거부가 아니다", () => {
+  const sc = googleScopeString(["drive", "gmail"]);
+  assert.ok(sc.includes(DRIVE_RO), "gmail 하나 때문에 드라이브까지 못 켜면 사람이 막힌다");
+  assert.ok(!sc.includes(GMAIL_RO));
+});
+
+t("[27] 빈 입력이 뒷문이 되지 않는다 — 기본값에도 gmail 이 없다", () => {
+  assert.ok(!(GOOGLE_DEFAULT_SERVICES as readonly string[]).includes("gmail"));
+  assert.ok(!googleScopeString([]).includes("gmail"));
+});
+
+t("[28] 무회귀: drive·calendar 는 그대로 실린다", () => {
+  const sc = googleScopeString(["drive", "calendar"]);
+  assert.ok(sc.includes(DRIVE_RO));
+  assert.ok(sc.includes(CAL_RO));
+});
+
+t("[29] googleOfferedServices 는 빈 배열을 그대로 돌려준다 — 호출자가 '줄 게 없다'를 구분해야 한다", () => {
+  assert.deepEqual(googleOfferedServices(["gmail"]), [], "여기서 기본으로 폴백하면 안 고른 범위를 몰래 요청하게 된다");
+  assert.deepEqual(googleOfferedServices(["drive", "gmail", "calendar"]), ["drive", "calendar"]);
+});
+
+t("[30] 인가 URL 전문에 'gmail' 문자열이 없다 — 조립 경로가 늘어도 새지 않는 backstop", () => {
+  const u = buildGoogleAuthorizeUrl({
+    clientId: "cid", redirectUri: "https://gw.example/oauth/callback", state: "st",
+    scope: googleScopeString(["drive", "gmail", "calendar"]),
+  });
+  assert.ok(!u.includes("gmail"), u);
+});
+
+t("[31] ★ gmail 을 빼도 미검증 100명 한도는 남는다 — drive.readonly 가 제한범위다", () => {
+  // 이 행은 기능이 아니라 **런칭 판단의 근거**를 잠근다. false 로 보이는 순간
+  //  "이제 심사도 한도도 없다"는 잘못된 결론이 서고, 100명을 넘긴 뒤에야 발각된다.
+  assert.equal(consumesUnverifiedUserCap(GOOGLE_DEFAULT_SERVICES), true);
+  assert.equal(googleConsentTier(["drive"]), "restricted");
+  assert.equal(googleConsentTier(["drive_file", "calendar"]), "sensitive", "정말 0으로 만들려면 drive_file 이어야 한다");
+  assert.equal(googleConsentTier(["drive_file"]), "non_sensitive");
 });
 
 console.log(`\n${pass} passed`);

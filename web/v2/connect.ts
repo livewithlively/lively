@@ -408,11 +408,15 @@ function googleTeamCollectCard(): HTMLElement {
     const anyOn = !!(drive.enabled || gmail.enabled);
 
     // 서비스 선택 — 체크박스가 곧 요청 scope 다(안 고른 건 동의도 안 받는다 = 최소 권한).
+    // ★ Gmail 은 1차 런칭 대상이 아니다(2026-08-26) — 서버가 offered:false 로 알려 준다. 칸을 아예 내밀지 않되,
+    //  **이미 켜 둔 조직에는 상태만 보여 준다**(칸이 사라지면 "왜 아직 메일이 모이지?" 를 아무도 설명 못 한다).
+    const gmailOffered = gmail.offered !== false;
+    const gmailLegacy = !gmailOffered && !!gmail.enabled;
     const dChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
     const gChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
     dChk.checked = drive.enabled !== false && (drive.enabled || !anyOn); // 기본 드라이브만
     gChk.checked = !!gmail.enabled;
-    const picked = (): string[] => [...(dChk.checked ? ['drive'] : []), ...(gChk.checked ? ['gmail'] : [])];
+    const picked = (): string[] => [...(dChk.checked ? ['drive'] : []), ...(gmailOffered && gChk.checked ? ['gmail'] : [])];
 
     const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
     chk.checked = anyOn;
@@ -428,21 +432,26 @@ function googleTeamCollectCard(): HTMLElement {
     else notes.push('구글 연결 준비가 아직 안 됐어요 — 아래에 구글 OAuth 클라이언트 값 두 개를 넣으면 열립니다.');
 
     // ★ 비용 고지 — Gmail 을 고른 순간(또는 이미 켜진 순간) 무슨 대가가 붙는지 먼저 말한다.
+    // ★ 여기서 거짓말을 하지 않는 것이 중요하다. Gmail 을 뺐다고 심사·한도가 0이 되는 게 아니다 —
+    //  팀 문서를 통째로 읽는 범위(drive.readonly)도 구글은 민감하게 본다. 100명은 되돌릴 수 없으므로
+    //  "제한 없음"으로 읽히면 그 오해의 대가를 나중에 치른다.
     const costLine = (): string =>
-      gChk.checked
-        ? 'Gmail 은 구글이 민감하게 보는 범위라, 심사를 마치기 전에는 회사 전체에서 100명까지만 연결할 수 있어요(그 수는 되돌릴 수 없습니다). 연결할 때 구글이 "확인되지 않은 앱" 경고를 띄우는데, [고급] → [이동]으로 넘어가면 됩니다.'
-        : 'Google Drive 만 모으면 구글 심사도, 연결 인원 제한도 없습니다.';
+      gmailLegacy
+        ? 'Gmail 은 지금 새로 켤 수 없어요(구글 심사 범위라 준비 중입니다) — 이미 켜져 있어서 그대로 돌아갑니다.'
+        : '구글 심사를 마치기 전에는 회사 전체에서 100명까지 연결할 수 있어요(그 수는 되돌릴 수 없습니다). 연결할 때 구글이 "확인되지 않은 앱" 경고를 띄우는데, [고급] → [이동]으로 넘어가면 됩니다.';
     const cost = el('p', { class: 'cn-help' }, ...uiText(costLine()));
     const repaintCost = () => cost.replaceChildren(...uiText(costLine()));
     dChk.onchange = repaintCost; gChk.onchange = repaintCost;
 
     const svcRow = el('div', { class: 'cn-sec-form' },
       el('label', { class: 'cn-toggle' }, dChk, el('span', { text: ' Google Drive 문서' })),
-      el('label', { class: 'cn-toggle' }, gChk, el('span', { text: ' Gmail 메일' })));
+      ...(gmailOffered ? [el('label', { class: 'cn-toggle' }, gChk, el('span', { text: ' Gmail 메일' }))]
+        : gmailLegacy ? [el('p', { class: 'cn-help' }, ...uiText('· Gmail 메일 — 예전에 켜 두신 것이 그대로 돌고 있어요'))]
+        : []));
 
     const extra: HTMLElement[] = [];
     // 동의는 했는데 그 서비스 범위가 빠진 경우 — 켜 봐야 상류가 거부하므로 먼저 범위를 넓히게 한다.
-    const missing = [!drive.scope_ok && dChk.checked ? 'Google Drive' : '', !gmail.scope_ok && gChk.checked ? 'Gmail' : ''].filter(Boolean);
+    const missing = [!drive.scope_ok && dChk.checked ? 'Google Drive' : '', gmailOffered && !gmail.scope_ok && gChk.checked ? 'Gmail' : ''].filter(Boolean);
     if (connected && missing.length) {
       extra.push(el('p', { class: 'cn-help' }, ...uiText(`${missing.join(' · ')} 는 아직 허용하지 않으셨어요 — [권한 넓히기]로 한 번 더 허용하면 모으기 시작합니다.`)));
     }
