@@ -1227,10 +1227,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const pd = addPending(text);
     view.scrollToBottom();
     try {
-      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) }) as { outbox_id?: number; transport?: string; fallback?: string };
+      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) }) as { outbox_id?: number; transport?: string; fallback?: string; steered?: boolean };
       if (r?.outbox_id) pd.obId = Number(r.outbox_id);
       // #2055 — app-server 로 보내려다 실패해 종전 경로로 내려갔다. 조용히 접으면 "왜 느리지"의 원인을 아무도 모른다.
       view.setNote(r?.fallback ? `대화 통로를 못 열어 터미널 경로로 보냈어요 — ${r.fallback}` : '');
+      // 도는 턴에 **얹었다**(새 턴이 아니다). 그러면 답은 하던 일에 이어 붙어 오므로, 새 턴을 기다리는 표시를
+      //  세우지 않는다 — 안 그러면 영영 안 오는 '내 차례'를 기다리는 화면이 된다.
+      if (r?.steered) pd.state.textContent = '하던 작업에 얹었어요 — 이어서 반영됩니다';
       if (!caps().read) {   // 큐엔 들어갔지만(배달자가 전달) 답은 여기 안 온다(파서 전) — 도는 척 두지 않고 그 자리에 말한다
         const i = pending.indexOf(pd); if (i >= 0) pending.splice(i, 1);
         pd.state.textContent = ''; running = false; view.settle(pd.t); view.busy(false);
