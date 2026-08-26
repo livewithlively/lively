@@ -27,13 +27,25 @@ export const SESS_STATES = {
 // 필터 항목 = 카드 라벨과 **같은 순서·같은 이름**. 종전엔 카드가 '종료됨'인데 필터엔 그 칸이 없어
 //  '복원 가능'으로 잡히는 어긋남이 있었다(감사 P1-②). 이제 key 가 곧 필터 버킷이다.
 export const SESS_STATE_KEYS = ['waiting', 'done', 'busy', 'idle', 'offline', 'shell', 'restorable', 'oom_killed', 'exited_user'];
-// '시킨 작업이 끝났는데 아직 안 봤나'(#1098) — lastAttached(열람)는 탭을 붙일 때 갱신되므로 들어가 보면 자동 해제된다.
+// '시킨 작업이 끝났는데 아직 안 봤나'(#1098) — 마지막 작업이 **마지막 열람보다 뒤**면 아직 안 본 결과다.
 //  24시간 가드: 하루 지난 건 알림이 아니라 이력이다.
+//
+// ⚠ 열람 신호가 **둘**인 이유 (#1954 3차). 원래는 lastAttached(tmux `session_last_attached`) 하나였고, 그때는 그게
+//  맞았다 — 세션을 여는 것이 곧 터미널 창을 새로 여는 것이었으니 열 때마다 새 attach 가 찍혔다. 그런데 새 셸이
+//  탭 DOM 을 유지하게 되면서(#1719 web/v2/tabs.ts) 세션 하나당 attach 가 **탭 수명당 한 번**이 됐다:
+//  이미 열어 둔 세션을 사이드바에서 다시 눌러도 attach 가 없어 열람 시각이 처음 연 순간에 얼어붙고,
+//  그 뒤로는 작업이 끝날 때마다 초록점이 켜진 채 **누르든 말든 안 꺼졌다**(실측 2026-08-26: 붙어 있는 세션 5개의
+//  last_attached 가 last_busy 보다 300~440초 뒤처진 채 고정). 그래서 화면이 직접 찍는 lastViewed(`@box_last_seen`)를
+//  더하고 **둘 중 더 나중 것**을 열람으로 본다. lastAttached 를 버리지 않는 이유: 단독 터미널 창·구 노드처럼
+//  화면이 도장을 못 찍는 경로가 아직 있고, 거기서는 그게 유일하게 맞는 신호다.
+export function lastViewedAt(s) {
+    return Math.max(Number(s?.lastAttached) || 0, Number(s?.lastViewed) || 0);
+}
 export function isUnreadDone(s, nowMs = Date.now()) {
     const last = Number(s?.lastActive) || 0;
     if (!last || s?.restorable)
         return false;
-    if (last <= (Number(s?.lastAttached) || 0))
+    if (last <= lastViewedAt(s))
         return false;
     return (nowMs / 1000 - last) <= 24 * 3600;
 }

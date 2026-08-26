@@ -17,7 +17,7 @@ import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연�
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,
-  markSessionActive, isReportedPhase, type CreateInput,
+  markSessionActive, markSessionSeen, isReportedPhase, type CreateInput,
 } from "../terminal/terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/terminal-pty.js";
 import { sendKeysToSession } from "../terminal/send-keys.js";
@@ -265,6 +265,12 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       //  구 게이트웨이는 이 필드를 모르고 무시한다(무회귀).
       const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
       return { ok: true, change: change ?? null };
+    }
+    // #1954 3차 — 게이트웨이가 릴레이한 '이 화면을 보고 있다' 도장을 이 노드 tmux 에 새긴다. markActive 와 같은
+    //  구조·같은 인가 전제(F7 — 게이트웨이가 이미 확인했다).
+    case "markSeen": {
+      await markSessionSeen(String(args.id));
+      return { ok: true };
     }
     // #1664 — 게이트웨이가 이 노드의 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). 인가(소유·초대)는
     //  게이트웨이가 끝냈다는 전제(F7). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와 flush 지연 규약은

@@ -41,7 +41,8 @@ import { getOpt } from "./tmux-exec.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
-import { nodeOfSession, nodeCanAttach } from "../node/registry.js";
+import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc } from "../node/registry.js";
+import { markSessionSeen } from "./phase.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
 import { sessionOsUser } from "./profiles.js";
 import { harnessIo, isChatAction, type ChatAction } from "./harness-io/adapter.js";
@@ -155,6 +156,35 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     await sendKeyToSession(id, key);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, action, key });
+  }));
+
+  // ── 열람 도장(#1954 3차) — "지금 이 세션 화면을 보고 있다". ────────────────────────────────────────
+  //  왜 필요한가: '작업 완료(초록점)'는 `lastActive > 마지막 열람` 으로 판정하는데(web/session-status.ts),
+  //   그 '마지막 열람'의 유일한 출처가 tmux `session_last_attached` 였다. 그건 클라이언트가 **붙는 순간**의
+  //   도장이라, 탭 DOM 을 유지하는 새 셸에서는 세션당 평생 한 번뿐이다 — 이미 열어 둔 세션은 다시 눌러도
+  //   attach 가 없어 초록점이 영영 안 꺼졌다(#1954 후속, 실측 배경은 tmux-exec.ts LIST_FMT 주석).
+  //  게이트 = keys 와 같은 canAttach — **들어갈 수 있는 사람만** 봤다고 말할 수 있다.
+  //  ⚠ 멱등·비파괴다(도장 하나 갱신). 화면이 보고 있는 동안 주기적으로 부르므로 실패는 조용히 삼킨다.
+  app.post("/api/ui/terminal/sessions/:id/seen", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    const uid = idOf(userOf(req));
+    if (!uid) throw new HttpError(403, "사용자 신원이 없습니다");
+    res.setHeader("Cache-Control", "no-store");
+    const nodeId = nodeOfSession(id);
+    if (nodeId) {
+      // 그 PC 의 tmux 에 사는 세션 — markActive 와 같은 릴레이. 인가는 노드가 아는 사실(소유·초대)로 먼저 묻는다.
+      const v = await nodeCanAttach(nodeId, id, uid);
+      if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+      //  이 op 를 모르는 구 노드는 **안 보낸다**(#1954 3차) — 그 세션만 종전 판정으로 남을 뿐 오류가 아니다.
+      if (!nodeSupports(nodeId, "markSeen")) { res.json({ ok: true, applied: false, reason: "node-old" }); return; }
+      await nodeRpc(nodeId, "markSeen", { id });
+      res.json({ ok: true, applied: true });
+      return;
+    }
+    if (!(await canAttach(id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    await markSessionSeen(id);
+    res.json({ ok: true, applied: true });
   }));
 
   // ── 아웃박스(#1753) — 이 세션의 전달 대기·실패 프롬프트. 화면이 대기 말풍선(새로고침 생존)과 재시도·삭제를 그린다. ──

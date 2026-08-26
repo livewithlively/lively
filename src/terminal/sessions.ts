@@ -190,7 +190,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -220,6 +220,9 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     parsed.push({
       name, created, attached, paneTitleRaw, offline, busy, shellWorking, lastBusy, reportedFresh,
       lastAttached: Number(lastAttachedRaw) || 0,
+      // #1954 3차 — 화면이 직접 찍은 열람 시각(@box_last_seen). attach 이벤트와 **다른 축**이라 max 로 합치지 않고
+      //  그대로 올린다 — 합치는 자리는 프론트 판정 한 곳(web/session-status.ts isUnreadDone)이다.
+      lastViewed: Number(lastSeenRaw) || 0,
       tmuxDesired: {
         owner: owner || "",
         label: labelParts.join("\t") || null,
@@ -250,7 +253,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     rows.push({
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
       offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
-      reportedFresh: p.reportedFresh, lastAttached: p.lastAttached,
+      reportedFresh: p.reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
       flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
     });
@@ -297,6 +300,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
       lastAttached: r.lastAttached || undefined, // #1098 마지막 열람(탭 붙음) 시각 — '안 본 작업 완료' 판정용.
+      lastViewed: r.lastViewed || undefined,      // #1954 3차 마지막 열람(화면이 직접 찍음) — 위와 같은 판정의 두 번째 신호.
     });
   }
   sessions.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));

@@ -135,7 +135,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerTicketProfileRoutes(app, auth);
   registerSessionCrudRoutes(app, auth);
   registerRestoreReportRoutes(app, auth);
-  registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys (CRUD 뒤 — 경로가 겹치지 않는다)
+  registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys · /sessions/:id/seen(#1954 3차) (CRUD 뒤 — 경로가 겹치지 않는다)
   registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
