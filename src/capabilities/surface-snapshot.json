@@ -476,6 +476,26 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "me_account_delete_plan",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/account-delete-plan"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_account_delete",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/account-delete"
+  ],
+  "input_hash": "035c54739fe48f44"
+ },
+ {
   "name": "device_lookup",
   "scope": null,
   "mcp": false,
