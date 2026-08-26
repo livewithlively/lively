@@ -157,6 +157,7 @@ function init() {
         projLens = localStorage.getItem(LENS_STORE) === 'active' ? 'active' : 'tree';
     }
     catch (_) { /* 기본 렌즈(폴더 · 리스트)로 */ }
+    initWikiClosed();
     foldClosed = loadSet(FOLD_CLOSED_STORE);
     void loadPeopleAvatars().then((m) => { people = m || {}; if (last)
         redraw(); });
@@ -1133,7 +1134,43 @@ function renderProjTree() {
 }
 let wikiCats = null;
 let wikiLoading = false;
+let wikiPins = null; // WIKI 인덱스(핀) 건수 — 뷰 줄의 알약
+let wikiPinsLoading = false;
+const WIKI_CLOSED_STORE = 'lively_v2_wiki_closed'; // 접어 둔 스페이스(브라우저 기억)
+let wikiClosed = new Set();
+const wikiMore = new Set(); // 「N개 더 보기」로 편 스페이스 — 페이지 수명(새로 열면 다시 접힌다)
+const WIKI_CARD_MAX = 6; // 카드 하나에 바로 보이는 분류 수. 넘으면 더 보기로 접는다
 const SPACE_LABEL = { product: '제품', business: '사업', system: '시스템' };
+const SPACE_ICON = { product: 'layers', business: 'chart', system: 'sliders' };
+const SPACE_ORDER = ['product', 'business', 'system'];
+/** 첫 방문 기본값 = 제품만 펼침. 카드 셋을 다 펴면 19줄 × 두 줄이라 종전의 '벽'이 그대로 돌아온다. */
+function initWikiClosed() {
+    try {
+        const raw = localStorage.getItem(WIKI_CLOSED_STORE);
+        wikiClosed = raw == null ? new Set(['business', 'system']) : new Set(JSON.parse(raw) || []);
+    }
+    catch (_) {
+        wikiClosed = new Set(['business', 'system']);
+    }
+}
+function saveWikiClosed() { try {
+    localStorage.setItem(WIKI_CLOSED_STORE, JSON.stringify([...wikiClosed]));
+}
+catch (_) { /* 못 남겨도 이번 화면은 된다 */ } }
+/** 우리 팀이 맡은 분류 id — `/api/ui/me` 가 이미 싣고 있다(team_owner_category_ids). 없으면 빈 집합(표식만 안 붙는다). */
+function ownerCatIds() {
+    const raw = state.me?.team_owner_category_ids;
+    return new Set(Array.isArray(raw) ? raw.map((x) => Number(x)).filter((n) => Number.isFinite(n)) : []);
+}
+function myTeamName() {
+    const t = state.me?.teams;
+    return Array.isArray(t) && t.length ? String(t[0].name || '우리 팀') : '우리 팀';
+}
+/** 지금 보고 있는 분류 — 주소에서 읽는다(`#/knowledge?category=N`, wiki.ts 가 지키는 URL 계약). */
+function wikiActiveCat() {
+    const m = /[?&]category=(\d+)/.exec(location.hash);
+    return m ? Number(m[1]) : 0;
+}
 function loadWikiCats() {
     if (wikiCats || wikiLoading)
         return;
@@ -1150,6 +1187,22 @@ function loadWikiCats() {
             redraw();
     });
 }
+/** 핀 건수 한 번 — 목록은 안 받는다(limit=1, 서버가 total 을 준다). */
+function loadWikiPins() {
+    if (wikiPins != null || wikiPinsLoading)
+        return;
+    wikiPinsLoading = true;
+    void api('/api/ui/knowledge?is_wiki=true&limit=1').then((d) => {
+        wikiPins = Number(d && d.total) || 0;
+        wikiPinsLoading = false;
+        if (last && (hooks.section?.() || 'home') === 'wiki')
+            redraw();
+    }).catch(() => { wikiPinsLoading = false; wikiPins = 0; });
+}
+/** 문서를 모아 보는 뷰 한 줄 — 분류가 아니다. 카드 밖에 서고 아이콘·무게가 카드 머리와 다르다. */
+function wikiViewRow(href, ic, label, title, n, on) {
+    return el('a', { class: 'v2-kview' + (on ? ' on' : ''), href, title, ...(on ? { 'aria-current': 'true' } : {}) }, icon(ic, 'v2-kview-ic'), el('span', { class: 'n', text: label }), n != null ? el('span', { class: 'v2-kpill', text: String(n) }) : null);
+}
 function renderWiki() {
     if (!last)
         return;
@@ -1161,25 +1214,68 @@ function renderWiki() {
         navHost.prepend(navEl);
     }
     loadWikiCats();
+    loadWikiPins();
     const q = sideFilter.trim().toLowerCase();
-    const cats = (wikiCats || []).filter((c) => !q || c.name.toLowerCase().includes(q) || String(c.key || '').toLowerCase().includes(q));
-    const total = (wikiCats || []).reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
+    const all = wikiCats || [];
+    const total = all.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
+    const own = ownerCatIds();
+    const teamName = myTeamName();
+    const activeCat = wikiActiveCat();
+    // 지금 보는 분류가 접힌 카드에 들어 있으면 그 카드를 편다 — 선택된 것이 화면에 없으면 사람은 '사라졌다'고 읽는다
+    //  (프로젝트 트리가 선택된 프로젝트를 펴 두는 것과 같은 규율).
+    if (activeCat) {
+        const c = all.find((x) => x.id === activeCat);
+        if (c && wikiClosed.has(c.space)) {
+            wikiClosed.delete(c.space);
+            saveWikiClosed();
+        }
+    }
+    const hit = (c) => !q || c.name.toLowerCase().includes(q)
+        || String(c.description || '').toLowerCase().includes(q) || String(c.key || '').toLowerCase().includes(q);
+    // 순서 = 우리 팀이 맡은 것 먼저 → 문서 많은 것 먼저.
+    const rank = (a, b) => (Number(own.has(b.id)) - Number(own.has(a.id))) || ((Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0));
+    const catRow = (c) => {
+        const on = activeCat === c.id;
+        const mine = own.has(c.id);
+        return el('a', { class: 'v2-kcat' + (on ? ' on' : ''), href: '#/knowledge?category=' + encodeURIComponent(String(c.id)),
+            title: c.name + (c.description ? ' — ' + c.description : ''), ...(on ? { 'aria-current': 'true' } : {}) }, el('span', { class: 'v2-kcat-t' }, el('span', { class: 'n', text: c.name }), mine ? el('span', { class: 'v2-kown', text: '담당', title: teamName + '이 맡은 분류' }) : null, el('span', { class: 'v2-kpill', text: String(Number(c.knowledge_count) || 0) })), c.description ? el('span', { class: 'v2-kcat-d', text: String(c.description) }) : null);
+    };
     const rows = [];
-    for (const space of ['product', 'business', 'system']) {
-        const inSpace = cats.filter((c) => c.space === space).sort((a, b) => (Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0));
+    for (const space of SPACE_ORDER) {
+        const inSpace = all.filter((c) => c.space === space);
         if (!inSpace.length)
             continue;
-        rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: SPACE_LABEL[space] || space }));
-        for (const c of inSpace) {
-            rows.push(el('a', { class: 'v2-wcat', href: '#/knowledge?category=' + encodeURIComponent(String(c.id)), title: c.name }, el('span', { class: 'n', text: c.name }), el('span', { class: 'v2-cnt', text: String(Number(c.knowledge_count) || 0) })));
+        const shownAll = inSpace.filter(hit).sort(rank);
+        if (q && !shownAll.length)
+            continue; // 찾는 중엔 맞는 것이 있는 카드만 선다
+        const open = q ? true : !wikiClosed.has(space); // 찾는 중엔 전부 편다 — 접힌 카드가 결과를 삼키면 안 된다
+        const capped = !q && !wikiMore.has(space) && shownAll.length > WIKI_CARD_MAX;
+        const shown = capped ? shownAll.slice(0, WIKI_CARD_MAX) : shownAll;
+        const docs = inSpace.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
+        const head = el('button', { class: 'v2-ksp-h', type: 'button', 'aria-expanded': String(open),
+            title: open ? SPACE_LABEL[space] + ' 접기' : SPACE_LABEL[space] + ' 펼치기 — 분류 ' + inSpace.length + '개',
+            onclick: () => {
+                if (open)
+                    wikiClosed.add(space);
+                else
+                    wikiClosed.delete(space);
+                saveWikiClosed();
+                redraw();
+            } }, el('span', { class: 'v2-car' + (open ? ' open' : ''), 'aria-hidden': 'true', text: '›' }), icon(SPACE_ICON[space] || 'apps', 'v2-ksp-ic'), el('span', { class: 'n', text: SPACE_LABEL[space] || space }), el('span', { class: 'v2-ksp-n', text: inSpace.length + ' · ' + docs }));
+        const kids = shown.map(catRow);
+        if (capped) {
+            kids.push(el('button', { class: 'v2-kmore', type: 'button', text: (shownAll.length - shown.length) + '개 더 보기',
+                onclick: () => { wikiMore.add(space); redraw(); } }));
         }
+        rows.push(el('section', { class: 'v2-ksp' + (open ? ' open' : ''), 'aria-label': SPACE_LABEL[space] || space }, head, ...(open ? [el('div', { class: 'v2-ksp-b' }, ...kids)] : [])));
     }
     if (!rows.length) {
         rows.push(el('p', { class: 'v2-empty', text: wikiCats ? (q ? '찾는 분류가 없어요.' : '아직 분류가 없어요.') : '불러오는 중…' }));
     }
-    const listEl = el('div', { class: 'v2-app-list', 'aria-label': '분류' }, ...rows);
+    const listEl = el('div', { class: 'v2-app-list v2-kshelf', 'aria-label': '분류' }, ...rows);
     appListEl = listEl;
-    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '위키' }, secHead('위키', total || null, el('a', { class: 'v2-app-new', href: '#/knowledge/new', 'aria-label': '새 문서', title: '새 문서 — 지식을 하나 씁니다' }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))), findBtn()), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('분류 찾기'))] : []), el('div', { class: 'v2-fixed v2-fixed--wiki' }, el('a', { class: 'v2-nav', href: '#/knowledge?indexed=1', title: 'WIKI 인덱스 — 모두가 항상 보는 핀' }, glyph('folder', 'v2-nav-ic'), el('span', { class: 'n', text: 'WIKI 인덱스' })), el('a', { class: 'v2-nav', href: '#/knowledge', title: '지식 전체' }, glyph('folder-open', 'v2-nav-ic'), el('span', { class: 'n', text: '지식 전체' }))), listEl), secFoot());
+    const h = location.hash;
+    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '위키' }, secHead('위키', total || null, el('a', { class: 'v2-app-new', href: '#/knowledge/new', 'aria-label': '새 문서', title: '새 문서 — 지식을 하나 씁니다' }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))), findBtn()), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('분류 · 설명 찾기'))] : []), el('nav', { class: 'v2-kviews', 'aria-label': '문서 모아 보기' }, wikiViewRow('#/knowledge?indexed=1', 'pin', 'WIKI 인덱스', 'WIKI 인덱스 — 모두가 항상 보는 핀', wikiPins, /indexed=1/.test(h)), wikiViewRow('#/knowledge', 'clock', '최근', '최근 — 팀이 남긴 순서대로', null, /^#\/knowledge$/.test(h) || /^#\/app\/knowledge$/.test(h)), wikiViewRow('#/knowledge?all=1', 'wiki', '지식 전체', '지식 전체 — 조건 없이 모두', total || null, /all=1/.test(h))), listEl), secFoot());
     keepSideScroll(listEl, 'v2-app-list');
     bindFindKey();
 }
