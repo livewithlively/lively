@@ -610,7 +610,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  자기 주소만 갈아타면 셸 주소·탭 제목·사이드바는 옛 세션 그대로인 어긋난 화면이 된다(#1808 사고).
     //  여기서 부르는 resumeSession 은 [이어서 대화하기]와 같은 경로라 주소(#/s/<새 id>)까지 함께 옮긴다.
     if (m && m.type === 'lively-term-gone' && String(m.id || '') === target.id) {
-      if (m.canRestore && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(); }
+      if (m.canRestore && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
     }
     if (!m || m.type !== 'lively-term-status') return;
@@ -1316,12 +1316,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     } catch (e: any) { if (!quiet) view.setNote(e?.message || '키를 보내지 못했습니다.'); }
   }
   /** 이 세션을 되살려(또는 그 대화를 이어받아) 새 세션으로 간다. btn 없이도 부를 수 있다 — 자동 복원 경로(#1820). */
-  async function resumeSession(btn?: HTMLButtonElement | null): Promise<void> {
+  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean }): Promise<void> {
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
       let nextId = '';
-      if (isBox && target.raw?.restorable) {
+      // ⚠ hint.canRestore — **프레임이 방금 서버에게 들은 말**이다(lively-term-gone). 종전엔 이 분기가 목록 행의
+      //  restorable 만 봤는데, 목록은 좌표를 접으면서 그 값을 못 받는 경우가 있다(session-merge.ts) — 그래서
+      //  되살릴 좌표(desired-state)가 멀쩡히 있는 세션이 **대화록 기반 이어받기**로 흘렀고, 서버는 그 대화의 cwd 를
+      //  자기 공유 루트 아래에서 못 찾아 "원본 실행 경로를 찾지 못해…" 라며 **빈 새 세션**을 만들었다
+      //  (2026-08-26 상민님 신고 · session-log-routes.ts 폴백). 목록이 조용해도 프레임이 말했으면 그 말을 믿는다.
+      //  /restore 는 이미 살아 있으면 already:true 로 되돌려주므로(routes.ts), 잘못 들어가도 새 세션을 만들지 않는다.
+      if (isBox && (target.raw?.restorable || hint?.canRestore)) {
         const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
         if (r?.session) rememberCreated(r.session);
         nextId = String(r?.session?.id || (r?.already ? target.id : ''));
