@@ -58,9 +58,14 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .sc-title { font-size: 13.5px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 /* 제목 = 세션 이름을 고치는 자리(#1719). 평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 '고칠 수 있다'고 말한다
    — 머리줄에 연필 아이콘 하나를 더 놓으면 그 줄의 조작부가 다섯 개가 된다(제목이 조작부에 밀린다). */
-.sc-titlebox { display: inline-flex; align-items: center; min-width: 0; flex: 0 1 auto; }
+/* ⭐ 좁아질 때 **먼저 줄어드는 쪽을 바꾼다**(원준 2026-08-26: "지금 세션명 너무 잘려서 보여").
+   종전엔 제목이 첫 번째로 줄었다 — 제목의 기준 폭(최대 46ch)이 이 줄에서 제일 커서 shrink 를 거의 다 떠안았다.
+   그런데 이 줄에서 사람이 가장 자주 읽는 건 제목이고, 알약은 줄어도 무엇인지가 안 사라진다(노드 이름만 …로 준다).
+   그래서 제목에 **바닥**을 준다: 이만큼은 어떤 폭에서도 안 줄고, 그 아래로는 알약이 먼저 준다.
+   ⚠ 위 ⚠ 규칙(.sc-meta min-width:0 + .sc-run overflow:hidden)은 그대로여야 압력이 알약으로 흘러간다. */
+.sc-titlebox { display: inline-flex; align-items: center; min-width: min(28ch, 100%); flex: 1 1 auto; }
 button.sc-title { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 13.5px; font-weight: 800;
-  max-width: 46ch; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: text; }
+  max-width: 72ch; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: text; }
 button.sc-title .sc-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sc-title-pen { width: 13px; height: 13px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linejoin: round;
   opacity: 0; transition: opacity .12s ease; }

@@ -144,8 +144,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  #1744 로 터미널 페이지의 상단바(파일 탐색기 · 질문 · 화면 복구 · 환경 설정 · 사용법 · 프로젝트 페이지)를 여기로
   //  합쳤다 — 종전엔 세션 화면 안에 터미널 프레임이 뜨면 상단바가 위아래로 둘이었다. 터미널 쪽 것은 사라지고
   //  그 기능은 [파일]·[목차]와 [⋯] 메뉴(터미널 조작)로 이 한 줄에 들어온다.
-  const dot = el('span', { class: 'v2-dot', 'aria-hidden': 'true' });
-  const stateEl = el('span', { class: 'sc-state' });
+  // 상태는 **점 하나로만** 말한다(원준 2026-08-26: "세션 상태 보이는데, 이거 그냥 안보이게 해").
+  //  글자('대기 중'·'작업 중'…)는 뺐다 — 색이 이미 같은 말을 하고, 이 줄에서 사람이 가장 자주 읽는 것은 세션 이름이다.
+  //  ⚠ 정보를 없애지는 않는다: 라벨을 점에 얹어 hover(title)·스크린리더(aria-label)로 그대로 읽힌다.
+  const dot = el('span', { class: 'v2-dot', role: 'img' });
   // 제목 = **pane 이름**(하네스가 써 두는 '지금 하는 일', 목록의 raw.title) — 상민님 2026-08-19.
   //  화면 안에서 알고 싶은 것은 '이 세션이 지금 뭘 하고 있나'다.
   //
@@ -280,7 +282,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
       dot, titleHost, chatBadge,
-      el('span', { class: 'sc-meta' }, stateEl, runEl)),
+      el('span', { class: 'sc-meta' }, runEl)),
     headR);
 
   const chatHost = el('div', { class: 'sc-chat' });
@@ -517,7 +519,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const asking = liveWaiting > 0 && !dead();
     const k = asking ? 'waiting' : running && !dead() ? 'busy' : target.stateKey;
     dot.className = 'v2-dot ' + dotCls(k);
-    stateEl.textContent = asking ? `확인 대기${liveWaiting > 1 ? ` ${liveWaiting}` : ''}` : running && !dead() ? '작업 중' : target.stateLabel;
+    // 라벨은 화면에서 뺐지만(원준 2026-08-26) 사라지지는 않는다 — 점에 얹어 hover·스크린리더로 그대로 읽힌다.
+    //  ⚠ '확인 대기'는 배너(waitBar)가 따로 크게 말하므로 이 줄이 없어져도 사람이 놓치지 않는다.
+    const stateLabel = asking ? `확인 대기${liveWaiting > 1 ? ` ${liveWaiting}` : ''}` : running && !dead() ? '작업 중' : target.stateLabel;
+    dot.title = stateLabel;
+    dot.setAttribute('aria-label', stateLabel);
     // ⚠ '대화가 지금 흐르고 있으면' 확인 배너를 내린다 — 훅의 waiting 보고는 사람이 터미널에서 답한 뒤 **다음 훅 보고**
     //  (PostToolUse — 긴 도구면 그 도구가 끝날 때)까지 남는다(실측 2026-08-18: 답했는데 배너가 계속 떠 있음 신고).
     //  트랜스크립트에 새 줄이 흐른다는 건 대화상자가 이미 닫혔다는 뜻이다 — 목록 폴링보다 빠르고 확실한 신호.
