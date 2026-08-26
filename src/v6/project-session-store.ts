@@ -68,6 +68,29 @@ export async function recordSessionProject(sessionId: string, projectId: number 
  *  ⚠ 순서가 의미다 — 실행 id 가 이겨야 한다. 세션을 옮긴 뒤(detach·재바인딩)의 정답은 그 실행 세션의 것이고,
  *   대화 축은 그보다 낡을 수 있다.
  */
+/**
+ * 이 세션들 중 **지금도 그 프로젝트 소속**인 것(#1867, 2026-08-26).
+ *
+ *  왜 따로 필요한가: 목록(listSessionsForProject)은 `session_project` **이력**을 조인한다 — 시간구간 모델에서
+ *   "이 프로젝트에서 일한 세션"이 곧 과거 구간을 가진 세션이라 그게 맞다. 그런데 **프로젝트를 휴지통에 넣을 때**
+ *   그 목록을 그대로 쓰면, 소속을 옮긴 뒤에도 과거 구간 때문에 **살아 있는 남의 일감 세션이 딸려 버려진다**
+ *   (2026-08-26 실측: 세션을 #1867 로 옮긴 뒤 옛 껍데기 #2015 를 휴지통에 넣자 그 세션 카드가 함께 쓸려갔다).
+ *  과거 구간은 그대로 두는 게 맞다(그때 한 일은 그 프로젝트의 것이다). 다만 **세션 자체**는 지금 주인을 따른다.
+ */
+export async function sessionsCurrentlyBound(sessionIds: string[], projectId: number): Promise<Set<string>> {
+  const ids = [...new Set(sessionIds.map((x) => String(x ?? "").trim()).filter(Boolean))];
+  if (!ids.length || !(projectId > 0)) return new Set();
+  const r = await itemsPool.query(
+    `SELECT t.session_id FROM (
+       SELECT DISTINCT ON (sp.session_id) sp.session_id, sp.project_id
+         FROM session_project sp
+        WHERE sp.session_id = ANY($1::text[])
+        ORDER BY sp.session_id, sp.valid_from DESC
+     ) t WHERE t.project_id = $2::int`,
+    [ids, projectId]);
+  return new Set(r.rows.map((x) => String((x as { session_id: string }).session_id)));
+}
+
 export async function latestProjectForSessionChain(
   ids: Array<string | null | undefined>,
   lookup: (id: string) => Promise<{ id: number; folder: string } | null> = latestProjectForSession,
