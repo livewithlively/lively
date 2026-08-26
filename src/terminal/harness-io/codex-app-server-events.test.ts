@@ -124,10 +124,58 @@ t("F3 시작을 못 본 채 turn/completed 만 오면 줄을 만들지 않는다
   assert.deepEqual(appServerLines(N("turn/completed", { threadId: "th1", completedAtMs: 7100 }), {}).lines, []);
 });
 
+// ── 나머지 항목들(#2055 후속) — 실측 스키마의 ThreadItem 18종 중 사람이 읽을 것이 있는 것만 ────────
+//  왜 표로 못박나: 안 옮기면 **아무 자국도 안 남는다**(빈 화면은 버그로 안 읽힌다). codex 는 계획을 세우고
+//  웹을 뒤지고 맥락을 압축하는데, 그 사실이 화면에 하나도 없으면 사람은 "가만히 있는다"로 읽는다.
+
+t("★ H1 plan → '할 일' 카드 — 글로 흘리지 않는다(한 말이 아니라 '지금 무엇을 하려는가'다)", () => {
+  const { lines } = appServerLines(done({ type: "plan", id: "p1", text: "1. 파일 읽기\n2. 고치기" }), {});
+  const use = (lines[0] as ChatAssistantLine).message.content[0] as any;
+  assert.equal(use.type, "tool_use");
+  assert.equal(use.name, "TodoWrite", "화면의 도구 분류기가 이미 아는 이름이어야 claude 세션과 같은 자리에 선다");
+  const res = (lines[1] as ChatUserLine).message.content as any[];
+  assert.equal(res[0].content, "1. 파일 읽기\n2. 고치기");
+});
+
+t("H2 빈 plan 은 줄을 만들지 않는다(빈 카드 금지)", () => {
+  assert.deepEqual(appServerLines(done({ type: "plan", id: "p1", text: "  " }), {}).lines, []);
+});
+
+t("H3 webSearch → '웹 검색' 카드 · 결과는 제목 — 주소 한 줄씩", () => {
+  const { lines } = appServerLines(done({ type: "webSearch", id: "w1", query: "codex app server", results: [{ title: "문서", url: "https://x/y" }] }), {});
+  const use = (lines[0] as ChatAssistantLine).message.content[0] as any;
+  assert.equal(use.name, "WebSearch");
+  assert.deepEqual(use.input, { query: "codex app server" });
+  assert.equal(((lines[1] as ChatUserLine).message.content as any[])[0].content, "문서 — https://x/y");
+});
+
+t("H4 dynamicToolCall 은 namespace 가 있으면 mcp__ 이름으로 — 화면이 MCP 도구로 알아본다", () => {
+  const { lines } = appServerLines(done({ type: "dynamicToolCall", id: "d1", namespace: "lively", tool: "project_get", contentItems: [{ text: "결과" }], status: "completed" }), {});
+  assert.equal(((lines[0] as ChatAssistantLine).message.content[0] as any).name, "mcp__lively__project_get");
+});
+
+t("H5 dynamicToolCall 실패는 실패로 — success:false 도 status 와 같은 뜻이다", () => {
+  const { lines } = appServerLines(done({ type: "dynamicToolCall", id: "d1", tool: "t", contentItems: [{ text: "터짐" }], success: false }), {});
+  assert.equal(((lines[1] as ChatUserLine).message.content as any[])[0].is_error, true);
+});
+
+t("★ H6 contextCompaction → system/compact — 화면의 '맥락 압축' 구분선이 읽는 바로 그 줄", () => {
+  const { lines } = appServerLines(done({ type: "contextCompaction", id: "c1" }), {});
+  const sys = lines[0] as ChatSystemLine;
+  assert.equal(sys.type, "system");
+  assert.equal(sys.subtype, "compact", "대화가 왜 갑자기 짧아졌는지의 유일한 설명이다");
+});
+
+t("H7 imageView → '읽기' 카드(경로) — 결과가 없으니 결과 줄도 없다(빈 말풍선 금지)", () => {
+  const { lines } = appServerLines(done({ type: "imageView", id: "i1", path: "/a/b.png" }), {});
+  assert.equal(lines.length, 1);
+  assert.deepEqual(((lines[0] as ChatAssistantLine).message.content[0] as any).input, { file_path: "/a/b.png" });
+});
+
 t("G1 모르는 method·item.type 은 조용히 무시한다(codex 가 항목을 늘려도 화면이 안 깨진다)", () => {
   assert.deepEqual(appServerLines(N("thread/tokenUsage/updated", { threadId: "th1" }), {}).lines, []);
-  assert.deepEqual(appServerLines(done({ type: "webSearch", id: "w1", query: "x" }), {}).lines, []);
   assert.deepEqual(appServerLines(done({ type: "sleep", id: "s1", durationMs: 5 }), {}).lines, []);
+  assert.deepEqual(appServerLines(done({ type: "subAgentActivity", id: "a1", kind: "x" }), {}).lines, []);
 });
 
 t("G2 깨진 입력(문자열·null·params 없음)에도 안 터진다", () => {

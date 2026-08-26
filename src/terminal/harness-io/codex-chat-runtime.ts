@@ -52,6 +52,8 @@ interface Entry {
   cwd: string;
   osUser: string | null;
   startedAt: number;
+  /** 지금 턴이 도는 중인가 — 도는 중에 온 말은 새 턴이 아니라 **얹는다**(turn/steer). */
+  running: boolean;
 }
 
 /**
@@ -226,8 +228,8 @@ async function start(o: CodexChatOpts): Promise<Entry> {
       // 승인은 **사람에게 물어본다**. 정책을 명시로 준 호출자(리브 같은 자동 경로)는 그쪽이 이긴다.
       onApproval: o.onApproval ?? ((req) => askHuman(o.sessionId, req)),
       onNotify: (method, params) => {
-        if (method === "turn/started") emit(o.sessionId, { kind: "status", running: true });
-        else if (method === "turn/completed") emit(o.sessionId, { kind: "status", running: false });
+        if (method === "turn/started") { mark(o.sessionId, true); emit(o.sessionId, { kind: "status", running: true }); }
+        else if (method === "turn/completed") { mark(o.sessionId, false); emit(o.sessionId, { kind: "status", running: false }); }
         else if (method === "thread/tokenUsage/updated") {
           const t = (params as any)?.tokenUsage?.total?.totalTokens;
           if (Number.isFinite(t)) emit(o.sessionId, { kind: "usage", totalTokens: Number(t) });
@@ -255,18 +257,37 @@ async function start(o: CodexChatOpts): Promise<Entry> {
     throw new CodexChatUnavailable(`codex 대화를 열지 못했습니다 — ${msg(e)}`, e);
   }
 
-  const entry: Entry = { server, threadId, cwd: o.cwd, osUser: o.osUser, startedAt: Date.now() };
+  const entry: Entry = { server, threadId, cwd: o.cwd, osUser: o.osUser, startedAt: Date.now(), running: false };
   sessions.set(o.sessionId, entry);
   return entry;
 }
 
-/** 한 턴 보낸다. 준비가 안 됐으면 준비하고 보낸다(호출자는 ensure 를 따로 부를 필요가 없다). */
-export async function sendCodexChat(o: CodexChatOpts & { text: string }): Promise<{ threadId: string }> {
+/** 턴 상태를 적어 둔다 — 다음 말을 새 턴으로 열지, 도는 턴에 얹을지의 근거다. */
+function mark(sessionId: string, running: boolean): void {
+  const e = sessions.get(sessionId);
+  if (e) e.running = running;
+}
+
+/**
+ * 한 턴 보낸다. 준비가 안 됐으면 준비하고 보낸다(호출자는 ensure 를 따로 부를 필요가 없다).
+ *
+ *  ★ **도는 중에 온 말은 새 턴이 아니라 얹는다**(turn/steer). 대화창은 도는 동안에도 보낼 수 있는데
+ *   (claude 세션이 큐로 받아 주므로 그렇게 만들었다), codex 에 그걸 turn/start 로 보내면 그 턴이 이미
+ *   있다며 거부되거나 두 턴이 겹친다. steer 는 끊지 않고 방향만 바꾼다 — 사람이 기대하는 것이 그쪽이다
+ *   ("아, 그거 말고 이거요"). steer 가 안 되는 판이면 그 실패를 삼키지 않고 새 턴으로 한 번 더 시도한다.
+ */
+export async function sendCodexChat(o: CodexChatOpts & { text: string }): Promise<{ threadId: string; steered?: boolean }> {
   const text = String(o.text ?? "");
   if (!text.trim()) throw new CodexChatUnavailable("빈 메시지는 보내지 않습니다");
   await ensureCodexChat(o);
   const e = sessions.get(o.sessionId);
   if (!e) throw new CodexChatUnavailable("codex 대화 런타임이 사라졌습니다");
+  if (e.running) {
+    try {
+      await e.server.steer(e.threadId, text);
+      return { threadId: e.threadId, steered: true };
+    } catch { /* 이 판에서는 steer 를 못 쓴다 — 아래 새 턴으로 간다(그 실패는 값으로 온다) */ }
+  }
   try {
     await e.server.startTurn(e.threadId, text);
     return { threadId: e.threadId };
