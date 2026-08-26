@@ -364,7 +364,12 @@ export async function startGoogleConsent(
   const relay = process.env.GOOGLE_OAUTH_RELAY_URL?.trim();
   if (relay) {
     const gatewayUrl = (await getOrgProfile()).gateway_url ?? "";
-    return { authorized: false, state, authorizationUrl: relayStartUrl(relay, state, gatewayUrl) };
+    // ★ 구글은 릴레이에 **scope 도 실어 보낸다**(슬랙·노션과 다른 점). CP 는 그걸 그대로 인가 URL 에 옮길 뿐,
+    //  기본값을 끼워 넣지 않는다 — 그래야 사용자가 고른 서비스만 요청된다(안 고른 제한범위가 섞이면
+    //  되돌릴 수 없는 미검증 100명 한도를 한 칸 태운다).
+    const u = new URL(relayStartUrl(relay, state, gatewayUrl));
+    u.searchParams.set("scope", googleScopeString(services));
+    return { authorized: false, state, authorizationUrl: u.toString() };
   }
   const client = await loadOAuthClient(GOOGLE_KIND);
   if (!client?.client_id || !client.client_secret) {
