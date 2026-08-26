@@ -40,13 +40,15 @@ export interface RailHooks {
 }
 
 // ── 구역 표 ──────────────────────────────────────────────────────────────────
-export interface SecDef { key: RailSection; label: string; route: string; tab: string | null; icon: string }
+//  ⚠ 구역의 **착지 주소는 여기 없다** — 셸(main.ts sectionRoute)이 정한다. [프로젝트]처럼 착지가 그때그때
+//   달라지는 구역이 있어서다(#2061 즐겨찾기 맨 위 리스트). 여기 표에 route 를 되살리면 규칙이 둘이 된다.
+export interface SecDef { key: RailSection; label: string; tab: string | null; icon: string }
 const SECTIONS: SecDef[] = [
-  { key: 'home', label: '홈', route: '#/', tab: null, icon: 'home' },
-  { key: 'inbox', label: '확인할 것', route: '#/inbox', tab: null, icon: 'inbox' },
-  { key: 'sess', label: 'AI 세션', route: '#/app/terminal', tab: 'terminal', icon: 'term' },
-  { key: 'proj', label: '프로젝트', route: '#/app/projects2', tab: 'projects2', icon: 'proj' },
-  { key: 'wiki', label: '위키', route: '#/app/knowledge', tab: 'knowledge', icon: 'wiki' },
+  { key: 'home', label: '홈', tab: null, icon: 'home' },
+  { key: 'inbox', label: '확인할 것', tab: null, icon: 'inbox' },
+  { key: 'sess', label: 'AI 세션', tab: 'terminal', icon: 'term' },
+  { key: 'proj', label: '프로젝트', tab: 'projects2', icon: 'proj' },
+  { key: 'wiki', label: '위키', tab: 'knowledge', icon: 'wiki' },
 ];
 //  구역이 아닌 '갈 곳' — 누르면 그 화면으로 가지만 사이드바는 바뀌지 않는다. 활성은 주소(activeKey)로 판정.
 interface LinkDef { key: string; label: string; route: string; tab: string | null; icon: string }
@@ -55,7 +57,6 @@ const LINKS: LinkDef[] = [
 ];
 export function railSections(): SecDef[] { return SECTIONS.filter((s) => !s.tab || navOn(s.tab)); }
 export function sectionDef(sec: RailSection): SecDef { return SECTIONS.find((s) => s.key === sec) || SECTIONS[0]; }
-export function sectionRoute(sec: RailSection): string { return sectionDef(sec).route; }
 
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 const SEC_STORE = 'lively_v2_rail_sec';
@@ -94,7 +95,10 @@ function init(): void {
   void listWorkspaces().then((rows) => { if (rows.length) { spaces = rows; drawRail(); } });
 }
 
-export function railSection(): RailSection { return section; }
+//  ⚠ init() 을 먼저 부른다 — 이 게터는 레일이 그려지기 **전에도** 불린다(부팅 때 탭이 되살아나는 순간 등).
+//   그때 기본값 'home' 을 돌려주면 부른 쪽은 '사람이 홈을 골랐다'로 읽는다. 실측(#2061): 위키에서 새로고침했는데
+//   되살아난 탭이 홈 자리로 기록돼 [홈] 이 기억하던 세션을 잃었다.
+export function railSection(): RailSection { init(); return section; }
 /** 레일이 숨겨져 있는가 — 좁은 폭에선 늘 '아니오'(거기선 CSS 가 레일을 아이콘으로 세운다). */
 export function railIsHidden(): boolean { return hidden && !window.matchMedia(NARROW_MQ).matches; }
 

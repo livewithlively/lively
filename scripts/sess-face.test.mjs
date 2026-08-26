@@ -87,6 +87,7 @@ ok(pickSessFace("  " + ID + "  ", { title: ID }).title === "",
 }
 
 // ══ 배선 — 규칙이 맞아도 안 부르면 화면은 그대로다 ══════════════════════════════
+const LOAD = () => slice(MAIN, "async function loadData(", "\nconst findSess");
 const TITLE_FOR = () => slice(MAIN, "function titleFor(route: string)", "\nfunction applyTabChrome(");
 ok(/sessFallback\(/.test(TITLE_FOR()) && TITLE_FOR().indexOf("sessFallback(") < TITLE_FOR().indexOf("'세션 ' + tail"),
   "E10 탭·좌측 행 이름은 id 꼬리로 떨어지기 **전에** 폴백을 본다");
@@ -138,5 +139,15 @@ ok(/recallSessName\(id\)/.test(FALLBACK()) && /appInstances\.find/.test(FALLBACK
 const REPAIR = () => slice(MAIN, "async function repairUnknownSessNames(", "\n// ── 라우터");
 ok(/pickSessFace\(ref, inst\)\.title/.test(REPAIR()),
   "E24 되찾기도 같은 규칙을 거친다 — 늙은 title·박스 id 를 그대로 이름으로 삼지 않는다");
+
+// ══ #2022 E2E 가 잡은 것 — 정본이 첫 그림에 **도착해 있어야** 폴백이 산다 ═══════════
+//  값·배선이 전부 통과하는데 화면만 틀렸던 자리다(2026-08-26 dev 실측): 세션 목록을 막고 첫 그림을
+//  그리자 서버가 이름을 아는 세션인데도 좌측 행이 `세션 c368bd` 로 떨어졌다. 원인은 loadData 의
+//  Promise.all 이 여섯 축을 한 덩어리로 묶은 것 — 폴백의 재료(앱 인스턴스)가 느린 축을 함께 기다렸다.
+ok(/const instsP = listAppInstances\(\)/.test(LOAD()) && /void instsP\.then/.test(LOAD()),
+  "E25 앱 인스턴스는 먼저 도착하는 대로 얹는다 — 폴백의 재료가 느린 축을 기다리면 정작 첫 그림에 없다");
+
+ok(/if \(data\.sessions\.length\) return;/.test(LOAD()),
+  "E26 그 조기 반영이 다시 그리는 건 아직 아무 세션도 못 그린 판뿐이다(매 폴링마다 덧그리지 않게)");
 
 console.log(`sess-face: ${pass} passed`);
