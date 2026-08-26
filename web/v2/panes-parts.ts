@@ -211,8 +211,8 @@ export function sessTitle(s: Sess, projectName: string): string {
   const dup = !!projectName && norm(t.main) === norm(projectName);
   const tailId = String(s.id).split('-').pop() || String(s.id);
   // ★ 서버가 들고 있는 이름이 **정본**이다 — 아래 nameCache 보다 먼저 본다(원준 2026-08-20).
-  //  새 세션은 첫 지시를 이름 자리에 임시로 넣어 두는데(seedSessName), 잠시 뒤 서버가 그 지시를 보고
-  //  **짧은 이름**을 지어 붙인다(src/terminal/session-name-ai.ts). 캐시를 먼저 보면 그 이름이 도착해도
+  //  새 세션은 첫 지시를 이름 자리에 임시로 넣어 두는데(seedSessName), 잠시 뒤 **그 세션 자신**이 첫 지시 턴에
+  //  **짧은 이름**을 지어 등록한다(#1979 — 훅 session-name-ask → MCP session_rename). 캐시를 먼저 보면 그 이름이 도착해도
   //  화면은 영영 첫 지시 앞부분을 그대로 달고 있게 된다.
   if (!dup && t.main) return t.main;
   return nameCache.get(s.id) || ('세션 ' + tailId.slice(0, 8));
@@ -254,7 +254,6 @@ function sessionsPart(ctx: PartCtx): Part {
   let mounted: { sid: string; h: { destroy(): void } | null; ok: boolean } | null = null;
   let retry = 0;                                      // 방금 만든 세션이 목록에 아직 없을 때 다시 붙여 보는 횟수
   let retryTimer = 0;
-  let missSince = 0;                                  // sel 이 목록에서 안 보이기 시작한 시각(0 = 보인다) — paint() 주석
 
   // 위(그리고 전부) — 세션 화면이 통째로 들어오는 자리
   const stage = el('div', { class: 'pn-stage' });
@@ -381,38 +380,24 @@ function sessionsPart(ctx: PartCtx): Part {
     select(made.id);
   }
 
-  /** 목록에서 sel 이 사라졌다고 갈아타기까지 두는 유예.
-   *  2분은 넉넉히 잡은 값이다 — 게이트웨이 재배포 후 노드가 다시 붙기까지 **최악 33초**(노드 에이전트 재연결
-   *  백오프 상한 30초 + 상태 push 주기 3초, src/node/agent.ts BACKOFF_MAX_MS·STATE_PUSH_MS)이고 그 사이
-   *  노드 세션은 목록에서 통째로 빠져 있다(게이트웨이 states 는 인메모리라 재시작 때 리셋된다).
-   *  반대로 늦어서 손해 볼 일은 거의 없다: 세션을 다른 프로젝트로 옮기거나 지운 드문 경우에 화면이 잠깐 더
-   *  머무를 뿐이고, 그동안에도 터미널은 그 세션에 정상으로 붙어 있다. */
-  const MISS_GRACE_MS = 120_000;
-
   function paint(): void {
     const ss = mine();
-    // 지정된 세션이 이 프로젝트에 없으면(옮겼거나 사라졌다) 맨 위 세션으로.
-    //  ⚠ 방금 만들어 아직 목록에 안 온 세션(mounted.ok === false)은 예외다 — 여기서 다른 세션으로 튕기면
-    //   사람이 방금 연 세션을 잃는다.
-    // ★ '목록에 없다' ≠ '사라졌다'(상민님 신고 2026-08-20). 게이트웨이를 재배포하면 /terminal/sessions 가
-    //   몇 초간 실패하고, 노드 세션 목록은 게이트웨이 재시작 때 통째로 리셋된다(src/node/registry.ts states —
-    //   노드가 다시 붙어 상태를 push 할 때까지 비어 있다). 그 한두 판에 이 폴백이 돌면 **살아 있는 세션이**
-    //   맨 위 세션으로 갈아치워졌다: 주소·탭 제목·상단바는 옛 세션 그대로인데 터미널만 남의 세션(대개 다른
-    //   탭에서 보고 있던 그 세션)인 화면이 되고, 20초 목록 갱신이 옛 세션 정보를 그 상단바에 계속 덧칠해
-    //   새로고침 전까지 어긋난 채로 굳었다. 그래서 셋을 건다 —
-    //   ⓐ 목록을 통째로 못 받은 판은 아예 판단하지 않는다(갈아탈 근거가 그 판에는 없다),
-    //   ⓑ 30초 넘게 계속 안 보일 때만 갈아탄다(재배포·일시장애는 그 안에 복구된다),
-    //   ⓒ 갈아탈 때는 select() 로 간다 — 주소·탭 제목까지 함께 옮겨 **화면과 주소가 어긋나지 않는다**.
+    // ★★ **보고 있는 세션을 다른 세션으로 바꾸지 않는다**(상민님 재신고 2026-08-20 — 1차 수정 후에도 재발,
+    //  2026-08-26 dev 에서 또 재발: 사람이 아무것도 안 눌렀는데 창이 남의 세션으로 넘어갔다).
+    //
+    //  종전엔 여기 "지정된 세션이 이 프로젝트 목록에 없으면 맨 위 세션으로" 폴백이 있었고, 그게 화면이
+    //  남의 세션으로 바뀌는 **유일한 입구**였다. 1차 수정에서 유예(2분)와 주소 동기화를 붙였지만 그것으로는
+    //  부족했다 — 실제로 난 사고는 이렇다:
+    //   ⓐ 게이트웨이 재시작 창에 renderRoute 가 세션을 목록에서 못 찾는다(노드 세션은 그때 잠깐 빠진다),
+    //   ⓑ 그래서 셸이 **loose(projectId=0)** 로 마운트된다 — 문패가 '프로젝트 없는 세션'이 된다,
+    //   ⓒ 그 셸의 mine() 은 '프로젝트 없는 세션'들이고, 보고 있던 세션은 거기 없다,
+    //   ⓓ 폴백이 그중 맨 위로 갈아탄다. 그 '맨 위'는 lastSeen 최신이라, **대화록이 방금 처음 올라온 세션**
+    //     (하네스 Stop 훅의 첫 업로드 — 사람 눈엔 '갑자기 생긴 새 세션')이 곧잘 그 자리를 차지한다.
+    //
+    //  올바른 처방은 '세션을 바꾸기'가 아니라 **'셸을 그 세션의 프로젝트로 다시 그리기'** 다. 그건 호출자가
+    //  안다(main.ts 8초 갱신이 셸 프로젝트와 세션의 실제 프로젝트를 대조해 다시 그린다). 여기서는 주소가
+    //  가리키는 세션을 그대로 지킨다 — 세션이 진짜로 사라졌으면 그건 터미널이 4410 으로 말해 준다.
     const pending = !!mounted && mounted.sid === sel && !mounted.ok;
-    const blind = !ctx.data().sessions.length;        // 목록 자체가 비었다 = 못 받은 판(진짜 0건이어도 갈아탈 곳이 없다)
-    const missing = !composing && !!sel && !pending && !blind && !ss.some((s) => s.id === sel);
-    if (!missing) missSince = 0;
-    else if (!missSince) missSince = Date.now();
-    if (missing && Date.now() - missSince >= MISS_GRACE_MS) {
-      missSince = 0;
-      select(ss.length ? ss[0].id : null);            // 주소·탭 제목까지 함께(onSessionPicked) — mountStage 도 select 안에서 돈다
-      return;
-    }
     if (!ss.length && !composing && !pending && !sel) composing = true;
     mountStage();
   }

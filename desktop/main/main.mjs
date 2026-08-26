@@ -23,16 +23,17 @@ import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
+import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, SEEN_MAX } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -57,6 +58,9 @@ let updater = null;                 // electron-updater 인스턴스 — **한 �
 let autoApplyTimer = null;          // 창이 안 보일 때 자동 적용 예약
 let progressNoteAt = 0;             // 진행률 문구를 마지막으로 그린 시각(스로틀)
 let updateVersion = "";             // 지금 받는 중인 새 버전(진행률 문구용)
+let updateCheckFailures = 0;         // 연속 확인 실패 — 5→15→60분 백오프. 성공하면 0으로 돌아간다.
+let updateCheckTimer = null;         // 결과 기반 다음 확인 예약(setInterval 이면 백오프를 표현하지 못한다)
+let updateAttemptHadError = false;   // error 이벤트 + checkForUpdates reject 가 같은 실패를 두 번 세지 않게 한다
 let staleInstalls = [];             // Windows: 다른 자리에 남은 옛 설치본(win-stale-install.mjs) — 있으면 정리 카드가 뜬다
 let staleCheckedAt = 0;
 let state = {                       // 트레이·렌더러가 함께 보는 스냅샷
@@ -135,7 +139,11 @@ async function refreshNodeStatus(cli) {
   const n = r.result?.node;
   if (!r.ok || !n) { renderTray(); send(IPC.STATE, state); return; }   // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
   // nodeConnected: 게이트웨이가 보는 연결 여부(true/false/null=모름). running 과 다른 축 — 프로세스가 돌아도 안 붙어 있을 수 있다.
-  patchState({ nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null, nodeConnected: typeof n.connected === "boolean" ? n.connected : null });
+  // nodeSleepNote(#1849): 게이트웨이가 연결 이력으로 판정한 "왜 안 붙어 있나"(잠자기 추정). 없으면 null(모름).
+  //  ⚠ 문구는 서버가 만든다 — 앱이 지으면 웹·CLI 와 다른 말을 하게 된다.
+  patchState({ nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null,
+    nodeConnected: typeof n.connected === "boolean" ? n.connected : null,
+    nodeSleepNote: (n.sleep && typeof n.sleep.note === "string" && n.sleep.note) ? n.sleep.note : null });
   renderTray(); send(IPC.STATE, state);
 }
 /** 상태 일부를 바꾸면 `ready` 도 같이 다시 잰다 — 이걸 빼먹은 자리가 하나라도 있으면 트레이·창이 옛 판정으로 움직인다. */
@@ -259,10 +267,11 @@ function setAppAutoLaunch(on) {
 
 // ── 자동 업데이트 (#1541 T6) ─────────────────────────────────────────────────
 // ⚠ **앱 자신의 갱신**이다 — 키트 자동 업데이트(#858)와 다른 축이다(그건 CLI 가 자기 키트를 갱신한다).
-// 실패는 치명이 아니다(앱은 그대로 쓴다) → 오류 팝업을 띄우지 않고 로그·상태로만 남기고, 한 번 실패하면
-//  이 세션엔 다시 묻지 않는다(같은 팝업이 6시간마다 반복되는 것보다 낫다).
-let updateFailed = false;
+// 실패는 치명이 아니다(앱은 그대로 쓴다) → 오류 팝업을 띄우지 않고 로그·상태로만 남긴다. 순간 장애 한 번이
+//  앱 재시작까지 업데이트를 영구 정지시키면 보안 픽스도 막히므로 5→15→60분으로 백오프해 다시 확인한다.
 async function checkUpdates() {
+  // 받아 둔 버전이 있으면 적용만 남았다. 5분마다 같은 릴리스 메타데이터를 다시 읽을 이유가 없다.
+  if (updateReady) return null;
   const verdict = shouldCheckForUpdates({
     packaged: app.isPackaged, platform: process.platform,
     // 빌드에 배포처가 **실제로** 박혔나. ⚠ 상수 true 로 두면 안 된다 — 설치기 없이 만든 빌드(`--dir`,
@@ -272,18 +281,42 @@ async function checkUpdates() {
     hasPublishConfig: existsSync(join(process.resourcesPath || "", "app-update.yml")),
     // mac 서명 여부는 런타임에 확실히 알기 어렵다 — 서명된 앱만 통과하는 게이트키퍼 판정을 대신 쓴다.
     macSigned: process.platform !== "darwin" || app.isPackaged && !!process.mas === false && isMacSigned(),
-    optOut: process.env[UPDATE_OPT_OUT_ENV], failedBefore: updateFailed,
+    optOut: process.env[UPDATE_OPT_OUT_ENV],
   });
   // 왜 안 하는지도 **화면에** 남긴다 — 로그에만 적으면 사용자는 '업데이트가 되는 앱인지'조차 모른다.
   updateNote = updateStatusNote(verdict.reason);
   if (!verdict.ok) { send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); return; }
+  updateAttemptHadError = false;
   try {
     const u = await getUpdater();
     // ⚠ checkForUpdatesAndNotify 가 아니다 — 그건 OS 알림으로 "종료하면 설치됩니다" 를 띄우는데, 이제 적용은
     //  앱이 스스로 한다(applyUpdate). 그 문구가 사람을 종전의 함정(손으로 껐다 켜기)으로 다시 부른다.
-    await u.checkForUpdates();
-  } catch (e) { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); }
+    const result = await u.checkForUpdates();
+    // autoDownload 의 설치기 받기는 별도 promise 다. 완료 전에 다음 5분 타이머를 열면 느린 회선에서 확인이 겹친다.
+    if (result?.downloadPromise) await result.downloadPromise;
+    if (!updateAttemptHadError) updateCheckFailures = 0;
+  } catch (e) { recordUpdateError(e); }
   void refreshState();
+}
+function recordUpdateError(e) {
+  // electron-updater 는 같은 실패를 error 이벤트로 내고 promise 도 reject 할 수 있다. 한 시도에 한 번만 센다.
+  if (!updateAttemptHadError) { updateAttemptHadError = true; updateCheckFailures += 1; }
+  updateNote = updateFailureNote(e);
+  send(IPC.LOG, { stream: "raw", line: updateNote });
+  void refreshState();
+}
+function scheduleNextUpdateCheck() {
+  const delay = updateCheckDelayMs(updateCheckFailures, Math.random());
+  updateCheckTimer = setTimeout(async () => {
+    updateCheckTimer = null;
+    await checkUpdates();
+    scheduleNextUpdateCheck();
+  }, delay);
+  if (updateCheckTimer.unref) updateCheckTimer.unref();
+}
+async function startUpdateCheckLoop() {
+  await checkUpdates();
+  scheduleNextUpdateCheck();
 }
 /** electron-updater — 한 번만 만들고 리스너도 한 번만. (종전엔 확인할 때마다 on() 을 다시 걸어 누적됐다.) */
 async function getUpdater() {
@@ -291,7 +324,7 @@ async function getUpdater() {
   const { autoUpdater } = (await import("electron-updater")).default;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;   // 사람이 먼저 끄면 그때라도 설치한다(폴백) — 주 경로는 applyUpdate
-  autoUpdater.on("error", (e) => { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); });
+  autoUpdater.on("error", (e) => recordUpdateError(e));
   autoUpdater.on("update-not-available", () => { updateNote = "최신 버전입니다."; void refreshState(); });
   autoUpdater.on("checking-for-update", () => { updateNote = "업데이트 확인 중…"; void refreshState(); });
   autoUpdater.on("update-available", (i) => {
@@ -548,6 +581,7 @@ async function connectNotifyStream() {
   if (!token) { scheduleStreamRetry(); return; }
   const ctl = new AbortController();
   streamCtl = ctl;
+  let openedAt = 0;
   try {
     const res = await fetch(`${gw}/api/ui/notify/stream`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
@@ -555,7 +589,8 @@ async function connectNotifyStream() {
     });
     // 구 게이트웨이엔 이 표면이 없다(404) — 조용히 폴링만 쓴다(그래서 폴링을 없애지 않았다).
     if (!res.ok || !res.body) { scheduleStreamRetry(); return; }
-    streamAlive = true; streamTries = 0;
+    streamAlive = true;
+    openedAt = Date.now();   // #2041 — 되돌리기는 '붙었나'가 아니라 '붙어서 살았나'로(아래 finally)
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -578,6 +613,9 @@ async function connectNotifyStream() {
   finally {
     streamAlive = false;
     if (streamCtl === ctl) streamCtl = null;
+    // ⚠ #2041 — 붙었다는 사실이 아니라 **버틴 시간**으로 백오프를 되돌린다. 붙자마자 끊는 서버에
+    //  성공으로 되돌리면 초당 한 번씩 재접속한다(웹 셸에서 20초에 19번 실측).
+    if (stableStream(openedAt ? Date.now() - openedAt : 0)) streamTries = 0;
     scheduleStreamRetry();
   }
 }
@@ -1050,8 +1088,12 @@ async function start(kind, opts) {
  */
 async function onboard(url) {
   if (running) return { ok: false, error: "이미 실행 중인 작업이 있습니다." };
-  try { argvFor("login", { gateway: url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
-  const gw = String(url || "").trim();
+  // 입력 해석 + 진행을 막아야 하는 사유(라이블리 클라우드 로그인 주소를 넣은 경우 등)를 **먼저** 본다 —
+  //  그냥 진행하면 부트스트랩이 404 를 받고 "CLI 설치가 끝났는데 실행파일이 없습니다" 라는 엉뚱한 진단이 남는다(#2044).
+  const advice = gatewayAdvice(url);
+  if (advice.error) return { ok: false, error: advice.error };
+  try { argvFor("login", { gateway: advice.url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
+  const gw = advice.url;
 
   // ★ 부트스트랩 조건은 '**CLI 가 없다**' 가 아니라 '**쓸 수 있는 CLI 가 없다**' 다.
   //  앱보다 먼저 CLI 를 깔아 둔 PC 가 흔한데(=지금까지 CLI 로 쓰던 모든 사람), 그 구 CLI 는 `--json-events` 를
@@ -1087,7 +1129,11 @@ async function onboard(url) {
           ? (state.cliBroken
             ? `CLI 를 다시 설치했는데도 실행할 수 없습니다(${state.cliBroken}).`
             : `CLI 를 업데이트했는데도 여전히 옛 버전입니다. 그 주소가 최신 키트를 서빙하는지 확인해 주세요: ${gw}`)
-          : `CLI 설치가 끝났는데 실행파일이 없습니다. 주소가 맞는지 확인하세요: ${gw}`),
+          // ★ 여기서 "주소가 맞는지 확인하세요" 로 끝내면 사람은 **맞는 주소를 어디서 보는지**를 모른다(#2044).
+          //  매니지드에서 가장 흔한 원인이 그것이라(로그인 주소를 넣음) 다음 행동을 같이 준다.
+          : `이 주소에서 라이블리 CLI 를 받지 못했습니다: ${gw}\n`
+            + "라이블리 클라우드라면 app.lvly.io 홈의 «데스크톱 앱·CLI 로 연결» 에 있는 워크스페이스 주소를, "
+            + "회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요."),
       };
     }
     progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
@@ -1132,6 +1178,8 @@ ipcMain.handle(IPC.ANSWER, (_e, { id, value }) => {
   return { ok: true };
 });
 ipcMain.handle(IPC.SET_GATEWAY, (_e, { url }) => onboard(url));
+// 타이핑 중 되비추기(#2044) — 아무것도 실행하지 않는다(문자열 → 문자열). 정규화·판정의 정본은 여기다.
+ipcMain.handle(IPC.GATEWAY_ADVICE, (_e, { url }) => gatewayAdvice(url));
 // 다시 시도 — **렌더러가 무엇을 재시도할지 정하지 않는다.** 메인이 기억한 마지막 작업을 그대로 돌린다
 //  (렌더러가 kind 를 보내면 '실패한 것'과 '보내고 싶은 것'이 갈라져 임의 작업 실행 통로가 된다).
 ipcMain.handle(IPC.RETRY, () => {
@@ -1147,7 +1195,7 @@ ipcMain.handle(IPC.READ_LOG, (_e, { id }) => {
   try { return { ok: true, ...tailText(readFileSync(p, "utf8")), path: p }; }
   catch (e) { return { ok: false, error: String(e?.message || e) }; }
 });
-ipcMain.handle(IPC.CHECK_UPDATE, async () => { updateFailed = false; await checkUpdates(); return { ok: true, note: updateNote }; });
+ipcMain.handle(IPC.CHECK_UPDATE, async () => { await checkUpdates(); return { ok: true, note: updateNote }; });
 ipcMain.handle(IPC.APPLY_UPDATE, async () => applyUpdate());
 ipcMain.handle(IPC.CLEANUP_STALE, async () => cleanupStaleInstall());
 ipcMain.handle(IPC.OPEN_APP, () => showApp());
@@ -1243,11 +1291,9 @@ else {
     //  트레이가 옛 상태를 계속 보여준다. 30초 — 사람이 느끼기엔 실시간이고 `status` 호출은 가볍다.
     const poll = setInterval(() => { if (!running) void refreshState({ deep: true }); }, 30_000);
     if (poll.unref) poll.unref();
-    void checkUpdates();
+    void startUpdateCheckLoop();
     // Windows: 다른 자리에 옛 설치본이 남아 있나 — 있으면 정리 카드·트레이 항목이 뜬다(옛 바로가기가 옛 버전을 여는 것의 뿌리).
     void detectStaleInstall({ force: true });
-    const up = setInterval(() => void checkUpdates(), UPDATE_INTERVAL_MS);
-    if (up.unref) up.unref();
     // 앱 알림(#1842) — 첫 폴은 기준선만 잡는다(콜드스타트). 이후 30초마다 '지금 사람을 불러야 할 사건'만 배너로.
     void pollNotifications();
     const ntf = setInterval(() => void pollNotifications(), NOTIFY_POLL_MS);
@@ -1257,7 +1303,7 @@ else {
   });
   // ★ 창을 다 닫아도 종료하지 않는다(트레이 상주). 기본 동작(win/linux 종료)을 반드시 덮어야 한다.
   app.on("window-all-closed", () => { /* noop — 트레이로 산다 */ });
-  app.on("before-quit", () => { quitting = true; });
+  app.on("before-quit", () => { quitting = true; if (updateCheckTimer) clearTimeout(updateCheckTimer); });
   app.on("activate", () => showMain());            // macOS dock 클릭 — 갖춰졌으면 라이블리 화면
   process.on("uncaughtException", (e) => {
     try { dialog.showErrorBox("라이블리", String(e?.stack || e)); } catch { /* 다이얼로그도 못 뜨는 상황 */ }

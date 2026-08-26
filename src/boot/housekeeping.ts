@@ -20,6 +20,8 @@ import { seedDefaultContent } from "../org/delivery/seed-content.js";
 import { seedBuiltinApps } from "../apps/seed.js";
 import { armWorkerRecovery } from "../apps/worker-service.js";
 import { armMemberDeactivationHook } from "../apps/member-deactivation.js";
+import { armNodeSessionDiscovery } from "../terminal/node-session-state.js";   // #2022 — 노드가 직접 띄운 세션도 desired-state 에 남긴다
+import { sweepGhostSessionInstances } from "../apps/instance-janitor.js";
 import { runAutoBackfillSweep } from "../v6/embedding-backfill.js";
 import { registerTerminal } from "../terminal/routes.js";
 import { liveAttachCount, scanAttachProcs } from "../terminal/terminal-pty.js";
@@ -174,6 +176,8 @@ export const DB_BOOT_STEPS: BootStep[] = [
   // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
   //  members.ts 의 단일 슬롯에 건다. 순수 배선(동기·DB 무접근)이라 어디 붙어도 되지만, 요청이 들어오기 전에 걸려야 한다.
   { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },
+  // #2022 — 노드 상태 push 구독. 처음 보는 세션의 행을 적어, 노드가 꺼져도 그 세션이 목록에서 사라지지 않게.
+  { name: "node-session-discovery", gate: "always", run: () => { armNodeSessionDiscovery(); } },
   // 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 .lively/project.json 에 sync:"pull" 을 stamp.
   //  pull 훅이 '이 폴더에 서버 파일을 써도 되나'를 마커의 sync 로 판정하게 됐는데, sync 없는 구 마커의 폴백은
   //  ~/lively/projects/<id>(꼴 고정) 만 인정한다 — 박스 폴더는 folder 가 임의(예: 'project/관리탭 수정')라
@@ -299,6 +303,11 @@ function startBackgroundSweeps(): void {
     void sweepAwaitingNotifications()
       .catch((err) => logger.warn({ err }, "awaiting 알림 스윕 실패(비치명 — 다음 tick 재시도)"));
   }, 30_000).unref();
+
+  // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
+  //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.
+  setTimeout(() => { void sweepGhostSessionInstances().catch((err) => logger.warn({ err }, "유령 인스턴스 스윕(부팅) 실패")); }, 90_000).unref();
+  setInterval(() => { void sweepGhostSessionInstances().catch((err) => logger.warn({ err }, "유령 인스턴스 스윕 실패")); }, 6 * 60 * 60_000).unref();
 
   // 부팅 직후 1회 백필(회수는 하지 않는다 — 재부팅 복원과 겹쳐 갓 뜬 세션을 오판하지 않게). 40초 뒤: 스키마·tmux 안정 후.
   setTimeout(() => { void backfillSessionStates().catch((err) => logger.warn({ err }, "session-state 백필(부팅) 실패")); }, 40_000).unref();

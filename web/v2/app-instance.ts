@@ -33,6 +33,12 @@ export interface AppInstanceRecord {
   subject_ref: string | null;
   page_key: string | null;
   title: string | null;
+  // ── 세션 인스턴스의 **지금의 정본**(#2022) — 서버가 desired-state(DB)/라이브를 조인해 실어 준다.
+  //  위 title 은 인스턴스를 연 그 순간의 스냅샷이라 늙는다(실측 'claude · resume'·'/status'·box id 그대로).
+  //  세션이 목록에 아직·영영 없을 때 화면은 이 값으로 이름·소속을 그린다(main.ts sessFallback).
+  subject_label?: string | null;
+  subject_project_id?: number | null;
+  subject_state?: 'live' | 'restorable' | 'gone';
   state: Record<string, unknown>;
   execution_host_kind: 'central' | 'remote' | null;
   execution_host_id: string | null;
@@ -97,13 +103,15 @@ export async function createAppInstance(appId: string, opts?: {
   return remember(out.instance as AppInstanceRecord);
 }
 
-/** 기존 세션 route를 ai-session builtin AppInstance로 멱등 등록한다. 화면 렌더 실패와 결합하지 않게 호출자가 오류를 처리한다. */
+/** 기존 세션 route를 ai-session builtin AppInstance로 멱등 등록한다. 화면 렌더 실패와 결합하지 않게 호출자가 오류를 처리한다.
+ *  ⚠ 이름을 **모르면 안 보낸다**(#2022) — 서버는 conflict 시 title 을 COALESCE 로 덮으므로, 세션 목록이 늦은
+ *   한 판이 자리표시자('AI 세션')를 저장된 멀쩡한 이름 위에 굳혀 버린다. 안 보내면 이전 값이 그대로 산다. */
 export function ensureSessionAppInstance(appId: string, sessionId: string, opts?: { projectId?: number | null; title?: string; execution?: AppExecution }): Promise<AppInstanceRecord> {
   return createAppInstance(appId || 'ai-session', {
     projectId: opts?.projectId ?? null,
     subjectKind: 'session',
     subjectRef: sessionId,
-    title: opts?.title || 'AI 세션',
+    ...(opts?.title ? { title: opts.title } : {}),
     execution: opts?.execution,
   });
 }

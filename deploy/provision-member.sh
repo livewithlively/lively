@@ -124,7 +124,7 @@ if [ -n "${LIVELY_TOKEN:-}" ]; then
      && tar -xzf "$KTMP/b.tgz" -C "$KTMP" 2>/dev/null && [ -f "$KTMP/setup/user-install.mjs" ]; then
     chown -R "$OSUSER:$OSUSER" "$KTMP"
     runuser -u "$OSUSER" -- env HOME="$HOME_DIR" LIVELY_TOKEN="$LIVELY_TOKEN" \
-      node "$KTMP/setup/user-install.mjs" --harness claude >/dev/null 2>&1 || echo "  ⚠ user-install 경고(훅 머지)"
+      node "$KTMP/setup/user-install.mjs" --allow-host-effects --harness claude >/dev/null 2>&1 || echo "  ⚠ user-install 경고(훅 머지)"
     runuser -u "$OSUSER" -- env HOME="$HOME_DIR" LIVELY_TOKEN="$LIVELY_TOKEN" STORE_URL="${GW_URL}/mcp" \
       bash "$KTMP/setup/register-clients.sh" >/dev/null 2>&1 || echo "  ⚠ MCP 등록 경고"
     echo "멤버 claude 키트 완료(settings.json 훅 + lively MCP=멤버 토큰)"

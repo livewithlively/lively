@@ -234,8 +234,13 @@ function storageEditor(detail, data) {
     const srp = st.session_reclaim_policy || {};
     const idleTtlIn = numIn(srp.idle_ttl_minutes ?? 0, 0, 43200);
     // #1220 압박 회수 — 사용률이 임계를 넘으면 평시 TTL 을 안 기다리고 걷는다(earlyoom 이 예고 없이 죽이기 전에).
-    const pressurePctIn = numIn(srp.pressure_used_pct ?? 0, 0, 99);
+    //  ⚠ 상한 90 은 서버 정책(RECLAIM_PRESSURE_PCT_MAX)과 같은 값이다 — earlyoom(94%)보다 늦은 값을
+    //   **애초에 고를 수 없게** 한다(#1675 ⑤: 어니스트는 95 로 켜 두고 한 번도 발동하지 못했다).
+    const pressurePctIn = numIn(srp.pressure_used_pct ?? 0, 0, 90);
     const pressureIdleIn = numIn(srp.pressure_idle_minutes ?? 60, 0, 43200);
+    // #1675 ⑤ 스왑 축 — 물리 메모리가 여유로워 보여도 스왑이 바닥이면 이미 벼랑이다. earlyoom 은 스왑을
+    //  보지 않으므로(-s 100) 이 축은 경합 없이 언제나 우리가 먼저다.
+    const pressureSwapIn = numIn(srp.pressure_swap_pct ?? 0, 0, 99);
     const reclaimBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'idle 회수 정책 저장' }); reclaimBtn.disabled = !canEdit;
     reclaimBtn.addEventListener('click', async () => {
       reclaimBtn.disabled = true;
@@ -252,6 +257,7 @@ function storageEditor(detail, data) {
         await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_reclaim_policy: {
           pressure_used_pct: Number(pressurePctIn.value),
           pressure_idle_minutes: Number(pressureIdleIn.value),
+          pressure_swap_pct: Number(pressureSwapIn.value),
         } }) });
         toast('저장됨 — 다음 회수 주기(5분)부터 적용됩니다.'); load();
       } catch (e: any) { toast(e.message, true); pressureBtn.disabled = false; }
@@ -280,6 +286,25 @@ function storageEditor(detail, data) {
         await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ delegate_policy: { stall_ms: Number(stallSel.value) } }) });
         toast('저장됨 — 다음 감시 주기부터 적용됩니다.'); load();
       } catch (e: any) { toast(e.message, true); stallBtn.disabled = false; }
+    });
+
+    // ── #1675 ①③ 실패 위탁의 뒤처리 — 검시용 보존 상한 + 자격 실패 시 크론 자동 정지. ──
+    const keepFailedIn = numIn(dp.keep_failed_sessions ?? 5, 0, 200);
+    const failedTtlIn = numIn(dp.failed_session_ttl_min ?? 120, 0, 10080);
+    const authStopChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    authStopChk.checked = dp.auth_fail_stop_cron !== false;   // 컬럼 부재(구 DB)면 켬이 기본
+    authStopChk.disabled = !canEdit;
+    const failedBtn = el('button', { class: 'btn btn-primary btn-sm', text: '실패 뒤처리 저장' }); failedBtn.disabled = !canEdit;
+    failedBtn.addEventListener('click', async () => {
+      failedBtn.disabled = true;
+      try {
+        await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ delegate_policy: {
+          keep_failed_sessions: Number(keepFailedIn.value),
+          failed_session_ttl_min: Number(failedTtlIn.value),
+          auth_fail_stop_cron: authStopChk.checked,
+        } }) });
+        toast('저장됨 — 다음 감시 주기(5초)부터 적용됩니다.'); load();
+      } catch (e: any) { toast(e.message, true); failedBtn.disabled = false; }
     });
 
     // ── 메모리 경보 임계(#1059) — 디스크처럼 사용%가 임계 넘으면 경보 웹훅. 0=끔. 채널은 [경보 알림] 탭 공용. ──
@@ -348,9 +373,11 @@ function storageEditor(detail, data) {
         el('strong', { text: '메모리 압박 회수' }),
         el('div', { class: 'storage-fields' },
           el('label', {}, el('span', { text: '발동 임계(사용%, 0=끔)' }), pressurePctIn),
+          el('label', {}, el('span', { text: '스왑 임계(사용%, 0=끔)' }), pressureSwapIn),
           el('label', {}, el('span', { text: '압박 시 idle 하한(분)' }), pressureIdleIn)),
-        el('p', { class: 'storage-calc', text: '사용률이 발동 임계를 넘으면 위 idle 임계를 기다리지 않고, 실제 점유(RSS)가 큰 세션부터 걷어 임계 밑으로 내려가면 멈춥니다 — 필요한 만큼만 회수합니다.' }),
-        el('p', { class: 'admin-hint' }, ...uiText('왜 필요한가: 이 자리를 종전엔 earlyoom 이 맡았는데, 그건 예고도 복원 신호도 없는 강제 종료라 사용자 눈엔 세션이 그냥 사라집니다. 게이트웨이가 먼저 개입하면 같은 메모리를 “복원 가능”한 방식으로 확보합니다. 0=끔(기본). 평시 회수를 꺼 둔 채(위 0) 이것만 켜도 됩니다. 제안: 경보 경고(85)와 위험(95) 사이 — 90 · 압박 하한 60분.')),
+        el('p', { class: 'storage-calc', text: '메모리 또는 스왑 사용률이 임계를 넘으면 위 idle 임계를 기다리지 않고, 실제 점유(RSS)가 큰 세션부터 걷어 임계 밑으로 내려가면 멈춥니다 — 필요한 만큼만 회수합니다.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('왜 필요한가: 이 자리를 종전엔 earlyoom 이 맡았는데, 그건 예고도 복원 신호도 없는 강제 종료라 사용자 눈엔 세션이 그냥 사라집니다. 게이트웨이가 먼저 개입하면 같은 메모리를 “복원 가능”한 방식으로 확보합니다. 0=끔(기본). 평시 회수를 꺼 둔 채(위 0) 이것만 켜도 됩니다. 제안: 메모리 85~90 · 스왑 90 · 압박 하한 60분.')),
+        el('p', { class: 'admin-hint' }, ...uiText('**스왑 임계를 함께 켜세요.** 메모리 임계는 최대 90까지만 고를 수 있습니다 — earlyoom 이 94%에서 먼저 개입하므로 그보다 늦은 값은 영영 발동하지 못합니다(실제로 95로 켜 두고 한 번도 안 돈 박스가 있었습니다). 그리고 물리 메모리가 여유로워 보여도 스왑이 차 있으면 그 박스는 이미 벼랑입니다 — 전면 장애 시점의 실측이 물리 82% · **스왑 99.9%** 였습니다. earlyoom 은 스왑을 보지 않으므로 이 축은 언제나 게이트웨이가 먼저 잡습니다.')),
         el('div', { class: 'storage-actions' }, pressureBtn)),
 
       // ── 위탁 작업 무응답 상한(#1101) — 세션 회수와 같은 결(언제 끊을지)이라 같은 섹션에 둔다. ──
@@ -362,6 +389,18 @@ function storageEditor(detail, data) {
         el('p', { class: 'storage-calc', text: '위탁한 작업이 시작된 뒤 이 시간 동안 출력을 한 줄도 내지 않으면 멈춘 것으로 보고 실패로 끝냅니다. 왜 멈췄는지 짐작되는 원인도 함께 남깁니다.' }),
         el('p', { class: 'admin-hint' }, ...uiText('가장 흔한 원인은 의뢰자의 Claude 토큰이 없거나 만료된 경우입니다(그러면 작업이 오류도 없이 멈춰 섭니다). 이 상한이 없으면 작업 제한시간(기본 1시간)까지 아무 단서 없이 매달립니다. 정상 작업은 시작하자마자 출력을 내므로 5분이면 넉넉합니다 — 레포 준비가 오래 걸리는 박스라면 늘려 잡으세요.')),
         el('div', { class: 'storage-actions' }, stallBtn)),
+
+      // ── 실패한 위탁의 뒤처리(#1675 ①③) — 무응답 상한과 같은 결(위탁 사고 처리)이라 바로 아래에 둔다. ──
+      el('div', { class: 'storage-block' },
+        el('strong', { text: '실패한 위탁 뒤처리' }),
+        el('div', { class: 'storage-fields' },
+          el('label', {}, el('span', { text: '검시용 세션 보존(건, 0=즉시 정리)' }), keepFailedIn),
+          el('label', {}, el('span', { text: '보존 시간(분, 0=무제한)' }), failedTtlIn),
+          el('label', {}, el('span', { text: '자격 오류면 그 예약작업 자동 중지' }), authStopChk)),
+        el('p', { class: 'storage-calc', text: '실패한 위탁의 작업 화면은 원인을 살펴보라고 남겨둡니다. 다만 최근 몇 건까지만, 정해둔 시간까지만 남기고 나머지는 정리합니다. 실행 기록과 오류 원문은 화면을 정리해도 그대로 남습니다.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('왜 상한이 필요한가: 종전에는 실패한 작업 화면이 **무제한으로** 쌓였습니다. Claude 토큰이 폐기된 채 예약작업이 10분마다 계속 돌던 박스에서 하루 만에 2,300여 개가 누적됐고, 그 무게로 스왑이 바닥나 데이터베이스 응답이 멈추고 웹까지 간헐적으로 끊겼습니다.')),
+        el('p', { class: 'admin-hint' }, ...uiText('자동 중지를 켜두면 토큰 폐기·만료 같은 자격 오류가 처음 나온 순간 그 예약작업을 멈추고 알림을 보냅니다(대기 중이던 같은 작업도 함께 취소). 토큰을 다시 등록한 뒤 예약작업을 다시 켜면 재개됩니다 — 끄면 알림만 가고 계속 실패합니다.')),
+        el('div', { class: 'storage-actions' }, failedBtn)),
     );
 
     // ── [PTY 슬롯] 탭(#687 후속) — 메모리 탭과 동형(지금 상태 게이지 + 경보 임계). ──

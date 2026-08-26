@@ -102,4 +102,36 @@ withEnv("1000", () => {
   invalidateDelegatePolicyCache();
 }
 
-console.log("delegate-policy.test: ok (해석·우선순위·캐시 엣지)");
+// ── #1675 ①③ 실패 뒤처리 노브 — 보존 상한·TTL·자격 실패 시 크론 정지 ──
+//  이 축이 틀리면 어니스트 2026-08-12 가 재현된다(실패 세션 무제한 누적 → 스왑 고갈 → 박스 다운).
+{
+  const d = normalizeDelegatePolicy(null);
+  assert.equal(d.keep_failed_sessions, 5, "검시용 보존 기본이 5건이 아니다");
+  assert.equal(d.failed_session_ttl_min, 120, "보존 TTL 기본이 2시간이 아니다");
+  assert.equal(d.auth_fail_stop_cron, true, "자격 실패 시 크론 자동 정지가 기본으로 꺼져 있다 — 24시간 방치가 재현된다");
+
+  // 0 은 **의미 있는 선택**이다(즉시 전량 회수 / TTL 무제한) — 잡값의 착지점이 아니어야 한다.
+  assert.equal(normalizeDelegatePolicy({ keep_failed_sessions: 0 }).keep_failed_sessions, 0, "0(즉시 정리)을 못 고른다");
+  assert.equal(normalizeDelegatePolicy({ failed_session_ttl_min: 0 }).failed_session_ttl_min, 0, "0(무제한)을 못 고른다");
+  // ★ 그래서 null/빈문자열은 0 이 아니라 **기본값**으로 가야 한다(loose 를 안 쓴 이유).
+  //   여기가 뒤집히면 DB 에 null 이 한 번 들어간 순간 그 박스는 조용히 '보존 0건'이 된다.
+  for (const junk of [null, "", false, [], "잡값"]) {
+    assert.equal(normalizeDelegatePolicy({ keep_failed_sessions: junk }).keep_failed_sessions, 5,
+      `잡값(${JSON.stringify(junk)})이 0 으로 해석됐다 — 검시 대상이 조용히 사라진다`);
+  }
+
+  // 범위 클램프.
+  assert.equal(normalizeDelegatePolicy({ keep_failed_sessions: 99_999 }).keep_failed_sessions, 200, "보존 상한 클램프");
+  assert.equal(normalizeDelegatePolicy({ keep_failed_sessions: -3 }).keep_failed_sessions, 0, "음수는 0(즉시 정리)");
+  assert.equal(normalizeDelegatePolicy({ failed_session_ttl_min: 99_999 }).failed_session_ttl_min, 10_080, "TTL 상한(7일) 클램프");
+
+  // 토글은 명시적으로 끌 수 있어야 한다(오탐이 걱정되는 운영).
+  assert.equal(normalizeDelegatePolicy({ auth_fail_stop_cron: false }).auth_fail_stop_cron, false, "자동 정지를 끌 수 없다");
+
+  // 부분 저장이 다른 축을 건드리면 안 된다 — 관리탭은 버튼마다 일부 필드만 보낸다.
+  const partial = normalizeDelegatePolicy({ stall_ms: 600_000 });
+  assert.equal(partial.keep_failed_sessions, 5, "stall 만 저장했는데 보존 상한이 바뀌었다");
+  assert.equal(partial.auth_fail_stop_cron, true, "stall 만 저장했는데 자동 정지가 꺼졌다");
+}
+
+console.log("delegate-policy.test: ok (해석·우선순위·캐시 엣지 + #1675 실패 뒤처리)");

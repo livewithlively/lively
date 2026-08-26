@@ -48,7 +48,7 @@ function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowle
     //  (부분 설치 금지 — AW10 과 같은 계약) 여기선 파일을 복사하되 설치 후 ~/.lively/hooks 에서 지워 흉내낸다.
     cpSync(join(KIT, "hooks", h), join(BUNDLE, ".claude", "hooks", h));
   }
-  for (const f of ["user-install.mjs", "user-uninstall.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
+  for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
   for (const f of ["lively.mjs", "lively-mcp-gateway.mjs"]) cpSync(join(KIT, "cli", f), join(BUNDLE, "cli", f));
   writeFileSync(join(BUNDLE, ".lively-org-name"), "테스트조직\n");
   writeFileSync(join(BUNDLE, ".lively", "auto-approve.json"), JSON.stringify({ allow: autoApprove }));

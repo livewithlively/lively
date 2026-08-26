@@ -24,18 +24,17 @@ import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js'; // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import { activeWorkspaceSlug, listWorkspaces, openWorkspaceMenu, switchWorkspace, workspaceInfo } from './switcher.js';
 const SECTIONS = [
-    { key: 'home', label: '홈', route: '#/', tab: null, icon: 'home' },
-    { key: 'inbox', label: '확인할 것', route: '#/inbox', tab: null, icon: 'inbox' },
-    { key: 'sess', label: 'AI 세션', route: '#/app/terminal', tab: 'terminal', icon: 'chat' }, // 말풍선 — 사이드바 세션 행과 같은 붓
-    { key: 'proj', label: '프로젝트', route: '#/app/projects2', tab: 'projects2', icon: 'proj' },
-    { key: 'wiki', label: '위키', route: '#/app/knowledge', tab: 'knowledge', icon: 'wiki' },
+    { key: 'home', label: '홈', tab: null, icon: 'home' },
+    { key: 'inbox', label: '확인할 것', tab: null, icon: 'inbox' },
+    { key: 'sess', label: 'AI 세션', tab: 'terminal', icon: 'chat' }, // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26)
+    { key: 'proj', label: '프로젝트', tab: 'projects2', icon: 'proj' },
+    { key: 'wiki', label: '위키', tab: 'knowledge', icon: 'wiki' },
 ];
 const LINKS = [
     { key: 'liv', label: '리브', route: '#/liv', tab: 'liv', icon: 'liv' },
 ];
 export function railSections() { return SECTIONS.filter((s) => !s.tab || navOn(s.tab)); }
 export function sectionDef(sec) { return SECTIONS.find((s) => s.key === sec) || SECTIONS[0]; }
-export function sectionRoute(sec) { return sectionDef(sec).route; }
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 const SEC_STORE = 'lively_v2_rail_sec';
 const HIDE_STORE = 'lively_v2_rail_hidden'; // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
@@ -78,7 +77,10 @@ function init() {
         drawRail();
     } });
 }
-export function railSection() { return section; }
+//  ⚠ init() 을 먼저 부른다 — 이 게터는 레일이 그려지기 **전에도** 불린다(부팅 때 탭이 되살아나는 순간 등).
+//   그때 기본값 'home' 을 돌려주면 부른 쪽은 '사람이 홈을 골랐다'로 읽는다. 실측(#2061): 위키에서 새로고침했는데
+//   되살아난 탭이 홈 자리로 기록돼 [홈] 이 기억하던 세션을 잃었다.
+export function railSection() { init(); return section; }
 /** 레일이 숨겨져 있는가 — 좁은 폭에선 늘 '아니오'(거기선 CSS 가 레일을 아이콘으로 세운다). */
 export function railIsHidden() { return hidden && !window.matchMedia(NARROW_MQ).matches; }
 export function setRailSection(sec, opts) {

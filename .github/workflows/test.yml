@@ -49,12 +49,11 @@ jobs:
       #    `Cannot find module dist/…` 를 4개 쏟았다. 원인은 인프라인데 로그가 우리 코드 탓처럼 보였다.
       #    그래서 **전제(체크아웃·의존성)** 를 조건으로 건다 — 전제가 없으면 조용히 skip, 빌드 실패는 여전히 통과.
       #    (빌드가 깨진 런에선 dist 의존 스텝이 시끄러울 수 있으나, 그 원인은 같은 로그에 바로 위에 찍힌다.)
-      # 산출물 신선도 게이트(#1313 R4) — public/app 은 web/*.ts 의 tsc 산출물을 **커밋하는 관례**다
-      #  (라이브 박스가 working tree 를 정적 서빙 → git pull 만으로 프론트 갱신). 소스만 고치고 재빌드를
-      #  빠뜨린 커밋은 방금 빌드한 산출물과 어긋나 여기서 실패한다 — 관례를 기계로 강제.
-      - name: 산출물 신선도 (public/app 드리프트 0)
-        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
-        run: git diff --exit-code -- public/app
+      # ⓘ 여기 있던 "산출물 신선도 (public/app 드리프트 0)" 게이트는 #2054 에서 **제거**했다.
+      #  그 게이트는 웹 산출물을 커밋하던 관례가 만든 위험("소스는 새 판인데 커밋된 산출물은 옛 판")을
+      #  막으려던 방어장치였다. 이제 산출물이 git 밖이라(.gitignore) 그 어긋남이 **성립할 수 없다** —
+      #  존재하는 public/app 은 바로 위 `npm run build` 가 방금 만든 것 하나뿐이다.
+      #  ⚠ 그러니 되살리지 마라: 추적 파일이 없으면 `git diff` 는 **항상 통과**하는 빈 게이트가 된다.
       # ① 전체 유닛 체인(#1313 R4) — scripts/run-tests.mjs 가 소스 글롭으로 자동 발견(145+건, 실 DB 불요:
       #    DB 필요한 것은 *.itest.mjs/*.pg-test.mjs 로 제외 관례, static-context 는 env 없으면 자체 skip).
       #    종전엔 케이스 ⑨(detached 훅) flaky 우려로 device-auth+CLI 2건만 돌렸으나(#880 주석), 그 테스트에는
@@ -123,6 +122,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: 테스트 격리 preflight (호스트 효과 권한 상승 금지)
+        run: node kit/testlib/test-isolation-lint.test.mjs
       # 끝까지 실행하고 실패를 모아 보고(run-tests 러너와 같은 정책 — 실패 1건이 나머지를 가리지 않게).
       # ⚠ desktop/ 도 포함한다 (#1541, 2026-08-11). 데스크톱 앱 코어는 kit 과 같은 성질이다 —
       #  **멤버 PC 에서 실행되고, 외부 의존성이 없다**(node 내장 + 자기 모듈). 그런데 여기서 빠져 있어서
@@ -132,6 +133,12 @@ jobs:
       #  이제 desktop-core 의 J8('진짜로 띄워 본다')이 이 러너에서 돌아 같은 계열을 막는다.
       - name: kit·desktop 테스트 (윈도우)
         shell: pwsh
+        # scripts/run-tests.mjs 를 거치지 않는 직접 실행 루프도 공통 러너와 같은 capability를 강제한다.
+        # 테스트가 필요한 자식 프로세스·loopback mock만 sandbox가 허용하고, 실 호스트 효과는 계속 deny다.
+        env:
+          LIVELY_HOST_EFFECTS: deny
+          LIVELY_HOST_EFFECTS_TEST_MODE: sandbox
+          LIVELY_NO_BROWSER: '1'
         run: |
           $files = Get-ChildItem -Path kit,desktop -Recurse -Filter *.test.mjs |
                    Where-Object { $_.Name -notlike '*.itest.mjs' -and $_.FullName -notlike '*node_modules*' } | Sort-Object FullName
@@ -150,3 +157,10 @@ jobs:
             exit 1
           }
           Write-Host "=== 윈도우 $($files.Count)건 전부 통과 ==="
+      # 실제 HKCU User PATH는 개발자 PC가 아니라 이 disposable 러너에서만 건드린다. 스크립트 자체도
+      # GITHUB_ACTIONS+RUNNER_OS+명시 capability 네 조건이 아니면 exit 2로 거부하며 install→uninstall 원복을 단언한다.
+      - name: Windows User PATH 호스트 효과 왕복 (disposable runner)
+        shell: pwsh
+        env:
+          LIVELY_HOST_EFFECTS: allow
+        run: node scripts/windows-host-effects.ci.mjs

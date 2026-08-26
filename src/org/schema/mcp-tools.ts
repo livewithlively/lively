@@ -253,6 +253,10 @@ export async function initToolAndAssetRegistry(pool: Pool): Promise<void> {
       ('repo_list','builtin',true,true),
       ('repo_rename','builtin',true,true),
       ('repo_set_source','builtin',true,true),
+      -- #1979 session_rename: 세션이 **자기 이름**을 짓는다(소유자 게이트, 세션당 1회 걸쇠, 값은 화면 표시용).
+      --  자동승인인 이유 — 이 툴은 사용자의 첫 턴 **안에서** 불린다. 거기서 컨펌을 띄우면 이 설계의 전제
+      --  ("이름짓기가 응답시간을 늘리지 않는다")가 깨진다. 남의 세션은 서버가 403 으로 막는다.
+      ('session_rename','builtin',true,true),
       ('task_create_v6','builtin',true,true),
       ('task_set_status_v6','builtin',true,true),
       ('task_delete_v6','builtin',false,false),

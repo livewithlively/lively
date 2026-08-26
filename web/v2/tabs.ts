@@ -33,12 +33,19 @@ export interface ShellTab {
   appId: string | null;
   appView: { destroy(): void } | null; // generic 앱 iframe 등 탭별 정리 핸들
   seq: number;                 // 이 탭의 렌더 순번(늦게 온 비동기 렌더 무시)
+  //  아직 안 보낸 지시(#2037) — 홈([새 작업])의 입력칸에 쳐 두고 아직 [시키기]를 안 누른 글.
+  //  DOM 이 곧 상태라는 이 모듈의 원칙에는 구멍이 하나 있다: **그 탭이 다른 화면으로 바뀌면 DOM 째로 사라진다**
+  //  (홈 탭은 '거쳐 가는 빈 탭'이라 그 위에 다른 화면이 덮인다 — main.ts onHash ⓪). 그래서 이 한 값만은
+  //  DOM 밖에도 둔다 — 새로고침·앱 재시작도 넘어가도록 저장본(save)에 함께 실린다.
+  draft?: string;
 }
 
 export interface TabsHooks {
   /** 라우트 → 표시 제목·우패널 유무·상태(아이콘 색)·아이콘 종류. 데이터가 늦게 와도 paint() 때마다 다시 묻는다.
    *  kind 는 라우트만으로는 안 갈리는 아이콘을 정한다 — 지금은 '새 세션 자리'(프로젝트 주소인데 아직 세션이 없다). */
-  titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string };
+  //  provisional = 돌려준 이름이 **id 꼬리 폴백**이다(이름이 아니다 — main.ts titleFor).
+  //   저장본을 그 값으로 덮으면 안 된다(#2022).
+  titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string; provisional?: boolean };
   /** 탭이 활성화됐다 — fresh 면 아직 안 그린 탭(렌더 필요). hash 반영·no-aside 토글은 호출자가 한다. */
   onActivate(tab: ShellTab, fresh: boolean): void;
   onClose(tab: ShellTab): void;
@@ -96,13 +103,14 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   const strip = el('div', { class: 'v2-tabs' });
   const scroll = el('div', { class: 'v2-tabs-scroll', role: 'tablist', 'aria-label': '열린 화면' });
 
-  function mkTab(route: string, title?: string): ShellTab {
+  function mkTab(route: string, title?: string, draft?: string): ShellTab {
     const t: ShellTab = {
       id: 'tab' + (++seq),
       route, title: title || hooks.titleFor(route).title, noAside: hooks.titleFor(route).noAside,
       center: el('div', { class: 'v2-tabpane', hidden: true }),
       aside: el('div', { class: 'v2-aside-pane', hidden: true }),
       rendered: false, chat: null, appInstanceId: null, appId: null, appView: null, seq: 0,
+      draft: draft || '',
     };
     centerHost.append(t.center);
     asideHost.append(t.aside);
@@ -114,7 +122,8 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     if (EMBEDDED) return;
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        tabs: tabs.map((t) => ({ route: t.route, title: t.title })),
+        //  draft(아직 안 보낸 지시)는 있을 때만 싣는다 — 빈 문자열까지 적으면 저장본이 쓸데없이 커진다.
+        tabs: tabs.map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
         active: activeTab ? tabs.indexOf(activeTab) : 0,
       }));
     } catch (_) { /* noop */ }
@@ -326,7 +335,11 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     if (drag || editLocked()) return; // 끌거나 고치는 중에 다시 그리면 그 동작이 끊긴다(20초 폴링도 paint 를 부른다)
     const kids: HTMLElement[] = tabs.map((t) => {
       const info = hooks.titleFor(t.route);
-      t.title = info.title; t.noAside = info.noAside;
+      // ★ id 꼬리 폴백(provisional)으로 **저장본을 덮지 않는다**(#2022). 종전엔 무조건 덮고 곧바로 save() 해서,
+      //  이름을 한 번도 못 들어 본 세션이 그 자리에서 `세션 <id꼬리>` 로 굳었다(#2028 의 기억은 그런 세션을
+      //  아직 모른다 — 그 기억은 '한 번 본 적 있는' 이름만 지킨다).
+      if (!info.provisional || !t.title) t.title = info.title;
+      t.noAside = info.noAside;
       // 줄에 눕는 이름은 **짧게** — 세션 이름이 한 문단인 경우가 흔하다(첫 지시가 그대로 이름이 된다).
       //  전문은 툴팁과 [모든 탭] 목록이 갖는다(정보를 버리지 않는다).
       const short = t.title.length > 26 ? t.title.slice(0, 26).trimEnd() + '…' : t.title;
@@ -409,7 +422,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     scroll.scrollLeft += e.deltaY;
   }, { passive: false });
 
-  // 저장된 탭 복원 — 라우트·제목만(내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
+  // 저장된 탭 복원 — 라우트·제목·아직 안 보낸 지시만(화면 내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
   let restoredActive = 0;
   try {
     const st = EMBEDDED ? null : JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
@@ -424,7 +437,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
         const k = routeKey(t.route);
         if (seen.has(k)) return;
         seen.add(k);
-        mkTab(t.route, typeof t.title === 'string' ? t.title : undefined);
+        mkTab(t.route, typeof t.title === 'string' ? t.title : undefined, typeof t.draft === 'string' ? t.draft : undefined);
         if (i === wantIdx) want = tabs.length - 1;
       });
       restoredActive = Math.min(Math.max(0, want >= 0 ? want : 0), Math.max(0, tabs.length - 1));
@@ -436,7 +449,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     active: () => { if (!activeTab) activate(tabs[restoredActive] || mkTab('#/')); return activeTab!; },
     current: () => activeTab,
     add, activate, close,
-    routed: (tab) => { const info = hooks.titleFor(tab.route); tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
+    routed: (tab) => { const info = hooks.titleFor(tab.route); if (!info.provisional || !tab.title) tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
     find: (route) => tabs.find((t) => routeKey(t.route) === routeKey(route)),
     initial: () => tabs[restoredActive] || null,
     paint, save,

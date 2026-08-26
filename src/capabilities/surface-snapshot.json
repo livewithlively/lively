@@ -763,7 +763,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "975eeaf7456036f0"
+  "input_hash": "9d6990858087a2d6"
  },
  {
   "name": "org_alert_status",
@@ -1345,7 +1345,7 @@
   "rest": [
    "POST /api/ui/me/liv-profile"
   ],
-  "input_hash": "28ae905489e3aa6c"
+  "input_hash": "39b76aa327ee5637"
  },
  {
   "name": "me_liv_profile_get",
@@ -3544,7 +3544,7 @@
   "rest": [
    "POST /api/ui/cron"
   ],
-  "input_hash": "d2d671f0d76c545f"
+  "input_hash": "848fdb990f675fbc"
  },
  {
   "name": "cron_delete",
@@ -3655,6 +3655,16 @@
    "POST /api/ui/execution-sessions/:id/project-context/applied"
   ],
   "input_hash": "38416a6a566515b3"
+ },
+ {
+  "name": "session_rename",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/rename"
+  ],
+  "input_hash": "b6f9caef520909c3"
  },
  {
   "name": "preview_env_list",
@@ -4007,6 +4017,96 @@
   "input_hash": "1333f0dfc135b86a"
  },
  {
+  "name": "app_instance_list",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-instances"
+  ],
+  "input_hash": "b3c909be092af25e"
+ },
+ {
+  "name": "app_instance_open",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances"
+  ],
+  "input_hash": "d984e2cee148b08f"
+ },
+ {
+  "name": "app_instance_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-instances/:id"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
+ },
+ {
+  "name": "app_instance_update",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/update"
+  ],
+  "input_hash": "db60c134f163ed47"
+ },
+ {
+  "name": "app_instance_set_project",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/project"
+  ],
+  "input_hash": "031a2b509fdb98b3"
+ },
+ {
+  "name": "app_instance_close",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-instances/:id/close"
+  ],
+  "input_hash": "8b4d5e8760e7510b"
+ },
+ {
+  "name": "app_notify",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-notifications"
+  ],
+  "input_hash": "38808f62c5d06ce5"
+ },
+ {
+  "name": "me_notifications",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/notifications"
+  ],
+  "input_hash": "0e5d23d8a5038cf4"
+ },
+ {
+  "name": "me_notifications_read",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/notifications/read"
+  ],
+  "input_hash": "62ff2ece42e18912"
+ },
+ {
   "name": "me_slack_channels",
   "scope": null,
   "mcp": false,
@@ -4126,106 +4226,6 @@
    "GET /api/ui/apps/:id/ui/:page"
   ],
   "input_hash": "f48e51524b8110f6"
- },
- {
-  "name": "app_instance_list",
-  "scope": null,
-  "mcp": false,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/app-instances"
-  ],
-  "input_hash": "b3c909be092af25e"
- },
- {
-  "name": "app_instance_open",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances"
-  ],
-  "input_hash": "d984e2cee148b08f"
- },
- {
-  "name": "app_instance_get",
-  "scope": null,
-  "mcp": false,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/app-instances/:id"
-  ],
-  "input_hash": "8b4d5e8760e7510b"
- },
- {
-  "name": "app_instance_update",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances/:id/update"
-  ],
-  "input_hash": "db60c134f163ed47"
- },
- {
-  "name": "app_instance_set_project",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances/:id/project"
-  ],
-  "input_hash": "031a2b509fdb98b3"
- },
- {
-  "name": "app_instance_restart",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances/:id/restart"
-  ],
-  "input_hash": "8b4d5e8760e7510b"
- },
- {
-  "name": "app_instance_close",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-instances/:id/close"
-  ],
-  "input_hash": "8b4d5e8760e7510b"
- },
- {
-  "name": "app_notify",
-  "scope": null,
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/app-notifications"
-  ],
-  "input_hash": "38808f62c5d06ce5"
- },
- {
-  "name": "me_notifications",
-  "scope": null,
-  "mcp": true,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/me/notifications"
-  ],
-  "input_hash": "0e5d23d8a5038cf4"
- },
- {
-  "name": "me_notifications_read",
-  "scope": null,
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/notifications/read"
-  ],
-  "input_hash": "62ff2ece42e18912"
  },
  {
   "name": "org_app_tool_call",
