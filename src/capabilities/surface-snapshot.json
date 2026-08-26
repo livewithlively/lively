@@ -2576,7 +2576,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "d2ebd46df8b2e243"
+  "input_hash": "c5af77aec9a1cc7f"
  },
  {
   "name": "source_undistilled",
@@ -2606,7 +2606,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "42805a361906679b"
+  "input_hash": "792ed81e3324e631"
  },
  {
   "name": "source_link_knowledge",
@@ -4075,6 +4075,46 @@
    "POST /api/ui/org/notion/oauth-complete"
   ],
   "input_hash": "1333f0dfc135b86a"
+ },
+ {
+  "name": "org_google_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/google/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_google_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/google/collect"
+  ],
+  "input_hash": "e6327bf788ae2867"
+ },
+ {
+  "name": "org_google_collect_connect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/google/collect/connect"
+  ],
+  "input_hash": "6ff94452debf8d5e"
+ },
+ {
+  "name": "org_google_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/google/oauth-complete"
+  ],
+  "input_hash": "8779c8483d0fd640"
  },
  {
   "name": "org_github_connect_status",
