@@ -33,6 +33,7 @@ import { mintAppToken } from "../apps/principal.js";
 import { appPluginArgs, writeAppHome, materializeAppAssets, materializePreparedAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv } from "./catalog.js";
+import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -284,10 +285,19 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     //  ⚠ 셸 하네스는 exited 가 아니다(#1059 P1) — AI 가 없는 게 그 세션의 정상 상태다. exited 는 'AI 가 있었는데
     //   끝났다'만 뜻해야 한다(그래야 카드의 '정리 대상' 뉘앙스가 사실과 맞는다).
     const shellHarness = !r.harness || r.harness === "shell";
+    // ★ app-server 세션(#2055): pane 이 **셸**인 것이 정상이다(대화는 app-server 가 돈다). 그런데 종전 판정은
+    //  "pane 에 하네스 프로세스가 도나"로 살아있음을 봤다 — 그래서 이 세션들이 전부 **'종료됨'** 으로 잡혔고,
+    //  화면은 입력칸 대신 '이어서 대화하기' 바를 띄웠다(=말을 걸 수 없다). 탭 유무(attached)도 무의미하다:
+    //  이 세션의 기본 화면은 터미널이 아니라 대화창이라 아무도 pane 에 붙지 않는다.
+    //  그래서 이 갈래만 **런타임에게 직접 묻는다** — 그게 그 세션의 AI 다. 실측 2026-08-26(사용자 신고).
+    const appServer = codexChatMode({ harness: r.harness }) === "app-server";
+    const asPhase = appServer ? codexChatPhase(r.name) : null;
     // #1221 — AI 실행 단계(busy·waiting·idle)는 이제 **한 곳에서** 판정한다(하네스 보고 우선, 화면 스크래핑 폴백).
     //  그 위의 세 갈래(셸 하네스 · AI 종료 · 탭 없음)는 실행 단계와 다른 축이라 종전 순서 그대로다.
     const phase = resolveAgentPhase({ reported: r.reportedFresh, nowSec, spinning: r.busy, scrapedWaiting: waitingIds.has(r.name) });
     const state: SessionInfo["agentState"] = shellHarness ? "shell"
+      // 런타임이 살아 있으면 그 말이 정본. 아직 안 열렸으면(첫 프롬프트 전) idle — '종료됨'이 아니다.
+      : appServer ? (asPhase ?? (r.reportedFresh?.phase === "waiting" ? "waiting" : "idle"))
       : r.offline ? "exited"
       : Number(r.attached) <= 0 ? "offline"
       : phase;
@@ -299,8 +309,10 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       agentState: state,
       // 회수(F)가 보는 두 신호는 **접속과 무관**해야 하고(탭=온라인 규칙이 busy·waiting 을 offline 으로 덮으므로),
       //  두 출처를 **합집합**으로 본다 — 죽이면 되돌릴 수 없는 판정이라 과보호가 옳은 실패 방향이다.
-      working: !!(r.busy || r.shellWorking || r.reportedFresh?.phase === "busy"),
-      awaiting: !!(r.reportedFresh?.phase === "waiting" || waitingIds.has(r.name)),
+      // app-server 세션의 '일하는 중'은 pane 스피너가 아니라 **턴이 도나**다(pane 은 셸이라 스피너가 없다).
+      working: appServer ? asPhase === "busy" : !!(r.busy || r.shellWorking || r.reportedFresh?.phase === "busy"),
+      // 승인 대기도 마찬가지 — 화면 스크래핑이 아니라 우리가 들고 있는 승인 목록이 사실이다.
+      awaiting: appServer ? asPhase === "waiting" : !!(r.reportedFresh?.phase === "waiting" || waitingIds.has(r.name)),
       title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
       lastAttached: r.lastAttached || undefined, // #1098 마지막 열람(탭 붙음) 시각 — '안 본 작업 완료' 판정용.
@@ -666,7 +678,21 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //   사람이 고른 임의 폴더면 사람이 답한다(autoTrustWorkspace). 이 판정을 빼면 프로젝트 세션의 첫 지시가 대화상자에 막힌다(실측).
     const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
     const onNode = !!process.env.LIVELY_NODE_TOKEN;   // 노드 에이전트 프로세스에만 있는 값(게이트웨이엔 없다 — 안전한 판별자)
-    if (onNode) {
+    if (chatMode === "app-server") {
+      // ★ app-server 세션의 pane 은 **셸**이다. 그런데 아웃박스 배달자는 "입력창이 뜨면 send-keys" 로 넣는다 —
+      //  그 세션에서는 사람의 첫 문장이 **zsh 프롬프트에 타이핑**된다(명령으로 실행되거나 그냥 사라진다).
+      //  실측 2026-08-26(사용자 신고 "첫 프롬프트도 씹히고"). 여기서는 프로토콜로 보낸다 — 답이 값으로 온다.
+      //  실패하면 아웃박스로 내려간다: 그래야 로그인 전이라 서버를 못 여는 경우에도 지시가 큐에 남는다.
+      void (async () => {
+        const { sendCodexChat } = await import("./harness-io/codex-chat-runtime.js");
+        try { await sendCodexChat({ sessionId: id, text: prompt, cwd: target, osUser }); }
+        catch (e) {
+          console.warn(`[terminal] 첫 지시 app-server 전송 실패(${id}) — 아웃박스로 폴백:`, (e as Error)?.message ?? e);
+          const { enqueuePrompt } = await import("../sessions/session-outbox.js");
+          await enqueuePrompt(id, prompt, { trustOk }).catch(() => undefined);
+        }
+      })();
+    } else if (onNode) {
       void import("./session-first-prompt.js")
         .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk }))
         .catch((e) => { console.warn(`[terminal] 노드 첫 지시 주입 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
