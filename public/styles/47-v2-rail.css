@@ -188,18 +188,47 @@
 .v2-foot-row .v2-apps-btn .v2-ic { width: 16px; height: 16px; color: var(--muted-2); }
 .v2-foot-row .v2-me { flex: 1; min-width: 0; padding-left: 10px; }
 
-/* ── 독 손질(#2016 4차) — 맥 독 문법: 우클릭/길게 눌러 고정·빼기, 끌어서 순서, 레일 밖으로 끌어내면 빼기 ──
-      구간 셋: 구역 | 고정한 앱 | 최근 연 앱. 고정과 최근 사이는 점선(맥 독의 최근 구간 경계). */
-.v2-rail-pins { display: flex; flex-direction: column; min-height: 0; }
-.v2-rail.drag .v2-rail-pins:empty { min-height: 34px; margin: 2px 8px; border: 1px dashed var(--line-net-2); border-radius: 8px; }
-.v2-rail-pins.over:empty { background: var(--bg-punch); border-color: var(--blue); }
-.v2-rail-it[draggable="true"] { cursor: grab; }
-.v2-rail-it[draggable="true"]:active { cursor: grabbing; }
-.v2-rail-it.dragging { opacity: .35; }
-.v2-rail-it.over-top::after, .v2-rail-it.over-bot::after { content: ''; position: absolute; left: 10px; right: 10px; height: 2px; border-radius: 2px; background: var(--blue); }
-.v2-rail-it.over-top::after { top: -2px; }
-.v2-rail-it.over-bot::after { bottom: -2px; }
-.v2-rail-hr--recent { height: 0; background: none; border-top: 1px dashed var(--line-net-2); }
+/* ── 독 손질(#2016 4차 → 5차) — 맥 독 · iOS 홈 화면 문법: **꾹 누르면 들리고**, 끌면 이웃이 비켜서고, 놓으면 내려앉는다 ──
+      메인 그룹(구역 · 리브 · 고정한 앱)은 사람이 정한 한 줄 순서. 헤어라인 아래는 최근 연 앱(자동) — 위로 끌어 올리면 고정,
+      고정한 것을 레일 밖(또는 헤어라인 아래)으로 끌어내면 '퍽' 하고 빠진다. 그림자(.v2-rail-ghost)는 레일 안에 fixed 로 떠서
+      `.v2-rail.closed` 의 세로 격자를 그대로 물려받는다(body 에 붙이면 아이콘 위 · 이름 아래가 풀린다). */
+.v2-rail-main, .v2-rail-recent { display: flex; flex-direction: column; min-height: 0; }
+.v2-rail-mid .v2-rail-it { touch-action: none; -webkit-touch-callout: none; }
+/* 누름 — 손가락 밑에서 살짝 작아진다(꾹 누르는 중이라는 답). */
+.v2-rail-it.press { transform: scale(.94); transition: transform 140ms ease; }
+/* 구멍 — 들린 것이 있던 자리. 내용은 숨기고 움푹한 판만 남겨 '여기 내려앉는다'를 말한다. */
+.v2-rail-it.hole { background: rgba(var(--tint-ink), .07); box-shadow: inset 0 0 0 1px rgba(var(--tint-ink), .09); }
+.v2-rail-it.hole > * { opacity: 0; }
+.v2-rail-it.hole.gone { display: none; }
+.v2-rail.drag, .v2-rail.drag .v2-rail-it { cursor: grabbing; }
+.v2-rail.drag .v2-rail-it:not(.on):hover { background: none; }
+.v2-rail.drag .v2-rail-it:not(.on):hover .v2-rail-ic { stroke: var(--muted-head); }
+/* 그림자 — 손을 따라가는 그 아이콘. 바깥 상자가 자리(translate), 안쪽 항목이 크기(scale)·그늘을 맡는다. */
+.v2-rail-ghost { position: fixed; z-index: 80; pointer-events: none; will-change: transform; }
+.v2-rail-ghost.settle { transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
+.v2-rail-ghost .v2-rail-it { width: 100% !important; height: 100%; margin: 0 !important; background: var(--surface); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .12), 0 0 0 1px var(--line); transform: scale(.94); transition: transform 220ms cubic-bezier(.34,1.56,.64,1), opacity 160ms ease, box-shadow 200ms ease; }
+.v2-rail-ghost .v2-rail-it .v2-rail-ic { stroke: var(--blue); }
+.v2-rail-ghost .v2-rail-it .v2-rail-t { color: var(--ink); }
+/* 들림 — 눌린 크기에서 튀어오른다(살짝 넘쳤다 돌아오는 곡선). */
+.v2-rail-ghost.up .v2-rail-it { transform: scale(1.1); box-shadow: 0 12px 30px rgba(var(--shadow-ink), .24), 0 0 0 1px var(--line); }
+/* 밖 — 뺄 자리다. 옅어지고 조금 작아진다. */
+.v2-rail-ghost.out .v2-rail-it { transform: scale(.92); opacity: .55; box-shadow: 0 4px 14px rgba(var(--shadow-ink), .14), 0 0 0 1px var(--line); }
+/* 착지 — 제 크기로 내려앉는다. */
+.v2-rail-ghost.land .v2-rail-it { transform: scale(1); opacity: 1; box-shadow: 0 1px 2px rgba(var(--shadow-ink), .1), 0 0 0 1px var(--line); transition-timing-function: cubic-bezier(.2,.8,.2,1); }
+/* 퍽 — 커지며 사라진다. */
+.v2-rail-ghost.puff .v2-rail-it { transform: scale(1.4); opacity: 0; transition-timing-function: ease-out; }
+@media (prefers-reduced-motion: reduce) { .v2-rail-it.press, .v2-rail-ghost, .v2-rail-ghost .v2-rail-it { transition: none; } }
+/* 4차(네이티브 드래그 · 고정 구간 따로)의 자리 — 5차에서 걷었다. 가드(check-css-drops) 때문에 셀렉터만 남긴다. */
+.v2-rail-pins { }
+.v2-rail.drag .v2-rail-pins:empty { }
+.v2-rail-pins.over:empty { }
+.v2-rail-it[draggable="true"] { }
+.v2-rail-it[draggable="true"]:active { }
+.v2-rail-it.dragging { }
+.v2-rail-it.over-top::after, .v2-rail-it.over-bot::after { }
+.v2-rail-it.over-top::after { }
+.v2-rail-it.over-bot::after { }
+.v2-rail-hr--recent { }
 
 /* ── 좁은 화면 — 레일은 서랍 뒤로 숨지 않고 아이콘만 남아 왼쪽에 붙어 선다. ── */
 @media (max-width: 900px) {
