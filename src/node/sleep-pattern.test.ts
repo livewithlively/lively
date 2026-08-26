@@ -3,7 +3,7 @@
 // 사양·엣지 표: 스크래치패드 spec-sleep-pattern.md (행 번호 = 아래 D<n>)
 import assert from "node:assert/strict";
 import {
-  diagnoseLink, WINDOW_MS, SHORT_UP_MS, LONG_GAP_MS, MIN_CYCLES, HEALTHY_UP_MS, type LinkEvent,
+  diagnoseLink, WINDOW_MS, SHORT_UP_MS, LONG_GAP_MS, SHORT_GAP_MS, MIN_CYCLES, HEALTHY_UP_MS, type LinkEvent,
 } from "./sleep-pattern.js";
 import { reconnectDelayMs, BACKOFF_MAX_MS, JITTER } from "./reconnect-delay.js";
 
@@ -65,10 +65,15 @@ t("D4 건강한 노드 — 8시간 붙어 있다 재부팅 한 번이면 판정�
   const d = diagnoseLink(timeline([[m(480), m(2)], [m(480), m(2)], [m(300), m(2)]]), NOW);
   assert.equal(d.suspected, null);
 });
-t("D5 ★짧은 연결이 반복돼도 공백이 짧으면 잠자기가 아니다 — 그건 네트워크 플랩이다", () => {
+// ⚠ #2127 로 **계약이 바뀐 행**. 종전엔 여기서 null(침묵)이었다 — "잠자기가 아니다"는 맞았지만, 그 결론이
+//  곧 '말할 것이 없다' 로 이어졌다. 그 침묵 때문에 실측 노드 하나가 며칠간 무신호로 죽어 있었다(hammurabi).
+//  의도(잠자기로 부르면 안 된다)는 그대로 지키되, 이제 churn 이라는 **사실**을 말한다. 원인 단정은 여전히 안 한다
+//  — 이 패턴은 네트워크 플랩으로도 만들어지므로, 문구가 둘 다 말한다(link-advice B1).
+t("D5 ★짧은 연결이 반복돼도 공백이 짧으면 **잠자기가 아니다** — 이제 침묵 대신 churn 으로 말한다", () => {
   // 공백 30초 = 재연결 백오프 범위. 프로세스가 깨어 있다는 뜻이므로 잠자기로 부르면 안 된다.
   const d = diagnoseLink(timeline([[s(60), s(30)], [s(60), s(30)], [s(60), s(30)], [s(60), s(30)]]), NOW);
-  assert.equal(d.suspected, null, "공백이 짧으면 머신은 깨어 있다");
+  assert.notEqual(d.suspected, "sleep", "공백이 짧으면 머신은 깨어 있다 — 잠자기 조치로 보내면 안 된다");
+  assert.equal(d.suspected, "churn");
 });
 t("D6 ★공백이 길어도 연결이 길면 잠자기가 아니다 — 밤에 꺼 둔 PC", () => {
   const d = diagnoseLink(timeline([[m(120), m(600)], [m(120), m(600)], [m(120), m(60)]]), NOW);
@@ -154,6 +159,74 @@ t("D19 ★임계값의 근거를 실제 재연결 로직과 대조한다 — 백
     `'긴 공백'(${LONG_GAP_MS}ms)이 최악 재연결 지연(${worst}ms)의 5배는 돼야 깨어 있는 노드를 잠자기로 오판하지 않는다`);
   // 반대 방향도 — 임계가 너무 크면 실측 패턴(공백 ≈ 1시간)을 못 잡는다.
   assert.ok(LONG_GAP_MS < 30 * 60_000, "임계가 30분을 넘으면 실측 잠자기 주기(1시간)를 잡기 어려워진다");
+});
+
+// ── #2127 churn 축 — 공백 길이가 두 원인을 가른다 (사양 표 A) ─────────────────────
+// 🔴 실측(hammurabi 2026-08-26): 평균 2초 연결 · 5초 공백으로 며칠간 끊겼는데 **아무 말도 못 들었다.**
+//  공백 5초는 sleep 임계(5분)에 한참 못 미쳐 suspected=null 이었고, 그러면 화면·오류가 통째로 침묵한다.
+//  5초는 우연이 아니다 — 윈도우 런처(kit/cli/cmd-node.mjs winRunnerCmd)가 죽은 에이전트를 `timeout /t 5`
+//  뒤에 다시 띄운다. 즉 **짧은 공백은 감시자가 되살린 지문**이고, 잠자기와는 반대 조치를 요구한다.
+t("A2 ★짧게 붙고 **짧게** 비면 churn — 잠자기가 아니다(재기동이거나 네트워크 플랩)", () => {
+  const d = diagnoseLink(timeline([[s(2), s(5)], [s(2), s(5)], [s(2), s(5)], [s(2), s(5)]]), NOW);
+  assert.equal(d.suspected, "churn");
+  assert.equal(d.medianUpSec, 2);
+  assert.equal(d.medianGapSec, 5);
+});
+
+t("A1 긴 공백이 둘 이상이면 여전히 sleep — 감시자는 초 단위로 되살리므로 재기동으로 설명되지 않는다", () => {
+  const d = diagnoseLink(timeline([[s(60), m(60)], [s(60), m(60)], [s(60), m(60)]]), NOW);
+  assert.equal(d.suspected, "sleep", "종전 판정을 churn 이 가로채면 안 된다");
+});
+
+// 섞인 경우 — 긴 공백이 2회 이상이면 sleep 이 이긴다(우선순위 고정).
+t("A1b 짧은 공백이 섞여 있어도 긴 공백 2회면 sleep", () => {
+  const d = diagnoseLink(timeline([[s(60), m(60)], [s(60), s(5)], [s(60), m(60)], [s(60), s(5)]]), NOW);
+  assert.equal(d.suspected, "sleep");
+});
+
+t("A3 길게 붙어 있으면 아무 판정도 안 한다 — 건강한 노드에 경고를 달지 않는다", () => {
+  const d = diagnoseLink(timeline([[m(40), s(5)], [m(40), s(5)], [m(40), s(5)]]), NOW);
+  assert.equal(d.suspected, null);
+});
+
+// ★경계 — 짧은 up 은 과반인데 **공백 표본이 없다**(완결 구간이 연달아 붙어 있을 수 없으므로 실제론
+//  cycles 만큼 gap 이 생기지만, 창 경계에서 gap 0개가 될 수 있다). 표본이 없으면 판정하지 않는다.
+t("A4 ★공백 표본이 없으면 churn 으로 단정하지 않는다(없음 ≠ 짧음)", () => {
+  const evs: LinkEvent[] = [
+    { ev: "up", at: NOW - s(30) }, { ev: "down", at: NOW - s(28) },
+  ];
+  const d = diagnoseLink(evs, NOW);
+  assert.equal(d.suspected, null, "cycles 1 · gap 0 — 표본 부족");
+});
+
+t("A5 표본이 MIN_CYCLES 미만이면 churn 도 안 낸다(sleep 과 같은 문턱)", () => {
+  const d = diagnoseLink(timeline([[s(2), s(5)], [s(2), s(5)]]), NOW);
+  assert.equal(d.cycles, MIN_CYCLES - 1);
+  assert.equal(d.suspected, null);
+});
+
+t("A6 지금 충분히 오래 붙어 있으면 과거 재기동 이력으로 경고하지 않는다", () => {
+  const d = diagnoseLink(
+    timeline([[s(2), s(5)], [s(2), s(5)], [s(2), s(5)]], { endsOpen: HEALTHY_UP_MS + 1000 }), NOW);
+  assert.equal(d.suspected, null);
+});
+
+// ★경계 — '긴 공백도 짧은 공백도 아닌' 중간대는 **어느 쪽으로도 판정하지 않는다**. 이걸 churn 으로 부르면
+//  자리를 비운 컴퓨터(5분 공백)를 프로그램 탓으로 몰게 되고, sleep 으로 부르면 D14 가 막는다.
+t("A7 ★중간대 공백(짧지도 길지도 않음)은 churn 이 아니다 — 두 임계 사이는 판정 공백이다", () => {
+  const mid = (SHORT_GAP_MS + LONG_GAP_MS) / 2;
+  const d = diagnoseLink(timeline([[s(60), mid], [s(60), mid], [s(60), mid], [s(60), mid]]), NOW);
+  assert.equal(d.suspected, null);
+});
+
+t("D20 ★'짧은 공백' 임계의 근거를 실제 재연결 로직과 대조한다 — 백오프가 커지면 판정 전제가 무너진다", () => {
+  let worst = 0;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    for (const rand of [0, 0.5, 1]) worst = Math.max(worst, reconnectDelayMs(attempt, rand));
+  }
+  assert.ok(SHORT_GAP_MS > worst,
+    `'짧은 공백'(${SHORT_GAP_MS}ms)은 최악 재연결 지연(${worst}ms)보다 커야 깨어 있는 프로세스의 재시도를 담는다`);
+  assert.ok(SHORT_GAP_MS < LONG_GAP_MS, "두 임계가 겹치면 판정이 모순된다");
 });
 
 console.log(`\n${pass} checks passed`);

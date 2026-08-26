@@ -27,14 +27,34 @@ export const WINDOW_MS = 24 * 60 * 60 * 1000;
 export const SHORT_UP_MS = 180_000;
 /** '긴 공백' 임계 — 이를 **초과**하면 길다. 재연결 백오프 상한(30초)의 10배 — 프로세스가 깨어 있으면 나올 수 없다. */
 export const LONG_GAP_MS = 300_000;
+/**
+ * '짧은 공백' — 이 안에 다시 붙었으면 **그 프로세스는 깨어 있었다**(#2127 churn 판정용).
+ *
+ * ⚠ `LONG_GAP_MS 미만` 을 그대로 '짧다'로 쓰면 안 된다. 그 사이(예: 정확히 5분)는 **둘 중 무엇도 아니다** —
+ *  잠자기라기엔 짧고 재시도라기엔 길다. 그걸 churn 으로 부르면 자리를 비운 컴퓨터를 프로그램 탓으로 몰게 된다.
+ *  근거는 재연결 백오프 상한(reconnect-delay.ts BACKOFF_MAX_MS + 지터 ≈ 33초)이다 — 깨어 있는 프로세스는
+ *  그 안에 반드시 다시 붙는다. 여유를 두어 1분으로 잡고, 그 관계를 테스트로 대조한다(D20).
+ */
+export const SHORT_GAP_MS = 60_000;
 /** 판정에 필요한 최소 완결 구간 수 — 2회는 우연일 수 있다. */
 export const MIN_CYCLES = 3;
 /** 지금 이만큼 붙어 있으면 과거 이력으로 경고하지 않는다 — 이미 해결된 문제를 경고하면 그게 거짓말이다. */
 export const HEALTHY_UP_MS = 30 * 60 * 1000;
 
 export interface LinkDiagnosis {
-  /** 추정 원인. null = 판정 없음(정상이거나 표본 부족). */
-  suspected: "sleep" | null;
+  /**
+   * 추정 원인. null = 판정 없음(정상이거나 표본 부족).
+   *
+   * - `sleep`    — 짧게 붙고 **길게**(5분 초과) 비었다. 그 사이 컴퓨터가 자리를 비운 것이다.
+   * - `churn`    — 짧게 붙고 **짧게** 비었다(#2127). 공백이 짧다는 건 **그 컴퓨터는 깨어 있었다**는 뜻이다.
+   *   ⚠ 이름을 원인이 아니라 **사실**로 지었다. 이 모양을 만드는 원인이 최소 둘이고 타이밍만으로는 못 가른다:
+   *   ① 에이전트가 죽고 감시자가 곧바로 되살림(윈도우 런처는 `timeout /t 5` 뒤 재기동 — kit/cli/cmd-node.mjs
+   *   winRunnerCmd. 실측 hammurabi 2026-08-26: 평균 2초 연결 · 5초 공백) ② 네트워크 플랩(재연결 백오프 범위).
+   *   원인을 단정하면 한쪽을 반드시 엉뚱한 조치로 보낸다 — 문구는 둘 다 말한다(link-advice).
+   *   ★ 이 축이 없어서 그 노드는 **며칠간 아무 말도 못 듣고** 있었다: 공백 5초는 sleep 임계(5분)에 한참 못 미쳐
+   *   `suspected: null` 이었고, 그러면 화면·오류가 통째로 침묵한다(linkDiagMessage 가 sleep 만 말했다).
+   */
+  suspected: "sleep" | "churn" | null;
   /** 아래 셋은 화면이 근거를 말하기 위한 값 — 판정이 없어도 채운다(진단 화면에서 그대로 보여줄 수 있게). */
   cycles: number;        // 창 안의 완결 연결 구간 수
   medianUpSec: number;   // 연결 유지 중앙값(초)
@@ -99,7 +119,13 @@ export function diagnoseLink(events: readonly LinkEvent[], now: number): LinkDia
 
   const shortUps = ups.filter((ms) => ms < SHORT_UP_MS).length;
   const longGaps = gaps.filter((ms) => ms > LONG_GAP_MS).length;
+  const shortGaps = gaps.filter((ms) => ms < SHORT_GAP_MS).length;   // #2127 — '그 사이'는 어느 쪽도 아니다
   // 과반 = 절반 초과(정확히 절반은 아니다 — 반반이면 그건 패턴이 아니라 잡음이다).
-  if (shortUps * 2 > ups.length && longGaps >= 2) out.suspected = "sleep";
+  if (shortUps * 2 > ups.length) {
+    // 공백의 길이가 두 원인을 가른다 — **자리를 비웠나(길다), 곧바로 되살아났나(짧다).**
+    //  sleep 을 먼저 본다: 긴 공백이 둘 이상이면 그건 초 단위 재기동으로 설명되지 않는다.
+    if (longGaps >= 2) out.suspected = "sleep";
+    else if (shortGaps * 2 > gaps.length) out.suspected = "churn";
+  }
   return out;
 }
