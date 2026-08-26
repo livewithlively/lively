@@ -79,6 +79,20 @@ async function transcriptResumable(id: string, st: { harness?: string | null; di
   return !!found && found.size > 0;
 }
 
+// #2122 — 저장된 transcript_path 에서 대화 uuid 를 되읽는다(**추측이 아니라 기록 재독**). claude 규약은
+//  `.../projects/<cwd인코딩>/<uuid>.jsonl` 이라 파일명 stem 이 곧 uuid 다. 이건 routes.ts:1082 가 금지한
+//  '그 폴더의 최신 대화 추측'과 **전혀 다르다** — 우리가 그 세션에 대해 이미 저장해 둔 값을 형태만 바꿔 읽는 것이고,
+//  훅 보고 경로(claude-uuid)도 uuid 와 path 를 **한 쌍으로** 저장하므로 path 의 stem 은 그 세션 자신의 uuid 다.
+//  claude_session_id 가 null 인데 transcript_path 만 남은 부분유실 창(#2122 매핑 null 전파)에서 정밀복원을 되살린다.
+//  ⚠ claude 전용(다른 하네스는 파일명 규약이 다를 수 있다). uuid 형태(8-4-4-4-12 hex 또는 claude 의 관대한 세션 id)만 받는다.
+export function uuidFromTranscriptPath(transcriptPath: string | null | undefined, harness: string | null | undefined): string | null {
+  if ((harness || "claude") !== "claude") return null;
+  const p = String(transcriptPath || "");
+  if (!p.endsWith(".jsonl")) return null;
+  const stem = p.slice(p.lastIndexOf("/") + 1, -".jsonl".length);
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(stem) ? stem : null;
+}
+
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
 function themeOf(req: { headers: Record<string, unknown> }, b: Record<string, unknown>): "dark" | "light" | undefined {
   return normalizeTheme(req.headers["x-lively-theme"]) ?? normalizeTheme(b.theme);
@@ -1037,7 +1051,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       if (st.discovered && !st.root_key) {
         throw new HttpError(409, "이 세션은 그 컴퓨터에서 직접 만들어진 것이라 되살릴 작업 폴더 좌표를 모릅니다 — 그 컴퓨터에서 이어서 시작해 주세요.");
       }
-      const resumeId = st.claude_session_id || null;
+      // #2122 — 노드 분기도 null 컬럼일 때 transcript_path 에서 uuid 를 되살린다(박스 분기와 같은 규율).
+      const resumeId = st.claude_session_id || uuidFromTranscriptPath(st.transcript_path, st.harness);
       const input: CreateInput = {
         label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
         harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
@@ -1057,11 +1072,16 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
       await registerSessionInstance(session.id, owner, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
-      if (st.claude_session_id) {
-        await setClaudeSessionId(session.id, st.claude_session_id, owner, st.transcript_path)
-          .catch((e) => logger.warn({ err: e, id: session.id }, "restore(node): 대화 id 승계 실패(비치명 — 다음 복원은 picker)"));
+      // #2122 — 매핑 승계를 권위화: 되살린 resumeId 로 승계하고, 성공했을 때만 옛 행을 지운다(박스 분기와 같은 규율).
+      const carried = resumeId
+        ? await setClaudeSessionId(session.id, resumeId, owner, st.transcript_path)
+            .catch((e) => { logger.warn({ err: e, id: session.id }, "restore(node): 대화 id 승계 실패 — 옛 행 보존(다음 복원 재시도)"); return false; })
+        : true;
+      if (carried) {
+        await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 정리 실패(비치명)"));
+      } else {
+        logger.warn({ id, newId: session.id }, "restore(node): 매핑 승계 미완 — 옛 desired-state 보존");
       }
-      await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 정리 실패(비치명)"));
       const ln = liveNodes().find((n) => n.id === nodeId);
       res.json({ ok: true, session: { ...session, node: { id: nodeId, name: ln?.name || nodeId, online: true } } });
       return;
@@ -1084,7 +1104,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   세션을 살려 두고 하네스의 원문 에러를 화면에 남기므로, 종전의 '복원 루프'(즉사→재복원)는 구조적으로 끊겨 있다.
     //  ⚠ #1437 ② — 그 확인은 **소유자 실행환경**에서 한다(transcriptResumable). 종전 transcriptExists 는 게이트웨이
     //   로컬 fs 만 봐서, 중계 배포(대화 파일이 노드 멤버 홈)에선 항상 false → **늘 picker**였다(정밀 복원이 죽어 있었다).
-    const mappedId = st.claude_session_id || null;
+    // #2122 — claude_session_id 가 null 이어도 transcript_path 가 남아 있으면 거기서 uuid 를 되읽어 정밀복원을 살린다
+    //  (매핑 null 전파 창: 앞선 restore 가 매핑 이관에 실패했거나 훅 보고 전 공백. 추측이 아니라 저장된 사실 재독 — 위 머리말).
+    const mappedId = st.claude_session_id || uuidFromTranscriptPath(st.transcript_path, st.harness);
     const resumeUuid = mappedId
       && (st.harness !== "claude" || await transcriptResumable(id, st, mappedId).catch(() => false))
       ? mappedId : null;
@@ -1111,14 +1133,22 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //  UUID 를 계속 쓰는데, 새 레코드는 훅이 보고할 때까지 비어 있어 **그 사이에 또 복원하면 picker 로 떨어졌다**
     //  (2026-07-28 상민님 신고 — 정밀 복원이 한 번만 되는 증상의 절반. 나머지 절반은 훅 dedup 키에 box-id 부재였다).
     //  훅이 새 UUID 를 보고하면 last-write-wins 로 갱신되므로 이 승계는 '보고 전 공백'만 메운다. best-effort.
-    if (st.claude_session_id) {
-      await setClaudeSessionId(session.id, st.claude_session_id, st.owner, st.transcript_path)   // #1746 대화 파일 경로도 승계(같은 대화 = 같은 파일)
-        .catch((e) => logger.warn({ err: e, id: session.id }, "restore: claude UUID 승계 실패(비치명 — 다음 복원은 picker)"));
-    }
+    // #2122 — 매핑 승계를 **권위화**한다(종전 best-effort 라 실패를 삼키고 옛 행을 지워 매핑이 영구 유실됐다).
+    //  승계할 uuid = 되읽은 mappedId(null 컬럼이어도 path 에서 살린 값 포함). 승계가 실제로 성공(rowCount>0)했을 때만
+    //  옛 desired-state 를 지운다 — 실패하면 옛 행(매핑 보유)을 **남겨** 다음 restore 가 거기서 다시 살릴 수 있게 한다.
+    //  (옛 행이 남아도 sessionGone=true 라 그대로 restorable 로 보인다 — 유령 라이브가 생기지 않는다.)
+    const carried = mappedId
+      ? await setClaudeSessionId(session.id, mappedId, st.owner, st.transcript_path)   // #1746 대화 파일 경로도 승계(같은 대화 = 같은 파일)
+          .catch((e) => { logger.warn({ err: e, id: session.id }, "restore: claude UUID 승계 실패 — 옛 행 보존(다음 복원이 재시도)"); return false; })
+      : true;   // 애초에 승계할 매핑이 없으면(셸·미보고) 지워도 잃을 게 없다.
     //  복원도 세션 생성이다 — 새 id 로 인스턴스를 세운다(옛 세션의 인스턴스는 아래 옛 행 정리와 함께 닫힌다).
     await registerSessionInstance(session.id, st.owner, { appId: st.app_id, projectId: st.project_id, title: st.label || session.label });
     await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));
-    await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
+    if (carried) {
+      await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
+    } else {
+      logger.warn({ id, newId: session.id }, "restore: 매핑 승계 미완 — 옛 desired-state 보존(다음 복원이 매핑을 다시 잇는다)");
+    }
     res.json({ ok: true, session });
   }));
 
