@@ -321,9 +321,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  덮어쓰지 않을 뿐 **지우지도 않는다** — 안내가 떴다고 세션이 쓰던 모델이 바뀐 것은 아니다.
   const realModelId = (m: string): boolean => !!m.trim() && !/^<.*>$/.test(m.trim());
 
-  // 처방전(#1719) — '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'가 앉는 자리. 입력칸 바로 위(askHost).
-  const rxHost = el('div', { class: 'sc-rx-host' });
-
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
     who: { me: '나', ai: 'AI' },
@@ -333,7 +330,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     sendWhileBusy: true,
     style: 'desktop',
     bar: { right: el('span', { class: 'dt-chips' }, chipMode) },
-    askHost: rxHost,                              // 처방전(#1719) — 스크롤에 떠내려가지 않는 입력칸 바로 위
     onSend: (text) => sendPrompt(text),
     onStop: canKeys() ? () => sendKey('interrupt') : undefined,
     escActive: () => true,
@@ -994,102 +990,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (cur && looksLive) { view.running(cur.t); view.busy(true); }
     else { running = false; recs.forEach((r) => view.settle(r.t)); view.busy(false); }
     titleFromFirstAsk();
-    paintRx();
   }
   function titleFromFirstAsk(): void {
     const q = recs.find((r) => r.t.text)?.t.text;
     // 이름이 자동 생성 id 꼴이면 첫 질문을 이름 자리에 대신 쓴다(고치기 전까지의 임시 이름).
     if (q && /^box-|^[0-9a-f-]{20,}$/i.test(titleText)) { titleText = q.length > 60 ? q.slice(0, 60) + '…' : q; }
     paintTitle();
-  }
-
-  // ── 처방전(#1719) — "방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요" ──────────────────────
-  //  왜: 사람이 한 번에 말했으면 끝날 일을 나눠 말하느라 네 턴을 쓴다(실측 흔함). 그 사실은 **일이 끝난 뒤에만**
-  //   말할 수 있다 — 결과를 아는 상태라야 "이렇게 했으면 됐다"가 훈수가 아니라 제안이 된다.
-  //  ⚠ 이 판정은 **화면에서만** 한다. 대화 본문은 이미 이 브라우저에 있고, 서버로 아무것도 보내지 않는다
-  //   (제안엔진 C3 — 서버는 세션 대화를 열지 않는다). 나중에 다듬기를 붙일 때도 그 경계는 세션 안이다.
-  //  v0 는 문장을 지어내지 않는다: 나눠 말한 것을 **순서대로 합쳐** 보여줄 뿐이고, 나중에 덧붙인 부분만 표시한다.
-  //   숫자(횟수·걸린 시간)도 그 대화에서 실제로 센 값이다 — 예상치를 쓰지 않는다.
-  const RX_OFF_KEY = 'lively_rx_off';
-  const RX_MIN_ASKS = 3;              // 세 번 이상 나눠 말했을 때만. 두 번은 그냥 대화다.
-  const RX_GAP_MS = 20 * 60 * 1000;   // 이만큼 벌어지면 다른 일로 본다(한 묶음의 경계)
-  const rxDone = new Set<string>();   // 이 묶음은 닫았다(× ) — 새 묶음이면 다시 뜬다
-  let rxKey = '';                     // 지금 그려 둔 묶음
-  const rxOff = (): boolean => { try { return localStorage.getItem(RX_OFF_KEY) === '1'; } catch { return false; } };
-  const askAt = (t: ChatTurn): number => { const v = t.ts ? Date.parse(t.ts) : NaN; return Number.isFinite(v) ? v : t.startedAt; };
-
-  /** 마지막 '한 묶음' = 끝에서부터 20분 이내로 이어진 사람 말들. 그 사이가 벌어지면 거기서 끊는다. */
-  function lastAskCluster(): ChatTurn[] {
-    const asks = recs.map((r) => r.t).filter((t) => t.text && t.text.trim());
-    if (asks.length < RX_MIN_ASKS) return [];
-    const out: ChatTurn[] = [asks[asks.length - 1]!];
-    for (let i = asks.length - 2; i >= 0; i--) {
-      if (askAt(out[0]!) - askAt(asks[i]!) > RX_GAP_MS) break;
-      out.unshift(asks[i]!);
-    }
-    return out;
-  }
-
-  function paintRx(): void {
-    // 끝난 세션에서도 뜬다 — 되짚기는 오히려 끝난 뒤가 제일 쓸모 있다(입력칸이 없으면 '넣기' 버튼만 빠진다).
-    if (rxOff() || running) { if (!running) rxHost.replaceChildren(); return; }
-    const cluster = lastAskCluster();
-    if (cluster.length < RX_MIN_ASKS) { rxHost.replaceChildren(); rxKey = ''; return; }
-    const key = String(askAt(cluster[0]!)) + '·' + cluster.length + '·' + (cluster[cluster.length - 1]!.text || '').slice(0, 24);
-    if (key === rxKey) return;                       // 같은 묶음 — 다시 그리지 않는다(깜빡임 방지)
-    rxKey = key;
-    if (rxDone.has(key)) { rxHost.replaceChildren(); return; }
-    rxHost.replaceChildren(rxCard(cluster, key));
-  }
-
-  /** 나눠 말한 것을 순서대로 합친 지시문. 첫 마디는 그대로, 뒤에 덧붙인 것은 표시한다(무엇을 놓쳤는지가 보이게). */
-  function rxMerged(cluster: ChatTurn[]): { el: HTMLElement; text: string } {
-    const parts = cluster.map((t) => (t.text || '').trim()).filter(Boolean);
-    const box = el('div', { class: 'sc-rx-prompt' },
-      el('span', { class: 'sc-rx-plabel', text: '나눠 말씀하신 것을 한 덩어리로 합치면' }),
-      el('div', { class: 'sc-rx-ptext' },
-        ...parts.map((p, i) => i === 0
-          ? el('span', { text: p })
-          : el('span', { class: 'sc-rx-add', text: ' ' + p }))));
-    return { el: box, text: parts.join(' ') };
-  }
-
-  function rxCard(cluster: ChatTurn[], key: string): HTMLElement {
-    const n = cluster.length;
-    const mins = Math.max(1, Math.round((askAt(cluster[n - 1]!) - askAt(cluster[0]!)) / 60000));
-    const merged = rxMerged(cluster);
-    const close = (): void => { rxDone.add(key); rxHost.replaceChildren(); };
-
-    // 4 → 1 — 숫자를 읽지 않아도 보이게. 뒤쪽(합쳐진 것)에는 예상 시간을 쓰지 않는다(우리는 모른다).
-    const dots = el('div', { class: 'sc-rx-fold' },
-      el('span', { class: 'sc-rx-grp' }, ...Array.from({ length: Math.min(n, 6) }, () => el('i', { class: 'sc-rx-b' }))),
-      el('span', { class: 'sc-rx-arrow', 'aria-hidden': 'true', text: '→' }),
-      el('span', { class: 'sc-rx-grp' }, el('i', { class: 'sc-rx-b one' })),
-      el('span', { class: 'sc-rx-cap' }, el('b', { text: `${n}번 · ${mins}분` }), document.createTextNode(' 이 한 번으로')));
-
-    const put = canType()
-      ? el('button', { class: 'btn-text sc-rx-go', type: 'button', text: '이 지시문 입력칸에 넣기',
-        onclick: () => { view.input.value = merged.text; view.input.dispatchEvent(new Event('input')); view.input.focus(); close(); } })
-      : null;   // 끝난 세션엔 입력칸이 없다 — 눌러도 되는 척하는 버튼은 두지 않는다
-    const copy = el('button', { class: 'btn-text sc-rx-alt', type: 'button', text: '복사',
-      onclick: async () => { try { await navigator.clipboard.writeText(merged.text); toast('지시문을 복사했어요.'); } catch { window.prompt('이 지시문을 복사하세요:', merged.text); } } });
-    const keep = el('button', { class: 'btn-text sc-rx-alt', type: 'button', text: '이 일을 명령으로 저장해 두기',
-      onclick: () => toast('아직 준비 중이에요 — 다음 단계에서 이 지시문을 명령으로 굳힐 수 있게 됩니다.') });
-    const never = el('button', { class: 'btn-text sc-rx-never', type: 'button', text: '이런 거 안 볼래요',
-      onclick: () => { try { localStorage.setItem(RX_OFF_KEY, '1'); } catch { /* 비치명 */ } rxHost.replaceChildren(); toast('앞으로 이 안내를 띄우지 않습니다.'); } });
-
-    return el('div', { class: 'sc-rx' },
-      el('div', { class: 'sc-rx-h' },
-        el('span', { class: 'sc-rx-av', 'aria-hidden': 'true', text: 'L' }),
-        el('span', { class: 'sc-rx-ht', text: '이번 건, 한 번에 끝낼 수 있었어요' }),
-        el('button', { class: 'btn-text sc-rx-x', type: 'button', title: '닫기', 'aria-label': '닫기', text: '×', onclick: close })),
-      el('div', { class: 'sc-rx-b-wrap' },
-        el('p', { class: 'sc-rx-said' },
-          document.createTextNode('나눠서 '), el('b', { text: `${n}번` }), document.createTextNode(' 말씀하시느라 '),
-          el('b', { text: `${mins}분` }), document.createTextNode('이 걸렸어요. 아래처럼 처음부터 한 번에 주시면 됩니다.')),
-        dots,
-        merged.el,
-        el('div', { class: 'sc-rx-acts' }, ...(put ? [put] : []), copy, keep, never)));
   }
 
   // 위로 더 — [from-WINDOW, from) 창을 읽어 **턴 단위로 거꾸로** 앞에 끼운다(보고 있던 자리는 그대로).
