@@ -659,7 +659,8 @@ p { margin: 0 0 8px; }
 
 /* ═══ 레일(보임 68px — 지금 dev 그대로) ═══ */
 .rail { display: flex; flex-direction: column; min-height: 0; background: var(--canvas); border-right: 1px solid var(--line); user-select: none; overflow: hidden; }
-.mock.railoff .rail { display: none; }
+/* 숨김 = 열 폭 0. display:none 으로 빼면 그리드 열이 한 칸씩 밀려 사이드바가 0px 열에 앉는다(실측). */
+.mock.railoff .rail { visibility: hidden; border-right: 0; }
 .r-top { flex: none; padding: 10px 8px 2px; display: flex; justify-content: center; }
 .r-mid { flex: 1; min-height: 0; overflow: hidden auto; padding: 2px 0 6px; scrollbar-width: none; }
 .r-foot { flex: none; padding: 6px 0 8px; border-top: 1px solid var(--line-net); }
