@@ -51,6 +51,7 @@ let asideEl: HTMLElement | null = null;
 let tabsApi: TabsApi | null = null;
 let mobile: MobileChrome | null = null;   // ≤900px 모바일 크롬(#1777) — 상단 바·서랍. 데스크톱에선 보이지 않는 채로 달려 있다.
 let titlebar: Titlebar | null = null;     // 데스크톱 앱 창 버튼·드래그를 위한 OS 크롬. 브라우저에선 null.
+let webTopbar: HTMLElement | null = null; // 브라우저의 맨 윗줄(#2016 8차) — 데스크톱 창 줄과 같은 골격, 창 버튼만 없다.
 let data: V2Data = { projects: [], sessions: [], loadedAt: 0 };
 let projLoadedAt = 0;
 const projRetried = new Set<number>();   // 목록에 없어 한 번 더 당겨 본 프로젝트 id(같은 id 로 반복 재조회 방지)
@@ -232,7 +233,16 @@ export async function bootV2(): Promise<void> {
     //   좁아지면 창 줄이 사라지고 모바일 바(☰·제목·타임라인)가 대신 서던 구조였는데, 그러면 이번에 올린
     //   뒤로·앞으로·검색이 통째로 사라지고 대신 세션명이 떴다 — 같은 자리가 두 얼굴을 갖는다.
     //   ☰ 를 창 줄 맨 왼쪽으로 데려와 한 줄로 합친다(모바일 바는 그 단추를 잃고 서랍 기계만 남는다).
-    if (titlebar) titlebar.host.prepend(mobile.menuBtn);
+    //  #2016 8차(원준: "사이드바 버튼은 더 좌측에 · 뒤로/앞으로는 검색에 붙여 · 맨 윗줄은 더 두껍게 — 슬랙 참고") —
+    //   브라우저에도 **창 전체를 가로지르는 맨 윗줄**을 세운다(데스크톱과 같은 골격). 토글은 줄 맨 왼쪽 끝,
+    //   [‹][›][검색] 은 줄 가운데 한 묶음(side.ts navRow), 사이드바는 그 아래에서 머리글부터 시작한다.
+    //   종전엔 이 줄이 사이드바 안에 갇혀 토글이 레일 오른쪽에 서고 검색칸이 열 폭에 매였다.
+    if (!titlebar) {
+      webTopbar = el('div', { class: 'v2-topbar v2-topbar--web' }, el('div', { class: 'v2-tb-grip' })) as HTMLElement;
+      root.prepend(webTopbar);
+      root.classList.add('has-topbar');
+    }
+    if (titlebar) titlebar.host.prepend(mobile.menuBtn); else webTopbar?.prepend(mobile.menuBtn);
     //  넓은 폭에서 그 ☰ 는 이제 **레일을 여닫는다**(#2016 원준 2026-08-25: "지금 사이드바는 닫을 수는 없는
     //   상태로 길이 조절 정도로 고정"). 종전엔 사이드바를 통째로 접었는데(`side-off`), 그러면 목록이 사라져
     //   되찾는 길을 또 만들어야 했다 — 접히는 것은 레일 하나뿐이고 사이드바는 폭 손잡이로만 조절한다.
@@ -1505,7 +1515,7 @@ function drawSide(): void {
     onCloseInstance: (key) => { void closeSideRow(key); },
     onOpenProject: openProjectPage,
     //  창 맨 윗줄이 우리 것이면 뒤로·앞으로·검색을 거기 건다 — 상단 탭이 빠져 비어 있던 자리다(#1954).
-    navHost: () => (titlebar ? titlebar.host : null),
+    navHost: () => (titlebar ? titlebar.host : webTopbar),
     onPinChanged: () => { orderPin.clear(); },   // 고정이 바뀌면 자물쇠를 푼다 — 새 묶음에서 자리를 다시 잡아야 한다
     //  #2016 — 사이드바가 무엇을 그릴지는 레일이 고른 구역이 정한다(홈 · AI 세션 · 프로젝트 · 위키).
     section: railSection,
