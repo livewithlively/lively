@@ -186,6 +186,10 @@ async function renderProjectV2Board(view, scopeKey?) {
   //  사이드바를 닫아도 스코프는 유지되므로, 스코프 딥링크가 사이드바를 강제로 다시 열지 않는다).
   if (scopeKey) { pjvSidebarSel.key = scopeKey; pjvSidebarSel.explicit = true; }
   try { const s = localStorage.getItem('pjv:sideOpen'); if (s === '0') pjvBoardView.byArea = false; else if (s === '1' || scopeKey) pjvBoardView.byArea = true; } catch (_) { if (scopeKey) pjvBoardView.byArea = true; }
+  // #2043 — 새 셸 액자(?embed=1) 안에서는 이 패널을 세우지 않는다. 폴더·리스트로 오가는 일은 셸의 [프로젝트] 사이드바
+  //  (폴더 · 리스트 렌즈, web/v2/side.ts renderProjTree)가 맡고, 이 화면은 그 사이드바가 보낸 스코프(#/projects2/l|f/<id> · /none)를
+  //  보드로 그린다. 같은 목록이 두 열에 서던 것(레일 #2016 §6 '남은 것')을 여기서 끊는다. 스코프는 패널이 접혀도 유지된다(#1067 §2).
+  if (document.body.classList.contains('embed')) pjvBoardView.byArea = false;
   pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화(이전 화면 선택 잔존 방지)
   const { y: keepY, host: keepHost } = consumeKeepScroll(); // 인라인 편집 재렌더면 스켈레톤 스킵 + 스크롤 복원(#358)
   if (keepY == null) view.replaceChildren(skeleton('프로젝트를 불러오는 중'));

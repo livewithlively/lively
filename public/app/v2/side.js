@@ -153,6 +153,11 @@ function init() {
         mineOnly = localStorage.getItem(MINE_KEY) === '1';
     }
     catch (_) { /* noop */ }
+    try {
+        projLens = localStorage.getItem(LENS_STORE) === 'active' ? 'active' : 'tree';
+    }
+    catch (_) { /* 기본 렌즈(폴더 · 리스트)로 */ }
+    foldClosed = loadSet(FOLD_CLOSED_STORE);
     void loadPeopleAvatars().then((m) => { people = m || {}; if (last)
         redraw(); });
 }
@@ -294,6 +299,26 @@ export function projectOrder(data) {
         .sort((a, b) => Number(a.done) - Number(b.done) || byWork(a, b))
         .map((r) => ({ proj: r.proj, done: r.done, mine: r.mine, lastWork: r.lastWork }));
 }
+// ══ #2043 — [프로젝트] 구역의 **렌즈 둘**: 진행 중 ↔ 폴더 · 리스트 ═══════════════════════
+//  레일 [프로젝트]를 누르면 사이드바가 둘 떴다 — 이 트리(진행 중 · 프로젝트 › 세션)와, 액자 안 클래식 앱이 들고 온
+//  「폴더 · 리스트」 패널. 둘은 **다른 질문**에 답한다(무엇이 도나 / 어디에 정리돼 있나)라 하나를 버리지 않고 스위치로
+//  갈랐다(원준 2026-08-26, 5안 중 안 3 — 지식 project-sidebar-unify-5-proposals-2043). 클래식 패널은 액자 안에서
+//  더는 그리지 않는다(projects/board.ts renderProjectV2Board).
+//  · 기본은 폴더 · 리스트(원준 선택). 고른 렌즈는 이 브라우저가 기억한다.
+//  · 폴더 · 리스트 렌즈는 **리스트까지만**(프로젝트 행 없음) — 리스트를 누르면 가운데 보드가 그 리스트로 간다(#/projects2/l/<id>).
+//  · 끌어다 놓기·리스트 ⋯ 메뉴는 1차에서 뺐다 — 리스트 설정·즐겨찾기 토글은 보드 머리줄의 ⌄ · ☆ 가 한다(#1067).
+const LENS_STORE = 'lively_v2_proj_lens'; // 'active' | 'tree'
+const FOLD_CLOSED_STORE = 'lively_v2_proj_fold_closed'; // 접어 둔 폴더 id
+let projLens = 'tree';
+let foldClosed = new Set();
+let favLists = null; // 내 즐겨찾기 리스트(#670) — 이 렌즈에 처음 들어올 때 한 번 당긴다
+let favLoading = false;
+let newKind = 'proj'; // ＋ 줄이 무엇을 만드나 — 폴더 · 리스트 렌즈에서만 셋 중 고른다
+const NEW_COPY = {
+    proj: { ph: '새 프로젝트 이름을 적고 Enter', label: '새 프로젝트 이름' },
+    list: { ph: '새 리스트 이름을 적고 Enter', label: '새 리스트 이름' },
+    folder: { ph: '새 폴더 이름을 적고 Enter', label: '새 폴더 이름' },
+};
 let hooks = {};
 export function drawSide(host, data, activeKey, h) {
     init();
@@ -911,6 +936,10 @@ function renderInboxSide() {
 function renderProjects() {
     if (!last)
         return;
+    if (projLens === 'tree') {
+        renderProjTree();
+        return;
+    } // #2043 — 렌즈가 갈린다(위 LENS_STORE 머리말)
     const { host, data } = last;
     const navEl = navRow();
     const navHost = hooks.navHost?.() || null;
@@ -924,9 +953,182 @@ function renderProjects() {
     const activeN = rows.filter((r) => r.proj && !r.archived).length;
     countEl = el('span', { class: 'v2-k' });
     treeEl = el('div', { class: 'v2-tree' });
-    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' }, secHead('프로젝트', null, countEl, newBtn(), findBtn(), filterBtn(activeN, liveAll, doneCount)), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('프로젝트 찾기'))] : []), ...(fltCount() ? [filterSummary(fltCount())] : []), ...(newOpen ? [newProjRow()] : []), treeEl), secFoot());
+    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' }, secHead('프로젝트', null, countEl, newBtn(), findBtn(), filterBtn(activeN, liveAll, doneCount)), lensSwitch(), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('프로젝트 찾기'))] : []), ...(fltCount() ? [filterSummary(fltCount())] : []), ...(newOpen ? [newProjRow()] : []), treeEl), secFoot());
     renderTree(rows);
     keepSideScroll(treeEl, 'v2-tree');
+    bindFindKey();
+}
+function loadFavLists() {
+    if (favLists || favLoading)
+        return;
+    favLoading = true;
+    void api('/api/ui/v6/favorites').then((d) => {
+        favLists = new Set(((d && d.project_lists) || []).map((x) => Number(x)).filter((n) => Number.isFinite(n)));
+        favLoading = false;
+        if (last && (hooks.section?.() || 'home') === 'proj' && projLens === 'tree')
+            redraw();
+    }).catch(() => { favLoading = false; favLists = new Set(); });
+}
+/** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
+function projScopeKey() {
+    const m = /^#\/projects2\/(l|f)\/(\d+)/.exec(location.hash);
+    if (m)
+        return (m[1] === 'l' ? 'L' : 'F') + m[2];
+    return /^#\/projects2\/none/.test(location.hash) ? 'none' : '';
+}
+function setLens(k) {
+    if (projLens === k)
+        return;
+    projLens = k;
+    try {
+        localStorage.setItem(LENS_STORE, k);
+    }
+    catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
+    // 찾기 칸과 ＋ 줄은 렌즈마다 다른 것을 찾고 만든다 — 넘길 때 비운다(옛 검색어가 새 목록을 조용히 줄이면 안 된다).
+    sideFilter = '';
+    findOpen = false;
+    newOpen = false;
+    newDraft = '';
+    newErr = '';
+    redraw();
+}
+/** 렌즈 스위치 — [진행 중 | 폴더 · 리스트]. 답을 기다리는 세션이 있으면 **다른 렌즈에 있을 때** 진행 중 쪽에 앰버 점(숫자는 안 단다 —
+ *  사이드바의 앰버 숫자 배지는 하나뿐이라는 #1719 규칙). 8/25 결정 ①(시간순 ↔ 프로젝트별 토글)과 같은 장치다. */
+function lensSwitch() {
+    const data = last ? last.data : null;
+    const waiting = !!data && data.sessions.some((s) => isLive(s) && s.stateKey === 'waiting');
+    const tab = (k, label, dot, title) => el('button', { class: 'v2-lens-b' + (projLens === k ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(projLens === k), title,
+        onclick: () => setLens(k) }, el('span', { text: label }), dot ? el('i', { class: 'v2-lens-dot', role: 'img', 'aria-label': '답을 기다리는 세션이 있어요' }) : null);
+    return el('div', { class: 'v2-lens', role: 'tablist', 'aria-label': '무엇을 볼지' }, tab('active', '진행 중', waiting && projLens !== 'active', '진행 중 — 도는 세션이 있는 프로젝트와 그 세션'), tab('tree', '폴더 · 리스트', false, '폴더 · 리스트 — 프로젝트가 정리된 자리. 리스트를 누르면 가운데 보드가 그 리스트로 갑니다'));
+}
+/** 폴더 · 리스트 렌즈의 ＋ — 무엇을 만들지 셋 중 고른다(프로젝트 · 리스트 · 폴더). 옛 패널의 「＋ 새로 만들기 ▾」(#1067) 자리. */
+function newMenuBtn() {
+    return el('button', {
+        class: 'v2-add' + (newOpen ? ' on' : ''), type: 'button', 'aria-label': '새로 만들기', 'aria-haspopup': 'menu', 'aria-expanded': String(newOpen),
+        title: newOpen ? '만들기 줄 접기' : '새로 만들기 — 프로젝트 · 리스트 · 폴더',
+        onclick: (e) => {
+            e.preventDefault();
+            if (newOpen) {
+                closeNew();
+                return;
+            }
+            const r = e.currentTarget.getBoundingClientRect();
+            ctxMenu(r.left, r.bottom + 4, [
+                { label: '새 프로젝트', run: () => openNew('proj') },
+                { label: '새 리스트', run: () => openNew('list') },
+                { label: '새 폴더', run: () => openNew('folder') },
+            ]);
+        },
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
+}
+function renderProjTree() {
+    if (!last)
+        return;
+    const { host, data } = last;
+    const navEl = navRow();
+    const navHost = hooks.navHost?.() || null;
+    if (navHost) {
+        navHost.querySelector('.v2-side-nav')?.remove();
+        navHost.prepend(navEl);
+    }
+    loadFavLists();
+    const lists = (data.lists || []);
+    const folders = (data.folders || []);
+    // 열린 프로젝트 수 — 보관·버림·완료는 빼고 센다. 매일 보는 숫자는 '남은 일'이다(완료까지 센 숫자는 보드의 Closed 토글이 말한다).
+    const openByList = new Map();
+    let noneN = 0;
+    for (const p of data.projects) {
+        if (isArchivedProj(p) || isTrashedProj(p) || p.status_category === 'done')
+            continue;
+        if (p.list_id)
+            openByList.set(p.list_id, (openByList.get(p.list_id) || 0) + 1);
+        else
+            noneN++;
+    }
+    // 아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 트리에 없다 — 발치 도크 [아카이브]가 그 문이다.
+    const kids = new Map();
+    for (const f of folders) {
+        const k = f.parent_id ?? null;
+        const arr = kids.get(k) || [];
+        arr.push(f);
+        kids.set(k, arr);
+    }
+    const archived = new Set();
+    const markArchive = (f) => { archived.add(f.id); for (const c of kids.get(f.id) || [])
+        markArchive(c); };
+    for (const f of folders)
+        if (f.settings && f.settings.kind === 'archive')
+            markArchive(f);
+    const listsIn = (folderId) => lists.filter((l) => (l.folder_id ?? null) === folderId);
+    const q = sideFilter.trim().toLowerCase();
+    const hit = (name) => !q || name.toLowerCase().includes(q);
+    const sel = projScopeKey();
+    const countUnder = (f) => listsIn(f.id).reduce((n, l) => n + (openByList.get(l.id) || 0), 0)
+        + (kids.get(f.id) || []).filter((c) => !archived.has(c.id)).reduce((n, c) => n + countUnder(c), 0);
+    // 찾는 중엔 맞는 것이 아래에 하나라도 있어야 폴더가 선다(폴더 이름이 맞아도 선다).
+    const anyHit = (f) => hit(f.name) || listsIn(f.id).some((l) => hit(l.name)) || (kids.get(f.id) || []).some((c) => !archived.has(c.id) && anyHit(c));
+    const lockIc = () => sv('svg', { viewBox: '0 0 24 24', class: 'v2-ptl-lock', 'aria-hidden': 'true' }, sv('path', { d: 'M7 11V8a5 5 0 0 1 10 0v3' }), sv('rect', { x: '5', y: '11', width: '14', height: '10', rx: '2' }));
+    const listRow = (l, depth) => {
+        const on = sel === 'L' + l.id;
+        const emoji = l.settings && l.settings.icon ? String(l.settings.icon) : '';
+        return el('a', { class: 'v2-wcat v2-ptl' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, style: 'padding-left:' + (12 + depth * 14) + 'px',
+            title: l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : ''), ...(on ? { 'aria-current': 'true' } : {}) }, emoji ? el('span', { class: 'v2-ptl-emoji', 'aria-hidden': 'true', text: emoji }) : icon('list', 'v2-ptl-ic'), el('span', { class: 'n', text: l.name }), l.visibility === 'members' ? lockIc() : null, el('span', { class: 'v2-cnt', text: String(openByList.get(l.id) || 0) }));
+    };
+    const rows = [];
+    const folderRows = (parent, depth) => {
+        for (const f of (kids.get(parent) || [])) {
+            if (archived.has(f.id))
+                continue;
+            if (q && !anyHit(f))
+                continue;
+            const open = q ? true : !foldClosed.has(String(f.id)); // 찾는 중엔 전부 편다 — 접힌 폴더가 결과를 삼키면 안 된다
+            const on = sel === 'F' + f.id;
+            const isSpace = !!(f.settings && f.settings.kind === 'space');
+            rows.push(el('div', { class: 'v2-ptf' + (on ? ' on' : ''), style: 'padding-left:' + (depth * 14) + 'px' }, el('button', { class: 'v2-car' + (open ? ' open' : ''), type: 'button', 'aria-label': open ? f.name + ' 접기' : f.name + ' 펼치기', 'aria-expanded': String(open), text: '›',
+                onclick: (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (open)
+                        foldClosed.add(String(f.id));
+                    else
+                        foldClosed.delete(String(f.id));
+                    saveSet(FOLD_CLOSED_STORE, foldClosed);
+                    redraw();
+                } }), el('a', { class: 'v2-ptf-a', href: '#/projects2/f/' + f.id, title: (isSpace ? '스페이스 ' : '폴더 ') + f.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}) }, glyph(open ? 'folder-open' : 'folder', 'v2-ptf-ic'), el('span', { class: 'n', text: f.name }), el('span', { class: 'v2-cnt', text: String(countUnder(f)) }))));
+            if (!open)
+                continue;
+            folderRows(f.id, depth + 1);
+            for (const l of listsIn(f.id))
+                if (hit(l.name))
+                    rows.push(listRow(l, depth + 1));
+        }
+    };
+    // ⭐ 즐겨찾기(#670) — 폴더 안이든 밖이든 맨 위 한자리로. 찾는 중엔 생략(찾기가 우선). 비어 있으면 구역 자체를 안 그린다.
+    const favs = !q && favLists ? lists.filter((l) => favLists.has(l.id)) : [];
+    if (favs.length) {
+        rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: '즐겨찾기' }));
+        for (const l of favs)
+            rows.push(listRow(l, 0));
+    }
+    rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: '폴더 · 리스트' }));
+    const treeStart = rows.length;
+    folderRows(null, 0);
+    for (const l of listsIn(null))
+        if (hit(l.name))
+            rows.push(listRow(l, 0));
+    // 기타(미분류) — 리스트에 안 넣은 프로젝트. 클래식 패널의 그 줄(#475 __none__). 그런 프로젝트가 있을 때만 선다.
+    const noneLabel = '기타 (미분류)';
+    if (noneN && (!q || noneLabel.toLowerCase().includes(q))) {
+        rows.push(el('a', { class: 'v2-wcat v2-ptl v2-ptl--none' + (sel === 'none' ? ' on' : ''), href: '#/projects2/none', style: 'padding-left:12px',
+            title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(sel === 'none' ? { 'aria-current': 'true' } : {}) }, glyph('inbox', 'v2-ptl-ic'), el('span', { class: 'n', text: noneLabel }), el('span', { class: 'v2-cnt', text: String(noneN) })));
+    }
+    if (rows.length === treeStart) {
+        rows.push(el('p', { class: 'v2-empty', text: q ? '찾는 폴더 · 리스트가 없어요.' : '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' }));
+    }
+    const listEl = el('div', { class: 'v2-app-list v2-ptree', 'aria-label': '폴더 · 리스트' }, ...rows);
+    appListEl = listEl;
+    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' }, secHead('프로젝트', null, newMenuBtn(), findBtn()), lensSwitch(), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('폴더 · 리스트 찾기'))] : []), ...(newOpen ? [newProjRow()] : []), listEl), secFoot());
+    keepSideScroll(listEl, 'v2-app-list');
     bindFindKey();
 }
 let wikiCats = null;
@@ -1305,7 +1507,7 @@ let newDraft = ''; // 20초 폴링 재렌더가 치던 이름을 지우지 않�
 let newSending = false;
 let newErr = '';
 let newFocusWanted = false;
-function openNew() { newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
+function openNew(kind = 'proj') { newKind = kind; newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
 function closeNew() { if (!newOpen)
     return; newOpen = false; newDraft = ''; newErr = ''; redraw(); }
 function newBtn() {
@@ -1324,7 +1526,7 @@ function newProjRow() {
     const errEl = el('p', { class: 'v2-npj-err', hidden: !newErr, text: newErr });
     const inp = el('input', {
         class: 'v2-npj-in', type: 'text', maxlength: '120', value: newDraft,
-        placeholder: '새 프로젝트 이름을 적고 Enter', 'aria-label': '새 프로젝트 이름',
+        placeholder: NEW_COPY[newKind].ph, 'aria-label': NEW_COPY[newKind].label, // #2043 — 이 줄은 프로젝트 · 리스트 · 폴더를 다 만든다
         oninput: (e) => { newDraft = e.target.value; if (newErr) {
             newErr = '';
             errEl.hidden = true;
@@ -1348,7 +1550,7 @@ function newProjRow() {
         onblur: () => window.setTimeout(() => { if (newOpen && !newSending && !newDraft.trim())
             closeNew(); }, 120),
     });
-    const line = el('div', { class: 'v2-npj-l' + (newSending ? ' sending' : '') }, el('span', { class: 'v2-car none', 'aria-hidden': 'true' }), glyph('folder', 'v2-pj-ic'), inp);
+    const line = el('div', { class: 'v2-npj-l' + (newSending ? ' sending' : '') }, el('span', { class: 'v2-car none', 'aria-hidden': 'true' }), newKind === 'list' ? icon('list', 'v2-pj-ic') : glyph(newKind === 'folder' ? 'folder-open' : 'folder', 'v2-pj-ic'), inp);
     const create = async () => {
         const name = newDraft.trim();
         // 재진입 가드는 둔다 — 이 줄은 만들면 그 작업대로 **떠나므로** 연달아 적는 줄이 아니다(그래서 잠금이 아니라 가드).
@@ -1365,6 +1567,34 @@ function newProjRow() {
         //  다시 그리지도 않는다: 여기서 redraw 하면 치던 칸이 새로 나면서 포커스가 끊긴다. 흐리게만 알린다.
         line.classList.add('sending');
         try {
+            if (newKind === 'list' || newKind === 'folder') {
+                // #2043 — 폴더 · 리스트 렌즈의 ＋. 만든 것을 목록에 **낙관적으로** 세운다(다음 폴링이 정본으로 덮는다 — 그때까지 이 줄이 선다).
+                const isList = newKind === 'list';
+                const made = await api(isList ? '/api/ui/v6/project-lists' : '/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name }) })
+                    .then((d) => (d && (isList ? d.list : d.folder)) || d);
+                if (!made || !made.id)
+                    throw new Error(isList ? '생성 응답에 리스트가 없어요' : '생성 응답에 폴더가 없어요');
+                if (last) {
+                    if (isList) {
+                        const ls = last.data.lists || (last.data.lists = []);
+                        if (!ls.some((l) => l.id === made.id))
+                            ls.push(made);
+                    }
+                    else {
+                        const fs = last.data.folders || (last.data.folders = []);
+                        if (!fs.some((f) => f.id === made.id))
+                            fs.push(made);
+                    }
+                }
+                newSending = false;
+                newOpen = false;
+                newDraft = '';
+                newErr = '';
+                if (isList)
+                    location.hash = '#/projects2/l/' + made.id; // 새 리스트의 보드로 — 빈 보드가 '만들어졌다'를 말한다
+                redraw();
+                return;
+            }
             const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name }) }).then((d) => (d && d.project) || d);
             if (!np || !np.id)
                 throw new Error('생성 응답에 프로젝트가 없어요');

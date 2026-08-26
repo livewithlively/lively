@@ -14,6 +14,7 @@ body.embed .pjv-has-side .pjv-side-nav-inner { top: 0; max-height: 100vh; paddin
 body.embed .pjv-has-side .pjv-side-main { min-height: 100vh; }
 body.embed .kn-shell { min-height: 100vh; }
 body.embed .kn-side { top: 0; max-height: 100vh; padding-top: 14px; }
+body.embed .pjv-side-btn { display: none !important; } /* #2043 — 액자 안에선 폴더·리스트 패널을 세우지 않는다(셸 사이드바가 맡는다). 여는 단추도 없어야 한다 */
 /* 액자 띠 없는 앱(FRAMELESS) — 새 탭 열기만 우상단 작은 아이콘으로 남긴다(기능 유지). */
 .v2-app-frameless { position: relative; }
 .v2-frame-pop { position: absolute; top: 6px; right: 10px; z-index: 2; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--muted-2); text-decoration: none; font-size: 13px; background: var(--bg); opacity: .7; }

@@ -202,3 +202,26 @@
   .v2-rail-me .v2-rail-t { display: none; }
   .v2-wspop { left: 64px !important; width: min(316px, calc(100vw - 72px)); }
 }
+
+/* ── [프로젝트] 구역 — 렌즈 스위치 + 폴더 · 리스트 트리 (#2043, web/v2/side.ts renderProjTree) ─────────── */
+.v2-lens { display: flex; gap: 2px; margin: 0 8px 8px; padding: 2px; border-radius: 9px; background: var(--bg-tint-2); flex: none; }
+.v2-lens-b { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 26px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.v2-lens-b:hover { color: var(--ink); }
+.v2-lens-b.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-lens-b:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-lens-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn-deep); flex: none; }
+.v2-ptree { display: flex; flex-direction: column; gap: 1px; }
+.v2-ptf { display: flex; align-items: center; gap: 2px; min-height: 30px; }
+.v2-ptf-a { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 4px; border-radius: 8px; font-size: 13px; font-weight: 700; color: var(--ink-sub); text-decoration: none; }
+.v2-ptf-a:hover { background: var(--bg); color: var(--ink); }
+.v2-ptf.on .v2-ptf-a { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-ptf-a .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-ptf-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; }
+.v2-ptf-a:hover .v2-ptf-ic, .v2-ptf.on .v2-ptf-ic { stroke: var(--blue); }
+.v2-ptf .v2-car.open { transform: rotate(90deg); }
+.v2-ptl.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-net); }
+.v2-ptl-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v2-ptl:hover .v2-ptl-ic, .v2-ptl.on .v2-ptl-ic { stroke: var(--blue); }
+.v2-ptl-emoji { width: 16px; text-align: center; font-size: 13px; flex: none; }
+.v2-ptl-lock { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 2; stroke-linejoin: round; }
+.v2-ptl--none { color: var(--muted); }

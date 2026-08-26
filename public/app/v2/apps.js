@@ -329,6 +329,7 @@ export function appFrame(hash, title, opts) {
     //  (안 접으면 문서 페이지에만 '클래식 화면 · 그대로 실림' 띠가 되살아난다 — #1841 실측)
     const seg = hash.replace(/^#\/?/, '').split(/[/?]/)[0];
     const key = CLASSIC_PAGES[seg] || seg;
+    frame.dataset.appKey = key; // #2043 — 같은 앱이면 셸이 액자를 다시 싣지 않고 안의 주소만 바꾼다(main.ts 클래식 분기)
     if (!opts?.live && FRAMELESS.has(key)) {
         const pop = el('a', { class: 'v2-frame-pop', href: classicUrl(hash), target: '_blank', rel: 'noopener', title: '새 탭에서 열기', 'aria-label': '새 탭에서 열기', text: '↗' });
         return el('div', { class: 'v2-app v2-app-frameless' }, pop, frame);
