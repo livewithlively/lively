@@ -221,11 +221,31 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
   return wsTransport(`ws://127.0.0.1:${port}`);
 }
 
-/** 세션 컨테이너 안 ws 포트에 붙는 stdio 다리 — 중계(docker exec hijack) 한 겹 위에 줄 단위 전송을 얹는다. */
+/**
+ * 세션 컨테이너 안 ws 포트에 붙는 stdio 다리 — 중계(docker exec hijack) 한 겹 위에 줄 단위 전송을 얹는다.
+ *
+ *  ★ **WebSocket 클라이언트여야 한다.** `codex app-server --listen ws://…` 는 이름 그대로 WebSocket 을
+ *   말한다 — 생 TCP 로 붙으면 서버가 `HTTP/1.1 400 Bad Request` 를 돌려주고 끝난다(실측 2026-08-26,
+ *   매니지드 실박스에서 **롤 전에** 잡았다). 셀프호스트 경로는 처음부터 wsTransport(진짜 ws 클라이언트)라
+ *   멀쩡했고 이 다리만 생 net.connect 였다 — 매니지드를 켠 적이 없어 아무도 안 밟았을 뿐이다.
+ *
+ *  왜 굳이 포트를 거치나(그냥 `codex app-server` 를 stdio 로 돌리면 다리도 포트도 필요 없다):
+ *   그러면 서버가 이 exec 의 **자식**이라 게이트웨이가 재기동되면 같이 죽는다 — 돌던 턴이 통째로
+ *   유실되는 그 회귀다(#2055 실측). 포트에 띄워 두면 다리만 끊기고 서버는 남아 턴을 마치고 답을 쓴다.
+ *
+ *  ⚠ 노드 22 의 전역 WebSocket 을 쓴다(테넌트 이미지 node v22.23.2 — 실측 확인).
+ *   메시지는 JSONL 이라 개행을 보장해 내보낸다(받는 쪽이 줄 단위로 자른다).
+ */
 function bridgeTransport(sessionId: string, port: number): AppServerTransport {
-  const BRIDGE = `const n=require("net");const s=n.connect(${port},"127.0.0.1");` +
-    `s.on("error",e=>{process.stderr.write(String(e.message));process.exit(1)});` +
-    `process.stdin.pipe(s);s.pipe(process.stdout);s.on("close",()=>process.exit(0));`;
+  const BRIDGE = [
+    `const ws=new WebSocket("ws://127.0.0.1:${port}");`,
+    `let q=[],open=false;`,
+    `ws.onopen=()=>{open=true;for(const m of q.splice(0))ws.send(m);};`,
+    `ws.onmessage=e=>{const d=String(e.data);process.stdout.write(d.endsWith("\\n")?d:d+"\\n");};`,
+    `ws.onerror=()=>{};`,
+    `ws.onclose=()=>process.exit(0);`,
+    `let buf="";process.stdin.on("data",c=>{buf+=c;let i;while((i=buf.indexOf("\\n"))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;if(open)ws.send(l);else q.push(l);}});`,
+  ].join("");
   const argv = sessionSpawnArgv(sessionId, ["node", "-e", BRIDGE]);
   const p = spawn(argv[0], argv.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
   let buf = "";
