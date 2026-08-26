@@ -43,7 +43,7 @@ function mcpEditor(detail, data) {
 }
 
 // 프록시 자격 종류 힌트(datalist) — 오타 방지용 제안. 신규 커넥터가 확장 가능(자유입력 허용).
-const MCP_AUTH_KINDS = ['notion_oauth', 'slack_oauth', 'google_oauth', 'gitlab_pat', 'slack_user_token', 'notion_token', 'clickup_token', 'prometheus_bearer', 'figma_token'];
+const MCP_AUTH_KINDS = ['notion_oauth', 'slack_oauth', 'google_oauth', 'gitlab_oauth', 'gitlab_pat', 'github_pat', 'slack_user_token', 'notion_token', 'clickup_token', 'prometheus_bearer', 'figma_token'];
 
 function mcpForm(root, s, data, detail, isNew) {
   const nameIn = el('input', { type: 'text', value: s.name, placeholder: '서버 이름(영문/숫자)', disabled: isNew ? null : '' });
