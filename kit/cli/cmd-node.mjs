@@ -393,6 +393,7 @@ function bakedNodePath() {
 async function cmdNode(rest) {
   const sub = rest[0];
   if (sub === "stop") return nodeStop();
+  if (sub === "keepawake") return nodeKeepAwake(rest.slice(1));   // #1849 — 시스템 잠자기 자체를 끈다(권한 1회)
   const daemon = rest.includes("--daemon");
   const nodeId = (rest.includes("--id") ? rest[rest.indexOf("--id") + 1] : "") || slugHost();
   const gw = gateway(), tok = token();
@@ -482,6 +483,7 @@ function nodeInstallDaemon(agentJs, nodeId) {
     if (r.status !== 0) die("LaunchAgent 등록 실패 — launchctl bootstrap", 1);
     say(green(`✅ 노드 '${nodeId}' 상시화(LaunchAgent) — 부팅·로그인마다 자동 연결`));
     say(dim(`   중지: lively node stop   ·   로그: ${logTailHint(NODE_LOG)}`));
+    for (const line of sleepHintLines()) say(dim(line));   // #1849
     return;
   }
   if (process.platform === "linux") {
@@ -548,6 +550,7 @@ WantedBy=default.target\n`);
       spawnSync("schtasks", ["/Run", "/TN", WIN_TASK_NAME], { stdio: "ignore" });          // 재로그인 기다리지 않고 지금 기동
       say(green(`✅ 노드 '${nodeId}' 상시화(작업 스케줄러) — 로그인마다 자동 연결·죽으면 1분 뒤 재기동`));
       say(dim(`   중지: lively node stop   ·   로그: ${logTailHint(NODE_LOG)}`));
+      for (const line of sleepHintLines()) say(dim(line));   // #1849
       reportAgentAlive(since);
       return;
     }
@@ -582,6 +585,7 @@ WantedBy=default.target\n`);
       spawn(process.env.COMSPEC || "cmd.exe", ["/c", runnerCmd], { detached: true, stdio: "ignore", windowsHide: true }).unref();
     }
     say(green(`✅ 노드 '${nodeId}' 상시화(시작프로그램) — 로그인마다 자동 연결·죽으면 5초 뒤 재기동`));
+    for (const line of sleepHintLines()) say(dim(line));   // #1849
     if (!started) say(yellow("   ⚠ WSH 가 꺼져 있어 로그인 시 자동 시작이 안 될 수 있습니다 — 재부팅 후 `lively status` 로 확인하세요."));
     say(dim("   로그인 전에는 돌지 않습니다(그 기능은 관리자 권한 필요 — 관리자 PowerShell 에서 다시 실행하면 승격됩니다)."));
     say(dim(`   중지: lively node stop   ·   로그: ${logTailHint(NODE_LOG)}`));
@@ -614,6 +618,77 @@ function winUserId() {
     userName: process.env.USERNAME || "",
     userDomain: process.env.USERDOMAIN || "",
   });
+}
+
+// ── 잠자기(#1849) ──────────────────────────────────────────────────────────────
+//  노드는 "항상 붙어 있어야 원격 세션이 열리는 머신" 인데, 노트북은 전원이 꽂혀 있어도 유휴 잠자기에 들어가
+//  링크가 끊긴다(실측 `haruui-macbookair`: 1시간에 한 번, 60초씩만 연결). 에이전트가 프로세스 수명 동안
+//  자동 억제를 걸지만(src/node/keep-awake.ts) **뚜껑 닫기·배터리·modern standby 는 못 막는다** —
+//  그 구멍은 사람이 한 번 결정해야 하고, 그러려면 먼저 **알아야** 한다. 그래서 상시화 직후 말한다.
+//  ⚠ 순수함수로 뺀다(#1510 §5) — Windows 분기는 mac/linux CI 에서 한 번도 안 돈다.
+/** 상시화 직후 띄울 잠자기 안내(플랫폼별). 아무 말도 필요 없으면 빈 배열. */
+export function sleepHintLines(platform = process.platform) {
+  if (platform === "darwin") {
+    return [
+      "이 맥이 잠들면 노드 연결이 끊겨 세션을 열 수 없습니다.",
+      "  · 전원 연결 상태에서는 라이블리가 자동으로 잠자기를 막습니다(화면은 꺼집니다).",
+      "  · 다만 **뚜껑을 닫으면** 막을 수 없습니다 — 뚜껑을 열어 두시거나, 닫고 쓰시려면:",
+      "      lively node keepawake            (내부적으로 sudo pmset -a disablesleep 1)",
+    ];
+  }
+  if (platform === "win32") {
+    return [
+      "이 PC 가 절전에 들어가면 노드 연결이 끊겨 세션을 열 수 없습니다.",
+      "  · 전원 연결 상태에서는 라이블리가 자동으로 절전을 막습니다(화면은 꺼집니다).",
+      "  · 최신 대기(modern standby) 기기에서는 막히지 않을 수 있습니다 — 그럴 땐:",
+      "      lively node keepawake            (내부적으로 powercfg /change standby-timeout-ac 0)",
+    ];
+  }
+  return [];
+}
+
+/**
+ * `lively node keepawake [off]` 가 실제로 실행할 명령(순수 — 테스트 seam).
+ *  ⚠ 이건 **시스템 전역 설정을 바꾼다**(에이전트의 프로세스 수명 억제와 다르다) → 사람이 명시적으로 부를 때만.
+ *   그래서 권한 상승이 필요하고, 그 사실을 needsAdmin 으로 드러내 호출부가 미리 말하게 한다.
+ */
+export function forceAwakeArgv(platform = process.platform, on = true) {
+  if (platform === "darwin") {
+    // pmset -a = 전원원 전체(배터리·어댑터·UPS). disablesleep 1 이면 뚜껑을 닫아도 자지 않는다.
+    return { cmd: "sudo", args: ["pmset", "-a", "disablesleep", on ? "1" : "0"], needsAdmin: true };
+  }
+  if (platform === "win32") {
+    // standby-timeout-ac 0 = "전원 연결 시 절전 안 함". 배터리(-dc)는 건드리지 않는다 — 계약 ③ 과 같은 취지.
+    return { cmd: "powercfg", args: ["/change", "standby-timeout-ac", on ? "0" : "30"], needsAdmin: true };
+  }
+  return null;
+}
+
+/**
+ * `lively node keepawake [off]` — **시스템 잠자기 자체를 끈다**(전역 설정 변경, 권한 1회).
+ *
+ *  에이전트의 자동 억제(프로세스 수명 한정·권한 불요)로 못 막는 구멍 — 맥 뚜껑 닫기, 윈도우 modern standby —
+ *  을 사람이 명시적으로 닫는 경로다. 되돌리기: `lively node keepawake off`.
+ *  ⚠ 무엇을 바꾸는지 **먼저 보여주고** 실행한다. 남의 PC 전원 설정을 말없이 바꾸는 건 우리가 할 일이 아니다.
+ */
+function nodeKeepAwake(rest) {
+  const on = !(rest[0] === "off");
+  const plan = forceAwakeArgv(process.platform, on);
+  if (!plan) die(`이 운영체제(${process.platform})에서는 지원하지 않습니다.`, 2);
+  say(`${on ? "잠자기를 끕니다" : "잠자기 설정을 되돌립니다"} — 다음 명령을 실행합니다:`);
+  say(dim(`  $ ${plan.cmd} ${plan.args.join(" ")}`));
+  if (plan.needsAdmin) say(dim("  (관리자 권한이 필요합니다 — 암호나 UAC 창이 뜰 수 있습니다.)"));
+  const r = spawnSync(plan.cmd, plan.args, { stdio: "inherit" });
+  if (r.status !== 0) {
+    // 실패를 성공처럼 말하지 않는다 — 무엇이 막혔고 무엇을 하면 되는지까지.
+    if (process.platform === "win32") {
+      die("실패했습니다 — 관리자 PowerShell 에서 다시 실행해 주세요:\n" +
+        `  ${plan.cmd} ${plan.args.join(" ")}`, 1);
+    }
+    die(`실패했습니다 — 직접 실행해 보세요: ${plan.cmd} ${plan.args.join(" ")}`, 1);
+  }
+  say(green(on ? "✅ 이제 이 컴퓨터는 (뚜껑을 닫아도) 자지 않습니다." : "✅ 잠자기 설정을 되돌렸습니다."));
+  if (on) say(dim("   되돌리기: lively node keepawake off"));
 }
 
 // 데몬 런처(.cmd) — 작업 스케줄러는 이 파일 하나만 실행한다.
@@ -902,6 +977,23 @@ export function parseProcCount(platform, stdout, status) {
  *  거짓말했다. '도는가' 와 '붙어 있는가' 는 다른 축이다 — 붙어 있지 않으면 사람은 다시 시작해야 한다.
  * @returns true=붙어 있음 · false=목록엔 있는데 오프라인 · null=모름(목록에 없음·응답 이상)
  */
+/**
+ * 게이트웨이 `/api/ui/nodes` 응답에서 **이 노드의 잠자기 상태 문구**를 뽑는다(#1849, 순수 — 테스트 seam).
+ *  ⚠ 문구는 **서버가 만든다**(src/node/link-advice.ts) — CLI·웹·앱이 각자 지으면 조금씩 다른 말을 하게 된다.
+ *   여기선 고르기만 한다. 못 찾으면 null(모름) — '문제 없음'과 섞지 않는다.
+ * @returns {{note: string|null, keepAwake: string|null}|null}
+ */
+export function nodeSleepInfoFrom(payload, id) {
+  const list = Array.isArray(payload) ? payload : Array.isArray(payload?.nodes) ? payload.nodes : null;
+  if (!list || !id) return null;
+  const n = list.find((x) => x && String(x.id) === String(id));
+  if (!n) return null;
+  return {
+    note: typeof n.link_note === "string" && n.link_note ? n.link_note : null,
+    keepAwake: typeof n.keep_awake_note === "string" && n.keep_awake_note ? n.keep_awake_note : null,
+  };
+}
+
 export function nodeConnectedFrom(payload, id) {
   const list = Array.isArray(payload) ? payload : Array.isArray(payload?.nodes) ? payload.nodes : null;
   if (!list || !id) return null;

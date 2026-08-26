@@ -982,6 +982,27 @@ export function setupWebkitImeAdapter() {
 }
 // 키/IME/마우스 입력(xterm onData)의 단일 처리 본체 — boot 가 term.onData 에 '한 번만' 등록한다.
 //  최상위 함수로 분리한 이유: 회귀 테스트(src/terminal-client-input.test.ts)가 실제 배선 그대로 직접 호출한다(#1117).
+// ── 마우스 리포트 코얼레싱(#1437, 2026-08-26) — claude alt-screen 은 리포트마다 화면 전체를 다시 그린다.
+//  트랙패드 스크롤·호버(1003 any-motion)는 초당 수십 리포트를 뿜어 재그리기를 겹겹이 쌓아 스크롤이 밀렸다
+//  (실측: 세션 컨테이너 부하 아님 — CPU 스로틀 0·메모리 압박 0. 파이프에 쌓인 프레임 수가 지연이었다).
+//  한 프레임에 온 리포트를 **바이트 하나도 안 버리고**(휠 노치·press/release 보존) 이어붙여 1회 ws 프레임으로
+//  보낸다 — claude 는 그 배치를 한 번에 읽어 재그리기도 한 번으로 접는다. 지연은 최대 1프레임(≈16ms)뿐.
+let mouseReportBuf = '';
+let mouseFlushArmed = false;
+const scheduleMouseFrame = (typeof requestAnimationFrame === 'function')
+  ? (fn: () => void) => requestAnimationFrame(fn)
+  : (fn: () => void) => setTimeout(fn, 16);
+// 버퍼된 마우스 리포트를 한 프레임으로 내보낸다(테스트가 동기로 부를 수 있게 export). 비면 no-op.
+export function flushMouseReports(): void {
+  if (!mouseReportBuf) return;
+  const d = mouseReportBuf; mouseReportBuf = ''; mouseFlushArmed = false;
+  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
+  // 드리프트 가드(#1302) — 리포트가 '실제로 나가는' 이 순간에만, 마지막 상태동기가 낡았을 때만 물어본다.
+  if (Date.now() - lastStateAt > 8000 && Date.now() - lastMouseProbeAt > 8000) {
+    lastMouseProbeAt = Date.now();
+    if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
+  }
+}
 export function handleTermData(d) {
   userTyped = true;       // #1059 — 이 탭에서 입력이 있었다 = 세션이 죽으면 '내가 끝냈을 수 있다'(자동 복원 금지)
   // 사파리 IME 어댑터의 삼킴(#1300) — beforeinput 이 예약한 '그 이벤트의 xterm 유출' 1회만 걸러낸다.
@@ -993,14 +1014,15 @@ export function handleTermData(d) {
   cancelPromptSeek(true); // 질문 위치 자동 탐색 중 사용자가 입력하면 즉시 중단(#967 — 사용자 조작 우선)
   // Shift+Enter 승격: 이 keydown 이 낸 '\r' 을 '\x1b\r'(Option+Enter 와 동일 = 줄바꿈)로 바꿔 보낸다. 음절 등 다른 데이터는 그대로.
   if (shiftEnterPending && d === '\r') { shiftEnterPending = false; d = '\x1b\r'; }
-  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
-  // 드리프트 가드(#1302) — 붙어 있는 동안 앱이 죽으면(마우스 off 를 못 보내고) 클라는 다음 동기화(포커스·재연결)까지
-  //  그 사실을 모른 채 리포트를 계속 흘린다. 리포트가 '실제로 나가는 순간'(=증상이 시작된 그 순간)에만, 그리고
-  //  마지막 상태동기가 낡았을 때만 상태를 다시 물어 갭을 한 왕복으로 줄인다(정상 앱 사용 중엔 8초에 1회 이하).
-  if (isMouseReport(d) && Date.now() - lastStateAt > 8000 && Date.now() - lastMouseProbeAt > 8000) {
-    lastMouseProbeAt = Date.now();
-    if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
+  // 마우스 리포트(호버·휠)는 프레임당 1회로 합쳐 보낸다(위 mouseReportBuf 주석). 드리프트 가드는 flush 안.
+  if (isMouseReport(d)) {
+    mouseReportBuf += d;
+    if (!mouseFlushArmed) { mouseFlushArmed = true; scheduleMouseFrame(flushMouseReports); }
+    return;
   }
+  // 비-마우스 입력 — 버퍼된 마우스를 먼저 비워 순서를 지키고(마우스→키), 즉시 보낸다(에코 지연 0).
+  flushMouseReports();
+  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
 }
 // 복사 경로는 셋 — ① 선택 후 Ctrl/Cmd+C (setupClipboard) ② '복사' 류 버튼 클릭 ③ 앱(Claude Code)의 OSC52 복사 신호.
 //  · [#972] copy-on-select(드래그 놓는 즉시 자동복사, #252)는 되살리지 않는다 — 미세한 클릭드래그(4px)에도

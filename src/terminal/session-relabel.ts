@@ -23,6 +23,7 @@ import { type LabelSource } from "../sessions/session-label-source.js";
 import { sessionNameFromAgent } from "./session-name.js";
 import { nodeOfSession, nodeRpc } from "../node/registry.js";
 import { getOpt, tmux } from "./tmux-exec.js";
+import { renameShellProjectForSession } from "../project/first-prompt-project.js";
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 // session-project-routes.ts 와 같은 규칙(userId 우선, 없으면 email) — 소유자 비교의 축이 갈리면 안 된다.
@@ -80,5 +81,13 @@ export async function relabelSession(
   } catch (e) {
     console.warn(`[terminal] 세션 이름 tmux 반영 실패(${id}) — DB 에는 남았다:`, (e as Error)?.message ?? e);
   }
+  // ③ 자동 생성 껍데기 프로젝트의 이름도 같은 것으로(#1867 · 상민님 제안 2026-08-25: "llm이 세션명 지을 때
+  //  플젝명도 그거랑 똑같게 업뎃하는 게 좋지 않을까, 기계적으로 만들어진 세션이었다면").
+  //  세션을 열 때 만든 껍데기의 이름은 **첫 지시를 70자에서 자른 것**이라 보드에서 읽기 나쁘다 — 지금 막
+  //  지어진 이름은 같은 재료를 사람이 읽을 문장으로 만든 것이니, 그 세션 하나를 담으려고 만든 껍데기라면 따라간다.
+  //  사람이 손댄 프로젝트는 AUTO_CREATED_MARK 가 없어 걸러진다(판정은 shouldRenameShellProject 한 곳).
+  //  출처(agent·human)로 가르지 않는다: 어느 쪽이든 기계로 자른 제목보다 낫고, 판정 근거는 '껍데기인가'다.
+  //  실패·미소속·못 찾음은 전부 조용한 no-op — 이름은 부가정보고 이 함수는 실패를 만들지 않는다(파일 머리말 ②).
+  await renameShellProjectForSession({ executionId: id, owner: me, name: label }).catch(() => { /* 비치명 */ });
   return { ok: true, applied: true, label, source };
 }

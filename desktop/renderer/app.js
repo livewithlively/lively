@@ -81,6 +81,13 @@ function renderState(s) {
       : zombie ? `노드 ${s?.nodeId || ""} — 프로세스는 돌지만 게이트웨이에 연결돼 있지 않습니다. 다시 시작하세요.`
         : running ? `노드 ${s?.nodeId || ""} 실행 중${s?.nodeDaemon ? " · PC 켤 때 자동 시작" : " · 이 세션만"}`
           : `노드 ${s?.nodeId || ""} 정지됨`;
+  // #1849 — 잠자기로 추정되면 원인·조치를 그대로 띄운다(서버가 만든 문구). 재시작 버튼만 있으면
+  //  사용자는 자는 PC 를 계속 재시작하게 된다 — 그건 고쳐지지 않는다.
+  const sleepEl = $("node-sleep");
+  if (sleepEl) {
+    sleepEl.textContent = s?.nodeSleepNote || "";
+    sleepEl.classList.toggle("hidden", !s?.nodeSleepNote);
+  }
   $("node-start").textContent = zombie ? "노드 다시 시작" : "노드 시작";
   $("node-start").disabled = !!s?.busy || (running && !zombie);
   $("node-stop").disabled = !!s?.busy || stopped || !s?.nodeRegistered;

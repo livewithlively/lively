@@ -8,7 +8,7 @@
 //   · catalog.ts   — 큐레이트 상수·타입(TMUX_BIN·PANE_LOCALE·ROOTS·HARNESSES·SessionInfo·CreateInput·modeEnvArgs)
 //   · tmux-exec.ts — tmux 실행 프리미티브(tmux/getOpt/LIST_FMT)·뮤터블 관측 상태·세션 메타 저수준 헬퍼
 //   · profiles.ts  — 멤버 신원 파생(slug)·멀티프로필(#346)·OS 유저 프로비저닝(#524)·AI 계정(#1085)
-//   · phase.ts     — 실행 단계 관측·판정(detectAwaiting·resolveAgentPhase·markSessionActive, #1221)
+//   · phase.ts     — 실행 단계 관측·판정(detectAwaiting·resolveAgentPhase·markSessionActive, #1221) + 열람 도장(markSessionSeen, #1954 3차)
 //   · write-cap.ts — 세션 기록 범위(#1291 v2)·가시성 술어(canSeeSession)
 //   · sessions.ts  — 세션 목록·생성·수정·삭제·초대·입장 판정(CRUD 코어)
 //  ⚠ 재수출 집합은 분할 전과 동일해야 한다(export 집합 diff 0 이 이 리팩토링의 계약). 새 심볼을 여기 늘리지 말 것 —
@@ -28,7 +28,7 @@ export {
 } from "./profiles.js";
 export {
   detectAwaiting, isReportedPhase, PHASE_TTL_SEC, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
-  isActivityProgress, markSessionActive, type ReportedPhase,
+  isActivityProgress, markSessionActive, markSessionSeen, type ReportedPhase,
 } from "./phase.js";
 export {
   invalidateWriteCap, normalizeCap, sessionWriteCap, deriveWriteCap, canSeeSession, type WriteCap,

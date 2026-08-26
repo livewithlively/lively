@@ -24,7 +24,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream } from "./notify.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
 
@@ -817,6 +817,11 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(statusLabel({ ...base, nodeConnected: false }), /연결 끊김/);
   assert.match(statusLabel({ ...base, nodeConnected: true }), /실행 중/);
   assert.match(statusLabel({ ...base, nodeConnected: null }), /실행 중/, '모름은 종전대로 — 게이트웨이에 못 물었다고 끊김이라 하면 거짓말');
+  // #1849 — 원인을 아는 끊김은 '다시 시작 필요'라고 하면 안 된다(자는 PC 는 재시작해도 또 잔다).
+  assert.match(statusLabel({ ...base, nodeConnected: false, nodeSleepNote: '…잠자기로 보입니다…' }), /잠자기/,
+    '잠자기로 추정되면 그 사실을 먼저 말한다');
+  assert.doesNotMatch(statusLabel({ ...base, nodeConnected: false, nodeSleepNote: '…' }), /다시 시작 필요/,
+    '자는 PC 에 재시작을 시키면 사용자는 같은 일을 반복하게 된다');
   assert.match(statusLabel({ ...base }), /실행 중/, '축이 아예 없어도(구 CLI) 종전대로');
   const z = trayMenuModel({ ...base, nodeConnected: false });
   const i = z.findIndex((m) => m.id === 'node-start');
@@ -828,6 +833,8 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(main, /nodeConnected: typeof n\.connected === "boolean" \? n\.connected : null/, 'connected 를 boolean 일 때만 옮기지 않는다');
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
   assert.match(js, /nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
+  assert.match(js, /nodeSleepNote/, '렌더러가 잠자기 원인 문구를 띄우지 않는다(#1849)');
+  assert.match(main, /nodeSleepNote:/, 'main 이 status 의 sleep.note 를 앱 상태로 옮기지 않는다(#1849)');
   assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
   assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
 });
@@ -1781,6 +1788,20 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(/streamAlive = true/.test(main) && /streamAlive = false/.test(main), "연결 상태를 갱신하지 않는다");
     assert.ok(/finally\s*{[^}]*streamAlive = false/s.test(main), "끊길 때 상태를 되돌리지 않는다 — 영영 폴링 배너가 막힌다");
     assert.ok(/scheduleStreamRetry/.test(main), "재연결이 배선되지 않았다");
+  });
+  // #2041 — 웹 셸에서 같은 코드 모양이 실제로 재접속 폭주를 냈다(브라우저 실측: 20초에 19번).
+  //  '붙었나'로 카운터를 되돌리면, 서버가 붙자마자 끊는 상황에서 백오프가 매번 첫 칸으로 돌아가
+  //  지수 백오프를 써 놓고 없는 것과 같아진다. 그래서 '붙어서 얼마나 살았나'로 판정한다.
+  t("A29 ★백오프는 '붙었나'가 아니라 '붙어서 살았나'로 되돌린다 — 즉시 끊기는 서버에 초당 재접속 금지", () => {
+    assert.equal(stableStream(0), false, "붙자마자 끊긴 연결은 실패의 한 종류다");
+    assert.equal(stableStream(9_999), false, "경계 직전 — 아직 아니다");
+    assert.equal(stableStream(10_000), true, "10초를 버텼으면 정상 연결");
+    assert.equal(stableStream(undefined), false, "값이 없으면 되돌리지 않는다(안전한 쪽)");
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const conn = main.slice(main.indexOf("async function connectNotifyStream("), main.indexOf("function scheduleStreamRetry("));
+    assert.ok(!/streamAlive = true;\s*streamTries = 0;/.test(conn),
+      "★붙는 순간 카운터를 0 으로 되돌린다 — 즉시 끊기는 서버에 초당 한 번씩 재접속한다(#2041 실측)");
+    assert.ok(/stableStream\(/.test(conn), "안정연결 판정을 쓰지 않는다");
   });
 }
 

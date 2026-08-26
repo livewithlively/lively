@@ -30,6 +30,7 @@ import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, live
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
+import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
@@ -135,7 +136,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerTicketProfileRoutes(app, auth);
   registerSessionCrudRoutes(app, auth);
   registerRestoreReportRoutes(app, auth);
-  registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys (CRUD 뒤 — 경로가 겹치지 않는다)
+  registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys · /sessions/:id/seen(#1954 3차) (CRUD 뒤 — 경로가 겹치지 않는다)
   registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
@@ -610,7 +611,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (!nodeOpenTo(n, idOf(userOf(req)))) {
       throw new HttpError(403, "본인이 등록한 노드가 아니고 공유 노드도 아닙니다 — 관리자가 공유 노드로 지정한 노드만 함께 쓸 수 있습니다");
     }
-    if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
+    // #1849 — 새 세션을 못 여는 것도 같은 뿌리다(실측: 사용자는 "세션도 안 열림"으로 겪었다).
+    //  왜 오프라인인지 추정이 서면 함께 말한다 — 이 자리가 사용자가 실제로 막히는 지점이다.
+    if (!nodeOnline(nodeId)) {
+      const extra = await nodeOfflineNote(nodeId).catch(() => null);
+      throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)" + (extra ? `\n\n${extra}` : ""));
+    }
   };
 
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
@@ -846,7 +852,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (st.node_id) {
       const nodeId = st.node_id;
       if (nodeSessionsFor(me).some((x) => x.node.id === nodeId && x.id === id)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
-      if (!nodeOnline(nodeId)) throw new HttpError(409, "그 세션이 있던 컴퓨터(노드)가 지금 연결돼 있지 않아 복원할 수 없습니다. 노드가 켜지면 다시 시도하세요.");
+      // #1849 — "연결돼 있지 않습니다"에서 끝내지 않는다: 게이트웨이는 그 노드의 연결 이력을 갖고 있으므로
+      //  **왜 그런지(잠자기 추정)와 무엇을 하면 되는지**까지 말할 수 있다. 진단 조회가 실패해도 원래 문구는 나간다.
+      if (!nodeOnline(nodeId)) {
+        const extra = await nodeOfflineNote(nodeId).catch(() => null);
+        throw new HttpError(409, "그 세션이 있던 컴퓨터(노드)가 지금 연결돼 있지 않아 복원할 수 없습니다. 노드가 켜지면 다시 시도하세요."
+          + (extra ? `\n\n${extra}` : ""));
+      }
       // 라이브 경합은 **노드에 묻는다**(gone op) — 스냅샷은 재시작 직후·생성 직후 비어 있고 뷰어별 필터라(admin) 살아 있는 세션을
       //  놓칠 수 있다. 확답을 못 받으면 복원하지 않는다(모르면 같은 세션을 둘로 만들지 않는다 — #835 '확답 only').
       const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
