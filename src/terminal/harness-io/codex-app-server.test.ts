@@ -184,4 +184,17 @@ await t("T4 turn/start 응답의 turn.id 도 잡는다 — 알림보다 먼저 �
   assert.equal(c.currentTurnId, "TU-7");
 });
 
+await t("★ T5 재기동으로 turn/started 를 놓쳤어도 item 알림의 turnId 로 따라잡는다 — 안 그러면 그 턴은 영영 못 멈춘다", async () => {
+  const tr = fake();
+  const c = await ready(tr);
+  // 붙었을 때 이미 턴이 돌고 있었다 — turn/started 는 지나갔고 item 알림만 온다.
+  tr.push({ jsonrpc: "2.0", method: "item/started", params: { threadId: "th1", turnId: "TU-42", item: { type: "agentMessage", id: "m1" } } });
+  assert.equal(c.currentTurnId, "TU-42");
+  const p = c.interrupt("th1");
+  const sent = tr.sent.find((m) => m.method === "turn/interrupt");
+  assert.equal(sent.params.turnId, "TU-42");
+  reply(tr, sent.id, {});
+  await p;
+});
+
 console.log(`\n${pass} passed`);

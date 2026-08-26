@@ -181,6 +181,10 @@ export class CodexAppServer {
       // 지금 도는 턴 id — 멈춤·얹기가 이 값을 **필수 인자로** 요구한다(스키마). onNotify 보다 먼저 잡는다.
       if (method === "turn/started") this.turnId = String((params as any)?.turn?.id ?? "");
       else if (method === "turn/completed") this.turnId = "";
+      // ★ 우리가 시작하지 않은 턴도 잡는다: 게이트웨이가 재기동되면 붙는 순간 turn/started 는 이미 지나갔고,
+      //  그러면 **그 턴은 영영 못 멈춘다**(서버는 계속 돌고 화면엔 멈춤 버튼만 있다). item/* 알림이 turnId 를
+      //  달고 계속 오므로 그걸로 따라잡는다 — 재접속이 곧 이 설계의 핵심 이득인데 멈춤만 못 하면 반쪽이다.
+      else if (!this.turnId && method.startsWith("item/")) this.turnId = String((params as any)?.turnId ?? "");
       this.opts.onNotify?.(method, params);
       if (method === "item/agentMessage/delta") {
         const d = String(params.delta ?? "");
