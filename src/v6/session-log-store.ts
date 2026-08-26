@@ -195,6 +195,22 @@ const mapSessionRow = (x: Record<string, unknown>): SessionListRow => ({
 });
 
 // 내 세션 목록(웹뷰) — 소유자=요청자. 제목·소유자표시명·생성·마지막활동·크기 포함.
+/** 이 목록의 상한(#2022 후속) — 종전 500 은 **말없이** 잘렸다. 실측 2026-08-26: 200행이 한 사람의
+ *  7.7일치밖에 못 덮어(하루 ~26세션) 그보다 오래된 지난 세션이 트리에서 통째로 사라졌다. 상한을 올리되
+ *  **잘렸다는 사실을 호출자에게 알린다**(listSessionsForOwnerPage) — 조용한 절단이 이 버그의 정체였다. */
+export const SESSION_LIST_MAX = 2000;
+
+/** 요청한 깊이를 상한 안으로 — **한 곳에서만** 정한다(종전엔 스토어 쿼리와 라우트가 각자 200/500 을 들고 있었다). */
+export const clampSessionListLimit = (v: unknown): number => Math.min(Math.max(Number(v) || 200, 1), SESSION_LIST_MAX);
+
+/** 목록 + **잘렸는지**. 화면이 '이게 전부'라고 오해하지 않게 truncated 를 함께 준다. */
+export async function listSessionsForOwnerPage(owner: string, limit = 200): Promise<{ rows: SessionListRow[]; truncated: boolean }> {
+  const want = clampSessionListLimit(limit);
+  const rows = await listSessionsForOwner(owner, want);
+  //  요청한 만큼 꽉 찼다 = 그 뒤가 더 있을 수 있다. '정확히 want 개'인 경우도 truncated 로 본다(보수적 — 없다고 단정하지 않는다).
+  return { rows, truncated: rows.length >= want };
+}
+
 export async function listSessionsForOwner(owner: string, limit = 200): Promise<SessionListRow[]> {
   if (!owner) return [];
   const r = await itemsPool.query(
@@ -212,7 +228,7 @@ export async function listSessionsForOwner(owner: string, limit = 200): Promise<
       WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL
       ORDER BY s.last_seen DESC
       LIMIT $2`,
-    [owner, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
+    [owner, clampSessionListLimit(limit)]);
   return r.rows.map(mapSessionRow);
 }
 
