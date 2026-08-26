@@ -2,7 +2,7 @@
 //  사양 엣지: ①어떤 지시가 프로젝트가 되나(길이·접두·여러 줄·상한) ②어떤 요청에서 선생성하나(이미 소속·폴더 선택·앱·로그인·읽기전용·인코그니토).
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AUTO_CREATED_MARK, UNNAMED_PROJECT, firstPromptProjectPlan, shellProjectFromPrompt } from "./first-prompt-project.js";
+import { AUTO_CREATED_MARK, UNNAMED_PROJECT, firstPromptProjectPlan, shellProjectFromPrompt, shouldRenameShellProject } from "./first-prompt-project.js";
 
 const PROMPT = "세션 귀속 v2 후속으로 홈 세션 cwd 를 프로젝트 폴더로 옮기자";
 
@@ -70,3 +70,27 @@ test("작업 세션이 아니거나 조직에 안 남기는 세션 → 안 만�
 });
 
 
+
+// ★ 상민님 제안(2026-08-25): "llm이 세션명 지을때 플젝명도 그거랑 똑같게 업뎃하는게 좋지않을까 기계적으로 만들어진세션이었다면"
+//  기계 제목("PROJECT AUTO BIND 에서 하는일이 정확히…")이 그대로 프로젝트명으로 남는 게 나쁘다는 지적에서 나왔다.
+test("세션 이름 승계 — 자동 생성 껍데기만, 사람이 손댔으면 물러난다", () => {
+  const shell = { name: "안뇽 너느누구", description: `첫 지시\n${AUTO_CREATED_MARK}` };
+  assert.equal(shouldRenameShellProject(shell, "세션 귀속 v2"), true);
+  assert.equal(shouldRenameShellProject(shell, "안뇽 너느누구"), false, "같은 이름이면 쓰지 않는다");
+  assert.equal(shouldRenameShellProject(shell, "   "), false, "빈 이름으로 덮지 않는다");
+  // 사람이 정련한 프로젝트(표식 없음) — 절대 안 건드린다.
+  assert.equal(shouldRenameShellProject({ name: "결제 백오프", description: "사람이 쓴 본문" }, "세션 이름"), false);
+  // expectName — 그 사이 누가 제목을 고쳤으면 물러난다.
+  assert.equal(shouldRenameShellProject(shell, "새 이름", { expectName: "안뇽 너느누구" }), true);
+  assert.equal(shouldRenameShellProject(shell, "새 이름", { expectName: UNNAMED_PROJECT }), false, "임시값이 아니면 승계 대상이 아니다");
+  assert.equal(shouldRenameShellProject(null, "이름"), false);
+});
+
+// 호출부(relabelSession)는 expectName 을 주지 않는다 — 상민님이 나쁘다고 한 이름이 바로 **첫 지시를 자른 제목**이라,
+//  임시값("새 작업")일 때만 바꾸면 정작 그 경우가 안 고쳐진다. 껍데기인가(표식)만 보고 승계한다.
+test("expectName 없이 부르면 기계로 자른 첫 지시 제목도 승계 대상이다", () => {
+  const sliced = { name: "PROJECT AUTO BIND 에서 하는일이 정확히 뭐야? 플젝 정련하라는 훅이랑 다른…", description: AUTO_CREATED_MARK };
+  assert.equal(shouldRenameShellProject(sliced, "훅 동작 확인"), true);
+  const placeholder = { name: UNNAMED_PROJECT, description: AUTO_CREATED_MARK };
+  assert.equal(shouldRenameShellProject(placeholder, "훅 동작 확인"), true, "임시값도 같은 자리");
+});
