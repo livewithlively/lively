@@ -404,6 +404,9 @@ function googleTeamCollectCard(): HTMLElement {
     const cols: any[] = (s && s.collectors) || [];
     const of = (k: string) => cols.find((c) => c.service === k) || {};
     const drive = of('drive'), gmail = of('gmail');
+    // 도구 전용(수집기 없음) — 일정은 자료로 모으지 않고 AI 가 그때그때 읽는다. 서버가 tools 로 내려 준다.
+    const tools: any[] = (s && s.tools) || [];
+    const cal = tools.find((t) => t.service === 'calendar') || {};
     const connected = !!(s && s.connected);
     const anyOn = !!(drive.enabled || gmail.enabled);
 
@@ -416,7 +419,14 @@ function googleTeamCollectCard(): HTMLElement {
     const gChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
     dChk.checked = drive.enabled !== false && (drive.enabled || !anyOn); // 기본 드라이브만
     gChk.checked = !!gmail.enabled;
-    const picked = (): string[] => [...(dChk.checked ? ['drive'] : []), ...(gmailOffered && gChk.checked ? ['gmail'] : [])];
+    const calOffered = cal.offered !== false;
+    const cChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    cChk.checked = !!cal.scope_ok; // 수집기가 없으니 '켜짐'의 뜻은 '허용했나' 하나뿐이다
+    const picked = (): string[] => [
+      ...(dChk.checked ? ['drive'] : []),
+      ...(gmailOffered && gChk.checked ? ['gmail'] : []),
+      ...(calOffered && cChk.checked ? ['calendar'] : []),
+    ];
 
     const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
     chk.checked = anyOn;
@@ -441,19 +451,29 @@ function googleTeamCollectCard(): HTMLElement {
         : '구글 심사를 마치기 전에는 회사 전체에서 100명까지 연결할 수 있어요(그 수는 되돌릴 수 없습니다). 연결할 때 구글이 "확인되지 않은 앱" 경고를 띄우는데, [고급] → [이동]으로 넘어가면 됩니다.';
     const cost = el('p', { class: 'cn-help' }, ...uiText(costLine()));
     const repaintCost = () => cost.replaceChildren(...uiText(costLine()));
-    dChk.onchange = repaintCost; gChk.onchange = repaintCost;
+    dChk.onchange = repaintCost; gChk.onchange = repaintCost; cChk.onchange = repaintCost;
 
     const svcRow = el('div', { class: 'cn-sec-form' },
       el('label', { class: 'cn-toggle' }, dChk, el('span', { text: ' Google Drive 문서' })),
+      ...(calOffered ? [el('label', { class: 'cn-toggle' }, cChk,
+        el('span', { text: ' 캘린더 일정 — AI가 읽기만 합니다(자료로 모으지 않아요)' }))] : []),
       ...(gmailOffered ? [el('label', { class: 'cn-toggle' }, gChk, el('span', { text: ' Gmail 메일' }))]
         : gmailLegacy ? [el('p', { class: 'cn-help' }, ...uiText('· Gmail 메일 — 예전에 켜 두신 것이 그대로 돌고 있어요'))]
         : []));
 
     const extra: HTMLElement[] = [];
     // 동의는 했는데 그 서비스 범위가 빠진 경우 — 켜 봐야 상류가 거부하므로 먼저 범위를 넓히게 한다.
-    const missing = [!drive.scope_ok && dChk.checked ? 'Google Drive' : '', gmailOffered && !gmail.scope_ok && gChk.checked ? 'Gmail' : ''].filter(Boolean);
+    const missing = [
+      !drive.scope_ok && dChk.checked ? 'Google Drive' : '',
+      gmailOffered && !gmail.scope_ok && gChk.checked ? 'Gmail' : '',
+      calOffered && !cal.scope_ok && cChk.checked ? '캘린더' : '',
+    ].filter(Boolean);
     if (connected && missing.length) {
-      extra.push(el('p', { class: 'cn-help' }, ...uiText(`${missing.join(' · ')} 는 아직 허용하지 않으셨어요 — [권한 넓히기]로 한 번 더 허용하면 모으기 시작합니다.`)));
+      // 캘린더는 '모으기'가 아니라 '읽기'다 — 문구가 하는 일과 어긋나면 사람이 다른 걸 기대한다.
+      const onlyCal = missing.length === 1 && missing[0] === '캘린더';
+      extra.push(el('p', { class: 'cn-help' }, ...uiText(
+        `${missing.join(' · ')} 는 아직 허용하지 않으셨어요 — [권한 넓히기]로 한 번 더 허용하면 ` +
+        (onlyCal ? 'AI가 일정을 읽을 수 있습니다.' : '바로 시작합니다.'))));
     }
     if (connected) {
       extra.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '권한 넓히기',

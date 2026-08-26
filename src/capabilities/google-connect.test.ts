@@ -6,7 +6,7 @@
 //       수명 누적이고 리셋·증액이 불가능해서, 한 번 태우면 되돌릴 수 없다.
 //    ② **조용한 성공** — 동의하지 않은 서비스의 수집기가 켜져 run 은 ok 인데 자료가 0건인 상태.
 import assert from "node:assert/strict";
-import { scopeCovers, GOOGLE_COLLECTORS, googleCollectAction } from "./google-connect.js";
+import { scopeCovers, GOOGLE_COLLECTORS, googleCollectAction, splitGoogleServices, GOOGLE_TOOL_ONLY_SERVICES } from "./google-connect.js";
 import { consumesUnverifiedUserCap, googleConsentTier } from "../org/credentials/google-oauth.js";
 
 let pass = 0;
@@ -105,6 +105,34 @@ t("P13 무회귀: 드라이브는 종전 규칙 그대로(동의 있으면 켜�
   const ns = googleCollectAction({ service: "drive", wanted: true, enabled: false, scopeOk: false });
   assert.equal(ns.action, "none");
   assert.equal(ns.reason, "no_scope", "동의 없이 켜면 run 은 ok 인데 자료가 0건인 '조용한 성공'이 된다");
+});
+
+// ── 도구 전용 서비스(캘린더) — 2026-08-27 "캘린더 안떠" 가 만든 축 ─────────────
+//  카드가 수집기 목록으로만 그려져서 캘린더는 **칸이 아예 없었고**, [권한 넓히기]가 보내는 services 에도
+//  안 실렸다. 도구(google_calendar_*)는 등록돼 있는데 그걸 켤 방법이 화면 어디에도 없던 상태다.
+t("P14 ★ 캘린더는 수집기를 만들지 않는다 — 없는 프리셋으로 upsert 를 시도하게 된다", () => {
+  assert.equal(GOOGLE_COLLECTORS.some((c) => (c.service as string) === "calendar"), false);
+  const r = splitGoogleServices(["drive", "calendar"]);
+  assert.deepEqual(r.collect, ["drive"]);
+  assert.deepEqual(r.toolOnly, ["calendar"], "동의 범위로는 반드시 실려야 한다");
+});
+
+t("P15 ★ 캘린더만 골라도 수집기는 0이고 동의는 열린다", () => {
+  const r = splitGoogleServices(["calendar"]);
+  assert.deepEqual(r.collect, []);
+  assert.deepEqual(r.toolOnly, ["calendar"]);
+});
+
+t("P16 모르는 값·중복은 조용히 걸러진다(화면이 뭘 보내든 서버가 무너지지 않는다)", () => {
+  const r = splitGoogleServices(["drive", "drive", "calendar", "calendar", "youtube", ""]);
+  assert.deepEqual(r.collect, ["drive"]);
+  assert.deepEqual(r.toolOnly, ["calendar"]);
+});
+
+t("P17 도구 전용 목록에 수집 서비스가 섞이지 않는다", () => {
+  for (const s of GOOGLE_TOOL_ONLY_SERVICES) {
+    assert.equal(GOOGLE_COLLECTORS.some((c) => (c.service as string) === s), false, `${s} 가 양쪽에 있다`);
+  }
 });
 
 console.log(`\ngoogle-connect: ${pass} passed`);
