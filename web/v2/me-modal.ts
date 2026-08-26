@@ -183,15 +183,6 @@ function pane(title: string, hint: string, ...kids: any[]): HTMLElement {
 function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
   return el('div', { class: 'v2me-save' }, btn, status);
 }
-// 다른 도메인(매니지드 계정 화면)으로 나가는 줄 — 같은 모양이되 **새 탭**으로 연다.
-//  이 창을 닫지 않는 이유: 돌아올 자리가 여기이고, 탈퇴를 그만두는 것도 흔한 결말이다.
-function moreLinkExternal(href: string, label: string, desc: string): HTMLElement {
-  return el('a', { class: 'v2me-more', href, target: '_blank', rel: 'noopener' },
-    el('span', { class: 'v2me-more-t', text: label }),
-    el('span', { class: 'v2me-more-d', text: desc }),
-    ic(['M9 6l6 6-6 6'], 'v2me-more-ic'));
-}
-
 // 이 창에서 관리탭 안쪽 화면으로 건너가는 줄 — 여기서 다 하지 않고 **어디로 가면 되는지**만 말한다.
 function moreLink(href: string, label: string, desc: string, close: () => void): HTMLElement {
   return el('a', { class: 'v2me-more', href, onclick: () => close() },
@@ -440,13 +431,20 @@ function accountPane(data: any, logins: any, close: () => void): HTMLElement {
   //  그래서 여기서 지우지 않고 그 화면으로 건너간다(코어는 컨트롤플레인을 부를 자격이 없다 — 쿠키 세션 전용).
   //  hub_url 이 없으면(셀프호스트 박스) 이 항목을 **아예 그리지 않는다**: 그 배포엔 '회원'이라는 단위가 없고
   //  구성원 제거는 관리자의 일이라, 눌러도 갈 곳이 없는 버튼이 된다.
+  // 계정은 매니지드(app.lvly.io)가 갖고 있지만 **탈퇴는 이 창 안에서 끝난다**(#1876).
+  //  종전엔 그 도메인으로 새 탭을 띄웠는데, 로그인해서 쓰고 있는 사람이 탈퇴하려면 밖에서 다시
+  //  로그인해야 하는 화면이 됐다 — 기능이 없는 것과 같다. 실행만 서버가 계정 서버로 위임한다.
+  //  hub_url 이 없으면(셀프호스트) 항목 자체를 두지 않는다: 그 배포엔 '회원'이라는 단위가 없다.
   const hubUrl = String(((state as any) && (state as any).me && (state as any).me.workspace && (state as any).me.workspace.hub_url) || '');
-  let accountUrl = '';
-  if (hubUrl) { try { accountUrl = new URL(hubUrl).origin + '/account'; } catch (_) { accountUrl = ''; } }
-  if (accountUrl) {
+  if (hubUrl) {
     kids.push(el('div', { class: 'v2me-more-k', text: '계정 정리' }),
-      moreLinkExternal(accountUrl, '회원 탈퇴',
-        '계정과 혼자 쓰는 워크스페이스가 지워집니다. 팀에 올린 자료와 지식은 남습니다.'));
+      el('button', {
+        type: 'button', class: 'v2me-more', style: 'width:100%;text-align:left;background:none;border:0;cursor:pointer',
+        onclick: () => accountDeleteModal(),
+      },
+        el('span', { class: 'v2me-more-t', text: '회원 탈퇴' }),
+        el('span', { class: 'v2me-more-d', text: '계정과 혼자 쓰는 워크스페이스가 지워집니다. 팀에 올린 자료와 지식은 남습니다.' }),
+        ic(['M9 6l6 6-6 6'], 'v2me-more-ic')));
   }
   return pane('계정 · 보안', '내가 이 워크스페이스에 어떻게 들어오는지 정합니다.', ...kids);
 }
@@ -506,3 +504,80 @@ function notifyPane(): HTMLElement {
   return body;
 }
 
+// ── 회원 탈퇴(#1876) — 이 창 안에서 끝난다 ──────────────────────────────────────
+//  화면이 "무엇이 지워지고 무엇이 남는지" 를 **서버 판정 그대로** 먼저 말한다(실행과 같은 함수를 쓴다).
+//  확인은 이메일 타이핑 — 되돌릴 수 없는 일의 방어는 버튼 한 번이 아니다.
+function accountDeleteModal(): void {
+  const head = el('div', { class: 'ov-head' }, el('h3', { text: '회원 탈퇴' }));
+  const box = el('div', { class: 'ov-box', style: 'max-width:520px' }, head);
+  const back = el('div', { class: 'ov-back' }, box);
+  const close = () => back.remove();
+  head.append(el('button', { class: 'btn btn-ghost btn-sm', text: '닫기', onclick: close }));
+  back.addEventListener('click', (e: any) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', function esc(ev: any) { if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+
+  const bodyEl = el('div', { style: 'margin-top:4px' }, el('p', { class: 'admin-hint', text: '확인하는 중입니다…' }));
+  box.append(bodyEl);
+  document.body.append(back);
+
+  const listOf = (title: string, names: string[], tone: string) => el('div', { style: 'margin:10px 0' },
+    el('p', { class: 'admin-hint', style: tone, text: title }),
+    el('ul', { style: 'margin:4px 0 0; padding-left:18px; font-size:13.5px' },
+      ...names.map((n) => el('li', { text: n }))));
+
+  void (async () => {
+    let plan: any;
+    try { plan = await api('/api/ui/me/account-delete-plan'); }
+    catch (e: any) {
+      bodyEl.replaceChildren(el('p', { class: 'gate-error', text: (e && e.message) || '탈퇴 정보를 불러오지 못했습니다.' }));
+      return;
+    }
+    const blocking: string[] = plan.blocking_teams || [];
+    const solo: string[] = plan.solo_workspaces || [];
+    const left: string[] = plan.memberships || [];
+
+    // 팀의 주인이면 막는다 — 주인 없는 팀을 남기지 않기 위해서다(넘기기는 아직 없다).
+    if (blocking.length) {
+      bodyEl.replaceChildren(
+        listOf('함께 쓰는 워크스페이스의 주인이라 지금은 탈퇴할 수 없습니다.', blocking, 'color:var(--danger-text,#b42318)'),
+        el('p', { class: 'admin-hint' }, ...uiText('이 워크스페이스를 다른 분에게 넘기거나 지운 뒤에 다시 시도해 주세요. 주인이 사라진 채로 남으면 남은 분들이 아무것도 할 수 없게 됩니다.')),
+        el('div', { style: 'display:flex;justify-content:flex-end;margin-top:14px' },
+          el('button', { type: 'button', class: 'btn btn-ghost', text: '닫기', onclick: close })));
+      return;
+    }
+
+    const rows: any[] = [];
+    rows.push(solo.length
+      ? listOf('아래 워크스페이스가 함께 지워집니다 — 그 안의 자료와 대화도 사라집니다.', solo, 'color:var(--danger-text,#b42318)')
+      : el('p', { class: 'admin-hint', text: '지워질 워크스페이스는 없습니다.' }));
+    if (left.length) rows.push(listOf('아래 워크스페이스에서는 나가기만 합니다 — 거기에 올리신 자료와 지식은 그대로 남습니다.', left, ''));
+    rows.push(el('p', { class: 'admin-hint' }, ...uiText('지운 워크스페이스의 파일은 복구를 위해 30일간 보관된 뒤 삭제됩니다. 더 빨리 파기해야 하면 운영팀에 요청해 주세요.')));
+
+    const input = el('input', { type: 'text', autocomplete: 'off', style: 'width:100%;margin-top:6px',
+      placeholder: '탈퇴하려면 이메일을 그대로 입력: ' + (plan.email || '') });
+    const err = el('p', { class: 'gate-error', hidden: true, style: 'margin:8px 0 0' });
+    const go = el('button', { class: 'btn btn-danger', type: 'submit', text: '탈퇴하기' });
+    const form = el('form', { style: 'margin:0' }, ...rows, input, err,
+      el('p', { class: 'admin-hint', style: 'margin-top:8px' }, ...uiText('탈퇴하면 되돌릴 수 없습니다. 같은 이메일로 다시 가입하실 수는 있고, 그때는 빈 계정으로 시작합니다.')),
+      el('div', { style: 'display:flex;gap:8px;justify-content:flex-end;margin-top:16px' },
+        el('button', { type: 'button', class: 'btn btn-ghost', text: '취소', onclick: close }), go));
+
+    form.addEventListener('submit', async (ev: any) => {
+      ev.preventDefault();
+      (err as any).hidden = true;
+      (go as any).disabled = true;
+      try {
+        await api('/api/ui/me/account-delete', { method: 'POST', body: JSON.stringify({ confirm: input.value }) });
+      } catch (e: any) {
+        (go as any).disabled = false;
+        err.textContent = (e && e.message) || '탈퇴에 실패했습니다.';
+        (err as any).hidden = false;
+        return;
+      }
+      // 계정이 사라졌으므로 이 화면에 더 머물 이유가 없다 — 곧바로 내보낸다.
+      bodyEl.replaceChildren(el('p', { class: 'admin-hint', text: '탈퇴가 완료되었습니다. 로그아웃합니다…' }));
+      setTimeout(() => logout(), 1200);
+    });
+    bodyEl.replaceChildren(form);
+  })();
+}
