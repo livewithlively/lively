@@ -16,6 +16,7 @@ import { browserSurface } from './browser-surface.js';
 import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession } from './views.js';
 import { pickSessFace } from './sess-face.js'; // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
+import { mergeLogRows } from './log-rows.js'; // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { renderArchive, renderTrash } from './bins.js'; // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js'; // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
@@ -534,10 +535,36 @@ const binHooks = { onChanged: () => {
 // ── 데이터 ──
 // 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
 let appInstances = []; // #1883 — 서버가 아는 내 활성 인스턴스(창 유무와 무관)
+// ── 기록 목록은 **두 겹**이다(#2022 후속) ───────────────────────────────────────
+//  종전엔 매 틱 `/api/ui/v6/sessions` 를 부르고 서버가 **말없이 200행에서 잘랐다**. 실측 2026-08-26:
+//  한 사람의 200행이 **7.7일**치밖에 안 돼(하루 ~26세션) 그보다 오래된 지난 세션이 트리에서 통째로 사라졌다.
+//  그렇다고 매 틱 전량(2000행 ≈ 500KB)을 받을 수는 없다 — 20초마다 그걸 받으면 시간당 수십 MB 다.
+//  그래서 깊이를 갈랐다:
+//   · 매 틱 **얕게**(200) — 값은 종전과 같다. 새로 생긴 기록·바뀐 제목이 곧바로 따라온다.
+//   · 이따금 **깊게**(전량, TTL) — 오래된 지난 세션이 목록에서 사라지지 않게.
+//  얕은 판은 깊은 캐시에 **덮어 얹는다**(mergeLogRows): 얕은 창(가장 오래된 last_seen) **안**은 얕은 판이
+//  정본이라 삭제·완전삭제가 즉시 반영되고, 그 **밖**은 깊은 캐시가 지킨다.
+const LOGS_SHALLOW = 200;
+const LOGS_DEEP = 2000; // 서버 상한(SESSION_LIST_MAX)과 같은 값 — 더 달라고 해도 서버가 잘라 준다
+const LOGS_DEEP_TTL_MS = 5 * 60_000;
+let logsDeepAt = 0;
+let logsWarned = false; // 서버가 '더 있다'고 말한 것을 한 번은 남긴다(아래 noteTruncated)
+/** 서버가 상한에서 잘랐다고 알려 왔다 — **조용히 넘기지 않는다**. 사람에게 보일 자리는 아직 없다:
+ *  깊은 판이 이미 서버 상한(SESSION_LIST_MAX)이라 '더 보기'로 더 받을 것이 없기 때문이다. 그래도 이 사실이
+ *  어딘가엔 남아야 한다 — 이 목록이 8일치만 보여 주면서 아무 말도 안 하던 것이 이 버그의 정체였다.
+ *  이 줄이 보이기 시작하면 그때가 상한을 올리거나 페이지네이션을 붙일 때다. */
+function noteTruncated(truncated) {
+    if (!truncated || logsWarned)
+        return;
+    logsWarned = true;
+    console.warn('[sessions] 지난 세션 목록이 서버 상한에서 잘렸습니다 — 이보다 오래된 세션은 트리에 안 보입니다.');
+}
+// 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
 let lastLive = [];
 let lastLogs = [];
 async function loadData(opts) {
     const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
+    const wantDeepLogs = Date.now() - logsDeepAt > LOGS_DEEP_TTL_MS; // #2022 후속 — 오래된 지난 세션이 사라지지 않게 이따금 전량
     const [pj, lists0, folders0, insts0, live, logs] = await Promise.all([
         // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
         //  archived=include(#1851) — 보관한 프로젝트도 받는다: 그 아래 세션이 '프로젝트 없는 세션'으로 떨어지지 않게, 그리고
@@ -550,7 +577,7 @@ async function loadData(opts) {
         listAppInstances().catch(() => null),
         // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
         api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
-        api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => null),
+        api('/api/ui/v6/sessions?limit=' + (wantDeepLogs ? LOGS_DEEP : LOGS_SHALLOW)).then((d) => { noteTruncated(!!(d && d.truncated)); return (d && d.sessions) || []; }).catch(() => null),
     ]);
     let projects = data.projects;
     if (Array.isArray(pj)) {
@@ -577,8 +604,15 @@ async function loadData(opts) {
     //  빈 배열(요청 성공)은 그대로 반영한다 — 실패와 '진짜 0건'은 다르다.
     if (Array.isArray(live))
         lastLive = live;
-    if (Array.isArray(logs))
-        lastLogs = logs;
+    if (Array.isArray(logs)) {
+        //  깊은 판은 캐시를 통째로 갈고, 얕은 판은 그 위에 얹는다(위 mergeLogRows 주석).
+        if (wantDeepLogs) {
+            lastLogs = logs;
+            logsDeepAt = Date.now();
+        }
+        else
+            lastLogs = mergeLogRows(lastLogs, logs);
+    }
     const sessions = mergeSessions(lastLive, lastLogs);
     applyRenamePins(sessions); // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
     applyArchivePins(sessions); // 방금 보관한 세션을 **되살리지 않게**(아래 archivePins)
