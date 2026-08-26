@@ -11,6 +11,7 @@ import { HttpError } from "./rest-util.js";
 import { githubAppReady, startGithubAppConsent, saveGithubAppCredentials } from "../org/credentials/oauth-broker.js";
 import { listSecretsByKindPublic } from "../org/credentials/member-secret-store.js";
 import { GITHUB_INSTALL_KIND } from "../org/credentials/github-app.js";
+import { listInstallationRepos } from "../org/credentials/github-app-git.js";
 import { GATEWAY_OWNER, memberOwner } from "../org/credentials/git-credential-store.js";
 
 /** 이 조직·이 사람의 GitHub 연결 상태 — 화면이 [연결]을 그릴지 [연결됨]을 그릴지 정하는 값. */
@@ -25,6 +26,8 @@ async function githubConnectState(memberId: string): Promise<Record<string, unkn
   ]);
   const mine = pats.find((s) => s.owner === memberOwner(memberId));
   const installs = installsAll.filter((s) => s.owner === GATEWAY_OWNER);
+  //  설치가 있을 때만 상류에 묻는다(없으면 왕복 낭비). 실패는 null 로 삼킨다 — 상태 조회가 이것 때문에 죽으면 안 된다.
+  const openRepos = installs.length ? await listInstallationRepos().catch(() => null) : null;
   return {
     //  관리자가 앱 자격을 넣어 뒀는가 — 이게 false 면 구성원이 [연결]을 눌러도 시작조차 못 한다.
     //  ⚠ client 묶음 행(scope_key=oauth:client)은 HIDDEN_SCOPE_KEYS 라 목록 조회에 **일부러** 안 보인다.
@@ -34,6 +37,10 @@ async function githubConnectState(memberId: string): Promise<Record<string, unkn
     // 붙여넣기 PAT 인지 OAuth 연결인지 — 같은 슬롯을 쓰므로 meta 로만 구분된다(둘 다 도구는 정상 동작).
     connected_via: mine?.has_secret ? (mine.meta && Object.keys(mine.meta).some((k) => k === "expires_at" || k === "token_type") ? "oauth" : "token") : null,
     installations: installs.map((s) => ({ installation_id: s.scope_key, connected_by: (s.meta as Record<string, unknown> | undefined)?.connected_by ?? null })),
+    //  ★ 앱에 실제로 열린 저장소(#1881 G10) — 목록 드롭다운(user token, "내가 볼 수 있는 전부")과 **범위가 다르다**.
+    //   clone 은 이 목록 안에서만 된다. 화면이 이 차이를 보여 주지 않으면 사용자는 안 열린 레포를 고르고
+    //   등록까지 성공한 뒤 clone 에서 실패한다. null = 알 수 없음(막지 않는다).
+    open_repositories: openRepos,
   };
 }
 
