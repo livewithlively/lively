@@ -74,9 +74,13 @@ export async function resolveGoogleTokenSource(
     return { warning: `구성원 '${id}' 의 Google 연결에 갱신 토큰이 없습니다 — 오래된 방식으로 연결된 계정입니다 ${RECONNECT}` };
   }
 
-  const client = await vault.oauthClient(hit.kind);
+  // ⚠ **잡힌 토큰의 kind 로만 client 를 찾으면 안 된다.** 토큰과 client 는 서로 다른 kind 에 있을 수 있다 —
+  //  새 방식으로 [Google 연결]을 하면 토큰은 통합 슬롯에 생기는데 client 는 #1652 시절 구 kind 에 그대로다.
+  //  그 조합에서 수집이 통째로 멈췄다(2026-08-27 run 16275: "클라이언트(kind google_oauth)가 등록되지 않았습니다").
+  //  둘은 독립적으로 해소한다.
+  const client = await resolveGoogleOAuthClient(vault);
   if (!client) {
-    return { warning: `Google OAuth 클라이언트(kind ${hit.kind})가 등록되지 않았습니다 — 관리자가 Client ID/Secret 을 조직 자격에 넣어야 합니다` };
+    return { warning: "Google OAuth 클라이언트가 등록되지 않았습니다 — 관리자가 Client ID/Secret 을 조직 자격에 넣어야 합니다" };
   }
   return { client_id: client.client_id, client_secret: client.client_secret, refresh_token: hit.refresh_token };
 }
