@@ -187,9 +187,19 @@ export class CodexAppServer {
   }
 }
 
-/** stdio 전송 — `codex app-server` 를 자식 프로세스로 띄운다(기본 배치). */
-export function stdioTransport(o: { bin?: string; cwd?: string; env?: NodeJS.ProcessEnv; args?: string[] } = {}): AppServerTransport {
-  const p = spawn(o.bin ?? "codex", ["app-server", ...(o.args ?? [])], {
+/** `codex app-server` 를 띄우는 argv(순수) — 호출자가 멤버 경계 래퍼(memberSpawnArgv)로 감쌀 수 있게 따로 둔다. */
+export function appServerArgv(bin = "codex", extra: string[] = []): string[] {
+  return [bin, "app-server", ...extra];
+}
+
+/**
+ * stdio 전송 — 주어진 argv 를 자식 프로세스로 띄운다.
+ *  ⚠ argv 를 **호출자가 정한다**: 매니지드에선 `memberSpawnArgv(osUser, appServerArgv())` 로 감싸 그 멤버의
+ *   실행 환경(테넌트 세션 컨테이너)에서 돌아야 한다. 여기서 직접 조립하면 경계 계산이 두 벌이 된다.
+ */
+export function stdioTransport(o: { argv?: string[]; bin?: string; cwd?: string; env?: NodeJS.ProcessEnv; args?: string[] } = {}): AppServerTransport {
+  const argv = o.argv?.length ? o.argv : appServerArgv(o.bin ?? "codex", o.args ?? []);
+  const p = spawn(argv[0], argv.slice(1), {
     cwd: o.cwd, env: o.env ?? process.env, stdio: ["pipe", "pipe", "pipe"],
   });
   let buf = "";
