@@ -18,62 +18,78 @@ const okBody = (r: DeadSessionMetaResult): DeadSessionMeta => {
   return r.body;
 };
 const ID = "box-yoon-1a2b3c4d";
+// #2116 — 실제 게이트가 쓰는 술어(isProjectSessionDir)와 **같은 뜻**의 흉내: 공유루트의 project/ 아래인가.
+//  여기서 규약을 흉내 내는 이유는 이 모듈이 fs 를 몰라야 하기 때문이다(판정은 호출자가 주입한다).
+const SHARED = "/srv/workspace/project/1719";                 // 프로젝트 폴더 세션
+const PERSONAL = "/srv/box/jang/sessions/box-jang-8ee2bf2d";  // 개인 세션 홈(#2116 의 그 세션)
+const shared = (dir: string): boolean => dir.startsWith("/srv/workspace/project/");
 
 test("①⑦ 내 세션 — 되살릴 수 있다고 말한다(개인·프로젝트 둘 다)", () => {
-  const solo = okBody(deadSessionMeta(ID, st(), "yoon", false));
+  const solo = okBody(deadSessionMeta(ID, st(), "yoon", false, shared));
   assert.equal(solo.restorable, true);
   assert.equal(solo.canRestore, true);
   assert.equal(solo.label, "라벨");
   assert.equal(solo.harness, "claude");
   assert.equal(solo.projectId, 0);
-  const inProj = okBody(deadSessionMeta(ID, st({ project_id: 1719 }), "yoon", false));
+  const inProj = okBody(deadSessionMeta(ID, st({ project_id: 1719, dir: SHARED }), "yoon", false, shared));
   assert.equal(inProj.canRestore, true);
   assert.equal(inProj.projectId, 1719);
 });
 
 test("②⑤ 남의 프로젝트 세션 — 보이되 복원은 소유자 몫(#452 공동 세션)", () => {
-  const b = okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1719 }), "yoon", false));
+  const b = okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1719, dir: SHARED }), "yoon", false, shared));
   assert.equal(b.restorable, true);
   assert.equal(b.canRestore, false, "남의 세션은 복원 불가로 알려야 화면이 '소유자만 열기'로 안내한다");
   assert.equal(b.projectId, 1719);
-  // 경계: project_id 는 1 부터 '프로젝트 세션'이다(0 은 없음 — 아래 ③④).
-  assert.equal(okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1 }), "yoon", false)).canRestore, false);
+  // ⚠ 경계는 이제 project_id 가 아니라 **dir** 이다(#2116) — project_id 는 응답에 실릴 뿐 판정에 안 쓴다.
+  assert.equal(okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1, dir: SHARED }), "yoon", false, shared)).canRestore, false);
 });
 
-test("③④ 남의 개인 세션 — 존재조차 알리지 않는다(403). project_id 0·null 은 '프로젝트 없음'", () => {
-  assert.equal(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: null }), "yoon", false).kind, "forbidden");
-  assert.equal(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 0 }), "yoon", false).kind, "forbidden");
+test("③④ 남의 개인 세션 — 존재조차 알리지 않는다(403)", () => {
+  assert.equal(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", dir: null }), "yoon", false, shared).kind, "forbidden");
+  assert.equal(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", dir: PERSONAL }), "yoon", false, shared).kind, "forbidden");
+});
+
+// ★ #2116 — 이 한 행이 이번 수정의 전부다. 개인 세션 홈에서 도는데 project_id 만 붙은 세션(dev 실측 268건 중 104건).
+//  종전엔 project_id>0 만 보고 "되살릴 수 있음"을 답했고, 정작 들어가려 하면 403 이었다 — 화면이 거짓말을 했다.
+test("★ 개인 세션 홈 + project_id 만 붙은 남의 세션 — 재는 자는 dir 이다", () => {
+  const st2 = st({ owner: "jang", project_id: 1968, dir: PERSONAL });
+  assert.equal(deadSessionMeta("box-jang-05ab7578", st2, "yoon", false, shared).kind, "forbidden",
+    "🔴 project_id 로 판정하면 남의 개인 세션에 '되살릴 수 있음'이 뜬다(다른 게이트는 전부 403 인데)");
+  // 소유자·admin 에게는 종전 그대로 보인다 — 이 수정은 '남'의 축만 바꾼다.
+  assert.equal(okBody(deadSessionMeta("box-jang-05ab7578", st2, "jang", false, shared)).canRestore, true);
+  assert.equal(okBody(deadSessionMeta("box-jang-05ab7578", st2, "yoon", true, shared)).canRestore, true);
 });
 
 test("⑥ admin 은 남의 개인 세션도 되살릴 수 있다(관리 권한)", () => {
-  assert.equal(okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang" }), "yoon", true)).canRestore, true);
+  assert.equal(okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang" }), "yoon", true, shared)).canRestore, true);
 });
 
 test("⑧⑨ 판정 근거가 없으면 'none' — 호출자는 종전 흐름을 계속한다", () => {
-  assert.equal(deadSessionMeta(ID, null, "yoon", false).kind, "none");
-  assert.equal(deadSessionMeta(ID, undefined, "yoon", false).kind, "none");
+  assert.equal(deadSessionMeta(ID, null, "yoon", false, shared).kind, "none");
+  assert.equal(deadSessionMeta(ID, undefined, "yoon", false, shared).kind, "none");
   // 새 엣지 — 행은 있는데 owner 가 비었다(마이그레이션 잔재·부분 기록). 소유자를 모르면 권한 판정이 불가능하다.
-  assert.equal(deadSessionMeta(ID, { owner: "" }, "yoon", false).kind, "none", "owner 없는 행은 판정 근거가 아니다");
+  assert.equal(deadSessionMeta(ID, { owner: "" }, "yoon", false, shared).kind, "none", "owner 없는 행은 판정 근거가 아니다");
 });
 
 test("⑩⑪⑫ 사용자 종료와 메모리 부족 — 확정이 추정을 이긴다(#1251)", () => {
-  const ex = okBody(deadSessionMeta(ID, st({ exited_at: "2026-08-20T00:00:00Z" }), "yoon", false));
+  const ex = okBody(deadSessionMeta(ID, st({ exited_at: "2026-08-20T00:00:00Z" }), "yoon", false, shared));
   assert.equal(ex.exitedByUser, true);
   assert.equal(ex.oomKilled, false);
-  const oom = okBody(deadSessionMeta(ID, st({ exit_reason: "oom" }), "yoon", false));
+  const oom = okBody(deadSessionMeta(ID, st({ exit_reason: "oom" }), "yoon", false, shared));
   assert.equal(oom.exitedByUser, false);
   assert.equal(oom.oomKilled, true);
-  const both = okBody(deadSessionMeta(ID, st({ exited_at: "2026-08-20T00:00:00Z", exit_reason: "oom" }), "yoon", false));
+  const both = okBody(deadSessionMeta(ID, st({ exited_at: "2026-08-20T00:00:00Z", exit_reason: "oom" }), "yoon", false, shared));
   assert.equal(both.exitedByUser, true);
   assert.equal(both.oomKilled, false, "/exit 는 확정 사실, oom 표시는 관측 기반 추정 — 겹치면 확정이 이긴다");
 });
 
 test("⑬⑭ 빈 라벨·하네스 미상 — id 와 'shell' 로 채운다(빈 제목이 화면에 나가지 않게)", () => {
-  const nul = okBody(deadSessionMeta(ID, st({ label: null, harness: null }), "yoon", false));
+  const nul = okBody(deadSessionMeta(ID, st({ label: null, harness: null }), "yoon", false, shared));
   assert.equal(nul.label, ID);
   assert.equal(nul.harness, "shell");
   // 경계: null 이 아니라 빈 문자열인 경우도 같다(회귀 당시 실제로 나가던 값이 "" 였다).
-  assert.equal(okBody(deadSessionMeta(ID, st({ label: "" }), "yoon", false)).label, ID);
+  assert.equal(okBody(deadSessionMeta(ID, st({ label: "" }), "yoon", false, shared)).label, ID);
 });
 
 // ── 노드 세션 메타의 갈래(nodeSessionMetaMode) — 사양 spec S2 의 엣지 표 6행 ───────────────────

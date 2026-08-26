@@ -7,6 +7,9 @@
 import path from "node:path";
 import { statSync } from "node:fs";
 import { itemsPool } from "../db/client.js";
+import { currentTenant, withTenant } from "../org/tenant-context.js";   // #1875 — 라우팅 조회의 primary 폴백
+import { SINGLE_TENANT_ID } from "../db/tenant-column.js";
+import { PRIMARY_SLUG } from "../org/tenancy/registry.js";
 import { ensureStageWorktree } from "./preview-stage.js";
 import { ensureProjectWorktree, runBuild, buildFailureHint } from "./preview-prepare.js";
 // 공유 워크스페이스 루트 = project-fs 의 단일 정의(TERMINAL_ROOT_SHARED). 여기서 따로 계산하면 설치에 따라
@@ -89,6 +92,26 @@ export async function listPreviewEnvs(): Promise<PreviewEnv[]> {
 }
 export async function getPreviewEnv(id: string): Promise<PreviewEnv | undefined> {
   return (await itemsPool.query("SELECT * FROM org_preview_env WHERE id=$1", [id])).rows[0];
+}
+
+/**
+ * 라우팅용 조회 — **지금 워크스페이스에서 못 찾으면 primary 에서 한 번 더 본다**(#1875 실측).
+ *
+ * 프리뷰 환경 표는 테넌트 축 위에 있는데, 프리뷰는 워크스페이스 데이터가 아니라 **박스 단위 개발 도구**다.
+ *  그래서 개인 워크스페이스에 서 있는 사람이 프리뷰 링크를 열면, 그 워크스페이스의 표에서 못 찾고
+ *  `프리뷰 환경 없음` 404 가 나갔다 — **로그인 요청까지** 포함해 그 주소의 모든 API 가 죽는다
+ *  (클라이언트가 /api/ 전부에 lvly_ws 를 붙이므로 예외가 없다). 사람 눈엔 "계정을 제대로 넣었는데
+ *  로그인이 안 된다"로만 보인다.
+ *
+ * 지금 스코프를 **먼저** 보는 이유: 개인 워크스페이스 안에서 만든 프리뷰도 그 자리에서 계속 열려야 한다.
+ *  못 찾을 때만 primary 로 한 번 더 — 넓히는 방향이라 종전에 열리던 것이 닫히지 않는다.
+ */
+export async function getPreviewEnvForRoute(id: string): Promise<PreviewEnv | undefined> {
+  const here = await getPreviewEnv(id);
+  if (here) return here;
+  const t = currentTenant();
+  if (!t || t.id === SINGLE_TENANT_ID) return undefined;   // 이미 primary 였다 — 두 번 볼 이유가 없다
+  return withTenant({ id: SINGLE_TENANT_ID, slug: PRIMARY_SLUG }, () => getPreviewEnv(id));
 }
 
 const slug = (s: unknown): string =>

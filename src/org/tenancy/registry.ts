@@ -137,6 +137,146 @@ export async function removeWorkspaceMember(workspaceId: string, memberId: strin
   invalidateRegistryCache();
 }
 
+// ── 개인/팀 판정(#1875) ─────────────────────────────────────────────────────
+//
+// ★ 개인이냐 팀이냐는 **저장된 값이 아니라 지금 명부에 몇 명인가**다. gw_workspace.kind 는 만들 때의
+//  의도를 적어 둔 것일 뿐이라, 사람이 들어오고 나가는 동안 조용히 거짓이 된다 — 혼자 남은 '팀',
+//  둘이 쓰는 '개인'. 화면과 게이트가 서로 다른 말을 하는 사고가 거기서 난다.
+//  그래서 표시·판정은 전부 이 함수를 지나간다(컬럼은 만들 때의 기본 이름·기본 kind 용으로만 남는다).
+export function kindEffective(memberCount: number): "personal" | "team" {
+  return memberCount >= 2 ? "team" : "personal";
+}
+
+export async function countWorkspaceMembers(workspaceId: string): Promise<number> {
+  const r = await itemsPool.query(`SELECT count(*)::int AS n FROM gw_workspace_member WHERE workspace_id=$1`, [workspaceId]);
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/** 여러 워크스페이스의 인원을 한 번에(스위처 목록이 n+1 쿼리를 돌지 않게). */
+export async function memberCounts(workspaceIds: string[]): Promise<Map<string, number>> {
+  if (!workspaceIds.length) return new Map();
+  const r = await itemsPool.query(
+    `SELECT workspace_id, count(*)::int AS n FROM gw_workspace_member WHERE workspace_id = ANY($1::uuid[]) GROUP BY workspace_id`,
+    [workspaceIds]);
+  const m = new Map<string, number>();
+  for (const row of r.rows as Array<{ workspace_id: string; n: number }>) m.set(row.workspace_id, Number(row.n));
+  for (const id of workspaceIds) if (!m.has(id)) m.set(id, 0);
+  return m;
+}
+
+// ── 구성원 초대(#1875) ──────────────────────────────────────────────────────
+//
+// 이메일이 키다 — 초대하는 시점에 그 사람의 member_id 가 아직 없을 수 있고(이 박스에 처음 오는 사람),
+//  member_id 를 먼저 알아야 부를 수 있다면 그건 초대가 아니라 명부 편집이다(종전 workspace_member_add).
+
+export interface WorkspaceInvite {
+  id: string;
+  workspace_id: string;
+  email: string;
+  role: "owner" | "member";
+  invited_by: string;
+  state: "pending" | "accepted" | "declined" | "revoked";
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
+
+const INVITE_COLS = "id, workspace_id, email, role, invited_by, state, created_at, resolved_at, resolved_by";
+
+/** 이메일 정규화 — 대소문자·공백만 정리한다(플러스주소·점 제거 같은 제공자별 규칙은 흉내 내지 않는다). */
+export function normalizeInviteEmail(raw: unknown): string {
+  const e = String(raw ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error(`이메일 형식이 올바르지 않습니다: ${e || "(빈 값)"}`);
+  return e;
+}
+
+// ── 초대 정책(순수) ────────────────────────────────────────────────────────
+//
+// 아래 셋은 핸들러가 실제로 부르는 판정이다. 인라인 if 로 흩어 두면 "누가 무엇을 할 수 있나"가
+//  요청 처리 코드 사이에 숨어, 규칙이 바뀔 때 한쪽만 바뀐다.
+
+export type InviteDecision = "accept" | "decline" | "revoke";
+
+/** 보류인 초대만 처리할 수 있다 — 이미 끝난 초대를 되살리는 경로는 없다. */
+export function inviteResolvable(state: WorkspaceInvite["state"]): boolean {
+  return state === "pending";
+}
+
+/** 그 결정을 **누가** 하는가. 받는 사람이 취소하거나 보낸 사람이 대신 수락하는 일이 없어야 한다. */
+export function inviteDecisionActor(decision: InviteDecision): "recipient" | "owner" {
+  return decision === "revoke" ? "owner" : "recipient";
+}
+
+/** 결정 → 다음 상태. */
+export function inviteNextState(decision: InviteDecision): "accepted" | "declined" | "revoked" {
+  return decision === "accept" ? "accepted" : decision === "decline" ? "declined" : "revoked";
+}
+
+/**
+ * 받는 사람 확인 — 초대의 이메일과 처리하는 사람의 이메일이 같은가.
+ *  대소문자·앞뒤 공백만 접는다(초대 저장 때와 **같은 규칙**이어야 한다). 처리자 이메일이 없으면 불일치다 —
+ *  "이메일이 없으니 통과"는 링크 id 만 아는 사람에게 남의 초대를 열어 주는 것과 같다(fail-closed).
+ */
+export function inviteRecipientMatches(inviteEmail: string, actorEmail: string | null | undefined): boolean {
+  const a = String(actorEmail ?? "").trim().toLowerCase();
+  if (!a) return false;
+  return a === String(inviteEmail ?? "").trim().toLowerCase();
+}
+
+export async function createInvite(v: {
+  id: string; workspaceId: string; email: string; role: "owner" | "member"; invitedBy: string;
+}): Promise<WorkspaceInvite> {
+  const r = await itemsPool.query(
+    `INSERT INTO gw_workspace_invite(id, workspace_id, email, role, invited_by)
+     VALUES($1,$2,$3,$4,$5) RETURNING ${INVITE_COLS}`,
+    [v.id, v.workspaceId, v.email, v.role, v.invitedBy]);
+  return r.rows[0] as WorkspaceInvite;
+}
+
+export async function listWorkspaceInvites(workspaceId: string, state = "pending"): Promise<WorkspaceInvite[]> {
+  const r = await itemsPool.query(
+    `SELECT ${INVITE_COLS} FROM gw_workspace_invite WHERE workspace_id=$1 AND state=$2 ORDER BY created_at DESC`,
+    [workspaceId, state]);
+  return r.rows as WorkspaceInvite[];
+}
+
+/** 이 이메일 앞으로 온 **보류** 초대 — 받는 사람이 어느 워크스페이스에 있든 보인다(전역 표인 이유). */
+export async function listInvitesForEmail(email: string): Promise<Array<WorkspaceInvite & { workspace_name: string; workspace_slug: string }>> {
+  const r = await itemsPool.query(
+    `SELECT ${INVITE_COLS.split(", ").map((c) => `i.${c}`).join(", ")}, w.name AS workspace_name, w.slug AS workspace_slug
+       FROM gw_workspace_invite i JOIN gw_workspace w ON w.id = i.workspace_id
+      WHERE i.email=$1 AND i.state='pending' AND w.state='active'
+      ORDER BY i.created_at DESC`, [email]);
+  return r.rows as Array<WorkspaceInvite & { workspace_name: string; workspace_slug: string }>;
+}
+
+export async function getInvite(id: string): Promise<WorkspaceInvite | null> {
+  const r = await itemsPool.query(`SELECT ${INVITE_COLS} FROM gw_workspace_invite WHERE id=$1`, [id]);
+  return (r.rows[0] as WorkspaceInvite) ?? null;
+}
+
+/**
+ * 초대 상태 전이 — **보류일 때만** 통과한다(원자적). 반환 null = 이미 누가 처리했다는 뜻이고,
+ *  호출자는 그걸 오류가 아니라 "방금 처리됨"으로 사람에게 말해야 한다.
+ */
+export async function resolveInvite(
+  id: string, state: "accepted" | "declined" | "revoked", by: string,
+): Promise<WorkspaceInvite | null> {
+  const r = await itemsPool.query(
+    `UPDATE gw_workspace_invite SET state=$2, resolved_at=now(), resolved_by=$3
+      WHERE id=$1 AND state='pending' RETURNING ${INVITE_COLS}`,
+    [id, state, by]);
+  return (r.rows[0] as WorkspaceInvite) ?? null;
+}
+
+/** 워크스페이스가 보관되면 그 보류 초대는 갈 곳이 없다 — 함께 거둔다. */
+export async function revokeInvitesForWorkspace(workspaceId: string, by: string): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE gw_workspace_invite SET state='revoked', resolved_at=now(), resolved_by=$2
+      WHERE workspace_id=$1 AND state='pending'`, [workspaceId, by]);
+  return r.rowCount ?? 0;
+}
+
 // ── 세션 → 워크스페이스 정본(#1750 후속) ────────────────────────────────────
 //
 // 워크스페이스 신호가 클라이언트 헤더에만 실리면 SSE·iframe·WS·구 번들·훅이 전부 조용히 primary 로

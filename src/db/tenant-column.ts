@@ -41,6 +41,9 @@ export const TENANT_COLUMN_EXEMPT: ReadonlySet<string> = new Set([
   "gw_workspace",
   "gw_workspace_member",
   "gw_session_map", // 세션→워크스페이스 정본(#1750 후속) — 컨텍스트를 열기 **전에** 읽는 표라 테넌트 축 밖
+  // #1875 — 구성원 초대. 받는 사람은 **자기 워크스페이스**에서 "나에게 온 초대"를 보는데 그건 초대한
+  //  워크스페이스의 컨텍스트가 아니다. 테넌트 축 위에 있으면 그 조회 자체가 성립하지 않는다.
+  "gw_workspace_invite",
 
   // #1291 v3 self-rls 의 스코프 전달 표 — **pg_backend_pid() 키** 프로세스 인프라다(각 백엔드가 제 pid 행만
   //  본다). 테넌트 축을 붙이면 PK(pid,kind,key)가 자연키로 판정돼 (tenant_id,…) 재작성이 일어나는데,

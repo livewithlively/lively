@@ -28,36 +28,64 @@ CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
 say() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
-skip() { say "건너뜀 — $*"; exit 0; }   # 정상 종료: 이 스크립트가 손대면 안 되는 상태라는 뜻이다
+
+# ── 상태를 **밖에서 보이게** 남긴다 (#2116) ───────────────────────────────────
+#  건너뛰는 것 자체는 옳다(남의 WIP 를 안 지운다). 문제는 **그 사실이 로그에만 남는 것**이었다 —
+#  2026-08-26 실측: 하루 세 번, 22분·15분씩 dev 가 옛 화면을 서빙하는 동안 아무도 몰랐다.
+#  게이트웨이 /readyz 가 이 파일을 읽어 degraded 로 드러낸다(src/ops/stage-sync-status.ts).
+#  ⚠ 사유는 **거친 분류만** 싣는다 — /readyz 는 미인증이라 원문 메시지(남의 브랜치·파일명)를 내보내지 않는다.
+STATUS="$CLONE/logs/stage-sync.status"
+now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+# 연속으로 건너뛴 시작 시각은 이어 간다 — 매번 새로 찍으면 '얼마나 오래 막혔나'를 영영 모른다.
+prev_since() { [ -f "$STATUS" ] && grep -q '"state":"skipped"' "$STATUS" 2>/dev/null \
+  && sed -n 's/.*"since":"\([^"]*\)".*/\1/p' "$STATUS" 2>/dev/null | head -1; }
+write_status() { # $1=state $2=code
+  mkdir -p "$(dirname "$STATUS")" 2>/dev/null || return 0
+  local n s; n="$(now_iso)"; s=""
+  [ "$1" = "skipped" ] && { s="$(prev_since)"; [ -n "$s" ] || s="$n"; }
+  printf '{"at":"%s","state":"%s","code":"%s","since":"%s"}\n' "$n" "$1" "${2:-}" "${s:-$n}" > "$STATUS" 2>/dev/null || true
+}
+
+skip() { # $1=거친 사유 코드, 나머지=사람 말
+  local code="$1"; shift
+  [ $CHECK_ONLY -eq 1 ] || write_status skipped "$code"
+  say "건너뜀 — $*"; exit 0
+}   # 정상 종료: 이 스크립트가 손대면 안 되는 상태라는 뜻이다
 
 [ -d "$CLONE/.git" ] || { say "오류: 서빙 클론이 아니다 — $CLONE"; exit 1; }
 git -C "$CLONE" rev-parse --git-dir >/dev/null 2>&1 || { say "오류: git 레포가 아니다 — $CLONE"; exit 1; }
 
 cur=$(git -C "$CLONE" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
-[ "$cur" = "$BRANCH" ] || skip "체크아웃이 $BRANCH 가 아니다(현재 $cur) — 사람이 무언가 하는 중일 수 있다"
+[ "$cur" = "$BRANCH" ] || skip branch "체크아웃이 $BRANCH 가 아니다(현재 $cur) — 사람이 무언가 하는 중일 수 있다"
 
 # ── 손대면 안 되는 상태 넷 ─────────────────────────────────────────────────────
-git -C "$CLONE" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && skip "머지 진행 중(MERGE_HEAD)"
-[ -n "$(git -C "$CLONE" ls-files -u 2>/dev/null)" ] && skip "미해소 충돌(unmerged)이 있다"
+git -C "$CLONE" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && skip merging "머지 진행 중(MERGE_HEAD)"
+[ -n "$(git -C "$CLONE" ls-files -u 2>/dev/null)" ] && skip conflict "미해소 충돌(unmerged)이 있다"
 for d in rebase-merge rebase-apply CHERRY_PICK_HEAD; do
-  [ -e "$CLONE/.git/$d" ] && skip "$d 진행 중"
+  [ -e "$CLONE/.git/$d" ] && skip procedure "$d 진행 중"
 done
 # ⚠ **추적되는 파일의 변경만** 막는다. untracked 는 통과시킨다 —
 #  그 클론엔 프로토타입 파일(public/onboarding-proto/*.html 등)이 늘 하나씩 놓여 있어서,
 #  untracked 까지 세면 그 파일 하나 때문에 동기화가 **영영** 멈춘다(첫 판에 실제로 그랬다).
 #  untracked 가 들어올 커밋과 부딪히면 아래 `merge --ff-only` 가 스스로 거부하므로 안전은 git 이 지킨다.
 dirty=$(git -C "$CLONE" status --porcelain --untracked-files=no 2>/dev/null)
-[ -n "$dirty" ] && skip "추적 파일에 변경이 있다(남의 WIP 일 수 있다):
+[ -n "$dirty" ] && skip dirty "추적 파일에 변경이 있다(남의 WIP 일 수 있다):
 $(printf '%s\n' "$dirty" | head -10 | sed 's/^/    /')"
 
 git -C "$CLONE" fetch -q origin "$BRANCH" || { say "오류: fetch 실패"; exit 1; }
 local_sha=$(git -C "$CLONE" rev-parse HEAD)
 remote_sha=$(git -C "$CLONE" rev-parse "origin/$BRANCH")
-[ "$local_sha" = "$remote_sha" ] && { [ $CHECK_ONLY -eq 1 ] && say "최신 — ${local_sha:0:8}"; exit 0; }
+# ⚠ 이미 최신인 평상시 경로에서도 **살아 있다는 도장을 찍는다** — 안 찍으면 잡이 멀쩡히 도는데도
+#  상태 파일이 늙어 /readyz 가 'stale(잡 사망)' 로 오판한다. 대부분의 틱이 이 경로로 끝난다.
+if [ "$local_sha" = "$remote_sha" ]; then
+  [ $CHECK_ONLY -eq 1 ] && say "최신 — ${local_sha:0:8}"
+  [ $CHECK_ONLY -eq 1 ] || write_status synced ""
+  exit 0
+fi
 
 # 미푸시 커밋이 있으면 그 사람이 아직 올리지 않은 것이다 — 앞질러 가지 않는다.
 ahead=$(git -C "$CLONE" rev-list --count "origin/$BRANCH..HEAD")
-[ "$ahead" -gt 0 ] && skip "미푸시 커밋 ${ahead}개가 있다(남의 작업을 대신 공개하지 않는다)"
+[ "$ahead" -gt 0 ] && skip unpushed "미푸시 커밋 ${ahead}개가 있다(남의 작업을 대신 공개하지 않는다)"
 
 behind=$(git -C "$CLONE" rev-list --count "HEAD..origin/$BRANCH")
 if [ $CHECK_ONLY -eq 1 ]; then say "동기화 필요 — ${behind}커밋 뒤짐(${local_sha:0:8} → ${remote_sha:0:8})"; exit 0; fi
@@ -80,6 +108,7 @@ if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- src/ 2>/dev/null; then
 fi
 
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 localhost:8080/healthz || echo "000")
+write_status synced ""
 say "완료 — HEAD ${remote_sha:0:8} · healthz $code"
 # ⚠ healthz 가 200 이 아니면 **동기화는 됐는데 게이트웨이가 못 서고 있다**는 뜻이다. 조용히 넘기지 않는다 —
 #  이 잡이 성공으로 끝나면 아무도 안 본다(로그는 no-op 일 때 비어 있어서 사람이 들여다볼 이유가 없다).

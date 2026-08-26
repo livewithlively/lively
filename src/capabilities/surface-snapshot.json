@@ -2029,6 +2029,36 @@
   "input_hash": "de9c8a98f1ec1cd9"
  },
  {
+  "name": "workspace_people",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/workspaces/people"
+  ],
+  "input_hash": "42e56e1c69815818"
+ },
+ {
+  "name": "workspace_invite",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/invite"
+  ],
+  "input_hash": "60220ba0c21fbaf7"
+ },
+ {
+  "name": "workspace_invite_resolve",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/invite/resolve"
+  ],
+  "input_hash": "ccd385ac11288e7c"
+ },
+ {
   "name": "activity_log",
   "scope": "memory",
   "mcp": true,
@@ -3925,6 +3955,16 @@
    "POST /api/ui/me/credential"
   ],
   "input_hash": "fa5bf8dd3c9d34f1"
+ },
+ {
+  "name": "me_credential_verify",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/credential/verify"
+  ],
+  "input_hash": "8210f8cb9a2d130f"
  },
  {
   "name": "me_credential_delete",
