@@ -20,6 +20,8 @@ import { discoverConnectorScope } from "../../connectors/discover.js";
 import { runAutoBackfillSweep } from "../../v6/embedding-backfill.js";
 import { itemsPool } from "../../db/client.js";
 import { ensureWikiRepoCollector } from "../../org/wiki-repo.js";
+import { ensureFigmaCommentsDistiller } from "../../org/distill/figma-preset.js";
+import { logger } from "../../log.js";
 import { actorOf, restOnly, restRead, str } from "./shared.js";
 
 /** 수집기 1건 조회 + 바인딩 정보 — 실행·discover 가 공용으로 쓴다. */
@@ -85,6 +87,14 @@ export const collectorsCapabilities: Capability[] = [
       // 인프로세스 해소 캐시 무효화 — 아래 discover·멤버 조회가 새 토큰을 즉시 쓰게(캐시는 원래 짧게 사는
       //  싱크 서브프로세스 전제라, 장수 게이트웨이에선 쓰기 시점에 리셋한다).
       resetConnectorConfigCache();
+      // #1881 F8 — 피그마 수집기를 만들면 그 자료를 지식으로 바꿀 증류기를 **꺼진 채로** 함께 준비한다.
+      //  왜 여기인가: 자료만 쌓이고 증류기가 0개면 수집은 성공하는데 지식이 한 줄도 안 는다(로컬 L3 와 같은 갭).
+      //  셀프서브 사용자는 '증류기'라는 단어를 모르므로 만들어 두기만 하고, 켜는 것은 표본을 본 사람이 한다.
+      //  best-effort — 증류기 준비 실패가 수집기 저장을 되돌리면 안 된다(수집이 본체다).
+      if (String((collector as { preset_key?: unknown }).preset_key ?? "") === "figma") {
+        try { await ensureFigmaCommentsDistiller({ actor: actorOf(user), source: "collector-upsert" }); }
+        catch (e) { logger.warn({ err: e }, "피그마 증류기 준비 실패(무시) — org_distiller_figma_ensure 로 다시 시도할 수 있다"); }
+      }
       return { collector };
     }, {
       id: z.number().int().positive().optional().describe("수정할 수집기 id(없으면 생성)"),

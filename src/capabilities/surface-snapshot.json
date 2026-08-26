@@ -1198,6 +1198,16 @@
   "input_hash": "331ca51692372057"
  },
  {
+  "name": "org_distiller_figma_ensure",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers/figma"
+  ],
+  "input_hash": "331ca51692372057"
+ },
+ {
   "name": "org_source_channels",
   "scope": "memory",
   "mcp": true,
