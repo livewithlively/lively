@@ -34,7 +34,7 @@ import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isT
 import { makeSplitter, readSplit, writeSplit } from './split.js'; // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js'; // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
-import { switcherName, switcherTop } from './switcher.js';
+import { refreshStatusCount, switcherName, switcherTop } from './switcher.js'; // #1875 — refreshStatusCount: 문패 배지는 인원 수에서 나온다
 import { openSectionMenu, railIsHidden, sectionDef, stackTile } from './rail.js'; // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js'; // #2016 — 선 아이콘 한 벌
 import { openMeModal } from './me-modal.js'; // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
@@ -313,7 +313,14 @@ const NEW_COPY = {
     folder: { ph: '새 폴더 이름을 적고 Enter', label: '새 폴더 이름' },
 };
 let hooks = {};
+// #1875 — 인원 수는 문패 배지의 근거다. 사이드바가 처음 설 때 한 번만 받아 오고(그 뒤엔 구성원이
+//  바뀔 때 switcher 가 갱신 신호를 쏜다), 실패해도 화면은 그대로 선다 — 배지만 컬럼 폴백으로 남는다.
+let countPulled = false;
 export function drawSide(host, data, activeKey, h) {
+    if (!countPulled) {
+        countPulled = true;
+        void refreshStatusCount();
+    }
     init();
     hooks = h || hooks;
     last = { host, data, activeKey };
