@@ -12,7 +12,9 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { authNodeToken, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, type OrgNode } from "./store.js";
+import { authNodeToken, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, loadRecentLinkEvents, type OrgNode } from "./store.js";
+import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
+import { linkDiagMessage, linkDiagSummary, keepAwakeLine } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로
 import { nodeOpenTo } from "./node-access.js";
 import { liveNodes } from "./registry.js";
 import { nodeHarnesses, agentIsLatest } from "./protocol.js";
@@ -42,17 +44,38 @@ function installHint(id: string): string {
 interface NodeView extends Omit<OrgNode, "token_hash"> {
   online: boolean; sessions: number; agent_latest: boolean | null; agent_ver_latest: string | null;
   harnesses: string[];   // #1713 — 이 노드에서 열 수 있는 하네스(정규화 — 미보고면 기준선)
+  // #1849 — 최근 24시간 연결 이력으로 본 추정 원인(잠자기 등)과 그 근거 수치. 화면은 이걸로
+  //  "연결돼 있지 않습니다" 에서 멈추지 않고 **왜 그런지·무엇을 하면 되는지**까지 말한다.
+  link_diag: LinkDiagnosis;
+  /** 잠자기로 추정될 때 화면에 그대로 띄울 한 문장(근거+조치). 판정이 없으면 null — 모르면 말하지 않는다. */
+  link_note: string | null;
+  /** 같은 판정의 한 줄 요약 — 목록처럼 폭이 좁은 자리용(전문은 툴팁·오류 메시지에서 쓴다). */
+  link_note_short: string | null;
+  /** 억제가 걸려 있나를 사람의 말로. 상태가 정상이어도 노드 화면이 "무엇이 안 막히는지"를 알려 준다. */
+  keep_awake_note: string;
 }
-function toView(n: OrgNode, live: Map<string, { online: boolean; sessions: number }>): NodeView {
+function toView(
+  n: OrgNode,
+  live: Map<string, { online: boolean; sessions: number }>,
+  linkEvents?: Map<string, LinkEvent[]>,
+  now: number = Date.now(),
+): NodeView {
   const { token_hash: _hash, ...rest } = n; // 토큰 해시는 응답에 싣지 않는다(상관추적은 토큰탭에서)
   const lv = live.get(n.id);
   const served = servedAgentVersion();
+  const diag = diagnoseLink(linkEvents?.get(n.id) ?? [], now);   // #1849
   return {
     ...rest, online: lv?.online ?? false, sessions: lv?.sessions ?? 0,
     agent_ver_latest: served,
     agent_latest: agentIsLatest(n.agent_ver, served),
     // #1713 — 이 노드에서 열 수 있는 하네스(미보고 = 구 번들 → 기준선). 노드 화면이 그대로 보여준다.
     harnesses: nodeHarnesses(n.agent_harnesses),
+    // #1849 — 이력이 없으면(방금 등록·기록 이전) 빈 판정이 나온다. 그건 '정상'이 아니라 '모름'이고,
+    //  cycles=0 으로 드러나므로 화면이 억지 결론을 내지 않는다.
+    link_diag: diag,
+    link_note: linkDiagMessage(diag, { platform: n.platform, keepAwake: n.keep_awake }),
+    link_note_short: linkDiagSummary(diag),
+    keep_awake_note: keepAwakeLine(n.keep_awake, n.platform),
   };
 }
 
@@ -69,6 +92,9 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     const me = idOf(u);
     const usable = req.query.usable === "1" || req.query.usable === "true";
     const live = new Map(liveNodes().map((n) => [n.id, { online: n.online, sessions: n.sessions }]));
+    // #1849 — 전 노드 24시간 이력을 **한 번에** 읽는다(노드마다 왕복하면 그게 곧 목록 지연이 된다).
+    //  실패해도 목록은 나와야 한다 — 진단은 부가 정보지 목록의 전제가 아니다.
+    const linkEvents = await loadRecentLinkEvents().catch(() => new Map<string, LinkEvent[]>());
     // 두 목록은 **질문이 다르다**: usable=1 은 "이 노드를 쓸 수 있나"(게이트와 동일한 술어여야 한다), 기본은
     //  "내가 관리하는 노드"(admin 은 전체 — 토글·회전·삭제 대상). 그래서 usable 에는 admin 예외를 얹지 않는다:
     //  얹으면 관리자에게 남의 비공유 노드가 선택지로 보이고, 고르면 게이트가 403 을 던진다(목록≠게이트).
@@ -76,7 +102,7 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
       ? (n.enabled && nodeOpenTo(n, me))
       : (isAdmin(u) || n.owner_member === me));
     res.setHeader("Cache-Control", "no-store");
-    res.json({ nodes: rows.map((n) => toView(n, live)) });
+    res.json({ nodes: rows.map((n) => toView(n, live, linkEvents)) });
   }));
 
   // 등록 — member=본인, worker=admin. 평문 토큰은 이 응답 1회.
