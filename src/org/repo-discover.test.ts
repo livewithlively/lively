@@ -3,7 +3,7 @@
 //  커버: provider 응답 → 픽커 옵션 매핑(GitHub·GitLab) · GitLab 서브그룹 리프이름 · clone 주소 선택(ssh/https)
 //        · 페이지네이션 절단 표면화 · 조회 파라미터(min_access_level=20)·인증 헤더 고정.
 import assert from "node:assert/strict";
-import { listGithub, listGitlab, preferUrl } from "./repo-discover.js";
+import { listGithub, listGitlab, preferUrl, bearerOf } from "./repo-discover.js";
 
 let pass = 0;
 const ta = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -126,3 +126,28 @@ await ta("preferUrl: 전송이 ssh 면 ssh_url, https/미등록이면 http_url, 
 });
 
 console.log(`\nREPO-DISCOVER UNIT: ${pass} passed`);
+
+// ── 금고 값 → Bearer 토큰(#1881 G5) ──
+//  같은 슬롯(github_pat)에 두 형태가 산다: 붙여넣은 정적 PAT 과 [GitHub 연결]이 저장한 토큰 묶음(JSON).
+//  묶음을 그대로 실으면 `Bearer {"access_token":…}` 가 나가 상류가 401 — 연결은 됐는데 목록만 비는 형태로
+//  드러나서 원인을 찾기 어렵다. 아래 네 행이 그 경계 전부다.
+const t2 = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
+
+t2("정적 PAT 은 한 글자도 안 바꾼다(무회귀)", () => {
+  assert.equal(bearerOf("ghp_AAAA1111"), "ghp_AAAA1111");
+  assert.equal(bearerOf("glpat-SECRET-xyz"), "glpat-SECRET-xyz");
+});
+
+t2("★ OAuth 토큰 묶음은 access_token 만 뽑는다 — 그대로 실으면 JSON 이 헤더로 나간다", () => {
+  assert.equal(bearerOf(JSON.stringify({ access_token: "ghu_LIVE", token_type: "bearer", expires_in: 28800 })), "ghu_LIVE");
+});
+
+t2("access_token 이 없는 JSON 은 묶음이 아니다 — 원문 그대로(임의 JSON 을 토큰으로 쓰는 조직이 있을 수 있다)", () => {
+  const raw = JSON.stringify({ note: "not a token bundle" });
+  assert.equal(bearerOf(raw), raw);
+});
+
+t2("깨진 JSON·빈 문자열도 그대로 통과시킨다(파싱 실패가 연결을 끊지 않는다)", () => {
+  assert.equal(bearerOf("{not json"), "{not json");
+  assert.equal(bearerOf(""), "");
+});
