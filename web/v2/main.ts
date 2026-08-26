@@ -485,6 +485,21 @@ let lastLogs: any[] = [];
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
   const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
   const wantDeepLogs = Date.now() - logsDeepAt > LOGS_DEEP_TTL_MS;   // #2022 후속 — 오래된 지난 세션이 사라지지 않게 이따금 전량
+  // ── 앱 인스턴스는 **먼저 도착하는 대로** 반영한다(#2022) ──────────────────────────
+  //  종전엔 아래 Promise.all 이 여섯 축을 한 덩어리로 묶어, 세션 목록이 느린 판에서 **이미 도착한**
+  //  인스턴스 정본까지 함께 기다렸다. 그런데 그 정본이 바로 세션 이름·소속 폴백의 재료다(sessFallback) —
+  //  즉 폴백이 가장 필요한 판(콜드 스타트 = "껐다 오랜만에 들어감")에 재료가 없었다.
+  //  E2E 실측(2026-08-26, dev): 세션 목록 두 축을 막고 첫 그림을 그리자, 서버가 이름을 아는 세션인데도
+  //  좌측 행이 `세션 c368bd` 로 떨어졌다. 값·배선 테스트는 전부 통과하는데 화면만 틀린 자리였다.
+  //  ⇒ 도착 즉시 얹고, **아직 아무 세션도 못 그린 판에서만** 다시 그린다(매 폴링마다 덧그리지 않게).
+  const instsP = listAppInstances().catch(() => null);
+  void instsP.then((rows) => {
+    if (!Array.isArray(rows)) return;
+    appInstances = rows;
+    if (data.sessions.length) return;   // 이미 목록이 있는 판이면 아래 정상 경로가 그린다
+    drawSide();
+    tabsApi?.paint();
+  });
   const [pj, lists0, folders0, insts0, live, logs] = await Promise.all([
     // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
     //  archived=include(#1851) — 보관한 프로젝트도 받는다: 그 아래 세션이 '프로젝트 없는 세션'으로 떨어지지 않게, 그리고
@@ -494,7 +509,9 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
     wantProj ? api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || null).catch(() => null) : Promise.resolve(null),
     wantProj ? api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || null).catch(() => null) : Promise.resolve(null),
     // #1883 좌측 목록의 정본 — 창(탭)이 아니라 **살아 있는 앱 인스턴스**(#1780 v2.2 §2.2·§2.3).
-    listAppInstances().catch(() => null),
+    //  #2022 — **먼저 도착하는 대로 반영한다**(아래 instsP): 이 축이 세션 이름·소속 폴백의 재료라
+    //  느린 축과 함께 기다리면 정작 필요한 판(첫 그림)에 없다.
+    instsP,
     // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
     api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
     api('/api/ui/v6/sessions?limit=' + (wantDeepLogs ? LOGS_DEEP : LOGS_SHALLOW)).then((d) => { noteTruncated(!!(d && d.truncated)); return (d && d.sessions) || []; }).catch(() => null),
