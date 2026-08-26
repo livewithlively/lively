@@ -13,6 +13,7 @@
 //
 //  provider 판정은 호스트로 한다 — github.com → GitHub REST, 그 외 → GitLab REST(self-managed 도 문법 동일).
 import { resolveMemberSecret, listMemberSecretsPublic } from "./credentials/member-secret-store.js";
+import { decodeTokenBlob } from "./credentials/oauth-broker.js";
 import {
   GATEWAY_OWNER, memberOwner, listGitCredentialsPublic, resolveGitSecret, normalizeHost,
 } from "./credentials/git-credential-store.js";
@@ -60,15 +61,26 @@ async function apiJson(url: string, headers: Record<string, string>): Promise<un
 //  scope_key 중 소문자화가 일치하는 것을 찾아 그 원본 키로 해소한다.
 //  allowFallback:true = 게이트웨이(조직 머신계정) 자격 폴백 허용 — member-secret-store 규약상 '비-PII read' 만
 //  허용되는데, 레포 목록 조회가 정확히 그 경우다(PII 없음·읽기 전용).
+/**
+ * 금고 값 → 실제로 헤더에 실을 토큰.
+ *  ⚠ 같은 슬롯에 두 형태가 산다(#1881 G5): 사람이 붙여넣은 **정적 PAT**(ghp_…)과 [GitHub 연결]이 저장한
+ *  **토큰 묶음**(JSON). 묶음을 그대로 실으면 `Authorization: Bearer {"access_token":…}` 가 나가 상류가 전부
+ *  401 을 준다 — 연결은 성공했는데 레포 목록만 조용히 비는 형태로 드러난다. http_proxy 가 이미 같은 처리를
+ *  하고 있고(oauth-proxy-auth), 여기서도 같은 규칙을 쓴다. 묶음이 아니면 한 글자도 안 바꾼다(무회귀).
+ */
+export function bearerOf(secret: string): string {
+  return decodeTokenBlob(secret)?.access_token ?? secret;
+}
+
 async function apiToken(memberId: string | null | undefined, kind: string, host: string): Promise<string | null> {
   const direct = await resolveMemberSecret(memberId, kind, { scopeKey: host, allowFallback: true }).catch(() => null);
-  if (direct?.secret) return direct.secret;
+  if (direct?.secret) return bearerOf(direct.secret);
   for (const owner of ownersOf(memberId)) {
     const rows = await listMemberSecretsPublic(owner).catch(() => []);
     const hit = rows.find((r) => r.kind === kind && r.has_secret && r.scope_key !== host && r.scope_key.toLowerCase() === host);
     if (!hit) continue;
     const s = await resolveMemberSecret(memberId, kind, { scopeKey: hit.scope_key, allowFallback: true }).catch(() => null);
-    if (s?.secret) return s.secret;
+    if (s?.secret) return bearerOf(s.secret);
   }
   return null;
 }
