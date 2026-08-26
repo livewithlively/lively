@@ -187,7 +187,10 @@ function openPopover(anchor: HTMLElement): void {
   const cur = workspaceInfo();
   const curSlug = activeWorkspaceSlug();
   const rows: Array<{ slug: string; name: string; kind: string; active: boolean }> = spaces.length
-    ? spaces.map((w) => ({ slug: String(w.slug), name: String(w.name || w.slug), kind: String(w.kind || 'team'), active: w.slug === curSlug || (!!w.is_primary && curSlug === 'primary') }))
+    //  ★ 종류는 저장된 kind 가 아니라 **지금 명부에 몇 명인가**에서 나온다(#1875 kind_effective).
+    //   실측: 혼자 만든 개인 ws 에 사람이 들어와 2명이 됐는데도 목록은 계속 '개인 워크스페이스'라
+    //   말하고 있었다 — 같은 팝오버 안에서 아래 구성원 행은 '팀 · 2명'이라 서로 어긋났다.
+    ? spaces.map((w: any) => ({ slug: String(w.slug), name: String(w.name || w.slug), kind: String(w.kind_effective || w.kind || 'team'), active: w.slug === curSlug || (!!w.is_primary && curSlug === 'primary') }))
     : [{ slug: 'primary', name: cur.name, kind: cur.kind, active: true }];
   //  #1875 — 나에게 온 초대는 **맨 위**다. 내가 결정해 줘야 저쪽이 기다림을 멈추고,
   //   무엇보다 '내가 갈 수 있는 곳'이라 워크스페이스 목록과 같은 질문에 답한다.
