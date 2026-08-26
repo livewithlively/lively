@@ -1164,7 +1164,16 @@ function askUser(p) {
 
 // ── IPC ─────────────────────────────────────────────────────────────────────
 ipcMain.handle(IPC.GET_STATE, async () => ({ state: await refreshState(), progress }));
-ipcMain.handle(IPC.RUN, (_e, { kind, opts }) => start(kind, opts || {}));
+ipcMain.handle(IPC.RUN, async (_e, { kind, opts }) => {
+  // 클라우드 설치(#2044)는 **온보딩과 같은 끝**을 가져야 한다: 설치가 끝나면 노드까지 선다.
+  //  주소 경로(onboard)가 그렇게 하는데 이쪽만 안 하면, 같은 앱에서 어떻게 시작했느냐로 결과가 갈린다.
+  if (kind === "setup-cloud") {
+    const r = await start("setup-cloud", opts || {});
+    if (!r.ok) return r;
+    return nextAfterSetup(state) ? start("node-start", {}) : r;
+  }
+  return start(kind, opts || {});
+});
 ipcMain.handle(IPC.CANCEL, () => { running?.handle?.cancel(); return { ok: true }; });
 ipcMain.handle(IPC.ANSWER, (_e, { id, value }) => {
   const r = pendingPrompts.get(id);
