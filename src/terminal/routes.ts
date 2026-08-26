@@ -862,6 +862,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
       if (gone === false) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
       if (gone === null) throw new HttpError(409, "그 컴퓨터(노드)가 응답하지 않아 세션 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하세요.");
+      // #2022 — 게이트웨이가 **노드 스냅샷에서 발견한** 행은 workspace 좌표를 모른다(그 컴퓨터에서 직접 띄운 세션).
+      //  아래 폴백(root_key || "shared")이 그걸 추측하면 그 세션이 **엉뚱한 폴더에서** 되살아난다 —
+      //  AI 가 다른 프로젝트의 파일을 자기 작업 폴더로 알고 만지게 된다. 모르면 모른다고 말하고 멈춘다.
+      if (st.discovered && !st.root_key) {
+        throw new HttpError(409, "이 세션은 그 컴퓨터에서 직접 만들어진 것이라 되살릴 작업 폴더 좌표를 모릅니다 — 그 컴퓨터에서 이어서 시작해 주세요.");
+      }
       const resumeId = st.claude_session_id || null;
       const input: CreateInput = {
         label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",

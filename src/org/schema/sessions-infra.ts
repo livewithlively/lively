@@ -193,6 +193,13 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 세션 이름이 한 번만 지어지고 그대로 가게 하는 걸쇠다:
   //  낮은 쪽이 높은 쪽을 못 덮는다(session-label-source.ts 의 표가 정본). NULL = 이 컬럼 이전 행 → `rule` 로 읽는다.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS label_source TEXT;`);
+  // #2022 — 이 행을 **어떻게 알게 됐나**. false(기본) = 게이트웨이가 만들거나 create 를 릴레이하며 쓴 행(좌표를 안다).
+  //  true = 게이트웨이가 **노드 스냅샷에서 발견해** 적은 행 — 그 컴퓨터에서 직접 띄운 세션이라 게이트웨이는
+  //  그 세션의 workspace 좌표(root_key·subpath)를 모른다. 노드는 dir(제 파일시스템의 절대경로)만 보고하고,
+  //  그 경로를 좌표로 되돌리려면 **그 노드의 루트 설정**을 알아야 하는데 게이트웨이엔 없다.
+  //  ⚠ 그래서 이 행은 '보이게' 하되 '되살릴 수 있다'고 말하지 않는다 — 복원이 좌표를 추측하면(root_key||'shared')
+  //   그 세션이 **엉뚱한 폴더에서** 되살아난다. 복원 경로가 이 표식을 보고 거절한다(terminal/routes.ts).
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS discovered BOOLEAN NOT NULL DEFAULT false;`);
 
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)

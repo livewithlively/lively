@@ -11,8 +11,8 @@
 // 이 모듈은 **게이트웨이 전용**이다 — node/registry(WS 서버)를 import 하므로 노드 에이전트 번들에 들어가면 안 된다
 //  (sessions.ts 가 이걸 import 하지 않는 이유. routes 가 부른다).
 import type { CreateInput, SessionInfo } from "./catalog.js";
-import { upsertSessionState, type SessionStateInput } from "../sessions/session-state.js";
-import { liveNodes } from "../node/registry.js";
+import { upsertSessionState, insertDiscoveredSessionState, getSessionStates, type SessionStateInput } from "../sessions/session-state.js";
+import { liveNodes, onNodeSessions } from "../node/registry.js";
 import { listNodes } from "../node/store.js";
 import { logger } from "../log.js";
 
@@ -45,6 +45,60 @@ export function nodeSessionStateInput(session: SessionInfo, nodeId: string, inpu
 export async function mirrorNodeSession(session: SessionInfo, nodeId: string, input: CreateInput, ownerId: string): Promise<void> {
   try { await upsertSessionState(nodeSessionStateInput(session, nodeId, input, ownerId)); }
   catch (e) { logger.warn({ err: e, id: session.id, node: nodeId }, "노드 세션 desired-state 기록 실패(비치명 — 이 세션은 죽으면 복원 카드가 안 남는다)"); }
+}
+
+// ── 노드가 **스스로** 띄운 세션도 기억한다(#2022) ──────────────────────────────
+//  #1791 이 채운 건 "게이트웨이가 create 를 릴레이한 노드 세션"까지다. 그런데 노드 에이전트는 3초마다
+//  **자기 tmux 의 box-* 세션을 전부** 밀어 올린다(agent.ts listSessionsRaw) — 그 컴퓨터에서 사람이 직접 띄운
+//  세션도 그 안에 있고, 그건 create 릴레이를 안 탔으니 행이 없다. 그래서:
+//   · 그 노드가 꺼지면 스냅샷이 끊긴다 → 라이브 목록에도, 복원 목록에도 없다 = **어디에도 없는 세션**.
+//   · 게이트웨이가 재배포되면 메모리 스냅샷이 비어 같은 상태가 된다(노드가 다시 붙을 때까지).
+//   · 세션 창(app_instance)에 실어 보내는 정본(subject_label·subject_project_id)도 재료가 없어 비어 나간다.
+//  ⇒ 처음 보는 id 는 그 자리에서 행을 적는다. **좌표(root_key·subpath)는 비운다** — 노드는 dir(제 파일시스템의
+//   절대경로)만 보고하고, 그걸 좌표로 되돌리려면 그 노드의 루트 설정을 알아야 하는데 게이트웨이엔 없다.
+//   대신 `discovered=true` 로 박아 **복원이 좌표를 추측하지 않게** 한다(terminal/routes.ts 가 거절한다).
+//   '보이게 하는 것'과 '되살릴 수 있다고 말하는 것'은 다르다 — 앞의 것만 한다.
+//
+//  ⚠ 3초마다 DB 를 묻지 않는다: 이 프로세스가 이미 본 id 는 메모리에 남겨 두고, **처음 보는 id 가 있을 때만**
+//   한 번의 일괄 조회를 한다. 정상 상태(새 세션 없음)에선 쿼리가 0 이다.
+const seenNodeSessions = new Set<string>();
+
+/** 스냅샷 한 판 — 처음 보는 세션만 골라 행을 적는다. best-effort(실패해도 다음 push 가 다시 본다). */
+export async function discoverNodeSessions(nodeId: string, sessions: SessionInfo[]): Promise<number> {
+  const fresh = sessions.filter((s) => s && s.id && !seenNodeSessions.has(s.id));
+  if (!fresh.length) return 0;
+  let wrote = 0;
+  try {
+    const have = await getSessionStates(fresh.map((s) => s.id));
+    for (const s of fresh) {
+      seenNodeSessions.add(s.id);          // 있든 없든 이 판에서 확인했다 — 다시 묻지 않는다
+      if (have.has(s.id)) continue;
+      const owner = String(s.owner || "").trim();
+      if (!owner) continue;                // 주인을 모르는 행은 적지 않는다(가시성 판정의 재료가 owner 다)
+      const ok = await insertDiscoveredSessionState({
+        id: s.id, owner, label: s.label || null, harness: s.harness || "claude", dir: s.dir || null,
+        root_key: null, subpath: null,     // ★ 모른다 — 추측하지 않는다(위 주석)
+        flags: s.flags || {}, auto_approve: !!s.autoApprove,
+        invites: Array.isArray(s.invites) ? s.invites : [],
+        project_id: s.projectId || null, project_src: s.projectId ? "v6" : null,
+        read_only: false, incognito: false, write_vis: null, restrict_read: false,
+        created: s.created || Math.floor(Date.now() / 1000), last_busy: null,
+        node_id: nodeId, app_id: s.appId || null,
+      });
+      if (ok) wrote++;
+    }
+  } catch (e) {
+    for (const s of fresh) seenNodeSessions.delete(s.id);   // 실패한 판은 안 본 것으로 — 다음 push 가 다시 본다
+    logger.warn({ err: e, node: nodeId }, "노드 세션 발견 기록 실패(비치명 — 다음 상태 보고에 재시도)");
+    return 0;
+  }
+  if (wrote) logger.info({ node: nodeId, wrote }, "노드가 직접 띄운 세션을 desired-state 에 기록(좌표 미상)");
+  return wrote;
+}
+
+/** 부팅 때 한 번 — 노드 상태 push 를 구독한다(registry 는 DB 를 모르므로 이쪽에서 건다). */
+export function armNodeSessionDiscovery(): void {
+  onNodeSessions((nodeId, sessions) => { void discoverNodeSessions(nodeId, sessions); });
 }
 
 /**

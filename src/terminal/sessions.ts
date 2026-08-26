@@ -105,7 +105,10 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       projectId: s.project_id || 0, appId: s.app_id || undefined,
       agentState: "offline", title: "",
       lastActive: s.last_busy || undefined,
-      restorable: true,
+      // #2022 — 게이트웨이가 노드 스냅샷에서 **발견한** 행은 workspace 좌표를 모른다 → 되살릴 수 없다.
+      //  여기서 true 로 내보내면 화면이 "열면 되살아난다"(#1820)고 약속한 뒤 409 를 받는다. 약속을 하지 않는다.
+      restorable: !(s.discovered && !s.root_key),
+      discovered: !!s.discovered,
       exitedByUser: !!s.exited_at, // #1059 — 사용자 정상 종료 표시가 찍혔으면 '종료됨', 아니면 '복원 가능(중단됨)'.
       // #1251 — 사용자 종료가 아닌데 사유가 'oom' 이면 earlyoom 이 죽인 것. 둘이 겹치면 사용자 종료가 이긴다(더 확실한 사실).
       oomKilled: !s.exited_at && s.exit_reason === "oom",
