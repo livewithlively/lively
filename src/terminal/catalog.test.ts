@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { HARNESSES, installTenantSlugResolver, roots, sharedRoot } from "./catalog.js";
+import { HARNESSES, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv } from "./catalog.js";
 
 test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그가 보존한다", () => {
   const c = HARNESSES.find((h) => h.key === "codex")!;
@@ -105,4 +105,19 @@ test("★ {slug} 없는 템플릿은 무시한다(전 테넌트 공유가 되면
     delete process.env.LIVELY_TENANT_ROOT_TEMPLATE;
     delete process.env.TERMINAL_ROOT_SHARED;
   }
+});
+
+// ── #2055 codex app-server 모드의 pane ─────────────────────────────────────────
+test("★ app-server 모드 pane 은 codex TUI 가 아니라 셸이다(스레드 writer 가 둘이 되면 대화가 갈린다)", () => {
+  const argv = codexAppServerPaneArgv();
+  assert.equal(argv[0], "sh");
+  const joined = argv.join(" ");
+  assert.match(joined, /exec "\$\{SHELL:-\/bin\/sh\}" -il/, "끝에 사람이 쓰는 셸로 남아야 한다");
+  assert.ok(!/(^|\s)codex(\s|$)/.test(argv[2]), "pane 스크립트가 codex 를 실행하면 안 된다");
+});
+
+test("app-server 모드 pane 안내는 '그냥 codex 를 치라'고 말하지 않는다 — 그건 새 대화다", () => {
+  const intro = codexAppServerPaneArgv().at(-1) ?? "";
+  assert.match(intro, /대화창/, "대화가 어디서 도는지 알려 준다");
+  assert.match(intro, /resume|넘기기/, "이어가는 법(인계)을 알려 준다");
 });

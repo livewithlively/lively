@@ -565,6 +565,27 @@ export function harnessLoginArgv(harnessKey: string): string[] | null {
   return ["sh", "-c", LOGIN_SH, "lively-login", intro, done];
 }
 
+// codex app-server 모드의 pane (#2055) — TUI 대신 **셸**을 띄우고, 왜 그런지 한 화면으로 알려 준다.
+//  왜 셸인가: codex 는 스레드당 writer 가 하나다(실측). pane 에 TUI 를 띄우면 대화창이 쥔 대화와 **다른 대화**가
+//  열려, 터미널에서 보는 것과 대화창에서 보는 것이 갈린다. 그래서 대화는 대화창(app-server)이 전담하고
+//  pane 은 사람이 직접 명령을 치는 자리로 남는다.
+//  ⚠ 안내에 `codex` 를 그냥 치라고 쓰지 않는다 — 그건 **새 대화**를 연다. 이어가려면 대화창이 스레드를
+//   놓아 준 뒤 `codex resume <id>` 다(그 id 는 화면이 알려 준다).
+const APP_SERVER_SH = [
+  'printf \'\\n%s\\n\\n\' "$1"',
+  'exec "${SHELL:-/bin/sh}" -il',
+].join("\n");
+export function codexAppServerPaneArgv(): string[] {
+  const line = "─".repeat(60);
+  const intro = [line,
+    "이 세션의 Codex 대화는 **대화창**이 맡습니다(App Server).",
+    "이 터미널은 명령을 직접 치는 자리입니다 — 파일·빌드·git 을 그대로 쓰세요.",
+    "여기서  codex  를 실행하면 대화창과 **다른 대화**가 열립니다(같은 대화는 한 곳만 쥘 수 있습니다).",
+    "대화를 이 터미널로 옮기려면 대화창에서 [터미널로 넘기기] 를 누르세요.",
+    line].join("\n");
+  return ["sh", "-c", APP_SERVER_SH, "lively-codex-chat", intro];
+}
+
 // 실행 모드(#1007+) → 격리 pane 에 실을 `-e` env 인자. 순수 함수라 단위테스트로 계약을 못박는다(terminal-sessions.test.ts).
 //  incognito 는 readonly 보다 강함(lively 전체 차단 + LIVELY_OFF 로 훅까지 off). 둘 다면 incognito.
 //  ⚠ **전이기 dual-env**: 새 LIVELY_MODE(주 신호) + 구 LIVELY_READONLY/LIVELY_INCOGNITO 를 함께 실어, x-lively-mode 헤더가 아직

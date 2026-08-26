@@ -7,6 +7,7 @@
 import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
+import { codexChatMode } from "./codex-chat-mode.js";
 import { HttpError } from "../http-error.js";
 import { dirToProjectFolder } from "../project/project-fs.js";
 import { hiddenProjects, type HiddenProjects } from "../v6/visibility.js";
@@ -31,7 +32,7 @@ import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials
 import { mintAppToken } from "../apps/principal.js";
 import { appPluginArgs, writeAppHome, materializeAppAssets, materializePreparedAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -452,7 +453,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //    하네스가 즉사해 로그인 화면조차 못 보던 데드락을 끊는다). 모르는 하네스면 무시하고 평범한 셸 세션.
   //  · AI 하네스 — 런처로 감싼다(비정상 종료 시 세션 보존 + 한국어 안내). harnessLaunchArgv 주석 참조.
   //  · 셸 하네스 — 그대로(감쌀 하네스가 없다).
-  const launch = input.loginFor ? (harnessLoginArgv(input.loginFor) ?? cmd) : harnessLaunchArgv(harness.key, cmd);
+  //  · codex app-server 모드(#2055) — pane 은 **셸**이다. 대화는 대화창(app-server)이 전담하고, TUI 를 띄우면
+  //    스레드 writer 가 둘이 돼 대화가 갈린다(codex 는 스레드당 writer 를 하나만 허용한다 — 실측).
+  const chatMode = codexChatMode({ harness: harness.key, loginFor: input.loginFor });
+  const launch = input.loginFor
+    ? (harnessLoginArgv(input.loginFor) ?? cmd)
+    : chatMode === "app-server"
+      ? codexAppServerPaneArgv()
+      : harnessLaunchArgv(harness.key, cmd);
 
   const invites = await validInvites(input.invites, ownerId(user));
   const args = ["new-session", "-d", "-s", id];
