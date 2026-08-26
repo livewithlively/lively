@@ -14,8 +14,9 @@ const t = async (name: string, fn: () => Promise<void> | void): Promise<void> =>
   await fn(); pass++; console.log(`ok  ${name}`);
 };
 
-/** 서버 흉내 — initialize·thread/*·turn/* 에 즉답한다. 특정 메서드를 실패시킬 수 있다. */
-function fakeServer(o: { failOn?: string; closeOnSend?: boolean } = {}) {
+/** 서버 흉내 — initialize·thread/*·turn/* 에 즉답한다. 특정 메서드를 실패시킬 수 있다.
+ *  turn/start 뒤에는 실제 서버처럼 **turn/started 알림**을 흘린다(런타임이 '도는 중'을 그걸로 안다). */
+function fakeServer(o: { failOn?: string; closeOnSend?: boolean; noTurnNotify?: boolean } = {}) {
   const argvSeen: string[][] = [];
   const sentMethods: string[] = [];
   let closed = 0;
@@ -37,7 +38,10 @@ function fakeServer(o: { failOn?: string; closeOnSend?: boolean } = {}) {
         const result =
           m.method === "thread/start" || m.method === "thread/resume" ? { thread: { id: m.params?.threadId ?? "T-new" } } :
           m.method === "turn/start" ? { turn: { id: "TU1" } } : {};
-        setImmediate(() => onLine?.(JSON.stringify({ jsonrpc: "2.0", id: m.id, result })));
+        setImmediate(() => {
+          onLine?.(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }));
+          if (m.method === "turn/start" && !o.noTurnNotify) onLine?.(JSON.stringify({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "T-new", startedAtMs: 1 } }));
+        });
       },
       onLine: (cb) => { onLine = cb; },
       onClose: (cb) => { onClose = cb; },
@@ -124,6 +128,34 @@ await t("★ P1 보내는 중 서버가 죽으면 폴백 신호를 던지고 런
   const f2 = fakeServer();
   await sendCodexChat(base({ text: "다시", transportFactory: f2.factory }));
   assert.equal(f2.argvSeen.length, 1, "다음 호출은 새로 띄운다");
+});
+
+await t("★ O3 도는 중에 온 말은 새 턴이 아니라 **얹는다**(turn/steer) — 두 턴이 겹치지 않게", async () => {
+  const f = fakeServer();
+  await sendCodexChat(base({ text: "먼저 이걸", transportFactory: f.factory }));
+  await new Promise((r) => setImmediate(r));                 // turn/started 알림이 도착할 틈
+  const r = await sendCodexChat(base({ text: "아, 그거 말고 이거요", transportFactory: f.factory }));
+  assert.equal(r.steered, true, "화면이 '하던 작업에 얹었어요'로 말할 수 있어야 한다");
+  assert.equal(f.sentMethods.filter((m) => m === "turn/start").length, 1, "새 턴을 또 열지 않는다");
+  assert.ok(f.sentMethods.includes("turn/steer"));
+});
+
+await t("O4 턴이 끝난 뒤에 온 말은 새 턴이다(얹을 턴이 없다)", async () => {
+  const f = fakeServer({ noTurnNotify: true });              // turn/started 가 안 오면 '도는 중'이 아니다
+  await sendCodexChat(base({ text: "하나", transportFactory: f.factory }));
+  const r = await sendCodexChat(base({ text: "둘", transportFactory: f.factory }));
+  assert.equal(r.steered, undefined);
+  assert.equal(f.sentMethods.filter((m) => m === "turn/start").length, 2);
+  assert.ok(!f.sentMethods.includes("turn/steer"));
+});
+
+await t("★ O5 steer 를 못 쓰는 판이면 실패를 삼키지 않고 새 턴으로 보낸다(말이 사라지지 않는다)", async () => {
+  const f = fakeServer({ failOn: "turn/steer" });
+  await sendCodexChat(base({ text: "먼저", transportFactory: f.factory }));
+  await new Promise((r) => setImmediate(r));
+  const r = await sendCodexChat(base({ text: "덧붙임", transportFactory: f.factory }));
+  assert.equal(r.steered, undefined);
+  assert.equal(f.sentMethods.filter((m) => m === "turn/start").length, 2, "얹지 못했으면 새 턴으로라도 전한다");
 });
 
 await t("★ Q1 release 는 프로세스를 내려 스레드를 TUI 에 넘긴다 — 그 id 를 돌려준다", async () => {

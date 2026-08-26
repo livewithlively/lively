@@ -146,7 +146,46 @@ export function appServerLines(msg: unknown, state: ParseState): { lines: ChatLi
       const res = item.error ? String(item.error) : JSON.stringify(item.result ?? "");
       return { lines: toolPair(ts, id, `mcp__${server}__${tool}`, item.arguments ?? {}, res === "null" ? "" : res, failed), state: st };
     }
+    // ── 아래는 화면에 뜻이 있는 나머지 항목들(#2055 후속) ────────────────────────────────
+    //  실측 스키마(0.149.1 `generate-json-schema`)의 ThreadItem 18종 중, **사람이 읽을 것이 있는** 것만 옮긴다.
+    //  나머지(hookPrompt·subAgentActivity·enteredReviewMode…)는 화면 계약이 아직 없어 그대로 버린다.
+    case "plan": {
+      // 에이전트가 세운 계획(= 할 일 목록). 텍스트 한 덩이로 온다 — 뜻이 '한 말'이 아니라 '지금 무엇을 하려는가'라
+      //  글로 흘리지 않고 **카드**로 세운다. 화면의 도구 분류기가 이미 아는 이름(TodoWrite)에 붙여
+      //  claude 세션과 같은 자리·같은 모양으로 보이게 한다(하네스마다 다른 그림을 만들지 않는다).
+      const text = String(item.text ?? "");
+      if (!text.trim()) return { lines: [], state: st };
+      return { lines: toolPair(ts, id, "TodoWrite", { plan: text }, text, false), state: st };
+    }
+    case "webSearch": {
+      const query = String(item.query ?? "");
+      const results = Array.isArray(item.results) ? item.results : [];
+      if (!query.trim() && !results.length) return { lines: [], state: st };
+      const body = results.map((r) => {
+        const o = asObj(r);
+        return o ? [o.title, o.url].filter(Boolean).map(String).join(" — ") : String(r ?? "");
+      }).filter(Boolean).join("\n");
+      return { lines: toolPair(ts, id, "WebSearch", { query }, body, false), state: st };
+    }
+    case "dynamicToolCall": {
+      const tool = String(item.tool ?? "");
+      if (!tool) return { lines: [], state: st };
+      const failed = String(item.status ?? "") === "failed" || item.success === false;
+      const contents = Array.isArray(item.contentItems) ? item.contentItems : [];
+      const body = contents.map((c) => { const o = asObj(c); return o && typeof o.text === "string" ? o.text : ""; }).filter(Boolean).join("\n");
+      const name = item.namespace ? `mcp__${String(item.namespace)}__${tool}` : tool;
+      return { lines: toolPair(ts, id, name, item.arguments ?? {}, body, failed), state: st };
+    }
+    case "imageView": {
+      const p = String(item.path ?? "");
+      if (!p) return { lines: [], state: st };
+      return { lines: toolPair(ts, id, "Read", { file_path: p }, "", false), state: st };
+    }
+    case "contextCompaction":
+      // 맥락 압축 — 화면은 이미 이 사실을 **구분선**으로 그린다(대화가 왜 갑자기 짧아졌는지의 유일한 설명).
+      //  claude 의 compact_boundary 와 같은 자리에 앉힌다.
+      return { lines: [{ type: "system", subtype: "compact", timestamp: ts }], state: st };
     default:
-      return { lines: [], state: st };   // plan·webSearch·sleep 등 — 화면 계약이 아직 없다
+      return { lines: [], state: st };   // hookPrompt·subAgentActivity·리뷰모드 등 — 화면 계약이 아직 없다
   }
 }

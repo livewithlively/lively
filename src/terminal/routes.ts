@@ -625,7 +625,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
             await setClaudeSessionId(req.params.id, r.threadId, uid, tpath || null).catch(() => false);
           }
         }
-        res.json({ ok: true, delivered: true, transport: "app-server", thread_id: r.threadId });
+        // steered = 새 턴이 아니라 **도는 턴에 얹었다**. 화면이 그 말풍선을 다르게 말할 수 있게 사실대로 싣는다.
+        res.json({ ok: true, delivered: true, transport: "app-server", thread_id: r.threadId, steered: !!r.steered });
         return;
       } catch (e) {
         if (!(e instanceof CodexChatUnavailable)) throw e;
