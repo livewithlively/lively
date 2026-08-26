@@ -56,6 +56,31 @@ export async function recordSessionProject(sessionId: string, projectId: number 
 
 // 이어받기(#905 C1) — 이 세션의 **가장 최근 바인딩** 프로젝트 id(+박스 폴더). 없으면 null. 세션이 어느 프로젝트에서
 //  돌았는지로 이어받기 세션의 작업 경로·멤버십 게이트를 정한다.
+/**
+ * 이어받기 승계(#1867) — **실행 세션 id 로 먼저, 없으면 그 세션이 이어받은 대화 uuid 로** 마지막 소속을 찾는다.
+ *
+ *  왜 두 축인가: 대화(conversation)와 실행 세션(execution)은 다른 엔티티다. 같은 대화를 새 세션에서 이어받으면
+ *   실행 id 는 **새로 발급**되므로 그 id 로는 아무 소속도 없다 — 그러면 첫 프롬프트에서 훅이 '미연결'로 보고
+ *   **새 프로젝트를 만든다**(2026-08-25 실측: 대화 `1bf015ec…`가 #1867 에 붙어 있었는데, 그 대화를 이어받은
+ *   `box-yoon-6178a7c3` 이 새 프로젝트 #2015 를 만들었다 — 상민님이 "왜 직전 프롬프트가 프로젝트명이지?"로 발견).
+ *  대화 uuid 축에도 소속이 남는 이유: session_log append 가 실행 세션의 현재 소속을 대화 id 로 투영한다.
+ *
+ *  ⚠ 순서가 의미다 — 실행 id 가 이겨야 한다. 세션을 옮긴 뒤(detach·재바인딩)의 정답은 그 실행 세션의 것이고,
+ *   대화 축은 그보다 낡을 수 있다.
+ */
+export async function latestProjectForSessionChain(
+  ids: Array<string | null | undefined>,
+  lookup: (id: string) => Promise<{ id: number; folder: string } | null> = latestProjectForSession,
+): Promise<{ id: number; folder: string } | null> {
+  for (const id of ids) {
+    const key = String(id ?? "").trim();
+    if (!key) continue;                       // 빈 축은 조회하지 않는다(대화 uuid 가 없는 세션이 정상이다)
+    const one = await lookup(key);
+    if (one) return one;
+  }
+  return null;
+}
+
 export async function latestProjectForSession(sessionId: string): Promise<{ id: number; folder: string } | null> {
   if (!sessionId) return null;
   const r = await itemsPool.query(

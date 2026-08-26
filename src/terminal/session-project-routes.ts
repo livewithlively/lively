@@ -23,7 +23,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { getOpt } from "./tmux-exec.js";
 import { adoptLegacyExecutionSession, executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject, type ExecutionSessionProject } from "../v6/execution-session-store.js";
-import { latestProjectForSession } from "../v6/project-session-store.js";
+import { latestProjectForSessionChain } from "../v6/project-session-store.js";
 import { canAttach } from "./terminal-sessions.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
@@ -133,7 +133,9 @@ async function adoptLegacyBinding(id: string, me: string): Promise<ExecutionSess
   const state = await getSessionState(id).catch(() => undefined);
   const owns = state ? state.owner === me : await canAttach(id, me).catch(() => false);
   if (!owns) return null;
-  const legacy = await latestProjectForSession(id).catch(() => null);
+  // 실행 id 의 구 바인딩 → 없으면 **이 세션이 이어받은 대화**의 마지막 소속(#1867 이어받기 승계).
+  //  이어받기는 실행 id 를 새로 발급하므로, 이 다리가 없으면 같은 대화가 매번 새 프로젝트를 만든다.
+  const legacy = await latestProjectForSessionChain([id, state?.claude_session_id]).catch(() => null);
   if (!legacy) return null;
   return await adoptLegacyExecutionSession({
     id, owner: me, harness: state?.harness ?? null, nodeId: state?.node_id ?? null, projectId: legacy.id,
