@@ -20,6 +20,7 @@
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
 import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, sv, toast } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
+import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
 import { confirmSessionPurge, purgeSessionRecord, purgedToast } from './session-actions.js';
@@ -327,6 +328,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // codex 실시간 층(#2055)의 승인·사용량이 앉는 자리 — 대화 목록과 달리 **스크롤에 안 떠내려간다**(입력칸 바로 위).
   //  승인은 답해야 턴이 진행되는 요청이라, 읽던 자리를 위로 올렸다고 사라지면 그 턴이 통째로 선다.
   const liveDock = el('div', { class: 'cxl-dock' });
+  let fontStep = parseFontStep(localStorage.getItem(CHAT_FONT_KEY));   // 글자 크기(#2055) — 지난번에 고른 값
 
   /** 이 세션은 대화창이 기본인가 — codex app-server 세션(pane 이 셸이라 터미널엔 말 걸 곳이 없다). */
   const chatFirst = (): boolean => String(target.raw?.chatMode || '') === 'app-server';
@@ -334,7 +336,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
     who: { me: '나', ai: 'AI' },
-    placeholder: target.node ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기',
+    // ⚠ '그 컴퓨터로 전달'은 **정말 다른 컴퓨터일 때만** 맞는 말이다. 게이트웨이 박스가 노드로도 등록돼
+    //  있으면 그 박스의 로컬 세션에도 노드 좌표가 붙는다(같은 함정을 네 번째로 밟는 자리) — app-server
+    //  세션은 여기서 도는데 "그 컴퓨터로 전달"이라고 적혀 있으면 사람이 다른 기계를 상상하게 된다.
+    placeholder: (target.node && !chatFirst()) ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기',
     toolLabel,
     thinking: 'fold',
     sendWhileBusy: true,
@@ -342,7 +347,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     bar: { right: el('span', { class: 'dt-chips' }, chipMode) },
     askHost: liveDock,                            // 승인(#2055) — 스크롤에 떠내려가지 않는 입력칸 바로 위
     onSend: (text) => sendPrompt(text),
-    onStop: (canKeys() || chatFirst()) ? () => stopTurn() : undefined,
+    // ★ 항상 준다 — **판단은 누를 때** 한다. 종전엔 여기서 한 번 정하고 끝이라, 화면을 열 때 아직 세션 행이
+    //  안 와 있으면(방금 만든 세션) 멈춤 버튼과 Esc 가 **그 화면에서 영영 사라졌다**(실측 2026-08-26 사용자 신고).
+    //  누를 자리가 없는 세션이면 stopTurn 이 그 자리에서 사실대로 말한다 — 죽은 버튼보다 낫다.
+    onStop: () => stopTurn(),
     escActive: () => true,
     opening: null,
   });
@@ -676,6 +684,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
           () => { modeChosen = true; setMode('term'); }));
     }
     rows.push(row('목차', '이 세션에 보낸 질문 목록 — 누르면 그 자리로', () => openIndex()));
+    // 글자 크기(#2055) — 브라우저 확대는 사이드바·터미널까지 같이 키운다. 이 화면만 키우는 자리가 없었다.
+    //  누르면 한 단계씩 순환하고, 지금 값이 설명줄에 그대로 보인다(무엇이 켜져 있는지 감추지 않는다).
+    rows.push(row('글자 크기', `지금 ${CHAT_FONT_LABELS[fontStep] ?? '보통'} — 누르면 다음 크기로`, () => {
+      fontStep = nextFontStep(fontStep);
+      view.setFontStep(fontStep);
+      toast(`글자 크기: ${CHAT_FONT_LABELS[fontStep]}`);
+    }));
     if (opts.terminalSrc && isBox) {
       rows.push(el('div', { class: 'sc-more-sec', text: '터미널' }));
       rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
@@ -1240,12 +1255,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // 도는 턴에 **얹었다**(새 턴이 아니다). 그러면 답은 하던 일에 이어 붙어 오므로, 새 턴을 기다리는 표시를
       //  세우지 않는다 — 안 그러면 영영 안 오는 '내 차례'를 기다리는 화면이 된다.
       if (r?.steered) pd.state.textContent = '하던 작업에 얹었어요 — 이어서 반영됩니다';
+      // app-server 는 아웃박스 행이 없다(프로토콜로 바로 갔다). 그래서 상태 줄이 **빈 채로** 남아 사람은
+      //  보냈는지조차 알 수 없었다(실측 신고 "큐된 상태의 메세지도 명확하게 안보이고"). 사실대로 적는다 —
+      //  이 줄은 답이 흐르기 시작하면(실시간 층의 status/delta) 지워진다.
+      else if (r?.transport === 'app-server') pd.state.textContent = '보냈어요 — 답을 기다리는 중…';
       if (!caps().read) {   // 큐엔 들어갔지만(배달자가 전달) 답은 여기 안 온다(파서 전) — 도는 척 두지 않고 그 자리에 말한다
         const i = pending.indexOf(pd); if (i >= 0) pending.splice(i, 1);
         pd.state.textContent = ''; running = false; view.settle(pd.t); view.busy(false);
         view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.'); return;
       }
-      if (target.node) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
+      // ⚠ 이 말은 **정말 다른 컴퓨터일 때만** 맞다. app-server 세션은 여기서 도는데 게이트웨이 박스가 노드로도
+      //  등록돼 있으면 노드 좌표가 붙어(같은 함정) 방금 보낸 말이 "그 컴퓨터로 전달했어요"로 덮였다(실측).
+      if (target.node && !chatFirst()) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
       // 어디를 지켜볼까 — 박스 파일, 노드면 중앙 기록(uuid 를 알 때만; 모르면 update() 가 가져올 때). ⚠ 노드에 박스 경로를 걸면 409 반복.
       if (!src) src = target.node ? logSrc() : { kind: 'box', id: target.id };   // src 가 이미 정해졌으면 그대로(위 watch 주석)
       if (src) schedule();
@@ -1341,11 +1362,22 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       sessionId: target.id, view, dock: liveDock,
       liveTurn: () => cur?.t ?? null,
       poke: () => pokePoll(),
+      onSettled: () => {
+        // 런타임이 "턴 끝" 이라고 했다 — 파일의 마감 줄을 기다리지 않는다(멈춤은 그 줄이 늦거나 안 온다).
+        if (!running) return;                    // 이미 마감했다(중복 호출은 조용히 무시 — 재접속마다 hello 가 온다)
+        running = false;
+        if (cur) view.settle(cur.t);
+        view.busy(false);
+        paintState();
+        pokePoll();                    // 마지막 조각이 파일에 떨어졌을 수 있다 — 지금 읽어 온다
+      },
       onState: (st) => {
         liveWaiting = st.waiting;
         // 서버가 '돈다'고 말하면 파일보다 먼저 그 사실을 화면에 세운다(파일은 항목이 끝나야 자란다).
         //  ⚠ 반대(끝났다)는 여기서 단정하지 않는다 — 마감은 대화 파일의 turn_duration 이 쥔다(두 곳에서 마감하면 어긋난다).
-        if (st.running && cur && !running) { running = true; view.running(cur.t); view.busy(true); }
+        // ⚠ cur 이 없어도(새로고침 직후·기록을 아직 못 읽은 창) **busy 는 세운다** — 그게 멈춤 버튼이 뜨는 조건이다.
+        //  종전엔 cur 이 있을 때만 세워, 창을 새로 연 사람은 도는 턴을 멈출 방법이 없었다.
+        if (st.running && !running) { running = true; if (cur) view.running(cur.t); view.busy(true); }
         paintState();
       },
     });

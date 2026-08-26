@@ -83,6 +83,7 @@ const SLACK = "https://slack.com/api";
 const GH = "https://api.github.com";
 const GL = "https://gitlab.com/api/v4";
 const FIGMA = "https://api.figma.com/v1";
+const FIGMA_V2 = "https://api.figma.com/v2";   // 열거(folders)는 v2 — v1 projects 는 구 스코프를 요구한다(아래 주석)
 
 // ── 슬랙을 B 로 내린 이유 (#1881, 2026-08-25) ──────────────────────────────────────────────────
 //  슬랙 공식 MCP(mcp.slack.com)는 **마켓플레이스 등록 앱·내부 앱만** 쓸 수 있다("unlisted apps are prohibited from
@@ -771,32 +772,38 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
         }, ["fileKey", "ids"]),
         pii_scrub: false,
       },
+      // ⚠ v1 `/teams/:id/projects`·`/projects/:id/files` 가 아니다 — 그 엔드포인트들은 **구 스코프 `projects:read`**
+      //  를 요구한다. granular scope(우리가 안내하는 folders:read 등 5종)만 켠 PAT 로 부르면 403 이고, 응답이
+      //  그 사실을 정확히 말한다(2026-08-26 실측): "Invalid scope(s): …folders:read… This endpoint requires the
+      //  projects:read scope". 문서의 'folders:read 가 projects:read 를 대체한다' 는 **v2 folders 엔드포인트**를
+      //  뜻하는 것이었다. 그래서 열거는 v2 로만 한다 — 안내 스코프와 짝이 맞는 유일한 경로.
       {
-        name: "figma_list_team_projects",
-        title: "피그마 팀 프로젝트 목록",
+        name: "figma_list_team_folders",
+        title: "피그마 팀 폴더 목록",
         description:
-          "팀 안의 프로젝트(폴더) 목록. teamId 는 프로그램으로 얻을 수 없어 사람이 팀 주소에서 복사해 넣어야 한다 — " +
-          "figma.com/files/team/<teamId>/… 의 team 뒤 숫자. ⚠ 이 도구는 개인 액세스 토큰으로만 동작한다.",
-        url: `${FIGMA}/teams/{teamId}/projects`,
+          "팀 안의 폴더 목록. teamId 는 프로그램으로 얻을 수 없어 사람이 팀 주소에서 복사해 넣어야 한다 — " +
+          "figma.com/files/team/<teamId>/… 의 team 뒤 숫자. ⚠ 개인 액세스 토큰(PAT)으로만 동작한다 " +
+          "— 같은 열거가 공개 OAuth 앱에는 금지돼 있다.",
+        url: `${FIGMA_V2}/teams/{teamId}/folders`,
         input_schema: obj({
           teamId: S("팀 id — figma.com/files/team/<teamId>/… 주소에서 복사"),
         }, ["teamId"]),
         pii_scrub: false,
-        no_paging: "피그마 projects API 에 페이지 파라미터가 없다 — 응답은 프로젝트 id·name 배열이라 팀이 커도 작다.",
+        no_paging: "피그마 folders API 에 페이지 파라미터가 없다 — 응답은 폴더 id·name 배열이라 팀이 커도 작다.",
       },
       {
-        name: "figma_list_project_files",
-        title: "피그마 프로젝트 파일 목록",
+        name: "figma_list_folder_files",
+        title: "피그마 폴더 파일 목록",
         description:
-          "프로젝트(폴더) 안의 파일 목록 — 파일 이름과 key 를 얻는다. 여기서 얻은 key 로 figma_get_file_comments 를 부른다. " +
-          "projectId 는 figma_list_team_projects 결과에서 온다.",
-        url: `${FIGMA}/projects/{projectId}/files`,
+          "폴더 안의 파일 목록 — 파일 이름과 key 를 얻는다. 여기서 얻은 key 로 figma_get_file_comments 를 부른다. " +
+          "folderId 는 figma_list_team_folders 결과에서 온다.",
+        url: `${FIGMA_V2}/folders/{folderId}/files`,
         input_schema: obj({
-          projectId: S("프로젝트 id(figma_list_team_projects 결과의 id)"),
+          folderId: S("폴더 id(figma_list_team_folders 결과의 id)"),
           branch_data: S("브랜치 메타까지 받으려면 'true'"),
-        }, ["projectId"]),
+        }, ["folderId"]),
         pii_scrub: false,
-        no_paging: "피그마 project files API 에 페이지 파라미터가 없다 — 파일당 몇 필드뿐이라 폴더가 커도 작다. branch_data 를 켜면 커지므로 기본은 끈 채로 둔다.",
+        no_paging: "피그마 folder files API 에 페이지 파라미터가 없다 — 파일당 몇 필드뿐이라 폴더가 커도 작다. branch_data 를 켜면 커지므로 기본은 끈 채로 둔다.",
       },
     ],
   },

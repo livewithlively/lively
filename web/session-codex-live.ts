@@ -29,6 +29,8 @@ export interface CodexLiveOpts {
   poke: () => void;
   /** 도는 중인지·기다리는 승인이 몇 개인지 바뀔 때 — 헤더의 점·상태 글자가 이 값을 따른다. */
   onState?: (s: { running: boolean; waiting: number }) => void;
+  /** 턴이 끝났다(런타임이 말했다) — 화면이 그 턴을 마감한다. 파일의 마감 줄을 기다리지 않는다. */
+  onSettled?: () => void;
 }
 
 export interface CodexLive {
@@ -158,7 +160,17 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
       case 'hello':
       case 'status': {
         isRunning = !!(ev as any).running;
-        if (!isRunning) clearPreview();          // 턴이 끝났다 — 남은 조각은 파일이 그린다
+        if (!isRunning) {
+          clearPreview();                        // 턴이 끝났다 — 남은 조각은 파일이 그린다
+          // ★ 끝났다는 사실도 **여기가 먼저 안다**. 종전엔 마감을 대화 파일에만 맡겼는데, 멈춤(interrupt)처럼
+          //  파일에 마감 줄이 늦게/안 오는 경우 화면이 최대 2분을 '작업 중'으로 남았다(실측 2026-08-26).
+          //  런타임이 이 세션의 AI 다 — 그 말을 그대로 쓴다.
+          //  ⚠ **이 층이 '도는 중'을 본 적 있을 때만** 알리지 않는다. 화면의 busy 는 보낼 때 세워지는데,
+          //   스트림이 그 사이 끊겼다 붙으면(프록시가 장수 연결을 끊는다 — dev 실측 ERR_HTTP2_PROTOCOL_ERROR)
+          //   이 층은 turn/started 를 못 봤으므로 was 가 false 고, 그러면 화면이 영영 '작업 중'으로 남는다.
+          //   끝났다는 사실은 그 자체로 전할 값이다 — 마감할지는 받는 쪽이 자기 상태를 보고 정한다.
+          o.onSettled?.();
+        }
         tell();
         return;
       }
@@ -187,21 +199,40 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
 
   // ── 스트림 ──────────────────────────────────────────────────────────────────────
   //  EventSource 는 헤더를 못 싣는다(토큰이 주소로 새 나간다) — fetch 스트림으로 읽는다.
+  /**
+   * ★ **말 없는 연결을 살아 있는 것으로 착각하지 않는다**(실측 2026-08-26 dev).
+   *  게이트웨이가 재기동되면 프록시(HTTP/2)가 스트림을 **닫지 않은 채** 붙들고 있어, `reader.read()` 가
+   *  영원히 안 깨어난다 — 예외도 없고 done 도 없다. 그래서 재접속 루프가 통째로 멈췄고, 화면은 멈춤 버튼과
+   *  경과 시간만 든 채 **영영 '작업 중'** 으로 남았다(사용자 신고의 절반이 이 한 가지에서 나왔다).
+   *  서버가 25초마다 하트비트(`: beat`)를 보내므로, 그보다 넉넉한 시간 동안 **한 바이트도 안 오면 죽은 것**이다.
+   */
+  const SILENCE_MS = 40_000;
+
   async function pump(): Promise<void> {
     let wait = 1000;                       // 끊기면 다시 붙되, 간격을 늘려 폭주하지 않게(게이트웨이 재기동·프록시 타임아웃)
     while (!closed) {
+      const attempt = new AbortController();
+      const onAbortAll = (): void => attempt.abort();
+      ctl.signal.addEventListener('abort', onAbortAll);
+      let silence: ReturnType<typeof setTimeout> | null = null;
+      const beat = (): void => {
+        if (silence) clearTimeout(silence);
+        silence = setTimeout(() => attempt.abort(), SILENCE_MS);   // 조용하면 끊고 새로 붙는다
+      };
       try {
         const res = await fetch(apiUrl(`/api/ui/terminal/sessions/${encodeURIComponent(o.sessionId)}/codex-chat/events`), {
-          headers: authHeaders({}), signal: ctl.signal, credentials: 'same-origin',
+          headers: authHeaders({}), signal: attempt.signal, credentials: 'same-origin',
         });
         if (!res.ok || !res.body) throw new Error(`스트림 실패 (${res.status})`);
         wait = 1000;
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let acc = '';
+        beat();
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          beat();
           acc += dec.decode(value, { stream: true });
           const cut = splitSse(acc);                              // 자르기 계약은 순수 모듈이 쥔다(web/sse-frames.ts)
           acc = cut.rest;
@@ -209,12 +240,17 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
             try { handle(JSON.parse(d)); } catch { /* 깨진 프레임 한 장은 넘긴다 */ }
           }
         }
-      } catch (e: any) {
-        if (closed || e?.name === 'AbortError') return;
+      } catch {
+        if (closed) return;                                       // 화면이 닫혔다 — 여기서 끝
+      } finally {
+        if (silence) clearTimeout(silence);
+        ctl.signal.removeEventListener('abort', onAbortAll);
       }
       if (closed) return;
       await new Promise((r) => setTimeout(r, wait));
-      wait = Math.min(wait * 2, 15_000);
+      // 상한을 짧게 둔다 — 이 통로가 나르는 것은 **승인**이라, 공백이 길면 그만큼 턴이 서 있는다.
+      //  프록시가 장수 연결을 주기적으로 끊는 환경(dev 실측)에서는 끊김이 정상 상태에 가깝다.
+      wait = Math.min(wait * 2, 5_000);
     }
   }
   void pump();
