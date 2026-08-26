@@ -14,7 +14,7 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
-import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_DEFAULT_SERVICES, googleConsentTier, consumesUnverifiedUserCap, type GoogleService } from "../org/credentials/google-oauth.js";
+import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_DEFAULT_SERVICES, googleConsentTier, consumesUnverifiedUserCap, googleOfferedServices, isGoogleServiceOffered, type GoogleService } from "../org/credentials/google-oauth.js";
 import { startGoogleConsent, completeGoogleInstall, googleReady } from "../org/credentials/oauth-broker.js";
 
 /** 수집기 인스턴스 — 서비스마다 하나(캘린더는 수집 대상이 아니다: 일정은 자료가 아니라 도구 면에서 읽는다). */
@@ -59,9 +59,43 @@ export function scopeCovers(scope: string, service: GoogleCollectService): boole
   return service === "gmail" ? GMAIL_SCOPE_MARKERS.some((m) => s.includes(m)) : s.includes("/auth/drive");
 }
 
+/**
+ * 토글 저장 때 서비스 하나를 **어떻게 할지** 정하는 순수 규칙. 핸들러 안에 묻어 두면 테스트가 못 닿는데,
+ *  여기서 한 칸 틀리면 대가가 비대칭적으로 크다 — 한쪽은 불가역 한도 소모, 다른 쪽은 돌던 수집의 조용한 정지.
+ *
+ *  · not_offered — 1차 런칭 대상이 아님. **켜지도 끄지도 않는다.** 끄면 이미 잘 돌던 조직이 이 배포 하나로 멈춘다.
+ *  · no_scope    — 동의하지 않은 범위. 켜면 run 은 ok 인데 자료가 0건인 '조용한 성공'이 된다.
+ */
+export type GoogleCollectAction =
+  | { action: "enable" }
+  | { action: "disable" }
+  | { action: "none"; reason?: "not_offered" | "not_wanted" | "no_scope"; message?: string };
+
+export function googleCollectAction(p: {
+  service: GoogleCollectService; wanted: boolean; enabled: boolean; scopeOk: boolean;
+}): GoogleCollectAction {
+  if (!isGoogleServiceOffered(p.service)) {
+    if (!p.wanted && !p.enabled) return { action: "none" };
+    return {
+      action: "none", reason: "not_offered",
+      message: p.enabled
+        ? "1차 런칭 대상이 아닙니다 — 이미 켜져 있어 그대로 둡니다(끄려면 수집기 화면에서 끄세요)"
+        : "1차 런칭 대상이 아닙니다 — 제한범위라 구글 심사(CASA)와 되돌릴 수 없는 100명 한도가 붙습니다",
+    };
+  }
+  if (!p.wanted) return p.enabled ? { action: "disable" } : { action: "none", reason: "not_wanted" };
+  if (!p.scopeOk) {
+    return {
+      action: "none", reason: "no_scope",
+      message: "이 서비스에 아직 동의하지 않았습니다 — [Google 연결]을 다시 눌러 범위를 넓히세요",
+    };
+  }
+  return { action: "enable" };
+}
+
 export interface GoogleCollectState {
   /** 서비스별 수집기 상태. */
-  collectors: Array<{ service: GoogleCollectService; enabled: boolean; collector_id: number | null; token_source: string | null; scope_ok: boolean }>;
+  collectors: Array<{ service: GoogleCollectService; enabled: boolean; collector_id: number | null; token_source: string | null; scope_ok: boolean; offered: boolean }>;
   /** 이 관리자의 구글 연결(없으면 null) — 수집은 이 연결로 돈다. */
   connected: { kind: string; scope: string } | null;
   /** 동의를 시작할 수 있는가 — OAuth 클라이언트(직결) 또는 CP 릴레이가 있어야 한다. */
@@ -82,6 +116,8 @@ export async function googleCollectState(memberId: string): Promise<GoogleCollec
       collector_id: inst?.id ?? null,
       token_source: (inst?.config?.token_source as string | undefined) ?? null,
       scope_ok: conn ? scopeCovers(conn.scope, c.service) : false,
+      // 1차 런칭에서 파는 서비스인가. false 인데 enabled 면 "예전에 켜 둔 것" — 화면은 보여만 주고 새로 못 켜게 한다.
+      offered: isGoogleServiceOffered(c.service),
     };
   });
   const on = collectors.filter((c) => c.enabled).map((c) => (c.service === "gmail" ? "gmail" : "drive") as GoogleService);
@@ -93,7 +129,9 @@ export async function googleCollectState(memberId: string): Promise<GoogleCollec
   };
 }
 
-const SERVICES = z.array(z.enum(["drive", "gmail"])).describe("모을 서비스. 비우면 드라이브만(Gmail 은 제한범위라 명시적으로 골라야 한다).");
+// enum 에서 gmail 을 지우지 않는다 — 이미 켜 둔 조직의 저장 요청이 zod 400 으로 튕기면 드라이브까지 못 고친다.
+//  거부는 스키마가 아니라 googleCollectAction 이 **사유와 함께** 한다(skipped).
+const SERVICES = z.array(z.enum(["drive", "gmail"])).describe("모을 서비스. 비우면 드라이브만. ★Gmail 은 1차 런칭 대상이 아니라 넣어도 켜지지 않는다.");
 
 const orgGoogleCollect: Capability = {
   name: "org_google_collect", title: "구글 팀 자료 수집 상태",
@@ -113,7 +151,8 @@ const orgGoogleCollectSet: Capability = {
   description:
     "\"팀 자료로 모으기\" 토글(admin). enabled=true 인데 내 구글 연결이 없으면 needs_connect=true 와 authorization_url 을 " +
     "돌려준다 — 그 화면에서 [허용]하면 연결이 저장되고, 다시 이 토글을 부르면 수집기가 만들어진다(token_source=member:<나>, " +
-    "토큰 복사 0). services 로 모을 서비스를 고른다 — **Gmail 은 제한범위**라 안 고르면 켜지 않는다(구글 심사·100명 한도 절약). " +
+    "토큰 복사 0). services 로 모을 서비스를 고른다. ★**Gmail 은 1차 런칭 대상이 아니다**(2026-08-26 결정) — 제한범위라 " +
+    "CASA·불가역 100명 한도를 태운다. 넣어 불러도 켜지지 않고, 이미 켜져 있던 것은 건드리지 않고 skipped 로 알린다. " +
     "false 면 끈다(삭제 아님 — 커서·자료 보존).",
   scope: "admin",
   input: { enabled: z.boolean().describe("true=켜기 · false=끄기"), services: SERVICES.optional() },
@@ -143,7 +182,9 @@ const orgGoogleCollectSet: Capability = {
     const conn = await memberGoogleConnection(actor);
     if (!conn) {
       // 아직 연결 전 — 여기서 동의를 시작한다(토글이 곧 연결). 고른 서비스만 요청한다(최소 권한).
-      const services: GoogleService[] = [...want].map((s) => (s === "gmail" ? "gmail" : "drive"));
+      // 파는 것만 요청한다 — googleScopeString 이 한 번 더 막지만, 동의 화면에 뜨는 목록까지 정확해야
+      //  사람이 자기가 무엇을 허용하는지 안다.
+      const services: GoogleService[] = googleOfferedServices([...want].map((s) => (s === "gmail" ? "gmail" : "drive")));
       const c = await startGoogleConsent(actor, services.length > 0 ? services : GOOGLE_DEFAULT_SERVICES, actor);
       return { ok: false, needs_connect: true, authorization_url: c.authorizationUrl, state: await googleCollectState(actor) };
     }
@@ -152,14 +193,16 @@ const orgGoogleCollectSet: Capability = {
     const skipped: Array<{ service: string; reason: string }> = [];
     for (const c of GOOGLE_COLLECTORS) {
       const inst = findInstance(all, c.preset, c.instance);
-      if (!want.has(c.service)) {
-        if (inst?.enabled) { await upsertCollector({ id: inst.id, enabled: false }, actor, source); changed.push(`-${c.instance}`); }
+      const plan = googleCollectAction({
+        service: c.service, wanted: want.has(c.service),
+        enabled: !!inst?.enabled, scopeOk: scopeCovers(conn.scope, c.service),
+      });
+      if (plan.action === "none") {
+        if (plan.message) skipped.push({ service: c.service, reason: plan.message });
         continue;
       }
-      // ⚠ 동의하지 않은 서비스는 켜지 않는다 — 켜 두면 run 은 '성공'인데 상류가 403 을 주고 자료는 0건이 된다.
-      //  그 상태는 화면상 정상으로 보여서 아무도 원인을 못 찾는다.
-      if (!scopeCovers(conn.scope, c.service)) {
-        skipped.push({ service: c.service, reason: "이 서비스에 아직 동의하지 않았습니다 — [Google 연결]을 다시 눌러 범위를 넓히세요" });
+      if (plan.action === "disable") {
+        if (inst?.id) { await upsertCollector({ id: inst.id, enabled: false }, actor, source); changed.push(`-${c.instance}`); }
         continue;
       }
       // 항상 **호출자**의 연결로 갈아끼운다(전임자가 나가서 멈춘 수집기를 다른 관리자가 이어받는 경로).
@@ -185,12 +228,18 @@ const orgGoogleCollectConnect: Capability = {
   handler: async (input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const raw = (input as { services?: unknown })?.services;
-    const services: GoogleService[] = Array.isArray(raw) && raw.length > 0
+    const asked: GoogleService[] = Array.isArray(raw) && raw.length > 0
       ? (raw as GoogleCollectService[]).map((s) => (s === "gmail" ? "gmail" : "drive"))
       : GOOGLE_DEFAULT_SERVICES;
+    // 안 파는 범위가 동의 화면에 뜨면 사람이 허용해 버리고, 그 순간 한도가 탄다(불가역).
+    const services: GoogleService[] = googleOfferedServices(asked);
+    const dropped = asked.filter((s) => !services.includes(s));
+    if (services.length === 0) {
+      throw new HttpError(400, `지금 연결할 수 있는 서비스가 없습니다 — ${dropped.join("·")} 는 1차 런칭 대상이 아닙니다`);
+    }
     const c = await startGoogleConsent(user.userId, services, user.userId);
     return {
-      ok: true, authorization_url: c.authorizationUrl,
+      ok: true, authorization_url: c.authorizationUrl, services, dropped,
       consumes_user_cap: consumesUnverifiedUserCap(services), scope_tier: googleConsentTier(services),
       message: "이 URL 의 구글 화면에서 [허용]하세요 — 완료되면 자동으로 저장됩니다.",
     };
