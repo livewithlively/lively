@@ -1356,6 +1356,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       poke: () => pokePoll(),
       onSettled: () => {
         // 런타임이 "턴 끝" 이라고 했다 — 파일의 마감 줄을 기다리지 않는다(멈춤은 그 줄이 늦거나 안 온다).
+        if (!running) return;                    // 이미 마감했다(중복 호출은 조용히 무시 — 재접속마다 hello 가 온다)
         running = false;
         if (cur) view.settle(cur.t);
         view.busy(false);

@@ -159,14 +159,17 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
       }
       case 'hello':
       case 'status': {
-        const was = isRunning;
         isRunning = !!(ev as any).running;
         if (!isRunning) {
           clearPreview();                        // 턴이 끝났다 — 남은 조각은 파일이 그린다
           // ★ 끝났다는 사실도 **여기가 먼저 안다**. 종전엔 마감을 대화 파일에만 맡겼는데, 멈춤(interrupt)처럼
           //  파일에 마감 줄이 늦게/안 오는 경우 화면이 최대 2분을 '작업 중'으로 남았다(실측 2026-08-26).
           //  런타임이 이 세션의 AI 다 — 그 말을 그대로 쓴다.
-          if (was) o.onSettled?.();
+          //  ⚠ **이 층이 '도는 중'을 본 적 있을 때만** 알리지 않는다. 화면의 busy 는 보낼 때 세워지는데,
+          //   스트림이 그 사이 끊겼다 붙으면(프록시가 장수 연결을 끊는다 — dev 실측 ERR_HTTP2_PROTOCOL_ERROR)
+          //   이 층은 turn/started 를 못 봤으므로 was 가 false 고, 그러면 화면이 영영 '작업 중'으로 남는다.
+          //   끝났다는 사실은 그 자체로 전할 값이다 — 마감할지는 받는 쪽이 자기 상태를 보고 정한다.
+          o.onSettled?.();
         }
         tell();
         return;
@@ -223,7 +226,9 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
       }
       if (closed) return;
       await new Promise((r) => setTimeout(r, wait));
-      wait = Math.min(wait * 2, 15_000);
+      // 상한을 짧게 둔다 — 이 통로가 나르는 것은 **승인**이라, 공백이 길면 그만큼 턴이 서 있는다.
+      //  프록시가 장수 연결을 주기적으로 끊는 환경(dev 실측)에서는 끊김이 정상 상태에 가깝다.
+      wait = Math.min(wait * 2, 5_000);
     }
   }
   void pump();
