@@ -83,11 +83,17 @@ export async function latestProjectForSessionChain(
 
 export async function latestProjectForSession(sessionId: string): Promise<{ id: number; folder: string } | null> {
   if (!sessionId) return null;
+  // ⚠ `p.trashed_at IS NULL` — **지워진 프로젝트는 승계하지 않는다**(#1867, 2026-08-26 실측으로 추가).
+  //  껍데기를 휴지통에 넣는 것이 정상 정리 절차인데(태스크 #2051), 그 상태로 대화를 이어받으면
+  //  이 조회가 지워진 프로젝트를 돌려줘 세션이 **휴지통에 있는 프로젝트에 붙는다**(보드엔 안 보이는데
+  //  맥락은 거기서 주입된다). 그때는 소속이 없는 것으로 보고, 훅이 새 껍데기를 만들게 두는 편이 맞다.
+  //  ⚠ '한 칸 더 옛날 바인딩'으로 되살리지 않는다 — 마지막 구간만 본다. 사람이 지운 프로젝트를 우회해
+  //   그 이전 소속을 부활시키면, 옮긴 뒤 지운 경우에 **의도와 정반대**가 된다(detach 가 NULL 로 남는 것과 같은 이유).
   const r = await itemsPool.query(
     `SELECT p.id, COALESCE(p.folder,'') AS folder
        FROM (SELECT project_id FROM session_project
               WHERE session_id=$1 ORDER BY valid_from DESC LIMIT 1) sp
-       JOIN project p ON p.id = sp.project_id`,
+       JOIN project p ON p.id = sp.project_id AND p.trashed_at IS NULL`,
     [sessionId]);
   const row = r.rows[0] as { id: number; folder: string } | undefined;
   return row ? { id: Number(row.id), folder: String(row.folder || "") } : null;
