@@ -81,3 +81,6 @@ fi
 
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 localhost:8080/healthz || echo "000")
 say "완료 — HEAD ${remote_sha:0:8} · healthz $code"
+# ⚠ healthz 가 200 이 아니면 **동기화는 됐는데 게이트웨이가 못 서고 있다**는 뜻이다. 조용히 넘기지 않는다 —
+#  이 잡이 성공으로 끝나면 아무도 안 본다(로그는 no-op 일 때 비어 있어서 사람이 들여다볼 이유가 없다).
+[ "$code" = "200" ] || { say "⚠ healthz=$code — dev 가 응답하지 않는다(사람이 봐야 한다)"; exit 1; }
