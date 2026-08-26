@@ -203,11 +203,16 @@ export async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem
  *  repo 는 매 실행 전량 관측하므로 파일이 사라지면 그 행만 last_synced_at 이 안 갱신돼 걸린다. run-sync 가 호출.
  *  #1561 감사: notion 스윕과 같은 무감사 아카이브였다 — 같은 헬퍼로 op='set_lifecycle' 을 남긴다(둘이 갈라지면
  *  한쪽 커넥터의 아카이브만 이력에 보이는, 더 헷갈리는 상태가 된다). */
-export async function sweepDomainWikiArchived(db: pg.Pool, runStartIso: string): Promise<number> {
+export async function sweepDomainWikiArchived(db: pg.Pool, runStartIso: string, instance: string): Promise<number> {
+  //  ⚠ instance 필수(#1881 G9) — 종전엔 external_system='domain-wiki' 만 보고 전량을 훑었다. 위키 레포가 하나뿐일
+  //   때는 맞았지만, 레포를 둘 붙이는 순간 **A 의 싱크가 B 의 지식을 전부 아카이브한다**(B 의 파일은 A 의 run 에서
+  //   관측될 리 없으니 last_synced_at 이 안 갱신된다). 노션이 워크스페이스 다중화에서 먼저 밟은 자리라
+  //   (sweepNotionArchived, #2000) 같은 방식으로 좁힌다 — 범위 없는 스윕은 애초에 부를 수 없게 막는다.
+  if (!instance) throw new Error("sweepDomainWikiArchived: instance 가 비었습니다 — 범위 없는 스윕은 다른 위키 레포의 지식을 아카이브합니다");
   const r = await db.query(
-    `UPDATE knowledge SET lifecycle='archived', updated_at=now()
-     WHERE external_system='domain-wiki' AND lifecycle='active'
-       AND (last_synced_at IS NULL OR last_synced_at < $1) RETURNING name`, [runStartIso]);
+    `UPDATE knowledge SET lifecycle='archived', updated_at=now(), updated_by='connector:domain-wiki'
+     WHERE external_system='domain-wiki' AND external_instance=$2 AND lifecycle='active'
+       AND (last_synced_at IS NULL OR last_synced_at < $1) RETURNING name`, [runStartIso, instance]);
   await auditLifecycleSweep(db, (r.rows as Array<{ name: string }>).map((x) => x.name),
     "connector:domain-wiki", "active", "archived");
   return r.rowCount ?? 0;

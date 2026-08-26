@@ -1087,6 +1087,16 @@
   "input_hash": "ee63edf0e6e64aae"
  },
  {
+  "name": "org_wiki_repo_ensure",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/wiki-repos"
+  ],
+  "input_hash": "411133c59afc2f35"
+ },
+ {
   "name": "org_ingest_policy_list",
   "scope": null,
   "mcp": true,
