@@ -885,18 +885,6 @@ function renderSessions(): void {
   const liveShown = live.filter(match);
   const pastShown = past.filter((s) => (stateFilter ? false : true) && (!q || s.label.toLowerCase().includes(q)));
 
-  //  상태 칩 — 필터를 팝오버에 숨기지 않는다. 이 구역에서는 '무엇이 나를 기다리나'가 첫 질문이라
-  //   숫자가 밖에 나와 있어야 한다(홈 목록에서는 반대로 [필터] 안에 둔다 — 거기선 목록이 주인공이다).
-  const chip = (on: boolean, label: string, n: number, dot: string | null, run: () => void): HTMLElement =>
-    el('button', { class: 'v2-schip' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on), onclick: run },
-      dot ? el('span', { class: 'v2-dot ' + dot }) : null,
-      el('span', { text: label }), el('span', { class: 'n', text: String(n) }));
-  const chipKeys = ['busy', 'waiting', 'done'].filter((k) => counts.has(k) || stateFilter === k);
-  const chips = el('div', { class: 'v2-schips' },
-    chip(!stateFilter, '전체', live.length, null, () => { stateFilter = null; redraw(); }),
-    ...chipKeys.map((k) => chip(stateFilter === k, stLabel(k), counts.get(k) || 0, dotCls(k),
-      () => { stateFilter = stateFilter === k ? null : k; redraw(); })));
-
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   //  ★ 홈과 **같은 붓**을 쓴다(#2033) — 행 문법도 묶는 축 토글도 여기서 새로 만들지 않는다.
   //   ⚠ 압정·× 는 안 그린다. 목록의 성질이 다르기 때문이다: 홈은 내가 지금 붙들고 있는 것만 담은 **작업 큐**라
@@ -923,9 +911,11 @@ function renderSessions(): void {
           sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
         //  묶는 축 토글 — 홈과 **같은 단추·같은 플래그**다(#2033). 묶는 축은 구역의 성질이 아니라
         //   사람의 습관이라, 한 구역에서 바꾸면 다른 구역도 그렇게 열린다.
-        axisBtn(), findBtn()),
+        //  상태 거르기는 **[프로젝트] 구역과 같은 팝오버**다(#2033) — 구역마다 다른 방식을 두지 않는다.
+        //   ⚠ 범위(내 프로젝트만·완료 포함)는 끈다: 여기는 세션 목록이라 그 개념이 없다.
+        axisBtn(), findBtn(), filterBtn(stateFilter ? 1 : 0, live, 0, false)),
       ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('세션 찾기'))] : []),
-      chips,
+      ...(stateFilter ? [filterSummary(1, false)] : []),
       listEl),
     secFoot(footLink('#/app/sessions', 'chat', '세션 이력')));
 
@@ -1704,7 +1694,16 @@ function findBtn(): HTMLElement {
 }
 
 // [필터] 버튼 + 팝오버 — 조작부는 여기 다 모인다. 목록 표면에는 필터가 없다(켜져 있으면 요약 한 줄만).
-function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLElement {
+/**
+ * 필터 — 보기 조건. **구역마다 새 방식을 만들지 않는다**(#2033 상민님: "ui 가 너무 많으면 혼란해").
+ *  종전엔 상태 거르기가 세 구역에서 세 가지였다: 홈 없음 · [AI 세션] 인라인 칩 · [프로젝트] 이 팝오버.
+ *  칩을 걷고 이 하나로 모았다 — 칩의 근거였던 주석 두 줄이 이미 낡아 있었기 때문이다:
+ *   ⓐ "홈에서는 반대로 [필터] 안에 둔다" → 홈엔 필터가 **없다**(비교 대상이 사라졌다).
+ *   ⓑ "이 구역의 첫 질문은 '무엇이 나를 기다리나'" → #2016 2차가 레일에 **[확인할 것] 구역**을
+ *      배지까지 달아 만들었다. 그 질문은 이제 레일이 상시로 답한다.
+ *  ⚠ `scope` = 프로젝트 범위(내 것만·완료 포함)를 보여 주나. [AI 세션]엔 그 개념이 없어 끈다.
+ */
+function filterBtn(activeN: number, liveAll: Sess[], doneCount: number, scope = true): HTMLElement {
   const counts = new Map<string, number>();
   for (const s of liveAll) counts.set(s.stateKey, (counts.get(s.stateKey) || 0) + 1);
   if (stateFilter && !counts.has(stateFilter)) counts.set(stateFilter, 0);   // 켜 둔 상태가 0이 돼도 끌 수 있게 남긴다
@@ -1733,9 +1732,11 @@ function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLEle
       opt(!stateFilter, '전체', '', null, () => { stateFilter = null; redraw(); }),
       ...keys.map((k) => opt(stateFilter === k, stLabel(k), String(counts.get(k) || 0), dotCls(k),
         () => { stateFilter = stateFilter === k ? null : k; redraw(); })),
-      el('div', { class: 'v2-flt-k', text: '범위' }),
-      opt(mineOnly, '내 프로젝트만', '', null, () => { mineOnly = !mineOnly; saveFlag(MINE_KEY, mineOnly); redraw(); }),
-      opt(showDone, '완료 프로젝트도 보기', doneCount ? String(doneCount) : '', null, () => { showDone = !showDone; saveFlag(DONE_KEY, showDone); redraw(); }),
+      ...(scope ? [
+        el('div', { class: 'v2-flt-k', text: '범위' }),
+        opt(mineOnly, '내 프로젝트만', '', null, () => { mineOnly = !mineOnly; saveFlag(MINE_KEY, mineOnly); redraw(); }),
+        opt(showDone, '완료 프로젝트도 보기', doneCount ? String(doneCount) : '', null, () => { showDone = !showDone; saveFlag(DONE_KEY, showDone); redraw(); }),
+      ] : []),
       el('div', { class: 'v2-flt-foot' },
         el('button', { class: 'btn-text', type: 'button', text: '전부 지우기', onclick: () => { stateFilter = null; mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); redraw(); } }),
         el('button', { class: 'btn-text', type: 'button', text: '닫기', onclick: () => { filterOpen = false; redraw(); } }))));
@@ -1749,14 +1750,14 @@ function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLEle
   return wrap;
 }
 // 필터가 켜져 있을 때만 나오는 한 줄 — 무엇으로 걸러 보고 있는지 + 한 번에 끄기.
-function filterSummary(n: number): HTMLElement {
+function filterSummary(n: number, scope = true): HTMLElement {
   const bits: string[] = [];
   if (stateFilter) bits.push(stLabel(stateFilter) + ' 세션만');
-  if (mineOnly) bits.push('내 프로젝트만');
-  if (showDone) bits.push('완료 포함');
+  if (scope && mineOnly) bits.push('내 프로젝트만');
+  if (scope && showDone) bits.push('완료 포함');
   return el('div', { class: 'v2-flt-sum' }, el('span', { text: bits.join(' · ') }),
     el('button', { class: 'btn-text', type: 'button', text: '지우기', title: `필터 ${n}개를 끕니다`,
-      onclick: () => { stateFilter = null; mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); redraw(); } }));
+      onclick: () => { stateFilter = null; if (scope) { mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); } redraw(); } }));
 }
 
 // 트리(프로젝트 ▸ 세션) — 검색은 여기만 다시 그린다(입력칸 포커스를 잃지 않게).
