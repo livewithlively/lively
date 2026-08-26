@@ -407,9 +407,17 @@ for (const [name, src, fn] of [
 //  ⚠ warn 메시지에도 같은 경로가 '수동 실행 안내'로 들어 있다 — 그냥 경로만 찾으면 **실행 라인을 libexec
 //   본으로 바꿔도 안내 문구에서 매치돼 green** 이 된다(실측: 이 단언의 첫 판이 그랬다). 따옴표까지 포함한
 //   실제 호출 형태(`sudo bash "$RELEASE_DIR/..."`)로 앵커한다 — 안내 문구는 따옴표가 없다.
-assert.ok(/sudo bash "\$RELEASE_DIR\/deploy\/linux\/install-isolation\.sh"/.test(deploy)
+assert.ok(/sudo GATEWAY_USER="\$SERVICE_USER" bash "\$RELEASE_DIR\/deploy\/linux\/install-isolation\.sh"/.test(deploy)
     && /sudo bash "\$RELEASE_DIR\/deploy\/refresh-member-kits\.sh"/.test(deploy),
     "리프레시는 새 릴리스 트리의 스크립트로 실행한다(옛 libexec 본은 자기 자신을 갱신하지 못한다)");
+  //  ⚠ install-isolation 은 GATEWAY_USER 를 **명시 전달**받아야 한다 — 안 넘기면 blue-green 템플릿 유닛
+  //   (lively-gateway@<color>) 환경에서 비인스턴스 조회가 빈값 → SUDO_USER(=root)로 폴백해 sudoers 주체를 root 로
+  //   오기록하고 box-spawn NOPASSWD 가 게이트웨이 유저에 안 맞아 격리 세션 재-spawn 이 깨진다. SERVICE_USER(활성
+  //   템플릿유닛 User=SoT)로 고정. warn 메시지엔 따옴표가 없어 위 따옴표 포함 앵커가 실제 호출 라인만 잡는다.
+  const iiCall = deploy.indexOf('GATEWAY_USER="$SERVICE_USER" bash "$RELEASE_DIR/deploy/linux/install-isolation.sh"');
+  const iSvcExport = deploy.indexOf("export SERVICE_USER");   // 존재를 먼저 고정 — 사라지면 indexOf=-1 로 순서단언 공허통과
+  assert.ok(iSvcExport > 0 && iiCall > iSvcExport,
+    "install-isolation 호출은 이미 확정된 SERVICE_USER 를 GATEWAY_USER 로 넘긴다(root 오기록 방지)");
 
   // #5 다중 TG flip — ALB TG 는 로드밸런서 1대에만 붙는 하드 리밋(TargetGroupAssociationLimit)이라 ALB 가
   //  여럿이면 TG 도 여럿이다. flip 이 그 전부에 반영돼야 하고, **부분 적용이 성공으로 보고되면 안 된다**.

@@ -435,8 +435,13 @@ main() {
   #  실패해도 무중단 flip 을 되돌릴 이유는 없다 → warn 만 남기고 배포는 성공으로 둔다(멱등이라 다음 배포가 재시도).
   if [ -x /opt/lively/libexec/box-spawn ]; then
     log "격리 인프라 리프레시(install-isolation.sh — 멱등)"
-    sudo bash "$RELEASE_DIR/deploy/linux/install-isolation.sh" >/dev/null 2>&1 \
-      || warn "격리 인프라 리프레시 경고 — 수동: sudo bash $RELEASE_DIR/deploy/linux/install-isolation.sh"
+    # ⚠ GATEWAY_USER 를 **명시 전달**한다. install-isolation 은 게이트웨이 유저(sudoers 주체)를 스스로
+    #  `systemctl show -p User --value lively-gateway`(비인스턴스)로 찾는데, blue-green 은 템플릿 유닛
+    #  lively-gateway@<color> 라 그 조회가 빈값 → SUDO_USER(=root, SSM/배포 컨텍스트)로 폴백해 **sudoers 주체를
+    #  root 로 오기록**한다(box-spawn NOPASSWD 가 게이트웨이 유저에 안 맞아 격리 세션 재-spawn 불가).
+    #  SERVICE_USER 는 활성 템플릿유닛(lively-gateway@$active)의 User 로 이미 SoT 다(위 §0) → 그걸 넘겨 고정.
+    sudo GATEWAY_USER="$SERVICE_USER" bash "$RELEASE_DIR/deploy/linux/install-isolation.sh" >/dev/null 2>&1 \
+      || warn "격리 인프라 리프레시 경고 — 수동: sudo GATEWAY_USER=$SERVICE_USER bash $RELEASE_DIR/deploy/linux/install-isolation.sh"
     log "격리 멤버 키트 리프레시(refresh-member-kits.sh — 멱등)"
     sudo bash "$RELEASE_DIR/deploy/refresh-member-kits.sh" 2>&1 | sed 's/^/  /' \
       || warn "멤버 키트 리프레시 경고 — 수동: sudo bash $RELEASE_DIR/deploy/refresh-member-kits.sh"
