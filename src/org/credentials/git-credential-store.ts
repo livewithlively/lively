@@ -132,13 +132,24 @@ export async function getGitSecret(owner: string, host: string): Promise<GitCred
 // provision 클론 주입용 — 요청 멤버 자격 우선, 없으면 게이트웨이 머신 자격 폴백, 둘 다 없으면 null(앰비언트).
 //  ⚠ **게이트웨이 프로세스 안에서 클론할 때 전용**이다. 조직 공용 자격으로 폴백하므로, 이 결과를 다른 머신으로
 //   내보내면 안 된다 — 원격 노드로 보낼 자격은 아래 leaseGitSecretForNode 를 써라(#905 C4).
-export async function resolveGitSecret(memberId: string | null | undefined, host: string): Promise<GitCredentialSecret | null> {
+export async function resolveGitSecret(
+  memberId: string | null | undefined, host: string,
+  //  repoFullName(owner/repo) — GitHub App 폴백이 토큰을 그 레포로 좁히는 데 쓴다(#1881 G8). 없어도 동작한다.
+  opts?: { repoFullName?: string | null },
+): Promise<GitCredentialSecret | null> {
   const h = normalizeHost(host);
   if (memberId) {
     const mine = await getGitSecret(memberOwner(memberId), h);
     if (mine) return mine;
   }
-  return getGitSecret(GATEWAY_OWNER, h);
+  const gw = await getGitSecret(GATEWAY_OWNER, h);
+  if (gw) return gw;
+  //  ── 등록된 git 자격이 하나도 없을 때만 여기까지 온다(#1881 G8) ──
+  //  [GitHub 연결]만 한 사람에겐 SSH 키도 HTTPS 토큰도 없다. 그런데 설치는 있으므로 그 자리에서 installation
+  //  token 을 찍어 쓴다 — 저장하지 않는다(1시간 만료라 저장하면 한 시간 뒤 전부 죽는다).
+  //  ⚠ 기존 자격이 있으면 여기 오지 않는다: 이 폴백은 종전 동작을 **덮지 않는다**(무회귀).
+  const { githubAppGitSecret } = await import("./github-app-git.js");
+  return (await githubAppGitSecret(h, opts?.repoFullName).catch(() => null)) as GitCredentialSecret | null;
 }
 
 // 🔴 **원격 노드로 내보낼** git 자격(#905 C4) — 노드 종류가 신뢰경계를 가른다. 조직 폴백은 여기서만 판정한다.

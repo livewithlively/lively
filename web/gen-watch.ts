@@ -97,7 +97,8 @@ function showUpdateBanner(v: string): void {
   box.setAttribute("aria-live", "polite");
   box.style.cssText = [
     "position:fixed", "left:50%", "top:16px", "transform:translateX(-50%)", "z-index:2147483000",
-    "display:flex", "align-items:center", "gap:12px",
+    // 좁은 화면에서는 버튼이 아랫줄로 접힌다 — 안 접으면 문구가 잘려 무슨 일인지 못 읽는다.
+    "display:flex", "align-items:center", "gap:8px 12px", "flex-wrap:wrap", "justify-content:flex-end",
     "max-width:calc(100vw - 32px)", "padding:10px 12px 10px 16px",
     "border-radius:10px", "border:1px solid rgba(255,255,255,.14)",
     "background:#1f2430", "color:#f4f6fb",
@@ -107,7 +108,9 @@ function showUpdateBanner(v: string): void {
 
   const msg = document.createElement("span");
   msg.textContent = "새 버전이 나왔습니다.";
-  msg.style.cssText = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+  //  ⚠ 자르지 않는다(종전 nowrap+ellipsis) — 이 배너의 문구는 한 줄뿐이라 잘리면 남는 게 없다.
+  //   좁은 화면에서는 접히게 두고, 버튼은 위 flex-wrap 으로 아랫줄에 온전히 남는다.
+  msg.style.cssText = "flex:1 1 auto;min-width:0";
 
   const go = document.createElement("button");
   go.type = "button";

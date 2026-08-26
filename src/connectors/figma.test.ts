@@ -8,6 +8,9 @@ import {
   parseFigmaFileKey, figmaCommentText, figmaCommentToItem, isExcludedFile, splitList, figmaFileUrl,
   type FigmaComment,
 } from "./figma.js";
+import { routeIngestV6 } from "../org/ingest/ingest-classify.js";
+import { sourceKindOf } from "../v6/mirror/mirror-source.js";
+import { SOURCE_KINDS } from "../capabilities/source.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -61,7 +64,8 @@ const C: FigmaComment = {
 };
 t("figmaCommentToItem: 자료 1건 = 코멘트 1건 · external_id 는 파일+코멘트로 유일하다", () => {
   const it = figmaCommentToItem("FILEKEY123", "홈 리디자인", C, "team-9");
-  assert.equal(it.type, "comment");
+  // message 인 이유는 아래 '적재 라우팅' 절 참조 — comment 는 PM 축 예약어다.
+  assert.equal(it.type, "message");
   assert.equal(it.provenance.system, "figma");
   assert.equal(it.provenance.instance, "team-9");
   assert.equal(it.provenance.external_id, "FILEKEY123:c-77");
@@ -101,6 +105,26 @@ t("isExcludedFile: 이름 조각 부분일치(대소문자 무시)", () => {
   assert.equal(isExcludedFile("홈 리디자인", ["archive"]), false);
   assert.equal(isExcludedFile("무엇이든", []), false);   // 패턴이 없으면 아무것도 제외하지 않는다
   assert.equal(isExcludedFile(undefined, ["archive"]), false);
+});
+
+// ── ★ 적재 라우팅 — 이 트랙에서 실제로 물린 함정 ───────────────────────────────────────────
+//  2026-08-26 실측: 커넥터가 `type:"comment"` 를 뱉었더니 수집 run 은 status=ok · ingested=4 인데
+//  자료(source)가 0건이었다. `comment` 는 ClickUp **태스크 코멘트**(pm_comment) 로 예약된 이름이라
+//  피그마 항목이 그 경로로 가서 부모 태스크를 못 찾고 조용히 버려진 것이다(task_comment 에도 0건).
+//  '커넥터를 만들었다'와 '자료가 쌓인다'는 다른 문제다 — 그 사이를 이 두 단언이 지킨다.
+t("★ 커넥터가 뱉는 RawItem 이 실제로 자료(source)로 라우팅된다", () => {
+  const it = figmaCommentToItem("FILEKEY123", "홈 리디자인", C);
+  assert.equal(routeIngestV6(it.type, "figma"), "source",
+    `figma 항목이 source 로 안 간다(type=${it.type}) — 수집은 성공으로 보이는데 자료가 0건이 된다`);
+});
+t("★ 'comment' 는 PM 축 예약어다 — 그 이름을 쓰면 조용히 버려진다(왜 message 인지의 근거)", () => {
+  assert.equal(routeIngestV6("comment", "figma"), "pm_comment");
+  assert.notEqual(figmaCommentToItem("F", undefined, C).type, "comment");
+});
+t("★ 자료 kind 가 figma 전용이다 — other 로 뭉뚱그리면 자료함 필터·증류기 match_kinds 가 갈린다", () => {
+  assert.equal(sourceKindOf("figma"), "figma_comment");
+  assert.ok((SOURCE_KINDS as readonly string[]).includes("figma_comment"),
+    "표준 kind 목록에 없으면 source_list(kind=…) 필터가 그 값을 거부한다");
 });
 
 console.log(`\nfigma connector tests: ${pass} passed`);

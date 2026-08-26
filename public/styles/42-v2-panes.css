@@ -117,10 +117,15 @@
 /* 얼굴 줄(#2116) — **[공유] 바로 왼쪽에 상주**한다(구글 문서와 같은 자리). 겹쳐 세워 자리를 아끼되
    첫 얼굴은 왼쪽으로 새지 않게 여백을 되돌린다. 최대 3명, 넘으면 마지막 칸이 `+N` 이 된다(panes.ts FACE_MAX). */
 .pn-faces { display: inline-flex; align-items: center; margin-right: 4px; }
-.pn-face { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--bg); margin-left: -6px; }
+/* ⚠ 얼굴은 **글자 한 자를 가운데 세우는 상자**다 — width·height·radius 만 주면 이니셜이 좌상단 베이스라인에
+   그대로 얹힌다(원준 2026-08-26 "'윤' 글자가 가운데정렬이 안되자나"). 다른 얼굴 클래스(v2-ss-face·v2-wscard-face)가
+   쓰는 것과 같은 처방을 쓴다: inline-grid + place-items:center + 글자 크기·굵기·색까지 여기서 못 박는다. */
+.pn-face { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--bg); margin-left: -6px;
+  box-sizing: border-box; display: inline-grid; place-items: center; overflow: hidden; flex: none;
+  font-size: 11px; font-weight: 700; line-height: 1; color: var(--on-fill); }
+.pn-face > img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pn-faces > .pn-face:first-child { margin-left: 0; }
-.pn-face-more { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
-  background: var(--bg-tint); color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: -.02em; }
+.pn-face-more { background: var(--bg-tint); color: var(--muted); letter-spacing: -.02em; }
 
 /* ── 아이콘·잔글씨 ── */
 .pn-i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -538,7 +543,11 @@ webview.pn-webframe { display: flex; }
 .pn-share-fine { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--muted-2); }
 .pn-share-people { display: flex; flex-direction: column; gap: 5px; }
 .pn-share-person { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink); }
-.pn-share-face { width: 22px; height: 22px; border-radius: 11px; flex: none; }
+/* 팝오버 안의 얼굴도 같은 처방 — 위 .pn-face 와 크기만 다르다. */
+.pn-share-face { width: 22px; height: 22px; border-radius: 50%; flex: none; box-sizing: border-box;
+  display: inline-grid; place-items: center; overflow: hidden;
+  font-size: 10px; font-weight: 700; line-height: 1; color: var(--on-fill); }
+.pn-share-face > img { width: 100%; height: 100%; object-fit: cover; display: block; }
 /* 고른 사람 = 칩. 없을 때는 '비공개'라는 사실 한 줄이 그 자리를 대신한다(빈 칸을 보여 주지 않는다). */
 .pn-share-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .pn-share-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 5px 3px 3px; border-radius: 999px;

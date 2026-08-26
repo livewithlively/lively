@@ -90,7 +90,12 @@ export function figmaCommentToItem(
 ): RawItem {
   const body = figmaCommentText(c);
   return {
-    type: "comment",
+    // ⚠ "comment" 가 아니다 — RawItem.type 은 **적재 라우팅 축**이고 그 이름은 이미 PM 이 점유했다:
+    //  routeIngestV6 의 `if (type === "comment") return "pm_comment"` 는 ClickUp **태스크 코멘트** 전용이라,
+    //  피그마 코멘트를 그 이름으로 뱉으면 부모 태스크를 못 찾아 **조용히 버려진다**(2026-08-26 실측:
+    //  수집 run 은 status=ok·ingested=4 인데 source 0건). 자료로 남을 것은 message/note 다.
+    //  피그마 코멘트는 실제로도 message 류다 — 사람이 남긴 자유 텍스트 + 작성자 + 스레드.
+    type: "message",
     provenance: {
       category: "collab_tool",
       system: "figma",
@@ -128,8 +133,29 @@ export function isExcludedFile(name: string | undefined, patterns: string[]): bo
   return patterns.some((p) => n.includes(p.toLowerCase()));
 }
 
+const strOf = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+
+/**
+ * 응답에서 배열을 찾는다 — 후보 키를 순서대로, 없으면 `meta` 한 겹 아래까지.
+ *  왜 관용적인가: 피그마 v2 folders 응답 스키마가 **문서에 없다**(2026-08-26 확인). 키를 하나로 단정하면
+ *  상류가 `{meta:{folders}}` 같은 형태일 때 조용히 '0개'가 되고, 그건 이 트랙에서 이미 한 번 물린 실패 모드다.
+ *  못 찾으면 호출부가 응답 키 목록을 경고에 실어 사람이 바로 원인을 본다.
+ */
+function pickArray(r: Record<string, unknown>, keys: string[]): Array<Record<string, unknown>> {
+  const meta = (r.meta && typeof r.meta === "object" ? r.meta : null) as Record<string, unknown> | null;
+  for (const k of keys) {
+    for (const src of [r, meta]) {
+      const v = src?.[k];
+      if (Array.isArray(v)) return v as Array<Record<string, unknown>>;
+    }
+  }
+  return [];
+}
+
 async function figmaGet<T>(token: string, path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`, { headers: { "X-Figma-Token": token } });
+  // path 가 /v2 로 시작하면 버전 접두를 갈아 끼운다(API 상수는 /v1). 피그마는 엔드포인트마다 버전이 다르다.
+  const url = path.startsWith("/v2/") ? `https://api.figma.com${path}` : `${API}${path}`;
+  const res = await fetch(url, { headers: { "X-Figma-Token": token } });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     const err = new Error(`Figma ${res.status} ${path}${text ? ` — ${text.slice(0, 200)}` : ""}`);
@@ -167,10 +193,16 @@ export const figmaConnector: Connector = {
 
     const teamIds = splitList(cfg.team_ids);
     for (const teamId of teamIds) {
+      // ⚠ v1 `/teams/:id/projects` 가 아니다 — 그 엔드포인트는 **구 스코프 `projects:read` 를 요구**한다.
+      //  granular scope(folders:read 등)만 켠 PAT 로 부르면 403 이고, 응답이 그 사실을 정확히 말해 준다(2026-08-26 실측):
+      //   "Invalid scope(s): …folders:read… This endpoint requires the projects:read scope"
+      //  문서는 folders:read 가 projects:read 를 '대체한다'고 하지만 그건 **v2 folders 엔드포인트 이야기**다.
+      //  그래서 열거는 v2 로만 한다 — 우리가 안내하는 스코프 5종과 짝이 맞는 유일한 경로.
       let projects: Array<{ id: string; name?: string }> = [];
       try {
-        const r = await figmaGet<{ projects?: Array<{ id: string; name?: string }> }>(token, `/teams/${encodeURIComponent(teamId)}/projects`);
-        projects = r.projects ?? [];
+        const r = await figmaGet<Record<string, unknown>>(token, `/v2/teams/${encodeURIComponent(teamId)}/folders`);
+        projects = pickArray(r, ["folders", "projects"]).map((f) => ({ id: String(f.id ?? ""), name: strOf(f.name) })).filter((f) => f.id);
+        if (!projects.length) console.warn(`figma: 팀 ${teamId} 에서 폴더를 못 찾았습니다 — 응답 키: ${Object.keys(r).join(",") || "(없음)"}`);
       } catch (e) {
         // 팀 하나가 막혀도 나머지는 계속 — 단 401 은 토큰 자체가 죽은 것이라 전체를 세운다(조용한 무수집 방지).
         if (statusOf(e) === 401 || statusOf(e) === 403) {
@@ -181,13 +213,18 @@ export const figmaConnector: Connector = {
       }
       for (const p of projects) {
         try {
-          const r = await figmaGet<{ files?: Array<{ key: string; name?: string }> }>(token, `/projects/${encodeURIComponent(p.id)}/files`);
-          for (const f of r.files ?? []) {
-            if (isExcludedFile(f.name, exclude)) continue;
-            files.set(f.key, f.name);
+          const r = await figmaGet<Record<string, unknown>>(token, `/v2/folders/${encodeURIComponent(p.id)}/files`);
+          const got = pickArray(r, ["files"]);
+          if (!got.length) console.warn(`figma: 폴더 ${p.id}(${p.name ?? ""})에서 파일을 못 찾았습니다 — 응답 키: ${Object.keys(r).join(",") || "(없음)"}`);
+          for (const f of got) {
+            const key = strOf(f.key) ?? strOf(f.file_key);
+            if (!key) continue;
+            const name = strOf(f.name);
+            if (isExcludedFile(name, exclude)) continue;
+            files.set(key, name);
           }
         } catch (e) {
-          console.warn(`figma: 프로젝트 ${p.id}(${p.name ?? ""}) 파일 목록 실패 — ${(e as Error).message}`);
+          console.warn(`figma: 폴더 ${p.id}(${p.name ?? ""}) 파일 목록 실패 — ${(e as Error).message}`);
         }
       }
     }
