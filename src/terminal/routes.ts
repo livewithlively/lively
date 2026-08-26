@@ -10,6 +10,7 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { codexChatMode } from "./codex-chat-mode.js";   // #2055 codex 대화 런타임 선택
+import { rememberCodexThread } from "./codex-chat-thread.js";   // #2055 — 대화 좌표를 남기는 한 곳
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
@@ -680,13 +681,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         //  · 경로 — **화면이 대화를 읽는 유일한 단서**다. 평소엔 세션 안 훅이 보고하지만 app-server 턴에서는
         //    그 훅이 돌지 않는다(실측 2026-08-26 — 그래서 답이 파일에 있는데도 대화창이 비어 있었다).
         //    우리는 threadId 를 아니 직접 찾아 넣는다.
-        if (r.threadId) {
-          const { rolloutPath } = await import("./harness-io/codex-chat-runtime.js");
-          const tpath = await rolloutPath(await sessionOsUser(req.params.id), r.threadId).catch(() => "");
-          if (r.threadId !== st?.claude_session_id || (tpath && tpath !== st?.transcript_path)) {
-            await setClaudeSessionId(req.params.id, r.threadId, uid, tpath || null).catch(() => false);
-          }
-        }
+        await rememberCodexThread({
+          sessionId: req.params.id, threadId: r.threadId, owner: uid, osUser,
+          knownThreadId: st?.claude_session_id, knownPath: st?.transcript_path,
+        });
         // steered = 새 턴이 아니라 **도는 턴에 얹었다**. 화면이 그 말풍선을 다르게 말할 수 있게 사실대로 싣는다.
         res.json({ ok: true, delivered: true, transport: "app-server", thread_id: r.threadId, steered: !!r.steered });
         return;
