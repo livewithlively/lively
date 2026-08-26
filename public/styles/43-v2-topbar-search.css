@@ -40,11 +40,17 @@
    이번엔 잡을 데가 모자랐다(상민님 2026-08-24). 그 사이값으로 둔다 — 끌기에 충분하면서 빈 자리로 보이지 않는 폭. */
 .v2-tb-grip { flex: 0 0 88px; min-width: 48px; }
 /*  #1954 — 상단 탭이 빠지면서 이 줄이 비었다. 뒤로·앞으로·검색이 그 자리로 올라온다(side.ts navHost).
-    ⚠ 줄 전체가 drag 라 그 안의 버튼·입력은 no-drag 로 되돌려야 눌린다. 손잡이는 오른쪽에 그대로 남는다. */
+    ⚠ no-drag 는 **누르는 것에만** 건다. 이 칸은 `flex: 1 1 auto` 로 줄의 남은 폭을 통째로 먹으므로, 여기에
+      no-drag 를 걸면 검색칸 오른쪽의 빈 자리까지 전부 '못 끄는 자리'가 된다 — 실제로 그렇게 나갔다
+      (#2024 상민님 2026-08-26: "빈 부분을 잡아도 창이 안 옮겨지고 맨 오른쪽 끝만 된다"). 그 '맨 오른쪽 끝'이
+      곧 아래 .v2-tb-grip 이었다. 규칙은 하나다 — **줄은 drag, 실제로 누르는 것만 no-drag.** */
 #v2-root.has-topbar > .v2-topbar > .v2-side-nav {
   order: -1; flex: 1 1 auto; min-width: 0; align-items: center; padding: 0 8px;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
+/*  누르는 것 셋만 되돌린다 — [뒤로][앞으로]와 검색칸. 그 사이 여백도, 검색칸 오른쪽에 남는 폭도 끌 수 있다. */
+#v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-navb,
+#v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { -webkit-app-region: no-drag; }
 /*  창 줄의 검색칸은 사이드바 때보다 넓게 쓸 수 있지만 줄을 가로지를 이유는 없다 — 절반으로(#1954 2차). */
 #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: 210px; }
 /* 탭이 줄 맨 위에 닿으므로 켜진 탭의 파란 밑줄은 **아래쪽**에 긋는다 — 위에 그으면 창 모서리와 붙어 선이 잘려 보인다. */
@@ -65,8 +71,12 @@
   #v2-root.has-topbar.side-off > .v2-side { visibility: visible; overflow: auto; }
   /* 좁은 폭에선 검색칸이 줄을 다 쓰게 둔다 — 210px 캡은 넓을 때 '줄을 가로지르지 않게' 하는 값이다. */
   #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: none; }
-  /* 끌 자리는 좁은 화면에서 사치다 — 창버튼 여백(--v2-tb-right)이 이미 비어 있어 그리로 끈다. */
-  #v2-root.has-topbar > .v2-topbar > .v2-tb-grip { display: none; }
+  /* 끌 자리는 좁은 화면에서 아깝지만 **0 이 되면 창을 아예 못 옮긴다**. 종전엔 여기서 손잡이를 통째로 감췄는데
+     ('창버튼 여백 --v2-tb-right 로 끌면 된다'는 계산) 그건 윈도우(WCO 가 오른쪽) 얘기고 **맥은 신호등이 왼쪽이라
+     --v2-tb-right 가 0** 이다. 바로 위에서 검색칸의 210px 상한까지 풀리므로 맥 좁은 창엔 끌 자리가 한 점도 안
+     남았다. 게다가 이 폭은 **창 최소폭에서 바로 닿는다** — 웹 창 minWidth 가 900px 이라(APP_WINDOW_MIN,
+     desktop/main/web-shell.mjs) 끝까지 줄이면 이 블록이 켜진다. 감추지 말고 **줄이기만** 한다. */
+  #v2-root.has-topbar > .v2-topbar > .v2-tb-grip { flex: 0 0 48px; }
 }
 /* ☰ 는 창 줄 맨 왼쪽 — 폭과 무관하게 늘 같은 자리다(#1954 3차). 맥 신호등·윈도우 WCO 여백 안쪽에 앉는다. */
 #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu {
