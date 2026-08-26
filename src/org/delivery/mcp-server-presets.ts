@@ -87,6 +87,34 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     dcr: true, seed: true,
     note: "Linear 공식 원격 MCP(OAuth2.1·DCR·no client secret). 구성원이 각자 OAuth 연결.",
   },
+  {
+    // GitLab 공식 MCP (#1881 G3) — 상류 실측 2026-08-26:
+    //   GET gitlab.com/.well-known/oauth-authorization-server → registration_endpoint: /oauth/register  (=DCR)
+    //   GET .../oauth-protected-resource/api/v4/mcp          → scopes_supported: ["mcp"]
+    //  Beta(18.6~) · Free tier(19.2~) · 최소 18.3 · GitLab.com·self-managed·Dedicated 전부 · 도구 35개를 상류가 유지한다.
+    //  ⚠ oauth_scope 를 비우면 안 된다 — 상류가 scopes_supported 를 **명시**하는 쪽이라(슬랙과 같은 부류) 노션·리니어처럼
+    //   생략하면 authorize 가 거부된다.
+    //  ⚠⚠ 이 토큰으로는 clone 도 REST 수집도 못 한다. GitLab 은 **동적 등록 클라이언트의 scope 를 mcp/mcp_orbit 으로
+    //   제한**하고(gitlab-org/gitlab#599020: "insufficient for API calls (need api or read_api)"), 사전등록 앱에 mcp scope 를
+    //   주는 경로는 아직 admin 폼에 노출조차 안 됐다. 그래서 레포 연결·자료 수집 축은 별도 OAuth(api read_repository)로 간다
+    //   — 사용자에게 동의가 2회로 보이는 건 우리 설계가 아니라 상류 제약이다. 상류가 #599020 을 내면 한 번으로 합친다.
+    //  self-managed: 이 url 의 호스트만 자기 GitLab 주소로 바꾸면 된다(org_mcp_server.url 은 행 단위 필드).
+    //   DCR 이라 관리자가 앱을 등록할 필요가 없다 — self-managed 에서도 [연결] 한 번이면 끝난다.
+    name: "gitlab", label: "GitLab", url: "https://gitlab.com/api/v4/mcp",
+    auth_kind: "gitlab_oauth", scope: "code", level: "L0", pii_scrub: true,
+    dcr: true, seed: true,
+    oauth_scope: "mcp",
+    note: "GitLab 공식 원격 MCP(DCR·무시크릿). 구성원이 각자 [연결]만 하면 이슈·MR·파이프라인·위키 도구가 열린다. self-managed 는 URL 의 호스트를 자기 주소로 바꾸세요(18.3 이상). ⚠ 이 연결은 AI 도구 전용입니다 — 저장소 연결·자료 수집은 GitLab 정책상 별도 동의가 필요합니다(#1881).",
+    guide: {
+      url: "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+      intro: "GitLab 은 동적 등록(DCR)을 지원해서 관리자가 준비할 것이 없습니다. gitlab.com 이면 그대로 두고, 자체 운영 GitLab 이면 주소만 바꾸세요.",
+      steps: [
+        "gitlab.com 을 쓰면 아무것도 하지 않아도 됩니다 — 구성원이 [외부 앱 연결 ▸ GitLab ▸ 연결]만 누르면 됩니다",
+        "자체 운영 GitLab 이면 이 서버의 URL 을 https://<우리 GitLab 주소>/api/v4/mcp 로 바꿉니다(GitLab 18.3 이상 필요)",
+        "⚠ [발행] 성공은 연결이 살아 있다는 증거가 아닙니다 — 도구를 **실제로 한 번 호출해** 결과가 오는지 확인하세요",
+      ],
+    },
+  },
   // ── DCR 미지원 → 사전등록 OAuth client 필요(관리탭 OAuth client 필드). 카탈로그로 문서화만. ──
   {
     name: "slack", label: "Slack", url: "https://mcp.slack.com/mcp",

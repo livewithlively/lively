@@ -70,10 +70,24 @@ t("MCP_SERVER_PRESETS: 비어있지 않은 배열, 각 엔트리에 name·auth_k
     assert.equal(typeof c.auth_kind, "string");
   }
 });
-t("MCP_SERVER_PRESETS: DCR 상류(notion·linear)는 oauth_scope 미지정, 비-DCR(slack·google)은 지정", () => {
+// DCR 이라고 scope 를 항상 비우는 게 아니다 — 기준은 **상류가 scopes_supported 를 명시하는가** 다.
+//  · 노션·리니어: 보호리소스가 scope 를 명시하지 않는다 → 넣으면 authorize 가 깨진다(그래서 비운다).
+//  · GitLab: 보호리소스가 `{"scopes_supported":["mcp"]}` 를 명시한다(2026-08-26 프로브) → 실어야 한다.
+//    상류 기본값도 mcp 이긴 하나(gitlab MR !208967) 그 기본값이 없던 18.3~18.5 self-managed 를 생각하면
+//    명시가 안전하다. DCR 등록 자체도 scope 파라미터를 받는다(mcp/mcp_orbit 로 제한).
+//  코드가 상류 메타데이터를 실행 중에 알 수는 없으므로, 예외는 **의도적으로만** 늘도록 여기 적어 둔다 —
+//  새 DCR 상류가 아무 근거 없이 scope 를 달고 들어오는 것은 계속 막힌다.
+const DCR_WITH_DECLARED_SCOPES: Record<string, string> = { gitlab: "mcp" };
+
+t("MCP_SERVER_PRESETS: DCR 상류는 oauth_scope 미지정(상류가 명시하는 gitlab 만 예외), 비-DCR(slack·google)은 지정", () => {
   for (const c of MCP_SERVER_PRESETS) {
-    if (c.dcr) assert.ok(!c.oauth_scope, `DCR 상류 ${c.name} 에 예기치 않은 scope(넣으면 깨짐): ${c.oauth_scope}`);
-    else assert.ok(c.oauth_scope && c.oauth_scope.length > 0, `비-DCR 상류 ${c.name} 에 scope 누락(authorize 가 거부됨)`);
+    if (!c.dcr) {
+      assert.ok(c.oauth_scope && c.oauth_scope.length > 0, `비-DCR 상류 ${c.name} 에 scope 누락(authorize 가 거부됨)`);
+      continue;
+    }
+    const declared = DCR_WITH_DECLARED_SCOPES[c.name];
+    if (declared) assert.equal(c.oauth_scope, declared, `${c.name} 은 상류가 명시한 scope 를 그대로 실어야 한다`);
+    else assert.ok(!c.oauth_scope, `DCR 상류 ${c.name} 에 예기치 않은 scope(넣으면 깨짐): ${c.oauth_scope}`);
   }
 });
 
