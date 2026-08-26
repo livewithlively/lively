@@ -13,6 +13,7 @@ import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { decodeTokenBlob, encodeTokenBlob, tokenMeta, CLIENT_SCOPE, gatewaySsrfFetch } from "./oauth-broker.js";
 import { getMemberSecret, setMemberSecret, type MemberSecretResolved } from "./member-secret-store.js";
 import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
+import { GOOGLE_KIND, GOOGLE_TOKEN_URL } from "./google-oauth.js";
 import { logger } from "../../log.js";
 
 /** 만료 여유(초) — 호출이 나가는 동안 만료돼 상류가 401 을 주는 것까지 막는다. */
@@ -40,6 +41,19 @@ export function mergeRefreshedTokens(prev: OAuthTokens, next: Partial<OAuthToken
     access_token: (next.access_token as string) ?? prev.access_token,
     refresh_token: next.refresh_token ?? prev.refresh_token,
   } as OAuthTokens;
+}
+
+/**
+ * 토큰 발급처 해소 — 먼저 MCP 서버 프리셋(auth_kind 축의 SoT), 없으면 **직결 kind** 표(#1881).
+ *  직결 kind 는 org_mcp_server 행이 없어 프리셋에서 못 찾는다. 구글 G2 가 첫 사례다: 도구 면은 이미 클래식 REST 인데
+ *  인증 앵커만 Developer Preview 엔드포인트에 남아 있어 MCP 행 의존을 끊었기 때문이다.
+ *  (슬랙 `slack_oauth`·노션 `notion_public` 은 이 경로를 안 탄다 — 슬랙은 토큰 회전 off 라 만료가 없고, 노션 갱신은 CP 프록시.)
+ */
+const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_TOKEN_URL };
+
+export function oauthTokenUrlFor(authKind: string | null | undefined): string | undefined {
+  if (!authKind) return undefined;
+  return presetOAuthTokenUrl(authKind) ?? DIRECT_OAUTH_TOKEN_URLS[authKind];
 }
 
 export interface OAuthClientInfo { client_id: string; client_secret?: string }
@@ -88,7 +102,7 @@ async function refreshBlob(
     // access_type=offline 픽스(#746, 2026-07-22) 이전 연결분 — 갱신 토큰 자체가 없다. 이미 죽은 연결이다.
     throw new Error(`자격이 만료됐고 갱신 토큰이 없습니다 — ${reconnect}`);
   }
-  const tokenUrl = (deps.tokenUrlOf ?? presetOAuthTokenUrl)(authKind);
+  const tokenUrl = (deps.tokenUrlOf ?? oauthTokenUrlFor)(authKind);
   if (!tokenUrl) throw new Error(`자격이 만료됐는데 '${authKind}' 의 토큰 발급처를 모릅니다 — 관리자에게 프리셋 설정을 요청하세요.`);
   const client = await (deps.loadClient ?? defaultLoadClient)(authKind);
   if (!client) throw new Error(`자격이 만료됐는데 '${authKind}' 의 OAuth 클라이언트 정보가 없습니다 — 관리자에게 등록을 요청하세요.`);
