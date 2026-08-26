@@ -24,6 +24,7 @@ import { livChatCapabilities } from "./delivery/liv-chat.js"; // #1631 v1 — �
 import { welcomeCapabilities } from "./delivery/welcome.js";       // #1813 — 처음 설정(#/welcome)의 실측·LLM 분석·반영
 import { projectChatCapabilities } from "./delivery/project-chat.js"; // #1757 — 프로젝트 화면의 리브 대화(프로젝트 폴더에서 한 턴)
 import { meProfileCapabilities, meSelfCapabilities } from "./delivery/me-self.js";
+import { meAccountDeleteCapabilities } from "./delivery/me-account-delete.js";   // #1876 탈퇴를 앱 안에서
 import { gitCredentialCapabilities } from "./delivery/git-credentials.js";
 import { runtimeConfigCapabilities } from "./delivery/runtime-config.js";
 import { boxStatusCapabilities } from "./delivery/box-status.js";
@@ -52,6 +53,7 @@ export const deliveryCapabilities: Capability[] = [
   ...membersCapabilities,
   ...tokenMintCapabilities,
   ...meProfileCapabilities,
+  ...meAccountDeleteCapabilities,
   ...deviceAuthCapabilities,
   ...meSelfCapabilities,
   ...gitCredentialCapabilities,
