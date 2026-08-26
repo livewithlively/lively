@@ -4,20 +4,47 @@
 //   탭으로 밀어내고 관리탭까지 다녀오게 하면, 프사 한 장 바꾸려고 작업 맥락을 잃는다. 슬랙·노션·리니어가 전부
 //   프로필/환경설정을 오버레이로 두는 이유가 이것이고, 우리 발치의 [나] 행도 같은 문법을 따른다.
 //
-//  구조(슬랙 환경설정 문법): [좌 목록 | 우 내용] 2단. 왼쪽은 **주제**(프로필·AI 개인 규칙·화면·계정)이고,
-//   오른쪽만 갈아 끼운다. 발치에는 로그아웃 — 슬랙과 같은 자리다(계정을 떠나는 일은 목록 맨 아래).
+//  구조(슬랙 환경설정 문법): [좌 목록 | 우 내용] 2단. 왼쪽은 **주제**(프로필 · AI 개인 규칙 · 내 AI 계정 ·
+//   외부 서비스 · 화면 · 계정)이고, 오른쪽만 갈아 끼운다. 발치에는 로그아웃 — 슬랙과 같은 자리다
+//   (계정을 떠나는 일은 목록 맨 아래).
+//
+//  ── #1898 — 내보내던 링크를 창 안으로 ────────────────────────────────────────────────
+//  [내 AI 계정]·[외부 서비스]는 종전에 이 창이 관리탭으로 **내보내던 링크**였다([계정 · 보안 ▸ 더 자세한
+//   설정]). 개인 설정을 보러 들어와서 다른 앱으로 튕겨 나가면 그건 창을 닫는 것과 같다 — 그래서 두 화면을
+//   이 창으로 들였다. **새로 만들지 않는다**: 관리탭이 쓰던 바로 그 부품(myAiAccountsCard · renderServices)을
+//   그대로 부른다. 부품 소유는 저쪽에 두고 여기선 자리만 내준다 — 두 벌이 되면 한쪽만 고쳐진다.
+//   관리탭 쪽 입구는 새 셸에서 감춘다(admin-shell sectionHidden) — 클래식엔 이 창이 없어 그쪽엔 남긴다.
 //
 //  ⚠ 저장 규약: 서버(POST /api/ui/me/profile)는 **미전송 필드를 보존**하는 patch 다. 그래서 [프로필]은
 //   body_md 를 안 보내고 [AI 개인 규칙]은 이름·아바타를 안 보낸다 — 한 창에 둘이 같이 있어도 서로를 지우지 않는다.
-//  ⚠ 칸에 적던 것이 탭을 옮기면 사라지면 안 된다 → 네 화면을 **한 번 만들어 두고 보이기만 토글**한다(다시 짓지 않는다).
+//  ⚠ 칸에 적던 것이 탭을 옮기면 사라지면 안 된다 → 화면을 **한 번 만들어 두고 보이기만 토글**한다(다시 짓지 않는다).
+//  ⚠ 단 서버를 더 부르는 두 화면([내 AI 계정]·[외부 서비스])은 **처음 펼 때** 그린다 — 열 때마다 넷을 더
+//   부르면(ai-accounts · sessions · credentials · oauth) 안 볼 수도 있는 화면 때문에 창이 늦게 뜨고,
+//   그러면 '잠깐 들르는 창'이 아니게 된다.
 import { api, el, errorNote, logout, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
 import { field, skeleton } from '../ui-primitives.js';
 import { PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips, } from '../me-profile.js';
 import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, pushThemeToOpenTabs, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref } from '../theme.js';
-// 좌 목록 — 순서가 곧 위계다. 나를 가리키는 것(프로필) → 내 AI 가 나를 대하는 법 → 나를 부르는 법(알림) → 내가 보는 화면 → 계정.
+//  #1898 — 관리탭 두 화면의 본체를 그대로 부른다(소유는 그쪽 — 여기서 다시 만들지 않는다).
+import { myAiAccountsCard } from '../me-ai.js';
+import { autoPane } from './me-auto.js'; // #1898 [자동으로 하는 일] — 세션 주입 화면과 같은 행을 본다(사본 없음)
+import { renderServices } from '../me-logins.js';
+import { openGitCredentialManager } from '../admin-credentials.js';
+// 좌 목록 — 순서가 곧 위계다. 나를 가리키는 것(프로필) → 내 AI 가 나를 대하는 법(규칙) → 매 대화에
+//  자동으로 들어가는 것(주입문) → 내 AI 가 무엇으로 도나(계정) → 무엇에 닿나(외부 서비스) →
+//  나를 부르는 법(알림) → 내가 보는 화면 → 내가 들어오는 법(계정 · 보안).
+//  ⚠ 알림은 'AI 를 어떻게 세팅하나'가 아니라 **내가 무엇을 언제 받나**다. 그래서 AI 묶음(규칙·주입문·
+//   계정·외부 서비스) 뒤, 화면 바로 앞에 둔다(원준 2026-08-26) — 앞에 끼면 AI 설정이 갈라져 읽힌다.
 const SECS = [
     { key: 'profile', label: '프로필', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'] },
     { key: 'ai', label: 'AI 개인 규칙', icon: ['M12 3.4l1.9 5.7 5.7 1.9-5.7 1.9L12 18.6l-1.9-5.7-5.7-1.9 5.7-1.9z', 'M18.5 16.5l.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7z'] },
+    // 종 — 나를 부르는 법(#1842). 규칙(위)이 'AI 가 나를 대하는 법'이면, 이건 'AI 가 나를 부르는 법'이다.
+    // 시계 — 이 화면은 '언제 무슨 일이 자동으로 일어나나'를 다룬다(#1898). 규칙(위)이 '무엇을'이면 이건 '언제'.
+    { key: 'auto', label: '자동 주입문', icon: ['M12 4.6a7.4 7.4 0 1 0 0 14.8 7.4 7.4 0 0 0 0-14.8', 'M12 8.2V12l2.6 1.6'] },
+    // 열쇠 — 이 화면이 하는 일은 '로그인' 하나다(상태 확인 + 다시 로그인). 아래 방패(계정 · 보안)와 겹치지 않는 붓.
+    { key: 'aiacct', label: '내 AI 계정', icon: ['M16 4.9a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2', 'M13.5 11 5 19.5', 'M7 17.5l2 2', 'M9.5 15l2 2'] },
+    // 맞물린 고리 — 사이드바 [외부 앱 연결]과 **같은 글리프**(side.ts glyph 'link'). 같은 것을 가리키니 같은 그림이어야 한다.
+    { key: 'svc', label: '외부 서비스', icon: ['M10.5 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.3 1.3', 'M13.5 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 1 0 5.7 5.7l1.3-1.3'] },
     { key: 'notify', label: '알림', icon: ['M12 4.2a5 5 0 0 0-5 5v3.1l-1.5 2.7h13L17 12.3V9.2a5 5 0 0 0-5-5z', 'M10.1 18a1.95 1.95 0 0 0 3.8 0'] },
     { key: 'look', label: '화면', icon: ['M4 5.5h16v10H4z', 'M9 19.5h6', 'M12 15.5v4'] },
     { key: 'account', label: '계정 · 보안', icon: ['M12 3.4 19 6v5.6c0 4.2-2.9 7.4-7 9-4.1-1.6-7-4.8-7-9V6z', 'M9.3 12.1l1.9 1.9 3.5-3.6'] },
@@ -75,10 +102,18 @@ export function openMeModal(opts = {}) {
     const contEl = el('div', { class: 'v2me-cont' }, skeleton('내 설정을 불러오는 중'));
     const navBtns = new Map();
     const panes = new Map();
+    // 처음 펼 때 한 번만 그리는 화면 — 서버를 더 부르는 것만 담긴다(위 ⚠ 참고).
+    const lazy = new Map();
     const show = (k) => {
         cur = k;
         navBtns.forEach((b, key) => { b.classList.toggle('on', key === k); b.setAttribute('aria-current', String(key === k)); });
         panes.forEach((p, key) => { p.hidden = key !== k; });
+        const first = lazy.get(k);
+        // 표에서 **먼저 지우고** 부른다 — 그리는 동안 같은 항목을 다시 눌러도 두 번 그리지 않는다.
+        if (first) {
+            lazy.delete(k);
+            first();
+        }
         contEl.scrollTop = 0;
     };
     SECS.forEach((s) => {
@@ -118,6 +153,15 @@ export function openMeModal(opts = {}) {
         const saved = () => { paintHead(); opts.onSaved?.(); };
         panes.set('profile', profilePane(data, saved));
         panes.set('ai', aiPane(data, liv));
+        const auto = autoPane({ close, pane });
+        panes.set('auto', auto.node);
+        lazy.set('auto', auto.init);
+        const acct = aiAccountPane();
+        panes.set('aiacct', acct.node);
+        lazy.set('aiacct', acct.init);
+        const svc = servicesPane();
+        panes.set('svc', svc.node);
+        lazy.set('svc', svc.init);
         panes.set('notify', notifyPane());
         panes.set('look', lookPane(close));
         panes.set('account', accountPane(data, logins, close));
@@ -255,50 +299,28 @@ function aiPane(data, liv) {
     });
     return pane('AI 개인 규칙', '내 AI 가 나에 대해 무엇을 알고 일할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.', onboardingCard(liv), el('div', { class: 'v2me-k', text: '내가 적는 것' }), field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI 가 나를 부르는 말)', addressIn), field('말투', toneChips), field('사용 언어 (AI 가 답하는 언어)', el('div', {}, langChips, el('p', { class: 'prof-hint' }, ...uiText('고르거나 직접 적은 언어로 내 AI 가 답합니다. 비우면 조직 기본값(주로 한국어)을 따릅니다.')))), field('추가 메모', el('div', {}, memoTa, el('p', { class: 'prof-hint' }, ...uiText('비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.')))), saveRow(btn, status));
 }
-// ── ③ 화면 — 이 브라우저에서 내가 보는 모습. 서버에 저장되지 않는다(기기별 취향). ──
-// ── 알림(#1842) — 어떤 순간에 데스크톱 앱이 OS 배너를 띄울지. ──
-//  ⚠ **기기가 아니라 사람 단위**다(서버 저장). 기기별로 두면 사무실 맥에서 끈 것이 노트북에선 그대로 떠
-//   "껐는데 뜬다"가 된다. 그래서 끄고 켜는 자리도 여기 하나뿐이고, 앱은 이 값을 읽기만 한다.
-//  ⚠ 스위치는 **누르는 순간 저장한다**(저장 버튼 없음). 스위치를 내린 것 자체가 결정이라, 한 번 더 누르게
-//   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인 규칙]이 저장 버튼을 쓰는 것과 다른
-//   이유이고, 그 구분은 일반적인 관례와 같다.
-const NOTIFY_ROWS = [
-    { key: 'session_waiting', label: 'AI 가 확인을 기다릴 때',
-        desc: '승인이나 선택을 물어놓고 멈춰 있을 때 알려 줍니다. 놓치면 AI 가 그대로 서 있게 됩니다.' },
-    { key: 'session_done', label: 'AI 가 작업을 마쳤을 때',
-        desc: '맡겨 둔 작업이 끝나는 순간 알려 줍니다. 세션을 여러 개 동시에 돌릴 때 가장 자주 받게 됩니다.' },
-    { key: 'person', label: '사람이 나를 부를 때',
-        desc: '댓글에서 나를 언급하거나, 내가 참여한 일에 댓글이 달리면 알려 줍니다.' },
-];
-function notifyPane() {
-    const status = el('span', { class: 'v2me-status' });
-    const list = el('div', { class: 'v2me-sw-list' }, skeleton('알림 설정을 불러오는 중'));
-    const body = pane('알림', '라이블리 데스크톱 앱이 화면 밖에 띄우는 알림입니다. 여기서 정한 값은 **내가 쓰는 모든 컴퓨터에 함께** 적용됩니다.', list, el('p', { class: 'prof-hint', style: 'margin-top:14px' }, ...uiText('알림은 데스크톱 앱이 띄웁니다 — 앱을 아직 안 쓰신다면 이 설정만으로는 알림이 오지 않습니다. 앱은 창을 닫아도 메뉴막대에 남아 있어, 라이블리를 보고 있지 않을 때도 알려 줍니다.')));
-    const paint = (prefs) => {
-        list.replaceChildren(...NOTIFY_ROWS.map((r) => {
-            const box = el('input', { type: 'checkbox', class: 'v2me-sw-in' });
-            box.checked = prefs[r.key] !== false;
-            box.addEventListener('change', () => {
-                const on = box.checked;
-                box.disabled = true;
-                status.textContent = '저장 중…';
-                void api('/api/ui/me/notify-prefs', { method: 'POST', body: JSON.stringify({ [r.key]: on }) })
-                    .then(() => { status.textContent = on ? '켰습니다' : '껐습니다'; })
-                    .catch((e) => {
-                    box.checked = !on; // 서버가 못 받았으면 화면도 되돌린다(거짓 상태를 남기지 않는다)
-                    status.textContent = '';
-                    toast((e && e.message) || '저장하지 못했습니다', true);
-                })
-                    .finally(() => { box.disabled = false; });
-            });
-            return el('label', { class: 'v2me-sw' }, box, el('span', { class: 'v2me-sw-txt' }, el('span', { class: 'v2me-sw-l', text: r.label }), el('span', { class: 'v2me-sw-d' }, ...uiText(r.desc))));
-        }), status);
-    };
-    void api('/api/ui/me/notify-prefs')
-        .then((r) => paint((r && r.prefs) || {}))
-        .catch((e) => list.replaceChildren(errorNote(e, '알림 설정을 불러오지 못했습니다')));
-    return body;
+// ── ③ 내 AI 계정 — 내 세션이 **무엇으로, 누구 계정으로** 도나(#1085 카드 그대로). ──
+//  카드 본체는 me-ai.ts 소유다 — 로그인 세션을 여는 법(claude 는 그 하네스로, codex 는 셸 + device-auth)이
+//  거기 적혀 있고, 그 규칙이 두 벌이 되면 한쪽이 낡는다. 여기선 자리와 문구만 준다.
+function aiAccountPane() {
+    const host = el('div');
+    const node = pane('내 AI 계정', '내 AI 세션이 어떤 AI 로, 누구 계정으로 실행되는지 봅니다. 세션에서 로그인 오류가 나면 여기서 다시 로그인하세요.', host);
+    node.classList.add('v2me-pane-wide'); // 계정 행은 [이름 · 배지 · 버튼] 한 줄이라 520px 에선 버튼이 접힌다
+    return { node, init: () => host.replaceChildren(myAiAccountsCard()) };
 }
+// ── ④ 외부 서비스 — AI 가 **내 계정으로** 쓸 수 있는 앱. 관리탭 [외부 서비스 관리]의 본체 그대로. ──
+//  ⚠ 사이드바 [외부 앱 연결](#/connect)은 같은 것을 전체 화면으로 편다(목록 ▸ 앱 상세 + 관리자 층).
+//   둘은 같은 표·같은 판정(LOGIN_SERVICES · partition)에서 나오므로 내용이 어긋나지 않는다 — 여기는
+//   '설정을 보러 들어온 김에 잇는' 자리이고, 저기는 '무엇을 시킬 수 있나'를 보러 가는 자리다.
+function servicesPane() {
+    const host = el('div', { class: 'admin-stack' });
+    //  git 자격은 서비스 연결과 성격이 다르다(AI 가 남의 계정을 쓰는 게 아니라 **코드를 받아오는** 열쇠) —
+    //  카드로 세우지 않고 발치 한 줄로 둔다. 여는 창(openGitCredentialManager)은 자격 금고 소유 그대로.
+    const node = pane('외부 서비스', 'AI 가 내 계정으로 외부 서비스를 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.', host, el('div', { class: 'v2me-k', style: 'margin-top:20px', text: '코드 저장소' }), field('리포지토리 접근 (개발자용)', el('div', {}, el('div', { class: 'v2me-inline' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })), el('p', { class: 'prof-hint' }, ...uiText('코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.')))));
+    node.classList.add('v2me-pane-wide');
+    return { node, init: () => { void renderServices(host); } };
+}
+// ── ⑤ 화면 — 이 브라우저에서 내가 보는 모습. 서버에 저장되지 않는다(기기별 취향). ──
 function lookPane(close) {
     const LAB = { system: '시스템', light: '라이트', dark: '다크' };
     const TIP = { system: '기기 설정을 따릅니다', light: '항상 밝은 화면으로 봅니다', dark: '항상 어두운 화면으로 봅니다' };
@@ -348,7 +370,7 @@ function lookPane(close) {
         onchange: (e) => setHarnessThemeSync(!!e.target.checked) });
     return pane('화면', '이 브라우저에서 화면이 어떻게 보일지 정합니다. 기기마다 따로 기억되고 팀에는 영향이 없습니다.', field('테마', el('div', {}, seg, el('p', { class: 'prof-hint' }, ...uiText('시스템을 고르면 기기의 밝게·어둡게 설정을 그대로 따라갑니다.')))), field('AI 세션', el('div', {}, el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, aiCb, el('span', { style: 'font-size:13.5px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))), el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:6px;' }, tabsCb, el('span', { style: 'font-size:13.5px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))), el('p', { class: 'prof-hint' }, ...uiText('첫째 칸을 끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')))), field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn, el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 설정 ▸ 화면 에서 언제든 돌아옵니다.')))));
 }
-// ── ④ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
+// ── ⑥ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
 function accountPane(data, logins, close) {
     const kids = [];
     if (data.email) {
@@ -356,6 +378,52 @@ function accountPane(data, logins, close) {
     }
     if (logins && logins.oidcAvailable)
         kids.push(field('회사 계정 로그인', companyLoginRow(logins)));
-    kids.push(el('div', { class: 'v2me-more-k', text: '더 자세한 설정' }), moreLink('#/system/me-ai', '내 AI 계정', '내 세션이 어떤 AI 계정으로 실행되는지 보고 로그인합니다.', close), moreLink('#/system/me-logins', '외부 서비스 관리', '슬랙·노션 같은 서비스를 내 계정으로 잇습니다.', close), moreLink('#/system/me-assets', '내 스킬 · 훅', '내 AI 가 쓰는 스킬과 훅을 켜고 끕니다.', close));
+    //  [내 AI 계정]·[외부 서비스]는 이 창의 화면이 됐다(#1898) — 더는 밖으로 내보내지 않는다.
+    //  남은 한 줄([내 스킬 · 훅])은 목록·편집기가 큰 화면이라 이 창에 들이지 않았다.
+    kids.push(el('div', { class: 'v2me-more-k', text: '더 자세한 설정' }), moreLink('#/system/me-assets', '내 스킬 · 훅', '내 AI 가 쓰는 스킬과 훅을 켜고 끕니다.', close));
     return pane('계정 · 보안', '내가 이 워크스페이스에 어떻게 들어오는지 정합니다.', ...kids);
+}
+// ── ③ 화면 — 이 브라우저에서 내가 보는 모습. 서버에 저장되지 않는다(기기별 취향). ──
+// ── 알림(#1842) — 어떤 순간에 데스크톱 앱이 OS 배너를 띄울지. ──
+//  ⚠ **기기가 아니라 사람 단위**다(서버 저장). 기기별로 두면 사무실 맥에서 끈 것이 노트북에선 그대로 떠
+//   "껐는데 뜬다"가 된다. 그래서 끄고 켜는 자리도 여기 하나뿐이고, 앱은 이 값을 읽기만 한다.
+//  ⚠ 스위치는 **누르는 순간 저장한다**(저장 버튼 없음). 스위치를 내린 것 자체가 결정이라, 한 번 더 누르게
+//   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인 규칙]이 저장 버튼을 쓰는 것과 다른
+//   이유이고, 그 구분은 일반적인 관례와 같다.
+const NOTIFY_ROWS = [
+    { key: 'session_waiting', label: 'AI 가 확인을 기다릴 때',
+        desc: '승인이나 선택을 물어놓고 멈춰 있을 때 알려 줍니다. 놓치면 AI 가 그대로 서 있게 됩니다.' },
+    { key: 'session_done', label: 'AI 가 작업을 마쳤을 때',
+        desc: '맡겨 둔 작업이 끝나는 순간 알려 줍니다. 세션을 여러 개 동시에 돌릴 때 가장 자주 받게 됩니다.' },
+    { key: 'person', label: '사람이 나를 부를 때',
+        desc: '댓글에서 나를 언급하거나, 내가 참여한 일에 댓글이 달리면 알려 줍니다.' },
+];
+function notifyPane() {
+    const status = el('span', { class: 'v2me-status' });
+    const list = el('div', { class: 'v2me-sw-list' }, skeleton('알림 설정을 불러오는 중'));
+    const body = pane('알림', '라이블리 데스크톱 앱이 화면 밖에 띄우는 알림입니다. 여기서 정한 값은 **내가 쓰는 모든 컴퓨터에 함께** 적용됩니다.', list, el('p', { class: 'prof-hint', style: 'margin-top:14px' }, ...uiText('알림은 데스크톱 앱이 띄웁니다 — 앱을 아직 안 쓰신다면 이 설정만으로는 알림이 오지 않습니다. 앱은 창을 닫아도 메뉴막대에 남아 있어, 라이블리를 보고 있지 않을 때도 알려 줍니다.')));
+    const paint = (prefs) => {
+        list.replaceChildren(...NOTIFY_ROWS.map((r) => {
+            const box = el('input', { type: 'checkbox', class: 'v2me-sw-in' });
+            box.checked = prefs[r.key] !== false;
+            box.addEventListener('change', () => {
+                const on = box.checked;
+                box.disabled = true;
+                status.textContent = '저장 중…';
+                void api('/api/ui/me/notify-prefs', { method: 'POST', body: JSON.stringify({ [r.key]: on }) })
+                    .then(() => { status.textContent = on ? '켰습니다' : '껐습니다'; })
+                    .catch((e) => {
+                    box.checked = !on; // 서버가 못 받았으면 화면도 되돌린다(거짓 상태를 남기지 않는다)
+                    status.textContent = '';
+                    toast((e && e.message) || '저장하지 못했습니다', true);
+                })
+                    .finally(() => { box.disabled = false; });
+            });
+            return el('label', { class: 'v2me-sw' }, box, el('span', { class: 'v2me-sw-txt' }, el('span', { class: 'v2me-sw-l', text: r.label }), el('span', { class: 'v2me-sw-d' }, ...uiText(r.desc))));
+        }), status);
+    };
+    void api('/api/ui/me/notify-prefs')
+        .then((r) => paint((r && r.prefs) || {}))
+        .catch((e) => list.replaceChildren(errorNote(e, '알림 설정을 불러오지 못했습니다')));
+    return body;
 }

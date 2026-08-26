@@ -33,11 +33,11 @@ import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js'; // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { mountTitlebar } from './titlebar.js'; // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
-import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, listAppInstances, updateAppInstance } from './app-instance.js';
+import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance } from './app-instance.js';
+import { mountAppRuntimeView } from './app-runtime.js';
+import { activeNavKey } from './shell-surfaces.js'; // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 import { startNotificationBanners } from './notifications.js'; // #1891 — 배너는 화면과 무관하게 뜬다
 import { startLiveSync } from './live-sync.js'; // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
-import { activeNavKey } from './shell-surfaces.js';
-import { ensureSingletonAppInstance } from './app-instance.js'; // #1891 — inbox 앱 인스턴스 멱등 확보   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
 const SOLO = new URLSearchParams(location.search).get('solo') === '1';
@@ -59,7 +59,7 @@ let suppressHash = 0; // 탭 전환이 만든 hashchange 를 라우터가 다시
 const projViews = new Map();
 // 그 탭의 셸이 **어느 프로젝트로** 마운트됐나(#1834 후속). 세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데,
 //  종전엔 그 상태가 그대로 굳어 문패가 '프로젝트 없는 세션'이 되고 그 셸의 세션 목록도 남의 것이 됐다.
-//  20초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
+//  8초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
 const shellProject = new Map();
 function dropProjView(tab) { const pv = projViews.get(tab); if (pv) {
     pv.destroy();
@@ -208,6 +208,7 @@ export async function bootV2() {
     if (!root)
         return;
     root.hidden = false;
+    watchStaleShell(); // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
     // 릴레이 복귀 알림(#1881) — CP OAuth 릴레이(슬랙·노션)가 테넌트로 돌려보낼 때 ?slack=ok|slack_error= /
     //  ?notion=ok|notion_error= 를 붙인다(해시 라우트 #/connect/<앱> 은 그대로 열린다). 여기서 한 번 알리고
     //  주소에서 지운다 — 안 지우면 새로고침·탭 복제 때마다 같은 토스트가 또 뜬다.
@@ -232,7 +233,6 @@ export async function bootV2() {
             history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash);
         }
     }
-    watchStaleShell(); // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
     // #1891 — 받은 알림 배너. 화면과 무관하게 돈다(「확인할 것」 안에서만 띄우면 보고 있어야 알림이 뜬다).
     //  데스크톱 앱 안에서는 스스로 물러난다 — 그 앱이 트레이에서 같은 사건을 이미 띄운다(#1842).
     startNotificationBanners();
@@ -452,8 +452,9 @@ export async function bootV2() {
     bindOmniKey();
     //  화면으로 돌아오면 즉시 최신으로 — 다음 틱을 기다리면 그 몇 초가 '멈춘 화면'으로 보인다.
     document.addEventListener('visibilitychange', () => {
-        if (document.hidden)
+        if (document.hidden || !tabsApi)
             return;
+        markViewedSessionSeen(); // #1954 3차 — 숨은 동안엔 안 찍었다(보고 있는 게 아니므로). 돌아온 지금부터 다시.
         void syncShell();
     });
     // 사이드바 상태 — 라이브 세션은 자주 바뀐다. 8초 폴링(#1954: 20초는 '방금 끝난 것'이 한참 뒤에야 떠서
@@ -462,8 +463,12 @@ export async function bootV2() {
     //  ⚠ #2041 로 **폴링이 유일한 시계가 아니게 됐다**(아래 startLiveSync) — 그래도 이 틱은 그대로 둔다:
     //   스트림이 끊긴 동안 이어받아야 하고, 스트림이 안 미는 변화(세션 생성·이름·프로젝트·앱 인스턴스)는
     //   여전히 여기서만 보인다.
-    setInterval(() => { if (document.hidden)
-        return; void syncShell(); }, 8000);
+    setInterval(() => {
+        if (document.hidden || !tabsApi)
+            return;
+        markViewedSessionSeen(); // #1954 3차 — 보고 있는 동안 열람 도장을 갱신(안 찍으면 초록점이 안 꺼진다)
+        void syncShell();
+    }, 8000);
     // ★ 배너가 뜨는 그 순간 목록도 그 순간을 본다 (#2041 상민님: "알림 오는 순간 사이드바를 보면 아직
     //  바뀌기 전으로 보인다"). 게이트웨이는 전이가 일어난 자리에서 이미 그 사실을 밀고 있고(#1842),
     //  데스크톱 앱의 배너는 그걸 5ms 만에 받는다 — 사이드바만 8초 폴링으로 뒤늦게 따라잡고 있었다.
@@ -475,14 +480,12 @@ export async function bootV2() {
  * 한 판 맞추기 — 서버를 다시 읽고 사이드바·탭·열려 있는 화면을 그 값으로 맞춘다.
  *  8초 폴링 · 실시간 스트림 · 화면 복귀 셋이 **같은 이 함수**를 부른다. 경로마다 다른 것을 맞추면
  *  곧 "어떤 때는 따라오고 어떤 때는 안 따라오는" 화면이 된다(#2041 이 고친 어긋남이 정확히 그 종류다).
+ *  ⚠ 열람 도장(markViewedSessionSeen, #1954 3차)은 **여기 두지 않는다** — 그건 '사람이 보고 있다'는
+ *   뜻이라 호출부(8초 틱·화면 복귀)의 사실이다. 스트림이 민 갱신에까지 찍으면 초록점이 저절로 꺼진다.
  */
 async function syncShell() {
     if (!tabsApi)
         return;
-    //  #1954 3차 — 보고 있는 동안 열람 도장을 갱신한다. 여기 두는 이유: 8초 폴링·실시간 스트림(#2041)·화면 복귀가
-    //   **전부 이 함수 하나**를 부른다. 갱신을 못 하면 초록점(작업 완료)이 안 꺼진다(markViewedSessionSeen 주석).
-    //   서버를 읽기 **전에** 찍는다 — 그래야 바로 뒤 loadData 가 방금 찍은 값을 함께 받아 온다.
-    markViewedSessionSeen();
     await loadData();
     if (!tabsApi)
         return;
@@ -502,7 +505,7 @@ async function syncShell() {
         const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
         const s = sid ? findSess(sid) : null;
         // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
-        //  재시작 창에 세션을 못 찾으면 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
+        //  세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
         //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
         //  뿌리가 여기였다. 목록에서 그 세션을 **찾았을 때만** 판단하므로 빈 판에 흔들리지 않는다.
         if (s) {
@@ -1158,8 +1161,9 @@ async function renderRoute(tab) {
                     frame.destroy();
                     return;
                 }
-                tab.center.replaceChildren(frame.root);
-                tab.appView = frame;
+                const view = instance.app.runtime ? mountAppRuntimeView(instance, frame) : frame;
+                tab.center.replaceChildren(view.root);
+                tab.appView = view;
             }
             tab.aside.replaceChildren();
             markActive('app-instance:' + instance.app_id);
@@ -1218,7 +1222,22 @@ async function renderRoute(tab) {
             const a = appByKey(CLASSIC_PAGES[page]);
             if (a)
                 noteAppUse(a.key);
-            tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
+            // #2043 — 같은 앱의 액자가 이미 서 있으면 새로 싣지 않고 **안의 주소만** 바꾼다. 셸 사이드바의 폴더 · 리스트 렌즈가
+            //  리스트마다 #/projects2/l/<id> 로 보내는데, 누를 때마다 클래식 앱을 처음부터 다시 띄우면 한 박자씩 멈춘다.
+            //  액자 안 클래식 라우터는 hashchange 로 스코프를 다시 잡는다(projects/state.ts pjvSyncUrl 주석). 못 닿으면 종전대로 새로 싣는다.
+            const cur = tab.center.querySelector('iframe.v2-frame');
+            let reused = false;
+            if (cur && a && cur.dataset.appKey === a.key && cur.contentWindow) {
+                try {
+                    cur.contentWindow.location.hash = '#/' + raw;
+                    reused = true;
+                }
+                catch {
+                    reused = false;
+                }
+            }
+            if (!reused)
+                tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
             markActive('app:' + (a ? a.key : ''));
         }
         else {
@@ -1591,7 +1610,9 @@ function sideInstances() {
         if (a.group !== b.group)
             return (dayOf.get(b.group) || 0) - (dayOf.get(a.group) || 0); // 날짜 내림차순
         return b.at - a.at;
-    }).map(({ at: _at, rank: _rank, ...row }) => row);
+        //  ⚠ at 은 벗기지 않는다(#2033) — 프로젝트 축이 **그룹의 순서**를 이 얼린 값으로 잰다.
+        //   rank 는 status.key 로 되살릴 수 있어 안 내보낸다.
+    }).map(({ rank: _rank, ...row }) => row);
     lastSideRows.clear();
     for (const r of out)
         lastSideRows.set(r.id, r);

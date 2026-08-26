@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Lively 가입 플로우 (프로토타입)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+/* 가입 퍼널 프로토타입 — 랜딩 → 계정 만들기 → 워크스페이스 생성 → 온보딩 인계.
+   원준님 2026-08-25 지시: 초대 코드가 아니라 "초대장이 간 이메일"로 시작하고, 그 이메일이 곧 아이디다.
+   구글 로그인은 당분간 배제(전체 공개 때 다시). 토큰·문법은 app.lvly.io 랜딩(landing.ts)과 같다. */
+:root{
+  --bg:#FFFFFF; --tint:#F6FAFF; --tint-2:#EEF5FF; --success:#F3FBF8;
+  --blue:#2D6BF0; --blue-deep:#1E54CC; --mint:#16C79A; --mint-deep:#0FA37E; --mint-text:#0B7E60;
+  --amber:#C98A16; --coral:#E4756B; --coral-text:#B84E44;
+  --ink:#15233B; --ink-sub:#5A6B85; --muted:#6E7D99; --muted-2:#A6B2C8; --muted-head:#5F6E8C;
+  --line:#E6ECF5; --line-row:#EDF1F8; --line-net:#DCE6F5;
+  --font:"Pretendard",-apple-system,"Apple SD Gothic Neo",sans-serif;
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --ease:cubic-bezier(.16,1,.3,1); --nav-h:64px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font-family:var(--font);font-weight:500;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;word-break:keep-all;overflow-wrap:break-word;overflow-x:hidden}
+b,strong{font-weight:700}
+a{color:inherit;text-decoration:none}
+button,input{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:4px}
+
+.ld{min-height:100svh;display:flex;flex-direction:column}
+@media (min-width:981px) and (min-height:660px){ html,body{overflow:hidden} .ld{height:100svh} }
+.ld-nav{height:var(--nav-h);flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 32px;border-bottom:1px solid var(--line)}
+.wordmark{display:inline-flex;align-items:baseline;gap:7px;font-weight:800;font-size:21px;color:var(--ink);letter-spacing:-.5px;white-space:nowrap}
+.pulse-dot{position:relative;width:7px;height:7px;border-radius:50%;background:var(--mint);align-self:center;flex:none;box-shadow:0 0 0 3px rgba(22,199,154,.16)}
+.pulse-dot::after{content:"";position:absolute;inset:-2px;border-radius:50%;border:1.5px solid var(--mint);animation:ring 2.2s var(--ease) infinite}
+@keyframes ring{0%{transform:scale(.55);opacity:0}30%{opacity:1}100%{transform:scale(1.7);opacity:0}}
+.ld-nav-r{display:flex;align-items:center;gap:6px}
+.ld-navlink{padding:8px 12px;border-radius:9px;font-size:14px;font-weight:600;color:var(--ink-sub)}
+.ld-navlink:hover{background:var(--tint);color:var(--ink)}
+.ld-navlink.pill{border:1px solid var(--line);color:var(--ink)}
+
+.ld-main{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;display:grid;grid-template-columns:minmax(0,7fr) minmax(380px,5fr);gap:clamp(32px,5vw,88px);align-items:safe center;max-width:1180px;width:100%;margin:0 auto;padding:24px 32px}
+.ld-main.solo{grid-template-columns:minmax(0,1fr);max-width:560px;justify-items:stretch}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:2.2px;text-transform:uppercase;color:var(--muted-head)}
+.eyebrow::before{content:"";width:18px;height:1.5px;background:var(--blue);opacity:.55}
+.ld-h1{margin-top:14px;font-size:clamp(30px,3.4vw,46px);font-weight:800;line-height:1.22;letter-spacing:-1.2px}
+.ld-h1 .hl{color:var(--blue)}
+.ld-sub{margin-top:12px;font-size:clamp(15px,1.25vw,17.5px);line-height:1.6;color:var(--ink-sub)}
+.ld-steps{margin-top:clamp(20px,3.4vh,36px);display:flex;flex-direction:column;gap:2px}
+.ld-st{display:flex;align-items:flex-start;gap:12px;padding:9px 0}
+.ld-st-n{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line-net);color:var(--muted-2);font-family:var(--mono);font-size:11px;font-weight:700;display:grid;place-items:center;flex:none;margin-top:1px;transition:.3s var(--ease)}
+.ld-st.on .ld-st-n{background:var(--ink);border-color:var(--ink);color:#fff}
+.ld-st.done .ld-st-n{background:var(--success);border-color:#CDEFE3;color:var(--mint-text)}
+.ld-st-t{display:block;font-size:14.5px;font-weight:600;color:var(--muted-2);transition:.3s}
+.ld-st.on .ld-st-t,.ld-st.done .ld-st-t{color:var(--ink)}
+.ld-st-d{display:block;font-size:12.5px;color:var(--muted);margin-top:2px;line-height:1.5}
+
+.ld-panel{border:1px solid var(--line);border-radius:16px;background:var(--bg);box-shadow:0 18px 48px rgba(21,35,59,.08);padding:clamp(18px,2.2vw,28px);animation:rise .4s var(--ease)}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.ld-panel h3{font-size:17px;font-weight:700;letter-spacing:-.2px}
+.ld-panel-d{margin-top:4px;font-size:13.5px;line-height:1.55;color:var(--ink-sub)}
+.ld-form{display:flex;flex-direction:column;gap:7px;margin-top:11px}
+.ld-lab{font-size:11.5px;font-weight:700;color:var(--muted-head);margin-top:3px}
+.ld-form input[type=email],.ld-form input[type=text],.ld-form input[type=password]{width:100%;height:42px;padding:0 13px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font-size:14.5px;transition:border-color .15s,box-shadow .15s}
+.ld-form input::placeholder{color:var(--muted-2)}
+.ld-form input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(45,107,240,.14)}
+.ld-idbox{display:flex;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--line-net);border-radius:10px;background:var(--tint)}
+.ld-idbox .k{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--muted-head);border:1px solid var(--line);background:var(--bg);border-radius:5px;padding:2px 6px;flex:none}
+.ld-idbox .v{font-size:14.5px;font-weight:700;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ld-idbox .ok{margin-left:auto;font-size:11.5px;font-weight:700;color:var(--mint-text);flex:none}
+.ld-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:42px;border-radius:10px;font-weight:700;font-size:15px;letter-spacing:-.2px;transition:transform .18s var(--ease),box-shadow .18s var(--ease),background .18s,border-color .18s}
+.ld-btn-primary{background:var(--blue);color:#fff;box-shadow:0 4px 14px rgba(45,107,240,.24)}
+.ld-btn-primary:hover{background:var(--blue-deep);transform:translateY(-2px);box-shadow:0 8px 22px rgba(45,107,240,.3)}
+.ld-btn-primary:disabled{background:var(--tint-2);color:#9cc7ec;box-shadow:none;transform:none;cursor:default}
+.ld-btn-ghost{background:var(--bg);color:var(--ink);border:1px solid var(--line)}
+.ld-btn-ghost:hover{border-color:var(--muted-2);transform:translateY(-2px);box-shadow:0 6px 16px rgba(21,35,59,.08)}
+.ld-hint{margin-top:8px;font-size:12.5px;color:var(--muted)}
+.ld-hint a{color:var(--blue);font-weight:600}
+.ld-or{display:flex;align-items:center;gap:12px;margin:13px 0 12px;font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--muted-2)}
+.ld-or::before,.ld-or::after{content:"";flex:1;height:1px;background:var(--line)}
+.ld-note{margin-top:11px;padding-top:10px;border-top:1px solid var(--line-row);font-size:12px;line-height:1.55;color:var(--muted)}
+.ld-err{margin-top:8px;font-size:12.5px;color:var(--coral-text);font-weight:600;display:none}
+.ld-err.on{display:block}
+.ld-done{display:flex;gap:10px;align-items:flex-start;margin-top:12px;padding:12px 14px;border-radius:12px;background:var(--success);border:1px solid #CDEFE3;font-size:13.5px}
+.ld-done .pd{width:7px;height:7px;border-radius:50%;background:var(--mint);flex:none;margin-top:6px}
+.ld-done p{margin-top:2px;color:var(--ink-sub);line-height:1.5}
+
+/* 동의 */
+.ld-agree{display:flex;gap:9px;align-items:flex-start;margin-top:8px;font-size:12.5px;line-height:1.5;color:var(--ink-sub)}
+.ld-agree input{width:16px;height:16px;margin-top:2px;flex:none;accent-color:var(--blue)}
+.ld-agree a{color:var(--blue);font-weight:600;text-decoration:underline}
+.ld-agree .req{display:inline-block;margin-right:3px;padding:1px 6px;border-radius:999px;background:var(--line-row);color:var(--muted-head);font-size:11px;font-weight:700;letter-spacing:.01em;vertical-align:1px}
+
+/* 비밀번호 규칙 */
+.ld-rules{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+.ld-rule{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:3px 8px}
+.ld-rule::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--muted-2)}
+.ld-rule.ok{color:var(--mint-text);border-color:#CDEFE3;background:var(--success)}
+.ld-rule.ok::before{background:var(--mint)}
+
+/* 워크스페이스 만드는 중 */
+.ld-prov{display:flex;flex-direction:column;gap:0}
+.ld-pv{display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid var(--line-row);font-size:13.5px;color:var(--muted-2);transition:color .3s}
+.ld-pv:last-child{border-bottom:0}
+.ld-pv.on,.ld-pv.done{color:var(--ink)}
+.ld-pv-i{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--line-net);flex:none;display:grid;place-items:center;font-size:10px;color:#fff}
+.ld-pv.on .ld-pv-i{border-color:var(--blue);border-top-color:transparent;animation:spin .7s linear infinite}
+.ld-pv.done .ld-pv-i{background:var(--mint);border-color:var(--mint)}
+.ld-pv.done .ld-pv-i::after{content:"✓"}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ld-pv .w{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted-2)}
+.ld-bar{height:4px;border-radius:2px;background:var(--line-row);overflow:hidden;margin:14px 0 0}
+.ld-bar i{display:block;height:100%;background:var(--blue);width:0;transition:width .4s linear}
+
+.ld-foot{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 32px;height:44px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.ld-foot a{color:var(--ink-sub);font-weight:600}
+
+/* 프로토타입 표시·장면 이동 */
+.pt{position:fixed;right:14px;bottom:14px;z-index:50}
+.pt-btn{background:var(--ink);color:#fff;border-radius:100px;padding:7px 13px;font-weight:700;font-size:11px;letter-spacing:.04em;box-shadow:0 8px 24px rgba(21,35,59,.18)}
+.pt-menu{position:absolute;right:0;bottom:38px;width:250px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px;box-shadow:0 12px 34px rgba(21,35,59,.16)}
+.pt-menu .k{display:block;margin:2px 4px 7px;font-size:11px;font-weight:700;color:var(--muted)}
+.pt-scenes{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.pt-scenes button{border:1px solid var(--line-row);border-radius:7px;padding:6px 8px;font-size:11.5px;font-weight:600;color:var(--ink-sub);text-align:left;line-height:1.3}
+.pt-scenes button:hover{background:var(--tint)}
+.pt-scenes button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.pt-reset{width:100%;margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:6px;font-size:11.5px;font-weight:600;color:var(--ink-sub)}
+.pt-reset:hover{background:var(--tint)}
+.pt-tag{position:fixed;left:14px;bottom:56px;z-index:50;font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--amber);background:#FFF8E8;border:1px solid #F2DFB4;border-radius:100px;padding:5px 11px}
+
+/* 낮은 노트북(720p 대) — 여백을 조여 랜딩이 스크롤 없이 서게. */
+@media (min-width:981px) and (max-height:820px){
+  .ld-main{padding:12px 32px}
+  .ld-panel{padding:18px 22px}
+  .ld-steps{margin-top:16px}
+  .ld-st{padding:7px 0}
+  .ld-sub{margin-top:9px}
+}
+@media (max-width:980px){
+  .ld-main,.ld-main.solo{grid-template-columns:1fr;align-items:start;padding:24px 20px 32px;gap:28px;max-width:none}
+  .ld-nav,.ld-foot{padding:0 20px}
+}
+@media (prefers-reduced-motion:reduce){ .pulse-dot::after,.ld-pv.on .ld-pv-i{animation:none} .ld-panel{animation:none} }
+</style>
+</head>
+<body>
+<div class="ld">
+  <header class="ld-nav">
+    <a class="wordmark" href="#">Lively<span class="pulse-dot"></span></a>
+    <nav class="ld-nav-r">
+      <a class="ld-navlink" href="https://lvly.io/" target="_blank" rel="noopener">Lively 소개</a>
+      <a class="ld-navlink pill" href="#" data-go="login">로그인</a>
+    </nav>
+  </header>
+  <main class="ld-main" id="main"></main>
+  <footer class="ld-foot">
+    <span id="foot">내 워크스페이스의 자료는 내가 초대한 구성원만 봅니다.</span>
+    <span><a href="https://lvly.io/terms" target="_blank" rel="noopener">이용약관</a> · <a href="https://lvly.io/privacy" target="_blank" rel="noopener">개인정보 처리방침</a></span>
+  </footer>
+</div>
+<span class="pt-tag">프로토타입 · 실제 가입 아님</span>
+<div class="pt" id="pt"></div>
+
+<script>
+/* ── 상태 ── */
+const S = { email: '', pw: '', agreed: false, waitlisted: false };
+const $ = (s, el) => (el || document).querySelector(s);
+const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const main = () => $('#main');
+
+/* 왼쪽 기둥 — 지금 어디쯤인지. 랜딩에서는 소개, 그 뒤로는 단계 표시. */
+const STEPS = [
+  ['이메일 확인', '초대장을 받으신 주소인지 봅니다.'],
+  ['비밀번호 설정', '그 이메일이 아이디가 됩니다.'],
+  ['워크스페이스 준비', '내 공간을 만듭니다. 1분 안쪽입니다.'],
+  ['처음 설정', '리브가 몇 가지를 여쭙고 자료를 정리합니다.'],
+];
+function railHTML(at) {
+  return `<section>
+    <span class="eyebrow">가입</span>
+    <h1 class="ld-h1">거의 다 왔습니다</h1>
+    <p class="ld-sub">초대받으신 분만 들어오는 자리라, 확인은 짧게 끝납니다.</p>
+    <div class="ld-steps">${STEPS.map(([t, d], i) => `
+      <div class="ld-st ${i < at ? 'done' : i === at ? 'on' : ''}">
+        <span class="ld-st-n">${i < at ? '✓' : i + 1}</span>
+        <span><span class="ld-st-t">${esc(t)}</span><span class="ld-st-d">${esc(d)}</span></span>
+      </div>`).join('')}</div>
+  </section>`;
+}
+
+/* 개인정보 수집·이용 동의 — 개인정보보호법 제15조가 요구하는 4가지(목적·항목·보유기간·거부권)를 한자리에.
+   ⚠ 문안은 초안이다(위키 legal-terms-privacy-draft-1813). 게시 전 사람 검토 필요. */
+function agreeHTML(kind) {
+  // 링크는 항목 이름에 건다 — 문장 꼬리에 '무엇을 왜 받는지'를 달았더니 줄이 넘어가고 읽는 순서도 어색했다(원준님 2026-08-25).
+  const href = 'https://lvly.io/privacy';
+  return `<label class="ld-agree"><input type="checkbox" data-agree>
+      <span><span class="req">필수</span> <a href="${href}" target="_blank" rel="noopener">개인정보 수집·이용</a>에 동의합니다.</span></label>`;
+}
+const bindAgree = (el, btn) => {
+  const cb = $('[data-agree]', el);
+  if (!cb || !btn) return;
+  const sync = () => { S.agreed = cb.checked; btn.disabled = !cb.checked || btn.dataset.extra === 'bad'; };
+  cb.addEventListener('change', sync); sync();
+};
+
+/* ══════════ 장면 ══════════ */
+const SCENES = {
+  /* ① 랜딩 — 초대 코드가 아니라 "초대장이 간 이메일"로 시작한다. */
+  landing: {
+    solo: false,
+    left: () => `<section>
+      <span class="eyebrow">초대로 시작하는 워크스페이스</span>
+      <h1 class="ld-h1"><span class="hl">내 일을 아는 AI</span>와<br>일하세요</h1>
+      <p class="ld-sub">자료를 한 번 올려두면 AI가 먼저 읽고 답합니다.<br>쓰던 AI는 그대로 쓰면 됩니다.</p>
+      <div class="ld-steps">${STEPS.map(([t, d], i) => `
+        <div class="ld-st"><span class="ld-st-n">${i + 1}</span>
+        <span><span class="ld-st-t">${esc(t)}</span><span class="ld-st-d">${esc(d)}</span></span></div>`).join('')}</div>
+    </section>`,
+    right: () => `<section class="ld-panel">
+      <h3>초대받은 이메일로 시작</h3>
+      <p class="ld-panel-d">초대장을 보내 드린 이메일 주소를 넣어 주세요. 그 주소가 아이디가 됩니다.</p>
+      <form class="ld-form" data-form="start">
+        <input type="email" name="email" placeholder="you@company.com" aria-label="초대받은 이메일" autocomplete="email" required value="${esc(S.email)}">
+        <button class="ld-btn ld-btn-primary" type="submit">시작하기</button>
+      </form>
+      <p class="ld-err" data-err>초대장을 보낸 기록이 없는 주소입니다. 아래에서 대기자로 등록해 주세요.</p>
+      <p class="ld-hint">비밀번호를 이미 만드셨다면 <a href="#" data-go="login">로그인</a>하세요.</p>
+
+      <div class="ld-or">또는</div>
+
+      <h3 id="waitlist">아직 초대를 받지 못하셨나요?</h3>
+      <p class="ld-panel-d">대기자로 등록해 주시면 확인 후 초대장을 이메일로 보내 드립니다.</p>
+      ${S.waitlisted
+        ? `<div class="ld-done"><span class="pd"></span><div><b>등록됐습니다.</b><p>확인이 끝나면 남겨 주신 주소로 초대장을 보내 드립니다.</p></div></div>`
+        : `<form class="ld-form" data-form="waitlist">
+             <input type="email" name="email" placeholder="이메일" aria-label="이메일" autocomplete="email" required>
+             <input type="text" name="note" placeholder="어떤 일에 쓰고 싶으신가요? (선택)" aria-label="사용 목적" maxlength="200">
+             ${agreeHTML('waitlist')}
+             <button class="ld-btn ld-btn-ghost" type="submit" disabled>대기자 등록하기</button>
+           </form>`}
+      <p class="ld-note">가입은 초대로만 열려 있습니다. 세션을 돌리려면 본인 AI 구독이 필요합니다. Claude, ChatGPT, Gemini, Grok 가운데 쓰시던 것 하나가 유료 플랜이면 됩니다.</p>
+    </section>`,
+    bind: (el) => {
+      const f = $('[data-form="start"]', el);
+      f.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const v = f.email.value.trim().toLowerCase();
+        const btn = $('button', f);
+        btn.disabled = true; btn.textContent = '확인 중';
+        await sleep(700);
+        // 프로토타입: '초대 없음'을 보고 싶으면 주소에 no- 를 붙여 넣으세요(예: no-me@company.com).
+        if (v.startsWith('no-')) {
+          btn.disabled = false; btn.textContent = '시작하기';
+          $('[data-err]', el).classList.add('on');
+          return;
+        }
+        S.email = v; go('signup');
+      });
+      const w = $('[data-form="waitlist"]', el);
+      if (w) {
+        bindAgree(w, $('button', w));
+        w.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const btn = $('button', w); btn.disabled = true; btn.textContent = '등록 중';
+          await sleep(600); S.waitlisted = true; go('landing');
+        });
+      }
+    },
+  },
+
+  /* ② 계정 만들기 — 이메일이 아이디임을 화면이 말한다. 비밀번호만 정하면 가입 끝. */
+  signup: {
+    at: 1,
+    right: () => `<section class="ld-panel">
+      <h3>비밀번호를 정해 주세요</h3>
+      <p class="ld-panel-d">초대를 확인했습니다. 아래 이메일이 앞으로 로그인할 <b>아이디</b>입니다.</p>
+      <div class="ld-form">
+        <div class="ld-idbox"><span class="k">ID</span><span class="v">${esc(S.email || 'you@company.com')}</span><span class="ok">초대 확인됨</span></div>
+        <span class="ld-lab">비밀번호</span>
+        <input type="password" name="pw" placeholder="8자 이상" aria-label="비밀번호" autocomplete="new-password">
+        <div class="ld-rules">
+          <span class="ld-rule" data-rule="len">8자 이상</span>
+          <span class="ld-rule" data-rule="mix">영문과 숫자</span>
+          <span class="ld-rule" data-rule="same">다시 입력과 일치</span>
+        </div>
+        <span class="ld-lab">비밀번호 다시 입력</span>
+        <input type="password" name="pw2" placeholder="한 번 더" aria-label="비밀번호 다시 입력" autocomplete="new-password">
+        ${agreeHTML('signup')}
+        <button class="ld-btn ld-btn-primary" data-submit disabled>가입하고 워크스페이스 만들기</button>
+      </div>
+      <p class="ld-hint">주소가 다르면 <a href="#" data-go="landing">돌아가서 다시</a> 넣으실 수 있습니다.</p>
+    </section>`,
+    bind: (el) => {
+      const pw = $('[name=pw]', el), pw2 = $('[name=pw2]', el), btn = $('[data-submit]', el);
+      const check = () => {
+        const v = pw.value, v2 = pw2.value;
+        const r = { len: v.length >= 8, mix: /[A-Za-z]/.test(v) && /[0-9]/.test(v), same: !!v && v === v2 };
+        Object.entries(r).forEach(([k, ok]) => $(`[data-rule="${k}"]`, el).classList.toggle('ok', ok));
+        btn.dataset.extra = Object.values(r).every(Boolean) ? '' : 'bad';
+        btn.disabled = !(S.agreed && !btn.dataset.extra);
+      };
+      pw.addEventListener('input', check); pw2.addEventListener('input', check);
+      bindAgree(el, btn); check();
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = '계정 만드는 중';
+        await sleep(800); S.pw = pw.value; go('provision');
+      });
+      pw.focus();
+    },
+  },
+
+  /* ③ 워크스페이스 준비 — "바로 만들어진다"는 거짓이라, 걸리는 일을 그대로 보여준다. */
+  provision: {
+    at: 2,
+    right: () => `<section class="ld-panel">
+      <h3>워크스페이스를 만들고 있습니다</h3>
+      <p class="ld-panel-d">가입이 끝났습니다. 이제 <b>${esc(S.email || 'you@company.com')}</b>님의 공간을 준비합니다. 잠깐만 이 화면에 머물러 주세요.</p>
+      <div class="ld-bar"><i data-bar></i></div>
+      <div class="ld-prov" style="margin-top:10px">
+        ${[['계정 만들기', '완료'], ['공간 확보', ''], ['자료 저장소 준비', ''], ['첫 화면 준비', '']].map(([t], i) => `
+          <div class="ld-pv ${i === 0 ? 'done' : ''}" data-pv="${i}"><span class="ld-pv-i"></span>${esc(t)}<span class="w" data-w="${i}">${i === 0 ? '완료' : ''}</span></div>`).join('')}
+      </div>
+      <p class="ld-note">보통 40초 안쪽입니다. 끝나면 자동으로 넘어갑니다.</p>
+    </section>`,
+    bind: async (el, token) => {
+      const steps = [[1, 1400, '3초'], [2, 1600, '11초'], [3, 1500, '9초']];
+      const bar = $('[data-bar]', el);
+      bar.style.width = '25%';
+      for (const [i, ms, w] of steps) {
+        if (token !== sceneToken) return;
+        $(`[data-pv="${i}"]`, el).classList.add('on');
+        await sleep(ms);
+        if (token !== sceneToken) return;
+        const row = $(`[data-pv="${i}"]`, el);
+        row.classList.remove('on'); row.classList.add('done');
+        $(`[data-w="${i}"]`, el).textContent = w;
+        bar.style.width = (25 + 25 * i) + '%';
+      }
+      await sleep(500);
+      if (token === sceneToken) go('ready');
+    },
+  },
+
+  /* ④ 준비 완료 — 여기서 온보딩(#/welcome)으로 넘어간다. */
+  ready: {
+    at: 3,
+    right: () => `<section class="ld-panel">
+      <h3>준비됐습니다</h3>
+      <p class="ld-panel-d">이제 리브가 몇 가지를 여쭙고 올려주시는 자료를 정리합니다.</p>
+      <div class="ld-form">
+        <a class="ld-btn ld-btn-primary" href="v2.html?scene=name">처음 설정 시작하기</a>
+      </div>
+      <p class="ld-note">다음 화면부터가 앞서 만든 온보딩입니다. 이름을 묻는 장면에서 시작합니다.</p>
+    </section>`,
+  },
+
+  /* 로그인 — 이메일이 아이디라는 것을 여기서도 같은 말로. */
+  login: {
+    solo: true,
+    right: () => `<section class="ld-panel">
+      <h3>로그인</h3>
+      <p class="ld-panel-d">초대받으신 이메일과 그때 정하신 비밀번호를 넣어 주세요.</p>
+      <form class="ld-form" data-form="login">
+        <span class="ld-lab">아이디 (이메일)</span>
+        <input type="email" name="email" placeholder="you@company.com" aria-label="이메일" autocomplete="username" required value="${esc(S.email)}">
+        <span class="ld-lab">비밀번호</span>
+        <input type="password" name="pw" placeholder="비밀번호" aria-label="비밀번호" autocomplete="current-password" required>
+        <button class="ld-btn ld-btn-primary" type="submit">로그인</button>
+      </form>
+      <p class="ld-hint">아직 시작 전이시면 <a href="#" data-go="landing">초대받은 이메일로 시작</a>하세요.</p>
+      <p class="ld-note">비밀번호가 기억나지 않으시면 초대를 보낸 담당자에게 알려 주세요. 재설정 링크를 보내 드립니다.</p>
+    </section>`,
+    bind: (el) => {
+      $('[data-form="login"]', el).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = $('button', e.currentTarget); btn.disabled = true; btn.textContent = '확인 중';
+        await sleep(700); go('ready');
+      });
+    },
+  },
+};
+
+/* ══════════ 전환 ══════════ */
+let sceneToken = 0, cur = 'landing';
+function go(key) {
+  if (!SCENES[key]) return;
+  cur = key; sceneToken++;
+  const sc = SCENES[key];
+  const m = main();
+  m.classList.toggle('solo', !!sc.solo);
+  m.innerHTML = (sc.left ? sc.left() : (sc.at != null ? railHTML(sc.at) : '')) + sc.right();
+  $$('[data-go]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); go(b.dataset.go); }));
+  sc.bind && sc.bind(m, sceneToken);
+  renderPt();
+  try { history.replaceState(null, '', location.pathname + '?scene=' + key); } catch (_) {}
+}
+
+/* 장면 바로 열기 */
+const TOUR = [['landing', '랜딩'], ['signup', '비밀번호 설정'], ['provision', '워크스페이스 준비'], ['ready', '준비 완료'], ['login', '로그인']];
+function renderPt() {
+  $('#pt').innerHTML = `<button class="pt-btn" id="ptBtn">장면 ▾</button>
+    <div class="pt-menu" id="ptMenu" hidden><span class="k">가입 플로우 · 장면 바로 열기</span>
+      <div class="pt-scenes">${TOUR.map(([k, t], i) => `<button data-sc="${k}" class="${cur === k ? 'on' : ''}">${i + 1}. ${t}</button>`).join('')}</div>
+      <button class="pt-reset" id="ptReset">처음부터 (입력 지우기)</button></div>`;
+  const btn = $('#ptBtn'), menu = $('#ptMenu');
+  btn.onclick = () => { menu.hidden = !menu.hidden; };
+  document.addEventListener('click', (e) => { if (!$('#pt').contains(e.target)) menu.hidden = true; }, { once: true });
+  $$('[data-sc]', menu).forEach((b) => b.onclick = () => {
+    menu.hidden = true;
+    if (!S.email && b.dataset.sc !== 'landing') S.email = 'wonjun@company.com';   // 장면 점프용 기본값
+    go(b.dataset.sc);
+  });
+  $('#ptReset').onclick = () => { S.email = ''; S.pw = ''; S.agreed = false; S.waitlisted = false; go('landing'); };
+}
+
+const want = new URLSearchParams(location.search).get('scene');
+const qEmail = (new URLSearchParams(location.search).get('email') || '').trim();
+if (qEmail) S.email = qEmail;                                   // 앞 화면(start.html)에서 넘어온 주소
+else if (want && SCENES[want] && want !== 'landing') S.email = 'wonjun@company.com';
+go(want && SCENES[want] ? want : 'landing');
+</script>
+</body>
+</html>

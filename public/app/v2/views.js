@@ -78,7 +78,7 @@ export function renderHome(host, data, draft) {
     const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
     const ta = el('textarea', { class: 'v2-launch-in', rows: '2', placeholder: '무엇이든 시키세요 — 프로젝트 없이 열리고, 소속은 나중에 세션에서 정해요', 'aria-label': '무엇이든 시키기' });
     ta.value = draft?.text || ''; // 쓰다 만 지시를 되받는다(#2037)
-    const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button' }, el('span', { text: '시키기' }), el('kbd', { text: '⏎' }));
+    const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', title: 'Enter 로도 보낼 수 있어요' }, el('span', { text: '시키기' }));
     // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 기본은 내가 지난번에 고른 값이고,
     //  여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts — '새 AI 세션' 폼과 같은 기억을 쓴다).
     const runPicker = createRunPicker();
@@ -86,9 +86,11 @@ export function renderHome(host, data, draft) {
     //  내 개인 폴더 uploads/ 로 올라가고, 절대경로가 첫 지시 꼬리에 실린다. 홈 화면은 20초 틱에 다시 그리지
     //  않으므로(main.ts — inbox 만 덧칠) 칩·입력 글자와 같은 수명으로 산다.
     const att = composerAttach({ projectId: () => 0 });
-    // [＋] 는 ctl **밖**(줄의 독립 첫 요소) — ctl 은 flex-wrap 이라 안에 넣으면 좁은 화면에서 셀렉트가 통째로
-    //  다음 줄로 밀려 [＋] 혼자 한 줄을 차지한다. 밖에 두면 셀렉트만 저희끼리 줄바꿈한다.
-    const card = el('div', { class: 'v2-launch' }, ta, att.chips, el('div', { class: 'v2-launch-row' }, att.btn, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send), att.fileIn);
+    // 아랫줄은 두 덩어리다(원준 2026-08-25) — 왼쪽 = **무엇으로 열까**(셀렉트 넷, 한 줄 고정), 오른쪽 = **행동**([＋]·[시키기]).
+    //  종전엔 [＋]가 줄의 맨 왼쪽 끝, [시키기]가 맨 오른쪽 끝에 떨어져 있었고 그 사이 셀렉트가 두 줄로 접히면
+    //  [＋]만 아랫줄에 홀로 남아 어느 쪽에도 속하지 않는 단추로 보였다. 파일도 보내기도 '지금 이 지시에 하는 일'이라
+    //  한 덩어리로 묶는다.
+    const card = el('div', { class: 'v2-launch' }, ta, att.chips, el('div', { class: 'v2-launch-row' }, el('div', { class: 'v2-launch-ctl' }, runPicker.el), el('div', { class: 'v2-launch-act' }, att.btn, send)), att.fileIn);
     att.wirePaste(ta);
     att.wireDrop(card, card);
     const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
@@ -114,7 +116,7 @@ export function renderHome(host, data, draft) {
             send.disabled = false;
             ta.disabled = false;
             runPicker.disable(false);
-            send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' }));
+            send.replaceChildren(el('span', { text: '시키기' }));
             ta.focus();
         }
     };

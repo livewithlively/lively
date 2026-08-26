@@ -190,11 +190,11 @@ function sessionsPart(ctx) {
         class: 'v2-launch-in', rows: '2', 'aria-label': '새 세션에 시킬 일',
         placeholder: ctx.id > 0 ? '무엇이든 시키세요 — 이 프로젝트에 붙은 새 세션이 열려요.' : '무엇이든 시키세요 — 새 세션이 열려요.',
     });
-    const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', onclick: () => void spawn() }, el('span', { text: '시키기' }), el('kbd', { text: '⏎' }));
+    const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', title: 'Enter 로도 보낼 수 있어요', onclick: () => void spawn() }, el('span', { text: '시키기' }));
     // 제공자·모델·추론강도·실행 노드 — 홈과 같은 부품이고 **같은 기억**을 쓴다(여기서 고른 값이 다음 기본이 된다).
     //  새 세션 자리를 처음 그릴 때만 만든다(서버 /terminal/config 를 한 번 부른다 — 세션을 보고 있을 뿐인 칸이 부를 이유가 없다).
     let runPicker = null;
-    const idle = () => { send.disabled = false; ta.disabled = false; runPicker?.disable(false); send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); };
+    const idle = () => { send.disabled = false; ta.disabled = false; runPicker?.disable(false); send.replaceChildren(el('span', { text: '시키기' })); };
     const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
     ta.addEventListener('input', grow);
     ta.addEventListener('keydown', (e) => {
@@ -213,8 +213,8 @@ function sessionsPart(ctx) {
         if (!runPicker)
             runPicker = createRunPicker();
         const pane = el('div', { class: 'pn-newpane' }, el('div', { class: 'pn-launch' }, el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }), el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }), el('div', { class: 'v2-launch' }, ta, att.chips, 
-        // [＋] 는 ctl 밖 — 홈(views.ts)과 같은 이유(ctl 은 flex-wrap 이라 안에 넣으면 셀렉트가 통째로 밀린다).
-        el('div', { class: 'v2-launch-row' }, att.btn, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send), att.fileIn)));
+        // 줄 구성은 홈(views.ts)과 같다 — 왼쪽 '무엇으로 열까', 오른쪽 '행동([＋]·[시키기])'.
+        el('div', { class: 'v2-launch-row' }, el('div', { class: 'v2-launch-ctl' }, runPicker.el), el('div', { class: 'v2-launch-act' }, att.btn, send)), att.fileIn)));
         att.wireDrop(pane, pane);
         return pane;
     }
@@ -319,18 +319,20 @@ function sessionsPart(ctx) {
     }
     function paint() {
         const ss = mine();
-        // ★★ **보고 있는 세션을 다른 세션으로 바꾸지 않는다**(상민님 재신고 2026-08-20 — 1차 수정 후에도 재발).
+        // ★★ **보고 있는 세션을 다른 세션으로 바꾸지 않는다**(상민님 재신고 2026-08-20 — 1차 수정 후에도 재발,
+        //  2026-08-26 dev 에서 또 재발: 사람이 아무것도 안 눌렀는데 창이 남의 세션으로 넘어갔다).
         //
         //  종전엔 여기 "지정된 세션이 이 프로젝트 목록에 없으면 맨 위 세션으로" 폴백이 있었고, 그게 화면이
         //  남의 세션으로 바뀌는 **유일한 입구**였다. 1차 수정에서 유예(2분)와 주소 동기화를 붙였지만 그것으로는
         //  부족했다 — 실제로 난 사고는 이렇다:
         //   ⓐ 게이트웨이 재시작 창에 renderRoute 가 세션을 목록에서 못 찾는다(노드 세션은 그때 잠깐 빠진다),
         //   ⓑ 그래서 셸이 **loose(projectId=0)** 로 마운트된다 — 문패가 '프로젝트 없는 세션'이 된다,
-        //   ⓒ 그 셸의 mine() 은 '프로젝트 없는 세션'들(dev 실측 70개)이고, 보고 있던 세션은 거기 없다,
-        //   ⓓ 폴백이 그중 맨 위(유일하게 살아 있던 **남의 세션**)로 갈아탄다.
+        //   ⓒ 그 셸의 mine() 은 '프로젝트 없는 세션'들이고, 보고 있던 세션은 거기 없다,
+        //   ⓓ 폴백이 그중 맨 위로 갈아탄다. 그 '맨 위'는 lastSeen 최신이라, **대화록이 방금 처음 올라온 세션**
+        //     (하네스 Stop 훅의 첫 업로드 — 사람 눈엔 '갑자기 생긴 새 세션')이 곧잘 그 자리를 차지한다.
         //
         //  올바른 처방은 '세션을 바꾸기'가 아니라 **'셸을 그 세션의 프로젝트로 다시 그리기'** 다. 그건 호출자가
-        //  안다(main.ts 20초 갱신이 셸 프로젝트와 세션의 실제 프로젝트를 대조해 다시 그린다). 여기서는 주소가
+        //  안다(main.ts 8초 갱신이 셸 프로젝트와 세션의 실제 프로젝트를 대조해 다시 그린다). 여기서는 주소가
         //  가리키는 세션을 그대로 지킨다 — 세션이 진짜로 사라졌으면 그건 터미널이 4410 으로 말해 준다.
         const pending = !!mounted && mounted.sid === sel && !mounted.ok;
         if (!ss.length && !composing && !pending && !sel)
