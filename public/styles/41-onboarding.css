@@ -140,3 +140,7 @@
 .ob-tok input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
 .ob-tok .ob-err{font-size:13px; color:#C0392B; min-height:1px}
 .ob-tok .ob-ok{font-size:13px; color:var(--mint-text)}
+/* #1879 — 사실을 덧붙이는 줄(다른 AI 가 이미 이어져 있음·판정 불가 등). 오류(빨강)도 성공(민트)도 아닌
+   '그냥 알려 드리는 것' 이라 본문과 같은 톤으로 낮춰 둔다. */
+.ob-tok .ob-note{font-size:13px; color:var(--ink-sub); line-height:1.7}
+.ob-tok .ob-note code{font-size:12px}

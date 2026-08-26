@@ -249,11 +249,104 @@ const HARNESS_CRED: Record<string, string> = {
   grok: ".grok/auth.json",
 };
 
+// 자격 **파일이 없는** 하네스의 로그인 판정(#1879) — 위 표가 못 답하는 자리를 프로브로 답한다.
+//  ⚠ 위 HARNESS_CRED 머리말은 "자격 위치를 실측하면 그때 연다" 고 했다. antigravity 는 자격이 파일로 안 남아
+//   (~/.gemini 트리 전체에 자격 파일 0건 — 2026-08-26 재실측) 그 문은 영영 안 열린다. 대신 **CLI 에게 직접 묻는다**:
+//     실측(agy 1.1.x): `agy models` → 로그인 exit 0(모델 목록) · 미로그인 exit 1
+//                      ("Error: Please sign in to view available models."). HOME 을 비우면 재현된다.
+//  이 표가 없으면 온보딩에서 제미나이를 고른 사람은 로그인을 마쳐도 영원히 «아직 로그인이 안 보여요» 를 본다
+//  (고르게는 해 놓고 이을 수는 없는 막다른 길이었다).
+//
+// ⚠ **뜨거운 경로에 올리지 마라.** 프로브는 네트워크를 타서 실측 4.3초다. memberLoggedInHarnessesAny 는
+//  /api/ui/me/welcome 이 폴링하는 자리라 파일 표만 쓰고, 프로브는 사람이 «로그인했어요» 를 누른 그 순간에만 돈다.
+const HARNESS_PROBE: Record<string, string[]> = {
+  antigravity: ["models"],
+};
+const PROBE_TIMEOUT_MS = 25_000;   // 네트워크 왕복(실측 4.3초)의 여유배 — 넘으면 '미로그인'이 아니라 **모름**이다
+
 // #1884 — 이 하네스에 '로그인'이라는 개념이 있나(= 위 표에 자격 위치가 실측돼 있나). 세션 폼의 [내 계정 로그인]이
 //  어느 AI 를 고르게 할지 이걸로 정한다. 표에 없는 하네스(opencode·antigravity)는 로그인 여부를 정직하게 말할 수
 //  없으므로 고르게 하지 않는다 — 위 ⚠ 주석과 같은 이유다.
 export function harnessHasCredential(key: string): boolean {
   return Object.prototype.hasOwnProperty.call(HARNESS_CRED, key);
+}
+
+/** 이 하네스는 **프로브로** 로그인을 잴 수 있나(#1879) — 자격 파일이 없는 하네스의 유일한 판정 수단.
+ *  harnessHasCredential 과 짝이다: 둘 다 false 면 그 하네스는 «이어졌나» 를 정직하게 답할 수 없다.
+ *  ⚠ 온보딩이 **고르게 하는** AI 는 반드시 둘 중 하나를 만족해야 한다 — 아니면 로그인을 마쳐도 화면이
+ *   영영 «아직 로그인이 안 보여요» 를 반복하는 막다른 길이 된다(제미나이가 정확히 그랬다). */
+export function harnessLoginProbe(key: string): readonly string[] | null {
+  return HARNESS_PROBE[key] ?? null;
+}
+
+/** 온보딩 «AI 잇기»(#1879)가 **고른 AI 하나**에 대해 묻는 것 — 셋을 따로 답한다.
+ *  종전 판정(ai_ready)은 «아무 하네스나 하나라도» 였다. 그래서 그록을 고른 사람에게 claude 로그인을 근거로
+ *  «이어졌어요» 라고 했고, 제미나이를 고른 사람에겐 설치가 없다는 사실을 «로그인이 안 보여요» 로 잘못 옮겼다.
+ *  설치와 로그인은 사람이 할 일이 완전히 다른 두 사건이라 화면이 갈라 말해야 한다. */
+export interface AiLoginCheck {
+  harness: string;
+  label: string;
+  bin: string;
+  /** 이 자리에서 그 CLI 를 실행할 수 있나. null = 확인 못 함(win32 게이트웨이·중계 오류). */
+  installed: boolean | null;
+  /** 로그인돼 있나. null = **모름**(프로브 시간초과·맥 키체인 접근 불가 등) — 모르는 것을 false 로 접지 않는다
+   *  (aiAccountStatus 와 같은 교리: 모르면서 «미로그인» 이라고 하면 로그인한 사람을 막는다). */
+  loggedIn: boolean | null;
+  /** 무엇으로 쟀나 — file=자격 파일 존재 · probe=`<bin> <args>` exit 0 · none=잴 방법이 없다 */
+  how: "file" | "probe" | "none";
+  /** 사람이 밟을 로그인 절차(catalog.loginSteps — 실측된 것만). */
+  steps: string[];
+}
+
+// `sh -c` 한 줄을 이 사람의 실행 자리에서 돌린다. 격리면 box_ 로 drop-priv(중계 배포면 그 노드), 아니면 게이트웨이 로컬.
+//  ⚠ 격리에서 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberFileExists
+//   머리말과 같은 함정), agy 는 자격을 HOME 기준으로 찾으므로 그 한 글자에 판정이 통째로 뒤집힌다.
+//  반환: true=exit 0 · false=exit≠0 · null=상한 초과/실행 자체 실패(=모름).
+async function runAtMemberSeat(osUser: string | null, line: string): Promise<boolean | null> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timer = new Promise<null>((r) => { t = setTimeout(() => r(null), PROBE_TIMEOUT_MS); });
+  const run = (async (): Promise<boolean | null> => {
+    try {
+      if (osUser) {
+        await memberSh(osUser, `HOME="${MEMBER_HOME_BASE}/${osUser}" ${line}`);
+        return true;
+      }
+      if (process.platform === "win32") return null;   // 게이트웨이가 윈도우면 `sh -c` 가 없다 — 지어내지 않고 '모름'
+      await execFileAsync("sh", ["-c", line], { timeout: PROBE_TIMEOUT_MS });
+      return true;
+    } catch { return false; }
+  })();
+  try { return await Promise.race([run, timer]); } finally { clearTimeout(t); }
+}
+
+/** 고른 AI 하나를 판정한다. 뜨거운 경로가 아니다 — 사람이 «로그인했어요» 를 누른 그 순간에만 부른다. */
+export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLoginCheck> {
+  const h = HARNESSES.find((x) => x.key === key);
+  if (!h || !h.bin) throw new HttpError(404, `모르는 AI: ${key}`);
+  const osSt = await memberOsStatus(ownerId(user));
+  const osUser = osSt.ready && osSt.provisioned ? osSt.osUser : null;
+  const out: AiLoginCheck = {
+    harness: h.key, label: h.label, bin: h.bin,
+    installed: null, loggedIn: null, how: "none", steps: h.loginSteps ?? [],
+  };
+
+  // ① 설치 — 실행 파일이 이 자리 PATH 에 있나. bin 은 우리 상수표에서만 오므로 셸 문자열에 사용자 입력이 없다.
+  out.installed = await runAtMemberSeat(osUser, `command -v "${h.bin}" >/dev/null 2>&1`);
+  if (out.installed !== true) return out;   // 없는 CLI 에 로그인을 물어봐야 답은 늘 '미로그인' 이다 — 묻지 않는다
+
+  // ② 로그인 — 자격 파일이 있는 하네스는 **aiAccountStatus 를 그대로 쓴다**(맥 키체인·멀티프로필·격리 분기가
+  //  전부 그 안에 있고, 여기서 다시 짜면 그중 하나를 빠뜨려도 아무 오류가 안 난다).
+  if (harnessHasCredential(h.key)) {
+    out.how = "file";
+    out.loggedIn = (await aiAccountStatus(user, osSt)).find((a) => a.key === h.key)?.loggedIn ?? null;
+    return out;
+  }
+  // 자격 파일이 없는 하네스(antigravity)는 CLI 에게 직접 묻는다.
+  const probe = HARNESS_PROBE[h.key];
+  if (!probe) return out;   // 잴 방법이 없으면 정직하게 침묵한다(how="none") — 화면이 지어내지 않는다
+  out.how = "probe";
+  out.loggedIn = await runAtMemberSeat(osUser, `${h.bin} ${probe.join(" ")} >/dev/null 2>&1`);
+  return out;
 }
 
 // box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서

@@ -13,7 +13,7 @@ import { codexChatMode } from "./codex-chat-mode.js";   // #2055 codex 대화 �
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
@@ -222,6 +222,27 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     await aiAccountLogout(userOf(req), harness);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, accounts: await aiAccountStatus(userOf(req)) });
+  }));
+  // 고른 AI 하나를 판정한다(#1879) — 온보딩 «AI 잇기» 의 [로그인했어요] 가 누른 그 순간에만 부른다.
+  //  ⚠ GET 이 아니라 POST 인 이유: antigravity 판정은 그 사람 자리에서 `agy models` 를 **실행**한다(실측 4.3초,
+  //   네트워크). 캐시·프리페치가 붙으면 안 되는 부수효과 있는 조회라 GET 의 계약을 빌리지 않는다.
+  //  others = 고른 것 말고 **이미 이어진** 헤드리스 하네스. 화면이 사람을 막지 않기 위해 쓴다 — 제미나이를 골랐어도
+  //   claude 가 이어져 있으면 분석은 지금도 돌기 때문이다(welcome.analyze 가 resolveHeadlessHarness 로 그걸 고른다).
+  app.post("/api/ui/me/ai-accounts/check", auth, wrap(async (req, res) => {
+    const harness = String(((req.body ?? {}) as Record<string, unknown>).harness ?? "").trim();
+    if (!harness) throw new HttpError(400, "harness(AI 키)가 필요합니다");
+    const user = userOf(req);
+    const [check, loggedIn] = await Promise.all([
+      aiLoginCheck(user, harness),
+      (async () => {
+        const { memberLoggedInHarnessesAny } = await import("./profiles.js");
+        const { HEADLESS_KEYS } = await import("../node/headless-harness.js");
+        return (await memberLoggedInHarnessesAny(user.userId).catch(() => [] as string[]))
+          .filter((k) => HEADLESS_KEYS.includes(k));
+      })(),
+    ]);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ...check, others: loggedIn.filter((k) => k !== harness) });
   }));
 
   // ── 멀티프로필 프로비저닝(#442) — 관리탭 전용(admin scope). 로그인(OAuth)은 멤버가 웹터미널에서 셀프서비스. ──
