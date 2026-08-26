@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AUTO_CREATED_MARK, UNNAMED_PROJECT, firstPromptProjectPlan, shellProjectFromPrompt, shouldRenameShellProject } from "./first-prompt-project.js";
 
-const PROMPT = "세션 귀속 v2 후속으로 홈 세션 cwd 를 프로젝트 폴더로 옮기자";
+// 28자를 넘지 않는 지시 — 이름이 그대로 이름이 되는(자르지 않는) 경로를 재려면 상한 안쪽이어야 한다(#2031).
+const PROMPT = "홈 세션 cwd 를 프로젝트 폴더로";
+// 상한을 넘는 지시 — 자르는 경로. 이번 신고("이름이 내가 시킨 말 그대로")의 그 모양이다.
+const LONG_PROMPT = "세션 귀속 v2 후속으로 홈 세션 cwd 를 프로젝트 폴더로 옮기자";
 
 test("지시 → 껍데기 프로젝트 이름·본문(훅과 같은 형식)", () => {
   const out = shellProjectFromPrompt(PROMPT);
@@ -14,12 +17,19 @@ test("지시 → 껍데기 프로젝트 이름·본문(훅과 같은 형식)", (
   assert.ok(String(out?.description).includes(AUTO_CREATED_MARK), "정련 훅이 껍데기를 판별하는 표식");
 });
 
-test("이름은 첫 비어있지 않은 줄 · 공백 정규화 · 70자 상한", () => {
+// #2031 — 상한이 70자였을 때 이 자리가 곧 신고 내용이었다: 보드·사이드바에 지시문 한 문장이 그대로 걸렸다
+//  (2026-08-26 실측 자동생성 63건 중 49건이 그 상태, 이름 평균 46자). 규칙 본체는 v6/project-name.ts 가 재고,
+//  여기서는 **껍데기 생성이 그 규칙을 실제로 통과시키는지**(원문은 본문에 보존하는지)를 잰다.
+test("이름은 첫 비어있지 않은 줄 · 공백 정규화 · 28자 상한", () => {
   assert.equal(shellProjectFromPrompt("\n\n  첫 줄이   여기다  \n둘째 줄은 제목이 아니다")?.name, "첫 줄이 여기다");
   const long = "가".repeat(200);
   const name = String(shellProjectFromPrompt(long)?.name);
-  assert.equal(name.length, 70);
+  assert.equal(name.length, 28);
   assert.ok(name.endsWith("…"), "잘랐으면 잘렸다고 보여야 한다");
+  // 긴 지시라도 **원문은 본문에 그대로** 남는다 — 이름이 짧아진 대가로 잃는 정보가 없어야 한다.
+  const out = shellProjectFromPrompt(LONG_PROMPT);
+  assert.ok(String(out?.name).length <= 28 && String(out?.name).endsWith("…"), "상한을 넘는 지시는 잘린 이름을 받는다");
+  assert.ok(String(out?.description).includes(LONG_PROMPT), "그래도 본문엔 원문 전체가 남는다");
 });
 
 test("제목 재료가 못 되는 지시 → 제목은 안 뽑는다(만들기는 별개 — firstPromptProjectPlan)", () => {

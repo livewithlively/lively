@@ -18,12 +18,13 @@
 import { createProject } from "../v6/project-store.js";
 import { getProjectRow } from "../v6/project-store.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
-import { updateProject } from "../v6/project-store.js";
+import { claimProjectName } from "../v6/project-store.js";
 import { executionSessionProject } from "../v6/execution-session-store.js";
+// 임시 이름을 짓는 규칙(#2031) — 훅 project-auto-bind 와 같은 계약이라 한 곳(v6/project-name.ts)에 둔다.
+import { shellNameFromPrompt } from "../v6/project-name.js";
 
 /** 자동 생성 표식 — 정련 훅(project-bind-nudge)이 "아직 임시 껍데기"를 판별하는 유일한 근거(훅과 같은 문자열). */
 export const AUTO_CREATED_MARK = "<!-- lively:auto-created-from-first-prompt -->";
-const MAX_TITLE = 70;
 const MAX_BODY = 3500;
 
 /** 세션 생성 요청 중 이 판정에 필요한 것만(라우트의 CreateInput 을 그대로 받지 않는다 — 순수 유지). */
@@ -96,9 +97,9 @@ export function shellProjectFromPrompt(promptRaw: string | null | undefined): { 
   const prompt = String(promptRaw ?? "").trim();
   if (!prompt) return null;
   if (prompt.startsWith("/") || prompt.startsWith("!") || prompt.startsWith("<")) return null;
-  const first = prompt.split(/\r?\n/).map((s) => s.trim()).find((s) => s) || prompt;
-  const t = first.replace(/\s+/g, " ").trim();
-  const name = t.length > MAX_TITLE ? t.slice(0, MAX_TITLE - 1).trimEnd() + "…" : t;
+  // 이름은 28자에서 자른다(#2031) — 종전 70자는 지시문 한 문장을 통째로 보드에 걸었다. 원문은 아래 본문에 남는다.
+  const name = shellNameFromPrompt(prompt);
+  if (!name) return null;
   const description = [
     "> ⚙ 세션의 첫 지시에서 **자동 생성**된 프로젝트입니다 — 제목·본문·분류는 작업이 구체화되면 보강됩니다.",
     "",
@@ -121,7 +122,10 @@ export async function createShellProject(
   try {
     // ⚠ dedupe:false — 이름이 임시값("새 작업")이라 서로 같아서, 켜 두면 30초 안에 연 두 세션이 **한 프로젝트를 공유**한다
     //  (2026-08-25 dev 실측: 빈 세션과 슬래시 세션이 project/2009 를 함께 받았다). 세션마다 자기 작업면이어야 한다.
-    const project = await createProject({ name: spec.name, description: spec.description, dedupe: false }, { actor, source: "web" });
+    //  name_source='rule'(#2031) — 이름이 **기계값**이라는 표시다. 이 표시가 있는 프로젝트만 그 세션이 첫 턴에
+    //  project_rename_v6 로 한 번 다듬을 수 있다(사람이 지은 이름은 그 걸쇠에 막힌다).
+    const project = await createProject(
+      { name: spec.name, description: spec.description, dedupe: false, name_source: "rule" }, { actor, source: "web" });
     // 폴더·AGENTS.md 확보 + project.folder 확정(resolveProjectBase) — 이게 있어야 cwd 로 쓸 수 있다.
     await ensureAgentsMd(project.id);
     const folder = (await getProjectRow(project.id))?.folder ?? "";
@@ -176,7 +180,12 @@ export async function renameShellProjectForSession(args: {
     if (args.expectProjectId !== undefined && pid !== args.expectProjectId) return null;   // 그새 다른 프로젝트로 옮겼다
     const row = await getProjectRow(pid);
     if (!shouldRenameShellProject(row, args.name, { expectName: args.expectName })) return null;
-    await updateProject(pid, { name: args.name }, { actor: args.owner, source: "web" });
+    // ⚠ 걸쇠를 통과시킨다(#2031) — 표식(AUTO_CREATED_MARK)은 이름을 지어도 본문에 그대로 남으므로, 표식만으로
+    //  거르면 **그 프로젝트에 세션이 하나 더 붙을 때마다** 그 세션의 이름으로 다시 덮어쓴다. 출처 순위
+    //  (rule < session < agent < human)가 그걸 한 번으로 못박고, 사람이 지은 이름·이 일의 이름으로 따로 지어진
+    //  이름(project_rename_v6)도 이 승계가 갈아치우지 못하게 한다. 못 이기면 조용한 no-op — 이 함수는 실패를 만들지 않는다.
+    const { applied } = await claimProjectName(pid, args.name, "session", { actor: args.owner, source: "web" });
+    if (!applied) return null;
     await ensureAgentsMd(pid).catch(() => { /* 제목이 digest 에 반영되는 것뿐 — 다음 pull 이 채운다 */ });
     return pid;
   } catch (e) {
