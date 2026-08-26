@@ -20,6 +20,7 @@ import { makeSsrfFetch } from "../../net/mcp-ssrf-fetch.js";
 import { logger } from "../../log.js";
 import { isSlackOAuthKind, buildSlackAuthorizeUrl, exchangeSlackCode, slackInstallToSlots, parseSlackAccessResponse, relayStartUrl, SLACK_BOT_KIND, type SlackInstall } from "./slack-oauth.js";
 import { isNotionPublicServer, buildNotionAuthorizeUrl, exchangeNotionCode, parseNotionTokenResponse, refreshNotionToken, notionInstallToSlot, NOTION_PUBLIC_KIND, NOTION_PUBLIC_SERVER, type NotionInstall } from "./notion-oauth.js";
+import { resolveGoogleOAuthClient, googleVaultReader } from "./google-token-source.js";
 import { isGoogleServer, buildGoogleAuthorizeUrl, exchangeGoogleCode, parseGoogleTokenResponse, refreshGoogleToken, mergeGoogleTokens, googleInstallToSlot, googleInstallFromBlob, googleTokenExpired, googleScopeString, GOOGLE_KIND, GOOGLE_SERVER, GOOGLE_DEFAULT_SERVICES, type GoogleInstall, type GoogleService } from "./google-oauth.js";
 
 const STATE_KEY_ENV = "CONNECTOR_SECRET_KEY"; // 상태 서명키는 봉투암호화 키와 같은 마스터에서 도메인 분리 파생(신규 env 불요).
@@ -358,10 +359,18 @@ export async function refreshNotionPublicToken(workspaceId: string, actor?: stri
 //  구글 OAuth 엔드포인트는 고정이라 디스커버리할 이유가 없다. 규칙(인가 URL·교환·병합·슬롯)은 google-oauth.ts.
 //  ★ 부수 효과: 연결 창구의 근거가 '서버 행'이 아니라 'http_proxy 도구'가 되어, 매니지드 개인 테넌트에서 구글이
 //   아예 안 보이던 것(T10 #1993 이 `0/4` 로 남긴 자리)이 함께 풀린다.
+/**
+ * 구글 조직 OAuth 클라이언트. **구 kind 를 승계한다** — #1652 시절에 붙인 조직은 client 가
+ *  `google_drive_oauth/oauth:client` 에 있고, 통합 kind 만 보면 연결이 돼 있는데도 googleReady()=false 가 되어
+ *  [권한 넓히기]가 죽는다(화면은 "연결됨"이라 client 입력 폼도 안 뜬다 → 빠져나갈 길이 없다. dev 실측 2026-08-26).
+ *  순서·근거는 google-token-source.ts GOOGLE_CLIENT_KINDS.
+ */
+async function loadGoogleClient(): Promise<{ client_id: string; client_secret: string } | null> {
+  return resolveGoogleOAuthClient(googleVaultReader);
+}
 export async function googleReady(): Promise<boolean> {
   if (process.env.GOOGLE_OAUTH_RELAY_URL?.trim()) return true;
-  const c = await loadOAuthClient(GOOGLE_KIND);
-  return !!(c?.client_id && c.client_secret);
+  return !!(await loadGoogleClient());
 }
 /** 현재 저장된 구글 설치 상태(병합·만료 판정의 prev). 없으면 null. */
 async function loadGoogleInstall(memberId: string): Promise<GoogleInstall | null> {
@@ -394,7 +403,7 @@ export async function startGoogleConsent(
     u.searchParams.set("scope", googleScopeString(services));
     return { authorized: false, state, authorizationUrl: u.toString() };
   }
-  const client = await loadOAuthClient(GOOGLE_KIND);
+  const client = await loadGoogleClient();
   if (!client?.client_id || !client.client_secret) {
     throw new Error("Google 연결이 아직 준비되지 않았습니다 — 관리자가 구글 OAuth 클라이언트의 Client ID/Secret 을 조직 자격(kind google_oauth, scope_key oauth:client)에 넣어야 합니다.");
   }
@@ -410,7 +419,7 @@ export async function startGoogleConsent(
   };
 }
 async function finishGoogleConsent(p: StatePayload, code: string, actor?: string): Promise<void> {
-  const client = await loadOAuthClient(GOOGLE_KIND);
+  const client = await loadGoogleClient();
   if (!client?.client_id || !client.client_secret) throw new Error("Google OAuth 클라이언트가 없어 토큰을 교환할 수 없습니다(연결 도중 설정이 지워졌습니다).");
   const owner = memberOwner(p.m);
   const verifier = (await getMemberSecret(owner, GOOGLE_KIND, PKCE_SCOPE))?.secret ?? undefined;
@@ -442,7 +451,7 @@ export async function ensureGoogleAccessToken(memberId: string, actor?: string):
   if (!cur) return null;
   if (!googleTokenExpired(cur)) return cur.access_token;
   if (!cur.refresh_token) return null;
-  const client = await loadOAuthClient(GOOGLE_KIND);
+  const client = await loadGoogleClient();
   if (!client?.client_id || !client.client_secret) return null;
   const refreshed = await refreshGoogleToken({
     clientId: client.client_id, clientSecret: client.client_secret,
