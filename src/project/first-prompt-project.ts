@@ -18,6 +18,8 @@
 import { createProject } from "../v6/project-store.js";
 import { getProjectRow } from "../v6/project-store.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
+import { updateProject } from "../v6/project-store.js";
+import { executionSessionProject } from "../v6/execution-session-store.js";
 
 /** 자동 생성 표식 — 정련 훅(project-bind-nudge)이 "아직 임시 껍데기"를 판별하는 유일한 근거(훅과 같은 문자열). */
 export const AUTO_CREATED_MARK = "<!-- lively:auto-created-from-first-prompt -->";
@@ -127,6 +129,58 @@ export async function createShellProject(
     return { id: project.id, folder };
   } catch (e) {
     console.warn("[first-prompt-project] 첫 지시 프로젝트 선생성 실패 — 개인 루트에서 연다:", (e as Error)?.message ?? e);
+    return null;
+  }
+}
+
+/**
+ * 순수 — 세션 이름이 정해졌을 때 **그 프로젝트 이름도 따라 바꿀 자리인가**(#1867, 상민님 제안 2026-08-25).
+ *
+ *  왜: 자동 생성 프로젝트의 이름은 **첫 지시를 기계적으로 자른 것**이라 "PROJECT AUTO BIND 에서 하는일이 정확히…"
+ *   처럼 읽기 나쁘다. 반면 세션 이름은 **그 세션 자신이** 지시·주입된 프로젝트 맥락을 보고 짓는다(#1979 `session_rename`).
+ *   같은 재료로 더 좋은 이름이 이미 나오는데 프로젝트만 기계값으로 남을 이유가 없다.
+ *
+ *  ⚠ 사람이 손댄 프로젝트는 절대 건드리지 않는다 — 두 겹으로 막는다:
+ *   ① `AUTO_CREATED_MARK` 가 본문에 남아 있어야 한다(정련하면 사람이 본문을 바꾸며 사라지거나, 최소한 제목이 바뀐다).
+ *   ② `expectName` 을 주면 **지금 이름이 그때 우리가 넣은 값 그대로**여야 한다(그 사이 누가 고쳤으면 물러난다).
+ *  세션 이름과 같아지는 것이 맞는 이유: 이 프로젝트는 그 세션 하나를 담으려고 방금 만든 껍데기다(여러 세션이 모인
+ *   프로젝트에 세션 이름을 덮는 것과는 다른 이야기 — 그건 #1808 이 금지한 반대 방향이다).
+ */
+export function shouldRenameShellProject(
+  project: { name?: string | null; description?: string | null } | null | undefined,
+  next: string,
+  opts: { expectName?: string } = {},
+): boolean {
+  if (!project) return false;
+  const now = String(project.name ?? "").trim();
+  const name = String(next ?? "").trim();
+  if (!name || name === now) return false;
+  if (!String(project.description ?? "").includes(AUTO_CREATED_MARK)) return false;   // 사람이 정련한 프로젝트
+  if (opts.expectName !== undefined && now !== String(opts.expectName).trim()) return false;
+  return true;
+}
+
+/**
+ * 세션 이름이 정해졌다 — 그 세션이 붙은 **자동 생성 껍데기** 프로젝트의 이름도 같은 것으로 바꾼다.
+ *  바꿨으면 그 id, 아니면 null. 실패는 전부 삼킨다(이름은 부가정보고, 세션·기록이 먼저다).
+ *  노드(멤버 PC) 세션도 덮는다 — 이름짓기가 게이트웨이의 capability 로 들어오기 때문이다(#1979 이전엔
+ *   노드에서 이름을 지어 이 승계가 no-op 이었다).
+ */
+export async function renameShellProjectForSession(args: {
+  executionId: string; owner: string; name: string; expectProjectId?: number; expectName?: string;
+}): Promise<number | null> {
+  try {
+    const current = await executionSessionProject(args.executionId, args.owner);
+    const pid = Number(current?.project_id ?? 0);
+    if (!(pid > 0)) return null;
+    if (args.expectProjectId !== undefined && pid !== args.expectProjectId) return null;   // 그새 다른 프로젝트로 옮겼다
+    const row = await getProjectRow(pid);
+    if (!shouldRenameShellProject(row, args.name, { expectName: args.expectName })) return null;
+    await updateProject(pid, { name: args.name }, { actor: args.owner, source: "web" });
+    await ensureAgentsMd(pid).catch(() => { /* 제목이 digest 에 반영되는 것뿐 — 다음 pull 이 채운다 */ });
+    return pid;
+  } catch (e) {
+    console.warn("[first-prompt-project] 껍데기 프로젝트 이름 승계 실패(비치명):", (e as Error)?.message ?? e);
     return null;
   }
 }

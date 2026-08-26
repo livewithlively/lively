@@ -50,6 +50,10 @@ export interface SessionState {
   created: number | null;     // session_created(epoch초)
   last_busy: number | null;   // @box_last_busy(마지막 작업 epoch초) — restorable 카드 시간표시용
   last_seen: string | null;   // 마지막 라이브(tmux) 관측 시각(진단용)
+  // #2022 — 이 행을 게이트웨이가 **노드 스냅샷에서 발견해** 적었나. true 면 workspace 좌표(root_key·subpath)를 모른다
+  //  (그 컴퓨터에서 직접 띄운 세션이라 dir 만 있고, 그 경로를 좌표로 되돌리려면 그 노드의 루트 설정이 필요하다).
+  //  목록엔 보이지만 복원은 거절한다 — 좌표를 추측하면 엉뚱한 폴더에서 되살아난다.
+  discovered?: boolean;
   claude_session_id: string | null; // #1059 정밀복원 — 이 box 가 현재 도는 claude 세션 UUID(work-flag 훅 보고, last-write-wins). null=미상→picker.
                                     //  ⚠ 이름만 claude 다 — 값은 **그 하네스의 대화 id**(codex·opencode·agy·grok 어댑터가 자기 id 를 같은 통로로 보고, #1711).
   transcript_path: string | null;   // #1746 — 그 대화 파일의 절대경로(훅 페이로드 transcript_path, 세션 안에서 보고 → 어느 홈인지 서버가 짐작 안 함).
@@ -87,6 +91,7 @@ export function rowToState(r: Record<string, any>): SessionState {
     exited_at: r.exited_at ? new Date(r.exited_at).toISOString() : null,
     exit_reason: r.exit_reason ?? null,
     node_id: (r.node_id as string | null) ?? null,
+    discovered: !!r.discovered,   // #2022 — 노드 스냅샷에서 발견한 행(좌표 미상)
   };
 }
 
@@ -194,6 +199,40 @@ export async function sessionStateByClaudeUuid(uuid: string): Promise<SessionSta
 export async function getSessionState(id: string): Promise<SessionState | undefined> {
   const r = await itemsPool.query("SELECT * FROM org_session_state WHERE id=$1", [id]);
   return r.rows[0] ? rowToState(r.rows[0]) : undefined;
+}
+
+/**
+ * #2022 — 노드 스냅샷에서 **발견한** 세션의 행을 적는다. `discovered=true` 로 박고 **없을 때만** 넣는다.
+ *
+ *  왜 upsert 가 아니라 insert-only 인가: 이 경로는 3초마다 도는 상태 push 에서 불린다. upsert 면 create 릴레이가
+ *  방금 쓴 **정확한 좌표(root_key·subpath)** 를 그 다음 push 가 좌표 없는 값으로 덮어쓴다 — 되살릴 수 있던 세션이
+ *  되살릴 수 없게 된다. 있으면 그대로 두는 것이 이 함수의 계약이다(ON CONFLICT DO NOTHING).
+ */
+export async function insertDiscoveredSessionState(s: SessionStateInput): Promise<boolean> {
+  if (ON_NODE) return false;   // 노드엔 DB 가 없다(upsertSessionState 와 같은 규약)
+  const r = await itemsPool.query(
+    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites,
+       project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id,
+       discovered, last_seen, updated_at)
+     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,
+       $11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,
+       true, now(), now())
+     ON CONFLICT (tenant_id, id) DO NOTHING`,
+    [s.id, s.owner, s.label, s.harness, s.dir, s.root_key, s.subpath, JSON.stringify(s.flags ?? {}), s.auto_approve,
+     JSON.stringify(s.invites ?? []), s.project_id, s.project_src, s.read_only, s.incognito, s.write_vis ?? null,
+     s.restrict_read, s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** 여러 세션의 desired-state 를 **한 번에**(#2022). 화면 하나가 세션 수십 개의 이름·소속을 물을 때
+ *  건별 왕복(N+1)을 만들지 않기 위한 것 — 없는 id 는 결과 Map 에 그냥 빠진다. */
+export async function getSessionStates(ids: string[]): Promise<Map<string, SessionState>> {
+  const want = [...new Set((ids || []).map((x) => String(x || "").trim()).filter(Boolean))];
+  const out = new Map<string, SessionState>();
+  if (!want.length) return out;
+  const r = await itemsPool.query("SELECT * FROM org_session_state WHERE id = ANY($1::text[])", [want]);
+  for (const row of r.rows) { const st = rowToState(row); out.set(st.id, st); }
+  return out;
 }
 
 // 한 소유자의 desired-state 전부(복원 목록의 원천 — 호출자가 tmux 라이브와 병합해 offline 만 남긴다).

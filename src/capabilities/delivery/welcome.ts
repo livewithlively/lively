@@ -223,7 +223,7 @@ export const welcomeCapabilities: Capability[] = [
       const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
       const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
       return {
-        done: !!liv.welcome?.done_at,
+        done: !!(liv.welcome?.done_at || liv.onboarded_at),   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
         done_at: liv.welcome?.done_at ?? null,
         // 이 사람의 AI 가 이어졌나(분석이 실제로 돌 수 있나) + 무엇으로 도는가. 자격 값은 절대 싣지 않는다.
         ai_ready: aiHarnesses.length > 0,
@@ -409,8 +409,11 @@ export const welcomeCapabilities: Capability[] = [
       }
 
       // ── 완료 표식 ── 서버가 안다. 기기를 바꿔도 온보딩이 다시 뜨지 않는다.
+      //  main(#2039)은 같은 사실을 `onboarded_at` 으로 보고 부팅 판정(me.first_run)을 한다 — 두 표식을 **한 번에** 찍는다.
+      //   welcome 만 찍으면 다음 부팅에 first_run 이 여전히 true 라 처음 설정이 또 뜬다.
       const profile = await appendLivProfile(userId, {
         welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder },
+        onboarded: true,
       });
       return { ok: true, created, skipped, welcome: profile.welcome ?? null };
     }, false, {

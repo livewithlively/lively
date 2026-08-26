@@ -9,6 +9,7 @@ import type { LivelyUser } from "../context.js";
 import { listSessions, listRestorableSessions } from "../terminal/terminal-sessions.js";
 import { listSessionsForProject } from "../v6/session-log-store.js";          // #1851 — 프로젝트 휴지통: 기록만 남은 세션까지 묶음으로
 import { bundleTrashedIds } from "../sessions/session-trash.js";
+import { sessionsCurrentlyBound } from "../v6/project-session-store.js";
 import { applySessionTrashOp } from "../sessions/session-trash-ops.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 import { syncFolderAcls } from "../v6/folder-acl-sync.js";
@@ -480,7 +481,12 @@ async function myProjectSessionIds(user: LivelyUser, me: string, projectId: numb
   const pastMine = restorable.filter((s) => Number(s.projectId) === projectId && s.owned);
   // 기록만 남은 세션(중앙 기록, 박스 없음) — 이 프로젝트에 바인딩된 내 것. 박스 id 와 겹치면 표식이 두 이름에 다 붙을 뿐 무해.
   const logs = await listSessionsForProject(projectId).catch(() => []);
-  const logMine = logs.filter((r) => r.owner === me).map((r) => r.session_id);
+  // ⚠ 이 목록은 **이력** 조인이라 '지금은 다른 프로젝트로 옮긴 세션'까지 포함한다(시간구간 모델 — 목록으로는 그게 맞다).
+  //  휴지통은 다르다: 옮긴 세션까지 버리면 **살아서 다른 일을 하고 있는 세션이 사라진다**(2026-08-26 실측 — 소속을
+  //  #1867 로 옮긴 뒤 옛 껍데기 #2015 를 버리자 그 세션 카드가 함께 쓸려갔다). 과거 구간은 그대로 두고, 세션은 지금 주인을 따른다.
+  const logCandidates = logs.filter((r) => r.owner === me).map((r) => r.session_id);
+  const stillHere = await sessionsCurrentlyBound(logCandidates, projectId).catch(() => new Set(logCandidates));
+  const logMine = logCandidates.filter((id) => stillHere.has(id));
   const ids = [...new Set([...liveMine.map((s) => s.id), ...pastMine.map((s) => s.id), ...logMine])];
   return { ids, liveMine: liveMine.length, liveOthers: liveOthers.length };
 }

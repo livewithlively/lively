@@ -177,3 +177,30 @@ test("N24 이미 적어 둔 도구 목록에 중복으로 넣지 않는다", asy
   });
   assert.deepEqual(m.permissions.tools.filter((t: string) => t === "app_notify").length, 1);
 });
+
+// ── 빌트인 vs 서드파티 (2026-08-26 dev 실측으로 뒤집힌 규칙) ────────────────
+// grant 가 답하는 질문은 "**남의 앱**이 내 이름으로 행동해도 되나" 다. ai-session 은 남의 앱이 아니라
+// 지금 내가 쓰는 화면 자체다. 게다가 동의 창은 런치패드로 앱을 열 때만 뜨는데 세션은 그 경로로 열리지
+// 않아, 아무도 ai-session grant 를 가진 적이 없었다 → 알림 이력이 한 사람에게만 쌓였다(기능이 반쯤 죽음).
+
+test("N25 ★빌트인은 grant 없이도 알림을 보낸다 — 제품 자신에게 동의를 받지 않는다", () => {
+  assert.equal(decideNotifyAllowed({
+    appId: "ai-session", declaresNotifications: true, hasActiveGrant: false, isBuiltin: true,
+  }), null);
+});
+
+test("N26 ★서드파티는 그대로 grant 를 요구한다(fail-closed 유지)", () => {
+  assert.equal(decideNotifyAllowed({
+    appId: "someone-app", declaresNotifications: true, hasActiveGrant: false, isBuiltin: false,
+  }), "notify-grant-missing");
+  // isBuiltin 을 아예 안 주면(구 호출부) 서드파티로 본다 — 안전한 기본값.
+  assert.equal(decideNotifyAllowed({
+    appId: "someone-app", declaresNotifications: true, hasActiveGrant: false,
+  }), "notify-grant-missing");
+});
+
+test("N27 빌트인이어도 권한 선언이 없으면 거부한다 — 빌트인은 grant 면제이지 권한 면제가 아니다", () => {
+  assert.equal(decideNotifyAllowed({
+    appId: "browser", declaresNotifications: false, hasActiveGrant: true, isBuiltin: true,
+  }), "notify-permission-missing");
+});

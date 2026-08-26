@@ -105,7 +105,10 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       projectId: s.project_id || 0, appId: s.app_id || undefined,
       agentState: "offline", title: "",
       lastActive: s.last_busy || undefined,
-      restorable: true,
+      // #2022 — 게이트웨이가 노드 스냅샷에서 **발견한** 행은 workspace 좌표를 모른다 → 되살릴 수 없다.
+      //  여기서 true 로 내보내면 화면이 "열면 되살아난다"(#1820)고 약속한 뒤 409 를 받는다. 약속을 하지 않는다.
+      restorable: !(s.discovered && !s.root_key),
+      discovered: !!s.discovered,
       exitedByUser: !!s.exited_at, // #1059 — 사용자 정상 종료 표시가 찍혔으면 '종료됨', 아니면 '복원 가능(중단됨)'.
       // #1251 — 사용자 종료가 아닌데 사유가 'oom' 이면 earlyoom 이 죽인 것. 둘이 겹치면 사용자 종료가 이긴다(더 확실한 사실).
       oomKilled: !s.exited_at && s.exit_reason === "oom",
@@ -190,7 +193,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -220,6 +223,9 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     parsed.push({
       name, created, attached, paneTitleRaw, offline, busy, shellWorking, lastBusy, reportedFresh,
       lastAttached: Number(lastAttachedRaw) || 0,
+      // #1954 3차 — 화면이 직접 찍은 열람 시각(@box_last_seen). attach 이벤트와 **다른 축**이라 max 로 합치지 않고
+      //  그대로 올린다 — 합치는 자리는 프론트 판정 한 곳(web/session-status.ts isUnreadDone)이다.
+      lastViewed: Number(lastSeenRaw) || 0,
       tmuxDesired: {
         owner: owner || "",
         label: labelParts.join("\t") || null,
@@ -250,7 +256,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     rows.push({
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
       offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
-      reportedFresh: p.reportedFresh, lastAttached: p.lastAttached,
+      reportedFresh: p.reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
       flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
     });
@@ -297,6 +303,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
       lastAttached: r.lastAttached || undefined, // #1098 마지막 열람(탭 붙음) 시각 — '안 본 작업 완료' 판정용.
+      lastViewed: r.lastViewed || undefined,      // #1954 3차 마지막 열람(화면이 직접 찍음) — 위와 같은 판정의 두 번째 신호.
     });
   }
   sessions.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));

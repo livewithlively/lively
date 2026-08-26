@@ -56,13 +56,67 @@ export async function recordSessionProject(sessionId: string, projectId: number 
 
 // 이어받기(#905 C1) — 이 세션의 **가장 최근 바인딩** 프로젝트 id(+박스 폴더). 없으면 null. 세션이 어느 프로젝트에서
 //  돌았는지로 이어받기 세션의 작업 경로·멤버십 게이트를 정한다.
+/**
+ * 이어받기 승계(#1867) — **실행 세션 id 로 먼저, 없으면 그 세션이 이어받은 대화 uuid 로** 마지막 소속을 찾는다.
+ *
+ *  왜 두 축인가: 대화(conversation)와 실행 세션(execution)은 다른 엔티티다. 같은 대화를 새 세션에서 이어받으면
+ *   실행 id 는 **새로 발급**되므로 그 id 로는 아무 소속도 없다 — 그러면 첫 프롬프트에서 훅이 '미연결'로 보고
+ *   **새 프로젝트를 만든다**(2026-08-25 실측: 대화 `1bf015ec…`가 #1867 에 붙어 있었는데, 그 대화를 이어받은
+ *   `box-yoon-6178a7c3` 이 새 프로젝트 #2015 를 만들었다 — 상민님이 "왜 직전 프롬프트가 프로젝트명이지?"로 발견).
+ *  대화 uuid 축에도 소속이 남는 이유: session_log append 가 실행 세션의 현재 소속을 대화 id 로 투영한다.
+ *
+ *  ⚠ 순서가 의미다 — 실행 id 가 이겨야 한다. 세션을 옮긴 뒤(detach·재바인딩)의 정답은 그 실행 세션의 것이고,
+ *   대화 축은 그보다 낡을 수 있다.
+ */
+/**
+ * 이 세션들 중 **지금도 그 프로젝트 소속**인 것(#1867, 2026-08-26).
+ *
+ *  왜 따로 필요한가: 목록(listSessionsForProject)은 `session_project` **이력**을 조인한다 — 시간구간 모델에서
+ *   "이 프로젝트에서 일한 세션"이 곧 과거 구간을 가진 세션이라 그게 맞다. 그런데 **프로젝트를 휴지통에 넣을 때**
+ *   그 목록을 그대로 쓰면, 소속을 옮긴 뒤에도 과거 구간 때문에 **살아 있는 남의 일감 세션이 딸려 버려진다**
+ *   (2026-08-26 실측: 세션을 #1867 로 옮긴 뒤 옛 껍데기 #2015 를 휴지통에 넣자 그 세션 카드가 함께 쓸려갔다).
+ *  과거 구간은 그대로 두는 게 맞다(그때 한 일은 그 프로젝트의 것이다). 다만 **세션 자체**는 지금 주인을 따른다.
+ */
+export async function sessionsCurrentlyBound(sessionIds: string[], projectId: number): Promise<Set<string>> {
+  const ids = [...new Set(sessionIds.map((x) => String(x ?? "").trim()).filter(Boolean))];
+  if (!ids.length || !(projectId > 0)) return new Set();
+  const r = await itemsPool.query(
+    `SELECT t.session_id FROM (
+       SELECT DISTINCT ON (sp.session_id) sp.session_id, sp.project_id
+         FROM session_project sp
+        WHERE sp.session_id = ANY($1::text[])
+        ORDER BY sp.session_id, sp.valid_from DESC
+     ) t WHERE t.project_id = $2::int`,
+    [ids, projectId]);
+  return new Set(r.rows.map((x) => String((x as { session_id: string }).session_id)));
+}
+
+export async function latestProjectForSessionChain(
+  ids: Array<string | null | undefined>,
+  lookup: (id: string) => Promise<{ id: number; folder: string } | null> = latestProjectForSession,
+): Promise<{ id: number; folder: string } | null> {
+  for (const id of ids) {
+    const key = String(id ?? "").trim();
+    if (!key) continue;                       // 빈 축은 조회하지 않는다(대화 uuid 가 없는 세션이 정상이다)
+    const one = await lookup(key);
+    if (one) return one;
+  }
+  return null;
+}
+
 export async function latestProjectForSession(sessionId: string): Promise<{ id: number; folder: string } | null> {
   if (!sessionId) return null;
+  // ⚠ `p.trashed_at IS NULL` — **지워진 프로젝트는 승계하지 않는다**(#1867, 2026-08-26 실측으로 추가).
+  //  껍데기를 휴지통에 넣는 것이 정상 정리 절차인데(태스크 #2051), 그 상태로 대화를 이어받으면
+  //  이 조회가 지워진 프로젝트를 돌려줘 세션이 **휴지통에 있는 프로젝트에 붙는다**(보드엔 안 보이는데
+  //  맥락은 거기서 주입된다). 그때는 소속이 없는 것으로 보고, 훅이 새 껍데기를 만들게 두는 편이 맞다.
+  //  ⚠ '한 칸 더 옛날 바인딩'으로 되살리지 않는다 — 마지막 구간만 본다. 사람이 지운 프로젝트를 우회해
+  //   그 이전 소속을 부활시키면, 옮긴 뒤 지운 경우에 **의도와 정반대**가 된다(detach 가 NULL 로 남는 것과 같은 이유).
   const r = await itemsPool.query(
     `SELECT p.id, COALESCE(p.folder,'') AS folder
        FROM (SELECT project_id FROM session_project
               WHERE session_id=$1 ORDER BY valid_from DESC LIMIT 1) sp
-       JOIN project p ON p.id = sp.project_id`,
+       JOIN project p ON p.id = sp.project_id AND p.trashed_at IS NULL`,
     [sessionId]);
   const row = r.rows[0] as { id: number; folder: string } | undefined;
   return row ? { id: Number(row.id), folder: String(row.folder || "") } : null;

@@ -277,9 +277,17 @@ export interface SessionInfo {
   //  lastActive(마지막 작업) 와 비교해 '내가 시킨 작업이 끝났는데 아직 안 본' 세션을 프론트가 판정한다
   //  (lastActive > lastAttached = 마지막 열람 이후에 작업이 끝남). 값 자체는 예전부터 tmux 가 주고 있었는데 버리고 있었다.
   lastAttached?: number;
+  // #1954 3차 — 마지막으로 이 세션 **화면을 보고 있던** 시각(epoch초, tmux `@box_last_seen`). 한 번도 안 봤으면 0.
+  //  lastAttached 와 뜻이 겹쳐 보이지만 축이 다르다: 저건 '터미널이 붙은 순간'(탭 수명당 한 번)이고 이건
+  //  '사람이 그 화면을 열어 두고 있다'(보는 동안 주기적으로 갱신). 새 셸이 탭 DOM 을 유지하면서 전자만으로는
+  //  '봤다'를 표현할 수 없게 됐다 — tmux-exec.ts LIST_FMT 주석 참조.
+  lastViewed?: number;
   // #1059 E — 복원 가능(restorable): tmux 에 없고 DB desired-state(org_session_state)에만 있는 세션(재부팅으로 죽었거나
   //  F reaper 가 회수). agentState 는 offline. 프론트가 이 배지를 보고 '열기=복원'(POST …/restore) 경로로 분기한다(attach 아님).
   restorable?: boolean;
+  // #2022 — 이 행을 게이트웨이가 **노드 스냅샷에서 발견해** 적었나(그 컴퓨터에서 직접 띄운 세션).
+  //  좌표를 모르므로 되살릴 수 없다 — 위 restorable 이 false 로 나가고, 화면은 '왜 못 되살리나'를 이 값으로 말할 수 있다.
+  discovered?: boolean;
   // #1059 — restorable 이 **사용자 정상 종료**(/exit·logout, SessionEnd 훅 보고)로 생겼나. true=내가 종료('종료됨·대화 이어보기'),
   //  false=재부팅·강제kill·reaper 회수('복원 가능·중단됨'). 프론트가 라벨·버튼을 구분(둘 다 복원 경로는 동일).
   exitedByUser?: boolean;
