@@ -3,7 +3,13 @@
 .ob-root{ --ghost:#D5DCE8; --blue-soft:#EEF5FF; --hover:#F6FAFF; --card:#FFFFFF; --shadow:0 1px 2px rgba(21,35,59,.05), 0 4px 14px rgba(21,35,59,.07);
   display:flex; flex-direction:column; flex:1; min-height:0; height:100%; background:var(--bg); color:var(--ink); font-size:14px; line-height:1.5; position:relative }
 .ob-root *{box-sizing:border-box}
-.ob-root button{font:inherit; color:inherit; background:none; border:0; cursor:pointer}
+/* ⚠ :where() 로 감싼 건 실수가 아니라 **이 리셋이 아래 클래스 규칙을 이기면 안 되기 때문**이다.
+   프로토타입(public/onboarding-proto/v2.html:29)은 맨 `button{…background:none}`(가중치 0,0,1)이라
+   `.btn-pri`(0,1,0)가 이겼다. v2 셸로 옮기며 스코프를 붙여 `.ob-root button`(0,1,1)이 되는 순간
+   승자가 뒤집혀 **#/welcome 의 채운 단추가 전부 배경 없는 맨글자로** 렌더됐다(실측: 계산된
+   background-color 가 rgba(0,0,0,0)). :where() 는 스코프는 유지하면서 가중치만 0 으로 만든다 —
+   프로토타입과 같은 힘, 앱 전역 button 은 그대로 안 건드린다. 여기에 스코프를 다시 붙이지 말 것. */
+:where(.ob-root) button{font:inherit; color:inherit; background:none; border:0; cursor:pointer}
 .ob-root input{font:inherit; color:inherit}
 .ob-root b{font-weight:600}
 /* ═══ 노션을 참조한 온보딩 v2 — 3막 구조 (#1813, 2026-08-24)
@@ -144,3 +150,54 @@
    '그냥 알려 드리는 것' 이라 본문과 같은 톤으로 낮춰 둔다. */
 .ob-tok .ob-note{font-size:13px; color:var(--ink-sub); line-height:1.7}
 .ob-tok .ob-note code{font-size:12px}
+
+/* ══ #1879 «내 컴퓨터에 잇기» — 설치 걸음표 · 명령 한 줄 · OS 토글 ══════════════════
+   기준은 리브 페르소나의 성립 조건("컴맹인 중학생도 따라올 수 있어야 한다")이다. 그래서 이 블록의
+   시각 규칙은 셋뿐 — ① 걸음마다 번호가 눈에 먼저 들어온다 ② 붙여넣을 줄은 다른 무엇과도 안 헷갈리게
+   한 덩어리로 떨어져 있다 ③ 누를 키는 본문 글자와 다르게 보인다. 장식은 넣지 않는다. */
+.ob-ostabs{display:flex; gap:6px; margin:0 0 20px}
+.ob-ostabs button{flex:1; border:1px solid var(--line); border-radius:9px; padding:9px 10px;
+  font-size:13.5px; font-weight:600; color:var(--ink-sub); background:var(--card)}
+.ob-ostabs button:hover{border-color:#cfcecb}
+.ob-ostabs button.ob-on{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); color:var(--ink)}
+
+.ob-ins-list{display:flex; flex-direction:column; gap:22px; margin:0 0 22px}
+.ob-ins{position:relative; padding-left:34px}
+.ob-ins::before{content:attr(data-n); position:absolute; left:0; top:0; width:23px; height:23px;
+  border-radius:50%; background:var(--ink); color:#fff; font-size:12.5px; font-weight:700;
+  display:grid; place-items:center; font-variant-numeric:tabular-nums}
+.ob-ins-t{display:block; font-size:15px; font-weight:700; margin:1px 0 7px; line-height:1.45}
+.ob-ins-p{font-size:13.5px; color:var(--ink-sub); line-height:1.8; margin:0 0 8px}
+.ob-ins-ul{margin:0 0 8px; padding-left:17px; font-size:13.5px; color:var(--ink-sub); line-height:1.8}
+.ob-ins-ul li{margin-bottom:3px}
+.ob-ins-n{font-size:12.5px; color:var(--muted); line-height:1.75; margin:0}
+.ob-ins-n2{color:var(--muted)}
+.ob-ins-n code,.ob-ins-ul code{background:var(--line-row); border-radius:5px; padding:2px 6px; font-size:12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
+
+/* 붙여넣을 줄 — 길면 감싸지 말고 가로로 흐르게 둔다(한 줄이라는 사실이 눈에 보여야 한다). */
+.ob-cmd{display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:9px;
+  background:var(--line-row); padding:9px 9px 9px 12px; margin:0 0 10px}
+.ob-cmd code{flex:1; min-width:0; overflow-x:auto; white-space:nowrap; font-size:12.5px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
+.ob-cmd-copy{flex:none; border:1px solid var(--line); border-radius:7px; background:var(--card);
+  padding:5px 11px; font-size:12.5px; font-weight:600; color:var(--ink-sub)}
+.ob-cmd-copy:hover{border-color:#cfcecb; color:var(--ink)}
+.ob-cmd-copy.ob-on{border-color:var(--blue); color:var(--blue)}
+
+.ob-kbd{display:inline-block; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px;
+  background:var(--card); padding:1px 6px; font-size:12px; font-weight:600; color:var(--ink);
+  font-family:inherit; line-height:1.6; white-space:nowrap}
+
+.ob-tok .ob-fine2{font-size:12.5px; color:var(--muted)}
+/* 윈도우 캐비엇 — 클래식 설치 가이드(web/learn.ts)가 같은 사실을 이미 말한다(bootstrap.ps1 의 실제
+   PowerShell 실행 검증은 POSIX 박스에서 돌지 않아 정적 계약 테스트뿐). 한쪽만 말하면 화면끼리 어긋난다. */
+.ob-ins-warn{margin:-8px 0 18px; color:var(--warn-ink, #8a6100)}
+/* 터미널 갈래 접힘 — 주된 길(앱) 아래에 조용히. 여는 사람만 본다. */
+.ob-ins-alt{margin-top:22px; border-top:1px solid var(--line); padding-top:14px}
+.ob-ins-alt>summary{font-size:13px; color:var(--muted); cursor:pointer; list-style:none}
+.ob-ins-alt>summary::-webkit-details-marker{display:none}
+.ob-ins-alt>summary::before{content:'＋ '; color:var(--ghost)}
+.ob-ins-alt[open]>summary::before{content:'－ '}
+.ob-ins-alt>summary:hover{color:var(--ink-sub)}
+.ob-ins-alt .ob-ins-n{margin:10px 0 8px}
