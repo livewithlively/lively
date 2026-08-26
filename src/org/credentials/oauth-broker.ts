@@ -20,6 +20,10 @@ import { makeSsrfFetch } from "../../net/mcp-ssrf-fetch.js";
 import { logger } from "../../log.js";
 import { isSlackOAuthKind, buildSlackAuthorizeUrl, exchangeSlackCode, slackInstallToSlots, parseSlackAccessResponse, relayStartUrl, SLACK_BOT_KIND, type SlackInstall } from "./slack-oauth.js";
 import { isNotionPublicServer, buildNotionAuthorizeUrl, exchangeNotionCode, parseNotionTokenResponse, refreshNotionToken, notionInstallToSlot, NOTION_PUBLIC_KIND, NOTION_PUBLIC_SERVER, type NotionInstall } from "./notion-oauth.js";
+import {
+  isGithubAppServer, buildGithubAuthorizeUrl, githubInstallUrl, exchangeGithubCode,
+  GITHUB_APP_KIND, GITHUB_APP_KEY_SCOPE, GITHUB_APP_SERVER, GITHUB_INSTALL_KIND, type GithubUserTokens,
+} from "./github-app.js";
 
 const STATE_KEY_ENV = "CONNECTOR_SECRET_KEY"; // 상태 서명키는 봉투암호화 키와 같은 마스터에서 도메인 분리 파생(신규 env 불요).
 const STATE_INFO = "lively-oauth-state-v1";
@@ -264,6 +268,108 @@ async function finishSlackConsent(p: StatePayload, srv: { authKind: string }, co
   await saveSlackInstall(p, srv.authKind, install, actor);
 }
 
+// ── GitHub App 직결(#1881 G5) — 예약 서버명(github-app)으로 콜백을 라우팅한다(서버 행 없음, 이유는 github-app.ts).
+//  산출이 둘이다: user token 은 **그 사람의** `github_pat` 슬롯(도구 G4 가 읽는 그 자리 — 붙여넣기에서 연결로 조용히
+//  승계된다), 설치 정보(installation_id·레포 선택 범위)는 **조직** 슬롯. installation token 자체는 1시간짜리라
+//  저장하지 않는다 — 필요할 때 app_id + private key 로 찍는다(mintInstallationToken).
+/** 앱 자격 — client 묶음(oauth:client)에 app_id·app_slug 를 meta 로 함께 둔다(설치 URL 을 만들려면 slug 가 필요하다). */
+async function loadGithubApp(): Promise<{ client_id: string; client_secret: string; app_slug?: string } | null> {
+  const r = await getMemberSecret(GATEWAY_OWNER, GITHUB_APP_KIND, CLIENT_SCOPE);
+  if (!r?.secret) return null;
+  try {
+    const ci = JSON.parse(r.secret) as Record<string, unknown>;
+    const id = typeof ci.client_id === "string" ? ci.client_id : "";
+    const sec = typeof ci.client_secret === "string" ? ci.client_secret : "";
+    if (!id || !sec) return null;
+    const slug = typeof (r.meta as Record<string, unknown> | undefined)?.app_slug === "string"
+      ? String((r.meta as Record<string, unknown>).app_slug) : "";
+    return { client_id: id, client_secret: sec, ...(slug ? { app_slug: slug } : {}) };
+  } catch { return null; }
+}
+/**
+ * 앱 자격 저장(관리자) — client 묶음과 private key 를 **다른 행**에 둔다.
+ *  왜 나누나: 수명과 취급이 다르다. client secret 은 OAuth 교환에만 쓰이고, private key 는 installation token
+ *  (=clone 자격)을 찍는 열쇠라 매니지드에선 아예 테넌트에 두지 않는다(CP 가 대신 찍는다 — G7). 한 행에 섞으면
+ *  "키만 빼고 나머지는 테넌트에" 라는 배치가 불가능해진다.
+ */
+export async function saveGithubAppCredentials(p: {
+  clientId: string; clientSecret: string; appId: string | null; appSlug: string | null;
+  privateKeyPem: string | null; actor?: string;
+}): Promise<void> {
+  await setMemberSecret(GATEWAY_OWNER, GITHUB_APP_KIND, CLIENT_SCOPE, {
+    secret: JSON.stringify({ client_id: p.clientId, client_secret: p.clientSecret }),
+    meta: { ...(p.appId ? { app_id: p.appId } : {}), ...(p.appSlug ? { app_slug: p.appSlug } : {}) },
+  }, p.actor ?? "admin");
+  if (p.privateKeyPem) {
+    await setMemberSecret(GATEWAY_OWNER, GITHUB_APP_KIND, GITHUB_APP_KEY_SCOPE, {
+      secret: p.privateKeyPem, meta: { ...(p.appId ? { app_id: p.appId } : {}) },
+    }, p.actor ?? "admin");
+  }
+}
+/**
+ * installation token 을 찍을 재료 — app_id + private key. 없으면 null(그 조직은 clone 자격을 못 만든다).
+ *  매니지드는 이 행이 비어 있고 CP 프록시가 대신 찍는다(G7) — 그래서 '없음'이 곧 오류는 아니다.
+ */
+export async function loadGithubAppSigner(): Promise<{ appId: string; privateKeyPem: string } | null> {
+  const key = await getMemberSecret(GATEWAY_OWNER, GITHUB_APP_KIND, GITHUB_APP_KEY_SCOPE);
+  if (!key?.secret) return null;
+  const appId = String((key.meta as Record<string, unknown> | undefined)?.app_id ?? "").trim()
+    || String(((await getMemberSecret(GATEWAY_OWNER, GITHUB_APP_KIND, CLIENT_SCOPE))?.meta as Record<string, unknown> | undefined)?.app_id ?? "").trim();
+  if (!appId) return null;
+  return { appId, privateKeyPem: key.secret };
+}
+export async function githubAppReady(): Promise<boolean> {
+  if (process.env.GITHUB_OAUTH_RELAY_URL?.trim()) return true;
+  return !!(await loadGithubApp());
+}
+/**
+ * 연결 시작. **설치 화면을 먼저 보낸다** — 그 화면의 레포 선택기가 곧 접근 범위 선언이고, 이미 설치한 사람은
+ *  GitHub 이 인가 단계로 바로 넘겨 준다(왕복이 늘지 않는다). slug 를 모르면 인가 URL 로 떨어뜨린다(설치는 GitHub 이 유도).
+ */
+export async function startGithubAppConsent(memberId: string): Promise<ConsentStart> {
+  const nonce = crypto.randomBytes(16).toString(B64);
+  const state = signState({ m: memberId, s: GITHUB_APP_SERVER, k: "", n: nonce });
+  const relay = process.env.GITHUB_OAUTH_RELAY_URL?.trim();   // 매니지드(G7): CP 가 client·private key 를 쥔다
+  if (relay) {
+    const gatewayUrl = (await getOrgProfile()).gateway_url ?? "";
+    return { authorized: false, state, authorizationUrl: relayStartUrl(relay, state, gatewayUrl) };
+  }
+  const app = await loadGithubApp();
+  if (!app) {
+    throw new Error("GitHub 연결이 아직 준비되지 않았습니다 — 관리자가 라이블리 GitHub App 의 Client ID/Secret 을 조직 자격(kind github_app, scope_key oauth:client)에 넣어야 합니다.");
+  }
+  const authorizationUrl = app.app_slug
+    ? githubInstallUrl(app.app_slug, state)
+    : buildGithubAuthorizeUrl({ clientId: app.client_id, redirectUri: await callbackUrl(), state });
+  return { authorized: false, state, authorizationUrl };
+}
+/** 설치 결과를 조직 슬롯에 기록 — 토큰이 아니라 **어디에 설치됐고 무엇을 골랐는가**만. */
+async function saveGithubInstallation(installationId: string, connectedBy: string, actor?: string): Promise<void> {
+  await setMemberSecret(GATEWAY_OWNER, GITHUB_INSTALL_KIND, installationId,
+    { secret: installationId, meta: { installation_id: installationId, connected_by: connectedBy } }, actor ?? "oauth");
+}
+async function finishGithubAppConsent(p: StatePayload, code: string, installationId: string | null, actor?: string): Promise<void> {
+  const app = await loadGithubApp();
+  if (!app) throw new Error("GitHub App client 가 없어 토큰을 교환할 수 없습니다(연결 도중 설정이 지워졌습니다).");
+  const tokens: GithubUserTokens = await exchangeGithubCode({
+    clientId: app.client_id, clientSecret: app.client_secret, code,
+    redirectUri: await callbackUrl(), fetchFn: await gatewaySsrfFetch(),
+  });
+  // 도구(G4)가 읽는 슬롯과 **같은 자리**에 묶음으로 넣는다 — oauth-proxy-auth 가 묶음/정적을 알아서 가른다.
+  const bundle: OAuthTokens = {
+    access_token: tokens.access_token,
+    token_type: tokens.token_type,
+    ...(tokens.expires_in !== undefined ? { expires_in: tokens.expires_in } : {}),
+    ...(tokens.refresh_token ? { refresh_token: tokens.refresh_token } : {}),
+    ...(tokens.scope !== undefined ? { scope: tokens.scope } : {}),
+  };
+  //  meta 에 expires_at 이 실려야 oauth-proxy-auth 의 만료 판정이 돈다 — 없으면 '만료 아님'으로 떨어져
+  //  8시간 뒤 도구가 401 을 맞을 때까지 아무도 갱신하지 않는다(tokenMeta 가 그 계산을 한다).
+  await setMemberSecret(memberOwner(p.m), "github_pat", "",
+    { secret: encodeTokenBlob(bundle), meta: tokenMeta(bundle) }, actor ?? "oauth");
+  if (installationId) await saveGithubInstallation(installationId, p.m, actor);
+}
+
 // ── 노션 공개 통합 직결(#1881 N2) — org_mcp_server 행이 아니라 예약 서버명(notion-public)으로 콜백을 라우팅한다.
 //  개인 MCP 연결(notion, DCR)과 별개: 이 플로우의 산출은 **조직 수집 슬롯**(gateway, notion_public, scope_key=workspace_id).
 //  규칙(인가 URL·교환·슬롯 모양)은 notion-oauth.ts. 재동의(=[페이지 더 고르기])가 정상 경로라 기존 토큰이 있어도
@@ -374,8 +480,17 @@ export async function startConsent(memberId: string, serverName: string, actor?:
   return { authorized: false, authorizationUrl: provider.authorizationUrl.toString(), state: provider.state() };
 }
 // 콜백 완료 — state 검증 → code→token 교환 → 멤버 vault 저장. serverName·memberId·scopeKey 는 state 에서 복원.
-export async function finishConsent(stateToken: string, code: string, actor?: string): Promise<{ ok: true; memberId: string; serverName: string }> {
+export async function finishConsent(
+  stateToken: string, code: string, actor?: string,
+  //  extra — 상류가 code 말고 더 실어 보내는 값. GitHub 은 설치 직후 콜백에 installation_id 를 함께 준다
+  //  (그 값이 있어야 나중에 installation token 을 찍을 수 있다). 다른 상류엔 없으므로 선택 인자로 둔다.
+  extra?: { installationId?: string | null },
+): Promise<{ ok: true; memberId: string; serverName: string }> {
   const p = verifyState(stateToken); // 위변조/만료 검증(HMAC)
+  if (isGithubAppServer(p.s)) { // #1881 G5 GitHub App — MCP 서버 행 없음(도구는 REST), 설치 정보도 함께 저장
+    await finishGithubAppConsent(p, code, extra?.installationId ?? null, actor);
+    return { ok: true, memberId: p.m, serverName: p.s };
+  }
   if (isNotionPublicServer(p.s)) { // #1881 N2 노션 공개 통합 — MCP 서버 행 없음, Basic 교환
     await finishNotionPublicConsent(p, code, actor);
     return { ok: true, memberId: p.m, serverName: p.s };
