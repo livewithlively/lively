@@ -2576,7 +2576,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "d2ebd46df8b2e243"
+  "input_hash": "c5af77aec9a1cc7f"
  },
  {
   "name": "source_undistilled",
@@ -2606,7 +2606,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "42805a361906679b"
+  "input_hash": "792ed81e3324e631"
  },
  {
   "name": "source_link_knowledge",
