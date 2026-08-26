@@ -1369,8 +1369,10 @@ function refreshSideNow(): void {
 }
 
 /** 좌측 행을 누르면 그 대상에 창을 붙인다 — 이미 열려 있으면 그 창으로, 아니면 새 창. */
-function openSideRow(key: string): void {
-  const route = sideRowRoute.get(key);
+function openSideRow(key: string, fallback?: string): void {
+  //  홈 목록의 행은 제 표(sideRowRoute)에 주소가 있다. [AI 세션]·[확인할 것]처럼 **홈에 없는 행**은
+  //   자기 주소를 들고 오므로 그걸 쓴다(#2033) — 없으면 눌러도 아무 데도 안 가는 행이 된다.
+  const route = sideRowRoute.get(key) || fallback;
   if (!route || !tabsApi) return;
   const hit = tabsApi.find(route);
   if (hit) tabsApi.activate(hit); else tabsApi.add(route);
