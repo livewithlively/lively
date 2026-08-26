@@ -9,7 +9,7 @@
 //   ② 최근 연 앱 — 헤어라인 아래. 맥 독의 '최근 사용' 구간. 5차: 꾹 눌러 위로 끌어 올리면 ①에 고정되고, ①은 끌어서 순서를 바꾼다.
 //   ③ 발치 — 앱(런치패드) · 나(내 프로필·환경설정 #1843). 슬랙의 ＋ · 아바타 자리.
 //
-//  ⚠ 레일 폭은 **68px 고정**이다(원준 3차: "가로 늘리면 UI 바뀌는 거 없이 폭 고정"). 종전의 232px 펼침 모드는
+//  ⚠ 레일 폭은 **76px 고정**이다(원준 3차: "가로 늘리면 UI 바뀌는 거 없이 폭 고정" · #2061 "폭 넓혀줘"로 68→76). 종전의 232px 펼침 모드는
 //   걷었다 — 상태는 **보임 / 숨김** 둘뿐. 숨기면 레일이 들고 있던 워크스페이스·구역·앱·나가 사이드바 머리와
 //   발치로 들어간다(side.ts wsHead·secFoot — 안 B '머리글 드롭다운'). 되살리는 길은 셋: 사이드바 맨 윗줄
 //   왼쪽 패널 단추 · 워크스페이스 팝오버 마지막 행 · ⌘⇧S.
@@ -760,7 +760,10 @@ export function drawRail(): void {
       class: 'v2-rail-it v2-rail-me', type: 'button', 'aria-haspopup': 'dialog', title: '내 프로필 · 환경설정',
       onclick: () => openMeModal({ onSaved: () => drawRail() }),
     },
-      profileAvatar(me.avatar, myName, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
+      //  접속 점은 얼굴 **바깥 껍질**에 단다(#2061) — 얼굴(.v2-ava)은 사진을 원형으로 자르려고 overflow:hidden 이라,
+      //   그 안에 ::after 로 달면 원 밖으로 나간 반쪽이 잘린다(실측: 오른쪽 아래가 초승달처럼 깎여 보였다).
+      el('span', { class: 'v2-rail-avaw' },
+        profileAvatar(me.avatar, myName, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color })),
       el('span', { class: 'v2-rail-t', text: myName })));
 
   host.replaceChildren(top, mid, foot);
