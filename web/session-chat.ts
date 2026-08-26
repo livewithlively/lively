@@ -428,23 +428,31 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   · 그 둘은 **터미널을 보고 있을 때만** 넣는다(대화 모드는 입력창 아래 바가 같은 사실을 이미 말한다).
   //     하네스·노드는 그 바가 말하지 않으므로 두 모드에서 늘 남는다 — 알약이 통째로 사라지지 않는 이유다.
   function paintRunHead(): void {
-    // 상단 선택기가 서면 같은 사실을 읽기 전용 알약으로 한 번 더 쓰지 않는다.
-    if (canType() && target.owned && hcats.some((h) => h.key !== 'shell')) { runEl.hidden = true; return; }
+    // ⭐ 상단 선택기가 서면 **그것이 말하는 것만** 뺀다 — 알약을 통째로 숨기지 않는다(원준 2026-08-27
+    //  "이거 지금 어느 노드에서 실행되고있는지가 원래 세션상단에 표시되지않았나? 그거 복구해").
+    //  #1870 이 선택기를 넣으며 `runEl.hidden = true; return;` 로 알약을 통째로 껐는데, 그 알약이 **노드**도
+    //  싣고 있었다. 선택기는 하네스·모델·강도만 말한다 — **어느 컴퓨터에서 도는지는 아무도 말하지 않게 됐다.**
+    //  바로 아래 머리말이 "하네스·노드는 그 바가 말하지 않으므로 두 모드에서 늘 남는다"고 적어 둔 그대로여야 한다.
+    const selectorsUp = canType() && target.owned && hcats.some((h) => h.key !== 'shell');
     const onTerm = !termHost.hidden;
     //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
     const vals: Array<{ v: string; cls?: string }> = [
-      { v: String(target.raw?.harness || '') },
-      { v: onTerm ? ((m) => (m ? prettyModel(m) : ''))(obsModel || startFlag('model')) : '' },
-      { v: onTerm ? ((e) => (e ? effortKo(e) : ''))(obsEffort || startFlag('effort')) : '' },
+      { v: selectorsUp ? '' : String(target.raw?.harness || '') },
+      { v: !selectorsUp && onTerm ? ((m) => (m ? prettyModel(m) : ''))(obsModel || startFlag('model')) : '' },
+      { v: !selectorsUp && onTerm ? ((e) => (e ? effortKo(e) : ''))(obsEffort || startFlag('effort')) : '' },
+      // ⚠ 노드는 **선택기와 무관하게 늘 싣는다** — 이 한 줄이 이 수정의 전부다.
       { v: target.node ? String(target.node) : '', cls: 'sc-run-node' },
     ].filter((x) => !!x.v);
     runEl.replaceChildren(...vals.flatMap((x, i) => {
       const cell = el('span', x.cls ? { class: x.cls, text: x.v, title: x.v } : { text: x.v });
       return i ? [el('span', { class: 'sc-sep', text: '·' }), cell] : [cell];
     }));
-    runEl.title = onTerm && (obsModel || obsEffort)
-      ? '이 세션이 무엇으로 돌고 있는지예요 — 모델·추론강도를 바꾸려면 [대화]에서 입력창 아래 칸으로 고르거나, 터미널에서 /model · /effort 를 치세요.'
-      : '이 세션이 무엇으로 돌고 있는지예요.';
+    // 선택기가 서서 노드만 남았으면 그 칸이 무엇인지 말해 준다 — 컴퓨터 이름만 덩그러니 있으면 못 읽는다.
+    runEl.title = selectorsUp
+      ? '이 세션이 도는 컴퓨터(노드)예요.'
+      : onTerm && (obsModel || obsEffort)
+        ? '이 세션이 무엇으로 돌고 있는지예요 — 모델·추론강도를 바꾸려면 [대화]에서 입력창 아래 칸으로 고르거나, 터미널에서 /model · /effort 를 치세요.'
+        : '이 세션이 무엇으로 돌고 있는지예요.';
     runEl.hidden = !vals.length;
   }
   //  tip = 칩에 걸 원문(줄인 모델 이름의 전체). 드롭다운이 서는 세션에선 칩이 숨으므로 안 쓰인다.
