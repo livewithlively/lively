@@ -74,7 +74,7 @@ export function switcherTop(opts?: { people?: Record<string, any>; faces?: strin
       ...faceIds.map((id) => personFace(id, 'v2-wscard-face', String(people[id]?.display_name || id))),
       more ? el('i', { class: 'v2-wscard-more', text: '+' + more }) : null) : null,
     el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })) as HTMLButtonElement;
-  btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } openMenu(btn); };
+  btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
   return el('div', { class: 'v2-side-top' }, btn);
 }
 
@@ -224,7 +224,7 @@ export function switcherTile(): HTMLElement {
     : el('span', { class: 'v2-wscard-big', text: (w.name || '?').trim().slice(0, 1) });
   const btn = el('button', { class: 'v2-ws v2-rail-tile', type: 'button', 'aria-haspopup': 'menu',
     title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` }, face) as HTMLButtonElement;
-  btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } void openMenu(btn); };
+  btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
   return btn;
 }
 
@@ -237,7 +237,7 @@ export function switcherName(): HTMLElement {
     title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` },
     el('span', { class: 'v2-side-wsn-t', text: w.name }),
     el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })) as HTMLButtonElement;
-  btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } void openMenu(btn); };
+  btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
   return btn;
 }
 
@@ -269,7 +269,16 @@ export function switchWorkspace(slug: string): void { switchTo(slug); }
 export function workspaceInfo(): { kind: 'personal' | 'team'; hub: string | null; name: string } { return ws(); }
 
 /** 종전 전환·만들기·연결 메뉴를 그대로 연다 — 레일 팝오버의 [＋ 워크스페이스 추가]가 여기로 온다(폼을 두 벌 만들지 않는다). */
-export function openWorkspaceMenu(anchor: HTMLElement): void { if (openPanel) { closeMenu(); return; } void openMenu(anchor); }
+// ── 워크스페이스 메뉴는 **하나**다(#1875, 원준 2026-08-26 "고르는 칸이 두 번 존재해야 할 이유가 있을까").
+//  레일(rail.ts)이 있으면 그쪽 팝오버가 유일한 메뉴이고, 아래 openMenu 는 레일이 없는 임베더용 폴백일 뿐이다.
+//  레일이 마운트될 때 자기 팝오버를 여기 등록하고, 문패·사이드바 머리·타일이 무엇을 눌러도 같은 것이 뜬다.
+let menuOpener: ((anchor: HTMLElement) => void) | null = null;
+export function registerWorkspaceMenu(fn: (anchor: HTMLElement) => void): void { menuOpener = fn; }
+export function openWorkspaceMenu(anchor: HTMLElement): void {
+  if (menuOpener) { menuOpener(anchor); return; }
+  if (openPanel) { closeMenu(); return; }
+  void openMenu(anchor);
+}
 
 function switchTo(slug: string): void {
   setCurrentWorkspace(slug === 'primary' ? '' : slug);
@@ -391,4 +400,45 @@ function promoRow(p: any, wrap: HTMLElement): HTMLElement {
     el('div', { class: 'v2-ws-promo-acts' },
       el('button', { class: 'btn btn-primary btn-xs', type: 'button', text: '올리기', onclick: () => resolve('approve') }),
       el('button', { class: 'btn btn-ghost btn-xs', type: 'button', text: '취소', onclick: () => resolve('reject') })));
+}
+
+
+// ── #1875 — 레일 팝오버(rail.ts)가 쓰는 워크스페이스 조작. 옛 메뉴(openMenu)의 인라인 fetch 를 꺼낸 것이다.
+//  화면은 rail.ts 가 새 문법으로 그리고, 서버와 말하는 법은 여기 한 곳에 둔다(주소·본문이 두 벌로 갈리지 않게).
+export async function createWorkspace(name: string, kind: 'personal' | 'team'): Promise<{ slug: string; name: string }> {
+  const d: any = await api('/api/ui/me/workspaces', { method: 'POST', body: JSON.stringify({ name, kind }) });
+  return { slug: String(d?.workspace?.slug || ''), name: String(d?.workspace?.name || name) };
+}
+export async function renameWorkspace(slug: string, name: string): Promise<void> {
+  await api('/api/ui/me/workspaces/update', { method: 'POST', body: JSON.stringify({ slug, name }) });
+}
+export async function archiveWorkspace(slug: string): Promise<void> {
+  await api('/api/ui/me/workspaces/delete', { method: 'POST', body: JSON.stringify({ slug }) });
+}
+/** 연결한 팀(다른 게이트웨이, 승격 경로 #1750). */
+export async function linkedTeams(): Promise<any[]> {
+  try { const d: any = await api('/api/ui/me/linked-workspaces'); return (d && d.links) || []; } catch (_) { return []; }
+}
+export async function linkTeam(url: string, token: string): Promise<{ name: string }> {
+  const d: any = await api('/api/ui/me/linked-workspaces', { method: 'POST', body: JSON.stringify({ url, token }) });
+  return { name: String(d?.link?.name || '팀 워크스페이스') };
+}
+export async function setAutoPromote(url: string, on: boolean): Promise<void> {
+  await api('/api/ui/me/linked-workspaces', { method: 'POST', body: JSON.stringify({ url, auto_promote: on }) });
+}
+export async function unlinkTeam(scopeKey: string): Promise<void> {
+  await api('/api/ui/me/linked-workspaces/remove', { method: 'POST', body: JSON.stringify({ scope_key: scopeKey }) });
+}
+export async function pendingPromotions(): Promise<any[]> {
+  try { const d: any = await api('/api/ui/me/promotions?state=pending'); return (d && d.promotions) || []; } catch (_) { return []; }
+}
+/** 승격 처리 — 결과 상태(done·failed·…)와 오류를 그대로 돌려준다(문구는 화면이 정한다). */
+export async function resolvePromotion(id: string | number, decision: 'approve' | 'reject'): Promise<{ state: string; error?: string }> {
+  const d: any = await api('/api/ui/me/promotions/' + id + '/resolve', { method: 'POST', body: JSON.stringify({ decision }) });
+  return { state: String(d?.promotion?.state || ''), error: d?.promotion?.error };
+}
+/** 다중 워크스페이스(registry)가 켜져 있는가 — 꺼져 있으면 만들 목록 자체가 없다. */
+export function registryActive(): boolean {
+  const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
+  return !!reg.active;
 }
