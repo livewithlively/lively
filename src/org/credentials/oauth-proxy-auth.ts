@@ -11,9 +11,9 @@
 //  설계 원칙: 정적 토큰 경로는 한 글자도 바뀌지 않는다. 묶음으로 해석되지 않으면 그대로 통과시킨다(무회귀).
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { decodeTokenBlob, encodeTokenBlob, tokenMeta, CLIENT_SCOPE, gatewaySsrfFetch } from "./oauth-broker.js";
-import { getMemberSecret, setMemberSecret, type MemberSecretResolved } from "./member-secret-store.js";
+import { getMemberSecret, setMemberSecret, resolveMemberSecret, type MemberSecretResolved, type ResolveOpts } from "./member-secret-store.js";
 import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
-import { GOOGLE_KIND, GOOGLE_TOKEN_URL } from "./google-oauth.js";
+import { GOOGLE_KIND, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
 import { logger } from "../../log.js";
 
 /** 만료 여유(초) — 호출이 나가는 동안 만료돼 상류가 401 을 주는 것까지 막는다. */
@@ -54,6 +54,39 @@ const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_
 export function oauthTokenUrlFor(authKind: string | null | undefined): string | undefined {
   if (!authKind) return undefined;
   return presetOAuthTokenUrl(authKind) ?? DIRECT_OAUTH_TOKEN_URLS[authKind];
+}
+
+/**
+ * 통합 kind 별칭 표(#1881 G2 전환기) — 구 kind 슬롯이 비어 있으면 통합 슬롯으로 폴백한다.
+ *  방향이 중요하다: **구 kind 가 먼저 잡히고**, 없을 때만 통합으로 간다. 그래서
+ *   · 예전에 붙인 사람은 자기 슬롯 그대로(무회귀) · 새로 붙인 사람은 통합 슬롯 하나로 세 서비스 전부.
+ *  scope_key 는 통합 슬롯의 것(`""` — googleInstallToSlot 이 그렇게 만든다)을 쓴다. 도구의 auth_scope_key 를
+ *  그대로 물려주면 다른 칸을 뒤지게 된다.
+ */
+function unifiedAliasFor(authKind: string): { kind: string; scopeKey: string } | null {
+  const g = googleUnifiedKindFor(authKind);
+  return g ? { kind: g, scopeKey: "" } : null;
+}
+
+/**
+ * OAuth 자격 해소 + 별칭 폴백. `resolveMemberSecret` 의 얇은 래퍼라 폴백 정책(allowFallback)은 그대로 따른다.
+ *  ⚠ 반환된 `resolved.kind` 는 **실제로 잡힌 슬롯의 kind** 다 — 호출자는 갱신·클라이언트 조회에
+ *   `tool.auth_kind` 가 아니라 이 값을 넘겨야 한다(안 그러면 구 클라이언트로 새 토큰을 갱신하려 든다).
+ */
+export type SecretResolver = (
+  memberId: string | null | undefined, kind: string, opts: ResolveOpts,
+) => Promise<MemberSecretResolved | null>;
+
+export async function resolveOAuthMemberSecret(
+  memberId: string | null | undefined, authKind: string, opts: ResolveOpts = {},
+  resolve: SecretResolver = resolveMemberSecret,
+): Promise<MemberSecretResolved | null> {
+  const direct = await resolve(memberId, authKind, opts);
+  if (direct?.secret) return direct;
+  const alias = unifiedAliasFor(authKind);
+  if (!alias) return direct; // 별칭 없는 kind — 조회를 **더 하지 않는다**(엉뚱한 kind 를 뒤지면 자격 혼선)
+  const viaAlias = await resolve(memberId, alias.kind, { ...opts, scopeKey: alias.scopeKey });
+  return viaAlias?.secret ? viaAlias : direct;
 }
 
 export interface OAuthClientInfo { client_id: string; client_secret?: string }

@@ -10,8 +10,7 @@ import { safeFetch, SsrfError } from "../net/ssrf.js";
 import { redactDeep } from "../org/ingest/redact.js";
 import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { markExternalTool } from "../org/policies/tool-log.js";
-import { resolveMemberSecret } from "../org/credentials/member-secret-store.js";
-import { resolveProxyBearer } from "../org/credentials/oauth-proxy-auth.js";
+import { resolveProxyBearer, resolveOAuthMemberSecret } from "../org/credentials/oauth-proxy-auth.js";
 import { channelSystemOf, channelPreCheck, channelPostFilter } from "../org/channels/channel-enforce.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
 import { requireAppTool } from "../apps/principal.js";
@@ -188,7 +187,8 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
     // P1(#746) per-user vault 인증 — 요청자 개인 자격 우선. 폴백 정책은 등급이 정한다:
     //  L2(집행/외부발신)=per-user 필수(통합 폴백 금지 — 사칭 방지) / 그 외=통합(gateway) 폴백 허용(비-PII read, 온보딩 0).
     const allowFallback = proxyAuthFallback(tool.level);
-    const resolved = await resolveMemberSecret(callerId, tool.auth_kind, { scopeKey: tool.auth_scope_key ?? "", allowFallback });
+    // #1881 G2: 구글 구 kind 3종은 통합 슬롯(google_oauth)으로 폴백한다 — 구 슬롯이 있으면 그게 먼저다(무회귀).
+    const resolved = await resolveOAuthMemberSecret(callerId, tool.auth_kind, { scopeKey: tool.auth_scope_key ?? "", allowFallback });
     if (!resolved || !resolved.secret) {
       throw new Error(
         `자격 없음 — 이 툴은 '${tool.auth_kind}' 자격이 필요합니다. ` +
@@ -197,7 +197,9 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
       );
     }
     // OAuth 자격이면 묶음에서 access token 을 뽑고(만료면 갱신) 그것만 싣는다(#1654). 정적 토큰은 그대로 통과.
-    const bearer = await resolveProxyBearer(resolved, tool.auth_kind);
+    // ⚠ tool.auth_kind 가 아니라 **실제로 잡힌 슬롯의 kind** 를 넘긴다 — 별칭으로 통합 슬롯이 잡혔는데
+    //  구 kind 를 넘기면 갱신이 구 OAuth 클라이언트를 찾아 실패한다(토큰은 새 클라이언트가 발급한 것).
+    const bearer = await resolveProxyBearer(resolved, resolved.kind);
     const built = buildProxyAuthHeaders(resolved.meta, bearer);
     Object.assign(headers, built.headers);
     injectedSecret = bearer; // 응답 스크럽 대상은 **실제로 실린 값** — 묶음 전체가 아니라 access token(갱신됐으면 새 것)
