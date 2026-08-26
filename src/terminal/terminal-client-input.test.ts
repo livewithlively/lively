@@ -674,6 +674,28 @@ t("wiring: setupClipboard/onData/OSC 핸들러가 실제로 등록된다", async
   assert.deepEqual(h.inputs(), ["x"]); // onData 본체가 ws 로 실제 전송
 });
 
+// ── 마우스 리포트 코얼레싱(#1437, 2026-08-26) — 프레임당 1회로 합쳐 보낸다(바이트 무손실·순서보존) ──
+t("COAL1 연속 마우스 리포트는 즉시 안 나가고 버퍼링 → flush 시 1프레임으로 이어붙여 나간다", async () => {
+  const h = await makeCtx();
+  h.mod.handleTermData("\x1b[<64;5;5M");     // 휠 up
+  h.mod.handleTermData("\x1b[<64;5;5M");     // 휠 up
+  h.mod.handleTermData("\x1b[<64;5;5M");     // 휠 up
+  assert.deepEqual(h.inputs(), [], "버퍼링 — flush 전엔 한 건도 안 나간다");
+  h.mod.flushMouseReports();
+  assert.deepEqual(h.inputs(), ["\x1b[<64;5;5M\x1b[<64;5;5M\x1b[<64;5;5M"], "3건이 1프레임으로 이어붙어 나간다(무손실)");
+});
+t("COAL2 비-마우스 입력은 즉시 나가되, 버퍼된 마우스를 먼저 비운다(순서 마우스→키)", async () => {
+  const h = await makeCtx();
+  h.mod.handleTermData("\x1b[<32;6;5M");     // 호버 이동(버퍼)
+  h.mod.handleTermData("a");                  // 키 — 즉시, 단 마우스 먼저 flush
+  assert.deepEqual(h.inputs(), ["\x1b[<32;6;5M", "a"], "마우스 flush 후 키 — 순서 보존");
+});
+t("COAL3 마우스 없이 키만이면 종전대로 즉시(버퍼 우회)", async () => {
+  const h = await makeCtx();
+  h.mod.handleTermData("x");
+  assert.deepEqual(h.inputs(), ["x"]);
+});
+
 async function main(): Promise<void> {
   let pass = 0; const fails: Array<[string, unknown]> = [];
   for (const [name, fn] of tests) {
