@@ -751,15 +751,20 @@ let lastGen = null;
 async function reloadIfStale() {
   if (!appWin || appWin.isDestroyed() || !state.gatewayUrl) return;
   const base = String(state.gatewayUrl).replace(/\/+$/, "");
-  let v = null;
+  let v = null, policy = "auto";
   try {
     const r = await fetch(`${base}/ui/__gen`, { cache: "no-store" });
     if (!r.ok) return;
     const j = await r.json();
     v = typeof j?.v === "string" ? j.v : null;
+    // 정책은 게이트웨이가 정한다(#2126, src/web.ts assetReloadPolicy) — 고객사 박스는 notify 가 기본이라
+    //  여기서 말없이 다시 싣지 않는다. 그 박스의 화면(web/gen-watch.ts)이 배너를 띄우고 사람이 누른다.
+    //  ⚠ 필드가 **아예 없으면 구 게이트웨이**다. 그 박스의 웹 자산에는 배너를 띄울 코드가 없으므로,
+    //   여기서 안 실으면 앱은 처음 뜬 판을 영영 들고 있게 된다(#1841 이 고친 바로 그 증상) → 종전 동작을 지킨다.
+    policy = j?.reload === undefined ? "auto" : (j.reload === "auto" ? "auto" : "notify");
   } catch { return; }
   if (!v) return;
-  if (lastGen && lastGen !== v) { try { appWin.webContents.reload(); } catch { /* 창이 사라졌으면 그만 */ } }
+  if (policy === "auto" && lastGen && lastGen !== v) { try { appWin.webContents.reload(); } catch { /* 창이 사라졌으면 그만 */ } }
   lastGen = v;
 }
 
