@@ -83,13 +83,16 @@ t("A7 CLI 부재 안내는 **다음 행동**을 준다(플랫폼별 부트스트
 });
 
 t("A8 ★ 부트스트랩 URL 이 웹 관리화면이 주는 한 줄과 같다(다르면 사람은 404 를 받는다)", () => {
-  // 진실원천: 게이트웨이 라우트(src/web.ts `/cli`·`/cli.ps1`)와 그걸 복붙시키는 화면(public/app/admin-install.js).
+  // 진실원천: 게이트웨이 라우트(src/web.ts `/cli`·`/cli.ps1`)와 그걸 복붙시키는 화면(web/admin-install.ts).
   //  앱이 그와 다른 주소를 안내하면 아무도 그 사실을 모른 채 설치가 막힌다.
+  //  ⚠ 화면 쪽은 **소스(web/*.ts)를 읽는다** — 종전엔 컴파일 산출물(public/app/admin-install.js)을 읽었는데,
+  //   그건 그 파일이 커밋돼 있어서 가능했던 것이다(#2054 로 산출물이 git 밖으로 나가며 깨졌다: 윈도우 잡은
+  //   빌드를 안 돌아 파일이 아예 없다). 애초에 검사하려는 '진실원천'은 소스지 산출물이 아니다.
   const repo = fileURLToPath(new URL("../../", import.meta.url));
   const web = readFileSync(join(repo, "src", "web.ts"), "utf8");
   assert.match(web, /app\.get\("\/cli",\s*serveBootstrap\("bootstrap\.sh"\)\)/, "게이트웨이 라우트가 바뀌었다");
   assert.match(web, /app\.get\("\/cli\.ps1",\s*serveBootstrap\("bootstrap\.ps1"\)\)/, "게이트웨이 라우트가 바뀌었다");
-  const admin = readFileSync(join(repo, "public", "app", "admin-install.js"), "utf8");
+  const admin = readFileSync(join(repo, "web", "admin-install.ts"), "utf8");
   const gw = "https://gw.example";
   for (const [plat, needle] of [["darwin", `curl -fsSL ${gw}/cli | sh`], ["win32", `irm ${gw}/cli.ps1 | iex`]]) {
     const mine = bootstrapOneLiner(gw, plat);
