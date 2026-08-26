@@ -276,6 +276,7 @@ export async function bootV2(): Promise<void> {
     onActivate: (tab, fresh) => {
       // 활성 탭의 라우트가 곧 주소다 — 다르면 맞춘다(이 hashchange 는 라우터가 무시).
       if (location.hash !== tab.route && '#' + location.hash !== tab.route) { suppressHash++; location.hash = tab.route; }
+      noteHomeRoute(tab.route);   // 이 탭이 곧 보이는 화면이다 — [홈] 구역이면 그 자리를 적어 둔다(#2061)
       applyTabChrome(tab);
       if (fresh) void renderRoute(tab);
       else markActive(routeKey(tab.route));
@@ -759,6 +760,7 @@ async function onHash(): Promise<void> {
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
   dropProjView(cur);                                       // 프로젝트 화면(#1757)의 리브 턴 폴링도
   cur.route = hash;
+  noteHomeRoute(hash);     // 같은 탭이 다른 화면이 되는 길 — 여기도 적어야 [홈] 이 그 자리를 안다(#2061)
   tabsApi.routed(cur);     // 제목·noAside 를 새 라우트로 먼저 — 그 뒤에 크롬을 맞춘다(거꾸로 하면 no-aside 가 한 화면 늦게 따라온다, 실측 #1777)
   applyTabChrome(cur);
   await renderRoute(cur);
@@ -1394,10 +1396,32 @@ function openAppKeys(): Set<string> {
   }
   return out;
 }
+// ── [홈] 구역은 **두고 간 자리**를 기억한다 (#2061) ────────────────────────────
+//  홈에서 세션을 열어 여러 번 시키다가 [위키] 로 갔다 돌아오면 **빈 '새 작업'** 이 떴다. 그 세션은 죽지 않았다 —
+//  탭이 살아 있는데 탭 줄을 안 그리므로(TABS_OFF) 보이지 않을 뿐이라, 사람은 사이드바 열몇 줄에서 그걸 다시 찾아야 했다.
+//  구역은 주소가 아니라 **사람이 고르는 장소**다(#2016 rail.ts). 장소로 돌아왔으면 두고 간 것이 거기 있어야 한다.
+//  세션 주소로 착지하면 라우터가 그 세션 탭을 **되살리는 게 아니라 다시 켠다**(onHash 의 tabsApi.activate) —
+//  대화·스크롤·폴링이 그대로 이어진다. 그래서 '이어서 보인다'가 말 그대로 성립한다.
+//  ⚠ 새로 시작하는 길은 그대로다 — 사이드바 머리줄 [새 작업](.v2-app-new)이 늘 빈 홈을 연다.
+const HOME_ROUTE_STORE = 'lively_v2_home_route';
+let homeRoute = (() => { try { return localStorage.getItem(HOME_ROUTE_STORE) || ''; } catch (_) { return ''; } })();
+/** 지금 보는 화면이 [홈] 구역의 것이면 그 자리를 적어 둔다. 구역은 사람이 고를 때만 바뀌므로 이 판정이 곧 '어느 장소인가'다. */
+function noteHomeRoute(route: string): void {
+  if (railSection() !== 'home' || !route || route === homeRoute) return;
+  homeRoute = route;
+  try { localStorage.setItem(HOME_ROUTE_STORE, route); } catch (_) { /* 이번 화면은 된다 */ }
+}
+/** [홈] 착지 — 두고 간 세션이 아직 있으면 그 세션으로, 아니면 종전대로 새 작업 화면. */
+function homeLandingRoute(): string {
+  //  이어 주는 것은 **세션뿐**이다. 빈 홈·앱 창까지 되살리면 [홈]이 '아무거나 마지막 화면'이 돼 뜻이 흐려진다.
+  const segs = parseRoute(homeRoute).segs;
+  if (segs[0] !== 's') return '#/';
+  return findSess(decodeURIComponent(segs[1] || '')) ? homeRoute : '#/';   // 사라진 세션이면 빈 홈(죽은 자리로 보내지 않는다)
+}
 function sectionRoute(sec: RailSection): string {
   //  [프로젝트]는 구역 첫 화면이 **즐겨찾기 맨 위 리스트**다(#2061) — 전체 프로젝트 보드는 매일 여는 자리가 아니다.
   //   주소로 착지시키는 이유: 이 사이드바의 그 줄도 눌린 것으로 서고(projScopeKey), 새로고침·북마크도 같은 자리로 돌아온다.
-  return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? projLandingRoute() : sec === 'wiki' ? '#/app/knowledge' : '#/';
+  return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? projLandingRoute() : sec === 'wiki' ? '#/app/knowledge' : homeLandingRoute();
 }
 /** ☰ 의 뜻이 바뀌었다(사이드바 접기 → 레일 여닫기) — 툴팁·aria 도 그 뜻으로 맞춘다. */
 function syncRailBtn(): void {
