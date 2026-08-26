@@ -9,7 +9,8 @@
 //  member_count 에서 나오고, 서버도 같은 값으로 판정한다(kind_effective). 어디에도 "팀으로 바꾸기"
 //  버튼이 없는 이유 — 사람이 들어오는 것이 곧 전환이다.
 import { api, el, profileAvatar, state, toast } from '../core.js';
-import { confirmDialog, overlay } from '../ui-primitives.js';
+import { confirmDialog, copyButton, skeletonRows } from '../ui-primitives.js';
+import { ctxMenu } from './panes-kit.js';   // ⋯ 메뉴 — 곁칸·프로젝트 행과 같은 부품
 
 export interface PeopleData {
   workspace: { slug: string; name: string; kind_effective: 'personal' | 'team'; member_count: number | null };
@@ -199,69 +200,199 @@ function parseEmails(raw: string): string[] {
   return out;
 }
 
-/** 구성원 모달을 연다. slug = 대상 워크스페이스, wsName = 표시 이름(모달 제목). */
-export function openMemberModal(slug: string, wsName: string): void {
-  const body = el('div', { class: 'v2-mem' }, el('p', { class: 'v2-ws-loading', text: '불러오는 중…' })) as HTMLElement;
-  const back = overlay(wsName + ' · 구성원', body);
-  const close = () => back.remove();
-  void paintModal(body, slug, close);
+// ── 구성원 모달 (#1875) — 슬랙 「사람 초대」 문법. 문패 오른쪽 「사람 추가」 아이콘이 연다. ──────────
+//
+// 한 창에서 끝난다: 부르기(이메일 여러 명) · 명부 · 권한 · 수락 대기. **설정으로 보내지 않는다**(원준 2026-08-26
+//  "그 모달에서 하고 설정으로 보내지 말자"). primary(박스의 팀 워크스페이스)도 같은 창이다 — 거긴 명부 대신
+//  박스 계정이 곧 구성원이라, 이메일을 넣으면 **계정이 만들어지고 임시 비밀번호가 이 창에서 바로** 나온다
+//  (서버 org_member_upsert 가 새 사람에게 한 번만 돌려주는 initialPassword). 셀프호스트 박스는 메일을 못
+//  보내므로 그 비밀번호를 사람이 직접 전한다 — 그래서 '보냈어요'가 아니라 '만들었어요 · 전해 주세요'다.
+//
+// 창의 뼈대는 [나] 창(me-modal, #1843)과 같은 문법 — 머리(얼굴·제목·부제·✕) + 스크롤 몸통. 관리 계열의
+//  overlay()(「닫기」 글자 단추)를 쓰지 않는 이유: 새 셸의 창은 전부 이 문법이라, 섞이면 두 시대가 한 화면에 선다.
+
+export interface MemberModalOpts {
+  /** primary(박스 팀) — 명부 대신 박스 계정. 초대 = 계정 생성. */
+  primary?: boolean;
+  /** 머리에 앉힐 워크스페이스 얼굴(rail 이 workspaceFace 로 만들어 준다 — 여기서 switcher 를 부르면 순환). */
+  face?: HTMLElement | null;
 }
 
-async function paintModal(body: HTMLElement, slug: string, close: () => void): Promise<void> {
-  let d: PeopleData;
-  try { d = await api('/api/ui/me/workspaces/people?slug=' + encodeURIComponent(slug)) as PeopleData; }
-  catch (e: any) { body.replaceChildren(el('p', { class: 'v2-ws-empty', text: e?.message || '구성원을 불러오지 못했어요.' })); return; }
-  const again = () => { void paintModal(body, slug, close); document.dispatchEvent(new CustomEvent('lively:ws-people-changed')); };
-  const meId = String((state.me as any)?.userId || '');
-  const personal = d.kind_effective === 'personal';
-  const kids: (HTMLElement | null)[] = [];
+type Role = 'creator' | 'owner' | 'admin' | 'member';
+interface Person {
+  id: string; name: string; email: string | null; role: Role;
+  avatar?: string | null; avatar_char?: string | null; avatar_color?: string | null;
+  scopes?: string[];
+}
+interface View {
+  wsName: string; kind: 'personal' | 'team'; count: number; canManage: boolean;
+  people: Person[]; pending: PeopleData['pending']; candidates: PeopleData['candidates'];
+}
+/** 방금 만든 계정·재설정한 비밀번호 — 창을 닫으면 사라진다(서버가 다시 주지 않는다). */
+interface Issued { title: string; email: string; password: string }
 
-  // 이 집이 지금 개인인지 팀인지 — 첫 줄에서 말한다(초대의 무게가 여기서 갈린다).
-  kids.push(el('div', { class: 'v2-mem-kind' + (personal ? ' personal' : '') },
-    el('b', { text: personal ? '개인 워크스페이스' : `팀 워크스페이스 · ${d.member_count}명` }),
-    el('span', { text: personal ? '지금은 나만 봐요. 사람을 들이면 팀이 됩니다.' : '초대받은 분이 수락하면 구성원이 됩니다.' })));
+const ROLE_LABEL: Record<Role, string> = { creator: '만든 사람', owner: '공동 관리자', admin: '관리자', member: '구성원' };
 
-  // ── 초대(만든 사람·owner 만) — 슬랙 문법: 이메일 여러 명 + 명부에서 고르기. ──
-  if (d.can_invite) kids.push(inviteBlock(d, slug, again));
+function svg(paths: string[], cls: string): SVGElement {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('class', cls); s.setAttribute('aria-hidden', 'true');
+  for (const d of paths) { const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', d); s.append(p); }
+  return s;
+}
 
-  // ── 명부 ──
-  kids.push(el('div', { class: 'v2-ws-sec', text: `구성원 ${d.member_count}명` }));
-  for (const m of d.members) kids.push(modalMemberRow(d, m, slug, meId, again));
+function ago(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.max(1, Math.round(ms / 60000));
+  if (m < 60) return `${m}분 전`;
+  const h = Math.round(m / 60); if (h < 24) return `${h}시간 전`;
+  const d = Math.round(h / 24); return d < 30 ? `${d}일 전` : `${Math.round(d / 30)}달 전`;
+}
 
-  // ── 보류 초대 ──
-  if (d.pending.length) {
-    kids.push(el('div', { class: 'v2-ws-sec', text: `수락 대기 ${d.pending.length}` }));
-    for (const p of d.pending) kids.push(el('div', { class: 'v2-mem-row pending' },
-      el('span', { class: 'v2-ws-person-face waiting', 'aria-hidden': 'true', text: '…' }),
-      el('span', { class: 'v2-ws-person-tt' }, el('b', { text: p.email }), el('span', { text: '수락 대기' })),
-      d.can_invite ? el('button', { class: 'v2-mem-act', type: 'button', text: '취소', title: '초대 취소', onclick: async () => {
-        if (!await confirmDialog({ title: '초대를 취소할까요?', message: `${p.email} 님에게 보낸 초대를 취소합니다.`, confirmText: '취소하기', cancelText: '그만두기' })) return;
-        try { await api('/api/ui/me/workspaces/invite/resolve', { method: 'POST', body: JSON.stringify({ invite_id: p.id, decision: 'revoke' }) }); toast('초대를 취소했어요.'); again(); }
-        catch (e: any) { toast('취소하지 못했어요 — ' + (e?.message || e), true); }
-      } }) : null));
+/** 구성원 모달을 연다. slug = 대상 워크스페이스, wsName = 표시 이름. */
+export function openMemberModal(slug: string, wsName: string, opts: MemberModalOpts = {}): void {
+  const primary = !!opts.primary;
+  const issued: Issued[] = [];
+
+  const sub = el('div', { class: 'v2mem-h-sub', text: '불러오는 중…' });
+  const close = (): void => { back.remove(); document.removeEventListener('keydown', onKey, true); };
+  // Esc — 위에 확인창(.ov-back)이나 ⋯ 메뉴(.pn-ctx)가 떠 있으면 그쪽이 먼저 먹는다.
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || document.querySelector('.ov-back, .pn-ctx')) return;
+    e.stopPropagation(); close();
+  };
+  const head = el('header', { class: 'v2mem-h' },
+    opts.face ? el('span', { class: 'v2mem-h-facewrap' }, opts.face) : null,
+    el('div', { class: 'v2mem-h-txt' }, el('h2', { class: 'v2mem-h-title', text: `${wsName}에 사람 초대` }), sub),
+    el('button', { class: 'v2mem-x', type: 'button', 'aria-label': '닫기', title: '닫기 (Esc)', onclick: close },
+      svg(['M6 6l12 12', 'M18 6 6 18'], 'v2mem-x-ic')));
+  const body = el('div', { class: 'v2mem-b' }, skeletonRows(3)) as HTMLElement;
+  const box = el('div', { class: 'v2mem', role: 'dialog', 'aria-modal': 'true', 'aria-label': `${wsName} 구성원` }, head, body);
+  const back = el('div', { class: 'v2mem-back' }, box) as HTMLElement;
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', onKey, true);
+  document.body.append(back);
+
+  const paint = async (): Promise<void> => {
+    let v: View;
+    try { v = primary ? await loadBoxView(wsName) : await loadWsView(slug, wsName); }
+    catch (e: any) { body.replaceChildren(el('p', { class: 'v2mem-err', text: e?.message || '구성원을 불러오지 못했어요.' })); return; }
+    sub.textContent = v.kind === 'personal' ? '개인 워크스페이스 · 지금은 나만 봐요' : `팀 워크스페이스 · 구성원 ${v.count}명`;
+    const again = (): void => { void paint(); document.dispatchEvent(new CustomEvent('lively:ws-people-changed')); };
+    const meId = String((state.me as any)?.userId || '');
+    const kids: (HTMLElement | null)[] = [];
+
+    for (const i of issued) kids.push(issuedCard(i));
+    if (v.canManage) kids.push(inviteBlock(v, slug, primary, (i) => { issued.unshift(i); }, again));
+
+    kids.push(el('div', { class: 'v2mem-sec' }, el('b', { text: '구성원' }), el('span', { text: String(v.count) })));
+    for (const p of v.people) kids.push(personRow(v, p, slug, primary, meId, (i) => { issued.unshift(i); }, again));
+
+    if (v.pending.length) {
+      kids.push(el('div', { class: 'v2mem-sec' }, el('b', { text: '수락 대기' }), el('span', { text: String(v.pending.length) })));
+      for (const p of v.pending) kids.push(pendingRow(v, p, again));
+    }
+    if (!v.canManage) kids.push(el('p', { class: 'v2mem-note', text: primary
+      ? '사람을 부르고 권한을 바꾸는 건 관리자가 합니다.'
+      : '사람을 부르고 권한을 바꾸는 건 이 워크스페이스를 만든 사람이 합니다.' }));
+    body.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
+  };
+  void paint();
+}
+
+// ── 데이터 — 두 집(워크스페이스 명부 / 박스 계정)을 한 모양(View)으로. ─────────────────────────
+
+async function loadWsView(slug: string, wsName: string): Promise<View> {
+  const d = await api('/api/ui/me/workspaces/people?slug=' + encodeURIComponent(slug)) as PeopleData;
+  return {
+    wsName: d.workspace?.name || wsName, kind: d.kind_effective, count: d.member_count, canManage: d.can_invite,
+    people: d.members.map((m: any) => ({
+      id: m.member_id, name: who(m), email: m.email, role: m.is_creator ? 'creator' : m.role === 'owner' ? 'owner' : 'member',
+      avatar: m.avatar, avatar_char: m.avatar_char, avatar_color: m.avatar_color })),
+    pending: d.pending, candidates: d.candidates,
+  };
+}
+
+/** primary — 박스 계정이 곧 구성원(로그인 = 접근). 이메일·scope 는 admin 에게만 온다(그 밖은 이름만). */
+async function loadBoxView(wsName: string): Promise<View> {
+  const [org, dash] = await Promise.all([api('/api/ui/org/members') as Promise<any>, api('/api/ui/dash/members').catch(() => null) as Promise<any>]);
+  const faces = new Map<string, any>(((dash && dash.members) || []).map((m: any) => [String(m.id), m]));
+  const rows: any[] = ((org && org.members) || []).filter((m: any) => m.kind === 'human' && m.state === 'active');
+  const people: Person[] = rows.map((m) => {
+    const f = faces.get(String(m.id)) || {};
+    const scopes: string[] = Array.isArray(m.scopes) ? m.scopes : [];
+    return { id: String(m.id), name: String(m.display_name || m.email || m.id), email: m.email || null,
+      role: scopes.includes('admin') ? 'admin' : 'member', scopes,
+      avatar: f.avatar ?? m.avatar, avatar_char: f.avatar_char ?? m.avatar_char, avatar_color: f.avatar_color ?? m.avatar_color };
+  });
+  return { wsName, kind: 'team', count: people.length, canManage: !!(org && org.canEdit), people, pending: [], candidates: [] };
+}
+
+// ── 부르기 — 이메일 칩 입력 + 권한 + [초대하기]. ─────────────────────────────────────────────
+
+function chipInput(candidates: PeopleData['candidates'], onSubmit: () => void) {
+  const emails: string[] = [];
+  const wrap = el('div', { class: 'v2mem-chips', role: 'group', 'aria-label': '초대할 이메일' }) as HTMLElement;
+  const input = el('input', { class: 'v2mem-chip-in', type: 'text', autocomplete: 'off', spellcheck: 'false',
+    placeholder: '예: ellis@lvly.io, maria@lvly.io', 'aria-label': '이메일 주소 — 여러 명은 쉼표·Enter 로' }) as HTMLInputElement;
+  let list: HTMLElement | null = null;
+  if (candidates.length) {
+    list = el('datalist', { id: 'v2mem-cand' }, ...candidates.map((c) => el('option', { value: c.email, label: c.display_name || c.email }))) as HTMLElement;
+    input.setAttribute('list', 'v2mem-cand');
   }
-
-  if (!d.can_invite) kids.push(el('p', { class: 'v2-ws-hint', text: '사람을 부르고 권한을 바꾸는 건 이 워크스페이스를 만든 사람이 합니다.' }));
-  body.replaceChildren(...kids.filter(Boolean) as HTMLElement[]);
+  // ★ 입력칸은 한 번 붙이고 **절대 떼지 않는다** — 칩만 그 앞에 갈아 끼운다. 입력칸을 떼었다 붙이면 포커스가
+  //  빠져서 "a@x.com, b@x.com" 을 치다 쉼표에서 글자가 허공으로 간다(프리뷰 실측: 둘째 주소 뒷부분이 사라졌다).
+  wrap.append(input, ...(list ? [list] : []));
+  const render = (): void => {
+    wrap.querySelectorAll('.v2mem-chip').forEach((c) => c.remove());
+    const chips = emails.map((e, i) => el('span', { class: 'v2mem-chip' + (EMAIL_RE.test(e) ? '' : ' bad'), title: EMAIL_RE.test(e) ? e : '이메일 형식이 아니에요' },
+      el('span', { text: e }),
+      el('button', { class: 'v2mem-chip-x', type: 'button', 'aria-label': `${e} 빼기`, onclick: () => { emails.splice(i, 1); render(); input.focus(); } },
+        svg(['M6 6l12 12', 'M18 6 6 18'], 'v2mem-chip-x-ic'))));
+    input.before(...chips);
+    input.placeholder = emails.length ? '' : '예: ellis@lvly.io, maria@lvly.io';
+  };
+  const commit = (): void => {
+    for (const e of parseEmails(input.value)) if (!emails.includes(e)) emails.push(e);
+    input.value = ''; render();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); onSubmit(); return; }
+    if (e.key === 'Enter' || e.key === ',' || e.key === ';' || e.key === ' ' || e.key === 'Tab') {
+      if (input.value.trim()) { e.preventDefault(); commit(); } else if (e.key !== 'Tab') e.preventDefault();
+      return;
+    }
+    if (e.key === 'Backspace' && !input.value && emails.length) { emails.pop(); render(); input.focus(); }
+  });
+  input.addEventListener('blur', commit);
+  input.addEventListener('paste', () => setTimeout(commit, 0));
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) input.focus(); });
+  render();
+  return {
+    el: wrap,
+    values: (): string[] => { commit(); return [...emails]; },
+    clear: (): void => { emails.length = 0; input.value = ''; render(); },
+    focus: (): void => input.focus(),
+  };
 }
 
-function inviteBlock(d: PeopleData, slug: string, again: () => void): HTMLElement {
-  const input = el('textarea', { class: 'v2-mem-emails', rows: '2',
-    placeholder: '예: ellis@lvly.io, maria@lvly.io', 'aria-label': '초대할 이메일(여러 명은 콤마로)', list: 'v2-ws-cand' }) as HTMLTextAreaElement;
-  const list = el('datalist', { id: 'v2-ws-cand' },
-    ...d.candidates.map((c) => el('option', { value: c.email, label: c.display_name || c.email }))) as HTMLElement;
-  const note = el('span', { class: 'v2-ws-note' });
-  const go = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '초대 보내기' }) as HTMLButtonElement;
+function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issued) => void, again: () => void): HTMLElement {
+  const note = el('p', { class: 'v2mem-invnote', 'aria-live': 'polite' });
+  const go = el('button', { class: 'btn btn-primary', type: 'button', text: '초대하기' }) as HTMLButtonElement;
+  const roleSel = primary ? null : el('select', { class: 'v2mem-sel', 'aria-label': '초대할 권한' },
+    el('option', { value: 'member', text: '구성원으로' }), el('option', { value: 'owner', text: '공동 관리자로' })) as HTMLSelectElement | null;
+  const chips = chipInput(v.candidates, () => void send());
 
-  const send = async () => {
-    const emails = parseEmails(input.value);
-    if (!emails.length) { note.textContent = '이메일을 입력하세요.'; input.focus(); return; }
+  const send = async (): Promise<void> => {
+    const emails = chips.values();
+    if (!emails.length) { note.textContent = '이메일을 넣어 주세요.'; chips.focus(); return; }
     const bad = emails.filter((e) => !EMAIL_RE.test(e));
     if (bad.length) { note.textContent = '이메일 형식이 아니에요: ' + bad.join(', '); return; }
-    // ★ 개인 → 팀은 되돌릴 수 없다(내보내도 그분이 본 것은 되돌아오지 않는다) — 강하게 한 번 확인한다.
-    if (d.kind_effective === 'personal') {
+    const mine = String((state.me as any)?.email || '').toLowerCase();
+    if (mine && emails.includes(mine)) { note.textContent = '내 주소는 넣을 수 없어요.'; return; }
+    // ★ 개인 → 팀은 되돌릴 수 없다(내보내도 그분이 본 것은 되돌아오지 않는다) — 첫 초대 한 번만 강하게 확인한다.
+    if (!primary && v.kind === 'personal') {
       const ok = await confirmDialog({
-        title: `'${d.workspace.name}' 에 사람을 들이면 팀이 됩니다`,
+        title: `'${v.wsName}' 에 사람을 들이면 팀이 됩니다`,
         lines: [
           `${emails.join(', ')} 님을 초대합니다.`,
           '수락하면 이 워크스페이스는 팀이 되고, 여기 있는 자료·프로젝트를 그분이 보게 됩니다.',
@@ -270,54 +401,110 @@ function inviteBlock(d: PeopleData, slug: string, again: () => void): HTMLElemen
         confirmText: '초대 보내기', cancelText: '그만두기', danger: true });
       if (!ok) return;
     }
-    go.setAttribute('disabled', ''); note.textContent = '보내는 중…';
+    go.disabled = true; note.textContent = primary ? '계정을 만드는 중…' : '보내는 중…';
     const okd: string[] = []; const failed: string[] = [];
     for (const email of emails) {
-      try { await api('/api/ui/me/workspaces/invite', { method: 'POST', body: JSON.stringify({ slug, email }) }); okd.push(email); }
-      catch (e: any) { failed.push(email + '(' + (e?.message || e) + ')'); }
+      try {
+        if (primary) {
+          // 박스 계정 생성 — 서버가 새 사람에게 임시 비밀번호를 **한 번만** 돌려준다. 여기서 받아 카드로 보인다.
+          const r: any = await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify({ kind: 'human', email, display_name: email.split('@')[0] }) });
+          if (r?.initialPassword) onIssued({ title: `${email} 계정을 만들었어요`, email, password: String(r.initialPassword) });
+        } else {
+          await api('/api/ui/me/workspaces/invite', { method: 'POST', body: JSON.stringify({ slug, email, role: roleSel?.value || 'member' }) });
+        }
+        okd.push(email);
+      } catch (e: any) { failed.push(`${email} — ${e?.message || e}`); }
     }
-    go.removeAttribute('disabled');
-    if (okd.length) { input.value = ''; toast(`${okd.length}명 초대했어요 — 그분이 수락하면 구성원이 됩니다.`); }
-    note.textContent = failed.length ? '못 보냄: ' + failed.join(' · ') : '';
-    again();
+    go.disabled = false;
+    if (okd.length) { chips.clear(); toast(primary ? `${okd.length}명의 계정을 만들었어요 — 임시 비밀번호를 전해 주세요.` : `${okd.length}명에게 초대를 보냈어요 — 수락하면 구성원이 됩니다.`); }
+    note.textContent = failed.length ? '못 했어요: ' + failed.join(' · ') : '';
+    if (okd.length) again();
   };
   go.onclick = () => void send();
-  //  Enter=줄바꿈(여러 명 입력), Cmd/Ctrl+Enter=보내기.
-  input.addEventListener('keydown', (e) => { const k = e as KeyboardEvent; if (k.key === 'Enter' && (k.metaKey || k.ctrlKey)) { e.preventDefault(); void send(); } });
 
-  return el('div', { class: 'v2-mem-invite' }, list,
-    el('label', { class: 'v2-mem-label', text: '이메일로 초대' }), input,
-    el('div', { class: 'v2-ws-formrow' }, go, note));
+  return el('section', { class: 'v2mem-invite' },
+    el('label', { class: 'v2mem-label', text: '이메일 주소' }),
+    chips.el,
+    el('p', { class: 'v2mem-help', text: primary
+      ? '계정이 만들어지고 임시 비밀번호가 이 창에 나와요 — 그분에게 직접 전해 주세요.'
+      : '초대받은 분이 로그인하면 초대가 보여요. 수락해야 구성원이 됩니다.' }),
+    el('div', { class: 'v2mem-invrow' }, roleSel, note, go));
 }
 
-function modalMemberRow(d: PeopleData, m: PeopleData['members'][number], slug: string, meId: string, again: () => void): HTMLElement {
-  const isMe = m.member_id === meId;
-  const nm = who(m) + (isMe ? ' (나)' : '');
-  const roleText = m.is_creator ? '만든 사람' : m.role === 'owner' ? '공동 관리자' : '구성원';
-  const acts: (HTMLElement | null)[] = [];
-  // 권한(만든 사람이 아닌 사람에 한해, owner 만 조작) — 관리자↔구성원 토글.
-  if (d.can_invite && !m.is_creator && !isMe) {
-    const mkOwner = m.role !== 'owner';
-    acts.push(el('button', { class: 'v2-mem-act', type: 'button',
-      title: mkOwner ? '공동 관리자로 올리기 — 사람 초대·권한 변경을 함께 할 수 있어요' : '구성원으로 내리기',
-      text: mkOwner ? '관리자로' : '구성원으로',
-      onclick: async () => {
-        try { await api('/api/ui/me/workspaces/members/add', { method: 'POST', body: JSON.stringify({ slug, member_id: m.member_id, role: mkOwner ? 'owner' : 'member' }) });
-          toast(mkOwner ? `${who(m)} 님을 공동 관리자로 올렸어요.` : `${who(m)} 님을 구성원으로 내렸어요.`); again(); }
+/** 방금 만든 계정 — 임시 비밀번호는 지금만 보인다. 세 줄을 한 번에 복사해 그분에게 전한다. */
+function issuedCard(i: Issued): HTMLElement {
+  const loginUrl = location.origin;
+  const text = `로그인 주소: ${loginUrl}\n이메일: ${i.email}\n임시 비밀번호: ${i.password}`;
+  const row = (k: string, val: string, mono = false): HTMLElement =>
+    el('div', { class: 'v2mem-cred-row' }, el('span', { class: 'v2mem-cred-k', text: k }), el('span', { class: 'v2mem-cred-v' + (mono ? ' mono' : ''), text: val }));
+  return el('section', { class: 'v2mem-cred', role: 'status' },
+    el('div', { class: 'v2mem-cred-h' }, svg(['M5 12.5l4.2 4.2L19 7'], 'v2mem-cred-ic'), el('b', { text: i.title })),
+    row('로그인 주소', loginUrl), row('이메일', i.email), row('임시 비밀번호', i.password, true),
+    el('div', { class: 'v2mem-cred-f' },
+      el('span', { class: 'v2mem-help', text: '처음 로그인하면 새 비밀번호를 정해요. 이 창을 닫으면 임시 비밀번호는 다시 볼 수 없어요.' }),
+      copyButton(() => text, '세 줄 복사')));
+}
+
+// ── 명부 — 한 줄에 얼굴·이름·권한, 조작은 ⋯ 메뉴(둘 이상이라 줄에 늘어놓지 않는다). ─────────
+
+function personRow(v: View, p: Person, slug: string, primary: boolean, meId: string, onIssued: (i: Issued) => void, again: () => void): HTMLElement {
+  const isMe = p.id === meId;
+  const rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean }> = [];
+  if (v.canManage && !isMe && p.role !== 'creator') {
+    if (primary) {
+      const isAdmin = p.role === 'admin';
+      rows.push({ label: isAdmin ? '관리자에서 내리기' : '관리자로 올리기', run: async () => {
+        const scopes = isAdmin ? (p.scopes || []).filter((s) => s !== 'admin') : [...new Set([...(p.scopes || []), 'admin'])];
+        try { await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify({ id: p.id, scopes }) }); toast(isAdmin ? `${p.name} 님을 관리자에서 내렸어요.` : `${p.name} 님을 관리자로 올렸어요.`); again(); }
         catch (e: any) { toast('바꾸지 못했어요 — ' + (e?.message || e), true); }
-      } }));
-    // 내보내기(추방) — 만든 사람은 못 뺀다(서버도 막는다).
-    acts.push(el('button', { class: 'v2-mem-act danger', type: 'button', title: '이 워크스페이스에서 내보내기', text: '내보내기',
-      onclick: async () => {
-        if (!await confirmDialog({ title: `${who(m)} 님을 내보낼까요?`,
-          lines: [`'${d.workspace.name}' 의 구성원에서 뺍니다.`, '그분이 만든 자료·프로젝트는 그대로 남아요.', d.member_count <= 2 ? '둘만 남은 팀이라, 내보내면 다시 개인 워크스페이스가 됩니다.' : ''].filter(Boolean),
+      } });
+      rows.push({ label: '비밀번호 재설정', run: async () => {
+        if (!await confirmDialog({ title: `${p.name} 님의 비밀번호를 재설정할까요?`, lines: ['지금 비밀번호는 바로 못 쓰게 되고, 새 임시 비밀번호가 이 창에 나와요.', '그 비밀번호를 그분에게 직접 전해 주세요.'], confirmText: '재설정', cancelText: '그만두기' })) return;
+        try { const r: any = await api('/api/ui/org/member/reset-password', { method: 'POST', body: JSON.stringify({ id: p.id }) });
+          onIssued({ title: `${p.name} 님의 비밀번호를 재설정했어요`, email: p.email || p.id, password: String(r?.password || '') }); again(); }
+        catch (e: any) { toast('재설정하지 못했어요 — ' + (e?.message || e), true); }
+      } });
+      rows.push({ label: '', sep: true });
+      rows.push({ label: '비활성화', danger: true, run: async () => {
+        if (!await confirmDialog({ title: `${p.name} 님을 비활성화할까요?`, lines: ['로그인할 수 없게 돼요. 그분이 만든 자료·프로젝트는 그대로 남아요.', '설정 ▸ 구성원에서 다시 활성화할 수 있어요.'], confirmText: '비활성화', cancelText: '그만두기', danger: true })) return;
+        try { await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify({ id: p.id, state: 'inactive' }) }); toast(`${p.name} 님을 비활성화했어요.`); again(); }
+        catch (e: any) { toast('비활성화하지 못했어요 — ' + (e?.message || e), true); }
+      } });
+    } else {
+      const mkOwner = p.role !== 'owner';
+      rows.push({ label: mkOwner ? '공동 관리자로 올리기' : '구성원으로 내리기', run: async () => {
+        try { await api('/api/ui/me/workspaces/members/add', { method: 'POST', body: JSON.stringify({ slug, member_id: p.id, role: mkOwner ? 'owner' : 'member' }) });
+          toast(mkOwner ? `${p.name} 님을 공동 관리자로 올렸어요.` : `${p.name} 님을 구성원으로 내렸어요.`); again(); }
+        catch (e: any) { toast('바꾸지 못했어요 — ' + (e?.message || e), true); }
+      } });
+      rows.push({ label: '', sep: true });
+      rows.push({ label: '내보내기', danger: true, run: async () => {
+        if (!await confirmDialog({ title: `${p.name} 님을 내보낼까요?`,
+          lines: [`'${v.wsName}' 의 구성원에서 뺍니다.`, '그분이 만든 자료·프로젝트는 그대로 남아요.', v.count <= 2 ? '둘만 남은 팀이라, 내보내면 다시 개인 워크스페이스가 됩니다.' : ''].filter(Boolean),
           confirmText: '내보내기', cancelText: '그만두기', danger: true })) return;
-        try { await api('/api/ui/me/workspaces/members/remove', { method: 'POST', body: JSON.stringify({ slug, member_id: m.member_id }) }); toast(`${who(m)} 님을 내보냈어요.`); again(); }
+        try { await api('/api/ui/me/workspaces/members/remove', { method: 'POST', body: JSON.stringify({ slug, member_id: p.id }) }); toast(`${p.name} 님을 내보냈어요.`); again(); }
         catch (e: any) { toast('내보내지 못했어요 — ' + (e?.message || e), true); }
-      } }));
+      } });
+    }
   }
-  return el('div', { class: 'v2-mem-row' },
-    profileAvatar((m as any).avatar, who(m), m.member_id, 'v2-ws-person-face', { char: (m as any).avatar_char, color: (m as any).avatar_color }),
-    el('span', { class: 'v2-ws-person-tt' }, el('b', { text: nm }), el('span', { text: roleText + (m.email && !m.is_creator ? ' · ' + m.email : '') })),
-    ...acts.filter(Boolean) as HTMLElement[]);
+  const more = rows.length ? el('button', { class: 'v2mem-more', type: 'button', 'aria-label': `${p.name} 님 조작 메뉴`, title: '권한 · 내보내기',
+    onclick: (e: Event) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); ctxMenu(r.right, r.bottom + 4, rows); } },
+    svg(['M5 12h.01', 'M12 12h.01', 'M19 12h.01'], 'v2mem-more-ic')) : null;
+  return el('div', { class: 'v2mem-row' },
+    profileAvatar(p.avatar ?? null, p.name, p.id, 'v2mem-face', { char: p.avatar_char, color: p.avatar_color }),
+    el('div', { class: 'v2mem-tt' }, el('b', { text: p.name + (isMe ? ' (나)' : '') }), el('span', { text: p.email || '' })),
+    el('span', { class: 'v2mem-role' + (p.role === 'member' ? '' : ' lead'), text: ROLE_LABEL[p.role] }),
+    more);
+}
+
+function pendingRow(v: View, p: PeopleData['pending'][number], again: () => void): HTMLElement {
+  return el('div', { class: 'v2mem-row pending' },
+    el('span', { class: 'v2mem-face waiting', 'aria-hidden': 'true', text: '…' }),
+    el('div', { class: 'v2mem-tt' }, el('b', { text: p.email }), el('span', { text: `${ago(p.created_at)} 보냄 · ${p.role === 'owner' ? '공동 관리자로' : '구성원으로'}` })),
+    el('span', { class: 'v2mem-role', text: '수락 대기' }),
+    v.canManage ? el('button', { class: 'btn-text v2mem-cancel', type: 'button', text: '취소', title: '초대 취소', onclick: async () => {
+      if (!await confirmDialog({ title: '초대를 취소할까요?', message: `${p.email} 님에게 보낸 초대를 거둡니다.`, confirmText: '취소하기', cancelText: '그만두기' })) return;
+      try { await api('/api/ui/me/workspaces/invite/resolve', { method: 'POST', body: JSON.stringify({ invite_id: p.id, decision: 'revoke' }) }); toast('초대를 취소했어요.'); again(); }
+      catch (e: any) { toast('취소하지 못했어요 — ' + (e?.message || e), true); }
+    } }) : null);
 }

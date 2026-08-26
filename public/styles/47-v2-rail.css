@@ -69,24 +69,76 @@
 /* 부제 행(구성원·설정·추가)은 여전히 button.v2-wspop-row 를 쓰는 곳(row())이 있으므로 그 규격은 그대로 둔다. */
 button.v2-wspop-row { padding: 8px; gap: 12px; }
 
-/* ── #1875 구성원 모달 — overlay(ov-box) 안. 슬랙 초대 모달 참고. ── */
-.v2-mem { display: flex; flex-direction: column; gap: 4px; min-width: 340px; max-width: 460px; }
-.v2-mem-kind { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; margin-bottom: 4px; border-radius: 10px; background: var(--bg-tint); border: 1px solid var(--line); }
-.v2-mem-kind.personal { background: var(--bg-success); border-color: var(--ok-line-2); }
-.v2-mem-kind b { font-size: 13.5px; color: var(--ink); }
-.v2-mem-kind span { font-size: 12px; color: var(--ink-sub); }
-.v2-mem-invite { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px 10px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
-.v2-mem-label { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
-.v2-mem-emails { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line-net-2); border-radius: 10px; font: inherit; font-size: 13px; resize: vertical; min-height: 46px; background: var(--bg); color: var(--ink); }
-.v2-mem-emails:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
-.v2-mem-row { display: flex; align-items: center; gap: 9px; padding: 6px 4px; border-radius: 8px; }
-.v2-mem-row:hover { background: var(--bg-tint); }
-.v2-mem-row .v2-ws-person-tt { flex: 1; min-width: 0; }
-.v2-mem-row.pending .v2-ws-person-tt b { color: var(--ink-sub); font-weight: 500; }
-.v2-mem-act { flex: none; font: inherit; font-size: 11.5px; font-weight: 700; padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px; background: none; color: var(--ink-sub); cursor: pointer; }
-.v2-mem-act:hover { border-color: var(--line-net-2); color: var(--ink); background: var(--bg); }
-.v2-mem-act.danger { color: var(--coral-text); }
-.v2-mem-act.danger:hover { border-color: var(--coral-text); background: var(--danger-bg, var(--bg-tint)); }
+/* ── #1875 구성원 모달 — [나] 창(46-v2-me.css)과 같은 문법: 머리(얼굴·제목·부제·✕) + 스크롤 몸통. 슬랙 「사람 초대」 참고.
+   한 창에서 부르기(이메일 칩) · 명부(⋯ 메뉴) · 수락 대기 · 방금 만든 계정 카드까지. 색·간격은 전부 토큰. ── */
+.v2mem-back { position: fixed; inset: 0; z-index: 70; background: rgba(var(--shadow-ink), .38); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.v2mem { display: flex; flex-direction: column; width: min(540px, 100%); max-height: min(720px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 18px 48px rgba(var(--shadow-ink), .22); }
+.v2mem-h { flex: none; display: flex; align-items: center; gap: 12px; padding: 16px 16px 14px 20px; border-bottom: 1px solid var(--line); }
+.v2mem-h-facewrap { flex: none; display: inline-flex; }
+.v2mem-h-txt { flex: 1; min-width: 0; }
+.v2mem-h-title { margin: 0; font-size: 16px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-h-sub { font-size: 12.5px; color: var(--muted-head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-x { flex: none; width: 30px; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--muted); display: inline-grid; place-items: center; cursor: pointer; }
+.v2mem-x:hover { background: var(--bg-punch); color: var(--ink); }
+.v2mem-x-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.v2mem-b { flex: 1; min-height: 0; overflow: auto; padding: 14px 20px 18px; display: flex; flex-direction: column; gap: 2px; }
+.v2mem-err { margin: 0; font-size: 13px; color: var(--coral-text); }
+.v2mem-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+/* 부르기 — 이메일 칩 입력(Enter·쉼표·붙여넣기로 여러 명) + 권한 + [초대하기] 하나. */
+.v2mem-invite { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 14px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.v2mem-label { font-size: 13px; font-weight: 700; color: var(--ink); }
+.v2mem-chips { display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 6px; min-height: 72px; padding: 8px 10px; border: 1px solid var(--line-net-2); border-radius: 10px; background: var(--bg); cursor: text; }
+.v2mem-chips:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
+.v2mem-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 4px 3px 9px; border-radius: 999px; background: var(--bg-tint); border: 1px solid var(--line); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.v2mem-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-chip.bad { border-color: var(--coral); color: var(--coral-text); background: var(--danger-bg); }
+.v2mem-chip-x { width: 18px; height: 18px; border: 0; border-radius: 50%; background: none; color: var(--muted); display: inline-grid; place-items: center; cursor: pointer; }
+.v2mem-chip-x:hover { background: var(--bg-punch); color: var(--ink); }
+.v2mem-chip-x-ic { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* 안쪽 입력칸 — 전역 input[type=text] 규격(테두리·높이·그림자)을 이긴다(특이도 0,2,1). 칩 상자가 곧 테두리다. */
+.v2mem-chips input.v2mem-chip-in { flex: 1; min-width: 160px; width: auto; min-height: 0; height: auto; margin: 0; border: 0; border-radius: 0; box-shadow: none; outline: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); padding: 4px 2px; }
+.v2mem-chips input.v2mem-chip-in:focus { border: 0; box-shadow: none; outline: 0; }
+/* datalist 가 붙은 입력칸에 크롬이 그리는 ▼ — 제안은 타이핑하면 뜬다, 화살표는 칩 상자 안에서 이물이다. */
+.v2mem-chips input.v2mem-chip-in::-webkit-calendar-picker-indicator { display: none !important; }
+.v2mem-help { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.v2mem-invrow { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.v2mem-sel { font: inherit; font-size: 12.5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink-sub); }
+.v2mem-invnote { flex: 1; min-width: 0; margin: 0; font-size: 12px; color: var(--coral-text); line-height: 1.4; }
+.v2mem-invrow .btn { margin-left: auto; }
+/* 방금 만든 계정 — 임시 비밀번호는 지금만 보인다. */
+.v2mem-cred { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; margin-bottom: 10px; border-radius: 12px; background: var(--bg-success); border: 1px solid var(--ok-line-2); }
+.v2mem-cred-h { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink); }
+.v2mem-cred-ic { width: 18px; height: 18px; fill: none; stroke: var(--mint-deep); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.v2mem-cred-row { display: flex; gap: 10px; font-size: 12.5px; line-height: 1.5; }
+.v2mem-cred-k { flex: none; width: 88px; color: var(--muted); }
+.v2mem-cred-v { flex: 1; min-width: 0; color: var(--ink); overflow-wrap: anywhere; user-select: all; }
+.v2mem-cred-v.mono { font-family: var(--mono, ui-monospace, monospace); font-weight: 700; letter-spacing: .02em; }
+.v2mem-cred-f { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 2px; }
+/* 절 머리 · 사람 줄 — 얼굴 32 · 이름 · 권한 라벨 · ⋯ */
+.v2mem-sec { display: flex; align-items: baseline; gap: 6px; padding: 10px 2px 4px; }
+.v2mem-sec b { font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.v2mem-sec span { font-size: 12px; color: var(--muted-2); }
+.v2mem-row { display: flex; align-items: center; gap: 11px; padding: 7px 8px; margin: 0 -8px; border-radius: 10px; }
+.v2mem-row:hover { background: var(--bg-tint); }
+.v2mem-face { flex: none; width: 32px; height: 32px; border-radius: 50%; font-size: 13px; display: inline-grid; place-items: center; }
+.v2mem-face.waiting { background: none; border: 1px dashed var(--muted-3); color: var(--muted-2); font-weight: 400; }
+.v2mem-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.v2mem-tt b { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-tt span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-row.pending .v2mem-tt b { font-weight: 500; color: var(--ink-sub); }
+.v2mem-role { flex: none; font-size: 11.5px; color: var(--muted); }
+.v2mem-role.lead { color: var(--ink-sub); font-weight: 700; }
+.v2mem-more { flex: none; width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted); display: inline-grid; place-items: center; cursor: pointer; }
+.v2mem-more:hover { background: var(--bg-punch); color: var(--ink); }
+.v2mem-more-ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
+.v2mem-cancel { flex: none; font-size: 12px; color: var(--coral-text); }
+.v2mem-x:focus-visible, .v2mem-more:focus-visible, .v2mem-chip-x:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+@media (max-width: 520px) {
+  .v2mem-back { padding: 0; align-items: stretch; }
+  .v2mem { width: 100%; max-height: 100%; border-radius: 0; border: 0; }
+  .v2mem-invrow { flex-wrap: wrap; }
+  .v2mem-cred-k { width: 76px; }
+}
 
 /* ── #1875 워크스페이스 메뉴의 하위 판 — 구성원 · 설정 · 추가. 같은 판(v2-wspop) 위에 같은 부품으로 그린다.
    옛 스위처 메뉴(40-v2.css .v2-ws-menu)와 이 팝오버가 함께 살아 두 시대의 생김새가 한 화면에 섞였다 —
