@@ -3,7 +3,7 @@
 // 사양·엣지 표: 스크래치패드 spec-sleep-pattern.md (행 번호 = 아래 D<n>)
 import assert from "node:assert/strict";
 import {
-  diagnoseLink, WINDOW_MS, SHORT_UP_MS, LONG_GAP_MS, SHORT_GAP_MS, MIN_CYCLES, HEALTHY_UP_MS, type LinkEvent,
+  diagnoseLink, WINDOW_MS, SHORT_UP_MS, LONG_GAP_MS, SHORT_GAP_MS, NOISE_GAP_MS, MIN_CYCLES, HEALTHY_UP_MS, type LinkEvent,
 } from "./sleep-pattern.js";
 import { reconnectDelayMs, BACKOFF_MAX_MS, JITTER } from "./reconnect-delay.js";
 
@@ -227,6 +227,32 @@ t("D20 ★'짧은 공백' 임계의 근거를 실제 재연결 로직과 대조�
   assert.ok(SHORT_GAP_MS > worst,
     `'짧은 공백'(${SHORT_GAP_MS}ms)은 최악 재연결 지연(${worst}ms)보다 커야 깨어 있는 프로세스의 재시도를 담는다`);
   assert.ok(SHORT_GAP_MS < LONG_GAP_MS, "두 임계가 겹치면 판정이 모순된다");
+});
+
+// ── #2127 후속 — 재연결 레이스가 만든 '가짜 끊김' (라이브에서 잡은 거짓양성) ──────────────
+// 🔴 배포 직후 실측: 멀쩡히 쓰고 있는 노드가 `up=2s · gap=0s` 로 churn 신고됐다. 그건 끊긴 게 아니라
+//  **연결이 교체된 자국**이다(registry.onNodeDisconnected "이미 새 연결로 교체됨"). 세면 안 되는 것을
+//  세면 건강한 노드가 병든 것으로 보이고, 그러면 이 진단 전체를 아무도 안 믿게 된다.
+t("A8 ★같은 순간의 down→up 은 끊김이 아니라 교체다 — 한 구간으로 이어 붙인다", () => {
+  // 60초 붙어 있던 중 두 번 교체(공백 0) — 실제로는 한 번도 안 끊긴 180초짜리 연결이다.
+  const evs: LinkEvent[] = [];
+  let at = NOW - s(200);
+  for (let i = 0; i < 3; i++) {
+    evs.push({ ev: "up", at });
+    at += s(60);
+    evs.push({ ev: "down", at });   // 곧바로 다음 up (공백 0)
+  }
+  const d = diagnoseLink(evs, NOW);
+  assert.equal(d.cycles, 1, "교체 2회는 별개 연결이 아니다");
+  assert.equal(d.medianUpSec, 180, "이어 붙인 총 길이여야 한다");
+  assert.equal(d.suspected, null, "멀쩡한 노드를 churn 으로 신고하면 안 된다");
+});
+
+t("A9 ★잡음 바닥을 넘는 공백은 그대로 센다 — 진짜 끊김을 지우면 안 된다", () => {
+  const d = diagnoseLink(timeline([[s(2), s(5)], [s(2), s(5)], [s(2), s(5)], [s(2), s(5)]]), NOW);
+  assert.equal(d.cycles, 4, "5초 공백은 잡음이 아니다(hammurabi 실측 패턴)");
+  assert.equal(d.suspected, "churn");
+  assert.ok(NOISE_GAP_MS < SHORT_GAP_MS, "잡음 바닥이 '짧은 공백' 임계보다 커지면 churn 이 영영 안 잡힌다");
 });
 
 console.log(`\n${pass} checks passed`);

@@ -36,6 +36,16 @@ export const LONG_GAP_MS = 300_000;
  *  그 안에 반드시 다시 붙는다. 여유를 두어 1분으로 잡고, 그 관계를 테스트로 대조한다(D20).
  */
 export const SHORT_GAP_MS = 60_000;
+/**
+ * 이보다 짧은 공백은 **끊긴 것으로 치지 않는다** — 완결 구간에서 통째로 제외한다(#2127 후속).
+ *
+ * 🔴 라이브 실측(2026-08-26 배포 직후): 멀쩡히 쓰고 있는 노드가 `up=2s · gap=0s` 로 잡혔다. 그건 노드가
+ *  끊긴 게 아니라 **연결이 교체된 자국**이다 — 재연결 레이스에서 옛 연결의 close 와 새 연결의 open 이
+ *  같은 순간에 기록된다(registry.onNodeDisconnected 의 "이미 새 연결로 교체됨"). 그 잡음을 세면
+ *  건강한 노드가 churn 으로 신고된다(내 맥과 게이트웨이 자신이 실제로 그렇게 잡혔다).
+ *  ⚠ 이 바닥이 없으면 이 파일의 모든 판정이 잡음 위에서 돈다 — cycles·중앙값이 전부 오염된다.
+ */
+export const NOISE_GAP_MS = 2_000;
 /** 판정에 필요한 최소 완결 구간 수 — 2회는 우연일 수 있다. */
 export const MIN_CYCLES = 3;
 /** 지금 이만큼 붙어 있으면 과거 이력으로 경고하지 않는다 — 이미 해결된 문제를 경고하면 그게 거짓말이다. */
@@ -91,15 +101,29 @@ export function diagnoseLink(events: readonly LinkEvent[], now: number): LinkDia
   const gaps: number[] = [];   // 공백 길이(ms) = 이전 down → 다음 up
   let openAt: number | null = null;
   let lastDown: number | null = null;
+  let lastStart: number | null = null;      // 방금 닫힌 구간의 시작 — 잡음 공백이면 되살려 이어 붙인다
   for (const e of evs) {
     if (e.ev === "up") {
       if (openAt !== null) { /* 해제 유실 — 앞 up 버림 */ }
-      else if (lastDown !== null) gaps.push(e.at - lastDown);
+      else if (lastDown !== null) {
+        const gap = e.at - lastDown;
+        // 🔴 끊긴 게 아니라 **교체**다(#2127 후속) — 재연결 레이스는 close 와 open 을 같은 순간에 남긴다.
+        //  그걸 한 번의 끊김으로 세면 멀쩡한 노드가 `up=2s · gap=0s` 로 잡혀 churn 으로 신고된다(라이브 실측).
+        //  두 구간을 **하나로 이어 붙이고** 그 공백은 세지 않는다 — 잡음을 지우는 것이지 감추는 것이 아니다.
+        if (gap < NOISE_GAP_MS && lastStart !== null) {
+          ups.pop();
+          openAt = lastStart;
+          lastDown = null; lastStart = null;
+          continue;
+        }
+        gaps.push(gap);
+      }
       openAt = e.at;
       continue;
     }
     if (openAt === null) continue;          // 창 경계의 고아 down
     ups.push(e.at - openAt);
+    lastStart = openAt;
     openAt = null;
     lastDown = e.at;
   }
