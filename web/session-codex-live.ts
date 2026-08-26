@@ -199,21 +199,40 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
 
   // ── 스트림 ──────────────────────────────────────────────────────────────────────
   //  EventSource 는 헤더를 못 싣는다(토큰이 주소로 새 나간다) — fetch 스트림으로 읽는다.
+  /**
+   * ★ **말 없는 연결을 살아 있는 것으로 착각하지 않는다**(실측 2026-08-26 dev).
+   *  게이트웨이가 재기동되면 프록시(HTTP/2)가 스트림을 **닫지 않은 채** 붙들고 있어, `reader.read()` 가
+   *  영원히 안 깨어난다 — 예외도 없고 done 도 없다. 그래서 재접속 루프가 통째로 멈췄고, 화면은 멈춤 버튼과
+   *  경과 시간만 든 채 **영영 '작업 중'** 으로 남았다(사용자 신고의 절반이 이 한 가지에서 나왔다).
+   *  서버가 25초마다 하트비트(`: beat`)를 보내므로, 그보다 넉넉한 시간 동안 **한 바이트도 안 오면 죽은 것**이다.
+   */
+  const SILENCE_MS = 40_000;
+
   async function pump(): Promise<void> {
     let wait = 1000;                       // 끊기면 다시 붙되, 간격을 늘려 폭주하지 않게(게이트웨이 재기동·프록시 타임아웃)
     while (!closed) {
+      const attempt = new AbortController();
+      const onAbortAll = (): void => attempt.abort();
+      ctl.signal.addEventListener('abort', onAbortAll);
+      let silence: ReturnType<typeof setTimeout> | null = null;
+      const beat = (): void => {
+        if (silence) clearTimeout(silence);
+        silence = setTimeout(() => attempt.abort(), SILENCE_MS);   // 조용하면 끊고 새로 붙는다
+      };
       try {
         const res = await fetch(apiUrl(`/api/ui/terminal/sessions/${encodeURIComponent(o.sessionId)}/codex-chat/events`), {
-          headers: authHeaders({}), signal: ctl.signal, credentials: 'same-origin',
+          headers: authHeaders({}), signal: attempt.signal, credentials: 'same-origin',
         });
         if (!res.ok || !res.body) throw new Error(`스트림 실패 (${res.status})`);
         wait = 1000;
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let acc = '';
+        beat();
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          beat();
           acc += dec.decode(value, { stream: true });
           const cut = splitSse(acc);                              // 자르기 계약은 순수 모듈이 쥔다(web/sse-frames.ts)
           acc = cut.rest;
@@ -221,8 +240,11 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
             try { handle(JSON.parse(d)); } catch { /* 깨진 프레임 한 장은 넘긴다 */ }
           }
         }
-      } catch (e: any) {
-        if (closed || e?.name === 'AbortError') return;
+      } catch {
+        if (closed) return;                                       // 화면이 닫혔다 — 여기서 끝
+      } finally {
+        if (silence) clearTimeout(silence);
+        ctl.signal.removeEventListener('abort', onAbortAll);
       }
       if (closed) return;
       await new Promise((r) => setTimeout(r, wait));
