@@ -120,6 +120,12 @@ export interface Harness {
   //  · failHint: 재시작 안내(`<bin>` 입력) 뒤에 덧붙일 줄들. 하네스마다 로그인 절차가 달라서 있는 값.
   loginCmd?: string;
   failHint?: string[];
+  /** 온보딩 «AI 잇기»(#1879)가 그 사람에게 **그대로 보여 주는** 로그인 절차. 하네스마다 완전히 다르다(실측 2026-08-26):
+   *   claude `claude auth login` · codex `codex login` · grok `grok login --device-auth`
+   *   · antigravity 는 **로그인 명령이 없다** — `agy` 를 켜면 하네스가 인증을 띄운다(원격이면 주소+코드).
+   *  ⚠ 없는 명령을 지어내지 않는다. 온보딩 첫 화면의 틀린 한 줄은 가입 직후 그 자리에서 들통난다
+   *   (harnessLoginArgv 머리말과 같은 교리). 여기 채우기 전에 그 CLI 의 --help 를 실제로 읽는다. */
+  loginSteps?: string[];
   // 이어받기(#1711) — '이어서 열기'(복원)가 **같은 대화를 이어서** 열게 하는 argv 조각.
   //  id 를 주면 그 대화, 없으면 '가장 최근 대화 또는 피커'. 하네스마다 수단이 완전히 다르다(실측 2026-08-14):
   //   claude `--resume <uuid>` / `--resume`(피커) · codex **서브커맨드** `resume <id>` / `resume --last`
@@ -156,7 +162,10 @@ export const HARNESSES: Harness[] = [
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "fable" },
       { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
     ],
-    failHint: ["로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요."],
+    failHint: ["로그인이 필요하다고 나오면  claude auth login  을 입력하세요."],
+    // 실측(claude 2.1.246 `claude auth --help`): login·logout·status 가 **셸 서브커맨드로** 있다. 종전 안내(TUI 안 `/login`)는
+    //  #1516 당시 사실이었지만 지금은 낡았다 — 온보딩에서 TUI 를 거치게 하면 한 단계가 공짜로 늘어난다.
+    loginSteps: ["터미널에  claude auth login  을 입력합니다", "열리는 창에서 Anthropic 계정으로 로그인합니다"],
     resumeArgv: (id) => (id ? ["--resume", id] : ["--resume"]),   // 인자 없는 --resume = 이 폴더의 대화 피커
     // 실측(claude 2.1.234 번들): `/model <별칭|풀네임>` · `/effort <low|medium|high|xhigh|max|auto>` 둘 다 인자를 받는
     //  local 커맨드(effort 는 supportsNonInteractive) — 입력창에 한 줄로 쳐서 그 자리에서 바뀐다.
@@ -184,6 +193,10 @@ export const HARNESSES: Harness[] = [
       "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
     },
     loginCmd: "codex logout && codex login --device-auth",
+    // 온보딩은 만료 복구가 아니라 **첫 로그인**이라 logout 을 앞세우지 않는다(지울 자격이 없다).
+    //  브라우저가 있는 자리는 `codex login` 이 알아서 창을 열고, 없으면 codex 가 device-auth 로 내려간다.
+    loginSteps: ["터미널에  codex login  을 입력합니다", "열리는 창에서 ChatGPT 계정으로 로그인합니다",
+      "창이 안 열리면  codex login --device-auth  로 주소와 일회용 코드를 받습니다"],
     resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
   },
   {
@@ -212,6 +225,11 @@ export const HARNESSES: Harness[] = [
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"] },   // claude 와 달리 3단계(실측)
     ],
     failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
+    // ⚠ agy 에는 로그인 서브커맨드가 **없다**(실측 agy 1.1.13·1.1.x --help — install·update·plugin·models·agent·changelog뿐).
+    //  그래서 절차의 1단계가 '하네스를 그냥 켠다' 이고, 인증은 하네스가 띄운다. 없는 `agy login` 을 안내하면
+    //  사람은 command not found 를 보고 막힌다 — 이 표에서 지어내지 않는 이유가 그것이다.
+    loginSteps: ["터미널에  agy  를 입력해 하네스를 켭니다", "하네스가 띄우는 안내대로 Google 계정으로 로그인합니다",
+      "원격이라 창이 안 열리면 화면의 주소를 브라우저에서 열고 함께 뜨는 코드를 입력합니다"],
     // ⚠ id 없는 폴백(`--continue`)은 **가장 최근 대화**를 잡는데, agy 의 대화 저장(~/.gemini/antigravity-cli/brain/)은
     //  워크스페이스별이 아니라 **전역**이다(실측) → 세션을 여러 개 돌리면 남의 대화를 이어받을 수 있다.
     //  그래서 antigravity 는 id 복원이 정상 경로이고(어댑터가 conversationId 를 세션 id 로 보고한다 — 매핑 존재),
@@ -229,6 +247,9 @@ export const HARNESSES: Harness[] = [
       { name: "--effort", label: "추론강도(effort)", desc: "모델이 지원하는 단계만 적용됩니다", type: "select", choices: ["", "low", "medium", "high", "xhigh"] },
     ],
     failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-code"],
+    // 실측(grok 1.0.5 `grok login --help`): `--oauth`(브라우저) 와 `--device-auth`(별칭 --device-code, 헤드리스) 둘.
+    loginSteps: ["터미널에  grok login  을 입력합니다", "열리는 창에서 X(xAI) 계정으로 로그인합니다",
+      "창이 안 열리면  grok login --device-auth  로 주소와 일회용 코드를 받습니다"],
     // 실측(grok 바이너리 도움말 문자열): `/model <모델id>  # Switch model` · `/effort <level>` 둘 다 인자를 받는다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
     // 실측(#1701): `-r <id>` 는 세션 id(UUID) 재개, id 없으면 `-c` = 이 폴더의 최근 세션. 어댑터가 sessionId 를
@@ -543,7 +564,11 @@ export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: s
 //  로그인하려고 연 세션이 로그인 화면을 못 보여주는 데드락이었다. 로그인은 하네스 TUI 가 아니라
 //  **셸에서 로그인 명령을 직접** 돌려야 한다.
 //  codex: logout(만료 자격 제거) → device-auth 로그인 → 끝나면 셸로 남아 바로 `codex` 를 칠 수 있다.
-//  claude: 로그인이 TUI 안 슬래시 커맨드(/login)라 자동화할 수 없다 → null(종전대로 claude 세션을 연다).
+//  claude: 종전엔 로그인이 TUI 안 슬래시 커맨드(/login)뿐이라 자동화할 수 없었다 → null(종전대로 claude 세션을 연다).
+//   ⚠ 이 전제는 낡았다(재실측 2026-08-26, claude 2.1.246): `claude auth login`(logout·status 도) 이 **셸 서브커맨드로**
+//    생겼다. 즉 #1516 이 codex 에만 준 '로그인 전용 세션'을 claude 에도 줄 수 있고, 그러면 '자격이 만료돼 세션이
+//    즉사해 로그인 화면조차 못 보는' 데드락이 claude 에서도 풀린다. 온보딩 안내는 이미 그 한 줄로 바꿨고
+//    (loginSteps·failHint), 이 자리(관리탭 [연결된 AI 계정]의 [로그인])는 #1516 표면이라 별도로 손댄다.
 //  ⚠ 나머지 하네스도 **지금은 전부 null 이 정답**이다(#1695 실측). 여기 채우려면 '무인으로 한 줄' 이어야 하는데:
 //   · antigravity(agy): 로그인 서브커맨드 자체가 없다(agy 1.1.13 --help — install·update·plugin·models·agent·changelog뿐).
 //     인증은 하네스를 켜면 하네스가 띄운다(원격이면 주소+코드). 그래서 '로그인 전용 세션'을 만들 대상이 아니고,

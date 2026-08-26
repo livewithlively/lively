@@ -906,7 +906,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
-          S.ai = c.dataset.opt; save(); renderSB(); await sleep(200);
+          S.ai = c.dataset.opt; AIC = null; save(); renderSB(); await sleep(200);
           goScene(S.ai === '아직 없어요' ? 'terminal' : 'claude');
         });
         $('[data-skip]', el).onclick = () => goScene('terminal');
@@ -914,46 +914,108 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     /* AI 잇기 — **실물**이다(#1813). 종전엔 900ms 기다렸다 무조건 «연결됐어요» 라고만 했다.
      *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 돈다(박스에 API 키가 없는 게 설계다).
-     *  ⚠ 잇는 방법은 **터미널에서 그 CLI 를 한 번 띄워 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
+     *  ⚠ 잇는 방법은 **터미널에서 그 CLI 로 한 번 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
      *   (~/.claude/.credentials.json 등)에 남고, 헤드리스 분석도 그 프로필로 돈다.
      *   setup-token 을 붙여넣게 하지 않는다 — 그건 자기 프로필이 없는 자리(남의 노드 위탁)용 보조 수단이라
      *   여기서 요구하면 사람에게 더 어려운 길을 시키는 것이 된다. 관문은 '로그인' 하나다(#1437 §6).
-     *  로그인 여부는 **서버가 프로필을 보고** 답한다(ai_ready) — 화면이 지어내지 않는다. */
+     *
+     *  #1879 — **넷을 다 잇는다.** 종전 판정(ai_ready)은 «아무 하네스나 하나라도» 였고 고른 AI 와 무관했다.
+     *   그래서 두 가지가 동시에 틀렸다: ① 그록을 고른 사람에게 claude 로그인을 근거로 «이어졌어요» 라고 했고
+     *   ② 제미나이(agy)는 자격을 파일로 남기지 않아 서버가 영영 못 봐서, 로그인을 마쳐도 «아직 로그인이
+     *   안 보여요» 만 반복되는 **막다른 길**이었다(고르게는 해 놓고 이을 수는 없는 자리).
+     *   이제 고른 AI **하나**를 서버에 묻고(POST /api/ui/me/ai-accounts/check) 세 가지를 갈라 말한다:
+     *     · CLI 가 이 자리에 없다      → 로그인을 시킬 게 아니라 그 사실을 말한다(사람이 할 일이 다르다)
+     *     · 있는데 로그인 전이다        → 그 하네스의 **실측된** 절차를 그대로 보여 준다(catalog.loginSteps)
+     *     · 됐다                        → 넘어간다
+     *   그리고 어느 갈래에서도 **사람을 가두지 않는다**: 다른 AI 가 이미 이어져 있으면 그걸 정직하게 말하고
+     *   그대로 계속할 문을 연다(분석은 resolveHeadlessHarness 가 고른 그 하네스로 실제로 돈다). */
     claude: {
-      html: () => qHead('claude',
-        `이어 두시면 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`,
-        S.aiConnected ? '이어졌어요.' : `${esc(S.ai || 'AI')} 계정을 이어 주세요.`,
-        S.aiConnected ? '' : '터미널을 열고 아래 한 줄을 치면 로그인 창이 열립니다.')
-        + (S.aiConnected
-          ? `<div class="ob-tok"><p class="ob-ok">${esc(S.aiName || 'AI')} 로그인이 확인됐어요.</p></div>`
-          : `<div class="ob-tok">
+      html: () => {
+        const c = AIC || {};
+        const picked = esc(S.ai || 'AI');
+        const bin = esc(c.bin || AI_BIN_FALLBACK[aiHarness()] || '');
+        const others = (c.others || []).map((k) => AI_LABEL[k] || k);
+        const otherNote = others.length
+          ? `<p class="ob-note">지금은 ${esc(others.join(' · '))} 이(가) 이어져 있어요. ${picked} 를 잇지 않으셔도 제 분석은 그걸로 돌아갑니다.</p>`
+          : '';
+        const skip = `<button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`;
+        const goOther = `<button class="ob-btn ob-btn-sub" data-other>다른 AI 고르기</button>`;
+        const lead = `이어 두시면 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
+
+        // ── 아직 안 물어봤다 — 없는 답을 지어내지 않고 묻는 중이라고 말한다(bind 가 곧 채운다).
+        if (!AIC) {
+          return qHead('claude', lead, `${picked} 계정을 이어 주세요.`, '')
+            + `<div class="ob-tok"><p class="ob-note">${picked} 가 이어져 있는지 확인하고 있어요…</p></div>` + skip;
+        }
+        // ── 물어봤는데 서버가 답을 못 줬다.
+        if (c.error) {
+          return qHead('claude', lead, `${picked} 계정을 이어 주세요.`, '')
+            + `<div class="ob-tok"><p class="ob-err">확인하지 못했어요 — ${esc(c.error)}</p>${otherNote}</div>`
+            + `<button class="ob-btn ob-btn-pri" id="cGo">다시 확인</button>` + goOther + skip;
+        }
+        // ── 됐다.
+        if (S.aiConnected || c.loggedIn === true) {
+          return qHead('claude', lead, '이어졌어요.', '')
+            + `<div class="ob-tok"><p class="ob-ok">${esc(S.aiName || AI_LABEL[c.harness] || picked)} 로그인이 확인됐어요.</p></div>`
+            + `<button class="ob-btn ob-btn-pri" id="cGo">계속</button>`;
+        }
+        // ── CLI 가 이 자리에 없다. 로그인 절차를 보여 줘도 첫 줄에서 command not found 가 난다 —
+        //    그러니 로그인을 시키지 않고 **없다는 사실**을 말한다(사람이 해야 할 일이 아예 다르다).
+        if (c.installed === false) {
+          return qHead('claude', lead, `이 자리엔 ${picked} 가 아직 없어요.`,
+            `${picked} 를 쓰려면 그 CLI(<code>${bin}</code>)가 먼저 깔려 있어야 합니다.`)
+            + `<div class="ob-tok">
+                <p class="ob-note">라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요. ${picked} 는 그 CLI 가 깔린 내 컴퓨터를 이어 두시면 그대로 쓸 수 있습니다(다음 화면).</p>
+                ${otherNote}
+              </div>`
+            + (others.length ? `<button class="ob-btn ob-btn-pri" id="cKeep">이대로 계속</button>` : '')
+            + goOther + skip;
+        }
+        // ── 있는데 아직 로그인 전(또는 판정 불가). 그 하네스의 **실측된** 절차를 그대로 보여 준다.
+        const steps = (c.steps && c.steps.length ? c.steps : [`터미널에  ${c.bin || 'claude'}  를 입력해 안내대로 로그인합니다`])
+          .map((t) => `<li>${esc(t)}</li>`).join('');
+        return qHead('claude', lead, `${picked} 계정을 이어 주세요.`,
+          '터미널을 열고 아래대로 하시면 로그인 창이 열립니다.')
+          + `<div class="ob-tok">
               <ol>
                 <li>터미널을 엽니다(라이블리 안에서도, 쓰시던 터미널이어도 됩니다)</li>
-                <li><code>${esc(AI_CLI[S.ai] || 'claude')}</code> 를 치고 안내대로 로그인합니다</li>
+                ${steps}
                 <li>로그인이 끝나면 아래 버튼을 누릅니다</li>
               </ol>
+              ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${picked} 로그인 여부를 서버가 확인하지 못해요 — 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
               <p class="ob-err" id="cErr"></p>
-            </div>`)
-        + `<button class="ob-btn ob-btn-pri" id="cGo">${S.aiConnected ? '계속' : '로그인했어요'}</button>
-           <button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`,
+              ${otherNote}
+            </div>`
+          + `<button class="ob-btn ob-btn-pri" id="cGo">로그인했어요</button>`
+          + (others.length ? `<button class="ob-btn ob-btn-sub" id="cKeep">이대로 계속</button>` : '')
+          + goOther + skip;
+      },
       bind: (el) => {
         const err = $('#cErr', el), go = $('#cGo', el);
-        go.onclick = async () => {
-          if (S.aiConnected) return goScene('terminal');
-          go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
-          // 서버가 프로필을 보고 답한다 — 화면이 «됐다» 고 지어내지 않는다.
-          await loadWelcome();
-          if (!WS || !WS.ai_ready) {
-            go.disabled = false; go.textContent = '다시 확인';
-            if (err) err.textContent = '아직 로그인이 안 보여요. 터미널에서 로그인을 끝내고 다시 눌러 주세요.';
-            return;
-          }
-          S.aiConnected = true;
-          S.aiName = (WS.ai_harnesses && WS.ai_harnesses[0]) || null;
-          S.decisions.push('AI 이음'); save(); renderSB();
-          toast('이어졌어요.');
-          goScene('terminal');
+        // 장면에 들어오자마자 **한 번** 묻는다 — 사람이 버튼을 누르기 전에 '없는 CLI 를 치라는 안내'를 보지 않게.
+        //  판정은 그때그때 다시 재므로 캐시를 믿지 않는다(AIC 는 그림용 최신값일 뿐이다).
+        if (!AIC) { checkAi().then(() => renderScene('claude', false)); return; }
+        const pass = (name) => {
+          S.aiConnected = true; S.aiName = name || null;
+          S.decisions.push('AI 이음'); save(); renderSB(); toast('이어졌어요.'); goScene('terminal');
         };
+        if (go) go.onclick = async () => {
+          if (S.aiConnected || (AIC && AIC.loggedIn === true)) return goScene('terminal');
+          go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
+          const c = await checkAi();
+          if (c && c.loggedIn === true) return pass(AI_LABEL[c.harness] || S.ai);
+          renderScene('claude', false);
+          const e2 = $('#cErr', el);
+          if (e2 && c && c.installed === true && c.loggedIn === false) {
+            e2.textContent = '아직 로그인이 안 보여요. 터미널에서 로그인을 끝내고 다시 눌러 주세요.';
+          }
+        };
+        // 다른 AI 가 이미 이어져 있을 때의 문 — 고른 것을 못 이었다고 사람을 가두지 않는다.
+        //  (분석은 서버가 resolveHeadlessHarness 로 고른 **실제 로그인된** 하네스로 돈다.)
+        const keep = $('#cKeep', el);
+        if (keep) keep.onclick = () => pass(AI_LABEL[(AIC.others || [])[0]] || null);
+        const other = $('[data-other]', el);
+        if (other) other.onclick = () => { AIC = null; goScene('ai'); };
         $('[data-skip]', el).onclick = () => goScene('terminal');
       },
     },
@@ -1143,9 +1205,26 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
   }
 
-  /* 고른 AI → 터미널에 칠 CLI. 헤드리스 규약을 아는 넷만 여기 있다(서버 HEADLESS 표와 짝) —
-   *  ChatGPT 는 코덱스, 제미나이는 안티그래비티가 그 자리다. 표에 없으면 claude 로 안내한다. */
-  const AI_CLI = { 'Claude': 'claude', 'ChatGPT': 'codex', 'Gemini': 'agy', 'Grok': 'grok' };
+  /* 고른 AI → **하네스 키**(서버 catalog/HEADLESS 표의 key). 헤드리스 규약을 아는 넷만 여기 있다 —
+   *  ChatGPT 는 코덱스, 제미나이는 안티그래비티가 그 자리다. 표에 없으면(‘여러 개’ 등) claude 로 안내한다.
+   *  ⚠ 여기 담는 건 **키뿐**이다(#1879). 실행 파일 이름(agy 등)·로그인 절차는 서버가 준다 —
+   *   화면에 박아 두면 하네스 표가 바뀔 때 이 줄만 조용히 틀려지고, 그 틀린 한 줄을 사람이
+   *   가입 직후 첫 화면에서 그대로 터미널에 친다. */
+  const AI_HARNESS = { 'Claude': 'claude', 'ChatGPT': 'codex', 'Gemini': 'antigravity', 'Grok': 'grok' };
+  const AI_LABEL = { claude: 'Claude', codex: 'ChatGPT', antigravity: 'Gemini', grok: 'Grok' };
+  const AI_BIN_FALLBACK = { claude: 'claude', codex: 'codex', antigravity: 'agy', grok: 'grok' };
+  const aiHarness = () => AI_HARNESS[S.ai] || 'claude';
+  /** 고른 AI 하나에 대한 마지막 판정(POST /api/ui/me/ai-accounts/check).
+   *  null = 아직 안 물어봤다 — 화면은 «확인 중» 으로 살고, 없는 답을 지어내지 않는다. */
+  let AIC = null;
+  async function checkAi() {
+    try {
+      AIC = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: aiHarness() }) });
+    } catch (e) {
+      AIC = { error: (e && e.message) ? String(e.message) : '알 수 없는 오류' };
+    }
+    return AIC;
+  }
 
   const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
   async function chatStep(step, token) {

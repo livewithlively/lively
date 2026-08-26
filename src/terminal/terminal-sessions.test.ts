@@ -426,7 +426,10 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   }
   // E11 — 모르는 하네스도 빈 안내를 주지 않는다(장래에 하네스가 늘어도 사용자는 조치를 안다).
   ok2(harnessFailNotice("codex").includes("device-auth"), "E11a codex 안내는 device-auth 를 지목한다");
-  ok2(harnessFailNotice("claude").includes("/login"), "E11b claude 안내는 TUI 안 /login 을 지목한다");
+  // E11b — 재실측(2026-08-26, claude 2.1.246 `claude auth --help`): login·logout·status 가 **셸 서브커맨드로** 생겼다.
+  //  종전 안내(TUI 를 띄운 뒤 슬래시 `/login`)는 #1516 당시엔 사실이었지만 지금은 한 단계가 공짜로 붙는 낡은 길이다.
+  //  안내가 주는 것은 «사람이 그대로 치는 한 줄» 이어야 한다(E11d 와 같은 교리).
+  ok2(harnessFailNotice("claude").includes("claude auth login"), "E11b claude 안내는 셸 한 줄(claude auth login)을 준다");
   ok2(harnessFailNotice("gemini").includes("gemini"), "E11c 모르는 하네스도 그 이름으로 재실행 안내를 준다");
   // E11d~ (#1695) — 안내에 적히는 명령은 **사용자가 그대로 치는 문자열**이다. 라벨도 내부 식별자도 아닌
   //  실행 파일이어야 한다: antigravity 의 명령은 `agy` 라, 종전 폴백('그 이름으로 재실행')을 그대로 두면
