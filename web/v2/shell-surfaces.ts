@@ -56,7 +56,8 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
  *  앱(builtin AppPackage)으로 만든다 — 가드가 개수를 지켜본다.
  */
 export const CLASSIC_BACKLOG = [
-  "dashboard", "terminal", "projects2", "knowledge", "context", "sessions", "system", "web", "learn",
+  // 'web' 은 browser builtin 앱으로 옮겨 여기서 빠졌다(2026-08-25) — 백로그가 줄어든 첫 항목.
+  "dashboard", "terminal", "projects2", "knowledge", "context", "sessions", "system", "learn",
 ] as const;
 
 /** 이 화면이 사이드바에서 어떤 키로 활성 표시되나 — 없으면 활성 표시를 하지 않는다. */

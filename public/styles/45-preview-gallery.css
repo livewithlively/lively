@@ -1,0 +1,77 @@
+/* ── 미리보기 갤러리 (#1841) — 설정 안 목록이던 것을 독립 앱 화면으로. ──────────────────────
+   항목 하나 = 창 미니어처 카드. "설정을 편집하는 행"이 아니라 "띄워 둔 화면을 골라 여는 선반"이라서
+   카드 위쪽(타이틀바+화면 골격)이 통째로 열기 타깃이다 — 실행 중이면 새 탭, 꺼짐이면 띄우기.
+   ⚠ 값은 전부 01-base.css 토큰 — 리터럴을 쓰면 다크에서 깨진다(디자인시스템 §P5). */
+
+.pvg-page { max-width: 1160px; margin: 0 auto; }
+.pvg-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pvg-head .admin-sechead { flex: 1 1 320px; min-width: 0; }
+.pvg-head-add { flex: none; margin-top: 4px; }
+
+.pvg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 16px; margin-top: 14px; }
+.pvg-empty { margin: 14px 0 0; font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
+
+/* 카드 — 화이트 + 헤어라인, 정지 상태 그림자 없음(§P3). '열린다'는 hover 의 보더 블루가 말한다(btn-ghost 문법). */
+.pvg-card { display: flex; flex-direction: column; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; transition: border-color 150ms ease; }
+.pvg-card:has(.pvg-open:hover), .pvg-card:has(.pvg-open:focus-visible) { border-color: var(--blue); }
+
+/* 열기 타깃 — a(실행 중)·button(꺼짐)·span(준비 중) 셋이 같은 모양이어야 한다(버튼 기본 스타일 리셋). */
+.pvg-open { display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+.pvg-open.wait { cursor: default; }
+.pvg-open:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 11px 11px 0 0; }
+
+/* 창 타이틀바 — 신호등은 무채(컬러 예산 §P1: 카드마다 원색 점 셋을 깔지 않는다). 상태만 색을 갖는다(아래 pvg-dot). */
+.pvg-bar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; background: var(--bg-tint); border-bottom: 1px solid var(--line); }
+.pvg-lights { display: inline-flex; gap: 4px; flex: none; }
+.pvg-lights i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-3); }
+.pvg-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; color: var(--ink); }
+
+/* 화면 골격 — 추상 페이지 미니어처(스크린샷이 없으니 내용을 아는 척하지 않는다). */
+.pvg-face { display: flex; flex-direction: column; gap: 7px; padding: 14px 14px 12px; min-height: 92px; }
+.pvg-sk { height: 7px; border-radius: 4px; background: var(--bg-tint-2); }
+.pvg-sk.w1 { width: 72%; }
+.pvg-sk.w2 { width: 46%; }
+.pvg-sk.w3 { width: 58%; }
+.pvg-card.st-stopped .pvg-sk { background: var(--bg-tint); }   /* 꺼진 창은 화면도 옅게 — 켜짐/꺼짐이 골격 농도로도 읽힌다 */
+
+/* 상태줄 — 점 + 라벨(색만으로 말하지 않는다) + 우측 동사(누르면 무슨 일이 나는지). */
+.pvg-state { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 10px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pvg-verb { margin-left: auto; flex: none; font-size: 12.5px; font-weight: 700; color: var(--blue); }
+.pvg-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--muted-2); }
+.pvg-dot.running { background: var(--mint); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint) 20%, transparent); }
+.pvg-dot.preparing { background: var(--blue-fill); animation: pvg-busy 1100ms ease-in-out infinite; }
+.pvg-dot.error { background: var(--coral); }
+.pvg-dot.stopped { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
+@keyframes pvg-busy { 50% { opacity: .35; } }
+
+/* 문제 안내 — 오류 잉크로 한 줄(원인은 서버 문구 그대로). */
+.pvg-err { display: block; padding: 0 14px 10px; font-size: 12px; line-height: 1.55; color: var(--coral-text); word-break: break-word; }
+
+/* 발치 — 메타(어느 작업의 화면인지) + 보조 액션. 액션은 wikicat 문법대로 평소 옅게, 카드에 손이 가면 또렷하게
+   (숨기는 게 아니라 농도만 — hover 없이도 늘 보이고 누를 수 있다). */
+.pvg-foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-top: 1px solid var(--line-row); min-width: 0; }
+.pvg-meta { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--muted-head); overflow: hidden; white-space: nowrap; }
+.pvg-meta > span { overflow: hidden; text-overflow: ellipsis; }
+.pvg-repo { flex: none; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 11px; font-weight: 500; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; }
+.pvg-when { flex: none; color: var(--muted-2); }
+.pvg-acts { flex: none; display: inline-flex; align-items: center; gap: 2px; opacity: .6; transition: opacity 120ms ease; }
+.pvg-card:hover .pvg-acts, .pvg-card:focus-within .pvg-acts { opacity: 1; }
+.pvg-acts .btn-text { font-size: 12px; padding: 3px 5px; }
+.pvg-acts .pvg-del:hover { color: var(--coral-text); }
+
+/* 새 미리보기 타일 — 점선 테두리(입력 칩의 '직접 입력' 문법). 격자의 마지막 칸. */
+.pvg-new { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 174px;
+  border: 1px dashed var(--line-net); border-radius: 12px; background: none; font: inherit; cursor: pointer; color: var(--ink-sub);
+  transition: border-color 150ms ease, background-color 150ms ease; }
+.pvg-new:hover { border-color: var(--blue); background: var(--bg-tint); }
+.pvg-new-plus { font-size: 22px; font-weight: 500; line-height: 1; color: var(--muted-2); }
+.pvg-new:hover .pvg-new-plus { color: var(--blue); }
+.pvg-new-t { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.pvg-new-sub { font-size: 12px; color: var(--muted); }
+
+@media (max-width: 560px) {
+  .pvg-grid { grid-template-columns: 1fr; gap: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pvg-dot.preparing { animation: none; }
+}
