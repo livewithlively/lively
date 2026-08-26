@@ -398,27 +398,34 @@ function render() {
     const prevScroll = appListEl ? appListEl.scrollTop : 0;
     const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
     const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
-    const rowEl = (inst) => el('div', { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : ''), role: 'listitem', 'data-instance': inst.id }, el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
-        onclick: () => hooks.onActivateInstance?.(inst.id) }, instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })), 
-    //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
-    //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
-    inst.status
-        ? el('span', { class: 'v2-app-inst-st', 'data-st': inst.status.key, title: inst.status.label,
-            role: 'img', 'aria-label': inst.status.label })
-        : null, 
-    //  압정 — 고른 것만 맨 위로(#1954). 호버·고정 상태에서만 보인다(늘 보이면 행마다 단추 둘이 늘어선다).
-    el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
-        'aria-label': inst.pinned ? `「${inst.title}」 고정 해제` : `「${inst.title}」 위에 고정`,
-        title: inst.pinned ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
-        onclick: (e) => { e.preventDefault(); e.stopPropagation(); toggleAppPin(inst.id); } }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY }))), 
-    //  × 는 어느 행에나 있고 뜻도 하나다 — **목록에서 치우기**(#1954). 돌던 세션은 계속 돌고, 상태가 바뀌면 다시 올라온다.
-    el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
-        title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
-        onclick: () => hooks.onCloseInstance?.(inst.id) }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))), inst.project && !inst.project.self
-        ? el('button', { class: 'v2-app-inst-project', type: 'button',
-            title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
-            onclick: () => hooks.onOpenProject?.(inst.project.id) }, glyph('folder', 'v2-app-inst-project-ic'), el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
-        : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' }));
+    const rowEl = (inst) => {
+        //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
+        const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
+        return el('div', { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id }, el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.owner ? `${inst.title}\n${ownerNm}의 세션 — 내가 열어 둬서 목록에 있습니다` : inst.title, 'aria-current': inst.active ? 'page' : null,
+            onclick: () => hooks.onActivateInstance?.(inst.id) }, instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })), 
+        //  얼굴은 **둘째 줄 왼쪽 여백**에 선다 — 첫 줄 아이콘 바로 아래 빈자리라 새로 폭을 먹지 않고,
+        //   첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다.
+        inst.owner ? personFace(inst.owner.id, 'v2-app-inst-face', ownerNm) : null, 
+        //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
+        //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
+        inst.status
+            ? el('span', { class: 'v2-app-inst-st', 'data-st': inst.status.key, title: inst.status.label,
+                role: 'img', 'aria-label': inst.status.label })
+            : null, 
+        //  압정 — 고른 것만 맨 위로(#1954). 호버·고정 상태에서만 보인다(늘 보이면 행마다 단추 둘이 늘어선다).
+        el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
+            'aria-label': inst.pinned ? `「${inst.title}」 고정 해제` : `「${inst.title}」 위에 고정`,
+            title: inst.pinned ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
+            onclick: (e) => { e.preventDefault(); e.stopPropagation(); toggleAppPin(inst.id); } }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY }))), 
+        //  × 는 어느 행에나 있고 뜻도 하나다 — **목록에서 치우기**(#1954). 돌던 세션은 계속 돌고, 상태가 바뀌면 다시 올라온다.
+        el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
+            title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
+            onclick: () => hooks.onCloseInstance?.(inst.id) }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))), inst.project && !inst.project.self
+            ? el('button', { class: 'v2-app-inst-project', type: 'button',
+                title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
+                onclick: () => hooks.onOpenProject?.(inst.project.id) }, glyph('folder', 'v2-app-inst-project-ic'), el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
+            : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' }));
+    };
     //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
     const rows = [];
     let lastGroup = '';
