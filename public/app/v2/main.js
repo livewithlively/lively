@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js'; // #1841 — 앱 창이 낡�
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText } from './side.js';
+import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, settleSideGroups } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession } from './views.js';
 import { pickSessFace } from './sess-face.js'; // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { renderArchive, renderTrash } from './bins.js'; // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
@@ -262,6 +262,7 @@ export async function bootV2() {
             activeKey: () => activeKey(),
             openApps: openAppKeys,
             onSection: (sec, o) => {
+                settleSideGroups(); // #2033 정산 순간 ⑵ — 목록에서 눈을 뗐다 돌아온 것이므로 밀린 강등·자동접기를 여기서 판다
                 drawSide();
                 if (o.navigate)
                     location.hash = sectionRoute(sec);
@@ -422,6 +423,7 @@ export async function bootV2() {
     document.addEventListener('visibilitychange', () => {
         if (document.hidden || !tabsApi)
             return;
+        settleSideGroups(); // #2033 정산 순간 ⑵ — 안 보던 사이에 밀린 강등·자동접기를 여기서 판다
         markViewedSessionSeen(); // #1954 3차 — 숨은 동안엔 안 찍었다(보고 있는 게 아니므로). 돌아온 지금부터 다시.
         void syncShell();
     });
@@ -1518,7 +1520,9 @@ function sideInstances() {
         if (a.group !== b.group)
             return (dayOf.get(b.group) || 0) - (dayOf.get(a.group) || 0); // 날짜 내림차순
         return b.at - a.at;
-    }).map(({ at: _at, rank: _rank, ...row }) => row);
+        //  ⚠ at 은 벗기지 않는다(#2033) — 프로젝트 축이 **그룹의 순서**를 이 얼린 값으로 잰다.
+        //   rank 는 status.key 로 되살릴 수 있어 안 내보낸다.
+    }).map(({ rank: _rank, ...row }) => row);
     lastSideRows.clear();
     for (const r of out)
         lastSideRows.set(r.id, r);
