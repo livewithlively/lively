@@ -14,7 +14,7 @@
 import { logger } from "../../log.js";
 import { listSecretsByKindPublic } from "./member-secret-store.js";
 import { loadGithubAppSigner } from "./oauth-broker.js";
-import { GITHUB_INSTALL_KIND, mintInstallationToken } from "./github-app.js";
+import { GITHUB_INSTALL_KIND, GITHUB_USER_AGENT, mintInstallationToken } from "./github-app.js";
 import { gatewaySsrfFetch } from "./oauth-broker.js";
 
 /** clone 자격의 모양 — git-credential-store 의 GitCredentialSecret 과 같은 형태(그쪽이 이 값을 그대로 쓴다). */
@@ -76,6 +76,31 @@ export function repoScopeNames(repoFullName: string | null | undefined): string[
   if (!/^[^/\s]+\/[^/\s]+$/.test(s)) return undefined;
   const name = s.split("/")[1];
   return name ? [name] : undefined;
+}
+
+/**
+ * 앱에 **실제로 열려 있는** 저장소 목록(#1881 G10).
+ *  왜 필요한가: 레포 목록 드롭다운은 user token(`/user/repos`)이라 "내가 볼 수 있는 전부"를 준다. 그런데 clone 은
+ *  installation token 이라 **설치 때 고른 것만** 된다. 그 차이를 화면이 모르면 사용자는 목록에서 안 고른 레포를
+ *  선택하고 → 등록은 되고 → clone 에서 실패한다("왜 안 되지?"). 이 함수가 그 경계를 알려 준다.
+ *  실패하면 null — 화면은 '알 수 없음'으로 그리고 목록을 막지 않는다(드롭다운은 제안이지 제약이 아니다, #825).
+ */
+export async function listInstallationRepos(): Promise<string[] | null> {
+  const s = await githubAppGitSecret("github.com", null);
+  if (!s) return null;
+  try {
+    const res = await (await gatewaySsrfFetch())("https://api.github.com/installation/repositories?per_page=100", {
+      headers: {
+        authorization: `Bearer ${s.https_token}`,
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "user-agent": GITHUB_USER_AGENT,
+      },
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { repositories?: Array<{ full_name?: unknown }> };
+    return (j.repositories ?? []).map((r) => String(r?.full_name ?? "")).filter(Boolean);
+  } catch { return null; }
 }
 
 /**
