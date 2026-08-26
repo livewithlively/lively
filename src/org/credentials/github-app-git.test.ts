@@ -3,7 +3,7 @@
 //  커버: clone 주소 파서(https·ssh·자격박힘·.git·끝슬래시·타호스트·서브경로) · 호스트 판정.
 //  ※ githubAppGitSecret 자체는 DB(설치 목록)+상류 발급이라 여기 없다 — 실호출로만 확인된다(G11).
 import assert from "node:assert/strict";
-import { githubRepoFullName, isGithubAppHost } from "./github-app-git.js";
+import { githubRepoFullName, isGithubAppHost, repoScopeNames } from "./github-app-git.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -56,6 +56,19 @@ t("호스트 판정 — GHES(자체호스팅)는 앱이 달라 이 경로를 안
   assert.equal(isGithubAppHost("GitHub.com"), true);
   assert.equal(isGithubAppHost("github.acme.com"), false);
   assert.equal(isGithubAppHost(""), false);
+});
+
+t("★ 토큰을 좁힐 때는 저장소 '이름만' 넘긴다 — full name 을 넣으면 상류가 422 로 거부한다", () => {
+  // 2026-08-26 실호출: 좁히지 않으면 발급 성공, 좁히면 전부 실패했다. 소유자는 installation 이 이미 안다.
+  assert.deepEqual(repoScopeNames("livewithlively/lively-infra"), ["lively-infra"]);
+  assert.deepEqual(repoScopeNames("o/r"), ["r"]);
+});
+
+t("좁힐 수 없으면 undefined — 설치 전체 토큰으로 떨어진다(동작은 한다)", () => {
+  assert.equal(repoScopeNames(null), undefined);
+  assert.equal(repoScopeNames("onlyname"), undefined);
+  assert.equal(repoScopeNames("a/b/c"), undefined);
+  assert.equal(repoScopeNames(""), undefined);
 });
 
 console.log(`\ngithub-app-git tests: ${pass} passed`);

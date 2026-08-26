@@ -66,6 +66,19 @@ export function githubRepoFullName(gitUrl: string | null | undefined): string | 
 }
 
 /**
+ * `owner/repo` → 토큰을 좁힐 때 상류에 넘길 이름 배열.
+ *  ⚠ GitHub 의 `repositories` 파라미터는 **저장소 이름만** 받는다(`lively-infra`) — full name 을 넣으면
+ *   422 로 거부된다(2026-08-26 실호출: 좁히지 않으면 성공, 좁히면 전부 실패했다). 소유자는 installation 이
+ *   이미 알고 있으므로 이름만으로 충분하다. 좁힐 수 없으면 undefined → 설치 전체 토큰(동작은 한다).
+ */
+export function repoScopeNames(repoFullName: string | null | undefined): string[] | undefined {
+  const s = String(repoFullName ?? "").trim();
+  if (!/^[^/\s]+\/[^/\s]+$/.test(s)) return undefined;
+  const name = s.split("/")[1];
+  return name ? [name] : undefined;
+}
+
+/**
  * GitHub App 설치로 clone 자격을 만든다(없으면 null — 호출자는 종전 경로로 떨어진다).
  *  repoFullName(owner/repo)을 주면 **그 레포로 좁힌 토큰**을 받는다. 좁히면 두 가지가 좋아진다:
  *   ① 최소권한 — clone 하나 때문에 설치 전체 권한을 들고 다니지 않는다.
@@ -79,7 +92,7 @@ export async function githubAppGitSecret(host: string, repoFullName?: string | n
   if (!ids.length) return null;
 
   const repo = String(repoFullName ?? "").trim().replace(/^\/+|\/+$/g, "").replace(/\.git$/, "");
-  const scoped = /^[^/\s]+\/[^/\s]+$/.test(repo) ? [repo] : undefined;
+  const scoped = repoScopeNames(repo);
   const fetchFn = await gatewaySsrfFetch();
 
   for (const installationId of ids) {
