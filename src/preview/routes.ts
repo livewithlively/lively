@@ -12,7 +12,7 @@ import path from "node:path";
 import http from "node:http";
 import type { BearerVerifier } from "../auth/bearer.js";
 import { sessionOrBearer } from "../auth/http-auth.js";
-import { getPreviewEnv } from "./preview-envs.js";
+import { getPreviewEnvForRoute } from "./preview-envs.js";
 import { portOf } from "./preview-proc.js";
 import { withPreviewFavicon, isRewritableHtml } from "./preview-favicon.js";
 
@@ -181,7 +181,7 @@ export function registerPreviewRoutes(app: express.Express, verifier: BearerVeri
       res.redirect(302, "/preview/" + id + "/ui/"); return;
     }
     let p;
-    try { p = await getPreviewEnv(id); } catch { res.status(500).end(); return; }
+    try { p = await getPreviewEnvForRoute(id); } catch { res.status(500).end(); return; }
     if (!p) { res.status(404).type("text/plain; charset=utf-8").send("프리뷰 환경 없음: " + id); return; }
     if (!p.enabled || p.status === "stopped") { res.status(409).type("text/plain; charset=utf-8").send("이 미리보기는 정지 상태입니다 — 관리 화면에서 ‘띄우기’를 눌러 주세요."); return; }
     if (p.status === "preparing") { // 작업 폴더 준비·빌드가 백그라운드로 도는 중 — 브라우저가 잠시 뒤 다시 오게 안내

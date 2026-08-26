@@ -56,6 +56,73 @@
 .v2-wspop-row:hover { background: var(--bg-tint); }
 .v2-wspop-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 .v2-wspop-row .v2-wscard-big { width: 40px; height: 40px; border-radius: 11px; font-size: 17px; }
+
+/* #1875 — 워크스페이스 행 = 전환 버튼 + 오른쪽 「사람 추가」 아이콘. 행은 div, 안에 버튼 둘(버튼 안 버튼 회피). */
+.v2-wspop-row { padding: 0; gap: 0; }
+.v2-wspop-switch { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px; border: 0; border-radius: 10px; background: none; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.v2-wspop-switch:hover { background: var(--bg-tint); }
+.v2-wspop-switch:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-add { flex: none; width: 34px; height: 34px; margin: 0 4px 0 2px; display: inline-grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+.v2-wspop-add:hover { background: var(--bg-punch); color: var(--blue); }
+.v2-wspop-add:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-add .v2-ic { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* 부제 행(구성원·설정·추가)은 여전히 button.v2-wspop-row 를 쓰는 곳(row())이 있으므로 그 규격은 그대로 둔다. */
+button.v2-wspop-row { padding: 8px; gap: 12px; }
+
+/* ── #1875 구성원 모달 — overlay(ov-box) 안. 슬랙 초대 모달 참고. ── */
+.v2-mem { display: flex; flex-direction: column; gap: 4px; min-width: 340px; max-width: 460px; }
+.v2-mem-kind { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; margin-bottom: 4px; border-radius: 10px; background: var(--bg-tint); border: 1px solid var(--line); }
+.v2-mem-kind.personal { background: var(--bg-success); border-color: var(--ok-line-2); }
+.v2-mem-kind b { font-size: 13.5px; color: var(--ink); }
+.v2-mem-kind span { font-size: 12px; color: var(--ink-sub); }
+.v2-mem-invite { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px 10px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.v2-mem-label { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
+.v2-mem-emails { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line-net-2); border-radius: 10px; font: inherit; font-size: 13px; resize: vertical; min-height: 46px; background: var(--bg); color: var(--ink); }
+.v2-mem-emails:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
+.v2-mem-row { display: flex; align-items: center; gap: 9px; padding: 6px 4px; border-radius: 8px; }
+.v2-mem-row:hover { background: var(--bg-tint); }
+.v2-mem-row .v2-ws-person-tt { flex: 1; min-width: 0; }
+.v2-mem-row.pending .v2-ws-person-tt b { color: var(--ink-sub); font-weight: 500; }
+.v2-mem-act { flex: none; font: inherit; font-size: 11.5px; font-weight: 700; padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px; background: none; color: var(--ink-sub); cursor: pointer; }
+.v2-mem-act:hover { border-color: var(--line-net-2); color: var(--ink); background: var(--bg); }
+.v2-mem-act.danger { color: var(--coral-text); }
+.v2-mem-act.danger:hover { border-color: var(--coral-text); background: var(--danger-bg, var(--bg-tint)); }
+
+/* ── #1875 워크스페이스 메뉴의 하위 판 — 구성원 · 설정 · 추가. 같은 판(v2-wspop) 위에 같은 부품으로 그린다.
+   옛 스위처 메뉴(40-v2.css .v2-ws-menu)와 이 팝오버가 함께 살아 두 시대의 생김새가 한 화면에 섞였다 —
+   그 기능들을 이 문법으로 옮겼으므로 여기 규격이 곧 '워크스페이스 메뉴'의 전부다. */
+.v2-wspop--panel { width: 316px; max-height: min(76vh, 600px); overflow: hidden auto; padding: 6px 8px 8px; }
+.v2-wspop-head { display: flex; align-items: center; gap: 6px; padding: 4px 4px 8px; }
+.v2-wspop-head b { font-size: 14px; font-weight: 800; color: var(--ink); }
+.v2-wspop-back { width: 26px; height: 26px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; }
+.v2-wspop-back:hover { background: var(--bg-tint); color: var(--ink); }
+.v2-wspop-back:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-sub { padding: 10px 6px 4px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.v2-wspop-form { display: flex; flex-direction: column; gap: 6px; padding: 2px 4px 6px; }
+.v2-wspop-in { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
+.v2-wspop-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
+.v2-wspop-actions { display: flex; align-items: center; gap: 8px; }
+.v2-wspop-note { flex: 1; min-width: 0; font-size: 11.5px; color: var(--coral-text); line-height: 1.4; }
+.v2-wspop-hint { margin: 2px 0 0; padding: 0 2px; font-size: 11.5px; line-height: 1.55; color: var(--muted); }
+.v2-wspop-row.danger .v2-wspop-ic { color: var(--coral-text); }
+.v2-wspop-row.danger .v2-wspop-tt b { color: var(--coral-text); }
+/* 연결한 팀 · 승인 대기 — 행 하나에 이름 + 작은 조작 둘. 타일 행보다 촘촘하다(목록이 아니라 관리다). */
+.v2-wspop-teams { display: flex; flex-direction: column; gap: 1px; }
+.v2-wspop-team { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 8px; border-radius: 8px; }
+.v2-wspop-team:hover { background: var(--bg-tint); }
+.v2-wspop-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font-size: 12.5px; }
+.v2-wspop-team-open b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.v2-wspop-kind, .v2-wspop-err { flex: none; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); }
+.v2-wspop-err { color: var(--coral-text); border-color: var(--coral-text); }
+.v2-wspop-act { flex: none; font: inherit; font-size: 11px; font-weight: 700; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.v2-wspop-act:hover { color: var(--ink); border-color: var(--line-net-2); }
+.v2-wspop-act.on { color: var(--mint-deep); border-color: var(--ok-line-2); background: var(--bg-success); }
+/* ws-people.ts 부품이 이 판 안에 앉을 때 — 행 규격이 촘촘해 여백만 맞춘다. */
+.v2-wspop--panel .v2-ws-sec { padding: 6px 6px 3px; }
+.v2-wspop--panel .v2-ws-invite { padding: 6px 4px 2px; }
+/* 나에게 온 초대 — 메뉴 맨 위. 타일 목록과 규격이 달라 좌우 여백만 맞춘다. */
+.v2-wspop .v2-ws-inbox { gap: 2px; }
+.v2-wspop .v2-ws-invite-row { margin: 0 0 2px; padding: 8px; border-radius: 10px; }
 .v2-wspop-row.cur .v2-wscard-big { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
 .v2-wspop-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 .v2-wspop-tt b { font-size: 14px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
