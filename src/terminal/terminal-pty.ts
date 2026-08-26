@@ -158,16 +158,25 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         return;
       }
       const ok = await canAttach(id, tk.userId).catch(() => false);
-      if (!ok) {
+      // ⚠ 권한이 있어도 **세션이 살아 있는지 따로 봐야 한다**(2026-08-26 실측 신고).
+      //  canAttach → ownerMeta 는 **DB desired-state 우선**이라(sessions.ts) tmux 에서 이미 죽은 세션도
+      //  권한을 통과시킨다. 그래서 종전엔 `!ok` 일 때만 생사를 확인했고, 죽은 세션에 붙으러 온 클라는
+      //  **종료 확답을 못 받았다** — attach 를 시도하다 tmux 의 "can't find session" 한 줄이 화면에
+      //  찍히고, 클라는 이유를 모른 채 **영원히 재연결**했다(새로고침해야 '열기=복원' 경로 #1820 으로 살아났다).
+      //  4410 을 주면 클라가 그 자리에서 복원으로 넘어간다(onSessionGone) — 그게 의도한 경험이다.
+      //  비용은 attach 당 has-session 1회다. 살아 있는 세션엔 즉답이고, 죽은 세션엔 재연결 폭풍을 멈추므로
+      //  오히려 왕복이 준다. 판정 불가(#835)는 여전히 false — 모르면 살아있다고 보고 종전 경로로 간다.
+      const gone = await sessionGone(id).catch(() => false);
+      const close = attachClose(ok, gone);
+      if (close) {
         // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 '이유가 담긴 코드'로
         //  닫아 terminal.js 가 사용자에게 정확한 문구를 띄우게 한다. 이유는 둘이고 클라 동작이 갈린다(#835):
         //   4410 session-gone — tmux 가 '그런 세션 없다'고 확답 → 세션이 진짜 끝남 → 클라는 재연결을 멈추고 '종료됨'을 명시.
         //   4403 no-access    — 권한 없음, 또는 판정 불가(tmux 과부하·타임아웃 = #687 의 '가짜 4403') → 클라는 몇 번 더 재시도.
         //  판정 불가를 gone 으로 넘기지 않는 게 핵심 — 살아있는 세션을 '종료됨'으로 오인하는 건 재연결 반복보다 나쁘다.
-        const gone = await sessionGone(id).catch(() => false);
-        logger.info({ id, userId: tk.userId, gone }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
+        logger.info({ id, userId: tk.userId, ok, gone }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
         wss.handleUpgrade(req, socket, head, (ws) => {
-          try { ws.close(gone ? 4410 : 4403, gone ? "session-gone" : "no-access"); } catch { /* noop */ }
+          try { ws.close(close.code, close.reason); } catch { /* noop */ }
         });
         return;
       }
@@ -184,6 +193,25 @@ type SendCmd = (line: string) => void;
 // ── 클라 의도 → 안전한 tmux 명령(순수 함수, 테스트 대상). d/c/r/n 은 모두 서버가 검증·인코딩 →
 //  클라가 임의 tmux 명령(kill-server 등)을 주입할 수 없다(입력은 hex 로만 인코딩되어 개행/공백 인젝션 불가).
 // 입력 d: UTF-8 바이트로 hex 인코딩해 `send-keys -H`(과도하게 긴 명령줄 방지 위해 512B 청크 → 명령 배열).
+/**
+ * attach 요청을 닫아야 하는가, 닫는다면 어떤 코드로(순수 — 표를 테스트가 지킨다).
+ *
+ * 두 축이 **따로** 논다는 게 요점이다:
+ *  · `ok`   = 붙을 **권한**이 있나(canAttach). 이 판정은 DB desired-state 우선이라 **죽은 세션도 통과**한다.
+ *  · `gone` = 그 세션이 정말 **끝났나**(tmux 확답 — 판정 불가는 false, #835).
+ *
+ * 그래서 권한만 보고 붙이면 죽은 세션에 붙으러 온 클라가 종료 확답을 못 받아 영원히 재연결한다
+ * (2026-08-26 실측: 화면에 "can't find session" 한 줄, 새로고침해야 복원). 둘 다 봐야 한다.
+ *
+ * 반환 null = 통과. 4410 = 세션 종료 확답(클라는 재연결을 멈추고 복원으로 간다).
+ * 4403 = 권한 없음 **또는 판정 불가**(클라는 몇 번 더 재시도 — 살아있는 세션을 '종료됨'으로
+ * 오인하는 건 재연결 반복보다 나쁘다).
+ */
+export function attachClose(ok: boolean, gone: boolean): { code: number; reason: string } | null {
+  if (ok && !gone) return null;
+  return gone ? { code: 4410, reason: "session-gone" } : { code: 4403, reason: "no-access" };
+}
+
 export function inputToSendKeys(d: string): string[] {
   const bytes = Buffer.from(d, "utf8");
   const cmds: string[] = [];
