@@ -127,4 +127,61 @@ await t("K2 JSON 이 아닌 줄·모르는 id 응답은 무시한다(잡음 한 
   assert.equal((await p).threadId, "T");
 });
 
+
+// ── 멈춤·얹기의 필수 인자 (#2055, 실측 2026-08-26 dev) ─────────────────────────────────
+//  스키마가 못박은 것: TurnInterruptParams.required = [threadId, turnId] · TurnSteerParams 는 expectedTurnId 필수.
+//  ★ 왜 표로 잡나: threadId 만 보내면 서버가 요청을 거부하는데, 우리는 그 실패를 **조용히 false 로 접었다** —
+//   그래서 화면의 [멈춤]·Esc 가 아무 일도 하지 않았고, 사람 눈에는 "멈춰지지도 않고"로만 보였다.
+//   인자 하나가 빠졌을 뿐인데 증상은 '기능이 없음'이다. 다시 빠지면 여기서 걸린다.
+async function ready(tr: ReturnType<typeof fake>): Promise<CodexAppServer> {
+  const c = new CodexAppServer({ transport: tr });
+  const p = c.initialize();
+  reply(tr, tr.sent[0].id, { userAgent: "x" });
+  await p;
+  return c;
+}
+
+await t("★ T1 turn/interrupt 는 turnId 를 함께 보낸다 — 없으면 서버가 거부하고 멈춤이 먹통이 된다", async () => {
+  const tr = fake();
+  const c = await ready(tr);
+  tr.push({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "th1", turn: { id: "TU-9" } } });
+  const p = c.interrupt("th1");
+  const sent = tr.sent.find((m) => m.method === "turn/interrupt");
+  assert.equal(sent.params.threadId, "th1");
+  assert.equal(sent.params.turnId, "TU-9", "지금 도는 턴 id 를 실어야 한다");
+  reply(tr, sent.id, {});
+  await p;
+});
+
+await t("★ T2 turn/steer 는 expectedTurnId 를 함께 보낸다(도는 턴 선행조건)", async () => {
+  const tr = fake();
+  const c = await ready(tr);
+  tr.push({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "th1", turn: { id: "TU-3" } } });
+  const p = c.steer("th1", "그거 말고 이거요");
+  const sent = tr.sent.find((m) => m.method === "turn/steer");
+  assert.equal(sent.params.expectedTurnId, "TU-3");
+  assert.deepEqual(sent.params.input, [{ type: "text", text: "그거 말고 이거요" }]);
+  reply(tr, sent.id, { turnId: "TU-3" });
+  await p;
+});
+
+await t("T3 턴이 끝나면 그 id 를 놓는다 — 끝난 턴을 멈추려 들지 않는다(엉뚱한 턴을 끊을 위험)", async () => {
+  const tr = fake();
+  const c = await ready(tr);
+  tr.push({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "th1", turn: { id: "TU-1" } } });
+  tr.push({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "th1", turn: { id: "TU-1" } } });
+  assert.equal(c.currentTurnId, "");
+  await assert.rejects(() => c.interrupt("th1"), /멈출 턴이 없습니다/);
+});
+
+await t("T4 turn/start 응답의 turn.id 도 잡는다 — 알림보다 먼저 올 수 있다(곧바로 멈출 수 있어야 한다)", async () => {
+  const tr = fake();
+  const c = await ready(tr);
+  const p = c.startTurn("th1", "안녕");
+  const sent = tr.sent.find((m) => m.method === "turn/start");
+  reply(tr, sent.id, { turn: { id: "TU-7" } });
+  await p;
+  assert.equal(c.currentTurnId, "TU-7");
+});
+
 console.log(`\n${pass} passed`);
