@@ -42,8 +42,12 @@ git -C "$CLONE" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && skip "머지
 for d in rebase-merge rebase-apply CHERRY_PICK_HEAD; do
   [ -e "$CLONE/.git/$d" ] && skip "$d 진행 중"
 done
-dirty=$(git -C "$CLONE" status --porcelain 2>/dev/null)
-[ -n "$dirty" ] && skip "작업트리에 변경이 있다(남의 WIP 일 수 있다):
+# ⚠ **추적되는 파일의 변경만** 막는다. untracked 는 통과시킨다 —
+#  그 클론엔 프로토타입 파일(public/onboarding-proto/*.html 등)이 늘 하나씩 놓여 있어서,
+#  untracked 까지 세면 그 파일 하나 때문에 동기화가 **영영** 멈춘다(첫 판에 실제로 그랬다).
+#  untracked 가 들어올 커밋과 부딪히면 아래 `merge --ff-only` 가 스스로 거부하므로 안전은 git 이 지킨다.
+dirty=$(git -C "$CLONE" status --porcelain --untracked-files=no 2>/dev/null)
+[ -n "$dirty" ] && skip "추적 파일에 변경이 있다(남의 WIP 일 수 있다):
 $(printf '%s\n' "$dirty" | head -10 | sed 's/^/    /')"
 
 git -C "$CLONE" fetch -q origin "$BRANCH" || { say "오류: fetch 실패"; exit 1; }
