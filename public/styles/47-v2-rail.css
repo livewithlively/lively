@@ -188,6 +188,19 @@
 .v2-foot-row .v2-apps-btn .v2-ic { width: 16px; height: 16px; color: var(--muted-2); }
 .v2-foot-row .v2-me { flex: 1; min-width: 0; padding-left: 10px; }
 
+/* ── 독 손질(#2016 4차) — 맥 독 문법: 우클릭/길게 눌러 고정·빼기, 끌어서 순서, 레일 밖으로 끌어내면 빼기 ──
+      구간 셋: 구역 | 고정한 앱 | 최근 연 앱. 고정과 최근 사이는 점선(맥 독의 최근 구간 경계). */
+.v2-rail-pins { display: flex; flex-direction: column; min-height: 0; }
+.v2-rail.drag .v2-rail-pins:empty { min-height: 34px; margin: 2px 8px; border: 1px dashed var(--line-net-2); border-radius: 8px; }
+.v2-rail-pins.over:empty { background: var(--bg-punch); border-color: var(--blue); }
+.v2-rail-it[draggable="true"] { cursor: grab; }
+.v2-rail-it[draggable="true"]:active { cursor: grabbing; }
+.v2-rail-it.dragging { opacity: .35; }
+.v2-rail-it.over-top::after, .v2-rail-it.over-bot::after { content: ''; position: absolute; left: 10px; right: 10px; height: 2px; border-radius: 2px; background: var(--blue); }
+.v2-rail-it.over-top::after { top: -2px; }
+.v2-rail-it.over-bot::after { bottom: -2px; }
+.v2-rail-hr--recent { height: 0; background: none; border-top: 1px dashed var(--line-net-2); }
+
 /* ── 좁은 화면 — 레일은 서랍 뒤로 숨지 않고 아이콘만 남아 왼쪽에 붙어 선다. ── */
 @media (max-width: 900px) {
   #v2-root.rail-mode, #v2-root.rail-mode.no-aside { display: flex; flex-direction: column; grid-template-columns: none; padding-left: 56px; }
