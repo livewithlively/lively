@@ -50,8 +50,22 @@ export function detachedStartSh(port: number, logPath: string, env: Record<strin
     `if command -v codex >/dev/null 2>&1; then :; else echo "codex 없음" >&2; exit 127; fi`,
     // 이미 그 포트에 살아 있으면 두 번 띄우지 않는다(두 서버가 같은 스레드를 노리면 writer 충돌이 난다).
     `if node -e 'const n=require("net");const s=n.connect(${port},"127.0.0.1");s.on("connect",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1))' 2>/dev/null; then echo already; exit 0; fi`,
+    // ★ 로그 폴더를 보장한다 — **없으면 리다이렉트가 실패해 nohup 이 아예 안 뜬다.**
+    //  `~/.codex` 는 codex 를 한 번이라도 쓴 홈에만 있다(키트가 첫 세션에 config.toml 을 심지만 그건
+    //  '보통'이지 계약이 아니다). 갓 만든 멤버 홈에서 실측으로 밟았다(2026-08-26, 매니지드 실박스):
+    //    sh: cannot create /home/box_…/.codex/…log: Directory nonexistent
+    //  그런데도 아래 `echo started` 가 그대로 나가서 **호출자는 성공으로 읽고** 붙으러 갔다가 실패한다.
+    `mkdir -p "$(dirname "${logPath}")" 2>/dev/null || true`,
     `${envPrefix ? envPrefix + " " : ""}nohup codex app-server --listen ws://127.0.0.1:${port} >>"${logPath}" 2>&1 &`,
-    `echo started`,
+    // ★ 기동을 **확인해서** 말한다. `&` 는 즉시 0 을 돌려주므로 그것만으로는 아무것도 안 본 것과 같다 —
+    //  안 뜬 것을 started 라고 하면 호출자는 붙으러 갔다가 실패하고, 그 시점엔 원인이 이미 사라져 있다.
+    //  ⚠ 매니지드에서는 게이트웨이가 이 포트에 **직접 못 닿는다**(컨테이너 loopback) — 확인은 여기서 해야 한다.
+    //  실패하면 로그 꼬리를 stderr 로 함께 돌려준다: 그 몇 줄이 유일한 진단이다.
+    `i=0; while [ $i -lt 20 ]; do`,
+    `  if node -e 'const n=require("net");const s=n.connect(${port},"127.0.0.1");s.on("connect",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1))' 2>/dev/null; then echo started; exit 0; fi`,
+    `  i=$((i+1)); sleep 0.3`,
+    `done`,
+    `echo "codex app-server 가 포트를 열지 않았습니다" >&2; tail -n 5 "${logPath}" >&2 2>/dev/null; exit 1`,
   ].join("\n");
 }
 
