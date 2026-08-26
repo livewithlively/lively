@@ -491,6 +491,55 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.json({ results, applied: results.filter((r) => r.status === "applied").length });
   }));
 
+  // ── codex 대화창 실시간 통로(#2055) — 글자 조각·승인 요청·상태를 SSE 로 민다. ──
+  //  왜 SSE 인가: rollout 파일은 **턴이 끝나야** 답을 담는다. 파일만 보면 화면은 그동안 빈 채로 있고, 무엇보다
+  //  **승인 요청**을 사람에게 전할 길이 없다 — 그러면 기본값(거부)으로 닫혀 codex 가 아무 명령도 못 돌린다.
+  //  폴링으로도 못 한다(승인은 '지금 답해야 진행되는' 요청이라 왕복 지연이 곧 멈춤이다).
+  app.get("/api/ui/terminal/sessions/:id/codex-chat/events", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const { onChatEvent, pendingApprovals, codexChatStatus } = await import("./harness-io/codex-chat-runtime.js");
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",              // 프록시 버퍼링 금지 — 조각이 뭉쳐 오면 스트리밍이 아니다
+    });
+    const send = (e: unknown): void => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* 이미 닫힘 */ } };
+    // 붙자마자 지금 상태를 준다 — 새로고침에 승인이 사라지면 그 턴은 영영 선다(TTL 까지 기다렸다 거부된다).
+    send({ kind: "hello", running: !!codexChatStatus(req.params.id)?.alive });
+    for (const a of pendingApprovals(req.params.id)) send({ kind: "approval", ...a });
+    const off = onChatEvent(req.params.id, send);
+    const beat = setInterval(() => { try { res.write(": beat\n\n"); } catch { /* */ } }, 25_000);
+    req.on("close", () => { off(); clearInterval(beat); });
+  }));
+
+  // 승인 답하기 — 화면의 [허용]·[이번만]·[거부] 가 부른다.
+  app.post("/api/ui/terminal/sessions/:id/codex-chat/approve", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const id = String(b.id ?? "");
+    const decision = String(b.decision ?? "");
+    // 스키마에 없는 값을 그대로 흘리지 않는다 — codex 는 모르는 값을 fail-closed 로 처리하지만, 우리가 먼저 막는다.
+    if (!["accept", "acceptForSession", "decline", "cancel"].includes(decision)) throw new HttpError(400, "허용되지 않은 결정값입니다");
+    if (!id) throw new HttpError(400, "승인 id 가 필요합니다");
+    const { answerApproval } = await import("./harness-io/codex-chat-runtime.js");
+    const ok = answerApproval(req.params.id, id, decision as never);
+    res.setHeader("Cache-Control", "no-store");
+    // 없는 id = 이미 처리됐거나 만료. 실패로 던지지 않고 사실대로 알린다(화면이 카드를 접으면 된다).
+    res.json({ ok: true, applied: ok });
+  }));
+
+  // 돌던 턴 멈추기 — 대화창의 [멈춤]. 런타임이 없으면 false(화면이 종전 Esc 경로로 간다).
+  app.post("/api/ui/terminal/sessions/:id/codex-chat/interrupt", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const { interruptCodexChat } = await import("./harness-io/codex-chat-runtime.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, interrupted: await interruptCodexChat(req.params.id) });
+  }));
+
   // 대화를 **터미널로 넘긴다**(#2055) — app-server 가 쥔 스레드를 놓아 주고, 사람이 pane 에서 이어가게 한다.
   //  왜 이 통로가 필요한가: codex 는 스레드당 writer 가 하나라, 우리 대화창이 쥔 대화는 pane 의 `codex resume` 이
   //  못 연다(active writer). 놓아 주는 유일한 방법이 **프로세스 종료**다(thread/unsubscribe 로는 안 풀린다 — 실측).
