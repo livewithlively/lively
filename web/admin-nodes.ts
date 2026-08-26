@@ -74,6 +74,19 @@ function selfBadge(n) {
   if (!n.self) return null;
   return el('span', { class: 'tsess-badge warn', title: n.self_note || '', text: '게이트웨이 자신' });
 }
+// #2127·#2128 — 낡은 인스턴스. 온라인인데 잠자기 억제 보고가 한 번도 없으면 그 PC 의 노드 프로그램이 굳은 것이다.
+//  버전 축(versionBadge)으로는 절대 안 잡힌다 — 실측에서 agent_ver 은 최신이었다. 그래서 별도 배지가 필요하다.
+function staleBadge(n) {
+  if (!n.stale_note) return null;
+  return el('span', { class: 'tsess-badge warn', title: n.stale_note, text: '프로그램 굳음' });
+}
+function staleLine(n) {
+  if (!n.stale_note) return null;
+  return el('span', { class: 'wikicat-should', title: n.stale_note },
+    el('span', { class: 'wikicat-should-label', text: '노드 프로그램' }),
+    '낡은 채로 굳어 있을 수 있습니다 — 그 PC 에서 `lively node --daemon` 을 다시 실행하세요.');
+}
+
 function selfLine(n) {
   if (!n.self) return null;
   return el('span', { class: 'wikicat-should', title: n.self_note || '' },
@@ -91,12 +104,13 @@ function nodeRow(n, ownerLabel, acts) {
       el('span', { class: 'wikicat-should-label', text: '연결한 사람' }), ownerLabel) : null,
     harnessLine(n),
     selfLine(n),
+    staleLine(n),
     keepAwakeLine(n),
     // #1849 — 좁은 열이라 **한 줄 요약**만 싣는다(전문은 배지 툴팁). 실측: 전문을 넣었더니 세로로 흘렀다.
     n.link_note_short ? el('span', { class: 'wikicat-should', title: n.link_note || '' },
       el('span', { class: 'wikicat-should-label', text: '잠자기' }), n.link_note_short) : null,
   );
-  return el('div', { class: 'wikicat-row' }, main, selfBadge(n), sleepBadge(n), versionBadge(n), statusBadge(n), acts || null);
+  return el('div', { class: 'wikicat-row' }, main, selfBadge(n), staleBadge(n), sleepBadge(n), versionBadge(n), statusBadge(n), acts || null);
 }
 
 // 그룹(제목·개수·한 줄 설명 + 행들). 빈 그룹도 '사실 + 다음에 할 일'로 말한다.

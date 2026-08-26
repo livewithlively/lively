@@ -5,7 +5,7 @@
 //  **문장이 문장으로 조립되는가** 라는 계약이다 — e2e 에서 조각을 접속사로 이어 "…없습니다이고, …" 가
 //  실제로 사용자에게 나갔다. 개수(0·1·여러 개)에 따라 깨지는 자리라 표로 못박는다.
 import assert from "node:assert/strict";
-import { keepAwakeLine, linkDiagMessage, linkDiagSummary, humanDur, forceAwakeCommand } from "./link-advice.js";
+import { keepAwakeLine, linkDiagMessage, linkDiagSummary, humanDur, forceAwakeCommand, staleAgentNote } from "./link-advice.js";
 import type { LinkDiagnosis } from "./sleep-pattern.js";
 
 let pass = 0;
@@ -89,6 +89,78 @@ t("A10 ★좁은 자리용 요약 — 짧고, 판정이 없으면 null(전문과
   assert.equal(linkDiagSummary(null), null);
   const full = linkDiagMessage(sleepDiag, { platform: "darwin" }) ?? "";
   assert.ok(full.length > short.length, "전문이 요약보다 길어야 둘을 나눈 의미가 있다");
+});
+
+// ── #2127 churn 문구 (사양 표 B) ──────────────────────────────────────────────
+// 🔴 여기서 잠자기 안내(전원·뚜껑·powercfg)를 내면 **정확히 반대 방향으로** 사람을 보낸다 — 기계는 안 잤고
+//  에이전트가 죽고 있었다. 그래서 '무엇을 말하나'보다 **'무엇을 말하면 안 되나'**를 먼저 못박는다.
+const churnDiag: LinkDiagnosis = { suspected: "churn", cycles: 9, medianUpSec: 2, medianGapSec: 5 };
+
+t("B1 ★churn 은 잠자기 조치를 말하지 않는다 — 대신 노드 재등록을 말한다", () => {
+  const msg = linkDiagMessage(churnDiag, { platform: "win32" }) ?? "";
+  assert.ok(msg.length > 0, "판정이 있으면 침묵하지 않는다");
+  assert.ok(!msg.includes("powercfg") && !msg.includes("pmset") && !msg.includes("뚜껑"),
+    `잠자기 조치가 섞이면 반대 방향으로 보낸다: ${msg}`);
+  assert.ok(msg.includes("lively node --daemon"), "가장 먼저 할 수 있는 조치를 말해야 한다");
+  assert.ok(msg.includes("네트워크"), "★원인을 하나로 단정하지 않는다 — 이 패턴은 네트워크 플랩으로도 생긴다");
+  assert.ok(msg.includes("9") && msg.includes("2초") && msg.includes("5초"), "근거 수치를 함께 낸다");
+  assert.ok(wellFormed(msg));
+});
+
+t("B2 sleep 문구는 종전 그대로 — churn 축이 기존 안내를 갉아먹지 않는다", () => {
+  const msg = linkDiagMessage(sleepDiag, { platform: "darwin" }) ?? "";
+  assert.ok(msg.includes("pmset"), "맥 잠자기 조치가 그대로 나와야 한다");
+  assert.ok(msg.includes("잠자기"));
+});
+
+t("B3 판정이 없으면 여전히 침묵한다 — 근거 없이 원인을 지목하지 않는다(이 모듈의 원칙)", () => {
+  assert.equal(linkDiagMessage({ suspected: null, cycles: 9, medianUpSec: 2, medianGapSec: 5 }), null);
+  assert.equal(linkDiagSummary({ suspected: null, cycles: 9, medianUpSec: 2, medianGapSec: 5 }), null);
+});
+
+t("B4 좁은 자리용 요약도 churn 을 말한다(전문과 같은 규칙·더 짧게)", () => {
+  const short = linkDiagSummary(churnDiag) ?? "";
+  assert.ok(short.length > 0 && short.length < 60, `요약이 길면 좁은 열에서 세로로 흐른다: ${short.length}자`);
+  assert.ok(!/잠자기로 보입니다/.test(short), "요약에서도 원인을 뒤바꾸면 안 된다");
+  const full = linkDiagMessage(churnDiag, { platform: "win32" }) ?? "";
+  assert.ok(full.length > short.length);
+});
+
+// ── #2127·#2128 낡은 인스턴스 지문 (사양 표 C) ───────────────────────────────────
+// 🔴 최신 번들의 startKeepAwake 는 **실패해도 객체를 돌려주고**(active:false + reason) hello 가 그걸 싣는다.
+//  저장은 COALESCE 라 한 번이라도 받았으면 남는다. 그러므로 온라인인데 비어 있다 = 현행 규약대로 hello 를 못 한다.
+//  실측(hammurabi)에서 이 상태가 며칠 지속됐고 agent_ver 은 **최신이었다** — 버전 축으로는 절대 안 잡힌다.
+t("C1 ★온라인 + 보고 없음 + 버전 최신 → 말한다(이 조합이 가장 강한 신호다)", () => {
+  const note = staleAgentNote({ online: true, keepAwake: null, agentLatest: true }) ?? "";
+  assert.ok(note.includes("최신"), "'버전은 최신인데'가 이 케이스의 핵심이다");
+  assert.ok(note.includes("lively node --daemon"));
+  assert.ok(wellFormed(note));
+});
+
+t("C2 버전 판정이 없어도 말한다 — 조치는 어느 원인이든 같다", () => {
+  for (const agentLatest of [null, false] as const) {
+    const note = staleAgentNote({ online: true, keepAwake: null, agentLatest }) ?? "";
+    assert.ok(note.includes("lively node --daemon"), `agentLatest=${agentLatest}`);
+  }
+});
+
+t("C3 보고가 있으면 조용하다(정상)", () => {
+  assert.equal(staleAgentNote({
+    online: true, agentLatest: true,
+    keepAwake: { active: true, method: "caffeinate", gaps: [] },
+  }), null);
+});
+
+// ★경계 — 억제를 **못 걸었어도 보고는 했다**. 그건 낡은 게 아니라 정직하게 실패한 것이다(별도 문구가 이미 있다).
+t("C4 ★active:false 여도 보고했으면 낡은 게 아니다 — 실패와 침묵을 섞지 않는다", () => {
+  assert.equal(staleAgentNote({
+    online: true, agentLatest: true,
+    keepAwake: { active: false, method: null, gaps: [], reason: "spawn-failed" },
+  }), null);
+});
+
+t("C5 ★꺼진 노드는 말하지 않는다 — 보고가 없는 게 당연하다", () => {
+  assert.equal(staleAgentNote({ online: false, keepAwake: null, agentLatest: true }), null);
 });
 
 console.log(`\n${pass} checks passed`);
