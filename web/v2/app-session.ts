@@ -25,6 +25,7 @@ export interface SessionApp {
   runtime: { kind: 'worker'; placement: 'any' | 'central' | 'remote'; idle_timeout_sec: number; memory_mb: number } | null;
   system: { renderer: 'session' | 'browser' | 'classic'; home?: string; route?: string } | null;
   source: { kind?: string };
+  notifications: boolean;   // #1891 — 이 앱이 알림을 보낼 수 있나(동의 창이 제 줄로 보여 준다)
 }
 
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
@@ -52,7 +53,8 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
         const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
         return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-          scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, runtime, system, source };
+          scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, runtime, system, source,
+          notifications: perm.notifications === true };   // #1891 — 동의 창이 제 줄로 보여 준다
       });
   } catch (e: any) {
     // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
@@ -81,7 +83,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   if (cur) return cur;
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
-      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [],
+      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [], notifications: false,
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, runtime: null, system: null, source: {} };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
@@ -178,6 +180,11 @@ function appConsent(app: SessionApp): Promise<boolean> {
         el('p', { class: 'v2-consent-sub', text: '이 앱의 화면·worker·AI 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }),
         el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))),
         el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))),
+        // 알림(#1891) — 다른 권한과 **성격이 다르다**: 나머지는 '앱이 내 데이터에 무엇을 하나'인데
+        //  이건 '앱이 나를 언제 부르나'다. 그래서 도구 칩에 섞지 않고 제 줄로 세운다(선언했을 때만).
+        app.notifications ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '알림' }),
+          el('div', { class: 'v2-consent-chips' },
+            el('span', { class: 'v2-consent-chip', text: '데스크톱 알림을 보낼 수 있어요' }))) : null,
         // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
         app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }),
           el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null,

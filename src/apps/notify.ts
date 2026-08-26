@@ -34,10 +34,13 @@ export async function notifyMember(input: {
   try { declares = parseAppManifest(app.manifest).permissions.notifications === true; }
   catch { declares = false; }   // 매니페스트를 못 읽으면 권한 없음으로 본다(fail-closed)
 
+  const isBuiltin = (app.source as { kind?: string } | null)?.kind === "builtin";
   const denial = decideNotifyAllowed({
     appId: input.appId,
     declaresNotifications: declares,
-    hasActiveGrant: !!(await getActiveGrant(input.appId, input.memberId)),
+    // 빌트인은 grant 를 안 보므로 조회 자체를 건너뛴다(부질없는 DB 왕복 + 없어도 되는 실패 지점).
+    hasActiveGrant: isBuiltin ? true : !!(await getActiveGrant(input.appId, input.memberId)),
+    isBuiltin,
   });
   if (denial) return { ok: false, denial };
 
