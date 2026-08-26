@@ -15,6 +15,7 @@ const SVC_BRAND = {
     notion: '#191919',
     linear: '#5E6AD2',
     slack: '#4A154B',
+    google: '#4285F4', // #1881 G5 — 접힌 구글 타일. 아래 구 키 3개는 기존 화면 호환으로 남긴다.
     'google-gmail': '#EA4335',
     'google-drive': '#0F9D58',
     'google-calendar': '#4285F4',

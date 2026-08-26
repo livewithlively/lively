@@ -143,12 +143,15 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "gmail",
     label: "Gmail",
     guide: {
-      intro: "Google 은 OAuth 데스크톱 클라이언트의 refresh token 방식입니다(1개 토큰이 Gmail·Drive 공용 가능).",
+      intro:
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 에서 [팀 자료로 모으기]를 켜면 " +
+        "그 연결로 수집이 돌고(token_source=member:<켠 사람>), 토큰을 복사할 일이 없습니다(#1881 G3). " +
+        "아래 3칸은 **셀프호스팅·기존 배포용 수동 경로**입니다.",
       steps: [
-        "console.cloud.google.com ▸ APIs & Services ▸ Credentials ▸ [Create Credentials ▸ OAuth client ID] — 유형 'Desktop app'",
-        "OAuth consent screen 을 'In production' 으로 게시(Testing 상태면 refresh token 이 7일 만료)",
-        "클라이언트 ID/Secret 으로 gmail.readonly scope 승인 → refresh token 발급(설치 키트의 google-oauth 헬퍼 또는 OAuth Playground)",
-        "세 값을 아래에 저장",
+        "console.cloud.google.com ▸ API 및 서비스 ▸ 사용자 인증 정보 ▸ [사용자 인증 정보 만들기 ▸ OAuth 클라이언트 ID]",
+        "OAuth 동의 화면을 **게시(In production)** — Testing 상태면 refresh token 이 7일 만에 만료돼 수집이 멈춥니다",
+        "gmail.readonly scope 로 승인해 refresh token 발급(설치 키트의 google-oauth 헬퍼)",
+        "세 값을 아래에 저장 — 또는 '토큰 출처'에 member:<구성원 id> 를 넣어 금고 연결을 가리키게 하세요",
       ],
       url: "https://console.cloud.google.com/apis/credentials",
     },
@@ -164,10 +167,12 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "gdrive",
     label: "Google Drive",
     guide: {
-      intro: "Gmail 과 같은 OAuth 클라이언트를 써도 됩니다 — scope 에 drive.readonly 를 합쳐 refresh token 을 발급하면 1개로 공용.",
+      intro:
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 의 [팀 자료로 모으기] 토글이 " +
+        "연결 하나로 드라이브·Gmail 을 함께 켭니다(#1881 G3). 아래는 셀프호스팅·기존 배포용 수동 경로입니다.",
       steps: [
-        "Gmail 가이드와 동일하게 OAuth 데스크톱 클라이언트 준비",
-        "drive.readonly scope 포함해 refresh token 발급 → 아래 저장",
+        "Gmail 가이드와 같은 OAuth 클라이언트를 쓰면 됩니다(1개 토큰이 Drive·Gmail 공용)",
+        "drive.readonly scope 포함해 refresh token 발급 → 아래 저장 — 또는 '토큰 출처'에 member:<구성원 id>",
       ],
       url: "https://console.cloud.google.com/apis/credentials",
     },
