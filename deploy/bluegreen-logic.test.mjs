@@ -391,6 +391,26 @@ for (const [name, src, fn] of [
   const iOldStop = phase4.indexOf('systemctl stop "$old_unit"', iElse);
   assert.ok(iOldStop > iSleep, "sleep(drain 유예)이 old stop 보다 앞(같은 non-keep-old 분기)");
 
+  // #7 격리 인프라·멤버 키트 리프레시 — update.sh 와의 패리티. blue-green 경로에 이게 없으면 격리 관련
+  //  변경(libexec 헬퍼·멤버 홈 훅 러너)이 배포돼도 박스에 안 붙는다(릴리스 코드만 새것이 되는 조용한 갭).
+  const iIsolation = deploy.indexOf("install-isolation.sh");
+  const iRefreshKits = deploy.indexOf("refresh-member-kits.sh");
+  assert.ok(iIsolation > 0 && iRefreshKits > 0, "배포 스크립트가 격리 인프라·멤버 키트 리프레시를 돈다");
+  //  flip 뒤여야 한다 — 리프레시는 **새 릴리스 코드 기준**으로 심어야 하고, 실패가 무중단 flip 을 되돌릴 이유는 없다.
+  assert.ok(iIsolation > iStateCommit && iRefreshKits > iStateCommit,
+    "리프레시는 active-color 커밋(flip 완료) 뒤 — 새 릴리스 기준으로 심는다");
+  //  best-effort: 실패해도 die 하지 않는다(멱등이라 다음 배포가 재시도).
+  const refreshBlock = deploy.slice(iIsolation, deploy.indexOf('phase "완료"', iIsolation));
+  assert.ok(/warn /.test(refreshBlock) && !/\bdie\b/.test(refreshBlock),
+    "리프레시 실패는 warn(배포는 성공) — 무중단 flip 을 되돌리지 않는다");
+  //  릴리스 트리의 스크립트를 써야 한다(옛 libexec·구 릴리스 본이 아니라 방금 flip 한 코드).
+//  ⚠ warn 메시지에도 같은 경로가 '수동 실행 안내'로 들어 있다 — 그냥 경로만 찾으면 **실행 라인을 libexec
+//   본으로 바꿔도 안내 문구에서 매치돼 green** 이 된다(실측: 이 단언의 첫 판이 그랬다). 따옴표까지 포함한
+//   실제 호출 형태(`sudo bash "$RELEASE_DIR/..."`)로 앵커한다 — 안내 문구는 따옴표가 없다.
+assert.ok(/sudo bash "\$RELEASE_DIR\/deploy\/linux\/install-isolation\.sh"/.test(deploy)
+    && /sudo bash "\$RELEASE_DIR\/deploy\/refresh-member-kits\.sh"/.test(deploy),
+    "리프레시는 새 릴리스 트리의 스크립트로 실행한다(옛 libexec 본은 자기 자신을 갱신하지 못한다)");
+
   // #5 다중 TG flip — ALB TG 는 로드밸런서 1대에만 붙는 하드 리밋(TargetGroupAssociationLimit)이라 ALB 가
   //  여럿이면 TG 도 여럿이다. flip 이 그 전부에 반영돼야 하고, **부분 적용이 성공으로 보고되면 안 된다**.
   const mSplit = /tg_split\(\)\s*\{[\s\S]*?\n\}/.exec(deploy);

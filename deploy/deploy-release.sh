@@ -425,6 +425,23 @@ main() {
     ok "old($active) 정지 — drain 완료"
   fi
 
+  # ── 격리 인프라·멤버 키트 리프레시(best-effort) ──────────────────────────────
+  #  왜 여기인가: `update.sh`(구 단일설치 경로)는 배포마다 install-isolation + refresh-member-kits 를 돌리는데,
+  #  blue-green 경로(이 스크립트)엔 그게 **빠져 있었다**. 그래서 격리 관련 변경(libexec 의 box-spawn·
+  #  provision-member·install-*-user 헬퍼, 멤버 홈의 훅 러너)이 이 경로로 배포해도 **박스에 반영되지 않았다** —
+  #  릴리스 코드만 새것이고 libexec·멤버 홈은 옛것으로 남는 조용한 갭이다(2026-08-27 발견: 멤버 codex 헬퍼를
+  #  추가했는데 배포만으로는 효력이 없었다).
+  #  flip **뒤**에 두는 이유: 리프레시는 새 릴리스의 코드를 기준으로 심어야 하고(활성 릴리스 = 방금 flip 한 것),
+  #  실패해도 무중단 flip 을 되돌릴 이유는 없다 → warn 만 남기고 배포는 성공으로 둔다(멱등이라 다음 배포가 재시도).
+  if [ -x /opt/lively/libexec/box-spawn ]; then
+    log "격리 인프라 리프레시(install-isolation.sh — 멱등)"
+    sudo bash "$RELEASE_DIR/deploy/linux/install-isolation.sh" >/dev/null 2>&1 \
+      || warn "격리 인프라 리프레시 경고 — 수동: sudo bash $RELEASE_DIR/deploy/linux/install-isolation.sh"
+    log "격리 멤버 키트 리프레시(refresh-member-kits.sh — 멱등)"
+    sudo bash "$RELEASE_DIR/deploy/refresh-member-kits.sh" 2>&1 | sed 's/^/  /' \
+      || warn "멤버 키트 리프레시 경고 — 수동: sudo bash $RELEASE_DIR/deploy/refresh-member-kits.sh"
+  fi
+
   phase "완료"
   ok "active=$idle  릴리스=$RELEASE_DIR"
   ok "확인: http://localhost:${idle_port}${HEALTH_PATH}  ·  프론트: ALB → instance:$idle_port (TG=$TG_ARN)"
