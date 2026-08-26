@@ -95,7 +95,11 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2mem-chip-x { width: 18px; height: 18px; border: 0; border-radius: 50%; background: none; color: var(--muted); display: inline-grid; place-items: center; cursor: pointer; }
 .v2mem-chip-x:hover { background: var(--bg-punch); color: var(--ink); }
 .v2mem-chip-x-ic { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.v2mem-chip-in { flex: 1; min-width: 160px; border: 0; outline: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); padding: 4px 2px; }
+/* 안쪽 입력칸 — 전역 input[type=text] 규격(테두리·높이·그림자)을 이긴다(특이도 0,2,1). 칩 상자가 곧 테두리다. */
+.v2mem-chips input.v2mem-chip-in { flex: 1; min-width: 160px; width: auto; min-height: 0; height: auto; margin: 0; border: 0; border-radius: 0; box-shadow: none; outline: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); padding: 4px 2px; }
+.v2mem-chips input.v2mem-chip-in:focus { border: 0; box-shadow: none; outline: 0; }
+/* datalist 가 붙은 입력칸에 크롬이 그리는 ▼ — 제안은 타이핑하면 뜬다, 화살표는 칩 상자 안에서 이물이다. */
+.v2mem-chips input.v2mem-chip-in::-webkit-calendar-picker-indicator { display: none !important; }
 .v2mem-help { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .v2mem-invrow { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
 .v2mem-sel { font: inherit; font-size: 12.5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink-sub); }
