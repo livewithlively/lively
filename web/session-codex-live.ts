@@ -29,6 +29,8 @@ export interface CodexLiveOpts {
   poke: () => void;
   /** 도는 중인지·기다리는 승인이 몇 개인지 바뀔 때 — 헤더의 점·상태 글자가 이 값을 따른다. */
   onState?: (s: { running: boolean; waiting: number }) => void;
+  /** 턴이 끝났다(런타임이 말했다) — 화면이 그 턴을 마감한다. 파일의 마감 줄을 기다리지 않는다. */
+  onSettled?: () => void;
 }
 
 export interface CodexLive {
@@ -157,8 +159,15 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
       }
       case 'hello':
       case 'status': {
+        const was = isRunning;
         isRunning = !!(ev as any).running;
-        if (!isRunning) clearPreview();          // 턴이 끝났다 — 남은 조각은 파일이 그린다
+        if (!isRunning) {
+          clearPreview();                        // 턴이 끝났다 — 남은 조각은 파일이 그린다
+          // ★ 끝났다는 사실도 **여기가 먼저 안다**. 종전엔 마감을 대화 파일에만 맡겼는데, 멈춤(interrupt)처럼
+          //  파일에 마감 줄이 늦게/안 오는 경우 화면이 최대 2분을 '작업 중'으로 남았다(실측 2026-08-26).
+          //  런타임이 이 세션의 AI 다 — 그 말을 그대로 쓴다.
+          if (was) o.onSettled?.();
+        }
         tell();
         return;
       }

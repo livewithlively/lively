@@ -69,6 +69,7 @@ export class CodexAppServer {
   private nextId = 1;
   private state: ParseState = {};
   private closed = false;
+  private turnId = "";                          // 지금 도는 턴(멈춤·얹기의 필수 인자)
   private closeReason = "";
 
   constructor(opts: CodexAppServerOptions) {
@@ -107,15 +108,38 @@ export class CodexAppServer {
 
   /** 한 턴 시작. 응답은 turn 메타이고 **내용은 알림으로 흐른다**(onLine·onDelta). */
   async startTurn(threadId: string, text: string): Promise<Record<string, unknown>> {
-    return await this.request("turn/start", { threadId, input: [{ type: "text", text }] }) as Record<string, unknown>;
+    const r = await this.request("turn/start", { threadId, input: [{ type: "text", text }] }) as Record<string, any>;
+    // 응답에도 turn 이 온다 — 알림보다 먼저 도착할 수 있으므로 여기서도 잡는다(멈춤이 곧바로 되게).
+    const id = String(r?.turn?.id ?? "");
+    if (id) this.turnId = id;
+    return r;
   }
 
-  async interrupt(threadId: string): Promise<void> { await this.request("turn/interrupt", { threadId }); }
-
-  /** 돌고 있는 턴에 말을 얹는다(끊지 않고 방향만 바꾼다). */
-  async steer(threadId: string, text: string): Promise<void> {
-    await this.request("turn/steer", { threadId, input: [{ type: "text", text }] });
+  /**
+   * 돌고 있는 턴을 끊는다.
+   *  ★ `turnId` 는 **필수**다(스키마 TurnInterruptParams: required [threadId, turnId]). threadId 만 보내면
+   *   요청이 거부되고 — 우리는 그 실패를 조용히 false 로 접었으므로 — 화면의 [멈춤]·Esc 가 **아무 일도 하지
+   *   않았다**(실측 2026-08-26 dev: 멈춤을 눌러도 계속 돌았다). 그래서 지금 도는 턴 id 를 들고 있는다.
+   */
+  async interrupt(threadId: string, turnId?: string): Promise<void> {
+    const id = turnId || this.turnId;
+    if (!id) throw new Error("멈출 턴이 없습니다(도는 턴 id 를 모릅니다)");
+    await this.request("turn/interrupt", { threadId, turnId: id });
   }
+
+  /**
+   * 돌고 있는 턴에 말을 얹는다(끊지 않고 방향만 바꾼다).
+   *  ★ `expectedTurnId` 는 **필수**이고 '지금 도는 턴' 선행조건이다 — 어긋나면 요청이 실패한다(스키마).
+   *   그 실패가 곧 "그 사이 턴이 바뀌었다"는 뜻이라, 호출자는 새 턴으로 보내면 된다.
+   */
+  async steer(threadId: string, text: string, expectedTurnId?: string): Promise<void> {
+    const id = expectedTurnId || this.turnId;
+    if (!id) throw new Error("얹을 턴이 없습니다(도는 턴 id 를 모릅니다)");
+    await this.request("turn/steer", { threadId, expectedTurnId: id, input: [{ type: "text", text }] });
+  }
+
+  /** 지금 도는 턴 id(없으면 ''). 알림으로 갱신된다 — 우리가 시작하지 않은 턴(TUI·복구)도 잡는다. */
+  get currentTurnId(): string { return this.turnId; }
 
   /** 구독만 끊는다. ⚠ **writer 락은 안 풀린다** — 스레드를 TUI 에 넘기려면 close() 로 프로세스를 내려야 한다(실측). */
   async unsubscribe(threadId: string): Promise<void> { await this.request("thread/unsubscribe", { threadId }); }
@@ -154,6 +178,9 @@ export class CodexAppServer {
     if (m.method) {
       const method = String(m.method);
       const params = (m.params ?? {}) as Record<string, any>;
+      // 지금 도는 턴 id — 멈춤·얹기가 이 값을 **필수 인자로** 요구한다(스키마). onNotify 보다 먼저 잡는다.
+      if (method === "turn/started") this.turnId = String((params as any)?.turn?.id ?? "");
+      else if (method === "turn/completed") this.turnId = "";
       this.opts.onNotify?.(method, params);
       if (method === "item/agentMessage/delta") {
         const d = String(params.delta ?? "");

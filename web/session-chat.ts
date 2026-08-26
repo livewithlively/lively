@@ -334,7 +334,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
     who: { me: '나', ai: 'AI' },
-    placeholder: target.node ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기',
+    // ⚠ '그 컴퓨터로 전달'은 **정말 다른 컴퓨터일 때만** 맞는 말이다. 게이트웨이 박스가 노드로도 등록돼
+    //  있으면 그 박스의 로컬 세션에도 노드 좌표가 붙는다(같은 함정을 네 번째로 밟는 자리) — app-server
+    //  세션은 여기서 도는데 "그 컴퓨터로 전달"이라고 적혀 있으면 사람이 다른 기계를 상상하게 된다.
+    placeholder: (target.node && !chatFirst()) ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기',
     toolLabel,
     thinking: 'fold',
     sendWhileBusy: true,
@@ -1351,6 +1354,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       sessionId: target.id, view, dock: liveDock,
       liveTurn: () => cur?.t ?? null,
       poke: () => pokePoll(),
+      onSettled: () => {
+        // 런타임이 "턴 끝" 이라고 했다 — 파일의 마감 줄을 기다리지 않는다(멈춤은 그 줄이 늦거나 안 온다).
+        running = false;
+        if (cur) view.settle(cur.t);
+        view.busy(false);
+        paintState();
+        pokePoll();                    // 마지막 조각이 파일에 떨어졌을 수 있다 — 지금 읽어 온다
+      },
       onState: (st) => {
         liveWaiting = st.waiting;
         // 서버가 '돈다'고 말하면 파일보다 먼저 그 사실을 화면에 세운다(파일은 항목이 끝나야 자란다).
