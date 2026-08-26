@@ -20,7 +20,8 @@ import path from "node:path";
 import { CodexAppServer, type AppServerTransport, type ApprovalDecision, type ApprovalRequest } from "./codex-app-server.js";
 import { detachedStartSh, portAlive, sessionPort, spawnDetachedLocal, waitPort, wsTransport } from "./codex-app-server-daemon.js";
 import { spawn } from "node:child_process";
-import { memberSh, memberSpawnArgv } from "../terminal-member-fs.js";
+import { memberSh } from "../terminal-member-fs.js";        // 파일 op 는 종전 경계(멤버 홈이 보이는 곳)
+import { sessionExecConfigured, sessionSpawnArgv } from "../session-exec.js";   // 프로세스는 세션 경계
 import type { ChatLine } from "./chat-line.js";
 
 /** 이 세션에서는 app-server 경로를 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
@@ -190,16 +191,18 @@ export async function ensureCodexChat(o: CodexChatOpts): Promise<{ threadId: str
  */
 async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
   const port = sessionPort(o.sessionId);
-  if (o.osUser) {
-    // ── 격리·매니지드: 서버는 **그 멤버의 실행 환경(세션 컨테이너)** 안에서 detached 로 돈다. ──
-    //  게이트웨이는 그 컨테이너의 loopback 에 직접 못 닿으므로, 중계로 stdio 다리를 하나 놓아 붙는다.
-    //  다리는 게이트웨이가 죽으면 같이 죽지만 **서버는 남는다** — 그게 이 구조의 요점이다.
+  // ── 매니지드: 서버는 **그 세션의 컨테이너** 안에서 detached 로 돈다(#2055 P3). ──
+  //  ★ 멤버 경계(memberSpawnArgv)가 아니라 **세션 경계**다. 전자는 tmux 컨테이너로 들어가는데
+  //   거기는 테넌트의 모든 멤버가 공유하고 `HOME=/` 이라 codex 가 자격을 못 찾는다(실측, session-exec.ts 머리말).
+  //  게이트웨이는 그 컨테이너의 loopback 에 직접 못 닿으므로, 중계로 stdio 다리를 하나 놓아 붙는다.
+  //  다리는 게이트웨이가 죽으면 같이 죽지만 **서버는 남는다** — 그게 이 구조의 요점이다.
+  if (sessionExecConfigured()) {
     const log = `$HOME/.codex/lively-app-server-${o.sessionId}.log`;
-    const out = await memberSh(o.osUser, detachedStartSh(port, log, sessionEnv(o.sessionId))).catch((e: unknown) => {
+    const out = await sessionSh(o.sessionId, detachedStartSh(port, log, sessionEnv(o.sessionId))).catch((e: unknown) => {
       throw new CodexChatUnavailable(`세션 컨테이너에서 codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
     });
     if (!/started|already/.test(String(out ?? ""))) throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
-    return bridgeTransport(o.osUser, port);
+    return bridgeTransport(o.sessionId, port);
   }
   // ── 로컬(비격리·dev): detached + 로그파일. 이미 그 포트에 살아 있으면 그대로 붙는다. ──
   if (!(await portAlive(port))) {
@@ -218,12 +221,32 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
   return wsTransport(`ws://127.0.0.1:${port}`);
 }
 
-/** 컨테이너 안 ws 포트에 붙는 stdio 다리 — 중계(docker exec) 한 겹 위에 줄 단위 전송을 얹는다. */
-function bridgeTransport(osUser: string, port: number): AppServerTransport {
-  const BRIDGE = `const n=require("net");const s=n.connect(${port},"127.0.0.1");` +
-    `s.on("error",e=>{process.stderr.write(String(e.message));process.exit(1)});` +
-    `process.stdin.pipe(s);s.pipe(process.stdout);s.on("close",()=>process.exit(0));`;
-  const argv = memberSpawnArgv(osUser, ["node", "-e", BRIDGE]);
+/**
+ * 세션 컨테이너 안 ws 포트에 붙는 stdio 다리 — 중계(docker exec hijack) 한 겹 위에 줄 단위 전송을 얹는다.
+ *
+ *  ★ **WebSocket 클라이언트여야 한다.** `codex app-server --listen ws://…` 는 이름 그대로 WebSocket 을
+ *   말한다 — 생 TCP 로 붙으면 서버가 `HTTP/1.1 400 Bad Request` 를 돌려주고 끝난다(실측 2026-08-26,
+ *   매니지드 실박스에서 **롤 전에** 잡았다). 셀프호스트 경로는 처음부터 wsTransport(진짜 ws 클라이언트)라
+ *   멀쩡했고 이 다리만 생 net.connect 였다 — 매니지드를 켠 적이 없어 아무도 안 밟았을 뿐이다.
+ *
+ *  왜 굳이 포트를 거치나(그냥 `codex app-server` 를 stdio 로 돌리면 다리도 포트도 필요 없다):
+ *   그러면 서버가 이 exec 의 **자식**이라 게이트웨이가 재기동되면 같이 죽는다 — 돌던 턴이 통째로
+ *   유실되는 그 회귀다(#2055 실측). 포트에 띄워 두면 다리만 끊기고 서버는 남아 턴을 마치고 답을 쓴다.
+ *
+ *  ⚠ 노드 22 의 전역 WebSocket 을 쓴다(테넌트 이미지 node v22.23.2 — 실측 확인).
+ *   메시지는 JSONL 이라 개행을 보장해 내보낸다(받는 쪽이 줄 단위로 자른다).
+ */
+function bridgeTransport(sessionId: string, port: number): AppServerTransport {
+  const BRIDGE = [
+    `const ws=new WebSocket("ws://127.0.0.1:${port}");`,
+    `let q=[],open=false;`,
+    `ws.onopen=()=>{open=true;for(const m of q.splice(0))ws.send(m);};`,
+    `ws.onmessage=e=>{const d=String(e.data);process.stdout.write(d.endsWith("\\n")?d:d+"\\n");};`,
+    `ws.onerror=()=>{};`,
+    `ws.onclose=()=>process.exit(0);`,
+    `let buf="";process.stdin.on("data",c=>{buf+=c;let i;while((i=buf.indexOf("\\n"))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;if(open)ws.send(l);else q.push(l);}});`,
+  ].join("");
+  const argv = sessionSpawnArgv(sessionId, ["node", "-e", BRIDGE]);
   const p = spawn(argv[0], argv.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
   let buf = "";
   let onLineCb: ((l: string) => void) | null = null;
@@ -243,6 +266,23 @@ function bridgeTransport(osUser: string, port: number): AppServerTransport {
     onClose: (cb) => { onCloseCb = cb; },
     close: () => { try { p.kill(); } catch { /* */ } },   // 다리만 끊는다 — 서버는 남는다
   };
+}
+
+/**
+ * 세션 컨테이너 안에서 셸 한 줄을 돌리고 stdout 을 돌려준다(짧은 명령용 — 기동 신호를 읽는다).
+ *  ⚠ stdin 을 **닫는다**: 이건 요청-응답이다. 장수 양방향은 bridgeTransport 가 따로 한다.
+ */
+function sessionSh(sessionId: string, script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const argv = sessionSpawnArgv(sessionId, ["sh", "-c", script]);
+    if (!argv.length) return reject(new Error("세션 경계 중계가 설정되지 않았습니다"));
+    const p = spawn(argv[0], argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+    let out = ""; let err = "";
+    p.stdout?.on("data", (c: Buffer) => { out += c.toString("utf8"); });
+    p.stderr?.on("data", (c: Buffer) => { err = (err + c.toString("utf8")).slice(-500); });
+    p.on("error", reject);
+    p.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.trim() || `세션 exec 종료코드 ${code}`))));
+  });
 }
 
 async function start(o: CodexChatOpts): Promise<Entry> {
@@ -346,16 +386,19 @@ export function releaseCodexChat(sessionId: string): { threadId: string } | null
   try { e.server.close(); } catch { /* 이미 닫혔다 */ }
   // ★ 서버 **프로세스**까지 내린다 — 연결만 끊으면 writer 락이 안 풀려 TUI 가 그 대화를 못 연다(실측).
   //  이제 서버는 게이트웨이 자식이 아니라 별도 프로세스라, 종료를 명시적으로 시켜야 한다.
-  void stopServer(sessionId, e.osUser);
+  void stopServer(sessionId);
   return { threadId: e.threadId };
 }
 
-/** 그 세션의 app-server 프로세스를 내린다(터미널 인계용). 실패는 삼킨다 — 인계 안내는 이미 나갔다. */
-async function stopServer(sessionId: string, osUser: string | null): Promise<void> {
+/**
+ * 그 세션의 app-server 프로세스를 내린다(터미널 인계용). 실패는 삼킨다 — 인계 안내는 이미 나갔다.
+ *  ⚠ **세션 경계**로 죽인다 — 그 프로세스는 세션 컨테이너 안에 있다(멤버 경계는 tmux 컨테이너라 거기 없다).
+ */
+async function stopServer(sessionId: string): Promise<void> {
   const port = sessionPort(sessionId);
   const sh = `pids=$(pgrep -f "app-server --listen ws://127.0.0.1:${port}" 2>/dev/null || true); [ -n "$pids" ] && kill $pids 2>/dev/null; echo stopped`;
   try {
-    if (osUser) await memberSh(osUser, sh);
+    if (sessionExecConfigured()) await sessionSh(sessionId, sh);
     else await new Promise<void>((resolve) => {
       const p = spawn("sh", ["-c", sh], { stdio: "ignore" });
       p.on("exit", () => resolve()); p.on("error", () => resolve());

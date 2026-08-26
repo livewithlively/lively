@@ -206,6 +206,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   if (svc.key === 'notion' && org && org.admin) settings.push(notionTeamCollectCard());
   //  #1881 G5 구글 — 관리자에게만. 슬랙처럼 켠 사람의 연결로 돌되, **무엇을 켜느냐가 곧 비용**이라 서비스를 고르게 한다.
   if (svc.key === 'google' && org && org.admin) settings.push(googleTeamCollectCard());
+  //  #1881 G10 GitHub — 연결한 사람에게만. 목록(내가 볼 수 있는 전부)과 **clone 가능 범위**(설치 때 고른 것)가
+  //   다르다는 사실을 이 카드가 드러낸다. 그 차이를 안 보여 주면 안 고른 레포를 골라 등록까지 성공한 뒤
+  //   clone 에서 실패한다 — 사용자는 원인을 알 수 없다.
+  if (svc.key === 'github' && st === 'on') settings.push(githubReposCard());
   if (svc.key === 'slack' && st === 'on') {
     settings.push(el('section', { class: 'cn-sec' },
       el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '이 앱의 설정' })),
@@ -238,6 +242,65 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
 }
 
 // ── 팀 자료로 모으기(#1881) — 슬랙 수집을 토글 하나로. 상태·토글·비공개 채널 안내를 한 카드에. ──
+// ── 연결된 저장소(#1881 G10) — "목록에 보이는 것"과 "clone 되는 것"의 경계를 드러낸다 ──────────────
+//  레포 목록은 user token(`/user/repos`)이라 내가 볼 수 있는 전부가 나오고, clone 은 installation token 이라
+//  설치 때 고른 것만 된다. 목록을 좁히는 건 답이 아니다(드롭다운은 제안이지 제약이 아니다 — #825).
+//  대신 **어느 것이 열려 있는지 표시하고**, 안 열린 걸 쓰려면 GitHub 설치 화면으로 보낸다.
+function githubReposCard(): HTMLElement {
+  const body = el('div', { class: 'cn-help' }, ...uiText('불러오는 중…'));
+  const box = el('section', { class: 'cn-sec' },
+    el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '연결된 저장소' })),
+    body);
+  const paint = async (): Promise<void> => {
+    let st: any, disc: any;
+    try {
+      st = await api('/api/ui/org/github/connect');
+      disc = await api('/api/ui/repos/discover', { method: 'POST', body: JSON.stringify({ host: 'github.com' }) }).catch(() => ({ options: [] }));
+    } catch (e) { body.replaceChildren(errorNote(e, '저장소 목록을 불러오지 못했습니다')); return; }
+
+    const open: string[] | null = Array.isArray(st?.open_repositories) ? st.open_repositories : null;
+    const openSet = new Set((open ?? []).map((x) => String(x).toLowerCase()));
+    const all = (disc?.options ?? []) as Array<{ full_path: string; private?: boolean }>;
+    const rows: HTMLElement[] = [];
+
+    if (open === null) {
+      //  알 수 없음 — 목록을 막지 않는다. 매니지드는 private key 가 CP 에 있어 여기서 못 물어볼 수 있다.
+      rows.push(el('p', { class: 'cn-help' }, ...uiText('어느 저장소가 열려 있는지 확인하지 못했습니다 — 아래 목록은 내 계정이 볼 수 있는 전부입니다.')));
+    } else {
+      rows.push(el('p', { class: 'cn-help' }, ...uiText(
+        open.length
+          ? `AI가 코드를 가져올 수 있는 저장소는 ${open.length}개입니다. 나머지는 목록에 보여도 가져오지 못합니다.`
+          : '아직 열어 준 저장소가 없습니다 — 아래 [저장소 고르기]에서 고르면 그때부터 코드를 가져올 수 있어요.')));
+    }
+
+    for (const r of all.slice(0, 40)) {
+      const isOpen = openSet.has(String(r.full_path).toLowerCase());
+      rows.push(el('div', { class: 'cn-repo-row' },
+        el('span', { class: 'v2-k', text: r.full_path }),
+        r.private ? el('span', { class: 'dm-tag', text: '비공개' }) : null,
+        open === null ? null
+          : el('span', { class: isOpen ? 'dm-tag dm-tag-ok' : 'dm-tag', text: isOpen ? '열림' : '안 열림' })));
+    }
+    if (all.length > 40) rows.push(el('p', { class: 'cn-help' }, ...uiText(`… 외 ${all.length - 40}개`)));
+
+    //  안 열린 저장소를 쓰려면 GitHub 설치 화면에서 추가해야 한다 — 우리 화면에서 할 수 있는 일이 아니다.
+    const add = el('button', {
+      class: 'btn btn-ghost btn-sm', type: 'button', text: '저장소 고르기 (GitHub에서)',
+      onclick: async () => {
+        try {
+          const r: any = await api('/api/ui/org/github/connect', { method: 'POST', body: JSON.stringify({}) });
+          if (r?.authorization_url) window.open(r.authorization_url, '_blank', 'noopener');
+          toast('GitHub 화면에서 저장소를 고르고 허용하면 이 목록에 반영됩니다');
+        } catch (e: any) { toast((e && e.message) || '열지 못했습니다', true); }
+      },
+    });
+    const refresh = el('button', { class: 'btn-text', type: 'button', text: '새로고침', onclick: () => void paint() });
+    body.replaceChildren(...rows, el('div', { class: 'cn-acts' }, add, refresh));
+  };
+  void paint();
+  return box;
+}
+
 function slackTeamCollectCard(): HTMLElement {
   const body = el('div', { class: 'cn-help' }, ...uiText('불러오는 중…'));
   const box = el('section', { class: 'cn-sec' },
