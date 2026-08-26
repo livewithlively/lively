@@ -95,7 +95,10 @@ function init(): void {
   void listWorkspaces().then((rows) => { if (rows.length) { spaces = rows; drawRail(); } });
 }
 
-export function railSection(): RailSection { return section; }
+//  ⚠ init() 을 먼저 부른다 — 이 게터는 레일이 그려지기 **전에도** 불린다(부팅 때 탭이 되살아나는 순간 등).
+//   그때 기본값 'home' 을 돌려주면 부른 쪽은 '사람이 홈을 골랐다'로 읽는다. 실측(#2061): 위키에서 새로고침했는데
+//   되살아난 탭이 홈 자리로 기록돼 [홈] 이 기억하던 세션을 잃었다.
+export function railSection(): RailSection { init(); return section; }
 /** 레일이 숨겨져 있는가 — 좁은 폭에선 늘 '아니오'(거기선 CSS 가 레일을 아이콘으로 세운다). */
 export function railIsHidden(): boolean { return hidden && !window.matchMedia(NARROW_MQ).matches; }
 
