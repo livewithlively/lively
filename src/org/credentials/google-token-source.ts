@@ -14,7 +14,7 @@
 //  출처를 **명시했으면 그 출처만** 쓴다 — 금고에 없다고 붙여넣기 값으로 조용히 떨어지면 "연결한 사람이 나갔는데
 //  옛 토큰으로 계속 긁는" 꼴이 된다. 없으면 비워서 커넥터가 "연결 없음" 으로 분명히 실패하게 둔다.
 import { getMemberSecret, memberOwner, GATEWAY_OWNER, CLIENT_SCOPE } from "./member-secret-store.js";
-import { GOOGLE_KIND } from "./google-oauth.js";
+import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS } from "./google-oauth.js";
 
 /** 커넥터 config 에 그대로 얹히는 3칸. 하나라도 비면 googleAccessToken 이 "자격 미설정" 으로 던진다. */
 export interface GoogleTokenResolution {
@@ -79,6 +79,29 @@ export async function resolveGoogleTokenSource(
     return { warning: `Google OAuth 클라이언트(kind ${hit.kind})가 등록되지 않았습니다 — 관리자가 Client ID/Secret 을 조직 자격에 넣어야 합니다` };
   }
   return { client_id: client.client_id, client_secret: client.client_secret, refresh_token: hit.refresh_token };
+}
+
+/**
+ * ★ 조직 OAuth 클라이언트도 **구 kind 를 승계한다**(2026-08-26 실측이 만든 수정).
+ *
+ *  멤버 토큰에는 별칭을 걸어 뒀는데(google-oauth.ts GOOGLE_LEGACY_KINDS) 게이트웨이 소유 client 슬롯에는
+ *  안 걸려 있었다. 그래서 **#1652 시절에 붙여 둔 조직**(client 가 `google_drive_oauth/oauth:client` 에 있다)은
+ *  · 도구·수집은 멀쩡히 도는데(그 경로는 잡힌 kind 로 client 를 찾는다)
+ *  · `googleReady()` 만 false 가 되어 [Google 연결]·[권한 넓히기]가 **작동하지 않는다.**
+ *  게다가 화면은 "연결됨"이라 client 입력 폼도 안 내밀어서 **빠져나갈 길이 없는 상태**가 된다(dev 실측).
+ *
+ *  순서: 통합 kind 가 먼저다 — 새로 넣은 client 가 낡은 것을 이긴다.
+ */
+export const GOOGLE_CLIENT_KINDS: readonly string[] = [GOOGLE_KIND, ...GOOGLE_LEGACY_KINDS];
+
+export async function resolveGoogleOAuthClient(
+  vault: Pick<GoogleVaultReader, "oauthClient">,
+): Promise<{ kind: string; client_id: string; client_secret: string } | null> {
+  for (const kind of GOOGLE_CLIENT_KINDS) {
+    const c = await vault.oauthClient(kind);
+    if (c) return { kind, ...c };
+  }
+  return null;
 }
 
 /** 실제 금고 리더 — 커넥터 설정 해소(config.ts)가 쓴다. */

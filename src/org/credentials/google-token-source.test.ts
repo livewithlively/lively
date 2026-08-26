@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import {
   resolveGoogleTokenSource, googleKindsFor, isGoogleCollectorSystem,
+  resolveGoogleOAuthClient, GOOGLE_CLIENT_KINDS,
   type GoogleVaultReader,
 } from "./google-token-source.js";
 
@@ -112,6 +113,38 @@ await ta("형식이 틀린 출처는 warning — 조용히 종전 경로로 떨�
   assert.match((await resolveGoogleTokenSource("bot", "gmail", v))?.warning ?? "", /member:/);
   assert.match((await resolveGoogleTokenSource("member:", "gmail", v))?.warning ?? "", /구성원 id/);
   assert.equal(v.kindsSeen.length, 0, "형식이 틀렸는데 금고를 뒤졌다");
+});
+
+// ── 조직 OAuth 클라이언트의 구 kind 승계 (2026-08-26 dev 실측이 만든 행들) ──────
+//  실측: dev 금고에 client 가 `google_drive_oauth/oauth:client` 로만 있었다. 그 상태에서
+//  통합 kind 만 보면 googleReady()=false 가 되는데, 화면은 "연결됨"이라 client 입력 폼도 안 뜬다
+//  → 연결은 돼 있는데 범위를 넓힐 길이 없는 **막다른 상태**가 된다.
+const clientVault = (have: Record<string, boolean>): Pick<GoogleVaultReader, "oauthClient"> => ({
+  async oauthClient(kind) {
+    return have[kind] ? { client_id: `${kind}-id`, client_secret: `${kind}-sec` } : null;
+  },
+});
+
+await ta("C1 ★ client 가 구 kind 에만 있어도 찾는다 — 없으면 연결된 사람이 범위를 못 넓힌다", async () => {
+  const r = await resolveGoogleOAuthClient(clientVault({ google_drive_oauth: true }));
+  assert.equal(r?.kind, "google_drive_oauth");
+  assert.equal(r?.client_id, "google_drive_oauth-id");
+});
+
+await ta("C2 통합 kind 가 먼저다 — 새로 넣은 client 가 낡은 것을 이긴다", async () => {
+  const r = await resolveGoogleOAuthClient(clientVault({ google_oauth: true, google_drive_oauth: true }));
+  assert.equal(r?.kind, "google_oauth");
+  assert.equal(GOOGLE_CLIENT_KINDS[0], "google_oauth");
+});
+
+await ta("C3 아무 데도 없으면 null — 여기서 '있는 척' 하면 authorize 가 빈 client_id 로 나간다", async () => {
+  assert.equal(await resolveGoogleOAuthClient(clientVault({})), null);
+});
+
+await ta("C4 구 kind 3종을 전부 훑는다(gmail·calendar 로만 붙인 조직도 있다)", async () => {
+  assert.deepEqual([...GOOGLE_CLIENT_KINDS],
+    ["google_oauth", "google_drive_oauth", "google_gmail_oauth", "google_calendar_oauth"]);
+  assert.equal((await resolveGoogleOAuthClient(clientVault({ google_calendar_oauth: true })))?.kind, "google_calendar_oauth");
 });
 
 console.log(`\n${pass} passed`);
