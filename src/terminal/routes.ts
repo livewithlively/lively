@@ -17,7 +17,8 @@ import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js";
+import { convIdFromTranscriptPath, mayForgetOldState } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
@@ -77,6 +78,25 @@ async function transcriptResumable(id: string, st: { harness?: string | null; di
     tfs.stat,
   );
   return !!found && found.size > 0;
+}
+
+// ── #2122 복원이 대화 매핑을 **잃지 않게** 하는 두 장치 ───────────────────────────────────────────────
+//  배경: 복원은 새 세션을 만들고 옛 desired-state 행을 지운다. 매핑(claude_session_id)은 그 사이 carry-forward
+//   한 번으로만 옮겨지는데, 종전엔 그게 **가드+베스트에포트**였다 — 소스가 이미 null 이면 건너뛰고, 이관이
+//   0행/throw 로 실패해도 삼킨 뒤 **옛 행은 무조건 지웠다**. 그러면 매핑이 어디에도 안 남아 그 뒤 복원이
+//   영원히 picker 로 떨어진다(실측 2026-08-26: 9442ed3d.claude_session_id=null — 대화 01985b13 은 멀쩡한데 picker).
+//   박스 세션엔 노드 세션의 org_node_session_map 같은 **내구 사이드테이블이 없어** 옛 행이 매핑의 유일한 사본이다.
+
+/** 매핑 승계를 **권위화**한다(#2122 ①) — 성공 여부를 돌려주고 순간 실패는 짧게 재시도한다. 호출자는 이 값이
+ *  false 면 **옛 행을 지우지 않는다**(그게 매핑의 마지막 사본이다). 0행도 실패로 친다: 새 세션의 desired-state
+ *  미러가 아직/영영 없다는 뜻이라(createSession 의 upsert 는 best-effort), 그 상태에서 옛 행을 지우면 증발한다. */
+async function carryConvMapping(newId: string, convId: string, st: { owner: string; transcript_path?: string | null }): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 120 * attempt));
+    const ok = await setClaudeSessionId(newId, convId, st.owner, st.transcript_path ?? null).catch(() => false);
+    if (ok) return true;
+  }
+  return false;
 }
 
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
@@ -970,7 +990,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       if (st.discovered && !st.root_key) {
         throw new HttpError(409, "이 세션은 그 컴퓨터에서 직접 만들어진 것이라 되살릴 작업 폴더 좌표를 모릅니다 — 그 컴퓨터에서 이어서 시작해 주세요.");
       }
-      const resumeId = st.claude_session_id || null;
+      // #2122 — 매핑 소스를 셋으로 넓힌다(종전엔 desired-state 행 하나뿐이라, 그 컬럼이 한 번 null 이 되면 영영 picker).
+      //  ① desired-state 행 ② 노드 세션 **내구 맵**(org_node_session_map — 세션 수명과 무관하게 남는 표, #1752)
+      //  ③ 저장된 대화 파일 경로에서 재독(convIdFromTranscriptPath). ②③ 은 ①이 비었을 때만 본다(=null 전파 자가치유).
+      const durableMap = st.claude_session_id ? null : (await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null;
+      const resumeId = st.claude_session_id || durableMap?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path);
       const input: CreateInput = {
         label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
         harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
@@ -990,11 +1014,19 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
       await registerSessionInstance(session.id, owner, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
-      if (st.claude_session_id) {
-        await setClaudeSessionId(session.id, st.claude_session_id, owner, st.transcript_path)
-          .catch((e) => logger.warn({ err: e, id: session.id }, "restore(node): 대화 id 승계 실패(비치명 — 다음 복원은 picker)"));
-      }
-      await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 정리 실패(비치명)"));
+      // #2122 ① — 승계를 **권위화**한다: 결과를 보고, 실패하면 옛 행을 지우지 않는다(아래). 노드 세션은 내구 맵에도
+      //  쓴다 — 그 표는 INSERT ON CONFLICT 라 desired-state 행이 아직 없어도(미러 실패) 매핑이 남는다.
+      const inRow = resumeId ? await carryConvMapping(session.id, resumeId, { owner, transcript_path: st.transcript_path }) : false;
+      const inMap = resumeId
+        ? await setNodeSessionMap(session.id, nodeId, resumeId, owner, st.transcript_path)
+            .catch((e) => { logger.warn({ err: e, id: session.id }, "restore(node): 내구 맵 승계 실패"); return false; })
+        : false;
+      const carried = mayForgetOldState(resumeId, inRow, inMap);   // 둘 중 하나라도 남았으면 매핑은 살아 있다
+      if (!carried) logger.error({ id, newId: session.id, convId: resumeId }, "restore(node): 대화 id 승계가 어디에도 안 남았다 — 옛 desired-state 를 보존한다(#2122)");
+      //  ⚠ 옛 행은 **승계가 확인됐을 때만** 지운다. 종전엔 무조건 지워서, 승계가 조용히 실패하면 매핑의 마지막
+      //   사본이 함께 사라졌다(그 뒤 복원은 영구 picker). 남겨두면 복원 목록에 옛 카드가 한 장 남지만(눈에 보이고
+      //   사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
+      if (carried) await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 정리 실패(비치명)"));
       const ln = liveNodes().find((n) => n.id === nodeId);
       res.json({ ok: true, session: { ...session, node: { id: nodeId, name: ln?.name || nodeId, online: true } } });
       return;
@@ -1017,7 +1049,10 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   세션을 살려 두고 하네스의 원문 에러를 화면에 남기므로, 종전의 '복원 루프'(즉사→재복원)는 구조적으로 끊겨 있다.
     //  ⚠ #1437 ② — 그 확인은 **소유자 실행환경**에서 한다(transcriptResumable). 종전 transcriptExists 는 게이트웨이
     //   로컬 fs 만 봐서, 중계 배포(대화 파일이 노드 멤버 홈)에선 항상 false → **늘 picker**였다(정밀 복원이 죽어 있었다).
-    const mappedId = st.claude_session_id || null;
+    //  ⚠ #2122 — DB 매핑이 **비어 있어도** 저장된 대화 파일 경로가 남아 있으면 거기서 대화 id 를 재독한다(추측 아님 —
+    //   훅 보고 때 경로·id 일치를 강제했고, 여기선 그 하네스의 id 규약으로 한 번 더 거른다). 종전엔 컬럼이 한 번
+    //   null 이 되면 그 세션은 **영구 picker** 였다(매핑을 되찾을 길이 없었다).
+    const mappedId = st.claude_session_id || convIdFromTranscriptPath(st.harness, st.transcript_path);
     const resumeUuid = mappedId
       && (st.harness !== "claude" || await transcriptResumable(id, st, mappedId).catch(() => false))
       ? mappedId : null;
@@ -1043,15 +1078,22 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     // #1059 — 매핑 승계: 새 세션 레코드에 옛 claude UUID 를 물려준다. 이 대화를 `--resume <uuid>` 로 이어받았으니 같은
     //  UUID 를 계속 쓰는데, 새 레코드는 훅이 보고할 때까지 비어 있어 **그 사이에 또 복원하면 picker 로 떨어졌다**
     //  (2026-07-28 상민님 신고 — 정밀 복원이 한 번만 되는 증상의 절반. 나머지 절반은 훅 dedup 키에 box-id 부재였다).
-    //  훅이 새 UUID 를 보고하면 last-write-wins 로 갱신되므로 이 승계는 '보고 전 공백'만 메운다. best-effort.
-    if (st.claude_session_id) {
-      await setClaudeSessionId(session.id, st.claude_session_id, st.owner, st.transcript_path)   // #1746 대화 파일 경로도 승계(같은 대화 = 같은 파일)
-        .catch((e) => logger.warn({ err: e, id: session.id }, "restore: claude UUID 승계 실패(비치명 — 다음 복원은 picker)"));
-    }
+    //  훅이 새 UUID 를 보고하면 last-write-wins 로 갱신되므로 이 승계는 '보고 전 공백'만 메운다.
+    //  ⚠ #2122 — 이 승계는 더 이상 best-effort 가 아니다. 박스 세션엔 노드 세션의 org_node_session_map 같은 내구
+    //   사이드테이블이 없어, 옛 행이 매핑의 **유일한 사본**이다: 승계가 조용히 실패한 채 옛 행을 지우면 그 대화는
+    //   영영 못 찾는다(그 뒤 복원은 전부 picker). 그래서 결과를 확인하고, 실패하면 아래에서 옛 행을 지우지 않는다.
+    const inRow = mappedId
+      ? await carryConvMapping(session.id, mappedId, { owner: st.owner, transcript_path: st.transcript_path })   // #1746 대화 파일 경로도 승계(같은 대화 = 같은 파일)
+      : false;
+    //  박스 세션엔 내구 맵이 없다(노드 세션의 org_node_session_map 은 노드 전용) → 세 번째 인자는 늘 false.
+    const carried = mayForgetOldState(mappedId, inRow, false);
+    if (!carried) logger.error({ id, newId: session.id, convId: mappedId }, "restore: 대화 id 승계 실패 — 옛 desired-state 를 보존한다(#2122)");
     //  복원도 세션 생성이다 — 새 id 로 인스턴스를 세운다(옛 세션의 인스턴스는 아래 옛 행 정리와 함께 닫힌다).
     await registerSessionInstance(session.id, st.owner, { appId: st.app_id, projectId: st.project_id, title: st.label || session.label });
     await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));
-    await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
+    //  ⚠ #2122 — 옛 행은 **승계가 확인됐을 때만** 지운다(위). 남겨두면 복원 목록에 옛 카드가 한 장 남지만(눈에
+    //   보이고 사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
+    if (carried) await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
     res.json({ ok: true, session });
   }));
 
