@@ -25,6 +25,7 @@ import { toolLabel } from './session-tool-labels.js';
 import { confirmSessionPurge, purgeSessionRecord, purgedToast } from './session-actions.js';
 import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
 import { sessionHandoffContext } from './session-handoff-context.js';
+import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 
@@ -143,8 +144,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  #1744 로 터미널 페이지의 상단바(파일 탐색기 · 질문 · 화면 복구 · 환경 설정 · 사용법 · 프로젝트 페이지)를 여기로
   //  합쳤다 — 종전엔 세션 화면 안에 터미널 프레임이 뜨면 상단바가 위아래로 둘이었다. 터미널 쪽 것은 사라지고
   //  그 기능은 [파일]·[목차]와 [⋯] 메뉴(터미널 조작)로 이 한 줄에 들어온다.
-  const dot = el('span', { class: 'v2-dot', 'aria-hidden': 'true' });
-  const stateEl = el('span', { class: 'sc-state' });
+  // 상태는 **점 하나로만** 말한다(원준 2026-08-26: "세션 상태 보이는데, 이거 그냥 안보이게 해").
+  //  글자('대기 중'·'작업 중'…)는 뺐다 — 색이 이미 같은 말을 하고, 이 줄에서 사람이 가장 자주 읽는 것은 세션 이름이다.
+  //  ⚠ 정보를 없애지는 않는다: 라벨을 점에 얹어 hover(title)·스크린리더(aria-label)로 그대로 읽힌다.
+  const dot = el('span', { class: 'v2-dot', role: 'img' });
   // 제목 = **pane 이름**(하네스가 써 두는 '지금 하는 일', 목록의 raw.title) — 상민님 2026-08-19.
   //  화면 안에서 알고 싶은 것은 '이 세션이 지금 뭘 하고 있나'다.
   //
@@ -279,7 +282,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
       dot, titleHost, chatBadge,
-      el('span', { class: 'sc-meta' }, stateEl, runEl)),
+      el('span', { class: 'sc-meta' }, runEl)),
     headR);
 
   const chatHost = el('div', { class: 'sc-chat' });
@@ -321,8 +324,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  덮어쓰지 않을 뿐 **지우지도 않는다** — 안내가 떴다고 세션이 쓰던 모델이 바뀐 것은 아니다.
   const realModelId = (m: string): boolean => !!m.trim() && !/^<.*>$/.test(m.trim());
 
-  // 처방전(#1719) — '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'가 앉는 자리. 입력칸 바로 위(askHost).
-  const rxHost = el('div', { class: 'sc-rx-host' });
+  // codex 실시간 층(#2055)의 승인·사용량이 앉는 자리 — 대화 목록과 달리 **스크롤에 안 떠내려간다**(입력칸 바로 위).
+  //  승인은 답해야 턴이 진행되는 요청이라, 읽던 자리를 위로 올렸다고 사라지면 그 턴이 통째로 선다.
+  const liveDock = el('div', { class: 'cxl-dock' });
+
+  /** 이 세션은 대화창이 기본인가 — codex app-server 세션(pane 이 셸이라 터미널엔 말 걸 곳이 없다). */
+  const chatFirst = (): boolean => String(target.raw?.chatMode || '') === 'app-server';
 
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
@@ -333,9 +340,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     sendWhileBusy: true,
     style: 'desktop',
     bar: { right: el('span', { class: 'dt-chips' }, chipMode) },
-    askHost: rxHost,                              // 처방전(#1719) — 스크롤에 떠내려가지 않는 입력칸 바로 위
+    askHost: liveDock,                            // 승인(#2055) — 스크롤에 떠내려가지 않는 입력칸 바로 위
     onSend: (text) => sendPrompt(text),
-    onStop: canKeys() ? () => sendKey('interrupt') : undefined,
+    onStop: (canKeys() || chatFirst()) ? () => stopTurn() : undefined,
     escActive: () => true,
     opening: null,
   });
@@ -505,10 +512,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 상태 표시(헤더 점·라벨·확인 대기 배너·끝난 세션 바) ————
   const dotCls = (k: string): string => k === 'busy' ? 'busy' : k === 'waiting' ? 'wait' : (k === 'done' || k === 'idle') ? 'done' : '';
   let running = false;                        // 대화 파일 기준 '지금 턴이 도는 중'
+  let liveWaiting = 0;                        // #2055 — 대답을 기다리는 승인 수(app-server 세션에서만 는다)
   const paintState = (): void => {
-    const k = running && !dead() ? 'busy' : target.stateKey;
+    // ★ 승인 대기가 무엇보다 먼저다 — 그게 있으면 세션은 **사람을 기다리는 중**이고, 그걸 모르면 아무것도 안 도는
+    //  화면을 '작업 중'으로 읽게 된다(그 상태로 몇 분을 기다린 것이 #2055 의 출발점이다).
+    const asking = liveWaiting > 0 && !dead();
+    const k = asking ? 'waiting' : running && !dead() ? 'busy' : target.stateKey;
     dot.className = 'v2-dot ' + dotCls(k);
-    stateEl.textContent = running && !dead() ? '작업 중' : target.stateLabel;
+    // 라벨은 화면에서 뺐지만(원준 2026-08-26) 사라지지는 않는다 — 점에 얹어 hover·스크린리더로 그대로 읽힌다.
+    //  ⚠ '확인 대기'는 배너(waitBar)가 따로 크게 말하므로 이 줄이 없어져도 사람이 놓치지 않는다.
+    const stateLabel = asking ? `확인 대기${liveWaiting > 1 ? ` ${liveWaiting}` : ''}` : running && !dead() ? '작업 중' : target.stateLabel;
+    dot.title = stateLabel;
+    dot.setAttribute('aria-label', stateLabel);
     // ⚠ '대화가 지금 흐르고 있으면' 확인 배너를 내린다 — 훅의 waiting 보고는 사람이 터미널에서 답한 뒤 **다음 훅 보고**
     //  (PostToolUse — 긴 도구면 그 도구가 끝날 때)까지 남는다(실측 2026-08-18: 답했는데 배너가 계속 떠 있음 신고).
     //  트랜스크립트에 새 줄이 흐른다는 건 대화상자가 이미 닫혔다는 뜻이다 — 목록 폴링보다 빠르고 확실한 신호.
@@ -549,6 +564,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  터미널이 없는 세션(노드·기록 전용)은 종전대로 대화가 기본이고 버튼도 없다.
   let termFrame: HTMLIFrameElement | null = null;
   let mode: 'term' | 'chat' = 'chat';
+  let modeChosen = false;              // 사람이 [보기] 메뉴에서 직접 골랐나 — 그 뒤엔 화면이 스스로 안 바꾼다
   function setMode(m: 'term' | 'chat'): void {
     if (m === 'term' && (!opts.terminalSrc || !isBox)) m = 'chat';
     mode = m;
@@ -649,9 +665,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     rows.push(el('div', { class: 'sc-more-sec', text: '보기' }));
     if (opts.terminalSrc && isBox) {
       // 상민님 지시(2026-08-18): 대화 인터페이스가 아직 미완성이라 **터미널이 기본**, 대화는 '베타'를 달고 뒤에 둔다.
+      //  ⚠ codex app-server 세션(#2055)만 예외다 — 거기서는 대화창이 **유일한 말 거는 자리**이고(pane 은 셸),
+      //   터미널은 셸을 쓰러 가는 곳이다. 같은 항목에 다른 뜻을 담으면서 같은 문구를 쓰면 사람이 헤맨다.
       rows.push(mode === 'term'
-        ? row('대화로 보기 (베타)', '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요', () => setMode('chat'))
-        : row('터미널로 보기', '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요', () => setMode('term')));
+        ? row(chatFirst() ? '대화로 보기' : '대화로 보기 (베타)',
+          chatFirst() ? '이 세션은 대화창이 본자리예요 — Codex 와 여기서 주고받습니다' : '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요',
+          () => { modeChosen = true; setMode('chat'); })
+        : row('터미널로 보기',
+          chatFirst() ? '같은 작업 폴더의 셸이에요 — 대화는 여기서 말고 대화창에서 합니다' : '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요',
+          () => { modeChosen = true; setMode('term'); }));
     }
     rows.push(row('목차', '이 세션에 보낸 질문 목록 — 누르면 그 자리로', () => openIndex()));
     if (opts.terminalSrc && isBox) {
@@ -929,7 +951,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.list.querySelector('.sc-empty')?.remove();     // 다시 여는 경우(대화 uuid 를 뒤늦게 앎, #1744) — 지난 '아직 없음' 안내는 물러난다
     const tries: Source[] = [];
     if (isBox) {
-      if (!target.node) tries.push({ kind: 'box', id: target.id });   // 노드 세션은 박스 경로를 묻지 않는다(늘 409 node — 파일이 그 컴퓨터에 있다)
+      // ⚠ 노드가 붙어 있어도 **박스 경로를 먼저 물어본다**(#2055 실측 2026-08-26). 종전엔 '노드 세션은 늘 409'
+      //  라는 전제로 건너뛰었는데, **게이트웨이 박스가 노드로도 등록된 배포**에서는 이 박스의 로컬 세션까지
+      //  node 가 붙는다 — 그때 박스 경로를 안 물으면 대화가 로컬 파일에 멀쩡히 있는데도 화면이 중앙 기록(아직
+      //  빈)만 보고 **영영 빈 채로 남는다**. 저쪽 컴퓨터 것이면 서버가 그대로 409 'node' 를 주고, 아래 루프가
+      //  그 응답으로 중앙 기록 후보를 잇는다 — 비용은 첫 열기 때 요청 한 번이다.
+      tries.push({ kind: 'box', id: target.id });
       const ls = logSrc(); if (ls) tries.push(ls);
     } else {
       tries.push({ kind: 'log', sid: target.id, node: String(target.node ?? '') });
@@ -955,7 +982,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const unreadable = Number(lastErr?.status) === 409 && lastErr?.message !== 'node' && !!lastErr?.message;   // 409 = 'node'(그 컴퓨터) 또는 못 읽는 하네스(문장, #1746 — 폴링 무의미)
       // 어디를 지켜볼까 — 박스 세션은 박스 파일, 노드 세션은 중앙 기록(대화 uuid 를 알 때만; 모르면 update() 가 가져올 때).
       //  ⚠ 노드 세션에 박스 경로를 걸면 409 node 가 영원히 반복된다(실측 #1744: '진행을 따라가지 못하고…' 가 그 증상).
-      const watch = (): Source | null => target.node ? logSrc() : { kind: 'box', id: target.id };
+      //  ⚠ 지켜볼 곳은 **방금 실제로 읽힌 곳**(src)을 먼저 쓴다 — node 가 붙었다고 중앙 기록으로 못박으면
+      //   로컬 파일로 읽히는 세션(위 주석의 배포)이 갱신을 못 받는다.
+      const watch = (): Source | null => src ?? (target.node ? logSrc() : { kind: 'box', id: target.id });
       // 홈 입력창이 방금 연 세션 — 첫 지시는 서버(또는 노드)가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
       if (notYet && firstPrompt && canType()) {
         const pd = addPending(firstPrompt); firstPrompt = null;   // 박스면 서버 큐가 obId 를 붙인다(syncOutbox); 노드면 큐 없이 로컬 주입
@@ -974,14 +1003,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         ? (tries.length ? '아직 중앙 기록이 없어요 — 그 컴퓨터의 세션은 턴이 끝날 때마다 기록이 올라와 여기 보여요. 지금 진행은 터미널로 보세요.'
           : '이 세션의 대화 id 를 아직 몰라요 — 첫 턴이 끝나면 중앙 기록으로 여기 보여요. 지금은 터미널로 보세요.')
         : null;
-      const msg = nodeMsg ? nodeMsg
+      // codex app-server 세션(#2055)은 **여기가 말 거는 자리**다 — pane 은 셸이라 터미널로 보내면 사람이
+      //  말 걸 곳 없는 화면을 본다(실제로 그렇게 헤맸다). 그래서 이 경우만 문구도 버튼도 다르다.
+      const msg = chatFirst() && notYet && canType() ? '아직 주고받은 말이 없어요 — 아래에 바로 말을 걸어 보세요.'
+        : nodeMsg ? nodeMsg
         : !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
         : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인·확인 대화상자에 멈춰 있는 것일 수 있어요 — 터미널로 확인해 보세요.' : '이 세션의 대화 기록을 찾지 못했어요.')
         : unreadable ? String(lastErr.message)
         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
         : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
       view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }),
-        opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => setMode('term') }) : null));
+        opts.terminalSrc && isBox && !chatFirst() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => setMode('term') }) : null));
       paintState();
       // 라이브면 기록이 생기는 순간을 잡는다 — 박스는 파일, 노드는 중앙 기록(uuid 를 알 때만). 못 읽는 하네스면 기다려도 안 온다(폴링 X).
       if (canType() && !unreadable) { src = watch(); if (src) schedule(); }
@@ -1009,102 +1041,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (cur && looksLive) { view.running(cur.t); view.busy(true); }
     else { running = false; recs.forEach((r) => view.settle(r.t)); view.busy(false); }
     titleFromFirstAsk();
-    paintRx();
   }
   function titleFromFirstAsk(): void {
     const q = recs.find((r) => r.t.text)?.t.text;
     // 이름이 자동 생성 id 꼴이면 첫 질문을 이름 자리에 대신 쓴다(고치기 전까지의 임시 이름).
     if (q && /^box-|^[0-9a-f-]{20,}$/i.test(titleText)) { titleText = q.length > 60 ? q.slice(0, 60) + '…' : q; }
     paintTitle();
-  }
-
-  // ── 처방전(#1719) — "방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요" ──────────────────────
-  //  왜: 사람이 한 번에 말했으면 끝날 일을 나눠 말하느라 네 턴을 쓴다(실측 흔함). 그 사실은 **일이 끝난 뒤에만**
-  //   말할 수 있다 — 결과를 아는 상태라야 "이렇게 했으면 됐다"가 훈수가 아니라 제안이 된다.
-  //  ⚠ 이 판정은 **화면에서만** 한다. 대화 본문은 이미 이 브라우저에 있고, 서버로 아무것도 보내지 않는다
-  //   (제안엔진 C3 — 서버는 세션 대화를 열지 않는다). 나중에 다듬기를 붙일 때도 그 경계는 세션 안이다.
-  //  v0 는 문장을 지어내지 않는다: 나눠 말한 것을 **순서대로 합쳐** 보여줄 뿐이고, 나중에 덧붙인 부분만 표시한다.
-  //   숫자(횟수·걸린 시간)도 그 대화에서 실제로 센 값이다 — 예상치를 쓰지 않는다.
-  const RX_OFF_KEY = 'lively_rx_off';
-  const RX_MIN_ASKS = 3;              // 세 번 이상 나눠 말했을 때만. 두 번은 그냥 대화다.
-  const RX_GAP_MS = 20 * 60 * 1000;   // 이만큼 벌어지면 다른 일로 본다(한 묶음의 경계)
-  const rxDone = new Set<string>();   // 이 묶음은 닫았다(× ) — 새 묶음이면 다시 뜬다
-  let rxKey = '';                     // 지금 그려 둔 묶음
-  const rxOff = (): boolean => { try { return localStorage.getItem(RX_OFF_KEY) === '1'; } catch { return false; } };
-  const askAt = (t: ChatTurn): number => { const v = t.ts ? Date.parse(t.ts) : NaN; return Number.isFinite(v) ? v : t.startedAt; };
-
-  /** 마지막 '한 묶음' = 끝에서부터 20분 이내로 이어진 사람 말들. 그 사이가 벌어지면 거기서 끊는다. */
-  function lastAskCluster(): ChatTurn[] {
-    const asks = recs.map((r) => r.t).filter((t) => t.text && t.text.trim());
-    if (asks.length < RX_MIN_ASKS) return [];
-    const out: ChatTurn[] = [asks[asks.length - 1]!];
-    for (let i = asks.length - 2; i >= 0; i--) {
-      if (askAt(out[0]!) - askAt(asks[i]!) > RX_GAP_MS) break;
-      out.unshift(asks[i]!);
-    }
-    return out;
-  }
-
-  function paintRx(): void {
-    // 끝난 세션에서도 뜬다 — 되짚기는 오히려 끝난 뒤가 제일 쓸모 있다(입력칸이 없으면 '넣기' 버튼만 빠진다).
-    if (rxOff() || running) { if (!running) rxHost.replaceChildren(); return; }
-    const cluster = lastAskCluster();
-    if (cluster.length < RX_MIN_ASKS) { rxHost.replaceChildren(); rxKey = ''; return; }
-    const key = String(askAt(cluster[0]!)) + '·' + cluster.length + '·' + (cluster[cluster.length - 1]!.text || '').slice(0, 24);
-    if (key === rxKey) return;                       // 같은 묶음 — 다시 그리지 않는다(깜빡임 방지)
-    rxKey = key;
-    if (rxDone.has(key)) { rxHost.replaceChildren(); return; }
-    rxHost.replaceChildren(rxCard(cluster, key));
-  }
-
-  /** 나눠 말한 것을 순서대로 합친 지시문. 첫 마디는 그대로, 뒤에 덧붙인 것은 표시한다(무엇을 놓쳤는지가 보이게). */
-  function rxMerged(cluster: ChatTurn[]): { el: HTMLElement; text: string } {
-    const parts = cluster.map((t) => (t.text || '').trim()).filter(Boolean);
-    const box = el('div', { class: 'sc-rx-prompt' },
-      el('span', { class: 'sc-rx-plabel', text: '나눠 말씀하신 것을 한 덩어리로 합치면' }),
-      el('div', { class: 'sc-rx-ptext' },
-        ...parts.map((p, i) => i === 0
-          ? el('span', { text: p })
-          : el('span', { class: 'sc-rx-add', text: ' ' + p }))));
-    return { el: box, text: parts.join(' ') };
-  }
-
-  function rxCard(cluster: ChatTurn[], key: string): HTMLElement {
-    const n = cluster.length;
-    const mins = Math.max(1, Math.round((askAt(cluster[n - 1]!) - askAt(cluster[0]!)) / 60000));
-    const merged = rxMerged(cluster);
-    const close = (): void => { rxDone.add(key); rxHost.replaceChildren(); };
-
-    // 4 → 1 — 숫자를 읽지 않아도 보이게. 뒤쪽(합쳐진 것)에는 예상 시간을 쓰지 않는다(우리는 모른다).
-    const dots = el('div', { class: 'sc-rx-fold' },
-      el('span', { class: 'sc-rx-grp' }, ...Array.from({ length: Math.min(n, 6) }, () => el('i', { class: 'sc-rx-b' }))),
-      el('span', { class: 'sc-rx-arrow', 'aria-hidden': 'true', text: '→' }),
-      el('span', { class: 'sc-rx-grp' }, el('i', { class: 'sc-rx-b one' })),
-      el('span', { class: 'sc-rx-cap' }, el('b', { text: `${n}번 · ${mins}분` }), document.createTextNode(' 이 한 번으로')));
-
-    const put = canType()
-      ? el('button', { class: 'btn-text sc-rx-go', type: 'button', text: '이 지시문 입력칸에 넣기',
-        onclick: () => { view.input.value = merged.text; view.input.dispatchEvent(new Event('input')); view.input.focus(); close(); } })
-      : null;   // 끝난 세션엔 입력칸이 없다 — 눌러도 되는 척하는 버튼은 두지 않는다
-    const copy = el('button', { class: 'btn-text sc-rx-alt', type: 'button', text: '복사',
-      onclick: async () => { try { await navigator.clipboard.writeText(merged.text); toast('지시문을 복사했어요.'); } catch { window.prompt('이 지시문을 복사하세요:', merged.text); } } });
-    const keep = el('button', { class: 'btn-text sc-rx-alt', type: 'button', text: '이 일을 명령으로 저장해 두기',
-      onclick: () => toast('아직 준비 중이에요 — 다음 단계에서 이 지시문을 명령으로 굳힐 수 있게 됩니다.') });
-    const never = el('button', { class: 'btn-text sc-rx-never', type: 'button', text: '이런 거 안 볼래요',
-      onclick: () => { try { localStorage.setItem(RX_OFF_KEY, '1'); } catch { /* 비치명 */ } rxHost.replaceChildren(); toast('앞으로 이 안내를 띄우지 않습니다.'); } });
-
-    return el('div', { class: 'sc-rx' },
-      el('div', { class: 'sc-rx-h' },
-        el('span', { class: 'sc-rx-av', 'aria-hidden': 'true', text: 'L' }),
-        el('span', { class: 'sc-rx-ht', text: '이번 건, 한 번에 끝낼 수 있었어요' }),
-        el('button', { class: 'btn-text sc-rx-x', type: 'button', title: '닫기', 'aria-label': '닫기', text: '×', onclick: close })),
-      el('div', { class: 'sc-rx-b-wrap' },
-        el('p', { class: 'sc-rx-said' },
-          document.createTextNode('나눠서 '), el('b', { text: `${n}번` }), document.createTextNode(' 말씀하시느라 '),
-          el('b', { text: `${mins}분` }), document.createTextNode('이 걸렸어요. 아래처럼 처음부터 한 번에 주시면 됩니다.')),
-        dots,
-        merged.el,
-        el('div', { class: 'sc-rx-acts' }, ...(put ? [put] : []), copy, keep, never)));
   }
 
   // 위로 더 — [from-WINDOW, from) 창을 읽어 **턴 단위로 거꾸로** 앞에 끼운다(보고 있던 자리는 그대로).
@@ -1216,6 +1158,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (dead() && src.kind === 'log' && !running) return;   // 죽은 세션의 중앙 기록은 더 안 는다
     pollTimer = window.setTimeout(() => { void poll(); }, ms);
   }
+  /** 지금 읽어 오라 — 실시간 층(#2055)이 '완성본이 파일에 떨어졌다'고 알려 줄 때. 몰아치면 한 번으로 합친다. */
+  function pokePoll(): void {
+    if (destroyed || !src) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = window.setTimeout(() => { void poll(); }, 120);
+  }
   let fails = 0;
   async function poll(): Promise<void> {
     if (destroyed || !src) return;
@@ -1285,9 +1233,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const pd = addPending(text);
     view.scrollToBottom();
     try {
-      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) }) as { outbox_id?: number };
+      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) }) as { outbox_id?: number; transport?: string; fallback?: string; steered?: boolean };
       if (r?.outbox_id) pd.obId = Number(r.outbox_id);
-      view.setNote('');
+      // #2055 — app-server 로 보내려다 실패해 종전 경로로 내려갔다. 조용히 접으면 "왜 느리지"의 원인을 아무도 모른다.
+      view.setNote(r?.fallback ? `대화 통로를 못 열어 터미널 경로로 보냈어요 — ${r.fallback}` : '');
+      // 도는 턴에 **얹었다**(새 턴이 아니다). 그러면 답은 하던 일에 이어 붙어 오므로, 새 턴을 기다리는 표시를
+      //  세우지 않는다 — 안 그러면 영영 안 오는 '내 차례'를 기다리는 화면이 된다.
+      if (r?.steered) pd.state.textContent = '하던 작업에 얹었어요 — 이어서 반영됩니다';
       if (!caps().read) {   // 큐엔 들어갔지만(배달자가 전달) 답은 여기 안 온다(파서 전) — 도는 척 두지 않고 그 자리에 말한다
         const i = pending.indexOf(pd); if (i >= 0) pending.splice(i, 1);
         pd.state.textContent = ''; running = false; view.settle(pd.t); view.busy(false);
@@ -1295,7 +1247,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
       if (target.node) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
       // 어디를 지켜볼까 — 박스 파일, 노드면 중앙 기록(uuid 를 알 때만; 모르면 update() 가 가져올 때). ⚠ 노드에 박스 경로를 걸면 409 반복.
-      if (!src) src = target.node ? logSrc() : { kind: 'box', id: target.id };
+      if (!src) src = target.node ? logSrc() : { kind: 'box', id: target.id };   // src 가 이미 정해졌으면 그대로(위 watch 주석)
       if (src) schedule();
       void syncOutbox();
     } catch (e: any) {
@@ -1305,6 +1257,20 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       view.error(pd.t, `보내지 못했습니다. ${e?.message || ''}`);
       view.input.value = text;               // 친 글은 돌려준다
     }
+  }
+  /** 돌던 턴을 멈춘다. app-server 세션(#2055)은 tmux 키가 아니라 **그 런타임**에 직접 말한다 —
+   *  그 세션의 pane 은 셸이라 Esc 를 받을 곳이 없다(키를 보내면 셸이 먹고 턴은 계속 돈다).
+   *  런타임이 없다고 하면(이미 넘겼거나 게이트웨이가 재기동됐다) 종전 키 경로로 내려간다. */
+  async function stopTurn(): Promise<void> {
+    if (chatFirst()) {
+      try {
+        const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/codex-chat/interrupt`, { method: 'POST', body: '{}' }) as { interrupted?: boolean };
+        if (r?.interrupted) { view.setNote('멈춤을 보냈어요.'); window.setTimeout(() => { if (!destroyed) view.setNote(''); }, 2500); return; }
+      } catch { /* 아래 키 경로로 */ }
+    }
+    if (canKeys()) { await sendKey('interrupt'); return; }
+    view.setNote('멈출 턴이 없어요.');
+    window.setTimeout(() => { if (!destroyed) view.setNote(''); }, 2500);
   }
   // 동작(승인·거부·중단)을 보낸다 — 어느 키인지는 서버의 하네스 어댑터가 정한다(#1746). 대신 못 누르는 하네스면 서버가 409 로 말한다.
   async function sendKey(action: 'approve' | 'deny' | 'interrupt', quiet = false): Promise<void> {
@@ -1364,7 +1330,33 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const close = anchoredPopover(moreBtn, panel);   // 목차는 [⋯] 안으로 들어갔다 — 앵커도 그 버튼이다
   }
 
-  setMode('term');   // 기본 = 터미널(터미널 없는 세션은 setMode 가 대화로 되돌린다)
+  // codex app-server 세션의 **실시간 층**(#2055) — 승인·타이핑·사용량. 완성된 대화는 종전대로 파일 폴링이 그린다.
+  //  승인이 여기 안 뜨면 서버는 기본값(거부)으로 닫아 codex 가 아무 명령도 못 돌린다 — 이 층이 없으면 대화가 성립하지 않는다.
+  let live: CodexLive | null = null;
+  function ensureLive(): void {
+    // ⚠ 열 때 세션 행에 chatMode 가 아직 없을 수 있다(방금 만든 세션 — 목록 갱신이 나중에 실어 준다).
+    //  그때 한 번만 보고 말면 그 세션은 **영원히 승인을 못 받는다**. 그래서 update() 도 이 문을 두드린다.
+    if (live || !chatFirst() || destroyed) return;
+    live = mountCodexLive({
+      sessionId: target.id, view, dock: liveDock,
+      liveTurn: () => cur?.t ?? null,
+      poke: () => pokePoll(),
+      onState: (st) => {
+        liveWaiting = st.waiting;
+        // 서버가 '돈다'고 말하면 파일보다 먼저 그 사실을 화면에 세운다(파일은 항목이 끝나야 자란다).
+        //  ⚠ 반대(끝났다)는 여기서 단정하지 않는다 — 마감은 대화 파일의 turn_duration 이 쥔다(두 곳에서 마감하면 어긋난다).
+        if (st.running && cur && !running) { running = true; view.running(cur.t); view.busy(true); }
+        paintState();
+      },
+    });
+  }
+  ensureLive();
+
+  // 기본 화면(#2055) — **codex app-server 세션은 대화가 기본**이다. 그 세션의 pane 은 셸이라(대화는 대화창이
+  //  전담한다) 터미널로 열면 사람이 **말 걸 곳이 없는 화면**을 먼저 본다 — 실제로 그렇게 헤맸다.
+  //  나머지는 종전 그대로 터미널이 기본이다(2026-08-18 지시: 대화창이 미완성인 동안은 터미널이 정답).
+  //  판정 근거는 세션 행의 chatMode — 서버가 '이 세션의 대화는 app-server 가 돈다'고 알려 주는 값이다.
+  setMode(chatFirst() ? 'chat' : 'term');
 
   void open();
 
@@ -1380,6 +1372,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
       paintState();
       if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
+      // #2055 — 열 때는 없던 chatMode 가 지금 왔을 수 있다(방금 만든 세션). 실시간 층을 그때 붙이고,
+      //  사람이 아직 보기를 직접 고르지 않았다면 기본 화면도 그때 대화로 바꾼다(고른 뒤엔 건드리지 않는다).
+      const hadLive = !!live;
+      ensureLive();
+      if (!hadLive && live && !modeChosen && mode === 'term') setMode('chat');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
@@ -1388,6 +1385,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); live?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }

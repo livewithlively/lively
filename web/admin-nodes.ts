@@ -67,6 +67,33 @@ function harnessLine(n) {
     el('span', { class: 'wikicat-should-label', text: '쓸 수 있는 AI' }), hs.join(' · '));
 }
 
+// 게이트웨이 자신(#2108) — `lively node --daemon` 을 **게이트웨이가 도는 그 컴퓨터에서** 돌린 경우.
+//  숨기지 않는다: 데몬이 돌고 있다는 사실 자체를 보여줘야 내릴지 말지 사람이 정할 수 있다. 대신 세션 만들기
+//  선택지에서는 빠지고(같은 박스라 '중앙 컴퓨터(기본)'가 이미 그 자리다), 여기서 왜 그런지·무엇을 하면 되는지 말한다.
+function selfBadge(n) {
+  if (!n.self) return null;
+  return el('span', { class: 'tsess-badge warn', title: n.self_note || '', text: '게이트웨이 자신' });
+}
+// #2127·#2128 — 낡은 인스턴스. 온라인인데 잠자기 억제 보고가 한 번도 없으면 그 PC 의 노드 프로그램이 굳은 것이다.
+//  버전 축(versionBadge)으로는 절대 안 잡힌다 — 실측에서 agent_ver 은 최신이었다. 그래서 별도 배지가 필요하다.
+function staleBadge(n) {
+  if (!n.stale_note) return null;
+  return el('span', { class: 'tsess-badge warn', title: n.stale_note, text: '프로그램 굳음' });
+}
+function staleLine(n) {
+  if (!n.stale_note) return null;
+  return el('span', { class: 'wikicat-should', title: n.stale_note },
+    el('span', { class: 'wikicat-should-label', text: '노드 프로그램' }),
+    '낡은 채로 굳어 있을 수 있습니다 — 그 PC 에서 `lively node --daemon` 을 다시 실행하세요.');
+}
+
+function selfLine(n) {
+  if (!n.self) return null;
+  return el('span', { class: 'wikicat-should', title: n.self_note || '' },
+    el('span', { class: 'wikicat-should-label', text: '이 컴퓨터' }),
+    "게이트웨이가 도는 바로 그 컴퓨터입니다 — 세션은 '중앙 컴퓨터(기본)'로 여세요.");
+}
+
 // 노드 한 행. acts 는 호출부가 정한다 — 같은 노드라도 '내 화면'과 '관리자 화면'에서 할 수 있는 일이 다르다.
 function nodeRow(n, ownerLabel, acts) {
   const main = el('div', { class: 'wikicat-row-main' },
@@ -76,12 +103,14 @@ function nodeRow(n, ownerLabel, acts) {
     ownerLabel ? el('span', { class: 'wikicat-should' },
       el('span', { class: 'wikicat-should-label', text: '연결한 사람' }), ownerLabel) : null,
     harnessLine(n),
+    selfLine(n),
+    staleLine(n),
     keepAwakeLine(n),
     // #1849 — 좁은 열이라 **한 줄 요약**만 싣는다(전문은 배지 툴팁). 실측: 전문을 넣었더니 세로로 흘렀다.
     n.link_note_short ? el('span', { class: 'wikicat-should', title: n.link_note || '' },
       el('span', { class: 'wikicat-should-label', text: '잠자기' }), n.link_note_short) : null,
   );
-  return el('div', { class: 'wikicat-row' }, main, sleepBadge(n), versionBadge(n), statusBadge(n), acts || null);
+  return el('div', { class: 'wikicat-row' }, main, selfBadge(n), staleBadge(n), sleepBadge(n), versionBadge(n), statusBadge(n), acts || null);
 }
 
 // 그룹(제목·개수·한 줄 설명 + 행들). 빈 그룹도 '사실 + 다음에 할 일'로 말한다.

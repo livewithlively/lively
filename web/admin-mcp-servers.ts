@@ -43,7 +43,7 @@ function mcpEditor(detail, data) {
 }
 
 // 프록시 자격 종류 힌트(datalist) — 오타 방지용 제안. 신규 커넥터가 확장 가능(자유입력 허용).
-const MCP_AUTH_KINDS = ['notion_oauth', 'slack_oauth', 'google_oauth', 'gitlab_pat', 'slack_user_token', 'notion_token', 'clickup_token', 'prometheus_bearer', 'figma_token'];
+const MCP_AUTH_KINDS = ['notion_oauth', 'slack_oauth', 'google_oauth', 'gitlab_oauth', 'gitlab_pat', 'github_pat', 'slack_user_token', 'notion_token', 'clickup_token', 'prometheus_bearer', 'figma_token'];
 
 function mcpForm(root, s, data, detail, isNew) {
   const nameIn = el('input', { type: 'text', value: s.name, placeholder: '서버 이름(영문/숫자)', disabled: isNew ? null : '' });
@@ -206,21 +206,34 @@ function mcpPresetField(f, data, isNew) {
   let catalog: any[] = [];
   api('/api/ui/org/mcp-server-presets').then((r: any) => {
     catalog = r.catalog || [];
-    for (const c of catalog) presetSel.append(el('option', { value: c.name, text: c.label + (c.dcr ? ' · 자동(DCR)' : ' · client 필요') }));
+    for (const c of catalog) presetSel.append(el('option', {
+      value: c.name,
+      // 레인 C(#1881)는 게이트웨이가 대리하지 않는다 — 'OAuth client 필요' 와 정반대라 라벨을 따로 준다.
+      text: c.label + (c.mode === 'client' ? ' · 내 PC 에 설치' : c.dcr ? ' · 자동(DCR)' : ' · client 필요'),
+    }));
   }).catch(() => {});
   presetSel.addEventListener('change', () => {
     const c = catalog.find((x) => x.name === presetSel.value);
     if (!c) { presetHint.style.display = 'none'; return; }
     if (isNew) nameIn.value = c.name;
     transSel.value = 'http'; urlIn.value = c.url;
-    modeSel.value = 'proxy'; authModeSel.value = 'oauth';
-    authKindIn.value = c.auth_kind; scopeSel.value = c.scope; levelSel.value = c.level; piiChk.checked = !!c.pii_scrub;
+    // 레인(#1881) — client 는 게이트웨이가 토큰을 갖지 않는다(금고 슬롯·OAuth 모드 없음).
+    const lanC = c.mode === 'client';
+    modeSel.value = lanC ? 'client' : 'proxy'; authModeSel.value = lanC ? 'bearer' : 'oauth';
+    authKindIn.value = lanC ? '' : (c.auth_kind || ''); scopeSel.value = c.scope; levelSel.value = c.level; piiChk.checked = !!c.pii_scrub;
     logArgsChk.checked = false; // #1082 — 프리셋은 전부 외부 SaaS(슬랙·노션·리니어…). 인자 값 기록은 항상 꺼진 상태로 시작한다.
     syncTransport(); syncMode();
     // 셋업 위저드(imp#1) — DCR이면 0세팅, 아니면 provider 콘솔 체크리스트 + 정확한 콜백 URL.
     const cb = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '') + '/oauth/callback';
     presetHint.replaceChildren();
-    if (c.dcr) {
+    if (c.mode === 'client') {
+      // 레인 C — [발행]을 누르면 게이트웨이가 상류에 붙으려다 실패한다(상류가 클라이언트를 allowlist 로 가림). 저장만 하면 된다.
+      presetHint.append(el('div', { text: `${c.label}: 구성원 PC 의 AI 도구에 직접 등록됩니다 — OAuth client·[발행] 모두 불필요합니다. 저장만 하세요.` }));
+      if (c.guide && Array.isArray(c.guide.steps) && c.guide.steps.length) {
+        presetHint.append(el('ol', { style: 'margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px' },
+          ...c.guide.steps.map((s: string) => el('li', {}, ...uiText(String(s))))));
+      }
+    } else if (c.dcr) {
       presetHint.append(el('div', { text: `${c.label}: 자동 클라이언트 등록(DCR) — OAuth client 입력 불필요. 저장 → [발행](연결 테스트) → 구성원이 [연결]하면 끝.` }));
     } else if (c.guide && Array.isArray(c.guide.steps) && c.guide.steps.length) {
       // 서비스별 실제 절차(프리셋 guide) — 범용 템플릿은 슬랙에 "웹 애플리케이션 OAuth 클라이언트"(구글 용어) 같은

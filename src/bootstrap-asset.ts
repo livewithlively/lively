@@ -17,10 +17,20 @@
 /** 선행 BOM(U+FEFF) 한 개를 떼어낸다. 없으면 원본 그대로. */
 const stripBom = (s: string): string => (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s);
 
-/** 부트스트랩 소스에 서빙 시점 게이트웨이 주소를 굽는다(= 다운로더가 실제로 받는 바이트). */
+/**
+ * 부트스트랩 소스에 서빙 시점 값을 굽는다(= 다운로더가 실제로 받는 바이트).
+ *  · 게이트웨이 주소
+ *  · 모드(#2044) — **게이트웨이가 서빙하면 언제나 `gateway`** 다. 이 스크립트를 클라우드 모드로 굽는 것은
+ *    컨트롤플레인(app.lvly.io)뿐이고, 거기선 워크스페이스를 아직 모르므로 주소를 파일에 쓰지 않고
+ *    `setup --cloud` 로 인계한다. 여기서 굽지 않으면 리터럴 `__LIVELY_MODE__` 가 사람 컴퓨터로 나간다
+ *    (스크립트는 모르는 값을 gateway 로 접어 안전하지만, 안 굽는 것이 정직하지 않다).
+ */
 export function bootstrapBody(src: string, gatewayUrl: string): string {
-  return stripBom(src).replaceAll(GATEWAY_PLACEHOLDER, gatewayUrl);
+  return stripBom(src).replaceAll(GATEWAY_PLACEHOLDER, gatewayUrl).replaceAll(MODE_PLACEHOLDER, "gateway");
 }
 
 /** 부트스트랩 소스가 게이트웨이 주소 자리에 박아두는 토큰. 소스와 서버가 같은 값을 써야 한다. */
 export const GATEWAY_PLACEHOLDER = "__LIVELY_GATEWAY__";
+
+/** 모드 자리(#2044) — `gateway`(게이트웨이가 서빙) | `cloud`(컨트롤플레인이 서빙). lvly-cloud 도 같은 토큰을 쓴다. */
+export const MODE_PLACEHOLDER = "__LIVELY_MODE__";

@@ -25,13 +25,13 @@ const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: 
   { key: 'notion', label: 'Notion', icon: '📔', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
   { key: 'linear', label: 'Linear', icon: '📐', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
   { key: 'slack', label: 'Slack', icon: '💬', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
-  { key: 'google-gmail', label: 'Gmail', icon: '✉️', oauth: 'google-gmail', blurb: 'AI가 내 Gmail 계정에 로그인해서 직접 메일을 읽고 보낼 수 있습니다.' },
-  { key: 'google-drive', label: 'Google Drive', icon: '📁', oauth: 'google-drive', blurb: 'AI가 내 Google Drive 계정에 로그인해서 직접 파일을 읽을 수 있습니다.' },
-  { key: 'google-calendar', label: 'Google 캘린더', icon: '📅', oauth: 'google-calendar', blurb: 'AI가 내 Google 캘린더 계정에 로그인해서 직접 일정을 확인할 수 있습니다.' },
-  { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', blurb: 'AI가 내 GitHub 계정에 로그인해서 직접 이슈·PR·저장소를 다룰 수 있습니다.' },
-  { key: 'gitlab', label: 'GitLab', icon: '🦊', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정에 로그인해서 직접 MR·저장소를 다룰 수 있습니다.' },
+  // #1881 G2 — 드라이브·Gmail·캘린더 세 줄이던 것을 **한 줄**로. 구글은 한 동의 화면에서 여러 API 범위를 함께
+  //  받으므로 나눌 이유가 없었다(세 줄은 곧 [연결] 3번이었다). 서버가 내려주는 커넥터도 server='google' 한 줄이다.
+  { key: 'google', label: 'Google', icon: '🔷', oauth: 'google', blurb: 'AI가 내 Google 계정에 로그인해서 직접 Drive 파일과 캘린더 일정을 읽을 수 있습니다. (Gmail 은 구글 심사 범위라 준비 중입니다.)' },
+  { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', blurb: 'AI가 내 GitHub 계정으로 이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다. 코드 저장소를 작업용으로 붙이는 것은 아래 [코드 저장소 접근]에서 따로 설정합니다.' },
+  { key: 'gitlab', label: 'GitLab', icon: '🦊', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
   { key: 'clickup', label: 'ClickUp', icon: '🗂️', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
-  { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 내 Figma 계정에 로그인해서 직접 디자인을 읽을 수 있습니다.' },
+  { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 내 Figma 계정으로 디자인 파일과 코멘트를 직접 읽을 수 있습니다 — 디자인 결정·피드백은 대개 코멘트에 쌓입니다.' },
   { key: 'prometheus', label: 'Prometheus', icon: '📊', token: 'prometheus_bearer', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
   { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', token: 'claude_setup_token', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
 ];

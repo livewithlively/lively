@@ -61,6 +61,25 @@ export function assetCacheControl(reqV: string, currentV: string): string {
   return reqV === currentV ? IMMUTABLE : "no-store";
 }
 
+/** 자산이 갱신됐을 때 **이미 열려 있는 화면**을 어떻게 할지 (#2126).
+ *
+ *  두 박스의 사정이 정반대다.
+ *   · dev 박스 — serve-sync 가 60초마다 origin/stage 를 당겨 build:web 을 돌린다
+ *     (deploy/io.lvly.stage-sync.plist). 자산이 하루에도 여러 번 바뀌고 개발자는 최신 판을 바로
+ *     보고 싶어 한다 → 즉시 다시 싣는 게 맞다(auto).
+ *   · 고객사 박스 — 릴리스는 운영자가 update.sh·deploy-release.sh 로 돌리는 드문 사건이다.
+ *     그 한 번이 하필 **글 쓰다 다른 창 갔다 돌아온 사람**의 입력을 통째로 날린다 → 알리고
+ *     사람이 누를 때 싣는다(notify).
+ *
+ *  ⚠ 기본값이 notify 인 것이 이 함수의 전부다. env 를 아무것도 안 넣은 박스가 곧 고객사 박스이므로,
+ *   모르는 값·오타가 auto 로 새면 이 노브는 아무것도 못 막는다. 옵트인만 auto, 나머지는 전부 notify.
+ *   (화면 쪽 대응은 web/gen-watch.ts — auto 라도 사람이 입력 중이면 그때는 배너로 미룬다.)
+ */
+export function assetReloadPolicy(raw: string | undefined): "auto" | "notify" {
+  const v = (raw ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on" || v === "auto" ? "auto" : "notify";
+}
+
 export function registerWebUi(app: express.Express, verifier: BearerVerifier): void {
   // 세션 쿠키(웹 로그인, scope=멤버 LIVE) OR bearer(에이전트) — 공통 미들웨어(http-auth). 터미널·프로젝트 라우트도 동일 사용.
   const authResolve = sessionOrBearer(verifier);
@@ -465,9 +484,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  ⚠ 이게 필요한 이유: 데스크톱 앱 창은 닫아도 죽지 않고(hide) 다시 열 때 loadURL 을 건너뛴다.
   //   그래서 게이트웨이가 갱신돼도 앱은 처음 뜬 판을 영영 들고 있었다(실측 2026-08-21: 앱 세대
   //   7964959ed50d vs 서버 882a0a3d262e — 원준이 "반영 안 된 것 같다"를 세 번 말한 진짜 원인).
+  //  ⚠ reload 는 **정책**이지 지시가 아니다(#2126) — 화면은 이 값과 자기 상태(사람이 입력 중인가)를
+  //   함께 보고 정한다. 필드가 늘어도 구 화면·구 데스크톱 앱은 v 만 읽으므로 무해하다.
   app.get("/ui/__gen", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ v: assetVersion() });
+    res.json({ v: assetVersion(), reload: assetReloadPolicy(process.env.LIVELY_ASSET_AUTO_RELOAD) });
   });
   app.use("/ui", serveStatic);
   app.get("/", (_req, res) => res.redirect("/ui/"));

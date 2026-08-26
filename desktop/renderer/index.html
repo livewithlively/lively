@@ -21,17 +21,40 @@
     <!-- 워크스페이스 주소 — 아직 모를 때만.
          ⚠ 문구가 '회사 게이트웨이'였을 때 매니지드 사용자는 넣을 값을 몰랐다(#2044): 그들에겐 '관리자'가 없고
          아는 주소는 로그인 페이지(app.lvly.io)뿐인데 거기엔 게이트웨이가 없다. 두 경로를 나란히 적는다. -->
+    <!-- 시작 — 두 갈래(#2044).
+         ★ 매니지드 셀프서브 사용자는 게이트웨이 주소를 **알 길이 없다**(관리자가 없고, 아는 주소는
+         로그인 페이지뿐인데 거긴 게이트웨이가 아니다). 그래서 기본은 '클라우드로 로그인'이고,
+         주소 입력은 그게 실제로 필요한 쪽(회사에 직접 설치)으로 내린다. -->
+    <section id="start-card" class="card hidden">
+      <h2>라이블리 시작하기</h2>
+      <p class="hint">라이블리 클라우드를 쓰시면 로그인만 하면 됩니다 — 주소를 찾을 필요 없습니다.</p>
+      <div class="row">
+        <button id="cloud-go" class="primary">라이블리 클라우드로 로그인</button>
+      </div>
+      <p class="err" id="start-err"></p>
+      <details id="selfhost-wrap">
+        <summary class="hint">회사에 직접 설치했어요 — 주소 입력</summary>
+        <p class="hint" id="gw-hint">관리자에게 받은 게이트웨이 주소를 넣으세요.</p>
+        <div class="row">
+          <input id="gw" type="text" placeholder="예: lively.우리회사.com" spellcheck="false" autocapitalize="off" autocorrect="off" />
+          <button id="gw-go" class="primary">연결</button>
+        </div>
+        <!-- 앱이 무엇을 실행하는지 숨기지 않는다 — 설치는 원격 코드 실행이다. -->
+        <p class="hint mono" id="gw-preview"></p>
+        <p class="err" id="gw-err"></p>
+      </details>
+    </section>
+
+    <!-- 고쳐야 할 때(구 CLI·재로그인) — 주소를 이미 알고 있으므로 주소칸만 따로 보여준다. -->
     <section id="gw-card" class="card hidden">
       <h2 id="gw-title">워크스페이스 주소</h2>
-      <p class="hint" id="gw-hint">라이블리 클라우드는 <b>app.lvly.io</b> 홈의 «데스크톱 앱·CLI 로 연결» 에서 복사하고,
-        회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요.</p>
+      <p class="hint" id="gw-fix-hint"></p>
       <div class="row">
-        <input id="gw" type="text" placeholder="예: acme.app.lvly.io" spellcheck="false" autocapitalize="off" autocorrect="off" />
-        <button id="gw-go" class="primary">연결</button>
+        <input id="gw-fix" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" />
+        <button id="gw-fix-go" class="primary">연결</button>
       </div>
-      <!-- 앱이 무엇을 실행하는지 숨기지 않는다 — 설치는 원격 코드 실행이다. -->
-      <p class="hint mono" id="gw-preview"></p>
-      <p class="err" id="gw-err"></p>
+      <p class="hint mono" id="gw-fix-preview"></p>
+      <p class="err" id="gw-fix-err"></p>
     </section>
 
     <!-- 완료 -->

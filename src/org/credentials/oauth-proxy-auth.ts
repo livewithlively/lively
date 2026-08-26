@@ -11,8 +11,9 @@
 //  설계 원칙: 정적 토큰 경로는 한 글자도 바뀌지 않는다. 묶음으로 해석되지 않으면 그대로 통과시킨다(무회귀).
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { decodeTokenBlob, encodeTokenBlob, tokenMeta, CLIENT_SCOPE, gatewaySsrfFetch } from "./oauth-broker.js";
-import { getMemberSecret, setMemberSecret, type MemberSecretResolved } from "./member-secret-store.js";
+import { getMemberSecret, setMemberSecret, resolveMemberSecret, type MemberSecretResolved, type ResolveOpts } from "./member-secret-store.js";
 import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
+import { GOOGLE_KIND, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
 import { logger } from "../../log.js";
 
 /** 만료 여유(초) — 호출이 나가는 동안 만료돼 상류가 401 을 주는 것까지 막는다. */
@@ -40,6 +41,52 @@ export function mergeRefreshedTokens(prev: OAuthTokens, next: Partial<OAuthToken
     access_token: (next.access_token as string) ?? prev.access_token,
     refresh_token: next.refresh_token ?? prev.refresh_token,
   } as OAuthTokens;
+}
+
+/**
+ * 토큰 발급처 해소 — 먼저 MCP 서버 프리셋(auth_kind 축의 SoT), 없으면 **직결 kind** 표(#1881).
+ *  직결 kind 는 org_mcp_server 행이 없어 프리셋에서 못 찾는다. 구글 G2 가 첫 사례다: 도구 면은 이미 클래식 REST 인데
+ *  인증 앵커만 Developer Preview 엔드포인트에 남아 있어 MCP 행 의존을 끊었기 때문이다.
+ *  (슬랙 `slack_oauth`·노션 `notion_public` 은 이 경로를 안 탄다 — 슬랙은 토큰 회전 off 라 만료가 없고, 노션 갱신은 CP 프록시.)
+ */
+const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_TOKEN_URL };
+
+export function oauthTokenUrlFor(authKind: string | null | undefined): string | undefined {
+  if (!authKind) return undefined;
+  return presetOAuthTokenUrl(authKind) ?? DIRECT_OAUTH_TOKEN_URLS[authKind];
+}
+
+/**
+ * 통합 kind 별칭 표(#1881 G2 전환기) — 구 kind 슬롯이 비어 있으면 통합 슬롯으로 폴백한다.
+ *  방향이 중요하다: **구 kind 가 먼저 잡히고**, 없을 때만 통합으로 간다. 그래서
+ *   · 예전에 붙인 사람은 자기 슬롯 그대로(무회귀) · 새로 붙인 사람은 통합 슬롯 하나로 세 서비스 전부.
+ *  scope_key 는 통합 슬롯의 것(`""` — googleInstallToSlot 이 그렇게 만든다)을 쓴다. 도구의 auth_scope_key 를
+ *  그대로 물려주면 다른 칸을 뒤지게 된다.
+ */
+function unifiedAliasFor(authKind: string): { kind: string; scopeKey: string } | null {
+  const g = googleUnifiedKindFor(authKind);
+  return g ? { kind: g, scopeKey: "" } : null;
+}
+
+/**
+ * OAuth 자격 해소 + 별칭 폴백. `resolveMemberSecret` 의 얇은 래퍼라 폴백 정책(allowFallback)은 그대로 따른다.
+ *  ⚠ 반환된 `resolved.kind` 는 **실제로 잡힌 슬롯의 kind** 다 — 호출자는 갱신·클라이언트 조회에
+ *   `tool.auth_kind` 가 아니라 이 값을 넘겨야 한다(안 그러면 구 클라이언트로 새 토큰을 갱신하려 든다).
+ */
+export type SecretResolver = (
+  memberId: string | null | undefined, kind: string, opts: ResolveOpts,
+) => Promise<MemberSecretResolved | null>;
+
+export async function resolveOAuthMemberSecret(
+  memberId: string | null | undefined, authKind: string, opts: ResolveOpts = {},
+  resolve: SecretResolver = resolveMemberSecret,
+): Promise<MemberSecretResolved | null> {
+  const direct = await resolve(memberId, authKind, opts);
+  if (direct?.secret) return direct;
+  const alias = unifiedAliasFor(authKind);
+  if (!alias) return direct; // 별칭 없는 kind — 조회를 **더 하지 않는다**(엉뚱한 kind 를 뒤지면 자격 혼선)
+  const viaAlias = await resolve(memberId, alias.kind, { ...opts, scopeKey: alias.scopeKey });
+  return viaAlias?.secret ? viaAlias : direct;
 }
 
 export interface OAuthClientInfo { client_id: string; client_secret?: string }
@@ -88,7 +135,7 @@ async function refreshBlob(
     // access_type=offline 픽스(#746, 2026-07-22) 이전 연결분 — 갱신 토큰 자체가 없다. 이미 죽은 연결이다.
     throw new Error(`자격이 만료됐고 갱신 토큰이 없습니다 — ${reconnect}`);
   }
-  const tokenUrl = (deps.tokenUrlOf ?? presetOAuthTokenUrl)(authKind);
+  const tokenUrl = (deps.tokenUrlOf ?? oauthTokenUrlFor)(authKind);
   if (!tokenUrl) throw new Error(`자격이 만료됐는데 '${authKind}' 의 토큰 발급처를 모릅니다 — 관리자에게 프리셋 설정을 요청하세요.`);
   const client = await (deps.loadClient ?? defaultLoadClient)(authKind);
   if (!client) throw new Error(`자격이 만료됐는데 '${authKind}' 의 OAuth 클라이언트 정보가 없습니다 — 관리자에게 등록을 요청하세요.`);

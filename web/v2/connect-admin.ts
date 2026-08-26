@@ -52,13 +52,16 @@ function copyRow(label: string, value: string): HTMLElement {
 /** 프리셋 한 벌로 조직에 등록하고(=문을 열고) 곧바로 발행(상류 툴 캡처)까지 시도한다. */
 async function openForOrg(preset: any, clientId: string, clientSecret: string): Promise<void> {
   //  값은 전부 프리셋에서 온다 — 관리탭 폼이 프리셋을 골랐을 때 채우는 것과 **같은 조합**이다(mcpPresetField).
+  //  레인 C(#1881 figma) — 게이트웨이가 대리하지 않는 상류다. 프록시로 심으면 상류가 거부하고, [발행]도 실패한다.
+  //   조직 쪽에서 할 일은 '이 서버를 켜 두는 것' 하나뿐이고 인증은 멤버 클라이언트가 자기 OAuth 로 한다.
+  const lanC = preset.mode === 'client';
   await api('/api/ui/org/mcp-server', {
     method: 'POST',
     body: JSON.stringify({
       name: preset.name, transport: 'http', url: preset.url, command: null, auth_env: null,
       note: preset.label + ' — [외부 앱 연결]에서 열었습니다', enabled: true,
-      mode: 'proxy', scope: preset.scope, level: preset.level,
-      auth_mode: 'oauth', auth_kind: preset.auth_kind, auth_scope_key: null,
+      mode: lanC ? 'client' : 'proxy', scope: preset.scope, level: preset.level,
+      auth_mode: lanC ? null : 'oauth', auth_kind: lanC ? null : preset.auth_kind, auth_scope_key: null,
       pii_scrub: !!preset.pii_scrub,
       log_args: false,   // #1082 — 프리셋은 전부 외부 SaaS. 호출 인자(슬랙 DM·메일 본문) 기록은 꺼진 채로 시작한다.
     }),
@@ -71,6 +74,12 @@ async function openForOrg(preset: any, clientId: string, clientSecret: string): 
       method: 'POST',
       body: JSON.stringify({ kind: preset.auth_kind, scope_key: 'oauth:client', secret: JSON.stringify(seed) }),
     });
+  }
+  // 레인 C 는 발행하지 않는다 — 게이트웨이가 상류에 붙을 수 없어(클라이언트 allowlist) 반드시 실패하고,
+  //  그 실패가 '설정이 잘못됐다'는 오해를 만든다. 도구는 멤버 PC 의 AI 도구가 직접 받는다.
+  if (lanC) {
+    toast(`조직에 열었어요 — 구성원 PC 의 AI 도구에 자동 등록됩니다(각자 ${preset.label} 계정으로 연결). 발행은 필요 없습니다`);
+    return;
   }
   // 발행 = 상류 tools/list 캡처. 여기서 막히는 건 대개 콘솔 설정이 덜 된 경우라, 실패해도 등록 자체는 살려 둔다.
   try {

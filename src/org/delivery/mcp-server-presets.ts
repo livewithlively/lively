@@ -17,7 +17,14 @@ export interface McpServerPreset {
   name: string;            // org_mcp_server.name (slug)
   label: string;           // 표시명
   url: string;             // 상류 remote MCP 엔드포인트(http streamable)
-  auth_kind: string;       // vault 토큰 슬롯 kind (auth_mode=oauth 필수)
+  auth_kind?: string;      // vault 토큰 슬롯 kind (auth_mode=oauth 필수) — **proxy 레인 전용**. client 레인은 없다(클라가 자체 OAuth).
+  // 레인(#746 mcp-proxy-convergence-design · #1881) — 기본 proxy.
+  //  proxy = 게이트웨이가 상류를 대리 호출하고 통제(P1~P5: 마스킹·감사·등급)한다. 금고에 토큰이 산다.
+  //  client = 레인 C. 게이트웨이가 대리하지 **못하는** 상류(상류가 클라이언트를 allowlist 로 가린 경우)에 쓴다.
+  //   발행 번들(.lively/mcp-servers.json)에 실려 멤버 PC 의 AI 도구에 `claude mcp add` 로 직접 등록되고, 인증은
+  //   그 클라이언트가 자기 OAuth 로 한다 → 게이트웨이는 토큰도 응답도 보지 않는다(그래서 저민감 상류 전용).
+  //   ⚠ 웹 터미널·헤드리스 크론에는 뜨지 않는다(#894 불변식: proxy 를 클라에 직접 등록 금지 / client 를 프록시로 심는 것도 금지).
+  mode?: "proxy" | "client";
   scope: "items" | "context" | "db" | "memory" | "code";
   level: "L0" | "L1" | "L2"; // 서버 기본 등급(툴별 자동 분류가 우선; 미매칭 시 이 값)
   pii_scrub: boolean;      // 응답 비정형 PII 마스킹
@@ -87,6 +94,34 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     dcr: true, seed: true,
     note: "Linear 공식 원격 MCP(OAuth2.1·DCR·no client secret). 구성원이 각자 OAuth 연결.",
   },
+  {
+    // GitLab 공식 MCP (#1881 G3) — 상류 실측 2026-08-26:
+    //   GET gitlab.com/.well-known/oauth-authorization-server → registration_endpoint: /oauth/register  (=DCR)
+    //   GET .../oauth-protected-resource/api/v4/mcp          → scopes_supported: ["mcp"]
+    //  Beta(18.6~) · Free tier(19.2~) · 최소 18.3 · GitLab.com·self-managed·Dedicated 전부 · 도구 35개를 상류가 유지한다.
+    //  ⚠ oauth_scope 를 비우면 안 된다 — 상류가 scopes_supported 를 **명시**하는 쪽이라(슬랙과 같은 부류) 노션·리니어처럼
+    //   생략하면 authorize 가 거부된다.
+    //  ⚠⚠ 이 토큰으로는 clone 도 REST 수집도 못 한다. GitLab 은 **동적 등록 클라이언트의 scope 를 mcp/mcp_orbit 으로
+    //   제한**하고(gitlab-org/gitlab#599020: "insufficient for API calls (need api or read_api)"), 사전등록 앱에 mcp scope 를
+    //   주는 경로는 아직 admin 폼에 노출조차 안 됐다. 그래서 레포 연결·자료 수집 축은 별도 OAuth(api read_repository)로 간다
+    //   — 사용자에게 동의가 2회로 보이는 건 우리 설계가 아니라 상류 제약이다. 상류가 #599020 을 내면 한 번으로 합친다.
+    //  self-managed: 이 url 의 호스트만 자기 GitLab 주소로 바꾸면 된다(org_mcp_server.url 은 행 단위 필드).
+    //   DCR 이라 관리자가 앱을 등록할 필요가 없다 — self-managed 에서도 [연결] 한 번이면 끝난다.
+    name: "gitlab", label: "GitLab", url: "https://gitlab.com/api/v4/mcp",
+    auth_kind: "gitlab_oauth", scope: "code", level: "L0", pii_scrub: true,
+    dcr: true, seed: true,
+    oauth_scope: "mcp",
+    note: "GitLab 공식 원격 MCP(DCR·무시크릿). 구성원이 각자 [연결]만 하면 이슈·MR·파이프라인·위키 도구가 열린다. self-managed 는 URL 의 호스트를 자기 주소로 바꾸세요(18.3 이상). ⚠ 이 연결은 AI 도구 전용입니다 — 저장소 연결·자료 수집은 GitLab 정책상 별도 동의가 필요합니다(#1881).",
+    guide: {
+      url: "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+      intro: "GitLab 은 동적 등록(DCR)을 지원해서 관리자가 준비할 것이 없습니다. gitlab.com 이면 그대로 두고, 자체 운영 GitLab 이면 주소만 바꾸세요.",
+      steps: [
+        "gitlab.com 을 쓰면 아무것도 하지 않아도 됩니다 — 구성원이 [외부 앱 연결 ▸ GitLab ▸ 연결]만 누르면 됩니다",
+        "자체 운영 GitLab 이면 이 서버의 URL 을 https://<우리 GitLab 주소>/api/v4/mcp 로 바꿉니다(GitLab 18.3 이상 필요)",
+        "⚠ [발행] 성공은 연결이 살아 있다는 증거가 아닙니다 — 도구를 **실제로 한 번 호출해** 결과가 오는지 확인하세요",
+      ],
+    },
+  },
   // ── DCR 미지원 → 사전등록 OAuth client 필요(관리탭 OAuth client 필드). 카탈로그로 문서화만. ──
   {
     name: "slack", label: "Slack", url: "https://mcp.slack.com/mcp",
@@ -139,6 +174,30 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     oauth_token_url: "https://oauth2.googleapis.com/token",
     note: "Google 공식 MCP(Developer Preview). ⚠ **프리뷰 미등록이면 tools/call 전부 403.** 대안: [AI 도구] 의 google-calendar 프리셋(클래식 Calendar API). Web앱 OAuth client 필요.",
     guide: { url: "https://console.cloud.google.com/apis/credentials", intro: GOOGLE_INTRO, steps: googleSteps("calendarmcp.googleapis.com") },
+  },
+  // ── 레인 C(클라 직접등록) — 게이트웨이가 대리하지 못하는 상류. 멤버 PC 의 AI 도구가 자체 OAuth 로 붙는다. ──
+  {
+    name: "figma", label: "Figma", url: "https://mcp.figma.com/mcp",
+    mode: "client",
+    scope: "code", level: "L0", pii_scrub: false,
+    dcr: false, seed: true,
+    // ⚠ dcr:false 인데 oauth_scope 가 없는 유일한 항목 — 레인 C 라 **게이트웨이가 authorize 를 만들지 않기 때문**이다.
+    //  mcp.figma.com 은 디스커버리(.well-known/oauth-authorization-server)를 200 으로 공개하고 registration_endpoint
+    //  (api.figma.com/v1/oauth/mcp/register)까지 광고하지만, 실제 등록은 **403 Forbidden** 이다(2026-08-26 실측 2회,
+    //  최소 페이로드 동일 / authorize 에 임의 client_id 를 주면 utm_source=unknown 로그인으로 튕긴다).
+    //  문서도 같다 — "Only clients listed in the Figma MCP Catalog like VS Code, Cursor, or Claude Code can connect."
+    //  그 카탈로그에 Claude Code 가 있어서, 게이트웨이 대신 **멤버 클라이언트**를 붙이는 이 레인이 성립한다.
+    note: "#1881 — 피그마 공식 원격 MCP(레인 C: 내 PC 의 AI 도구에 직접 등록). mcp.figma.com 은 Figma MCP 카탈로그에 오른 클라이언트만 허용하고 DCR 은 광고만 하고 403 으로 막는다(2026-08-26 실측) → 게이트웨이가 대리할 수 없다. 대신 멤버 키트가 `claude mcp add` 로 심고 Claude Code 가 자체 OAuth(2클릭)로 붙는다. 원격 서버는 전 seat·전 플랜 사용 가능(무료 seat 포함). ⚠ 게이트웨이 미경유라 웹 터미널·헤드리스 크론에는 이 도구가 뜨지 않고 마스킹·감사·등급 통제도 걸리지 않는다(저민감 전제). ⚠ 코멘트는 이 서버가 주지 않는다 — 노출 도구 25개에 코멘트·파일열거가 0개다. 디자인 코멘트 수집은 [AI 도구] 의 figma 프리셋(REST API)이 맡는다.",
+    guide: {
+      url: "https://www.figma.com/developers",
+      intro: "피그마는 관리자가 설정할 것이 없습니다 — 게이트웨이가 대리하지 않고, 구성원 PC 의 AI 도구에 직접 등록돼 각자 자기 Figma 계정으로 붙습니다. OAuth 클라이언트도 [발행]도 필요 없습니다.",
+      steps: [
+        "이 서버를 **저장만** 합니다 — OAuth 클라이언트 입력·[발행] 모두 불필요합니다(게이트웨이가 상류를 호출하지 않습니다)",
+        "구성원 PC 에 라이블리 키트가 설치되면 이 서버가 `~/.lively/mcp-servers.json` 에 실려 AI 도구에 자동 등록됩니다",
+        "구성원은 AI 도구에서 `/mcp` ▸ figma ▸ [허용] 로 자기 Figma 계정을 연결합니다(2클릭, 무료 seat 도 됩니다)",
+        "⚠ 웹 터미널·크론에는 이 도구가 뜨지 않습니다(게이트웨이 미경유). 웹에서도 피그마를 쓰려면 [AI 도구] 의 **figma 프리셋(REST API)** 을 함께 적용하세요 — 디자인 코멘트 읽기도 그쪽입니다",
+      ],
+    },
   },
 ];
 

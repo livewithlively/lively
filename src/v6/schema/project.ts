@@ -93,6 +93,22 @@ export async function initV6ProjectCore(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS project_trashed_idx ON project(trashed_at) WHERE trashed_at IS NOT NULL;
   `);
 
+  // ── 5h) 이름 걸쇠(#2031, 원준 2026-08-26) — 프로젝트 이름을 **누가 지었나**(rule|agent|human). ──
+  //  자동 생성 껍데기의 이름은 지시문 첫 줄을 자른 기계값이라 보드에 문장 토막이 걸린다. 그걸 세션이 첫 턴에
+  //  스스로 다듬게 하되(project_rename_v6), **한 번만** 다듬어지고 사람이 지은 이름은 절대 안 덮이도록
+  //  순위표를 컬럼으로 고정한다. 판정표는 v6/project-name.ts(RANK)와 **같은 값**이어야 한다.
+  //  기본값은 NULL 이고 코드가 NULL 을 `human` 으로 읽는다 — 사람이 만든 것·커넥터 미러가 이 컬럼 이전부터
+  //  쌓여 있어서, 낮은 쪽으로 가정하면 남이 지은 이름을 에이전트가 갈아치운다(세션 쪽 기본값과 반대인 이유).
+  //  백필은 **자동 생성 표식이 본문에 있는 행만** rule 로 — 그 이름들만 '아직 기계값'이라는 근거가 있다.
+  //  멱등(WHERE name_source IS NULL): 이미 지어진 이름은 다시 손대지 않는다.
+  await pool.query(`
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS name_source TEXT;
+    ${redefineCheck("project", "project_name_source_chk", "name_source IS NULL OR name_source IN ('rule','session','agent','human')")}
+    UPDATE project SET name_source='rule'
+      WHERE name_source IS NULL AND level='project'
+        AND description LIKE '%lively:auto-created-from-first-prompt%';
+  `);
+
   // ── 5d) task_assignee(2026-06-26, #177) — 단일 assignee 컬럼 → n:n **가산**. 멀티담당자(ClickUp/Notion people) 무손실용. ──
   //  전환기: 기존 `assignee` 컬럼이 primary(UI·리스트뷰 호환), task_assignee 는 가산 섀도(쓰기경로가 동기, 백필로 시드).
   //  member_id = org_member.id 또는 외부 신원(FK 없음 — 미러/외부 담당자 허용, project_member·assignee 관례와 동일).

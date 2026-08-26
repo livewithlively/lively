@@ -19,6 +19,9 @@ import { startConnectorRun } from "../../connectors/run-tracker.js";
 import { discoverConnectorScope } from "../../connectors/discover.js";
 import { runAutoBackfillSweep } from "../../v6/embedding-backfill.js";
 import { itemsPool } from "../../db/client.js";
+import { ensureWikiRepoCollector } from "../../org/wiki-repo.js";
+import { ensureFigmaCommentsDistiller } from "../../org/distill/figma-preset.js";
+import { logger } from "../../log.js";
 import { actorOf, restOnly, restRead, str } from "./shared.js";
 
 /** 수집기 1건 조회 + 바인딩 정보 — 실행·discover 가 공용으로 쓴다. */
@@ -84,11 +87,19 @@ export const collectorsCapabilities: Capability[] = [
       // 인프로세스 해소 캐시 무효화 — 아래 discover·멤버 조회가 새 토큰을 즉시 쓰게(캐시는 원래 짧게 사는
       //  싱크 서브프로세스 전제라, 장수 게이트웨이에선 쓰기 시점에 리셋한다).
       resetConnectorConfigCache();
+      // #1881 F8 — 피그마 수집기를 만들면 그 자료를 지식으로 바꿀 증류기를 **꺼진 채로** 함께 준비한다.
+      //  왜 여기인가: 자료만 쌓이고 증류기가 0개면 수집은 성공하는데 지식이 한 줄도 안 는다(로컬 L3 와 같은 갭).
+      //  셀프서브 사용자는 '증류기'라는 단어를 모르므로 만들어 두기만 하고, 켜는 것은 표본을 본 사람이 한다.
+      //  best-effort — 증류기 준비 실패가 수집기 저장을 되돌리면 안 된다(수집이 본체다).
+      if (String((collector as { preset_key?: unknown }).preset_key ?? "") === "figma") {
+        try { await ensureFigmaCommentsDistiller({ actor: actorOf(user), source: "collector-upsert" }); }
+        catch (e) { logger.warn({ err: e }, "피그마 증류기 준비 실패(무시) — org_distiller_figma_ensure 로 다시 시도할 수 있다"); }
+      }
       return { collector };
     }, {
       id: z.number().int().positive().optional().describe("수정할 수집기 id(없으면 생성)"),
       key: z.string().optional().describe("식별 슬러그(a-z0-9._-) — 비우면 자동 생성"),
-      preset_key: z.string().optional().describe("프리셋: slack|notion|clickup|gmail|gdrive|discord|domain-wiki (생성 시 필수)"),
+      preset_key: z.string().optional().describe("프리셋: slack|notion|clickup|gmail|gdrive|discord|figma|domain-wiki (생성 시 필수)"),
       instance_key: z.string().optional().describe("커서 네임스페이스 — 생성 시에만. 비우면 key(첫 인스턴스는 '_')"),
       label: z.string().nullable().optional(),
       enabled: z.boolean().optional(),
@@ -236,5 +247,27 @@ export const collectorsCapabilities: Capability[] = [
       return { ok: true };
     }, {
       id: z.number().int().positive().describe("삭제할 수집기 id — 수집된 자료·지식은 남는다"),
+    }),
+
+  restOnly("org_wiki_repo_ensure", "레포의 위키를 자료로 모으기",
+    "등록된 git 레포의 마크다운을 지식으로 인입하는 수집기를 준비한다(#1881 G9) — **자격증명이 더 필요하지 않다**. " +
+    "레포를 등록하면 게이트웨이가 이미 공유 클론(workspace/repos/<name>)을 두고 최신화하므로, 이 도구는 그 경로를 " +
+    "수집기 설정에 채워 넣을 뿐이다. 종전엔 사람이 서버에 들어가 직접 클론하고 절대경로를 타이핑해야 했다. " +
+    "스캔 폴더는 추정한다(content/ 가 있으면 그것, 없으면 레포 루트) — 응답의 markdown_files 로 '정말 위키인가'를 " +
+    "가늠하고, 표본(org_collector_preview)을 본 뒤 enable=true 로 켜라. **기본은 꺼진 채로 만든다**(코드 레포를 " +
+    "실수로 통째 지식화하지 않게). enable=false 로 부르면 끈다. 이미 있으면 경로·링크 접두만 최신화한다(멱등).",
+    [{ method: "POST", paths: ["/api/ui/org/wiki-repos"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const repo = str(input.repo, "repo", 100).trim();
+      const r = await ensureWikiRepoCollector({
+        repo,
+        enable: typeof input.enable === "boolean" ? input.enable : undefined,
+        actor: actorOf(user), source: "web",
+      });
+      resetConnectorConfigCache(); // 설정을 방금 바꿨다 — 다음 해소가 옛 값을 보지 않게
+      return r;
+    }, {
+      repo: z.string().describe("등록된 레포 이름(레포(git) 관리의 그 이름)"),
+      enable: z.boolean().optional().describe("true=켜기(표본 확인 뒤 승인) · false=끄기 · 미지정=준비만(꺼진 채 생성·기존 상태 유지)"),
     }),
 ];

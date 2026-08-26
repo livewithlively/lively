@@ -185,8 +185,14 @@ function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need
   if (!nodes.length) return "가용 노드 없음(쓸 수 있는 노드가 없음 — 위탁은 중앙 + 본인이 등록한 노드 + 관리자가 공유 노드로 지정한 노드에만 갑니다. 공유 노드를 쓰려면 내 셋업토큰 등록이 필요합니다)";
   // #1884 — 하네스를 못 띄우는 건 용량 문제가 아니다. 후보 전부가 그 사유면 그렇게 말한다(셋업토큰 안내로 헛다리 짚지 않게).
   if (!nodes.some((n) => n.harnesses.includes(t.harness))) {
-    return `하네스 ${t.harness} 를 지원하는 노드 없음 — ` + nodes.map((n) => `${n.id}: [${n.harnesses.join(",")}]`).join(" · ")
-      + `. 그 CLI 가 깔린 노드를 등록하거나(노드는 hello 로 자기 하네스를 보고한다) 잡/위탁의 하네스를 바꾸세요.`;
+    // ⚠ #2128 — "지원하는 노드 없음"이라고 **단정하지 않는다.** 이 목록은 노드가 hello 로 스스로 보고한 것이고,
+    //  낡은 인스턴스가 좁은 PATH 로 굳으면 **그 CLI 가 잘 도는 PC 도 없다고 보고한다**(실측 2026-08-26 hammurabi:
+    //  claude 세션 8/8 이 정상 실행되는데 검출은 [shell] 하나였다). 그 상태에서 "없다"고 못 박으면 사람은 설치·
+    //  셋업토큰을 의심하며 헛다리를 짚는다. 사실(보고된 목록)만 대고, 보고가 틀릴 수 있다는 것과 조치를 함께 말한다.
+    return `하네스 ${t.harness} 를 보고한 노드 없음 — ` + nodes.map((n) => `${n.id}: [${n.harnesses.join(",")}]`).join(" · ")
+      + `. 이 목록은 각 노드가 스스로 보고한 것입니다 — 그 CLI 가 깔려 있는데도 안 보이면 그 PC 에서`
+      + ` \`lively node --daemon\` 을 다시 실행해 주세요(낡은 인스턴스가 좁은 PATH 로 굳으면 못 찾습니다).`
+      + ` 정말 없다면 그 CLI 가 깔린 노드를 등록하거나 잡/위탁의 하네스를 바꾸세요.`;
   }
   const bits = nodes.map((n) => {
     if (!n.harnesses.includes(t.harness)) return `${n.id}: 하네스 ${t.harness} 미지원`;

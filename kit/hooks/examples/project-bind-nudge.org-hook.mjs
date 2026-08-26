@@ -166,11 +166,15 @@ function projectIdFromToolInput(toolName, ti) {
   // ── (a) 자동 생성 껍데기 — 지금이 정련 시점이다. ──
   if (!consume()) return;
   const nm = String(proj.name || "");
+  // 제목은 이제 첫 지시 턴에 세션이 스스로 짓는다(#2031 — session-name-ask 안내 ② + project_rename_v6 걸쇠).
+  //  그래서 여기서는 **아직 기계값인 경우에만**(name_source='rule') 제목을 다시 꺼낸다. 이미 지어진 이름을
+  //  다섯 줄짜리 정련 목록에 또 올리면, 방금 잘 지은 이름을 모델이 한 번 더 갈아치운다.
+  const nameIsMachine = String(proj.name_source || "human") === "rule";
   emit(
     `[라이블리 — 프로젝트 정련 안내(세션당 1회)]\n` +
     `이 세션이 붙은 **프로젝트 #${pid} «${nm.length > 60 ? nm.slice(0, 59).trimEnd() + "…" : nm}»** 는 세션 첫 지시에서 자동 생성된 **임시 껍데기**입니다 ` +
-    `(제목이 지시문 그대로이고 분류·관계·지식이 비어 있습니다). 지금 본격적인 작업이 시작되니, **지금까지 알게 된 것으로 이 프로젝트를 정련하세요**:\n` +
-    `  ① 제목 — 무엇을 하는 일인지 드러나게: \`project_update_v6 {id: ${pid}, name: "…"}\`\n` +
+    `(${nameIsMachine ? "제목이 아직 지시문을 자른 기계값이고 " : ""}분류·관계·지식이 비어 있습니다). 지금 본격적인 작업이 시작되니, **지금까지 알게 된 것으로 이 프로젝트를 정련하세요**:\n` +
+    (nameIsMachine ? `  ① 제목 — 무엇을 하는 일인지 드러나게: \`project_update_v6 {id: ${pid}, name: "…"}\`\n` : "") +
     `  ② 소속 리스트(영역) — \`project_list_index_v6\` 로 목록을 보고: \`project_set_list_v6 {id: ${pid}, list_id: <id>}\`\n` +
     `  ③ 선행·후속 — 이 일이 기존 프로젝트의 후속이면: \`project_link_project_v6 {id: ${pid}, to: <선행 id>}\` (후보는 검색이 아니라 **대화에서 사람이 언급한 것·직전에 하던 일**에서 찾고, 애매하면 사람에게 물어보세요)\n` +
     `  ④ 필요·산출지식 — \`project_recommend_knowledge_v6 {id: ${pid}}\` 로 확인해 \`project_link_knowledge_v6(required)\`, 이 세션이 만드는 지식은 끝나기 전 \`produced\` 로\n` +
