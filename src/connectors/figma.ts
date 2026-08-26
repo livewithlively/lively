@@ -90,7 +90,12 @@ export function figmaCommentToItem(
 ): RawItem {
   const body = figmaCommentText(c);
   return {
-    type: "comment",
+    // ⚠ "comment" 가 아니다 — RawItem.type 은 **적재 라우팅 축**이고 그 이름은 이미 PM 이 점유했다:
+    //  routeIngestV6 의 `if (type === "comment") return "pm_comment"` 는 ClickUp **태스크 코멘트** 전용이라,
+    //  피그마 코멘트를 그 이름으로 뱉으면 부모 태스크를 못 찾아 **조용히 버려진다**(2026-08-26 실측:
+    //  수집 run 은 status=ok·ingested=4 인데 source 0건). 자료로 남을 것은 message/note 다.
+    //  피그마 코멘트는 실제로도 message 류다 — 사람이 남긴 자유 텍스트 + 작성자 + 스레드.
+    type: "message",
     provenance: {
       category: "collab_tool",
       system: "figma",

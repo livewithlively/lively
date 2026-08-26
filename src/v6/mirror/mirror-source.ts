@@ -7,7 +7,7 @@ import { auditConnector } from "./mirror-common.js";
 import { stampSourceVisibility } from "../source-vis-policy.js";
 
 // system → source.kind 매핑(표준 kind 준수 — SOURCE_KINDS). 그 외는 'other'(raw 에 system 보존).
-function sourceKindOf(system: string): string {
+export function sourceKindOf(system: string): string {
   switch (system) {
     case "slack": return "slack";
     case "gmail": return "email";
@@ -16,6 +16,7 @@ function sourceKindOf(system: string): string {
     case "gdrive": return "drive_file"; // #541 Drive 파일 = raw 자료(source) → distill 대상
     case "discord": return "discord";   // #735 커넥터별 kind 충실화(종전 'other' 로 뭉뚱그려져 UI 필터 불가)
     case "local": return "local_file";  // #1881 내 컴퓨터 업로드(폴더·파일) — drive_file 과 섞이면 자료함 필터·증류기 match_kinds 가 갈린다
+    case "figma": return "figma_comment"; // #1881 F5 디자인 코멘트 — 결정·피드백·QA 지적이 섞여 슬랙 메시지와 증류 기준이 다르다
     default: return "other";
   }
 }
