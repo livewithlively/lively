@@ -13,7 +13,7 @@ import crypto from "node:crypto";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthTokens, OAuthClientMetadata, OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { getMemberSecret, setMemberSecret, deleteMemberSecret, memberOwner, GATEWAY_OWNER } from "./member-secret-store.js";
+import { getMemberSecret, setMemberSecret, deleteMemberSecret, memberOwner, GATEWAY_OWNER, CLIENT_SCOPE, PKCE_SCOPE } from "./member-secret-store.js";
 import { getMcpServer, getRuntimeConfig, getOrgProfile } from "../store.js";
 import { presetOAuthScope } from "../delivery/mcp-server-presets.js";
 import { makeSsrfFetch } from "../../net/mcp-ssrf-fetch.js";
@@ -103,10 +103,12 @@ export function buildClientMetadata(opts: { redirectUrl: string; clientName?: st
 }
 
 // vault 슬롯 키 — 토큰은 서버 설정 scope_key(resolveMemberSecret 이 읽는 슬롯), 클라정보/PKCE 는 예약 scope_key 로 분리.
-export const CLIENT_SCOPE = "oauth:client";  // owner=gateway(조직 공용 DCR 등록) — http_proxy 갱신 경로도 여기서 client_id/secret 을 읽는다(#1654)
-// PKCE verifier — owner=member, (member,kind)당 고정 슬롯(콜백까지 임시). 고정키라 재시도 시 덮어써 고아 누적 방지(리뷰 #1);
-//  finishConsent 성공/실패/거부 모두 정리(try/finally + abandonConsent). listMemberSecretsPublic 는 이 슬롯을 숨긴다.
-export const PKCE_SCOPE = "oauth:pkce";
+//  정본은 member-secret-store(금고 슬롯의 예약 키니까). 여기서 재수출해 기존 import 경로를 유지한다 — 금고만
+//  읽으면 되는 모듈이 이 무거운 파일을 끌어오다 import 순환이 났었다(#1881 G3).
+//  · CLIENT_SCOPE — owner=gateway(조직 공용 DCR 등록). http_proxy 갱신 경로도 여기서 client_id/secret 을 읽는다(#1654).
+//  · PKCE_SCOPE — owner=member, (member,kind)당 고정 슬롯(콜백까지 임시). 고정키라 재시도 시 덮어써 고아 누적 방지;
+//    finishConsent 성공/실패/거부 모두 정리(try/finally + abandonConsent). listMemberSecretsPublic 는 이 슬롯을 숨긴다.
+export { CLIENT_SCOPE, PKCE_SCOPE };
 
 export interface VaultOAuthOpts {
   memberId: string;
