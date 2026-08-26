@@ -637,13 +637,19 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   }
 
   // ⭐ 문패의 얼굴 줄은 '이 프로젝트의 구성원'이 아니라 **지금 이 세션을 보고 있는 사람**이다(#2116).
-  //  구성원 명단은 [프로젝트 상세]가 이미 갖고 있고, 문패에서 사람이 알고 싶은 건 "지금 나 말고 누가 여기 있나"다
-  //  — 구글 문서의 얼굴 줄과 같은 질문. 아무도 없으면(혼자 보는 중) 통째로 생략한다: 내 얼굴 하나는 정보가 0이다.
+  //  구성원 명단은 [프로젝트 상세]가 이미 갖고 있고, 문패에서 사람이 알고 싶은 건 "지금 여기 누가 있나"다
+  //  — 구글 문서의 얼굴 줄과 같은 질문. 그래서 자리도 같다: **[공유] 바로 왼쪽에 상주**한다.
+  //  ⚠ 혼자일 때 숨기지 않는다(원준 2026-08-26). 내 얼굴 하나는 정보가 적어 보이지만, 얼굴 줄이 **늘 그 자리에
+  //   있다**는 사실 자체가 "여기 사람이 보인다"를 말한다 — 있다 없다 하면 아무도 그 자리를 안 쳐다본다.
+  const FACE_MAX = 3;   // 넘으면 접는다 — 네 번째부터는 이름이 아니라 '몇 명 더'가 알고 싶은 것이다
   function facesNode(row: any): HTMLElement | null {
     const vs = viewersOf(row && row.id);
-    if (vs.length < 2) return null;
+    if (!vs.length) return null;                 // 도장이 아직 없다(막 열렸거나 멈춘 세션) — 빈 자리를 그리지 않는다
+    const shown = vs.slice(0, FACE_MAX);
+    const rest = vs.length - shown.length;
     return el('span', { class: 'pn-faces', title: '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') },
-      ...vs.slice(0, 5).map((v) => personFace(v.id, 'pn-face', v.name)));
+      ...shown.map((v) => personFace(v.id, 'pn-face', v.name)),
+      rest > 0 ? el('span', { class: 'pn-face pn-face-more', text: '+' + rest }) : null);
   }
 
   // 공유(#2116) — 지금 보고 있는 **세션**을 함께 볼 사람을 고른다(초대는 세션 단위다).
@@ -669,7 +675,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   세션 칸이, 할 일·지식은 각자의 칸이. 문패에서 두 번 세는 대신 자리를 돌려준다. 남는 건 **좌표(#id)와 상태**뿐이고
   //   그 둘은 제목과 같은 줄에 선다.
   function paintDoor(): void {
-    if (titleRenaming) return;   // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다 — 세션 제목과 같은 규칙)
     const p = pj();
     const st = p.status_category === 'done' ? { t: '끝남', c: 'done' } : p.status_category === 'unstarted' ? { t: '시작 전', c: 'todo' } : { t: '진행 중', c: 'run' };
     // ⚠ 주소의 id 는 **박스 id 일 수도, 중앙 기록 uuid 일 수도** 있다(main.ts findSess 와 같은 사정).
@@ -699,51 +704,25 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         loose ? null : el('button', { class: 'btn btn-ghost btn-sm pn-door-btn', type: 'button', title: '본문·할 일·상태·이름을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '프로젝트 상세' }))));
   }
 
-  // ── 프로젝트 이름 = 문패 제목을 눌러 고친다(원준 2026-08-24) ────────────────────────
-  //  세션 이름과 **같은 UI** 로 맞춘다: 평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 연필이 떠서
-  //  '고칠 수 있다'고 말한다(session-chat.ts 의 sc-title-btn 과 같은 문법). 클릭하면 그 자리에 입력칸이
-  //  열리고 Enter·포커스 이동으로 저장, Esc 로 취소한다. 사이드바 줄 더블클릭(side.ts)도 같은 편집이다.
-  //  '프로젝트 없는 세션'(loose)은 고칠 이름이 없으므로 평범한 제목으로 둔다.
-  let titleRenaming = false;
+  // ── 문패 제목 = **프로젝트 전체 화면으로 가는 문**(원준 2026-08-26) ─────────────────
+  //  종전엔 눌러서 이름을 고치는 자리였다. 그런데 문패에서 제목을 누르는 사람이 기대하는 건 '그 프로젝트로
+  //  가기'지 '이름 고치기'가 아니다 — 제목은 어디에서나 그 대상으로 가는 링크라는 것이 웹의 기본 문법이고,
+  //  거기에 편집을 걸어 두면 **가려던 사람이 편집을 연다**(되돌리려면 Esc 를 눌러야 한다는 것도 알아야 한다).
+  //  이름 편집은 사라지지 않는다 — 사이드바 줄 더블클릭(side.ts beginRenameProject)이 그대로 그 길이다.
+  //  ⚠ 주소를 고를 때 함정이 둘이다:
+  //   · `#/p/<id>` 로 보내면 안 된다 — 라우터가 그걸 '거쳐 가는 문'으로 보고 맨 위 세션으로 갈아 끼운다(main.ts onHash).
+  //     즉 지금 보고 있는 화면으로 되돌아와 **아무 일도 안 일어난 것처럼** 보인다.
+  //   · `#/projects/<id>` 도 안 된다 — v1 프로젝트 탭 폐기(2026-06-23) 이후 그 경로는 **id 를 버리고** `#/projects2`
+  //     (보드)로 리다이렉트한다(web/main.ts). 엉뚱한 화면에 떨어진다.
+  //   맞는 주소는 **`#/projects2/p/<id>`** — 그 프로젝트의 상세 화면(본문·할 일·보드)이다.
+  //  아이콘은 이 굵은 글자가 **프로젝트 이름**임을 말한다(세션 이름과 한 화면에 있어 둘이 헷갈렸다).
+  //  '프로젝트 없는 세션'(loose)은 갈 곳이 없으므로 평범한 제목으로 둔다.
   function titleNode(name: string): HTMLElement {
     if (loose) return el('h1', { class: 'pn-title', text: name });
     return el('h1', { class: 'pn-title' },
-      el('button', { class: 'pn-title-btn', type: 'button', title: '프로젝트 이름 — 눌러서 바꿉니다', onclick: () => startTitleRename() },
-        el('span', { class: 'pn-title-t', text: name }),
-        pnIcon('pencil', 'pn-title-pen')));
-  }
-  function startTitleRename(): void {
-    if (loose || titleRenaming) return;
-    const h = door.querySelector('.pn-title');
-    if (!h) return;
-    titleRenaming = true;
-    const cur = String(pj().name || '');
-    const input = el('input', { class: 'pn-title-in', type: 'text', maxlength: '120', value: cur, spellcheck: 'false', 'aria-label': '프로젝트 이름' }) as HTMLInputElement;
-    h.replaceChildren(input);
-    input.focus(); input.select();
-    let closed = false;
-    const stop = (): void => { titleRenaming = false; paintDoor(); };
-    const cancel = (): void => { if (closed) return; closed = true; stop(); };
-    const save = async (): Promise<void> => {
-      if (closed) return;
-      const to = input.value.replace(/\s+/g, ' ').trim();
-      if (!to || to === cur) { cancel(); return; }
-      closed = true; input.disabled = true;
-      try {
-        await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ name: to }) });
-        const cp = pj(); if (cp) cp.name = to;
-        toast('프로젝트 이름을 바꿨어요.');
-        opts.onProjectChanged?.();       // 사이드바·탭 제목까지 새 이름으로
-        void refreshDetail();
-      } catch (e: any) { toast('이름을 바꾸지 못했어요 — ' + (e?.message || e), true); }
-      stop();
-    };
-    input.onkeydown = (e: KeyboardEvent) => {
-      if (e.isComposing) return;         // 한글 조합 중의 Enter 는 확정이지 저장이 아니다
-      if (e.key === 'Enter') { e.preventDefault(); void save(); }
-      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
-    };
-    input.onblur = () => { void save(); };   // 다른 데를 누르면 그대로 저장(취소는 Esc)
+      el('a', { class: 'pn-title-btn', href: '#/projects2/p/' + id, title: name + ' — 프로젝트 전체 화면으로 갑니다' },
+        pnIcon('proj', 'pn-title-ic'),
+        el('span', { class: 'pn-title-t', text: name })));
   }
 
   function resetLayout(): void {
