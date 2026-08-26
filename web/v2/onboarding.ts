@@ -6,6 +6,11 @@
 // @ts-nocheck
 import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl } from '../core.js';
+//  #1879 — 외부 앱을 **실제로** 잇는다. 잇는 길은 새로 만들지 않고 이미 깎아 둔 한 곳을 그대로 쓴다:
+//   서비스 표·연결 판정은 me-logins.ts(=[외부 앱 연결] 화면 v2/connect.ts 와 같은 정본), 토큰 발급처·생김새는
+//   admin-credentials.ts 의 CRED_KINDS. **표가 두 벌이 되면 조용히 어긋난다** — 여기서 다시 만들지 않는다.
+import { LOGIN_SERVICES, partition } from '../me-logins.js';
+import { CRED_KINDS } from '../admin-credentials.js';
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
@@ -740,6 +745,149 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     } catch (_) { return null; }
   }
 
+  /* ══ #1879 «가져올 곳 잇기» — 실배선 부품 ═══════════════════════════════════════
+   *  종전 이 장면은 카드를 누르면 `await sleep(1100)` 뒤 무조건 «연결이 완료됐어요» 라고 썼다.
+   *   **아무것도 이어지지 않았다.** 그러고는 다음 화면들이 «쌓인 자료를 가져오는 중» 이라고 말했고
+   *   (읽는 개수 41 도 그 자리에서 지어낸 숫자였다), 온보딩을 마친 사람이 [외부 앱 연결] 에 가 보면
+   *   전부 «연결 안 됨» 이었다. 첫 3분이 통째로 거짓말을 하는 자리였다.
+   *  이제 실제로 잇는다 — 길은 [외부 앱 연결](v2/connect.ts)이 이미 깎아 둔 그것 하나다:
+   *   · 계정 로그인 = POST /api/ui/me/oauth/connect → 새 탭 동의 → **창 포커스 복귀**에 재조회(폴링 없음)
+   *   · 토큰       = POST /api/ui/me/credential
+   *   · 판정       = me-logins.ts partition() — 연결됨 / 내가 켤 수 있음 / 관리자가 열어야 함
+   *
+   *  기준선은 이 온보딩 전체의 그것과 같다 — **컴맹인 중학생도 따라올 수 있어야 한다**:
+   *   한 번에 한 걸음 · 어디를 누르는지 그대로 · 전문용어 금지 · 왜 하는지 먼저 · 값이 어떻게 생겼는지 ·
+   *   되돌릴 수 있다고 말해 주기. 그래서 토큰형은 오버레이(svcTokenForm)를 띄우지 않고 **그 카드 아래에서
+   *   펼쳐지는 세 걸음**으로 바꿨다: 관리자용 폼은 '발급 스펙'을 보여 주지만, 이 사람에게 필요한 것은
+   *   '어느 버튼을 누르는가'다. 발급처 주소와 값의 생김새는 지어내지 않고 CRED_KINDS 에서 읽는다.
+   */
+  // 온보딩이 부르는 이름 → 서비스 표(LOGIN_SERVICES)의 키. 이 줄 하나가 두 자리를 잇는 전부다.
+  //  없는 것(git·folder·none)은 여기 없다 — 잇는 길이 다르거나(내 컴퓨터 설치) 연결이랄 게 없다.
+  const SVC_OF = {
+    notion: 'notion', gdrive: 'google-drive', gmail: 'google-gmail', gcal: 'google-calendar',
+    slack: 'slack', linear: 'linear', clickup: 'clickup',
+    github: 'github', gitlab: 'gitlab', figma: 'figma', prometheus: 'prometheus',
+  };
+  /** 서버 실측(partition 결과). null = **아직 못 물었다** — '연결 안 됨'과 뭉개지 않는다. */
+  let CONN = null;
+  /** 한 번이라도 물어봤나. ⚠ 이게 없으면 서버가 답을 못 줄 때 '못 읽음 → 다시 그림 → 또 물음'이 영원히 돈다. */
+  let connTried = false;
+  async function loadConn() {
+    connTried = true;
+    try {
+      const creds = await api('/api/ui/me/credentials');
+      const oauth = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
+      CONN = partition(oauth, creds);
+    } catch (_) { CONN = null; }
+    return CONN;
+  }
+  const svcOf = (id) => LOGIN_SERVICES.find((s) => s.key === SVC_OF[id]);
+  /** 이 앱이 지금 어떤 자리에 있나 — 'on'(이어짐) · 'off'(내가 켤 수 있다) · 'blocked'(관리자가 열어야) · null(모른다). */
+  function connState(id) {
+    const svc = svcOf(id); if (!svc || !CONN) return null;
+    if (CONN.connected.some((s) => s.key === svc.key)) return 'on';
+    if (CONN.blockedOAuth.some((s) => s.key === svc.key)) return 'blocked';
+    return 'off';
+  }
+  /** 어떻게 잇나 — 계정 로그인이 가능하면 **무조건 그쪽**이다(누르고 [허용] 한 번 = 이 사람에게 가장 쉬운 길).
+   *  조직에 그 커넥터가 없을 때만 토큰으로 떨어진다. 둘 다 없으면 null(카드를 내밀지 않는다). */
+  function connHow(id) {
+    const svc = svcOf(id); if (!svc) return null;
+    if (svc.oauth && CONN && CONN.oauthMap.has(svc.oauth)) return 'oauth';
+    return svc.token ? 'token' : (svc.oauth ? 'oauth' : null);
+  }
+  /** 이어진 것으로 세어도 되는 id 만 — 화면이 «2곳 이었어요» 라고 말할 근거. */
+  const pickedIds = () => S.sources.filter((id) => id !== 'none' && SVC_OF[id]);
+
+  /* 토큰형의 «어느 버튼을 누르는가». 주소·값의 생김새는 CRED_KINDS 에서 읽고(지어내면 그 자리에서 막힌다),
+   *  경로도 그 표의 help 에 적힌 그것을 따른다 — 여기서 한 일은 **말투를 바꾼 것**뿐이다.
+   *  ⚠ 화면 이름은 그 회사가 언제든 바꾼다. 그래서 마지막에 늘 '조금 달라 보이면' 한 줄을 붙인다. */
+  const TOKEN_HOWTO = {
+    github: {
+      why: 'GitHub 에서 <b>글자 한 줄</b>을 받아 오면 돼요. 이걸 주면 제가 이슈·코드 기록을 읽을 수 있습니다.',
+      go: 'GitHub 에서 글자 받기',
+      steps: [
+        '새 탭이 열리면 오른쪽 위 <b>Generate new token</b> ▸ <b>Generate new token (classic)</b> 을 누르세요.',
+        '<b>Note</b> 칸에 아무 이름이나 적고(예: lively), 아래 목록에서 <b>repo</b> 앞 네모를 체크하세요.',
+        '맨 아래 <b>Generate token</b> 을 누르면 <b>ghp_</b> 로 시작하는 긴 글자가 나옵니다. 그걸 복사해 아래에 붙여넣으세요.',
+      ],
+      last: '그 글자는 <b>그 화면에서 한 번만</b> 보여요. 놓쳤으면 같은 자리에서 새로 만들면 됩니다. 나중에 GitHub 에서 지우면 연결도 그때 끊깁니다.',
+    },
+    figma: {
+      why: 'Figma 에서 <b>글자 한 줄</b>을 받아 오면 돼요. 이걸 주면 제가 디자인 파일과 거기 달린 의견을 읽을 수 있습니다.',
+      go: 'Figma 설정 열기',
+      steps: [
+        '새 탭이 열리면 <b>Security</b> 를 누르고, 아래로 내려 <b>Personal access tokens</b> 를 찾으세요.',
+        '<b>Generate new token</b> 을 누르고 이름을 아무거나 적으세요(예: lively). 권한은 전부 <b>Read only</b>(읽기만) 로 두세요 — 고치는 권한은 주지 않습니다.',
+        '<b>figd_</b> 로 시작하는 글자가 나오면 복사해 아래에 붙여넣으세요.',
+      ],
+      last: '그 글자는 <b>한 번만</b> 보여요. 놓쳤으면 새로 만들면 됩니다. 읽기 권한만 주므로 제가 디자인을 고칠 일은 없습니다.',
+    },
+    clickup: {
+      why: 'ClickUp 에서 <b>글자 한 줄</b>을 받아 오면 돼요. 이걸 주면 제가 거기 쌓인 일감을 읽을 수 있습니다.',
+      go: 'ClickUp 설정 열기',
+      steps: [
+        '새 탭이 열리면 <b>Apps</b> 화면이 나와요.',
+        '<b>API Token</b> 자리에서 <b>Generate</b> 를 누르세요(이미 있으면 <b>Copy</b>).',
+        '<b>pk_</b> 로 시작하는 글자를 복사해 아래에 붙여넣으세요.',
+      ],
+      last: '언제든 같은 자리에서 새로 만들거나 지울 수 있어요.',
+    },
+    slack: {
+      why: 'Slack 에서 <b>글자 한 줄</b>을 받아 와야 해요.',
+      go: 'Slack 앱 화면 열기',
+      steps: ['Slack 앱 화면에서 사용자 토큰(<b>xoxp-</b> 로 시작)을 발급받아 아래에 붙여넣으세요.'],
+      last: '이 길은 손이 많이 갑니다 — 회사 관리자가 Slack 을 열어 두면 <b>[허용] 한 번</b>으로 끝나요. 어려우면 지금은 건너뛰고 관리자에게 부탁하시는 편이 낫습니다.',
+    },
+  };
+  /** 그 밖의 토큰형(예: Prometheus) — 표에 안내가 없으면 지어내지 않고 '값 붙여넣기'만 연다. */
+  const tokenHowto = (id) => TOKEN_HOWTO[id] || null;
+  const credSpec = (svc) => (svc && svc.token ? CRED_KINDS.find((x) => x.kind === svc.token) : null);
+
+  /** 계정 로그인 — 새 탭에서 [허용]. 복귀는 **창 포커스 한 번**으로 안다(v2/connect.ts 와 같은 경로). */
+  async function svcOAuth(id, after) {
+    const svc = svcOf(id); if (!svc || !svc.oauth) return;
+    try {
+      const r: any = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
+      if (r && r.authorized) { await loadConn(); after(); return; }
+      const url = r && (r.authorization_url || r.url);
+      if (!url) { after('연결할 주소를 받지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+      window.open(url, '_blank', 'noopener');
+      // 돌아온 순간이 곧 '허용을 마쳤거나 그만뒀다'는 시점이다 — 그때 한 번만 다시 읽는다.
+      window.addEventListener('focus', () => { void loadConn().then(() => after()); }, { once: true });
+    } catch (e) { after((e && e.message) || '연결을 시작하지 못했어요.'); }
+  }
+  /** 토큰 저장 — 저장되면 곧바로 서버에 다시 물어 **정말 이어졌는지** 확인하고 넘어간다. */
+  async function svcToken(id, value) {
+    const svc = svcOf(id); const spec = credSpec(svc);
+    if (!svc || !spec) throw new Error('이 앱은 글자로 잇는 곳이 아니에요.');
+    const payload: any = { kind: spec.kind, secret: value };
+    if (spec.meta) payload.meta = spec.meta;
+    await api('/api/ui/me/credential', { method: 'POST', body: JSON.stringify(payload) });
+    await loadConn();
+  }
+
+  /** 지금 «글자 받아 오기»가 펼쳐진 앱. 한 번에 하나만 편다 — 한 번에 한 걸음이 이 화면의 규칙이다. */
+  let tokOpen = null;
+  /** 그 카드 아래에서 펼쳐지는 세 걸음. 발급처 주소·값의 생김새는 CRED_KINDS 에서 읽는다.
+   *  안내가 없는 앱(표에 help 가 없는 것)은 지어내지 않고 붙여넣는 칸만 연다 — 틀린 길을 알려 주느니 없는 게 낫다. */
+  function tokPanel(id) {
+    const svc = svcOf(id), spec = credSpec(svc), h = tokenHowto(id);
+    const it = (DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id)) || { label: id };
+    const ph = (spec && spec.secretPh) || '받아 오신 글자를 붙여넣으세요';
+    const doc = (spec && spec.docUrl) || '';
+    return `<div class="ob-tok ob-tok-in">
+      <p class="ob-note">${h ? h.why : `${esc(it.label)} 에서 받은 글자를 아래에 붙여넣으면 이어집니다.`}</p>
+      ${doc ? `<a class="ob-btn ob-btn-sub ob-btn-inline" href="${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(h ? h.go : it.label + ' 열기')} ↗</a>` : ''}
+      ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
+      <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(ph)}">
+      <p class="ob-err" id="tokErr"></p>
+      ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
+      <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
+      <button class="ob-btn ob-btn-pri ob-btn-inline" id="tokGo">이걸로 잇기</button>
+    </div>`;
+  }
+
 
   let pendingChips = null;   // 지금 답을 기다리는 칩들 — 입력창 해석이 본다
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
@@ -881,69 +1029,175 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     /* 앱 고르기 — 로컬 파일은 앞에서 받았으므로 '내 컴퓨터 폴더' 항목은 뺀다. */
     sources: {
       html: () => {
-        // 뺀 둘: '내 컴퓨터 폴더'는 앞 단계(파일 올리기)가 대신하고, '딱히 없어요'는 아래 건너뛰기가 이미 그 자리다
-        //  (버튼으로 두면 글이 길어 두 줄로 잘린다). 남은 '로컬 깃 저장소'는 하나뿐이라 '그 밖'으로 합친다(원준님 2026-08-25).
-        const DROP = new Set(['folder', 'none']);
-        const rows = [];
+        // 뺀 셋: '내 컴퓨터 폴더'는 앞 단계(파일 올리기)가 대신하고, '딱히 없어요'는 아래 건너뛰기가 이미 그 자리다
+        //  (버튼으로 두면 글이 길어 두 줄로 잘린다).
+        //  #1879 — '로컬 깃 저장소'도 뺀다. 이건 외부 서비스 연결이 아니라 **내 컴퓨터에 라이블리를 까는 일**이고,
+        //   뒤 «내 컴퓨터에 잇기» 장면이 통째로 그걸 한다. 여기 두면 골라 놓고 이을 길이 없는 카드가 된다.
+        const DROP = new Set(['folder', 'none', 'git']);
+        //  #1879 — 세 갈래로 나눠 그린다. 회사가 안 열어 둔 앱을 고르게 두면 다음 화면에서 **막다른 길**이 된다:
+        //   눌러도 아무 일이 없고, 왜 안 되는지도 이 사람은 알 길이 없다. 그래서 그것들은 고르는 자리에서 빼고
+        //   맨 아래 «아직 열려 있지 않은 곳»으로 사실대로 내린다(부탁할 문구를 함께 준다).
+        //  아직 서버에 못 물었으면(CONN===null) 표 그대로 다 보여 준다 — 모르는 것을 '안 된다'로 뭉개지 않는다.
+        const rows = [], blocked = [];
         for (const r of DATA.SOURCE_ROWS) {
           const items = r.items.filter((it) => !DROP.has(it.id));
           if (!items.length) continue;
           const k = r.k === '내 컴퓨터' ? '그 밖' : r.k;
-          const hit = rows.find((x) => x.k === k);
-          if (hit) hit.items = hit.items.concat(items); else rows.push({ k, items });
+          for (const it of items) {
+            if (connState(it.id) === 'blocked') { blocked.push(it); continue; }
+            const hit = rows.find((x) => x.k === k);
+            if (hit) hit.items.push(it); else rows.push({ k, items: [it] });
+          }
         }
+        const already = rows.flatMap((r) => r.items).filter((it) => connState(it.id) === 'on');
         return qHead('sources',
           S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 이어서 한 가지만 더요.` : '알겠습니다. 이어서 한 가지만 더요.',
           '그동안 쌓아 두신 자료를 가져올 외부 서비스를 연결할게요.',
           '고르신 곳에 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요.')
+          + (already.length ? `<p class="ob-q-fine" style="text-align:left;margin:0 0 14px">이미 이어져 있는 곳이 있어요 — ${esc(already.map((it) => it.label).join(' · '))}. 다시 하실 필요 없습니다.</p>` : '')
           + rows.map((r) => `<p class="ob-opt-group">${esc(r.k)}</p><div class="ob-opt-grid">
-              ${r.items.map((it) => card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
+              ${r.items.map((it) => connState(it.id) === 'on'
+                ? `<button class="ob-opt-card ob-on ob-locked" data-done="1" aria-disabled="true"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">이어져 있어요</span></span><span class="ob-oc-chk">✓</span></button>`
+                : card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
+          + (blocked.length ? `<p class="ob-opt-group">아직 열려 있지 않은 곳</p><div class="ob-opt-grid">
+              ${blocked.map((it) => `<button class="ob-opt-card ob-locked" data-ask="${esc(it.id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">눌러서 부탁 문구를 복사하세요.</span></span></button>`).join('')}</div>
+              <p class="ob-q-fine" style="text-align:left;margin:2px 0 0">이 앱들은 회사에서 먼저 열어 줘야 이을 수 있어요. 눌러서 나온 문구를 담당자에게 그대로 보내시면 됩니다.</p>` : '')
           + `<button class="ob-btn ob-btn-pri" id="srcGo" disabled>계속</button>
              <button class="ob-q-skip" data-skip>가져올 곳이 없어요</button>`;
       },
       bind: (el) => {
+        //  서버에 **먼저** 묻는다 — 무엇이 이미 이어져 있고 무엇을 회사가 안 열어 뒀는지는 서버만 안다.
+        //   못 물으면 표 그대로 두고 그냥 진행한다(연결 못 읽었다고 온보딩이 막히면 안 된다).
+        if (!CONN && !connTried) { void loadConn().then(() => renderScene('sources', false)); }
         const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
         const idOf = (label) => (all.find((s) => s.label === label) || {}).id;
         const go = $('#srcGo', el);
-        const sync = () => { const n = $$('.ob-opt-card.ob-on', el).length; go.disabled = !n; go.textContent = n ? `${n}곳에서 가져오기` : '계속'; };
+        //  이미 이어진 것은 고르고 말고 할 게 없다 — 잠가 두고 [계속]의 숫자에서도 뺀다.
+        //  ⚠ 다만 **문은 열어 둔다**: 이미 다 이어 둔 사람은 새로 고를 것이 없어 [계속]이 잠기고,
+        //   그러면 남는 길이 [가져올 곳이 없어요]뿐이라 이어 둔 사실을 스스로 부정하고 나가야 한다.
+        const already = $$('.ob-opt-card.ob-locked[data-done]', el).length;
+        const sync = () => { const n = $$('.ob-opt-card.ob-on:not(.ob-locked)', el).length;
+          go.disabled = !n && !already; go.textContent = n ? `${n}곳에서 가져오기` : '계속'; };
         sync();
-        $$('.ob-opt-card', el).forEach((c) => c.onclick = () => {
+        $$('.ob-opt-card:not(.ob-locked)', el).forEach((c) => c.onclick = () => {
           c.classList.toggle('ob-on');
-          S.sources = $$('.ob-opt-card.ob-on', el).map((x) => idOf(x.dataset.opt)).filter(Boolean); save(); renderSB(); sync();
+          S.sources = $$('.ob-opt-card.ob-on:not(.ob-locked)', el).map((x) => idOf(x.dataset.opt)).filter(Boolean); save(); renderSB(); sync();
         });
-        go.onclick = () => goScene(S.sources.length && !(S.sources.length === 1 && S.sources[0] === 'none') ? 'connect' : 'ai');
+        //  회사가 안 열어 둔 앱 — 눌러도 안 되는 버튼 대신 **그대로 전달할 수 있는 한 문장**을 준다(v2/connect.ts 와 같은 처방).
+        $$('[data-ask]', el).forEach((c) => c.onclick = async () => {
+          const it = all.find((x) => x.id === c.dataset.ask) || { label: c.dataset.ask };
+          const ask = `라이블리에서 ${it.label} 을(를) 쓰고 싶습니다. 관리 ▸ 외부 서비스에서 ${it.label} 커넥터를 등록해 주세요.`;
+          try { await navigator.clipboard.writeText(ask); toast('부탁 문구를 복사했어요 — 담당자에게 그대로 보내세요.'); }
+          catch (_) { toast(ask); }
+        });
+        go.onclick = () => goScene(pickedIds().length ? 'connect' : 'ai');
         $('[data-skip]', el).onclick = () => { S.sources = ['none']; save(); goScene('ai'); };
       },
     },
-    /* 앱 연결 — 고른 것을 하나씩. 이 동안 앞에서 받은 파일이 배경에서 읽힌다(대기 없음). */
+    /* ══ #1879 — 고른 곳을 **실제로** 잇는다. 이 동안 앞에서 받은 파일이 배경에서 읽힌다(대기 없음). ══
+     *  종전 이 장면은 카드를 누르면 1.1초 기다렸다가 무조건 «연결이 완료됐어요» 라고 썼고, 읽을 자료가
+     *   없으면 «41개» 라는 숫자까지 지어내 진행바를 굴렸다. 아무것도 이어지지 않았고 아무것도 읽지 않았다.
+     *  이제 [외부 앱 연결](v2/connect.ts)과 **같은 경로로** 잇는다. 초록불의 근거는 화면의 기억(S.connected)이
+     *   아니라 **서버 실측**이다 — 새로고침해도, 다른 탭에서 이어도, 도중에 그만둬도 화면이 사실과 같아진다.
+     *
+     *  잇는 길이 둘이라 화면도 둘이다. 어느 쪽인지는 사람이 고르지 않는다(connHow 가 정한다):
+     *   · **계정 로그인** — 누르면 새 탭이 열리고 그 서비스에서 [허용] 한 번. 이 사람에게 가장 쉬운 길이라
+     *     가능하면 무조건 이쪽이다(Notion·Slack·Google·GitLab…).
+     *   · **글자 받아 오기** — 조직에 그 커넥터가 없거나 애초에 그 방법뿐인 앱(GitHub·Figma·ClickUp).
+     *     여기서 관리자용 토큰 폼(svcTokenForm)을 띄우지 않는다: 그 폼은 '발급 스펙'을 보여 주지만
+     *     이 사람에게 필요한 것은 **어느 버튼을 누르는가**다. 그래서 카드 아래에서 세 걸음으로 펼친다.
+     *     주소·값의 생김새는 CRED_KINDS 에서 읽는다(지어내면 그 자리에서 사람이 막힌다).
+     *
+     *  ⚠ 어느 갈래에서도 사람을 가두지 않는다 — 하나도 못 이어도 [나중에 가져올게요]로 그냥 간다.
+     *   연결은 여기서 안 끝나도 [외부 앱 연결] 화면에 그대로 남아 있다(그 사실을 화면에 적어 둔다).
+     */
     connect: {
       html: () => {
         const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
-        const picked = S.sources.filter((id) => id !== 'none');
-        const left = picked.length - S.connected.length;
+        const picked = pickedIds();
+        const done = picked.filter((id) => connState(id) === 'on');
+        const left = picked.length - done.length;
         const reading = S.read.total && !S.read.finished;
+        //  아직 서버에 못 물었으면 그렇다고 말한다 — '연결 안 됨'으로 뭉개면 이미 이은 사람이 또 잇는다.
+        const unknown = !CONN;
         return qHead('connect',
           reading ? `읽는 중이에요. <b>${S.read.done} / ${S.read.total}</b>` : (S.upN ? `파일 ${S.upN}개는 다 읽었어요.` : '거의 다 왔어요.'),
-          '고르신 곳을 하나씩 이어 주세요.',
-          '새 탭에서 한 번만 허용하시면 됩니다. 허용하는 즉시 그동안 쌓인 자료를 가져오기 시작합니다.')
-          + `<div class="ob-opt-cards">${picked.map((id) => { const it = all.find((s) => s.id === id) || { label: id };
-              const on = S.connected.includes(id);
-              return `<button class="ob-opt-card ${on ? 'ob-on' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span class="ob-oc-st"><span class="v2-dot ${on ? 'done' : 'off'}" style="margin:0"></span></span>
-                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '연결이 완료됐어요.' : '눌러서 잇기 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
-          <button class="ob-btn ob-btn-pri" id="upGo" ${S.connected.length ? '' : 'disabled'}>${left > 0 && S.connected.length ? `${left}개는 나중에, 계속` : '다 이었어요, 계속'}</button>
-          <button class="ob-q-skip" data-skip>나중에 가져올게요</button>`;
+          done.length ? `${done.length}곳을 이었어요.` : '고르신 곳을 하나씩 이어 주세요.',
+          unknown ? '연결 상태를 불러오는 중이에요…' : '아래에서 하나씩 눌러 주세요. 한 번에 하나면 됩니다.')
+          + `<div class="ob-opt-cards">${picked.map((id) => {
+              const it = all.find((s) => s.id === id) || { label: id };
+              const st = connState(id);
+              const how = connHow(id);
+              const open = tokOpen === id;
+              const desc = st === 'on' ? '이어졌어요.'
+                : st === 'blocked' ? '회사에서 먼저 열어 줘야 해요.'
+                : unknown ? '연결 상태를 확인하고 있어요.'
+                : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
+                : '눌러 주세요 — 새 탭에서 [허용]만 누르면 됩니다.';
+              return `<button class="ob-opt-card ${st === 'on' ? 'ob-on' : ''}${open ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
+                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${esc(desc)}</span></span>
+                <span class="ob-oc-st">${st === 'on' ? '<span class="v2-dot done" style="margin:0"></span>' : ''}</span></button>`
+                + (open ? tokPanel(id) : ''); }).join('')}</div>
+          <button class="ob-btn ob-btn-pri" id="upGo" ${done.length ? '' : 'disabled'}>${left > 0 && done.length ? `${left}곳은 나중에, 계속` : '다 이었어요, 계속'}</button>
+          <button class="ob-q-skip" data-skip>나중에 가져올게요. 지금은 넘어갈게요</button>
+          <p class="ob-q-fine">지금 못 이으셔도 괜찮아요 — 왼쪽 <b>외부 앱 연결</b>에서 언제든 다시 하실 수 있습니다.</p>`;
       },
       bind: (el) => {
-        $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
-          const id = c.dataset.conn; if (S.connected.includes(id)) return;
-          c.querySelector('.ob-oc-st').innerHTML = '<span class="v2-dot busy" style="margin:0"></span>'; c.querySelector('.ob-oc-d').textContent = '새 탭에서 허용을 기다리는 중';
-          await sleep(1100);
+        //  들어올 때마다 서버에 묻는다 — 앞 장면에서 뒤로 왔을 수도, 다른 탭에서 이었을 수도 있다.
+        if (!CONN && !connTried) { void loadConn().then(() => renderScene('connect', false)); }
+        const redraw = () => renderScene('connect', false);
+        /** 이어진 것을 화면·사이드바·결정 기록에 반영한다. **서버가 그렇다고 한 뒤에만** 부른다. */
+        const markConnected = (id) => {
+          const it = DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id) || { label: id };
+          if (S.connected.includes(id)) return;                     // 뒤로 왔다 다시 들어와도 두 번 세지 않는다
           S.connected.push(id);
-          if (!S.read.total) { S.read.total = 41; startReading(); }
-          save(); renderSB(); renderScene('connect', false);
+          S.decisions.push(`${it.label} 이음`);
+          save(); renderSB();
+          toast(`${it.label} 이 이어졌어요 — 그동안 쌓인 자료를 가져오기 시작합니다.`);
+        };
+        $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
+          const id = c.dataset.conn;
+          if (connState(id) === 'on') return;                       // 이미 이어졌다 — 더 시킬 일이 없다
+          if (connState(id) === 'blocked') { toast('이 앱은 회사에서 먼저 열어 줘야 해요. 앞 화면에서 부탁 문구를 복사하실 수 있습니다.'); return; }
+          //  ⚠ 아직 서버를 못 읽었으면 **어느 길로 이을지 고를 수 없다**: Slack·GitLab 은 계정 로그인과 글자 받아
+          //   오기가 둘 다 있어서, 모르는 채로 정하면 회사가 이미 열어 둔 쉬운 길을 두고 어려운 길로 보내게 된다.
+          if (!CONN) { toast('연결 상태를 아직 확인하는 중이에요 — 잠시 뒤 다시 눌러 주세요.'); if (!connTried) void loadConn().then(redraw); return; }
+          if (connHow(id) === 'token') { tokOpen = tokOpen === id ? null : id; redraw(); return; }
+          const d = c.querySelector('.ob-oc-d'); if (d) d.textContent = '새 탭에서 [허용]을 눌러 주세요…';
+          await svcOAuth(id, (err) => {
+            if (err) { toast(err); redraw(); return; }
+            if (connState(id) === 'on') markConnected(id);
+            else toast('아직 이어지지 않았어요 — 새 탭에서 [허용]까지 누르셨는지 보고 다시 눌러 주세요.');
+            redraw();
+          });
         });
-        $('#upGo', el).onclick = () => goScene('ai');
-        $('[data-skip]', el).onclick = () => goScene('ai');
+        // ── 펼쳐진 «글자 받아 오기» 폼 배선 ──
+        const tokIn = $('#tokIn', el), tokGo = $('#tokGo', el), tokErr = $('#tokErr', el);
+        if (tokIn && tokGo) {
+          const submit = async () => {
+            const id = tokOpen, v = (tokIn.value || '').trim();
+            if (!id) return;
+            if (!v) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
+            tokGo.disabled = true; tokGo.textContent = '잇는 중…'; if (tokErr) tokErr.textContent = '';
+            try {
+              await svcToken(id, v);
+            } catch (e) {
+              tokGo.disabled = false; tokGo.textContent = '이걸로 잇기';
+              if (tokErr) tokErr.textContent = (e && e.message) || '잇지 못했어요. 글자를 다시 확인해 주세요.';
+              return;
+            }
+            //  저장은 됐다. 그래도 **서버가 이어졌다고 할 때만** 초록불을 켠다(값이 틀려도 저장은 되기 때문).
+            if (connState(id) === 'on') { markConnected(id); tokOpen = null; redraw(); return; }
+            tokGo.disabled = false; tokGo.textContent = '이걸로 잇기';
+            if (tokErr) tokErr.textContent = '글자는 받았는데 아직 이어지지 않았어요 — 복사할 때 앞뒤가 잘리지 않았는지 보고 다시 넣어 주세요.';
+          };
+          tokGo.onclick = submit;
+          tokIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) submit(); });
+          tokIn.focus();
+        }
+        //  남겨 두고 가는 사람에게는 **어디로 돌아오면 되는지**를 말한다 — 안 그러면 '나중에'가 갈 곳 없는 말이 된다.
+        $('#upGo', el).onclick = () => { if (pickedIds().some((id) => connState(id) !== 'on')) toast('남은 곳은 왼쪽 [외부 앱 연결]에서 언제든 이으실 수 있어요.'); goScene('ai'); };
+        $('[data-skip]', el).onclick = () => { toast('나중에 하셔도 돼요 — 왼쪽 [외부 앱 연결]에 그대로 있습니다.'); goScene('ai'); };
       },
     },
     ai: {
