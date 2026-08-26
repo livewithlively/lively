@@ -26,10 +26,21 @@ export function decideNotifyAllowed(input: {
   appId: string | null | undefined;
   declaresNotifications: boolean;
   hasActiveGrant: boolean;
+  /** 이 앱이 제품 자신인가(source.kind === "builtin"). 빌트인은 동의를 따로 받지 않는다 — 아래 참조. */
+  isBuiltin?: boolean;
 }): NotifyDenial | null {
   if (!input.appId) return "notify-app-required";
   if (!input.declaresNotifications) return "notify-permission-missing";
-  if (!input.hasActiveGrant) return "notify-grant-missing";
+  // ★ 빌트인은 grant 를 요구하지 않는다(2026-08-26 결정).
+  //  grant 가 답하는 질문은 "**남의 앱**이 내 이름으로 행동해도 되나" 다. ai-session 은 남의 앱이 아니라
+  //  지금 내가 쓰고 있는 화면 자체다 — 세션을 여는 데 동의가 필요 없는데 그 세션이 나를 부르는 데만
+  //  동의를 요구하는 건 앞뒤가 맞지 않는다.
+  //  ⚠ 그리고 실제로 죽어 있었다: 동의 창은 **런치패드에서 앱을 열 때만** 뜨는데 세션은 그 경로로 열리지
+  //   않는다 → 아무도 ai-session grant 를 가진 적이 없고, 그래서 알림 이력이 한 사람(수동 부여)에게만
+  //   쌓였다(dev 실측 2026-08-26: 조직 전체 grant 4건이 전부 테스트로 만든 것).
+  //  끄는 수단은 [내 정보 ▸ 알림] 토글이 이미 준다(#1842 — "끌 수단 없는 알림은 만들지 않는다").
+  //  서드파티(installed·git·path)는 그대로 fail-closed 다.
+  if (!input.isBuiltin && !input.hasActiveGrant) return "notify-grant-missing";
   return null;
 }
 
