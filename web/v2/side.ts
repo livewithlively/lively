@@ -264,7 +264,7 @@ export interface SideHooks {
   navState?: () => { back: boolean; forward: boolean };
   /** 상단 탭의 정본 상태를 좌측 '열린 앱' 목록으로 투영한다. */
   instances?: () => SideInstance[];
-  onActivateInstance?: (id: string) => void;
+  onActivateInstance?: (id: string, route?: string) => void;
   onCloseInstance?: (id: string) => void;
   onOpenProject?: (projectId: number) => void;
   /** 뒤로·앞으로·검색 줄을 사이드바 대신 여기(데스크톱 창 맨 윗줄)에 건다 — null 이면 종전대로 사이드바 맨 위(#1954). */
@@ -302,6 +302,10 @@ export interface SideInstance {
   owner?: { id: string; name: string } | null;
   /** 정렬 시각(ms) — main.ts 가 **얼려 둔** 값(#1954 orderPin). 프로젝트 축이 그룹 순서를 이걸로 잰다(#2033). */
   at?: number;
+  /** 이 행을 여는 주소. **홈 목록은 안 준다** — 셸이 행 키로 제 표에서 찾는다(sideRowRoute).
+   *  홈에 없는 행(=[AI 세션]·[확인할 것]의 세션)만 자기 주소를 들고 온다(#2033). 없으면 셸이 못 열어
+   *  아무 데도 안 가는 행이 된다 — 실측으로 밟았다. */
+  route?: string;
 }
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
@@ -420,7 +424,15 @@ function instanceIcon(inst: SideInstance): SVGElement {
 /** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다(#1958).
  *  ⚠ `one` = **한 줄 구조**(#2033 상민님). 프로젝트 축에서는 머리글이 이미 프로젝트를 말하므로 둘째 줄이 통째로 빈다 —
  *   정보가 줄었으니 줄도 줄인다. 그때 사라지는 것(소속·주인·시각·상태어)은 툴팁이 받는다. */
-function appRowEl(inst: SideInstance, one = false): HTMLElement {
+interface RowOpts {
+  /** 한 줄 구조 — 프로젝트 축(머리글이 소속을 이미 말한다). */
+  one?: boolean;
+  /** 압정·× 를 그리나. **목록의 성질**이 정한다(아래 renderSessions 머리말) — 행의 성질이 아니다. */
+  pin?: boolean;
+  close?: boolean;
+}
+function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
+  const one = !!o.one, canPin = o.pin !== false, canClose = o.close !== false;
   //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
   const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
   const tip = [
@@ -429,9 +441,11 @@ function appRowEl(inst: SideInstance, one = false): HTMLElement {
     one ? [inst.status ? inst.status.label : '', inst.at ? when(inst.at) : ''].filter(Boolean).join(' · ') : '',
   ].filter(Boolean).join('\n');
   return el('div',
-    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
+    //  ⚠ `--plain` = **행 조작이 없는 목록**(압정·× 안 그림). 그 CSS 가 '상태 점은 호버에도 안 숨는다'를
+    //   이미 갖고 있다 — 홈에서 점이 숨는 건 그 자리를 × 가 받기 때문이고, 받을 것이 없으면 숨을 이유도 없다.
+    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
     el('button', { class: 'v2-app-inst-open', type: 'button', title: tip, 'aria-current': inst.active ? 'page' : null,
-      onclick: () => hooks.onActivateInstance?.(inst.id) },
+      onclick: () => hooks.onActivateInstance?.(inst.id, inst.route) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
     //  얼굴은 **둘째 줄 왼쪽 여백**에 선다 — 첫 줄 아이콘 바로 아래 빈자리라 새로 폭을 먹지 않고,
     //   첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다.
@@ -445,13 +459,13 @@ function appRowEl(inst: SideInstance, one = false): HTMLElement {
           role: 'img', 'aria-label': inst.status.label })
       : null,
     //  압정 — 고른 것만 맨 위로(#1954). 호버·고정 상태에서만 보인다(늘 보이면 행마다 단추 둘이 늘어선다).
-    el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
+    !canPin ? null : el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
       'aria-label': inst.pinned ? `「${inst.title}」 고정 해제` : `「${inst.title}」 위에 고정`,
       title: inst.pinned ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
       onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); toggleAppPin(inst.id); } },
       sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY }))),
-    //  × 는 어느 행에나 있고 뜻도 하나다 — **목록에서 치우기**(#1954). 돌던 세션은 계속 돌고, 상태가 바뀌면 다시 올라온다.
-    el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
+    //  × 는 **이 목록 안에서는** 어느 행에나 있고 뜻도 하나다 — 목록에서 치우기(#1954).
+    !canClose ? null : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
       title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
       onclick: () => hooks.onCloseInstance?.(inst.id) },
       sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
@@ -557,7 +571,7 @@ function toggleGrp(key: string, wasOpen: boolean): void {
 }
 
 /** 프로젝트 축의 목록 — 시간축과 **같은 묶음 머리글**(고정 · 지금 볼 것 · 오늘 …) 아래에 프로젝트 카드를 쌓는다. */
-function projListKids(shown: SideInstance[], q: string): HTMLElement[] {
+function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLElement[] {
   const kids: HTMLElement[] = [];
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
@@ -567,7 +581,7 @@ function projListKids(shown: SideInstance[], q: string): HTMLElement[] {
   if (pinned.length) {
     kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: pinned[0].group || '고정' }) as HTMLElement);
     lastBucket = pinned[0].group || '고정';
-    for (const r of pinned) kids.push(appRowEl(r));
+    for (const r of pinned) kids.push(appRowEl(r, o));
   }
   for (const g of projGroups(rest, !!q)) {
     if (g.bucket && g.bucket !== lastBucket) {
@@ -578,26 +592,26 @@ function projListKids(shown: SideInstance[], q: string): HTMLElement[] {
     //   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방).
     kids.push(el('div', { class: 'v2-pg' + (g.open ? ' open' : '') },
       projGrpHead(g),
-      g.open ? el('div', { class: 'v2-pg-list' }, ...g.rows.map((r) => appRowEl(r, true))) : null) as HTMLElement);
+      g.open ? el('div', { class: 'v2-pg-list' }, ...g.rows.map((r) => appRowEl(r, { ...o, one: true }))) : null) as HTMLElement);
   }
   return kids;
 }
 
 /** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
-function appListKids(shown: SideInstance[], q: string): HTMLElement[] {
-  const kids: HTMLElement[] = groupProj ? projListKids(shown, q) : [];
+function appListKids(shown: SideInstance[], q: string, o: RowOpts = {}, empty?: { none: string; found: string }): HTMLElement[] {
+  const kids: HTMLElement[] = groupProj ? projListKids(shown, q, o) : [];
   if (!groupProj) {
     //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
     let lastGroup = '';
     for (const inst of shown) {
       const g = inst.group || '';
       if (g && g !== lastGroup) { kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g }) as HTMLElement); lastGroup = g; }
-      kids.push(appRowEl(inst));
+      kids.push(appRowEl(inst, o));
     }
   }
   if (shown.length) return kids;
   return [el('div', { class: 'v2-app-empty' },
-    el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }),
+    el('p', { text: q ? (empty?.found || '찾는 열린 앱이 없어요.') : (empty?.none || '열린 앱이 없어요.') }),
     q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
       : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() })) as HTMLElement];
 }
@@ -804,22 +818,34 @@ function renderHomeApps(): void {
 // ══ [AI 세션] 구역 (#2016) ═══════════════════════════════════════════════════
 //  홈이 '열린 것'이라면 여기는 **세션 전체**다 — 이 브라우저에서 안 열었어도 박스에서 돌면 여기 있다.
 //  행 생김새는 홈과 같은 문법(.v2-app-inst)이다: 구역이 바뀌었다고 시각 언어까지 바뀌면 같은 화면으로 안 읽힌다.
-function sessInstRow(s: Sess, pastRow: boolean): HTMLElement {
+/**
+ * 세션 하나를 목록의 공용 자료형(SideInstance)으로 옮긴다(#2033).
+ *  ★ 이렇게 두면 [AI 세션]·[확인할 것]이 홈과 **같은 붓**(appRowEl · appListKids)을 쓴다 — 행 문법도,
+ *   묶는 축 토글도, 뒤에 붙는 고침도 한 자리에서 온다. 종전엔 행 그리는 코드가 두 벌이라(sessInstRow)
+ *   같은 목록인데 홈에만 있던 것이 조용히 생겼다: 남의 세션 주인 얼굴(#2026)이 여기 없었고, 행을 눌렀을 때
+ *   홈은 탭을 재사용하는데 여기는 주소로 곧장 갈아탔다.
+ */
+function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
   const p = s.projectId ? last!.data.projects.find((x) => x.id === s.projectId) : null;
   const t = sessText(s, p ? p.name : '');
   const ak = last!.activeKey();
-  const on = ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId);
-  const stKey = !pastRow && SESS_STATES[s.stateKey] ? s.stateKey : '';
-  return el('div', { class: 'v2-app-inst v2-app-inst--plain' + (on ? ' on' : ''), role: 'listitem' },
-    el('a', { class: 'v2-app-inst-open', href: '#/s/' + encodeURIComponent(s.id), title: t.main, 'aria-current': on ? 'page' : null },
-      glyph('chat', 'v2-app-inst-ic'),
-      el('span', { class: 'v2-app-inst-title', text: t.main })),
-    stKey ? el('span', { class: 'v2-app-inst-st', 'data-st': stKey, title: stLabel(stKey), role: 'img', 'aria-label': stLabel(stKey) }) : null,
-    p
-      ? el('button', { class: 'v2-app-inst-project', type: 'button', title: `${p.name}\n프로젝트 페이지를 엽니다`,
-          onclick: () => hooks.onOpenProject?.(p.id) },
-          glyph('folder', 'v2-app-inst-project-ic'), el('span', { class: 'v2-app-inst-pname', text: p.name }))
-      : el('span', { class: 'v2-app-inst-meta', text: t.sub || when(s.lastSeen) }));
+  const st = !pastRow && SESS_STATES[s.stateKey] ? s.stateKey : '';
+  const ownerId = String((s.raw && s.raw.owner) || '');
+  return {
+    id: 'sess:' + s.id,
+    route: '#/s/' + encodeURIComponent(s.id),
+    title: t.main,
+    active: ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId),
+    icon: 'chat',
+    meta: t.sub || when(s.lastSeen),
+    project: p ? { id: p.id, name: p.name } : null,
+    group,
+    status: st ? { key: st, label: stLabel(st) } : null,
+    //  남의 세션이면 주인 얼굴 — 홈이 이미 하는 일이다(#2026). 이 구역은 남의 세션이 **더 많이** 서는 곳이라
+    //   여기 없던 게 더 이상했다.
+    owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },
+    at: s.lastSeen || 0,
+  };
 }
 
 function renderSessions(): void {
@@ -857,15 +883,19 @@ function renderSessions(): void {
       () => { stateFilter = stateFilter === k ? null : k; redraw(); })));
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
-  const rows: HTMLElement[] = [];
-  rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: `돌고 있는 것 · ${liveShown.length}` }));
-  if (liveShown.length) rows.push(...liveShown.map((s) => sessInstRow(s, false)));
-  else rows.push(el('p', { class: 'v2-empty', text: stateFilter || q ? '조건에 맞는 세션이 없어요.' : '지금 도는 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' }));
-  if (pastShown.length) {
-    rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: `지난 세션 · ${pastShown.length}` }));
-    rows.push(...pastShown.slice(0, 40).map((s) => sessInstRow(s, true)));
-  }
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': 'AI 세션' }, ...rows);
+  //  ★ 홈과 **같은 붓**을 쓴다(#2033) — 행 문법도 묶는 축 토글도 여기서 새로 만들지 않는다.
+  //   ⚠ 압정·× 는 안 그린다. 목록의 성질이 다르기 때문이다: 홈은 내가 지금 붙들고 있는 것만 담은 **작업 큐**라
+  //    맨 위 고정도, 치우기도 뜻이 있다. 여기는 **전수 명부**고 순서의 정본은 상태(bySeen)다 —
+  //    치우면 찾을 곳이 없어지고, 고정은 상태 순서를 흔든다(프로젝트 트리도 프로젝트만 고정하지 세션은 안 한다).
+  const rowOpts: RowOpts = { pin: false, close: false };
+  const items = [
+    ...liveShown.map((s) => sessAsInst(s, false, `돌고 있는 것 · ${liveShown.length}`)),
+    ...pastShown.slice(0, 40).map((s) => sessAsInst(s, true, `지난 세션 · ${pastShown.length}`)),
+  ];
+  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': 'AI 세션' },
+    ...appListKids(items, q, rowOpts, {
+      none: stateFilter ? '조건에 맞는 세션이 없어요.' : '지금 도는 세션이 없어요. 홈에서 무엇이든 시켜 보세요.',
+      found: '찾는 세션이 없어요.' }));
   appListEl = listEl;
   listEl.scrollTop = prevScroll;
 
@@ -876,7 +906,9 @@ function renderSessions(): void {
         el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 세션', title: '새 세션 — 홈에서 무엇이든 시키면 열려요',
           onclick: () => hooks.onNewTask?.() },
           sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
-        findBtn()),
+        //  묶는 축 토글 — 홈과 **같은 단추·같은 플래그**다(#2033). 묶는 축은 구역의 성질이 아니라
+        //   사람의 습관이라, 한 구역에서 바꾸면 다른 구역도 그렇게 열린다.
+        axisBtn(), findBtn()),
       ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('세션 찾기'))] : []),
       chips,
       listEl),
@@ -897,12 +929,16 @@ function renderInboxSide(): void {
   const live = data.sessions.filter((s) => isLive(s) && !isTrashedSess(s));
   const waits = live.filter((s) => s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
   const dones = live.filter((s) => s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
-  const rows: HTMLElement[] = [];
-  if (waits.length) { rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: `답 기다림 · ${waits.length}` })); rows.push(...waits.map((s) => sessInstRow(s, false))); }
-  if (dones.length) { rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: `작업 완료 · ${dones.length}` })); rows.push(...dones.map((s) => sessInstRow(s, false))); }
-  if (!rows.length) rows.push(el('p', { class: 'v2-empty', text: '지금 확인할 것이 없어요. 답을 기다리거나 막 끝난 세션이 여기 모입니다.' }));
+  //  홈·[AI 세션]과 같은 붓(#2033). 여기도 전수가 아니라 **지금 나를 기다리는 것**만 모인 자리라
+  //   압정·× 는 안 그린다 — 확인하면 스스로 빠지는 목록이다.
+  const items = [
+    ...waits.map((s) => sessAsInst(s, false, `답 기다림 · ${waits.length}`)),
+    ...dones.map((s) => sessAsInst(s, false, `작업 완료 · ${dones.length}`)),
+  ];
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '확인할 것' }, ...rows);
+  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '확인할 것' },
+    ...appListKids(items, '', { pin: false, close: false },
+      { none: '지금 확인할 것이 없어요. 답을 기다리거나 막 끝난 세션이 여기 모입니다.', found: '' }));
   appListEl = listEl;
   host.replaceChildren(
     ...topBits(navEl, navHost),
