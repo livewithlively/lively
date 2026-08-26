@@ -191,7 +191,7 @@ function place(pop: HTMLElement, anchor: HTMLElement, below: boolean): void {
  *  옛 메뉴가 갖고 있던 기능(만들기 · 이름 바꾸기 · 보관 · 팀 연결 · 승격 승인)을 **이 문법의 하위 판**으로
  *  옮기고, 문패·이름·타일이 무엇을 눌러도 여기로 오게 했다(switcher.registerWorkspaceMenu).
  *
- *  행 순서 — 나에게 온 초대(있을 때) · 워크스페이스 목록 · 구성원 · 설정 · 추가 · 레일.
+ *  행 순서 — 나에게 온 초대(있을 때) · 워크스페이스 목록 · 구성원 · 설정 · 추가.
  */
 export function openWorkspacePopover(anchor: HTMLElement): void {
   if (popEl) { closePopover(); return; }
@@ -228,17 +228,15 @@ function openPopover(anchor: HTMLElement): void {
       tt(w.name, w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스'))),
     hr(),
     //  구성원 — 슬랙의 「Invite people to …」 자리. primary 는 명부가 없다(박스 로그인 = 접근) — 고를 것이 없으면 그리지 않는다.
-    curSlug === 'primary' ? null : row('group', '구성원 · 초대', peopleSub(curSlug), () => openPeoplePopover(anchor, curSlug)),
+    curSlug === 'primary' || !inviteAxisOn() ? null : row('group', '구성원 · 초대', peopleSub(curSlug), () => openPeoplePopover(anchor, curSlug)),
     //  설정 — 이름 · 연결한 팀 · 보관. 만든 사람(owner)만. 종전엔 목록 행 옆 ✎ ✕ 였다(무엇인지 읽히지 않았다).
     isOwner ? row('gear', '워크스페이스 설정', settingsSub(), () => openSettingsPanel(anchor, curSlug)) : null,
-    curSlug === 'primary' && !isOwner ? null : hr(),
+    (curSlug === 'primary' || !inviteAxisOn()) && !isOwner ? null : hr(),
     //  추가 — 누르면 **바로 만드는 판**이 뜬다(종전엔 옛 메뉴 전체가 떴다 — "저 드롭다운으로 보내는 이유를 모르겠음").
     row('plus', '워크스페이스 추가', registryActive() ? '혼자 시작합니다 — 사람을 부르면 팀이 됩니다' : '지금은 만들 수 없어요', () => openCreatePanel(anchor)),
-    hr(),
-    el('button', { class: 'v2-wspop-row', type: 'button', role: 'menuitem', onclick: () => { closePopover(); toggleRail(); } },
-      el('span', { class: 'v2-wspop-ic' }, icon('panel')),
-      tt(hidden ? '레일 펼치기' : '레일 숨기기', hidden ? '워크스페이스 · 구역 · 앱 · 나를 왼쪽 끝으로' : '워크스페이스 · 구역 · 앱 · 나를 사이드바로'),
-      el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }))) as HTMLElement;
+    //  「레일 숨기기」 행은 뺐다(원준 2026-08-26 "여기 있어야 할 이유가 없음") — 레일 여닫기는 창 맨 윗줄
+    //   패널 단추와 ⌘⇧S 의 일이지 워크스페이스 메뉴의 일이 아니다.
+    ) as HTMLElement;
   place(pop, anchor, !!anchor.closest('.v2-side'));
 }
 
@@ -260,6 +258,10 @@ function field(ph: string, opts?: { type?: string; value?: string; autocomplete?
 }
 const hint = (t: string): HTMLElement => el('p', { class: 'v2-wspop-hint', text: t });
 const sub = (t: string): HTMLElement => el('div', { class: 'v2-wspop-sub', text: t });
+
+/** 초대 축(#1875 서버)이 이 게이트웨이에 있는가 — 목록 응답에 member_count 가 실리면 있다(같은 커밋에서 생겼다).
+ *  없는 게이트웨이(서버 반영 전 dev)에서 구성원 행을 그리면 눌렀을 때 404 만 난다 — 그리지 않는다. */
+function inviteAxisOn(): boolean { return spaces.some((w) => typeof w.member_count === 'number' || w.member_count === null); }
 
 /** 팝오버 행의 부제 — 목록에서 이미 받아 둔 인원 수로 '개인/팀'을 말한다(#1875 파생 규칙). */
 function peopleSub(slug: string): string {
