@@ -41,6 +41,7 @@ export async function resolveRepoInject(
 }
 // hostOf·isAuthError·prepareGitAuth 는 git-credential-store 로 이관(#606, 스캐너와 공유). 하위호환·기존 테스트 위해 re-export.
 export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "../org/credentials/git-credential-store.js";
+import { githubRepoFullName } from "../org/credentials/github-app-git.js";
 
 export const REPOS_SUBDIR = "repos"; // workspace/repos/<name> — 박스 호스트 클론(프로젝트 간 공유, worktree 의 부모)
 const REPO_NAME_RE = /^(?!\.+$)[A-Za-z0-9._-]{1,100}$/; // 경로 컴포넌트로 쓰이므로 슬래시 금지 + 점세그먼트(.·..·…) 거부(traversal 방지). 이름 속 점은 허용
@@ -271,7 +272,9 @@ async function ensureBaseClone(
   const inject = opts?.inject;
   const row = inject ? { git_url: inject.gitUrl } : await getRepo(name).catch(() => null);
   const host = hostOf(row?.git_url) ?? (existed ? hostOf(await originUrl(repoPath)) : null) ?? "github.com";
-  const secret = inject ? (inject.secret ?? null) : await resolveGitSecret(memberId, host).catch(() => null);
+  //  레포 이름을 함께 넘긴다(#1881 G8) — GitHub App 폴백이 토큰을 그 레포로 좁힌다(최소권한 + 설치가 여럿일 때 상류가 판정).
+  const secret = inject ? (inject.secret ?? null)
+    : await resolveGitSecret(memberId, host, { repoFullName: githubRepoFullName(row?.git_url ?? null) }).catch(() => null);
   const auth = await prepareGitAuth(secret);
   let cloned = false;
   try {
