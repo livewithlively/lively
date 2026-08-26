@@ -1573,6 +1573,18 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(nextAfterSetup({}), "node-start");
     assert.equal(nextAfterSetup(null), "node-start");
   });
+  t("N3 ★ 배포 모양으로 분기하지 않는다(#2044 결정) — 매니지드든 셀프호스트든 설치의 끝은 노드다", () => {
+    // 상태에 어떤 배포 힌트가 실려 와도 판정이 흔들리면 안 된다. 매니지드에서 노드가 조용히 실패하던 원인은
+    //  코어(노드 WS 가 테넌트 컨텍스트 밖)였고, 여기에 조건을 붙여 증상을 가리는 쪽으로 가면 안 된다.
+    for (const extra of [{ gatewayUrl: "https://acme.app.lvly.io" }, { gatewayUrl: "https://dev.lvly.io" }, { managed: true }, { managed: false }]) {
+      assert.equal(nextAfterSetup({ nodeRunning: false, ...extra }), "node-start", JSON.stringify(extra));
+    }
+    // 소스에도 배포 분기가 없어야 한다 — 위 표는 우리가 아는 힌트만 덮는다.
+    const src = readFileSync(fileURLToPath(new URL("./web-shell.mjs", import.meta.url)), "utf8");
+    const fn = src.slice(src.indexOf("export function nextAfterSetup("));
+    const body = fn.slice(0, fn.indexOf("\n}") + 2);
+    assert.ok(!/managed|lvly\.io|tenant|gatewayUrl/i.test(body), "배포 모양을 보고 갈라진다: " + body);
+  });
   t("N2 배선 — onboard 가 setup **성공 후에만** node-start 를 잇고, 실패면 setup 결과를 그대로 돌려준다", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     const fn = main.slice(main.indexOf("async function onboard("), main.indexOf("function askUser("));
