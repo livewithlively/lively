@@ -9,26 +9,27 @@ import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { githubAppReady, startGithubAppConsent, saveGithubAppCredentials } from "../org/credentials/oauth-broker.js";
-import { listMemberSecretsPublic } from "../org/credentials/member-secret-store.js";
-import { GITHUB_APP_KIND, GITHUB_INSTALL_KIND } from "../org/credentials/github-app.js";
+import { listSecretsByKindPublic } from "../org/credentials/member-secret-store.js";
+import { GITHUB_INSTALL_KIND } from "../org/credentials/github-app.js";
 import { GATEWAY_OWNER, memberOwner } from "../org/credentials/git-credential-store.js";
 
 /** 이 조직·이 사람의 GitHub 연결 상태 — 화면이 [연결]을 그릴지 [연결됨]을 그릴지 정하는 값. */
 async function githubConnectState(memberId: string): Promise<Record<string, unknown>> {
   const ready = await githubAppReady();
-  //  kind 별로 묻는다(스토어가 kind 를 요구한다) — 세 축을 한 번에 보려면 세 번 부르는 게 정직하다.
-  const [pats, installsAll, appRows] = await Promise.all([
-    listMemberSecretsPublic("github_pat"),
-    listMemberSecretsPublic(GITHUB_INSTALL_KIND),
-    listMemberSecretsPublic(GITHUB_APP_KIND),
+  //  ⚠ kind 로 묻는 함수는 listSecretsByKindPublic 이다. listMemberSecretsPublic 은 **owner** 를 받는데
+  //   둘 다 string 이라 컴파일러가 잡아 주지 않는다 — 처음엔 kind 를 owner 자리에 넣어서 connected·installations 가
+  //   **항상 비어** 있었다(실호출로만 드러났다: app_ready=true 인데 connected=false 가 영원히 유지된다).
+  const [pats, installsAll] = await Promise.all([
+    listSecretsByKindPublic("github_pat"),
+    listSecretsByKindPublic(GITHUB_INSTALL_KIND),
   ]);
   const mine = pats.find((s) => s.owner === memberOwner(memberId));
   const installs = installsAll.filter((s) => s.owner === GATEWAY_OWNER);
-  const appRow = appRows.find((s) => s.owner === GATEWAY_OWNER);
   return {
-    // 관리자가 앱 자격을 넣어 뒀는가 — 이게 false 면 구성원이 [연결]을 눌러도 시작조차 못 한다.
+    //  관리자가 앱 자격을 넣어 뒀는가 — 이게 false 면 구성원이 [연결]을 눌러도 시작조차 못 한다.
+    //  ⚠ client 묶음 행(scope_key=oauth:client)은 HIDDEN_SCOPE_KEYS 라 목록 조회에 **일부러** 안 보인다.
+    //   그래서 "행이 있나"로는 판정할 수 없고, 실제로 읽어 보는 githubAppReady() 가 유일한 진실이다.
     app_ready: ready,
-    app_registered: !!appRow,
     connected: !!mine?.has_secret,
     // 붙여넣기 PAT 인지 OAuth 연결인지 — 같은 슬롯을 쓰므로 meta 로만 구분된다(둘 다 도구는 정상 동작).
     connected_via: mine?.has_secret ? (mine.meta && Object.keys(mine.meta).some((k) => k === "expires_at" || k === "token_type") ? "oauth" : "token") : null,
