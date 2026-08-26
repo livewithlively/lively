@@ -6,7 +6,7 @@
 //   ① 구역 — 홈 · 확인할 것(배지) · AI 세션 · 프로젝트 · 위키 · 리브. 슬랙의 홈·DM·내 활동·나중에 자리.
 //      고른 구역이 곧 **사이드바의 내용**이다(side.ts). 리브만 구역이 아니라 '갈 곳'이다 — 리브 화면은
 //      대화 한 장이라 사이드바가 바뀔 이유가 없다(활성 표시는 주소로 판정).
-//   ② 최근 연 앱 — 헤어라인 아래. 맥 독의 '최근 사용' 구간.
+//   ② 최근 연 앱 — 헤어라인 아래. 맥 독의 '최근 사용' 구간. 5차: 꾹 눌러 위로 끌어 올리면 ①에 고정되고, ①은 끌어서 순서를 바꾼다.
 //   ③ 발치 — 앱(런치패드) · 나(내 프로필·환경설정 #1843). 슬랙의 ＋ · 아바타 자리.
 //
 //  ⚠ 레일 폭은 **68px 고정**이다(원준 3차: "가로 늘리면 UI 바뀌는 거 없이 폭 고정"). 종전의 232px 펼침 모드는
@@ -39,7 +39,8 @@ export function sectionRoute(sec) { return sectionDef(sec).route; }
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 const SEC_STORE = 'lively_v2_rail_sec';
 const HIDE_STORE = 'lively_v2_rail_hidden'; // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
-const PIN_STORE = 'lively_v2_rail_pins'; // 독에 고정한 앱 키(사람이 정한 순서). 최근 앱과 같은 이유로 이 기기에 둔다.
+const MAIN_STORE = 'lively_v2_rail_main'; // 메인 그룹 순서 — 구역 · 리브 · 독에 고정한 앱을 **한 줄**로(사람이 정한 순서, 5차). 이 기기에 둔다.
+const PIN_STORE = 'lively_v2_rail_pins'; // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
 const RECENT_N = 4;
 const NARROW_MQ = '(max-width: 900px)'; // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 let section = 'home';
@@ -48,19 +49,27 @@ let host = null;
 let hooks = {};
 let inited = false;
 let spaces = [];
-let pins = [];
+let order = []; // 메인 그룹 — 구역·리브 키와 고정한 앱 키가 섞여 선다(표시 순서 그대로)
 function init() {
     if (inited)
         return;
     inited = true;
+    order = defaultOrder();
     try {
         const s = localStorage.getItem(SEC_STORE);
         if (s && SECTIONS.some((x) => x.key === s))
             section = s;
         hidden = localStorage.getItem(HIDE_STORE) === '1';
-        const p = JSON.parse(localStorage.getItem(PIN_STORE) || '[]');
-        if (Array.isArray(p))
-            pins = p.filter((x) => typeof x === 'string' && APPS.some((a) => a.key === x));
+        const raw = localStorage.getItem(MAIN_STORE);
+        if (raw)
+            order = normalizeOrder(JSON.parse(raw));
+        else { // 4차(고정 앱만 따로) → 5차(메인 한 줄): 기본 순서 뒤에 고정했던 앱을 잇는다
+            const p = JSON.parse(localStorage.getItem(PIN_STORE) || '[]');
+            order = normalizeOrder([...defaultOrder(), ...(Array.isArray(p) ? p : [])]);
+            localStorage.removeItem(PIN_STORE);
+            if (Array.isArray(p) && p.length)
+                localStorage.setItem(MAIN_STORE, JSON.stringify(order)); // 옮긴 것을 바로 적는다 — 안 적으면 다음 로드에 사라진다
+        }
         localStorage.removeItem('lively_v2_rail_open'); // 232px 펼침 모드(2차)의 기억 — 이제 뜻이 없다
     }
     catch (_) { /* 못 읽어도 홈·보임으로 선다 */ }
@@ -106,7 +115,7 @@ function recentForRail(n) {
     catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
     const pick = [];
     const take = (a) => {
-        if (!a || SEC_APP_KEYS.has(a.key) || pins.includes(a.key) || pick.some((p) => p.key === a.key))
+        if (!a || SEC_APP_KEYS.has(a.key) || order.includes(a.key) || pick.some((p) => p.key === a.key))
             return;
         if (a.tab && !navOn(a.tab))
             return;
@@ -189,7 +198,7 @@ function openPopover(anchor) {
     //  레일에서 열면 오른쪽 옆, 사이드바 머리에서 열면 그 아래(슬랙의 「HonestAI ▾」 메뉴 자리).
     place(pop, anchor, !!anchor.closest('.v2-side'));
 }
-/** 레일을 숨겼을 때 사이드바 머리의 **구역 드롭다운**(안 B) — 여섯 행 + 「레일 펼치기」. */
+/** 레일을 숨겼을 때 사이드바 머리의 **구역 드롭다운**(안 B) — 메인 그룹 순서 그대로(구역 · 리브 · 고정한 앱) + 「레일 펼치기」. */
 export function openSectionMenu(anchor) {
     if (popEl) {
         closePopover();
@@ -200,131 +209,381 @@ export function openSectionMenu(anchor) {
     const linkOn = LINKS.find((l) => l.key === ak) || null;
     const row = (key, label, ic, on, extra, run) => el('button', { class: 'v2-secdd-row' + (on ? ' on' : ''), type: 'button', role: 'menuitemradio', 'aria-checked': String(on),
         onclick: () => { closePopover(); run(); } }, icon(ic, 'v2-ic'), el('span', { class: 'v2-secdd-t', text: label }), extra);
-    const pop = el('div', { class: 'v2-secdd-menu', role: 'menu', 'aria-label': '구역' }, ...railSections().map((s) => {
-        const extra = s.key === 'inbox' && c.inbox ? el('span', { class: 'v2-rail-bd', text: String(c.inbox) })
-            : s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
-                : s.key === 'proj' && c.projects ? el('span', { class: 'v2-secdd-m', text: String(c.projects) }) : null;
-        return row(s.key, s.label, s.icon, !linkOn && section === s.key, extra, () => setRailSection(s.key, { navigate: true }));
-    }), ...LINKS.filter((l) => !l.tab || navOn(l.tab) !== false).map((l) => row(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; })), el('div', { class: 'v2-wspop-hr', role: 'separator' }), row('rail', '레일 펼치기', 'panel', false, el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }), () => toggleRail()));
+    const pop = el('div', { class: 'v2-secdd-menu', role: 'menu', 'aria-label': '구역' }, ...mainEntries().map((m) => {
+        if (m.kind === 'sec') {
+            const s = m.sec;
+            const extra = s.key === 'inbox' && c.inbox ? el('span', { class: 'v2-rail-bd', text: String(c.inbox) })
+                : s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
+                    : s.key === 'proj' && c.projects ? el('span', { class: 'v2-secdd-m', text: String(c.projects) }) : null;
+            return row(s.key, s.label, s.icon, !linkOn && section === s.key, extra, () => setRailSection(s.key, { navigate: true }));
+        }
+        if (m.kind === 'link') {
+            const l = m.link;
+            return row(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; });
+        }
+        const a = m.app; // 독에 고정한 앱 — 레일이 숨어도 여기서 간다
+        return row(a.key, a.title, a.icon, false, null, () => { location.hash = '#/app/' + a.key; });
+    }), el('div', { class: 'v2-wspop-hr', role: 'separator' }), row('rail', '레일 펼치기', 'panel', false, el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }), () => toggleRail()));
     place(pop, anchor, true);
 }
-// ── 독 손질(#2016 4차, 원준: "맥 독처럼 실행한 앱을 독에 고정·커스텀") ────────────────
-//  맥 독 문법 그대로: 우클릭(또는 길게 누르기) → 「독에 고정 / 독에서 빼기」 · 고정한 것끼리 끌어서 순서 ·
-//  최근 앱을 고정 구간으로 끌어다 놓으면 고정 · 고정한 것을 레일 밖으로 끌어내면 빼기.
-//  구간은 셋 — 구역(고정, 손댈 수 없음) | 고정한 앱(사람이 정한 순서) | 최근 연 앱(자동). 맥 독의 앱 구간·최근 구간.
-function savePins() { try {
-    localStorage.setItem(PIN_STORE, JSON.stringify(pins));
+// ── 메인 그룹 순서 · 독 손질(#2016 4차 → 5차, 원준: "꾹 눌러서 끌어당기는 애니메이션 · 위 메인으로 옮기는 느낌 · 메인 순서도") ──
+//  맥 독 · iOS 홈 화면의 문법 그대로: **꾹 누르면 들린다**(눌린 채 살짝 작아졌다가 튀어오른다), 끌면 이웃이 비켜서고(FLIP),
+//  놓으면 자리로 내려앉는다. 최근 앱을 헤어라인 **위 메인 그룹**으로 끌어 올리면 거기 고정되고, 고정한 앱을 레일 밖
+//  (또는 헤어라인 아래)으로 끌어내 놓으면 '퍽' 하고 빠진다. 구역·리브는 순서만 바꿀 수 있다(뺄 수 없다).
+//  마우스는 맥 독처럼 끌자마자 들리고, 손가락은 스크롤과 갈라야 하니 꾹 누른 뒤에만 들린다.
+//  네이티브 HTML 드래그는 쓰지 않는다 — 그림자를 브라우저가 그려서 들리는 동작·비켜서기·착지를 만들 수 없다.
+const HOLD_MS = { mouse: 380, touch: 340 };
+const motion = () => !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function defaultOrder() { return [...SECTIONS.map((s) => s.key), ...LINKS.map((l) => l.key)]; }
+function isSecKey(k) { return SECTIONS.some((s) => s.key === k) || LINKS.some((l) => l.key === k); }
+function canPin(k) { return !isSecKey(k) && !SEC_APP_KEYS.has(k) && APPS.some((a) => a.key === k); }
+/** 저장된 순서에서 믿을 수 있는 것만 남기고, 표에 새로 생긴 구역은 뒤에 잇는다. */
+function normalizeOrder(list) {
+    const seen = new Set();
+    const out = [];
+    if (Array.isArray(list))
+        for (const k of list) {
+            if (typeof k === 'string' && !seen.has(k) && (isSecKey(k) || canPin(k))) {
+                seen.add(k);
+                out.push(k);
+            }
+        }
+    for (const k of defaultOrder())
+        if (!seen.has(k)) {
+            seen.add(k);
+            out.push(k);
+        }
+    return out;
 }
-catch (_) { /* 이번 화면은 된다 */ } }
-function placePin(key, idx) {
-    const cur = pins.indexOf(key);
-    const next = pins.filter((k) => k !== key);
-    if (cur >= 0 && cur < idx)
-        idx -= 1;
+function saveOrder(next) {
+    order = normalizeOrder(next);
+    try {
+        localStorage.setItem(MAIN_STORE, JSON.stringify(order));
+    }
+    catch (_) { /* 이번 화면은 된다 */ }
+}
+/** 메인 그룹 — 저장된 순서대로, 지금 켜진 것만. */
+function mainEntries() {
+    const out = [];
+    for (const key of order) {
+        const s = SECTIONS.find((x) => x.key === key);
+        if (s) {
+            if (!s.tab || navOn(s.tab))
+                out.push({ key, kind: 'sec', sec: s });
+            continue;
+        }
+        const l = LINKS.find((x) => x.key === key);
+        if (l) {
+            if (!l.tab || navOn(l.tab) !== false)
+                out.push({ key, kind: 'link', link: l });
+            continue;
+        }
+        const a = APPS.find((x) => x.key === key);
+        if (a && (!a.tab || navOn(a.tab)))
+            out.push({ key, kind: 'app', app: a });
+    }
+    return out;
+}
+function pinApp(key, idx = order.length) {
+    if (!canPin(key))
+        return;
+    const next = order.filter((k) => k !== key);
     next.splice(Math.max(0, Math.min(idx, next.length)), 0, key);
-    pins = next;
-    savePins();
+    saveOrder(next);
     drawRail();
 }
-function unpinApp(key) { pins = pins.filter((k) => k !== key); savePins(); drawRail(); }
+function unpinApp(key) { saveOrder(order.filter((k) => k !== key)); drawRail(); }
 function dockMenu(x, y, a, pinned) {
     ctxMenu(x, y, [
         { label: '열기', run: () => { location.hash = '#/app/' + a.key; } },
         { sep: true, label: '' },
-        pinned
-            ? { label: '독에서 빼기', run: () => unpinApp(a.key) }
-            : { label: '독에 고정', run: () => placePin(a.key, pins.length) },
+        pinned ? { label: '독에서 빼기', run: () => unpinApp(a.key) } : { label: '독에 고정', run: () => pinApp(a.key) },
     ]);
 }
-let dragKey = null;
-let dropped = false;
-function clearOver() { host?.querySelectorAll('.over-top, .over-bot').forEach((x) => x.classList.remove('over-top', 'over-bot')); }
-function wireDock(it, a, pinned) {
-    let hold = null;
-    let sx = 0;
-    let sy = 0;
-    const cancelHold = () => { if (hold) {
-        window.clearTimeout(hold);
-        hold = null;
-    } };
-    it.addEventListener('dragstart', (e) => {
-        cancelHold();
-        dragKey = a.key;
-        dropped = false;
-        it.classList.add('dragging');
-        host?.classList.add('drag');
-        if (e.dataTransfer) {
-            e.dataTransfer.setData('text/plain', a.key);
-            e.dataTransfer.effectAllowed = 'move';
-        }
-    });
-    it.addEventListener('dragend', (e) => {
-        it.classList.remove('dragging');
-        host?.classList.remove('drag');
-        clearOver();
-        const key = dragKey;
-        dragKey = null;
-        //  레일 밖에 놓았다 = 독에서 뺀다(맥 독). 고정한 것만 — 최근 앱은 원래 자동으로 오가는 것이라 뺄 게 없다.
-        if (!dropped && key && pinned && host) {
-            const r = host.getBoundingClientRect();
-            const out = e.clientX > r.right + 24 || e.clientX < r.left - 24 || e.clientY < r.top || e.clientY > r.bottom;
-            if (out) {
-                unpinApp(key);
-                toast('독에서 뺐어요 — 최근에 열면 다시 아래에 떠요');
-            }
-        }
-    });
-    if (pinned) {
-        it.addEventListener('dragover', (e) => {
-            if (!dragKey || dragKey === a.key)
-                return;
-            e.preventDefault();
-            const r = it.getBoundingClientRect();
-            const before = e.clientY < r.top + r.height / 2;
-            clearOver();
-            it.classList.add(before ? 'over-top' : 'over-bot');
-        });
-        it.addEventListener('dragleave', () => it.classList.remove('over-top', 'over-bot'));
-        it.addEventListener('drop', (e) => {
-            if (!dragKey)
-                return;
-            e.preventDefault();
-            e.stopPropagation();
-            const r = it.getBoundingClientRect();
-            const before = e.clientY < r.top + r.height / 2;
-            const idx = pins.indexOf(a.key) + (before ? 0 : 1);
-            dropped = true;
-            placePin(dragKey, idx);
-        });
-    }
-    it.addEventListener('contextmenu', (e) => { e.preventDefault(); dockMenu(e.clientX, e.clientY, a, pinned); });
-    //  길게 누르기(550ms) — 우클릭이 없는 자리(터치·트랙패드 한 손가락)의 같은 메뉴. 움직이면 끌기로 본다.
+let drag = null;
+function wireDrag(it, key, kind) {
+    it.setAttribute('draggable', 'false'); // <a> 는 기본이 끌리는 요소 — 네이티브 드래그가 포인터 이벤트를 끊는다
+    it.addEventListener('dragstart', (e) => e.preventDefault());
     it.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0)
+        if (e.button !== 0 || drag || !host || !it.parentElement)
             return;
-        sx = e.clientX;
-        sy = e.clientY;
-        hold = window.setTimeout(() => { hold = null; dockMenu(sx, sy, a, pinned); }, 550);
+        const d = {
+            key, kind, it, ghost: null, ptr: e.pointerId, type: e.pointerType, x0: e.clientX, y0: e.clientY,
+            lifted: false, moved: false, out: false, inMain: kind !== 'recent',
+            home: { parent: it.parentElement, next: it.nextElementSibling }, hold: null,
+        };
+        drag = d;
+        it.classList.add('press');
+        d.hold = window.setTimeout(() => { d.hold = null; lift(d); }, e.pointerType === 'mouse' ? HOLD_MS.mouse : HOLD_MS.touch);
+        window.addEventListener('pointermove', onMove, true);
+        window.addEventListener('pointerup', onUp, true);
+        window.addEventListener('pointercancel', onCancel, true);
+        window.addEventListener('keydown', onKey, true);
     });
-    it.addEventListener('pointerup', cancelHold);
-    it.addEventListener('pointerleave', cancelHold);
-    it.addEventListener('pointermove', (e) => { if (hold && Math.hypot(e.clientX - sx, e.clientY - sy) > 6)
-        cancelHold(); });
 }
-/** 고정 구간 자체도 놓을 자리다 — 비어 있을 때(끌기 중엔 점선 칸이 생긴다)와 맨 아래에 놓을 때. */
-function wireZone(zone) {
-    zone.addEventListener('dragover', (e) => { if (!dragKey)
-        return; e.preventDefault(); zone.classList.add('over'); });
-    zone.addEventListener('dragleave', (e) => { if (!zone.contains(e.relatedTarget))
-        zone.classList.remove('over'); });
-    zone.addEventListener('drop', (e) => {
-        if (!dragKey || e.target.closest('.v2-rail-it'))
+function unlisten() {
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', onUp, true);
+    window.removeEventListener('pointercancel', onCancel, true);
+    window.removeEventListener('keydown', onKey, true);
+}
+/** 들리기 전에 손을 뗐거나 움직였다 — 보통의 클릭·스크롤로 흘려보낸다. */
+function dropPress(d) {
+    if (d.hold) {
+        window.clearTimeout(d.hold);
+        d.hold = null;
+    }
+    d.it.classList.remove('press');
+    drag = null;
+    unlisten();
+}
+function lift(d) {
+    if (d.hold) {
+        window.clearTimeout(d.hold);
+        d.hold = null;
+    }
+    if (!host) {
+        dropPress(d);
+        return;
+    }
+    d.lifted = true;
+    try {
+        d.it.setPointerCapture(d.ptr);
+    }
+    catch (_) { /* 못 잡아도 window 에서 듣는다 */ }
+    const r = d.it.getBoundingClientRect();
+    const inner = d.it.cloneNode(true);
+    inner.classList.remove('press');
+    inner.removeAttribute('title');
+    const g = el('div', { class: 'v2-rail-ghost', 'aria-hidden': 'true' }, inner);
+    g.style.left = `${r.left}px`;
+    g.style.top = `${r.top}px`;
+    g.style.width = `${r.width}px`;
+    g.style.height = `${r.height}px`;
+    host.appendChild(g);
+    d.ghost = g;
+    d.it.classList.remove('press');
+    d.it.classList.add('hole');
+    host.classList.add('drag');
+    requestAnimationFrame(() => g.classList.add('up')); // 눌린 크기(.94)에서 튀어오른다(1.1) — '들리는' 동작
+    if (d.type !== 'mouse') {
+        try {
+            navigator.vibrate?.(8);
+        }
+        catch (_) { /* 없으면 없는 대로 */ }
+    }
+}
+function onMove(e) {
+    const d = drag;
+    if (!d || e.pointerId !== d.ptr)
+        return;
+    const dx = e.clientX - d.x0;
+    const dy = e.clientY - d.y0;
+    if (!d.lifted) {
+        if (Math.hypot(dx, dy) <= 8)
             return;
-        e.preventDefault();
-        zone.classList.remove('over');
-        dropped = true;
-        placePin(dragKey, pins.length);
-    });
+        if (d.type === 'mouse')
+            lift(d);
+        else {
+            dropPress(d);
+            return;
+        } // 마우스는 끌자마자 들린다(맥 독) · 손가락은 스크롤이다
+        if (!d.lifted)
+            return;
+    }
+    e.preventDefault();
+    if (Math.hypot(dx, dy) > 4)
+        d.moved = true;
+    if (d.ghost)
+        d.ghost.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+    track(d, e.clientX, e.clientY);
+}
+function onUp(e) {
+    const d = drag;
+    if (!d || e.pointerId !== d.ptr)
+        return;
+    if (!d.lifted) {
+        dropPress(d);
+        return;
+    } // 짧게 눌렀다 뗐다 = 클릭 — 그대로 흐른다
+    e.preventDefault();
+    finish(d, e.clientX, e.clientY);
+}
+function onCancel(e) {
+    const d = drag;
+    if (!d || e.pointerId !== d.ptr)
+        return;
+    if (!d.lifted) {
+        dropPress(d);
+        return;
+    }
+    abort(d);
+}
+function onKey(e) {
+    const d = drag;
+    if (!d || e.key !== 'Escape')
+        return;
+    e.preventDefault();
+    if (!d.lifted) {
+        dropPress(d);
+        return;
+    }
+    abort(d);
+}
+/** 손 자리에 맞춰 구멍(자리표)을 옮긴다 — 이웃은 FLIP 으로 비켜선다. */
+function track(d, x, y) {
+    if (!host)
+        return;
+    const main = host.querySelector('.v2-rail-main');
+    const mid = host.querySelector('.v2-rail-mid');
+    const hr = host.querySelector('.v2-rail-hr');
+    if (!main || !mid || !hr)
+        return;
+    const rr = host.getBoundingClientRect();
+    const mr = mid.getBoundingClientRect();
+    const inRail = x >= rr.left - 24 && x <= rr.right + 24 && y >= mr.top - 12 && y <= mr.bottom + 12;
+    const inMain = inRail && y < hr.getBoundingClientRect().top + 6;
+    if (inMain) {
+        moveHole(d, main, slotAt(main, y, d.it));
+        d.inMain = true;
+        d.out = false;
+        d.ghost?.classList.remove('out');
+        return;
+    }
+    d.inMain = false;
+    if (d.kind === 'pin') { // 메인 밖 = 뺀다(맥 독) — 구멍이 닫히고 그림자가 옅어진다
+        if (!d.out) {
+            d.out = true;
+            d.ghost?.classList.add('out');
+            flip(() => d.it.classList.add('gone'));
+        }
+    }
+    else if (d.kind === 'recent') { // 원래 자리로 돌아간다
+        moveHole(d, d.home.parent, null, d.home.next);
+    }
+    //  구역·리브는 마지막 자리표를 지킨다(뺄 수 없다) — 놓으면 거기로 돌아간다
+}
+/** 세로 위치로 몇 번째 칸인가 — 끌고 있는 것과 닫힌 구멍은 세지 않는다. */
+function slotAt(zone, y, self) {
+    let idx = 0;
+    for (const c of Array.from(zone.children)) {
+        if (c === self || c.classList.contains('gone'))
+            continue;
+        const r = c.getBoundingClientRect();
+        if (y > r.top + r.height / 2)
+            idx += 1;
+    }
+    return idx;
+}
+/** 구멍을 zone 의 idx 번째(끌고 있는 것 제외)로 — 이미 거기면 아무것도 하지 않는다. */
+function moveHole(d, zone, idx, before) {
+    const kids = Array.from(zone.children).filter((c) => c !== d.it);
+    const ref = before !== undefined ? before : (idx === null ? null : (kids[idx] || null));
+    if (d.it.parentElement === zone && d.it.nextElementSibling === ref && !d.it.classList.contains('gone'))
+        return;
+    flip(() => { d.it.classList.remove('gone'); zone.insertBefore(d.it, ref); });
+}
+/** FLIP — 바꾸기 전 자리를 재고(First), 바꾸고(Last), 차이만큼 되돌려 놓은 뒤(Invert) 제자리로 흘려보낸다(Play). */
+function flip(change) {
+    if (!host) {
+        change();
+        return;
+    }
+    const els = Array.from(host.querySelectorAll('.v2-rail-mid .v2-rail-it, .v2-rail-mid .v2-rail-hr'));
+    const first = new Map();
+    for (const x of els) {
+        first.set(x, x.getBoundingClientRect().top);
+        x.style.transition = 'none';
+        x.style.transform = '';
+    }
+    change();
+    if (!motion())
+        return;
+    for (const x of els) {
+        if (!x.isConnected || x.classList.contains('hole'))
+            continue; // 구멍은 튀지 않고 바로 새 칸에 선다
+        const dy = first.get(x) - x.getBoundingClientRect().top;
+        if (Math.abs(dy) < 1)
+            continue;
+        x.style.transform = `translateY(${dy}px)`;
+        void x.offsetHeight; // 되돌린 자리를 먼저 그리게 한다
+        x.style.transition = 'transform 180ms cubic-bezier(.2,.8,.2,1)';
+        x.style.transform = '';
+    }
+}
+function finish(d, x, y) {
+    if (!d.moved) {
+        //  들었다가 그 자리에서 놓았다 — 손가락이면 메뉴(우클릭이 없는 자리), 마우스면 보통의 클릭이 이어진다
+        if (d.type !== 'mouse') {
+            swallowClick();
+            const a = APPS.find((q) => q.key === d.key);
+            if (a && d.kind !== 'sec')
+                dockMenu(x, y, a, d.kind === 'pin');
+        }
+        land(d, () => endDrag(d));
+        return;
+    }
+    swallowClick();
+    if (d.kind === 'pin' && d.out) {
+        puff(d, () => endDrag(d, () => { saveOrder(order.filter((k) => k !== d.key)); toast('독에서 뺐어요 — 최근에 열면 다시 아래에 떠요'); }));
+        return;
+    }
+    if (d.kind === 'recent' && !d.inMain) {
+        land(d, () => endDrag(d));
+        return;
+    } // 제자리로 — 최근 칸의 순서는 자동이다
+    //  메인 그룹의 지금 DOM 순서가 곧 새 순서 — 최근 앱이 올라와 있으면 거기서 고정된다
+    const main = host?.querySelector('.v2-rail-main');
+    const keys = main ? Array.from(main.children).map((c) => c.dataset.key || '').filter(Boolean) : order;
+    land(d, () => endDrag(d, () => saveOrder(keys)));
+}
+function abort(d) {
+    d.out = false;
+    d.ghost?.classList.remove('out');
+    moveHole(d, d.home.parent, null, d.home.next);
+    land(d, () => endDrag(d));
+}
+/** 그림자가 구멍으로 내려앉는다. */
+function land(d, done) {
+    const g = d.ghost;
+    if (!g || !motion()) {
+        done();
+        return;
+    }
+    g.classList.add('settle', 'land');
+    if (!d.it.classList.contains('gone')) {
+        const r = d.it.getBoundingClientRect();
+        g.style.transform = `translate3d(${r.left - (parseFloat(g.style.left) || 0)}px, ${r.top - (parseFloat(g.style.top) || 0)}px, 0)`;
+    }
+    window.setTimeout(done, 230);
+}
+/** 밖에 놓았다 — 커지며 사라진다(맥 독의 '퍽'). */
+function puff(d, done) {
+    const g = d.ghost;
+    if (!g || !motion()) {
+        done();
+        return;
+    }
+    g.classList.add('puff');
+    window.setTimeout(done, 210);
+}
+function endDrag(d, then) {
+    drag = null;
+    unlisten();
+    d.ghost?.remove();
+    d.ghost = null;
+    d.it.classList.remove('hole', 'gone', 'press');
+    host?.classList.remove('drag');
+    if (then)
+        then();
+    drawRail(); // 순서가 바뀌었든 아니든 한 번 다시 그린다 — 끌던 동안 미뤄 둔 그림도 여기서 따라온다
+}
+/** 끌고 난 뒤 따라오는 click 하나를 삼킨다 — 링크(<a>)가 열리거나 구역이 바뀌면 안 된다. */
+function swallowClick() {
+    const off = () => window.removeEventListener('click', eat, true);
+    const eat = (e) => { e.preventDefault(); e.stopImmediatePropagation(); off(); };
+    window.addEventListener('click', eat, true);
+    window.setTimeout(off, 400);
 }
 // ── 그리기 ───────────────────────────────────────────────────────────────────
 export function mountRail(el0, h) {
@@ -337,6 +596,8 @@ export function drawRail() {
     if (!host)
         return;
     init();
+    if (drag && drag.lifted)
+        return; // 끌던 중엔 다시 그리지 않는다 — DOM 을 갈아엎으면 손에 든 것이 사라진다(endDrag 가 그린다)
     const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
     const running = hooks.openApps?.() || new Set();
     const ak = hooks.activeKey?.() || '';
@@ -345,38 +606,50 @@ export function drawRail() {
     document.getElementById('v2-root')?.classList.toggle('rail-hidden', hidden);
     // ⓪ 워크스페이스
     const top = el('div', { class: 'v2-rail-top' }, el('div', { class: 'v2-rail-ws' }, stackTile()));
-    // ① 구역 — 아이콘 위, 이름 아래.
+    // 항목 한 붓 — 아이콘 위, 이름 아래.
     const item = (key, label, ic, on, extra, onclick, href) => el(href ? 'a' : 'button', {
         class: 'v2-rail-it' + (on ? ' on' : ''), ...(href ? { href } : { type: 'button' }), 'data-key': key,
         'aria-current': on ? 'page' : null, title: label,
         onclick: (e) => { if (!href)
             e.preventDefault(); onclick(); },
     }, icon(ic, 'v2-rail-ic'), el('span', { class: 'v2-rail-t', text: label }), extra);
-    const secEls = railSections().map((s) => {
-        const on = !linkOn && section === s.key;
-        //  확인할 것 — 슬랙 '내 활동'의 그 배지. 아이콘 귀퉁이에 숫자.
-        const extra = s.key === 'inbox' && c.inbox
-            ? el('span', { class: 'v2-rail-bd', text: String(c.inbox), role: 'img', 'aria-label': `확인할 것 ${c.inbox}건` })
-            : null;
-        return item(s.key, s.label, s.icon, on, extra, () => setRailSection(s.key, { navigate: true }));
-    });
-    const linkEls = LINKS.filter((l) => !l.tab || navOn(l.tab) !== false)
-        .map((l) => item(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }, l.route));
-    // ② 독 — 고정한 앱(사람이 정한 순서) | 최근 연 앱(자동). 둘 사이는 점선(맥 독의 최근 구간 경계).
-    const appItem = (a, pinned) => {
-        const it = item('app:' + a.key, a.title, a.icon, false, running.has(a.key) ? el('span', { class: 'v2-rail-run', role: 'img', 'aria-label': '실행 중' }) : null, () => { }, '#/app/' + a.key);
-        it.classList.add(pinned ? 'pinned' : 'recent');
+    const appItem = (a, kind) => {
+        const it = item(a.key, a.title, a.icon, false, running.has(a.key) ? el('span', { class: 'v2-rail-run', role: 'img', 'aria-label': '실행 중' }) : null, () => { }, '#/app/' + a.key);
+        it.classList.add(kind === 'pin' ? 'pinned' : 'recent');
         it.dataset.app = a.key;
-        it.setAttribute('draggable', 'true');
-        it.title = a.title + (pinned ? ' — 독에 고정됨 · 끌어서 순서, 우클릭으로 빼기' : ' — 최근에 연 앱 · 우클릭으로 독에 고정');
-        wireDock(it, a, pinned);
+        it.dataset.kind = kind;
+        it.title = a.title + (kind === 'pin' ? ' — 독에 고정됨 · 꾹 눌러 끌면 순서, 레일 밖으로 끌어내면 빼기' : ' — 최근에 연 앱 · 꾹 눌러 위로 끌어 올리면 고정');
+        it.addEventListener('contextmenu', (e) => { e.preventDefault(); if (drag?.lifted)
+            return; dockMenu(e.clientX, e.clientY, a, kind === 'pin'); });
+        wireDrag(it, a.key, kind);
         return it;
     };
-    const pinnedEls = pins.map((k) => APPS.find((a) => a.key === k)).filter((a) => !!a && (!a.tab || navOn(a.tab))).map((a) => appItem(a, true));
-    const recentEls = recentForRail(RECENT_N).map((a) => appItem(a, false));
-    const pinsZone = el('div', { class: 'v2-rail-pins', 'aria-label': '독에 고정한 앱' }, ...pinnedEls);
-    wireZone(pinsZone);
-    const mid = el('div', { class: 'v2-rail-mid' }, ...secEls, ...linkEls, el('div', { class: 'v2-rail-hr', role: 'presentation' }), pinsZone, pinnedEls.length && recentEls.length ? el('div', { class: 'v2-rail-hr v2-rail-hr--recent', role: 'presentation' }) : null, ...recentEls);
+    // ① 메인 그룹 — 구역 · 리브 · 독에 고정한 앱, 사람이 정한 한 줄 순서(꾹 눌러 끌면 바뀐다).
+    const mainEls = mainEntries().map((m) => {
+        if (m.kind === 'app')
+            return appItem(m.app, 'pin');
+        let it;
+        if (m.kind === 'sec') {
+            const s = m.sec;
+            const on = !linkOn && section === s.key;
+            //  확인할 것 — 슬랙 '내 활동'의 그 배지. 아이콘 귀퉁이에 숫자.
+            const extra = s.key === 'inbox' && c.inbox
+                ? el('span', { class: 'v2-rail-bd', text: String(c.inbox), role: 'img', 'aria-label': `확인할 것 ${c.inbox}건` })
+                : null;
+            it = item(s.key, s.label, s.icon, on, extra, () => setRailSection(s.key, { navigate: true }));
+        }
+        else {
+            const l = m.link;
+            it = item(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }, l.route);
+        }
+        it.dataset.kind = 'sec';
+        wireDrag(it, m.key, 'sec');
+        return it;
+    });
+    const mainZone = el('div', { class: 'v2-rail-main', 'aria-label': '메인 — 꾹 눌러 끌면 순서를 바꿀 수 있어요' }, ...mainEls);
+    // ② 최근 연 앱 — 헤어라인 아래, 자동(맥 독의 최근 구간). 위로 끌어 올리면 메인에 고정된다.
+    const recentZone = el('div', { class: 'v2-rail-recent', 'aria-label': '최근 연 앱' }, ...recentForRail(RECENT_N).map((a) => appItem(a, 'recent')));
+    const mid = el('div', { class: 'v2-rail-mid' }, mainZone, el('div', { class: 'v2-rail-hr', role: 'presentation' }), recentZone);
     // ③ 발치 — 앱 · 나 (슬랙의 ＋ · 아바타). 여닫는 단추는 여기 없다(머리말).
     const me = state.me || {};
     const myName = String(me.display_name || me.email || me.userId || '');
