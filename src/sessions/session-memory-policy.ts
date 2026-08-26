@@ -24,6 +24,20 @@ export interface SessionMemoryPolicy {
   per_session_high_mb: number;
   /** 세션당 MemoryMax(MB) — 초과 시 그 세션 scope 안에서 OOM-kill(하드). 0 = 하드 캡 없음. */
   per_session_max_mb: number;
+  /**
+   * 세션당 **스케줄링 예약치**(MB) — 이 세션을 노드에 앉힐 때 '자리를 얼마나 차지하는 것으로 칠지'.
+   * 0 = 미설정(종전 동작: 배치·용량 심사가 하드 캡을 그대로 쓴다).
+   *
+   * 왜 캡과 따로인가: 캡(max)은 **폭주 상한**이라 크게 잡아야 안전한데, 그 값으로 배치를 심사하면
+   *  노드가 놀면서도 새 세션을 거절한다. 실측(2026-08-26 매니지드 박스): 활성 claude 세션이
+   *  560MiB / 1.5GiB 캡(36%), 물리 가용 6027MB 인데 두 번째 세션이 거절됐다. k8s 의 requests/limits
+   *  와 같은 분리다 — 예약은 실사용 기준, 캡은 폭주 방지. 넘어서는 사용은 캡까지 허용되고, 노드가
+   *  위험해지면 회수(리퍼)·earlyoom 이 받는다.
+   *
+   * 이 값은 **세션 spawn 훅을 쓰는 배포**(매니지드)에서만 뜻이 있다 — 그 훅이 노드 용량을 심사한다.
+   *  로컬·단일호스트는 심사 주체가 없어 무시된다(무회귀).
+   */
+  per_session_request_mb: number;
 }
 
 export type SessionMemoryPolicyPatch = Partial<SessionMemoryPolicy>;
@@ -32,6 +46,7 @@ export type SessionMemoryPolicyPatch = Partial<SessionMemoryPolicy>;
 export const DEFAULT_SESSION_MEMORY_POLICY: SessionMemoryPolicy = {
   per_session_high_mb: 0,
   per_session_max_mb: 0,
+  per_session_request_mb: 0,   // 0 = 미설정 → 심사가 하드 캡을 그대로 쓴다(종전 동작)
 };
 
 // 관리탭·검증 노출 상수 — 0(무제한) ~ 1TB(비정상 큰 값 방어).
@@ -45,12 +60,18 @@ const policy = definePolicy<SessionMemoryPolicy>({
   fields: {
     per_session_high_mb: { env: "LIVELY_SESSION_MEM_HIGH_MB", min: SESSION_MEM_MB_MIN, max: SESSION_MEM_MB_MAX, loose: true },
     per_session_max_mb: { env: "LIVELY_SESSION_MEM_MAX_MB", min: SESSION_MEM_MB_MIN, max: SESSION_MEM_MB_MAX, loose: true },
+    per_session_request_mb: { env: "LIVELY_SESSION_MEM_REQUEST_MB", min: SESSION_MEM_MB_MIN, max: SESSION_MEM_MB_MAX, loose: true },
   },
   invariant(out) {
     // 불변식: 둘 다 설정됐고 high > max 면 high 를 max 로 내린다. MemoryHigh 는 MemoryMax **아래**의 스로틀
     //  지점이라야 의미(high>max 면 하드 kill 전에 소프트 스로틀이 안 걸려 무의미). 조용히 고치되(잡음 방지) 안전쪽으로.
     if (out.per_session_high_mb > 0 && out.per_session_max_mb > 0 && out.per_session_high_mb > out.per_session_max_mb) {
       out.per_session_high_mb = out.per_session_max_mb;
+    }
+    // 예약이 캡보다 클 수는 없다 — 그러면 '자리는 크게 잡고 실제로는 그만큼 못 쓰는' 모순이 되고,
+    //  배치가 캡 심사보다 보수적이 되어 이 분리의 목적(밀도 회복)이 뒤집힌다. 조용히 캡으로 내린다.
+    if (out.per_session_request_mb > 0 && out.per_session_max_mb > 0 && out.per_session_request_mb > out.per_session_max_mb) {
+      out.per_session_request_mb = out.per_session_max_mb;
     }
   },
 });

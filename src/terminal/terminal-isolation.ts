@@ -69,7 +69,12 @@ export const BOX_CGSPAWN = process.env.LIVELY_BOX_CGSPAWN || "/opt/lively/libexe
 export function sessionSpawnPath(): string { return process.env.LIVELY_SESSION_SPAWN || ""; }
 
 // per-session 메모리 한도(#1059 D) — MemoryHigh/Max(MB). 0/미지정 = 그 축 무제한(box-cgspawn 이 생략).
-export interface CgroupLimit { highMb?: number; maxMb?: number; }
+export interface CgroupLimit {
+  highMb?: number;
+  maxMb?: number;
+  /** #2120 — 스케줄링 예약치(MB). 세션 spawn 훅을 쓰는 배포에서 노드 용량 심사가 쓴다(캡과 별개). */
+  requestMb?: number;
+}
 
 export interface WrapOptions {
   /**
@@ -111,11 +116,16 @@ export function wrapAsMember(osUser: string, argv: string[], cwd?: string, cg?: 
 }
 
 // (순수 — 테스트 seam) 세션 spawn 훅 argv 조립.
-//  결과: [SESSION_SPAWN, osUser, <high>, <max>, "--", ("--cwd",cwd)?, ...argv]
+//  결과: [SESSION_SPAWN, osUser, <high>, <max>, (<request>)?, "--", ("--cwd",cwd)?, ...argv]
 //  메모리 인자는 캡이 없으면 "0"(무제한) — box-cgspawn 과 **같은 인자 순서**라 기존 래퍼를 그대로 쓸 수 있다.
+//
+//  #2120 — 예약치(request)는 **설정됐을 때만** 하나 더 끼운다. 늘 보내면 그 인자를 모르는 구버전 훅이
+//   "4번째가 '--' 가 아니다"로 죽어 세션이 아예 안 뜬다(훅은 이미지 안에 있어 코어와 따로 굴러간다).
+//   미설정(0)이면 argv 가 종전과 **바이트 단위로 같다** — 그게 무회귀의 근거다.
 export function sessionSpawnArgv(osUser: string, argv: string[], cwd: string | undefined, cg?: CgroupLimit): string[] {
   const pre = cwd ? ["--cwd", cwd] : [];
-  return [sessionSpawnPath(), osUser, memArg(cg?.highMb), memArg(cg?.maxMb), "--", ...pre, ...argv];
+  const req = cg?.requestMb && cg.requestMb > 0 ? [memArg(cg.requestMb)] : [];
+  return [sessionSpawnPath(), osUser, memArg(cg?.highMb), memArg(cg?.maxMb), ...req, "--", ...pre, ...argv];
 }
 
 // (순수 — 테스트 seam) box-cgspawn 경유 argv 조립. 게이트(cgroupInfraReady: platform·existsSync 의존)와 분리해

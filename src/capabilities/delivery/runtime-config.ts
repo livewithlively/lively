@@ -203,6 +203,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         const patchIn: SessionMemoryPolicyPatch = {};
         if (s.per_session_high_mb !== undefined) patchIn.per_session_high_mb = mb(s.per_session_high_mb, "per_session_high_mb");
         if (s.per_session_max_mb !== undefined) patchIn.per_session_max_mb = mb(s.per_session_max_mb, "per_session_max_mb");
+        // #2120 — 스케줄링 예약치. 캡과 별개 축이라 여기서 함께 받는다(0=미설정 → 심사가 캡을 그대로 쓴다).
+        if (s.per_session_request_mb !== undefined) patchIn.per_session_request_mb = mb(s.per_session_request_mb, "per_session_request_mb");
         // high>max 는 무의미(하드 kill 전에 소프트 스로틀이 안 걸림) — 사용자 의도일 리 없으니 조용히 고치지 말고 알려준다.
         //  ⚠ 검사는 **단방향**(제출한 high 가 결과 max 를 넘을 때만 400): 반대로 max 만 기존 high 아래로 낮추면
         //   normalize 가 high 를 max 로 조용히 끌어내린다(안전 방향 — 하드캡을 낮추면 소프트캡도 같이 내려가는 게 자연스럽다).
@@ -210,6 +212,10 @@ export const runtimeConfigCapabilities: Capability[] = [
         const merged = normalizeSessionMemoryPolicy({ ...(await getRuntimeConfig()).session_memory_policy, ...patchIn });
         if (patchIn.per_session_high_mb !== undefined && patchIn.per_session_high_mb > 0 && merged.per_session_max_mb > 0 && patchIn.per_session_high_mb > merged.per_session_max_mb) {
           throw new HttpError(400, `MemoryHigh(${patchIn.per_session_high_mb}MB)는 MemoryMax(${merged.per_session_max_mb}MB) 이하여야 합니다`);
+        }
+        // 예약이 캡보다 크면 '자리는 크게 잡고 실제로는 그만큼 못 쓰는' 모순이다 — high>max 와 같은 관례로 단방향 400.
+        if (patchIn.per_session_request_mb !== undefined && patchIn.per_session_request_mb > 0 && merged.per_session_max_mb > 0 && patchIn.per_session_request_mb > merged.per_session_max_mb) {
+          throw new HttpError(400, `예약치(${patchIn.per_session_request_mb}MB)는 MemoryMax(${merged.per_session_max_mb}MB) 이하여야 합니다`);
         }
         patch.session_memory_policy = patchIn;
       }
@@ -615,7 +621,8 @@ export const runtimeConfigCapabilities: Capability[] = [
       session_memory_policy: z.object({
         per_session_high_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryHigh(MB) — 초과 시 강한 회수·스로틀(kill 아님). 0=무제한"),
         per_session_max_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryMax(MB) — 초과 시 그 세션 scope 안에서 OOM-kill. 0=무제한. MemoryHigh 이상이어야"),
-      }).optional().describe("per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). 캡을 걸면 세션이 box-cgspawn scope 로 격리돼 폭주 세션만 OOM-kill·박스 생존"),
+        per_session_request_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 스케줄링 예약치(MB) — 노드에 자리를 얼마나 차지하는 것으로 칠지. 0=미설정(심사가 MemoryMax 를 그대로 쓴다). 캡은 폭주 상한이라 크게 잡아야 하는데 그 값으로 배치를 심사하면 노드가 놀면서도 새 세션을 거절한다 — 실사용 기준으로 이 값을 따로 둔다(k8s requests/limits 와 같은 분리). MemoryMax 이하여야"),
+      }).optional().describe("per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB) + 스케줄링 예약치(#2120). 0=무제한(무회귀). 캡을 걸면 세션이 box-cgspawn scope 로 격리돼 폭주 세션만 OOM-kill·박스 생존"),
       session_reclaim_policy: z.object({
         idle_ttl_minutes: z.number().int().min(0).max(43_200).optional().describe("이 분(minute)을 넘게 idle 인 세션을 자동 회수. 0=끔(무회귀). managed·attached·busy·waiting 은 항상 제외"),
         pressure_used_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_PRESSURE_PCT_MAX).optional().describe("메모리 사용률이 이 %를 넘으면 평시 TTL 을 기다리지 않고 회수(#1220). 0=끔. RSS 큰 세션부터 걷고 임계 밑으로 내려가면 멈춘다. ⚠ 상한이 earlyoom 발동선(94%)보다 낮게 잡혀 있다(#1675 ⑤) — 그 위 값은 earlyoom 이 먼저 죽여 영영 발동하지 못한다"),
