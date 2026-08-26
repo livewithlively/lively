@@ -925,7 +925,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.list.querySelector('.sc-empty')?.remove();     // 다시 여는 경우(대화 uuid 를 뒤늦게 앎, #1744) — 지난 '아직 없음' 안내는 물러난다
     const tries: Source[] = [];
     if (isBox) {
-      if (!target.node) tries.push({ kind: 'box', id: target.id });   // 노드 세션은 박스 경로를 묻지 않는다(늘 409 node — 파일이 그 컴퓨터에 있다)
+      // ⚠ 노드가 붙어 있어도 **박스 경로를 먼저 물어본다**(#2055 실측 2026-08-26). 종전엔 '노드 세션은 늘 409'
+      //  라는 전제로 건너뛰었는데, **게이트웨이 박스가 노드로도 등록된 배포**에서는 이 박스의 로컬 세션까지
+      //  node 가 붙는다 — 그때 박스 경로를 안 물으면 대화가 로컬 파일에 멀쩡히 있는데도 화면이 중앙 기록(아직
+      //  빈)만 보고 **영영 빈 채로 남는다**. 저쪽 컴퓨터 것이면 서버가 그대로 409 'node' 를 주고, 아래 루프가
+      //  그 응답으로 중앙 기록 후보를 잇는다 — 비용은 첫 열기 때 요청 한 번이다.
+      tries.push({ kind: 'box', id: target.id });
       const ls = logSrc(); if (ls) tries.push(ls);
     } else {
       tries.push({ kind: 'log', sid: target.id, node: String(target.node ?? '') });
@@ -951,7 +956,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const unreadable = Number(lastErr?.status) === 409 && lastErr?.message !== 'node' && !!lastErr?.message;   // 409 = 'node'(그 컴퓨터) 또는 못 읽는 하네스(문장, #1746 — 폴링 무의미)
       // 어디를 지켜볼까 — 박스 세션은 박스 파일, 노드 세션은 중앙 기록(대화 uuid 를 알 때만; 모르면 update() 가 가져올 때).
       //  ⚠ 노드 세션에 박스 경로를 걸면 409 node 가 영원히 반복된다(실측 #1744: '진행을 따라가지 못하고…' 가 그 증상).
-      const watch = (): Source | null => target.node ? logSrc() : { kind: 'box', id: target.id };
+      //  ⚠ 지켜볼 곳은 **방금 실제로 읽힌 곳**(src)을 먼저 쓴다 — node 가 붙었다고 중앙 기록으로 못박으면
+      //   로컬 파일로 읽히는 세션(위 주석의 배포)이 갱신을 못 받는다.
+      const watch = (): Source | null => src ?? (target.node ? logSrc() : { kind: 'box', id: target.id });
       // 홈 입력창이 방금 연 세션 — 첫 지시는 서버(또는 노드)가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
       if (notYet && firstPrompt && canType()) {
         const pd = addPending(firstPrompt); firstPrompt = null;   // 박스면 서버 큐가 obId 를 붙인다(syncOutbox); 노드면 큐 없이 로컬 주입
@@ -1201,7 +1208,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
       if (target.node) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
       // 어디를 지켜볼까 — 박스 파일, 노드면 중앙 기록(uuid 를 알 때만; 모르면 update() 가 가져올 때). ⚠ 노드에 박스 경로를 걸면 409 반복.
-      if (!src) src = target.node ? logSrc() : { kind: 'box', id: target.id };
+      if (!src) src = target.node ? logSrc() : { kind: 'box', id: target.id };   // src 가 이미 정해졌으면 그대로(위 watch 주석)
       if (src) schedule();
       void syncOutbox();
     } catch (e: any) {
