@@ -285,6 +285,9 @@ export interface SessionInfo {
   // #1059 E — 복원 가능(restorable): tmux 에 없고 DB desired-state(org_session_state)에만 있는 세션(재부팅으로 죽었거나
   //  F reaper 가 회수). agentState 는 offline. 프론트가 이 배지를 보고 '열기=복원'(POST …/restore) 경로로 분기한다(attach 아님).
   restorable?: boolean;
+  // #2022 — 이 행을 게이트웨이가 **노드 스냅샷에서 발견해** 적었나(그 컴퓨터에서 직접 띄운 세션).
+  //  좌표를 모르므로 되살릴 수 없다 — 위 restorable 이 false 로 나가고, 화면은 '왜 못 되살리나'를 이 값으로 말할 수 있다.
+  discovered?: boolean;
   // #1059 — restorable 이 **사용자 정상 종료**(/exit·logout, SessionEnd 훅 보고)로 생겼나. true=내가 종료('종료됨·대화 이어보기'),
   //  false=재부팅·강제kill·reaper 회수('복원 가능·중단됨'). 프론트가 라벨·버튼을 구분(둘 다 복원 경로는 동일).
   exitedByUser?: boolean;

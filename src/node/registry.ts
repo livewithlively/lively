@@ -264,6 +264,9 @@ function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | 
     res: res ?? prev?.res ?? null,
   };
   states.set(k, st);
+  // #2022 — 처음 보는 세션이 있으면 그 자리에서 기억한다(구독자가 판단·기록, 여기선 알리기만).
+  //  best-effort: 실패해도 스냅샷 반영은 그대로 간다(이 함수는 라이브 목록의 정본을 세우는 자리다).
+  if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 스냅샷을 막지 않는다 */ } }
   // 정본(org_node_state)으로 흘려보낸다(#1834) — 이 게이트웨이가 재배포로 죽어도 다음 부팅이 여기서 목록을 되찾는다.
   //  세션 목록이 바뀌었을 때 즉시, 그대로면 최소 간격마다(node-state-store.shouldPersist). 비치명 —
   //  실패하면 기억을 지워 다음 보고(3초 뒤)가 곧바로 다시 시도한다.
@@ -286,6 +289,11 @@ export function onTaskDone(cb: (nodeId: string, m: TaskDoneMsg) => void): void {
 // 최신 에이전트 hello가 확정된 뒤 호출돼, 연결 단절 때 fail-closed 정지한 AppInstance worker를 다시 맞춘다.
 let nodeReadyHandler: ((nodeId: string) => void | Promise<void>) | null = null;
 export function onNodeReady(cb: (nodeId: string) => void | Promise<void>): void { nodeReadyHandler = cb; }
+// #2022 — 노드가 올린 세션 스냅샷 구독(순환 import 회피: registry 는 DB 계층을 모른다 — onTaskDone·onWorkerState 와 같은 역전).
+//  구독자(terminal/node-session-state)가 처음 보는 세션의 desired-state 를 적는다 — 그 컴퓨터에서 직접 띄운 세션이
+//  노드가 꺼지는 순간 어디에도 없는 세션이 되던 것을 막는다.
+let nodeSessionsHandler: ((nodeId: string, sessions: SessionInfo[]) => void | Promise<void>) | null = null;
+export function onNodeSessions(cb: (nodeId: string, sessions: SessionInfo[]) => void | Promise<void>): void { nodeSessionsHandler = cb; }
 let workerStateHandler: ((nodeId: string, snapshot: unknown) => void | Promise<void>) | null = null;
 export function onWorkerState(cb: (nodeId: string, snapshot: unknown) => void | Promise<void>): void { workerStateHandler = cb; }
 
