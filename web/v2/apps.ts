@@ -16,7 +16,7 @@ export interface AppDef {
   desc: string;       // 한 줄
   route: string;      // 클래식 해시(#/ 뒤) — iframe 에 실릴 경로
   tab: string | null; // navOn 게이팅에 쓸 클래식 탭 키(없으면 항상 노출)
-  icon: 'home' | 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web';
+  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web';
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
@@ -27,7 +27,7 @@ export interface AppDef {
 // 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(홈·AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
 export const APPS: AppDef[] = [
   { key: 'dashboard', title: '홈(클래식)', desc: '옛 대시보드 — 내 프로젝트·알림·세션·팀 로그 위젯', route: 'dashboard', tab: 'dashboard', icon: 'home' },
-  { key: 'terminal', title: 'AI 세션', desc: '박스에서 도는 AI 세션 전체 · 새 세션 만들기', route: 'terminal', tab: 'terminal', icon: 'term' },
+  { key: 'terminal', title: 'AI 세션', desc: '박스에서 도는 AI 세션 전체 · 새 세션 만들기', route: 'terminal', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26 "터미널 아이콘 말고 말풍선으로 통일")
   { key: 'projects2', title: '프로젝트', desc: '보드 · 리스트 · 타임라인 · 태스크', route: 'projects2', tab: 'projects2', icon: 'proj' },
   { key: 'knowledge', title: 'WIKI', desc: '지식 트리 · 문서 · 검토 큐', route: 'knowledge', tab: 'knowledge', icon: 'wiki' },
   { key: 'context', title: '맥락 관리', desc: '수집(연결) · 증류 · 분류 · 자동 관리 파이프라인', route: 'context', tab: 'context', icon: 'ctx' },
@@ -104,7 +104,7 @@ export function soloSessionUrl(id: string): string {
 // ── 아이콘(라인, 채움 없음 — DS 규약) ──
 const ICON_PATHS: Record<AppDef['icon'], string> = {
   //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 홈(클래식)은 옛 대시보드라 위젯 판 넷, 설정은 이빨 있는 톱니.
-  home: ICONS.dashboard, term: ICONS.term, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
+  home: ICONS.dashboard, term: ICONS.term, chat: ICONS.chat, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
   sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web,
 };
 export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
@@ -196,6 +196,12 @@ const GLASS_ART: Record<string, GlassArt> = {
   },
   // 겹친 말풍선 — 세션 이력의 실체는 시간이 아니라 **지난 대화 기록**이다.
   //  시계는 게으른 은유였다: '이력=시계'는 이 앱이 무엇인지 아무것도 말하지 않는다(원준 2026-08-21 반려).
+  // AI 세션 — 말풍선 하나(색) + 흰 줄 둘. 사이드바 세션 행의 말풍선과 같은 뜻(#2016 6차, 터미널 창 아이콘 폐기).
+  chat: {
+    span: [5, 8, 59, 56],
+    color: '<path d="M14 8h36a9 9 0 0 1 9 9v22a9 9 0 0 1-9 9H30l-13 11 1.8-11H14a9 9 0 0 1-9-9V17a9 9 0 0 1 9-9z"/>',
+    punch: '<rect x="15" y="20" width="26" height="3.6" rx="1.8"/><rect x="15" y="29" width="17" height="3.6" rx="1.8"/>',
+  },
   //  앞 풍선이 색, 뒤 풍선이 서리 — 뒤집기 전(앞이 서리)에는 색 덩어리가 뒤로 밀려 창백했다.
   //  ⚠ 안의 흰 것은 **줄**이지 점이 아니다. 점 셋은 '지금 입력 중'으로 읽혀 지난 기록과 뜻이 어긋난다.
   sess: {
