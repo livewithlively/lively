@@ -21,6 +21,7 @@
 import { el, renderMarkdown, toast } from './core.js';
 import { toolGroupSummary } from './chat-tool-group.js';
 import { scanDiff, type DiffScan } from './chat-diff.js';
+import { CHAT_FONT_KEY, fontScale, parseFontStep } from './chat-font.js';
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }
@@ -83,6 +84,8 @@ export interface ChatView {
   turns(): ChatTurn[];
   /** 위에 끼워 넣기(이전 기록 불러오기) — 보고 있던 자리를 지킨다. */
   prependKeepingView(fn: () => void): void;
+  /** 글자 크기 단계(0..3)를 바꾸고 이 브라우저에 기억한다. */
+  setFontStep(step: number): void;
   destroy(): void;
 }
 
@@ -185,6 +188,15 @@ function thinkCard(text: string): HTMLElement {
     el('div', { class: 'livc-think-body', text }));
 }
 
+// ── 글자 크기 (#2055) ──────────────────────────────────────────────────────────────────
+//  규칙(단계·배율·범위 접기)은 순수 모듈 web/chat-font.ts 가 쥔다 — 여기는 그 값을 DOM 에 바르기만 한다.
+function applyFont(root: HTMLElement, step: number): void {
+  root.style.setProperty('--livc-fs', String(fontScale(step)));
+}
+function readFontStep(): number {
+  try { return parseFontStep(localStorage.getItem(CHAT_FONT_KEY)); } catch { return 1; }
+}
+
 const fmtClock = (iso?: string): string => {
   if (!iso) return '';
   const d = new Date(iso); if (!Number.isFinite(d.getTime())) return '';
@@ -244,6 +256,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   };
 
   const root = el('div', { class: 'livc-wrap' + (desktop ? ' livc-desktop' : '') }, el('div', { class: 'livc-scroller' }, list, jump), opts.askHost ?? undefined, note, footSlot);
+  applyFont(root, readFontStep());          // 이 브라우저가 고른 배율로 열린다(다음에 와도 그대로)
   host.replaceChildren(root);
   if (opts.opening) list.append(opts.opening);
   if (opts.footer) { form.hidden = true; footSlot.append(opts.footer); }
@@ -494,6 +507,12 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     removeOpening: () => { list.querySelector('.livc-open')?.remove(); },
     setFooter: (f) => { footSlot.querySelectorAll(':scope > :not(form)').forEach((n) => n.remove()); if (f) { form.hidden = true; footSlot.append(f); } else form.hidden = false; },
     turns: () => turnsArr.slice(),
+    setFontStep: (step) => {
+      const n = parseFontStep(String(Math.round(step)));
+      applyFont(root, n);
+      try { localStorage.setItem(CHAT_FONT_KEY, String(n)); } catch { /* 스토리지가 막힌 브라우저 — 이번 화면에만 적용된다 */ }
+      scroll();                              // 배율이 바뀌면 높이가 바뀐다 — 바닥에 붙어 있었으면 그대로 둔다
+    },
     prependKeepingView: (fn) => {
       const before = list.scrollHeight; const top = list.scrollTop;
       fn();
