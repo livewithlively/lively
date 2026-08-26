@@ -112,7 +112,7 @@
 #v2-root.ob-bare { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; }
 #v2-root.ob-bare .v2-side, #v2-root.ob-bare > .v2-split-x, #v2-root.ob-bare .v2-tabs, #v2-root.ob-bare .v2-tl-btn { display: none; }
 /* #2016 레일 — 좌측이 두 열(레일 + 사이드바)이 됐다. rail-mode 가 6열 그리드를 다시 정의하므로 위 5열 규칙만으로는
-   막1에서 레일 68px 이 그대로 서 있다. 좁은 화면(≤900)에선 레일이 fixed 로 빠지고 뿌리에 padding-left 56 이 붙는데, 그것도 걷는다. */
+   막1에서 레일(76px)이 그대로 서 있다. 좁은 화면(≤900)에선 레일이 fixed 로 빠지고 뿌리에 padding-left 56 이 붙는데, 그것도 걷는다. */
 #v2-root.rail-mode.ob-bare { grid-template-columns: 0 0 0 minmax(0, 1fr) 0 0; padding-left: 0; }
 #v2-root.ob-bare > .v2-rail { display: none; }
 
