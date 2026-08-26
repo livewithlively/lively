@@ -38,6 +38,12 @@ export const HOOK_SCRIPTS = [
   "opencode-plugin.js",
   "antigravity-adapter.mjs",
   "grok-adapter.mjs",
+  // usage-report.mjs 는 훅(이벤트 배선)이 아니라 **statusLine 스크립트**다 — settings 훅 블록에 안 걸리고,
+  //  스폰타임 `--settings` 로 상시세션에만 얹힌다(src/terminal/catalog.ts managedStatusLineSpec).
+  //  여기 등재하는 건 파일을 ~/.lively/hooks/ 로 같은 복사·chmod·자동업데이트 파이프라인에 태우기 위해서다
+  //  — 그래야 그 statusLine command 가 실재 파일을 가리킨다. 빠지면 command 가 없는 경로를 가리키며
+  //  **조용히** 아무것도 안 나온다(타입체크·테스트로는 안 잡히는 무증상 실패).
+  "usage-report.mjs",
 ];
 
 // ── 훅이 hooks/ **밖에서** 끌어 쓰는 공유 모듈 ───────────────────────────────

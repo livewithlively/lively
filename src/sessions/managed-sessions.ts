@@ -16,6 +16,13 @@ export interface ManagedSession {
   session_id: string | null; note: string | null; sort: number;
 }
 
+// 상시세션의 **실효 계정** — 미지정이면 시드 기본 'daon'. 스폰 주체(asUser)와 사용량 조인(usage-store 키)이
+//  반드시 같은 값을 써야 한다: 스폰은 이 계정으로 LIVELY_TOKEN 을 굽고, 목록은 이 계정으로 getUsage 한다.
+//  둘이 갈리면(예: 조인이 raw account=null 을 쓰면) 값이 스토어에 있어도 UI 가 영영 '미보고'(silent miss)다.
+export function managedAccount(m: Pick<ManagedSession, "account">): string {
+  return m.account || "daon";
+}
+
 // account → provision 주체 합성 LivelyUser. 단일프로필이면 account 가 곧 시드 계정(세션 id = box-<account>-…).
 function asUser(account: string): LivelyUser {
   return { userId: account, email: "", scopes: ["items", "context", "memory", "admin", "runtime"] } as unknown as LivelyUser;
@@ -208,7 +215,7 @@ export async function ensureManagedSession(m: ManagedSession): Promise<{ id: str
     //   크론 주입(resolveSessionTmux)이 그 id 를 받으면 사람의 세션에 프롬프트를 밀어 넣는다 — 조용히 틀리느니 실패한다.
     return { id: m.id, action: "invalid_subpath", reaped: 0 };
   }
-  const user = asUser(m.account || "daon");
+  const user = asUser(managedAccount(m));
   // ⚠ **조회 실패를 빈 목록으로 삼키면 안 된다**(#1675 ⑥ 근본원인). 종전엔 `.catch(() => [])` 라
   //  tmux 가 잠깐 안 잡히는 것만으로 "살아있는 세션이 없다" → **새로 만든다** 가 됐다. 이 함수는 2분마다
   //  돌므로 그 오판 하나가 곧 세션 하나이고, 그렇게 30개까지 늘었다. 모르면 **아무것도 하지 않는다.**

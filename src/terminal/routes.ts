@@ -25,6 +25,7 @@ import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
+import { recordUsage } from "./usage-store.js"; // 세션 사용량(rate-limit 소진율) — statusLine 훅이 계정 단위로 보고
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "../v6/search-util.js";
 import { setupPtyUpgrade } from "./terminal-pty-upgrade.js";   // #2165 — 테넌시를 아는 업그레이드 핸들러는 게이트웨이 전용 모듈
@@ -1300,6 +1301,16 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (!st) throw new HttpError(404, "세션 상태 기록이 없습니다");
     if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     await setLastPrompt(id, prompt, me);
+  // 세션 사용량 보고 — statusLine 훅(usage-report.mjs)이 그 세션 안에서만 얻을 수 있는 rate_limits(5시간·7일 소진율)를
+  //  보고한다. rate_limits 는 **statusLine stdin 에만** 실린다(hook stdin·REST 어디에도 없음) → 이 경로가 유일 수집구다.
+  //  rate limit 은 계정(로그인) 단위 quota 라 세션(:id) 이 아니라 **토큰의 계정**으로 키잉한다 — 같은 계정 아무 세션이나
+  //  보고하면 그 계정의 소진율이 갱신된다. owner-gating 불필요(자기 계정 quota 를 자기 토큰으로 보고 = 스푸핑 불가).
+  //  /active 와 달리 org_session_state 행에 의존하지 않는다(상시세션은 그 미러에서 제외 — sessions-infra.ts). fail-soft.
+  app.post("/api/ui/terminal/usage", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const account = idOf(userOf(req));
+    const rl = ((req.body ?? {}) as Record<string, unknown>).rate_limits;
+    recordUsage(account, rl);   // 유효 창이 없으면 조용히 무기록(rate_limits 는 구독자·첫 API 응답 후에만 존재)
     res.json({ ok: true });
   }));
 
