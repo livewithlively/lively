@@ -1801,8 +1801,11 @@ function navRow(): HTMLElement {
         onclick: () => hooks.onToggleRail?.() },
         icon('panel', 'v2-navb-ic'))
     : null;
+  //  #2016 8차 — 뒤로·앞으로는 검색칸에 **붙어** 줄 가운데 선다(슬랙). 양쪽 빈 칸(.v2-nav-sp)이 가운데를 만든다.
   return el('div', { class: 'v2-side-nav' },
     railBtn,
+    el('span', { class: 'v2-nav-sp', 'aria-hidden': 'true' }),
+    el('div', { class: 'v2-nav-core' },
     navArrow('back', st.back, hooks.onBack),
     navArrow('fwd', st.forward, hooks.onForward),
     el('button', {
@@ -1813,7 +1816,8 @@ function navRow(): HTMLElement {
       sv('svg', { viewBox: '0 0 24 24', class: 'v2-omnib-ic', 'aria-hidden': 'true' },
         sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
       el('span', { class: 'v2-omnib-t', text: '검색' }),
-      el('kbd', { class: 'v2-omnib-k', text: mac ? '⌘K' : 'Alt K' })));
+      el('kbd', { class: 'v2-omnib-k', text: mac ? '⌘K' : 'Alt K' }))),
+    el('span', { class: 'v2-nav-sp v2-nav-sp--r', 'aria-hidden': 'true' }));
 }
 /** 화살표 둘의 켜짐만 갱신한다 — 이동할 때마다 사이드바를 통째로 다시 그리지 않게(markFind 와 같은 규칙). */
 export function markNav(st: { back: boolean; forward: boolean }): void {
