@@ -803,6 +803,14 @@ async function onHash() {
     const fromHome = routeKey(cur.route) === 'home';
     const targetInstance = /^(s|i):/.test(routeKey(hash));
     const currentInstance = /^(s|i):/.test(routeKey(cur.route));
+    // ★ 쓰다 만 지시가 있는 홈 탭은 **덮지 않는다**(#2037 · 원준 신고 "다른 창 갔다 오면 타이핑해놓은 글자가 전부
+    //  사라진다"). 위 ⓪ 은 홈을 '빈 새 탭'으로 보고 거기서 연 화면이 그 탭이 되게 하는데, 빈 탭이라는 전제가
+    //  깨지는 경우가 하나 있다 — 사람이 이미 무언가를 쳐 둔 홈이다. 그때는 새 탭에서 열어 그 홈을 살려 둔다
+    //  (사이드바 [새 작업] 행으로 돌아오면 쓰던 글이 그대로 있다).
+    if (!hop && fromHome && (cur.draft || '').trim()) {
+        tabsApi.add(hash);
+        return;
+    }
     if (!hop && !fromHome && (targetInstance || currentInstance)) {
         tabsApi.add(hash);
         return;
@@ -836,6 +844,22 @@ function bindAltOpen() {
             tabsApi.add(href);
     }, true);
 }
+// ── 아직 안 보낸 지시(#2037) ────────────────────────────────────────────────────
+//  홈의 입력칸에 쳐 두고 [시키기]를 아직 안 누른 글은 **탭이 쥔다** — 화면(DOM)만 쥐고 있으면 그 탭이 다른
+//  화면으로 바뀌는 순간 함께 사라진다. 저장은 잦으므로(글자마다) 한 박자 모아서 한 번 쓴다.
+let draftSaveT = 0;
+function homeDraft(tab) {
+    return {
+        text: tab.draft || '',
+        onChange: (v) => {
+            tab.draft = v;
+            window.clearTimeout(draftSaveT);
+            //  ⚠ 여기서 사이드바를 다시 그리지 않는다 — 글자마다 목록을 새로 세우면 사람이 지금 쓰고 있는 칸을
+            //   건드릴 위험만 지고(#1883·#1907), 부제는 8초 틱이나 화면을 떠날 때 따라오면 충분하다.
+            draftSaveT = window.setTimeout(() => { tabsApi?.save(); }, 400);
+        },
+    };
+}
 async function renderRoute(tab) {
     const seq = ++tab.seq;
     if (tab.ob) {
@@ -856,7 +880,7 @@ async function renderRoute(tab) {
     markActive(activeNavKey(page, page === 's' ? decodeURIComponent(segs[1] || '') : segs[1]));
     try {
         if (page === '' || page === 'dashboard') {
-            renderHome(tab.center, data);
+            renderHome(tab.center, data, homeDraft(tab));
             tab.aside.replaceChildren();
         }
         else if (page === 'inbox') {
@@ -1089,7 +1113,7 @@ async function renderRoute(tab) {
             markActive('app:' + (a ? a.key : ''));
         }
         else {
-            renderHome(tab.center, data);
+            renderHome(tab.center, data, homeDraft(tab));
             tab.aside.replaceChildren();
         }
     }
@@ -1168,8 +1192,15 @@ function sideRowKey(route) {
         return 'inst:' + decodeURIComponent(segs[1] || '');
     return 'route:' + routeKey(route);
 }
-/** route 하나가 좌측에서 갖는 얼굴 — 이름·아이콘·부제·소속 프로젝트. */
-function sideRowFace(route) {
+/** 쓰다 만 지시의 한 줄 요약 — 줄바꿈은 접고 너무 길면 자른다(부제 한 줄에 들어가야 한다). */
+function draftLine(draft) {
+    const one = String(draft || '').replace(/\s+/g, ' ').trim();
+    if (!one)
+        return '';
+    return '쓰다 만 지시 · ' + (one.length > 40 ? one.slice(0, 40) + '…' : one);
+}
+/** route 하나가 좌측에서 갖는 얼굴 — 이름·아이콘·부제·소속 프로젝트. `draft` 는 그 창에 쓰다 만 지시(#2037). */
+function sideRowFace(route, draft) {
     const { segs } = parseRoute(route);
     const page = segs[0] || '';
     const info = titleFor(route);
@@ -1179,9 +1210,10 @@ function sideRowFace(route) {
     const project = base ? { ...base, self: selfProject } : null;
     let icon = 'app';
     let meta = '라이블리 앱';
+    //  쓰다 만 지시가 있으면 그 첫 줄이 부제다(#2037) — [새 작업] 창이 여럿이어도 '내가 뭘 쓰다 만 창'을 찾아간다.
     if (!page || page === 'dashboard') {
         icon = 'home';
-        meta = '아직 시작하지 않은 작업';
+        meta = draftLine(draft) || '아직 시작하지 않은 작업';
     }
     //  ⚠ 소속을 **모르는 것**과 **없는 것**은 다르다(#2022) — 목록에도 서버 정본에도 아직 못 닿은 세션
     //   (unresolved)에 '프로젝트 없음' 을 붙이면 화면이 거짓말을 한다. 그때는 소속 줄을 비운다.
@@ -1352,7 +1384,7 @@ function sideInstances() {
     sideRowRoute.clear();
     sideRowInstance.clear();
     const rows = new Map();
-    const put = (key, route, at, stateKey, force) => {
+    const put = (key, route, at, stateKey, force, draft) => {
         const prev = rows.get(key);
         //  치운 행은 **그 상태 그대로인 동안** 숨는다. 창이 열려 있으면(force) 늘 보인다 — 보고 있는 화면이 목록에 없으면 그게 고장이다.
         if (!force && !prev && dismissed[key] !== undefined && dismissed[key] === (stateKey || ''))
@@ -1380,7 +1412,7 @@ function sideInstances() {
                 rank = activeHold.rank;
             }
         }
-        rows.set(key, { ...sideRowFace(route), id: key, active: key === activeKey, pinned: pin,
+        rows.set(key, { ...sideRowFace(route, draft), id: key, active: key === activeKey, pinned: pin,
             status: st ? { key: sk, label: st.label } : null,
             group, rank, at: pinnedAt(key, group, rawAt) });
     };
@@ -1403,7 +1435,7 @@ function sideInstances() {
     }
     (tabsApi ? tabsApi.tabs : []).forEach((tab, i) => {
         const key = sideRowKey(tab.route);
-        put(key, tab.route, rows.has(key) ? rows.get(key).at : now - i, rows.get(key)?.status?.key, true);
+        put(key, tab.route, rows.has(key) ? rows.get(key).at : now - i, rows.get(key)?.status?.key, true, tab.draft);
     });
     // 살아 있는 행만 자물쇠에 남긴다 — 안 그러면 닫힌 세션의 옛 자리가 영영 쌓인다.
     for (const k of [...orderPin.keys()])
