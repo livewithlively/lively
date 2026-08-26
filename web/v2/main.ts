@@ -15,6 +15,7 @@ import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
+import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
@@ -466,6 +467,17 @@ function rememberSessName(id: string, name: string): void {
   }, 400);
 }
 const recallSessName = (id: string): string => sessNames.get(id) || '';
+// ── 목록에 없는 세션의 **소속까지** (#2022) ────────────────────────────────────────
+//  위 sessNames(#2028)가 지키는 건 **이름**이다. 그런데 같은 findSess 미스가 소속도 함께 지운다 —
+//  `sideRowFace` 가 그 판정으로 소속 줄을 만들어 '프로젝트 없음' 을 붙이고, 세션 화면은 프로젝트 셸을
+//  0(프로젝트 없음)으로 두른다. 이름만 살리면 "이름은 맞는데 어느 프로젝트인지 모르는 행"이 남는다.
+//  ⇒ 서버가 세션 창(app_instance)에 실어 주는 **정본**을 쓴다: desired-state 의 지금 이름·소속
+//   (`subject_label`·`subject_project_id`, capabilities/app-instances.ts). 저장된 `title` 은 창을 연
+//   그 순간의 스냅샷이라 늙으므로(실측 'claude · resume'·'/status'·box id 그대로) 맨 뒤 폴백이다.
+//  ⚠ 새 왕복을 만들지 않는다 — 이 목록은 loadData 의 같은 Promise.all 에서 이미 받아 둔다.
+function sessFallback(id: string): { title: string; projectId: number } {
+  return pickSessFace(id, appInstances.find((i) => i.subject_kind === 'session' && i.subject_ref === id), { n: recallSessName(id) });
+}
 /** 저장돼 있던 탭 이름을 기억으로 옮긴다 — **첫 그림 전에** 부른다(그래야 켠 직후부터 이름이 제자리에 있다). */
 function seedSessNamesFromTabs(): void {
   for (const t of tabsApi ? tabsApi.tabs : []) {
@@ -496,8 +508,11 @@ async function repairUnknownSessNames(): Promise<void> {
     const out: any = await api('/api/ui/app-instances?include_closed=true');
     for (const inst of (Array.isArray(out?.instances) ? out.instances : [])) {
       const ref = String((inst && inst.subject_ref) || '');
-      const title = String((inst && inst.title) || '').trim();
+      //  #2022 — 서버가 실어 준 정본(subject_label)을 먼저 본다. 저장된 title 은 창을 연 순간의 스냅샷이라
+      //   늙고(실측 'claude · resume'·'/status'), 아예 **박스 id 그대로**인 행도 있다(실측 3건) — 그걸
+      //   이름으로 삼으면 고치려던 그림(`세션 <id꼬리>`)과 똑같아진다. pickSessFace 가 그 배제를 쥔다.
       //  'AI 세션' 은 이름이 아니라 기본값이다 — 그걸 기억하면 탭 여럿이 도로 같은 글자가 된다.
+      const title = pickSessFace(ref, inst).title;
       if (want.has(ref) && title && title !== 'AI 세션' && !recallSessName(ref)) rememberSessName(ref, title);
     }
   } catch { /* 못 찾으면 종전대로 id 꼬리로 — 이름 하나 때문에 화면을 막지 않는다 */ }
@@ -517,7 +532,7 @@ function parseRoute(route: string): { segs: string[]; params: URLSearchParams; r
 //  ⚠ 힌트는 클래식 딥링크(routeKey 'raw:…')에만 쓴다. 세션·프로젝트 이름은 살아 있는 데이터가 정본이다.
 const routeTitleHint = new Map<string, string>();
 /** 라우트 → 탭 제목·우패널 유무(탭 줄이 매 paint 마다 묻는다 — 데이터가 늦게 와도 이름이 따라잡는다). */
-function titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string } {
+function titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string; provisional?: boolean; unresolved?: boolean } {
   const { segs, raw } = parseRoute(route);
   const p = segs[0] || '';
   const key = routeKey(route);
@@ -552,10 +567,15 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
     // 못 찾은 세션(되살려서 새 id 를 받았거나·지웠거나·아직 목록에 안 온 것)이라도 **부르던 이름은 안 버린다**
     //  (위 sessNames 주석). 이름을 한 번도 못 들어 본 세션만 id 꼬리로 물러난다 — 그때도 서로 구분은 되게.
     if (!s) {
-      const kept = recallSessName(sid);
-      if (kept) return { title: kept, noAside: !SOLO };
+      //  #2022 — 기억(위 sessNames)에 더해 **서버 정본**(subject_label)도 본다. 기억은 이 브라우저가 한 번
+      //   봤어야 생기는데, 회수·정리된 박스는 이 기기에서 한 번도 못 본 것이 흔하다.
+      const kept = sessFallback(sid).title;
+      //  unresolved = '목록에 없다'. 이름을 되찾았는지와 **별개**다 — 소속을 아직 모른다는 뜻이므로
+      //   좌측 행이 '프로젝트 없음' 이라고 단정하지 않게 한다(모르는 것과 없는 것은 다르다).
+      if (kept) return { title: kept, noAside: !SOLO, unresolved: true };
       const tail = sid.split('-').pop() || sid;
-      return { title: '세션 ' + tail.slice(0, 6), noAside: !SOLO };
+      //  provisional = 이 이름은 id 꼬리다(이름이 아니다) — 탭이 저장본 위에 덮지 않게 한다.
+      return { title: '세션 ' + tail.slice(0, 6), noAside: !SOLO, unresolved: true, provisional: true };
     }
     const t = sessText(s, projName(data, s.projectId));
     const title = t.main || t.sub || String(s.raw?.harness || '세션');
@@ -738,7 +758,10 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 일반 세션만 ai-session builtin으로 접힌다 — 종전의 '세션 앱'과 일반 앱이 같은 package/instance 모델을 쓴다.
       // 인스턴스 메타 실패가 살아 있는 세션 자체를 가리지 않도록 화면 렌더와는 분리한다.
       try {
-        const title = s ? (sessText(s, projName(data, s.projectId)).main || s.label || 'AI 세션') : 'AI 세션';
+        //  ⚠ 모를 때 'AI 세션' 같은 자리표시자를 보내지 않는다(#2022) — 서버는 conflict 시 title 을 COALESCE 로
+        //   덮으므로, 목록이 늦은 한 판이 저장된 멀쩡한 이름을 자리표시자로 굳혀 버린다(실측: '/status'·'claude · resume').
+        //   안 보내면 이전 값이 그대로 살고, 되찾기(repairUnknownSessNames)도 그 값을 다시 쓸 수 있다.
+        const title = s ? (sessText(s, projName(data, s.projectId)).main || s.label || undefined) : undefined;
         const appId = String(s?.raw?.appId || s?.raw?.app_id || 'ai-session');
         const instance = await ensureSessionAppInstance(appId, s?.id || id, { projectId: s?.projectId ? Number(s.projectId) : null, title });
         if (seq !== tab.seq) return;
@@ -756,7 +779,8 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         });
         return;
       }
-      await mountProjectShell(tab, s && s.projectId ? Number(s.projectId) : 0, id, seq);
+      //  #2022 — 목록에 아직·영영 없는 세션이어도 서버가 아는 소속으로 셸을 두른다(종전엔 무조건 0 = 프로젝트 없음).
+      await mountProjectShell(tab, s ? (s.projectId ? Number(s.projectId) : 0) : sessFallback(id).projectId, id, seq);
     } else if (page === 'i' && segs[1]) {
       const instance = await getAppInstance(decodeURIComponent(segs[1]));
       if (seq !== tab.seq) return;
@@ -874,8 +898,11 @@ function projectIdForRoute(route: string): number {
   const { segs } = parseRoute(route);
   if (segs[0] === 'p') return Number(segs[1]) || 0;
   if (segs[0] === 's') {
-    const s = findSess(decodeURIComponent(segs[1] || ''));
-    return s && s.projectId ? Number(s.projectId) : 0;
+    const id = decodeURIComponent(segs[1] || '');
+    const s = findSess(id);
+    //  목록에 있는 세션이면 그 값이 정본이다 — 0(프로젝트 없음)도 사실이므로 폴백으로 덮지 않는다.
+    if (s) return s.projectId ? Number(s.projectId) : 0;
+    return sessFallback(id).projectId;   // #2022 — 아직·영영 목록에 없는 세션은 서버가 아는 소속으로
   }
   if (segs[0] === 'app' && segs[1] === 'projects2' && segs[2] === 'p') return Number(segs[3]) || 0;
   if (segs[0] === 'projects2' && segs[1] === 'p') return Number(segs[2]) || 0;
@@ -909,7 +936,9 @@ function sideRowFace(route: string): Omit<SideInstance, 'id' | 'active'> {
   let icon: SideInstance['icon'] = 'app';
   let meta = '라이블리 앱';
   if (!page || page === 'dashboard') { icon = 'home'; meta = '아직 시작하지 않은 작업'; }
-  else if (page === 's' || page === 'p') { icon = 'chat'; meta = project ? '' : 'AI 세션 · 프로젝트 없음'; }
+  //  ⚠ 소속을 **모르는 것**과 **없는 것**은 다르다(#2022) — 목록에도 서버 정본에도 아직 못 닿은 세션
+  //   (unresolved)에 '프로젝트 없음' 을 붙이면 화면이 거짓말을 한다. 그때는 소속 줄을 비운다.
+  else if (page === 's' || page === 'p') { icon = 'chat'; meta = project ? '' : (info.unresolved ? 'AI 세션' : 'AI 세션 · 프로젝트 없음'); }
   else if (page === 'inbox') { icon = 'inbox'; meta = '답과 확인을 기다리는 작업'; }
   else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
   //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
