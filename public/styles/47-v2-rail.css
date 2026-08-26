@@ -93,7 +93,10 @@
 .v2-rail.closed .v2-rail-it.on .v2-rail-bd { box-shadow: 0 0 0 2px var(--bg); }
 
 .v2-rail-me .v2-ava { position: relative; width: 24px; height: 24px; font-size: 10px; flex: none; }
-.v2-rail-me .v2-ava::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mint); border: 2px solid var(--canvas); }
+/*  접속 점은 얼굴을 감싼 껍질(.v2-rail-avaw)에 단다 — 얼굴 자신은 overflow:hidden(원형 클립)이라 그 안의 ::after 는 원 밖 반쪽이
+    잘려 초승달이 됐다(#2061 실측). 껍질은 클립이 없으니 점이 원 테두리 위에 온전히 선다. */
+.v2-rail-avaw { position: relative; display: inline-flex; flex: none; line-height: 0; }
+.v2-rail-avaw::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mint); border: 2px solid var(--canvas); }
 .v2-rail-me .v2-rail-t { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 .v2-rail.closed .v2-rail-me .v2-ava { width: 30px; height: 30px; font-size: 12px; }
 .v2-rail.closed .v2-rail-me .v2-rail-t { display: none; }
