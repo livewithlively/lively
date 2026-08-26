@@ -17,6 +17,14 @@ set -eu
 GW="${LIVELY_GATEWAY:-__LIVELY_GATEWAY__}"
 GW="${GW%/}"
 
+# 이 주소가 **게이트웨이**인가 **라이블리 클라우드**인가 (#2044).
+#  게이트웨이(자가호스팅·테넌트)가 서빙하면 'gateway' 로 남고, 라이블리 클라우드(app.lvly.io)가 서빙하면
+#  'cloud' 로 구워진다. 다른 건 마지막 [4] 인계뿐이다 — 클라우드는 **어느 워크스페이스인지 아직 모르므로**
+#  게이트웨이 주소를 파일에 쓰지 않고, 로그인이 그 값을 받아 온다.
+#  ⚠ 굽히지 않은 채(치환 실패) 오면 종전대로 'gateway' 다 — 새 서버 + 구 스크립트 조합에서 안전한 쪽.
+MODE="${LIVELY_MODE:-__LIVELY_MODE__}"
+case "$MODE" in cloud) ;; *) MODE="gateway" ;; esac
+
 # ⚠ LIVELY_HOME 은 **HOME 리다이렉트**다(.lively 디렉터리가 아니라) — user-install/uninstall/self-update 와 같은 계약.
 LIVELY_DIR="${LIVELY_HOME:-$HOME}/.lively"
 NODE_DIR="$LIVELY_DIR/runtime"
@@ -150,8 +158,12 @@ chmod 755 "$LIVELY_DIR/bin/lively"
 ok "lively 설치: ~/.lively/bin/lively"
 
 # 게이트웨이 주소 기록 — `lively login` 이 어디에 물어볼지 알게 된다(토큰은 여기 없다).
-printf '%s' "$GW" > "$LIVELY_DIR/gateway-url"
-chmod 600 "$LIVELY_DIR/gateway-url" 2>/dev/null || true
+#  ⚠ 클라우드 모드에선 **쓰지 않는다**: 그 값은 아직 아무도 모르고(사람이 워크스페이스를 안 골랐다),
+#   여기에 클라우드 주소를 적으면 CLI 가 그걸 게이트웨이로 믿어 이후 모든 호출이 404 로 샌다.
+if [ "$MODE" = gateway ]; then
+  printf '%s' "$GW" > "$LIVELY_DIR/gateway-url"
+  chmod 600 "$LIVELY_DIR/gateway-url" 2>/dev/null || true
+fi
 
 # ── [3] PATH 배선 ─────────────────────────────────────────────────────────────
 # 새 터미널에서도 `lively` 가 잡히게 셸 rc 에 센티넬 블록을 **비파괴로** 심는다(이미 있으면 건너뜀).
@@ -188,6 +200,10 @@ export PATH
 # `curl … | sh` 라 이 스크립트의 stdin 은 **파이프**다. 그래서 /dev/tty(제어 단말)를 직접 물려 준다 —
 #  이것 하나로 "복사 1번 → 가림 입력 → 설치 완료"가 한 창에서 끝난다(토큰은 어디에도 안 남는다).
 if [ -r /dev/tty ] && [ -t 1 ]; then
+  if [ "$MODE" = cloud ]; then
+    # 클라우드 — 브라우저 승인 한 번으로 워크스페이스·자격이 온다(주소를 묻지 않는다).
+    exec "$LIVELY_DIR/bin/lively" setup --cloud "$GW" < /dev/tty
+  fi
   exec "$LIVELY_DIR/bin/lively" setup < /dev/tty
 fi
 
@@ -195,6 +211,15 @@ fi
 say ""
 ok "lively CLI 준비 완료."
 say ""
+if [ "$MODE" = cloud ]; then
+  say "  다음 명령을 실행하세요:"
+  say ""
+  say "      lively setup --cloud   # 브라우저로 로그인 + 설치"
+  say ""
+  say "  (지금 창에서 'lively: command not found' 가 나면 새 터미널을 열거나  source ~/.zshrc)"
+  say ""
+  exit 0
+fi
 say "  다음 두 명령을 실행하세요:"
 say ""
 say "      lively login      # 접속 토큰 입력(화면에 안 보임)"
