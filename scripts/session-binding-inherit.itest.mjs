@@ -29,7 +29,7 @@ execSync("sleep 0.5");
 
 process.env.ITEMS_DATABASE_URL = url;
 const { itemsPool } = await import("../dist/items/store.js");
-const { latestProjectForSession, latestProjectForSessionChain } = await import("../dist/v6/project-session-store.js");
+const { latestProjectForSession, latestProjectForSessionChain, sessionsCurrentlyBound } = await import("../dist/v6/project-session-store.js");
 
 try {
   // 스텁은 이 두 함수가 만지는 컬럼만(전체 initV6Schema 는 pgvector 필요라 격리 — schema-init.itest 가 그쪽을 본다).
@@ -100,6 +100,23 @@ try {
     assert.deepEqual(await latestProjectForSessionChain(["box-exec", "conv-uuid"]), { id: Q, folder: "project/Q4" },
       "실행 축이 휴지통이면 대화 축으로");
     ok("④ 실행 축이 휴지통 → 대화 축으로 넘어간다");
+  }
+
+  // ── ⑤ 휴지통 쓸어담기: '지금도 이 프로젝트 소속'인 세션만 ──
+  //  근거(2026-08-26 실측): 소속을 옮긴 뒤 옛 껍데기를 버렸더니 **살아 있는 그 세션 카드가 함께 쓸려갔다**.
+  //  목록(listSessionsForProject)은 이력 조인이라 옮긴 세션도 나온다 — 목록엔 맞고, 버리기엔 틀리다.
+  {
+    const OLD = await mk("O5", "project/O5"), NEW = await mk("N5", "project/N5");
+    await bind("moved", OLD, "2026-08-20T00:00:00Z");
+    await bind("moved", NEW, "2026-08-21T00:00:00Z");     // 옮겼다
+    await bind("stayed", OLD, "2026-08-20T00:00:00Z");    // 그대로 남았다
+    assert.deepEqual([...await sessionsCurrentlyBound(["moved", "stayed"], OLD)], ["stayed"],
+      "옛 프로젝트를 버릴 때 딸려갈 세션은 아직 거기 있는 것뿐이다");
+    ok("⑤ 옮긴 세션은 옛 프로젝트의 휴지통에 딸려가지 않는다");
+    assert.deepEqual([...await sessionsCurrentlyBound(["moved", "stayed"], NEW)], ["moved"], "옮겨간 쪽에서는 포함된다");
+    ok("⑤ 옮겨간 프로젝트에서는 포함된다");
+    assert.equal((await sessionsCurrentlyBound([], OLD)).size, 0, "빈 입력은 DB 를 때리지 않는다");
+    ok("⑤ 빈 입력 방어");
   }
 
   console.log(`\n통과 ${pass}건`);
