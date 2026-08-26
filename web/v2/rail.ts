@@ -46,7 +46,7 @@ export interface SecDef { key: RailSection; label: string; tab: string | null; i
 const SECTIONS: SecDef[] = [
   { key: 'home', label: '홈', tab: null, icon: 'home' },
   { key: 'inbox', label: '확인할 것', tab: null, icon: 'inbox' },
-  { key: 'sess', label: 'AI 세션', tab: 'terminal', icon: 'term' },
+  { key: 'sess', label: 'AI 세션', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26)
   { key: 'proj', label: '프로젝트', tab: 'projects2', icon: 'proj' },
   { key: 'wiki', label: '위키', tab: 'knowledge', icon: 'wiki' },
 ];
