@@ -247,6 +247,10 @@ export async function initToolAndAssetRegistry(pool: Pool): Promise<void> {
       ('project_list_delete_v6','builtin',true,true),
       ('project_list_set_members_v6','builtin',true,true),
       ('project_set_list_v6','builtin',true,true),
+      -- #2031 project_rename_v6: 세션이 **자기 프로젝트의 임시 이름**(지시문을 자른 기계값)을 한 번 다듬는다.
+      --  자동승인인 이유는 session_rename 과 같다 — 이 툴은 사용자의 첫 턴 **안에서** 불린다. 거기서 컨펌을 띄우면
+      --  "이름짓기가 응답시간을 늘리지 않는다"는 전제가 깨진다. 사람이 지은 이름은 서버 걸쇠가 지킨다(덮이지 않는다).
+      ('project_rename_v6','builtin',true,true),
       ('repo_create','builtin',true,true),
       ('repo_delete','builtin',true,true),
       ('repo_deprecate','builtin',true,true),

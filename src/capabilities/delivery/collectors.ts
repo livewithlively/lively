@@ -19,6 +19,7 @@ import { startConnectorRun } from "../../connectors/run-tracker.js";
 import { discoverConnectorScope } from "../../connectors/discover.js";
 import { runAutoBackfillSweep } from "../../v6/embedding-backfill.js";
 import { itemsPool } from "../../db/client.js";
+import { ensureWikiRepoCollector } from "../../org/wiki-repo.js";
 import { actorOf, restOnly, restRead, str } from "./shared.js";
 
 /** 수집기 1건 조회 + 바인딩 정보 — 실행·discover 가 공용으로 쓴다. */
@@ -236,5 +237,27 @@ export const collectorsCapabilities: Capability[] = [
       return { ok: true };
     }, {
       id: z.number().int().positive().describe("삭제할 수집기 id — 수집된 자료·지식은 남는다"),
+    }),
+
+  restOnly("org_wiki_repo_ensure", "레포의 위키를 자료로 모으기",
+    "등록된 git 레포의 마크다운을 지식으로 인입하는 수집기를 준비한다(#1881 G9) — **자격증명이 더 필요하지 않다**. " +
+    "레포를 등록하면 게이트웨이가 이미 공유 클론(workspace/repos/<name>)을 두고 최신화하므로, 이 도구는 그 경로를 " +
+    "수집기 설정에 채워 넣을 뿐이다. 종전엔 사람이 서버에 들어가 직접 클론하고 절대경로를 타이핑해야 했다. " +
+    "스캔 폴더는 추정한다(content/ 가 있으면 그것, 없으면 레포 루트) — 응답의 markdown_files 로 '정말 위키인가'를 " +
+    "가늠하고, 표본(org_collector_preview)을 본 뒤 enable=true 로 켜라. **기본은 꺼진 채로 만든다**(코드 레포를 " +
+    "실수로 통째 지식화하지 않게). enable=false 로 부르면 끈다. 이미 있으면 경로·링크 접두만 최신화한다(멱등).",
+    [{ method: "POST", paths: ["/api/ui/org/wiki-repos"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const repo = str(input.repo, "repo", 100).trim();
+      const r = await ensureWikiRepoCollector({
+        repo,
+        enable: typeof input.enable === "boolean" ? input.enable : undefined,
+        actor: actorOf(user), source: "web",
+      });
+      resetConnectorConfigCache(); // 설정을 방금 바꿨다 — 다음 해소가 옛 값을 보지 않게
+      return r;
+    }, {
+      repo: z.string().describe("등록된 레포 이름(레포(git) 관리의 그 이름)"),
+      enable: z.boolean().optional().describe("true=켜기(표본 확인 뒤 승인) · false=끄기 · 미지정=준비만(꺼진 채 생성·기존 상태 유지)"),
     }),
 ];

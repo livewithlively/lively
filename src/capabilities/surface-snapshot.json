@@ -1087,6 +1087,16 @@
   "input_hash": "ee63edf0e6e64aae"
  },
  {
+  "name": "org_wiki_repo_ensure",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/wiki-repos"
+  ],
+  "input_hash": "411133c59afc2f35"
+ },
+ {
   "name": "org_ingest_policy_list",
   "scope": null,
   "mcp": true,
@@ -2745,6 +2755,16 @@
    "POST /api/ui/v6/projects/:id"
   ],
   "input_hash": "dcd98f3b595ef870"
+ },
+ {
+  "name": "project_rename_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/rename"
+  ],
+  "input_hash": "7339e5b72ec7b0ce"
  },
  {
   "name": "project_set_repos_v6",
