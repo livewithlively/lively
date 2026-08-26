@@ -3,11 +3,11 @@
 //
 //  목록 API 에는 그 글이 없다 — 중앙 기록의 session 표는 **첫 지시**(= 제목)만 쥔다(src/v6/session-log-store.ts
 //  firstUserPromptTitle). 서버에 칸을 더하면 게이트웨이를 다시 띄워야 데브에 서므로(#1979 제약), 지금은 대화
-//  꼬리를 행마다 한 번씩 받아(panes-parts fetchTurns — 탭 이름 폴백 lookupSessNames 가 같은 길) 이 기기에 캐시한다.
+//  꼬리를 행마다 한 번씩 받아(sess-tail fetchTurns — 세션 카드가 같은 길) 이 기기에 캐시한다.
 //   · 같은 lastSeen 이면 다시 묻지 않는다(활동이 있어야 새 말이 있다) · 동시 4건 · 도착하면 onReady 로 목록만 갈아 끼운다.
 //   · 새 활동이 생기면 옛 글을 먼저 보여 주고 뒤에서 바꾼다 — 빈 줄이 깜빡이지 않게.
 //  ⚠ 서버 칸(session.last_prompt)으로 올리는 것이 정답이다 — 그때 이 파일은 그 값을 읽는 한 줄로 줄어든다.
-import { fetchLastAsk } from './panes-parts.js';
+import { fetchLastAsk } from './sess-tail.js';
 import type { Sess } from './views.js';
 
 const TAIL = 48000;    // 꼬리 바이트 — 클로드 코드의 last-prompt 레코드는 턴마다 있어 보통 여기 든다(행 20개면 1MB 안쪽)
