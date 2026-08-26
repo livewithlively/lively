@@ -190,6 +190,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-flt-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .v2-flt-n { min-width: 15px; height: 15px; border-radius: 999px; background: var(--blue-fill); color: var(--on-fill); font-size: 10px; font-weight: 800; display: inline-grid; place-items: center; padding: 0 3px; }
 .v2-flt-pop { position: absolute; top: calc(100% + 6px); right: -40px; width: 236px; z-index: 30; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(var(--shadow-ink), .14); padding: 6px; }
+/*  ⚠ 위 `right: -40px` 은 구 머리줄(.v2-side-sec)에서 필터가 **끝이 아니던** 시절의 값이다. 구역 머리글
+    (.v2-app-space-head)에서는 필터가 맨 오른쪽이라 그대로 두면 팝오버가 사이드바 밖으로 나가 잘린다
+    (실측: 「닫기」가 「닫」으로, 상태 개수도 잘림). 여기서는 오른쪽 끝에 맞춘다(#2033). */
+.v2-app-space-head .v2-flt-pop { right: 0; }
 .v2-flt-k { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; letter-spacing: .06em; color: var(--muted); padding: 8px 10px 3px; }
 .v2-fo { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; text-align: left; }
 .v2-fo:hover { background: var(--bg-tint); color: var(--ink); }
