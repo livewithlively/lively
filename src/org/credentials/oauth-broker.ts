@@ -13,7 +13,7 @@ import crypto from "node:crypto";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthTokens, OAuthClientMetadata, OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { getMemberSecret, setMemberSecret, deleteMemberSecret, memberOwner, GATEWAY_OWNER } from "./member-secret-store.js";
+import { getMemberSecret, setMemberSecret, deleteMemberSecret, memberOwner, GATEWAY_OWNER, CLIENT_SCOPE, PKCE_SCOPE } from "./member-secret-store.js";
 import { getMcpServer, getRuntimeConfig, getOrgProfile } from "../store.js";
 import { presetOAuthScope } from "../delivery/mcp-server-presets.js";
 import { makeSsrfFetch } from "../../net/mcp-ssrf-fetch.js";
@@ -24,6 +24,8 @@ import {
   isGithubAppServer, buildGithubAuthorizeUrl, githubInstallUrl, exchangeGithubCode,
   GITHUB_APP_KIND, GITHUB_APP_KEY_SCOPE, GITHUB_APP_SERVER, GITHUB_INSTALL_KIND, type GithubUserTokens,
 } from "./github-app.js";
+import { resolveGoogleOAuthClient, googleVaultReader } from "./google-token-source.js";
+import { isGoogleServer, buildGoogleAuthorizeUrl, exchangeGoogleCode, parseGoogleTokenResponse, refreshGoogleToken, mergeGoogleTokens, googleInstallToSlot, googleInstallFromBlob, googleTokenExpired, googleScopeString, GOOGLE_KIND, GOOGLE_SERVER, GOOGLE_DEFAULT_SERVICES, type GoogleInstall, type GoogleService } from "./google-oauth.js";
 
 const STATE_KEY_ENV = "CONNECTOR_SECRET_KEY"; // 상태 서명키는 봉투암호화 키와 같은 마스터에서 도메인 분리 파생(신규 env 불요).
 const STATE_INFO = "lively-oauth-state-v1";
@@ -102,10 +104,12 @@ export function buildClientMetadata(opts: { redirectUrl: string; clientName?: st
 }
 
 // vault 슬롯 키 — 토큰은 서버 설정 scope_key(resolveMemberSecret 이 읽는 슬롯), 클라정보/PKCE 는 예약 scope_key 로 분리.
-export const CLIENT_SCOPE = "oauth:client";  // owner=gateway(조직 공용 DCR 등록) — http_proxy 갱신 경로도 여기서 client_id/secret 을 읽는다(#1654)
-// PKCE verifier — owner=member, (member,kind)당 고정 슬롯(콜백까지 임시). 고정키라 재시도 시 덮어써 고아 누적 방지(리뷰 #1);
-//  finishConsent 성공/실패/거부 모두 정리(try/finally + abandonConsent). listMemberSecretsPublic 는 이 슬롯을 숨긴다.
-export const PKCE_SCOPE = "oauth:pkce";
+//  정본은 member-secret-store(금고 슬롯의 예약 키니까). 여기서 재수출해 기존 import 경로를 유지한다 — 금고만
+//  읽으면 되는 모듈이 이 무거운 파일을 끌어오다 import 순환이 났었다(#1881 G3).
+//  · CLIENT_SCOPE — owner=gateway(조직 공용 DCR 등록). http_proxy 갱신 경로도 여기서 client_id/secret 을 읽는다(#1654).
+//  · PKCE_SCOPE — owner=member, (member,kind)당 고정 슬롯(콜백까지 임시). 고정키라 재시도 시 덮어써 고아 누적 방지;
+//    finishConsent 성공/실패/거부 모두 정리(try/finally + abandonConsent). listMemberSecretsPublic 는 이 슬롯을 숨긴다.
+export { CLIENT_SCOPE, PKCE_SCOPE };
 
 export interface VaultOAuthOpts {
   memberId: string;
@@ -455,6 +459,115 @@ export async function refreshNotionPublicToken(workspaceId: string, actor?: stri
   await saveNotionInstall({ m: connectedBy, s: NOTION_PUBLIC_SERVER, k: "", n: "", e: 0 }, install, actor ?? "oauth-refresh");
   return install.access_token;
 }
+// ── 구글 직결(#1881 G2) — 드라이브·Gmail·캘린더를 **한 동의**로. 예약 서버명(google)으로 콜백을 라우팅한다.
+//  org_mcp_server 행을 쓰지 않는다: 도구 호출은 이미 클래식 REST(http_proxy, #1652)로 내려가 있는데 인증 앵커만
+//  Developer Preview 엔드포인트(`*mcp.googleapis.com`)에 남아 있었다 — 상류가 바뀌면 연결 개시가 통째로 죽는 구조였다.
+//  구글 OAuth 엔드포인트는 고정이라 디스커버리할 이유가 없다. 규칙(인가 URL·교환·병합·슬롯)은 google-oauth.ts.
+//  ★ 부수 효과: 연결 창구의 근거가 '서버 행'이 아니라 'http_proxy 도구'가 되어, 매니지드 개인 테넌트에서 구글이
+//   아예 안 보이던 것(T10 #1993 이 `0/4` 로 남긴 자리)이 함께 풀린다.
+/**
+ * 구글 조직 OAuth 클라이언트. **구 kind 를 승계한다** — #1652 시절에 붙인 조직은 client 가
+ *  `google_drive_oauth/oauth:client` 에 있고, 통합 kind 만 보면 연결이 돼 있는데도 googleReady()=false 가 되어
+ *  [권한 넓히기]가 죽는다(화면은 "연결됨"이라 client 입력 폼도 안 뜬다 → 빠져나갈 길이 없다. dev 실측 2026-08-26).
+ *  순서·근거는 google-token-source.ts GOOGLE_CLIENT_KINDS.
+ */
+async function loadGoogleClient(): Promise<{ client_id: string; client_secret: string } | null> {
+  return resolveGoogleOAuthClient(googleVaultReader);
+}
+export async function googleReady(): Promise<boolean> {
+  if (process.env.GOOGLE_OAUTH_RELAY_URL?.trim()) return true;
+  return !!(await loadGoogleClient());
+}
+/** 현재 저장된 구글 설치 상태(병합·만료 판정의 prev). 없으면 null. */
+async function loadGoogleInstall(memberId: string): Promise<GoogleInstall | null> {
+  const cur = await getMemberSecret(memberOwner(memberId), GOOGLE_KIND, "");
+  return googleInstallFromBlob(cur?.secret ?? null);
+}
+async function saveGoogleInstall(memberId: string, install: GoogleInstall, actor?: string): Promise<void> {
+  const slot = googleInstallToSlot(install);
+  await setMemberSecret(memberOwner(memberId), GOOGLE_KIND, slot.scopeKey, { secret: slot.secret, meta: slot.meta }, actor ?? "oauth");
+}
+/**
+ * 동의 개시. **이미 토큰이 있어도 서비스를 더 켜려면 다시 동의해야 하므로** 슬랙처럼 조기 authorized:true 로 끊지 않는다
+ *  — `include_granted_scopes=true` 라 재동의가 기존 권한을 보존하며 범위만 넓힌다(google-oauth.ts §인가 URL).
+ */
+export async function startGoogleConsent(
+  memberId: string, services: readonly GoogleService[] = GOOGLE_DEFAULT_SERVICES, actor?: string,
+): Promise<ConsentStart> {
+  const nonce = crypto.randomBytes(16).toString(B64);
+  const state = signState({ m: memberId, s: GOOGLE_SERVER, k: "", n: nonce });
+  // 매니지드(G4): 라이블리 CP 가 구글 클라이언트를 쥐고 콜백을 받는다 — 슬랙 T5·노션 N4 와 같은 규약(gw=테넌트 열쇠).
+  //  ⚠ CP 의 **로그인용** 구글 클라이언트와 다른 자격이어야 한다 — 로그인 앱에 데이터 범위를 얹으면 그 앱이 통째로
+  //   검증 대상 + 100명 한도가 되어 가입 자체가 막힌다(지식 google-single-connect-design-1881 §6②).
+  const relay = process.env.GOOGLE_OAUTH_RELAY_URL?.trim();
+  if (relay) {
+    const gatewayUrl = (await getOrgProfile()).gateway_url ?? "";
+    // ★ 구글은 릴레이에 **scope 도 실어 보낸다**(슬랙·노션과 다른 점). CP 는 그걸 그대로 인가 URL 에 옮길 뿐,
+    //  기본값을 끼워 넣지 않는다 — 그래야 사용자가 고른 서비스만 요청된다(안 고른 제한범위가 섞이면
+    //  되돌릴 수 없는 미검증 100명 한도를 한 칸 태운다).
+    const u = new URL(relayStartUrl(relay, state, gatewayUrl));
+    u.searchParams.set("scope", googleScopeString(services));
+    return { authorized: false, state, authorizationUrl: u.toString() };
+  }
+  const client = await loadGoogleClient();
+  if (!client?.client_id || !client.client_secret) {
+    throw new Error("Google 연결이 아직 준비되지 않았습니다 — 관리자가 구글 OAuth 클라이언트의 Client ID/Secret 을 조직 자격(kind google_oauth, scope_key oauth:client)에 넣어야 합니다.");
+  }
+  // PKCE — 구글은 지원한다(슬랙·노션과 다른 점). verifier 는 표준 슬롯에 두고 콜백에서 1회 쓰고 지운다.
+  const pkce = generatePkce();
+  await setMemberSecret(memberOwner(memberId), GOOGLE_KIND, PKCE_SCOPE, { secret: pkce.verifier }, actor ?? "oauth");
+  return {
+    authorized: false, state,
+    authorizationUrl: buildGoogleAuthorizeUrl({
+      clientId: client.client_id, redirectUri: await callbackUrl(), state,
+      scope: googleScopeString(services), codeChallenge: pkce.challenge,
+    }),
+  };
+}
+async function finishGoogleConsent(p: StatePayload, code: string, actor?: string): Promise<void> {
+  const client = await loadGoogleClient();
+  if (!client?.client_id || !client.client_secret) throw new Error("Google OAuth 클라이언트가 없어 토큰을 교환할 수 없습니다(연결 도중 설정이 지워졌습니다).");
+  const owner = memberOwner(p.m);
+  const verifier = (await getMemberSecret(owner, GOOGLE_KIND, PKCE_SCOPE))?.secret ?? undefined;
+  const install = await exchangeGoogleCode({
+    clientId: client.client_id, clientSecret: client.client_secret, code,
+    redirectUri: await callbackUrl(), codeVerifier: verifier, fetchFn: await gatewaySsrfFetch(),
+  });
+  // 최초 동의는 refresh_token 을 주지만, 구글이 생략하는 경로가 있어 병합을 항상 거친다(google-oauth.ts ★).
+  await saveGoogleInstall(p.m, mergeGoogleTokens(await loadGoogleInstall(p.m), install), actor);
+}
+/**
+ * 릴레이 완료(#1881 G4) — CP 가 구글과 교환한 토큰 응답 원문을 들고 온다. state 는 이 게이트웨이가 서명한 것이라
+ *  위조·만료·멤버 귀속을 여기서 검증한다(CP 는 통과만 시킨다). 구글 직결 state 가 아니면 거부.
+ */
+export async function completeGoogleInstall(stateToken: string, tokenResponse: unknown, actor?: string): Promise<{ ok: true; memberId: string; email: string | null }> {
+  const p = verifyState(stateToken);
+  if (!isGoogleServer(p.s)) throw new Error("이 state 는 구글 연결이 아닙니다");
+  const merged = mergeGoogleTokens(await loadGoogleInstall(p.m), parseGoogleTokenResponse(tokenResponse));
+  await saveGoogleInstall(p.m, merged, actor);
+  return { ok: true, memberId: p.m, email: merged.email };
+}
+/**
+ * 만료 갱신 — 유효하면 그대로, 만료면 갱신 후 **병합해서** 되쓴다.
+ *  ⚠ 구글은 갱신 응답에 refresh_token 을 **안 준다** — mergeGoogleTokens 없이 저장하면 1시간 뒤 영구 실패한다(#1652).
+ *  refresh_token 이나 client 가 없으면 null — 호출자가 "다시 연결" 실패 클래스로 안내한다(매니지드는 CP 갱신 프록시, G4).
+ */
+export async function ensureGoogleAccessToken(memberId: string, actor?: string): Promise<string | null> {
+  const cur = await loadGoogleInstall(memberId);
+  if (!cur) return null;
+  if (!googleTokenExpired(cur)) return cur.access_token;
+  if (!cur.refresh_token) return null;
+  const client = await loadGoogleClient();
+  if (!client?.client_id || !client.client_secret) return null;
+  const refreshed = await refreshGoogleToken({
+    clientId: client.client_id, clientSecret: client.client_secret,
+    refreshToken: cur.refresh_token, fetchFn: await gatewaySsrfFetch(),
+  });
+  const merged = mergeGoogleTokens(cur, refreshed);
+  await saveGoogleInstall(memberId, merged, actor ?? "oauth-refresh");
+  return merged.access_token;
+}
+
 /**
  * 릴레이 완료(#1881 T5) — CP 가 슬랙과 교환한 `oauth.v2.access` 응답 원문을 들고 온다. state 는 이 게이트웨이가 서명한 것이라
  *  위조·만료·멤버 귀속을 여기서 검증한다(CP 는 통과만 시킨다). 슬랙 직결 서버가 아니면 거부.
@@ -470,6 +583,8 @@ export async function completeSlackInstall(stateToken: string, access: unknown, 
 
 // 동의 개시 — PKCE·서명 state 로 authorization URL 생성(브라우저 오픈용). 이미 토큰 있으면 authorized:true.
 export async function startConsent(memberId: string, serverName: string, actor?: string): Promise<ConsentStart> {
+  // #1881 G2 구글 직결 — MCP 서버 행이 없으므로 loadProxyServer 앞에서 갈라야 한다(노션 공개 통합과 같은 규약).
+  if (isGoogleServer(serverName)) return startGoogleConsent(memberId, GOOGLE_DEFAULT_SERVICES, actor);
   const srv = await loadProxyServer(serverName);
   const redirectUrl = await callbackUrl();
   if (isSlackOAuthKind(srv.authKind)) return startSlackConsent(memberId, serverName, srv, redirectUrl);
@@ -495,6 +610,15 @@ export async function finishConsent(
     await finishNotionPublicConsent(p, code, actor);
     return { ok: true, memberId: p.m, serverName: p.s };
   }
+  if (isGoogleServer(p.s)) { // #1881 G2 구글 직결 — MCP 서버 행 없음, form 교환 + PKCE
+    try {
+      await finishGoogleConsent(p, code, actor);
+    } finally {
+      // 1회용 verifier 정리 — 실패·예외 경로에서도 고아를 남기지 않는다(표준 경로와 같은 규율).
+      await deleteMemberSecret(memberOwner(p.m), GOOGLE_KIND, PKCE_SCOPE).catch(() => { /* best-effort */ });
+    }
+    return { ok: true, memberId: p.m, serverName: p.s };
+  }
   const srv = await loadProxyServer(p.s);
   const redirectUrl = await callbackUrl();
   if (isSlackOAuthKind(srv.authKind)) { // #1881 슬랙 직결 — PKCE 없음, 교환·저장은 finishSlackConsent
@@ -517,6 +641,10 @@ export async function abandonConsent(stateToken: string): Promise<void> {
   let p: StatePayload;
   try { p = verifyState(stateToken); } catch { return; }
   if (isNotionPublicServer(p.s)) return; // #1881 노션 공개 통합 — PKCE 슬롯이 없어 정리할 것도 없다
+  if (isGoogleServer(p.s)) { // #1881 G2 구글 직결 — PKCE 를 쓰므로 취소 경로에서도 verifier 를 지운다
+    await deleteMemberSecret(memberOwner(p.m), GOOGLE_KIND, PKCE_SCOPE).catch(() => { /* best-effort */ });
+    return;
+  }
   try {
     const srv = await loadProxyServer(p.s);
     const provider = new VaultOAuthProvider({ memberId: p.m, serverName: p.s, authKind: srv.authKind, tokenScopeKey: p.k, redirectUrl: await callbackUrl(), state: stateToken });

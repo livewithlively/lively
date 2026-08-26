@@ -8,6 +8,7 @@ import { secretsEnabled } from "../org/credentials/secret-box.js";
 import { getMcpServer, listMcpServers, listEnabledProxyTools } from "../org/store.js";
 import { deleteMemberSecret, memberOwner, listMemberSecretsPublic } from "../org/credentials/member-secret-store.js";
 import { startConsent } from "../org/credentials/oauth-broker.js";
+import { GOOGLE_KIND, GOOGLE_SERVER, GOOGLE_LEGACY_KINDS, isGoogleServer } from "../org/credentials/google-oauth.js";
 import { logger } from "../log.js";
 
 function s(v: unknown, max = 200): string {
@@ -17,6 +18,9 @@ function s(v: unknown, max = 200): string {
   return t;
 }
 async function requireOAuthServer(name: string): Promise<{ auth_kind: string; auth_scope_key: string | null }> {
+  // #1881 G2 구글 직결 — org_mcp_server 행이 **없다**(인증 앵커를 Developer Preview 엔드포인트에서 뗐다).
+  //  여기서 갈라 주지 않으면 연결 버튼이 404 로 죽는다(매니지드 개인 테넌트가 정확히 그 상태였다 — T10 #1993).
+  if (isGoogleServer(name)) return { auth_kind: GOOGLE_KIND, auth_scope_key: "" };
   const srv = await getMcpServer(name);
   if (!srv || srv.mode !== "proxy") throw new HttpError(404, `proxy MCP 서버 없음: ${name}`);
   if (srv.auth_mode !== "oauth" || !srv.auth_kind) throw new HttpError(400, `'${name}' 은 OAuth 커넥터가 아닙니다(auth_mode=oauth 필요)`);
@@ -50,7 +54,13 @@ const meOauthDisconnect: Capability = {
     const name = s((input as Record<string, unknown>)?.server);
     if (!name) throw new HttpError(400, "server 는 필수입니다");
     const srv = await requireOAuthServer(name);
-    const deleted = await deleteMemberSecret(memberOwner(user.userId), srv.auth_kind, srv.auth_scope_key ?? "");
+    let deleted = await deleteMemberSecret(memberOwner(user.userId), srv.auth_kind, srv.auth_scope_key ?? "");
+    // 구글은 구 kind 슬롯도 함께 지운다 — 하나만 지우면 별칭 폴백으로 **연결이 계속 살아 있다**(해제가 거짓말이 된다).
+    if (isGoogleServer(name)) {
+      for (const k of GOOGLE_LEGACY_KINDS) {
+        if (await deleteMemberSecret(memberOwner(user.userId), k, "")) deleted = true;
+      }
+    }
     return { disconnected: deleted };
   },
 };
@@ -70,6 +80,8 @@ const meOauthDisconnect: Capability = {
  */
 export interface OAuthConnectorRow {
   server: string; auth_kind: string; auth_scope_key: string | null; note: string | null; enabled: boolean; used_by: string[];
+  /** 이 kind 들의 토큰도 '연결됨'으로 친다(#1881 G2 전환기 — 구 kind 로 붙은 사람이 '연결 안 됨'으로 보이면 안 된다). */
+  alias_kinds?: string[];
 }
 export interface ConnectorServerLike {
   name: string; mode: string; auth_mode?: string | null; auth_kind?: string | null; auth_scope_key?: string | null;
@@ -100,8 +112,26 @@ export function foldOAuthConnectors(
     // 같은 자격을 여러 서버가 선언하면 하나로 접는다 — 켜져 있는 쪽을 대표로(연결 개시가 실제로 되는 행).
     if (!prev || (!prev.enabled && enabled)) byKind.set(s.auth_kind, row);
   }
+  // ── #1881 G2 구글 — 서비스마다 한 줄(드라이브·Gmail·캘린더 ×3)이던 것을 **[Google 연결] 한 줄**로 접는다. ──
+  //  이 줄은 MCP 서버 행에 기대지 않는다(직결이라 필요 없다). 그래서 서버 행이 없는 매니지드 개인 테넌트에서도
+  //  창구가 선다 — 구글이 아예 안 보이던 T10(#1993) 의 나머지 절반이 여기서 풀린다.
+  //  ⚠ 구 kind 는 alias_kinds 로 물고 간다: 예전에 붙은 사람이 '연결 안 됨'으로 보이면 재연결을 유도하게 되고,
+  //   그게 #1652 에서 실제로 사람을 잃은 실패 모드다(토큰은 살아 있는데 화면에서 사라짐).
+  const googleKinds = [GOOGLE_KIND, ...GOOGLE_LEGACY_KINDS];
+  const googleTools = googleKinds.flatMap((k) => kindUsers.get(k) ?? []);
+  if (googleTools.length > 0) {
+    const legacyRows = GOOGLE_LEGACY_KINDS.map((k) => byKind.get(k)).filter(Boolean) as OAuthConnectorRow[];
+    for (const k of googleKinds) byKind.delete(k); // 서비스별 줄을 걷어낸다(한 줄로 접히는 것이 요점)
+    byKind.set(GOOGLE_KIND, {
+      server: GOOGLE_SERVER, auth_kind: GOOGLE_KIND, auth_scope_key: "",
+      note: legacyRows.find((r) => r.note)?.note ?? null,
+      enabled: true, // 직결이라 서버 행의 enabled 와 무관하다 — 도구가 있으면 연결할 수 있다
+      used_by: googleTools.map((n) => `tool:${n}`),
+      alias_kinds: [...GOOGLE_LEGACY_KINDS],
+    });
+  }
   const orphanKinds = [...kindUsers.entries()]
-    .filter(([kind]) => !byKind.has(kind))
+    .filter(([kind]) => !byKind.has(kind) && !googleKinds.includes(kind))
     .map(([auth_kind, toolNames]) => ({ auth_kind, tools: toolNames }));
   return { connectors: [...byKind.values()], orphanKinds };
 }
@@ -128,12 +158,16 @@ const meOauthConnectors: Capability = {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const rows = await resolveOAuthConnectors();
     const mine = await listMemberSecretsPublic(memberOwner(user.userId)); // has_secret 플래그만(복호·last_used 부작용 없음)
-    const connected = (kind: string, sk: string | null) => mine.some((c) => c.kind === kind && c.scope_key === (sk ?? "") && c.has_secret);
+    const hasSlot = (kind: string, sk: string | null) => mine.some((c) => c.kind === kind && c.scope_key === (sk ?? "") && c.has_secret);
+    // 별칭 kind 의 토큰도 '연결됨'이다 — 구 방식으로 붙은 사람에게 재연결을 요구하지 않는다(#1881 G2 전환기).
+    //  별칭 슬롯의 scope_key 는 그 kind 자신의 기본값("")이지 이 줄의 scope_key 가 아니다.
+    const connected = (r: OAuthConnectorRow) =>
+      hasSlot(r.auth_kind, r.auth_scope_key) || (r.alias_kinds ?? []).some((k) => hasSlot(k, ""));
     return {
       connectors: rows.map((r) => ({
         server: r.server, // 웹이 이 값을 키로 매칭한다 — 어댑터를 바꿔도 이름이 같으면 화면·연결이 그대로다(무중단 승계)
         note: r.note, used_by: r.used_by,
-        connected: connected(r.auth_kind, r.auth_scope_key),
+        connected: connected(r),
       })),
     };
   },

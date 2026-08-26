@@ -8,6 +8,7 @@
 //  회귀 대상 ③: **단언 없는 프로브는 프로브가 아니다**(R2) — 호출 성공만 보면 정확히 이번처럼 눈이 먼다.
 import assert from "node:assert/strict";
 import { judgeProbe, evaluateStreak, alertTransition, pluck, isUnconfigured } from "./judge.js";
+import { googleToolAuthHint } from "../credentials/google-oauth.js";
 import { assertProbeCoverage, CANARY_PROBES, DENIAL_MARKERS, type CanaryProbe } from "./probes.js";
 
 let pass = 0;
@@ -182,6 +183,48 @@ t("R4 key 중복·어댑터별 target 형태를 거부", () => {
 t("R5 A·B 두 어댑터를 모두 덮는다 — 어느 쪽이 깨졌는지 가르려면 대조군이 필요하다", () => {
   const adapters = new Set(CANARY_PROBES.map((p) => p.adapter));
   assert.ok(adapters.has("http_proxy") && adapters.has("mcp_proxy"), `한쪽만 본다: ${[...adapters]}`);
+});
+
+// ★ #1994 T11 — "구글은 2개인데 슬랙은 0개" 였다. 상류가 하나도 안 덮이면 그 상류의 회귀는 **아무도 못 본다.**
+//  프로브 유무가 아니라 **덮이는 상류의 집합**을 잠근다: 새 상류를 붙이면서 눈을 안 달면 여기서 red 가 난다.
+t("★ R6 계약을 파는 상류마다 프로브가 있다 — 눈 없는 상류를 만들지 않는다", () => {
+  const systems = new Map<string, number>();
+  for (const p of CANARY_PROBES) {
+    const sys = p.key.split(".")[1] ?? "?";           // b.slack.search → slack
+    systems.set(sys, (systems.get(sys) ?? 0) + 1);
+  }
+  for (const want of ["slack", "notion"]) {
+    assert.ok((systems.get(want) ?? 0) > 0, `${want} 프로브가 0개 — 그 상류의 회귀는 아무도 못 본다`);
+  }
+  assert.ok((systems.get("google_drive") ?? 0) > 0);
+});
+
+t("★ R7 슬랙 검색 프로브는 **현행 표면의 지문**을 단언한다 — legacy 로 되돌아가면 잡힌다", () => {
+  const p = CANARY_PROBES.find((x) => x.key === "b.slack.search");
+  assert.ok(p, "슬랙 검색 프로브가 없다");
+  // legacy(search.messages) 응답은 messages.matches — results.messages 를 요구해야 그 회귀가 빨간불이 된다.
+  assert.ok(p!.expect.paths?.includes("results.messages"), `현행 표면 지문이 없다: ${JSON.stringify(p!.expect.paths)}`);
+  // 슬랙은 거부를 200 봉투로 준다 — 호출 성공만 보면 못 잡는다.
+  assert.ok(p!.expect.notContains?.includes("missing_scope"), "200 위장 거부를 안 본다");
+});
+
+
+// ★ 구글 안내 문구가 '미설정' 판정을 비켜 가지 않는가 — 리터럴이 아니라 **실제 출력**을 통과시킨다.
+//  #1881 G2 에서 "자격 없음 — me_credential_set 에 등록하세요" 를 "다음에 누를 버튼"으로 바꿨는데,
+//  그때 이 목록을 같이 안 고쳐서 **구글을 안 쓰는 조직이 전부 '상류 회귀'로 잡힐 뻔했다**(가짜 경보가
+//  진짜 경보를 묻는 경로). 문구를 또 바꾸면 여기서 red 가 난다.
+t("★ googleToolAuthHint 의 모든 출력이 '미설정'으로 분류된다 — 상류 회귀로 오인하면 가짜 경보가 쌓인다", () => {
+  const DRIVE = "https://www.googleapis.com/auth/drive.readonly";
+  const cases = [
+    googleToolAuthHint("google_calendar_oauth", null),   // 슬롯 자체가 없다
+    googleToolAuthHint("google_oauth", null),            // 통합 kind 도 같다
+    googleToolAuthHint("google_calendar_oauth", DRIVE),  // 연결은 있는데 캘린더 범위가 없다
+    googleToolAuthHint("google_gmail_oauth", DRIVE),     // 런칭에서 뺀 서비스
+  ];
+  for (const c of cases) {
+    assert.ok(c, "안내 문구가 비었다");
+    assert.equal(isUnconfigured(`상류가 실패를 반환했다: ${c}`), true, `'미설정'으로 안 잡힌다: ${c}`);
+  }
 });
 
 console.log(`\ncanary judge: ${pass} passed`);

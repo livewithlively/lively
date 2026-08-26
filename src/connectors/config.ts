@@ -16,6 +16,7 @@ import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js"
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
 import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
+import { resolveGoogleTokenSource, googleVaultReader, isGoogleCollectorSystem } from "../org/credentials/google-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
 export interface ConnectorField {
@@ -143,12 +144,15 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "gmail",
     label: "Gmail",
     guide: {
-      intro: "Google 은 OAuth 데스크톱 클라이언트의 refresh token 방식입니다(1개 토큰이 Gmail·Drive 공용 가능).",
+      intro:
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 에서 [팀 자료로 모으기]를 켜면 " +
+        "그 연결로 수집이 돌고(token_source=member:<켠 사람>), 토큰을 복사할 일이 없습니다(#1881 G3). " +
+        "아래 3칸은 **셀프호스팅·기존 배포용 수동 경로**입니다.",
       steps: [
-        "console.cloud.google.com ▸ APIs & Services ▸ Credentials ▸ [Create Credentials ▸ OAuth client ID] — 유형 'Desktop app'",
-        "OAuth consent screen 을 'In production' 으로 게시(Testing 상태면 refresh token 이 7일 만료)",
-        "클라이언트 ID/Secret 으로 gmail.readonly scope 승인 → refresh token 발급(설치 키트의 google-oauth 헬퍼 또는 OAuth Playground)",
-        "세 값을 아래에 저장",
+        "console.cloud.google.com ▸ API 및 서비스 ▸ 사용자 인증 정보 ▸ [사용자 인증 정보 만들기 ▸ OAuth 클라이언트 ID]",
+        "OAuth 동의 화면을 **게시(In production)** — Testing 상태면 refresh token 이 7일 만에 만료돼 수집이 멈춥니다",
+        "gmail.readonly scope 로 승인해 refresh token 발급(설치 키트의 google-oauth 헬퍼)",
+        "세 값을 아래에 저장 — 또는 '토큰 출처'에 member:<구성원 id> 를 넣어 금고 연결을 가리키게 하세요",
       ],
       url: "https://console.cloud.google.com/apis/credentials",
     },
@@ -156,6 +160,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "client_id", env: "GMAIL_CLIENT_ID", secret: false, required: true, label: "OAuth Client ID", hint: "xxxx.apps.googleusercontent.com" },
       { key: "client_secret", env: "GMAIL_CLIENT_SECRET", secret: true, required: true, label: "OAuth Client Secret" },
       { key: "refresh_token", env: "GMAIL_REFRESH_TOKEN", secret: true, required: true, label: "Refresh Token", hint: "gmail.readonly scope" },
+      { key: "token_source", env: "GMAIL_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Google 연결]로 저장한 자격 · 비우면 위 세 칸(Client ID/Secret/Refresh Token)을 씁니다" },
       { key: "query", env: "GMAIL_QUERY", secret: false, label: "검색 쿼리", hint: "Gmail 검색식 (예: -from:noreply, 비우면 전체)" },
     ],
   },
@@ -163,10 +168,12 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "gdrive",
     label: "Google Drive",
     guide: {
-      intro: "Gmail 과 같은 OAuth 클라이언트를 써도 됩니다 — scope 에 drive.readonly 를 합쳐 refresh token 을 발급하면 1개로 공용.",
+      intro:
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 의 [팀 자료로 모으기] 토글이 " +
+        "연결 하나로 드라이브·Gmail 을 함께 켭니다(#1881 G3). 아래는 셀프호스팅·기존 배포용 수동 경로입니다.",
       steps: [
-        "Gmail 가이드와 동일하게 OAuth 데스크톱 클라이언트 준비",
-        "drive.readonly scope 포함해 refresh token 발급 → 아래 저장",
+        "Gmail 가이드와 같은 OAuth 클라이언트를 쓰면 됩니다(1개 토큰이 Drive·Gmail 공용)",
+        "drive.readonly scope 포함해 refresh token 발급 → 아래 저장 — 또는 '토큰 출처'에 member:<구성원 id>",
       ],
       url: "https://console.cloud.google.com/apis/credentials",
     },
@@ -174,6 +181,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "client_id", env: "GDRIVE_CLIENT_ID", secret: false, required: true, label: "OAuth Client ID", hint: "xxxx.apps.googleusercontent.com" },
       { key: "client_secret", env: "GDRIVE_CLIENT_SECRET", secret: true, required: true, label: "OAuth Client Secret" },
       { key: "refresh_token", env: "GDRIVE_REFRESH_TOKEN", secret: true, required: true, label: "Refresh Token", hint: "drive.readonly scope" },
+      { key: "token_source", env: "GDRIVE_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Google 연결]로 저장한 자격 · 비우면 위 세 칸(Client ID/Secret/Refresh Token)을 씁니다" },
       { key: "folders", env: "GDRIVE_FOLDERS", secret: false, label: "폴더 id", hint: "이 폴더들만 (쉼표구분, 비우면 전체 Drive)" },
     ],
   },
@@ -398,6 +406,20 @@ async function loadConnectorConfig(
     if (r) {
       if (r.warning) console.warn(`figma token_source: ${r.warning}`);
       out.token = r.token;
+    }
+  }
+  // ── 구글 토큰 출처(#1881 G3) — 같은 규약이되 **액세스 토큰이 아니라 갱신 자격 3칸**을 채운다.
+  //  구글 액세스 토큰은 1시간짜리라 커넥터가 들고 있으면 곧 죽는다. google-auth.ts 의 교환·만료캐시 경로는
+  //  그대로 두고 값의 출처만 붙여넣기 → 금고로 옮긴다(googleAccessToken 무변경).
+  if (isGoogleCollectorSystem(system) && out.token_source) {
+    const r = await resolveGoogleTokenSource(out.token_source, system, googleVaultReader);
+    if (r) {
+      if (r.warning) console.warn(`${system} token_source: ${r.warning}`);
+      // 명시한 출처가 못 풀리면 **비운다** — 붙여넣기 값으로 조용히 떨어지면 "연결자가 나갔는데 옛 자격으로
+      //  계속 긁는" 꼴이 된다(슬랙·노션과 같은 규약).
+      out.client_id = r.client_id;
+      out.client_secret = r.client_secret;
+      out.refresh_token = r.refresh_token;
     }
   }
   return out;
