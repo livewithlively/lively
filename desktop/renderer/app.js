@@ -12,6 +12,10 @@ let justFinished = false;
 //  메인도 답을 받으면 progress.prompt 를 비우지만, 그 사이에 다음 step 이벤트가 먼저 도착하면
 //  옛 prompt 를 든 진행 상태가 한 번 더 그려진다(실측: 답한 카드가 잠깐 되살아났다). 양쪽에서 막는다.
 const answeredPrompts = new Set();
+// 주소칸 기본 안내 — index.html 의 초기 문구와 **같은 말**이어야 한다(상태가 바뀌었다 돌아오면 이 값이 복원된다).
+//  두 경로를 나란히 적는 이유는 index.html 주석 참조(#2044).
+const DEFAULT_GW_HINT = "라이블리 클라우드는 app.lvly.io 홈의 «데스크톱 앱·CLI 로 연결» 에서 복사하고, "
+  + "회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요.";
 
 function renderState(s) {
   state = s || {};
@@ -37,8 +41,8 @@ function renderState(s) {
   //  (사람이 편집 중이면 건드리지 않는다 — 입력을 덮어쓰는 화면만큼 짜증나는 게 없다.)
   const gwIn = $("gw");
   const needsFix = s?.cliOutdated || s?.cliBroken || s?.tokenRejected;
-  if (needsFix && s?.gatewayUrl && !gwIn.value && document.activeElement !== gwIn) { gwIn.value = s.gatewayUrl; preview(); }
-  $("gw-title").textContent = s?.cliBroken ? "라이블리 CLI 다시 설치" : s?.cliOutdated ? "라이블리 CLI 업데이트" : s?.tokenRejected ? "다시 로그인" : "회사 게이트웨이 주소";
+  if (needsFix && s?.gatewayUrl && !gwIn.value && document.activeElement !== gwIn) { gwIn.value = s.gatewayUrl; void preview(); }
+  $("gw-title").textContent = s?.cliBroken ? "라이블리 CLI 다시 설치" : s?.cliOutdated ? "라이블리 CLI 업데이트" : s?.tokenRejected ? "다시 로그인" : "워크스페이스 주소";
   // 실패 이유를 그대로 보여준다 — 'spawn EINVAL' 같은 원문이 있어야 제보가 진단이 된다(숨기면 우리도 모른다).
   $("gw-hint").textContent = s?.cliBroken
     ? `설치된 CLI 를 실행할 수 없습니다(${s.cliBroken}). 아래 주소에서 다시 받아 이어서 진행합니다.`
@@ -46,7 +50,7 @@ function renderState(s) {
       ? "설치된 CLI 가 이 앱보다 오래돼 앱이 진행 상황을 읽지 못합니다. 아래 주소에서 최신으로 받아 이어서 진행합니다."
       : s?.tokenRejected
         ? "게이트웨이가 이 PC 의 로그인 토큰을 거부했습니다(만료 또는 회수). 다시 로그인하면 이어서 진행합니다."
-        : "관리자에게 받은 주소를 넣으면 브라우저로 로그인합니다.";
+        : DEFAULT_GW_HINT;
   $("gw-go").textContent = s?.cliBroken ? "다시 설치" : s?.cliOutdated ? "업데이트" : s?.tokenRejected ? "다시 로그인" : "연결";
   show($("done-card"), ready && !s?.busy && justFinished);
   // 라이블리 화면(웹 UI 창) — 갖춰졌을 때만 열 수 있다. 못 실은 사유(webError)가 있으면 그대로 적는다(메인이 준다).
@@ -141,14 +145,20 @@ function log(line) {
 
 // ── 배선 ────────────────────────────────────────────────────────────────────
 // 무엇을 실행할지 **입력하는 동안** 보여준다(설치는 원격 코드 실행이다 — 숨기지 않는다).
-const preview = () => {
-  const gw = $("gw").value.trim().replace(/\/+$/, "");
-  const win = /win/i.test(navigator.userAgent || "");
-  $("gw-preview").textContent = /^https?:\/\/\S+$/i.test(gw)
-    ? (win ? `irm ${gw}/cli.ps1 | iex` : `curl -fsSL ${gw}/cli | sh`) + "  → 이어서 로그인·설치"
-    : "";
+//  ⚠ 정규화·판정을 여기서 다시 적지 않는다(#2044) — 메인이 정본이고 렌더러는 받은 문자열을 그린다.
+//  종전엔 이 함수가 자기 정규식으로 판정해서, 스킴 없이 친 주소는 미리보기가 **아무 말도 안 하다가**
+//  [연결]에서야 "형식이 올바르지 않습니다" 로 튕겼다(같은 값에 두 판정 = 사람이 원인을 못 찾는다).
+let previewSeq = 0;
+const preview = async () => {
+  const seq = ++previewSeq;
+  const a = await window.lively.gatewayAdvice($("gw").value);
+  if (seq !== previewSeq) return;                       // 더 최근 입력이 있다 — 옛 답으로 덮지 않는다
+  $("gw-preview").textContent = a?.cmd ? a.cmd + "  → 이어서 로그인·설치" : "";
+  // 타이핑 중의 오류는 **막는 게 아니라 알려주는 것**이다 — [연결]을 눌러도 같은 판정이 나온다(메인이 같은 자를 쓴다).
+  //  ⚠ 힌트(gw-hint)는 건드리지 않는다 — 그건 상태(구 CLI·재로그인)가 주도하는 자리다(renderState).
+  $("gw-err").textContent = a?.error || "";
 };
-$("gw").addEventListener("input", () => { $("gw-err").textContent = ""; preview(); });
+$("gw").addEventListener("input", () => { $("gw-err").textContent = ""; void preview(); });
 $("gw").addEventListener("keydown", (e) => { if (e.key === "Enter") $("gw-go").click(); });
 $("gw-go").addEventListener("click", async () => {
   const url = $("gw").value.trim();
