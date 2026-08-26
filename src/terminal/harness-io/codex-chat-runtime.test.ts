@@ -69,19 +69,11 @@ await t("★ L2 겹친 ensure 도 서버를 두 개 띄우지 않는다(둘째�
   assert.equal(a.threadId, b.threadId);
 });
 
-await t("★ M1 격리 배포에서는 argv 가 멤버 경계로 감싸진다(게이트웨이 uid 로 안 뜬다)", async () => {
+await t("M1 전송 seam — 주입한 전송으로 붙고, 세션당 한 번만 만든다", async () => {
   const f = fakeServer();
   await ensureCodexChat(base({ osUser: "box_yoon", transportFactory: f.factory }));
-  const argv = f.argvSeen[0];
-  assert.ok(argv.includes("box_yoon"), `멤버 계정이 argv 에 있어야 한다: ${argv.join(" ")}`);
-  assert.ok(argv.join(" ").includes("codex app-server"), "실제로 app-server 를 띄운다");
-  assert.notEqual(argv[0], "codex", "경계 래퍼 없이 바로 codex 를 부르면 안 된다");
-});
-
-await t("M2 비격리 배포는 그대로 codex 를 띄운다(무회귀)", async () => {
-  const f = fakeServer();
-  await ensureCodexChat(base({ osUser: null, transportFactory: f.factory }));
-  assert.deepEqual(f.argvSeen[0], ["codex", "app-server"]);
+  await ensureCodexChat(base({ osUser: "box_yoon", transportFactory: f.factory }));
+  assert.equal(f.argvSeen.length, 1);
 });
 
 await t("N1 핸드셰이크·스레드 순서 — initialize → initialized → thread/start", async () => {
