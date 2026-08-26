@@ -2,7 +2,7 @@
 //  + '세션 종료 확답' 판정(#835).
 // 실행: npm run build && node dist/terminal/terminal-pty.test.js
 import assert from "node:assert/strict";
-import { inputToSendKeys, inputToSendKeysArgv, isPsmuxBin, createInputPump, resizeToRefresh, captureCmd, stateCmd, mouseResetCmd, STATE_MARKER, handleControlMsg, parseEtimeSec, summarizeAttachProcs } from "./terminal-pty.js";
+import { inputToSendKeys, inputToSendKeysArgv, isPsmuxBin, createInputPump, resizeToRefresh, captureCmd, stateCmd, mouseResetCmd, STATE_MARKER, handleControlMsg, parseEtimeSec, summarizeAttachProcs, attachClose } from "./terminal-pty.js";
 import { isSessionGoneError } from "./terminal-sessions.js";
 import { TMUX_BIN } from "./catalog.js";
 
@@ -449,3 +449,30 @@ await ta("D5 펌프 — 전송 1건이 실패해도 다음 입력은 계속 흐�
 });
 
 console.log(`\n${pass} passed`);
+
+// ── attach 판정: 권한과 생사는 **따로** 본다 (2026-08-26 실측 신고) ──────────────
+// 종전엔 권한이 없을 때만 생사를 확인했다. 그런데 canAttach→ownerMeta 는 DB desired-state 우선이라
+//  **죽은 세션도 권한을 통과**시킨다 → 종료 확답(4410)이 안 나가고, 클라는 이유를 모른 채 영원히
+//  재연결했다(화면엔 tmux 의 "can't find session" 한 줄만). 새로고침해야 '열기=복원'으로 살아났다.
+
+t("[attach] 권한 있고 살아 있으면 통과", () => {
+  assert.equal(attachClose(true, false), null);
+});
+
+t("[attach] ★ 권한이 있어도 세션이 끝났으면 4410 — 클라가 재연결을 멈추고 복원으로 간다", () => {
+  assert.deepEqual(attachClose(true, true), { code: 4410, reason: "session-gone" });
+});
+
+t("[attach] 권한이 없으면 4403 — 클라는 몇 번 더 재시도(#687 가짜 4403 과 같은 취급)", () => {
+  assert.deepEqual(attachClose(false, false), { code: 4403, reason: "no-access" });
+});
+
+t("[attach] 권한도 없고 세션도 끝났으면 종료가 더 정확한 사실이다 → 4410", () => {
+  assert.deepEqual(attachClose(false, true), { code: 4410, reason: "session-gone" });
+});
+
+t("[attach] 판정 불가는 gone 이 아니다 — 살아있는 세션을 '종료됨'으로 오인하지 않는다(#835)", () => {
+  // 호출부가 sessionGone 실패를 false 로 접는다. 그 입력에서는 권한만으로 갈린다.
+  assert.equal(attachClose(true, false), null);
+  assert.deepEqual(attachClose(false, false), { code: 4403, reason: "no-access" });
+});
