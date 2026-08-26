@@ -17,7 +17,7 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { api, el, navOn, profileAvatar, state, toast } from '../core.js';
+import { el, navOn, profileAvatar, state, toast } from '../core.js';
 import { APPS, openLaunchpad, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
@@ -27,7 +27,6 @@ import {
   archiveWorkspace, createWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam,
 } from './switcher.js';
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
-import { overlay } from '../ui-primitives.js';
 
 export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
 
@@ -262,14 +261,15 @@ const sub = (t: string): HTMLElement => el('div', { class: 'v2-wspop-sub', text:
  *  없는 게이트웨이(서버 반영 전 dev)에서 구성원 행을 그리면 눌렀을 때 404 만 난다 — 그리지 않는다. */
 function inviteAxisOn(): boolean { return spaces.some((w) => typeof w.member_count === 'number' || w.member_count === null); }
 
-/** 워크스페이스 행 오른쪽 「사람 추가」 아이콘 — 그 워크스페이스의 구성원 모달을 연다.
- *  primary(박스의 팀)는 명부가 따로 없어 이메일 초대 축이 없다 — 박스 계정 목록 + 「사람 추가」→ 설정으로 보낸다.
- *  그 밖의 워크스페이스는 이메일 초대 모달(#1875). 초대 축이 아직 없는 게이트웨이(서버 반영 전)에서는 안 그린다. */
-function addPeopleBtn(w: { slug: string; name: string; is_primary?: boolean }): HTMLElement | null {
+/** 워크스페이스 행 오른쪽 「사람 추가」 아이콘 — 그 워크스페이스의 구성원 모달을 연다(#1875, ws-people.ts).
+ *  primary(박스의 팀)도 **같은 창**이다 — 거긴 명부 대신 박스 계정이라 초대 = 계정 생성이고, 그 임시 비밀번호가
+ *  창 안에 바로 나온다(설정으로 보내지 않는다 — 원준 2026-08-26). 초대 축이 아직 없는 게이트웨이(서버 반영 전)의
+ *  일반 워크스페이스에서는 안 그린다. */
+function addPeopleBtn(w: { slug: string; name: string; kind: string; is_primary?: boolean }): HTMLElement | null {
   const isPrimary = !!w.is_primary || w.slug === 'primary';
   if (!isPrimary && !inviteAxisOn()) return null;
   return el('button', { class: 'v2-wspop-add', type: 'button', title: `${w.name} 에 사람 초대`, 'aria-label': `${w.name} 에 사람 초대`,
-    onclick: (e: Event) => { e.stopPropagation(); closePopover(); if (isPrimary) openBoxPeople(w.name); else openMemberModal(w.slug, w.name); } },
+    onclick: (e: Event) => { e.stopPropagation(); closePopover(); openMemberModal(w.slug, w.name, { primary: isPrimary, face: workspaceFace(w, 'v2-wscard-big') }); } },
     icon('adduser')) as HTMLElement;
 }
 
@@ -278,28 +278,6 @@ let promoN = 0;   // 승인 대기 승격 수 — 설정 행 부제에 싣는다
 
 /** primary(박스의 팀) 구성원 모달 — 박스 계정 전원이다(명부가 따로 없다). 관리자면 「사람 추가」가 설정 ▸ 구성원으로
  *  간다(계정 만들기 = 여기 들어오기). 다른 워크스페이스의 이메일 초대와 같은 자리(문패 오른쪽 아이콘)에서 열린다. */
-function openBoxPeople(wsName: string): void {
-  const me: any = state.me || {};
-  const isAdmin = Array.isArray(me.scopes) && me.scopes.includes('admin');
-  const list = el('div', { class: 'v2-mem' }, el('p', { class: 'v2-ws-loading', text: '불러오는 중…' })) as HTMLElement;
-  const foot = isAdmin
-    ? el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { back.remove(); location.hash = '#/system/members'; } },
-        el('span', { class: 'v2-wspop-ic' }, icon('plus')), tt('사람 추가', '설정 ▸ 구성원에서 계정을 만들면 이 워크스페이스에 들어옵니다'))
-    : el('p', { class: 'v2-ws-hint', text: '사람 추가는 관리자가 설정 ▸ 구성원에서 계정을 만들어 합니다.' });
-  const back = overlay(wsName + ' · 구성원', el('div', { class: 'v2-mem-kind' }, el('b', { text: '팀 워크스페이스' }),
-    el('span', { text: '이 박스에 계정이 있으면 여기 구성원이에요.' })), list, foot) as HTMLElement;
-  void (async () => {
-    try {
-      const d: any = await api('/api/ui/dash/members');
-      const rows: any[] = (d && d.members) || [];
-      const meId = String(me.userId || '');
-      list.replaceChildren(el('div', { class: 'v2-ws-sec', text: `구성원 ${rows.length}명` }), ...rows.map((m) => el('div', { class: 'v2-mem-row' },
-        profileAvatar(m.avatar, String(m.display_name || m.id), m.id, 'v2-ws-person-face', { char: m.avatar_char, color: m.avatar_color }),
-        el('span', { class: 'v2-ws-person-tt' }, el('b', { text: String(m.display_name || m.id) + (String(m.id) === meId ? ' (나)' : '') })))));
-    } catch (e: any) { list.replaceChildren(el('p', { class: 'v2-ws-hint', text: e?.message || '구성원을 불러오지 못했어요.' })); }
-  })();
-}
-
 /** 워크스페이스 추가 — 이름 하나면 된다. 개인/팀은 **고르는 것이 아니라 인원에서 나온다**(#1875 D1):
  *  혼자면 개인, 사람을 부르면 그 순간 팀. 그래서 종류 선택 칸을 두지 않는다 — 있으면 '지금 정해야 하는 것'으로 읽힌다. */
 function openCreatePanel(anchor: HTMLElement): void {
