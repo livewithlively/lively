@@ -339,12 +339,16 @@ function chipInput(candidates: PeopleData['candidates'], onSubmit: () => void) {
     list = el('datalist', { id: 'v2mem-cand' }, ...candidates.map((c) => el('option', { value: c.email, label: c.display_name || c.email }))) as HTMLElement;
     input.setAttribute('list', 'v2mem-cand');
   }
+  // ★ 입력칸은 한 번 붙이고 **절대 떼지 않는다** — 칩만 그 앞에 갈아 끼운다. 입력칸을 떼었다 붙이면 포커스가
+  //  빠져서 "a@x.com, b@x.com" 을 치다 쉼표에서 글자가 허공으로 간다(프리뷰 실측: 둘째 주소 뒷부분이 사라졌다).
+  wrap.append(input, ...(list ? [list] : []));
   const render = (): void => {
+    wrap.querySelectorAll('.v2mem-chip').forEach((c) => c.remove());
     const chips = emails.map((e, i) => el('span', { class: 'v2mem-chip' + (EMAIL_RE.test(e) ? '' : ' bad'), title: EMAIL_RE.test(e) ? e : '이메일 형식이 아니에요' },
       el('span', { text: e }),
       el('button', { class: 'v2mem-chip-x', type: 'button', 'aria-label': `${e} 빼기`, onclick: () => { emails.splice(i, 1); render(); input.focus(); } },
         svg(['M6 6l12 12', 'M18 6 6 18'], 'v2mem-chip-x-ic'))));
-    wrap.replaceChildren(...chips, input, ...(list ? [list] : []));
+    input.before(...chips);
     input.placeholder = emails.length ? '' : '예: ellis@lvly.io, maria@lvly.io';
   };
   const commit = (): void => {
