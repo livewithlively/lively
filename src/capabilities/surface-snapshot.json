@@ -4077,6 +4077,36 @@
   "input_hash": "1333f0dfc135b86a"
  },
  {
+  "name": "org_github_connect_status",
+  "scope": "items",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/github/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_github_connect",
+  "scope": "items",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/github/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_github_app_register",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/github/app"
+  ],
+  "input_hash": "3341637643557f3f"
+ },
+ {
   "name": "app_instance_list",
   "scope": null,
   "mcp": false,
