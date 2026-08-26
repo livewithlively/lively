@@ -28,6 +28,7 @@ import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes, nodeOfSession, nodeSessionHarness, nodeAgentStale } from "../node/registry.js";
+import type { NodeSessionInfo } from "../node/registry.js";
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
@@ -44,7 +45,7 @@ import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";  
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
-import { deadSessionMeta } from "./session-meta.js";                 // #1820 — 죽은 세션이 '복원 가능'을 말하는 단일 판정
+import { deadSessionMeta, nodeSessionMetaMode } from "./session-meta.js";  // #1820 — 죽은 세션이 '복원 가능'을 말하는 단일 판정 + 노드 세션 생사 갈래
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
@@ -399,10 +400,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     // #1791 — 노드 세션의 desired-state(node_id) — 라이브 스냅샷에 없으면 죽은 것이다. 게이트웨이 tmux 를 묻지 않는다
     //  (그 id 는 여기 tmux 에 없고, canAttach 가 DB owner 로 통과해 빈 라벨을 돌려주는 오답을 막는다).
     if (st?.node_id) {
+      const ln = liveNodes().find((n) => n.id === st.node_id);
+      const nodeBadge = { id: st.node_id, name: ln?.name || st.node_id, online: !!ln?.online };
+      // ★ 좌표(?node=)를 못 받은 호출도 **여기서 생사를 확인한다** — 판정표는 session-meta.ts nodeSessionMetaMode.
+      //  스냅샷은 메모리 레지스트리라 새 왕복이 없다.
+      let alive: NodeSessionInfo | undefined;
+      const mode = nodeSessionMetaMode(nodeId, st.node_id, (nid) => {
+        alive = nodeSessionsFor(uid).find((x) => x.node.id === nid && x.id === id);
+        return !!alive;
+      });
+      if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge }); return; }
       const dead = deadSessionMeta(id, st, uid, isAdmin);
       if (dead.kind !== "ok") throw new HttpError(403, "세션에 접근할 수 없습니다");
-      const ln = liveNodes().find((n) => n.id === st.node_id);
-      res.json({ ...dead.body, node: { id: st.node_id, name: ln?.name || st.node_id, online: !!ln?.online } });
+      res.json({ ...dead.body, node: nodeBadge });
       return;
     }
     // ★ #1820 — 박스 세션이 tmux 에 없으면 **여기서** '복원 가능'을 알린다. canAttach 뒤로 미루면 안 된다:
