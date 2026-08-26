@@ -8,6 +8,7 @@ import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
 import { codexChatMode } from "./codex-chat-mode.js";
+import { rememberCodexThread } from "./codex-chat-thread.js";   // #2055 — 첫 지시도 대화 좌표를 남겨야 화면이 읽는다
 import { HttpError } from "../http-error.js";
 import { dirToProjectFolder } from "../project/project-fs.js";
 import { hiddenProjects, type HiddenProjects } from "../v6/visibility.js";
@@ -685,7 +686,12 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       //  실패하면 아웃박스로 내려간다: 그래야 로그인 전이라 서버를 못 여는 경우에도 지시가 큐에 남는다.
       void (async () => {
         const { sendCodexChat } = await import("./harness-io/codex-chat-runtime.js");
-        try { await sendCodexChat({ sessionId: id, text: prompt, cwd: target, osUser }); }
+        try {
+          const r = await sendCodexChat({ sessionId: id, text: prompt, cwd: target, osUser });
+          // ★ 스레드 좌표를 남긴다 — 안 남기면 답은 파일에 멀쩡히 있는데 **화면이 그 파일을 못 찾는다**
+          //  (프롬프트 경로에서 이미 한 번 밟은 함정이라 한 함수로 묶어 둘 다 부른다).
+          await rememberCodexThread({ sessionId: id, threadId: r.threadId, owner: ownerId(user), osUser });
+        }
         catch (e) {
           console.warn(`[terminal] 첫 지시 app-server 전송 실패(${id}) — 아웃박스로 폴백:`, (e as Error)?.message ?? e);
           const { enqueuePrompt } = await import("../sessions/session-outbox.js");
