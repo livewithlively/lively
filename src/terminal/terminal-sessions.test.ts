@@ -309,9 +309,35 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     //  그러면 이 시나리오는 통과하면서 아무것도 안 보는 vacuous 테스트가 된다(mutation 으로 실제 확인함).
     //  빈 문자열은 어느 셸에서도 유지되고 `${SHELL:-…}` 폴백을 실제로 발동시킨다(dash 처럼 안 채워주는 셸의 대역).
     const env: Record<string, string | undefined> = { ...process.env, SHELL: opts.noShell ? "" : "/bin/sh", ENV: "" };
-    const r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    // ★ **포크 실패는 런처 결함이 아니다.** 이 헬퍼는 진짜 프로세스를 띄우는데, CI 러너가 붐비면
+    //  `spawnSync` 가 EAGAIN/ENOMEM 으로 **포크 자체를 못 한다**. 그걸 그대로 아래 [배선] 단언에 흘리면
+    //  멀쩡한 런처가 "실행 안 됐다"로 빨간불이 된다 — 실측 2026-08-26: 같은 커밋이 두 번 실패하고
+    //  세 번째에 통과했다(러너 queued 12 → 0). 원인은 제품이 아니라 그 순간의 자원이었다.
+    //  그래서 **일시적 포크 실패만** 짧게 물러났다 다시 시도한다. 다른 실패(ENOENT 등)는 그대로 올린다 —
+    //  그건 진짜 결함이고, 여기서 삼키면 이 파일이 무엇도 안 보는 테스트가 된다.
+    const TRANSIENT = new Set(["EAGAIN", "ENOMEM"]);
+    let r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    for (let i = 0; i < 4 && r.error && TRANSIENT.has(String((r.error as NodeJS.ErrnoException).code ?? "")); i++) {
+      // 동기 백오프 — 이 테스트는 동기 흐름이라 await 를 못 쓴다. **바쁜 대기는 쓰지 않는다**:
+      //  CPU 가 모자라 포크가 실패한 그 순간에 CPU 를 태우면 상황을 더 나쁘게 만든다.
+      //  Atomics.wait 는 스레드를 실제로 재운다 — 러너가 숨 돌릴 틈을 준다.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150 * (i + 1));
+      r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    }
     // [배선] 관측 장치가 죽어 있으면 아래 단언은 통과하면서 아무것도 안 본다(vacuous).
-    ok2(!r.error && r.status !== null, "[배선] 런처가 실제로 실행됐다");
+    //  ⚠ 실패 문구에 **이유**를 싣는다. 종전엔 "런처가 실제로 실행됐다"만 남아서, 포크가 안 된 것인지
+    //   런처가 깨진 것인지 로그만 보고는 구분할 수 없었다(그 구분이 없어 플레이크를 제품 결함으로 쫓았다).
+    const code = r.error ? String((r.error as NodeJS.ErrnoException).code ?? "") : "";
+    const why = r.error
+      // 두 갈래를 **문구에서** 가른다: 재시도까지 했는데 못 띄운 자원 문제 vs 진짜 실행 실패(없는 파일 등).
+      //  이 구분이 없으면 로그만 보고는 플레이크인지 결함인지 알 수 없고, 그러면 결국 제품을 뒤지게 된다.
+      ? TRANSIENT.has(code)
+        ? `재시도했는데도 프로세스를 못 띄웠다(${code}) — 러너 자원 문제다`
+        : `런처를 실행하지 못했다(${code || r.error.message})`
+      : r.status === null
+        ? `신호로 죽었다(${r.signal ?? "?"})`
+        : "";
+    ok2(!why, `[배선] 런처가 실제로 실행됐다${why ? ` — ${why}` : ""}`);
     return (r.stdout || "") + (r.stderr || "");
   };
   const ALIVE = "echo SHELL_ALIVE\n";   // 폴백 셸이 살아 있을 때만 실행된다
