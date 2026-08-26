@@ -8,7 +8,7 @@ import {
   spawn as nodeSpawn,
   spawnSync as nodeSpawnSync,
 } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, resolve, sep } from "node:path";
 
@@ -35,10 +35,25 @@ const unquote = (value) => String(value || "").replace(/^"|"$/g, "");
 const commandName = (command) => unquote(command).replace(/^.*[\\/]/, "").replace(/\.exe$/i, "").toLowerCase();
 const processKind = (command) => SCHEDULER_COMMANDS.has(commandName(command)) ? "scheduler" : "external-cli";
 const pathKey = (value) => process.platform === "win32" ? String(value).toLowerCase() : String(value);
+/**
+ * ★ 심링크를 풀어 본 형태도 함께 본다 — 안 그러면 **macOS 에서 모든 임시경로가 '샌드박스 밖'으로 판정된다.**
+ *
+ * 실측(2026-08-27): `os.tmpdir()` 는 `/var/folders/…` 를 주는데 그 안에 만든 폴더의 realpath 는
+ *  `/private/var/folders/…` 다(`/var` → `/private/var` 심링크). 테스트는 바인딩 정본을 맞추려
+ *  realpath 를 쓰고(예: kit/cli/project-init.test.mjs mkRepo), 게이트는 raw `tmpdir()` 를 뿌리로 쓴다.
+ *  `resolve()` 는 심링크를 풀지 않으므로 `startsWith` 가 그 자리에서 실패 →
+ *  `HostEffects denied external-cli: git`. **리눅스 CI(`/tmp`, 심링크 없음)에서는 안 난다** — 그래서
+ *  CI 는 초록불인데 개발자 맥에서만 5건이 빨간불이었고, 그 상태가 "원래 저래" 로 굳고 있었다.
+ *
+ * 넓히는 게 아니라 **같은 자리를 같은 자리로 알아보게** 하는 것이다: 두 표기가 가리키는 디렉터리가
+ *  실제로 하나다. 종전에 통과하던 raw↔raw 비교는 그대로 두므로(변형 목록에 raw 가 남는다) 무회귀다.
+ */
+const realish = (p) => { try { return realpathSync(p); } catch { return p; } };   // 아직 없는 경로(clone 목적지 등)는 그대로
+const pathForms = (p) => { const r = resolve(p); const real = realish(r); return real === r ? [r] : [r, real]; };
 const inside = (file, root) => {
   if (!file || !root) return false;
-  const f = pathKey(resolve(file)), r = pathKey(resolve(root));
-  return f === r || f.startsWith(r.endsWith(sep) ? r : r + sep);
+  const fs_ = pathForms(file).map(pathKey), rs = pathForms(root).map(pathKey);
+  return fs_.some((f) => rs.some((r) => f === r || f.startsWith(r.endsWith(sep) ? r : r + sep)));
 };
 const resolvedCommand = (command, env) => {
   const raw = unquote(command);
@@ -63,7 +78,12 @@ const sandboxProcessAllowed = ({ command, args = [], options = {} }, env) => {
   const resolved = resolvedCommand(command, env);
   // Linux CI에는 TMPDIR가 없을 수 있지만 테스트의 mkdtemp(tmpdir())는 여전히 /tmp 아래다.
   const roots = [env.LIVELY_HOME, env.TEMP, env.TMP, env.TMPDIR, tmpdir()].filter(Boolean);
-  if (name === "node" && (pathKey(resolved) === pathKey(process.execPath)
+  // ⚠ `pathKey(...) === pathKey(...)` 로 **문자열 비교하지 마라.** PATH 의 `node` 는 보통 심링크이고
+  //  (`/opt/homebrew/bin/node` → `/opt/homebrew/Cellar/node@22/…/bin/node`) `process.execPath` 는 실경로라
+  //  같은 실행파일인데 문자열이 다르다 → 훅 실행이 통째로 막힌다(실측 2026-08-27: kit/hooks/run-custom
+  //  52건 중 33건이 'crash' 로 빨간불. 리눅스 CI 는 PATH 의 node 가 실경로라 안 났다).
+  //  inside() 는 realpath 형태까지 함께 보므로 같은 파일을 같은 파일로 알아본다(경로가 같으면 f===r).
+  if (name === "node" && (inside(resolved, process.execPath)
     || roots.some((root) => inside(resolved, root)))) return true;
   if (roots.some((root) => inside(resolved, root))) return true;
   const cleanArgs = args.map(unquote);
