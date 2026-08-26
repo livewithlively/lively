@@ -398,10 +398,81 @@ function instanceIcon(inst: SideInstance): SVGElement {
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
  * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
  */
+/** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다(#1958). */
+function appRowEl(inst: SideInstance): HTMLElement {
+    //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
+    const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
+    return el('div',
+    { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
+    el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.owner ? `${inst.title}\n${ownerNm}의 세션 — 내가 열어 둬서 목록에 있습니다` : inst.title, 'aria-current': inst.active ? 'page' : null,
+      onclick: () => hooks.onActivateInstance?.(inst.id) },
+      instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
+    //  얼굴은 **둘째 줄 왼쪽 여백**에 선다 — 첫 줄 아이콘 바로 아래 빈자리라 새로 폭을 먹지 않고,
+    //   첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다.
+    inst.owner ? personFace(inst.owner.id, 'v2-app-inst-face', ownerNm) : null,
+    //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
+    //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
+    inst.status
+      ? el('span', { class: 'v2-app-inst-st', 'data-st': inst.status.key, title: inst.status.label,
+          role: 'img', 'aria-label': inst.status.label })
+      : null,
+    //  압정 — 고른 것만 맨 위로(#1954). 호버·고정 상태에서만 보인다(늘 보이면 행마다 단추 둘이 늘어선다).
+    el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
+      'aria-label': inst.pinned ? `「${inst.title}」 고정 해제` : `「${inst.title}」 위에 고정`,
+      title: inst.pinned ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
+      onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); toggleAppPin(inst.id); } },
+      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY }))),
+    //  × 는 어느 행에나 있고 뜻도 하나다 — **목록에서 치우기**(#1954). 돌던 세션은 계속 돌고, 상태가 바뀌면 다시 올라온다.
+    el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
+      title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
+      onclick: () => hooks.onCloseInstance?.(inst.id) },
+      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
+    inst.project && !inst.project.self
+      ? el('button', { class: 'v2-app-inst-project', type: 'button',
+          title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
+          onclick: () => hooks.onOpenProject?.(inst.project!.id) },
+          glyph('folder', 'v2-app-inst-project-ic'),
+          el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
+      : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
+}
+
+/** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
+function appListKids(shown: SideInstance[], q: string): HTMLElement[] {
+  const kids: HTMLElement[] = [];
+  //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
+  let lastGroup = '';
+  for (const inst of shown) {
+    const g = inst.group || '';
+    if (g && g !== lastGroup) { kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g }) as HTMLElement); lastGroup = g; }
+    kids.push(appRowEl(inst));
+  }
+  if (shown.length) return kids;
+  return [el('div', { class: 'v2-app-empty' },
+    el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }),
+    q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
+      : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() })) as HTMLElement];
+}
+
+/** 검색어를 칠 때의 갱신 — **목록만** 갈아 끼운다. 검색칸·머리글은 손대지 않는다(살아 있는 노드 = 살아 있는 IME 조합).
+ *  머리글의 개수 배지는 거르기 전 전체 수라 검색어로 변하지 않으므로 여기서 손댈 것이 없다. */
+function paintAppList(): void {
+  if (!appListEl || !hooks.instances) return;
+  const q = sideFilter.trim().toLowerCase();
+  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  appListEl.replaceChildren(...appListKids(shown, q));
+  appListEl.scrollTop = 0;   // 거르고 나면 맨 위가 첫 결과다
+}
+
+/** 검색칸에서 글자를 조합하는 중(한글 등). 이때 전면 재렌더가 돌면 입력칸이 새로 나 조합이 끊긴다(#1958). */
+let findComposing = false;
+
 function render(): void {
   if (!last) return;
   // SideHooks.instances 를 모르는 이전 임베더는 기존 프로젝트 트리를 그대로 받는다.
   if (!hooks.instances) { renderLegacy(); return; }
+  // 검색칸에서 한글을 조합하는 중이면 이번 판은 건너뛴다 — 폴링이 입력칸을 새로 만들면 그 글자가 자모로
+  //  흩어진다(#1958). 갱신은 **다시 오지만**, 사람이 치던 글자는 다시 오지 않는다.
+  if (findComposing) return;
   const wsReg: any = (state.me as any)?.workspace_registry || {};
   const wsKind = (wsReg.active && wsReg.kind) || ((state.me as any)?.workspace?.kind);
   const sideRoot = last.host.closest('.v2-side');
@@ -434,14 +505,21 @@ function fltCount(): number { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) 
 /** 찾기 칸 — 구역마다 찾는 대상이 달라 안내 문구만 갈린다(입력 상태 `sideFilter` 는 하나다). */
 function findInput(ph: string): HTMLInputElement {
   const inp = el('input', { class: 'v2-find-in', type: 'search', placeholder: ph, 'aria-label': ph, value: sideFilter,
-    oninput: (e: any) => { sideFilter = e.target.value; redraw(); markFind(); },
+    // ⚠ 타이핑 중에는 **목록만** 갈아 끼운다 — 사이드바를 통째로 다시 그리면 이 입력칸도 새로 나고,
+    //  그 순간 브라우저의 IME 조합이 끊긴다. 한글은 한 글자가 여러 타건의 조합이라 매 타건이 따로 확정되어
+    //  "안녕"이 "ㅇㅏㄴㄴㅕㅇ"로 흩어진다(#1958). 포커스를 복원해도 소용없다 — 조합 상태는 노드에 붙어 있다.
+    oninput: (e: any) => { sideFilter = e.target.value; paintAppList(); markFind(); },
     onkeydown: (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      // 한글 조합 중의 Esc 는 '조합 취소'지 '검색 지우기'가 아니다 — 치던 글자만 물러난다.
+      if (e.isComposing || (e as any).keyCode === 229) return;
       e.stopPropagation();
       if (sideFilter) sideFilter = ''; else findOpen = false;
       redraw();
     },
-    onblur: () => { if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
+    oncompositionstart: () => { findComposing = true; },
+    oncompositionend: () => { findComposing = false; },
+    onblur: () => { findComposing = false; if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
   if (findFocusWanted) { findFocusWanted = false; window.setTimeout(() => inp.focus(), 0); }
   return inp;
 }
@@ -520,69 +598,27 @@ function renderHomeApps(): void {
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
   const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
-  const rowEl = (inst: SideInstance): HTMLElement => {
-    //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
-    const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
-    return el('div',
-    { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
-    el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.owner ? `${inst.title}\n${ownerNm}의 세션 — 내가 열어 둬서 목록에 있습니다` : inst.title, 'aria-current': inst.active ? 'page' : null,
-      onclick: () => hooks.onActivateInstance?.(inst.id) },
-      instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
-    //  얼굴은 **둘째 줄 왼쪽 여백**에 선다 — 첫 줄 아이콘 바로 아래 빈자리라 새로 폭을 먹지 않고,
-    //   첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다.
-    inst.owner ? personFace(inst.owner.id, 'v2-app-inst-face', ownerNm) : null,
-    //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
-    //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
-    inst.status
-      ? el('span', { class: 'v2-app-inst-st', 'data-st': inst.status.key, title: inst.status.label,
-          role: 'img', 'aria-label': inst.status.label })
-      : null,
-    //  압정 — 고른 것만 맨 위로(#1954). 호버·고정 상태에서만 보인다(늘 보이면 행마다 단추 둘이 늘어선다).
-    el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
-      'aria-label': inst.pinned ? `「${inst.title}」 고정 해제` : `「${inst.title}」 위에 고정`,
-      title: inst.pinned ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
-      onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); toggleAppPin(inst.id); } },
-      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY }))),
-    //  × 는 어느 행에나 있고 뜻도 하나다 — **목록에서 치우기**(#1954). 돌던 세션은 계속 돌고, 상태가 바뀌면 다시 올라온다.
-    el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
-      title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
-      onclick: () => hooks.onCloseInstance?.(inst.id) },
-      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
-    inst.project && !inst.project.self
-      ? el('button', { class: 'v2-app-inst-project', type: 'button',
-          title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
-          onclick: () => hooks.onOpenProject?.(inst.project!.id) },
-          glyph('folder', 'v2-app-inst-project-ic'),
-          el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
-      : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' }));
-  };
 
-  //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
-  const rows: HTMLElement[] = [];
-  let lastGroup = '';
-  for (const inst of shown) {
-    const g = inst.group || '';
-    if (g && g !== lastGroup) { rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g })); lastGroup = g; }
-    rows.push(rowEl(inst));
-  }
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' },
-    ...rows,
-    ...(!shown.length ? [el('div', { class: 'v2-app-empty' },
-      el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }),
-      q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
-        : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() }))] : []));
+  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' }, ...appListKids(shown, q));
   appListEl = listEl;
   listEl.scrollTop = prevScroll;
 
   const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '열린 앱 찾기', 'aria-label': '열린 앱 찾기', value: sideFilter,
-    oninput: (e: any) => { sideFilter = e.target.value; redraw(); markFind(); },
+    // ⚠ 타이핑 중에는 **목록만** 갈아 끼운다 — 사이드바를 통째로 다시 그리면 이 입력칸도 새로 나고,
+    //  그 순간 브라우저의 IME 조합이 끊긴다. 한글은 한 글자가 여러 타건의 조합이라 매 타건이 따로 확정되어
+    //  "안녕"이 "ㅇㅏㄴㄴㅕㅇ"로 흩어진다(#1958). 포커스를 복원해도 소용없다 — 조합 상태는 노드에 붙어 있다.
+    oninput: (e: any) => { sideFilter = e.target.value; paintAppList(); markFind(); },
     onkeydown: (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      // 한글 조합 중의 Esc 는 '조합 취소'지 '검색 지우기'가 아니다 — 치던 글자만 물러난다.
+      if (e.isComposing || (e as any).keyCode === 229) return;
       e.stopPropagation();
       if (sideFilter) sideFilter = ''; else findOpen = false;
       redraw();
     },
-    onblur: () => { if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
+    oncompositionstart: () => { findComposing = true; },
+    oncompositionend: () => { findComposing = false; },
+    onblur: () => { findComposing = false; if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
 
   //  데스크톱 앱이면 이 줄은 창 맨 윗줄로 간다(#1954 상민님: 상단 탭이 빠져 그 자리가 비었다).
   //  브라우저에선 navHost 가 null 이라 종전대로 사이드바 맨 위에 남는다.
