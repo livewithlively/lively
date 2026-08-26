@@ -380,3 +380,22 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 @media (prefers-reduced-motion: reduce) {
   .cxl-typing::after { animation: none; }
 }
+
+/* ══ 글자 크기 (#2055) — web/chat-view.ts setFontStep ═══════════════════════════════════
+   대화창은 무엇보다 **읽는 화면**이다. 브라우저 확대는 사이드바·터미널까지 같이 키워 이 화면만 키울
+   수단이 없었다. 배율 하나(--livc-fs)로 본문·내 말·도구 이름·원문·코드가 **함께** 움직인다 —
+   일부만 커지면 위계가 깨져 '큰 글씨'가 아니라 '망가진 화면'이 된다.
+   ⚠ 크롬(작은 글자·머리표·상태)은 안 건드린다: 그건 읽는 글이 아니라 표식이고, 같이 키우면
+   대화보다 크롬이 더 커 보인다(Claude Desktop·Codex 데스크톱도 본문만 키운다). */
+.livc-wrap { --livc-fs: 1; }
+.livc-wrap .livc-said { font-size: calc(14px * var(--livc-fs)); }
+.livc-wrap .livc-ask-text { font-size: calc(15.5px * var(--livc-fs)); }
+.livc-desktop .dt-bubble { font-size: calc(14px * var(--livc-fs)); }
+.livc-wrap .livc-slip-name { font-size: calc(12.5px * var(--livc-fs)); }
+.livc-wrap .livc-slip-detail { font-size: calc(11.5px * var(--livc-fs)); }
+.livc-wrap .livc-slip-raw pre { font-size: calc(11px * var(--livc-fs)); }
+.livc-wrap .livc-think-body { font-size: calc(12.5px * var(--livc-fs)); }
+.livc-wrap .livc-input { font-size: calc(14px * var(--livc-fs)); }
+.livc-wrap .cxl-ask-title { font-size: calc(13px * var(--livc-fs)); }
+.livc-wrap .cxl-ask-body { font-size: calc(11.5px * var(--livc-fs)); }
+@media (max-width: 760px) { .livc-desktop .dt-bubble { font-size: calc(15px * var(--livc-fs)); } }

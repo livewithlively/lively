@@ -370,6 +370,21 @@ export function codexChatStatus(sessionId: string): { alive: boolean; running: b
   return e ? { alive: !e.server.isClosed, running: e.running, threadId: e.threadId, startedAt: e.startedAt } : null;
 }
 
+/**
+ * 이 세션이 **지금 사람을 기다리나 / 일하고 있나** — 목록의 상태 축이 읽는다(#2055).
+ *
+ *  ★ 왜 목록이 이걸 물어봐야 하나: app-server 세션의 pane 은 **셸**이다(설계). 그런데 종전 판정은
+ *   "pane 에 하네스 프로세스가 도나"로 살아있음을 봤다 — 그래서 이 세션들이 전부 **'종료됨'** 으로
+ *   잡혔고, 화면은 대화창 대신 '이어서 대화하기' 바를 띄웠다(=말을 걸 수 없다). 실측 2026-08-26.
+ *   pane 이 아니라 **여기**가 그 세션의 AI 다.
+ */
+export function codexChatPhase(sessionId: string): "busy" | "waiting" | "idle" | null {
+  const e = sessions.get(sessionId);
+  if (!e || e.server.isClosed) return null;
+  if ((pendings.get(sessionId)?.size ?? 0) > 0) return "waiting";   // 사람이 답해야 진행된다 — 무엇보다 먼저
+  return e.running ? "busy" : "idle";
+}
+
 /** 세션이 끝났다 — 런타임도 같이 내린다(고아 프로세스 방지). */
 export function dropSession(sessionId: string): void {
   closePendings(sessionId);                                   // 런타임이 없어지면 그 승인들도 갈 곳이 없다

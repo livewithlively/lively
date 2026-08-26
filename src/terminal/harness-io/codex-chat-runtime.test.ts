@@ -40,7 +40,8 @@ function fakeServer(o: { failOn?: string; closeOnSend?: boolean; noTurnNotify?: 
           m.method === "turn/start" ? { turn: { id: "TU1" } } : {};
         setImmediate(() => {
           onLine?.(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }));
-          if (m.method === "turn/start" && !o.noTurnNotify) onLine?.(JSON.stringify({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "T-new", startedAtMs: 1 } }));
+          // 실물과 같은 모양으로 — turn.id 가 있어야 멈춤·얹기가 성립한다(그 인자가 필수다).
+          if (m.method === "turn/start" && !o.noTurnNotify) onLine?.(JSON.stringify({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "T-new", startedAtMs: 1, turn: { id: "TU1" } } }));
         });
       },
       onLine: (cb) => { onLine = cb; },
@@ -191,9 +192,18 @@ await t("★ Q1 release 는 프로세스를 내려 스레드를 TUI 에 넘긴�
 await t("Q2 interrupt 는 런타임이 없으면 조용히 false(호출자가 종전 Esc 경로로 간다)", async () => {
   assert.equal(await interruptCodexChat("없는세션"), false);
   const f = fakeServer();
-  await ensureCodexChat(base({ transportFactory: f.factory }));
+  // ★ 도는 턴이 있어야 멈출 수 있다 — turn/interrupt 는 turnId 가 필수다(스키마). 턴 없이 부르면 false 다.
+  await sendCodexChat(base({ text: "안녕", transportFactory: f.factory }));
+  await new Promise((r) => setImmediate(r));                 // turn/started 알림이 도착할 틈
   assert.equal(await interruptCodexChat("s1"), true);
   assert.ok(f.sentMethods.includes("turn/interrupt"));
+});
+
+await t("★ Q2b 도는 턴이 없으면 멈춤은 false — 엉뚱한 턴을 끊지 않는다(호출자가 종전 경로로 간다)", async () => {
+  const f = fakeServer({ noTurnNotify: true });
+  await ensureCodexChat(base({ transportFactory: f.factory }));
+  assert.equal(await interruptCodexChat("s1"), false);
+  assert.ok(!f.sentMethods.includes("turn/interrupt"), "인자를 못 채운 요청은 아예 보내지 않는다");
 });
 
 await t("Q3 세션이 끝나면 런타임도 내려간다(고아 프로세스 방지)", async () => {
