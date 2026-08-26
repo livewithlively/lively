@@ -54,6 +54,82 @@ interface Entry {
   startedAt: number;
 }
 
+/**
+ * 세션별 **실시간 통로** (#2055) — 화면이 SSE 로 구독한다.
+ *  왜 필요한가: rollout 파일은 턴이 **끝나야** 답을 담는다. 그래서 파일만 보면 화면은 몇 초~몇 분을 빈 채로 기다리고,
+ *  더 나쁜 건 **승인 요청**이다 — 서버가 우리에게 물어보는데 사람에게 전할 길이 없으면 전부 거부되고(fail-closed 기본)
+ *  codex 는 아무 명령도 못 돌린다. 이 버스가 그 두 가지(글자 조각·승인)를 화면까지 나른다.
+ */
+export type ChatEvent =
+  | { kind: "delta"; text: string }
+  | { kind: "line"; line: ChatLine }
+  | { kind: "status"; running: boolean }
+  | { kind: "approval"; id: string; title: string; detail: string; kindHint: string }
+  | { kind: "approval-done"; id: string; decision: string }
+  | { kind: "usage"; totalTokens?: number; usedPercent?: number };
+
+type Listener = (e: ChatEvent) => void;
+const listeners = new Map<string, Set<Listener>>();
+
+/** 대기 중 승인 — 화면이 답할 때까지 서버 턴이 그 자리에 서 있다. */
+interface Pending { id: string; title: string; detail: string; kindHint: string; settle: (d: ApprovalDecision) => void; at: number }
+const pendings = new Map<string, Map<string, Pending>>();
+
+/** 승인을 사람이 안 보는 채로 영원히 세워 두지 않는다 — 이 시간이 지나면 거부로 닫는다(fail-closed). */
+const APPROVAL_TTL_MS = 10 * 60_000;
+
+export function onChatEvent(sessionId: string, fn: Listener): () => void {
+  const set = listeners.get(sessionId) ?? new Set<Listener>();
+  set.add(fn); listeners.set(sessionId, set);
+  return () => { set.delete(fn); if (!set.size) listeners.delete(sessionId); };
+}
+
+function emit(sessionId: string, e: ChatEvent): void {
+  for (const fn of listeners.get(sessionId) ?? []) { try { fn(e); } catch { /* 한 구독자의 실패가 나머지를 막지 않는다 */ } }
+}
+
+/** 아직 답을 기다리는 승인들(화면이 새로 붙었을 때 되살린다 — 새로고침에 승인이 사라지면 턴이 영영 선다). */
+export function pendingApprovals(sessionId: string): Array<{ id: string; title: string; detail: string; kindHint: string }> {
+  return [...(pendings.get(sessionId)?.values() ?? [])].map((p) => ({ id: p.id, title: p.title, detail: p.detail, kindHint: p.kindHint }));
+}
+
+/** 화면이 고른 결정을 그 승인에 전달한다. 없는 id 면 false(이미 처리됐거나 만료). */
+export function answerApproval(sessionId: string, id: string, decision: ApprovalDecision): boolean {
+  const p = pendings.get(sessionId)?.get(id);
+  if (!p) return false;
+  pendings.get(sessionId)?.delete(id);
+  p.settle(decision);
+  emit(sessionId, { kind: "approval-done", id, decision });
+  return true;
+}
+
+/** 서버가 올린 승인 요청 → 사람에게 물어본다. 답이 올 때까지 기다리고, 안 오면 거부로 닫는다. */
+function askHuman(sessionId: string, req: ApprovalRequest): Promise<ApprovalDecision> {
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const p = req.params as Record<string, any>;
+  const command = String(p?.command ?? "");
+  const kindHint = /commandExecution|execCommand/i.test(req.method) ? "command"
+    : /applyPatch|fileChange/i.test(req.method) ? "patch"
+    : /permission/i.test(req.method) ? "permission" : "other";
+  const title = kindHint === "command" ? "명령을 실행할까요?"
+    : kindHint === "patch" ? "파일을 고칠까요?"
+    : kindHint === "permission" ? "권한을 허용할까요?" : "이 작업을 허용할까요?";
+  const detail = command || String(p?.reason ?? "") || req.method;
+  return new Promise<ApprovalDecision>((resolve) => {
+    const map = pendings.get(sessionId) ?? new Map<string, Pending>();
+    let done = false;
+    const settle = (d: ApprovalDecision): void => { if (done) return; done = true; clearTimeout(timer); resolve(d); };
+    const timer = setTimeout(() => {
+      map.delete(id);
+      emit(sessionId, { kind: "approval-done", id, decision: "decline" });
+      settle("decline");                                  // 아무도 안 봤다 = 허용하지 않는다
+    }, APPROVAL_TTL_MS);
+    map.set(id, { id, title, detail, kindHint, settle, at: Date.now() });
+    pendings.set(sessionId, map);
+    emit(sessionId, { kind: "approval", id, title, detail, kindHint });
+  });
+}
+
 const sessions = new Map<string, Entry>();
 /** 같은 세션에 대한 ensure 가 겹쳐도 서버를 두 개 띄우지 않는다(둘째가 첫째의 writer 락에 걸린다). */
 const starting = new Map<string, Promise<Entry>>();
@@ -145,9 +221,21 @@ async function start(o: CodexChatOpts): Promise<Entry> {
     const transport = o.transportFactory ? o.transportFactory([], o.cwd) : await connect(o);
     server = new CodexAppServer({
       transport,
-      onLine: o.onLine,
-      onDelta: o.onDelta ? (d) => o.onDelta?.(d) : undefined,
-      onApproval: o.onApproval,
+      onLine: (l) => { o.onLine?.(l); emit(o.sessionId, { kind: "line", line: l }); },
+      onDelta: (d) => { o.onDelta?.(d); emit(o.sessionId, { kind: "delta", text: d }); },
+      // 승인은 **사람에게 물어본다**. 정책을 명시로 준 호출자(리브 같은 자동 경로)는 그쪽이 이긴다.
+      onApproval: o.onApproval ?? ((req) => askHuman(o.sessionId, req)),
+      onNotify: (method, params) => {
+        if (method === "turn/started") emit(o.sessionId, { kind: "status", running: true });
+        else if (method === "turn/completed") emit(o.sessionId, { kind: "status", running: false });
+        else if (method === "thread/tokenUsage/updated") {
+          const t = (params as any)?.tokenUsage?.total?.totalTokens;
+          if (Number.isFinite(t)) emit(o.sessionId, { kind: "usage", totalTokens: Number(t) });
+        } else if (method === "account/rateLimits/updated") {
+          const u = (params as any)?.rateLimits?.primary?.usedPercent;
+          if (Number.isFinite(u)) emit(o.sessionId, { kind: "usage", usedPercent: Number(u) });
+        }
+      },
     });
     await server.initialize();
   } catch (e) {

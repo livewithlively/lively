@@ -17,7 +17,14 @@ export interface McpServerPreset {
   name: string;            // org_mcp_server.name (slug)
   label: string;           // 표시명
   url: string;             // 상류 remote MCP 엔드포인트(http streamable)
-  auth_kind: string;       // vault 토큰 슬롯 kind (auth_mode=oauth 필수)
+  auth_kind?: string;      // vault 토큰 슬롯 kind (auth_mode=oauth 필수) — **proxy 레인 전용**. client 레인은 없다(클라가 자체 OAuth).
+  // 레인(#746 mcp-proxy-convergence-design · #1881) — 기본 proxy.
+  //  proxy = 게이트웨이가 상류를 대리 호출하고 통제(P1~P5: 마스킹·감사·등급)한다. 금고에 토큰이 산다.
+  //  client = 레인 C. 게이트웨이가 대리하지 **못하는** 상류(상류가 클라이언트를 allowlist 로 가린 경우)에 쓴다.
+  //   발행 번들(.lively/mcp-servers.json)에 실려 멤버 PC 의 AI 도구에 `claude mcp add` 로 직접 등록되고, 인증은
+  //   그 클라이언트가 자기 OAuth 로 한다 → 게이트웨이는 토큰도 응답도 보지 않는다(그래서 저민감 상류 전용).
+  //   ⚠ 웹 터미널·헤드리스 크론에는 뜨지 않는다(#894 불변식: proxy 를 클라에 직접 등록 금지 / client 를 프록시로 심는 것도 금지).
+  mode?: "proxy" | "client";
   scope: "items" | "context" | "db" | "memory" | "code";
   level: "L0" | "L1" | "L2"; // 서버 기본 등급(툴별 자동 분류가 우선; 미매칭 시 이 값)
   pii_scrub: boolean;      // 응답 비정형 PII 마스킹
@@ -167,6 +174,30 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     oauth_token_url: "https://oauth2.googleapis.com/token",
     note: "Google 공식 MCP(Developer Preview). ⚠ **프리뷰 미등록이면 tools/call 전부 403.** 대안: [AI 도구] 의 google-calendar 프리셋(클래식 Calendar API). Web앱 OAuth client 필요.",
     guide: { url: "https://console.cloud.google.com/apis/credentials", intro: GOOGLE_INTRO, steps: googleSteps("calendarmcp.googleapis.com") },
+  },
+  // ── 레인 C(클라 직접등록) — 게이트웨이가 대리하지 못하는 상류. 멤버 PC 의 AI 도구가 자체 OAuth 로 붙는다. ──
+  {
+    name: "figma", label: "Figma", url: "https://mcp.figma.com/mcp",
+    mode: "client",
+    scope: "code", level: "L0", pii_scrub: false,
+    dcr: false, seed: true,
+    // ⚠ dcr:false 인데 oauth_scope 가 없는 유일한 항목 — 레인 C 라 **게이트웨이가 authorize 를 만들지 않기 때문**이다.
+    //  mcp.figma.com 은 디스커버리(.well-known/oauth-authorization-server)를 200 으로 공개하고 registration_endpoint
+    //  (api.figma.com/v1/oauth/mcp/register)까지 광고하지만, 실제 등록은 **403 Forbidden** 이다(2026-08-26 실측 2회,
+    //  최소 페이로드 동일 / authorize 에 임의 client_id 를 주면 utm_source=unknown 로그인으로 튕긴다).
+    //  문서도 같다 — "Only clients listed in the Figma MCP Catalog like VS Code, Cursor, or Claude Code can connect."
+    //  그 카탈로그에 Claude Code 가 있어서, 게이트웨이 대신 **멤버 클라이언트**를 붙이는 이 레인이 성립한다.
+    note: "#1881 — 피그마 공식 원격 MCP(레인 C: 내 PC 의 AI 도구에 직접 등록). mcp.figma.com 은 Figma MCP 카탈로그에 오른 클라이언트만 허용하고 DCR 은 광고만 하고 403 으로 막는다(2026-08-26 실측) → 게이트웨이가 대리할 수 없다. 대신 멤버 키트가 `claude mcp add` 로 심고 Claude Code 가 자체 OAuth(2클릭)로 붙는다. 원격 서버는 전 seat·전 플랜 사용 가능(무료 seat 포함). ⚠ 게이트웨이 미경유라 웹 터미널·헤드리스 크론에는 이 도구가 뜨지 않고 마스킹·감사·등급 통제도 걸리지 않는다(저민감 전제). ⚠ 코멘트는 이 서버가 주지 않는다 — 노출 도구 25개에 코멘트·파일열거가 0개다. 디자인 코멘트 수집은 [AI 도구] 의 figma 프리셋(REST API)이 맡는다.",
+    guide: {
+      url: "https://www.figma.com/developers",
+      intro: "피그마는 관리자가 설정할 것이 없습니다 — 게이트웨이가 대리하지 않고, 구성원 PC 의 AI 도구에 직접 등록돼 각자 자기 Figma 계정으로 붙습니다. OAuth 클라이언트도 [발행]도 필요 없습니다.",
+      steps: [
+        "이 서버를 **저장만** 합니다 — OAuth 클라이언트 입력·[발행] 모두 불필요합니다(게이트웨이가 상류를 호출하지 않습니다)",
+        "구성원 PC 에 라이블리 키트가 설치되면 이 서버가 `~/.lively/mcp-servers.json` 에 실려 AI 도구에 자동 등록됩니다",
+        "구성원은 AI 도구에서 `/mcp` ▸ figma ▸ [허용] 로 자기 Figma 계정을 연결합니다(2클릭, 무료 seat 도 됩니다)",
+        "⚠ 웹 터미널·크론에는 이 도구가 뜨지 않습니다(게이트웨이 미경유). 웹에서도 피그마를 쓰려면 [AI 도구] 의 **figma 프리셋(REST API)** 을 함께 적용하세요 — 디자인 코멘트 읽기도 그쪽입니다",
+      ],
+    },
   },
 ];
 

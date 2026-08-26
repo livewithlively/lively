@@ -1,0 +1,54 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - text: Lively
+        - generic [ref=e6]: ·
+        - text: 라이블리 제품팀
+      - generic [ref=e7]: 예시 공간
+    - main [ref=e8]:
+      - region "리브와 첫 대화" [ref=e40]:
+        - generic [ref=e41]:
+          - article [ref=e42]:
+            - generic [ref=e43]:
+              - generic [ref=e44]: L
+              - generic [ref=e45]:
+                - text: 리브와 첫 대화
+                - generic [ref=e46]: 제품팀의 예시 맥락을 바탕으로 답합니다.
+            - generic [ref=e47]:
+              - generic [ref=e48]: 리브
+              - paragraph [ref=e49]: 먼저 무엇을 함께 해 볼까요?
+              - generic "첫 질문 제안" [ref=e50]:
+                - button "이번 주 진행 중인 일 정리" [ref=e51] [cursor=pointer]
+                - button "최근 결정 보기" [ref=e52] [cursor=pointer]
+                - button "맡을 일 찾기" [ref=e53] [cursor=pointer]
+              - generic [ref=e69]:
+                - generic [ref=e70]: 리브
+                - paragraph [ref=e71]: 이번 주에는 초대받은 사람이 팀 안에서 첫 일을 시작하는 흐름을 다듬고 있어요. 먼저 웹에서 한 번 써 보고, 필요할 때만 개인 AI와 자료를 연결하게 하는 방향입니다.
+                - generic [ref=e72]:
+                  - strong [ref=e73]: 이 답은 예시입니다.
+                  - paragraph [ref=e74]: 실제 화면에서는 초대받은 사람이 읽을 수 있는 프로젝트와 지식이 있을 때만, 그 내용과 출처를 바탕으로 답합니다.
+            - generic [ref=e54]:
+              - textbox "리브에게 물어보기" [ref=e55]:
+                - /placeholder: 궁금한 것을 입력하세요.
+              - button "보내기" [ref=e56] [cursor=pointer]
+          - complementary [ref=e57]:
+            - heading "이번 대화에 함께 온 것" [level=2] [ref=e58]
+            - paragraph [ref=e59]: 예시 공간의 데이터입니다. 실제 제품에서는 권한이 있는 자료만 표시합니다.
+            - generic [ref=e60]: 제품팀의 업무 방식
+            - generic [ref=e63]: 진행 중인 온보딩 설계
+            - generic [ref=e66]: 최근 결정 2건
+            - generic [ref=e75]:
+              - heading "내 노션도 함께 보고 싶으세요?" [level=3] [ref=e76]
+              - paragraph [ref=e77]: 연결하면 라이블리가 읽기 권한으로만 자료를 봅니다.
+              - button "내 노션 연결하기" [ref=e78] [cursor=pointer]
+  - dialog [ref=e79]:
+    - generic [ref=e80]:
+      - heading "내 노션을 연결할까요?" [level=2] [ref=e81]
+      - paragraph [ref=e82]: 브라우저에서 노션 로그인과 권한 동의를 직접 마치면 됩니다. 리브는 비밀번호를 보거나 저장하지 않습니다.
+      - generic [ref=e83]:
+        - generic [ref=e84]: ✓
+        - generic [ref=e85]: 읽기만 허용합니다.연결한 뒤에도 언제든 해제할 수 있습니다.
+      - generic [ref=e86]:
+        - button "취소" [active] [ref=e87] [cursor=pointer]
+        - button "예시로 연결하기" [ref=e88] [cursor=pointer]

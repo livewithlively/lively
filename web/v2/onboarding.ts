@@ -7,7 +7,68 @@
 import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl } from '../core.js';
 export const OB_DONE_KEY = 'lively_ob_done';
+/** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
+/**
+ * 처음 설정을 끝냈는지 **서버에 묻는다**(#1813). 종전엔 localStorage 표식뿐이라 기기·브라우저를 바꾸면
+ *  이미 끝낸 사람에게 온보딩이 다시 떴다. 서버가 답을 주면 로컬 캐시도 그 값으로 맞춘다.
+ *  못 물으면(오프라인·구 서버) 로컬 캐시로 떨어진다 — 온보딩 때문에 앱이 안 열리는 일은 없어야 한다.
+ */
+export async function fetchOnboardingDone(): Promise<boolean> {
+  try {
+    const r: any = await api('/api/ui/me/welcome');
+    const done = !!(r && r.done);
+    try { done ? localStorage.setItem(OB_DONE_KEY, '1') : localStorage.removeItem(OB_DONE_KEY); } catch (_) { /* 사파리 프라이빗 */ }
+    return done;
+  } catch (_) { return onboardingDone(); }
+}
+
+/* ── 데스크톱 앱 내려받기 (#1813) ──────────────────────────────────────────────
+ *  종전엔 «앱 받기» 가 "설정 ▸ 데스크톱 앱에서 받으실 수 있어요" 토스트만 띄웠다. 그런데 **코어 어디에도
+ *   내려받기 주소가 없다**(실측 2026-08-26: releases/download 문자열 0건) — 안내가 가리키는 자리가 비어
+ *   있어서 사람은 앱을 끝내 못 받는다. 퍼널이 거기서 끊긴다.
+ *  릴리스는 공개라 **브라우저가 직접** 물어볼 수 있다(GitHub API 가 CORS 를 연다). 서버를 거치지 않으니
+ *   테넌트 컨테이너의 바깥 망에 기대지 않고, 게이트웨이에 새 문을 내지도 않는다.
+ *  ⚠ 실패하면 **릴리스 페이지로 보낸다** — 종전과 같은 자리이지 더 나쁘지 않다. 절대 던지지 않는다.
+ */
+const DL_API = 'https://api.github.com/repos/livewithlively/lively/releases/latest';
+const DL_PAGE = 'https://github.com/livewithlively/lively/releases/latest';
+
+/** 이 브라우저가 도는 OS. 못 가리면 null — 그때는 릴리스 페이지로 보낸다(추측해서 엉뚱한 파일을 주지 않는다). */
+function desktopOs() {
+  const s = `${navigator.userAgent} ${navigator.platform || ''}`.toLowerCase();
+  if (s.includes('mac')) return 'mac';
+  if (s.includes('win')) return 'win';
+  if (s.includes('linux') || s.includes('x11')) return 'linux';
+  return null;
+}
+
+/** 자산 이름 → 내 OS 것인가. blockmap·업데이트 매니페스트(.yml)·코어 tgz 는 사람이 받을 것이 아니다 —
+ *  확장자로 끝나는지만 보면 `.exe.blockmap` 류는 저절로 걸러진다. */
+function pickAsset(assets, os) {
+  const ext = os === 'mac' ? '.dmg' : os === 'win' ? '.exe' : '.appimage';
+  for (const a of assets) {
+    const name = typeof (a && a.name) === 'string' ? a.name.toLowerCase() : '';
+    const url = typeof (a && a.browser_download_url) === 'string' ? a.browser_download_url : '';
+    if (name && url && name.endsWith(ext)) return url;
+  }
+  return null;
+}
+
+/** 내 OS 설치본 주소. 한 번만 묻고 그 답을 재사용한다. 실패·못 가림이면 null. */
+let dlCache;
+async function desktopLink() {
+  if (dlCache !== undefined) return dlCache;
+  const os = desktopOs();
+  if (!os) { dlCache = null; return null; }
+  try {
+    const res = await fetch(DL_API, { headers: { accept: 'application/vnd.github+json' } });
+    if (!res.ok) throw new Error(String(res.status));
+    const body = await res.json();
+    dlCache = pickAsset(Array.isArray(body && body.assets) ? body.assets : [], os);
+  } catch (_) { dlCache = null; }
+  return dlCache;
+}
 
 export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boolean) => void; onDone?: () => void } = {}): { destroy(): void } {
   host.className = 'ob-root';
@@ -20,6 +81,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     </div></div>
 <div class="ob-toast" id="toast"></div>`;
   const DONE_KEY = OB_DONE_KEY;
+  /* 서버 실측 — 내가 올린 자료·종류별 집계·지금 갈래. 연출 숫자를 여기 값으로 갈아끼운다(#1813). */
+  let WS: any = null;
+  async function loadWelcome() {
+    try { WS = await api('/api/ui/me/welcome'); } catch (_) { WS = null; }
+    return WS;
+  }
+  /** 지금 아는 **진짜** 갈래 집계. 서버를 아직 못 읽었으면 빈 배열(연출 숫자를 만들지 않는다). */
+  const realKinds = () => (WS && WS.uploads && Array.isArray(WS.uploads.kinds)) ? WS.uploads.kinds : [];
+  /** 올린 자료 총수 — 업로드 카운터와 서버 총계 중 큰 쪽(막 올린 건 서버가 아직 모를 수 있다). */
+  const realTotal = () => Math.max(S.upN || 0, (WS && WS.uploads && WS.uploads.total) || 0);
   const setStage = (s) => { host.className = 'ob-root ob-' + s; ctx.onBare && ctx.onBare(s === 'stage-name'); };
   /* ══════════════ 데이터 — 기존 프로토(app.js)에서 그대로 추출한 확정본 ══════════════ */
   const DATA = {
@@ -602,9 +673,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const KEY = 'lively-ob-v2';
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
-    sources: [], connected: [], ai: null, aiConnected: false, terminal: null, app: null,
+    sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
+    drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
     upN: 0, upBusy: 0,      // #1881 실업로드 — 자료로 등록된 파일 수 / 올리는 중 수(연출 아님)
     b2: null, b3: null, nowline: null, firstOrder: null, decisions: [], notes: [],
     chatDone: [],           // 막3에서 끝난 단계들
@@ -616,24 +688,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const stageOf = () => DATA.STAGES[S.stage] || DATA.STAGES.company;
   const jobOf = () => S.job || stageOf().opts[0][0];
   const personaOf = () => { const hit = stageOf().opts.find(([l]) => l === S.job); return hit ? hit[1] : stageOf().opts[0][1]; };
-  const tally3 = () => DATA.TALLY7[jobOf()] || DATA.TALLY7[personaOf()] || DATA.TALLY7.default;
   const canOf = () => DATA.CAN[jobOf()] || DATA.CAN[S.stage] || DATA.CAN['제품·기획'];
-  /* b2 는 '같은 양식 문서' 이야기 — 녹음·이미지 파일이 예시로 뽑히면 문장이 안 맞는다(실측: 8/12 팀 회의.m4a) */
-    const fileOf = (i) => { const raw = DATA.FILES[personaOf()] || DATA.FILES['마케팅'] || [];
-      const docs = raw.filter((f) => !/\.(m4a|mp3|wav|mp4|mov|png|jpe?g|gif)$/i.test(String(f)));
-      return docs[i] || raw[i] || ['보고서', '문서'][i]; };
   const nick = () => S.nameSet && S.name ? S.name : '';
 
-  /* 자료 41건을 7갈래에 나눠 담는 목표치 — 상위 3개는 직무 표, 나머지는 잔량 */
-  function drawerTargets() {
-    const top = tally3(); const t = {};
-    DATA.KINDS7.forEach(([k]) => { t[k] = 0; });
-    let sum = 0; top.forEach(([k, c]) => { t[k] = c; sum += c; });
-    const rest = DATA.KINDS7.map(([k]) => k).filter((k) => !t[k]);
-    let left = Math.max(0, 41 - sum);
-    rest.forEach((k, i) => { const c = i < rest.length - 1 ? Math.min(left, [2, 1, 1][i] ?? 1) : left; t[k] = c; left -= c; });
-    return t;
-  }
 
   let pendingChips = null;   // 지금 답을 기다리는 칩들 — 입력창 해석이 본다
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
@@ -767,7 +824,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         upDropZone(zone, zone, (items) => void sendAll(items));
         const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub', label: '파일이나 폴더 고르기' });
         $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 반환은 {btn, fileIn, dirIn} — input 도 DOM 에 있어야 click 이 된다
-        $('#fGo', el).onclick = () => { startReading(); goScene('sources'); };   // 읽기는 여기서 시작 — 뒤 단계가 대기 시간을 덮는다
+        // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
+        $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
         $('[data-skip]', el).onclick = () => goScene('sources');
       },
     },
@@ -854,16 +912,46 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         $('[data-skip]', el).onclick = () => goScene('terminal');
       },
     },
+    /* AI 잇기 — **실물**이다(#1813). 종전엔 900ms 기다렸다 무조건 «연결됐어요» 라고만 했다.
+     *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 돈다(박스에 API 키가 없는 게 설계다).
+     *  ⚠ 잇는 방법은 **터미널에서 그 CLI 를 한 번 띄워 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
+     *   (~/.claude/.credentials.json 등)에 남고, 헤드리스 분석도 그 프로필로 돈다.
+     *   setup-token 을 붙여넣게 하지 않는다 — 그건 자기 프로필이 없는 자리(남의 노드 위탁)용 보조 수단이라
+     *   여기서 요구하면 사람에게 더 어려운 길을 시키는 것이 된다. 관문은 '로그인' 하나다(#1437 §6).
+     *  로그인 여부는 **서버가 프로필을 보고** 답한다(ai_ready) — 화면이 지어내지 않는다. */
     claude: {
       html: () => qHead('claude',
-        `연결한 뒤에는 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 ${esc(S.ai || 'AI')} 사용량을 씁니다. 얼마나 썼는지는 언제든 보여 드릴게요.`,
-        `${esc(S.ai || 'AI')} 계정을 연결해 주세요.`,
-        '새 탭에서 로그인하고 짧은 코드를 가져오면 됩니다 · 1분')
-        + `<button class="ob-btn ob-btn-pri" id="cGo">${S.aiConnected ? '연결됐어요, 계속' : '연결 확인'}</button>
+        `이어 두시면 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`,
+        S.aiConnected ? '이어졌어요.' : `${esc(S.ai || 'AI')} 계정을 이어 주세요.`,
+        S.aiConnected ? '' : '터미널을 열고 아래 한 줄을 치면 로그인 창이 열립니다.')
+        + (S.aiConnected
+          ? `<div class="ob-tok"><p class="ob-ok">${esc(S.aiName || 'AI')} 로그인이 확인됐어요.</p></div>`
+          : `<div class="ob-tok">
+              <ol>
+                <li>터미널을 엽니다(라이블리 안에서도, 쓰시던 터미널이어도 됩니다)</li>
+                <li><code>${esc(AI_CLI[S.ai] || 'claude')}</code> 를 치고 안내대로 로그인합니다</li>
+                <li>로그인이 끝나면 아래 버튼을 누릅니다</li>
+              </ol>
+              <p class="ob-err" id="cErr"></p>
+            </div>`)
+        + `<button class="ob-btn ob-btn-pri" id="cGo">${S.aiConnected ? '계속' : '로그인했어요'}</button>
            <button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`,
       bind: (el) => {
-        $('#cGo', el).onclick = async (e) => {
-          if (!S.aiConnected) { e.target.textContent = '연결 확인 중…'; await sleep(900); S.aiConnected = true; save(); renderSB(); toast(`${S.ai} 연결됐어요.`); }
+        const err = $('#cErr', el), go = $('#cGo', el);
+        go.onclick = async () => {
+          if (S.aiConnected) return goScene('terminal');
+          go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
+          // 서버가 프로필을 보고 답한다 — 화면이 «됐다» 고 지어내지 않는다.
+          await loadWelcome();
+          if (!WS || !WS.ai_ready) {
+            go.disabled = false; go.textContent = '다시 확인';
+            if (err) err.textContent = '아직 로그인이 안 보여요. 터미널에서 로그인을 끝내고 다시 눌러 주세요.';
+            return;
+          }
+          S.aiConnected = true;
+          S.aiName = (WS.ai_harnesses && WS.ai_harnesses[0]) || null;
+          S.decisions.push('AI 이음'); save(); renderSB();
+          toast('이어졌어요.');
           goScene('terminal');
         };
         $('[data-skip]', el).onclick = () => goScene('terminal');
@@ -872,7 +960,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     /* 노션 p4(데스크톱 앱 유도)와 같은 자리 — 우리는 터미널 질문 */
     terminal: {
       html: () => qHead('terminal',
-        S.ai === '아직 없어요' ? `AI 구독이 아직 없으셔도 괜찮아요. 자료 쌓기·정리·검색은 지금부터 됩니다. 첫 질문 <b>3회</b>는 라이블리 계정으로 열어 드릴게요.` : (S.aiConnected ? '연결됐어요. 거의 끝났습니다.' : '거의 끝났습니다.'),
+        S.ai === '아직 없어요' ? `AI 구독이 아직 없으셔도 괜찮아요. 자료 쌓기·정리·검색은 지금부터 됩니다.` : (S.aiConnected ? '이어졌어요. 거의 끝났습니다.' : '거의 끝났습니다.'),
         '터미널에서 Claude Code나 Codex 등을 쓰시나요?',
         '쓰신다면 그 컴퓨터를 라이블리에 이어 두시길 권합니다. 한 줄 설치로 끝납니다.')
         + `<div class="ob-benefits">
@@ -901,7 +989,21 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           <button class="ob-btn ob-btn-pri" id="appGet">앱 받기</button>
           <button class="ob-btn ob-btn-sub" id="appSkip">지금은 웹으로 할게요</button>`,
       bind: (el) => {
-        $('#appGet', el).onclick = () => { S.app = 'yes'; S.decisions.push('데스크톱 앱 받기'); save(); renderSB(); toast('실제 서비스에서는 여기서 내려받기가 시작됩니다.'); goScene('read'); };
+        // 주소는 **미리** 물어 둔다 — 누른 순간에 await 하면 사용자 제스처가 풀려 새 창이 막힌다.
+        let url = null;
+        desktopLink().then((u) => { url = u; });
+        $('#appGet', el).onclick = () => { S.app = 'yes'; S.decisions.push('데스크톱 앱 받기'); save(); renderSB();
+          if (url) {
+            // 같은 창에서 받는다(GitHub 가 attachment 로 내려 주므로 이 화면은 그대로 남는다).
+            const a = document.createElement('a'); a.href = url; a.rel = 'noopener';
+            document.body.appendChild(a); a.click(); a.remove();
+            toast('내려받기를 시작했어요. 설치는 나중에 하셔도 됩니다.');
+          } else {
+            // 아직 답이 안 왔거나 못 가렸다 — 받는 곳을 그대로 열어 준다. 없는 자리를 가리키지 않는다.
+            window.open(DL_PAGE, '_blank', 'noopener');
+            toast('받는 곳을 새 창으로 열었어요. 지금은 웹으로 이어서 진행할게요.');
+          }
+          goScene('read'); };
         $('#appSkip', el).onclick = () => { S.app = 'web'; save(); goScene('read'); };
       },
     },
@@ -970,45 +1072,131 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   /* 읽기 진행 — 사이드바 서랍 숫자가 실시간으로 올라간다 */
   let readTimer = null, readBarEl = null, readNEl = null;
+  /**
+   * 읽기 진행 — **서버에 물어서** 움직인다(#1813). 종전엔 240ms 타이머가 41까지 세는 연출이었다.
+   *  지금은 올린 자료를 서버가 몇 건 받았는지 폴링하고, 다 받았으면 끝난 것으로 본다.
+   *  올린 게 하나도 없으면 읽을 것도 없다 — 기다리게 하지 않고 곧바로 끝낸다.
+   */
   function startReading() {
-    if (!S.read.total) S.read.total = S.upN || 41;   // #1881 — 실제로 올린 파일이 있으면 그 수가 곧 읽을 자료 수다(가짜 41 금지)
     if (S.read.finished) return;
     clearInterval(readTimer);
-    const targets = drawerTargets();
-    readTimer = setInterval(() => {
-      S.read.done = Math.min(S.read.total, S.read.done + 1);
-      const p = S.read.done / S.read.total;
-      S._counts = {}; let shown = 0;
-      DATA.KINDS7.forEach(([k]) => { const c = Math.round((targets[k] || 0) * p); S._counts[k] = c || ''; shown += c; });
-      const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
+    const target = () => Math.max(S.upN || 0, S.read.total || 0);
+    const paint = () => {
+      const tot = Math.max(1, target());
+      const p = Math.min(1, S.read.done / tot);
       if (readBarEl) readBarEl.style.width = Math.round(p * 100) + '%';
-      if (readNEl) readNEl.textContent = `${S.read.done} / ${S.read.total}`;
-      if (S.read.done >= S.read.total) { S.read.finished = true; save(); clearInterval(readTimer); renderSB(); document.dispatchEvent(new Event('read-done')); }
-      save();
-    }, 240);
+      if (readNEl) readNEl.textContent = `${S.read.done} / ${target()}`;
+    };
+    const finish = () => {
+      S.read.finished = true; S.read.done = target(); save();
+      clearInterval(readTimer); readTimer = null; paint(); renderSB();
+      document.dispatchEvent(new Event('read-done'));
+    };
+    if (!target()) { finish(); return; }                 // 올린 자료 0건 — 기다릴 것이 없다
+    readTimer = setInterval(async () => {
+      const w = await loadWelcome();
+      const got = (w && w.uploads && w.uploads.total) || 0;
+      S.read.done = Math.min(target(), got);
+      S.read.total = target();
+      // 서버가 센 종류별 수를 사이드바에 그대로 싣는다(만들어 낸 목표치가 아니다).
+      S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
+      const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
+      paint(); save();
+      if (S.read.done >= target()) finish();
+    }, 1500);
   }
+
+  /**
+   * 올린 자료를 **실제로 AI 에게 보여** 갈래를 받아 온다(#1813).
+   *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 헤드리스 세션이 도는 것이 유일한 길이라,
+   *  AI 를 아직 안 이었으면 여기서 실패한다 — **감추지 않고 이유를 돌려준다**(화면은 실제 집계로 내려앉는다).
+   *  기다림에 상한을 둔다: 온보딩 한복판에서 사람을 무한정 세워 둘 수는 없다.
+   */
+  const ANALYZE_TIMEOUT_MS = 75000;
+  async function analyzeUploads(token) {
+    // AI 가 안 이어졌으면 **묻지도 않는다.** 서버도 402 로 막지만, 여기서 먼저 접으면 헛왕복이 없고
+    //  사람이 기다리는 시간도 없다. 판정은 서버가 준 값이다(ai_ready — 실제로 리스가 붙는지로 잰 것).
+    if (WS && WS.ai_ready === false) {
+      return { drawers: null, why: 'AI 를 아직 잇지 않으셔서, 파일 종류로 나눈 결과예요.' };
+    }
+    let started;
+    try {
+      started = await api('/api/ui/me/welcome/analyze', { method: 'POST', body: JSON.stringify({ job: S.job || null }) });
+    } catch (e) {
+      const m = e && e.message ? String(e.message) : '';
+      return { drawers: null, why: /402|50[0-9]|잇지 않으|시작하지 못/.test(m) ? 'AI 를 아직 잇지 않으셔서, 파일 종류로 나눈 결과예요.' : '' };
+    }
+    const id = started && started.turn_id;
+    if (!id) return { drawers: null, why: '' };
+    const until = Date.now() + ANALYZE_TIMEOUT_MS;
+    let from = 0;
+    while (Date.now() < until) {
+      if (token !== seqToken) return { drawers: null, why: '' };
+      await sleep(2000);
+      let r;
+      try { r = await api(`/api/ui/me/welcome/analyze/${encodeURIComponent(id)}?from=${from}`); } catch (_) { continue; }
+      if (typeof r.next === 'number') from = r.next;
+      if (!r.done) continue;
+      if (r.drawers && r.drawers.length) return { drawers: r.drawers, why: '' };
+      return { drawers: null, why: 'AI 판정을 읽지 못해서, 파일 종류로 나눈 결과예요.' };
+    }
+    return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
+  }
+
+  /* 고른 AI → 터미널에 칠 CLI. 헤드리스 규약을 아는 넷만 여기 있다(서버 HEADLESS 표와 짝) —
+   *  ChatGPT 는 코덱스, 제미나이는 안티그래비티가 그 자리다. 표에 없으면 claude 로 안내한다. */
+  const AI_CLI = { 'Claude': 'claude', 'ChatGPT': 'codex', 'Gemini': 'agy', 'Grok': 'grok' };
 
   const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
   async function chatStep(step, token) {
     if (token !== seqToken) return;
     const doneStep = (s) => { if (!S.chatDone.includes(s)) S.chatDone.push(s); save(); renderSB(); };
     if (step === 'b1') {
-      await sleep(500);
-      msgLiv(`${S.read.finished ? '' : `읽으면서 `}${esc(nick() || '')}${nick() ? '님' : ''} 자료를 종류별로 세어 봤어요.
-        <div class="ob-tags">${tally3().map(([n, c]) => `<span class="ob-tag">${esc(n)} <b>${c}</b></span>`).join('')}</div>
-        <p style="margin-top:8px"><b>자료함을 이렇게 나눠 둘까요?</b> 옆의 숫자는 그 종류로 본 자료 수예요. 이대로 서랍을 만들어 두면 다음부터 새 자료가 알아서 제자리로 들어갑니다.</p>`);
-      await sleep(300);
+      await sleep(400);
+      await loadWelcome();
+      const total = realTotal();
+      if (!total) {
+        // 올린 자료가 없으면 셀 것도 없다. 없는 숫자를 지어내지 않는다.
+        msgLiv(`올려 주신 자료가 아직 없어서 자료함은 나중에 나누겠습니다. 홈에서 파일을 올리시면 그때 제가 갈래를 잡아 드릴게요.`);
+        await sleep(200); doneStep('b1'); chatStep('b2', token); return;
+      }
+      // ① 먼저 **실제로 센 것**을 보여 준다. AI 가 없어도 이 숫자는 진짜다.
+      const bubble = msgLiv(`${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 자료 <b>${total}건</b>을 종류별로 세어 봤어요.
+        <div class="ob-tags" data-tags>${realKinds().map((k) => `<span class="ob-tag">${esc(k.name)} <b>${k.n}</b></span>`).join('')}</div>
+        <p style="margin-top:8px" data-note>AI 가 파일을 훑어보고 더 나은 갈래를 제안하는 중이에요.</p>`);
+      // ② 그 위에 **진짜 LLM 판정**을 얹는다. 실패하면 ①이 그대로 답이 된다(감추지 않고 이유를 적는다).
+      let drawers = realKinds().map((k) => ({ name: k.name, n: k.n }));
+      const llm = await analyzeUploads(token);
+      if (token !== seqToken) return;
+      const note = $('[data-note]', bubble);
+      if (llm.drawers && llm.drawers.length) {
+        drawers = llm.drawers;
+        $('[data-tags]', bubble).innerHTML = drawers.map((d) => `<span class="ob-tag">${esc(d.name)}</span>`).join('');
+        note.innerHTML = `<b>자료함을 이렇게 나눠 둘까요?</b> 파일을 훑어보고 정한 갈래예요. 이대로 서랍을 만들어 두면 다음부터 새 자료가 알아서 제자리로 들어갑니다.`;
+      } else {
+        note.innerHTML = `<b>자료함을 이렇게 나눠 둘까요?</b> 옆의 숫자는 그 종류로 본 자료 수예요.`
+          + (llm.why ? `<br><span style="color:var(--muted)">${esc(llm.why)}</span>` : '');
+      }
+      S.drawers = drawers;
+      await sleep(200);
+      const approve = (l) => { msgUser(l); S.drawersOn = true; S.decisions.push(`자료함 ${S.drawers.length}갈래로 나눔`); doneStep('b1'); renderSB(); enableLocalDistiller(); chatStep('b2', token); };
       chipsRow([
-        { label: '네, 이대로 나눠 주세요', cta: true, cb: (l) => { msgUser(l); S.drawersOn = true; S.decisions.push(`자료함 7갈래로 나눔`); doneStep('b1'); renderSB(); enableLocalDistiller(); chatStep('b2', token); } },
+        { label: '네, 이대로 나눠 주세요', cta: true, cb: approve },
         { label: '빠진 종류가 있어요', cb: (l) => { msgUser(l);
-            msgLiv('어떤 종류인가요? 아래 입력창에 적어 주세요. 서랍을 하나 더 만들어 둘게요.'); /* [새문구] */
-            armCompose('예: 고객 인터뷰', (v) => { S.drawersOn = true; S.decisions.push(`갈래 추가: ${v}`); doneStep('b1'); renderSB();
+            msgLiv('어떤 종류인가요? 아래 입력창에 적어 주세요. 서랍을 하나 더 만들어 둘게요.');
+            armCompose('예: 고객 인터뷰', (v) => { S.drawers = [...(S.drawers || []), { name: v }]; S.drawersOn = true;
+              S.decisions.push(`갈래 추가: ${v}`); doneStep('b1'); renderSB(); enableLocalDistiller();
               msgLiv(`<b>${esc(v)}</b> 서랍을 더해 뒀어요.`); chatStep('b2', token); }); } },
       ]);
     }
     if (step === 'b2') {
       await sleep(600);
-      msgLiv(`같은 양식 문서가 여러 달치 있네요. ${esc(fileOf(0) || '보고서')} 같은 것들이요.<p style="margin-top:6px"><b>정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?</b> 주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.</p>`);
+      // 관찰은 **실제 파일 이름에서 본 것만** 말한다. 못 봤으면 관찰을 지어내지 않고 그냥 묻는다.
+      const forms = (WS && WS.uploads && WS.uploads.forms) || [];   // 서버가 실제 파일 이름에서 본 것
+      const seen = forms.length
+        ? `같은 꼴 이름이 여러 개 보여요. ${forms.slice(0, 2).map((g) => `<b>${esc(g.names[0])}</b> 같은 것 ${g.names.length}개`).join(', ')}요.`
+        : '';
+      msgLiv(`${seen}<p style="margin-top:${seen ? '6px' : '0'}"><b>정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?</b> 주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.</p>`);
       await sleep(300);
       const pickB2 = (id, label) => { msgUser(label); S.b2 = id; if (id !== 'no') S.decisions.push(id === 'month' ? '매달 반복 작업으로 봄' : '매주 반복 작업으로 봄'); doneStep('b2'); chatStep('b3', token); };
       chipsRow([
@@ -1019,7 +1207,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     }
     if (step === 'b3') {
       await sleep(600);
-      msgLiv(`문서에 같은 이름이 반복해서 나와요.<p style="margin-top:6px"><b>같이 보는 팀이 있나요?</b> 있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.</p>`);
+      // 종전엔 "문서에 같은 이름이 반복해서 나와요"라고 했는데, 우리는 문서 **안**을 아직 안 읽었다.
+      //  근거 없는 관찰을 앞세우지 않고 묻기만 한다.
+      msgLiv(`<b>이 자료를 같이 보는 팀이 있나요?</b><p style="margin-top:6px">있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.</p>`);
       await sleep(300);
       const pickB3 = (id, label, dec) => { msgUser(label); S.b3 = id; S.decisions.push(dec); doneStep('b3'); renderSB(); chatStep('nowline', token); };
       chipsRow([
@@ -1044,7 +1234,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (step === 'can') {
       await sleep(500);
       const C = canOf();
-      msgLiv(`다 읽었어요.${S.nowline ? ` <b>${esc(S.nowline)}</b>에 시간을 제일 많이 쓰신다고 하셨죠.` : (nick() ? ` ${esc(nick())}님이 하시는 일이라면,` : '')}
+      const readN = realTotal();
+      msgLiv(`${readN ? `자료 <b>${readN}건</b>을 다 읽었어요.` : '준비됐어요.'}${S.nowline ? ` <b>${esc(S.nowline)}</b>에 시간을 제일 많이 쓰신다고 하셨죠.` : (nick() ? ` ${esc(nick())}님이 하시는 일이라면,` : '')}
         <p style="margin-top:6px"><b>이런 것까지 저한테 맡기실 수 있어요.</b> 보통은 몇 번씩 왔다 갔다 해야 하는 일이에요. 여기서는 한 문장이면 됩니다.</p>
         <div class="ob-excard" data-ex="0"><div class="ob-xt">“${esc(C[0][0])}”</div><div class="ob-xd"><b>보통은</b> ${esc(C[0][1])}</div></div>
         <div class="ob-excard" data-ex="1"><div class="ob-xt">“${esc(C[1][1])}”</div><div class="ob-xd"><b>${esc(C[1][0])} 쪽도</b> 이런 것까지 이어서 물으실 수 있어요.</div></div>`);
@@ -1053,19 +1244,40 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const t = $('.ob-xt', c).textContent.replace(/^“|”$/g, '');
         msgUser(t);
         S.firstOrder = t; S.decisions.push(`첫 지시: ${t.slice(0, 40)}…`); save(); renderSB();
-        msgLiv('이 문장으로 세션을 하나 열어 뒀어요. 왼쪽에 보이죠? 온보딩이 끝나면 바로 시작됩니다. 다 됐으면 아래 <b>준비 끝, 정리해 주세요</b>를 눌러 주세요.'); /* [새문구] */
+        // ⚠ 종전엔 "세션을 하나 열어 뒀어요. 왼쪽에 보이죠?" 라고 했는데 **세션을 만들지 않았다**.
+        //  적어 두는 것은 실제로 한다(마무리에서 프로필의 결정으로 남는다) — 그 사실만 말한다.
+        msgLiv('적어 뒀어요. 정리가 끝나면 홈에서 이 문장으로 바로 시작하실 수 있어요. 다 됐으면 아래 <b>준비 끝, 정리해 주세요</b>를 눌러 주세요.');
       });
       await sleep(400);
       chipsRow([{ label: '준비 끝, 정리해 주세요', cta: true, cb: async (l) => {
         msgUser(l); doneStep('can'); S.scene = 'done'; save(); renderSB();
+        // ★ 여기가 온보딩이 **실제로 워크스페이스를 바꾸는** 자리다. 종전엔 localStorage 표식 하나가 전부였다.
+        const m = msgLiv('정리하고 있어요.');
+        let applied = null;
+        try {
+          applied = await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({
+            name: S.nameSet ? S.name : null,
+            stage: S.stage || null,
+            job: S.job || null,
+            drawers: (S.drawers || []).map((d) => ({ name: d.name, why: d.why || null })),
+            cadence: S.b2 || null,
+            share: S.b3 || null,
+            nowline: S.nowline || null,
+            first_order: S.firstOrder || null,
+          }) });
+        } catch (e) {
+          // 반영이 실패했으면 **끝났다고 말하지 않는다** — 다음에 다시 물을 수 있게 표식도 남기지 않는다.
+          m.querySelector('.ob-body').innerHTML = `정리하다 막혔어요 — ${esc(e && e.message ? e.message : '알 수 없는 오류')}<p style="margin-top:6px">홈에서 이어서 하실 수 있습니다.</p>`;
+          await sleep(1200); location.hash = '#/'; return;
+        }
         try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
-        // 끝냈다는 표식은 **서버가 정본**(#2039) — localStorage 는 이 브라우저에만 남아, 기기를 바꾸면 처음 설정이
-        //  다시 떴다. 실패해도 화면은 그대로 간다(다음 부팅에 서버 판정이 받아 준다).
-        void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ onboarded: true }) }).catch(() => {});
         ctx.onDone && ctx.onDone();
-        // 요약 화면은 두지 않는다 — 정리해 달라고 했으면 정리된 워크스페이스를 보여 주는 게 맞다(원준님 2026-08-25).
-        msgLiv('정리했어요. 워크스페이스로 모시겠습니다.');
-        await sleep(900);
+        const made = (applied && applied.created) || [];
+        m.querySelector('.ob-body').innerHTML = made.length
+          ? `정리했어요. 자료함에 <b>${made.map((x) => esc(x)).join(' · ')}</b> 서랍을 만들어 뒀습니다. 워크스페이스로 모시겠습니다.`
+          : '정리했어요. 워크스페이스로 모시겠습니다.';
+        scrollChat();
+        await sleep(1100);
         location.hash = '#/';
       } }]);
       fineRow('지금 시키지 않으셔도 됩니다. 홈에서 언제든 그대로 말씀하시면 돼요.');
@@ -1084,10 +1296,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   async function enterChat(token) {
     setStage('stage-chat');
     $('#thread').innerHTML = '';
-    if (!S.read.total) S.read.total = 41;
+    await loadWelcome();
+    S.read.total = Math.max(S.upN || 0, 0);
     startReading();
     await sleep(300);
-    msgLiv(`${nick() ? esc(nick()) + '님, ' : ''}연결까지 끝났어요.<p style="margin-top:6px">지금 자료 <b>${S.read.total}건</b>을 읽고 있어요. 읽는 동안 몇 가지만 확인할게요.</p>`); /* [새문구] 채팅 도입부 */
+    const n = S.read.total;
+    msgLiv(`${nick() ? esc(nick()) + '님, ' : ''}연결까지 끝났어요.`
+      + (n ? `<p style="margin-top:6px">지금 자료 <b>${n}건</b>을 읽고 있어요. 읽는 동안 몇 가지만 확인할게요.</p>`
+           : `<p style="margin-top:6px">몇 가지만 확인하고 바로 시작할게요.</p>`));
     chatStep('b1', token);
   }
 
@@ -1155,7 +1371,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (upto > CHAT_STEPS.indexOf('b3')) past.push([`같이 보는 팀이 있나요?`, S.b3 === 'me' ? '나만 봐요' : '우리 팀이 같이 봐요']), S.b3 = S.b3 || 'team';
       if (upto > CHAT_STEPS.indexOf('nowline')) { S.nowline = S.nowline || DATA.NOW_KINDS[2]; past.push([`평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?`, S.nowline]); }
       Object.assign(S.read, { done: S.read.total, finished: true });
-      const targets = drawerTargets(); S._counts = {}; DATA.KINDS7.forEach(([k]) => { S._counts[k] = targets[k] || ''; });
+      // 장면 건너뛰기(?scene=)로 중간에 들어온 경우에도 사이드바 숫자는 **실측**을 쓴다 —
+      //  여기만 상수 목표치를 쓰면 같은 화면이 두 가지 숫자를 말한다.
+      S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
     }
     save(); renderSB();
     if (key === 'read') { enterChat(token); return; }

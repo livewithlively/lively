@@ -17,3 +17,4 @@ export * from './dash/widget-folders.js';
 export * from './dash/widget-notifications.js';
 export * from './dash/widget-tasks-review-log.js';
 export * from './dash/widget-lively-log.js';
+export * from './dash/widget-previews.js';
