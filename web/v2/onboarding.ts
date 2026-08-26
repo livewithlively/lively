@@ -794,6 +794,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function connHow(id) {
     const svc = svcOf(id); if (!svc) return null;
     if (svc.oauth && CONN && CONN.oauthMap.has(svc.oauth)) return 'oauth';
+    //  #1881 G5 — 전용 창구를 가진 앱(GitHub)도 '계정 로그인' 길이다. 이게 없으면 토큰 발급 3단계로 보내는데,
+    //   그건 우리가 없애려던 바로 그 벽이고 저장소도 못 고른다(계정 연결은 그 화면에서 범위를 함께 정한다).
+    if ((svc as any).appConnect) return 'oauth';
     return svc.token ? 'token' : (svc.oauth ? 'oauth' : null);
   }
   /** 이어진 것으로 세어도 되는 id 만 — 화면이 «2곳 이었어요» 라고 말할 근거. */
@@ -846,9 +849,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   /** 계정 로그인 — 새 탭에서 [허용]. 복귀는 **창 포커스 한 번**으로 안다(v2/connect.ts 와 같은 경로). */
   async function svcOAuth(id, after) {
-    const svc = svcOf(id); if (!svc || !svc.oauth) return;
+    const svc = svcOf(id); if (!svc || !(svc.oauth || (svc as any).appConnect)) return;
     try {
-      const r: any = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
+      //  전용 창구를 가진 앱(#1881 GitHub)은 공용 경로를 못 탄다 — MCP 서버 행이 없기 때문이다.
+      const app = !!(svc as any).appConnect;
+      const r: any = await api(app ? '/api/ui/org/github/connect' : '/api/ui/me/oauth/connect',
+        { method: 'POST', body: JSON.stringify(app ? {} : { server: svc.oauth }) });
       if (r && r.authorized) { await loadConn(); after(); return; }
       const url = r && (r.authorization_url || r.url);
       if (!url) { after('연결할 주소를 받지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
