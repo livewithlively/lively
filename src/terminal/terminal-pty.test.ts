@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { inputToSendKeys, inputToSendKeysArgv, isPsmuxBin, createInputPump, resizeToRefresh, captureCmd, stateCmd, mouseResetCmd, STATE_MARKER, handleControlMsg, parseEtimeSec, summarizeAttachProcs } from "./terminal-pty.js";
 import { isSessionGoneError } from "./terminal-sessions.js";
+import { TMUX_BIN } from "./catalog.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -156,9 +157,25 @@ t("타임아웃(kill/SIGTERM, tmux 과부하 #687) → 종료 아님(판정 불�
   assert.equal(isSessionGoneError({ killed: true, signal: "SIGTERM", stderr: "can't find session: box-a-0011ffee" }), false);
 });
 
-t("tmux 서버 접속 불가(소켓 없음·no server running) → 종료 아님(판정 불가)", () => {
-  assert.equal(isSessionGoneError({ code: 1, stderr: "error connecting to /private/tmp/tmux-501/default (No such file or directory)" }), false);
-  assert.equal(isSessionGoneError({ code: 1, stderr: "no server running on /private/tmp/tmux-501/default" }), false);
+t("로컬 단일호스트 — tmux 서버 접속 불가(소켓 없음·no server running) → 종료 아님(판정 불가)", () => {
+  // 로컬(중계 아님, relayManaged=false)에선 종전 그대로 보수적: 서버 부재는 일시장애일 수 있어 재연결 유지.
+  assert.equal(isSessionGoneError({ code: 1, stderr: "error connecting to /private/tmp/tmux-501/default (No such file or directory)" }, TMUX_BIN, false), false);
+  assert.equal(isSessionGoneError({ code: 1, stderr: "no server running on /private/tmp/tmux-501/default" }, TMUX_BIN, false), false);
+});
+
+// ── 관리형 중계(#1437) — tmux 가 테넌트별 컨테이너에 산다. 이미지 롤아웃/OOM 으로 그 서버가 증발하면 인메모리 세션이
+//  통째로 사라지고 스스로 돌아오지 않는다(복원만이 길). 그래서 같은 문구를 **확답**으로 승격한다(상민님 실측
+//  lively-46e3: has-session → "no server running" 인데 복원이 already 로 막혔다). relayManaged 만 true 로 바뀔 뿐
+//  나머지 판정(타임아웃·killed·can't find)은 로컬과 동일해야 한다.
+t("관리형 중계 — tmux 서버 부재(no server running·소켓 없음) → 종료됨(확답)", () => {
+  assert.equal(isSessionGoneError({ code: 1, stderr: "no server running on /tmp/tmux-200069/lvly-lively-46e3" }, TMUX_BIN, true), true, "스테일 소켓(서버 죽음) = 그 테넌트 세션 증발");
+  assert.equal(isSessionGoneError({ code: 1, stderr: "error connecting to /tmp/tmux-200069/lvly-lively-46e3 (No such file or directory)" }, TMUX_BIN, true), true, "소켓 없음(재생성된 빈 컨테이너) = 증발");
+  assert.equal(isSessionGoneError({ code: 1, stderr: "error connecting to /tmp/tmux-200069/lvly-x (Connection refused)" }, TMUX_BIN, true), true, "소켓은 있으나 서버 죽는 중 = 증발");
+  // 컨테이너 보장/생성 실패는 도커·노드 일시장애 — 중계여도 판정 불가(재연결 유지, 세션을 죽었다고 오판하지 않는다).
+  assert.equal(isSessionGoneError({ code: 1, stderr: "tmux 컨테이너 보장 실패: docker daemon 응답 없음" }, TMUX_BIN, true), false, "컨테이너 인프라 장애는 확답 아님");
+  assert.equal(isSessionGoneError({ code: 1, stderr: "tmux 컨테이너 생성 실패: no space left on device" }, TMUX_BIN, true), false, "컨테이너 생성 실패도 확답 아님");
+  // 타임아웃은 중계여도 판정 불가 — 서버 부재 문구가 섞여도 시그널이 있으면 판정 불가(과부하 오인 방지, #687).
+  assert.equal(isSessionGoneError({ killed: true, signal: "SIGTERM", stderr: "no server running on /tmp/tmux-200069/lvly-x" }, TMUX_BIN, true), false, "중계 타임아웃은 판정 불가");
 });
 
 // #1791 실측(hammurabi) — psmux 는 `has-session -t <없는 id>` 에 문구 없이 exit 1 만 준다. tmux 규칙(문구 필요)만 있으면
