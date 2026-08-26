@@ -36,7 +36,7 @@
 import type express from "express";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { canAttach, sessionDir } from "./terminal-sessions.js";
+import { canAttach, sessionDir, sessionGone } from "./terminal-sessions.js";
 import { getOpt } from "./tmux-exec.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState } from "../sessions/session-state.js";
@@ -65,7 +65,11 @@ async function gateRead(id: string, req: express.Request): Promise<void> {
   if (nodeId) {
     const v = await nodeCanAttach(nodeId, id, uid);
     if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
-    throw new HttpError(409, "node");   // 인가는 되지만 파일이 그 컴퓨터에 있다 — 화면이 중앙 기록으로 물러난다
+    // ⚠ '노드에 등록됨'과 '파일이 저쪽에 있음'은 다르다(#2055 실측 2026-08-26): 게이트웨이 박스가 노드로도
+    //  등록돼 있으면 **이 박스의 로컬 세션까지** 노드 스냅샷에 잡힌다(applyLiveTheme·prompt 라우트가 이미 같은
+    //  함정을 겪었다). 그때 여기서 409 로 물러나면 화면은 중앙 기록으로 폴백하는데, 그 기록은 아직 비어 있어
+    //  **대화창이 통째로 빈 채로 남는다**. 이 박스의 tmux 에 실제로 있으면 로컬 파일로 답한다.
+    if (await sessionGone(id)) throw new HttpError(409, "node");   // 정말 저쪽 컴퓨터 것 — 중앙 기록으로
   }
   if (await canAttach(id, uid)) return;
   const st = await getSessionState(id);

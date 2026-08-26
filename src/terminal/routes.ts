@@ -343,7 +343,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
     } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
-    for (const s of [...local, ...localRestorable, ...remote]) s.chat = chatIoCaps(s.harness);
+    for (const s of [...local, ...localRestorable, ...remote]) {
+      s.chat = chatIoCaps(s.harness);
+      // #2055 — 이 세션의 대화가 **어디서 도나**. app-server 면 pane 이 셸이라 화면은 대화창을 먼저 열어야 한다
+      //  (터미널로 열면 사람이 말 걸 곳이 없는 화면을 먼저 본다 — 실측으로 그렇게 헤맸다).
+      s.chatMode = codexChatMode({ harness: s.harness });
+    }
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
@@ -513,6 +518,55 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.json({ results, applied: results.filter((r) => r.status === "applied").length });
   }));
 
+  // ── codex 대화창 실시간 통로(#2055) — 글자 조각·승인 요청·상태를 SSE 로 민다. ──
+  //  왜 SSE 인가: rollout 파일은 **턴이 끝나야** 답을 담는다. 파일만 보면 화면은 그동안 빈 채로 있고, 무엇보다
+  //  **승인 요청**을 사람에게 전할 길이 없다 — 그러면 기본값(거부)으로 닫혀 codex 가 아무 명령도 못 돌린다.
+  //  폴링으로도 못 한다(승인은 '지금 답해야 진행되는' 요청이라 왕복 지연이 곧 멈춤이다).
+  app.get("/api/ui/terminal/sessions/:id/codex-chat/events", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const { onChatEvent, pendingApprovals, codexChatStatus } = await import("./harness-io/codex-chat-runtime.js");
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",              // 프록시 버퍼링 금지 — 조각이 뭉쳐 오면 스트리밍이 아니다
+    });
+    const send = (e: unknown): void => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* 이미 닫힘 */ } };
+    // 붙자마자 지금 상태를 준다 — 새로고침에 승인이 사라지면 그 턴은 영영 선다(TTL 까지 기다렸다 거부된다).
+    send({ kind: "hello", running: !!codexChatStatus(req.params.id)?.alive });
+    for (const a of pendingApprovals(req.params.id)) send({ kind: "approval", ...a });
+    const off = onChatEvent(req.params.id, send);
+    const beat = setInterval(() => { try { res.write(": beat\n\n"); } catch { /* */ } }, 25_000);
+    req.on("close", () => { off(); clearInterval(beat); });
+  }));
+
+  // 승인 답하기 — 화면의 [허용]·[이번만]·[거부] 가 부른다.
+  app.post("/api/ui/terminal/sessions/:id/codex-chat/approve", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const id = String(b.id ?? "");
+    const decision = String(b.decision ?? "");
+    // 스키마에 없는 값을 그대로 흘리지 않는다 — codex 는 모르는 값을 fail-closed 로 처리하지만, 우리가 먼저 막는다.
+    if (!["accept", "acceptForSession", "decline", "cancel"].includes(decision)) throw new HttpError(400, "허용되지 않은 결정값입니다");
+    if (!id) throw new HttpError(400, "승인 id 가 필요합니다");
+    const { answerApproval } = await import("./harness-io/codex-chat-runtime.js");
+    const ok = answerApproval(req.params.id, id, decision as never);
+    res.setHeader("Cache-Control", "no-store");
+    // 없는 id = 이미 처리됐거나 만료. 실패로 던지지 않고 사실대로 알린다(화면이 카드를 접으면 된다).
+    res.json({ ok: true, applied: ok });
+  }));
+
+  // 돌던 턴 멈추기 — 대화창의 [멈춤]. 런타임이 없으면 false(화면이 종전 Esc 경로로 간다).
+  app.post("/api/ui/terminal/sessions/:id/codex-chat/interrupt", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const { interruptCodexChat } = await import("./harness-io/codex-chat-runtime.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, interrupted: await interruptCodexChat(req.params.id) });
+  }));
+
   // 대화를 **터미널로 넘긴다**(#2055) — app-server 가 쥔 스레드를 놓아 주고, 사람이 pane 에서 이어가게 한다.
   //  왜 이 통로가 필요한가: codex 는 스레드당 writer 가 하나라, 우리 대화창이 쥔 대화는 pane 의 `codex resume` 이
   //  못 연다(active writer). 놓아 주는 유일한 방법이 **프로세스 종료**다(thread/unsubscribe 로는 안 풀린다 — 실측).
@@ -539,39 +593,50 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     } else if (!(await canAttach(req.params.id, uid))) {
       throw new HttpError(403, "세션에 접근할 수 없습니다");
     }
-    if (!nodeId) {
-      // ── codex app-server 모드(#2055) — 글자를 화면에 '넣는' 대신 **프로토콜로 보낸다**. ──
+    // ── codex app-server 모드(#2055) — 글자를 화면에 '넣는' 대신 **프로토콜로 보낸다**. ──
+    //  ⚠ **노드 판정보다 먼저** 본다(실측 2026-08-26, dev): 게이트웨이 박스가 노드로도 등록돼 있으면
+    //   그 박스의 **로컬 세션까지 노드 스냅샷에 잡혀**(applyLiveTheme 주석과 같은 함정) 아래 노드 릴레이로
+    //   빠져 이 분기가 통째로 무시됐다 — 응답이 `{ok:true}` 한 줄로 와서 겉으론 성공처럼 보인다.
+    //   그래서 '노드에 등록됐나'가 아니라 **'이 박스의 tmux 에 그 세션이 실제로 있나'** 로 가른다.
+    if (codexChatMode({ harness: await sessionHarnessKey(req.params.id) }) === "app-server"
+        && !(await sessionGone(req.params.id))) {
       //  아웃박스+send-keys 는 pane 화면을 읽어 타이밍을 맞추는 경로라, 로그인·대화상자에 걸리면 배달이 지연되거나
       //  조용히 사라진다. app-server 는 turn/start 의 **응답으로 성공/실패가 온다** — 애매함이 없다.
       //  ⚠ 실패하면 반드시 종전 경로로 폴백한다(app-server 는 공식 문서상 experimental). 폴백했다는 사실은
       //   응답에 실어 화면·게이트가 볼 수 있게 한다 — 조용히 접으면 "왜 느리지"의 원인을 아무도 모른다.
-      const harnessKey = await sessionHarnessKey(req.params.id);
-      if (codexChatMode({ harness: harnessKey }) === "app-server") {
-        const { sendCodexChat, CodexChatUnavailable } = await import("./harness-io/codex-chat-runtime.js");
-        try {
-          const dir = await sessionDir(req.params.id);
-          const osUser = await sessionOsUser(req.params.id);
-          const st = await getSessionState(req.params.id);
-          const r = await sendCodexChat({
-            sessionId: req.params.id, text, cwd: dir, osUser,
-            threadId: st?.claude_session_id || null,
-          });
-          // 스레드 id 를 세션 상태에 남긴다 — 게이트웨이가 재시작해도 **같은 대화**로 이어 붙는다
-          //  (없으면 새 스레드가 열려 사람이 보던 대화와 갈린다). 화면의 기록 조회도 이 값을 쓴다.
-          if (r.threadId && r.threadId !== st?.claude_session_id) {
-            await setClaudeSessionId(req.params.id, r.threadId, uid).catch(() => false);
+      const { sendCodexChat, CodexChatUnavailable } = await import("./harness-io/codex-chat-runtime.js");
+      try {
+        const dir = await sessionDir(req.params.id);
+        const osUser = await sessionOsUser(req.params.id);
+        const st = await getSessionState(req.params.id);
+        const r = await sendCodexChat({
+          sessionId: req.params.id, text, cwd: dir, osUser,
+          threadId: st?.claude_session_id || null,
+        });
+        // 스레드 id **와 대화 파일 경로**를 세션 상태에 남긴다.
+        //  · id — 게이트웨이가 재시작해도 같은 대화로 이어 붙는다(없으면 새 스레드가 열려 대화가 갈린다).
+        //  · 경로 — **화면이 대화를 읽는 유일한 단서**다. 평소엔 세션 안 훅이 보고하지만 app-server 턴에서는
+        //    그 훅이 돌지 않는다(실측 2026-08-26 — 그래서 답이 파일에 있는데도 대화창이 비어 있었다).
+        //    우리는 threadId 를 아니 직접 찾아 넣는다.
+        if (r.threadId) {
+          const { rolloutPath } = await import("./harness-io/codex-chat-runtime.js");
+          const tpath = await rolloutPath(await sessionOsUser(req.params.id), r.threadId).catch(() => "");
+          if (r.threadId !== st?.claude_session_id || (tpath && tpath !== st?.transcript_path)) {
+            await setClaudeSessionId(req.params.id, r.threadId, uid, tpath || null).catch(() => false);
           }
-          res.json({ ok: true, delivered: true, transport: "app-server", thread_id: r.threadId });
-          return;
-        } catch (e) {
-          if (!(e instanceof CodexChatUnavailable)) throw e;
-          logger.warn({ id: req.params.id, err: (e as Error).message }, "codex app-server 전송 실패 — 종전 경로로 폴백");
-          const { enqueuePrompt } = await import("../sessions/session-outbox.js");
-          const q = await enqueuePrompt(req.params.id, text);
-          res.json({ ok: true, queued: true, outbox_id: q.id, seq: q.seq, transport: "outbox", fallback: (e as Error).message });
-          return;
         }
+        res.json({ ok: true, delivered: true, transport: "app-server", thread_id: r.threadId });
+        return;
+      } catch (e) {
+        if (!(e instanceof CodexChatUnavailable)) throw e;
+        logger.warn({ id: req.params.id, err: (e as Error).message }, "codex app-server 전송 실패 — 종전 경로로 폴백");
+        const { enqueuePrompt } = await import("../sessions/session-outbox.js");
+        const q = await enqueuePrompt(req.params.id, text);
+        res.json({ ok: true, queued: true, outbox_id: q.id, seq: q.seq, transport: "outbox", fallback: (e as Error).message });
+        return;
       }
+    }
+    if (!nodeId) {
       // 이 박스 세션 — 아웃박스(#1753)로. 곧바로 send-keys 하지 않는다: 로그인·대화상자에 멈춘 세션이면 글자가 조용히
       //  사라진다(실측). 배달자가 입력창을 확인하고 넣고, 트랜스크립트 에코로 delivered 를 확정한다. 화면은 seq 로 상태를 따라간다.
       const { enqueuePrompt } = await import("../sessions/session-outbox.js");
