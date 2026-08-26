@@ -33,13 +33,14 @@
   <key>RunAtLoad</key>
   <true/>
 
+  <!-- 어떻게 죽든(정상종료 exit 0 포함) 자동 재시작 = "최대한 안 죽게"의 핵심.
+       ⚠ 종전 KeepAlive{SuccessfulExit:false} 는 **비정상 종료에만** 재기동했다 — 게이트웨이는 SIGTERM 을 우아하게
+       받아 exit 0 으로 끝나므로 남의 `pkill -f dist/index.js`·`kill`·`launchctl stop` 한 방에 영구 다운됐다
+       (2026-08-26 dev.lvly.io 9분 502). 코드도 exit 0 = "슈퍼바이저가 다시 띄운다"를 전제한다
+       (src/boot/housekeeping.ts workspace-registry 의 의도된 재기동 · Linux 유닛은 Restart=always). 내리려면 bootout.
+       회귀 가드: deploy/mac/keepalive-always.test.mjs -->
   <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-    <key>NetworkState</key>
-    <true/>
-  </dict>
+  <true/>
 
   <key>ThrottleInterval</key>
   <integer>10</integer>

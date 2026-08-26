@@ -11,7 +11,7 @@ export function onboardingDone(): boolean { try { return localStorage.getItem(OB
 
 export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boolean) => void; onDone?: () => void } = {}): { destroy(): void } {
   host.className = 'ob-root';
-  host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span></div>
+  host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span><button class="ob-q-back" id="obBack" data-back hidden>← 이전</button></div>
     <div class="ob-qwrap"><div class="ob-qcol" id="qcol"></div></div>
     <div class="ob-chat"><div class="ob-thread" id="thread"></div></div>
     <div class="ob-composer"><div class="ob-composer-in">
@@ -584,6 +584,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   /* 서비스 로고·무대 아이콘 — v1 app.js 의 BRAND(인라인 SVG)를 그대로. 사람은 '내가 쓰는 그 서비스'를 로고로 알아본다. */
   const BRAND = {"slack":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#4A154B\"><path d=\"M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z\"/></svg>","notion":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#000000\"><path d=\"M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z\"/></svg>","linear":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#5E6AD2\"><path d=\"M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z\"/></svg>","googledrive":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#4285F4\"><path d=\"M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z\"/></svg>","github":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#181717\"><path d=\"M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12\"/></svg>","gitlab":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#FC6D26\"><path d=\"m23.6004 9.5927-.0337-.0862L20.3.9814a.851.851 0 0 0-.3362-.405.8748.8748 0 0 0-.9997.0539.8748.8748 0 0 0-.29.4399l-2.2055 6.748H7.5375l-2.2057-6.748a.8573.8573 0 0 0-.29-.4412.8748.8748 0 0 0-.9997-.0537.8585.8585 0 0 0-.3362.4049L.4332 9.5015l-.0325.0862a6.0657 6.0657 0 0 0 2.0119 7.0105l.0113.0087.03.0213 4.976 3.7264 2.462 1.8633 1.4995 1.1321a1.0085 1.0085 0 0 0 1.2197 0l1.4995-1.1321 2.4619-1.8633 5.006-3.7489.0125-.01a6.0682 6.0682 0 0 0 2.0094-7.003z\"/></svg>","clickup":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#7B68EE\"><path d=\"M2 18.439l3.69-2.828c1.961 2.56 4.044 3.739 6.363 3.739 2.307 0 4.33-1.166 6.203-3.704L22 18.405C19.298 22.065 15.941 24 12.053 24 8.178 24 4.788 22.078 2 18.439zM12.04 6.15l-6.568 5.66-3.036-3.52L12.055 0l9.543 8.296-3.05 3.509z\"/></svg>","figma":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#F24E1E\"><path d=\"M15.852 8.981h-4.588V0h4.588c2.476 0 4.49 2.014 4.49 4.49s-2.014 4.491-4.49 4.491zM12.735 7.51h3.117c1.665 0 3.019-1.355 3.019-3.019s-1.355-3.019-3.019-3.019h-3.117V7.51zm0 1.471H8.148c-2.476 0-4.49-2.014-4.49-4.49S5.672 0 8.148 0h4.588v8.981zm-4.587-7.51c-1.665 0-3.019 1.355-3.019 3.019s1.354 3.02 3.019 3.02h3.117V1.471H8.148zm4.587 15.019H8.148c-2.476 0-4.49-2.014-4.49-4.49s2.014-4.49 4.49-4.49h4.588v8.98zM8.148 8.981c-1.665 0-3.019 1.355-3.019 3.019s1.355 3.019 3.019 3.019h3.117V8.981H8.148zM8.172 24c-2.489 0-4.515-2.014-4.515-4.49s2.014-4.49 4.49-4.49h4.588v4.441c0 2.503-2.047 4.539-4.563 4.539zm-.024-7.51a3.023 3.023 0 0 0-3.019 3.019c0 1.665 1.365 3.019 3.044 3.019 1.705 0 3.093-1.376 3.093-3.068v-2.97H8.148zm7.704 0h-.098c-2.476 0-4.49-2.014-4.49-4.49s2.014-4.49 4.49-4.49h.098c2.476 0 4.49 2.014 4.49 4.49s-2.014 4.49-4.49 4.49zm-.097-7.509c-1.665 0-3.019 1.355-3.019 3.019s1.355 3.019 3.019 3.019h.098c1.665 0 3.019-1.355 3.019-3.019s-1.355-3.019-3.019-3.019h-.098z\"/></svg>","prometheus":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#E6522C\"><path d=\"M12 0C5.373 0 0 5.372 0 12c0 6.627 5.373 12 12 12s12-5.373 12-12c0-6.628-5.373-12-12-12zm0 22.46c-1.885 0-3.414-1.26-3.414-2.814h6.828c0 1.553-1.528 2.813-3.414 2.813zm5.64-3.745H6.36v-2.046h11.28v2.046zm-.04-3.098H6.391c-.037-.043-.075-.086-.111-.13-1.155-1.401-1.427-2.133-1.69-2.879-.005-.025 1.4.287 2.395.511 0 0 .513.119 1.262.255-.72-.843-1.147-1.915-1.147-3.01 0-2.406 1.845-4.508 1.18-6.207.648.053 1.34 1.367 1.387 3.422.689-.951.977-2.69.977-3.755 0-1.103.727-2.385 1.454-2.429-.648 1.069.168 1.984.894 4.256.272.854.237 2.29.447 3.201.07-1.892.395-4.652 1.595-5.605-.529 1.2.079 2.702.494 3.424.671 1.164 1.078 2.047 1.078 3.716a4.642 4.642 0 01-1.11 2.996c.792-.149 1.34-.283 1.34-.283l2.573-.502s-.374 1.538-1.81 3.019z\"/></svg>","gmail":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#EA4335\"><path d=\"M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z\"/></svg>","googlecalendar":"<svg class=\"ob-blogo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"#4285F4\"><path d=\"M18.316 5.684H24v12.632h-5.684V5.684zM5.684 24h12.632v-5.684H5.684V24zM18.316 5.684V0H1.895A1.894 1.894 0 0 0 0 1.895v16.421h5.684V5.684h12.632zm-7.207 6.25v-.065c.272-.144.5-.349.687-.617s.279-.595.279-.982c0-.379-.099-.72-.3-1.025a2.05 2.05 0 0 0-.832-.714 2.703 2.703 0 0 0-1.197-.257c-.6 0-1.094.156-1.481.467-.386.311-.65.671-.793 1.078l1.085.452c.086-.249.224-.461.413-.633.189-.172.445-.257.767-.257.33 0 .602.088.816.264a.86.86 0 0 1 .322.703c0 .33-.12.589-.36.778-.24.19-.535.284-.886.284h-.567v1.085h.633c.407 0 .748.109 1.02.327.272.218.407.499.407.843 0 .336-.129.614-.387.832s-.565.327-.924.327c-.351 0-.651-.103-.897-.311-.248-.208-.422-.502-.521-.881l-1.096.452c.178.616.505 1.082.977 1.401.472.319.984.478 1.538.477a2.84 2.84 0 0 0 1.293-.291c.382-.193.684-.458.902-.794.218-.336.327-.72.327-1.149 0-.429-.115-.797-.344-1.105a2.067 2.067 0 0 0-.881-.689zm2.093-1.931l.602.913L15 10.045v5.744h1.187V8.446h-.827l-2.158 1.557zM22.105 0h-3.289v5.184H24V1.895A1.894 1.894 0 0 0 22.105 0zm-3.289 23.5l4.684-4.684h-4.684V23.5zM0 22.105C0 23.152.848 24 1.895 24h3.289v-5.184H0v3.289z\"/></svg>"};
+  /* 우리 것(브랜드 아님) — 선 아이콘. 로고는 색이 있고 이건 글자색을 따라가서, 남의 서비스와 내 것이 눈으로 갈린다. */
+  const GLYPH = {
+    folder: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+    git: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/><circle cx="17.5" cy="8" r="2.6"/><path d="M6 8.6v6.8M17.5 10.6c0 3.2-2.9 4.4-5.4 4.9"/></svg>',
+    none: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.6a7.9 7.9 0 0 1-8.5 7.9 8.6 8.6 0 0 1-3.6-.8L3.5 20.3l1.6-4.3a7.9 7.9 0 0 1-1.6-4.8 8 8 0 0 1 8.5-7.7 7.9 7.9 0 0 1 8.5 7.7z"/><path d="M8.6 11.5h.01M12 11.5h.01M15.4 11.5h.01"/></svg>',
+  };
 
   const $ = (s, el) => (el || host).querySelector(s);
   const $$ = (s, el) => Array.from((el || host).querySelectorAll(s));
@@ -597,6 +603,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, terminal: null, app: null,
+    trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
     upN: 0, upBusy: 0,      // #1881 실업로드 — 자료로 등록된 파일 수 / 올리는 중 수(연출 아님)
     b2: null, b3: null, nowline: null, firstOrder: null, decisions: [], notes: [],
@@ -632,16 +639,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
 
   /* ══════════════ 장면 차례 ══════════════ */
-  const ORDER = ['name', 'stage', 'role', 'sources', 'upload', 'ai', 'claude', 'terminal', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can', 'done'];
+  const ORDER = ['name', 'stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
   const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
   const CHAT_FROM = STEP_OF.read;          // 여기부터 막3(채팅)
-  const QPROG = ['stage', 'role', 'sources', 'upload', 'ai', 'claude', 'terminal', 'app'];   // 막2 진행 눈금
+  const QPROG = ['stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'app'];   // 막2 진행 눈금
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
   function qHead(prog, lead, title, help) {
     const at = QPROG.indexOf(prog);
-    return `<div class="ob-q-ic">L</div>
-      ${at >= 0 ? `<div class="ob-q-prog">${QPROG.map((_, i) => `<i class="${i <= at ? 'ob-on' : ''}"></i>`).join('')}</div>` : ''}
+    // 눈금은 지나온 자리로 돌아가는 문이기도 하다 — 앞 단계는 눌러서 고칠 수 있다(원준님 2026-08-25).
+    return `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
+      ${at >= 0 ? `<div class="ob-q-prog">${QPROG.map((k, i) => i < at
+          ? `<button class="ob-on ob-go" data-jump="${k}" aria-label="${esc(SCENE_LABEL[k] || '')}(으)로 돌아가기"></button>`
+          : `<i class="${i === at ? 'ob-on' : ''}"></i>`).join('')}</div>` : ''}
       ${lead ? `<p class="ob-q-lead">${lead}</p>` : ''}
       <h1 class="ob-q-title">${title}</h1>
       ${help ? `<p class="ob-q-help">${help}</p>` : ''}`;
@@ -706,75 +716,41 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
-          S.job = c.dataset.opt; save(); await sleep(200); goScene('sources');
+          S.job = c.dataset.opt; save(); await sleep(200); goScene('files');
         });
         const wr = $('.ob-q-write', el), win = $('#roleIn', el);
         $('[data-other]', el).onclick = (e) => { wr.hidden = false; e.target.hidden = true; win.focus(); };
-        const commit = () => { const v = win.value.trim(); if (!v) return; S.job = v; save(); goScene('sources'); };
+        const commit = () => { const v = win.value.trim(); if (!v) return; S.job = v; save(); goScene('files'); };
         $('#roleInGo', el).onclick = commit;
         win.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) commit(); });
-        $('[data-skip]', el).onclick = () => goScene('sources');
+        $('[data-skip]', el).onclick = () => goScene('files');
       },
     },
-    sources: {
-      html: () => qHead('sources',
-        `고맙습니다. 나머지는 <b>조금 뒤에 올려주시는 자료를 보고</b> 제가 알아서 세팅할게요.`,
-        '지금까지의 맥락을 주로 어디에 쌓아 두셨나요?',
-        '연결해 두시면 라이블리가 그 서비스의 자료를 계속 모아 정리해서, 쓰시는 AI에 자동으로 실어 줍니다. 여러 개 골라도 됩니다.')
-        + DATA.SOURCE_ROWS.map((r) => `<p class="ob-opt-group">${esc(r.k)}</p><div class="ob-opt-grid">
-            ${r.items.map((it) => card(it.label, '', BRAND[it.logo] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
-        + `<button class="ob-btn ob-btn-pri" id="srcGo" disabled>계속</button>
-           <button class="ob-q-skip" data-skip>건너뛰기. 파일은 나중에 올릴게요</button>`,
-      bind: (el) => {
-        const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
-        const idOf = (label) => (all.find((s) => s.label === label) || {}).id;
-        const go = $('#srcGo', el);
-        const sync = () => { const n = $$('.ob-opt-card.ob-on', el).length; go.disabled = !n; go.textContent = n ? `${n}개 연결하고 계속` : '계속'; };
-        sync();
-        $$('.ob-opt-card', el).forEach((c) => c.onclick = () => {
-          c.classList.toggle('ob-on');
-          S.sources = $$('.ob-opt-card.ob-on', el).map((x) => idOf(x.dataset.opt)).filter(Boolean); save(); renderSB(); sync();
-        });
-        go.onclick = () => goScene('upload');
-        $('[data-skip]', el).onclick = () => { S.sources = ['none']; save(); goScene('ai'); };
-      },
-    },
-    upload: {
-      html: () => {
-        const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
-        const names = S.sources.map((id) => (all.find((s) => s.id === id) || {}).label).filter(Boolean);
-        return qHead('upload',
-          `${esc(names.join('·'))}은 한 번 연결하면 계속 새 자료가 따라옵니다.`,
-          '자료를 넘겨주세요.',
-          '파일을 가지고 계시면 그냥 끌어다 놓으시면 됩니다.')
-          + `<div class="ob-opt-cards">${S.sources.map((id) => { const it = all.find((s) => s.id === id) || { label: id };
-              const on = S.connected.includes(id);
-              return `<button class="ob-opt-card ${on ? 'ob-on' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || ''}</span><span class="ob-oc-st"><span class="v2-dot ${on ? 'done' : 'off'}" style="margin:0"></span></span>
-                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '연결됐어요. 새 자료가 따라옵니다.' : '눌러서 연결 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
-          <div class="ob-opt-card" id="upZone" style="justify-content:center;flex-direction:column;gap:6px;min-height:96px;border-style:dashed;cursor:default">
-            <span class="ob-oc-t" id="upZoneT">${S.upN ? `${S.upN}개 받았어요. 더 끌어다 놓으셔도 됩니다.` : '여기에 파일이나 폴더를 끌어다 놓아 주세요.'}</span>
-            <span class="ob-oc-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개…` : '폴더 정리도, 이름 짓기도 필요 없습니다.'}</span>
+    /* 로컬 파일 — 앱 연결과 섞여 있던 것을 앞으로 떼어냈다(원준님 2026-08-25).
+       여기서 받은 파일은 곧바로 읽기 시작해, 뒤이어 앱을 잇는 동안 배경에서 분류가 끝난다.
+       업로드 자체는 #1881 L4 실배선 그대로 — 드롭·피커 → 개인 폴더 uploads/<상대경로> → 서버가 자료로 등록. */
+    files: {
+      html: () => qHead('files',
+        `${esc(S.name)}님, 먼저 파일부터 받겠습니다.`,
+        '지금 가지고 계신 파일을 올려 주세요.',
+        '폴더째 끌어다 놓으셔도 됩니다. 받는 즉시 읽기 시작해서, 다음 단계를 하시는 동안 정리해 둡니다.')
+        + `<div class="ob-drop ${S.upN ? 'ob-has' : ''}" id="upZone">
+            <span class="ob-drop-t" id="upZoneT">${S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요'}</span>
+            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더 정리도, 이름 짓기도 필요 없습니다.')}</span>
             <span id="upPick"></span>
           </div>
-          <button class="ob-btn ob-btn-pri" id="upGo" ${(S.connected.length || S.upN) ? '' : 'disabled'}>다 넣었어요, 계속</button>
-          <button class="ob-q-skip" data-skip>지금은 건너뛰기</button>`;
-      },
+          <button class="ob-btn ob-btn-pri" id="fGo" ${S.upN ? '' : 'disabled'}>${S.upN ? `${S.upN}개 올리고 계속` : '계속'}</button>
+          <button class="ob-q-skip" data-skip>지금은 건너뛰기. 나중에 올려도 됩니다</button>`,
       bind: (el) => {
-        $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
-          const id = c.dataset.conn; if (S.connected.includes(id)) return;
-          c.querySelector('.ob-oc-st').innerHTML = '<span class="v2-dot busy" style="margin:0"></span>'; c.querySelector('.ob-oc-d').textContent = '새 탭에서 허용을 기다리는 중';
-          await sleep(1100);
-          S.connected.push(id); if (!S.read.total) S.read.total = 41; save(); renderSB();
-          renderScene('upload', false);
-        });
-        // #1881 L4 — 실제 업로드: 드롭·피커 → 개인 폴더 uploads/<상대경로>. 서버가 파일을 자료(source)로 등록하고
-        //  응답 source_id 로 알려 준다 — 카운터는 그 실측이다(연출 아님). 실패는 조용히 넘어가지 않는다(toast).
         const zone = $('#upZone', el);
-        const paintZone = () => { const t = $('#upZoneT', el), d = $('#upZoneD', el);
+        const paintZone = () => {
+          const t = $('#upZoneT', el), d = $('#upZoneD', el), go = $('#fGo', el);
           if (!t || !d) return;
-          t.textContent = S.upN ? `${S.upN}개 받았어요. 더 끌어다 놓으셔도 됩니다.` : '여기에 파일이나 폴더를 끌어다 놓아 주세요.';
-          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개…` : '폴더 정리도, 이름 짓기도 필요 없습니다.';
-          const go = $('#upGo', el); if (go && (S.connected.length || S.upN)) go.disabled = false; };
+          t.textContent = S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요';
+          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더 정리도, 이름 짓기도 필요 없습니다.');
+          zone.classList.toggle('ob-has', !!S.upN);
+          if (go) { go.disabled = !S.upN; go.textContent = S.upN ? `${S.upN}개 올리고 계속` : '계속'; }
+        };
         const sendAll = async (items) => {
           if (!items.length) return;
           S.upBusy += items.length; paintZone();
@@ -791,6 +767,74 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         upDropZone(zone, zone, (items) => void sendAll(items));
         const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub', label: '파일이나 폴더 고르기' });
         $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 반환은 {btn, fileIn, dirIn} — input 도 DOM 에 있어야 click 이 된다
+        $('#fGo', el).onclick = () => { startReading(); goScene('sources'); };   // 읽기는 여기서 시작 — 뒤 단계가 대기 시간을 덮는다
+        $('[data-skip]', el).onclick = () => goScene('sources');
+      },
+    },
+    /* 앱 고르기 — 로컬 파일은 앞에서 받았으므로 '내 컴퓨터 폴더' 항목은 뺀다. */
+    sources: {
+      html: () => {
+        // 뺀 둘: '내 컴퓨터 폴더'는 앞 단계(파일 올리기)가 대신하고, '딱히 없어요'는 아래 건너뛰기가 이미 그 자리다
+        //  (버튼으로 두면 글이 길어 두 줄로 잘린다). 남은 '로컬 깃 저장소'는 하나뿐이라 '그 밖'으로 합친다(원준님 2026-08-25).
+        const DROP = new Set(['folder', 'none']);
+        const rows = [];
+        for (const r of DATA.SOURCE_ROWS) {
+          const items = r.items.filter((it) => !DROP.has(it.id));
+          if (!items.length) continue;
+          const k = r.k === '내 컴퓨터' ? '그 밖' : r.k;
+          const hit = rows.find((x) => x.k === k);
+          if (hit) hit.items = hit.items.concat(items); else rows.push({ k, items });
+        }
+        return qHead('sources',
+          S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 이어서 한 가지만 더요.` : '알겠습니다. 이어서 한 가지만 더요.',
+          '그동안 쌓아 두신 자료를 가져올 외부 서비스를 연결할게요.',
+          '고르신 곳에 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요.')
+          + rows.map((r) => `<p class="ob-opt-group">${esc(r.k)}</p><div class="ob-opt-grid">
+              ${r.items.map((it) => card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
+          + `<button class="ob-btn ob-btn-pri" id="srcGo" disabled>계속</button>
+             <button class="ob-q-skip" data-skip>가져올 곳이 없어요</button>`;
+      },
+      bind: (el) => {
+        const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
+        const idOf = (label) => (all.find((s) => s.label === label) || {}).id;
+        const go = $('#srcGo', el);
+        const sync = () => { const n = $$('.ob-opt-card.ob-on', el).length; go.disabled = !n; go.textContent = n ? `${n}곳에서 가져오기` : '계속'; };
+        sync();
+        $$('.ob-opt-card', el).forEach((c) => c.onclick = () => {
+          c.classList.toggle('ob-on');
+          S.sources = $$('.ob-opt-card.ob-on', el).map((x) => idOf(x.dataset.opt)).filter(Boolean); save(); renderSB(); sync();
+        });
+        go.onclick = () => goScene(S.sources.length && !(S.sources.length === 1 && S.sources[0] === 'none') ? 'connect' : 'ai');
+        $('[data-skip]', el).onclick = () => { S.sources = ['none']; save(); goScene('ai'); };
+      },
+    },
+    /* 앱 연결 — 고른 것을 하나씩. 이 동안 앞에서 받은 파일이 배경에서 읽힌다(대기 없음). */
+    connect: {
+      html: () => {
+        const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
+        const picked = S.sources.filter((id) => id !== 'none');
+        const left = picked.length - S.connected.length;
+        const reading = S.read.total && !S.read.finished;
+        return qHead('connect',
+          reading ? `읽는 중이에요. <b>${S.read.done} / ${S.read.total}</b>` : (S.upN ? `파일 ${S.upN}개는 다 읽었어요.` : '거의 다 왔어요.'),
+          '고르신 곳을 하나씩 이어 주세요.',
+          '새 탭에서 한 번만 허용하시면 됩니다. 허용하는 즉시 그동안 쌓인 자료를 가져오기 시작합니다.')
+          + `<div class="ob-opt-cards">${picked.map((id) => { const it = all.find((s) => s.id === id) || { label: id };
+              const on = S.connected.includes(id);
+              return `<button class="ob-opt-card ${on ? 'ob-on' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span class="ob-oc-st"><span class="v2-dot ${on ? 'done' : 'off'}" style="margin:0"></span></span>
+                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '연결이 완료됐어요.' : '눌러서 잇기 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
+          <button class="ob-btn ob-btn-pri" id="upGo" ${S.connected.length ? '' : 'disabled'}>${left > 0 && S.connected.length ? `${left}개는 나중에, 계속` : '다 이었어요, 계속'}</button>
+          <button class="ob-q-skip" data-skip>나중에 가져올게요</button>`;
+      },
+      bind: (el) => {
+        $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
+          const id = c.dataset.conn; if (S.connected.includes(id)) return;
+          c.querySelector('.ob-oc-st').innerHTML = '<span class="v2-dot busy" style="margin:0"></span>'; c.querySelector('.ob-oc-d').textContent = '새 탭에서 허용을 기다리는 중';
+          await sleep(1100);
+          S.connected.push(id);
+          if (!S.read.total) { S.read.total = 41; startReading(); }
+          save(); renderSB(); renderScene('connect', false);
+        });
         $('#upGo', el).onclick = () => goScene('ai');
         $('[data-skip]', el).onclick = () => goScene('ai');
       },
@@ -830,12 +874,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       html: () => qHead('terminal',
         S.ai === '아직 없어요' ? `AI 구독이 아직 없으셔도 괜찮아요. 자료 쌓기·정리·검색은 지금부터 됩니다. 첫 질문 <b>3회</b>는 라이블리 계정으로 열어 드릴게요.` : (S.aiConnected ? '연결됐어요. 거의 끝났습니다.' : '거의 끝났습니다.'),
         '터미널에서 Claude Code나 Codex 등을 쓰시나요?',
-        '쓰신다면 거기에도 같은 자료가 실리게 할 수 있어요.')
+        '쓰신다면 그 컴퓨터를 라이블리에 이어 두시길 권합니다. 한 줄 설치로 끝납니다.')
         + `<div class="ob-benefits">
-            <p class="ob-benefit">터미널의 AI도 같은 자료함을 봅니다</p>
-            <p class="ob-benefit">여기서 정리한 맥락이 코드 작업에도 실립니다</p>
+            <p class="ob-benefit">터미널에서 켜는 AI가 이 자료함을 그대로 읽습니다</p>
+            <p class="ob-benefit">웹에서도 그 컴퓨터의 세션을 열 수 있습니다</p>
+            <p class="ob-benefit">오래 걸리는 일은 그 컴퓨터에 맡겨 둘 수 있습니다</p>
           </div>
-          <button class="ob-btn ob-btn-pri" id="tYes">네, 씁니다</button>
+          <button class="ob-btn ob-btn-pri" id="tYes">네, 씁니다. 이어 둘게요</button>
           <button class="ob-btn ob-btn-sub" id="tNo">아니요</button>`,
       bind: (el) => {
         $('#tYes', el).onclick = () => { S.terminal = 'yes'; S.decisions.push('내 컴퓨터 노드 연결, 터미널의 Claude Code에도 같은 자료'); save(); renderSB(); toast('홈에서 한 줄 설치를 안내할게요 (lively node --daemon)'); goScene('app'); };
@@ -943,7 +988,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     }, 240);
   }
 
-  const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can', 'done'];
+  const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
   async function chatStep(step, token) {
     if (token !== seqToken) return;
     const doneStep = (s) => { if (!S.chatDone.includes(s)) S.chatDone.push(s); save(); renderSB(); };
@@ -1011,24 +1056,22 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         msgLiv('이 문장으로 세션을 하나 열어 뒀어요. 왼쪽에 보이죠? 온보딩이 끝나면 바로 시작됩니다. 다 됐으면 아래 <b>준비 끝, 정리해 주세요</b>를 눌러 주세요.'); /* [새문구] */
       });
       await sleep(400);
-      chipsRow([{ label: '준비 끝, 정리해 주세요', cta: true, cb: (l) => { msgUser(l); doneStep('can'); chatStep('done', token); } }]);
+      chipsRow([{ label: '준비 끝, 정리해 주세요', cta: true, cb: async (l) => {
+        msgUser(l); doneStep('can'); S.scene = 'done'; save(); renderSB();
+        try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
+        // 끝냈다는 표식은 **서버가 정본**(#2039) — localStorage 는 이 브라우저에만 남아, 기기를 바꾸면 처음 설정이
+        //  다시 떴다. 실패해도 화면은 그대로 간다(다음 부팅에 서버 판정이 받아 준다).
+        void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ onboarded: true }) }).catch(() => {});
+        ctx.onDone && ctx.onDone();
+        // 요약 화면은 두지 않는다 — 정리해 달라고 했으면 정리된 워크스페이스를 보여 주는 게 맞다(원준님 2026-08-25).
+        msgLiv('정리했어요. 워크스페이스로 모시겠습니다.');
+        await sleep(900);
+        location.hash = '#/';
+      } }]);
       fineRow('지금 시키지 않으셔도 됩니다. 홈에서 언제든 그대로 말씀하시면 돼요.');
     }
-    if (step === 'done') {
-      await sleep(600);
-      msgLiv(`정리했어요. 지금까지 정해 주신 것들이에요.
-        <div class="ob-tags" style="margin-top:8px">${S.decisions.slice(0, 8).map((d) => `<span class="ob-tag">${esc(d)}</span>`).join('')}</div>
-        <p style="margin-top:10px">자료 <b>${S.read.total}건</b>이 서랍 <b>7개</b>에 정리돼 있고, 새 자료는 이제 알아서 제자리로 갑니다.</p>
-        <p>이제부터는 <b>아래 입력창에 그대로 말씀하시면 됩니다.</b> 제가 자료를 들고 움직일게요.</p>`); /* [새문구] 요약 연결부 */
-      S.scene = 'done'; save(); renderSB(); try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {} ctx.onDone && ctx.onDone();
-      // 끝냈다는 표식은 **서버가 정본**(#2039) — localStorage 는 이 브라우저에만 남아, 기기를 바꾸면 처음 설정이
-      //  다시 떴다. 실패해도 화면은 그대로 간다(다음 부팅에 서버 판정이 받아 준다).
-      void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ onboarded: true }) }).catch(() => {});
-      armCompose('여기에 그대로 말씀하시면 됩니다', (v) => { S.notes.push(v); save(); msgLiv('네. 실제 서비스에서는 여기서 바로 시작됩니다. 프로토타입은 여기까지예요.'); });
-      await sleep(300);
-      chipsRow([{ label: '처음부터 다시 보기', ghost: true, cb: () => { sessionStorage.removeItem(KEY); localStorage.removeItem(DONE_KEY); location.reload(); } }]);
-    }
   }
+
   function waitRead(token) {
     if (S.read.finished) { chatStep('can', token); return; }
     const m = msgLiv(`<div class="ob-readline"><span>자료를 읽고 있어요.</span><span class="ob-readbar"><i></i></span><span id="readN">${S.read.done} / ${S.read.total}</span></div>`); /* [새문구] 읽기+사이드바 연결 */
@@ -1058,16 +1101,36 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (animate !== false) { void col.offsetWidth; col.style.animation = ''; }
     col.classList.toggle('ob-wide', key === 'sources');
     col.innerHTML = sc.html();
+    syncBack();
+    $$('[data-jump]', col).forEach((b) => b.onclick = () => goJump(b.dataset.jump));
     sc.bind && sc.bind(col);
   }
-  function goScene(key) {
+  const SCENE_LABEL = { name: '이름', stage: '무대', role: '직무', files: '파일 올리기', sources: '앱 고르기',
+    connect: '앱 연결', ai: 'AI 고르기', claude: 'AI 연결', terminal: '터미널', app: '앱 받기' };
+  /* 뒤로가기는 **지나온 자취**를 되짚는다 — 차례표를 거꾸로 세면 조건부로 건너뛴 장면(AI 없음 등)에 걸린다. */
+  function goBack() { const prev = S.trail.pop(); if (!prev) return; save(); goScene(prev, { back: true }); }
+  function goJump(key) {
+    const i = S.trail.indexOf(key);
+    if (i < 0) return goScene(key);
+    S.trail = S.trail.slice(0, i); save(); goScene(key, { back: true });
+  }
+  /* 뒤로가기 버튼은 이동줄에 하나만 두고 켜고 끈다 — 질문 기둥의 L 뱃지가 밀리지 않게(원준님 2026-08-25) */
+  function syncBack() {
+    const b = $('#obBack'); if (!b) return;
+    b.hidden = !S.trail.length;
+    b.onclick = () => goBack();
+  }
+  function goScene(key, opts) {
+    if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) S.trail.push(S.scene);
     S.scene = key; save(); renderSB();
     seqToken++;
     if (STEP_OF[key] >= CHAT_FROM) {
+      S.trail = []; save();
       replayChatTo(key, seqToken);
     } else {
       renderScene(key, true);
     }
+    syncBack();
   }
 
   /* 채팅 단계로 점프·복원 — 앞 단계 문답을 압축해 깔아 놓고 그 단계부터 산다 */
@@ -1091,7 +1154,6 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (upto > CHAT_STEPS.indexOf('b2')) past.push([`정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?`, S.b2 === 'week' ? '네, 매주' : S.b2 === 'no' ? '아니요' : '네, 매달']);
       if (upto > CHAT_STEPS.indexOf('b3')) past.push([`같이 보는 팀이 있나요?`, S.b3 === 'me' ? '나만 봐요' : '우리 팀이 같이 봐요']), S.b3 = S.b3 || 'team';
       if (upto > CHAT_STEPS.indexOf('nowline')) { S.nowline = S.nowline || DATA.NOW_KINDS[2]; past.push([`평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?`, S.nowline]); }
-      if (upto > CHAT_STEPS.indexOf('can')) past.push([`이런 것까지 저한테 맡기실 수 있어요.`, '준비 끝, 정리해 주세요']);
       Object.assign(S.read, { done: S.read.total, finished: true });
       const targets = drawerTargets(); S._counts = {}; DATA.KINDS7.forEach(([k]) => { S._counts[k] = targets[k] || ''; });
     }

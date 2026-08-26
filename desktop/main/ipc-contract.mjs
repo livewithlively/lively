@@ -63,11 +63,11 @@ export const IPC_WEB = {
 };
 
 /** 렌더러가 요청할 수 있는 작업 — 화이트리스트. 임의 argv 를 렌더러가 만들지 못하게 한다. */
-export const RUN_KINDS = ["setup", "login", "logout", "install", "update", "node-start", "node-stop", "status", "doctor"];
+export const RUN_KINDS = ["setup", "login", "logout", "install", "update", "node-start", "node-stop", "status", "doctor", "setup-cloud"];
 
 /** 다시 시도해도 **안전한** 작업인가 — 재시도 버튼은 이 목록에만 붙는다.
  *  로그아웃·정지처럼 상태를 되돌리는 것은 실패해도 자동 재시도를 권하지 않는다(사람이 다시 판단해야 한다). */
-export const RETRYABLE_KINDS = ["setup", "login", "install", "update", "node-start", "status", "doctor"];
+export const RETRYABLE_KINDS = ["setup", "login", "install", "update", "node-start", "status", "doctor", "setup-cloud"];
 
 /**
  * 작업 종류 → CLI argv (순수). `--json-events` 는 runCli 가 붙인다.
@@ -95,6 +95,14 @@ export function argvFor(kind, opts) {
   switch (kind) {
     // setup = 로그인 + 키트 설치(순서·조건의 정본은 CLI 다 — 앱이 다시 판단하지 않는다).
     case "setup": { const gw = gateway(o); return gw ? ["setup", "--gateway", gw] : ["setup"]; }
+    // 클라우드 설치(#2044) — 주소를 **안 받는다**. CLI 가 라이블리 클라우드에 붙어 워크스페이스를 알아 온다.
+    //  값을 인자로 노출하지 않는 이유: 이 경로의 요지가 "사람도 앱도 주소를 모른다" 이고, 렌더러가 임의
+    //  클라우드 주소를 넣을 수 있으면 그건 다시 주소 입력이다(개발용 덮어쓰기는 env LIVELY_CLOUD_URL).
+    case "setup-cloud": {
+      const c = String(process.env.LIVELY_CLOUD_URL || "").trim();
+      if (c && !/^https?:\/\/[^\s"'`;|&$()<>\\]+$/i.test(c)) throw new Error("LIVELY_CLOUD_URL 형식이 올바르지 않습니다.");
+      return c ? ["setup", "--cloud", c] : ["setup", "--cloud"];
+    }
     case "login": { const gw = gateway(o); return gw ? ["login", "--gateway", gw] : ["login"]; }
     // 로그아웃은 게이트웨이 인자를 받지 않는다 — 지금 로그인된 곳에서 나가는 것이지 '어디서' 를 고르는 게 아니다.
     case "logout": return ["logout"];

@@ -18,10 +18,17 @@ const skipped = [];
 for (const c of MCP_SERVER_PRESETS) {
   if (!c.seed) { skipped.push(c.name + "(needs-client)"); continue; }
   if (existing.has(c.name)) { skipped.push(c.name + "(exists)"); continue; }
+  // 레인(#1881) — proxy 는 게이트웨이가 대리하므로 금고 슬롯(auth_kind)+oauth 가 필요하고,
+  //  client(레인 C)는 멤버 클라가 자체 OAuth 로 붙으므로 게이트웨이 쪽 자격이 **없어야** 한다.
+  //  종전엔 proxy·oauth 가 하드코딩돼 있어서 레인 C 프리셋을 넣으면 상류가 거부하는 프록시로 심겼다.
+  const client = c.mode === "client";
   await upsertMcpServer(
     {
-      name: c.name, transport: "http", url: c.url, mode: "proxy", auth_mode: "oauth",
-      auth_kind: c.auth_kind, scope: c.scope, level: c.level, pii_scrub: c.pii_scrub,
+      name: c.name, transport: "http", url: c.url,
+      mode: client ? "client" : "proxy",
+      auth_mode: client ? null : "oauth",
+      auth_kind: client ? null : c.auth_kind,
+      scope: c.scope, level: c.level, pii_scrub: c.pii_scrub,
       enabled: true, note: c.note,
     },
     "bootstrap", "deploy/connectors",

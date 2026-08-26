@@ -22,9 +22,8 @@ jobs:
           node-version: '22'
       - run: npm ci
       - run: npm run build          # dist/ + public/app/ (arch 무관 JS)
-      # 산출물 신선도 게이트(#1313 R4) — 스테일 public/app 이 릴리스 번들에 실리는 것을 차단(test.yml 과 동일).
-      - name: 산출물 신선도 (public/app 드리프트 0)
-        run: git diff --exit-code -- public/app
+      # ⓘ 여기 있던 "산출물 신선도" 게이트는 #2054 에서 제거했다 — 산출물이 git 밖이라(.gitignore)
+      #  스테일 산출물이 번들에 실릴 길이 없다. 아래 패키징이 담는 public/ 은 **바로 위 build 의 결과**다.
       # 배포 신원(#1289) — 산출물이 자기 버전을 말하게 한다. 런타임 추론은 틀린다(blue/green 심링크 사고).
       #  ⚠ package.json 의 version 은 건드리지 않는다 — package-lock.json 의 루트 version 과 어긋나면
       #   박스의 `npm ci` 가 깨져 배포의 첫 단계가 죽는다. 별도 파일로 둔다.

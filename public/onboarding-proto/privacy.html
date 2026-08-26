@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>개인정보 처리방침 · Lively</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
+<!-- 제품 디자인 시스템을 그대로 쓴다(토큰·카드·표·콜아웃). 값을 베껴 오지 않는다. -->
+<link rel="stylesheet" href="../styles/01-base.css">
+<link rel="stylesheet" href="../styles/03-components.css">
+<link rel="stylesheet" href="../styles/26-docs-guide.css">
+<link rel="stylesheet" href="legal.css">
+</head>
+<body>
+<div style="background:#FFF7ED;border-bottom:1px solid #F3DCC0;padding:10px 20px;font-size:13px;line-height:1.6;color:#7A5A2E;text-align:center">이 페이지는 <b>설계 당시의 초안</b>입니다. 효력 있는 정본은 <a href="https://lvly.io/privacy" style="color:#1E54CC;font-weight:700">lvly.io/privacy</a> 입니다.</div>
+<header class="doc-top">
+  <span class="doc-brand">Lively <i aria-hidden="true"></i></span>
+  <nav class="doc-nav">
+    <a href="terms.html">이용약관</a>
+    <a href="privacy.html" aria-current="page">개인정보 처리방침</a>
+  </nav>
+</header>
+
+<main class="doc-wrap docs-body">
+  <p class="docs-eyebrow">LIVELY</p>
+  <h1 class="docs-title">개인정보 처리방침</h1>
+  <div class="docs-lead">
+    <p class="md-p">회사가 어떤 정보를 왜 받고, 어떻게 쓰고, 언제 지우는지를 적은 문서입니다. 항목마다 <b>먼저 한 줄로 요약</b>하고 그 아래에 자세한 내용을 두었습니다.</p>
+    <p class="md-p">시행일 <span class="doc-fill">공개일</span> · 판 0.1(초안)</p>
+  </div>
+
+  <div class="doc-cards">
+
+    <section class="card docs-card">
+      <div class="docs-md">
+        <div class="md-quote">
+          <p class="md-p"><b>아직 공개 전 문서입니다.</b> 사업자 정보는 채워 넣었고, 남은 것은 시행일 확정과 변호사 검토입니다. 내용은 실제 코드와 설정을 확인해 작성했지만, 법률 자문은 아닙니다.</p>
+        </div>
+        <p class="md-p">라이블리(이하 “회사”)는 이용자의 개인정보를 소중히 다루며, 「개인정보 보호법」을 비롯한 관계 법령을 지킵니다.</p>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>1. 어떤 정보를 받나요</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 로그인에 필요한 계정 정보와, 이용자가 올리거나 연결해 들여온 자료를 받습니다.</b></p>
+        <div class="docs-tablewrap">
+          <table class="md-table">
+            <tr><th>구분</th><th>항목</th><th>수집 방법</th></tr>
+            <tr><th>가입·계정</th><td>이메일 주소, 비밀번호, 이름(선택), 가입 시각</td><td>초대장을 받으신 이메일로 가입하실 때 직접 입력받습니다. 비밀번호는 되돌릴 수 없는 방식으로 변환해 저장합니다.</td></tr>
+            <tr><th>초대</th><td>초대받는 사람의 이메일 주소, 초대한 사람, 발급·사용 시각</td><td>이용자가 동료를 초대할 때 직접 입력합니다.</td></tr>
+            <tr><th>대기자 등록</th><td>이메일 주소, 사용 목적(선택 입력)</td><td>홈페이지 대기자 등록 폼으로 받습니다.</td></tr>
+            <tr><th>워크스페이스</th><td>워크스페이스 이름, 구성원 목록과 권한</td><td>이용자가 만들고 초대하는 과정에서 생성됩니다.</td></tr>
+            <tr><th>이용 기록</th><td>접속·이용 시각, 브라우저 종류, 사용량(세션 시간·횟수), 서비스 이용 이벤트, 관리 작업 감사 기록</td><td>서비스 이용 과정에서 자동 생성됩니다.</td></tr>
+            <tr><th>이용자 콘텐츠</th><td>올리거나 외부 서비스를 연결해 들여온 문서·파일·메시지, 그로부터 만들어진 지식, AI 세션의 지시와 응답 기록</td><td>이용자가 직접 올리거나, 이용자가 연결한 외부 서비스에서 가져옵니다.</td></tr>
+            <tr><th>자료에 딸려 오는 제3자 정보</th><td>가져온 자료에 들어 있는 다른 사람의 이름·이메일·계정 식별자</td><td>메일·메신저·문서 서비스에서 자료를 가져올 때 함께 들어옵니다.</td></tr>
+          </table>
+        </div>
+        <div class="md-quote">
+          <p class="md-p"><b>이용자 콘텐츠 안에 개인정보가 들어 있을 수 있습니다.</b> 회사는 그 내용을 들여다보지 않으며(6번 항목), 올린 그대로 보관·처리합니다. 타인의 개인정보가 포함된 자료를 올릴 때에는 이용자가 적법한 권한을 갖추어야 합니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card docs-card" id="consent">
+      <div class="card-head"><h3>1-1. 동의를 받는 곳과 그 내용</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 동의를 받는 자리는 둘뿐입니다. 대기자 등록과 가입입니다. 각각 무엇을 왜 받고 언제 지우는지 아래에 그대로 적습니다.</b></p>
+        <div class="docs-tablewrap">
+          <table class="md-table">
+            <tr><th>구분</th><th>대기자 등록</th><th>가입</th></tr>
+            <tr><th>수집 항목</th><td>이메일 주소, 사용 목적(선택 입력)</td><td>이메일 주소, 비밀번호</td></tr>
+            <tr><th>수집 목적</th><td>초대장 발송과 순서 안내</td><td>계정 식별과 워크스페이스 제공</td></tr>
+            <tr><th>보유 기간</th><td>초대를 보내 드렸거나 등록하신 날로부터 1년</td><td>탈퇴 시까지</td></tr>
+            <tr><th>동의를 거부하면</th><td>초대장을 보내 드릴 수 없습니다.</td><td>계정을 만들 수 없어 서비스를 이용하실 수 없습니다.</td></tr>
+          </table>
+        </div>
+        <p class="md-p"><b>동의는 거부하실 수 있습니다.</b> 위 항목은 각 절차를 진행하는 데 반드시 필요한 최소한이라, 거부하시면 그 절차만 진행되지 않을 뿐 다른 불이익은 없습니다. 동의하신 뒤에도 언제든 철회하실 수 있고, 철회하시면 해당 정보를 지웁니다(7번 항목).</p>
+        <p class="md-p">홍보나 마케팅 목적의 메일은 보내지 않습니다. 보내게 되는 경우에는 그때 따로 동의를 받습니다.</p>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>2. 무엇에 쓰나요</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 로그인시키고, 자료를 정리해 주고, 서비스를 안정적으로 운영하는 데만 씁니다.</b></p>
+        <ol class="md-list">
+          <li><b>회원 식별과 서비스 제공</b> — 로그인, 워크스페이스 배정, 구성원 권한 관리</li>
+          <li><b>초대제 운영</b> — 초대장 발급·검증, 중복·만료 확인</li>
+          <li><b>서비스 운영과 안정성</b> — 장애 대응, 사용량 관리, 부정 이용 방지, 보안 사고 대응</li>
+          <li><b>이용자 콘텐츠의 저장·정리·검색</b> — 이용자가 요청한 기능의 수행</li>
+          <li><b>공지와 문의 응대</b> — 약관 변경, 장애·점검, 문의에 대한 회신</li>
+        </ol>
+        <p class="md-p">회사는 위 목적을 넘어서는 용도로 개인정보를 쓰지 않으며, 목적이 바뀌면 미리 알리고 동의를 받습니다.</p>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>3. AI 세션 — 꼭 읽어 주세요</h3></div>
+      <div class="docs-md">
+        <div class="md-quote">
+          <p class="md-p"><b>AI는 이용자 본인 계정으로 돌아갑니다.</b> 회사 서버가 이용자를 대신해 AI 사업자를 호출하지 않고, 회사는 AI 사업자의 API 키를 갖고 있지 않습니다.</p>
+        </div>
+        <ol class="md-list">
+          <li>서비스의 AI 세션은 이용자 본인 명의의 외부 AI 계정으로 실행됩니다.</li>
+          <li>따라서 세션에서 오가는 지시·자료·응답은 이용자 자신의 계정으로 그 외부 AI 사업자에게 전송되어 처리됩니다. 이 전송은 이용자가 그 사업자와 맺은 계약에 따른 것이며, 그 처리에는 해당 사업자의 개인정보 처리방침이 적용됩니다.</li>
+          <li>AI 세션을 이용하시려면 <b>Claude · ChatGPT · Gemini · Grok 가운데 하나를 유료로 이용 중</b>이셔야 합니다. 어느 도구를 연결하셨는지에 따라 정보를 받는 사업자가 달라지며, 이들 사업자의 서버는 국외에 있습니다.</li>
+          <li>이용자의 AI 자격증명은 그 이용자만 접근할 수 있는 격리된 영역에 보관됩니다.</li>
+          <li>회사는 이용자 콘텐츠를 회사의 인공지능 모델 학습에 사용하지 않습니다.</li>
+          <li>AI 구독이 없는 구성원도 초대받아 자료를 보고 편집할 수 있습니다. 다만 AI 세션 실행은 되지 않습니다.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>4. 얼마나 보관하나요</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 대부분 이용계약이 끝날 때까지 보관합니다. 다만 AI 세션 대화 기록은 지금 보존 기간 제한이 없습니다.</b></p>
+        <div class="docs-tablewrap">
+          <table class="md-table">
+            <tr><th>대상</th><th>기간</th></tr>
+            <tr><th>계정·워크스페이스 정보</th><td>이용계약이 유지되는 동안 보관하고, 해지하면 지체 없이 삭제합니다.</td></tr>
+            <tr><th>이용자 콘텐츠(자료·지식)</th><td>이용자가 지우거나 이용계약이 끝날 때까지 보관합니다.</td></tr>
+            <tr><th>AI 세션 대화 기록</th><td><b>현재 보존 기간 제한이 없습니다(무기한).</b> 워크스페이스 설정에서 보존 기간을 정하거나 기록 남기기를 끌 수 있습니다.</td></tr>
+            <tr><th>백업본</th><td>데이터베이스 백업 30일 · 서버 자동 백업 7일 · 파일 백업은 일 7회분, 주 4회분, 월 3회분을 보관합니다.</td></tr>
+            <tr><th>초대 기록</th><td>초대장은 발급 후 14일이 지나면 효력을 잃습니다. 기록은 계정 삭제 시 함께 지웁니다.</td></tr>
+            <tr><th>대기자 등록 정보</th><td>초대를 보내 드렸거나 등록하신 날로부터 <b>1년</b>이 지나면 삭제합니다.</td></tr>
+            <tr><th>접속·감사 기록</th><td>보안 사고 대응을 위해 <b>1년</b> 보관합니다.</td></tr>
+            <tr><th>법령상 보존 의무가 있는 기록</th><td>해당 법령이 정한 기간 동안 보관합니다.</td></tr>
+          </table>
+        </div>
+        <div class="md-quote">
+          <p class="md-p"><b>AI 세션 기록은 대화 전문이 그대로 저장됩니다.</b> 주고받은 말뿐 아니라 그 과정에서 AI가 읽고 쓴 파일의 내용까지 포함되고, 같은 프로젝트에 속한 구성원이 볼 수 있습니다. 민감한 내용을 다룰 때에는 워크스페이스 설정에서 기록 남기기를 끄거나 보존 기간을 정해 주세요.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>5. 누구에게 가나요</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 제3자에게 팔거나 넘기지 않습니다. 서버 운영과 로그인 인증만 외부에 맡깁니다.</b></p>
+
+        <h4 class="md-h4">제3자 제공</h4>
+        <p class="md-p">회사는 이용자의 개인정보를 제3자에게 제공하지 않습니다. 다만 이용자가 미리 동의한 경우와, 법령에 특별한 규정이 있거나 수사기관이 법령에 정한 절차와 방법에 따라 요구하는 경우는 예외입니다.</p>
+
+        <h4 class="md-h4">처리 위탁</h4>
+        <div class="docs-tablewrap">
+          <table class="md-table">
+            <tr><th>수탁자</th><th>위탁 업무</th><th>보관 위치</th></tr>
+            <tr><th>Amazon Web Services</th><td>서버·데이터베이스·백업 저장소 운영, 초대·공지 메일 발송</td><td>대한민국(서울 리전)</td></tr>
+            <tr><th>Google</th><td>로그인 인증(구글 계정)</td><td>구글의 처리 정책에 따릅니다.</td></tr>
+          </table>
+        </div>
+        <p class="md-p">검색에 쓰이는 문서 임베딩(수치 변환)은 회사가 직접 운영하는 서버에서 처리되며 외부로 전송되지 않습니다.</p>
+
+        <h4 class="md-h4">국외 이전</h4>
+        <p class="md-p">회사가 직접 운영하는 서버와 백업은 <b>대한민국 내(AWS 서울 리전)</b>에 있습니다. 다만 아래는 국외로 나갑니다.</p>
+        <div class="docs-tablewrap">
+          <table class="md-table">
+            <tr><th>이전받는 자</th><th>이전 항목</th><th>국가</th><th>시점·방법</th><th>목적·보유기간</th></tr>
+            <tr><th>이용자가 연결한 AI 사업자<br>(Anthropic · OpenAI · Google · xAI 등)</th><td>AI 세션의 지시문과 그에 딸린 이용자 콘텐츠</td><td>미국 등 국외</td><td>이용자가 세션을 실행할 때, 이용자 본인 계정으로 전송됩니다.</td><td>AI 응답 생성 · 해당 사업자의 정책에 따릅니다.</td></tr>
+            <tr><th>jsDelivr · Google Fonts</th><td>접속 IP 주소, 브라우저 종류</td><td>국외</td><td>화면을 열 때 브라우저가 글꼴·화면 구성요소를 내려받으며 자동 전송됩니다.</td><td>화면 표시 · 해당 사업자의 정책에 따릅니다.</td></tr>
+          </table>
+        </div>
+        <p class="md-p">이용자가 노션·슬랙·구글 드라이브 등 외부 서비스를 스스로 연결하면, 그 서비스에서 자료를 가져오는 과정에 해당 사업자의 정책이 적용됩니다.</p>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>6. 회사는 언제 내 자료를 볼 수 있나요</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 세 가지 경우뿐이고, 모든 접근이 기록됩니다.</b></p>
+        <ol class="md-list">
+          <li>이용자가 지원을 요청하며 동의한 경우</li>
+          <li>장애 대응을 위해 어쩔 수 없는 경우</li>
+          <li>법령 위반이나 약관 위반을 조사해야 하는 경우</li>
+        </ol>
+        <p class="md-p">세션 내용과 지식 본문은 <b>이용자의 요청 없이 열람하지 않습니다.</b></p>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>7. 어떻게 지우나요</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 해지하면 워크스페이스를 삭제합니다. 다만 백업과 삭제 이력에는 일정 기간 남습니다.</b></p>
+        <ol class="md-list">
+          <li>보유 기간이 지나거나 처리 목적이 달성되면 지체 없이 파기합니다.</li>
+          <li>워크스페이스를 해지하면 그 데이터베이스와 실행 환경을 삭제합니다. 전자적 파일은 복구할 수 없는 방법으로 지웁니다.</li>
+          <li>다만 아래는 즉시 사라지지 않습니다. 완전한 삭제를 원하시면 문의처로 요청해 주세요.
+            <ul class="md-list">
+              <li>작업 폴더는 실수로 인한 삭제에 대비해 30일간 보관한 뒤 삭제합니다.</li>
+              <li>백업본에는 각 백업의 보관 주기(4번 항목)만큼 데이터가 남습니다.</li>
+              <li>지식·프로젝트를 지운 기록은 되돌리기와 감사를 위해 변경 이력에 보존됩니다.</li>
+            </ul>
+          </li>
+          <li>계정 삭제(탈퇴)를 원하시면 문의처로 요청해 주세요. 회사는 지체 없이 처리합니다.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>8. 내 권리</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 언제든 열람·정정·삭제·처리정지를 요구할 수 있습니다.</b></p>
+        <ol class="md-list">
+          <li>이용자는 언제든지 자신의 개인정보에 대한 열람·정정·삭제·처리정지를 요구할 수 있습니다.</li>
+          <li>요구는 아래 문의처로 하시면 되고, 회사는 지체 없이(법정 기한 내) 조치합니다.</li>
+          <li>법정대리인이나 위임받은 사람을 통해서도 할 수 있습니다.</li>
+          <li>다른 법령에서 그 개인정보의 보존을 명시적으로 요구하는 경우 등에는 삭제 요구가 제한될 수 있습니다.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>9. 쿠키</h3></div>
+      <div class="docs-md">
+        <p class="md-p"><b>요약 — 로그인 유지에 필요한 쿠키만 씁니다. 광고나 행동 추적 쿠키는 쓰지 않습니다.</b></p>
+        <div class="docs-tablewrap">
+          <table class="md-table">
+            <tr><th>쿠키</th><th>용도</th><th>보관 기간</th></tr>
+            <tr><th>로그인 세션</th><td>로그인 상태 유지</td><td>30일</td></tr>
+            <tr><th>워크스페이스 세션</th><td>내 워크스페이스 로그인 유지</td><td>30일</td></tr>
+            <tr><th>터미널 접속권</th><td>웹 터미널 연결 확인</td><td>12시간</td></tr>
+            <tr><th>초대 코드</th><td>초대 링크로 들어온 사람의 코드를 가입까지 기억</td><td>1시간</td></tr>
+            <tr><th>돌아갈 주소</th><td>로그인 뒤 보던 화면으로 되돌리기</td><td>10분</td></tr>
+          </table>
+        </div>
+        <p class="md-p">모두 자바스크립트가 읽을 수 없도록 설정되어 있습니다. 외부 분석 도구도 넣지 않았습니다. 브라우저 설정에서 쿠키 저장을 거부할 수 있으나, 그 경우 로그인이 유지되지 않아 서비스를 이용하기 어렵습니다.</p>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>10. 어떻게 지키나요</h3></div>
+      <div class="docs-md">
+        <ul class="md-list">
+          <li><b>전송 구간 암호화</b> — 모든 접속은 HTTPS로 이루어집니다.</li>
+          <li><b>저장 구간 암호화</b> — 데이터베이스·서버 디스크·백업 저장소를 암호화합니다.</li>
+          <li><b>워크스페이스 격리</b> — 워크스페이스마다 별도의 데이터베이스와 격리된 실행 환경을 배정하여, 다른 워크스페이스의 자료에 접근할 수 없도록 합니다.</li>
+          <li><b>구성원 간 격리</b> — 같은 워크스페이스 안에서도 구성원별 작업 공간과 자격증명을 분리합니다.</li>
+          <li><b>접근 통제와 기록</b> — 운영자 접근은 최소 권한으로 제한하고 모든 접근을 기록합니다.</li>
+          <li><b>비밀번호·토큰</b> — 비밀번호는 되돌릴 수 없는 방식으로 변환해 저장하고, 접속 토큰과 초대 코드도 원문을 저장하지 않습니다.</li>
+          <li><b>민감정보 가림</b> — 외부 메일·문서를 가져올 때 주민등록번호·카드번호 등이 발견되면 가려서 보관합니다.</li>
+          <li><b>백업과 복구 점검</b> — 매일 백업하고, 복구가 실제로 되는지 매일 한 곳씩 돌아가며 확인합니다.</li>
+        </ul>
+        <p class="md-p">현재 2단계 인증(2FA)은 제공하지 않습니다. 회사 계정 로그인(SSO)을 연결한 조직은 그 인증 정책을 따릅니다.</p>
+      </div>
+    </section>
+
+    <section class="card docs-card">
+      <div class="card-head"><h3>11. 문의와 구제</h3></div>
+      <div class="docs-md">
+        <div class="docs-tablewrap">
+          <table class="md-table">
+            <tr><th>개인정보 보호책임자</th><td>윤상민 (대표)</td></tr>
+            <tr><th>문의·열람 청구 접수</th><td><a href="mailto:lively@lvly.io">lively@lvly.io</a></td></tr>
+            <tr><th>상호 · 대표자</th><td>라이블리 · 윤상민</td></tr>
+            <tr><th>사업자등록번호</th><td>105-75-00657</td></tr>
+            <tr><th>사업장 주소</th><td>서울특별시 송파구 가락로 244, S80호</td></tr>
+          </table>
+        </div>
+        <p class="md-p">개인정보 침해로 도움이 필요하면 아래 기관에 문의할 수 있습니다.</p>
+        <ul class="md-list">
+          <li>개인정보 침해신고센터 — privacy.kisa.or.kr / (국번 없이) 118</li>
+          <li>개인정보 분쟁조정위원회 — kopico.go.kr / 1833-6972</li>
+          <li>대검찰청 사이버수사과 — spo.go.kr / 1301</li>
+          <li>경찰청 사이버수사국 — ecrm.police.go.kr / 182</li>
+        </ul>
+        <h4 class="md-h4">처리방침의 변경</h4>
+        <p class="md-p">이 방침을 바꿀 때에는 시행 7일 전부터 서비스 화면에 공지합니다. 이용자에게 중요한 변경은 30일 전에 알리고 등록된 연락처로 따로 통지합니다.</p>
+      </div>
+    </section>
+
+  </div>
+
+  <p class="doc-foot">서비스 이용 조건은 <a href="terms.html">이용약관</a>을 확인해 주세요.</p>
+</main>
+</body>
+</html>

@@ -285,6 +285,9 @@ export interface SessionInfo {
   // #1059 E — 복원 가능(restorable): tmux 에 없고 DB desired-state(org_session_state)에만 있는 세션(재부팅으로 죽었거나
   //  F reaper 가 회수). agentState 는 offline. 프론트가 이 배지를 보고 '열기=복원'(POST …/restore) 경로로 분기한다(attach 아님).
   restorable?: boolean;
+  // #2022 — 이 행을 게이트웨이가 **노드 스냅샷에서 발견해** 적었나(그 컴퓨터에서 직접 띄운 세션).
+  //  좌표를 모르므로 되살릴 수 없다 — 위 restorable 이 false 로 나가고, 화면은 '왜 못 되살리나'를 이 값으로 말할 수 있다.
+  discovered?: boolean;
   // #1059 — restorable 이 **사용자 정상 종료**(/exit·logout, SessionEnd 훅 보고)로 생겼나. true=내가 종료('종료됨·대화 이어보기'),
   //  false=재부팅·강제kill·reaper 회수('복원 가능·중단됨'). 프론트가 라벨·버튼을 구분(둘 다 복원 경로는 동일).
   exitedByUser?: boolean;
@@ -560,6 +563,27 @@ export function harnessLoginArgv(harnessKey: string): string[] | null {
   const done = [line, "로그인 절차가 끝났습니다. 확인하려면  codex login status  를 입력해 보세요.",
     "이 세션에서 바로 쓰려면  codex  를 입력하세요.", line].join("\n");
   return ["sh", "-c", LOGIN_SH, "lively-login", intro, done];
+}
+
+// codex app-server 모드의 pane (#2055) — TUI 대신 **셸**을 띄우고, 왜 그런지 한 화면으로 알려 준다.
+//  왜 셸인가: codex 는 스레드당 writer 가 하나다(실측). pane 에 TUI 를 띄우면 대화창이 쥔 대화와 **다른 대화**가
+//  열려, 터미널에서 보는 것과 대화창에서 보는 것이 갈린다. 그래서 대화는 대화창(app-server)이 전담하고
+//  pane 은 사람이 직접 명령을 치는 자리로 남는다.
+//  ⚠ 안내에 `codex` 를 그냥 치라고 쓰지 않는다 — 그건 **새 대화**를 연다. 이어가려면 대화창이 스레드를
+//   놓아 준 뒤 `codex resume <id>` 다(그 id 는 화면이 알려 준다).
+const APP_SERVER_SH = [
+  'printf \'\\n%s\\n\\n\' "$1"',
+  'exec "${SHELL:-/bin/sh}" -il',
+].join("\n");
+export function codexAppServerPaneArgv(): string[] {
+  const line = "─".repeat(60);
+  const intro = [line,
+    "이 세션의 Codex 대화는 **대화창**이 맡습니다(App Server).",
+    "이 터미널은 명령을 직접 치는 자리입니다 — 파일·빌드·git 을 그대로 쓰세요.",
+    "여기서  codex  를 실행하면 대화창과 **다른 대화**가 열립니다(같은 대화는 한 곳만 쥘 수 있습니다).",
+    "대화를 이 터미널로 옮기려면 대화창에서 [터미널로 넘기기] 를 누르세요.",
+    line].join("\n");
+  return ["sh", "-c", APP_SERVER_SH, "lively-codex-chat", intro];
 }
 
 // 실행 모드(#1007+) → 격리 pane 에 실을 `-e` env 인자. 순수 함수라 단위테스트로 계약을 못박는다(terminal-sessions.test.ts).

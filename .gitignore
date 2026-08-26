@@ -36,10 +36,24 @@ desktop/node_modules/
 desktop/release/
 desktop/build/
 
-# 웹 SPA 컴파일 중간 산출(#1760) — scripts/build-web.mjs 가 여기 쌓고 public/app 으로 원자 교체한다.
-#  서빙되는 것은 public/app 쪽이고 그건 계속 커밋한다.
+# 웹 빌드 산출물 — **전부 git 밖이다**(#2054). dist/ 와 같은 취급.
+#  ⚠ 종전엔 public/app 과 단독 페이지 번들을 **커밋했다**. 그 관행이 치르던 비용이 셋이고, 셋 다
+#   "git 이 산출물을 덮어쓴다"는 한 원인에서 나왔다 — 쫓아내지 않으면 못 고친다:
+#   ① 프론트를 건드리는 PR 끼리 산출물에서 **반드시** 충돌한다(소스는 깨끗이 머지돼도). 충돌한 PR 은
+#      GitHub 이 머지 ref 를 못 만들어 `test` 워크플로가 **아예 안 돈다** — 실측: PR #384 하나에 리베이스 3회.
+#   ② 머지가 서빙 트리에 충돌마커를 써 넣어 :8080 화면이 죽었다(2026-06-30 사고 — 서빙 클론은 작업트리를
+#      그대로 정적 서빙한다).
+#   ③ 머지·checkout 이 산출물을 옛 블롭으로 되돌려도 .tsbuildinfo-web 엔 "이미 빌드됨"이 남아 tsc 가 emit 을
+#      건너뛴다 → 소스는 새 판인데 화면은 옛 판인 상태가 조용히 커밋됐다(#1631).
+#  빌드 없이 이 파일들을 읽는 소비자는 **없다**: 릴리스 tgz 는 CI 가 빌드해 담고(release.yml), 소스 배포·
+#   프리뷰·dev 박스는 전부 `npm run build` 를 돈다(prebuilt 판정은 `[ -d dist ] && [ ! -d src ]` 라 무관).
+#  (구 `public/app/v2/studio.js` 예외(#1719)는 아래 디렉터리 무시에 흡수됐다.)
 /build/
 /public/.app-next/
 /public/.app-old/
-# 폐기된 studio.ts 의 산출물 — 머지마다 되살아나 서빙 트리를 더럽혔다(#1719)
-public/app/v2/studio.js
+/public/app/
+# 단독 페이지 번들 — scripts/build-standalone.mjs 가 web/standalone/*.ts 에서 만든다.
+#  최근 30커밋 중 23건이 public/terminal.js 를 건드렸다(파일 하나짜리로는 최대 충돌원).
+/public/terminal.js
+/public/md.js
+/public/page-scrollbar.js

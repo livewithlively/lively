@@ -83,13 +83,16 @@ t("A7 CLI 부재 안내는 **다음 행동**을 준다(플랫폼별 부트스트
 });
 
 t("A8 ★ 부트스트랩 URL 이 웹 관리화면이 주는 한 줄과 같다(다르면 사람은 404 를 받는다)", () => {
-  // 진실원천: 게이트웨이 라우트(src/web.ts `/cli`·`/cli.ps1`)와 그걸 복붙시키는 화면(public/app/admin-install.js).
+  // 진실원천: 게이트웨이 라우트(src/web.ts `/cli`·`/cli.ps1`)와 그걸 복붙시키는 화면(web/admin-install.ts).
   //  앱이 그와 다른 주소를 안내하면 아무도 그 사실을 모른 채 설치가 막힌다.
+  //  ⚠ 화면 쪽은 **소스(web/*.ts)를 읽는다** — 종전엔 컴파일 산출물(public/app/admin-install.js)을 읽었는데,
+  //   그건 그 파일이 커밋돼 있어서 가능했던 것이다(#2054 로 산출물이 git 밖으로 나가며 깨졌다: 윈도우 잡은
+  //   빌드를 안 돌아 파일이 아예 없다). 애초에 검사하려는 '진실원천'은 소스지 산출물이 아니다.
   const repo = fileURLToPath(new URL("../../", import.meta.url));
   const web = readFileSync(join(repo, "src", "web.ts"), "utf8");
   assert.match(web, /app\.get\("\/cli",\s*serveBootstrap\("bootstrap\.sh"\)\)/, "게이트웨이 라우트가 바뀌었다");
   assert.match(web, /app\.get\("\/cli\.ps1",\s*serveBootstrap\("bootstrap\.ps1"\)\)/, "게이트웨이 라우트가 바뀌었다");
-  const admin = readFileSync(join(repo, "public", "app", "admin-install.js"), "utf8");
+  const admin = readFileSync(join(repo, "web", "admin-install.ts"), "utf8");
   const gw = "https://gw.example";
   for (const [plat, needle] of [["darwin", `curl -fsSL ${gw}/cli | sh`], ["win32", `irm ${gw}/cli.ps1 | iex`]]) {
     const mine = bootstrapOneLiner(gw, plat);
@@ -1909,6 +1912,63 @@ t("GW15 배선 — 메인·preload·렌더러가 같은 채널을 보고, 렌더
   // 온보딩이 그 판정을 실제로 쓰는가 — 안 쓰면 [연결]은 종전처럼 부트스트랩부터 돌아 404 를 만난다.
   assert.match(main, /const advice = gatewayAdvice\(url\)/, "onboard 가 판정을 안 쓴다");
   assert.match(main, /if \(advice\.error\) return/, "판정 결과로 막지 않는다");
+});
+
+
+// ── CL. 클라우드 로그인 경로 (#2044) — 주소를 묻지 않는 시작 ──────────────────
+// 사양(spec-funnel.md): 셀프서브는 주소를 알 길이 없다 → 기본은 '클라우드로 로그인',
+//  주소 입력은 그게 실제로 필요한 쪽(회사에 직접 설치)으로 내린다. 셀프호스팅은 무회귀.
+t("CL1 ★ 클라우드 설치 argv 엔 주소가 없다 — 이 경로의 요지가 '아무도 주소를 모른다' 이다", () => {
+  const prev = process.env.LIVELY_CLOUD_URL;
+  delete process.env.LIVELY_CLOUD_URL;
+  try {
+    assert.deepEqual(argvFor("setup-cloud", {}), ["setup", "--cloud"]);
+    // 렌더러가 주소를 끼워 넣어도 무시된다 — argv 는 메인이 만든다(이 파일의 E 절과 같은 원칙).
+    assert.deepEqual(argvFor("setup-cloud", { gateway: "https://evil.example" }), ["setup", "--cloud"]);
+  } finally { if (prev === undefined) delete process.env.LIVELY_CLOUD_URL; else process.env.LIVELY_CLOUD_URL = prev; }
+});
+
+t("CL2 개발용 덮어쓰기는 env 로만 — 그리고 그 값도 형식을 강제한다", () => {
+  const prev = process.env.LIVELY_CLOUD_URL;
+  try {
+    process.env.LIVELY_CLOUD_URL = "http://127.0.0.1:9999";
+    assert.deepEqual(argvFor("setup-cloud", {}), ["setup", "--cloud", "http://127.0.0.1:9999"]);
+    for (const bad of ["--token", "https://a b", "https://a;rm", "file:///etc/passwd"]) {
+      process.env.LIVELY_CLOUD_URL = bad;
+      assert.throws(() => argvFor("setup-cloud", {}), /형식/, `통과해버림: ${bad}`);
+    }
+  } finally { if (prev === undefined) delete process.env.LIVELY_CLOUD_URL; else process.env.LIVELY_CLOUD_URL = prev; }
+});
+
+t("CL3 클라우드 설치는 화이트리스트·재시도 목록에 있다(버튼이 조용히 무동작이 되지 않게)", () => {
+  assert.ok(RUN_KINDS.includes("setup-cloud"), "렌더러가 요청해도 메인이 거절한다");
+  assert.ok(RETRYABLE_KINDS.includes("setup-cloud"), "실패해도 '다시 시도' 가 안 붙는다 — 안전한 작업이다");
+});
+
+t("CL4 ★ 두 카드는 배타다 — 처음이면 클라우드 우선, 고칠 땐 주소칸만", () => {
+  const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+  assert.match(app, /show\(\$\("start-card"\), !ready && !s\?\.busy && !needsFix\)/, "시작 카드 조건이 없다");
+  assert.match(app, /show\(\$\("gw-card"\), !ready && !s\?\.busy && !!needsFix\)/, "고치기 카드 조건이 없다");
+  const html = readFileSync(fileURLToPath(new URL("../renderer/index.html", import.meta.url)), "utf8");
+  assert.match(html, /id="cloud-go"/, "클라우드 버튼이 없다");
+  assert.match(html, /id="selfhost-wrap"/, "셀프호스팅 주소 입력 자리가 없다");
+  // 셀프호스팅 경로가 사라지면 안 된다 — 그쪽엔 클라우드가 없다.
+  assert.match(html, /id="gw"[^>]*>/, "시작 카드의 주소칸이 없다");
+});
+
+t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다", () => {
+  const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+  assert.match(app, /window\.lively\.run\("setup-cloud"\)/, "버튼이 아무것도 안 부른다");
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const h = main.slice(main.indexOf("ipcMain.handle(IPC.RUN"));
+  const seg = h.slice(0, h.indexOf("ipcMain.handle(IPC.CANCEL"));
+  assert.ok(seg.includes('"setup-cloud"'), "메인이 클라우드 경로를 따로 몰지 않는다");
+  assert.ok(seg.includes("nextAfterSetup"), "설치 끝에 노드를 안 세운다 — 주소 경로와 결과가 갈린다");
+  // ⚠ 가드의 **존재**를 먼저 단언한다. 위치만 비교하면 가드를 통째로 지웠을 때 indexOf 가 -1 이라
+  //  "-1 < n" 으로 통과한다 — 실측(mutation Pb): 없는 가드를 있다고 읽었다.
+  const guardAt = seg.indexOf("if (!r.ok) return r;");
+  assert.ok(guardAt >= 0, "설치 실패 가드가 없다 — 실패한 설치 위에 노드를 올린다");
+  assert.ok(guardAt < seg.indexOf("nextAfterSetup"), "실패했는데 노드를 세우려 한다");
 });
 
 console.log(`\n${pass} passed`);

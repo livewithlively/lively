@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>온보딩 플로우 재설정</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --canvas:#F4F6F8; --paper:#FFFFFF; --sunk:#EDF0F3;
+  --ink:#171B21; --ink2:#5B636F; --ink3:#8A929E;
+  --rule:#E1E5EA; --rule2:#CDD4DB;
+  --mint:#0E9F87; --mint-bg:#E7F5F2;
+  --blue:#2D6BE4; --blue-bg:#E9EFFC;
+  --amber:#A9660C; --amber-bg:#FBF1E2;
+  --red:#B3261E; --red-bg:#FBECEA;
+  --edit:#FFFDF5; --edit-line:#E8C97A;
+  --shadow:0 1px 2px rgba(20,28,40,.05), 0 8px 24px -18px rgba(20,28,40,.35);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --canvas:#11141A; --paper:#191D24; --sunk:#1F242C;
+  --ink:#E7EBF1; --ink2:#9AA3B0; --ink3:#6E7783;
+  --rule:#282E37; --rule2:#39414C;
+  --mint:#37C7AC; --mint-bg:#12302C;
+  --blue:#7BA4FF; --blue-bg:#182339;
+  --amber:#D89A45; --amber-bg:#2E2415;
+  --red:#F2857B; --red-bg:#33201E;
+  --edit:#221E14; --edit-line:#7A6428;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -18px rgba(0,0,0,.8);
+}}
+:root[data-theme="dark"]{
+  --canvas:#11141A; --paper:#191D24; --sunk:#1F242C;
+  --ink:#E7EBF1; --ink2:#9AA3B0; --ink3:#6E7783;
+  --rule:#282E37; --rule2:#39414C;
+  --mint:#37C7AC; --mint-bg:#12302C;
+  --blue:#7BA4FF; --blue-bg:#182339;
+  --amber:#D89A45; --amber-bg:#2E2415;
+  --red:#F2857B; --red-bg:#33201E;
+  --edit:#221E14; --edit-line:#7A6428;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -18px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--canvas); color:var(--ink);
+  font-family:"IBM Plex Sans KR",-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif;
+  font-size:15px; line-height:1.62; word-break:keep-all; -webkit-font-smoothing:antialiased}
+.mono,.src,.step,.pvl,.n{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+.top{position:sticky; top:0; z-index:30; background:var(--canvas); border-bottom:1px solid var(--rule)}
+.in{max-width:1280px; margin:0 auto; padding:15px 22px 11px}
+h1{font-size:21px; font-weight:700; letter-spacing:-.5px; margin:0 0 3px}
+.sub{color:var(--ink2); font-size:12.5px; margin:0 0 10px; max-width:84ch}
+.sub b{color:var(--ink); font-weight:600}
+.flowmap{display:flex; align-items:center; gap:3px; flex-wrap:wrap; padding-bottom:4px}
+.fl{display:flex; align-items:center; gap:5px; text-decoration:none; color:var(--ink2);
+  background:var(--paper); border:1px solid var(--rule2); border-radius:999px; padding:3px 10px 3px 6px; font-size:12px; transition:.14s}
+.fl:hover{border-color:var(--mint); color:var(--ink)}
+.fl .n{font-size:10px; color:var(--ink3)}
+.fl[data-state="cut"]{opacity:.45; text-decoration:line-through; border-color:var(--red)}
+.fl[data-state="move"],.fl[data-state="split"],.fl[data-state="merge"]{border-color:var(--amber); color:var(--amber)}
+.ar{color:var(--ink3); font-size:11px}
+.wrap{max-width:1280px; margin:0 auto; padding:20px 22px 120px}
+.sec-h{display:flex; align-items:baseline; gap:9px; margin:0 0 12px; border-bottom:1px solid var(--rule2); padding-bottom:7px}
+.sec-h h2{font-size:16px; font-weight:700; margin:0}
+.sec-h .cnt{font-size:11.5px; color:var(--ink3)}
+.card{background:var(--paper); border:1px solid var(--rule); border-radius:12px; padding:15px 17px 17px; margin:0 0 11px;
+  box-shadow:var(--shadow); display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:20px; align-items:start; scroll-margin-top:120px}
+.card[data-state="cut"]{opacity:.5; border-color:var(--red)}
+.card[data-state="cut"] .cl>*:not(.ch):not(.acts):not(.note){text-decoration:line-through}
+.card[data-state="move"],.card[data-state="split"],.card[data-state="merge"]{border-color:var(--amber)}
+.cl{min-width:0}
+.cr{position:sticky; top:120px}
+.pvl{display:block; font-size:10px; color:var(--ink3); letter-spacing:.06em; margin-bottom:5px}
+.pv{background:var(--sunk); border:1px solid var(--rule2); border-radius:12px; padding:14px 13px 15px; min-height:70px}
+.ch{display:flex; align-items:center; gap:9px; margin:0 0 9px; flex-wrap:wrap}
+.step{font-size:11px; font-weight:600; background:var(--ink); color:var(--canvas); border-radius:999px;
+  width:22px; height:22px; display:grid; place-items:center}
+.ch h3{font-size:14.5px; font-weight:600; margin:0}
+.badge{font-size:10.5px; background:var(--blue-bg); color:var(--blue); border-radius:5px; padding:2px 7px}
+.src{font-size:10.5px; color:var(--ink3); margin-left:auto}
+.acts{display:flex; gap:4px; flex-wrap:wrap; align-items:center; margin:0 0 12px; padding-bottom:11px; border-bottom:1px dashed var(--rule)}
+.act{font:inherit; font-size:11.5px; cursor:pointer; border:1px solid var(--rule2); background:var(--paper);
+  color:var(--ink3); border-radius:999px; padding:3px 11px; transition:.12s}
+.act:hover{color:var(--ink); border-color:var(--ink3)}
+.act[aria-pressed="true"]{background:var(--ink); border-color:var(--ink); color:var(--canvas); font-weight:600}
+.act[data-act="cut"][aria-pressed="true"]{background:var(--red); border-color:var(--red); color:#fff}
+.act[data-act="move"][aria-pressed="true"],.act[data-act="split"][aria-pressed="true"],.act[data-act="merge"][aria-pressed="true"]
+{background:var(--amber); border-color:var(--amber); color:#fff}
+.act:focus-visible{outline:2px solid var(--blue); outline-offset:2px}
+.acthint{font-size:10.5px; color:var(--ink3); margin-left:4px}
+.ed{margin:0; border-radius:7px; padding:3px 7px; transition:background .12s, box-shadow .12s; outline:none; cursor:text}
+.ed:hover{background:var(--sunk)}
+.ed:focus{background:var(--edit); box-shadow:0 0 0 2px var(--edit-line)}
+.ed.edited{background:var(--edit); box-shadow:inset 3px 0 0 var(--amber)}
+.ed.edited::after{content:"원래 — " attr(data-orig); display:block; font-size:11px; color:var(--ink3);
+  font-family:"IBM Plex Mono",monospace; line-height:1.5; margin-top:3px; padding-top:3px; border-top:1px dashed var(--rule2)}
+.lead{color:var(--ink2); font-size:13.5px}
+.lead::before{content:"●"; color:var(--mint); font-size:9px; vertical-align:middle; margin-right:6px}
+.q{font-size:17.5px; font-weight:600; letter-spacing:-.4px; margin:5px 0 2px; text-wrap:balance}
+.help{font-size:12.5px; color:var(--ink3)}
+.chips{display:flex; gap:5px; flex-wrap:wrap; margin:9px 0 0}
+.chip{font-size:12.5px; font-weight:500; border:1px solid var(--rule2); background:var(--paper);
+  color:var(--ink); border-radius:999px; padding:5px 12px; display:inline-block}
+.chip.pri{background:var(--ink); color:var(--canvas); border-color:var(--ink)}
+.chip.esc{border-style:dashed; color:var(--ink2)}
+.chip.dim{color:var(--ink3); border-style:dashed}
+.chip.edited{background:var(--edit); box-shadow:inset 3px 0 0 var(--amber)}
+.chip.edited::after{display:inline; margin-left:7px; border:0; padding:0}
+.skiprow{font-size:12px; color:var(--ink3); margin:9px 0 0}
+.note{font-size:12.5px; color:var(--ink2); background:var(--sunk); border-radius:8px; padding:7px 10px;
+  margin-top:12px; min-height:32px; border:1px dashed var(--rule2)}
+.note:empty::before{content:attr(data-ph); color:var(--ink3)}
+.note.edited{border-style:solid; border-color:var(--amber)}
+.rows{display:flex; flex-direction:column; gap:7px}
+.row{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--rule);
+  border-radius:10px; padding:10px 12px}
+.row>div{flex:1; min-width:0}
+.rn{width:20px; text-align:center; color:var(--ink3)}
+.rt{font-size:13px; font-weight:600}
+.rm{font-size:12px; color:var(--ink3)}
+.p-lead{font-size:11.5px; color:var(--ink2); display:flex; gap:6px; align-items:flex-start; line-height:1.55; margin-bottom:9px}
+.p-lead i{width:7px; height:7px; border-radius:50%; background:var(--mint); flex:0 0 7px; margin-top:5px}
+.p-q{font-size:14.5px; font-weight:600; line-height:1.4; text-wrap:balance}
+.p-help{font-size:10.5px; color:var(--ink3); line-height:1.5; margin-top:3px}
+.p-chips{display:flex; gap:4px; flex-wrap:wrap; margin-top:10px}
+.p-chip{font-size:10.5px; border:1px solid var(--rule2); background:var(--paper); color:var(--ink);
+  border-radius:999px; padding:3px 9px; line-height:1.5}
+.p-chip.pri{background:var(--ink); color:var(--paper); border-color:var(--ink)}
+.p-chip.dim{color:var(--ink3); border-style:dashed}
+.p-fine{font-size:10px; color:var(--ink3); margin-top:8px}
+.p-empty{font-size:11px; color:var(--ink3)}
+.vv{font-style:normal; background:var(--blue-bg); color:var(--blue); border-radius:4px; padding:0 4px; font-size:.94em}
+.savebar{display:flex; gap:8px; align-items:center; font-size:12px; color:var(--mint);
+  background:var(--mint-bg); border-radius:8px; padding:6px 11px; margin-bottom:14px}
+.tools{position:fixed; right:16px; bottom:16px; z-index:40; display:flex; gap:7px; align-items:center}
+.tb{font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; border:1px solid var(--ink);
+  background:var(--ink); color:var(--canvas); border-radius:999px; padding:8px 15px; box-shadow:var(--shadow)}
+.tb.ghost{background:var(--paper); color:var(--ink2); border-color:var(--rule2)}
+dialog{border:1px solid var(--rule); border-radius:14px; background:var(--paper); color:var(--ink);
+  max-width:min(780px,93vw); width:100%; padding:0; box-shadow:0 30px 80px -30px rgba(0,0,0,.5)}
+dialog::backdrop{background:rgba(10,14,20,.5)}
+.dlg{padding:18px 20px 20px}
+.dlg h3{margin:0 0 4px; font-size:16px}
+.dlg p{margin:0 0 12px; font-size:12.5px; color:var(--ink2)}
+.dlg textarea{width:100%; height:360px; font-family:"IBM Plex Mono",monospace; font-size:12px; line-height:1.6;
+  border:1px solid var(--rule2); border-radius:9px; padding:11px; background:var(--sunk); color:var(--ink); resize:vertical}
+footer{border-top:1px solid var(--rule); padding-top:16px; margin-top:26px; color:var(--ink3); font-size:12px}
+@media (prefers-reduced-motion:reduce){*{transition:none !important}}
+@media (max-width:1040px){.card{grid-template-columns:1fr} .cr{position:static} .pv{max-width:420px}}
+</style>
+</head>
+<body>
+<div class="top"><div class="in">
+  <h1>온보딩 플로우 재설정</h1>
+  <p class="sub"><b>지금 도는 화면</b>에서 그대로 뽑았습니다. 문구는 눌러서 고치고, 장면 자체는 <b>[그대로/없앤다/순서 옮긴다/쪼갠다/합친다]</b>로 정해 주세요. <b>이 브라우저에 자동 저장</b>됩니다. 문구 <b>135</b>개 · 선택지 포함.</p>
+  <div class="flowmap"><a class="fl" href="#c-name" data-fl="name"><span class="n">1</span><span class="t">이름</span></a><span class="ar">→</span><a class="fl" href="#c-stage" data-fl="stage"><span class="n">2</span><span class="t">무대</span></a><span class="ar">→</span><a class="fl" href="#c-role" data-fl="role"><span class="n">3</span><span class="t">직무</span></a><span class="ar">→</span><a class="fl" href="#c-sources" data-fl="sources"><span class="n">4</span><span class="t">자료 위치</span></a><span class="ar">→</span><a class="fl" href="#c-upload" data-fl="upload"><span class="n">5</span><span class="t">자료 넘기기</span></a><span class="ar">→</span><a class="fl" href="#c-ai" data-fl="ai"><span class="n">6</span><span class="t">AI 고르기</span></a><span class="ar">→</span><a class="fl" href="#c-claude" data-fl="claude"><span class="n">7</span><span class="t">AI 연결</span></a><span class="ar">→</span><a class="fl" href="#c-terminal" data-fl="terminal"><span class="n">8</span><span class="t">터미널</span></a><span class="ar">→</span><a class="fl" href="#c-reading" data-fl="reading"><span class="n">9</span><span class="t">읽는 중</span></a><span class="ar">→</span><a class="fl" href="#c-b1" data-fl="b1"><span class="n">10</span><span class="t">되묻기 1 · 갈래</span></a><span class="ar">→</span><a class="fl" href="#c-b2" data-fl="b2"><span class="n">11</span><span class="t">되묻기 2 · 주기</span></a><span class="ar">→</span><a class="fl" href="#c-b3" data-fl="b3"><span class="n">12</span><span class="t">되묻기 3 · 협업</span></a><span class="ar">→</span><a class="fl" href="#c-nowline" data-fl="nowline"><span class="n">13</span><span class="t">되묻기 4 · 시간 쓰는 곳</span></a><span class="ar">→</span><a class="fl" href="#c-can" data-fl="can"><span class="n">14</span><span class="t">시킬 수 있는 일</span></a><span class="ar">→</span><a class="fl" href="#c-done" data-fl="done"><span class="n">15</span><span class="t">마무리</span></a></div>
+</div></div>
+<div class="wrap">
+  <div class="savebar" id="savebar">고치는 즉시 저장됩니다. 다 하시면 오른쪽 아래 <b>[정리해서 꺼내기]</b>로 복사해 주세요.</div>
+  <div class="sec-h"><h2>장면 17개</h2><span class="cnt">실제로 지나가는 순서</span></div>
+  <article class="card" data-card="name" id="c-name">
+    <div class="cl">
+      <div class="ch"><span class="step">1</span><h3>이름</h3><span class="badge">누구라고 부를지</span>
+        <span class="src">→ 무대</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="name" data-act="keep">그대로</button><button type="button" class="act" data-scene="name" data-act="cut">없앤다</button><button type="button" class="act" data-scene="name" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="name" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="name" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="name.lead" data-orig="안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다.">안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="name.q" data-orig="어떻게 불러 드릴까요?">어떻게 불러 드릴까요?</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="name.help" data-orig="이름이든 별명이든 편한 대로 적어 주세요. 나중에 언제든 바꾸실 수 있어요.">이름이든 별명이든 편한 대로 적어 주세요. 나중에 언제든 바꾸실 수 있어요.</p><div class="chips"><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="name.btn0" data-orig="이렇게 불러 주세요">이렇게 불러 주세요</span><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="name.btn1" data-orig="그냥 넘어갈게요">그냥 넘어갈게요</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="name.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="stage" id="c-stage">
+    <div class="cl">
+      <div class="ch"><span class="step">2</span><h3>무대</h3><span class="badge">어디에서 일하는지</span>
+        <span class="src">→ 직무</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="stage" data-act="keep">그대로</button><button type="button" class="act" data-scene="stage" data-act="cut">없앤다</button><button type="button" class="act" data-scene="stage" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="stage" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="stage" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="stage.lead" data-orig="안녕하세요, 저는 리브예요. **이 워크스페이스를 계속 돌봐 드릴 담당자입니다.** 몇 가지만 여쭙고, 나머지는 자료를 보고 제가 알아서 세팅할게요.">안녕하세요, 저는 리브예요. **이 워크스페이스를 계속 돌봐 드릴 담당자입니다.** 몇 가지만 여쭙고, 나머지는 자료를 보고 제가 알아서 세팅할게요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="stage.q" data-orig="어디에서 일하고 계세요?">어디에서 일하고 계세요?</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="stage.help" data-orig="자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.">자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.</p><p class="skiprow">고르는 것 <b>4개</b></p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="stage.list0" data-orig="회사·조직">회사·조직</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="stage.list1" data-orig="1인·프리랜서">1인·프리랜서</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="stage.list2" data-orig="학교·연구">학교·연구</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="stage.list3" data-orig="학생">학생</span></div><p class="skiprow">건너뛰기 → <span class="ed skip" contenteditable="true" spellcheck="false" data-id="stage.skip" data-orig="나중에 정할게요">나중에 정할게요</span></p><p class="note ed" contenteditable="true" spellcheck="false" data-id="stage.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="role" id="c-role">
+    <div class="cl">
+      <div class="ch"><span class="step">3</span><h3>직무</h3><span class="badge">무슨 일을 하는지</span>
+        <span class="src">→ 자료 위치</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="role" data-act="keep">그대로</button><button type="button" class="act" data-scene="role" data-act="cut">없앤다</button><button type="button" class="act" data-scene="role" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="role" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="role" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="role.lead" data-orig="〈무대〉이시군요.">〈무대〉이시군요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="role.q" data-orig="고르신 것에 맞춰 자료를 읽습니다 — 목록에 없으면 직접 적어 주세요.">고르신 것에 맞춰 자료를 읽습니다 — 목록에 없으면 직접 적어 주세요.</p><p class="skiprow">무대마다 이렇게 되묻습니다</p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.axis0" data-orig="회사·조직 → 어느 부서에 가까우세요?">회사·조직 → 어느 부서에 가까우세요?</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.axis1" data-orig="1인·프리랜서 → 어떤 일을 하고 계세요?">1인·프리랜서 → 어떤 일을 하고 계세요?</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.axis2" data-orig="학교·연구 → 어느 단계이신가요?">학교·연구 → 어느 단계이신가요?</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.axis3" data-orig="학생 → 어떤 일에 주로 사용하실 예정인가요?">학생 → 어떤 일에 주로 사용하실 예정인가요?</span></div><p class="skiprow">고르는 것 <b>25개</b></p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list0" data-orig="회사·조직 › 제품·기획">회사·조직 › 제품·기획</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list1" data-orig="회사·조직 › 마케팅·브랜드">회사·조직 › 마케팅·브랜드</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list2" data-orig="회사·조직 › 영업·고객">회사·조직 › 영업·고객</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list3" data-orig="회사·조직 › 개발·데이터">회사·조직 › 개발·데이터</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list4" data-orig="회사·조직 › 디자인">회사·조직 › 디자인</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list5" data-orig="회사·조직 › 경영·전략">회사·조직 › 경영·전략</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list6" data-orig="회사·조직 › 재무·회계·법무">회사·조직 › 재무·회계·법무</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list7" data-orig="회사·조직 › 인사·총무·운영">회사·조직 › 인사·총무·운영</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list8" data-orig="1인·프리랜서 › 컨설팅·자문">1인·프리랜서 › 컨설팅·자문</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list9" data-orig="1인·프리랜서 › 개발·외주">1인·프리랜서 › 개발·외주</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list10" data-orig="1인·프리랜서 › 디자인·크리에이티브">1인·프리랜서 › 디자인·크리에이티브</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list11" data-orig="1인·프리랜서 › 콘텐츠·미디어">1인·프리랜서 › 콘텐츠·미디어</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list12" data-orig="1인·프리랜서 › 커머스">1인·프리랜서 › 커머스</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list13" data-orig="1인·프리랜서 › 교육·강의">1인·프리랜서 › 교육·강의</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list14" data-orig="1인·프리랜서 › 전문직">1인·프리랜서 › 전문직</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list15" data-orig="학교·연구 › 학부연구생">학교·연구 › 학부연구생</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list16" data-orig="학교·연구 › 석사">학교·연구 › 석사</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list17" data-orig="학교·연구 › 박사">학교·연구 › 박사</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list18" data-orig="학교·연구 › 포닥·연구원">학교·연구 › 포닥·연구원</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list19" data-orig="학교·연구 › 교원">학교·연구 › 교원</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list20" data-orig="학생 › 수업·과제">학생 › 수업·과제</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list21" data-orig="학생 › 외부 시험(자격 시험 등)">학생 › 외부 시험(자격 시험 등)</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list22" data-orig="학생 › 학회·동아리">학생 › 학회·동아리</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list23" data-orig="학생 › 창업·사이드 프로젝트">학생 › 창업·사이드 프로젝트</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="role.list24" data-orig="학생 › 취업">학생 › 취업</span></div><div class="chips"><span class="ed chip esc" contenteditable="true" spellcheck="false" data-id="role.other" data-orig="그 외 — 직접 적기">그 외 — 직접 적기</span></div><p class="skiprow">건너뛰기 → <span class="ed skip" contenteditable="true" spellcheck="false" data-id="role.skip" data-orig="나중에 정할게요">나중에 정할게요</span></p><p class="note ed" contenteditable="true" spellcheck="false" data-id="role.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="sources" id="c-sources">
+    <div class="cl">
+      <div class="ch"><span class="step">4</span><h3>자료 위치</h3><span class="badge">맥락이 어디 쌓였는지</span>
+        <span class="src">→ AI 고르기 / 자료 넘기기</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="sources" data-act="keep">그대로</button><button type="button" class="act" data-scene="sources" data-act="cut">없앤다</button><button type="button" class="act" data-scene="sources" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="sources" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="sources" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="sources.lead" data-orig="고맙습니다. 나머지는 **조금 뒤에 올려주시는 자료를 보고** 제가 알아서 세팅할게요.">고맙습니다. 나머지는 **조금 뒤에 올려주시는 자료를 보고** 제가 알아서 세팅할게요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="sources.q" data-orig="지금까지의 맥락을 주로 어디에 쌓아 두셨나요?">지금까지의 맥락을 주로 어디에 쌓아 두셨나요?</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="sources.help" data-orig="연결해 두시면 라이블리가 그 서비스의 자료를 계속 모아 정리해서, 쓰시는 AI에 자동으로 실어 줍니다. 맥락이 많은 곳일수록, 여러 곳을 이을수록 답이 좋아집니다. 여러 개 골라도 됩니다.">연결해 두시면 라이블리가 그 서비스의 자료를 계속 모아 정리해서, 쓰시는 AI에 자동으로 실어 줍니다. 맥락이 많은 곳일수록, 여러 곳을 이을수록 답이 좋아집니다. 여러 개 골라도 됩니다.</p><p class="skiprow">고르는 것 <b>14개</b></p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list0" data-orig="문서·위키 › Notion">문서·위키 › Notion</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list1" data-orig="문서·위키 › Google Drive">문서·위키 › Google Drive</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list2" data-orig="문서·위키 › Figma">문서·위키 › Figma</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list3" data-orig="메신저·메일·일정 › Slack">메신저·메일·일정 › Slack</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list4" data-orig="메신저·메일·일정 › Gmail">메신저·메일·일정 › Gmail</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list5" data-orig="메신저·메일·일정 › Google 캘린더">메신저·메일·일정 › Google 캘린더</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list6" data-orig="일감·코드 › Linear">일감·코드 › Linear</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list7" data-orig="일감·코드 › ClickUp">일감·코드 › ClickUp</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list8" data-orig="일감·코드 › GitHub">일감·코드 › GitHub</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list9" data-orig="일감·코드 › GitLab">일감·코드 › GitLab</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list10" data-orig="내 컴퓨터 › 내 컴퓨터 폴더">내 컴퓨터 › 내 컴퓨터 폴더</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list11" data-orig="내 컴퓨터 › 로컬 깃 저장소">내 컴퓨터 › 로컬 깃 저장소</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list12" data-orig="그 밖 › Prometheus">그 밖 › Prometheus</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="sources.list13" data-orig="그 밖 › 딱히 없어요 — 대화로 시작">그 밖 › 딱히 없어요 — 대화로 시작</span></div><div class="chips"><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="sources.btn0" data-orig="계속">계속</span><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="sources.btn1" data-orig="건너뛰기">건너뛰기</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="sources.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="upload" id="c-upload">
+    <div class="cl">
+      <div class="ch"><span class="step">5</span><h3>자료 넘기기</h3><span class="badge">드롭·연결</span>
+        <span class="src">→ AI 고르기</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="upload" data-act="keep">그대로</button><button type="button" class="act" data-scene="upload" data-act="cut">없앤다</button><button type="button" class="act" data-scene="upload" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="upload" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="upload" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="upload.lead" data-orig="〈…〉은 한 번 연결하면 계속 새 자료가 따라옵니다.">〈…〉은 한 번 연결하면 계속 새 자료가 따라옵니다.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="upload.q" data-orig="파일을 가지고 계시면 그냥 끌어다 놓으시면 됩니다.">파일을 가지고 계시면 그냥 끌어다 놓으시면 됩니다.</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="upload.help" data-orig="자료를 넘겨주세요.">자료를 넘겨주세요.</p><div class="chips"><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="upload.btn0" data-orig="연결">연결</span><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="upload.btn1" data-orig="명령 복사">명령 복사</span><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="upload.btn2" data-orig="다 넣었어요 — 계속">다 넣었어요 — 계속</span><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="upload.btn3" data-orig="지금은 건너뛰기">지금은 건너뛰기</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="upload.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="ai" id="c-ai">
+    <div class="cl">
+      <div class="ch"><span class="step">6</span><h3>AI 고르기</h3><span class="badge">평소 쓰는 것</span>
+        <span class="src">→ 터미널 / AI 연결</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="ai" data-act="keep">그대로</button><button type="button" class="act" data-scene="ai" data-act="cut">없앤다</button><button type="button" class="act" data-scene="ai" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="ai" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="ai" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="ai.lead" data-orig="자료를 읽는 동안 하나 더요.">자료를 읽는 동안 하나 더요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="ai.q" data-orig="이제 AI 차례예요.">이제 AI 차례예요.</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="ai.help" data-orig="평소 어떤 AI를 쓰세요?">평소 어떤 AI를 쓰세요?</p><p class="skiprow">고르는 것 <b>6개</b></p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="ai.list0" data-orig="Claude">Claude</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="ai.list1" data-orig="ChatGPT">ChatGPT</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="ai.list2" data-orig="Gemini">Gemini</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="ai.list3" data-orig="Grok">Grok</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="ai.list4" data-orig="여러 개">여러 개</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="ai.list5" data-orig="아직 없어요">아직 없어요</span></div><p class="skiprow">건너뛰기 → <span class="ed skip" contenteditable="true" spellcheck="false" data-id="ai.skip" data-orig="나중에 정할게요">나중에 정할게요</span></p><p class="note ed" contenteditable="true" spellcheck="false" data-id="ai.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="claude" id="c-claude">
+    <div class="cl">
+      <div class="ch"><span class="step">7</span><h3>AI 연결</h3><span class="badge">계정 잇기</span>
+        <span class="src">→ 터미널</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="claude" data-act="keep">그대로</button><button type="button" class="act" data-scene="claude" data-act="cut">없앤다</button><button type="button" class="act" data-scene="claude" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="claude" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="claude" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="claude.lead" data-orig="연결한 뒤에는 제(리브)가 일할 때도 〈이름〉님의 〈AI〉 사용량을 씁니다 — 얼마나 썼는지는 언제든 보여 드릴게요.">연결한 뒤에는 제(리브)가 일할 때도 〈이름〉님의 〈AI〉 사용량을 씁니다 — 얼마나 썼는지는 언제든 보여 드릴게요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="claude.q" data-orig="〈AI〉 계정을 연결해 주세요.">〈AI〉 계정을 연결해 주세요.</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="claude.help" data-orig="새 탭에서 로그인하고 짧은 코드를 가져오면 됩니다 · 1분">새 탭에서 로그인하고 짧은 코드를 가져오면 됩니다 · 1분</p><div class="chips"><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="claude.btn0" data-orig="연결 확인">연결 확인</span><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="claude.btn1" data-orig="나중에 할게요">나중에 할게요</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="claude.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="terminal" id="c-terminal">
+    <div class="cl">
+      <div class="ch"><span class="step">8</span><h3>터미널</h3><span class="badge">거기도 실을지</span>
+        <span class="src">→ 되묻기 1 · 갈래</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="terminal" data-act="keep">그대로</button><button type="button" class="act" data-scene="terminal" data-act="cut">없앤다</button><button type="button" class="act" data-scene="terminal" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="terminal" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="terminal" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="terminal.lead" data-orig="AI 구독이 아직 없으셔도 괜찮아요 — 자료 쌓기·정리·검색은 지금부터 됩니다. 첫 질문 **3회**는 라이블리 계정으로 열어 드릴게요.">AI 구독이 아직 없으셔도 괜찮아요 — 자료 쌓기·정리·검색은 지금부터 됩니다. 첫 질문 **3회**는 라이블리 계정으로 열어 드릴게요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="terminal.q" data-orig="터미널에서 Claude Code나 Codex 등을 쓰시나요?">터미널에서 Claude Code나 Codex 등을 쓰시나요?</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="terminal.help" data-orig="쓰신다면 거기에도 같은 자료가 실리게 할 수 있어요.">쓰신다면 거기에도 같은 자료가 실리게 할 수 있어요.</p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="terminal.opt0" data-orig="네, 씁니다">네, 씁니다</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="terminal.opt1" data-orig="아니요">아니요</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="terminal.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="reading" id="c-reading">
+    <div class="cl">
+      <div class="ch"><span class="step">9</span><h3>읽는 중</h3><span class="badge">기다리는 화면</span>
+        <span class="src">→ 시킬 수 있는 일</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="reading" data-act="keep">그대로</button><button type="button" class="act" data-scene="reading" data-act="cut">없앤다</button><button type="button" class="act" data-scene="reading" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="reading" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="reading" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="reading.lead" data-orig="금방이에요.">금방이에요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="reading.q" data-orig="자료를 읽고 있어요.">자료를 읽고 있어요.</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="reading.help" data-orig="읽으면서 〈직무〉 기준으로 보고 있어요 — 끝나면 **제가 본 것**을 말씀드립니다.">읽으면서 〈직무〉 기준으로 보고 있어요 — 끝나면 **제가 본 것**을 말씀드립니다.</p><p class="note ed" contenteditable="true" spellcheck="false" data-id="reading.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="b1" id="c-b1">
+    <div class="cl">
+      <div class="ch"><span class="step">10</span><h3>되묻기 1 · 갈래</h3><span class="badge">무엇을 만드는가</span>
+        <span class="src">→ 되묻기 2 · 주기</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="b1" data-act="keep">그대로</button><button type="button" class="act" data-scene="b1" data-act="cut">없앤다</button><button type="button" class="act" data-scene="b1" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="b1" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="b1" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="b1.lead" data-orig="〈이름〉님 자료를 종류별로 세어 봤어요.">〈이름〉님 자료를 종류별로 세어 봤어요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="b1.q" data-orig="〈직무〉 하시는 분들은 보통 이런 것들을 만드세요.">〈직무〉 하시는 분들은 보통 이런 것들을 만드세요.</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="b1.help" data-orig="자료함을 이렇게 나눠 둘까요?">자료함을 이렇게 나눠 둘까요?</p><p class="skiprow">고르는 것 <b>7개</b></p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.list0" data-orig="기획·설계 — 무엇을 만들지 정한 것">기획·설계 — 무엇을 만들지 정한 것</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.list1" data-orig="보고·분석 — 결과를 정리해 알린 것">보고·분석 — 결과를 정리해 알린 것</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.list2" data-orig="기록 — 오간 말을 남긴 것">기록 — 오간 말을 남긴 것</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.list3" data-orig="규정·계약 — 지켜야 할 것을 못박은 것">규정·계약 — 지켜야 할 것을 못박은 것</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.list4" data-orig="산출물 — 내보낸 결과물 자체">산출물 — 내보낸 결과물 자체</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.list5" data-orig="조사·자료 — 남이 만든 것을 모아 둔 것">조사·자료 — 남이 만든 것을 모아 둔 것</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.list6" data-orig="거래·정산 — 돈이 오간 것">거래·정산 — 돈이 오간 것</span></div><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.opt0" data-orig="네, 이대로 나눠 주세요">네, 이대로 나눠 주세요</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b1.opt1" data-orig="빠진 종류가 있어요">빠진 종류가 있어요</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="b1.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="b2" id="c-b2">
+    <div class="cl">
+      <div class="ch"><span class="step">11</span><h3>되묻기 2 · 주기</h3><span class="badge">언제 돌아오는가</span>
+        <span class="src">→ 되묻기 3 · 협업</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="b2" data-act="keep">그대로</button><button type="button" class="act" data-scene="b2" data-act="cut">없앤다</button><button type="button" class="act" data-scene="b2" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="b2" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="b2" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="b2.lead" data-orig="같은 양식 문서가 여러 달치 있네요. 〈7월 보고서〉 같은 것들이요.">같은 양식 문서가 여러 달치 있네요. 〈7월 보고서〉 같은 것들이요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="b2.q" data-orig="정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?">정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="b2.help" data-orig="주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.">주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.</p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b2.opt0" data-orig="네, 매달">네, 매달</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b2.opt1" data-orig="네, 매주">네, 매주</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b2.opt2" data-orig="아니요">아니요</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="b2.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="b3" id="c-b3">
+    <div class="cl">
+      <div class="ch"><span class="step">12</span><h3>되묻기 3 · 협업</h3><span class="badge">누구와 보는가</span>
+        <span class="src">→ 되묻기 4 · 시간 쓰는 곳</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="b3" data-act="keep">그대로</button><button type="button" class="act" data-scene="b3" data-act="cut">없앤다</button><button type="button" class="act" data-scene="b3" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="b3" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="b3" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="b3.lead" data-orig="문서에 같은 이름이 반복해서 나와요.">문서에 같은 이름이 반복해서 나와요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="b3.q" data-orig="같이 보는 팀이 있나요?">같이 보는 팀이 있나요?</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="b3.help" data-orig="있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.">있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.</p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b3.opt0" data-orig="나만 봐요">나만 봐요</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b3.opt1" data-orig="우리 팀이 같이 봐요">우리 팀이 같이 봐요</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b3.opt2" data-orig="회사의 여러 부서와 나눠요">회사의 여러 부서와 나눠요</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="b3.opt3" data-orig="고객·외부에 냅니다">고객·외부에 냅니다</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="b3.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="nowline" id="c-nowline">
+    <div class="cl">
+      <div class="ch"><span class="step">13</span><h3>되묻기 4 · 시간 쓰는 곳</h3><span class="badge">객관식 6 + 직접 적기</span>
+        <span class="src">흐름 끝</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="nowline" data-act="keep">그대로</button><button type="button" class="act" data-scene="nowline" data-act="cut">없앤다</button><button type="button" class="act" data-scene="nowline" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="nowline" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="nowline" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="nowline.lead" data-orig="마지막 하나예요.">마지막 하나예요.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="nowline.q" data-orig="평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?">평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="nowline.help" data-orig="한 주를 놓고 볼 때 제일 자주, 제일 오래 붙잡고 계신 일이요. 여기부터 제가 손을 보탭니다.">한 주를 놓고 볼 때 제일 자주, 제일 오래 붙잡고 계신 일이요. 여기부터 제가 손을 보탭니다.</p><p class="skiprow">고르는 것 <b>6개</b></p><div class="chips"><span class="ed chip" contenteditable="true" spellcheck="false" data-id="nowline.list0" data-orig="지난 자료를 찾아 확인하는 일">지난 자료를 찾아 확인하는 일</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="nowline.list1" data-orig="문서를 처음부터 쓰는 일">문서를 처음부터 쓰는 일</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="nowline.list2" data-orig="같은 양식을 매번 다시 채우는 일">같은 양식을 매번 다시 채우는 일</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="nowline.list3" data-orig="사람들과 맞추고 공유하는 일">사람들과 맞추고 공유하는 일</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="nowline.list4" data-orig="숫자를 모아 맞춰 보는 일">숫자를 모아 맞춰 보는 일</span><span class="ed chip" contenteditable="true" spellcheck="false" data-id="nowline.list5" data-orig="길게 읽고 요약하는 일">길게 읽고 요약하는 일</span></div><div class="chips"><span class="ed chip esc" contenteditable="true" spellcheck="false" data-id="nowline.other" data-orig="직접 적을게요">직접 적을게요</span></div><p class="skiprow">건너뛰기 → <span class="ed skip" contenteditable="true" spellcheck="false" data-id="nowline.skip" data-orig="지금은 건너뛰기">지금은 건너뛰기</span></p><p class="note ed" contenteditable="true" spellcheck="false" data-id="nowline.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="can" id="c-can">
+    <div class="cl">
+      <div class="ch"><span class="step">14</span><h3>시킬 수 있는 일</h3><span class="badge">발견·첫질문·답을 대체</span>
+        <span class="src">→ 마무리</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="can" data-act="keep">그대로</button><button type="button" class="act" data-scene="can" data-act="cut">없앤다</button><button type="button" class="act" data-scene="can" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="can" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="can" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="ed lead" contenteditable="true" spellcheck="false" data-id="can.lead" data-orig="다 읽었어요. **〈…〉**에 시간을 제일 많이 쓰신다고 하셨죠.">다 읽었어요. **〈…〉**에 시간을 제일 많이 쓰신다고 하셨죠.</p><p class="ed q" contenteditable="true" spellcheck="false" data-id="can.q" data-orig="다 읽었어요. 〈이름〉님이 하시는 일이라면,">다 읽었어요. 〈이름〉님이 하시는 일이라면,</p><p class="ed help" contenteditable="true" spellcheck="false" data-id="can.help" data-orig="이런 것까지 저한테 맡기실 수 있어요.">이런 것까지 저한테 맡기실 수 있어요.</p><div class="chips"><span class="ed chip pri" contenteditable="true" spellcheck="false" data-id="can.btn0" data-orig="준비 끝 — 정리해 주세요">준비 끝 — 정리해 주세요</span></div><p class="note ed" contenteditable="true" spellcheck="false" data-id="can.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article><article class="card" data-card="done" id="c-done">
+    <div class="cl">
+      <div class="ch"><span class="step">15</span><h3>마무리</h3><span class="badge">무엇이 준비됐는지</span>
+        <span class="src">흐름 끝</span></div>
+      <div class="acts"><button type="button" class="act" data-scene="done" data-act="keep">그대로</button><button type="button" class="act" data-scene="done" data-act="cut">없앤다</button><button type="button" class="act" data-scene="done" data-act="move">순서 옮긴다</button><button type="button" class="act" data-scene="done" data-act="split">쪼갠다</button><button type="button" class="act" data-scene="done" data-act="merge">앞과 합친다</button><span class="acthint">이 장면을 어떻게 할까요</span></div>
+      <p class="skiprow">이 장면은 문구가 코드 안에서 조립됩니다 — 메모로 알려 주시면 제가 찾아 고치겠습니다.</p><p class="note ed" contenteditable="true" spellcheck="false" data-id="done.note" data-orig="" data-ph="이 장면에 하고 싶은 말 — 순서를 옮기고 싶다, 쪼개고 싶다, 다른 걸 묻고 싶다 등"></p>
+    </div>
+    <aside class="cr"><span class="pvl">화면에서 이렇게</span><div class="pv"></div></aside>
+  </article>
+  <div class="sec-h" style="margin-top:26px"><h2>지금은 안 지나가는 장면</h2><span class="cnt">코드에는 남아 있음</span></div>
+  <div class="rows"><div class="row"><span class="rn">·</span><div><div class="rt">found</div><div class="rm">〈이름〉님의 일하는 방식 — 제가 본 것</div></div><span class="chip dim">지금은 안 지나감</span></div><div class="row"><span class="rn">·</span><div><div class="rt">firstq</div><div class="rm">: '이제'} 저(리브)가 아니라 **〈이름〉님의 AI**가 답할 차례예요.〈…〉</div></div><span class="chip dim">지금은 안 지나감</span></div><div class="row"><span class="rn">·</span><div><div class="rt">answer</div><div class="rm"></div></div><span class="chip dim">지금은 안 지나감</span></div><div class="row"><span class="rn">·</span><div><div class="rt">guess</div><div class="rm"></div></div><span class="chip dim">지금은 안 지나감</span></div><div class="row"><span class="rn">·</span><div><div class="rt">b4</div><div class="rm"></div></div><span class="chip dim">지금은 안 지나감</span></div></div>
+  <footer>동작하는 화면 — /ui/onboarding-proto/index.html · 생성기 project/tools/</footer>
+</div>
+<div class="tools">
+  <span class="tb ghost" id="cnt">아직 없음</span>
+  <button class="tb" type="button" id="show">정리해서 꺼내기</button>
+</div>
+<dialog id="dlg"><div class="dlg">
+  <h3>정한 것 모음</h3>
+  <p>전부 골라 복사해서 대화창에 붙여 넣어 주세요.</p>
+  <textarea id="out" readonly></textarea>
+  <div class="chips" style="margin-top:11px">
+    <button class="tb" type="button" id="copy">복사하기</button>
+    <button class="tb ghost" type="button" id="close">닫기</button>
+  </div>
+</div></dialog>
+<script>
+(function(){
+  "use strict";
+  var KEY = 'lively-onboarding-flow-v1';
+  var store = { text: {}, act: {} };
+  try { store = Object.assign(store, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch(e){}
+  if (!store.text) store.text = {};
+  if (!store.act) store.act = {};
+
+  function persist(){
+    try { localStorage.setItem(KEY, JSON.stringify(store)); }
+    catch(e){ document.getElementById('savebar').textContent = '이 브라우저에 저장하지 못했습니다 — 고치신 뒤 바로 [정리해서 꺼내기]로 복사해 주세요.'; }
+  }
+  function esc(s){ return String(s).replace(/[&<>]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]; }); }
+  function fmt(s){ return esc(s).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/〈([^〉]+)〉/g,'<i class="vv">$1</i>'); }
+
+  /* 오른쪽 미리보기 — 이 화면에서만 그린다 */
+  function renderPv(card){
+    var pv = card.querySelector('.pv'); if(!pv) return;
+    var out = [], chips = [];
+    function flush(){ if(chips.length){ out.push('<div class="p-chips">'+chips.join('')+'</div>'); chips = []; } }
+    Array.prototype.forEach.call(card.querySelectorAll('.cl .ed'), function(el){
+      if(el.classList.contains('note')) return;
+      var t = el.textContent.trim(); if(!t) return;
+      var c = el.className;
+      if(c.indexOf('chip') >= 0){ chips.push('<span class="p-chip'+(c.indexOf('pri')>=0?' pri':c.indexOf('esc')>=0||c.indexOf('dim')>=0?' dim':'')+'">'+fmt(t)+'</span>'); return; }
+      flush();
+      if(c.indexOf('lead') >= 0) out.push('<div class="p-lead"><i></i><span>'+fmt(t)+'</span></div>');
+      else if(c.indexOf('q') >= 0) out.push('<div class="p-q">'+fmt(t)+'</div>');
+      else if(c.indexOf('help') >= 0) out.push('<div class="p-help">'+fmt(t)+'</div>');
+      else out.push('<div class="p-fine">'+fmt(t)+'</div>');
+    });
+    flush();
+    pv.innerHTML = out.join('') || '<div class="p-empty">문구가 코드 안에서 조립되는 장면입니다.</div>';
+  }
+
+  /* 저장된 편집 복원 */
+  var restored = 0;
+  Array.prototype.forEach.call(document.querySelectorAll('.ed'), function(el){
+    var v = store.text[el.dataset.id];
+    if (typeof v === 'string' && v !== el.textContent) { el.textContent = v; restored++; }
+    if (el.textContent.trim() !== (el.dataset.orig || '').trim()) el.classList.add('edited');
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.card'), renderPv);
+
+  /* 장면 처리 버튼 */
+  function paint(scene){
+    var st = store.act[scene] || '';
+    var card = document.querySelector('.card[data-card="'+scene+'"]');
+    if (card) { if (st && st !== 'keep') card.dataset.state = st; else card.removeAttribute('data-state'); }
+    var fl = document.querySelector('.fl[data-fl="'+scene+'"]');
+    if (fl) { if (st && st !== 'keep') fl.dataset.state = st; else fl.removeAttribute('data-state'); }
+    Array.prototype.forEach.call(document.querySelectorAll('.act[data-scene="'+scene+'"]'), function(b){
+      b.setAttribute('aria-pressed', b.dataset.act === st);
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.act'), function(b){
+    b.addEventListener('click', function(){
+      var sc = b.dataset.scene;
+      store.act[sc] = (store.act[sc] === b.dataset.act) ? '' : b.dataset.act;
+      persist(); paint(sc); count();
+    });
+  });
+  Object.keys(store.act).forEach(paint);
+
+  /* 편집 */
+  document.addEventListener('input', function(e){
+    var el = e.target.closest ? e.target.closest('.ed') : null; if(!el) return;
+    var changed = el.textContent.trim() !== (el.dataset.orig || '').trim();
+    el.classList.toggle('edited', changed);
+    if (changed) store.text[el.dataset.id] = el.textContent; else delete store.text[el.dataset.id];
+    persist();
+    var card = el.closest('.card'); if(card) renderPv(card);
+    count();
+  });
+  document.addEventListener('paste', function(e){
+    var el = e.target.closest ? e.target.closest('.ed') : null; if(!el) return;
+    e.preventDefault();
+    var t = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, t.replace(/\s+/g,' '));
+  });
+
+  var cntEl = document.getElementById('cnt');
+  function edited(){
+    return Array.prototype.filter.call(document.querySelectorAll('.ed'), function(el){
+      return el.textContent.trim() !== (el.dataset.orig || '').trim();
+    });
+  }
+  function acted(){ return Object.keys(store.act).filter(function(k){ return store.act[k] && store.act[k] !== 'keep'; }); }
+  function count(){
+    var e = edited().length, a = acted().length;
+    cntEl.textContent = (e || a) ? ('문구 ' + e + ' · 장면 ' + a) : '아직 없음';
+  }
+  count();
+  if (restored) document.getElementById('savebar').textContent = '저장해 둔 ' + restored + '개를 되살렸습니다. 이어서 하시면 됩니다.';
+
+  var LABEL = { cut:'없앤다', move:'순서 옮긴다', split:'쪼갠다', merge:'앞과 합친다', keep:'그대로' };
+  document.getElementById('show').addEventListener('click', function(){
+    var lines = [];
+    var a = acted();
+    if (a.length){
+      lines.push('## 장면 처리');
+      a.forEach(function(k){ lines.push('[' + k + '] ' + LABEL[store.act[k]]); });
+      lines.push('');
+    }
+    var e = edited();
+    if (e.length){
+      lines.push('## 문구');
+      e.forEach(function(el){
+        var o = (el.dataset.orig || '').trim();
+        lines.push('[' + el.dataset.id + ']\n' + (o ? '원문: ' + o + '\n수정: ' : '메모: ') + el.textContent.trim() + '\n');
+      });
+    }
+    document.getElementById('out').value = lines.length ? lines.join('\n') : '아직 정한 것이 없습니다.';
+    document.getElementById('dlg').showModal();
+    document.getElementById('out').select();
+  });
+  document.getElementById('close').addEventListener('click', function(){ document.getElementById('dlg').close(); });
+  document.getElementById('copy').addEventListener('click', function(){
+    var ta = document.getElementById('out'); ta.select();
+    try { document.execCommand('copy'); this.textContent = '복사했습니다'; }
+    catch(err){ this.textContent = '직접 골라 복사해 주세요'; }
+  });
+})();
+</script>
+</body>
+</html>

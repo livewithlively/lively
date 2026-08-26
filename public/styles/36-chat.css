@@ -275,7 +275,11 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   background-position: calc(100% - 8px) 52%, calc(100% - 4px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
 .dt-chip-sel:hover:not(:disabled) { border-color: var(--line-net); color: var(--blue); }
 .dt-chip-sel:disabled { opacity: .55; cursor: default; }
-.sc-run-top { flex: 1 1 100%; gap: 6px; min-width: 0; flex-wrap: wrap; }
+/*  실행 설정(하네스·모델·추론강도)은 **머리줄에 같이 선다** — 제목 오른쪽, 세션 조작 왼쪽.
+    ⚠ 여기 `flex: 1 1 100%` 가 남아 있어서, 아무리 넓어도 이 묶음이 한 줄을 통째로 차지했다
+    (실측 #2061: 뷰포트 2400px 에서도 머리가 3줄 — 제목 / 실행 설정 / 조작). 아래 좁은 화면
+    규칙에서 따로 100% 를 주므로 여기서는 **들어가면 한 줄, 안 들어가면 그때 접히게** 둔다. */
+.sc-run-top { flex: 0 1 auto; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .sc-run-top .dt-chip-sel { max-width: 145px; }
 .sc-run-top .sc-run-harness { max-width: 180px; }
 .livc-desktop .livc-note:not(:empty) { padding: 2px 30px 0; }

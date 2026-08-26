@@ -20,6 +20,7 @@ import { seedDefaultContent } from "../org/delivery/seed-content.js";
 import { seedBuiltinApps } from "../apps/seed.js";
 import { armWorkerRecovery } from "../apps/worker-service.js";
 import { armMemberDeactivationHook } from "../apps/member-deactivation.js";
+import { armNodeSessionDiscovery } from "../terminal/node-session-state.js";   // #2022 — 노드가 직접 띄운 세션도 desired-state 에 남긴다
 import { sweepGhostSessionInstances } from "../apps/instance-janitor.js";
 import { runAutoBackfillSweep } from "../v6/embedding-backfill.js";
 import { registerTerminal } from "../terminal/routes.js";
@@ -175,6 +176,8 @@ export const DB_BOOT_STEPS: BootStep[] = [
   // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
   //  members.ts 의 단일 슬롯에 건다. 순수 배선(동기·DB 무접근)이라 어디 붙어도 되지만, 요청이 들어오기 전에 걸려야 한다.
   { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },
+  // #2022 — 노드 상태 push 구독. 처음 보는 세션의 행을 적어, 노드가 꺼져도 그 세션이 목록에서 사라지지 않게.
+  { name: "node-session-discovery", gate: "always", run: () => { armNodeSessionDiscovery(); } },
   // 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 .lively/project.json 에 sync:"pull" 을 stamp.
   //  pull 훅이 '이 폴더에 서버 파일을 써도 되나'를 마커의 sync 로 판정하게 됐는데, sync 없는 구 마커의 폴백은
   //  ~/lively/projects/<id>(꼴 고정) 만 인정한다 — 박스 폴더는 folder 가 임의(예: 'project/관리탭 수정')라

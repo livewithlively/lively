@@ -33,10 +33,10 @@ import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isT
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
-import { switcherTop } from './switcher.js';
+import { switcherName, switcherTop } from './switcher.js';
+import { openSectionMenu, railIsHidden, sectionDef, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
+import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
-//  ⚠ 병합 판단(2026-08-25): main 의 **사이드바 3단 테마 토글**(#1683 themeSeg)은 여기 두지 않는다 — 그 기능은
-//   me-modal 안으로 옮겨 갔고(테마 + 열린 탭 적용 + 하네스 동기화까지) 같은 조작을 사이드바 발치에 둘로 두지 않는다.
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
@@ -53,15 +53,26 @@ const PAST_KEY_LEGACY = 'lively_v2_side_past';
 const SELCLOSED_KEY = 'lively_v2_side_selclosed';   // 선택된 프로젝트인데도 **일부러 접어 둔** 것
 // ⚠ 「전체 프로젝트」 펼침은 **기억하지 않는다**(원준 2026-08-23 — "사용자가 변경하기 전에는 디폴트로 접힌 상태").
 //  종전엔 lively_v2_side_all 로 브라우저에 남겨, 한 번 편 사람은 그 뒤로 늘 수백 행이 펼쳐진 채 열렸다. 이제 페이지 수명만.
-//  ⚠ 병합 판단(2026-08-25): main 쪽엔 ALL_KEY 로 **아직 기억하는** 코드가 남아 있었지만, 같은 파일의 주석이 이미
-//   '「전체 프로젝트」가 같은 처방을 받았다(2026-08-23)'고 말하고 있었다 — 주석만 오고 코드가 안 따라온 것이라,
-//   실제로 처방을 적용한 이쪽(페이지 수명만)을 취한다.
 const ALL_KEY_LEGACY = 'lively_v2_side_all';
 const PIN_KEY = 'lively_v2_side_pin';     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
 //  앱 인스턴스 핀(#1954)은 키 공간이 달라(sess:/inst:/route:) 따로 둔다 — 한 통에 섞으면 트리를 걷어낼 때 같이 사라진다.
 const APP_PIN_STORE = 'lively_v2_app_pin';
 const BINS_KEY = 'lively_v2_side_bins';   // '1' = 아카이브·휴지통 두 행을 **발치에 고정**(목록을 내려도 늘 보인다, #1851)
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
+
+// ══ #2033 — 홈 목록의 **묶는 축**(세션 ↔ 프로젝트) ═══════════════════════════════
+//  집합은 그대로 두고 묶는 축만 바꾼다. 행 문법(×·압정·상태 점)도, 목록에 무엇이 있는지도 그대로다.
+//  움직임의 원칙 한 줄: **위로 올라가고 펴지는 쪽은 즉시, 아래로 내려가고 접히는 쪽은 안 볼 때.**
+//   올라오는 움직임은 정보고(나를 기다리는 게 생겼다), 내려가는 움직임은 소음이다(처리한 것의 뒷정리).
+const GROUP_STORE = 'lively_v2_side_group';        // 'proj' = 프로젝트로 묶기 · 없으면 종전 시간·상태 축
+const GRPCLOSED_STORE = 'lively_v2_side_grpclosed';   // 사람이 **접어 둔** 프로젝트 그룹
+const GRPOPENED_STORE = 'lively_v2_side_grpopened';   // 사람이 **펴 둔** 프로젝트 그룹
+let groupProj = false;
+let grpClosed = new Set<string>();
+let grpOpened = new Set<string>();
+
+//  ⚠ 순서를 여기서 따로 기억하지 않는다. 묶음의 자리도, 펼침 여부도 **지금 사실의 함수**다
+//   (순서는 시간축이 준 정렬 그대로, 펼침은 상태·선택 그대로) — 그래서 두 축이 어긋날 자리가 없다.
 
 let openSet = new Set<string>();
 const pastSet = new Set<string>();          // '지난 세션'을 펴 둔 프로젝트 — **페이지 수명만**(위 주석)
@@ -101,7 +112,13 @@ function init(): void {
   try { localStorage.removeItem(ALL_KEY_LEGACY); binsPinned = localStorage.getItem(BINS_KEY) === '1'; } catch (_) { /* noop */ }
   pinnedSet = loadSet(PIN_KEY);
   appPinned = loadSet(APP_PIN_STORE);
+  grpClosed = loadSet(GRPCLOSED_STORE);
+  grpOpened = loadSet(GRPOPENED_STORE);
+  try { groupProj = localStorage.getItem(GROUP_STORE) === 'proj'; } catch (_) { /* 못 읽어도 종전 축으로 돈다 */ }
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
+  try { projLens = localStorage.getItem(LENS_STORE) === 'active' ? 'active' : 'tree'; } catch (_) { /* 기본 렌즈(폴더 · 리스트)로 */ }
+  initWikiClosed();
+  foldClosed = loadSet(FOLD_CLOSED_STORE);
   void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
 }
 
@@ -245,13 +262,19 @@ export interface SideHooks {
   navState?: () => { back: boolean; forward: boolean };
   /** 상단 탭의 정본 상태를 좌측 '열린 앱' 목록으로 투영한다. */
   instances?: () => SideInstance[];
-  onActivateInstance?: (id: string) => void;
+  onActivateInstance?: (id: string, route?: string) => void;
   onCloseInstance?: (id: string) => void;
   onOpenProject?: (projectId: number) => void;
   /** 뒤로·앞으로·검색 줄을 사이드바 대신 여기(데스크톱 창 맨 윗줄)에 건다 — null 이면 종전대로 사이드바 맨 위(#1954). */
   navHost?: () => HTMLElement | null;
   /** 앱 인스턴스 고정이 바뀌었다 — 목록을 다시 계산해야 한다(정렬은 main 이 안다). */
   onPinChanged?: () => void;
+  /** #2016 — 레일이 고른 구역(홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). */
+  section?: () => RailSection;
+  /** #2016 — 레일 여닫기. 슬랙처럼 **맨 윗줄 맨 왼쪽**(패널 아이콘)에 선다 — navHost 가 없는 브라우저에서만 여기 그린다
+   *  (데스크톱은 창 맨 윗줄의 ☰ 자리가 이미 그 단추다). */
+  onToggleRail?: () => void;
+  railHidden?: () => boolean;
 }
 
 export interface SideInstance {
@@ -275,12 +298,41 @@ export interface SideInstance {
    *   행에는 그걸 말해 주는 표식이 없어 "내가 만들지도 않은 게 왜 뜨지"가 됐다(상민님 2026-08-26).
    *   프로젝트 트리 행은 이미 같은 얼굴을 달고 있다(sessRow) — 두 목록이 같은 사실을 같은 방식으로 말한다. */
   owner?: { id: string; name: string } | null;
+  /** 정렬 시각(ms) — main.ts 가 **얼려 둔** 값(#1954 orderPin). 프로젝트 축이 그룹 순서를 이걸로 잰다(#2033). */
+  at?: number;
+  /** 이 행을 여는 주소. **홈 목록은 안 준다** — 셸이 행 키로 제 표에서 찾는다(sideRowRoute).
+   *  홈에 없는 행(=[AI 세션]·[확인할 것]의 세션)만 자기 주소를 들고 온다(#2033). 없으면 셸이 못 열어
+   *  아무 데도 안 가는 행이 된다 — 실측으로 밟았다. */
+  route?: string;
 }
+// ══ #2043 — [프로젝트] 구역의 **렌즈 둘**: 진행 중 ↔ 폴더 · 리스트 ═══════════════════════
+//  레일 [프로젝트]를 누르면 사이드바가 둘 떴다 — 이 트리(진행 중 · 프로젝트 › 세션)와, 액자 안 클래식 앱이 들고 온
+//  「폴더 · 리스트」 패널. 둘은 **다른 질문**에 답한다(무엇이 도나 / 어디에 정리돼 있나)라 하나를 버리지 않고 스위치로
+//  갈랐다(원준 2026-08-26, 5안 중 안 3 — 지식 project-sidebar-unify-5-proposals-2043). 클래식 패널은 액자 안에서
+//  더는 그리지 않는다(projects/board.ts renderProjectV2Board).
+//  · 기본은 폴더 · 리스트(원준 선택). 고른 렌즈는 이 브라우저가 기억한다.
+//  · 폴더 · 리스트 렌즈는 **리스트까지만**(프로젝트 행 없음) — 리스트를 누르면 가운데 보드가 그 리스트로 간다(#/projects2/l/<id>).
+//  · 끌어다 놓기·리스트 ⋯ 메뉴는 1차에서 뺐다 — 리스트 설정·즐겨찾기 토글은 보드 머리줄의 ⌄ · ☆ 가 한다(#1067).
+const LENS_STORE = 'lively_v2_proj_lens';               // 'active' | 'tree'
+const FOLD_CLOSED_STORE = 'lively_v2_proj_fold_closed'; // 접어 둔 폴더 id
+type ProjLens = 'active' | 'tree';
+let projLens: ProjLens = 'tree';
+let foldClosed = new Set<string>();
+let favLists: Set<number> | null = null;   // 내 즐겨찾기 리스트(#670) — 이 렌즈에 처음 들어올 때 한 번 당긴다
+let favLoading = false;
+type NewKind = 'proj' | 'list' | 'folder';
+let newKind: NewKind = 'proj';             // ＋ 줄이 무엇을 만드나 — 폴더 · 리스트 렌즈에서만 셋 중 고른다
+const NEW_COPY: Record<NewKind, { ph: string; label: string }> = {
+  proj: { ph: '새 프로젝트 이름을 적고 Enter', label: '새 프로젝트 이름' },
+  list: { ph: '새 리스트 이름을 적고 Enter', label: '새 리스트 이름' },
+  folder: { ph: '새 폴더 이름을 적고 Enter', label: '새 폴더 이름' },
+};
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
   init();
   hooks = h || hooks;
   last = { host, data, activeKey };
+  saveFavTop();   // 즐겨찾기·리스트가 둘 다 도착한 순간 착지 후보를 남긴다(#2061 — 다음 진입이 안 기다리게)
   render();
 }
 function redraw(): void { if (last) render(); }
@@ -353,8 +405,8 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
     // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
     //  ⚠ 뒤판은 **왼쪽 세로선까지 그린다**(`M3 17V7…`). 종전엔 `M3 7…v1` 이라 (3,7)→(21,10) 으로 위쪽만 긋고
     //   끝나서, 왼쪽 y=7~17 구간이 통째로 비어 있었다 — 앞판이 (3,17) 에서 시작하므로 그 사이가 뚫린 채 남고,
-    //   16px 에서는 폴더가 **납작하게 잘려 보인다**(원준 2026-08-20 "폴더 아이콘이 좀 가려짐"). 겹침이 아니라
-    //   글리프가 덜 그려진 것이 원인이었다. 접힌 폴더와 같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채운다.
+    //   16px 에서는 폴더가 **납작하게 잘려 보인다**(원준 2026-08-20 "폴더 아이콘이 좀 가려짐"). 접힌 폴더와
+    //   같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채우면 두 아이콘의 무게가 맞는다.
     'folder-open': ['M3 17V7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
     chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
     inbox: ['M4.6 5h14.8L22 13v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4z', 'M2 13h6a4 4 0 0 0 8 0h6'],
@@ -365,7 +417,8 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
     archive: ['M3 6h18v4H3z', 'M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9', 'M10 14h4'],
     trash: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 13h10l1-13', 'M10 11v6M14 11v6'],
   };
-  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
+  //  #2016 — 모양은 icons.ts 한 벌에서 온다(레일·도크·행이 같은 붓). 위 D 는 그 표에 없을 때의 폴백이다.
+  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d: ICONS[kind] || D[kind].join(' ') }));
 }
 
 let appListEl: HTMLElement | null = null;
@@ -389,37 +442,37 @@ function instanceIcon(inst: SideInstance): SVGElement {
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
  * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
  */
-function render(): void {
-  if (!last) return;
-  // SideHooks.instances 를 모르는 이전 임베더는 기존 프로젝트 트리를 그대로 받는다.
-  if (!hooks.instances) { renderLegacy(); return; }
-  const { host, data } = last;
-  const wsReg: any = (state.me as any)?.workspace_registry || {};
-  const wsKind = (wsReg.active && wsReg.kind) || ((state.me as any)?.workspace?.kind);
-  host.closest('.v2-side')?.classList.toggle('ws-personal', wsKind === 'personal');
-
-  const me: any = state.me || {};
-  const name = String(me.display_name || me.email || me.userId || '');
-  const faceOwners = [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
-  const instances = hooks.instances();
-  const q = sideFilter.trim().toLowerCase();
-  const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
-  const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
-
-  const prevScroll = appListEl ? appListEl.scrollTop : 0;
-  const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
-  const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
-  const rowEl = (inst: SideInstance): HTMLElement => {
-    //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
-    const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
-    return el('div',
-    { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
-    el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.owner ? `${inst.title}\n${ownerNm}의 세션 — 내가 열어 둬서 목록에 있습니다` : inst.title, 'aria-current': inst.active ? 'page' : null,
-      onclick: () => hooks.onActivateInstance?.(inst.id) },
+/** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다.
+ *  ⚠ `one` = **한 줄 구조**(#2033 상민님). 프로젝트 축에서는 머리글이 이미 프로젝트를 말하므로 둘째 줄이 통째로 빈다 —
+ *   정보가 줄었으니 줄도 줄인다. 그때 사라지는 것(소속·주인·시각·상태어)은 툴팁이 받는다. */
+interface RowOpts {
+  /** 한 줄 구조 — 프로젝트 축(머리글이 소속을 이미 말한다). */
+  one?: boolean;
+  /** 압정·× 를 그리나. **목록의 성질**이 정한다(아래 renderSessions 머리말) — 행의 성질이 아니다. */
+  pin?: boolean;
+  close?: boolean;
+}
+function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
+  const one = !!o.one, canPin = o.pin !== false, canClose = o.close !== false;
+  //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
+  const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
+  const tip = [
+    inst.title,
+    inst.owner ? `${ownerNm}의 세션 — 내가 열어 둬서 목록에 있습니다` : '',
+    one ? [inst.status ? inst.status.label : '', inst.at ? when(inst.at) : ''].filter(Boolean).join(' · ') : '',
+  ].filter(Boolean).join('\n');
+  return el('div',
+    //  ⚠ `--plain` = **행 조작이 없는 목록**(압정·× 안 그림). 그 CSS 가 '상태 점은 호버에도 안 숨는다'를
+    //   이미 갖고 있다 — 홈에서 점이 숨는 건 그 자리를 × 가 받기 때문이고, 받을 것이 없으면 숨을 이유도 없다.
+    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
+    el('button', { class: 'v2-app-inst-open', type: 'button', title: tip, 'aria-current': inst.active ? 'page' : null,
+      onclick: () => hooks.onActivateInstance?.(inst.id, inst.route) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
     //  얼굴은 **둘째 줄 왼쪽 여백**에 선다 — 첫 줄 아이콘 바로 아래 빈자리라 새로 폭을 먹지 않고,
     //   첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다.
-    inst.owner ? personFace(inst.owner.id, 'v2-app-inst-face', ownerNm) : null,
+    //  ⚠ 한 줄 모드(#2033)에는 얼굴을 안 세운다 — 이 부품은 `grid-row: 2` 에 사는데 그 줄이 없어서,
+    //   그리면 빈 둘째 줄이 되살아나 행 높이가 두 축에서 어긋난다. 주인 이름은 위 툴팁이 말한다.
+    inst.owner && !one ? personFace(inst.owner.id, 'v2-app-inst-face', ownerNm) : null,
     //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
     //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
     inst.status
@@ -427,51 +480,325 @@ function render(): void {
           role: 'img', 'aria-label': inst.status.label })
       : null,
     //  압정 — 고른 것만 맨 위로(#1954). 호버·고정 상태에서만 보인다(늘 보이면 행마다 단추 둘이 늘어선다).
-    el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
+    !canPin ? null : el('button', { class: 'v2-app-inst-pin' + (inst.pinned ? ' on' : ''), type: 'button', 'aria-pressed': String(!!inst.pinned),
       'aria-label': inst.pinned ? `「${inst.title}」 고정 해제` : `「${inst.title}」 위에 고정`,
       title: inst.pinned ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
       onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); toggleAppPin(inst.id); } },
       sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY }))),
-    //  × 는 어느 행에나 있고 뜻도 하나다 — **목록에서 치우기**(#1954). 돌던 세션은 계속 돌고, 상태가 바뀌면 다시 올라온다.
-    el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
+    //  × 는 **이 목록 안에서는** 어느 행에나 있고 뜻도 하나다 — 목록에서 치우기(#1954).
+    !canClose ? null : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
       title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
       onclick: () => hooks.onCloseInstance?.(inst.id) },
       sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
-    inst.project && !inst.project.self
-      ? el('button', { class: 'v2-app-inst-project', type: 'button',
-          title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
-          onclick: () => hooks.onOpenProject?.(inst.project!.id) },
-          glyph('folder', 'v2-app-inst-project-ic'),
-          el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
-      : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' }));
-  };
+    //  ⚠ 한 줄 모드(#2033)에서는 둘째 줄을 **만들지 않는다** — 숨기기(display:none)로 두면 빈 그리드 행이 남아
+    //   행 높이가 두 축에서 어긋난다. 소속은 머리글이, 시각·상태어는 툴팁이 말한다.
+    one ? null
+      : inst.project && !inst.project.self
+        ? el('button', { class: 'v2-app-inst-project', type: 'button',
+            title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
+            onclick: () => hooks.onOpenProject?.(inst.project!.id) },
+            glyph('folder', 'v2-app-inst-project-ic'),
+            el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
+        : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
+}
 
-  //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
-  const rows: HTMLElement[] = [];
-  let lastGroup = '';
-  for (const inst of shown) {
-    const g = inst.group || '';
-    if (g && g !== lastGroup) { rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g })); lastGroup = g; }
-    rows.push(rowEl(inst));
+// ══ 프로젝트 축 — 묶기·펼침 (#2033) ══════════════════════════════════════════
+/** 한 프로젝트 묶음. rows 는 이미 정렬돼 들어온다(아래 projGroups 머리말). */
+interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; counts: Record<string, number> }
+
+//  펼칠 상태 = **확인 필요 · 작업 완료(미확인)** 둘뿐(상민님 2026-08-26).
+//   작업 중은 「지금 볼 것」에 **서기는 하되 펴지 않는다** — 돌고 있는 건 나를 기다리는 게 아니라 알리기만 하면 되고,
+//   그건 머리글의 파란 점이 이미 한다. 묶음에 들어가고 말고(=순서)는 시간축이 정하고, 펴고 접고만 여기서 가른다.
+const OPENS: Record<string, true> = { waiting: true, done: true };
+
+/**
+ * 행 목록을 프로젝트 묶음으로 접는다(#2033).
+ *
+ * ★ **순서와 묶음 이름은 시간축이 정한 그대로 쓴다.** main.ts 가 이미 행마다 묶음(고정 · 지금 볼 것 · 오늘 · 어제 …)을
+ *  붙이고 그 순서(상태 순위 → 최신순)로 정렬해서 넘긴다. 여기서는 **먼저 나온 순서대로 프로젝트를 묶기만** 한다.
+ *  그러면 프로젝트 축의 순서는 **정의상** 세션 축과 같아진다 — 한 프로젝트는 그 안에서 가장 급한 행이 서 있던 자리에 서고,
+ *  묶음 이름도 그 행의 묶음이다(그 행이 목록에서 제일 먼저 나오므로).
+ *  ⚠ 여기서 순서를 다시 매기지 마라. 종전 판은 '층 + 승급 순서'를 따로 지어냈다가 두 축의 순서가 갈렸다
+ *   (상민님: "정렬순서도 시간순정렬일때랑 너무 다른데" · "지금 볼 것 로직은 똑같이 가져가면 되잖아").
+ */
+function projGroups(rest: SideInstance[], searching: boolean): ProjGrp[] {
+  const groups: ProjGrp[] = [];
+  const byKey = new Map<string, ProjGrp>();
+  for (const r of rest) {
+    const id = (r.project && r.project.id) || 0;
+    const key = 'p:' + id;
+    let g = byKey.get(key);
+    if (!g) {
+      //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 프로젝트의 가장 급한 행이다.
+      g = { key, id, name: id ? (r.project as { name: string }).name : '프로젝트 없음',
+        bucket: r.group || '', rows: [], open: false, active: false, counts: {} };
+      byKey.set(key, g); groups.push(g);
+    }
+    g.rows.push(r);
+    if (r.active) g.active = true;
+    if (r.status) g.counts[r.status.key] = (g.counts[r.status.key] || 0) + 1;
   }
-  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' },
-    ...rows,
-    ...(!shown.length ? [el('div', { class: 'v2-app-empty' },
-      el('p', { text: q ? '찾는 열린 앱이 없어요.' : '열린 앱이 없어요.' }),
-      q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
-        : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() }))] : []));
-  appListEl = listEl;
-  listEl.scrollTop = prevScroll;
 
-  const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '열린 앱 찾기', 'aria-label': '열린 앱 찾기', value: sideFilter,
+  for (const g of groups) {
+    //  펼침 — 사람의 결정이 언제나 이긴다. 그 위에 자동 두 가지뿐이고, 둘 다 **지금 사실의 함수**다.
+    //   ⚠ 선택 때문에 펴진 묶음은 **선택이 풀리면 다시 접힌다**(상민님 2026-08-26). 트리의
+    //    「선택된 프로젝트만 펼침」과 같은 규율이다 — 한 번 펴진 걸 계속 붙들면 목록이 하루 종일 자라기만 한다.
+    if (searching) g.open = true;                                  // 찾으려고 건 렌즈를 묶음이 가리면 안 된다(#1719)
+    else if (grpClosed.has(g.key)) g.open = false;                 // 사람이 접었다 — 확인 필요가 생겨도 시스템이 안 뒤집는다
+    else if (grpOpened.has(g.key)) g.open = true;                  // 사람이 폈다
+    else g.open = g.rows.some((r) => !!r.status && !!OPENS[r.status.key]) || g.active;
+  }
+  return groups;
+}
+
+/** 머리글 오른쪽의 상태 요약 — 트리의 v2-sums 와 같은 문법(점 + 개수), 볼 일 있는 것만.
+ *  ⚠ **개수가 1이면 점만** 그린다. 실측(dev, 살아 있는 세션은 프로젝트마다 대개 하나)에서 머리글이
+ *   「● 1  1」 처럼 1을 두 번 쓰고 있었다 — 같은 사실을 두 번 말하면 둘 다 안 읽힌다. */
+function grpSums(counts: Record<string, number>): HTMLElement | null {
+  const part = (k: string, cls: string) => (counts[k] ? el('span', { class: 'v2-sum ' + cls, title: `${SESS_STATES[k] ? SESS_STATES[k].label : k} ${counts[k]}` },
+    el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), counts[k] > 1 ? String(counts[k]) : null) : null);
+  const w = part('waiting', 'wait'), d = part('done', 'done'), b = part('busy', 'busy');
+  if (!w && !d && !b) return null;
+  return el('span', { class: 'v2-sums' }, w, d, b);
+}
+
+/**
+ * 프로젝트 묶음 머리글.
+ *  ⚠ 접기 단추와 ＋ 는 **형제 button** 이다 — 단추 안에 단추를 넣으면 유효하지 않은 마크업이고 클릭이 겹친다.
+ *  ⚠ ＋ 는 트리의 것을 그대로 재사용하되 **그리드/플렉스 밖(절대위치)** 에 띄운다 — 자리를 차지하면
+ *   상태 점·개수가 오른쪽 끝에 못 붙는다(#1954 ⓑ 가 앱 행에서 이미 밟은 함정, 상민님 2026-08-26 재지적).
+ */
+function projGrpHead(g: ProjGrp): HTMLElement {
+  return el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') },
+    el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
+      title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
+      onclick: () => toggleGrp(g.key, g.open) },
+      el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
+      glyph(g.open ? 'folder-open' : 'folder', 'v2-pg-ic'),
+      el('span', { class: 'n', text: g.name }),
+      grpSums(g.counts),
+      //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
+      g.rows.length > 1 ? el('span', { class: 'v2-cnt', text: String(g.rows.length) }) : null),
+    g.id ? newSessBtn(g.id) : null) as HTMLElement;
+}
+
+/** 사람이 묶음을 접거나 폈다. 사람의 결정은 브라우저에 남고, 그 뒤로 자동 판정이 이 묶음을 안 뒤집는다. */
+function toggleGrp(key: string, wasOpen: boolean): void {
+  if (wasOpen) { grpClosed.add(key); grpOpened.delete(key); }
+  else { grpOpened.add(key); grpClosed.delete(key); }
+  saveSet(GRPCLOSED_STORE, grpClosed);
+  saveSet(GRPOPENED_STORE, grpOpened);
+  paintAppList();
+}
+
+/** 프로젝트 축의 목록 — 시간축과 **같은 묶음 머리글**(고정 · 지금 볼 것 · 오늘 …) 아래에 프로젝트 카드를 쌓는다. */
+function projListKids(shown: SideInstance[], q: string, o: RowOpts = {}): HTMLElement[] {
+  const kids: HTMLElement[] = [];
+  //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
+  //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
+  const pinned = shown.filter((r) => r.pinned);
+  const rest = shown.filter((r) => !r.pinned);
+  let lastBucket = '';
+  if (pinned.length) {
+    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: pinned[0].group || '고정' }) as HTMLElement);
+    lastBucket = pinned[0].group || '고정';
+    for (const r of pinned) kids.push(appRowEl(r, o));
+  }
+  for (const g of projGroups(rest, !!q)) {
+    if (g.bucket && g.bucket !== lastBucket) {
+      kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
+      lastBucket = g.bucket;
+    }
+    //  ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
+    //   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18, 트리 .v2-pj.open 과 같은 처방).
+    kids.push(el('div', { class: 'v2-pg' + (g.open ? ' open' : '') },
+      projGrpHead(g),
+      g.open ? el('div', { class: 'v2-pg-list' }, ...g.rows.map((r) => appRowEl(r, { ...o, one: true }))) : null) as HTMLElement);
+  }
+  return kids;
+}
+
+/** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
+function appListKids(shown: SideInstance[], q: string, o: RowOpts = {}, empty?: { none: string; found: string }): HTMLElement[] {
+  const kids: HTMLElement[] = groupProj ? projListKids(shown, q, o) : [];
+  if (!groupProj) {
+    //  묶음 머리글은 **묶음이 바뀔 때만** 낀다 — 행마다 붙이면 목록이 아니라 표가 된다.
+    let lastGroup = '';
+    for (const inst of shown) {
+      const g = inst.group || '';
+      if (g && g !== lastGroup) { kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g }) as HTMLElement); lastGroup = g; }
+      kids.push(appRowEl(inst, o));
+    }
+  }
+  if (shown.length) return kids;
+  return [el('div', { class: 'v2-app-empty' },
+    el('p', { text: q ? (empty?.found || '찾는 열린 앱이 없어요.') : (empty?.none || '열린 앱이 없어요.') }),
+    q ? el('button', { class: 'btn-text', type: 'button', text: '검색 지우기', onclick: () => { sideFilter = ''; redraw(); } })
+      : el('button', { class: 'btn-text', type: 'button', text: '새 작업 열기', onclick: () => hooks.onNewTask?.() })) as HTMLElement];
+}
+
+/** 검색어를 칠 때의 갱신 — **목록만** 갈아 끼운다. 검색칸·머리글은 손대지 않는다(살아 있는 노드 = 살아 있는 IME 조합).
+ *  머리글의 개수 배지는 거르기 전 전체 수라 검색어로 변하지 않으므로 여기서 손댈 것이 없다. */
+function paintAppList(): void {
+  if (!appListEl || !hooks.instances) return;
+  const q = sideFilter.trim().toLowerCase();
+  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  appListEl.replaceChildren(...appListKids(shown, q));
+  appListEl.scrollTop = 0;   // 거르고 나면 맨 위가 첫 결과다
+}
+
+/** 검색칸에서 글자를 조합하는 중(한글 등). 이때 전면 재렌더가 돌면 입력칸이 새로 나 조합이 끊긴다(#1958). */
+let findComposing = false;
+
+function render(): void {
+  if (!last) return;
+  // SideHooks.instances 를 모르는 이전 임베더는 기존 프로젝트 트리를 그대로 받는다.
+  if (!hooks.instances) { renderLegacy(); return; }
+  // 검색칸에서 한글을 조합하는 중이면 이번 판은 건너뛴다 — 20초 폴링이 입력칸을 새로 만들면 그 글자가 자모로
+  //  흩어진다(실측: 아무것도 안 해도 30초에 한 번 입력칸이 새로 난다). renderLegacy 의 `renaming` 가드와 같은 규율:
+  //  갱신은 **다시 오지만**, 사람이 치던 글자는 다시 오지 않는다. 조합이 끝나면 다음 폴링이 곧 따라잡는다.
+  if (findComposing) return;
+  const wsReg: any = (state.me as any)?.workspace_registry || {};
+  const wsKind = (wsReg.active && wsReg.kind) || ((state.me as any)?.workspace?.kind);
+  const sideRoot = last.host.closest('.v2-side');
+  sideRoot?.classList.toggle('ws-personal', wsKind === 'personal');
+  //  #2016 — **무엇을 그릴지는 레일이 고른 구역이 정한다.** 홈은 종전 화면(열린 앱 목록) 그대로이고,
+  //   나머지 셋은 그 구역의 렌즈다: AI 세션 = 세션 전체, 프로젝트 = 프로젝트 트리, 위키 = 분류.
+  //   ⚠ 구역은 주소를 따라 저절로 바뀌지 않는다(rail.ts 머리말) — 목록에서 뭔가를 여는 순간
+  //    사이드바가 갈아엎이면 방금 보던 목록이 사라진다.
+  const sec: RailSection = hooks.section?.() || 'home';
+  sideRoot?.setAttribute('data-sec', sec);
+  if (sec === 'inbox') { renderInboxSide(); return; }
+  if (sec === 'sess') { renderSessions(); return; }
+  if (sec === 'proj') { renderProjects(); return; }
+  if (sec === 'wiki') { renderWiki(); return; }
+  renderHomeApps();
+}
+
+/** 구역 머리 — 레일이 접혀 있으면 워크스페이스 이름이 여기 선다(슬랙의 「HonestAI ▾」 자리). */
+function secHead(title: string, count: number | null, ...acts: Array<HTMLElement | null>): HTMLElement {
+  return el('div', { class: 'v2-app-space-head' },
+    railIsHidden() ? null : switcherName(),
+    el('span', { class: 'v2-k', text: title }),
+    count != null ? el('span', { class: 'v2-app-count', text: String(count) }) : null,
+    ...acts);
+}
+
+/** 켜져 있는 필터 수 — 0이면 요약 줄을 그리지 않는다. */
+function fltCount(): number { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0); }
+
+/** 찾기 칸 — 구역마다 찾는 대상이 달라 안내 문구만 갈린다(입력 상태 `sideFilter` 는 하나다).
+ *  ⚠ 한글 조합 보호는 홈 목록과 같은 규율이다(#1958): 조합 중엔 전면 재렌더를 멈추고, Esc 는 조합 취소를 먼저 존중한다. */
+function findInput(ph: string): HTMLInputElement {
+  return el('input', { class: 'v2-find-in', type: 'search', placeholder: ph, 'aria-label': ph, value: sideFilter,
     oninput: (e: any) => { sideFilter = e.target.value; redraw(); markFind(); },
     onkeydown: (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      if (e.isComposing || (e as any).keyCode === 229) return;
       e.stopPropagation();
       if (sideFilter) sideFilter = ''; else findOpen = false;
       redraw();
     },
-    onblur: () => { if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
+    oncompositionstart: () => { findComposing = true; },
+    oncompositionend: () => { findComposing = false; },
+    onblur: () => { findComposing = false; if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
+}
+
+/** 레일을 숨겼을 때 사이드바 머리 한 줄(#2016 안 B) — [스택 타일 + 이름 ▾] … [지금 구역 ▾]. 레일이 보이면 그리지 않는다.
+ *  왼쪽은 레일 맨 위의 그 문패(같은 팝오버), 오른쪽은 구역 드롭다운(여섯 행 + 레일 펼치기). 앱·나는 발치 한 줄로(secFoot). */
+function wsHead(): HTMLElement {
+  const sec = hooks.section?.() || 'home';
+  const ak = last ? last.activeKey() : '';
+  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : sectionDef(sec);
+  const inboxN = last ? last.data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length : 0;
+  return el('div', { class: 'v2-side-wshd' },
+    stackTile({ small: true, label: true }),
+    el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키 · 리브',
+      onclick: (e: Event) => openSectionMenu(e.currentTarget as HTMLElement) },
+      icon(cur.icon, 'v2-ic'), el('span', { class: 'v2-secdd-t', text: cur.label }),
+      sec === 'inbox' && ak !== 'liv' && inboxN ? el('span', { class: 'v2-rail-bd', text: String(inboxN) }) : null,
+      el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })));
+}
+/** 사이드바 맨 위 — 뒤로·앞으로·검색 줄(데스크톱은 창 맨 윗줄로 간다) + 레일을 숨겼을 때의 머리 한 줄. */
+function topBits(navEl: HTMLElement, navHost: HTMLElement | null): HTMLElement[] {
+  return [...(navHost ? [] : [navEl]), ...(railIsHidden() ? [wsHead()] : [])];
+}
+/** 레일을 숨겼을 때 발치 한 줄 — [⊞ 앱] [아바타 이름 톱니]. 레일이 있기 전 사이드바(#1843)의 그 자리. */
+function footRow(): HTMLElement {
+  const me: any = state.me || {};
+  const name = String(me.display_name || me.email || me.userId || '');
+  return el('div', { class: 'v2-foot-row' },
+    el('button', { class: 'v2-apps-btn', type: 'button', title: '모든 앱', onclick: () => openLaunchpad() }, icon('apps', 'v2-ic'), el('span', { text: '앱' })),
+    el('button', { class: 'v2-me', type: 'button', title: '내 프로필 · 환경설정', 'aria-haspopup': 'dialog', onclick: () => openMeModal({ onSaved: () => redraw() }) },
+      profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
+      el('span', { class: 'v2-me-name', text: name }), icon('gear', 'v2-me-ic')));
+}
+
+/** 구역 발치 — 어느 구역에서나 같다: 데스크톱 업데이트 알림(#1838) + **도크 셋**(아카이브 · 휴지통 · 외부 앱 연결).
+ *  원준 2026-08-26: "이전에 아래에 있었던 아카이브랑 휴지통은 어디 감? 거기에 외부 앱 연결도 만들자." — 치워 둔 곳과
+ *  바깥으로 나가는 문은 **어느 구역에서든 같은 자리**에 있어야 찾는다. 아이콘 아래 이름을 둔다(아이콘만 늘어선
+ *  도크는 무엇인지 안 읽혔다 — 종전 도크 여섯의 교훈). */
+function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
+  const data = last ? last.data : null;
+  const ak = last ? last.activeKey() : '';
+  const me = meId();
+  const archivedN = data ? data.projects.filter((p) => isArchivedProj(p) && !isTrashedProj(p)).length : 0;
+  const trashedN = data ? data.projects.filter((p) => isTrashedProj(p)).length
+    + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length : 0;
+  const dock = (key: 'archive' | 'trash' | 'connect', label: string, n: number, title: string): HTMLElement =>
+    el('a', { class: 'v2-dock-btn' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title, 'aria-label': label + (n ? ` ${n}` : '') },
+      icon(key === 'connect' ? 'link' : key, 'v2-dock-ic'),
+      el('span', { class: 'v2-dock-t', text: label }),
+      n ? el('span', { class: 'v2-dock-n', text: String(n) }) : null);
+  return el('footer', { class: 'v2-side-foot v2-side-foot--apps' }, updateSlot(), ...rows,
+    el('nav', { class: 'v2-app-dock v2-app-dock--3', 'aria-label': '치워 둔 곳 · 연결' },
+      dock('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'),
+      dock('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'),
+      dock('connect', '외부 앱 연결', 0, '외부 앱 연결 — 슬랙·노션·드라이브 같은 바깥 서비스를 잇습니다')),
+    //  레일을 숨겼으면 레일 발치의 [앱]·[나]가 여기로 내려온다(안 B).
+    railIsHidden() ? footRow() : null);
+}
+
+/** 발치의 '갈 곳' 한 줄(세션 이력 등) — 목록의 항목이 아니라 같은 급의 문이다. */
+function footLink(href: string, icon: Parameters<typeof glyph>[0], text: string, n?: number | null): HTMLElement {
+  return el('a', { class: 'v2-nav v2-foot-link', href, title: text },
+    glyph(icon, 'v2-nav-ic'), el('span', { class: 'n', text }),
+    n != null ? el('span', { class: 'v2-cnt', text: String(n) }) : null);
+}
+
+function renderHomeApps(): void {
+  if (!last) return;
+  const { host } = last;
+  const instances = hooks.instances!();
+  const q = sideFilter.trim().toLowerCase();
+  const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+
+  const prevScroll = appListEl ? appListEl.scrollTop : 0;
+  const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
+  const findSel = findHad ? [findHad.selectionStart, findHad.selectionEnd] : null;
+  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '열린 앱' }, ...appListKids(shown, q));
+  appListEl = listEl;
+  listEl.scrollTop = prevScroll;
+
+  const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '열린 앱 찾기', 'aria-label': '열린 앱 찾기', value: sideFilter,
+    // ⚠ 타이핑 중에는 **목록만** 갈아 끼운다 — 사이드바를 통째로 다시 그리면 이 입력칸도 새로 나고,
+    //  그 순간 브라우저의 IME 조합이 끊긴다. 한글은 한 글자가 여러 타건의 조합이라 매 타건이 따로 확정되어
+    //  "안녕"이 "ㅇㅏㄴㄴㅕㅇ"로 흩어진다(원준 2026-08-25 신고 · 앱·크롬 공통 = 브라우저 문제가 아니다).
+    //  포커스를 복원해도 소용없다 — 조합 상태는 노드에 붙어 있어 노드가 죽으면 같이 죽는다.
+    oninput: (e: any) => { sideFilter = e.target.value; paintAppList(); markFind(); },
+    onkeydown: (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // 한글 조합 중의 Esc 는 '조합 취소'지 '검색 지우기'가 아니다(레포 불변식 #505) — 치던 글자만 물러난다.
+      if (e.isComposing || (e as any).keyCode === 229) return;
+      e.stopPropagation();
+      if (sideFilter) sideFilter = ''; else findOpen = false;
+      redraw();
+    },
+    //  조합 중엔 전면 재렌더를 멈춘다(위 render() 머리의 가드). 조합이 끝나면 바로 푼다.
+    oncompositionstart: () => { findComposing = true; },
+    oncompositionend: () => { findComposing = false; },
+    //  칸을 떠나면 조합도 끝난 것 — compositionend 를 못 받는 환경이 있어도 사이드바가 굳지 않게 여기서도 푼다.
+    onblur: () => { findComposing = false; if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
 
   //  데스크톱 앱이면 이 줄은 창 맨 윗줄로 간다(#1954 상민님: 상단 탭이 빠져 그 자리가 비었다).
   //  브라우저에선 navHost 가 null 이라 종전대로 사이드바 맨 위에 남는다.
@@ -479,50 +806,568 @@ function render(): void {
   const navHost = hooks.navHost?.() || null;
   if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
 
+  //  #2016 — 문패 카드와 [나]는 **레일**로 갔다(펼치면 카드, 접히면 타일 / 발치의 나). 여기 사본을 남기지 않는다.
+  //   대신 발치 도크에 있던 넷 중 **확인할 것 · 리브 · 외부 앱 연결**이 목록 위 고정 행으로 돌아온다 —
+  //   셋 다 '홈에서 늘 가는 곳'이고, 아이콘만 여섯 늘어선 도크에서는 무엇인지 읽히지 않았다.
+  //   아카이브 · 휴지통은 [프로젝트] 구역 발치로, 모든 앱은 레일의 [앱]으로 갔다.
+  //  #2016 2차 — 확인할 것·리브는 **레일**로 갔다(슬랙의 내 활동 자리). 홈 사이드바는 열린 앱 목록뿐이다.
+  //   아카이브·휴지통·외부 앱 연결은 어느 구역에서나 **발치 도크**(secFoot)에 있다.
   host.replaceChildren(
-    ...(navHost ? [] : [navEl]),
-    switcherTop({ people, faces: faceOwners }),
+    ...topBits(navEl, navHost),
     el('section', { class: 'v2-app-space', 'aria-label': '앱' },
-      el('div', { class: 'v2-app-space-head' },
-        el('span', { class: 'v2-k', text: '앱' }),
-        el('span', { class: 'v2-app-count', text: String(instances.length) }),
+      secHead('앱', instances.length,
         //  새 작업은 목록 위 큰 버튼이 아니라 머리글의 ＋ 하나다(#1954) — 목록이 세로를 더 쓴다.
         el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 작업 열기', title: '새 작업 — 무엇이든 시키거나 앱을 고릅니다',
           onclick: () => hooks.onNewTask?.() },
           sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
-        //  ⊞ 모든 앱은 여기 두지 않는다(#1954) — 같은 버튼이 발치 도크에 이미 있다. 한 화면에 같은 문 둘은 문이 아니라 헷갈림이다.
-        findBtn()),
+        axisBtn(), findBtn()),
       ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findIn)] : []),
       listEl),
-    el('footer', { class: 'v2-side-foot v2-side-foot--apps' },
-      updateSlot(),
-      el('nav', { class: 'v2-app-dock', 'aria-label': '앱 바로 열기' },
-        el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'inbox' ? ' on' : ''), href: '#/inbox', title: '확인할 것', 'aria-label': '확인할 것' },
-          glyph('inbox', 'v2-dock-ic'), inboxN ? el('span', { class: 'v2-dock-badge', text: String(inboxN) }) : null),
-        el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'connect' ? ' on' : ''), href: '#/connect', title: '외부 앱 연결', 'aria-label': '외부 앱 연결' }, glyph('link', 'v2-dock-ic')),
-        //  치워 둔 곳(#1851) — 트리 발치에 있던 두 행이 여기로 온다. 목록에 없다고 못 가는 곳이 되면 안 된다.
-        el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'archive' ? ' on' : ''), href: '#/archive', title: '아카이브', 'aria-label': '아카이브' }, glyph('archive', 'v2-dock-ic')),
-        el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'trash' ? ' on' : ''), href: '#/trash', title: '휴지통', 'aria-label': '휴지통' }, glyph('trash', 'v2-dock-ic')),
-        ...(navOn('liv') !== false ? [el('a', { class: 'v2-dock-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', title: '리브', 'aria-label': '리브' },
-          el('span', { class: 'v2-dock-liv', text: 'L' }))] : []),
-        el('button', { class: 'v2-dock-btn', type: 'button', title: '모든 앱', 'aria-label': '모든 앱 열기', onclick: () => openLaunchpad() },
-          sv('svg', { viewBox: '0 0 24 24', class: 'v2-dock-ic', 'aria-hidden': 'true' },
-            sv('rect', { x: '4', y: '4', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '4', width: '6', height: '6', rx: '1' }),
-            sv('rect', { x: '4', y: '14', width: '6', height: '6', rx: '1' }), sv('rect', { x: '14', y: '14', width: '6', height: '6', rx: '1' })))),
-      // [나] — 한 줄 전체가 **내 프로필 · 환경설정**을 여는 단추다(#1843, 원준 2026-08-21).
-      //  ⚠ 테마 3단·클래식 전환·로그아웃은 전부 그 창 안에 산다 — 발치에 다시 늘어놓지 않는다(#1954 회귀 복구).
-      el('button', { class: 'v2-me', type: 'button', title: '내 프로필 · 환경설정', 'aria-haspopup': 'dialog',
-        onclick: () => openMeModal({ onSaved: () => redraw() }) },
-        profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
-        el('span', { class: 'v2-me-name', text: name }),
-        sv('svg', { viewBox: '0 0 24 24', class: 'v2-me-ic', 'aria-hidden': 'true' },
-          sv('path', { d: 'M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z' }),
-          sv('path', { d: 'M19.4 13.6a7.6 7.6 0 0 0 0-3.2l1.9-1.4-1.9-3.3-2.2.9a7.7 7.7 0 0 0-2.8-1.6L14 2.5h-4l-.4 2.5a7.7 7.7 0 0 0-2.8 1.6l-2.2-.9L2.7 9l1.9 1.4a7.6 7.6 0 0 0 0 3.2L2.7 15l1.9 3.3 2.2-.9a7.7 7.7 0 0 0 2.8 1.6l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.8-1.6l2.2.9 1.9-3.3z' })))));
+    secFoot());
 
   listEl.scrollTop = prevScroll;
   keepSideScroll(listEl, 'v2-app-list');
   if (findHad) { findIn.focus(); if (findSel && findSel[0] != null) findIn.setSelectionRange(findSel[0], findSel[1]); }
   else if (findFocusWanted) { findFocusWanted = false; findIn.focus(); }
+  bindFindKey();
+}
+
+// ══ [AI 세션] 구역 (#2016) ═══════════════════════════════════════════════════
+//  홈이 '열린 것'이라면 여기는 **세션 전체**다 — 이 브라우저에서 안 열었어도 박스에서 돌면 여기 있다.
+//  행 생김새는 홈과 같은 문법(.v2-app-inst)이다: 구역이 바뀌었다고 시각 언어까지 바뀌면 같은 화면으로 안 읽힌다.
+/**
+ * 세션 하나를 목록의 공용 자료형(SideInstance)으로 옮긴다(#2033).
+ *  ★ 이렇게 두면 [AI 세션]·[확인할 것]이 홈과 **같은 붓**(appRowEl · appListKids)을 쓴다 — 행 문법도,
+ *   묶는 축 토글도, 뒤에 붙는 고침도 한 자리에서 온다. 종전엔 행 그리는 코드가 두 벌이라(sessInstRow)
+ *   같은 목록인데 홈에만 있던 것이 조용히 생겼다: 남의 세션 주인 얼굴(#2026)이 여기 없었고, 행을 눌렀을 때
+ *   홈은 탭을 재사용하는데 여기는 주소로 곧장 갈아탔다.
+ */
+function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
+  const p = s.projectId ? last!.data.projects.find((x) => x.id === s.projectId) : null;
+  const t = sessText(s, p ? p.name : '');
+  const ak = last!.activeKey();
+  const st = !pastRow && SESS_STATES[s.stateKey] ? s.stateKey : '';
+  const ownerId = String((s.raw && s.raw.owner) || '');
+  return {
+    id: 'sess:' + s.id,
+    route: '#/s/' + encodeURIComponent(s.id),
+    title: t.main,
+    active: ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId),
+    icon: 'chat',
+    meta: t.sub || when(s.lastSeen),
+    project: p ? { id: p.id, name: p.name } : null,
+    group,
+    status: st ? { key: st, label: stLabel(st) } : null,
+    //  남의 세션이면 주인 얼굴 — 홈이 이미 하는 일이다(#2026). 이 구역은 남의 세션이 **더 많이** 서는 곳이라
+    //   여기 없던 게 더 이상했다.
+    owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },
+    at: s.lastSeen || 0,
+  };
+}
+
+function renderSessions(): void {
+  if (!last) return;
+  const { host, data } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+
+  const all = data.sessions.filter((s) => !isTrashedSess(s));
+  const live = all.filter(isLive).sort(bySeen);
+  const past = all.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen);
+  const counts = new Map<string, number>();
+  for (const s of live) counts.set(s.stateKey, (counts.get(s.stateKey) || 0) + 1);
+  const q = sideFilter.trim().toLowerCase();
+  const match = (s: Sess): boolean => {
+    if (stateFilter && s.stateKey !== stateFilter) return false;
+    if (!q) return true;
+    const p = s.projectId ? data.projects.find((x) => x.id === s.projectId) : null;
+    return [s.label, p?.name].filter(Boolean).join(' ').toLowerCase().includes(q);
+  };
+  const liveShown = live.filter(match);
+  const pastShown = past.filter((s) => (stateFilter ? false : true) && (!q || s.label.toLowerCase().includes(q)));
+
+  const prevScroll = appListEl ? appListEl.scrollTop : 0;
+  //  ★ 홈과 **같은 붓**을 쓴다(#2033) — 행 문법도 묶는 축 토글도 여기서 새로 만들지 않는다.
+  //   ⚠ 압정·× 는 안 그린다. 목록의 성질이 다르기 때문이다: 홈은 내가 지금 붙들고 있는 것만 담은 **작업 큐**라
+  //    맨 위 고정도, 치우기도 뜻이 있다. 여기는 **전수 명부**고 순서의 정본은 상태(bySeen)다 —
+  //    치우면 찾을 곳이 없어지고, 고정은 상태 순서를 흔든다(프로젝트 트리도 프로젝트만 고정하지 세션은 안 한다).
+  const rowOpts: RowOpts = { pin: false, close: false };
+  const items = [
+    ...liveShown.map((s) => sessAsInst(s, false, `돌고 있는 것 · ${liveShown.length}`)),
+    ...pastShown.slice(0, 40).map((s) => sessAsInst(s, true, `지난 세션 · ${pastShown.length}`)),
+  ];
+  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': 'AI 세션' },
+    ...appListKids(items, q, rowOpts, {
+      none: stateFilter ? '조건에 맞는 세션이 없어요.' : '지금 도는 세션이 없어요. 홈에서 무엇이든 시켜 보세요.',
+      found: '찾는 세션이 없어요.' }));
+  appListEl = listEl;
+  listEl.scrollTop = prevScroll;
+
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': 'AI 세션' },
+      secHead('AI 세션', live.length,
+        el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 세션', title: '새 세션 — 홈에서 무엇이든 시키면 열려요',
+          onclick: () => hooks.onNewTask?.() },
+          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
+        //  묶는 축 토글 — 홈과 **같은 단추·같은 플래그**다(#2033). 묶는 축은 구역의 성질이 아니라
+        //   사람의 습관이라, 한 구역에서 바꾸면 다른 구역도 그렇게 열린다.
+        //  상태 거르기는 **[프로젝트] 구역과 같은 팝오버**다(#2033) — 구역마다 다른 방식을 두지 않는다.
+        //   ⚠ 범위(내 프로젝트만·완료 포함)는 끈다: 여기는 세션 목록이라 그 개념이 없다.
+        axisBtn(), findBtn(), filterBtn(stateFilter ? 1 : 0, live, 0, false)),
+      ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('세션 찾기'))] : []),
+      ...(stateFilter ? [filterSummary(1, false)] : []),
+      listEl),
+    secFoot(footLink('#/app/sessions', 'chat', '세션 이력')));
+
+  listEl.scrollTop = prevScroll;
+  keepSideScroll(listEl, 'v2-app-list');
+  bindFindKey();
+}
+
+// ══ [확인할 것] 구역 (#2016 2차) — 슬랙 '내 활동'의 자리. 답을 기다리는 것과 끝났는데 아직 안 본 것. ══
+function renderInboxSide(): void {
+  if (!last) return;
+  const { host, data } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+  const live = data.sessions.filter((s) => isLive(s) && !isTrashedSess(s));
+  const waits = live.filter((s) => s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
+  const dones = live.filter((s) => s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
+  //  홈·[AI 세션]과 같은 붓(#2033). 여기도 전수가 아니라 **지금 나를 기다리는 것**만 모인 자리라
+  //   압정·× 는 안 그린다 — 확인하면 스스로 빠지는 목록이다.
+  const items = [
+    ...waits.map((s) => sessAsInst(s, false, `답 기다림 · ${waits.length}`)),
+    ...dones.map((s) => sessAsInst(s, false, `작업 완료 · ${dones.length}`)),
+  ];
+  const prevScroll = appListEl ? appListEl.scrollTop : 0;
+  const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '확인할 것' },
+    ...appListKids(items, '', { pin: false, close: false },
+      { none: '지금 확인할 것이 없어요. 답을 기다리거나 막 끝난 세션이 여기 모입니다.', found: '' }));
+  appListEl = listEl;
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': '확인할 것' },
+      secHead('확인할 것', waits.length + dones.length,
+        el('a', { class: 'v2-app-open', href: '#/inbox', title: '받은 알림까지 한 화면에서', 'aria-label': '확인할 것 화면 열기' }, icon('inbox'))),
+      listEl),
+    secFoot());
+  listEl.scrollTop = prevScroll;
+  keepSideScroll(listEl, 'v2-app-list');
+}
+
+// ══ [프로젝트] 구역 (#2016) — #1883 이전의 프로젝트 트리를 그대로 되살린다. ══════
+//  트리 기계(renderTree·projRow·sessRow·binRows)는 지우지 않고 남아 있었다 — 새 구역은 그 자리를 되찾은 것이다.
+function renderProjects(): void {
+  if (!last) return;
+  if (projLens === 'tree') { renderProjTree(); return; }   // #2043 — 렌즈가 갈린다(위 LENS_STORE 머리말)
+  const { host, data } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+
+  const rows = buildRows(data);
+  const liveAll = data.sessions.filter(isLive);
+  const doneCount = rows.filter((r) => r.proj && r.done && !r.live.length).length;
+  const activeN = rows.filter((r) => r.proj && !r.archived).length;
+  countEl = el('span', { class: 'v2-k' });
+  treeEl = el('div', { class: 'v2-tree' }) as HTMLElement;
+
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
+      secHead('프로젝트', null, countEl, newBtn(), findBtn(), filterBtn(activeN, liveAll, doneCount)),
+      lensSwitch(),
+      ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('프로젝트 찾기'))] : []),
+      ...(fltCount() ? [filterSummary(fltCount())] : []),
+      ...(newOpen ? [newProjRow()] : []),
+      treeEl),
+    secFoot());
+
+  renderTree(rows);
+  keepSideScroll(treeEl, 'v2-tree');
+  bindFindKey();
+}
+
+// ══ [프로젝트] 구역 · 폴더 · 리스트 렌즈 (#2043) ══════════════════════════════════
+//  클래식 프로젝트 앱의 「폴더 · 리스트」 패널(projects/board.ts renderArea)을 새 셸 문법으로 다시 그린 것 — 리스트까지만.
+//  재료는 이미 V2Data 에 있다(main.ts loadData 가 lists · folders 를 프로젝트와 함께 당긴다, #1883). 즐겨찾기만 한 번 더 당긴다.
+interface TreeList { id: number; name: string; folder_id?: number | null; visibility?: string | null; settings?: { icon?: string | null } | null }
+interface TreeFolder { id: number; name: string; parent_id?: number | null; settings?: { kind?: string | null } | null }
+
+export function loadFavLists(): void {
+  if (favLists || favLoading) return;
+  favLoading = true;
+  void api('/api/ui/v6/favorites').then((d: any) => {
+    favLists = new Set<number>(((d && d.project_lists) || []).map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n)));
+    favLoading = false;
+    saveFavTop();
+    if (last && (hooks.section?.() || 'home') === 'proj' && projLens === 'tree') redraw();
+  }).catch(() => { favLoading = false; favLists = new Set<number>(); });
+}
+
+// ── [프로젝트] 구역의 기본 착지 = 즐겨찾기 맨 위 리스트 (#2061) ───────────────────────
+//  구역에 들어갔을 때 나오던 것은 **전체 프로젝트 보드**였다. 액자 안 클래식 보드에도 같은 규칙(#1114)이 있지만
+//  그건 클래식 패널(renderArea)이 설 때만 도는데, 새 셸에서는 그 패널을 접으므로(#2043) 영영 안 돌았다.
+//  그래서 규칙을 **셸의 착지 주소**로 올린다 — 주소가 리스트를 가리켜야 이 사이드바의 그 줄도 눌린 것으로 선다(projScopeKey).
+const FAV_TOP_STORE = 'lively_v2_proj_fav_top';
+
+/** 즐겨찾기 맨 위 리스트 id — 사이드바 즐겨찾기 구역과 **같은 식**(같은 순서)을 쓴다. 모르면 0. */
+function favTopListId(): number {
+  if (!favLists || !last) return 0;
+  const lists = (last.data.lists || []) as unknown as TreeList[];
+  const top = lists.find((l) => favLists!.has(l.id));
+  return top ? top.id : 0;
+}
+
+//  다음 진입이 즐겨찾기 응답을 기다리지 않게 남긴다 — 착지는 화면이 서기 전에 정해져야 해서, 늦게 온 답으로
+//  주소를 바꾸면 사용자가 보던 화면이 저절로 갈아엎힌다. 없으면 종전대로 전체 보드로 간다(무해한 폴백).
+//  ⚠ **모를 때는 지우지 않는다** — 즐겨찾기와 리스트는 따로 도착하므로, 한쪽만 온 순간의 '0' 은 '없다'가 아니라
+//   '아직 모른다'다. 그걸로 지우면 멀쩡한 캐시가 날아가 다음 진입이 또 전체 보드로 간다.
+let favTopSaved = -1;
+function saveFavTop(): void {
+  if (!favLists || !last || !(last.data.lists || []).length) return;
+  const id = favTopListId();
+  if (id === favTopSaved) return;   // 값이 그대로면 매 렌더마다 쓰지 않는다
+  favTopSaved = id;
+  try { if (id) localStorage.setItem(FAV_TOP_STORE, String(id)); else localStorage.removeItem(FAV_TOP_STORE); } catch (_) { /* 이번 화면은 된다 */ }
+}
+
+/** [프로젝트] 구역에 들어갈 때의 주소. 즐겨찾기 맨 위 리스트가 있으면 그 보드로, 없으면 종전대로 전체. */
+export function projLandingRoute(): string {
+  loadFavLists();   // 아직 모르면 지금 당겨 둔다 — 이번엔 못 써도 다음 진입은 안다
+  let id = favTopListId();
+  if (!id) { try { id = Number(localStorage.getItem(FAV_TOP_STORE)) || 0; } catch (_) { id = 0; } }
+  return id ? '#/projects2/l/' + id : '#/app/projects2';
+}
+
+/** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
+function projScopeKey(): string {
+  const m = /^#\/projects2\/(l|f)\/(\d+)/.exec(location.hash);
+  if (m) return (m[1] === 'l' ? 'L' : 'F') + m[2];
+  return /^#\/projects2\/none/.test(location.hash) ? 'none' : '';
+}
+
+function setLens(k: ProjLens): void {
+  if (projLens === k) return;
+  projLens = k;
+  try { localStorage.setItem(LENS_STORE, k); } catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
+  // 찾기 칸과 ＋ 줄은 렌즈마다 다른 것을 찾고 만든다 — 넘길 때 비운다(옛 검색어가 새 목록을 조용히 줄이면 안 된다).
+  sideFilter = ''; findOpen = false; newOpen = false; newDraft = ''; newErr = '';
+  redraw();
+}
+
+/** 렌즈 스위치 — [진행 중 | 폴더 · 리스트]. 답을 기다리는 세션이 있으면 **다른 렌즈에 있을 때** 진행 중 쪽에 앰버 점(숫자는 안 단다 —
+ *  사이드바의 앰버 숫자 배지는 하나뿐이라는 #1719 규칙). 8/25 결정 ①(시간순 ↔ 프로젝트별 토글)과 같은 장치다. */
+function lensSwitch(): HTMLElement {
+  const data = last ? last.data : null;
+  const waiting = !!data && data.sessions.some((s) => isLive(s) && s.stateKey === 'waiting');
+  const tab = (k: ProjLens, label: string, dot: boolean, title: string): HTMLElement =>
+    el('button', { class: 'v2-lens-b' + (projLens === k ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(projLens === k), title,
+      onclick: () => setLens(k) },
+      el('span', { text: label }),
+      dot ? el('i', { class: 'v2-lens-dot', role: 'img', 'aria-label': '답을 기다리는 세션이 있어요' }) : null);
+  return el('div', { class: 'v2-lens', role: 'tablist', 'aria-label': '무엇을 볼지' },
+    tab('active', '진행 중', waiting && projLens !== 'active', '진행 중 — 도는 세션이 있는 프로젝트와 그 세션'),
+    tab('tree', '폴더 · 리스트', false, '폴더 · 리스트 — 프로젝트가 정리된 자리. 리스트를 누르면 가운데 보드가 그 리스트로 갑니다'));
+}
+
+/** 폴더 · 리스트 렌즈의 ＋ — 무엇을 만들지 셋 중 고른다(프로젝트 · 리스트 · 폴더). 옛 패널의 「＋ 새로 만들기 ▾」(#1067) 자리. */
+function newMenuBtn(): HTMLElement {
+  return el('button', {
+    class: 'v2-add' + (newOpen ? ' on' : ''), type: 'button', 'aria-label': '새로 만들기', 'aria-haspopup': 'menu', 'aria-expanded': String(newOpen),
+    title: newOpen ? '만들기 줄 접기' : '새로 만들기 — 프로젝트 · 리스트 · 폴더',
+    onclick: (e: MouseEvent) => {
+      e.preventDefault();
+      if (newOpen) { closeNew(); return; }
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      ctxMenu(r.left, r.bottom + 4, [
+        { label: '새 프로젝트', run: () => openNew('proj') },
+        { label: '새 리스트', run: () => openNew('list') },
+        { label: '새 폴더', run: () => openNew('folder') },
+      ]);
+    },
+  }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
+}
+
+function renderProjTree(): void {
+  if (!last) return;
+  const { host, data } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+  loadFavLists();
+
+  const lists = (data.lists || []) as unknown as TreeList[];
+  const folders = (data.folders || []) as unknown as TreeFolder[];
+  // 열린 프로젝트 수 — 보관·버림·완료는 빼고 센다. 매일 보는 숫자는 '남은 일'이다(완료까지 센 숫자는 보드의 Closed 토글이 말한다).
+  const openByList = new Map<number, number>();
+  let noneN = 0;
+  for (const p of data.projects) {
+    if (isArchivedProj(p) || isTrashedProj(p) || p.status_category === 'done') continue;
+    if (p.list_id) openByList.set(p.list_id, (openByList.get(p.list_id) || 0) + 1); else noneN++;
+  }
+  // 아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 트리에 없다 — 발치 도크 [아카이브]가 그 문이다.
+  const kids = new Map<number | null, TreeFolder[]>();
+  for (const f of folders) { const k = f.parent_id ?? null; const arr = kids.get(k) || []; arr.push(f); kids.set(k, arr); }
+  const archived = new Set<number>();
+  const markArchive = (f: TreeFolder): void => { archived.add(f.id); for (const c of kids.get(f.id) || []) markArchive(c); };
+  for (const f of folders) if (f.settings && f.settings.kind === 'archive') markArchive(f);
+  const listsIn = (folderId: number | null): TreeList[] => lists.filter((l) => (l.folder_id ?? null) === folderId);
+  const q = sideFilter.trim().toLowerCase();
+  const hit = (name: string): boolean => !q || name.toLowerCase().includes(q);
+  const sel = projScopeKey();
+  const countUnder = (f: TreeFolder): number => listsIn(f.id).reduce((n, l) => n + (openByList.get(l.id) || 0), 0)
+    + (kids.get(f.id) || []).filter((c) => !archived.has(c.id)).reduce((n, c) => n + countUnder(c), 0);
+  // 찾는 중엔 맞는 것이 아래에 하나라도 있어야 폴더가 선다(폴더 이름이 맞아도 선다).
+  const anyHit = (f: TreeFolder): boolean => hit(f.name) || listsIn(f.id).some((l) => hit(l.name)) || (kids.get(f.id) || []).some((c) => !archived.has(c.id) && anyHit(c));
+
+  const lockIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-ptl-lock', 'aria-hidden': 'true' },
+    sv('path', { d: 'M7 11V8a5 5 0 0 1 10 0v3' }), sv('rect', { x: '5', y: '11', width: '14', height: '10', rx: '2' }));
+  const listRow = (l: TreeList, depth: number): HTMLElement => {
+    const on = sel === 'L' + l.id;
+    const emoji = l.settings && l.settings.icon ? String(l.settings.icon) : '';
+    return el('a', { class: 'v2-wcat v2-ptl' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, style: 'padding-left:' + (12 + depth * 14) + 'px',
+      title: l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : ''), ...(on ? { 'aria-current': 'true' } : {}) },
+      emoji ? el('span', { class: 'v2-ptl-emoji', 'aria-hidden': 'true', text: emoji }) : icon('list', 'v2-ptl-ic'),
+      el('span', { class: 'n', text: l.name }),
+      l.visibility === 'members' ? lockIc() : null,
+      el('span', { class: 'v2-cnt', text: String(openByList.get(l.id) || 0) }));
+  };
+  const rows: HTMLElement[] = [];
+  const folderRows = (parent: number | null, depth: number): void => {
+    for (const f of (kids.get(parent) || [])) {
+      if (archived.has(f.id)) continue;
+      if (q && !anyHit(f)) continue;
+      const open = q ? true : !foldClosed.has(String(f.id));   // 찾는 중엔 전부 편다 — 접힌 폴더가 결과를 삼키면 안 된다
+      const on = sel === 'F' + f.id;
+      const isSpace = !!(f.settings && f.settings.kind === 'space');
+      rows.push(el('div', { class: 'v2-ptf' + (on ? ' on' : ''), style: 'padding-left:' + (depth * 14) + 'px' },
+        el('button', { class: 'v2-car' + (open ? ' open' : ''), type: 'button', 'aria-label': open ? f.name + ' 접기' : f.name + ' 펼치기', 'aria-expanded': String(open), text: '›',
+          onclick: (e: Event) => {
+            e.preventDefault(); e.stopPropagation();
+            if (open) foldClosed.add(String(f.id)); else foldClosed.delete(String(f.id));
+            saveSet(FOLD_CLOSED_STORE, foldClosed); redraw();
+          } }),
+        el('a', { class: 'v2-ptf-a', href: '#/projects2/f/' + f.id, title: (isSpace ? '스페이스 ' : '폴더 ') + f.name + ' — 누르면 그 안의 리스트를 한 화면에 봅니다', ...(on ? { 'aria-current': 'true' } : {}) },
+          glyph(open ? 'folder-open' : 'folder', 'v2-ptf-ic'),
+          el('span', { class: 'n', text: f.name }),
+          el('span', { class: 'v2-cnt', text: String(countUnder(f)) }))));
+      if (!open) continue;
+      folderRows(f.id, depth + 1);
+      for (const l of listsIn(f.id)) if (hit(l.name)) rows.push(listRow(l, depth + 1));
+    }
+  };
+  // ⭐ 즐겨찾기(#670) — 폴더 안이든 밖이든 맨 위 한자리로. 찾는 중엔 생략(찾기가 우선). 비어 있으면 구역 자체를 안 그린다.
+  const favs = !q && favLists ? lists.filter((l) => favLists!.has(l.id)) : [];
+  if (favs.length) {
+    rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: '즐겨찾기' }));
+    for (const l of favs) rows.push(listRow(l, 0));
+  }
+  rows.push(el('div', { class: 'v2-app-group', role: 'presentation', text: '폴더 · 리스트' }));
+  const treeStart = rows.length;
+  folderRows(null, 0);
+  for (const l of listsIn(null)) if (hit(l.name)) rows.push(listRow(l, 0));
+  // 기타(미분류) — 리스트에 안 넣은 프로젝트. 클래식 패널의 그 줄(#475 __none__). 그런 프로젝트가 있을 때만 선다.
+  const noneLabel = '기타 (미분류)';
+  if (noneN && (!q || noneLabel.toLowerCase().includes(q))) {
+    rows.push(el('a', { class: 'v2-wcat v2-ptl v2-ptl--none' + (sel === 'none' ? ' on' : ''), href: '#/projects2/none', style: 'padding-left:12px',
+      title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(sel === 'none' ? { 'aria-current': 'true' } : {}) },
+      glyph('inbox', 'v2-ptl-ic'), el('span', { class: 'n', text: noneLabel }), el('span', { class: 'v2-cnt', text: String(noneN) })));
+  }
+  if (rows.length === treeStart) {
+    rows.push(el('p', { class: 'v2-empty', text: q ? '찾는 폴더 · 리스트가 없어요.' : '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' }));
+  }
+  const listEl = el('div', { class: 'v2-app-list v2-ptree', 'aria-label': '폴더 · 리스트' }, ...rows);
+  appListEl = listEl;
+
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
+      secHead('프로젝트', null, newMenuBtn(), findBtn()),
+      lensSwitch(),
+      ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('폴더 · 리스트 찾기'))] : []),
+      ...(newOpen ? [newProjRow()] : []),
+      listEl),
+    secFoot());
+
+  keepSideScroll(listEl, 'v2-app-list');
+  bindFindKey();
+}
+
+// ══ [위키] 구역 — 서가 (#2043, 3안 중 안 A) ═══════════════════════════════════
+//  원준 2026-08-26: "위키 사이드바는 가독성이 너무 별로고 위계가 느껴지지 않음. 전면 재디자인."
+//  진단(dev 실측)과 3안은 지식 `wiki-sidebar-redesign-3-proposals-2043`. 고른 것은 **안 A 서가**.
+//
+//  위키는 **스페이스 › 분류 › 문서** 세 층인데 종전 사이드바는 그 층이 글자 크기로만 갈려 벽으로 읽혔다.
+//  그래서 스페이스를 글자 한 줄이 아니라 **카드(면)** 로 만든다 — "이 줄들은 저 안에 있다"가 보이게.
+//   ① 맨 위 세 줄은 분류가 아니라 **문서를 모아 보는 뷰**(인덱스 · 최근 · 전체)라 카드 밖에, 다른 모양으로 선다
+//      (종전엔 폴더 아이콘 + 더 굵은 글자라 분류의 상위 폴더처럼 읽혔다 — 위계가 뒤집혀 보였다).
+//   ② 분류 행은 **이름(진한 14px) + 설명 한 줄**. 이름만으로는 「증류」·「주입·검색」이 무엇인지 아무도 모른다.
+//      설명은 이미 서버가 준다(`/api/ui/categories` 의 description) — 새 조회가 아니다.
+//   ③ 순서는 개수가 아니라 **우리 팀이 맡은 것 먼저**(`/api/ui/me` 의 team_owner_category_ids). 매일 보는 곳이 위로.
+//   ④ 개수는 모노 글자가 아니라 **알약** — 이름과 같은 줄 오른쪽 끝에 고정폭으로 서서 겉돌지 않는다.
+//  ⚠ 이모지(📌🕘🧩)는 쓰지 않는다 — 아이콘은 `icons.ts` 한 벌에서 온다(원준: "이모티콘 쓸 일 있으면 DS 에 맞게 다시 그려라").
+interface WikiCat { id: number; space: string; name: string; key: string; description?: string | null; knowledge_count?: number }
+let wikiCats: WikiCat[] | null = null;
+let wikiLoading = false;
+let wikiPins: number | null = null;      // WIKI 인덱스(핀) 건수 — 뷰 줄의 알약
+let wikiPinsLoading = false;
+const WIKI_CLOSED_STORE = 'lively_v2_wiki_closed';   // 접어 둔 스페이스(브라우저 기억)
+let wikiClosed = new Set<string>();
+const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 스페이스 — 페이지 수명(새로 열면 다시 접힌다)
+const WIKI_CARD_MAX = 6;                 // 카드 하나에 바로 보이는 분류 수. 넘으면 더 보기로 접는다
+const SPACE_LABEL: Record<string, string> = { product: '제품', business: '사업', system: '시스템' };
+const SPACE_ICON: Record<string, string> = { product: 'layers', business: 'chart', system: 'sliders' };
+const SPACE_ORDER = ['product', 'business', 'system'];
+
+/** 첫 방문 기본값 = 제품만 펼침. 카드 셋을 다 펴면 19줄 × 두 줄이라 종전의 '벽'이 그대로 돌아온다. */
+function initWikiClosed(): void {
+  try {
+    const raw = localStorage.getItem(WIKI_CLOSED_STORE);
+    wikiClosed = raw == null ? new Set(['business', 'system']) : new Set<string>(JSON.parse(raw) || []);
+  } catch (_) { wikiClosed = new Set(['business', 'system']); }
+}
+function saveWikiClosed(): void { try { localStorage.setItem(WIKI_CLOSED_STORE, JSON.stringify([...wikiClosed])); } catch (_) { /* 못 남겨도 이번 화면은 된다 */ } }
+
+/** 우리 팀이 맡은 분류 id — `/api/ui/me` 가 이미 싣고 있다(team_owner_category_ids). 없으면 빈 집합(표식만 안 붙는다). */
+function ownerCatIds(): Set<number> {
+  const raw = (state.me as any)?.team_owner_category_ids;
+  return new Set<number>(Array.isArray(raw) ? raw.map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n)) : []);
+}
+function myTeamName(): string {
+  const t = (state.me as any)?.teams;
+  return Array.isArray(t) && t.length ? String(t[0].name || '우리 팀') : '우리 팀';
+}
+/** 지금 보고 있는 분류 — 주소에서 읽는다(`#/knowledge?category=N`, wiki.ts 가 지키는 URL 계약). */
+function wikiActiveCat(): number {
+  const m = /[?&]category=(\d+)/.exec(location.hash);
+  return m ? Number(m[1]) : 0;
+}
+
+function loadWikiCats(): void {
+  if (wikiCats || wikiLoading) return;
+  wikiLoading = true;
+  void api('/api/ui/categories').then((d: any) => {
+    wikiCats = ((d && d.categories) || []) as WikiCat[];
+    wikiLoading = false;
+    if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
+  }).catch(() => {
+    wikiLoading = false;
+    wikiCats = [];
+    if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
+  });
+}
+/** 핀 건수 한 번 — 목록은 안 받는다(limit=1, 서버가 total 을 준다). */
+function loadWikiPins(): void {
+  if (wikiPins != null || wikiPinsLoading) return;
+  wikiPinsLoading = true;
+  void api('/api/ui/knowledge?is_wiki=true&limit=1').then((d: any) => {
+    wikiPins = Number(d && d.total) || 0;
+    wikiPinsLoading = false;
+    if (last && (hooks.section?.() || 'home') === 'wiki') redraw();
+  }).catch(() => { wikiPinsLoading = false; wikiPins = 0; });
+}
+
+/** 문서를 모아 보는 뷰 한 줄 — 분류가 아니다. 카드 밖에 서고 아이콘·무게가 카드 머리와 다르다. */
+function wikiViewRow(href: string, ic: string, label: string, title: string, n: number | null, on: boolean): HTMLElement {
+  return el('a', { class: 'v2-kview' + (on ? ' on' : ''), href, title, ...(on ? { 'aria-current': 'true' } : {}) },
+    icon(ic, 'v2-kview-ic'), el('span', { class: 'n', text: label }),
+    n != null ? el('span', { class: 'v2-kpill', text: String(n) }) : null);
+}
+
+function renderWiki(): void {
+  if (!last) return;
+  const { host } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+  loadWikiCats();
+  loadWikiPins();
+
+  const q = sideFilter.trim().toLowerCase();
+  const all = wikiCats || [];
+  const total = all.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
+  const own = ownerCatIds();
+  const teamName = myTeamName();
+  const activeCat = wikiActiveCat();
+  // 지금 보는 분류가 접힌 카드에 들어 있으면 그 카드를 편다 — 선택된 것이 화면에 없으면 사람은 '사라졌다'고 읽는다
+  //  (프로젝트 트리가 선택된 프로젝트를 펴 두는 것과 같은 규율).
+  if (activeCat) {
+    const c = all.find((x) => x.id === activeCat);
+    if (c && wikiClosed.has(c.space)) { wikiClosed.delete(c.space); saveWikiClosed(); }
+  }
+  const hit = (c: WikiCat) => !q || c.name.toLowerCase().includes(q)
+    || String(c.description || '').toLowerCase().includes(q) || String(c.key || '').toLowerCase().includes(q);
+  // 순서 = 우리 팀이 맡은 것 먼저 → 문서 많은 것 먼저.
+  const rank = (a: WikiCat, b: WikiCat): number =>
+    (Number(own.has(b.id)) - Number(own.has(a.id))) || ((Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0));
+
+  const catRow = (c: WikiCat): HTMLElement => {
+    const on = activeCat === c.id;
+    const mine = own.has(c.id);
+    return el('a', { class: 'v2-kcat' + (on ? ' on' : ''), href: '#/knowledge?category=' + encodeURIComponent(String(c.id)),
+      title: c.name + (c.description ? ' — ' + c.description : ''), ...(on ? { 'aria-current': 'true' } : {}) },
+      el('span', { class: 'v2-kcat-t' },
+        el('span', { class: 'n', text: c.name }),
+        mine ? el('span', { class: 'v2-kown', text: '담당', title: teamName + '이 맡은 분류' }) : null,
+        el('span', { class: 'v2-kpill', text: String(Number(c.knowledge_count) || 0) })),
+      c.description ? el('span', { class: 'v2-kcat-d', text: String(c.description) }) : null);
+  };
+
+  const rows: HTMLElement[] = [];
+  for (const space of SPACE_ORDER) {
+    const inSpace = all.filter((c) => c.space === space);
+    if (!inSpace.length) continue;
+    const shownAll = inSpace.filter(hit).sort(rank);
+    if (q && !shownAll.length) continue;              // 찾는 중엔 맞는 것이 있는 카드만 선다
+    const open = q ? true : !wikiClosed.has(space);   // 찾는 중엔 전부 편다 — 접힌 카드가 결과를 삼키면 안 된다
+    const capped = !q && !wikiMore.has(space) && shownAll.length > WIKI_CARD_MAX;
+    const shown = capped ? shownAll.slice(0, WIKI_CARD_MAX) : shownAll;
+    const docs = inSpace.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
+    const head = el('button', { class: 'v2-ksp-h', type: 'button', 'aria-expanded': String(open),
+      title: open ? SPACE_LABEL[space] + ' 접기' : SPACE_LABEL[space] + ' 펼치기 — 분류 ' + inSpace.length + '개',
+      onclick: () => {
+        if (open) wikiClosed.add(space); else wikiClosed.delete(space);
+        saveWikiClosed(); redraw();
+      } },
+      el('span', { class: 'v2-car' + (open ? ' open' : ''), 'aria-hidden': 'true', text: '›' }),
+      icon(SPACE_ICON[space] || 'apps', 'v2-ksp-ic'),
+      el('span', { class: 'n', text: SPACE_LABEL[space] || space }),
+      el('span', { class: 'v2-ksp-n', text: inSpace.length + ' · ' + docs }));
+    const kids: HTMLElement[] = shown.map(catRow);
+    if (capped) {
+      kids.push(el('button', { class: 'v2-kmore', type: 'button', text: (shownAll.length - shown.length) + '개 더 보기',
+        onclick: () => { wikiMore.add(space); redraw(); } }));
+    }
+    rows.push(el('section', { class: 'v2-ksp' + (open ? ' open' : ''), 'aria-label': SPACE_LABEL[space] || space },
+      head, ...(open ? [el('div', { class: 'v2-ksp-b' }, ...kids)] : [])));
+  }
+  if (!rows.length) {
+    rows.push(el('p', { class: 'v2-empty', text: wikiCats ? (q ? '찾는 분류가 없어요.' : '아직 분류가 없어요.') : '불러오는 중…' }));
+  }
+  const listEl = el('div', { class: 'v2-app-list v2-kshelf', 'aria-label': '분류' }, ...rows);
+  appListEl = listEl;
+
+  const h = location.hash;
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': '위키' },
+      secHead('위키', total || null,
+        el('a', { class: 'v2-app-new', href: '#/knowledge/new', 'aria-label': '새 문서', title: '새 문서 — 지식을 하나 씁니다' },
+          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
+        findBtn()),
+      ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('분류 · 설명 찾기'))] : []),
+      el('nav', { class: 'v2-kviews', 'aria-label': '문서 모아 보기' },
+        wikiViewRow('#/knowledge?indexed=1', 'pin', 'WIKI 인덱스', 'WIKI 인덱스 — 모두가 항상 보는 핀', wikiPins, /indexed=1/.test(h)),
+        wikiViewRow('#/knowledge', 'clock', '최근', '최근 — 팀이 남긴 순서대로', null, /^#\/knowledge$/.test(h) || /^#\/app\/knowledge$/.test(h)),
+        wikiViewRow('#/knowledge?all=1', 'wiki', '지식 전체', '지식 전체 — 조건 없이 모두', total || null, /all=1/.test(h))),
+      listEl),
+    secFoot());
+
+  keepSideScroll(listEl, 'v2-app-list');
   bindFindKey();
 }
 
@@ -651,9 +1496,6 @@ function renderLegacy(): void {
           sv('path', { d: 'M19.4 13.6a7.6 7.6 0 0 0 0-3.2l1.9-1.4-1.9-3.3-2.2.9a7.7 7.7 0 0 0-2.8-1.6L14 2.5h-4l-.4 2.5a7.7 7.7 0 0 0-2.8 1.6l-2.2-.9L2.7 9l1.9 1.4a7.6 7.6 0 0 0 0 3.2L2.7 15l1.9 3.3 2.2-.9a7.7 7.7 0 0 0 2.8 1.6l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.8-1.6l2.2.9 1.9-3.3z' })))));
   navFit(navEl);            // 붙고 나서야 실제 높이를 알 수 있다 — 저장값을 지금 줄 수에 맞춰 앉힌다
   renderTree(rows);
-  // ⚠ 병합 판단(2026-08-25): main 의 keepSideScroll(#288, 08-21 09:48Z)은 여기서 걷는다 — 뒤에 온 이 앵커 방식
-  //  (08-21 10:03Z)이 같은 신고를 더 정확히 고치고, 위 주석이 '픽셀 되돌리기는 이 트리에서 어긋난다'는 사유를 남겼다.
-  //  그 처방이 막던 구멍(트리가 통째로 새로 생겨 scrollTop 이 0 인 경우)은 아래 lastScroll 이 그대로 맡는다.
   //  ① 보던 줄을 같은 자리에 → ② 그 줄이 사라졌으면 옛 픽셀값으로(그래도 아무것도 안 하는 것보단 낫다).
   if (!anchorApply(anchor)) treeEl!.scrollTop = prevScroll;
   lastScroll = treeEl!.scrollTop;
@@ -830,7 +1672,7 @@ let newSending = false;
 let newErr = '';
 let newFocusWanted = false;
 
-function openNew(): void { newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
+function openNew(kind: NewKind = 'proj'): void { newKind = kind; newOpen = true; newFocusWanted = true; newErr = ''; redraw(); }
 function closeNew(): void { if (!newOpen) return; newOpen = false; newDraft = ''; newErr = ''; redraw(); }
 
 function newBtn(): HTMLElement {
@@ -847,7 +1689,7 @@ function newProjRow(): HTMLElement {
   const errEl = el('p', { class: 'v2-npj-err', hidden: !newErr, text: newErr });
   const inp = el('input', {
     class: 'v2-npj-in', type: 'text', maxlength: '120', value: newDraft,
-    placeholder: '새 프로젝트 이름을 적고 Enter', 'aria-label': '새 프로젝트 이름',
+    placeholder: NEW_COPY[newKind].ph, 'aria-label': NEW_COPY[newKind].label,   // #2043 — 이 줄은 프로젝트 · 리스트 · 폴더를 다 만든다
     oninput: (e: any) => { newDraft = e.target.value; if (newErr) { newErr = ''; errEl.hidden = true; } },
     onkeydown: (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); closeNew(); return; }
@@ -863,7 +1705,7 @@ function newProjRow(): HTMLElement {
   }) as HTMLInputElement;
   const line = el('div', { class: 'v2-npj-l' + (newSending ? ' sending' : '') },
     el('span', { class: 'v2-car none', 'aria-hidden': 'true' }),
-    glyph('folder', 'v2-pj-ic'),
+    newKind === 'list' ? icon('list', 'v2-pj-ic') : glyph(newKind === 'folder' ? 'folder-open' : 'folder', 'v2-pj-ic'),
     inp);
   const create = async (): Promise<void> => {
     const name = newDraft.trim();
@@ -875,6 +1717,21 @@ function newProjRow(): HTMLElement {
     //  다시 그리지도 않는다: 여기서 redraw 하면 치던 칸이 새로 나면서 포커스가 끊긴다. 흐리게만 알린다.
     line.classList.add('sending');
     try {
+      if (newKind === 'list' || newKind === 'folder') {
+        // #2043 — 폴더 · 리스트 렌즈의 ＋. 만든 것을 목록에 **낙관적으로** 세운다(다음 폴링이 정본으로 덮는다 — 그때까지 이 줄이 선다).
+        const isList = newKind === 'list';
+        const made = await api(isList ? '/api/ui/v6/project-lists' : '/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name }) })
+          .then((d: any) => (d && (isList ? d.list : d.folder)) || d);
+        if (!made || !made.id) throw new Error(isList ? '생성 응답에 리스트가 없어요' : '생성 응답에 폴더가 없어요');
+        if (last) {
+          if (isList) { const ls = last.data.lists || (last.data.lists = []); if (!ls.some((l) => l.id === made.id)) ls.push(made); }
+          else { const fs = last.data.folders || (last.data.folders = []); if (!fs.some((f) => f.id === made.id)) fs.push(made); }
+        }
+        newSending = false; newOpen = false; newDraft = ''; newErr = '';
+        if (isList) location.hash = '#/projects2/l/' + made.id;   // 새 리스트의 보드로 — 빈 보드가 '만들어졌다'를 말한다
+        redraw();
+        return;
+      }
       const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name }) }).then((d: any) => (d && d.project) || d);
       if (!np || !np.id) throw new Error('생성 응답에 프로젝트가 없어요');
       newSending = false; newOpen = false; newDraft = ''; newErr = '';
@@ -910,7 +1767,18 @@ function navRow(): HTMLElement {
   //  맥이 아니면 **Alt+K** 를 적는다: Ctrl+K 도 먹지만 터미널이 포커스면 안 먹는다(그건 셸의 kill-line 이다).
   //  '거의 되는 키'를 적어 두면 안 될 때 고장으로 읽히므로, 화면에는 **어디서나 되는 쪽**을 적는다.
   const mac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '');
+  //  #2016 — 레일 여닫기는 슬랙처럼 **맨 윗줄 맨 왼쪽**의 패널 아이콘이다. 데스크톱(navHost 있음)은 창 맨 윗줄의
+  //   그 자리를 mobile.menuBtn 이 이미 차지하고 있어(같은 아이콘, 같은 동작) 여기선 브라우저에서만 그린다.
+  const railHid = !!hooks.railHidden?.();
+  const railBtn = hooks.onToggleRail && !hooks.navHost?.()
+    ? el('button', {
+        class: 'v2-navb v2-railtg' + (railHid ? ' hid' : ''), type: 'button', 'aria-expanded': String(!railHid),
+        title: (railHid ? '레일 펼치기' : '레일 숨기기') + ' — ⌘⇧S', 'aria-label': railHid ? '레일 펼치기' : '레일 숨기기',
+        onclick: () => hooks.onToggleRail?.() },
+        icon('panel', 'v2-navb-ic'))
+    : null;
   return el('div', { class: 'v2-side-nav' },
+    railBtn,
     navArrow('back', st.back, hooks.onBack),
     navArrow('fwd', st.forward, hooks.onForward),
     el('button', {
@@ -927,9 +1795,32 @@ function navRow(): HTMLElement {
 export function markNav(st: { back: boolean; forward: boolean }): void {
   const row = document.querySelector('.v2-side-nav');
   if (!row) return;
-  const btns = Array.from(row.querySelectorAll<HTMLButtonElement>('.v2-navb'));
+  //  #2016 — 맨 왼쪽의 레일 여닫기(.v2-railtg)는 뒤로·앞으로가 아니다. 같은 붓(.v2-navb)을 쓰지만 여기서 빼지 않으면
+  //   첫 단추로 잡혀 '뒤로 갈 곳 없음'에 함께 꺼진다(실측: disabled 가 붙어 눌러도 아무 일도 안 났다).
+  const btns = Array.from(row.querySelectorAll<HTMLButtonElement>('.v2-navb:not(.v2-railtg)'));
   if (btns[0]) btns[0].disabled = !st.back || !hooks.onBack;
   if (btns[1]) btns[1].disabled = !st.forward || !hooks.onForward;
+}
+
+/**
+ * 묶는 축 토글(#2033) — 머리글의 아이콘 하나(폴더 + 그 아래 들여쓴 줄 둘 = '프로젝트 밑으로 묶기').
+ *  칩 두 개(「세션」「프로젝트」)로 밖에 내지 않은 이유: 세로 한 줄을 먹는다 — #1954 가 「새 작업」 큰 버튼을
+ *  머리글의 ＋ 로 줄인 것과 같은 사유다(목록이 세로를 더 쓰는 게 이 화면의 이득이다).
+ */
+function axisBtn(): HTMLElement {
+  return el('button', {
+    class: 'v2-axisbtn' + (groupProj ? ' on' : ''), type: 'button', 'aria-pressed': String(groupProj),
+    'aria-label': groupProj ? '세션으로 풀어 보기' : '프로젝트로 묶어 보기',
+    title: groupProj ? '지금은 프로젝트로 묶는 중 — 눌러서 세션으로 풀기' : '프로젝트로 묶기 — 같은 목록을 프로젝트별로 접어 봅니다',
+    onclick: () => {
+      groupProj = !groupProj;
+      try { if (groupProj) localStorage.setItem(GROUP_STORE, 'proj'); else localStorage.removeItem(GROUP_STORE); }
+      catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
+      redraw();
+    } },
+    //  그림은 하나다 — 켜짐/꺼짐은 **채움**이 말한다(켜지면 파랑을 채운다). 두 얼굴로 바꾸면
+    //   '지금 이 상태'인지 '누르면 이렇게 된다'인지가 애매해진다.
+    icon('group', 'v2-axisbtn-ic')) as HTMLElement;
 }
 
 function findBtn(): HTMLElement {
@@ -945,7 +1836,16 @@ function findBtn(): HTMLElement {
 }
 
 // [필터] 버튼 + 팝오버 — 조작부는 여기 다 모인다. 목록 표면에는 필터가 없다(켜져 있으면 요약 한 줄만).
-function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLElement {
+/**
+ * 필터 — 보기 조건. **구역마다 새 방식을 만들지 않는다**(#2033 상민님: "ui 가 너무 많으면 혼란해").
+ *  종전엔 상태 거르기가 세 구역에서 세 가지였다: 홈 없음 · [AI 세션] 인라인 칩 · [프로젝트] 이 팝오버.
+ *  칩을 걷고 이 하나로 모았다 — 칩의 근거였던 주석 두 줄이 이미 낡아 있었기 때문이다:
+ *   ⓐ "홈에서는 반대로 [필터] 안에 둔다" → 홈엔 필터가 **없다**(비교 대상이 사라졌다).
+ *   ⓑ "이 구역의 첫 질문은 '무엇이 나를 기다리나'" → #2016 2차가 레일에 **[확인할 것] 구역**을
+ *      배지까지 달아 만들었다. 그 질문은 이제 레일이 상시로 답한다.
+ *  ⚠ `scope` = 프로젝트 범위(내 것만·완료 포함)를 보여 주나. [AI 세션]엔 그 개념이 없어 끈다.
+ */
+function filterBtn(activeN: number, liveAll: Sess[], doneCount: number, scope = true): HTMLElement {
   const counts = new Map<string, number>();
   for (const s of liveAll) counts.set(s.stateKey, (counts.get(s.stateKey) || 0) + 1);
   if (stateFilter && !counts.has(stateFilter)) counts.set(stateFilter, 0);   // 켜 둔 상태가 0이 돼도 끌 수 있게 남긴다
@@ -974,9 +1874,11 @@ function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLEle
       opt(!stateFilter, '전체', '', null, () => { stateFilter = null; redraw(); }),
       ...keys.map((k) => opt(stateFilter === k, stLabel(k), String(counts.get(k) || 0), dotCls(k),
         () => { stateFilter = stateFilter === k ? null : k; redraw(); })),
-      el('div', { class: 'v2-flt-k', text: '범위' }),
-      opt(mineOnly, '내 프로젝트만', '', null, () => { mineOnly = !mineOnly; saveFlag(MINE_KEY, mineOnly); redraw(); }),
-      opt(showDone, '완료 프로젝트도 보기', doneCount ? String(doneCount) : '', null, () => { showDone = !showDone; saveFlag(DONE_KEY, showDone); redraw(); }),
+      ...(scope ? [
+        el('div', { class: 'v2-flt-k', text: '범위' }),
+        opt(mineOnly, '내 프로젝트만', '', null, () => { mineOnly = !mineOnly; saveFlag(MINE_KEY, mineOnly); redraw(); }),
+        opt(showDone, '완료 프로젝트도 보기', doneCount ? String(doneCount) : '', null, () => { showDone = !showDone; saveFlag(DONE_KEY, showDone); redraw(); }),
+      ] : []),
       el('div', { class: 'v2-flt-foot' },
         el('button', { class: 'btn-text', type: 'button', text: '전부 지우기', onclick: () => { stateFilter = null; mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); redraw(); } }),
         el('button', { class: 'btn-text', type: 'button', text: '닫기', onclick: () => { filterOpen = false; redraw(); } }))));
@@ -990,14 +1892,14 @@ function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLEle
   return wrap;
 }
 // 필터가 켜져 있을 때만 나오는 한 줄 — 무엇으로 걸러 보고 있는지 + 한 번에 끄기.
-function filterSummary(n: number): HTMLElement {
+function filterSummary(n: number, scope = true): HTMLElement {
   const bits: string[] = [];
   if (stateFilter) bits.push(stLabel(stateFilter) + ' 세션만');
-  if (mineOnly) bits.push('내 프로젝트만');
-  if (showDone) bits.push('완료 포함');
+  if (scope && mineOnly) bits.push('내 프로젝트만');
+  if (scope && showDone) bits.push('완료 포함');
   return el('div', { class: 'v2-flt-sum' }, el('span', { text: bits.join(' · ') }),
     el('button', { class: 'btn-text', type: 'button', text: '지우기', title: `필터 ${n}개를 끕니다`,
-      onclick: () => { stateFilter = null; mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); redraw(); } }));
+      onclick: () => { stateFilter = null; if (scope) { mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); } redraw(); } }));
 }
 
 // 트리(프로젝트 ▸ 세션) — 검색은 여기만 다시 그린다(입력칸 포커스를 잃지 않게).
@@ -1077,7 +1979,8 @@ function renderTree(rowsIn?: Row[]): void {
   if (hiddenDone && (!splitting || allOpen)) kids.push(el('button', { class: 'v2-tree-more', type: 'button', text: `숨긴 완료 프로젝트 ${hiddenDone}개 보기`, onclick: () => { showDone = true; saveFlag(DONE_KEY, true); redraw(); } }));
   // 아카이브·휴지통(#1851) — 트리 맨 아래 두 행(검색·필터 중에도 남는다: 치워 둔 것을 찾는 길이 렌즈에 가려지면 안 된다).
   //  발치에 고정해 두었으면 여기엔 없다(render() 가 트리 밖에 세운다).
-  if (!binsPinned) kids.push(el('div', { class: 'v2-bins' }, ...binRows(last.data)));
+  //  #2016 — 새 셸(구역이 있는 쪽)에서는 발치 도크가 아카이브·휴지통을 든다. 트리 안에 또 세우면 같은 문이 둘이다.
+  if (!binsPinned && !hooks.section) kids.push(el('div', { class: 'v2-bins' }, ...binRows(last.data)));
   treeEl.replaceChildren(...kids);
 }
 
@@ -1227,6 +2130,9 @@ function newSessBtn(projectId: number): HTMLElement {
 //  고정된 것은 늘 보이고, 아닌 것은 그 행에 손을 얹었을 때만 보인다.
 /** 앱 인스턴스 고정 — 사람이 고른 것만 맨 위로. 자동으로 뭘 올려 두지 않는다(#1954). */
 export function isAppPinned(key: string): boolean { return appPinned.has(key); }
+
+/** 문패 카드가 쓰는 사람 지도 — side.ts 가 이미 한 번 당겨 둔 것을 레일도 함께 쓴다(두 번 당기지 않는다). */
+export function sidePeople(): Record<string, any> { return people; }
 function toggleAppPin(key: string): void {
   if (appPinned.has(key)) appPinned.delete(key); else appPinned.add(key);
   saveSet(APP_PIN_STORE, appPinned);

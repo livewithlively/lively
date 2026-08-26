@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, type SideInstance } from './side.js';
+import { bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
@@ -27,21 +27,23 @@ import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
+import { drawRail, mountRail, railIsHidden, railSection, toggleRail, type RailSection } from './rail.js';   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
-import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
+import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
+import { mountAppRuntimeView } from './app-runtime.js';
+import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 import { startNotificationBanners } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다
 import { startLiveSync } from './live-sync.js';   // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
-import { activeNavKey } from './shell-surfaces.js';
-import { ensureSingletonAppInstance } from './app-instance.js';   // #1891 — inbox 앱 인스턴스 멱등 확보   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
 const SOLO = new URLSearchParams(location.search).get('solo') === '1';
 let root: HTMLElement | null = null;
+let railEl: HTMLElement | null = null;    // #2016 좌측 끝 레일 — 구역 넷·워크스페이스·최근 앱·[앱]·[나]
 let sideEl: HTMLElement | null = null;
 let centerEl: HTMLElement | null = null;
 let asideEl: HTMLElement | null = null;
@@ -58,7 +60,7 @@ let suppressHash = 0;                    // 탭 전환이 만든 hashchange 를 
 const projViews = new Map<ShellTab, { destroy(): void; newSession?(): void }>();
 // 그 탭의 셸이 **어느 프로젝트로** 마운트됐나(#1834 후속). 세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데,
 //  종전엔 그 상태가 그대로 굳어 문패가 '프로젝트 없는 세션'이 되고 그 셸의 세션 목록도 남의 것이 됐다.
-//  20초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
+//  8초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
 const shellProject = new Map<ShellTab, number>();
 function dropProjView(tab: ShellTab): void { const pv = projViews.get(tab); if (pv) { pv.destroy(); projViews.delete(tab); } }
 function setTabAppInstance(tab: ShellTab, id: string, appId: string): void {
@@ -184,6 +186,7 @@ export async function bootV2(): Promise<void> {
   root = document.getElementById('v2-root');
   if (!root) return;
   root.hidden = false;
+  watchStaleShell();   // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
   // 릴레이 복귀 알림(#1881) — CP OAuth 릴레이(슬랙·노션)가 테넌트로 돌려보낼 때 ?slack=ok|slack_error= /
   //  ?notion=ok|notion_error= 를 붙인다(해시 라우트 #/connect/<앱> 은 그대로 열린다). 여기서 한 번 알리고
   //  주소에서 지운다 — 안 지우면 새로고침·탭 복제 때마다 같은 토스트가 또 뜬다.
@@ -198,7 +201,6 @@ export async function bootV2(): Promise<void> {
     }
     if (seen) { const rest = q.toString(); history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash); }
   }
-  watchStaleShell();   // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
   // #1891 — 받은 알림 배너. 화면과 무관하게 돈다(「확인할 것」 안에서만 띄우면 보고 있어야 알림이 뜬다).
   //  데스크톱 앱 안에서는 스스로 물러난다 — 그 앱이 트레이에서 같은 사건을 이미 띄운다(#1842).
   startNotificationBanners();
@@ -209,6 +211,8 @@ export async function bootV2(): Promise<void> {
   root.classList.toggle('solo', SOLO);
   root.replaceChildren(
     ...(SOLO ? [] : [
+      //  #2016 — 레일이 사이드바 **왼쪽**에 한 칸 더 선다. 폭은 접힘/펼침 두 값뿐이라 손잡이가 없다.
+      railEl = el('nav', { class: 'v2-rail', 'aria-label': '구역' }),
       sideEl = el('nav', { class: 'v2-side stu-side', 'aria-label': '탐색' }),
       makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 316, min: 220, max: 560, grow: 1, label: '사이드바 너비' }),
     ]),
@@ -228,21 +232,38 @@ export async function bootV2(): Promise<void> {
     //   뒤로·앞으로·검색이 통째로 사라지고 대신 세션명이 떴다 — 같은 자리가 두 얼굴을 갖는다.
     //   ☰ 를 창 줄 맨 왼쪽으로 데려와 한 줄로 합친다(모바일 바는 그 단추를 잃고 서랍 기계만 남는다).
     if (titlebar) titlebar.host.prepend(mobile.menuBtn);
-    //  넓은 폭에서 그 ☰ 는 **사이드바를 접었다 편다**(좁은 폭에선 mobile.ts 가 서랍을 여닫는다 — 그쪽 핸들러는
-    //   isMobile() 가드가 있어 여기서 겹치지 않는다). 접힘은 브라우저에 기억한다 — 매번 다시 접게 하지 않는다.
-    const SIDE_OFF = 'lively_v2_side_off';
-    const applySideOff = (off: boolean): void => {
-      root!.classList.toggle('side-off', off);
-      mobile!.menuBtn.setAttribute('aria-expanded', String(!off));
-      mobile!.menuBtn.title = off ? '사이드바 펼치기' : '사이드바 접기';
-    };
-    try { if (localStorage.getItem(SIDE_OFF) === '1') applySideOff(true); } catch { /* 못 읽어도 펼친 채로 시작 */ }
+    //  넓은 폭에서 그 ☰ 는 이제 **레일을 여닫는다**(#2016 원준 2026-08-25: "지금 사이드바는 닫을 수는 없는
+    //   상태로 길이 조절 정도로 고정"). 종전엔 사이드바를 통째로 접었는데(`side-off`), 그러면 목록이 사라져
+    //   되찾는 길을 또 만들어야 했다 — 접히는 것은 레일 하나뿐이고 사이드바는 폭 손잡이로만 조절한다.
+    //   좁은 폭에선 mobile.ts 가 서랍을 여닫는다(그쪽 핸들러는 isMobile() 가드가 있어 여기서 겹치지 않는다).
     mobile.menuBtn.addEventListener('click', () => {
       if (window.matchMedia(MOBILE_MQ).matches) return;   // 좁은 폭 = 서랍(mobile.ts 담당)
-      const off = !root!.classList.contains('side-off');
-      applySideOff(off);
-      try { localStorage.setItem(SIDE_OFF, off ? '1' : '0'); } catch { /* 못 남겨도 이번 화면은 된다 */ }
+      toggleRail();
+      syncRailBtn();
     });
+    //  ⌘⇧S — 슬랙의 '워크스페이스 스위처 표시'와 같은 자리(레일 펼치기). 입력 중에는 가로채지 않는다.
+    document.addEventListener('keydown', (e) => {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
+      if ((e.key || '').toLowerCase() !== 's') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      toggleRail();
+      syncRailBtn();
+    });
+    //  즐겨찾기는 [프로젝트] 착지를 정하는 재료다(#2061) — 구역에 들어간 뒤 당기면 첫 진입이 답을 못 기다린다. 미리 당겨 둔다.
+    loadFavLists();
+    mountRail(railEl!, {
+      counts: railCounts,
+      activeKey: () => activeKey(),
+      openApps: openAppKeys,
+      onSection: (sec, o) => {
+        drawSide();
+        if (o.navigate) location.hash = sectionRoute(sec);
+      },
+      onLayout: () => { drawSide(); syncRailBtn(); },
+    });
+    syncRailBtn();
   }
 
   // 실험장(#1719 원준): 크롬식 탭 줄은 걷는다 — 사이드바(프로젝트·열린 세션)가 이미 그 역할을 한다.
@@ -255,6 +276,7 @@ export async function bootV2(): Promise<void> {
     onActivate: (tab, fresh) => {
       // 활성 탭의 라우트가 곧 주소다 — 다르면 맞춘다(이 hashchange 는 라우터가 무시).
       if (location.hash !== tab.route && '#' + location.hash !== tab.route) { suppressHash++; location.hash = tab.route; }
+      noteHomeRoute(tab.route);   // 이 탭이 곧 보이는 화면이다 — [홈] 구역이면 그 자리를 적어 둔다(#2061)
       applyTabChrome(tab);
       if (fresh) void renderRoute(tab);
       else markActive(routeKey(tab.route));
@@ -348,7 +370,8 @@ export async function bootV2(): Promise<void> {
   bindOmniKey();
   //  화면으로 돌아오면 즉시 최신으로 — 다음 틱을 기다리면 그 몇 초가 '멈춘 화면'으로 보인다.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
+    if (document.hidden || !tabsApi) return;
+    markViewedSessionSeen();   // #1954 3차 — 숨은 동안엔 안 찍었다(보고 있는 게 아니므로). 돌아온 지금부터 다시.
     void syncShell();
   });
   // 사이드바 상태 — 라이브 세션은 자주 바뀐다. 8초 폴링(#1954: 20초는 '방금 끝난 것'이 한참 뒤에야 떠서
@@ -357,7 +380,11 @@ export async function bootV2(): Promise<void> {
   //  ⚠ #2041 로 **폴링이 유일한 시계가 아니게 됐다**(아래 startLiveSync) — 그래도 이 틱은 그대로 둔다:
   //   스트림이 끊긴 동안 이어받아야 하고, 스트림이 안 미는 변화(세션 생성·이름·프로젝트·앱 인스턴스)는
   //   여전히 여기서만 보인다.
-  setInterval(() => { if (document.hidden) return; void syncShell(); }, 8000);
+  setInterval(() => {
+    if (document.hidden || !tabsApi) return;
+    markViewedSessionSeen();   // #1954 3차 — 보고 있는 동안 열람 도장을 갱신(안 찍으면 초록점이 안 꺼진다)
+    void syncShell();
+  }, 8000);
   // ★ 배너가 뜨는 그 순간 목록도 그 순간을 본다 (#2041 상민님: "알림 오는 순간 사이드바를 보면 아직
   //  바뀌기 전으로 보인다"). 게이트웨이는 전이가 일어난 자리에서 이미 그 사실을 밀고 있고(#1842),
   //  데스크톱 앱의 배너는 그걸 5ms 만에 받는다 — 사이드바만 8초 폴링으로 뒤늦게 따라잡고 있었다.
@@ -370,13 +397,11 @@ export async function bootV2(): Promise<void> {
  * 한 판 맞추기 — 서버를 다시 읽고 사이드바·탭·열려 있는 화면을 그 값으로 맞춘다.
  *  8초 폴링 · 실시간 스트림 · 화면 복귀 셋이 **같은 이 함수**를 부른다. 경로마다 다른 것을 맞추면
  *  곧 "어떤 때는 따라오고 어떤 때는 안 따라오는" 화면이 된다(#2041 이 고친 어긋남이 정확히 그 종류다).
+ *  ⚠ 열람 도장(markViewedSessionSeen, #1954 3차)은 **여기 두지 않는다** — 그건 '사람이 보고 있다'는
+ *   뜻이라 호출부(8초 틱·화면 복귀)의 사실이다. 스트림이 민 갱신에까지 찍으면 초록점이 저절로 꺼진다.
  */
 async function syncShell(): Promise<void> {
   if (!tabsApi) return;
-  //  #1954 3차 — 보고 있는 동안 열람 도장을 갱신한다. 여기 두는 이유: 8초 폴링·실시간 스트림(#2041)·화면 복귀가
-  //   **전부 이 함수 하나**를 부른다. 갱신을 못 하면 초록점(작업 완료)이 안 꺼진다(markViewedSessionSeen 주석).
-  //   서버를 읽기 **전에** 찍는다 — 그래야 바로 뒤 loadData 가 방금 찍은 값을 함께 받아 온다.
-  markViewedSessionSeen();
   await loadData();
   if (!tabsApi) return;
   drawSide(); tabsApi.paint();
@@ -390,7 +415,7 @@ async function syncShell(): Promise<void> {
     const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
     const s = sid ? findSess(sid) : null;
     // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
-    //  재시작 창에 세션을 못 찾으면 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
+    //  세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
     //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
     //  뿌리가 여기였다. 목록에서 그 세션을 **찾았을 때만** 판단하므로 빈 판에 흔들리지 않는다.
     if (s) {
@@ -461,6 +486,21 @@ let lastLogs: any[] = [];
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
   const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
   const wantDeepLogs = Date.now() - logsDeepAt > LOGS_DEEP_TTL_MS;   // #2022 후속 — 오래된 지난 세션이 사라지지 않게 이따금 전량
+  // ── 앱 인스턴스는 **먼저 도착하는 대로** 반영한다(#2022) ──────────────────────────
+  //  종전엔 아래 Promise.all 이 여섯 축을 한 덩어리로 묶어, 세션 목록이 느린 판에서 **이미 도착한**
+  //  인스턴스 정본까지 함께 기다렸다. 그런데 그 정본이 바로 세션 이름·소속 폴백의 재료다(sessFallback) —
+  //  즉 폴백이 가장 필요한 판(콜드 스타트 = "껐다 오랜만에 들어감")에 재료가 없었다.
+  //  E2E 실측(2026-08-26, dev): 세션 목록 두 축을 막고 첫 그림을 그리자, 서버가 이름을 아는 세션인데도
+  //  좌측 행이 `세션 c368bd` 로 떨어졌다. 값·배선 테스트는 전부 통과하는데 화면만 틀린 자리였다.
+  //  ⇒ 도착 즉시 얹고, **아직 아무 세션도 못 그린 판에서만** 다시 그린다(매 폴링마다 덧그리지 않게).
+  const instsP = listAppInstances().catch(() => null);
+  void instsP.then((rows) => {
+    if (!Array.isArray(rows)) return;
+    appInstances = rows;
+    if (data.sessions.length) return;   // 이미 목록이 있는 판이면 아래 정상 경로가 그린다
+    drawSide();
+    tabsApi?.paint();
+  });
   const [pj, lists0, folders0, insts0, live, logs] = await Promise.all([
     // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
     //  archived=include(#1851) — 보관한 프로젝트도 받는다: 그 아래 세션이 '프로젝트 없는 세션'으로 떨어지지 않게, 그리고
@@ -470,7 +510,9 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
     wantProj ? api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || null).catch(() => null) : Promise.resolve(null),
     wantProj ? api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || null).catch(() => null) : Promise.resolve(null),
     // #1883 좌측 목록의 정본 — 창(탭)이 아니라 **살아 있는 앱 인스턴스**(#1780 v2.2 §2.2·§2.3).
-    listAppInstances().catch(() => null),
+    //  #2022 — **먼저 도착하는 대로 반영한다**(아래 instsP): 이 축이 세션 이름·소속 폴백의 재료라
+    //  느린 축과 함께 기다리면 정작 필요한 판(첫 그림)에 없다.
+    instsP,
     // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
     api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
     api('/api/ui/v6/sessions?limit=' + (wantDeepLogs ? LOGS_DEEP : LOGS_SHALLOW)).then((d) => { noteTruncated(!!(d && d.truncated)); return (d && d.sessions) || []; }).catch(() => null),
@@ -735,6 +777,7 @@ async function onHash(): Promise<void> {
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
   dropProjView(cur);                                       // 프로젝트 화면(#1757)의 리브 턴 폴링도
   cur.route = hash;
+  noteHomeRoute(hash);     // 같은 탭이 다른 화면이 되는 길 — 여기도 적어야 [홈] 이 그 자리를 안다(#2061)
   tabsApi.routed(cur);     // 제목·noAside 를 새 라우트로 먼저 — 그 뒤에 크롬을 맞춘다(거꾸로 하면 no-aside 가 한 화면 늦게 따라온다, 실측 #1777)
   applyTabChrome(cur);
   await renderRoute(cur);
@@ -916,8 +959,9 @@ async function renderRoute(tab: ShellTab): Promise<void> {
           instanceId: instance.id,
         });
         if (seq !== tab.seq) { frame.destroy(); return; }
-        tab.center.replaceChildren(frame.root);
-        tab.appView = frame;
+        const view = instance.app.runtime ? mountAppRuntimeView(instance, frame) : frame;
+        tab.center.replaceChildren(view.root);
+        tab.appView = view;
       }
       tab.aside.replaceChildren();
       markActive('app-instance:' + instance.app_id);
@@ -933,6 +977,19 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         tabsApi?.routed(tab);
         void renderRoute(tab);
         return;
+      }
+      //  스코프 없는 프로젝트 주소(#/app/projects2)로 들어오면 구역 첫 화면으로 보낸다(#2061) — 레일을 눌러 오든
+      //   새로고침·북마크로 오든 같은 자리에 서야 한다. replace 라 뒤로가기에 빈 칸을 남기지 않는다.
+      //   즐겨찾기를 아직 모르면 projLandingRoute 가 이 주소를 그대로 돌려주므로 아무 일도 안 일어난다(무한루프 없음).
+      if (segs[1] === 'projects2' && !segs[2]) {
+        const landing = projLandingRoute();
+        if (landing !== '#/app/projects2') {
+          tab.route = landing;   // ⚠ renderRoute 는 location 이 아니라 tab.route 를 읽는다 — 이걸 안 바꾸면 같은 주소로 다시 들어와 무한루프다
+          if (tabsApi?.current() === tab && location.hash !== landing) { suppressHash++; location.replace(location.pathname + location.search + landing); }
+          tabsApi?.routed(tab);
+          void renderRoute(tab);
+          return;
+        }
       }
       const a = appByKey(segs[1]);
       if (a) noteAppUse(a.key);   // 홈 한 줄이 읽는 '최근에 연 앱'(#1954)
@@ -954,7 +1011,15 @@ async function renderRoute(tab: ShellTab): Promise<void> {
     } else if (CLASSIC_PAGES[page]) {
       const a = appByKey(CLASSIC_PAGES[page]);
       if (a) noteAppUse(a.key);
-      tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
+      // #2043 — 같은 앱의 액자가 이미 서 있으면 새로 싣지 않고 **안의 주소만** 바꾼다. 셸 사이드바의 폴더 · 리스트 렌즈가
+      //  리스트마다 #/projects2/l/<id> 로 보내는데, 누를 때마다 클래식 앱을 처음부터 다시 띄우면 한 박자씩 멈춘다.
+      //  액자 안 클래식 라우터는 hashchange 로 스코프를 다시 잡는다(projects/state.ts pjvSyncUrl 주석). 못 닿으면 종전대로 새로 싣는다.
+      const cur = tab.center.querySelector<HTMLIFrameElement>('iframe.v2-frame');
+      let reused = false;
+      if (cur && a && cur.dataset.appKey === a.key && cur.contentWindow) {
+        try { cur.contentWindow.location.hash = '#/' + raw; reused = true; } catch { reused = false; }
+      }
+      if (!reused) tab.center.replaceChildren(appFrame(raw, a ? a.title : page));
       markActive('app:' + (a ? a.key : ''));
     } else {
       renderHome(tab.center, data, homeDraft(tab));
@@ -1264,7 +1329,9 @@ function sideInstances(): SideInstance[] {
     if (ap) return a.rank - b.rank || b.at - a.at;           // 확인 필요 → 작업 완료 → 작업 중
     if (a.group !== b.group) return (dayOf.get(b.group!) || 0) - (dayOf.get(a.group!) || 0);   // 날짜 내림차순
     return b.at - a.at;
-  }).map(({ at: _at, rank: _rank, ...row }) => row);
+  //  ⚠ at 은 벗기지 않는다(#2033) — 프로젝트 축이 **그룹의 순서**를 이 얼린 값으로 잰다.
+  //   rank 는 status.key 로 되살릴 수 있어 안 내보낸다.
+  }).map(({ rank: _rank, ...row }) => row);
   lastSideRows.clear();
   for (const r of out) lastSideRows.set(r.id, r);
   return out;
@@ -1302,8 +1369,10 @@ function refreshSideNow(): void {
 }
 
 /** 좌측 행을 누르면 그 대상에 창을 붙인다 — 이미 열려 있으면 그 창으로, 아니면 새 창. */
-function openSideRow(key: string): void {
-  const route = sideRowRoute.get(key);
+function openSideRow(key: string, fallback?: string): void {
+  //  홈 목록의 행은 제 표(sideRowRoute)에 주소가 있다. [AI 세션]·[확인할 것]처럼 **홈에 없는 행**은
+  //   자기 주소를 들고 오므로 그걸 쓴다(#2033) — 없으면 눌러도 아무 데도 안 가는 행이 된다.
+  const route = sideRowRoute.get(key) || fallback;
   if (!route || !tabsApi) return;
   const hit = tabsApi.find(route);
   if (hit) tabsApi.activate(hit); else tabsApi.add(route);
@@ -1326,7 +1395,63 @@ function openProjectPage(projectId: number): void {
   refreshSideNow();
 }
 
+// ── 레일(#2016)이 쓰는 값들 ──────────────────────────────────────────────────
+//  ⚠ 배지의 뜻은 사이드바와 **같은 셈**이어야 한다 — 레일이 4 라 하고 [확인할 것] 목록이 3 이면
+//   어느 쪽이 거짓말인지 화면이 말하지 못한다. inbox 는 side.ts render() 와 같은 식이다.
+function railCounts(): { inbox: number; busy: number; projects: number } {
+  const live = data.sessions.filter((s) => s.live && s.alive && !isTrashedSess(s));
+  const inbox = live.filter((s) => s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned)).length;
+  const busy = live.filter((s) => s.stateKey === 'busy').length;
+  const projects = new Set(live.map((s) => s.projectId).filter((x): x is number => !!x)).size;
+  return { inbox, busy, projects };
+}
+/** 최근 앱 아이콘 아래 '실행 중' 점 — 지금 창이 열려 있는 앱 키. */
+function openAppKeys(): Set<string> {
+  const out = new Set<string>();
+  for (const tab of (tabsApi ? tabsApi.tabs : [])) {
+    const seg = parseRoute(tab.route).segs;
+    if (seg[0] === 'app' && seg[1]) out.add(seg[1]);
+    else if (seg[0] && CLASSIC_PAGES[seg[0]]) out.add(CLASSIC_PAGES[seg[0]]);
+  }
+  return out;
+}
+// ── [홈] 구역은 **두고 간 자리**를 기억한다 (#2061) ────────────────────────────
+//  홈에서 세션을 열어 여러 번 시키다가 [위키] 로 갔다 돌아오면 **빈 '새 작업'** 이 떴다. 그 세션은 죽지 않았다 —
+//  탭이 살아 있는데 탭 줄을 안 그리므로(TABS_OFF) 보이지 않을 뿐이라, 사람은 사이드바 열몇 줄에서 그걸 다시 찾아야 했다.
+//  구역은 주소가 아니라 **사람이 고르는 장소**다(#2016 rail.ts). 장소로 돌아왔으면 두고 간 것이 거기 있어야 한다.
+//  세션 주소로 착지하면 라우터가 그 세션 탭을 **되살리는 게 아니라 다시 켠다**(onHash 의 tabsApi.activate) —
+//  대화·스크롤·폴링이 그대로 이어진다. 그래서 '이어서 보인다'가 말 그대로 성립한다.
+//  ⚠ 새로 시작하는 길은 그대로다 — 사이드바 머리줄 [새 작업](.v2-app-new)이 늘 빈 홈을 연다.
+const HOME_ROUTE_STORE = 'lively_v2_home_route';
+let homeRoute = (() => { try { return localStorage.getItem(HOME_ROUTE_STORE) || ''; } catch (_) { return ''; } })();
+/** 지금 보는 화면이 [홈] 구역의 것이면 그 자리를 적어 둔다. 구역은 사람이 고를 때만 바뀌므로 이 판정이 곧 '어느 장소인가'다. */
+function noteHomeRoute(route: string): void {
+  if (railSection() !== 'home' || !route || route === homeRoute) return;
+  homeRoute = route;
+  try { localStorage.setItem(HOME_ROUTE_STORE, route); } catch (_) { /* 이번 화면은 된다 */ }
+}
+/** [홈] 착지 — 두고 간 세션이 아직 있으면 그 세션으로, 아니면 종전대로 새 작업 화면. */
+function homeLandingRoute(): string {
+  //  이어 주는 것은 **세션뿐**이다. 빈 홈·앱 창까지 되살리면 [홈]이 '아무거나 마지막 화면'이 돼 뜻이 흐려진다.
+  const segs = parseRoute(homeRoute).segs;
+  if (segs[0] !== 's') return '#/';
+  return findSess(decodeURIComponent(segs[1] || '')) ? homeRoute : '#/';   // 사라진 세션이면 빈 홈(죽은 자리로 보내지 않는다)
+}
+function sectionRoute(sec: RailSection): string {
+  //  [프로젝트]는 구역 첫 화면이 **즐겨찾기 맨 위 리스트**다(#2061) — 전체 프로젝트 보드는 매일 여는 자리가 아니다.
+  //   주소로 착지시키는 이유: 이 사이드바의 그 줄도 눌린 것으로 서고(projScopeKey), 새로고침·북마크도 같은 자리로 돌아온다.
+  return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? projLandingRoute() : sec === 'wiki' ? '#/app/knowledge' : homeLandingRoute();
+}
+/** ☰ 의 뜻이 바뀌었다(사이드바 접기 → 레일 여닫기) — 툴팁·aria 도 그 뜻으로 맞춘다. */
+function syncRailBtn(): void {
+  if (!mobile) return;
+  const hid = railIsHidden();
+  mobile.menuBtn.setAttribute('aria-expanded', String(!hid));
+  mobile.menuBtn.title = (hid ? '레일 펼치기' : '레일 숨기기') + ' — ⌘⇧S';
+}
+
 function drawSide(): void {
+  drawRail();
   if (!sideEl) return;
   if (!sideTreeHost || !sideEl.contains(sideTreeHost)) {
     sideTreeHost = el('div', { class: 'stu-panel-tree' }) as HTMLElement;
@@ -1359,6 +1484,10 @@ function drawSide(): void {
     //  창 맨 윗줄이 우리 것이면 뒤로·앞으로·검색을 거기 건다 — 상단 탭이 빠져 비어 있던 자리다(#1954).
     navHost: () => (titlebar ? titlebar.host : null),
     onPinChanged: () => { orderPin.clear(); },   // 고정이 바뀌면 자물쇠를 푼다 — 새 묶음에서 자리를 다시 잡아야 한다
+    //  #2016 — 사이드바가 무엇을 그릴지는 레일이 고른 구역이 정한다(홈 · AI 세션 · 프로젝트 · 위키).
+    section: railSection,
+    onToggleRail: () => { toggleRail(); syncRailBtn(); },
+    railHidden: railIsHidden,
   });
 }
 

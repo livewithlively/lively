@@ -9,10 +9,11 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
+import { codexChatMode } from "./codex-chat-mode.js";   // #2055 codex 대화 런타임 선택
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
@@ -485,6 +486,20 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.json({ results, applied: results.filter((r) => r.status === "applied").length });
   }));
 
+  // 대화를 **터미널로 넘긴다**(#2055) — app-server 가 쥔 스레드를 놓아 주고, 사람이 pane 에서 이어가게 한다.
+  //  왜 이 통로가 필요한가: codex 는 스레드당 writer 가 하나라, 우리 대화창이 쥔 대화는 pane 의 `codex resume` 이
+  //  못 연다(active writer). 놓아 주는 유일한 방법이 **프로세스 종료**다(thread/unsubscribe 로는 안 풀린다 — 실측).
+  //  돌려주는 thread_id 로 화면이 `codex resume <id>` 를 안내하면 대화가 안 끊긴다.
+  app.post("/api/ui/terminal/sessions/:id/codex-chat/release", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const { releaseCodexChat } = await import("./harness-io/codex-chat-runtime.js");
+    const r = releaseCodexChat(req.params.id);
+    res.setHeader("Cache-Control", "no-store");
+    // 런타임이 없으면(이미 넘겼거나 tmux 모드) 그것도 정상 응답이다 — 화면이 '넘길 게 없다'를 구분할 수 있게 released 로 알린다.
+    res.json({ ok: true, released: !!r, thread_id: r?.threadId ?? null });
+  }));
+
   app.post("/api/ui/terminal/sessions/:id/prompt", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     const text = String(((req.body ?? {}) as Record<string, unknown>).text ?? "");
@@ -498,6 +513,38 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       throw new HttpError(403, "세션에 접근할 수 없습니다");
     }
     if (!nodeId) {
+      // ── codex app-server 모드(#2055) — 글자를 화면에 '넣는' 대신 **프로토콜로 보낸다**. ──
+      //  아웃박스+send-keys 는 pane 화면을 읽어 타이밍을 맞추는 경로라, 로그인·대화상자에 걸리면 배달이 지연되거나
+      //  조용히 사라진다. app-server 는 turn/start 의 **응답으로 성공/실패가 온다** — 애매함이 없다.
+      //  ⚠ 실패하면 반드시 종전 경로로 폴백한다(app-server 는 공식 문서상 experimental). 폴백했다는 사실은
+      //   응답에 실어 화면·게이트가 볼 수 있게 한다 — 조용히 접으면 "왜 느리지"의 원인을 아무도 모른다.
+      const harnessKey = await sessionHarnessKey(req.params.id);
+      if (codexChatMode({ harness: harnessKey }) === "app-server") {
+        const { sendCodexChat, CodexChatUnavailable } = await import("./harness-io/codex-chat-runtime.js");
+        try {
+          const dir = await sessionDir(req.params.id);
+          const osUser = await sessionOsUser(req.params.id);
+          const st = await getSessionState(req.params.id);
+          const r = await sendCodexChat({
+            sessionId: req.params.id, text, cwd: dir, osUser,
+            threadId: st?.claude_session_id || null,
+          });
+          // 스레드 id 를 세션 상태에 남긴다 — 게이트웨이가 재시작해도 **같은 대화**로 이어 붙는다
+          //  (없으면 새 스레드가 열려 사람이 보던 대화와 갈린다). 화면의 기록 조회도 이 값을 쓴다.
+          if (r.threadId && r.threadId !== st?.claude_session_id) {
+            await setClaudeSessionId(req.params.id, r.threadId, uid).catch(() => false);
+          }
+          res.json({ ok: true, delivered: true, transport: "app-server", thread_id: r.threadId });
+          return;
+        } catch (e) {
+          if (!(e instanceof CodexChatUnavailable)) throw e;
+          logger.warn({ id: req.params.id, err: (e as Error).message }, "codex app-server 전송 실패 — 종전 경로로 폴백");
+          const { enqueuePrompt } = await import("../sessions/session-outbox.js");
+          const q = await enqueuePrompt(req.params.id, text);
+          res.json({ ok: true, queued: true, outbox_id: q.id, seq: q.seq, transport: "outbox", fallback: (e as Error).message });
+          return;
+        }
+      }
       // 이 박스 세션 — 아웃박스(#1753)로. 곧바로 send-keys 하지 않는다: 로그인·대화상자에 멈춘 세션이면 글자가 조용히
       //  사라진다(실측). 배달자가 입력창을 확인하고 넣고, 트랜스크립트 에코로 delivered 를 확정한다. 화면은 seq 로 상태를 따라간다.
       const { enqueuePrompt } = await import("../sessions/session-outbox.js");
@@ -864,6 +911,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
       if (gone === false) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
       if (gone === null) throw new HttpError(409, "그 컴퓨터(노드)가 응답하지 않아 세션 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하세요.");
+      // #2022 — 게이트웨이가 **노드 스냅샷에서 발견한** 행은 workspace 좌표를 모른다(그 컴퓨터에서 직접 띄운 세션).
+      //  아래 폴백(root_key || "shared")이 그걸 추측하면 그 세션이 **엉뚱한 폴더에서** 되살아난다 —
+      //  AI 가 다른 프로젝트의 파일을 자기 작업 폴더로 알고 만지게 된다. 모르면 모른다고 말하고 멈춘다.
+      if (st.discovered && !st.root_key) {
+        throw new HttpError(409, "이 세션은 그 컴퓨터에서 직접 만들어진 것이라 되살릴 작업 폴더 좌표를 모릅니다 — 그 컴퓨터에서 이어서 시작해 주세요.");
+      }
       const resumeId = st.claude_session_id || null;
       const input: CreateInput = {
         label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
