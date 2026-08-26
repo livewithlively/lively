@@ -1156,6 +1156,9 @@ export function renderOnboarding(host, ctx = {}) {
                             localStorage.setItem(DONE_KEY, '1');
                         }
                         catch (e) { }
+                        // 끝냈다는 표식은 **서버가 정본**(#2039) — localStorage 는 이 브라우저에만 남아, 기기를 바꾸면 처음 설정이
+                        //  다시 떴다. 실패해도 화면은 그대로 간다(다음 부팅에 서버 판정이 받아 준다).
+                        void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ onboarded: true }) }).catch(() => { });
                         ctx.onDone && ctx.onDone();
                         // 요약 화면은 두지 않는다 — 정리해 달라고 했으면 정리된 워크스페이스를 보여 주는 게 맞다(원준님 2026-08-25).
                         msgLiv('정리했어요. 워크스페이스로 모시겠습니다.');
