@@ -99,24 +99,28 @@
 .pn-state.todo { color: var(--muted); }
 .pn-title { margin: 0; min-width: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
 /* 한 줄 문패에서는 제목이 더 이상 왼쪽 끝이 아니다(눈썹이 앞에 선다) — 끝을 맞추던 음수 여백을 거둔다. */
-.pn-door-l .pn-title-btn, .pn-door-l .pn-title-in { margin-left: 0; }
-/* 제목 = 프로젝트 이름을 고치는 자리(원준 2026-08-24). 세션 제목(.sc-title-btn)과 같은 문법 —
-   평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 연필이 떠서 '고칠 수 있다'고 말한다. */
-.pn-title-btn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin-left: -8px; padding: 2px 8px;
-  border: 0; border-radius: 9px; background: none; font: inherit; color: inherit; text-align: left; cursor: text; }
+.pn-door-l .pn-title-btn { margin-left: 0; }
+/* 제목 = **프로젝트 전체 화면으로 가는 링크**(원준 2026-08-26). 종전엔 눌러서 이름을 고치는 자리였다 —
+   이름 편집은 사이드바 줄 더블클릭으로 갔고, 여기는 링크의 문법을 그대로 쓴다(커서 pointer, 밑줄 대신 은은한 판). */
+.pn-title-btn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 2px 8px;
+  border: 0; border-radius: 9px; background: none; font: inherit; color: inherit; text-align: left;
+  text-decoration: none; cursor: pointer; }
 .pn-title-btn .pn-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.pn-title-pen { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linejoin: round;
-  opacity: 0; transition: opacity .12s ease; }
+/* 프로젝트 아이콘 — 이 굵은 글자가 세션 이름이 아니라 **프로젝트 이름**임을 말한다. 글자보다 조용하게. */
+.pn-title-ic { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round; }
 .pn-title-btn:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
-.pn-title-btn:hover .pn-title-pen, .pn-title-btn:focus-visible .pn-title-pen { opacity: 1; }
+.pn-title-btn:hover .pn-title-ic { stroke: var(--blue); }
+.pn-title-btn:hover .pn-title-t { color: var(--blue); }
 .pn-title-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.pn-title-in { width: min(46ch, 100%); margin-left: -8px; padding: 2px 8px; border: 1px solid var(--blue); border-radius: 9px;
-  background: var(--bg); font: inherit; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; color: var(--ink); }
-.pn-title-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
-.pn-title-in:disabled { opacity: .6; }
 .pn-door-r { display: flex; align-items: center; gap: 8px; flex: none; }
-.pn-faces { display: inline-flex; margin-right: 4px; }
+/* 얼굴 줄(#2116) — **[공유] 바로 왼쪽에 상주**한다(구글 문서와 같은 자리). 겹쳐 세워 자리를 아끼되
+   첫 얼굴은 왼쪽으로 새지 않게 여백을 되돌린다. 최대 3명, 넘으면 마지막 칸이 `+N` 이 된다(panes.ts FACE_MAX). */
+.pn-faces { display: inline-flex; align-items: center; margin-right: 4px; }
 .pn-face { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--bg); margin-left: -6px; }
+.pn-faces > .pn-face:first-child { margin-left: 0; }
+.pn-face-more { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+  background: var(--bg-tint); color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: -.02em; }
 
 /* ── 아이콘·잔글씨 ── */
 .pn-i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
