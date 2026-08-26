@@ -674,7 +674,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
-    local: null, localOs: null,   // #1879 내 컴퓨터 설치 — 'done'|'later' · 고른 OS('mac'|'win')
+    local: null,            // #1879 내 컴퓨터 설치 — 'done'|'getting'|'later'
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
     drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
@@ -700,11 +700,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *   한 줄 안에 주소가 한 번만 들어가면 나머지는 스크립트가 안다.
    */
   const GW = String(location.origin || '').replace(/\/+$/, '');
-  /** 이 컴퓨터가 윈도우인가 — 사람이 고른 값이 있으면 그게 이긴다(브라우저 추정은 틀릴 수 있다). */
-  function localOs() {
-    if (S.localOs === 'win' || S.localOs === 'mac') return S.localOs;
-    return desktopOs() === 'win' ? 'win' : 'mac';   // 리눅스·판정불가는 맥 문구로 — 명령줄이 같다(sh)
-  }
+  /* ⚠ OS 토글을 두지 않는다. 사람이 고르게 하면 **고른 값과 실제로 받아지는 파일이 어긋날 수 있다** —
+   *  내려받기는 desktopLink()→pickAsset() 이 `desktopOs()` 로 고르지, 사람이 고른 값을 보지 않기 때문이다.
+   *  그래서 문구도 같은 판정을 쓴다. 셋으로 가른다(둘로 접으면 리눅스 사람에게 .dmg 라고 말하게 된다):
+   *   mac / win — 받아질 파일 이름을 그대로 말한다.
+   *   other(리눅스·판정불가) — desktopLink() 가 null 이라 [앱 받기]가 **릴리스 페이지**를 연다. 그러니
+   *    "파일이 내려받아진다"고 말하면 안 된다. 없는 자리를 가리키지 않는다. */
   const kbd = (t) => `<kbd class="ob-kbd">${esc(t)}</kbd>`;
   /** 복사 단추가 붙은 명령 한 줄. **사람이 손으로 타이핑하게 두지 않는다** — 오타 한 글자가 곧 막힘이다. */
   function cmdBox(cmd) {
@@ -1129,8 +1130,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      */
     local: {
       html: () => {
-        const win = localOs() === 'win';
-        const cmd = win ? `irm ${GW}/cli.ps1 | iex` : `curl -fsSL ${GW}/cli | sh`;
+        const os = desktopOs();                       // 'mac' | 'win' | 'linux' | null
+        const win = os === 'win';
+        const cmd = win ? `irm ${GW}/cli.ps1 | iex` : `curl -fsSL ${GW}/cli | sh`;   // 리눅스도 sh
+        const step1 = win
+          ? '아래 [앱 받기]를 누르면 <b>Lively-Setup.exe</b> 가 내려받아져요. 내려받은 파일을 두 번 눌러 설치하세요.'
+          : os === 'mac'
+            ? '아래 [앱 받기]를 누르면 <b>Lively.dmg</b> 가 내려받아져요. 내려받은 파일을 두 번 누르고, 나온 라이블리 아이콘을 [응용 프로그램]으로 끌어다 놓으세요.'
+            : '아래 [앱 받기]를 누르면 받는 곳이 새 창으로 열려요. 거기서 내 컴퓨터에 맞는 파일을 골라 받으시면 됩니다.';
         return qHead('local',
           '평소 쓰시던 그 터미널에 회사 맥락을 넣어 드릴게요.',
           '앱을 받으시면 앱이 알아서 깝니다.',
@@ -1138,7 +1145,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           + `<div class="ob-ins-list">
               <div class="ob-ins" data-n="1">
                 <b class="ob-ins-t">앱을 받아서 엽니다</b>
-                <p class="ob-ins-p">아래 [앱 받기]를 누르면 ${win ? '<b>Lively-Setup.exe</b>' : '<b>Lively.dmg</b>'} 가 내려받아져요. ${win ? '내려받은 파일을 두 번 눌러 설치하세요.' : '내려받은 파일을 두 번 누르고, 나온 라이블리 아이콘을 [응용 프로그램]으로 끌어다 놓으세요.'}</p>
+                <p class="ob-ins-p">${step1}</p>
               </div>
               <div class="ob-ins" data-n="2">
                 <b class="ob-ins-t">앱이 시키는 대로 [승인] 한 번</b>
