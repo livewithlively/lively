@@ -52,6 +52,12 @@ export interface HttpToolPreset {
   //  L2 여야 한다: ① per-user 자격 필수(통합 폴백 금지 — 사칭 방지) ② 채널 정책이 'write' 로 판정(발송 fail-closed).
   //  A 어댑터는 classifyToolLevel 이 동사(send)로 자동 분류하지만 B 는 행의 level 이 전부라 여기서 명시한다.
   level?: "L0" | "L1" | "L2";
+  // 상류가 페이지네이션을 제공하지 않는 목록 도구의 **명시 선언**(#1881). 값 = 그렇게 둬도 되는 이유.
+  //  왜 필드로 두나: 응답 256KiB 상한 때문에 목록 도구는 URL 에 개수·필드 상한을 박는 것이 규칙이고, 테스트가 그걸
+  //  강제한다. 그런데 상류에 따라 **줄 파라미터 자체가 없는** 경우가 있다(피그마 REST 는 projects·files·comments 에
+  //  페이지 파라미터가 없다). 그때 도구 이름에서 'list' 를 빼 규칙을 피해 가면 규칙은 통과하고 위험만 남는다.
+  //  그래서 회피 대신 선언하게 한다 — 리뷰어가 이유를 읽고, 응답이 커지는 상류가 새로 들어오면 여기서 걸린다.
+  no_paging?: string;
 }
 
 export interface HttpToolPresetGroup {
@@ -74,6 +80,7 @@ const DRIVE = "https://www.googleapis.com/drive/v3";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1";
 const CAL = "https://www.googleapis.com/calendar/v3";
 const SLACK = "https://slack.com/api";
+const FIGMA = "https://api.figma.com/v1";
 
 // ── 슬랙을 B 로 내린 이유 (#1881, 2026-08-25) ──────────────────────────────────────────────────
 //  슬랙 공식 MCP(mcp.slack.com)는 **마켓플레이스 등록 앱·내부 앱만** 쓸 수 있다("unlisted apps are prohibited from
@@ -376,6 +383,106 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
         }, ["channel", "text", "post_at"]),
         pii_scrub: false,
         level: "L2",
+      },
+    ],
+  },
+  // ── 피그마를 B 로 내린 이유 (#1881, 2026-08-26) ──────────────────────────────────────────────
+  //  피그마엔 A(게이트웨이 MCP 프록시) 경로가 **아예 없다**. mcp.figma.com 은 Figma MCP 카탈로그에 오른
+  //  클라이언트(VS Code·Cursor·Claude Code…)만 받고, DCR 은 registration_endpoint 를 광고하면서도 실제 등록을
+  //  403 으로 막는다(2026-08-26 실측 2회). 그래서 MCP 면은 레인 C(멤버 클라 직접등록, mcp-server-presets 의 figma)로
+  //  내리고, **게이트웨이가 쓸 수 있는 유일한 피그마 표면이 이 REST API** 다.
+  //  ★ 이 프리셋이 없으면 figma_token 칸은 죽은 표면이다 — 붙여넣기 칸(me-logins·admin-credentials)은 이미 있었지만
+  //   그 토큰을 소비하는 도구가 0개였다(#1881 실측). 이 묶음이 그 칸에 처음으로 의미를 준다.
+  //  ★ 그리고 이건 **매니지드 웹 세션·헤드리스 크론에서 도는 유일한 피그마 도구 면**이다(레인 C 는 개인 PC 전용).
+  //  ★ 코멘트가 여기 있는 이유: 피그마 MCP 도구 25개에 코멘트·파일열거가 0개다. 디자인 맥락(결정·피드백·QA 지적)은
+  //   전부 코멘트에 쌓이므로, 수집 축(#1881 F5)도 이 엔드포인트를 쓴다.
+  //  인증: PAT(figd_…) 를 X-Figma-Token 헤더로 — CRED_KINDS.figma_token 의 meta(auth_header/token_prefix:"")가
+  //   이미 그 형식을 지정하고 있어 authHeader() 가 Bearer 대신 이 헤더를 만든다. 별도 배선 불요.
+  //  ⚠ 파일 열거(teams/projects)는 **PAT 라서** 쓸 수 있다 — 같은 엔드포인트가 공개 OAuth 앱에는 금지돼 있다
+  //   ("The projects endpoints cannot be used with public OAuth apps"). 공개 앱(F3) 도입 후에도 이 두 도구는
+  //   PAT 경로에만 남는다. team_id 는 API 로 얻을 수 없어 사람이 팀 URL 에서 복사해 넣어야 한다.
+  {
+    key: "figma", label: "Figma (REST API)", auth_kind: "figma_token",
+    hosts: ["api.figma.com"], scope: "items", level: "L0",
+    tools: [
+      {
+        name: "figma_get_me",
+        title: "피그마 내 계정",
+        description: "연결된 내 Figma 계정 정보(이름·이메일·핸들). 연결이 살아 있는지 확인할 때 먼저 부른다.",
+        url: `${FIGMA}/me`,
+        input_schema: obj({}),
+        pii_scrub: true,
+      },
+      {
+        name: "figma_get_file_comments",
+        title: "피그마 파일 코멘트 읽기",
+        description:
+          "디자인 파일에 달린 코멘트를 모두 읽는다(디자이너·기획·QA 가 남긴 결정과 피드백이 여기 쌓인다). " +
+          "fileKey 는 파일 주소에서 딴다 — figma.com/design/<fileKey>/<이름> 의 가운데 토막. " +
+          "답글은 parent_id 로 부모를 가리키고(1단), resolved_at 이 있으면 이미 결론이 난 스레드다.",
+        url: `${FIGMA}/files/{fileKey}/comments`,
+        input_schema: obj({
+          fileKey: S("파일 키 — figma.com/design/<fileKey>/… 주소의 가운데 토막"),
+          as_md: S("코멘트 본문을 마크다운으로 받으려면 'true'"),
+        }, ["fileKey"]),
+        pii_scrub: true,
+        no_paging: "피그마 코멘트 API 에 페이지 파라미터가 없다(reactions 만 커서 지원) — 파일 하나의 코멘트는 텍스트라 통상 작다. 아주 오래된 대형 파일에서 잘리면 수집 경로(웹훅 증분)로 받는다.",
+      },
+      {
+        name: "figma_get_file",
+        title: "피그마 파일 구조 읽기",
+        description:
+          "파일의 문서 구조(페이지·프레임 이름과 배치)를 읽는다. 코멘트가 가리키는 화면이 무엇인지 확인할 때 쓴다. " +
+          "⚠ 전체 노드 트리는 매우 크다 — 기본 depth=2(페이지와 최상위 프레임)로 받고, 더 깊이 필요하면 " +
+          "figma_get_file_nodes 로 특정 노드만 판다.",
+        url: `${FIGMA}/files/{fileKey}?depth=2`,
+        input_schema: obj({
+          fileKey: S("파일 키"),
+          depth: I("트리 깊이(기본 2 — 크게 잡으면 응답 상한 256KiB 를 넘겨 잘린다)"),
+          branch_data: S("브랜치 메타까지 받으려면 'true'"),
+        }, ["fileKey"]),
+        pii_scrub: false,
+      },
+      {
+        name: "figma_get_file_nodes",
+        title: "피그마 특정 노드 읽기",
+        description:
+          "파일 안의 특정 노드(프레임·컴포넌트)만 골라 읽는다. ids 는 쉼표로 구분한 노드 id — " +
+          "코멘트의 위치 정보나 figma_get_file 결과에서 얻는다. 파일 전체를 받지 않아 응답이 작다.",
+        url: `${FIGMA}/files/{fileKey}/nodes?depth=2`,
+        input_schema: obj({
+          fileKey: S("파일 키"),
+          ids: S("노드 id 목록(쉼표 구분, 예: 1:2,1:5)"),
+          depth: I("트리 깊이(기본 2)"),
+        }, ["fileKey", "ids"]),
+        pii_scrub: false,
+      },
+      {
+        name: "figma_list_team_projects",
+        title: "피그마 팀 프로젝트 목록",
+        description:
+          "팀 안의 프로젝트(폴더) 목록. teamId 는 프로그램으로 얻을 수 없어 사람이 팀 주소에서 복사해 넣어야 한다 — " +
+          "figma.com/files/team/<teamId>/… 의 team 뒤 숫자. ⚠ 이 도구는 개인 액세스 토큰으로만 동작한다.",
+        url: `${FIGMA}/teams/{teamId}/projects`,
+        input_schema: obj({
+          teamId: S("팀 id — figma.com/files/team/<teamId>/… 주소에서 복사"),
+        }, ["teamId"]),
+        pii_scrub: false,
+        no_paging: "피그마 projects API 에 페이지 파라미터가 없다 — 응답은 프로젝트 id·name 배열이라 팀이 커도 작다.",
+      },
+      {
+        name: "figma_list_project_files",
+        title: "피그마 프로젝트 파일 목록",
+        description:
+          "프로젝트(폴더) 안의 파일 목록 — 파일 이름과 key 를 얻는다. 여기서 얻은 key 로 figma_get_file_comments 를 부른다. " +
+          "projectId 는 figma_list_team_projects 결과에서 온다.",
+        url: `${FIGMA}/projects/{projectId}/files`,
+        input_schema: obj({
+          projectId: S("프로젝트 id(figma_list_team_projects 결과의 id)"),
+          branch_data: S("브랜치 메타까지 받으려면 'true'"),
+        }, ["projectId"]),
+        pii_scrub: false,
+        no_paging: "피그마 project files API 에 페이지 파라미터가 없다 — 파일당 몇 필드뿐이라 폴더가 커도 작다. branch_data 를 켜면 커지므로 기본은 끈 채로 둔다.",
       },
     ],
   },
