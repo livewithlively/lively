@@ -950,7 +950,18 @@ function sideRowFace(route: string): Omit<SideInstance, 'id' | 'active'> {
     const app = appByKey(appKey);
     if (app) { icon = app.icon; meta = app.desc; }
   }
-  return { title: (!page || page === 'dashboard') ? '새 작업' : info.title, icon, state: info.state, meta, project };
+  //  남의 세션이면 그 주인(#2026) — 이 목록의 세션 줄기(sideInstances ①)는 `!s.owned` 로 남의 것을 거르지만,
+  //   **열어 둔 창**(③)은 소유자를 보지 않는다(보고 있는 화면이 목록에 없으면 그게 고장이므로). 그래서 한 번 열어 본
+  //   남의 세션이 목록에 남는데 행에는 표식이 없어 "내가 만들지도 않은 게 왜 뜨지"가 됐다(상민님 2026-08-26).
+  //   판정은 서버가 준 owned 를 그대로 쓴다 — 이름은 side 의 people 맵이 다듬으므로 여기선 폴백만 싣는다.
+  const owner = ((): SideInstance['owner'] => {
+    if (page !== 's' || !segs[1]) return null;
+    const s = findSess(decodeURIComponent(segs[1]));
+    if (!s || s.owned) return null;
+    const id = String((s.raw && (s.raw.owner ?? s.raw.owner_id)) || '');
+    return id ? { id, name: String((s.raw && s.raw.owner_name) || id) } : null;
+  })();
+  return { title: (!page || page === 'dashboard') ? '새 작업' : info.title, icon, state: info.state, meta, project, owner };
 }
 
 //  행 키 → 그 행을 여는 route · 그 행이 쥔 AppInstance. 활성화·닫기가 이 두 표로 되돌아간다.
@@ -1108,11 +1119,8 @@ function sideInstances(): SideInstance[] {
   }
   for (const inst of appInstances) {                                 // ② 세션 아닌 활성 인스턴스
     if (inst.status !== 'active') continue;
+    if (inst.subject_kind === 'session') continue;                   // 세션 인스턴스는 아래 ④ 에서 그 세션 행에 붙인다
     const at = Date.parse(String(inst.updated_at || inst.created_at || '')) || 0;
-    if (inst.subject_kind === 'session') {
-      if (inst.subject_ref && rows.has('sess:' + inst.subject_ref)) sideRowInstance.set('sess:' + inst.subject_ref, inst.id);
-      continue;
-    }
     sideRowInstance.set('inst:' + inst.id, inst.id);
     put('inst:' + inst.id, '#/i/' + encodeURIComponent(inst.id), at);
   }
@@ -1120,6 +1128,16 @@ function sideInstances(): SideInstance[] {
     const key = sideRowKey(tab.route);
     put(key, tab.route, rows.has(key) ? rows.get(key)!.at : now - i, rows.get(key)?.status?.key, true);
   });
+  //  ④ 세션 인스턴스를 그 세션 행에 붙인다 — **반드시 ③ 뒤**여야 한다(#2026).
+  //   종전엔 ② 안에서 `rows.has('sess:…')` 로 붙였는데, 그 시점에 rows 에 있는 세션은 ① 이 세운 **내 세션뿐**이었다.
+  //   남의 세션(③ 열어 둔 창으로만 서는 행)은 매핑을 못 받아 × 가 closeAppInstance 를 통째로 건너뛰었고,
+  //   그래서 창은 닫혀도 서버의 AppInstance 는 active 로 남았다(실측 2026-08-26: 상민님 계정에 원준님 세션을
+  //   가리키는 active 인스턴스 2건이 그렇게 쌓여 있었다). 행이 다 선 뒤에 붙이면 두 경우가 같은 규칙을 탄다.
+  for (const inst of appInstances) {
+    if (inst.status !== 'active' || inst.subject_kind !== 'session' || !inst.subject_ref) continue;
+    const key = 'sess:' + inst.subject_ref;
+    if (rows.has(key)) sideRowInstance.set(key, inst.id);
+  }
 
   // 살아 있는 행만 자물쇠에 남긴다 — 안 그러면 닫힌 세션의 옛 자리가 영영 쌓인다.
   for (const k of [...orderPin.keys()]) if (!rows.has(k)) orderPin.delete(k);
@@ -1148,12 +1166,14 @@ function sideInstances(): SideInstance[] {
  *  ⚠ 세션·worker 는 죽이지 않는다(#1780 v2.2 §2.3) — 돌던 일은 그대로 돌고, 상태가 바뀌면 목록에 다시 올라온다.
  */
 async function closeSideRow(key: string): Promise<void> {
-  const route = sideRowRoute.get(key);
   const instanceId = sideRowInstance.get(key);
   const row = lastSideRows.get(key);
   dismissed[key] = row?.status?.key || '';
   saveDismissed();
-  if (route && tabsApi) { const hit = tabsApi.find(route); if (hit) tabsApi.close(hit); }
+  //  창은 **그 행의 것을 전부** 닫는다(#2026). find() 는 첫 하나만 잡는데, 같은 화면이 두 탭에 열려 있으면
+  //   (복원 잔재·옛 버그가 만든 짝 — tabs.ts 복원 dedupe 주석) 하나만 닫혀 행이 그대로 남는다 —
+  //   누른 사람 눈엔 "× 를 눌렀는데 안 없어진다"다. 판정은 행 키(sideRowKey)로 한다 — 쿼리만 다른 같은 화면도 함께 닫힌다.
+  if (tabsApi) for (const t of [...tabsApi.tabs]) if (sideRowKey(t.route) === key) tabsApi.close(t);
   if (instanceId) {
     try { await closeAppInstance(instanceId); appInstances = appInstances.filter((x) => x.id !== instanceId); }
     catch (_) { toast('앱을 닫지 못했습니다'); }

@@ -272,6 +272,12 @@ export interface SideInstance {
   status?: { key: string; label: string } | null;
   /** 사람이 맨 위로 고정했는가(#1954). */
   pinned?: boolean;
+  /** 남의 세션이면 그 주인(#2026). 내 것이면 null — 전부 내 얼굴이면 아무것도 구분하지 못한다.
+   *  왜 필요한가: 이 목록의 세션 줄기는 `!s.owned` 로 남의 세션을 거르지만, **열어 둔 창**은 소유자를 보지 않는다
+   *   (보고 있는 화면이 목록에 없으면 그게 고장이므로 — sideInstances ③). 그래서 남의 세션이 여기 설 길이 있는데
+   *   행에는 그걸 말해 주는 표식이 없어 "내가 만들지도 않은 게 왜 뜨지"가 됐다(상민님 2026-08-26).
+   *   프로젝트 트리 행은 이미 같은 얼굴을 달고 있다(sessRow) — 두 목록이 같은 사실을 같은 방식으로 말한다. */
+  owner?: { id: string; name: string } | null;
 }
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
@@ -389,11 +395,16 @@ function instanceIcon(inst: SideInstance): SVGElement {
  */
 /** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다. */
 function appRowEl(inst: SideInstance): HTMLElement {
+  //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
+  const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
   return el('div',
-    { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : ''), role: 'listitem', 'data-instance': inst.id },
-    el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.title, 'aria-current': inst.active ? 'page' : null,
+    { class: 'v2-app-inst' + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
+    el('button', { class: 'v2-app-inst-open', type: 'button', title: inst.owner ? `${inst.title}\n${ownerNm}의 세션 — 내가 열어 둬서 목록에 있습니다` : inst.title, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
+    //  얼굴은 **둘째 줄 왼쪽 여백**에 선다 — 첫 줄 아이콘 바로 아래 빈자리라 새로 폭을 먹지 않고,
+    //   첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다.
+    inst.owner ? personFace(inst.owner.id, 'v2-app-inst-face', ownerNm) : null,
     //  상태 = **점 하나**. 글자는 줄을 먹어 제목이 잘렸다(#1954 2차) — 색으로 가르고 이름은 툴팁·읽어주기에 남긴다.
     //  작업 중(파랑·깜빡임) · 확인 필요(노랑) · 작업 완료(초록). 확인한 완료는 점이 없다.
     inst.status
