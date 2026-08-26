@@ -18,12 +18,15 @@
   </header>
 
   <main>
-    <!-- 게이트웨이 주소 — 아직 모를 때만 -->
+    <!-- 워크스페이스 주소 — 아직 모를 때만.
+         ⚠ 문구가 '회사 게이트웨이'였을 때 매니지드 사용자는 넣을 값을 몰랐다(#2044): 그들에겐 '관리자'가 없고
+         아는 주소는 로그인 페이지(app.lvly.io)뿐인데 거기엔 게이트웨이가 없다. 두 경로를 나란히 적는다. -->
     <section id="gw-card" class="card hidden">
-      <h2 id="gw-title">회사 게이트웨이 주소</h2>
-      <p class="hint" id="gw-hint">관리자에게 받은 주소를 넣으면 브라우저로 로그인합니다.</p>
+      <h2 id="gw-title">워크스페이스 주소</h2>
+      <p class="hint" id="gw-hint">라이블리 클라우드는 <b>app.lvly.io</b> 홈의 «데스크톱 앱·CLI 로 연결» 에서 복사하고,
+        회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요.</p>
       <div class="row">
-        <input id="gw" type="url" placeholder="https://..." spellcheck="false" />
+        <input id="gw" type="text" placeholder="예: acme.app.lvly.io" spellcheck="false" autocapitalize="off" autocorrect="off" />
         <button id="gw-go" class="primary">연결</button>
       </div>
       <!-- 앱이 무엇을 실행하는지 숨기지 않는다 — 설치는 원격 코드 실행이다. -->

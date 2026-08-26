@@ -15,6 +15,8 @@ import {
 } from "./protocol.js";
 import { authNodeToken, getNode, touchNode, type OrgNode } from "./store.js";
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
+import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
+import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
 
 // 웹터미널 close 코드 확장(#869) — 로컬 4410(session-gone)/4403(no-access) 체계에 노드 사유를 더한다.
 export const CLOSE_NODE_OFFLINE = 4462; // 노드 미연결(꺼짐·절전·네트워크) — 클라는 재시도 유지(일시 상태일 수 있음)
@@ -43,6 +45,10 @@ interface NodeConn {
   //  그 사이 도착한 req 를 "미지원"으로 오판해 떨구면 안 되기 때문(구 노드도 기준선은 전부 한다).
   caps: Set<string>;
   harnesses: string[];   // #1713 — 이 노드가 실제로 띄울 수 있는 하네스(hello 보고 · 미보고면 기준선)
+  // 이 연결이 속한 테넌트(공유 게이트웨이). 업그레이드 헤더에서 한 번 정하고 연결 수명 내내 고정한다 —
+  //  WS 이벤트 핸들러는 Express 를 안 타므로 요청 컨텍스트가 없다(아래 inTenant 가 이 값으로 다시 연다).
+  //  단일 테넌트 배포에서는 null(종전 그대로 컨텍스트 없이 돈다).
+  tenant: TenantContext | null;
 }
 
 // 노드 세션 스냅샷 — 노드가 끊겨도 유지해 '오프라인 노드의 세션'을 계속 보여준다.
@@ -53,6 +59,24 @@ interface NodeConn {
 //  '이 세션은 없어졌다'로 오판해 다른 세션으로 갈아타는 사고까지 났다(web/v2/panes-parts.ts 주석).
 //  조회는 계속 이 캐시가 답한다(동기 API 유지 — 목록 API 가 조회마다 DB 를 때리지 않는다).
 interface NodeState { ts: number; sessions: SessionInfo[]; name: string; kind: string; owner: string; res: NodeResources | null }
+
+// ── 인메모리 맵의 **테넌트 스코프** (#2044) ─────────────────────────────────
+// 판정(나눠야 하는가·어느 스코프인가)은 순수 모듈 registry-scope.ts 가 소유한다 — 사연·불변식은 거기 머리말.
+//  여기서는 그 키로 맵을 읽고 쓰기만 한다.
+
+/** 맵 키 — 인자 없이 부르면 **지금 요청의 테넌트**, `t` 를 주면 그 테넌트(WS 이벤트는 요청 밖이라 연결이 들고 있다). */
+function keyOf(nodeId: string, t?: TenantContext | null): string {
+  return scopeKey(nodeId, (t === undefined ? currentTenant() : t)?.id ?? null);
+}
+/** 지금 스코프의 항목만 훑는다 — `[노드id, 값]`. 자가호스팅에선 전부가 한 스코프라 종전과 같다. */
+function* inScope<V>(m: Map<string, V>): Generator<[string, V]> {
+  const p = keyOf("");   // `<스코프><SEP>` = 이 스코프의 접두사
+  for (const [k, v] of m) if (k.startsWith(p)) yield [k.slice(p.length), v];
+}
+/** 이 연결의 테넌트로 컨텍스트를 연다 — WS 핸들러는 Express 를 안 타 컨텍스트가 없다(단일 테넌트면 그대로 호출). */
+function inTenant<T>(c: NodeConn, fn: () => T): T {
+  return c.tenant ? withTenant(c.tenant, fn) : fn();
+}
 
 const conns = new Map<string, NodeConn>();
 const states = new Map<string, NodeState>();
@@ -70,9 +94,10 @@ export async function hydrateNodeStates(): Promise<number> {
   const rows = await loadNodeStates();
   let n = 0;
   for (const r of rows) {
-    if (states.has(r.nodeId)) continue;
-    states.set(r.nodeId, { ts: r.reportedAt, sessions: r.sessions, name: r.name, kind: r.kind, owner: r.owner, res: r.res });
-    persisted.set(r.nodeId, { digest: sessionsDigest(r.sessions), at: r.reportedAt });
+    const k = keyOf(r.nodeId);
+    if (states.has(k)) continue;
+    states.set(k, { ts: r.reportedAt, sessions: r.sessions, name: r.name, kind: r.kind, owner: r.owner, res: r.res });
+    persisted.set(k, { digest: sessionsDigest(r.sessions), at: r.reportedAt });
     n++;
   }
   logger.info({ nodes: n, sessions: rows.reduce((a, r) => a + r.sessions.length, 0) }, "노드 세션 스냅샷 복구(정본 org_node_state)");
@@ -86,19 +111,19 @@ export interface NodePublic { id: string; name: string; kind: string; owner: str
 export function liveNodes(): NodePublic[] {
   const out: NodePublic[] = [];
   const seen = new Set<string>();
-  for (const [id, c] of conns) {
-    const st = states.get(id);
+  for (const [id, c] of inScope(conns)) {
+    const st = states.get(keyOf(id));
     out.push({ id, name: c.node.name, kind: c.node.kind, owner: c.node.owner_member, online: true, lastStateTs: st?.ts ?? null, sessions: st?.sessions.length ?? 0 });
     seen.add(id);
   }
-  for (const [id, st] of states) {
+  for (const [id, st] of inScope(states)) {
     if (seen.has(id)) continue;
     out.push({ id, name: st.name, kind: st.kind, owner: st.owner, online: false, lastStateTs: st.ts, sessions: st.sessions.length });
   }
   return out;
 }
 
-export function nodeOnline(id: string): boolean { return conns.has(id); }
+export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
 
 // 이 노드의 에이전트가 게이트웨이 서빙 번들보다 낡았나 — **에러 번역용**(#1541). op 미지원(caps)과 다른 축이다:
 //  op 은 있는데(기준선 create 등) 그 구현이 새 규약(sessionDir 등)을 몰라 "허용되지 않은 루트" 류의 낯선 오류를
@@ -117,8 +142,8 @@ export async function nodeAgentStale(id: string): Promise<boolean> {
 export interface NodeSessionInfo extends SessionInfo { node: { id: string; name: string; online: boolean } }
 export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
   const out: NodeSessionInfo[] = [];
-  for (const [id, st] of states) {
-    const online = conns.has(id);
+  for (const [id, st] of inScope(states)) {
+    const online = conns.has(keyOf(id));
     for (const s of st.sessions) {
       if (!nodeSessionVisible(s, viewer)) continue;
       out.push({
@@ -138,7 +163,7 @@ export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
 //  방금 만든 세션은 잠깐 안 보일 수 있는데, 그때는 로컬로 폴백해 `has-session` 이 정직하게 실패한다
 //  — 못 찾은 걸 '로컬에 있다'고 단정해 엉뚱한 세션에 키를 흘리는 일은 없다(id 가 겹칠 수 없으므로).
 export function nodeOfSession(sessionId: string): string | null {
-  for (const [id, st] of states) if (st.sessions.some((s) => s.id === sessionId)) return id;
+  for (const [id, st] of inScope(states)) if (st.sessions.some((s) => s.id === sessionId)) return id;
   return null;
 }
 
@@ -146,20 +171,20 @@ export function nodeOfSession(sessionId: string): string | null {
 //  (그 세션은 그 컴퓨터가 만든다) 하네스를 여기서만 알 수 있다. 모델·추론강도 바꾸기(#1758)가 '어떤 슬래시 명령을
 //  칠까'를 정하려면 하네스가 있어야 한다 — 화면이 보낸 값을 믿지 않는다(남의 하네스 명령을 대신 치게 할 여지를 안 만든다).
 export function nodeSessionHarness(nodeId: string, sessionId: string): string {
-  return states.get(nodeId)?.sessions.find((s) => s.id === sessionId)?.harness || "";
+  return states.get(keyOf(nodeId))?.sessions.find((s) => s.id === sessionId)?.harness || "";
 }
 
 // 이 노드가 op 를 할 수 있나(#905 C4) — hello.caps 가 근거, 안 보낸 구 노드는 v1 기준선.
 //  provision-remote.ts(assertNodeUsable 의 requireProvision 게이트)가 배치 전 사전 조회로 쓴다 — 못 할 노드를
 //   미리 걸러 사람 말로 안내한다. 강제 게이트는 nodeRpc 가 이미 한다(여긴 사전 조회용).
 export function nodeSupports(nodeId: string, op: NodeOp): boolean {
-  const c = conns.get(nodeId);
+  const c = conns.get(keyOf(nodeId));
   return !!c && c.caps.has(op);
 }
 
 // 타입드 RPC — 노드에 op 실행을 위임하고 결과를 기다린다. 노드 미연결이면 즉시 실패.
 export async function nodeRpc<T = unknown>(nodeId: string, op: NodeOp, args?: Record<string, unknown>): Promise<T> {
-  const c = conns.get(nodeId);
+  const c = conns.get(keyOf(nodeId));
   if (!c) throw new Error("node-offline");
   // 🔴 미지원 노드엔 **보내지 않는다**(#905 C4). 보내면 구 노드가 `unknown op: <op>` 라는 **문자열**을 돌려주고,
   //  호출자는 그걸 "실패"와 구별하지 못한다 — 기능이 없는 건지 하다 터진 건지 모른 채 재시도·오진이 쌓인다.
@@ -177,12 +202,13 @@ export async function nodeRpc<T = unknown>(nodeId: string, op: NodeOp, args?: Re
 // attach 가부 판정(정책 — 게이트웨이 소유). 스냅샷이 신선하면 그걸로, 아니면 노드에 목록을 재조회.
 export async function nodeCanAttach(nodeId: string, sessionId: string, viewer: string):
   Promise<{ ok: true } | { ok: false; code: number; reason: string }> {
-  if (!conns.has(nodeId)) return { ok: false, code: CLOSE_NODE_OFFLINE, reason: "node-offline" };
-  let st = states.get(nodeId);
+  const conn = conns.get(keyOf(nodeId));
+  if (!conn) return { ok: false, code: CLOSE_NODE_OFFLINE, reason: "node-offline" };
+  let st = states.get(keyOf(nodeId));
   if (!st || Date.now() - st.ts > STATE_STALE_MS) {
     try {
       const sessions = await nodeRpc<SessionInfo[]>(nodeId, "list");
-      st = applyState(nodeId, sessions);
+      st = applyState(conn, sessions);
     } catch { return { ok: false, code: CLOSE_NODE_OFFLINE, reason: "node-offline" }; }
   }
   const s = st.sessions.find((x) => x.id === sessionId);
@@ -199,7 +225,7 @@ export async function nodeCanAttach(nodeId: string, sessionId: string, viewer: s
 //  브라우저→노드: 텍스트(JSON 제어 i/r/cap)를 ctl 로 포워딩(노드가 안전한 tmux 명령으로 번역 — 명령 구성은 서버측 불변).
 //  노드→브라우저: 바이너리 채널 프레임의 payload 를 그대로 send(무디코드 — 멀티바이트 경계 보존).
 export function nodeRelayAttach(nodeId: string, sessionId: string, browser: WebSocket): void {
-  const c = conns.get(nodeId);
+  const c = conns.get(keyOf(nodeId));
   if (!c) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } return; }
   // WS liveness(#687·#869) — 이게 없으면 게이트웨이 heartbeat 가 **살아있는** 노드-릴레이 브라우저도 매 주기 isAlive=false
   //  로 보고 terminate → 30s 마다 재연결·재attach 를 유발한다. 그 churn 이 노드에서 pty 를 반복 spawn/정리하게 만들고,
@@ -224,25 +250,28 @@ export function nodeRelayAttach(nodeId: string, sessionId: string, browser: WebS
   catch { cleanup(false); try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
 }
 
-function applyState(nodeId: string, sessions: SessionInfo[], res?: NodeResources | null): NodeState {
-  const c = conns.get(nodeId);
-  const prev = states.get(nodeId);
+// ⚠ 노드 id 가 아니라 **연결**을 받는다(#2044) — 스코프(테넌트)를 연결이 들고 있고, 상태 push 는 요청 밖(WS
+//  이벤트)이라 currentTenant() 로는 알 수 없다. 두 호출부 모두 연결이 있는 자리다.
+function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | null): NodeState {
+  const nodeId = c.node.id;
+  const k = keyOf(nodeId, c.tenant);
+  const prev = states.get(k);
   const st: NodeState = {
     ts: Date.now(), sessions,
-    name: c?.node.name ?? prev?.name ?? nodeId,
-    kind: c?.node.kind ?? prev?.kind ?? "member",
-    owner: c?.node.owner_member ?? prev?.owner ?? "",
+    name: c.node.name ?? prev?.name ?? nodeId,
+    kind: c.node.kind ?? prev?.kind ?? "member",
+    owner: c.node.owner_member ?? prev?.owner ?? "",
     res: res ?? prev?.res ?? null,
   };
-  states.set(nodeId, st);
+  states.set(k, st);
   // 정본(org_node_state)으로 흘려보낸다(#1834) — 이 게이트웨이가 재배포로 죽어도 다음 부팅이 여기서 목록을 되찾는다.
   //  세션 목록이 바뀌었을 때 즉시, 그대로면 최소 간격마다(node-state-store.shouldPersist). 비치명 —
   //  실패하면 기억을 지워 다음 보고(3초 뒤)가 곧바로 다시 시도한다.
   const digest = sessionsDigest(sessions);
-  if (shouldPersist(persisted.get(nodeId), digest, st.ts)) {
-    persisted.set(nodeId, { digest, at: st.ts });
+  if (shouldPersist(persisted.get(k), digest, st.ts)) {
+    persisted.set(k, { digest, at: st.ts });
     void saveNodeState(nodeId, sessions, st.res, st.ts).catch((err) => {
-      persisted.delete(nodeId);
+      persisted.delete(k);
       logger.warn({ err, node: nodeId }, "노드 스냅샷 정본 저장 실패(비치명 — 다음 보고에 재시도)");
     });
   }
@@ -267,8 +296,8 @@ export function onWorkerState(cb: (nodeId: string, snapshot: unknown) => void | 
 export interface RemoteSchedulable { id: string; hasDocker: boolean; res: NodeResources | null }
 export function schedulableRemotes(): RemoteSchedulable[] {
   const out: RemoteSchedulable[] = [];
-  for (const [id, c] of conns) {
-    const st = states.get(id);
+  for (const [id, c] of inScope(conns)) {
+    const st = states.get(keyOf(id));
     out.push({ id, hasDocker: c.hasDocker, res: st?.res ?? null });
   }
   return out;
@@ -286,6 +315,13 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
   }
   const m = parseMsg<NodeToGwMsg>(raw);
   if (!m) return;
+  // ★ 여기부터는 DB 를 만진다(상태 저장·touchNode·worker 복구) — WS 이벤트라 요청 컨텍스트가 없으므로
+  //  이 연결의 테넌트로 다시 연다(#2044). 위 바이너리 릴레이는 DB 를 안 만져 컨텍스트 밖에 둔다(핫패스).
+  inTenant(c, () => onNodeControlMsg(c, m));
+}
+
+/** 제어 메시지(비바이너리) 처리 — **호출부가 이미 테넌트 컨텍스트를 열어 두었다**(onNodeMessage). */
+function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
   if (m.t === "res") {
     const p = c.pending.get(m.id);
     if (!p) return;
@@ -296,7 +332,7 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     return;
   }
   if (m.t === "state") {
-    applyState(c.node.id, Array.isArray(m.sessions) ? m.sessions : [], m.res ?? null);
+    applyState(c, Array.isArray(m.sessions) ? m.sessions : [], m.res ?? null);
     const now = Date.now();
     if (now - c.lastTouch > TOUCH_MIN_MS) { c.lastTouch = now; void touchNode(c.node.id).catch(() => { /* 비치명 */ }); }
     return;
@@ -357,14 +393,16 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
 }
 
 function onNodeDisconnected(c: NodeConn): void {
-  if (conns.get(c.node.id) !== c) return; // 이미 새 연결로 교체됨(재연결 레이스) — 새 연결을 건드리지 않는다
-  conns.delete(c.node.id);
+  const k = keyOf(c.node.id, c.tenant);
+  if (conns.get(k) !== c) return; // 이미 새 연결로 교체됨(재연결 레이스) — 새 연결을 건드리지 않는다
+  conns.delete(k);
   for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(new Error("node-offline")); }
   c.pending.clear();
   for (const { browser } of c.chans.values()) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
   c.chans.clear();
-  void touchNode(c.node.id).catch(() => { /* 비치명 */ });
-  logger.info({ node: c.node.id }, "노드 연결 해제");
+  // last_seen 갱신도 테넌트 컨텍스트가 필요하다(close 이벤트 = 요청 밖) — 없으면 RLS 가 막아 조용히 안 써진다.
+  inTenant(c, () => { void touchNode(c.node.id).catch(() => { /* 비치명 */ }); });
+  logger.info({ node: c.node.id, tenant: c.tenant?.slug }, "노드 연결 해제");
 }
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
@@ -377,30 +415,44 @@ export function setupNodeUpgrade(server: Server): void {
     let url: URL;
     try { url = new URL(req.url || "", "http://localhost"); } catch { return; }
     if (url.pathname !== NODE_WS_PATH) return; // 다른 업그레이드(/terminal/ws)는 미관여
-    void (async () => {
+    // ★★ 업그레이드는 Express 미들웨어를 **안 탄다** — 테넌트 컨텍스트(tenant-middleware)가 여기엔 없다(#2044).
+    //  판정은 registry-scope.nodeUpgradeTenant 가 소유한다(사연은 거기 주석). 요지: 컨텍스트 없이
+    //  authNodeToken 을 부르면 공유 게이트웨이에서 RLS 가 쿼리를 오류내고, 그 오류가 store 의 fail-closed
+    //  catch 에 삼켜져 **'토큰 불일치'** 로 둔갑해 매니지드에서는 노드가 영원히 못 붙는다.
+    const verdict = nodeUpgradeTenant(req.headers as Record<string, string | string[] | undefined>);
+    if (!verdict.ok) {
+      logger.warn({ reason: verdict.reason, detail: verdict.detail }, "노드 업그레이드 거부 — 테넌트 해소 실패");
+      socket.destroy();
+      return;
+    }
+    const tenant = verdict.tenant;
+    const open = <T>(fn: () => T): T => (tenant ? withTenant(tenant, fn) : fn());
+    void open(async () => {
       const auth = String(req.headers.authorization || "");
       const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
       const node = await authNodeToken(token);
       if (!node) { socket.destroy(); return; }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        const prev = conns.get(node.id);
+        const k = keyOf(node.id, tenant);
+        const prev = conns.get(k);
         if (prev) { logger.info({ node: node.id }, "노드 재연결 — 구 연결 교체"); try { prev.ws.terminate(); } catch { /* noop */ } onNodeDisconnected(prev); }
         // caps 는 **기준선으로 시작**한다 — hello 가 오기 전에도 v1 op 는 보낼 수 있어야 한다(구 노드와 동일 취급).
         //  hello 를 받으면 그 노드가 선언한 실제 목록으로 교체된다.
         const c: NodeConn = {
           node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(),
           lastTouch: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS), harnesses: [...NODE_BASELINE_HARNESSES],
+          tenant,
         };
-        conns.set(node.id, c);
+        conns.set(k, c);
         (ws as LiveWS).isAlive = true;
         ws.on("pong", () => { (ws as LiveWS).isAlive = true; });
         ws.on("message", (raw, isBinary) => onNodeMessage(c, raw, isBinary));
         ws.on("close", () => onNodeDisconnected(c));
         ws.on("error", () => onNodeDisconnected(c));
-        void touchNode(node.id).catch(() => { /* 비치명 */ });
-        logger.info({ node: node.id, kind: node.kind, owner: node.owner_member }, "노드 연결");
+        inTenant(c, () => { void touchNode(node.id).catch(() => { /* 비치명 */ }); });
+        logger.info({ node: node.id, kind: node.kind, owner: node.owner_member, tenant: tenant?.slug }, "노드 연결");
       });
-    })();
+    });
   });
   logger.info(`node registry mounted (ws ${NODE_WS_PATH})`);
 }
