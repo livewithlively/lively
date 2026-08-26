@@ -152,3 +152,58 @@
 .ob-tok input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
 .ob-tok .ob-err{font-size:13px; color:#C0392B; min-height:1px}
 .ob-tok .ob-ok{font-size:13px; color:var(--mint-text)}
+/* #1879 — 사실을 덧붙이는 줄(다른 AI 가 이미 이어져 있음·판정 불가 등). 오류(빨강)도 성공(민트)도 아닌
+   '그냥 알려 드리는 것' 이라 본문과 같은 톤으로 낮춰 둔다. */
+.ob-tok .ob-note{font-size:13px; color:var(--ink-sub); line-height:1.7}
+.ob-tok .ob-note code{font-size:12px}
+
+/* ══ #1879 «내 컴퓨터에 잇기» — 설치 걸음표 · 명령 한 줄 · OS 토글 ══════════════════
+   기준은 리브 페르소나의 성립 조건("컴맹인 중학생도 따라올 수 있어야 한다")이다. 그래서 이 블록의
+   시각 규칙은 셋뿐 — ① 걸음마다 번호가 눈에 먼저 들어온다 ② 붙여넣을 줄은 다른 무엇과도 안 헷갈리게
+   한 덩어리로 떨어져 있다 ③ 누를 키는 본문 글자와 다르게 보인다. 장식은 넣지 않는다. */
+.ob-ostabs{display:flex; gap:6px; margin:0 0 20px}
+.ob-ostabs button{flex:1; border:1px solid var(--line); border-radius:9px; padding:9px 10px;
+  font-size:13.5px; font-weight:600; color:var(--ink-sub); background:var(--card)}
+.ob-ostabs button:hover{border-color:#cfcecb}
+.ob-ostabs button.ob-on{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); color:var(--ink)}
+
+.ob-ins-list{display:flex; flex-direction:column; gap:22px; margin:0 0 22px}
+.ob-ins{position:relative; padding-left:34px}
+.ob-ins::before{content:attr(data-n); position:absolute; left:0; top:0; width:23px; height:23px;
+  border-radius:50%; background:var(--ink); color:#fff; font-size:12.5px; font-weight:700;
+  display:grid; place-items:center; font-variant-numeric:tabular-nums}
+.ob-ins-t{display:block; font-size:15px; font-weight:700; margin:1px 0 7px; line-height:1.45}
+.ob-ins-p{font-size:13.5px; color:var(--ink-sub); line-height:1.8; margin:0 0 8px}
+.ob-ins-ul{margin:0 0 8px; padding-left:17px; font-size:13.5px; color:var(--ink-sub); line-height:1.8}
+.ob-ins-ul li{margin-bottom:3px}
+.ob-ins-n{font-size:12.5px; color:var(--muted); line-height:1.75; margin:0}
+.ob-ins-n2{color:var(--muted)}
+.ob-ins-n code,.ob-ins-ul code{background:var(--line-row); border-radius:5px; padding:2px 6px; font-size:12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
+
+/* 붙여넣을 줄 — 길면 감싸지 말고 가로로 흐르게 둔다(한 줄이라는 사실이 눈에 보여야 한다). */
+.ob-cmd{display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:9px;
+  background:var(--line-row); padding:9px 9px 9px 12px; margin:0 0 10px}
+.ob-cmd code{flex:1; min-width:0; overflow-x:auto; white-space:nowrap; font-size:12.5px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
+.ob-cmd-copy{flex:none; border:1px solid var(--line); border-radius:7px; background:var(--card);
+  padding:5px 11px; font-size:12.5px; font-weight:600; color:var(--ink-sub)}
+.ob-cmd-copy:hover{border-color:#cfcecb; color:var(--ink)}
+.ob-cmd-copy.ob-on{border-color:var(--blue); color:var(--blue)}
+
+.ob-kbd{display:inline-block; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px;
+  background:var(--card); padding:1px 6px; font-size:12px; font-weight:600; color:var(--ink);
+  font-family:inherit; line-height:1.6; white-space:nowrap}
+
+.ob-tok .ob-fine2{font-size:12.5px; color:var(--muted)}
+/* 윈도우 캐비엇 — 클래식 설치 가이드(web/learn.ts)가 같은 사실을 이미 말한다(bootstrap.ps1 의 실제
+   PowerShell 실행 검증은 POSIX 박스에서 돌지 않아 정적 계약 테스트뿐). 한쪽만 말하면 화면끼리 어긋난다. */
+.ob-ins-warn{margin:-8px 0 18px; color:var(--warn-ink, #8a6100)}
+/* 터미널 갈래 접힘 — 주된 길(앱) 아래에 조용히. 여는 사람만 본다. */
+.ob-ins-alt{margin-top:22px; border-top:1px solid var(--line); padding-top:14px}
+.ob-ins-alt>summary{font-size:13px; color:var(--muted); cursor:pointer; list-style:none}
+.ob-ins-alt>summary::-webkit-details-marker{display:none}
+.ob-ins-alt>summary::before{content:'＋ '; color:var(--ghost)}
+.ob-ins-alt[open]>summary::before{content:'－ '}
+.ob-ins-alt>summary:hover{color:var(--ink-sub)}
+.ob-ins-alt .ob-ins-n{margin:10px 0 8px}
