@@ -43,7 +43,9 @@ export interface ShellTab {
 export interface TabsHooks {
   /** 라우트 → 표시 제목·우패널 유무·상태(아이콘 색)·아이콘 종류. 데이터가 늦게 와도 paint() 때마다 다시 묻는다.
    *  kind 는 라우트만으로는 안 갈리는 아이콘을 정한다 — 지금은 '새 세션 자리'(프로젝트 주소인데 아직 세션이 없다). */
-  titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string };
+  //  provisional = 돌려준 이름이 **id 꼬리 폴백**이다(이름이 아니다 — main.ts titleFor).
+  //   저장본을 그 값으로 덮으면 안 된다(#2022).
+  titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string; provisional?: boolean };
   /** 탭이 활성화됐다 — fresh 면 아직 안 그린 탭(렌더 필요). hash 반영·no-aside 토글은 호출자가 한다. */
   onActivate(tab: ShellTab, fresh: boolean): void;
   onClose(tab: ShellTab): void;
@@ -333,7 +335,11 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     if (drag || editLocked()) return; // 끌거나 고치는 중에 다시 그리면 그 동작이 끊긴다(20초 폴링도 paint 를 부른다)
     const kids: HTMLElement[] = tabs.map((t) => {
       const info = hooks.titleFor(t.route);
-      t.title = info.title; t.noAside = info.noAside;
+      // ★ id 꼬리 폴백(provisional)으로 **저장본을 덮지 않는다**(#2022). 종전엔 무조건 덮고 곧바로 save() 해서,
+      //  이름을 한 번도 못 들어 본 세션이 그 자리에서 `세션 <id꼬리>` 로 굳었다(#2028 의 기억은 그런 세션을
+      //  아직 모른다 — 그 기억은 '한 번 본 적 있는' 이름만 지킨다).
+      if (!info.provisional || !t.title) t.title = info.title;
+      t.noAside = info.noAside;
       // 줄에 눕는 이름은 **짧게** — 세션 이름이 한 문단인 경우가 흔하다(첫 지시가 그대로 이름이 된다).
       //  전문은 툴팁과 [모든 탭] 목록이 갖는다(정보를 버리지 않는다).
       const short = t.title.length > 26 ? t.title.slice(0, 26).trimEnd() + '…' : t.title;
@@ -443,7 +449,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     active: () => { if (!activeTab) activate(tabs[restoredActive] || mkTab('#/')); return activeTab!; },
     current: () => activeTab,
     add, activate, close,
-    routed: (tab) => { const info = hooks.titleFor(tab.route); tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
+    routed: (tab) => { const info = hooks.titleFor(tab.route); if (!info.provisional || !tab.title) tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
     find: (route) => tabs.find((t) => routeKey(t.route) === routeKey(route)),
     initial: () => tabs[restoredActive] || null,
     paint, save,

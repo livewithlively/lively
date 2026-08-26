@@ -330,7 +330,11 @@ export function createTabs(centerHost, asideHost, hooks) {
             return; // 끌거나 고치는 중에 다시 그리면 그 동작이 끊긴다(20초 폴링도 paint 를 부른다)
         const kids = tabs.map((t) => {
             const info = hooks.titleFor(t.route);
-            t.title = info.title;
+            // ★ id 꼬리 폴백(provisional)으로 **저장본을 덮지 않는다**(#2022). 종전엔 무조건 덮고 곧바로 save() 해서,
+            //  이름을 한 번도 못 들어 본 세션이 그 자리에서 `세션 <id꼬리>` 로 굳었다(#2028 의 기억은 그런 세션을
+            //  아직 모른다 — 그 기억은 '한 번 본 적 있는' 이름만 지킨다).
+            if (!info.provisional || !t.title)
+                t.title = info.title;
             t.noAside = info.noAside;
             // 줄에 눕는 이름은 **짧게** — 세션 이름이 한 문단인 경우가 흔하다(첫 지시가 그대로 이름이 된다).
             //  전문은 툴팁과 [모든 탭] 목록이 갖는다(정보를 버리지 않는다).
@@ -442,7 +446,8 @@ export function createTabs(centerHost, asideHost, hooks) {
             activate(tabs[restoredActive] || mkTab('#/')); return activeTab; },
         current: () => activeTab,
         add, activate, close,
-        routed: (tab) => { const info = hooks.titleFor(tab.route); tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
+        routed: (tab) => { const info = hooks.titleFor(tab.route); if (!info.provisional || !tab.title)
+            tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
         find: (route) => tabs.find((t) => routeKey(t.route) === routeKey(route)),
         initial: () => tabs[restoredActive] || null,
         paint, save,

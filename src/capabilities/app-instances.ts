@@ -7,13 +7,13 @@ import type { Capability, CapabilityCtx } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { canSeeProjectRow } from "../v6/visibility.js";
 import { listSessions } from "../terminal/terminal-sessions.js";
-import { getSessionState } from "../sessions/session-state.js";
+import { getSessionState, getSessionStates } from "../sessions/session-state.js";
 import { parseAppManifest, type LivelyAppManifest } from "../apps/manifest.js";
 import { normalizeInstanceProject, normalizeInstanceState } from "../apps/instance-policy.js";
 import * as apps from "../org/store/apps.js";
 import * as instances from "../org/store/app-instances.js";
 import { resolveWorkerPlacement, startWorkerForInstance, stopWorkerForInstance, workerRunForInstance } from "../apps/worker-service.js";
-import { nodeOnline, nodeSupports } from "../node/registry.js";
+import { nodeOnline, nodeSessionsFor, nodeSupports } from "../node/registry.js";
 import { getNode } from "../node/store.js";
 import { nodeOpenTo } from "../node/node-access.js";
 
@@ -102,6 +102,49 @@ function requestedExecution(value: unknown): { kind: "central" | "remote"; node_
   return { kind: x.kind, ...(nodeId ? { node_id: nodeId } : {}) };
 }
 
+// ── 세션 인스턴스에 **지금의 정본**을 얹는다(#2022) ────────────────────────────────
+//  화면이 세션 이름·소속을 아는 길은 세션 목록 응답 하나뿐이었다. 그래서 목록이 오기 전(부팅 첫 그림)과
+//  목록에서 빠진 세션(회수·정리된 박스, 오프라인 노드)에서 이름이 `세션 <id꼬리>` 로, 소속이 '프로젝트 없음'
+//  으로 떨어졌다 — 정작 그 값은 desired-state(DB)에 그대로 있는데도. 인스턴스 행이 이미 세션 id 를 subject 로
+//  쥐고 있으므로 여기서 함께 실어 보낸다. 저장된 title 은 그 순간의 스냅샷이라 늙는다(실측: 'claude · resume',
+//  '/status', box id 그대로) — 그래서 **덮지 않고 별도 필드**로 준다. 화면이 정본을 먼저 쓰고 title 은 폴백이다.
+//   · subject_label      — 지금의 이름   · subject_project_id — 지금의 소속
+//   · subject_state      — 'known'(어느 쪽으로든 아는 세션) | 'gone'(desired-state 도 노드 스냅샷도 없다 = 되살릴 수 없다)
+//
+//  ⚠ 여기서 **tmux 를 훑지 않는다.** 이 목록은 화면 폴링마다 불리는데(20초), 같은 폴링이 이미
+//   /api/ui/terminal/sessions 로 tmux 를 한 번 훑는다 — 두 번째 스캔을 여기에 얹을 이유가 없다.
+//   재료는 둘 다 싸다: desired-state 는 한 번의 ANY() 조회, 노드 세션은 게이트웨이 메모리 스냅샷.
+//  ⚠ 건별 조회를 만들지 않는다 — 인스턴스 수만큼 왕복하면 목록 한 번이 수십 쿼리가 된다.
+//  ⚠ 노출 범위는 세션 목록과 같다 — 내 세션이거나 프로젝트 세션(#452 로 로그인 전원 공개)일 때만 이름을 싣는다.
+async function sessionSubjects(
+  rows: instances.AppInstanceRow[],
+  user: LivelyUser,
+): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>();
+  const sessionRows = rows.filter((r) => r.subject_kind === "session" && !!r.subject_ref);
+  if (!sessionRows.length) return out;
+  const owner = actorOf(user);
+  const ids = sessionRows.map((r) => String(r.subject_ref));
+  const states = await getSessionStates(ids).catch(() => new Map<string, Awaited<ReturnType<typeof getSessionState>>>());
+  const nodeSeen = new Map(nodeSessionsFor(owner).map((s) => [s.id, s]));
+  for (const r of sessionRows) {
+    const id = String(r.subject_ref);
+    const st = states.get(id);
+    const nd = nodeSeen.get(id);
+    if (!st && !nd) { out.set(r.id, { subject_state: "gone" }); continue; }
+    const mine = !st || st.owner === owner || !!st.project_id;   // 세션 목록과 같은 노출 범위
+    const label = mine ? String(st?.label || nd?.label || "").trim() : "";
+    const projectId = mine ? (Number(st?.project_id || nd?.projectId || 0) || null) : null;
+    out.set(r.id, {
+      subject_state: "known",
+      // id 를 그대로 쓴 이름은 이름이 아니다 — 화면이 그걸 '아는 이름'으로 오해하지 않게 비워 보낸다.
+      subject_label: label && label !== id ? label : null,
+      subject_project_id: projectId,
+    });
+  }
+  return out;
+}
+
 const listInput = {
   app_id: z.string().optional(),
   project_id: z.number().int().positive().nullable().optional(),
@@ -127,10 +170,11 @@ const appInstanceList: Capability = {
       projectId: input.project_id,
       includeClosed: input.include_closed,
     });
+    const subjects = await sessionSubjects(rows, user);
     const visible: Array<Record<string, unknown>> = [];
     for (const row of rows) {
       // project_id 는 분류·provenance일 뿐 인스턴스 조회 권한이 아니다. 앱 자체가 비활성이면 목록에서만 제외한다.
-      try { visible.push(await decorate(row)); }
+      try { visible.push({ ...(await decorate(row)), ...(subjects.get(row.id) ?? {}) }); }
       catch (error) { if (!(error instanceof HttpError && (error.status === 404 || error.status === 409))) throw error; }
     }
     return { instances: visible };

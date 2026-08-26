@@ -196,6 +196,17 @@ export async function getSessionState(id: string): Promise<SessionState | undefi
   return r.rows[0] ? rowToState(r.rows[0]) : undefined;
 }
 
+/** 여러 세션의 desired-state 를 **한 번에**(#2022). 화면 하나가 세션 수십 개의 이름·소속을 물을 때
+ *  건별 왕복(N+1)을 만들지 않기 위한 것 — 없는 id 는 결과 Map 에 그냥 빠진다. */
+export async function getSessionStates(ids: string[]): Promise<Map<string, SessionState>> {
+  const want = [...new Set((ids || []).map((x) => String(x || "").trim()).filter(Boolean))];
+  const out = new Map<string, SessionState>();
+  if (!want.length) return out;
+  const r = await itemsPool.query("SELECT * FROM org_session_state WHERE id = ANY($1::text[])", [want]);
+  for (const row of r.rows) { const st = rowToState(row); out.set(st.id, st); }
+  return out;
+}
+
 // 한 소유자의 desired-state 전부(복원 목록의 원천 — 호출자가 tmux 라이브와 병합해 offline 만 남긴다).
 export async function listSessionStatesForOwner(owner: string): Promise<SessionState[]> {
   const r = await itemsPool.query("SELECT * FROM org_session_state WHERE owner=$1 ORDER BY COALESCE(last_busy, created, 0) DESC", [owner]);
