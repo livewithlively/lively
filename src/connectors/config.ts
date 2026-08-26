@@ -15,6 +15,8 @@ import { itemsPool } from "../db/client.js";
 import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js";
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
+import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
+import { resolveGoogleTokenSource, googleVaultReader, isGoogleCollectorSystem } from "../org/credentials/google-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
 export interface ConnectorField {
@@ -142,12 +144,15 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "gmail",
     label: "Gmail",
     guide: {
-      intro: "Google 은 OAuth 데스크톱 클라이언트의 refresh token 방식입니다(1개 토큰이 Gmail·Drive 공용 가능).",
+      intro:
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 에서 [팀 자료로 모으기]를 켜면 " +
+        "그 연결로 수집이 돌고(token_source=member:<켠 사람>), 토큰을 복사할 일이 없습니다(#1881 G3). " +
+        "아래 3칸은 **셀프호스팅·기존 배포용 수동 경로**입니다.",
       steps: [
-        "console.cloud.google.com ▸ APIs & Services ▸ Credentials ▸ [Create Credentials ▸ OAuth client ID] — 유형 'Desktop app'",
-        "OAuth consent screen 을 'In production' 으로 게시(Testing 상태면 refresh token 이 7일 만료)",
-        "클라이언트 ID/Secret 으로 gmail.readonly scope 승인 → refresh token 발급(설치 키트의 google-oauth 헬퍼 또는 OAuth Playground)",
-        "세 값을 아래에 저장",
+        "console.cloud.google.com ▸ API 및 서비스 ▸ 사용자 인증 정보 ▸ [사용자 인증 정보 만들기 ▸ OAuth 클라이언트 ID]",
+        "OAuth 동의 화면을 **게시(In production)** — Testing 상태면 refresh token 이 7일 만에 만료돼 수집이 멈춥니다",
+        "gmail.readonly scope 로 승인해 refresh token 발급(설치 키트의 google-oauth 헬퍼)",
+        "세 값을 아래에 저장 — 또는 '토큰 출처'에 member:<구성원 id> 를 넣어 금고 연결을 가리키게 하세요",
       ],
       url: "https://console.cloud.google.com/apis/credentials",
     },
@@ -155,6 +160,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "client_id", env: "GMAIL_CLIENT_ID", secret: false, required: true, label: "OAuth Client ID", hint: "xxxx.apps.googleusercontent.com" },
       { key: "client_secret", env: "GMAIL_CLIENT_SECRET", secret: true, required: true, label: "OAuth Client Secret" },
       { key: "refresh_token", env: "GMAIL_REFRESH_TOKEN", secret: true, required: true, label: "Refresh Token", hint: "gmail.readonly scope" },
+      { key: "token_source", env: "GMAIL_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Google 연결]로 저장한 자격 · 비우면 위 세 칸(Client ID/Secret/Refresh Token)을 씁니다" },
       { key: "query", env: "GMAIL_QUERY", secret: false, label: "검색 쿼리", hint: "Gmail 검색식 (예: -from:noreply, 비우면 전체)" },
     ],
   },
@@ -162,10 +168,12 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "gdrive",
     label: "Google Drive",
     guide: {
-      intro: "Gmail 과 같은 OAuth 클라이언트를 써도 됩니다 — scope 에 drive.readonly 를 합쳐 refresh token 을 발급하면 1개로 공용.",
+      intro:
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 의 [팀 자료로 모으기] 토글이 " +
+        "연결 하나로 드라이브·Gmail 을 함께 켭니다(#1881 G3). 아래는 셀프호스팅·기존 배포용 수동 경로입니다.",
       steps: [
-        "Gmail 가이드와 동일하게 OAuth 데스크톱 클라이언트 준비",
-        "drive.readonly scope 포함해 refresh token 발급 → 아래 저장",
+        "Gmail 가이드와 같은 OAuth 클라이언트를 쓰면 됩니다(1개 토큰이 Drive·Gmail 공용)",
+        "drive.readonly scope 포함해 refresh token 발급 → 아래 저장 — 또는 '토큰 출처'에 member:<구성원 id>",
       ],
       url: "https://console.cloud.google.com/apis/credentials",
     },
@@ -173,6 +181,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "client_id", env: "GDRIVE_CLIENT_ID", secret: false, required: true, label: "OAuth Client ID", hint: "xxxx.apps.googleusercontent.com" },
       { key: "client_secret", env: "GDRIVE_CLIENT_SECRET", secret: true, required: true, label: "OAuth Client Secret" },
       { key: "refresh_token", env: "GDRIVE_REFRESH_TOKEN", secret: true, required: true, label: "Refresh Token", hint: "drive.readonly scope" },
+      { key: "token_source", env: "GDRIVE_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Google 연결]로 저장한 자격 · 비우면 위 세 칸(Client ID/Secret/Refresh Token)을 씁니다" },
       { key: "folders", env: "GDRIVE_FOLDERS", secret: false, label: "폴더 id", hint: "이 폴더들만 (쉼표구분, 비우면 전체 Drive)" },
     ],
   },
@@ -195,6 +204,31 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "git_pull", env: "DOMAIN_WIKI_GIT_PULL", secret: false, label: "싱크 전 git pull", hint: "true 면 ff-only pull 시도 (기본 false — 워킹트리 그대로 읽음)" },
       { key: "base_url", env: "DOMAIN_WIKI_BASE_URL", secret: false, label: "원본 blob URL 접두", hint: "external_url 구성용 (기본 gitlab blob/main)" },
       { key: "instance", env: "DOMAIN_WIKI_INSTANCE", secret: false, label: "Instance", hint: "repo 식별자 (기본 domain-wiki)" },
+    ],
+  },
+  // 피그마(#1881 F5) — 수집 단위는 **파일의 코멘트**다(캔버스가 아니라 코멘트에 결정·피드백이 쌓인다).
+  //  범위 선언 장치가 링크와 팀 id 인 이유는 connectors/figma.ts 머리말 참조 — 피그마엔 채널 열거도
+  //  페이지 선택기도 없다(공개 OAuth 앱은 파일 열거 금지 · team_id 는 API 로 못 얻는다).
+  figma: {
+    system: "figma",
+    label: "Figma",
+    guide: {
+      intro: "피그마는 '어느 파일을 볼지'를 사람이 정해 줘야 합니다 — 피그마엔 채널 목록 같은 게 없습니다. 가장 쉬운 길은 **파일 링크를 그대로 붙여넣는 것**입니다(주소창에서 복사). 팀 전체를 훑으려면 '팀 id' 를 한 번 넣으세요. 토큰은 개인 액세스 토큰(figd_…)을 씁니다 — 발급할 때 허용범위를 고르는 화면이 나옵니다.",
+      steps: [
+        "Figma ▸ 오른쪽 위 계정 ▸ Settings ▸ Security ▸ Personal access tokens ▸ [Generate new token]",
+        "허용범위(scopes)에서 file_comments:read · file_content:read · file_metadata:read · folders:read · current_user:read 를 켭니다 — folders:read 가 없으면 팀 전체 훑기가 안 됩니다",
+        "만들어진 토큰(figd_…)을 아래 '토큰' 칸에 저장합니다. (이미 [내 설정 ▸ 외부 서비스 관리 ▸ Figma]에 저장해 뒀다면 토큰 칸을 비우고 '토큰 출처'에 member:<내 구성원 id> 를 적으세요)",
+        "수집할 대상을 정합니다 — '파일 링크'에 피그마 주소를 붙여넣거나(여러 개면 줄바꿈·공백으로 구분), '팀 id'에 팀 주소(figma.com/files/team/<여기>/…)의 id 를 넣습니다",
+        "훑고 싶지 않은 파일이 있으면 '제외 파일'에 이름 조각을 적습니다(예: archive 백업)",
+      ],
+      url: "https://www.figma.com/settings",
+    },
+    fields: [
+      { key: "token", env: "FIGMA_TOKEN", secret: true, label: "토큰", hint: "figd_... — Figma ▸ Settings ▸ Security ▸ Personal access tokens. 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "FIGMA_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = 관리탭 자격 금고의 조직 공용 figma_token · member:<구성원 id> = 그 사람이 [외부 서비스 관리 ▸ Figma]에 저장한 토큰 · 비우면 위 토큰 칸을 씁니다" },
+      { key: "file_keys", env: "FIGMA_FILE_KEYS", secret: false, label: "파일 링크", hint: "피그마 파일 주소를 그대로 붙여넣으세요(여러 개면 공백·줄바꿈으로 구분). 파일 키만 적어도 됩니다" },
+      { key: "team_ids", env: "FIGMA_TEAM_IDS", secret: false, label: "팀 id", hint: "팀 전체를 훑습니다 — figma.com/files/team/<여기>/… 주소에서 복사(피그마는 팀 id 를 API 로 주지 않습니다). 팀이 여럿이면 수집기를 팀당 하나 두는 편이 낫습니다" },
+      { key: "exclude_files", env: "FIGMA_EXCLUDE_FILES", secret: false, label: "제외 파일", hint: "이름에 이 조각이 들어간 파일은 건너뜁니다(예: archive 백업) — 공백·쉼표 구분" },
     ],
   },
 };
@@ -363,6 +397,29 @@ async function loadConnectorConfig(
     if (r) {
       if (r.warning) console.warn(`notion token_source: ${r.warning}`);
       out.token = r.token;
+    }
+  }
+  // ── 피그마 토큰 출처(#1881 F5) — 같은 규약. 다만 여기 담기는 건 OAuth 토큰이 아니라 개인 액세스 토큰(PAT)이다:
+  //  공개 OAuth 앱은 파일 열거 엔드포인트를 못 써서 팀 전체 수집이 PAT 로만 성립한다(figma-token-source.ts 참조).
+  if (system === "figma" && out.token_source) {
+    const r = await resolveFigmaTokenSource(out.token_source, figmaVaultReader);
+    if (r) {
+      if (r.warning) console.warn(`figma token_source: ${r.warning}`);
+      out.token = r.token;
+    }
+  }
+  // ── 구글 토큰 출처(#1881 G3) — 같은 규약이되 **액세스 토큰이 아니라 갱신 자격 3칸**을 채운다.
+  //  구글 액세스 토큰은 1시간짜리라 커넥터가 들고 있으면 곧 죽는다. google-auth.ts 의 교환·만료캐시 경로는
+  //  그대로 두고 값의 출처만 붙여넣기 → 금고로 옮긴다(googleAccessToken 무변경).
+  if (isGoogleCollectorSystem(system) && out.token_source) {
+    const r = await resolveGoogleTokenSource(out.token_source, system, googleVaultReader);
+    if (r) {
+      if (r.warning) console.warn(`${system} token_source: ${r.warning}`);
+      // 명시한 출처가 못 풀리면 **비운다** — 붙여넣기 값으로 조용히 떨어지면 "연결자가 나갔는데 옛 자격으로
+      //  계속 긁는" 꼴이 된다(슬랙·노션과 같은 규약).
+      out.client_id = r.client_id;
+      out.client_secret = r.client_secret;
+      out.refresh_token = r.refresh_token;
     }
   }
   return out;

@@ -424,7 +424,7 @@ AI 가 **내 계정으로** 쓸 수 있는 앱을 연결하는 곳입니다. 연
 | Linear | 계정 로그인 | 이슈 보고 만들기 |
 | GitHub · GitLab | 토큰 | 이슈·PR·MR·저장소 |
 | ClickUp | 토큰 | 작업 확인 |
-| Figma | 토큰 | 디자인 읽기 |
+| Figma | 토큰 | 디자인·코멘트 읽기 |
 | Prometheus | 토큰 | 지표 조회 |
 | Claude (헤드리스 실행) | 토큰 | 자동 분류·크론이 내 Claude 계정으로 실행(터미널에서 \`claude setup-token\` 으로 발급) |
 

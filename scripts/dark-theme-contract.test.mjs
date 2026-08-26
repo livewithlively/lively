@@ -71,4 +71,16 @@ const orphan = [...explicit.keys()].filter((k) => !lightRoot.has(k));
 assert.deepEqual(orphan, [],
   `★ 라이트에 선언이 없는 다크 전용 토큰: ${orphan.join(", ")} — 01-base.css :root 에 라이트 값을 먼저 두어라`);
 
+// ⑤ 자기참조 금지 — `--x: var(--x)` 는 순환이라 **그 토큰이 통째로 무효**가 된다(unset). 값이 사라지는데
+//    CSS 는 조용해서, 화면 전체가 색을 잃고서야 알게 된다. 리터럴→토큰 일괄 치환이 토큰 **정의 파일**을
+//    지나가면 한 번에 수십 개가 이렇게 된다 — 이 프로젝트에서 실제로 두 번 밟았다.
+for (const [file, css] of [["01-base.css", base], ["90-dark.css", dark]]) {
+  const cycles = [];
+  for (const m of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+    if (m[2].includes(`var(${m[1]})`)) cycles.push(m[1]);
+  }
+  assert.deepEqual(cycles, [],
+    `★ ${file} 에 자기참조 토큰이 있다 — 그 토큰은 무효(unset)가 되어 화면에서 색이 사라진다: ${cycles.join(", ")}`);
+}
+
 console.log("✓ 다크 테마 계약 — 두 블록 일치 · 라이트/다크 토큰 집합 일치");

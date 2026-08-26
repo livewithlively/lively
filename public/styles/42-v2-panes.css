@@ -85,39 +85,47 @@
 .pn-part[hidden] { display: none; }
 
 /* ── 문패 ──
-   여백·제목 크기는 **캔버스 문패(.stu-door)와 정확히 같은 값**이다 — 오른쪽 끝 [기본|캔버스] 단추가 두 뷰에서
-   같은 픽셀에 서야 하기 때문(1px 이라도 다르면 오갈 때 단추가 흔들린다). 한쪽을 고치면 다른 쪽도 같이 고친다. */
-.pn-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); }
-/*  왼쪽 칸은 **남는 자리를 받는다**(원준 2026-08-25 "공간이 충분한데 왜 … 으로 뜨냐").
-    안 주면 이 칸의 폭을 위 눈썹줄(#1875 · 진행 중 · 할 일 …)이 정한다 — 제목은 `overflow:hidden` 이라 폭 계산에
-    자기 길이를 보태지 못하기 때문이다. 그래서 눈썹줄보다 몇 px 긴 이름은 오른쪽이 400px 넘게 비어 있는데도
-    …로 잘렸다(실측: 눈썹 377px · 제목 필요 385px). flex:1 로 남는 자리를 먼저 받고, 그래도 모자랄 만큼 긴
-    이름일 때만 잘린다(오른쪽 단추는 그대로 지킨다). */
-.pn-door-l { min-width: 0; flex: 1 1 auto; }
+   ⭐ 문패는 **한 줄**이다(원준 2026-08-26: "너무 높이 많이 차지해"). 종전엔 눈썹줄이 제목 위에 한 줄을 더 먹어
+   머리가 ~85px 였다. 눈썹에 있던 세션 수·할 일·지식은 각자의 칸이 이미 말하는 숫자라 문패에서 뺐고(panes.ts
+   paintDoor), 남은 좌표(#id)·상태는 제목과 **같은 줄**에 선다.
+   ⚠ 위 머리말이 말하던 캔버스 문패 `.stu-door` 는 지금 코드에 없다 — 맞출 짝이 사라졌으므로 그 제약도 없다. */
+.pn-door { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 24px; border-bottom: 1px solid var(--line); }
+.pn-door-l { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 /* (원준 2026-08-20) 알약 폐지 — 좌상단을 비워 둘 이유가 없다. */
-.pn-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); margin-bottom: 7px; }
+.pn-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); flex: none; }
 .pn-eyebrow .sep { color: var(--muted-2); }
 .pn-state.run { color: var(--blue); font-weight: 700; }
 .pn-state.done { color: var(--mint-deep); font-weight: 700; }
 .pn-state.todo { color: var(--muted); }
-.pn-title { margin: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
-/* 제목 = 프로젝트 이름을 고치는 자리(원준 2026-08-24). 세션 제목(.sc-title-btn)과 같은 문법 —
-   평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 연필이 떠서 '고칠 수 있다'고 말한다. */
-.pn-title-btn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin-left: -8px; padding: 2px 8px;
-  border: 0; border-radius: 9px; background: none; font: inherit; color: inherit; text-align: left; cursor: text; }
+.pn-title { margin: 0; min-width: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
+/* 한 줄 문패에서는 제목이 더 이상 왼쪽 끝이 아니다(눈썹이 앞에 선다) — 끝을 맞추던 음수 여백을 거둔다. */
+.pn-door-l .pn-title-btn { margin-left: 0; }
+/* 제목 = **프로젝트 전체 화면으로 가는 링크**(원준 2026-08-26). 종전엔 눌러서 이름을 고치는 자리였다 —
+   이름 편집은 사이드바 줄 더블클릭으로 갔고, 여기는 링크의 문법을 그대로 쓴다(커서 pointer, 밑줄 대신 은은한 판). */
+.pn-title-btn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 2px 8px;
+  border: 0; border-radius: 9px; background: none; font: inherit; color: inherit; text-align: left;
+  text-decoration: none; cursor: pointer; }
 .pn-title-btn .pn-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.pn-title-pen { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linejoin: round;
-  opacity: 0; transition: opacity .12s ease; }
+/* 프로젝트 아이콘 — 이 굵은 글자가 세션 이름이 아니라 **프로젝트 이름**임을 말한다. 글자보다 조용하게. */
+.pn-title-ic { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round; }
 .pn-title-btn:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
-.pn-title-btn:hover .pn-title-pen, .pn-title-btn:focus-visible .pn-title-pen { opacity: 1; }
+.pn-title-btn:hover .pn-title-ic { stroke: var(--blue); }
+.pn-title-btn:hover .pn-title-t { color: var(--blue); }
 .pn-title-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.pn-title-in { width: min(46ch, 100%); margin-left: -8px; padding: 2px 8px; border: 1px solid var(--blue); border-radius: 9px;
-  background: var(--bg); font: inherit; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; color: var(--ink); }
-.pn-title-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
-.pn-title-in:disabled { opacity: .6; }
 .pn-door-r { display: flex; align-items: center; gap: 8px; flex: none; }
-.pn-faces { display: inline-flex; margin-right: 4px; }
-.pn-face { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--bg); margin-left: -6px; }
+/* 얼굴 줄(#2116) — **[공유] 바로 왼쪽에 상주**한다(구글 문서와 같은 자리). 겹쳐 세워 자리를 아끼되
+   첫 얼굴은 왼쪽으로 새지 않게 여백을 되돌린다. 최대 3명, 넘으면 마지막 칸이 `+N` 이 된다(panes.ts FACE_MAX). */
+.pn-faces { display: inline-flex; align-items: center; margin-right: 4px; }
+/* ⚠ 얼굴은 **글자 한 자를 가운데 세우는 상자**다 — width·height·radius 만 주면 이니셜이 좌상단 베이스라인에
+   그대로 얹힌다(원준 2026-08-26 "'윤' 글자가 가운데정렬이 안되자나"). 다른 얼굴 클래스(v2-ss-face·v2-wscard-face)가
+   쓰는 것과 같은 처방을 쓴다: inline-grid + place-items:center + 글자 크기·굵기·색까지 여기서 못 박는다. */
+.pn-face { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--bg); margin-left: -6px;
+  box-sizing: border-box; display: inline-grid; place-items: center; overflow: hidden; flex: none;
+  font-size: 11px; font-weight: 700; line-height: 1; color: var(--on-fill); }
+.pn-face > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pn-faces > .pn-face:first-child { margin-left: 0; }
+.pn-face-more { background: var(--bg-tint); color: var(--muted); letter-spacing: -.02em; }
 
 /* ── 아이콘·잔글씨 ── */
 .pn-i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -383,7 +391,7 @@
 @media (max-width: 900px) {
   .pn-body { grid-template-columns: minmax(0, 1fr) 0 0; }
   .pn-pane[data-zone="side"], .pn-body > .v2-split-x, .pn-side-reopen { display: none; }
-  .pn-door { padding: 12px 14px 10px; }
+  .pn-door { padding: 8px 14px; }
   .pn-title { font-size: 19px; }
 }
 
@@ -520,3 +528,37 @@ webview.pn-webframe { display: flex; }
 .pn-prev-m{font-size:11px;color:var(--muted-2);line-height:1.45;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pn-prev-go{flex:0 0 auto;opacity:0;transition:opacity .12s}
 .pn-prev-row:hover .pn-prev-go,.pn-prev-row.is-on .pn-prev-go{opacity:.6}
+
+/* ── 세션 공유(#2116) — 문패 [공유]가 여는 팝오버 ────────────────────────────────
+   구글 문서의 [공유]와 같은 자리·같은 뜻이다: 맨 위가 '지금 보고 있는 사람', 그 아래가 '함께 볼 사람'.
+   위치만 .dash-pop(position:fixed)이 잡아 주므로 카드 모양은 여기서 그린다. */
+.pn-share { width: 292px; max-width: calc(100vw - 16px); background: var(--bg); border: 1px solid var(--line-net);
+  border-radius: 12px; box-shadow: 0 10px 32px rgba(20,35,59,.18); overflow: hidden; }
+.pn-share-head { display: flex; align-items: baseline; gap: 8px; padding: 11px 13px 9px; border-bottom: 1px solid var(--line); }
+.pn-share-head b { font-size: 13.5px; }
+.pn-share-sub { min-width: 0; font-size: 11.5px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-share-body { padding: 11px 13px 12px; display: flex; flex-direction: column; gap: 11px; }
+.pn-share-block { display: flex; flex-direction: column; gap: 7px; }
+.pn-share-sec { font-size: 11px; font-weight: 700; letter-spacing: .01em; color: var(--muted); }
+.pn-share-fine { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--muted-2); }
+.pn-share-people { display: flex; flex-direction: column; gap: 5px; }
+.pn-share-person { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink); }
+/* 팝오버 안의 얼굴도 같은 처방 — 위 .pn-face 와 크기만 다르다. */
+.pn-share-face { width: 22px; height: 22px; border-radius: 50%; flex: none; box-sizing: border-box;
+  display: inline-grid; place-items: center; overflow: hidden;
+  font-size: 10px; font-weight: 700; line-height: 1; color: var(--on-fill); }
+.pn-share-face > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 고른 사람 = 칩. 없을 때는 '비공개'라는 사실 한 줄이 그 자리를 대신한다(빈 칸을 보여 주지 않는다). */
+.pn-share-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.pn-share-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 5px 3px 3px; border-radius: 999px;
+  background: var(--bg-tint); font-size: 12px; }
+.pn-share-x { border: none; background: none; padding: 0 2px; cursor: pointer; color: var(--muted); font-size: 13px; line-height: 1; }
+.pn-share-x:hover { color: var(--ink); }
+.pn-share-in { width: 100%; padding: 6px 9px; border: 1px solid var(--line-net); border-radius: 8px;
+  font-family: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
+.pn-share-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.pn-share-list { display: flex; flex-direction: column; max-height: 176px; overflow-y: auto; scrollbar-width: thin; }
+.pn-share-row { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 6px; border: none; background: none;
+  border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 12.5px; color: inherit; text-align: left; }
+.pn-share-row:hover { background: var(--bg-tint); }
+.pn-share-act { display: flex; justify-content: flex-end; gap: 6px; }

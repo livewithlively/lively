@@ -10,9 +10,12 @@ import {
   normalizeSessionMemoryPolicy, SESSION_MEM_MB_MIN, SESSION_MEM_MB_MAX, type SessionMemoryPolicyPatch
 } from "../../sessions/session-memory-policy.js"; // #1059 D
 import {
-  RECLAIM_TTL_MIN_MIN, RECLAIM_TTL_MIN_MAX, RECLAIM_PRESSURE_PCT_MIN, RECLAIM_PRESSURE_PCT_MAX, type SessionReclaimPolicyPatch
+  RECLAIM_TTL_MIN_MIN, RECLAIM_TTL_MIN_MAX, RECLAIM_PRESSURE_PCT_MIN, RECLAIM_PRESSURE_PCT_MAX, RECLAIM_SWAP_PCT_MAX, type SessionReclaimPolicyPatch
 } from "../../sessions/session-reclaim-policy.js"; // #1059 F · #1220 압박 회수
-import { STALL_MS_MIN, STALL_MS_MAX, type DelegatePolicyPatch } from "../../org/policies/delegate-policy.js"; // #1101 위탁 무출력 stall 상한
+import {
+  STALL_MS_MIN, STALL_MS_MAX, KEEP_FAILED_MIN, KEEP_FAILED_MAX, FAILED_TTL_MIN_MIN, FAILED_TTL_MIN_MAX,
+  type DelegatePolicyPatch,
+} from "../../org/policies/delegate-policy.js"; // #1101 위탁 무출력 stall 상한 · #1675 실패 뒤처리
 import {
   type SessionSharePatch, SESSION_SHARE_SCOPES, SESSION_SHARE_STORES, SESSION_SHARE_VIEW_POLICIES, KNOWN_HARNESSES, RETENTION_MAX_DAYS
 } from "../../sessions/session-share.js";
@@ -232,6 +235,14 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.pressure_idle_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다`);
           patchIn.pressure_idle_minutes = Math.floor(n);
         }
+        // #1675 ⑤ 스왑 축 — 물리 축과 상한 근거가 다르다(earlyoom 은 -s 100 으로 스왑을 안 본다) → 99 까지.
+        //  ⚠ 이 블록에 필드를 빠뜨리면 **관리탭이 200 을 받고도 값이 조용히 사라진다**(아래 zod 가 미선언 키를 strip).
+        //   #1675 최초 구현이 정확히 그 상태였다 — 저장 버튼이 무효인 채로 리뷰까지 왔다.
+        if (s.pressure_swap_pct !== undefined) {
+          const n = Number(s.pressure_swap_pct);
+          if (!Number.isFinite(n) || n < RECLAIM_PRESSURE_PCT_MIN || n > RECLAIM_SWAP_PCT_MAX) throw new HttpError(400, `session_reclaim_policy.pressure_swap_pct 는 ${RECLAIM_PRESSURE_PCT_MIN}~${RECLAIM_SWAP_PCT_MAX} 정수(%)여야 합니다 (0=스왑 압박 회수 끔)`);
+          patchIn.pressure_swap_pct = Math.floor(n);
+        }
         patch.session_reclaim_policy = patchIn;
       }
       // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구.
@@ -246,6 +257,18 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(n) || n < STALL_MS_MIN || n > STALL_MS_MAX) throw new HttpError(400, `delegate_policy.stall_ms 는 ${STALL_MS_MIN}~${STALL_MS_MAX} 정수(ms)여야 합니다 (0=가드 끔)`);
           patchIn.stall_ms = Math.floor(n);
         }
+        // #1675 ①③ 실패 뒤처리 — 보존 상한·TTL·자격 실패 시 크론 자동 정지.
+        if (s.keep_failed_sessions !== undefined) {
+          const n = Number(s.keep_failed_sessions);
+          if (!Number.isFinite(n) || n < KEEP_FAILED_MIN || n > KEEP_FAILED_MAX) throw new HttpError(400, `delegate_policy.keep_failed_sessions 는 ${KEEP_FAILED_MIN}~${KEEP_FAILED_MAX} 정수(건)여야 합니다 (0=즉시 전량 회수)`);
+          patchIn.keep_failed_sessions = Math.floor(n);
+        }
+        if (s.failed_session_ttl_min !== undefined) {
+          const n = Number(s.failed_session_ttl_min);
+          if (!Number.isFinite(n) || n < FAILED_TTL_MIN_MIN || n > FAILED_TTL_MIN_MAX) throw new HttpError(400, `delegate_policy.failed_session_ttl_min 는 ${FAILED_TTL_MIN_MIN}~${FAILED_TTL_MIN_MAX} 정수(분)여야 합니다 (0=무제한)`);
+          patchIn.failed_session_ttl_min = Math.floor(n);
+        }
+        if (s.auth_fail_stop_cron !== undefined) patchIn.auth_fail_stop_cron = Boolean(s.auth_fail_stop_cron);
         patch.delegate_policy = patchIn;
       }
       if (input.hooks !== undefined) {
@@ -595,11 +618,15 @@ export const runtimeConfigCapabilities: Capability[] = [
       }).optional().describe("per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). 캡을 걸면 세션이 box-cgspawn scope 로 격리돼 폭주 세션만 OOM-kill·박스 생존"),
       session_reclaim_policy: z.object({
         idle_ttl_minutes: z.number().int().min(0).max(43_200).optional().describe("이 분(minute)을 넘게 idle 인 세션을 자동 회수. 0=끔(무회귀). managed·attached·busy·waiting 은 항상 제외"),
-        pressure_used_pct: z.number().int().min(0).max(99).optional().describe("메모리 사용률이 이 %를 넘으면 평시 TTL 을 기다리지 않고 회수(#1220). 0=끔. RSS 큰 세션부터 걷고 임계 밑으로 내려가면 멈춘다 — earlyoom 이 예고 없이 SIGTERM 하기 전에 복원 가능한 방식으로 먼저 확보"),
+        pressure_used_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_PRESSURE_PCT_MAX).optional().describe("메모리 사용률이 이 %를 넘으면 평시 TTL 을 기다리지 않고 회수(#1220). 0=끔. RSS 큰 세션부터 걷고 임계 밑으로 내려가면 멈춘다. ⚠ 상한이 earlyoom 발동선(94%)보다 낮게 잡혀 있다(#1675 ⑤) — 그 위 값은 earlyoom 이 먼저 죽여 영영 발동하지 못한다"),
         pressure_idle_minutes: z.number().int().min(0).max(43_200).optional().describe("압박 회수가 쓰는 완화 idle 기준(분) — 압박이어도 이보다 최근에 쓴 세션은 안 건드린다. 평시 TTL 보다 짧게(예: 평시 1440·압박 60)"),
+        pressure_swap_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_SWAP_PCT_MAX).optional().describe("스왑 사용률이 이 %를 넘으면 압박으로 보고 회수(#1675 ⑤). 0=끔. 물리 메모리가 여유로워 보여도 스왑이 차 있으면 그 박스는 이미 벼랑이다 — 전면장애 실측이 물리 82%·스왑 99.9% 였다. earlyoom 은 -s 100 으로 스왑을 안 보므로 이 축은 경합 없이 게이트웨이가 먼저 잡는다"),
       }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택)"),
       delegate_policy: z.object({
         stall_ms: z.number().int().min(STALL_MS_MIN).max(STALL_MS_MAX).optional().describe("위탁 워커가 시작 후 한 바이트도 못 낸 채 이 ms 를 넘기면 조기 종결(#1101). 0=가드 끔. 0 초과인데 60000 미만이면 60000 으로 올린다 — 너무 짧으면 멀쩡한 작업을 죽인다"),
+        keep_failed_sessions: z.number().int().min(KEEP_FAILED_MIN).max(KEEP_FAILED_MAX).optional().describe("실패로 끝난 위탁의 워커 세션을 몇 건까지 검시용으로 남길지(#1675 ①). 0=즉시 전량 회수. 종전엔 무제한이라 하루에 2,300개가 쌓여 스왑을 고갈시켰다 — 원문(stream.jsonl·stderr.log)은 세션과 무관하게 작업 폴더에 남는다"),
+        failed_session_ttl_min: z.number().int().min(FAILED_TTL_MIN_MIN).max(FAILED_TTL_MIN_MAX).optional().describe("남겨둔 실패 세션도 이 분을 넘기면 회수(#1675 ①). 0=무제한(개수 상한만). 검시는 사고 직후에 하지 이틀 뒤에 하지 않는다"),
+        auth_fail_stop_cron: z.boolean().optional().describe("자격(인증) 실패를 감지하면 그 위탁을 낸 크론을 자동 정지할지(#1675 ③). 기본 켬. 끄면 알림만 가고 크론은 계속 돌아 같은 실패를 반복한다"),
       }).optional().describe("위탁 태스크 정책(#1101) — 무출력 stall 상한. 자격 부재로 claude -p 가 hang 하면 종전엔 timeout(1h)까지 무출력으로 매달렸다. 레포 준비가 느린 박스는 늘리고, 배치 드레인은 줄여 빨리 실패를 본다"),
       // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.
       //  상한은 WORKER_POLICY_MAX 를 그대로 쓴다(스키마·핸들러·store clamp 가 한 상수를 공유 — 드리프트 금지).

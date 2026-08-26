@@ -15,6 +15,7 @@ import {
 } from "./protocol.js";
 import { authNodeToken, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
+import { sharesGatewayTmux } from "./self-node.js";
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
 
@@ -125,6 +126,51 @@ export function liveNodes(): NodePublic[] {
 
 export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
 
+// ── 게이트웨이 자신이 노드로도 등록된 경우(#2108) ──
+//
+// `lively node --daemon` 은 self-register 라, **게이트웨이가 도는 그 박스에서** 실행하면 평범한 member 노드로
+//  목록에 들어온다. 게이트웨이엔 "이 노드가 나 자신인가"를 보는 눈이 없어 종전엔 그냥 남의 PC 처럼 다뤘다.
+//  그런데 같은 박스면 **같은 tmux 서버**를 보므로(terminal/routes 344·project-routes 381 의 이중표기 주석이
+//  이미 인정하는 사실) 한 세션이 두 경로로 접근된다: 박스 경로는 tmux 에 직접 물어 즉시 확답을 받고,
+//  노드 경로는 3초 스냅샷을 거친다. 그래서 "중앙 컴퓨터로 고르면 열리는데 노드로 고르면 안 열린다"가 난다.
+//  위탁 스케줄러에도 해롭다 — 같은 박스가 CENTRAL 과 원격 노드로 **두 번** 후보에 올라 용량이 이중계산된다.
+//
+// 판정은 **양성 확답만** 쓴다: 그 노드의 스냅샷 세션 id 중 하나가 **이 게이트웨이의 tmux 목록에도 있으면**
+//  같은 tmux 서버다 = 자기 자신. 호스트명 비교 같은 대용물이 아니라 해로운 성질 그 자체를 재므로
+//  ⓐ 오탐이 없고(원격 노드의 세션 id 가 이 박스 tmux 에 있을 수 없다) ⓑ 노드 에이전트 변경이 필요 없다
+//  (구 번들에도 그대로 듣는다). 겹침이 없다고 '자신이 아니다'로 뒤집지는 않는다 — 세션이 하나도 없는
+//  순간엔 볼 것이 없을 뿐이다(없음 ≠ 아니다). 그래서 한 번 선 판정은 유지한다(프로세스 재시작 시 재도출).
+//
+// 매니지드 공유 게이트웨이: 판정은 **박스 단위**이고 테넌트를 안 탄다 — 컨테이너 안에서 도는 노드는 어느
+//  테넌트가 등록했든 자기 자신이 맞고(같은 tmux), 멤버의 개인 PC 는 이 박스 tmux 와 겹칠 수 없어 절대 안 걸린다.
+//  겹친 id 자체는 어떤 응답에도 싣지 않는다(테넌트 간 노출 없음 — 노드마다 불리언 하나만 나간다).
+const selfNodes = new Set<string>();          // states 와 같은 스코프 키
+const SELF_PROBE_MS = 30_000;
+let selfProbeAt = 0;
+let selfProbing = false;
+async function probeSelfNodes(): Promise<void> {
+  if (selfProbing || Date.now() - selfProbeAt < SELF_PROBE_MS) return;
+  selfProbing = true;
+  selfProbeAt = Date.now();                   // 실패도 백오프시킨다(tmux 불통일 때 3초마다 재시도하지 않게)
+  try {
+    // strict — tmux 가 **답해서** 준 목록일 때만 쓴다. '못 봤다'를 빈 목록으로 접으면 판정 근거가 사라진다.
+    const { listSessionsRaw } = await import("../terminal/sessions.js");
+    const mine = new Set((await listSessionsRaw({ strict: true })).map((s) => s.id));
+    for (const [k, st] of states) {
+      if (selfNodes.has(k)) continue;
+      if (!sharesGatewayTmux(mine, st.sessions.map((s) => s.id))) continue;
+      selfNodes.add(k);
+      logger.warn({ node: k },
+        "이 노드는 게이트웨이 자신과 같은 tmux 를 씁니다 — 같은 박스입니다. 세션 생성 대상에서 빼고 '중앙 컴퓨터'로 안내합니다");
+    }
+  } catch { /* tmux 를 못 봤다 = 판정 불가. 양성일 때만 표시하므로 조용히 넘어간다 */ }
+  finally { selfProbing = false; }
+}
+/** 이 노드가 **게이트웨이 자신이 도는 박스**인가(#2108). 확답으로 관측됐을 때만 true. */
+export function isSelfNode(id: string): boolean { return selfNodes.has(keyOf(id)); }
+/** 테스트·부팅용 — 판정 캐시를 비운다(다음 스냅샷에서 다시 도출된다). */
+export function resetSelfNodes(): void { selfNodes.clear(); selfProbeAt = 0; }
+
 // 이 노드의 에이전트가 게이트웨이 서빙 번들보다 낡았나 — **에러 번역용**(#1541). op 미지원(caps)과 다른 축이다:
 //  op 은 있는데(기준선 create 등) 그 구현이 새 규약(sessionDir 등)을 몰라 "허용되지 않은 루트" 류의 낯선 오류를
 //  던지는 케이스가 실측됐다. 그때 사용자에게 "노드를 다시 시작하라"는 다음 행동을 줘야 한다(#1713 자가 갱신이
@@ -199,6 +245,23 @@ export async function nodeRpc<T = unknown>(nodeId: string, op: NodeOp, args?: Re
   });
 }
 
+/**
+ * 이 노드 세션이 **정말 끝났나** — 확답 only(#835). `true` 일 때만 '죽었다'로 다뤄도 된다.
+ *
+ * ⚠ **스냅샷 부재는 죽음의 근거가 아니다.** 상태 push 는 3초 주기(agent STATE_PUSH_MS)라 방금 만든
+ *  살아 있는 세션이 그 창 동안 목록에서 통째로 빠진다(#2108 실측: hammurabi 5회 중 3회, macmini 45~143ms).
+ *  그걸 죽음으로 읽으면 부팅 게이트가 갓 만든 세션을 복원으로 몰아 `--resume` 후보 0건 피커가 뜬다.
+ *
+ * @returns `true` 종료 확답 · `false` 살아 있음 확답 · `null` 판정 불가(노드 오프라인·무응답 — 죽음으로 접지 말 것)
+ */
+export async function nodeSessionGone(nodeId: string, sessionId: string): Promise<boolean | null> {
+  if (!conns.has(keyOf(nodeId))) return null;                 // 오프라인 — 물어볼 곳이 없다
+  const st = states.get(keyOf(nodeId));
+  // 신선한 스냅샷에 있으면 그것만으로 살아있음 확답(RPC 아낌). 없을 때만 노드에 직접 묻는다.
+  if (st && Date.now() - st.ts <= STATE_STALE_MS && st.sessions.some((s) => s.id === sessionId)) return false;
+  return await nodeRpc<boolean>(nodeId, "gone", { id: sessionId }).catch(() => null);
+}
+
 // attach 가부 판정(정책 — 게이트웨이 소유). 스냅샷이 신선하면 그걸로, 아니면 노드에 목록을 재조회.
 export async function nodeCanAttach(nodeId: string, sessionId: string, viewer: string):
   Promise<{ ok: true } | { ok: false; code: number; reason: string }> {
@@ -264,6 +327,10 @@ function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | 
     res: res ?? prev?.res ?? null,
   };
   states.set(k, st);
+  void probeSelfNodes();   // #2108 — 이 노드가 게이트웨이 자신인가(스로틀·비치명, 아래 주석)
+  // #2022 — 처음 보는 세션이 있으면 그 자리에서 기억한다(구독자가 판단·기록, 여기선 알리기만).
+  //  best-effort: 실패해도 스냅샷 반영은 그대로 간다(이 함수는 라이브 목록의 정본을 세우는 자리다).
+  if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 스냅샷을 막지 않는다 */ } }
   // 정본(org_node_state)으로 흘려보낸다(#1834) — 이 게이트웨이가 재배포로 죽어도 다음 부팅이 여기서 목록을 되찾는다.
   //  세션 목록이 바뀌었을 때 즉시, 그대로면 최소 간격마다(node-state-store.shouldPersist). 비치명 —
   //  실패하면 기억을 지워 다음 보고(3초 뒤)가 곧바로 다시 시도한다.
@@ -286,6 +353,11 @@ export function onTaskDone(cb: (nodeId: string, m: TaskDoneMsg) => void): void {
 // 최신 에이전트 hello가 확정된 뒤 호출돼, 연결 단절 때 fail-closed 정지한 AppInstance worker를 다시 맞춘다.
 let nodeReadyHandler: ((nodeId: string) => void | Promise<void>) | null = null;
 export function onNodeReady(cb: (nodeId: string) => void | Promise<void>): void { nodeReadyHandler = cb; }
+// #2022 — 노드가 올린 세션 스냅샷 구독(순환 import 회피: registry 는 DB 계층을 모른다 — onTaskDone·onWorkerState 와 같은 역전).
+//  구독자(terminal/node-session-state)가 처음 보는 세션의 desired-state 를 적는다 — 그 컴퓨터에서 직접 띄운 세션이
+//  노드가 꺼지는 순간 어디에도 없는 세션이 되던 것을 막는다.
+let nodeSessionsHandler: ((nodeId: string, sessions: SessionInfo[]) => void | Promise<void>) | null = null;
+export function onNodeSessions(cb: (nodeId: string, sessions: SessionInfo[]) => void | Promise<void>): void { nodeSessionsHandler = cb; }
 let workerStateHandler: ((nodeId: string, snapshot: unknown) => void | Promise<void>) | null = null;
 export function onWorkerState(cb: (nodeId: string, snapshot: unknown) => void | Promise<void>): void { workerStateHandler = cb; }
 
@@ -297,6 +369,9 @@ export interface RemoteSchedulable { id: string; hasDocker: boolean; res: NodeRe
 export function schedulableRemotes(): RemoteSchedulable[] {
   const out: RemoteSchedulable[] = [];
   for (const [id, c] of inScope(conns)) {
+    // #2108 — 게이트웨이 자신인 노드는 후보에서 뺀다. CENTRAL 후보가 이미 그 박스를 대표하므로, 두면
+    //  같은 머신이 두 번 올라 용량(CAP_CENTRAL + CAP_MEMBER)이 이중계산되고 실행 경로만 원격으로 돌아간다.
+    if (isSelfNode(id)) continue;
     const st = states.get(keyOf(id));
     out.push({ id, hasDocker: c.hasDocker, res: st?.res ?? null });
   }

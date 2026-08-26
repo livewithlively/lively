@@ -13,6 +13,10 @@ $ErrorActionPreference = "Stop"
 
 # 게이트웨이가 서빙 시점에 자기 주소를 굽는다(src/web.ts 의 /cli.ps1 라우트).
 $GW = if ($env:LIVELY_GATEWAY) { $env:LIVELY_GATEWAY } else { "__LIVELY_GATEWAY__" }
+# 이 주소가 **게이트웨이**인가 **라이블리 클라우드**인가 (#2044) — sh 판과 같은 계약.
+#  굽히지 않은 채 오면 종전대로 'gateway'(새 서버 + 구 스크립트 조합에서 안전한 쪽).
+$Mode = if ($env:LIVELY_MODE) { $env:LIVELY_MODE } else { "__LIVELY_MODE__" }
+if ($Mode -ne "cloud") { $Mode = "gateway" }
 $GW = $GW.TrimEnd('/')
 
 function Say($m, $c = "Gray") { Write-Host $m -ForegroundColor $c }
@@ -190,7 +194,10 @@ $shimCrlf = ((($shim -replace "`r`n", "`n") -replace "`n", "`r`n")) + "`r`n"
 OK "lively 설치: $LV\bin\lively.cmd"
 
 # 게이트웨이 주소 기록 — `lively login` 이 어디에 물어볼지 알게 된다(토큰은 여기 없다).
-Set-Content -Path (Join-Path $LV "gateway-url") -Value $GW -NoNewline
+# ⚠ 클라우드 모드에선 주소를 쓰지 않는다 — 아직 아무도 모르는 값이다(로그인이 받아 온다).
+if ($Mode -eq "gateway") {
+  Set-Content -Path (Join-Path $LV "gateway-url") -Value $GW -NoNewline
+}
 
 # ── [3] PATH 배선 (User 스코프 — 관리자 권한 불필요) ──────────────────────────
 $binDir = Join-Path $LV "bin"
@@ -212,7 +219,12 @@ $canPrompt = $true
 try { $canPrompt = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected } catch { $canPrompt = $true }
 
 if ($canPrompt) {
-  & $NODE $cliPath setup
+  if ($Mode -eq "cloud") {
+    # 클라우드 — 브라우저 승인 한 번으로 워크스페이스·자격이 온다(주소를 묻지 않는다).
+    & $NODE $cliPath setup --cloud $GW
+  } else {
+    & $NODE $cliPath setup
+  }
   # ⚠ 여기서도 exit 금지(위 Die 주석과 같은 이유) — 실패했으면 **사실대로 알리고** 스크립트만 끝낸다.
   #  종전엔 `exit $LASTEXITCODE` 라서, 설치가 실패한 바로 그 순간 사용자 창이 닫혀 에러를 아무도 못 읽었다.
   if ($LASTEXITCODE -ne 0) {

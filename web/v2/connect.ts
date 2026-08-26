@@ -204,6 +204,8 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   if (svc.key === 'slack' && st === 'on' && org && org.admin) settings.push(slackTeamCollectCard());
   //  #1881 노션 — 관리자에게만. 슬랙과 달리 개인 연결(MCP)과 무관: 토글이 여는 노션 화면(페이지 선택)이 곧 연결이자 수집 범위다.
   if (svc.key === 'notion' && org && org.admin) settings.push(notionTeamCollectCard());
+  //  #1881 G5 구글 — 관리자에게만. 슬랙처럼 켠 사람의 연결로 돌되, **무엇을 켜느냐가 곧 비용**이라 서비스를 고르게 한다.
+  if (svc.key === 'google' && org && org.admin) settings.push(googleTeamCollectCard());
   if (svc.key === 'slack' && st === 'on') {
     settings.push(el('section', { class: 'cn-sec' },
       el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '이 앱의 설정' })),
@@ -373,6 +375,163 @@ function notionTeamCollectCard(): HTMLElement {
       await paint();
     };
     body.replaceChildren(lab, ...notes.map((t) => el('p', { class: 'cn-help' }, ...uiText(t))), ...extra);
+  };
+  void paint();
+  return box;
+}
+
+// ── 팀 자료로 모으기 · 구글(#1881 G5) ─────────────────────────────────────────────
+//  슬랙·노션 카드와 같은 뼈대인데 축이 하나 더 있다: **어떤 서비스를 모을지**.
+//  그게 취향 문제가 아니라 돈 문제라서다 — Gmail 은 구글 '제한범위'라 앱 심사(CASA, 연 수백~수천 달러)나
+//  미검증 100명 한도를 끌고 오고, 드라이브는 그렇지 않다. 그 100 은 프로젝트 수명 누적이고 되돌릴 수 없어서,
+//  안 쓰는 Gmail 을 기본으로 켜 두면 구성원 한 명이 연결할 때마다 한 칸씩 영구히 사라진다.
+//  → 기본은 드라이브만. Gmail 은 사람이 명시적으로 고르고, 그 대가를 화면이 먼저 말한다.
+//  (근거·수치: 지식 google-single-connect-design-1881 §9)
+function googleTeamCollectCard(): HTMLElement {
+  const body = el('div', { class: 'cn-help' }, ...uiText('불러오는 중…'));
+  const box = el('section', { class: 'cn-sec' },
+    el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '팀 자료로 모으기' })),
+    body);
+  const openConsent = (url: string, after: () => void): void => {
+    window.open(url, '_blank', 'noopener');
+    toast('구글 화면에서 [허용]을 누르세요 — 돌아오면 이 화면이 갱신됩니다');
+    window.addEventListener('focus', () => after(), { once: true });
+  };
+  const paint = async (): Promise<void> => {
+    let s: any;
+    try { s = await api('/api/ui/org/google/collect'); }
+    catch (e) { body.replaceChildren(errorNote(e, '수집 상태를 불러오지 못했습니다')); return; }
+    const cols: any[] = (s && s.collectors) || [];
+    const of = (k: string) => cols.find((c) => c.service === k) || {};
+    const drive = of('drive'), gmail = of('gmail');
+    // 도구 전용(수집기 없음) — 일정은 자료로 모으지 않고 AI 가 그때그때 읽는다. 서버가 tools 로 내려 준다.
+    const tools: any[] = (s && s.tools) || [];
+    const cal = tools.find((t) => t.service === 'calendar') || {};
+    const connected = !!(s && s.connected);
+    const anyOn = !!(drive.enabled || gmail.enabled);
+
+    // 서비스 선택 — 체크박스가 곧 요청 scope 다(안 고른 건 동의도 안 받는다 = 최소 권한).
+    // ★ Gmail 은 1차 런칭 대상이 아니다(2026-08-26) — 서버가 offered:false 로 알려 준다. 칸을 아예 내밀지 않되,
+    //  **이미 켜 둔 조직에는 상태만 보여 준다**(칸이 사라지면 "왜 아직 메일이 모이지?" 를 아무도 설명 못 한다).
+    const gmailOffered = gmail.offered !== false;
+    const gmailLegacy = !gmailOffered && !!gmail.enabled;
+    const dChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    const gChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    dChk.checked = drive.enabled !== false && (drive.enabled || !anyOn); // 기본 드라이브만
+    gChk.checked = !!gmail.enabled;
+    const calOffered = cal.offered !== false;
+    const cChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    cChk.checked = !!cal.scope_ok; // 수집기가 없으니 '켜짐'의 뜻은 '허용했나' 하나뿐이다
+    const picked = (): string[] => [
+      ...(dChk.checked ? ['drive'] : []),
+      ...(gmailOffered && gChk.checked ? ['gmail'] : []),
+      ...(calOffered && cChk.checked ? ['calendar'] : []),
+    ];
+
+    const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    chk.checked = anyOn;
+    if (!(s && s.ready) && !connected) chk.disabled = true; // 시작할 길이 없다 — 눌러도 안 되는 토글을 내밀지 않는다
+    const lab = el('label', { class: 'cn-toggle' }, chk, el('span', { text: ' 구글에 있는 팀 자료를 자료함에 자동으로 모읍니다' }));
+
+    const notes: string[] = [];
+    if (anyOn) {
+      const on = [drive.enabled ? 'Google Drive' : '', gmail.enabled ? 'Gmail' : ''].filter(Boolean).join(' · ');
+      notes.push(`${on} 에서 모으고 있어요 — 켠 사람(${(s.connected && s.connected.kind) ? '내' : '내'}) 구글 연결로 돕니다.`);
+    } else if (connected) notes.push('연결은 돼 있어요 — 모을 서비스를 고르고 켜면 바로 시작합니다.');
+    else if (s && s.ready) notes.push('켜면 구글 화면이 열려요 — [허용]만 누르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
+    else notes.push('구글 연결 준비가 아직 안 됐어요 — 아래에 구글 OAuth 클라이언트 값 두 개를 넣으면 열립니다.');
+
+    // ★ 비용 고지 — Gmail 을 고른 순간(또는 이미 켜진 순간) 무슨 대가가 붙는지 먼저 말한다.
+    // ★ 여기서 거짓말을 하지 않는 것이 중요하다. Gmail 을 뺐다고 심사·한도가 0이 되는 게 아니다 —
+    //  팀 문서를 통째로 읽는 범위(drive.readonly)도 구글은 민감하게 본다. 100명은 되돌릴 수 없으므로
+    //  "제한 없음"으로 읽히면 그 오해의 대가를 나중에 치른다.
+    const costLine = (): string =>
+      gmailLegacy
+        ? 'Gmail 은 지금 새로 켤 수 없어요(구글 심사 범위라 준비 중입니다) — 이미 켜져 있어서 그대로 돌아갑니다.'
+        : '구글 심사를 마치기 전에는 회사 전체에서 100명까지 연결할 수 있어요(그 수는 되돌릴 수 없습니다). 연결할 때 구글이 "확인되지 않은 앱" 경고를 띄우는데, [고급] → [이동]으로 넘어가면 됩니다.';
+    const cost = el('p', { class: 'cn-help' }, ...uiText(costLine()));
+    const repaintCost = () => cost.replaceChildren(...uiText(costLine()));
+    dChk.onchange = repaintCost; gChk.onchange = repaintCost; cChk.onchange = repaintCost;
+
+    const svcRow = el('div', { class: 'cn-sec-form' },
+      el('label', { class: 'cn-toggle' }, dChk, el('span', { text: ' Google Drive 문서' })),
+      ...(calOffered ? [el('label', { class: 'cn-toggle' }, cChk,
+        el('span', { text: ' 캘린더 일정 — AI가 읽기만 합니다(자료로 모으지 않아요)' }))] : []),
+      ...(gmailOffered ? [el('label', { class: 'cn-toggle' }, gChk, el('span', { text: ' Gmail 메일' }))]
+        : gmailLegacy ? [el('p', { class: 'cn-help' }, ...uiText('· Gmail 메일 — 예전에 켜 두신 것이 그대로 돌고 있어요'))]
+        : []));
+
+    const extra: HTMLElement[] = [];
+    // 동의는 했는데 그 서비스 범위가 빠진 경우 — 켜 봐야 상류가 거부하므로 먼저 범위를 넓히게 한다.
+    const missing = [
+      !drive.scope_ok && dChk.checked ? 'Google Drive' : '',
+      gmailOffered && !gmail.scope_ok && gChk.checked ? 'Gmail' : '',
+      calOffered && !cal.scope_ok && cChk.checked ? '캘린더' : '',
+    ].filter(Boolean);
+    if (connected && missing.length) {
+      // 캘린더는 '모으기'가 아니라 '읽기'다 — 문구가 하는 일과 어긋나면 사람이 다른 걸 기대한다.
+      const onlyCal = missing.length === 1 && missing[0] === '캘린더';
+      extra.push(el('p', { class: 'cn-help' }, ...uiText(
+        `${missing.join(' · ')} 는 아직 허용하지 않으셨어요 — [권한 넓히기]로 한 번 더 허용하면 ` +
+        (onlyCal ? 'AI가 일정을 읽을 수 있습니다.' : '바로 시작합니다.'))));
+    }
+    if (connected) {
+      extra.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '권한 넓히기',
+        onclick: async () => {
+          try {
+            const r: any = await api('/api/ui/org/google/collect/connect', { method: 'POST', body: JSON.stringify({ services: picked() }) });
+            if (r && r.authorization_url) openConsent(r.authorization_url, () => void paint());
+            else toast('구글 화면을 열지 못했습니다', true);
+          } catch (e: any) { toast((e && e.message) || '구글 화면을 열지 못했습니다', true); }
+        } }));
+    }
+    // ★ 조건이 `!ready && !connected` 였다: 조직에 client 가 없는데 나는 (예전 방식으로) 연결돼 있으면
+    //  폼이 안 떠서 **client 를 넣을 길이 자체가 사라진다**(2026-08-26 dev 에서 이 막다른 상태를 실제로 밟았다).
+    //  client 는 조직 것이고 내 연결 여부와 독립이다 — ready 만 본다.
+    if (!(s && s.ready)) {
+      // 직결(셀프호스팅·dev) 준비 폼 — 노션 카드와 대칭. 매니지드 테넌트는 CP 릴레이가 있어 이 폼이 보일 일이 없다.
+      //  client_secret 은 이 사이트 계정의 비밀번호가 아니다 — type=password 금지(#1250), 텍스트칸+CSS 가림.
+      const idIn = el('input', { type: 'text', placeholder: 'OAuth 클라이언트 ID', autocomplete: 'off', style: 'width:100%' }) as HTMLInputElement;
+      const secIn = el('input', { type: 'text', class: 'secret-input', placeholder: 'OAuth 클라이언트 보안 비밀', autocomplete: 'off', style: 'width:100%' }) as HTMLInputElement;
+      const saveBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '클라이언트 값 저장' }) as HTMLButtonElement;
+      saveBtn.onclick = async () => {
+        const cid = idIn.value.trim(), sec = secIn.value.trim();
+        if (!cid || !sec) { toast('ID 와 보안 비밀을 모두 넣어 주세요', true); return; }
+        saveBtn.disabled = true;
+        try {
+          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: 'google_oauth', scope_key: 'oauth:client', secret: JSON.stringify({ client_id: cid, client_secret: sec }) }) });
+          toast('저장했어요 — 이제 토글을 켜면 구글 화면이 열립니다');
+        } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; return; }
+        await paint();
+      };
+      extra.push(el('div', { class: 'cn-sec-form' },
+        idIn, secIn, saveBtn,
+        el('p', { class: 'cn-help' }, ...uiText('Google Cloud 콘솔 ▸ API 및 서비스 ▸ 사용자 인증 정보에서 만든 **웹 애플리케이션** 클라이언트의 ID·보안 비밀입니다. 그 클라이언트의 승인된 리디렉션 URI 에 ' + location.origin + '/oauth/callback 이 등록돼 있어야 하고, OAuth 동의 화면은 반드시 게시(In production) 상태여야 합니다 — 테스트 상태면 7일마다 연결이 끊깁니다.'))));
+    }
+
+    chk.onchange = async () => {
+      chk.disabled = true;
+      const services = picked();
+      if (chk.checked && services.length === 0) { toast('모을 서비스를 하나 이상 골라 주세요', true); chk.checked = false; chk.disabled = false; return; }
+      try {
+        const r: any = await api('/api/ui/org/google/collect', { method: 'POST', body: JSON.stringify({ enabled: chk.checked, services }) });
+        if (r && r.needs_connect && r.authorization_url) {
+          // 동의가 먼저다 — 구글에서 허용하고 돌아오면 다시 켜서 수집기를 만든다(멱등).
+          openConsent(r.authorization_url, () => {
+            void api('/api/ui/org/google/collect', { method: 'POST', body: JSON.stringify({ enabled: true, services }) })
+              .then((rr: any) => { if (rr && rr.ok) toast('팀 자료 모으기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다'); })
+              .catch(() => { /* 동의 전에 돌아옴 — 화면 갱신만 */ })
+              .finally(() => void paint());
+          });
+        } else if (r && r.ok) {
+          const skipped = (r.skipped || []) as Array<{ service: string; reason: string }>;
+          if (skipped.length) toast(`${skipped.map((x) => x.service === 'gmail' ? 'Gmail' : 'Google Drive').join(' · ')} 는 아직 허용 전이라 켜지 못했어요 — [권한 넓히기]를 눌러 주세요`, true);
+          else toast(chk.checked ? '팀 자료 모으기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다' : '팀 자료 모으기를 껐어요');
+        }
+      } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+      await paint();
+    };
+    body.replaceChildren(lab, svcRow, cost, ...notes.map((t) => el('p', { class: 'cn-help' }, ...uiText(t))), ...extra);
   };
   void paint();
   return box;

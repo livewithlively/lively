@@ -14,6 +14,7 @@ import { tenantContextMiddleware } from "./org/tenant-middleware.js";
 import { lookupWorkspace, workspaceForSession } from "./org/tenancy/registry.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
+import { parseInstallCallback } from "./org/credentials/github-app.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { registerWebUi } from "./web.js";
@@ -170,7 +171,9 @@ app.get("/oauth/callback", async (req, res) => {
   }
   if (!q.code || !q.state) return res.status(400).send(oauthPage("code 또는 state 가 없습니다."));
   try {
-    const r = await finishConsent(String(q.state), String(q.code));
+    //  GitHub App 은 설치 직후 installation_id 를 함께 보낸다(#1881 G5) — 숫자만 통과시킨다(그 값이 API 경로에 들어간다).
+    const r = await finishConsent(String(q.state), String(q.code), undefined,
+      { installationId: parseInstallCallback(q).installationId });
     res.send(oauthPage(`연결이 완료되었습니다 — ${r.serverName}. 이 창을 닫아도 됩니다.`));
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "oauth 콜백 실패");

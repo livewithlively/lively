@@ -20,6 +20,7 @@
 //  클래스 이름은 리브 시절의 `livc-*` 를 그대로 둔다(35-liv.css 가 이미 그 이름으로 그린다 — 접두어를 바꾸면 얻는 게 없다).
 import { el, renderMarkdown, toast } from './core.js';
 import { toolGroupSummary } from './chat-tool-group.js';
+import { scanDiff, type DiffScan } from './chat-diff.js';
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }
@@ -103,11 +104,33 @@ function pretty(v: unknown): string {
   if (typeof v === 'string') return v;
   try { return JSON.stringify(v ?? {}, null, 2); } catch { return String(v); }
 }
+// ── 변경분(diff) ────────────────────────────────────────────────────────────────────────
+//  판정·세기는 순수 모듈(web/chat-diff.ts)이 쥔다 — 여기는 그 결과를 칠하기만 한다. 색만으로 말하지 않는다:
+//  +/- 부호가 원문 그대로 남고 배경 톤은 그걸 거들 뿐이다(§0.5 색각 계약).
+function diffPre(d: DiffScan): HTMLElement {
+  const pre = el('pre', { class: 'livc-diff' });
+  for (const l of d.lines) pre.append(el('span', { class: 'livc-dl' + (l.kind ? ' is-' + l.kind : ''), text: l.text + '\n' }));
+  return pre;
+}
 function rawPart(cap: string, body: string): HTMLElement {
   const s = String(body ?? '');
+  const shown = s.slice(0, 4000);
+  const more = s.length > 4000 ? ' · 앞 4,000자' : '';
+  const d = scanDiff(shown);
+  if (d.isDiff) {
+    // 펼치기 전에도 규모를 알 수 있게 머리에 +N -N 을 적는다 — 한 줄 고침과 300줄 갈아엎기는 다른 일이다.
+    return el('div', { class: 'livc-raw-part' },
+      el('div', { class: 'livc-raw-cap' },
+        el('span', { text: cap + ' · ' }),
+        el('b', { class: 'livc-dc-add', text: `+${d.add}` }),
+        el('span', { text: ' ' }),
+        el('b', { class: 'livc-dc-del', text: `-${d.del}` }),
+        el('span', { text: more })),
+      diffPre(d));
+  }
   return el('div', { class: 'livc-raw-part' },
-    el('div', { class: 'livc-raw-cap', text: cap + (s.length > 4000 ? ` · 앞 4,000자` : '') }),
-    el('pre', { text: s.slice(0, 4000) }));
+    el('div', { class: 'livc-raw-cap', text: cap + more }),
+    el('pre', { text: shown }));
 }
 function finishCard(card: HTMLElement, output: string, isError: boolean): void {
   const mark = card.querySelector('.livc-slip-mark');
@@ -129,21 +152,28 @@ function settleCard(card: HTMLElement): void {
 function said(text: string): HTMLElement {
   const box = el('div', { class: 'livc-said' }, renderMarkdown(text));
   decorateCode(box);
+  // 답 한 덩이를 그대로 가져가는 자리 — 코드블록 복사와 같은 문법(손을 올려야 드러난다). 붙여넣을 것은 화면의
+  //  마크다운이 아니라 **원문**이라, 그린 결과가 아니라 받은 글자를 그대로 준다.
+  box.append(copyBtn(text, 'livc-said-copy', '답 복사'));
   return box;
+}
+/** 복사 버튼 하나 — 누르면 잠깐 '복사됨'으로 바뀐다(눌렸는지 알 수 없는 버튼을 만들지 않는다). */
+function copyBtn(text: string, cls: string, aria: string): HTMLElement {
+  const btn: HTMLElement = el('button', {
+    class: cls, type: 'button', text: '복사', 'aria-label': aria,
+    onclick: async () => {
+      try { await navigator.clipboard.writeText(text); btn.textContent = '복사됨'; setTimeout(() => { btn.textContent = '복사'; }, 1200); }
+      catch { toast('복사하지 못했습니다 — 직접 선택해 복사해 주세요.'); }
+    },
+  });
+  return btn;
 }
 function decorateCode(box: HTMLElement): void {
   box.querySelectorAll('pre').forEach((pre) => {
     if (pre.parentElement?.classList.contains('livc-code')) return;
     const wrap = el('div', { class: 'livc-code' });
     pre.replaceWith(wrap);
-    const btn = el('button', {
-      class: 'livc-copy', type: 'button', text: '복사', 'aria-label': '코드 복사',
-      onclick: async () => {
-        try { await navigator.clipboard.writeText(pre.textContent || ''); btn.textContent = '복사됨'; setTimeout(() => { btn.textContent = '복사'; }, 1200); }
-        catch { toast('복사하지 못했습니다 — 직접 선택해 복사해 주세요.'); }
-      },
-    });
-    wrap.append(pre, btn);
+    wrap.append(pre, copyBtn(pre.textContent || '', 'livc-copy', '코드 복사'));
   });
 }
 
@@ -390,7 +420,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       const b = r.blocks.get(Number(e.index));
       if (!b) return;
       b.el.classList.remove('livc-said-live');
-      if (b.buf.trim()) { b.el.replaceChildren(renderMarkdown(b.buf)); decorateCode(b.el); }
+      if (b.buf.trim()) { b.el.replaceChildren(renderMarkdown(b.buf)); decorateCode(b.el); b.el.append(copyBtn(b.buf, 'livc-said-copy', '답 복사')); }
       else b.el.remove();
       r.blocks.delete(Number(e.index));
     }
@@ -399,7 +429,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   function settle(t: ChatTurn, o?: { exit?: number | null; interrupted?: boolean; durationMs?: number }): void {
     for (const [i, b] of t.r.blocks) {
       b.el.classList.remove('livc-said-live');
-      if (b.buf.trim()) { b.el.replaceChildren(renderMarkdown(b.buf)); decorateCode(b.el); } else b.el.remove();
+      if (b.buf.trim()) { b.el.replaceChildren(renderMarkdown(b.buf)); decorateCode(b.el); b.el.append(copyBtn(b.buf, 'livc-said-copy', '답 복사')); } else b.el.remove();
       t.r.blocks.delete(i);
     }
     t.work.querySelectorAll('.livc-slip-run').forEach((m) => { const c = m.closest('.livc-slip'); if (c) settleCard(c as HTMLElement); });

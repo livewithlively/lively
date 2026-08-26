@@ -12,10 +12,6 @@ let justFinished = false;
 //  메인도 답을 받으면 progress.prompt 를 비우지만, 그 사이에 다음 step 이벤트가 먼저 도착하면
 //  옛 prompt 를 든 진행 상태가 한 번 더 그려진다(실측: 답한 카드가 잠깐 되살아났다). 양쪽에서 막는다.
 const answeredPrompts = new Set();
-// 주소칸 기본 안내 — index.html 의 초기 문구와 **같은 말**이어야 한다(상태가 바뀌었다 돌아오면 이 값이 복원된다).
-//  두 경로를 나란히 적는 이유는 index.html 주석 참조(#2044).
-const DEFAULT_GW_HINT = "라이블리 클라우드는 app.lvly.io 홈의 «데스크톱 앱·CLI 로 연결» 에서 복사하고, "
-  + "회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요.";
 
 function renderState(s) {
   state = s || {};
@@ -35,23 +31,26 @@ function renderState(s) {
   // ⚠ 판정은 **메인이 한다**(web-shell.appReady → state.ready). 렌더러가 식을 따로 적으면 한 축(계약 지원·토큰 거부)이
   //  빠진 채 '설치 완료' 화면이 뜨고 버튼은 조용히 아무 일도 안 한다(실측: 구 CLI 인 PC 가 그랬다).
   const ready = !!s?.ready;
-  // 게이트웨이 카드는 아직 끝나지 않았을 때만 — 다 됐는데 또 물으면 사용자가 '뭘 잘못했나' 한다.
-  show($("gw-card"), !ready && !s?.busy);
+  // 아직 안 끝났을 때만 묻는다 — 다 됐는데 또 물으면 사용자가 '뭘 잘못했나' 한다.
+  //  두 카드는 **배타**다(#2044): 처음이면 시작 카드(클라우드 우선), 고쳐야 할 때(구 CLI·재로그인)는
+  //  주소 카드. 고칠 땐 주소를 **이미 알고 있으므로** 클라우드 선택지를 다시 보여줄 이유가 없다.
+  const needsFix = s?.cliOutdated || s?.cliBroken || s?.tokenRejected;
+  show($("start-card"), !ready && !s?.busy && !needsFix);
+  show($("gw-card"), !ready && !s?.busy && !!needsFix);
   // 업데이트·재로그인이 필요한 경우엔 **주소를 이미 안다** — 다시 치게 하지 않고 채워 두고, 무엇을 할지 문구로 바꾼다.
   //  (사람이 편집 중이면 건드리지 않는다 — 입력을 덮어쓰는 화면만큼 짜증나는 게 없다.)
-  const gwIn = $("gw");
-  const needsFix = s?.cliOutdated || s?.cliBroken || s?.tokenRejected;
-  if (needsFix && s?.gatewayUrl && !gwIn.value && document.activeElement !== gwIn) { gwIn.value = s.gatewayUrl; void preview(); }
+  const gwIn = $("gw-fix");
+  if (needsFix && s?.gatewayUrl && !gwIn.value && document.activeElement !== gwIn) { gwIn.value = s.gatewayUrl; void previewFix(); }
   $("gw-title").textContent = s?.cliBroken ? "라이블리 CLI 다시 설치" : s?.cliOutdated ? "라이블리 CLI 업데이트" : s?.tokenRejected ? "다시 로그인" : "워크스페이스 주소";
   // 실패 이유를 그대로 보여준다 — 'spawn EINVAL' 같은 원문이 있어야 제보가 진단이 된다(숨기면 우리도 모른다).
-  $("gw-hint").textContent = s?.cliBroken
+  $("gw-fix-hint").textContent = s?.cliBroken
     ? `설치된 CLI 를 실행할 수 없습니다(${s.cliBroken}). 아래 주소에서 다시 받아 이어서 진행합니다.`
     : s?.cliOutdated
       ? "설치된 CLI 가 이 앱보다 오래돼 앱이 진행 상황을 읽지 못합니다. 아래 주소에서 최신으로 받아 이어서 진행합니다."
       : s?.tokenRejected
         ? "게이트웨이가 이 PC 의 로그인 토큰을 거부했습니다(만료 또는 회수). 다시 로그인하면 이어서 진행합니다."
-        : DEFAULT_GW_HINT;
-  $("gw-go").textContent = s?.cliBroken ? "다시 설치" : s?.cliOutdated ? "업데이트" : s?.tokenRejected ? "다시 로그인" : "연결";
+        : "";
+  $("gw-fix-go").textContent = s?.cliBroken ? "다시 설치" : s?.cliOutdated ? "업데이트" : "다시 로그인";
   show($("done-card"), ready && !s?.busy && justFinished);
   // 라이블리 화면(웹 UI 창) — 갖춰졌을 때만 열 수 있다. 못 실은 사유(webError)가 있으면 그대로 적는다(메인이 준다).
   show($("app-card"), ready && !justFinished);
@@ -95,6 +94,8 @@ function renderState(s) {
   al.closest("label").classList.toggle("hidden", s?.appAutoLaunch === null || s?.appAutoLaunch === undefined);
   al.checked = !!s?.appAutoLaunch; al.disabled = !!s?.busy;
   $("gw-go").disabled = !!s?.busy;
+  $("gw-fix-go").disabled = !!s?.busy;
+  $("cloud-go").disabled = !!s?.busy;
 }
 
 function renderProgress(p) {
@@ -159,6 +160,28 @@ const preview = async () => {
   $("gw-err").textContent = a?.error || "";
 };
 $("gw").addEventListener("input", () => { $("gw-err").textContent = ""; void preview(); });
+// 고치기 카드(구 CLI·재로그인)의 주소칸 — 같은 판정을 쓰되 자기 자리에 그린다.
+let previewFixSeq = 0;
+const previewFix = async () => {
+  const seq = ++previewFixSeq;
+  const a = await window.lively.gatewayAdvice($("gw-fix").value);
+  if (seq !== previewFixSeq) return;
+  $("gw-fix-preview").textContent = a?.cmd ? a.cmd + "  → 이어서 로그인·설치" : "";
+  $("gw-fix-err").textContent = a?.error || "";
+};
+$("gw-fix").addEventListener("input", () => { $("gw-fix-err").textContent = ""; void previewFix(); });
+$("gw-fix").addEventListener("keydown", (e) => { if (e.key === "Enter") $("gw-fix-go").click(); });
+$("gw-fix-go").addEventListener("click", async () => {
+  $("gw-fix-err").textContent = "";
+  const r = await window.lively.setGateway($("gw-fix").value.trim());
+  if (!r?.ok && r?.error) { $("gw-fix-err").textContent = r.error; log("✗ " + r.error); }
+});
+// ★ 클라우드 로그인(#2044) — 주소를 묻지 않는다. 브라우저 승인 한 번으로 워크스페이스·자격이 온다.
+$("cloud-go").addEventListener("click", async () => {
+  $("start-err").textContent = "";
+  const r = await window.lively.run("setup-cloud");
+  if (r?.error) { $("start-err").textContent = r.error; log("✗ " + r.error); }
+});
 $("gw").addEventListener("keydown", (e) => { if (e.key === "Enter") $("gw-go").click(); });
 $("gw-go").addEventListener("click", async () => {
   const url = $("gw").value.trim();

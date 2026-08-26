@@ -25,8 +25,12 @@ import {
   readdirSync, statSync, realpathSync, openSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, relative } from "node:path";
-import { spawnSync, spawn } from "node:child_process";
+import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  execFileSync as nodeExecFileSync,
+  spawn as nodeSpawn,
+  spawnSync as nodeSpawnSync,
+} from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import crypto from "node:crypto";
@@ -34,6 +38,104 @@ import crypto from "node:crypto";
 // ── 0. 상수 · 경로 ──────────────────────────────────────────────────────────
 const CLI_VERSION = "1.0.0";
 const WIN = process.platform === "win32";
+// 부트스트랩은 이 단일 파일만 내려받으므로 공용 setup/host-effects.mjs 를 정적 import할 수 없다.
+// 같은 deny/native 계약을 인라인 포트로 유지하고, 설치 뒤 동적 모듈에는 이 객체 자체를 capability로 넘긴다.
+const HOST_EFFECTS_MODE = process.env.LIVELY_HOST_EFFECTS !== "deny"
+  ? "native"
+  : (process.env.LIVELY_HOST_EFFECTS_TEST_MODE === "sandbox" ? "sandbox" : "deny");
+const SANDBOX_EXEC_ALLOW = new Set(["where", "command", "hostname", "whoami"]);
+const inlineUnquote = (value) => String(value || "").replace(/^"|"$/g, "");
+const inlineCommandName = (command) => inlineUnquote(command).replace(/^.*[\\/]/, "").replace(/\.exe$/i, "").toLowerCase();
+const inlineInside = (file, root) => {
+  if (!file || !root) return false;
+  const norm = (p) => process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p);
+  const f = norm(file), r = norm(root);
+  return f === r || f.startsWith(r.endsWith(sep) ? r : r + sep);
+};
+const inlineResolvedCommand = (command) => {
+  const raw = inlineUnquote(command);
+  if (isAbsolute(raw)) return raw;
+  const exts = WIN ? String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+  for (const dir of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
+    for (const ext of ["", ...exts]) {
+      const p = resolve(dir, raw + ext);
+      if (existsSync(p)) return p;
+    }
+    try {
+      const wanted = new Set([raw, ...exts.map((ext) => raw + ext)].map((v) => v.toLowerCase()));
+      const found = readdirSync(dir).find((name) => wanted.has(name.toLowerCase()));
+      if (found) return resolve(dir, found);
+    } catch { /* PATH 항목 부재/접근불가 */ }
+  }
+  return "";
+};
+const inlineSandboxProcessAllowed = ({ command, args = [], options = {} }) => {
+  const name = inlineCommandName(command);
+  if (SANDBOX_EXEC_ALLOW.has(name)) return true;
+  const file = inlineResolvedCommand(command);
+  const roots = [process.env.LIVELY_HOME, process.env.TEMP, process.env.TMP, process.env.TMPDIR, tmpdir()].filter(Boolean);
+  if (name === "node" && (inlineInside(file, process.execPath) || roots.some((root) => inlineInside(file, root)))) return true;
+  if (roots.some((root) => inlineInside(file, root))) return true;
+  const cleanArgs = args.map(inlineUnquote);
+  if (name === "git" && !cleanArgs.some((a) => a === "--global" || a === "--system")) {
+    const at = cleanArgs.indexOf("-C");
+    const cloneDest = cleanArgs[0] === "clone" ? cleanArgs.at(-1) : "";
+    return roots.some((root) => inlineInside(options.cwd, root)
+      || (at >= 0 && inlineInside(cleanArgs[at + 1], root))
+      || inlineInside(cloneDest, root));
+  }
+  if (name === "tar") {
+    const at = cleanArgs.indexOf("-C");
+    return at >= 0 && roots.some((root) => inlineInside(cleanArgs[at + 1], root));
+  }
+  return false;
+};
+const inlineSandboxNetworkAllowed = (input) => {
+  try {
+    const u = new URL(typeof input === "string" ? input : input?.url);
+    const port = Number(u.port);
+    return ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && port >= 32768 && port <= 65535;
+  } catch { return false; }
+};
+const hostEffectGuard = (kind, operation, detail) => {
+  if (HOST_EFFECTS_MODE === "native") return;
+  if (HOST_EFFECTS_MODE === "sandbox" && kind === "external-cli" && inlineSandboxProcessAllowed(detail)) return;
+  if (HOST_EFFECTS_MODE === "sandbox" && kind === "scheduler" && inlineSandboxProcessAllowed(detail)) return;
+  if (HOST_EFFECTS_MODE === "sandbox" && kind === "network" && inlineSandboxNetworkAllowed(detail)) return;
+  {
+    const e = new Error(`HostEffects denied ${kind}: ${operation}`);
+    e.name = "HostEffectDeniedError";
+    e.code = "LIVELY_HOST_EFFECT_DENIED";
+    throw e;
+  }
+};
+const schedulerCommand = (command) => /^(schtasks|launchctl|systemctl|loginctl)(\.exe)?$/i.test(String(command).replace(/^.*[\\/]/, ""));
+const hostEffects = Object.freeze({
+  mode: HOST_EFFECTS_MODE,
+  execFileSync(command, args = [], options = {}) {
+    hostEffectGuard(schedulerCommand(command) ? "scheduler" : "external-cli", command, { command, args, options });
+    return nodeExecFileSync(command, args, options);
+  },
+  spawnSync(command, args = [], options = {}) {
+    hostEffectGuard(schedulerCommand(command) ? "scheduler" : "external-cli", command, { command, args, options });
+    return nodeSpawnSync(command, args, options);
+  },
+  spawn(command, args = [], options = {}) {
+    hostEffectGuard(schedulerCommand(command) ? "scheduler" : "external-cli", command, { command, args, options });
+    return nodeSpawn(command, args, options);
+  },
+  schedulerSync(command, args = [], options = {}) {
+    hostEffectGuard("scheduler", command, command);
+    return nodeSpawnSync(command, args, options);
+  },
+  fetch(input, init) {
+    hostEffectGuard("network", typeof input === "string" ? input : (input?.url || String(input)), input);
+    return globalThis.fetch(input, init);
+  },
+});
+const spawnSync = (...args) => hostEffects["spawnSync"](...args);
+const spawn = (...args) => hostEffects["spawn"](...args);
+const fetch = (...args) => hostEffects.fetch(...args);
 // 셸 env(LIVELY_TOKEN·PATH)를 새로 읽게 하는 방법은 OS 마다 다르다 — 윈도우에 `source ~/.zshrc` 를 안내하면
 //  사용자는 실행조차 못 한다(#1087 실측: 윈도우 설치 화면에 그대로 나갔다).
 const RELOAD_SHELL_HINT = WIN ? "새 PowerShell 창을 여세요" : "새 터미널을 열거나  source ~/.zshrc";
@@ -72,6 +174,11 @@ const AGY_PLUGIN_DIR = join(HOME, ".gemini", "config", "plugins", "lively");
 const GROK_DIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
 // 배선 신호는 **통째로 우리 소유**인 훅 배선 파일이다(user-install.mjs installGrok 이 심는다).
 const GROK_HOOKS_JSON = join(GROK_DIR, "hooks", "lively-grok.json");
+// 자산 충족 판정 — status 색상·조치 힌트·doctor 체크가 **한 산식**을 공유한다(표면끼리 어긋나면 그게 이 판정의 결함).
+//  collision = 같은 이름의 멤버 자산이 이겨서 조직 사본을 안 깐 것(정상). null = 판정 불가 → 보수적으로 결손 취급하고
+//  불확실성은 문구로 밝힌다(아는 척 초록불로 덮지 않는다).
+const assetsSatisfied = (a) => a.local + (a.collision || 0) >= a.server;
+
 // 자동 업데이터(self-update.mjs)와 **같은 필수 훅 목록**을 쓴다 — 손상 번들 판정 기준이 갈리면 안 된다.
 //  self-update.mjs 자신은 목록에 없다(구 게이트웨이로 롤백 시 '손상'으로 오판해 영구 고착되는 걸 막기 위함 — #858).
 const REQUIRED_HOOKS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
@@ -304,7 +411,22 @@ function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeou
   }
   return { code: r.status ?? -1, out: String(r.stdout || ""), err: String(r.stderr || "") };
 }
-const has = (bin) => spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", bin], { stdio: "ignore", shell: !WIN }).status === 0;
+const has = (bin) => {
+  if (HOST_EFFECTS_MODE === "sandbox") {
+    if (SANDBOX_EXEC_ALLOW.has(inlineCommandName(bin))) return true;
+    const found = inlineResolvedCommand(bin);
+    const roots = [process.env.LIVELY_HOME, process.env.TEMP, process.env.TMP, process.env.TMPDIR, tmpdir()].filter(Boolean);
+    if (inlineCommandName(bin) === "node" && found && inlineInside(found, process.execPath)) return true;
+    if (!found || !roots.some((root) => inlineInside(found, root))) return false;
+    SANDBOX_EXEC_ALLOW.add(inlineCommandName(bin));
+    return true;
+  }
+  const r = spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", bin], {
+    stdio: ["ignore", "pipe", "ignore"], encoding: "utf8", shell: !WIN,
+  });
+  if (r.status !== 0) return false;
+  return true;
+};
 // claude CLI 호출 — **자식 HOME 을 모듈 HOME(=LIVELY_HOME or os.homedir())으로 명시 주입한다.**
 //  ⚠ 이걸 빠뜨리면 샌드박스(LIVELY_HOME)로 돌린 login·install 이 **실사용자 ~/.claude.json** 을 고친다.
 //   등록하는 command 값은 LIVELY_HOME 기반인데 기록되는 파일만 실 HOME 이라 둘이 어긋나고, 남는 건
@@ -466,7 +588,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 //   설치 이후 표면만 뗄 수 있다. 최상위 static import 는 그 첫 실행을 ERR_MODULE_NOT_FOUND 로 죽인다.
 const cliCtx = () => ({
   say, ok, info, warn, fail, die, bold, dim, red, green, yellow,
-  run, has, api, sleep, gateway, token, readLively, writeLively,
+  run, has, api, sleep, gateway, token, readLively, writeLively, hostEffects,
 });
 
 // ── 위탁(delegate, #869 §11) — 세션이 무거운 1회성 작업을 워커/중앙에 위탁하는 클라이언트 프로세스. ──
@@ -562,13 +684,15 @@ async function downloadBundle() {
 function verifyBundle(root) {
   const installer = join(root, "setup", "user-install.mjs");
   if (!existsSync(installer)) throw new Error("번들 손상 — setup/user-install.mjs 없음");
+  const hostEffects = join(root, "setup", "host-effects.mjs");
+  if (!existsSync(hostEffects)) throw new Error("번들 손상 — setup/host-effects.mjs 없음");
   const hooksDir = join(root, ".claude", "hooks");
   for (const h of REQUIRED_HOOKS) {
     const p = join(hooksDir, h);
     if (!existsSync(p)) throw new Error(`번들 손상 — 훅 누락: ${h}`);
     if (statSync(p).size < 64) throw new Error(`번들 손상 — 훅이 비었음: ${h}`);
   }
-  const files = [installer];
+  const files = [installer, hostEffects];
   try { for (const f of readdirSync(hooksDir)) if (f.endsWith(".mjs")) files.push(join(hooksDir, f)); } catch { /* */ }
   const cli = join(root, "cli", "lively.mjs");
   if (existsSync(cli)) files.push(cli);   // CLI 가 자기 후임을 검증한다(자기 발등 찍기 방지)
@@ -845,7 +969,7 @@ async function syncKit({ label, offerHarness }) {
     //  ⚠ LIVELY_TOKEN 을 **명시 주입**한다: user-install.mjs 의 org-seed fetch 는 아직 env 우선이라(그쪽:539),
     //   안 주면 이 셸의 스테일 env 로 시드를 받아 **번들은 새 신원·시드는 옛 신원**으로 갈린다(#916 계열).
     //   token() 이 정본(파일)을 이미 풀었으니 그 값을 그대로 물려준다 — process.env 전역을 덮지 않는 이유는 afterLogin 주석 참조.
-    run(process.execPath, [join(root, "setup", "user-install.mjs"), "--clone-root", root, "--harness", harnesses.join(",")],
+    run(process.execPath, [join(root, "setup", "user-install.mjs"), "--allow-host-effects", "--clone-root", root, "--harness", harnesses.join(",")],
       { env: { LIVELY_TOKEN: token() } });
 
     step("kit-install", "설치 중", "done", 2);
@@ -1010,6 +1134,93 @@ async function deviceLogin(gw) {
   }
 }
 
+// ── 클라우드 로그인 (#2044) ─────────────────────────────────────────────────
+// 게이트웨이 주소를 **모르는** 사람을 위한 경로. 라이블리 클라우드(컨트롤플레인)에 디바이스 코드로 붙으면
+//  CP 가 "어느 워크스페이스인가 + 그 자격"을 함께 돌려준다 — 사람이 주소를 타이핑할 일이 없다.
+//
+// ⚠ 셀프호스팅에는 이 경로가 없다(그쪽엔 클라우드가 없다). 그래서 기본은 여전히 주소 입력이고,
+//  이건 **명시적으로 고른 사람**만 탄다(--cloud, 또는 클라우드에서 시작한 부트스트랩).
+//
+// 서버 계약은 코어 device-auth 와 **같은 모양**이라(같은 상태코드·같은 필드) 폴 루프의 분기가 한 벌이다.
+export const DEFAULT_CLOUD_URL = "https://app.lvly.io";
+
+/** 클라우드 주소 정규화 — 사람이 스킴 없이 치거나 말미 슬래시를 붙여도 받는다. */
+function normCloud(u) {
+  const s = String(u || DEFAULT_CLOUD_URL).trim().replace(/\/+$/, "");
+  return /^https?:\/\//i.test(s) ? s : "https://" + s;
+}
+
+/**
+ * 클라우드 디바이스 로그인 — 성공하면 { gateway, token, workspace }.
+ * 실패는 die()(사람이 다음에 뭘 할지 아는 문구로).
+ */
+async function cloudLogin(cloudUrl) {
+  const cloud = normCloud(cloudUrl);
+  const verifier = crypto.randomBytes(32).toString("base64url");
+  const label = `${process.env.LIVELY_HARNESS || "lively"}@${hostLabel()}`;
+
+  let start;
+  try {
+    const res = await fetch(cloud + "/cli/device/start", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code_challenge: s256(verifier), label }),
+    });
+    const text = await res.text();
+    try { start = JSON.parse(text); } catch { start = null; }
+    // 이 주소가 라이블리 클라우드가 아니면(자가호스팅 게이트웨이를 --cloud 로 준 경우 등) 여기서 걸린다.
+    if (!res.ok || !start?.device_code) {
+      die(`이 주소는 라이블리 클라우드가 아닙니다: ${cloud}\n  회사에 직접 설치한 라이블리라면 --cloud 대신 ` + bold("--gateway <주소>") + " 를 쓰세요.");
+    }
+  } catch (e) {
+    if (e?.__die) throw e;
+    die(`라이블리 클라우드에 연결하지 못했습니다 (${e.message}) — 네트워크를 확인하세요: ${cloud}`);
+  }
+
+  say(`\n${bold("라이블리 클라우드 로그인")}  ${dim(cloud)}`);
+  say("  아래 주소를 브라우저에서 열어 승인하세요:");
+  say("    " + bold(start.verification_uri_complete || start.verification_uri));
+  say("    코드: " + bold(start.user_code));
+  say(dim(PROMPTER || !NO_BROWSER
+    ? "  (브라우저가 자동으로 열립니다. 안 열리면 위 주소를 직접 여세요.)"
+    : "  (자동 열기가 꺼져 있습니다 — 위 주소를 직접 여세요.)"));
+  // 앱이 몰고 있으면 앱이 연다(중복 탭 방지 — #1717 과 같은 규약).
+  if (PROMPTER) {
+    PROMPTER.tell("device-code", "device-code", {
+      user_code: start.user_code, verification_uri: start.verification_uri,
+      verification_uri_complete: start.verification_uri_complete || null,
+      expires_in: Number(start.expires_in) || null, gateway: cloud,
+    });
+  } else openBrowser(start.verification_uri_complete || start.verification_uri);
+  say(dim("  · 브라우저에서 승인을 기다리는 중… (이 창은 열어 두세요)"));
+  if (EV) EV.step("cloud-approve", "브라우저에서 승인 대기", "start");
+
+  let interval = Math.max(2, Number(start.interval) || 5);
+  const deadline = Date.now() + (Number(start.expires_in) || 900) * 1000;
+  for (;;) {
+    await sleep(interval * 1000);
+    if (Date.now() > deadline) die("코드가 만료됐습니다 — 다시 실행하세요.");
+    let status, body;
+    try {
+      const res = await fetch(cloud + "/cli/device/poll", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_code: start.device_code, code_verifier: verifier }),
+      });
+      status = res.status;
+      const text = await res.text();
+      try { body = JSON.parse(text); } catch { body = null; }
+    } catch { status = 0; body = null; }   // 전송 오류는 일시 오류로 보고 계속(코어 폴 루프와 같은 판단)
+    if (status === 200 && body?.token && body?.gateway_url) {
+      if (EV) EV.step("cloud-approve", "브라우저에서 승인 대기", "done");   // ⚠ 토큰은 이벤트에 안 싣는다
+      return { gateway: normGw(body.gateway_url), token: body.token, workspace: body.workspace || null };
+    }
+    if (status === 202) continue;
+    if (status === 429) { interval = (Number(body?.interval) || interval) + 5; continue; }
+    if (status === 403) die("승인이 거부됐습니다.");
+    if (status === 410 || status === 401) die("코드가 만료됐습니다 — 다시 실행하세요.");
+    // 그 외(0·5xx·비-JSON) = 일시 오류 → 백오프 후 계속.
+  }
+}
+
 // 호스트 라벨(승인 화면 표시용, 자기주장 값) — 서버가 [\w .@-] 로 제한한다.
 function hostLabel() {
   try { return String(spawnSync("hostname", [], { encoding: "utf8" }).stdout || "").trim().split(".")[0] || "내PC"; }
@@ -1052,6 +1263,14 @@ function afterLogin(gw, tok) {
 }
 
 async function cmdLogin(opts) {
+  // #2044 — 클라우드 경로: 주소를 **받지 않고** 알아낸다. 승인 한 번으로 주소·자격이 함께 온다.
+  if (opts.cloud) {
+    const r = await cloudLogin(opts.cloud);
+    const me = await validateAndStore(r.gateway, r.token);
+    say(dim(`  워크스페이스: ${bold(r.workspace || r.gateway)}`));
+    afterLogin(r.gateway, r.token);
+    return me;
+  }
   if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
   const gw = gateway();
   if (!gw) die("게이트웨이 주소가 없습니다 — `lively login --gateway https://<주소>` 로 지정하세요.");
@@ -1121,6 +1340,7 @@ async function cmdUpdate(opts) {
 }
 
 const uninstallArgs = (o) => [
+  "--allow-host-effects",
   ...(o.dryRun ? ["--dry-run"] : []), ...(o.purge ? ["--purge"] : []), ...(o.yes ? ["--yes"] : []),
   ...(o.harness ? ["--harness", o.harness] : []),
 ];
@@ -1341,14 +1561,35 @@ async function gatherStatus() {
     //   (자산 sync 는 실패해도 조용하다 — 세션을 막지 않는 게 설계라서. 그래서 '조용한 실패'가 기본값이다.)
     //  로컬 0 / 서버 N 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻이고, 그게 곧 신고 전에 잡을 신호다.
     const manifest = (() => { try { return JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")) || {}; } catch { return {}; } })();
+    // ★ 안 깔린 이유는 둘이다 — ①materialize 실패(진짜 고장) ②**슬러그 충돌**: 같은 이름의 그 사람 자산이 이미
+    //  디스크에 있어 sync 가 비파괴 정책으로 비켜선 것(sync-harness-assets 의 collision — 멤버 파일 보존).
+    //  ②를 세지 않으면 진단이 거짓말한다: 실측(2026-08-20) 조직 스킬 51개의 **원저자 머신**에서 전량 충돌인데
+    //  doctor 가 "14/65 ✗ · 새 세션을 켜세요" 를 냈다 — 정책상 세션을 몇 번 켜도 영원히 안 깔리는 상태다.
+    //  경로 규약은 훅과 **같은 표**(harness-registry)에서 가져온다(하드코딩 복제 금지). 표를 못 읽으면 null =
+    //  '충돌인지 모른다'. null 은 판정에선 0 과 같게(=보수적으로 결손) 다루되 **사람용 문구엔 "확인 못 했다"를 적는다** —
+    //  경보를 숨기지도, 모르는 걸 정상이라 우기지도 않는다. 구분이 필요한 소비자는 --json 의 null 을 본다.
+    let placementFor = null;
+    try { ({ placementFor } = await import(new URL("../hooks/harness-registry.mjs", import.meta.url).href)); } catch { /* 발행 배치가 다르면 생략 */ }
     for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1701 — grok 도 같은 자산 축
       if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
       try {
         const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
         const server = Array.isArray(r?.assets) ? r.assets.length : null;
         if (server === null) continue;
-        const local = Object.keys((manifest[h] && typeof manifest[h] === "object") ? manifest[h] : {}).length;
-        st.harness[h].assets = { local, server };
+        const mine = (manifest[h] && typeof manifest[h] === "object") ? manifest[h] : {};
+        const local = Object.keys(mine).length;
+        let collision = null;
+        if (placementFor) {
+          collision = 0;
+          for (const a of r.assets) {
+            const id = String(a?.id || "").trim().toLowerCase();
+            if (!id || Object.hasOwn(mine, id)) continue;    // 라이블리가 심은 것은 충돌이 아니다(prototype 키 오탐 방지)
+            let place = null;
+            try { place = placementFor(h, a?.kind, id, HOME); } catch { /* 그 하네스가 안 쓰는 종류 */ }
+            if (place?.file && existsSync(place.file)) collision++;
+          }
+        }
+        st.harness[h].assets = { local, server, collision };
       } catch { /* 자산 조회 실패는 부가 정보 — 상태 전체를 죽이지 않는다 */ }
     }
   } catch (e) { st.gateway.error = e.message; }
@@ -1467,7 +1708,15 @@ async function cmdStatus(opts) {
   // 연결(#1431)은 **등록됐을 때만** 뜻이 있다. 확인 못 했으면(구버전 claude 등) 물음표로 — 모르는 걸 아는 척하지 않는다.
   const connOf = (h) => !h.mcp ? "" : h.mcpConnected === null ? `   ${dim("? 연결")}` : `   ${h.mcpConnected ? green("✓") : yellow("✘")} 연결`;
   // 자산은 **개수가 곧 진단**이다 — 0/26 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻(#1475).
-  const assetsOf = (h) => !h.assets ? "" : `   자산 ${h.assets.local === h.assets.server ? green(`${h.assets.local}/${h.assets.server}`) : yellow(`${h.assets.local}/${h.assets.server}`)}`;
+  // 충돌분(내 로컬 자산이 이겨서 조직 사본을 안 깐 것)은 **고장이 아니다** — 초록으로 두고 괄호로 사실만 덧붙인다.
+  const assetsOf = (h) => {
+    if (!h.assets) return "";
+    const a = h.assets, kept = a.collision || 0;
+    const n = `${a.local}/${a.server}`;
+    // 용어는 웹 '내 하네스'(overlap: shadow = "로컬이 가림")와 맞춘다 — 같은 사실을 두 표면이 다른 말로 부르면 대조가 안 된다.
+    const note = kept ? ` (+${kept} 로컬이 가림)` : (a.collision === null && a.local < a.server ? " (충돌 여부 미확인)" : "");
+    return `   자산 ${assetsSatisfied(a) ? green(n) : yellow(n)}${note ? dim(note) : ""}`;
+  };
   say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록${connOf(st.harness.claude)}${assetsOf(st.harness.claude)}`);
   // ★ '어딘가 등록됨' 을 통과로 쓰지 않는다 — 웹터미널 세션은 프로필 dir 을 읽으므로, 거기 없으면 세션엔 안 보인다.
   //  그 상태가 초록불로 보이던 게 실기기 오진의 원인이었다. 빠진 곳을 이름으로 말하고, 고치는 한 줄까지 준다.
@@ -1531,7 +1780,7 @@ async function cmdStatus(opts) {
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
   else {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
-    const short = ["claude", "codex", "opencode", "antigravity", "grok"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server); // #1701 — grok 포함
+    const short = ["claude", "codex", "opencode", "antigravity", "grok"].filter((h) => st.harness[h].assets && !assetsSatisfied(st.harness[h].assets)); // #1701 — grok 포함 · 충돌분 제외
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
     // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
     //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
@@ -1647,7 +1896,11 @@ async function cmdDoctor(opts) {
   for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1689 — opencode 도 종전 누락분 보강 · #1701 — grok
     const a = st.harness[h].assets;
     if (!a) continue;
-    chk(`조직 자산(${h})`, a.local >= a.server, `${a.local}/${a.server} 설치됨`,
+    const kept = a.collision || 0;   // 같은 이름의 내 로컬 자산이 있어 조직 사본을 안 깐 것 = 정상(비파괴 정책)
+    //  collision=null 이면 결손인지 충돌인지 못 가린다 → 경보는 유지하되 그 불확실성을 문구에 적는다.
+    const note = kept ? ` · ${kept}건은 로컬 동명 자산이 가려 조직 사본 미배포(정상)`
+      : (a.collision === null && a.local < a.server ? " · 로컬 충돌 여부는 확인 못 했습니다(배치표 미가용)" : "");
+    chk(`조직 자산(${h})`, assetsSatisfied(a), `${a.local}/${a.server} 설치됨${note}`,
       "새 세션을 한 번 켜세요(세션 시작 훅이 내려받습니다). 그래도 0 이면 배선·권한 문제입니다");
   }
   if (st.kit.remote) chk("키트 최신", st.kit.current, st.kit.current ? String(st.kit.local) : `${st.kit.local || "(미설치)"} → ${st.kit.remote}`, "lively update");
@@ -2007,6 +2260,15 @@ async function cmdSetup(opts = {}) {
   //  `login` 과 `install` 을 따로 부르는 대신 **setup 하나**로 몰 수 있어야 한다(순서·조건의 정본은 CLI 다).
   //  아래 tokenAccepted 가 **새 주소로** 판정되도록 로그인보다 먼저 쓴다 — 게이트웨이를 바꾸는 경우
   //  옛 주소의 토큰이 '먹힌다'고 나와 로그인을 통째로 건너뛰는 사고(#1087 계열)를 막는다.
+  // #2044 — 클라우드 경로면 로그인이 주소까지 정한다(사람은 주소를 모른다). 그 뒤는 종전 설치와 같다.
+  //  ★ 여기서 "이미 로그인돼 있나"를 먼저 보지 않는다: 이 경로를 고른 사람은 **어느 워크스페이스인지**를
+  //   아직 안 골랐고, 옛 토큰이 먹힌다는 이유로 그 선택을 건너뛰면 엉뚱한 워크스페이스에 설치된다.
+  if (opts.cloud) {
+    await cmdLogin({ cloud: opts.cloud });
+    await cmdInstall();
+    say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
+    return;
+  }
   if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
   // ⚠ 토큰이 **있는지**가 아니라 **먹히는지**를 본다(#1087). token() 은 파일 다음에 LIVELY_TOKEN 환경변수도
   //  보므로, 만료·회수된 토큰이나 셸에 남아 있던 옛 env 값이 로그인을 건너뛰게 만들었다. 그러면 설치는
@@ -2045,7 +2307,6 @@ ${bold("확인")}
                          ${dim("프로젝트 폴더에서 실행하면 프로젝트 · 공유폴더 동기화 상태도 함께 보여줍니다")}
   doctor                 문제 진단 + 해결책               ${dim("--json")}
   selfcheck              배선 점검 사실 덤프(AI 가 세션과 대조) ${dim("--json")}
-  selfcheck              배선 점검(AI가 세션과 대조할 사실) ${dim("--json")}
 
 ${bold("작업")}
   init                   지금 폴더를 프로젝트로 — 기본은 ${bold("제안만")}(무엇을 할지 알려주고 아무것도 안 바꿈)
@@ -2072,6 +2333,7 @@ ${bold("작업")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
+  --cloud [url]          라이블리 클라우드로 로그인 — 주소를 몰라도 된다 ${dim("(기본 app.lvly.io)")}
   --token <토큰>         비대화형 로그인 (스크립트 · 프로비저닝용)
   --json-events          진행 상황을 stdout 에 NDJSON 으로 ${dim("(데스크톱 앱·자동화용 — 사람용 출력은 stderr 그대로)")}
                          ${dim("확인이 필요하면 prompt 이벤트를 내고 stdin 의 {\"t\":\"answer\",\"id\":…,\"value\":…} 한 줄을 기다립니다.")}
@@ -2086,6 +2348,9 @@ function parse(argv) {
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === "--gateway") o.gateway = argv[++i];
+    // #2044 — 클라우드 로그인. 값 없이 주면 기본 주소(app.lvly.io)를 쓴다. 게이트웨이 주소를 **모르는**
+    //  사람이 쓰는 경로라, 값을 요구하면 그 자체가 이 옵션의 존재 이유를 무너뜨린다.
+    else if (t === "--cloud") { const n = argv[i + 1]; o.cloud = (n && !n.startsWith("-")) ? argv[++i] : DEFAULT_CLOUD_URL; }
     else if (t === "--token") o.token = argv[++i];
     else if (t === "--harness") o.harness = argv[++i];
     else if (t === "--check") o.check = true;

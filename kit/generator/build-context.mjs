@@ -217,7 +217,7 @@ function copyPs1WithHeader(srcAbs, destAbs, srcLabel, orgLabel) {
 //   보면 detached 로 띄우는 백그라운드 프로세스다. 번들·설치 대상엔 들어가되 settings 훅 목록엔 안 들어간다.
 // ⚠ harness-registry.mjs 는 훅이 아니라 훅들이 import 하는 모듈이다 — 발행물에 동봉되지 않으면 설치된 훅이
 //  ERR_MODULE_NOT_FOUND 로 죽는다(user-install.HOOK_SCRIPTS 와 **같은 목록**이어야 한다).
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "host-effects-port.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
 
 function emitHooks(targetDir, orgLabel) {
   const hooksDir = join(targetDir, ".claude", "hooks");
@@ -306,6 +306,14 @@ function emitClaudeArtifact({ target, orgLabel, copied }) {
     orgLabel,
   );
   copied.push("setup/user-install.mjs");
+  // 설치·제거의 영속 호스트 효과 capability/Windows User PATH 어댑터 — 엔진과 반드시 같은 번들에 둔다.
+  copyMjsWithHeader(
+    kitAbs("setup/host-effects.mjs"),
+    join(target, "setup", "host-effects.mjs"),
+    "workflow-std/setup/host-effects.mjs",
+    orgLabel,
+  );
+  copied.push("setup/host-effects.mjs");
   // user-install 이 import 하는 공유 상수(work-roots 헤더 단일 출처, #270) — 번들 동봉 필수(누락 시 import 크래시).
   copyMjsWithHeader(
     kitAbs("setup/work-roots-header.mjs"),

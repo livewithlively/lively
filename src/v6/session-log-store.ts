@@ -85,6 +85,35 @@ export function firstUserPromptTitle(jsonl: string): string | null {
 }
 
 // 델타 append — offset-CAS. 성공/멱등이면 ok=true, gap/overlap 이면 ok=false(+정정용 현재 bytes).
+/** 트랜스크립트 줄에서 읽어 낼 수 있는 '마지막 활동 시각'. 못 읽으면 null → 호출부가 now() 로 폴백한다.
+ *
+ *  왜 있나 (#2050): `session.last_seen` 은 종전에 **미러가 받은 시각**(`now()`)이었다. 목록이
+ *   `ORDER BY last_seen DESC` 라, 몇 달 전 대화가 훅을 통해 **처음** 올라오는 순간 맨 위에 새것처럼 섰다.
+ *   그게 세션 창이 저절로 남의 세션으로 넘어가던 사고의 방아쇠였다(화면 폴백이 '맨 위'를 골랐다).
+ *
+ *  ⚠ **미래는 믿지 않는다.** 보고하는 기계의 시계가 앞서 있으면 그 세션이 목록 맨 위에 영구히 박힌다.
+ *   통상 시계 오차(SKEW)는 그대로 두고 그 밖은 null 로 떨어뜨린다 — 틀린 미래보다 '모르겠다'가 낫다.
+ *  ⚠ **과거는 그대로 쓴다.** 오래된 대화를 제자리에 세우는 것이 이 함수의 목적이다.
+ */
+const ACTIVITY_SKEW_MS = 5 * 60_000;   // 통상 시계 오차 — 경계 포함(정확히 5분은 허용)
+const ACTIVITY_TAIL_LINES = 400;       // 꼬리만 훑는다(큰 델타를 전수 파싱하지 않게)
+export function lastActivityAt(jsonl: string, nowMs: number = Date.now()): Date | null {
+  if (!jsonl) return null;
+  const lines = jsonl.split("\n");
+  const stop = Math.max(0, lines.length - ACTIVITY_TAIL_LINES);
+  for (let i = lines.length - 1; i >= stop; i--) {
+    const line = lines[i];
+    if (!line || !line.trim()) continue;
+    let o: { timestamp?: unknown };
+    try { o = JSON.parse(line); } catch { continue; }
+    const ts = o && typeof o.timestamp === "string" ? Date.parse(o.timestamp) : NaN;
+    if (!Number.isFinite(ts)) continue;
+    if (ts > nowMs + ACTIVITY_SKEW_MS) return null;   // 시계가 앞선 보고 — 지어내지 않고 폴백에 맡긴다
+    return new Date(ts);
+  }
+  return null;
+}
+
 export async function appendSessionLog(input: {
   nodeId: string; sessionId: string; atOffset: number; data: Buffer; harness?: string | null; owner?: string | null; store?: "slim" | "raw"; parentSessionId?: string | null;
 }): Promise<AppendResult> {
@@ -96,15 +125,23 @@ export async function appendSessionLog(input: {
     // 불멸 세션 레코드 보장(있으면 last_seen 만 갱신). owner 는 **최초 1회만** 굳는다(COALESCE — 첫 append 한
     //  멤버가 소유자로 고정, 이후 append 가 못 덮는다). 프라이버시 게이트라 라우트의 owner-검사와 함께 이중방어.
     //  제목은 첫 append(offset 0)의 첫 사람 발화에서 유도해 COALESCE 로 굳힌다(uuid 대신 읽을 수 있는 제목, 한 번만).
-    const titleCand = atOffset === 0 && len > 0 ? firstUserPromptTitle(data.toString("utf8")) : null;
+    const text = len > 0 ? data.toString("utf8") : "";
+    const titleCand = atOffset === 0 && len > 0 ? firstUserPromptTitle(text) : null;
+    // 이 델타가 말하는 마지막 활동 시각(#2050) — 못 읽으면 null 이고 SQL 이 now() 로 받는다.
+    const activityAt = len > 0 ? lastActivityAt(text) : null;
     await client.query(
-      `INSERT INTO session(node_id, session_id, harness, owner, title, parent_session_id) VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (tenant_id, node_id, session_id) DO UPDATE SET last_seen=now(),
+      `INSERT INTO session(node_id, session_id, harness, owner, title, parent_session_id, first_seen, last_seen)
+       VALUES($1,$2,$3,$4,$5,$6, COALESCE($7::timestamptz, now()), COALESCE($7::timestamptz, now()))
+       ON CONFLICT (tenant_id, node_id, session_id) DO UPDATE SET
+         -- 대화가 **마지막으로 움직인** 시각. 못 읽으면 종전대로 수신 시각(now()).
+         --  GREATEST: 같은 델타가 재전송돼도(멱등) 값이 과거로 되돌지 않는다.
+         last_seen=GREATEST(session.last_seen, COALESCE($7::timestamptz, now())),
          harness=COALESCE(session.harness, EXCLUDED.harness),
          owner=COALESCE(session.owner, EXCLUDED.owner),
          title=COALESCE(session.title, EXCLUDED.title),
          parent_session_id=COALESCE(session.parent_session_id, EXCLUDED.parent_session_id)`,
-      [nodeId, sessionId, input.harness ?? null, input.owner ?? null, titleCand, input.parentSessionId ?? null]);
+      [nodeId, sessionId, input.harness ?? null, input.owner ?? null, titleCand, input.parentSessionId ?? null,
+       activityAt ? activityAt.toISOString() : null]);
     await client.query(
       `INSERT INTO session_log(node_id, session_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,
       [nodeId, sessionId]);

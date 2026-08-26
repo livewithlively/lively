@@ -7,7 +7,11 @@ import os from "node:os";
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const FLAG_DIR = path.join(os.tmpdir(), "lively-hooks");
-const MAX_TITLE = 70;
+// 임시 이름 길이 — 28자(#2031). 종전 70자는 지시문 한 문장을 통째로 보드·사이드바에 걸었고, 그게 사람 눈에
+//  "프로젝트 이름이 내가 시킨 말 그대로"로 보인 자리다(2026-08-26 실측: 자동생성 63건 중 49건이 그 상태, 평균 46자).
+//  ⚠ 서버 선생성 경로(src/v6/project-name.ts shellNameFromPrompt)와 **같은 계약** — 한쪽만 바꾸면 같은 지시가
+//   입구(홈 입력창 / 외부 하네스 훅)에 따라 다른 이름을 갖는다.
+const MAX_TITLE = 28;
 const MAX_BODY = 3500;
 const FETCH_MS = 5000;
 const AUTO_MARK = "<!-- lively:auto-created-from-first-prompt -->";
@@ -36,9 +40,10 @@ function executionSessionId(input = {}, env = process.env) {
   return null;
 }
 
-function titleFrom(prompt) {
-  const first = prompt.split(/\r?\n/).map((s) => s.trim()).find((s) => s) || prompt.trim();
-  const title = first.replace(/\s+/g, " ").trim();
+export function titleFrom(prompt) {
+  const first = String(prompt ?? "").split(/\r?\n/).map((s) => s.trim()).find((s) => s) || String(prompt ?? "").trim();
+  // 한 줄로 접고 끝의 문장부호를 뗀다 — 잘린 자리에 남는 `?`·`.` 는 이름이 아니라 문장의 흔적이다.
+  const title = first.replace(/\s+/g, " ").trim().replace(/[.。!?？…]+$/, "").trim();
   return title.length > MAX_TITLE ? title.slice(0, MAX_TITLE - 1).trimEnd() + "…" : title;
 }
 
@@ -104,5 +109,7 @@ async function request(base, token, executionId, url, method = "GET", body) {
   }
   process.stdout.write(
     `[라이블리] 이 실행 세션은 프로젝트에 안 붙어 있어서, 방금 지시로 **프로젝트 #${pid}** 를 만들고 붙였습니다 — ` +
-    `cwd와 무관하게 여기서 남기는 지식·작업기록이 #${pid}에 귀속됩니다. 제목·본문은 임시값이며 작업이 구체화되면 정련하세요.\n`);
+    `cwd와 무관하게 여기서 남기는 지식·작업기록이 #${pid}에 귀속됩니다. 제목은 지시문을 자른 임시값이니 ` +
+    `**무슨 일인지 드러나는 이름을 지어 \`project_rename_v6 {name: "…"}\` 로 한 번 등록하세요**(#2031 — id 는 생략, ` +
+    `이 세션이 붙은 프로젝트. 이미 이름이 지어졌으면 조용히 무시됩니다). 분류·관계·지식은 작업이 구체화되면 정련하세요.\n`);
 })().then(() => process.exit(0)).catch(() => process.exit(0));

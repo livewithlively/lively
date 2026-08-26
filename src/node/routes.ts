@@ -14,9 +14,9 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { authNodeToken, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, loadRecentLinkEvents, type OrgNode } from "./store.js";
 import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
-import { linkDiagMessage, linkDiagSummary, keepAwakeLine } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로
+import { linkDiagMessage, linkDiagSummary, keepAwakeLine, staleAgentNote } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로 · #2127 낡은 인스턴스
 import { nodeOpenTo } from "./node-access.js";
-import { liveNodes } from "./registry.js";
+import { liveNodes, isSelfNode } from "./registry.js";
 import { nodeHarnesses, agentIsLatest } from "./protocol.js";
 import { AGENT_BUNDLE, AGENT_BUNDLE_ROOT, servedAgentVersion, agentBundleExists } from "./agent-bundle.js";
 import { logger } from "../log.js";
@@ -53,6 +53,15 @@ interface NodeView extends Omit<OrgNode, "token_hash"> {
   link_note_short: string | null;
   /** 억제가 걸려 있나를 사람의 말로. 상태가 정상이어도 노드 화면이 "무엇이 안 막히는지"를 알려 준다. */
   keep_awake_note: string;
+  /** #2108 — 이 노드가 **게이트웨이 자신이 도는 박스**인가(같은 tmux 를 쓰는 것을 확답으로 관측했을 때만 true). */
+  self: boolean;
+  /** self 일 때 화면에 그대로 띄울 한 문장(무엇인지 + 어떻게 하면 되는지). 아니면 null. */
+  self_note: string | null;
+  /**
+   * #2127·#2128 — 온라인인데 그 PC 의 노드 프로그램이 **낡은 채로 굳어 있는** 것으로 보이나(근거+조치 한 문장).
+   *  아니면 null. 실측에서 이 상태가 며칠간 무신호로 지속돼 하네스 검출이 통째로 실패했다 — 그 침묵을 메우는 자리다.
+   */
+  stale_note: string | null;
 }
 function toView(
   n: OrgNode,
@@ -76,6 +85,15 @@ function toView(
     link_note: linkDiagMessage(diag, { platform: n.platform, keepAwake: n.keep_awake }),
     link_note_short: linkDiagSummary(diag),
     keep_awake_note: keepAwakeLine(n.keep_awake, n.platform),
+    stale_note: staleAgentNote({
+      online: lv?.online ?? false, keepAwake: n.keep_awake, agentLatest: agentIsLatest(n.agent_ver, served),
+    }),
+    // #2108 — 이 노드가 게이트웨이 자신인가(같은 tmux 를 쓰는 것을 확답으로 관측). 관리 화면에선 **숨기지 않는다**
+    //  — 데몬이 돌고 있다는 사실 자체를 관리자가 봐야 내릴지 말지 정할 수 있다. 다만 세션 생성 대상에선 빠진다.
+    self: isSelfNode(n.id),
+    self_note: isSelfNode(n.id)
+      ? "이 노드는 게이트웨이가 도는 바로 그 컴퓨터입니다(같은 tmux 를 씁니다). 세션은 '중앙 컴퓨터(기본)'로 여세요 — 노드로 열면 같은 세션이 두 경로로 잡혀 새 세션이 복원으로 새 버립니다. 그 컴퓨터에서 `lively node stop` 을 실행하면 이 항목이 사라집니다."
+      : null,
   };
 }
 

@@ -2,7 +2,7 @@
 import { parseAppManifest, type LivelyAppManifest } from "./manifest.js";
 import { WorkerHost, WORKER_RPC_CHUNK_BYTES, type WorkerRunSnapshot, type WorkerStopReason } from "./worker-host.js";
 import type { OrgApp } from "../org/store/apps.js";
-import { getActiveGrant, getApp, getRuntimeAsset } from "../org/store/apps.js";
+import { getApp, getRuntimeAsset } from "../org/store/apps.js";
 import type { AppInstanceRow } from "../org/store/app-instances.js";
 import { listActiveRuntimeInstances } from "../org/store/app-instances.js";
 import * as runs from "../org/store/app-worker-runs.js";
@@ -16,11 +16,6 @@ const gatewayWorkerHost = new WorkerHost({ onSnapshot: (snapshot) => runs.applyW
 export interface WorkerPlacement { kind: "central" | "remote"; nodeId: string | null }
 
 export interface WorkerRecoveryResult { kept: number; restarted: number; failed: number; failures: string[] }
-
-export async function assertWorkerGrant(appId: string, owner: string,
-  lookup: (id: string, member: string) => Promise<unknown> = getActiveGrant): Promise<void> {
-  if (!(await lookup(appId, owner))) throw new Error("worker-grant-required");
-}
 
 /** 복구 한 건의 실패가 다른 AppInstance를 막지 않게 직렬 실행하고 결과를 정규화한다. */
 export async function runWorkerRecoveryBatch<T>(items: readonly T[], recover: (item: T) => Promise<"kept" | "restarted">): Promise<WorkerRecoveryResult> {
@@ -94,7 +89,6 @@ async function startWorkerForInstanceCore(app: OrgApp, manifest: LivelyAppManife
   if (!currentApp || !currentApp.enabled || currentApp.status !== "active" || currentApp.content_hash !== app.content_hash) {
     throw new Error("worker-app-no-longer-active");
   }
-  await assertWorkerGrant(app.id, instance.owner_member);
   if (!app.content_hash) throw new Error("worker-package-hash-missing");
   const asset = await getRuntimeAsset(app.id, app.content_hash);
   if (!asset) throw new Error("worker-runtime-asset-missing");

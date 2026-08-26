@@ -36,13 +36,15 @@
 import type express from "express";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { canAttach, sessionDir } from "./terminal-sessions.js";
+import { canAttach, sessionDir, sessionGone } from "./terminal-sessions.js";
 import { getOpt } from "./tmux-exec.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc } from "../node/registry.js";
 import { markSessionSeen } from "./phase.js";
+import { markViewing, viewersOf } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
+import { listMembers } from "../org/store.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
 import { sessionOsUser } from "./profiles.js";
 import { harnessIo, isChatAction, type ChatAction } from "./harness-io/adapter.js";
@@ -63,13 +65,38 @@ async function gateRead(id: string, req: express.Request): Promise<void> {
   if (nodeId) {
     const v = await nodeCanAttach(nodeId, id, uid);
     if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
-    throw new HttpError(409, "node");   // 인가는 되지만 파일이 그 컴퓨터에 있다 — 화면이 중앙 기록으로 물러난다
+    // ⚠ '노드에 등록됨'과 '파일이 저쪽에 있음'은 다르다(#2055 실측 2026-08-26): 게이트웨이 박스가 노드로도
+    //  등록돼 있으면 **이 박스의 로컬 세션까지** 노드 스냅샷에 잡힌다(applyLiveTheme·prompt 라우트가 이미 같은
+    //  함정을 겪었다). 그때 여기서 409 로 물러나면 화면은 중앙 기록으로 폴백하는데, 그 기록은 아직 비어 있어
+    //  **대화창이 통째로 빈 채로 남는다**. 이 박스의 tmux 에 실제로 있으면 로컬 파일로 답한다.
+    if (await sessionGone(id)) throw new HttpError(409, "node");   // 정말 저쪽 컴퓨터 것 — 중앙 기록으로
   }
   if (await canAttach(id, uid)) return;
   const st = await getSessionState(id);
   const mine = !!st && (st.owner === uid || !!u.scopes?.includes("admin"));
   if (st && (mine || (st.project_id ?? 0) > 0)) return;
   throw new HttpError(403, "세션에 접근할 수 없습니다");
+}
+
+// #2116 — 지금 이 세션을 보고 있는 사람(얼굴 줄). **열람 도장(/seen)의 응답에 얹어** 돌려준다:
+//  화면은 이미 보는 동안 15초마다 그 도장을 찍으므로(web/v2/main.ts SEEN_EVERY_MS), presence 전용 폴링을
+//  새로 만들 이유가 없다. 이름은 명부에서 붙인다 — 화면이 id 만 받으면 '누구'인지 그릴 수 없다.
+//  명부 조회가 실패해도 얼굴은 나간다(id 를 이름 자리에 쓴다) — 부가 정보 하나 때문에 도장을 실패시키지 않는다.
+//  ⚠ 명부는 잠깐 재사용한다 — 이 함수는 **보고 있는 사람 수 × 15초마다** 불린다. 매번 org_member 를 훑을 이유가
+//   없고(이름은 그 사이 거의 안 바뀐다), 바뀌어도 1분 안에 따라온다.
+let nameMemo: { at: number; m: Map<string, string> } | null = null;
+const NAME_TTL_MS = 60_000;
+async function memberNames(): Promise<Map<string, string>> {
+  if (nameMemo && Date.now() - nameMemo.at < NAME_TTL_MS) return nameMemo.m;
+  const m = new Map((await listMembers().catch(() => [])).map((x) => [x.id, x.display_name || x.id]));
+  if (m.size) nameMemo = { at: Date.now(), m };   // 빈 결과(조회 실패)는 기억하지 않는다 — 1분 동안 이름을 잃는다
+  return m;
+}
+async function viewerFaces(sessionId: string): Promise<Array<{ id: string; name: string }>> {
+  const ids = viewersOf(sessionId);
+  if (!ids.length) return [];
+  const names = await memberNames();
+  return ids.map((id) => ({ id, name: names.get(id) || id }));
 }
 
 // 이 세션의 하네스 — desired-state 미러(있으면) → 라이브 tmux 옵션(@box_harness) 폴백. 둘 다 없으면 ''(모름 → 못 읽는 하네스로 다룬다, claude 로 추측하지 않는다).
@@ -176,15 +203,18 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
       // 그 PC 의 tmux 에 사는 세션 — markActive 와 같은 릴레이. 인가는 노드가 아는 사실(소유·초대)로 먼저 묻는다.
       const v = await nodeCanAttach(nodeId, id, uid);
       if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
-      //  이 op 를 모르는 구 노드는 **안 보낸다**(#1954 3차) — 그 세션만 종전 판정으로 남을 뿐 오류가 아니다.
-      if (!nodeSupports(nodeId, "markSeen")) { res.json({ ok: true, applied: false, reason: "node-old" }); return; }
+      //  ⭐ 얼굴 줄(#2116)은 **게이트웨이가 기록한다** — 보고 있는 사람은 그 노드가 아니라 여기에 붙은 브라우저다.
+      //   그래서 구 노드(markSeen 미지원)여도, 노드 왕복이 실패해도 얼굴은 정확하다.
+      markViewing(id, uid);
+      if (!nodeSupports(nodeId, "markSeen")) { res.json({ ok: true, applied: false, reason: "node-old", viewers: await viewerFaces(id) }); return; }
       await nodeRpc(nodeId, "markSeen", { id });
-      res.json({ ok: true, applied: true });
+      res.json({ ok: true, applied: true, viewers: await viewerFaces(id) });
       return;
     }
     if (!(await canAttach(id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    markViewing(id, uid);
     await markSessionSeen(id);
-    res.json({ ok: true, applied: true });
+    res.json({ ok: true, applied: true, viewers: await viewerFaces(id) });
   }));
 
   // ── 아웃박스(#1753) — 이 세션의 전달 대기·실패 프롬프트. 화면이 대기 말풍선(새로고침 생존)과 재시도·삭제를 그린다. ──

@@ -25,13 +25,13 @@ const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: 
   { key: 'notion', label: 'Notion', icon: '📔', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
   { key: 'linear', label: 'Linear', icon: '📐', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
   { key: 'slack', label: 'Slack', icon: '💬', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
-  { key: 'google-gmail', label: 'Gmail', icon: '✉️', oauth: 'google-gmail', blurb: 'AI가 내 Gmail 계정에 로그인해서 직접 메일을 읽고 보낼 수 있습니다.' },
-  { key: 'google-drive', label: 'Google Drive', icon: '📁', oauth: 'google-drive', blurb: 'AI가 내 Google Drive 계정에 로그인해서 직접 파일을 읽을 수 있습니다.' },
-  { key: 'google-calendar', label: 'Google 캘린더', icon: '📅', oauth: 'google-calendar', blurb: 'AI가 내 Google 캘린더 계정에 로그인해서 직접 일정을 확인할 수 있습니다.' },
-  { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', blurb: 'AI가 내 GitHub 계정에 로그인해서 직접 이슈·PR·저장소를 다룰 수 있습니다.' },
-  { key: 'gitlab', label: 'GitLab', icon: '🦊', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정에 로그인해서 직접 MR·저장소를 다룰 수 있습니다.' },
+  // #1881 G2 — 드라이브·Gmail·캘린더 세 줄이던 것을 **한 줄**로. 구글은 한 동의 화면에서 여러 API 범위를 함께
+  //  받으므로 나눌 이유가 없었다(세 줄은 곧 [연결] 3번이었다). 서버가 내려주는 커넥터도 server='google' 한 줄이다.
+  { key: 'google', label: 'Google', icon: '🔷', oauth: 'google', blurb: 'AI가 내 Google 계정에 로그인해서 직접 Drive 파일과 캘린더 일정을 읽을 수 있습니다. (Gmail 은 구글 심사 범위라 준비 중입니다.)' },
+  { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', blurb: 'AI가 내 GitHub 계정으로 이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다. 코드 저장소를 작업용으로 붙이는 것은 아래 [코드 저장소 접근]에서 따로 설정합니다.' },
+  { key: 'gitlab', label: 'GitLab', icon: '🦊', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
   { key: 'clickup', label: 'ClickUp', icon: '🗂️', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
-  { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 내 Figma 계정에 로그인해서 직접 디자인을 읽을 수 있습니다.' },
+  { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 내 Figma 계정으로 디자인 파일과 코멘트를 직접 읽을 수 있습니다 — 디자인 결정·피드백은 대개 코멘트에 쌓입니다.' },
   { key: 'prometheus', label: 'Prometheus', icon: '📊', token: 'prometheus_bearer', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
   { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', token: 'claude_setup_token', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
 ];
@@ -44,6 +44,8 @@ interface SvcView {
   available: any[];       // 내가 지금 바로 켤 수 있는 서비스
   blockedOAuth: any[];    // 관리자가 조직에 등록해야만 켤 수 있는 서비스(내 힘으로 안 되는 것)
   all: any[];             // 위 셋 전부 — 상세 화면(#/connect/<key>)이 키로 되찾을 때 쓴다
+  /** #1675 ③ 헤드리스 자격의 마지막 실패(있으면). `{ at, label, task_id }`. */
+  authFailure?: { at: string | null; label: string; task_id: number } | null;
 }
 
 /** 표에 없는 커넥터를 화면에 세울 최소 정보로 감싼다 — 관리자가 방금 등록한 앱이 여기로 들어온다. */
@@ -82,7 +84,9 @@ function partition(oauth: any, creds: any): SvcView {
     const svc = svcFromConnector(server, c);
     (c && c.connected ? connected : available).push(svc);
   }
-  return { oauthMap, credMap, connected, available, blockedOAuth, all: [...connected, ...available, ...blockedOAuth] };
+  // #1675 ③ — 헤드리스 자격이 마지막으로 **실패**한 기록(서버가 org_task 에서 뽑아 준다). 없으면 null.
+  const authFailure = creds.headless_auth_failure ?? null;
+  return { oauthMap, credMap, connected, available, blockedOAuth, authFailure, all: [...connected, ...available, ...blockedOAuth] };
 }
 
 // ── 화면 그리기 ──
@@ -169,6 +173,25 @@ function connectedRow(svc: any, v: SvcView, reload: () => void) {
   if (viaToken && cred?.last_used_at) metaBits.push('마지막 사용 ' + relTime(cred.last_used_at));
   else if (viaToken && cred?.updated_at) metaBits.push('연결 ' + relTime(cred.updated_at));
 
+  // #1675 ③ — **이 토큰이 지금 살아 있나.** '마지막 사용'만으로는 성공했는지 실패했는지 알 수 없어서,
+  //  토큰이 폐기돼도 이 화면은 멀쩡해 보였다(전면장애 때 사람이 그 사실을 알 길이 알림 하나뿐이었다).
+  //  실패가 **마지막 등록보다 나중**일 때만 경고한다 — 다시 등록했으면 지난 실패는 이미 해결된 것이다.
+  let authWarn: any = null;
+  if (svc.key === 'claude-headless' && viaToken && v.authFailure) {
+    const failAt = v.authFailure.at ? new Date(v.authFailure.at).getTime() : 0;
+    const setAt = cred?.updated_at ? new Date(cred.updated_at).getTime() : 0;
+    if (failAt > setAt) {
+      authWarn = el('div', { class: 'svc-conn-blurb' },
+        el('span', { class: 'pill pill-warn', text: '인증 실패' }),
+        el('span', { text: ' ' + relTime(v.authFailure.at) + ' · ' + v.authFailure.label
+          + ' — 내 계정으로 실행된 작업이 인증에 실패했습니다. 여기 등록한 토큰이 원인이라면'
+          + ' `claude setup-token` 으로 다시 발급해 [토큰 교체]를 누르세요.'
+          + ' 내 PC(노드)에서 실행된 작업이었다면 그 PC 의 Claude 로그인을 다시 하셔야 합니다 —'
+          + ' 그 경우 이 안내는 30일 뒤 저절로 사라집니다.'
+          + ' 이 실패로 멈춘 예약 작업이 있다면 관리 ▸ 자동화에서 다시 켜세요.' }));
+    }
+  }
+
   box.append(
     el('div', { class: 'svc-conn-row' },
       svcTile(svc.key, svc.label, true),
@@ -177,7 +200,8 @@ function connectedRow(svc: any, v: SvcView, reload: () => void) {
           el('span', { text: svc.label }),
           el('span', { class: 'svc-state', text: '연결됨' }),
           metaBits.length ? el('span', { class: 'svc-meta', text: metaBits.join(' · ') }) : null),
-        el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb))),
+        el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb)),
+        authWarn),
       el('div', { class: 'svc-conn-acts' }, ...acts)),
     expand);
   return box;

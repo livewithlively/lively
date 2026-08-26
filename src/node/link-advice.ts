@@ -66,7 +66,17 @@ export function linkDiagMessage(
   diag: LinkDiagnosis | null | undefined,
   opts: { platform?: string | null; keepAwake?: KeepAwakeStatus | null } = {},
 ): string | null {
-  if (!diag || diag.suspected !== "sleep") return null;
+  if (!diag) return null;
+  // #2127 — 짧게 붙고 짧게 끊긴다. **공백이 짧으니 그 컴퓨터는 깨어 있었다** — 잠자기 안내(전원·뚜껑·powercfg)를
+  //  여기에 내면 정확히 반대 방향으로 사람을 보낸다. 다만 원인은 하나가 아니다(노드 프로그램 재기동 / 네트워크
+  //  플랩) 하고 타이밍만으로는 못 가른다 — 그래서 **둘 다 말하고**, 어느 쪽이든 해로울 것 없는 조치를 먼저 준다.
+  if (diag.suspected === "churn") {
+    return `최근 24시간 동안 ${diag.cycles}번 붙었는데 한 번에 평균 ${humanDur(diag.medianUpSec)}만 연결되고 ${humanDur(diag.medianGapSec)}씩 끊겼습니다`
+      + " — 공백이 짧아 이 컴퓨터가 잔 것은 아닙니다. 노드 프로그램이 죽고 다시 뜨는 중이거나, 네트워크가 자주 끊기는 것으로 보입니다."
+      + " 먼저 그 PC 에서 `lively node --daemon` 을 다시 실행해 주세요(멱등 — 낡은 인스턴스를 회수하고 새로 띄웁니다)."
+      + " 그래도 같으면 그 PC 의 네트워크(VPN·무선)를 확인해 주세요.";
+  }
+  if (diag.suspected !== "sleep") return null;
   const platform = opts.platform ?? null;
   const cmd = forceAwakeCommand(platform);
   const evidence = `최근 24시간 동안 ${diag.cycles}번 붙었는데 한 번에 평균 ${humanDur(diag.medianUpSec)}만 연결되고 ${humanDur(diag.medianGapSec)}씩 끊겼습니다`;
@@ -88,6 +98,39 @@ export function linkDiagMessage(
  *   (문구 출처를 하나로 두는 원칙은 그대로 — 웹이 전문을 잘라 쓰면 문장이 중간에서 끊긴다).
  */
 export function linkDiagSummary(diag: LinkDiagnosis | null | undefined): string | null {
-  if (!diag || diag.suspected !== "sleep") return null;
-  return `평균 ${humanDur(diag.medianUpSec)} 연결되고 ${humanDur(diag.medianGapSec)}씩 끊깁니다 — 잠자기로 보입니다.`;
+  if (!diag) return null;
+  const evidence = `평균 ${humanDur(diag.medianUpSec)} 연결되고 ${humanDur(diag.medianGapSec)}씩 끊깁니다`;
+  if (diag.suspected === "churn") return `${evidence} — 잠자기는 아닙니다(재기동·네트워크).`;
+  if (diag.suspected !== "sleep") return null;
+  return `${evidence} — 잠자기로 보입니다.`;
+}
+
+/**
+ * 🔴 #2127·#2128 — **온라인인데 이 노드가 잠자기 억제 상태를 한 번도 보고한 적이 없다.**
+ *
+ * 최신 번들의 `startKeepAwake` 는 실패해도 **반드시 객체를 돌려주고**(active:false + reason), hello 가 그걸 싣는다.
+ *  저장은 COALESCE 라 한 번이라도 받았으면 값이 남는다. 그러므로 온라인 노드의 `keep_awake` 가 비어 있다는 것은
+ *  **그 PC 에서 도는 인스턴스가 현행 규약대로 hello 를 못 하고 있다**는 뜻이다 — 낡은 번들이거나, 낡은 감시자
+ *  프로세스가 옛 환경으로 계속 자식을 띄우고 있거나(윈도우 `.cmd` 런처 루프), hello 전에 죽고 있거나.
+ *
+ * 왜 굳이 말하나: 실측(hammurabi, 2026-08-26)에서 이 상태가 **며칠간 아무 신호 없이** 지속됐고, 그 동안
+ *  하네스 검출이 통째로 실패해(claude 가 도는데 `['shell']` 로 보고) 웹 피커와 위탁이 그 노드를 배제했다.
+ *  `agent_ver` 은 최신으로 보였다 — 그래서 '버전' 축으로는 절대 안 잡힌다. 이 값이 유일한 지문이다.
+ *
+ * ⚠ 원인을 단정하지 않는다(이 모듈의 원칙). 다만 **조치는 어느 원인이든 같다** — 재등록 한 번.
+ */
+export function staleAgentNote(o: {
+  online: boolean;
+  keepAwake?: KeepAwakeStatus | null;
+  /** 서빙 번들과 같은가 — true 면 '버전은 최신인데 보고를 못 한다'라 더 강한 신호다. null=판정 불가. */
+  agentLatest?: boolean | null;
+}): string | null {
+  if (!o.online) return null;        // 꺼진 노드는 다른 축이다 — 보고가 없는 게 당연하다
+  if (o.keepAwake) return null;      // 받은 적이 있다 = 현행 규약대로 말하고 있다
+  const head = o.agentLatest === true
+    ? "이 노드는 프로그램 버전은 최신인데, 잠자기 억제 상태를 한 번도 보고하지 않았습니다"
+    : "이 노드가 잠자기 억제 상태를 한 번도 보고하지 않았습니다";
+  return `${head} — 그 PC 에서 도는 노드 프로그램이 낡은 채로 굳어 있을 수 있습니다.`
+    + " 이 상태에서는 그 PC 에 깔린 AI 를 못 찾아 세션 목록·위탁에서 빠질 수 있습니다."
+    + " 그 PC 에서 `lively node --daemon` 을 다시 실행해 주세요(멱등 — 옛 인스턴스를 회수하고 새로 띄웁니다).";
 }

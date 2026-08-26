@@ -26,7 +26,6 @@ const execFileP = promisify(execFile);
 const SYSTEM = "domain-wiki";
 const INSTANCE_DEFAULT = "domain-wiki";
 const CONTENT_DEFAULT = "content";
-const BASE_URL_DEFAULT = "https://git.example.com/acme-dev/domain-wiki/-/blob/main";
 
 interface DwConfig {
   repoPath: string | null;
@@ -42,13 +41,16 @@ async function loadConfig(): Promise<DwConfig> {
     repoPath: c.repo_path?.trim() || null,
     contentSubdir: c.content_subdir?.trim() || CONTENT_DEFAULT,
     gitPull: (c.git_pull ?? "").trim().toLowerCase() === "true",
-    baseUrl: (c.base_url?.trim() || BASE_URL_DEFAULT).replace(/\/+$/, ""),
+    //  기본값을 씌우지 않는다 — 예시 도메인이 근거 링크로 새는 것을 막는다(위 toRawItem 주석).
+    baseUrl: (c.base_url?.trim() || "").replace(/\/+$/, ""),
     instance: c.instance?.trim() || INSTANCE_DEFAULT,
   };
 }
 
-/** content 루트 아래 *.md 상대경로(content 기준) 전량. 심볼릭·.git 등은 walk 하지 않는다. */
-function listMarkdown(contentRoot: string): string[] {
+/** content 루트 아래 *.md 상대경로(content 기준) 전량. 심볼릭·.git 등은 walk 하지 않는다.
+ *  export 이유(#1881 G9): 위키 레포 다리가 "이 레포에 md 가 몇 개인가"를 미리 세어 사람에게 보여준다 —
+ *  스캔 규칙이 두 벌이 되면 미리보기와 실제 인입이 어긋나므로 같은 함수를 쓴다. */
+export function listMarkdown(contentRoot: string): string[] {
   const out: string[] = [];
   const walk = (dir: string) => {
     let ents: fs.Dirent[];
@@ -93,7 +95,9 @@ export function toRawItem(
       system: SYSTEM,
       instance,
       external_id: slug,                                   // = 지식 name (파일 basename 슬러그, 전역 유니크)
-      external_url: `${baseUrl}/${relpath.split(path.sep).join("/")}`,  // gitlab blob 딥링크
+      //  base_url 이 없으면 **링크를 만들지 않는다**(#1881 G9). 종전엔 예시 상수(git.example.com/acme-dev)가
+      //   기본값이라, 그 값을 지정하지 않은 배포는 근거 칩이 **남의 도메인**으로 향했다 — 없는 링크보다 나쁘다.
+      external_url: baseUrl ? `${baseUrl}/${relpath.split(path.sep).join("/")}` : undefined,
     },
     title: title || slug,
     body: normalized || undefined,
@@ -149,8 +153,11 @@ async function postSync(ctx: PostSyncCtx): Promise<PostSyncResult> {
   const { pool, runStartIso, ingested, mirrorFailures } = ctx;
   if (mirrorFailures === 0 && ingested > 0) {
     try {
-      const archived = await sweepDomainWikiArchived(pool, runStartIso);
-      logger.info({ system: SYSTEM, ingested, archived }, "domain-wiki 후처리 완료(삭제 전파 스윕)");
+      //  스윕은 **이 수집기의 instance 안에서만** 돈다(#1881 G9) — 위키 레포를 둘 이상 붙였을 때
+      //  한 레포의 싱크가 다른 레포의 지식을 아카이브하지 않게. instance 는 backfill 이 RawItem 에 실은 값과 같다.
+      const { instance } = await loadConfig();
+      const archived = await sweepDomainWikiArchived(pool, runStartIso, instance);
+      logger.info({ system: SYSTEM, instance, ingested, archived }, "domain-wiki 후처리 완료(삭제 전파 스윕)");
     } catch (err) {
       logger.error({ err: (err as Error)?.message ?? String(err) }, "domain-wiki 스윕 실패(비치명 — 다음 run 수렴)");
     }

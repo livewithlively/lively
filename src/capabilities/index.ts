@@ -23,8 +23,6 @@ import { listV6Capabilities } from "./lists-v6.js";
 import { statusTemplateV6Capabilities } from "./status-templates-v6.js";
 import { favoritesCapabilities } from "./favorites.js";
 import { appCapabilities } from "./apps.js";
-import { appInstanceCapabilities } from "./app-instances.js";
-import { appNotificationCapabilities } from "./app-notifications.js";
 import { appToolCallCapabilities } from "./app-tool-call.js";
 import { appStoreCapabilities } from "./app-store.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
@@ -56,6 +54,10 @@ import { awsCredentialCapabilities } from "./aws-credentials.js";
 import { oauthConnectCapabilities } from "./oauth-connect.js";
 import { slackConnectCapabilities } from "./slack-connect.js";
 import { notionConnectCapabilities } from "./notion-connect.js";
+import { googleConnectCapabilities } from "./google-connect.js";
+import { githubConnectCapabilities } from "./github-connect.js";
+import { appInstanceCapabilities } from "./app-instances.js";
+import { appNotificationCapabilities } from "./app-notifications.js";
 import { channelPolicyCapabilities } from "./channel-policy.js";
 import { brokerCapabilities } from "./broker.js";
 import { meCapabilities, whoamiCapabilities } from "./whoami.js";
@@ -125,11 +127,13 @@ const all: Capability[] = [
   ...oauthConnectCapabilities, // #746 T2: OAuth 커넥터 연결 — me_oauth_connect/disconnect(scope=null). auth_mode=oauth 프록시 MCP 에 per-user 동의. 콜백은 /oauth/callback(index.ts).
   ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
   ...notionConnectCapabilities, // #1881: 노션 "팀 자료로 모으기" — org_notion_collect(상태)/set(토글=동의 시작)/connect(페이지 더 고르기)/oauth_complete(CP 릴레이). 동의 화면의 페이지 선택이 곧 수집 범위, 수집기는 token_source=org 로 조직 슬롯을 가리킨다. 토큰 복사 0.
+  ...googleConnectCapabilities, // #1881 G5: 구글 "팀 자료로 모으기" — org_google_collect(상태)/set(토글=동의 시작)/connect(범위 넓히기)/oauth_complete(CP 릴레이). 수집기는 token_source=member:<켠 관리자> 로 그 사람의 연결을 가리킨다(구글엔 봇 개념이 없어 조직 토큰이라는 게 없다). ★Gmail 은 제한범위라 명시적으로 골라야 켜진다 — 안 쓰는 서비스를 끼우면 미검증 100명 한도를 되돌릴 수 없게 태운다.
+  ...githubConnectCapabilities, // #1881 G5: GitHub App 직결 — org_github_connect(연결 시작=설치·레포 선택)/_status/org_github_app_register(관리자 앱 자격). 설치 화면의 레포 선택이 곧 접근 범위 선언이고, 그 설치로 clone 자격(installation token)까지 나온다.
+  ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
+  ...appNotificationCapabilities, // #1891: 앱이 쏘는 알림(권한 fail-closed) + 내 알림 이력·읽음. inbox 앱이 소비한다.
   ...channelPolicyCapabilities, // #1226: 대화 채널별 개인 열람/발송 허용 — me_slack_channels·me_channel_policy_set. **REST 전용·변경은 사람만**(AI 가 자기 차단을 못 풀게). 집행은 org/channels/channel-guard ← mcp-proxy.
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
   ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.
-  ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
-  ...appNotificationCapabilities, // #1891: 앱이 쏘는 알림(권한 fail-closed) + 내 알림 이력·읽음. inbox 앱이 소비한다.
   ...appToolCallCapabilities, // #1780 PR5b: 앱 UI 브리지 tools/call(org_app_tool_call, REST 전용) — 앱 UI 의 도구 호출을 앱 principal 로 재판정 실행.
   ...appStoreCapabilities, // #1780 D6: 앱 데이터 store_*(insert/query/tables) — 앱이 자기 app 스키마 테이블을 RLS 격리 하에 읽고 쓴다.
 ];

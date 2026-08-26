@@ -19,6 +19,7 @@ import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
 import { NOISE_RE, TRASH_DIR, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
+import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
 import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
@@ -114,51 +115,6 @@ const base = (p: string): string => String(p).split('/').pop() || String(p);
 //  맨 위가 새 세션 입력칸, 그 아래로 이 프로젝트의 세션이 **답 기다리는 것 먼저**.
 //  카드는 최근 대화 몇 줄 + 그 자리에서 이어 말하는 입력칸을 가진다 — 세션 화면으로 넘어가지 않아도 되게.
 //  펼친 카드만 대화를 당긴다(접힌 카드는 요청 자체를 안 한다).
-
-interface Turn { who: 'me' | 'ai'; text: string }
-const INJ_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
-
-const tailCache = new Map<string, { turns: Turn[]; at: number }>();
-
-/** 대화 꼬리를 어디서 읽나 — 이 박스에서 도는 세션은 박스의 대화 파일, 노드·끝난 세션은 **중앙 기록**(#1752).
- *  둘 다 공통 ChatLine ndjson 을 준다(src/terminal/harness-io/chat-line.ts) — 아래 파서 하나로 읽힌다. */
-function tailUrl(s: Sess, maxBytes: number): string | null {
-  if (s.live && !s.node) return '/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/transcript?tail=' + maxBytes;
-  const sid = String(s.logId || s.id || '');
-  if (!sid) return null;
-  return '/api/ui/v6/sessions/' + encodeURIComponent(sid) + '/log?fmt=chat&tail=' + maxBytes + '&node=' + encodeURIComponent(String(s.logNode || s.node || ''));
-}
-
-async function fetchTurns(s: Sess, maxBytes: number): Promise<Turn[]> {
-  const hit = tailCache.get(s.id);
-  if (hit && Date.now() - hit.at < 7000) return hit.turns;
-  const turns: Turn[] = [];
-  const url = tailUrl(s, maxBytes);
-  if (!url) { tailCache.set(s.id, { turns, at: Date.now() }); return turns; }
-  try {
-    const res = await fetch(apiUrl(url), { headers: authHeaders(), credentials: 'same-origin' });
-    if (res.ok) {
-      for (const line of (await res.text()).split('\n')) {
-        if (!line.trim()) continue;
-        let o: any; try { o = JSON.parse(line); } catch { continue; }
-        if (!o || o.isSidechain || o.isMeta) continue;
-        const c = o.message?.content;
-        if (o.type === 'user') {
-          const txt = (typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b: any) => b?.type === 'text').map((b: any) => String(b.text || '')).join(' ') : '').replace(/\s+/g, ' ').trim();
-          if (txt && !INJ_RE.test(txt)) turns.push({ who: 'me', text: txt });
-        } else if (o.type === 'assistant') {
-          const txt = (Array.isArray(c) ? c.filter((b: any) => b?.type === 'text').map((b: any) => String(b.text || '')).join('\n') : '').trim();
-          if (!txt) continue;
-          const last = turns[turns.length - 1];
-          if (last && last.who === 'ai') last.text = txt;
-          else turns.push({ who: 'ai', text: txt });
-        }
-      }
-    }
-  } catch (_) { /* 못 읽으면 카드는 상태만 보여 준다 */ }
-  tailCache.set(s.id, { turns, at: Date.now() });
-  return turns;
-}
 
 /** 상태 우선순위 — 답을 기다리는 것이 맨 위(내가 풀어야 도는 일), 그다음 도는 것, 조용한 것, 끝난 것. */
 const rank = (s: Sess): number => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : s.live && s.alive ? 2 : 3);

@@ -24,7 +24,7 @@ export {
 export {
   memberOsUser, resolveRootPath, rootRelOf, profileConfigDir, resolveProfileConfigDir, profileStatus, profileStatusFor,
   provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, ensureMemberOsUser,
-  sessionOsUser, userOsUser, harnessHasCredential, type AiAccountStatus,
+  sessionOsUser, userOsUser, harnessHasCredential, harnessLoginProbe, aiLoginCheck, type AiAccountStatus, type AiLoginCheck,
 } from "./profiles.js";
 export {
   detectAwaiting, isReportedPhase, PHASE_TTL_SEC, parseReportedPhase, isPhaseFresh, resolveAgentPhase,

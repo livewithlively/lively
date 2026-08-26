@@ -1,0 +1,33 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - text: Lively
+      - generic [ref=e6]: ·
+      - text: 라이블리 제품팀
+    - generic [ref=e7]: 예시 공간
+  - main [ref=e8]:
+    - region "리브와 첫 대화" [ref=e36]:
+      - generic [ref=e37]:
+        - article [ref=e38]:
+          - generic [ref=e39]:
+            - generic [ref=e40]: L
+            - generic [ref=e41]:
+              - text: 리브와 첫 대화
+              - generic [ref=e42]: 제품팀의 예시 맥락을 바탕으로 답합니다.
+          - generic [ref=e43]:
+            - generic [ref=e44]: 리브
+            - paragraph [ref=e45]: 먼저 무엇을 함께 해 볼까요?
+            - generic "첫 질문 제안" [ref=e46]:
+              - button "이번 주 진행 중인 일 정리" [ref=e47] [cursor=pointer]
+              - button "최근 결정 보기" [ref=e48] [cursor=pointer]
+              - button "맡을 일 찾기" [ref=e49] [cursor=pointer]
+          - generic [ref=e50]:
+            - textbox "리브에게 물어보기" [ref=e51]:
+              - /placeholder: 궁금한 것을 입력하세요.
+            - button "보내기" [ref=e52] [cursor=pointer]
+        - complementary [ref=e53]:
+          - heading "이번 대화에 함께 온 것" [level=2] [ref=e54]
+          - paragraph [ref=e55]: 예시 공간의 데이터입니다. 실제 제품에서는 권한이 있는 자료만 표시합니다.
+          - generic [ref=e56]: 제품팀의 업무 방식
+          - generic [ref=e59]: 진행 중인 온보딩 설계
+          - generic [ref=e62]: 최근 결정 2건

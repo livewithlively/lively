@@ -120,6 +120,12 @@ export interface Harness {
   //  · failHint: 재시작 안내(`<bin>` 입력) 뒤에 덧붙일 줄들. 하네스마다 로그인 절차가 달라서 있는 값.
   loginCmd?: string;
   failHint?: string[];
+  /** 온보딩 «AI 잇기»(#1879)가 그 사람에게 **그대로 보여 주는** 로그인 절차. 하네스마다 완전히 다르다(실측 2026-08-26):
+   *   claude `claude auth login` · codex `codex login` · grok `grok login --device-auth`
+   *   · antigravity 는 **로그인 명령이 없다** — `agy` 를 켜면 하네스가 인증을 띄운다(원격이면 주소+코드).
+   *  ⚠ 없는 명령을 지어내지 않는다. 온보딩 첫 화면의 틀린 한 줄은 가입 직후 그 자리에서 들통난다
+   *   (harnessLoginArgv 머리말과 같은 교리). 여기 채우기 전에 그 CLI 의 --help 를 실제로 읽는다. */
+  loginSteps?: string[];
   // 이어받기(#1711) — '이어서 열기'(복원)가 **같은 대화를 이어서** 열게 하는 argv 조각.
   //  id 를 주면 그 대화, 없으면 '가장 최근 대화 또는 피커'. 하네스마다 수단이 완전히 다르다(실측 2026-08-14):
   //   claude `--resume <uuid>` / `--resume`(피커) · codex **서브커맨드** `resume <id>` / `resume --last`
@@ -147,6 +153,8 @@ export const HARNESSES: Harness[] = [
     autoApproveFlag: "--dangerously-skip-permissions",
     flags: [
       // desc 는 폼에서 드롭다운 아래 회색 캡션으로 붙는다 — '비우면 기본' 류는 빈 값 옵션 라벨('(자동)')이 이미 말하므로 두지 않는다(#1145).
+      // 2026-08-24 Claude Code 2.1.241 --help 가 현행 별칭으로 fable·opus·sonnet 을 직접 안내한다.
+      // haiku 는 빠른 기존 별칭으로 유지하고, 기본 표기만 현재 세션 기본인 fable 로 올린다(argv 고정은 하지 않는다).
       //  ⚠ 별칭 목록은 CLI 도움말을 실측해 맞춘다 — fable 이 빠져 있었다(원준님 2026-08-21 지적).
       //   실측(claude 2.1.238 `--help`): "Provide an alias for the latest model (e.g. 'fable', 'opus', or
       //   'sonnet') or a model's full name (e.g. 'claude-fable-5')." 목록에 없어도 터미널에서 `/model fable`
@@ -154,7 +162,10 @@ export const HARNESSES: Harness[] = [
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "fable" },
       { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
     ],
-    failHint: ["로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요."],
+    failHint: ["로그인이 필요하다고 나오면  claude auth login  을 입력하세요."],
+    // 실측(claude 2.1.246 `claude auth --help`): login·logout·status 가 **셸 서브커맨드로** 있다. 종전 안내(TUI 안 `/login`)는
+    //  #1516 당시 사실이었지만 지금은 낡았다 — 온보딩에서 TUI 를 거치게 하면 한 단계가 공짜로 늘어난다.
+    loginSteps: ["터미널에  claude auth login  을 입력합니다", "열리는 창에서 Anthropic 계정으로 로그인합니다"],
     resumeArgv: (id) => (id ? ["--resume", id] : ["--resume"]),   // 인자 없는 --resume = 이 폴더의 대화 피커
     // 실측(claude 2.1.234 번들): `/model <별칭|풀네임>` · `/effort <low|medium|high|xhigh|max|auto>` 둘 다 인자를 받는
     //  local 커맨드(effort 는 supportsNonInteractive) — 입력창에 한 줄로 쳐서 그 자리에서 바뀐다.
@@ -182,6 +193,10 @@ export const HARNESSES: Harness[] = [
       "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
     },
     loginCmd: "codex logout && codex login --device-auth",
+    // 온보딩은 만료 복구가 아니라 **첫 로그인**이라 logout 을 앞세우지 않는다(지울 자격이 없다).
+    //  브라우저가 있는 자리는 `codex login` 이 알아서 창을 열고, 없으면 codex 가 device-auth 로 내려간다.
+    loginSteps: ["터미널에  codex login  을 입력합니다", "열리는 창에서 ChatGPT 계정으로 로그인합니다",
+      "창이 안 열리면  codex login --device-auth  로 주소와 일회용 코드를 받습니다"],
     resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
   },
   {
@@ -210,6 +225,11 @@ export const HARNESSES: Harness[] = [
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"] },   // claude 와 달리 3단계(실측)
     ],
     failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
+    // ⚠ agy 에는 로그인 서브커맨드가 **없다**(실측 agy 1.1.13·1.1.x --help — install·update·plugin·models·agent·changelog뿐).
+    //  그래서 절차의 1단계가 '하네스를 그냥 켠다' 이고, 인증은 하네스가 띄운다. 없는 `agy login` 을 안내하면
+    //  사람은 command not found 를 보고 막힌다 — 이 표에서 지어내지 않는 이유가 그것이다.
+    loginSteps: ["터미널에  agy  를 입력해 하네스를 켭니다", "하네스가 띄우는 안내대로 Google 계정으로 로그인합니다",
+      "원격이라 창이 안 열리면 화면의 주소를 브라우저에서 열고 함께 뜨는 코드를 입력합니다"],
     // ⚠ id 없는 폴백(`--continue`)은 **가장 최근 대화**를 잡는데, agy 의 대화 저장(~/.gemini/antigravity-cli/brain/)은
     //  워크스페이스별이 아니라 **전역**이다(실측) → 세션을 여러 개 돌리면 남의 대화를 이어받을 수 있다.
     //  그래서 antigravity 는 id 복원이 정상 경로이고(어댑터가 conversationId 를 세션 id 로 보고한다 — 매핑 존재),
@@ -227,6 +247,9 @@ export const HARNESSES: Harness[] = [
       { name: "--effort", label: "추론강도(effort)", desc: "모델이 지원하는 단계만 적용됩니다", type: "select", choices: ["", "low", "medium", "high", "xhigh"] },
     ],
     failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-code"],
+    // 실측(grok 1.0.5 `grok login --help`): `--oauth`(브라우저) 와 `--device-auth`(별칭 --device-code, 헤드리스) 둘.
+    loginSteps: ["터미널에  grok login  을 입력합니다", "열리는 창에서 X(xAI) 계정으로 로그인합니다",
+      "창이 안 열리면  grok login --device-auth  로 주소와 일회용 코드를 받습니다"],
     // 실측(grok 바이너리 도움말 문자열): `/model <모델id>  # Switch model` · `/effort <level>` 둘 다 인자를 받는다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
     // 실측(#1701): `-r <id>` 는 세션 id(UUID) 재개, id 없으면 `-c` = 이 폴더의 최근 세션. 어댑터가 sessionId 를
@@ -283,6 +306,9 @@ export interface SessionInfo {
   // #1059 E — 복원 가능(restorable): tmux 에 없고 DB desired-state(org_session_state)에만 있는 세션(재부팅으로 죽었거나
   //  F reaper 가 회수). agentState 는 offline. 프론트가 이 배지를 보고 '열기=복원'(POST …/restore) 경로로 분기한다(attach 아님).
   restorable?: boolean;
+  // #2022 — 이 행을 게이트웨이가 **노드 스냅샷에서 발견해** 적었나(그 컴퓨터에서 직접 띄운 세션).
+  //  좌표를 모르므로 되살릴 수 없다 — 위 restorable 이 false 로 나가고, 화면은 '왜 못 되살리나'를 이 값으로 말할 수 있다.
+  discovered?: boolean;
   // #1059 — restorable 이 **사용자 정상 종료**(/exit·logout, SessionEnd 훅 보고)로 생겼나. true=내가 종료('종료됨·대화 이어보기'),
   //  false=재부팅·강제kill·reaper 회수('복원 가능·중단됨'). 프론트가 라벨·버튼을 구분(둘 다 복원 경로는 동일).
   exitedByUser?: boolean;
@@ -303,6 +329,8 @@ export interface SessionInfo {
   //  answer=승인·거부·중단을 화면에서 대신 누를 수 있나(승인 키 실측 있음). 화면이 이걸로 버튼·안내를 **정직하게** 그린다(없는 능력의
   //  버튼을 두지 않는다 — 막다른 컨트롤 금지). 없으면(구 서버) 화면은 둘 다 있는 것으로 본다(종전 동작).
   chat?: { read: boolean; answer: boolean };
+  /** #2055 — 대화 런타임: "tmux"(pane 의 TUI) · "app-server"(pane 은 셸, 대화는 JSON-RPC). 화면의 기본 보기가 이걸 따른다. */
+  chatMode?: string;
   // #1791 — 이 세션이 도는 노드(라이브 노드 스냅샷 행은 node/registry 가 채우고, **복원 가능 노드 세션 행**은
   //  listRestorableSessions 가 desired-state 의 node_id 로 채운다 — 이름·온라인 여부는 routes 가 레지스트리로 보강). 없으면 게이트웨이 박스.
   //  프론트는 이 값으로 &node= 를 릴레이한다(입장·삭제·복원 결과 열기).
@@ -536,7 +564,11 @@ export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: s
 //  로그인하려고 연 세션이 로그인 화면을 못 보여주는 데드락이었다. 로그인은 하네스 TUI 가 아니라
 //  **셸에서 로그인 명령을 직접** 돌려야 한다.
 //  codex: logout(만료 자격 제거) → device-auth 로그인 → 끝나면 셸로 남아 바로 `codex` 를 칠 수 있다.
-//  claude: 로그인이 TUI 안 슬래시 커맨드(/login)라 자동화할 수 없다 → null(종전대로 claude 세션을 연다).
+//  claude: 종전엔 로그인이 TUI 안 슬래시 커맨드(/login)뿐이라 자동화할 수 없었다 → null(종전대로 claude 세션을 연다).
+//   ⚠ 이 전제는 낡았다(재실측 2026-08-26, claude 2.1.246): `claude auth login`(logout·status 도) 이 **셸 서브커맨드로**
+//    생겼다. 즉 #1516 이 codex 에만 준 '로그인 전용 세션'을 claude 에도 줄 수 있고, 그러면 '자격이 만료돼 세션이
+//    즉사해 로그인 화면조차 못 보는' 데드락이 claude 에서도 풀린다. 온보딩 안내는 이미 그 한 줄로 바꿨고
+//    (loginSteps·failHint), 이 자리(관리탭 [연결된 AI 계정]의 [로그인])는 #1516 표면이라 별도로 손댄다.
 //  ⚠ 나머지 하네스도 **지금은 전부 null 이 정답**이다(#1695 실측). 여기 채우려면 '무인으로 한 줄' 이어야 하는데:
 //   · antigravity(agy): 로그인 서브커맨드 자체가 없다(agy 1.1.13 --help — install·update·plugin·models·agent·changelog뿐).
 //     인증은 하네스를 켜면 하네스가 띄운다(원격이면 주소+코드). 그래서 '로그인 전용 세션'을 만들 대상이 아니고,
@@ -558,6 +590,27 @@ export function harnessLoginArgv(harnessKey: string): string[] | null {
   const done = [line, "로그인 절차가 끝났습니다. 확인하려면  codex login status  를 입력해 보세요.",
     "이 세션에서 바로 쓰려면  codex  를 입력하세요.", line].join("\n");
   return ["sh", "-c", LOGIN_SH, "lively-login", intro, done];
+}
+
+// codex app-server 모드의 pane (#2055) — TUI 대신 **셸**을 띄우고, 왜 그런지 한 화면으로 알려 준다.
+//  왜 셸인가: codex 는 스레드당 writer 가 하나다(실측). pane 에 TUI 를 띄우면 대화창이 쥔 대화와 **다른 대화**가
+//  열려, 터미널에서 보는 것과 대화창에서 보는 것이 갈린다. 그래서 대화는 대화창(app-server)이 전담하고
+//  pane 은 사람이 직접 명령을 치는 자리로 남는다.
+//  ⚠ 안내에 `codex` 를 그냥 치라고 쓰지 않는다 — 그건 **새 대화**를 연다. 이어가려면 대화창이 스레드를
+//   놓아 준 뒤 `codex resume <id>` 다(그 id 는 화면이 알려 준다).
+const APP_SERVER_SH = [
+  'printf \'\\n%s\\n\\n\' "$1"',
+  'exec "${SHELL:-/bin/sh}" -il',
+].join("\n");
+export function codexAppServerPaneArgv(): string[] {
+  const line = "─".repeat(60);
+  const intro = [line,
+    "이 세션의 Codex 대화는 **대화창**이 맡습니다(App Server).",
+    "이 터미널은 명령을 직접 치는 자리입니다 — 파일·빌드·git 을 그대로 쓰세요.",
+    "여기서  codex  를 실행하면 대화창과 **다른 대화**가 열립니다(같은 대화는 한 곳만 쥘 수 있습니다).",
+    "대화를 이 터미널로 옮기려면 대화창에서 [터미널로 넘기기] 를 누르세요.",
+    line].join("\n");
+  return ["sh", "-c", APP_SERVER_SH, "lively-codex-chat", intro];
 }
 
 // 실행 모드(#1007+) → 격리 pane 에 실을 `-e` env 인자. 순수 함수라 단위테스트로 계약을 못박는다(terminal-sessions.test.ts).

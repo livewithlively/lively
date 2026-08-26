@@ -51,20 +51,21 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .livc-foot form[hidden] { display: none; }
 
 /* ── 세션 화면 ───────────────────────────────────────────────────────────── */
-/*  머리줄의 한 줄/두 줄은 **화면 크기가 아니라 이 칸의 폭**이 정한다 — 세션 칸은 곁칸 분할로 좁아지므로
-    미디어쿼리로는 못 잡는다(같은 1440 화면에서도 칸은 780px 일 수 있다). 그래서 컨테이너 질의를 쓴다(아래 @container). */
-.sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); container-type: inline-size; }
+.sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 /* 첫 줄은 우패널 머리(.v2-aside-h)의 38px 리듬을 유지하고, 실행 설정은 겹치지 않게 둘째 줄로 접힌다. */
 .sc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; min-height: 38px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); flex: none; }
-/*  제목 묶음은 남는 자리를 다 먹지 않는다 — 그 오른쪽에 실행 설정(.sc-run-top)이 같은 줄로 서고, 남는 자리는
-    세션 조작(.sc-head-r)을 오른쪽 끝으로 미는 데 쓴다. 좁아지면 제목이 먼저 …로 줄어든다(min-width:0). */
-.sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .sc-title { font-size: 13.5px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 /* 제목 = 세션 이름을 고치는 자리(#1719). 평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 '고칠 수 있다'고 말한다
    — 머리줄에 연필 아이콘 하나를 더 놓으면 그 줄의 조작부가 다섯 개가 된다(제목이 조작부에 밀린다). */
-.sc-titlebox { display: inline-flex; align-items: center; min-width: 0; flex: 0 1 auto; }
+/* ⭐ 좁아질 때 **먼저 줄어드는 쪽을 바꾼다**(원준 2026-08-26: "지금 세션명 너무 잘려서 보여").
+   종전엔 제목이 첫 번째로 줄었다 — 제목의 기준 폭(최대 46ch)이 이 줄에서 제일 커서 shrink 를 거의 다 떠안았다.
+   그런데 이 줄에서 사람이 가장 자주 읽는 건 제목이고, 알약은 줄어도 무엇인지가 안 사라진다(노드 이름만 …로 준다).
+   그래서 제목에 **바닥**을 준다: 이만큼은 어떤 폭에서도 안 줄고, 그 아래로는 알약이 먼저 준다.
+   ⚠ 위 ⚠ 규칙(.sc-meta min-width:0 + .sc-run overflow:hidden)은 그대로여야 압력이 알약으로 흘러간다. */
+.sc-titlebox { display: inline-flex; align-items: center; min-width: min(28ch, 100%); flex: 1 1 auto; }
 button.sc-title { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 13.5px; font-weight: 800;
-  max-width: 46ch; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: text; }
+  max-width: 72ch; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: text; }
 button.sc-title .sc-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sc-title-pen { width: 13px; height: 13px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linejoin: round;
   opacity: 0; transition: opacity .12s ease; }
@@ -76,62 +77,6 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-title-in:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-fill) 18%, transparent); }
 .sc-title-in:disabled { opacity: .6; }
 .sc-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
-
-/* ── 처방전(#1719) — 입력칸 바로 위. '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'.
- *  대화가 아니라 **끼워 넣은 안내**라는 게 보여야 한다: 말풍선 문법을 쓰지 않고 테두리 있는 판으로.
- *  일이 끝난 뒤에만 뜨고, 닫으면 그 묶음에서는 다시 안 뜬다. */
-.sc-rx-host:empty { display: none; }
-.sc-rx {
-  margin: 0 16px 10px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
-  background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
-}
-.sc-rx-h {
-  display: flex; align-items: center; gap: 9px; padding: 9px 12px;
-  background: var(--bg-punch); border-bottom: 1px solid var(--line-row);
-  font-size: 13px; font-weight: 600;
-}
-.sc-rx-av {
-  width: 20px; height: 20px; border-radius: 50%; background: var(--blue-fill); color: var(--on-fill); flex: none;
-  display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700;
-}
-.sc-rx-ht { flex: 1; min-width: 0; }
-.sc-rx-x { color: var(--ink-sub); font-size: 15px; line-height: 1; padding: 2px 4px; }
-.sc-rx-b-wrap { padding: 13px 14px 14px; }
-.sc-rx-said { margin: 0 0 12px; font-size: 13px; line-height: 1.65; color: var(--ink-sub); }
-.sc-rx-said b { color: var(--ink); font-weight: 600; }
-
-/* 몇 번이 한 번이 되는지 — 숫자를 읽지 않아도 보이게 */
-.sc-rx-fold { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-.sc-rx-grp { display: inline-flex; gap: 4px; }
-.sc-rx-b { width: 22px; height: 13px; border-radius: 4px; background: var(--bg-punch); border: 1px solid var(--line); display: block; }
-.sc-rx-b.one { width: 44px; background: var(--mint-deep); border-color: var(--mint-deep); }
-.sc-rx-arrow { color: var(--ink-sub); font-size: 13px; }
-.sc-rx-cap { font-size: 12px; color: var(--ink-sub); }
-.sc-rx-cap b { color: var(--ink); font-weight: 600; }
-
-/* 합친 지시문 — 읽는 물건이자 가져가는 물건 */
-.sc-rx-prompt { background: var(--bg-punch); border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; }
-.sc-rx-plabel {
-  display: block; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--ink-sub); margin-bottom: 6px;
-}
-.sc-rx-ptext { font-size: 13px; line-height: 1.75; color: var(--ink); word-break: break-word; }
-.sc-rx-add { background: rgba(22, 199, 154, .17); box-shadow: 0 0 0 1.5px rgba(22, 199, 154, .17); border-radius: 3px; }
-
-.sc-rx-acts { display: flex; align-items: center; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
-.sc-rx-go {
-  background: var(--blue-fill); color: var(--on-fill); border-radius: 7px; padding: 7px 13px; font-size: 12.5px; font-weight: 500;
-}
-.sc-rx-go:hover { filter: brightness(1.06); }
-.sc-rx-alt {
-  border: 1px solid var(--line); color: var(--ink-sub); border-radius: 7px; padding: 7px 11px; font-size: 12.5px;
-}
-.sc-rx-never { color: var(--ink-sub); font-size: 12px; padding: 7px 4px; margin-left: auto; }
-
-@media (max-width: 760px) {
-  .sc-rx { margin: 0 12px 8px; }
-  .sc-rx-never { margin-left: 0; }
-}
 .sc-meta a { color: var(--ink-sub); text-decoration: none; }
 .sc-meta a:hover { color: var(--blue); }
 .sc-sep { color: var(--muted-2); }
@@ -157,7 +102,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
       위에 알약 글자가 겹쳐 찍힌다 — 박스 간격만 재면 12px 로 멀쩡해 보여 이 증상을 못 잡는다).
    줄어드는 칸은 제목(.sc-titlebox)과 알약 속 노드 이름(.sc-run-node) 둘, 그 순서다. */
 .sc-meta { min-width: 0; }
-.sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
+.sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
 .sc-act-on { background: var(--bg-punch); color: var(--ink); }
@@ -279,19 +224,13 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   background-position: calc(100% - 8px) 52%, calc(100% - 4px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
 .dt-chip-sel:hover:not(:disabled) { border-color: var(--line-net); color: var(--blue); }
 .dt-chip-sel:disabled { opacity: .55; cursor: default; }
-/*  세션 머리줄의 실행 설정 줄(제공자 · 모델 · 추론강도) — **한 줄**이어야 한다(원준 2026-08-25 "왜 두 줄로 보이냐").
-    <select> 의 자동 폭은 고른 값이 아니라 가장 긴 선택지 기준이라, 셋이 저마다 상한(145·180px)을 먹고 세션 칸이
-    조금만 좁아도 줄이 접혔다. nowrap 으로 한 줄을 못 박고 좁아지면 각 칸이 저마다 줄며 …로 접히게 한다
-    (전체 문구는 칸의 툴팁과 펼친 목록이 말한다). */
-.sc-run-top { flex: 0 1 auto; gap: 6px; min-width: 0; flex-wrap: nowrap; }
-/*  칸이 좁으면 실행 설정 묶음이 통째로 아랫줄로 내려간다 — 그때 내려갈 것은 **이 묶음**이지 오른쪽 조작부가
-    아니다([화면 복구]·[환경 설정]·[⋯] 는 어느 폭에서나 오른쪽 위 같은 자리에 있어야 손이 간다). */
-@container (max-width: 960px) {
-  .sc-run-top { flex: 1 1 100%; order: 2; }
-  .sc-head-l { flex: 1 1 auto; }
-}
-.sc-run-top .dt-chip-sel { flex: 0 1 auto; min-width: 54px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc-run-top .sc-run-harness { max-width: 190px; }
+/*  실행 설정(하네스·모델·추론강도)은 **머리줄에 같이 선다** — 제목 오른쪽, 세션 조작 왼쪽.
+    ⚠ 여기 `flex: 1 1 100%` 가 남아 있어서, 아무리 넓어도 이 묶음이 한 줄을 통째로 차지했다
+    (실측 #2061: 뷰포트 2400px 에서도 머리가 3줄 — 제목 / 실행 설정 / 조작). 아래 좁은 화면
+    규칙에서 따로 100% 를 주므로 여기서는 **들어가면 한 줄, 안 들어가면 그때 접히게** 둔다. */
+.sc-run-top { flex: 0 1 auto; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.sc-run-top .dt-chip-sel { max-width: 145px; }
+.sc-run-top .sc-run-harness { max-width: 180px; }
 .livc-desktop .livc-note:not(:empty) { padding: 2px 30px 0; }
 .livc-desktop .livc-jump { bottom: 10px; }
 
@@ -346,7 +285,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .dt-bar { flex-wrap: wrap; gap: 4px 8px; padding-top: 6px; }
   .dt-chips { flex-wrap: wrap; gap: 6px 10px; }
   .dt-chip-sel { max-width: 110px; }
-  .sc-run-top { flex: 1 1 100%; order: 2; margin-left: 0; flex-wrap: nowrap; }
+  .sc-run-top { flex: 1 1 100%; order: 2; margin-left: 0; }
   .sc-run-top .dt-chip-sel, .sc-run-top .sc-run-harness { max-width: min(31vw, 125px); }
   .livc-desktop .livc-note:not(:empty) { padding: 2px 12px 0; }
   .dt-qstate { font-size: 11px; }
@@ -369,3 +308,75 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 /* 이름 옆의 '지금 하는 일' — 굵은 이름과 같은 줄, 조용한 톤(사이드바의 이름+부제와 같은 문법). */
 .sc-title-job { margin-left: 9px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 12.5px; font-weight: 500; color: var(--muted); }
+
+/* ══ codex 대화창의 실시간 층 (#2055) — web/session-codex-live.ts ═══════════════════════════
+   이 화면에서 **사람이 답해야 기계가 움직이는** 유일한 순간이 승인이다. 그래서 대화 흐름 안(스크롤되는 목록)이
+   아니라 입력칸 바로 위에 서고, 무엇을 실행하려는지 원문 그대로 보여 준다. 이 층은 조용한 대화창에서 유일하게
+   '채운 파랑'을 쓰는 자리다(§0.5 예산) — 그 예산을 여기 말고 쓸 곳이 없다: 답하지 않으면 대화가 멈춘다.
+   상태는 색이 아니라 글자로도 말한다(허용/거부/이미 닫힘). */
+
+.cxl-dock { display: block; }
+.cxl-usage[hidden] { display: none; }
+.cxl-usage { margin: 0 16px 6px; text-align: right; font-family: var(--livc-mono); font-size: 10.5px;
+  letter-spacing: .04em; color: var(--muted); }
+
+.cxl-asks:empty { display: none; }
+.cxl-asks { display: flex; flex-direction: column; gap: 8px; margin: 0 16px 10px; max-height: 46vh; overflow: auto; }
+
+.cxl-ask {
+  border: 1px solid var(--line); border-left: 3px solid var(--blue); border-radius: 11px;
+  background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .04); padding: 11px 13px 11px 12px;
+}
+.cxl-ask-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.cxl-ask-kind { flex: none; font-family: var(--livc-mono); font-size: 10px; letter-spacing: .06em; color: var(--muted); }
+.cxl-ask-title { font-size: 13px; font-weight: 700; color: var(--ink); }
+/* 실행하려는 것 그대로 — 요약하지 않는다. 요약된 명령을 허용하는 것은 허용이 아니다. */
+.cxl-ask-body { margin: 8px 0 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg-punch); font-family: var(--livc-mono); font-size: 11.5px; line-height: 1.6; color: var(--ink);
+  white-space: pre-wrap; word-break: break-all; max-height: 168px; overflow: auto; }
+.cxl-ask-body code { font: inherit; }
+.cxl-ask-acts { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.cxl-ask-btn { font: inherit; font-size: 12.5px; line-height: 1; padding: 8px 12px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--line-net); background: var(--bg); color: var(--ink-sub); }
+.cxl-ask-btn:hover { border-color: var(--muted-3); color: var(--ink); }
+.cxl-ask-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.cxl-ask-btn.is-go { border-color: var(--blue-fill); background: var(--blue-fill); color: var(--on-fill); font-weight: 600; }
+.cxl-ask-btn.is-go:hover { background: var(--blue-fill-deep); border-color: var(--blue-fill-deep); }
+/* 답하는 동안 — 버튼을 지우지 않고 잠근다(무엇을 눌렀는지 그대로 보인다). */
+.cxl-ask.is-busy { opacity: .55; }
+.cxl-ask.is-busy .cxl-ask-acts { pointer-events: none; }
+/* 답한 뒤 — 파랑을 반납하고 무엇을 골랐는지만 남긴다. 잠깐 뒤 스스로 접힌다. */
+.cxl-ask.is-done { border-left-color: var(--line-net); opacity: .72; }
+.cxl-ask-said { font-family: var(--livc-mono); font-size: 11px; color: var(--muted); }
+
+/* 타이핑 — 아직 완성본이 아니라는 것이 보여야 한다(완성되면 이 자리는 사라지고 마크다운 본문이 대신 선다).
+   그래서 본문보다 한 톤 옅고, 끝에 커서가 깜빡인다. */
+.cxl-typing { color: var(--ink-sub); }
+.cxl-typing::after { content: '▌'; margin-left: 1px; color: var(--mint-deep); animation: livc-pulse 1.1s ease-in-out infinite; }
+
+/* ── 답 한 덩이 복사 — 코드블록 복사와 같은 문법, 자리만 다르다(#2055). ── */
+.livc-said { position: relative; }
+.livc-said-copy { position: absolute; top: 0; right: 0; font: inherit; font-size: 11px; line-height: 1; padding: 4px 7px;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--ink-sub); cursor: pointer;
+  opacity: 0; transition: opacity .12s; }
+.livc-said:hover .livc-said-copy, .livc-said-copy:focus-visible { opacity: 1; }
+.livc-said-copy:hover { color: var(--ink); border-color: var(--line-net); }
+
+/* ── 변경분(diff) — 도구 원문에서 가장 자주 읽히는 것(#2055). ──────────────────────────────
+   색만으로 말하지 않는다: +/- 부호가 원문 그대로 남고 배경 톤은 그걸 거들 뿐이다(§0.5 색각 계약).
+   머리줄의 +N -N 은 펼치기 전에도 규모를 알려 준다. */
+.livc-diff .livc-dl { display: block; }
+.livc-diff .is-add { background: color-mix(in srgb, var(--mint-deep) 13%, transparent); color: var(--ink); }
+.livc-diff .is-del { background: color-mix(in srgb, var(--coral) 15%, transparent); color: var(--ink); }
+.livc-diff .is-hunk { color: var(--muted); background: var(--bg-punch); }
+.livc-diff .is-meta { color: var(--muted-2); }
+.livc-dc-add { color: var(--mint-deep); font-weight: 700; }
+.livc-dc-del { color: var(--coral-text); font-weight: 700; }
+
+@media (max-width: 760px) {
+  .cxl-asks, .cxl-usage { margin-left: 12px; margin-right: 12px; }
+  .cxl-ask-btn { flex: 1 1 auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cxl-typing::after { animation: none; }
+}
