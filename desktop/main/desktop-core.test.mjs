@@ -13,6 +13,7 @@ import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLine
 import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
 import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
+import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState } from "./update-policy.mjs";
@@ -1558,6 +1559,18 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(nextAfterSetup({}), "node-start");
     assert.equal(nextAfterSetup(null), "node-start");
   });
+  t("N3 ★ 배포 모양으로 분기하지 않는다(#2044 결정) — 매니지드든 셀프호스트든 설치의 끝은 노드다", () => {
+    // 상태에 어떤 배포 힌트가 실려 와도 판정이 흔들리면 안 된다. 매니지드에서 노드가 조용히 실패하던 원인은
+    //  코어(노드 WS 가 테넌트 컨텍스트 밖)였고, 여기에 조건을 붙여 증상을 가리는 쪽으로 가면 안 된다.
+    for (const extra of [{ gatewayUrl: "https://acme.app.lvly.io" }, { gatewayUrl: "https://dev.lvly.io" }, { managed: true }, { managed: false }]) {
+      assert.equal(nextAfterSetup({ nodeRunning: false, ...extra }), "node-start", JSON.stringify(extra));
+    }
+    // 소스에도 배포 분기가 없어야 한다 — 위 표는 우리가 아는 힌트만 덮는다.
+    const src = readFileSync(fileURLToPath(new URL("./web-shell.mjs", import.meta.url)), "utf8");
+    const fn = src.slice(src.indexOf("export function nextAfterSetup("));
+    const body = fn.slice(0, fn.indexOf("\n}") + 2);
+    assert.ok(!/managed|lvly\.io|tenant|gatewayUrl/i.test(body), "배포 모양을 보고 갈라진다: " + body);
+  });
   t("N2 배선 — onboard 가 setup **성공 후에만** node-start 를 잇고, 실패면 setup 결과를 그대로 돌려준다", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     const fn = main.slice(main.indexOf("async function onboard("), main.indexOf("function askUser("));
@@ -1770,5 +1783,111 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(/stableStream\(/.test(conn), "안정연결 판정을 쓰지 않는다");
   });
 }
+
+
+// ── GW. 주소 입력 해석 (#2044) — 마법사가 묻는 값의 유일한 해석기 ────────────────
+// 사양 엣지 표(입력 조합 × 기대). 행마다 테스트 1개:
+//  정규화 GW1 스킴없음 · N2 말미 슬래시 · N3 브라우저 복사(/ui/#해시) · N4 말미 /mcp ·
+//         N5 경로 접두 게이트웨이 보존(경계) · N6 평문·포트 보존 · N7 빈 입력(새 값이 빈 경우)
+//  안내   A1 mac · A2 win · A3 클라우드 로그인 주소 거절 · A4 그 서브도메인은 통과(경계) ·
+//         A5 셸 메타문자 거절 · A6 빈 입력은 조용
+//  통합   J-G1 argv 에 정규화가 실린다 · J-G2 메타문자는 여전히 throw · J-G3 빈 값은 종전대로
+t("GW1 스킴 없이 넣어도 받는다 — 사람이 아는 주소엔 https:// 가 안 붙어 있다", () => {
+  assert.equal(normalizeGatewayInput("acme.app.lvly.io"), "https://acme.app.lvly.io");
+  assert.equal(normalizeGatewayInput("  acme.app.lvly.io  "), "https://acme.app.lvly.io");
+});
+t("GW2 말미 슬래시는 떼어낸다(부트스트랩 URL 이 // 로 갈라지지 않게)", () => {
+  assert.equal(normalizeGatewayInput("https://acme.app.lvly.io/"), "https://acme.app.lvly.io");
+  assert.equal(normalizeGatewayInput("https://acme.app.lvly.io///"), "https://acme.app.lvly.io");
+});
+t("GW3 브라우저 주소창에서 복사한 값(/ui/ + 해시)도 받는다", () => {
+  assert.equal(normalizeGatewayInput("https://acme.app.lvly.io/ui/#/home"), "https://acme.app.lvly.io");
+  assert.equal(normalizeGatewayInput("https://acme.app.lvly.io/ui"), "https://acme.app.lvly.io");
+});
+t("GW4 말미 /mcp 는 게이트웨이 주소가 아니라 엔드포인트다 — 떼어낸다(코어 normalizeGatewayUrl 과 같은 흡수)", () => {
+  assert.equal(normalizeGatewayInput("https://gw.example.com/mcp"), "https://gw.example.com");
+  assert.equal(normalizeGatewayInput("https://gw.example.com/mcp/"), "https://gw.example.com");
+});
+t("GW5 ★ 경계: 경로 접두 게이트웨이는 **보존**한다 — 임의 경로를 자르면 그 배포가 통째로 못 붙는다", () => {
+  assert.equal(normalizeGatewayInput("https://dev.lvly.io/preview/p1541"), "https://dev.lvly.io/preview/p1541");
+  assert.equal(normalizeGatewayInput("https://dev.lvly.io/preview/p1541/ui/"), "https://dev.lvly.io/preview/p1541");
+});
+t("GW6 평문·포트는 그대로 — 로컬 게이트웨이(http://127.0.0.1:8080)를 https 로 덮지 않는다", () => {
+  assert.equal(normalizeGatewayInput("http://127.0.0.1:8080"), "http://127.0.0.1:8080");
+});
+t("GW7 빈 입력은 빈 문자열 — 던지지 않는다(칸이 비어 있는 것은 오류가 아니다)", () => {
+  assert.equal(normalizeGatewayInput(""), "");
+  assert.equal(normalizeGatewayInput("   "), "");
+  assert.equal(normalizeGatewayInput(null), "");
+  assert.equal(normalizeGatewayInput(undefined), "");
+});
+t("GW7b ★ 경계: 호스트로 안 보이는 값엔 스킴을 보태지 않는다 — 안 그러면 플래그가 '올바른 주소'가 된다", () => {
+  // 이 가드가 없으면 `--token` 이 `https://--token` 이 되어 형식 강제를 통과한다(E2 가 잡는 그 부류).
+  for (const bad of ["--token", "-x", "acme", "  --gateway  "]) {
+    assert.ok(!normalizeGatewayInput(bad).startsWith("https://"), `스킴을 붙였다: ${JSON.stringify(bad)}`);
+  }
+  // 진짜 호스트의 최소 조건 — 점이 있거나, 포트가 붙었거나, localhost.
+  assert.equal(normalizeGatewayInput("acme.app.lvly.io"), "https://acme.app.lvly.io");
+  assert.equal(normalizeGatewayInput("localhost:8080"), "https://localhost:8080");
+  assert.equal(normalizeGatewayInput("gw.example.com/preview/x"), "https://gw.example.com/preview/x");
+});
+t("GW8 안내는 그 플랫폼이 실제로 실행할 한 줄을 준다(웹 관리화면·CLI 안내와 같은 URL)", () => {
+  const mac = gatewayAdvice("acme.app.lvly.io", "darwin");
+  assert.equal(mac.error, "");
+  assert.equal(mac.cmd, "curl -fsSL https://acme.app.lvly.io/cli | sh");
+  assert.equal(mac.cmd, bootstrapOneLiner("https://acme.app.lvly.io", "darwin"), "cli-locate 와 갈라졌다");
+  const win = gatewayAdvice("acme.app.lvly.io", "win32");
+  assert.equal(win.cmd, "irm https://acme.app.lvly.io/cli.ps1 | iex");
+});
+t("GW9 ★ 라이블리 클라우드 **로그인** 주소는 진행을 막는다 — 매니지드에서 가장 흔한 막다른 길", () => {
+  for (const h of CONTROL_PLANE_HOSTS) {
+    const a = gatewayAdvice(h, "darwin");
+    assert.ok(a.error, `${h} 를 통과시켰다 — 부트스트랩이 404 를 받고 엉뚱한 진단이 남는다`);
+    assert.equal(a.cmd, "", "막아야 하는데 실행할 한 줄을 보여줬다");
+    assert.ok(/워크스페이스 주소/.test(a.error), "다음 행동(어디서 주소를 보는지)이 없다");
+  }
+  assert.ok(gatewayAdvice("https://app.lvly.io/home", "darwin").error, "경로가 붙어도 같은 호스트다");
+});
+t("GW10 ★ 경계: 그 호스트의 **서브도메인**은 워크스페이스다 — 막으면 정상 사용자가 못 붙는다", () => {
+  assert.equal(isControlPlane("https://app.lvly.io"), true);
+  assert.equal(isControlPlane("https://acme.app.lvly.io"), false);
+  assert.equal(gatewayAdvice("acme.app.lvly.io", "darwin").error, "");
+  // 뒤에 붙은 문자열이 우연히 호스트를 포함해도 안 걸린다(부분일치 금지).
+  assert.equal(isControlPlane("https://not-app.lvly.io.evil.example"), false);
+});
+t("GW11 셸 메타문자는 안내 단계에서 이미 거절한다(형식 강제는 ipc-contract 가 다시 한다)", () => {
+  for (const bad of ["https://a b", "https://a;rm", "https://a`x`", "https://a|b", "https://a$(x)"]) {
+    const a = gatewayAdvice(bad, "darwin");
+    assert.ok(a.error, `통과시켰다: ${bad}`);
+    assert.equal(a.cmd, "");
+  }
+});
+t("GW12 빈 입력은 조용하다 — 아직 아무 판단도 하지 않는다(타이핑 시작 전에 빨간 글씨를 띄우지 않는다)", () => {
+  const a = gatewayAdvice("", "darwin");
+  assert.equal(a.error, "");
+  assert.equal(a.cmd, "");
+  assert.equal(a.url, "");
+});
+t("GW13 ★ 통합: 정규화된 값이 실제 argv 에 실린다 — 미리보기와 [연결]이 같은 값을 쓴다", () => {
+  assert.deepEqual(argvFor("setup", { gateway: "acme.app.lvly.io" }), ["setup", "--gateway", "https://acme.app.lvly.io"]);
+  assert.deepEqual(argvFor("login", { gateway: "https://acme.app.lvly.io/ui/" }), ["login", "--gateway", "https://acme.app.lvly.io"]);
+});
+t("GW14 통합: 셸 메타문자는 여전히 throw · 빈 값은 종전대로 인자 없음(보호 무회귀)", () => {
+  assert.throws(() => argvFor("setup", { gateway: "https://a;rm -rf /" }));
+  assert.deepEqual(argvFor("setup", {}), ["setup"]);
+  assert.deepEqual(argvFor("setup", { gateway: "   " }), ["setup"]);
+});
+t("GW15 배선 — 메인·preload·렌더러가 같은 채널을 보고, 렌더러는 자기 정규식으로 판정하지 않는다", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  assert.match(main, /ipcMain\.handle\(IPC\.GATEWAY_ADVICE/, "메인에 핸들러가 없다");
+  const preload = readFileSync(fileURLToPath(new URL("../preload/preload.cjs", import.meta.url)), "utf8");
+  assert.match(preload, /gatewayAdvice:/, "preload 가 노출하지 않는다");
+  const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+  assert.match(app, /window\.lively\.gatewayAdvice\(/, "렌더러가 메인에 묻지 않는다");
+  assert.ok(!/\^https\?:\\\/\\\//.test(app), "렌더러가 주소 형식을 자기 정규식으로 다시 판정한다(정본이 둘)");
+  // 온보딩이 그 판정을 실제로 쓰는가 — 안 쓰면 [연결]은 종전처럼 부트스트랩부터 돌아 404 를 만난다.
+  assert.match(main, /const advice = gatewayAdvice\(url\)/, "onboard 가 판정을 안 쓴다");
+  assert.match(main, /if \(advice\.error\) return/, "판정 결과로 막지 않는다");
+});
 
 console.log(`\n${pass} passed`);

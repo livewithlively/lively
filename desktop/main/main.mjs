@@ -23,6 +23,7 @@ import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
+import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
@@ -1059,8 +1060,12 @@ async function start(kind, opts) {
  */
 async function onboard(url) {
   if (running) return { ok: false, error: "이미 실행 중인 작업이 있습니다." };
-  try { argvFor("login", { gateway: url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
-  const gw = String(url || "").trim();
+  // 입력 해석 + 진행을 막아야 하는 사유(라이블리 클라우드 로그인 주소를 넣은 경우 등)를 **먼저** 본다 —
+  //  그냥 진행하면 부트스트랩이 404 를 받고 "CLI 설치가 끝났는데 실행파일이 없습니다" 라는 엉뚱한 진단이 남는다(#2044).
+  const advice = gatewayAdvice(url);
+  if (advice.error) return { ok: false, error: advice.error };
+  try { argvFor("login", { gateway: advice.url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
+  const gw = advice.url;
 
   // ★ 부트스트랩 조건은 '**CLI 가 없다**' 가 아니라 '**쓸 수 있는 CLI 가 없다**' 다.
   //  앱보다 먼저 CLI 를 깔아 둔 PC 가 흔한데(=지금까지 CLI 로 쓰던 모든 사람), 그 구 CLI 는 `--json-events` 를
@@ -1096,7 +1101,11 @@ async function onboard(url) {
           ? (state.cliBroken
             ? `CLI 를 다시 설치했는데도 실행할 수 없습니다(${state.cliBroken}).`
             : `CLI 를 업데이트했는데도 여전히 옛 버전입니다. 그 주소가 최신 키트를 서빙하는지 확인해 주세요: ${gw}`)
-          : `CLI 설치가 끝났는데 실행파일이 없습니다. 주소가 맞는지 확인하세요: ${gw}`),
+          // ★ 여기서 "주소가 맞는지 확인하세요" 로 끝내면 사람은 **맞는 주소를 어디서 보는지**를 모른다(#2044).
+          //  매니지드에서 가장 흔한 원인이 그것이라(로그인 주소를 넣음) 다음 행동을 같이 준다.
+          : `이 주소에서 라이블리 CLI 를 받지 못했습니다: ${gw}\n`
+            + "라이블리 클라우드라면 app.lvly.io 홈의 «데스크톱 앱·CLI 로 연결» 에 있는 워크스페이스 주소를, "
+            + "회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요."),
       };
     }
     progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
@@ -1141,6 +1150,8 @@ ipcMain.handle(IPC.ANSWER, (_e, { id, value }) => {
   return { ok: true };
 });
 ipcMain.handle(IPC.SET_GATEWAY, (_e, { url }) => onboard(url));
+// 타이핑 중 되비추기(#2044) — 아무것도 실행하지 않는다(문자열 → 문자열). 정규화·판정의 정본은 여기다.
+ipcMain.handle(IPC.GATEWAY_ADVICE, (_e, { url }) => gatewayAdvice(url));
 // 다시 시도 — **렌더러가 무엇을 재시도할지 정하지 않는다.** 메인이 기억한 마지막 작업을 그대로 돌린다
 //  (렌더러가 kind 를 보내면 '실패한 것'과 '보내고 싶은 것'이 갈라져 임의 작업 실행 통로가 된다).
 ipcMain.handle(IPC.RETRY, () => {

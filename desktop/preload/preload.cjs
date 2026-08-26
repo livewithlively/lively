@@ -20,6 +20,7 @@ const IPC = {
   APPLY_UPDATE: "lively:apply-update",
   CLEANUP_STALE: "lively:cleanup-stale",
   OPEN_APP: "lively:open-app",
+  GATEWAY_ADVICE: "lively:gateway-advice",
   STATE: "lively:state",
   PROGRESS: "lively:progress",
   LOG: "lively:log",
@@ -41,6 +42,8 @@ contextBridge.exposeInMainWorld("lively", {
   applyUpdate: () => ipcRenderer.invoke(IPC.APPLY_UPDATE),
   cleanupStale: () => ipcRenderer.invoke(IPC.CLEANUP_STALE),
   openApp: () => ipcRenderer.invoke(IPC.OPEN_APP),
+  // 주소칸 되비추기(#2044) — 문자열 하나를 주고 { url, cmd, error, hint } 를 받는다. 실행 없음.
+  gatewayAdvice: (url) => ipcRenderer.invoke(IPC.GATEWAY_ADVICE, { url }),
   onState: (cb) => ipcRenderer.on(IPC.STATE, (_e, s) => cb(s)),
   onProgress: (cb) => ipcRenderer.on(IPC.PROGRESS, (_e, p) => cb(p)),
   onLog: (cb) => ipcRenderer.on(IPC.LOG, (_e, l) => cb(l)),
