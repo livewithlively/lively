@@ -27,7 +27,7 @@ import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes, nodeOfSession, nodeSessionHarness, nodeAgentStale } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, liveNodes, nodeOfSession, nodeSessionHarness, nodeAgentStale } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
@@ -45,7 +45,7 @@ import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";  
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
-import { deadSessionMeta, nodeSessionMetaMode } from "./session-meta.js";  // #1820 — 죽은 세션이 '복원 가능'을 말하는 단일 판정 + 노드 세션 생사 갈래
+import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
@@ -198,7 +198,9 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
         const me = idOf(userOf(req));
         const live = new Map(liveNodes().map((n) => [n.id, n.online]));
         return (await listNodes().catch(() => []))
-          .filter((n) => n.enabled && nodeOpenTo(n, me))
+          // #2108 — 게이트웨이 자신이 노드로도 등록돼 있으면 여기서 뺀다. 같은 박스라 '중앙 컴퓨터(기본)'가
+          //  이미 그 자리를 대표하고, 노드로 고르면 3초 스냅샷을 거치느라 새 세션이 복원으로 새 버린다(#2108).
+          .filter((n) => n.enabled && nodeOpenTo(n, me) && !isSelfNode(n.id))
           // harnesses(#1713) — **그 PC 에서 실제로 띄울 수 있는 것**만 폼에 보여주기 위해 함께 준다.
           //  노드가 hello 로 보고한 값이고, 구 번들이라 미보고면 기준선(claude·codex·shell)이 온다.
           //  이게 없으면 사용자는 [생성하기]를 누른 뒤에야 안다 — 옛 번들은 502, 바이너리 부재는 세션 즉사.
@@ -389,11 +391,16 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.setHeader("Cache-Control", "no-store");
     // 노드 세션(#869) — 마지막 상태 스냅샷에서 가시성 판정 후 라벨 반환(노드 오프라인이어도 표시 가능).
     const nodeId = String(req.query.node ?? "").trim();
+    // 🔴 #2108 — 이 메타는 **부팅 게이트(maybeRestoreOnOpen)의 유일한 입력**이다. 여기서 restorable 을 한 번
+    //  잘못 내면 화면은 WS 도 안 붙이고 곧장 복원으로 간다 — 그래서 '모름'을 '죽음'으로 접으면 안 된다.
     if (nodeId) {
       const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === id);
       if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 }); return; }
       // #1791 — 스냅샷에 없다 = 그 노드에서 죽었다(또는 노드가 스냅샷을 아직 안 올렸다). 아래 desired-state 경로로 떨어져
       //  '복원 가능'을 알린다(종전엔 여기서 403 — 노드 세션은 desired-state 가 없어 알릴 것이 없었다).
+      // ⚠ #2108 — 괄호 안의 두 번째 경우가 실제로 났다. 상태 push 는 3초 주기라 **방금 만든 살아있는 세션**이
+      //  그 창 동안 스냅샷에서 빠지는데, 종전엔 그걸 그대로 '복원 가능'으로 냈다. 그래서 아래 갈래는 스냅샷
+      //  부재를 dead 로 접지 않고 **ask** 로 보내 노드에 확답을 구한다(nodeSessionMetaMode 머리말).
     }
     // 복원 판정에 쓸 desired-state 는 한 번만 읽어 아래 세 갈래(노드·박스 사망·권한없음)가 나눠 쓴다.
     const st = await getSessionState(id);
@@ -412,7 +419,17 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge }); return; }
       const dead = deadSessionMeta(id, st, uid, isAdmin);
       if (dead.kind !== "ok") throw new HttpError(403, "세션에 접근할 수 없습니다");
-      res.json({ ...dead.body, node: nodeBadge });
+      // 🔴 #2108 — 스냅샷이 모르는 자리(ask)는 **노드에 확답을 구한다**(#835 '확답 only'). 부재는 죽음의 근거가
+      //  아니다 — 상태 push 3초 주기 때문에 방금 만든 살아있는 세션이 그 창 동안 목록에서 빠진다.
+      //  확답을 못 받으면(null: 오프라인·무응답) 종전대로 '복원 가능'이다 — 그 경우 복원 라우트가 다시 gone 을
+      //  물어 409("노드가 응답하지 않아…")로 정직하게 멈춘다. 조용한 빈 피커 대신 읽을 수 있는 이유가 남는다.
+      //  ⚠ 확답은 **desired-state 가 아는 노드**(st.node_id)에 구한다 — 좌표 없이 온 호출도 여기로 오기 때문이다.
+      //  ⚠ 접근통제(deadSessionMeta)를 통과한 뒤에만 묻는다 — 남의 세션 id 로 노드에 왕복을 시키지 않는다.
+      const nodeGone = mode === "ask" ? await nodeSessionGone(st.node_id, id) : null;
+      const body = nodeMetaRestorable({ mode, nodeGone })
+        ? dead.body
+        : { id: dead.body.id, label: dead.body.label, projectId: dead.body.projectId };
+      res.json({ ...body, node: nodeBadge });
       return;
     }
     // ★ #1820 — 박스 세션이 tmux 에 없으면 **여기서** '복원 가능'을 알린다. canAttach 뒤로 미루면 안 된다:
@@ -665,6 +682,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   const requireCreatableNode = async (req: express.Request, nodeId: string): Promise<void> => {
     const n = await getNode(nodeId);
     if (!n || !n.enabled) throw new HttpError(404, `노드 없음: ${nodeId}`);
+    // #2108 — 이 노드가 게이트웨이 자신이면 거절한다(피커에선 이미 빠졌고, 여기는 옛 화면·북마크·API 용).
+    //  ⚠ 조용히 '중앙'으로 옮기지 않는다 — 노드와 박스는 같은 머신이어도 워크스페이스 뿌리가 다를 수 있어,
+    //   말없이 옮기면 사람이 고른 것과 **다른 폴더**에서 세션이 열린다(#2022 가 세운 원칙: 모르면 멈춘다).
+    if (isSelfNode(nodeId)) {
+      throw new HttpError(409, `노드 '${nodeId}' 는 이 게이트웨이가 도는 바로 그 컴퓨터입니다 — 목록에서 '중앙 컴퓨터(기본)'를 고르세요. (그 컴퓨터에서 \`lively node stop\` 으로 노드 연결을 내리면 목록에서도 사라집니다)`);
+    }
     if (!nodeOpenTo(n, idOf(userOf(req)))) {
       throw new HttpError(403, "본인이 등록한 노드가 아니고 공유 노드도 아닙니다 — 관리자가 공유 노드로 지정한 노드만 함께 쓸 수 있습니다");
     }

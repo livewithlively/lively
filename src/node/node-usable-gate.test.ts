@@ -98,6 +98,24 @@ async function main() {
   );
   ok("legacy row (shared undefined) + non-owner requester → 403");
 
+  // 11) 🔴 #2108 — **게이트웨이 자신인 노드**(같은 tmux 를 쓰는 그 박스)엔 원격으로 일을 시키지 않는다 → 409.
+  //    다른 조건은 전부 통과(본인 소유·online·cap 보유)라 유일 실패 사유가 'self' 이도록 격리한다.
+  //    같은 박스를 원격처럼 다루면 한 세션이 두 경로(박스 즉시확답 / 노드 3초 스냅샷)로 잡혀
+  //    새 세션이 복원으로 샌다 — 그게 #2108 의 원증상이다.
+  await assert.rejects(
+    () => assertNodeUsable(depsFor(node({ kind: "member", owner_member: "bob" }), { self: () => true }), "n1", "bob"),
+    isHttp(409),
+  );
+  ok("#2108 gateway's own node (shares this box) → 409");
+
+  // 12) self 판정이 **없는** 호출부(구 deps)는 종전대로 통과한다 — 옵셔널 dep 이 조용히 게이트를 켜지 않는다.
+  {
+    const n = node({ kind: "member", owner_member: "bob" });
+    const got = await assertNodeUsable({ online: () => true, supports: () => true, getNode: async () => n }, "n1", "bob");
+    assert.equal(got, n);
+    ok("#2108 deps without self predicate → unchanged (gate stays off)");
+  }
+
   // 10) 전부 통과(본인 소유·비공유, online, provision cap 보유) → 노드 객체를 그대로 반환.
   {
     const n = node({ kind: "member", owner_member: "bob", shared: false });
