@@ -80,6 +80,8 @@ const DRIVE = "https://www.googleapis.com/drive/v3";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1";
 const CAL = "https://www.googleapis.com/calendar/v3";
 const SLACK = "https://slack.com/api";
+const GH = "https://api.github.com";
+const GL = "https://gitlab.com/api/v4";
 const FIGMA = "https://api.figma.com/v1";
 
 // ── 슬랙을 B 로 내린 이유 (#1881, 2026-08-25) ──────────────────────────────────────────────────
@@ -383,6 +385,318 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
         }, ["channel", "text", "post_at"]),
         pii_scrub: false,
         level: "L2",
+      },
+    ],
+  },
+  // ── GitHub·GitLab 을 B 로 내린 이유 (#1881, 2026-08-26) ────────────────────────────────────────
+  //  ★ 이 두 묶음이 생기기 전까지, [내 설정 ▸ 외부 서비스 관리] 의 GitHub·GitLab 카드는 "AI가 내 계정으로 이슈·PR·MR 을
+  //   다룰 수 있습니다" 라고 약속하면서 **도구를 한 개도 만들지 않았다**. github_pat/gitlab_pat 의 유일한 소비처는
+  //   레포 목록 드롭다운(repo-discover.ts)이었고, MCP 프리셋에도 http_proxy 에도 git 은 없었다. 약속과 코드의 어긋남을
+  //   메우는 것이 이 묶음의 첫 목적이다(#1881 G4).
+  //  왜 MCP(A)가 아니라 B 인가 — GitHub 원격 MCP(api.githubcopilot.com/mcp)의 인가서버는 github.com 자신이고 **DCR 을
+  //   지원하지 않는다**(2026-08-26 프로브: github.com/.well-known/oauth-authorization-server 없음). 즉 라이블리가 자기
+  //   GitHub App 을 소유하기 전에는 A 경로가 아예 성립하지 않는다. 반면 REST(api.github.com)는 PAT·App 토큰 모두 받는다.
+  //   GitLab 은 반대로 공식 MCP 가 DCR 을 지원해 A 로 간다(mcp-server-presets 의 gitlab) — 여기 B 묶음은 그 MCP 토큰이
+  //   **scope=mcp 로 묶여 REST 를 못 부르기 때문에**(gitlab#599020) 남겨 두는 보완 면이다.
+  //  auth_kind 는 기존 슬롯(github_pat·gitlab_pat)을 그대로 쓴다 — 이미 토큰을 넣어 둔 사람이 재입력 없이 즉시 도구를
+  //   얻고, 나중에 OAuth 가 붙어도 같은 슬롯에 토큰 묶음을 저장하면 oauth-proxy-auth 가 묶음/정적을 알아서 가른다
+  //   (슬랙에서 "서버 이름이 승계의 열쇠" 였던 것과 같은 원리).
+  //  ⚠ 경로 자리표시 값은 encodeURIComponent 된다(applyUrlTemplate — 경로 탈출 방지). 그래서:
+  //   · GitHub `contents/{path}` 는 **쓸 수 없다**(docs/a.md → docs%2Fa.md 로 깨진다). 파일 읽기는 도구가 아니라
+  //     클론된 레포를 그냥 읽는 게 맞다(레포 연결이 이미 workspace/repos 에 클론을 둔다) — 그래서 여기 없다.
+  //   · GitLab 은 오히려 그 인코딩을 **요구한다**(projects/:id 는 group%2Fproject, files/:file_path 도 인코딩) — 맞물린다.
+  //  조직 밖으로 나가는 쓰기(이슈 생성·코멘트)는 level L2 — per-user 자격 필수(사칭 방지) + 발송 확인 대상.
+  {
+    key: "github", label: "GitHub (REST API)", auth_kind: "github_pat",
+    hosts: ["api.github.com"], scope: "items", level: "L0",
+    tools: [
+      {
+        name: "github_list_my_repos",
+        title: "내 GitHub 저장소 목록",
+        description:
+          "내 계정이 접근할 수 있는 저장소 목록(최근 갱신순). owner/repo 이름을 찾을 때 쓴다 — 다른 GitHub 도구는 전부 " +
+          "owner 와 repo 를 따로 받는다(예: owner=lively-ai, repo=lively).",
+        url: `${GH}/user/repos?per_page=50&sort=updated`,
+        input_schema: obj({
+          per_page: I("한 번에 받을 개수(기본 50, 최대 100)"),
+          page: I("쪽 번호(1부터)"),
+          affiliation: S("소속 필터: owner, collaborator, organization_member(쉼표구분)"),
+        }),
+        pii_scrub: false,
+      },
+      {
+        name: "github_search_repos",
+        title: "GitHub 저장소 검색",
+        description: "GitHub 전체에서 저장소를 검색한다. q 는 GitHub 검색 문법(예: `org:lively-ai lively`).",
+        url: `${GH}/search/repositories?per_page=20`,
+        input_schema: obj({
+          q: S("검색어(GitHub 검색 문법 — org:·user:·language: 등)"),
+          sort: S("정렬: stars | forks | updated"),
+          per_page: I("개수(기본 20)"),
+        }, ["q"]),
+        pii_scrub: false,
+      },
+      {
+        name: "github_list_issues",
+        title: "GitHub 이슈 목록",
+        description:
+          "저장소의 이슈 목록. state 로 열림/닫힘을 고른다. ⚠ GitHub 은 PR 도 이슈로 함께 돌려준다 — pull_request 칸이 " +
+          "있는 항목이 PR 이다(PR 만 보려면 github_list_prs).",
+        url: `${GH}/repos/{owner}/{repo}/issues?per_page=30&state=open`,
+        input_schema: obj({
+          owner: S("저장소 소유자(사용자 또는 조직)"),
+          repo: S("저장소 이름"),
+          state: S("open(기본) | closed | all"),
+          labels: S("라벨(쉼표구분)"),
+          since: S("이 시각 이후 갱신분만(ISO8601)"),
+          per_page: I("개수(기본 30)"),
+          page: I("쪽 번호"),
+        }, ["owner", "repo"]),
+        pii_scrub: true,
+      },
+      {
+        name: "github_get_issue",
+        title: "GitHub 이슈 읽기",
+        description: "이슈 1건의 제목·본문·상태·라벨·담당자. 댓글은 github_get_issue_comments 로 따로 읽는다.",
+        url: `${GH}/repos/{owner}/{repo}/issues/{issue_number}`,
+        input_schema: obj({
+          owner: S("저장소 소유자"),
+          repo: S("저장소 이름"),
+          issue_number: I("이슈 번호(#뒤의 숫자)"),
+        }, ["owner", "repo", "issue_number"]),
+        pii_scrub: true,
+      },
+      {
+        name: "github_get_issue_comments",
+        title: "GitHub 이슈 댓글 읽기",
+        description: "이슈(또는 PR)의 댓글 목록. PR 의 일반 댓글도 이 경로다(코드 리뷰 코멘트는 별개).",
+        url: `${GH}/repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=50`,
+        input_schema: obj({
+          owner: S("저장소 소유자"),
+          repo: S("저장소 이름"),
+          issue_number: I("이슈 또는 PR 번호"),
+          per_page: I("개수(기본 50)"),
+        }, ["owner", "repo", "issue_number"]),
+        pii_scrub: true,
+      },
+      {
+        name: "github_list_prs",
+        title: "GitHub PR 목록",
+        description: "저장소의 Pull Request 목록. state 로 열림/닫힘/전체를 고른다.",
+        url: `${GH}/repos/{owner}/{repo}/pulls?per_page=30&state=open`,
+        input_schema: obj({
+          owner: S("저장소 소유자"),
+          repo: S("저장소 이름"),
+          state: S("open(기본) | closed | all"),
+          base: S("대상 브랜치로 좁히기(예: main)"),
+          per_page: I("개수(기본 30)"),
+          page: I("쪽 번호"),
+        }, ["owner", "repo"]),
+        pii_scrub: true,
+      },
+      {
+        name: "github_get_pr",
+        title: "GitHub PR 읽기",
+        description: "PR 1건의 제목·본문·브랜치·머지 상태·변경 통계. 변경 파일은 github_get_pr_files.",
+        url: `${GH}/repos/{owner}/{repo}/pulls/{pull_number}`,
+        input_schema: obj({
+          owner: S("저장소 소유자"),
+          repo: S("저장소 이름"),
+          pull_number: I("PR 번호"),
+        }, ["owner", "repo", "pull_number"]),
+        pii_scrub: true,
+      },
+      {
+        name: "github_get_pr_files",
+        title: "GitHub PR 변경 파일",
+        description:
+          "PR 의 변경 파일 목록과 각 파일의 patch(diff). ⚠ 응답 상한 256KiB 라 큰 PR 은 잘린다 — per_page 를 줄이고 " +
+          "page 로 넘겨 읽는다.",
+        url: `${GH}/repos/{owner}/{repo}/pulls/{pull_number}/files?per_page=30`,
+        input_schema: obj({
+          owner: S("저장소 소유자"),
+          repo: S("저장소 이름"),
+          pull_number: I("PR 번호"),
+          per_page: I("개수(기본 30)"),
+          page: I("쪽 번호"),
+        }, ["owner", "repo", "pull_number"]),
+        pii_scrub: false,
+      },
+      {
+        name: "github_list_commits",
+        title: "GitHub 커밋 목록",
+        description: "브랜치·경로별 최근 커밋. sha 로 브랜치를, path 로 특정 파일 이력을 좁힌다.",
+        url: `${GH}/repos/{owner}/{repo}/commits?per_page=20`,
+        input_schema: obj({
+          owner: S("저장소 소유자"),
+          repo: S("저장소 이름"),
+          sha: S("브랜치명 또는 커밋 sha(기본 기본브랜치)"),
+          path: S("이 경로를 건드린 커밋만"),
+          since: S("이 시각 이후(ISO8601)"),
+          per_page: I("개수(기본 20)"),
+        }, ["owner", "repo"]),
+        pii_scrub: true,
+      },
+      {
+        name: "github_search_code",
+        title: "GitHub 코드 검색",
+        description:
+          "GitHub 코드 검색. q 는 검색 문법(예: `repo:lively-ai/lively resolveMemberSecret`). " +
+          "⚠ 우리 조직 레포는 이미 클론돼 있으니(레포 연결) 로컬 grep 이 더 빠르고 정확하다 — 이 도구는 클론하지 않은 " +
+          "저장소를 볼 때 쓴다.",
+        url: `${GH}/search/code?per_page=20`,
+        input_schema: obj({
+          q: S("검색어(GitHub 코드검색 문법 — repo:·path:·language: 등)"),
+          per_page: I("개수(기본 20)"),
+        }, ["q"]),
+        pii_scrub: false,
+      },
+      {
+        name: "github_create_issue",
+        title: "GitHub 이슈 만들기",
+        description:
+          "저장소에 이슈를 만든다(조직 밖으로 나가는 쓰기 — 저장소와 내용을 확인하고 부른다). " +
+          "본문은 마크다운.",
+        url: `${GH}/repos/{owner}/{repo}/issues`,
+        method: "POST",
+        input_schema: obj({
+          owner: S("저장소 소유자"),
+          repo: S("저장소 이름"),
+          title: S("이슈 제목"),
+          body: S("이슈 본문(마크다운)"),
+          labels: S("라벨(쉼표구분)"),
+        }, ["owner", "repo", "title"]),
+        pii_scrub: false,
+        level: "L2",
+      },
+      {
+        name: "github_comment_issue",
+        title: "GitHub 이슈·PR 에 댓글 달기",
+        description:
+          "이슈 또는 PR 에 댓글을 단다(조직 밖으로 나가는 쓰기 — 대상 번호와 내용을 확인하고 부른다).",
+        url: `${GH}/repos/{owner}/{repo}/issues/{issue_number}/comments`,
+        method: "POST",
+        input_schema: obj({
+          owner: S("저장소 소유자"),
+          repo: S("저장소 이름"),
+          issue_number: I("이슈 또는 PR 번호"),
+          body: S("댓글 본문(마크다운)"),
+        }, ["owner", "repo", "issue_number", "body"]),
+        pii_scrub: false,
+        level: "L2",
+      },
+    ],
+  },
+  {
+    // ⚠ 이 묶음의 URL 은 gitlab.com 고정이다. self-managed GitLab 은 호스트가 조직마다 달라 프리셋 한 벌로 못 덮는다
+    //  (org_tool.url 은 행 단위라 관리자가 도구별로 바꿀 수는 있다). self-managed 의 정공법은 A 경로(MCP) 인데,
+    //  그쪽은 DCR 이라 URL 하나만 바꾸면 되고 도구 35개를 상류가 준다 — mcp-server-presets 의 gitlab 을 보라.
+    key: "gitlab", label: "GitLab (REST API · gitlab.com)", auth_kind: "gitlab_pat",
+    hosts: ["gitlab.com"], scope: "items", level: "L0",
+    tools: [
+      {
+        name: "gitlab_search_projects",
+        title: "내 GitLab 프로젝트 목록",
+        description:
+          "내가 속한 프로젝트 목록(최근 활동순). 다른 GitLab 도구가 받는 project_id 를 여기서 얻는다 — 숫자 id 또는 " +
+          "전체 경로(group/sub/project) 둘 다 쓸 수 있다.",
+        url: `${GL}/projects?membership=true&per_page=50&order_by=last_activity_at&simple=true`,
+        input_schema: obj({
+          search: S("이름으로 좁히기"),
+          per_page: I("개수(기본 50)"),
+          page: I("쪽 번호"),
+        }),
+        pii_scrub: false,
+      },
+      {
+        name: "gitlab_list_issues",
+        title: "GitLab 이슈 목록",
+        description: "프로젝트의 이슈 목록. state 로 열림/닫힘을 고른다.",
+        url: `${GL}/projects/{project_id}/issues?per_page=30&state=opened`,
+        input_schema: obj({
+          project_id: S("프로젝트 id(숫자) 또는 전체 경로(group/project)"),
+          state: S("opened(기본) | closed | all"),
+          labels: S("라벨(쉼표구분)"),
+          per_page: I("개수(기본 30)"),
+          page: I("쪽 번호"),
+        }, ["project_id"]),
+        pii_scrub: true,
+      },
+      {
+        name: "gitlab_get_issue",
+        title: "GitLab 이슈 읽기",
+        description: "이슈 1건. iid 는 프로젝트 안에서 보이는 번호(#뒤 숫자)이지 전역 id 가 아니다.",
+        url: `${GL}/projects/{project_id}/issues/{issue_iid}`,
+        input_schema: obj({
+          project_id: S("프로젝트 id 또는 전체 경로"),
+          issue_iid: I("이슈 번호(프로젝트 내 iid)"),
+        }, ["project_id", "issue_iid"]),
+        pii_scrub: true,
+      },
+      {
+        name: "gitlab_list_mrs",
+        title: "GitLab 병합요청(MR) 목록",
+        description: "프로젝트의 MR 목록. state 로 열림/병합됨/닫힘을 고른다.",
+        url: `${GL}/projects/{project_id}/merge_requests?per_page=30&state=opened`,
+        input_schema: obj({
+          project_id: S("프로젝트 id 또는 전체 경로"),
+          state: S("opened(기본) | merged | closed | all"),
+          target_branch: S("대상 브랜치로 좁히기"),
+          per_page: I("개수(기본 30)"),
+          page: I("쪽 번호"),
+        }, ["project_id"]),
+        pii_scrub: true,
+      },
+      {
+        name: "gitlab_get_mr",
+        title: "GitLab MR 읽기",
+        description: "MR 1건의 제목·본문·브랜치·병합 상태. 변경 내용은 gitlab_get_mr_changes.",
+        url: `${GL}/projects/{project_id}/merge_requests/{merge_request_iid}`,
+        input_schema: obj({
+          project_id: S("프로젝트 id 또는 전체 경로"),
+          merge_request_iid: I("MR 번호(프로젝트 내 iid)"),
+        }, ["project_id", "merge_request_iid"]),
+        pii_scrub: true,
+      },
+      {
+        name: "gitlab_get_mr_changes",
+        title: "GitLab MR 변경 내용",
+        description:
+          "MR 의 변경 파일과 diff. ⚠ 응답 상한 256KiB 라 큰 MR 은 잘린다 — 그때는 클론된 레포에서 직접 diff 를 보는 게 맞다.",
+        url: `${GL}/projects/{project_id}/merge_requests/{merge_request_iid}/changes`,
+        input_schema: obj({
+          project_id: S("프로젝트 id 또는 전체 경로"),
+          merge_request_iid: I("MR 번호(iid)"),
+        }, ["project_id", "merge_request_iid"]),
+        pii_scrub: false,
+      },
+      {
+        name: "gitlab_read_file",
+        title: "GitLab 파일 읽기",
+        description:
+          "저장소의 파일 1개를 읽는다(원문). ref 는 브랜치·태그·커밋(기본 기본브랜치). " +
+          "클론된 레포가 있으면 로컬에서 읽는 편이 빠르다 — 이 도구는 클론하지 않은 프로젝트용.",
+        url: `${GL}/projects/{project_id}/repository/files/{file_path}/raw`,
+        input_schema: obj({
+          project_id: S("프로젝트 id 또는 전체 경로"),
+          file_path: S("파일 경로(예: docs/README.md — 인코딩은 자동)"),
+          ref: S("브랜치·태그·커밋(기본 기본브랜치)"),
+        }, ["project_id", "file_path"]),
+        pii_scrub: true,
+      },
+      {
+        name: "gitlab_search",
+        title: "GitLab 전체 검색",
+        description:
+          "GitLab 인스턴스 전체에서 검색한다. scope 는 필수 — projects | issues | merge_requests | milestones | " +
+          "users | blobs(코드) | commits | wiki_blobs 중 하나.",
+        url: `${GL}/search?per_page=20`,
+        input_schema: obj({
+          scope: S("검색 대상: projects | issues | merge_requests | blobs | commits | wiki_blobs | users"),
+          search: S("검색어"),
+          per_page: I("개수(기본 20)"),
+        }, ["scope", "search"]),
+        pii_scrub: true,
       },
     ],
   },

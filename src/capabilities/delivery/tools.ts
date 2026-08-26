@@ -161,7 +161,8 @@ export const toolsCapabilities: Capability[] = [
       }
       return { ok: true, key, applied, added_hosts: addedHosts };
     }, {
-      key: z.string().describe("적용할 프리셋 묶음 key(google-drive · google-gmail · google-calendar · slack · figma)"),
+      // 목록을 손으로 적으면 프리셋이 늘 때마다 드리프트한다 — slack 이 빠져 있던 것이 그 증거다(#1881).
+      key: z.string().describe(`적용할 프리셋 묶음 key(${HTTP_TOOL_PRESETS.map((g) => g.key).join(" · ")})`),
     }),
   restRuntime("org_tool_remove", "AI 도구 제거",
     "조직 MCP 툴을 제거한다(http_proxy=즉시 노출 중단, builtin 게이팅 행 제거=기본값 복귀).",
