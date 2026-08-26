@@ -34,7 +34,7 @@ import { makeSplitter, readSplit, writeSplit } from './split.js'; // 경계 끌�
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js'; // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
 import { switcherName, switcherTop } from './switcher.js';
-import { railIsOpen } from './rail.js'; // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
+import { openSectionMenu, railIsHidden, sectionDef, stackTile } from './rail.js'; // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js'; // #2016 — 선 아이콘 한 벌
 import { openMeModal } from './me-modal.js'; // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 //  ⚠ 병합 판단(2026-08-25): main 의 **사이드바 3단 테마 토글**(#1683 themeSeg)은 여기 두지 않는다 — 그 기능은
@@ -417,7 +417,7 @@ function render() {
 }
 /** 구역 머리 — 레일이 접혀 있으면 워크스페이스 이름이 여기 선다(슬랙의 「HonestAI ▾」 자리). */
 function secHead(title, count, ...acts) {
-    return el('div', { class: 'v2-app-space-head' }, railIsOpen() ? null : switcherName(), el('span', { class: 'v2-k', text: title }), count != null ? el('span', { class: 'v2-app-count', text: String(count) }) : null, ...acts);
+    return el('div', { class: 'v2-app-space-head' }, railIsHidden() ? null : switcherName(), el('span', { class: 'v2-k', text: title }), count != null ? el('span', { class: 'v2-app-count', text: String(count) }) : null, ...acts);
 }
 /** 켜져 있는 필터 수 — 0이면 요약 줄을 그리지 않는다. */
 function fltCount() { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0); }
@@ -444,6 +444,26 @@ function findInput(ph) {
     }
     return inp;
 }
+/** 레일을 숨겼을 때 사이드바 머리 한 줄(#2016 안 B) — [스택 타일 + 이름 ▾] … [지금 구역 ▾]. 레일이 보이면 그리지 않는다.
+ *  왼쪽은 레일 맨 위의 그 문패(같은 팝오버), 오른쪽은 구역 드롭다운(여섯 행 + 레일 펼치기). 앱·나는 발치 한 줄로(secFoot). */
+function wsHead() {
+    const sec = hooks.section?.() || 'home';
+    const ak = last ? last.activeKey() : '';
+    const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : sectionDef(sec);
+    const inboxN = last ? last.data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length : 0;
+    return el('div', { class: 'v2-side-wshd' }, stackTile({ small: true, label: true }), el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키 · 리브',
+        onclick: (e) => openSectionMenu(e.currentTarget) }, icon(cur.icon, 'v2-ic'), el('span', { class: 'v2-secdd-t', text: cur.label }), sec === 'inbox' && ak !== 'liv' && inboxN ? el('span', { class: 'v2-rail-bd', text: String(inboxN) }) : null, el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })));
+}
+/** 사이드바 맨 위 — 뒤로·앞으로·검색 줄(데스크톱은 창 맨 윗줄로 간다) + 레일을 숨겼을 때의 머리 한 줄. */
+function topBits(navEl, navHost) {
+    return [...(navHost ? [] : [navEl]), ...(railIsHidden() ? [wsHead()] : [])];
+}
+/** 레일을 숨겼을 때 발치 한 줄 — [⊞ 앱] [아바타 이름 톱니]. 레일이 있기 전 사이드바(#1843)의 그 자리. */
+function footRow() {
+    const me = state.me || {};
+    const name = String(me.display_name || me.email || me.userId || '');
+    return el('div', { class: 'v2-foot-row' }, el('button', { class: 'v2-apps-btn', type: 'button', title: '모든 앱', onclick: () => openLaunchpad() }, icon('apps', 'v2-ic'), el('span', { text: '앱' })), el('button', { class: 'v2-me', type: 'button', title: '내 프로필 · 환경설정', 'aria-haspopup': 'dialog', onclick: () => openMeModal({ onSaved: () => redraw() }) }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), icon('gear', 'v2-me-ic')));
+}
 /** 구역 발치 — 어느 구역에서나 같다: 데스크톱 업데이트 알림(#1838) + **도크 셋**(아카이브 · 휴지통 · 외부 앱 연결).
  *  원준 2026-08-26: "이전에 아래에 있었던 아카이브랑 휴지통은 어디 감? 거기에 외부 앱 연결도 만들자." — 치워 둔 곳과
  *  바깥으로 나가는 문은 **어느 구역에서든 같은 자리**에 있어야 찾는다. 아이콘 아래 이름을 둔다(아이콘만 늘어선
@@ -456,7 +476,9 @@ function secFoot(...rows) {
     const trashedN = data ? data.projects.filter((p) => isTrashedProj(p)).length
         + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length : 0;
     const dock = (key, label, n, title) => el('a', { class: 'v2-dock-btn' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title, 'aria-label': label + (n ? ` ${n}` : '') }, icon(key === 'connect' ? 'link' : key, 'v2-dock-ic'), el('span', { class: 'v2-dock-t', text: label }), n ? el('span', { class: 'v2-dock-n', text: String(n) }) : null);
-    return el('footer', { class: 'v2-side-foot v2-side-foot--apps' }, updateSlot(), ...rows, el('nav', { class: 'v2-app-dock v2-app-dock--3', 'aria-label': '치워 둔 곳 · 연결' }, dock('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'), dock('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'), dock('connect', '외부 앱 연결', 0, '외부 앱 연결 — 슬랙·노션·드라이브 같은 바깥 서비스를 잇습니다')));
+    return el('footer', { class: 'v2-side-foot v2-side-foot--apps' }, updateSlot(), ...rows, el('nav', { class: 'v2-app-dock v2-app-dock--3', 'aria-label': '치워 둔 곳 · 연결' }, dock('archive', '아카이브', archivedN, '아카이브 — 통째로 보관한 프로젝트와 그 아래 세션'), dock('trash', '휴지통', trashedN, '휴지통 — 버린 프로젝트·세션을 되돌리거나 완전히 지웁니다'), dock('connect', '외부 앱 연결', 0, '외부 앱 연결 — 슬랙·노션·드라이브 같은 바깥 서비스를 잇습니다')), 
+    //  레일을 숨겼으면 레일 발치의 [앱]·[나]가 여기로 내려온다(안 B).
+    railIsHidden() ? footRow() : null);
 }
 /** 발치의 '갈 곳' 한 줄(세션 이력 · 아카이브 · 휴지통) — 목록의 항목이 아니라 같은 급의 문이다. */
 function footLink(href, icon, text, n) {
@@ -539,7 +561,7 @@ function renderHomeApps() {
     //   아카이브 · 휴지통은 [프로젝트] 구역 발치로, 모든 앱은 레일의 [앱]으로 갔다.
     //  #2016 2차 — 확인할 것·리브는 **레일**로 갔다(슬랙의 내 활동 자리). 홈 사이드바는 열린 앱 목록뿐이다.
     //   아카이브·휴지통·외부 앱 연결은 어느 구역에서나 **발치 도크**(secFoot)에 있다.
-    host.replaceChildren(...(navHost ? [] : [navEl]), el('section', { class: 'v2-app-space', 'aria-label': '앱' }, secHead('앱', instances.length, 
+    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '앱' }, secHead('앱', instances.length, 
     //  새 작업은 목록 위 큰 버튼이 아니라 머리글의 ＋ 하나다(#1954) — 목록이 세로를 더 쓴다.
     el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 작업 열기', title: '새 작업 — 무엇이든 시키거나 앱을 고릅니다',
         onclick: () => hooks.onNewTask?.() }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))), findBtn()), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findIn)] : []), listEl), secFoot());
@@ -616,7 +638,7 @@ function renderSessions() {
     const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': 'AI 세션' }, ...rows);
     appListEl = listEl;
     listEl.scrollTop = prevScroll;
-    host.replaceChildren(...(navHost ? [] : [navEl]), el('section', { class: 'v2-app-space', 'aria-label': 'AI 세션' }, secHead('AI 세션', live.length, el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 세션', title: '새 세션 — 홈에서 무엇이든 시키면 열려요',
+    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': 'AI 세션' }, secHead('AI 세션', live.length, el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 세션', title: '새 세션 — 홈에서 무엇이든 시키면 열려요',
         onclick: () => hooks.onNewTask?.() }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))), findBtn()), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('세션 찾기'))] : []), chips, listEl), secFoot(footLink('#/app/sessions', 'chat', '세션 이력')));
     listEl.scrollTop = prevScroll;
     keepSideScroll(listEl, 'v2-app-list');
@@ -650,7 +672,7 @@ function renderInboxSide() {
     const prevScroll = appListEl ? appListEl.scrollTop : 0;
     const listEl = el('div', { class: 'v2-app-list', role: 'list', 'aria-label': '확인할 것' }, ...rows);
     appListEl = listEl;
-    host.replaceChildren(...(navHost ? [] : [navEl]), el('section', { class: 'v2-app-space', 'aria-label': '확인할 것' }, secHead('확인할 것', waits.length + dones.length, el('a', { class: 'v2-app-open', href: '#/inbox', title: '받은 알림까지 한 화면에서', 'aria-label': '확인할 것 화면 열기' }, icon('inbox'))), listEl), secFoot());
+    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '확인할 것' }, secHead('확인할 것', waits.length + dones.length, el('a', { class: 'v2-app-open', href: '#/inbox', title: '받은 알림까지 한 화면에서', 'aria-label': '확인할 것 화면 열기' }, icon('inbox'))), listEl), secFoot());
     listEl.scrollTop = prevScroll;
     keepSideScroll(listEl, 'v2-app-list');
 }
@@ -672,7 +694,7 @@ function renderProjects() {
     const activeN = rows.filter((r) => r.proj && !r.archived).length;
     countEl = el('span', { class: 'v2-k' });
     treeEl = el('div', { class: 'v2-tree' });
-    host.replaceChildren(...(navHost ? [] : [navEl]), el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' }, secHead('프로젝트', null, countEl, newBtn(), findBtn(), filterBtn(activeN, liveAll, doneCount)), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('프로젝트 찾기'))] : []), ...(fltCount() ? [filterSummary(fltCount())] : []), ...(newOpen ? [newProjRow()] : []), treeEl), secFoot());
+    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' }, secHead('프로젝트', null, countEl, newBtn(), findBtn(), filterBtn(activeN, liveAll, doneCount)), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('프로젝트 찾기'))] : []), ...(fltCount() ? [filterSummary(fltCount())] : []), ...(newOpen ? [newProjRow()] : []), treeEl), secFoot());
     renderTree(rows);
     keepSideScroll(treeEl, 'v2-tree');
     bindFindKey();
@@ -725,7 +747,7 @@ function renderWiki() {
     }
     const listEl = el('div', { class: 'v2-app-list', 'aria-label': '분류' }, ...rows);
     appListEl = listEl;
-    host.replaceChildren(...(navHost ? [] : [navEl]), el('section', { class: 'v2-app-space', 'aria-label': '위키' }, secHead('위키', total || null, el('a', { class: 'v2-app-new', href: '#/knowledge/new', 'aria-label': '새 문서', title: '새 문서 — 지식을 하나 씁니다' }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))), findBtn()), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('분류 찾기'))] : []), el('div', { class: 'v2-fixed v2-fixed--wiki' }, el('a', { class: 'v2-nav', href: '#/knowledge?indexed=1', title: 'WIKI 인덱스 — 모두가 항상 보는 핀' }, glyph('folder', 'v2-nav-ic'), el('span', { class: 'n', text: 'WIKI 인덱스' })), el('a', { class: 'v2-nav', href: '#/knowledge', title: '지식 전체' }, glyph('folder-open', 'v2-nav-ic'), el('span', { class: 'n', text: '지식 전체' }))), listEl), secFoot());
+    host.replaceChildren(...topBits(navEl, navHost), el('section', { class: 'v2-app-space', 'aria-label': '위키' }, secHead('위키', total || null, el('a', { class: 'v2-app-new', href: '#/knowledge/new', 'aria-label': '새 문서', title: '새 문서 — 지식을 하나 씁니다' }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))), findBtn()), ...(findShown() ? [el('div', { class: 'v2-find v2-find--apps' }, findInput('분류 찾기'))] : []), el('div', { class: 'v2-fixed v2-fixed--wiki' }, el('a', { class: 'v2-nav', href: '#/knowledge?indexed=1', title: 'WIKI 인덱스 — 모두가 항상 보는 핀' }, glyph('folder', 'v2-nav-ic'), el('span', { class: 'n', text: 'WIKI 인덱스' })), el('a', { class: 'v2-nav', href: '#/knowledge', title: '지식 전체' }, glyph('folder-open', 'v2-nav-ic'), el('span', { class: 'n', text: '지식 전체' }))), listEl), secFoot());
     keepSideScroll(listEl, 'v2-app-list');
     bindFindKey();
 }
@@ -1159,11 +1181,11 @@ function navRow() {
     const mac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '');
     //  #2016 — 레일 여닫기는 슬랙처럼 **맨 윗줄 맨 왼쪽**의 패널 아이콘이다. 데스크톱(navHost 있음)은 창 맨 윗줄의
     //   그 자리를 mobile.menuBtn 이 이미 차지하고 있어(같은 아이콘, 같은 동작) 여기선 브라우저에서만 그린다.
-    const railOn = !!hooks.railOpen?.();
+    const railHid = !!hooks.railHidden?.();
     const railBtn = hooks.onToggleRail && !hooks.navHost?.()
         ? el('button', {
-            class: 'v2-navb v2-railtg', type: 'button', 'aria-expanded': String(railOn),
-            title: (railOn ? '레일 접기' : '레일 펼치기') + ' — ⌘⇧S', 'aria-label': railOn ? '레일 접기' : '레일 펼치기',
+            class: 'v2-navb v2-railtg' + (railHid ? ' hid' : ''), type: 'button', 'aria-expanded': String(!railHid),
+            title: (railHid ? '레일 펼치기' : '레일 숨기기') + ' — ⌘⇧S', 'aria-label': railHid ? '레일 펼치기' : '레일 숨기기',
             onclick: () => hooks.onToggleRail?.()
         }, icon('panel', 'v2-navb-ic'))
         : null;
@@ -1179,7 +1201,9 @@ export function markNav(st) {
     const row = document.querySelector('.v2-side-nav');
     if (!row)
         return;
-    const btns = Array.from(row.querySelectorAll('.v2-navb'));
+    //  #2016 — 맨 왼쪽의 레일 여닫기(.v2-railtg)는 뒤로·앞으로가 아니다. 같은 붓(.v2-navb)을 쓰지만 여기서 빼지 않으면
+    //   첫 단추로 잡혀 '뒤로 갈 곳 없음'에 함께 꺼진다(실측: disabled 가 붙어 눌러도 아무 일도 안 났다).
+    const btns = Array.from(row.querySelectorAll('.v2-navb:not(.v2-railtg)'));
     if (btns[0])
         btns[0].disabled = !st.back || !hooks.onBack;
     if (btns[1])
