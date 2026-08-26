@@ -17,7 +17,7 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { el, navOn, profileAvatar, state, toast } from '../core.js';
+import { api, el, navOn, profileAvatar, state, toast } from '../core.js';
 import { APPS, openLaunchpad, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
@@ -228,10 +228,14 @@ function openPopover(anchor: HTMLElement): void {
       tt(w.name, w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스'))),
     hr(),
     //  구성원 — 슬랙의 「Invite people to …」 자리. primary 는 명부가 없다(박스 로그인 = 접근) — 고를 것이 없으면 그리지 않는다.
-    curSlug === 'primary' || !inviteAxisOn() ? null : row('group', '구성원 · 초대', peopleSub(curSlug), () => openPeoplePopover(anchor, curSlug)),
+    //  primary(박스의 팀 워크스페이스)는 명부가 따로 없다 — 박스에 계정이 있으면 곧 여기 구성원이다. 그래서 '초대'가
+    //   아니라 '계정 만들기'(설정 ▸ 구성원, 관리자)가 사람을 넣는 길이다. 문은 같은 자리에 둔다 — 없으면
+    //   "팀인데 왜 사람 초대가 없나"가 된다(원준 2026-08-26). 그 밖의 워크스페이스는 이메일 초대(#1875).
+    curSlug === 'primary' ? row('group', '구성원', '이 워크스페이스의 구성원 · 사람 추가는 설정에서', () => openBoxPeoplePanel(anchor))
+      : !inviteAxisOn() ? null : row('group', '구성원 · 초대', peopleSub(curSlug), () => openPeoplePopover(anchor, curSlug)),
     //  설정 — 이름 · 연결한 팀 · 보관. 만든 사람(owner)만. 종전엔 목록 행 옆 ✎ ✕ 였다(무엇인지 읽히지 않았다).
     isOwner ? row('gear', '워크스페이스 설정', settingsSub(), () => openSettingsPanel(anchor, curSlug)) : null,
-    (curSlug === 'primary' || !inviteAxisOn()) && !isOwner ? null : hr(),
+    (curSlug !== 'primary' && !inviteAxisOn()) && !isOwner ? null : hr(),
     //  추가 — 누르면 **바로 만드는 판**이 뜬다(종전엔 옛 메뉴 전체가 떴다 — "저 드롭다운으로 보내는 이유를 모르겠음").
     row('plus', '워크스페이스 추가', registryActive() ? '혼자 시작합니다 — 사람을 부르면 팀이 됩니다' : '지금은 만들 수 없어요', () => openCreatePanel(anchor)),
     //  「레일 숨기기」 행은 뺐다(원준 2026-08-26 "여기 있어야 할 이유가 없음") — 레일 여닫기는 창 맨 윗줄
@@ -281,6 +285,31 @@ function openPeoplePopover(anchor: HTMLElement, slug: string): void {
     panelHead('구성원 · 초대', anchor),
     peopleSection(slug, () => { void refreshSpaces(); })) as HTMLElement;
   place(pop, anchor, !!anchor.closest('.v2-side'));
+}
+
+/** primary(박스의 팀) 구성원 — 박스 계정 전원이다. 관리자면 「사람 추가」가 설정 ▸ 구성원으로 간다(계정 만들기 = 여기 들어오기). */
+function openBoxPeoplePanel(anchor: HTMLElement): void {
+  closePopover();
+  const me: any = state.me || {};
+  const isAdmin = Array.isArray(me.scopes) && me.scopes.includes('admin');
+  const list = el('div', { class: 'v2-ws-people' }, el('p', { class: 'v2-ws-loading', text: '불러오는 중…' })) as HTMLElement;
+  const pop = el('div', { class: 'v2-wspop v2-wspop--panel', role: 'dialog', 'aria-label': '구성원' },
+    panelHead('구성원', anchor), list,
+    isAdmin
+      ? el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { closePopover(); location.hash = '#/system/members'; } },
+          el('span', { class: 'v2-wspop-ic' }, icon('plus')), tt('사람 추가', '설정 ▸ 구성원에서 계정을 만들면 이 워크스페이스에 들어옵니다'))
+      : hint('사람 추가는 관리자가 설정 ▸ 구성원에서 계정을 만들어 합니다.')) as HTMLElement;
+  place(pop, anchor, !!anchor.closest('.v2-side'));
+  void (async () => {
+    try {
+      const d: any = await api('/api/ui/dash/members');
+      const rows: any[] = (d && d.members) || [];
+      const meId = String(me.userId || '');
+      list.replaceChildren(sub(`구성원 ${rows.length}명`), ...rows.map((m) => el('div', { class: 'v2-ws-person' },
+        profileAvatar(m.avatar, String(m.display_name || m.id), m.id, 'v2-ws-person-face', { char: m.avatar_char, color: m.avatar_color }),
+        el('span', { class: 'v2-ws-person-tt' }, el('b', { text: String(m.display_name || m.id) + (String(m.id) === meId ? ' (나)' : '') })))));
+    } catch (e: any) { list.replaceChildren(hint(e?.message || '구성원을 불러오지 못했어요.')); }
+  })();
 }
 
 /** 워크스페이스 추가 — 이름 하나면 된다. 개인/팀은 **고르는 것이 아니라 인원에서 나온다**(#1875 D1):
