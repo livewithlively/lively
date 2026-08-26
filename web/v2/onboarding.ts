@@ -936,7 +936,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const bin = esc(c.bin || AI_BIN_FALLBACK[aiHarness()] || '');
         const others = (c.others || []).map((k) => AI_LABEL[k] || k);
         const otherNote = others.length
-          ? `<p class="ob-note">지금은 ${esc(others.join(' · '))} 이(가) 이어져 있어요. ${picked} 를 잇지 않으셔도 제 분석은 그걸로 돌아갑니다.</p>`
+          ? `<p class="ob-note">지금은 ${esc(others.join(' · '))}${josa(others[others.length - 1], 0)} 이어져 있어요. ${picked}${josa(S.ai, 1)} 잇지 않으셔도 제 분석은 그걸로 돌아갑니다.</p>`
           : '';
         const skip = `<button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`;
         const goOther = `<button class="ob-btn ob-btn-sub" data-other>다른 AI 고르기</button>`;
@@ -962,10 +962,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // ── CLI 가 이 자리에 없다. 로그인 절차를 보여 줘도 첫 줄에서 command not found 가 난다 —
         //    그러니 로그인을 시키지 않고 **없다는 사실**을 말한다(사람이 해야 할 일이 아예 다르다).
         if (c.installed === false) {
-          return qHead('claude', lead, `이 자리엔 ${picked} 가 아직 없어요.`,
-            `${picked} 를 쓰려면 그 CLI(<code>${bin}</code>)가 먼저 깔려 있어야 합니다.`)
+          return qHead('claude', lead, `이 자리엔 ${picked}${josa(S.ai, 0)} 아직 없어요.`,
+            `${picked}${josa(S.ai, 1)} 쓰려면 그 CLI(<code>${bin}</code>)가 먼저 깔려 있어야 합니다.`)
             + `<div class="ob-tok">
-                <p class="ob-note">라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요. ${picked} 는 그 CLI 가 깔린 내 컴퓨터를 이어 두시면 그대로 쓸 수 있습니다(다음 화면).</p>
+                <p class="ob-note">라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요. ${picked}${josa(S.ai, 2)} 그 CLI 가 깔린 내 컴퓨터를 이어 두시면 그대로 쓸 수 있습니다(다음 화면).</p>
                 ${otherNote}
               </div>`
             + (others.length ? `<button class="ob-btn ob-btn-pri" id="cKeep">이대로 계속</button>` : '')
@@ -1016,7 +1016,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         if (keep) keep.onclick = () => pass(AI_LABEL[(AIC.others || [])[0]] || null);
         const other = $('[data-other]', el);
         if (other) other.onclick = () => { AIC = null; goScene('ai'); };
-        $('[data-skip]', el).onclick = () => goScene('terminal');
+        // ⚠ 갈래마다 버튼 구성이 다르다 — «이어졌어요» 화면엔 [나중에]가 없다. 무조건 잡으면 bind 가 그 자리에서
+        //  throw 하고, 그 뒤에 배선이 더 붙는 날 그것들이 통째로 조용히 안 걸린다(지금은 마지막 줄이라 안 드러났다).
+        const skip = $('[data-skip]', el);
+        if (skip) skip.onclick = () => goScene('terminal');
       },
     },
     /* 노션 p4(데스크톱 앱 유도)와 같은 자리 — 우리는 터미널 질문 */
@@ -1213,6 +1216,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const AI_HARNESS = { 'Claude': 'claude', 'ChatGPT': 'codex', 'Gemini': 'antigravity', 'Grok': 'grok' };
   const AI_LABEL = { claude: 'Claude', codex: 'ChatGPT', antigravity: 'Gemini', grok: 'Grok' };
   const AI_BIN_FALLBACK = { claude: 'claude', codex: 'codex', antigravity: 'agy', grok: 'grok' };
+  /* 라틴 표기 이름의 **조사**. 끝소리로 갈린다 — Grok 만 받침이 있다(록). '이(가)' 같은 회피 표기는
+   *  가입 직후 첫 화면에서 눈에 띄게 어색하다. [주격, 목적격, 주제격] 순. 표에 없으면 회피형으로 내려앉는다. */
+  const AI_JOSA = { Claude: ['가', '를', '는'], ChatGPT: ['가', '를', '는'], Gemini: ['가', '를', '는'], Grok: ['이', '을', '은'] };
+  const josa = (word, i) => (AI_JOSA[word] || ['이(가)', '을(를)', '은(는)'])[i];
   const aiHarness = () => AI_HARNESS[S.ai] || 'claude';
   /** 고른 AI 하나에 대한 마지막 판정(POST /api/ui/me/ai-accounts/check).
    *  null = 아직 안 물어봤다 — 화면은 «확인 중» 으로 살고, 없는 답을 지어내지 않는다. */
