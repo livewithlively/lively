@@ -161,6 +161,21 @@ function pretty(v: unknown): string {
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 
+/**
+ * 이 resume 실패가 **'지킬 대화가 없음'** 인가(=새로 시작해도 잃을 것이 없다).
+ *  두 갈래를 반드시 갈라야 한다:
+ *   · 남이 쥐고 있다(`active writer`·`conflict`) → 그 대화는 **살아 있다**. 새로 파면 사람이 보던 것과
+ *     다른 대화가 열린다 — 절대 안 된다.
+ *   · 파일이 비었다·없다·못 읽는다 → 이어 붙일 대화가 애초에 없다. 여기서 막으면 그 세션은 영영
+ *     아웃박스로만 돌고 사람은 되돌릴 방법이 없다.
+ *  ⚠ 좁게 잡는다 — 모르는 실패는 **보수적으로**(덮지 않는다) 다룬다.
+ */
+function isGoneThread(e: unknown): boolean {
+  const m = msg(e);
+  if (/active writer|conflict/i.test(m)) return false;        // 살아 있는 대화 — 손대지 않는다
+  return /is empty|not found|no such file|failed to read (session metadata|thread)/i.test(m);
+}
+
 const sessions = new Map<string, Entry>();
 /** 같은 세션에 대한 ensure 가 겹쳐도 서버를 두 개 띄우지 않는다(둘째가 첫째의 writer 락에 걸린다). */
 const starting = new Map<string, Promise<Entry>>();
@@ -314,11 +329,25 @@ async function start(o: CodexChatOpts): Promise<Entry> {
 
   let threadId = "";
   try {
-    // 이어 열기를 먼저 시도한다. 실패해도 **새 스레드로 폴백하지 않는다** — 그 실패의 대부분은
+    // 이어 열기를 먼저 시도한다. 실패해도 **함부로 새 스레드로 덮지 않는다** — 그 실패의 대부분은
     //  'TUI 가 그 스레드를 쥐고 있다'이고, 그때 새 스레드를 파면 사람이 보던 대화와 다른 대화가 열린다.
-    threadId = o.threadId
-      ? (await server.resumeThread(o.threadId)).threadId
-      : (await server.startThread({ cwd: o.cwd, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox })).threadId;
+    //  ★ 단, **읽을 대화가 아예 없는** 실패는 다르다(아래 isGoneThread) — 지킬 것이 없는데도 막으면
+    //   그 세션은 영영 아웃박스로만 돌게 된다(회복 불가). 실측 2026-08-26 매니지드 e2e:
+    //     `rollout at …/rollout-….jsonl is empty` → 대화가 영영 안 열림.
+    //   프로덕션에도 같은 길이 있다: 대화 파일이 지워지거나 잘리면 그 세션이 그대로 막힌다.
+    const startNew = (): Promise<{ threadId: string }> =>
+      server.startThread({ cwd: o.cwd, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox });
+    if (!o.threadId) {
+      threadId = (await startNew()).threadId;
+    } else {
+      try {
+        threadId = (await server.resumeThread(o.threadId)).threadId;
+      } catch (e) {
+        if (!isGoneThread(e)) throw e;                // 남이 쥔 대화 — 덮지 않는다(그쪽이 정본이다)
+        console.warn(`[codex-chat] 이어 열 대화가 비었거나 없다(${o.threadId}) — 새 대화로 시작한다: ${msg(e)}`);
+        threadId = (await startNew()).threadId;
+      }
+    }
     if (!threadId) throw new Error("thread id 를 받지 못했습니다");
   } catch (e) {
     server.close();

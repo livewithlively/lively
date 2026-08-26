@@ -16,7 +16,7 @@ const t = async (name: string, fn: () => Promise<void> | void): Promise<void> =>
 
 /** 서버 흉내 — initialize·thread/*·turn/* 에 즉답한다. 특정 메서드를 실패시킬 수 있다.
  *  turn/start 뒤에는 실제 서버처럼 **turn/started 알림**을 흘린다(런타임이 '도는 중'을 그걸로 안다). */
-function fakeServer(o: { failOn?: string; closeOnSend?: boolean; noTurnNotify?: boolean } = {}) {
+function fakeServer(o: { failOn?: string; failMessage?: string; closeOnSend?: boolean; noTurnNotify?: boolean } = {}) {
   const argvSeen: string[][] = [];
   const sentMethods: string[] = [];
   let closed = 0;
@@ -31,7 +31,7 @@ function fakeServer(o: { failOn?: string; closeOnSend?: boolean; noTurnNotify?: 
         sentMethods.push(m.method);
         if (m.id === undefined) return;                       // 알림엔 답이 없다
         if (o.failOn && m.method === o.failOn) {
-          setImmediate(() => onLine?.(JSON.stringify({ jsonrpc: "2.0", id: m.id, error: { code: -32600, message: `${m.method} 거부` } })));
+          setImmediate(() => onLine?.(JSON.stringify({ jsonrpc: "2.0", id: m.id, error: { code: -32600, message: o.failMessage ?? `${m.method} 거부` } })));
           return;
         }
         if (o.closeOnSend && m.method === "turn/start") { setImmediate(() => onClose?.("서버가 죽었다")); return; }
@@ -104,6 +104,31 @@ await t("★ N3 resume 이 거부되면(=TUI 가 쥐고 있다) 새 스레드로
   assert.ok(!f.sentMethods.includes("thread/start"), "새 대화를 몰래 파면 사람이 보던 대화와 달라진다");
   assert.equal(f.closedCount(), 1, "실패한 서버는 내린다(고아 프로세스 금지)");
   assert.equal(codexChatStatus("s1"), null);
+});
+
+// ── 이어 열기 실패의 두 갈래 (#2055 P3, 실측 2026-08-26 매니지드 e2e) ─────────────────────
+//  같은 "resume 실패"라도 뜻이 정반대다:
+//   · 남이 쥐고 있다 → 그 대화는 **살아 있다**. 새로 파면 사람이 보던 것과 다른 대화가 열린다.
+//   · 파일이 비었다·없다 → 이어 붙일 대화가 애초에 없다. 여기서 막으면 그 세션은 **영영 아웃박스로만**
+//     돌고 사람은 되돌릴 방법이 없다(실측: `rollout at …jsonl is empty` → 대화가 영영 안 열림).
+//  이 갈림을 잘못 잡으면 한쪽은 대화 분열, 다른 쪽은 회복 불가다. 그래서 표로 못박는다.
+await t("★ N4 대화 파일이 비었으면 새 대화로 시작한다 — 지킬 것이 없는데 막으면 회복이 안 된다", async () => {
+  const f = fakeServer({ failOn: "thread/resume", failMessage: "rollout at /home/x/.codex/sessions/a.jsonl is empty" });
+  const r = await ensureCodexChat(base({ threadId: "T-빈파일", transportFactory: f.factory }));
+  assert.ok(f.sentMethods.includes("thread/start"), "새 대화를 연다");
+  assert.equal(r.threadId, "T-new");
+});
+
+await t("★ N5 남이 쥐고 있으면 **여전히** 덮지 않는다 — 그 대화는 살아 있다", async () => {
+  const f = fakeServer({ failOn: "thread/resume", failMessage: "thread-store conflict: T-old already has an active writer" });
+  await assert.rejects(ensureCodexChat(base({ threadId: "T-old", transportFactory: f.factory })), CodexChatUnavailable);
+  assert.ok(!f.sentMethods.includes("thread/start"), "새 대화를 몰래 파면 사람이 보던 대화와 달라진다");
+});
+
+await t("N6 모르는 실패는 보수적으로 — 덮지 않는다(좁게 잡는다)", async () => {
+  const f = fakeServer({ failOn: "thread/resume", failMessage: "웬일인지 모르겠다" });
+  await assert.rejects(ensureCodexChat(base({ threadId: "T-old", transportFactory: f.factory })), CodexChatUnavailable);
+  assert.ok(!f.sentMethods.includes("thread/start"));
 });
 
 await t("O1 send 는 준비를 겸한다 — ensure 를 따로 안 불러도 된다", async () => {
