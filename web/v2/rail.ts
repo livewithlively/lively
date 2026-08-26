@@ -26,7 +26,8 @@ import {
   activeWorkspaceSlug, listWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
   archiveWorkspace, createWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam,
 } from './switcher.js';
-import { inboxSection, peopleSection } from './ws-people.js';   // #1875 — 구성원·초대(이 워크스페이스) / 나에게 온 초대
+import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
+import { overlay } from '../ui-primitives.js';
 
 export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
 
@@ -212,23 +213,20 @@ function openPopover(anchor: HTMLElement): void {
 
   const pop = el('div', { class: 'v2-wspop', role: 'menu', 'aria-label': '워크스페이스' },
     ...(inbox ? [inbox, hr()] : []),
-    ...rows.map((w) => el('button', {
-      class: 'v2-wspop-row' + (w.active ? ' cur' : ''), type: 'button', role: 'menuitemradio', 'aria-checked': String(w.active),
-      title: w.active ? '지금 이 워크스페이스예요' : `${w.name} 워크스페이스로 전환`,
-      onclick: () => { closePopover(); if (!w.active) switchWorkspace(w.slug); },
-    },
-      wsTile(w, 'v2-wscard-big'),
-      tt(w.name, w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스'))),
+    //  #1875 — 각 워크스페이스 행 오른쪽에 「사람 추가」 아이콘. 초대는 목록의 형제 항목이 아니라 **그 워크스페이스에
+    //   딸린 행동**이라, 어느 워크스페이스에 넣는지가 그 자리에서 보인다(원준 2026-08-26 "어디서 추가하는지 느낌이 안 온다").
+    //   행 전체는 전환, 아이콘만 모달 — 버튼 안 버튼을 피하려 div 로 감싼다.
+    ...rows.map((w) => el('div', { class: 'v2-wspop-row' + (w.active ? ' cur' : '') },
+      el('button', { class: 'v2-wspop-switch', type: 'button', role: 'menuitemradio', 'aria-checked': String(w.active),
+        title: w.active ? '지금 이 워크스페이스예요' : `${w.name} 워크스페이스로 전환`,
+        onclick: () => { closePopover(); if (!w.active) switchWorkspace(w.slug); } },
+        wsTile(w, 'v2-wscard-big'),
+        tt(w.name, w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스')),
+      addPeopleBtn(w))),
     hr(),
-    //  구성원 — 슬랙의 「Invite people to …」 자리. primary 는 명부가 없다(박스 로그인 = 접근) — 고를 것이 없으면 그리지 않는다.
-    //  primary(박스의 팀 워크스페이스)는 명부가 따로 없다 — 박스에 계정이 있으면 곧 여기 구성원이다. 그래서 '초대'가
-    //   아니라 '계정 만들기'(설정 ▸ 구성원, 관리자)가 사람을 넣는 길이다. 문은 같은 자리에 둔다 — 없으면
-    //   "팀인데 왜 사람 초대가 없나"가 된다(원준 2026-08-26). 그 밖의 워크스페이스는 이메일 초대(#1875).
-    curSlug === 'primary' ? row('group', '구성원', '이 워크스페이스의 구성원 · 사람 추가는 설정에서', () => openBoxPeoplePanel(anchor))
-      : !inviteAxisOn() ? null : row('group', '구성원 · 초대', peopleSub(curSlug), () => openPeoplePopover(anchor, curSlug)),
     //  설정 — 이름 · 연결한 팀 · 보관. 만든 사람(owner)만. 종전엔 목록 행 옆 ✎ ✕ 였다(무엇인지 읽히지 않았다).
     isOwner ? row('gear', '워크스페이스 설정', settingsSub(), () => openSettingsPanel(anchor, curSlug)) : null,
-    (curSlug !== 'primary' && !inviteAxisOn()) && !isOwner ? null : hr(),
+    isOwner ? hr() : null,
     //  추가 — 누르면 **바로 만드는 판**이 뜬다(종전엔 옛 메뉴 전체가 떴다 — "저 드롭다운으로 보내는 이유를 모르겠음").
     row('plus', '워크스페이스 추가', registryActive() ? '혼자 시작합니다 — 사람을 부르면 팀이 됩니다' : '지금은 만들 수 없어요', () => openCreatePanel(anchor)),
     //  「레일 숨기기」 행은 뺐다(원준 2026-08-26 "여기 있어야 할 이유가 없음") — 레일 여닫기는 창 맨 윗줄
@@ -260,48 +258,41 @@ const sub = (t: string): HTMLElement => el('div', { class: 'v2-wspop-sub', text:
  *  없는 게이트웨이(서버 반영 전 dev)에서 구성원 행을 그리면 눌렀을 때 404 만 난다 — 그리지 않는다. */
 function inviteAxisOn(): boolean { return spaces.some((w) => typeof w.member_count === 'number' || w.member_count === null); }
 
-/** 팝오버 행의 부제 — 목록에서 이미 받아 둔 인원 수로 '개인/팀'을 말한다(#1875 파생 규칙). */
-function peopleSub(slug: string): string {
-  const w = spaces.find((x) => x.slug === slug);
-  const n = w && typeof w.member_count === 'number' ? w.member_count : null;
-  if (n === null) return '보기 · 이메일로 초대';
-  const pend = w && w.pending_invites ? ` · 수락 대기 ${w.pending_invites}` : '';
-  return (n >= 2 ? `팀 · ${n}명` : '나만 — 초대하면 팀이 됩니다') + pend;
+/** 워크스페이스 행 오른쪽 「사람 추가」 아이콘 — 그 워크스페이스의 구성원 모달을 연다.
+ *  primary(박스의 팀)는 명부가 따로 없어 이메일 초대 축이 없다 — 박스 계정 목록 + 「사람 추가」→ 설정으로 보낸다.
+ *  그 밖의 워크스페이스는 이메일 초대 모달(#1875). 초대 축이 아직 없는 게이트웨이(서버 반영 전)에서는 안 그린다. */
+function addPeopleBtn(w: { slug: string; name: string; is_primary?: boolean }): HTMLElement | null {
+  const isPrimary = !!w.is_primary || w.slug === 'primary';
+  if (!isPrimary && !inviteAxisOn()) return null;
+  return el('button', { class: 'v2-wspop-add', type: 'button', title: `${w.name} 에 사람 초대`, 'aria-label': `${w.name} 에 사람 초대`,
+    onclick: (e: Event) => { e.stopPropagation(); closePopover(); if (isPrimary) openBoxPeople(w.name); else openMemberModal(w.slug, w.name); } },
+    icon('adduser')) as HTMLElement;
 }
+
 function settingsSub(): string { return promoN ? `이름 · 연결한 팀 · 보관 · 승인 대기 ${promoN}` : '이름 · 연결한 팀 · 보관'; }
 let promoN = 0;   // 승인 대기 승격 수 — 설정 행 부제에 싣는다(판 안에 숨기면 아무도 못 본다)
 
-/** 이 워크스페이스의 구성원 — 명부 · 수락 대기 · 이메일 초대(#1875). 부품은 ws-people.ts 것 그대로다. */
-function openPeoplePopover(anchor: HTMLElement, slug: string): void {
-  closePopover();
-  const pop = el('div', { class: 'v2-wspop v2-wspop--panel', role: 'dialog', 'aria-label': '구성원' },
-    panelHead('구성원 · 초대', anchor),
-    peopleSection(slug, () => { void refreshSpaces(); })) as HTMLElement;
-  place(pop, anchor, !!anchor.closest('.v2-side'));
-}
-
-/** primary(박스의 팀) 구성원 — 박스 계정 전원이다. 관리자면 「사람 추가」가 설정 ▸ 구성원으로 간다(계정 만들기 = 여기 들어오기). */
-function openBoxPeoplePanel(anchor: HTMLElement): void {
-  closePopover();
+/** primary(박스의 팀) 구성원 모달 — 박스 계정 전원이다(명부가 따로 없다). 관리자면 「사람 추가」가 설정 ▸ 구성원으로
+ *  간다(계정 만들기 = 여기 들어오기). 다른 워크스페이스의 이메일 초대와 같은 자리(문패 오른쪽 아이콘)에서 열린다. */
+function openBoxPeople(wsName: string): void {
   const me: any = state.me || {};
   const isAdmin = Array.isArray(me.scopes) && me.scopes.includes('admin');
-  const list = el('div', { class: 'v2-ws-people' }, el('p', { class: 'v2-ws-loading', text: '불러오는 중…' })) as HTMLElement;
-  const pop = el('div', { class: 'v2-wspop v2-wspop--panel', role: 'dialog', 'aria-label': '구성원' },
-    panelHead('구성원', anchor), list,
-    isAdmin
-      ? el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { closePopover(); location.hash = '#/system/members'; } },
-          el('span', { class: 'v2-wspop-ic' }, icon('plus')), tt('사람 추가', '설정 ▸ 구성원에서 계정을 만들면 이 워크스페이스에 들어옵니다'))
-      : hint('사람 추가는 관리자가 설정 ▸ 구성원에서 계정을 만들어 합니다.')) as HTMLElement;
-  place(pop, anchor, !!anchor.closest('.v2-side'));
+  const list = el('div', { class: 'v2-mem' }, el('p', { class: 'v2-ws-loading', text: '불러오는 중…' })) as HTMLElement;
+  const foot = isAdmin
+    ? el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { back.remove(); location.hash = '#/system/members'; } },
+        el('span', { class: 'v2-wspop-ic' }, icon('plus')), tt('사람 추가', '설정 ▸ 구성원에서 계정을 만들면 이 워크스페이스에 들어옵니다'))
+    : el('p', { class: 'v2-ws-hint', text: '사람 추가는 관리자가 설정 ▸ 구성원에서 계정을 만들어 합니다.' });
+  const back = overlay(wsName + ' · 구성원', el('div', { class: 'v2-mem-kind' }, el('b', { text: '팀 워크스페이스' }),
+    el('span', { text: '이 박스에 계정이 있으면 여기 구성원이에요.' })), list, foot) as HTMLElement;
   void (async () => {
     try {
       const d: any = await api('/api/ui/dash/members');
       const rows: any[] = (d && d.members) || [];
       const meId = String(me.userId || '');
-      list.replaceChildren(sub(`구성원 ${rows.length}명`), ...rows.map((m) => el('div', { class: 'v2-ws-person' },
+      list.replaceChildren(el('div', { class: 'v2-ws-sec', text: `구성원 ${rows.length}명` }), ...rows.map((m) => el('div', { class: 'v2-mem-row' },
         profileAvatar(m.avatar, String(m.display_name || m.id), m.id, 'v2-ws-person-face', { char: m.avatar_char, color: m.avatar_color }),
         el('span', { class: 'v2-ws-person-tt' }, el('b', { text: String(m.display_name || m.id) + (String(m.id) === meId ? ' (나)' : '') })))));
-    } catch (e: any) { list.replaceChildren(hint(e?.message || '구성원을 불러오지 못했어요.')); }
+    } catch (e: any) { list.replaceChildren(el('p', { class: 'v2-ws-hint', text: e?.message || '구성원을 불러오지 못했어요.' })); }
   })();
 }
 
