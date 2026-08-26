@@ -1117,6 +1117,9 @@ export function renderOnboarding(host, ctx = {}) {
             }
             catch (e) { }
             ctx.onDone && ctx.onDone();
+            // 끝냈다는 표식은 **서버가 정본**(#2039) — localStorage 는 이 브라우저에만 남아, 기기를 바꾸면 처음 설정이
+            //  다시 떴다. 실패해도 화면은 그대로 간다(다음 부팅에 서버 판정이 받아 준다).
+            void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ onboarded: true }) }).catch(() => { });
             armCompose('여기에 그대로 말씀하시면 됩니다', (v) => { S.notes.push(v); save(); msgLiv('네. 실제 서비스에서는 여기서 바로 시작됩니다. 프로토타입은 여기까지예요.'); });
             await sleep(300);
             chipsRow([{ label: '처음부터 다시 보기', ghost: true, cb: () => { sessionStorage.removeItem(KEY); localStorage.removeItem(DONE_KEY); location.reload(); } }]);

@@ -15,6 +15,7 @@ import { visAxes } from "../v6/visibility-axes.js";
 import { registryModeActive } from "../org/tenancy/state.js"; // #1750 S1 — 다중 워크스페이스 ride-along
 import { getWorkspaceBySlug, PRIMARY_SLUG } from "../org/tenancy/registry.js"; // 스위처 버튼 이름·종류(registry 가 이름의 SoT)
 import { currentTenant } from "../org/tenant-context.js";
+import { memberFirstRun } from "../org/delivery/first-run.js"; // #2039 — 처음 설정(#/welcome) 노출 판정은 서버가 한다
 
 // ── me — 토큰 게이트 확인(스코프 불요, REST 전용). 핸들러가 partial user 에서 null-default 구성. ──
 //  ⚠ MCP 로 열지 않는다(expose.mcp:false 유지) — 응답의 avatar 가 base64 data URL 이미지라 하네스 컨텍스트를 잡아먹는다.
@@ -32,15 +33,16 @@ const me: Capability = {
     const memberId = u.userId ?? "";
     // 소속 팀 + '우리 팀' 카테고리 id(소유 ∪ 이해관계) — 프론트 사이드바 '우리 팀' 우선노출의 단일 소스.
     //  실패해도 게이트 확인은 막지 않는다(팀 미설정/스키마 초기 등 — 빈 배열 폴백).
-    const [teams, cats, member, org, ui] = memberId
+    const [teams, cats, member, org, ui, firstRun] = memberId
       ? await Promise.all([
           memberTeams(memberId).catch(() => []),
           memberCategoryIds(memberId).catch(() => ({ all: [], owner: [] })),
           getMember(memberId).catch(() => null), // 표시 이름 — 우측 상단 '내 프로필' 라벨(이메일보다 우선)
           getOrgProfile().catch(() => null),     // 상단 워드마크 태그라인('for <조직명>') — 미설정이면 태그라인 자체를 숨긴다
           getUiSurface(),                        // #1454 S2~S5 — 매니지드 표면 노브 4종(자체 fail-open: 실패=기본값)
+          memberFirstRun(memberId).catch(() => false), // #2039 — 아래 first_run. 모르면 홈(false)
         ])
-      : [[], { all: [], owner: [] }, null, null, null];
+      : [[], { all: [], owner: [] }, null, null, null, false];
     return {
       userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
       display_name: member?.display_name ?? null,
@@ -66,6 +68,10 @@ const me: Capability = {
       ui_profile: ui?.ui_profile ?? "full",   // S4 — 관리탭 프로파일(admin-shell sectionHidden 이 해석)
       usage_url: ui?.usage_url ?? null,       // S5 — 상단바 '사용량' 칩 링크
       ui_mode: ui?.ui_mode ?? "v2",           // #1719 — 기본 화면 셸(v2|classic). main.ts boot 가 셸 선택 전에 읽는다
+      // #2039 — 처음 설정(#/welcome) 을 이 사람에게 보여줄까. **판정은 서버가 한다.**
+      //  종전엔 화면이 브라우저 localStorage 하나로 정해서, 몇 달째 쓰던 사람도 새 브라우저·다른 기기에서
+      //  열면 홈 대신 처음 설정이 떴다(원준님 신고 2026-08-26). 판정 근거는 org/delivery/first-run.ts.
+      first_run: !!firstRun,
       // #1750 — 이 워크스페이스의 종류(personal|team)와 계정 허브 URL. 좌상단 스위처(web/v2/switcher.ts)가 배지·동선을 정한다.
       //  기본 team·null = 기존 셀프호스트 박스(무설정) — 스위처는 '이 팀 워크스페이스 + 연결한 팀' 만 보인다.
       workspace: { kind: ui?.workspace_kind ?? "team", hub_url: ui?.workspace_hub_url ?? null },
