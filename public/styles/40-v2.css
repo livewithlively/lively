@@ -121,7 +121,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
    얼굴이 말한다: 팀 = 조직 이니셜 타일 + 멤버 얼굴 스택, 개인 = 내 얼굴(원형). */
 .v2-ws.v2-wscard { padding: 9px 10px; border: 1px solid var(--line-net); border-radius: 11px; background: var(--bg); gap: 10px; }
 .v2-ws.v2-wscard:hover { border-color: var(--blue); }
-.v2-wscard-big { width: 34px; height: 34px; border-radius: 9px; background: var(--ink); color: var(--on-fill); display: inline-grid; place-items: center; font-size: 16px; font-weight: 800; flex: none; overflow: hidden; }
+.v2-wscard-big { width: 34px; height: 34px; border-radius: 9px; background: var(--ink); color: var(--bg); display: inline-grid; place-items: center; font-size: 16px; font-weight: 800; flex: none; overflow: hidden; }
 .v2-wscard-big.round { border-radius: 50%; font-size: 13px; }
 .v2-wscard-big.round img { width: 100%; height: 100%; object-fit: cover; }
 .v2-wscard-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }

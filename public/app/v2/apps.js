@@ -5,6 +5,7 @@
 //  이 표의 항목이 `native` 로 바뀌거나 빠진다(표가 곧 '아직 안 옮긴 것' 목록이다).
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
 import { el, navOn, sv } from '../core.js';
+import { ICONS } from './icons.js';
 import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
@@ -104,16 +105,9 @@ export function soloSessionUrl(id) {
 }
 // ── 아이콘(라인, 채움 없음 — DS 규약) ──
 const ICON_PATHS = {
-    home: 'M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z',
-    term: 'M4 17l6-5-6-5M12 19h8',
-    proj: 'M4 5h16v4H4zM4 11h7v8H4zM13 11h7v8h-7z',
-    wiki: 'M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2zM4 5v16M8 7h8M8 11h6',
-    ctx: 'M6 4v6a6 6 0 0 0 12 0V4M6 20h12M12 16v4',
-    sys: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM3 12h2M19 12h2M12 3v2M12 19v2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4',
-    learn: 'M12 4l9 4-9 4-9-4zM5 10v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5',
-    liv: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 10h.01M15 10h.01M9 14a4 4 0 0 0 6 0',
-    sess: 'M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-4 3z',
-    web: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.4 3.8 5.4 3.8 9s-1.3 6.6-3.8 9c-2.5-2.4-3.8-5.4-3.8-9S9.5 5.4 12 3z',
+    //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 홈(클래식)은 옛 대시보드라 위젯 판 넷, 설정은 이빨 있는 톱니.
+    home: ICONS.dashboard, term: ICONS.term, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
+    sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web,
 };
 export function appIcon(icon, cls) {
     const svgNs = 'http://www.w3.org/2000/svg';
