@@ -540,6 +540,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
   };
 
+  /** 이 세션은 대화창이 기본인가 — codex app-server 세션(pane 이 셸이라 터미널엔 말 걸 곳이 없다). */
+  const chatFirst = (): boolean => String(target.raw?.chatMode || '') === 'app-server';
+
   // 화면 모드 — 기본은 **터미널**(상민님 지시 2026-08-18: 대화창이 미완성이라 공 들이기 전엔 터미널이 정답).
   //  '대화 (베타)' 버튼으로 스왑한다. 스왑이어도 양쪽 다 DOM 에 남는다(터미널 WS·대화 폴링 유지 — 숨겼다 보였다).
   //  터미널이 없는 세션(노드·기록 전용)은 종전대로 대화가 기본이고 버튼도 없다.
@@ -1277,7 +1280,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const close = anchoredPopover(moreBtn, panel);   // 목차는 [⋯] 안으로 들어갔다 — 앵커도 그 버튼이다
   }
 
-  setMode('term');   // 기본 = 터미널(터미널 없는 세션은 setMode 가 대화로 되돌린다)
+  // 기본 화면(#2055) — **codex app-server 세션은 대화가 기본**이다. 그 세션의 pane 은 셸이라(대화는 대화창이
+  //  전담한다) 터미널로 열면 사람이 **말 걸 곳이 없는 화면**을 먼저 본다 — 실제로 그렇게 헤맸다.
+  //  나머지는 종전 그대로 터미널이 기본이다(2026-08-18 지시: 대화창이 미완성인 동안은 터미널이 정답).
+  //  판정 근거는 세션 행의 chatMode — 서버가 '이 세션의 대화는 app-server 가 돈다'고 알려 주는 값이다.
+  setMode(chatFirst() ? 'chat' : 'term');
 
   void open();
 
