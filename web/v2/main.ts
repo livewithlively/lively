@@ -1283,7 +1283,9 @@ function sideInstances(): SideInstance[] {
     if (ap) return a.rank - b.rank || b.at - a.at;           // 확인 필요 → 작업 완료 → 작업 중
     if (a.group !== b.group) return (dayOf.get(b.group!) || 0) - (dayOf.get(a.group!) || 0);   // 날짜 내림차순
     return b.at - a.at;
-  }).map(({ at: _at, rank: _rank, ...row }) => row);
+  //  ⚠ at 은 벗기지 않는다(#2033) — 프로젝트 축이 **그룹의 순서**를 이 얼린 값으로 잰다.
+  //   rank 는 status.key 로 되살릴 수 있어 안 내보낸다.
+  }).map(({ rank: _rank, ...row }) => row);
   lastSideRows.clear();
   for (const r of out) lastSideRows.set(r.id, r);
   return out;
