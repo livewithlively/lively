@@ -17,10 +17,11 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { el, navOn, profileAvatar, state } from '../core.js';
+import { el, navOn, profileAvatar, state, toast } from '../core.js';
 import { APPS, openLaunchpad } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
+import { ctxMenu } from './panes-kit.js'; // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import { activeWorkspaceSlug, listWorkspaces, openWorkspaceMenu, switchWorkspace, workspaceInfo } from './switcher.js';
 const SECTIONS = [
     { key: 'home', label: '홈', route: '#/', tab: null, icon: 'home' },
@@ -38,6 +39,7 @@ export function sectionRoute(sec) { return sectionDef(sec).route; }
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 const SEC_STORE = 'lively_v2_rail_sec';
 const HIDE_STORE = 'lively_v2_rail_hidden'; // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
+const PIN_STORE = 'lively_v2_rail_pins'; // 독에 고정한 앱 키(사람이 정한 순서). 최근 앱과 같은 이유로 이 기기에 둔다.
 const RECENT_N = 4;
 const NARROW_MQ = '(max-width: 900px)'; // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 let section = 'home';
@@ -46,6 +48,7 @@ let host = null;
 let hooks = {};
 let inited = false;
 let spaces = [];
+let pins = [];
 function init() {
     if (inited)
         return;
@@ -55,6 +58,9 @@ function init() {
         if (s && SECTIONS.some((x) => x.key === s))
             section = s;
         hidden = localStorage.getItem(HIDE_STORE) === '1';
+        const p = JSON.parse(localStorage.getItem(PIN_STORE) || '[]');
+        if (Array.isArray(p))
+            pins = p.filter((x) => typeof x === 'string' && APPS.some((a) => a.key === x));
         localStorage.removeItem('lively_v2_rail_open'); // 232px 펼침 모드(2차)의 기억 — 이제 뜻이 없다
     }
     catch (_) { /* 못 읽어도 홈·보임으로 선다 */ }
@@ -100,7 +106,7 @@ function recentForRail(n) {
     catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
     const pick = [];
     const take = (a) => {
-        if (!a || SEC_APP_KEYS.has(a.key) || pick.some((p) => p.key === a.key))
+        if (!a || SEC_APP_KEYS.has(a.key) || pins.includes(a.key) || pick.some((p) => p.key === a.key))
             return;
         if (a.tab && !navOn(a.tab))
             return;
@@ -202,6 +208,124 @@ export function openSectionMenu(anchor) {
     }), ...LINKS.filter((l) => !l.tab || navOn(l.tab) !== false).map((l) => row(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; })), el('div', { class: 'v2-wspop-hr', role: 'separator' }), row('rail', '레일 펼치기', 'panel', false, el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }), () => toggleRail()));
     place(pop, anchor, true);
 }
+// ── 독 손질(#2016 4차, 원준: "맥 독처럼 실행한 앱을 독에 고정·커스텀") ────────────────
+//  맥 독 문법 그대로: 우클릭(또는 길게 누르기) → 「독에 고정 / 독에서 빼기」 · 고정한 것끼리 끌어서 순서 ·
+//  최근 앱을 고정 구간으로 끌어다 놓으면 고정 · 고정한 것을 레일 밖으로 끌어내면 빼기.
+//  구간은 셋 — 구역(고정, 손댈 수 없음) | 고정한 앱(사람이 정한 순서) | 최근 연 앱(자동). 맥 독의 앱 구간·최근 구간.
+function savePins() { try {
+    localStorage.setItem(PIN_STORE, JSON.stringify(pins));
+}
+catch (_) { /* 이번 화면은 된다 */ } }
+function placePin(key, idx) {
+    const cur = pins.indexOf(key);
+    const next = pins.filter((k) => k !== key);
+    if (cur >= 0 && cur < idx)
+        idx -= 1;
+    next.splice(Math.max(0, Math.min(idx, next.length)), 0, key);
+    pins = next;
+    savePins();
+    drawRail();
+}
+function unpinApp(key) { pins = pins.filter((k) => k !== key); savePins(); drawRail(); }
+function dockMenu(x, y, a, pinned) {
+    ctxMenu(x, y, [
+        { label: '열기', run: () => { location.hash = '#/app/' + a.key; } },
+        { sep: true, label: '' },
+        pinned
+            ? { label: '독에서 빼기', run: () => unpinApp(a.key) }
+            : { label: '독에 고정', run: () => placePin(a.key, pins.length) },
+    ]);
+}
+let dragKey = null;
+let dropped = false;
+function clearOver() { host?.querySelectorAll('.over-top, .over-bot').forEach((x) => x.classList.remove('over-top', 'over-bot')); }
+function wireDock(it, a, pinned) {
+    let hold = null;
+    let sx = 0;
+    let sy = 0;
+    const cancelHold = () => { if (hold) {
+        window.clearTimeout(hold);
+        hold = null;
+    } };
+    it.addEventListener('dragstart', (e) => {
+        cancelHold();
+        dragKey = a.key;
+        dropped = false;
+        it.classList.add('dragging');
+        host?.classList.add('drag');
+        if (e.dataTransfer) {
+            e.dataTransfer.setData('text/plain', a.key);
+            e.dataTransfer.effectAllowed = 'move';
+        }
+    });
+    it.addEventListener('dragend', (e) => {
+        it.classList.remove('dragging');
+        host?.classList.remove('drag');
+        clearOver();
+        const key = dragKey;
+        dragKey = null;
+        //  레일 밖에 놓았다 = 독에서 뺀다(맥 독). 고정한 것만 — 최근 앱은 원래 자동으로 오가는 것이라 뺄 게 없다.
+        if (!dropped && key && pinned && host) {
+            const r = host.getBoundingClientRect();
+            const out = e.clientX > r.right + 24 || e.clientX < r.left - 24 || e.clientY < r.top || e.clientY > r.bottom;
+            if (out) {
+                unpinApp(key);
+                toast('독에서 뺐어요 — 최근에 열면 다시 아래에 떠요');
+            }
+        }
+    });
+    if (pinned) {
+        it.addEventListener('dragover', (e) => {
+            if (!dragKey || dragKey === a.key)
+                return;
+            e.preventDefault();
+            const r = it.getBoundingClientRect();
+            const before = e.clientY < r.top + r.height / 2;
+            clearOver();
+            it.classList.add(before ? 'over-top' : 'over-bot');
+        });
+        it.addEventListener('dragleave', () => it.classList.remove('over-top', 'over-bot'));
+        it.addEventListener('drop', (e) => {
+            if (!dragKey)
+                return;
+            e.preventDefault();
+            e.stopPropagation();
+            const r = it.getBoundingClientRect();
+            const before = e.clientY < r.top + r.height / 2;
+            const idx = pins.indexOf(a.key) + (before ? 0 : 1);
+            dropped = true;
+            placePin(dragKey, idx);
+        });
+    }
+    it.addEventListener('contextmenu', (e) => { e.preventDefault(); dockMenu(e.clientX, e.clientY, a, pinned); });
+    //  길게 누르기(550ms) — 우클릭이 없는 자리(터치·트랙패드 한 손가락)의 같은 메뉴. 움직이면 끌기로 본다.
+    it.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0)
+            return;
+        sx = e.clientX;
+        sy = e.clientY;
+        hold = window.setTimeout(() => { hold = null; dockMenu(sx, sy, a, pinned); }, 550);
+    });
+    it.addEventListener('pointerup', cancelHold);
+    it.addEventListener('pointerleave', cancelHold);
+    it.addEventListener('pointermove', (e) => { if (hold && Math.hypot(e.clientX - sx, e.clientY - sy) > 6)
+        cancelHold(); });
+}
+/** 고정 구간 자체도 놓을 자리다 — 비어 있을 때(끌기 중엔 점선 칸이 생긴다)와 맨 아래에 놓을 때. */
+function wireZone(zone) {
+    zone.addEventListener('dragover', (e) => { if (!dragKey)
+        return; e.preventDefault(); zone.classList.add('over'); });
+    zone.addEventListener('dragleave', (e) => { if (!zone.contains(e.relatedTarget))
+        zone.classList.remove('over'); });
+    zone.addEventListener('drop', (e) => {
+        if (!dragKey || e.target.closest('.v2-rail-it'))
+            return;
+        e.preventDefault();
+        zone.classList.remove('over');
+        dropped = true;
+        placePin(dragKey, pins.length);
+    });
+}
 // ── 그리기 ───────────────────────────────────────────────────────────────────
 export function mountRail(el0, h) {
     init();
@@ -238,9 +362,21 @@ export function drawRail() {
     });
     const linkEls = LINKS.filter((l) => !l.tab || navOn(l.tab) !== false)
         .map((l) => item(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }, l.route));
-    // ② 최근 연 앱
-    const recentEls = recentForRail(RECENT_N).map((a) => item('app:' + a.key, a.title, a.icon, false, running.has(a.key) ? el('span', { class: 'v2-rail-run', role: 'img', 'aria-label': '실행 중' }) : null, () => { }, '#/app/' + a.key));
-    const mid = el('div', { class: 'v2-rail-mid' }, ...secEls, ...linkEls, recentEls.length ? el('div', { class: 'v2-rail-hr', role: 'presentation' }) : null, ...recentEls);
+    // ② 독 — 고정한 앱(사람이 정한 순서) | 최근 연 앱(자동). 둘 사이는 점선(맥 독의 최근 구간 경계).
+    const appItem = (a, pinned) => {
+        const it = item('app:' + a.key, a.title, a.icon, false, running.has(a.key) ? el('span', { class: 'v2-rail-run', role: 'img', 'aria-label': '실행 중' }) : null, () => { }, '#/app/' + a.key);
+        it.classList.add(pinned ? 'pinned' : 'recent');
+        it.dataset.app = a.key;
+        it.setAttribute('draggable', 'true');
+        it.title = a.title + (pinned ? ' — 독에 고정됨 · 끌어서 순서, 우클릭으로 빼기' : ' — 최근에 연 앱 · 우클릭으로 독에 고정');
+        wireDock(it, a, pinned);
+        return it;
+    };
+    const pinnedEls = pins.map((k) => APPS.find((a) => a.key === k)).filter((a) => !!a && (!a.tab || navOn(a.tab))).map((a) => appItem(a, true));
+    const recentEls = recentForRail(RECENT_N).map((a) => appItem(a, false));
+    const pinsZone = el('div', { class: 'v2-rail-pins', 'aria-label': '독에 고정한 앱' }, ...pinnedEls);
+    wireZone(pinsZone);
+    const mid = el('div', { class: 'v2-rail-mid' }, ...secEls, ...linkEls, el('div', { class: 'v2-rail-hr', role: 'presentation' }), pinsZone, pinnedEls.length && recentEls.length ? el('div', { class: 'v2-rail-hr v2-rail-hr--recent', role: 'presentation' }) : null, ...recentEls);
     // ③ 발치 — 앱 · 나 (슬랙의 ＋ · 아바타). 여닫는 단추는 여기 없다(머리말).
     const me = state.me || {};
     const myName = String(me.display_name || me.email || me.userId || '');
