@@ -1024,7 +1024,7 @@
   "rest": [
    "POST /api/ui/org/collectors"
   ],
-  "input_hash": "298e83f2269cfc45"
+  "input_hash": "fc0bef7cbe17e238"
  },
  {
   "name": "org_collector_sync_run",
@@ -1636,7 +1636,7 @@
   "rest": [
    "POST /api/ui/org/http-tool-presets/apply"
   ],
-  "input_hash": "2dcad916c979d382"
+  "input_hash": "7d29effdda986fd0"
  },
  {
   "name": "org_tool_remove",
