@@ -13,6 +13,8 @@ import { enqueueExternalPush } from "./external-outbox.js";
 // 프로젝트 검색(#631) — knowledge 와 동일 seam. 검색 경로의 쿼리 벡터 리터럴만 toVectorLiteral 로 만든다.
 import { toVectorLiteral } from "./embedding-provider.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
+// 이름 걸쇠(#2031) — 순위표·다듬기 규칙은 순수 모듈에 두고 여기서는 집행만 한다(DB 무접촉 판정 = 표로 고정).
+import { type ProjectNameSource } from "./project-name.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
 import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
@@ -34,7 +36,7 @@ const PROJECT_COLS =
    list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
-   sort, created_at, updated_at, completed_at, archived_at, trashed_at`;
+   sort, created_at, updated_at, completed_at, archived_at, trashed_at, name_source`;
 
 export interface ProjectRow {
   id: number; level: string; parent_id: number | null;
@@ -54,6 +56,9 @@ export interface ProjectRow {
   archived_at: string | null;
   // #1851 — 휴지통 표식(버린 시각). NULL=평소. 목록은 기본으로 이 행을 뺀다(ProjectFilter.trashed). 하드 삭제 전 단계.
   trashed_at: string | null;
+  // #2031 — 이 이름을 누가 지었나(rule=첫 지시에서 자른 기계값 | agent | human). NULL=구 행 → 코드가 human 으로 읽는다.
+  //  걸쇠(claimProjectName)가 이 값으로 "낮은 쪽이 높은 쪽을 못 덮는다"를 집행한다. 판정표는 v6/project-name.ts.
+  name_source: string | null;
   members?: unknown[]; // listProjects 가 facepile 용으로 채움(상세 getProject 의 members 와 별개)
 }
 
@@ -439,6 +444,9 @@ export async function createProject(
      *  돌려줘 두 세션이 한 폴더를 공유**한다(2026-08-25 dev 실측 — 빈 세션과 슬래시 세션이 project/2009 를 공유).
      *  사람이 이름을 지어 만드는 경로에서는 절대 끄지 마라 — 그 자리는 IME 이중 Enter·에이전트 재시도가 실재한다. */
     dedupe?: boolean;
+    /** 이 이름을 누가 지었나(#2031). 생략=human — **사람이 지은 이름으로 간주**한다(에이전트가 못 덮는다).
+     *  첫 지시에서 기계가 자른 임시 이름을 넣는 자동 생성 경로만 'rule' 을 준다(그것만 나중에 다듬어진다). */
+    name_source?: ProjectNameSource;
   },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
@@ -469,10 +477,11 @@ export async function createProject(
       [input.name, ctx?.actor ?? null, String(CREATE_DEDUPE_SEC)]);
     if (dup) return { row: dup, deduped: true };
     const fresh: ProjectRow = await one(c,
-      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, created_at, updated_at)
-       VALUES('project',$1,$2,$3,$4,$5,'active','started',now(),now())
+      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, name_source, created_at, updated_at)
+       VALUES('project',$1,$2,$3,$4,$5,'active','started',$6,now(),now())
        RETURNING ${PROJECT_COLS}`,
-      [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null]);
+      [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null,
+       input.name_source ?? "human"]);
     return { row: fresh, deduped: false };
   });
   // 이미 있던 것을 돌려주는 길에서는 뒷일(팀원 등록·감사·외부 푸시·임베딩)을 다시 하지 않는다 — 첫 생성이 이미 했다.
@@ -623,7 +632,10 @@ export async function updateProject(
   const sets: string[] = [];
   const vals: unknown[] = [];
   const set = (col: string, v: unknown) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
-  if (patch.name !== undefined) set("name", patch.name);
+  // 이름을 명시적으로 고치는 길은 **의도된 개명**이다(웹 인라인 편집 · 사람이 시켜서 부르는 에이전트) —
+  //  그래서 출처를 human 으로 올린다(#2031). 그 뒤로는 자동 이름짓기가 이 프로젝트를 건드리지 않는다.
+  //  기계의 임시 이름(rule)은 createProject 로, 에이전트의 자동 이름(agent)은 claimProjectName 으로 들어온다.
+  if (patch.name !== undefined) { set("name", patch.name); set("name_source", "human"); }
   if (patch.description !== undefined) set("description", patch.description);
   // append 모드 — 기존 본문 보존 후 끝에 이어붙인다. 읽고-쓰기 경합을 피하려 SQL 에서 원자적 concat:
   //  빈/NULL 본문이면 구분자 없이 그대로, 아니면 빈 줄(newline×2)로 문단 분리. description(교체)과는 상호배타(capability 게이트).
@@ -648,6 +660,34 @@ export async function updateProject(
   if (after.name !== before.name || (after.description ?? null) !== (before.description ?? null))
     await markProjectEmbeddingPending(id);
   return after;
+}
+
+// 프로젝트 이름 **걸쇠**(#2031) — `source` 가 지금 출처를 이길 때만 이름을 바꾸고, 이겼는지 돌려준다.
+//
+//  왜 SQL 한 방인가: 읽고-판정하고-쓰면 그 사이에 다른 쓰는 자리가 낀다(이름 쓰는 자리가 셋이다 — 자동 생성·
+//   웹 편집·에이전트 이름짓기). 순위 비교를 UPDATE 의 WHERE 에 넣으면 판정과 쓰기가 한 문장이라 낄 틈이 없다.
+//   순위표는 v6/project-name.ts 의 RANK 와 **같은 값**이어야 한다 — 한쪽만 바꾸면 DB 와 코드가 다르게 판정한다.
+//  반환 applied=false 의 뜻은 둘이다: ⓐ 졌다(이미 같거나 높은 출처가 지었다) ⓑ 그런 프로젝트가 없다.
+//   둘 다 **실패가 아니다** — 호출자는 지금 이름을 그대로 두면 된다(이름은 화면 표시값이지 작업이 아니다).
+//  세션 이름 걸쇠(sessions/session-state.claimSessionLabel)와 같은 꼴이다. 다른 점은 소유자 게이트가 여기 없다는
+//   것 — 프로젝트는 개인 소유가 아니라 공개범위(visibility)로 통제하고, 그 판정은 capability 가 앞에서 한다.
+export async function claimProjectName(
+  id: number, name: string, source: ProjectNameSource, ctx?: WriteCtx,
+): Promise<{ applied: boolean; project: ProjectRow | null }> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+  if (!before) return { applied: false, project: null };
+  const RANK = "CASE $3 WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'session' THEN 2 ELSE 1 END";
+  const CUR = "CASE COALESCE(name_source,'human') WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'session' THEN 2 ELSE 1 END";
+  const after: ProjectRow | undefined = await one(itemsPool,
+    `UPDATE project SET name=$2, name_source=$3, updated_at=now()
+      WHERE id=$1 AND level='project' AND ($3='human' OR ${RANK} > ${CUR})
+      RETURNING ${PROJECT_COLS}`, [id, name, source]);
+  if (!after) return { applied: false, project: before };
+  await auditProject(String(id), "update", before, after, ctx);
+  await enqueueExternalPush(id, "upsert", ctx);   // 외부 푸시(name) — 드레인이 ClickUp PUT.
+  if (after.name !== before.name) await markProjectEmbeddingPending(id);
+  return { applied: true, project: after };
 }
 
 // ── 보드(프로젝트 목록) 커스텀 컬럼 ───────────────────────────────────────────

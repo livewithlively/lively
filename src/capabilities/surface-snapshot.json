@@ -1087,6 +1087,16 @@
   "input_hash": "ee63edf0e6e64aae"
  },
  {
+  "name": "org_wiki_repo_ensure",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/wiki-repos"
+  ],
+  "input_hash": "411133c59afc2f35"
+ },
+ {
   "name": "org_ingest_policy_list",
   "scope": null,
   "mcp": true,
@@ -1488,6 +1498,46 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "me_welcome_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/welcome"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_welcome_analyze",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/welcome/analyze"
+  ],
+  "input_hash": "fe93e7dfd6f67dfa"
+ },
+ {
+  "name": "me_welcome_analyze_read",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/welcome/analyze/:id"
+  ],
+  "input_hash": "1aa36e96f800bcb3"
+ },
+ {
+  "name": "me_welcome_apply",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/welcome"
+  ],
+  "input_hash": "f174a2b3cb887964"
+ },
+ {
   "name": "project_chat_turn",
   "scope": null,
   "mcp": false,
@@ -1636,7 +1686,7 @@
   "rest": [
    "POST /api/ui/org/http-tool-presets/apply"
   ],
-  "input_hash": "7d29effdda986fd0"
+  "input_hash": "e2fcc3d7adb030c3"
  },
  {
   "name": "org_tool_remove",
@@ -2705,6 +2755,16 @@
    "POST /api/ui/v6/projects/:id"
   ],
   "input_hash": "dcd98f3b595ef870"
+ },
+ {
+  "name": "project_rename_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/rename"
+  ],
+  "input_hash": "7339e5b72ec7b0ce"
  },
  {
   "name": "project_set_repos_v6",

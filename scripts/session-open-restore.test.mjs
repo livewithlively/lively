@@ -75,6 +75,13 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "③-e 판정표가 trashed 를 받아 휴지통 세션은 되살리지 않는다");
   ok(/autoResume:\s*shouldRestoreOnOpen\(\{[^}]*trashed:\s*isTrashedSess\(s\)/.test(views),
     "③-f 화면이 휴지통 여부를 판정표에 넘긴다");
+  // 2026-08-26 — 프레임이 "되살릴 수 있다"고 말했으면 **그 말을 이어받기 분기까지 들고 간다**. 목록 행의
+  //  restorable 만 보면, 목록이 좌표를 접느라 그 값을 못 받은 세션이 대화록 기반 이어받기로 흘러 빈 새 세션이 된다
+  //  (실측: 프로젝트 하나에 「새 세션(원본 기반)」 4개). 신호를 만들어 놓고 안 넘기면 조용히 무효가 되는 자리다.
+  ok(/lively-term-gone[\s\S]{0,400}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
+    "③-g 프레임이 말한 canRestore 를 resumeSession 에 넘긴다");
+  ok(/if\s*\(isBox\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
+    "③-h 복원 분기가 목록의 restorable **또는** 프레임이 말한 canRestore 를 본다(둘 중 하나면 /restore)");
 }
 
 // ── ④ 세션 주소를 만드는 곳은 하나다 ────────────────────────────────────────────────

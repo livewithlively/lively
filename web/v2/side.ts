@@ -28,6 +28,7 @@
 import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
+import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
@@ -292,6 +293,8 @@ export interface SideInstance {
   status?: { key: string; label: string } | null;
   /** 사람이 맨 위로 고정했는가(#1954). */
   pinned?: boolean;
+  /** 세션 행의 둘째 줄 — 내가 마지막으로 시킨 말(#2016 6차, last-ask.ts). 아직 모르면 null. */
+  ask?: string | null;
   /** 남의 세션이면 그 주인(#2026). 내 것이면 null — 전부 내 얼굴이면 아무것도 구분하지 못한다.
    *  왜 필요한가: 이 목록의 세션 줄기는 `!s.owned` 로 남의 세션을 거르지만, **열어 둔 창**은 소유자를 보지 않는다
    *   (보고 있는 화면이 목록에 없으면 그게 고장이므로 — sideInstances ③). 그래서 남의 세션이 여기 설 길이 있는데
@@ -336,6 +339,12 @@ export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => strin
   render();
 }
 function redraw(): void { if (last) render(); }
+//  '내 마지막 말'이 도착했다 — 홈이면 목록만(검색칸은 살아 있는 IME 조합), 다른 구역은 그 구역을 다시 그린다.
+watchLastAsk(() => {
+  if (!last) return;
+  if ((hooks.section?.() || 'home') === 'home' && appListEl) { const st = appListEl.scrollTop; paintAppList(); appListEl.scrollTop = st; }
+  else redraw();
+});
 
 // ★고정 — 사람이 고른 프로젝트를 목록 맨 위로. 자동으로 뭘 올려 두지 않는다(열린 세션을 자동으로 띄우던
 //  줄은 2026-08-19 에 걷었다: 내가 고르지 않은 것이 자리를 차지했다). 브라우저에 남는다.
@@ -399,7 +408,7 @@ let outsideBound = false;
 const PIN_NEEDLE = 'M12 17v5';
 const PIN_BODY = 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4a1 1 0 0 1 1 1z';
 
-function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'link' | 'archive' | 'trash', cls: string): SVGElement {
+function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'ask' | 'home' | 'inbox' | 'link' | 'archive' | 'trash', cls: string): SVGElement {
   const D: Record<string, string[]> = {
     folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
     // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
@@ -409,6 +418,7 @@ function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'lin
     //   같은 자리(x 3~21 · y 5~20)를 쓰면서 왼쪽 변만 채우면 두 아이콘의 무게가 맞는다.
     'folder-open': ['M3 17V7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
     chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
+    ask: ['M9 6H5a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a3 3 0 0 1-3 3', 'M19 6h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a3 3 0 0 1-3 3'],
     inbox: ['M4.6 5h14.8L22 13v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4z', 'M2 13h6a4 4 0 0 0 8 0h6'],
     // 외부 앱 연결 — 고리 둘이 맞물린 모양(연결). 자물쇠·플러그는 '잠금'·'전원'으로 읽혀 뜻이 어긋난다.
     link: ['M10.5 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.3 1.3', 'M13.5 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 1 0 5.7 5.7l1.3-1.3'],
@@ -442,6 +452,13 @@ function instanceIcon(inst: SideInstance): SVGElement {
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
  * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
  */
+/** 세션 행의 둘째 줄 — **내가 마지막으로 시킨 말**(#2016 6차, 원준: "밑에 2행은 내가 한 마지막 질문의 짧은 요약본으로").
+ *  단추가 아니다(종전 폴더+프로젝트명은 누르면 프로젝트로 갔다) — 행 전체가 세션을 연다. 프로젝트는 툴팁에 남긴다. */
+function askLine(ask: string, projName: string): HTMLElement {
+  return el('span', { class: 'v2-app-inst-ask', title: (projName ? projName + '\n' : '') + '내가 마지막으로 한 말 — ' + ask },
+    glyph('ask', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: ask })) as HTMLElement;
+}
+
 /** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다.
  *  ⚠ `one` = **한 줄 구조**(#2033 상민님). 프로젝트 축에서는 머리글이 이미 프로젝트를 말하므로 둘째 줄이 통째로 빈다 —
  *   정보가 줄었으니 줄도 줄인다. 그때 사라지는 것(소속·주인·시각·상태어)은 툴팁이 받는다. */
@@ -460,6 +477,7 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
     inst.title,
     inst.owner ? `${ownerNm}의 세션 — 내가 열어 둬서 목록에 있습니다` : '',
     one ? [inst.status ? inst.status.label : '', inst.at ? when(inst.at) : ''].filter(Boolean).join(' · ') : '',
+    one && inst.ask ? '내가 마지막으로 한 말 — ' + inst.ask : '',   // 한 줄 모드에선 둘째 줄이 없으니 툴팁이 받는다(#2016 6차)
   ].filter(Boolean).join('\n');
   return el('div',
     //  ⚠ `--plain` = **행 조작이 없는 목록**(압정·× 안 그림). 그 CSS 가 '상태 점은 호버에도 안 숨는다'를
@@ -492,14 +510,19 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
       sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
     //  ⚠ 한 줄 모드(#2033)에서는 둘째 줄을 **만들지 않는다** — 숨기기(display:none)로 두면 빈 그리드 행이 남아
     //   행 높이가 두 축에서 어긋난다. 소속은 머리글이, 시각·상태어는 툴팁이 말한다.
+    //  둘째 줄 — 세션이면 **내 마지막 말**(#2016 6차, 아직 모르면 프로젝트명을 글자로), 그 밖의 앱은 종전대로 프로젝트 단추.
     one ? null
-      : inst.project && !inst.project.self
-        ? el('button', { class: 'v2-app-inst-project', type: 'button',
-            title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
-            onclick: () => hooks.onOpenProject?.(inst.project!.id) },
-            glyph('folder', 'v2-app-inst-project-ic'),
-            el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
-        : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
+      : inst.icon === 'chat'
+        ? (inst.ask
+            ? askLine(inst.ask, inst.project && !inst.project.self ? inst.project.name : '')
+            : el('span', { class: 'v2-app-inst-meta', text: (inst.project && !inst.project.self ? inst.project.name : '') || inst.meta || 'AI 세션' }))
+        : inst.project && !inst.project.self
+          ? el('button', { class: 'v2-app-inst-project', type: 'button',
+              title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
+              onclick: () => hooks.onOpenProject?.(inst.project!.id) },
+              glyph('folder', 'v2-app-inst-project-ic'),
+              el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
+          : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
 }
 
 // ══ 프로젝트 축 — 묶기·펼침 (#2033) ══════════════════════════════════════════
@@ -642,7 +665,7 @@ function appListKids(shown: SideInstance[], q: string, o: RowOpts = {}, empty?: 
 function paintAppList(): void {
   if (!appListEl || !hooks.instances) return;
   const q = sideFilter.trim().toLowerCase();
-  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.ask, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
   appListEl.replaceChildren(...appListKids(shown, q));
   appListEl.scrollTop = 0;   // 거르고 나면 맨 위가 첫 결과다
 }
@@ -771,7 +794,7 @@ function renderHomeApps(): void {
   const { host } = last;
   const instances = hooks.instances!();
   const q = sideFilter.trim().toLowerCase();
-  const shown = instances.filter((i) => !q || [i.title, i.meta, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = instances.filter((i) => !q || [i.title, i.meta, i.ask, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
@@ -855,6 +878,7 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     active: ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId),
     icon: 'chat',
     meta: t.sub || when(s.lastSeen),
+    ask: lastAsk(s),   // 둘째 줄 = 내 마지막 말(#2016 6차) — 홈 행과 같은 붓(appRowEl)이 그린다
     project: p ? { id: p.id, name: p.name } : null,
     group,
     status: st ? { key: st, label: stLabel(st) } : null,

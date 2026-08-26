@@ -17,6 +17,7 @@
 .v2-topbar { display: none; }
 #v2-root.has-topbar { grid-template-rows: var(--v2-tb-h, 36px) minmax(0, 1fr); }
 #v2-root.has-topbar > .v2-topbar {
+  position: relative;        /* 검색칸이 이 줄의 **가운데**에 앉는 기준(#2016 7차) */
   display: flex; align-items: stretch;
   grid-column: 1 / -1; grid-row: 1;
   height: var(--v2-tb-h, 36px);
@@ -45,14 +46,19 @@
       (#2024 상민님 2026-08-26: "빈 부분을 잡아도 창이 안 옮겨지고 맨 오른쪽 끝만 된다"). 그 '맨 오른쪽 끝'이
       곧 아래 .v2-tb-grip 이었다. 규칙은 하나다 — **줄은 drag, 실제로 누르는 것만 no-drag.** */
 #v2-root.has-topbar > .v2-topbar > .v2-side-nav {
-  order: -1; flex: 1 1 auto; min-width: 0; align-items: center; padding: 0 8px;
+  order: -1; flex: 1 1 auto; min-width: 0; align-items: center; gap: 2px; padding: 0 4px;
   -webkit-app-region: drag;
 }
 /*  누르는 것 셋만 되돌린다 — [뒤로][앞으로]와 검색칸. 그 사이 여백도, 검색칸 오른쪽에 남는 폭도 끌 수 있다. */
 #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-navb,
 #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { -webkit-app-region: no-drag; }
-/*  창 줄의 검색칸은 사이드바 때보다 넓게 쓸 수 있지만 줄을 가로지를 이유는 없다 — 절반으로(#1954 2차). */
-#v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: 210px; }
+/*  검색칸은 창 줄의 **가운데**(슬랙의 그 자리, #2016 7차 원준: "검색 텍스트 박스가 2열 사이드바 밖으로 튀어나와서").
+    종전엔 [뒤로][앞으로] 옆에 210px 로 붙어 있어 사이드바를 좁히면 열 경계를 넘었다 — 열 폭을 모르는 줄에 열에
+    맞춰야 할 것을 두지 않는다. 가운데면 어느 열 폭에서도 어긋날 것이 없고, 통합검색은 어차피 온 화면의 것이다. */
+#v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: clamp(260px, 34vw, 520px); max-width: none; height: 26px; margin: 0; flex: none;
+}
 /* 탭이 줄 맨 위에 닿으므로 켜진 탭의 파란 밑줄은 **아래쪽**에 긋는다 — 위에 그으면 창 모서리와 붙어 선이 잘려 보인다. */
 #v2-root.has-topbar > .v2-topbar .v2-tab.on { box-shadow: inset 0 -2px 0 var(--blue); }
 /* 데스크톱 앱은 맨 윗줄이 이미 탭 줄이다 — 가운데 열 위에 또 한 줄이 생기지 않게 [모든 탭] 도 같은 줄에서 산다.
@@ -69,8 +75,8 @@
   #v2-root.has-topbar > .v2-mbar { padding-left: 4px; padding-right: 4px; }
   /*  좁은 폭은 서랍이 담당한다 — 데스크톱 접기 클래스는 여기서 무시한다(안 그러면 서랍까지 안 보인다). */
   #v2-root.has-topbar.side-off > .v2-side { visibility: visible; overflow: auto; }
-  /* 좁은 폭에선 검색칸이 줄을 다 쓰게 둔다 — 210px 캡은 넓을 때 '줄을 가로지르지 않게' 하는 값이다. */
-  #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: none; }
+  /* 좁은 폭 — 가운데 그대로, 폭만 줄인다(왼쪽 단추 묶음·오른쪽 손잡이와 안 겹치는 값). */
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { max-width: none; width: clamp(180px, 40vw, 520px); }
   /* 끌 자리는 좁은 화면에서 아깝지만 **0 이 되면 창을 아예 못 옮긴다**. 종전엔 여기서 손잡이를 통째로 감췄는데
      ('창버튼 여백 --v2-tb-right 로 끌면 된다'는 계산) 그건 윈도우(WCO 가 오른쪽) 얘기고 **맥은 신호등이 왼쪽이라
      --v2-tb-right 가 0** 이다. 바로 위에서 검색칸의 210px 상한까지 풀리므로 맥 좁은 창엔 끌 자리가 한 점도 안
@@ -80,15 +86,16 @@
 }
 /* ☰ 는 창 줄 맨 왼쪽 — 폭과 무관하게 늘 같은 자리다(#1954 3차). 맥 신호등·윈도우 WCO 여백 안쪽에 앉는다. */
 #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu {
-  order: -2; flex: none; width: 34px; height: 100%; display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 0; background: none; color: var(--ink-sub); cursor: pointer; -webkit-app-region: no-drag;
+  order: -2; flex: none; width: 28px; height: 28px; align-self: center; margin: 0 4px 0 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 8px; background: none; color: var(--muted-head); cursor: pointer; -webkit-app-region: no-drag;
 }
 #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu:hover { background: var(--bg); color: var(--ink); }
 /*  ⚠ 획 스타일(fill:none·stroke)은 40-v2.css 의 **모바일 미디어 블록 안**에만 있다 — ☰ 가 그 바를 떠나
     창 줄로 오면서 그 규칙 밖으로 나가, 넓은 폭에서 아이콘이 stroke:none·fill:black 이 되어 안 보였다(#1954 3차 실측).
     여기서 폭과 무관하게 다시 준다. */
 #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu .v2-mbar-ic {
-  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
 }
 /* 모바일 바는 [타임라인] 하나만 남는다 — 그 버튼이 숨으면 바 자체가 설 이유가 없다. */
 #v2-root.has-topbar > .v2-mbar:not(:has(.v2-mbar-btn:not([hidden]))) { display: none; }
@@ -97,18 +104,20 @@
    ② 사이드바 맨 윗줄 — [뒤로][앞으로] + [검색]
    내용(프로젝트·세션)보다 위, 워크스페이스 문패보다도 위. '움직이는 손잡이'라 목록의 일부가 아니다.
    ════════════════════════════════════════════════════════════════════════ */
-.v2-side-nav { display: flex; align-items: center; gap: 4px; padding: 8px var(--side-x, 8px) 2px; }
+/*  #2016 7차 — 셋(토글·뒤로·앞으로)은 한 굵기(16px · 1.7)로 왼쪽에 모으고, 검색칸의 오른쪽 끝은 **아래 머리줄의 마지막
+    아이콘 글리프**와 맞춘다(오른쪽 18px = 머리줄 4px 패딩 + 28px 단추 안 글리프 여백 — 실측 371→366). 위 여백 10px 로 줄이 숨 쉰다. */
+.v2-side-nav { display: flex; align-items: center; gap: 2px; padding: 10px 18px 4px 8px; }
 .v2-navb { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; padding: 0;
   border: 0; border-radius: 8px; background: none; color: var(--muted-head); cursor: pointer; }
 .v2-navb:hover:not(:disabled) { background: var(--bg); color: var(--ink); }
 .v2-navb:disabled { color: var(--muted-2); cursor: default; }
-.v2-navb-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.v2-navb-ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 /* 검색은 **칸처럼 생긴 버튼**이다 — 진짜 입력칸을 두면 사이드바 20초 재렌더가 입력·한글 조합을 끊는다. */
-.v2-omnib { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 28px; padding: 0 8px;
+.v2-omnib { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; height: 28px; margin-left: 6px; padding: 0 8px 0 10px;
   border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg);
   font: inherit; font-size: 12.5px; color: var(--muted); cursor: pointer; text-align: left; }
 .v2-omnib:hover { border-color: var(--blue); color: var(--ink-sub); }
-.v2-omnib-ic { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+.v2-omnib-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
 .v2-omnib-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-omnib-k { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; letter-spacing: .02em;
   padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--canvas); }

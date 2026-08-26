@@ -211,7 +211,9 @@ export function openProjSettings(opts: ProjSettingsOpts): void {
       sec('보관', archived ? '지금 아카이브에 있어요. 해제하면 사이드바·보드에 다시 보입니다.' : '끝났거나 한동안 안 볼 프로젝트는 통째로 치워 둘 수 있어요. 태스크·세션·지식 연결은 그대로 남습니다.', el('div', { class: 'pn-set-foot' }, archBtn)),
       sec('삭제', '프로젝트를 폴더째 휴지통으로 보냅니다 — 그 안의 내 세션도 함께 가고, 도는 세션은 멈춥니다. 휴지통에서 복원하면 함께 돌아와요.', el('div', { class: 'pn-set-foot' }, trashBtn))),
     el('footer', { class: 'pn-modal-f' },
-      el('a', { class: 'btn-text', href: '#/projects/' + id, onclick: () => close(), text: '전체 프로젝트 화면 열기 ↗' }),
+      // ⚠ `#/projects/<id>` 가 아니다 — v1 프로젝트 탭 폐기(2026-06-23) 이후 그 경로는 **id 를 버리고** 보드로
+      //  리다이렉트한다(web/main.ts). 그래서 이 링크는 그동안 늘 엉뚱한 화면(전체 보드)에 떨어졌다(#2116 에서 발견).
+      el('a', { class: 'btn-text', href: '#/projects2/p/' + id, onclick: () => close(), text: '전체 프로젝트 화면 열기 ↗' }),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: close })));
 
   document.body.append(back, panel);
