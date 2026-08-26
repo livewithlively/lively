@@ -102,7 +102,8 @@
 /* ── 사이드바 쪽 부품 ───────────────────────────────────────────────────────── */
 /* 맨 윗줄 맨 왼쪽 — 레일 여닫기(슬랙 창 맨 윗줄의 패널 아이콘). 뒤로·앞으로와 같은 붓. */
 .v2-railtg .v2-navb-ic { width: 16px; height: 16px; }
-.v2-railtg[aria-expanded="true"] { color: var(--blue); }
+.v2-railtg[aria-expanded="true"] { /* 3차: 파란색은 '숨김' 상태에 준다(.hid) */ }
+.v2-railtg.hid { color: var(--blue); }
 /* 데스크톱 창 맨 윗줄의 ☰ — 좁은 폭엔 ☰, 넓은 폭엔 패널 아이콘(둘 중 하나만). */
 .v2-mbar-menu .v2-mbar-ic--m { display: none; }
 @media (max-width: 900px) { .v2-mbar-menu .v2-mbar-ic--m { display: block; } .v2-mbar-menu .v2-mbar-ic--w { display: none; } }
@@ -149,6 +150,43 @@
 .v2-rail-tg, .v2-rail-tg:hover, .v2-rail-tg:focus-visible, .v2-rail-tg .v2-rail-ic, .v2-rail.closed .v2-rail-tg, .v2-rail.closed .v2-rail-tg .v2-rail-t,
 .v2-rail-gear, .v2-rail-me:hover .v2-rail-gear, .v2-rail.closed .v2-rail-me .v2-rail-gear,
 .v2-rail-it[data-tip]:hover::after, .v2-rail-tg[data-tip]:hover::after, .v2-rail.open .v2-rail-it[data-tip]:hover::after { /* 폐기 */ }
+
+/* ── 레일 숨김(#2016 3차, 안 B '머리글 드롭다운') — 레일이 들고 있던 것이 사이드바로 들어온다 ─────
+      ⚠ 숨김은 **열 폭 0** 이다. display:none 으로 빼면 그리드 열이 한 칸씩 밀려 사이드바가 0px 열에 앉는다(목업 실측).
+      레일 폭은 68 고정(232 펼침 모드 폐기 — `.rail-open` 규칙은 죽은 자리, 가드 때문에 남긴다). */
+#v2-root.rail-hidden { --v2-rail-w: 0px; }
+#v2-root.rail-hidden > .v2-rail { visibility: hidden; border-right: 0; }
+/* 머리 한 줄 — [스택 타일 + 이름 ▾] … [지금 구역 ▾] */
+.v2-side-wshd { display: flex; align-items: center; gap: 6px; padding: 4px var(--side-x, 8px) 4px; flex: none; }
+.v2-side-wsbtn { display: inline-flex; align-items: center; gap: 6px; width: auto; height: auto; max-width: 52%; padding: 3px 6px 3px 3px; border: 1px solid transparent; border-radius: 8px; font: inherit; font-size: 14px; font-weight: 800; color: var(--ink); }
+.v2-side-wsbtn:hover { background: var(--bg); border-color: var(--line); }
+.v2-side-wsbtn::after { display: none; }
+.v2-side-wsbtn .v2-rail-stack-t { position: relative; display: inline-grid; width: 34px; height: 34px; place-items: start center; }
+.v2-side-wsbtn .v2-rail-stack-t::after { content: ''; position: absolute; left: 5px; right: 5px; bottom: 1px; height: 9px; border-radius: 0 0 7px 7px; background: rgba(var(--tint-ink), .18); }
+.v2-side-wsbtn .v2-wscard-big { position: relative; z-index: 1; width: 26px; height: 26px; border-radius: 8px; font-size: 12px; box-shadow: 0 1px 2px rgba(var(--shadow-ink), .18); }
+.v2-side-wsbtn-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-side-wsbtn .v2-ws-car { font-size: 9px; color: var(--muted-2); }
+.v2-secdd { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; max-width: 50%; padding: 4px 8px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); font: inherit; font-size: 13px; font-weight: 700; color: var(--ink); cursor: pointer; }
+.v2-secdd:hover { border-color: var(--blue); }
+.v2-secdd:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-secdd .v2-ic { width: 15px; height: 15px; color: var(--blue); }
+.v2-secdd-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-secdd .v2-rail-bd { min-width: 16px; height: 16px; font-size: 10px; }
+.v2-secdd .v2-ws-car { font-size: 9px; color: var(--muted-2); }
+/* 구역 드롭다운 — body 에 붙는다(팝오버와 같은 이유). #v2-root 밖이라 획 규칙을 여기서 다시 준다. */
+.v2-secdd-menu { position: fixed; z-index: 70; min-width: 224px; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 30px rgba(var(--shadow-ink), .14); display: flex; flex-direction: column; gap: 1px; }
+.v2-secdd-row { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); text-align: left; cursor: pointer; }
+.v2-secdd-row:hover, .v2-secdd-row.on { background: var(--bg-tint); color: var(--ink); }
+.v2-secdd-row .v2-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--muted-head); }
+.v2-secdd-row.on .v2-ic { color: var(--blue); }
+.v2-secdd-row .v2-secdd-t { flex: 1; min-width: 0; }
+.v2-secdd-m { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v2-secdd-menu .v2-wspop-hr { margin: 4px 0; }
+/* 발치 한 줄 — [⊞ 앱] [아바타 이름 톱니]. 레일이 있기 전 사이드바(#1843)의 그 자리. */
+.v2-foot-row { display: flex; align-items: center; gap: 4px; }
+.v2-foot-row .v2-apps-btn { width: auto; flex: none; padding: 7px 10px; gap: 6px; }
+.v2-foot-row .v2-apps-btn .v2-ic { width: 16px; height: 16px; color: var(--muted-2); }
+.v2-foot-row .v2-me { flex: 1; min-width: 0; padding-left: 10px; }
 
 /* ── 좁은 화면 — 레일은 서랍 뒤로 숨지 않고 아이콘만 남아 왼쪽에 붙어 선다. ── */
 @media (max-width: 900px) {

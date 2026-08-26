@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, sidePeople, type SideInstance } from './side.js';
+import { bySeen, drawSide as drawSideTree, isAppPinned, markNav, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderConnect, renderConnectApp } from './connect.js';
@@ -25,7 +25,7 @@ import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
-import { drawRail, mountRail, railIsOpen, railSection, toggleRail, type RailSection } from './rail.js';   // #2016 — 좌측 끝 레일(구역 넷 + 워크스페이스 + 최근 앱)
+import { drawRail, mountRail, railIsHidden, railSection, toggleRail, type RailSection } from './rail.js';   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
@@ -232,8 +232,6 @@ export async function bootV2(): Promise<void> {
         drawSide();
         if (o.navigate) location.hash = sectionRoute(sec);
       },
-      people: () => sidePeople(),
-      faces: () => sideFaces(),
       onLayout: () => { drawSide(); syncRailBtn(); },
     });
     syncRailBtn();
@@ -1134,16 +1132,12 @@ function openAppKeys(): Set<string> {
 function sectionRoute(sec: RailSection): string {
   return sec === 'inbox' ? '#/inbox' : sec === 'sess' ? '#/app/terminal' : sec === 'proj' ? '#/app/projects2' : sec === 'wiki' ? '#/app/knowledge' : '#/';
 }
-/** 문패 카드 얼굴 = **세션을 가진 사람들**(멤버 명부가 아니다 — 더미 계정이 먼저 잡힌다, #1719). */
-function sideFaces(): string[] {
-  return [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
-}
 /** ☰ 의 뜻이 바뀌었다(사이드바 접기 → 레일 여닫기) — 툴팁·aria 도 그 뜻으로 맞춘다. */
 function syncRailBtn(): void {
   if (!mobile) return;
-  const open = railIsOpen();
-  mobile.menuBtn.setAttribute('aria-expanded', String(open));
-  mobile.menuBtn.title = (open ? '레일 접기' : '레일 펼치기') + ' — ⌘⇧S';
+  const hid = railIsHidden();
+  mobile.menuBtn.setAttribute('aria-expanded', String(!hid));
+  mobile.menuBtn.title = (hid ? '레일 펼치기' : '레일 숨기기') + ' — ⌘⇧S';
 }
 
 function drawSide(): void {
@@ -1183,7 +1177,7 @@ function drawSide(): void {
     //  #2016 — 사이드바가 무엇을 그릴지는 레일이 고른 구역이 정한다(홈 · AI 세션 · 프로젝트 · 위키).
     section: railSection,
     onToggleRail: () => { toggleRail(); syncRailBtn(); },
-    railOpen: railIsOpen,
+    railHidden: railIsHidden,
   });
 }
 
