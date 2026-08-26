@@ -14,7 +14,8 @@ import {
   describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller
 } from "../../org/distill/distiller.js";
 import { actorOf, restOnly, restRead, restWork } from "./shared.js";
-import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";   // #1881 L3
+import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";
+import { ensureFigmaCommentsDistiller, FIGMA_DISTILLER_KEY } from "../../org/distill/figma-preset.js";   // #1881 L3
 
 export const ingestDistillersCapabilities: Capability[] = [
   // ── 인입 허용선 정책 (#638, #783) — 지식이 라이브에 박히기 전 게이트. 오너가 관리탭에서 조절(디폴트 auto=현행 무변). ──
@@ -263,6 +264,25 @@ export const ingestDistillersCapabilities: Capability[] = [
         requester: typeof input.requester === "string" && input.requester.trim() ? input.requester.trim() : null, source: "web",
       });
       return { key: LOCAL_DISTILLER_KEY, created: r.created, enabled: r.enabled, job: r.job, distiller: { ...r.distiller, scope_text: describeScope(r.distiller as unknown as Parameters<typeof describeScope>[0]) } };
+    }, {
+      enable: z.boolean().optional().describe("true=켜고 잡 등록(승인). 미지정=없을 때만 꺼진 채로 만든다."),
+      requester: z.string().optional().describe("헤드리스 실행 신원(멤버 id/이메일) — 켤 때만. 없으면 호출자."),
+    }),
+  // #1881 F8 — 피그마 코멘트 증류기. 로컬(L3)과 같은 규약: 첫 수집기를 만들 때 꺼진 채로 준비하고, 사람이 표본을 보고 켠다.
+  //  왜 별도 증류기인가: 디자인 코멘트는 **맥락이 본문에 없고**(캔버스의 한 점에 붙어 "여기·이거"로 말한다),
+  //  **짧고**, **결정 단어를 거의 안 쓴다**. 대신 슬랙엔 없는 `resolved` 신호가 있다 — 기준이 다를 수밖에 없다.
+  restWork("org_distiller_figma_ensure", "피그마 코멘트 증류기 준비",
+    "피그마 디자인 파일의 코멘트(자료 kind=figma_comment)를 지식으로 만드는 증류기 'figma-comments' 를 준비한다 — 없으면 프리셋으로 만든다(기본은 **꺼진 채**). " +
+    "enable=true 면 켜고(의뢰자=requester, 없으면 호출자) 전용 헤드리스 잡(distill-figma-comments, 15분)까지 등록한다. " +
+    "이미 켜져 있으면 no-op. 기준·형식은 org_distiller_upsert 로 언제든 손볼 수 있다(여긴 건드리지 않는다). " +
+    "⚠ 사전필터는 꺼진 채로 출하한다 — 디자인 코멘트는 짧고 둘이서 오가며 결정 단어를 안 써서 길이·참여자·키워드 축이 전부 불리하다. 자료가 쌓인 뒤 org_distiller_tune 의 유실률로 정하라.",
+    [{ method: "POST", paths: ["/api/ui/org/distillers/figma"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const r = await ensureFigmaCommentsDistiller({
+        actor: actorOf(user), enable: !!input.enable,
+        requester: typeof input.requester === "string" && input.requester.trim() ? input.requester.trim() : null, source: "web",
+      });
+      return { key: FIGMA_DISTILLER_KEY, created: r.created, enabled: r.enabled, job: r.job, distiller: { ...r.distiller, scope_text: describeScope(r.distiller as unknown as Parameters<typeof describeScope>[0]) } };
     }, {
       enable: z.boolean().optional().describe("true=켜고 잡 등록(승인). 미지정=없을 때만 꺼진 채로 만든다."),
       requester: z.string().optional().describe("헤드리스 실행 신원(멤버 id/이메일) — 켤 때만. 없으면 호출자."),

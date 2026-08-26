@@ -25,6 +25,8 @@ import { createSign, createPrivateKey } from "node:crypto";
 export const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 export const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 export const GITHUB_API = "https://api.github.com";
+/** GitHub 이 요구하는 User-Agent — 없으면 403(administrative rules)이다. */
+export const GITHUB_USER_AGENT = "lively-gateway";
 
 /**
  * 콜백 라우팅용 예약 서버명(#1881 G5).
@@ -205,6 +207,10 @@ export async function mintInstallationToken(p: {
       authorization: `Bearer ${jwt}`,
       accept: "application/vnd.github+json",
       "x-github-api-version": "2022-11-28",
+      //  ⚠ GitHub 은 User-Agent 없는 요청을 **403 으로 거부한다**("Request forbidden by administrative rules.
+      //   Please make sure your request has a User-Agent header"). 2026-08-26 실호출에서 이것 때문에 발급이
+      //   통째로 막혔다 — fetch 스텁 테스트로는 절대 안 보이는 종류다(스텁은 헤더를 검사하지 않으면 다 통과시킨다).
+      "user-agent": GITHUB_USER_AGENT,
       ...(p.repositories?.length ? { "content-type": "application/json" } : {}),
     },
     ...(p.repositories?.length ? { body: JSON.stringify({ repositories: p.repositories }) } : {}),
