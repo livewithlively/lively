@@ -422,6 +422,14 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-close svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 .v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
 
+/*  남의 세션 표식(#2026) — 이 목록에 남의 세션이 서는 길은 '내가 열어 둔 창' 하나뿐인데(sideInstances ③),
+    행에는 그 사실을 말해 주는 게 없어 "내가 만들지도 않은 게 왜 뜨지"가 됐다. 프로젝트 트리 행(.v2-ss-face)과 같은 얼굴을 단다.
+    자리는 **둘째 줄 왼쪽 여백** — 첫 줄 아이콘 바로 아래 이미 비어 있는 26px 들여쓰기 안이라 폭을 새로 먹지 않고,
+    첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다. */
+.v2-app-inst-face { grid-column: 1; grid-row: 2; justify-self: start; align-self: center; width: 18px; height: 18px; flex: none;
+  border-radius: 50%; font-size: 9px; font-weight: 700; display: inline-grid; place-items: center; color: var(--on-fill); overflow: hidden; }
+.v2-app-inst-face img { width: 100%; height: 100%; object-fit: cover; }
+
 /*  상태 = **점 하나**(#1954 2차). 글자 칩은 줄을 먹어 제목이 잘렸다 — 이름은 툴팁·aria-label 에 남는다.
     확인한 완료는 점이 없다 — 그 없음이 곧 '더 볼 것 없음'이다. */
 .v2-app-inst-st { grid-column: 2; grid-row: 1; align-self: center; justify-self: end; flex: none; width: 7px; height: 7px; margin-left: 6px;
