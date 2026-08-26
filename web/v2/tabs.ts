@@ -33,6 +33,11 @@ export interface ShellTab {
   appId: string | null;
   appView: { destroy(): void } | null; // generic 앱 iframe 등 탭별 정리 핸들
   seq: number;                 // 이 탭의 렌더 순번(늦게 온 비동기 렌더 무시)
+  //  아직 안 보낸 지시(#2037) — 홈([새 작업])의 입력칸에 쳐 두고 아직 [시키기]를 안 누른 글.
+  //  DOM 이 곧 상태라는 이 모듈의 원칙에는 구멍이 하나 있다: **그 탭이 다른 화면으로 바뀌면 DOM 째로 사라진다**
+  //  (홈 탭은 '거쳐 가는 빈 탭'이라 그 위에 다른 화면이 덮인다 — main.ts onHash ⓪). 그래서 이 한 값만은
+  //  DOM 밖에도 둔다 — 새로고침·앱 재시작도 넘어가도록 저장본(save)에 함께 실린다.
+  draft?: string;
 }
 
 export interface TabsHooks {
@@ -96,13 +101,14 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   const strip = el('div', { class: 'v2-tabs' });
   const scroll = el('div', { class: 'v2-tabs-scroll', role: 'tablist', 'aria-label': '열린 화면' });
 
-  function mkTab(route: string, title?: string): ShellTab {
+  function mkTab(route: string, title?: string, draft?: string): ShellTab {
     const t: ShellTab = {
       id: 'tab' + (++seq),
       route, title: title || hooks.titleFor(route).title, noAside: hooks.titleFor(route).noAside,
       center: el('div', { class: 'v2-tabpane', hidden: true }),
       aside: el('div', { class: 'v2-aside-pane', hidden: true }),
       rendered: false, chat: null, appInstanceId: null, appId: null, appView: null, seq: 0,
+      draft: draft || '',
     };
     centerHost.append(t.center);
     asideHost.append(t.aside);
@@ -114,7 +120,8 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     if (EMBEDDED) return;
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        tabs: tabs.map((t) => ({ route: t.route, title: t.title })),
+        //  draft(아직 안 보낸 지시)는 있을 때만 싣는다 — 빈 문자열까지 적으면 저장본이 쓸데없이 커진다.
+        tabs: tabs.map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
         active: activeTab ? tabs.indexOf(activeTab) : 0,
       }));
     } catch (_) { /* noop */ }
@@ -409,7 +416,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     scroll.scrollLeft += e.deltaY;
   }, { passive: false });
 
-  // 저장된 탭 복원 — 라우트·제목만(내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
+  // 저장된 탭 복원 — 라우트·제목·아직 안 보낸 지시만(화면 내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
   let restoredActive = 0;
   try {
     const st = EMBEDDED ? null : JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
@@ -424,7 +431,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
         const k = routeKey(t.route);
         if (seen.has(k)) return;
         seen.add(k);
-        mkTab(t.route, typeof t.title === 'string' ? t.title : undefined);
+        mkTab(t.route, typeof t.title === 'string' ? t.title : undefined, typeof t.draft === 'string' ? t.draft : undefined);
         if (i === wantIdx) want = tabs.length - 1;
       });
       restoredActive = Math.min(Math.max(0, want >= 0 ? want : 0), Math.max(0, tabs.length - 1));
