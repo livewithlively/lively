@@ -74,13 +74,21 @@ export function deadSessionMeta(
 }
 
 /**
- * 노드 세션 메타의 갈래 — **'지금 살아 있나'를 먼저 묻는다**(2026-08-26 상민님 신고).
+/**
+ * 노드 세션 메타의 갈래 — **'지금 살아 있나'를 먼저 묻는다**(2026-08-26 상민님 신고 두 건).
  *
  * 종전엔 desired-state 에 node_id 가 **있다는 것만 보고** 곧바로 deadSessionMeta(restorable=true)로 갔다.
  *  생사 확인이 `?node=` 를 받은 갈래에만 있었기 때문인데, 목록이 좌표를 떨어뜨리면(게이트웨이와 노드가 같은
  *  tmux 를 볼 때 — sessions/session-merge.ts) 화면은 좌표 없이 물어볼 수밖에 없다. 그러면 **지금 돌고 있는
  *  세션이 '죽었다'고 답해지고**, 그 오답을 받은 셸이 대화록 기반 이어받기로 흘러 빈 새 세션을 만든다
- *  (실측 dev: 프로젝트 하나에 「새 세션(원본 기반)」이 4개 쌓였다).
+ *  (#2111 실측 dev: 프로젝트 하나에 「새 세션(원본 기반)」이 4개 쌓였다).
+ *
+ * 🔴 #2108 — **스냅샷에 없다는 것은 죽음의 근거가 아니다.** 노드 상태 push 는 3초 주기(agent STATE_PUSH_MS)라
+ *  **방금 만든 살아있는 세션**이 그 창 동안 목록에서 통째로 빠진다. 종전엔 그 부재를 곧바로 dead 로 접었고,
+ *  부팅 게이트(web maybeRestoreOnOpen, #1820)가 WS 도 붙이기 전에 그 메타로 판정하므로 **새 세션이 아예 안 열리고**
+ *  복원으로 갔다 — 갓 만든 세션엔 이어받을 대화 id 가 없어 인자 없는 `--resume` = **후보 0건 피커**가 떴다
+ *  (실측: hammurabi 5회 중 3회 재현 · macmini 오답 구간 45~143ms).
+ *  그래서 스냅샷이 모르는 자리는 dead 가 아니라 **`ask`** 다 — 호출자가 노드에 확답을 구한다(#835 '확답 only').
  *
  * ⚠ 호출 규약 — 라우트는 `?node=` 를 받은 갈래에서 **이미 그 노드를 물어보고 못 찾았을 때** 여기로 온다.
  *  그래서 askedNode 가 stateNode 와 같으면 같은 스냅샷을 다시 보지 않는다(답이 같다). 그 경우 aliveOn 은
@@ -88,12 +96,31 @@ export function deadSessionMeta(
  *
  * 순수 — 스냅샷 조회는 aliveOn 으로 주입한다(위 머리말 '표를 테스트로 고정한다').
  */
+export type NodeSessionMetaMode = "alive" | "ask" | "dead";
 export function nodeSessionMetaMode(
   askedNode: string,
   stateNode: string,
   aliveOn: (nodeId: string) => boolean,
-): "alive" | "dead" {
-  if (!stateNode) return "dead";              // 노드 세션이 아니다 — 호출자가 이 갈래로 보내지 않는다(방어)
-  if (askedNode === stateNode) return "dead"; // 이미 물어보고 못 찾았다
-  return aliveOn(stateNode) ? "alive" : "dead";
+): NodeSessionMetaMode {
+  if (!stateNode) return "dead";             // 노드 세션이 아니다 — 호출자가 이 갈래로 보내지 않는다(방어)
+  if (askedNode === stateNode) return "ask"; // 이미 스냅샷은 봤다. 없다고 죽음은 아니다(#2108) — 노드에 물어라
+  return aliveOn(stateNode) ? "alive" : "ask";
+}
+
+/**
+ * 🔴 그 갈래에서 **복원 신호(restorable·canRestore…)를 실을까** (#2108) — 확답 only(#835).
+ *
+ * | mode | 노드 확답 | 복원 신호 | 왜 |
+ * |---|---|---|---|
+ * | `alive` | — | 낸다(도달 안 함) | 위에서 라이브 메타로 이미 답했다 |
+ * | `dead`  | — | 낸다 | 노드 세션이 아니다 — 판정 대상 밖 |
+ * | `ask`   | `true` 없다 | 낸다 | 진짜 죽음 |
+ * | `ask`   | `false` 있다 | **안 낸다** | 스냅샷만 늦었을 뿐 살아 있다 |
+ * | `ask`   | `null` 무응답·오프라인 | 낸다 | **판정불가를 '살아있음'으로 접지 않는다** — 접으면 꺼진 노드의
+ *   세션이 영영 복원 불가가 된다(#1791 보존). 복원 라우트가 다시 gone 을 물어 409 로 정직하게 멈추므로,
+ *   조용한 빈 피커 대신 읽을 수 있는 이유가 남는다 |
+ */
+export function nodeMetaRestorable(args: { mode: NodeSessionMetaMode; nodeGone: boolean | null }): boolean {
+  if (args.mode !== "ask") return true;
+  return args.nodeGone !== false;
 }
