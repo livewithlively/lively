@@ -183,6 +183,15 @@ function pane(title: string, hint: string, ...kids: any[]): HTMLElement {
 function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
   return el('div', { class: 'v2me-save' }, btn, status);
 }
+// 다른 도메인(매니지드 계정 화면)으로 나가는 줄 — 같은 모양이되 **새 탭**으로 연다.
+//  이 창을 닫지 않는 이유: 돌아올 자리가 여기이고, 탈퇴를 그만두는 것도 흔한 결말이다.
+function moreLinkExternal(href: string, label: string, desc: string): HTMLElement {
+  return el('a', { class: 'v2me-more', href, target: '_blank', rel: 'noopener' },
+    el('span', { class: 'v2me-more-t', text: label }),
+    el('span', { class: 'v2me-more-d', text: desc }),
+    ic(['M9 6l6 6-6 6'], 'v2me-more-ic'));
+}
+
 // 이 창에서 관리탭 안쪽 화면으로 건너가는 줄 — 여기서 다 하지 않고 **어디로 가면 되는지**만 말한다.
 function moreLink(href: string, label: string, desc: string, close: () => void): HTMLElement {
   return el('a', { class: 'v2me-more', href, onclick: () => close() },
@@ -426,6 +435,19 @@ function accountPane(data: any, logins: any, close: () => void): HTMLElement {
   //  남은 한 줄([내 스킬 · 훅])은 목록·편집기가 큰 화면이라 이 창에 들이지 않았다.
   kids.push(el('div', { class: 'v2me-more-k', text: '더 자세한 설정' }),
     moreLink('#/system/me-assets', '내 스킬 · 훅', '내 AI 가 쓰는 스킬과 훅을 켜고 끕니다.', close));
+
+  // ── 회원 탈퇴(#1876) — 계정은 이 워크스페이스가 아니라 **매니지드(app.lvly.io)** 가 갖고 있다.
+  //  그래서 여기서 지우지 않고 그 화면으로 건너간다(코어는 컨트롤플레인을 부를 자격이 없다 — 쿠키 세션 전용).
+  //  hub_url 이 없으면(셀프호스트 박스) 이 항목을 **아예 그리지 않는다**: 그 배포엔 '회원'이라는 단위가 없고
+  //  구성원 제거는 관리자의 일이라, 눌러도 갈 곳이 없는 버튼이 된다.
+  const hubUrl = String(((state as any) && (state as any).me && (state as any).me.workspace && (state as any).me.workspace.hub_url) || '');
+  let accountUrl = '';
+  if (hubUrl) { try { accountUrl = new URL(hubUrl).origin + '/account'; } catch (_) { accountUrl = ''; } }
+  if (accountUrl) {
+    kids.push(el('div', { class: 'v2me-more-k', text: '계정 정리' }),
+      moreLinkExternal(accountUrl, '회원 탈퇴',
+        '계정과 혼자 쓰는 워크스페이스가 지워집니다. 팀에 올린 자료와 지식은 남습니다.'));
+  }
   return pane('계정 · 보안', '내가 이 워크스페이스에 어떻게 들어오는지 정합니다.', ...kids);
 }
 
