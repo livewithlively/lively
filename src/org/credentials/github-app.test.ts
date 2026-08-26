@@ -153,16 +153,19 @@ await at("M1 installation_id 가 숫자가 아니면 네트워크에 나가기 �
 });
 
 await at("M2·M3 repositories 를 주면 body 로 좁히고, 안 주면 body 를 안 보낸다", async () => {
-  const seen: Array<{ url: string; body?: string; auth?: string }> = [];
+  const seen: Array<{ url: string; body?: string; auth?: string; ua?: string }> = [];
   const fetchFn = async (url: string | URL, init?: RequestInit): Promise<Response> => {
     const h = (init?.headers ?? {}) as Record<string, string>;
-    seen.push({ url: String(url), body: init?.body as string | undefined, auth: h.authorization });
+    seen.push({ url: String(url), body: init?.body as string | undefined, auth: h.authorization, ua: h["user-agent"] });
     return json({ token: "ghs_x", expires_at: "2026-08-26T10:00:00Z" }, 201);
   };
   await mintInstallationToken({ appId: "1", privateKeyPem: PEM, installationId: "42", repositories: ["o/a"], fetchFn });
   assert.equal(seen[0].url, "https://api.github.com/app/installations/42/access_tokens");
   assert.deepEqual(JSON.parse(seen[0].body as string), { repositories: ["o/a"] });
   assert.ok(seen[0].auth?.startsWith("Bearer "), "App JWT 로 인증해야 한다");
+  //  ★ User-Agent 가 없으면 GitHub 이 403 으로 거부한다(2026-08-26 실호출에서 발급이 통째로 막혔다).
+  //   스텁 테스트는 헤더를 검사하지 않으면 다 통과시키므로, 여기서 명시적으로 본다.
+  assert.ok((seen[0].ua ?? "").length > 0, "User-Agent 가 없으면 상류가 403 을 준다");
 
   await mintInstallationToken({ appId: "1", privateKeyPem: PEM, installationId: "42", fetchFn });
   assert.equal(seen[1].body, undefined, "빈 body 를 보내면 상류가 400 을 준다");

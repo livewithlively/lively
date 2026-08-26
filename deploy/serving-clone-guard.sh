@@ -7,8 +7,14 @@
 #   ③ stage 에만 먼저 쌓여 main 과 갭이 벌어진다(정산 전 369커밋).
 #   작업은 워크트리에서 브랜치로 하고, 이 클론은 scripts/serve-sync.sh 로 **받기만** 한다.
 #
-# 성격: **막는 것이 아니라 멈춰 세우고 알려 주는 것**이다. 정말 급하면 `--no-verify` 로 넘길 수 있다
-#   (git 의 표준 탈출구를 막지 않는다 — 막으면 사람이 훅을 지워 버려 가드 자체가 사라진다).
+# 성격(2026-08-26 변경): **탈출구를 닫는다.** 종전엔 `--no-verify` 를 일부러 열어 뒀는데
+#   ("막으면 사람이 훅을 지워 버려 가드 자체가 사라진다"), 실측 결과 열어 둔 문으로 계속 들어왔다 —
+#   하루에 세 번, 미푸시 커밋이 17개·8개까지 쌓여 dev 가 옛 화면에서 멈췄다. 습관으로는 안 막혔다.
+#   `--no-verify` 는 pre-commit 을 아예 안 부르므로 거기서는 막을 수 없다. 대신 **post-commit 은 불린다** —
+#   거기서 `reset --soft HEAD^` 로 **되돌린다**. 잃는 것은 없다: 내용은 그대로 staged 로 남고, 커밋은
+#   reflog 에 남는다. 사람은 "커밋이 안 된다"만 겪고, 안내문이 갈 곳을 알려 준다.
+#   ⚠ 이것도 절대적이지 않다(훅 파일을 지우거나 core.hooksPath 를 비우면 그만이다). 목표는 **실수로 넘어가는 문을
+#    닫는 것**이지 작정한 우회를 막는 것이 아니다.
 #   ⚠ 머지 커밋은 통과시킨다 — serve-sync.sh 가 아니라 사람이 stage 를 갱신하는 정당한 경로다.
 #
 # ★ 훅이 **둘**인 이유(2026-08-26 추가) — 통과시킨 그 정당한 경로가 정작 dev 를 얼렸다.
@@ -62,7 +68,7 @@ cat >&2 <<'MSG'
 
      자세히: 지식 「런북: dev :8080 게이트웨이 빌드·재시작」
 
-  (정말 여기서 커밋해야 한다면 git commit --no-verify)
+  ℹ --no-verify 로 넘겨도 소용없습니다 — post-commit 이 그 커밋을 되돌립니다(내용은 staged 로 그대로 남습니다).
 
 MSG
 exit 1
@@ -98,24 +104,60 @@ echo "가드 설치: $HOOK_MERGE"
 
 cat > "$HOOK_COMMIT" <<'HOOKEOF'
 #!/usr/bin/env bash
-# lively:serving-clone-guard(post-commit) — **충돌을 해결하고 마무리한 머지**도 그 자리에서 push 한다.
-#  ⭐ 왜 post-merge 만으로 안 되나: git 은 `git merge` 가 스스로 커밋을 만들 때만 post-merge 를 부른다.
-#   충돌이 나면 머지는 멈추고 사람이 `git commit` 으로 마무리하는데, 그 길에는 post-merge 가 **안 불린다**.
-#   그런데 main↔stage 처럼 벌어진 두 갈래를 머지하면 충돌은 예외가 아니라 기본값이다 — 즉 자동 push 가
-#   가장 필요한 경로가 정확히 비어 있었다(2026-08-26, 이 가드를 고치다 테스트로 잡았다).
-#  ⚠ 머지 커밋(부모 2개 이상)일 때만 민다 — 부모가 하나면 `--no-verify` 로 낸 남의 직접 커밋이고,
-#   그건 대신 공개하지 않는다(가드의 원래 원칙).
+# lively:serving-clone-guard(post-commit) — 두 가지를 한다.
+#  ① **머지 커밋이면 그 자리에서 push** — 충돌을 해결하고 마무리한 머지는 post-merge 가 안 불린다.
+#     (git 은 `git merge` 가 스스로 커밋을 만들 때만 post-merge 를 부른다. 충돌이 나면 사람이 `git commit`
+#      으로 마무리하는데 그 길엔 안 불린다 — 그런데 벌어진 갈래를 머지하면 충돌이 기본값이라,
+#      자동 push 가 가장 필요한 경로가 정확히 비어 있었다.)
+#  ② **부모가 하나인 새 커밋이면 되돌린다** — 여기까지 왔다는 건 pre-commit 을 `--no-verify` 로 넘겼다는 뜻이다.
+#     `reset --soft` 라 **잃는 것이 없다**: 변경은 그대로 staged 로 남고 커밋은 reflog 에 있다.
 set -uo pipefail
+gd="$(git rev-parse --git-dir)"
 br="$(git symbolic-ref --short -q HEAD || true)"
-[ "$br" = "stage" ] || exit 0
-[ "$(git rev-list --no-walk --count --merges HEAD 2>/dev/null || echo 0)" = "1" ] || exit 0
-git rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 || exit 0
-n="$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
-[ "${n:-0}" -gt 0 ] || exit 0
-if git push origin "$br" >/dev/null 2>&1; then
-  echo "✅ [serving-clone-guard] 충돌 해결 머지를 원격에 올렸습니다(${n}커밋)." >&2
+
+# ── ① 머지 커밋 — 배웅한다 ──
+if [ "$(git rev-list --no-walk --count --merges HEAD 2>/dev/null || echo 0)" = "1" ]; then
+  [ "$br" = "stage" ] || exit 0
+  git rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 || exit 0
+  n="$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+  [ "${n:-0}" -gt 0 ] || exit 0
+  if git push origin "$br" >/dev/null 2>&1; then
+    echo "✅ [serving-clone-guard] 머지를 원격에 올렸습니다(${n}커밋)." >&2
+  else
+    echo "⚠ [serving-clone-guard] 자동 push 거부 — git pull --rebase origin stage && git push origin stage 로 올려 주세요." >&2
+  fi
+  exit 0
+fi
+
+# ── ② 새 작업 커밋 — 되돌린다 ──
+# ⚠ 여러 커밋을 기계가 순서대로 만드는 중(리베이스·체리픽·되돌리기·bisect)이면 손대지 않는다.
+#  거기서 HEAD 를 움직이면 그 절차 자체가 깨진다 — 그건 '새 작업'이 아니라 '이미 있는 커밋의 재생'이다.
+for f in REBASE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG rebase-merge rebase-apply; do
+  if [ -e "$gd/$f" ]; then
+    echo "⚠ [serving-clone-guard] 여기는 서빙 클론입니다 — 진행 중인 절차라 되돌리지 않습니다. 끝나면 정리해 주세요." >&2
+    exit 0
+  fi
+done
+git rev-parse -q --verify HEAD^ >/dev/null 2>&1 || exit 0    # 첫 커밋(부모 없음) — 되돌릴 자리가 없다
+if git reset --soft HEAD^ >/dev/null 2>&1; then
+  cat >&2 <<'MSG'
+
+  ⛔ [serving-clone-guard] 커밋을 **되돌렸습니다** — 여기는 dev(:8080) 가 디스크째 서빙하는 클론입니다.
+
+     고친 내용은 그대로 있습니다(staged 상태). 잃은 것은 없습니다 — 커밋만 취소됐습니다.
+
+  ✅ 이렇게 하세요:
+     1) 워크트리에서 작업합니다 — lively_local_repo_worktree {repo:"lively"}
+        (지금 것을 옮기려면: git diff --cached > /tmp/wip.patch 로 떠서 거기서 git apply)
+     2) 브랜치를 push 하고, 그 브랜치를 stage 에 머지합니다(머지는 통과하고 자동으로 push 됩니다).
+     3) **같은 브랜치로 main PR 도 함께 엽니다.**
+
+     여기서 커밋이 쌓이면 serve-sync 가 "미푸시 커밋"으로 영구 스킵해 **dev 가 옛 화면에서 멈춥니다**
+     (2026-08-26 실측: 하루에 세 번, 17커밋·8커밋).
+
+MSG
 else
-  echo "⚠ [serving-clone-guard] 자동 push 거부 — git pull --rebase origin stage && git push origin stage 로 올려 주세요(안 올리면 dev 가 언 채로 있습니다)." >&2
+  echo "⚠ [serving-clone-guard] 되돌리기에 실패했습니다 — git reset --soft HEAD^ 로 직접 취소해 주세요." >&2
 fi
 exit 0
 HOOKEOF
