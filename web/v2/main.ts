@@ -33,6 +33,7 @@ import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크�
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, ensureSessionAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
 import { startNotificationBanners } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다
+import { startLiveSync } from './live-sync.js';   // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
 import { activeNavKey } from './shell-surfaces.js';
 import { ensureSingletonAppInstance } from './app-instance.js';   // #1891 — inbox 앱 인스턴스 멱등 확보   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 
@@ -342,43 +343,72 @@ export async function bootV2(): Promise<void> {
   bindOmniKey();
   //  화면으로 돌아오면 즉시 최신으로 — 다음 틱을 기다리면 그 몇 초가 '멈춘 화면'으로 보인다.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden || !tabsApi) return;
-    void loadData().then(() => { drawSide(); tabsApi!.paint(); });
+    if (document.hidden) return;
+    void syncShell();
   });
   // 사이드바 상태 — 라이브 세션은 자주 바뀐다. 8초 폴링(#1954: 20초는 '방금 끝난 것'이 한참 뒤에야 떠서
-  //  화면이 묵은 것으로 읽혔다). 탭이 숨어 있으면 건너뛰고, **돌아온 순간 바로 한 판 당긴다**(아래 visibilitychange)
+  //  화면이 묵은 것으로 읽혔다). 탭이 숨어 있으면 건너뛰고, **돌아온 순간 바로 한 판 당긴다**(위 visibilitychange)
   //  — 건너뛴 동안 쌓인 지연이 사람 눈에 그대로 보이던 자리가 거기다.
-  setInterval(() => {
-    if (document.hidden || !tabsApi) return;
-    void loadData().then(() => {
-      drawSide(); tabsApi!.paint();
-      const at = tabsApi!.active();
-      const atPage = parseRoute(at.route).segs[0];
-      if (atPage === 'inbox') renderInbox(at.center, data);   // 확인할 것 — 20초 결로 따라온다
-      else if (atPage === 'archive') renderArchive(at.center, data, binHooks);   // 아카이브·휴지통도 같은 결(#1851)
-      else if (atPage === 'trash') renderTrash(at.center, data, binHooks);
-      for (const t of tabsApi!.tabs) {
-        if (!t.chat) continue;
-        const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
-        const s = sid ? findSess(sid) : null;
-        // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
-        //  재시작 창에 세션을 못 찾으면 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
-        //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
-        //  뿌리가 여기였다. 목록에서 그 세션을 **찾았을 때만** 판단하므로 빈 판에 흔들리지 않는다.
-        if (s) {
-          const want = s.projectId ? Number(s.projectId) : 0;
-          const have = shellProject.get(t);
-          if (have !== undefined && have !== want) { void renderRoute(t); continue; }
-        }
-        // ★ 탭이 보는 세션(라우트)과 **실제로 붙어 있는 화면**(chat.id)이 다르면 덧칠하지 않는다.
-        //  어긋남 자체는 panes-parts.ts sessionsPart.paint 에서 막았지만, 어떤 경로로든 어긋나면 이 갱신이
-        //  '상단바만 남의 세션'인 화면을 20초마다 다시 만든다(상민님 신고 2026-08-20).
-        if (s && t.chat.id === s.id) { t.chat.update({ ...s, projectName: projName(data, s.projectId) });
-          // 우측 '이 세션'도 — 프로젝트 드롭다운(#1749)은 body 팝오버라 우측을 되그려도 안 닫힌다.
-          drawAsideSession(t, s); }
-      }
-    });
-  }, 8000);
+  //  ⚠ #2041 로 **폴링이 유일한 시계가 아니게 됐다**(아래 startLiveSync) — 그래도 이 틱은 그대로 둔다:
+  //   스트림이 끊긴 동안 이어받아야 하고, 스트림이 안 미는 변화(세션 생성·이름·프로젝트·앱 인스턴스)는
+  //   여전히 여기서만 보인다.
+  setInterval(() => { if (document.hidden) return; void syncShell(); }, 8000);
+  // ★ 배너가 뜨는 그 순간 목록도 그 순간을 본다 (#2041 상민님: "알림 오는 순간 사이드바를 보면 아직
+  //  바뀌기 전으로 보인다"). 게이트웨이는 전이가 일어난 자리에서 이미 그 사실을 밀고 있고(#1842),
+  //  데스크톱 앱의 배너는 그걸 5ms 만에 받는다 — 사이드바만 8초 폴링으로 뒤늦게 따라잡고 있었다.
+  //  그래서 **같은 스트림에 셸도 붙는다**: 시점을 새로 정의하지 않고 이미 있는 시점에 얹는다.
+  //  ⚠ 여기서 배너를 만들지는 않는다 — 그건 앱 한 곳의 일이다(v2/live-sync.ts 머리말 §①).
+  startLiveSync(() => refreshSideSoon());
+}
+
+/**
+ * 한 판 맞추기 — 서버를 다시 읽고 사이드바·탭·열려 있는 화면을 그 값으로 맞춘다.
+ *  8초 폴링 · 실시간 스트림 · 화면 복귀 셋이 **같은 이 함수**를 부른다. 경로마다 다른 것을 맞추면
+ *  곧 "어떤 때는 따라오고 어떤 때는 안 따라오는" 화면이 된다(#2041 이 고친 어긋남이 정확히 그 종류다).
+ */
+async function syncShell(): Promise<void> {
+  if (!tabsApi) return;
+  await loadData();
+  if (!tabsApi) return;
+  drawSide(); tabsApi.paint();
+  const at = tabsApi.active();
+  const atPage = parseRoute(at.route).segs[0];
+  if (atPage === 'inbox') renderInbox(at.center, data);   // 확인할 것 — 같은 결로 따라온다
+  else if (atPage === 'archive') renderArchive(at.center, data, binHooks);   // 아카이브·휴지통도 같은 결(#1851)
+  else if (atPage === 'trash') renderTrash(at.center, data, binHooks);
+  for (const t of tabsApi.tabs) {
+    if (!t.chat) continue;
+    const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
+    const s = sid ? findSess(sid) : null;
+    // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
+    //  재시작 창에 세션을 못 찾으면 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
+    //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
+    //  뿌리가 여기였다. 목록에서 그 세션을 **찾았을 때만** 판단하므로 빈 판에 흔들리지 않는다.
+    if (s) {
+      const want = s.projectId ? Number(s.projectId) : 0;
+      const have = shellProject.get(t);
+      if (have !== undefined && have !== want) { void renderRoute(t); continue; }
+    }
+    // ★ 탭이 보는 세션(라우트)과 **실제로 붙어 있는 화면**(chat.id)이 다르면 덧칠하지 않는다.
+    //  어긋남 자체는 panes-parts.ts sessionsPart.paint 에서 막았지만, 어떤 경로로든 어긋나면 이 갱신이
+    //  '상단바만 남의 세션'인 화면을 다시 만든다(상민님 신고 2026-08-20).
+    if (s && t.chat.id === s.id) { t.chat.update({ ...s, projectName: projName(data, s.projectId) });
+      // 우측 '이 세션'도 — 프로젝트 드롭다운(#1749)은 body 팝오버라 우측을 되그려도 안 닫힌다.
+      drawAsideSession(t, s); }
+  }
+}
+
+/**
+ * 스트림이 민 사건 → 그 자리에서 한 판. 다만 **몰아서** 읽는다 (#2041).
+ *  세션 20개를 병렬로 돌리다 한꺼번에 끝나면 사건도 20개다 — #1842 가 겨냥한 바로 그 상황이고,
+ *  건당 loadData 를 부르면 그 순간 요청이 20벌 나간다. 짧은 창으로 합치면 한 번이면 된다.
+ *  ⚠ 창을 0 으로 줄이지 마라 — '즉시'가 목적이 아니라 '배너와 같은 순간'이 목적이고, 사람 눈에
+ *   250ms 는 같은 순간이다.
+ */
+let sideSoon = 0;
+function refreshSideSoon(delayMs = 250): void {
+  if (sideSoon || document.hidden) return;
+  sideSoon = window.setTimeout(() => { sideSoon = 0; void syncShell(); }, delayMs);
 }
 
 // 아카이브·휴지통 화면(#1851)의 배선 — 무엇을 바꾸든 서버가 정답이므로 다시 읽고 사이드바·탭을 되그린다.
