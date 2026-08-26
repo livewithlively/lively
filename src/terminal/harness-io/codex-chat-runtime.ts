@@ -252,4 +252,33 @@ export function sessionEnv(sessionId: string): Record<string, string> {
   return { LIVELY_SESSION_ID: sessionId, LIVELY_HARNESS: "codex" };
 }
 
+/** (순수) 스레드 id → 대화 파일을 찾는 셸 한 줄. 파일명에 **시각**이 들어가 규약으로 못 만들고, 날짜 폴더도 갈린다. */
+export function findRolloutSh(threadId: string): string {
+  return `ls -t "$HOME"/.codex/sessions/*/*/*/rollout-*-${threadId}.jsonl 2>/dev/null | head -1`;
+}
+
+/**
+ * 그 스레드의 rollout 파일 경로 — **화면이 대화를 읽는 유일한 단서**다.
+ *
+ *  ⚠ 왜 우리가 직접 찾나(실측 2026-08-26): 평소엔 세션 안에서 도는 훅(work-flag)이 `transcript_path` 를 보고해
+ *   화면이 그 파일을 찾는다. 그런데 **app-server 턴에서는 그 훅이 돌지 않는다**(훅 신뢰가 이 실행에 없다 —
+ *   app-server 에는 `--dangerously-bypass-hook-trust` 같은 표면도 없다). 그래서 답이 파일에 멀쩡히 쓰였는데도
+ *   화면은 그 파일이 어디 있는지 몰라 **빈 채로 남았다**(사용자에게는 "답이 안 온다"로 보였다).
+ *   우리는 threadId 를 알고 있으니 훅에 기대지 말고 **직접** 찾는다 — 의존이 하나 줄고 결정론적이다.
+ */
+export async function rolloutPath(osUser: string | null, threadId: string): Promise<string> {
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(threadId)) return "";
+  const sh = findRolloutSh(threadId);
+  try {
+    if (osUser) return String(await memberSh(osUser, sh) ?? "").trim().split("\n")[0] ?? "";
+    return await new Promise<string>((resolve) => {
+      const p = spawn("sh", ["-c", sh], { stdio: ["ignore", "pipe", "ignore"] });
+      let out = "";
+      p.stdout?.on("data", (c: Buffer) => { out += c.toString("utf8"); });
+      p.on("exit", () => resolve(out.trim().split("\n")[0] ?? ""));
+      p.on("error", () => resolve(""));
+    });
+  } catch { return ""; }
+}
+
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));

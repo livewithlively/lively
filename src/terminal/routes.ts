@@ -542,10 +542,17 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           sessionId: req.params.id, text, cwd: dir, osUser,
           threadId: st?.claude_session_id || null,
         });
-        // 스레드 id 를 세션 상태에 남긴다 — 게이트웨이가 재시작해도 **같은 대화**로 이어 붙는다
-        //  (없으면 새 스레드가 열려 사람이 보던 대화와 갈린다). 화면의 기록 조회도 이 값을 쓴다.
-        if (r.threadId && r.threadId !== st?.claude_session_id) {
-          await setClaudeSessionId(req.params.id, r.threadId, uid).catch(() => false);
+        // 스레드 id **와 대화 파일 경로**를 세션 상태에 남긴다.
+        //  · id — 게이트웨이가 재시작해도 같은 대화로 이어 붙는다(없으면 새 스레드가 열려 대화가 갈린다).
+        //  · 경로 — **화면이 대화를 읽는 유일한 단서**다. 평소엔 세션 안 훅이 보고하지만 app-server 턴에서는
+        //    그 훅이 돌지 않는다(실측 2026-08-26 — 그래서 답이 파일에 있는데도 대화창이 비어 있었다).
+        //    우리는 threadId 를 아니 직접 찾아 넣는다.
+        if (r.threadId) {
+          const { rolloutPath } = await import("./harness-io/codex-chat-runtime.js");
+          const tpath = await rolloutPath(await sessionOsUser(req.params.id), r.threadId).catch(() => "");
+          if (r.threadId !== st?.claude_session_id || (tpath && tpath !== st?.transcript_path)) {
+            await setClaudeSessionId(req.params.id, r.threadId, uid, tpath || null).catch(() => false);
+          }
         }
         res.json({ ok: true, delivered: true, transport: "app-server", thread_id: r.threadId });
         return;
