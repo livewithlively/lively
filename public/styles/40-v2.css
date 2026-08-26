@@ -1562,3 +1562,67 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-noti-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; flex: none; }
 .v2-noti-dot.on { background: var(--accent, #2563eb); }
 .v2-noti-row .st { font-size: 12px; color: var(--muted); flex: none; }
+
+/* ══ #2033 — 홈 목록의 묶는 축(세션 ↔ 프로젝트) ═══════════════════════════════
+   집합은 그대로, 묶는 축만 바꾼다. 행 문법(×·압정·상태 점)은 두 축에서 같은 것을 쓴다.       */
+
+/* 축 토글 — 머리글의 아이콘 하나(＋·돋보기와 같은 급). 목록 위 칩 두 개는 세로 한 줄을 먹는다. */
+.v2-axisbtn { width: 26px; height: 26px; flex: none; display: inline-grid; place-items: center; padding: 0;
+  border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer; }
+.v2-axisbtn:hover { color: var(--ink); background: var(--bg-tint-2); }
+/*  켜짐은 **채운 파랑** — 연한 틴트로는 켜졌는지 안 읽혔다(상민님 2026-08-26).
+    `-fill` 계열 배경 위에는 --on-fill 백색 글자가 앉는다(DS '채움 vs 글자' 축). */
+.v2-axisbtn.on { color: var(--on-fill); background: var(--blue-fill); }
+.v2-axisbtn.on:hover { color: var(--on-fill); background: var(--blue-fill-deep); }
+.v2-axisbtn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-axisbtn-ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ★펼친 묶음 = 흰 카드 그릇 — 세션이 프로젝트의 **안**에 산다는 걸 면(面)이 말한다.
+   들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(상민님 2026-08-18 — 트리 .v2-pj.open 과 같은 처방).
+   접힌 묶음은 카드 없이 조용히 — 카드는 '열려 있음'의 표식이기도 하다. */
+.v2-pg + .v2-pg { margin-top: 2px; }
+.v2-pg.open + .v2-pg, .v2-pg + .v2-pg.open { margin-top: 8px; }
+.v2-pg.open { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; }
+.v2-pg-row { position: relative; display: flex; align-items: center; gap: 4px; padding: 5px 6px 5px 5px; border-radius: 8px; }
+.v2-pg-row:hover { background: var(--bg); }
+/* 펼친 카드의 머리글은 **뚜껑**이다 — 실선 한 줄로 몸통과 가른다. 없으면 흰 면 위 흰 면이라
+   '프로젝트 단위'가 눈으로 안 갈린다(상민님 2026-08-26 요구). */
+.v2-pg.open > .v2-pg-row { border-radius: 9px 9px 0 0; border-bottom: 1px solid var(--line-row); }
+.v2-pg.open > .v2-pg-row:hover { background: var(--bg-tint); }
+/* 머리글의 두 표적은 **형제**다 — 접기(넓은 쪽)와 ＋. 단추 안에 단추를 넣으면 클릭이 겹친다. */
+.v2-pg-t { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 0; border: 0;
+  background: none; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.v2-pg-t:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 6px; }
+/* 위계는 **굵기**가 만든다 — 묶음 이름이 그 안의 세션보다 굵고 반 급 크다(트리의 프로젝트 행 : 세션 행과 같은 관계).
+   처음엔 머리글 12.5/700 · 행 13/600 이라 행이 더 커 보여 위계가 뒤집혀 있었다(프리뷰 실측). */
+.v2-pg-t .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13.5px; font-weight: 700; line-height: 1.5; }
+.v2-pg-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.v2-pg-row:hover .v2-pg-ic { stroke: var(--blue); }
+.v2-pg.open > .v2-pg-row .v2-car { transform: rotate(90deg); }
+.v2-pg-row .v2-sums { min-width: 0; margin-left: 4px; }
+.v2-pg-row .v2-cnt { flex: none; margin-left: 2px; }
+/*  ⚠ ＋ 는 **머리글 흐름 밖(절대위치)** 에 띄우고 안 보일 땐 display:none 이라 자리도 안 먹는다.
+    opacity:0 로 숨기면 안 보이는데도 폭(18+2px)을 그대로 차지해 **상태 점·개수가 오른쪽 끝에 못 붙는다** —
+    #1954 ⓑ 가 앱 행에서 이미 밟은 함정이고, 이 머리글에서 그대로 재발했다(상민님 2026-08-26 재지적).
+    손을 얹으면 그 오른쪽 자리를 ＋ 가 받고 점·개수는 잠깐 물러난다(앱 행의 × 규약과 같다). */
+.v2-pg-row .v2-newb { position: absolute; right: 5px; top: 50%; margin: -9px 0 0; opacity: 1; display: none; }
+.v2-pg-row:hover .v2-newb, .v2-pg-row .v2-newb:focus-visible { display: inline-grid; }
+.v2-pg-row:hover .v2-sums, .v2-pg-row:hover .v2-cnt { visibility: hidden; }
+/* 접힌 묶음 안에 **지금 보고 있는 행**이 있다 — 왼쪽 마디로 남긴다.
+   그게 없으면 "지금 보는 화면이 목록에서 사라졌다"는 고장이 된다. */
+.v2-pg-row.act::before { content: ''; position: absolute; left: -1px; top: 6px; bottom: 6px; width: 3px;
+  border-radius: 999px; background: var(--blue-fill); }
+
+/* 카드 몸통 — 담김은 면(面)이 말하므로 세로선 레일은 안 넣는다(이중 표식은 잡음). */
+.v2-pg-list { padding: 4px 5px 5px; }
+
+/* 한 줄 행(#2033 상민님) — 프로젝트 축에서는 머리글이 소속을 이미 말하므로 둘째 줄이 없다.
+   정보가 줄었으니 줄도 줄인다. 사라진 것(소속·시각·상태어)은 툴팁이 받는다. */
+.v2-app-inst--1 { grid-template-rows: minmax(28px, auto); padding: 3px 8px 3px 7px; }
+.v2-app-inst--1 .v2-app-inst-title { font-size: 13px; font-weight: 500; }
+.v2-app-inst--1 .v2-app-inst-close, .v2-app-inst--1 .v2-app-inst-pin { top: 4px; }
+/* 카드 안에서는 hover·선택 배경이 카드와 같은 --bg 라 안 읽힌다 — 트리 세션 행과 같은 틴트로 바꾼다. */
+.v2-pg.open .v2-app-inst:hover { background: var(--bg-tint); }
+.v2-pg.open .v2-app-inst.on { background: var(--bg-tint); box-shadow: none; }
+.v2-pg.open .v2-app-inst.on::before { left: -2px; }
