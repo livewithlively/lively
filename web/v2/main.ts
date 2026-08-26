@@ -20,6 +20,7 @@ import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
+import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
@@ -1231,7 +1232,9 @@ function markViewedSessionSeen(): void {
   const now = Date.now();
   if (now - (seenSentAt.get(sid) || 0) < SEEN_EVERY_MS) return;
   seenSentAt.set(sid, now);
+  // #2116 — 도장의 응답이 곧 '지금 이 세션을 보고 있는 사람'이다. presence 를 위한 폴링을 따로 두지 않는다.
   void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/seen`, { method: 'POST', body: '{}' })
+    .then((r: any) => setViewers(sid, r && r.viewers))
     .catch(() => { seenSentAt.delete(sid); });   // 못 찍었으면 다음 틱에 다시 시도한다
 }
 
