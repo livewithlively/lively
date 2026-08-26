@@ -668,6 +668,21 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         target.projectId ? (target.projectName || '이름 없는 프로젝트') : '이 세션은 아직 프로젝트에 붙어 있지 않아요',
         () => opts.onPickProject!(moreBtn)));
     }
+    // 대화를 터미널로 넘기기(#2055) — codex app-server 모드에서만 뜻이 있다.
+    //  왜 이 항목이 필요한가: codex 는 **스레드당 writer 를 하나만** 허용한다(실측). 대화창이 그 대화를 쥔 동안
+    //  터미널에서 `codex resume <id>` 를 치면 `active writer` 로 거부된다. 놓아 주는 유일한 방법이 서버 프로세스를
+    //  내리는 것이라, 그 동작을 사람이 부를 수 있게 여기에 둔다. 놓으면 그 자리에서 이어갈 명령을 알려 준다.
+    if (isBox && target.owned && target.live && String(target.raw?.harness || '') === 'codex') {
+      rows.push(row('대화를 터미널로 넘기기', '대화창이 쥔 Codex 대화를 놓아, 터미널에서 이어가게 합니다', async () => {
+        try {
+          const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(target.id) + '/codex-chat/release', { method: 'POST' });
+          // released=false = 넘길 것이 없다(이미 넘겼거나 이 세션은 종전 tmux 모드) — 사실대로 말한다.
+          toast(r?.released
+            ? '대화를 놓았습니다 — 터미널에서  codex resume ' + String(r.thread_id || '').slice(0, 8) + '…  으로 이어가세요'
+            : '지금 대화창이 쥐고 있는 Codex 대화가 없습니다');
+        } catch (e: any) { toast('넘기지 못했습니다 — ' + ((e && e.message) || e), true); }
+      }));
+    }
     // 보관 — 터미널만 내려놓고 대화·설정은 남긴다. 살아 있는 내 세션에만(내릴 것이 있어야 보관이다).
     if (opts.onArchive && target.owned && target.live && !target.raw?.restorable)
       rows.push(row('이 세션 보관', '터미널을 내려놓고 대화·설정은 남겨요 — [보관한 세션]에서 되살립니다', () => opts.onArchive!()));
