@@ -34,7 +34,7 @@ import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isT
 import { makeSplitter, readSplit, writeSplit } from './split.js'; // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js'; // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
-import { refreshStatusCount, switcherName, switcherTop } from './switcher.js'; // #1875 — refreshStatusCount: 문패 배지는 인원 수에서 나온다
+import { refreshStatusCount, switcherTop } from './switcher.js'; // #1875 — refreshStatusCount: 문패 배지는 인원 수에서 나온다
 import { openSectionMenu, railIsHidden, sectionDef, stackTile } from './rail.js'; // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js'; // #2016 — 선 아이콘 한 벌
 import { openMeModal } from './me-modal.js'; // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
@@ -680,7 +680,10 @@ function render() {
 }
 /** 구역 머리 — 레일이 접혀 있으면 워크스페이스 이름이 여기 선다(슬랙의 「HonestAI ▾」 자리). */
 function secHead(title, count, ...acts) {
-    return el('div', { class: 'v2-app-space-head' }, railIsHidden() ? null : switcherName(), el('span', { class: 'v2-k', text: title }), count != null ? el('span', { class: 'v2-app-count', text: String(count) }) : null, ...acts);
+    //  #1875 — 워크스페이스 이름은 여기 **안** 그린다. 레일이 보이면 레일 타일이, 레일을 숨기면 wsHead(topBits)가
+    //   이미 워크스페이스를 보여준다 — 둘 다 아닌 경우가 없으므로 여기 이름을 두면 순수 중복이다(원준 2026-08-26:
+    //   "1열 레일에 이미 있는데 왜 2열에 또"). 종전 코드는 조건까지 뒤집혀 레일이 **열렸을 때** 이름을 그렸다.
+    return el('div', { class: 'v2-app-space-head' }, el('span', { class: 'v2-k', text: title }), count != null ? el('span', { class: 'v2-app-count', text: String(count) }) : null, ...acts);
 }
 /** 켜져 있는 필터 수 — 0이면 요약 줄을 그리지 않는다. */
 function fltCount() { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0); }
