@@ -3,10 +3,11 @@
 //   🔴 restorable 이 안 나가면 — 세션을 열어도 '그냥 끝난 세션' 배너로 끝난다(2026-08-14~20 실측 회귀, #109).
 //   🔴 canRestore 가 너무 넓으면 — 남의 세션에 복원 버튼이 뜬다(눌러 보고 403 을 받는 UX).
 //   🔴 남의 개인 세션에 응답하면 — 그 세션의 존재·이름·프로젝트가 새어 나간다.
-//  ⚠ 호출 **순서**(살아있음 확인 → 이 판정)는 순수 테스트로 못 잡는다 — scripts/session-open-restore.test.mjs 가 지킨다.
+//  ⚠ 호출 **순서**(살아있음 확인 → 이 판정) 중 노드 세션 갈래는 아래 nodeSessionMetaMode 표가 지킨다(2026-08-26).
+//   그 밖의 진입 순서는 여전히 scripts/session-open-restore.test.mjs 가 지킨다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { deadSessionMeta, type DeadSessionMeta, type DeadSessionMetaResult, type DeadSessionStateLike } from "./session-meta.js";
+import { deadSessionMeta, nodeSessionMetaMode, type DeadSessionMeta, type DeadSessionMetaResult, type DeadSessionStateLike } from "./session-meta.js";
 
 const st = (over: Partial<DeadSessionStateLike> = {}): DeadSessionStateLike => ({
   owner: "yoon", label: "라벨", harness: "claude", project_id: null, exited_at: null, exit_reason: null, ...over,
@@ -73,4 +74,52 @@ test("⑬⑭ 빈 라벨·하네스 미상 — id 와 'shell' 로 채운다(빈 �
   assert.equal(nul.harness, "shell");
   // 경계: null 이 아니라 빈 문자열인 경우도 같다(회귀 당시 실제로 나가던 값이 "" 였다).
   assert.equal(okBody(deadSessionMeta(ID, st({ label: "" }), "yoon", false)).label, ID);
+});
+
+// ── 노드 세션 메타의 갈래(nodeSessionMetaMode) — 사양 spec S2 의 엣지 표 6행 ───────────────────
+//  이 표가 곧 "돌고 있는 노드 세션을 죽었다고 답하지 않는다"이다. 틀리면 티가 크다:
+//   🔴 살아 있는데 dead — 화면이 이어받기로 흘러 **빈 새 세션**이 생긴다(2026-08-26 실측: 프로젝트 하나에 4개).
+//   🔴 죽었는데 alive — 없는 tmux 에 붙어 4410 배너로 끝난다(복원 버튼이 안 뜬다).
+//   🔴 이미 물어본 노드를 또 묻기 — 같은 스냅샷을 두 번 훑는다(답은 같다).
+const spy = (found: boolean): { fn: (n: string) => boolean; calls: string[] } => {
+  const calls: string[] = [];
+  return { fn: (n: string) => { calls.push(n); return found; }, calls };
+};
+
+test("① 노드 세션이 아니면 dead — 빈 노드 이름으로 스냅샷을 묻지 않는다(방어)", () => {
+  const s = spy(true);
+  assert.equal(nodeSessionMetaMode("", "", s.fn), "dead");
+  assert.deepEqual(s.calls, [], "물어볼 노드가 없다");
+  // 경계: 호출자는 좌표를 줬는데 desired-state 가 모르는 경우. 빈 이름으로 물으면 **아무 노드의** 같은 id 를
+  //  살아 있다고 오판할 수 있다(스냅샷 조회는 노드 이름으로 좁힌다).
+  const s2 = spy(true);
+  assert.equal(nodeSessionMetaMode("laptop", "", s2.fn), "dead");
+  assert.deepEqual(s2.calls, [], "빈 노드 이름으로는 묻지 않는다");
+});
+
+test("② 좌표 없이 물어본 호출도 살아 있으면 alive — 이 갈래가 없어서 빈 새 세션이 생겼다", () => {
+  const s = spy(true);
+  assert.equal(nodeSessionMetaMode("", "mac", s.fn), "alive");
+  assert.deepEqual(s.calls, ["mac"], "desired-state 가 아는 노드로 물어야 한다(호출자가 준 값이 아니라)");
+});
+
+test("③ 좌표 없이 물어봤는데 스냅샷에 없으면 dead — 진짜 죽은 세션은 종전대로 복원 안내", () => {
+  const s = spy(false);
+  assert.equal(nodeSessionMetaMode("", "mac", s.fn), "dead");
+  assert.deepEqual(s.calls, ["mac"]);
+});
+
+test("④ 이미 그 노드를 물어보고 못 찾은 호출은 다시 묻지 않는다(중복 조회 금지)", () => {
+  const s = spy(true);
+  assert.equal(nodeSessionMetaMode("mac", "mac", s.fn), "dead");
+  assert.deepEqual(s.calls, [], "같은 스냅샷을 두 번 훑지 않는다 — 답이 같다");
+});
+
+test("⑤⑥ 엉뚱한 좌표로 물어봤어도 desired-state 의 노드로 다시 확인한다", () => {
+  const alive = spy(true);
+  assert.equal(nodeSessionMetaMode("laptop", "mac", alive.fn), "alive");
+  assert.deepEqual(alive.calls, ["mac"]);
+  const gone = spy(false);
+  assert.equal(nodeSessionMetaMode("laptop", "mac", gone.fn), "dead");
+  assert.deepEqual(gone.calls, ["mac"]);
 });

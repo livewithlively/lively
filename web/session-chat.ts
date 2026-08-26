@@ -610,7 +610,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  자기 주소만 갈아타면 셸 주소·탭 제목·사이드바는 옛 세션 그대로인 어긋난 화면이 된다(#1808 사고).
     //  여기서 부르는 resumeSession 은 [이어서 대화하기]와 같은 경로라 주소(#/s/<새 id>)까지 함께 옮긴다.
     if (m && m.type === 'lively-term-gone' && String(m.id || '') === target.id) {
-      if (m.canRestore && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(); }
+      if (m.canRestore && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
     }
     if (!m || m.type !== 'lively-term-status') return;
@@ -667,6 +667,21 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       rows.push(row(target.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결',
         target.projectId ? (target.projectName || '이름 없는 프로젝트') : '이 세션은 아직 프로젝트에 붙어 있지 않아요',
         () => opts.onPickProject!(moreBtn)));
+    }
+    // 대화를 터미널로 넘기기(#2055) — codex app-server 모드에서만 뜻이 있다.
+    //  왜 이 항목이 필요한가: codex 는 **스레드당 writer 를 하나만** 허용한다(실측). 대화창이 그 대화를 쥔 동안
+    //  터미널에서 `codex resume <id>` 를 치면 `active writer` 로 거부된다. 놓아 주는 유일한 방법이 서버 프로세스를
+    //  내리는 것이라, 그 동작을 사람이 부를 수 있게 여기에 둔다. 놓으면 그 자리에서 이어갈 명령을 알려 준다.
+    if (isBox && target.owned && target.live && String(target.raw?.harness || '') === 'codex') {
+      rows.push(row('대화를 터미널로 넘기기', '대화창이 쥔 Codex 대화를 놓아, 터미널에서 이어가게 합니다', async () => {
+        try {
+          const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(target.id) + '/codex-chat/release', { method: 'POST' });
+          // released=false = 넘길 것이 없다(이미 넘겼거나 이 세션은 종전 tmux 모드) — 사실대로 말한다.
+          toast(r?.released
+            ? '대화를 놓았습니다 — 터미널에서  codex resume ' + String(r.thread_id || '').slice(0, 8) + '…  으로 이어가세요'
+            : '지금 대화창이 쥐고 있는 Codex 대화가 없습니다');
+        } catch (e: any) { toast('넘기지 못했습니다 — ' + ((e && e.message) || e), true); }
+      }));
     }
     // 보관 — 터미널만 내려놓고 대화·설정은 남긴다. 살아 있는 내 세션에만(내릴 것이 있어야 보관이다).
     if (opts.onArchive && target.owned && target.live && !target.raw?.restorable)
@@ -1301,12 +1316,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     } catch (e: any) { if (!quiet) view.setNote(e?.message || '키를 보내지 못했습니다.'); }
   }
   /** 이 세션을 되살려(또는 그 대화를 이어받아) 새 세션으로 간다. btn 없이도 부를 수 있다 — 자동 복원 경로(#1820). */
-  async function resumeSession(btn?: HTMLButtonElement | null): Promise<void> {
+  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean }): Promise<void> {
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
       let nextId = '';
-      if (isBox && target.raw?.restorable) {
+      // ⚠ hint.canRestore — **프레임이 방금 서버에게 들은 말**이다(lively-term-gone). 종전엔 이 분기가 목록 행의
+      //  restorable 만 봤는데, 목록은 좌표를 접으면서 그 값을 못 받는 경우가 있다(session-merge.ts) — 그래서
+      //  되살릴 좌표(desired-state)가 멀쩡히 있는 세션이 **대화록 기반 이어받기**로 흘렀고, 서버는 그 대화의 cwd 를
+      //  자기 공유 루트 아래에서 못 찾아 "원본 실행 경로를 찾지 못해…" 라며 **빈 새 세션**을 만들었다
+      //  (2026-08-26 상민님 신고 · session-log-routes.ts 폴백). 목록이 조용해도 프레임이 말했으면 그 말을 믿는다.
+      //  /restore 는 이미 살아 있으면 already:true 로 되돌려주므로(routes.ts), 잘못 들어가도 새 세션을 만들지 않는다.
+      if (isBox && (target.raw?.restorable || hint?.canRestore)) {
         const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
         if (r?.session) rememberCreated(r.session);
         nextId = String(r?.session?.id || (r?.already ? target.id : ''));
