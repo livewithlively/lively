@@ -23,7 +23,7 @@ import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import {
-  activeWorkspaceSlug, listWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceInfo,
+  activeWorkspaceSlug, listWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
   archiveWorkspace, createWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam,
 } from './switcher.js';
 import { inboxSection, peopleSection } from './ws-people.js';   // #1875 — 구성원·초대(이 워크스페이스) / 나에게 온 초대
@@ -142,11 +142,8 @@ function recentForRail(n: number): AppDef[] {
 
 // ── 워크스페이스 — 스택 타일 + 슬랙식 팝오버 ─────────────────────────────────
 function wsTile(w: { name: string; kind: string }, cls: string): HTMLElement {
-  const me: any = state.me || {};
-  const cur = workspaceInfo();
-  //  개인 워크스페이스의 얼굴은 내 아바타(원형) — 지금 것일 때만 계정 아바타를 안다.
-  if (w.kind === 'personal' && w.name === cur.name) return profileAvatar(me.avatar, w.name, me.userId, cls + ' round', { char: me.avatar_char, color: me.avatar_color });
-  return el('span', { class: cls + (w.kind === 'personal' ? ' round' : ''), text: String(w.name || '?').trim().slice(0, 1) });
+  //  얼굴의 출처는 switcher.workspaceFace 하나다(#1875) — 여기서 따로 그리면 같은 워크스페이스가 자리마다 다른 색이 된다.
+  return workspaceFace(w, cls);
 }
 
 /** 문패 = 타일 한 장 + 뒤에 겹친 타일(슬랙의 그 스택). 레일 맨 위에도, 레일을 숨겼을 땐 사이드바 머리에도 선다. */

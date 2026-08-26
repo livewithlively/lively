@@ -59,9 +59,7 @@ export function switcherTop(opts?: { people?: Record<string, any>; faces?: strin
   const sub = w.kind === 'personal' ? '개인 워크스페이스 · 나만'
     : `팀 워크스페이스${shown ? ' · ' + shown + '명' : ''}`;
   // 아바타 — 개인은 내 얼굴(계정 아바타 그대로), 팀은 조직 이니셜 타일. 팀 로고 이미지는 아직 없다(있으면 여기).
-  const face = w.kind === 'personal'
-    ? profileAvatar(me.avatar, w.name, me.userId, 'v2-wscard-big round', { char: me.avatar_char, color: me.avatar_color })
-    : el('span', { class: 'v2-wscard-big', text: (w.name || '?').trim().slice(0, 1) });
+  const face = workspaceFace(w, 'v2-wscard-big');
   // 팀 얼굴 스택 — **세션을 가진 사람들**(호출자가 추린 실재 협업자, 나 먼저) 최대 3명 + 나머지는 숫자.
   //  멤버 명부를 그대로 쓰면 더미·테스트 계정이 먼저 잡힌다(dev 실측) — 얼굴은 '지금 여기서 일하는 사람'이어야 맞다.
   const pool = (opts && opts.faces && opts.faces.length ? opts.faces : ids);
@@ -210,6 +208,18 @@ async function refreshMine(wrap: HTMLElement): Promise<void> {
   }
 }
 
+// ── 워크스페이스 얼굴 — **단 하나의 출처**(#1875, 원준 2026-08-26 "왜 서로 다른 색이 있지 … 같은 데에서 갖다써야 되는데"). ──
+//  종전엔 이 얼굴을 네 자리(문패 카드·타일·레일 스택·팝오버 행)에서 제각각 그렸다: 개인이면서 '지금 것'일 때만
+//  내 아바타(내 색)를 쓰고, 그 밖엔 **색 없는 검은 사각**(CSS var(--ink))으로 떨어졌다. 그래서 같은 개인
+//  워크스페이스가 지금 것일 땐 하늘색, 목록의 한 줄일 땐 검정 — 두 색으로 보였다.
+//  ★ 개인 워크스페이스는 **소유자만 본다**(#1750) — 내 목록에 있는 개인 ws 는 전부 내 것이라 늘 내 얼굴·내 색이다.
+//   팀·primary 는 이니셜 타일(어두운 문패). 색은 CSS(.v2-wscard-big)가 준다.
+export function workspaceFace(w: { name: string; kind: string }, cls: string): HTMLElement {
+  const me: any = (state && state.me) || {};
+  if (w.kind === 'personal') return profileAvatar(me.avatar, w.name, me.userId, cls + ' round', { char: me.avatar_char, color: me.avatar_color });
+  return el('span', { class: cls, text: (w.name || '?').trim().slice(0, 1) });
+}
+
 // ── 레일(#2016)에서 쓰는 출구 셋 ────────────────────────────────────────────
 //  좌측 레일이 접혀 있을 때 문패는 **타일 하나**로 서고, 워크스페이스가 여럿이면 그 타일이 세로로 쌓인다.
 //  그 셋 다 이 모듈이 이미 갖고 있던 것(메뉴·전환·목록)을 밖으로 여는 것뿐이다 — 전환 규약을 두 벌로 두지 않는다.
@@ -217,11 +227,8 @@ async function refreshMine(wrap: HTMLElement): Promise<void> {
 /** 접힌 레일의 문패 = 조직 이니셜(팀) 또는 내 얼굴(개인) 타일. 누르면 종전 전환 메뉴가 그대로 뜬다. */
 export function switcherTile(): HTMLElement {
   const w = ws();
-  const me: any = (state && state.me) || {};
   const kindText = w.kind === 'personal' ? '개인' : '팀';
-  const face = w.kind === 'personal'
-    ? profileAvatar(me.avatar, w.name, me.userId, 'v2-wscard-big round', { char: me.avatar_char, color: me.avatar_color })
-    : el('span', { class: 'v2-wscard-big', text: (w.name || '?').trim().slice(0, 1) });
+  const face = workspaceFace(w, 'v2-wscard-big');
   const btn = el('button', { class: 'v2-ws v2-rail-tile', type: 'button', 'aria-haspopup': 'menu',
     title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` }, face) as HTMLButtonElement;
   btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
