@@ -7,7 +7,7 @@
 //   그 밖의 진입 순서는 여전히 scripts/session-open-restore.test.mjs 가 지킨다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { deadSessionMeta, nodeSessionMetaMode, type DeadSessionMeta, type DeadSessionMetaResult, type DeadSessionStateLike } from "./session-meta.js";
+import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, type DeadSessionMeta, type DeadSessionMetaResult, type DeadSessionStateLike } from "./session-meta.js";
 
 const st = (over: Partial<DeadSessionStateLike> = {}): DeadSessionStateLike => ({
   owner: "yoon", label: "라벨", harness: "claude", project_id: null, exited_at: null, exit_reason: null, ...over,
@@ -103,15 +103,19 @@ test("② 좌표 없이 물어본 호출도 살아 있으면 alive — 이 갈�
   assert.deepEqual(s.calls, ["mac"], "desired-state 가 아는 노드로 물어야 한다(호출자가 준 값이 아니라)");
 });
 
-test("③ 좌표 없이 물어봤는데 스냅샷에 없으면 dead — 진짜 죽은 세션은 종전대로 복원 안내", () => {
+// 🔴 #2108 로 바뀐 칸 — 종전엔 dead 였다. 스냅샷 부재는 죽음의 근거가 아니다(상태 push 3초 주기라
+//  방금 만든 살아있는 세션이 그 창 동안 빠진다). 호출자가 노드에 확답을 구하도록 ask 로 보낸다.
+test("③ 좌표 없이 물어봤는데 스냅샷에 없으면 ask — 부재는 죽음의 근거가 아니다(#2108)", () => {
   const s = spy(false);
-  assert.equal(nodeSessionMetaMode("", "mac", s.fn), "dead");
+  assert.equal(nodeSessionMetaMode("", "mac", s.fn), "ask");
   assert.deepEqual(s.calls, ["mac"]);
 });
 
-test("④ 이미 그 노드를 물어보고 못 찾은 호출은 다시 묻지 않는다(중복 조회 금지)", () => {
+// 🔴 #2108 로 바뀐 칸 — 종전엔 dead("이미 물어보고 못 찾았다")였다. 같은 스냅샷을 두 번 훑지 않는 계약은
+//  그대로 두되, 결론만 ask 로 바꾼다: 스냅샷을 두 번 봐도 답이 같을 뿐 그게 죽음을 뜻하지는 않는다.
+test("④ 이미 그 노드를 물어보고 못 찾았어도 ask — 스냅샷은 두 번 안 훑는다(#2108)", () => {
   const s = spy(true);
-  assert.equal(nodeSessionMetaMode("mac", "mac", s.fn), "dead");
+  assert.equal(nodeSessionMetaMode("mac", "mac", s.fn), "ask");
   assert.deepEqual(s.calls, [], "같은 스냅샷을 두 번 훑지 않는다 — 답이 같다");
 });
 
@@ -120,6 +124,31 @@ test("⑤⑥ 엉뚱한 좌표로 물어봤어도 desired-state 의 노드로 다
   assert.equal(nodeSessionMetaMode("laptop", "mac", alive.fn), "alive");
   assert.deepEqual(alive.calls, ["mac"]);
   const gone = spy(false);
-  assert.equal(nodeSessionMetaMode("laptop", "mac", gone.fn), "dead");
+  assert.equal(nodeSessionMetaMode("laptop", "mac", gone.fn), "ask", "#2108 — 부재는 죽음이 아니라 '물어보라'다");
   assert.deepEqual(gone.calls, ["mac"]);
+});
+
+// ── #2108 그 갈래에서 복원 신호를 실을까(nodeMetaRestorable) — 사양 표 A 5행 ─────────────────
+// 🔴 실측 사고(2026-08-26): 노드 상태 push 는 3초 주기라 **방금 만든 살아있는 세션**이 그 창 동안 스냅샷에서
+//  빠진다. 종전엔 그 부재만으로 restorable 을 냈고, 부팅 게이트(web maybeRestoreOnOpen, #1820)가 WS 도 안 붙이고
+//  복원으로 갔다 — 갓 만든 세션엔 이어받을 대화 id 가 없어 인자 없는 `--resume` = **후보 0건 피커**가 떴다
+//  ("새 세션이 안 열리고 곧장 이어받기가 뜬다"). hammurabi 5회 중 3회 재현 · macmini 오답 구간 45~143ms.
+test("표A-1 ask + 노드가 '살아 있다'고 확답 → 복원 신호를 내지 않는다", () => {
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: false }), false);
+});
+test("표A-2 ask + 노드가 '없다'고 확답 → 종전대로 복원 신호를 낸다", () => {
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: true }), true);
+});
+// 판정불가를 '살아있음'으로 접으면 진짜 죽은 세션이 영영 복원 불가가 된다 — 이 수정이 고치려는 것보다 나쁘다.
+//  종전 동작(#1791: 꺼진 노드의 세션도 복원 가능으로 알린다)을 그대로 보존한다.
+test("표A-3 ask + 확답 없음(null) → 종전대로 복원 가능", () => {
+  assert.equal(nodeMetaRestorable({ mode: "ask", nodeGone: null }), true);
+});
+// 표A-4·5 — ask 가 아닌 갈래는 이 게이트의 대상이 아니다. dead 는 노드 세션이 아니라 판정 밖이고,
+//  alive 는 라우트가 위에서 이미 라이브 메타로 답해 여기 도달하지 않는다(도달해도 종전 동작을 바꾸지 않는다).
+test("표A-4 dead 는 확답과 무관하게 복원 가능 — 이 게이트의 대상이 아니다", () => {
+  assert.equal(nodeMetaRestorable({ mode: "dead", nodeGone: false }), true);
+});
+test("표A-5 alive 도 이 게이트가 건드리지 않는다", () => {
+  assert.equal(nodeMetaRestorable({ mode: "alive", nodeGone: false }), true);
 });
