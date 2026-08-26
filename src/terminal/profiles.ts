@@ -11,7 +11,7 @@ import { HttpError } from "../http-error.js";
 import { getMember, mintToken, listTokens, revokeToken } from "../org/store.js";
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
-import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
+import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug } from "./terminal-isolation.js";
 import { memberSh } from "./terminal-member-fs.js";
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
@@ -20,7 +20,7 @@ import { loadDesiredOne } from "../sessions/session-desired.js";
 const execFileAsync = promisify(execFile);
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
 
-export const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
+export const slug = memberSlug;   // 정본은 terminal-isolation.memberSlug — useradd 이름과 홈 경로가 같은 규칙을 쓰게 (#1884)
 export const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
 export const ownerId = (u: LivelyUser): string => u.userId || u.email || "";
 // 멤버 id → 그 사람의 OS 계정명. provision-member.sh 와 같은 규칙이어야 하므로 **여기가 유일한 파생지**다
@@ -248,6 +248,13 @@ const HARNESS_CRED: Record<string, string> = {
   // grok 은 자격이 **파일**이다(#1701 실측: `grok login` 이 ~/.grok/auth.json 0600 을 만든다 — agy 의 keyring 과 다름).
   grok: ".grok/auth.json",
 };
+
+// #1884 — 이 하네스에 '로그인'이라는 개념이 있나(= 위 표에 자격 위치가 실측돼 있나). 세션 폼의 [내 계정 로그인]이
+//  어느 AI 를 고르게 할지 이걸로 정한다. 표에 없는 하네스(opencode·antigravity)는 로그인 여부를 정직하게 말할 수
+//  없으므로 고르게 하지 않는다 — 위 ⚠ 주석과 같은 이유다.
+export function harnessHasCredential(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(HARNESS_CRED, key);
+}
 
 // box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
 //  '존재'만 확인(내용은 안 봄). exit0=있음. 미프로비저닝/에러=false.

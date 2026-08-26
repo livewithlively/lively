@@ -200,6 +200,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  write_vis: 'open'|'audience'|'private' (NULL=미설정 → 실행 폴더에서 재파생). restrict: read 축소(owner∪invites) 여부.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS write_vis TEXT;`);
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS restrict_read BOOLEAN NOT NULL DEFAULT false;`);
+  // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 세션 이름이 한 번만 지어지고 그대로 가게 하는 걸쇠다:
+  //  낮은 쪽이 높은 쪽을 못 덮는다(session-label-source.ts 의 표가 정본). NULL = 이 컬럼 이전 행 → `rule` 로 읽는다.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS label_source TEXT;`);
 
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)
@@ -358,6 +361,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS agent_caps TEXT[];
     -- #1713 — 이 노드에서 실제로 띄울 수 있는 하네스(번들 카탈로그 ∩ PATH). 미보고(구 번들)면 NULL → 기준선으로 본다.
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS agent_harnesses TEXT[];
+    -- #1849 — 이 PC 가 자지 않게 붙잡고 있나(에이전트 hello 보고: {active, method, gaps, reason}).
+    --  NULL = **모름**(구 번들은 안 보낸다)이지 '안 걸림'이 아니다 — 그 구분을 화면이 해야 사용자를 오도하지 않는다.
+    ALTER TABLE org_node ADD COLUMN IF NOT EXISTS keep_awake JSONB;
 
     -- shared 이관(#1540) — **컬럼을 방금 만든 경우에만** 백필한다.
     --  ⚠ 조건 없이 UPDATE 로 두면, 관리자가 공유를 끈 worker 노드가 게이트웨이 재시작마다 다시 공유로

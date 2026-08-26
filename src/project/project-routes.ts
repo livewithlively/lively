@@ -19,10 +19,8 @@ import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — �
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
-import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions } from "../node/provision-remote.js";
-import { nodeRpc } from "../node/registry.js";
+import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions, bindNodeSessionProjectOrKill, injectDeferredFirstPrompt } from "../node/provision-remote.js";
 import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
-import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
 import { assertAppSessionPlacement, autoTrustWorkspace } from "../terminal/session-create-guards.js";
@@ -61,6 +59,20 @@ interface ProjectDeps {
   listProjectActivities: (id: number, authorPerson?: string, limit?: number, offset?: number) => Promise<unknown[]>;
   // folder 가 비었을 때 물리 폴더를 생성하고 DB 에 반영 후 상대경로 반환(v6 보강용). 없으면 폴더 없음 400.
   ensureFolder?: (project: { id: number; name: string }) => Promise<string>;
+}
+
+/**
+ * 디렉터리를 못 읽었을 때 무엇으로 답할 것인가(순수 판정).
+ *
+ * 프로젝트의 물리 폴더는 **첫 세션·첫 업로드가 만들기 전까지 없다** — DB(project.folder)엔 경로가 배정돼
+ *  있는데 디스크엔 없는 창이 정상 경로에 존재한다(실측 2026-08-25 매니지드: 대화로 만든 프로젝트를 열자
+ *  자료 화면이 404 로 깨졌다). 그 상태의 사실은 "**빈 폴더**"이지 "없는 프로젝트"가 아니다.
+ * ⚠ 루트일 때만 빈 목록이다 — 없는 **하위 경로**까지 빈 목록으로 덮으면 오타·죽은 링크가 조용히
+ *  "빈 폴더"로 보인다(그건 404 보다 더 나쁜 거짓말이다).
+ * @returns 루트면 빈 목록 응답, 하위 경로면 null(= 호출자가 404)
+ */
+export function missingDirResponse(base: string, abs: string): { path: string; parent: null; items: never[] } | null {
+  return path.relative(base, abs) === "" ? { path: "", parent: null, items: [] } : null;
 }
 
 // base 기준 안전 경로 해소(.. 탈출 차단). requireFile=true 면 루트 자신 거부(파일 경로 필요).
@@ -145,7 +157,18 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     if (q) { res.json({ search: q, items: await searchFiles(base, q) }); return; }
     const abs = resolveIn(base, req.query.path, false);
     let entries: fs.Dirent[];
-    try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new HttpError(404, "디렉터리 없음"); }
+    try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch {
+      // ★ 프로젝트 폴더가 아직 **디스크에 없는** 경우(실측 2026-08-25 매니지드): 폴더 경로는 배정돼 있고
+      //  (위 projBase 의 ensureFolder 는 `project.folder` 값만 정한다 — mkdir 은 세션·업로드가 처음 할 때 한다)
+      //  파일만 하나도 없는 상태다. 그건 "**빈 폴더**"이지 "없는 프로젝트"가 아니다 — 404 를 던지면 자료 화면이
+      //  통째로 에러가 되어, 방금 만든 프로젝트를 열자마자 깨진 화면을 본다(대화로 만든 프로젝트는 세션이 뜨기
+      //  전까지 폴더가 없으므로 **정상 경로에서 재현된다**).
+      //  ⚠ 루트일 때만 빈 목록이다. 하위 경로가 없는 건 진짜로 없는 경로이므로 404 를 유지한다(오타·죽은 링크를
+      //   조용히 빈 화면으로 덮으면 그게 더 나쁜 거짓말이다).
+      const empty = missingDirResponse(base, abs);
+      if (empty) { res.json(empty); return; }
+      throw new HttpError(404, "디렉터리 없음");
+    }
     const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number; repo?: boolean }> = [];
     for (const e of entries) {
       if (e.name.startsWith(".")) continue;
@@ -396,25 +419,21 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       const memberIds = await deps.listProjectMembers(project.id);
       const invites = await validateInvites(memberIds, requester); // 실제 org 멤버만·요청자(owner) 제외·중복 제거
       const { session, deferredPrompt } = await createProjectSessionOnNode(nodeId, requester, input, invites);
-      // 노드는 DB 무접속이므로 게이트웨이가 실행 세션 current + 전환 이력을 한 번에 기록한다.
+      // 노드는 DB 무접속이므로 게이트웨이가 실행 세션 current 를 확정한다(실패 시 세션 롤백 — 공용 헬퍼).
       if (input.projectSrc !== "org") {
-        try {
-          const current = await setExecutionSessionProject({ id: session.id, owner: requester, harness: session.harness || input.harness, nodeId, projectId: project.id });
-          if (!current) throw new Error("execution session owner claim failed");
-          await markExecutionSessionApplied(session.id, requester, current.desired_revision).catch(() => { /* desired가 정본 */ });
-        } catch (e) {
-          // DB SoT 없이 떠 있는 노드 세션을 남기지 않는다. 방금 만든 세션이고 첫 응답 전이라 안전한 생성 롤백이다.
-          await nodeRpc(nodeId, "kill", { user: { userId: requester }, id: session.id }).catch(() => { /* 노드 이탈 시 진단 로그에 남는다 */ });
-          throw new HttpError(503, `프로젝트 소속을 기록하지 못해 노드 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
-        }
+        await bindNodeSessionProjectOrKill({
+          nodeId, sessionId: session.id, requester, harness: session.harness || input.harness, projectId: project.id,
+        });
       }
       // #1791 — desired-state 정본(node_id) — 죽어도 '복원 가능(그 노드)'로 남는 근거. 노드엔 DB 가 없어 게이트웨이가 쓴다.
       await mirrorNodeSession({ ...session, invites }, nodeId, input, requester);
       // 새 노드는 create 시 첫 지시를 보류했다. execution_session current와 desired-state가 모두 생긴 뒤에만 주입을 시작한다.
-      if (deferredPrompt) await nodeRpc(nodeId, "injectFirstPrompt", {
-        id: session.id, harness: session.harness || input.harness, text: deferredPrompt,
-        trustOk: autoTrustWorkspace({ projectId: project.id, subpath: input.subpath }),   // 프로젝트 canonical 폴더 = 우리가 만든 자리(#1867)
-      }).catch((e) => console.warn(`[project] 노드 첫 지시 예약 실패(${session.id}) — 세션은 살아 있습니다:`, (e as Error)?.message ?? e));
+      if (deferredPrompt) {
+        await injectDeferredFirstPrompt({
+          nodeId, sessionId: session.id, harness: session.harness || input.harness, text: deferredPrompt,
+          trustOk: autoTrustWorkspace({ projectId: project.id, subpath: input.subpath }),   // 프로젝트 canonical 폴더 = 우리가 만든 자리
+        });
+      }
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }

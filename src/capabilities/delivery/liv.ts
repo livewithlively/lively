@@ -136,7 +136,8 @@ export const livCapabilities: Capability[] = [
       const workIn = (input.work ?? null) as Record<string, unknown> | null;
       const decIn = (input.decision ?? null) as Record<string, unknown> | null;
       const dclIn = (input.declined ?? null) as Record<string, unknown> | null;
-      if (!workIn && !decIn && !dclIn) throw new HttpError(400, "work · decision · declined 중 하나는 있어야 합니다");
+      const onboarded = input.onboarded === true;   // #2039 — 처음 설정을 끝냈다는 표식
+      if (!workIn && !decIn && !dclIn && !onboarded) throw new HttpError(400, "work · decision · declined · onboarded 중 하나는 있어야 합니다");
       const declinedKey = dclIn ? str(dclIn.key, 80) : undefined;
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
@@ -146,6 +147,7 @@ export const livCapabilities: Capability[] = [
           work: workIn ? { asis: str(workIn.asis, 2000), tobe: str(workIn.tobe, 2000), by: workIn.by === "self" ? "self" : "ai", at: now } : undefined,
           decision: decIn ? { at: now, what: decWhat as string, why: str(decIn.why, 1000), by: str(decIn.by, 60) ?? "liv" } : undefined,
           declined: dclIn ? { at: now, key: declinedKey as string, why: str(dclIn.why, 500) } : undefined,
+          onboarded,
         }),
       };
       // ⚠ mcp:true 여야 한다 — 리브에겐 **이게 유일한 기록 수단**이다. 종전엔 mcp:false 라 부팅 훅이
@@ -159,6 +161,8 @@ export const livCapabilities: Capability[] = [
         .describe("무엇을 왜 그렇게 설정했는지. 뒤에 쌓인다."),
       declined: z.object({ key: z.string(), why: z.string().optional() }).optional()
         .describe("사람이 '안 하겠다'고 한 카드 key(예: org.embeddings). 그 카드는 이후 뜨지 않는다."),
+      onboarded: z.boolean().optional()
+        .describe("처음 설정(#/welcome)을 끝냈다는 표식(#2039). 찍히면 그 사람에겐 어느 브라우저에서도 처음 설정이 다시 뜨지 않는다."),
     }),
 
   // ── 리브가 나에 대해 아는 것을 **화면이 읽는다**(#1843) ──────────────────────────────

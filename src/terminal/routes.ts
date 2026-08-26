@@ -10,7 +10,9 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
+import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
@@ -28,9 +30,13 @@ import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, live
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
+import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
+import { bindNodeSessionProjectOrKill, injectDeferredFirstPrompt, nodeProjectCreatePlan } from "../node/provision-remote.js";
+import { createShellProject, firstPromptProjectPlan } from "../project/first-prompt-project.js";
+import { autoTrustWorkspace } from "./session-create-guards.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
@@ -130,7 +136,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerTicketProfileRoutes(app, auth);
   registerSessionCrudRoutes(app, auth);
   registerRestoreReportRoutes(app, auth);
-  registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys (CRUD 뒤 — 경로가 겹치지 않는다)
+  registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys · /sessions/:id/seen(#1954 3차) (CRUD 뒤 — 경로가 겹치지 않는다)
   registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
@@ -169,6 +175,9 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       // runtime — 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만). 화면이 컨트롤 노출을 이걸로 정한다.
       harnesses: HARNESSES.map((h) => ({
         key: h.key, label: h.label, bin: h.bin, provider: h.provider,
+        // login — 이 AI 에 '로그인' 개념이 있나(#1884, profiles.ts HARNESS_CRED 표). 세션 폼의 [내 계정 로그인]이
+        //  이걸로 선택지를 만든다. 종전엔 그 버튼이 claude 고정이라 codex 사용자가 눌러도 claude 세션이 떴다.
+        login: harnessHasCredential(h.key),
         hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags,
         effortsByModel: h.effortsByModel,
         runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },
@@ -262,6 +271,21 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
 //  ⚠ 기록 실패는 **생성 실패로 승격**한다: 맵 없는 secondary 세션은 이후 헤더 없는 요청이 전부
 //  primary 로 오귀속된다 — dev 실측('다온')이 정확히 그 사고라, 조용히 넘기지 않는다.
 // (#1791 모듈 스코프로 올림 — 노드 세션 복원도 같은 기록을 해야 한다.)
+/**
+ * 세션이 섰다 — 그 세션의 **앱 인스턴스**를 세운다(#1954 후속 · #1780 v2.2 §2.5: 일반 세션 = ai-session 앱의 인스턴스).
+ *  종전엔 웹에서 그 세션을 처음 열 때만 만들어져(lazy), CLI 로 띄우고 웹에서 안 연 세션은 인스턴스가 없었다 —
+ *  그래서 좌측 목록이 '돌고 있는 세션'을 따로 훑어 그 구멍을 메워야 했다. 정체성은 세션이 태어날 때 정해진다.
+ *  ⚠ 이 등록은 **게이트웨이에만** 있다 — sessions.ts(createSession)는 노드 에이전트 번들에 실리고 노드엔 DB 가 없다
+ *   ('DB 없음' 계약, scripts/build-node-agent.mjs 화이트리스트). 그래서 박스·노드·핸드오프·복원이 공유하는
+ *   이 라우트 층 한 곳에 둔다.
+ *  subject 로 멱등하다(store createAppInstance) — 복원처럼 같은 세션이 다시 와도 하나다. 실패해도 세션은 산다.
+ */
+const registerSessionInstance = async (sessionId: string, owner: string, opts: { appId?: string | null; projectId?: number | null; title?: string | null }): Promise<void> => {
+  await createAppInstance({ appId: opts.appId || "ai-session", owner, projectId: opts.projectId ?? null,
+    subjectKind: "session", subjectRef: sessionId, title: opts.title || null })
+    .catch((e) => logger.warn({ err: e, sessionId }, "앱 인스턴스 등록 실패(비치명) — 세션은 살아 있다"));
+};
+
 const recordSessionTenant = async (sessionId: string, killOnFail?: () => Promise<unknown>): Promise<void> => {
   const t = currentTenant();
   if (!t || t.id === PRIMARY_TENANT_ID) return;
@@ -587,7 +611,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (!nodeOpenTo(n, idOf(userOf(req)))) {
       throw new HttpError(403, "본인이 등록한 노드가 아니고 공유 노드도 아닙니다 — 관리자가 공유 노드로 지정한 노드만 함께 쓸 수 있습니다");
     }
-    if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
+    // #1849 — 새 세션을 못 여는 것도 같은 뿌리다(실측: 사용자는 "세션도 안 열림"으로 겪었다).
+    //  왜 오프라인인지 추정이 서면 함께 말한다 — 이 자리가 사용자가 실제로 막히는 지점이다.
+    if (!nodeOnline(nodeId)) {
+      const extra = await nodeOfflineNote(nodeId).catch(() => null);
+      throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)" + (extra ? `\n\n${extra}` : ""));
+    }
   };
 
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
@@ -613,6 +642,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  (없으면 일반 세션, 종전 경로 무변경). 존재·활성·grant 검증은 createSession(mintAppToken)이 하고 404/409/403 을 던진다.
       appId: String(b.appId ?? "").trim() || undefined,
     };
+    // 홈 컴포저(첫 지시를 이미 들고 여는 미소속 세션)는 **프로젝트를 먼저 만들고 그 폴더에서** 연다(#1867).
+    //  종전엔 개인 루트에서 열고 훅이 뒤늦게 소속만 붙여, 그 세션의 파일·워크트리가 개인 루트에 흩어졌다.
+    //  실패하면 그냥 종전 경로(개인 루트) — 세션 생성을 막지 않는다. 빈 세션·앱·로그인·읽기전용은 대상이 아니다(순수 판정).
+    const shellSpec = firstPromptProjectPlan(input);
+    if (shellSpec) {
+      const made = await createShellProject(shellSpec, idOf(userOf(req)));
+      if (made) { input.projectId = made.id; input.projectSrc = "v6"; input.rootKey = "shared"; input.subpath = made.folder; }
+    }
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
     if (nodeId) {
@@ -623,15 +660,31 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
       const remoteInput = await prepareRemoteAppSession(input, me);
       const op: NodeOp = input.appId ? "createAppSession" : "create";
-      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...remoteInput, invites: [], hostProfile }, invites });
+      // 프로젝트 세션이면 첫 지시를 create 에서 떼어 **DB 소속을 쓴 뒤** 넣는다(#1867) — 안 그러면 노드의 첫 훅이
+      //  아직 없는 소속을 보고 또 프로젝트를 만든다. 소속 없는 세션은 종전대로 create 가 바로 넣는다(무회귀).
+      const plan = nodeProjectCreatePlan(remoteInput, !!input.projectId && nodeSupports(nodeId, "injectFirstPrompt"));
+      const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...plan.createInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
+      if (input.projectId && input.projectSrc !== "org") {
+        await bindNodeSessionProjectOrKill({
+          nodeId, sessionId: session.id, requester: me, harness: session.harness || input.harness, projectId: input.projectId,
+        });
+      }
       // #1791 — desired-state 정본은 게이트웨이가 쓴다(노드엔 DB 가 없다). 죽어도 '복원 가능(그 노드)'로 남는 근거.
       await mirrorNodeSession({ ...session, invites }, nodeId, input, me);
+      if (plan.deferredPrompt) {
+        await injectDeferredFirstPrompt({
+          nodeId, sessionId: session.id, harness: session.harness || input.harness, text: plan.deferredPrompt,
+          trustOk: autoTrustWorkspace({ projectId: input.projectId, subpath: input.subpath }),
+        });
+      }
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }
     const session = await createSession(userOf(req), input);
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
+    await registerSessionInstance(session.id, idOf(userOf(req)), { appId: input.appId, projectId: input.projectId, title: session.label });
     res.json({ session });
   }));
   // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
@@ -658,6 +711,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
       const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites: st.invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites: st.invites }, nodeId, input, me);
       res.json({ ok: true, from: id, session: { ...session, node: { id: nodeId, online: true } } });
       return;
@@ -665,6 +719,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (!(await canAttach(id, me))) throw new HttpError(409, "원래 세션이 이미 닫혀 전환할 수 없습니다 — 이어서 열기를 사용해 주세요.");
     const session = await createSession(userOf(req), input);
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
+    await registerSessionInstance(session.id, idOf(userOf(req)), { appId: input.appId, projectId: input.projectId, title: session.label });
     res.json({ ok: true, from: id, session });
   }));
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
@@ -739,6 +794,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         return;
       }
       await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 desired-state 삭제 실패(비치명)"));
+      //  이 경로는 노드에 kill 을 **릴레이**하므로 게이트웨이 killSession 을 안 거친다 — 인스턴스는 여기서 닫는다(#1954 후속).
+      await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "앱 인스턴스 닫기 실패(비치명)"));
       forgetTenantMap();
       res.json({ ok: true, forgot: !killed });
       return;
@@ -755,6 +812,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (st) {
         if (st.owner !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 세션이 아닙니다");
         await deleteSessionState(req.params.id);
+        await closeSessionAppInstances(req.params.id).catch((e) => logger.warn({ err: e, id: req.params.id }, "앱 인스턴스 닫기 실패(비치명)"));
         forgetTenantMap();
         res.json({ ok: true, forgot: true });
         return;
@@ -794,7 +852,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (st.node_id) {
       const nodeId = st.node_id;
       if (nodeSessionsFor(me).some((x) => x.node.id === nodeId && x.id === id)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
-      if (!nodeOnline(nodeId)) throw new HttpError(409, "그 세션이 있던 컴퓨터(노드)가 지금 연결돼 있지 않아 복원할 수 없습니다. 노드가 켜지면 다시 시도하세요.");
+      // #1849 — "연결돼 있지 않습니다"에서 끝내지 않는다: 게이트웨이는 그 노드의 연결 이력을 갖고 있으므로
+      //  **왜 그런지(잠자기 추정)와 무엇을 하면 되는지**까지 말할 수 있다. 진단 조회가 실패해도 원래 문구는 나간다.
+      if (!nodeOnline(nodeId)) {
+        const extra = await nodeOfflineNote(nodeId).catch(() => null);
+        throw new HttpError(409, "그 세션이 있던 컴퓨터(노드)가 지금 연결돼 있지 않아 복원할 수 없습니다. 노드가 켜지면 다시 시도하세요."
+          + (extra ? `\n\n${extra}` : ""));
+      }
       // 라이브 경합은 **노드에 묻는다**(gone op) — 스냅샷은 재시작 직후·생성 직후 비어 있고 뷰어별 필터라(admin) 살아 있는 세션을
       //  놓칠 수 있다. 확답을 못 받으면 복원하지 않는다(모르면 같은 세션을 둘로 만들지 않는다 — #835 '확답 only').
       const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
@@ -818,6 +882,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const op: NodeOp = input.appId ? "createAppSession" : "create";
       const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: owner }, input: { ...remoteInput, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
+      await registerSessionInstance(session.id, owner, { appId: input.appId, projectId: input.projectId, title: session.label });
       await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
       if (st.claude_session_id) {
         await setClaudeSessionId(session.id, st.claude_session_id, owner, st.transcript_path)
@@ -875,6 +940,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       await setClaudeSessionId(session.id, st.claude_session_id, st.owner, st.transcript_path)   // #1746 대화 파일 경로도 승계(같은 대화 = 같은 파일)
         .catch((e) => logger.warn({ err: e, id: session.id }, "restore: claude UUID 승계 실패(비치명 — 다음 복원은 picker)"));
     }
+    //  복원도 세션 생성이다 — 새 id 로 인스턴스를 세운다(옛 세션의 인스턴스는 아래 옛 행 정리와 함께 닫힌다).
+    await registerSessionInstance(session.id, st.owner, { appId: st.app_id, projectId: st.project_id, title: st.label || session.label });
+    await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));
     await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
     res.json({ ok: true, session });
   }));
@@ -888,6 +956,19 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //  #1221 — 같은 경로로 **실행 단계**(state: busy·waiting·idle)까지 받는다. 새 엔드포인트를 따로 두지 않은 이유는
   //   훅과 게이트웨이가 **따로 업데이트되기 때문**이다: 새 훅 + 구 게이트웨이는 모르는 필드를 무시하고 활동 보고만
   //   되고(무회귀), 구 훅 + 새 게이트웨이는 state 없이 종전대로 동작한다. 새 경로였다면 앞 조합이 404 로 죽는다.
+  // 전이 하나를 그 세션 주인에게 민다(#1842). **무엇이 알림인지는 여기서 정하지 않는다** — 앱이 해석한다.
+  //  이름은 지금 하는 일(pane 제목)이 있으면 그걸, 없으면 세션 라벨을 준다(앱이 다시 폴백한다).
+  const notifyPhaseChange = async (id: string, owner: string, change: { prev: string | null; phase: string; at: number }, nameHint?: string): Promise<void> => {
+    try {
+      // 노드 세션의 tmux 는 그 PC 에 있어 getSessionLabel(로컬 tmux)이 못 읽는다 → 호출자가 아는 이름을 준다.
+      publishNotify(owner, {
+        type: "session", id, name: nameHint || (await getSessionLabel(id).catch(() => "")) || "",
+        prev: change.prev, phase: change.phase,
+        key: sessionEventKey(id, change.phase, change.at), ts: change.at,
+      });
+    } catch (e) { logger.warn({ err: e, id }, "알림 전달 실패(비치명)"); }
+  };
+
   app.post("/api/ui/terminal/sessions/:id/active", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const id = req.params.id;
@@ -898,7 +979,10 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     // #1791 — 노드 세션도 이제 행이 있다(node_id). 그 세션의 tmux 는 노드에 있으니 아래 릴레이 분기로(여기서 로컬 tmux 를 만지면 안 된다).
     if (st && !st.node_id) {
       if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
-      await markSessionActive(id, phase).catch((e) => logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"));
+      const change = await markSessionActive(id, phase).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
+      // #1842 — 단계가 **바뀐** 순간 그 자리에서 앱으로 민다. 폴링이 30초 뒤에 같은 사실을 다시 발견하는 대신,
+      //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
+      if (change) void notifyPhaseChange(id, me, change);   // 응답을 막지 않는다 — 훅은 핫패스다
       res.json({ ok: true });
       return;
     }
@@ -912,8 +996,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (ns.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     // 구 노드(caps 미선언)는 이 op 를 모른다 → 보내지 않는다. 그 노드 세션은 종전대로 자기 tmux 스크래핑으로 판정된다(무회귀).
     if (nodeSupports(ns.node.id, "markActive")) {
-      await nodeRpc(ns.node.id, "markActive", { id, state: phase })
-        .catch((e) => logger.warn({ err: e, id }, "노드 활동 보고 릴레이 실패(비치명)"));
+      const relay = await nodeRpc(ns.node.id, "markActive", { id, state: phase })
+        .catch((e) => { logger.warn({ err: e, id }, "노드 활동 보고 릴레이 실패(비치명)"); return null; });
+      // #1842 — 노드가 돌려준 전이를 그대로 민다. 구 노드는 change 를 안 보내므로 undefined → 폴링이 커버한다(무회귀).
+      const change = (relay as { change?: { prev: string | null; phase: string; at: number } | null } | null)?.change;
+      if (change) void notifyPhaseChange(id, me, change, ns.label);
     }
     res.json({ ok: true });
   }));

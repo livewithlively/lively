@@ -13,6 +13,7 @@ import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLine
 import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
 import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
+import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState } from "./update-policy.mjs";
@@ -23,6 +24,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream } from "./notify.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
 
@@ -815,6 +817,11 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(statusLabel({ ...base, nodeConnected: false }), /연결 끊김/);
   assert.match(statusLabel({ ...base, nodeConnected: true }), /실행 중/);
   assert.match(statusLabel({ ...base, nodeConnected: null }), /실행 중/, '모름은 종전대로 — 게이트웨이에 못 물었다고 끊김이라 하면 거짓말');
+  // #1849 — 원인을 아는 끊김은 '다시 시작 필요'라고 하면 안 된다(자는 PC 는 재시작해도 또 잔다).
+  assert.match(statusLabel({ ...base, nodeConnected: false, nodeSleepNote: '…잠자기로 보입니다…' }), /잠자기/,
+    '잠자기로 추정되면 그 사실을 먼저 말한다');
+  assert.doesNotMatch(statusLabel({ ...base, nodeConnected: false, nodeSleepNote: '…' }), /다시 시작 필요/,
+    '자는 PC 에 재시작을 시키면 사용자는 같은 일을 반복하게 된다');
   assert.match(statusLabel({ ...base }), /실행 중/, '축이 아예 없어도(구 CLI) 종전대로');
   const z = trayMenuModel({ ...base, nodeConnected: false });
   const i = z.findIndex((m) => m.id === 'node-start');
@@ -826,6 +833,8 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(main, /nodeConnected: typeof n\.connected === "boolean" \? n\.connected : null/, 'connected 를 boolean 일 때만 옮기지 않는다');
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
   assert.match(js, /nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
+  assert.match(js, /nodeSleepNote/, '렌더러가 잠자기 원인 문구를 띄우지 않는다(#1849)');
+  assert.match(main, /nodeSleepNote:/, 'main 이 status 의 sleep.note 를 앱 상태로 옮기지 않는다(#1849)');
   assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
   assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
 });
@@ -1571,6 +1580,18 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(nextAfterSetup({}), "node-start");
     assert.equal(nextAfterSetup(null), "node-start");
   });
+  t("N3 ★ 배포 모양으로 분기하지 않는다(#2044 결정) — 매니지드든 셀프호스트든 설치의 끝은 노드다", () => {
+    // 상태에 어떤 배포 힌트가 실려 와도 판정이 흔들리면 안 된다. 매니지드에서 노드가 조용히 실패하던 원인은
+    //  코어(노드 WS 가 테넌트 컨텍스트 밖)였고, 여기에 조건을 붙여 증상을 가리는 쪽으로 가면 안 된다.
+    for (const extra of [{ gatewayUrl: "https://acme.app.lvly.io" }, { gatewayUrl: "https://dev.lvly.io" }, { managed: true }, { managed: false }]) {
+      assert.equal(nextAfterSetup({ nodeRunning: false, ...extra }), "node-start", JSON.stringify(extra));
+    }
+    // 소스에도 배포 분기가 없어야 한다 — 위 표는 우리가 아는 힌트만 덮는다.
+    const src = readFileSync(fileURLToPath(new URL("./web-shell.mjs", import.meta.url)), "utf8");
+    const fn = src.slice(src.indexOf("export function nextAfterSetup("));
+    const body = fn.slice(0, fn.indexOf("\n}") + 2);
+    assert.ok(!/managed|lvly\.io|tenant|gatewayUrl/i.test(body), "배포 모양을 보고 갈라진다: " + body);
+  });
   t("N2 배선 — onboard 가 setup **성공 후에만** node-start 를 잇고, 실패면 setup 결과를 그대로 돌려준다", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     const fn = main.slice(main.indexOf("async function onboard("), main.indexOf("function askUser("));
@@ -1584,5 +1605,310 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(rest.indexOf("!r.ok") < chainAt, "실패 가드보다 먼저 노드를 시작하려 한다");
   });
 }
+
+// ── 앱 알림 판정 (#1842) ─────────────────────────────────────────────────────
+{
+  const S = (over) => ({ id: "box-jang-1", label: "세션", harness: "claude", owned: true, agentState: "idle", awaiting: false, working: false, ...over });
+  const snap = (arr) => snapshotSessions(arr);
+  const kinds = (evs) => evs.map((e) => e.kind);
+
+  t("A1 콜드스타트 — 앱을 켠 첫 폴은 **아무것도 알리지 않는다**(과거가 배너로 되살아나면 안 된다)", () => {
+    assert.deepEqual(diffSessions(null, snap([S({ awaiting: true })])), []);
+  });
+  t("A2 대기 진입 — awaiting false→true 에서만 뜬다(계속 대기 중이면 다시 안 뜬다)", () => {
+    const a = snap([S({ awaiting: false })]), b = snap([S({ awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+    assert.deepEqual(diffSessions(b, b), [], "같은 대기가 폴링마다 반복되면 30초마다 같은 배너가 된다");
+  });
+  t("A3 ★ 탭이 없어도(agentState=offline) 대기는 알린다 — 이 프로젝트의 핵심 함정", () => {
+    // catalog.ts: agentState 는 탭이 없으면 busy·waiting 을 offline 으로 덮는다. 그 값으로 판정하면
+    //  화면을 열어 둔 사람에게만 알림이 가고, 자리를 뜬 사람(=알림이 필요한 사람)에겐 안 뜬다.
+    const a = snap([S({ agentState: "offline", awaiting: false })]);
+    const b = snap([S({ agentState: "offline", awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+    const src = readFileSync(fileURLToPath(new URL("./notify.mjs", import.meta.url)), "utf8");
+    const body = src.slice(src.indexOf("export function diffSessions"));
+    assert.ok(!/\.state\s*===\s*"waiting"|agentState\s*===\s*"waiting"/.test(body), "waiting 판정에 agentState 를 쓰고 있다");
+  });
+  t("A4 완료 — working true→false", () => {
+    assert.deepEqual(kinds(diffSessions(snap([S({ working: true })]), snap([S({ working: false })]))), [NOTIFY.DONE]);
+  });
+  t("A5 완료와 대기가 같은 순간이면 **대기가 이긴다**(질문은 완료가 아니다)", () => {
+    const a = snap([S({ working: true })]), b = snap([S({ working: false, awaiting: true })]);
+    assert.deepEqual(kinds(diffSessions(a, b)), [NOTIFY.WAITING]);
+  });
+  t("A6 ★ 세션이 끝나는 것은 알리지 않는다 (원준 2026-08-24) — 정상·강제 어느 쪽도", () => {
+    // 끝난 세션은 목록에서 확인하면 되고, 배너로 부를 만큼 지금 해야 할 일이 없다.
+    //  ⚠ working 이 돌던 세션이 exited 로 가면 '완료'로는 잡힌다 — 그건 작업이 끝난 것이라 맞다.
+    const idle = snap([S({ agentState: "idle" })]);
+    assert.deepEqual(diffSessions(idle, snap([S({ agentState: "exited" })])), []);
+    assert.deepEqual(diffSessions(idle, snap([S({ agentState: "exited", oomKilled: true })])), [], "강제 종료도 알리지 않는다");
+    assert.ok(!("EXITED" in NOTIFY), "종료 알림 종류가 되살아났다");
+  });
+  t("A7 새 세션 — 곧장 승인을 물으면 알리고, 그냥 생긴 것은 안 알린다", () => {
+    const before = snap([]);
+    assert.deepEqual(kinds(diffSessions(before, snap([S({ awaiting: true })]))), [NOTIFY.WAITING]);
+    assert.deepEqual(diffSessions(before, snap([S({})])), []);
+  });
+  t("A8 사라진 세션(회수·정리)은 사건이 아니다", () => {
+    assert.deepEqual(diffSessions(snap([S({ working: true })]), snap([])), []);
+  });
+  t("A9 남의 세션(owned=false)·셸 세션(harness=shell)은 스냅샷에서 빠진다", () => {
+    assert.equal(snap([S({ owned: false, awaiting: true })]).size, 0);
+    assert.equal(snap([S({ harness: "shell", awaiting: true })]).size, 0);
+  });
+  t("A10 유형별 끄기 — 끈 종류는 만들지 않는다", () => {
+    const a = snap([S({ awaiting: false })]), b = snap([S({ awaiting: true })]);
+    assert.deepEqual(diffSessions(a, b, { [NOTIFY.WAITING]: false }), []);
+    assert.deepEqual(kinds(diffSessions(a, b, { [NOTIFY.DONE]: false })), [NOTIFY.WAITING], "다른 종류를 꺼도 대기는 산다");
+  });
+  t("A11 이름 폴백 — title 없으면 label, 둘 다 없으면 '이름 없는 세션'", () => {
+    assert.equal(snap([S({ title: "지금 하는 일" })]).get("box-jang-1").name, "지금 하는 일");
+    assert.equal(snap([S({ title: "", label: "라벨" })]).get("box-jang-1").name, "라벨");
+    assert.equal(snap([S({ title: "", label: "" })]).get("box-jang-1").name, "이름 없는 세션");
+  });
+  t("A12 배너 계획 — 적으면 개별, 많으면 한 장으로 묶는다(알림 폭탄 방지)", () => {
+    const ev = (i) => ({ kind: NOTIFY.WAITING, id: "s" + i, name: "세션" + i });
+    assert.equal(planBanners([ev(1), ev(2)]).length, 2);
+    const many = planBanners([ev(1), ev(2), ev(3), ev(4)]);
+    assert.equal(many.length, 1);
+    assert.equal(many[0].event, null, "묶음 배너는 특정 세션으로 보내지 않는다");
+    assert.match(many[0].body, /4개/);
+  });
+  t("A13 문구 — 본문은 어미까지 끝맺는다(ui-copy-complete-sentence-endings)", () => {
+    for (const k of [NOTIFY.WAITING, NOTIFY.DONE]) {
+      const b = bannerFor({ kind: k, name: "테스트 세션" });
+      assert.ok(b.title && b.body, k + " 문구가 비었다");
+      assert.ok(b.body.includes("테스트 세션"), k + " 본문에 세션 이름이 없다");
+    }
+  });
+  t("A14 세션 해시 — 형식이 아닌 id 는 주소로 만들지 않는다(응답을 그대로 믿지 않는다)", () => {
+    assert.equal(sessionHash("box-jang-8abcdb3b"), "#/s/box-jang-8abcdb3b");
+    for (const bad of ["", null, "a b", "../../etc", "javascript:alert(1)", "x".repeat(200)]) assert.equal(sessionHash(bad), null, String(bad));
+  });
+  t("A15 배선 — main.mjs 가 알림 폴러를 실제로 걸고 Notification 을 띄운다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(/from "\.\/notify\.mjs"/.test(main), "notify.mjs 를 쓰지 않는다");
+    assert.ok(/new Notification\(/.test(main), "OS 알림을 띄우지 않는다");
+    assert.ok(/setAppUserModelId/.test(main), "Windows 는 AppUserModelId 가 없으면 배너가 안 뜬다");
+  });
+  t("A16 ★ 트레이엔 알림 설정이 없다 — 설정 자리는 [내 정보 ▸ 알림] 한 곳이다", () => {
+    // 두 자리에서 끄고 켜면 저장소가 갈라져 "껐는데 뜬다"가 난다. 사람 단위(서버)로 한 곳에 모은다.
+    const ready = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true };
+    assert.ok(!trayMenuModel(ready).some((m) => m.id === "notify" || String(m.id || "").startsWith("notify:")),
+      "트레이에 알림 토글이 남아 있다");
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(!/notify-prefs-local|desktop-notify\.json/.test(main), "앱이 아직 기기별 설정 파일을 본다 — 서버가 정본이다");
+  });
+  t("A18 사람 알림 — 콜드스타트는 기준선만(지난 24시간이 배너로 쏟아지면 안 된다)", () => {
+    const items = [{ key: "comment:1", link: "#/projects2/p/7", text: { title: "밥이 나를 언급했어요", body: "확인해 주세요" } }];
+    assert.deepEqual(pickPersonEvents(items, null), [], "seen 이 null(첫 폴)인데 배너를 만들었다");
+    assert.equal(pickPersonEvents(items, new Set()).length, 1);
+  });
+  t("A19 사람 알림 — 이미 띄운 것은 다시 안 띄운다(커서만으로는 폴 경계 중복을 못 막는다)", () => {
+    const items = [{ key: "comment:1", link: "#/projects2/p/7", text: { title: "t", body: "b" } }];
+    const seen = new Set();
+    const first = pickPersonEvents(items, seen);
+    assert.equal(first.length, 1);
+    rememberSeen(seen, first);
+    assert.deepEqual(pickPersonEvents(items, seen), [], "같은 key 가 두 번 떴다");
+  });
+  t("A20 사람 알림 — 끄면 안 뜨고, key 기억은 상한에서 오래된 것부터 잊는다", () => {
+    const items = [{ key: "k1", text: { title: "t", body: "b" } }];
+    assert.deepEqual(pickPersonEvents(items, new Set(), { [NOTIFY.PERSON]: false }), []);
+    const seen = new Set();
+    rememberSeen(seen, Array.from({ length: SEEN_MAX + 50 }, (_, i) => ({ key: "k" + i })));
+    assert.equal(seen.size, SEEN_MAX);
+    assert.ok(!seen.has("k0"), "가장 오래된 key 가 남아 있다 — 상한이 안 먹었다");
+    assert.ok(seen.has("k" + (SEEN_MAX + 49)), "가장 최근 key 가 사라졌다");
+  });
+  t("A21 사람 알림 링크 — 해시 형태만 통과시킨다(서버가 준 값이라도 다시 본다)", () => {
+    assert.equal(personLink("#/projects2/p/7"), "#/projects2/p/7");
+    for (const bad of ["", null, "https://evil.example/x", "javascript:alert(1)", "#/a b", "#/" + "x".repeat(300)]) {
+      assert.equal(personLink(bad), null, String(bad));
+    }
+    assert.equal(pickPersonEvents([{ key: "k", link: "https://evil.example", text: { title: "t", body: "b" } }], new Set())[0].link, null,
+      "바깥 주소가 알림 클릭 대상으로 살아남았다");
+  });
+  t("A22 사람 알림 — 많으면 한 장으로 묶고, 묶음은 특정 화면으로 보내지 않는다", () => {
+    const ev = Array.from({ length: 5 }, (_, i) => ({ key: "k" + i, title: "t" + i, body: "b", link: "#/x" }));
+    const plan = planPersonBanners(ev);
+    assert.equal(plan.length, 1);
+    assert.equal(plan[0].event, null);
+    assert.match(plan[0].body, /5개/);
+  });
+  t("A23 배선 — 앱이 사람 알림 피드를 폴링하고, 실패하면 커서를 전진시키지 않는다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const fn = main.slice(main.indexOf("async function pollPersonFeed("));
+    assert.ok(/\/api\/ui\/notify\/feed/.test(fn), "알림 피드를 부르지 않는다");
+    const guardAt = fn.indexOf("if (!res.ok) return;");
+    const cursorAt = fn.indexOf("personSince =");
+    assert.ok(guardAt >= 0 && guardAt < cursorAt, "실패 가드보다 먼저 커서를 전진시킨다 — 그 사이 알림이 영영 사라진다");
+    assert.ok(/personSeen = null/.test(main), "로그아웃에서 기준선을 버리지 않는다 — 다시 로그인하면 과거가 쏟아진다");
+  });
+  t("A24 실시간 전이표 — 병렬 세션에서 가장 자주 기다리는 신호는 busy→idle(끝났다)", () => {
+    assert.equal(phaseEventKind("busy", "idle"), NOTIFY.DONE);
+    assert.equal(phaseEventKind("idle", "waiting"), NOTIFY.WAITING);
+    assert.equal(phaseEventKind("busy", "waiting"), NOTIFY.WAITING);
+    assert.equal(phaseEventKind(null, "waiting"), NOTIFY.WAITING, "첫 보고가 대기면 알린다");
+    assert.equal(phaseEventKind(null, "idle"), null, "첫 보고가 idle 인 건 '끝난 것'이 아니라 그냥 쉬는 것이다");
+    assert.equal(phaseEventKind("idle", "busy"), null, "일을 시작한 건 알릴 일이 아니다");
+    assert.equal(phaseEventKind("waiting", "waiting"), null);
+  });
+  t("A25 스트림 사건 — 끈 종류·이미 본 key·모르는 형식은 배너가 되지 않는다", () => {
+    const ev = { type: "session", id: "box-jang-1", name: "빌드", prev: "busy", phase: "idle", key: "s:1:idle:100" };
+    assert.equal(streamEvent(ev, new Set()).kind, NOTIFY.DONE);
+    assert.equal(streamEvent(ev, new Set([ev.key])), null, "재연결 직후 같은 사건이 다시 떴다");
+    assert.equal(streamEvent(ev, new Set(), { [NOTIFY.DONE]: false }), null);
+    assert.equal(streamEvent({ type: "other", id: "x" }, new Set()), null);
+    assert.equal(streamEvent({ type: "session", prev: "busy", phase: "idle" }, new Set()), null, "id 없는 사건은 갈 곳이 없다");
+    assert.equal(streamEvent({ ...ev, name: "" }, new Set()).name, "이름 없는 세션");
+  });
+  t("A26 SSE 파싱 — 미완성 프레임은 버퍼에 남긴다(반쪽 JSON 을 파싱하면 사건을 잃는다)", () => {
+    const a = parseSse("event: session\ndata: {\"id\":1}\n\n: ping\n\nevent: session\ndata: {\"id\":2");
+    assert.deepEqual(a.events, [{ id: 1 }], "ping 주석이 사건으로 잡히거나 반쪽 프레임이 파싱됐다");
+    assert.ok(a.rest.includes("\"id\":2"), "미완성 프레임이 버려졌다 — 다음 조각과 이어지지 못한다");
+    const b = parseSse(a.rest + "}\n\n");
+    assert.deepEqual(b.events, [{ id: 2 }], "이어붙인 프레임이 복원되지 않았다");
+    assert.deepEqual(parseSse("data: {깨진\n\n").events, [], "깨진 프레임 하나가 예외로 스트림을 끊으면 안 된다");
+  });
+  t("A27 재연결 — 지수 백오프에 상한(게이트웨이 재시작 중 초당 재접속 금지)", () => {
+    assert.equal(reconnectDelay(0), 1000);
+    assert.equal(reconnectDelay(1), 2000);
+    assert.ok(reconnectDelay(3) < reconnectDelay(4));
+    assert.equal(reconnectDelay(99), 30_000, "상한이 없다");
+  });
+  t("A28 배선 — 스트림이 살아 있으면 폴링은 배너를 만들지 않되 기준선은 늘 갱신한다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.ok(/\/api\/ui\/notify\/stream/.test(main), "실시간 스트림에 붙지 않는다");
+    const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
+    const snapAt = poll.indexOf("notifySnapshot = next;");
+    const gateAt = poll.indexOf("if (!streamAlive)");
+    assert.ok(snapAt >= 0 && gateAt > snapAt, "게이팅이 기준선 갱신보다 앞이다 — 연결이 끊기면 폴링이 못 이어받는다");
+    assert.ok(/streamAlive = true/.test(main) && /streamAlive = false/.test(main), "연결 상태를 갱신하지 않는다");
+    assert.ok(/finally\s*{[^}]*streamAlive = false/s.test(main), "끊길 때 상태를 되돌리지 않는다 — 영영 폴링 배너가 막힌다");
+    assert.ok(/scheduleStreamRetry/.test(main), "재연결이 배선되지 않았다");
+  });
+  // #2041 — 웹 셸에서 같은 코드 모양이 실제로 재접속 폭주를 냈다(브라우저 실측: 20초에 19번).
+  //  '붙었나'로 카운터를 되돌리면, 서버가 붙자마자 끊는 상황에서 백오프가 매번 첫 칸으로 돌아가
+  //  지수 백오프를 써 놓고 없는 것과 같아진다. 그래서 '붙어서 얼마나 살았나'로 판정한다.
+  t("A29 ★백오프는 '붙었나'가 아니라 '붙어서 살았나'로 되돌린다 — 즉시 끊기는 서버에 초당 재접속 금지", () => {
+    assert.equal(stableStream(0), false, "붙자마자 끊긴 연결은 실패의 한 종류다");
+    assert.equal(stableStream(9_999), false, "경계 직전 — 아직 아니다");
+    assert.equal(stableStream(10_000), true, "10초를 버텼으면 정상 연결");
+    assert.equal(stableStream(undefined), false, "값이 없으면 되돌리지 않는다(안전한 쪽)");
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const conn = main.slice(main.indexOf("async function connectNotifyStream("), main.indexOf("function scheduleStreamRetry("));
+    assert.ok(!/streamAlive = true;\s*streamTries = 0;/.test(conn),
+      "★붙는 순간 카운터를 0 으로 되돌린다 — 즉시 끊기는 서버에 초당 한 번씩 재접속한다(#2041 실측)");
+    assert.ok(/stableStream\(/.test(conn), "안정연결 판정을 쓰지 않는다");
+  });
+}
+
+
+// ── GW. 주소 입력 해석 (#2044) — 마법사가 묻는 값의 유일한 해석기 ────────────────
+// 사양 엣지 표(입력 조합 × 기대). 행마다 테스트 1개:
+//  정규화 GW1 스킴없음 · N2 말미 슬래시 · N3 브라우저 복사(/ui/#해시) · N4 말미 /mcp ·
+//         N5 경로 접두 게이트웨이 보존(경계) · N6 평문·포트 보존 · N7 빈 입력(새 값이 빈 경우)
+//  안내   A1 mac · A2 win · A3 클라우드 로그인 주소 거절 · A4 그 서브도메인은 통과(경계) ·
+//         A5 셸 메타문자 거절 · A6 빈 입력은 조용
+//  통합   J-G1 argv 에 정규화가 실린다 · J-G2 메타문자는 여전히 throw · J-G3 빈 값은 종전대로
+t("GW1 스킴 없이 넣어도 받는다 — 사람이 아는 주소엔 https:// 가 안 붙어 있다", () => {
+  assert.equal(normalizeGatewayInput("acme.app.lvly.io"), "https://acme.app.lvly.io");
+  assert.equal(normalizeGatewayInput("  acme.app.lvly.io  "), "https://acme.app.lvly.io");
+});
+t("GW2 말미 슬래시는 떼어낸다(부트스트랩 URL 이 // 로 갈라지지 않게)", () => {
+  assert.equal(normalizeGatewayInput("https://acme.app.lvly.io/"), "https://acme.app.lvly.io");
+  assert.equal(normalizeGatewayInput("https://acme.app.lvly.io///"), "https://acme.app.lvly.io");
+});
+t("GW3 브라우저 주소창에서 복사한 값(/ui/ + 해시)도 받는다", () => {
+  assert.equal(normalizeGatewayInput("https://acme.app.lvly.io/ui/#/home"), "https://acme.app.lvly.io");
+  assert.equal(normalizeGatewayInput("https://acme.app.lvly.io/ui"), "https://acme.app.lvly.io");
+});
+t("GW4 말미 /mcp 는 게이트웨이 주소가 아니라 엔드포인트다 — 떼어낸다(코어 normalizeGatewayUrl 과 같은 흡수)", () => {
+  assert.equal(normalizeGatewayInput("https://gw.example.com/mcp"), "https://gw.example.com");
+  assert.equal(normalizeGatewayInput("https://gw.example.com/mcp/"), "https://gw.example.com");
+});
+t("GW5 ★ 경계: 경로 접두 게이트웨이는 **보존**한다 — 임의 경로를 자르면 그 배포가 통째로 못 붙는다", () => {
+  assert.equal(normalizeGatewayInput("https://dev.lvly.io/preview/p1541"), "https://dev.lvly.io/preview/p1541");
+  assert.equal(normalizeGatewayInput("https://dev.lvly.io/preview/p1541/ui/"), "https://dev.lvly.io/preview/p1541");
+});
+t("GW6 평문·포트는 그대로 — 로컬 게이트웨이(http://127.0.0.1:8080)를 https 로 덮지 않는다", () => {
+  assert.equal(normalizeGatewayInput("http://127.0.0.1:8080"), "http://127.0.0.1:8080");
+});
+t("GW7 빈 입력은 빈 문자열 — 던지지 않는다(칸이 비어 있는 것은 오류가 아니다)", () => {
+  assert.equal(normalizeGatewayInput(""), "");
+  assert.equal(normalizeGatewayInput("   "), "");
+  assert.equal(normalizeGatewayInput(null), "");
+  assert.equal(normalizeGatewayInput(undefined), "");
+});
+t("GW7b ★ 경계: 호스트로 안 보이는 값엔 스킴을 보태지 않는다 — 안 그러면 플래그가 '올바른 주소'가 된다", () => {
+  // 이 가드가 없으면 `--token` 이 `https://--token` 이 되어 형식 강제를 통과한다(E2 가 잡는 그 부류).
+  for (const bad of ["--token", "-x", "acme", "  --gateway  "]) {
+    assert.ok(!normalizeGatewayInput(bad).startsWith("https://"), `스킴을 붙였다: ${JSON.stringify(bad)}`);
+  }
+  // 진짜 호스트의 최소 조건 — 점이 있거나, 포트가 붙었거나, localhost.
+  assert.equal(normalizeGatewayInput("acme.app.lvly.io"), "https://acme.app.lvly.io");
+  assert.equal(normalizeGatewayInput("localhost:8080"), "https://localhost:8080");
+  assert.equal(normalizeGatewayInput("gw.example.com/preview/x"), "https://gw.example.com/preview/x");
+});
+t("GW8 안내는 그 플랫폼이 실제로 실행할 한 줄을 준다(웹 관리화면·CLI 안내와 같은 URL)", () => {
+  const mac = gatewayAdvice("acme.app.lvly.io", "darwin");
+  assert.equal(mac.error, "");
+  assert.equal(mac.cmd, "curl -fsSL https://acme.app.lvly.io/cli | sh");
+  assert.equal(mac.cmd, bootstrapOneLiner("https://acme.app.lvly.io", "darwin"), "cli-locate 와 갈라졌다");
+  const win = gatewayAdvice("acme.app.lvly.io", "win32");
+  assert.equal(win.cmd, "irm https://acme.app.lvly.io/cli.ps1 | iex");
+});
+t("GW9 ★ 라이블리 클라우드 **로그인** 주소는 진행을 막는다 — 매니지드에서 가장 흔한 막다른 길", () => {
+  for (const h of CONTROL_PLANE_HOSTS) {
+    const a = gatewayAdvice(h, "darwin");
+    assert.ok(a.error, `${h} 를 통과시켰다 — 부트스트랩이 404 를 받고 엉뚱한 진단이 남는다`);
+    assert.equal(a.cmd, "", "막아야 하는데 실행할 한 줄을 보여줬다");
+    assert.ok(/워크스페이스 주소/.test(a.error), "다음 행동(어디서 주소를 보는지)이 없다");
+  }
+  assert.ok(gatewayAdvice("https://app.lvly.io/home", "darwin").error, "경로가 붙어도 같은 호스트다");
+});
+t("GW10 ★ 경계: 그 호스트의 **서브도메인**은 워크스페이스다 — 막으면 정상 사용자가 못 붙는다", () => {
+  assert.equal(isControlPlane("https://app.lvly.io"), true);
+  assert.equal(isControlPlane("https://acme.app.lvly.io"), false);
+  assert.equal(gatewayAdvice("acme.app.lvly.io", "darwin").error, "");
+  // 뒤에 붙은 문자열이 우연히 호스트를 포함해도 안 걸린다(부분일치 금지).
+  assert.equal(isControlPlane("https://not-app.lvly.io.evil.example"), false);
+});
+t("GW11 셸 메타문자는 안내 단계에서 이미 거절한다(형식 강제는 ipc-contract 가 다시 한다)", () => {
+  for (const bad of ["https://a b", "https://a;rm", "https://a`x`", "https://a|b", "https://a$(x)"]) {
+    const a = gatewayAdvice(bad, "darwin");
+    assert.ok(a.error, `통과시켰다: ${bad}`);
+    assert.equal(a.cmd, "");
+  }
+});
+t("GW12 빈 입력은 조용하다 — 아직 아무 판단도 하지 않는다(타이핑 시작 전에 빨간 글씨를 띄우지 않는다)", () => {
+  const a = gatewayAdvice("", "darwin");
+  assert.equal(a.error, "");
+  assert.equal(a.cmd, "");
+  assert.equal(a.url, "");
+});
+t("GW13 ★ 통합: 정규화된 값이 실제 argv 에 실린다 — 미리보기와 [연결]이 같은 값을 쓴다", () => {
+  assert.deepEqual(argvFor("setup", { gateway: "acme.app.lvly.io" }), ["setup", "--gateway", "https://acme.app.lvly.io"]);
+  assert.deepEqual(argvFor("login", { gateway: "https://acme.app.lvly.io/ui/" }), ["login", "--gateway", "https://acme.app.lvly.io"]);
+});
+t("GW14 통합: 셸 메타문자는 여전히 throw · 빈 값은 종전대로 인자 없음(보호 무회귀)", () => {
+  assert.throws(() => argvFor("setup", { gateway: "https://a;rm -rf /" }));
+  assert.deepEqual(argvFor("setup", {}), ["setup"]);
+  assert.deepEqual(argvFor("setup", { gateway: "   " }), ["setup"]);
+});
+t("GW15 배선 — 메인·preload·렌더러가 같은 채널을 보고, 렌더러는 자기 정규식으로 판정하지 않는다", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  assert.match(main, /ipcMain\.handle\(IPC\.GATEWAY_ADVICE/, "메인에 핸들러가 없다");
+  const preload = readFileSync(fileURLToPath(new URL("../preload/preload.cjs", import.meta.url)), "utf8");
+  assert.match(preload, /gatewayAdvice:/, "preload 가 노출하지 않는다");
+  const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+  assert.match(app, /window\.lively\.gatewayAdvice\(/, "렌더러가 메인에 묻지 않는다");
+  assert.ok(!/\^https\?:\\\/\\\//.test(app), "렌더러가 주소 형식을 자기 정규식으로 다시 판정한다(정본이 둘)");
+  // 온보딩이 그 판정을 실제로 쓰는가 — 안 쓰면 [연결]은 종전처럼 부트스트랩부터 돌아 404 를 만난다.
+  assert.match(main, /const advice = gatewayAdvice\(url\)/, "onboard 가 판정을 안 쓴다");
+  assert.match(main, /if \(advice\.error\) return/, "판정 결과로 막지 않는다");
+});
 
 console.log(`\n${pass} passed`);

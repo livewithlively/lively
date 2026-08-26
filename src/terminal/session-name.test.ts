@@ -32,3 +32,39 @@ assert.equal(isUnnamedSession("랜딩 카피 수정", "box-yoon-1a2b3c4d"), fals
 assert.equal(isUnnamedSession("APP. lvly. io 셀프서브 방식 와이어프레임", "box-yoon-1a2b3c4d"), false);
 
 console.log("ok  세션 이름 규칙 6갈래");
+
+// ── 에이전트가 지은 이름 (#1979) — 이 규칙이 틀렸을 때 나는 일: ───────────────
+//  🔴 구 cleanAiName 은 40자 넘는 입력을 **빈 문자열로 거절**했다("문장을 통째로 뱉었다"). 이제 이름은 세션이
+//     사용자 턴 **안에서** 툴로 등록한다 — 거기서 거절하면 모델이 형식을 맞추려 다시 부르느라 사람이
+//     기다리는 시간만 늘어난다(윤상민 2026-08-25: "실패응답 되도록 발생시키지말고. 글자수 초과 이런건 걍 trim").
+//     그래서 **거절하지 않고 자른다**.
+import { sessionNameFromAgent } from "./session-name.js";
+
+// ⓐ 통상 — 그대로 남는다.
+assert.equal(sessionNameFromAgent("결제 백오프"), "결제 백오프");
+
+// ⓑ 따옴표와 마침표가 **섞여** 있어도 한 번에 벗긴다(순서대로 지우면 하나가 남는다).
+assert.equal(sessionNameFromAgent('"결제 백오프".'), "결제 백오프");
+assert.equal(sessionNameFromAgent("「한글 자모분리」"), "한글 자모분리");
+
+// ⓒ ★12자에서 자른다 — 거절하지 않는다.
+assert.equal(sessionNameFromAgent("가".repeat(13)), "가".repeat(12));
+
+// ⓓ ★경계 — 정확히 12자는 안 자른다.
+assert.equal(sessionNameFromAgent("나".repeat(12)), "나".repeat(12));
+
+// ⓔ ★정책 변경 회귀 — 문장을 통째로 뱉어도 **빈 문자열이 아니다**(구 동작은 "" 거절이었다).
+{
+  const sentence = "이 세션은 결제 백오프 로직을 고치는 자리입니다 그러니까 그렇게 이름을 붙이면 되겠습니다";
+  const out = sessionNameFromAgent(sentence);
+  assert.notEqual(out, "", "긴 문장을 거절하면 안 된다 — 잘라서라도 이름을 준다");
+  assert.equal(out.length, 12, `12자로 잘려야 하는데 ${out.length}자`);
+}
+
+// ⓕ 여러 줄이면 첫 줄만(모델이 뒤에 설명을 붙여도 이름만 남는다).
+assert.equal(sessionNameFromAgent("결제 백오프\n이유는 …"), "결제 백오프");
+
+// ⓖ 이름으로 쓸 게 없으면 빈 문자열 — 호출자가 지금 이름을 그대로 둔다(여기서 지어내지 않는다).
+assert.equal(sessionNameFromAgent(""), "");
+assert.equal(sessionNameFromAgent("   \n  "), "");
+assert.equal(sessionNameFromAgent('"".'), "");

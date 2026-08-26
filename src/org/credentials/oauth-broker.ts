@@ -17,6 +17,7 @@ import { getMemberSecret, setMemberSecret, deleteMemberSecret, memberOwner, GATE
 import { getMcpServer, getRuntimeConfig, getOrgProfile } from "../store.js";
 import { presetOAuthScope } from "../delivery/mcp-server-presets.js";
 import { makeSsrfFetch } from "../../net/mcp-ssrf-fetch.js";
+import { logger } from "../../log.js";
 import { isSlackOAuthKind, buildSlackAuthorizeUrl, exchangeSlackCode, slackInstallToSlots, parseSlackAccessResponse, relayStartUrl, SLACK_BOT_KIND, type SlackInstall } from "./slack-oauth.js";
 import { isNotionPublicServer, buildNotionAuthorizeUrl, exchangeNotionCode, parseNotionTokenResponse, refreshNotionToken, notionInstallToSlot, NOTION_PUBLIC_KIND, NOTION_PUBLIC_SERVER, type NotionInstall } from "./notion-oauth.js";
 
@@ -287,11 +288,33 @@ export async function startNotionPublicConsent(memberId: string): Promise<Consen
   }
   return { authorized: false, state, authorizationUrl: buildNotionAuthorizeUrl({ clientId: client.client_id, redirectUri: await callbackUrl(), state }) };
 }
+/**
+ * 노션 연결이 저장된 직후에 부를 후처리 — **상위 계층이 꽂는다**(capabilities/notion-connect.ts).
+ *
+ *  왜 훅인가: 동의가 끝나면 사용자 입장에서 그 일은 **끝나야 한다.** 그런데 저장 자체는 자격 계층의 일이고
+ *  "그래서 수집기를 켠다"는 수집 계층의 일이라, 여기서 직접 부르면 순환 import 가 된다(notion-connect 는
+ *  이 모듈의 startNotionPublicConsent 를 쓴다). 그래서 방향을 뒤집어 훅으로 받는다.
+ *
+ *  ★ 이게 없으면 무슨 일이 나는가(2026-08-25 매니지드 실측): 토글을 켜면 동의 화면으로 갔다가 돌아오는데
+ *   **체크박스가 풀린 채**다 — 연결은 저장됐지만 수집기는 아무도 안 켰기 때문이다. 사용자는 "안 됐나?" 하고
+ *   한 번 더 누르고, 그제야 켜진다(그땐 이미 연결이 있으니 동의 화면도 안 뜬다). 두 번 누르게 만드는 UX 는
+ *   컴맹 페르소나(#1881)에서 그대로 이탈 지점이다.
+ */
+export type NotionInstalledHook = (memberId: string) => Promise<void>;
+let notionInstalledHook: NotionInstalledHook | null = null;
+export function onNotionInstalled(fn: NotionInstalledHook): void { notionInstalledHook = fn; }
+
 // 설치 결과 → 조직 슬롯. connected_by 로 '누가 연결했나'를 남긴다(이탈 시 "다른 관리자로 다시 연결" 안내의 근거).
 async function saveNotionInstall(p: StatePayload, install: NotionInstall, actor?: string): Promise<void> {
   const slot = notionInstallToSlot(install);
   await setMemberSecret(GATEWAY_OWNER, NOTION_PUBLIC_KIND, slot.scopeKey,
     { secret: slot.secret, meta: { ...slot.meta, connected_by: p.m } }, actor ?? "oauth");
+  // 후처리는 **연결 저장을 막지 않는다** — 수집기 준비가 실패해도 토큰은 이미 저장됐고, 화면에서 토글을
+  //  한 번 더 켜면 된다(그때는 연결이 있으니 동의 없이 켜진다). 실패를 삼키되 로그로 남긴다.
+  if (notionInstalledHook) {
+    await notionInstalledHook(p.m).catch((e) =>
+      logger.warn({ err: (e as Error)?.message }, "노션 연결 후 수집기 준비 실패 — 화면에서 토글로 켤 수 있습니다"));
+  }
 }
 async function finishNotionPublicConsent(p: StatePayload, code: string, actor?: string): Promise<void> {
   const client = await loadOAuthClient(NOTION_PUBLIC_KIND);

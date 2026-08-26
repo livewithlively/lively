@@ -333,7 +333,7 @@ const STATE_MARKER = '__LTSTATE__';
 //  문자를 %output 알림 '경계'에서 쪼갤 수 있는데(문자의 앞바이트가 한 %output 끝, 뒷바이트가 다음 %output
 //  시작 — 사이에 `\n%output %<pane> ` 프레이밍이 끼어듦), 스트림을 문자열로 먼저 디코드하면 그 자리가 깨진다(�).
 //  → %output 의 '값 바이트'만 모아 streaming UTF-8 디코더(경계의 partial 바이트를 버퍼링)로 디코드해 재조립한다.
-function makeControl(opts) {
+export function makeControl(opts) {
   // opts: { write(string), backfill(string), onExit() }
   let mode = null;                  // null=미정, 'control', 'raw'
   let pending = new Uint8Array(0);  // 부분 줄/도입자 판별용 바이트 잔여
@@ -365,8 +365,19 @@ function makeControl(opts) {
     }
     return new Uint8Array(out);
   }
-  function handleLine(s, e0) { // pending[s,e0) — 줄(개행 제외). 끝 \r 제거.
-    let e = e0; if (e > s && pending[e - 1] === 0x0d) e--;
+  // 줄 끝 CR 은 **개수와 무관하게 전부** 프레이밍이다 — 값이 아니다(#1943 실측).
+  //  tmux 는 control mode 줄을 `\n` 으로 끝내고, 값 안의 제어바이트는 전부 8진(`\015`)으로 이스케이프한다
+  //  → 줄 끝에 '리터럴' CR 이 오는 경로는 PTY 의 ONLCR(`\n`→`\r\n`) 뿐이고, 그건 데이터가 아니다.
+  //  ⚠ 종전엔 CR 을 **한 개만** 벗겼다. 그 가정은 'PTY 가 하나'일 때만 맞다:
+  //   · 셀프호스팅(dev) — 코어 node-pty → tmux : `\r\n` (CR 1개) → 한 개 벗기면 정확.
+  //   · 매니지드      — 코어 node-pty → tmux-relay.cjs → docker exec(Tty:true) → tmux : PTY 가 **둘**이라
+  //     ONLCR 이 두 번 걸려 `\r\r\n` (CR 2개). 한 개만 벗기면 **남은 CR 이 pane 데이터로 xterm 에 써진다.**
+  //  증상(실측 2026-08-25, 매니지드 도그푸드): 앱이 그린 프레임은 절대 CUP(`\e[43;5H`)로 끝나는데 그 뒤에
+  //   붙은 CR 이 커서를 **매번 0열로** 밀었다 → 커서가 프롬프트 맨 왼쪽(`>` 위)에 붙박이고, 한글 IME 조합은
+  //   버퍼 커서 자리에 그려지므로 조합 글자가 거기 뜬다(확정 전까지). tmux cx=5 인데 xterm x=0 으로 실측.
+  //   dev 에서 안 나던 이유가 이것이다 — 같은 코드, 다른 PTY 층수.
+  function handleLine(s, e0) { // pending[s,e0) — 줄(개행 제외). 끝 \r 전부 제거.
+    let e = e0; while (e > s && pending[e - 1] === 0x0d) e--;
     // 닫히지 않는 블록에서 빠져나온다 — 이 줄부터는 평소대로(=%output 은 화면에 쓴다) 처리한다.
     if (inBlock && blockAt && Date.now() - blockAt > BLOCK_MAX_MS) {
       inBlock = false; blockParts = []; blockAt = 0;
@@ -438,6 +449,12 @@ let syncedThisConn = false;           // 이 연결에서 재접속 상태동기
 //  cap 을 보내면(옛 서버로의 degrade 는 예외 — 그땐 상태 자체가 안 옴), state-only(t:'st')가 남긴 stale 커서가
 //  엉뚱한 백필에 적용돼 이 버그(커서 desync)가 재발한다. 새 cap 송신부를 추가하면 st:1 을 반드시 함께.
 let pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
+// tmux 실커서로 되돌린다 — cx/cy 는 0-based·가시영역 기준, xterm CUP 은 1-based.
+// ⚠ 조건 없이 적용한다. 한때 '커서가 숨겨져 있으면(cursor_flag=0) 좌표를 못 믿는다'고 보고 적용을 미룬 적이
+//  있는데(#1943 초판), 그건 오진이었다 — 진짜 원인은 control-mode 줄 끝의 잔여 CR 이었다(handleLine 주석).
+//  게다가 커서를 숨긴 채 idle 인 TUI(선택 프롬프트·less·fzf)에선 '미루면 영영 안 맞춰져' 더 나빴다.
+//  tmux 의 cx/cy 는 커서 표시 여부와 무관하게 그 순간의 진짜 좌표다.
+function writeCursor(st) { try { term.write('\x1b[' + (st.cy + 1) + ';' + (st.cx + 1) + 'H'); } catch (_) { /* noop */ } }
 // ── 캡처가 불가능한 백엔드를 위한 폴백 (#1541 실측) ──────────────────────────────────────────
 // psmux(Windows 노드)는 **alt-screen 팬의 capture-pane 에 빈 응답**을 준다(tmux 는 내용을 준다).
 //  A/B 실측 — 같은 노드, 같은 요청: 셸 팬(alt=0) → 상태 블록 + 캡처 44줄 / claude 팬(alt=1) → 상태 블록만.
@@ -521,7 +538,7 @@ function armBackfillWatch() {
     doNudge();
   }, BACKFILL_WAIT_MS);
 }
-function parsePaneState(line) {
+export function parsePaneState(line) {
   const m: any = {};
   for (const tok of String(line).trim().split(/\s+/)) { const i = tok.indexOf('='); if (i > 0) m[tok.slice(0, i)] = tok.slice(i + 1); }
   const num = (k) => { const n = parseInt(m[k], 10); return Number.isFinite(n) ? n : null; };
@@ -965,6 +982,27 @@ export function setupWebkitImeAdapter() {
 }
 // 키/IME/마우스 입력(xterm onData)의 단일 처리 본체 — boot 가 term.onData 에 '한 번만' 등록한다.
 //  최상위 함수로 분리한 이유: 회귀 테스트(src/terminal-client-input.test.ts)가 실제 배선 그대로 직접 호출한다(#1117).
+// ── 마우스 리포트 코얼레싱(#1437, 2026-08-26) — claude alt-screen 은 리포트마다 화면 전체를 다시 그린다.
+//  트랙패드 스크롤·호버(1003 any-motion)는 초당 수십 리포트를 뿜어 재그리기를 겹겹이 쌓아 스크롤이 밀렸다
+//  (실측: 세션 컨테이너 부하 아님 — CPU 스로틀 0·메모리 압박 0. 파이프에 쌓인 프레임 수가 지연이었다).
+//  한 프레임에 온 리포트를 **바이트 하나도 안 버리고**(휠 노치·press/release 보존) 이어붙여 1회 ws 프레임으로
+//  보낸다 — claude 는 그 배치를 한 번에 읽어 재그리기도 한 번으로 접는다. 지연은 최대 1프레임(≈16ms)뿐.
+let mouseReportBuf = '';
+let mouseFlushArmed = false;
+const scheduleMouseFrame = (typeof requestAnimationFrame === 'function')
+  ? (fn: () => void) => requestAnimationFrame(fn)
+  : (fn: () => void) => setTimeout(fn, 16);
+// 버퍼된 마우스 리포트를 한 프레임으로 내보낸다(테스트가 동기로 부를 수 있게 export). 비면 no-op.
+export function flushMouseReports(): void {
+  if (!mouseReportBuf) return;
+  const d = mouseReportBuf; mouseReportBuf = ''; mouseFlushArmed = false;
+  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
+  // 드리프트 가드(#1302) — 리포트가 '실제로 나가는' 이 순간에만, 마지막 상태동기가 낡았을 때만 물어본다.
+  if (Date.now() - lastStateAt > 8000 && Date.now() - lastMouseProbeAt > 8000) {
+    lastMouseProbeAt = Date.now();
+    if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
+  }
+}
 export function handleTermData(d) {
   userTyped = true;       // #1059 — 이 탭에서 입력이 있었다 = 세션이 죽으면 '내가 끝냈을 수 있다'(자동 복원 금지)
   // 사파리 IME 어댑터의 삼킴(#1300) — beforeinput 이 예약한 '그 이벤트의 xterm 유출' 1회만 걸러낸다.
@@ -976,14 +1014,15 @@ export function handleTermData(d) {
   cancelPromptSeek(true); // 질문 위치 자동 탐색 중 사용자가 입력하면 즉시 중단(#967 — 사용자 조작 우선)
   // Shift+Enter 승격: 이 keydown 이 낸 '\r' 을 '\x1b\r'(Option+Enter 와 동일 = 줄바꿈)로 바꿔 보낸다. 음절 등 다른 데이터는 그대로.
   if (shiftEnterPending && d === '\r') { shiftEnterPending = false; d = '\x1b\r'; }
-  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
-  // 드리프트 가드(#1302) — 붙어 있는 동안 앱이 죽으면(마우스 off 를 못 보내고) 클라는 다음 동기화(포커스·재연결)까지
-  //  그 사실을 모른 채 리포트를 계속 흘린다. 리포트가 '실제로 나가는 순간'(=증상이 시작된 그 순간)에만, 그리고
-  //  마지막 상태동기가 낡았을 때만 상태를 다시 물어 갭을 한 왕복으로 줄인다(정상 앱 사용 중엔 8초에 1회 이하).
-  if (isMouseReport(d) && Date.now() - lastStateAt > 8000 && Date.now() - lastMouseProbeAt > 8000) {
-    lastMouseProbeAt = Date.now();
-    if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
+  // 마우스 리포트(호버·휠)는 프레임당 1회로 합쳐 보낸다(위 mouseReportBuf 주석). 드리프트 가드는 flush 안.
+  if (isMouseReport(d)) {
+    mouseReportBuf += d;
+    if (!mouseFlushArmed) { mouseFlushArmed = true; scheduleMouseFrame(flushMouseReports); }
+    return;
   }
+  // 비-마우스 입력 — 버퍼된 마우스를 먼저 비워 순서를 지키고(마우스→키), 즉시 보낸다(에코 지연 0).
+  flushMouseReports();
+  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
 }
 // 복사 경로는 셋 — ① 선택 후 Ctrl/Cmd+C (setupClipboard) ② '복사' 류 버튼 클릭 ③ 앱(Claude Code)의 OSC52 복사 신호.
 //  · [#972] copy-on-select(드래그 놓는 즉시 자동복사, #252)는 되살리지 않는다 — 미세한 클릭드래그(4px)에도
@@ -2804,7 +2843,7 @@ async function connectNow() {
         // 커서 복원(#1092 버그2·3) — capture 텍스트엔 최종 커서위치가 없고, capture 는 pane 높이만큼(빈 줄 포함) 그려
         //  커서가 '쓴 마지막 줄'(대개 화면 맨 아래)에 남는다 → 프롬프트는 위, 입력/커서는 아래로 어긋남. tmux 실커서로 되돌린다.
         //  (cx/cy 는 0-based·가시영역 기준 → xterm CUP 은 1-based.)
-        if (st && st.hasCursor) term.write('\x1b[' + (st.cy + 1) + ';' + (st.cx + 1) + 'H');
+        if (st && st.hasCursor) writeCursor(st);
       } catch (_) { /* noop */ }
     },
     // tmux control 스트림의 %exit — 이 attach 클라가 끝났다는 뜻일 뿐, '세션이 죽었다'는 뜻은 아니다

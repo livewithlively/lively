@@ -1,6 +1,6 @@
 // v2/views.ts — 새 셸의 중앙 화면 셋(#1719): 홈(미선택) · 프로젝트 · 세션. 데이터는 main.ts 가 모아 넘긴다(V2Data).
 //  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
-//  프로젝트는 v2/project-view.ts(#1757 — 짧은 개요 + 리브 대화), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 에 있다.
+//  프로젝트는 v2/panes.ts(칸 셸 — main.ts mountProjectShell 이 그걸 마운트한다), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 와 칸 「리브」(panes-parts.ts)에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
 import { el, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
@@ -10,6 +10,7 @@ import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
+import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
 
 export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
@@ -91,7 +92,15 @@ export function sessDisplayName(s: Sess, projectName: string): string {
 //  · Enter → 세션 생성 → 세션 대화 화면. 리브 대화는 홈에 두지 않는다(#/liv 가 그 자리).
 //  · '지금 도는 세션'은 **답 기다리는 것 먼저**, 세션 이름과 프로젝트가 같으면 한 번만 쓴다(같은 말 두 줄 금지).
 
-export function renderHome(host: HTMLElement, data: V2Data): void {
+/**
+ * 홈(=[새 작업]) 화면.
+ *
+ * `draft` 는 **아직 안 보낸 지시**다(#2037). 홈 탭은 '거쳐 가는 빈 탭'이라 거기서 다른 화면을 열면 그 탭이
+ * 통째로 그 화면이 되는데(main.ts onHash ⓪), 그러면 쳐 두던 글이 DOM 과 함께 사라졌다 — 원준 신고:
+ * *"가운데 박스에 타이핑 쳐놨다가 프로젝트나 이런 다른 창 가서 뭐 좀 하다오면 타이핑해놓은 글자 전부 사라진다."*
+ * 그래서 값을 탭(그리고 그 저장본)에 맡기고 여기서 되받는다 — 화면이 다시 그려져도, 새로고침해도 남는다.
+ */
+export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: string; onChange(v: string): void }): void {
   const me = state.me || {};
   const name = String(me.display_name || me.email || me.userId || '');
   const live = data.sessions.filter((s) => s.live && s.alive);
@@ -101,6 +110,7 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
   const d = new Date(); const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
 
   const ta = el('textarea', { class: 'v2-launch-in', rows: '2', placeholder: '무엇이든 시키세요 — 프로젝트 없이 열리고, 소속은 나중에 세션에서 정해요', 'aria-label': '무엇이든 시키기' }) as HTMLTextAreaElement;
+  ta.value = draft?.text || '';   // 쓰다 만 지시를 되받는다(#2037)
   const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button' }, el('span', { text: '시키기' }), el('kbd', { text: '⏎' })) as HTMLButtonElement;
   // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 기본은 내가 지난번에 고른 값이고,
   //  여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts — '새 AI 세션' 폼과 같은 기억을 쓴다).
@@ -124,11 +134,15 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
     if (att.busy()) { toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.'); return; }
     send.disabled = true; ta.disabled = true; runPicker.disable(true);
     send.replaceChildren(el('span', { text: '여는 중…' }));
+    // ⚠ 초안은 **보내기 전에** 비운다. 이 글은 이제 세션의 것이고, 홈 탭이 그대로 그 세션 화면이 되어야 하기
+    //  때문이다 — 초안이 남아 있으면 라우터가 '쓰던 홈'으로 보고 세션을 새 탭에 연다(main.ts onHash).
+    draft?.onChange('');
     const ok = await openQuickSession(text + att.tail(), { run: runPicker.value() });
-    if (!ok) { send.disabled = false; ta.disabled = false; runPicker.disable(false); send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); ta.focus(); }
+    if (!ok) { draft?.onChange(ta.value); send.disabled = false; ta.disabled = false; runPicker.disable(false); send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); ta.focus(); }
   };
   send.onclick = () => { void submit(); };
-  ta.addEventListener('input', grow);
+  //  ⚠ 값만 밖으로 넘긴다 — 이 칸을 다시 그리지 않는다(한글 조합이 흩어진다, [[ime-safe-search-input-no-full-rerender]]).
+  ta.addEventListener('input', () => { grow(); draft?.onChange(ta.value); });
   ta.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void submit(); }
   });
@@ -159,7 +173,12 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
   //  왜: 같은 목록이 **사이드바(프로젝트 폴더 안 세션)**·**[확인할 것]**·**AI 세션 앱** 셋에 이미 있고,
   //  홈은 '무엇이든 시키는 자리' 하나로 충분하다. 게다가 그 목록에는 자동 이름짓기 프롬프트처럼 사람이 시킨 적
   //  없는 기록까지 이름으로 올라와(실측) 첫 화면이 잡동사니로 읽혔다. 시키는 칸은 화면 가운데로 올린다.
-  window.setTimeout(() => { grow(); ta.focus(); }, 30);
+  window.setTimeout(() => {
+    grow();
+    ta.focus();
+    // 쓰다 만 글을 되받았으면 커서는 그 끝에 — 이어서 치면 된다.
+    if (ta.value) { try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (_) { /* noop */ } }
+  }, 30);
 }
 
 // nowList(돌고 있어요 · 답을 기다려요 · 이어서 할 수 있어요)는 홈에서 걷었다(원준 2026-08-20).
@@ -170,6 +189,13 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
 //  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — 보이는 것 전부(프로젝트 세션은 팀 누구든 답할 수 있다).
 //  · 끝났어요: 시킨 작업이 끝났는데 아직 안 본 세션(stateKey 'done') — 내 것만(남의 완료를 내가 '확인'할 일은 없다).
 //  행은 홈의 nowList 와 같은 문법(v2-now-row) — 새 시각 언어를 만들지 않는다. 들어가 보면(lastAttached 갱신) 목록에서 빠진다.
+/**
+ * 「확인할 것」 = **받은 알림의 이력**(#1891) + 지금 내 답을 기다리는 세션.
+ *
+ * 종전엔 라이브 세션에서 파생만 했다 — 화면을 안 보고 있으면 지나갔고 이력이 없었다.
+ * 이제 위쪽은 서버가 남긴 알림(앱이 보낸 것 전부), 아래쪽은 지금 상태다. 둘은 겹칠 수 있지만
+ *  성격이 다르다: 알림은 **그때 무슨 일이 있었나**, 대기 세션은 **지금 무엇이 막혀 있나**.
+ */
 export function renderInbox(host: HTMLElement, data: V2Data): void {
   const waits = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
   const dones = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
@@ -182,9 +208,11 @@ export function renderInbox(host: HTMLElement, data: V2Data): void {
       el('span', { class: 'st', text: when(s.lastSeen) }),
       el('span', { class: 'go btn btn-sm', text: s.stateKey === 'waiting' ? '답하기' : '보기' }));
   };
-  host.replaceChildren(el('div', { class: 'v2-center v2-inbox' },
+  const notiHost = el('section', { class: 'v2-noti-sec' });
+  const shell = el('div', { class: 'v2-center v2-inbox' },
     el('h1', { class: 'v2-title', text: '확인할 것' }),
-    el('p', { class: 'v2-desc', text: '내 답이나 확인을 기다리는 세션이에요. 들어가 보면 목록에서 빠집니다.' }),
+    el('p', { class: 'v2-desc', text: '받은 알림과, 지금 내 답을 기다리는 세션이에요.' }),
+    notiHost,
     (!waits.length && !dones.length)
       ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '지금 확인할 것이 없어요.' }),
           el('p', { class: 'sub', text: '세션이 답을 기다리거나 작업을 끝내면 여기에 모입니다.' }))
@@ -194,7 +222,35 @@ export function renderInbox(host: HTMLElement, data: V2Data): void {
             ...waits.map(rowOf)) : null,
           dones.length ? el('section', {},
             el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `끝났어요 — 확인만 하면 돼요 · ${dones.length}` })),
-            ...dones.map(rowOf)) : null)));
+            ...dones.map(rowOf)) : null));
+  host.replaceChildren(shell);
+  void paintNotifications(notiHost);
+}
+
+/** 알림 이력 칸 — 비동기라 화면을 먼저 세우고 도착하면 채운다(빈 목록이면 칸 자체를 비운다). */
+async function paintNotifications(host: HTMLElement): Promise<void> {
+  let feed: NotificationFeed;
+  try { feed = await loadNotifications({ limit: 100 }); }
+  catch { host.replaceChildren(); return; }   // 이력을 못 읽어도 아래 '대기 세션'은 그대로 쓸 수 있다
+  if (!feed.notifications.length) { host.replaceChildren(); return; }
+
+  // 배너는 셸이 전역으로 띄운다(startNotificationBanners) — 여기서 또 띄우면 이 화면을 열 때마다 두 번 뜬다.
+
+  const perm = notificationPermission();
+  const head = el('div', { class: 'v2-now-h' },
+    el('span', { class: 'v2-k', text: `받은 알림 · ${feed.notifications.length}${feed.unread ? ` (안 읽음 ${feed.unread})` : ''}` }),
+    //  ⚠ 권한은 사람이 누를 때만 묻는다 — 들어오자마자 뜨는 권한 창은 거의 거부당하고, 거부되면 다시 못 묻는다.
+    perm === 'default'
+      ? el('button', { class: 'btn btn-sm', type: 'button', text: '알림 켜기',
+          onclick: (e: Event) => { void askNotificationPermission().then(() => { (e.target as HTMLElement)?.remove(); }); } })
+      : null,
+    feed.unread
+      ? el('button', { class: 'btn btn-sm', type: 'button', text: '모두 읽음',
+          onclick: () => { void markNotificationsRead().then(() => paintNotifications(host)); } })
+      : null);
+
+  host.replaceChildren(el('div', { class: 'v2-now' },
+    el('section', {}, head, ...feed.notifications.map(notificationRow))));
 }
 
 export function projName(data: V2Data, id: number | null): string {
@@ -203,7 +259,7 @@ export function projName(data: V2Data, id: number | null): string {
   return p ? p.name : `프로젝트 #${id}`;
 }
 
-// ── 프로젝트 화면은 v2/project-view.ts(#1757) — 짧은 개요 + 리브 대화. 여기 있던 renderProject(개요+세션+태스크 나열)는 거기로 갈음했다.
+// ── 프로젝트 화면은 v2/panes.ts(칸 셸) — 여기 있던 renderProject 는 #1757 에서 project-view.ts 로 옮겼고, 그 뒤 칸 셸이 그 자리를 가져갔다(project-view.ts 는 도달 경로가 없어져 삭제). 리브 대화는 칸 「리브」가 싣는다.
 
 // ── 세션 — 그 세션 자체를 가운데에: 터미널 기본 + 대화(베타)(web/session-chat.ts) ─────────
 //  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].

@@ -6,6 +6,7 @@
 //    (tmux -CC 출력은 멀티바이트가 프레임 경계에서 쪼개질 수 있어 서버가 디코드하지 않고
 //     바이트 그대로 릴레이한다 — terminal-pty 와 동일 원칙.)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
+import type { KeepAwakeStatus } from "./keep-awake.js";   // #1849 — hello 로 보고하는 잠자기 억제 상태(타입만)
 import type { WorkerRunSnapshot } from "../apps/worker-host.js";
 
 export const NODE_WS_PATH = "/node/ws";
@@ -60,9 +61,15 @@ export interface NodeResources {
 //  harnesses = **이 PC 에서 실제로 세션을 띄울 수 있는 하네스**(#1713) = 이 번들의 카탈로그 ∩ PATH 에 있는 실행 파일.
 //            caps 와 같은 이유로 노드가 직접 답한다 — 게이트웨이는 남의 PC 에 무엇이 깔렸는지 알 방법이 없고,
 //            번들이 낡았는지도 이 값이 스스로 말한다(옛 빌드는 이 필드를 안 보낸다 → nodeHarnesses 가 기준선으로).
+//  keepAwake = **이 PC 가 자지 않게 붙잡고 있나**(#1849). 노드가 붙어 있어야 원격 세션이 열리는데, 노트북은
+//            전원이 꽂혀 있어도 유휴 잠자기에 들어가 링크가 끊긴다(실측: 1시간에 한 번, 60초씩만 연결).
+//            에이전트가 스스로 억제를 걸고 그 결과를 여기로 보고한다 — 자동으로 못 막는 구멍(gaps: 뚜껑 닫기·
+//            배터리·modern standby)까지 함께 보내야 화면이 "왜 아직 끊기는지"와 "무엇을 더 해야 하는지"를 말한다.
+//            구 번들은 이 필드를 안 보낸다 → '모름'(undefined)이지 '안 걸림'이 아니다(그 구분은 UI 가 해야 한다).
 export interface HelloMsg {
   t: "hello"; ver: number; node: string; platform: string;
   agentVer?: string; caps?: string[]; harnesses?: string[]; host?: string; hasDocker?: boolean;
+  keepAwake?: KeepAwakeStatus;
 }
 export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources }
 export interface ResMsg { t: "res"; id: number; ok: boolean; data?: unknown; error?: string }
@@ -107,7 +114,10 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //   노드는 tmux @box_project 실행 캐시만 적용한다(cwd·project.json·링크·셔틀은 건드리지 않는다).
 //  injectFirstPrompt = 프로젝트 세션 create와 첫 지시를 둘로 나눠, 게이트웨이가 DB current를 기록한 뒤에만
 //   노드의 입력창 대기·주입을 시작한다. 즉답 후 백그라운드 실행이라 90초 폴링이 RPC 상한을 잡아먹지 않는다.
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt"] as const;
+//  markSeen = 사람이 **그 세션 화면을 보고 있다**는 도장(#1954 3차, @box_last_seen). markActive 와 같은 이유로 릴레이가
+//   필요하다 — 노드 세션의 tmux 는 그 PC 에 있어 게이트웨이가 직접 못 쓴다. 이 op 를 모르는 구 노드에서는
+//   그 세션만 종전 동작(attach 시각만으로 판정)으로 남는다 — 안 보내면 그만이라 무회귀다.
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;

@@ -21,6 +21,9 @@ export function statusLabel(st) {
   if (s.tokenRejected) return "로그인 만료 — 다시 로그인 필요";
   if (!s.kitInstalled) return "키트 설치 필요";
   // 프로세스는 도는데 게이트웨이엔 안 붙어 있음(#1541 실측: 절전 뒤 좀비 3시간·나흘) — '실행 중' 이라 하면 거짓말이다.
+  // #1849 — **원인을 아는 끊김**은 "다시 시작 필요" 라고 하면 안 된다: 자는 PC 는 재시작해도 또 잔다.
+  //  잠자기로 추정되면 그 사실을 먼저 말한다(자세한 문구는 창에서).
+  if (s.nodeRunning && s.nodeConnected === false && s.nodeSleepNote) return "노드 연결 끊김 — 이 PC 가 잠자기에 듭니다";
   if (s.nodeRunning && s.nodeConnected === false) return "노드 연결 끊김 — 다시 시작 필요";
   if (s.nodeRunning) return s.nodeDaemon ? "노드 실행 중 (자동 시작 켜짐)" : "노드 실행 중 (이 세션만)";
   return s.nodeRegistered ? "노드 정지됨" : "노드 미등록";

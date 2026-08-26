@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const mod = await import(join(root, "public/app/session-status.js"));
-const { SESS_STATES, SESS_STATE_KEYS, sessStateKey, sessLabel, sessRank, sessIsDead, isUnreadDone } = mod;
+const { SESS_STATES, SESS_STATE_KEYS, sessStateKey, sessLabel, sessRank, sessIsDead, isUnreadDone, lastViewedAt } = mod;
 
 let pass = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -52,6 +52,23 @@ eqk({ agentState: "busy", lastActive: nowSec - 60, lastAttached: nowSec - 600 },
   "⑯작업 중이면 '작업 완료'로 덮지 않는다(아직 안 끝났다)", NOW);
 eqk({ restorable: true, lastActive: nowSec - 60, lastAttached: nowSec - 600 }, "restorable",
   "⑰복원 가능 세션은 '작업 완료'로 승격하지 않는다", NOW);
+
+// ── 열람 신호가 둘이다 (#1954 3차) ──────────────────────────────────────────────────────
+//  🔴 실제로 났던 일(2026-08-26 상민님 신고): 사이드바에서 **초록점을 눌러도 안 꺼지고** 행도 '지금 볼 것'에
+//     고정이었다. 원인은 열람 신호가 tmux attach 하나뿐이었던 것 — 새 셸이 탭 DOM 을 유지하면서 세션당 attach 가
+//     탭 수명당 한 번이 됐고(#1719), 이미 열어 둔 세션은 다시 눌러도 attach 가 없어 열람 시각이 얼어붙었다.
+//     실측: 붙어 있는(att=1) 세션 5개의 last_attached 가 last_busy 보다 300~440초 뒤처진 채 100초간 1초도 안 움직였다.
+//  그래서 화면이 직접 찍는 lastViewed(@box_last_seen)를 더하고 **둘 중 나중 것**을 열람으로 본다.
+eqk({ agentState: "idle", lastActive: nowSec - 60, lastAttached: nowSec - 600, lastViewed: nowSec - 10 }, "idle",
+  "⑰-a attach 는 낡았어도 화면이 방금 봤으면 '작업 완료' 아님 — 이게 안 되면 초록점이 안 꺼진다", NOW);
+eqk({ agentState: "idle", lastActive: nowSec - 60, lastAttached: nowSec - 10, lastViewed: nowSec - 600 }, "idle",
+  "⑰-b 반대로 화면 도장이 낡았어도 방금 붙었으면 봤다 — 단독 터미널 창·구 노드 경로가 여기 산다", NOW);
+eqk({ agentState: "idle", lastActive: nowSec - 60, lastAttached: nowSec - 600, lastViewed: nowSec - 300 }, "done",
+  "⑰-c 둘 다 작업보다 앞서면 여전히 '안 본 결과'다 — 신호를 더한다고 판정이 물러지지 않는다", NOW);
+assert.equal(lastViewedAt({ lastAttached: 100, lastViewed: 200 }), 200);
+assert.equal(lastViewedAt({ lastAttached: 300, lastViewed: 200 }), 300);
+assert.equal(lastViewedAt({}), 0);
+ok("⑰-d 열람 = max(attach, 화면 도장) — 없으면 0(한 번도 안 봤다)");
 
 // ── 탭이 없어도 '지금 돌고 있다/기다린다'는 사실이 이긴다 (#1819 원준 신고 2026-08-21) ──
 //  실측: 25분째 도는 세션(@box_state=busy, 8초 전 갱신)이 사이드바엔 초록 '작업 완료'로 떠 있었다.

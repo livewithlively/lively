@@ -797,7 +797,11 @@ function digestLine(r: Record<string, unknown>): { head: string; body: string; t
   const who = s(f.author_name);
   const ch = s(f.container_name);
   const tid = s(f.thread_ts ?? f.ts);
-  const meta = [when, who && `@${who}`, ch && `#${ch}`, tid && `thread=${tid}`].filter(Boolean).join(" · ");
+  // #1881 — 개인 폴더에서 올라온 자료는 **올린 사람만 보는 자료**다. 이걸 안 알려주면 증류기가 그 내용을
+  //  조직 공개 지식에 합치고, derived_from 상속(단조 축소)이 그 공개 문서를 올린 사람 전용으로 잠근다(실측 위험).
+  //  fields.root 는 로컬 업로드 자료만 갖는 값이라 다른 커넥터의 digest 는 종전 그대로다.
+  const priv = s(f.root) === "personal" ? "개인 폴더(올린 사람만 봄)" : "";
+  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, tid && `thread=${tid}`].filter(Boolean).join(" · ");
   const raw = s(r.body_md);
   const truncated = raw.length > DIGEST_PER_SOURCE;
   return {

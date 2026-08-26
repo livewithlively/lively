@@ -121,7 +121,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
    얼굴이 말한다: 팀 = 조직 이니셜 타일 + 멤버 얼굴 스택, 개인 = 내 얼굴(원형). */
 .v2-ws.v2-wscard { padding: 9px 10px; border: 1px solid var(--line-net); border-radius: 11px; background: var(--bg); gap: 10px; }
 .v2-ws.v2-wscard:hover { border-color: var(--blue); }
-.v2-wscard-big { width: 34px; height: 34px; border-radius: 9px; background: var(--ink); color: var(--on-fill); display: inline-grid; place-items: center; font-size: 16px; font-weight: 800; flex: none; overflow: hidden; }
+.v2-wscard-big { width: 34px; height: 34px; border-radius: 9px; background: var(--ink); color: var(--bg); display: inline-grid; place-items: center; font-size: 16px; font-weight: 800; flex: none; overflow: hidden; }
 .v2-wscard-big.round { border-radius: 50%; font-size: 13px; }
 .v2-wscard-big.round img { width: 100%; height: 100%; object-fit: cover; }
 .v2-wscard-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
@@ -390,8 +390,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-group { padding: 12px 8px 4px; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0; }
 .v2-app-group:first-child { padding-top: 2px; }
 
-.v2-app-inst { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto 24px; grid-template-rows: minmax(32px, auto) auto;
-  column-gap: 3px; padding: 6px 5px 6px 7px; border-radius: 9px; color: var(--ink-sub); }
+/*  세 칸이다: 제목 | 압정 | 상태 점. 압정·닫기는 기본적으로 **그리드 밖**(절대위치)에 뜬다 — 그리드 칸으로 두면
+    안 보이는 동안에도 폭을 먹어 점이 오른쪽 끝에 못 붙었다(#1954 3차). 가운데 칸은 **고정된 행에서만** 차오른다
+    (아래 .v2-app-inst-pin.on) — 비어 있으면 auto 라 폭이 0 이므로 점은 여전히 오른쪽 끝에 붙는다. */
+.v2-app-inst { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: minmax(32px, auto) auto;
+  column-gap: 3px; padding: 6px 8px 6px 7px; border-radius: 9px; color: var(--ink-sub); }
 .v2-app-inst + .v2-app-inst { margin-top: 2px; }
 .v2-app-inst:hover { background: var(--bg); color: var(--ink); }
 .v2-app-inst.on { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-net); color: var(--ink); }
@@ -402,32 +405,47 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 650; line-height: 1.4; }
 .v2-app-inst-ic { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-app-inst:hover .v2-app-inst-ic, .v2-app-inst.on .v2-app-inst-ic { stroke: var(--ink-sub); }
-.v2-app-inst-ic.st-busy { stroke: var(--blue); }
-.v2-app-inst-ic.st-wait { stroke: var(--warn-deep); }
-.v2-app-inst-ic.st-done { stroke: var(--mint-deep); }
-.v2-app-inst-close { grid-column: 3; grid-row: 1; align-self: center; width: 22px; height: 22px; display: inline-grid; place-items: center; padding: 0; border: 0;
-  border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; opacity: 0; }
-.v2-app-inst:hover .v2-app-inst-close, .v2-app-inst.on .v2-app-inst-close, .v2-app-inst-close:focus-visible { opacity: 1; }
+/*  압정·닫기 — 첫 줄 오른쪽에 겹쳐 뜬다. 안 보일 땐 display:none 이라 **자리도 안 먹는다**(#1954 3차).
+    호버·포커스나 이미 고정된 행에서만 보인다 — 늘 보이면 행마다 단추 둘이 늘어서 목록이 도구모음이 된다. */
+.v2-app-inst-close, .v2-app-inst-pin { position: absolute; top: 7px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;
+  border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
+.v2-app-inst-close { right: 5px; }
+.v2-app-inst-pin { right: 29px; }
+.v2-app-inst:hover .v2-app-inst-close, .v2-app-inst.on .v2-app-inst-close, .v2-app-inst-close:focus-visible,
+.v2-app-inst:hover .v2-app-inst-pin, .v2-app-inst-pin:focus-visible, .v2-app-inst-pin.on { display: inline-grid; }
+/*  고정된 행의 압정은 **늘 보이므로 겹쳐 뜨면 안 된다** — 절대위치로 두면 제목 꼬리를 27px 덮어 썼다
+    (#2061 실측: 제목 칸이 349px 에서 끝나는데 압정이 322px 에 떠서 마지막 글자와 …을 가렸다).
+    그래서 고정된 행에서만 압정을 가운데 칸에 세워 **자리를 실제로 차지하게** 한다 — 제목은 그만큼 먼저 줄고,
+    호버 때 뜨는 압정과 같은 x(오른쪽에서 29px)에 서서 행끼리도 세로로 맞는다. 닫기(오른쪽 5px)와도 안 겹친다. */
+.v2-app-inst-pin.on { position: static; grid-column: 2; grid-row: 1; align-self: center; justify-self: end; margin-right: 5px;
+  color: var(--blue); }
+.v2-app-inst-pin:hover { background: var(--bg-punch); color: var(--ink); }
+.v2-app-inst-pin.on:hover { color: var(--blue); }
+.v2-app-inst-pin svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.v2-app-inst-pin.on svg { fill: currentColor; fill-opacity: .18; }
 .v2-app-inst-close:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-close svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
-.v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / 4; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
+.v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / -1; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
 
-/*  상태를 **글자로** 말한다(#1954) — 색만 쓰면 '작업 중'과 '작업 완료'가 같은 점 하나로 보인다.
-    확인한 완료는 아무 칩도 달지 않는다 — 그 없음이 곧 '더 볼 것 없음'이다. */
-.v2-app-inst-st { grid-column: 2; grid-row: 1; align-self: center; display: inline-flex; align-items: center; gap: 4px; flex: none;
-  padding: 1px 6px 1px 5px; border-radius: 999px; font-size: 10.5px; font-weight: 700; line-height: 1.6; white-space: nowrap; }
-.v2-app-inst-st-dot { width: 5px; height: 5px; border-radius: 999px; background: currentColor; flex: none; }
-/*  ⚠ *-fill 은 '채운 면'(진한 색, 위에 백색 글자가 앉는다) — 칩 배경엔 **틴트** 토큰을 쓴다.
-    fill 을 배경으로 깔면 같은 계열 글자색이 그 위에서 사라진다(실측: 초록·파란 블록만 보이고 글자가 안 읽혔다). */
-.v2-app-inst-st[data-st="busy"] { background: var(--bg-note); color: var(--blue); }
-.v2-app-inst-st[data-st="busy"] .v2-app-inst-st-dot { animation: v2-app-pulse 1.4s ease-in-out infinite; }
-.v2-app-inst-st[data-st="waiting"] { background: var(--warn-bg); color: var(--warn-deep); }
-.v2-app-inst-st[data-st="done"] { background: var(--bg-success); color: var(--mint-deep); }
-@keyframes v2-app-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
-@media (prefers-reduced-motion: reduce) { .v2-app-inst-st[data-st="busy"] .v2-app-inst-st-dot { animation: none; } }
-/*  호버로 닫기 × 가 뜨면 칩과 겹칠 자리가 좁아진다 — 칩을 접어 자리를 내준다(정보는 행 전체가 이미 말한다). */
-.v2-app-inst:hover .v2-app-inst-st, .v2-app-inst.on .v2-app-inst-st { display: none; }
-.v2-app-inst:hover .v2-app-inst-st:only-child { display: inline-flex; }
+/*  남의 세션 표식(#2026) — 이 목록에 남의 세션이 서는 길은 '내가 열어 둔 창' 하나뿐인데(sideInstances ③),
+    행에는 그 사실을 말해 주는 게 없어 "내가 만들지도 않은 게 왜 뜨지"가 됐다. 프로젝트 트리 행(.v2-ss-face)과 같은 얼굴을 단다.
+    자리는 **둘째 줄 왼쪽 여백** — 첫 줄 아이콘 바로 아래 이미 비어 있는 26px 들여쓰기 안이라 폭을 새로 먹지 않고,
+    첫 줄 오른쪽에 겹쳐 뜨는 압정·닫기와도 부딪히지 않는다. */
+.v2-app-inst-face { grid-column: 1; grid-row: 2; justify-self: start; align-self: center; width: 18px; height: 18px; flex: none;
+  border-radius: 50%; font-size: 9px; font-weight: 700; display: inline-grid; place-items: center; color: var(--on-fill); overflow: hidden; }
+.v2-app-inst-face img { width: 100%; height: 100%; object-fit: cover; }
+
+/*  상태 = **점 하나**(#1954 2차). 글자 칩은 줄을 먹어 제목이 잘렸다 — 이름은 툴팁·aria-label 에 남는다.
+    확인한 완료는 점이 없다 — 그 없음이 곧 '더 볼 것 없음'이다. */
+.v2-app-inst-st { grid-column: 3; grid-row: 1; align-self: center; justify-self: end; flex: none; width: 7px; height: 7px; margin-left: 6px;
+  border-radius: 999px; background: currentColor; }
+.v2-app-inst-st[data-st="busy"] { color: var(--blue); animation: v2-app-pulse 1.4s ease-in-out infinite; }
+.v2-app-inst-st[data-st="waiting"] { color: var(--warn); }
+.v2-app-inst-st[data-st="done"] { color: var(--mint); }
+@keyframes v2-app-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .v2-app-inst-st[data-st="busy"] { animation: none; } }
+/*  호버로 닫기 × 가 뜨면 점은 자리를 내준다 — 그 순간 사람이 보는 건 '닫을까'지 상태가 아니다. */
+.v2-app-inst:hover .v2-app-inst-st, .v2-app-inst.on .v2-app-inst-st { visibility: hidden; }
 .v2-app-inst-project { display: flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: var(--muted); font: inherit;
   font-size: 11.5px; line-height: 1.35; text-align: left; cursor: pointer; }
 .v2-app-inst-project:hover { color: var(--blue); }
@@ -669,6 +687,8 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 연결 카드 안 소형 폼(#1881 노션 직결 client 2칸) — 입력·버튼을 세로로 좁게 쌓는다. */
 .cn-sec-form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: 420px; margin-top: 6px; }
 .cn-sec-form input { width: 100%; }
+/* 노션 워크스페이스가 둘 이상일 때 — 대표 토글 아래에 워크스페이스별 줄(#1881 N7). 들여쓰기로 종속을 보인다. */
+.cn-ws-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px 20px; }
 /* 슬랙 대화 정책은 관리탭 카드 문법으로 만들어졌다 — 셸 안에서는 테두리 한 겹만 두르고 그대로 싣는다. */
 .cn-slack { padding: 16px; border: 1px solid var(--line-net); border-radius: 12px; }
 .cn-slack .card { border: 0; padding: 0; background: none; box-shadow: none; }
@@ -1321,6 +1341,14 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
    내렸지만(지식: canvas-view-retired-1719) **이 규칙들은 사이드바가 쓰고 있어 살아 있다** — 이름만 옛것이다. */
 #v2-root.rail-mode { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); }
 #v2-root.rail-mode.no-aside { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
+/*  사이드바 접기(#1954 3차) — 창 맨 윗줄 맨 왼쪽 ☰ 가 켠다. 열과 손잡이를 0 으로 접고 안의 것은 감춘다
+    (폭만 0 으로 두면 내용이 삐져나온다).
+    ⚠ **rail-mode 뒤에 와야 한다** — 같은 명시도면 나중 규칙이 이긴다. 앞에 두면 rail-mode 가 열 폭을 되돌려
+    ☰ 를 눌러도 아무 일도 일어나지 않는다(실측: 클릭 후에도 사이드바 316px 그대로였다).
+    좁은 폭은 서랍이 담당하므로 그 미디어 블록에서 이 클래스를 무시한다(43-v2-topbar-search.css). */
+#v2-root.side-off, #v2-root.rail-mode.side-off { grid-template-columns: 0 0 minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.side-off.no-aside, #v2-root.rail-mode.side-off.no-aside { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; }
+#v2-root.side-off > .v2-side, #v2-root.side-off > .v2-split-x:first-of-type { overflow: hidden; visibility: hidden; }
 .stu-side { position: relative; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; padding: 0; background: var(--bg); border: 0; }
 .stu-panel { position: relative; width: 100%; flex: 1 1 auto; min-width: 0; min-height: 0; background: var(--gray-bg-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .stu-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 14px 6px; }
@@ -1523,3 +1551,14 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   border-top: 1px solid var(--line); background: var(--bg-tint); }
 .v2-tidybar-k { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; color: var(--ink-sub);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+
+/* 받은 알림(#1891) — 「확인할 것」 위 칸. 세션 줄(.v2-now-row)과 같은 골격을 쓰되 상태점만 다르다. */
+.v2-noti-sec { display: block; }
+.v2-noti-row .tw { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.v2-noti-row .t { font-size: 13.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-noti-row .p { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-noti-row.unread .t { font-weight: 700; }
+/* 안 읽음 표식은 **점 하나**다 — 줄 전체를 물들이면 목록이 시끄러워지고, 읽은 줄이 바래 보인다. */
+.v2-noti-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; flex: none; }
+.v2-noti-dot.on { background: var(--accent, #2563eb); }
+.v2-noti-row .st { font-size: 12px; color: var(--muted); flex: none; }

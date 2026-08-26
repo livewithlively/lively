@@ -130,6 +130,49 @@ try {
     ok("실행 DB SoT — 전환·해제·삭제 revision 이력 + 프로젝트당 노드 canonical cwd 1개");
   }
 
+  // ── 구 배포 세션 구제(#1867 후속) ──
+  //  이 표가 생기기 전에 붙은 세션은 session_project 에만 바인딩이 있다. 그대로 두면 업그레이드 뒤 첫 프롬프트에서
+  //  '미연결' 로 판정돼 새 프로젝트가 자동 생성된다(사람이 고른 소속이 갈린다). 구제는 current 만 세우고
+  //  **이력은 건드리지 않는다**(이미 그 바인딩을 말하고 있다).
+  {
+    const { adoptLegacyExecutionSession, executionSessionProject } = await import("../dist/v6/execution-session-store.js");
+    const made = await itemsPool.query(`INSERT INTO project(name, created_by) VALUES ('legacy-adopt-e2e','itest') RETURNING id`);
+    const pid = Number(made.rows[0].id);
+    const sid = "box-legacy-adopt01";
+    await itemsPool.query(`INSERT INTO session_project(session_id, project_id, binding_epoch) VALUES($1,$2,0)`, [sid, pid]);
+    const before = await executionSessionProject(sid, "itest");
+    assert.equal(before, null, "구 세션은 아직 실행 표에 없다");
+
+    const adopted = await adoptLegacyExecutionSession({ id: sid, owner: "itest", harness: "claude", projectId: pid });
+    assert.deepEqual([adopted?.project_id, adopted?.desired_revision, adopted?.applied_revision, adopted?.binding_epoch], [pid, 1, 0, 1],
+      "구제는 current 를 세우되 applied=0 — 다음 턴에 규칙이 한 번 주입돼야 한다");
+
+    const history = await itemsPool.query(`SELECT count(*)::int AS n FROM session_project WHERE session_id=$1`, [sid]);
+    assert.equal(history.rows[0].n, 1, "구제가 이력 행을 새로 만들면 같은 바인딩이 두 구간이 된다");
+
+    // 두 번째 호출은 아무것도 바꾸지 않는다(정상 경로가 이미 세운 값을 덮지 않는다).
+    await itemsPool.query(`UPDATE execution_session SET applied_revision=1 WHERE id=$1`, [sid]);
+    const again = await adoptLegacyExecutionSession({ id: sid, owner: "itest", harness: "claude", projectId: 999999 });
+    assert.deepEqual([again?.project_id, again?.applied_revision], [pid, 1], "이미 있으면 DO NOTHING");
+    assert.equal(await executionSessionProject(sid, "other"), null, "남의 소유로는 안 보인다");
+    ok("구 배포 세션 구제 — current 만 세우고 이력·기존 행은 건드리지 않는다");
+  }
+
+  // ── 자동 생성 껍데기는 세션마다 별개여야 한다(#1867) ──
+  //  임시 이름("새 작업")은 서로 같으므로 이름 기반 중복차단(#1819)이 켜져 있으면 30초 안에 연 두 세션이 **한 프로젝트를
+  //  공유**한다(dev 실측: 빈 세션과 슬래시 세션이 project/2009 를 함께 받았다) — 그러면 작업면까지 같이 쓰게 된다.
+  {
+    const { createProject } = await import("../dist/v6/project-store.js");
+    const ctx = { actor: "itest-dedupe", source: "web" };
+    const a = await createProject({ name: "새 작업", description: "x", dedupe: false }, ctx);
+    const b = await createProject({ name: "새 작업", description: "x", dedupe: false }, ctx);
+    assert.notEqual(a.id, b.id, "자동 생성 껍데기는 세션마다 자기 프로젝트를 가져야 한다");
+    const c = await createProject({ name: "사람이 지은 이름", description: "x" }, ctx);
+    const d = await createProject({ name: "사람이 지은 이름", description: "x" }, ctx);
+    assert.equal(c.id, d.id, "사람 경로의 중복 차단(#1819)은 그대로 — IME 이중 Enter·에이전트 재시도가 실재한다");
+    ok("자동 생성 껍데기 = 세션마다 별개 · 사람이 지은 이름 = 종전대로 중복 차단");
+  }
+
   await itemsPool.end();
   console.log(`\n${pass} passed`);
 } finally {

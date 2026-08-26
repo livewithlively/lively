@@ -5,6 +5,7 @@ import { logger } from "../log.js";
 import { listSessions, killSession, sessionGone } from "../terminal/terminal-sessions.js";
 import { nodeSessionsFor, nodeRpc, nodeOnline } from "../node/registry.js";
 import { getSessionState, deleteSessionState } from "./session-state.js";
+import { closeSessionAppInstances } from "../org/store/app-instances.js";   // #2022 — 완전 삭제한 세션의 앱 인스턴스도 함께 닫는다(안 닫으면 좌측 목록에 유령 행이 남는다)
 import { clearSessionWorkspace } from "../org/tenancy/registry.js";
 import { itemsPool } from "../db/client.js";
 import { trashSessions, untrashSessions, purgeSessions, trashMarkedIds } from "./session-trash.js";
@@ -104,6 +105,9 @@ export async function applySessionTrashOp(u: LivelyUser, me: string, op: TrashOp
           await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "휴지통 완전 삭제 — desired-state 삭제 실패(비치명)"));
           void clearSessionWorkspace(id).catch(() => { /* 비치명 */ });
         }
+        // #2022 — 세션이 영영 사라졌으면 그 세션을 subject 로 쥔 앱 인스턴스도 닫는다. 안 닫으면 좌측 '열린 앱'
+        //  목록에 되살릴 수도 없는 행이 `세션 <id꼬리>` · '프로젝트 없음' 으로 영영 남는다.
+        for (const sid of r.ids) await closeSessionAppInstances(sid).catch((e) => logger.warn({ err: e, id: sid }, "완전 삭제 — 앱 인스턴스 닫기 실패(비치명)"));
         await purgeSessions(me, r.ids);
       }
       done.push(id);

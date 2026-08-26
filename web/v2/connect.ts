@@ -290,14 +290,21 @@ function notionTeamCollectCard(): HTMLElement {
     try { s = await api('/api/ui/org/notion/collect'); }
     catch (e) { body.replaceChildren(errorNote(e, '수집 상태를 불러오지 못했습니다')); return; }
     const wsAll = (s && s.workspaces) || [];
-    const ws = wsAll[0];
+    const wsName = (w: any): string => (w && (w.name || w.id)) || '';
+    const on = wsAll.filter((w: any) => w.enabled);
     const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
     chk.checked = !!(s && s.enabled);
     if (!(s && s.ready) && !wsAll.length) chk.disabled = true; // 시작할 길이 없다 — 눌러도 안 되는 토글을 내밀지 않는다
     const lab = el('label', { class: 'cn-toggle' }, chk, el('span', { text: ' 노션에서 고른 페이지를 팀 자료함에 자동으로 모읍니다' }));
     const notes: string[] = [];
-    if (s && s.enabled) notes.push(ws ? `'${ws.name || ws.id}' 워크스페이스에서 모으고 있어요 — 노션에서 고른 페이지(와 그 하위)만 읽습니다.` : '모으고 있어요.');
-    else if (wsAll.length) notes.push('연결은 돼 있어요 — 켜면 바로 모으기 시작합니다.');
+    if (s && s.enabled) {
+      notes.push(on.length > 1
+        ? `노션 워크스페이스 ${on.length}곳에서 모으고 있어요 — 각 워크스페이스에서 고른 페이지(와 그 하위)만 읽습니다.`
+        : `'${wsName(on[0] || wsAll[0])}' 워크스페이스에서 모으고 있어요 — 노션에서 고른 페이지(와 그 하위)만 읽습니다.`);
+    }
+    else if (wsAll.length) notes.push(wsAll.length > 1
+      ? `노션 워크스페이스 ${wsAll.length}곳이 연결돼 있어요 — 켜면 바로 모으기 시작합니다.`
+      : '연결은 돼 있어요 — 켜면 바로 모으기 시작합니다.');
     else if (s && s.ready) notes.push('켜면 노션 화면이 열려요 — 거기서 모을 페이지를 고르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
     else notes.push('노션 연결 준비가 아직 안 됐어요 — 아래에 Lively Notion 통합의 값 두 개를 넣으면 열립니다. 지금 당장은 관리 화면의 외부 자료 수집에서 토큰 방식으로도 연결할 수 있어요.');
     const extra: HTMLElement[] = [];
@@ -321,8 +328,24 @@ function notionTeamCollectCard(): HTMLElement {
         idIn, secIn, saveBtn,
         el('p', { class: 'cn-help' }, ...uiText('notion.so/my-integrations 의 Lively 공개 통합 ▸ 구성(Configuration)에서 ID 와 시크릿을 복사해 넣으세요. 그 통합의 redirect URI 에는 ' + location.origin + '/oauth/callback 이 등록돼 있어야 합니다.'))));
     }
+    if (wsAll.length > 1) {
+      // 워크스페이스마다 한 줄 — 하나가 실패해도 나머지는 돈다(수집기가 워크스페이스당 하나, #1881 N7).
+      extra.push(el('div', { class: 'cn-ws-list' }, ...wsAll.map((w: any) => {
+        const c = el('input', { type: 'checkbox' }) as HTMLInputElement;
+        c.checked = !!w.enabled;
+        c.onchange = async () => {
+          c.disabled = true;
+          try {
+            await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: c.checked, workspace_id: w.id }) });
+            toast(c.checked ? `'${wsName(w)}' 모으기를 켰어요` : `'${wsName(w)}' 모으기를 껐어요`);
+          } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+          await paint();
+        };
+        return el('label', { class: 'cn-toggle' }, c, el('span', { text: ' ' + wsName(w) }));
+      })));
+    }
     if (wsAll.length) {
-      extra.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '페이지 더 고르기',
+      extra.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: wsAll.length > 1 ? '페이지 더 고르기 · 워크스페이스 추가' : '페이지 더 고르기 · 다른 워크스페이스 추가',
         onclick: async () => {
           try {
             const r: any = await api('/api/ui/org/notion/collect/connect', { method: 'POST' });

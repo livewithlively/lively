@@ -22,6 +22,7 @@ import {
 import { itemsPool } from "../db/client.js";
 import { flushProjectEmbeds } from "../v6/connector-mirror.js"; // #624 미러 프로젝트 재임베딩(배치 후 flush)
 import { initAllSchemas } from "../boot/schemas.js";
+import { loadEnterprise } from "../enterprise/load.js";
 import { connectors } from "./index.js";
 import { runClickupSync } from "./clickup/sync.js";
 import { CURSOR_EPSILON_MS, planCursorWrite } from "./sync-cursor.js";
@@ -46,6 +47,15 @@ if (!name) {
 // 스키마 직렬 체인(item→org→domainmap→v6) — 서버 부팅과 단일 규약(boot/schemas.ts). 단독 CLI(신규 DB)도 성립(멱등).
 //  (item: person/connector_state 등 보조 스키마 · org: v6 미러/매핑 적재 전제 · domainmap: activity 등 initV6Schema 의
 //   ALTER/FK 선행 의존 · v6: 미러 수용 테이블 project/knowledge/source + PM 계층 #541). quiet — CLI 는 종전대로 무로그.
+// Enterprise(src/ee) 적재 — **게이트웨이와 같은 규약**(index.ts 가 부팅에서 하는 일). 없으면 조용히 코어로 진행.
+//
+//  ⚠ 이게 빠져 있었다(2026-08-25 실측). 그 결과 이 CLI 는 조직이 설정한 **인입 허용선 정책을 통째로
+//   무시**했다 — EE 훅이 없으니 규칙이 빈 배열(= 디폴트 auto)로 읽혀, 관리자가 "이건 받지 마라"고 켜 둔
+//   게이트가 커넥터 인입에만 적용되지 않았다. #783 의 고아 가드가 그 조용한 우회를 시끄러운 실패로
+//   바꿔 놓아 드러났다(수집이 페이지를 다 받고 미러 적재에서 거부). 가드를 끄는 게 아니라 **적재를
+//   맞추는 것**이 답이다 — 부모가 집행하는 정책을 자식도 똑같이 집행해야 한다.
+await loadEnterprise();
+
 await initAllSchemas({ quiet: true });
 
 // ── 수집기 바인딩(#1419 T1) — **첫 설정 해소보다 먼저.** 이 뒤로 모든 resolveConnectorConfig 는 이 인스턴스의

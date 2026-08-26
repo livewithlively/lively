@@ -29,7 +29,8 @@ export async function listSessionApps() {
             // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
             const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
             return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-                scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, system, source };
+                scopes: (perm.scopes || []).map(String), tools, pages, sites, net, instances, system, source,
+                notifications: perm.notifications === true }; // #1891 — 동의 창이 제 줄로 보여 준다
         });
     }
     catch (e) {
@@ -58,7 +59,7 @@ export function ensureAppGrant(appId, title) {
         return cur;
     const run = (async () => {
         const app = (await listSessionApps()).find((a) => a.id === appId)
-            || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [],
+            || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], sites: [], net: [], notifications: false,
                 instances: { project: 'optional', multiplicity: 'multiple' }, system: null, source: {} };
         if (!(await appConsent(app)))
             return false;
@@ -139,6 +140,9 @@ function appConsent(app) {
         const ov = el('div', { class: 'v2-consent-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': app.title + ' 사용 동의',
             onclick: (e) => { if (e.target === ov)
                 finish(false); } }, el('div', { class: 'v2-consent' }, el('h3', { class: 'v2-consent-t', text: '「' + app.title + '」을(를) 내 자격으로 실행할까요?' }), el('p', { class: 'v2-consent-sub', text: '이 앱이 여는 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }), el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))), el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))), 
+        // 알림(#1891) — 다른 권한과 **성격이 다르다**: 나머지는 '앱이 내 데이터에 무엇을 하나'인데
+        //  이건 '앱이 나를 언제 부르나'다. 그래서 도구 칩에 섞지 않고 제 줄로 세운다(선언했을 때만).
+        app.notifications ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '알림' }), el('div', { class: 'v2-consent-chips' }, el('span', { class: 'v2-consent-chip', text: '데스크톱 알림을 보낼 수 있어요' }))) : null, 
         // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
         app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null, app.net.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '연결' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.net, ''))) : null, el('div', { class: 'v2-consent-acts' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => finish(false) }), el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '동의하고 열기', onclick: () => finish(true) }))));
         document.body.append(ov);

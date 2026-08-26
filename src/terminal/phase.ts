@@ -136,14 +136,39 @@ export function isActivityProgress(phase: ReportedPhase | undefined, prev: Repor
 //   훅은 툴을 쓸 때마다 실제로 실행되므로 추측이 아니다.
 //  #1221 — phase 를 함께 받으면 실행 단계(busy·waiting·idle)도 tmux 메타에 싣는다. phase 없이 부르면 종전 그대로
 //   활동 시각만 갱신한다(구 훅 호환 — 새 게이트웨이 + 구 훅 조합에서 무회귀).
-export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000)): Promise<void> {
+//  #1842 — **전이(prev→phase)를 반환한다.** 이 함수가 곧 "지금 단계가 바뀌었다"를 아는 유일한 자리라서,
+//   실시간 알림은 이 값 없이는 30초 폴링으로 같은 사실을 다시 발견해야 한다. 알림 관심사를 이 파일에
+//   들이지 않으려고(여긴 tmux 계층이다) **판단은 하지 않고 사실만 돌려준다** — 무엇이 알림인지는 호출자가 정한다.
+export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000)): Promise<SessionPhaseChange | null> {
   let prev: ReportedPhase | null = null;
   if (phase) {
     prev = parseReportedPhase(await getOpt(id, "@box_state"))?.phase ?? null;   // 전이 여부 판정용(아래)
     await tmuxQuiet(["set-option", "-t", id, "@box_state", `${phase} ${nowSec}`]);
   }
-  if (!isActivityProgress(phase, prev)) return;   // 하트비트는 활동 시각을 올리지 않는다(위 표 참조)
+  const changed = !!phase && phase !== prev;
+  if (!isActivityProgress(phase, prev)) return changed ? { prev, phase: phase as ReportedPhase, at: nowSec } : null;   // 하트비트는 활동 시각을 올리지 않는다(위 표 참조)
   setLastBusy(id, nowSec);                                        // 이 프로세스 관측치도 함께 올린다
   await tmuxQuiet(["set-option", "-t", id, "@box_last_busy", String(nowSec)]);
   await touchSessionBusy(id, nowSec).catch(() => { /* 비치명 — 레코드 없음·DB 다운 */ });
+  return changed ? { prev, phase: phase as ReportedPhase, at: nowSec } : null;
+}
+
+/** 단계가 실제로 **바뀐** 순간 (#1842). 같은 단계 재보고(하트비트)는 전이가 아니라 null 이다. */
+export interface SessionPhaseChange { prev: ReportedPhase | null; phase: ReportedPhase; at: number }
+
+/**
+ * 이 세션 화면을 **지금 보고 있다**고 기록한다 (#1954 3차, `@box_last_seen`).
+ *
+ * markSessionActive 와 같은 자리(tmux 세션 옵션)에 두는 이유도 같다 — 게이트웨이가 재기동해도 살아남고,
+ *  목록 조회가 어차피 읽는 한 줄에 딸려 온다. 다른 점은 **누가 찍느냐**다: 활동은 하네스 훅이, 열람은 화면이 찍는다.
+ *
+ * ⚠ 왜 tmux `session_last_attached` 로 안 되나: 그건 클라이언트가 **붙는 순간**의 도장이라 탭 DOM 을 유지하는
+ *  새 셸에서는 세션당 평생 한 번뿐이다(자세한 배경은 tmux-exec.ts LIST_FMT 주석). '보고 있다'는 지속 상태라
+ *  지속적으로 갱신되는 신호가 따로 있어야 한다.
+ *
+ * 실패해도 조용히 넘긴다 — 열람 도장을 못 찍은 최악의 결과는 '초록점이 좀 더 오래 켜져 있다'이지,
+ *  사람이 보고 있는 화면을 망가뜨릴 일이 아니다.
+ */
+export async function markSessionSeen(id: string, nowSec = Math.floor(Date.now() / 1000)): Promise<void> {
+  await tmuxQuiet(["set-option", "-t", id, "@box_last_seen", String(nowSec)]);
 }

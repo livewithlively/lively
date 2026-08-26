@@ -46,13 +46,14 @@ export function createTabs(centerHost, asideHost, hooks) {
     //    no-aside 모드의 오른쪽 여백(112px) 때문에 줄 끝이 아니라 어중간한 자리에 떠 있었다(실측: 1336px, 줄 끝 1500px).
     const strip = el('div', { class: 'v2-tabs' });
     const scroll = el('div', { class: 'v2-tabs-scroll', role: 'tablist', 'aria-label': '열린 화면' });
-    function mkTab(route, title) {
+    function mkTab(route, title, draft) {
         const t = {
             id: 'tab' + (++seq),
             route, title: title || hooks.titleFor(route).title, noAside: hooks.titleFor(route).noAside,
             center: el('div', { class: 'v2-tabpane', hidden: true }),
             aside: el('div', { class: 'v2-aside-pane', hidden: true }),
             rendered: false, chat: null, appInstanceId: null, appId: null, appView: null, seq: 0,
+            draft: draft || '',
         };
         centerHost.append(t.center);
         asideHost.append(t.aside);
@@ -64,7 +65,8 @@ export function createTabs(centerHost, asideHost, hooks) {
             return;
         try {
             localStorage.setItem(STORE_KEY, JSON.stringify({
-                tabs: tabs.map((t) => ({ route: t.route, title: t.title })),
+                //  draft(아직 안 보낸 지시)는 있을 때만 싣는다 — 빈 문자열까지 적으면 저장본이 쓸데없이 커진다.
+                tabs: tabs.map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
                 active: activeTab ? tabs.indexOf(activeTab) : 0,
             }));
         }
@@ -328,7 +330,11 @@ export function createTabs(centerHost, asideHost, hooks) {
             return; // 끌거나 고치는 중에 다시 그리면 그 동작이 끊긴다(20초 폴링도 paint 를 부른다)
         const kids = tabs.map((t) => {
             const info = hooks.titleFor(t.route);
-            t.title = info.title;
+            // ★ id 꼬리 폴백(provisional)으로 **저장본을 덮지 않는다**(#2022). 종전엔 무조건 덮고 곧바로 save() 해서,
+            //  이름을 한 번도 못 들어 본 세션이 그 자리에서 `세션 <id꼬리>` 로 굳었다(#2028 의 기억은 그런 세션을
+            //  아직 모른다 — 그 기억은 '한 번 본 적 있는' 이름만 지킨다).
+            if (!info.provisional || !t.title)
+                t.title = info.title;
             t.noAside = info.noAside;
             // 줄에 눕는 이름은 **짧게** — 세션 이름이 한 문단인 경우가 흔하다(첫 지시가 그대로 이름이 된다).
             //  전문은 툴팁과 [모든 탭] 목록이 갖는다(정보를 버리지 않는다).
@@ -409,7 +415,7 @@ export function createTabs(centerHost, asideHost, hooks) {
         e.preventDefault();
         scroll.scrollLeft += e.deltaY;
     }, { passive: false });
-    // 저장된 탭 복원 — 라우트·제목만(내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
+    // 저장된 탭 복원 — 라우트·제목·아직 안 보낸 지시만(화면 내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
     let restoredActive = 0;
     try {
         const st = EMBEDDED ? null : JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
@@ -426,7 +432,7 @@ export function createTabs(centerHost, asideHost, hooks) {
                 if (seen.has(k))
                     return;
                 seen.add(k);
-                mkTab(t.route, typeof t.title === 'string' ? t.title : undefined);
+                mkTab(t.route, typeof t.title === 'string' ? t.title : undefined, typeof t.draft === 'string' ? t.draft : undefined);
                 if (i === wantIdx)
                     want = tabs.length - 1;
             });
@@ -440,7 +446,8 @@ export function createTabs(centerHost, asideHost, hooks) {
             activate(tabs[restoredActive] || mkTab('#/')); return activeTab; },
         current: () => activeTab,
         add, activate, close,
-        routed: (tab) => { const info = hooks.titleFor(tab.route); tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
+        routed: (tab) => { const info = hooks.titleFor(tab.route); if (!info.provisional || !tab.title)
+            tab.title = info.title; tab.noAside = info.noAside; paint(); save(); },
         find: (route) => tabs.find((t) => routeKey(t.route) === routeKey(route)),
         initial: () => tabs[restoredActive] || null,
         paint, save,
