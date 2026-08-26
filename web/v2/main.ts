@@ -55,6 +55,10 @@ let suppressHash = 0;                    // 탭 전환이 만든 hashchange 를 
 //  탭 전환(숨김)에는 살려 둔다 — 탭의 존재 이유(상태 보존)와 같은 원칙.
 //  뷰가 둘(기본·캔버스)이라 핸들은 공통 계약 하나로만 본다 — 셸이 아는 것은 '언젠가 정리해야 한다'뿐이다.
 const projViews = new Map<ShellTab, { destroy(): void; newSession?(): void }>();
+// 그 탭의 셸이 **어느 프로젝트로** 마운트됐나(#1834 후속). 세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데,
+//  종전엔 그 상태가 그대로 굳어 문패가 '프로젝트 없는 세션'이 되고 그 셸의 세션 목록도 남의 것이 됐다.
+//  8초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
+const shellProject = new Map<ShellTab, number>();
 function dropProjView(tab: ShellTab): void { const pv = projViews.get(tab); if (pv) { pv.destroy(); projViews.delete(tab); } }
 function setTabAppInstance(tab: ShellTab, id: string, appId: string): void {
   tab.appInstanceId = id;
@@ -96,6 +100,22 @@ function goSession(sid: string, tab: ShellTab): void {
 /** 같은 탭 안에서 이어지는 이동(리다이렉트)의 수 — onHash 의 '새 탭' 규칙만 건너뛴다(다시 그리기는 그대로 한다). */
 let inTabHops = 0;
 
+/**
+ * 복원(이어받기)으로 새 세션이 생겼다 — **그 탭만** 새 세션으로 옮긴다(#1834 후속).
+ *
+ * 종전엔 세션 화면이 location.hash 를 직접 바꿨다. 셸 안에서 그건 **활성 탭의 주소**라, 숨은 탭에서
+ *  일어난 복원이 지금 보고 있는 탭을 남의 새 세션으로 끌고 갔다(상민님 지적 2026-08-20).
+ *  활성 탭이면 주소까지 맞추고, 숨은 탭이면 그 탭의 라우트·제목·화면만 바꾼다(그 탭을 열면 맞는 화면이다).
+ */
+function resumedInTab(tab: ShellTab, sid: string): void {
+  const href = '#/s/' + encodeURIComponent(sid);
+  tab.route = href;
+  if (tabsApi?.current() === tab && location.hash !== href) { suppressHash++; location.hash = href; }
+  tabsApi?.routed(tab);
+  void renderRoute(tab);
+  drawSide();
+}
+
 /** 프로젝트 셸(문패 + 칸 + 세션 서랍)을 이 탭에 마운트한다. 세션 화면은 그 안 '세션' 칸에 통째로 들어간다. */
 async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: string | null, seq: number): Promise<void> {
   let detail: any = null;
@@ -103,6 +123,7 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
   if (seq !== tab.seq) return;
   if (detail && !data.projects.some((p) => p.id === projectId)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
   dropProjView(tab);
+  shellProject.set(tab, projectId);
   if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
   projViews.set(tab, mountPanes(tab.center, {
     data: () => data,
@@ -145,6 +166,9 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
         onPickProject: (anchor) => openProjectPicker(anchor, sid, tab),
         onRename: (label) => renameSession(sid, label, tab),
         onArchive: () => void archiveSession(sid),
+        // 자동 복원은 **보이는 탭에서만**, 복원 뒤 이동은 **그 탭만**(#1834 후속 — session-chat.ts isVisible/onResumed 주석).
+        isVisible: () => tabsApi?.current() === tab,
+        onResumed: (nid) => resumedInTab(tab, nid),
       });
       tab.chat = h;      // 20초 목록 갱신이 이 핸들로 상태를 흘려보낸다
       return h;
@@ -256,7 +280,7 @@ export async function bootV2(): Promise<void> {
       if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
       if (tab.appView) { tab.appView.destroy(); tab.appView = null; }
       // 탭 닫기 = AppWindow 연결 해제. AppInstance·세션·worker 생애주기는 별도라 여기서 종료 API를 부르지 않는다.
-      dropProjView(tab); drawSide();
+      dropProjView(tab); shellProject.delete(tab); drawSide();
     },
     // 탭 두 번 눌러 이름 바꾸기(원준 2026-08-20) — 세션 탭만. 판정은 세션 화면의 규칙과 같다:
     //  내 세션이고 살아 있고 복원 대기가 아닐 때(session-chat canRename).
@@ -357,6 +381,15 @@ export async function bootV2(): Promise<void> {
         if (!t.chat) continue;
         const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
         const s = sid ? findSess(sid) : null;
+        // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
+        //  재시작 창에 세션을 못 찾으면 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
+        //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
+        //  뿌리가 여기였다. 목록에서 그 세션을 **찾았을 때만** 판단하므로 빈 판에 흔들리지 않는다.
+        if (s) {
+          const want = s.projectId ? Number(s.projectId) : 0;
+          const have = shellProject.get(t);
+          if (have !== undefined && have !== want) { void renderRoute(t); continue; }
+        }
         // ★ 탭이 보는 세션(라우트)과 **실제로 붙어 있는 화면**(chat.id)이 다르면 덧칠하지 않는다.
         //  어긋남 자체는 panes-parts.ts sessionsPart.paint 에서 막았지만, 어떤 경로로든 어긋나면 이 갱신이
         //  '상단바만 남의 세션'인 화면을 20초마다 다시 만든다(상민님 신고 2026-08-20).
