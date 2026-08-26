@@ -12,7 +12,7 @@
    ① 맨 윗줄 — 데스크톱 앱은 **창 맨 윗줄**(창 전폭), 브라우저는 **왼쪽 두 열까지만**(#2142, 아래 ①-b).
    데스크톱: preload 가 그리던 빈 36px 띠를 셸이 가져와(web/v2/titlebar.ts) 탭 줄을 그리로 올린다.
    아래 규칙들은 창 버튼(--v2-tb-left/right)·드래그가 있는 **데스크톱 기준**으로 쓰였다 — 브라우저에선 그 둘이
-   각각 0·무의미하고, 달라지는 자리 셋(열 범위 · 톤 잇기 · 끌 손잡이 폭)만 `--web`/`.topbar-web` 으로 덮는다.
+   각각 0·무의미하고, 달라지는 자리 셋(열 범위 · 톤 잇기 · 안쪽 자리)만 `--web`/`.topbar-web` 으로 덮는다.
    좌·우 안쪽 여백(--v2-tb-left/right)은 OS 창 버튼이 얹히는 폭이다 — 맥은 왼쪽 신호등, 윈도우는 오른쪽 WCO.
    줄 전체가 드래그 영역이고, 실제로 누르는 것들(탭·닫기·[모든 탭])만 no-drag 로 되돌린다.
    ⚠ 탭이 줄을 꽉 채우면 창을 옮길 데가 없다 → 오른쪽 .v2-tb-grip 이 늘 빈 손잡이로 남는다(크롬과 같은 이유).
@@ -122,19 +122,39 @@
   #v2-root.has-topbar.topbar-web > .v2-main + .v2-split-x { grid-column: 5; grid-row: 1 / -1; }
   #v2-root.has-topbar.topbar-web > .v2-aside { grid-column: 6; grid-row: 1 / -1; }
   /*  줄이 왼쪽 두 열 위에만 남으므로 **그 두 열의 톤을 그대로 위로 잇는다** — 레일 위는 레일 색(--canvas),
-      사이드바 위는 사이드바 색(--gray-bg-2, 이 줄의 원래 배경), 둘 사이 세로선도 이어 긋는다. 그래야 이 줄이
-      왼쪽 판에 '얹힌 띠'가 아니라 **그 판의 머리**로 읽힌다(8차 전, 이 줄이 사이드바 안에 있던 때의 모습).
-      아래 경계선은 지운다 — 같은 색끼리 만나는 자리에 그으면 왼쪽 판을 가로지르는 금이 된다. */
+      사이드바 위는 사이드바 색(--gray-bg-2, 이 줄의 원래 배경), 둘 사이 세로선(레일 border-right)도 이어 긋는다.
+      그래야 이 줄이 왼쪽 판에 '얹힌 띠'가 아니라 **그 판의 머리**로 읽힌다(8차 전, 줄이 사이드바 안에 있던 때의 모습).
+      아래 경계선은 지운다 — 같은 색끼리 만나는 자리에 그으면 왼쪽 판을 가로지르는 금이 된다.
+      ⚠ 두 톤은 **배경 그라디언트**로 칠한다. ::before 덮개로 칠했더니 그것이 positioned 라 ☰·[뒤로]보다 위에 그려져
+        레일 칸의 단추들이 통째로 가려졌다(실측). 배경은 언제나 내용 아래다 — 톤은 배경으로만 칠한다.
+      ⚠ 레일을 걷으면 --v2-rail-w 가 0 이라 앞 두 구간이 폭 0 으로 접히고 사이드바 색만 남는다(자동). */
   #v2-root.has-topbar.topbar-web > .v2-topbar {
     border-bottom: 0;
     border-right: 1px solid var(--line);   /* 사이드바 오른쪽 테두리(.stu-panel)의 연장 */
+    background: linear-gradient(to right,
+      var(--canvas) 0 calc(var(--v2-rail-w, 0px) - 1px),
+      var(--line) calc(var(--v2-rail-w, 0px) - 1px) var(--v2-rail-w, 0px),
+      var(--gray-bg-2) var(--v2-rail-w, 0px) 100%);
   }
-  #v2-root.has-topbar.topbar-web > .v2-topbar::before {
-    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: var(--v2-rail-w, 0px);
-    background: var(--canvas); border-right: 1px solid var(--line); pointer-events: none;
+  /*  안의 것도 제 열을 지킨다 — ☰ 는 레일 칸, [뒤로][앞으로][검색] 은 사이드바 칸.
+      묶음을 줄 가운데 두던 8차 셈법(양쪽 빈 칸 .v2-nav-sp)은 창 전폭일 때의 것이다. 줄이 두 열로 줄면 그 셈이
+      [뒤로]·[앞으로]를 레일/사이드바 경계에 걸치게 놓는다(실측 x=44~102, 경계는 76). 사이드바 칸을 폭으로 못 박고
+      남는 레일 자리를 ☰ 쪽에 남기면(margin-left:auto) 아래 목록·머리줄과 좌우 여백까지 그대로 맞는다.
+      끌 손잡이는 여기서 지운다 — 끌 창이 없으니 자리만 먹고, 그 8px 이 검색칸을 열 밖으로 민다. */
+  #v2-root.has-topbar.topbar-web > .v2-topbar > .v2-tb-grip { display: none; }
+  #v2-root.has-topbar.topbar-web > .v2-topbar > .v2-side-nav {
+    flex: 0 1 var(--v2-side-w); margin-left: auto;
+    padding: 0 18px 0 8px;   /* ② 사이드바 줄과 같은 좌우 여백 — 검색칸 오른쪽 끝이 아래 머리줄 글리프와 맞는다 */
   }
-  /*  레일을 걷으면 열 폭이 0 이다 — 폭 0 에 테두리 1px 를 주면 사이드바 왼쪽 끝에 실선 하나가 남는다(border-box). */
-  #v2-root.has-topbar.topbar-web.rail-hidden > .v2-topbar::before { display: none; }
+  /*  가운데를 만들던 빈 칸은 여기선 할 일이 없다. 남겨 두면 폭 0 인 채로 양옆 gap(2px×2)만 먹어 검색칸 오른쪽 끝이
+      머리줄 글리프에서 3px 어긋난다(실측 371 vs 374). */
+  #v2-root.has-topbar.topbar-web > .v2-topbar > .v2-side-nav > .v2-nav-sp { display: none; }
+  /*  ☰ 는 레일 칸 **가운데** — 바로 아래 워크스페이스 타일·구역 아이콘이 전부 그 자리에 선다(레일은 가운데 정렬 열이다).
+      창 전폭이던 8차엔 '줄의 맨 왼쪽'이 곧 화면 맨 왼쪽이라 6px 이 맞았지만, 줄이 레일 칸 위로 들어온 지금은
+      6px 이 그 열의 중심에서 18px 어긋난다. 레일을 걷으면(폭 0) 계산값이 음수가 되므로 6px 로 받친다. */
+  #v2-root.has-topbar.topbar-web > .v2-topbar > .v2-mbar-menu {
+    margin: 0 0 0 max(6px, calc((var(--v2-rail-w, 0px) - 28px) / 2));
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -147,8 +167,9 @@
 /* 8차 — [‹][›][검색] 한 묶음과 그 양쪽 빈 칸. 창 줄에선 묶음이 줄 가운데 선다(위 has-topbar 규칙이 flex 를 조인다). */
 .v2-nav-sp { flex: 1 1 0; min-width: 0; }
 .v2-nav-core { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; }
-/* 브라우저 창 줄 — 창 버튼이 없으니 오른쪽 손잡이는 장식이다. 가운데가 진짜 가운데에 오게 폭을 줄인다. */
-.v2-topbar--web > .v2-tb-grip { flex: 0 0 8px; min-width: 8px; }
+/*  8차의 `.v2-topbar--web > .v2-tb-grip { flex: 0 0 8px }`(끌 손잡이를 장식으로 줄이던 줄)은 걷었다 —
+    넓은 폭에선 위 ①-b 가 손잡이를 아예 지우고, 좁은 폭(≤900px)에선 `#v2-root.has-topbar …` 쪽이 이겨 48px 이 된다.
+    어느 폭에서도 닿지 않는 규칙이었다. */
 #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu { margin-left: 6px; }
 .v2-navb { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; padding: 0;
   border: 0; border-radius: 8px; background: none; color: var(--muted-head); cursor: pointer; }
