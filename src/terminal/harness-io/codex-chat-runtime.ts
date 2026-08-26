@@ -95,6 +95,14 @@ export function pendingApprovals(sessionId: string): Array<{ id: string; title: 
   return [...(pendings.get(sessionId)?.values() ?? [])].map((p) => ({ id: p.id, title: p.title, detail: p.detail, kindHint: p.kindHint }));
 }
 
+/**
+ * (테스트 seam) 서버가 올린 승인 요청을 그대로 태워 본다 — 문구 계약을 하네스 없이 잡기 위해서다.
+ *  제품 경로는 CodexAppServer 의 onApproval 이 부르고, 그 인자가 바로 이 모양이다.
+ */
+export function askApproval(sessionId: string, method: string, params: Record<string, unknown>): Promise<ApprovalDecision> {
+  return askHuman(sessionId, { method, params });
+}
+
 /** 화면이 고른 결정을 그 승인에 전달한다. 없는 id 면 false(이미 처리됐거나 만료). */
 export function answerApproval(sessionId: string, id: string, decision: ApprovalDecision): boolean {
   const p = pendings.get(sessionId)?.get(id);
@@ -105,18 +113,31 @@ export function answerApproval(sessionId: string, id: string, decision: Approval
   return true;
 }
 
-/** 서버가 올린 승인 요청 → 사람에게 물어본다. 답이 올 때까지 기다리고, 안 오면 거부로 닫는다. */
+/**
+ * 서버가 올린 승인 요청 → 사람에게 물어본다. 답이 올 때까지 기다리고, 안 오면 거부로 닫는다.
+ *
+ *  ★ 제목은 **codex 가 쓴 말(reason)을 그대로** 쓴다 — 실측(2026-08-26, dev 실서버):
+ *    `item/commandExecution/requestApproval` 은 `reason` 에 이미 사람에게 물을 문장을 담아 온다
+ *    ("요청하신 /tmp/x.txt 파일을 생성하도록 허용하시겠습니까?"). 그걸 버리고 우리 문구("명령을
+ *    실행할까요?")로 덮으면, **왜 지금 묻는지**라는 유일한 단서를 잃는다(명령줄만으로는 그게 왜
+ *    에스컬레이션인지 안 보인다 — 같은 echo 라도 쓰는 자리에 따라 갈린다). reason 이 없을 때만 우리 문구.
+ *  본문은 실행하려는 것 **원문 그대로**다 — 요약된 명령을 허용하는 것은 허용이 아니다.
+ */
 function askHuman(sessionId: string, req: ApprovalRequest): Promise<ApprovalDecision> {
   const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const p = req.params as Record<string, any>;
   const command = String(p?.command ?? "");
+  const reason = String(p?.reason ?? "").trim();
   const kindHint = /commandExecution|execCommand/i.test(req.method) ? "command"
     : /applyPatch|fileChange/i.test(req.method) ? "patch"
     : /permission/i.test(req.method) ? "permission" : "other";
-  const title = kindHint === "command" ? "명령을 실행할까요?"
+  const title = reason || (kindHint === "command" ? "명령을 실행할까요?"
     : kindHint === "patch" ? "파일을 고칠까요?"
-    : kindHint === "permission" ? "권한을 허용할까요?" : "이 작업을 허용할까요?";
-  const detail = command || String(p?.reason ?? "") || req.method;
+    : kindHint === "permission" ? "권한을 허용할까요?" : "이 작업을 허용할까요?");
+  // 본문 — 명령이 있으면 명령(+ 어느 폴더에서 도는지), 없으면 그 요청이 가진 것으로.
+  const cwd = String(p?.cwd ?? "").trim();
+  const detail = command ? (cwd ? `${command}\n\n(작업 폴더: ${cwd})` : command)
+    : (reason && reason !== title ? reason : "") || pretty(p?.changes ?? p?.fileChange ?? "") || req.method;
   return new Promise<ApprovalDecision>((resolve) => {
     const map = pendings.get(sessionId) ?? new Map<string, Pending>();
     let done = false;
@@ -130,6 +151,13 @@ function askHuman(sessionId: string, req: ApprovalRequest): Promise<ApprovalDeci
     pendings.set(sessionId, map);
     emit(sessionId, { kind: "approval", id, title, detail, kindHint });
   });
+}
+
+/** 값 하나를 사람이 읽을 글로 — 승인 본문에 명령이 없을 때(파일 변경 등) 쓴다. */
+function pretty(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (v == null) return "";
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 
 const sessions = new Map<string, Entry>();
@@ -311,6 +339,7 @@ export async function interruptCodexChat(sessionId: string): Promise<boolean> {
  *  돌려주는 threadId 로 `codex resume <id>` 를 안내하면 대화가 안 끊긴다.
  */
 export function releaseCodexChat(sessionId: string): { threadId: string } | null {
+  closePendings(sessionId);           // 터미널로 넘기는 마당에 대화창에 승인이 서 있으면 안 된다
   const e = sessions.get(sessionId);
   if (!e) return null;
   sessions.delete(sessionId);
@@ -334,22 +363,43 @@ async function stopServer(sessionId: string, osUser: string | null): Promise<voi
   } catch { /* 이미 없다 */ }
 }
 
-export function codexChatStatus(sessionId: string): { alive: boolean; threadId: string; startedAt: number } | null {
+export function codexChatStatus(sessionId: string): { alive: boolean; running: boolean; threadId: string; startedAt: number } | null {
   const e = sessions.get(sessionId);
-  return e ? { alive: !e.server.isClosed, threadId: e.threadId, startedAt: e.startedAt } : null;
+  // ⚠ alive(런타임이 있나)와 running(지금 턴이 도나)은 다르다. 붙는 화면에 alive 를 running 으로 주면
+  //  **아무것도 안 도는 세션이 영영 '작업 중'** 으로 보인다(입력칸도 그 상태를 따라간다).
+  return e ? { alive: !e.server.isClosed, running: e.running, threadId: e.threadId, startedAt: e.startedAt } : null;
 }
 
 /** 세션이 끝났다 — 런타임도 같이 내린다(고아 프로세스 방지). */
 export function dropSession(sessionId: string): void {
+  closePendings(sessionId);                                   // 런타임이 없어지면 그 승인들도 갈 곳이 없다
   const e = sessions.get(sessionId);
   if (!e) return;
   sessions.delete(sessionId);
   try { e.server.close(); } catch { /* 이미 죽었다 */ }
 }
 
+/**
+ * 그 세션에 서 있던 승인들을 **거부로 닫는다**.
+ *  왜 필요한가: 승인은 답이 올 때까지 서버 턴을 세워 두는 약속이다. 런타임이 사라지면 그 약속을 지킬
+ *  주체가 없는데 promise 는 TTL(10분)까지 매달려 있고, 더 나쁜 건 **다음에 붙는 화면이 그 죽은 승인을
+ *  되살려 보여 주는 것**이다(SSE 가 붙자마자 대기분을 재생한다) — 눌러도 아무 일도 안 일어나는 버튼이 된다.
+ *  fail-closed 로 닫고 화면에도 그 사실을 알린다.
+ */
+function closePendings(sessionId: string): void {
+  const map = pendings.get(sessionId);
+  if (!map) return;
+  pendings.delete(sessionId);
+  for (const p of map.values()) {
+    p.settle("decline");
+    emit(sessionId, { kind: "approval-done", id: p.id, decision: "decline" });
+  }
+}
+
 /** 테스트·종료 훅용 — 전부 내린다. */
 export function dropAllCodexChats(): void {
   for (const id of [...sessions.keys()]) dropSession(id);
+  for (const id of [...pendings.keys()]) closePendings(id);   // 런타임 없이 남은 승인(기동 실패 등)도 닫는다
 }
 
 /**
