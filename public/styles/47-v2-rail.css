@@ -57,6 +57,37 @@
 .v2-wspop-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 .v2-wspop-row .v2-wscard-big { width: 40px; height: 40px; border-radius: 11px; font-size: 17px; }
 
+/* #1875 — 워크스페이스 행 = 전환 버튼 + 오른쪽 「사람 추가」 아이콘. 행은 div, 안에 버튼 둘(버튼 안 버튼 회피). */
+.v2-wspop-row { padding: 0; gap: 0; }
+.v2-wspop-switch { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px; border: 0; border-radius: 10px; background: none; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.v2-wspop-switch:hover { background: var(--bg-tint); }
+.v2-wspop-switch:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-add { flex: none; width: 34px; height: 34px; margin: 0 4px 0 2px; display: inline-grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+.v2-wspop-add:hover { background: var(--bg-punch); color: var(--blue); }
+.v2-wspop-add:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-add .v2-ic { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* 부제 행(구성원·설정·추가)은 여전히 button.v2-wspop-row 를 쓰는 곳(row())이 있으므로 그 규격은 그대로 둔다. */
+button.v2-wspop-row { padding: 8px; gap: 12px; }
+
+/* ── #1875 구성원 모달 — overlay(ov-box) 안. 슬랙 초대 모달 참고. ── */
+.v2-mem { display: flex; flex-direction: column; gap: 4px; min-width: 340px; max-width: 460px; }
+.v2-mem-kind { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; margin-bottom: 4px; border-radius: 10px; background: var(--bg-tint); border: 1px solid var(--line); }
+.v2-mem-kind.personal { background: var(--bg-success); border-color: var(--ok-line-2); }
+.v2-mem-kind b { font-size: 13.5px; color: var(--ink); }
+.v2-mem-kind span { font-size: 12px; color: var(--ink-sub); }
+.v2-mem-invite { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px 10px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.v2-mem-label { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
+.v2-mem-emails { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line-net-2); border-radius: 10px; font: inherit; font-size: 13px; resize: vertical; min-height: 46px; background: var(--bg); color: var(--ink); }
+.v2-mem-emails:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
+.v2-mem-row { display: flex; align-items: center; gap: 9px; padding: 6px 4px; border-radius: 8px; }
+.v2-mem-row:hover { background: var(--bg-tint); }
+.v2-mem-row .v2-ws-person-tt { flex: 1; min-width: 0; }
+.v2-mem-row.pending .v2-ws-person-tt b { color: var(--ink-sub); font-weight: 500; }
+.v2-mem-act { flex: none; font: inherit; font-size: 11.5px; font-weight: 700; padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px; background: none; color: var(--ink-sub); cursor: pointer; }
+.v2-mem-act:hover { border-color: var(--line-net-2); color: var(--ink); background: var(--bg); }
+.v2-mem-act.danger { color: var(--coral-text); }
+.v2-mem-act.danger:hover { border-color: var(--coral-text); background: var(--danger-bg, var(--bg-tint)); }
+
 /* ── #1875 워크스페이스 메뉴의 하위 판 — 구성원 · 설정 · 추가. 같은 판(v2-wspop) 위에 같은 부품으로 그린다.
    옛 스위처 메뉴(40-v2.css .v2-ws-menu)와 이 팝오버가 함께 살아 두 시대의 생김새가 한 화면에 섞였다 —
    그 기능들을 이 문법으로 옮겼으므로 여기 규격이 곧 '워크스페이스 메뉴'의 전부다. */
