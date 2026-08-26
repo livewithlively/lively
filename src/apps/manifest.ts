@@ -40,7 +40,9 @@ export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
 
 // OS가 직접 그리는 builtin 전용 renderer. 매니페스트에는 기록되지만, 소비자는 source.kind='builtin' 일 때만 신뢰한다.
 //  외부 앱이 같은 문자열을 선언해도 generic opaque iframe 경로를 벗어나지 못한다.
-export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic"] as const;
+export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox"] as const;
+/** #1891 — 알림 권한이 함의하는 능력 이름. 이 이름이 바뀌면 파생도 같이 바뀌어야 한다. */
+export const NOTIFY_TOOL = "app_notify";
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -69,6 +71,9 @@ const permissionsSchema = z.object({
   ext_tools: z.array(toolGlobSchema).default([]),    // 프록시(ext__*)·HTTP 도구 allowlist(글롭)
   hosts: z.array(hostSchema).default([]),            // 자체 백엔드 — 설치 시 url_allowlist 병합
   db_sources: z.array(z.string().min(1).max(128)).default([]), // 읽을 소스 뷰(src.*)
+  // #1891 — 이 앱이 사용자에게 알림을 보낼 수 있나. 기본 false(fail-closed): 선언하지 않은 앱은 못 쏜다.
+  //  선언만으로도 부족하고 그 멤버의 활성 grant 가 함께 있어야 한다(src/apps/notify-policy.ts).
+  notifications: z.boolean().default(false),
 }).strict();
 
 const uiPageSchema = z.object({
@@ -227,6 +232,14 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
     throw new HttpError(400, `매니페스트 오류 [${path}]: ${first?.message ?? "형식이 올바르지 않습니다"}`);
   }
   const m = parsed.data;
+
+  // #1891 — `notifications: true` 는 `app_notify` 도구를 **함의한다**.
+  //  앱 토큰의 도구 allowlist(permissions.tools)가 비면 lively 툴이 0개라, 알림 권한만 선언한 앱은
+  //  정작 app_notify 를 못 부른다(dev 실측: 403 "앱 권한 밖"). 개발자가 같은 뜻을 두 군데 적게 하는 대신
+  //  여기서 파생한다 — 사람에게 보이는 권한은 '알림'이고, 도구 이름은 배관이다.
+  if (m.permissions.notifications && !m.permissions.tools.includes(NOTIFY_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, NOTIFY_TOOL];
+  }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.
   for (const s of m.permissions.scopes) {

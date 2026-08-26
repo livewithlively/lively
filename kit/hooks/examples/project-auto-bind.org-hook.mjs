@@ -7,7 +7,6 @@ import os from "node:os";
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const FLAG_DIR = path.join(os.tmpdir(), "lively-hooks");
-const MIN_PROMPT_CHARS = 12;
 const MAX_TITLE = 70;
 const MAX_BODY = 3500;
 const FETCH_MS = 5000;
@@ -68,7 +67,11 @@ async function request(base, token, executionId, url, method = "GET", body) {
   const executionId = executionSessionId(input);
   if (!executionId) return;
   const prompt = String(input.prompt || "").trim();
-  if (!prompt || prompt.length < MIN_PROMPT_CHARS || prompt.startsWith("/") || prompt.startsWith("!") || prompt.startsWith("<")) return;
+  // 길이로 거르지 않는다(2026-08-25 상민님 지적): 종전 12자 게이트는 "제목 재료가 되나"를 본 것인데, 짧은 말만
+  //  주고받는 세션은 **영영 프로젝트가 안 생겼다**(플래그를 안 쓰고 미루므로 다음 프롬프트에 다시 보지만, 계속
+  //  짧으면 계속 미뤄진다). 귀속은 기본값이어야 한다 — 짧은 제목은 정련(project-bind-nudge)이 고친다.
+  //  슬래시·뱅·하네스 주입물만 미룬다(사람의 지시가 아니다 — 플래그를 소모하지 않으므로 다음 프롬프트에 다시 본다).
+  if (!prompt || prompt.startsWith("/") || prompt.startsWith("!") || prompt.startsWith("<")) return;
 
   const HOME = process.env.LIVELY_HOME || os.homedir();
   const readLocal = (rel) => { try { return fs.readFileSync(path.join(HOME, ".lively", rel), "utf8").trim() || null; } catch { return null; } };

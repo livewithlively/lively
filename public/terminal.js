@@ -673,7 +673,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 2c667e07",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build bb00ef87",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -737,7 +737,7 @@
     }
     function handleLine(s, e0) {
       let e = e0;
-      if (e > s && pending[e - 1] === 13) e--;
+      while (e > s && pending[e - 1] === 13) e--;
       if (inBlock && blockAt && Date.now() - blockAt > BLOCK_MAX_MS) {
         inBlock = false;
         blockParts = [];
@@ -834,6 +834,12 @@
   var ctrl = null, didBackfill = false;
   var syncedThisConn = false;
   var pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
+  function writeCursor(st) {
+    try {
+      term.write("\x1B[" + (st.cy + 1) + ";" + (st.cx + 1) + "H");
+    } catch (_) {
+    }
+  }
   var BACKFILL_WAIT_MS = 900;
   var MAX_NUDGES = 3;
   var backfillWatch = null, nudgeTries = 0, needBackfill = false, lastKnownState = null;
@@ -1364,6 +1370,30 @@
       imeSwallow = null;
     }, true);
   }
+  var mouseReportBuf = "";
+  var mouseFlushArmed = false;
+  var scheduleMouseFrame = typeof requestAnimationFrame === "function" ? (fn) => requestAnimationFrame(fn) : (fn) => setTimeout(fn, 16);
+  function flushMouseReports() {
+    if (!mouseReportBuf) return;
+    const d = mouseReportBuf;
+    mouseReportBuf = "";
+    mouseFlushArmed = false;
+    if (ws && ws.readyState === 1) {
+      try {
+        ws.send(JSON.stringify({ t: "i", d }));
+      } catch (_) {
+      }
+    }
+    if (Date.now() - lastStateAt > 8e3 && Date.now() - lastMouseProbeAt > 8e3) {
+      lastMouseProbeAt = Date.now();
+      if (ws && ws.readyState === 1) {
+        try {
+          ws.send(JSON.stringify({ t: "st" }));
+        } catch (_) {
+        }
+      }
+    }
+  }
   function handleTermData(d) {
     userTyped = true;
     if (imeSwallow !== null && d === imeSwallow) {
@@ -1379,19 +1409,19 @@
       shiftEnterPending = false;
       d = "\x1B\r";
     }
+    if (isMouseReport(d)) {
+      mouseReportBuf += d;
+      if (!mouseFlushArmed) {
+        mouseFlushArmed = true;
+        scheduleMouseFrame(flushMouseReports);
+      }
+      return;
+    }
+    flushMouseReports();
     if (ws && ws.readyState === 1) {
       try {
         ws.send(JSON.stringify({ t: "i", d }));
       } catch (_) {
-      }
-    }
-    if (isMouseReport(d) && Date.now() - lastStateAt > 8e3 && Date.now() - lastMouseProbeAt > 8e3) {
-      lastMouseProbeAt = Date.now();
-      if (ws && ws.readyState === 1) {
-        try {
-          ws.send(JSON.stringify({ t: "st" }));
-        } catch (_) {
-        }
       }
     }
   }
@@ -2649,7 +2679,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "2c667e07 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "bb00ef87 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -3566,7 +3596,7 @@
           }
           term.write("\x1B[H\x1B[2J\x1B[3J\x1B[0m");
           term.write(text);
-          if (st && st.hasCursor) term.write("\x1B[" + (st.cy + 1) + ";" + (st.cx + 1) + "H");
+          if (st && st.hasCursor) writeCursor(st);
         } catch (_) {
         }
       },

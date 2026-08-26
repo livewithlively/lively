@@ -189,10 +189,9 @@ async function deliverLoop(sessionId: string): Promise<void> {
     //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
     if (row.kind === "control") { await mark(row.id, "sent", "control-no-echo"); continue; }
     let echoed = await waitEcho(st, oneLine);
-    if (echoed === "timeout" && harness === "claude") {
-      // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18):
-      //  에코가 안 보이면 Enter 만 한 번 더 — 이미 제출됐다면 빈 입력칸 Enter 라 무해하고, 남아 있었다면 그때 제출된다.
-      //  텍스트 재전송이 아니다(중복 없음). 종전엔 화면(클라)이 5초 뒤에 하던 일을 배달자가 이어받았다.
+    if (needsSubmitRetry(echoed, harness)) {
+      // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
+      //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867).
       await sendKeyToSession(sessionId, "Enter").catch(() => { /* 다음 에코 창에서 판정 */ });
       echoed = await waitEcho(st, oneLine);
     }
@@ -237,6 +236,20 @@ async function waitReady(sessionId: string, harness: string, trustOk: boolean): 
  *  파일 찾기: 훅 보고 경로 → 규약(locateTranscript). 매핑이 아직 없으면(방금 뜬 세션) 그 폴더의 **보낸 뒤 자란 파일**을 훑는다.
  *  파일을 아예 못 읽는 자리(격리 홈·미지원 하네스)는 'unreadable' — 보냈다는 사실만 남긴다(재전송 금지).
  */
+/**
+ * 순수 — 에코 판정 뒤 **Enter 를 한 번 더 눌러야 하는가**(미제출 방어, send-keys 규약 ②).
+ *
+ *  ⚠ `timeout` 뿐 아니라 **`unreadable` 에서도 눌러야 한다**(#1867 실측 2026-08-25, dev):
+ *   첫 지시로 프로젝트를 만드는 경로가 생기면서 세션이 **방금 만든 빈 폴더**에서 시작한다 → 그 폴더엔 대화 파일이
+ *   아직 없어 에코를 읽을 자리 자체가 없다(`unreadable`). 종전 조건(timeout 만)은 그때 Enter 를 안 눌러
+ *   **첫 지시가 입력칸에 그대로 남았다**(아웃박스 기록: `sent / echo-unreadable`, 사람이 직접 Enter 를 눌러야 했다).
+ *  이미 제출됐다면 빈 입력칸 Enter 라 무해하다 — 텍스트 재전송이 아니므로 중복 발화가 없다.
+ *  claude 외 하네스는 입력칸 문법을 모르므로 누르지 않는다(종전과 같다).
+ */
+export function needsSubmitRetry(echoed: "confirmed" | "timeout" | "unreadable", harness: string): boolean {
+  return echoed !== "confirmed" && harness === "claude";
+}
+
 async function waitEcho(st: Awaited<ReturnType<typeof getSessionState>>, oneLine: string): Promise<"confirmed" | "timeout" | "unreadable"> {
   const io = harnessIo(st?.harness || "claude");
   if (!io || !io.parse) return "unreadable";

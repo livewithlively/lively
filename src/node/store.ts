@@ -6,6 +6,9 @@ import crypto from "node:crypto";
 import { itemsPool } from "../db/client.js";
 import { mintToken, revokeToken, getMember } from "../org/store.js";
 import { HttpError } from "../http-error.js";
+import type { KeepAwakeStatus } from "./keep-awake.js";
+import { LINK_LOG_KEEP } from "../org/schema/node-link-log.js";   // #1849 — 노드당 보관 이벤트 상한(단일 출처)
+import { WINDOW_MS, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 진단 창(같은 값으로 읽는다)
 
 const sha256 = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
 
@@ -15,6 +18,8 @@ export interface OrgNode {
   //  kind 와 직교다 — kind 는 git 자격 정책(resolveRepoInject)·슬롯 용량에만 쓴다.
   token_hash: string | null; enabled: boolean; shared: boolean;
   platform: string | null; agent_ver: string | null; agent_caps: string[] | null; agent_harnesses: string[] | null; host: string | null;
+  // #1849 — 노드가 hello 로 보고한 잠자기 억제 상태. NULL = **모름**(구 번들)이지 '안 걸림'이 아니다.
+  keep_awake: KeepAwakeStatus | null;
   last_seen: string | null; created_by: string | null; created_at: string; updated_at: string;
 }
 
@@ -86,6 +91,8 @@ export async function deleteNode(id: string, actor?: string): Promise<{ deleted:
   // 세션 스냅샷 정본(#1834)도 함께 — FK CASCADE 를 안 걸었으므로(org/schema/node-state.ts 주석) 여기서 지운다.
   //  남아도 읽는 쪽 JOIN 이 걸러 보이지는 않지만, 지워진 노드의 세션 목록을 DB 에 남겨 둘 이유가 없다.
   await itemsPool.query(`DELETE FROM org_node_state WHERE node_id=$1`, [id]).catch(() => { /* best-effort */ });
+  // 연결 이력(#1849)도 함께 — 같은 이유(FK 를 안 걸었다). 지워진 노드의 이력을 남길 이유가 없다.
+  await itemsPool.query(`DELETE FROM org_node_link_log WHERE node_id=$1`, [id]).catch(() => { /* best-effort */ });
   const r = await itemsPool.query(`DELETE FROM org_node WHERE id=$1`, [id]);
   return { deleted: (r.rowCount ?? 0) > 0 };
 }
@@ -93,7 +100,7 @@ export async function deleteNode(id: string, actor?: string): Promise<{ deleted:
 // hello 시 관측 필드 갱신 + 생존 확인 주기 갱신.
 export async function touchNode(
   id: string,
-  obs?: { platform?: string; agentVer?: string; host?: string; caps?: string[]; harnesses?: string[] },
+  obs?: { platform?: string; agentVer?: string; host?: string; caps?: string[]; harnesses?: string[]; keepAwake?: KeepAwakeStatus },
 ): Promise<void> {
   // COALESCE — 관측값이 없으면(state push 로 부른 경우) 기존 값을 지우지 않는다.
   //  ⚠ agent_ver 가 라이브에서 **영원히 NULL** 이던 원인이 여기가 아니라 **hello 가 안 보낸 것**이었다(#905 C4).
@@ -101,9 +108,11 @@ export async function touchNode(
   await itemsPool.query(
     `UPDATE org_node SET last_seen=now(), updated_at=now(),
         platform=COALESCE($2, platform), agent_ver=COALESCE($3, agent_ver), host=COALESCE($4, host),
-        agent_caps=COALESCE($5, agent_caps), agent_harnesses=COALESCE($6, agent_harnesses)
+        agent_caps=COALESCE($5, agent_caps), agent_harnesses=COALESCE($6, agent_harnesses),
+        keep_awake=COALESCE($7::jsonb, keep_awake)
       WHERE id=$1`,
-    [id, obs?.platform ?? null, obs?.agentVer ?? null, obs?.host ?? null, obs?.caps ?? null, obs?.harnesses ?? null],
+    [id, obs?.platform ?? null, obs?.agentVer ?? null, obs?.host ?? null, obs?.caps ?? null, obs?.harnesses ?? null,
+      obs?.keepAwake ? JSON.stringify(obs.keepAwake) : null],
   );
 }
 
@@ -121,4 +130,39 @@ export async function authNodeToken(token: string): Promise<OrgNode | null> {
     );
     return (r.rows[0] as OrgNode | undefined) ?? null;
   } catch { return null; } // DB 불가 = fail-closed(연결 거부)
+}
+
+// ── 노드 연결 이력(#1849) ───────────────────────────────────────────────────────
+// "이 노드가 왜 자꾸 끊기나"는 한 시점의 상태로는 답할 수 없다 — 이력의 모양이 곧 원인이다(sleep-pattern.ts).
+//  종전엔 이 정보가 게이트웨이 **로그 파일에만** 있어서, 사람이 ssh 로 grep 해야 보였다.
+
+/** 연결/해제 1건 기록 + 노드당 상한 유지. 실패는 비치명 — 이력 때문에 연결 경로가 죽으면 안 된다. */
+export async function appendNodeLinkEvent(nodeId: string, ev: "up" | "down"): Promise<void> {
+  await itemsPool.query(`INSERT INTO org_node_link_log(node_id, ev) VALUES($1,$2)`, [nodeId, ev]);
+  // 상한 넘은 옛 행 정리 — 삽입할 때마다 그 노드 것만 본다(전역 스캔·별도 크론 불요).
+  await itemsPool.query(
+    `DELETE FROM org_node_link_log
+      WHERE node_id=$1
+        AND at < (SELECT at FROM org_node_link_log WHERE node_id=$1 ORDER BY at DESC OFFSET $2 LIMIT 1)`,
+    [nodeId, LINK_LOG_KEEP],
+  );
+}
+
+/**
+ * 진단 창(24시간) 안의 이벤트를 **노드별로** 한 번에 읽는다.
+ *  ⚠ 노드마다 쿼리하지 않는다 — 목록 API 는 자주 불리고, 노드 수만큼 왕복하면 그게 곧 지연이 된다.
+ *   전체라야 노드 수 × LINK_LOG_KEEP 행(현재 규모로 수백 행)이라 한 번에 읽는 편이 싸다.
+ */
+export async function loadRecentLinkEvents(now: number = Date.now()): Promise<Map<string, LinkEvent[]>> {
+  const r = await itemsPool.query(
+    `SELECT node_id, ev, at FROM org_node_link_log WHERE at > $1 ORDER BY node_id, at`,
+    [new Date(now - WINDOW_MS)],
+  );
+  const out = new Map<string, LinkEvent[]>();
+  for (const row of r.rows as Array<{ node_id: string; ev: "up" | "down"; at: Date }>) {
+    const list = out.get(row.node_id) ?? [];
+    list.push({ at: new Date(row.at).getTime(), ev: row.ev });
+    out.set(row.node_id, list);
+  }
+  return out;
 }

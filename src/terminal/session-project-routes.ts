@@ -22,7 +22,10 @@ import { projectAbsPath } from "../project/project-fs.js";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { getOpt } from "./tmux-exec.js";
-import { executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
+import { adoptLegacyExecutionSession, executionSessionProject, markExecutionSessionApplied, setExecutionSessionProject, type ExecutionSessionProject } from "../v6/execution-session-store.js";
+import { latestProjectForSessionChain, recordSessionProject } from "../v6/project-session-store.js";
+import { canAttach } from "./terminal-sessions.js";
+import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import { syncSessionAppInstanceProject } from "../org/store/app-instances.js";
 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -72,13 +75,14 @@ export async function setSessionProject(
   }
 
   const nodeId = nodeOfSession(id);
+  // 상태는 한 번만 읽는다 — 아래 소유권 검사(노드 세션)와 대화 축 동기화가 같은 값을 본다.
+  const st = await getSessionState(id).catch(() => undefined);
   // 분산 적용 전에 소유권을 먼저 확정한다. DB가 SoT이므로 runtime 캐시를 먼저 바꾸고 DB 기록에 실패하는
   // 순서를 허용하지 않는다. 반대로 desired-state가 없는 노드 세션 id를 먼저 DB에 claim하게 두면, 남의 실제
   // 세션을 겨냥한 요청이 RPC에서 거부되더라도 DB id는 공격자 소유로 남는다. 그래서 상태 부재도 쓰기 전에 막는다.
   if (nodeId) {
-    const state = await getSessionState(id).catch(() => undefined);
-    if (!state) throw new HttpError(404, "세션을 찾을 수 없습니다");
-    if (state.owner !== me) throw new HttpError(403, "내 세션만 프로젝트를 바꿀 수 있습니다");
+    if (!st) throw new HttpError(404, "세션을 찾을 수 없습니다");
+    if (st.owner !== me) throw new HttpError(403, "내 세션만 프로젝트를 바꿀 수 있습니다");
   } else {
     const localOwner = await getOpt(id, "@box_owner").catch(() => "");
     if (localOwner && localOwner !== me) throw new HttpError(403, "내 세션만 프로젝트를 바꿀 수 있습니다");
@@ -113,7 +117,39 @@ export async function setSessionProject(
   // 세션 화면은 ai-session AppInstance다. 세션 바인딩이 권위이므로 열린/복원 인스턴스의 현재 맥락도 같은 값으로 맞춘다.
   // 시간 이력은 app-instances 스토어가 별도로 남겨, 옮긴 뒤에도 과거 활동의 소속을 소급 변경하지 않는다.
   await syncSessionAppInstanceProject(id, bind ? bind.projectId : null).catch(() => { /* UI 메타데이터 실패는 세션 바인딩을 되돌리지 않는다 */ });
+  // 대화 축도 같이 옮긴다(#1867, 2026-08-26). 실행 세션과 **대화**는 다른 엔티티라 session_project 에 각자 이력이 있다:
+  //  · 이어받기 승계(latestProjectForSessionChain)가 대화 축을 읽는다 — 안 맞추면 이어받은 세션이 **옛 프로젝트**로 간다.
+  //  · 프로젝트를 휴지통에 넣을 때 그 프로젝트에 묶인 세션 카드가 함께 쓸려간다 — 안 맞추면 **이미 옮긴 세션**이 딸려간다
+  //    (2026-08-26 실측: #2015 를 휴지통에 넣자, 소속을 #1867 로 옮긴 뒤였는데도 대화 축이 2015 로 남아 카드가 쓸려갔다).
+  //  종전에도 session_log append 가 같은 투영을 했지만 그건 전사가 올라올 때뿐이라, 옮긴 직후의 창이 비어 있었다.
+  if (st?.claude_session_id) {
+    await recordSessionProject(st.claude_session_id, bind ? bind.projectId : null, Number(current.binding_epoch))
+      .catch(() => { /* 투영 실패는 실행 축(정본)을 되돌리지 않는다 */ });
+  }
   return { ...out, revision: current.desired_revision, bindingEpoch: current.binding_epoch };
+}
+
+/**
+ * 구 배포에서 넘어온 세션 구제(#1867 후속) — `execution_session` 행이 없고 `session_project` 에만 바인딩이 있으면,
+ *  **요청자가 그 세션의 소유자임을 증명할 때만** current 를 세워 돌려준다.
+ *
+ *  없으면: 이 표가 생기기 전에 프로젝트에 붙은 세션(실측 dev 794개)이 업그레이드 뒤 첫 프롬프트에서 '미연결' 로
+ *   판정돼 **새 프로젝트가 자동 생성**된다 — 사람이 고른 소속이 조용히 갈린다.
+ *  소유 증명은 두 축 중 하나: ①desired-state 의 owner(노드 세션 포함 — 게이트웨이 tmux 엔 안 보인다) ②canAttach
+ *   (중앙 tmux 세션·프로젝트 폴더 공동 세션). 외부 실행 id(`codex-`·`claude-` 접두)는 구 이력이 있을 수 없어 제외한다.
+ */
+async function adoptLegacyBinding(id: string, me: string): Promise<ExecutionSessionProject | null> {
+  if (isExternalExecutionSessionId(id)) return null;
+  const state = await getSessionState(id).catch(() => undefined);
+  const owns = state ? state.owner === me : await canAttach(id, me).catch(() => false);
+  if (!owns) return null;
+  // 실행 id 의 구 바인딩 → 없으면 **이 세션이 이어받은 대화**의 마지막 소속(#1867 이어받기 승계).
+  //  이어받기는 실행 id 를 새로 발급하므로, 이 다리가 없으면 같은 대화가 매번 새 프로젝트를 만든다.
+  const legacy = await latestProjectForSessionChain([id, state?.claude_session_id]).catch(() => null);
+  if (!legacy) return null;
+  return await adoptLegacyExecutionSession({
+    id, owner: me, harness: state?.harness ?? null, nodeId: state?.node_id ?? null, projectId: legacy.id,
+  }).catch(() => null);
 }
 
 /** 동적 AGENTS 주입용 단일 조회. cwd를 전혀 받지 않으며 실행 세션 id와 DB current binding만 본다.
@@ -126,7 +162,7 @@ export async function sessionProjectContext(
   if (!me) throw new HttpError(403, "사용자 신원이 없습니다");
   const known = knownRevisionRaw == null || knownRevisionRaw === "" ? -1 : Number(knownRevisionRaw);
   if (!Number.isSafeInteger(known) || known < -1) throw new HttpError(400, "knownRevision 형식 오류");
-  const current = await executionSessionProject(id, me);
+  const current = (await executionSessionProject(id, me)) ?? (await adoptLegacyBinding(id, me));
   if (!current) return { found: false, changed: known !== 0, session_id: id, project_id: null, revision: 0, applied_revision: 0, binding_epoch: 0 };
   const base = {
     found: true, changed: known !== current.desired_revision, session_id: id, project_id: current.project_id,

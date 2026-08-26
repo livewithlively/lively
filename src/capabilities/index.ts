@@ -31,6 +31,7 @@ import { folderV6Capabilities } from "./folders-v6.js";
 import { sharedFolderCapabilities } from "./shared-folder.js";
 import { viewV6Capabilities } from "./views-v6.js";
 import { taskDetailV6Capabilities } from "./task-detail-v6.js";
+import { notifyCapabilities } from "./notify.js";
 import { taskFieldV6Capabilities } from "./task-field-v6.js";
 import { teamCapabilities } from "./teams.js";
 import { trashCapabilities } from "./trash.js";
@@ -41,6 +42,7 @@ import { feedTargetCapabilities } from "./feed-targets.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
 import { sessionProjectCapabilities } from "./session-project.js";
+import { sessionRenameCapabilities } from "./session-rename.js";
 import { previewEnvCapabilities } from "./preview-env.js";
 import { stackProfileCapabilities } from "./stack-profiles.js";
 import { delegateCapabilities } from "./delegate.js";
@@ -53,6 +55,7 @@ import { oauthConnectCapabilities } from "./oauth-connect.js";
 import { slackConnectCapabilities } from "./slack-connect.js";
 import { notionConnectCapabilities } from "./notion-connect.js";
 import { appInstanceCapabilities } from "./app-instances.js";
+import { appNotificationCapabilities } from "./app-notifications.js";
 import { channelPolicyCapabilities } from "./channel-policy.js";
 import { brokerCapabilities } from "./broker.js";
 import { meCapabilities, whoamiCapabilities } from "./whoami.js";
@@ -86,6 +89,7 @@ const all: Capability[] = [
   ...sharedFolderCapabilities, // #1291 v2: 공유폴더 경로 공개범위(shared_folder_acl_get/_set — /api/ui/terminal/browse/acl). scope=memory, MCP+REST. 집행은 terminal-files.ts 가, 술어는 v6/shared-folder-store.ts 가.
   ...viewV6Capabilities, // v6(#541): 저장 뷰 조회(ClickUp 이관 뷰 — /api/ui/v6/project-views). 보드 '뷰' 피커 소비.
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).
+  ...notifyCapabilities, // #1842: 나에게 온 알림(멘션·댓글·담당) — 데스크톱 앱이 OS 배너를 띄우려고 폴링한다. scope=memory. REST(/api/ui/notify/feed).
   ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId). task_field_delete_v6 는 org_tool 기본 OFF(값 손실).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6). #1291: 조회·복원 모두 공개범위 판정을 탄다(지우면 열린다가 되지 않게).
   // (커넥터별 자료 공개범위 **정책 정의·소급 백필**(source_vis_policy_*)은 #1601 로 Enterprise 로 갔다 —
@@ -106,6 +110,7 @@ const all: Capability[] = [
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
   ...sessionProjectCapabilities, // 세션↔프로젝트 변경(MCP+REST) + 실행 세션 동적 문맥(REST 전용). cwd가 아니라 x-lively-session/DB를 쓴다.
+  ...sessionRenameCapabilities,  // #1979 세션 이름 짓기 — 세션이 자기 이름을 짓는다(헤드리스 스폰 없음). 세션당 1회 걸쇠.
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).
@@ -121,6 +126,7 @@ const all: Capability[] = [
   ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
   ...notionConnectCapabilities, // #1881: 노션 "팀 자료로 모으기" — org_notion_collect(상태)/set(토글=동의 시작)/connect(페이지 더 고르기)/oauth_complete(CP 릴레이). 동의 화면의 페이지 선택이 곧 수집 범위, 수집기는 token_source=org 로 조직 슬롯을 가리킨다. 토큰 복사 0.
   ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
+  ...appNotificationCapabilities, // #1891: 앱이 쏘는 알림(권한 fail-closed) + 내 알림 이력·읽음. inbox 앱이 소비한다.
   ...channelPolicyCapabilities, // #1226: 대화 채널별 개인 열람/발송 허용 — me_slack_channels·me_channel_policy_set. **REST 전용·변경은 사람만**(AI 가 자기 차단을 못 풀게). 집행은 org/channels/channel-guard ← mcp-proxy.
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
   ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.

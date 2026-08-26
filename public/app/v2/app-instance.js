@@ -38,13 +38,15 @@ export async function createAppInstance(appId, opts) {
         throw new Error('앱 인스턴스를 만들지 못했습니다');
     return remember(out.instance);
 }
-/** 기존 세션 route를 ai-session builtin AppInstance로 멱등 등록한다. 화면 렌더 실패와 결합하지 않게 호출자가 오류를 처리한다. */
+/** 기존 세션 route를 ai-session builtin AppInstance로 멱등 등록한다. 화면 렌더 실패와 결합하지 않게 호출자가 오류를 처리한다.
+ *  ⚠ 이름을 **모르면 안 보낸다**(#2022) — 서버는 conflict 시 title 을 COALESCE 로 덮으므로, 세션 목록이 늦은
+ *   한 판이 자리표시자('AI 세션')를 저장된 멀쩡한 이름 위에 굳혀 버린다. 안 보내면 이전 값이 그대로 산다. */
 export function ensureSessionAppInstance(appId, sessionId, opts) {
     return createAppInstance(appId || 'ai-session', {
         projectId: opts?.projectId ?? null,
         subjectKind: 'session',
         subjectRef: sessionId,
-        title: opts?.title || 'AI 세션',
+        ...(opts?.title ? { title: opts.title } : {}),
     });
 }
 /** 설치된 앱을 새 실행 인스턴스로 열고 그 인스턴스 route로 이동한다. */
@@ -59,6 +61,21 @@ export async function openInstalledApp(app, projectId) {
     catch (e) {
         toast('앱을 열지 못했어요 — ' + (e && e.message ? e.message : e), true);
         return false;
+    }
+}
+/**
+ * single-instance 빌트인 앱의 인스턴스를 멱등 확보한다(#1891 inbox).
+ *
+ * 서버가 multiplicity='single' 인 앱을 subject(singleton, app_id) 로 멱등 처리하므로,
+ *  여러 번 불러도 같은 인스턴스가 돌아온다. 실패는 **삼킨다** — 인스턴스는 정체성·프로젝트 귀속을
+ *  주는 것이지 화면을 그리는 조건이 아니다(앱이 아직 안 깔린 게이트웨이에서도 화면은 떠야 한다).
+ */
+export async function ensureSingletonAppInstance(appId, title) {
+    try {
+        return await createAppInstance(appId, { title });
+    }
+    catch {
+        return null;
     }
 }
 export async function closeAppInstance(id) {

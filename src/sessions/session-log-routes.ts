@@ -18,7 +18,7 @@ import { auditOrgContent } from "../v6/content-audit.js";
 import { sessionFootprint, purgeFootprint, type PurgeSelection } from "../v6/session-footprint-store.js";
 import { projectDirOnThisHost } from "../terminal/session-project.js";   // #1850 — 완전 삭제한 프로젝트의 폴더(첨부·자료 파일)
 import { rm as fsRm } from "node:fs/promises";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
-import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
+import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
 import { trashMapFor } from "./session-trash.js";   // #1851 — 내 세션 목록에 휴지통 표식
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
@@ -130,7 +130,10 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
     res.setHeader("Cache-Control", "no-store");
     // #1851 휴지통 — 내 표식: 휴지통이면 trashed_at, 완전 삭제(purged)면 행을 뺀다(terminal/sessions 와 같은 규칙).
-    let rows = await listSessionsForOwner(requester);
+    //  #2022 후속 — 깊이를 호출자가 정한다(기본 200 = 종전). 화면은 매 틱 얕게, 이따금 깊게 부른다.
+    //   상한(SESSION_LIST_MAX)은 스토어가 쥔다 — 여기서 두 번 정의하지 않는다.
+    const page = await listSessionsForOwnerPage(requester, Number(req.query.limit ?? 200));
+    let rows = page.rows;
     try {
       const marks = await trashMapFor(requester);
       if (marks.size) {
@@ -144,7 +147,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
         });
       }
     } catch { /* 표식 조회 실패 — 휴지통 없이 나간다 */ }
-    res.json({ sessions: rows });
+    //  truncated — **조용히 자르지 않는다**(이 목록이 8일치만 보여 주던 것이 이 버그였다). 화면이 '더 있다'를 말할 근거.
+    res.json({ sessions: rows, truncated: page.truncated });
   }));
 
   // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함). 인가: 프로젝트 멤버.
@@ -196,9 +200,11 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       if (t) {
         void autoNameUnnamedSession(sessionId, t, {
           lookup: (uuid) => sessionStateByClaudeUuid(uuid),
-          renameLocal: (owner, id, label) => editSession({ userId: owner } as LivelyUser, id, { label }),
+          // #1979 — 출처는 **rule**(첫 지시 앞부분을 자른 규칙 이름)이다. 기본값 human 을 쓰면 이 자동 이름이
+          //  '사람이 지은 이름'으로 굳어져 그 세션이 스스로 짓는 이름(agent)을 영영 막는다.
+          renameLocal: (owner, id, label) => editSession({ userId: owner } as LivelyUser, id, { label }, { source: "rule" }),
           renameNode: (nodeId2, owner, id, label) => nodeRpc(nodeId2, "edit", { user: { userId: owner }, id, patch: { label } }).then(() => undefined),
-          saveLabel: (id, label) => updateSessionStateMeta(id, { label }),
+          saveLabel: (id, label) => updateSessionStateMeta(id, { label, label_source: "rule" }),
           warn: (msg, err) => console.warn(`[session-log] ${msg}:`, (err as Error)?.message ?? err),
         });
       }
