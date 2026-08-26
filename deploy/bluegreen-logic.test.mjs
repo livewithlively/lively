@@ -179,6 +179,22 @@ for (const [name, src, fn] of [
   assert.equal(sh("bg_parse_args --release /r --tg-arn arn:x --bogus").status, 2, "알 수 없는 인자 → rc 2");
   assert.equal(sh("bg_parse_args --release /r --tg-arn arn:x --health-retries abc").status, 2, "비정수 retries → rc 2");
   assert.equal(sh("bg_parse_args --release /r --tg-arn arn:x --alb-health-timeout abc").status, 2, "비정수 alb-health-timeout → rc 2");
+
+  // 다중 TG — ALB 가 여럿이면(각자 전용 TG) flip 대상도 여럿이다.
+  //  ⚠ 첫 --tg-arn 은 env 를 **대체**한다(종전 계약 유지). 그 뒤 반복만 누적 — 아니면 CI env 가 인자에 딸려붙는다.
+  assert.equal(parse("--release /r --tg-arn arn:a --tg-arn arn:b").stdout, "/r|/opt/lively|/readyz|60|5|0|arn:a,arn:b||180",
+    "--tg-arn 반복 → 콤마 결합(첫 지정이 env 대체, 이후 누적)");
+  assert.equal(parse("--release /r --tg-arn arn:a,arn:b").stdout, "/r|/opt/lively|/readyz|60|5|0|arn:a,arn:b||180",
+    "콤마 구분 1회 지정도 같은 결과");
+  assert.equal(parse("--release /r", { LIVELY_TG_ARN: "arn:a,arn:b" }).stdout, "/r|/opt/lively|/readyz|60|5|0|arn:a,arn:b||180",
+    "env LIVELY_TG_ARN 도 콤마 다중 가능(CI 변수 하나로 두 ALB)");
+  // 빈 항목은 소비처 루프가 조용히 건너뛰어 **일부 ALB 미flip 을 성공 보고**할 수 있어 파싱에서 끊는다.
+  assert.equal(sh("bg_parse_args --release /r --tg-arn arn:a,,arn:b").status, 2, "--tg-arn 빈 항목(,,) → rc 2");
+  assert.equal(sh("bg_parse_args --release /r --tg-arn arn:a,").status, 2, "--tg-arn 후행 콤마 → rc 2");
+  // 중복은 두 번째 deregister 가 실패해 flip 이 die 로 멈춘다 → 파싱에서 끊는다.
+  assert.equal(sh("bg_parse_args --release /r --tg-arn arn:a --tg-arn arn:a").status, 2, "--tg-arn 중복 → rc 2");
+  // 공백 패딩은 ARN 에 있을 수 없다 — 다운스트림 aws 실패로도 잡히지만(원복·die) 여기서 끊어 에러를 이르게.
+  assert.equal(sh('bg_parse_args --release /r --tg-arn "arn:a, arn:b"').status, 2, "--tg-arn 항목 공백 패딩 → rc 2");
 }
 
 // ── H. deploy-release.sh 배선(부작용 절차 — 롤백 안전 불변식) ───────────────
@@ -189,13 +205,17 @@ for (const [name, src, fn] of [
   // ⭐ 롤백 안전(로컬 게이트): 로컬 healthz 실패면 ALB 를 아예 만지지 않고 idle 정리 후 die → old 계속 서빙.
   //  bg_flip_decision 이 flip 이 아니면 ALB register(flip 시작) 앞에서 죽어야 한다. (상세 ALB 배선은 아래 ALB 블록.)
   const iDecision = deploy.indexOf("bg_flip_decision");
-  const iRegister = deploy.indexOf("aws elbv2 register-targets"); // ALB flip 시작점(deregister 와 구분되는 정확 문자열)
+  //  ⚠ 다중 TG 화로 `aws elbv2 register-targets` 리터럴은 파일 상단 헬퍼 **정의**에도 있다(첫 등장이 main 이 아니다).
+  //   flip 시작점은 main 안의 호출부이므로 그걸 앵커로 쓴다 — 리터럴을 쓰면 슬라이스가 뒤집혀 단언이 무력화된다.
+  const iRegister = deploy.indexOf('alb_register_targets "$TG_ARN"'); // ALB flip 시작점(main 안 첫 ALB mutate)
   assert.ok(iDecision > 0 && iRegister > 0 && iDecision < iRegister, "로컬 healthz 게이트가 ALB register 보다 앞서야 한다");
   const rollbackBlock = deploy.slice(iDecision, iRegister);
   assert.ok(/!= flip/.test(rollbackBlock), "flip 이 아니면 분기하는 가드가 있어야 한다");
   assert.ok(/systemctl stop "lively-gateway@\$idle"/.test(rollbackBlock), "로컬 healthz 실패 시 실패한 idle 을 정지해야 한다");
   assert.ok(/\bdie\b/.test(rollbackBlock), "로컬 healthz 실패 시 die(배포 중단)");
-  assert.ok(!/aws elbv2/.test(rollbackBlock), "로컬 healthz 실패 경로는 ALB 를 만지지 않는다(register 앞에서 die)");
+  //  헬퍼 경유 호출도 ALB mutate 다 — 리터럴만 막으면 alb_*_targets 로 우회한 회귀를 놓친다.
+  assert.ok(!/aws elbv2|alb_register_targets|alb_deregister_targets/.test(rollbackBlock),
+    "로컬 healthz 실패 경로는 ALB 를 만지지 않는다(register 앞에서 die)");
 
   // ⭐ 흡수 코드는 배포 스크립트에서 통째로 제거됐다(데이터파괴 클래스 분리) — negative-assert.
   assert.ok(!/migrate_from_single/.test(deploy), "deploy-release 에 흡수 함수(migrate_from_single) 잔존 금지 — migrate 로 분리");
@@ -283,9 +303,9 @@ for (const [name, src, fn] of [
 
   // flip 3-스텝 앵커(모두 호출부의 `if ! ` 프리픽스로 앵커 — 함수 정의·rollback deregister(|| warn)와 구분).
   //  구 포트 deregister 만 `if ! ` 가드라 register/idle-rollback deregister 와 유일 구분된다.
-  const iRegister = deploy.indexOf("if ! aws elbv2 register-targets");
+  const iRegister = deploy.indexOf("if ! alb_register_targets");
   const iHealthPoll = deploy.indexOf("if ! alb_wait_healthy");
-  const iDeregOld = deploy.indexOf("if ! aws elbv2 deregister-targets"); // 구 포트 deregister(유일한 if-가드 deregister)
+  const iDeregOld = deploy.indexOf("if ! alb_deregister_targets"); // 구 포트 deregister(유일한 if-가드 deregister)
   const iStateCommit = deploy.indexOf('tee "$root/active-color"', iDeregOld); // 실제 커밋(die 메시지·주석의 'active-color' 아님)
   assert.ok(iRegister > 0, "ALB register-targets(idle 포트) 호출 존재");
   assert.ok(iHealthPoll > iRegister, "health poll(alb_wait_healthy)이 register 뒤");
@@ -294,21 +314,21 @@ for (const [name, src, fn] of [
   // register 는 구 포트 deregister 앞(핵심 불변식 — 먼저 빼면 다운타임).
   assert.ok(iRegister < iDeregOld, "ALB register(+healthy)가 deregister(구 포트)보다 먼저");
   // 구 포트 deregister 는 active_port(구 포트)를 대상으로 한다(idle 포트 아님).
-  assert.ok(/if ! aws elbv2 deregister-targets[\s\S]*Port="\$active_port"/.test(deploy), "구 포트 deregister 대상은 active_port");
+  assert.ok(/if ! alb_deregister_targets "\$TG_ARN" "\$INSTANCE_ID" "\$active_port"/.test(deploy), "구 포트 deregister 대상은 active_port");
 
   // 롤백 분기들.
   // (a) register 실패 → idle 정지 + die(old 계속 서빙). register 호출부 ~ health poll 사이.
   const registerBlock = deploy.slice(iRegister, iHealthPoll);
-  assert.ok(/if ! aws elbv2 register-targets/.test(registerBlock), "register 는 실패 시 분기(if !)");
+  assert.ok(/if ! alb_register_targets/.test(registerBlock), "register 는 실패 시 분기(if !)");
   assert.ok(/systemctl stop "lively-gateway@\$idle"/.test(registerBlock) && /\bdie\b/.test(registerBlock), "register 실패 시 idle 정지 + die");
   // (b) ALB healthy 미달 → idle 등록 취소(deregister idle) + idle 정지 + die(구 유닛 유지). health poll ~ 구 포트 deregister 사이.
   const unhealthyBlock = deploy.slice(iHealthPoll, iDeregOld);
   assert.ok(/if ! alb_wait_healthy/.test(unhealthyBlock), "ALB unhealthy 는 분기(if ! alb_wait_healthy)");
-  assert.ok(/deregister-targets[\s\S]*Port="\$idle_port"/.test(unhealthyBlock), "ALB unhealthy 롤백은 idle 포트를 등록 취소(원복)");
+  assert.ok(/alb_deregister_targets "\$TG_ARN" "\$INSTANCE_ID" "\$idle_port"/.test(unhealthyBlock), "ALB unhealthy 롤백은 idle 포트를 등록 취소(원복) — TG 전부에");
   assert.ok(/systemctl stop "lively-gateway@\$idle"/.test(unhealthyBlock) && /\bdie\b/.test(unhealthyBlock), "ALB unhealthy 시 idle 정지 + die");
   // (c) 구 포트 deregister 실패 → die(idle·old 둘 다 등록 = 무중단, active-color 미커밋). idle 은 끄지 않는다(서빙 중).
   const deregBlock = deploy.slice(iDeregOld, iStateCommit);
-  assert.ok(/if ! aws elbv2 deregister-targets/.test(deregBlock), "구 포트 deregister 는 실패 시 분기");
+  assert.ok(/if ! alb_deregister_targets/.test(deregBlock), "구 포트 deregister 는 실패 시 분기");
   assert.ok(/\bdie\b/.test(deregBlock), "구 포트 deregister 실패 시 die(active-color 미커밋)");
   assert.ok(!/systemctl stop "lively-gateway@\$idle"/.test(deregBlock), "구 포트 deregister 실패 경로는 idle 을 끄지 않는다(healthy·서빙 중)");
 }
@@ -318,11 +338,14 @@ for (const [name, src, fn] of [
 //   ②실패경로가 idle 을 disable 안 하면 재부팅 시 양 color 동시기동(OOM 이력 박스 치명), ③BLUE==GREEN 오설정이면
 //   deregister 가 방금 register 한 타깃을 도로 빼 flip 이 무효, ④keep-old 인데 sleep 하면 무의미한 지연이다.
 {
-  const iRegisterFlip = deploy.indexOf("if ! aws elbv2 register-targets");
+  const iRegisterFlip = deploy.indexOf("if ! alb_register_targets");
   const iHealthPoll = deploy.indexOf("if ! alb_wait_healthy");
-  const iDeregOld = deploy.indexOf("if ! aws elbv2 deregister-targets");
+  const iDeregOld = deploy.indexOf("if ! alb_deregister_targets");
   const iDecision = deploy.indexOf("bg_flip_decision");
-  const iRegisterAny = deploy.indexOf("aws elbv2 register-targets");
+  //  ⚠ 종전엔 `aws elbv2 register-targets` 리터럴 첫 등장을 썼는데, 다중 TG 화로 그 리터럴이 파일 상단
+  //   헬퍼 정의로 옮겨가 iDecision 보다 앞이 됐다(슬라이스가 빈 문자열이 되어 단언이 조용히 무력화된다).
+  //   main 안의 첫 ALB mutate = register 호출이므로 그 자리를 직접 쓴다.
+  const iRegisterAny = iRegisterFlip;
 
   // #1 HC=traffic-port preflight — register 보다 앞(배선 락). 호출은 `"$TG_ARN"` 인자형으로 정의(())와 구분.
   const iPreflightCall = deploy.indexOf('assert_tg_hc_traffic_port "$TG_ARN"');
@@ -367,6 +390,45 @@ for (const [name, src, fn] of [
   // sleep 은 old stop 직전(drain 유예) — 같은 else 안에서 stop 보다 앞.
   const iOldStop = phase4.indexOf('systemctl stop "$old_unit"', iElse);
   assert.ok(iOldStop > iSleep, "sleep(drain 유예)이 old stop 보다 앞(같은 non-keep-old 분기)");
+
+  // #5 다중 TG flip — ALB TG 는 로드밸런서 1대에만 붙는 하드 리밋(TargetGroupAssociationLimit)이라 ALB 가
+  //  여럿이면 TG 도 여럿이다. flip 이 그 전부에 반영돼야 하고, **부분 적용이 성공으로 보고되면 안 된다**.
+  const mSplit = /tg_split\(\)\s*\{[\s\S]*?\n\}/.exec(deploy);
+  assert.ok(mSplit, "tg_split 정의 존재(콤마 구분 TG 리스트 분해)");
+  assert.ok(/set -f/.test(mSplit[0]) && /set \+f/.test(mSplit[0]), "tg_split 은 분해 중 glob 확장을 끈다(pathname expansion 차단)");
+  assert.ok(/\[ -n "\$item" \]/.test(mSplit[0]), "tg_split 은 빈 항목을 흘리지 않는다");
+
+  const mReg = /alb_register_targets\(\)\s*\{[\s\S]*?\n\}/.exec(deploy);
+  assert.ok(mReg, "alb_register_targets 정의 존재");
+  assert.ok(/tg_split/.test(mReg[0]), "register 는 TG 리스트 전부를 순회");
+  // 부분 등록 롤백 — healthy 확인 전에 어떤 ALB 도 idle 로 트래픽을 보내지 않는다는 불변식.
+  assert.ok(/done_tgs/.test(mReg[0]) && /deregister-targets/.test(mReg[0]) && /return 1/.test(mReg[0]),
+    "register 하나라도 실패하면 그 실행에서 등록한 TG 들을 되돌리고 rc 1(부분 등록 금지)");
+
+  const mDereg = /alb_deregister_targets\(\)\s*\{[\s\S]*?\n\}/.exec(deploy);
+  assert.ok(mDereg, "alb_deregister_targets 정의 존재");
+  assert.ok(/tg_split/.test(mDereg[0]) && /rc=1/.test(mDereg[0]),
+    "deregister 는 TG 전부에 적용하고 하나라도 실패하면 rc 1(호출부가 die 판단)");
+
+  const mWait = /alb_wait_healthy\(\)\s*\{[\s\S]*?\n\}/.exec(deploy);
+  assert.ok(mWait, "alb_wait_healthy 정의 존재");
+  assert.ok(/tg_split/.test(mWait[0]) && /pending/.test(mWait[0]) && /still/.test(mWait[0]),
+    "healthy 폴링은 미달 TG 만 라운드로빈으로 재확인(TG 수만큼 타임아웃이 곱해지지 않게)");
+  assert.ok(/\$\{#still\[@\]\}" -eq 0 \] && return 0/.test(mWait[0]),
+    "모든 TG 가 healthy 일 때만 rc 0(하나라도 미달이면 계속 대기 → 타임아웃 시 rc 1)");
+
+  // preflight 도 전 TG 에 적용돼야 한다 — 한 TG 만 검사하면 다른 ALB 의 HC 드리프트가 그대로 통과한다.
+  assert.ok(/tg_split/.test(m1[0]), "HC preflight 도 TG 리스트 전부를 순회");
+
+  // #6 다중 TG 고유 edge — healthy 미달 롤백은 idle 을 끄기 전에 drain 유예를 준다. TG 가 여럿이면 먼저
+  //  healthy 가 된 ALB 가 타임아웃까지 idle 로 트래픽을 보내고 있었을 수 있어(단일 TG 엔 없던 경로),
+  //  유예 없이 stop 하면 그 커넥션이 절단된다.
+  const iRollbackDereg = deploy.indexOf('alb_deregister_targets "$TG_ARN" "$INSTANCE_ID" "$idle_port"');
+  const iRollbackStop = deploy.indexOf('systemctl stop "lively-gateway@$idle"', iRollbackDereg);
+  const iRollbackSleep = deploy.indexOf('sleep "$DRAIN_SECONDS"', iRollbackDereg);
+  assert.ok(iRollbackDereg > 0 && iRollbackSleep > 0 && iRollbackStop > 0, "healthy 미달 롤백 블록에 dereg·sleep·stop 존재");
+  assert.ok(iRollbackSleep > iRollbackDereg && iRollbackSleep < iRollbackStop,
+    "롤백 drain 유예는 idle 등록취소 뒤 · idle stop 앞");
 }
 
 // ═══ migrate-to-bluegreen.sh — 1회성 흡수 스크립트 ═══════════════════════════
@@ -723,7 +785,7 @@ for (const [name, src, fn] of [
   //  8080 상수가 아니다 — PORT 를 바꿔 설치한 박스에서 엉뚱한 포트를 빼면 구 포트가 TG 에 남아 사망 타깃이 된다(M1c/M1d).
   const iOverride = deploy.indexOf('&& active_port="$LEGACY_BLUE_PORT"');
   const iActivePortCalc = deploy.indexOf('active_port="$(bg_port "$active")"');
-  const iDeregOld = deploy.indexOf('deregister-targets --target-group-arn "$TG_ARN" --targets Id="$INSTANCE_ID",Port="$active_port"');
+  const iDeregOld = deploy.indexOf('alb_deregister_targets "$TG_ARN" "$INSTANCE_ID" "$active_port"');
   assert.ok(iOverride > 0, "LEGACY_BLUE_UNIT 존재 시 active_port ← 실측 marker 포트 오버라이드 존재");
   assert.ok(iOverride > iActivePortCalc, "오버라이드는 active_port=bg_port(active) 산출 뒤");
   assert.ok(iDeregOld > 0 && iOverride < iDeregOld, "오버라이드는 구 포트 deregister 앞(실서빙 포트 대상)");
@@ -761,7 +823,7 @@ for (const [name, src, fn] of [
   assert.ok(/AWS_REGION/.test(deploy) && /imds_get meta-data\/placement\/region/.test(deploy), "region: env 또는 IMDS placement/region");
   // INSTANCE_ID 확정이 ALB register 보다 앞(flip 전에 대상 확정).
   const iInst = deploy.indexOf('INSTANCE_ID="$(imds_get');
-  const iReg = deploy.indexOf("if ! aws elbv2 register-targets");
+  const iReg = deploy.indexOf("if ! alb_register_targets");
   assert.ok(iInst > 0 && iReg > 0 && iInst < iReg, "INSTANCE_ID 확정이 ALB register 보다 앞");
 }
 
