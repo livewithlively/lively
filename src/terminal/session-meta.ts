@@ -72,3 +72,28 @@ export function deadSessionMeta(
     },
   };
 }
+
+/**
+ * 노드 세션 메타의 갈래 — **'지금 살아 있나'를 먼저 묻는다**(2026-08-26 상민님 신고).
+ *
+ * 종전엔 desired-state 에 node_id 가 **있다는 것만 보고** 곧바로 deadSessionMeta(restorable=true)로 갔다.
+ *  생사 확인이 `?node=` 를 받은 갈래에만 있었기 때문인데, 목록이 좌표를 떨어뜨리면(게이트웨이와 노드가 같은
+ *  tmux 를 볼 때 — sessions/session-merge.ts) 화면은 좌표 없이 물어볼 수밖에 없다. 그러면 **지금 돌고 있는
+ *  세션이 '죽었다'고 답해지고**, 그 오답을 받은 셸이 대화록 기반 이어받기로 흘러 빈 새 세션을 만든다
+ *  (실측 dev: 프로젝트 하나에 「새 세션(원본 기반)」이 4개 쌓였다).
+ *
+ * ⚠ 호출 규약 — 라우트는 `?node=` 를 받은 갈래에서 **이미 그 노드를 물어보고 못 찾았을 때** 여기로 온다.
+ *  그래서 askedNode 가 stateNode 와 같으면 같은 스냅샷을 다시 보지 않는다(답이 같다). 그 경우 aliveOn 은
+ *  아예 부르지 않는다 — 중복 조회를 막는 것이 이 갈래의 계약이다.
+ *
+ * 순수 — 스냅샷 조회는 aliveOn 으로 주입한다(위 머리말 '표를 테스트로 고정한다').
+ */
+export function nodeSessionMetaMode(
+  askedNode: string,
+  stateNode: string,
+  aliveOn: (nodeId: string) => boolean,
+): "alive" | "dead" {
+  if (!stateNode) return "dead";              // 노드 세션이 아니다 — 호출자가 이 갈래로 보내지 않는다(방어)
+  if (askedNode === stateNode) return "dead"; // 이미 물어보고 못 찾았다
+  return aliveOn(stateNode) ? "alive" : "dead";
+}
