@@ -4,13 +4,8 @@
 //  문구는 원준님 교정 31건 반영본. 새로 쓴 연결부는 [새문구] 주석. 상태는 sessionStorage(진행)·localStorage(끝남 표식).
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
-import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
+import { authUploadProgress, upDirSupported, upDropZone, upFromInput } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl } from '../core.js';
-//  #1879 — 외부 앱을 **실제로** 잇는다. 잇는 길은 새로 만들지 않고 이미 깎아 둔 한 곳을 그대로 쓴다:
-//   서비스 표·연결 판정은 me-logins.ts(=[외부 앱 연결] 화면 v2/connect.ts 와 같은 정본), 토큰 발급처·생김새는
-//   admin-credentials.ts 의 CRED_KINDS. **표가 두 벌이 되면 조용히 어긋난다** — 여기서 다시 만들지 않는다.
-import { LOGIN_SERVICES, partition } from '../me-logins.js';
-import { CRED_KINDS } from '../admin-credentials.js';
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
@@ -679,7 +674,6 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
-    local: null,            // #1879 내 컴퓨터 설치 — 'done'|'getting'|'later'
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
     drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
@@ -697,212 +691,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const canOf = () => DATA.CAN[jobOf()] || DATA.CAN[S.stage] || DATA.CAN['제품·기획'];
   const nick = () => S.nameSet && S.name ? S.name : '';
 
-  /* ── #1879 «내 컴퓨터에 잇기» 장면의 부품 ─────────────────────────────────────
-   *  게이트웨이 주소는 **지금 이 화면이 떠 있는 그 주소**다. 서버에 물어볼 필요가 없다(비관리자에겐
-   *   org_profile.gateway_url 이 가려지기도 한다 — 클래식 설치 가이드도 같은 값으로 접는다:
-   *   web/learn.ts drawInstallGuide 의 `profile.gateway_url || window.location.origin`).
-   *  `/cli` 는 게이트웨이가 **자기 주소를 구워** 내보내므로(kit/cli/bootstrap.sh 의 __LIVELY_GATEWAY__),
-   *   한 줄 안에 주소가 한 번만 들어가면 나머지는 스크립트가 안다.
-   */
-  const GW = String(location.origin || '').replace(/\/+$/, '');
-  /* ⚠ OS 토글을 두지 않는다. 사람이 고르게 하면 **고른 값과 실제로 받아지는 파일이 어긋날 수 있다** —
-   *  내려받기는 desktopLink()→pickAsset() 이 `desktopOs()` 로 고르지, 사람이 고른 값을 보지 않기 때문이다.
-   *  그래서 문구도 같은 판정을 쓴다. 셋으로 가른다(둘로 접으면 리눅스 사람에게 .dmg 라고 말하게 된다):
-   *   mac / win — 받아질 파일 이름을 그대로 말한다.
-   *   other(리눅스·판정불가) — desktopLink() 가 null 이라 [앱 받기]가 **릴리스 페이지**를 연다. 그러니
-   *    "파일이 내려받아진다"고 말하면 안 된다. 없는 자리를 가리키지 않는다. */
-  const kbd = (t) => `<kbd class="ob-kbd">${esc(t)}</kbd>`;
-  /** 복사 단추가 붙은 명령 한 줄. **사람이 손으로 타이핑하게 두지 않는다** — 오타 한 글자가 곧 막힘이다. */
-  function cmdBox(cmd) {
-    return `<div class="ob-cmd"><code>${esc(cmd)}</code><button type="button" class="ob-cmd-copy" data-copy="${esc(cmd)}">복사</button></div>`;
-  }
-  /** 복사 배선 — 클립보드가 막힌 자리(비 HTTPS·권한 거부)에서는 **글자를 선택해 준다**.
-   *  조용히 실패하면 사람은 붙여넣기가 안 되는 이유를 영영 모른다. */
-  function wireCopy(root) {
-    $$('.ob-cmd-copy', root).forEach((b) => b.onclick = async () => {
-      const txt = b.dataset.copy || '';
-      try {
-        await navigator.clipboard.writeText(txt);
-        const was = b.textContent; b.textContent = '복사됨'; b.classList.add('ob-on');
-        setTimeout(() => { b.textContent = was; b.classList.remove('ob-on'); }, 1600);
-      } catch (_) {
-        const code = b.parentElement && b.parentElement.querySelector('code');
-        if (code) { const r = document.createRange(); r.selectNodeContents(code); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
-        toast('복사가 막혀 있어요 — 파랗게 선택해 뒀으니 ⌘/Ctrl + C 로 복사해 주세요.');
-      }
-    });
-  }
-  let localTimer = null;      // 설치 확인 폴링
-  let localBase = null;       // 장면에 들어올 때의 기준값(이미 참이면 전이를 볼 수 없다)
-  /** 이 사람 신원으로 라이블리 MCP 툴이 **실제로 성공 호출된 적 있나**(서버 자동판정).
-   *  true/false, 못 물었으면 null — 못 물은 것을 '아직 안 됐다'로 뭉개지 않는다. */
-  async function connectSignal() {
-    try {
-      const r: any = await api('/api/ui/me/onboarding');
-      const items = (r && r.status && r.status.items) || [];
-      const it = items.find((x) => x && x.key === 'connect');
-      return !!(it && it.state === 'done' && it.by === 'auto');
-    } catch (_) { return null; }
-  }
-
-  /* ══ #1879 «가져올 곳 잇기» — 실배선 부품 ═══════════════════════════════════════
-   *  종전 이 장면은 카드를 누르면 `await sleep(1100)` 뒤 무조건 «연결이 완료됐어요» 라고 썼다.
-   *   **아무것도 이어지지 않았다.** 그러고는 다음 화면들이 «쌓인 자료를 가져오는 중» 이라고 말했고
-   *   (읽는 개수 41 도 그 자리에서 지어낸 숫자였다), 온보딩을 마친 사람이 [외부 앱 연결] 에 가 보면
-   *   전부 «연결 안 됨» 이었다. 첫 3분이 통째로 거짓말을 하는 자리였다.
-   *  이제 실제로 잇는다 — 길은 [외부 앱 연결](v2/connect.ts)이 이미 깎아 둔 그것 하나다:
-   *   · 계정 로그인 = POST /api/ui/me/oauth/connect → 새 탭 동의 → **창 포커스 복귀**에 재조회(폴링 없음)
-   *   · 토큰       = POST /api/ui/me/credential
-   *   · 판정       = me-logins.ts partition() — 연결됨 / 내가 켤 수 있음 / 관리자가 열어야 함
-   *
-   *  기준선은 이 온보딩 전체의 그것과 같다 — **컴맹인 중학생도 따라올 수 있어야 한다**:
-   *   한 번에 한 걸음 · 어디를 누르는지 그대로 · 전문용어 금지 · 왜 하는지 먼저 · 값이 어떻게 생겼는지 ·
-   *   되돌릴 수 있다고 말해 주기. 그래서 토큰형은 오버레이(svcTokenForm)를 띄우지 않고 **그 카드 아래에서
-   *   펼쳐지는 세 걸음**으로 바꿨다: 관리자용 폼은 '발급 스펙'을 보여 주지만, 이 사람에게 필요한 것은
-   *   '어느 버튼을 누르는가'다. 발급처 주소와 값의 생김새는 지어내지 않고 CRED_KINDS 에서 읽는다.
-   */
-  // 온보딩이 부르는 이름 → 서비스 표(LOGIN_SERVICES)의 키. 이 줄 하나가 두 자리를 잇는 전부다.
-  //  없는 것(git·folder·none)은 여기 없다 — 잇는 길이 다르거나(내 컴퓨터 설치) 연결이랄 게 없다.
-  const SVC_OF = {
-    notion: 'notion', gdrive: 'google-drive', gmail: 'google-gmail', gcal: 'google-calendar',
-    slack: 'slack', linear: 'linear', clickup: 'clickup',
-    github: 'github', gitlab: 'gitlab', figma: 'figma', prometheus: 'prometheus',
-  };
-  /** 서버 실측(partition 결과). null = **아직 못 물었다** — '연결 안 됨'과 뭉개지 않는다. */
-  let CONN = null;
-  /** 한 번이라도 물어봤나. ⚠ 이게 없으면 서버가 답을 못 줄 때 '못 읽음 → 다시 그림 → 또 물음'이 영원히 돈다. */
-  let connTried = false;
-  async function loadConn() {
-    connTried = true;
-    try {
-      const creds = await api('/api/ui/me/credentials');
-      const oauth = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
-      CONN = partition(oauth, creds);
-    } catch (_) { CONN = null; }
-    return CONN;
-  }
-  const svcOf = (id) => LOGIN_SERVICES.find((s) => s.key === SVC_OF[id]);
-  /** 이 앱이 지금 어떤 자리에 있나 — 'on'(이어짐) · 'off'(내가 켤 수 있다) · 'blocked'(관리자가 열어야) · null(모른다). */
-  function connState(id) {
-    const svc = svcOf(id); if (!svc || !CONN) return null;
-    if (CONN.connected.some((s) => s.key === svc.key)) return 'on';
-    if (CONN.blockedOAuth.some((s) => s.key === svc.key)) return 'blocked';
-    return 'off';
-  }
-  /** 어떻게 잇나 — 계정 로그인이 가능하면 **무조건 그쪽**이다(누르고 [허용] 한 번 = 이 사람에게 가장 쉬운 길).
-   *  조직에 그 커넥터가 없을 때만 토큰으로 떨어진다. 둘 다 없으면 null(카드를 내밀지 않는다). */
-  function connHow(id) {
-    const svc = svcOf(id); if (!svc) return null;
-    if (svc.oauth && CONN && CONN.oauthMap.has(svc.oauth)) return 'oauth';
-    //  #1881 G5 — 전용 창구를 가진 앱(GitHub)도 '계정 로그인' 길이다. 이게 없으면 토큰 발급 3단계로 보내는데,
-    //   그건 우리가 없애려던 바로 그 벽이고 저장소도 못 고른다(계정 연결은 그 화면에서 범위를 함께 정한다).
-    if ((svc as any).appConnect) return 'oauth';
-    return svc.token ? 'token' : (svc.oauth ? 'oauth' : null);
-  }
-  /** 이어진 것으로 세어도 되는 id 만 — 화면이 «2곳 이었어요» 라고 말할 근거. */
-  const pickedIds = () => S.sources.filter((id) => id !== 'none' && SVC_OF[id]);
-
-  /* 토큰형의 «어느 버튼을 누르는가». 주소·값의 생김새는 CRED_KINDS 에서 읽고(지어내면 그 자리에서 막힌다),
-   *  경로도 그 표의 help 에 적힌 그것을 따른다 — 여기서 한 일은 **말투를 바꾼 것**뿐이다.
-   *  ⚠ 화면 이름은 그 회사가 언제든 바꾼다. 그래서 마지막에 늘 '조금 달라 보이면' 한 줄을 붙인다. */
-  const TOKEN_HOWTO = {
-    github: {
-      why: 'GitHub 에서 <b>글자 한 줄</b>을 받아 오면 돼요. 이걸 주면 제가 이슈·코드 기록을 읽을 수 있습니다.',
-      go: 'GitHub 에서 글자 받기',
-      steps: [
-        '새 탭이 열리면 오른쪽 위 <b>Generate new token</b> ▸ <b>Generate new token (classic)</b> 을 누르세요.',
-        '<b>Note</b> 칸에 아무 이름이나 적고(예: lively), 아래 목록에서 <b>repo</b> 앞 네모를 체크하세요.',
-        '맨 아래 <b>Generate token</b> 을 누르면 <b>ghp_</b> 로 시작하는 긴 글자가 나옵니다. 그걸 복사해 아래에 붙여넣으세요.',
-      ],
-      last: '그 글자는 <b>그 화면에서 한 번만</b> 보여요. 놓쳤으면 같은 자리에서 새로 만들면 됩니다. 나중에 GitHub 에서 지우면 연결도 그때 끊깁니다.',
-    },
-    figma: {
-      why: 'Figma 에서 <b>글자 한 줄</b>을 받아 오면 돼요. 이걸 주면 제가 디자인 파일과 거기 달린 의견을 읽을 수 있습니다.',
-      go: 'Figma 설정 열기',
-      steps: [
-        '새 탭이 열리면 <b>Security</b> 를 누르고, 아래로 내려 <b>Personal access tokens</b> 를 찾으세요.',
-        '<b>Generate new token</b> 을 누르고 이름을 아무거나 적으세요(예: lively). 권한은 전부 <b>Read only</b>(읽기만) 로 두세요 — 고치는 권한은 주지 않습니다.',
-        '<b>figd_</b> 로 시작하는 글자가 나오면 복사해 아래에 붙여넣으세요.',
-      ],
-      last: '그 글자는 <b>한 번만</b> 보여요. 놓쳤으면 새로 만들면 됩니다. 읽기 권한만 주므로 제가 디자인을 고칠 일은 없습니다.',
-    },
-    clickup: {
-      why: 'ClickUp 에서 <b>글자 한 줄</b>을 받아 오면 돼요. 이걸 주면 제가 거기 쌓인 일감을 읽을 수 있습니다.',
-      go: 'ClickUp 설정 열기',
-      steps: [
-        '새 탭이 열리면 <b>Apps</b> 화면이 나와요.',
-        '<b>API Token</b> 자리에서 <b>Generate</b> 를 누르세요(이미 있으면 <b>Copy</b>).',
-        '<b>pk_</b> 로 시작하는 글자를 복사해 아래에 붙여넣으세요.',
-      ],
-      last: '언제든 같은 자리에서 새로 만들거나 지울 수 있어요.',
-    },
-    slack: {
-      why: 'Slack 에서 <b>글자 한 줄</b>을 받아 와야 해요.',
-      go: 'Slack 앱 화면 열기',
-      steps: ['Slack 앱 화면에서 사용자 토큰(<b>xoxp-</b> 로 시작)을 발급받아 아래에 붙여넣으세요.'],
-      last: '이 길은 손이 많이 갑니다 — 회사 관리자가 Slack 을 열어 두면 <b>[허용] 한 번</b>으로 끝나요. 어려우면 지금은 건너뛰고 관리자에게 부탁하시는 편이 낫습니다.',
-    },
-  };
-  /** 그 밖의 토큰형(예: Prometheus) — 표에 안내가 없으면 지어내지 않고 '값 붙여넣기'만 연다. */
-  const tokenHowto = (id) => TOKEN_HOWTO[id] || null;
-  const credSpec = (svc) => (svc && svc.token ? CRED_KINDS.find((x) => x.kind === svc.token) : null);
-
-  /** 계정 로그인 — 새 탭에서 [허용]. 복귀는 **창 포커스 한 번**으로 안다(v2/connect.ts 와 같은 경로). */
-  async function svcOAuth(id, after) {
-    const svc = svcOf(id); if (!svc || !(svc.oauth || (svc as any).appConnect)) return;
-    try {
-      //  전용 창구를 가진 앱(#1881 GitHub)은 공용 경로를 못 탄다 — MCP 서버 행이 없기 때문이다.
-      const app = !!(svc as any).appConnect;
-      const r: any = await api(app ? '/api/ui/org/github/connect' : '/api/ui/me/oauth/connect',
-        { method: 'POST', body: JSON.stringify(app ? {} : { server: svc.oauth }) });
-      if (r && r.authorized) { await loadConn(); after(); return; }
-      const url = r && (r.authorization_url || r.url);
-      if (!url) { after('연결할 주소를 받지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
-      window.open(url, '_blank', 'noopener');
-      // 돌아온 순간이 곧 '허용을 마쳤거나 그만뒀다'는 시점이다 — 그때 한 번만 다시 읽는다.
-      window.addEventListener('focus', () => { void loadConn().then(() => after()); }, { once: true });
-    } catch (e) { after((e && e.message) || '연결을 시작하지 못했어요.'); }
-  }
-  /** 토큰 저장 — 저장되면 곧바로 서버에 다시 물어 **정말 이어졌는지** 확인하고 넘어간다. */
-  async function svcToken(id, value) {
-    const svc = svcOf(id); const spec = credSpec(svc);
-    if (!svc || !spec) throw new Error('이 앱은 글자로 잇는 곳이 아니에요.');
-    const payload: any = { kind: spec.kind, secret: value };
-    if (spec.meta) payload.meta = spec.meta;
-    await api('/api/ui/me/credential', { method: 'POST', body: JSON.stringify(payload) });
-    await loadConn();
-  }
-
-  /** 지금 «글자 받아 오기»가 펼쳐진 앱. 한 번에 하나만 편다 — 한 번에 한 걸음이 이 화면의 규칙이다. */
-  let tokOpen = null;
-  /** 그 카드 아래에서 펼쳐지는 세 걸음. 발급처 주소·값의 생김새는 CRED_KINDS 에서 읽는다.
-   *  안내가 없는 앱(표에 help 가 없는 것)은 지어내지 않고 붙여넣는 칸만 연다 — 틀린 길을 알려 주느니 없는 게 낫다. */
-  function tokPanel(id) {
-    const svc = svcOf(id), spec = credSpec(svc), h = tokenHowto(id);
-    const it = (DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id)) || { label: id };
-    const ph = (spec && spec.secretPh) || '받아 오신 글자를 붙여넣으세요';
-    const doc = (spec && spec.docUrl) || '';
-    return `<div class="ob-tok ob-tok-in">
-      <p class="ob-note">${h ? h.why : `${esc(it.label)} 에서 받은 글자를 아래에 붙여넣으면 이어집니다.`}</p>
-      ${doc ? `<a class="ob-btn ob-btn-sub ob-btn-inline" href="${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(h ? h.go : it.label + ' 열기')} ↗</a>` : ''}
-      ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
-      <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(ph)}">
-      <p class="ob-err" id="tokErr"></p>
-      ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
-      <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
-      <button class="ob-btn ob-btn-pri ob-btn-inline" id="tokGo">이걸로 잇기</button>
-    </div>`;
-  }
-
 
   let pendingChips = null;   // 지금 답을 기다리는 칩들 — 입력창 해석이 본다
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
 
   /* ══════════════ 장면 차례 ══════════════ */
-  const ORDER = ['name', 'stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'local', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
+  const ORDER = ['name', 'stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
   const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
   const CHAT_FROM = STEP_OF.read;          // 여기부터 막3(채팅)
-  const QPROG = ['stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'local', 'app'];   // 막2 진행 눈금
+  const QPROG = ['stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'app'];   // 막2 진행 눈금
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
   function qHead(prog, lead, title, help) {
@@ -934,7 +731,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
            <button class="ob-q-skip" data-skip>그냥 넘어갈게요</button>`,
       bind: (el) => {
         const inp = $('#nameIn', el);
-        const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; } goScene('stage'); };
+        // ⚠ 이름은 **그 자리에서** 서버에 남긴다. 종전엔 온보딩을 끝까지 마쳐야(POST /api/ui/me/welcome) 저장돼서,
+        //  중간에 나가면 방금 적은 이름이 워크스페이스 어디에도 안 보였다(원준님 신고 2026-08-26).
+        //  실패해도 진행은 막지 않는다 — 마무리에서 한 번 더 보낸다.
+        const saveName = (v) => {
+          if (!v) return;
+          void api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ nickname: v }) })
+            .catch(() => { /* 비치명 — 마무리에서 재시도된다 */ });
+        };
+        const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; saveName(v); } goScene('stage'); };
         $('#nameGo', el).onclick = go;
         inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) go(); });
         $('[data-skip]', el).onclick = () => goScene('stage');
@@ -997,7 +802,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         + `<div class="ob-drop ${S.upN ? 'ob-has' : ''}" id="upZone">
             <span class="ob-drop-t" id="upZoneT">${S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요'}</span>
             <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더 정리도, 이름 짓기도 필요 없습니다.')}</span>
-            <span id="upPick"></span>
+            <span class="ob-drop-pick" id="upPick"></span>
           </div>
           <button class="ob-btn ob-btn-pri" id="fGo" ${S.upN ? '' : 'disabled'}>${S.upN ? `${S.upN}개 올리고 계속` : '계속'}</button>
           <button class="ob-q-skip" data-skip>지금은 건너뛰기. 나중에 올려도 됩니다</button>`,
@@ -1014,19 +819,43 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const sendAll = async (items) => {
           if (!items.length) return;
           S.upBusy += items.length; paintZone();
+          let failed = 0;
           for (const it of items) {
+            // 폴더째 올리면 rel 이 `내폴더/하위/파일.md` 로 온다 — 그 구조를 그대로 개인 폴더 uploads/ 아래에 편다.
             const rel = 'uploads/' + String(it.rel || it.file.name).replace(/^\/+/, '');
             try {
-              const j = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
-              if (j && j.source_id) S.upN++;
-            } catch (e) { toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
+              await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              // ⚠ 종전엔 응답의 source_id 가 있을 때만 셌다. 그런데 그 필드는 **자료 등록까지 성공했을 때만** 실린다
+              //  (terminal-files.ts: `...(ing?.ingested ? { source_id } : {})`) — 등록이 조용히 실패하면 파일은 올라갔는데
+              //  화면은 0개로 남아 «계속» 이 영영 안 켜졌다(실측 2026-08-26 원준님 신고). 올라간 건 올라간 것으로 센다.
+              S.upN++;
+            } catch (e) { failed++; toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
             S.upBusy--; S.read.total = S.upN; save(); paintZone();
           }
+          if (failed && failed === items.length) toast('올리지 못했어요. 잠시 뒤 다시 시도해 주세요.');
           renderSB();
         };
         upDropZone(zone, zone, (items) => void sendAll(items));
-        const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub', label: '파일이나 폴더 고르기' });
-        $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 반환은 {btn, fileIn, dirIn} — input 도 DOM 에 있어야 click 이 된다
+        // 고르기 버튼은 **둘을 그대로 편다.** 종전엔 프로젝트 화면용 팝오버 메뉴(upControl)를 빌려 썼는데,
+        //  그 메뉴 안에 숨은 «폴더 올리기» 를 사람이 찾지 못했다(원준님: "폴더채로도 업로드할 수 있어야함").
+        //  이 화면은 질문 하나에 답하는 자리라, 고를 것이 둘뿐이면 숨기지 않는다.
+        const mkIn = (dir) => {
+          const i = document.createElement('input');
+          i.type = 'file'; i.multiple = true; i.style.display = 'none';
+          if (dir) { i.setAttribute('webkitdirectory', ''); }
+          i.addEventListener('change', () => { sendAll(upFromInput(i)); i.value = ''; });
+          return i;
+        };
+        const mkBtn = (label, input) => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'ob-btn ob-btn-sub ob-btn-inline'; b.textContent = label;
+          b.onclick = (ev) => { ev.stopPropagation(); input.click(); };
+          return b;
+        };
+        const fileIn = mkIn(false), dirIn = mkIn(true);
+        const host = $('#upPick', el);
+        host.append(mkBtn('파일 고르기', fileIn), fileIn);
+        if (upDirSupported()) host.append(mkBtn('폴더째 고르기', dirIn), dirIn);   // 사파리 등 미지원 브라우저에선 끌어다 놓기로 간다
         // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
         $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
         $('[data-skip]', el).onclick = () => goScene('sources');
@@ -1035,175 +864,69 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     /* 앱 고르기 — 로컬 파일은 앞에서 받았으므로 '내 컴퓨터 폴더' 항목은 뺀다. */
     sources: {
       html: () => {
-        // 뺀 셋: '내 컴퓨터 폴더'는 앞 단계(파일 올리기)가 대신하고, '딱히 없어요'는 아래 건너뛰기가 이미 그 자리다
-        //  (버튼으로 두면 글이 길어 두 줄로 잘린다).
-        //  #1879 — '로컬 깃 저장소'도 뺀다. 이건 외부 서비스 연결이 아니라 **내 컴퓨터에 라이블리를 까는 일**이고,
-        //   뒤 «내 컴퓨터에 잇기» 장면이 통째로 그걸 한다. 여기 두면 골라 놓고 이을 길이 없는 카드가 된다.
-        const DROP = new Set(['folder', 'none', 'git']);
-        //  #1879 — 세 갈래로 나눠 그린다. 회사가 안 열어 둔 앱을 고르게 두면 다음 화면에서 **막다른 길**이 된다:
-        //   눌러도 아무 일이 없고, 왜 안 되는지도 이 사람은 알 길이 없다. 그래서 그것들은 고르는 자리에서 빼고
-        //   맨 아래 «아직 열려 있지 않은 곳»으로 사실대로 내린다(부탁할 문구를 함께 준다).
-        //  아직 서버에 못 물었으면(CONN===null) 표 그대로 다 보여 준다 — 모르는 것을 '안 된다'로 뭉개지 않는다.
-        const rows = [], blocked = [];
+        // 뺀 둘: '내 컴퓨터 폴더'는 앞 단계(파일 올리기)가 대신하고, '딱히 없어요'는 아래 건너뛰기가 이미 그 자리다
+        //  (버튼으로 두면 글이 길어 두 줄로 잘린다). 남은 '로컬 깃 저장소'는 하나뿐이라 '그 밖'으로 합친다(원준님 2026-08-25).
+        const DROP = new Set(['folder', 'none']);
+        const rows = [];
         for (const r of DATA.SOURCE_ROWS) {
           const items = r.items.filter((it) => !DROP.has(it.id));
           if (!items.length) continue;
           const k = r.k === '내 컴퓨터' ? '그 밖' : r.k;
-          for (const it of items) {
-            if (connState(it.id) === 'blocked') { blocked.push(it); continue; }
-            const hit = rows.find((x) => x.k === k);
-            if (hit) hit.items.push(it); else rows.push({ k, items: [it] });
-          }
+          const hit = rows.find((x) => x.k === k);
+          if (hit) hit.items = hit.items.concat(items); else rows.push({ k, items });
         }
-        const already = rows.flatMap((r) => r.items).filter((it) => connState(it.id) === 'on');
         return qHead('sources',
           S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 이어서 한 가지만 더요.` : '알겠습니다. 이어서 한 가지만 더요.',
           '그동안 쌓아 두신 자료를 가져올 외부 서비스를 연결할게요.',
           '고르신 곳에 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요.')
-          + (already.length ? `<p class="ob-q-fine" style="text-align:left;margin:0 0 14px">이미 이어져 있는 곳이 있어요 — ${esc(already.map((it) => it.label).join(' · '))}. 다시 하실 필요 없습니다.</p>` : '')
           + rows.map((r) => `<p class="ob-opt-group">${esc(r.k)}</p><div class="ob-opt-grid">
-              ${r.items.map((it) => connState(it.id) === 'on'
-                ? `<button class="ob-opt-card ob-on ob-locked" data-done="1" aria-disabled="true"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">이어져 있어요</span></span><span class="ob-oc-chk">✓</span></button>`
-                : card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
-          + (blocked.length ? `<p class="ob-opt-group">아직 열려 있지 않은 곳</p><div class="ob-opt-grid">
-              ${blocked.map((it) => `<button class="ob-opt-card ob-locked" data-ask="${esc(it.id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">눌러서 부탁 문구를 복사하세요.</span></span></button>`).join('')}</div>
-              <p class="ob-q-fine" style="text-align:left;margin:2px 0 0">이 앱들은 회사에서 먼저 열어 줘야 이을 수 있어요. 눌러서 나온 문구를 담당자에게 그대로 보내시면 됩니다.</p>` : '')
+              ${r.items.map((it) => card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
           + `<button class="ob-btn ob-btn-pri" id="srcGo" disabled>계속</button>
              <button class="ob-q-skip" data-skip>가져올 곳이 없어요</button>`;
       },
       bind: (el) => {
-        //  서버에 **먼저** 묻는다 — 무엇이 이미 이어져 있고 무엇을 회사가 안 열어 뒀는지는 서버만 안다.
-        //   못 물으면 표 그대로 두고 그냥 진행한다(연결 못 읽었다고 온보딩이 막히면 안 된다).
-        if (!CONN && !connTried) { void loadConn().then(() => renderScene('sources', false)); }
         const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
         const idOf = (label) => (all.find((s) => s.label === label) || {}).id;
         const go = $('#srcGo', el);
-        //  이미 이어진 것은 고르고 말고 할 게 없다 — 잠가 두고 [계속]의 숫자에서도 뺀다.
-        //  ⚠ 다만 **문은 열어 둔다**: 이미 다 이어 둔 사람은 새로 고를 것이 없어 [계속]이 잠기고,
-        //   그러면 남는 길이 [가져올 곳이 없어요]뿐이라 이어 둔 사실을 스스로 부정하고 나가야 한다.
-        const already = $$('.ob-opt-card.ob-locked[data-done]', el).length;
-        const sync = () => { const n = $$('.ob-opt-card.ob-on:not(.ob-locked)', el).length;
-          go.disabled = !n && !already; go.textContent = n ? `${n}곳에서 가져오기` : '계속'; };
+        const sync = () => { const n = $$('.ob-opt-card.ob-on', el).length; go.disabled = !n; go.textContent = n ? `${n}곳에서 가져오기` : '계속'; };
         sync();
-        $$('.ob-opt-card:not(.ob-locked)', el).forEach((c) => c.onclick = () => {
+        $$('.ob-opt-card', el).forEach((c) => c.onclick = () => {
           c.classList.toggle('ob-on');
-          S.sources = $$('.ob-opt-card.ob-on:not(.ob-locked)', el).map((x) => idOf(x.dataset.opt)).filter(Boolean); save(); renderSB(); sync();
+          S.sources = $$('.ob-opt-card.ob-on', el).map((x) => idOf(x.dataset.opt)).filter(Boolean); save(); renderSB(); sync();
         });
-        //  회사가 안 열어 둔 앱 — 눌러도 안 되는 버튼 대신 **그대로 전달할 수 있는 한 문장**을 준다(v2/connect.ts 와 같은 처방).
-        $$('[data-ask]', el).forEach((c) => c.onclick = async () => {
-          const it = all.find((x) => x.id === c.dataset.ask) || { label: c.dataset.ask };
-          const ask = `라이블리에서 ${it.label} 을(를) 쓰고 싶습니다. 관리 ▸ 외부 서비스에서 ${it.label} 커넥터를 등록해 주세요.`;
-          try { await navigator.clipboard.writeText(ask); toast('부탁 문구를 복사했어요 — 담당자에게 그대로 보내세요.'); }
-          catch (_) { toast(ask); }
-        });
-        go.onclick = () => goScene(pickedIds().length ? 'connect' : 'ai');
+        go.onclick = () => goScene(S.sources.length && !(S.sources.length === 1 && S.sources[0] === 'none') ? 'connect' : 'ai');
         $('[data-skip]', el).onclick = () => { S.sources = ['none']; save(); goScene('ai'); };
       },
     },
-    /* ══ #1879 — 고른 곳을 **실제로** 잇는다. 이 동안 앞에서 받은 파일이 배경에서 읽힌다(대기 없음). ══
-     *  종전 이 장면은 카드를 누르면 1.1초 기다렸다가 무조건 «연결이 완료됐어요» 라고 썼고, 읽을 자료가
-     *   없으면 «41개» 라는 숫자까지 지어내 진행바를 굴렸다. 아무것도 이어지지 않았고 아무것도 읽지 않았다.
-     *  이제 [외부 앱 연결](v2/connect.ts)과 **같은 경로로** 잇는다. 초록불의 근거는 화면의 기억(S.connected)이
-     *   아니라 **서버 실측**이다 — 새로고침해도, 다른 탭에서 이어도, 도중에 그만둬도 화면이 사실과 같아진다.
-     *
-     *  잇는 길이 둘이라 화면도 둘이다. 어느 쪽인지는 사람이 고르지 않는다(connHow 가 정한다):
-     *   · **계정 로그인** — 누르면 새 탭이 열리고 그 서비스에서 [허용] 한 번. 이 사람에게 가장 쉬운 길이라
-     *     가능하면 무조건 이쪽이다(Notion·Slack·Google·GitLab…).
-     *   · **글자 받아 오기** — 조직에 그 커넥터가 없거나 애초에 그 방법뿐인 앱(GitHub·Figma·ClickUp).
-     *     여기서 관리자용 토큰 폼(svcTokenForm)을 띄우지 않는다: 그 폼은 '발급 스펙'을 보여 주지만
-     *     이 사람에게 필요한 것은 **어느 버튼을 누르는가**다. 그래서 카드 아래에서 세 걸음으로 펼친다.
-     *     주소·값의 생김새는 CRED_KINDS 에서 읽는다(지어내면 그 자리에서 사람이 막힌다).
-     *
-     *  ⚠ 어느 갈래에서도 사람을 가두지 않는다 — 하나도 못 이어도 [나중에 가져올게요]로 그냥 간다.
-     *   연결은 여기서 안 끝나도 [외부 앱 연결] 화면에 그대로 남아 있다(그 사실을 화면에 적어 둔다).
-     */
+    /* 앱 연결 — 고른 것을 하나씩. 이 동안 앞에서 받은 파일이 배경에서 읽힌다(대기 없음). */
     connect: {
       html: () => {
         const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
-        const picked = pickedIds();
-        const done = picked.filter((id) => connState(id) === 'on');
-        const left = picked.length - done.length;
+        const picked = S.sources.filter((id) => id !== 'none');
+        const left = picked.length - S.connected.length;
         const reading = S.read.total && !S.read.finished;
-        //  아직 서버에 못 물었으면 그렇다고 말한다 — '연결 안 됨'으로 뭉개면 이미 이은 사람이 또 잇는다.
-        const unknown = !CONN;
         return qHead('connect',
           reading ? `읽는 중이에요. <b>${S.read.done} / ${S.read.total}</b>` : (S.upN ? `파일 ${S.upN}개는 다 읽었어요.` : '거의 다 왔어요.'),
-          done.length ? `${done.length}곳을 이었어요.` : '고르신 곳을 하나씩 이어 주세요.',
-          unknown ? '연결 상태를 불러오는 중이에요…' : '아래에서 하나씩 눌러 주세요. 한 번에 하나면 됩니다.')
-          + `<div class="ob-opt-cards">${picked.map((id) => {
-              const it = all.find((s) => s.id === id) || { label: id };
-              const st = connState(id);
-              const how = connHow(id);
-              const open = tokOpen === id;
-              const desc = st === 'on' ? '이어졌어요.'
-                : st === 'blocked' ? '회사에서 먼저 열어 줘야 해요.'
-                : unknown ? '연결 상태를 확인하고 있어요.'
-                : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
-                : '눌러 주세요 — 새 탭에서 [허용]만 누르면 됩니다.';
-              return `<button class="ob-opt-card ${st === 'on' ? 'ob-on' : ''}${open ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
-                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${esc(desc)}</span></span>
-                <span class="ob-oc-st">${st === 'on' ? '<span class="v2-dot done" style="margin:0"></span>' : ''}</span></button>`
-                + (open ? tokPanel(id) : ''); }).join('')}</div>
-          <button class="ob-btn ob-btn-pri" id="upGo" ${done.length ? '' : 'disabled'}>${left > 0 && done.length ? `${left}곳은 나중에, 계속` : '다 이었어요, 계속'}</button>
-          <button class="ob-q-skip" data-skip>나중에 가져올게요. 지금은 넘어갈게요</button>
-          <p class="ob-q-fine">지금 못 이으셔도 괜찮아요 — 왼쪽 <b>외부 앱 연결</b>에서 언제든 다시 하실 수 있습니다.</p>`;
+          '고르신 곳을 하나씩 이어 주세요.',
+          '새 탭에서 한 번만 허용하시면 됩니다. 허용하는 즉시 그동안 쌓인 자료를 가져오기 시작합니다.')
+          + `<div class="ob-opt-cards">${picked.map((id) => { const it = all.find((s) => s.id === id) || { label: id };
+              const on = S.connected.includes(id);
+              return `<button class="ob-opt-card ${on ? 'ob-on' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span class="ob-oc-st"><span class="v2-dot ${on ? 'done' : 'off'}" style="margin:0"></span></span>
+                <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${on ? '연결이 완료됐어요.' : '눌러서 잇기 (새 탭에서 허용 1번)'}</span></span></button>`; }).join('')}</div>
+          <button class="ob-btn ob-btn-pri" id="upGo" ${S.connected.length ? '' : 'disabled'}>${left > 0 && S.connected.length ? `${left}개는 나중에, 계속` : '다 이었어요, 계속'}</button>
+          <button class="ob-q-skip" data-skip>나중에 가져올게요</button>`;
       },
       bind: (el) => {
-        //  들어올 때마다 서버에 묻는다 — 앞 장면에서 뒤로 왔을 수도, 다른 탭에서 이었을 수도 있다.
-        if (!CONN && !connTried) { void loadConn().then(() => renderScene('connect', false)); }
-        const redraw = () => renderScene('connect', false);
-        /** 이어진 것을 화면·사이드바·결정 기록에 반영한다. **서버가 그렇다고 한 뒤에만** 부른다. */
-        const markConnected = (id) => {
-          const it = DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id) || { label: id };
-          if (S.connected.includes(id)) return;                     // 뒤로 왔다 다시 들어와도 두 번 세지 않는다
-          S.connected.push(id);
-          S.decisions.push(`${it.label} 이음`);
-          save(); renderSB();
-          toast(`${it.label} 이 이어졌어요 — 그동안 쌓인 자료를 가져오기 시작합니다.`);
-        };
         $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
-          const id = c.dataset.conn;
-          if (connState(id) === 'on') return;                       // 이미 이어졌다 — 더 시킬 일이 없다
-          if (connState(id) === 'blocked') { toast('이 앱은 회사에서 먼저 열어 줘야 해요. 앞 화면에서 부탁 문구를 복사하실 수 있습니다.'); return; }
-          //  ⚠ 아직 서버를 못 읽었으면 **어느 길로 이을지 고를 수 없다**: Slack·GitLab 은 계정 로그인과 글자 받아
-          //   오기가 둘 다 있어서, 모르는 채로 정하면 회사가 이미 열어 둔 쉬운 길을 두고 어려운 길로 보내게 된다.
-          if (!CONN) { toast('연결 상태를 아직 확인하는 중이에요 — 잠시 뒤 다시 눌러 주세요.'); if (!connTried) void loadConn().then(redraw); return; }
-          if (connHow(id) === 'token') { tokOpen = tokOpen === id ? null : id; redraw(); return; }
-          const d = c.querySelector('.ob-oc-d'); if (d) d.textContent = '새 탭에서 [허용]을 눌러 주세요…';
-          await svcOAuth(id, (err) => {
-            if (err) { toast(err); redraw(); return; }
-            if (connState(id) === 'on') markConnected(id);
-            else toast('아직 이어지지 않았어요 — 새 탭에서 [허용]까지 누르셨는지 보고 다시 눌러 주세요.');
-            redraw();
-          });
+          const id = c.dataset.conn; if (S.connected.includes(id)) return;
+          c.querySelector('.ob-oc-st').innerHTML = '<span class="v2-dot busy" style="margin:0"></span>'; c.querySelector('.ob-oc-d').textContent = '새 탭에서 허용을 기다리는 중';
+          await sleep(1100);
+          S.connected.push(id);
+          if (!S.read.total) { S.read.total = 41; startReading(); }
+          save(); renderSB(); renderScene('connect', false);
         });
-        // ── 펼쳐진 «글자 받아 오기» 폼 배선 ──
-        const tokIn = $('#tokIn', el), tokGo = $('#tokGo', el), tokErr = $('#tokErr', el);
-        if (tokIn && tokGo) {
-          const submit = async () => {
-            const id = tokOpen, v = (tokIn.value || '').trim();
-            if (!id) return;
-            if (!v) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
-            tokGo.disabled = true; tokGo.textContent = '잇는 중…'; if (tokErr) tokErr.textContent = '';
-            try {
-              await svcToken(id, v);
-            } catch (e) {
-              tokGo.disabled = false; tokGo.textContent = '이걸로 잇기';
-              if (tokErr) tokErr.textContent = (e && e.message) || '잇지 못했어요. 글자를 다시 확인해 주세요.';
-              return;
-            }
-            //  저장은 됐다. 그래도 **서버가 이어졌다고 할 때만** 초록불을 켠다(값이 틀려도 저장은 되기 때문).
-            if (connState(id) === 'on') { markConnected(id); tokOpen = null; redraw(); return; }
-            tokGo.disabled = false; tokGo.textContent = '이걸로 잇기';
-            if (tokErr) tokErr.textContent = '글자는 받았는데 아직 이어지지 않았어요 — 복사할 때 앞뒤가 잘리지 않았는지 보고 다시 넣어 주세요.';
-          };
-          tokGo.onclick = submit;
-          tokIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) submit(); });
-          tokIn.focus();
-        }
-        //  남겨 두고 가는 사람에게는 **어디로 돌아오면 되는지**를 말한다 — 안 그러면 '나중에'가 갈 곳 없는 말이 된다.
-        $('#upGo', el).onclick = () => { if (pickedIds().some((id) => connState(id) !== 'on')) toast('남은 곳은 왼쪽 [외부 앱 연결]에서 언제든 이으실 수 있어요.'); goScene('ai'); };
-        $('[data-skip]', el).onclick = () => { toast('나중에 하셔도 돼요 — 왼쪽 [외부 앱 연결]에 그대로 있습니다.'); goScene('ai'); };
+        $('#upGo', el).onclick = () => goScene('ai');
+        $('[data-skip]', el).onclick = () => goScene('ai');
       },
     },
     ai: {
@@ -1215,7 +938,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
-          S.ai = c.dataset.opt; AIC = null; save(); renderSB(); await sleep(200);
+          S.ai = c.dataset.opt; save(); renderSB(); await sleep(200);
           goScene(S.ai === '아직 없어요' ? 'terminal' : 'claude');
         });
         $('[data-skip]', el).onclick = () => goScene('terminal');
@@ -1223,112 +946,47 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     /* AI 잇기 — **실물**이다(#1813). 종전엔 900ms 기다렸다 무조건 «연결됐어요» 라고만 했다.
      *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 돈다(박스에 API 키가 없는 게 설계다).
-     *  ⚠ 잇는 방법은 **터미널에서 그 CLI 로 한 번 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
+     *  ⚠ 잇는 방법은 **터미널에서 그 CLI 를 한 번 띄워 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
      *   (~/.claude/.credentials.json 등)에 남고, 헤드리스 분석도 그 프로필로 돈다.
      *   setup-token 을 붙여넣게 하지 않는다 — 그건 자기 프로필이 없는 자리(남의 노드 위탁)용 보조 수단이라
      *   여기서 요구하면 사람에게 더 어려운 길을 시키는 것이 된다. 관문은 '로그인' 하나다(#1437 §6).
-     *
-     *  #1879 — **넷을 다 잇는다.** 종전 판정(ai_ready)은 «아무 하네스나 하나라도» 였고 고른 AI 와 무관했다.
-     *   그래서 두 가지가 동시에 틀렸다: ① 그록을 고른 사람에게 claude 로그인을 근거로 «이어졌어요» 라고 했고
-     *   ② 제미나이(agy)는 자격을 파일로 남기지 않아 서버가 영영 못 봐서, 로그인을 마쳐도 «아직 로그인이
-     *   안 보여요» 만 반복되는 **막다른 길**이었다(고르게는 해 놓고 이을 수는 없는 자리).
-     *   이제 고른 AI **하나**를 서버에 묻고(POST /api/ui/me/ai-accounts/check) 세 가지를 갈라 말한다:
-     *     · CLI 가 이 자리에 없다      → 로그인을 시킬 게 아니라 그 사실을 말한다(사람이 할 일이 다르다)
-     *     · 있는데 로그인 전이다        → 그 하네스의 **실측된** 절차를 그대로 보여 준다(catalog.loginSteps)
-     *     · 됐다                        → 넘어간다
-     *   그리고 어느 갈래에서도 **사람을 가두지 않는다**: 다른 AI 가 이미 이어져 있으면 그걸 정직하게 말하고
-     *   그대로 계속할 문을 연다(분석은 resolveHeadlessHarness 가 고른 그 하네스로 실제로 돈다). */
+     *  로그인 여부는 **서버가 프로필을 보고** 답한다(ai_ready) — 화면이 지어내지 않는다. */
     claude: {
-      html: () => {
-        const c = AIC || {};
-        const picked = esc(S.ai || 'AI');
-        const bin = esc(c.bin || AI_BIN_FALLBACK[aiHarness()] || '');
-        const others = (c.others || []).map((k) => AI_LABEL[k] || k);
-        const otherNote = others.length
-          ? `<p class="ob-note">지금은 ${esc(others.join(' · '))}${josa(others[others.length - 1], 0)} 이어져 있어요. ${picked}${josa(S.ai, 1)} 잇지 않으셔도 제 분석은 그걸로 돌아갑니다.</p>`
-          : '';
-        const skip = `<button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`;
-        const goOther = `<button class="ob-btn ob-btn-sub" data-other>다른 AI 고르기</button>`;
-        const lead = `이어 두시면 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
-
-        // ── 아직 안 물어봤다 — 없는 답을 지어내지 않고 묻는 중이라고 말한다(bind 가 곧 채운다).
-        if (!AIC) {
-          return qHead('claude', lead, `${picked} 계정을 이어 주세요.`, '')
-            + `<div class="ob-tok"><p class="ob-note">${picked} 가 이어져 있는지 확인하고 있어요…</p></div>` + skip;
-        }
-        // ── 물어봤는데 서버가 답을 못 줬다.
-        if (c.error) {
-          return qHead('claude', lead, `${picked} 계정을 이어 주세요.`, '')
-            + `<div class="ob-tok"><p class="ob-err">확인하지 못했어요 — ${esc(c.error)}</p>${otherNote}</div>`
-            + `<button class="ob-btn ob-btn-pri" id="cGo">다시 확인</button>` + goOther + skip;
-        }
-        // ── 됐다.
-        if (S.aiConnected || c.loggedIn === true) {
-          return qHead('claude', lead, '이어졌어요.', '')
-            + `<div class="ob-tok"><p class="ob-ok">${esc(S.aiName || AI_LABEL[c.harness] || picked)} 로그인이 확인됐어요.</p></div>`
-            + `<button class="ob-btn ob-btn-pri" id="cGo">계속</button>`;
-        }
-        // ── CLI 가 이 자리에 없다. 로그인 절차를 보여 줘도 첫 줄에서 command not found 가 난다 —
-        //    그러니 로그인을 시키지 않고 **없다는 사실**을 말한다(사람이 해야 할 일이 아예 다르다).
-        if (c.installed === false) {
-          return qHead('claude', lead, `이 자리엔 ${picked}${josa(S.ai, 0)} 아직 없어요.`,
-            `${picked}${josa(S.ai, 1)} 쓰려면 그 CLI(<code>${bin}</code>)가 먼저 깔려 있어야 합니다.`)
-            + `<div class="ob-tok">
-                <p class="ob-note">라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요. ${picked}${josa(S.ai, 2)} 그 CLI 가 깔린 내 컴퓨터를 이어 두시면 그대로 쓸 수 있습니다(다음 화면).</p>
-                ${otherNote}
-              </div>`
-            + (others.length ? `<button class="ob-btn ob-btn-pri" id="cKeep">이대로 계속</button>` : '')
-            + goOther + skip;
-        }
-        // ── 있는데 아직 로그인 전(또는 판정 불가). 그 하네스의 **실측된** 절차를 그대로 보여 준다.
-        const steps = (c.steps && c.steps.length ? c.steps : [`터미널에  ${c.bin || 'claude'}  를 입력해 안내대로 로그인합니다`])
-          .map((t) => `<li>${esc(t)}</li>`).join('');
-        return qHead('claude', lead, `${picked} 계정을 이어 주세요.`,
-          '터미널을 열고 아래대로 하시면 로그인 창이 열립니다.')
-          + `<div class="ob-tok">
+      html: () => qHead('claude',
+        `이어 두시면 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`,
+        S.aiConnected ? '이어졌어요.' : `${esc(S.ai || 'AI')} 계정을 이어 주세요.`,
+        S.aiConnected ? '' : '터미널을 열고 아래 한 줄을 치면 로그인 창이 열립니다.')
+        + (S.aiConnected
+          ? `<div class="ob-tok"><p class="ob-ok">${esc(S.aiName || 'AI')} 로그인이 확인됐어요.</p></div>`
+          : `<div class="ob-tok">
               <ol>
                 <li>터미널을 엽니다(라이블리 안에서도, 쓰시던 터미널이어도 됩니다)</li>
-                ${steps}
+                <li><code>${esc(AI_CLI[S.ai] || 'claude')}</code> 를 치고 안내대로 로그인합니다</li>
                 <li>로그인이 끝나면 아래 버튼을 누릅니다</li>
               </ol>
-              ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${picked} 로그인 여부를 서버가 확인하지 못해요 — 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
               <p class="ob-err" id="cErr"></p>
-              ${otherNote}
-            </div>`
-          + `<button class="ob-btn ob-btn-pri" id="cGo">로그인했어요</button>`
-          + (others.length ? `<button class="ob-btn ob-btn-sub" id="cKeep">이대로 계속</button>` : '')
-          + goOther + skip;
-      },
+            </div>`)
+        + `<button class="ob-btn ob-btn-pri" id="cGo">${S.aiConnected ? '계속' : '로그인했어요'}</button>
+           <button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`,
       bind: (el) => {
         const err = $('#cErr', el), go = $('#cGo', el);
-        // 장면에 들어오자마자 **한 번** 묻는다 — 사람이 버튼을 누르기 전에 '없는 CLI 를 치라는 안내'를 보지 않게.
-        //  판정은 그때그때 다시 재므로 캐시를 믿지 않는다(AIC 는 그림용 최신값일 뿐이다).
-        if (!AIC) { checkAi().then(() => renderScene('claude', false)); return; }
-        const pass = (name) => {
-          S.aiConnected = true; S.aiName = name || null;
-          S.decisions.push('AI 이음'); save(); renderSB(); toast('이어졌어요.'); goScene('terminal');
-        };
-        if (go) go.onclick = async () => {
-          if (S.aiConnected || (AIC && AIC.loggedIn === true)) return goScene('terminal');
+        go.onclick = async () => {
+          if (S.aiConnected) return goScene('terminal');
           go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
-          const c = await checkAi();
-          if (c && c.loggedIn === true) return pass(AI_LABEL[c.harness] || S.ai);
-          renderScene('claude', false);
-          const e2 = $('#cErr', el);
-          if (e2 && c && c.installed === true && c.loggedIn === false) {
-            e2.textContent = '아직 로그인이 안 보여요. 터미널에서 로그인을 끝내고 다시 눌러 주세요.';
+          // 서버가 프로필을 보고 답한다 — 화면이 «됐다» 고 지어내지 않는다.
+          await loadWelcome();
+          if (!WS || !WS.ai_ready) {
+            go.disabled = false; go.textContent = '다시 확인';
+            if (err) err.textContent = '아직 로그인이 안 보여요. 터미널에서 로그인을 끝내고 다시 눌러 주세요.';
+            return;
           }
+          S.aiConnected = true;
+          S.aiName = (WS.ai_harnesses && WS.ai_harnesses[0]) || null;
+          S.decisions.push('AI 이음'); save(); renderSB();
+          toast('이어졌어요.');
+          goScene('terminal');
         };
-        // 다른 AI 가 이미 이어져 있을 때의 문 — 고른 것을 못 이었다고 사람을 가두지 않는다.
-        //  (분석은 서버가 resolveHeadlessHarness 로 고른 **실제 로그인된** 하네스로 돈다.)
-        const keep = $('#cKeep', el);
-        if (keep) keep.onclick = () => pass(AI_LABEL[(AIC.others || [])[0]] || null);
-        const other = $('[data-other]', el);
-        if (other) other.onclick = () => { AIC = null; goScene('ai'); };
-        // ⚠ 갈래마다 버튼 구성이 다르다 — «이어졌어요» 화면엔 [나중에]가 없다. 무조건 잡으면 bind 가 그 자리에서
-        //  throw 하고, 그 뒤에 배선이 더 붙는 날 그것들이 통째로 조용히 안 걸린다(지금은 마지막 줄이라 안 드러났다).
-        const skip = $('[data-skip]', el);
-        if (skip) skip.onclick = () => goScene('terminal');
+        $('[data-skip]', el).onclick = () => goScene('terminal');
       },
     },
     /* 노션 p4(데스크톱 앱 유도)와 같은 자리 — 우리는 터미널 질문 */
@@ -1336,160 +994,23 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       html: () => qHead('terminal',
         S.ai === '아직 없어요' ? `AI 구독이 아직 없으셔도 괜찮아요. 자료 쌓기·정리·검색은 지금부터 됩니다.` : (S.aiConnected ? '이어졌어요. 거의 끝났습니다.' : '거의 끝났습니다.'),
         '터미널에서 Claude Code나 Codex 등을 쓰시나요?',
-        '쓰신다면 그 컴퓨터에 라이블리를 깔아 드릴게요. 앱을 받아서 여시면 앱이 알아서 합니다.')
-        /* ⚠ 문구는 **설치만 하면 참인 것**으로 맞춘다. 종전 3줄 중 «웹에서 그 컴퓨터의 세션을 연다»·
-         *  «오래 걸리는 일을 맡긴다» 는 설치가 아니라 노드 연결(`lively node --daemon`)이 있어야 참인데,
-         *  설치만 안내하고 그 문장을 보여 주면 화면이 못 지킬 약속을 하는 것이 된다. 노드는 다음 장면에서
-         *  «원하면 한 줄 더» 로 정직하게 연다. */
+        '쓰신다면 그 컴퓨터를 라이블리에 이어 두시길 권합니다. 한 줄 설치로 끝납니다.')
         + `<div class="ob-benefits">
-            <p class="ob-benefit">내 컴퓨터에서 켜는 그 AI가 회사 자료·규칙을 그대로 압니다</p>
-            <p class="ob-benefit">지금까지 쓰시던 작업 메모·직접 만든 기능을 그대로 가져올 수 있어요</p>
-            <p class="ob-benefit">그 컴퓨터를 웹에서도 열 수 있어요 — 앱이 그것까지 해 둡니다</p>
+            <p class="ob-benefit">터미널에서 켜는 AI가 이 자료함을 그대로 읽습니다</p>
+            <p class="ob-benefit">웹에서도 그 컴퓨터의 세션을 열 수 있습니다</p>
+            <p class="ob-benefit">오래 걸리는 일은 그 컴퓨터에 맡겨 둘 수 있습니다</p>
           </div>
-          <button class="ob-btn ob-btn-pri" id="tYes">네, 씁니다. 깔아 둘게요</button>
+          <button class="ob-btn ob-btn-pri" id="tYes">네, 씁니다. 이어 둘게요</button>
           <button class="ob-btn ob-btn-sub" id="tNo">아니요</button>`,
       bind: (el) => {
-        $('#tYes', el).onclick = () => { S.terminal = 'yes'; S.decisions.push('내 컴퓨터에 라이블리 설치, 터미널의 Claude Code에도 같은 자료'); save(); renderSB(); goScene('local'); };
+        $('#tYes', el).onclick = () => { S.terminal = 'yes'; S.decisions.push('내 컴퓨터 노드 연결, 터미널의 Claude Code에도 같은 자료'); save(); renderSB(); toast('홈에서 한 줄 설치를 안내할게요 (lively node --daemon)'); goScene('app'); };
         $('#tNo', el).onclick = () => { S.terminal = 'no'; save(); goScene('app'); };
-      },
-    },
-    /* ══ #1879 — 내 컴퓨터에 잇기. «쓴다»고 답한 사람을 **실제로 설치까지** 데려간다. ══
-     *  종전엔 [네, 씁니다] 를 눌러도 «홈에서 한 줄 설치를 안내할게요» 토스트 하나 띄우고 다음 장면이었다.
-     *   그런데 **그 안내가 홈에 없다** — v2 셸에 로컬 설치 표면이 아예 없고(라우트는 #/ · #/inbox · #/welcome
-     *   셋뿐), 설치 안내는 클래식 셸의 #/learn 설치 모달에만 있다. 약속만 하고 지키지 않는 자리였다.
-     *
-     *  ⚠ 이 사람들에게 특히 중요한 이유 — 앞 «AI 잇기»(claude 장면)가 재는 것은 **게이트웨이 서버**의
-     *   자격이다(src/terminal/profiles.ts: 서버의 ~/.claude/.credentials.json · 맥 키체인). 평소 자기
-     *   노트북에서 claude·codex 를 쓰던 사람은 **자기 자리에** 이미 로그인돼 있고, 그 사실을 이 서버는
-     *   영영 못 본다. 그 사람에게 맞는 길은 «내 컴퓨터에 라이블리를 깔아, 이미 쓰던 그 AI 에 회사 맥락을
-     *   넣는 것» 이다. 그래서 이 장면은 곁다리가 아니라 그 갈래의 본줄기다.
-     *
-     *  기준선은 리브 페르소나가 못박은 성립 조건이다 — "사람에게 시키는 것은 컴맹인 중학생도 따라올 수
-     *   있어야 한다: 한 번에 한 걸음 · 어디를 누르는지 그대로 · 전문용어 금지 · 왜 하는지 먼저 ·
-     *   값이 어떻게 생겼는지 · 되돌릴 수 있다고 말해 주기".
-     *
-     *  ★ **그래서 여기서 터미널 명령을 주된 길로 삼지 않는다 — 데스크톱 앱이 주된 길이다**(원준님 2026-08-27).
-     *   이 자리를 다시 curl 안내로 되돌리려는 사람에게: 앱이 **이미 그 일을 전부** 한다.
-     *     desktop/main/main.mjs:1089 `onboard()` — "주소 입력 한 번으로 **끝까지** 간다: (없으면) CLI
-     *      부트스트랩 → `lively setup`"(= 로그인 + 키트 설치 + MCP 등록), 그리고 :1173 — 설치가 끝나면
-     *      **노드까지 세운다**. 브라우저 승인·프롬프트는 GUI 가 받는다(ipc-contract.mjs IPC.RUN/ANSWER,
-     *      cli-runner.mjs, e2e: desktop/main/onboard-e2e.test.mjs).
-     *   즉 앞서 쓰던 3단계 curl 안내는 앱과 **같은 일을 사람 손으로 시키는 것**이었다. 터미널을 쓰는
-     *   사람이라 해도 굳이 더 어려운 길로 보낼 이유가 없다 — 터미널 갈래는 아래 접힘에 남겨 둔다.
-     *
-     *  앱이 **하지 않는 것이 딱 하나** 있고, 그게 3단계다: 설치가 끝난 뒤 «온보딩 도와줘»(=`lively
-     *   onboarding`, kit/cli/lively.mjs:2384 — claude 를 그 문구로 띄워 lively-onboarding 스킬 소환)를
-     *   권하는 자리가 앱 완료 카드에 없다(실측: desktop/ 전체에 그 문자열 0건). 그래서 웹이 말한다.
-     *
-     *  화면에 적은 사실은 전부 코드·실측에서 확인한 것이다(지어내면 그 자리에서 사람이 막힌다):
-     *   · 내려받기 자산 — GitHub 최신 릴리스 실측(v0.1.354, 2026-08-26): `Lively-<ver>-arm64.dmg` ·
-     *     `Lively-Setup-<ver>.exe` · `.AppImage`. 고르는 코드는 이 파일 위쪽 desktopLink()/pickAsset().
-     *   · 터미널 갈래 한 줄 — src/web.ts:339 `/cli`(sh) · `/cli.ps1`(ps1). 게이트웨이가 자기 주소를 굽는다.
-     *   · sudo·비밀번호 없음 — kit/cli/bootstrap.sh 는 무sudo(~/.lively 안에서 끝난다).
-     *   · 되돌리기 `lively uninstall` · 확인 `lively status` · 진단 `lively doctor` — lively.mjs HELP.
-     */
-    local: {
-      html: () => {
-        const os = desktopOs();                       // 'mac' | 'win' | 'linux' | null
-        const win = os === 'win';
-        const cmd = win ? `irm ${GW}/cli.ps1 | iex` : `curl -fsSL ${GW}/cli | sh`;   // 리눅스도 sh
-        const step1 = win
-          ? '아래 [앱 받기]를 누르면 <b>Lively-Setup.exe</b> 가 내려받아져요. 내려받은 파일을 두 번 눌러 설치하세요.'
-          : os === 'mac'
-            ? '아래 [앱 받기]를 누르면 <b>Lively.dmg</b> 가 내려받아져요. 내려받은 파일을 두 번 누르고, 나온 라이블리 아이콘을 [응용 프로그램]으로 끌어다 놓으세요.'
-            : '아래 [앱 받기]를 누르면 받는 곳이 새 창으로 열려요. 거기서 내 컴퓨터에 맞는 파일을 골라 받으시면 됩니다.';
-        return qHead('local',
-          '평소 쓰시던 그 터미널에 회사 맥락을 넣어 드릴게요.',
-          '앱을 받으시면 앱이 알아서 깝니다.',
-          '터미널에 뭘 치실 필요 없어요. 받아서 여시면 앱이 물어보는 대로 한 번만 눌러 주시면 됩니다.')
-          + `<div class="ob-ins-list">
-              <div class="ob-ins" data-n="1">
-                <b class="ob-ins-t">앱을 받아서 엽니다</b>
-                <p class="ob-ins-p">${step1}</p>
-              </div>
-              <div class="ob-ins" data-n="2">
-                <b class="ob-ins-t">앱이 시키는 대로 [승인] 한 번</b>
-                <p class="ob-ins-p">앱을 열면 설치 마법사가 뜹니다. 브라우저에 <b>라이블리 승인</b> 창이 열리면 <b>[승인]</b>을 누르세요. 그게 전부예요.</p>
-                <p class="ob-ins-n">비밀번호는 묻지 않습니다. 앱이 알아서 클로드·코덱스에 회사 맥락을 넣고, 이 컴퓨터를 라이블리에 이어 둡니다.</p>
-              </div>
-              <div class="ob-ins" data-n="3">
-                <b class="ob-ins-t">끝나면 이 한 마디만</b>
-                <p class="ob-ins-p">평소처럼 클로드(코덱스)를 켜서 이렇게 말해 보세요.</p>
-                ${cmdBox('온보딩 도와줘')}
-                <p class="ob-ins-n">예전에 쓰시던 작업 메모·직접 만든 기능·연결해 둔 서비스를 찾아서 보여주고, 무엇을 회사와 나눌지 하나씩 같이 정합니다. <b>원본은 지우지도 고치지도 않아요</b> — 옮길 때도 복사만 합니다. <span class="ob-ins-n2">(터미널에서 <code>lively onboarding</code> 이라고 쳐도 같은 게 열립니다.)</span></p>
-              </div>
-            </div>
-            <div class="ob-tok">
-              <p class="ob-note" id="lcSt"></p>
-            </div>
-            <button class="ob-btn ob-btn-pri" id="lcGet">앱 받기</button>
-            <button class="ob-btn ob-btn-sub" id="lcLater">나중에 할게요</button>
-            <details class="ob-ins-alt">
-              <summary>터미널이 더 편하신가요</summary>
-              <p class="ob-ins-n">앱 없이 터미널 한 줄로도 됩니다. 앱이 하는 일과 같은 것을 그대로 합니다(설치 · 로그인 · 회사 맥락 배선).</p>
-              ${cmdBox(cmd)}
-              <p class="ob-ins-n">확인 <code>lively status</code> · 진단 <code>lively doctor</code> · 되돌리기 <code>lively uninstall</code>. 이 컴퓨터를 웹에서도 열려면 <code>lively node --daemon</code>.${win ? ' 윈도우 터미널 설치는 아직 검증이 충분하지 않습니다 — 막히면 앱 쪽을 쓰세요.' : ''}</p>
-            </details>`;
-      },
-      bind: (el) => {
-        wireCopy(el);
-        const st = $('#lcSt', el);
-        /* 설치를 **정말** 했는지는 서버 신호로 본다 — "lively status 쳐 보세요" 는 사람에게 판정을 떠넘기는
-         *  것이고, 이 화면의 목표는 그 출력을 읽을 줄 몰라도 되게 하는 것이다.
-         *  신호 = GET /api/ui/me/onboarding 의 connect 항목이 by:'auto' 로 done
-         *   (src/org/delivery/onboarding.ts — `mcp_call_log WHERE actor=<나> AND ok`).
-         *   그 행은 **설치·로그인·MCP 등록·AI 실행·라이블리 호출이 전부 성공해야** 남는다. 3단계
-         *   «온보딩 도와줘» 가 딱 그 경로다.
-         *  ⚠ 이미 웹 터미널을 쓴 사람은 이 신호가 **처음부터** 참이다. 그래서 장면에 들어올 때 기준값을
-         *   먼저 재고 **거짓→참 전이**만 성공으로 읽는다. 기준값이 이미 참이면 자동확인을 끄고 그 사실을
-         *   말한다 — 모르는 것을 안다고 하지 않는다(거짓 초록불을 켜면 사람은 안 깔고 넘어간다). */
-        const say = (cls, text) => { if (!st.isConnected) return; st.className = 'ob-note' + (cls ? ' ' + cls : ''); st.textContent = text; };
-        say('', '설치가 끝났는지 제가 지켜보고 있을게요 — 3단계까지 마치시면 여기가 저절로 바뀝니다.');
-        clearInterval(localTimer); localTimer = null;
-        let ticks = 0;
-        const poll = async () => {
-          const now = await connectSignal();
-          if (now === null) return;                          // 못 물었다 — 조용히 다음 차례에 다시
-          if (localBase === null) { localBase = now; if (now) say('', '이 계정으로 AI가 라이블리를 쓴 기록이 이미 있어서, 설치가 끝났는지는 제가 자동으로 가려내지 못해요. 아래 [앱 받기]로 시작하시면 됩니다.'); return; }
-          if (localBase === true) return;                    // 기준값이 참 — 전이를 볼 수 없다
-          if (!now) return;
-          clearInterval(localTimer); localTimer = null;
-          S.local = 'done'; S.decisions.push('내 컴퓨터에 라이블리 설치'); save(); renderSB();
-          say('ob-ok', '✓ 이어졌어요 — 내 컴퓨터의 AI가 라이블리를 쓰는 걸 확인했어요.');
-          toast('내 컴퓨터가 이어졌어요.');
-        };
-        void poll();
-        localTimer = setInterval(() => {
-          if (!st.isConnected || ++ticks > 240) { clearInterval(localTimer); localTimer = null; return; }  // 20분이면 멈춘다(무한 폴 금지)
-          void poll();
-        }, 5000);
-
-        /* 내려받기 — 주소는 **미리** 물어 둔다(누른 순간 await 하면 사용자 제스처가 풀려 새 창이 막힌다).
-         *  «앱 받기» 장면과 같은 코드를 쓴다: 같은 자산을 두 자리에서 다르게 고르면 한쪽이 조용히 틀린다. */
-        let url = null;
-        desktopLink().then((u) => { url = u; });
-        const get = $('#lcGet', el);
-        get.onclick = () => {
-          S.app = 'yes'; S.local = S.local || 'getting'; S.decisions.push('데스크톱 앱으로 내 컴퓨터에 설치'); save(); renderSB();
-          if (url) {
-            const a = document.createElement('a'); a.href = url; a.rel = 'noopener';
-            document.body.appendChild(a); a.click(); a.remove();
-            toast('내려받기를 시작했어요. 설치는 지금 하셔도, 나중에 하셔도 됩니다.');
-          } else {
-            // 아직 답이 안 왔거나 못 가렸다 — 받는 곳을 그대로 연다. 없는 자리를 가리키지 않는다.
-            window.open(DL_PAGE, '_blank', 'noopener');
-            toast('받는 곳을 새 창으로 열었어요.');
-          }
-          get.textContent = '계속';
-          get.onclick = () => goScene('read');   // 앱을 받았으면 «앱 받기» 장면은 건너뛴다 — 같은 걸 두 번 권하지 않는다
-        };
-        $('#lcLater', el).onclick = () => { S.local = 'later'; save(); toast('나중에 하셔도 돼요 — 여기 안내는 그대로 있습니다.'); goScene('app'); };
       },
     },
     /* 노션 p4 '앱 유도' 그대로의 자리 — 질문이 끝나고 채팅(컨설팅)에 들어가기 직전. [새문구] 전체 */
     app: {
       html: () => qHead('app',
-        S.terminal === 'yes' ? '내 컴퓨터 설치는 언제든 다시 하실 수 있어요. 마지막으로 하나 권해 드릴게요.' : '마지막으로 하나 권해 드릴게요.',
+        S.terminal === 'yes' ? '터미널 연결까지 받아 뒀어요. 마지막으로 하나 권해 드릴게요.' : '마지막으로 하나 권해 드릴게요.',
         '라이블리 앱을 받아 두시면 더 편해요.',
         '웹으로도 전부 됩니다. 앱은 이런 게 더해져요.')
         + `<div class="ob-benefits">
@@ -1654,30 +1175,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
   }
 
-  /* 고른 AI → **하네스 키**(서버 catalog/HEADLESS 표의 key). 헤드리스 규약을 아는 넷만 여기 있다 —
-   *  ChatGPT 는 코덱스, 제미나이는 안티그래비티가 그 자리다. 표에 없으면(‘여러 개’ 등) claude 로 안내한다.
-   *  ⚠ 여기 담는 건 **키뿐**이다(#1879). 실행 파일 이름(agy 등)·로그인 절차는 서버가 준다 —
-   *   화면에 박아 두면 하네스 표가 바뀔 때 이 줄만 조용히 틀려지고, 그 틀린 한 줄을 사람이
-   *   가입 직후 첫 화면에서 그대로 터미널에 친다. */
-  const AI_HARNESS = { 'Claude': 'claude', 'ChatGPT': 'codex', 'Gemini': 'antigravity', 'Grok': 'grok' };
-  const AI_LABEL = { claude: 'Claude', codex: 'ChatGPT', antigravity: 'Gemini', grok: 'Grok' };
-  const AI_BIN_FALLBACK = { claude: 'claude', codex: 'codex', antigravity: 'agy', grok: 'grok' };
-  /* 라틴 표기 이름의 **조사**. 끝소리로 갈린다 — Grok 만 받침이 있다(록). '이(가)' 같은 회피 표기는
-   *  가입 직후 첫 화면에서 눈에 띄게 어색하다. [주격, 목적격, 주제격] 순. 표에 없으면 회피형으로 내려앉는다. */
-  const AI_JOSA = { Claude: ['가', '를', '는'], ChatGPT: ['가', '를', '는'], Gemini: ['가', '를', '는'], Grok: ['이', '을', '은'] };
-  const josa = (word, i) => (AI_JOSA[word] || ['이(가)', '을(를)', '은(는)'])[i];
-  const aiHarness = () => AI_HARNESS[S.ai] || 'claude';
-  /** 고른 AI 하나에 대한 마지막 판정(POST /api/ui/me/ai-accounts/check).
-   *  null = 아직 안 물어봤다 — 화면은 «확인 중» 으로 살고, 없는 답을 지어내지 않는다. */
-  let AIC = null;
-  async function checkAi() {
-    try {
-      AIC = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: aiHarness() }) });
-    } catch (e) {
-      AIC = { error: (e && e.message) ? String(e.message) : '알 수 없는 오류' };
-    }
-    return AIC;
-  }
+  /* 고른 AI → 터미널에 칠 CLI. 헤드리스 규약을 아는 넷만 여기 있다(서버 HEADLESS 표와 짝) —
+   *  ChatGPT 는 코덱스, 제미나이는 안티그래비티가 그 자리다. 표에 없으면 claude 로 안내한다. */
+  const AI_CLI = { 'Claude': 'claude', 'ChatGPT': 'codex', 'Gemini': 'agy', 'Grok': 'grok' };
 
   const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
   async function chatStep(step, token) {
@@ -1843,8 +1343,6 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function renderScene(key, animate) {
     const sc = SCENES[key];
     if (!sc) return;
-    // 장면이 바뀌면 «내 컴퓨터» 폴링을 멈춘다 — 화면에 없는 타이머가 5초마다 도는 건 조용한 누수다.
-    if (key !== 'local') { clearInterval(localTimer); localTimer = null; localBase = null; }
     setStage(key === 'name' ? 'stage-name' : 'stage-q');
     const col = $('#qcol');
     col.style.animation = 'none';
@@ -1856,7 +1354,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     sc.bind && sc.bind(col);
   }
   const SCENE_LABEL = { name: '이름', stage: '무대', role: '직무', files: '파일 올리기', sources: '앱 고르기',
-    connect: '앱 연결', ai: 'AI 고르기', claude: 'AI 연결', terminal: '터미널', local: '내 컴퓨터에 잇기', app: '앱 받기' };
+    connect: '앱 연결', ai: 'AI 고르기', claude: 'AI 연결', terminal: '터미널', app: '앱 받기' };
   /* 뒤로가기는 **지나온 자취**를 되짚는다 — 차례표를 거꾸로 세면 조건부로 건너뛴 장면(AI 없음 등)에 걸린다. */
   function goBack() { const prev = S.trail.pop(); if (!prev) return; save(); goScene(prev, { back: true }); }
   function goJump(key) {
@@ -1870,8 +1368,24 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     b.hidden = !S.trail.length;
     b.onclick = () => goBack();
   }
+  /* 브라우저 뒤로가기 — 쌓아 둔 장면이 있으면 그 한 걸음을 먹고, 없으면 셸이 하던 대로 나간다. */
+  function onPop(ev) {
+    if (!S.trail.length) return;                 // 더 물러날 곳이 없다 → 홈으로 나가는 게 맞다
+    const st = ev && ev.state;
+    if (st && st.ob === undefined && !S.trail.length) return;
+    goBack();
+    // 우리가 한 걸음 먹었으니 그만큼 다시 쌓아 둔다 — 다음 뒤로가기도 이 안에서 듣는다.
+    try { history.pushState({ ob: S.scene }, '', location.href); } catch (_) { /* noop */ }
+  }
+  addEventListener('popstate', onPop);
   function goScene(key, opts) {
-    if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) S.trail.push(S.scene);
+    if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) {
+      S.trail.push(S.scene);
+      // 브라우저·셸의 «뒤로» 도 이 안에서 한 걸음 물러나게 한다(원준님 2026-08-26: "뒤로가기 누르니까 그냥 메인홈으로 가지네").
+      //  ⚠ 주소(해시)는 **바꾸지 않는다** — 바꾸면 셸 라우터가 화면을 새로 그린다. 같은 주소로 state 만 쌓아
+      //   popstate 때 우리가 먼저 받아 처리한다. 장면이 하나도 안 쌓였을 때의 뒤로가기는 종전대로 홈으로 나간다.
+      try { history.pushState({ ob: key }, '', location.href); } catch (_) { /* 사파리 프라이빗 */ }
+    }
     S.scene = key; save(); renderSB();
     seqToken++;
     if (STEP_OF[key] >= CHAT_FROM) {
@@ -1923,5 +1437,5 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
   if (want && STEP_OF[want] != null) { goScene(want); }
   else { renderSB(); goScene(S.scene || 'name'); }
-  return { destroy() { clearInterval(readTimer); clearInterval(localTimer); clearTimeout(toastT); ctx.onBare && ctx.onBare(false); } };
+  return { destroy() { clearInterval(readTimer); clearTimeout(toastT); removeEventListener('popstate', onPop); ctx.onBare && ctx.onBare(false); } };
 }
