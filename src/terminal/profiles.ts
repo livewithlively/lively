@@ -336,8 +336,19 @@ export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLog
     installed: null, loggedIn: null, how: "none", steps: h.loginSteps ?? [],
   };
 
-  // ① 설치 — 실행 파일이 이 자리 PATH 에 있나. bin 은 우리 상수표에서만 오므로 셸 문자열에 사용자 입력이 없다.
-  out.installed = await runAtMemberSeat(osUser, `command -v "${h.bin}" >/dev/null 2>&1`);
+  // ① 설치 — **게이트웨이 자신의 파일시스템**에서 본다(osUser 를 넘기지 않는다). bin 은 우리 상수표에서만
+  //  오므로 셸 문자열에 사용자 입력이 없다.
+  //  ⚠ 여기서 **멤버 자리(memberSh)를 보면 틀린다**(2026-08-27 라이브 실측). 중계는 늘 테넌트의 **tmux 컨테이너**로
+  //   exec 하는데(member-exec-relay.cjs — `/containers/lvly-s-<slug>-tmux/exec`), 하네스가 실제로 도는 곳은
+  //   **멤버 세션 컨테이너**(`lvly-s-<slug>-box-<member>-<id>`)다. 둘은 이미지가 다를 수 있다 — tmux 는 한 번
+  //   만들어지면 정지될 때까지 그대로인 반면(sessionbroker ensureTmuxContainer: 실행 중이면 스테일해도 유지),
+  //   세션 컨테이너는 **세션마다** 현재 이미지로 새로 뜬다.
+  //   실측: 같은 테넌트에서 tmux=c36(agy 없음) / 방금 뜬 세션 컨테이너=c48(agy 있음) → 화면이 «이 자리엔
+  //   Gemini 가 없어요» 라고 거짓말했다. 실제로는 새 세션에 있었다.
+  //  게이트웨이 자신은 롤마다 재생성돼 **현재 테넌트 이미지와 같은 태그**로 뜨고(roll-tenant-image 가 gw.image 와
+  //  tenant.image 를 같은 축으로 맞춘다), 새 세션도 그 이미지로 뜬다 — 그래서 «새 세션이 무엇을 갖게 되나» 의
+  //  정직한 대리값이다. 자격(loggedIn)은 반대로 **멤버 자리**가 맞다: 홈이 볼륨이라 tmux 에서 봐도 같은 파일이다.
+  out.installed = await runAtMemberSeat(null, `command -v "${h.bin}" >/dev/null 2>&1`);
   if (out.installed !== true) return out;   // 없는 CLI 에 로그인을 물어봐야 답은 늘 '미로그인' 이다 — 묻지 않는다
 
   // ② 로그인 — 자격 파일이 있는 하네스는 **aiAccountStatus 를 그대로 쓴다**(맥 키체인·멀티프로필·격리 분기가
@@ -351,6 +362,13 @@ export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLog
   const probe = HARNESS_PROBE[h.key];
   if (!probe) return out;   // 잴 방법이 없으면 정직하게 침묵한다(how="none") — 화면이 지어내지 않는다
   out.how = "probe";
+  // ⚠ 프로브는 **멤버 자리에서** 돌아야 한다 — 그 사람의 자격(HOME)을 봐야 하기 때문이다. 그런데 그 자리(tmux
+  //  컨테이너)에 바이너리가 없을 수 있다(위 ① 머리말의 이미지 어긋남). 그러면 프로브의 실패는 «미로그인» 이
+  //  아니라 «잴 수 없음» 이다 — 그걸 false 로 접으면 로그인한 사람에게 «아직 로그인이 안 보여요» 라고 한다.
+  if (await runAtMemberSeat(osUser, `command -v "${h.bin}" >/dev/null 2>&1`) !== true) {
+    out.loggedIn = null;   // 모름 — 화면은 절차를 보여 주고 «확인하지 못했어요» 를 덧붙인다
+    return out;
+  }
   out.loggedIn = await runAtMemberSeat(osUser, `${h.bin} ${probe.join(" ")} >/dev/null 2>&1`);
   return out;
 }
