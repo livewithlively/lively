@@ -846,6 +846,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // 공통 ChatLine(#1746) — 중단(사용자가 끊음)·맥락 압축(어댑터가 system 줄로 올린다. claude 는 위의 사용자 줄 표식으로도 온다).
       else if (o.subtype === 'interrupted') { if (cur) view.settle(cur.t, { interrupted: true }); running = false; }
       else if (o.subtype === 'compact') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', typeof o.text === 'string' ? o.text : undefined); cur = newRec(null); running = true; }
+      // ★ 하네스가 올린 오류 — **반드시 보이게** 하고 턴을 마감한다. 삼키면 화면이 «작업 중» 에 갇힌다
+      //  (실측 2026-08-27: codex 401 이 그렇게 «10초 생각중 → 죽은 세션» 으로 보였다).
+      else if (o.subtype === 'error') { view.divider('오류', typeof o.text === 'string' ? o.text : undefined); if (cur) view.settle(cur.t, {}); running = false; }
       return;
     }
   }

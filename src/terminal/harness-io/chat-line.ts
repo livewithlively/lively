@@ -41,10 +41,10 @@ export interface ChatAssistantLine {
 }
 export interface ChatSystemLine {
   type: "system";
-  subtype: "turn_duration" | "interrupted" | "compact" | "stop_hook_summary";
+  subtype: "turn_duration" | "interrupted" | "compact" | "stop_hook_summary" | "error";
   timestamp: string;
   durationMs?: number;              // turn_duration — 이 턴에 걸린 시간
-  text?: string;                    // compact — 요약 본문(있으면 구분선을 펼쳐 보여준다)
+  text?: string;                    // compact — 요약 본문 · error — 사람이 다음에 할 일을 아는 한 문장
 }
 export type ChatLine = ChatUserLine | ChatAssistantLine | ChatSystemLine;
 
@@ -113,7 +113,13 @@ export function thinLine(line: ChatLine): ChatLine | null {
   const o = line as any;
   if (!o || typeof o !== "object") return null;
   if (o.type === "system") {
-    return { type: "system", subtype: o.subtype, timestamp: o.timestamp ?? "", ...(o.durationMs !== undefined ? { durationMs: o.durationMs } : {}) } as ChatLine;
+    // ⚠ error 는 **본문이 곧 내용**이라 얇은 줄에서도 text 를 남긴다 — 지우면 화면에 «오류» 라는 말만 남고
+    //  이유가 사라진다(그 이유가 «로그인이 필요합니다» 라 더 그렇다).
+    return {
+      type: "system", subtype: o.subtype, timestamp: o.timestamp ?? "",
+      ...(o.durationMs !== undefined ? { durationMs: o.durationMs } : {}),
+      ...(o.subtype === "error" && typeof o.text === "string" ? { text: o.text } : {}),
+    } as ChatLine;
   }
   if (o.type === "user") {
     const c = o.message?.content;
