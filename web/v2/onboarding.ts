@@ -31,6 +31,16 @@ export function markWelcomeSeen(): void {
 }
 
 /**
+ * [나중에 할게요] — 사람이 **스스로 미뤘다**는 표식(#2232). 하다 만 자리가 있으면 다음 부팅에 그 장면으로 자동
+ *  복귀하는 것이 기본인데(«어디까지 했는지 기억해서 거기부터»), 스스로 미룬 사람까지 끌고 가면 #2171 의
+ *  «시도때도없이»가 된다. 그래서 이 버튼만 표식을 남기고, 홈의 «이어서 하기»가 길을 지킨다. 실패해도 삼킨다.
+ */
+export function markWelcomeDeferred(): void {
+  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ welcome_deferred: true }) })
+    .catch(() => { /* 비치명 */ });
+}
+
+/**
  * 처음 설정을 끝냈는지 **서버에 묻는다**(#1813). 종전엔 localStorage 표식뿐이라 기기·브라우저를 바꾸면
  *  이미 끝낸 사람에게 온보딩이 다시 떴다. 서버가 답을 주면 로컬 캐시도 그 값으로 맞춘다.
  *  못 물으면(오프라인·구 서버) 로컬 캐시로 떨어진다 — 온보딩 때문에 앱이 안 열리는 일은 없어야 한다.
@@ -122,7 +132,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   markWelcomeSeen();
   //  ⚠ `$` 는 아래에서 선언된다(const, TDZ) — 여기선 host 에서 직접 집는다.
   const exitBtn = host.querySelector('#obExit') as HTMLButtonElement | null;
-  if (exitBtn) exitBtn.onclick = () => { location.hash = '#/'; };
+  if (exitBtn) exitBtn.onclick = () => { markWelcomeDeferred(); location.hash = '#/'; };
   /* 서버 실측 — 내가 올린 자료·종류별 집계·지금 갈래. 연출 숫자를 여기 값으로 갈아끼운다(#1813). */
   let WS: any = null;
   async function loadWelcome() {

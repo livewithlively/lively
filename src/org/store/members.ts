@@ -260,6 +260,12 @@ export interface LivProfile {
    *  종전엔 완주(onboarded_at)만이 유일한 탈출구라, 중간에 나간 사람은 앱을 열 때마다 다시 끌려갔다.
    */
   welcome_shown_at?: string | null;
+  /**
+   * 사람이 스스로 [나중에 할게요] 로 처음 설정을 **미룬** 시각(#2232). 있으면 하다 만 자리가 있어도 자동으로
+   *  끌고 가지 않는다(홈 + «이어서 하기»). 다시 이어서 답을 하나라도 더 하면(진행 저장) 지운다 — 미룸은
+   *  '지금은 말고'지 '영영 말고'가 아니다.
+   */
+  welcome_deferred_at?: string | null;
   /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
@@ -305,6 +311,8 @@ export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Pro
 export async function setLivWelcomeProgress(id: string, progress: LivWelcomeProgress | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, welcome_progress: progress };
+  // #2232 — 진행이 새로 저장되면 [나중에 할게요] 미룸은 풀린다(사람이 다시 하기 시작했다).
+  if (progress) delete next.welcome_deferred_at;
   const r = await itemsPool.query(
     `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
@@ -366,7 +374,7 @@ export async function getLivProfile(id: string): Promise<LivProfile> {
  *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
  */
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
@@ -377,6 +385,8 @@ export async function appendLivProfile(
   // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).
   //  처음 찍힌 시각을 지킨다 — 이 값이 곧 '자동 진입은 평생 한 번' 의 근거라 뒤로 밀리면 안 된다.
   if (patch.welcomeSeen && !cur.welcome_shown_at) next.welcome_shown_at = new Date().toISOString();
+  // #2232 — [나중에 할게요]. 매번 갱신한다(마지막으로 미룬 시각이 뜻이 있다).
+  if (patch.welcomeDeferred) next.welcome_deferred_at = new Date().toISOString();
   if (patch.decision) next.decisions = [...(cur.decisions ?? []), patch.decision].slice(-LIV_LIST_CAP);
   if (patch.declined) {
     const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);
