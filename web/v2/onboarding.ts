@@ -35,8 +35,17 @@ export function markWelcomeSeen(): void {
  *  복귀하는 것이 기본인데(«어디까지 했는지 기억해서 거기부터»), 스스로 미룬 사람까지 끌고 가면 #2171 의
  *  «시도때도없이»가 된다. 그래서 이 버튼만 표식을 남기고, 홈의 «이어서 하기»가 길을 지킨다. 실패해도 삼킨다.
  */
-export function markWelcomeDeferred(): void {
-  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ welcome_deferred: true }) })
+export function markWelcomeDeferred(): void { setWelcomeDeferred(true); }
+
+/**
+ * 미룸 해제 — **사람이 처음 설정을 다시 연 순간**(#2232). 자동 진입은 미룬 사람에게 오지 않으므로, 이 화면이
+ *  떴다는 것은 곧 «홈의 이어서 하기를 눌렀거나 스스로 주소로 왔다» 는 뜻이다. 여기서 풀어야 그 뒤 탭을 그냥
+ *  닫아도 다음 입장에 하던 자리로 돌아간다. ⚠ 진행 저장에서 풀면 나가기 flush 와 경합한다(server members.ts 주석).
+ */
+export function clearWelcomeDeferred(): void { setWelcomeDeferred(false); }
+
+function setWelcomeDeferred(on: boolean): void {
+  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ welcome_deferred: on }) })
     .catch(() => { /* 비치명 */ });
 }
 
@@ -130,6 +139,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   //   열었을 수도 있다(홈의 «이어서 하기» · 주소 직접 입력). 그때도 자동 진입 표식은 있어야 옳다 —
   //   서버는 이미 찍혔으면 처음 시각을 지키므로(appendLivProfile) 두 번 불러도 값이 밀리지 않는다.
   markWelcomeSeen();
+  //  #2232 — 이 화면이 떴다 = 사람이 다시 열었다(미룬 사람에겐 자동 진입이 오지 않는다) → 미룸을 푼다.
+  clearWelcomeDeferred();
   //  ⚠ `$` 는 아래에서 선언된다(const, TDZ) — 여기선 host 에서 직접 집는다.
   const exitBtn = host.querySelector('#obExit') as HTMLButtonElement | null;
   if (exitBtn) exitBtn.onclick = () => { markWelcomeDeferred(); location.hash = '#/'; };
@@ -831,8 +842,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    */
   // 온보딩이 부르는 이름 → 서비스 표(LOGIN_SERVICES)의 키. 이 줄 하나가 두 자리를 잇는 전부다.
   //  없는 것(git·folder·none)은 여기 없다 — 잇는 길이 다르거나(내 컴퓨터 설치) 연결이랄 게 없다.
+  //  ⚠ #2232 — 구글 셋(gdrive·gmail·gcal)이 'google-drive' 같은 **없는 키**를 가리키고 있었다. 서버가 내려주는
+  //   커넥터도, LOGIN_SERVICES 의 행도 이름이 'google' 하나다(#1881 G2 에서 세 줄을 한 줄로 합쳤다). 그 결과
+  //   Google Drive 카드는 상태를 못 읽고(회사가 안 열어 뒀다는 안내조차 못 하고), 눌러도 아무 일이 없었다.
   const SVC_OF = {
-    notion: 'notion', gdrive: 'google-drive', gmail: 'google-gmail', gcal: 'google-calendar',
+    notion: 'notion', gdrive: 'google', gmail: 'google', gcal: 'google',
     slack: 'slack', linear: 'linear', clickup: 'clickup',
     github: 'github', gitlab: 'gitlab', figma: 'figma', prometheus: 'prometheus',
   };
@@ -849,7 +863,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     } catch (_) { CONN = null; }
     return CONN;
   }
-  const svcOf = (id) => LOGIN_SERVICES.find((s) => s.key === SVC_OF[id]);
+  //  표에 없는 앱(관리자가 조직에 등록한 MCP 커넥터)은 서버가 내려준 목록에서 키로 찾는다 — #/connect 와 같은 규약
+  //   (me-logins.ts svcFromConnector). 이게 없으면 «회사가 열어 둔 앱»이 온보딩에만 안 보인다.
+  const svcOf = (id) => LOGIN_SERVICES.find((s) => s.key === SVC_OF[id])
+    || (CONN && CONN.all.find((s) => s.key === id)) || null;
+  /** 화면에 쓸 이름 — 표에 있으면 표의 이름, 없으면 서버가 준 이름. */
+  const srcLabel = (id) => {
+    const it = DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id);
+    if (it) return it.label;
+    const svc = svcOf(id); return (svc && svc.label) || id;
+  };
+  /** 표에 없이 서버만 아는 앱들(관리자 등록) — 온보딩 목록 맨 아래 한 묶음으로 세운다. */
+  const dynSvcs = () => (CONN ? CONN.all.filter((s) => s.dynamic) : []);
   /** 이 앱이 지금 어떤 자리에 있나 — 'on'(이어짐) · 'off'(내가 켤 수 있다) · 'blocked'(관리자가 열어야) · null(모른다). */
   function connState(id) {
     const svc = svcOf(id); if (!svc || !CONN) return null;
@@ -868,7 +893,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return svc.token ? 'token' : (svc.oauth ? 'oauth' : null);
   }
   /** 이어진 것으로 세어도 되는 id 만 — 화면이 «2곳 이었어요» 라고 말할 근거. */
-  const pickedIds = () => S.sources.filter((id) => id !== 'none' && SVC_OF[id]);
+  const pickedIds = () => S.sources.filter((id) => id !== 'none' && (SVC_OF[id] || (CONN && CONN.all.some((s) => s.key === id))));
 
   /* 토큰형의 «어느 버튼을 누르는가». 주소·값의 생김새는 CRED_KINDS 에서 읽고(지어내면 그 자리에서 막힌다),
    *  경로도 그 표의 help 에 적힌 그것을 따른다 — 여기서 한 일은 **말투를 바꾼 것**뿐이다.
@@ -938,7 +963,17 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const payload: any = { kind: spec.kind, secret: value };
     if (spec.meta) payload.meta = spec.meta;
     await api('/api/ui/me/credential', { method: 'POST', body: JSON.stringify(payload) });
+    //  #2232 — 저장은 **아무 글자나** 성공한다(금고는 값을 검사하지 않는다). 그래서 저장만 보고 초록불을 켜면
+    //   오타를 넣어도 «이어졌어요» 가 된다. 관리 화면(admin-credentials.ts)이 이미 쓰는 확인 창구를 여기서도 부른다.
+    //   확인이 없는 배포(구 이미지)면 supported:false 로 오거나 실패한다 — 그때는 종전대로 저장만 믿는다.
+    let verdict = null;
+    try {
+      const r: any = await api('/api/ui/me/credential/verify',
+        { method: 'POST', body: JSON.stringify({ kind: spec.kind, scope_key: '' }) });
+      if (r && r.supported !== false) verdict = { ok: !!r.ok, message: String(r.message || '') };
+    } catch (_) { /* 확인 경로 없음 — 저장은 이미 됐다 */ }
     await loadConn();
+    return verdict;
   }
 
   /** 지금 «글자 받아 오기»가 펼쳐진 앱. 한 번에 하나만 편다 — 한 번에 한 걸음이 이 화면의 규칙이다. */
@@ -1165,6 +1200,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                 : it.soon
                 ? `<button class="ob-opt-card ob-locked ob-soon" aria-disabled="true" disabled><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">곧 지원합니다</span></span></button>`
                 : card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
+          //  #2232 — 표에 없지만 **회사가 이미 열어 둔 앱**(관리자가 등록한 MCP 커넥터). 종전엔 코드를 고쳐 표에
+          //   한 줄 넣어야만 온보딩에 떴다 — #/connect 는 이미 이것들을 세우고 있었으므로 두 화면이 서로 다른
+          //   목록을 보여 주고 있었다. 로고만 없을 뿐 잇는 길은 같다.
+          + (dynSvcs().length ? `<p class="ob-opt-group">회사가 열어 둔 앱</p><div class="ob-opt-grid">
+              ${dynSvcs().map((sv) => connState(sv.key) === 'on'
+                ? `<button class="ob-opt-card ob-on ob-locked" data-done="1" aria-disabled="true"><span class="ob-oc-ic">${esc((sv.label || '?').slice(0, 1))}</span><span><span class="ob-oc-t">${esc(sv.label)}</span><span class="ob-oc-d">이어져 있어요</span></span><span class="ob-oc-chk">✓</span></button>`
+                : card(sv.label, '', esc((sv.label || '?').slice(0, 1)), S.sources.includes(sv.key))).join('')}</div>` : '')
           + (blocked.length ? `<p class="ob-opt-group">아직 열려 있지 않은 곳</p><div class="ob-opt-grid">
               ${blocked.map((it) => `<button class="ob-opt-card ob-locked" data-ask="${esc(it.id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">눌러서 부탁 문구를 복사하세요.</span></span></button>`).join('')}</div>
               <p class="ob-q-fine" style="text-align:left;margin:2px 0 0">이 앱들은 회사에서 먼저 열어 줘야 이을 수 있어요. 눌러서 나온 문구를 담당자에게 그대로 보내시면 됩니다.</p>` : '')
@@ -1176,7 +1218,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   못 물으면 표 그대로 두고 그냥 진행한다(연결 못 읽었다고 온보딩이 막히면 안 된다).
         if (!CONN && !connTried) { void loadConn().then(() => renderScene('sources', false)); }
         const all = DATA.SOURCE_ROWS.flatMap((r) => r.items);
-        const idOf = (label) => (all.find((s) => s.label === label) || {}).id;
+        //  #2232 — 관리자가 등록한 앱은 표에 없으므로 서버가 준 목록에서도 찾는다(키가 곧 id 다).
+        const idOf = (label) => (all.find((s) => s.label === label) || {}).id
+          || (dynSvcs().find((sv) => sv.label === label) || {}).key;
         const go = $('#srcGo', el);
         //  이미 이어진 것은 고르고 말고 할 게 없다 — 잠가 두고 [계속]의 숫자에서도 뺀다.
         //  ⚠ 다만 **문은 열어 둔다**: 이미 다 이어 둔 사람은 새로 고를 것이 없어 [계속]이 잠기고,
@@ -1192,7 +1236,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //  회사가 안 열어 둔 앱 — 눌러도 안 되는 버튼 대신 **그대로 전달할 수 있는 한 문장**을 준다(v2/connect.ts 와 같은 처방).
         $$('[data-ask]', el).forEach((c) => c.onclick = async () => {
           const it = all.find((x) => x.id === c.dataset.ask) || { label: c.dataset.ask };
-          const ask = `라이블리에서 ${it.label} 을(를) 쓰고 싶습니다. 관리 ▸ 외부 서비스에서 ${it.label} 커넥터를 등록해 주세요.`;
+          const ask = `라이블리에서 ${it.label} 을(를) 쓰고 싶습니다. 설정 ▸ 앱·연결에서 ${it.label} 커넥터를 등록해 주세요.`;
           try { await navigator.clipboard.writeText(ask); toast('부탁 문구를 복사했어요 — 담당자에게 그대로 보내세요.'); }
           catch (_) { toast(ask); }
         });
@@ -1246,7 +1290,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                 + (open ? tokPanel(id) : ''); }).join('')}</div>
           <button class="ob-btn ob-btn-pri" id="upGo" ${done.length ? '' : 'disabled'}>${left > 0 && done.length ? `${left}곳은 나중에, 계속` : '다 이었어요, 계속'}</button>
           <button class="ob-q-skip" data-skip>나중에 가져올게요. 지금은 넘어갈게요</button>
-          <p class="ob-q-fine">지금 못 이으셔도 괜찮아요 — 왼쪽 <b>외부 앱 연결</b>에서 언제든 다시 하실 수 있습니다.</p>`;
+          <p class="ob-q-fine">지금 못 이으셔도 괜찮아요 — <a href="#/connect" class="ob-link">외부 앱 연결</a>에서 언제든 다시 하실 수 있습니다.</p>`;
       },
       bind: (el) => {
         //  들어올 때마다 서버에 묻는다 — 앞 장면에서 뒤로 왔을 수도, 다른 탭에서 이었을 수도 있다.
@@ -1254,13 +1298,34 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const redraw = () => renderScene('connect', false);
         /** 이어진 것을 화면·사이드바·결정 기록에 반영한다. **서버가 그렇다고 한 뒤에만** 부른다. */
         const markConnected = (id) => {
-          const it = DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id) || { label: id };
+          const label = srcLabel(id);
           if (S.connected.includes(id)) return;                     // 뒤로 왔다 다시 들어와도 두 번 세지 않는다
           S.connected.push(id);
-          S.decisions.push(`${it.label} 이음`);
+          S.decisions.push(`${label} 이음`);
           save(); renderSB();
-          toast(`${it.label} 이 이어졌어요 — 그동안 쌓인 자료를 가져오기 시작합니다.`);
+          //  ★ #2232 — 이 화면은 «그동안 쌓인 자료를 가져옵니다» 라고 약속한다. 개인 연결(금고에 자격 한 줄)은
+          //   **AI 가 그 앱을 쓸 수 있게** 할 뿐, 지난 자료를 끌어오지는 않는다 — 그건 수집기(org_collector)이고
+          //   새 워크스페이스에는 꺼진 채로 깔린다. 그래서 켤 수 있는 사람(=관리자, 셀프서브에선 만든 사람 본인)
+          //   에게는 여기서 **실제로 켠다**. 못 켜는 사람에게는 약속하지 않는다(문구가 갈린다).
+          void startCollect(id).then((on) => {
+            toast(on ? `${label} 이 이어졌어요 — 그동안 쌓인 자료를 가져오기 시작합니다.`
+                     : `${label} 이 이어졌어요 — 이제 제가 ${label} 을 직접 쓸 수 있어요.`);
+          });
         };
+        /** 팀 자료로 모으기(수집) 켜기 — 관리자만. 실패·미지원은 조용히 false(온보딩을 막지 않는다). */
+        const COLLECT_OF = { slack: 'slack', notion: 'notion', gdrive: 'google', gmail: 'google', gcal: 'google' };
+        const isAdmin = () => { try { return (state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin')) === true; } catch (_) { return false; } };
+        async function startCollect(id) {
+          //  피그마는 수집기가 아니라 **코멘트 증류기**가 짝이다(#1881 F8) — 있으면 꺼진 채로 준비만 해 둔다.
+          if (id === 'figma' && isAdmin()) {
+            try { await api('/api/ui/org/distillers/figma', { method: 'POST', body: JSON.stringify({}) }); } catch (_) { /* 비치명 */ }
+          }
+          const svc = COLLECT_OF[id]; if (!svc || !isAdmin()) return false;
+          try {
+            const r: any = await api(`/api/ui/org/${svc}/collect`, { method: 'POST', body: JSON.stringify({ enabled: true }) });
+            return !(r && r.needs_connect === true);
+          } catch (_) { return false; }
+        }
         $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
           const id = c.dataset.conn;
           if (connState(id) === 'on') return;                       // 이미 이어졌다 — 더 시킬 일이 없다
@@ -1285,14 +1350,21 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             if (!id) return;
             if (!v) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
             tokGo.disabled = true; tokGo.textContent = '잇는 중…'; if (tokErr) tokErr.textContent = '';
+            let verdict = null;
             try {
-              await svcToken(id, v);
+              verdict = await svcToken(id, v);
             } catch (e) {
               tokGo.disabled = false; tokGo.textContent = '이걸로 잇기';
               if (tokErr) tokErr.textContent = (e && e.message) || '잇지 못했어요. 글자를 다시 확인해 주세요.';
               return;
             }
             //  저장은 됐다. 그래도 **서버가 이어졌다고 할 때만** 초록불을 켠다(값이 틀려도 저장은 되기 때문).
+            //  #2232 — 서버가 «그 값으로 실제 붙어 봤다» 고 답했으면 그 답이 먼저다(저장 성공 ≠ 되는 값).
+            if (verdict && verdict.ok === false) {
+              tokGo.disabled = false; tokGo.textContent = '이걸로 잇기';
+              if (tokErr) tokErr.textContent = verdict.message || '그 글자로는 아직 이어지지 않았어요 — 값을 다시 확인해 주세요.';
+              return;
+            }
             if (connState(id) === 'on') { markConnected(id); tokOpen = null; redraw(); return; }
             tokGo.disabled = false; tokGo.textContent = '이걸로 잇기';
             if (tokErr) tokErr.textContent = '글자는 받았는데 아직 이어지지 않았어요 — 복사할 때 앞뒤가 잘리지 않았는지 보고 다시 넣어 주세요.';
