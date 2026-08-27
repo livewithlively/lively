@@ -86,6 +86,7 @@ export { uiKeyCls, uiText } from './lib/uitext.js';
 export { anchoredPopover, infoPop, toast, withTip } from './lib/overlay.js';
 //  아바타 단일 소스(#473) — 사람 얼굴은 전부 이 한 경로로.
 export { avatarColor, initials, loadPeopleAvatars, personFace, profileAvatar, setPersonAvatar } from './lib/avatar.js';
+export { personName, type NamedPerson } from './lib/person-name.js';   // 사람 이름 단일 판정(#1813)
 //  체크박스 드래그 범위 선택(#1140) — 모듈 전역 상태 + document 리스너 1회 등록.
 export { initDragRangeSelect } from './lib/drag-select.js';
 //  공용 위젯 + 백엔드 enum 1:1 라벨 상수.

@@ -2,7 +2,7 @@
 //  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
 //  프로젝트는 v2/panes.ts(칸 셸 — main.ts mountProjectShell 이 그걸 마운트한다), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 와 칸 「리브」(panes-parts.ts)에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
-import { el, relTime, state, sv, toast } from '../core.js';
+import { el, personName, relTime, state, sv, toast } from '../core.js';
 import { composerAttach } from './compose-attach.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
@@ -102,7 +102,7 @@ export function sessDisplayName(s: Sess, projectName: string): string {
  */
 export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: string; onChange(v: string): void }): void {
   const me = state.me || {};
-  const name = String(me.display_name || me.email || me.userId || '');
+  const name = personName(me);   // 이름 판정은 한 곳(#1813)
   const live = data.sessions.filter((s) => s.live && s.alive);
   const busy = live.filter((s) => s.stateKey === 'busy').length;
   const waiting = live.filter((s) => s.stateKey === 'waiting').length;

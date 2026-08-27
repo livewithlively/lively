@@ -17,7 +17,7 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { el, navOn, profileAvatar, state, toast } from '../core.js';
+import { el, navOn, personName, profileAvatar, state, toast } from '../core.js';
 import { APPS, openLaunchpad, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
@@ -757,7 +757,7 @@ export function drawRail(): void {
 
   // ③ 발치 — 앱 · 나 (슬랙의 ＋ · 아바타). 여닫는 단추는 여기 없다(머리말).
   const me: any = state.me || {};
-  const myName = String(me.display_name || me.email || me.userId || '');
+  const myName = personName(me);   // 닉네임을 쓰기로 켠 사람은 닉네임으로 불린다(#1813)
   const foot = el('footer', { class: 'v2-rail-foot' },
     item('apps', '앱', 'apps', false, null, () => openLaunchpad()),
     el('button', {
