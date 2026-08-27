@@ -393,7 +393,50 @@ export async function resolveSessionSuccessor(id: string, maxHops = 16): Promise
     last = next;
     cur = next;
   }
-  return last;
+  // 이정표가 없으면 **대화로 찾는다**(아래). 사슬 끝이 또 이정표 없는 죽은 자리일 수도 있으니 그 끝에서 이어 본다.
+  return last ?? await successorByConversation(id);
+}
+
+/**
+ * #2231 — 이정표가 **없는** 옛 id 를 대화로 되찾는다. 이 스킬의 핵심 안전망이다.
+ *
+ *  이정표(superseded_by)는 이 변경 이후의 복원에만 생긴다. 그런데 옛 행이 사라지는 길은 복원 말고도 있다 —
+ *  사람이 완전 삭제, 휴지통 비우기, 워크스페이스 회수, 이 변경 이전에 이미 복원된 세션. 그 전부에서 화면은
+ *  똑같이 막다른 길이 됐다. 그래서 **행이 없어도** 답할 수 있는 축이 필요하다: **대화 id**.
+ *
+ *  `org_node_session_map` 은 세션 수명과 무관하게 남는 표다(#1752) — box_id ↔ conv_uuid. 그래서 행이 지워진
+ *  옛 세션도 "그 세션이 무슨 대화였는지"는 남아 있고, **같은 대화를 들고 있는 최신 세션**이 곧 갈 곳이다.
+ *  (2026-08-27 실측: `box-jang-b830d01a` 는 행이 없지만 이 표에 대화가 남아 있어 `box-jang-fa34ad1e` 로 이어진다.)
+ *
+ *  ⚠ 소유자 스코프 — 남의 세션으로 보내지 않는다. 대화 id 는 세션 사이를 승계하지만 소유자는 승계되지 않는다.
+ *  ⚠ 이어받기로 대화가 갈라져 후보가 여럿이면 **가장 최근**을 준다(사람이 마지막으로 쓰던 자리).
+ */
+async function successorByConversation(id: string): Promise<string | null> {
+  const cur = await itemsPool.query(
+    `SELECT COALESCE(s.claude_session_id, m.conv_uuid) AS conv, COALESCE(s.owner, m.owner) AS owner
+       FROM (SELECT $1::text AS id) AS q
+       LEFT JOIN org_session_state AS s ON s.id = q.id
+       LEFT JOIN org_node_session_map AS m ON m.box_id = q.id`,
+    [id],
+  );
+  const conv = (cur.rows[0]?.conv as string | null) ?? null;
+  const owner = (cur.rows[0]?.owner as string | null) ?? null;
+  if (!conv || !owner) return null;
+  // 같은 대화를 들고 있는 다른 세션 — desired-state 행(살아있거나 되살릴 수 있는 것)을 먼저, 없으면 매핑 표에서.
+  const byState = await itemsPool.query(
+    `SELECT id FROM org_session_state
+      WHERE claude_session_id=$1 AND owner=$2 AND id<>$3 AND superseded_by IS NULL
+      ORDER BY COALESCE(last_busy, created, 0) DESC, created_at DESC LIMIT 1`,
+    [conv, owner, id],
+  );
+  if (byState.rows[0]?.id) return String(byState.rows[0].id);
+  const byMap = await itemsPool.query(
+    `SELECT m.box_id FROM org_node_session_map AS m
+      WHERE m.conv_uuid=$1 AND m.owner=$2 AND m.box_id<>$3
+      ORDER BY m.updated_at DESC LIMIT 1`,
+    [conv, owner, id],
+  );
+  return byMap.rows[0]?.box_id ? String(byMap.rows[0].box_id) : null;
 }
 
 // desired-state 삭제 — 사용자가 **명시적으로 kill** 한 세션만(복원 안 함). reaper 회수는 보존(restorable) 하므로 호출 안 함.
