@@ -38,3 +38,19 @@
   #desktop-update.deskup-bar { justify-content: flex-start; padding: 8px 14px; }
   #desktop-update.deskup-bar .deskup-btn { width: 100%; }
 }
+
+/* ── 나중에 하기 (#2203) ──────────────────────────────────────────────────────────────
+   실측(원준): "저거에 X버튼 없는 상황도 이해가 안 가네." 종전엔 이 띠를 접는 길이 재시작뿐이었다.
+   지금 재시작할 수 없는 사정은 늘 있으므로 출구를 준다 — 그 버전에 한해서만 접히고, 다음 버전이 오면 다시 뜬다.
+   아이콘 한 글자만 두는 자리라 **누를 면적을 글자보다 크게** 잡는다(22px 정사각) — 크롬의 작은 컨트롤이
+   글자 크기 그대로면 조준이 어렵다. 색은 보조(ink-sub)로 두어 반영 버튼보다 뒤에 서게 한다. */
+.deskup-x {
+  flex: none; width: 22px; height: 22px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+  color: var(--ink-sub); font-size: 15px; line-height: 1;
+}
+.deskup-x:hover { background: var(--bg-sel); color: var(--ink); }
+.deskup-x:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 1px; }
+/* v2 사이드바 칸에서는 머리줄 오른쪽 끝(카드의 관례 자리)으로 민다. */
+.deskup-row .deskup-t .deskup-x { margin-left: auto; }
