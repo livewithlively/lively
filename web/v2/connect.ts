@@ -175,8 +175,12 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
       },
     }));
   } else if (st === 'off') {
-    acts.push(el('button', { class: 'btn btn-primary', type: 'button', text: svc.oauth ? '계정으로 연결' : '토큰으로 연결',
-      onclick: () => { if (svc.oauth) void startOAuth(svc, reload); else openToken(svc, reload); } }));
+    //  둘 다 되는 앱(#1881 GitHub)은 **계정 연결을 앞에 둔다** — 토큰은 직접 발급해야 하고 저장소도 못 고른다.
+    //   토큰 길은 남긴다(셀프호스팅·기존 사용자·앱을 아직 안 연 조직).
+    const app = !!(svc as any).appConnect;
+    acts.push(el('button', { class: 'btn btn-primary', type: 'button', text: (svc.oauth || app) ? '계정으로 연결' : '토큰으로 연결',
+      onclick: () => { if (svc.oauth || app) void startOAuth(svc, reload); else openToken(svc, reload); } }));
+    if (app && svc.token) acts.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '토큰으로 연결', onclick: () => openToken(svc, reload) }));
   } else if (!(org && org.admin)) {
     // 관리자 필요 — 눌러도 안 되는 버튼을 내밀지 않는다. 대신 **그대로 전달할 수 있는 문장**을 복사해 준다.
     //  ⚠ 관리자에게는 이 버튼을 주지 않는다 — 자기가 열 수 있는데 자기에게 부탁 문구를 복사시키는 꼴이 된다.
@@ -623,7 +627,10 @@ function backLink(): HTMLElement {
 //  곧 '동의가 끝났거나 그만뒀다'는 시점이라 그때 한 번만 다시 읽으면 충분하다.
 async function startOAuth(svc: Svc, reload: () => void): Promise<void> {
   try {
-    const r: any = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
+    //  #1881 G5 — GitHub 은 MCP 서버 행이 없어 공용 창구(/me/oauth/connect)를 못 탄다. 전용 op 가 설치+인가를
+    //   한 번에 여는 URL 을 준다(그 화면의 저장소 선택이 곧 접근 범위 선언이다).
+    const ep = (svc as any).appConnect ? '/api/ui/org/github/connect' : '/api/ui/me/oauth/connect';
+    const r: any = await api(ep, { method: 'POST', body: JSON.stringify((svc as any).appConnect ? {} : { server: svc.oauth }) });
     const url = r && (r.authorization_url || r.url); // 서버는 authorization_url 을 준다(me-logins 와 동일) — r.url 만 보던 v2 는 늘 실패했다(#1881)
     if (r && r.authorized) { toast('이미 연결돼 있어요'); reload(); return; }
     if (url) {
