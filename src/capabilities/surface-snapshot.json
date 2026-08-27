@@ -3864,7 +3864,7 @@
   "rest": [
    "POST /api/ui/stack-profiles"
   ],
-  "input_hash": "db31880d68201eb9"
+  "input_hash": "93aa29d534559c54"
  },
  {
   "name": "stack_profile_delete",
