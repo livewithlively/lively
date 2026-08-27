@@ -75,6 +75,11 @@
 .v2me-more-d { flex: 1; min-width: 0; font-size: 12.5px; color: var(--muted-head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2me-more-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: 1.8; stroke-linecap: round; }
 .v2me-more:hover .v2me-more-ic { stroke: var(--blue); }
+/* 고급 설정(#2199) — 설정 화면의 목차. 그룹 머리글(.v2me-more-k) + 행(.v2me-more: 이름 · 권한 배지 · 한 줄 설명 · ›).
+   배지는 설정 화면 사이드바의 '관리자'와 같은 뜻 — 채움 없이 선으로만(읽는 사람에게 경고가 아니라 표식이다). */
+.v2me-dir > .v2me-more-k:first-child { margin-top: 2px; }
+.v2me-more-badge { flex: none; font-size: 10.5px; font-weight: 700; line-height: 1.5; padding: 0 6px; border-radius: 6px;
+  border: 1px solid var(--line); color: var(--muted-head); background: var(--bg); }
 
 /* ── 알림(#1842) — 한 줄 = [체크박스 | 제목·설명]. **누르는 순간 저장된다**(저장 버튼 없음).
    커스텀 토글을 만들지 않고 네이티브 체크박스를 쓴다 — 디자인 시스템이 부품 언어를 하나로 묶는다.

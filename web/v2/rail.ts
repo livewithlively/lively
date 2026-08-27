@@ -131,7 +131,7 @@ function recentForRail(n: number): AppDef[] {
   catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
   const pick: AppDef[] = [];
   const take = (a: AppDef | undefined): void => {
-    if (!a || SEC_APP_KEYS.has(a.key) || order.includes(a.key) || pick.some((p) => p.key === a.key)) return;
+    if (!a || a.hidden || SEC_APP_KEYS.has(a.key) || order.includes(a.key) || pick.some((p) => p.key === a.key)) return;   // hidden(#2199): 문이 다른 곳에 있는 앱
     if (a.tab && !navOn(a.tab)) return;
     pick.push(a);
   };
@@ -438,7 +438,7 @@ const motion = (): boolean => !window.matchMedia('(prefers-reduced-motion: reduc
 
 function defaultOrder(): string[] { return [...SECTIONS.map((s) => s.key), ...LINKS.map((l) => l.key)]; }
 function isSecKey(k: string): boolean { return SECTIONS.some((s) => s.key === k) || LINKS.some((l) => l.key === k); }
-function canPin(k: string): boolean { return !isSecKey(k) && !SEC_APP_KEYS.has(k) && APPS.some((a) => a.key === k); }
+function canPin(k: string): boolean { return !isSecKey(k) && !SEC_APP_KEYS.has(k) && APPS.some((a) => a.key === k && !a.hidden); }   // hidden 은 저장된 순서에서도 떨어진다(normalizeOrder)
 /** 저장된 순서에서 믿을 수 있는 것만 남기고, 표에 새로 생긴 구역은 뒤에 잇는다. */
 function normalizeOrder(list: unknown): string[] {
   const seen = new Set<string>(); const out: string[] = [];
@@ -460,7 +460,7 @@ function mainEntries(): MainEntry[] {
     const l = LINKS.find((x) => x.key === key);
     if (l) { if (!l.tab || navOn(l.tab) !== false) out.push({ key, kind: 'link', link: l }); continue; }
     const a = APPS.find((x) => x.key === key);
-    if (a && (!a.tab || navOn(a.tab))) out.push({ key, kind: 'app', app: a });
+    if (a && !a.hidden && (!a.tab || navOn(a.tab))) out.push({ key, kind: 'app', app: a });
   }
   return out;
 }
