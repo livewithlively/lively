@@ -2121,9 +2121,14 @@ async function cmdMode(rest) {
 
 // `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
 //  서버 본체·툴 레지스트리는 lib/lively-mcp-local.mjs 에 있다 — 새 로컬 툴은 거기 TOOLS 배열에 추가한다(여긴 위임만).
+// ⚠ 서빙이 끝나면(= 하네스가 stdin 을 닫았다) **명시적으로 종료한다.**
+//  안 그러면 "이벤트 루프가 빌 때"만 죽는데, 상류 fetch 가 남긴 undici 소켓처럼 핸들이 하나만 남아도
+//  영영 안 죽는다. `DIRECT_RUN` 쪽 exit(파일 하단)은 `lively mcp` 로 뜰 때 argv[1] 이 lively.mjs 라
+//  **발동하지 않는다** — 그래서 종료 책임이 여기 있다.
 async function cmdMcpLocal() {
   const { serveMcpLocal } = await import(new URL("./lively-mcp-local.mjs", import.meta.url));
   await serveMcpLocal();
+  process.exit(0);
 }
 
 // `lively mcp` — 게이트웨이 MCP 의 로컬 stdio 프록시(#1079). 하네스가 매 세션 spawn 한다.
@@ -2133,6 +2138,7 @@ async function cmdMcpLocal() {
 async function cmdMcpGateway() {
   const { serveMcpGateway } = await import(new URL("./lively-mcp-gateway.mjs", import.meta.url));
   await serveMcpGateway();
+  process.exit(0);            // ↑ cmdMcpLocal 의 주석과 같은 이유 — 남은 소켓이 종료를 막지 못하게.
 }
 
 // `lively init` — 이 폴더를 라이블리 프로젝트로(사람 표면). MCP 툴 lively_local_project_init 과 **같은 코어**를 쓴다
