@@ -1466,10 +1466,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           '터미널을 열고 아래대로 하시면 로그인 창이 열립니다.')
           + `<div class="ob-tok">
               <ol>
-                <li>터미널을 엽니다(라이블리 안에서도, 쓰시던 터미널이어도 됩니다)</li>
+                <li>터미널을 엽니다 — 아래 [라이블리에서 터미널 열기]를 누르시면 새 탭에서 열립니다(쓰시던 터미널이어도 됩니다)</li>
                 ${steps}
-                <li>로그인이 끝나면 아래 버튼을 누릅니다</li>
+                <li>로그인이 끝나면 이 화면으로 돌아와 아래 버튼을 누릅니다</li>
               </ol>
+              <button class="ob-btn ob-btn-sub ob-btn-inline" id="cTerm">라이블리에서 터미널 열기 ↗</button>
               ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${picked} 로그인 여부를 서버가 확인하지 못해요 — 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
               <p class="ob-err" id="cErr"></p>
               ${otherNote}
@@ -1480,6 +1481,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       },
       bind: (el) => {
         const err = $('#cErr', el), go = $('#cGo', el);
+        //  #2232 — «터미널을 엽니다» 라고만 하고 여는 길이 없었다. 웹 터미널은 이미 있는 화면이다(#/terminal) —
+        //   새 탭으로 연다(이 탭을 떠나면 하던 자리가 끊긴다). 로그인을 마치고 돌아와 [로그인했어요] 를 누르면 된다.
+        const term = $('#cTerm', el);
+        if (term) term.onclick = () => { try { window.open(location.pathname + '#/terminal', '_blank', 'noopener'); } catch (_) { location.hash = '#/terminal'; } };
         // 장면에 들어오자마자 **한 번** 묻는다 — 사람이 버튼을 누르기 전에 '없는 CLI 를 치라는 안내'를 보지 않게.
         //  판정은 그때그때 다시 재므로 캐시를 믿지 않는다(AIC 는 그림용 최신값일 뿐이다).
         if (!AIC) { checkAi().then(() => renderScene('claude', false)); return; }
