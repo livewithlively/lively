@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { HOOK_SCRIPTS, SETUP_FILES } from "../setup/kit-manifest.mjs";
 import {
   HARNESS, HARNESS_IDS, resolveHarness, isKnownHarness,
   harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher, allToolNames, mcpToolName,
@@ -36,18 +37,20 @@ const slash = (v) => JSON.parse(JSON.stringify(v ?? null).replace(/\\\\/g, "/"))
 const eqPath = (n, got, want) => eq(n, slash(got), want);
 
 // ── A. 배선 보장(S1) — 엣지 E1·E2 ────────────────────────────────────────────────
-// 복사 목록이 두 벌인 건 설치 경로가 둘이기 때문이다(발행물 생성 = build-context, 설치 = user-install).
-// 한쪽만 고치면 "발행은 됐는데 설치가 안 되는" 또는 그 반대가 된다.
+// 종전엔 복사 목록이 **두 벌**이었다(발행물 생성 = build-context, 설치 = user-install). 한쪽만 고치면
+//  "발행은 됐는데 설치가 안 되는" 또는 그 반대가 됐고, 실제로 셋째 사본(deploy/refresh-member-kits.sh 의
+//  `kit/hooks/*.mjs` 글롭)과 드리프트해 2026-08-27 «멤버 훅 전멸» 을 냈다. 그래서 목록은
+//  kit/setup/kit-manifest.mjs 단일 출처로 합쳤다 — 이제 A1 이 볼 것은 «두 목록이 같은가» 가 아니라
+//  «소비자가 지역 사본을 되살리지 않았는가» 다.
 {
-  const listOf = (file, name) => {
-    const m = new RegExp(`const ${name}\\s*=\\s*\\[([^\\]]*)\\]`).exec(readFileSync(file, "utf8"));
-    return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : null;
-  };
-  const install = listOf(join(KIT, "setup", "user-install.mjs"), "HOOK_SCRIPTS");
-  const build = listOf(join(KIT, "generator", "build-context.mjs"), "HOOK_SCRIPTS");
-  if (!install || !build) bad("A0 두 목록 파싱", "HOOK_SCRIPTS 를 못 찾음(형태가 바뀌었으면 이 테스트를 고칠 것)");
-  else {
-    eq("A1[E2] 두 HOOK_SCRIPTS 목록이 동일", install, build);
+  const install = HOOK_SCRIPTS;
+  const revived = ["setup/user-install.mjs", "generator/build-context.mjs"]
+    .filter((rel) => /const HOOK_SCRIPTS\s*=\s*\[/.test(readFileSync(join(KIT, rel), "utf8")));
+  {
+    revived.length === 0
+      ? ok("A1[E2] 소비자가 목록 사본을 두지 않음(매니페스트 단일 출처)")
+      : bad("A1[E2] 소비자가 목록 사본을 두지 않음(매니페스트 단일 출처)",
+          `${revived.join(", ")} 가 지역 리터럴을 되살렸다 — 매니페스트와 조용히 어긋난다`);
     // 배포되는 훅들이 import 하는 상대 모듈을 모아, 전부 목록에 있는지 본다(정적 검사).
     const missing = [];
     for (const f of readdirSync(HOOKS_DIR).filter((x) => x.endsWith(".mjs") && !x.endsWith(".test.mjs"))) {
@@ -166,7 +169,9 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
     mkdirSync(join(BUNDLE, "setup"), { recursive: true });
     for (const f of scripts) cpSync(join(HOOKS_DIR, f), join(BUNDLE, ".claude", "hooks", f));
-    for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
+    // 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
+    //  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
+    for (const f of SETUP_FILES) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
     writeFileSync(join(BUNDLE, ".lively-org-name"), "테스트조직\n");
     writeFileSync(join(BUNDLE, ".lively", "auto-approve.json"), JSON.stringify({ allow: [] }));
     writeFileSync(join(BUNDLE, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));

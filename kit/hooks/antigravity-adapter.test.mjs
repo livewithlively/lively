@@ -13,6 +13,7 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { HARNESS, mcpMatcher, toolMatcher } from "./harness-registry.mjs";
+import { HOOK_SCRIPTS } from "../setup/kit-manifest.mjs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ADAPTER = join(HOOKS_DIR, "antigravity-adapter.mjs");
@@ -51,12 +52,16 @@ const SRC = readFileSync(ADAPTER, "utf8");
 
 // ── P3. HOOK_SCRIPTS 등재(두 목록 모두) — 누락 시 설치 자리에 어댑터가 없어 hooks.json 이 죽은 경로를 가리킨다 ──
 {
-  for (const [f, name] of [[join(KIT, "setup", "user-install.mjs"), "user-install"], [join(KIT, "generator", "build-context.mjs"), "build-context"]]) {
-    const src = readFileSync(f, "utf8");
-    const m = /const HOOK_SCRIPTS\s*=\s*\[([^\]]*)\]/.exec(src);
-    const list = m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
-    list.includes("antigravity-adapter.mjs") ? ok(`P3 ${name} HOOK_SCRIPTS 등재`) : bad(`P3 ${name} HOOK_SCRIPTS 등재`, "누락");
-  }
+  // 목록은 kit/setup/kit-manifest.mjs 단일 출처다(2026-08-27 «멤버 훅 전멸» 이후). 그래서 볼 것이 둘이다 —
+  //  ① 매니페스트에 등재됐는가 ② 소비자가 지역 사본을 되살리지 않았는가(되살아나면 다시 드리프트한다).
+  HOOK_SCRIPTS.includes("antigravity-adapter.mjs")
+    ? ok("P3 매니페스트 HOOK_SCRIPTS 등재")
+    : bad("P3 매니페스트 HOOK_SCRIPTS 등재", "누락 — 설치기·번들 조립이 복사할 소스가 없다");
+  const revived = ["setup/user-install.mjs", "generator/build-context.mjs"]
+    .filter((rel) => /const HOOK_SCRIPTS\s*=\s*\[/.test(readFileSync(join(KIT, rel), "utf8")));
+  revived.length === 0
+    ? ok("P3 소비자가 목록 사본을 두지 않음(단일 출처 유지)")
+    : bad("P3 소비자가 목록 사본을 두지 않음(단일 출처 유지)", `${revived.join(", ")} 가 지역 리터럴을 되살렸다`);
 }
 
 // ── R. 실행 검증 — 스텁 러너를 심은 샌드박스(LIVELY_HOME 격리)에서 어댑터를 직접 실행 ──
