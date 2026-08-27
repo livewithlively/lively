@@ -283,9 +283,9 @@ const MIXED_SECTIONS = { tools: ['admin', 'runtime'], 'preview-envs': ['code', '
 // 사이드바 권한 배지 — '권한 없으면 목록에 아예 안 보이는' 항목에 붙인다(숨김 규칙 sectionHidden 과 같은 표에서 파생).
 //  ⚠ 문구는 **'관리자' 하나로 통일**한다(#1085 사용자 지정) — runtime·code 같은 내부 scope 이름을 배지에 노출하면
 //   보는 사람에겐 무슨 말인지 모를 뿐이고, 실제로 그 항목들을 열 수 있는 사람은 관리 권한을 받은 사람이다.
+function sectionGated(key) { return ADMIN_ONLY.includes(key) || RUNTIME_ONLY.includes(key) || !!MIXED_SECTIONS[key]; }
 function navPermBadge(key) {
-  const gated = ADMIN_ONLY.includes(key) || RUNTIME_ONLY.includes(key) || !!MIXED_SECTIONS[key];
-  if (!gated) return null;
+  if (!sectionGated(key)) return null;
   return el('span', { class: 'admin-only-badge', text: '관리자', title: '권한이 있어야 보고 편집할 수 있는 항목입니다.' });
 }
 // 심플 어드민(#1454 S4) — ui_profile='personal'(노션식 개인 워크스페이스) 때 숨기는 조직 운영 섹션.
@@ -335,6 +335,23 @@ function sectionHidden(key, data) {
   const any = MIXED_SECTIONS[key];
   if (any && !any.some((s) => (s === 'admin' ? data.canEdit : s === 'runtime' ? data.canRuntime : hasScope(s)))) return true;
   return false;
+}
+
+// ── 정보구조를 **밖에서** 읽는 창구(#2199) ──────────────────────────────────────
+//  새 셸 [나] 창 ▸ [고급 설정](v2/me-modal.ts)이 이 표로 목차를 그린다 — 런치패드의 [설정] 앱이 빠지면서 그 창이
+//  설정 화면의 문이 됐다. **같은 표 · 같은 숨김 판정(sectionHidden) · 같은 권한 판정(sectionGated)** 을 쓰므로
+//  여기 화면이 늘거나 권한이 바뀌면 그쪽 목차도 같이 바뀐다(사본 없음). 그쪽이 따로 갖는 건 한 줄 설명뿐이다
+//  (이 사이드바는 설명을 안 그린다). data = loadAdmin() 의 그것(canEdit · canRuntime).
+export interface AdminDirItem { key: string; label: string; gated: boolean }
+export interface AdminDirGroup { key: string; label: string; items: AdminDirItem[] }
+export function adminDirectory(data): AdminDirGroup[] {
+  const out: AdminDirGroup[] = [];
+  for (const g of ADMIN_GROUPS) {
+    const items = ADMIN_SECTIONS.filter((s) => s.group === g.key && !sectionHidden(s.key, data))
+      .map((s) => ({ key: s.key, label: s.label, gated: sectionGated(s.key) }));
+    if (items.length) out.push({ key: g.key, label: g.label, items });   // 항목 0 인 그룹은 저쪽 사이드바처럼 통째로 숨는다
+  }
+  return out;
 }
 
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
