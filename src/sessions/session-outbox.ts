@@ -17,8 +17,10 @@
 //    (미확인)로 끝낸다 — 다시 보내면 같은 지시가 두 번 간다. 재시도는 **보내기 전 단계**(준비 안 됨)에서만.
 //  · 실패는 조용히 삼키지 않는다 — failed 행이 사유와 함께 남고, 화면이 그 자리에서 재시도·삭제를 준다.
 //  · 노드(멤버 PC) 세션은 이 큐를 안 탄다(파일·tmux 가 그 컴퓨터에 있다) — 종전 릴레이 경로 그대로(후속).
-//  · **전송수단은 하네스 모드가 정한다**(#2169) — codex app-server 세션의 pane 은 셸이라 send-keys 가
-//    영영 성립하지 않는다. 큐·재시도·화면은 그대로 쓰고 **나르는 수단만** 프로토콜로 바꾼다.
+//  · **전송수단은 하네스 모드가 정한다**(#2169) — codex app-server 세션의 pane 은 **codex TUI 가 아니다**
+//    (#2055: TUI 와 app-server 가 같은 대화를 동시에 쥘 수 없어 pane 을 셸로 둔다). 거기에 글자를 넣으면
+//    사람의 지시가 **셸에 타이핑된다**(실측 2026-08-26, 사용자 신고 "첫 프롬프트도 씹히고" — sessions.ts).
+//    큐·재시도·화면은 그대로 쓰고 **나르는 수단만** 프로토콜로 바꾼다.
 //
 //  ── #2154 매니지드 첫 지시 유실 ──
 //  실측 2026-08-27(상민님): 홈 컴포저로 세션을 열고 첫 지시만 준 뒤 자리를 비웠는데, 6시간 뒤 대화가 0개였다.
@@ -107,11 +109,10 @@ export function stallAction(
  * 이 세션의 지시를 **무엇으로 나르나**(순수 — 표가 못박는다, #2169).
  *
  *  · `send-keys` — 화면에 글자를 넣고 트랜스크립트 에코로 확인한다(ack 없는 통로의 우회).
- *  · `codex-chat` — codex app-server 는 pane 이 **셸**이라(#2055) 입력창이 영영 안 뜬다. 프로토콜로 보내고
- *    성공·실패를 **값으로** 받는다(에코 확인 불필요).
+ *  · `codex-chat` — codex app-server 의 pane 은 **codex TUI 가 아니다**(#2055). 거기 넣은 글자는 그 대화에
+ *    도달하지 못한다 — 프로토콜로 보내고 성공·실패를 **값으로** 받는다(에코 확인 불필요).
  *
- *  종전엔 수단이 하나뿐이라, app-server 폴백으로 큐에 들어온 지시가 **큐에 남기만 하고 영영 못 나갔다**
- *  (실측 2026-08-27: not-ready 로 죽은 4건이 전부 codex).
+ *  종전엔 수단이 하나뿐이라, app-server 폴백으로 큐에 들어온 지시가 **닿을 수 없는 곳으로 갔다.**
  */
 export type DeliveryTransport = "send-keys" | "codex-chat";
 export function deliveryTransport(harness: string, env: NodeJS.ProcessEnv = process.env): DeliveryTransport {
@@ -297,11 +298,17 @@ async function deliverLoop(sessionId: string): Promise<void> {
     await mark(row.id, "sending");
 
     // ── 전송수단 갈림(#2169) — codex app-server 는 화면이 아니라 **프로토콜**로 받는다. ──
-    //  왜 여기서 갈리나: 그 세션의 pane 은 **셸**이다(#2055 — TUI 와 app-server 가 같은 대화를 동시에 쥘 수
-    //  없어 pane 을 셸로 둔다). 그래서 아래 준비 판정(입력창이 뜨나)이 **영원히 wait** 를 주고, 큐는 지시를
-    //  들고만 있다가 TTL 에 버렸다 — 실측 2026-08-27: not-ready 로 죽은 4건이 전부 codex 였다.
+    //  왜 여기서 갈리나: 그 세션의 pane 은 **codex TUI 가 아니다**(#2055 — TUI 와 app-server 가 같은 대화를
+    //  동시에 쥘 수 없어 pane 을 셸로 둔다). 그래서 send-keys 로는 **그 대화에 닿는 길이 아예 없다.**
+    //  닿지 못하는 방식이 둘인데 어느 쪽도 배달이 아니다:
+    //   · 준비 판정이 send 를 주면 → 사람의 첫 문장이 **셸에 타이핑된다**(명령으로 실행되거나 사라진다).
+    //     실측 2026-08-26, 사용자 신고 "첫 프롬프트도 씹히고"(sessions.ts 의 app-server 분기 머리말).
+    //   · 준비 판정이 끝내 send 를 안 주면 → TTL 까지 기다렸다 failed/not-ready.
+    //  ⚠ 어느 쪽이 나는지는 그때 pane 에 달렸다 — 실측 2026-08-27 의 not-ready 4건이 어느 경로였는지는
+    //   **모른다**(그때 pane 이 남아 있지 않다). 고치는 근거는 그 통계가 아니라 **구조**다: 이 전송수단은
+    //   이 세션의 대화에 도달할 수 없다.
     //  이 폴백의 의도는 원래 "로그인 전이라 서버를 못 여는 경우에도 지시가 큐에 남는다"(sessions.ts)인데,
-    //  나르는 수단이 send-keys 하나뿐이라 **큐에 남기만 하고 영영 못 나갔다.** 수단을 하나 더 준다.
+    //  나르는 수단이 send-keys 하나뿐이라 그 의도가 성립한 적이 없다. 수단을 하나 더 준다.
     //  ⚠ control(설정 슬래시 명령)은 여기 올 수 없다 — codex 는 runtimeCmd 가 없어 /runtime 이 409 로 막는다.
     if (deliveryTransport(harness) === "codex-chat") {
       if (await deliverViaCodexChat(sessionId, st, row, settleStall)) return;
