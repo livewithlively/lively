@@ -16,7 +16,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { HOOK_SCRIPTS, LIB_FILES } from "./kit-manifest.mjs";
+import { HOOK_SCRIPTS, LIB_FILES, isDirectRun } from "./kit-manifest.mjs";
 
 // 주석 줄을 걷어낸다 — 설명 주석의 import 예시를 실제 의존으로 오인하지 않기 위해. 레포의 다른
 //  스크립트 검사(provision-member-order.test.mjs 등)와 같은 관례다.
@@ -106,7 +106,11 @@ export function verifyKitInstall(livelyDir) {
 }
 
 // ── CLI: `node kit/setup/verify-kit-install.mjs <~/.lively 경로>` → 실패 시 exit 1 ──
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+//  ⚠ 진입 판정은 isDirectRun(kit-manifest) 이 한다 — 손으로 argv[1] 을 비교하면 심링크 경로에서
+//   이 블록이 통째로 안 돌아 **검증이 무음으로 건너뛰어지고 exit 0** 이 된다. 부르는 쪽
+//   (refresh-member-kits.sh 의 `if vout="$(node "$VERIFY" …)"`)은 그걸 «설치 검증 통과» 로 읽는다 —
+//   2026-08-27 «멤버 훅 전멸» 을 잡으라고 만든 안전망이 그 자체로 무음이 되는 자리였다.
+if (isDirectRun(import.meta.url)) {
   const target = process.argv[2];
   if (!target) { console.error("사용: node kit/setup/verify-kit-install.mjs <lively-dir>"); process.exit(2); }
   const { ok, problems } = verifyKitInstall(target);
