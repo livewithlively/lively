@@ -43,6 +43,9 @@ export async function listDeleted(limit = 200, offset = 0): Promise<DeletedRow[]
           ORDER BY entity, entity_key, at DESC, id DESC
        ) latest
       WHERE latest.op = 'delete'
+        -- #1850 P4: 완전 삭제(purge)된 항목은 스냅샷이 비어(before IS NULL) 복원할 것이 없다 — "(제목 없음)" 유령 행으로
+        --  휴지통에 세우지 않는다. 일반 삭제는 before 에 전문이 있어 그대로 복원된다.
+        AND latest.before IS NOT NULL
       ORDER BY at DESC
       LIMIT $2 OFFSET $3`,   // #709 offset — 최신 삭제 N건 너머 옛 삭제 항목 복원 도달
     [TRASH_ENTITIES as unknown as string[], Math.min(Math.max(Number(limit) || 200, 1), 500),
