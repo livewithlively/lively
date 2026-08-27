@@ -3,7 +3,7 @@
 //  커버: clone 주소 파서(https·ssh·자격박힘·.git·끝슬래시·타호스트·서브경로) · 호스트 판정.
 //  ※ githubAppGitSecret 자체는 DB(설치 목록)+상류 발급이라 여기 없다 — 실호출로만 확인된다(G11).
 import assert from "node:assert/strict";
-import { githubRepoFullName, isGithubAppHost, repoScopeNames } from "./github-app-git.js";
+import { githubRepoFullName, isGithubAppHost, repoScopeNames } from "./github-repo-url.js";   // #2165 — 순수 함수는 잎 모듈로 옮겼다
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
