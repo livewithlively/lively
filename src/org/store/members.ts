@@ -1,7 +1,6 @@
 // org_member — 구성원 CRUD + jsonb 부속(온보딩 보고·하네스 관측 스냅샷·머신 별명·로컬 토글 지시)
 //  + person/person_identity 동기화. (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
-import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { logger } from "../../log.js";
 
@@ -83,10 +82,7 @@ export async function listMembers(): Promise<OrgMember[]> {
 }
 
 export async function getMember(id: string): Promise<OrgMember | null> {
-  //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
-  //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.
-  const r = await itemsPool.query(
-    `SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1 AND tenant_id = ${TENANT_DEFAULT_EXPR}`, [id]);
+  const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1`, [id]);
   return r.rows[0] ? mapMember(r.rows[0]) : null;
 }
 
@@ -315,11 +311,8 @@ export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Pro
 export async function setLivWelcomeProgress(id: string, progress: LivWelcomeProgress | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, welcome_progress: progress };
-  //  ⚠ #2232 — 여기서 미룸(welcome_deferred_at)을 지우면 안 된다(한 번 그렇게 썼다가 실측으로 잡았다).
-  //   [나중에 할게요] 는 «미룸 표식 POST» 와 «나가면서 밀리는 진행 flush» 를 거의 동시에 보내는데, 순서가
-  //   뒤집히면 방금 찍은 미룸이 그 자리에서 지워져 다음 입장에 또 끌려간다. 미룸을 푸는 자리는 **사람이
-  //   처음 설정 화면을 다시 연 순간**이다(web/v2/onboarding.ts clearWelcomeDeferred) — 그건 나가기보다
-  //   한참 앞서 일어나므로 경합이 없다.
+  // #2232 — 진행이 새로 저장되면 [나중에 할게요] 미룸은 풀린다(사람이 다시 하기 시작했다).
+  if (progress) delete next.welcome_deferred_at;
   const r = await itemsPool.query(
     `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
@@ -392,9 +385,8 @@ export async function appendLivProfile(
   // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).
   //  처음 찍힌 시각을 지킨다 — 이 값이 곧 '자동 진입은 평생 한 번' 의 근거라 뒤로 밀리면 안 된다.
   if (patch.welcomeSeen && !cur.welcome_shown_at) next.welcome_shown_at = new Date().toISOString();
-  // #2232 — [나중에 할게요]. true=미룸(매번 갱신 — 마지막으로 미룬 시각이 뜻이 있다) · false=미룸 해제(다시 열었다).
-  if (patch.welcomeDeferred === true) next.welcome_deferred_at = new Date().toISOString();
-  else if (patch.welcomeDeferred === false) delete next.welcome_deferred_at;
+  // #2232 — [나중에 할게요]. 매번 갱신한다(마지막으로 미룬 시각이 뜻이 있다).
+  if (patch.welcomeDeferred) next.welcome_deferred_at = new Date().toISOString();
   if (patch.decision) next.decisions = [...(cur.decisions ?? []), patch.decision].slice(-LIV_LIST_CAP);
   if (patch.declined) {
     const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);

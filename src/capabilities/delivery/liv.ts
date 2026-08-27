@@ -138,9 +138,8 @@ export const livCapabilities: Capability[] = [
       const dclIn = (input.declined ?? null) as Record<string, unknown> | null;
       const onboarded = input.onboarded === true;   // #2039 — 처음 설정을 **끝냈다**는 표식
       const welcomeSeen = input.welcome_seen === true; // #2171 — 처음 설정으로 **보냈다**는 표식(끝냈다와 별개)
-      // #2232 — [나중에 할게요] 미룸. **세 값**이다: true=미룸 · false=미룸 해제(화면을 다시 열었다) · 미지정=건드리지 않음.
-      const welcomeDeferred = typeof input.welcome_deferred === "boolean" ? input.welcome_deferred : undefined;
-      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred 중 하나는 있어야 합니다");
+      const welcomeDeferred = input.welcome_deferred === true; // #2232 — [나중에 할게요] 로 **미뤘다**는 표식
+      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && !welcomeDeferred) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred 중 하나는 있어야 합니다");
       const declinedKey = dclIn ? str(dclIn.key, 80) : undefined;
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
@@ -172,8 +171,8 @@ export const livCapabilities: Capability[] = [
         .describe("처음 설정(#/welcome)으로 **자동으로 보냈다**는 표식(#2171) — 끝냈다는 뜻이 아니다. " +
           "답 없이 보기만 한 사람에겐 자동 진입을 다시 하지 않는다. 하다 만 자리가 있으면 그 장면으로 돌아간다(#2232)."),
       welcome_deferred: z.boolean().optional()
-        .describe("사람이 [나중에 할게요] 로 처음 설정을 **미뤘다**는 표식(#2232). true 면 하다 만 자리가 있어도 자동으로 끌고 가지 않고 " +
-          "홈의 «이어서 하기»로만 안내한다. false 면 미룸을 푼다(사람이 처음 설정을 다시 연 순간)."),
+        .describe("사람이 [나중에 할게요] 로 처음 설정을 **미뤘다**는 표식(#2232). 있으면 하다 만 자리가 있어도 자동으로 끌고 가지 않고 " +
+          "홈의 «이어서 하기»로만 안내한다. 다시 이어서 답을 더 하면 풀린다."),
     }),
 
   // ── 리브가 나에 대해 아는 것을 **화면이 읽는다**(#1843) ──────────────────────────────
