@@ -783,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "47c527e846de89ca"
+  "input_hash": "42f37589e448838b"
  },
  {
   "name": "org_alert_status",

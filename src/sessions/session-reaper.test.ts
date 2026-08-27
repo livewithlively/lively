@@ -23,10 +23,12 @@ async function run(opts: {
   managed?: Array<string | null>; reapThrows?: Set<string>;
   // #1220 압박 회수 — 미지정이면 '압박 필드가 아예 없는 구 정책'(=표 A P13) 이 되어 종전 동작이어야 한다.
   pressurePct?: number; pressureIdle?: number;
+  // #2148 attach 전용 TTL — 미지정이면 '그 필드가 아예 없는 구 정책'(=종전 동작: attach 무기한 존중)
+  attachIdle?: number;
   usedPct?: number; totalMb?: number; rss?: Record<string, number>; memThrows?: boolean;
 }): Promise<{ res: Awaited<ReturnType<typeof reapIdleSessions>>; reaped: string[]; memCalls: number; rssCalls: number }> {
   const { ttl = TTL, live = [], states, managed = [], reapThrows = new Set<string>(),
-    pressurePct, pressureIdle, usedPct = 0, totalMb = 1000, rss, memThrows = false } = opts;
+    pressurePct, pressureIdle, attachIdle, usedPct = 0, totalMb = 1000, rss, memThrows = false } = opts;
   invalidateSessionReclaimPolicyCache(); // 시나리오마다 다른 ttl 을 쓰므로 30초 정책 캐시를 비운다(프로덕션은 tick 마다 갱신)
   const reaped: string[] = [];
   let memCalls = 0, rssCalls = 0;
@@ -35,6 +37,7 @@ async function run(opts: {
       idle_ttl_minutes: ttl,
       ...(pressurePct === undefined ? {} : { pressure_used_pct: pressurePct }),
       ...(pressureIdle === undefined ? {} : { pressure_idle_minutes: pressureIdle }),
+      ...(attachIdle === undefined ? {} : { attach_idle_minutes: attachIdle }),
     }),
     listLive: async () => live,
     listStates: async () => states ?? live.map((s) => ({ id: s.id })), // 기본: 라이브 전부 desired-state 있음
@@ -351,6 +354,84 @@ const pSess = (id: string) => sess({ id, lastActive: TWO_HOURS_AGO });
 {
   const { reaped } = await run({ live: [sess({ id: "await-approval", lastActive: CUTOFF - 100, attached: false, agentState: "offline", working: false, awaiting: true })] });
   assert.deepEqual(reaped, [], "탭 없이 승인 대기 중인 세션은 회수하지 않는다 — agentState 가 offline 이어도");
+}
+
+// ── #2148 세션 단위 attach TTL ────────────────────────────────────────────────
+// attach 는 '지금 보는 중'을 뜻하지만 그 신호가 거짓일 수 있다 — 원격 tmux 에서 재연결 잔재가 쌓이면
+//  attached>0 이 영구히 참이 되어 회수가 영영 멈춘다(2026-08-27 실측: 세션당 유령 6~7개).
+//  아래 표는 스크래치패드 spec-attach.md 의 6~15행이다.
+const ATT = 180;                       // attach TTL(분)
+const ATT_CUT = NOW_SEC - ATT * 60;    // 이 시각 이하로 유휴면 attach 여도 회수 대상
+
+// #6 attachTtl 미설정(구 정책) — 아무리 오래 유휴여도 종전대로 무기한 존중
+{
+  const { reaped, res } = await run({ live: [sess({ id: "ghost", attached: true, lastActive: 1 })] });
+  assert.deepEqual(reaped, [], "attach TTL 이 없으면 attached 는 무기한 존중(무회귀)");
+  assert.equal(res.skipReasons?.attached, 1);
+}
+
+// #7 attach TTL 미달 — 아직 존중
+{
+  const { reaped, res } = await run({ attachIdle: ATT, live: [sess({ id: "recent", attached: true, lastActive: ATT_CUT + 60 })] });
+  assert.deepEqual(reaped, [], "attach TTL 미달이면 보류");
+  assert.equal(res.skipReasons?.attached, 1);
+}
+
+// #8 attach TTL 초과 + 기본 TTL 도 초과 → 회수
+{
+  const { reaped } = await run({ attachIdle: ATT, live: [sess({ id: "stale", attached: true, lastActive: ATT_CUT - 60 })] });
+  assert.deepEqual(reaped, ["stale"], "attach TTL 을 넘긴 attach 는 존중하지 않는다");
+}
+
+// #9 attach TTL 초과여도 **작업 중이면 보류** — attach TTL 은 ②의 예외를 열 뿐, ③은 못 연다
+{
+  const { reaped, res } = await run({ attachIdle: ATT, live: [sess({ id: "busy", attached: true, working: true, lastActive: ATT_CUT - 60 })] });
+  assert.deepEqual(reaped, [], "작업 중은 attach TTL 과 무관하게 보호");
+  assert.equal(res.skipReasons?.working, 1);
+}
+
+// #10 복원 불가(desired-state 없음)면 보류 — 회수 ⊆ 복원가능 불변식은 못 연다
+{
+  const { reaped, res } = await run({ attachIdle: ATT, states: [], live: [sess({ id: "nostate", attached: true, lastActive: ATT_CUT - 60 })] });
+  assert.deepEqual(reaped, [], "복원 불가 세션은 attach TTL 과 무관하게 보호");
+  assert.equal(res.skipReasons?.noState, 1);
+}
+
+// #11 managed(상시)면 보류
+{
+  const { reaped, res } = await run({ attachIdle: ATT, managed: ["mg"], live: [sess({ id: "mg", attached: true, lastActive: ATT_CUT - 60 })] });
+  assert.deepEqual(reaped, [], "managed 는 attach TTL 과 무관하게 보호");
+  assert.equal(res.skipReasons?.managed, 1);
+}
+
+// #12 ★ attach TTL 은 넘겼지만 **기본 TTL 미달** — attach TTL 은 ②를 열 뿐 ⑤를 대신하지 않는다
+//  (attachTtl 을 기본 TTL 보다 짧게 잘못 잡았을 때의 역전을 여기서 못박는다)
+{
+  const shortAttach = 1;   // 1분 — 기본 TTL(60분)보다 짧다
+  const { reaped, res } = await run({ attachIdle: shortAttach, live: [sess({ id: "fresh", attached: true, lastActive: NOW_SEC - 5 * 60 })] });
+  assert.deepEqual(reaped, [], "기본 TTL 미달이면 attach TTL 을 넘겨도 회수하지 않는다");
+  assert.equal(res.skipReasons?.recent, 1);
+}
+
+// #13 미접속 세션은 attach TTL 과 무관하게 종전대로 기본 TTL 로 판정
+{
+  const { reaped } = await run({ attachIdle: ATT, live: [sess({ id: "det", attached: false, lastActive: CUTOFF - 10 })] });
+  assert.deepEqual(reaped, ["det"], "미접속은 종전대로 기본 TTL 로 회수");
+}
+
+// #14 경계 — 유휴가 정확히 attach TTL 이면 회수(이상이면 통과)
+{
+  const { reaped } = await run({ attachIdle: ATT, live: [sess({ id: "edge", attached: true, lastActive: ATT_CUT })] });
+  assert.deepEqual(reaped, ["edge"], "유휴 == attach TTL 은 회수 대상(경계 포함)");
+}
+
+// #15 ★ 활동 신호가 하나도 없으면 보류 — 모르면 안 죽인다
+//  (lastActive·lastAttached·created 가 전부 비면 유휴를 계산할 수 없다. 그때 attach 를 깨면
+//   '방금 뜬 세션'을 걷을 수 있다.)
+{
+  const { reaped, res } = await run({ attachIdle: ATT, live: [sess({ id: "unknown", attached: true, created: 0, lastActive: undefined, lastAttached: undefined })] });
+  assert.deepEqual(reaped, [], "활동 신호가 없으면 attach 를 깨지 않는다");
+  assert.equal(res.skipReasons?.attached, 1);
 }
 
 console.log("session-reaper: all passed");
