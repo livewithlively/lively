@@ -2,7 +2,7 @@
 //
 // 종전 「확인할 것」은 **라이브 세션에서 파생**돼 이력이 없었다 — 화면을 안 보고 있으면 그냥 지나갔고
 //  "무슨 알림이 왔었지"를 물을 데가 없었다. 이제 서버가 남기고(org_app_notification) 여기가 읽는다.
-import { api, el, relTime } from '../core.js';
+import { api, el, relTime, wsKey } from '../core.js';
 
 export interface AppNotification {
   id: string;
@@ -34,7 +34,7 @@ export async function markNotificationsRead(ids?: string[]): Promise<void> {
 //  ⚠ 권한을 **먼저 묻지 않는다.** 들어오자마자 뜨는 권한 창은 거의 항상 거부당하고, 한 번 거부되면
 //   그 뒤로는 물을 수도 없다. 사람이 「알림 켜기」를 누를 때만 요청한다.
 
-const SEEN_STORE = 'lively_v2_notified';   // 이미 배너로 띄운 알림 id(이 브라우저 기준)
+const SEEN_STORE = wsKey('lively_v2_notified');   // #1875 — 알림 id 는 워크스페이스의 것   // 이미 배너로 띄운 알림 id(이 브라우저 기준)
 
 function seen(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem(SEEN_STORE) || '[]') as string[]); }
