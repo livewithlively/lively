@@ -4,7 +4,8 @@ import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
 import { listSessions, killSession, sessionGone } from "../terminal/terminal-sessions.js";
 import { nodeSessionsFor, nodeRpc, nodeOnline } from "../node/registry.js";
-import { getSessionState, deleteSessionState } from "./session-state.js";
+import { getSessionState, deleteSessionState, sessionStateByClaudeUuid } from "./session-state.js";
+import { sessionNames, isLiveByAnyName } from "./session-names.js";   // #2151 — 세션의 두 이름(박스 id·대화 uuid)을 재는 규칙
 import { closeSessionAppInstances } from "../org/store/app-instances.js";   // #2022 — 완전 삭제한 세션의 앱 인스턴스도 함께 닫는다(안 닫으면 좌측 목록에 유령 행이 남는다)
 import { clearSessionWorkspace } from "../org/tenancy/registry.js";
 import { itemsPool } from "../db/client.js";
@@ -42,19 +43,27 @@ export async function stopForPurge(u: LivelyUser, me: string, id: string, nodeId
   catch (e) { return `돌고 있는 세션을 멈추지 못했어요 — ${(e as Error)?.message ?? e}`; }
 }
 
-/** id 하나를 '내 것'으로 확정하고, 같은 세션의 다른 이름(대화 uuid)까지 모은다. 내 것이 아니면 null. */
-async function resolveMine(id: string, me: string): Promise<{ ids: string[]; hasState: boolean } | null> {
+/** id 하나를 '내 것'으로 확정하고, 같은 세션의 다른 이름(대화 uuid)까지 모은다. 내 것이 아니면 null.
+ *  boxId = 그 세션의 desired-state 행 id(모르면 null). **라이브 판정·멈춤·행 삭제는 전부 이 이름으로 한다** —
+ *  호출자가 손에 든 id 는 대화 uuid 일 수 있고(중앙 기록 목록이 주는 이름), tmux·노드는 그 이름을 모른다(#2151). */
+async function resolveMine(id: string, me: string): Promise<{ ids: string[]; hasState: boolean; boxId: string | null } | null> {
   const st = await getSessionState(id).catch(() => undefined);
   if (st) {
     if (st.owner !== me) return null;
-    const ids = [id];
-    if (st.claude_session_id) ids.push(st.claude_session_id);
-    return { ids, hasState: true };
+    return { ids: sessionNames(id, st.id, st.claude_session_id), hasState: true, boxId: st.id };
+  }
+  // #2151 — id 가 **대화 uuid** 면 desired-state 는 그 이름으로 안 찾아진다(행의 키는 박스 id). 훅이 보고한
+  //  매핑을 거꾸로 타 그 박스를 찾는다. 이게 없으면 박스를 못 찾아 ① 라이브인데 안 돌고 있다고 읽고
+  //  ② 표식을 대화 uuid 한쪽에만 붙이고 ③ 완전 삭제 때 desired-state 행을 고아로 남긴다(전부 실측).
+  const byUuid = await sessionStateByClaudeUuid(id).catch(() => undefined);
+  if (byUuid) {
+    if (byUuid.owner !== me) return null;
+    return { ids: sessionNames(id, byUuid.id, byUuid.claude_session_id), hasState: true, boxId: byUuid.id };
   }
   const owner = await logOwnerOf(id);
   if (owner === null) return null;     // desired-state 도 기록도 없다 — 우리가 아는 세션이 아니다
   if (owner !== me) return null;
-  return { ids: [id], hasState: false };
+  return { ids: [id], hasState: false, boxId: null };
 }
 
 
@@ -83,14 +92,18 @@ export async function applySessionTrashOp(u: LivelyUser, me: string, op: TrashOp
     const skipped: Array<{ id: string; why: string }> = [];
     for (const id of ids) {
       let r = await resolveMine(id, me);
-      if (!r && marked.has(id)) r = { ids: [id], hasState: false };
+      if (!r && marked.has(id)) r = { ids: [id], hasState: false, boxId: null };
       if (!r) { skipped.push({ id, why: "본인 세션이 아니거나 없는 세션" }); continue; }
-      if (liveIds.has(id)) {
+      // #2151 — 라이브 판정은 이 세션의 **모든 이름**으로 잰다. 라이브 집합(tmux·노드 스냅샷)엔 박스 id 만
+      //  들어 있어, 대화 uuid 로 들어온 세션은 종전에 늘 '안 돌고 있음'으로 읽혔다 → 돌고 있는 세션이
+      //  멈춤도 경고도 없이 휴지통에 들어갔다(실측 2026-08-26: 대화 9a0f069a 가 그 뒤로도 계속 일했다).
+      if (isLiveByAnyName(r.ids, liveIds)) {
         // 휴지통으로 보내는 것(trash)만 거부한다 — 휴지통은 '지난 세션'의 다음 단계다. 완전 삭제는 **멈추고 지운다**.
         if (op !== "purge" && !(op === "trash" && opts.stopLive)) { skipped.push({ id, why: "아직 돌고 있는 세션 — 먼저 지난 세션으로 보내 주세요" }); continue; }
-        const st = await getSessionState(id).catch(() => undefined);
-        const nodeId = st?.node_id || nodeSessionsFor(me).find((x) => x.id === id)?.node.id || null;
-        const stopped = await stopForPurge(u, me, id, nodeId);
+        const boxId = r.boxId ?? id;   // 멈추는 것은 tmux/노드 — 그쪽이 아는 이름으로만 부른다
+        const st = await getSessionState(boxId).catch(() => undefined);
+        const nodeId = st?.node_id || nodeSessionsFor(me).find((x) => x.id === boxId)?.node.id || null;
+        const stopped = await stopForPurge(u, me, boxId, nodeId);
         if (stopped !== true) { skipped.push({ id, why: stopped }); continue; }
       }
       // 표식 저장소는 **바꾼 행 수**를 돌려준다 — 0 이면 한 것이 없다(이미 완전 삭제된 이름은 trash/untrash 가 건드리지 않는다).
@@ -102,8 +115,9 @@ export async function applySessionTrashOp(u: LivelyUser, me: string, op: TrashOp
       } else {
         // 완전 삭제 — desired-state(되살리기 좌표)는 실제로 지운다. 워크스페이스 소속 맵도 함께(종전 DELETE 와 같은 뒷정리).
         if (r.hasState) {
-          await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "휴지통 완전 삭제 — desired-state 삭제 실패(비치명)"));
-          void clearSessionWorkspace(id).catch(() => { /* 비치명 */ });
+          const boxId = r.boxId ?? id;   // #2151 — 행의 키는 박스 id. 대화 uuid 로 지우면 0행 = 고아 행이 남는다.
+          await deleteSessionState(boxId).catch((e) => logger.warn({ err: e, id: boxId }, "휴지통 완전 삭제 — desired-state 삭제 실패(비치명)"));
+          void clearSessionWorkspace(boxId).catch(() => { /* 비치명 */ });
         }
         // #2022 — 세션이 영영 사라졌으면 그 세션을 subject 로 쥔 앱 인스턴스도 닫는다. 안 닫으면 좌측 '열린 앱'
         //  목록에 되살릴 수도 없는 행이 `세션 <id꼬리>` · '프로젝트 없음' 으로 영영 남는다.
