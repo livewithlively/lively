@@ -1,6 +1,4 @@
 [
- "dist/apps/grant.js",
- "dist/apps/principal.js",
  "dist/apps/session-assets.js",
  "dist/apps/worker-policy.js",
  "dist/auth/oidc-config.js",
@@ -20,15 +18,9 @@
  "dist/org/credentials/notion-token-source.js",
  "dist/org/credentials/slack-oauth.js",
  "dist/org/credentials/slack-token-source.js",
- "dist/org/delivery/bundle-tar.js",
- "dist/org/delivery/hook-defaults.js",
- "dist/org/delivery/knowledge-index.js",
  "dist/org/delivery/liv-secret.js",
- "dist/org/delivery/mcp-client-bundle.js",
- "dist/org/delivery/publish.js",
  "dist/org/manage/action-whitelist.js",
  "dist/org/schema/node-link-log.js",
- "dist/org/store/apps.js",
  "dist/org/store/session-mint.js",
  "dist/org/tenancy/registry.js",
  "dist/org/tenant-context.js",
@@ -40,6 +32,5 @@
  "dist/terminal/session-first-prompt.js",
  "dist/terminal/session-project.js",
  "dist/v6/execution-session-store.js",
- "dist/v6/source-vis-policy.js",
- "dist/v6/team-store.js"
+ "dist/v6/source-vis-policy.js"
 ]

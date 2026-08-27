@@ -85,7 +85,14 @@ console.log(`[boot] ${installTenantBinding()}`);
   const { registerGatewayCapabilities } = await import("./sessions/gateway-capabilities.js");
   const { materializeMemberGit } = await import("./org/credentials/git-credential-materialize-gateway.js");
   const { resolveGitSecret, leaseGitSecretForNode } = await import("./org/credentials/git-credential-store.js");
-  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode });
+  const { getMember } = await import("./org/store.js");
+  const { buildInstallBundle } = await import("./org/delivery/publish.js");
+  const { SEED_HARNESSES } = await import("./terminal/member-kit-seed.js");
+  const { mintAppToken } = await import("./apps/principal.js");
+  const { materializeAppAssets } = await import("./apps/session-assets-gateway.js");
+  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
+    mintAppToken, materializeAppAssets: materializeAppAssets as never,
+    kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }
 
 const app = express();

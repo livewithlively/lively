@@ -30,10 +30,9 @@ import path from "node:path";
 import { memberExecConfigured } from "./terminal-isolation.js";
 import { memberSh, memberStat, memberWriteFrom } from "./terminal-member-fs.js";
 import { mintCentralBoxToken, userSlug, ownerId } from "./profiles.js";
+import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB·번들 생성은 게이트웨이 능력이다
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
-import { getMember } from "../org/store.js";
-import { buildInstallBundle } from "../org/delivery/publish.js";
 import { logger } from "../log.js";
 
 const MARKER = ".lively/.kit-seeded";
@@ -56,13 +55,22 @@ export interface KitSeedDeps {
   mintToken: (memberId: string, scopes: string[], slug: string) => Promise<string>;
   buildBundle: () => Promise<Buffer>;
 }
-const defaultDeps: KitSeedDeps = {
-  getMember: (id) => getMember(id),
-  mintToken: (memberId, scopes, slug) => mintCentralBoxToken(memberId, scopes, slug, false),
-  // #1884 — claude·codex 양쪽 배선(하네스 패리티 불변식 ②). 종전엔 claude 만 심어 매니지드 codex 세션은 MCP·훅·대화 uuid
-  //  매핑이 통째로 없었다(대화창 404). 발행은 다중 하네스 스펙("claude,codex")을 받는다(generator dispatchEmit).
-  buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer,
-};
+//  #2165 — `getMember`(DB)·`buildInstallBundle`(설치 번들 생성)은 **게이트웨이 능력**으로 받는다.
+//   종전엔 여기서 정적 import 했는데, 이 모듈은 `terminal/sessions.ts` 를 통해 노드 에이전트 번들에 들어가므로
+//   `org/store`·`org/delivery/*`·`v6/team-store` 가 통째로 멤버 PC 로 나갔다. 노드에선 어차피
+//   `memberExecConfigured()` 가 false 라 시딩이 시작도 안 된다(= 죽은 코드가 무게만 실었다).
+//   `mintCentralBoxToken` 은 terminal 로컬이라 그대로 둔다.
+// #1884 — claude·codex 양쪽 배선(하네스 패리티 불변식 ②). 종전엔 claude 만 심어 매니지드 codex 세션은 MCP·훅·대화 uuid
+//  매핑이 통째로 없었다(대화창 404). 발행은 다중 하네스 스펙("claude,codex")을 받는다(generator dispatchEmit).
+function registryDeps(): KitSeedDeps | null {
+  const d = gatewayCapability("kitSeedDeps");
+  if (!d) return null;
+  return {
+    getMember: d.getMember,
+    mintToken: (memberId, scopes, slug) => mintCentralBoxToken(memberId, scopes, slug, false),
+    buildBundle: d.buildBundle,
+  };
+}
 /** 멤버 홈에 배선할 하네스 — 테넌트 이미지가 싣는 바이너리와 같은 집합(lvly-cloud tenant-image/Dockerfile). 없는 하네스를
  *  적어도 설치기는 설정 파일만 쓰므로 해가 없지만(그 하네스를 띄우면 그때 catalog 의 미설치 안내), 있는 하네스를 빠뜨리면 조용히 반쪽이다. */
 export const SEED_HARNESSES = "claude,codex";
@@ -90,8 +98,10 @@ export function installScript(home: string): string {
  * 중계 배포에서 이 멤버의 홈 키트를 보장한다(멱등·best-effort). 로컬 격리/비격리 배포는 no-op —
  *  거긴 provision-member.sh 경로가 담당한다(이중 시딩 금지).
  */
-export async function ensureMemberKitSeeded(user: LivelyUser, osUser: string, deps: KitSeedDeps = defaultDeps): Promise<void> {
+export async function ensureMemberKitSeeded(user: LivelyUser, osUser: string, injected?: KitSeedDeps): Promise<void> {
   if (!memberExecConfigured() || !osUser) return;
+  const deps = injected ?? registryDeps();
+  if (!deps) return;   // 노드 — 게이트웨이 능력이 없다(여기까진 애초에 안 온다)
   const memberId = ownerId(user);
   if (!memberId || seeded.has(osUser)) return;
   let p = inflight.get(osUser);

@@ -56,7 +56,7 @@ import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js"
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
 import { mintAppToken } from "../apps/principal.js";
-import { prepareAppAssets } from "../apps/session-assets.js";
+import { prepareAppAssets } from "../apps/session-assets-gateway.js";   // #2165 — DB 를 타는 조각
 import { gatewayUrl } from "../gateway-url.js";
 
 /** #1683 후속2 — 그 세션이 어느 하네스로 떴나(tmux 세션 옵션 @box_harness). 모르면 빈 문자열. */
