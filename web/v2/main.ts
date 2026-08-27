@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
+import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
@@ -1329,6 +1329,16 @@ function sideInstances(): SideInstance[] {
   for (const s of data.sessions) {                                   // ① 돌고 있는 내 세션
     if (!s.live || !s.alive || !s.owned || isTrashedSess(s)) continue;
     put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, s.stateKey);   // lastSeen 은 ms(views.ts)
+  }
+  //  ①′ **고정한 세션은 끝나도 남는다**(원준 2026-08-27 "지난 세션 되면 핀까지 날려버리는 거야?"). 머리말의 "끝난 세션은
+  //   세우지 않는다"는 지난 세션이 목록을 덮지 않게 하려는 규칙이고, 압정은 사람이 "이건 계속 여기 두라"고 고른 자리다 —
+  //   끝났다고 자동 규칙이 걷어 가면 고정의 뜻이 없다. 종전엔 압정 표식(localStorage)은 남는데 **행이 사라져** 사람 눈엔
+  //   핀이 빠진 것으로 보였다. 목록에 아직 있는 세션(복원 가능·기록 행 — findSess 가 logId 도 본다)만 세운다.
+  for (const key of appPinnedKeys()) {
+    if (!key.startsWith('sess:') || rows.has(key)) continue;
+    const s = findSess(key.slice(5));
+    if (!s || isTrashedSess(s)) continue;
+    put(key, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, s.stateKey);
   }
   for (const inst of appInstances) {                                 // ② 세션 아닌 활성 인스턴스
     if (inst.status !== 'active') continue;
