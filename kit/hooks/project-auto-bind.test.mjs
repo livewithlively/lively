@@ -179,6 +179,53 @@ async function main() {
       assert.ok(Number(gw.states.get(execution)) > 0, "그 실행 ID 로 바인딩됐다");
       ok("하네스 미지정 + stdin session_id → claude-* 실행 ID로 생성·바인딩");
     }
+    // ── #1979 항목4 — **위탁(task) 세션은 프로젝트를 만들지 않는다.** ────────────────────────────
+    //  🔴 이 가드가 없어서 실제로 났던 일(프로덕션 실측 2026-08-25~27): 위탁 워커(spawnTaskSession)는 자기
+    //   LIVELY_SESSION_ID 를 제대로 실어 **정상 세션으로** 뜨는데, 그 세션의 첫 프롬프트가 **서버가 조립한
+    //   시스템 프롬프트**라 이 훅이 사람의 첫 지시로 오인했다. 배치 1회 = 프로젝트 1개:
+    //     #2019 «이 사람이 방금 라이블리에 올린 파일 목록입니다…» · #2123 «도메인맵 미분류 매핑»
+    //     #2152 «내 컴퓨터 자료 증류 배치»  ← 10분 주기 증류 크론만으로 하루 100건대
+    //  단언은 **부작용**으로 한다: 게이트웨이 요청이 한 건도 없어야 한다(문구 대조가 아니라 관측 가능한 효과).
+    {
+      const s = sid("task-ws");
+      const before = gw.hits.length;
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s, LIVELY_TASK_WS: "/tmp/lively-task-ws-e2e" });
+      assert.equal(out, "", "위탁 세션엔 아무것도 주입하지 않는다");
+      assert.equal(gw.hits.length - before, 0, "위탁 세션은 게이트웨이를 **한 번도** 부르지 않는다(조회조차 안 한다)");
+      assert.equal(gw.states.get(s), undefined, "위탁 세션에 프로젝트가 붙으면 안 된다");
+      ok("★위탁 세션(LIVELY_TASK_WS) → 프로젝트 생성 0 · 게이트웨이 요청 0");
+    }
+    // 대조군 — 같은 조건에서 표식만 빼면 **종전대로 생성된다**. 이게 없으면 위 단언이 vacuous 하다
+    //  (훅이 다른 이유로 죽어도 '요청 0건'은 참이 되므로).
+    {
+      const s = sid("task-ws-control");
+      const before = gw.hits.length;
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s });
+      assert.match(out, /프로젝트 #\d+/, "대조군은 종전대로 프로젝트를 만든다");
+      assert.ok(gw.hits.length - before >= 3, "대조군은 조회·생성·바인딩을 실제로 부른다");
+      assert.ok(Number(gw.states.get(s)) > 0);
+      ok("대조군(표식 없음) — 종전대로 생성·바인딩(가드가 일반 세션을 안 건드린다)");
+    }
+    // 경계 — 빈 값·공백은 표식이 아니다. env 를 ""로 지우는 배선(runHook 의 기본값)이 실수로 가드를 켜면
+    //  **모든 세션이 프로젝트를 잃는다**. 그 자리를 못박는다.
+    for (const [label, val] of [["빈 문자열", ""], ["공백만", "   "]]) {
+      const s = sid(`task-ws-empty-${val.length}`);
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s, LIVELY_TASK_WS: val });
+      assert.match(out, /프로젝트 #\d+/, `LIVELY_TASK_WS=${label} 은 표식이 아니다 — 종전대로 생성돼야 한다`);
+      ok(`경계 — LIVELY_TASK_WS ${label} 은 위탁 표식이 아니다`);
+    }
+    // 이미 프로젝트에 바인딩된 위탁(delegate_run 등)은 **종전에도** 아무 일도 안 했다 — 가드가 그 동작을
+    //  바꾸지 않는지 본다(의도된 바인딩을 깨지 않는다는 근거).
+    {
+      const s = sid("task-ws-bound"); gw.states.set(s, 88);
+      const before = gw.hits.length;
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s, LIVELY_TASK_WS: "/tmp/lively-task-ws-e2e" });
+      assert.equal(out, "");
+      assert.equal(gw.states.get(s), 88, "이미 붙은 소속은 그대로다");
+      assert.equal(gw.hits.length - before, 0);
+      ok("명시 바인딩된 위탁 — 소속 유지, 아무 변화 없음");
+    }
+
     console.log(`\n${pass} passed`);
   } finally {
     gw.server.close();
