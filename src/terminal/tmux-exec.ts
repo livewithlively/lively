@@ -118,7 +118,10 @@ const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — �
 //  영영 안 꺼졌다(실측 2026-08-26: att=1 인 세션 5개의 last_attached 가 last_busy 보다 300~440초 뒤처진 채 고정).
 //  그래서 '봤다'를 attach 이벤트에서 떼어내 **보고 있는 동안 화면이 직접 찍는** 신호로 따로 둔다.
 //  tmux 에 두는 이유는 위 둘과 같다(게이트웨이 재기동 생존 + 이 한 줄에 딸려 와 조회 비용 0).
-export const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_app}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{@box_state}\t#{@box_last_seen}\t#{pane_title}\t#{@box_label}";
+// @box_managed = 이 세션을 만든 **상시세션 id**(#2170). 상시세션은 desired-state DB 미러가 없어(#1059 E) tmux 가
+//  유일한 자리다. 정리기가 "내가 만든 세션인가"를 여기서 읽는다 — 세션 수만큼 getOpt 를 치면 2분마다 O(N) tmux
+//  호출이 되므로, 어차피 도는 이 한 줄에 실어 조회 비용을 0 으로 둔다(@box_last_busy 와 같은 이유).
+export const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_app}\t#{@box_managed}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{@box_state}\t#{@box_last_seen}\t#{pane_title}\t#{@box_label}";
 
 // ── 뮤터블 관측 상태(프로세스 로컬) — Map 은 은닉하고 최소 접근 함수만 노출한다(#1313 R15) ──
 // 세션별 마지막 'busy(작업중)' 관측 시각(epoch초). 폴링 관측 기반 — '최근 작업순' 정렬용. 서버 재기동 시 리셋(도그푸드 OK).

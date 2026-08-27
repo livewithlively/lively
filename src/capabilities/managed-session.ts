@@ -32,15 +32,16 @@ const list: Capability = {
       //  "중복 0개"로 보고하게 된다 — 이 응답이 없애려던 '없음 vs 모름' 혼동을 그대로 재현한다(#1675 리뷰).
       const live = await listSessionsRaw({ strict: true });
       return {
-        sessions: sessions.map((m) => ({
-          ...m,
-          orphan_count: classifyManagedLive({
-            live, subpath: managedSubpath(m), registered: m.session_id,
-          }).orphans.length,
-        })),
+        sessions: sessions.map((m) => {
+          const c = classifyManagedLive({ live, managedId: m.id, subpath: managedSubpath(m), registered: m.session_id });
+          // unmarked_count(#2170) = 같은 워크스페이스에 떠 있지만 **정리기가 만든 게 아닌** 세션 수.
+          //  자동 정리에서 뺀 것을 침묵으로 처리하지 않는다 — #1675 의 교훈이 "30개가 떠 있는데 어느 화면에도
+          //  안 보였다" 였으므로, 안 걷는 쪽으로 판정이 좁아진 만큼 그 잔여가 사람 눈에 보여야 한다.
+          return { ...m, orphan_count: c.orphans.length, unmarked_count: c.unmarked.length };
+        }),
       };
     } catch {
-      return { sessions: sessions.map((m) => ({ ...m, orphan_count: null })) };
+      return { sessions: sessions.map((m) => ({ ...m, orphan_count: null, unmarked_count: null })) };
     }
   },
 };
