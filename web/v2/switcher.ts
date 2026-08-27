@@ -23,7 +23,12 @@ function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string; co
   // registry(다중 워크스페이스)가 켜져 있으면 **등록부의 이름이 정답**이다 — org_name 을 쓰면
   //  버튼("Lively")과 메뉴 목록("라이블리")이 같은 워크스페이스를 두 이름으로 부른다(2026-08-19 실측 신고).
   const reg: any = m.workspace_registry || {};
-  const name = (reg.active && reg.name) ? String(reg.name) : String(m.org_name || m.email || '내 워크스페이스');
+  // 이름의 출처: registry(다중 ws) 활성 → 등록부 이름 / 아니면 **org_profile 이름**(모두가 같은 값을 본다).
+  //  ⚠ org_name 이 비었을 때 **m.email 로 폴백하지 않는다**(#1875, 2026-08-27 원준 신고) — 이메일은 '지금 보는
+  //   사람'의 것이라, 같은 팀 워크스페이스가 사람마다 다른 이름(각자 자기 이메일)으로 보였다. 워크스페이스 이름은
+  //   워크스페이스의 것이지 개인의 것이 아니다. 공유 이름이 없으면 중립 라벨로 떨어진다(매니지드 프로비저닝·
+  //   이름 동기가 org_name 을 채우면 이 폴백은 안 닿는다). 종류(personal/team)는 아래에서 정해지므로 여기선 못 쓴다.
+  const name = (reg.active && reg.name) ? String(reg.name) : String(m.org_name || '워크스페이스');
   // ★ 종류는 **저장된 값이 아니라 지금 몇 명인가**에서 나온다(#1875). 컬럼(reg.kind)은 만들 때의 의도라
   //  사람이 들고 나면 조용히 거짓이 된다 — 혼자 남은 '팀', 둘이 쓰는 '개인'이 거기서 생긴다.
   //  인원을 아직 못 받았을 때만(첫 그리기) 컬럼으로 임시 표시하고, status 가 오면 바로 정정된다.
