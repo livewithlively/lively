@@ -22,10 +22,14 @@
 //   데스크톱 앱을 깔게 하고, 그 앱이 붙는 순간 mcp_call_log 에 성공 호출이 남는다. 즉 «흔적 없음»만으로는
 //   하다 만 사람을 못 알아본다. 그래서 진행 중이면 흔적을 이긴다 — 단, **아직 자동으로 안 보냈을 때만**이다.
 //
-//  ⚠ #2207 과 #2171 이 만나는 자리 — 둘의 의도를 다 지키는 답은 «끌고 가기»가 아니라 «길을 남기기»다.
-//   #2207 이 막으려던 것은 *하던 설정으로 돌아갈 길이 사라지는 것*이지 *강제로 끌려가는 것*이 아니다.
-//   그래서 자동 진입은 한 번으로 두되, 하다 만 사람에게는 홈의 «처음 설정 이어서 하기»(welcomePending)가
-//   끝낼 때까지 남는다 — 진행 상태(welcome_progress)는 그대로 있으니 눌렀을 때 그 자리에서 이어진다.
+//  ★ #2232 (원준님 지시 2026-08-28) — **하다 만 자리는 «보여줬다»보다 세다.** #2171 은 «보여줬으면 끝»을
+//   진행중보다 위에 뒀는데, 그 결과 온보딩을 하다 나간 사람이 돌아오면 하던 장면이 아니라 홈(+«이어서 하기» 줄)에
+//   떨어졌다 — 실측: 노션을 잇고 클릭업을 잇던 중 나갔다가 돌아오니 홈. 사람의 기대는 "어디까지 했는지 기억해서
+//   거기부터"이지 "홈에 링크 한 줄"이 아니다. 그래서 순서를 바꾼다: 진행 중이면(답이 하나라도 남아 있으면) 자동으로
+//   그 장면부터 다시 연다. #2171 이 막으려던 «시도때도없이»는 주소·탭 저장본·전환(main.ts wsSwitched·tabs.ts
+//   routeSticky)이 따로 막고 있고, 진행이 있는 사람은 정의상 '끌려가는' 게 아니라 '돌아가는' 것이다.
+//   단 **사람이 스스로 [나중에 할게요] 를 눌러 미룬 경우**(liv_profile.welcome_deferred_at)는 끌고 가지 않는다 —
+//   그때는 홈 + «이어서 하기» 줄. 미룬 뒤 다시 이어서 답을 하나라도 더 하면(진행 저장) 미룸은 풀린다.
 //
 //  ⚠ **모르면 홈이다.** 조회가 실패하면 '흔적 있음'으로 접는다 — 여기서 fail-open 하면 장애 때 전원이
 //   처음 설정으로 튄다(고장을 고장으로 덮는 것). 처음 설정은 못 봐도 되지만 홈은 늘 홈이어야 한다.
@@ -40,6 +44,8 @@ export interface FirstRunFacts {
   shownAt: string | null;
   /** 처음 설정을 **하다 만 자리**가 서버에 남아 있나(#2207 — liv_profile.welcome_progress). */
   welcomeInProgress: boolean;
+  /** 사람이 스스로 [나중에 할게요] 로 **미룬** 시각(#2232 — liv_profile.welcome_deferred_at). 있으면 끌고 가지 않는다. */
+  deferredAt?: string | null;
   /** 이 신원으로 MCP 툴이 성공 호출된 적 있나. */
   everCalledMcp: boolean;
   /** 이 사람 소유의 터미널 세션이 하나라도 있었나. */
@@ -48,9 +54,10 @@ export interface FirstRunFacts {
 
 /** 사실 → **자동 진입** 판정. **순수 함수**(DB·시각 무접촉). */
 export function isFirstRun(f: FirstRunFacts): boolean {
-  if (f.onboardedAt) return false;        // 끝냈다
-  if (f.shownAt) return false;            // 이미 한 번 보냈다 — 두 번은 끌고 가지 않는다(#2171)
-  if (f.welcomeInProgress) return true;   // 하다 만 자리가 있다 = 아직 하는 중(#2207)
+  if (f.onboardedAt) return false;                          // 끝냈다
+  if (f.deferredAt) return false;                           // 사람이 스스로 미뤘다 — 끌고 가지 않는다(#2232)
+  if (f.welcomeInProgress) return true;                     // ★ 하다 만 자리가 있다 = 그 장면부터 다시 연다(#2207·#2232)
+  if (f.shownAt) return false;                              // 답 없이 보기만 했으면 두 번은 끌고 가지 않는다(#2171)
   return !f.everCalledMcp && !f.everHadSession;
 }
 
@@ -62,7 +69,7 @@ export function isFirstRun(f: FirstRunFacts): boolean {
  */
 export function isWelcomePending(f: FirstRunFacts): boolean {
   if (f.onboardedAt) return false;
-  return !!f.shownAt || !!f.welcomeInProgress;   // ⚠ 둘 다 접는다 — 이 축을 안 주는 옛 호출부에선 undefined 가 샌다
+  return !!f.shownAt || !!f.welcomeInProgress || !!f.deferredAt;   // ⚠ 전부 접는다 — 이 축을 안 주는 옛 호출부에선 undefined 가 샌다
 }
 
 async function used(sql: string, params: unknown[]): Promise<boolean> {
@@ -74,7 +81,7 @@ async function used(sql: string, params: unknown[]): Promise<boolean> {
 export async function memberWelcomeState(memberId: string): Promise<{ firstRun: boolean; pending: boolean }> {
   if (!memberId) return { firstRun: false, pending: false };
   const [profile, everCalledMcp, everHadSession] = await Promise.all([
-    getLivProfile(memberId).catch(() => ({} as { onboarded_at?: string | null; welcome_shown_at?: string | null; welcome_progress?: unknown })),
+    getLivProfile(memberId).catch(() => ({} as { onboarded_at?: string | null; welcome_shown_at?: string | null; welcome_deferred_at?: string | null; welcome_progress?: unknown })),
     used("SELECT 1 FROM mcp_call_log WHERE actor=$1 AND ok LIMIT 1", [memberId]),
     used("SELECT 1 FROM session WHERE owner=$1 LIMIT 1", [memberId]),
   ]);
@@ -82,6 +89,7 @@ export async function memberWelcomeState(memberId: string): Promise<{ firstRun: 
     onboardedAt: profile?.onboarded_at ?? null,
     shownAt: profile?.welcome_shown_at ?? null,
     welcomeInProgress: !!profile?.welcome_progress,
+    deferredAt: profile?.welcome_deferred_at ?? null,
     everCalledMcp, everHadSession,
   };
   return { firstRun: isFirstRun(facts), pending: isWelcomePending(facts) };
