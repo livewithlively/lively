@@ -108,6 +108,12 @@ export function eulReul(name: string): string {
   if (c >= 0xac00 && c <= 0xd7a3) return (c - 0xac00) % 28 ? '을' : '를';
   return '을(를)';
 }
+// 주격 조사 — 같은 규칙으로 이/가.
+export function iGa(name: string): string {
+  const c = (name || '').trim().slice(-1).charCodeAt(0);
+  if (c >= 0xac00 && c <= 0xd7a3) return (c - 0xac00) % 28 ? '이' : '가';
+  return '이(가)';
+}
 
 // ── 휴지통(#1851) — 지난 세션의 다음 단계. 잃는 것이 **없다**(표식 하나가 붙어 목록에서 빠질 뿐) → 위험 색 없이, 되돌릴 수 있다고 말한다. ──
 //  원준 2026-08-23: "휴지통으로 보낸다는 내용이 떠야" — 종전 '지울까요?'(완전 삭제) 창과 반드시 달라야 한다.
@@ -420,17 +426,26 @@ export async function confirmSessionPurge(opts: {
 }
 
 // 일괄(비우기·여러 개 선택) — 발자국을 전부 모아 **한 창**에서 고른다. 결과는 세션별 선택으로 풀어 돌려준다.
+//  projects 를 주면 **프로젝트 묶음까지 같은 창**에서 말한다(원준 2026-08-27 검증: 프로젝트 완전 삭제가 창을 두 번 띄웠고,
+//  [휴지통 비우기]는 결과물 창 없이 기록만 지웠다). 프로젝트 본체의 한계(감사 스냅샷에 본문이 남아 WIKI 휴지통에서 되살아난다)도
+//  여기서 정직하게 말한다 — 그 한계를 없앨지는 별도 결정(trash-screen-3-proposals-and-flow-audit-1850 갭 4).
 export async function confirmSessionPurgeMany(opts: {
   sessions: Array<{ sid: string | null; node: string; label: string }>; title: string;
+  projects?: Array<{ id: number; name: string; sessN: number }>;
 }): Promise<Map<string, PurgeChoice> | null> {
   const fps = new Map<string, Footprint | null>();
   await Promise.all(opts.sessions.filter((s) => s.sid).map(async (s) => { fps.set(s.sid!, await fetchFootprint(s.sid!, s.node)); }));
   const withLog = opts.sessions.filter((s) => s.sid).length;
   const { groups, keep } = splitFootprint([...fps.values()].filter((x): x is Footprint => !!x));
+  const pj = opts.projects || [];
+  const what = [pj.length ? `프로젝트 ${pj.length}개` : '', opts.sessions.length ? `세션 ${opts.sessions.length}개` : ''].filter(Boolean).join('와 ');
+  const lines: string[] = [];
+  if (withLog) lines.push(`세션 ${withLog}개는 중앙 대화 기록도 함께 지워져요.`);
+  if (pj.length) lines.push('프로젝트의 태스크·팀원·연결은 지워지고, 이름·본문만 WIKI 앱 휴지통(삭제됨)에 남아요.');
   const on = await purgeDialog({
     title: opts.title,
-    message: `세션 ${opts.sessions.length}개가 영영 사라지고, 되돌릴 수 없어요.`,
-    lines: withLog ? [`그중 ${withLog}개는 중앙 대화 기록도 함께 지워져요.`] : [],
+    message: `${what || '고른 항목'}${iGa(what || '고른 항목')} 영영 사라지고, 되돌릴 수 없어요.`,
+    lines,
     groups, keep, kept: ['작업 폴더의 파일·커밋은 그대로 남아요.'],
   });
   if (!on) return null;
