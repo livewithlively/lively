@@ -4,6 +4,7 @@
 //  - 세션은 완료 후에도 셸로 남아(웹터미널로 사후 검시 가능) — 성공 수집 후 스케줄러가 종료, 실패는 보존.
 //  - 완료 감지 = exit 파일 등장(폴링) — 화면 파싱보다 견고(F5).
 //  - v1 제약: 워크스페이스는 공유 루트(rootKey=shared)만 — 격리(700) 개인 홈엔 게이트웨이/에이전트가 파일을 못 쓴다.
+import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fsp from "node:fs/promises";
@@ -341,6 +342,9 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   const args = ["new-session", "-d", "-s", id];
   args.push("-e", `LANG=${PANE_LOCALE}`, "-e", `LC_CTYPE=${PANE_LOCALE}`, "-e", `LC_ALL=${PANE_LOCALE}`);
   args.push("-e", `LIVELY_TASK_WS=${workspace}`, "-e", `LIVELY_TASK_ID=${input.taskId}`);
+  // #2162 — 위탁 워커는 `createSession` 을 안 타는 **두 번째 문**이라, 종류를 여기서 직접 싣는다.
+  //  이 한 줄이 없으면 훅이 다시 `LIVELY_TASK_WS`(작업 폴더라는 제 뜻이 따로 있는 값)를 스니핑해야 한다.
+  args.push("-e", `${SESSION_KIND_ENV}=task`);
   // #1291 v2 — 위탁 세션도 세션 신원과 기록 범위를 갖는다. 지금까지 LIVELY_SESSION_ID 조차 안 실어
   //  이 경로의 AI 는 **항상 전체 공개로** 기록했다(잠긴 프로젝트를 위탁해도 마찬가지였다).
   //  세션 id 를 실어야 게이트웨이가 캡을 조회할 수 있고, 캡은 tmux 옵션(아래)이 권위다.
@@ -373,6 +377,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   await tmux(args);
   const ownerId = user.userId || user.email || "";
   await tmux(["set-option", "-t", id, "@box_owner", ownerId]);
+  await tmux(["set-option", "-t", id, "@box_kind", "task"]);   // #2162 — 세션 목록·화면이 «배치»를 알아본다
   await tmux(["set-option", "-t", id, "@box_label", input.label?.trim() || `위탁 #${input.taskId}`]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
   await tmux(["set-option", "-t", id, "@box_dir", workspace]);

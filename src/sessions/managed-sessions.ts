@@ -273,6 +273,9 @@ export async function ensureManagedSession(m: ManagedSession): Promise<{ id: str
     // #2170 — 값이 boolean 이 아니라 **이 상시세션의 id** 다: createSession 이 그것을 @box_managed 로 세션에 박고,
     //  다음 tick 의 정리기가 그 표식으로 '내가 만든 세션'을 판정한다(경로 우연의 일치로 남의 세션을 죽이지 않게).
     managed: m.id,
+    // #2162 — 위의 `managed`(**누구의 것인가** — 정리기용 신원)와 이건 **직교**다: kind 는 **무엇인가**(종류)를
+    //  말한다. 종전 `managed: true` 가 그 둘을 한 불리언에 겹쳐 놓아 어느 쪽도 제대로 못 말했다.
+    kind: "managed",
   });
   await itemsPool.query("UPDATE org_managed_session SET session_id=$1, updated_at=now() WHERE id=$2", [created.id, m.id]);
   return { id: m.id, session_id: created.id, action: "created" };

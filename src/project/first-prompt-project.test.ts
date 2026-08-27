@@ -44,12 +44,12 @@ test("제목 재료가 못 되는 지시 → 제목은 안 뽑는다(만들기�
 // ★ 상민님 결정(2026-08-25): "빈 세션도 플젝 만들어야지 · 그냥 항상 만들어 · 껍데기 신경쓰지 말고".
 //  근거의 비대칭 — 빈 껍데기는 사람이 지우면 되는 되돌릴 수 있는 비용이고, 잘못 고른 cwd 는 그 세션 내내 못 되돌린다.
 test("첫 지시가 없어도 미소속 세션이면 프로젝트를 만든다(임시 이름)", () => {
-  const empty = firstPromptProjectPlan({});
+  const empty = firstPromptProjectPlan({ kind: "human" });
   assert.equal(empty?.name, UNNAMED_PROJECT);
   assert.ok(String(empty?.description).includes(AUTO_CREATED_MARK), "정련이 껍데기를 알아보는 표식");
-  assert.equal(firstPromptProjectPlan({ initialPrompt: "   " })?.name, UNNAMED_PROJECT, "공백뿐인 지시도 같은 자리");
+  assert.equal(firstPromptProjectPlan({ kind: "human", initialPrompt: "   " })?.name, UNNAMED_PROJECT, "공백뿐인 지시도 같은 자리");
   // 제목 재료가 못 되는 지시(슬래시 등)도 **만들기는 한다** — 이름만 임시.
-  assert.equal(firstPromptProjectPlan({ initialPrompt: "/status" })?.name, UNNAMED_PROJECT);
+  assert.equal(firstPromptProjectPlan({ kind: "human", initialPrompt: "/status" })?.name, UNNAMED_PROJECT);
 });
 
 // ⚠ 실측(2026-08-25, dev): 상민님이 "안뇽 너느누구"(7자)로 새 세션을 열었더니 개인 루트에서 떴다.
@@ -58,25 +58,36 @@ test("첫 지시가 없어도 미소속 세션이면 프로젝트를 만든다(�
 test("짧은 첫 지시도 프로젝트를 만든다 — 제목 품질과 작업면은 다른 축", () => {
   assert.equal(shellProjectFromPrompt("안뇽 너느누구")?.name, "안뇽 너느누구");
   assert.ok(shellProjectFromPrompt("ㄱㄱ"), "두 글자라도 새 세션의 첫 지시다(제목은 정련이 고친다)");
-  assert.ok(firstPromptProjectPlan({ initialPrompt: "안뇽 너느누구" }), "홈 컴포저의 짧은 인사도 프로젝트 폴더에서 연다");
+  assert.ok(firstPromptProjectPlan({ kind: "human", initialPrompt: "안뇽 너느누구" }), "홈 컴포저의 짧은 인사도 프로젝트 폴더에서 연다");
 });
 
 test("홈 컴포저(첫 지시 있음·폴더 안 고름) → 선생성", () => {
-  assert.ok(firstPromptProjectPlan({ initialPrompt: PROMPT }));
-  assert.ok(firstPromptProjectPlan({ initialPrompt: PROMPT, rootKey: "personal" }), "개인 루트 명시도 같은 자리");
+  assert.ok(firstPromptProjectPlan({ kind: "human", initialPrompt: PROMPT }));
+  assert.ok(firstPromptProjectPlan({ kind: "human", initialPrompt: PROMPT, rootKey: "personal" }), "개인 루트 명시도 같은 자리");
 });
 
 test("이미 프로젝트가 정해졌거나 사람이 폴더를 골랐으면 → 안 만든다", () => {
-  assert.equal(firstPromptProjectPlan({ initialPrompt: PROMPT, projectId: 12 }), null, "그 프로젝트 폴더에서 연다");
-  assert.equal(firstPromptProjectPlan({ initialPrompt: PROMPT, subpath: "repos/mycode" }), null, "고른 자리에서 열겠다는 뜻");
-  assert.equal(firstPromptProjectPlan({ initialPrompt: PROMPT, rootKey: "shared" }), null, "개인 루트가 아닌 root 도 사람의 선택");
+  assert.equal(firstPromptProjectPlan({ kind: "human", initialPrompt: PROMPT, projectId: 12 }), null, "그 프로젝트 폴더에서 연다");
+  assert.equal(firstPromptProjectPlan({ kind: "human", initialPrompt: PROMPT, subpath: "repos/mycode" }), null, "고른 자리에서 열겠다는 뜻");
+  assert.equal(firstPromptProjectPlan({ kind: "human", initialPrompt: PROMPT, rootKey: "shared" }), null, "개인 루트가 아닌 root 도 사람의 선택");
 });
 
-test("작업 세션이 아니거나 조직에 안 남기는 세션 → 안 만든다", () => {
-  assert.equal(firstPromptProjectPlan({ initialPrompt: PROMPT, appId: "hello" }), null, "앱 세션");
-  assert.equal(firstPromptProjectPlan({ initialPrompt: PROMPT, loginFor: "claude" }), null, "로그인 세션");
-  assert.equal(firstPromptProjectPlan({ initialPrompt: PROMPT, readOnly: true }), null, "읽기전용은 쓰기 금지");
-  assert.equal(firstPromptProjectPlan({ initialPrompt: PROMPT, incognito: true }), null, "인코그니토는 아무것도 안 남긴다");
+// #2162 — 판정 축이 `appId`·`loginFor` 개별 필드에서 **kind 하나**로 옮겨졌다.
+//  종전엔 종류가 늘 때마다 여기 조건을 더해야 했고, 잊어도 아무 신호가 없었다 — 실제로 **위탁 워커가
+//  그 틈으로 샜다**(#1979 항목4: 10분 주기 증류 크론만으로 하루 100건대). 이제 사람 작업 세션만 통과한다.
+//  (요청→kind 매핑은 sessionKindFromRequest 가 담당하고 session-kind.test.ts 가 표로 잠근다.)
+test("사람의 작업 세션이 아니면 → 안 만든다 (kind 축)", () => {
+  for (const kind of ["app", "login", "task", "managed"]) {
+    assert.equal(firstPromptProjectPlan({ kind, initialPrompt: PROMPT }), null, `kind=${kind}`);
+  }
+  // 대조군 — 같은 지시라도 human 이면 만든다(위 단언이 vacuous 하지 않다).
+  assert.ok(firstPromptProjectPlan({ kind: "human", initialPrompt: PROMPT }), "대조군: 사람 세션은 만든다");
+});
+
+// 실행 모드는 kind 와 **직교**다 — 사람이 연 읽기전용 세션이 있다. kind 로 흡수하지 않는 이유.
+test("조직에 안 남기는 실행 모드 → 안 만든다 (kind 와 직교)", () => {
+  assert.equal(firstPromptProjectPlan({ kind: "human", initialPrompt: PROMPT, readOnly: true }), null, "읽기전용은 쓰기 금지");
+  assert.equal(firstPromptProjectPlan({ kind: "human", initialPrompt: PROMPT, incognito: true }), null, "인코그니토는 아무것도 안 남긴다");
 });
 
 

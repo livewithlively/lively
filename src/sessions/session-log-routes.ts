@@ -384,6 +384,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       //  좁혀둔 기록 범위도 풀린다. '이어보기'는 그 세션을 잇는 것이지 새로 여는 게 아니다.
       const prev = await getSessionState(sessionId).catch(() => undefined);
       const session = await createSession(user, {
+        kind: "human",   // #2162 — 사람이 기록을 이어 여는 세션
         label: `이어보기 · ${sessionId.slice(0, 8)}`, rootKey: "shared", subpath: path.relative(sharedBase, cwd),
         // #1711 — 원본 세션의 하네스로 연다. 종전엔 "claude" 고정이라, codex 로 만든 세션의 기록을 이어보면
         //  **다른 하네스로** 열리면서 resume id 도 그 하네스에서 무의미해졌다(모드·기록범위는 이미 승계 중이었다).
@@ -400,6 +401,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (proj?.folder) {
       const prevF = await getSessionState(sessionId).catch(() => undefined);
       const session = await createSession(user, {
+        kind: "human",   // #2162 — 사람이 원본을 바탕으로 새로 여는 세션
         label: `새 세션(원본 기반) · ${sessionId.slice(0, 8)}`, rootKey: "shared", subpath: proj.folder,
         harness: prevF?.harness || "claude", flags: {}, autoApprove: false, projectId: proj.id, projectSrc: "v6",   // #1711 — 원본 하네스 승계
         readOnly: !!prevF?.read_only, incognito: !!prevF?.incognito,
