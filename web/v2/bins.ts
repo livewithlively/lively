@@ -114,7 +114,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   };
   const logSid = (s: Sess): string => s.logId || (s.stateKey === 'log' ? s.id : '');
   const logNode = (s: Sess): string => String((s.logNode ?? s.node) || '');
-  const defaultChoice = { log: true, knowledge: [] as string[], revert: [] as string[], projects: [] as number[], sources: [] as number[], activities: false };
+  const defaultChoice = { log: true, knowledge: [] as string[], revert: [] as string[], projects: [] as number[], sources: [] as number[], tasks: [] as number[], categories: [] as number[], activities: false };
 
   // ── 되돌리기 ──
   const restoreSession = (s: Sess): Promise<void> => guard(async () => {
@@ -168,12 +168,17 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
       projects: pjs.map((i) => ({ id: i.p.id, name: i.p.name, sessN: i.bundle.length })),
     });
     if (!choices) return;
-    let logs = 0, failed = 0; const sum = { kn: 0, rv: 0, pj: 0, src: 0 };
+    let logs = 0, failed = 0; const sum = { kn: 0, rv: 0, pj: 0, src: 0, tk: 0, ct: 0 };
+    // ⚠ 같은 창에서 프로젝트도 지울 때, 세션 발자국의 projects 에 그 프로젝트가 있으면 세션 쪽이 먼저 지워
+    //  아래 프로젝트 삭제가 404 로 헛돈다(순서 경합). 지금 지우려는 프로젝트 id 는 세션 선택에서 뺀다 —
+    //  그 행은 아래 /projects/:id/purge 가 지운다(서버가 묶음 세션 결과물까지 마저 되돌린다).
+    const purgingPj = new Set(pjs.map((i) => i.p.id));
     for (const s of all) {
       const sid = logSid(s); if (!sid) continue;
       try {
-        const r = await purgeSessionRecord(sid, logNode(s), choices.get(sid) || defaultChoice);
-        logs++; sum.kn += r.knowledge_deleted; sum.rv += r.knowledge_reverted; sum.pj += r.projects_deleted; sum.src += r.sources_deleted;
+        const c = choices.get(sid) || defaultChoice;
+        const r = await purgeSessionRecord(sid, logNode(s), { ...c, projects: c.projects.filter((id) => !purgingPj.has(id)) });
+        logs++; sum.kn += r.knowledge_deleted; sum.rv += r.knowledge_reverted; sum.pj += r.projects_deleted; sum.src += r.sources_deleted; sum.tk += r.tasks_deleted; sum.ct += r.categories_deleted;
       } catch { failed++; }
     }
     let sessDone = 0, pjDone = 0; let why = '';
@@ -192,6 +197,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
     if (logs) tail.push(`대화 기록 ${logs}건 파기`);
     if (sum.kn) tail.push(`지식 ${sum.kn}건 삭제`); if (sum.rv) tail.push(`지식 ${sum.rv}건 되돌림`);
     if (sum.pj) tail.push(`프로젝트 ${sum.pj}건 삭제`); if (sum.src) tail.push(`자료 ${sum.src}건 삭제`);
+    if (sum.tk) tail.push(`태스크 ${sum.tk}건 삭제`); if (sum.ct) tail.push(`분류 ${sum.ct}건 삭제`);
     if (failed) tail.push(`⚠ ${failed}건은 지우지 못했어요${why ? ' — ' + why : ''}`);
     toast(parts.join(' · ') + '를 완전히 지웠어요.' + (tail.length ? ' ' + tail.join(' · ') : ''), failed > 0);
     sel.clear(); hooks.onChanged?.();

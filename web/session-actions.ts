@@ -250,13 +250,15 @@ export function sessionLogLink(text?: string): HTMLElement {
 //  고친 지식은 지우지 않고 **세션 직전 판으로 되돌린다**(세션 전에도 있던 남의 것이므로).
 export interface Footprint {
   tmux_session_id: string | null;
-  knowledge_created: Array<{ name: string; title: string | null; touched_after?: boolean }>;
-  knowledge_edited: Array<{ name: string; title: string | null; touched_after?: boolean }>;
+  knowledge_created: Array<{ name: string; title: string | null; touched_after?: boolean; others_during?: boolean }>;
+  knowledge_edited: Array<{ name: string; title: string | null; touched_after?: boolean; others_during?: boolean }>;
   projects: Array<{ id: number; name: string; created_here: boolean; touched_after?: boolean; other_sessions?: number }>;
-  sources: Array<{ id: number; title: string | null; kind: string | null }>;
+  sources: Array<{ id: number; title: string | null; kind: string | null; linked?: boolean }>;
+  tasks: Array<{ id: number; name: string; project_name: string | null }>;         // #1850 P4 — 살아남는 프로젝트 안에 만든 작업
+  categories: Array<{ id: number; key: string; name: string | null }>;             // #1850 P4 — 이 세션의 지식만 담은 분류
   activities: number;
 }
-export interface PurgeChoice { log: boolean; knowledge: string[]; revert: string[]; projects: number[]; sources: number[]; activities: boolean }
+export interface PurgeChoice { log: boolean; knowledge: string[]; revert: string[]; projects: number[]; sources: number[]; tasks: number[]; categories: number[]; activities: boolean }
 
 async function fetchFootprint(sid: string, node: string): Promise<Footprint | null> {
   try {
@@ -267,6 +269,8 @@ async function fetchFootprint(sid: string, node: string): Promise<Footprint | nu
       knowledge_edited: Array.isArray(d?.knowledge_edited) ? d.knowledge_edited : [],
       projects: Array.isArray(d?.projects) ? d.projects : [],
       sources: Array.isArray(d?.sources) ? d.sources : [],
+      tasks: Array.isArray(d?.tasks) ? d.tasks : [],
+      categories: Array.isArray(d?.categories) ? d.categories : [],
       activities: Number(d?.activities) || 0,
     };
   } catch { return null; }   // 못 읽으면 대화 기록만 지우는 종전 흐름으로(있지도 않은 목록을 지어내지 않는다)
@@ -290,12 +294,12 @@ function checkRow(id: string, label: string, names: string[], hint?: string): { 
 //    사람이 풀어서 남긴다. 규칙 B: **그 뒤에 남이 손댄 것은 고를 수 없다** — "남는 것"으로 이유와 함께 보여 준다.
 //  세션 하나를 버리며 남의 작업을 날릴 수는 없다(서버도 같은 판정으로 한 번 더 거른다).
 type FpItem = { key: string; label: string; sub?: string };
-type FpGroup = { kind: 'kc' | 'ke' | 'pj' | 'src' | 'ac'; title: string; hint?: string; items: FpItem[]; count: number };
+type FpGroup = { kind: 'kc' | 'ke' | 'pj' | 'src' | 'tk' | 'ct' | 'ac'; title: string; hint?: string; items: FpItem[]; count: number };
 type FpKeep = { label: string; why: string };
 
 // 발자국을 '고를 수 있는 묶음'과 '남는 것'으로 가른다 — 단일·일괄 확인창이 같은 판정을 쓴다.
 function splitFootprint(fps: Footprint[]): { groups: FpGroup[]; keep: FpKeep[] } {
-  const kc: FpItem[] = [], ke: FpItem[] = [], pj: FpItem[] = [], src: FpItem[] = [];
+  const kc: FpItem[] = [], ke: FpItem[] = [], pj: FpItem[] = [], src: FpItem[] = [], tk: FpItem[] = [], ct: FpItem[] = [];
   const keep: FpKeep[] = [];
   let acts = 0;
   const seen = new Set<string>();
@@ -303,12 +307,22 @@ function splitFootprint(fps: Footprint[]): { groups: FpGroup[]; keep: FpKeep[] }
     for (const k of fp.knowledge_created) {
       const key = 'k:' + k.name; if (seen.has(key)) continue; seen.add(key);
       if (k.touched_after) keep.push({ label: k.title || k.name, why: '이 세션이 끝난 뒤에 수정된 문서라 남겨요' });
+      else if (k.others_during) keep.push({ label: k.title || k.name, why: '이 세션이 도는 동안 다른 사람도 손댄 문서라 남겨요' });
       else kc.push({ key: k.name, label: k.title || k.name });
     }
     for (const k of fp.knowledge_edited) {
       const key = 'k:' + k.name; if (seen.has(key)) continue; seen.add(key);
       if (k.touched_after) keep.push({ label: k.title || k.name, why: '이 세션이 끝난 뒤에 또 수정된 문서라 되돌리지 않아요' });
+      else if (k.others_during) keep.push({ label: k.title || k.name, why: '이 세션이 도는 동안 다른 사람도 고친 문서라 되돌리지 않아요' });
       else ke.push({ key: k.name, label: k.title || k.name });
+    }
+    for (const t of fp.tasks || []) {
+      const key = 't:' + t.id; if (seen.has(key)) continue; seen.add(key);
+      tk.push({ key: String(t.id), label: t.name + (t.project_name ? ` (${t.project_name})` : '') });
+    }
+    for (const c of fp.categories || []) {
+      const key = 'c:' + c.id; if (seen.has(key)) continue; seen.add(key);
+      ct.push({ key: String(c.id), label: c.name || c.key });
     }
     for (const p of fp.projects) {
       const key = 'p:' + p.id; if (seen.has(key)) continue; seen.add(key);
@@ -328,7 +342,10 @@ function splitFootprint(fps: Footprint[]): { groups: FpGroup[]; keep: FpKeep[] }
   if (ke.length) groups.push({ kind: 'ke', title: `고친 지식 ${ke.length}건 이 세션 전 내용으로 되돌리기`, items: ke, count: ke.length });
   if (pj.length) groups.push({ kind: 'pj', title: `만든 프로젝트 ${pj.length}건 지우기`, hint: '그 안의 작업·첨부·폴더도 함께', items: pj, count: pj.length });
   // 자료는 세션이 '만든' 것이 아니다 — 올렸거나 수집된 원본이 이 세션의 지식에 붙어 있는 것이다(원준 지적). 붙어 있는 관계로 말한다.
-  if (src.length) groups.push({ kind: 'src', title: `원본 자료 ${src.length}건 지우기`, hint: '위에서 지우는 지식에만 붙어 있는 자료예요', items: src, count: src.length });
+  //  지식에 붙은 자료는 **그 지식을 지울 때만** 함께 지워진다(서버도 같은 규칙) — 인용만 남고 근거가 사라지는 일이 없게.
+  if (src.length) groups.push({ kind: 'src', title: `원본 자료 ${src.length}건 지우기`, hint: '지식에 붙은 자료는 그 지식을 지울 때만 함께 지워요', items: src, count: src.length });
+  if (tk.length) groups.push({ kind: 'tk', title: `만든 태스크 ${tk.length}건 지우기`, hint: '남는 프로젝트 안에 이 세션이 만든 작업이에요', items: tk, count: tk.length });
+  if (ct.length) groups.push({ kind: 'ct', title: `만든 분류 ${ct.length}건 지우기`, hint: '이 세션의 지식만 담고 있는 분류예요', items: ct, count: ct.length });
   if (acts) groups.push({ kind: 'ac', title: `작업 기록 ${acts}건 지우기`, items: [], count: acts });
   return { groups, keep };
 }
@@ -391,15 +408,19 @@ async function purgeDialog(opts: {
 
 // fp + kind 선택 → 이 세션의 실제 이름 목록(서버는 어차피 발자국 밖 이름을 거른다).
 function choiceOf(fp: Footprint | null, on: Set<string>): PurgeChoice {
-  const kc = (fp?.knowledge_created ?? []).filter((k) => !k.touched_after);
-  const ke = (fp?.knowledge_edited ?? []).filter((k) => !k.touched_after);
+  const kc = (fp?.knowledge_created ?? []).filter((k) => !k.touched_after && !k.others_during);
+  const ke = (fp?.knowledge_edited ?? []).filter((k) => !k.touched_after && !k.others_during);
   const pj = (fp?.projects ?? []).filter((p) => p.created_here && !p.touched_after && !p.other_sessions);
+  const delKn = on.has('kc') && kc.length > 0;
   return {
     log: true,
-    knowledge: on.has('kc') ? kc.map((k) => k.name) : [],
+    knowledge: delKn ? kc.map((k) => k.name) : [],
     revert: on.has('ke') ? ke.map((k) => k.name) : [],
     projects: on.has('pj') ? pj.map((p) => p.id) : [],
-    sources: on.has('src') ? (fp?.sources ?? []).map((x) => x.id) : [],
+    // 지식에 붙은 자료(linked)는 그 지식을 지울 때만 — 서버도 같은 규칙으로 거른다.
+    sources: on.has('src') ? (fp?.sources ?? []).filter((x) => x.linked === false || delKn).map((x) => x.id) : [],
+    tasks: on.has('tk') ? (fp?.tasks ?? []).map((t) => t.id) : [],
+    categories: on.has('ct') ? (fp?.categories ?? []).map((c) => c.id) : [],
     activities: on.has('ac'),
   };
 }
@@ -458,7 +479,8 @@ export async function confirmSessionPurgeMany(opts: {
 export interface PurgeResult {
   bytes: number; subagents: number; localFiles: number; localPending: string | null;
   knowledge_deleted: number; knowledge_reverted: number; knowledge_revert_failed: string[];
-  projects_deleted: number; folders_deleted: number; sources_deleted: number; activities_deleted: number;
+  projects_deleted: number; folders_deleted: number; sources_deleted: number;
+  tasks_deleted: number; categories_deleted: number; activities_deleted: number;
 }
 export async function purgeSessionRecord(sid: string, node: string, choice?: PurgeChoice | null): Promise<PurgeResult> {
   // ⚠ content-type 을 여기서 또 넣지 마라 — api() 가 'Content-Type' 을 넣는데 대소문자가 다른 키가 하나 더 있으면 fetch 가
@@ -476,6 +498,8 @@ export async function purgeSessionRecord(sid: string, node: string, choice?: Pur
     knowledge_reverted: Number(r?.knowledge_reverted) || 0,
     knowledge_revert_failed: Array.isArray(r?.knowledge_revert_failed) ? r.knowledge_revert_failed : [],
     projects_deleted: Number(r?.projects_deleted) || 0,
+    tasks_deleted: Number(r?.tasks_deleted) || 0,
+    categories_deleted: Number(r?.categories_deleted) || 0,
     activities_deleted: Number(r?.activities_deleted) || 0,
   };
 }
@@ -488,6 +512,8 @@ export function purgedToast(r: PurgeResult): string {
   if (r.knowledge_reverted) parts.push(`지식 ${r.knowledge_reverted}건 되돌림`);
   if (r.projects_deleted) parts.push(`프로젝트 ${r.projects_deleted}건 삭제` + (r.folders_deleted ? ` (폴더 ${r.folders_deleted}개 포함)` : ''));
   if (r.sources_deleted) parts.push(`자료 ${r.sources_deleted}건 삭제`);
+  if (r.tasks_deleted) parts.push(`태스크 ${r.tasks_deleted}건 삭제`);
+  if (r.categories_deleted) parts.push(`분류 ${r.categories_deleted}건 삭제`);
   if (r.activities_deleted) parts.push(`작업 기록 ${r.activities_deleted}건 삭제`);
   if (r.localFiles) parts.push(`이 박스의 대화 파일 ${r.localFiles}개도 삭제`);
   if (r.knowledge_revert_failed.length) parts.push(`⚠ 되돌릴 판을 못 찾은 지식 ${r.knowledge_revert_failed.length}건은 그대로예요`);

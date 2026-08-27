@@ -425,7 +425,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const denied = checkPurgeGate({ requester, owner });
     if (denied) throw new HttpError(denied.status, denied.message);
     res.setHeader("Cache-Control", "no-store");
-    res.json(await sessionFootprint(nodeId, sessionId));
+    res.json(await sessionFootprint(nodeId, sessionId, owner));
   }));
 
   // 고른 범위까지 함께 지운다(#1850 P2) — 대화 기록 + 이 세션이 만든 지식·프로젝트·작업 기록,
@@ -450,16 +450,25 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     //  지우는 통로가 된다(자기 세션 하나만 있으면 남의 지식 이름을 실어 보낼 수 있다).
     //  규칙 B(원준 2026-08-24) 도 여기서 **서버가** 지킨다 — 그 뒤에 남이 손댄 지식·프로젝트, 다른 세션이 붙은 프로젝트는
     //  화면이 못 고르게 하지만, 화면을 믿지 않고 한 번 더 거른다. 세션 하나를 버리며 남의 작업을 날릴 수는 없다.
-    const fp = await sessionFootprint(nodeId, sessionId);
-    const okCreated = new Set(fp.knowledge_created.filter((k) => !k.touched_after).map((k) => k.name));
-    const okEdited = new Set(fp.knowledge_edited.filter((k) => !k.touched_after).map((k) => k.name));
+    const fp = await sessionFootprint(nodeId, sessionId, owner);
+    //  '만든 것'은 첫 감사 행의 actor 가 주인인 것만 온다(sessionFootprint) — 남의 문서는 애초에 이 집합에 없다(#1850 P4).
+    //  others_during(창 안에 다른 사람 손이 닿은 것)은 규칙 B 의 반쪽 — 되돌리기·삭제 어느 쪽도 하지 않는다.
+    const okCreated = new Set(fp.knowledge_created.filter((k) => !k.touched_after && !k.others_during).map((k) => k.name));
+    const okEdited = new Set(fp.knowledge_edited.filter((k) => !k.touched_after && !k.others_during).map((k) => k.name));
     const okProjects = new Set(fp.projects.filter((p) => p.created_here && !p.touched_after && p.other_sessions === 0).map((p) => p.id));
-    const okSources = new Set(fp.sources.map((x) => x.id));
+    const knowledge = strArr(b.knowledge).filter((n) => okCreated.has(n));
+    //  자료는 지식에 묶인다 — 지식에 붙은 자료(linked)는 **그 지식을 실제로 지울 때만** 함께 지운다. 종전엔 "만든 지식 지우기"를
+    //  풀어도 자료가 지워져 인용은 남고 근거가 사라졌다. 안 붙은 자료(linked=false)는 그 자체로 대상.
+    const okSources = new Set(fp.sources.filter((x) => !x.linked || knowledge.length > 0).map((x) => x.id));
+    const okTasks = new Set(fp.tasks.map((t) => t.id));
+    const okCategories = new Set(fp.categories.map((c) => c.id));
     const sel: PurgeSelection = {
-      knowledge: strArr(b.knowledge).filter((n) => okCreated.has(n)),
+      knowledge,
       revert: strArr(b.revert).filter((n) => okEdited.has(n)),
       projects: numArr(b.projects).filter((i) => okProjects.has(i)),
       sources: numArr(b.sources).filter((i) => okSources.has(i)),
+      tasks: numArr(b.tasks).filter((i) => okTasks.has(i)),
+      categories: numArr(b.categories).filter((i) => okCategories.has(i)),
       activities: b.activities === true,
     };
 
