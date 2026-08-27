@@ -52,6 +52,13 @@ assert.ok(/if \[ "\$failed" -gt 0 \]/.test(src) && /exit 1/.test(src.slice(src.i
 // ── ⑥ 실제로 돌려 본다: lib 공유 모듈이 멤버 홈에 심기는가 ──────────────────
 //  ①~⑤ 는 텍스트 검사다. 그날 텍스트는 멀쩡했고 **결과**가 틀렸으므로, 스텁 환경에서 스크립트를
 //  진짜로 실행해 산출물을 본다.
+// ⑥ 은 bash + POSIX 스텁(getent·install)을 쓴다 — 윈도우에선 ①~⑤(텍스트 검사)까지만 하고 끝낸다.
+//  이 스크립트 자체가 게이트웨이(리눅스) 전용이라 윈도우에서 실행 검증할 대상이 애초에 없다.
+if (process.platform === "win32") {
+  console.log("member-kit-refresh.test OK — 윈도우: 정적 단언만 수행(⑥ 실행 검증은 POSIX 전용)");
+  process.exit(0);
+}
+
 const SB = mkdtempSync(join(tmpdir(), "lively-refresh-"));
 const HOMEDIR = join(SB, "home", "box_stub");
 

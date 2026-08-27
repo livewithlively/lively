@@ -84,8 +84,9 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 {
   const plan = installPlan(KIT);
   const dests = plan.map((e) => e.dest);
-  const hasLib = dests.includes(join("lib", "host-effects.mjs"));
-  const hasOpencode = dests.includes(join("hooks", "opencode-plugin.js"));
+  // dest 는 POSIX 논리 경로다 — join() 으로 기대값을 만들면 윈도우에서만 어긋난다(실측).
+  const hasLib = dests.includes("lib/host-effects.mjs");
+  const hasOpencode = dests.includes("hooks/opencode-plugin.js");
   const tests = dests.filter((d) => d.includes(".test."));
   (hasLib && hasOpencode && tests.length === 0)
     ? ok("M6 설치 계획: lib 공유모듈 포함 · .js 어댑터 포함 · 테스트 파일 제외")

@@ -63,10 +63,14 @@ export const SETUP_FILES = [
 // kit 트리(<repo>/kit 또는 릴리스 <release>/kit)에서 읽어 갈 실제 경로 + 설치 위치 쌍.
 //  훅은 <kitRoot>/hooks/, 공유 모듈은 <kitRoot>/setup/ 에 있다(발행번들 레이아웃은 다르므로
 //  user-install 이 자기 매핑을 따로 갖는다 — 공유되는 건 **목록**이지 레이아웃이 아니다).
+//  ⚠ dest 는 **논리 경로**라 항상 POSIX 구분자(`/`)로 쓴다 — join() 을 섞으면 윈도우에서만 hooks 는
+//   `hooks\\x` 인데 lib 는 `lib/y` 가 돼 두 축의 표기가 갈린다(실측: 그렇게 짰다가 윈도우 CI 에서만 M6 가
+//   깨졌다 — 이 레포가 이미 겪은 부류다). 소비자는 셸(`$h/.lively/$dest`)과 node(`join(LIVELY, dest)`)
+//   둘인데 양쪽 다 `/` 를 받는다. src 는 반대로 실제 파일을 열어야 하므로 join() 으로 플랫폼 경로를 쓴다.
 export function installPlan(kitRoot) {
   const root = resolve(kitRoot);
   return [
-    ...HOOK_SCRIPTS.map((f) => ({ src: join(root, "hooks", f), dest: join("hooks", f) })),
+    ...HOOK_SCRIPTS.map((f) => ({ src: join(root, "hooks", f), dest: `hooks/${f}` })),
     ...LIB_FILES.map((f) => ({ src: join(root, "setup", f.src), dest: f.dest })),
   ];
 }
