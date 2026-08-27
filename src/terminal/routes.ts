@@ -19,7 +19,7 @@ import { locateTranscript } from "./harness-io/locate.js";              // #1437
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js";
-import { convIdFromTranscriptPath, mayForgetOldState } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
+import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
@@ -1290,19 +1290,27 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       if (io0?.convIdOk && !io0.convIdOk(uuid)) throw new HttpError(400, `${io0.label} 의 대화 id 형식이 아닙니다`);
     }
     if (st0 && st0.owner !== idOf(userOf(req))) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
-    let ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
+    const rowOk = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
     // #1752 갭2 — 노드 세션의 전용 매핑(org_node_session_map): 이 uuid 가 곧 중앙 세션 기록(session_log)의 키라, 매핑이 있어야
     //  채팅창이 노드 오프라인에도 기록을 읽는다. #1791 뒤 노드 세션도 org_session_state 행이 있어 위 UPDATE 가 성공하지만,
     //  기록 열쇠는 세션 수명과 무관하게 남아야 하므로(행은 삭제·복원으로 사라진다) **둘 다** 쓴다. 행이 없는 옛 노드 세션은
     //  종전대로 매핑만. 노드 미확인(스냅샷 지연·게이트웨이 재시작 직후)이면 매핑은 다음 보고로(훅이 매 턴 다시 보고한다).
+    let mapOk = false;
     {
       const nodeId = nodeOfSession(req.params.id);
-      if (nodeId) {
-        const mapped = await setNodeSessionMap(req.params.id, nodeId, uuid, idOf(userOf(req)), transcriptPath).catch(() => false);
-        ok = ok || mapped;
-      }
+      if (nodeId) mapOk = await setNodeSessionMap(req.params.id, nodeId, uuid, idOf(userOf(req)), transcriptPath).catch(() => false);
     }
-    res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나, 박스 레코드도 노드 스냅샷도 없음(무해 — 다음 보고가 잇는다)
+    // ⚠ #2151 — 못 적었으면 **200 으로 답하지 않는다.** 훅은 응답 본문이 아니라 HTTP 상태(`r.ok`)만 보고
+    //  1회성 dedup 플래그(`<box>.<uuid>.mapped`)를 쓴다. 종전의 `200 {ok:false}` 는 그래서 **실패를 성공으로
+    //  기록**해, 그 (box, uuid) 조합을 영원히 다시 보고하지 않게 만들었다 = 그 세션은 영구 무매핑 →
+    //  복원이 늘 후보 picker(2026-08-27 실측: 이 계정의 복원 가능 claude 세션 124개 중 51개가 이 상태였다).
+    //  '박스 행이 없다'는 거부가 아니라 **아직 없다**이다 — 노드 세션은 게이트웨이가 create 를 릴레이한 뒤
+    //  mirrorNodeSession 으로 행을 적는데, 노드의 pane 은 그보다 먼저 떠서 SessionStart 훅이 1초 안에 보고한다.
+    //  그 창에 걸리면 박스 행도 노드 스냅샷도 아직 없다. 그러니 재시도 가능한 상태로 답한다 —
+    //  훅이 60초 쿨다운 뒤 다음 툴 사용에 다시 보고하고, 그때는 행이 있다(/active 와 같은 규약).
+    //  판정 규칙은 sessions/conv-mapping.ts 가 쥔다(#2122 의 매핑 유실 규칙과 같은 자리 — 표로 못박혀 있다).
+    if (mappingReportStatus(rowOk, mapOk) !== 200) throw new HttpError(404, "이 세션의 상태 기록이 아직 없습니다 — 잠시 뒤 다시 보고하세요");
+    res.json({ ok: true });
   }));
 
   // #1059 — claude SessionEnd 훅이 **사용자 정상 종료**(/exit·Ctrl-D=prompt_input_exit, logout)를 보고한다. 이 표시가 찍힌

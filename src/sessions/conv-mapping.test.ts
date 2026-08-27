@@ -4,7 +4,7 @@
 //        ② 매핑이 어딘가에 확실히 남았을 때만 옛 desired-state 를 지운다(박스 세션엔 옛 행이 유일한 사본).
 // 실행: npm run build && node dist/sessions/conv-mapping.test.js
 import assert from "node:assert/strict";
-import { convIdFromTranscriptPath, mayForgetOldState } from "./conv-mapping.js";
+import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "./conv-mapping.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -89,6 +89,26 @@ t("[15] ★ 매핑은 있는데 어디에도 못 남겼으면 **지우지 않는
 
 t("[16] 둘 다 성공이면 당연히 지워도 된다", () => {
   assert.equal(mayForgetOldState(UUID, true, true), true);
+});
+
+// ── ③ 매핑 보고의 응답 규약(#2151) ──────────────────────────────────────────────
+//  보고자(훅)는 응답 **본문을 읽지 않는다** — HTTP 상태만 보고 (세션, 대화)당 1회성 완료 표식을 쓴다.
+//  그래서 '어디에도 못 적었다'를 2xx 로 답하면 그 조합은 영영 다시 보고되지 않는다(= 영구 무매핑 → 늘 picker).
+//  2진 조합 전수(= 경계 전수).
+t("[17] 행에 적혔으면 성공", () => {
+  assert.equal(mappingReportStatus(true, false), 200);
+});
+
+t("[18] 내구 맵에만 적혔어도 성공(노드 세션)", () => {
+  assert.equal(mappingReportStatus(false, true), 200);
+});
+
+t("[19] 둘 다 적혔으면 당연히 성공", () => {
+  assert.equal(mappingReportStatus(true, true), 200);
+});
+
+t("[20] ★ 어디에도 못 적었으면 **2xx 로 답하지 않는다** — 재시도 가능한 상태여야 한다", () => {
+  assert.equal(mappingReportStatus(false, false), 404);
 });
 
 console.log(`\n${pass} passed`);
