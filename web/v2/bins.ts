@@ -10,7 +10,7 @@
 //  완전 삭제의 실제 삭제 범위는 #1850 P2~P4(session-actions·session-footprint-store) — 여기는 그 창을 부를 뿐이다.
 //  행 문법은 홈·확인할 것과 같은 토큰(v2-dot·bg-sel·line-row)만 쓴다 — 새 시각 언어를 만들지 않는다.
 import { api, el, relTime, sv, toast } from '../core.js';
-import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, fetchFootprint, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, eulReul, type Footprint } from '../session-actions.js';
+import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, fetchFootprint, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, splitFootprint, trashConfirmSkipped, eulReul, type Footprint } from '../session-actions.js';
 import { sessText } from './side.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 
@@ -344,14 +344,18 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
       detail.append(el('div', { class: 'act' },
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '복원', onclick: () => void restoreProject(it.p) }),
         el('button', { class: 'btn-text danger', type: 'button', text: '완전 삭제…', onclick: () => void purgeItems([it], `「${name}」${eulReul(name)} 완전히 지울까요?`) })));
-      // 안에 든 결과물(발자국) — 묶음 세션 것을 모아 이름까지. 못 읽으면 조용히 생략(추측 금지).
+      // 안에 든 결과물(발자국) — 묶음 세션 것을 모아 이름까지. 읽는 동안·실패도 말한다(빈 채로 두면 고장으로 읽힌다).
       const fpBox = el('div', { class: 'fp' });
       detail.append(fpBox);
-      const sids = it.bundle.map((s) => ({ sid: logSid(s), node: logNode(s) })).filter((x) => x.sid).slice(0, 5);
-      if (sids.length) void Promise.all(sids.map((x) => fpOf(x.sid, x.node))).then((fps) => {
-        if (ui.focus !== it.key || !aside.contains(fpBox)) return;
-        paintFp(fpBox, fps.filter((x): x is Footprint => !!x));
-      });
+      const sids = it.bundle.map((s) => ({ sid: logSid(s), node: logNode(s) })).filter((x) => x.sid).slice(0, 10);
+      if (sids.length) {
+        fpBox.append(el('p', { class: 'meta', text: '안에 든 지식·자료를 확인하는 중…' }));
+        void Promise.all(sids.map((x) => fpOf(x.sid, x.node))).then((fps) => {
+          if (ui.focus !== it.key || !aside.contains(fpBox)) return;
+          fpBox.replaceChildren();
+          paintFp(fpBox, fps.filter((x): x is Footprint => !!x), { logs: sids.length, failed: fps.filter((x) => !x).length });
+        });
+      } else fpBox.append(el('p', { class: 'meta', text: '함께 들어간 세션에 중앙 대화 기록이 없어요 — 지워도 지식·자료 변화가 없어요.' }));
     } else {
       const s = it.s;
       detail.append(
@@ -364,35 +368,60 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
       const sid = logSid(s);
       const fpBox = el('div', { class: 'fp' });
       detail.append(fpBox);
-      if (sid) void fpOf(sid, logNode(s)).then((fp) => {
-        if (ui.focus !== it.key || !aside.contains(fpBox)) return;
-        if (fp) paintFp(fpBox, [fp]);
-        else fpBox.append(el('p', { class: 'meta', text: '이 세션이 남긴 것은 찾지 못했어요.' }));
-      });
-      else fpBox.append(el('p', { class: 'meta', text: '중앙 대화 기록이 없는 세션이에요 — 지워도 기록·지식 변화가 없어요.' }));
+      if (sid) {
+        fpBox.append(el('p', { class: 'meta', text: '이 세션이 남긴 것을 확인하는 중…' }));
+        void fpOf(sid, logNode(s)).then((fp) => {
+          if (ui.focus !== it.key || !aside.contains(fpBox)) return;
+          fpBox.replaceChildren();
+          paintFp(fpBox, fp ? [fp] : [], { logs: 1, failed: fp ? 0 : 1 });
+        });
+      } else fpBox.append(el('p', { class: 'meta', text: '중앙 대화 기록이 없는 세션이에요 — 지워도 기록·지식 변화가 없어요.' }));
     }
     box.append(detail);
     aside.replaceChildren(box);
   };
-  // 발자국 → 곁칸 목록. "지우면 무엇이 함께 정리되나"를 창을 열기 전에 보여 준다(실제 선택은 확인창에서).
-  const paintFp = (boxEl: HTMLElement, fps: Footprint[]) => {
-    const kc = new Map<string, string>(); const ke = new Map<string, string>(); let src = 0, acts = 0, tk = 0, ct = 0;
-    for (const fp of fps) {
-      for (const k of fp.knowledge_created) kc.set(k.name, k.title || k.name);
-      for (const k of fp.knowledge_edited) ke.set(k.name, k.title || k.name);
-      src += fp.sources.length; acts += fp.activities; tk += (fp.tasks || []).length; ct += (fp.categories || []).length;
+  // 발자국 → 곁칸. **확인창과 똑같은 판정(splitFootprint)** 으로 세 단락을 그린다 — 지워지는 것 / 이전으로 돌아가는 것 /
+  //  남는 것(이유까지). 원준 2026-08-27: "삭제하면 어떤 지식·자료가 삭제되고 바뀌는지 제대로 안 보인다" — 개수 요약이
+  //  아니라 **이름과 결과**를 창을 열기 전에 보여 준다. 판정 함수를 공유하므로 곁칸과 확인창이 어긋날 수 없다.
+  const paintFp = (boxEl: HTMLElement, fps: Footprint[], meta?: { logs: number; failed: number }) => {
+    // 못 읽은 세션이 있으면 정직하게 — 빈 목록을 '없다'로 단언하지 않는다.
+    if (meta && meta.failed > 0 && !fps.length) {
+      boxEl.append(el('p', { class: 'meta', text: '안에 든 것을 확인하지 못했어요 — [완전 삭제…]를 누르면 창에서 다시 확인해요.' }));
+      return;
     }
-    if (!kc.size && !ke.size && !src && !acts && !tk && !ct) { boxEl.append(el('p', { class: 'meta', text: '만든 지식·자료·작업 기록은 없어요.' })); return; }
-    boxEl.append(el('h5', { text: '완전히 지우면 함께 정리되는 것' }));
-    for (const [, t] of [...kc].slice(0, 5)) boxEl.append(sideLi(null, t, '만든 지식'));
-    if (kc.size > 5) boxEl.append(el('p', { class: 'meta', text: `만든 지식 외 ${kc.size - 5}건` }));
-    for (const [, t] of [...ke].slice(0, 3)) boxEl.append(sideLi(null, t, '이전으로 되돌림'));
-    if (ke.size > 3) boxEl.append(el('p', { class: 'meta', text: `고친 지식 외 ${ke.size - 3}건` }));
-    if (src) boxEl.append(sideLi(null, '원본 자료', `${src}건`));
-    if (tk) boxEl.append(sideLi(null, '만든 태스크', `${tk}건`));
-    if (ct) boxEl.append(sideLi(null, '만든 분류', `${ct}건`));
-    if (acts) boxEl.append(sideLi(null, '작업 기록', `${acts}건`));
-    boxEl.append(el('p', { class: 'meta', text: '남길 것은 [완전 삭제…]를 누른 창에서 고를 수 있어요.' }));
+    const { groups, keep } = splitFootprint(fps);
+    const li = (label: string, value: string) => boxEl.append(sideLi(null, label, value));
+    const items = (kind: string, cap: number, value: string): number => {
+      const g = groups.find((x) => x.kind === kind);
+      if (!g) return 0;
+      if (g.items.length) {
+        for (const x of g.items.slice(0, cap)) li(x.label, value);
+        if (g.items.length > cap) boxEl.append(el('p', { class: 'meta', text: `외 ${g.items.length - cap}건 ${value}` }));
+      } else li(g.title.replace(/ 지우기$/, ''), value);
+      return g.count;
+    };
+    // ① 지워지는 것 — 대화 기록부터(이 흐름의 출발점), 그다음 만든 것들 이름으로.
+    boxEl.append(el('h5', { text: '완전히 지우면 사라지는 것' }));
+    if (meta?.logs) li(meta.logs > 1 ? `대화 기록 ${meta.logs}개 세션` : '이 세션의 대화 기록', '파기');
+    const delN = items('kc', 5, '지식 삭제') + items('src', 3, '자료 삭제') + items('tk', 3, '태스크 삭제') + items('ct', 2, '분류 삭제') + items('ac', 0, '작업 기록 삭제');
+    // ② 이전으로 돌아가는 것 — 고친 지식은 지우는 게 아니라 이 세션이 고치기 전 내용으로.
+    const ke = groups.find((x) => x.kind === 'ke');
+    if (ke) {
+      boxEl.append(el('h5', { text: '이 세션이 고치기 전으로 돌아가는 것' }));
+      for (const x of ke.items.slice(0, 4)) li(x.label, '되돌림');
+      if (ke.items.length > 4) boxEl.append(el('p', { class: 'meta', text: `외 ${ke.items.length - 4}건 되돌림` }));
+    }
+    // ③ 남는 것 — 남이 손댄 것(이유), 그리고 폴더의 파일·커밋.
+    if (keep.length) {
+      boxEl.append(el('h5', { text: '남는 것' }));
+      for (const k of keep.slice(0, 4)) boxEl.append(el('div', { class: 'li' }, el('span', { class: 'n', text: k.label, title: k.label }), el('span', { class: 'sp' }), el('span', { class: 'v keep', text: k.why })));
+      if (keep.length > 4) boxEl.append(el('p', { class: 'meta', text: `외 ${keep.length - 4}건 남아요` }));
+    }
+    if (!delN && !ke && !keep.length) {
+      boxEl.append(el('p', { class: 'meta', text: '이 세션이 만든 지식·자료·작업 기록은 찾지 못했어요 — 대화 기록만 지워져요.' }));
+      return;
+    }
+    boxEl.append(el('p', { class: 'meta', text: (meta && meta.failed > 0 ? `세션 ${meta.failed}개는 확인하지 못했어요. ` : '') + '남길 것은 [완전 삭제…] 창에서 체크로 고를 수 있어요.' }));
   };
 
   const paint = () => { paintChips(); paintTable(); paintBar(); paintAside(); };

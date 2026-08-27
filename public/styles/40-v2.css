@@ -1741,4 +1741,6 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-side-detail .li a.n:hover { color: var(--blue); }
 .v2-bin-side-detail .li .sp { flex: 1; }
 .v2-bin-side-detail .li .v { flex: none; font-size: 11.5px; color: var(--muted); }
+.v2-bin-side-detail .li .v.keep { color: var(--mint-deep); max-width: 46%; white-space: normal; text-align: right; line-height: 1.4; }
+.v2-bin-side-detail .fp h5:first-child { margin-top: 12px; }
 .v2-bin-side-detail .act, .v2-bin-side-sum .act { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
