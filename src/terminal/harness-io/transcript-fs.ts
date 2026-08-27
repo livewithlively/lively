@@ -13,8 +13,9 @@
 //   CLAUDE_CONFIG_DIR·공유 홈)에 있고, 그 경로를 멤버 uid 로 바꾸면 되레 못 읽는 자리(게이트웨이 소유 프로필)가 생긴다.
 //   중계 배포만 파일이 '다른 호스트'다 — 갈아끼울 이유가 있는 곳만 갈아끼운다.
 import fsp from "node:fs/promises";
+import path from "node:path";
 import { memberExecConfigured } from "../terminal-isolation.js";
-import { memberStat, memberReadRange, memberNodeJson } from "../terminal-member-fs.js";
+import { memberStat, memberReadRange, memberNodeJson, memberLs } from "../terminal-member-fs.js";
 import { findPrevTranscript } from "../terminal-transcript.js";
 import { fileReader, prefetchReader, type ByteReader } from "./window.js";
 
@@ -25,6 +26,10 @@ export interface TranscriptFs {
   read<T>(file: string, size: number, fn: (r: ByteReader) => Promise<T>): Promise<T>;
   /** 이 파일이 맥락 압축(compact_boundary)으로 시작하면 압축 전 대화 uuid — claude 규약(terminal-transcript.findPrevTranscript). */
   prevTranscript(file: string): Promise<string | null>;
+  /** 이 폴더의 **일반 파일** 이름+mtime(ms). 못 읽으면 빈 배열 — '없다'와 '못 본다'를 구별하지 않는다(호출부가 폴백을 쓴다).
+   *  왜 필요한가: 매핑(대화 id)이 아직 없는 갓 뜬 세션은 규약 경로를 만들 수 없어 **그 폴더에서 방금 자란 파일**을
+   *  찾아야 한다(session-outbox 의 에코 확인). 중계 배포에선 그 폴더가 노드의 멤버 홈이라 로컬 readdir 이 빈손이다. */
+  listDir(dir: string): Promise<Array<{ name: string; mtimeMs: number }>>;
 }
 
 export const localTranscriptFs: TranscriptFs = {
@@ -36,6 +41,16 @@ export const localTranscriptFs: TranscriptFs = {
     try { return await fn(fileReader(fh)); } finally { await fh.close(); }
   },
   prevTranscript: findPrevTranscript,
+  async listDir(dir) {
+    let names: string[] = [];
+    try { names = await fsp.readdir(dir); } catch { return []; }
+    const out: Array<{ name: string; mtimeMs: number }> = [];
+    for (const name of names) {
+      try { const s = await fsp.stat(path.join(dir, name)); if (s.isFile()) out.push({ name, mtimeMs: s.mtimeMs }); }
+      catch { /* 그새 사라짐 — 다음 */ }
+    }
+    return out;
+  },
 };
 
 // findPrevTranscript 와 같은 규칙을 **멤버 실행환경에서** 돌리는 node 한 줄(고정 리터럴 · 값은 stdin JSON).
@@ -71,6 +86,11 @@ export function memberTranscriptFs(osUser: string): TranscriptFs {
       } catch { prev = null; }
       prevCache.set(key, prev);
       return prev;
+    },
+    async listDir(dir) {
+      // memberLs 가 이미 그 멤버 uid 로 도는 한 줄(LS_JS)로 name·type·mtime 을 준다 — 여기서 왕복을 새로 만들지 않는다.
+      try { return (await memberLs(osUser, dir)).filter((e) => e.type === "file").map((e) => ({ name: e.name, mtimeMs: e.mtime })); }
+      catch { return []; }
     },
   };
 }

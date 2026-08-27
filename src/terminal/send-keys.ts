@@ -49,6 +49,25 @@ export function sendKeysPlan(id: string, text: string, bin: string): SendKeysPla
 }
 
 /**
+ * 존재 확인(has-session) 단계에서 실패했다 = **한 글자도 안 들어갔다** (#2154).
+ *
+ *  왜 따로 두나: 이 함수의 실패는 두 종류인데 결과가 정반대다. 존재 확인에서 죽었으면 아무것도 안 갔으니
+ *  **그대로 다시 보내도 안전**하고, 글자를 싣기 시작한 뒤에 죽었으면 입력칸에 반쪽이 남아 있을 수 있어
+ *  **다시 보내면 안 된다**(이 파일과 session-outbox 머리말의 '중복을 만들지 않는다').
+ *  종전엔 호출자가 그 둘을 구별할 수 없어 둘 다 실패로 버렸다 — 실측 2026-08-27: 노드 채널이 순간 빈
+ *  `has-session … node channel unavailable` 하나에 사람의 지시("자꾸 매니지드 클로드코드 tui 맨아래
+ *  프롬프트 입력 사라져…")가 통째로 사라졌다. `cause` 는 원래의 tmux 오류다(gone 확답 판정에 쓴다).
+ */
+export class SendKeysNotStarted extends Error {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "SendKeysNotStarted";
+    this.cause = cause;
+  }
+}
+
+/**
  * 이 호스트의 mux 세션에 텍스트를 넣고 제출한다. 세션이 없으면 throw(호출자가 error 로 보고한다).
  *
  * ⚠ 인가는 하지 않는다 — 게이트웨이 로컬 호출은 크론/관리세션 해소를 거쳐 오고, 노드 호출은
@@ -57,7 +76,9 @@ export function sendKeysPlan(id: string, text: string, bin: string): SendKeysPla
 export async function sendKeysToSession(id: string, text: string): Promise<void> {
   const plan = sendKeysPlan(id, text, TMUX_BIN);
   if (!plan.oneLine) throw new Error("주입할 텍스트가 비어 있습니다");
-  await tmux(["has-session", "-t", id]);          // 부재면 throw — 없는 세션에 키를 흘리지 않는다
+  // 부재면 throw — 없는 세션에 키를 흘리지 않는다. 여기서 죽으면 **한 글자도 안 갔다**(SendKeysNotStarted).
+  try { await tmux(["has-session", "-t", id]); }
+  catch (e) { throw new SendKeysNotStarted(e); }
   for (const argv of plan.keys) await tmux(argv); // 청크 순서 = 글자 순서
   await new Promise((r) => setTimeout(r, injectFlushMs(plan.oneLine.length)));
   await tmux(plan.enter);
