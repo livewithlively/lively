@@ -195,8 +195,10 @@ export const workspaceRegistryCapabilities: Capability[] = [
     }),
 
   restWork("workspace_delete", "워크스페이스 보관(삭제)",
-    "워크스페이스를 보관(archive)한다(owner 전용) — 스위처·접근에서 사라지지만 **데이터는 지우지 않는다**" +
-    "(복구는 관리자가 등록부 state 를 되돌리면 된다. 물리 삭제는 v1 범위 밖 — 파괴 반경이 워크스페이스 전체라 사람 손으로만). primary 는 보관할 수 없다.",
+    "워크스페이스를 보관(archive)한다 — 스위처·접근에서 사라지지만 **데이터는 지우지 않는다**" +
+    "(복구는 관리자가 등록부 state 를 되돌리면 된다. 물리 삭제는 v1 범위 밖 — 파괴 반경이 워크스페이스 전체라 사람 손으로만). " +
+    "**나 혼자 있는 워크스페이스만 보관할 수 있다**(owner 전용, #1875 D5'): 함께 쓰는 사람이 있으면 보관은 막히고 " +
+    "`workspace_leave`(나가기)만 열린다 — 보관은 남은 사람들의 접근까지 함께 끊기 때문이다. primary 는 보관할 수 없다.",
     [{ method: "POST", paths: ["/api/ui/me/workspaces/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
@@ -204,6 +206,16 @@ export const workspaceRegistryCapabilities: Capability[] = [
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary(기존 박스 워크스페이스)는 보관할 수 없습니다");
       await requireOwner(ws, id);
+      // #1875 D5' (2026-08-27, 장원준) — **함께 쓰는 사람이 있으면 치우는 조작은 없다. 나가기만 있다.**
+      //  보관은 «내 목록에서 숨기기»가 아니라 등록부 state 를 내리는 것이라 **모두의 접근이 끊긴다**.
+      //  owner 라는 자격이 남의 자료를 남의 동의 없이 닫을 권한까지 주지는 않는다는 것이 이 결정이다.
+      //  판정은 역할이나 저장된 kind 가 아니라 **지금 인원수**다(#1875 D1 과 같은 축).
+      const n = await countWorkspaceMembers(ws.id);
+      if (n >= 2) {
+        throw new HttpError(400,
+          `함께 쓰는 분이 ${n - 1}명 있어 이 워크스페이스는 보관할 수 없습니다 — ` +
+          "나만 빠지려면 workspace_leave(나가기)를 쓰고, 치우려면 구성원이 모두 나간 뒤에 하세요.");
+      }
       await archiveWorkspace(ws.id);
       // 보관된 워크스페이스로 가는 초대는 갈 곳이 없다 — 함께 거둬야 받는 사람 화면에 유령이 남지 않는다.
       const revoked = await revokeInvitesForWorkspace(ws.id, actorOf(user));
@@ -247,7 +259,9 @@ export const workspaceRegistryCapabilities: Capability[] = [
       await requireOwner(ws, id);
       const memberId = String(input.member_id ?? "").trim();
       if (!memberId) throw new HttpError(400, "member_id 가 필요합니다");
-      if (memberId === ws.owner_member) throw new HttpError(400, "만든 사람(owner)은 뺄 수 없습니다 — 워크스페이스를 보관하세요");
+      // #1875 D5' — 종전 안내("워크스페이스를 보관하세요")는 이제 거짓이다: 팀은 보관 자체가 막힌다.
+      if (memberId === ws.owner_member) throw new HttpError(400,
+        "만든 사람(owner)은 뺄 수 없습니다 — 구성원이 모두 나간 뒤에 보관할 수 있습니다");
       await removeWorkspaceMember(ws.id, memberId);
       const n = await countWorkspaceMembers(ws.id);
       return { workspace: ws.slug, members: await listWorkspaceMembers(ws.id), member_count: n, kind_effective: kindEffective(n) };
@@ -255,6 +269,29 @@ export const workspaceRegistryCapabilities: Capability[] = [
       slug: z.string().describe("팀 워크스페이스 slug"),
       member_id: z.string().describe("뺄 멤버 id"),
     }),
+
+  restWork("workspace_leave", "워크스페이스 나가기",
+    "함께 쓰는 워크스페이스에서 **나 하나만** 빠진다(#1875 D5') — 워크스페이스와 그 안의 지식·프로젝트는 그대로 남는다. " +
+    "보관(workspace_delete)과 **서로 배타**다: 인원이 2명 이상이면 보관이 막히고 이것만 열리며, 혼자면 반대다. " +
+    "만든 사람(owner)은 아직 나갈 수 없다 — 나가면 아무도 관리할 수 없는 «주인 없는 팀»이 남기 때문이고, " +
+    "주인 넘기기는 후속 과업(#1971)이 만든다. 다시 들어오려면 owner 의 초대(workspace_invite)를 받아야 한다.",
+    [{ method: "POST", paths: ["/api/ui/me/workspaces/leave"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = requireMember(user);
+      requireRegistry();
+      const ws = await findWs(input.slug);
+      if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary 는 명부가 없습니다 — 박스 멤버 전원이 접근합니다");
+      if (!(await getWorkspaceMemberRole(ws.id, id))) throw new HttpError(403, "이 워크스페이스의 구성원이 아닙니다");
+      const n = await countWorkspaceMembers(ws.id);
+      if (n < 2) throw new HttpError(400, "혼자 쓰는 워크스페이스입니다 — 나가기 대신 보관(workspace_delete)하세요");
+      // 만든 사람이 빠지면 초대·이름변경·보관을 할 사람이 없어진다. 반쯤 처리하지 않고 막고 이유를 말한다.
+      if (id === ws.owner_member) throw new HttpError(400,
+        "만든 사람은 그냥 나갈 수 없습니다 — 나가면 아무도 이 워크스페이스를 관리할 수 없게 됩니다. " +
+        "먼저 다른 분을 owner 로 세우거나(workspace_member_add role=owner), 구성원이 모두 나간 뒤에 보관하세요.");
+      await removeWorkspaceMember(ws.id, id);
+      const left = await countWorkspaceMembers(ws.id);
+      return { left: ws.slug, member_count: left, kind_effective: kindEffective(left) };
+    }, { slug: z.string().describe("나갈 워크스페이스 slug") }),
 
   // ── #1875 구성원 초대 ─────────────────────────────────────────────────────
   //  종전에 사람을 부르는 화면은 매니지드 관리페이지(app.lvly.io)에만 있었고, 게이트웨이에는
