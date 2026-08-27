@@ -4,7 +4,7 @@
 //  문구는 원준님 교정 31건 반영본. 새로 쓴 연결부는 [새문구] 주석. 상태는 sessionStorage(진행)·localStorage(끝남 표식).
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
-import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
+import { authUploadProgress, upDropZone, upFromInput } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
 //  #1879 — 외부 앱을 **실제로** 잇는다. 잇는 길은 새로 만들지 않고 이미 깎아 둔 한 곳을 그대로 쓴다:
@@ -1049,7 +1049,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         '폴더째 끌어다 놓으셔도 됩니다. 받는 즉시 읽기 시작해서, 다음 단계를 하시는 동안 정리해 둡니다.')
         + `<div class="ob-drop ${S.upN ? 'ob-has' : ''}" id="upZone">
             <span class="ob-drop-t" id="upZoneT">${S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요'}</span>
-            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더 정리도, 이름 짓기도 필요 없습니다.')}</span>
+            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더째 끌어다 놓으셔도 됩니다. 정리도, 이름 짓기도 필요 없어요.')}</span>
             <span class="ob-drop-pick" id="upPick"></span>
           </div>
           <button class="ob-btn ob-btn-pri" id="fGo" ${S.upN ? '' : 'disabled'}>${S.upN ? `${S.upN}개 올리고 계속` : '계속'}</button>
@@ -1060,7 +1060,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           const t = $('#upZoneT', el), d = $('#upZoneD', el), go = $('#fGo', el);
           if (!t || !d) return;
           t.textContent = S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요';
-          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더 정리도, 이름 짓기도 필요 없습니다.');
+          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더째 끌어다 놓으셔도 됩니다. 정리도, 이름 짓기도 필요 없어요.');
           zone.classList.toggle('ob-has', !!S.upN);
           if (go) { go.disabled = !S.upN; go.textContent = S.upN ? `${S.upN}개 올리고 계속` : '계속'; }
         };
@@ -1081,12 +1081,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           renderSB();
         };
         upDropZone(zone, zone, (items) => void sendAll(items));
-        // 고르기는 **공용 부품 하나**를 쓴다(upControl) — 버튼 한 개를 누르면 [파일 올리기 / 폴더 올리기] 가 뜬다.
-        //  구글 드라이브·슬랙과 같은 문법이고, 무엇보다 이 레포의 규칙이다(files-upload.ts: "새 업로드 코드 금지").
-        //  ⚠ 버튼을 둘로 펴 보았다가 되돌렸다(원준님 2026-08-27) — 고르는 방법 하나에 버튼을 두 개 두는 화면은 없다.
-        //   폴더가 안 보이던 것은 메뉴가 아니라 **그 메뉴가 이 화면에서 안 떴는지**를 봐야 할 문제였다.
-        const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub ob-btn-inline', label: '올릴 것 고르기' });
-        $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 숨김 input 도 DOM 에 있어야 click 이 먹는다
+        // 고르기는 **한 번에 끝난다** — 묻지 않는다(원준님 2026-08-27: "모달로 또 떠서 고르라는데").
+        //  ⚠ 브라우저 제약은 그대로다: 폴더는 `webkitdirectory` 입력으로만 고를 수 있어 입력이 둘이어야 한다.
+        //   하지만 그건 **우리 사정**이지 사람에게 물을 일이 아니다. 그래서 입력 둘을 숨겨 두고, 화면에는
+        //   [파일 고르기] 하나만 둔다 — 폴더째는 **끌어다 놓기**가 받는다(드롭은 파일·폴더를 함께 받는다).
+        //   프로젝트 화면의 팝오버 메뉴(upControl)는 파일 브라우저의 문법이라 이 자리에는 맞지 않는다.
+        const fileIn = document.createElement('input');
+        fileIn.type = 'file'; fileIn.multiple = true; fileIn.style.display = 'none';
+        fileIn.addEventListener('change', () => { void sendAll(upFromInput(fileIn)); fileIn.value = ''; });
+        const pickBtn = document.createElement('button');
+        pickBtn.type = 'button'; pickBtn.className = 'ob-btn ob-btn-sub ob-btn-inline'; pickBtn.textContent = '파일 고르기';
+        pickBtn.onclick = (ev) => { ev.stopPropagation(); fileIn.click(); };
+        $('#upPick', el).append(pickBtn, fileIn);
         // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
         $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
         $('[data-skip]', el).onclick = () => goScene('sources');
