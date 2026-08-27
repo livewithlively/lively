@@ -16,6 +16,7 @@ import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
+import { mappingReportStatus } from "../sessions/conv-mapping.js";   // #2151 — 매핑 보고 응답 규약(못 적었으면 2xx 로 답하지 않는다)
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
@@ -26,6 +27,8 @@ import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
+// #2116 — 죽은 세션 메타의 '남에게도 보이나' 판정을 다른 게이트와 **같은 술어**로 맞춘다(cwd 축).
+const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, liveNodes, nodeOfSession, nodeSessionHarness, nodeAgentStale } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
@@ -451,7 +454,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         return !!alive;
       });
       if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge }); return; }
-      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       if (dead.kind !== "ok") throw new HttpError(403, "세션에 접근할 수 없습니다");
       // 🔴 #2108 — 스냅샷이 모르는 자리(ask)는 **노드에 확답을 구한다**(#835 '확답 only'). 부재는 죽음의 근거가
       //  아니다 — 상태 push 3초 주기 때문에 방금 만든 살아있는 세션이 그 창 동안 목록에서 빠진다.
@@ -474,7 +477,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  ⚠ sessionGone 은 tmux 가 "그런 세션 없다"고 **확답**할 때만 true 다(소켓 불통·타임아웃은 false) — 모르면
     //   종전 경로로 흘러 살아 있는 세션을 죽었다고 오판하지 않는다(#835 '확답 only').
     if (await sessionGone(id)) {
-      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       if (dead.kind === "ok") { res.json(dead.body); return; }
       if (dead.kind === "forbidden") throw new HttpError(403, "세션에 접근할 수 없습니다");
       // kind === "none" — 되살릴 근거(desired-state)가 없는 진짜 끝난 세션. 종전 흐름이 답한다.
@@ -484,7 +487,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  위 게이트가 tmux 확답을 못 받았을 때의 폴백이다(공유 게이트웨이가 그 세션의 tmux 서버 문맥 밖에 있는 경우 등).
       //  노출 범위는 복원 권한과 같게: 소유자·admin 만 desired-state 를 보고 되살릴 수 있고(canRestore),
       //  프로젝트 세션은 #452 로 전원 공개라 라벨까지는 보이되 복원은 소유자 몫으로 둔다.
-      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       if (dead.kind === "ok") { res.json(dead.body); return; }
       throw new HttpError(403, "세션에 접근할 수 없습니다");
     }
@@ -1234,19 +1237,23 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       if (io0?.convIdOk && !io0.convIdOk(uuid)) throw new HttpError(400, `${io0.label} 의 대화 id 형식이 아닙니다`);
     }
     if (st0 && st0.owner !== idOf(userOf(req))) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
-    let ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
+    const rowOk = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
     // #1752 갭2 — 노드 세션의 전용 매핑(org_node_session_map): 이 uuid 가 곧 중앙 세션 기록(session_log)의 키라, 매핑이 있어야
     //  채팅창이 노드 오프라인에도 기록을 읽는다. #1791 뒤 노드 세션도 org_session_state 행이 있어 위 UPDATE 가 성공하지만,
     //  기록 열쇠는 세션 수명과 무관하게 남아야 하므로(행은 삭제·복원으로 사라진다) **둘 다** 쓴다. 행이 없는 옛 노드 세션은
     //  종전대로 매핑만. 노드 미확인(스냅샷 지연·게이트웨이 재시작 직후)이면 매핑은 다음 보고로(훅이 매 턴 다시 보고한다).
+    let mapOk = false;
     {
       const nodeId = nodeOfSession(req.params.id);
-      if (nodeId) {
-        const mapped = await setNodeSessionMap(req.params.id, nodeId, uuid, idOf(userOf(req)), transcriptPath).catch(() => false);
-        ok = ok || mapped;
-      }
+      if (nodeId) mapOk = await setNodeSessionMap(req.params.id, nodeId, uuid, idOf(userOf(req)), transcriptPath).catch(() => false);
     }
-    res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나, 박스 레코드도 노드 스냅샷도 없음(무해 — 다음 보고가 잇는다)
+    // ⚠ #2151 — 못 적었으면 **200 으로 답하지 않는다.** 훅은 응답 본문이 아니라 HTTP 상태(`r.ok`)만 보고
+    //  1회성 dedup 플래그(`<box>.<uuid>.mapped`)를 쓴다. 종전의 `200 {ok:false}` 는 그래서 **실패를 성공으로
+    //  기록**해, 그 (box, uuid) 조합을 영원히 다시 보고하지 않게 만들었다 = 그 세션은 영구 무매핑 →
+    //  복원이 늘 후보 picker. '박스 행이 없다'는 거부가 아니라 **아직 없다**이다(노드 세션은 pane 이
+    //  mirrorNodeSession 보다 먼저 뜬다) → 재시도 가능한 상태로 답한다(/active 와 같은 규약).
+    if (mappingReportStatus(rowOk, mapOk) !== 200) throw new HttpError(404, "이 세션의 상태 기록이 아직 없습니다 — 잠시 뒤 다시 보고하세요");
+    res.json({ ok: true });
   }));
 
   // #1059 — claude SessionEnd 훅이 **사용자 정상 종료**(/exit·Ctrl-D=prompt_input_exit, logout)를 보고한다. 이 표시가 찍힌

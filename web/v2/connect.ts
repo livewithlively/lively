@@ -175,8 +175,12 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
       },
     }));
   } else if (st === 'off') {
-    acts.push(el('button', { class: 'btn btn-primary', type: 'button', text: svc.oauth ? '계정으로 연결' : '토큰으로 연결',
-      onclick: () => { if (svc.oauth) void startOAuth(svc, reload); else openToken(svc, reload); } }));
+    //  둘 다 되는 앱(#1881 GitHub)은 **계정 연결을 앞에 둔다** — 토큰은 직접 발급해야 하고 저장소도 못 고른다.
+    //   토큰 길은 남긴다(셀프호스팅·기존 사용자·앱을 아직 안 연 조직).
+    const app = !!(svc as any).appConnect;
+    acts.push(el('button', { class: 'btn btn-primary', type: 'button', text: (svc.oauth || app) ? '계정으로 연결' : '토큰으로 연결',
+      onclick: () => { if (svc.oauth || app) void startOAuth(svc, reload); else openToken(svc, reload); } }));
+    if (app && svc.token) acts.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '토큰으로 연결', onclick: () => openToken(svc, reload) }));
   } else if (!(org && org.admin)) {
     // 관리자 필요 — 눌러도 안 되는 버튼을 내밀지 않는다. 대신 **그대로 전달할 수 있는 문장**을 복사해 준다.
     //  ⚠ 관리자에게는 이 버튼을 주지 않는다 — 자기가 열 수 있는데 자기에게 부탁 문구를 복사시키는 꼴이 된다.
@@ -206,6 +210,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   if (svc.key === 'notion' && org && org.admin) settings.push(notionTeamCollectCard());
   //  #1881 G5 구글 — 관리자에게만. 슬랙처럼 켠 사람의 연결로 돌되, **무엇을 켜느냐가 곧 비용**이라 서비스를 고르게 한다.
   if (svc.key === 'google' && org && org.admin) settings.push(googleTeamCollectCard());
+  //  #1881 G10 GitHub — 연결한 사람에게만. 목록(내가 볼 수 있는 전부)과 **clone 가능 범위**(설치 때 고른 것)가
+  //   다르다는 사실을 이 카드가 드러낸다. 그 차이를 안 보여 주면 안 고른 레포를 골라 등록까지 성공한 뒤
+  //   clone 에서 실패한다 — 사용자는 원인을 알 수 없다.
+  if (svc.key === 'github' && st === 'on') settings.push(githubReposCard());
   if (svc.key === 'slack' && st === 'on') {
     settings.push(el('section', { class: 'cn-sec' },
       el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '이 앱의 설정' })),
@@ -238,6 +246,65 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
 }
 
 // ── 팀 자료로 모으기(#1881) — 슬랙 수집을 토글 하나로. 상태·토글·비공개 채널 안내를 한 카드에. ──
+// ── 연결된 저장소(#1881 G10) — "목록에 보이는 것"과 "clone 되는 것"의 경계를 드러낸다 ──────────────
+//  레포 목록은 user token(`/user/repos`)이라 내가 볼 수 있는 전부가 나오고, clone 은 installation token 이라
+//  설치 때 고른 것만 된다. 목록을 좁히는 건 답이 아니다(드롭다운은 제안이지 제약이 아니다 — #825).
+//  대신 **어느 것이 열려 있는지 표시하고**, 안 열린 걸 쓰려면 GitHub 설치 화면으로 보낸다.
+function githubReposCard(): HTMLElement {
+  const body = el('div', { class: 'cn-help' }, ...uiText('불러오는 중…'));
+  const box = el('section', { class: 'cn-sec' },
+    el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '연결된 저장소' })),
+    body);
+  const paint = async (): Promise<void> => {
+    let st: any, disc: any;
+    try {
+      st = await api('/api/ui/org/github/connect');
+      disc = await api('/api/ui/repos/discover', { method: 'POST', body: JSON.stringify({ host: 'github.com' }) }).catch(() => ({ options: [] }));
+    } catch (e) { body.replaceChildren(errorNote(e, '저장소 목록을 불러오지 못했습니다')); return; }
+
+    const open: string[] | null = Array.isArray(st?.open_repositories) ? st.open_repositories : null;
+    const openSet = new Set((open ?? []).map((x) => String(x).toLowerCase()));
+    const all = (disc?.options ?? []) as Array<{ full_path: string; private?: boolean }>;
+    const rows: HTMLElement[] = [];
+
+    if (open === null) {
+      //  알 수 없음 — 목록을 막지 않는다. 매니지드는 private key 가 CP 에 있어 여기서 못 물어볼 수 있다.
+      rows.push(el('p', { class: 'cn-help' }, ...uiText('어느 저장소가 열려 있는지 확인하지 못했습니다 — 아래 목록은 내 계정이 볼 수 있는 전부입니다.')));
+    } else {
+      rows.push(el('p', { class: 'cn-help' }, ...uiText(
+        open.length
+          ? `AI가 코드를 가져올 수 있는 저장소는 ${open.length}개입니다. 나머지는 목록에 보여도 가져오지 못합니다.`
+          : '아직 열어 준 저장소가 없습니다 — 아래 [저장소 고르기]에서 고르면 그때부터 코드를 가져올 수 있어요.')));
+    }
+
+    for (const r of all.slice(0, 40)) {
+      const isOpen = openSet.has(String(r.full_path).toLowerCase());
+      rows.push(el('div', { class: 'cn-repo-row' },
+        el('span', { class: 'v2-k', text: r.full_path }),
+        r.private ? el('span', { class: 'dm-tag', text: '비공개' }) : null,
+        open === null ? null
+          : el('span', { class: isOpen ? 'dm-tag dm-tag-ok' : 'dm-tag', text: isOpen ? '열림' : '안 열림' })));
+    }
+    if (all.length > 40) rows.push(el('p', { class: 'cn-help' }, ...uiText(`… 외 ${all.length - 40}개`)));
+
+    //  안 열린 저장소를 쓰려면 GitHub 설치 화면에서 추가해야 한다 — 우리 화면에서 할 수 있는 일이 아니다.
+    const add = el('button', {
+      class: 'btn btn-ghost btn-sm', type: 'button', text: '저장소 고르기 (GitHub에서)',
+      onclick: async () => {
+        try {
+          const r: any = await api('/api/ui/org/github/connect', { method: 'POST', body: JSON.stringify({}) });
+          if (r?.authorization_url) window.open(r.authorization_url, '_blank', 'noopener');
+          toast('GitHub 화면에서 저장소를 고르고 허용하면 이 목록에 반영됩니다');
+        } catch (e: any) { toast((e && e.message) || '열지 못했습니다', true); }
+      },
+    });
+    const refresh = el('button', { class: 'btn-text', type: 'button', text: '새로고침', onclick: () => void paint() });
+    body.replaceChildren(...rows, el('div', { class: 'cn-acts' }, add, refresh));
+  };
+  void paint();
+  return box;
+}
+
 function slackTeamCollectCard(): HTMLElement {
   const body = el('div', { class: 'cn-help' }, ...uiText('불러오는 중…'));
   const box = el('section', { class: 'cn-sec' },
@@ -476,8 +543,22 @@ function googleTeamCollectCard(): HTMLElement {
         (onlyCal ? 'AI가 일정을 읽을 수 있습니다.' : '바로 시작합니다.'))));
     }
     if (connected) {
+      // ★ 이미 가진 범위만 골라 놓고 누르면 구글 화면을 한 바퀴 돌고도 **아무것도 안 바뀐다** —
+      //  그런데 화면상으론 "허용 완료"라서 사람은 됐다고 믿는다(2026-08-27 실측: 두 번 돌았는데 캘린더가
+      //  안 열렸다. 캘린더 칸이 '아직 안 받았으니' 꺼진 채 시작하는데, 그걸 켜지 않고 버튼만 눌렀다).
+      //  넓힐 게 없으면 구글로 보내지 말고, 무엇을 체크해야 하는지 말한다.
+      const granted = (svc: string): boolean =>
+        svc === 'drive' ? !!drive.scope_ok : svc === 'gmail' ? !!gmail.scope_ok : !!cal.scope_ok;
+      const widenTargets = (): string[] => picked().filter((svc) => !granted(svc));
       extra.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '권한 넓히기',
         onclick: async () => {
+          const add = widenTargets();
+          if (add.length === 0) {
+            const rest = [!drive.scope_ok ? 'Google Drive 문서' : '', calOffered && !cal.scope_ok ? '캘린더 일정' : '']
+              .filter(Boolean).join(' · ');
+            toast(rest ? `위에서 ${rest} 을 체크한 뒤 눌러 주세요 — 지금은 넓힐 게 없어요` : '이미 다 허용돼 있어요', true);
+            return;
+          }
           try {
             const r: any = await api('/api/ui/org/google/collect/connect', { method: 'POST', body: JSON.stringify({ services: picked() }) });
             if (r && r.authorization_url) openConsent(r.authorization_url, () => void paint());
@@ -546,7 +627,10 @@ function backLink(): HTMLElement {
 //  곧 '동의가 끝났거나 그만뒀다'는 시점이라 그때 한 번만 다시 읽으면 충분하다.
 async function startOAuth(svc: Svc, reload: () => void): Promise<void> {
   try {
-    const r: any = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
+    //  #1881 G5 — GitHub 은 MCP 서버 행이 없어 공용 창구(/me/oauth/connect)를 못 탄다. 전용 op 가 설치+인가를
+    //   한 번에 여는 URL 을 준다(그 화면의 저장소 선택이 곧 접근 범위 선언이다).
+    const ep = (svc as any).appConnect ? '/api/ui/org/github/connect' : '/api/ui/me/oauth/connect';
+    const r: any = await api(ep, { method: 'POST', body: JSON.stringify((svc as any).appConnect ? {} : { server: svc.oauth }) });
     const url = r && (r.authorization_url || r.url); // 서버는 authorization_url 을 준다(me-logins 와 동일) — r.url 만 보던 v2 는 늘 실패했다(#1881)
     if (r && r.authorized) { toast('이미 연결돼 있어요'); reload(); return; }
     if (url) {

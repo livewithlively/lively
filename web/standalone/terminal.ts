@@ -584,6 +584,24 @@ export function paneMouseMode(st) {
  *  0/1 로 와도 믿지 않는다 — ConPTY 가 앱 출력을 정규화하는 뒤에서 psmux 가 모드를 추적한다는 검증이 없고, 틀린 0 을
  *  믿으면 살아있는 앱의 마우스를 끄는 이 버그가 그대로 재발한다(그 검증이 생기면 이 게이트를 좁혀라).
  *  구 노드 번들(mux 토큰 없음)은 '전부 빈 값' 지문으로 psmux 를 알아본다(captureSafeBackend 와 같은 축). */
+// ── 휠 폴백 래치 끊기 (#1943 후속) ─────────────────────────────────────────────
+// alt-screen 인데 클라 xterm 의 마우스 트래킹이 꺼져 있으면 xterm 은 휠을 ↑/↓ 키로 폴백한다(xterm 의 정상 설계).
+//  진짜 문제는 **그 상태에서 스스로 빠져나올 수 없다**는 것이다: 재동기 질의(handleTermData 의 드리프트 가드)는
+//  `isMouseReport(d)` 일 때만 거는데, 트래킹이 꺼져 있으면 xterm 은 리포트 대신 화살표를 보내므로 그 조건이
+//  **영영 성립하지 않는다** → 탭 전환·포커스·재연결 전까지 어긋난 채로 남는다(실측 2026-08-27: 강제로 한 번
+//  끈 뒤 휠·이동을 24초간 계속해도 복구 신호가 한 번도 안 나갔다).
+// 해법: 폴백이 **실제로 일어나는 그 순간**(휠 이벤트)에 상태를 물어 한 왕복으로 교정한다.
+//  왕복은 매니지드 실측 중앙값 30ms(최대 64ms)라 사용자가 체감하기 전에 돌아온다.
+// ⚠ 일반 화면(alt=false)의 휠은 폴백이 아니라 스크롤백 스크롤이다 — 건드리지 않는다.
+// ⚠ 마우스를 정말 안 쓰는 alt 앱(less 등)에서도 질의는 나가지만 응답이 '꺼짐'이라 no-op 이고, 스로틀로
+//   빈도가 묶인다(휠을 굴리는 동안 3초에 1회 이하 = display-message 한 번).
+export const WHEEL_RESYNC_GAP_MS = 3000;
+export function wheelResyncAction(s) {
+  if (!s || !s.alt) return 'skip';                            // 일반 화면 — 폴백이 아니다
+  if (s.mouseMode && s.mouseMode !== 'none') return 'skip';   // 리포트가 앱으로 나간다 — 정상
+  const since = Number.isFinite(s.sinceProbe) ? s.sinceProbe : Infinity;
+  return since >= WHEEL_RESYNC_GAP_MS ? 'probe' : 'throttle';
+}
 export function paneMouseKnown(st) {
   if (!st) return false;
   if (st.mux === 'psmux') return false;
@@ -622,9 +640,17 @@ export function applyPaneState(st) {
       // tmux 는 마우스 ON 이라는데 그 pane 에 앱이 없다 = 죽은 앱이 남긴 flag. 이 클라만 안 켜고 끝내면 tmux 의 잘못된
       //  진실은 그대로라 다른 클라·실 터미널 attach 는 계속 flood 를 받는다 → 서버에 pane 상태 복구를 요청한다(스로틀).
       if (st.mouseOn) requestMouseReset();
-      if (xtOn) term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l'); // 앱 off → 전 모드 해제
+      if (xtOn) {
+        // **왜** 껐는지를 남긴다(#1943 후속). 이 한 줄이 없어서 "휠이 화살표가 된다"의 트리거를 제보로만
+        //  추정해야 했다 — 끈 순간의 근거(셸 오인인지 flag 0 인지)가 진단에 남으면 한 번의 제보로 확정된다.
+        dlog('mouse', 'off ' + xtMode + ' ← ' + (isShellCmd(st.cmd) ? '포그라운드가 셸(cmd=' + st.cmd + ')' : 'tmux flag 전부 0')
+          + ' · any=' + (st.any ? 1 : 0) + ' btn=' + (st.btn ? 1 : 0) + ' std=' + (st.std ? 1 : 0)
+          + ' alt=' + (st.alt ? 1 : 0) + ' mux=' + (st.mux || '?'));
+        term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l'); // 앱 off → 전 모드 해제
+      }
     } else if (wantMode !== xtMode) {
       // 앱이 원하는 모드로 정확히 맞춘다(꺼져있었거나 다른 서브모드였거나). 다른 트래킹이 켜져있었으면 먼저 정리.
+      dlog('mouse', xtMode + ' → ' + wantMode + ' (cmd=' + (st.cmd || '?') + ' sgr=' + (st.sgr ? 1 : 0) + ')');
       let seq = xtOn ? '\x1b[?1000l\x1b[?1002l\x1b[?1003l' : '';
       if (st.std) seq += '\x1b[?1000h';
       if (st.btn) seq += '\x1b[?1002h';
@@ -2420,6 +2446,20 @@ export async function boot() {
     term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
   }
   term.open(host);
+  // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
+  //  xterm 의 휠 처리보다 먼저 보도록 capture 로 단다 — 판정은 이 시점의 버퍼·모드로 한다.
+  let lastWheelProbeAt = 0;
+  try {
+    host.addEventListener('wheel', () => {
+      let mouseMode = 'none', alt = false;
+      try { mouseMode = (term.modes && term.modes.mouseTrackingMode) || 'none'; } catch (_) { /* noop */ }
+      try { alt = !!(term.buffer && term.buffer.active && term.buffer.active.type === 'alternate'); } catch (_) { /* noop */ }
+      if (wheelResyncAction({ alt, mouseMode, sinceProbe: Date.now() - lastWheelProbeAt }) !== 'probe') return;
+      lastWheelProbeAt = Date.now();
+      dlog('mouse', '휠이 화살표로 폴백 중(alt + 트래킹 off) → 상태 재질의');
+      try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ }
+    }, { passive: true, capture: true });
+  } catch (_) { /* noop */ }
   // 클릭으로 링크 열기(#1541) — 두 경로를 캡처 단계에서 가로채 **클라이언트가** 연다(urlAtColumn 머리말).
   //  ⚠ 실측: 트래킹 pane(claude TUI)에선 클릭이 pty 로 릴레이돼 web-links(맨클릭)가 못 받고, TUI 자신의 링크
   //   확인창이 뜨며, OK 는 서버 안 open(1) — 게이트웨이 박스엔 브라우저가 없어 사용자에겐 무반응(구조적).

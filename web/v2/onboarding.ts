@@ -674,6 +674,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
+    local: null,            // #1879 내 컴퓨터 설치 — 'done'|'getting'|'later'
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
     drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
@@ -691,15 +692,63 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const canOf = () => DATA.CAN[jobOf()] || DATA.CAN[S.stage] || DATA.CAN['제품·기획'];
   const nick = () => S.nameSet && S.name ? S.name : '';
 
+  /* ── #1879 «내 컴퓨터에 잇기» 장면의 부품 ─────────────────────────────────────
+   *  게이트웨이 주소는 **지금 이 화면이 떠 있는 그 주소**다. 서버에 물어볼 필요가 없다(비관리자에겐
+   *   org_profile.gateway_url 이 가려지기도 한다 — 클래식 설치 가이드도 같은 값으로 접는다:
+   *   web/learn.ts drawInstallGuide 의 `profile.gateway_url || window.location.origin`).
+   *  `/cli` 는 게이트웨이가 **자기 주소를 구워** 내보내므로(kit/cli/bootstrap.sh 의 __LIVELY_GATEWAY__),
+   *   한 줄 안에 주소가 한 번만 들어가면 나머지는 스크립트가 안다.
+   */
+  const GW = String(location.origin || '').replace(/\/+$/, '');
+  /* ⚠ OS 토글을 두지 않는다. 사람이 고르게 하면 **고른 값과 실제로 받아지는 파일이 어긋날 수 있다** —
+   *  내려받기는 desktopLink()→pickAsset() 이 `desktopOs()` 로 고르지, 사람이 고른 값을 보지 않기 때문이다.
+   *  그래서 문구도 같은 판정을 쓴다. 셋으로 가른다(둘로 접으면 리눅스 사람에게 .dmg 라고 말하게 된다):
+   *   mac / win — 받아질 파일 이름을 그대로 말한다.
+   *   other(리눅스·판정불가) — desktopLink() 가 null 이라 [앱 받기]가 **릴리스 페이지**를 연다. 그러니
+   *    "파일이 내려받아진다"고 말하면 안 된다. 없는 자리를 가리키지 않는다. */
+  const kbd = (t) => `<kbd class="ob-kbd">${esc(t)}</kbd>`;
+  /** 복사 단추가 붙은 명령 한 줄. **사람이 손으로 타이핑하게 두지 않는다** — 오타 한 글자가 곧 막힘이다. */
+  function cmdBox(cmd) {
+    return `<div class="ob-cmd"><code>${esc(cmd)}</code><button type="button" class="ob-cmd-copy" data-copy="${esc(cmd)}">복사</button></div>`;
+  }
+  /** 복사 배선 — 클립보드가 막힌 자리(비 HTTPS·권한 거부)에서는 **글자를 선택해 준다**.
+   *  조용히 실패하면 사람은 붙여넣기가 안 되는 이유를 영영 모른다. */
+  function wireCopy(root) {
+    $$('.ob-cmd-copy', root).forEach((b) => b.onclick = async () => {
+      const txt = b.dataset.copy || '';
+      try {
+        await navigator.clipboard.writeText(txt);
+        const was = b.textContent; b.textContent = '복사됨'; b.classList.add('ob-on');
+        setTimeout(() => { b.textContent = was; b.classList.remove('ob-on'); }, 1600);
+      } catch (_) {
+        const code = b.parentElement && b.parentElement.querySelector('code');
+        if (code) { const r = document.createRange(); r.selectNodeContents(code); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+        toast('복사가 막혀 있어요 — 파랗게 선택해 뒀으니 ⌘/Ctrl + C 로 복사해 주세요.');
+      }
+    });
+  }
+  let localTimer = null;      // 설치 확인 폴링
+  let localBase = null;       // 장면에 들어올 때의 기준값(이미 참이면 전이를 볼 수 없다)
+  /** 이 사람 신원으로 라이블리 MCP 툴이 **실제로 성공 호출된 적 있나**(서버 자동판정).
+   *  true/false, 못 물었으면 null — 못 물은 것을 '아직 안 됐다'로 뭉개지 않는다. */
+  async function connectSignal() {
+    try {
+      const r: any = await api('/api/ui/me/onboarding');
+      const items = (r && r.status && r.status.items) || [];
+      const it = items.find((x) => x && x.key === 'connect');
+      return !!(it && it.state === 'done' && it.by === 'auto');
+    } catch (_) { return null; }
+  }
+
 
   let pendingChips = null;   // 지금 답을 기다리는 칩들 — 입력창 해석이 본다
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
 
   /* ══════════════ 장면 차례 ══════════════ */
-  const ORDER = ['name', 'stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
+  const ORDER = ['name', 'stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'local', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
   const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
   const CHAT_FROM = STEP_OF.read;          // 여기부터 막3(채팅)
-  const QPROG = ['stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'app'];   // 막2 진행 눈금
+  const QPROG = ['stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'local', 'app'];   // 막2 진행 눈금
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
   function qHead(prog, lead, title, help) {
@@ -1027,23 +1076,160 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       html: () => qHead('terminal',
         S.ai === '아직 없어요' ? `AI 구독이 아직 없으셔도 괜찮아요. 자료 쌓기·정리·검색은 지금부터 됩니다.` : (S.aiConnected ? '이어졌어요. 거의 끝났습니다.' : '거의 끝났습니다.'),
         '터미널에서 Claude Code나 Codex 등을 쓰시나요?',
-        '쓰신다면 그 컴퓨터를 라이블리에 이어 두시길 권합니다. 한 줄 설치로 끝납니다.')
+        '쓰신다면 그 컴퓨터에 라이블리를 깔아 드릴게요. 앱을 받아서 여시면 앱이 알아서 합니다.')
+        /* ⚠ 문구는 **설치만 하면 참인 것**으로 맞춘다. 종전 3줄 중 «웹에서 그 컴퓨터의 세션을 연다»·
+         *  «오래 걸리는 일을 맡긴다» 는 설치가 아니라 노드 연결(`lively node --daemon`)이 있어야 참인데,
+         *  설치만 안내하고 그 문장을 보여 주면 화면이 못 지킬 약속을 하는 것이 된다. 노드는 다음 장면에서
+         *  «원하면 한 줄 더» 로 정직하게 연다. */
         + `<div class="ob-benefits">
-            <p class="ob-benefit">터미널에서 켜는 AI가 이 자료함을 그대로 읽습니다</p>
-            <p class="ob-benefit">웹에서도 그 컴퓨터의 세션을 열 수 있습니다</p>
-            <p class="ob-benefit">오래 걸리는 일은 그 컴퓨터에 맡겨 둘 수 있습니다</p>
+            <p class="ob-benefit">내 컴퓨터에서 켜는 그 AI가 회사 자료·규칙을 그대로 압니다</p>
+            <p class="ob-benefit">지금까지 쓰시던 작업 메모·직접 만든 기능을 그대로 가져올 수 있어요</p>
+            <p class="ob-benefit">그 컴퓨터를 웹에서도 열 수 있어요 — 앱이 그것까지 해 둡니다</p>
           </div>
-          <button class="ob-btn ob-btn-pri" id="tYes">네, 씁니다. 이어 둘게요</button>
+          <button class="ob-btn ob-btn-pri" id="tYes">네, 씁니다. 깔아 둘게요</button>
           <button class="ob-btn ob-btn-sub" id="tNo">아니요</button>`,
       bind: (el) => {
-        $('#tYes', el).onclick = () => { S.terminal = 'yes'; S.decisions.push('내 컴퓨터 노드 연결, 터미널의 Claude Code에도 같은 자료'); save(); renderSB(); toast('홈에서 한 줄 설치를 안내할게요 (lively node --daemon)'); goScene('app'); };
+        $('#tYes', el).onclick = () => { S.terminal = 'yes'; S.decisions.push('내 컴퓨터에 라이블리 설치, 터미널의 Claude Code에도 같은 자료'); save(); renderSB(); goScene('local'); };
         $('#tNo', el).onclick = () => { S.terminal = 'no'; save(); goScene('app'); };
+      },
+    },
+    /* ══ #1879 — 내 컴퓨터에 잇기. «쓴다»고 답한 사람을 **실제로 설치까지** 데려간다. ══
+     *  종전엔 [네, 씁니다] 를 눌러도 «홈에서 한 줄 설치를 안내할게요» 토스트 하나 띄우고 다음 장면이었다.
+     *   그런데 **그 안내가 홈에 없다** — v2 셸에 로컬 설치 표면이 아예 없고(라우트는 #/ · #/inbox · #/welcome
+     *   셋뿐), 설치 안내는 클래식 셸의 #/learn 설치 모달에만 있다. 약속만 하고 지키지 않는 자리였다.
+     *
+     *  ⚠ 이 사람들에게 특히 중요한 이유 — 앞 «AI 잇기»(claude 장면)가 재는 것은 **게이트웨이 서버**의
+     *   자격이다(src/terminal/profiles.ts: 서버의 ~/.claude/.credentials.json · 맥 키체인). 평소 자기
+     *   노트북에서 claude·codex 를 쓰던 사람은 **자기 자리에** 이미 로그인돼 있고, 그 사실을 이 서버는
+     *   영영 못 본다. 그 사람에게 맞는 길은 «내 컴퓨터에 라이블리를 깔아, 이미 쓰던 그 AI 에 회사 맥락을
+     *   넣는 것» 이다. 그래서 이 장면은 곁다리가 아니라 그 갈래의 본줄기다.
+     *
+     *  기준선은 리브 페르소나가 못박은 성립 조건이다 — "사람에게 시키는 것은 컴맹인 중학생도 따라올 수
+     *   있어야 한다: 한 번에 한 걸음 · 어디를 누르는지 그대로 · 전문용어 금지 · 왜 하는지 먼저 ·
+     *   값이 어떻게 생겼는지 · 되돌릴 수 있다고 말해 주기".
+     *
+     *  ★ **그래서 여기서 터미널 명령을 주된 길로 삼지 않는다 — 데스크톱 앱이 주된 길이다**(원준님 2026-08-27).
+     *   이 자리를 다시 curl 안내로 되돌리려는 사람에게: 앱이 **이미 그 일을 전부** 한다.
+     *     desktop/main/main.mjs:1089 `onboard()` — "주소 입력 한 번으로 **끝까지** 간다: (없으면) CLI
+     *      부트스트랩 → `lively setup`"(= 로그인 + 키트 설치 + MCP 등록), 그리고 :1173 — 설치가 끝나면
+     *      **노드까지 세운다**. 브라우저 승인·프롬프트는 GUI 가 받는다(ipc-contract.mjs IPC.RUN/ANSWER,
+     *      cli-runner.mjs, e2e: desktop/main/onboard-e2e.test.mjs).
+     *   즉 앞서 쓰던 3단계 curl 안내는 앱과 **같은 일을 사람 손으로 시키는 것**이었다. 터미널을 쓰는
+     *   사람이라 해도 굳이 더 어려운 길로 보낼 이유가 없다 — 터미널 갈래는 아래 접힘에 남겨 둔다.
+     *
+     *  앱이 **하지 않는 것이 딱 하나** 있고, 그게 3단계다: 설치가 끝난 뒤 «온보딩 도와줘»(=`lively
+     *   onboarding`, kit/cli/lively.mjs:2384 — claude 를 그 문구로 띄워 lively-onboarding 스킬 소환)를
+     *   권하는 자리가 앱 완료 카드에 없다(실측: desktop/ 전체에 그 문자열 0건). 그래서 웹이 말한다.
+     *
+     *  화면에 적은 사실은 전부 코드·실측에서 확인한 것이다(지어내면 그 자리에서 사람이 막힌다):
+     *   · 내려받기 자산 — GitHub 최신 릴리스 실측(v0.1.354, 2026-08-26): `Lively-<ver>-arm64.dmg` ·
+     *     `Lively-Setup-<ver>.exe` · `.AppImage`. 고르는 코드는 이 파일 위쪽 desktopLink()/pickAsset().
+     *   · 터미널 갈래 한 줄 — src/web.ts:339 `/cli`(sh) · `/cli.ps1`(ps1). 게이트웨이가 자기 주소를 굽는다.
+     *   · sudo·비밀번호 없음 — kit/cli/bootstrap.sh 는 무sudo(~/.lively 안에서 끝난다).
+     *   · 되돌리기 `lively uninstall` · 확인 `lively status` · 진단 `lively doctor` — lively.mjs HELP.
+     */
+    local: {
+      html: () => {
+        const os = desktopOs();                       // 'mac' | 'win' | 'linux' | null
+        const win = os === 'win';
+        const cmd = win ? `irm ${GW}/cli.ps1 | iex` : `curl -fsSL ${GW}/cli | sh`;   // 리눅스도 sh
+        const step1 = win
+          ? '아래 [앱 받기]를 누르면 <b>Lively-Setup.exe</b> 가 내려받아져요. 내려받은 파일을 두 번 눌러 설치하세요.'
+          : os === 'mac'
+            ? '아래 [앱 받기]를 누르면 <b>Lively.dmg</b> 가 내려받아져요. 내려받은 파일을 두 번 누르고, 나온 라이블리 아이콘을 [응용 프로그램]으로 끌어다 놓으세요.'
+            : '아래 [앱 받기]를 누르면 받는 곳이 새 창으로 열려요. 거기서 내 컴퓨터에 맞는 파일을 골라 받으시면 됩니다.';
+        return qHead('local',
+          '평소 쓰시던 그 터미널에 회사 맥락을 넣어 드릴게요.',
+          '앱을 받으시면 앱이 알아서 깝니다.',
+          '터미널에 뭘 치실 필요 없어요. 받아서 여시면 앱이 물어보는 대로 한 번만 눌러 주시면 됩니다.')
+          + `<div class="ob-ins-list">
+              <div class="ob-ins" data-n="1">
+                <b class="ob-ins-t">앱을 받아서 엽니다</b>
+                <p class="ob-ins-p">${step1}</p>
+              </div>
+              <div class="ob-ins" data-n="2">
+                <b class="ob-ins-t">앱이 시키는 대로 [승인] 한 번</b>
+                <p class="ob-ins-p">앱을 열면 설치 마법사가 뜹니다. 브라우저에 <b>라이블리 승인</b> 창이 열리면 <b>[승인]</b>을 누르세요. 그게 전부예요.</p>
+                <p class="ob-ins-n">비밀번호는 묻지 않습니다. 앱이 알아서 클로드·코덱스에 회사 맥락을 넣고, 이 컴퓨터를 라이블리에 이어 둡니다.</p>
+              </div>
+              <div class="ob-ins" data-n="3">
+                <b class="ob-ins-t">끝나면 이 한 마디만</b>
+                <p class="ob-ins-p">평소처럼 클로드(코덱스)를 켜서 이렇게 말해 보세요.</p>
+                ${cmdBox('온보딩 도와줘')}
+                <p class="ob-ins-n">예전에 쓰시던 작업 메모·직접 만든 기능·연결해 둔 서비스를 찾아서 보여주고, 무엇을 회사와 나눌지 하나씩 같이 정합니다. <b>원본은 지우지도 고치지도 않아요</b> — 옮길 때도 복사만 합니다. <span class="ob-ins-n2">(터미널에서 <code>lively onboarding</code> 이라고 쳐도 같은 게 열립니다.)</span></p>
+              </div>
+            </div>
+            <div class="ob-tok">
+              <p class="ob-note" id="lcSt"></p>
+            </div>
+            <button class="ob-btn ob-btn-pri" id="lcGet">앱 받기</button>
+            <button class="ob-btn ob-btn-sub" id="lcLater">나중에 할게요</button>
+            <details class="ob-ins-alt">
+              <summary>터미널이 더 편하신가요</summary>
+              <p class="ob-ins-n">앱 없이 터미널 한 줄로도 됩니다. 앱이 하는 일과 같은 것을 그대로 합니다(설치 · 로그인 · 회사 맥락 배선).</p>
+              ${cmdBox(cmd)}
+              <p class="ob-ins-n">확인 <code>lively status</code> · 진단 <code>lively doctor</code> · 되돌리기 <code>lively uninstall</code>. 이 컴퓨터를 웹에서도 열려면 <code>lively node --daemon</code>.${win ? ' 윈도우 터미널 설치는 아직 검증이 충분하지 않습니다 — 막히면 앱 쪽을 쓰세요.' : ''}</p>
+            </details>`;
+      },
+      bind: (el) => {
+        wireCopy(el);
+        const st = $('#lcSt', el);
+        /* 설치를 **정말** 했는지는 서버 신호로 본다 — "lively status 쳐 보세요" 는 사람에게 판정을 떠넘기는
+         *  것이고, 이 화면의 목표는 그 출력을 읽을 줄 몰라도 되게 하는 것이다.
+         *  신호 = GET /api/ui/me/onboarding 의 connect 항목이 by:'auto' 로 done
+         *   (src/org/delivery/onboarding.ts — `mcp_call_log WHERE actor=<나> AND ok`).
+         *   그 행은 **설치·로그인·MCP 등록·AI 실행·라이블리 호출이 전부 성공해야** 남는다. 3단계
+         *   «온보딩 도와줘» 가 딱 그 경로다.
+         *  ⚠ 이미 웹 터미널을 쓴 사람은 이 신호가 **처음부터** 참이다. 그래서 장면에 들어올 때 기준값을
+         *   먼저 재고 **거짓→참 전이**만 성공으로 읽는다. 기준값이 이미 참이면 자동확인을 끄고 그 사실을
+         *   말한다 — 모르는 것을 안다고 하지 않는다(거짓 초록불을 켜면 사람은 안 깔고 넘어간다). */
+        const say = (cls, text) => { if (!st.isConnected) return; st.className = 'ob-note' + (cls ? ' ' + cls : ''); st.textContent = text; };
+        say('', '설치가 끝났는지 제가 지켜보고 있을게요 — 3단계까지 마치시면 여기가 저절로 바뀝니다.');
+        clearInterval(localTimer); localTimer = null;
+        let ticks = 0;
+        const poll = async () => {
+          const now = await connectSignal();
+          if (now === null) return;                          // 못 물었다 — 조용히 다음 차례에 다시
+          if (localBase === null) { localBase = now; if (now) say('', '이 계정으로 AI가 라이블리를 쓴 기록이 이미 있어서, 설치가 끝났는지는 제가 자동으로 가려내지 못해요. 아래 [앱 받기]로 시작하시면 됩니다.'); return; }
+          if (localBase === true) return;                    // 기준값이 참 — 전이를 볼 수 없다
+          if (!now) return;
+          clearInterval(localTimer); localTimer = null;
+          S.local = 'done'; S.decisions.push('내 컴퓨터에 라이블리 설치'); save(); renderSB();
+          say('ob-ok', '✓ 이어졌어요 — 내 컴퓨터의 AI가 라이블리를 쓰는 걸 확인했어요.');
+          toast('내 컴퓨터가 이어졌어요.');
+        };
+        void poll();
+        localTimer = setInterval(() => {
+          if (!st.isConnected || ++ticks > 240) { clearInterval(localTimer); localTimer = null; return; }  // 20분이면 멈춘다(무한 폴 금지)
+          void poll();
+        }, 5000);
+
+        /* 내려받기 — 주소는 **미리** 물어 둔다(누른 순간 await 하면 사용자 제스처가 풀려 새 창이 막힌다).
+         *  «앱 받기» 장면과 같은 코드를 쓴다: 같은 자산을 두 자리에서 다르게 고르면 한쪽이 조용히 틀린다. */
+        let url = null;
+        desktopLink().then((u) => { url = u; });
+        const get = $('#lcGet', el);
+        get.onclick = () => {
+          S.app = 'yes'; S.local = S.local || 'getting'; S.decisions.push('데스크톱 앱으로 내 컴퓨터에 설치'); save(); renderSB();
+          if (url) {
+            const a = document.createElement('a'); a.href = url; a.rel = 'noopener';
+            document.body.appendChild(a); a.click(); a.remove();
+            toast('내려받기를 시작했어요. 설치는 지금 하셔도, 나중에 하셔도 됩니다.');
+          } else {
+            // 아직 답이 안 왔거나 못 가렸다 — 받는 곳을 그대로 연다. 없는 자리를 가리키지 않는다.
+            window.open(DL_PAGE, '_blank', 'noopener');
+            toast('받는 곳을 새 창으로 열었어요.');
+          }
+          get.textContent = '계속';
+          get.onclick = () => goScene('read');   // 앱을 받았으면 «앱 받기» 장면은 건너뛴다 — 같은 걸 두 번 권하지 않는다
+        };
+        $('#lcLater', el).onclick = () => { S.local = 'later'; save(); toast('나중에 하셔도 돼요 — 여기 안내는 그대로 있습니다.'); goScene('app'); };
       },
     },
     /* 노션 p4 '앱 유도' 그대로의 자리 — 질문이 끝나고 채팅(컨설팅)에 들어가기 직전. [새문구] 전체 */
     app: {
       html: () => qHead('app',
-        S.terminal === 'yes' ? '터미널 연결까지 받아 뒀어요. 마지막으로 하나 권해 드릴게요.' : '마지막으로 하나 권해 드릴게요.',
+        S.terminal === 'yes' ? '내 컴퓨터 설치는 언제든 다시 하실 수 있어요. 마지막으로 하나 권해 드릴게요.' : '마지막으로 하나 권해 드릴게요.',
         '라이블리 앱을 받아 두시면 더 편해요.',
         '웹으로도 전부 됩니다. 앱은 이런 게 더해져요.')
         + `<div class="ob-benefits">
@@ -1397,6 +1583,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function renderScene(key, animate) {
     const sc = SCENES[key];
     if (!sc) return;
+    // 장면이 바뀌면 «내 컴퓨터» 폴링을 멈춘다 — 화면에 없는 타이머가 5초마다 도는 건 조용한 누수다.
+    if (key !== 'local') { clearInterval(localTimer); localTimer = null; localBase = null; }
     setStage(key === 'name' ? 'stage-name' : 'stage-q');
     const col = $('#qcol');
     col.style.animation = 'none';
@@ -1408,7 +1596,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     sc.bind && sc.bind(col);
   }
   const SCENE_LABEL = { name: '이름', stage: '무대', role: '직무', files: '파일 올리기', sources: '앱 고르기',
-    connect: '앱 연결', ai: 'AI 고르기', claude: 'AI 연결', terminal: '터미널', app: '앱 받기' };
+    connect: '앱 연결', ai: 'AI 고르기', claude: 'AI 연결', terminal: '터미널', local: '내 컴퓨터에 잇기', app: '앱 받기' };
   /* 뒤로가기는 **지나온 자취**를 되짚는다 — 차례표를 거꾸로 세면 조건부로 건너뛴 장면(AI 없음 등)에 걸린다. */
   function goBack() { const prev = S.trail.pop(); if (!prev) return; save(); goScene(prev, { back: true }); }
   function goJump(key) {
@@ -1475,5 +1663,5 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
   if (want && STEP_OF[want] != null) { goScene(want); }
   else { renderSB(); goScene(S.scene || 'name'); }
-  return { destroy() { clearInterval(readTimer); clearTimeout(toastT); ctx.onBare && ctx.onBare(false); } };
+  return { destroy() { clearInterval(readTimer); clearInterval(localTimer); clearTimeout(toastT); ctx.onBare && ctx.onBare(false); } };
 }

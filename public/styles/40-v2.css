@@ -720,6 +720,14 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 연결 카드 안 소형 폼(#1881 노션 직결 client 2칸) — 입력·버튼을 세로로 좁게 쌓는다. */
 .cn-sec-form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: 420px; margin-top: 6px; }
 .cn-sec-form input { width: 100%; }
+/* 연결된 저장소 줄(#1881 G10) — 목록에 보이는 것과 clone 되는 것의 경계를 한 줄에 담는다.
+   '열림/안 열림' 칩이 그 경계다: 안 열린 저장소는 등록해도 코드를 못 가져온다. */
+.cn-repo-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13.5px; border-bottom: 1px solid var(--line-soft, rgba(0,0,0,.06)); }
+.cn-repo-row:last-of-type { border-bottom: 0; }
+.cn-repo-row .v2-k { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* '열림' 은 긍정 상태라 중립 칩과 색으로 갈라 준다 — 목록을 훑을 때 눈이 먼저 잡아야 하는 정보다. */
+.dm-tag-ok { background: var(--ok-bg, rgba(22,163,74,.12)); color: var(--ok-ink, #15803d); border-color: transparent; }
+
 /* 노션 워크스페이스가 둘 이상일 때 — 대표 토글 아래에 워크스페이스별 줄(#1881 N7). 들여쓰기로 종속을 보인다. */
 .cn-ws-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px 20px; }
 /* 슬랙 대화 정책은 관리탭 카드 문법으로 만들어졌다 — 셸 안에서는 테두리 한 겹만 두르고 그대로 싣는다. */
@@ -1521,6 +1529,30 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-more { margin: 4px 8px 2px; }
 .v2-bin-empty { margin: 6px 8px; font-size: 12.5px; color: var(--muted); }
 .v2-bin-fine { margin-top: 28px; font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+/* 휴지통 안 3(#1850, 2026-08-27) — 한 목록·시간순. 도구 줄(칩·검색·정렬) · 날짜 묶음 머리 · 프로젝트 행 · 펼친 세션 */
+.v2-bin-tools { display: flex; align-items: center; gap: 8px; padding: 2px 6px 10px; flex-wrap: wrap; }
+.v2-bin-tools .sp { flex: 1; }
+.v2-bin-chips { display: flex; gap: 6px; }
+.v2-bin-chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); color: var(--ink-note); cursor: pointer; }
+.v2-bin-chip:hover { background: var(--bg-tint); }
+.v2-bin-chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.v2-bin-search { font: inherit; font-size: 12.5px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink); width: 180px; min-width: 120px; }
+.v2-bin-search:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-bin-sort { font-size: 12px; color: var(--muted); }
+.v2-bin-master { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.v2-bin-count { margin-left: auto; font-size: 12px; color: var(--muted); }
+.v2-bin-grp { font-size: 11.5px; font-weight: 700; color: var(--muted-head); letter-spacing: .02em; padding: 12px 8px 4px; }
+.v2-bin-grp:first-child { padding-top: 4px; }
+.v2-bin-row.proj .tw { flex-direction: column; align-items: flex-start; gap: 1px; }
+.v2-bin-row.proj .t { font-weight: 650; }
+.v2-bin-row.proj .p { max-width: none; }
+.v2-bin-caret { flex: none; width: 22px; height: 22px; border: 0; background: none; border-radius: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.v2-bin-caret:hover { background: var(--bg-tint-2); color: var(--ink-note); }
+.v2-bin-caret.none { text-align: center; line-height: 22px; cursor: default; }
+.v2-bin-kids { margin: 0 8px 4px 46px; padding: 2px 4px; border-left: 2px solid var(--line); background: var(--bg-tint); border-radius: 0 8px 8px 0; }
+.v2-bin-kids .v2-bin-row { padding: 5px 8px; font-size: 12.5px; }
+.v2-bin-kids .v2-bin-row .t { font-weight: 450; color: var(--ink-note); }
+.v2-bin-kids .v2-bin-empty { margin: 4px 8px 6px; }
 @media (max-width: 900px) {
   .v2-bin-row { flex-wrap: wrap; }
   .v2-bin-row .p { max-width: 100%; }

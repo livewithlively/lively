@@ -21,14 +21,17 @@ import { svcTile } from './svc-icons.js';
 // ── 지원 서비스 표 ──
 //  blurb — '무엇을 허용하는 것인지'를 그대로 말한다(#1085). '나로서 …해요' 는 무슨 일이 벌어지는지 모호했다.
 //  oauth = 조직이 등록해 둔 OAuth 커넥터(프록시 MCP 서버) 이름 · token = 내가 직접 붙여넣는 자격 종류.
-const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: string; token?: string; blurb: string }> = [
+//  appConnect — MCP 서버 행이 아니라 **전용 연결 창구**를 쓰는 앱(#1881 G5 GitHub). oauth 필드를 쓸 수 없는 이유:
+//   svc.oauth 는 org_mcp_server 이름을 가리키는데 GitHub 은 그 행이 없다(도구 면을 REST 로 내렸다). 그래서
+//   selfServe 판정도 oauthMap 으로는 못 하고, 연결 시작도 /api/ui/me/oauth/connect 가 아니라 전용 op 를 부른다.
+const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: string; token?: string; appConnect?: string; blurb: string }> = [
   { key: 'notion', label: 'Notion', icon: '📔', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
   { key: 'linear', label: 'Linear', icon: '📐', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
   { key: 'slack', label: 'Slack', icon: '💬', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
   // #1881 G2 — 드라이브·Gmail·캘린더 세 줄이던 것을 **한 줄**로. 구글은 한 동의 화면에서 여러 API 범위를 함께
   //  받으므로 나눌 이유가 없었다(세 줄은 곧 [연결] 3번이었다). 서버가 내려주는 커넥터도 server='google' 한 줄이다.
   { key: 'google', label: 'Google', icon: '🔷', oauth: 'google', blurb: 'AI가 내 Google 계정에 로그인해서 직접 Drive 파일과 캘린더 일정을 읽을 수 있습니다. (Gmail 은 구글 심사 범위라 준비 중입니다.)' },
-  { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', blurb: 'AI가 내 GitHub 계정으로 이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다. 코드 저장소를 작업용으로 붙이는 것은 아래 [코드 저장소 접근]에서 따로 설정합니다.' },
+  { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', appConnect: 'github', blurb: 'AI가 내 GitHub 계정으로 이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다. [계정으로 연결]하면 그 화면에서 고른 저장소는 코드까지 가져올 수 있어요 — 토큰을 따로 만들 필요가 없습니다.' },
   { key: 'gitlab', label: 'GitLab', icon: '🦊', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
   { key: 'clickup', label: 'ClickUp', icon: '🗂️', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
   { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 내 Figma 계정으로 디자인 파일과 코멘트를 직접 읽을 수 있습니다 — 디자인 결정·피드백은 대개 코멘트에 쌓입니다.' },
@@ -67,7 +70,9 @@ function partition(oauth: any, creds: any): SvcView {
   const oauthOn = (s: any) => !!(s.oauth && oauthMap.get(s.oauth)?.connected);
   const tokenOn = (s: any) => !!(s.token && credMap.get(s.token)?.has_secret);
   // 내 힘으로 켤 수 있나 — OAuth 는 조직 등록이 선행돼야 하고, 토큰형은 내가 붙여넣으면 그만이다.
-  const selfServe = (s: any) => !!((s.oauth && oauthMap.has(s.oauth)) || s.token);
+  //  appConnect 는 조직 등록(oauthMap)이 아니라 앱 자격 유무가 관문이라 여기서는 '켤 수 있음'으로 둔다 —
+  //   실제로 못 켜면 연결 시작이 409 와 함께 관리자가 할 일을 알려 준다(막다른 버튼으로 두지 않는다).
+  const selfServe = (s: any) => !!((s.oauth && oauthMap.has(s.oauth)) || s.token || s.appConnect);
   const connected: any[] = [], available: any[] = [], blockedOAuth: any[] = [];
   for (const s of LOGIN_SERVICES) {
     if (oauthOn(s) || tokenOn(s)) connected.push(s);

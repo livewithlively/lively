@@ -57,6 +57,20 @@ export const DENIAL_MARKERS = [
   "unauthorized",
 ];
 
+/**
+ * 슬랙은 거부를 **HTTP 200 + `ok:false` 봉투**로 준다 — 구글 문구와 겹치지 않으므로 따로 둔다.
+ *  `missing_scope`·`not_allowed_token_type` 이 T9 가 겨눈 바로 그 고장이다(legacy 메서드는 새 앱의
+ *  분할형 스코프를 거부한다). `invalid_auth`·`token_revoked` 는 연결자가 앱을 지운 경우.
+ */
+export const SLACK_DENIAL_MARKERS = [
+  "missing_scope",
+  "not_allowed_token_type",
+  "invalid_auth",
+  "token_revoked",
+  "account_inactive",
+  "\"ok\":false",
+];
+
 // ⚠ 프로브가 보는 응답 본문은 **상류가 준 것 그대로**다(2026-08-12 dev 실측에서 잡음).
 //  http_proxy 프로브는 `runHttpProxyTool` 을 직접 부르므로, MCP 등록 핸들러가 씌우는
 //  `{status, ok, truncated, body}` 래퍼가 **없다.** 그 래퍼를 전제로 `paths:["body"]` 를 걸면
@@ -95,6 +109,29 @@ export const CANARY_PROBES: CanaryProbe[] = [
     args: {},
     expect: { contains: ["files"], notContains: DENIAL_MARKERS },
     why: "Developer Preview 게이트 상태. 미등록 조직(=고객 기본값)에서 이게 초록이 되면 게이트가 풀린 것이다.",
+  },
+  // ── 슬랙 B(#1994 T11) — 구글은 2개인데 슬랙은 0개였다. 슬랙은 **수집과 도구가 같은 상류**를 쓰는데
+  //  그 상류가 검색 표면을 갈아치우는 중이라(legacy search.messages → assistant.search.context) 눈이 필요하다.
+  {
+    key: "b.slack.search",
+    label: "슬랙 검색(B · assistant.search.context)",
+    adapter: "http_proxy", tier: "plain",
+    target: { tool: "slack_search_messages" },
+    args: { query: "lively" },
+    // ★ `results.messages` 는 **현행 표면의 지문**이다. legacy(search.messages)는 `messages.matches` 를 주므로
+    //  이 단언이 빨간불이면 둘 중 하나다 — ① 상류가 또 바꿨다 ② org_tool 행이 프리셋보다 낡아 legacy 를
+    //  때리고 있다(2026-08-27 dev 에서 실제로 그 상태였다). 건수는 안 본다: 조용한 워크스페이스도 정상이다.
+    expect: { json: true, paths: ["results.messages"], notContains: [...DENIAL_MARKERS, ...SLACK_DENIAL_MARKERS] },
+    why: "legacy search.messages 는 새 앱 토큰(분할형 search:read.*)을 거부한다 — 검색 표면이 현행인지, 그리고 그 토큰으로 실제 통과하는지.",
+  },
+  {
+    key: "b.slack.channels",
+    label: "슬랙 채널 목록(B · conversations.list)",
+    adapter: "http_proxy", tier: "plain",
+    target: { tool: "slack_search_channels" },
+    args: { limit: 1 },
+    expect: { json: true, paths: ["channels"], notContains: [...DENIAL_MARKERS, ...SLACK_DENIAL_MARKERS] },
+    why: "수집의 **열거 축**. 검색은 랭킹이라 완결성을 못 주고(#1959 실측), 채널 열거가 그 대안의 토대다 — 여기가 죽으면 수집 자체가 설 자리가 없다.",
   },
   {
     key: "a.notion.search",

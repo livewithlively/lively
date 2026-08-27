@@ -68,3 +68,64 @@ assert.equal(sessionNameFromAgent("결제 백오프\n이유는 …"), "결제 �
 assert.equal(sessionNameFromAgent(""), "");
 assert.equal(sessionNameFromAgent("   \n  "), "");
 assert.equal(sessionNameFromAgent('"".'), "");
+
+// ── #2116 첫 문장 경계 — 사양 엣지 표 E1~E13 ────────────────────────────────
+//  🔴 URL 한복판에서 끊기면 — 이름이 `…열려니까 안열려. https:/…` 가 되어 무슨 세션인지 안 읽힌다(dev 실측).
+//  🔴 마침표가 이어진 글자 사이에서 끊기면 — `v1.2 를 올리자` 가 `v1` 이 된다.
+//  🔴 줄을 다 걸러 빈 이름이 나오면 — 세션 이름이 통째로 box id 로 떨어진다.
+{
+  const P = sessionNameFromPrompt;
+
+  // E1 빈 입력
+  assert.equal(P(""), "");
+  assert.equal(P("   \n\t "), "");
+
+  // E2·E3 짧은 한 줄
+  assert.equal(P("세션 목록 고치자"), "세션 목록 고치자");
+  assert.equal(P("세션 목록 고치자."), "세션 목록 고치자");
+
+  // E4 ★ 문장 + 다음 줄에 URL·스택트레이스 → 첫 문장만
+  assert.equal(
+    P("내가 원준이 세션 열려니까 안열려.\nhttps://dev.lvly.io/ui/#/s/box-jang-05ab7578\nmain.js?v=aaf959b6:587 noteTruncated\n    at api (net.js:129:19)"),
+    "내가 원준이 세션 열려니까 안열려",
+    "🔴 붙여넣은 URL·스택이 이름을 먹었다");
+
+  // E5 ★ 같은 줄에 문장 + URL
+  assert.equal(P("이거 고쳐줘. https://dev.lvly.io/ui/#/s/box-a"), "이거 고쳐줘");
+
+  // E6 ★ 첫 줄이 URL 뿐 → 다음 쓸 줄
+  assert.equal(P("https://dev.lvly.io/ui/#/s/box-a\n세션 이름이 잘려"), "세션 이름이 잘려");
+
+  // E7 ★ 첫 문장이 MAX 초과 → 잘린다
+  const long1 = P("아주 길고 긴 첫 문장인데 스물여덟자를 확실히 넘기도록 늘려 쓴다. 두 번째 문장.");
+  assert.equal(long1.length, 28);
+  assert.ok(long1.endsWith("…"), "🔴 초과분이 … 로 안 잘렸다");
+
+  // E8 문장부호 없이 MAX 초과 (종전 동작)
+  const long2 = P("현재 열려있는 pr중 모든 커밋이 이미 dev게이트웨이에 반영되었는지 확인해줘");
+  assert.equal(long2.length, 28);
+  assert.ok(long2.endsWith("…"));
+
+  // E9 ★ 첫 문장이 너무 짧으면 경계로 안 친다
+  assert.equal(P("ㅇㅇ. 세션 목록을 고치자"), "ㅇㅇ. 세션 목록을 고치자",
+    "🔴 두 글자짜리 첫 문장으로 이름을 만들었다");
+
+  // E10 ★ 마침표가 글자 사이면 문장 끝이 아니다
+  assert.equal(P("v1.2 를 올리자"), "v1.2 를 올리자", "🔴 버전 표기의 점에서 끊었다");
+  assert.equal(P("main.js 를 고쳐줘"), "main.js 를 고쳐줘");
+
+  // E11 ★ 코드펜스 안은 건너뛴다
+  assert.equal(P("```\nsome code here\n```\n이 코드 고쳐줘"), "이 코드 고쳐줘");
+
+  // E12b 부호만 친 입력은 **종전대로** 빈 이름이다 — 개선을 슬쩍 끼우지 않는다는 계약
+  assert.equal(P("???"), "");
+  assert.equal(P("..."), "");
+
+  // E12 ★ 건질 문장이 0 이어도 빈 이름을 만들지 않는다(폴백이 실제로 돈다)
+  const only = P("    at api (net.js:129:19)\n    at async createAppInstance (app-instance.js:26:17)");
+  assert.notEqual(only, "", "🔴 폴백이 안 돌아 이름이 비었다");
+  assert.ok(only.length <= 28, "🔴 폴백이 MAX 를 안 지켰다");
+
+  // E13 여러 공백·탭·줄바꿈은 한 칸으로
+  assert.equal(P("세션   목록\t고치자"), "세션 목록 고치자");
+}

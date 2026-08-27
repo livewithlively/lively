@@ -90,6 +90,13 @@ const GUIDE =
   // 읽기전용·인코그니토 — 세션 이름도 조직에 남는 쓰기다(읽기전용에선 어차피 툴이 막힌다). 안내 자체를 하지 않는다.
   const mode = String(process.env.LIVELY_MODE || "").trim().toLowerCase();
   if (mode === "readonly" || mode === "incognito") return;
+  // ⚠ **위탁(task) 세션은 제외한다**(#1979 항목4). project-auto-bind 와 같은 표식·같은 이유다.
+  //  ① 위탁 워커의 이름은 이미 정해져 있다 — `위탁 #<taskId>`(src/node/tasks.ts:376). 그게 세션 목록에서
+  //   "이건 배치다"를 말해 주는 유일한 신호인데, 걸쇠상 agent 가 rule 을 이기므로 이 훅이 그 신호를 덮는다.
+  //   실측(2026-08-26~27): 위탁이 만든 프로젝트가 «내 컴퓨터 자료 증류 배치»·«도메인맵 미분류 매핑» 처럼
+  //   **멀쩡한 이름**을 달아 보드에서 진짜 작업과 구분되지 않았다 — 쓰레기가 위장된 셈이다.
+  //  ② 배치마다 이름짓기 툴콜이 한 번씩 붙는다. 사람이 기다리는 턴이 아니라 순수 낭비다.
+  if (String(process.env.LIVELY_TASK_WS || "").trim()) return;
 
   const stdinData = await readStdin();
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { return; }
