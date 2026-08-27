@@ -26,6 +26,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
+import { WS_SWITCH_KEY } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
 import { drawRail, mountRail, railIsHidden, railSection, toggleRail, type RailSection } from './rail.js';
@@ -367,7 +368,15 @@ export async function bootV2(): Promise<void> {
   //  ★ #2171 — 보내는 순간 **서버에 '보냈다'를 찍는다**(welcome_seen). 자동 진입은 평생 한 번이다.
   //   종전엔 맨 끝 [준비 끝, 정리해 주세요] 를 눌러야만 표식이 남아서, 중간에 나간 사람·웹만 쓰는 사람은
   //   앱을 열 때마다 다시 끌려갔다. 못 끝낸 사람은 홈의 «이어서 하기»(me.welcome_pending)로 안내한다.
-  if (!boot && state.me && state.me.first_run === true && !onboardingDone()) {
+  //  ★ #2171 — **워크스페이스를 전환해 온 부팅에서는 자동 진입하지 않는다.** 전환은 `location.reload()` 를
+  //   거치므로 이 판정을 처음부터 다시 타는데, 옮겨 간 워크스페이스엔 그 사람의 흔적이 0이라 «처음 오는
+  //   사람»이 참이 되어 **전환할 때마다 처음 설정이 떴다**(원준님 신고 2026-08-27 — 데스크톱 앱에서
+  //   워크스페이스 전환 중). 전환은 처음 오는 것이 아니라 있던 곳으로 가는 것이다 — 그 자리는 홈이어야 한다.
+  const wsSwitched = (() => {
+    try { const v = sessionStorage.getItem(WS_SWITCH_KEY) === '1'; if (v) sessionStorage.removeItem(WS_SWITCH_KEY); return v; }
+    catch (_) { return false; }   // 프라이빗 모드 — 표식을 못 읽으면 종전 동작(자동 진입 판정 그대로)
+  })();
+  if (!boot && !wsSwitched && state.me && state.me.first_run === true && !onboardingDone()) {
     boot = '#/welcome';
     markWelcomeSeen();
   }
