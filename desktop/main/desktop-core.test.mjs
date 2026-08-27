@@ -16,7 +16,7 @@ import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote } from "./update-policy.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
@@ -695,10 +695,12 @@ t('U15 ★ 배선 — 웹 창이 상태를 받고(밀기+물어보기) 그 자�
   // 웹: 다리의 유무로만 능력을 판정하고, **받아 둔 게 있을 때만** 그린다
   const ui = readFileSync(fileURLToPath(new URL('../../web/desktop-update.ts', import.meta.url)), 'utf8');
   assert.match(ui, /livelyDesktop/, '웹이 데스크톱 다리를 안 본다');
-  assert.match(ui, /if \(!cur\.ready\)/, '받아 두지 않았는데도 무언가 그린다');
+  // 조건이 늘어날 수 있으므로(#2203 의 '나중에 하기') **'받아 둔 게 없으면 접는다' 라는 항만** 본다.
+  assert.match(ui, /if \(!cur\.ready(\s*\|\||\))/, '받아 두지 않았는데도 무언가 그린다');
   assert.match(ui, /다시 시작하여 반영하기/, '사람이 누를 문구가 없다');
   assert.ok(!/다시 켜|직접 켜/.test(ui), '사람에게 앱을 켜라고 말하면 종전 경쟁(U10 머리말)이 재현된다');
-  // 두 셸 모두 그 자리를 가진다 — 클래식이 제품 기본이고(web/lib/state.ts uiMode), v2 는 사이드바 발치.
+  // 두 셸 모두 그 자리를 가진다 — v2 가 제품 기본이고(web/lib/state.ts uiMode) 거기선 사이드바 발치,
+  //  클래식은 고른 사람에게만 뜨지만 그 셸에도 자리가 있어야 한다.
   const classic = readFileSync(fileURLToPath(new URL('../../web/main.ts', import.meta.url)), 'utf8');
   assert.match(classic, /mountDesktopUpdate\(deskUp, 'bar'\)/, '클래식 셸에 자리가 없다');
   const side = readFileSync(fileURLToPath(new URL('../../web/v2/side.ts', import.meta.url)), 'utf8');
@@ -706,6 +708,91 @@ t('U15 ★ 배선 — 웹 창이 상태를 받고(밀기+물어보기) 그 자�
   const html = readFileSync(fileURLToPath(new URL('../../public/index.html', import.meta.url)), 'utf8');
   assert.match(html, /id="desktop-update" hidden/, '클래식 셸의 자리가 문서에 없다(기본은 접힘)');
   assert.match(html, /44-desktop-update\.css/, '스타일이 문서에 안 걸렸다');
+});
+
+// ── U16. 배너가 뜨는 순간 = 눌러서 되는 순간 이어야 한다 (#2203) ────────────────────────────────
+// 실측(2026-08-27 원준): "다시 시작하여 반영하기를 수십 번 눌렀는데 사라지질 않는다." 릴리스도 게이트웨이도 정상이었다.
+//  맥의 업데이트가 **두 단계**인데(① 우리가 zip 을 받는다 → ② 애플 설치기가 그 zip 을 다시 넘겨받는다, 수 분)
+//  ①에서 배너를 띄웠다. ② 전에 부른 quitAndInstall 은 MacUpdater 가 조용히 무시한다 — 예외도 오류 이벤트도 없다.
+//  재현 시간축: 배너 → 클릭 → **6분 무반응** → ②완료 → 그제서야 앱이 닫히고 설치·재시작.
+//  win·linux 에는 ② 단계가 없다(받으면 곧바로 적용 가능) — 그쪽에 이 조건을 걸면 배너가 영영 안 뜬다.
+t('U16 적용 가능 판정 — 맥만 설치기 인계를 기다린다', () => {
+  const V = '0.1.358';
+  // 표 1·2 — 이번 사고의 그 자리. 인계 전/후가 갈려야 한다.
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'darwin', squirrelReady: false }), false,
+    '맥에서 인계 전인데 준비됨 — 배너가 앞서 뜨고 사람은 죽은 버튼을 누른다(#2203)');
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'darwin', squirrelReady: true }), true,
+    '인계가 끝났는데 안 뜬다 — 업데이트가 영영 앉아 있는다');
+  // 표 3·4·8 — 맥 조건이 다른 플랫폼으로 새면 그쪽 배너가 영영 안 뜬다(그 신호 자체가 없으므로)
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'win32', squirrelReady: false }), true,
+    'win 에 ② 단계를 요구했다 — 그 신호는 win 에서 오지 않는다');
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'linux', squirrelReady: false }), true,
+    'linux(AppImage)에 ② 단계를 요구했다');
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'win32', squirrelReady: true }), true);
+  // 표 5·6·7 — 이번에 새로 도입한 값이 **비었거나 부재**인 경우(인계 신호만으로 준비됨이 되면 안 된다)
+  assert.equal(updateApplyReady({ downloadedVersion: null, platform: 'darwin', squirrelReady: true }), false,
+    '받아 둔 게 없는데 인계 신호만으로 준비됨이 됐다');
+  assert.equal(updateApplyReady({ downloadedVersion: '   ', platform: 'win32', squirrelReady: true }), false,
+    '빈 버전 문자열을 받아 둔 것으로 셌다');
+  assert.equal(updateApplyReady(undefined), false, '인자 부재에서 터지거나 참이 된다');
+  assert.equal(updateApplyReady({}), false);
+});
+
+t('U16 문구 — 아직 못 누르는 구간을 "실패" 가 아니라 "아직" 으로 말한다', () => {
+  // 실패로 읽히면 사람은 다시 누르거나 앱을 손으로 껐다 켠다 — 그게 U10 머리말에서 이미 고친 함정이다.
+  const staging = updateStagingNote('0.1.358');
+  assert.match(staging, /0\.1\.358/, '어느 버전을 준비 중인지 안 말한다');
+  assert.ok(!/실패|오류|없습니다/.test(staging), '준비 중을 실패로 말한다 — 사람이 손으로 개입하게 만든다');
+  const notStaged = updateNotStagedNote('0.1.358');
+  assert.match(notStaged, /아직/, "'아직' 이 없으면 사람은 다시 누른다(눌러도 소용없는 구간이다)");
+  assert.ok(!/실패|오류/.test(notStaged), '아직을 실패로 말한다');
+  // 버전이 없어도 문장이 깨지지 않는다(update-policy 의 다른 문구들과 같은 규약 — 버전 뒤에 조사를 안 붙인다)
+  assert.equal(typeof updateStagingNote(null), 'string');
+  assert.equal(typeof updateNotStagedNote(undefined), 'string');
+});
+
+t('U17 나중에 하기 — 닫는 길이 있고, 닫아도 다음 버전은 다시 뜬다 (#2203)', () => {
+  // 실측(원준): "저거에 X버튼 없는 상황도 이해가 안 가네." 종전엔 이 띠를 접는 길이 **재시작뿐**이었다.
+  //  지금 재시작할 수 없는 사정(작업 중·회의 중)은 늘 있는데 화면이 그걸 인정하지 않았다.
+  const ui = readFileSync(fileURLToPath(new URL('../../web/desktop-update.ts', import.meta.url)), 'utf8');
+  assert.match(ui, /class: 'deskup-x'/, '닫기 컨트롤이 없다 — 재시작 말고는 이 띠를 접을 길이 없다');
+  // 아이콘 하나만 두는 자리라 **이름**이 반드시 있어야 한다(스크린리더·툴팁 모두 '×' 만 읽으면 뜻이 없다)
+  assert.match(ui, /'aria-label': '나중에 하기'/, '닫기 버튼에 이름이 없다');
+  // ⚠ 닫기가 자동 업데이트를 영구히 꺼 버리면 보안 픽스까지 막힌다 — **그 버전에 한해서만** 접혀야 한다
+  assert.match(ui, /dismissed === dismissKey\(cur\)/, '닫힘 판정이 버전 단위가 아니다 — 다음 버전이 와도 안 뜬다');
+  assert.match(ui, /s\.version \|\| 'unknown'/, '버전을 못 받은 판에서 닫기가 동작하지 않는다');
+  // 저장이 막힌 환경(프라이빗 창·사이트 데이터 차단)에서 터지면 배너 전체가 안 그려진다
+  const dz = ui.slice(ui.indexOf('function readDismissed'), ui.indexOf('export function mountDesktopUpdate'));
+  assert.equal((dz.match(/catch/g) || []).length, 2, 'localStorage 읽기·쓰기 양쪽을 감싸지 않았다 — 저장이 막힌 창에서 터진다');
+  // 스타일: 아이콘만 있는 컨트롤이라 누를 면적을 글자보다 크게 잡아야 한다
+  const css = readFileSync(fileURLToPath(new URL('../../public/styles/44-desktop-update.css', import.meta.url)), 'utf8');
+  assert.match(css, /\.deskup-x\s*\{/, '닫기 버튼 스타일이 없다');
+  assert.match(css, /\.deskup-x:focus-visible/, '키보드로 왔을 때 어디 있는지 안 보인다');
+});
+
+t('U16 ★ 배선 — 인계 신호를 직접 듣고, 아직인 요청에 성공으로 답하지 않는다', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  // W1 — 파일을 받은 사실만으로 '준비됨' 을 세우지 않는다(그게 이번 결함의 뿌리다)
+  const dl = main.slice(main.indexOf('autoUpdater.on("update-downloaded"'), main.indexOf('function settleUpdateReady'));
+  assert.ok(dl.length > 0, 'update-downloaded 핸들러나 승격 함수가 사라졌다');
+  assert.ok(!/\bupdateReady\s*=/.test(dl), 'zip 을 받자마자 준비됨으로 세운다 — 맥에서 배너가 앞서 뜬다(#2203)');
+  // W2 — 인계 신호를 직접 듣는다. electron-updater 는 이 사실을 밖으로 알려 주지 않는다.
+  //  그리고 그 구독은 **맥에서만** 걸어야 한다(다른 OS 에선 native autoUpdater 를 건드릴 이유가 없다).
+  assert.match(main, /autoUpdater as nativeAutoUpdater/, 'native autoUpdater 를 안 들여왔다 — 인계 시점을 알 길이 없다');
+  const nat = main.indexOf('nativeAutoUpdater.on(');
+  assert.ok(nat > 0, '인계 신호를 안 듣는다 — 맥 배너가 영영 안 뜬다');
+  assert.match(main.slice(Math.max(0, nat - 400), nat), /platform === "darwin"/, '맥 밖에서도 native autoUpdater 를 건드린다');
+  assert.match(main, /squirrelReady = true/, '인계 신호를 듣고도 상태를 안 바꾼다');
+  // W3 — 아직인 상태의 적용 요청에 성공으로 답하지 않는다(성공으로 답하면 화면이 '다시 시작하는 중' 으로 굳는다)
+  const ap = main.slice(main.indexOf('async function applyUpdate'), main.indexOf('function scheduleAutoApply'));
+  assert.ok(ap.length > 0, 'applyUpdate 를 못 찾았다');
+  assert.match(ap, /ok: false, error: updateNotStagedNote/, '아직인 요청을 성공으로 답한다 — 버튼이 굳는 그 경로(#2203)');
+  // W4 — 재시작이 실제로 안 일어났을 때 '종료해도 된다' 표시를 되돌린다
+  //  안 되돌리면 그 뒤 사람이 창을 닫을 때 트레이로 숨는 대신 창이 진짜 닫히고, 창 숨김에 달린 자동 적용까지 사라진다.
+  assert.match(ap, /quitting = false/, 'quitting 안전망이 없다 — 실패 뒤 창 닫기가 트레이 상주를 깬다');
+  // W5 — 재확인 억제 기준은 '준비됨' 이 아니라 '받았음' 이다(인계를 기다리는 몇 분 사이 확인이 또 돌면 프록시가 겹친다)
+  const ck = main.slice(main.indexOf('async function checkUpdates'), main.indexOf('async function checkUpdates') + 900);
+  assert.match(ck, /if \(updateDownloaded\) return null;/, '재확인 억제 기준이 준비됨이다 — 인계 대기 중 확인이 또 돈다');
 });
 
 // ── S. Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs) ────────────────────
@@ -845,11 +932,17 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
 t('U14 업데이트 적용 재시작 후 창 복원 — 창에서 눌렀을 때만 마커, 시작 때 마커 소비 후 창 (#1541 실측: 트레이에만 떠 손으로 열었다)', () => {
   const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
   // applyUpdate: 창이 보일 때만 마커 — 자동 적용(창 숨김)이 마커를 남기면 안 보는 사람 앞에 창이 튀어나온다
-  const ap = main.slice(main.indexOf('async function applyUpdate'), main.indexOf('async function applyUpdate') + 1600);
+  // ⚠ 슬라이스는 **함수 경계**로 자른다 — 고정 길이(+1600자)로 자르면 주석 한 줄만 늘어도 quitAndInstall 이
+  //  범위 밖으로 밀려 '못 찾음' 이 조용히 통과로 둔갑한다(#2203 에서 실제로 이 자리가 빨간불이 됐다).
+  const ap = main.slice(main.indexOf('async function applyUpdate'), main.indexOf('function scheduleAutoApply'));
+  //  ⚠ 찾는 건 **실제 호출**(`u.quitAndInstall(`)이다 — 맨 이름으로 찾으면 머리말 주석의 언급이 먼저 걸려
+  //   순서 단언이 엉뚱한 자리를 재게 된다(#2203 에서 실제로 그랬다).
+  const qi = ap.indexOf('u.quitAndInstall(');
+  assert.ok(qi > 0, 'applyUpdate 슬라이스가 quitAndInstall 호출을 못 담았다 — 아래 순서 단언이 무의미해진다');
   const mk = ap.indexOf('desktop-reopen');
   assert.ok(mk >= 0, 'applyUpdate 가 재열기 마커를 안 남긴다');
   assert.match(ap.slice(Math.max(0, mk - 200), mk), /win\.isVisible\(\)/, '창 표시 여부 확인 없이 마커를 남긴다');
-  assert.ok(ap.indexOf('desktop-reopen') < ap.indexOf('quitAndInstall'), '마커는 quitAndInstall 전에 남겨야 한다(후엔 프로세스가 죽는다)');
+  assert.ok(mk < qi, '마커는 quitAndInstall 전에 남겨야 한다(후엔 프로세스가 죽는다)');
   // 시작: 마커가 있으면 지우고 창을 연다(지우지 않으면 다음 시작마다 창이 뜬다)
   const boot = main.slice(main.indexOf('app.whenReady'), main.indexOf('app.whenReady') + 2000);
   const bm = boot.indexOf('desktop-reopen');

@@ -307,6 +307,8 @@ export async function clearSessionWorkspace(sessionId: string): Promise<void> {
 export async function workspaceForSession(sessionId: string): Promise<RegistryWorkspace | null> {
   const hit = sessionWsCache.get(sessionId);
   if (hit && Date.now() - hit.at < SESSION_TTL_MS) return hit.ws;
+  // (이쪽은 워크스페이스 **레코드**를 돌려주는 자리라 INNER JOIN 이 맞다 — 행이 없으면 줄 것이 없다.
+  //  «소속 id 만» 필요한 sessionWorkspaceIds 와 계약이 다르다: 그쪽은 LEFT JOIN 이어야 한다. 위 주석 참조.)
   const r = await itemsPool.query(
     `SELECT ${COLS.split(", ").map((c) => `w.${c}`).join(", ")}
        FROM gw_session_map m JOIN gw_workspace w ON w.id = m.workspace_id
@@ -334,10 +336,15 @@ export function sessionInWorkspace(mappedWsId: string | null | undefined, curren
 export async function sessionWorkspaceIds(sessionIds: string[]): Promise<Map<string, string>> {
   const ids = Array.from(new Set(sessionIds.filter((s) => typeof s === "string" && s)));
   if (!ids.length) return new Map();
+  // ⚠ **LEFT JOIN 이어야 한다**(실측 2026-08-27, 매니지드 프로덕션): 이 조인의 목적은 «보관된(archived)
+  //  워크스페이스를 빼는 것» 인데, INNER JOIN 이면 «gw_workspace 에 행이 아예 없는 배포» 에서 **전부**
+  //  빠진다. 매니지드가 정확히 그 배포다 — 워크스페이스 축을 CP 가 테넌트로 갖고 있어 이 표는 비어 있고,
+  //  gw_session_map 에는 매핑이 멀쩡히 있다. 그래서 목록이 통째로 비었다(«세션이 목록에 안 나타남»).
+  //  없는 것(w.id IS NULL)은 «모름» 이라 매핑값을 그대로 쓰고, 있는데 보관됐을 때만 뺀다.
   const r = await itemsPool.query(
     `SELECT m.session_id, m.workspace_id::text AS wsid
-       FROM gw_session_map m JOIN gw_workspace w ON w.id = m.workspace_id
-      WHERE w.state='active' AND m.session_id = ANY($1::text[])`,
+       FROM gw_session_map m LEFT JOIN gw_workspace w ON w.id = m.workspace_id
+      WHERE (w.id IS NULL OR w.state='active') AND m.session_id = ANY($1::text[])`,
     [ids]);
   return new Map(r.rows.map((x) => [x.session_id as string, x.wsid as string]));
 }

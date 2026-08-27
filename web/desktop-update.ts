@@ -40,6 +40,23 @@ let cur: UpdateState = { ready: false, version: '', busy: false };
 let applying = false;      // 눌렀다 — 이 창은 곧 사라진다(설치기가 앱을 닫는다). 두 번 누르지 못하게.
 let wired = false;
 
+// ── 나중에 하기 (#2203) ────────────────────────────────────────────────────────────────
+// ★ 실측(2026-08-27 원준): "저거에 X버튼 없는 상황도 이해가 안 가네." — 맞는 지적이다. 종전엔 이 띠를 접는 길이
+//  **재시작뿐**이었다. 지금 재시작할 수 없는 사정(작업 중·회의 중)은 늘 있는데 화면은 그걸 인정하지 않았다.
+//  → 닫기를 준다. 다만 **그 버전에 대해서만** 접는다: 다음 버전이 오면 다시 뜬다(닫기가 자동 업데이트를
+//    영구히 꺼 버리면 그건 보안 픽스까지 막는 스위치가 된다). 닫은 뒤에도 트레이 메뉴에 항목이 그대로 있다.
+const DISMISS_KEY = 'deskup-dismissed';
+const dismissKey = (s: UpdateState): string => s.version || 'unknown';   // 버전을 못 받은 판(구 앱)도 접히긴 해야 한다
+function readDismissed(): string {
+  try { return localStorage.getItem(DISMISS_KEY) || ''; } catch (_) { return ''; }   // 프라이빗 창·저장 차단
+}
+let dismissed = readDismissed();
+function dismiss(): void {
+  dismissed = dismissKey(cur);
+  try { localStorage.setItem(DISMISS_KEY, dismissed); } catch (_) { /* 못 남겨도 이번 화면에선 접힌다 */ }
+  paint();
+}
+
 /**
  * 붙일 자리를 하나 등록한다. 셸이 그 자리를 다시 만들 때마다 그냥 다시 부르면 된다 —
  *  화면에서 떨어진 옛 자리는 다음 그리기에서 저절로 정리된다(누수·중복 그리기 없음).
@@ -77,8 +94,15 @@ function paint(): void {
 }
 
 function render(host: HTMLElement, variant: Variant): void {
-  if (!cur.ready) { host.replaceChildren(); host.hidden = true; return; }
+  // 접는 조건 둘 — 받아 둔 게 없다 / 이 버전은 사람이 "나중에" 라고 했다(다음 버전이 오면 다시 뜬다)
+  if (!cur.ready || dismissed === dismissKey(cur)) { host.replaceChildren(); host.hidden = true; return; }
   const ver = cur.version ? '새 버전 ' + cur.version : '';
+  // 닫기 — 지금 재시작할 수 없는 사람에게 주는 유일한 출구다(#2203). 아이콘만 두므로 이름을 반드시 붙인다.
+  const x = el('button', {
+    class: 'deskup-x', type: 'button', 'aria-label': '나중에 하기',
+    title: '나중에 하기 — 트레이 메뉴에서 언제든 반영할 수 있습니다.',
+    onclick: () => dismiss(),
+  }, '×') as HTMLButtonElement;
   // 작업 중(설치·노드 기동 등)엔 앱이 적용을 거절한다 — 누르고 나서 거절당하는 대신 미리 잠그고 이유를 적는다.
   // 버튼은 기성 고스트(흰 바탕 + 헤어라인)다 — 채운 블루 primary 는 화면당 하나라는 예산이 있고(디자인 시스템 §0.5),
   //  이 띠는 화면의 과업이 아니라 **크롬**이라 그 하나를 가져가면 안 된다.
@@ -90,8 +114,12 @@ function render(host: HTMLElement, variant: Variant): void {
 
   if (variant === 'row') {
     // 사이드바 발치 — 폭이 좁아 두 줄로 쌓는다. 문장은 짧게 하되 어미는 남긴다.
+    //  닫기는 머리줄 오른쪽 끝에 둔다(카드의 관례 자리) — 반영 버튼과 나란히 두면 둘 중 뭘 누를지 헷갈린다.
     host.replaceChildren(
-      el('div', { class: 'deskup-t' }, el('span', { class: 'deskup-dot', 'aria-hidden': 'true' }), el('span', { text: '업데이트 준비가 완료되었습니다.' })),
+      el('div', { class: 'deskup-t' },
+        el('span', { class: 'deskup-dot', 'aria-hidden': 'true' }),
+        el('span', { text: '업데이트 준비가 완료되었습니다.' }),
+        x),
       ...(ver || why ? [el('p', { class: 'deskup-sub', text: why || ver })] : []),
       btn);
   } else {
@@ -100,7 +128,7 @@ function render(host: HTMLElement, variant: Variant): void {
       el('span', { class: 'deskup-txt', text: '업데이트 준비가 완료되었습니다. 다시 시작하면 반영됩니다.' }),
       ...(ver ? [el('span', { class: 'deskup-ver', text: ver })] : []),
       ...(why ? [el('span', { class: 'deskup-ver', text: why })] : []),
-      btn);
+      btn, x);
   }
   host.className = 'deskup deskup-' + variant;
   host.setAttribute('role', 'status');

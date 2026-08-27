@@ -122,6 +122,26 @@ export async function setMemberOnboardingStep(
 export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
 /** 처음 설정의 결과. 무엇을 만들었는지까지 남긴다 — "왜 이 서랍이 있죠?" 에 답할 유일한 근거다. */
 export interface LivWelcome { done_at: string; drawers?: string[]; first_order?: string | null }
+/**
+ * 처음 설정을 **하다 만 자리**(#2207). 끝난 결과(LivWelcome)와 별개다 — 이건 아직 안 끝난 사람의 자리표다.
+ *
+ * 왜 서버에 두나: 종전엔 진행 상태가 브라우저 sessionStorage(`lively-ob-v2`) 하나였다. sessionStorage 는
+ *  **탭을 닫으면 사라진다** — 온보딩을 하다 창을 닫고 app.lvly.io 로 다시 들어오면 이름부터 다시 물었고,
+ *  거기까지 답한 것(무대·직무·고른 AI·자료함 갈래)은 아무 데도 안 남았다. 답을 받아 놓고 잃는 것은
+ *  이름·업무를 그 자리에서 저장하기로 한 결정(#1813)과 같은 이유로 고쳐야 하는 결함이다.
+ *
+ * `state` 는 **화면이 쥔 상태 그대로**(불투명)다. 서버는 해석하지 않는다 — 장면이 늘고 줄 때마다
+ *  서버 스키마를 따라 고치게 만들면 그 순간부터 두 벌이 어긋난다. 서버가 아는 것은 두 가지뿐:
+ *  «어느 장면에서 멈췄나»(scene — 되돌아갈 자리)와 «언제»(at). 나머지는 화면이 읽고 화면이 쓴다.
+ */
+export interface LivWelcomeProgress {
+  /** 마지막으로 저장된 시각(ISO). */
+  at: string;
+  /** 멈춘 장면 key(화면의 SCENES/CHAT_STEPS key). 되돌아갈 자리. */
+  scene: string;
+  /** 화면이 쥔 진행 상태 그대로 — 서버는 해석하지 않는다. */
+  state: Record<string, unknown>;
+}
 export interface LivDecision { at: string; what: string; why?: string; by?: string }
 /** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
 export interface LivDeclined { at: string; key: string; why?: string }
@@ -230,8 +250,16 @@ export interface LivProfile {
   work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[];
   /** 처음 설정(#/welcome)을 끝낸 시각. 종전엔 브라우저 localStorage 표식이라 기기를 바꾸면 온보딩이 다시 떴다(#1813). */
   welcome?: LivWelcome | null;
+  /** 처음 설정을 **하다 만 자리**(#2207). 끝나면 지운다(끝난 사실은 위 welcome·onboarded_at 이 말한다). */
+  welcome_progress?: LivWelcomeProgress | null;
   /** 처음 설정(#/welcome)을 끝낸 시각(#2039). **브라우저가 아니라 여기가 정본** — 기기를 바꿔도 다시 안 뜬다. */
   onboarded_at?: string | null;
+  /**
+   * 처음 설정으로 **자동으로 보낸** 시각(#2171). onboarded_at 과 다른 사실이다 —
+   *  저건 «끝냈다», 이건 «보여는 줬다». 자동 진입은 이 표식으로 **평생 한 번**만 한다.
+   *  종전엔 완주(onboarded_at)만이 유일한 탈출구라, 중간에 나간 사람은 앱을 열 때마다 다시 끌려갔다.
+   */
+  welcome_shown_at?: string | null;
   /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
@@ -262,6 +290,21 @@ export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Pro
   if (!chat) return cur;                       // 대화가 없으면 이을 곳도 없다
   const turns = [...(chat.turns ?? []), turn].slice(-cap);
   const next: LivProfile = { ...cur, chat: { ...chat, turns } };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+/**
+ * 처음 설정을 하다 만 자리를 남긴다(null = 지운다 — 끝났거나 처음부터 다시 하기로 했을 때) (#2207).
+ *
+ * ⚠ 읽고-쓰기라 같은 사람이 두 탭에서 온보딩을 하면 뒤가 앞을 덮는다. 그게 맞다 — **마지막으로 만진
+ *  화면이 그 사람의 지금**이고, 두 진행을 합칠 방법도 뜻도 없다(반쯤 A, 반쯤 B 인 답은 답이 아니다).
+ */
+export async function setLivWelcomeProgress(id: string, progress: LivWelcomeProgress | null): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur, welcome_progress: progress };
   const r = await itemsPool.query(
     `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
@@ -323,7 +366,7 @@ export async function getLivProfile(id: string): Promise<LivProfile> {
  *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
  */
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
@@ -331,6 +374,9 @@ export async function appendLivProfile(
   if (patch.welcome) next.welcome = patch.welcome;
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
+  // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).
+  //  처음 찍힌 시각을 지킨다 — 이 값이 곧 '자동 진입은 평생 한 번' 의 근거라 뒤로 밀리면 안 된다.
+  if (patch.welcomeSeen && !cur.welcome_shown_at) next.welcome_shown_at = new Date().toISOString();
   if (patch.decision) next.decisions = [...(cur.decisions ?? []), patch.decision].slice(-LIV_LIST_CAP);
   if (patch.declined) {
     const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);

@@ -20,7 +20,11 @@
 /* ── 오른쪽 본문 ─────────────────────────────────────────────── */
 .ob-main{flex:1; display:flex; flex-direction:column; min-width:0; position:relative}
 .ob-crumb{display:flex; align-items:center; gap:6px; padding:10px 16px; font-size:13px; color:var(--ink-sub); border-bottom:1px solid transparent; min-height:41px}
-.ob-root.ob-stage-name .ob-crumb{visibility:hidden}
+/* 막1(이름)은 민낯이라 빵부스러기를 숨긴다 — 다만 **나가는 문은 남긴다**(#2171).
+   종전엔 줄 전체를 숨겨서, 첫 화면에 떨어진 사람은 스스로 나갈 길이 아예 없었다. */
+/*  ⚠ visibility 가 아니라 display 로 걷는다 — visibility 는 자리를 남겨서, 나가는 문의 margin-left:auto 가
+    빈 자리 뒤에서 멈춘다(줄 가운데에 뜬다). 줄 높이는 .ob-crumb 의 min-height 가 지킨다. */
+.ob-root.ob-stage-name .ob-crumb>*:not(.ob-q-exit){display:none}
 .ob-crumb .ob-lm{width:18px;height:18px;font-size:9px}
 .ob-crumb .ob-sep{color:var(--ghost)}
 
@@ -143,6 +147,9 @@
 .ob-q-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
 .ob-q-back{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--muted);padding:4px 9px;border-radius:8px;border:1px solid transparent;background:none;cursor:pointer}
 .ob-q-back[hidden]{display:none}
+/* 나가는 문(#2171) — 줄의 오른쪽 끝. [← 이전] 이 함께 보일 때만 그 뒤에 붙는다(그때는 [← 이전] 이 밀린다). */
+.ob-q-exit{margin-left:auto}
+.ob-q-back:not([hidden])~.ob-q-exit{margin-left:8px}
 .ob-q-back:hover{color:var(--ink);background:var(--bg-tint);border-color:var(--line)}
 .ob-q-prog{gap:5px;width:118px}
 .ob-q-prog button.ob-go{cursor:pointer}

@@ -8,7 +8,8 @@
 //   ① GET  /api/ui/me/welcome          — 실측 조회(내가 올린 자료·종류별 집계·지금 갈래·끝냈는지)
 //   ② POST /api/ui/me/welcome/analyze  — 올린 자료를 **LLM 에게 실제로 보여** 갈래를 제안받는다
 //      GET  /api/ui/me/welcome/analyze/:id — 그 판정을 읽는다(끝났으면 파싱된 갈래 목록)
-//   ③ POST /api/ui/me/welcome          — 사람이 승인한 것을 **진짜로 반영**(갈래 생성·프로필·완료)
+//   ③ POST /api/ui/me/welcome/progress — **하다 만 자리**를 남긴다(#2207 — 창을 닫아도 그 장면부터 잇게)
+//   ④ POST /api/ui/me/welcome          — 사람이 승인한 것을 **진짜로 반영**(갈래 생성·프로필·완료)
 //
 //  ⚠ LLM 은 이 제품에서 **사람의 AI 구독으로 헤드리스 세션을 띄우는 것**이 유일한 길이다
 //   (박스에 API 키가 없다 — 그게 설계다). 그래서 ②는 리브 턴과 같은 spawnTaskSession 을 쓰고,
@@ -53,6 +54,31 @@ export function drawerKey(name: string): string {
   const ascii = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
   if (ascii) return ascii;
   return `d-${crypto.createHash("sha1").update(name.trim()).digest("hex").slice(0, 10)}`;
+}
+
+/** 하다 만 자리를 저장할 때의 크기 상한(#2207). 화면 상태는 답 몇 줄이라 이 값을 넘을 이유가 없다.
+ *  ⚠ 넘으면 **거절한다**(조용히 자르지 않는다) — 잘린 JSON 은 다음에 이어 열 때 그냥 깨진 상태다. */
+export const PROGRESS_MAX_BYTES = 32 * 1024;
+/** 장면 key — 어떤 장면이 있는지는 화면이 정한다. 서버는 목록을 모르고 **모양만** 본다. */
+const SCENE_RE = /^[A-Za-z0-9_-]{1,40}$/;
+
+/**
+ * 화면이 보낸 «하다 만 자리»를 저장할 모양으로 다듬는다(순수) (#2207).
+ *
+ * 서버는 `state` 를 **해석하지 않는다** — 장면이 늘고 줄 때마다 서버 스키마를 따라 고치게 만들면
+ *  그 순간부터 두 벌이 어긋난다(같은 이유로 리브 프로필도 대화 본문을 복제하지 않는다).
+ *  대신 지키는 것 셋: 장면 key 의 모양 · 전체 크기 · JSON 으로 다시 읽히는가.
+ */
+export function normalizeProgress(input: Record<string, unknown>, now: string): { at: string; scene: string; state: Record<string, unknown> } {
+  const scene = String(input.scene ?? "").trim();
+  if (!SCENE_RE.test(scene)) throw new HttpError(400, "scene 이 올바르지 않습니다");
+  const raw = input.state;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "state 는 객체여야 합니다");
+  let json: string;
+  try { json = JSON.stringify(raw); } catch { throw new HttpError(400, "state 를 저장할 수 없습니다"); }
+  if (!json || json === "{}") throw new HttpError(400, "저장할 진행이 없습니다");
+  if (Buffer.byteLength(json, "utf8") > PROGRESS_MAX_BYTES) throw new HttpError(413, "진행 상태가 너무 큽니다");
+  return { at: now, scene, state: JSON.parse(json) as Record<string, unknown> };
 }
 
 /**
@@ -258,9 +284,16 @@ export const welcomeCapabilities: Capability[] = [
       // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
       const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
       const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
+      const done = !!(liv.welcome?.done_at || liv.onboarded_at);
       return {
-        done: !!(liv.welcome?.done_at || liv.onboarded_at),   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
+        done,   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
         done_at: liv.welcome?.done_at ?? null,
+        // #2171 — **보여준 적 있나**(끝냈나와 별개). 자동 진입은 이 표식으로 평생 한 번만 한다.
+        shown_at: liv.welcome_shown_at ?? null,
+        //  하다 만 자리(#2207) — 이 값이 있으면 화면은 **이름부터가 아니라 그 장면부터** 다시 연다.
+        //  ⚠ 끝낸 사람에게는 내주지 않는다. 남아 있는 옛 진행이 «이어서 하기» 로 되살아나면
+        //   이미 끝낸 설정을 다시 하게 된다(끝냈다는 사실이 진행보다 세다).
+        progress: done ? null : (liv.welcome_progress ?? null),
         // 이 사람의 AI 가 이어졌나(분석이 실제로 돌 수 있나) + 무엇으로 도는가. 자격 값은 절대 싣지 않는다.
         ai_ready: aiHarnesses.length > 0,
         ai_harnesses: aiHarnesses,
@@ -395,7 +428,41 @@ export const welcomeCapabilities: Capability[] = [
       from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
     }),
 
-  // ── ③ 반영 ───────────────────────────────────────────────────────────────
+  // ── ③ 하다 만 자리 저장(#2207) ─────────────────────────────────────────────
+  //  왜 필요한가: 진행 상태가 브라우저 sessionStorage 하나였다. 탭을 닫으면 사라지므로, 온보딩을 하다
+  //   나간 사람은 app.lvly.io 로 다시 들어와도 **이름부터** 다시 물었다. 답을 받아 놓고 잃는 것은
+  //   이름·업무를 그 자리에서 남기기로 한 결정(#1813)과 같은 결함이다 — 자리표까지 서버가 든다.
+  //  ⚠ 자동 저장이라 자주 불린다. 그래서 하는 일은 **한 줄 쓰기**뿐이다(집계·LLM·외부 호출 없음).
+  restRead("me_welcome_progress", "처음 설정 진행 저장",
+    "처음 설정(#/welcome)에서 **지금 어디까지 왔는지**를 서버에 남긴다. 중간에 창을 닫아도 다음에 " +
+    "들어오면 그 장면부터 이어 간다. state 는 화면이 쥔 상태 그대로이고 서버는 해석하지 않는다. " +
+    "끝나면(POST /api/ui/me/welcome) 저절로 지워진다.",
+    [{ method: "POST", paths: ["/api/ui/me/welcome/progress"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile, setLivWelcomeProgress } = await import("../../org/store.js");
+      const { assertNoHardSecrets } = await import("../../org/ingest/redact.js");
+
+      // 지우기 — 처음부터 다시 하기로 했을 때. 저장과 같은 문으로 받는다(문을 두 개 내지 않는다).
+      if (input.clear === true) { await setLivWelcomeProgress(userId, null); return { ok: true, cleared: true }; }
+
+      // 이미 끝낸 사람의 진행은 받지 않는다 — 받으면 그 값이 다음 로그인에 «아직 하는 중» 으로 읽힌다.
+      const liv = await getLivProfile(userId);
+      if (liv.welcome?.done_at || liv.onboarded_at) return { ok: true, skipped: "done" };
+
+      const progress = normalizeProgress(input, new Date().toISOString());
+      //  온보딩 답이 멤버 레코드에 남는다 — 사람이 입력창에 토큰을 붙여 넣었으면 여기서 막는다(welcome 반영과 같은 규율).
+      assertNoHardSecrets(JSON.stringify(progress.state), "welcome-progress");
+      await setLivWelcomeProgress(userId, progress);
+      return { ok: true, at: progress.at, scene: progress.scene };
+    }, false, {
+      scene: z.string().optional().describe("멈춘 장면 key — 다음에 이 장면부터 연다"),
+      state: z.record(z.unknown()).optional().describe("화면이 쥔 진행 상태 그대로(서버는 해석하지 않는다)"),
+      clear: z.boolean().optional().describe("true 면 저장된 진행을 지운다(처음부터 다시)"),
+    }),
+
+  // ── ④ 반영 ───────────────────────────────────────────────────────────────
   restRead("me_welcome_apply", "처음 설정 결과 반영",
     "처음 설정에서 사람이 정한 것을 **실제로 반영한다** — 부를 이름, 자료함 갈래 생성, 업무 방식과 결정 기록, " +
     "그리고 처음 설정 완료 표식. 갈래 생성은 이미 있는 key 를 건너뛰므로 다시 눌러도 안전하다.",
@@ -491,6 +558,10 @@ export const welcomeCapabilities: Capability[] = [
         welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder },
         onboarded: true,
       });
+      //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
+      //  ⚠ 비치명: 못 지워도 끝난 것은 끝난 것이다(GET 이 done 일 때 progress 를 내주지 않는다).
+      const { setLivWelcomeProgress } = await import("../../org/store.js");
+      await setLivWelcomeProgress(userId, null).catch(() => { /* 비치명 */ });
       return { ok: true, created, skipped, welcome: profile.welcome ?? null };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),

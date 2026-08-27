@@ -8,12 +8,13 @@
 //   · 새 활동이 생기면 옛 글을 먼저 보여 주고 뒤에서 바꾼다 — 빈 줄이 깜빡이지 않게.
 //  ★ 서버 칸이 생겼다(#2197 — org_session_state.last_prompt, work-flag 훅이 UserPromptSubmit 순간 보고). 목록 행에
 //   lastPrompt 가 실리면 그것이 정본이고 아래 꼬리 조회는 **그 값이 없는 세션**(옛 훅·코덱스·기록 세션)의 폴백이다.
+import { wsKey } from '../core.js';
 import { fetchLastAsk } from './sess-tail.js';
 import type { Sess } from './views.js';
 
 const TAIL = 48000;    // 꼬리 바이트 — 클로드 코드의 last-prompt 레코드는 턴마다 있어 보통 여기 든다(행 20개면 1MB 안쪽)
 const TAIL_FAR = 240000;   // 못 찾으면 한 번 더 멀리 — 도구 결과가 긴 에이전트 세션은 사람 말이 수백 KB 뒤에 있다(dev 실측)
-const STORE = 'lively_v2_last_ask';   // 이 기기의 기억 — 새로고침마다 20~50건을 다시 받지 않게(같은 lastSeen 이면 그대로)
+const STORE = wsKey('lively_v2_last_ask');   // #1875 워크스페이스별 · 이 기기의 기억 — 새로고침마다 20~50건을 다시 받지 않게(같은 lastSeen 이면 그대로)
 const KEEP = 200;
 const LIMIT = 4;
 const MAX = 56;

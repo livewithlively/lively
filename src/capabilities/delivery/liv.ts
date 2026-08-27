@@ -136,8 +136,9 @@ export const livCapabilities: Capability[] = [
       const workIn = (input.work ?? null) as Record<string, unknown> | null;
       const decIn = (input.decision ?? null) as Record<string, unknown> | null;
       const dclIn = (input.declined ?? null) as Record<string, unknown> | null;
-      const onboarded = input.onboarded === true;   // #2039 — 처음 설정을 끝냈다는 표식
-      if (!workIn && !decIn && !dclIn && !onboarded) throw new HttpError(400, "work · decision · declined · onboarded 중 하나는 있어야 합니다");
+      const onboarded = input.onboarded === true;   // #2039 — 처음 설정을 **끝냈다**는 표식
+      const welcomeSeen = input.welcome_seen === true; // #2171 — 처음 설정으로 **보냈다**는 표식(끝냈다와 별개)
+      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen 중 하나는 있어야 합니다");
       const declinedKey = dclIn ? str(dclIn.key, 80) : undefined;
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
@@ -148,6 +149,7 @@ export const livCapabilities: Capability[] = [
           decision: decIn ? { at: now, what: decWhat as string, why: str(decIn.why, 1000), by: str(decIn.by, 60) ?? "liv" } : undefined,
           declined: dclIn ? { at: now, key: declinedKey as string, why: str(dclIn.why, 500) } : undefined,
           onboarded,
+          welcomeSeen,
         }),
       };
       // ⚠ mcp:true 여야 한다 — 리브에겐 **이게 유일한 기록 수단**이다. 종전엔 mcp:false 라 부팅 훅이
@@ -163,6 +165,9 @@ export const livCapabilities: Capability[] = [
         .describe("사람이 '안 하겠다'고 한 카드 key(예: org.embeddings). 그 카드는 이후 뜨지 않는다."),
       onboarded: z.boolean().optional()
         .describe("처음 설정(#/welcome)을 끝냈다는 표식(#2039). 찍히면 그 사람에겐 어느 브라우저에서도 처음 설정이 다시 뜨지 않는다."),
+      welcome_seen: z.boolean().optional()
+        .describe("처음 설정(#/welcome)으로 **자동으로 보냈다**는 표식(#2171) — 끝냈다는 뜻이 아니다. " +
+          "찍히면 자동 진입을 다시 하지 않는다(자동 진입은 평생 한 번). 못 끝낸 사람은 홈의 «이어서 하기»로 안내된다."),
     }),
 
   // ── 리브가 나에 대해 아는 것을 **화면이 읽는다**(#1843) ──────────────────────────────

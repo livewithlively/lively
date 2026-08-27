@@ -55,6 +55,11 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
   //  ensureTenantColumn **뒤**여야 한다 — 컬럼이 붙은 다음이라야 기본값을 고칠 수 있다.
   const ig = await pinIdentityGlobalTenant();
   if (ig.folded) note(`identity-global tenant pinned (${ig.pinned}표 · ${ig.folded}행 primary 로 접음)`);
+  if (ig.skipped.length) {
+    // 바깥 정책 계층(매니지드 공용 DB 의 lvly-cloud tenantrls)이 tenant_isolation 을 걸어 둔 표 — 그 배포에서는
+    //  테넌트별 표다. 못박고 접으면 행이 어느 테넌트에도 안 보이는 자리로 가 전 테넌트 로그인이 죽는다(#2198).
+    note(`identity-global pin skipped — 테넌트로 격리된 표 ${ig.skipped.length}개(바깥 정책 계층 소관): ${ig.skipped.join(", ")}`);
+  }
   if (ig.conflicts.length) {
     // 짝이 있어 접지 못한 행 — 자동으로 고르면 데이터를 잃는다. 사람이 정해야 한다.
     logger.warn(`[schema] 신원 전역 표에 워크스페이스로 갈라진 행이 남아 있습니다 — ${ig.conflicts.join(" · ")}`);

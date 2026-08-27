@@ -16,6 +16,21 @@ export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
 /**
+ * 처음 설정으로 **자동으로 보냈다**를 서버에 남긴다(#2171). «끝냈다»(onboarded)와 다른 사실이다.
+ *
+ *  왜 필요한가: 종전엔 끝냄 표식이 온보딩 맨 끝 [준비 끝, 정리해 주세요] 한 자리에서만 찍혔다. 그래서
+ *   중간에 나간 사람은 서버 눈에 영영 '처음 오는 사람'이라 **앱을 열 때마다 다시 끌려갔다**(원준님 신고
+ *   2026-08-27). 자동 진입은 평생 한 번이어야 하고, 그 근거는 «보여줬다»는 사실이지 «끝냈다»가 아니다.
+ *
+ *  ⚠ 실패해도 삼킨다 — 표식을 못 남겼다고 화면이 안 뜨면 안 된다. 다음 부팅에 한 번 더 뜨는 것이
+ *   최악이고, 그건 종전과 같지 더 나쁘지 않다(구 서버도 400 을 낼 뿐 화면은 그대로 뜬다).
+ */
+export function markWelcomeSeen(): void {
+  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ welcome_seen: true }) })
+    .catch(() => { /* 비치명 — 위 ⚠ */ });
+}
+
+/**
  * 처음 설정을 끝냈는지 **서버에 묻는다**(#1813). 종전엔 localStorage 표식뿐이라 기기·브라우저를 바꾸면
  *  이미 끝낸 사람에게 온보딩이 다시 떴다. 서버가 답을 주면 로컬 캐시도 그 값으로 맞춘다.
  *  못 물으면(오프라인·구 서버) 로컬 캐시로 떨어진다 — 온보딩 때문에 앱이 안 열리는 일은 없어야 한다.
@@ -88,7 +103,10 @@ async function desktopLink() {
 
 export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boolean) => void; onDone?: () => void } = {}): { destroy(): void } {
   host.className = 'ob-root';
-  host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span><button class="ob-q-back" id="obBack" data-back hidden>← 이전</button></div>
+  // ⚠ 나가는 문(#2171). 종전엔 처음 설정에서 **스스로 나갈 길이 없었다** — 장면마다 「나중에 정할게요」가
+  //  있었지만 그건 다음 질문으로 넘기는 버튼이지 나가는 버튼이 아니었고, 끝까지 완주해야만 벗어날 수 있었다.
+  //  홈으로 보내면서 «이어서 하기» 를 남긴다(포기가 아니라 미룸 — views.ts 의 홈 줄이 받는다).
+  host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span><button class="ob-q-back" id="obBack" data-back hidden>← 이전</button><button class="ob-q-back ob-q-exit" id="obExit" title="홈으로 갑니다. 남은 설정은 홈에서 이어서 하실 수 있어요.">나중에 할게요</button></div>
     <div class="ob-qwrap"><div class="ob-qcol" id="qcol"></div></div>
     <div class="ob-chat"><div class="ob-thread" id="thread"></div></div>
     <div class="ob-composer"><div class="ob-composer-in">
@@ -97,6 +115,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     </div></div>
 <div class="ob-toast" id="toast"></div>`;
   const DONE_KEY = OB_DONE_KEY;
+  // 나가는 문 배선(#2171) — 화면에 들어온 것 자체가 «보여줬다» 이므로 표식을 찍고 홈으로 보낸다.
+  //  ★ 여기서 markWelcomeSeen 을 한 번 더 부르는 이유: 자동 진입이 아니라 **사람이 스스로** 이 화면을
+  //   열었을 수도 있다(홈의 «이어서 하기» · 주소 직접 입력). 그때도 자동 진입 표식은 있어야 옳다 —
+  //   서버는 이미 찍혔으면 처음 시각을 지키므로(appendLivProfile) 두 번 불러도 값이 밀리지 않는다.
+  markWelcomeSeen();
+  //  ⚠ `$` 는 아래에서 선언된다(const, TDZ) — 여기선 host 에서 직접 집는다.
+  const exitBtn = host.querySelector('#obExit') as HTMLButtonElement | null;
+  if (exitBtn) exitBtn.onclick = () => { location.hash = '#/'; };
   /* 서버 실측 — 내가 올린 자료·종류별 집계·지금 갈래. 연출 숫자를 여기 값으로 갈아끼운다(#1813). */
   let WS: any = null;
   async function loadWelcome() {
@@ -650,6 +676,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   /* ── 상태 ── */
   const KEY = 'lively-ob-v2';
+  /** 검토용 장면 점프(?scene=)로 들어왔나 — 그때만 없는 답을 지어내 화면을 채운다(#2207). */
+  let demoJump = false;
+  /** 이 화면이 이미 걷혔나 — 서버를 기다리는 사이에 떠날 수 있다. */
+  let destroyed = false;
+  /** 이 화면이 히스토리에 쌓은 걸음 순번 — «뒤로» 와 «나가기» 를 가르는 근거(onPop 참조). */
+  let obSeq = 0;
+  /** 서버에 «어디까지 하셨나» 를 묻고 기다리는 한도. 넘으면 처음부터 연다 — 못 물었다고 화면이 안 열리면 안 된다. */
+  const RESUME_WAIT_MS = 2500;
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
@@ -662,8 +696,58 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     chatDone: [],           // 막3에서 끝난 단계들
   });
   let S = fresh();
-  try { const v = JSON.parse(sessionStorage.getItem(KEY)); if (v && v.scene) S = Object.assign(fresh(), v); } catch (e) {}
-  const save = () => { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+  /** 이 탭에 남아 있던 진행이 있었나 — 있으면 그게 가장 새 것이다(아래 «어느 쪽이 정본인가» 참조).
+   *  ⚠ **아무것도 답하지 않은 상태는 «있음» 으로 치지 않는다.** 서버를 못 물었을 때(장애·느림) 첫 화면이
+   *   그대로 이 탭에 저장되는데, 그걸 «있음» 으로 읽으면 그 탭은 **다시는 서버에 묻지 않는다** — 한 번의
+   *   일시적 실패가 그 사람의 저장된 진행을 영영 가린다(실측 2026-08-27: 프리뷰 백엔드가 잠깐 죽은 사이 재현). */
+  let hadLocal = false;
+  try {
+    const v = JSON.parse(sessionStorage.getItem(KEY));
+    if (v && v.scene) { S = Object.assign(fresh(), v); hadLocal = v.scene !== 'name' || !!v.nameSet; }
+  } catch (e) {}
+
+  /* ── 하다 만 자리를 **서버에** 남긴다 (#2207) ─────────────────────────────────
+   *  종전엔 진행이 sessionStorage 하나였다. sessionStorage 는 **탭을 닫으면 사라진다** — 온보딩을 하다
+   *   창을 닫고 app.lvly.io 로 다시 들어오면 이름부터 다시 물었고, 거기까지 답한 것(무대·직무·고른 AI·
+   *   자료함 갈래)은 아무 데도 안 남았다. 이름·업무를 그 자리에서 남기기로 한 것(#1813)과 같은 이유로,
+   *   **자리표까지** 서버가 든다.
+   *  ⚠ 어느 쪽이 정본인가: **이 탭에 있으면 이 탭이 정본**이다. 로컬은 매 저장마다 서버로 밀리므로
+   *   서버보다 앞서거나 같다(뒤질 수 없다). 서버는 «탭이 사라진 뒤» 를 위한 자리다.
+   *  ⚠ 자주 불린다(장면 하나에 여러 번) — 그래서 debounce 하고, 한 번에 하나만 날린다.
+   */
+  const PUSH_MS = 800;
+  let pushT = null, pushing = false, pushAgain = false, pushOff = false;
+  const saveLocal = () => { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+  /** 남길 만한 진행인가 — **아무것도 답하지 않은 첫 화면은 «하다 만 것» 이 아니다.**
+   *  ⚠ 이 문턱이 없으면 처음 설정을 **열어보기만 한** 사람도 다음 로그인마다 처음 설정으로 끌려간다
+   *   (서버 판정이 자리표를 흔적보다 세게 보기 때문이다 — first-run.ts ★). 답이 하나라도 있을 때부터 남긴다. */
+  const worthSaving = () => S.scene !== 'name' || S.nameSet;
+  function schedulePush() {
+    if (pushOff || !worthSaving()) return;   // 끝난 사람의 진행은 남기지 않는다(서버도 거절한다)
+    clearTimeout(pushT);
+    pushT = setTimeout(() => { void flushProgress(); }, PUSH_MS);
+  }
+  /** 지금 상태를 서버에 밀어 넣는다. **실패해도 진행을 막지 않는다** — 이 탭에는 그대로 남아 있다.
+   *  `keepalive` 는 창을 닫는 중에도 요청이 끝까지 가게 한다(pagehide). */
+  async function flushProgress(keepalive) {
+    if (pushOff || !worthSaving()) return;
+    clearTimeout(pushT); pushT = null;
+    if (pushing) { pushAgain = true; return; }
+    pushing = true;
+    try {
+      await api('/api/ui/me/welcome/progress', Object.assign(
+        { method: 'POST', body: JSON.stringify({ scene: S.scene || 'name', state: S }) },
+        keepalive ? { keepalive: true } : {}));
+    } catch (_) { /* 비치명 — 이 탭에는 남아 있다 */ }
+    pushing = false;
+    if (pushAgain) { pushAgain = false; void flushProgress(); }
+  }
+  const save = () => { saveLocal(); schedulePush(); };
+  /** 창을 닫거나 탭을 숨길 때 — 마지막 한 걸음이 유실되는 자리가 정확히 여기다(debounce 대기 중). */
+  const onLeave = () => { if (document.visibilityState === 'hidden') void flushProgress(true); };
+  const onPageHide = () => { void flushProgress(true); };
+  addEventListener('pagehide', onPageHide);
+  document.addEventListener('visibilitychange', onLeave);
 
   const stageOf = () => DATA.STAGES[S.stage] || DATA.STAGES.company;
   const jobOf = () => S.job || stageOf().opts[0][0];
@@ -1823,6 +1907,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           await sleep(1200); location.hash = '#/'; return;
         }
         try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
+        //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 서버 쪽 자리표는 반영이 지웠다 —
+        //   여기서 늦게 도착한 push 하나가 그걸 되살리면 다음 로그인이 다시 온보딩으로 간다.
+        pushOff = true; clearTimeout(pushT); pushT = null;
         ctx.onDone && ctx.onDone();
         const made = (applied && applied.created) || [];
         m.querySelector('.ob-body').innerHTML = made.length
@@ -1890,12 +1977,25 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     b.hidden = !S.trail.length;
     b.onclick = () => goBack();
   }
-  /* 브라우저 뒤로가기 — 쌓아 둔 장면이 있으면 그 한 걸음을 먹고, 없으면 셸이 하던 대로 나간다. */
-  function onPop() {
+  /* 브라우저 뒤로가기 — 쌓아 둔 장면이 있으면 그 한 걸음을 먹고, 없으면 셸이 하던 대로 나간다.
+   *
+   * ⚠ **popstate 는 «뒤로» 전용이 아니다**(#2207 실측 2026-08-27). 같은 문서 안에서 해시가 바뀌는 이동이면
+   *  브라우저가 전부 popstate 를 띄운다 — 사람이 사이드바를 눌러 홈·받은 편지함으로 **나가는** 순간에도 뜬다.
+   *  그래서 종전 코드는 «떠날 때마다 장면을 하나 되감고» 그 자리를 저장했다. 진행이 이 탭 안에만 살던 때는
+   *  잘 안 보였지만, 진행이 서버에 남게 된 지금은 **나갈 때마다 한 걸음씩 뒤로 밀린 자리가 저장된다**
+   *  (재현: 「AI 고르기」에서 Claude 를 고르고 홈으로 나가면 저장된 자리가 다시 「AI 고르기」가 된다).
+   *
+   * 가르는 법: 우리가 쌓은 걸음에는 순번(obSeq)을 찍어 둔다. 되돌아온 자리의 순번이 **지금보다 뒤**일 때만
+   *  «뒤로» 다(앞으로 나가는 이동은 우리 상태가 아예 없거나 순번이 뒤가 아니다).
+   */
+  function onPop(ev) {
+    const st = ev && ev.state;
+    if (!st || typeof st.obSeq !== 'number' || st.obSeq >= obSeq) return;   // 앞으로 나가는 이동 — 우리 일이 아니다
+    obSeq = st.obSeq;
     if (!S.trail.length) return;                 // 더 물러날 곳이 없다 → 홈으로 나가는 게 맞다
     goBack();
     // 우리가 한 걸음 먹었으니 그만큼 다시 쌓아 둔다 — 다음 뒤로가기도 이 안에서 듣는다.
-    try { history.pushState({ ob: S.scene }, '', location.href); } catch (_) { /* noop */ }
+    try { history.pushState({ ob: S.scene, obSeq: ++obSeq }, '', location.href); } catch (_) { /* noop */ }
   }
   addEventListener('popstate', onPop);
   function goScene(key, opts) {
@@ -1904,7 +2004,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       // 브라우저·셸의 «뒤로» 도 이 안에서 한 걸음 물러나게 한다(원준님 2026-08-26: "뒤로가기 누르니까 그냥 메인홈으로 가지네").
       //  ⚠ 주소(해시)는 **바꾸지 않는다** — 바꾸면 셸 라우터가 화면을 새로 그린다. 같은 주소로 state 만 쌓아
       //   popstate 때 우리가 먼저 받아 처리한다. 쌓인 장면이 없을 때의 뒤로가기는 종전대로 홈으로 나간다.
-      try { history.pushState({ ob: key }, '', location.href); } catch (_) { /* 사파리 프라이빗 */ }
+      //  ⚠ 순번(obSeq)을 함께 찍는다 — 이게 있어야 «뒤로» 와 «앞으로 나가는 이동» 이 갈린다(onPop 참조).
+      try { history.pushState({ ob: key, obSeq: ++obSeq }, '', location.href); } catch (_) { /* 사파리 프라이빗 */ }
     }
     S.scene = key; save(); renderSB();
     seqToken++;
@@ -1922,9 +2023,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     setStage('stage-chat');
     $('#thread').innerHTML = '';
     // 막2 답이 비어 있으면 기본값으로 채움 (장면 점프용)
-    if (!S.nameSet) { S.name = '원준'; S.nameSet = true; }
+    //  ⚠ **검토용 점프(?scene=)에서만 지어낸다**(#2207). 실제로 이어 여는 사람에게 쓰면, 이름을 건너뛴
+    //   사람이 갑자기 '원준' 으로 불리고 고른 적 없는 앱이 골라진 것으로 뜬다 — 그 사람의 답이 아니다.
+    //   중립 폴백(`||`)은 둘 다 쓴다: 없는 것을 주장하지 않고 화면이 깨지지만 않게 하는 값이라서다.
+    if (demoJump && !S.nameSet) { S.name = '원준'; S.nameSet = true; }
     S.stage = S.stage || 'company'; S.job = S.job || stageOf().opts[1][0];
-    if (!S.sources.length) S.sources = ['gdrive', 'notion'];
+    if (demoJump && !S.sources.length) S.sources = ['gdrive', 'notion'];
     if (!S.connected.length) S.connected = S.sources.filter((x) => x !== 'none');
     // ⚠ 여기서 **S.aiConnected 를 지어내지 않는다**(#1879). 종전엔 `S.ai !== '아직 없어요'` 로 무조건
     //  덮어썼는데, 그건 `||` 폴백이 아니라 **대입**이라 AI 잇기를 건너뛴 사람도 채팅 단계에 닿는 순간
@@ -1934,7 +2038,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     //  나머지 둘은 사람의 '답'이라 점프용 기본값이 성립한다(중립값으로 채운다 — 없는 연결을 주장하지 않는다).
     S.ai = S.ai || 'Claude';
     S.terminal = S.terminal || 'no'; S.app = S.app || 'web';
-    if (!S.read.total) S.read.total = 41;
+    //  읽고 있는 자료 수 — 이어 여는 사람에게는 **실측**을 쓴다(41 은 검토용 연출 숫자다).
+    if (!S.read.total) S.read.total = demoJump ? 41 : realTotal();
     const past = [];
     const target = key === 'read' ? 'b1' : key;
     const upto = CHAT_STEPS.indexOf(target);
@@ -1956,12 +2061,58 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     chatStep(target, token);
   }
 
+  /* ── 이어서 열기 (#2207) ───────────────────────────────────────────────────
+   *  탭에 남은 것이 없을 때만 서버에 묻는다(탭에 있으면 그게 더 새 것이다 — 위 «어느 쪽이 정본인가»).
+   */
+  /** 서버가 준 자리표 → 실제로 열 장면. 못 열 자리면 null(처음부터). */
+  function resumeScene(p) {
+    if (!p || !p.state || typeof p.state !== 'object') return null;
+    if (STEP_OF[p.scene] != null) return p.scene;
+    //  'done' 은 차례표에 없다 — 마무리(반영)를 누른 뒤 그게 실패했거나 끊긴 자리다. 답은 다 받아 놨으니
+    //   맨 앞이 아니라 **마지막 채팅 단계**로 되돌려 «준비 끝, 정리해 주세요» 를 다시 누르게 한다.
+    if (Array.isArray(p.state.chatDone) && p.state.chatDone.length) return 'can';
+    return null;
+  }
+  /** 서버에 남은 자리로 화면을 연다. 못 물으면 처음부터 — 온보딩이 **안 열리는** 것보다 낫다. */
+  async function resumeFromServer() {
+    if (destroyed) return;
+    setStage('stage-name');
+    $('#qcol').innerHTML = `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
+      <p class="ob-q-help">지난번에 어디까지 하셨는지 보고 있어요.</p>`;
+    const got = await Promise.race([loadWelcome(), sleep(RESUME_WAIT_MS)]);
+    if (destroyed) return;                 // 기다리는 사이에 화면을 떠났다 — 없는 화면에 그리지 않는다
+    const scene = resumeScene(got && got.progress);
+    if (scene) {
+      S = Object.assign(fresh(), got.progress.state);
+      S.scene = scene;
+      saveLocal();          // 이 탭에도 얹어 둔다 — 이제부터는 이 탭이 정본이다(서버로 다시 밀지 않는다)
+      renderSB(); goScene(scene);
+      toast('지난번에 하시던 자리에서 이어 갑니다.');
+      return;
+    }
+    renderSB(); goScene(S.scene || 'name');
+  }
+
   /* ── 부팅 ── */
+  //  지금 이 히스토리 자리에 **출발점 도장(obSeq 0)** 을 찍는다. 이게 있어야 첫 걸음에서의 «뒤로» 가
+  //   «되돌아온 것» 으로 읽힌다 — 도장이 없으면 onPop 이 그 이동을 '우리 일이 아님' 으로 흘려보내고,
+  //   사람은 처음 설정 안에서 뒤로가기가 먹지 않는 것을 본다(#2026 이 고쳤던 그 증상).
+  //  ⚠ 셸이 찍어 둔 값(v2i 등)은 **보존한다** — 통째로 갈아끼우면 셸의 앞/뒤 화살표 판정이 무너진다.
+  try { history.replaceState({ ...(history.state || {}), ob: S.scene, obSeq: 0 }, '', location.href); } catch (_) { /* 사파리 rate limit */ }
   $('#composeGo').onclick = composeSend;
   $('#composeIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) composeSend(); });
   // 장면 바로 열기 — 셸에선 질의가 해시 뒤에 붙는다(#/welcome?scene=b1). 검토용.
   const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
-  if (want && STEP_OF[want] != null) { goScene(want); }
-  else { renderSB(); goScene(S.scene || 'name'); }
-  return { destroy() { clearInterval(readTimer); clearInterval(localTimer); clearTimeout(toastT); removeEventListener('popstate', onPop); ctx.onBare && ctx.onBare(false); } };
+  if (want && STEP_OF[want] != null) { demoJump = true; goScene(want); }
+  else if (hadLocal) { renderSB(); goScene(S.scene || 'name'); schedulePush(); }
+  else { renderSB(); void resumeFromServer(); }
+  return { destroy() {
+    destroyed = true;
+    clearInterval(readTimer); clearInterval(localTimer); clearTimeout(toastT);
+    removeEventListener('popstate', onPop);
+    removeEventListener('pagehide', onPageHide);
+    document.removeEventListener('visibilitychange', onLeave);
+    void flushProgress();          // 화면을 떠나는 것도 '중간에 나간 것'이다 — 마지막 한 걸음을 남긴다
+    ctx.onBare && ctx.onBare(false);
+  } };
 }

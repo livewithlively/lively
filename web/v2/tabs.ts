@@ -17,7 +17,7 @@
 //    자리를 먹고, 그 탭만 규칙이 달라(못 닫힘·못 끌림) 줄 전체가 두 문법이 된다. 홈은 사이드바 [새 작업]이
 //    **새 탭으로** 여는 여느 화면이고, 그 탭에서 세션을 열면 그 자리가 곧 그 세션이 된다(브라우저 새 탭 문법).
 //  · **탭 끌어 순서 바꾸기** — 모든 탭이 같은 자격이라 어느 것이든 끌어 옮긴다.
-import { anchoredPopover, el, sv } from '../core.js';
+import { anchoredPopover, el, sv, wsKey } from '../core.js';
 import { EMBEDDED } from './embed.js';
 
 export interface ShellTab {
@@ -55,7 +55,7 @@ export interface TabsHooks {
   onRename?(tab: ShellTab, name: string): Promise<void>;
 }
 
-const STORE_KEY = 'lively_v2_tabs';
+const STORE_KEY = wsKey('lively_v2_tabs');   // #1875 — 열린 창은 **그 워크스페이스의 것**이다(net.ts wsKey 머리말)
 
 //  ⚠ 끼워 넣은 판(미리보기 프레임 안)은 **탭을 기억하지도 기억되지도 않는다** — 미리보기도 주소가 같은
 //   사이트라 저장소를 바깥과 공유한다. 복원하면 바깥이 보던 탭이 프레임 안에 통째로 되살아나 정작 보려던
@@ -70,6 +70,18 @@ export function routeKey(route: string): string {
   if (!p || p === 'dashboard') return 'home';
   if (p === 'p' || p === 's' || p === 'i' || p === 'app') return p + ':' + decodeURIComponent(segs[1] || '');
   return 'raw:' + h;
+}
+
+/**
+ * 이 화면을 **탭 저장본에 남길까**(#2171).
+ *
+ * 처음 설정(#/welcome)은 «지나가는 자리»다 — 한 번 지나가면 끝이지, 다음에 앱을 켤 때 되살아날 화면이
+ *  아니다. 그런데 종전엔 그냥 탭으로 저장돼서, 자동 진입이 한 번 일어나면 그 탭이 저장본에 박히고
+ *  **다음 부팅마다 서버 판정을 보지도 않고 복원**됐다(부팅 라우팅은 저장된 탭을 그대로 되살린다).
+ *  즉 게이트가 아무리 정확해져도 그 뒤로는 무의미했다 — '시도때도없이 뜬다'의 실제 정체가 이것이다.
+ */
+export function routeSticky(route: string): boolean {
+  return routeKey(route) !== 'raw:welcome';
 }
 
 export interface TabsApi {
@@ -123,8 +135,10 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         //  draft(아직 안 보낸 지시)는 있을 때만 싣는다 — 빈 문자열까지 적으면 저장본이 쓸데없이 커진다.
-        tabs: tabs.map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
-        active: activeTab ? tabs.indexOf(activeTab) : 0,
+        //  ⚠ 지나가는 화면(#/welcome)은 저장하지 않는다 — 되살아나면 서버 판정을 우회한다(routeSticky).
+        tabs: tabs.filter((t) => routeSticky(t.route))
+          .map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
+        active: Math.max(0, tabs.filter((t) => routeSticky(t.route)).indexOf(activeTab as ShellTab)),
       }));
     } catch (_) { /* noop */ }
   }
@@ -434,6 +448,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       const wantIdx = Math.max(0, Number(st.active) || 0);
       st.tabs.slice(0, 12).forEach((t: any, i: number) => {
         if (!t || typeof t.route !== 'string') return;
+        if (!routeSticky(t.route)) return;   // 옛 저장본에 박혀 있던 #/welcome 을 되살리지 않는다(#2171)
         const k = routeKey(t.route);
         if (seen.has(k)) return;
         seen.add(k);

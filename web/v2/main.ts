@@ -7,14 +7,14 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
-import { renderOnboarding, onboardingDone } from './onboarding.js'; // #/welcome 처음 설정(#1813)
-import { $view, anchoredPopover, api, el, state, toast } from '../core.js';
+import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
+import { $view, anchoredPopover, api, el, state, toast, wsKey } from '../core.js';
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
-import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
+import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
+import { dotCls, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
@@ -26,6 +26,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
+import { WS_SWITCH_KEY } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
 import { drawRail, mountRail, railIsHidden, railSection, toggleRail, type RailSection } from './rail.js';
@@ -353,12 +354,33 @@ export async function bootV2(): Promise<void> {
 
   // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
   let boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
+  // ★ #2171 — 주소에 남은 `#/welcome` 은 **딥링크로 인정하지 않는다.**
+  //  처음 설정이 한 번 뜨면 주소창이 #/welcome 으로 바뀌는데(applyTabChrome), 그 뒤 새로고침하면 그게
+  //  딥링크로 읽혀 **서버 판정도 로컬 표식도 안 보고** 그대로 다시 떴다. 게이트를 아무리 정확히 해도
+  //  그 뒤로는 자기가 자기를 되살리는 고리가 된다(원준님 신고 2026-08-27 "시도때도없이 떠서 돌아버리겠어").
+  //  ⚠ 사람이 **스스로** 처음 설정을 다시 열 길은 남긴다 — 홈의 «이어서 하기» 가 붙이는 `?resume=1` 은 통과.
+  if (boot && routeKey(boot) === 'raw:welcome' && !boot.includes('resume=1')) boot = null;
   // 처음 설정을 아직 안 끝낸 **처음 오는 사람**만 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
   //  ⚠ 판정은 **서버**(me.first_run — src/org/delivery/first-run.ts)다. 종전엔 localStorage 하나로 정해서
   //   몇 달째 쓰던 사람도 새 브라우저·다른 기기·시크릿창이면 홈 대신 처음 설정이 떴다(원준님 신고 2026-08-26,
   //   #2039). localStorage 는 **끄는 쪽으로만** 쓴다 — 방금 이 브라우저에서 끝냈으면 표식이 서버에 닿기 전에도
   //   다시 안 뜨게. 값을 못 받았으면(옛 서버·조회 실패) 홈이다.
-  if (!boot && state.me && state.me.first_run === true && !onboardingDone()) boot = '#/welcome';
+  //  ★ #2171 — 보내는 순간 **서버에 '보냈다'를 찍는다**(welcome_seen). 자동 진입은 평생 한 번이다.
+  //   종전엔 맨 끝 [준비 끝, 정리해 주세요] 를 눌러야만 표식이 남아서, 중간에 나간 사람·웹만 쓰는 사람은
+  //   앱을 열 때마다 다시 끌려갔다. 못 끝낸 사람은 홈의 «이어서 하기»(me.welcome_pending)로 안내한다.
+  //  ★ #2171 — **워크스페이스를 전환해 온 부팅에서는 자동 진입하지 않는다.** 전환은 `location.reload()` 를
+  //   거치므로 이 판정을 처음부터 다시 타는데, 옮겨 간 워크스페이스엔 그 사람의 흔적이 0이라(거기서 MCP 를
+  //   부른 적도 세션을 연 적도 없다) «처음 오는 사람»이 참이 되어 **전환할 때마다 처음 설정이 떴다**
+  //   (원준님 신고 2026-08-27 — 데스크톱 앱에서 워크스페이스 전환 중). 전환은 처음 오는 것이 아니라
+  //   있던 곳으로 가는 것이다 — 그 자리는 홈이어야 한다. 필요한 사람에겐 홈의 «이어서 하기»가 남는다.
+  const wsSwitched = (() => {
+    try { const v = sessionStorage.getItem(WS_SWITCH_KEY) === '1'; if (v) sessionStorage.removeItem(WS_SWITCH_KEY); return v; }
+    catch (_) { return false; }   // 프라이빗 모드 — 표식을 못 읽으면 종전 동작(자동 진입 판정 그대로)
+  })();
+  if (!boot && !wsSwitched && state.me && state.me.first_run === true && !onboardingDone()) {
+    boot = '#/welcome';
+    markWelcomeSeen();
+  }
   if (boot && tabsApi.find(boot)) { const hit = tabsApi.find(boot)!; hit.route = boot; tabsApi.activate(hit); }
   else {
     const saved = tabsApi.initial();
@@ -582,7 +604,7 @@ const findSess = (id: string): Sess | undefined => data.sessions.find((x) => x.i
 //  이름을 넣어 둔 탭 3개 중 죽은 2개가 다음 판에 `세션 1d14b3`·`세션 10242a` 로 저장됐다.
 //  ⇒ 이름을 **알아낼 때마다 기억**해 두고, 못 찾는 순간엔 그 기억을 쓴다. 이름은 화면에 쓰는 값이라
 //    기기별(localStorage)로 충분하다. 서버를 더 부르지 않는다.
-const NAME_STORE = 'lively_v2_sess_names';   // `*_KEY` 로 두지 않는다(gitleaks 오탐 — DISMISS_STORE 주석과 같은 이유)
+const NAME_STORE = wsKey('lively_v2_sess_names');   // `*_KEY` 로 두지 않는다(gitleaks 오탐 — DISMISS_STORE 주석과 같은 이유)
 const NAME_MAX = 300;                        // 넘으면 오래된 것부터 버린다(Map 은 삽입 순서를 지킨다)
 /** 이름을 못 찾았을 때 쓰는 폴백(`세션 1d14b3`) — 이 모양은 **이름이 아니므로** 기억하지 않는다. */
 const isSessIdFallback = (s: string): boolean => /^세션 [0-9a-f]{4,}$/i.test(String(s || '').trim());
@@ -1199,7 +1221,7 @@ function dayGroup(at: number, now: number): string {
  *  그게 이 목록이 하는 일이기 때문이다. 같은 상태로 계속 도는 동안엔 조용하다.
  *  기기별 습관이라 브라우저에 둔다.
  */
-const DISMISS_STORE = 'lively_v2_side_dismissed';   // 이름을 `*_KEY` 로 두지 않는다 — 위 apps.ts 주석과 같은 이유(gitleaks 오탐)
+const DISMISS_STORE = wsKey('lively_v2_side_dismissed');   // 이름을 `*_KEY` 로 두지 않는다 — 위 apps.ts 주석과 같은 이유(gitleaks 오탐)
 let dismissed: Record<string, string> = (() => {
   try { const v = JSON.parse(localStorage.getItem(DISMISS_STORE) || '{}'); return v && typeof v === 'object' ? v : {}; }
   catch { return {}; }
@@ -1330,6 +1352,16 @@ function sideInstances(): SideInstance[] {
     if (!s.live || !s.alive || !s.owned || isTrashedSess(s)) continue;
     put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, s.stateKey);   // lastSeen 은 ms(views.ts)
   }
+  //  ①′ **고정한 세션은 끝나도 남는다**(원준 2026-08-27 "지난 세션 되면 핀까지 날려버리는 거야?"). 머리말의 "끝난 세션은
+  //   세우지 않는다"는 지난 세션이 목록을 덮지 않게 하려는 규칙이고, 압정은 사람이 "이건 계속 여기 두라"고 고른 자리다 —
+  //   끝났다고 자동 규칙이 걷어 가면 고정의 뜻이 없다. 종전엔 압정 표식(localStorage)은 남는데 **행이 사라져** 사람 눈엔
+  //   핀이 빠진 것으로 보였다. 목록에 아직 있는 세션(복원 가능·기록 행 — findSess 가 logId 도 본다)만 세운다.
+  for (const key of appPinnedKeys()) {
+    if (!key.startsWith('sess:') || rows.has(key)) continue;
+    const s = findSess(key.slice(5));
+    if (!s || isTrashedSess(s)) continue;
+    put(key, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, s.stateKey);
+  }
   for (const inst of appInstances) {                                 // ② 세션 아닌 활성 인스턴스
     if (inst.status !== 'active') continue;
     if (inst.subject_kind === 'session') continue;                   // 세션 인스턴스는 아래 ④ 에서 그 세션 행에 붙인다
@@ -1439,7 +1471,7 @@ function openProjectPage(projectId: number): void {
 //   어느 쪽이 거짓말인지 화면이 말하지 못한다. inbox 는 side.ts render() 와 같은 식이다.
 function railCounts(): { inbox: number; busy: number; projects: number } {
   const live = data.sessions.filter((s) => s.live && s.alive && !isTrashedSess(s));
-  const inbox = live.filter((s) => s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned)).length;
+  const inbox = live.filter((s) => isMineSess(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length;
   const busy = live.filter((s) => s.stateKey === 'busy').length;
   const projects = new Set(live.map((s) => s.projectId).filter((x): x is number => !!x)).size;
   return { inbox, busy, projects };
@@ -1461,7 +1493,7 @@ function openAppKeys(): Set<string> {
 //  세션 주소로 착지하면 라우터가 그 세션 탭을 **되살리는 게 아니라 다시 켠다**(onHash 의 tabsApi.activate) —
 //  대화·스크롤·폴링이 그대로 이어진다. 그래서 '이어서 보인다'가 말 그대로 성립한다.
 //  ⚠ 새로 시작하는 길은 그대로다 — 사이드바 머리줄 [새 작업](.v2-app-new)이 늘 빈 홈을 연다.
-const HOME_ROUTE_STORE = 'lively_v2_home_route';
+const HOME_ROUTE_STORE = wsKey('lively_v2_home_route');
 let homeRoute = (() => { try { return localStorage.getItem(HOME_ROUTE_STORE) || ''; } catch (_) { return ''; } })();
 /** 지금 보는 화면이 [홈] 구역의 것이면 그 자리를 적어 둔다. 구역은 사람이 고를 때만 바뀌므로 이 판정이 곧 '어느 장소인가'다. */
 function noteHomeRoute(route: string): void {
