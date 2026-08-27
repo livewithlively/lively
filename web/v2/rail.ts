@@ -115,6 +115,23 @@ export function setRailSection(sec: RailSection, opts?: { navigate?: boolean }):
   hooks.onSection?.(sec, { navigate: changed || !!(opts && opts.navigate) });
 }
 
+/**
+ * 구역을 **조용히** 되돌린다 — 이동도 없고 훅에도 알리지 않는다 (#2230).
+ *
+ * 워크스페이스 전환 부팅에서 셸(main.ts)이 부른다. 전환의 도착지는 홈인데(#2171) 구역은 **이 기기의
+ *  기억**이라 옮겨 가도 [위키]·[프로젝트]에 그대로 머물렀다 — 본문은 홈인데 레일만 딴 곳을 가리키는 어긋남.
+ *
+ * ⚠ 여기서 setRailSection 을 쓰면 안 된다 — 그건 `hooks.onSection` 으로 **주소까지 옮긴다**(그러면
+ *  홈 구역의 '두고 간 자리'로 다시 끌려가, 전환의 도착지를 홈으로 되돌리려는 이 부름이 자기를 무효로 만든다).
+ */
+export function resetRailSection(sec: RailSection): void {
+  if (!SECTIONS.some((s) => s.key === sec)) return;
+  init();
+  section = sec;
+  try { localStorage.setItem(SEC_STORE, sec); } catch (_) { /* 이번 화면은 된다 */ }
+  drawRail();   // 아직 마운트 전이면 아무 일도 안 한다(host 가드) — 곧 mountRail 이 이 값으로 그린다
+}
+
 export function toggleRail(): void {
   hidden = !hidden;
   try { localStorage.setItem(HIDE_STORE, hidden ? '1' : '0'); } catch (_) { /* 이번 화면은 된다 */ }
