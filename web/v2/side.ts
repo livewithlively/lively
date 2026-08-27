@@ -2170,6 +2170,8 @@ function newSessBtn(projectId: number): HTMLElement {
 //  고정된 것은 늘 보이고, 아닌 것은 그 행에 손을 얹었을 때만 보인다.
 /** 앱 인스턴스 고정 — 사람이 고른 것만 맨 위로. 자동으로 뭘 올려 두지 않는다(#1954). */
 export function isAppPinned(key: string): boolean { return appPinned.has(key); }
+/** 고정된 키 전부 — 셸이 **끝난 세션도 고정돼 있으면 행을 세우는** 데 쓴다(원준 2026-08-27: 지난 세션이 되면 핀이 빠져 보였다). */
+export function appPinnedKeys(): string[] { return [...appPinned]; }
 
 /** 문패 카드가 쓰는 사람 지도 — side.ts 가 이미 한 번 당겨 둔 것을 레일도 함께 쓴다(두 번 당기지 않는다). */
 export function sidePeople(): Record<string, any> { return people; }

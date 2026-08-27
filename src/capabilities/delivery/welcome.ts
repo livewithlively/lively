@@ -288,6 +288,8 @@ export const welcomeCapabilities: Capability[] = [
       return {
         done,   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
         done_at: liv.welcome?.done_at ?? null,
+        // #2171 — **보여준 적 있나**(끝냈나와 별개). 자동 진입은 이 표식으로 평생 한 번만 한다.
+        shown_at: liv.welcome_shown_at ?? null,
         //  하다 만 자리(#2207) — 이 값이 있으면 화면은 **이름부터가 아니라 그 장면부터** 다시 연다.
         //  ⚠ 끝낸 사람에게는 내주지 않는다. 남아 있는 옛 진행이 «이어서 하기» 로 되살아나면
         //   이미 끝낸 설정을 다시 하게 된다(끝냈다는 사실이 진행보다 세다).
