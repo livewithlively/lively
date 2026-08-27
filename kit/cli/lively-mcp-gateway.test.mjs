@@ -283,6 +283,36 @@ try {
     await p.end(); await up.close();
   }
 
+  // E24 — #2234 세션 MCP 토큰이 **파일을 이긴다**(홈이 공유인 박스에서 남의 신원으로 나가던 것).
+  //  E11 과 짝이다: 셸 rc 가 만든 LIVELY_TOKEN 은 파일의 스냅샷이라 파일이 이기고(E11), 게이트웨이가
+  //  pane 에 심은 LIVELY_MCP_TOKEN 은 그 세션 주인 앞으로 발급된 정본이라 파일을 이긴다.
+  {
+    const up = await startUpstream({ tools: T(["s1"]) });
+    setGw(up.url); setTok("tok-file");
+    process.env.LIVELY_TOKEN = "tok-env-stale";              // 스테일 셸 export 가 함께 있어도
+    process.env.LIVELY_MCP_TOKEN = "tok-session-owner";      // 세션 자격이 최우선이어야 한다
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 17, method: "tools/list" });
+    await p.waitFor(17);
+    check("E24 #2234 — 세션 MCP 토큰이 파일·스테일 env 를 모두 이긴다",
+      up.seen[0]?.headers?.authorization === "Bearer tok-session-owner", `auth=${up.seen[0]?.headers?.authorization}`);
+    delete process.env.LIVELY_MCP_TOKEN; delete process.env.LIVELY_TOKEN;
+    await p.end(); await up.close();
+  }
+
+  // E25 — 세션 토큰이 없으면 종전과 **글자 그대로 같다**(구 게이트웨이·격리 박스·개인 노트북 무회귀).
+  {
+    const up = await startUpstream({ tools: T(["s2"]) });
+    setGw(up.url); setTok("tok-file");
+    delete process.env.LIVELY_MCP_TOKEN;
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 18, method: "tools/list" });
+    await p.waitFor(18);
+    check("E25 세션 토큰 부재 → 종전대로 파일 토큰",
+      up.seen[0]?.headers?.authorization === "Bearer tok-file", `auth=${up.seen[0]?.headers?.authorization}`);
+    await p.end(); await up.close();
+  }
+
   // E12 — 토큰 파일이 없으면 env 로 떨어진다(프로비저닝·컨테이너 경로 보존).
   {
     const up = await startUpstream({ tools: T(["x"]) });

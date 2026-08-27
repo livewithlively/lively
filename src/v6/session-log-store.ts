@@ -12,6 +12,7 @@
 //  ⚠ **키는 (node_id, session_id) 복합.** 스칼라면 같은 session_id 를 쓰는 두 머신 로그가 한 줄로 병합되고
 //   CAS 가 서로를 못 본다(설계 §5 ①). node_id='' = 게이트웨이 로컬(박스).
 import { itemsPool, withTx } from "../db/client.js";
+import { sessionNameFromPrompt } from "../terminal/session-name.js";
 import { SINGLE_TENANT_ID } from "../db/tenant-column.js";   // #1875 — 세션 목록 워크스페이스 필터의 primary 귀속값
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
@@ -220,6 +221,12 @@ export async function readSessionLog(nodeId: string, sessionId: string, from = 0
 //  회수 표면의 목록면: 어느 환경에서 만들었든 내 세션을 한 곳에서 본다. reap 된 세션도 남(bytes=0, session 불멸).
 export interface SessionListRow {
   node_id: string; session_id: string; harness: string | null; title: string | null;
+  //  ★ title 과 name 은 다르다(#2234). title 은 **대화 제목**(첫 사람 발화 120자, firstUserPromptTitle) —
+  //   이력 화면에서 "그 대화가 무엇이었나"를 읽으라고 길게 남긴 값이다. name 은 **목록에 걸 이름**으로,
+  //   세션 이름을 짓는 그 규칙(terminal/session-name.ts)을 통과시킨 값이다. 둘을 한 값으로 쓰면
+  //   목록이 첫 지시 원문을 이름 자리에 건다 — 실측 2026-08-27(jang): 좌측 사이드바에
+  //   「업데이트 준비가 완료되었습니다. 새 버전 0.1.358 다시 시작하여 반영하기 이거 사이드바 아래에서 …」(121자).
+  name: string | null;
   owner: string | null; owner_name: string | null; first_seen: string; last_seen: string; bytes: number;
   project_id?: number | null; project_name?: string | null;   // 최근 바인딩 프로젝트(내 세션 목록에서만 채움, #905 C1)
 }
@@ -227,7 +234,11 @@ const SESSION_LIST_COLS = `s.node_id, s.session_id, s.harness, s.title, s.owner,
   s.first_seen, s.last_seen, COALESCE(l.bytes, 0)::bigint AS bytes`;
 const mapSessionRow = (x: Record<string, unknown>): SessionListRow => ({
   node_id: x.node_id as string, session_id: x.session_id as string, harness: (x.harness as string) ?? null,
-  title: (x.title as string) ?? null, owner: (x.owner as string) ?? null, owner_name: (x.owner_name as string) ?? null,
+  title: (x.title as string) ?? null,
+  //  이름은 **짓는 규칙 한 곳**을 그대로 탄다 — 살아 있는 박스가 자동 이름을 받는 그 규칙이다(#1808 · #2116).
+  //   그래야 박스가 죽어 기록만 남아도 같은 세션이 같은 이름으로 서 있다(종전엔 죽는 순간 121자로 늘어났다).
+  name: sessionNameFromPrompt(String(x.title ?? "")) || null,
+  owner: (x.owner as string) ?? null, owner_name: (x.owner_name as string) ?? null,
   first_seen: x.first_seen as string, last_seen: x.last_seen as string, bytes: Number(x.bytes),
   project_id: x.project_id != null ? Number(x.project_id) : null, project_name: (x.project_name as string) ?? null,
 });

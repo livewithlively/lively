@@ -41,6 +41,37 @@ export async function latestWorkerRun(instanceId: string): Promise<AppWorkerRunR
   return r.rows[0] ? row(r.rows[0]) : null;
 }
 
+// ── 목록용 일괄 조회(#2234) ───────────────────────────────────────────────────
+//  왜: `/api/ui/app-instances` 가 인스턴스마다 activeWorkerRun + latestWorkerRun 을 **순차로** 물었다.
+//   실측 2026-08-27(dev, 인스턴스 92건): 그 목록 한 번이 **4.4초** — 나머지 다섯 축을 다 합친 것의 6배다.
+//   그런데 이 축은 부팅 첫 그림의 배리어(web/v2/main.ts loadData 의 Promise.all)에 함께 묶여 있어,
+//   0.3초에 도착한 세션 목록을 화면이 4.4초 동안 못 썼다 — 그동안 좌측 행은 전부 '목록에서 못 찾음'
+//   (unresolved)이라 이름이 브라우저 기억으로, 소속 줄이 'AI 세션' 으로 떨어진다. 사용자가 신고한
+//   "앱 로드될 때 한참 이런 화면" 이 그 창이다. 왕복 수를 행 수에 비례시키지 않는다.
+const ACTIVE_STATUSES = "('prepared','starting','ready','idle','running','stopping')";
+
+/** 인스턴스별 **가장 최근** 실행 한 줄씩 — 한 번의 조회로. */
+export async function latestWorkerRuns(instanceIds: string[]): Promise<Map<string, AppWorkerRunRow>> {
+  return runsByInstance(instanceIds, "");
+}
+
+/** 인스턴스별 **살아 있는** 실행 한 줄씩 — 한 번의 조회로(없으면 그 키는 맵에 없다). */
+export async function activeWorkerRuns(instanceIds: string[]): Promise<Map<string, AppWorkerRunRow>> {
+  return runsByInstance(instanceIds, `AND status IN ${ACTIVE_STATUSES}`);
+}
+
+async function runsByInstance(instanceIds: string[], extra: string): Promise<Map<string, AppWorkerRunRow>> {
+  const ids = [...new Set(instanceIds.filter(Boolean))];
+  const out = new Map<string, AppWorkerRunRow>();
+  if (!ids.length) return out;
+  const r = await itemsPool.query(
+    `SELECT DISTINCT ON (instance_id) * FROM org_app_worker_run
+      WHERE instance_id = ANY($1::text[]) ${extra}
+      ORDER BY instance_id, created_at DESC`, [ids]);
+  for (const x of r.rows) out.set(String(x.instance_id), row(x));
+  return out;
+}
+
 export async function prepareWorkerRun(input: {
   instanceId: string; appId: string; owner: string; projectId: number | null;
   hostKind: WorkerHostKind; hostId: string | null; packageHash: string; memoryMb?: number | null;

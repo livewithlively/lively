@@ -181,20 +181,58 @@ export async function mintCentralBoxToken(memberId: string, memberScopes: string
 //   scope null(인증된 멤버면 OK)이고, 오히려 per-member 타깃팅이 그 세션 주인 기준으로 맞아진다.
 //  세션 스코프 자격이라 세션이 죽으면 회수한다(killSession). 같은 id 로 다시 뜨면 옛 것을 회수하고 새로 굽는다.
 const SESSION_TOKEN_LABEL = "session-hooks:";
-export async function revokeSessionHookToken(boxId: string): Promise<void> {
-  const label = `${SESSION_TOKEN_LABEL}${boxId}`;
+// #2234 — MCP 신원도 **그 세션 주인**이어야 한다. 훅 토큰과 **따로** 굽는 이유는 권한 폭이 다르기 때문이다:
+//  훅은 세션 최소권한(admin/runtime 제외)이 맞고, MCP 는 사람이 세션에서 실제로 쓰는 표면이라 그 멤버가
+//  가진 만큼을 그대로 들어야 한다(오늘도 공유 파일 토큰으로 그만큼 쓰고 있다 — 다만 **남의 것**으로).
+const SESSION_MCP_TOKEN_LABEL = "session-mcp:";
+/** 라벨 하나에 걸린 살아있는 자격을 전부 회수 — 재생성 때 옛 것을 즉시 죽인다. */
+async function revokeSessionTokensLabeled(labels: Set<string>, why: string): Promise<void> {
   for (const t of await listTokens()) {
-    if (!t.revoked_at && t.label === label) await revokeToken(t.token_hash, "killSession", "terminal-sessions");
+    if (!t.revoked_at && t.label && labels.has(t.label)) await revokeToken(t.token_hash, why, "terminal-sessions");
   }
+}
+/** 세션이 죽을 때 — 그 세션에 실어 준 자격(훅·MCP)을 **둘 다** 회수한다. */
+export async function revokeSessionHookToken(boxId: string): Promise<void> {
+  await revokeSessionTokensLabeled(new Set([`${SESSION_TOKEN_LABEL}${boxId}`, `${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "killSession");
 }
 export async function mintSessionHookToken(memberId: string, boxId: string): Promise<string | null> {
   const member = await getMember(memberId);
   if (!member) return null;                       // 멤버 디렉터리에 없는 소유자 — 종전대로 공유 토큰(무회귀)
-  await revokeSessionHookToken(boxId);            // 같은 box id 재생성 — 옛 자격은 즉시 죽인다
+  await revokeSessionTokensLabeled(new Set([`${SESSION_TOKEN_LABEL}${boxId}`]), "createSession");   // 같은 box id 재생성 — 옛 자격은 즉시 죽인다
   const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
   const scopes = (member.scopes || []).filter((s) => isScope(s) && !dangerous.has(s));   // 세션 최소권한(admin/runtime 제외)
   const { token } = await mintToken(
     { userId: memberId, memberId, scopes, label: `${SESSION_TOKEN_LABEL}${boxId}` },
+    "createSession", "terminal-sessions",
+  );
+  return token;
+}
+
+// 세션 MCP 신원(#2234) — 비격리(공유 홈) 박스의 pane 에 실어 주는 '그 세션 소유자' MCP 토큰.
+//
+//  왜 필요한가: MCP 는 #1079 부터 **로컬 stdio 프록시**로 붙고, 프록시는 매 호출 `~/.lively/token` 을 읽는다
+//   (kit/cli/lively-mcp-gateway.mjs). 그 파일은 홈이 공유인 박스에서 **키트를 깐 사람 것 하나뿐**이다
+//   (deploy/install-kit.sh: 프로필 모드는 공유 토큰을 일부러 보존한다). 그래서 다른 멤버의 세션이 MCP 로 하는
+//   모든 일이 **남의 신원**으로 나간다. 종전 http 직결 등록은 멤버 토큰을 프로필 .claude.json 에 구워
+//   이 문제가 없었다 — 즉 #1079 가 #346/#916 이 세운 프로필 격리를 MCP 에서 조용히 되돌린 것이다.
+//
+//  실측(laibeulliui-Macmini, 2026-08-27): `~/.lively/token`=yoon 인데 pane 은 box-jang-*.
+//   `whoami` → member_id=yoon + session_id=box-jang-4e2de346, `session_rename` → "내 세션만 이름을 바꿀 수
+//   있습니다". 그래서 #1979 의 세션 자동 이름짓기가 이 박스에선 **구조적으로 불가능**했다 —
+//   jang 계정 그날 세션 17건 중 12건이 첫 지시 원문(rule 이름) 그대로였다.
+//
+//  ⚠ 이건 격리가 아니라 **귀속**이다(훅 토큰 주석과 같다) — 같은 박스에서 서로 읽을 수 있다는 사실은 그대로다.
+//  ⚠ 권한은 **그 멤버 것으로 캡**된다. 오늘 세션이 쓰는 권한은 '박스를 깐 사람'의 것이라, 관리자가 깐 박스에서는
+//   비관리자 세션도 관리 표면을 들고 있었다(교차 상승). 이 토큰은 그 상승을 닫으면서, 각자 자기 권한은 그대로 쓴다.
+//  세션 스코프 자격이라 세션이 죽으면 회수한다(revokeSessionHookToken 이 둘 다 회수).
+export async function mintSessionMcpToken(memberId: string, boxId: string): Promise<string | null> {
+  const member = await getMember(memberId);
+  if (!member) return null;                       // 멤버 디렉터리에 없는 소유자 — 종전대로 공유 토큰(무회귀)
+  await revokeSessionTokensLabeled(new Set([`${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "createSession");
+  const scopes = (member.scopes || []).filter((s) => isScope(s));
+  if (!scopes.length) return null;                // 실어 봐야 아무것도 못 한다 — 종전 경로를 막지 않는다
+  const { token } = await mintToken(
+    { userId: memberId, memberId, scopes, label: `${SESSION_MCP_TOKEN_LABEL}${boxId}` },
     "createSession", "terminal-sessions",
   );
   return token;

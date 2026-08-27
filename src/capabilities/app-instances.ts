@@ -12,7 +12,7 @@ import { parseAppManifest, type LivelyAppManifest } from "../apps/manifest.js";
 import { normalizeInstanceProject, normalizeInstanceState } from "../apps/instance-policy.js";
 import * as apps from "../org/store/apps.js";
 import * as instances from "../org/store/app-instances.js";
-import { resolveWorkerPlacement, startWorkerForInstance, stopWorkerForInstance, workerRunForInstance } from "../apps/worker-service.js";
+import { resolveWorkerPlacement, startWorkerForInstance, stopWorkerForInstance, workerRunForInstance, workerRunsForInstances } from "../apps/worker-service.js";
 import { nodeOnline, nodeSessionsFor, nodeSupports } from "../node/registry.js";
 import { getNode } from "../node/store.js";
 import { nodeOpenTo } from "../node/node-access.js";
@@ -93,6 +93,35 @@ async function decorate(instance: instances.AppInstanceRow): Promise<Record<stri
   return { ...instance, app: publicAppMeta(app, manifest), worker: await workerRunForInstance(instance.id) };
 }
 
+// ── 목록 장식 — 왕복을 **행 수에 비례시키지 않는다**(#2234) ──────────────────────
+//  종전엔 행마다 decorate() 를 순차로 await 했다: 인스턴스당 org_app 1회 + worker run 2회.
+//  실측 2026-08-27(dev, jang 계정 92건): 이 목록 하나가 **4.38초**(같은 판의 다른 다섯 축은 0.07~0.44초).
+//  이 축은 부팅 첫 그림의 배리어에 함께 묶여 있어(web/v2/main.ts loadData) 그 4.4초가 그대로 첫 화면의
+//  '아무것도 모르는 상태'가 됐다 — 좌측 세션 행이 전부 unresolved 로 떨어져 이름은 브라우저 기억으로,
+//  소속 줄은 'AI 세션' 으로 그려진다(원준 신고 2026-08-27 스크린샷이 그 창이다).
+//  ⚠ **판정은 그대로**여야 한다: 앱이 없으면 404, 활성이 아니면 409 — 목록은 그 행만 건너뛴다.
+async function decorateAll(rows: instances.AppInstanceRow[]): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>();
+  if (!rows.length) return out;
+  const [installed, workers] = await Promise.all([
+    apps.listApps(),
+    workerRunsForInstances(rows.map((r) => r.id)),
+  ]);
+  const byId = new Map(installed.map((a) => [a.id, a]));
+  const meta = new Map<string, Record<string, unknown> | null>();   // app_id → 공개 메타(못 쓰는 앱이면 null)
+  for (const r of rows) {
+    if (!meta.has(r.app_id)) {
+      const app = byId.get(r.app_id);
+      //  activeApp() 과 같은 문턱 — 없거나 비활성인 앱의 인스턴스는 목록에서 뺀다(위 머리말).
+      meta.set(r.app_id, app && app.status === "active" && app.enabled ? publicAppMeta(app, parseAppManifest(app.manifest)) : null);
+    }
+    const app = meta.get(r.app_id);
+    if (!app) continue;
+    out.set(r.id, { ...r, app, worker: workers.get(r.id) ?? null });
+  }
+  return out;
+}
+
 function requestedExecution(value: unknown): { kind: "central" | "remote"; node_id?: string } | null {
   if (value == null) return null;
   if (typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "execution 은 객체여야 합니다");
@@ -170,12 +199,13 @@ const appInstanceList: Capability = {
       projectId: input.project_id,
       includeClosed: input.include_closed,
     });
-    const subjects = await sessionSubjects(rows, user);
+    // project_id 는 분류·provenance일 뿐 인스턴스 조회 권한이 아니다. 앱 자체가 비활성이면 목록에서만 제외한다(decorateAll).
+    const [subjects, decorated] = await Promise.all([sessionSubjects(rows, user), decorateAll(rows)]);
     const visible: Array<Record<string, unknown>> = [];
     for (const row of rows) {
-      // project_id 는 분류·provenance일 뿐 인스턴스 조회 권한이 아니다. 앱 자체가 비활성이면 목록에서만 제외한다.
-      try { visible.push({ ...(await decorate(row)), ...(subjects.get(row.id) ?? {}) }); }
-      catch (error) { if (!(error instanceof HttpError && (error.status === 404 || error.status === 409))) throw error; }
+      const face = decorated.get(row.id);
+      if (!face) continue;
+      visible.push({ ...face, ...(subjects.get(row.id) ?? {}) });
     }
     return { instances: visible };
   },

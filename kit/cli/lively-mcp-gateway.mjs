@@ -69,7 +69,25 @@ const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$
 //  조용히 붙는다(둘 다 유효하니 401 도 안 난다 = 조용한 파손). 파일이 없을 때만 env 로 떨어진다
 //  (프로비저닝·컨테이너처럼 파일 없이 env 로만 주는 경로 보존).
 const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GATEWAY_URL);
-const token = () => (readLively("token") || process.env.LIVELY_TOKEN || "").trim();
+// ★ **세션 토큰이 있으면 그게 이긴다(#2234)** — 위 '파일이 env 를 이긴다' 규칙의 유일한 예외이자, 그 규칙이
+//  지키려던 것을 오히려 지키는 자리다. 두 값의 성격이 다르다:
+//   · LIVELY_TOKEN — 설치기가 셸 rc 에 심은 `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 의 결과일 수 있다.
+//     그건 **파일의 스냅샷**이라 재로그인 뒤 늙는다 → 파일이 이겨야 한다(#916). 종전 규칙 그대로 둔다.
+//   · LIVELY_MCP_TOKEN — 게이트웨이가 이 pane 을 띄우며 **그 세션 주인 앞으로 발급해 심은** 세션 스코프
+//     자격이다(src/terminal/profiles.ts mintSessionMcpToken). 셸이 만든 값이 아니라 늙지 않고, 세션이 죽으면
+//     회수된다. 이건 캐시가 아니라 **정본**이다.
+//  왜 필요한가: 홈이 공유인 박스(맥 단일유저·중앙박스)는 `~/.lively/token` 이 **키트를 깐 사람 것 하나뿐**이라,
+//   다른 멤버의 세션이 MCP 로 하는 모든 일이 남의 신원으로 나갔다. 실측 2026-08-27(laibeulliui-Macmini):
+//   `whoami` → member_id=yoon + session_id=box-jang-…, `session_rename` → "내 세션만 이름을 바꿀 수 있습니다"
+//   → #1979 세션 자동 이름짓기가 그 박스에서 구조적으로 불가능했다(그날 17건 중 12건이 첫 지시 원문 그대로).
+//   종전 http 직결 등록은 멤버 토큰을 프로필 .claude.json 에 구워 이 문제가 없었다 — #1079 의 프록시 전환이
+//   #346/#916 이 세운 프로필 격리를 MCP 에서 조용히 되돌린 것이라, 여기서 되돌린다.
+//  ⚠ 없으면 종전과 **글자 그대로 같다**(구 게이트웨이·격리 박스·개인 노트북) — 무회귀.
+const token = () => (
+  (process.env.LIVELY_MCP_TOKEN || "").trim()
+  || readLively("token")
+  || (process.env.LIVELY_TOKEN || "").trim()
+).trim();
 
 // stdout 은 JSON-RPC 전용 — 실수로 샌 console.log 가 프로토콜을 깨지 않게 stderr 로 묶는다.
 console.log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");

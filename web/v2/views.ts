@@ -403,8 +403,13 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       if (!owner.trashedAt && r.trashed_at) { owner.trashedAt = String(r.trashed_at); owner.trashedWith = r.trashed_with != null ? Number(r.trashed_with) : null; }   // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통
       continue;
     }
+    //  ★ 이름은 `name`(서버가 이름 규칙을 태운 값) — `title`(대화 제목, 첫 지시 120자)이 아니다(#2234).
+    //   종전엔 title 을 그대로 label 로 썼다. 그래서 박스가 사라져 기록만 남는 순간 같은 세션의 이름이
+    //   짧은 이름에서 **첫 지시 원문 121자**로 늘어났고, 그게 좌측 목록의 이름 자리에 그대로 걸렸다
+    //   (실측 2026-08-27: 「업데이트 준비가 완료되었습니다. 새 버전 0.1.358 …」). 제목은 logTitle 로 그대로 남는다.
     out.set(id, {
-      id, label: String(r.title || id), projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
+      id, label: String(r.name || r.title || id), logTitle: r.title ? String(r.title) : undefined,
+      projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
       live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,
       trashedAt: r.trashed_at ? String(r.trashed_at) : null,
       trashedWith: r.trashed_with != null ? Number(r.trashed_with) : null,
