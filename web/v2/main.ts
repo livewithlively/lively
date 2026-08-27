@@ -238,10 +238,14 @@ export async function bootV2(): Promise<void> {
     //   브라우저에도 **창 전체를 가로지르는 맨 윗줄**을 세운다(데스크톱과 같은 골격). 토글은 줄 맨 왼쪽 끝,
     //   [‹][›][검색] 은 줄 가운데 한 묶음(side.ts navRow), 사이드바는 그 아래에서 머리글부터 시작한다.
     //   종전엔 이 줄이 사이드바 안에 갇혀 토글이 레일 오른쪽에 서고 검색칸이 열 폭에 매였다.
+    //  #2142(상민님 2026-08-27) — 그 줄은 브라우저에서 **왼쪽 두 열(레일 + 사이드바)까지만** 선다.
+    //   창을 가로지르는 건 데스크톱 앱에서 그것이 OS 타이틀바이기 때문이다(창 버튼이 얹히고 빈 자리로 창을 끈다).
+    //   브라우저엔 얹힐 창 버튼도 끌 창도 없어서, 가로지르면 본문·우패널이 이유 없이 42px 을 잃는다.
+    //   자리 나누기는 CSS 가 한다(`.topbar-web` → 43-v2-topbar-search.css 의 열 못 박기).
     if (!titlebar) {
       webTopbar = el('div', { class: 'v2-topbar v2-topbar--web' }, el('div', { class: 'v2-tb-grip' })) as HTMLElement;
       root.prepend(webTopbar);
-      root.classList.add('has-topbar');
+      root.classList.add('has-topbar', 'topbar-web');
     }
     if (titlebar) titlebar.host.prepend(mobile.menuBtn); else webTopbar?.prepend(mobile.menuBtn);
     //  넓은 폭에서 그 ☰ 는 이제 **레일을 여닫는다**(#2016 원준 2026-08-25: "지금 사이드바는 닫을 수는 없는
