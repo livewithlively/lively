@@ -17,9 +17,10 @@ const KEEP = 200;
 const LIMIT = 4;
 const MAX = 56;
 
-const RETRY_MS = 10 * 60 * 1000;   // 못 찾은 세션은 10분 뒤에나 다시 묻는다(권한 없는 남의 세션·기록 없는 옛 세션이 매 폴링마다 3~6 요청을 만들지 않게)
-const cache = new Map<string, { seen: number; text: string | null; at: number }>();
-try { const v = JSON.parse(localStorage.getItem(STORE) || '{}'); for (const [k, e] of Object.entries<any>(v)) if (e && typeof e.seen === 'number') cache.set(k, { seen: e.seen, text: typeof e.text === 'string' ? e.text : null, at: Number(e.at || 0) }); } catch (_) { /* 기억이 없으면 새로 받는다 */ }
+const RETRY_MS = 10 * 60 * 1000;   // **못 읽는**(hold) 세션은 10분 뒤에나 다시 묻는다(권한 없는 남의 세션·기록 없는 옛 세션이 매 폴링마다 3~6 요청을 만들지 않게)
+// hold = 로그를 **아예 못 읽었다**(권한·좌표) — RETRY_MS 동안 다시 묻지 않는다. '읽었는데 이번 창엔 없다'는 hold 가 아니다(아래 one).
+const cache = new Map<string, { seen: number; text: string | null; at: number; hold?: boolean }>();
+try { const v = JSON.parse(localStorage.getItem(STORE) || '{}'); for (const [k, e] of Object.entries<any>(v)) if (e && typeof e.seen === 'number') cache.set(k, { seen: e.seen, text: typeof e.text === 'string' ? e.text : null, at: Number(e.at || 0), hold: !!e.hold }); } catch (_) { /* 기억이 없으면 새로 받는다 */ }
 function persist(): void {
   try {
     const ents = [...cache.entries()].sort((a, b) => b[1].seen - a[1].seen).slice(0, KEEP);
@@ -43,7 +44,7 @@ export function watchLastAsk(cb: () => void): void { ready = cb; }
 export function lastAsk(s: Sess): string | null {
   const hit = cache.get(s.id);
   const seen = Number(s.lastSeen || 0);
-  if (hit && (hit.seen === seen || (hit.text === null && Date.now() - hit.at < RETRY_MS))) return hit.text;
+  if (hit && (hit.seen === seen || (hit.hold && Date.now() - hit.at < RETRY_MS))) return hit.text;
   if (!queued.has(s.id)) { queued.add(s.id); queue.push(s); pump(); }
   return hit ? hit.text : null;
 }
@@ -58,9 +59,12 @@ function pump(): void {
 async function one(s: Sess): Promise<void> {
   let r = await fetchLastAsk(s, TAIL);
   if (!r.text && r.ok) r = await fetchLastAsk(s, TAIL_FAR);   // 읽히긴 했는데 내 말이 안 보였다 — 더 멀리. 아예 못 읽었으면(권한·좌표) 그만.
-  const text = r.text ? shorten(r.text) : null;
   const prev = cache.get(s.id);
-  cache.set(s.id, { seen: Number(s.lastSeen || 0), text, at: Date.now() });
+  //  ★ 빈손이면 **옛 글을 지킨다**(원준 2026-08-27 "실시간 반영이 안 된다" 조사) — 도구 출력이 긴 턴의 한중간엔
+  //   내 말이 꼬리 240KB 밖에 있어 '읽었는데 없음'이 정상으로 나온다. 종전엔 그 null 로 캐시를 덮고 10분 홀드까지
+  //   걸어, 잘 서 있던 줄이 턴 중간에 사라진 채 새 말도 10분간 안 물어봤다. 홀드는 '못 읽는' 세션만(hold).
+  const text = r.text ? shorten(r.text) : prev ? prev.text : null;
+  cache.set(s.id, { seen: Number(s.lastSeen || 0), text, at: Date.now(), hold: !r.ok });
   persist();
   if (!prev || prev.text !== text) notify();
 }
