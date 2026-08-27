@@ -49,7 +49,17 @@ function desktopOs() {
 }
 
 /** 자산 이름 → 내 OS 것인가. blockmap·업데이트 매니페스트(.yml)·코어 tgz 는 사람이 받을 것이 아니다 —
- *  확장자로 끝나는지만 보면 `.exe.blockmap` 류는 저절로 걸러진다. */
+ *  확장자로 끝나는지만 보면 `.exe.blockmap` 류는 저절로 걸러진다.
+ *
+ *  ★★ 불변식: **맥 자산은 `.dmg` 가 정확히 하나여야 한다.** 이 함수는 첫 번째로 맞는 것을 집는데,
+ *   arch 별로 둘(`-arm64.dmg`·`-x64.dmg`)이면 **인텔 사용자가 arm64 를 받을 확률이 반반**이 된다.
+ *   그리고 브라우저는 맥의 CPU 아키텍처를 **알 수 없다** — 애플이 호환성 때문에 애플 실리콘에서도
+ *   `navigator.platform` 을 `MacIntel` 로 남겨 뒀고, UA 힌트도 macOS 에선 arch 를 안 준다.
+ *   즉 여기서 갈라 주는 것은 원리적으로 불가능하다.
+ *  → 그래서 `desktop/package.json` 의 mac 타깃을 **universal** 로 둔다(dmg·zip 둘 다).
+ *   그 앱은 네이티브 의존성이 없어(electron-updater 하나, 순수 JS) universal 의 주된 위험도 없다.
+ *  ⚠ 그 설정을 `arch:["x64","arm64"]` 로 되돌리려는 사람에게: 그러면 **이 함수부터 고쳐야 하는데
+ *   고칠 방법이 없다.** 정 나눠야 한다면 사람에게 고르게 하는 화면이 먼저다. */
 function pickAsset(assets, os) {
   const ext = os === 'mac' ? '.dmg' : os === 'win' ? '.exe' : '.appimage';
   for (const a of assets) {

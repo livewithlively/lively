@@ -5,6 +5,12 @@ name: release-desktop
 #  데스크톱은 각 OS 러너에서 그 OS 용으로만 만들 수 있어(코드서명·설치기가 네이티브 도구를 쓴다) 매트릭스가 필요하고,
 #  실패해도 서버 릴리스를 막으면 안 된다(축이 다르다). 그래서 별도 워크플로 + 같은 릴리스에 붙인다.
 #
+# ⚠ **맥은 universal 하나로 낸다**(desktop/package.json 의 mac.target 이 arch:["universal"]).
+#  arch 별로 둘로 내면 온보딩 «앱 받기»(web/v2/onboarding.ts 의 pickAsset)가 **첫 번째 `.dmg`** 를 집으므로
+#  인텔 사용자가 arm64 를 받을 수 있다. 그리고 브라우저는 맥의 arch 를 알 수 없다 — 애플 실리콘에서도
+#  `navigator.platform` 이 `MacIntel` 이라 갈라 줄 방법이 원리적으로 없다. 대신 mac 잡이 두 arch 를
+#  만들어 합치므로 **그 잡만 대략 2배** 걸린다(실측 v0.1.355: mac 4분 · win 1분 · linux 0분, 매트릭스 병렬).
+#
 # ⚠ **서명은 시크릿이 있을 때만** 한다. 없으면 electron-builder 가 서명을 건너뛰고 그대로 빌드한다
 #  (mac 은 Gatekeeper 경고, win 은 SmartScreen 경고를 사용자가 보게 된다 — 그 사실을 요약에 남긴다).
 #  포크·커뮤니티 빌드가 시크릿 없이도 돌아야 하므로 실패로 만들지 않는다.
