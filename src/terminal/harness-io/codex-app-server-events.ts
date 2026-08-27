@@ -94,6 +94,27 @@ export function appServerLines(msg: unknown, state: ParseState): { lines: ChatLi
     };
   }
 
+  // ★ 서버가 올리는 **오류 알림** — 이걸 안 받으면 실패한 턴이 «침묵» 으로 끝난다. (실측 2026-08-27, 프로덕션)
+  //  사용자 신고: 첫 프롬프트 뒤 «10초쯤 생각중» 하다 세션이 갑자기 종료되고, 새로고침하면 이어받기가 두 번
+  //  다 실패했다. app-server 로그에는 이유가 또렷했다 —
+  //    `failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses`
+  //  그 홈에 `~/.codex/auth.json` 이 없었다(=그 멤버가 codex 로그인을 안 했다). codex 쪽은 정직하게 401 을
+  //  말하고 백오프하다 포기했는데, **우리가 그 알림을 버려서** 화면에는 «작업 중» 만 남고 아무 설명이 없었다.
+  //  즉 사람이 30초면 고칠 일(로그인)을 «제품이 고장났다» 로 보게 만든 것은 이 한 줄의 부재였다.
+  //
+  //  ⚠ 오류는 **반드시 보이는 줄**로 남긴다(조용히 삼키지 않는다). 턴이 끝났다는 사실도 함께 알려야
+  //   화면이 «작업 중» 에서 풀린다 — 그래서 turn_duration 도 같이 낸다(turn/completed 가 안 올 수 있다).
+  if (method === "error" || method === "thread/realtime/error") {
+    const ts2 = isoOf(Number(params.emittedAtMs)) || new Date().toISOString();
+    const lines: ChatLine[] = [{ type: "system", subtype: "error", timestamp: ts2, text: codexErrorText(params) }];
+    const startMs = typeof st.turnStartMs === "number" ? st.turnStartMs : 0;
+    if (startMs) {
+      delete st.turnStartMs;
+      lines.push({ type: "system", subtype: "turn_duration", timestamp: ts2, durationMs: Math.max(0, Date.now() - startMs) });
+    }
+    return { lines, state: st };
+  }
+
   if (method !== "item/completed") return { lines: [], state: st };
 
   const item = asObj(params.item);
@@ -188,4 +209,42 @@ export function appServerLines(msg: unknown, state: ParseState): { lines: ChatLi
     default:
       return { lines: [], state: st };   // hookPrompt·subAgentActivity·리뷰모드 등 — 화면 계약이 아직 없다
   }
+}
+
+
+/**
+ * (순수) codex 오류 알림 → **사람이 다음에 할 일을 아는 한 문장**.
+ *
+ *  codex 는 `codexErrorInfo` 로 갈래를 준다(unauthorized · usageLimitExceeded · contextWindowExceeded …)
+ *  그리고 상류 HTTP 상태가 있으면 `httpStatusCode` 로 함께 온다. 갈래를 아는데도 원문만 흘리면
+ *  사용자는 «wss://api.openai.com … 401» 같은 문장을 보게 된다 — 그건 정보이지 안내가 아니다.
+ *
+ *  ⚠ 모르는 갈래는 **원문을 그대로 보여준다**(지어내지 않는다). codex 가 갈래를 늘려도 최소한 사실은 남는다.
+ */
+export function codexErrorText(params: Record<string, unknown>): string {
+  const info = params.codexErrorInfo;
+  const kind = typeof info === "string" ? info : String(asObj(info)?.type ?? asObj(info)?.code ?? "");
+  const status = Number(asObj(info)?.httpStatusCode ?? params.httpStatusCode);
+  const raw = String(params.message ?? params.error ?? "").trim();
+  const detail = raw ? ` (${clip(raw)})` : "";
+  switch (kind) {
+    case "unauthorized":
+      return `코덱스 로그인이 필요합니다 — 이 세션의 터미널 탭에서 \`codex login\` 을 마친 뒤 다시 보내세요.${detail}`;
+    case "usageLimitExceeded":
+      return `코덱스 사용량 한도에 걸렸습니다 — 한도가 풀린 뒤 다시 시도하세요.${detail}`;
+    case "sessionBudgetExceeded":
+      return `이 대화의 예산을 넘었습니다 — 새 대화를 여세요.${detail}`;
+    case "contextWindowExceeded":
+      return `맥락 창을 넘었습니다 — 대화를 줄이거나 새 대화를 여세요.${detail}`;
+    case "serverOverloaded":
+      return `OpenAI 서버가 혼잡합니다 — 잠시 뒤 다시 보내세요.${detail}`;
+    case "sandboxError":
+      return `코덱스 샌드박스를 만들지 못했습니다 — 이 세션에서는 도구 실행이 막힐 수 있습니다.${detail}`;
+    default:
+      break;
+  }
+  if (status === 401 || /\b401\b|unauthorized/i.test(raw)) {
+    return `코덱스 로그인이 필요합니다 — 이 세션의 터미널 탭에서 \`codex login\` 을 마친 뒤 다시 보내세요.${detail}`;
+  }
+  return raw ? `코덱스 오류 — ${clip(raw)}` : "코덱스가 오류를 알렸습니다(내용 없음)";
 }

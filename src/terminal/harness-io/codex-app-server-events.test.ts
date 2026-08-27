@@ -2,7 +2,7 @@
 //  codex-cli 0.149.1 로 initialize→thread/start→turn/start 를 돌려 받은 알림이다(지식 codex-app-server-spike-2055 §2).
 //  ⚠ 이 파일은 하네스 바이너리 없이 돈다 — 형식 회귀는 여기서 잡고, 실바이너리 왕복은 별도(codex-app-server.e2e).
 import assert from "node:assert/strict";
-import { appServerLines } from "./codex-app-server-events.js";
+import { appServerLines, codexErrorText } from "./codex-app-server-events.js";
 import type { ChatAssistantLine, ChatSystemLine, ChatUserLine, ParseState } from "./chat-line.js";
 
 let pass = 0;
@@ -183,6 +183,48 @@ t("G2 깨진 입력(문자열·null·params 없음)에도 안 터진다", () => 
   assert.deepEqual(appServerLines(null, {}).lines, []);
   assert.deepEqual(appServerLines({ jsonrpc: "2.0", method: "item/completed" }, {}).lines, []);
   assert.deepEqual(appServerLines(done({ type: "userMessage", id: "u", content: [] }), {}).lines, []);
+});
+
+// ── 오류 알림 (#2055, 2026-08-27 프로덕션 실측) ──────────────────────────────────────────
+//  사용자 신고: 첫 프롬프트 뒤 «10초쯤 생각중» 하다 세션이 갑자기 종료되고, 이어받기가 두 번 다 실패.
+//  app-server 로그의 이유는 또렷했다 — `401 Unauthorized … wss://api.openai.com/v1/responses`
+//  (그 홈에 auth.json 이 없었다 = 로그인 안 함). codex 는 정직하게 말했는데 **우리가 그 알림을 버려서**
+//  화면엔 «작업 중» 만 남았다. 사람이 30초면 고칠 일을 «제품 고장» 으로 보게 만든 자리다.
+t("★ E1 오류 알림은 **보이는 줄**로 남는다 — 삼키면 화면이 «작업 중» 에 갇힌다", () => {
+  const { lines } = appServerLines(N("error", { message: "boom", codexErrorInfo: "other" }), {});
+  assert.ok(lines.length >= 1);
+  const e = lines[0] as ChatSystemLine;
+  assert.equal(e.type, "system");
+  assert.equal(e.subtype, "error");
+  assert.match(String(e.text), /boom/);
+});
+
+t("★ E2 오류가 오면 턴도 끝난 것으로 알린다 — turn/completed 가 안 올 수 있다", () => {
+  const { lines } = appServerLines(N("error", { message: "x" }), { turnStartMs: Date.now() - 1000 });
+  assert.ok(lines.some((l) => (l as ChatSystemLine).subtype === "turn_duration"), "turn_duration 도 함께 낸다");
+});
+
+t("★ E3 401 은 «로그인이 필요합니다» 로 번역한다 — 그게 사용자가 다음에 할 일이다", () => {
+  assert.match(codexErrorText({ codexErrorInfo: "unauthorized", message: "401" }), /로그인이 필요/);
+  // 갈래를 못 받아도 상류 상태·원문으로 같은 결론에 닿아야 한다(실측 로그가 그 모양이었다).
+  assert.match(codexErrorText({ message: "failed to connect: HTTP error: 401 Unauthorized" }), /로그인이 필요/);
+  assert.match(codexErrorText({ codexErrorInfo: { httpStatusCode: 401 } }), /로그인이 필요/);
+});
+
+t("E4 아는 갈래는 각각의 안내로 — 한도·맥락·혼잡", () => {
+  assert.match(codexErrorText({ codexErrorInfo: "usageLimitExceeded" }), /사용량 한도/);
+  assert.match(codexErrorText({ codexErrorInfo: "contextWindowExceeded" }), /맥락 창/);
+  assert.match(codexErrorText({ codexErrorInfo: "serverOverloaded" }), /혼잡/);
+});
+
+t("★ E5 모르는 갈래는 **원문을 그대로** 보여준다 — 지어내지 않는다", () => {
+  const txt = codexErrorText({ codexErrorInfo: "somethingBrandNew", message: "unmapped detail" });
+  assert.match(txt, /unmapped detail/);
+});
+
+t("E6 thread/realtime/error 도 같은 길로 온다", () => {
+  const { lines } = appServerLines(N("thread/realtime/error", { threadId: "t", message: "rt down" }), {});
+  assert.equal((lines[0] as ChatSystemLine).subtype, "error");
 });
 
 console.log(`\n${pass} passed`);
