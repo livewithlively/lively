@@ -4,7 +4,7 @@
 //  문구는 원준님 교정 31건 반영본. 새로 쓴 연결부는 [새문구] 주석. 상태는 sessionStorage(진행)·localStorage(끝남 표식).
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
-import { authUploadProgress, upDirSupported, upDropZone, upFromInput } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
+import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
 //  #1879 — 외부 앱을 **실제로** 잇는다. 잇는 길은 새로 만들지 않고 이미 깎아 둔 한 곳을 그대로 쓴다:
@@ -1050,26 +1050,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           renderSB();
         };
         upDropZone(zone, zone, (items) => void sendAll(items));
-        // 고르기 버튼은 **둘을 그대로 편다.** 종전엔 프로젝트 화면용 팝오버 메뉴(upControl)를 빌려 썼는데,
-        //  그 메뉴 안에 숨은 «폴더 올리기» 를 사람이 찾지 못했다(원준님: "폴더채로도 업로드할 수 있어야함").
-        //  이 화면은 질문 하나에 답하는 자리라, 고를 것이 둘뿐이면 숨기지 않는다.
-        const mkIn = (dir) => {
-          const i = document.createElement('input');
-          i.type = 'file'; i.multiple = true; i.style.display = 'none';
-          if (dir) i.setAttribute('webkitdirectory', '');
-          i.addEventListener('change', () => { void sendAll(upFromInput(i)); i.value = ''; });
-          return i;
-        };
-        const mkBtn = (label, input) => {
-          const b = document.createElement('button');
-          b.type = 'button'; b.className = 'ob-btn ob-btn-sub ob-btn-inline'; b.textContent = label;
-          b.onclick = (ev) => { ev.stopPropagation(); input.click(); };
-          return b;
-        };
-        const fileIn = mkIn(false), dirIn = mkIn(true);
-        const pickHost = $('#upPick', el);
-        pickHost.append(mkBtn('파일 고르기', fileIn), fileIn);
-        if (upDirSupported()) pickHost.append(mkBtn('폴더째 고르기', dirIn), dirIn);   // 미지원 브라우저는 끌어다 놓기로 간다
+        // 고르기는 **공용 부품 하나**를 쓴다(upControl) — 버튼 한 개를 누르면 [파일 올리기 / 폴더 올리기] 가 뜬다.
+        //  구글 드라이브·슬랙과 같은 문법이고, 무엇보다 이 레포의 규칙이다(files-upload.ts: "새 업로드 코드 금지").
+        //  ⚠ 버튼을 둘로 펴 보았다가 되돌렸다(원준님 2026-08-27) — 고르는 방법 하나에 버튼을 두 개 두는 화면은 없다.
+        //   폴더가 안 보이던 것은 메뉴가 아니라 **그 메뉴가 이 화면에서 안 떴는지**를 봐야 할 문제였다.
+        const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub ob-btn-inline', label: '올릴 것 고르기' });
+        $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 숨김 input 도 DOM 에 있어야 click 이 먹는다
         // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
         $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
         $('[data-skip]', el).onclick = () => goScene('sources');

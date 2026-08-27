@@ -122,11 +122,22 @@
     ② 자동 배치 — 숨긴 형제(.v2-side·손잡이·레일)가 display:none 이면 칸을 안 먹어 본문이 **한 칸씩 당겨진다**.
    그 둘이 겹쳐 본문이 사이드바(316px)·레일(68px) 칸에 앉았다(실측 2026-08-26: 실서비스·프리뷰 양쪽).
    그래서 폭을 다투지 않고 **본문을 전 열에 걸친다** — 열이 몇 개든(5열·레일 6열), 어느 규칙이 이기든 같다. */
-#v2-root.ob-bare > .v2-main { grid-column: 1 / -1; }
+/*  ⚠ 막1에서는 **그리드 자체를 끈다.** 열 폭·열 수·grid-column 을 규칙 하나씩 이기려던 시도가 세 번
+     연달아 졌다(레일 6열 · 열 어긋남 · has-topbar 의 grid-area). 셸은 상태에 따라 열 정의를 계속 바꾸는데,
+     민낯은 «가운데 한 칸» 이라 애초에 그리드가 필요 없다. display:block 이면 숨긴 형제는 그대로 빠지고
+     본문만 폭을 다 쓴다 — 셸이 열을 어떻게 바꾸든 무관해진다. */
+#v2-root.ob-bare.has-topbar, #v2-root.ob-bare { display: block; padding-left: 0; }
+#v2-root.ob-bare > .v2-main { width: 100%; height: 100vh; }
 #v2-root.ob-bare .v2-side, #v2-root.ob-bare > .v2-split-x, #v2-root.ob-bare .v2-tabs, #v2-root.ob-bare .v2-tl-btn,
-#v2-root.ob-bare > .v2-rail { display: none; }
-/* 좁은 화면(≤900)에선 레일이 흐름에서 빠져 fixed 로 서고 뿌리에 padding-left 가 붙는다 — 그것도 걷는다. */
-#v2-root.ob-bare { padding-left: 0; }
+#v2-root.ob-bare > .v2-rail,
+/* 맨 윗줄(뒤로·앞으로·검색·레일 토글)은 **사이드바 밖**에 산다 — 브라우저는 .v2-topbar, 데스크톱은 창 제목줄
+   (main.ts navHost). 그래서 위 사이드바 규칙으로는 안 지워지고, 막1에 그 줄만 남아 본문을 오른쪽으로 밀었다
+   (원준님 실측 2026-08-27). 민낯은 **가운데 한 칸**이어야 하므로 이 줄도 함께 걷는다. */
+/*  ⚠ `.has-topbar` 까지 붙여 **명시도를 하나 더** 올린다. 43-v2-topbar-search.css 의
+     `#v2-root.has-topbar > .v2-topbar { display:flex }` 와 동점(1,2,1)이면 나중에 실리는 43 이 이긴다
+     — 이 파일(41)이 앞이라 순서로는 못 이긴다. 이 화면에서 두 번 밟은 함정이다(레일·버튼 리셋). */
+#v2-root.ob-bare.has-topbar > .v2-topbar, #v2-root.ob-bare > .v2-topbar { display: none; }
+/* (좁은 화면에서 레일이 fixed 로 서며 붙는 padding-left 도 위 규칙이 함께 걷는다.) */
 
 /* 되돌아가기 + 파일 받는 자리 (2026-08-25 플로우 재배치 — 로컬 업로드를 앞으로, 앱 연결을 뒤로) */
 .ob-q-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
