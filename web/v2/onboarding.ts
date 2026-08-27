@@ -143,7 +143,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   clearWelcomeDeferred();
   //  ⚠ `$` 는 아래에서 선언된다(const, TDZ) — 여기선 host 에서 직접 집는다.
   const exitBtn = host.querySelector('#obExit') as HTMLButtonElement | null;
-  if (exitBtn) exitBtn.onclick = () => { markWelcomeDeferred(); location.hash = '#/'; };
+  if (exitBtn) exitBtn.onclick = () => {
+    markWelcomeDeferred();
+    //  #2232 — 홈의 «이어서 하기» 줄은 me.welcome_pending 을 본다. me 는 부팅 때 한 번 읽으므로, 표식만
+    //   서버에 보내고 나가면 **그 자리에서는 줄이 안 뜬다**(새로고침해야 보였다 — 실측). 나가는 사람에게
+    //   돌아올 길이 보이지 않으면 그 버튼은 '포기'가 된다. 우리가 방금 만든 사실이니 여기서 함께 반영한다.
+    try { if (state.me) (state.me as { welcome_pending?: boolean }).welcome_pending = true; } catch (_) { /* 비치명 */ }
+    location.hash = '#/';
+  };
   /* 서버 실측 — 내가 올린 자료·종류별 집계·지금 갈래. 연출 숫자를 여기 값으로 갈아끼운다(#1813). */
   let WS: any = null;
   async function loadWelcome() {
