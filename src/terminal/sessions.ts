@@ -4,6 +4,7 @@
 //  지금 뭘 돌리나 — tmux). 읽기는 session-desired.resolveDesired 가 단일 창구이고 **DB 가 기본, tmux 가 폴백**이다.
 //  쓰기는 아직 양쪽에 한다(tmux @box_* + DB upsert) — 폴백이 살아 있어야 자가호스팅 업그레이드가 안 깨진다.
 // 접근 모델: 소유자 + 초대된 멤버(invites). 기본 비공개(초대 없음 = 소유자만). 공개/팀 개념 없음.
+import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
 import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
@@ -512,6 +513,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 명시 보존해야 한다(deploy/linux/sudoers-lively).
   //   구 sudoers 면 미보존 → 헤더 빈 값 → 미기록 = 종전 동작(무회귀).
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
+  // #2162 — **훅이 읽는 유일한 종류 신호.** 종전엔 서버만 알고(managed·loginFor·appId) pane 엔 안 나가서,
+  //  훅은 `LIVELY_TASK_WS` 같은 부산물을 스니핑해 종류를 되짚어야 했다. 이제 한 축이다.
+  args.push("-e", `${SESSION_KIND_ENV}=${input.kind}`);
   // 화면 테마(#1683) — 이 pane 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 고르게 한다.
   //  두 경로로 알린다(둘 다 터미널이 앱에게 알려주는 표준 방식이고, 어느 쪽을 읽는지는 도구마다 다르다):
   //   · COLORFGBG — 오래된 관습(vim/neovim 의 background 자동판정, less 등). "<fg>;<bg>" ANSI 번호.
@@ -620,6 +624,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
+  await tmux(["set-option", "-t", id, "@box_kind", input.kind]);   // #2162 — 종류(@box_* 와 같은 자리·같은 규약)
   await tmux(["set-option", "-t", id, "@box_dir", target]);
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
   await tmux(["set-option", "-t", id, "@box_flags", encodeOptJson(appliedFlags)]);
@@ -671,7 +676,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ best-effort: DB 가 죽어도 세션 생성은 이미 끝났다(위 tmux new-session) — upsert 실패로 세션을 되돌리지 않는다.
   //  managed(상시) 세션은 skip — keep-alive(ensureAllManagedSessions)가 그 영속을 소유하므로 restorable 로 이중화하면
   //   재부팅 후 keep-alive 재생성과 사용자 수동복원이 충돌한다(#1059 E 설계).
-  if (!input.managed) {
+  // #2162 — 종전 `input.managed` 불리언 대신 kind 를 본다(신호 이원화 제거). 상시 세션은 keep-alive 가
+  //  영속을 소유하므로 desired-state 미러를 만들지 않는다(#1059 E) — 판정 근거만 바뀌고 동작은 같다.
+  if (input.kind !== "managed") {
     try {
       await upsertSessionState({
         id, owner: ownerId(user), label, harness: harness.key, dir: target,
@@ -681,6 +688,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         read_only: !!input.readOnly, incognito: !!input.incognito,
         write_vis: input.writeVis ?? null, restrict_read: !!input.restrictRead,
         app_id: input.appId || null,   // #1780 D4 — 앱 세션 desired-state 미러(복원이 앱 축을 잃지 않게)
+        kind: input.kind,               // #2162 — 종류는 태어날 때 정해진다(복원이 되살린다)
         label_source: labelSource,     // #1979 — 이름 걸쇠. INSERT 때만 정해진다(복원은 저장된 출처를 유지)
         created: createdSec, last_busy: null,
       });

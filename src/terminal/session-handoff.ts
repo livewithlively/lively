@@ -1,6 +1,7 @@
 // 실행 중 세션의 설정을 바꿀 때 다른 CLI 프로세스로 맥락을 넘기는 공통 프롬프트.
 // 화면은 하네스별 원문을 공통 ChatLine으로 바꾼 뒤 최근 대화만 보낸다. 서버는 길이 상한과
 // 경계를 다시 고정해 임의 클라이언트가 첫 지시 상한(20,000자)을 우회하지 못하게 한다.
+import { normalizeSessionKind } from "../sessions/session-kind.js";
 import type { SessionState } from "../sessions/session-state.js";
 import type { CreateInput } from "./catalog.js";
 
@@ -24,6 +25,8 @@ export function sessionHandoffInput(
   st: SessionState, harness: string, flags: Record<string, unknown>, rawContext: unknown,
 ): CreateInput {
   return {
+    // #2162 — 핸드오버는 **그 세션을 잇는 것**이라 원래 종류를 그대로 물려받는다.
+    kind: normalizeSessionKind(st.kind),
     label: st.label || "", rootKey: st.root_key || "personal", subpath: st.subpath || "",
     harness, flags, autoApprove: st.auto_approve, invites: st.invites,
     projectId: st.project_id || undefined, projectSrc: st.project_src === "org" ? "org" : "v6",

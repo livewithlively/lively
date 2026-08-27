@@ -2,6 +2,7 @@
 // REST(/api/ui/terminal/*, Bearer) = 세션 목록·생성·이름변경·삭제 + 설정(루트·하네스 카탈로그).
 // WS(/terminal/ws, ticket 쿠키) = PTY 스트림(terminal-pty.ts). 브라우저는 Authorization 헤더를 WS/네비에
 // 못 실으므로, Bearer 로 인증된 멤버에게 HttpOnly 티켓 쿠키(userId 보유)를 발급해 WS 소유권 판정에 쓴다.
+import { normalizeSessionKind, sessionKindFromRequest } from "../sessions/session-kind.js";
 import type express from "express";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
@@ -847,6 +848,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const input: CreateInput = {
       label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
       harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
+      // #2162 — HTTP 요청을 kind 로 옮기는 **유일한 경계**. 여기 말고 다른 데서 loginFor/appId 로
+      //  종류를 되짚지 마라(그게 갈라진 신호의 시작이었다). 이후 모든 판정은 kind 하나만 본다.
+      kind: sessionKindFromRequest(b),
       autoApprove: !!b.autoApprove, invites: b.invites, loginProfile: !!b.loginProfile,
       readOnly: !!b.readOnly, // #1007 — 이 세션만 읽기전용(컨텍스트 스토어 쓰기 소거). 노드 세션도 아래 relay 가 input 스프레드로 전파.
       incognito: !!b.incognito, // #1007+ — 이 세션만 인코그니토(lively 전체 차단 + 훅 off). readOnly 보다 우선.
@@ -1099,6 +1103,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const durableMap = st.claude_session_id ? null : (await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null;
       const resumeId = st.claude_session_id || durableMap?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path);
       const input: CreateInput = {
+        // #2162 — 복원은 **원래 종류를 되살린다**. human 으로 굳히면 앱 세션이 복원될 때 종류를 잃는다.
+        kind: normalizeSessionKind(st.kind),
         label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
         harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
         projectId: st.project_id || undefined, projectSrc: st.project_src === "org" ? "org" : "v6",
@@ -1161,6 +1167,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       ? mappedId : null;
     const precise = !!resumeUuid;
     const session = await createSession(owner, {
+      kind: normalizeSessionKind(st.kind),   // #2162 — 복원은 원래 종류를 되살린다
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
       harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
       invites: st.invites, projectId: st.project_id || undefined,

@@ -15,6 +15,7 @@
 //
 //  ⚠ 이 파일의 판정 규칙(길이·접두)과 본문 형식은 **훅 `project-auto-bind` 와 같은 계약**이다(그쪽은 외부 하네스용
 //   폴백으로 남는다). 한쪽만 바꾸면 같은 지시가 입구에 따라 다른 프로젝트가 된다 — 바꾸려면 둘 다 바꾼다.
+import { isWorkSession } from "../sessions/session-kind.js";
 import { createProject } from "../v6/project-store.js";
 import { getProjectRow } from "../v6/project-store.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
@@ -29,6 +30,9 @@ const MAX_BODY = 3500;
 
 /** 세션 생성 요청 중 이 판정에 필요한 것만(라우트의 CreateInput 을 그대로 받지 않는다 — 순수 유지). */
 export interface FirstPromptPlanInput {
+  // #2162 — 종류가 판정의 1급 근거다. 종전엔 appId·loginFor 를 각각 보고 '기계인가'를 되짚었는데,
+  //  그러면 새 종류(위탁·상시)가 생길 때 여기 조건을 더하는 걸 잊어도 아무 신호가 없다.
+  kind: string;
   projectId?: number | null;
   appId?: string;
   loginFor?: string;
@@ -59,7 +63,10 @@ export const UNNAMED_PROJECT = "새 작업";
  */
 export function firstPromptProjectPlan(input: FirstPromptPlanInput): { name: string; description: string } | null {
   if (Number(input.projectId ?? 0) > 0) return null;
-  if (input.appId || input.loginFor) return null;
+  // #2162 — **사람의 작업 세션만** 프로젝트를 갖는다. 위탁·상시·앱·로그인은 전부 여기서 걸린다.
+  //  종전엔 `appId || loginFor` 둘만 봐서 위탁 워커가 통과했다(그건 이 문을 안 지나 별개로 샜다) —
+  //  이제 종류를 모르는 호출자는 human 으로 떨어지고(normalize), 기계 경로는 전부 명시한다.
+  if (!isWorkSession(input.kind)) return null;
   if (input.readOnly || input.incognito) return null;
   if (String(input.subpath ?? "").trim()) return null;
   const root = String(input.rootKey ?? "").trim();
