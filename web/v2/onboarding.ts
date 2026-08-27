@@ -1428,7 +1428,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           : '';
         const skip = `<button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`;
         const goOther = `<button class="ob-btn ob-btn-sub" data-other>다른 AI 고르기</button>`;
-        const lead = `이어 두시면 제(리브)가 일할 때도 ${esc(nick() || '당신')}님의 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
+        //  #2232 — 이름을 아직 안 주신 분에게 «당신님» 이라고 부르던 자리(실측). 이름이 없으면 부르지 않는다.
+        const lead = `이어 두시면 제(리브)가 일할 때도 ${nick() ? `${esc(nick())}님의` : '쓰시던'} 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
 
         // ── 아직 안 물어봤다 — 없는 답을 지어내지 않고 묻는 중이라고 말한다(bind 가 곧 채운다).
         if (!AIC) {
