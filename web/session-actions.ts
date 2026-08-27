@@ -293,12 +293,12 @@ function checkRow(id: string, label: string, names: string[], hint?: string): { 
 //  → 완전 삭제 창은 이 세션이 남긴 것(만든 지식·고친 지식·만든 프로젝트·자료·작업 기록)을 **기본 체크**로 보여 주고,
 //    사람이 풀어서 남긴다. 규칙 B: **그 뒤에 남이 손댄 것은 고를 수 없다** — "남는 것"으로 이유와 함께 보여 준다.
 //  세션 하나를 버리며 남의 작업을 날릴 수는 없다(서버도 같은 판정으로 한 번 더 거른다).
-type FpItem = { key: string; label: string; sub?: string };
-type FpGroup = { kind: 'kc' | 'ke' | 'pj' | 'src' | 'tk' | 'ct' | 'ac'; title: string; hint?: string; items: FpItem[]; count: number };
-type FpKeep = { label: string; why: string };
+export type FpItem = { key: string; label: string; sub?: string };
+export type FpGroup = { kind: 'kc' | 'ke' | 'pj' | 'src' | 'tk' | 'ct' | 'ac'; title: string; hint?: string; items: FpItem[]; count: number };
+export type FpKeep = { label: string; why: string };
 
 // 발자국을 '고를 수 있는 묶음'과 '남는 것'으로 가른다 — 단일·일괄 확인창이 같은 판정을 쓴다.
-function splitFootprint(fps: Footprint[]): { groups: FpGroup[]; keep: FpKeep[] } {
+export function splitFootprint(fps: Footprint[]): { groups: FpGroup[]; keep: FpKeep[] } {
   const kc: FpItem[] = [], ke: FpItem[] = [], pj: FpItem[] = [], src: FpItem[] = [], tk: FpItem[] = [], ct: FpItem[] = [];
   const keep: FpKeep[] = [];
   let acts = 0;
