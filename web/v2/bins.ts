@@ -376,13 +376,13 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
   };
   // 발자국 → 곁칸 목록. "지우면 무엇이 함께 정리되나"를 창을 열기 전에 보여 준다(실제 선택은 확인창에서).
   const paintFp = (boxEl: HTMLElement, fps: Footprint[]) => {
-    const kc = new Map<string, string>(); const ke = new Map<string, string>(); let src = 0, acts = 0, tk = 0;
+    const kc = new Map<string, string>(); const ke = new Map<string, string>(); let src = 0, acts = 0, tk = 0, ct = 0;
     for (const fp of fps) {
       for (const k of fp.knowledge_created) kc.set(k.name, k.title || k.name);
       for (const k of fp.knowledge_edited) ke.set(k.name, k.title || k.name);
-      src += fp.sources.length; acts += fp.activities; tk += (fp.tasks || []).length;
+      src += fp.sources.length; acts += fp.activities; tk += (fp.tasks || []).length; ct += (fp.categories || []).length;
     }
-    if (!kc.size && !ke.size && !src && !acts && !tk) { boxEl.append(el('p', { class: 'meta', text: '만든 지식·자료·작업 기록은 없어요.' })); return; }
+    if (!kc.size && !ke.size && !src && !acts && !tk && !ct) { boxEl.append(el('p', { class: 'meta', text: '만든 지식·자료·작업 기록은 없어요.' })); return; }
     boxEl.append(el('h5', { text: '완전히 지우면 함께 정리되는 것' }));
     for (const [, t] of [...kc].slice(0, 5)) boxEl.append(sideLi(null, t, '만든 지식'));
     if (kc.size > 5) boxEl.append(el('p', { class: 'meta', text: `만든 지식 외 ${kc.size - 5}건` }));
@@ -390,6 +390,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
     if (ke.size > 3) boxEl.append(el('p', { class: 'meta', text: `고친 지식 외 ${ke.size - 3}건` }));
     if (src) boxEl.append(sideLi(null, '원본 자료', `${src}건`));
     if (tk) boxEl.append(sideLi(null, '만든 태스크', `${tk}건`));
+    if (ct) boxEl.append(sideLi(null, '만든 분류', `${ct}건`));
     if (acts) boxEl.append(sideLi(null, '작업 기록', `${acts}건`));
     boxEl.append(el('p', { class: 'meta', text: '남길 것은 [완전 삭제…]를 누른 창에서 고를 수 있어요.' }));
   };
