@@ -120,12 +120,20 @@ async function selfhostMe(user: LivelyUser) {
   return { me, email };
 }
 
-/** 내가 나가면 이 워크스페이스에 활성 관리자가 0이 되는가.
- *  ⚠ 막지 않으면 **아무도 구성원을 들이거나 설정을 바꿀 수 없는 박스**가 남는다 — 되돌릴 방법이 화면에 없다.
- *   매니지드의 '팀 주인이라 막힘'과 같은 자리의 같은 이유다(주인 없는 것을 남기지 않는다). */
-export function wouldOrphanAdmins(meId: string, meScopes: string[], all: Array<{ id: string; state: string; scopes: string[] }>): boolean {
+/** 내가 나가면 이 워크스페이스에 **사람** 관리자가 0이 되는가.
+ *  ⚠ 막지 않으면 아무도 구성원을 들이거나 설정을 바꿀 수 없는 박스가 남는다 — 되돌릴 방법이 화면에 없다.
+ *   매니지드의 '팀 주인이라 막힘'과 같은 자리의 같은 이유다(주인 없는 것을 남기지 않는다).
+ *
+ *  ⚠ **에이전트·시스템 구성원은 세지 않는다.** admin 스코프를 든 에이전트(dev 의 `daon` 등)가 남아 있어도
+ *   그건 토큰이 살아 있는 동안만이고, 그 토큰이 만료·회수되면 되돌릴 사람이 아무도 없다. 판정 불가를
+ *   삭제 쪽으로 기울이지 않는 것과 같은 원칙이다(#1876 E7) — 잘못 막으면 다른 관리자를 세우면 그만이지만,
+ *   잘못 통과시키면 화면으로는 복구할 수 없다. */
+export function wouldOrphanAdmins(
+  meId: string, meScopes: string[],
+  all: Array<{ id: string; kind: string; state: string; scopes: string[] }>,
+): boolean {
   if (!meScopes.includes("admin")) return false;   // 내가 관리자가 아니면 애초에 줄어들 것이 없다
-  return !all.some((m) => m.id !== meId && m.state === "active" && m.scopes.includes("admin"));
+  return !all.some((m) => m.id !== meId && m.kind === "human" && m.state === "active" && m.scopes.includes("admin"));
 }
 
 // ── 표면 ────────────────────────────────────────────────────────────────────
