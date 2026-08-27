@@ -396,6 +396,9 @@ export async function purgeSessionLog(nodeId: string, sessionId: string, purgedB
       `DELETE FROM session_project sp
         WHERE sp.session_id = ANY($1)
           AND NOT EXISTS (SELECT 1 FROM session s WHERE s.session_id = sp.session_id)`, [ids]);
+    // #2233 — 대화 사슬(어느 박스가 이 대화를 돌렸나)도 함께 지운다. 남겨 두면 완전 삭제한 대화가 다른 세션
+    //  화면의 사슬에 이름으로 남는다(내용은 이미 없지만, '있었다'는 사실 자체가 지우기로 한 것이다).
+    await client.query(`DELETE FROM org_session_conv WHERE conv_uuid = ANY($1)`, [ids]);
     // 묘비 — 이 좌표는 다시 받지 않는다. 없으면 워터마크가 0으로 돌아간 자리에 캡처 훅이 전문을 다시 올려
     //  지운 것이 부활한다(세션이 아직 살아 있을 때 특히). 서브에이전트 좌표도 각각 세운다(각자 append 대상이다).
     for (const id of ids) {

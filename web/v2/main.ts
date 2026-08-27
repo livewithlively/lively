@@ -23,6 +23,7 @@ import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719
 import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
+import { loadThinTrail } from '../session-trail.js';   // #2233 — 팝아웃 창의 타임라인도 세션 전체(대화 사슬)를 본다
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
@@ -1742,10 +1743,18 @@ function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null 
   dropAsideGuest(host);          // 우패널을 통째로 다시 세운다 — 손님(미리보기)도 함께 물러난다
   host.replaceChildren();
   dropAsideFiles(host);          // 다른 세션으로 옮겼다 — 파일 패널도 그 세션 것으로 새로 연다
-  const w = createTimeline(host, { scope: '이 세션', outcomes: true, empty: '아직 남은 것이 없어요 — 세션이 만들고 고친 것이 여기에 쌓입니다.' });
+  //  ⚠ #2233 — 여기(팝아웃 창의 우패널)는 종전에 '결과물 보기'라 **질문이 한 줄도 안 섰다**. 같은 세션을 셸에서 열면
+  //   질문·답이 장으로 서는데(panes.ts trailFor) 창으로 떼면 사라지니, 같은 화면이 두 얼굴을 가진 셈이었다.
+  //   타임라인은 한 벌이다(timeline.ts 머리말) — 세션을 보는 자리면 어디서나 '내가 뭘 시켰나'가 줄기다.
+  const w = createTimeline(host, {
+    scope: '이 세션', chapters: true, allSays: true,
+    empty: '아직 아무것도 없어요 — 이 세션에 무언가 시키면 여기 쌓입니다.',
+  });
   w.setMeta(factsEl);
   host.__trail = { id: s.id, w };
   paintAsidePanes(host);
+  void loadThinTrail(w, { id: s.id, node: s.node || null, logId: (raw && (raw.claudeSessionId as string)) || null })
+    .then((r) => { if (r.ok && r.from > 0) w.setNote('이 세션이 아주 커서 뒤쪽만 불러왔어요. 앞부분은 가운데 대화에서 보실 수 있습니다.'); });
   void loadSessionActivities(s.id).then((items) => w.addAll(items));
   return w;
 }
