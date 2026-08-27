@@ -26,11 +26,14 @@
 //  · IDENTITY_GLOBAL_TABLES — tenant_id 는 있지만(코어가 일괄로 붙인다) **정책을 걸지 않는** 표.
 //    신원은 박스 전역이라는 제품 결정(#1750): 사람·세션·토큰·자격은 워크스페이스를 넘나들고,
 //    ground-truth 레지스트리(kind_registry·data_source)와 실행 노드(org_node)도 배포 전체의 사실이다.
-//    컬럼은 남지만 정책이 없으면 불활성이다 — 무해한 16바이트.
+//    ⚠ 컬럼은 남는데 **기본값은 정책과 무관하게 살아 있다** — 그래서 오래도록 '정책이 없으면
+//    불활성'이라 적혀 있던 이 자리가 틀렸다. 비-primary 워크스페이스에서 들어온 INSERT 가
+//    같은 사람의 행을 하나 더 만들었다(#1879, 실측 2026-08-27). 지금은 db/tenant-column.ts 의
+//    pinIdentityGlobalTenant 가 기본값을 상수로 못박아 **비로소 불활성**이다.
 import crypto from "node:crypto";
 import pg from "pg";
 import { itemsPool } from "../../db/client.js";
-import { TENANT_COLUMN_EXEMPT, SINGLE_TENANT_ID, ensureTenantColumn } from "../../db/tenant-column.js";
+import { IDENTITY_GLOBAL_TABLES, TENANT_COLUMN_EXEMPT, SINGLE_TENANT_ID, ensureTenantColumn } from "../../db/tenant-column.js";
 import { writeTenancyRuntime, readTenancyRuntimeSync, registryModeActive } from "./state.js";
 import { PRIMARY_SLUG, invalidateRegistryCache } from "./registry.js";
 import { logger } from "../../log.js";
@@ -53,21 +56,12 @@ async function currentAppRole(db: Q): Promise<string> {
   return appRoleName(String((await db.query("SELECT current_database() AS d")).rows[0]?.d ?? ""));
 }
 
-/** 신원·전역 표 — 정책을 걸지 않는다(박스 전역). ⚠ 늘리는 것은 "이 표엔 워크스페이스 사유 데이터가
- *  절대 없다"는 판단이다 — 면제는 검사를 끄는 일이고, 꺼진 검사가 유출 경로가 된다. */
-export const IDENTITY_GLOBAL_TABLES: ReadonlySet<string> = new Set([
-  // 사람과 그 자격 — 계정은 박스에 하나, 워크스페이스는 접근 명부(gw_workspace_member)로 가른다.
-  "org_member", "web_session", "auth_token", "member_credential", "member_secret", "git_credential",
-  // 인증 진행중 상태 — 로그인 플로우는 워크스페이스 이전에 일어난다.
-  "pending_device_auth", "pending_oidc_auth", "pending_oidc_link", "pending_session_mint",
-  // OAuth AS(이 게이트웨이가 인가서버) — 클라이언트 등록·코드·리프레시는 배포 전체의 사실.
-  "oauth_client", "oauth_auth_code", "oauth_auth_request", "oauth_refresh",
-  // 실행 노드 — 기계는 박스에 붙는다(어느 워크스페이스의 세션이든 같은 노드에서 뜰 수 있다).
-  "org_node",
-  // ground-truth 레지스트리 — 스키마 초기화(소유자)가 시드하는 정의 표. 테넌트로 가르면
-  //  secondary 가 빈 레지스트리를 본다(시드는 primary 에만 떨어지므로).
-  "kind_registry", "data_source",
-]);
+/**
+ * 신원·전역 표 — 정책을 걸지 않는다(박스 전역). 정의는 db/tenant-column.ts 가 갖는다:
+ *  그 표들은 **정책만이 아니라 컬럼 기본값도** 다르게 다뤄야 하기 때문이다(#1879 — 기본값이
+ *  컨텍스트를 따라가면 정책이 없어도 계정행이 워크스페이스마다 갈라진다). 여기서는 정책 면제 목록으로만 쓴다.
+ */
+export { IDENTITY_GLOBAL_TABLES } from "../../db/tenant-column.js";
 
 const qi = (name: string): string => {
   if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) throw new Error(`안전하지 않은 식별자: ${name}`);
