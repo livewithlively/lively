@@ -292,9 +292,32 @@ export function openWorkspaceMenu(anchor: HTMLElement): void {
   void openMenu(anchor);
 }
 
-function switchTo(slug: string): void {
+/**
+ * 이 리로드가 «워크스페이스 전환»이라고 부팅부에 알리는 표식(#2171).
+ *
+ * 전환은 `location.reload()` 를 거치므로(아래 switchTo) **부팅 판정을 처음부터 다시 탄다.** 그런데
+ *  옮겨 간 워크스페이스에는 그 사람의 흔적이 0이라(거기서 MCP 를 부른 적도, 세션을 연 적도 없다)
+ *  코어의 «흔적 없으면 처음 오는 사람» 판정이 참이 되어 **전환할 때마다 처음 설정이 떴다**
+ *  (원준님 신고 2026-08-27, 데스크톱 앱에서 워크스페이스 전환 중).
+ *
+ * 전환은 «처음 오는 것»이 아니라 «있던 곳으로 가는 것»이다 — 그 자리는 언제나 홈이어야 한다.
+ *  처음 설정이 필요한 사람에게는 홈의 «처음 설정 이어서 하기»(me.welcome_pending)가 남는다.
+ *
+ * sessionStorage 인 이유: 이 표식은 **딱 다음 부팅 한 번**만 살아야 한다. localStorage 에 두면 지우기
+ *  전까지 자동 진입이 영영 죽고, 그러면 새로 온 사람이 처음 설정을 못 본다.
+ */
+export const WS_SWITCH_KEY = 'lively_ws_switching';
+
+/**
+ * @param landing 도착해서 열 화면. 기본은 홈이다 — **전환의 도착지는 언제나 홈**(위 ★).
+ *   방금 **만든** 워크스페이스로 갈 때만 처음 설정(`#/welcome?resume=1`)을 명시적으로 준다:
+ *   그 한 번이 «워크스페이스 만드는 과정의 마지막» 이고, 그건 휴리스틱이 아니라 **만든 쪽이 가리켜야** 한다
+ *   (매니지드 CP 가 첫 입장에 `?to=#/welcome` 을 싣는 것과 같은 규칙 — lvly-cloud workspaces.ts).
+ */
+function switchTo(slug: string, landing?: string): void {
   setCurrentWorkspace(slug === 'primary' ? '' : slug);
-  location.hash = '#/';
+  try { sessionStorage.setItem(WS_SWITCH_KEY, '1'); } catch (_) { /* 프라이빗 모드 — 표식이 없으면 종전 동작 */ }
+  location.hash = landing || '#/';
   location.reload(); // 화면 전체가 그 워크스페이스의 데이터로 다시 선다 — 부분 갱신은 반쪽 상태를 만든다
 }
 
@@ -337,7 +360,10 @@ function buildCreateForm(form: HTMLElement): void {
     try {
       const d: any = await api('/api/ui/me/workspaces', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), kind: kind.value }) });
       toast(`'${d?.workspace?.name || name.value.trim()}' 워크스페이스를 만들었어요.`);
-      switchTo(String(d?.workspace?.slug || '')); // 만들자마자 그 워크스페이스로 — 빈 목록 앞에서 헤매지 않게
+      // 만들자마자 그 워크스페이스로 — 빈 목록 앞에서 헤매지 않게.
+      //  ★ 여기가 «워크스페이스 만드는 과정의 마지막»이라 처음 설정으로 **명시적으로** 보낸다(#2171).
+      //   코어의 자동 진입은 전환 부팅에서 꺼지므로(main.ts wsSwitched), 안 가리키면 아무도 못 본다.
+      switchTo(String(d?.workspace?.slug || ''), '#/welcome?resume=1');
     } catch (e: any) { note.textContent = e?.message || String(e); go.removeAttribute('disabled'); }
   } });
   form.replaceChildren(name, kind, el('div', { class: 'v2-ws-formrow' }, go, note),

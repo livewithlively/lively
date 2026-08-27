@@ -110,6 +110,26 @@ export function sessDisplayName(s: Sess, projectName: string): string {
 //  · '지금 도는 세션'은 **답 기다리는 것 먼저**, 세션 이름과 프로젝트가 같으면 한 번만 쓴다(같은 말 두 줄 금지).
 
 /**
+ * 홈의 «처음 설정 이어서 하기» 한 줄(#2171).
+ *
+ * 왜 홈에 있나: 자동 진입을 «평생 한 번»으로 줄이면(first-run.ts) 중간에 나간 사람은 두 번 다시 그 화면을
+ *  못 만난다 — 그러면 안 끌려가는 대신 **길을 잃는다**. 그래서 자동으로 끌고 가는 것과 스스로 찾아가는
+ *  길을 분리한다: 끌고 가는 건 한 번, 길은 끝낼 때까지 여기 남는다.
+ *
+ * `?resume=1` 을 붙이는 이유는 main.ts 부팅부에 있다 — 주소에 남은 `#/welcome` 은 딥링크로 인정하지
+ *  않는데(자기가 자기를 되살리는 고리였다), **사람이 스스로 누른 것**은 그 차단을 통과해야 한다.
+ */
+function welcomeResumeRow(): HTMLElement | null {
+  if (!state.me || (state.me as { welcome_pending?: boolean }).welcome_pending !== true) return null;
+  return el('a', { class: 'v2-home-resume', href: '#/welcome?resume=1' },
+    el('span', { class: 'v2-home-resume-l', text: 'L' }),
+    el('span', { class: 'v2-home-resume-t' },
+      el('b', { text: '처음 설정을 이어서 하시겠어요?' }),
+      el('span', { text: '리브가 자료를 읽고 워크스페이스를 대신 세팅해 드립니다. 2~3분이면 됩니다.' })),
+    el('span', { class: 'v2-home-resume-go', text: '이어서 하기' }));
+}
+
+/**
  * 홈(=[새 작업]) 화면.
  *
  * `draft` 는 **아직 안 보낸 지시**다(#2037). 홈 탭은 '거쳐 가는 빈 탭'이라 거기서 다른 화면을 열면 그 탭이
@@ -180,6 +200,10 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
       el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }),
       el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }),
       card,
+      // 처음 설정을 **보여는 줬는데 안 끝낸** 사람에게만(#2171 — me.welcome_pending, 판정은 서버).
+      //  ★ 자동 진입을 평생 한 번으로 줄인 것의 짝이다. 끌고 가지 않는 대신 버리지도 않는다 —
+      //   길은 여기 남겨 두고, 갈지 말지는 사람이 정한다. 끝내면(onboarded_at) 이 줄은 사라진다.
+      welcomeResumeRow(),
       // 시키는 칸 아래 한 줄 = **최근에 연 앱**(#1954). 전부 깔지 않는다 — 다 깔면 고르는 화면이 되어
       //  '무엇이든 시키세요'라는 이 화면의 첫 문장과 다툰다. 전체는 [모든 앱]이 런치패드로 연다.
       el('div', { class: 'v2-home-apps' },

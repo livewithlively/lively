@@ -397,6 +397,18 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 1px 2px 12px; scrollbar-width: thin; scrollbar-color: transparent transparent; }
 .v2-app-list:hover { scrollbar-color: var(--line-strong) transparent; }
 /*  홈 — 시키는 칸 아래 최근에 연 앱 한 줄(#1954). 전체는 [모든 앱]이 런치패드로 연다. */
+/* 처음 설정 이어서 하기(#2171) — 시키는 칸 바로 아래 한 줄. 배너가 아니라 «있는지 없는지» 정도의 존재감:
+   홈의 첫 문장은 «무엇을 할까요?» 이고, 이 줄은 그 다음이어야 한다(끌고 가지 않기로 한 것의 짝). */
+.v2-home-resume { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 11px 13px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--bg-tint); text-decoration: none; color: inherit; }
+.v2-home-resume:hover { border-color: var(--blue); }
+.v2-home-resume-l { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 7px; background: var(--blue); color: #fff;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+.v2-home-resume-t { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.v2-home-resume-t b { font-size: 13px; font-weight: 650; }
+.v2-home-resume-t span { font-size: 12px; color: var(--muted); }
+.v2-home-resume-go { margin-left: auto; flex: 0 0 auto; font-size: 12.5px; font-weight: 650; color: var(--blue); }
+
 .v2-home-apps { margin-top: 26px; }
 .v2-home-apps-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .v2-home-apps-k { font-size: 12px; font-weight: 700; color: var(--muted); }
