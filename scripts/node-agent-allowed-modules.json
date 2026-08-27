@@ -54,6 +54,7 @@
  "dist/project/project-fs.js",
  "dist/project/project-origin.js",
  "dist/project/project-provision.js",
+ "dist/sessions/session-kind.js",
  "dist/sessions/session-memory-policy.js",
  "dist/sessions/session-reclaim-policy.js",
  "dist/sessions/session-share.js",

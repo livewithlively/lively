@@ -12,7 +12,7 @@ const sleep = async (_ms: number): Promise<void> => {};
 
 // 프로젝트 바인딩 정본이 기록되기 전에 노드가 첫 프롬프트를 실행하지 않게, 새 노드는 prompt를 create에서 분리한다.
 {
-  const input = { label: "", rootKey: "shared", subpath: "project/1", harness: "claude", flags: {}, autoApprove: false, initialPrompt: "첫 지시" };
+  const input = { kind: "human" as const, label: "", rootKey: "shared", subpath: "project/1", harness: "claude", flags: {}, autoApprove: false, initialPrompt: "첫 지시" };
   const modern = nodeProjectCreatePlan(input, true);
   assert.equal(modern.createInput.initialPrompt, undefined);
   assert.equal(modern.deferredPrompt, "첫 지시");

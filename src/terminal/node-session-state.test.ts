@@ -12,7 +12,7 @@ const sess = (over: Partial<SessionInfo> = {}): SessionInfo => ({
   ...over,
 });
 const req = (over: Partial<CreateInput> = {}): CreateInput => ({
-  label: "요청 라벨", rootKey: "", subpath: "", harness: "codex", flags: {}, autoApprove: true, ...over,
+  kind: "human", label: "요청 라벨", rootKey: "", subpath: "", harness: "codex", flags: {}, autoApprove: true, ...over,
 });
 
 test("B1·B2 workspace 좌표 — 빈 root는 personal, 지정 좌표는 그대로", () => {

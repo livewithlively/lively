@@ -1,5 +1,6 @@
 // 중앙 박스 — 큐레이트 설정 카탈로그(허용 루트·하네스 플래그·세션 타입). terminal-sessions.ts 분할(#1313 R15).
 //  순수 상수·타입·무의존 순수함수만 둔다(다른 terminal 모듈이 전부 이 파일을 딛고 선다 — 역방향 import 금지).
+import type { SessionKind } from "../sessions/session-kind.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -354,7 +355,13 @@ export interface PreparedAppSession {
   assets: Array<{ path: string; body: string; mode: number }>;
 }
 
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
+export interface CreateInput {
+  // #2162 — **이 세션을 누가·무엇을 위해 여나.** 필수다: 새 세션 경로를 만들며 종류를 잊으면 컴파일이 안 된다.
+  //  종전엔 종류 신호가 서버(managed·loginFor·appId)와 훅(env)으로 갈라져 겹치지도 이어지지도 않았고,
+  //  그래서 새 경로가 말없이 '사람 세션'이 돼 #1979 에서 두 번(이름짓기 헤드리스·위탁 워커) 샜다.
+  //  실행 모드(readOnly·incognito)는 **직교 축**이니 여기 흡수하지 마라(읽기전용 위탁이 표현 불가해진다).
+  kind: SessionKind;
+  label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
   // #1291 v2 — 기록 범위(write cap)와 read 축소. 미지정이면 실행 폴더에서 파생한다(신규·복원이 같은 규칙).
   //  writeVis: 'open'|'audience'|'private' — 이 세션이 **사용자 승인 없이** 만들 수 있는 맥락의 최대 가시성.
   //  restrictRead: 프로젝트 세션을 owner∪invites 로 더 좁힌다(프로젝트 대상 안에서만 축소 가능).

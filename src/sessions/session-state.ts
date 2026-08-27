@@ -26,6 +26,10 @@ const ON_NODE = !!process.env.LIVELY_NODE_TOKEN;
 export interface SessionState {
   id: string;                 // 세션 id(box-<slug>-<hex>) = tmux 세션명 = claude --resume 인자(#905 C1)
   owner: string;              // @box_owner
+  // #2162 — **이 세션을 누가·무엇을 위해 열었나**(human|task|managed|app|login). 종류 판정의 정본.
+  //  종전엔 이 축이 없어 서버(managed·loginFor·appId)와 훅(env) 신호가 갈라져 있었고, 새 기계 세션
+  //  경로가 말없이 '사람 세션'이 됐다(#1979 에서 두 번). NULL = 이 컬럼 이전 행 → `human` 으로 읽는다.
+  kind?: string | null;
   label: string | null;
   // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 낮은 쪽이 높은 쪽을 못 덮는 걸쇠의 근거
   //  (표는 session-label-source.ts). 입력에선 선택 — 안 실어 보내면 이전 값 보존(upsert COALESCE).
@@ -72,7 +76,7 @@ export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session
 // export: session-desired.ts 가 자기 쿼리 결과를 같은 규칙으로 해석해야 한다(파싱이 두 벌이 되면 갈린다).
 export function rowToState(r: Record<string, any>): SessionState {
   return {
-    id: r.id, owner: r.owner, label: r.label ?? null, label_source: (r.label_source as string | null) ?? null, harness: r.harness || "claude",
+    id: r.id, owner: r.owner, kind: (r.kind as string | null) ?? null, label: r.label ?? null, label_source: (r.label_source as string | null) ?? null, harness: r.harness || "claude",
     dir: r.dir ?? null, root_key: r.root_key ?? null, subpath: r.subpath ?? null,
     flags: (r.flags && typeof r.flags === "object" && !Array.isArray(r.flags)) ? r.flags : {},
     auto_approve: !!r.auto_approve,
@@ -273,8 +277,8 @@ export async function listAllSessionStates(): Promise<SessionState[]> {
 export async function upsertSessionState(s: SessionStateInput): Promise<void> {
   if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다. 노드 세션의 행은 게이트웨이가 릴레이 직후 쓴다(헤더).
   await itemsPool.query(
-    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, label_source, last_seen, updated_at)
-     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,$21,now(),now())
+    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, label_source, kind, last_seen, updated_at)
+     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,$21,COALESCE($22,'human'),now(),now())
      ON CONFLICT (tenant_id, id) DO UPDATE SET
        owner=EXCLUDED.owner, label=EXCLUDED.label, harness=EXCLUDED.harness, dir=EXCLUDED.dir,
        root_key=EXCLUDED.root_key, subpath=EXCLUDED.subpath, flags=EXCLUDED.flags, auto_approve=EXCLUDED.auto_approve,
@@ -288,6 +292,8 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
        --  (routes.ts 의 label: st.label || id) — 출처 계산만 보면 그건 '사람이 준 이름'이라 human 으로 승격되고,
        --  반대로 이름 없이 복원되면 rule 로 내려앉는다. 어느 쪽이든 **복원 한 번에 걸쇠가 풀린다.**
        --  이름의 출처가 바뀌는 자리는 개명(claimSessionLabel·updateSessionStateMeta) 하나뿐이다.
+       -- #2162 kind 도 **이 경로로 안 바뀐다**(INSERT 때만). 세션의 종류는 태어날 때 정해지고 변하지 않는다 —
+       --  복원이 원래 종류를 되살려 보내지만(routes.ts), 만에 하나 그게 비면 기존 값이 살아남아야 한다.
        restrict_read=EXCLUDED.restrict_read,
        created=EXCLUDED.created,
        -- node_id 는 세션 정체성의 일부다(같은 id 가 다른 노드로 옮겨 가는 일은 없다) — 그래도 EXCLUDED 로 그대로 쓴다:
@@ -298,7 +304,7 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
     [s.id, s.owner, s.label, s.harness, s.dir, s.root_key, s.subpath, JSON.stringify(s.flags || {}),
      s.auto_approve, JSON.stringify(s.invites || []), s.project_id, s.project_src, s.read_only, s.incognito,
      s.write_vis ?? null, s.restrict_read ?? false,
-     s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null, s.label_source ?? null],
+     s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null, s.label_source ?? null, s.kind ?? null],
   );
 }
 
