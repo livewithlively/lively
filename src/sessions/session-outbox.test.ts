@@ -1,6 +1,6 @@
 // 순수 단위 체크(node:assert) — 아웃박스(#1753)의 정책·에코 바늘. 배달자(파일·tmux·DB)는 여기서 안 띄운다.
 import assert from "node:assert/strict";
-import { echoNeedle, flatOneLine, needsSubmitRetry, readyVerdictOnError, retryDelayMs, stallAction, unreachableDelayMs,
+import { deliveryTransport, echoNeedle, flatOneLine, needsSubmitRetry, readyVerdictOnError, retryDelayMs, stallAction, unreachableDelayMs,
   READY_WINDOW_MS, NOT_READY_TTL_MS, UNREACHABLE_TTL_MS } from "./session-outbox.js";
 
 let pass = 0;
@@ -93,4 +93,22 @@ t("[#2154 ②] 못 닿는 동안의 재시도는 분 단위로 벌어지고 5분
   assert.equal(unreachableDelayMs(3), 120_000);
   assert.equal(unreachableDelayMs(100), 5 * 60_000);
   assert.ok(unreachableDelayMs(0) >= retryDelayMs(99), "가장 느린 입력창 재시도보다도 성기게");
+});
+
+// ── #2169 전송수단은 하네스 모드가 정한다 ──────────────────────────────────────────────
+//  실측 2026-08-27: 아웃박스에서 not-ready 로 죽은 4건이 **전부 codex** 였다. codex app-server 세션의
+//  pane 은 셸이라(#2055) '입력창이 뜨면 send-keys' 가 영영 성립하지 않는다 — 큐는 지시를 들고만 있다가
+//  TTL 에 버렸다. 폴백의 원래 의도("로그인 전이라 서버를 못 여는 경우에도 지시가 큐에 남는다")가
+//  나르는 수단이 하나뿐이라 말뿐이었다.
+t("[#2169] codex(app-server 기본)는 프로토콜로 나른다 — 셸 pane 에 글자를 넣지 않는다", () => {
+  assert.equal(deliveryTransport("codex", {} as NodeJS.ProcessEnv), "codex-chat");
+});
+t("[#2169] 그 외 하네스는 종전대로 화면(send-keys) — 무회귀", () => {
+  for (const h of ["claude", "opencode", "antigravity", "grok", "shell", ""]) {
+    assert.equal(deliveryTransport(h, {} as NodeJS.ProcessEnv), "send-keys", h);
+  }
+});
+t("[#2169] codex 를 tmux 모드로 되돌리면(LIVELY_CODEX_CHAT=tmux) 화면 경로로 돌아온다", () => {
+  assert.equal(deliveryTransport("codex", { LIVELY_CODEX_CHAT: "tmux" } as NodeJS.ProcessEnv), "send-keys");
+  // 되돌리는 길이 살아 있어야 한다 — app-server 는 공식 문서상 experimental 이다(codex-chat-mode 머리말).
 });

@@ -28,7 +28,18 @@ import type { ChatLine } from "./chat-line.js";
 
 /** 이 세션에서는 app-server 경로를 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
 export class CodexChatUnavailable extends Error {
-  constructor(message: string, readonly cause?: unknown) { super(message); this.name = "CodexChatUnavailable"; }
+  /**
+   * **한 글자도 안 갔나**(#2169). 기본 true — 이 오류는 대부분 서버를 못 띄운 자리에서 난다.
+   *
+   *  왜 이 구분이 필요한가: 호출자가 큐(아웃박스)라면 "되돌려도 되는 실패"와 "이미 갔을 수 있는 실패"의
+   *  결말이 정반대다. 앞의 것은 다시 보내야 지시가 안 사라지고, 뒤의 것은 다시 보내면 같은 말이 두 번 간다.
+   *  종전엔 둘이 한 타입이라 호출자가 구별할 길이 없었다 — #2154 의 `SendKeysNotStarted` 와 같은 축이다.
+   *  `startTurn` 이 던진 경우만 false 다(요청이 서버에 닿은 뒤 응답이 실패했을 수 있다).
+   */
+  readonly notStarted: boolean;
+  constructor(message: string, readonly cause?: unknown, notStarted = true) {
+    super(message); this.name = "CodexChatUnavailable"; this.notStarted = notStarted;
+  }
 }
 
 export interface CodexChatOpts {
@@ -424,8 +435,10 @@ export async function sendCodexChat(o: CodexChatOpts & { text: string }): Promis
     return { threadId: e.threadId };
   } catch (err) {
     // 보내기가 실패하면 그 서버는 못 믿는다 — 지우고 폴백시킨다(다음 호출이 새로 띄운다).
+    //  ⚠ notStarted=false — 요청이 서버에 닿은 **뒤** 응답이 실패했을 수 있다. 큐가 이걸 되돌리면
+    //   같은 말이 두 번 갈 수 있으므로, 여기서만 '되돌리면 안 된다'고 말한다(#2169).
     dropSession(o.sessionId);
-    throw new CodexChatUnavailable(`codex 에 말을 전하지 못했습니다 — ${msg(err)}`, err);
+    throw new CodexChatUnavailable(`codex 에 말을 전하지 못했습니다 — ${msg(err)}`, err, false);
   }
 }
 
