@@ -362,7 +362,10 @@ export const welcomeCapabilities: Capability[] = [
       const nickname = s(input.name, 80);
       const member = await getMember(userId);
       if (nickname && member) {
-        await upsertMember({ id: userId, nickname }, { actor: userId, source: "welcome" } as never)
+        // ⚠ **display_name 도 함께** 넣는다. 화면이 사람 이름을 읽는 자리는 전부 display_name 이고
+        //  (rail.ts·side.ts·views.ts 모두 `display_name || email || userId`), nickname 은 활동 로그·알림에서만 쓰인다.
+        //  nickname 만 넣으면 「어떻게 불러 드릴까요」에 답해도 사이드바엔 이메일 앞부분이 계속 뜬다(#1813).
+        await upsertMember({ id: userId, display_name: nickname, nickname }, { actor: userId, source: "welcome" } as never)
           .catch(() => { /* 이름은 못 바꿔도 온보딩을 막지 않는다 */ });
       }
 
