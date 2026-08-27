@@ -1,8 +1,9 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  IDENTITY_GLOBAL_DEFAULT_EXPR, SINGLE_TENANT_ID, SURROGATE_GEN_RE, TENANT_DEFAULT_EXPR,
-  buildIdentityGlobalFoldSql, buildIdentityGlobalPinDdl, buildTenantColumnDdl, isNaturalKey, rewritePartialUniqueDef,
+  IDENTITY_GLOBAL_DEFAULT_EXPR, SINGLE_TENANT_ID, SQL_IDENTITY_GLOBAL, SURROGATE_GEN_RE, TENANT_DEFAULT_EXPR,
+  buildIdentityGlobalFoldSql, buildIdentityGlobalPinDdl, buildTenantColumnDdl, identityGlobalPinPlan, isNaturalKey,
+  rewritePartialUniqueDef,
 } from "./tenant-column.js";
 
 const G = (...pairs: string[]) => new Set(pairs);
@@ -250,4 +251,37 @@ test("★★ audit() 의 org_member 서브쿼리가 tenant 로 못박혀 있다"
   const m = /FROM org_member m WHERE[^)]*/.exec(src);
   assert.ok(m, "audit.ts 에서 org_member 서브쿼리를 못 찾았다 — 이 가드를 따라 옮길 것");
   assert.match(m[0], /m\.tenant_id\s*=/, `스칼라 서브쿼리가 테넌트로 좁혀지지 않았다: ${m[0]}`);
+});
+
+// ── 못박기 계획 — 바깥 정책 계층이 격리한 표는 건드리지 않는다(#2198) ─────────
+//
+// ★★ 2026-08-27 실측. 매니지드 공용 DB(lvly-cloud) 에서는 '테넌트'가 워크스페이스가 아니라 **고객사**라
+//  토큰·세션·구성원도 테넌트별이고, 그래서 그 표들에 tenant_isolation(FORCE RLS)이 걸려 있다. 그 위에서
+//  #1879 의 못박기·접기가 돌아 auth_token 290/290 · web_session 325/325 행이 단일테넌트 UUID 로 옮겨졌고,
+//  정책이 그 행을 어느 테넌트에도 안 보여 줘 **전 테넌트가 invalid_token** 이 됐다(app.lvly.io 워크스페이스
+//  열기 500). "정책이 걸린 표"는 그 배포가 테넌트별로 쓰는 표다 — 거기서 전역화는 곧 장애다.
+
+const igRow = (t: string, over: Partial<{ pk: string[] | null; rls_forced: boolean; tenant_policy: boolean }> = {}) =>
+  ({ t, pk: ["id"], rls_forced: false, tenant_policy: false, ...over });
+
+test("★★ tenant_isolation 정책이 걸린 신원 표는 못박지도 접지도 않는다 — 매니지드 공용 DB 전 테넌트 로그인이 죽는다(#2198)", () => {
+  const plan = identityGlobalPinPlan([
+    igRow("org_member"),
+    igRow("auth_token", { tenant_policy: true }),
+    igRow("web_session", { rls_forced: true }),
+  ]);
+  assert.deepEqual(plan.pin.map((r) => r.t), ["org_member"]);
+  assert.deepEqual(plan.skipped, ["auth_token", "web_session"]);
+});
+
+test("정책이 없는 표는 종전대로 전부 못박는다(셀프호스트 registry 모드 무회귀)", () => {
+  const plan = identityGlobalPinPlan([igRow("org_member"), igRow("auth_token"), igRow("web_session")]);
+  assert.equal(plan.pin.length, 3);
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("★ 카탈로그 조회가 정책 이름과 FORCE 를 실제로 읽는다 — 판정 재료가 없으면 건너뛸 수 없다", () => {
+  assert.match(SQL_IDENTITY_GLOBAL, /pg_policy/);
+  assert.match(SQL_IDENTITY_GLOBAL, /'tenant_isolation'/);
+  assert.match(SQL_IDENTITY_GLOBAL, /relforcerowsecurity/);
 });
