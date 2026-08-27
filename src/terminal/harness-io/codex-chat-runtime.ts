@@ -20,7 +20,7 @@ import path from "node:path";
 import { CodexAppServer, type AppServerTransport, type ApprovalDecision, type ApprovalRequest } from "./codex-app-server.js";
 import { detachedStartSh, portAlive, sessionPort, spawnDetachedLocal, waitPort, wsTransport } from "./codex-app-server-daemon.js";
 import { spawn } from "node:child_process";
-import { memberSh } from "../terminal-member-fs.js";        // 파일 op 는 종전 경계(멤버 홈이 보이는 곳)
+import { memberShOut } from "../terminal-member-fs.js";       // 파일 op 는 종전 경계(멤버 홈이 보이는 곳)
 import { sessionExecConfigured, sessionSpawnArgv } from "../session-exec.js";   // 프로세스는 세션 경계
 import type { ChatLine } from "./chat-line.js";
 
@@ -218,6 +218,27 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
     });
     if (!/started|already/.test(String(out ?? ""))) throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
     return bridgeTransport(o.sessionId, port);
+  }
+  // ── 격리 리눅스 박스(#524): 서버를 **그 멤버 uid 로** 띄운다. ──
+  //  게이트웨이 uid 로 띄우면 두 군데가 동시에 어긋난다(실측 2026-08-27 코드 대조):
+  //   ① codex 가 **게이트웨이 유저의 `~/.codex`** 를 본다 — 멤버 자격이 없어 턴이 안 돈다.
+  //   ② 답이 쓰이는 rollout 은 게이트웨이 홈에 생기는데, 읽기 경로(rolloutPath)는 memberShOut 으로
+  //      **멤버 홈**을 뒤진다 — 서로 다른 홈을 봐서 대화창이 빈 채로 남는다(«답이 안 온다»).
+  //   그리고 무엇보다 그 배포의 존재 이유인 격리가 뚫린다 — 에이전트가 멤버가 아니라 게이트웨이 권한으로 돈다.
+  //  매니지드와 같은 셸(detachedStartSh)을 쓴다: `$HOME` 이 그 멤버 홈으로 풀려 위 ②가 저절로 맞는다.
+  //  ⚠ 게이트웨이는 같은 호스트의 loopback 에 그냥 닿는다(매니지드처럼 다리가 필요 없다) — 컨테이너 경계가
+  //   없기 때문이다. 그 사실이 곧 아래 «켤 때 명시 동의» 의 이유이기도 하다(codex-chat-mode.ts 머리말).
+  if (o.osUser) {
+    if (!(await portAlive(port))) {
+      const log = `$HOME/.codex/lively-app-server-${o.sessionId}.log`;
+      const out = await memberShOut(o.osUser, detachedStartSh(port, log, sessionEnv(o.sessionId))).catch((e: unknown) => {
+        throw new CodexChatUnavailable(`멤버 자리(${o.osUser})에서 codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
+      });
+      if (!/started|already/.test(String(out ?? ""))) {
+        throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
+      }
+    }
+    return wsTransport(`ws://127.0.0.1:${port}`);
   }
   // ── 로컬(비격리·dev): detached + 로그파일. 이미 그 포트에 살아 있으면 그대로 붙는다. ──
   if (!(await portAlive(port))) {
@@ -516,7 +537,9 @@ export async function rolloutPath(osUser: string | null, threadId: string): Prom
   if (!/^[A-Za-z0-9-]{8,64}$/.test(threadId)) return "";
   const sh = findRolloutSh(threadId);
   try {
-    if (osUser) return String(await memberSh(osUser, sh) ?? "").trim().split("\n")[0] ?? "";
+    // ⚠ memberSh 가 아니라 memberShOut 이다 — memberSh 는 stdout 을 버리고 void 를 돌려줘서, 여기서 쓰면
+    //  **항상 빈 경로**가 나온다(실측 2026-08-27: 격리·매니지드에서 화면이 답 파일을 못 찾던 원인).
+    if (osUser) return String(await memberShOut(osUser, sh)).trim().split("\n")[0] ?? "";
     return await new Promise<string>((resolve) => {
       const p = spawn("sh", ["-c", sh], { stdio: ["ignore", "pipe", "ignore"] });
       let out = "";

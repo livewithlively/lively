@@ -2,6 +2,7 @@
 //  여기서 잡는 것: 세션당 1개 · 겹친 ensure 가 서버를 두 개 안 띄운다 · 멤버 경계 argv · 실패는 값으로(폴백 신호) ·
 //  resume 실패를 새 스레드로 덮지 않는다 · release 는 프로세스를 내린다(락 반납).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   answerApproval, askApproval, CodexChatUnavailable, codexChatStatus, dropAllCodexChats, dropSession,
   ensureCodexChat, interruptCodexChat, onChatEvent, pendingApprovals, releaseCodexChat, sendCodexChat,
@@ -288,6 +289,35 @@ await t("★ V3 답을 안 하면 그 승인은 계속 서 있다 — 화면이 
   assert.ok(answerApproval("s1", waiting[0].id, "decline"));
   assert.equal(pendingApprovals("s1").length, 0);
   assert.equal(answerApproval("s1", waiting[0].id, "accept"), false, "같은 승인에 두 번 답해도 안 터진다");
+});
+
+/** 제품 소스 원문 — 이 저장소 관례대로 dist 경로를 src 로 되돌려 읽는다(ai-login.test.ts 와 같은 방식). */
+const SRC = (): string => {
+  const src = readFileSync(new URL("./codex-chat-runtime.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  assert.ok(src.length > 2000, "제품 소스를 실제로 읽었다(vacuous test 방지)");
+  return src;
+};
+
+// ── 격리 리눅스 배포(#524)의 실행 자리 — 소스 계약으로 잡는다 ────────────────────────────
+//  왜 소스인가: 이 분기는 box_ OS 유저·sudoers·box-spawn 이 깔린 리눅스 박스에서만 실제로 돈다.
+//   맥·CI 에서는 재현할 수 없는데, **틀렸을 때 증상이 조용하다** — 대화창이 비고(다른 홈의 rollout 을
+//   찾는다) 격리가 뚫린다(에이전트가 게이트웨이 권한으로 돈다). 그래서 «어느 자리에서 띄우는가» 를
+//   본문 계약으로 못박는다. lvly-cloud 의 중계 계약 테스트와 같은 처방이다.
+await t("★ 격리 배포는 app-server 를 **멤버 uid 로** 띄운다 — 게이트웨이 uid 로 띄우면 자격도 rollout 도 어긋난다", async () => {
+  const src = SRC();
+  const connect = src.slice(src.indexOf("async function connect("), src.indexOf("세션 컨테이너 안 ws 포트에 붙는"));
+  assert.ok(connect.includes("if (o.osUser)"), "osUser 분기가 있다");
+  const iso = connect.slice(connect.indexOf("if (o.osUser)"), connect.indexOf("로컬(비격리·dev)"));
+  assert.ok(iso.length > 100, "격리 분기 구간을 못 잘랐다");
+  assert.ok(iso.includes("memberShOut(o.osUser"), "멤버 자리에서 띄운다");
+  assert.ok(iso.indexOf("spawnDetachedLocal") === -1, "격리 분기가 게이트웨이 로컬 spawn 으로 새지 않는다");
+});
+
+await t("★ rolloutPath 는 stdout 을 받는 통로를 쓴다 — memberSh 는 void 라 **항상 빈 경로**가 된다", async () => {
+  const src = SRC();
+  const fn = src.slice(src.indexOf("export async function rolloutPath"));
+  assert.ok(fn.includes("memberShOut(osUser"), "memberShOut 으로 읽는다");
+  assert.ok(!/\bmemberSh\(/.test(fn), "memberSh( 를 쓰지 않는다(출력을 버리는 통로다)");
 });
 
 dropAllCodexChats();
