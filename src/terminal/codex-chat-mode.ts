@@ -18,26 +18,21 @@
 export type CodexChatMode = "tmux" | "app-server";
 
 /**
- * 이 배포의 기본 모드. 값이 정확히 app-server 일 때만 켠다(오타는 종전 동작으로 접는다 — 조용한 전환 금지).
+ * 이 배포의 기본 모드 — **codex 는 대화 UI(app-server)가 기본이다.**
  *
- *  ── ★ 격리 리눅스 박스(#524)는 한 겹 더 묻는다 ──
- *  app-server 는 `ws://127.0.0.1:<포트>` 로 말하는데 **그 포트에는 인증이 없다**. 경계를 누가 대신 서느냐가
- *  배포마다 다르다:
- *   · 매니지드      세션 컨테이너가 선다 — loopback 이 그 세션 안이라 밖에서 못 닿는다.
- *   · 비격리(맥·dev) 어차피 단일 사용자 박스다 — 지킬 경계가 없다.
- *   · **격리 리눅스**  여러 멤버가 **같은 호스트**를 나눠 쓴다. 같은 박스의 다른 멤버 OS 유저가 그 포트에
- *     붙어 **남의 대화를 조종**할 수 있다 — 이 배포의 존재 이유인 그 경계가 여기서만 비어 있다.
- *  그래서 격리에서는 `LIVELY_CODEX_CHAT_ISOLATED=1` 로 **운영자가 그 사실을 알고** 켜야 한다. 없으면 tmux 로
- *  접는다(종전 동작 = 안전한 쪽). codex 가 `unix://` 를 지원하면 이 노브는 사라진다 — 지금은 그 표면이
- *  initialize 에서 연결을 끊는다(codex-app-server-daemon.ts 머리말 실측).
+ *  ── 왜 기본을 뒤집었나 (2026-08-27, 상민님 지시) ──
+ *  처음엔 opt-in 이었다. App Server 가 공식 문서상 experimental 인데다, 켜는 순간 pane 이 TUI 대신 셸로
+ *  바뀌는 눈에 띄는 변화라 «조용한 전환» 을 피하고 싶었다. 그 판단을 뒤집은 근거는 둘이다:
+ *   ① **실측이 쌓였다** — 매니지드 프로덕션에서 로컬·원격 노드 양쪽 배치로 왕복이 확인됐다(e2e 상시 검사).
+ *   ② **경계가 배포마다 실제로 서게 됐다** — 마지막까지 비어 있던 자리가 격리 리눅스였는데, 거기서도
+ *      포트를 버리고 0600 유닉스 소켓으로 바꿔 닫았다(codex-as-supervisor.ts). 그전까지는 «켤 때 동의를
+ *      받는 노브» 로 막고 있었고, 그건 결함을 노브로 덮은 것이지 고친 게 아니었다.
+ *
+ *  끄는 길은 남긴다: `LIVELY_CODEX_CHAT=tmux`. experimental 표면이라 언제든 되돌릴 수 있어야 한다는
+ *  처음의 판단은 그대로 유효하다 — 바뀐 것은 **어느 쪽이 기본이냐** 뿐이다.
  */
-export function codexChatModeDefault(
-  env: NodeJS.ProcessEnv = process.env,
-  o: { isolated?: boolean } = {},
-): CodexChatMode {
-  if (String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() !== "app-server") return "tmux";
-  if (o.isolated && String(env.LIVELY_CODEX_CHAT_ISOLATED || "").trim() !== "1") return "tmux";
-  return "app-server";
+export function codexChatModeDefault(env: NodeJS.ProcessEnv = process.env): CodexChatMode {
+  return String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() === "tmux" ? "tmux" : "app-server";
 }
 
 /**
@@ -46,10 +41,10 @@ export function codexChatModeDefault(
  *  · 로그인 전용 세션(loginFor)은 언제나 tmux — 그 세션의 일은 대화가 아니라 `codex login` 이다.
  */
 export function codexChatMode(
-  o: { harness: string; loginFor?: string | null; isolated?: boolean },
+  o: { harness: string; loginFor?: string | null },
   env: NodeJS.ProcessEnv = process.env,
 ): CodexChatMode {
   if (String(o.harness || "") !== "codex") return "tmux";
   if (o.loginFor) return "tmux";
-  return codexChatModeDefault(env, { isolated: o.isolated });
+  return codexChatModeDefault(env);
 }

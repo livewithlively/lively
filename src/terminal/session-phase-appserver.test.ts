@@ -35,8 +35,10 @@ function agentState(i: {
     : i.phase;
 }
 
-const ON = { LIVELY_CODEX_CHAT: "app-server" } as NodeJS.ProcessEnv;
-const OFF = {} as NodeJS.ProcessEnv;
+// ⚠ 2026-08-27 부터 **기본이 app-server** 다(codex-chat-mode.ts). 그래서 대조군은 «env 없음» 이 아니라
+//  «끄는 값을 명시» 여야 한다 — 빈 env 로 두면 두 군이 같은 모드가 돼 이 표가 아무것도 안 지킨다.
+const ON = {} as NodeJS.ProcessEnv;                              // 기본 = app-server
+const OFF = { LIVELY_CODEX_CHAT: "tmux" } as NodeJS.ProcessEnv;  // 끈 배포(종전 판정)
 const base = { harness: "codex", offline: true, attached: 0, phase: "idle" as const, asPhase: null };
 
 t("★ A1 pane 이 셸이어도 '종료됨'이 아니다 — app-server 세션에선 그게 정상이다", () => {
