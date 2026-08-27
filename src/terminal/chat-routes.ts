@@ -39,7 +39,7 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { canAttach, sessionDir, sessionGone } from "./terminal-sessions.js";
 import { getOpt } from "./tmux-exec.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { getSessionState } from "../sessions/session-state.js";
+import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc } from "../node/registry.js";
 import { markSessionSeen } from "./phase.js";
@@ -52,7 +52,8 @@ import { locateTranscript } from "./harness-io/locate.js";
 import { readAlignedWindow, type AlignedWindow } from "./harness-io/window.js";
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";
 import { parseWindow } from "./harness-io/parse-cache.js";
-import { toNdjson, toThinNdjson, THIN_MAX_BYTES } from "./harness-io/chat-line.js";
+import { toNdjson, THIN_MAX_BYTES, THIN_CHAIN_MAX_BYTES } from "./harness-io/chat-line.js";
+import { resolveConvChain, readThinChain, convUuidsInDir } from "./harness-io/conv-chain.js";
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -145,16 +146,38 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const q = req.query as Record<string, unknown>;
     // fmt=thin(#1819) — 타임라인은 창이 아니라 **세션 전체**를 본다. 덩치를 버린 같은 모양이라 20MB 가 455KB 가 된다.
     const thin = String(q.fmt ?? "") === "thin";
-    const { start, end } = thin
-      ? { start: Math.max(0, found.size - THIN_MAX_BYTES), end: found.size }
-      : transcriptRange(found.size, q);
+    // ★ #2233 — 그 '세션 전체'는 파일 하나가 아니다. 한 박스는 살면서 대화를 갈아탄다(/clear·resume·포크·압축 롤오버)
+    //  — 그때마다 매핑이 덮여, 그 전에 사람이 던진 질문이 타임라인에서 통째로 사라졌다(실측: 43개 중 1개만 떴다).
+    //  얇은 판은 **이 박스가 돌린 대화 전부**를 오래된 순으로 이어 붙여 낸다(무엇을 합칠지는 conv-chain.ts 가 가른다).
+    //  창(비-thin)은 손대지 않는다 — 그건 대화창이 지금 대화를 이어 읽는 통로다.
+    if (thin) {
+      const known = (await sessionConvsFor(id).catch(() => [])).map((c) => c.conv_uuid);
+      const exclusive = !!cwd && !(await dirSharedWithOtherSession(id, cwd));
+      const chain = await resolveConvChain(io, tfs, {
+        curFile: found.file, curUuid: uuid, curSize: found.size, exclusive, known,
+        //  단독 폴더면 폴더의 모든 대화가 후보라, 배제 목록도 폴더 전체를 놓고 물어야 뜻이 있다.
+        taken: await convsTakenByOtherSession(id, exclusive ? await convUuidsInDir(io, tfs, found.file) : known),
+        budget: THIN_CHAIN_MAX_BYTES,
+      });
+      const { ndjson, from } = await readThinChain(io, tfs, chain, THIN_MAX_BYTES, id);
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("X-Log-Bytes", String(found.size));
+      res.setHeader("X-Log-From", String(from));
+      res.setHeader("X-Log-To", String(found.size));
+      res.setHeader("X-Session-Uuid", uuid);
+      res.setHeader("X-Session-Convs", String(chain.length));   // 몇 개의 대화를 이어 붙였나(진단용)
+      res.setHeader("X-Harness", io.key);
+      res.end(ndjson);
+      return;
+    }
+    const { start, end } = transcriptRange(found.size, q);
     // 창이 파일 머리(0)에 닿았고 그 파일이 압축으로 시작하면 이전 파일 uuid 를 함께 준다 — 화면이 [압축 전 대화 불러오기]를 낸다.
     //  (claude 의 compact_boundary 사슬 — 다른 하네스 파일엔 그 표식이 없어 null 이 돌아온다.)
     if (start === 0 && found.size > 0) {
       const prev = await tfs.prevTranscript(found.file);
       if (prev) res.setHeader("X-Prev-Session", prev);
     }
-    const explicitTo = !thin && q.to !== undefined;
+    const explicitTo = q.to !== undefined;
     let win: AlignedWindow = { from: start, to: start, data: Buffer.alloc(0) };
     if (end > start) win = await tfs.read(found.file, found.size, (r) => readAlignedWindow(r, found.size, start, end, explicitTo));
     const lines = win.data.length ? parseWindow(io.parse, `${id}|${found.file}`, win.from, win.to, win.data.toString("utf8")) : [];
@@ -164,7 +187,7 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     res.setHeader("X-Log-To", String(win.to));
     res.setHeader("X-Session-Uuid", uuid);
     res.setHeader("X-Harness", io.key);
-    res.end(thin ? toThinNdjson(lines) : toNdjson(lines));
+    res.end(toNdjson(lines));
   }));
 
   app.post("/api/ui/terminal/sessions/:id/keys", auth, wrap(async (req, res) => {

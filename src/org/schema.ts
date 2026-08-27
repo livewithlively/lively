@@ -25,6 +25,7 @@ import { initPromotion } from "./schema/promotion.js";
 import { initNodeSessionMap } from "./schema/node-session-map.js";
 import { initNodeState } from "./schema/node-state.js";
 import { initNodeLinkLog } from "./schema/node-link-log.js";
+import { initSessionConvLog } from "./schema/session-conv.js";
 import { initWorkspaceRegistry } from "./schema/workspace-registry.js";
 import { initAppRegistry } from "./schema/apps.js";
 
@@ -59,5 +60,6 @@ export async function initOrgSchema(): Promise<void> {
   await initAppRegistry(itemsPool);                // #1780: org_app(+component·grant) — OS/앱 계층 앱 레지스트리 + auth_token/session_state/mcp_call_log 앱 축 — 맨 끝(신규 조각 규약)
   await initNodeState(itemsPool);                  // #1834: org_node_state(노드 세션 스냅샷의 정본 — 게이트웨이 재배포에도 목록이 남는다) — 맨 끝(신규 조각 규약)
   await initNodeLinkLog(itemsPool);                // #1849: org_node_link_log(노드 연결/해제 이력 — 잠자기 패턴 진단의 근거) — 맨 끝(신규 조각 규약)
+  await initSessionConvLog(itemsPool);             // #2233: org_session_conv(한 박스가 살면서 돌린 대화 전부 — 타임라인이 세션 전체를 본다) — 맨 끝(신규 조각 규약)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

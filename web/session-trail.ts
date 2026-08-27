@@ -255,8 +255,10 @@ export async function loadThinTrail(w: TimelineHandle, s: { id: string; node?: s
   Promise<{ ok: boolean; from: number; bytes: number }> {
   const node = String(s.node || s.logNode || '');
   const sid = node ? String(s.logId || s.id) : s.id;
+  //  ⭐ #2233 — 노드 세션은 주소가 **대화 id** 라, 그것만으로는 이 박스가 갈아탄 옛 대화를 서버가 찾을 수 없다.
+  //   box= 로 박스 id 를 함께 준다(서버가 기록된 사슬을 이어 붙인다). 박스 세션은 주소가 이미 박스 id 다.
   const path = node
-    ? `/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?node=${encodeURIComponent(node)}&fmt=thin`
+    ? `/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?node=${encodeURIComponent(node)}&fmt=thin&box=${encodeURIComponent(s.id)}`
     : `/api/ui/terminal/sessions/${encodeURIComponent(sid)}/transcript?fmt=thin`;
   const headers: Record<string, string> = {};
   const tok = localStorage.getItem(TOKEN_KEY); if (tok) headers.Authorization = 'Bearer ' + tok;

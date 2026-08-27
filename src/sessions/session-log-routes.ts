@@ -20,6 +20,7 @@ import { projectDirOnThisHost } from "../terminal/session-project.js";   // #185
 import { rm as fsRm } from "node:fs/promises";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
 import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
 import { trashMapFor } from "./session-trash.js";   // #1851 — 내 세션 목록에 휴지통 표식
+import { sessionConvsFor, convsTakenByOtherSession } from "./session-state.js";   // #2233 — 한 박스가 갈아탄 대화 사슬
 import { currentTenant } from "../org/tenant-context.js";   // #1875 — 세션 목록 워크스페이스 격리
 import { PRIMARY_TENANT_ID } from "../org/tenancy/registry.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
@@ -271,6 +272,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
     const from = req.query.from !== undefined ? Number(req.query.from) : 0;
     if (!Number.isFinite(from) || from < 0 || Math.floor(from) !== from) throw new HttpError(400, "from(오프셋)은 0 이상 정수여야 합니다");
+    // #2233 — 이 대화가 딸린 **박스** id(선택). 있으면 얇은 판이 그 박스가 갈아탄 대화들까지 이어 붙인다.
+    const boxId = String(req.query.box ?? "").trim();
+    if (boxId && !SID_RE.test(boxId)) throw new HttpError(400, "box 형식 오류");
 
     // 열람 게이트(순수 checkViewGate) — owner·view_policy·멤버십. attach 이고 비소유자일 때만 멤버십 DB 조회.
     const cfg = (await getRuntimeConfig()).session_share;
@@ -302,10 +306,37 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
         ? { start: Math.max(0, total - THIN_MAX_BYTES), end: total }
         : transcriptRange(total, { from: req.query.from, to: req.query.to, tail: req.query.tail });
       if (io?.parse) {
+        const readThin = async (conv: string): Promise<string> => {
+          const t = await sessionLogWatermark(nodeId, conv);
+          if (!t) return "";
+          const rd = { read: (s: number, e: number) => readSessionLog(nodeId, conv, s, e).then((r) => r.data) };
+          const s0 = Math.max(0, t - THIN_MAX_BYTES);
+          const w = await readAlignedWindow(rd, t, s0, t, false);
+          return w.data.length ? toThinNdjson(parseWindow(io.parse!, `log|${nodeId}|${conv}`, w.from, w.to, w.data.toString("utf8"))) : "";
+        };
         const reader = { read: (s: number, e: number) => readSessionLog(nodeId, sessionId, s, e).then((r) => r.data) };
         const win = rng.end > rng.start ? await readAlignedWindow(reader, total, rng.start, rng.end, !thin && req.query.to !== undefined) : { from: rng.start, to: rng.start, data: Buffer.alloc(0) };
         const lines = win.data.length ? parseWindow(io.parse, `log|${nodeId}|${sessionId}`, win.from, win.to, win.data.toString("utf8")) : [];
         ndjson = thin ? toThinNdjson(lines) : toNdjson(lines);
+        // ★ #2233 — 얇은 판은 **이 박스가 돌린 대화 전부**다. 박스가 /clear·resume·포크로 대화를 갈아타면 그 전 질문이
+        //  통째로 안 보였다(박스 세션과 같은 결함, 같은 처방). box= 는 화면이 알려 주는 이 세션의 박스 id 이고,
+        //  사슬은 기록(org_session_conv)에서만 온다 — 노드에는 폴더가 없으니 추측할 여지 자체가 없다.
+        //  열람 게이트는 대화마다 다시 건다(같은 소유자·같은 정책일 때만 붙인다).
+        if (thin && boxId) {
+          const known = (await sessionConvsFor(boxId).catch(() => [])).filter((c) => c.conv_uuid && c.conv_uuid !== sessionId);
+          const taken = await convsTakenByOtherSession(boxId, known.map((c) => c.conv_uuid));
+          const heads: string[] = [];
+          for (const c of known.slice(-11)) {
+            if (taken.has(c.conv_uuid)) continue;
+            const o = await sessionOwner(nodeId, c.conv_uuid);
+            if (!o) continue;
+            const mine = o === requester;
+            const memberOk = !mine && cfg.view_policy === "attach" ? await sessionBoundToMemberProject(c.conv_uuid, requester) : false;
+            if (checkViewGate({ requester, owner: o, viewPolicy: cfg.view_policy, isProjectMember: memberOk })) continue;
+            heads.push(await readThin(c.conv_uuid).catch(() => ""));
+          }
+          ndjson = heads.filter(Boolean).join("") + (ndjson ?? "");
+        }
         log = { from: win.from, bytes: total, data: win.data }; winEnd = win.to;
       } else {
         log = await readSessionLog(nodeId, sessionId, rng.start, rng.end);
