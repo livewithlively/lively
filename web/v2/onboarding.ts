@@ -4,7 +4,7 @@
 //  문구는 원준님 교정 31건 반영본. 새로 쓴 연결부는 [새문구] 주석. 상태는 sessionStorage(진행)·localStorage(끝남 표식).
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
-import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
+import { authUploadProgress, upDirSupported, upDropZone, upFromInput } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl } from '../core.js';
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
@@ -731,7 +731,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
            <button class="ob-q-skip" data-skip>그냥 넘어갈게요</button>`,
       bind: (el) => {
         const inp = $('#nameIn', el);
-        const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; } goScene('stage'); };
+        // ⚠ 이름은 **그 자리에서** 서버에 남긴다. 종전엔 온보딩을 끝까지 마쳐야(POST /api/ui/me/welcome) 저장돼서,
+        //  중간에 나가면 방금 적은 이름이 워크스페이스 어디에도 안 보였다(원준님 신고 2026-08-26).
+        //  실패해도 진행은 막지 않는다 — 마무리에서 한 번 더 보낸다.
+        const saveName = (v) => {
+          if (!v) return;
+          void api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ nickname: v }) })
+            .catch(() => { /* 비치명 — 마무리에서 재시도된다 */ });
+        };
+        const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; saveName(v); } goScene('stage'); };
         $('#nameGo', el).onclick = go;
         inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) go(); });
         $('[data-skip]', el).onclick = () => goScene('stage');
@@ -794,7 +802,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         + `<div class="ob-drop ${S.upN ? 'ob-has' : ''}" id="upZone">
             <span class="ob-drop-t" id="upZoneT">${S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요'}</span>
             <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더 정리도, 이름 짓기도 필요 없습니다.')}</span>
-            <span id="upPick"></span>
+            <span class="ob-drop-pick" id="upPick"></span>
           </div>
           <button class="ob-btn ob-btn-pri" id="fGo" ${S.upN ? '' : 'disabled'}>${S.upN ? `${S.upN}개 올리고 계속` : '계속'}</button>
           <button class="ob-q-skip" data-skip>지금은 건너뛰기. 나중에 올려도 됩니다</button>`,
@@ -811,19 +819,43 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const sendAll = async (items) => {
           if (!items.length) return;
           S.upBusy += items.length; paintZone();
+          let failed = 0;
           for (const it of items) {
+            // 폴더째 올리면 rel 이 `내폴더/하위/파일.md` 로 온다 — 그 구조를 그대로 개인 폴더 uploads/ 아래에 편다.
             const rel = 'uploads/' + String(it.rel || it.file.name).replace(/^\/+/, '');
             try {
-              const j = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
-              if (j && j.source_id) S.upN++;
-            } catch (e) { toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
+              await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              // ⚠ 종전엔 응답의 source_id 가 있을 때만 셌다. 그런데 그 필드는 **자료 등록까지 성공했을 때만** 실린다
+              //  (terminal-files.ts: `...(ing?.ingested ? { source_id } : {})`) — 등록이 조용히 실패하면 파일은 올라갔는데
+              //  화면은 0개로 남아 «계속» 이 영영 안 켜졌다(실측 2026-08-26 원준님 신고). 올라간 건 올라간 것으로 센다.
+              S.upN++;
+            } catch (e) { failed++; toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
             S.upBusy--; S.read.total = S.upN; save(); paintZone();
           }
+          if (failed && failed === items.length) toast('올리지 못했어요. 잠시 뒤 다시 시도해 주세요.');
           renderSB();
         };
         upDropZone(zone, zone, (items) => void sendAll(items));
-        const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub', label: '파일이나 폴더 고르기' });
-        $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 반환은 {btn, fileIn, dirIn} — input 도 DOM 에 있어야 click 이 된다
+        // 고르기 버튼은 **둘을 그대로 편다.** 종전엔 프로젝트 화면용 팝오버 메뉴(upControl)를 빌려 썼는데,
+        //  그 메뉴 안에 숨은 «폴더 올리기» 를 사람이 찾지 못했다(원준님: "폴더채로도 업로드할 수 있어야함").
+        //  이 화면은 질문 하나에 답하는 자리라, 고를 것이 둘뿐이면 숨기지 않는다.
+        const mkIn = (dir) => {
+          const i = document.createElement('input');
+          i.type = 'file'; i.multiple = true; i.style.display = 'none';
+          if (dir) { i.setAttribute('webkitdirectory', ''); }
+          i.addEventListener('change', () => { sendAll(upFromInput(i)); i.value = ''; });
+          return i;
+        };
+        const mkBtn = (label, input) => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'ob-btn ob-btn-sub ob-btn-inline'; b.textContent = label;
+          b.onclick = (ev) => { ev.stopPropagation(); input.click(); };
+          return b;
+        };
+        const fileIn = mkIn(false), dirIn = mkIn(true);
+        const host = $('#upPick', el);
+        host.append(mkBtn('파일 고르기', fileIn), fileIn);
+        if (upDirSupported()) host.append(mkBtn('폴더째 고르기', dirIn), dirIn);   // 사파리 등 미지원 브라우저에선 끌어다 놓기로 간다
         // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
         $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
         $('[data-skip]', el).onclick = () => goScene('sources');
@@ -1336,8 +1368,24 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     b.hidden = !S.trail.length;
     b.onclick = () => goBack();
   }
+  /* 브라우저 뒤로가기 — 쌓아 둔 장면이 있으면 그 한 걸음을 먹고, 없으면 셸이 하던 대로 나간다. */
+  function onPop(ev) {
+    if (!S.trail.length) return;                 // 더 물러날 곳이 없다 → 홈으로 나가는 게 맞다
+    const st = ev && ev.state;
+    if (st && st.ob === undefined && !S.trail.length) return;
+    goBack();
+    // 우리가 한 걸음 먹었으니 그만큼 다시 쌓아 둔다 — 다음 뒤로가기도 이 안에서 듣는다.
+    try { history.pushState({ ob: S.scene }, '', location.href); } catch (_) { /* noop */ }
+  }
+  addEventListener('popstate', onPop);
   function goScene(key, opts) {
-    if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) S.trail.push(S.scene);
+    if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) {
+      S.trail.push(S.scene);
+      // 브라우저·셸의 «뒤로» 도 이 안에서 한 걸음 물러나게 한다(원준님 2026-08-26: "뒤로가기 누르니까 그냥 메인홈으로 가지네").
+      //  ⚠ 주소(해시)는 **바꾸지 않는다** — 바꾸면 셸 라우터가 화면을 새로 그린다. 같은 주소로 state 만 쌓아
+      //   popstate 때 우리가 먼저 받아 처리한다. 장면이 하나도 안 쌓였을 때의 뒤로가기는 종전대로 홈으로 나간다.
+      try { history.pushState({ ob: key }, '', location.href); } catch (_) { /* 사파리 프라이빗 */ }
+    }
     S.scene = key; save(); renderSB();
     seqToken++;
     if (STEP_OF[key] >= CHAT_FROM) {
@@ -1389,5 +1437,5 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
   if (want && STEP_OF[want] != null) { goScene(want); }
   else { renderSB(); goScene(S.scene || 'name'); }
-  return { destroy() { clearInterval(readTimer); clearTimeout(toastT); ctx.onBare && ctx.onBare(false); } };
+  return { destroy() { clearInterval(readTimer); clearTimeout(toastT); removeEventListener('popstate', onPop); ctx.onBare && ctx.onBare(false); } };
 }
