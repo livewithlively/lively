@@ -237,8 +237,16 @@ test("★★ M3/M4 — 세션 생성이 맵을 기록(실패=생성 실패)하�
 });
 
 test("★ M5 — WS 업그레이드(registry)는 세션 정본으로 컨텍스트를 복원한다", () => {
+  //  #2165 — 업그레이드 핸들러는 `terminal-pty-upgrade.ts` 로 갈렸다(테넌시를 아는 쪽만 게이트웨이 전용 모듈로).
+  //   불변식은 그대로다: **정본 복원이 없으면 secondary attach 가 가짜 4410 을 낸다.** 검사 대상 파일만 옮겼다.
+  //   ⚠ terminal-pty.ts 로 되돌리지 마라 — 거기 있으면 org/tenancy·db 가 노드 에이전트 번들에 다시 실린다.
+  const upg = readFileSync("src/terminal/terminal-pty-upgrade.ts", "utf8");
+  assert.match(upg, /workspaceForSession/, "업그레이드는 헤더를 못 싣는다 — 정본 복원이 없으면 secondary attach 가 가짜 4410");
+  assert.match(upg, /resolveTenantFromHeaders/, "헤더 경로도 같은 자리에서 판정해야 한다(업그레이드는 미들웨어를 안 탄다)");
+  //  그리고 **노드도 쓰는** terminal-pty.ts 에는 테넌시가 없어야 한다 — 그게 이 분리의 목적이다.
   const pty = readFileSync("src/terminal/terminal-pty.ts", "utf8");
-  assert.match(pty, /workspaceForSession/, "업그레이드는 헤더를 못 싣는다 — 정본 복원이 없으면 secondary attach 가 가짜 4410");
+  assert.ok(!/org\/tenant-context|org\/tenancy\/registry/.test(pty),
+    "terminal-pty.ts(노드 공용)가 테넌시를 import 한다 — 노드 번들에 org/tenancy·db 가 다시 실린다(#2165)");
 });
 
 test("★ M1/M6 — apiUrl 이 lvly_ws 를 싣고, 훅·프록시가 세션 신호를 싣는다", () => {
