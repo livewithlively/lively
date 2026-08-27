@@ -12,6 +12,7 @@
 //  ⚠ **키는 (node_id, session_id) 복합.** 스칼라면 같은 session_id 를 쓰는 두 머신 로그가 한 줄로 병합되고
 //   CAS 가 서로를 못 본다(설계 §5 ①). node_id='' = 게이트웨이 로컬(박스).
 import { itemsPool, withTx } from "../db/client.js";
+import { SINGLE_TENANT_ID } from "../db/tenant-column.js";   // #1875 — 세션 목록 워크스페이스 필터의 primary 귀속값
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 // 무손실 압축 저장(#905 C1 슬②) — 청크 data 를 zstd 로 압축해 저장 공간을 줄인다. **무손실**이라 회수 시 원본 그대로
@@ -241,15 +242,32 @@ export const SESSION_LIST_MAX = 2000;
 export const clampSessionListLimit = (v: unknown): number => Math.min(Math.max(Number(v) || 200, 1), SESSION_LIST_MAX);
 
 /** 목록 + **잘렸는지**. 화면이 '이게 전부'라고 오해하지 않게 truncated 를 함께 준다. */
-export async function listSessionsForOwnerPage(owner: string, limit = 200): Promise<{ rows: SessionListRow[]; truncated: boolean }> {
+export async function listSessionsForOwnerPage(owner: string, limit = 200, workspaceId?: string | null): Promise<{ rows: SessionListRow[]; truncated: boolean }> {
   const want = clampSessionListLimit(limit);
-  const rows = await listSessionsForOwner(owner, want);
+  const rows = await listSessionsForOwner(owner, want, workspaceId);
   //  요청한 만큼 꽉 찼다 = 그 뒤가 더 있을 수 있다. '정확히 want 개'인 경우도 truncated 로 본다(보수적 — 없다고 단정하지 않는다).
   return { rows, truncated: rows.length >= want };
 }
 
-export async function listSessionsForOwner(owner: string, limit = 200): Promise<SessionListRow[]> {
+/**
+ * 내 세션 목록. `workspaceId` 를 주면 **그 워크스페이스에 속한 세션만**(#1875 격리): gw_session_map 부재/보관됨 =
+ *  primary(SINGLE_TENANT_ID). 안 주면 종전대로 owner 전체(내부 소비자·대시보드 등 — 워크스페이스 관심 없는 경로).
+ *  ⚠ 필터를 SQL 에 두는 이유: LIMIT 뒤에 JS 로 거르면 want 를 채우고도 잘려 나가 truncated 판정이 거짓이 된다.
+ *  owner(org_member)는 워크스페이스를 넘나드는 전역 신원이라(IDENTITY_GLOBAL_TABLES) owner 만으로는 개인
+ *  워크스페이스에 박스 전체 세션 제목이 샌다 — 실측(#1875, 2026-08-27 장원준 신고: 개인 ws 사이드바에 팀 세션 제목).
+ */
+export async function listSessionsForOwner(owner: string, limit = 200, workspaceId?: string | null): Promise<SessionListRow[]> {
   if (!owner) return [];
+  const params: unknown[] = [owner, clampSessionListLimit(limit)];
+  let wsClause = "";
+  if (workspaceId) {
+    params.push(workspaceId, SINGLE_TENANT_ID);   // $3 = 현재 워크스페이스, $4 = primary(맵 부재 시 귀속)
+    wsClause = `AND COALESCE(
+        (SELECT m.workspace_id::text FROM gw_session_map m
+           JOIN gw_workspace w ON w.id = m.workspace_id AND w.state = 'active'
+          WHERE m.session_id = s.session_id),
+        $4) = $3`;
+  }
   const r = await itemsPool.query(
     `SELECT ${SESSION_LIST_COLS}, proj.project_id, proj.project_name
        FROM session s
@@ -262,10 +280,10 @@ export async function listSessionsForOwner(owner: string, limit = 200): Promise<
                   WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
            JOIN project p ON p.id = last.project_id
        ) proj ON true
-      WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL
+      WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL ${wsClause}
       ORDER BY s.last_seen DESC
       LIMIT $2`,
-    [owner, clampSessionListLimit(limit)]);
+    params);
   return r.rows.map(mapSessionRow);
 }
 

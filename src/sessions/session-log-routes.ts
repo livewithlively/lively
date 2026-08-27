@@ -20,6 +20,8 @@ import { projectDirOnThisHost } from "../terminal/session-project.js";   // #185
 import { rm as fsRm } from "node:fs/promises";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
 import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
 import { trashMapFor } from "./session-trash.js";   // #1851 — 내 세션 목록에 휴지통 표식
+import { currentTenant } from "../org/tenant-context.js";   // #1875 — 세션 목록 워크스페이스 격리
+import { PRIMARY_TENANT_ID } from "../org/tenancy/registry.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import { parseWindow } from "../terminal/harness-io/parse-cache.js";
@@ -132,7 +134,10 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // #1851 휴지통 — 내 표식: 휴지통이면 trashed_at, 완전 삭제(purged)면 행을 뺀다(terminal/sessions 와 같은 규칙).
     //  #2022 후속 — 깊이를 호출자가 정한다(기본 200 = 종전). 화면은 매 틱 얕게, 이따금 깊게 부른다.
     //   상한(SESSION_LIST_MAX)은 스토어가 쥔다 — 여기서 두 번 정의하지 않는다.
-    const page = await listSessionsForOwnerPage(requester, Number(req.query.limit ?? 200));
+    // #1875 — 세션 목록은 **지금 보고 있는 워크스페이스**의 것만. gw_session_map 부재 = primary(PRIMARY_TENANT_ID).
+    //  이 필터가 없으면 owner(전역 신원)로만 걸러 개인 워크스페이스 사이드바에 박스 전체 세션 제목이 샜다(실측 신고).
+    const wsId = currentTenant()?.id ?? PRIMARY_TENANT_ID;
+    const page = await listSessionsForOwnerPage(requester, Number(req.query.limit ?? 200), wsId);
     let rows = page.rows;
     try {
       const marks = await trashMapFor(requester);
