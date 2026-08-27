@@ -25,7 +25,7 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
@@ -756,7 +756,7 @@ function topBits(navEl: HTMLElement, navHost: HTMLElement | null): HTMLElement[]
 /** 레일을 숨겼을 때 발치 한 줄 — [⊞ 앱] [아바타 이름 톱니]. 레일이 있기 전 사이드바(#1843)의 그 자리. */
 function footRow(): HTMLElement {
   const me: any = state.me || {};
-  const name = String(me.display_name || me.email || me.userId || '');
+  const name = personName(me);   // 이름 판정은 한 곳(#1813)
   return el('div', { class: 'v2-foot-row' },
     el('button', { class: 'v2-apps-btn', type: 'button', title: '모든 앱', onclick: () => openLaunchpad() }, icon('apps', 'v2-ic'), el('span', { text: '앱' })),
     el('button', { class: 'v2-me', type: 'button', title: '내 프로필 · 환경설정', 'aria-haspopup': 'dialog', onclick: () => openMeModal({ onSaved: () => redraw() }) },
@@ -1416,7 +1416,7 @@ function renderLegacy(): void {
   // 문패 얼굴 스택 = **세션을 가진 사람들**(나 먼저) — 멤버 명부 순서 그대로면 dev 처럼 더미 계정이 먼저 잡힌다(실측).
   const faceOwners = [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
   const me = state.me || {};
-  const name = String(me.display_name || me.email || me.userId || '');
+  const name = personName(me);   // 이름 판정은 한 곳(#1813)
   const rows = buildRows(data);
   // [필터]의 '세션 상태' 항목은 **트리에 있는 세션 전부**를 센다 — 지난 세션까지(중단됨만 골라 보는 렌즈가 여기서 생긴다).
   const liveAll = rows.flatMap((r) => [...r.live, ...r.past]);

@@ -36,6 +36,7 @@ export interface OrgMember {
   kind: "human" | "agent" | "system";
   display_name: string | null;
   nickname: string | null; // 표시 이름과 별개의 닉네임(#762). 활동 로그 등 캐주얼 표기용. null/''=display_name 폴백.
+  use_nickname: boolean;     // 「이 닉네임을 내 이름으로 사용」(#1813) — 켜면 이름을 보이는 자리 전부에서 nickname 이 이긴다.
   email: string | null;
   identities: MemberIdentity[];
   body_md: string;
@@ -57,6 +58,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
     kind: row.kind as OrgMember["kind"],
     display_name: (row.display_name as string) ?? null,
     nickname: (row.nickname as string) ?? null,
+    use_nickname: row.use_nickname === true,
     email: (row.email as string) ?? null,
     identities: (row.identities as MemberIdentity[]) ?? [],
     body_md: (row.body_md as string) ?? "",
@@ -72,7 +74,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
   };
 }
 
-const MEMBER_COLS = "id, kind, display_name, nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by";
+const MEMBER_COLS = "id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by";
 
 export async function listMembers(): Promise<OrgMember[]> {
   const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member ORDER BY sort, id`);
@@ -481,6 +483,7 @@ export interface MemberInput {
   kind?: "human" | "agent" | "system";
   display_name?: string | null;
   nickname?: string | null; // undefined=보존, null/''=닉네임 지움(→display_name 폴백).
+  use_nickname?: boolean;   // undefined=보존. 「이 닉네임을 내 이름으로 사용」(#1813).
   email?: string | null;
   identities?: MemberIdentity[];
   body_md?: string;
@@ -505,15 +508,17 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
     : (/^#[0-9a-fA-F]{6}$/.test((m.avatar_color || "").trim()) ? (m.avatar_color as string).trim() : null);
   // nickname — undefined=보존, 그 외=trim 후 빈값이면 null(→ display_name 폴백).
   const nickname = m.nickname === undefined ? (before?.nickname ?? null) : ((m.nickname || "").trim() || null);
+  // use_nickname — undefined=보존. 닉네임이 비면 **끈다**: 켜 둔 채 닉네임만 지우면 이름이 사라진 것처럼 보인다(#1813).
+  const useNick = nickname ? (m.use_nickname === undefined ? (before?.use_nickname ?? false) : !!m.use_nickname) : false;
   await itemsPool.query(
-    `INSERT INTO org_member(id, kind, display_name, nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13,1,now(),$14)
+    `INSERT INTO org_member(id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13::jsonb,$14,1,now(),$15)
      ON CONFLICT (tenant_id, id) DO UPDATE SET
-       kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, nickname=EXCLUDED.nickname, email=EXCLUDED.email,
+       kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, nickname=EXCLUDED.nickname, use_nickname=EXCLUDED.use_nickname, email=EXCLUDED.email,
        identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, avatar=EXCLUDED.avatar,
        avatar_char=EXCLUDED.avatar_char, avatar_color=EXCLUDED.avatar_color, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
        version=org_member.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [m.id, kind, m.display_name ?? before?.display_name ?? null, nickname, m.email ?? before?.email ?? null,
+    [m.id, kind, m.display_name ?? before?.display_name ?? null, nickname, useNick, m.email ?? before?.email ?? null,
      JSON.stringify(identities), m.body_md ?? before?.body_md ?? "", avatar, avatarChar, avatarColor,
      m.state ?? before?.state ?? "active", JSON.stringify(scopes), m.sort ?? before?.sort ?? 0, actor ?? null],
   );

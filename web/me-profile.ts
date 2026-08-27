@@ -5,7 +5,7 @@
 //  PROF_* · profChips · parseMyProfile 은 내 프로필 창의 [AI 개인 규칙] 탭(v2/me-modal.ts)이 함께 쓴다 —
 //   같은 저장 경로(POST /api/ui/me/profile)를 부분 갱신으로 나눠 쓰기 때문에 직렬화 규약이 한 곳이어야 한다.
 //   (관리탭 [내 AI 설정]의 규칙 폼은 그 창으로 옮겨 가며 걷었다 — #1843·#1898.)
-import { api, apiUrl, el, errorNote, logout, profileAvatar, setPersonAvatar, state, toast, uiText, usernameAnchor } from './core.js';
+import { api, apiUrl, el, errorNote, logout, personName, profileAvatar, setPersonAvatar, state, toast, uiText, usernameAnchor } from './core.js';
 import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from './theme.js'; // #1683 화면 테마 · AI 세션 동기화
 import { field, skeleton } from './ui-primitives.js';
 
@@ -218,9 +218,16 @@ function avatarEditor(data, nameInput) {
 // 저장 후 상단바(아바타·이름)·사람 아바타 맵 즉시 갱신 — 모달·[내 정보] 공유.
 function applyMyProfileSaved(res, fallbackId) {
   const m = (res && res.member) || {};
-  if (state.me) { state.me.display_name = m.display_name || null; state.me.avatar = m.avatar || null; state.me.avatar_char = m.avatar_char || null; state.me.avatar_color = m.avatar_color || null; }
+  //  ⚠ 닉네임·「내 이름으로 사용」도 함께 갈아끼운다(#1813) — 이 둘이 빠지면 저장은 됐는데 화면은
+  //   새로고침 전까지 옛 이름을 들고 있다(personName 이 state.me 를 읽는다).
+  if (state.me) {
+    state.me.display_name = m.display_name || null;
+    state.me.nickname = m.nickname || null;
+    (state.me as any).use_nickname = m.use_nickname === true;
+    state.me.avatar = m.avatar || null; state.me.avatar_char = m.avatar_char || null; state.me.avatar_color = m.avatar_color || null;
+  }
   setPersonAvatar((state.me && state.me.userId) || fallbackId, m);
-  const label = (m.display_name && m.display_name.trim()) || m.email || (state.me && (state.me.email || state.me.userId)) || '';
+  const label = personName({ ...m, userId: (state.me && state.me.userId) || fallbackId }) || m.email || '';
   const ue = document.getElementById('user-email');
   if (ue) ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || fallbackId, 'topbar-ava', { char: m.avatar_char, color: m.avatar_color }), el('span', { text: label }));
 }

@@ -215,6 +215,32 @@ test("★ 키 컬럼이 없으면 접기 문장을 만들지 않는다 — 추�
   assert.throws(() => buildIdentityGlobalFoldSql("org_member", []), /키 컬럼/);
 });
 
+// ── ★★ PK 가 tenant_id 하나뿐인 표(=자연키가 전부 tenant_id 에 얹힌 표) ──────────────
+//  실측 사고(2026-08-27 c60 롤): member_credential 의 PK 는 `member_id` 인데, tenant 화가 그 PK 를
+//   (tenant_id, member_id) 로 바꿔 놓았다. 그러면 PK 조회(SQL_IDENTITY_GLOBAL)가 tenant_id 를 빼고
+//   `member_id` 를 돌려주므로 짝 판정은 맞다 — 여기까지는 정상이다.
+//  그런데 **PK 에서 tenant_id 를 뺀 나머지가 비는 표**가 있으면 얘기가 다르다: 짝 조건이 `AND` 없이
+//   비어 `NOT EXISTS (SELECT 1 FROM t p WHERE p.tenant_id = <기본>)` 가 되어, primary 에 행이
+//   **하나라도** 있으면 전부 건너뛰거나(무해) 하나도 없으면 **전부 옮겨** PK 충돌을 낸다.
+//  그래서 그런 표는 문장을 만들지 않고 던진다 — 위 '키 컬럼 없음' 가드가 정확히 그 자리다.
+//  이 테스트는 그 가드가 **빈 배열뿐 아니라 tenant_id 만 남은 경우에도** 걸리는지 못박는다.
+test("★★ 짝 조건이 비면 접지 않는다 — tenant_id 만 남은 키로는 '같은 행'을 못 가른다", () => {
+  // tenant_id 는 SQL_IDENTITY_GLOBAL 이 애초에 빼고 주므로, 여기 남는 건 빈 배열이다.
+  assert.throws(() => buildIdentityGlobalFoldSql("member_credential", []), /키 컬럼/);
+  // 공백만 든 배열도 같은 취급이어야 한다 — 호출부가 filter(Boolean) 을 빠뜨려도 여기서 막힌다.
+  assert.throws(() => buildIdentityGlobalFoldSql("member_credential", ["", ""]), /키 컬럼/);
+});
+
+// ── ★★ 접기는 **한 행이 여러 후보와 겹칠 때**도 안전해야 한다 ────────────────────────
+//  NOT EXISTS 는 '짝이 이미 있으면 건너뛴다' 를 보장하지만, **옮기는 행끼리** 서로 같은 키를 가지면
+//   막지 못한다(둘 다 primary 에 짝이 없으므로 둘 다 통과 → 같은 키 두 행이 primary 로 들어가 PK 충돌).
+//   실측 사고가 정확히 이 모양이었다: secondary 두 워크스페이스에 같은 member_id 자격이 하나씩.
+//  그래서 문장은 **행 단위 dedup** 을 함께 가져야 한다.
+test("★★ 옮기는 행끼리 같은 키면 하나만 옮긴다 — 둘 다 통과하면 PK 충돌이다", () => {
+  const sql = buildIdentityGlobalFoldSql("member_credential", ["member_id"]);
+  assert.match(sql, /ctid/, "행 단위 dedup 이 없다 — 같은 키를 가진 secondary 행 둘이 함께 옮겨진다");
+});
+
 // ── ★★ 감사 서브쿼리는 신원 전역 표를 **못박아** 읽는다 ─────────────────────
 // 이 한 줄이 없으면 갈라진 행 하나가 감사가 걸린 **모든 org 쓰기**를 500 으로 만든다.
 //  스칼라 서브쿼리는 2행을 받으면 그 자리에서 오류이고, 그 오류는 INSERT 뒤에 나서 되돌릴 수도 없다.
