@@ -260,7 +260,7 @@ export interface Footprint {
 }
 export interface PurgeChoice { log: boolean; knowledge: string[]; revert: string[]; projects: number[]; sources: number[]; tasks: number[]; categories: number[]; activities: boolean }
 
-async function fetchFootprint(sid: string, node: string): Promise<Footprint | null> {
+export async function fetchFootprint(sid: string, node: string): Promise<Footprint | null> {
   try {
     const d: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/footprint?node=${encodeURIComponent(node || '')}`);
     return {
