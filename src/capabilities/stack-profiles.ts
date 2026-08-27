@@ -40,6 +40,9 @@ const spSet: Capability = {
     repo: z.string().max(100).optional(),
     static_only: z.boolean().optional(),
     start_cmd: z.string().max(1000).optional(),
+    // build_cmd — 스토어·DB·목록 응답엔 처음부터 있었는데 **입구만 빠져 있었다**(#2143). 그 탓에 빌드가 필요한
+    //  레포의 프로필을 에이전트도 관리자도 못 고쳐, 프리뷰가 깨진 채로 손댈 자리가 없었다(시드된 값만 유효).
+    build_cmd: z.string().max(1000).optional(),
     port_env: z.string().max(64).optional(),
     env_json: z.record(z.string()).optional(),
     healthcheck_path: z.string().max(200).optional(),
@@ -50,7 +53,7 @@ const spSet: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/stack-profiles"], parse: (req) => {
       const b = (req.body ?? {}) as Record<string, unknown>;
       return {
-        id: b.id, label: b.label, repo: b.repo, start_cmd: b.start_cmd, port_env: b.port_env,
+        id: b.id, label: b.label, repo: b.repo, start_cmd: b.start_cmd, build_cmd: b.build_cmd, port_env: b.port_env,
         healthcheck_path: b.healthcheck_path, note: b.note,
         static_only: typeof b.static_only === "boolean" ? b.static_only : undefined,
         env_json: (b.env_json && typeof b.env_json === "object" && !Array.isArray(b.env_json)) ? b.env_json : undefined,

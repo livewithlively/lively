@@ -32,6 +32,15 @@ export const CRON_ACTION_ALLOWLIST = [
   "run_canary",            // #1657 — 상류 회귀 자동탐지(카나리)
 ] as const;
 
+/**
+ * 정적(shared-proxy) 프리뷰가 화면을 갖추기 위해 돌려야 하는 빌드 — **두 단계 다**여야 한다.
+ *
+ * `build:web` 은 SPA(`public/app/**`)만 만들고, `build-standalone.mjs` 가 `public/page-scrollbar.js`
+ *  등 단독 페이지 번들을 만든다. index.html 은 그 둘을 모두 로드하는데, #2054 로 **양쪽 다 git 밖**이
+ *  됐다. 그래서 `build:web` 하나만 돌리면 진입 모듈 하나가 빈 채로 서빙된다(#2143 실측).
+ */
+const WEB_BUILD_CMD = "npm run build:web && node scripts/build-standalone.mjs";
+
 export async function initSessionsInfra(pool: Pool): Promise<void> {
   // ── org_cron — 서버사이드 스케줄 잡(웹 관리). is 신선화·커넥터 sync 등을 게이트웨이 프로세스가 주기 실행. ──
   //  트리거 표준화: git push 웹훅(도달성+repo당 등록 필요)을 대체 — 게이트웨이가 바깥으로 fetch 하므로 직원 0·repo셋업 0.
@@ -325,15 +334,23 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'npm run build:web','PORT','{}'::jsonb,'/',
        '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. 별도 프로세스·포트 없음(가장 싸고 안전).'),
       ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','npm run build','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
-       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
+       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).'),
+      ('lively-frontend','lively 프론트 (정적·shared-proxy)','lively',true,NULL,$1,'PORT','{}'::jsonb,'/',
+       '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. repo 이름이 lively 로 바뀐 뒤 자동매칭이 co-frontend(옛 이름 context-ontology)에 안 걸려, 빌드가 통째로 생략되고 화면이 하얗게 뜨던 것을 메운다(#2143).')
     ON CONFLICT DO NOTHING;
-  `);
+  `, [WEB_BUILD_CMD]);
   // 기존 프리셋 보정 — 위 INSERT 는 ON CONFLICT DO NOTHING 이라 이미 있던 행엔 build_cmd 가 안 들어간다.
   //  운영자가 직접 채운 값은 건드리지 않는다(IS NULL 조건).
   await pool.query(`
     UPDATE org_stack_profile SET build_cmd='npm run build:web' WHERE id='co-frontend' AND build_cmd IS NULL;
     UPDATE org_stack_profile SET build_cmd='npm run build'     WHERE id='co-fullstack' AND build_cmd IS NULL;
   `);
+  // 정적 프리셋의 빌드는 **단독 페이지 번들까지** 돌아야 한다 — #2054 로 public/app 뿐 아니라
+  //  public/page-scrollbar.js 도 git 밖으로 나갔고, index.html 은 그 둘을 다 로드한다. build:web 만으로는
+  //  진입 모듈 하나가 빈 채 서빙된다. 종전 기본값 그대로인 행만 올린다(운영자가 고친 값은 그대로 둔다).
+  await pool.query(
+    `UPDATE org_stack_profile SET build_cmd=$1 WHERE id='co-frontend' AND build_cmd='npm run build:web';`,
+    [WEB_BUILD_CMD]);
 
   // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──
   //  연결은 항상 노드→게이트웨이 아웃바운드 WSS(/node/ws) — 노드는 포트를 열지 않는다(단일 정문 유지).
