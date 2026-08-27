@@ -199,3 +199,35 @@
 .ob-ins-alt[open]>summary::before{content:'－ '}
 .ob-ins-alt>summary:hover{color:var(--ink-sub)}
 .ob-ins-alt .ob-ins-n{margin:10px 0 8px}
+
+/* ── #1879 «가져올 곳 잇기» 실배선 ─────────────────────────────────────────────
+   고를 수 없는 카드(이미 이어짐 · 회사가 아직 안 열어 둠)와, 카드 아래에서 펼쳐지는 «글자 받아 오기». */
+.ob-opt-card.ob-locked{cursor:default}
+.ob-opt-card.ob-locked:hover{border-color:var(--line); box-shadow:none}
+/* 회사가 안 열어 둔 것만 흐리게 — 이미 이어진 것은 흐리면 '꺼졌다'로 읽힌다(정반대 뜻이 된다). */
+.ob-opt-card.ob-locked[data-ask]{opacity:.66; cursor:pointer}
+/* 곧 지원(#1813) — **눌러도 되는 것처럼 보이면 안 된다.** 흐리게 + 점선 테두리로 «아직 아니다» 를 형태로 말하고,
+   설명 줄은 대기 색(앰버)으로 둔다. 체크 자리는 아예 비운다(고를 수 없으므로). */
+.ob-opt-card.ob-soon{opacity:.58; background:var(--bg); border-style:dashed}
+.ob-opt-card.ob-soon:hover{border-color:var(--line); box-shadow:none}
+.ob-opt-card.ob-soon .ob-oc-d{color:var(--amber, #C98A16); font-weight:600}
+.ob-opt-card.ob-soon .ob-blogo{filter:grayscale(1)}
+.ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:#cfcecb; box-shadow:var(--shadow)}
+/* 펼쳐 둔 카드 — 아래 패널과 한 덩어리로 읽히게 아랫모서리를 편다. */
+.ob-opt-card.ob-open{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue);
+  border-bottom-left-radius:0; border-bottom-right-radius:0}
+.ob-tok-in{margin:-10px 0 0; padding:14px 15px 16px; background:var(--card);
+  border:1px solid var(--blue); border-top:0; border-radius:0 0 10px 10px}
+.ob-tok-in ol{margin:2px 0}
+.ob-tok-in .ob-btn{margin-top:0}
+.ob-tok-in .ob-btn-inline{align-self:flex-start}
+.ob-tok-in .ob-err:empty{display:none}
+.ob-root a.ob-btn{text-decoration:none}
+/* #2232 — 본문 안에서 실제로 갈 수 있는 자리로 보내는 링크(«외부 앱 연결» 등). 문구로만 이름을 부르면 사람이 못 찾는다. */
+.ob-link{color:var(--accent, #2f6bff); text-underline-offset:2px}
+.ob-link:hover{text-decoration:underline}
+
+/* 자료 올리기 — 고르기 버튼 둘을 드롭존 안에 나란히(팝오버 메뉴 폐기, #1813).
+   폴더 올리기가 메뉴 안에 숨어 있어 사람이 못 찾았다 — 고를 것이 둘뿐이면 숨기지 않는다. */
+.ob-drop-pick{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:12px}
+.ob-drop-pick .ob-btn{margin-top:0}
