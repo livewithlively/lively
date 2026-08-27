@@ -23,7 +23,7 @@ const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 
 // ctx 주입 슬롯 — 아래 함수 본문은 lively.mjs 원문 그대로다(이름·들여쓰기 무변경).
-let say, dim, green, yellow, die, has, api, gateway, token, writeLively;
+let say, dim, green, yellow, die, has, api, gateway, token, writeLively, normGw;
 let hostEffects = createHostEffects();
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawnSync = (...args) => hostEffects.spawnSync(...args);
@@ -31,7 +31,7 @@ const spawn = (...args) => hostEffects.spawn(...args);
 const fetch = (...args) => hostEffects.fetch(...args);
 
 export function nodeCommands(ctx) {
-  ({ say, dim, green, yellow, die, has, api, gateway, token, writeLively } = ctx);
+  ({ say, dim, green, yellow, die, has, api, gateway, token, writeLively, normGw } = ctx);
   hostEffects = ctx.hostEffects || entrypointHostEffects();
   return { cmdNode };
 }
@@ -390,6 +390,33 @@ function bakedNodePath() {
   return mergePathDirs(loginShellPath(), process.env.PATH || "", [join(HOME, ".lively", "bin")], ":");
 }
 
+/**
+ * 저장된 노드 토큰을 **지금 로그인한 게이트웨이에서** 재사용해도 되는가(#2161).
+ *  순수 함수다 — 파일·네트워크를 안 만진다(전 플랫폼에서 도는 테스트 대상: node-token-reuse.test.mjs).
+ *
+ * 왜 이 판정이 따로 필요한가: 노드 토큰은 **그 게이트웨이(테넌트)의 `org_node.token_hash` 와 직접 매칭**돼야
+ *  통과한다(src/node/store.ts authNodeToken). 다른 게이트웨이에는 그 행이 아예 없어 조인이 영원히 비고,
+ *  노드는 /node/ws 에서 말없이 끊긴다 — 실측 2026-08-27, 502 무한 재시도.
+ *  종전 판정은 "파일에 값이 있나" 하나뿐이라 로그아웃 → 다른 게이트웨이 로그인 뒤에도 옛 토큰을 그대로 썼다.
+ *
+ * @param {{token?: string|null, prevGw?: string|null, prevId?: string|null, gw: string, nodeId: string}} inp
+ * @param {(u: string|null|undefined) => string} [norm] 게이트웨이 주소 정규화(기본: 공백만 제거).
+ *   ⚠ 실사용에선 반드시 CLI 의 normGw 를 넘긴다 — 끝슬래시·'/mcp' 차이로 판정이 갈리면 안 된다(단일 출처).
+ * @returns {{reuse: true} | {reuse: false, why: string}}
+ */
+export function nodeTokenReuse(inp, norm) {
+  const n = norm || ((u) => String(u || "").trim());
+  if (!inp.token) return { reuse: false, why: "저장된 노드 토큰이 없습니다" };
+  const prevGw = n(inp.prevGw), gw = n(inp.gw);
+  // 기록이 없으면(구 install.sh 로 깔린 파일 등) 어느 게이트웨이 것인지 알 수 없다 → 모르면 다시 등록한다.
+  //  잘못 재사용하면 '스스로 낫지 않는 502' 가 되고, 다시 등록하면 최악이 왕복 한 번이다. 비대칭이 분명하다.
+  if (prevGw !== gw) return { reuse: false, why: `게이트웨이가 바뀌었습니다(${prevGw || "(기록 없음)"} → ${gw})` };
+  const prevId = String(inp.prevId || "").trim();
+  // 노드 id 기록이 없는 건 구 파일일 뿐이라 그것만으로 버리지 않는다(게이트웨이가 같으면 토큰은 유효하다).
+  if (prevId && prevId !== inp.nodeId) return { reuse: false, why: `노드 id 가 바뀌었습니다(${prevId} → ${inp.nodeId})` };
+  return { reuse: true };
+}
+
 async function cmdNode(rest) {
   const sub = rest[0];
   if (sub === "stop") return nodeStop();
@@ -403,14 +430,40 @@ async function cmdNode(rest) {
   const tmuxPath = await ensureTmux();
 
   // 1) 노드 토큰 — 로컬에 있으면 재사용, 없으면 등록(중복이면 회전).
+  //  ★ 재사용은 **같은 게이트웨이·같은 노드 id 일 때만** 성립한다(#2161).
+  //   노드 토큰은 그 게이트웨이의 `org_node.token_hash` 와 직접 매칭돼야 통과한다(src/node/store.ts authNodeToken)
+  //   — 다른 게이트웨이(=다른 테넌트)에는 그 행이 아예 없으므로 조인이 영원히 비고, 노드는 /node/ws 에서
+  //   말없이 끊긴다(실측 2026-08-27: 502 무한 재시도).
+  //   종전 판정은 **'파일에 값이 있나' 하나뿐**이라 로그아웃하고 다른 게이트웨이로 로그인해도 옛 토큰을
+  //   그대로 재사용했다(등록을 통째로 건너뛴다). 게다가 바로 아래에서 LIVELY_GATEWAY_URL 만 새 주소로
+  //   덮어써, 파일이 **'새 게이트웨이 + 옛 테넌트 토큰'이라는 스스로 모순된 상태**로 굳었다.
+  //   노드 id 가 바뀐 경우도 같다 — 그 토큰은 다른 노드의 것이다.
   let nodeTok = readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_TOKEN");
+  {
+    const verdict = nodeTokenReuse({
+      token: nodeTok,
+      prevGw: readEnvFile(NODE_ENV_FILE, "LIVELY_GATEWAY_URL"),
+      prevId: readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_ID"),
+      gw, nodeId,
+    }, normGw);
+    if (nodeTok && !verdict.reuse) {
+      say(dim(`· ${verdict.why} — 옛 토큰은 여기서 쓸 수 없어 다시 등록합니다.`));
+      nodeTok = "";
+    }
+  }
   if (!nodeTok) {
     say(dim(`· 노드 등록: ${nodeId}`));
     let r = await api("/api/ui/nodes", { method: "POST", body: { id: nodeId, name: hostname() } }).catch((e) => ({ __err: e }));
     if (r.__err) { // 이미 존재 → 토큰 회전으로 새 토큰 확보(본인 노드여야 통과)
-      r = await api(`/api/ui/nodes/${encodeURIComponent(nodeId)}/rotate`, { method: "POST", body: {} }).catch((e2) => die(`노드 등록/회전 실패 — ${e2.message}`, 1));
+      const e1 = r.__err;
+      r = await api(`/api/ui/nodes/${encodeURIComponent(nodeId)}/rotate`, { method: "POST", body: {} })
+        // 두 오류를 **다 보여준다** — 회전 실패만 보이면 '왜 등록이 먼저 실패했는지'가 사라져, 진짜 원인(권한·주소·테넌트)을 못 짚는다.
+        .catch((e2) => die(`노드 등록/회전 실패 — 등록: ${e1.message} · 회전: ${e2.message}`, 1));
     }
     nodeTok = r.token;
+    // 응답에 토큰이 없으면 여기서 멈춘다 — 종전엔 `LIVELY_NODE_TOKEN=undefined` 가 0600 파일에 굳어,
+    //  그 뒤 모든 재실행이 "토큰이 있다"고 판단해 등록을 건너뛰었다(스스로 낫지 않는 상태).
+    if (!nodeTok || !String(nodeTok).startsWith("lvk_")) die(`노드 등록 응답에 토큰이 없습니다 — 게이트웨이(${normGw(gw)}) 응답을 확인하세요.`, 1);
     say(green(`✓ 노드 '${nodeId}' 등록됨`));
   }
   // 접속정보 env 파일(0600) — foreground 는 spawn env, 데몬은 이 파일을 읽는다.

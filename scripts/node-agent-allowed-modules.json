@@ -19,6 +19,7 @@
  "dist/node/registry.js",
  "dist/node/self-node.js",
  "dist/node/sleep-pattern.js",
+ "dist/node/auth-denial.js",
  "dist/node/store.js",
  "dist/node/tasks.js",
  "dist/ops/build-cache.js",
