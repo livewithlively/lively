@@ -1295,7 +1295,7 @@ function sideInstances(): SideInstance[] {
   sideRowRoute.clear(); sideRowInstance.clear(); dismissBasis.clear();
   interface Row extends SideInstance { at: number; rank: number }
   const rows = new Map<string, Row>();
-  const put = (key: string, route: string, at: number, stateKey?: string, force?: boolean, draft?: string): void => {
+  const put = (key: string, route: string, at: number, stateKey?: string, force?: boolean, draft?: string, past?: boolean): void => {
     const prev = rows.get(key);
     //  기준값은 **그 행을 처음 세우는 줄기**(세션이면 ①)가 든 원본 stateKey 에서 뜬다. ③은 prev 의 것을 잇는다 —
     //   ③이 넘기는 stateKey 는 이미 그려진 status.key(표시용 가공을 거친 값)라, 여기서 다시 뜨면 자가 어긋난다.
@@ -1323,12 +1323,25 @@ function sideInstances(): SideInstance[] {
     }
     rows.set(key, { ...sideRowFace(route, draft), id: key, active: key === activeKey, pinned: pin,
       status: st ? { key: sk!, label: st.label } : null,
+      //  지난 세션 표식은 **①이 세운 것만 믿는다** — ③(열린 창)은 그 행이 세션인지도 모르고 넘기지 않으므로,
+      //   여기서 prev 의 것을 잇지 않으면 창을 연 순간 표식이 지워진다(#2208).
+      past: past ?? prev?.past,
       group, rank, at: pinnedAt(key, group, rawAt) });
   };
 
-  for (const s of data.sessions) {                                   // ① 돌고 있는 내 세션
-    if (!s.live || !s.alive || !s.owned || isTrashedSess(s)) continue;
-    put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, s.stateKey);   // lastSeen 은 ms(views.ts)
+  for (const s of data.sessions) {                                   // ① 내 세션 — 도는 것 + **오늘 쓴 지난 세션**
+    if (!s.owned || isTrashedSess(s)) continue;
+    const liveNow = s.live && s.alive;
+    //  ★ 종전엔 도는 것만 세웠다. 그래서 오늘 쓰고 끝낸 세션이 목록에서 통째로 빠졌다 —
+    //   실측(2026-08-27, 상민님 계정): 오늘 활동한 내 세션 16건 중 **5건만** 섰고 나머지 11건(offline·종료)은
+    //   어디에도 없었다. 사람 눈엔 "오늘 쓴 게 왜 안 보이지"다.
+    //  ⚠ 그렇다고 지난 세션을 **전부** 세우지는 않는다(내 세션 320건 중 314건이 그 부류다) — 그건 목록이 아니라
+    //   명부고, [AI 세션] 구역이 이미 하는 일이다. 홈은 '오늘 붙들고 있는 것'이라 **오늘 것까지만** 받는다.
+    if (!liveNow && dayGroup(s.lastSeen || 0, now) !== '오늘') continue;
+    //  지난 세션엔 상태 점을 주지 않는다 — 점은 '지금 벌어지는 일'을 말하는 자리다(#1954 §4).
+    //   구분은 영역이 아니라 행이 진다(past → .v2-app-inst--past, 원준 지시 2026-08-27).
+    put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0,   // lastSeen 은 ms(views.ts)
+      liveNow ? s.stateKey : '', false, undefined, !liveNow);
   }
   for (const inst of appInstances) {                                 // ② 세션 아닌 활성 인스턴스
     if (inst.status !== 'active') continue;

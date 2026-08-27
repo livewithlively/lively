@@ -303,6 +303,10 @@ export interface SideInstance {
   owner?: { id: string; name: string } | null;
   /** 정렬 시각(ms) — main.ts 가 **얼려 둔** 값(#1954 orderPin). 프로젝트 축이 그룹 순서를 이걸로 잰다(#2033). */
   at?: number;
+  /** 지난 세션인가 — 오늘 쓰고 이미 끝난 것(#2208). 홈은 이런 행도 세우되(그러지 않으면 오늘 한 일이 목록에서
+   *  통째로 빠진다 — 실측 2026-08-27: 오늘 활동한 세션 16건 중 5건만 섰다) **영역은 나누지 않는다**(원준 지시).
+   *  대신 행이 스스로 '지난 것'이라 말한다 — 아이콘·제목을 한 단계 낮춘 톤으로(.v2-app-inst--past). */
+  past?: boolean;
   /** 이 행을 여는 주소. **홈 목록은 안 준다** — 셸이 행 키로 제 표에서 찾는다(sideRowRoute).
    *  홈에 없는 행(=[AI 세션]·[확인할 것]의 세션)만 자기 주소를 들고 온다(#2033). 없으면 셸이 못 열어
    *  아무 데도 안 가는 행이 된다 — 실측으로 밟았다. */
@@ -481,13 +485,14 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
   const tip = [
     inst.title,
     inst.owner ? `${ownerNm}의 세션 — 내가 열어 둬서 목록에 있습니다` : '',
+    inst.past ? '지난 세션 — 이어서 할 수 있어요' : '',
     one ? [inst.status ? inst.status.label : '', inst.at ? when(inst.at) : ''].filter(Boolean).join(' · ') : '',
     one && inst.ask ? '내가 마지막으로 한 말 — ' + inst.ask : '',   // 한 줄 모드에선 둘째 줄이 없으니 툴팁이 받는다(#2016 6차)
   ].filter(Boolean).join('\n');
   return el('div',
     //  ⚠ `--plain` = **행 조작이 없는 목록**(압정·× 안 그림). 그 CSS 가 '상태 점은 호버에도 안 숨는다'를
     //   이미 갖고 있다 — 홈에서 점이 숨는 건 그 자리를 × 가 받기 때문이고, 받을 것이 없으면 숨을 이유도 없다.
-    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
+    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.past ? ' v2-app-inst--past' : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id },
     el('button', { class: 'v2-app-inst-open', type: 'button', title: tip, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id, inst.route) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),

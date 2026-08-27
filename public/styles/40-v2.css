@@ -434,6 +434,13 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 650; line-height: 1.4; }
 .v2-app-inst-ic { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-app-inst:hover .v2-app-inst-ic, .v2-app-inst.on .v2-app-inst-ic { stroke: var(--ink-sub); }
+/* 지난 세션(#2208) — 오늘 쓰고 이미 끝난 행. **영역을 나누지 않고** 행이 스스로 말한다(원준 지시 2026-08-27):
+   묶음은 「오늘」 그대로 두고 아이콘·제목만 한 단계 낮춘 톤으로. ⚠ opacity 로 흐리지 않는다 — 그건 '꺼짐'이라
+   눌러도 안 열릴 것처럼 보이고, 지난 세션은 **이어서 할 수 있는 것**이다. 호버·선택 때는 제 색을 되찾는다. */
+.v2-app-inst--past .v2-app-inst-ic { stroke: var(--muted-2); }
+.v2-app-inst--past .v2-app-inst-title { font-weight: 600; color: var(--ink-sub); }
+.v2-app-inst--past:hover .v2-app-inst-title, .v2-app-inst--past.on .v2-app-inst-title { color: var(--ink); }
+.v2-app-inst--past:hover .v2-app-inst-ic, .v2-app-inst--past.on .v2-app-inst-ic { stroke: var(--muted); }
 /*  압정·닫기 — 첫 줄 오른쪽에 겹쳐 뜬다. 안 보일 땐 display:none 이라 **자리도 안 먹는다**(#1954 3차).
     호버·포커스나 이미 고정된 행에서만 보인다 — 늘 보이면 행마다 단추 둘이 늘어서 목록이 도구모음이 된다. */
 .v2-app-inst-close, .v2-app-inst-pin { position: absolute; top: 7px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;

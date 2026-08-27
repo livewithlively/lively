@@ -48,7 +48,7 @@ export interface SecDef { key: RailSection; label: string; route: string; tab: s
 const SECTIONS: SecDef[] = [
   { key: 'home', label: '홈', route: '#/', tab: null, icon: 'home' },
   { key: 'inbox', label: '확인할 것', route: '#/inbox', tab: null, icon: 'inbox' },
-  { key: 'sess', label: 'AI 세션', route: '#/app/terminal', tab: 'terminal', icon: 'term' },
+  { key: 'sess', label: 'AI 세션', route: '#/app/terminal', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26). ⚠ 8/27 머지에서 한 번 'term' 으로 되돌아갔다(#2208)
   { key: 'proj', label: '프로젝트', route: '#/app/projects2', tab: 'projects2', icon: 'proj' },
   { key: 'wiki', label: '위키', route: '#/app/knowledge', tab: 'knowledge', icon: 'wiki' },
 ];
