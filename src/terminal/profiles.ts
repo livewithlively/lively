@@ -13,6 +13,7 @@ import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug } from "./terminal-isolation.js";
 import { memberSh } from "./terminal-member-fs.js";
+import { memberExecConfigured } from "./terminal-isolation.js";   // #2148 — 중계 배포에는 멤버 OS 계정이 없다(아래 memberOsStatus)
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
 import { loadDesiredOne } from "../sessions/session-desired.js";
@@ -399,6 +400,11 @@ async function memberLoggedInHarnesses(osUser: string): Promise<string[]> {
 // box_ 홈 dir 존재 — **OS 유저와 별개**로 본다. 홈 부모(/home)는 755 라 게이트웨이가 stat 할 수 있고
 //  (내용은 700 이라 여전히 못 읽는다), 이 한 비트가 아래 '고아 홈' 판정의 유일한 근거다.
 async function memberHomeExists(osUser: string): Promise<boolean> {
+  // 중계 배포(매니지드)는 홈이 **게이트웨이가 아니라 실행 노드**에 있다 — 로컬 stat 은 늘 false 다
+  //  (memberFileExists 머리말과 같은 함정). 자격 확인과 같은 자리에서 본다.
+  if (memberExecConfigured()) {
+    try { await memberSh(osUser, `test -d "/home/${osUser}"`); return true; } catch { return false; }
+  }
   try { return (await fsp.stat(path.join(MEMBER_HOME_BASE, osUser))).isDirectory(); }
   catch { return false; }
 }
@@ -429,8 +435,18 @@ export interface MemberOsStatus {
  *   실측(#1471): 매니지드 테넌트에서 이 거짓 false 때문에 컨트롤플레인이 자율 파이프라인을 영영 안 켰다.
  *   드롭-프리브할 유저가 없어 **확인할 방법 자체가 없으므로** 답은 false 가 아니라 null(모름)이다.
  */
-export function judgeMemberOs(i: { ready: boolean; provisioned: boolean; homeExists: boolean; credExists: boolean }): { loggedIn: boolean | null; orphanHome: boolean } {
-  if (i.provisioned) return { loggedIn: i.credExists, orphanHome: false };   // drop-priv 로 실제 확인함
+export function judgeMemberOs(i: {
+  ready: boolean; provisioned: boolean; homeExists: boolean; credExists: boolean;
+  /**
+   * 자격 확인을 **실제로 돌렸나**(#2148). 로컬 확인은 drop-priv 가 필요해 passwd 항목(provisioned)이 전제지만,
+   * 중계 확인은 경로만 있으면 된다 — 그래서 provisioned 가 false 여도 답을 얻을 수 있다.
+   */
+  credChecked?: boolean;
+}): { loggedIn: boolean | null; orphanHome: boolean } {
+  // 확인을 실제로 돌렸으면 **그 답이 권위다.** passwd 항목 유무는 그 답을 뒤집을 근거가 아니다 — 매니지드에서는
+  //  멤버 OS 계정이 아예 없는 것이 정상이고(uid 는 테넌트, member-exec-relay 머리말), 그걸 '미로그인'으로 읽으면
+  //  자율 파이프라인이 영영 안 켜진다(2026-08-27 실측: 가동 성공 누적 0건).
+  if (i.provisioned || i.credChecked) return { loggedIn: i.credExists, orphanHome: false };
   const orphanHome = i.ready && i.homeExists;                                 // 홈만 남음 → 확인 불가
   return { loggedIn: orphanHome ? null : false, orphanHome };                 // 홈도 없으면 확실히 미로그인
 }
@@ -439,10 +455,15 @@ export async function memberOsStatus(memberId: string): Promise<MemberOsStatus> 
   const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
   const ready = isolationInfraReady();
   const provisioned = await osUserExists(osUser);
-  const loggedInHarnesses = provisioned ? await memberLoggedInHarnesses(osUser) : [];
+  // ★ 중계 배포(매니지드)에는 **멤버 OS 계정이 아예 없다** — 중계는 테넌트 tmux 컨테이너로 나가고 그 안의 uid 는
+  //  테넌트다(member-exec-relay 머리말: "컨테이너 안엔 멤버 계정이 없어 uid 는 테넌트다"). 즉 provisioned 는
+  //  구조적으로 영원히 false 인데, 종전엔 그걸 자격 확인의 **전제**로 삼아 로그인이 영영 안 보였다.
+  //  자격 확인 자체는 경로만 있으면 되므로(memberFileExists 는 중계를 탄다) 중계가 있으면 그냥 돌린다.
+  const credChecked = provisioned || memberExecConfigured();
+  const loggedInHarnesses = credChecked ? await memberLoggedInHarnesses(osUser) : [];
   const credExists = loggedInHarnesses.length > 0;
   const homeExists = provisioned ? true : await memberHomeExists(osUser);
-  return { ready, provisioned, osUser, loggedInHarnesses, ...judgeMemberOs({ ready, provisioned, homeExists, credExists }) };
+  return { ready, provisioned, osUser, loggedInHarnesses, ...judgeMemberOs({ ready, provisioned, homeExists, credExists, credChecked }) };
 }
 
 // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 계정] 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
