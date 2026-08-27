@@ -227,6 +227,15 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  ⚠ 그래서 이 행은 '보이게' 하되 '되살릴 수 있다'고 말하지 않는다 — 복원이 좌표를 추측하면(root_key||'shared')
   //   그 세션이 **엉뚱한 폴더에서** 되살아난다. 복원 경로가 이 표식을 보고 거절한다(terminal/routes.ts).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS discovered BOOLEAN NOT NULL DEFAULT false;`);
+  // #2231 — **이 세션은 어느 새 세션으로 이어졌나**(복원 성공 시 새 id). NULL = 아직 이어지지 않은 살아있는 desired-state.
+  //  왜: 종전엔 복원이 성공하면 옛 행을 **지웠다**. 그러면 그 옛 id 는 서버에서 통째로 모르는 값이 되어, 이미 열려 있던
+  //   화면·탭·북마크·다른 칸이 그 id 를 계속 가리킨 채 "중단된 세션이에요 — 이어받을 수 있어요"를 띄우고, 누르면
+  //   `복원할 세션 상태가 없습니다`(404) 로 끝났다 — 정작 그 대화는 새 id 로 멀쩡히 돌고 있는데 갈 길이 없었다
+  //   (실측 2026-08-27 장원준 신고: box-jang-b830d01a → box-jang-fa34ad1e 로 이어진 뒤 옛 화면이 막다른 길).
+  //  그래서 지우는 대신 **이어진 곳을 적어 남긴다**: 목록에서는 빠지고(listAllSessionStates 가 거른다 — 종전 DELETE 와 같은
+  //   가시성), 옛 id 로 오는 복원·메타 조회는 이 값을 따라가 새 세션으로 **안내**한다. 행 하나는 수백 바이트라 남겨 두는
+  //   비용보다 '옛 링크가 영원히 산다'는 값이 크다(그래서 만료 삭제도 두지 않는다).
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS superseded_by TEXT;`);
 
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)
