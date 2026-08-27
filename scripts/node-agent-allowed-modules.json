@@ -41,6 +41,7 @@
  "dist/org/store/profile.js",
  "dist/org/store/runtime-config.js",
  "dist/org/store/tokens.js",
+ "dist/org/tenant-ttl-cache.js",
  "dist/org/timezone.js",
  "dist/project/project-fs.js",
  "dist/project/project-provision.js",
