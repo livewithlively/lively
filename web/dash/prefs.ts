@@ -5,7 +5,7 @@
 //   (여기서 import 하면 shell ↔ prefs 순환). 이 파일은 그 짝인 키·버전·writer(dashSaveLayout/dashResetLayout)만 보관한다.
 //  ⚠ DASH_NOTIF_GROUPS(알림 유형 카탈로그)도 같은 이유로 여기 산다 — 바로 아래 DASH_NOTIF_DEFAULTS 가 **모듈 초기화
 //   시점에** 카탈로그를 접기 때문에, 카탈로그를 widget-notifications.ts 로 올리면 TDZ 로 실제로 깨지는 순환이 된다.
-import { api } from '../core.js';
+import { api, wsKey } from '../core.js';
 import { dashListStatusDefs, dashResolveStatus } from './status.js';
 
 // ── 최신 알림 사용자화(유형별 on/off) — 전용 알림 백엔드가 없어 대시보드-로컬(localStorage, 기기별). ──
@@ -75,7 +75,7 @@ type DashLayout = { cols: string[][]; hidden: string[] };
 function dashSaveLayout(lay: DashLayout) { try { localStorage.setItem(DASH_LAYOUT_KEY, JSON.stringify({ v: DASH_LAYOUT_VER, ...lay })); } catch { /* 저장 실패 무시 */ } }
 function dashResetLayout() { try { localStorage.removeItem(DASH_LAYOUT_KEY); } catch { /* 무시 */ } }
 // ── 개요 리스트 순서(드래그) — 대시보드-로컬(localStorage). 프로젝트 탭의 리스트 순서와는 독립. ──
-const DASH_LIST_ORDER_KEY = 'dash_list_order_v1';
+const DASH_LIST_ORDER_KEY = wsKey('dash_list_order_v1');   // #1875 — 리스트 id 를 담는다 = 워크스페이스의 내용
 function dashListOrderSaved(): any[] { try { const a = JSON.parse(localStorage.getItem(DASH_LIST_ORDER_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
 function dashSaveListOrder(order) { try { localStorage.setItem(DASH_LIST_ORDER_KEY, JSON.stringify(order)); } catch { /* 저장 실패 무시 */ } dashPrefsPush(); }
 // 저장된 순서를 현재 리스트 집합(base)에 적용 — 저장분 먼저(그 순서대로), 새 리스트는 뒤에.
@@ -96,7 +96,7 @@ function dashReorderList(order, dragId, targetId, after?) {
 }
 // ── 개요 카드 표시/숨김(사용자화, #671) — 숨긴 리스트 id 집합을 대시보드-로컬(localStorage, 기기별)에 저장. ──
 //  미분류(id 0)까지 개별 토글. 헤더 ⚙ 팝오버 체크박스 + 카드 hover ✕ 두 경로로 조작한다(리스트 순서와는 독립).
-const DASH_OV_HIDDEN_KEY = 'dash_ov_hidden_v1';
+const DASH_OV_HIDDEN_KEY = wsKey('dash_ov_hidden_v1');     // #1875 — 리스트 id 를 담는다
 function dashOvHidden(): Set<number> {
   try { const a = JSON.parse(localStorage.getItem(DASH_OV_HIDDEN_KEY) || '[]'); return new Set(Array.isArray(a) ? a.map(Number) : []); }
   catch { return new Set(); }
@@ -105,7 +105,7 @@ function dashSaveOvHidden(set: Set<number>) { try { localStorage.setItem(DASH_OV
 // ── #req 직접 고른 리스트(화이트리스트) — ⚙ 스페이스›폴더 트리에서 체크한, 내 프로젝트가 없는 리스트. ──
 //  hidden(블랙리스트)과 짝이다: 자동 후보는 hidden 으로 빼고, 그 밖의 리스트는 pinned 로 넣는다.
 //  pinned 리스트는 mine 필터 없이 '리스트 전체'를 보여준다(그렇지 않으면 0개 빈 카드가 된다).
-const DASH_OV_PINNED_KEY = 'dash_ov_pinned_v1';
+const DASH_OV_PINNED_KEY = wsKey('dash_ov_pinned_v1');     // #1875 — 리스트 id 를 담는다
 function dashOvPinned(): Set<number> {
   try { const a = JSON.parse(localStorage.getItem(DASH_OV_PINNED_KEY) || '[]'); return new Set(Array.isArray(a) ? a.map(Number).filter((n) => n > 0) : []); }
   catch { return new Set(); }

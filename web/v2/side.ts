@@ -25,12 +25,12 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast, wsKey } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
@@ -42,7 +42,7 @@ import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
-const OPEN_KEY = 'lively_v2_opened';
+const OPEN_KEY = wsKey('lively_v2_opened');
 const DONE_KEY = 'lively_v2_side_done';   // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
 // ⚠ 「지난 세션」 펼침은 **기억하지 않는다**(원준 2026-08-24 — "난 연 적이 없는데 지멋대로 펼쳐져 있어").
@@ -51,13 +51,13 @@ const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
 //  지난 세션은 배경이지 본문이 아니다 — 기본은 늘 접힘이고, 편 것은 그 페이지 동안만 산다.
 //  「전체 프로젝트」가 같은 이유로 같은 처방을 받았다(2026-08-23).
 const PAST_KEY_LEGACY = 'lively_v2_side_past';
-const SELCLOSED_KEY = 'lively_v2_side_selclosed';   // 선택된 프로젝트인데도 **일부러 접어 둔** 것
+const SELCLOSED_KEY = wsKey('lively_v2_side_selclosed');   // 선택된 프로젝트인데도 **일부러 접어 둔** 것
 // ⚠ 「전체 프로젝트」 펼침은 **기억하지 않는다**(원준 2026-08-23 — "사용자가 변경하기 전에는 디폴트로 접힌 상태").
 //  종전엔 lively_v2_side_all 로 브라우저에 남겨, 한 번 편 사람은 그 뒤로 늘 수백 행이 펼쳐진 채 열렸다. 이제 페이지 수명만.
 const ALL_KEY_LEGACY = 'lively_v2_side_all';
-const PIN_KEY = 'lively_v2_side_pin';     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
+const PIN_KEY = wsKey('lively_v2_side_pin');     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
 //  앱 인스턴스 핀(#1954)은 키 공간이 달라(sess:/inst:/route:) 따로 둔다 — 한 통에 섞으면 트리를 걷어낼 때 같이 사라진다.
-const APP_PIN_STORE = 'lively_v2_app_pin';
+const APP_PIN_STORE = wsKey('lively_v2_app_pin');
 const BINS_KEY = 'lively_v2_side_bins';   // '1' = 아카이브·휴지통 두 행을 **발치에 고정**(목록을 내려도 늘 보인다, #1851)
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 
@@ -65,9 +65,9 @@ const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보�
 //  집합은 그대로 두고 묶는 축만 바꾼다. 행 문법(×·압정·상태 점)도, 목록에 무엇이 있는지도 그대로다.
 //  움직임의 원칙 한 줄: **위로 올라가고 펴지는 쪽은 즉시, 아래로 내려가고 접히는 쪽은 안 볼 때.**
 //   올라오는 움직임은 정보고(나를 기다리는 게 생겼다), 내려가는 움직임은 소음이다(처리한 것의 뒷정리).
-const GROUP_STORE = 'lively_v2_side_group';        // 'proj' = 프로젝트로 묶기 · 없으면 종전 시간·상태 축
-const GRPCLOSED_STORE = 'lively_v2_side_grpclosed';   // 사람이 **접어 둔** 프로젝트 그룹
-const GRPOPENED_STORE = 'lively_v2_side_grpopened';   // 사람이 **펴 둔** 프로젝트 그룹
+const GROUP_STORE = wsKey('lively_v2_side_group');        // 'proj' = 프로젝트로 묶기 · 없으면 종전 시간·상태 축
+const GRPCLOSED_STORE = wsKey('lively_v2_side_grpclosed');   // 사람이 **접어 둔** 프로젝트 그룹
+const GRPOPENED_STORE = wsKey('lively_v2_side_grpopened');   // 사람이 **펴 둔** 프로젝트 그룹
 let groupProj = false;
 let grpClosed = new Set<string>();
 let grpOpened = new Set<string>();
@@ -179,7 +179,9 @@ export function sessText(s: Sess, projName: string): { main: string; sub: string
 //  종전엔 둘 다 s.owned 만 봤는데, 그 값이 한 번이라도 false 로 오면 **내 세션에 내 얼굴이 뜨고
 //  보관 단추는 사라지는** 짝이 된다 — 사용자가 본 그림이 정확히 그것이다. 그래서 소유자 id 로도 확인한다.
 const meId = (): string => String((state.me && state.me.userId) || '');
-const isMine = (s: Sess): boolean => !!s.owned || (!!meId() && String((s.raw && s.raw.owner) || '') === meId());
+// '내 세션인가' 는 views.ts 의 isMineSess 한 벌뿐이다(#1875) — 여기 사본을 두면 「확인할 것」 배지와
+//  목록이 서로 다른 규칙으로 세는 일이 다시 생긴다.
+const isMine = (s: Sess): boolean => isMineSess(s);
 const rankOf = (k: string) => (SESS_STATES[k] ? SESS_STATES[k].rank : 9);
 /** 사이드바 세션 정렬 — 상태 순위(답 기다림이 위) 다음 최근 순. **'맨 위 세션'의 정의는 여기 하나뿐**이다
  *  (라우터가 프로젝트 → 세션으로 보낼 때도 이걸 쓴다 — 사이드바에서 보이는 순서와 어긋나면 안 된다). */
@@ -317,7 +319,7 @@ export interface SideInstance {
 //  · 폴더 · 리스트 렌즈는 **리스트까지만**(프로젝트 행 없음) — 리스트를 누르면 가운데 보드가 그 리스트로 간다(#/projects2/l/<id>).
 //  · 끌어다 놓기·리스트 ⋯ 메뉴는 1차에서 뺐다 — 리스트 설정·즐겨찾기 토글은 보드 머리줄의 ⌄ · ☆ 가 한다(#1067).
 const LENS_STORE = 'lively_v2_proj_lens';               // 'active' | 'tree'
-const FOLD_CLOSED_STORE = 'lively_v2_proj_fold_closed'; // 접어 둔 폴더 id
+const FOLD_CLOSED_STORE = wsKey('lively_v2_proj_fold_closed'); // 접어 둔 폴더 id
 type ProjLens = 'active' | 'tree';
 let projLens: ProjLens = 'tree';
 let foldClosed = new Set<string>();
@@ -740,7 +742,7 @@ function wsHead(): HTMLElement {
   const sec = hooks.section?.() || 'home';
   const ak = last ? last.activeKey() : '';
   const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : sectionDef(sec);
-  const inboxN = last ? last.data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length : 0;
+  const inboxN = last ? last.data.sessions.filter((s) => isLive(s) && isMine(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length : 0;
   return el('div', { class: 'v2-side-wshd' },
     stackTile({ small: true, label: true }),
     el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · 확인할 것 · AI 세션 · 프로젝트 · 위키 · 리브',
@@ -965,8 +967,9 @@ function renderInboxSide(): void {
   const navHost = hooks.navHost?.() || null;
   if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
   const live = data.sessions.filter((s) => isLive(s) && !isTrashedSess(s));
-  const waits = live.filter((s) => s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
-  const dones = live.filter((s) => s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
+  //  #1875 — 내 것만. 남의 프로젝트 세션이 답을 기다리는 것은 그 사람의 「확인할 것」이지 내 것이 아니다.
+  const waits = live.filter((s) => isMine(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
+  const dones = live.filter((s) => isMine(s) && s.stateKey === 'done').sort((a, b) => b.lastSeen - a.lastSeen);
   //  홈·[AI 세션]과 같은 붓(#2033). 여기도 전수가 아니라 **지금 나를 기다리는 것**만 모인 자리라
   //   압정·× 는 안 그린다 — 확인하면 스스로 빠지는 목록이다.
   const items = [
@@ -1043,7 +1046,7 @@ export function loadFavLists(): void {
 //  구역에 들어갔을 때 나오던 것은 **전체 프로젝트 보드**였다. 액자 안 클래식 보드에도 같은 규칙(#1114)이 있지만
 //  그건 클래식 패널(renderArea)이 설 때만 도는데, 새 셸에서는 그 패널을 접으므로(#2043) 영영 안 돌았다.
 //  그래서 규칙을 **셸의 착지 주소**로 올린다 — 주소가 리스트를 가리켜야 이 사이드바의 그 줄도 눌린 것으로 선다(projScopeKey).
-const FAV_TOP_STORE = 'lively_v2_proj_fav_top';
+const FAV_TOP_STORE = wsKey('lively_v2_proj_fav_top');
 
 /** 즐겨찾기 맨 위 리스트 id — 사이드바 즐겨찾기 구역과 **같은 식**(같은 순서)을 쓴다. 모르면 0. */
 function favTopListId(): number {
@@ -1094,7 +1097,7 @@ function setLens(k: ProjLens): void {
  *  사이드바의 앰버 숫자 배지는 하나뿐이라는 #1719 규칙). 8/25 결정 ①(시간순 ↔ 프로젝트별 토글)과 같은 장치다. */
 function lensSwitch(): HTMLElement {
   const data = last ? last.data : null;
-  const waiting = !!data && data.sessions.some((s) => isLive(s) && s.stateKey === 'waiting');
+  const waiting = !!data && data.sessions.some((s) => isLive(s) && isMine(s) && s.stateKey === 'waiting');
   const tab = (k: ProjLens, label: string, dot: boolean, title: string): HTMLElement =>
     el('button', { class: 'v2-lens-b' + (projLens === k ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(projLens === k), title,
       onclick: () => setLens(k) },
@@ -1246,7 +1249,7 @@ let wikiCats: WikiCat[] | null = null;
 let wikiLoading = false;
 let wikiPins: number | null = null;      // WIKI 인덱스(핀) 건수 — 뷰 줄의 알약
 let wikiPinsLoading = false;
-const WIKI_CLOSED_STORE = 'lively_v2_wiki_closed';   // 접어 둔 스페이스(브라우저 기억)
+const WIKI_CLOSED_STORE = wsKey('lively_v2_wiki_closed');   // 접어 둔 스페이스(브라우저 기억)
 let wikiClosed = new Set<string>();
 const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 스페이스 — 페이지 수명(새로 열면 다시 접힌다)
 const WIKI_CARD_MAX = 6;                 // 카드 하나에 바로 보이는 분류 수. 넘으면 더 보기로 접는다
@@ -1448,8 +1451,10 @@ function renderLegacy(): void {
     onblur: () => { if (!sideFilter && findOpen) window.setTimeout(() => { if (!sideFilter) closeFind(); }, 120); } }) as HTMLInputElement;
   const doneCount = rows.filter((r) => r.done).length;
   const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
-  // 확인할 것 = 확인 필요(waiting, 보이는 것 전부 — 프로젝트 세션은 팀 누구든 답할 수 있다) + 작업 완료 미열람(내 것만).
-  const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
+  // 확인할 것 = 확인 필요(waiting) + 작업 완료 미열람 — **둘 다 내 것만**(#1875, 2026-08-27 원준).
+  //  종전엔 waiting 만 '보이는 것 전부'였다(프로젝트 세션은 팀 누구든 답할 수 있으니까) — 그 규칙이
+  //  동료의 대기를 내 배지 숫자로 올렸다. views.ts renderInbox 머리말에 뒤집은 이유가 적혀 있다.
+  const inboxN = data.sessions.filter((s) => isLive(s) && isMine(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length;
   // ⚠ 바로 가기 칸은 **밖에서 잡아 두어야** 한다 — 아래 나눔선(navSplitter)이 이 칸의 높이를 조정한다.
   //  칸을 인라인으로 두면 손잡이가 가리킬 대상을 못 잡는다.
   const navEl = el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' },
