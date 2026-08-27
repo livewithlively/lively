@@ -147,6 +147,19 @@ t("⑪ 막다른 길이 없다 — CLI 가 없어도 계속할 문이 있다", (
   assert.match(scene, /id="cKeep"/, "이미 이어진 다른 AI 로 계속할 문이 없다");
 });
 
+t("⑬ ★화면이 «이어졌다» 를 지어내지 않는다 — 참으로 만드는 자리는 서버 확인 뒤 한 곳뿐", () => {
+  // 종전 replayChatTo 가 `S.aiConnected = S.ai !== '아직 없어요'` 로 **무조건 대입**했다(|| 폴백이 아니다).
+  //  그래서 AI 잇기를 건너뛴 사람도 채팅 단계에 닿는 순간 참이 됐고, AI 화면으로 돌아가면
+  //  «이어졌어요 · 로그인이 확인됐어요» 라고 말했다 — 서버는 그런 적이 없다.
+  //  #1813 이 걷어낸 «900ms 뒤 무조건 연결됐어요» 와 같은 모양의 잔재였다.
+  const sets = [...ONBOARDING.matchAll(/S\.aiConnected\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
+  assert.deepEqual(sets, ["true"],
+    `S.aiConnected 를 참으로 만드는 자리가 하나가 아니거나 서버 판정이 아니다: ${JSON.stringify(sets)}`);
+  // 그 한 곳은 checkAi() 결과나 «이대로 계속»(다른 AI 가 실제로 이어져 있음) 뒤여야 한다.
+  const scene = ONBOARDING.slice(ONBOARDING.indexOf("    claude: {"), ONBOARDING.indexOf("    terminal: {"));
+  assert.match(scene, /S\.aiConnected = true/, "이음 처리가 claude 장면(서버 판정 자리) 밖에 있다");
+});
+
 t("⑫ 화면이 CLI 이름을 박아 두지 않는다 — 하네스 표가 바뀌면 그 줄만 조용히 틀려진다", () => {
   const map = ONBOARDING.match(/const AI_HARNESS = \{([^}]*)\}/)![1];
   assert.doesNotMatch(map, /'agy'/, "고르기 표에 실행 파일 이름(agy)이 박혀 있다 — 여긴 하네스 key 자리다");
