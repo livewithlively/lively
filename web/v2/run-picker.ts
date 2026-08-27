@@ -12,14 +12,19 @@
 //  고르면 제공자 목록이 그 PC 가 실제로 띄울 수 있는 것만 남는다**(클래식 '새 AI 세션' 폼과 같은 규칙 — 못 고르게만 하고
 //  끝내지 않으려 목록 자체를 좁힌다). 노드가 하나도 없으면 이 칸은 아예 안 그린다(중앙만 있는 사람에게 군더더기 금지).
 //
-//  ── 기본값 = 직전 세팅 ──
+//  ── 기본값 = 직전 세팅 (단, 실행 노드는 예외) ──
 //  칸들의 기본은 **내가 지난번에 고른 값**이다 — 클래식 '새 AI 세션' 폼이 쓰는 것과 **같은 localStorage 키**
 //  (lively_term_create_prefs, 사용자별)를 읽고, 여기서 고른 값도 거기에 되쓴다. 두 화면이 서로의 기억을 잇는다.
 //  모델·추론강도의 빈 값은 **'AI 기본값'** 이다 — 그 플래그를 아예 안 넘겨 그 AI 가 자기 설정(마지막에 고른
 //  모델)으로 뜬다는 뜻이다. 종전 문구는 '지난번 그대로'(클래식 session-form.ts 가 아직 쓴다)였는데, 무엇이
 //  지난번이었는지는 이 줄만 봐서는 알 수 없어 '그래서 지금 뭔데'가 남았다(원준 2026-08-25). 짧기도 하다 —
 //  넷이 한 줄에 서는 칸이라 문구 길이가 곧 옆 칸의 잘림이다.
-//  실행 노드는 기억하되 **지금 온라인인 노드일 때만** 기본으로 되살린다(오프라인 노드에는 세션을 못 만든다 — 서버 409).
+//  ⚠ **실행 노드만은 기억을 기본으로 삼지 않는다**(#2172, 윤상민 2026-08-27). 직전에 고른 노드를 되살리면
+//  어제 중앙으로 한 번 연 것이 오늘의 기본이 되어, 켜 둔 내 컴퓨터를 두고 중앙에서 세션이 뜬다. 그래서 노드 축은
+//  **매번 규칙으로 다시 정한다**(defaultNodeId): 켜져 있는 **내 컴퓨터**가 가장 높고, 그 다음이 켜져 있는 공유
+//  컴퓨터이며, **중앙 컴퓨터가 가장 낮다**. 켜진 내 컴퓨터가 여럿이면 **가장 최근에 붙은 것**을 고른다
+//  (서버 cfg.nodes[].connectedAt — last_seen·상태 push 는 온라인인 동안 계속 갱신돼 노드끼리 구분이 안 된다).
+//  고른 값을 기억에 되쓰는 것은 그대로다 — 클래식 폼은 아직 '직전 그대로'를 쓰기 때문이다(읽지 않을 뿐 끊지 않는다).
 //
 //  ── 소비자 ──
 //  홈 입력창(v2/views.ts) · 프로젝트 '클로드로 실행' 기본값(projects/selection.ts) · 세션 대화창(session-chat.ts —
@@ -37,7 +42,28 @@ export interface RunHarness {
   runtime?: { model?: boolean; effort?: boolean };
 }
 // 실행 노드(#869·#1744) — 서버 /terminal/config 의 cfg.nodes 그대로. harnesses = 그 PC 가 띄울 수 있는 하네스 키(미보고면 기준선).
-export interface RunNode { id: string; name?: string; kind?: string; shared?: boolean; online?: boolean; harnesses?: string[] }
+export interface RunNode {
+  id: string; name?: string; kind?: string; shared?: boolean; online?: boolean; harnesses?: string[];
+  // #2172 — 기본 노드 규칙이 쓰는 두 값. mine=내 소유인가(shared 와 직교: 내 노드를 관리자가 공유로 지정할 수 있다),
+  //  connectedAt=지금 연결이 붙은 시각(ms, 오프라인이면 null). 구 게이트웨이는 둘 다 안 준다 → 아래에서 폴백한다.
+  mine?: boolean; connectedAt?: number | null;
+}
+
+/** 내 소유인가 — 구 게이트웨이(mine 미보고)면 '공유가 아니면 내 것'으로 본다(서버가 내 소유 ∪ 공유만 주므로 정확한 폴백). */
+const nodeIsMine = (n: RunNode): boolean => (typeof n.mine === 'boolean' ? n.mine : !n.shared);
+
+/**
+ * 새 세션의 **기본 실행 노드**(#2172) — 켜져 있는 내 컴퓨터 > 켜져 있는 공유 컴퓨터 > 중앙('').
+ *  같은 등급이면 **가장 최근에 붙은 것**. connectedAt 을 안 주는 구 게이트웨이에서는 서버가 준 목록 순서를 따른다
+ *  (sort 가 안정 정렬이라 동률이 뒤섞이지 않는다). 꺼진 노드는 애초에 후보가 아니다 — 세션을 못 만든다(서버 409).
+ */
+export function defaultNodeId(nodes: RunNode[]): string {
+  const live = nodes.filter((n) => n.online);
+  if (!live.length) return '';
+  const best = live.slice().sort((a, b) =>
+    (nodeIsMine(b) ? 1 : 0) - (nodeIsMine(a) ? 1 : 0) || (b.connectedAt || 0) - (a.connectedAt || 0))[0];
+  return best ? best.id : '';
+}
 
 /** 추론강도 값 → 사람 말. 서버가 주는 값은 low|medium|high|xhigh|max 로 하네스마다 일부만 쓴다. */
 export const EFFORT_KO: Record<string, string> = { none: '없음', low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대', ultra: '울트라' };
@@ -127,13 +153,17 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
   const prefs = runPrefs();
   const savedFlags: Record<string, string> = (prefs.flags && typeof prefs.flags === 'object') ? { ...prefs.flags } as Record<string, string> : {};
   let harnesses: RunHarness[] = [];
-  let nodes: RunNode[] = [];
+  // 다른 화면이 이미 /terminal/config 를 받아 놨으면 그 자리에서 쓴다 — 카탈로그가 오기 전에 사람이 Enter 를 쳐도
+  //  기본 노드가 규칙대로(중앙이 아니라 켜 둔 내 컴퓨터로) 잡힌다.
+  let nodes: RunNode[] = cached ? cached.nodes : [];
   let harnessKey = String(prefs.harness && prefs.harness !== 'shell' ? prefs.harness : 'claude');
-  let nodeKey = String(prefs.node || '');   // 도착한 노드 목록으로 온라인 검증 후 확정(오프라인·삭제된 노드면 중앙으로).
+  // 실행 노드는 **기억을 읽지 않는다**(#2172, 머리말 참조) — 매번 규칙으로 정한다. 사람이 직접 고르면 그 때부터 그 값이다.
+  let nodeKey = defaultNodeId(nodes);
+  let nodePicked = false;
 
   const sel = (cls: string, title: string): HTMLSelectElement =>
     el('select', { class: 'v2-run-sel ' + cls, title, 'aria-label': title }) as HTMLSelectElement;
-  const nodeSel = sel('v2-run-node', '어느 컴퓨터에서 실행할까요 — 기본은 중앙 컴퓨터예요');
+  const nodeSel = sel('v2-run-node', '어느 컴퓨터에서 실행할까요 — 기본은 켜져 있는 내 컴퓨터예요');
   const provSel = sel('v2-run-prov', '어느 회사 모델로 열까요');
   const modelSel = sel('v2-run-model', '모델을 고릅니다');
   const effortSel = sel('v2-run-effort', '추론강도를 고릅니다');
@@ -164,10 +194,12 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     box.value = choices.includes(want) ? want : '';
   }
   function paintNode(): void {
-    // 노드가 없으면 칸 자체를 숨긴다(중앙만 있는 사람에겐 군더더기). 기억한 노드가 지금 온라인이 아니면 중앙으로 되돌린다.
+    // 노드가 없으면 칸 자체를 숨긴다(중앙만 있는 사람에겐 군더더기).
     nodeSel.hidden = !nodes.length;
     if (!nodes.length) { nodeKey = ''; return; }
-    if (nodeKey && !(nodeOf(nodeKey)?.online)) nodeKey = '';   // 오프라인·삭제된 노드엔 못 만든다 → 중앙
+    // 사람이 아직 안 골랐으면 **규칙이 정한다**(#2172). 고른 뒤라도 그 노드가 꺼져 있으면 다시 규칙으로 —
+    //  꺼진 노드엔 세션을 못 만든다(서버 409). 사람이 중앙을 직접 고른 경우('' + nodePicked)는 그대로 둔다.
+    if (!nodePicked || (nodeKey && !(nodeOf(nodeKey)?.online))) nodeKey = defaultNodeId(nodes);
     nodeSel.replaceChildren(
       el('option', { value: '' }, '중앙 컴퓨터'),
       ...nodes.map((n) => {
@@ -201,7 +233,7 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     if (remember) saveRunPrefs({ harness: harnessKey, flags: { ...savedFlags }, node: nodeKey });
     opts?.onChange?.(pick());
   };
-  nodeSel.addEventListener('change', () => { nodeKey = nodeSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
+  nodeSel.addEventListener('change', () => { nodeKey = nodeSel.value; nodePicked = true; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
   provSel.addEventListener('change', () => { harnessKey = provSel.value; modelSel.value = ''; effortSel.value = ''; paint(); changed(); });
   modelSel.addEventListener('change', () => { paintFlag(effortSel, '--effort', '추론강도 · AI 기본값', (v) => '추론강도 · ' + effortKo(v)); changed(); });
   effortSel.addEventListener('change', changed);
