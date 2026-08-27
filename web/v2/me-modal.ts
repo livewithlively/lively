@@ -167,7 +167,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
     const svc = servicesPane();    panes.set('svc', svc.node);     lazy.set('svc', svc.init);
     panes.set('notify', notifyPane());
     panes.set('look', lookPane(close));
-    panes.set('account', accountPane(data, logins, close));
+    panes.set('account', accountPane(data, logins));
     contEl.replaceChildren(...panes.values());
     show(cur);
   })();
@@ -183,14 +183,6 @@ function pane(title: string, hint: string, ...kids: any[]): HTMLElement {
 function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
   return el('div', { class: 'v2me-save' }, btn, status);
 }
-// 이 창에서 관리탭 안쪽 화면으로 건너가는 줄 — 여기서 다 하지 않고 **어디로 가면 되는지**만 말한다.
-function moreLink(href: string, label: string, desc: string, close: () => void): HTMLElement {
-  return el('a', { class: 'v2me-more', href, onclick: () => close() },
-    el('span', { class: 'v2me-more-t', text: label }),
-    el('span', { class: 'v2me-more-d', text: desc }),
-    ic(['M9 6l6 6-6 6'], 'v2me-more-ic'));
-}
-
 // ── ① 프로필 — 얼굴·이름. 팀 화면 어디에서나 나를 가리키는 것. ──
 function profilePane(data: any, onSaved: () => void): HTMLElement {
   const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '이름 (비우면 이메일·아이디로 표시됩니다)' });
@@ -414,7 +406,7 @@ function lookPane(close: () => void): HTMLElement {
 }
 
 // ── ⑥ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
-function accountPane(data: any, logins: any, close: () => void): HTMLElement {
+function accountPane(data: any, logins: any): HTMLElement {
   const kids: any[] = [];
   if (data.email) {
     kids.push(field('비밀번호', el('div', { class: 'v2me-inline' },
@@ -423,9 +415,8 @@ function accountPane(data: any, logins: any, close: () => void): HTMLElement {
   }
   if (logins && logins.oidcAvailable) kids.push(field('회사 계정 로그인', companyLoginRow(logins)));
   //  [내 AI 계정]·[외부 서비스]는 이 창의 화면이 됐다(#1898) — 더는 밖으로 내보내지 않는다.
-  //  남은 한 줄([내 스킬 · 훅])은 목록·편집기가 큰 화면이라 이 창에 들이지 않았다.
-  kids.push(el('div', { class: 'v2me-more-k', text: '더 자세한 설정' }),
-    moreLink('#/system/me-assets', '내 스킬 · 훅', '내 AI 가 쓰는 스킬과 훅을 켜고 끕니다.', close));
+  //  [내 스킬 · 훅]으로 건너가던 '더 자세한 설정' 줄도 뺐다(원준 지시 2026-08-27): 이 칸은
+  //  '어떻게 들어오는가'인데 그 줄만 축이 달랐고, 관리탭에 같은 자리가 이미 있다.
 
   // ── 회원 탈퇴(#1876) — **이 창 안에서 끝난다.**
   //  종전엔 app.lvly.io 로 새 탭을 띄웠는데, 로그인해서 쓰고 있는 사람이 탈퇴하려면 밖에서 다시
