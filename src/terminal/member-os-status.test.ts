@@ -56,6 +56,53 @@ t("판정은 credExists 를 provisioned 일 때만 신뢰한다(미프로비저�
 });
 
 
+// ── #2148 — 중계 배포(매니지드)에는 **멤버 OS 계정이 아예 없다** ────────────────────────────
+//  중계는 테넌트 tmux 컨테이너로 나가고 그 안의 uid 는 테넌트다(member-exec-relay 머리말).
+//  즉 provisioned 는 구조적으로 영원히 false 인데, 종전엔 그걸 자격 확인의 **전제**로 삼았다.
+//  결과: app.lvly.io 에서 「AI 로그인한 구성원이 없음(T9 관문 미통과)」이 무한 반복되고
+//  자율 파이프라인 가동 성공이 **누적 0건**이었다 — 자격 파일은 디스크에 멀쩡히 있었는데도.
+//  (2026-08-27 실측: `~/.claude/.credentials.json` 509B 존재 · 중계로 `test -f` EXIT=0.)
+//  → 확인을 **실제로 돌렸으면 그 답이 권위다.** passwd 항목 유무는 그걸 뒤집을 근거가 아니다.
+
+t("★★ 중계로 자격을 확인했으면 provisioned 가 false 여도 로그인이다", () => {
+  assert.deepEqual(
+    judgeMemberOs({ ready: true, provisioned: false, homeExists: true, credExists: true, credChecked: true }),
+    { loggedIn: true, orphanHome: false },
+  );
+});
+
+// ★ 고아로 오인하면 컨트롤플레인이 무의미한 복구(healOrphanHomes)를 반복한다 — 매니지드에선
+//  그 유저를 되살릴 자리가 애초에 없다(passwd 는 컨테이너 수명).
+t("★ 중계로 확인했는데 자격이 없으면 '확실히 미로그인'이다(고아 아님)", () => {
+  assert.deepEqual(
+    judgeMemberOs({ ready: true, provisioned: false, homeExists: true, credExists: false, credChecked: true }),
+    { loggedIn: false, orphanHome: false },
+  );
+});
+
+// ★ 중앙 게이트웨이 컨테이너에는 box-spawn 이 없어 ready=false 다(실측). 그 사실이 중계 확인을
+//  뒤집으면 안 된다 — ready 는 '로컬 격리 인프라'의 이야기지 중계의 이야기가 아니다.
+t("★ ready=false(로컬 격리 인프라 없음)여도 중계 확인 결과를 존중한다", () => {
+  assert.equal(
+    judgeMemberOs({ ready: false, provisioned: false, homeExists: false, credExists: true, credChecked: true }).loggedIn,
+    true,
+  );
+});
+
+t("provisioned 면 credChecked 와 무관하게 종전 경로(무회귀)", () => {
+  assert.deepEqual(
+    judgeMemberOs({ ready: true, provisioned: true, homeExists: true, credExists: true, credChecked: false }),
+    { loggedIn: true, orphanHome: false },
+  );
+});
+
+// credChecked 를 안 준 호출(구 호출부·셀프호스트)은 종전 세 갈래 그대로여야 한다.
+t("credChecked 미지정이면 종전 판정 그대로", () => {
+  assert.equal(judgeMemberOs({ ready: true, provisioned: false, homeExists: true, credExists: true }).loggedIn, null);
+  assert.equal(judgeMemberOs({ ready: true, provisioned: false, homeExists: false, credExists: true }).loggedIn, false);
+});
+
+
 // ── #1884 — 세션 폼 [내 계정 로그인]이 어느 AI 를 고르게 할지의 근거 ──────────────────────────
 //  이 판정이 '표에 있나'여야 하는 이유: 표에 없는 하네스(opencode·antigravity)는 자격이 keyring·제공자별로
 //  흩어져 있어 파일 존재로 로그인 여부를 말하면 **거짓말**이 된다(profiles.ts HARNESS_CRED 머리말).
