@@ -1944,7 +1944,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     S.stage = S.stage || 'company'; S.job = S.job || stageOf().opts[1][0];
     if (!S.sources.length) S.sources = ['gdrive', 'notion'];
     if (!S.connected.length) S.connected = S.sources.filter((x) => x !== 'none');
-    S.ai = S.ai || 'Claude'; S.aiConnected = S.ai !== '아직 없어요';
+    // ⚠ 여기서 **S.aiConnected 를 지어내지 않는다**(#1879). 종전엔 `S.ai !== '아직 없어요'` 로 무조건
+    //  덮어썼는데, 그건 `||` 폴백이 아니라 **대입**이라 AI 잇기를 건너뛴 사람도 채팅 단계에 닿는 순간
+    //  참이 됐다. 그 뒤 AI 화면으로 돌아가면 «이어졌어요 · 로그인이 확인됐어요» 라고 말한다 — 서버는
+    //  그런 적이 없다. #1813 이 걷어낸 «900ms 뒤 무조건 연결됐어요» 와 같은 모양의 잔재였다.
+    //  이음 여부는 서버가 답한다(ai-accounts/check) — 화면이 채워 넣을 값이 아니다.
+    //  나머지 둘은 사람의 '답'이라 점프용 기본값이 성립한다(중립값으로 채운다 — 없는 연결을 주장하지 않는다).
+    S.ai = S.ai || 'Claude';
     S.terminal = S.terminal || 'no'; S.app = S.app || 'web';
     if (!S.read.total) S.read.total = 41;
     const past = [];
