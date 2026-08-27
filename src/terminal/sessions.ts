@@ -44,7 +44,7 @@ import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
 } from "./phase.js";
-import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, revokeSessionHookToken } from "./profiles.js";
+import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
@@ -606,6 +606,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  best-effort — 못 구우면 종전대로 공유 토큰으로 떨어진다(무회귀).
     const hookToken = await mintSessionHookToken(ownerId(user), id).catch(() => null);
     if (hookToken) args.push("-e", `LIVELY_TOKEN=${hookToken}`);
+    // MCP 신원(#2234) — 훅과 **같은 이유, 다른 채널**이다. MCP 는 stdio 프록시로 붙고 그 프록시는 매 호출
+    //  공유 `~/.lively/token`(= 키트를 깐 사람) 을 읽으므로, 이 pane 의 MCP 가 전부 남의 신원으로 나갔다.
+    //  실측 2026-08-27: box-jang-* 세션의 whoami 가 yoon 으로 오고 session_rename 이 "내 세션만…" 으로 거절 →
+    //  #1979 세션 자동 이름짓기가 이 박스에서 구조적으로 불가능했다.
+    //  ⚠ 훅 토큰과 **따로** 싣는다 — 권한 폭이 다르다(훅=세션 최소권한, MCP=그 멤버가 가진 만큼).
+    //  ⚠ 값이 없으면(멤버 미상·scope 0) 아무것도 안 실어 종전 경로(공유 파일)로 떨어진다 — 무회귀.
+    const mcpToken = await mintSessionMcpToken(ownerId(user), id).catch(() => null);
+    if (mcpToken) args.push("-e", `LIVELY_MCP_TOKEN=${mcpToken}`);
     if (launch.length) args.push(...launch);
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이

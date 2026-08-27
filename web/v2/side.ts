@@ -154,12 +154,20 @@ function echoesProject(label: string, proj: string): boolean {
   return head + tail >= ca.length;
 }
 
+/** '하던 일'이 이름을 **되풀이만** 하는가 — 그러면 둘째 줄에 쓸 값이 아니다.
+ *  종전엔 완전 일치만 봤는데, 기록 행의 이름은 대화 제목의 앞머리(28자 규칙)라 늘 '앞부분만 같다'가 된다(#2234).
+ *  꼬리 말줄임(…)은 자른 자리 표시일 뿐이므로 떼고 잰다. */
+function restates(work: string, name: string): boolean {
+  const w = norm(work); const n = norm(name).replace(/…+$/, '').trim();
+  return !!n && (w === n || w.startsWith(n));
+}
+
 /** 세션 행에 쓸 글 — ★프로젝트명 반복을 걷어낸다.
  *  프로젝트에서 연 세션은 이름이 **프로젝트명 그대로**인 게 대다수(dev 실측 2026-08-18: 25건 중 14건) — 그 이름은 바로 위
  *  프로젝트 행이 이미 말하고 있다. 같은 제목이 한 화면에 대여섯 번 반복돼 목록이 통째로 안 읽히던 원인이라 지운다.
  *  대신 하네스가 pane 제목에 써 두는 '지금 하는 일'이 그 자리를 받는다 — 실제로 세션을 구분해 주던 건 그 줄이었다.
  *  이름이 따로 있는 세션(사람이 지은 것)만 두 줄이 된다. 원래 이름은 툴팁에 남는다(정보를 버리지는 않는다). */
-export function sessText(s: Sess, projName: string): { main: string; sub: string } {
+export function sessText(s: Sess, projName: string): { main: string; sub: string; named: boolean } {
   const label = String(s.label || '').trim();
   //  멈춘 세션엔 pane 제목이 없다(박스가 없으니 훔쳐볼 화면도 없다) — 그 자리를 **중앙 기록의 대화 제목**
   //  (= 그 세션에 처음 시킨 말)이 받는다. 없으면 종전대로 이름만 남는다.
@@ -169,10 +177,13 @@ export function sessText(s: Sess, projName: string): { main: string; sub: string
   if (projName && label.startsWith(projName)) name = label.slice(projName.length).replace(/^[\s·:\-–—_/|]+/, '').trim();
   if (projName && name && echoesProject(name, projName)) name = '';
   if (isMachineLabel(name)) name = '';
-  const job = work && !HARNESS_TITLES.has(norm(work)) && norm(work) !== norm(name) ? work : '';
-  if (name && job) return { main: name, sub: job };
-  if (name || job) return { main: name || job, sub: '' };
-  return { main: (isIdLabel(label) ? '' : label) || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '' };
+  const job = work && !HARNESS_TITLES.has(norm(work)) && !restates(work, name) ? work : '';
+  //  named = 이 이름이 **그 세션의 이름**에서 나왔나(라벨). false 면 pane 제목·대화 제목을 빌려 온 것이라
+  //   화면에 쓰기는 해도 **기억해 두지는 않는다**(main.ts rememberSessName · #2028 이 세운 규칙의 나머지 반쪽).
+  if (name && job) return { main: name, sub: job, named: true };
+  if (name || job) return { main: name || job, sub: '', named: !!name };
+  const last = (isIdLabel(label) ? '' : label);
+  return { main: last || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '', named: !!last };
 }
 // ★내 세션인가 — 얼굴(남의 세션 표시)과 보관(×)이 **같은 판정**을 써야 한다(상민님 2026-08-19:
 //  "윤상민 아바타 같은 게 있는데 왜 있는지 모르겠고, 그것 때문인지 x 버튼이 보이질 않음").
