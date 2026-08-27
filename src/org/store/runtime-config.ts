@@ -66,7 +66,7 @@ export interface OrgRuntimeConfig {
   announcement: UiAnnouncement | null; // #1454 S3 — 조직 공지 배너. null = 미표시(현행).
   ui_profile: UiProfile; // #1454 S4 — 관리탭 프로파일. 'full'(현행) | 'personal'(개인 워크스페이스 — 조직 운영 섹션 숨김).
   usage_url: string | null; // #1454 S5 — 상단바 '사용량' 칩 링크. null = 칩 미노출(현행).
-  ui_mode: UiMode; // #1719 — 기본 화면 셸. 'classic'(종전 탭 셸, 기본) | 'v2'(새 1탭 셸 — 베타 opt-in). 사람별 로컬 오버라이드는 프론트가 해석.
+  ui_mode: UiMode; // #1719 — 기본 화면 셸. 'v2'(새 1탭 셸, **기본**) | 'classic'(종전 탭 셸 — 명시적 opt-in 전용). 사람별 로컬 오버라이드는 프론트가 해석.
   workspace_kind: WorkspaceKind; // #1750 — 이 워크스페이스(=게이트웨이)의 종류. 'team'(기본 = 기존 셀프호스트) | 'personal'(개인).
   workspace_hub_url: string | null; // #1750 — 계정의 워크스페이스 목록·만들기 허브(매니지드 app.lvly.io/home). null = 없음(셀프호스트 기본).
   worker_policy: WorkerPolicy; // #1780 Stage B — 앱 worker 조직 예산(동시 수·메모리 합·CPU·수명). 각 0=무제한. DB 우선, 비면 코드 기본값.
@@ -101,11 +101,14 @@ const graceMsSafe = (v: unknown): number | null => {
 export interface UiNavConfig { tabs?: Record<string, boolean> }
 export interface UiAnnouncement { text: string; href: string | null; tone: "info" | "warn" }
 export type UiProfile = "full" | "personal";
-// #1719 — 화면 셸. 잡값/부재 = 'classic'(제품 기본 — '부재 = 현행 동작' 규약 준수).
-//  대표 결정(2026-08-20): v2 는 아직 베타 — 완성 전까지 클래식 기본, v2 는 관리탭 [화면] opt-in.
-//  (2026-08-18 의 'v2 기본' 결정을 뒤집음 — v0.1.336 하루 만에 회수, 새 결정이 우선한다.)
+// #1719 — 화면 셸. 잡값/부재 = 'v2'(제품 기본). **classic 은 명시적으로 고른 값일 때만** 나온다.
+//  대표 결정(2026-08-27, 원준): 클래식은 제한적으로만 쓰는 화면이라 **어떤 경로로도 기본이 되지 않는다.**
+//  (2026-08-20 의 '클래식 기본' 결정을 뒤집음 — 새 워크스페이스가 클래식으로 떨어지던 것이 계기.)
+//  ⚠ 이 함수가 새 워크스페이스의 저장값을 정한다 — workspace_create 는 행이 없는 상태에서
+//   updateRuntimeConfig 를 부르고, 그 INSERT 는 여기서 접힌 값을 **명시적으로** 싣는다
+//   (컬럼 DEFAULT 는 그 경로에 관여하지 않는다). 그래서 '기본을 v2 로' 의 정본은 여기다.
 export type UiMode = "v2" | "classic";
-export const uiModeSafe = (v: unknown): UiMode => (v === "v2" ? "v2" : "classic");
+export const uiModeSafe = (v: unknown): UiMode => (v === "classic" ? "classic" : "v2");
 // #1750 — 워크스페이스 종류. 잡값/부재 = 'team'(기존 셀프호스트 박스 = 팀 워크스페이스, 무설정 하위호환).
 export type WorkspaceKind = "personal" | "team";
 export const workspaceKindSafe = (v: unknown): WorkspaceKind => (v === "personal" ? "personal" : "team");
@@ -174,7 +177,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     announcement: announcementSafe(row?.announcement), // #1454 S3 — 잡값/부재면 null = 미표시(현행)
     ui_profile: uiProfileSafe(row?.ui_profile), // #1454 S4 — 잡값/부재면 'full'(현행)
     usage_url: usageUrlSafe(row?.usage_url), // #1454 S5 — 빈값/부재면 null = 칩 미노출(현행)
-    ui_mode: uiModeSafe(row?.ui_mode), // #1719 — 잡값/부재면 'classic'(제품 기본 — v2 는 베타 opt-in)
+    ui_mode: uiModeSafe(row?.ui_mode), // #1719 — 잡값/부재면 'v2'(제품 기본 — classic 은 명시적으로 고른 값일 때만)
     workspace_kind: workspaceKindSafe(row?.workspace_kind), // #1750 — 잡값/부재면 'team'(기존 박스 = 팀)
     workspace_hub_url: usageUrlSafe(row?.workspace_hub_url), // #1750 — 빈값/부재면 null(허브 없음)
     worker_policy: resolveWorkerPolicy(row?.worker_policy), // #1780 Stage B — DB 우선, 비면 코드 기본값(수·메모리 상한 / CPU·수명 0=끔)

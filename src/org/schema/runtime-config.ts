@@ -178,13 +178,31 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS announcement JSONB;
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_profile TEXT NOT NULL DEFAULT 'full';
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS usage_url TEXT;
-    -- ── ui_mode(#1719): 기본 화면 셸 — 'v2'(새 1탭 셸: 사이드바·리브 대화·위젯·런치패드, **베타**) | 'classic'(종전 탭 셸).
-    --  기본값 'classic' (대표 결정 2026-08-20: v2 는 아직 베타 — 완성 전까지 새 설치 포함 전부 클래식이 기본,
-    --   v2 는 관리탭 [화면] 에서 조직/브라우저 단위 opt-in). 한때 'v2' 기본이었다(v0.1.336, 당일 회수) —
-    --   그 짧은 창에 마이그레이션을 탄 DB 는 행 값이 'v2' 로 남으므로 관리탭에서 내린다(행 값은 여기서 안 건드린다).
+    -- ── ui_mode(#1719): 기본 화면 셸 — 'v2'(새 1탭 셸: 사이드바·리브 대화·위젯·런치패드) | 'classic'(종전 탭 셸).
+    --  기본값 'v2' (대표 결정 2026-08-27, 원준: **클래식이 기본이 되는 상황을 하나도 두지 않는다** — 클래식은
+    --   제한적으로만 쓰는 화면이라 '고른 사람'에게만 간다. 2026-08-20 의 '클래식 기본' 결정을 뒤집는다).
     --   클래식 코드는 그대로 남아 ?embed=1 로 새 셸의 런치패드 '앱'으로 실린다. 사람별로는 브라우저 로컬 오버라이드(web/lib/state.ts uiMode)가 우선.
-    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_mode TEXT NOT NULL DEFAULT 'classic';
-    ALTER TABLE org_runtime_config ALTER COLUMN ui_mode SET DEFAULT 'classic';  -- v0.1.336 으로 컬럼이 이미 생긴 DB 의 컬럼 기본값 교정(멱등)
+    --  ⚠ 새 워크스페이스의 저장값을 정하는 것은 이 DEFAULT 가 아니라 store/runtime-config.ts uiModeSafe 다
+    --   (workspace_create → updateRuntimeConfig 의 INSERT 가 값을 **명시적으로** 싣는다). 여기 DEFAULT 는
+    --   그 경로를 타지 않는 직접 INSERT 를 위한 이중 안전장치다 — 둘을 같은 값으로 유지할 것.
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_mode TEXT NOT NULL DEFAULT 'v2';
+    -- 클래식 시대 닫기(2026-08-27) — **컬럼 기본값이 아직 'classic' 인 DB 에서 딱 한 번** 돈다.
+    --  2026-08-20 ~ 08-27 사이에 만들어진 워크스페이스는 아무도 고르지 않았는데 행 값이 'classic' 으로
+    --  굳었다(그때의 컬럼 기본값 + uiModeSafe 폴백). 기본값만 바꾸면 그 행들은 영영 클래식으로 남아
+    --  "클래식이 기본인 상황"이 그대로 살아 있게 된다 — 그래서 그 시대의 행을 함께 올린다.
+    --  ⚠ 조건 없는 UPDATE 로 두면 안 된다: 그러면 관리탭 [화면] 에서 클래식을 **고른** 조직이
+    --   게이트웨이 재시작마다 v2 로 되살아난다(org_node.shared 이관 선례와 같은 함정). 컬럼 기본값이
+    --   'classic' 인 순간은 이 전환을 처음 태우는 부팅 단 한 번뿐이라, 그 순간을 걸쇠로 쓴다.
+    --  ⚠ 이 문장은 소유자 role 로(바인딩 없는 스키마 자식 프로세스) 돌아 **전 워크스페이스의 행**을 덮는다.
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_attribute a
+                   JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                  WHERE a.attrelid = 'org_runtime_config'::regclass AND a.attname = 'ui_mode'
+                    AND pg_get_expr(d.adbin, d.adrelid) LIKE '%classic%') THEN
+        UPDATE org_runtime_config SET ui_mode='v2' WHERE ui_mode='classic';
+        ALTER TABLE org_runtime_config ALTER COLUMN ui_mode SET DEFAULT 'v2';
+      END IF;
+    END $$;
     -- ── workspace_kind(#1750): 이 워크스페이스(=이 게이트웨이)의 종류 — 'team'(여러 사람이 쓰는 팀 워크스페이스) |
     --   'personal'(한 사람의 개인 워크스페이스). 기본 'team' = 기존 셀프호스트 박스는 무설정으로 팀 워크스페이스가 된다
     --   (상민님 결정 2026-08-18: "기존 셀프호스팅 단일 워크스페이스는 팀 워크스페이스"). 매니지드는 컨트롤플레인이 가입 시 personal 로 push.

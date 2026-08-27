@@ -331,7 +331,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (p !== "full" && p !== "personal") throw new HttpError(400, "ui_profile 은 full|personal 만 허용됩니다");
         patch.ui_profile = p;
       }
-      // ui_mode(#1719): 기본 화면 셸 — 'classic'(종전 탭 셸, 제품 기본) | 'v2'(새 1탭 셸, 베타 opt-in). 관리탭 [화면] 이 쓴다.
+      // ui_mode(#1719): 기본 화면 셸 — 'v2'(새 1탭 셸, 제품 기본) | 'classic'(종전 탭 셸, **명시적으로 고를 때만**). 관리탭 [화면] 이 쓴다.
       if (input.ui_mode !== undefined) {
         const m = String(input.ui_mode);
         if (m !== "v2" && m !== "classic") throw new HttpError(400, "ui_mode 는 v2|classic 만 허용됩니다");
@@ -576,7 +576,7 @@ export const runtimeConfigCapabilities: Capability[] = [
       }).nullable().optional().describe("S3 조직 공지 배너 — null 로 내림(기본 null = 미표시)"),
       ui_profile: z.enum(["full", "personal"]).optional().describe("S4 관리탭 프로파일 — personal 이면 조직 운영 섹션 숨김(기본 full = 현행)"),
       usage_url: z.string().nullable().optional().describe("S5 상단바 '사용량' 칩 링크 — null/'' 로 내림(기본 null = 미노출)"),
-      ui_mode: z.enum(["v2", "classic"]).optional().describe("#1719 기본 화면 셸 — v2(새 1탭 셸, 기본) | classic(종전 탭 셸). 사람별 로컬 오버라이드는 브라우저에서"),
+      ui_mode: z.enum(["v2", "classic"]).optional().describe("#1719 기본 화면 셸 — v2(새 1탭 셸, 기본) | classic(종전 탭 셸 — 고를 때만, 어떤 경로로도 기본이 되지 않는다). 사람별 로컬 오버라이드는 브라우저에서"),
       workspace_kind: z.enum(["personal", "team"]).optional().describe("#1750 이 워크스페이스의 종류 — team(기본: 여러 사람의 팀 워크스페이스, 기존 셀프호스트) | personal(한 사람의 개인 워크스페이스). 좌상단 스위처 배지·승격 동선의 근거"),
       workspace_hub_url: z.string().nullable().optional().describe("#1750 계정의 워크스페이스 목록·만들기 허브 링크(매니지드 app.lvly.io/home). null/'' 로 내림(기본 null = 셀프호스트)"),
       writeback_notice: z.string().nullable().optional().describe("세션종료 너지 문구(null=기본값)"),
