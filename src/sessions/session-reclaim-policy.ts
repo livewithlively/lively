@@ -58,6 +58,23 @@ export interface SessionReclaimPolicy {
    * 스왑이 없는 박스(SwapTotal=0)·못 재는 플랫폼에서는 이 축이 자동으로 비활성이다.
    */
   pressure_swap_pct: number;
+  /**
+   * #2148 **attach 전용 TTL(분)** — 탭이 붙어 있어도(attached>0) 이 시간 넘게 입출력이 없으면 회수한다.
+   *  0 = 종전 동작(attach 를 무기한 존중 = 회수 안전 불변식 ②).
+   *
+   * 왜 필요(2026-08-27 app.lvly.io 실측): attach 는 '지금 보는 중'을 뜻하지만 **그 신호가 거짓일 수 있다.**
+   *  원격 tmux(매니지드)에서 attach 는 컨테이너 안 `docker exec` 으로 뜨는데, 웹 탭이 재연결할 때마다
+   *  옛 클라이언트가 안 끊겨 세션 하나에 6~7개가 쌓였다. `session_attached` 가 영구히 >0 이 되어
+   *  **유휴 6~8시간 세션이 어느 회수 경로로도 안 걷혔다.** 근본 수정은 그 유령을 끊는 것이고
+   *  (terminal-pty detachGhostClients), 이 값은 **그게 또 새더라도 회수가 멈추지 않게 하는 안전망**이다.
+   *
+   * 같은 교리가 테넌트 축에는 이미 있다(#1445 `attach_idle_ttl_min` — "탭 방치가 곧 상시 가동이면 안 된다").
+   *  세션 축만 예외로 남아 있었다.
+   *
+   * ⚠ idle_ttl_minutes 보다 **길게** 잡아라 — attach 는 그래도 사람이 붙어 있었다는 신호다.
+   *  값이 그보다 짧으면 attach 가 오히려 빨리 걷히는 역전이 생긴다.
+   */
+  attach_idle_minutes: number;
 }
 
 export type SessionReclaimPolicyPatch = Partial<SessionReclaimPolicy>;
@@ -68,6 +85,7 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   pressure_used_pct: 0,      // 0 = 압박 회수 끔(무회귀)
   pressure_idle_minutes: 60, // 켰을 때의 기본 하한 — '한 시간 넘게 손 안 댄 세션'
   pressure_swap_pct: 0,      // #1675 ⑤ — 0 = 끔(무회귀). 켜는 값은 90 안팎을 권한다(그 아래는 평시에도 닿는 박스가 있다)
+  attach_idle_minutes: 0,    // #2148 — 0 = 끔(무회귀). 셀프호스트 동작은 종전 그대로다.
 };
 
 // 관리탭·검증 노출 상수 — 0(끔) ~ 43200분(30일; 그 이상은 사실상 안 켠 것).
@@ -120,6 +138,8 @@ const policy = definePolicy<SessionReclaimPolicy>({
     // #1675 ⑤ — 신규 노브라 loose 를 쓰지 않는다(knob.ts 의 방어적 해석이 정본). 0 은 '끔'이라는 의미 있는 선택이라
     //  null/"" 이 0 으로 뒤집히면 안 된다.
     pressure_swap_pct: { env: "LIVELY_SESSION_PRESSURE_SWAP_PCT", min: RECLAIM_PRESSURE_PCT_MIN, max: RECLAIM_SWAP_PCT_MAX },
+    // #2148 — 신규 노브라 loose 를 쓰지 않는다(0='끔'이 의미 있는 선택이므로 null/"" 이 0 으로 뒤집히면 안 된다).
+    attach_idle_minutes: { env: "LIVELY_SESSION_ATTACH_IDLE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
   },
 });
 

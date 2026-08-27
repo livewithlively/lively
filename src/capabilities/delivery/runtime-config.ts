@@ -249,6 +249,13 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(n) || n < RECLAIM_PRESSURE_PCT_MIN || n > RECLAIM_SWAP_PCT_MAX) throw new HttpError(400, `session_reclaim_policy.pressure_swap_pct 는 ${RECLAIM_PRESSURE_PCT_MIN}~${RECLAIM_SWAP_PCT_MAX} 정수(%)여야 합니다 (0=스왑 압박 회수 끔)`);
           patchIn.pressure_swap_pct = Math.floor(n);
         }
+        // #2148 attach 전용 TTL — attached>0 이어도 이 시간 넘게 입출력이 없으면 회수한다(0=끔, 종전 동작).
+        //  ⚠ 위 스왑 축 주석과 같은 함정: 여기와 아래 zod 둘 다에 있어야 값이 살아남는다.
+        if (s.attach_idle_minutes !== undefined) {
+          const n = Number(s.attach_idle_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.attach_idle_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=attach 를 무기한 존중)`);
+          patchIn.attach_idle_minutes = Math.floor(n);
+        }
         patch.session_reclaim_policy = patchIn;
       }
       // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구.
@@ -628,6 +635,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         pressure_used_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_PRESSURE_PCT_MAX).optional().describe("메모리 사용률이 이 %를 넘으면 평시 TTL 을 기다리지 않고 회수(#1220). 0=끔. RSS 큰 세션부터 걷고 임계 밑으로 내려가면 멈춘다. ⚠ 상한이 earlyoom 발동선(94%)보다 낮게 잡혀 있다(#1675 ⑤) — 그 위 값은 earlyoom 이 먼저 죽여 영영 발동하지 못한다"),
         pressure_idle_minutes: z.number().int().min(0).max(43_200).optional().describe("압박 회수가 쓰는 완화 idle 기준(분) — 압박이어도 이보다 최근에 쓴 세션은 안 건드린다. 평시 TTL 보다 짧게(예: 평시 1440·압박 60)"),
         pressure_swap_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_SWAP_PCT_MAX).optional().describe("스왑 사용률이 이 %를 넘으면 압박으로 보고 회수(#1675 ⑤). 0=끔. 물리 메모리가 여유로워 보여도 스왑이 차 있으면 그 박스는 이미 벼랑이다 — 전면장애 실측이 물리 82%·스왑 99.9% 였다. earlyoom 은 -s 100 으로 스왑을 안 보므로 이 축은 경합 없이 게이트웨이가 먼저 잡는다"),
+        attach_idle_minutes: z.number().int().min(0).max(43_200).optional().describe("탭이 붙어 있어도(attached>0) 이 분을 넘게 입출력이 없으면 회수(#2148). 0=끔(attach 를 무기한 존중, 종전 동작). idle_ttl_minutes 보다 길게 잡아라. 원격 tmux 에서 재연결 잔재가 attached 를 영구 참으로 만들면 회수가 영영 멈추는데, 그 안전망이다"),
       }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택)"),
       delegate_policy: z.object({
         stall_ms: z.number().int().min(STALL_MS_MIN).max(STALL_MS_MAX).optional().describe("위탁 워커가 시작 후 한 바이트도 못 낸 채 이 ms 를 넘기면 조기 종결(#1101). 0=가드 끔. 0 초과인데 60000 미만이면 60000 으로 올린다 — 너무 짧으면 멀쩡한 작업을 죽인다"),

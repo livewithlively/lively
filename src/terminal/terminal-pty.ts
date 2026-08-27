@@ -102,6 +102,49 @@ function spawnAttachTerm(bin: string, args: string[], env: Record<string, string
 }
 
 const liveTerms = new Set<AttachTerm>();  // 이 인스턴스가 띄운 살아있는 attach 클라 — 종료 훅이 일괄 kill 한다.
+
+// ── 유령 attach 정리(#2148) ────────────────────────────────────────────────
+// **원격 tmux(매니지드)에서는 `term.kill()` 이 attach 클라이언트를 죽이지 못한다.**
+//  중계(LIVELY_TMUX_EXEC)는 `docker exec` 로 tmux 컨테이너 **안에** attach 를 띄운다. WS 가 닫혀
+//  중계 프로세스를 SIGTERM 하면 죽는 건 **중계뿐**이고, 컨테이너 안 `tmux -CC attach` 는 그대로 산다
+//  (도커는 exec 클라이언트가 끊겨도 exec 을 죽이지 않고, control-mode 클라는 SIGHUP 을 무시한다 — 위 (3)).
+//  그래서 탭이 재연결할 때마다 클라이언트가 하나씩 쌓인다.
+//
+//  실측(2026-08-27 app.lvly.io): 세션 하나에 `tmux -CC attach` 가 6~7개(경과 07:46~08:54로 흩어짐).
+//  `session_attached` 가 영구히 >0 이 되어 **코어 리퍼의 불변식 ②(attached 면 제외)가 영원히 발동**했다 —
+//  유휴 6~8시간 세션이 어느 회수 경로로도 안 걷혔다. #1445 의 'attach 방치'보다 나쁘다: 사람이 탭을
+//  닫아도 안 풀린다.
+//
+//  고치는 자리는 여기다 — **그 세션의 마지막 WS 가 닫힐 때** 남은 클라이언트를 끊는다.
+//  · 마지막일 때만 하는 이유: 세션 공유(session-share)로 두 사람이 같은 판을 볼 수 있다.
+//    WS 가 하나라도 남아 있으면 그 클라이언트는 유령이 아니다.
+//  · `detach-client -s <세션>` 은 그 세션의 **모든** 클라이언트를 끊는다 — WS 가 0인 시점이라 정확히 유령만 남는다.
+//  · 로컬 tmux(셀프호스트)에서도 무해하다: term.kill 로 이미 클라가 사라졌으므로 끊을 대상이 없다(no-op).
+const attachRefs = new Map<string, number>();
+
+/** attach 시작 — 이 세션의 살아있는 WS 수를 1 늘린다. (테스트가 상태를 만들 수 있게 export) */
+export function acquireAttachRef(id: string): void {
+  attachRefs.set(id, (attachRefs.get(id) ?? 0) + 1);
+}
+/** attach 종료 — 1 줄이고, **이 세션의 마지막이었나**를 답한다(순수 카운팅, 테스트 대상). */
+export function releaseAttachRef(id: string): boolean {
+  const n = (attachRefs.get(id) ?? 1) - 1;
+  if (n > 0) { attachRefs.set(id, n); return false; }
+  attachRefs.delete(id);
+  return true;
+}
+/** 테스트·진단용 — 지금 이 세션에 잡혀 있는 WS 수. */
+export function attachRefCount(id: string): number { return attachRefs.get(id) ?? 0; }
+
+/**
+ * 남은 attach 클라이언트를 끊는다. **비치명**(실패해도 회수는 리퍼의 attach TTL 안전망이 받는다).
+ * argv 는 attach 를 띄울 때 쓴 것을 **그대로 재사용**한다 — 중계 argv 는 요청 컨텍스트(테넌트 슬러그)를
+ *  읽어 만들어지는데, ws 'close' 콜백은 그 컨텍스트 밖이라 여기서 다시 만들면 던진다.
+ */
+function detachGhostClients(bin: string, prefix: string[], id: string, env: Record<string, string>): void {
+  void execFileP(bin, [...prefix, "detach-client", "-s", id], { timeout: 5000, env, windowsHide: true })
+    .catch(() => { /* 세션이 이미 없거나 tmux 무응답 — 비치명 */ });
+}
 // 스폰 실패 폭주 차단(#869) — node-pty spawn 이 반복 실패하면(예: 노드에서 fd 고갈 EMFILE) 매 실패가 pty fd 를 새게 해
 //  가속 붕괴한다(실측: 노드 에이전트 fd 1543개, 10K 실패). 세션별 최근 연속 실패를 세어 임계 초과 시 **스폰 자체를 건너뛰고**
 //  즉시 닫는다 — 할당을 안 하니 누수 원천 차단(정상 스폰 1회로 스트릭 리셋). 브라우저 재연결은 하되 pty 는 안 뜬다.
@@ -445,6 +488,7 @@ export function attachSession(ws: AttachSocket, id: string): void {
       const [abin, ...aprefix] = relay.length ? relay : [TMUX_BIN];
       term = spawnAttachTerm(abin!, [...aprefix, ...args], env);
       liveTerms.add(term); // 종료 훅이 회수할 수 있게 추적(#687 고아 방지)
+      acquireAttachRef(id);  // #2148 — 마지막 WS 가 닫힐 때 유령 클라이언트를 끊기 위한 참조수
       spawnFailStreak.delete(id); // 정상 스폰 → 실패 스트릭 리셋(#869)
       // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
       //  그 에코가 control 도입자(\x1bP1000p)보다 먼저 도착해 클라가 raw 로 오인 → 명령 텍스트가 화면에 뜬다.
@@ -474,10 +518,17 @@ export function attachSession(ws: AttachSocket, id: string): void {
       });
       // 회수는 **SIGTERM 명시** — 기본 SIGHUP 은 tmux -CC 클라가 무시해 좀비로 남는다(위 (3)). 여기가 연결 단위
       //  회수의 유일한 관문이라(탭 종료·heartbeat terminate·에러 전부 이 경로) 시그널 하나가 곧 누수 여부다.
+      // ⚠ 'close' 와 'error' 에 **둘 다** 걸리므로 두 번 불릴 수 있다 — 참조수를 두 번 빼면
+      //  아직 보고 있는 다른 탭의 클라이언트까지 끊는다. 한 번만 풀리게 잠근다.
+      let released = false;
       const cleanup = () => {
         pump?.close();                        // 대기 입력 폐기 + 타이머 해제(#1541 — 닫힌 세션에 유령 입력·타이머 잔류 금지)
         if (term) liveTerms.delete(term);
         try { term?.kill("SIGTERM"); } catch { /* already gone */ }
+        if (released) return;
+        released = true;
+        // #2148 — 이 세션의 마지막 WS 였다면 컨테이너 안에 남은 유령 클라이언트를 끊는다(위 머리말).
+        if (releaseAttachRef(id)) detachGhostClients(abin!, aprefix, id, env);
       };
       ws.on("close", cleanup);
       ws.on("error", cleanup);

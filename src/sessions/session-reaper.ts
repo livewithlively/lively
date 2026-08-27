@@ -7,7 +7,9 @@
 //
 // ⚠ **회수 안전 불변식**(정당 세션 오kill 금지 — #687 교훈):
 //  ① managed(상시 세션): keep-alive 가 소유 → 회수 무의미(되살아남). 제외.
-//  ② attached>0: 누가 보는 중 → 제외.
+//  ② attached>0: 누가 보는 중 → 제외. **단 무기한은 아니다**(#2148) — `attach_idle_minutes` 를 켜면 그 시간 넘게
+//     입출력이 없는 attach 는 존중하지 않는다(원격 tmux 에서 유령 클라이언트가 이 신호를 영구 참으로 만들었다).
+//     0(기본)이면 종전대로 무기한 존중이라 셀프호스트 동작은 그대로다.
 //  ③ busy(작업 중)·waiting(승인/선택 대기): 죽이면 진행 중 작업·대기 중 결정을 잃는다 → 제외.
 //  ④ **desired-state(org_session_state) 레코드가 있는 세션만 회수** — 회수 = 반드시 복원 가능(restorable)해야 한다.
 //     레코드 없는(구버전·managed) 세션은 회수해도 복원 못 하므로 손대지 않는다(회수 ⊆ 복원가능 보장).
@@ -180,7 +182,22 @@ export async function reapIdleSessions(deps?: {
   for (const s of live) {
     if (managedIds.has(s.id)) { skipped++; reasons.managed++; continue; }                 // ① managed
     if (!restorable.has(s.id)) { skipped++; reasons.noState++; continue; }                // ④ 복원 불가면 손대지 않음
-    if (s.attached) { skipped++; reasons.attached++; continue; }                          // ② 누가 보는 중
+    // ⑤ 유휴 판정에 쓸 마지막 활동 시각 — ② 의 attach TTL 판정도 이 값을 쓰므로 **먼저** 구한다.
+    //   (아래 ⑤ 원문 주석이 세 축의 이유를 그대로 설명한다.)
+    const lastSeen = Math.max(s.lastActive || 0, s.lastAttached || 0);  // 마지막 활동 = 작업 또는 열람
+    const idleSince = lastSeen || s.created || 0;
+    // ② 누가 보는 중 — **다만 무기한은 아니다**(#2148).
+    //  attach 는 '지금 보는 중'을 뜻하지만 그 신호가 거짓일 수 있다: 원격 tmux 에서는 웹 탭이 재연결할 때마다
+    //  옛 클라이언트가 안 끊겨 쌓이고, 그러면 `attached>0` 이 영구히 참이 되어 **회수가 영원히 멈춘다**
+    //  (2026-08-27 실측: 세션당 유령 6~7개 · 유휴 6~8시간 세션이 어느 경로로도 안 걷힘).
+    //  근본 수정은 그 유령을 끊는 것이고(terminal-pty detachGhostClients), 여기 TTL 은 **그게 또 새더라도
+    //  회수가 멈추지 않게 하는 안전망**이다. 0 = 종전대로 무기한 존중(셀프호스트 기본 · 무회귀).
+    //  같은 교리가 테넌트 축엔 이미 있다(#1445 attach_idle_ttl_min) — 세션 축만 예외로 남아 있었다.
+    if (s.attached) {
+      const attachTtl = policy.attach_idle_minutes ?? 0;
+      const attachCutoffSec = Math.floor(now() / 1000) - attachTtl * 60;
+      if (attachTtl <= 0 || !idleSince || idleSince > attachCutoffSec) { skipped++; reasons.attached++; continue; }
+    }
     // ③ 작업/대기 중 — **접속 여부와 무관한 `working` 을 함께 본다.** agentState 는 attached==0 이면 busy 여도
     //  offline 이 되므로(탭=온라인 규칙), 그 값만 보면 **아무도 안 붙은 채 크론·빌드가 도는 세션이 '작업 중'으로
     //  안 잡혀** 회수된다(상민님 지적 2026-07-28). lastActive(⑤)는 폴링 타이밍에 따라 놓칠 수 있어 보호가 얇았다.
@@ -197,8 +214,6 @@ export async function reapIdleSessions(deps?: {
     //   된 순간, 42분 전까지 열람 중이던 세션이 'lastActive 149시간 전' 으로 판정돼 회수됐다(그 세션은 대화만 하고
     //   있어서 busy 로 관측된 적이 오래됐다). attached 는 '지금 보는 중'만 말하고 '방금까지 보고 있었다'는
     //   lastAttached 에만 있다 — 네트워크가 잠깐 끊기는 것과 방치를 가르는 유일한 신호다.
-    const lastSeen = Math.max(s.lastActive || 0, s.lastAttached || 0);  // 마지막 활동 = 작업 또는 열람
-    const idleSince = lastSeen || s.created || 0;
     if (!idleSince || idleSince > cutoffSec) { skipped++; reasons.recent++; continue; }  //   TTL 미만 = 최근 → 보존
     candidates.push({ id: s.id, idleSince });
   }

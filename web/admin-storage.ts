@@ -233,6 +233,9 @@ function storageEditor(detail, data) {
     // ── ② 정책 — idle 세션 자동 회수(#1059 F) ── 그 시간 넘게 idle 인 세션을 회수(desired-state 보존→복원 가능). 0=끔(무회귀).
     const srp = st.session_reclaim_policy || {};
     const idleTtlIn = numIn(srp.idle_ttl_minutes ?? 0, 0, 43200);
+    // #2148 attach 전용 TTL — attached 를 무기한 존중하면 '탭이 붙어 있다'는 신호가 거짓일 때 회수가 영영 멈춘다
+    //  (원격 tmux 재연결 잔재가 그 신호를 영구 참으로 만든 실측이 있다). 테넌트 축엔 이미 같은 노브가 있다(#1445).
+    const attachIdleIn = numIn(srp.attach_idle_minutes ?? 0, 0, 43200);
     // #1220 압박 회수 — 사용률이 임계를 넘으면 평시 TTL 을 안 기다리고 걷는다(earlyoom 이 예고 없이 죽이기 전에).
     //  ⚠ 상한 90 은 서버 정책(RECLAIM_PRESSURE_PCT_MAX)과 같은 값이다 — earlyoom(94%)보다 늦은 값을
     //   **애초에 고를 수 없게** 한다(#1675 ⑤: 어니스트는 95 로 켜 두고 한 번도 발동하지 못했다).
@@ -245,7 +248,10 @@ function storageEditor(detail, data) {
     reclaimBtn.addEventListener('click', async () => {
       reclaimBtn.disabled = true;
       try {
-        await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_reclaim_policy: { idle_ttl_minutes: Number(idleTtlIn.value) } }) });
+        await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_reclaim_policy: {
+          idle_ttl_minutes: Number(idleTtlIn.value),
+          attach_idle_minutes: Number(attachIdleIn.value),
+        } }) });
         toast('저장됨 — 다음 회수 주기(5분)부터 적용됩니다.'); load();
       } catch (e: any) { toast(e.message, true); reclaimBtn.disabled = false; }
     });
@@ -365,9 +371,11 @@ function storageEditor(detail, data) {
         el('strong', { text: 'idle 세션 자동 회수' }),
         ...(srcHint(st.session_reclaim_policy_source) ? [srcHint(st.session_reclaim_policy_source)] : []),
         el('div', { class: 'storage-fields' },
-          el('label', {}, el('span', { text: 'idle 임계(분, 0=끔)' }), idleTtlIn)),
+          el('label', {}, el('span', { text: 'idle 임계(분, 0=끔)' }), idleTtlIn),
+          el('label', {}, el('span', { text: '접속 중 임계(분, 0=끔)' }), attachIdleIn)),
         el('p', { class: 'storage-calc', text: '이 시간 넘게 idle 인 세션을 5분 주기로 회수합니다. 작업내용(대화·설정)은 보존돼 목록에 “복원 가능”으로 남고, 열면 이어집니다(admission control 대신 채택).' }),
-        el('p', { class: 'admin-hint' }, ...uiText('0=끔(무회귀, 기본). 상시(managed)·접속 중·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.')),
+        el('p', { class: 'admin-hint' }, ...uiText('0=끔(무회귀, 기본). 상시(managed)·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.')),
+        el('p', { class: 'admin-hint' }, ...uiText('“접속 중 임계”는 탭이 열려 있어도 그 시간 넘게 입출력이 없으면 회수합니다(0=탭이 열려 있으면 무기한 보존). idle 임계보다 길게 잡으세요 — 탭이 열려 있다는 건 그래도 사람이 보고 있었다는 신호입니다.')),
         el('div', { class: 'storage-actions' }, reclaimBtn)),
       el('div', { class: 'storage-block' },
         el('strong', { text: '메모리 압박 회수' }),
