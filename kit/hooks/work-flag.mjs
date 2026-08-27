@@ -277,15 +277,25 @@ try {
     //  되고, 툴마다 실행되는 핫패스에 왕복을 얹지 않는다). 종전 `.active` 플래그를 `.state`(내용=마지막 보고 상태)로
     //  대체 — 전이 판정에 '지난번에 뭐라고 했나'가 필요하기 때문.
     const phase = reportedPhase(input, event);
+    const jobs = [];
     if (token && phase) {
       const stateFile = join(FLAG_DIR, `${boxId}.state`);
       let last = ""; try { last = readFileSync(stateFile, "utf8").trim(); } catch { /* 첫 보고 */ }
       if (last !== phase || !cooling(stateFile, 60_000)) {
         mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
         writeFileSync(stateFile, phase);
-        await post("/active", { state: phase });
+        jobs.push(post("/active", { state: phase }));
       }
     }
+    // #2197 — 사람이 **방금 친 말**을 그 순간 보고한다(사이드바 세션 행 둘째 줄의 정본 — 종전엔 화면이 대화 꼬리를 뒤졌고,
+    //  노드 세션은 기록이 턴 끝에만 중앙에 올라와 '방금 친 말'이 턴이 끝나야 보였다). 스로틀 없음 — 사람 손 속도다.
+    //  페이로드 이름: claude 원조 `prompt` · 어댑터/구버전 `prompt_text`. 서버가 다시 다듬으므로(300자) 여긴 상한만 건다.
+    //  /active 와 **나란히** 보낸다 — 이 훅은 프롬프트 처리 앞에서 도는 핫패스라 왕복을 직렬로 쌓지 않는다.
+    if (token && event === "UserPromptSubmit") {
+      const p = String(input?.prompt ?? input?.prompt_text ?? "").replace(/\s+/g, " ").trim();
+      if (p) jobs.push(post("/last-prompt", { prompt: Array.from(p).slice(0, 600).join("") }));
+    }
+    await Promise.all(jobs);
   } catch { /* fail-open */ }
 } catch { /* fail-open */ }
 process.exit(0);

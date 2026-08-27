@@ -224,6 +224,28 @@ const states = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui
   s.length === 1 && s[0] === "busy" ? ok("E13 UserPromptSubmit → state=busy(턴 시작)") : bad("E13 busy", `실제=${JSON.stringify(s)}`);
 }
 
+// ── E13b(#2197): UserPromptSubmit 은 **방금 친 말**도 함께 보고한다 — 사이드바 세션 행 둘째 줄의 정본 ──────
+// /active 와 나란히 POST …/last-prompt {prompt}. claude 원조 이름은 prompt, 구 어댑터는 prompt_text — 둘 다 받는다.
+//  빈 프롬프트는 안 보낸다(빈 줄을 정본으로 덮으면 잘 서 있던 줄이 사라진다). 다른 이벤트는 프롬프트가 아니다.
+{
+  const lp = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui/terminal/sessions/${BOX}/last-prompt`)
+    .map((x) => { try { return JSON.parse(x.body).prompt; } catch { return null; } });
+  fresh();
+  const r1 = await runHook({ session_id: `ph${++n}`, hook_event_name: "UserPromptSubmit", prompt: "  사이드바  고쳐 줘\n지금 " });
+  const a = lp(r1);
+  a.length === 1 && a[0] === "사이드바 고쳐 줘 지금" ? ok("E13b UserPromptSubmit → POST /last-prompt {prompt}(공백 접힘)") : bad("E13b prompt", `실제=${JSON.stringify(a)}`);
+  states(r1).length === 1 ? ok("E13b /active 보고는 그대로 함께 간다") : bad("E13b active", `실제=${JSON.stringify(states(r1))}`);
+  fresh();
+  const r2 = await runHook({ session_id: `ph${++n}`, hook_event_name: "UserPromptSubmit", prompt_text: "옛 이름" });
+  lp(r2)[0] === "옛 이름" ? ok("E13b prompt_text(구 어댑터 이름)도 받는다") : bad("E13b prompt_text", `실제=${JSON.stringify(lp(r2))}`);
+  fresh();
+  const r3 = await runHook({ session_id: `ph${++n}`, hook_event_name: "UserPromptSubmit", prompt: "   " });
+  lp(r3).length === 0 ? ok("E13b 빈 프롬프트는 보내지 않는다") : bad("E13b empty", `실제=${JSON.stringify(lp(r3))}`);
+  fresh();
+  const r4 = await runHook({ session_id: `ph${++n}`, hook_event_name: "Stop", prompt: "x" });
+  lp(r4).length === 0 ? ok("E13b 다른 이벤트에선 보내지 않는다(UserPromptSubmit 만)") : bad("E13b other-event", `실제=${JSON.stringify(lp(r4))}`);
+}
+
 // ── E14: 턴 종료(Stop) → idle. **전이는 스로틀에 막히면 안 된다** ─────────────────────
 // 같은 상태의 반복만 60초 스로틀 대상이다. 전이(busy→idle)가 막히면 끝난 세션이 계속 '작업 중'으로 보이고,
 //  회수(F)도 그 세션을 영원히 보호한다 — 스로틀이 정보를 삼키는 가장 위험한 지점이라 여기서 못박는다.
