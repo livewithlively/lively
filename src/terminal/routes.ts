@@ -370,9 +370,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt). 사이드바 둘째 줄의 정본 —
     //  종전엔 화면이 세션마다 대화 꼬리(48~240KB)를 받아 찾았고, 노드 세션은 기록이 턴 끝에만 올라와 실시간이 아니었다.
     //  박스·노드 세션 모두 같은 행에 있다(#1791). 없으면(옛 훅·코덱스·셸) 화면이 종전 꼬리 조회로 폴백한다.
+    //  ⚠ 복원 가능 행(localRestorable)도 덮는다 — dev 실측 목록 350행 중 323행이 그 부류(tmux 가 죽은 지난 세션)라,
+    //   라이브만 덮으면 사이드바 '지난 세션' 묶음이 통째로 꼬리 조회 폴백(권한 403 → 빈 줄)에 남는다.
     try {
-      const pm = await lastPromptsFor([...local, ...remote].map((s) => s.id));
-      for (const s of [...local, ...remote]) { const p = pm.get(s.id); if (p) s.lastPrompt = p; }
+      const rows = [...local, ...remote, ...localRestorable];
+      const pm = await lastPromptsFor(rows.map((s) => s.id));
+      for (const s of rows) { const p = pm.get(s.id); if (p) s.lastPrompt = p; }
     } catch { /* 조회 실패 — 값 없이 나간다(화면 폴백) */ }
     // #1752 갭2 — 노드 세션 행에도 대화 uuid 를 싣는다(org_node_session_map — /claude-uuid 노드 분기가 채움).
     //  이 값이 실려야 새 셸 채팅창이 노드 세션을 중앙 기록(v6/sessions/:uuid/log)으로 읽고, 같은 기록 행과 한 장으로 접힌다.
