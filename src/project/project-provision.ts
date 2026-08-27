@@ -14,7 +14,11 @@ import { getRepo } from "../domainmap/core/repos.js";
 import { sanitizeCloneUrl } from "../domainmap/core/url-util.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
-import { resolveGitSecret, leaseGitSecretForNode, hostOf, isAuthError, prepareGitAuth, describeGitError } from "../org/credentials/git-credential-store.js";
+import { hostOf, isAuthError, prepareGitAuth, describeGitError } from "../org/credentials/git-auth-prepare.js";   // #2165 잎 모듈 — 노드도 쓰는 순수/fs 헬퍼
+import { resolveGitSecret, leaseGitSecretForNode } from "../org/credentials/git-credential-store.js";
+//  ⚠ 위 둘은 DB(itemsPool)와 GitHub App 자격을 탄다. 노드는 이 경로를 **부르지 않지만**(아래 주입 경로 #905 C4)
+//   이 모듈이 노드 번들 진입 경로라 코드 자체는 실린다. `await import()` 로 미뤄도 소용없다 —
+//   esbuild 는 단일 outfile 이면 동적 import 를 그대로 인라인한다(#2165 실측). 진짜로 빼려면 **모듈을 갈라야** 한다.
 import type { GitCredentialSecret } from "../org/credentials/git-credential-store.js";
 
 // 노드 provision 주입 묶음(#905 C4) — DB 를 아는 게이트웨이가 조회해 넘기고, DB 가 없는 노드는 그걸 그대로 쓴다.
@@ -40,8 +44,8 @@ export async function resolveRepoInject(
   return { gitUrl: row?.git_url ?? null, secret };
 }
 // hostOf·isAuthError·prepareGitAuth 는 git-credential-store 로 이관(#606, 스캐너와 공유). 하위호환·기존 테스트 위해 re-export.
-export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "../org/credentials/git-credential-store.js";
-import { githubRepoFullName } from "../org/credentials/github-app-git.js";
+export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "../org/credentials/git-auth-prepare.js";
+import { githubRepoFullName } from "../org/credentials/github-repo-url.js";   // #2165 잎 모듈 — 무거운 자격 모듈을 끌어오지 않는다
 
 export const REPOS_SUBDIR = "repos"; // workspace/repos/<name> — 박스 호스트 클론(프로젝트 간 공유, worktree 의 부모)
 const REPO_NAME_RE = /^(?!\.+$)[A-Za-z0-9._-]{1,100}$/; // 경로 컴포넌트로 쓰이므로 슬래시 금지 + 점세그먼트(.·..·…) 거부(traversal 방지). 이름 속 점은 허용
@@ -274,7 +278,9 @@ async function ensureBaseClone(
   const host = hostOf(row?.git_url) ?? (existed ? hostOf(await originUrl(repoPath)) : null) ?? "github.com";
   //  레포 이름을 함께 넘긴다(#1881 G8) — GitHub App 폴백이 토큰을 그 레포로 좁힌다(최소권한 + 설치가 여럿일 때 상류가 판정).
   const secret = inject ? (inject.secret ?? null)
-    : await resolveGitSecret(memberId, host, { repoFullName: githubRepoFullName(row?.git_url ?? null) }).catch(() => null);
+    : await (async () => {
+              return resolveGitSecret(memberId, host, { repoFullName: githubRepoFullName(row?.git_url ?? null) }).catch(() => null);
+      })();
   const auth = await prepareGitAuth(secret);
   let cloned = false;
   try {
