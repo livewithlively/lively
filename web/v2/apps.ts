@@ -92,7 +92,10 @@ export function appByKey(key: string): AppDef | null { return APPS.find((a) => a
 //  appUrl 을 거치지 않는다(거치면 프리픽스가 두 번 붙는다). 같은 경로 = 같은 API 베이스 = 같은 인증.
 export function embedUrl(hash: string): string {
   const h = hash.replace(/^#\/?/, '');
-  return location.pathname + '?embed=1#/' + h;
+  //  shell=classic — **이 앱은 클래식 페이지다**를 명시한다(#2208). 종전엔 embed=1 하나가 '끼워 넣은 판'과
+  //   '클래식 셸을 써라' 두 뜻을 겸했는데, 그러면 embed 를 붙이는 **다른 자리**(곁칸 웹 칸 — web-url.ts 가
+  //   우리 오리진에 자동으로 붙인다)까지 클래식으로 끌려간다. 뜻이 둘이면 플래그도 둘이어야 한다.
+  return location.pathname + '?embed=1&shell=classic#/' + h;
 }
 export function classicUrl(hash: string): string {
   const h = hash.replace(/^#\/?/, '');
