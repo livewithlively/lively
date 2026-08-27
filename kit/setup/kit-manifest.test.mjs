@@ -94,5 +94,61 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
         `lib=${hasLib} opencode=${hasOpencode} tests=[${tests.join(", ")}] — 2026-08-27 회귀의 세 축`);
 }
 
+// ── M7 CLI 진입 가드가 **심링크 경로**에서도 동작하는가 ─────────────────────
+//  🔴 왜 이 행이 있나: 이 파일의 CLI 블록은 `pathToFileURL(resolve(process.argv[1])).href === import.meta.url`
+//   로 "직접 실행인가"를 판정한다. 그런데 `path.resolve` 는 **심링크를 풀지 않고**, `import.meta.url` 은
+//   Node 가 실제로 로드한 **realpath** 다. 그래서 심링크 경로로 부르면 두 값이 어긋나 **CLI 블록이 통째로
+//   안 돌고, 출력 0줄에 exit 0** 이 된다 — 실패가 아니라 침묵이라 부르는 쪽은 «목록이 비었다»로만 본다.
+//
+//  이게 왜 사고인가: `deploy/refresh-member-kits.sh` 가 이 CLI 로 설치 목록을 읽는데, 목록이 비면
+//   «✗ 설치 목록이 비어 있음 — 리프레시 중단» 으로 죽는다. 그리고 배포 레이아웃은 심링크 투성이다 —
+//   `current → <color> → releases/<id>`(deploy-release.sh). bash 의 `cd`+`pwd` 는 심링크를 **보존**하므로
+//   `/opt/lively/current/deploy` 에서 부르면 그대로 물린다. 즉 **멤버 훅 리프레시가 통째로 안 도는** 자리다.
+//   (macOS 의 /tmp·/var 도 심링크라 deploy/member-kit-refresh.test.mjs 가 이 박스에서 항상 빨간불이었다.)
+{
+  const { mkdtempSync, mkdirSync, cpSync, symlinkSync, rmSync } = await import("node:fs");
+  const { tmpdir, platform } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const { realpathSync } = await import("node:fs");
+
+  // 심링크가 확실히 끼도록 **우리가 직접** 만든다(플랫폼의 tmp 심링크 유무에 기대지 않는다).
+  const sb = realpathSync(mkdtempSync(join(tmpdir(), "kit-manifest-cli-")));
+  try {
+    const realKit = join(sb, "real", "kit");
+    mkdirSync(join(realKit, "hooks"), { recursive: true });
+    mkdirSync(join(realKit, "setup"), { recursive: true });
+    cpSync(join(KIT, "setup", "kit-manifest.mjs"), join(realKit, "setup", "kit-manifest.mjs"));
+    symlinkSync(join(sb, "real"), join(sb, "link"));           // link → real
+
+    const run = (base) => spawnSync(process.execPath,
+      [join(base, "kit", "setup", "kit-manifest.mjs"), "--install-plan", "--kit-root", join(base, "kit")],
+      { encoding: "utf8" });
+
+    const direct = run(join(sb, "real"));
+    const viaLink = run(join(sb, "link"));
+    const lines = (r) => r.stdout.split("\n").filter(Boolean).length;
+
+    // 배선 확인 — 대조군(실경로)이 실제로 목록을 뱉어야 아래 단언이 뜻을 갖는다.
+    if (lines(direct) === 0) {
+      bad("M7 CLI 진입 가드(심링크)", `대조군(실경로)조차 0줄이다 — 이 검사가 vacuous 하다. stderr=${direct.stderr}`);
+    } else if (lines(viaLink) !== lines(direct)) {
+      bad("M7 CLI 진입 가드(심링크)",
+        `심링크 경로로 부르면 ${lines(viaLink)}줄(실경로는 ${lines(direct)}줄) — CLI 블록이 안 돈다. ` +
+        `배포 레이아웃(current → releases/<id>)에서 refresh-member-kits.sh 가 «설치 목록이 비어 있음»으로 죽는다. ` +
+        `argv[1] 은 resolve(=심링크 유지), import.meta.url 은 realpath 라 어긋난다.`);
+    } else {
+      ok(`M7 CLI 진입 가드 — 심링크 경로로 불러도 같은 계획(${lines(viaLink)}줄)`);
+    }
+
+    // 오용은 조용히 넘어가지 않는다 — 인자 없이 부르면 exit 2 + 사용법.
+    const noArg = spawnSync(process.execPath, [join(sb, "real", "kit", "setup", "kit-manifest.mjs")], { encoding: "utf8" });
+    noArg.status === 2 && /--install-plan/.test(noArg.stderr)
+      ? ok("M7b 인자 없이 부르면 exit 2 + 사용법(조용한 성공 금지)")
+      : bad("M7b 인자 없이 부르면 exit 2 + 사용법", `status=${noArg.status} stderr=${noArg.stderr}`);
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n${fail === 0 ? "PASS" : "FAIL"} kit-manifest.test — ${pass} ok, ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);
