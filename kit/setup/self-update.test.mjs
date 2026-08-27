@@ -226,6 +226,27 @@ try {
     (serving.installHits === before) ? ok("⑧ 배선 없는 홈 → 무동작") : bad("⑧ 미배선", `installHits +${serving.installHits - before}`);
   }
 
+  // ⑧b **PATH 에 하네스 바이너리가 있어도** 배선 없는 홈이면 무동작 — ⑧ 의 CI 사각지대를 막는다.
+  //   ⑧ 은 «PATH 에 아무 하네스도 없는» 러너에서는 구조적으로 초록이다(GitHub 러너엔 claude·codex 가
+  //   없다). 그래서 PATH 를 보는 판정이 들어오면 ⑧ 은 **실제 사용자 머신에서만** 빨개지고 CI 는 끝까지
+  //   초록이다 — 회귀가 CI 를 통과해 배포된다. 여기서 스텁 바이너리를 직접 심어 그 창을 닫는다.
+  //   (실측 2026-08-27: PATH 보탬에 kit 설치 게이트가 없던 판이 CI 4체크 전부 초록인 채로 ⑧ 을 깼다.)
+  {
+    serving.body = makeBundle("v-bare"); serving.version = "v-bare";
+    const before = serving.installHits;
+    const home = mkdtempSync(join(BOX, "barepath-"));
+    mkdirSync(join(home, ".lively"), { recursive: true });   // ⚠ hooks/ 는 만들지 않는다 = kit 미설치
+    writeFileSync(lv(home, "token"), "test-token");
+    writeFileSync(lv(home, "gateway-url"), GW);
+    const binDir = mkdtempSync(join(BOX, "barebin-"));
+    writeFileSync(join(binDir, WIN ? "claude.CMD" : "claude"), WIN ? "@echo off\r\n" : "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    await runUpdater(home, { PATH: `${binDir}${WIN ? ";" : ":"}${process.env.PATH || ""}` }, ["--to", "v-bare"]).catch(() => {});
+    (serving.installHits === before)
+      ? ok("⑧b PATH 에 하네스가 있어도 배선 없는 홈이면 무동작(엉뚱한 머신 보호)")
+      : bad("⑧b 미배선 + PATH", `installHits +${serving.installHits - before} — PATH 만 보고 lively 를 쓴 적 없는 홈에 설치했다`);
+  }
+
   // ══ 프로덕션 경로 통합 — session-preload(훅) → detached 업데이터 → 설치 ══
   //  여기까지 붙어야 "멤버가 세션을 켜기만 하면 갱신된다"가 증명된다. 위 케이스들은 업데이터 단독 실행이었다.
   const PRELOAD = join(HERE, "..", "hooks", "session-preload.mjs");
