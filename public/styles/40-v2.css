@@ -1691,3 +1691,56 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pg.open .v2-app-inst:hover { background: var(--bg-tint); }
 .v2-pg.open .v2-app-inst.on { background: var(--bg-tint); box-shadow: none; }
 .v2-pg.open .v2-app-inst.on::before { left: -2px; }
+
+/* ── 휴지통·아카이브 안 A「원장 표」(#1850, 원준 2026-08-27 확정) ──
+   표 문법은 데이터 표 규격(DS §6.6): th 11.5/700 muted · 행 hover 틴트 · 초점 행 bg-sel + 좌 3px 레일.
+   파괴 동사는 코랄 글자(진입점)뿐 — 채운 파랑 0(P1). 곁칸(.v2-bin-side)은 우패널에 산다. */
+.v2-binpage.wide { max-width: 1160px; }
+.v2-bin-tblwrap { border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; background: var(--bg); }
+.v2-bin-tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.v2-bin-tbl th { font-size: 11.5px; font-weight: 700; color: var(--muted); text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--bg); }
+.v2-bin-tbl th.c-cb, .v2-bin-tbl td.c-cb { width: 30px; padding: 0 4px 0 12px; }
+.v2-bin-tbl td { padding: 0 10px; height: 40px; border-bottom: 1px solid var(--line-row); vertical-align: middle; white-space: nowrap; color: var(--ink-sub); }
+.v2-bin-tbl tbody tr:last-child td { border-bottom: 0; }
+.v2-bin-tbl tbody tr { cursor: default; }
+.v2-bin-tbl tbody tr:hover td { background: var(--bg-tint); }
+.v2-bin-tbl tbody tr.focus td { background: var(--bg-sel); }
+.v2-bin-tbl tbody tr.focus td:first-child { box-shadow: inset 3px 0 0 var(--blue); }
+.v2-bin-tbl tr.g td { background: var(--bg-tint); height: 32px; font-size: 12.5px; color: var(--muted-head); }
+.v2-bin-tbl tr.g td b { font-weight: 800; color: var(--ink-sub); }
+.v2-bin-tbl tr.g .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.v2-bin-tbl td.c-name { max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
+.v2-bin-tbl td.c-name .v2-bin-fold { vertical-align: -3px; margin-right: 7px; }
+.v2-bin-tbl td.c-name .t { font-weight: 700; color: var(--ink); text-decoration: none; }
+.v2-bin-tbl td.c-name a.t:hover { color: var(--blue); }
+.v2-bin-tbl td.c-name .mono { font: 600 11.5px/1 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--muted-head); margin-left: 7px; }
+.v2-bin-tbl td.c-kind, .v2-bin-tbl td.c-in { font-size: 13px; }
+.v2-bin-tbl td.c-in .v2-dot { margin-right: 5px; }
+.v2-bin-tbl td.c-when .m { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v2-bin-tbl td.c-acts { text-align: right; }
+.v2-bin-tbl .acts { display: inline-flex; gap: 2px; visibility: hidden; }
+.v2-bin-tbl tbody tr:hover .acts, .v2-bin-tbl tbody tr.focus .acts { visibility: visible; }
+@media (hover: none) { .v2-bin-tbl .acts { visibility: visible; } }
+.v2-bin-tbl .btn-text.danger, .v2-bin-side .btn-text.danger { color: var(--coral-text); }
+.v2-bin-tbl .btn-text.danger:hover, .v2-bin-side .btn-text.danger:hover { color: var(--coral); }
+/* 곁칸 — 고른 것 합계 + 초점 항목의 안 */
+.v2-bin-side { padding: 16px 14px 22px; display: flex; flex-direction: column; gap: 14px; font-size: 13px; color: var(--ink-sub); }
+.v2-bin-side-hint { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0; }
+.v2-bin-side-sum { border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); padding: 12px 14px; }
+.v2-bin-side-sum h4 { margin: 0 0 2px; font-size: 13.5px; font-weight: 800; color: var(--ink); }
+.v2-bin-side-sum .d { margin: 0 0 10px; font-size: 12.5px; color: var(--muted-head); }
+.v2-bin-side-detail { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 14px; }
+.v2-bin-side-detail .h { display: flex; align-items: center; gap: 7px; margin: 0 0 3px; min-width: 0; }
+.v2-bin-side-detail .h b { font-size: 14px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-bin-side-detail .tag { flex: none; font: 700 10.5px/1 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--muted-head); background: var(--bg-tint-2); border-radius: 999px; padding: 3px 7px; }
+.v2-bin-side-detail .meta, .v2-bin-side .fp .meta { margin: 0 0 6px; font-size: 12px; color: var(--muted-head); line-height: 1.55; }
+.v2-bin-side-detail h5 { margin: 10px 0 4px; font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--muted-head); }
+.v2-bin-side-detail .li { display: flex; align-items: center; gap: 7px; padding: 4px 0; border-bottom: 1px solid var(--line-row); min-width: 0; }
+.v2-bin-side-detail .li:last-of-type { border-bottom: 0; }
+.v2-bin-side-detail .li .n { color: var(--ink-sub); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-bin-side-detail .li a.n:hover { color: var(--blue); }
+.v2-bin-side-detail .li .sp { flex: 1; }
+.v2-bin-side-detail .li .v { flex: none; font-size: 11.5px; color: var(--muted); }
+.v2-bin-side-detail .li .v.keep { color: var(--mint-deep); max-width: 46%; white-space: normal; text-align: right; line-height: 1.4; }
+.v2-bin-side-detail .fp h5:first-child { margin-top: 12px; }
+.v2-bin-side-detail .act, .v2-bin-side-sum .act { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
