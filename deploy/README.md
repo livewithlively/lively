@@ -71,6 +71,29 @@ curl -fsSL <bootstrap-url> | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMI
 ```
 (private 레포 동안은 다운로드에 `LIVELY_CODE_TOKEN`(Bearer) 필요 — OSS 공개 시 tokenless.)
 
+#### 같은 태그가 **데스크톱 앱도** 낸다 — 그리고 그건 오래 걸린다
+
+`release-desktop.yml` 도 같은 `v*` 태그에 걸려 mac/win/linux 앱을 만들어 **같은 릴리스에 붙인다**. 즉 태그 하나 = 서버 번들 + 데스크톱 앱.
+
+⚠ **맥 잡이 긴 축이다.** universal(x64+arm64 합본)이라 두 arch 를 만들어 합친다.
+실측 v0.1.355(합본 전): mac 4분 · win 1분 · linux 0분(매트릭스 병렬). 합본 뒤로는 **맥만 대략 2배**를 잡아라.
+맥이 universal 이어야 하는 이유는 `release-desktop.yml` 머리말 참조 — 온보딩 «앱 받기» 가 arch 를 가릴 수 없다.
+
+★ **기다릴 거면 blocking 하지 마라.** 사람이든 AI 든 태그를 밀어 놓고 그 앞에 앉아 있을 이유가 없다.
+푸시하고 **다른 일을 하다가** 완료를 통지로 받아라. 검증도 릴리스가 끝난 뒤 한 번이면 된다.
+
+```bash
+git tag -a v0.1.1 -m "…" && git push origin v0.1.1
+# ↓ 완료될 때까지 백그라운드로 기다리고(턴을 붙잡지 않는다), 끝나면 결과만 본다
+#   AI 라면 Bash(run_in_background: true) 로 — foreground 의 sleep 루프는 그 시간만큼 대화를 막는다
+until [ "$(gh run list --limit 20 --json headBranch,status         --jq '[.[]|select(.headBranch=="v0.1.1")|select(.status!="completed")]|length')" = 0 ]; do sleep 60; done
+gh release view v0.1.1 --json assets --jq '.assets[].name'
+```
+
+발행 뒤 확인할 것 둘:
+- **온보딩 [앱 받기]** 는 코드에 버전이 안 박혀 있고 `releases/latest` 를 그때그때 묻는다 → 새 릴리스가 자동으로 최신이 된다(배포 불요). 단 `latest` 는 **draft·prerelease 를 건너뛴다**.
+- **자동 업데이트**는 `latest-mac.yml` 의 `version:` 이 새 값인지 본다. 태그가 `desktop/package.json` 의 version 을 덮어쓰지 못하면 업데이터가 영원히 "이미 최신"으로 판정한다.
+
 ## 최초 설치 (새 박스 — install.sh)
 
 > 전체 흐름(EC2): 내부 인프라 레포에서 `terraform apply` → 코드 rsync → 아래 `install.sh` → `claude` 로그인.
