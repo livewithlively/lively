@@ -31,6 +31,11 @@ const SAMPLE_CAP = 200;
  *  갈래를 정하는 데는 이름 120개면 충분하고, 긴 이름은 앞부분만으로도 무엇인지 드러난다. */
 const PROMPT_FILE_CAP = 120;
 const PROMPT_NAME_CAP = 80;
+/** 한 파일에서 LLM 에게 보여 줄 **본문 발췌** 길이. 이름만으로는 «이미지 4개» 같은 답밖에 안 나온다 —
+ *  무엇에 대한 파일인지는 첫 몇 줄에 거의 다 있다(제목·머리말·표 머리). 그 이상은 값만 오른다.
+ *  ⚠ 발췌를 실을 파일 수는 따로 조인다(PROMPT_BODY_FILES) — 120개 × 400자면 프롬프트가 5만 자가 된다. */
+const PROMPT_BODY_CHARS = 400;
+const PROMPT_BODY_FILES = 40;
 const TURN_ID_RE = /^t[0-9a-f]{16}$/;
 
 /**
@@ -166,25 +171,56 @@ export function repeatedForms(names: string[]): Array<{ skel: string; names: str
 }
 
 /** LLM 에게 줄 지시문. 서버가 만든다 — 화면이 만들면 사람마다 다른 프롬프트가 나간다. */
-export function analyzePrompt(files: string[], job: string | null): string {
+/** 분석에 실을 파일 한 건 — 이름과(있으면) 본문 발췌. */
+export interface AnalyzeFile { title: string; excerpt?: string | null }
+
+/** 발췌 한 토막 — 줄바꿈·공백을 접고 길이를 조인다(프롬프트에서 한 줄로 읽히게). */
+export function squeezeExcerpt(body: string | null | undefined, cap = PROMPT_BODY_CHARS): string {
+  const t = String(body ?? "")
+    // 로컬 자료의 '읽을 수 없는 파일' 스텁은 내용이 아니다 — 실으면 LLM 이 그 문구를 주제로 착각한다.
+    .replace(/^\s*>\s.*$/gm, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return "";
+  return t.length > cap ? t.slice(0, cap) + "…" : t;
+}
+
+export function analyzePrompt(files: Array<string | AnalyzeFile>, job: string | null, work?: string | null): string {
+  const rows: AnalyzeFile[] = files.map((f) => (typeof f === "string" ? { title: f } : f));
+  const shown = rows.slice(0, PROMPT_FILE_CAP);
+  const cut = (t: string): string => (t.length > PROMPT_NAME_CAP ? t.slice(0, PROMPT_NAME_CAP) + "…" : t);
+  // 발췌는 앞쪽 N건에만 싣는다 — 전부 실으면 프롬프트가 수만 자가 되고 값이 그만큼 오른다.
+  let withBody = 0;
+  const lines = shown.map((f) => {
+    const ex = withBody < PROMPT_BODY_FILES ? squeezeExcerpt(f.excerpt) : "";
+    if (ex) withBody++;
+    return ex ? `- ${cut(f.title)}\n    · 내용: ${ex}` : `- ${cut(f.title)}`;
+  });
   return [
-    "이 사람이 방금 라이블리에 올린 파일 목록입니다. 이 사람의 **자료함 서랍**을 정해 주세요.",
+    "이 사람이 방금 라이블리에 올린 자료입니다. 이 사람의 **자료함 서랍**을 정해 주세요.",
+    "서랍은 나중에 이 워크스페이스의 **위키 분류**가 됩니다 — 앞으로 쌓일 자료도 그 서랍으로 들어갑니다.",
     job ? `이 사람이 하는 일: ${job}` : "",
+    work ? `이 사람이 일하는 방식: ${work}` : "",
     "",
     "규칙",
-    `- 서랍은 3~${MAX_DRAWERS}개. 파일 이름에서 **실제로 보이는 것**만 근거로 삼습니다. 없는 종류를 지어내지 마세요.`,
+    `- 서랍은 3~${MAX_DRAWERS}개.`,
+    "- **파일 이름이 아니라 내용으로 가릅니다.** 아래 「내용」 줄이 있으면 그것이 판단의 주된 근거입니다.",
+    "  이름이 'image-1.png' 처럼 아무 뜻이 없어도 내용이 회의 기록이면 그 서랍으로 넣습니다.",
+    "- 확장자·형식은 서랍이 아닙니다. '이미지'·'PDF'·'문서' 같은 이름을 쓰지 마세요 — 그건 무엇에 대한 것인지 말해 주지 않습니다.",
+    "- 위에 적힌 **하는 일**에 맞춰 가릅니다. 같은 자료도 마케터와 개발자에게는 다른 서랍이 맞습니다.",
     "- 이름은 한국어 명사구로 짧게(예: 회의록, 월간 보고, 계약·견적).",
-    "- 파일 확장자가 아니라 **하는 일**로 가릅니다. pdf·docx 같은 이름은 서랍이 아닙니다.",
+    "- 실제로 보이는 것만 근거로 삼습니다. 없는 종류를 지어내지 마세요.",
     "- 어디에도 안 들어가는 것을 담을 서랍 하나(예: 그 밖의 자료)를 마지막에 둡니다.",
     "",
     "답은 **JSON 배열 하나만** 코드펜스에 담아 주세요. 설명은 펜스 밖에 적으세요.",
+    "why 에는 **무엇을 보고 그렇게 판단했는지**를 한 줄로 적습니다(파일 이름이 아니라 내용의 근거).",
     '```json',
-    '[{"name":"회의록","why":"주간회의_로 시작하는 파일 12개"}]',
+    '[{"name":"회의록","why":"주간 정기회의 논의와 결정이 적힌 자료 12건"}]',
     '```',
     "",
-    "파일 목록:",
-    ...files.slice(0, PROMPT_FILE_CAP).map((f) => `- ${f.length > PROMPT_NAME_CAP ? f.slice(0, PROMPT_NAME_CAP) + "…" : f}`),
-    files.length > PROMPT_FILE_CAP ? `(그 밖에 ${files.length - PROMPT_FILE_CAP}건 더 있습니다)` : "",
+    "자료:",
+    ...lines,
+    rows.length > PROMPT_FILE_CAP ? `(그 밖에 ${rows.length - PROMPT_FILE_CAP}건 더 있습니다)` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -255,12 +291,33 @@ export const welcomeCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { listSources } = await import("../../v6/source-store.js");
+      const { listSources, getSource } = await import("../../v6/source-store.js");
       const rows = await listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>);
-      const files = (rows as Array<{ title?: string | null }>).map((r) => String(r.title ?? "")).filter(Boolean);
-      if (!files.length) throw new HttpError(400, "아직 올라온 자료가 없습니다 — 파일을 먼저 올려 주세요");
+      const listed = (rows as Array<{ id?: number; title?: string | null }>)
+        .map((r) => ({ id: Number(r.id ?? 0), title: String(r.title ?? "") }))
+        .filter((r) => r.title);
+      if (!listed.length) throw new HttpError(400, "아직 올라온 자료가 없습니다 — 파일을 먼저 올려 주세요");
+
+      // ── 본문 발췌 ── 이름만 보내면 «이미지 4개» 같은 답밖에 안 나온다(원준님 실측 2026-08-27).
+      //  목록 조회(listSources)는 body_md 를 주지 않으므로(목록용 SELECT) 앞쪽 N건만 따로 읽는다.
+      //  ⚠ 하나 실패해도 분석은 돈다 — 발췌는 있으면 좋은 것이지 없으면 못 하는 것이 아니다.
+      const files: AnalyzeFile[] = [];
+      for (const r of listed) {
+        const need = files.filter((f) => f.excerpt).length < PROMPT_BODY_FILES;
+        if (!need || !r.id) { files.push({ title: r.title }); continue; }
+        const full = await getSource(r.id, null).catch(() => null);
+        files.push({ title: r.title, excerpt: squeezeExcerpt((full as { body_md?: string } | null)?.body_md) });
+      }
 
       const job = input.job == null ? null : String(input.job).trim().slice(0, 200) || null;
+      // 하는 일(무대·직무)은 리브 프로필에 이미 있다 — 같은 답을 화면이 또 보내게 하지 않는다.
+      const work = await (async () => {
+        try {
+          const { getLivProfile } = await import("../../org/store.js");
+          const liv = await getLivProfile(userId);
+          return String(liv?.work?.asis ?? "").trim() || null;
+        } catch { return null; }
+      })();
       const turnId = `t${crypto.randomBytes(8).toString("hex")}`;
       const { spawnTaskSession } = await import("../../node/tasks.js");
       const { livTurnArgs } = await import("../../org/delivery/liv-turn.js");
@@ -291,7 +348,7 @@ export const welcomeCapabilities: Capability[] = [
       try {
         await spawnTaskSession({
           user, taskId: turnId, rootKey: "personal", subpath: "liv",
-          prompt: analyzePrompt(files, job), harness,
+          prompt: analyzePrompt(files, job, work), harness,
           // 온보딩 분석은 **한 번 묻고 끝**이다 — 이어가는 대화가 아니라 새 세션으로 띄운다.
           //  ⚠ livTurnArgs 는 claude 플래그다(--disallowedTools·--include-partial-messages·--session-id).
           //   다른 하네스에 실으면 인자가 안 먹거나 기동이 깨진다 — 실측하지 않은 플래그를 추측해 넣지 않는다.
@@ -362,7 +419,13 @@ export const welcomeCapabilities: Capability[] = [
       const nickname = s(input.name, 80);
       const member = await getMember(userId);
       if (nickname && member) {
-        await upsertMember({ id: userId, nickname }, { actor: userId, source: "welcome" } as never)
+        // ⚠ **display_name 도 함께** 넣는다. 화면이 사람 이름을 읽는 자리는 전부 display_name 이고
+        //  (rail.ts·side.ts·views.ts 모두 `display_name || email || userId`), nickname 은 활동 로그·알림에서만 쓰인다.
+        //  nickname 만 넣으면 「어떻게 불러 드릴까요」에 답해도 사이드바엔 이메일 앞부분이 계속 뜬다(#1813).
+        // ⚠ **display_name 만** 넣는다. 「어떻게 불러 드릴까요」의 답은 곧 표시이름이다.
+        //  닉네임은 [내 설정 ▸ 프로필]에서 따로 정하고, 「이 닉네임을 내 이름으로 사용」을 켠 사람만 그것으로 불린다
+        //  (personName 단일 판정). 여기서 nickname 까지 덮으면 그 사람이 정해 둔 닉네임이 날아간다.
+        await upsertMember({ id: userId, display_name: nickname }, { actor: userId, source: "welcome" } as never)
           .catch(() => { /* 이름은 못 바꿔도 온보딩을 막지 않는다 */ });
       }
 
@@ -383,6 +446,19 @@ export const welcomeCapabilities: Capability[] = [
           } as never, { actor: userId, source: "welcome" } as never);
           created.push(name); existing.add(key);
         } catch { skipped.push(name); }   // 권한이 없거나 경합 — 온보딩을 멈추지 않는다
+      }
+
+      // ── 올린 자료가 **지식이 되게** 켠다 ── 갈래(=위키 분류)만 만들면 빈 서랍이다.
+      //  로컬 자료 증류기는 첫 업로드 때 **꺼진 채로** 만들어져 있다(#1881 L3 local-preset 머리말):
+      //   셀프서브 사용자는 '증류기' 를 모르니 여기 «이렇게 나눴는데 맞나요» 승인이 그 스위치라고 설계돼 있었는데,
+      //   정작 그 자리에서 켜는 코드가 없었다(실측 2026-08-27) — 그래서 승인해도 자료가 자료로만 남았다.
+      //  ⚠ 갈래를 하나도 안 만든 사람(전부 건너뛴 경우)에게는 켜지 않는다 — 승인한 적이 없기 때문이다.
+      //  ⚠ 실패해도 온보딩은 끝난다(비치명) — 증류는 나중에 관리 화면에서도 켤 수 있다.
+      if (created.length) {
+        try {
+          const { ensureLocalFilesDistiller } = await import("../../org/distill/local-preset.js");
+          await ensureLocalFilesDistiller({ enable: true, actor: userId, requester: userId, source: "welcome" });
+        } catch (e) { console.warn(`[welcome] 로컬 증류기를 켜지 못했습니다: ${(e as Error)?.message ?? e}`); }
       }
 
       // ── 업무 방식과 결정 ── 리브의 기억이 사는 자리에 남긴다(다음 세션의 리브가 이걸 읽는다).

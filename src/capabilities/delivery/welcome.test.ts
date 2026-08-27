@@ -4,7 +4,7 @@
 // 실행: npm run build && node dist/capabilities/delivery/welcome.test.js
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt } from "./welcome.js";
+import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt, squeezeExcerpt } from "./welcome.js";
 
 let pass = 0, fail = 0;
 // 실패해도 멈추지 않는다 — 어느 행이 빨간불인지 **전부** 봐야 red 입증이 된다.
@@ -290,6 +290,91 @@ t("㊳ 자격 값은 응답에 절대 싣지 않는다", () => {
   assert.doesNotMatch(SRC, /ai_env/, "자격 env 를 응답 필드로 열었다");
   // 하네스 **이름**은 비밀이 아니다 — 화면이 '무엇으로 도는지' 말하려면 필요하다.
   assert.match(SRC, /ai_harnesses: aiHarnesses/, "무엇으로 도는지 화면이 알 방법이 없다");
+});
+
+// ── 내용으로 가른다 (#1813, 원준님 2026-08-27) ──────────────────────────────
+//  실측 신고: 이미지 4개를 올렸더니 «이미지 4개» 라고만 하고 무엇에 대한 것인지 하나도 안 봤다.
+//  이름만 보내던 프롬프트가 원인이었다 — 발췌를 실어야 «무엇»이 판단에 들어온다.
+
+t("㊴ 발췌를 실으면 프롬프트에 내용 줄이 붙는다 — 이름만으로는 판단이 안 된다", () => {
+  const p = analyzePrompt([{ title: "image-1.png", excerpt: "3월 정기회의: 가격 정책 재검토, 담당 김" }], null);
+  assert.match(p, /image-1\.png/);
+  assert.match(p, /· 내용: 3월 정기회의/, "발췌가 프롬프트에 안 실렸다");
+  assert.match(p, /파일 이름이 아니라 내용으로 가릅니다/, "판단 기준을 안 알려 준다");
+});
+
+t("㊵ 형식 이름을 서랍으로 쓰지 말라고 명시한다 — 그게 이번 신고의 증상이었다", () => {
+  const p = analyzePrompt([{ title: "a.png" }], null);
+  assert.match(p, /'이미지'·'PDF'·'문서' 같은 이름을 쓰지 마세요/);
+});
+
+t("㊶ 하는 일·일하는 방식이 있으면 프롬프트에 싣는다 — 같은 자료도 직무마다 서랍이 다르다", () => {
+  const p = analyzePrompt([{ title: "a.md" }], "제품·기획", "회사·조직에서 팀과 함께 일한다 · 제품·기획");
+  assert.match(p, /이 사람이 하는 일: 제품·기획/);
+  assert.match(p, /이 사람이 일하는 방식: 회사·조직에서/);
+});
+
+t("㊷ 옛 호출(문자열 배열)도 그대로 받는다 — 호출부를 한 번에 못 바꿔도 깨지지 않게", () => {
+  const p = analyzePrompt(["a.md", "b.csv"], null);
+  assert.match(p, /- a\.md/);
+  assert.match(p, /- b\.csv/);
+});
+
+t("㊸ 발췌는 앞쪽 N건에만 — 120개 전부 실으면 프롬프트가 수만 자가 된다", () => {
+  const many = Array.from({ length: 120 }, (_, i) => ({ title: `f${i}.md`, excerpt: `내용${i} 입니다` }));
+  const p = analyzePrompt(many, null);
+  const bodyLines = p.split("\n").filter((l) => l.includes("· 내용:"));
+  assert.ok(bodyLines.length <= 40, `발췌 줄이 ${bodyLines.length}개 — 상한(40)을 넘었다`);
+  assert.ok(bodyLines.length >= 1, "발췌가 하나도 안 실렸다");
+});
+
+// ── 발췌 다듬기 ──
+t("㊹ 발췌는 줄바꿈·공백을 접어 한 줄로 만든다", () => {
+  assert.equal(squeezeExcerpt("가\n\n나   다\t라"), "가 나 다 라");
+});
+
+t("㊺ 스텁 인용문(> …)은 내용이 아니다 — 실으면 그 문구를 주제로 착각한다", () => {
+  const stub = "> 이 파일은 읽을 수 없습니다 — 형식 미지원\n실제 제목: 3월 매출 정리";
+  const out = squeezeExcerpt(stub);
+  assert.doesNotMatch(out, /읽을 수 없습니다/);
+  assert.match(out, /3월 매출 정리/);
+});
+
+t("㊻ 빈 본문·없음은 빈 문자열 — 프롬프트에 빈 '내용:' 줄을 만들지 않는다", () => {
+  assert.equal(squeezeExcerpt(null), "");
+  assert.equal(squeezeExcerpt(undefined), "");
+  assert.equal(squeezeExcerpt("   \n  "), "");
+  const p = analyzePrompt([{ title: "a.md", excerpt: "" }], null);
+  assert.doesNotMatch(p, /· 내용:/);
+});
+
+t("㊼ 긴 발췌는 잘라서 싣고 잘린 것을 표시한다", () => {
+  const out = squeezeExcerpt("가".repeat(900));
+  assert.ok(out.length <= 401, `안 잘렸다(${out.length}자)`);
+  assert.match(out, /…$/);
+});
+
+// ── 승인이 곧 스위치다 (#1881 L3 · #1813) ──────────────────────────────────
+//  갈래(=위키 분류)를 만들어도 증류기가 꺼져 있으면 자료는 자료로만 남는다 — 빈 서랍이다.
+//  local-preset 머리말이 "온보딩 승인 때 켠다"고 설계를 적어 뒀는데 정작 그 코드가 없었다(실측 2026-08-27).
+//  런타임으로 재려면 DB·크론이 필요하므로 **배선 자체**를 소스에서 못박는다(㉟~㊲와 같은 이유).
+t("㊽ 갈래를 만들면 로컬 증류기를 켠다 — 안 켜면 위키가 빈 채로 남는다", () => {
+  assert.match(SRC, /ensureLocalFilesDistiller\(\{ enable: true/,
+    "승인 때 증류기를 켜지 않는다 — 올린 자료가 지식이 되지 않는다");
+  assert.match(SRC, /if \(created\.length\) \{[\s\S]{0,400}ensureLocalFilesDistiller/,
+    "갈래를 하나도 안 만든 사람에게도 켠다 — 승인한 적이 없는 사람이다");
+});
+
+t("㊾ 증류기 켜기가 실패해도 온보딩은 끝난다 — 마무리를 막지 않는다", () => {
+  const seg = SRC.slice(SRC.indexOf("ensureLocalFilesDistiller"));
+  assert.match(seg.slice(0, 300), /catch/, "실패가 마무리를 통째로 깨뜨린다");
+});
+
+// ── 분석이 본문을 실제로 읽는가 ──
+t("㊿ 분석은 자료 본문을 읽어 발췌를 만든다 — 목록 조회만으로는 body_md 가 없다", () => {
+  assert.match(SRC, /getSource\(r\.id, null\)/, "본문을 안 읽는다 — 이름만 보내던 그 상태로 되돌아갔다");
+  assert.match(SRC, /squeezeExcerpt\(\(full as \{ body_md\?: string \} \| null\)\?\.body_md\)/);
+  assert.match(SRC, /analyzePrompt\(files, job, work\)/, "하는 일을 프롬프트에 안 싣는다");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

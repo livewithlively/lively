@@ -9,7 +9,7 @@
 //  ⚠ 마감 일수 계산은 dash/widget-tasks-review-log.ts 의 dashDueDays **한 벌**을 쓴다(#1313 R43) — 예전엔 여기에
 //   dueInDays 라는 두 번째 구현이 있었다. 라벨 문구는 자리마다 달라(마감 알림 '3일 뒤' vs 할 일 배지 '3일 남음')
 //   dueLabel 은 여기 남는다.
-import { api, el, errorNote, relTime, state } from '../core.js';
+import { api, el, errorNote, personName, relTime, state } from '../core.js';
 import { DASH_NOTIF_GROUPS, dashFieldPref, dashNotifPrefs, dashNotifReadSet, dashSaveNotifPrefs, dashSaveNotifRead } from './prefs.js';
 import { dashClockIcon, dashCommentIcon, dashPersonIcon, dashReviewIcon, dashSessionIcon, dashSparkIcon } from './icons.js';
 import { dashCtl, dashEmpty, dashPopover, myDisplayName } from './chrome.js';
@@ -27,7 +27,7 @@ async function fillNotifications(zone, projectsP) {
   try { projects = await projectsP; }
   catch (e) { zone.body.replaceChildren(errorNote(e, '알림을 불러오지 못했습니다')); return; }
   const people = await api('/api/ui/dash/people').then((d) => (d && d.people) || []).catch(() => []);
-  const nameOf = (pid) => { if (!pid) return ''; const m = people.find((x) => x.author_person === pid); return (m && (m.nickname || m.display_name)) || pid; };
+  const nameOf = (pid) => { if (!pid) return ''; const m = people.find((x) => x.author_person === pid); return (m && personName(m as never)) || pid; };
   const projById = new Map<any, any>(projects.map((p) => [p.id, p]));
   const myIds = new Set(projects.map((p) => p.id));
 

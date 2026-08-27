@@ -189,12 +189,22 @@ export function buildIdentityGlobalPinDdl(tables: readonly string[]): string[] {
  *  남은 행이 다시 500 을 내지 않도록 읽는 쪽(audit)이 테넌트로 못박혀 있다.
  */
 export function buildIdentityGlobalFoldSql(table: string, keyColumns: readonly string[]): string {
-  if (!keyColumns.length) throw new Error(`${table}: 키 컬럼을 모르면 접기 문장을 만들 수 없다`);
+  const keys = keyColumns.map((c) => String(c || "").trim()).filter(Boolean);
+  // 빈 키(그리고 공백만 든 배열)로는 '같은 행'을 가를 수 없다 — 조건 없는 UPDATE 는 전량 이동이다.
+  if (!keys.length) throw new Error(`${table}: 키 컬럼을 모르면 접기 문장을 만들 수 없다`);
   const tbl = qi(table);
-  const match = keyColumns.map((c) => `p.${qi(c)} = x.${qi(c)}`).join(" AND ");
+  const match = keys.map((c) => `p.${qi(c)} = x.${qi(c)}`).join(" AND ");
+  // ⚠ NOT EXISTS 만으로는 **옮기는 행끼리의 충돌**을 못 막는다(실측 사고 2026-08-27, c60 롤에서
+  //  `duplicate key value violates unique constraint "member_credential_pkey"` 로 스키마 초기화가 죽었다).
+  //  secondary 두 워크스페이스에 같은 키의 행이 하나씩 있으면 **둘 다** primary 에 짝이 없으므로 둘 다
+  //  통과하고, 같은 키 두 행이 primary 로 들어가 PK 를 깬다. 그래서 키마다 **한 행만**(ctid 최소) 옮긴다.
+  //  나머지는 그 자리에 남고 아래 conflicts 집계가 사람에게 보고한다 — 자동으로 고르지 않는다는 원칙 그대로다.
   return `UPDATE ${tbl} x SET tenant_id = ${IDENTITY_GLOBAL_DEFAULT_EXPR}
      WHERE x.tenant_id <> ${IDENTITY_GLOBAL_DEFAULT_EXPR}
-       AND NOT EXISTS (SELECT 1 FROM ${tbl} p WHERE p.tenant_id = ${IDENTITY_GLOBAL_DEFAULT_EXPR} AND ${match})`;
+       AND NOT EXISTS (SELECT 1 FROM ${tbl} p WHERE p.tenant_id = ${IDENTITY_GLOBAL_DEFAULT_EXPR} AND ${match})
+       AND x.ctid = (SELECT min(d.ctid) FROM ${tbl} d
+                      WHERE d.tenant_id <> ${IDENTITY_GLOBAL_DEFAULT_EXPR}
+                        AND ${keys.map((c) => `d.${qi(c)} = x.${qi(c)}`).join(" AND ")})`;
 }
 
 // ── 카탈로그 ────────────────────────────────────────────────────────────────

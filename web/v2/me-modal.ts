@@ -26,7 +26,7 @@
 //  ⚠ 단 서버를 더 부르는 두 화면([내 AI 계정]·[외부 서비스])은 **처음 펼 때** 그린다 — 열 때마다 넷을 더
 //   부르면(ai-accounts · sessions · credentials · oauth) 안 볼 수도 있는 화면 때문에 창이 늦게 뜨고,
 //   그러면 '잠깐 들르는 창'이 아니게 된다.
-import { api, el, errorNote, logout, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
+import { api, el, errorNote, logout, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
 import { field, skeleton } from '../ui-primitives.js';
 import {
   PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips,
@@ -113,7 +113,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
   const headSub = el('div', { class: 'v2me-h-sub' });
   const paintHead = (): void => {
     const m: any = state.me || {};
-    const nm = String(m.display_name || m.email || m.userId || '');
+    const nm = personName(m);   // 이름 판정은 한 곳(#1813)
     headAva.replaceChildren(profileAvatar(m.avatar || null, nm, m.userId, 'v2me-ava', { char: m.avatar_char, color: m.avatar_color }));
     headName.textContent = nm;
     headSub.textContent = String(m.email || m.userId || '');
@@ -208,17 +208,35 @@ function moreLink(href: string, label: string, desc: string, close: () => void, 
 // ── ① 프로필 — 얼굴·이름. 팀 화면 어디에서나 나를 가리키는 것. ──
 function profilePane(data: any, onSaved: () => void): HTMLElement {
   const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '이름 (비우면 이메일·아이디로 표시됩니다)' });
-  const nickIn = el('input', { type: 'text', value: data.nickname || '', placeholder: '닉네임 (비우면 이름으로 표시됩니다)' });
+  const nickIn = el('input', { type: 'text', value: data.nickname || '', placeholder: '닉네임 (예: 원준)' });
+  // 「이 닉네임을 내 이름으로 사용」(#1813) — 켜면 사람 이름을 보이는 자리 **전부**에서 닉네임이 이름을 대체한다.
+  //  닉네임이 비어 있으면 켤 수 없다(켜 둔 채 닉네임을 지우면 이름이 사라진 것처럼 보인다 — 서버도 같은 규칙으로 끈다).
+  const useNick = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  useNick.checked = data.use_nickname === true;
+  const useNickRow = el('label', { class: 'v2me-check' }, useNick,
+    el('span', { text: '이 닉네임을 내 이름으로 사용' }),
+    el('span', { class: 'v2me-check-d', text: '켜면 사이드바·작업 기록 등 이름이 나오는 곳에 닉네임이 표시됩니다.' }));
+  const syncUseNick = () => {
+    const has = !!String((nickIn as any).value || '').trim();
+    useNick.disabled = !has;
+    if (!has) useNick.checked = false;
+    useNickRow.classList.toggle('off', !has);
+  };
+  nickIn.addEventListener('input', syncUseNick);
+  syncUseNick();
   const ava = avatarEditor(data, nameIn);
   const status = el('span', { class: 'v2me-status' });
   const btn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   btn.addEventListener('click', async () => {
     (btn as any).disabled = true;
     // body_md 는 안 보낸다 — 서버가 보존하므로 [AI 개인 규칙]이 지워지지 않는다.
-    const payload = { display_name: (nameIn as any).value.trim(), nickname: (nickIn as any).value.trim(), ...ava.payload() };
+    const payload = { display_name: (nameIn as any).value.trim(), nickname: (nickIn as any).value.trim(),
+      use_nickname: useNick.checked, ...ava.payload() };
     try {
       const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
       applyMyProfileSaved(res, data.id);
+      // 이름이 바뀌면 부른 쪽이 자기 화면을 다시 그린다 — 레일은 drawRail, 사이드바는 redraw 를 이미 넘긴다.
+      //  ⚠ 여기서 rail.js 를 직접 부르면 import 순환이 된다(rail → me-modal → rail). 방향은 한쪽으로만.
       onSaved();
       toast('저장했습니다.'); status.textContent = '저장했습니다.';
     } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다.', true); }
@@ -227,7 +245,8 @@ function profilePane(data: any, onSaved: () => void): HTMLElement {
   return pane('프로필', '이름과 사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴입니다.',
     field('프로필 사진', ava.node),
     field('이름', nameIn),
-    field('닉네임 (활동 기록 등에 표시됩니다)', nickIn),
+    field('닉네임', nickIn),
+    useNickRow,
     data.email ? field('이메일 (로그인 아이디 · 변경은 관리자가 합니다)', el('div', { class: 'admin-ro', text: data.email })) : null,
     saveRow(btn, status));
 }

@@ -209,3 +209,10 @@
 @media (max-width: 760px) {
   .v2a-tiles { grid-template-columns: 1fr; }
 }
+
+/* 「이 닉네임을 내 이름으로 사용」(#1813) — 닉네임 칸 바로 아래 한 줄. 닉네임이 비면 흐리게 잠근다. */
+.v2me-check{display:grid; grid-template-columns:auto 1fr; gap:2px 8px; align-items:center; margin:-4px 0 2px; cursor:pointer}
+.v2me-check input{grid-row:1; margin:0}
+.v2me-check > span{grid-column:2; font-size:13.5px; color:var(--ink)}
+.v2me-check .v2me-check-d{grid-column:2; grid-row:2; font-size:12px; color:var(--muted); line-height:1.5}
+.v2me-check.off{opacity:.5; cursor:default}
