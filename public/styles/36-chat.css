@@ -320,6 +320,17 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .cxl-usage { margin: 0 16px 6px; text-align: right; font-family: var(--livc-mono); font-size: 10.5px;
   letter-spacing: .04em; color: var(--muted); }
 
+/* 로그인 관문(#2055) — 승인 카드와 같은 자리(입력칸 바로 위)에 두되, 색으로 «막힘» 을 구분한다.
+   승인은 «답해 주세요»(파랑)이고 이건 «지금은 못 보냅니다»(주의)라 같은 파랑을 쓰면 안 된다. */
+.cxl-gate {
+  border: 1px solid var(--line); border-left: 3px solid var(--warn, #d97706); border-radius: 11px;
+  background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+  padding: 11px 13px; margin: 0 16px 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+}
+.cxl-gate-t { font-weight: 600; }
+.cxl-gate-d { color: var(--muted); font-size: 13px; }
+.cxl-gate-s { color: var(--muted); font-size: 12px; font-family: var(--mono, monospace); }
+
 .cxl-asks:empty { display: none; }
 .cxl-asks { display: flex; flex-direction: column; gap: 8px; margin: 0 16px 10px; max-height: 46vh; overflow: auto; }
 
@@ -374,7 +385,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .livc-dc-del { color: var(--coral-text); font-weight: 700; }
 
 @media (max-width: 760px) {
-  .cxl-asks, .cxl-usage { margin-left: 12px; margin-right: 12px; }
+  .cxl-asks, .cxl-usage, .cxl-gate { margin-left: 12px; margin-right: 12px; }
   .cxl-ask-btn { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
