@@ -199,7 +199,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, managedRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -228,6 +228,10 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     //  tmux 값으로 먼저 거르면 DB 에서 초대가 추가된 세션이 목록에 아예 안 올라온다(2차 패스로 미룬다).
     parsed.push({
       name, created, attached, paneTitleRaw, offline, busy, shellWorking, lastBusy, reportedFresh,
+      // #2170 — 상시세션 출처 표식. **desired 해소(resolveDesired)를 타지 않는다**: 상시세션은 DB 미러가
+      //  아예 없으므로(#1059 E) 대응 컬럼이 없고, TmuxDesired 에 넣으면 "DB 컬럼이 있는 값"이라는 그 인터페이스의
+      //  계약(필드는 DB 컬럼과 1:1)이 깨진다. tmux 만이 아는 관측값으로 그대로 올린다.
+      managed: (managedRaw || "").trim() || null,
       lastAttached: Number(lastAttachedRaw) || 0,
       // #1954 3차 — 화면이 직접 찍은 열람 시각(@box_last_seen). attach 이벤트와 **다른 축**이라 max 로 합치지 않고
       //  그대로 올린다 — 합치는 자리는 프론트 판정 한 곳(web/session-status.ts isUnreadDone)이다.
@@ -265,6 +269,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       reportedFresh: p.reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
       flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
+      managed: p.managed as string | null,
     });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
@@ -310,6 +315,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       autoApprove: r.autoApprove, owner: r.owner || "", owned: r.owned,
       created: Number(r.created) || 0, attached: Number(r.attached) > 0, invites: r.invites, flags,
       projectId: r.projectId || 0, appId: r.appId || undefined,
+      managed: (r.managed as string | null) || undefined,   // #2170 — 상시세션 정리기의 '내 것' 판정 근거
       agentState: state,
       // 회수(F)가 보는 두 신호는 **접속과 무관**해야 하고(탭=온라인 규칙이 busy·waiting 을 offline 으로 덮으므로),
       //  두 출처를 **합집합**으로 본다 — 죽이면 되돌릴 수 없는 판정이라 과보호가 옳은 실패 방향이다.
@@ -620,6 +626,19 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_invites", encodeOptJson(invites)]);
   // 앱 세션이면 앱 id 를 박아둔다(#1780 D4) — @box_project 등과 같은 자리·같은 규약(desired 미러는 app_id 컬럼). 관측·귀속용.
   if (input.appId) await tmux(["set-option", "-t", id, "@box_app", String(input.appId)]);
+  // 상시세션 keep-alive 가 만든 세션이면 **그 상시세션 id 를 박는다**(#2170). 정리기가 나중에 이 세션을 걷어도
+  //  되는지 판정하는 유일한 근거다 — 없으면 정리기는 작업 폴더 문자열이 겹친다는 이유만으로 남의 세션을 죽인다.
+  //  ⚠ 못 박으면 **방금 만든 세션을 되돌린다**(best-effort 로 삼키지 않는다). 표식 없는 상시세션은 다음 tick 이
+  //   '내 것이 아니다'로 보고 또 만드는데, 이 함수는 2분마다 불리므로 그 오판 하나가 곧 **2분당 세션 하나**다
+  //   (= #1675 ⑥ 에서 30개까지 늘었던 그 누수 그대로). 여기서 죽여 두면 이번 tick 만 실패하고 다음 tick 이 다시 만든다.
+  if (input.managed) {
+    try {
+      await tmux(["set-option", "-t", id, "@box_managed", String(input.managed)]);
+    } catch (e) {
+      await tmuxQuiet(["kill-session", "-t", id]);
+      throw new HttpError(503, `상시세션 표식을 박지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
+    }
+  }
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
   //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
@@ -774,6 +793,18 @@ async function tmuxKill(id: string): Promise<void> {
 //  로 남아 열 때 lazy resume). 노드 세션 회수는 게이트웨이 라우트의 relayNodeOp{op:'kill'} 이 담당(F 는 소스별 dispatch).
 export async function reapCentralSession(id: string): Promise<void> {
   await tmuxKill(id);
+}
+/**
+ * 이미 떠 있는 세션에 상시세션 표식(@box_managed)을 뒤늦게 박는다 — **이행 전용**(#2170).
+ *
+ * 왜 필요한가: 표식은 이번 판부터 생긴다. 그전에 만들어진 상시세션(레지스트리 session_id 가 가리키는 그 세션)은
+ *  표식이 없어서, 표식 기반 정리기 눈에는 '내 것이 아닌 세션'으로 보인다 → 살아 있는데도 새로 하나 더 만든다.
+ *  그래서 **레지스트리가 가리키는 그 한 개에 한해** 입양하면서 표식을 찍는다(자세한 조건은 ensureManagedSession).
+ *
+ * ⚠ 이 함수는 "이 세션은 걷어도 된다"고 선언하는 것과 같다. 호출부가 **소유자·작업 폴더까지 확인한 뒤에만** 부를 것.
+ */
+export async function stampManagedMarker(id: string, managedId: string): Promise<void> {
+  await tmux(["set-option", "-t", id, "@box_managed", managedId]);
 }
 // opts.admin: 소유자 확인을 건너뛴다(호출 라우트가 admin scope 를 이미 검증 — F4 관리자 수동 회수).
 // opts.preserveState: desired-state(org_session_state)를 지운다 vs 보존한다. 기본(미지정)=지움(사용자 명시 kill=복원 안 함).

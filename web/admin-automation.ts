@@ -274,7 +274,16 @@ async function managedSessionsPanel(detail, data) {
             + (m.enabled
               ? '다음 점검(2분 이내)에서 자동으로 정리되고, 가장 오래된 하나만 남습니다.'
               : '이 에이전트가 꺼져 있어 자동 정리는 돌지 않습니다 — 켜면 다음 점검에서 정리되고, 그럴 생각이 없다면 터미널에서 직접 종료하세요.'))
-          : null));
+          : null),
+      // #2170 — 같은 작업 폴더에 떠 있지만 **이 에이전트가 만든 게 아닌** 세션. 자동 정리 대상이 아니다.
+      //  판정이 '경로가 겹친다'에서 '내가 만들었다'로 좁아지면서 여기 걸리는 세션이 생겼다 — 안 걷는다고
+      //  침묵하면 #1675 의 실패(30개가 떠 있는데 어느 화면에도 안 보였다)를 그대로 반복한다.
+      (Number(m.unmarked_count) > 0
+        ? withTip(el('span', { class: 'pill', text: '외부 세션 ' + m.unmarked_count + '개' }),
+          '같은 작업 폴더에 이 에이전트가 만들지 않은 세션이 ' + m.unmarked_count + '개 떠 있습니다. '
+          + '사람이 연 세션이거나 이 표식이 생기기 전에 만들어진 세션입니다 — 자동으로 정리하지 않습니다. '
+          + '정리하려면 터미널에서 직접 확인하고 종료하세요.')
+        : null));
     const acts = el('div', { class: 'wikicat-row-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', text: '시작/재생성', onclick: () => managedEnsure(m.id, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: m.enabled ? '끄기' : '켜기', onclick: () => managedToggle(m, reload) }),
@@ -343,7 +352,10 @@ function openManagedSessionForm(m, reload) {
     psBlock('세션 id', isNew ? '소문자 슬러그(a-z0-9_-). 고유 키.' : 'id 는 변경 불가.', idInp),
     psBlock('이름', '관리 목록·세션 탭에 보일 이름.', labelInp),
     psBlock('라이블리 계정/프로필', '이 세션을 띄울 클로드 로그인(프로필=구성원). 목록에서 고르거나 입력. 각 프로필은 provision + 웹터미널 /login 후 사용.', account.el),
-    psBlock('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp),
+    psBlock('격리 워크스페이스(하위경로)',
+      '공유폴더 아래 이 세션 전용 작업폴더입니다. 비우면 managed/<id> 를 씁니다. '
+      + '프로젝트 폴더(project/… · legacy-project/…)는 쓸 수 없습니다 — 프로젝트 폴더 세션은 팀 전원이 함께 쓰는 자리라 '
+      + '무인 상시세션의 자동 정리·공개범위 규칙과 맞지 않습니다.', wsInp),
     psBlock('하네스', '', harnessSel),
     flagsWrap,
     psBlock('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, autoFlagText)),

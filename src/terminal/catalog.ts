@@ -266,6 +266,14 @@ export interface SessionInfo {
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
   appId?: string; // 이 세션을 실행한 AppPackage. 일반 AI 세션은 undefined이고 셸이 ai-session builtin으로 해석한다.
+  // #2170 — 이 세션을 **상시세션 keep-alive 가 만들었으면** 그 상시세션 id(@box_managed). 사람이 연 세션은 undefined.
+  //  왜 있어야 하나(2026-08-27, 상민님 지적): 정리기(classifyManagedLive)가 "내가 만든 세션"을 **작업 폴더 문자열
+  //   suffix** 로만 판정했다. 그러면 상시세션의 workspace_subpath 에 프로젝트 폴더(`project/<id>`)를 등록하는
+  //   순간 그 폴더에서 일하던 **다른 멤버의 세션 전부**가 같은 suffix 로 잡힌다 — 프로젝트 폴더 세션은 전원에게
+  //   보이고(canSeeSession) reapCentralSession 은 소유자를 안 물으므로, 2분마다 도는 keep-alive 가 1개만 남기고
+  //   전부 죽인다. 이 표식이 그 판정을 **경로 우연의 일치**에서 **출처**로 바꾼다: 정리기는 자기가 박은 id 를
+  //   가진 세션만 걷고, 표식 없는 세션은 무슨 폴더에 있든 절대 안 건드린다.
+  managed?: string;
   // 에이전트 실행 상태(#1015 E 에서 '오프라인' 한 칸에 섞여 있던 '셸로 빠짐'을 exited 로 분리):
   //  busy=스피너 관측(작업중) · waiting=화면에 사용자 선택/승인 대기(확인 필요) — 이 둘은 **접속 무관**.
   //   탭을 닫아도 AI 는 계속 일하고, waiting 은 사용자 결정을 기다리는 알림이라 회색으로 덮으면 놓친다.
@@ -355,8 +363,13 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   //  (실측: /mcp "No MCP servers configured"). 게이트웨이가 "member 노드 && 생성자=노드 주인"일 때만 켠다 —
   //  노드측은 값을 믿고 따르기만 한다(정책 판단은 게이트웨이, 노드는 기계적 실행 — agent runOp 전제 그대로).
   hostProfile?: boolean;
-  // #1059 E — 상시(managed) 세션은 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유). ensureManagedSession 만 넘긴다.
-  managed?: boolean;
+  // 이 세션을 만든 **상시세션(org_managed_session)의 id**. ensureManagedSession 만 넘긴다(사람·라우트 경로엔 없다).
+  //  · #1059 E — 값이 있으면 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유).
+  //  · #2170 — 그 id 를 `@box_managed` 로 세션에 **박는다**. 정리기가 "내가 만든 세션"을 판정하는 유일한 근거다
+  //    (종전엔 작업 폴더 문자열 suffix 뿐이라, 상시세션의 workspace_subpath 를 프로젝트 폴더로 등록하면
+  //     그 폴더의 **남의 세션 전부**가 고아로 잡혀 걷혔다 — SessionInfo.managed 주석 참조).
+  //  ⚠ boolean 이 아니라 id 다. 종전 `managed?: boolean` 을 바꾼 것 — 참/거짓만으로는 "누구의 것인가"를 못 말한다.
+  managed?: string;
   // #1059 — claude UUID 를 모를 때 인자 없는 --resume 로 후보 picker 를 띄운다(restorable 복원. resume 과 배타 — resume 우선).
   resumePick?: boolean;
   // #1516 — 로그인 전용 세션: 이 하네스의 **로그인 명령**을 셸에서 돌린다(하네스 TUI 를 띄우지 않는다).
