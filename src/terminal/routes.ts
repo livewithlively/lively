@@ -2,6 +2,7 @@
 // REST(/api/ui/terminal/*, Bearer) = 세션 목록·생성·이름변경·삭제 + 설정(루트·하네스 카탈로그).
 // WS(/terminal/ws, ticket 쿠키) = PTY 스트림(terminal-pty.ts). 브라우저는 Authorization 헤더를 WS/네비에
 // 못 실으므로, Bearer 로 인증된 멤버에게 HttpOnly 티켓 쿠키(userId 보유)를 발급해 WS 소유권 판정에 쓴다.
+import { normalizeSessionKind, sessionKindFromRequest } from "../sessions/session-kind.js";
 import type express from "express";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
@@ -26,7 +27,8 @@ import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "../v6/search-util.js";
-import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
+import { setupPtyUpgrade } from "./terminal-pty-upgrade.js";   // #2165 — 테넌시를 아는 업그레이드 핸들러는 게이트웨이 전용 모듈
+import { type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
@@ -48,7 +50,8 @@ import { autoTrustWorkspace } from "./session-create-guards.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
-import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
+import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
+import { cleanLastPrompt } from "./last-prompt.js";
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
@@ -56,7 +59,7 @@ import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js"
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
 import { mintAppToken } from "../apps/principal.js";
-import { prepareAppAssets } from "../apps/session-assets.js";
+import { prepareAppAssets } from "../apps/session-assets-gateway.js";   // #2165 — DB 를 타는 조각
 import { gatewayUrl } from "../gateway-url.js";
 
 /** #1683 후속2 — 그 세션이 어느 하네스로 떴나(tmux 세션 옵션 @box_harness). 모르면 빈 문자열. */
@@ -239,7 +242,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       //  online 이어야 실제 생성 가능(폼이 비활성 표시).
       nodes: await (async () => {
         const me = idOf(userOf(req));
-        const live = new Map(liveNodes().map((n) => [n.id, n.online]));
+        const live = new Map(liveNodes().map((n) => [n.id, n]));
         return (await listNodes().catch(() => []))
           // #2108 — 게이트웨이 자신이 노드로도 등록돼 있으면 여기서 뺀다. 같은 박스라 '중앙 컴퓨터(기본)'가
           //  이미 그 자리를 대표하고, 노드로 고르면 3초 스냅샷을 거치느라 새 세션이 복원으로 새 버린다(#2108).
@@ -247,7 +250,14 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
           // harnesses(#1713) — **그 PC 에서 실제로 띄울 수 있는 것**만 폼에 보여주기 위해 함께 준다.
           //  노드가 hello 로 보고한 값이고, 구 번들이라 미보고면 기준선(claude·codex·shell)이 온다.
           //  이게 없으면 사용자는 [생성하기]를 누른 뒤에야 안다 — 옛 번들은 502, 바이너리 부재는 세션 즉사.
-          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, shared: n.shared, online: live.get(n.id) ?? false, harnesses: nodeHarnesses(n.agent_harnesses) }));
+          // mine·connectedAt(#2172) — 새 세션의 **기본 실행 노드**를 화면이 규칙으로 정하기 위한 두 값.
+          //  규칙은 '내 켜져 있는 컴퓨터 > 공유 컴퓨터 > 중앙'이고, 동률이면 **가장 최근에 붙은 것**이다(web/v2/run-picker.ts).
+          //  mine 없이 shared 만 보면 '내 노드인데 관리자가 공유로 지정한 것'을 남의 PC 로 오판한다(둘은 직교다).
+          .map((n) => ({
+            id: n.id, name: n.name, kind: n.kind, shared: n.shared, mine: n.owner_member === me,
+            online: live.get(n.id)?.online ?? false, connectedAt: live.get(n.id)?.connectedAt ?? null,
+            harnesses: nodeHarnesses(n.agent_harnesses),
+          }));
       })(),
     });
   }));
@@ -399,6 +409,16 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const map = await claudeSessionIdsFor([...local, ...remote].map((s) => s.id));
       for (const s of [...local, ...remote]) { const u = map.get(s.id); if (u) s.claudeSessionId = u; }
     } catch { /* 미러 조회 실패 — uuid 없이 나간다(화면은 '기록 없음'으로 다룬다) */ }
+    // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt). 사이드바 둘째 줄의 정본 —
+    //  종전엔 화면이 세션마다 대화 꼬리(48~240KB)를 받아 찾았고, 노드 세션은 기록이 턴 끝에만 올라와 실시간이 아니었다.
+    //  박스·노드 세션 모두 같은 행에 있다(#1791). 없으면(옛 훅·코덱스·셸) 화면이 종전 꼬리 조회로 폴백한다.
+    //  ⚠ 복원 가능 행(localRestorable)도 덮는다 — dev 실측 목록 350행 중 323행이 그 부류(tmux 가 죽은 지난 세션)라,
+    //   라이브만 덮으면 사이드바 '지난 세션' 묶음이 통째로 꼬리 조회 폴백(권한 403 → 빈 줄)에 남는다.
+    try {
+      const rows = [...local, ...remote, ...localRestorable];
+      const pm = await lastPromptsFor(rows.map((s) => s.id));
+      for (const s of rows) { const p = pm.get(s.id); if (p) s.lastPrompt = p; }
+    } catch { /* 조회 실패 — 값 없이 나간다(화면 폴백) */ }
     // #1752 갭2 — 노드 세션 행에도 대화 uuid 를 싣는다(org_node_session_map — /claude-uuid 노드 분기가 채움).
     //  이 값이 실려야 새 셸 채팅창이 노드 세션을 중앙 기록(v6/sessions/:uuid/log)으로 읽고, 같은 기록 행과 한 장으로 접힌다.
     //  매핑의 node_id 와 지금 행의 노드가 다르면 버린다(노드 재등록·이름 재사용으로 남은 낡은 매핑 오염 방지).
@@ -840,6 +860,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const input: CreateInput = {
       label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
       harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
+      // #2162 — HTTP 요청을 kind 로 옮기는 **유일한 경계**. 여기 말고 다른 데서 loginFor/appId 로
+      //  종류를 되짚지 마라(그게 갈라진 신호의 시작이었다). 이후 모든 판정은 kind 하나만 본다.
+      kind: sessionKindFromRequest(b),
       autoApprove: !!b.autoApprove, invites: b.invites, loginProfile: !!b.loginProfile,
       readOnly: !!b.readOnly, // #1007 — 이 세션만 읽기전용(컨텍스트 스토어 쓰기 소거). 노드 세션도 아래 relay 가 input 스프레드로 전파.
       incognito: !!b.incognito, // #1007+ — 이 세션만 인코그니토(lively 전체 차단 + 훅 off). readOnly 보다 우선.
@@ -1092,6 +1115,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const durableMap = st.claude_session_id ? null : (await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null;
       const resumeId = st.claude_session_id || durableMap?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path);
       const input: CreateInput = {
+        // #2162 — 복원은 **원래 종류를 되살린다**. human 으로 굳히면 앱 세션이 복원될 때 종류를 잃는다.
+        kind: normalizeSessionKind(st.kind),
         label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
         harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
         projectId: st.project_id || undefined, projectSrc: st.project_src === "org" ? "org" : "v6",
@@ -1154,6 +1179,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       ? mappedId : null;
     const precise = !!resumeUuid;
     const session = await createSession(owner, {
+      kind: normalizeSessionKind(st.kind),   // #2162 — 복원은 원래 종류를 되살린다
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
       harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
       invites: st.invites, projectId: st.project_id || undefined,
@@ -1256,6 +1282,24 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const change = (relay as { change?: { prev: string | null; phase: string; at: number } | null } | null)?.change;
       if (change) void notifyPhaseChange(id, me, change, ns.label);
     }
+    res.json({ ok: true });
+  }));
+
+  // #2197 — **사람이 방금 시킨 말** 보고(work-flag 훅 UserPromptSubmit). 사이드바 세션 행 둘째 줄의 정본이다 — 종전엔 화면이
+  //  대화 꼬리를 세션마다 받아 찾았고, 노드 세션은 기록이 턴 끝(Stop 캡처)에만 중앙에 올라와 '방금 친 말'이 턴이 끝나야 보였다.
+  //  박스·노드 세션 모두 org_session_state 행(#1791)에 쓴다 — 노드로 릴레이하지 않는다(소비자가 중앙 목록뿐이라 중앙이 정본).
+  //  owner-gated(남의 세션 오염 차단) · 본문은 서버가 다듬는다(cleanLastPrompt — 제어문자 제거·공백 접기·300자). best-effort — 훅은 fire-and-forget.
+  app.post("/api/ui/terminal/sessions/:id/last-prompt", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    const prompt = cleanLastPrompt(((req.body ?? {}) as Record<string, unknown>).prompt);
+    if (!prompt) throw new HttpError(400, "prompt 가 비어 있습니다");
+    const me = idOf(userOf(req));
+    const st = await getSessionState(id);
+    if (!st) throw new HttpError(404, "세션 상태 기록이 없습니다");
+    if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
+    await setLastPrompt(id, prompt, me);
     res.json({ ok: true });
   }));
 

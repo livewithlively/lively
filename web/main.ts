@@ -5,7 +5,7 @@
 //  import 방향: main → 각 탭 모듈(단방향). **역으로 어떤 모듈도 main 을 import 하지 않는다** — 그러면
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
-import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, personName, profileAvatar, showGate, state } from './core.js';
 import { watchStaleShell } from './gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
@@ -288,7 +288,8 @@ async function boot() {
   // ── 화면 셸 선택(#1719) ──
   //  ?embed=1 : 새 셸이 클래식 페이지를 iframe 에 '앱'으로 실을 때. 클래식 셸을 그대로 쓰되 크롬(상단바·탭·배너·푸터)만
   //             body.embed 로 걷는다(40-v2.css). 임베드는 항상 클래식이다(안 그러면 셸 안에 셸이 뜬다).
-  //  그 외      : uiMode()(URL ?ui > 로컬 오버라이드 > 조직 ui_mode > 'classic') 가 v2 면 새 셸로 넘기고 여기서 끝낸다.
+  //  그 외      : uiMode()(URL ?ui > 로컬 오버라이드 > 조직 ui_mode > 'v2') 가 v2 면 새 셸로 넘기고 여기서 끝낸다.
+  //             기본이 v2 이므로 이 아래 클래식 경로는 **누군가 클래식을 고른** 경우에만 돈다.
   //             클래식 라우터·상단바 코드는 건드리지 않은 채로 남는다 — 두 셸의 병행 기간 동안 옛 화면은 옛 코드 그대로다.
   //  ?solo=1 : 세션 하나만 담은 **팝아웃 창**(#1744 — 세션 화면 [새 탭]). 새 셸을 쓰되 왼쪽 사이드바만 없다.
   //             조직이 ui_mode 를 classic 으로 두었더라도 이 주소는 새 셸이어야 한다(그 화면을 가리키는 링크이므로).
@@ -304,7 +305,7 @@ async function boot() {
   // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→'내 정보' 팝업(#762).
   const userBtn = document.getElementById('user-email');
   if (userBtn) {
-    const nm = state.me.display_name || state.me.email || state.me.userId || '';
+    const nm = personName(state.me as never);   // 이름 판정은 한 곳(#1813)
     userBtn.replaceChildren(profileAvatar(state.me.avatar, nm, state.me.userId, 'topbar-ava', { char: state.me.avatar_char, color: state.me.avatar_color }), el('span', { text: nm }));
     userBtn.hidden = false;
   }

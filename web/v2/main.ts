@@ -8,13 +8,13 @@
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
-import { $view, anchoredPopover, api, el, state, toast } from '../core.js';
+import { $view, anchoredPopover, api, el, state, toast, wsKey } from '../core.js';
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
-import { dotCls, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
+import { dotCls, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
@@ -26,6 +26,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
+import { WS_SWITCH_KEY } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
 import { drawRail, mountRail, railIsHidden, railSection, toggleRail, type RailSection } from './rail.js';
@@ -367,7 +368,16 @@ export async function bootV2(): Promise<void> {
   //  ★ #2171 — 보내는 순간 **서버에 '보냈다'를 찍는다**(welcome_seen). 자동 진입은 평생 한 번이다.
   //   종전엔 맨 끝 [준비 끝, 정리해 주세요] 를 눌러야만 표식이 남아서, 중간에 나간 사람·웹만 쓰는 사람은
   //   앱을 열 때마다 다시 끌려갔다. 못 끝낸 사람은 홈의 «이어서 하기»(me.welcome_pending)로 안내한다.
-  if (!boot && state.me && state.me.first_run === true && !onboardingDone()) {
+  //  ★ #2171 — **워크스페이스를 전환해 온 부팅에서는 자동 진입하지 않는다.** 전환은 `location.reload()` 를
+  //   거치므로 이 판정을 처음부터 다시 타는데, 옮겨 간 워크스페이스엔 그 사람의 흔적이 0이라(거기서 MCP 를
+  //   부른 적도 세션을 연 적도 없다) «처음 오는 사람»이 참이 되어 **전환할 때마다 처음 설정이 떴다**
+  //   (원준님 신고 2026-08-27 — 데스크톱 앱에서 워크스페이스 전환 중). 전환은 처음 오는 것이 아니라
+  //   있던 곳으로 가는 것이다 — 그 자리는 홈이어야 한다. 필요한 사람에겐 홈의 «이어서 하기»가 남는다.
+  const wsSwitched = (() => {
+    try { const v = sessionStorage.getItem(WS_SWITCH_KEY) === '1'; if (v) sessionStorage.removeItem(WS_SWITCH_KEY); return v; }
+    catch (_) { return false; }   // 프라이빗 모드 — 표식을 못 읽으면 종전 동작(자동 진입 판정 그대로)
+  })();
+  if (!boot && !wsSwitched && state.me && state.me.first_run === true && !onboardingDone()) {
     boot = '#/welcome';
     markWelcomeSeen();
   }
@@ -436,8 +446,8 @@ async function syncShell(): Promise<void> {
   const at = tabsApi.active();
   const atPage = parseRoute(at.route).segs[0];
   if (atPage === 'inbox') renderInbox(at.center, data);   // 확인할 것 — 같은 결로 따라온다
-  else if (atPage === 'archive') renderArchive(at.center, data, binHooks);   // 아카이브·휴지통도 같은 결(#1851)
-  else if (atPage === 'trash') renderTrash(at.center, data, binHooks);
+  else if (atPage === 'archive') renderArchive(at.center, data, binHooks, at.aside);   // 아카이브·휴지통도 같은 결(#1851 → #1850 안 A: 곁칸 포함)
+  else if (atPage === 'trash') renderTrash(at.center, data, binHooks, at.aside);
   for (const t of tabsApi.tabs) {
     if (!t.chat) continue;
     const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
@@ -478,7 +488,7 @@ const binHooks = { onChanged: () => { void loadData({ projects: true }).then(() 
   drawSide(); tabsApi?.paint();
   // 그 화면 자체도 다시 — 되돌리기·완전 삭제 뒤 행이 그 자리에 남아 있으면 '안 됐나?'로 읽힌다(20초 결을 기다리지 않는다).
   const at = tabsApi?.active();
-  if (at) { const pg = parseRoute(at.route).segs[0]; if (pg === 'archive') renderArchive(at.center, data, binHooks); else if (pg === 'trash') renderTrash(at.center, data, binHooks); }
+  if (at) { const pg = parseRoute(at.route).segs[0]; if (pg === 'archive') renderArchive(at.center, data, binHooks, at.aside); else if (pg === 'trash') renderTrash(at.center, data, binHooks, at.aside); }
 }); } };
 
 // ── 데이터 ──
@@ -594,7 +604,7 @@ const findSess = (id: string): Sess | undefined => data.sessions.find((x) => x.i
 //  이름을 넣어 둔 탭 3개 중 죽은 2개가 다음 판에 `세션 1d14b3`·`세션 10242a` 로 저장됐다.
 //  ⇒ 이름을 **알아낼 때마다 기억**해 두고, 못 찾는 순간엔 그 기억을 쓴다. 이름은 화면에 쓰는 값이라
 //    기기별(localStorage)로 충분하다. 서버를 더 부르지 않는다.
-const NAME_STORE = 'lively_v2_sess_names';   // `*_KEY` 로 두지 않는다(gitleaks 오탐 — DISMISS_STORE 주석과 같은 이유)
+const NAME_STORE = wsKey('lively_v2_sess_names');   // `*_KEY` 로 두지 않는다(gitleaks 오탐 — DISMISS_STORE 주석과 같은 이유)
 const NAME_MAX = 300;                        // 넘으면 오래된 것부터 버린다(Map 은 삽입 순서를 지킨다)
 /** 이름을 못 찾았을 때 쓰는 폴백(`세션 1d14b3`) — 이 모양은 **이름이 아니므로** 기억하지 않는다. */
 const isSessIdFallback = (s: string): boolean => /^세션 [0-9a-f]{4,}$/i.test(String(s || '').trim());
@@ -692,8 +702,8 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   //  돌아보기는 불러오는 것 — 프로젝트 화면은 문패 [타임라인](알림 센터)이 그 자리를 맡는다.
   if (!p || p === 'dashboard') return { title: '홈', noAside: true };
   if (p === 'inbox') return { title: '확인할 것', noAside: true };
-  if (p === 'archive') return { title: '아카이브', noAside: true };   // #1851
-  if (p === 'trash') return { title: '휴지통', noAside: true };
+  if (p === 'archive') return { title: '아카이브', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
+  if (p === 'trash') return { title: '휴지통', noAside: false };
   if (p === 'connect') return { title: segs[1] ? '앱 연결' : '외부 앱 연결', noAside: true };
   if (p === 'liv') return { title: '리브', noAside: true };
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
@@ -873,8 +883,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 아카이브·휴지통(#1851) — 사이드바 발치의 두 행이 여는 화면. ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
       //  이 분기가 그보다 **앞에** 서야 한다(뒤에 두면 WIKI 앱 프레임의 옛 휴지통이 열린다 — 그쪽은 화면 안 링크로 간다).
       markActive(page);
-      if (page === 'archive') renderArchive(tab.center, data, binHooks); else renderTrash(tab.center, data, binHooks);
-      tab.aside.replaceChildren();
+      if (page === 'archive') renderArchive(tab.center, data, binHooks, tab.aside); else renderTrash(tab.center, data, binHooks, tab.aside);
     } else if (page === 'connect') {
       markActive('connect');
       tab.aside.replaceChildren();
@@ -1212,7 +1221,7 @@ function dayGroup(at: number, now: number): string {
  *  그게 이 목록이 하는 일이기 때문이다. 같은 상태로 계속 도는 동안엔 조용하다.
  *  기기별 습관이라 브라우저에 둔다.
  */
-const DISMISS_STORE = 'lively_v2_side_dismissed';   // 이름을 `*_KEY` 로 두지 않는다 — 위 apps.ts 주석과 같은 이유(gitleaks 오탐)
+const DISMISS_STORE = wsKey('lively_v2_side_dismissed');   // 이름을 `*_KEY` 로 두지 않는다 — 위 apps.ts 주석과 같은 이유(gitleaks 오탐)
 let dismissed: Record<string, string> = (() => {
   try { const v = JSON.parse(localStorage.getItem(DISMISS_STORE) || '{}'); return v && typeof v === 'object' ? v : {}; }
   catch { return {}; }
@@ -1452,7 +1461,7 @@ function openProjectPage(projectId: number): void {
 //   어느 쪽이 거짓말인지 화면이 말하지 못한다. inbox 는 side.ts render() 와 같은 식이다.
 function railCounts(): { inbox: number; busy: number; projects: number } {
   const live = data.sessions.filter((s) => s.live && s.alive && !isTrashedSess(s));
-  const inbox = live.filter((s) => s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned)).length;
+  const inbox = live.filter((s) => isMineSess(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length;
   const busy = live.filter((s) => s.stateKey === 'busy').length;
   const projects = new Set(live.map((s) => s.projectId).filter((x): x is number => !!x)).size;
   return { inbox, busy, projects };
@@ -1474,7 +1483,7 @@ function openAppKeys(): Set<string> {
 //  세션 주소로 착지하면 라우터가 그 세션 탭을 **되살리는 게 아니라 다시 켠다**(onHash 의 tabsApi.activate) —
 //  대화·스크롤·폴링이 그대로 이어진다. 그래서 '이어서 보인다'가 말 그대로 성립한다.
 //  ⚠ 새로 시작하는 길은 그대로다 — 사이드바 머리줄 [새 작업](.v2-app-new)이 늘 빈 홈을 연다.
-const HOME_ROUTE_STORE = 'lively_v2_home_route';
+const HOME_ROUTE_STORE = wsKey('lively_v2_home_route');
 let homeRoute = (() => { try { return localStorage.getItem(HOME_ROUTE_STORE) || ''; } catch (_) { return ''; } })();
 /** 지금 보는 화면이 [홈] 구역의 것이면 그 자리를 적어 둔다. 구역은 사람이 고를 때만 바뀌므로 이 판정이 곧 '어느 장소인가'다. */
 function noteHomeRoute(route: string): void {

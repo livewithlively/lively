@@ -17,6 +17,10 @@
 //    (미확인)로 끝낸다 — 다시 보내면 같은 지시가 두 번 간다. 재시도는 **보내기 전 단계**(준비 안 됨)에서만.
 //  · 실패는 조용히 삼키지 않는다 — failed 행이 사유와 함께 남고, 화면이 그 자리에서 재시도·삭제를 준다.
 //  · 노드(멤버 PC) 세션은 이 큐를 안 탄다(파일·tmux 가 그 컴퓨터에 있다) — 종전 릴레이 경로 그대로(후속).
+//  · **전송수단은 하네스 모드가 정한다**(#2169) — codex app-server 세션의 pane 은 **codex TUI 가 아니다**
+//    (#2055: TUI 와 app-server 가 같은 대화를 동시에 쥘 수 없어 pane 을 셸로 둔다). 거기에 글자를 넣으면
+//    사람의 지시가 **셸에 타이핑된다**(실측 2026-08-26, 사용자 신고 "첫 프롬프트도 씹히고" — sessions.ts).
+//    큐·재시도·화면은 그대로 쓰고 **나르는 수단만** 프로토콜로 바꾼다.
 //
 //  ── #2154 매니지드 첫 지시 유실 ──
 //  실측 2026-08-27(상민님): 홈 컴포저로 세션을 열고 첫 지시만 준 뒤 자리를 비웠는데, 6시간 뒤 대화가 0개였다.
@@ -37,6 +41,7 @@ import { itemsPool } from "../db/client.js";
 import { tmux, isSessionGoneError } from "../terminal/tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession, SendKeysNotStarted } from "../terminal/send-keys.js";
 import { firstPromptStep } from "../terminal/session-first-prompt.js";
+import { codexChatMode } from "../terminal/codex-chat-mode.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
 import { localTranscriptFs, transcriptFsFor, type TranscriptFs } from "../terminal/harness-io/transcript-fs.js";
@@ -98,6 +103,20 @@ export function stallAction(
   if (verdict === "gone" && !o.restorable) return { action: "fail", reason: "session-gone" };
   const reason = verdict === "gone" ? "session-gone-restorable" : "unreachable";
   return { action: o.ageMs >= UNREACHABLE_TTL_MS ? "fail" : "requeue", reason };
+}
+
+/**
+ * 이 세션의 지시를 **무엇으로 나르나**(순수 — 표가 못박는다, #2169).
+ *
+ *  · `send-keys` — 화면에 글자를 넣고 트랜스크립트 에코로 확인한다(ack 없는 통로의 우회).
+ *  · `codex-chat` — codex app-server 의 pane 은 **codex TUI 가 아니다**(#2055). 거기 넣은 글자는 그 대화에
+ *    도달하지 못한다 — 프로토콜로 보내고 성공·실패를 **값으로** 받는다(에코 확인 불필요).
+ *
+ *  종전엔 수단이 하나뿐이라, app-server 폴백으로 큐에 들어온 지시가 **닿을 수 없는 곳으로 갔다.**
+ */
+export type DeliveryTransport = "send-keys" | "codex-chat";
+export function deliveryTransport(harness: string, env: NodeJS.ProcessEnv = process.env): DeliveryTransport {
+  return codexChatMode({ harness }, env) === "app-server" ? "codex-chat" : "send-keys";
 }
 
 /** 못 닿는 동안의 재시도 간격 — 입력창 대기(초 단위)와 달리 **분 단위** 사건이다(노드 재기동·사람의 복원). */
@@ -277,6 +296,25 @@ async function deliverLoop(sessionId: string): Promise<void> {
     };
 
     await mark(row.id, "sending");
+
+    // ── 전송수단 갈림(#2169) — codex app-server 는 화면이 아니라 **프로토콜**로 받는다. ──
+    //  왜 여기서 갈리나: 그 세션의 pane 은 **codex TUI 가 아니다**(#2055 — TUI 와 app-server 가 같은 대화를
+    //  동시에 쥘 수 없어 pane 을 셸로 둔다). 그래서 send-keys 로는 **그 대화에 닿는 길이 아예 없다.**
+    //  닿지 못하는 방식이 둘인데 어느 쪽도 배달이 아니다:
+    //   · 준비 판정이 send 를 주면 → 사람의 첫 문장이 **셸에 타이핑된다**(명령으로 실행되거나 사라진다).
+    //     실측 2026-08-26, 사용자 신고 "첫 프롬프트도 씹히고"(sessions.ts 의 app-server 분기 머리말).
+    //   · 준비 판정이 끝내 send 를 안 주면 → TTL 까지 기다렸다 failed/not-ready.
+    //  ⚠ 어느 쪽이 나는지는 그때 pane 에 달렸다 — 실측 2026-08-27 의 not-ready 4건이 어느 경로였는지는
+    //   **모른다**(그때 pane 이 남아 있지 않다). 고치는 근거는 그 통계가 아니라 **구조**다: 이 전송수단은
+    //   이 세션의 대화에 도달할 수 없다.
+    //  이 폴백의 의도는 원래 "로그인 전이라 서버를 못 여는 경우에도 지시가 큐에 남는다"(sessions.ts)인데,
+    //  나르는 수단이 send-keys 하나뿐이라 그 의도가 성립한 적이 없다. 수단을 하나 더 준다.
+    //  ⚠ control(설정 슬래시 명령)은 여기 올 수 없다 — codex 는 runtimeCmd 가 없어 /runtime 이 409 로 막는다.
+    if (deliveryTransport(harness) === "codex-chat") {
+      if (await deliverViaCodexChat(sessionId, st, row, settleStall)) return;
+      continue;
+    }
+
     const ready = await waitReady(sessionId, harness, row.trust_ok);
     if (ready !== "ready") {
       if (await settleStall(ready)) return;
@@ -311,6 +349,48 @@ async function deliverLoop(sessionId: string): Promise<void> {
     }
     if (echoed === "confirmed") await mark(row.id, "delivered");
     else await mark(row.id, "sent", echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed");
+  }
+}
+
+/**
+ * codex app-server 배달(#2169) — 화면에 글자를 넣는 대신 **프로토콜로 보낸다**.
+ *
+ *  에코 확인이 없다: 여기서는 성공·실패가 **값으로 온다**(turn/start 의 응답). 트랜스크립트를 뒤져
+ *  "적혔나"를 물을 이유가 없다 — 그건 ack 없는 통로(send-keys)를 쓸 때만 필요한 우회다.
+ *
+ *  ⚠ **스레드 좌표를 남긴다**(rememberCodexThread). 안 남기면 답은 파일에 멀쩡히 있는데 **화면이 그 파일을
+ *   못 찾는다** — sessions.ts 가 같은 함정을 밟고 한 함수로 묶어 둔 자리다.
+ *
+ *  반환 true = 루프를 내려놓았다(타이머·전량실패) · false = 이 행은 끝났으니 다음 행으로.
+ */
+async function deliverViaCodexChat(
+  sessionId: string,
+  st: SessionState | undefined,
+  row: OutboxRow,
+  settleStall: (v: Exclude<ReadyVerdict, "ready">) => Promise<boolean>,
+): Promise<boolean> {
+  const osUser = await sessionOsUser(sessionId).catch(() => null);
+  try {
+    const { sendCodexChat } = await import("../terminal/harness-io/codex-chat-runtime.js");
+    const r = await sendCodexChat({
+      sessionId, text: row.text, cwd: st?.dir || "", osUser,
+      threadId: st?.claude_session_id || null,
+    });
+    const { rememberCodexThread } = await import("../terminal/codex-chat-thread.js");
+    await rememberCodexThread({
+      sessionId, threadId: r.threadId, owner: st?.owner || "", osUser,
+      knownThreadId: st?.claude_session_id, knownPath: st?.transcript_path,
+    }).catch((e) => logger.warn({ err: e, sessionId }, "outbox: codex 스레드 좌표 기록 실패(비치명)"));
+    await mark(row.id, "delivered");
+    return false;
+  } catch (e) {
+    // ⚠ **한 글자도 안 갔을 때만 되돌린다**(#2154 SendKeysNotStarted 와 같은 축). app-server 를 못 띄운
+    //  경우(로그인 전이 대표)가 그것이고, 그때는 큐가 들고 있다가 로그인되면 그대로 들어간다 —
+    //  이 폴백이 원래 하려던 일이 비로소 성립한다. startTurn 이 던진 경우는 이미 갔을 수 있어 안 되돌린다.
+    const notStarted = (e as { notStarted?: boolean })?.notStarted !== false;
+    if (notStarted) return settleStall("unknown");
+    await mark(row.id, "failed", `codex: ${(e as Error)?.message ?? e}`.slice(0, 300));
+    return false;
   }
 }
 

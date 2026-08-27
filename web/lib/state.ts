@@ -56,8 +56,9 @@ function navOn(tab: string): boolean {
 //  우선순위: ① URL ?ui=classic|v2 (이번 로드에만 — 링크로 상대 화면을 보여줄 때)
 //           ② 브라우저 로컬 오버라이드 localStorage[lively_ui_mode] (관리탭 [화면] 의 '이 브라우저에서만' 버튼)
 //           ③ 조직 기본 me.ui_mode (org_runtime_config.ui_mode — 관리자가 정함, 매니지드는 컨트롤플레인이 push)
-//           ④ 'classic' (제품 기본 — 대표 결정 2026-08-20: v2 는 베타라 완성 전까지 opt-in. 서버가 값을 못 줘도 종전 화면)
-//  새 화면(베타)을 쓰려면 ③ 을 v2 로 올리거나(조직), 관리탭 [화면] 의 '이 브라우저에서만'으로 개인만 켠다.
+//           ④ 'v2' (제품 기본 — 대표 결정 2026-08-27: **클래식이 기본이 되는 상황을 하나도 두지 않는다.**
+//              서버가 값을 못 줘도 새 화면이다. 클래식은 ①~③ 에서 누군가 **고른** 값일 때만 나온다.)
+//  클래식으로 보려면 ③ 을 classic 으로 내리거나(조직), 관리탭 [화면]·내 정보의 '클래식 화면으로 바꾸기'로 이 브라우저만 바꾼다.
 const UI_MODE_KEY = 'lively_ui_mode';
 type UiMode = 'v2' | 'classic';
 function uiMode(): UiMode {
@@ -68,7 +69,7 @@ function uiMode(): UiMode {
     if (o === 'classic' || o === 'v2') return o;
   } catch (_) { /* localStorage 접근 불가(프라이버시 모드 등) → 조직 기본으로 */ }
   const m = state.me && (state.me as any).ui_mode;
-  return m === 'v2' ? 'v2' : 'classic';
+  return m === 'classic' ? 'classic' : 'v2';   // 값 부재·구 서버·잡값 → 새 화면(클래식은 고른 값일 때만)
 }
 // 로컬 오버라이드 쓰기 — null 이면 해제(조직 기본으로 복귀). 관리탭 [화면] 과 새 셸의 '클래식으로' 링크가 쓴다.
 function setUiModeOverride(m: UiMode | null): void {

@@ -8,19 +8,14 @@
 //  클라가 임의 tmux 명령(kill-server 등)을 주입하지 못하게 명령 구성을 서버에 가둔다.
 // TERMINAL_LEGACY_ATTACH=1 이면 옛 방식(plain `tmux attach`, tmux 가 화면 painting + copy-mode 스크롤)으로 폴백.
 // ws 종료 = attach 클라만 종료(tmux 세션은 영속). 셸 미경유(argv).
-import { WebSocketServer, type WebSocket } from "ws";
 import { spawn as ptySpawn } from "node-pty";
 import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";   // psmux 파이프 attach 백엔드 + CLI 입력(#1541)
 import { promisify } from "node:util";
-import type { Server, IncomingMessage } from "node:http";
-import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
 import os from "node:os";
-import { TMUX_BIN, canAttach, ensureSessionOpts, sessionGone } from "./terminal-sessions.js";
+import { TMUX_BIN } from "./terminal-sessions.js";
 import { isPsmuxBin } from "./catalog.js";   // #1791 — 정의가 catalog(leaf)로 내려갔다(위 재수출과 짝)
 import { tmuxExecArgv } from "./tmux-exec.js";
-import { resolveTenantFromHeaders, withTenant } from "../org/tenant-context.js";
-import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
 
 // attach 가 실제로 쓰는 소켓 표면 — 게이트웨이 로컬은 실 WebSocket, 노드 에이전트(#869)는 게이트웨이행
 //  단일 WSS 위의 '채널 어댑터'가 이 인터페이스를 구현해 같은 attach 로직(tmux -CC · 큐잉 · 정리)을 재사용한다.
@@ -34,7 +29,6 @@ export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 
 const CONTROL_MODE = process.env.TERMINAL_LEGACY_ATTACH !== "1"; // 기본 control mode, =1 이면 plain attach 폴백
 const execFileP = promisify(cpExecFile);
-const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
 // ── attach PTY 수명 관리(#687 PTY 누수) ──
 // 배경: attach 는 브라우저 WS 하나당 node-pty(`tmux -CC attach`) 1개 = **PTY 1개**를 뜬다. 이건 term.kill() 로만
@@ -54,7 +48,6 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 //      462 → kern.tty.ptmx_max 511 소진 → ssh 조차 PTY 할당 실패). 자식은 정상 종료하므로 고아 프로세스가 0이라
 //      ⓒ 에 안 걸리고, JS 로는 회수도 불가하다(kill·destroy 모두 무효 — 잔류 fd 2개 동일 실측). upstream 이
 //      close(slave) + low_fds 정리 off-by-one 을 고친 **1.2.0-beta.10+** 로 올려 해결한다(package.json).
-const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
 // ── attach 백엔드 (#1541) ─────────────────────────────────────────────────────
 // tmux 는 `attach` 에 tty 를 요구하므로 node-pty 로 띄운다. 그런데 **Windows 노드의 멀티플렉서(psmux)는
 //  정반대**다 — PTY 위에서 control mode 가 **아무것도 내보내지 않는다**(실측: 같은 node-pty 로 cmd.exe·
@@ -150,85 +143,6 @@ function detachGhostClients(bin: string, prefix: string[], id: string, env: Reco
 //  즉시 닫는다 — 할당을 안 하니 누수 원천 차단(정상 스폰 1회로 스트릭 리셋). 브라우저 재연결은 하되 pty 는 안 뜬다.
 const spawnFailStreak = new Map<string, { n: number; at: number }>();
 const SPAWN_FAIL_WINDOW_MS = 60_000, SPAWN_FAIL_MAX = 8, SPAWN_COOLDOWN_MS = 30_000;
-type LiveWS = WebSocket & { isAlive?: boolean };
-let heartbeat: NodeJS.Timeout | null = null;
-
-export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): void {
-  startHeartbeat();                     // 죽은 attach 소켓 주기 회수(#687)
-  void reapOrphanAttachClients();       // 이전 인스턴스가 남긴 고아 attach 회수(#687) — best-effort·비동기
-  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    let url: URL;
-    try { url = new URL(req.url || "", "http://localhost"); } catch { return; }
-    if (url.pathname !== "/terminal/ws") return; // 다른 업그레이드(있다면)는 미관여
-    // ★★ 업그레이드는 Express 미들웨어를 **안 탄다** — 테넌트 컨텍스트(tenant-middleware)가 여기엔 없다.
-    //  요청별 테넌시 배포에서 컨텍스트 없이 canAttach 를 부르면 tmux 중계·DB 조회가 "컨텍스트 밖"으로
-    //  죽고, 그 실패가 4403 으로 접혀 **소유자 본인이 무한 '연결 확인중'** 이 된다(실측 2026-08-18).
-    //  같은 헤더·같은 비밀로 여기서 직접 연다. 거절 사유면 소켓을 닫는다(비밀 불일치 = 배선 문제).
-    const tr = resolveTenantFromHeaders(req.headers as Record<string, string | string[] | undefined>, process.env);
-    if (!tr.ok && tr.reason !== "disabled") { socket.destroy(); return; }
-    // registry(#1750 후속) — 셀프호스트 다중 워크스페이스. 브라우저 WS URL 은 커스텀 헤더를 못 실으므로
-    //  **세션 정본(gw_session_map)** 으로 소속을 되찾는다: 맵에 있으면 그 워크스페이스, 없으면 primary(종전).
-    //  이게 없으면 secondary 세션 attach 가 primary 컨텍스트로 돌아 기본 tmux 소켓을 뒤지고 4410(가짜
-    //  '세션 없음')이 된다 — 세션은 lvly-<slug> 소켓에 살아 있는데.
-    const registrySessionCtx = async (): Promise<{ id: string; slug: string } | null> => {
-      if (tr.ok || (process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() !== "registry") return null;
-      const sid = url.searchParams.get("session") || "";
-      if (!sid) return null;
-      const { workspaceForSession } = await import("../org/tenancy/registry.js");
-      const w = await workspaceForSession(sid).catch(() => null);
-      return w ? { id: w.id, slug: w.slug } : null;
-    };
-    void (async () => {
-      const regCtx = await registrySessionCtx();
-      const inTenant = <T>(fn: () => T): T => (tr.ok ? withTenant(tr.tenant, fn) : regCtx ? withTenant(regCtx, fn) : fn());
-      return inTenant(() => (async () => {
-      const tk = lookupTicket(req.headers.cookie);
-      if (!tk) { socket.destroy(); return; }
-      const id = url.searchParams.get("session") || "";
-      // 노드 세션(#869) — ?node=<id> 면 그 노드의 아웃바운드 채널로 릴레이한다. 정책(가시성)은 여기(게이트웨이)서
-      //  판정하고 노드는 기계적으로 attach 만 실행(F7). 거부 사유는 로컬과 같은 코드 체계(4410/4403)+4462(노드 오프라인).
-      const nodeId = url.searchParams.get("node") || "";
-      if (nodeId) {
-        const verdict = await nodeCanAttach(nodeId, id, tk.userId);
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          if (!verdict.ok) {
-            logger.info({ nodeId, id, userId: tk.userId, code: verdict.code }, "ws 노드 attach 거부");
-            try { ws.close(verdict.code, verdict.reason); } catch { /* noop */ }
-            return;
-          }
-          nodeRelayAttach(nodeId, id, ws);
-        });
-        return;
-      }
-      const ok = await canAttach(id, tk.userId).catch(() => false);
-      // ⚠ 권한이 있어도 **세션이 살아 있는지 따로 봐야 한다**(2026-08-26 실측 신고).
-      //  canAttach → ownerMeta 는 **DB desired-state 우선**이라(sessions.ts) tmux 에서 이미 죽은 세션도
-      //  권한을 통과시킨다. 그래서 종전엔 `!ok` 일 때만 생사를 확인했고, 죽은 세션에 붙으러 온 클라는
-      //  **종료 확답을 못 받았다** — attach 를 시도하다 tmux 의 "can't find session" 한 줄이 화면에
-      //  찍히고, 클라는 이유를 모른 채 **영원히 재연결**했다(새로고침해야 '열기=복원' 경로 #1820 으로 살아났다).
-      //  4410 을 주면 클라가 그 자리에서 복원으로 넘어간다(onSessionGone) — 그게 의도한 경험이다.
-      //  비용은 attach 당 has-session 1회다. 살아 있는 세션엔 즉답이고, 죽은 세션엔 재연결 폭풍을 멈추므로
-      //  오히려 왕복이 준다. 판정 불가(#835)는 여전히 false — 모르면 살아있다고 보고 종전 경로로 간다.
-      const gone = await sessionGone(id).catch(() => false);
-      const close = attachClose(ok, gone);
-      if (close) {
-        // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 '이유가 담긴 코드'로
-        //  닫아 terminal.js 가 사용자에게 정확한 문구를 띄우게 한다. 이유는 둘이고 클라 동작이 갈린다(#835):
-        //   4410 session-gone — tmux 가 '그런 세션 없다'고 확답 → 세션이 진짜 끝남 → 클라는 재연결을 멈추고 '종료됨'을 명시.
-        //   4403 no-access    — 권한 없음, 또는 판정 불가(tmux 과부하·타임아웃 = #687 의 '가짜 4403') → 클라는 몇 번 더 재시도.
-        //  판정 불가를 gone 으로 넘기지 않는 게 핵심 — 살아있는 세션을 '종료됨'으로 오인하는 건 재연결 반복보다 나쁘다.
-        logger.info({ id, userId: tk.userId, ok, gone }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          try { ws.close(close.code, close.reason); } catch { /* noop */ }
-        });
-        return;
-      }
-      await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
-      wss.handleUpgrade(req, socket, head, (ws) => inTenant(() => attach(ws, id)));
-      })());
-    })();
-  });
-}
 
 // 컨트롤 명령 전송 함수 타입. 시작 레이스(아래) 때문에 'term 직접 쓰기'가 아니라 attach 가 주는 버퍼링 send 를 쓴다.
 type SendCmd = (line: string) => void;
@@ -442,10 +356,6 @@ function handleLegacyMsg(term: AttachTerm, msg: { t?: string; d?: unknown; c?: u
   }
 }
 
-function attach(ws: WebSocket, id: string): void {
-  attachSession(ws as unknown as AttachSocket, id);
-}
-
 // attach 본체 — 게이트웨이 로컬(WebSocket)과 노드 에이전트(채널 어댑터 #869)가 공유한다.
 export function attachSession(ws: AttachSocket, id: string): void {
   // 스폰 실패 폭주 차단(#869) — 이 세션 attach 가 최근 연속 실패했으면(예: node-pty 가 이 OS 에서 spawn 불가 = spawn-helper
@@ -541,21 +451,6 @@ export function attachSession(ws: AttachSocket, id: string): void {
       logger.warn({ err, id, fails: spawnFailStreak.get(id)?.n }, "pty attach 실패");
       try { ws.close(); } catch { /* noop */ }
     });
-}
-
-// WS liveness heartbeat(#687) — 반쯤 끊긴 attach 소켓을 주기적으로 걸러 terminate 한다. terminate 는 'close' 를
-//  발생시켜 기존 cleanup(term.kill)이 돌게 하므로 PTY 가 정상 회수된다(=탭 정상 종료와 동일 경로). 게이트웨이가
-//  프로세스 정상 종료하는 걸 막지 않도록 unref. 멱등(중복 호출 무시).
-function startHeartbeat(): void {
-  if (heartbeat) return;
-  heartbeat = setInterval(() => {
-    for (const ws of wss.clients as Set<LiveWS>) {
-      if (ws.isAlive === false) { try { ws.terminate(); } catch { /* noop */ } continue; } // 직전 주기에 pong 없음 = 죽음
-      ws.isAlive = false;
-      try { ws.ping(); } catch { /* noop */ }
-    }
-  }, HEARTBEAT_MS);
-  if (heartbeat.unref) heartbeat.unref();
 }
 
 // 게이트웨이 종료(SIGTERM 재배포·SIGINT·크래시) 시 이 인스턴스의 attach node-pty 를 전부 kill 한다(#687). 안 죽이면
@@ -655,7 +550,7 @@ export function killAttachedPtys(): void {
 //  대상 판정(3중 게이트, 오탐 0 지향): (1) PPID===1(원부모 사망=고아 — 살아있는 부모 있는 건 절대 안 건드림. 현재
 //  인스턴스가 방금 띄운 attach 는 우리 자식이라 PPID≠1 → 매칭 안 됨), (2) 우리 웹터미널 attach 시그니처(tmux …
 //  attach … -t box-…), (3) 우리 uid 소유일 때만 kill 성공(타 uid 는 EPERM 로 skip). ps 는 리눅스·macOS 공통 포맷.
-async function reapOrphanAttachClients(): Promise<void> {
+export async function reapOrphanAttachClients(): Promise<void> {   // #2165 — 〃
   try {
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");

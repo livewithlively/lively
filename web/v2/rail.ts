@@ -17,8 +17,8 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { el, navOn, profileAvatar, state, toast } from '../core.js';
-import { APPS, openLaunchpad, type AppDef } from './apps.js';
+import { el, navOn, personName, profileAvatar, state, toast, wsKey } from '../core.js';
+import { APPS, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
@@ -64,9 +64,9 @@ export function sectionDef(sec: RailSection): SecDef { return SECTIONS.find((s) 
 
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 const SEC_STORE = 'lively_v2_rail_sec';
-const HIDE_STORE = 'lively_v2_rail_hidden';   // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
-const MAIN_STORE = 'lively_v2_rail_main';     // 메인 그룹 순서 — 구역 · 리브 · 독에 고정한 앱을 **한 줄**로(사람이 정한 순서, 5차). 이 기기에 둔다.
-const PIN_STORE = 'lively_v2_rail_pins';      // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
+const HIDE_STORE = wsKey('lively_v2_rail_hidden');   // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
+const MAIN_STORE = wsKey('lively_v2_rail_main');     // 메인 그룹 순서 — 구역 · 리브 · 독에 고정한 앱을 **한 줄**로(사람이 정한 순서, 5차). 이 기기에 둔다.
+const PIN_STORE = wsKey('lively_v2_rail_pins');      // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
 const RECENT_N = 4;
 const NARROW_MQ = '(max-width: 900px)';   // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 
@@ -127,7 +127,9 @@ export function toggleRail(): void {
 const SEC_APP_KEYS = new Set(['terminal', 'projects2', 'knowledge']);
 function recentForRail(n: number): AppDef[] {
   let keys: string[] = [];
-  try { const v = JSON.parse(localStorage.getItem('lively_v2_recent_apps') || '[]'); if (Array.isArray(v)) keys = v.filter((x) => typeof x === 'string'); }
+  //  ⚠ 키를 여기서 다시 적지 않는다 — apps.ts 가 내보내는 RECENT_STORE_KEY 와 **같은 자리**를
+  //   읽어야 한다. 사본을 두면 워크스페이스 접미사가 한쪽에만 붙어 레일만 남의 워크스페이스 기록을 본다(#1875).
+  try { const v = JSON.parse(localStorage.getItem(RECENT_STORE_KEY) || '[]'); if (Array.isArray(v)) keys = v.filter((x) => typeof x === 'string'); }
   catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
   const pick: AppDef[] = [];
   const take = (a: AppDef | undefined): void => {
@@ -757,7 +759,7 @@ export function drawRail(): void {
 
   // ③ 발치 — 앱 · 나 (슬랙의 ＋ · 아바타). 여닫는 단추는 여기 없다(머리말).
   const me: any = state.me || {};
-  const myName = String(me.display_name || me.email || me.userId || '');
+  const myName = personName(me);   // 닉네임을 쓰기로 켠 사람은 닉네임으로 불린다(#1813)
   const foot = el('footer', { class: 'v2-rail-foot' },
     item('apps', '앱', 'apps', false, null, () => openLaunchpad()),
     el('button', {

@@ -10,6 +10,7 @@
 //
 // 관련: src/node/task-scheduler.ts(이 정책으로 stall 판정) · src/sessions/session-reclaim-policy.ts(같은 seam 원형).
 
+import { tenantTtlCache } from "../tenant-ttl-cache.js";
 import { definePolicy } from "./knob.js";
 
 export interface DelegatePolicy {
@@ -116,24 +117,21 @@ export function delegatePolicySource(dbRaw: unknown): "db" | "env" | "default" {
 // ── 캐시 ──
 // 스케줄러는 5초마다 도는 루프라 매 tick DB 를 치면 안 된다. 짧은 캐시 + DB 실패 시 폴백
 //  (stall 판정이 정책 조회로 막히지 않게 — 못 읽으면 마지막 값→기본값으로, 절대 throw 하지 않는다).
-let cache: { at: number; policy: DelegatePolicy } | null = null;
+// ★ **테넌트별** 캐시다 — 전역 한 칸이면 중앙 게이트웨이에서 먼저 읽은 테넌트의 값이 TTL 동안
+//  다른 테넌트에도 적용된다(실측 2026-08-27: 갓 만든 테넌트의 기본값 0/0 이 정상 테넌트 1536 을 덮어
+//  세션 컨테이너 격리가 조용히 꺼졌다). 근거·전말은 org/tenant-ttl-cache.ts 머리말이 정본이다.
+const cache = tenantTtlCache<DelegatePolicy>(30_000, () => normalizeDelegatePolicy(null));
 
 export async function effectiveDelegatePolicy(
   load: () => Promise<DelegatePolicy>,
   ttlMs = 30_000,
   now: () => number = Date.now,
 ): Promise<DelegatePolicy> {
-  if (cache && now() - cache.at < ttlMs) return cache.policy;
-  try {
-    const policy = await load();
-    cache = { at: now(), policy };
-    return policy;
-  } catch {
-    return cache?.policy ?? normalizeDelegatePolicy(null);
-  }
+  // ttlMs·now 는 종전 시그니처 그대로 **캐시에 넘긴다** — 새 캐시를 만들면 그게 곧 캐시를 없앤 것이다.
+  return cache.get(load, ttlMs, now);
 }
 
 /** 관리탭에서 정책을 저장한 직후 호출 — 다음 스케줄러 tick 이 즉시 새 값을 보게. */
 export function invalidateDelegatePolicyCache(): void {
-  cache = null;
+  cache.invalidate();
 }

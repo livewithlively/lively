@@ -17,8 +17,13 @@ set -euo pipefail
 #     · opencode-plugin.js 를 놓침(확장자가 .js 라 *.mjs 에 미매치)
 #     · 반대로 .test.mjs 25개를 멤버 홈에 뿌림
 #   목록은 kit/setup/kit-manifest.mjs 단일 출처가 갖고, 이 스크립트는 그걸 **읽어 갈 뿐**이다.
-#   복사 후엔 verify-kit-install.mjs 로 «심어놓은 트리가 import 를 푸는가»를 확인한다 — 훅은
-#   non-blocking 이라 깨져도 세션이 떠서, 이 확인이 없으면 다음 사고도 사용자 제보로만 발견된다.
+#   그리고 **스테이지에 먼저 깔아 verify-kit-install.mjs 로 검증한 뒤에만** 살아 있는 트리로 옮긴다.
+#   훅은 non-blocking 이라 깨져도 세션이 떠서, 이 확인이 없으면 다음 사고도 사용자 제보로만 발견된다.
+#
+#  ⭐ 불변식: **검증에 실패한 훅 런타임은 멤버에게 닿지 않는다.**
+#   왜 «덮어쓰고 검증» 으로는 부족한가 — 훅이 깨지면 self-update 를 띄우는 유일한 주체(session-preload)가
+#   함께 죽는다(session-preload.mjs:468 이 유일 호출부). 즉 한 번 나쁜 kit 이 실리면 멤버는 **스스로
+#   복구할 수 없고** 관리자가 홈마다 손대야 한다(2026-08-27 실측). 그래서 «닿기 전에» 걸러야 한다.
 #
 # 사용: sudo bash deploy/refresh-member-kits.sh   (update.sh 가 격리 박스에서 자동 호출)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +66,16 @@ for u in $members; do
   # 이하 훅 러너 리프레시는 kit 설치 멤버(~/.lively/hooks 존재)만 — 첫 세션 프로비저닝이 설치한다.
   [ -d "$h/.lively/hooks" ] || continue
 
+  # ── ① 스테이징에 먼저 깔고 검증한다 — 살아 있는 트리는 아직 건드리지 않는다 ─────────────
+  #  ⚠ 이 순서가 핵심이다(2026-08-27 사고의 근본 처방). 종전엔 «덮어쓰고 → 검증» 이라, 나쁜 번들이 실리면
+  #   검증이 실패를 알려줄 때는 **이미 멤버가 깨진 뒤**였다. 그리고 그 상태에서 자가치유가 불가능하다:
+  #   self-update 를 띄우는 곳은 session-preload 하나뿐인데(session-preload.mjs:468) 그 session-preload
+  #   자신이 방금 덮어쓴 트리 안에 산다 — 트리가 깨지면 **복구를 실행할 주체가 함께 죽는다**. 그래서
+  #   그날 관리자가 홈마다 파일을 손으로 복사해야 했다.
+  #   스테이지에서 먼저 검증하면 나쁜 번들은 **아무에게도 닿지 않는다** — 멤버는 돌던 kit 을 그대로 쓴다.
+  stage="$h/.lively/.refresh-stage"
+  rm -rf "$stage"
+  install -d -o "$u" -g "$u" -m 0755 "$stage"
   cnt=0
   gone=0
   while IFS=$'\t' read -r src dest; do
@@ -70,20 +85,46 @@ for u in $members; do
     fi
     # 대상 디렉터리는 **멤버 소유**로 만든다 — root 소유로 만들면 이후 멤버 권한으로 도는 자동 업데이트
     #  (user-install)이 그 안에 못 써서 다음 업데이트가 조용히 실패한다.
-    d="$h/.lively/$(dirname "$dest")"
+    d="$stage/$(dirname "$dest")"
     [ -d "$d" ] || install -d -o "$u" -g "$u" -m 0755 "$d"
     # 소유권=멤버, 파일만 교체(원자적 install). 러너는 node 가 읽어 실행(실행비트 불요) → 0644.
-    if install -o "$u" -g "$u" -m 0644 "$src" "$h/.lively/$dest"; then cnt=$((cnt + 1)); fi
+    if install -o "$u" -g "$u" -m 0644 "$src" "$stage/$dest"; then cnt=$((cnt + 1)); fi
   done <<EOF
 $PLAN
 EOF
 
-  # 심어 놓은 트리가 실제로 import 를 푸는가 — 개수가 아니라 **실행 가능성**을 본다.
+  # 스테이지가 실제로 import 를 푸는가 — 개수가 아니라 **실행 가능성**을 본다.
+  if ! vout="$(node "$VERIFY" "$stage" 2>&1)"; then
+    failed=$((failed + 1))
+    echo "  ✗ $u — 새 훅 런타임이 검증에 실패해 **적용하지 않았다**(기존 트리 유지 — 이 멤버는 계속 동작한다):"
+    printf '%s\n' "$vout" | sed 's/^/      /'
+    if [ "$gone" -ne 0 ]; then
+      echo "      ⚠ 번들 누락 ${gone}건(위 목록)"
+      missing_total=$((missing_total + gone))
+    fi
+    rm -rf "$stage"
+    n=$((n + 1))
+    continue
+  fi
+
+  # ── ② 검증을 통과한 것만 살아 있는 트리로 옮긴다 ───────────────────────────────────
+  while IFS=$'\t' read -r src dest; do
+    [ -n "$src" ] || continue
+    [ -f "$stage/$dest" ] || continue
+    d="$h/.lively/$(dirname "$dest")"
+    [ -d "$d" ] || install -d -o "$u" -g "$u" -m 0755 "$d"
+    install -o "$u" -g "$u" -m 0644 "$stage/$dest" "$h/.lively/$dest"
+  done <<EOF
+$PLAN
+EOF
+  rm -rf "$stage"
+
+  # 옮긴 뒤 실제 트리도 한 번 더 본다 — 스테이지엔 없던 잔존물이 폐포를 깨는 경우까지 잡는다.
   if vout="$(node "$VERIFY" "$h/.lively" 2>&1)"; then
     echo "  ✓ $u — 훅 런타임 ${cnt}개 리프레시 · 설치 검증 통과"
   else
     failed=$((failed + 1))
-    echo "  ✗ $u — 설치 검증 실패(이 멤버의 훅은 동작하지 않는다):"
+    echo "  ✗ $u — 적용 후 검증 실패(이 멤버의 훅은 동작하지 않는다):"
     printf '%s\n' "$vout" | sed 's/^/      /'
   fi
   if [ "$gone" -ne 0 ]; then
@@ -94,7 +135,10 @@ EOF
 done
 echo "✓ 격리 멤버 훅 러너 리프레시 완료(${n}명, 소스=$KIT)"
 if [ "$failed" -gt 0 ]; then
-  echo "✗ 그중 ${failed}명은 설치 검증 실패 — 훅이 죽은 채로 세션이 뜬다(위 진단 참조)"
+  #  ⚠ 문구는 **적용 여부**를 말해야 한다 — stage→verify→swap 이후 검증 실패는 «적용하지 않음»(멤버는
+  #   기존 kit 으로 계속 동작)이지 «훅이 죽음»이 아니다. 종전 문구를 그대로 두면 운영자가 멀쩡한 박스를
+  #   장애로 오인해 불필요한 수동 복구를 한다(그 손댐 자체가 새 사고의 입구다).
+  echo "✗ 그중 ${failed}명은 새 훅 런타임을 적용하지 못했다 — 그 멤버는 **기존 kit 으로 계속 동작한다**(위 진단 참조). 번들을 고쳐 재배포하라."
   exit 1
 fi
 # ⚠ 검증을 통과했더라도 **번들↔매니페스트 불일치**는 그 자체로 실패다. verify 는 «심어진 트리가 import 를

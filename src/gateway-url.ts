@@ -9,7 +9,7 @@
 //   안으로 들어간다. 헤더 폴백은 요청자가 통제할 수 있으니(Host), `"`·`$(…)`·백틱이 섞이면 자기 자신에게
 //   셸 인젝션이 된다. 실사용에선 org 프로필/PUBLIC_URL 이 먼저 잡혀 폴백이 거의 안 쓰이지만 방어는 유지한다.
 import type express from "express";
-import { getOrgProfile } from "./org/store.js";
+import { getOrgProfile } from "./org/store/profile.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 
 export const SAFE_GATEWAY_URL = /^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?$/;
 

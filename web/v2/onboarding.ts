@@ -4,8 +4,9 @@
 //  문구는 원준님 교정 31건 반영본. 새로 쓴 연결부는 [새문구] 주석. 상태는 sessionStorage(진행)·localStorage(끝남 표식).
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
-import { authUploadProgress, upDirSupported, upDropZone, upFromInput } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
-import { api, apiUrl } from '../core.js';
+import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
+import { api, apiUrl, state } from '../core.js';
+import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
 //  #1879 — 외부 앱을 **실제로** 잇는다. 잇는 길은 새로 만들지 않고 이미 깎아 둔 한 곳을 그대로 쓴다:
 //   서비스 표·연결 판정은 me-logins.ts(=[외부 앱 연결] 화면 v2/connect.ts 와 같은 정본), 토큰 발급처·생김새는
 //   admin-credentials.ts 의 CRED_KINDS. **표가 두 벌이 되면 조용히 어긋난다** — 여기서 다시 만들지 않는다.
@@ -431,110 +432,44 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     {
      "k": "문서·위키",
      "items": [
-      {
-       "id": "notion",
-       "label": "Notion",
-       "logo": "notion",
-       "live": true
-      },
-      {
-       "id": "gdrive",
-       "label": "Google Drive",
-       "logo": "googledrive",
-       "live": true
-      },
-      {
-       "id": "figma",
-       "label": "Figma",
-       "logo": "figma",
-       "live": true
-      }
+      { "id": "notion", "label": "Notion", "logo": "notion", "live": true },
+      { "id": "gdrive", "label": "Google Drive", "logo": "googledrive", "live": true },
+      { "id": "figma", "label": "Figma", "logo": "figma", "live": true }
      ]
     },
     {
      "k": "메신저·메일·일정",
      "items": [
-      {
-       "id": "slack",
-       "label": "Slack",
-       "logo": "slack",
-       "live": true
-      },
-      {
-       "id": "gmail",
-       "label": "Gmail",
-       "logo": "gmail",
-       "live": true,
-       "admin": true
-      },
-      {
-       "id": "gcal",
-       "label": "Google 캘린더",
-       "logo": "googlecalendar",
-       "live": true,
-       "admin": true
-      }
+      { "id": "slack", "label": "Slack", "logo": "slack", "live": true },
+      { "id": "gmail", "label": "Gmail", "logo": "gmail", "soon": true },
+      { "id": "gcal", "label": "Google 캘린더", "logo": "googlecalendar", "soon": true }
      ]
     },
     {
-     "k": "일감·코드",
+     "k": "태스크 관리",
      "items": [
-      {
-       "id": "linear",
-       "label": "Linear",
-       "logo": "linear",
-       "live": true
-      },
-      {
-       "id": "clickup",
-       "label": "ClickUp",
-       "logo": "clickup",
-       "live": true
-      },
-      {
-       "id": "github",
-       "label": "GitHub",
-       "logo": "github",
-       "live": true
-      },
-      {
-       "id": "gitlab",
-       "label": "GitLab",
-       "logo": "gitlab",
-       "live": true
-      }
+      { "id": "linear", "label": "Linear", "logo": "linear", "live": true },
+      { "id": "clickup", "label": "ClickUp", "logo": "clickup", "live": true }
+     ]
+    },
+    {
+     "k": "코드",
+     "items": [
+      { "id": "github", "label": "GitHub", "logo": "github", "live": true },
+      { "id": "gitlab", "label": "GitLab", "logo": "gitlab", "live": true }
      ]
     },
     {
      "k": "내 컴퓨터",
      "items": [
-      {
-       "id": "folder",
-       "label": "내 컴퓨터 폴더",
-       "ic": "folder"
-      },
-      {
-       "id": "git",
-       "label": "로컬 깃 저장소",
-       "ic": "term"
-      }
+      { "id": "folder", "label": "내 컴퓨터 폴더", "ic": "folder" },
+      { "id": "git", "label": "로컬 깃 저장소", "ic": "term" }
      ]
     },
     {
      "k": "그 밖",
      "items": [
-      {
-       "id": "prometheus",
-       "label": "Prometheus",
-       "logo": "prometheus",
-       "live": true
-      },
-      {
-       "id": "none",
-       "label": "딱히 없어요, 대화로 시작",
-       "ic": "doc",
-       "none": true
-      }
+      { "id": "none", "label": "딱히 없어요, 대화로 시작", "ic": "doc", "none": true }
      ]
     }
    ],
@@ -703,6 +638,35 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     none: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.6a7.9 7.9 0 0 1-8.5 7.9 8.6 8.6 0 0 1-3.6-.8L3.5 20.3l1.6-4.3a7.9 7.9 0 0 1-1.6-4.8 8 8 0 0 1 8.5-7.7 7.9 7.9 0 0 1 8.5 7.7z"/><path d="M8.6 11.5h.01M12 11.5h.01M15.4 11.5h.01"/></svg>',
   };
 
+  /* 무대·직무·AI 아이콘 (#1813) — 글자만 늘어선 카드는 훑기 어렵다.
+   *  선 아이콘은 셸 아이콘(web/v2/icons.ts)과 같은 붓: 24 뷰박스 · 획 1.7 · 둥근 끝 · 채움 없음.
+   *  AI 넷은 각 회사의 실제 마크를 그대로 쓴다(브랜드는 사람이 로고로 알아본다). */
+  const ICONS = {
+    company: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M5 21V6a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v15M14 10h4a1 1 0 0 1 1 1v10"/><path d="M8 9h3M8 13h3M8 17h3"/></svg>',
+    solo: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg>',
+    academy: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4 2 9l10 5 10-5-10-5z"/><path d="M6 11.5V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-4.5"/></svg>',
+    student: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H18a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5.5A1.5 1.5 0 0 1 4 17.5z"/><path d="M4 17.5A1.5 1.5 0 0 1 5.5 16H19"/><path d="M8 8h7"/></svg>',
+    제품·기획: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v4h-7zM13 12h7v8h-7zM4 15h7v5H4z"/></svg>',
+    마케팅·브랜드: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h3l6 4V5L7 9H4z"/><path d="M17 9.5a4 4 0 0 1 0 5"/></svg>',
+    영업·고객: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/><path d="M19 4l1.5 1.5L23 3"/></svg>',
+    개발·데이터: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg>',
+    디자인: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 2-.9 2-2 0-.5-.2-1-.6-1.4-.3-.4-.4-.8-.4-1.1 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-3.9-4-6-9-6z"/><circle cx="7.5" cy="11" r="1"/><circle cx="11" cy="7.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/></svg>',
+    경영·전략: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>',
+    재무·회계·법무: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18M7 7h7a3 3 0 0 1 0 6H8a3 3 0 0 0 0 6h8"/></svg>',
+    인사·총무·운영: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M2 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1"/><path d="M17 5.5a3 3 0 0 1 0 6M18.5 14a4.5 4.5 0 0 1 3.5 4.4V20"/></svg>',
+    _job: '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M9 6V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V6"/></svg>',
+  };
+  const AI_LOGO = {
+    'Claude': '<svg class="ob-blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#D97757"><path d="M4.709 15.955l4.72-2.647.079-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.004 1.81 2.508 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg>',
+    'ChatGPT': '<svg class="ob-blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#000000"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997z"/></svg>',
+    'Gemini': '<svg class="ob-blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#4285F4"><path d="M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.305 14.305 0 0 0 12 12 14.305 14.305 0 0 0-12 12"/></svg>',
+    'Grok': '<svg class="ob-blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#000000"><path d="M6.469 8.776L16.512 23h-4.464L2.005 8.776H6.47zm-.004 7.9l-2.233 3.164L2 16.68l2.232-3.163 2.233 3.159zM22 6.919l-9.489 13.44-2.232-3.163 7.257-10.28H22zM22 1l-9.879 14-2.233-3.163L17.536 1H22z"/></svg>',
+    '여러 개': '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/><path d="M12 8v8M8 12h8"/></svg>',
+    '아직 없어요': '<svg class="ob-blogo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/><path d="M9.2 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.4-2.8 4"/><path d="M12 17.2h.01"/></svg>',
+  };
+  /** 직무 아이콘 — 목록에 없는 답(직접 적기)도 기본 아이콘을 준다. */
+  const jobIcon = (label) => ICONS[label] || ICONS._job;
+
   const $ = (s, el) => (el || host).querySelector(s);
   const $$ = (s, el) => Array.from((el || host).querySelectorAll(s));
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -712,6 +676,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   /* ── 상태 ── */
   const KEY = 'lively-ob-v2';
+  /** 검토용 장면 점프(?scene=)로 들어왔나 — 그때만 없는 답을 지어내 화면을 채운다(#2207). */
+  let demoJump = false;
+  /** 이 화면이 이미 걷혔나 — 서버를 기다리는 사이에 떠날 수 있다. */
+  let destroyed = false;
+  /** 이 화면이 히스토리에 쌓은 걸음 순번 — «뒤로» 와 «나가기» 를 가르는 근거(onPop 참조). */
+  let obSeq = 0;
+  /** 서버에 «어디까지 하셨나» 를 묻고 기다리는 한도. 넘으면 처음부터 연다 — 못 물었다고 화면이 안 열리면 안 된다. */
+  const RESUME_WAIT_MS = 2500;
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
@@ -724,8 +696,58 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     chatDone: [],           // 막3에서 끝난 단계들
   });
   let S = fresh();
-  try { const v = JSON.parse(sessionStorage.getItem(KEY)); if (v && v.scene) S = Object.assign(fresh(), v); } catch (e) {}
-  const save = () => { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+  /** 이 탭에 남아 있던 진행이 있었나 — 있으면 그게 가장 새 것이다(아래 «어느 쪽이 정본인가» 참조).
+   *  ⚠ **아무것도 답하지 않은 상태는 «있음» 으로 치지 않는다.** 서버를 못 물었을 때(장애·느림) 첫 화면이
+   *   그대로 이 탭에 저장되는데, 그걸 «있음» 으로 읽으면 그 탭은 **다시는 서버에 묻지 않는다** — 한 번의
+   *   일시적 실패가 그 사람의 저장된 진행을 영영 가린다(실측 2026-08-27: 프리뷰 백엔드가 잠깐 죽은 사이 재현). */
+  let hadLocal = false;
+  try {
+    const v = JSON.parse(sessionStorage.getItem(KEY));
+    if (v && v.scene) { S = Object.assign(fresh(), v); hadLocal = v.scene !== 'name' || !!v.nameSet; }
+  } catch (e) {}
+
+  /* ── 하다 만 자리를 **서버에** 남긴다 (#2207) ─────────────────────────────────
+   *  종전엔 진행이 sessionStorage 하나였다. sessionStorage 는 **탭을 닫으면 사라진다** — 온보딩을 하다
+   *   창을 닫고 app.lvly.io 로 다시 들어오면 이름부터 다시 물었고, 거기까지 답한 것(무대·직무·고른 AI·
+   *   자료함 갈래)은 아무 데도 안 남았다. 이름·업무를 그 자리에서 남기기로 한 것(#1813)과 같은 이유로,
+   *   **자리표까지** 서버가 든다.
+   *  ⚠ 어느 쪽이 정본인가: **이 탭에 있으면 이 탭이 정본**이다. 로컬은 매 저장마다 서버로 밀리므로
+   *   서버보다 앞서거나 같다(뒤질 수 없다). 서버는 «탭이 사라진 뒤» 를 위한 자리다.
+   *  ⚠ 자주 불린다(장면 하나에 여러 번) — 그래서 debounce 하고, 한 번에 하나만 날린다.
+   */
+  const PUSH_MS = 800;
+  let pushT = null, pushing = false, pushAgain = false, pushOff = false;
+  const saveLocal = () => { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+  /** 남길 만한 진행인가 — **아무것도 답하지 않은 첫 화면은 «하다 만 것» 이 아니다.**
+   *  ⚠ 이 문턱이 없으면 처음 설정을 **열어보기만 한** 사람도 다음 로그인마다 처음 설정으로 끌려간다
+   *   (서버 판정이 자리표를 흔적보다 세게 보기 때문이다 — first-run.ts ★). 답이 하나라도 있을 때부터 남긴다. */
+  const worthSaving = () => S.scene !== 'name' || S.nameSet;
+  function schedulePush() {
+    if (pushOff || !worthSaving()) return;   // 끝난 사람의 진행은 남기지 않는다(서버도 거절한다)
+    clearTimeout(pushT);
+    pushT = setTimeout(() => { void flushProgress(); }, PUSH_MS);
+  }
+  /** 지금 상태를 서버에 밀어 넣는다. **실패해도 진행을 막지 않는다** — 이 탭에는 그대로 남아 있다.
+   *  `keepalive` 는 창을 닫는 중에도 요청이 끝까지 가게 한다(pagehide). */
+  async function flushProgress(keepalive) {
+    if (pushOff || !worthSaving()) return;
+    clearTimeout(pushT); pushT = null;
+    if (pushing) { pushAgain = true; return; }
+    pushing = true;
+    try {
+      await api('/api/ui/me/welcome/progress', Object.assign(
+        { method: 'POST', body: JSON.stringify({ scene: S.scene || 'name', state: S }) },
+        keepalive ? { keepalive: true } : {}));
+    } catch (_) { /* 비치명 — 이 탭에는 남아 있다 */ }
+    pushing = false;
+    if (pushAgain) { pushAgain = false; void flushProgress(); }
+  }
+  const save = () => { saveLocal(); schedulePush(); };
+  /** 창을 닫거나 탭을 숨길 때 — 마지막 한 걸음이 유실되는 자리가 정확히 여기다(debounce 대기 중). */
+  const onLeave = () => { if (document.visibilityState === 'hidden') void flushProgress(true); };
+  const onPageHide = () => { void flushProgress(true); };
+  addEventListener('pagehide', onPageHide);
+  document.addEventListener('visibilitychange', onLeave);
 
   const stageOf = () => DATA.STAGES[S.stage] || DATA.STAGES.company;
   const jobOf = () => S.job || stageOf().opts[0][0];
@@ -973,9 +995,23 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // ⚠ 이름은 **그 자리에서** 서버에 남긴다. 종전엔 온보딩을 끝까지 마쳐야(POST /api/ui/me/welcome) 저장돼서,
         //  중간에 나가면 방금 적은 이름이 워크스페이스 어디에도 안 보였다(원준님 신고 2026-08-26).
         //  실패해도 진행은 막지 않는다 — 마무리에서 한 번 더 보낸다.
+        //  ⚠ **display_name 과 nickname 을 함께** 넣는다. 종전엔 nickname 만 넣었는데, 화면이 사람 이름을 읽는
+        //   자리는 전부 display_name 이다(rail.ts·side.ts·views.ts·me-modal.ts 모두 `display_name || email || userId`).
+        //   nickname 은 활동 로그·알림 위젯에서만 쓰여서, 「어떻게 불러 드릴까요」에 답해도 사이드바엔 이메일
+        //   앞부분(프로비저닝이 넣은 값)이 계속 떠 있었다(원준님 신고 2026-08-26).
         const saveName = (v) => {
           if (!v) return;
-          void api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ nickname: v }) }).catch(() => { /* 비치명 */ });
+          //  ⚠ **display_name 만** 넣는다(닉네임은 건드리지 않는다). 「어떻게 불러 드릴까요」는 곧 표시이름이고,
+          //   닉네임은 [내 설정 ▸ 프로필]에서 따로 정한 뒤 「이 닉네임을 내 이름으로 사용」을 켜야 이름을 대체한다.
+          //   종전엔 여기서 nickname 까지 덮어써서, 프로필에 정해 둔 닉네임이 온보딩을 다시 지나면 날아갔다.
+          void api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ display_name: v }) })
+            .then(() => {
+              // 화면이 읽는 값을 그 자리에서 갈아끼우고 레일을 다시 그린다 — 안 그리면 새로고침 전엔
+              //  사이드바 발치가 옛 이름(이메일 앞부분)을 그대로 들고 있다.
+              try { if (state && (state as any).me) { (state as any).me.display_name = v; } } catch (_) { /* noop */ }
+              try { drawRail(); } catch (_) { /* 레일이 없는 배포(클래식)면 그냥 넘어간다 */ }
+            })
+            .catch(() => { /* 비치명 — 마무리에서 한 번 더 보낸다 */ });
         };
         const go = () => { const v = inp.value.trim(); if (v) { S.name = v; S.nameSet = true; saveName(v); } goScene('stage'); };
         $('#nameGo', el).onclick = go;
@@ -992,17 +1028,17 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         '자세한 건 안 여쭙습니다. 두 번만 고르시면 됩니다.')
         /* [새문구] 카드 설명 4줄 — 노션 카드형에 맞춰 새로 씀 */
         + `<div class="ob-opt-cards">
-            ${card('회사·조직', '팀과 함께 회사 일을 합니다', BRAND.company, S.stage === 'company')}
-            ${card('1인·프리랜서', '내 이름으로 여러 일을 합니다', BRAND.solo, S.stage === 'solo')}
-            ${card('학교·연구', '연구실·학교에서 연구합니다', BRAND.academy, S.stage === 'academy')}
-            ${card('학생', '수업·시험·진로를 준비합니다', BRAND.student, S.stage === 'student')}
+            ${card('회사·조직', '팀과 함께 회사 일을 합니다', ICONS.company, S.stage === 'company')}
+            ${card('1인·프리랜서', '내 이름으로 여러 일을 합니다', ICONS.solo, S.stage === 'solo')}
+            ${card('학교·연구', '연구실·학교에서 연구합니다', ICONS.academy, S.stage === 'academy')}
+            ${card('학생', '수업·시험·진로를 준비합니다', ICONS.student, S.stage === 'student')}
           </div><button class="ob-q-skip" data-skip>나중에 정할게요</button>`,
       bind: (el) => {
         const ID = { '회사·조직': 'company', '1인·프리랜서': 'solo', '학교·연구': 'academy', '학생': 'student' };
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           const id = ID[c.dataset.opt]; if (S.stage !== id) { S.job = null; }
-          S.stage = id; save(); await sleep(200); goScene('role');
+          S.stage = id; save(); saveWork(); await sleep(200); goScene('role');
         });
         $('[data-skip]', el).onclick = () => { S.stage = S.stage || 'company'; goScene('role'); };
       },
@@ -1012,18 +1048,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         `${esc(stageOf().label)}이시군요.`,
         esc(stageOf().axis),
         '고르신 것에 맞춰 자료를 읽습니다. 목록에 없으면 직접 적어 주세요.')
-        + `<div class="ob-opt-cards">${stageOf().opts.map(([l]) => card(l, '', '', S.job === l)).join('')}</div>
+        + `<div class="ob-opt-cards">${stageOf().opts.map(([l]) => card(l, '', jobIcon(l), S.job === l)).join('')}</div>
            <div class="ob-q-write" hidden><input id="roleIn" type="text" placeholder="무슨 일을 하시는지 적어 주세요"><button class="ob-btn ob-btn-pri ob-btn-inline" id="roleInGo" style="margin-top:0">확인</button></div>
            <button class="ob-q-skip" data-other>목록에 없어요. 직접 적을게요</button>
            <button class="ob-q-skip" data-skip>나중에 정할게요</button>`,
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
-          S.job = c.dataset.opt; save(); await sleep(200); goScene('files');
+          S.job = c.dataset.opt; save(); saveWork(); await sleep(200); goScene('files');
         });
         const wr = $('.ob-q-write', el), win = $('#roleIn', el);
         $('[data-other]', el).onclick = (e) => { wr.hidden = false; e.target.hidden = true; win.focus(); };
-        const commit = () => { const v = win.value.trim(); if (!v) return; S.job = v; save(); goScene('files'); };
+        const commit = () => { const v = win.value.trim(); if (!v) return; S.job = v; save(); saveWork(); goScene('files'); };
         $('#roleInGo', el).onclick = commit;
         win.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) commit(); });
         $('[data-skip]', el).onclick = () => goScene('files');
@@ -1071,26 +1107,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           renderSB();
         };
         upDropZone(zone, zone, (items) => void sendAll(items));
-        // 고르기 버튼은 **둘을 그대로 편다.** 종전엔 프로젝트 화면용 팝오버 메뉴(upControl)를 빌려 썼는데,
-        //  그 메뉴 안에 숨은 «폴더 올리기» 를 사람이 찾지 못했다(원준님: "폴더채로도 업로드할 수 있어야함").
-        //  이 화면은 질문 하나에 답하는 자리라, 고를 것이 둘뿐이면 숨기지 않는다.
-        const mkIn = (dir) => {
-          const i = document.createElement('input');
-          i.type = 'file'; i.multiple = true; i.style.display = 'none';
-          if (dir) i.setAttribute('webkitdirectory', '');
-          i.addEventListener('change', () => { void sendAll(upFromInput(i)); i.value = ''; });
-          return i;
-        };
-        const mkBtn = (label, input) => {
-          const b = document.createElement('button');
-          b.type = 'button'; b.className = 'ob-btn ob-btn-sub ob-btn-inline'; b.textContent = label;
-          b.onclick = (ev) => { ev.stopPropagation(); input.click(); };
-          return b;
-        };
-        const fileIn = mkIn(false), dirIn = mkIn(true);
-        const pickHost = $('#upPick', el);
-        pickHost.append(mkBtn('파일 고르기', fileIn), fileIn);
-        if (upDirSupported()) pickHost.append(mkBtn('폴더째 고르기', dirIn), dirIn);   // 미지원 브라우저는 끌어다 놓기로 간다
+        // 고르기는 **공용 부품 하나**를 쓴다(upControl) — 버튼 한 개를 누르면 [파일 올리기 / 폴더 올리기] 가 뜬다.
+        //  구글 드라이브·슬랙과 같은 문법이고, 무엇보다 이 레포의 규칙이다(files-upload.ts: "새 업로드 코드 금지").
+        //  ⚠ 버튼을 둘로 펴 보았다가 되돌렸다(원준님 2026-08-27) — 고르는 방법 하나에 버튼을 두 개 두는 화면은 없다.
+        //   폴더가 안 보이던 것은 메뉴가 아니라 **그 메뉴가 이 화면에서 안 떴는지**를 봐야 할 문제였다.
+        const pick = upControl((items) => void sendAll(items), { className: 'ob-btn ob-btn-sub ob-btn-inline', label: '올릴 것 고르기' });
+        $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 숨김 input 도 DOM 에 있어야 click 이 먹는다
         // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
         $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
         $('[data-skip]', el).onclick = () => goScene('sources');
@@ -1128,6 +1150,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           + rows.map((r) => `<p class="ob-opt-group">${esc(r.k)}</p><div class="ob-opt-grid">
               ${r.items.map((it) => connState(it.id) === 'on'
                 ? `<button class="ob-opt-card ob-on ob-locked" data-done="1" aria-disabled="true"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">이어져 있어요</span></span><span class="ob-oc-chk">✓</span></button>`
+                //  아직 안 되는 곳(soon) — **고를 수 없게 잠그고 그 사실을 적는다.** 고를 수 있게 두면
+                //   골랐는데 아무 일도 안 일어나고, 그때 사람은 서비스가 고장 났다고 읽는다.
+                : it.soon
+                ? `<button class="ob-opt-card ob-locked ob-soon" aria-disabled="true" disabled><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">곧 지원합니다</span></span></button>`
                 : card(it.label, '', BRAND[it.logo] || GLYPH[it.id] || '', S.sources.includes(it.id))).join('')}</div>`).join('')
           + (blocked.length ? `<p class="ob-opt-group">아직 열려 있지 않은 곳</p><div class="ob-opt-grid">
               ${blocked.map((it) => `<button class="ob-opt-card ob-locked" data-ask="${esc(it.id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span><span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">눌러서 부탁 문구를 복사하세요.</span></span></button>`).join('')}</div>
@@ -1274,7 +1300,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       html: () => qHead('ai',
         S.read.total ? '자료를 읽는 동안 하나 더요.' : '이제 AI 차례예요.',
         '평소 어떤 AI를 쓰세요?', '')
-        + `<div class="ob-opt-cards">${DATA.AIS.map((a) => card(a, '', '', S.ai === a)).join('')}</div>
+        + `<div class="ob-opt-cards">${DATA.AIS.map((a) => card(a, '', AI_LOGO[a] || '', S.ai === a)).join('')}</div>
            <button class="ob-q-skip" data-skip>나중에 정할게요</button>`,
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
@@ -1718,6 +1744,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
   }
 
+  /* 하는 일(무대·직무)을 **고른 즉시** 남긴다 (#1813).
+   *  이 값은 매 세션 개인 층으로 주입된다(publish.ts renderLivOnboarding → 「### 온보딩에서 알려주신 것」).
+   *  ⚠ 종전엔 마무리(POST /api/ui/me/welcome)에서만 저장돼서, 중간에 나간 사람은 답을 해 놓고도
+   *   AI 가 그걸 모른 채 일했다 — 이름과 같은 구조의 결함이었다(원준님 실측 2026-08-26).
+   *  실패해도 진행은 막지 않는다(마무리에서 한 번 더 보낸다). */
+  const STAGE_TEXT = { company: '회사·조직에서 팀과 함께 일한다', solo: '1인·프리랜서로 여러 일을 한다',
+    academy: '학교·연구실에서 연구한다', student: '학생으로 수업·시험·진로를 준비한다' };
+  function saveWork() {
+    const asis = [S.stage ? STAGE_TEXT[S.stage] : null, S.job].filter(Boolean).join(' · ');
+    if (!asis) return;
+    void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ work: { asis, by: 'self' } }) })
+      .catch(() => { /* 비치명 */ });
+  }
+
   /* 고른 AI → **하네스 키**(서버 catalog/HEADLESS 표의 key). 헤드리스 규약을 아는 넷만 여기 있다 —
    *  ChatGPT 는 코덱스, 제미나이는 안티그래비티가 그 자리다. 표에 없으면(‘여러 개’ 등) claude 로 안내한다.
    *  ⚠ 여기 담는 건 **키뿐**이다(#1879). 실행 파일 이름(agy 등)·로그인 절차는 서버가 준다 —
@@ -1867,6 +1907,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           await sleep(1200); location.hash = '#/'; return;
         }
         try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
+        //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 서버 쪽 자리표는 반영이 지웠다 —
+        //   여기서 늦게 도착한 push 하나가 그걸 되살리면 다음 로그인이 다시 온보딩으로 간다.
+        pushOff = true; clearTimeout(pushT); pushT = null;
         ctx.onDone && ctx.onDone();
         const made = (applied && applied.created) || [];
         m.querySelector('.ob-body').innerHTML = made.length
@@ -1934,12 +1977,25 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     b.hidden = !S.trail.length;
     b.onclick = () => goBack();
   }
-  /* 브라우저 뒤로가기 — 쌓아 둔 장면이 있으면 그 한 걸음을 먹고, 없으면 셸이 하던 대로 나간다. */
-  function onPop() {
+  /* 브라우저 뒤로가기 — 쌓아 둔 장면이 있으면 그 한 걸음을 먹고, 없으면 셸이 하던 대로 나간다.
+   *
+   * ⚠ **popstate 는 «뒤로» 전용이 아니다**(#2207 실측 2026-08-27). 같은 문서 안에서 해시가 바뀌는 이동이면
+   *  브라우저가 전부 popstate 를 띄운다 — 사람이 사이드바를 눌러 홈·받은 편지함으로 **나가는** 순간에도 뜬다.
+   *  그래서 종전 코드는 «떠날 때마다 장면을 하나 되감고» 그 자리를 저장했다. 진행이 이 탭 안에만 살던 때는
+   *  잘 안 보였지만, 진행이 서버에 남게 된 지금은 **나갈 때마다 한 걸음씩 뒤로 밀린 자리가 저장된다**
+   *  (재현: 「AI 고르기」에서 Claude 를 고르고 홈으로 나가면 저장된 자리가 다시 「AI 고르기」가 된다).
+   *
+   * 가르는 법: 우리가 쌓은 걸음에는 순번(obSeq)을 찍어 둔다. 되돌아온 자리의 순번이 **지금보다 뒤**일 때만
+   *  «뒤로» 다(앞으로 나가는 이동은 우리 상태가 아예 없거나 순번이 뒤가 아니다).
+   */
+  function onPop(ev) {
+    const st = ev && ev.state;
+    if (!st || typeof st.obSeq !== 'number' || st.obSeq >= obSeq) return;   // 앞으로 나가는 이동 — 우리 일이 아니다
+    obSeq = st.obSeq;
     if (!S.trail.length) return;                 // 더 물러날 곳이 없다 → 홈으로 나가는 게 맞다
     goBack();
     // 우리가 한 걸음 먹었으니 그만큼 다시 쌓아 둔다 — 다음 뒤로가기도 이 안에서 듣는다.
-    try { history.pushState({ ob: S.scene }, '', location.href); } catch (_) { /* noop */ }
+    try { history.pushState({ ob: S.scene, obSeq: ++obSeq }, '', location.href); } catch (_) { /* noop */ }
   }
   addEventListener('popstate', onPop);
   function goScene(key, opts) {
@@ -1948,7 +2004,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       // 브라우저·셸의 «뒤로» 도 이 안에서 한 걸음 물러나게 한다(원준님 2026-08-26: "뒤로가기 누르니까 그냥 메인홈으로 가지네").
       //  ⚠ 주소(해시)는 **바꾸지 않는다** — 바꾸면 셸 라우터가 화면을 새로 그린다. 같은 주소로 state 만 쌓아
       //   popstate 때 우리가 먼저 받아 처리한다. 쌓인 장면이 없을 때의 뒤로가기는 종전대로 홈으로 나간다.
-      try { history.pushState({ ob: key }, '', location.href); } catch (_) { /* 사파리 프라이빗 */ }
+      //  ⚠ 순번(obSeq)을 함께 찍는다 — 이게 있어야 «뒤로» 와 «앞으로 나가는 이동» 이 갈린다(onPop 참조).
+      try { history.pushState({ ob: key, obSeq: ++obSeq }, '', location.href); } catch (_) { /* 사파리 프라이빗 */ }
     }
     S.scene = key; save(); renderSB();
     seqToken++;
@@ -1966,9 +2023,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     setStage('stage-chat');
     $('#thread').innerHTML = '';
     // 막2 답이 비어 있으면 기본값으로 채움 (장면 점프용)
-    if (!S.nameSet) { S.name = '원준'; S.nameSet = true; }
+    //  ⚠ **검토용 점프(?scene=)에서만 지어낸다**(#2207). 실제로 이어 여는 사람에게 쓰면, 이름을 건너뛴
+    //   사람이 갑자기 '원준' 으로 불리고 고른 적 없는 앱이 골라진 것으로 뜬다 — 그 사람의 답이 아니다.
+    //   중립 폴백(`||`)은 둘 다 쓴다: 없는 것을 주장하지 않고 화면이 깨지지만 않게 하는 값이라서다.
+    if (demoJump && !S.nameSet) { S.name = '원준'; S.nameSet = true; }
     S.stage = S.stage || 'company'; S.job = S.job || stageOf().opts[1][0];
-    if (!S.sources.length) S.sources = ['gdrive', 'notion'];
+    if (demoJump && !S.sources.length) S.sources = ['gdrive', 'notion'];
     if (!S.connected.length) S.connected = S.sources.filter((x) => x !== 'none');
     // ⚠ 여기서 **S.aiConnected 를 지어내지 않는다**(#1879). 종전엔 `S.ai !== '아직 없어요'` 로 무조건
     //  덮어썼는데, 그건 `||` 폴백이 아니라 **대입**이라 AI 잇기를 건너뛴 사람도 채팅 단계에 닿는 순간
@@ -1978,7 +2038,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     //  나머지 둘은 사람의 '답'이라 점프용 기본값이 성립한다(중립값으로 채운다 — 없는 연결을 주장하지 않는다).
     S.ai = S.ai || 'Claude';
     S.terminal = S.terminal || 'no'; S.app = S.app || 'web';
-    if (!S.read.total) S.read.total = 41;
+    //  읽고 있는 자료 수 — 이어 여는 사람에게는 **실측**을 쓴다(41 은 검토용 연출 숫자다).
+    if (!S.read.total) S.read.total = demoJump ? 41 : realTotal();
     const past = [];
     const target = key === 'read' ? 'b1' : key;
     const upto = CHAT_STEPS.indexOf(target);
@@ -2000,12 +2061,58 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     chatStep(target, token);
   }
 
+  /* ── 이어서 열기 (#2207) ───────────────────────────────────────────────────
+   *  탭에 남은 것이 없을 때만 서버에 묻는다(탭에 있으면 그게 더 새 것이다 — 위 «어느 쪽이 정본인가»).
+   */
+  /** 서버가 준 자리표 → 실제로 열 장면. 못 열 자리면 null(처음부터). */
+  function resumeScene(p) {
+    if (!p || !p.state || typeof p.state !== 'object') return null;
+    if (STEP_OF[p.scene] != null) return p.scene;
+    //  'done' 은 차례표에 없다 — 마무리(반영)를 누른 뒤 그게 실패했거나 끊긴 자리다. 답은 다 받아 놨으니
+    //   맨 앞이 아니라 **마지막 채팅 단계**로 되돌려 «준비 끝, 정리해 주세요» 를 다시 누르게 한다.
+    if (Array.isArray(p.state.chatDone) && p.state.chatDone.length) return 'can';
+    return null;
+  }
+  /** 서버에 남은 자리로 화면을 연다. 못 물으면 처음부터 — 온보딩이 **안 열리는** 것보다 낫다. */
+  async function resumeFromServer() {
+    if (destroyed) return;
+    setStage('stage-name');
+    $('#qcol').innerHTML = `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
+      <p class="ob-q-help">지난번에 어디까지 하셨는지 보고 있어요.</p>`;
+    const got = await Promise.race([loadWelcome(), sleep(RESUME_WAIT_MS)]);
+    if (destroyed) return;                 // 기다리는 사이에 화면을 떠났다 — 없는 화면에 그리지 않는다
+    const scene = resumeScene(got && got.progress);
+    if (scene) {
+      S = Object.assign(fresh(), got.progress.state);
+      S.scene = scene;
+      saveLocal();          // 이 탭에도 얹어 둔다 — 이제부터는 이 탭이 정본이다(서버로 다시 밀지 않는다)
+      renderSB(); goScene(scene);
+      toast('지난번에 하시던 자리에서 이어 갑니다.');
+      return;
+    }
+    renderSB(); goScene(S.scene || 'name');
+  }
+
   /* ── 부팅 ── */
+  //  지금 이 히스토리 자리에 **출발점 도장(obSeq 0)** 을 찍는다. 이게 있어야 첫 걸음에서의 «뒤로» 가
+  //   «되돌아온 것» 으로 읽힌다 — 도장이 없으면 onPop 이 그 이동을 '우리 일이 아님' 으로 흘려보내고,
+  //   사람은 처음 설정 안에서 뒤로가기가 먹지 않는 것을 본다(#2026 이 고쳤던 그 증상).
+  //  ⚠ 셸이 찍어 둔 값(v2i 등)은 **보존한다** — 통째로 갈아끼우면 셸의 앞/뒤 화살표 판정이 무너진다.
+  try { history.replaceState({ ...(history.state || {}), ob: S.scene, obSeq: 0 }, '', location.href); } catch (_) { /* 사파리 rate limit */ }
   $('#composeGo').onclick = composeSend;
   $('#composeIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) composeSend(); });
   // 장면 바로 열기 — 셸에선 질의가 해시 뒤에 붙는다(#/welcome?scene=b1). 검토용.
   const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
-  if (want && STEP_OF[want] != null) { goScene(want); }
-  else { renderSB(); goScene(S.scene || 'name'); }
-  return { destroy() { clearInterval(readTimer); clearInterval(localTimer); clearTimeout(toastT); removeEventListener('popstate', onPop); ctx.onBare && ctx.onBare(false); } };
+  if (want && STEP_OF[want] != null) { demoJump = true; goScene(want); }
+  else if (hadLocal) { renderSB(); goScene(S.scene || 'name'); schedulePush(); }
+  else { renderSB(); void resumeFromServer(); }
+  return { destroy() {
+    destroyed = true;
+    clearInterval(readTimer); clearInterval(localTimer); clearTimeout(toastT);
+    removeEventListener('popstate', onPop);
+    removeEventListener('pagehide', onPageHide);
+    document.removeEventListener('visibilitychange', onLeave);
+    void flushProgress();          // 화면을 떠나는 것도 '중간에 나간 것'이다 — 마지막 한 걸음을 남긴다
+    ctx.onBare && ctx.onBare(false);
+  } };
 }

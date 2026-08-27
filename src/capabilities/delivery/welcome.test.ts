@@ -4,7 +4,7 @@
 // 실행: npm run build && node dist/capabilities/delivery/welcome.test.js
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt } from "./welcome.js";
+import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt, squeezeExcerpt, normalizeProgress, PROGRESS_MAX_BYTES } from "./welcome.js";
 
 let pass = 0, fail = 0;
 // 실패해도 멈추지 않는다 — 어느 행이 빨간불인지 **전부** 봐야 red 입증이 된다.
@@ -290,6 +290,213 @@ t("㊳ 자격 값은 응답에 절대 싣지 않는다", () => {
   assert.doesNotMatch(SRC, /ai_env/, "자격 env 를 응답 필드로 열었다");
   // 하네스 **이름**은 비밀이 아니다 — 화면이 '무엇으로 도는지' 말하려면 필요하다.
   assert.match(SRC, /ai_harnesses: aiHarnesses/, "무엇으로 도는지 화면이 알 방법이 없다");
+});
+
+// ── 내용으로 가른다 (#1813, 원준님 2026-08-27) ──────────────────────────────
+//  실측 신고: 이미지 4개를 올렸더니 «이미지 4개» 라고만 하고 무엇에 대한 것인지 하나도 안 봤다.
+//  이름만 보내던 프롬프트가 원인이었다 — 발췌를 실어야 «무엇»이 판단에 들어온다.
+
+t("㊴ 발췌를 실으면 프롬프트에 내용 줄이 붙는다 — 이름만으로는 판단이 안 된다", () => {
+  const p = analyzePrompt([{ title: "image-1.png", excerpt: "3월 정기회의: 가격 정책 재검토, 담당 김" }], null);
+  assert.match(p, /image-1\.png/);
+  assert.match(p, /· 내용: 3월 정기회의/, "발췌가 프롬프트에 안 실렸다");
+  assert.match(p, /파일 이름이 아니라 내용으로 가릅니다/, "판단 기준을 안 알려 준다");
+});
+
+t("㊵ 형식 이름을 서랍으로 쓰지 말라고 명시한다 — 그게 이번 신고의 증상이었다", () => {
+  const p = analyzePrompt([{ title: "a.png" }], null);
+  assert.match(p, /'이미지'·'PDF'·'문서' 같은 이름을 쓰지 마세요/);
+});
+
+t("㊶ 하는 일·일하는 방식이 있으면 프롬프트에 싣는다 — 같은 자료도 직무마다 서랍이 다르다", () => {
+  const p = analyzePrompt([{ title: "a.md" }], "제품·기획", "회사·조직에서 팀과 함께 일한다 · 제품·기획");
+  assert.match(p, /이 사람이 하는 일: 제품·기획/);
+  assert.match(p, /이 사람이 일하는 방식: 회사·조직에서/);
+});
+
+t("㊷ 옛 호출(문자열 배열)도 그대로 받는다 — 호출부를 한 번에 못 바꿔도 깨지지 않게", () => {
+  const p = analyzePrompt(["a.md", "b.csv"], null);
+  assert.match(p, /- a\.md/);
+  assert.match(p, /- b\.csv/);
+});
+
+t("㊸ 발췌는 앞쪽 N건에만 — 120개 전부 실으면 프롬프트가 수만 자가 된다", () => {
+  const many = Array.from({ length: 120 }, (_, i) => ({ title: `f${i}.md`, excerpt: `내용${i} 입니다` }));
+  const p = analyzePrompt(many, null);
+  const bodyLines = p.split("\n").filter((l) => l.includes("· 내용:"));
+  assert.ok(bodyLines.length <= 40, `발췌 줄이 ${bodyLines.length}개 — 상한(40)을 넘었다`);
+  assert.ok(bodyLines.length >= 1, "발췌가 하나도 안 실렸다");
+});
+
+// ── 발췌 다듬기 ──
+t("㊹ 발췌는 줄바꿈·공백을 접어 한 줄로 만든다", () => {
+  assert.equal(squeezeExcerpt("가\n\n나   다\t라"), "가 나 다 라");
+});
+
+t("㊺ 스텁 인용문(> …)은 내용이 아니다 — 실으면 그 문구를 주제로 착각한다", () => {
+  const stub = "> 이 파일은 읽을 수 없습니다 — 형식 미지원\n실제 제목: 3월 매출 정리";
+  const out = squeezeExcerpt(stub);
+  assert.doesNotMatch(out, /읽을 수 없습니다/);
+  assert.match(out, /3월 매출 정리/);
+});
+
+t("㊻ 빈 본문·없음은 빈 문자열 — 프롬프트에 빈 '내용:' 줄을 만들지 않는다", () => {
+  assert.equal(squeezeExcerpt(null), "");
+  assert.equal(squeezeExcerpt(undefined), "");
+  assert.equal(squeezeExcerpt("   \n  "), "");
+  const p = analyzePrompt([{ title: "a.md", excerpt: "" }], null);
+  assert.doesNotMatch(p, /· 내용:/);
+});
+
+t("㊼ 긴 발췌는 잘라서 싣고 잘린 것을 표시한다", () => {
+  const out = squeezeExcerpt("가".repeat(900));
+  assert.ok(out.length <= 401, `안 잘렸다(${out.length}자)`);
+  assert.match(out, /…$/);
+});
+
+// ── 승인이 곧 스위치다 (#1881 L3 · #1813) ──────────────────────────────────
+//  갈래(=위키 분류)를 만들어도 증류기가 꺼져 있으면 자료는 자료로만 남는다 — 빈 서랍이다.
+//  local-preset 머리말이 "온보딩 승인 때 켠다"고 설계를 적어 뒀는데 정작 그 코드가 없었다(실측 2026-08-27).
+//  런타임으로 재려면 DB·크론이 필요하므로 **배선 자체**를 소스에서 못박는다(㉟~㊲와 같은 이유).
+t("㊽ 갈래를 만들면 로컬 증류기를 켠다 — 안 켜면 위키가 빈 채로 남는다", () => {
+  assert.match(SRC, /ensureLocalFilesDistiller\(\{ enable: true/,
+    "승인 때 증류기를 켜지 않는다 — 올린 자료가 지식이 되지 않는다");
+  assert.match(SRC, /if \(created\.length\) \{[\s\S]{0,400}ensureLocalFilesDistiller/,
+    "갈래를 하나도 안 만든 사람에게도 켠다 — 승인한 적이 없는 사람이다");
+});
+
+t("㊾ 증류기 켜기가 실패해도 온보딩은 끝난다 — 마무리를 막지 않는다", () => {
+  const seg = SRC.slice(SRC.indexOf("ensureLocalFilesDistiller"));
+  assert.match(seg.slice(0, 300), /catch/, "실패가 마무리를 통째로 깨뜨린다");
+});
+
+// ── 분석이 본문을 실제로 읽는가 ──
+t("㊿ 분석은 자료 본문을 읽어 발췌를 만든다 — 목록 조회만으로는 body_md 가 없다", () => {
+  assert.match(SRC, /getSource\(r\.id, null\)/, "본문을 안 읽는다 — 이름만 보내던 그 상태로 되돌아갔다");
+  assert.match(SRC, /squeezeExcerpt\(\(full as \{ body_md\?: string \} \| null\)\?\.body_md\)/);
+  assert.match(SRC, /analyzePrompt\(files, job, work\)/, "하는 일을 프롬프트에 안 싣는다");
+});
+
+// ── 하다 만 자리 저장 (#2207) ───────────────────────────────────────────────
+//  엣지 표 「scene × state × 크기 → 저장값/거절」:
+//   R1 정상            scene='role', state={...}        → {at, scene, state}
+//   R2 scene 없음/빈값                                   → 400
+//   R3 scene 이 이상한 모양(경로·스크립트·40자 초과)       → 400
+//   R4 state 가 객체가 아님(문자열·배열·null)             → 400
+//   R5 state 가 빈 객체                                  → 400  (저장할 진행이 없다)
+//   R6 크기 초과                                         → 413
+//   R7 at 은 **주어진 시각**을 쓴다(함수 안에서 시계를 읽지 않는다 — 순수)
+//   R8 저장값은 입력과 **다른 객체**다(호출부가 나중에 손대도 저장한 것이 안 바뀐다)
+const throws = (fn: () => unknown, status: number, why: string): void => {
+  try { fn(); assert.fail(`거절하지 않았다 — ${why}`); }
+  catch (e) {
+    if ((e as Error).name === "AssertionError") throw e;
+    assert.equal((e as { status?: number }).status, status, `${why} (문구: ${(e as Error).message})`);
+  }
+};
+
+t("R1 정상 입력은 {at, scene, state} 로 떨어진다", () => {
+  const out = normalizeProgress({ scene: "role", state: { name: "원준", stage: "company" } }, "2026-08-27T01:00:00Z");
+  assert.deepEqual(out, { at: "2026-08-27T01:00:00Z", scene: "role", state: { name: "원준", stage: "company" } });
+});
+
+t("R2 scene 이 없으면 거절 — 어디로 되돌아갈지 모르는 저장은 저장이 아니다", () => {
+  throws(() => normalizeProgress({ state: { a: 1 } }, "t"), 400, "scene 없음");
+  throws(() => normalizeProgress({ scene: "   ", state: { a: 1 } }, "t"), 400, "scene 공백");
+});
+
+t("R3 scene 은 모양을 본다 — 경로·스크립트·긴 값은 거절", () => {
+  throws(() => normalizeProgress({ scene: "../../etc", state: { a: 1 } }, "t"), 400, "경로");
+  throws(() => normalizeProgress({ scene: "<script>", state: { a: 1 } }, "t"), 400, "스크립트");
+  throws(() => normalizeProgress({ scene: "x".repeat(41), state: { a: 1 } }, "t"), 400, "41자");
+  assert.equal(normalizeProgress({ scene: "x".repeat(40), state: { a: 1 } }, "t").scene, "x".repeat(40));
+});
+
+t("R4 state 는 객체여야 한다", () => {
+  for (const bad of ["문자열", 42, null, undefined, [1, 2]]) {
+    throws(() => normalizeProgress({ scene: "role", state: bad }, "t"), 400, `state=${JSON.stringify(bad)}`);
+  }
+});
+
+t("R5 빈 객체는 저장할 진행이 아니다", () => {
+  throws(() => normalizeProgress({ scene: "role", state: {} }, "t"), 400, "빈 객체");
+});
+
+t("R6 크기를 넘으면 413 — 조용히 자르지 않는다(잘린 JSON 은 못 이어 연다)", () => {
+  const big = { notes: "가".repeat(PROGRESS_MAX_BYTES) };   // 한글은 UTF-8 3바이트라 확실히 넘는다
+  throws(() => normalizeProgress({ scene: "role", state: big }, "t"), 413, "상한 초과");
+  // 상한 아래는 통과한다 — 상한이 실사용을 막으면 안 된다(온보딩 답은 몇 줄이다).
+  assert.ok(normalizeProgress({ scene: "role", state: { notes: "a".repeat(1000) } }, "t").state);
+});
+
+t("R7 at 은 준 시각을 그대로 쓴다 — 함수가 시계를 읽지 않는다(순수)", () => {
+  assert.equal(normalizeProgress({ scene: "b1", state: { a: 1 } }, "2020-01-01T00:00:00Z").at, "2020-01-01T00:00:00Z");
+});
+
+t("R8 저장값은 입력과 다른 객체다 — 호출부가 나중에 손대도 저장한 것은 안 바뀐다", () => {
+  const state: Record<string, unknown> = { a: 1 };
+  const out = normalizeProgress({ scene: "b1", state }, "t");
+  state.a = 999;
+  assert.equal((out.state as { a: number }).a, 1);
+});
+
+// ── 끝나면 자리표를 걷는다 ──────────────────────────────────────────────────
+t("R9 반영이 끝나면 하다 만 자리를 지운다 — 끝낸 사람에게 «이어서 하기» 가 남으면 안 된다", () => {
+  assert.match(SRC, /setLivWelcomeProgress\(userId, null\)/,
+    "완료 반영이 진행 자리표를 안 지운다 — 다음 로그인이 다시 온보딩으로 간다");
+});
+
+t("R10 끝낸 사람에게는 progress 를 내주지 않는다 — 옛 진행이 되살아나면 안 된다", () => {
+  assert.match(SRC, /progress: done \? null :/,
+    "GET 이 끝낸 사람에게도 진행을 내준다");
+});
+
+// ── 화면 쪽 계약 (#2207) — 브라우저 검증에서 실제로 물린 자리만 못박는다 ─────────
+//  왜 소스를 읽나: 이 고장들은 **오류를 내지 않는다.** 화면은 멀쩡히 뜨고, 저장된 자리만 조용히
+//   어긋난다(한 장면 되감김 · 이어 열기가 영영 안 뜸). 런타임으로 잡으려면 실브라우저 + 히스토리
+//   조작 + 서버 왕복이 다 필요하다 — src/terminal/ai-login.test.ts 가 같은 판단으로 이미 이렇게 한다.
+const OB = readFileSync(new URL("../../../web/v2/onboarding.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+
+t("W1 ★ popstate 를 «뒤로» 로 단정하지 않는다 — 순번(obSeq)으로 가른다", () => {
+  // 실측 2026-08-27: 같은 문서에서 해시가 바뀌는 이동이면 브라우저가 전부 popstate 를 띄운다.
+  //  가르지 않으면 사람이 홈으로 **나가는** 순간 장면이 하나 되감기고, 그 되감긴 자리가 서버에 저장된다
+  //  (「AI 고르기」에서 Claude 를 고르고 나갔더니 저장된 자리가 다시 「AI 고르기」였다).
+  const fn = OB.slice(OB.indexOf("function onPop"), OB.indexOf("function onPop") + 700);
+  assert.match(fn, /obSeq/, "onPop 이 순번을 안 본다 — 나가는 이동까지 «뒤로» 로 처리한다");
+  assert.match(fn, /st\.obSeq\s*>=\s*obSeq/, "«되돌아온 것» 판정이 없다");
+});
+
+t("W2 히스토리에 쌓는 걸음마다 순번을 찍는다 + 출발점 도장이 있다", () => {
+  assert.match(OB, /history\.pushState\(\{ ob: key, obSeq: \+\+obSeq \}/, "걸음에 순번을 안 찍으면 W1 의 판정이 늘 거짓이 된다");
+  assert.match(OB, /history\.replaceState\(\{ \.\.\.\(history\.state \|\| \{\}\), ob: S\.scene, obSeq: 0 \}/,
+    "출발점 도장이 없다 — 첫 걸음에서의 «뒤로» 가 안 먹는다(#2026 이 고쳤던 증상)");
+});
+
+t("W3 ★ 아무것도 안 답한 로컬 상태는 «있음» 이 아니다 — 한 번의 서버 실패가 이어 열기를 영영 가린다", () => {
+  // 실측: 프리뷰 백엔드가 잠깐 죽은 사이 첫 화면이 sessionStorage 에 저장됐고, 그 뒤로 그 탭은
+  //  서버에 다시 묻지 않았다(hadLocal=true) — 저장돼 있던 진행이 통째로 가려졌다.
+  assert.match(OB, /hadLocal = v\.scene !== 'name' \|\| !!v\.nameSet/, "빈 첫 화면을 «있음» 으로 읽는다");
+});
+
+t("W4 답이 하나라도 있어야 서버에 남긴다 — 열어보기만 한 사람을 다음 로그인마다 끌어오지 않는다", () => {
+  assert.match(OB, /const worthSaving = \(\) => S\.scene !== 'name' \|\| S\.nameSet/);
+  assert.match(OB, /if \(pushOff \|\| !worthSaving\(\)\) return/, "문턱 없이 저장하면 first-run 판정이 그 사람을 놓아주지 않는다");
+});
+
+t("W5 끝내면 진행 저장을 멈춘다 — 늦게 도착한 push 가 자리표를 되살리면 안 된다", () => {
+  assert.match(OB, /pushOff = true;/, "완료 뒤에도 push 가 살아 있으면 다음 로그인이 다시 온보딩으로 간다");
+});
+
+t("W6 검토용 점프에서만 없는 답을 지어낸다 — 이어 여는 사람에게 남의 이름을 부르지 않는다", () => {
+  assert.match(OB, /if \(demoJump && !S\.nameSet\) \{ S\.name = '원준'/, "이어 여는 사람에게도 '원준' 을 쓴다");
+  assert.match(OB, /if \(demoJump && !S\.sources\.length\)/, "고른 적 없는 앱이 골라진 것으로 뜬다");
+  assert.match(OB, /S\.read\.total = demoJump \? 41 : realTotal\(\)/, "연출 숫자 41 이 실제 화면에 샌다");
+});
+
+t("W7 화면을 떠날 때·창을 닫을 때 마지막 한 걸음을 남긴다", () => {
+  assert.match(OB, /addEventListener\('pagehide', onPageHide\)/);
+  assert.match(OB, /removeEventListener\('pagehide', onPageHide\)/, "떠난 화면의 리스너가 남는다(누수)");
+  assert.match(OB, /void flushProgress\(\);\s*\/\/ 화면을 떠나는 것도/, "destroy 에서 안 밀면 debounce 대기 중이던 마지막 답이 사라진다");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

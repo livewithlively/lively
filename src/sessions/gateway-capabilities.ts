@@ -29,12 +29,21 @@ export interface GatewayCapabilities {
   materializeMemberGit?: (osUser: string, memberId: string) => Promise<void>;
   /** 이 멤버/호스트의 git 자격을 해소한다(레지스트리·금고·GitHub App 폴백). DB 를 탄다 → 게이트웨이 전용. */
   resolveGitSecret?: (memberId: string | null, host: string, opts?: { repoFullName?: string | null }) => Promise<GitCredentialSecret | null>;
+  /** 멤버 키트 시딩이 쓰는 바깥 데이터(멤버 조회 · 설치 번들 생성). DB·번들 생성을 탄다 → 게이트웨이 전용. */
+  kitSeedDeps?: {
+    getMember: (id: string) => Promise<{ scopes?: string[] | null } | null>;
+    buildBundle: () => Promise<Buffer>;
+  };
+  /** 앱 세션 토큰 발급. DB 를 탄다 → 게이트웨이 전용(노드는 게이트웨이가 발급해 실어 보낸 토큰을 쓴다). */
+  mintAppToken?: (memberId: string, appId: string, reason: string) => Promise<{ token: string }>;
+  /** 앱 하네스 자산을 조직 저장소에서 읽어 물질화. DB 를 탄다 → 게이트웨이 전용(노드는 prepared 자산을 쓴다). */
+  materializeAppAssets?: (sessionHome: string, appId: string, writer: unknown) => Promise<void>;
   /** 노드에 실어 보낼 자격 리스(조직 폴백 없음). DB 를 탄다 → 게이트웨이 전용. */
   leaseGitSecretForNode?: (requesterId: string, host: string, nodeKind: "worker" | "member") => Promise<GitCredentialSecret | null>;
 }
 
 /** 선언된 능력 이름 — 배선 가드가 이 목록으로 index.ts 를 검사한다(추가하면 가드가 자동으로 요구한다). */
-export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode"] as const;
+export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets"] as const;
 
 const caps: GatewayCapabilities = {};
 

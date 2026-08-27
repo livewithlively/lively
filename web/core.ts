@@ -71,7 +71,7 @@ export { hideGate, logout, showGate };
 
 // ── 배럴 재수출(호출부 무변경 계약) ─────────────────────────────────────────────
 //  네트워크(R29a) — 토큰 키·API 베이스·인증 fetch.
-export { TOKEN_KEY, api, apiUrl, appUrl, currentWorkspace, setCurrentWorkspace } from './lib/net.js';
+export { TOKEN_KEY, api, apiUrl, appUrl, currentWorkspace, setCurrentWorkspace, wsKey } from './lib/net.js';
 //  DOM 프리미티브 — el/sv 로만 화면을 짓는다(innerHTML 금지 불변식의 물리적 근거).
 export { $view, applyReveal, el, interleave, reducedMotion, sv } from './lib/dom.js';
 //  제자리 갱신이 스크롤을 옮기지 않게(#1635) — busy(비우는 동안 높이 예약) · keepSideScroll(사이드바 자체 스크롤).
@@ -86,6 +86,7 @@ export { uiKeyCls, uiText } from './lib/uitext.js';
 export { anchoredPopover, infoPop, toast, withTip } from './lib/overlay.js';
 //  아바타 단일 소스(#473) — 사람 얼굴은 전부 이 한 경로로.
 export { avatarColor, initials, loadPeopleAvatars, personFace, profileAvatar, setPersonAvatar } from './lib/avatar.js';
+export { personName, type NamedPerson } from './lib/person-name.js';   // 사람 이름 단일 판정(#1813)
 //  체크박스 드래그 범위 선택(#1140) — 모듈 전역 상태 + document 리스너 1회 등록.
 export { initDragRangeSelect } from './lib/drag-select.js';
 //  공용 위젯 + 백엔드 enum 1:1 라벨 상수.

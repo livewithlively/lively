@@ -198,9 +198,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         canRename()
           ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() },
             el('span', { class: 'sc-title-t', text: name }), penIc())
-          : el('b', { class: 'sc-title', title: tip, text: name }),
-        // 하는 일은 이름 옆에 조용히 — 사이드바가 이름(굵게) + 하는 일(부제)로 쓰는 것과 같은 문법이다.
-        ...(job ? [el('span', { class: 'sc-title-job', title: '이 세션이 지금 하는 일', text: job })] : []));
+          : el('b', { class: 'sc-title', title: tip, text: name }));
+      // ⚠ pane 제목을 이름 **옆에** 덧붙이지 않는다(원준 2026-08-27 "이건 어디서 나온 말이지? 필요없는 말").
+      //  pane 제목은 하네스가 첫 화제로 한 번 찍는 도장이라 긴 세션에선 낡은 말이고, 이름이 이미 세션을
+      //  말하는 줄에 낡은 부제까지 서면 소음이다. 이름이 없을 때만(아래) 그 도장이 제목 노릇을 한다.
       return;
     }
     if (job) {
@@ -433,22 +434,26 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  #1870 이 선택기를 넣으며 `runEl.hidden = true; return;` 로 알약을 통째로 껐는데, 그 알약이 **노드**도
     //  싣고 있었다. 선택기는 하네스·모델·강도만 말한다 — **어느 컴퓨터에서 도는지는 아무도 말하지 않게 됐다.**
     //  바로 아래 머리말이 "하네스·노드는 그 바가 말하지 않으므로 두 모드에서 늘 남는다"고 적어 둔 그대로여야 한다.
-    const selectorsUp = canType() && target.owned && hcats.some((h) => h.key !== 'shell');
+    //  ★ '윗줄이 이미 말한 축'의 판정은 **선택기만이 아니라 읽기 전용 칩도** 본다(원준 2026-08-27 "Anthropic ·
+    //   Claude Code 위에 이상한 도형이랑 겹치네"). 남의 세션·멈춘 세션엔 선택기 대신 칩이 서는데, 종전엔
+    //   selectorsUp 만 봐서 알약이 하네스·모델·강도를 한 벌 더 썼다 — 넓은 화면에선 같은 말이 두 번, 좁은
+    //   화면에선 알약이 20px 원(패딩+테두리만 남은 껍데기)으로 눌려 칩 글자 위에 겹쳤다(그 '이상한 도형').
+    const said = (span: HTMLElement, sel: HTMLSelectElement): boolean => !span.hidden || !sel.hidden;
     const onTerm = !termHost.hidden;
     //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
     const vals: Array<{ v: string; cls?: string }> = [
-      { v: selectorsUp ? '' : String(target.raw?.harness || '') },
-      { v: !selectorsUp && onTerm ? ((m) => (m ? prettyModel(m) : ''))(obsModel || startFlag('model')) : '' },
-      { v: !selectorsUp && onTerm ? ((e) => (e ? effortKo(e) : ''))(obsEffort || startFlag('effort')) : '' },
-      // ⚠ 노드는 **선택기와 무관하게 늘 싣는다** — 이 한 줄이 이 수정의 전부다.
+      { v: said(chipProv, selHarness) ? '' : String(target.raw?.harness || '') },
+      { v: !said(chipModel, selModel) && onTerm ? ((m) => (m ? prettyModel(m) : ''))(obsModel || startFlag('model')) : '' },
+      { v: !said(chipEffort, selEffort) && onTerm ? ((e) => (e ? effortKo(e) : ''))(obsEffort || startFlag('effort')) : '' },
+      // ⚠ 노드는 **윗줄과 무관하게 늘 싣는다** — 어느 컴퓨터에서 도는지는 칩도 선택기도 말하지 않는다.
       { v: target.node ? String(target.node) : '', cls: 'sc-run-node' },
     ].filter((x) => !!x.v);
     runEl.replaceChildren(...vals.flatMap((x, i) => {
       const cell = el('span', x.cls ? { class: x.cls, text: x.v, title: x.v } : { text: x.v });
       return i ? [el('span', { class: 'sc-sep', text: '·' }), cell] : [cell];
     }));
-    // 선택기가 서서 노드만 남았으면 그 칸이 무엇인지 말해 준다 — 컴퓨터 이름만 덩그러니 있으면 못 읽는다.
-    runEl.title = selectorsUp
+    // 윗줄이 나머지를 다 말해 노드만 남았으면 그 칸이 무엇인지 말해 준다 — 컴퓨터 이름만 덩그러니 있으면 못 읽는다.
+    runEl.title = vals.length && vals.every((x) => x.cls === 'sc-run-node')
       ? '이 세션이 도는 컴퓨터(노드)예요.'
       : onTerm && (obsModel || obsEffort)
         ? '이 세션이 무엇으로 돌고 있는지예요 — 모델·추론강도를 바꾸려면 [대화]에서 입력창 아래 칸으로 고르거나, 터미널에서 /model · /effort 를 치세요.'
@@ -1378,11 +1383,53 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
   // codex app-server 세션의 **실시간 층**(#2055) — 승인·타이핑·사용량. 완성된 대화는 종전대로 파일 폴링이 그린다.
   //  승인이 여기 안 뜨면 서버는 기본값(거부)으로 닫아 codex 가 아무 명령도 못 돌린다 — 이 층이 없으면 대화가 성립하지 않는다.
+  // ★ 로그인 관문 — **세션을 여는 순간** 알려준다(#2055, 2026-08-27 사용자 신고).
+  //
+  //  신고 그대로: 「매니지드에서 코덱스 세션 만들어봤는데 로그인 하라는 안내도 없고 이거 뭐 어쩌라는거야」.
+  //  맞는 지적이다. 그 전에 우리가 고친 건 «턴이 401 로 죽으면 이유를 말한다» 였는데, 그건 **사람이 한 번
+  //  헛수고한 뒤에야** 뜬다. 로그인 여부는 보내기 전에 알 수 있는 사실이므로 그때 말해야 한다.
+  //
+  //  ⚠ loggedIn 이 **null(모름)이면 아무 말도 안 한다** — 코어의 교리와 같다(profiles.ts AiLoginCheck):
+  //   모르면서 «미로그인» 이라고 하면 **로그인한 사람을 막는다**. 이건 관문이 아니라 안내이므로,
+  //   조회가 실패해도 조용히 넘어가고 사람은 그대로 보낼 수 있다.
+  let gateShown = false;
+  async function loginGate(): Promise<void> {
+    if (gateShown || destroyed) return;
+    gateShown = true;
+    let c: { loggedIn?: boolean | null; label?: string; steps?: string[] } | null = null;
+    try { c = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: 'codex' }) }); }
+    catch { return; }                                  // 못 물었으면 침묵 — 사람을 막지 않는다
+    if (!c || c.loggedIn !== false || destroyed) return;
+    const label = c.label || '코덱스';
+    const box = el('div', { class: 'cxl-gate' });
+    box.append(el('div', { class: 'cxl-gate-t', text: label + ' 에 로그인되어 있지 않습니다' }));
+    box.append(el('div', { class: 'cxl-gate-d', text: '지금 보내면 답이 오지 않습니다 — 먼저 로그인하세요.' }));
+    const go = el('button', { class: 'btn btn-primary', text: '로그인 세션 열기' }) as HTMLButtonElement;
+    go.onclick = async (): Promise<void> => {
+      go.disabled = true;
+      try {
+        // me-ai.ts 와 **같은 방식**이다 — codex 는 셸 세션 + 로그인 명령(loginFor)으로 연다(TUI 안이 아니라 자동화 가능).
+        const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
+          label: '내 계정 로그인 (' + label + ')', rootKey: 'personal', subpath: '',
+          harness: 'shell', loginFor: 'codex', flags: {}, autoApprove: false, loginProfile: true,
+        }) });
+        toast('로그인용 세션을 열었습니다 — 그 세션에서 화면 안내를 따르세요.');
+        if (out?.session?.id) window.open('#/s/' + encodeURIComponent(out.session.id), '_blank');
+        box.remove();
+      } catch (e) { toast('로그인 세션을 열지 못했습니다 — ' + ((e as Error)?.message || e), true); go.disabled = false; }
+    };
+    box.append(go);
+    // 실측된 절차가 있으면 같이 보여준다(catalog.loginSteps) — 버튼을 못 쓰는 상황의 탈출로.
+    for (const st of (c.steps || []).slice(0, 3)) box.append(el('div', { class: 'cxl-gate-s', text: st }));
+    liveDock.prepend(box);
+  }
+
   let live: CodexLive | null = null;
   function ensureLive(): void {
     // ⚠ 열 때 세션 행에 chatMode 가 아직 없을 수 있다(방금 만든 세션 — 목록 갱신이 나중에 실어 준다).
     //  그때 한 번만 보고 말면 그 세션은 **영원히 승인을 못 받는다**. 그래서 update() 도 이 문을 두드린다.
     if (live || !chatFirst() || destroyed) return;
+    void loginGate();
     live = mountCodexLive({
       sessionId: target.id, view, dock: liveDock,
       liveTurn: () => cur?.t ?? null,

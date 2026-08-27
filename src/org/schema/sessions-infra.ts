@@ -204,6 +204,11 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  ⚠ 소비자는 이 컬럼을 보고 갈라야 한다 — 복원 목록은 그 노드의 것으로 표시하고, reaper·백필(중앙 tmux 만 훑는다)은
   //   라이브 목록에 없는 id 라 원래 건드리지 않는다. 종전 node-session-map.ts 헤더의 "INSERT 기각" 근거가 이 컬럼으로 해소된다.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS node_id TEXT;`);
+  // #2197 — 사람이 **마지막으로 시킨 말**(work-flag 훅이 UserPromptSubmit 순간 보고, 서버가 300자로 다듬음). 사이드바 세션 행
+  //  둘째 줄의 정본 — 종전엔 화면이 대화 꼬리를 세션마다 받아 찾았고(비용), 노드 세션은 기록이 턴 끝에만 올라와 실시간이 아니었다.
+  //  last_prompt_at = 그 보고 시각(진단·정렬용). 박스·노드 세션 공통(#1791 행) — 노드로 릴레이하지 않는다.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS last_prompt TEXT;`);
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS last_prompt_at TIMESTAMPTZ;`);
   // #1291 v2 — 세션 **기록 범위**(write cap)와 read 축소의 desired-state 미러.
   //  tmux user-option 이 권위지만 tmux 가 죽으면(재부팅·회수) 그 값이 사라진다 → 복원 때 캡이 넓어지지 않게 여기 남긴다.
   //  write_vis: 'open'|'audience'|'private' (NULL=미설정 → 실행 폴더에서 재파생). restrict: read 축소(owner∪invites) 여부.
@@ -212,6 +217,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 세션 이름이 한 번만 지어지고 그대로 가게 하는 걸쇠다:
   //  낮은 쪽이 높은 쪽을 못 덮는다(session-label-source.ts 의 표가 정본). NULL = 이 컬럼 이전 행 → `rule` 로 읽는다.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS label_source TEXT;`);
+  // #2162 — 세션의 종류(human|task|managed|app|login). 종전엔 이 축이 없어 서버와 훅의 종류 신호가
+  //  갈라져 있었고 새 기계 세션 경로가 말없이 '사람 세션'이 됐다. NULL = 이 컬럼 이전 행 → `human`.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS kind TEXT;`);
   // #2022 — 이 행을 **어떻게 알게 됐나**. false(기본) = 게이트웨이가 만들거나 create 를 릴레이하며 쓴 행(좌표를 안다).
   //  true = 게이트웨이가 **노드 스냅샷에서 발견해** 적은 행 — 그 컴퓨터에서 직접 띄운 세션이라 게이트웨이는
   //  그 세션의 workspace 좌표(root_key·subpath)를 모른다. 노드는 dir(제 파일시스템의 절대경로)만 보고하고,

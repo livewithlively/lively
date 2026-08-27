@@ -17,6 +17,7 @@
 // 관련: deploy/linux/box-cgspawn(root wrapper, systemd-run --scope) · terminal-isolation.wrapAsMember(cap-gated 분기) ·
 //  src/org/policies/storage-policy.ts(같은 seam 의 원형).
 
+import { tenantTtlCache } from "../org/tenant-ttl-cache.js";
 import { definePolicy } from "../org/policies/knob.js";
 
 export interface SessionMemoryPolicy {
@@ -94,24 +95,21 @@ export function sessionMemoryPolicySource(dbRaw: unknown): "db" | "env" | "defau
 // ── 캐시 ──
 // 세션 생성마다 조회한다 → 매번 DB 를 때리지 않게 짧게 캐시. DB 가 죽어도 정책을 낼 수 있어야 하므로(세션 생성이
 //  정책 조회로 막히면 안 됨) load 실패 시 마지막 값 → 기본값으로 폴백하고 절대 throw 하지 않는다(storage-policy 와 동형).
-let cache: { at: number; policy: SessionMemoryPolicy } | null = null;
+// ★ **테넌트별** 캐시다 — 전역 한 칸이면 중앙 게이트웨이에서 먼저 읽은 테넌트의 값이 TTL 동안
+//  다른 테넌트에도 적용된다(실측 2026-08-27: 갓 만든 테넌트의 기본값 0/0 이 정상 테넌트 1536 을 덮어
+//  세션 컨테이너 격리가 조용히 꺼졌다). 근거·전말은 org/tenant-ttl-cache.ts 머리말이 정본이다.
+const cache = tenantTtlCache<SessionMemoryPolicy>(30_000, () => normalizeSessionMemoryPolicy(null));
 
 export async function effectiveSessionMemoryPolicy(
   load: () => Promise<SessionMemoryPolicy>,
   ttlMs = 30_000,
   now: () => number = Date.now,
 ): Promise<SessionMemoryPolicy> {
-  if (cache && now() - cache.at < ttlMs) return cache.policy;
-  try {
-    const policy = await load();
-    cache = { at: now(), policy };
-    return policy;
-  } catch {
-    return cache?.policy ?? normalizeSessionMemoryPolicy(null);
-  }
+  // ttlMs·now 는 종전 시그니처 그대로 **캐시에 넘긴다** — 새 캐시를 만들면 그게 곧 캐시를 없앤 것이다.
+  return cache.get(load, ttlMs, now);
 }
 
 /** 관리탭에서 정책을 저장한 직후 호출 — 다음 세션 생성이 즉시 새 값을 보게. */
 export function invalidateSessionMemoryPolicyCache(): void {
-  cache = null;
+  cache.invalidate();
 }

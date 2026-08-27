@@ -79,3 +79,30 @@ test("E8 세션 목록 엔드포인트가 현재 워크스페이스를 필터로
   assert.match(src, /listSessionsForOwnerPage\([\s\S]{0,80}?,\s*wsId\)/,
     "/api/ui/v6/sessions 가 listSessionsForOwnerPage 에 wsId(현재 워크스페이스)를 넘기지 않는다");
 });
+
+// ── E9 매니지드 회귀 (실측 2026-08-27 프로덕션) ──────────────────────────────────────────
+//  위 격리가 배포된 직후 매니지드에서 **세션 목록이 통째로 비었다**(e2e `[10] 세션이 목록에 안 나타남`,
+//  `{"sessions":[]}`). 규칙(sessionInWorkspace)은 옳았고, 깨진 건 소속을 **읽어 오는** SQL 이었다:
+//   · gw_session_map 에는 매핑이 멀쩡히 있다.
+//   · 그런데 `gw_workspace` 는 **0행**이다 — 매니지드는 워크스페이스 축을 CP 가 테넌트로 갖고 있어
+//     이 표를 안 쓴다(실측: 테넌트 컨텍스트 유무와 무관하게 count=0).
+//   · INNER JOIN 이라 매핑이 있어도 **전부** 버려졌고, 모든 세션이 «소속 부재» 로 떨어졌다.
+//     현재 워크스페이스는 테넌트 UUID 인데 부재의 기본값은 primary(all-zero)라 하나도 안 맞는다.
+//  조인의 목적은 «보관된(archived) 워크스페이스 제외» 이지 «레코드 없는 배포 전멸» 이 아니다.
+test("★ E9 소속 조회는 gw_workspace 가 비어도 매핑을 살린다 — 매니지드에서 목록이 통째로 비었다", () => {
+  const src = readSrc("src/org/tenancy/registry.ts");
+  const fn = src.slice(src.indexOf("export async function sessionWorkspaceIds"));
+  assert.match(fn, /LEFT JOIN gw_workspace/,
+    "INNER JOIN 이면 gw_workspace 가 빈 배포(매니지드)에서 매핑이 전부 버려진다");
+  assert.match(fn, /w\.id IS NULL OR w\.state='active'/,
+    "행이 없으면 '모름'이라 매핑을 그대로 쓰고, 있는데 보관됐을 때만 뺀다");
+});
+
+test("E10 워크스페이스 레코드를 돌려주는 쪽은 INNER 가 맞다 — 두 계약을 섞지 않는다", () => {
+  const src = readSrc("src/org/tenancy/registry.ts");
+  const fn = src.slice(src.indexOf("export async function workspaceForSession"), src.indexOf("export async function sessionWorkspaceIds"));
+  // 주석이 아니라 **SQL 문장만** 본다 — 주석에 'LEFT JOIN' 이라 적기만 해도 걸리면 그건 계약이 아니라 검열이다.
+  const sql = fn.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.match(sql, /JOIN gw_workspace/, "레코드가 필요한 자리라 행이 없으면 줄 것이 없다");
+  assert.ok(!/LEFT JOIN gw_workspace/.test(sql), "이쪽까지 LEFT 로 바꾸면 null 필드의 가짜 워크스페이스가 나간다");
+});
