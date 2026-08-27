@@ -27,7 +27,8 @@ import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "../v6/search-util.js";
-import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
+import { setupPtyUpgrade } from "./terminal-pty-upgrade.js";   // #2165 — 테넌시를 아는 업그레이드 핸들러는 게이트웨이 전용 모듈
+import { type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
