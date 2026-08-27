@@ -66,12 +66,15 @@ export async function listTokens(): Promise<TokenMeta[]> {
   return r.rows as TokenMeta[];
 }
 
-export async function revokeToken(tokenHash: string, actor?: string, source?: string): Promise<void> {
-  await itemsPool.query(
+// client 를 넘기면 그 트랜잭션에서 UPDATE+audit 을 실행한다 — mintToken 과 대칭(#880 의 이유가 그대로 적용된다).
+//  회수와 교체가 갈리면 '구 토큰은 죽었는데 새 토큰은 안 붙은' 상태가 남는다(#2161 rotateNodeToken).
+export async function revokeToken(tokenHash: string, actor?: string, source?: string, client?: pg.PoolClient): Promise<void> {
+  const exec = client ?? itemsPool;
+  await exec.query(
     `UPDATE auth_token SET revoked_at = now() WHERE token_hash=$1 AND revoked_at IS NULL`,
     [tokenHash],
   );
-  await audit("auth_token", tokenHash, "revoke", null, null, actor, source); // 전체 해시 기록(상관추적용 — 해시는 비밀 아님)
+  await audit("auth_token", tokenHash, "revoke", null, null, actor, source, client); // 전체 해시 기록(상관추적용 — 해시는 비밀 아님)
 }
 
 // 유효 권한 계산(순수 함수 — 단위 테스트 대상). 토큰은 '발급된 상한', 멤버는 '라이브 상한' →

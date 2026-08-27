@@ -12,11 +12,11 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { authNodeToken, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, loadRecentLinkEvents, type OrgNode } from "./store.js";
+import { authNodeTokenDetailed, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, loadRecentLinkEvents, type OrgNode } from "./store.js";
 import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
 import { linkDiagMessage, linkDiagSummary, keepAwakeLine, staleAgentNote } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로 · #2127 낡은 인스턴스
 import { nodeOpenTo } from "./node-access.js";
-import { liveNodes, isSelfNode } from "./registry.js";
+import { liveNodes, isSelfNode, logNodeAuthDenial } from "./registry.js";
 import { nodeHarnesses, agentIsLatest } from "./protocol.js";
 import { AGENT_BUNDLE, AGENT_BUNDLE_ROOT, servedAgentVersion, agentBundleExists } from "./agent-bundle.js";
 import { logger } from "../log.js";
@@ -204,8 +204,13 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
   app.get("/node/agent-bundle", wrap(async (req, res) => {
     const raw = String(req.headers.authorization ?? "");
     const tok = raw.startsWith("Bearer ") ? raw.slice(7).trim() : "";
-    const node = tok ? await authNodeToken(tok) : null;
-    if (!node) throw new HttpError(403, "노드 토큰이 유효하지 않습니다");
+    // 자가갱신 경로라 여기서 막히면 노드가 **영원히 옛 번들로 돈다**(#1713) — 사유를 로그에 남긴다(#2161).
+    //  응답 본문에는 사유를 싣지 않는다: 인증을 통과하지 못한 요청자에게 라벨·노드 id 를 알려 줄 이유가 없다.
+    const outcome = await authNodeTokenDetailed(tok);
+    if (!outcome.ok) {
+      logNodeAuthDenial(outcome, null);
+      throw new HttpError(403, "노드 토큰이 유효하지 않습니다");
+    }
     if (!agentBundleExists()) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
     res.setHeader("Content-Type", "application/gzip");
     res.setHeader("X-Agent-Ver", servedAgentVersion() ?? "");   // 노드가 받은 바이트를 대조할 기준

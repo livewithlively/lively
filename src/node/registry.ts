@@ -13,7 +13,8 @@ import {
   NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
-import { authNodeToken, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
+import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
+import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
 import { sharesGatewayTmux } from "./self-node.js";
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
@@ -490,6 +491,20 @@ function onNodeDisconnected(c: NodeConn): void {
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
+// 인증 거부 로그(#2161) — 같은 토큰의 같은 사유는 쿨다운으로 접는다(노드는 거부돼도 백오프로 계속
+//  재접속하므로, 매 시도를 다 찍으면 진짜 신호가 묻힌다). 첫 건은 반드시 남긴다.
+//  ⚠ 평문 토큰은 절대 싣지 않는다 — 지문(해시 앞 12자)과 사유만.
+const denialLoggedAt = new Map<string, number>();
+export function resetNodeAuthDenialLog(): void { denialLoggedAt.clear(); }   // 테스트용
+export function logNodeAuthDenial(outcome: Extract<NodeAuthOutcome<OrgNode>, { ok: false }>, tenant: string | null): void {
+  const key = denialKey(outcome.fingerprint, outcome.reason);
+  const now = Date.now();
+  if (!shouldLogDenial(denialLoggedAt.get(key), now)) return;
+  denialLoggedAt.set(key, now);
+  logger.warn({ reason: outcome.reason, token: outcome.fingerprint, tenant },
+    `노드 연결 거부 — ${denialMessage(outcome)}`);
+}
+
 // /node/ws 업그레이드 — Authorization: Bearer <노드토큰> 을 org_node 매칭으로 검증(스코프 불요·표면 최소).
 //  같은 노드가 재연결하면 구 연결을 교체한다(반쯤 열린 구 소켓이 새 연결을 가리지 않게).
 export function setupNodeUpgrade(server: Server): void {
@@ -513,8 +528,15 @@ export function setupNodeUpgrade(server: Server): void {
     void open(async () => {
       const auth = String(req.headers.authorization || "");
       const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-      const node = await authNodeToken(token);
-      if (!node) { socket.destroy(); return; }
+      const outcome = await authNodeTokenDetailed(token);
+      if (!outcome.ok) {
+        // ★ 종전엔 여기서 **말없이** socket.destroy() 만 했다(#2161) — 사람에게 남는 것은 caddy 의 502 뿐이라,
+        //  원인을 짚는 데 패킷캡처와 DB 대조까지 갔다. 거부는 조용해도 되지만 **기록까지 조용하면 안 된다**.
+        logNodeAuthDenial(outcome, tenant?.slug ?? null);
+        socket.destroy();
+        return;
+      }
+      const node = outcome.node;
       wss.handleUpgrade(req, socket, head, (ws) => {
         const k = keyOf(node.id, tenant);
         const prev = conns.get(k);

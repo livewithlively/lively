@@ -42,7 +42,10 @@ const BOX = mkdtempSync(join(tmpdir(), "lively-node-test-"));
 const cleanup = () => { try { rmSync(BOX, { recursive: true, force: true }); } catch { /* */ } };
 
 const TOKEN = "lvk_test_node_0123456789";
-const NODE_TOKEN = "lvNode_deadbeef";
+// ⚠ 실제 게이트웨이가 발급하는 형식과 같아야 한다 — mintToken 은 항상 `lvk_` 접두이고
+//  서버의 authNodeToken 도 그 접두를 요구한다. 종전 픽스처("lvNode_…")는 라이브에서는
+//  절대 통과하지 못하는 값이라, CLI 가 응답 토큰을 검증해도 그 사실을 여기서 못 잡았다.
+const NODE_TOKEN = "lvk_test_node_agent_0123";
 const NODE_ID = "test-daemon-node";
 
 // ── 픽스처 게이트웨이 — 노드 등록(POST /api/ui/nodes) + 에이전트 번들(GET /api/ui/node-agent). ──
@@ -206,6 +209,65 @@ try {
     check("⑦ stop 후에도 등록(env)·번들(agent.mjs) 보존",
       existsSync(join(H.home, ".lively", "node-agent.env")) && existsSync(join(H.home, ".lively", "node-agent", "agent.mjs")),
       "stop 이 등록/번들을 지웠다");
+  }
+
+  // ⑧ 게이트웨이 전환(#2161) — **노드 토큰은 그 게이트웨이(테넌트)에 매인다.**
+  //  실측 사고(2026-08-27): dev 로그아웃 → 매니지드 로그인 뒤 노드가 /node/ws 에서 **502 무한 재시도**.
+  //   원인은 CLI 가 "파일에 토큰이 있다" 하나만 보고 등록을 통째로 건너뛰어, **옛 테넌트의 토큰을 새
+  //   게이트웨이에 제시**한 것이다. 그 게이트웨이에는 그 org_node 행이 아예 없어 조인이 영원히 빈다.
+  //   게다가 종전 코드는 LIVELY_GATEWAY_URL 만 새 주소로 덮어써, env 파일이 **'새 게이트웨이 + 옛 토큰'
+  //   이라는 스스로 모순된 상태**로 굳었다 — 재실행해도 스스로 낫지 않는다.
+  //  ⑦ 이 "stop 은 등록을 남긴다"(재사용은 옳다)를 굳혔다면, ⑧ 은 그 재사용의 **한계**를 굳힌다.
+  {
+    const TOKEN2 = "lvk_test_second_gateway_9876";
+    const NODE_TOKEN2 = "lvk_test_node_agent_second";
+    const posts2 = [];
+    const srv2 = createServer((req, res) => {
+      const p2 = (req.url || "").split("?")[0];
+      // 다른 게이트웨이 = 다른 로그인 토큰. 옛 토큰으로 오면 401 이다(현실과 같다).
+      if (String(req.headers.authorization || "") !== `Bearer ${TOKEN2}`) { res.writeHead(401).end(); return; }
+      if (req.method === "POST" && p2 === "/api/ui/nodes") {
+        let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
+          posts2.push(JSON.parse(body || "{}"));
+          res.writeHead(200, { "content-type": "application/json" })
+            .end(JSON.stringify({ node: { id: NODE_ID, name: NODE_ID, kind: "member" }, token: NODE_TOKEN2, install: "…" }));
+        });
+      } else if (p2 === "/api/ui/node-agent") {
+        res.writeHead(200, { "content-type": "application/gzip" }).end(AGENT_TGZ);
+      } else { res.writeHead(404).end(); }
+    });
+    await new Promise((r) => srv2.listen(0, "127.0.0.1", r));
+    const GW2 = `http://127.0.0.1:${srv2.address().port}`;
+    try {
+      const H2 = newHome("h-switch");
+      const envPath = join(H2.home, ".lively", "node-agent.env");
+      posts = [];
+      await lively(H2, ["node", "--daemon", "--id", NODE_ID]);
+      // 데몬 등록이 막히는 환경(HostEffects 차단 등)에서는 env 파일 자체가 안 생긴다 —
+      //  그때 readFileSync 로 죽으면 **뒤 검사들이 통째로 안 돈다**. 없으면 빈 문자열로 두고 FAIL 로 남긴다.
+      const readEnv = () => (existsSync(envPath) ? readFileSync(envPath, "utf8") : "");
+      const env1 = readEnv();
+      check("⑧ (준비) 첫 게이트웨이 등록 — 그 게이트웨이의 노드 토큰이 굳는다",
+        posts.length === 1 && env1.includes(`LIVELY_NODE_TOKEN=${NODE_TOKEN}`) && env1.includes(`LIVELY_GATEWAY_URL=${GW}`),
+        `posts=${posts.length}\n${env1}`);
+
+      // 로그아웃 → 다른 게이트웨이로 로그인 = gateway-url·token 교체(로그인 경로가 실제로 하는 일 그대로).
+      writeFileSync(join(H2.home, ".lively", "gateway-url"), GW2);
+      writeFileSync(join(H2.home, ".lively", "token"), TOKEN2);
+      chmodSync(join(H2.home, ".lively", "token"), 0o600);
+
+      const r2 = await lively(H2, ["node", "--daemon", "--id", NODE_ID]);
+      const env2 = readEnv();
+      // ★ 회귀 방지의 핵심 — 수정 전에는 posts2.length === 0 이고 옛 토큰이 그대로 남았다.
+      check("⑧ 게이트웨이가 바뀌면 재등록한다(옛 테넌트 토큰 재사용 금지)",
+        posts2.length === 1 && env2.includes(`LIVELY_NODE_TOKEN=${NODE_TOKEN2}`),
+        `code=${r2.code} posts2=${posts2.length}\n${env2}\n${r2.err.slice(-300)}`);
+      // env 가 스스로 모순되지 않는다 — 새 게이트웨이와 새 토큰이 **짝**이고, 옛 토큰 흔적이 남지 않는다.
+      check("⑧ env 가 새 게이트웨이와 짝이 맞는다(옛 토큰 잔존 없음)",
+        // env2 가 비어 있으면 `!includes` 가 vacuous 하게 참이 된다 — 파일이 있다는 것부터 조건이다.
+        env2.length > 0 && env2.includes(`LIVELY_GATEWAY_URL=${GW2}`) && !env2.includes(NODE_TOKEN),
+        env2 || "(node-agent.env 없음)");
+    } finally { srv2.close(); }
   }
 } finally {
   server.close();

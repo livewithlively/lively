@@ -595,6 +595,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const cliCtx = () => ({
   say, ok, info, warn, fail, die, bold, dim, red, green, yellow,
   run, has, api, sleep, gateway, token, readLively, writeLively, hostEffects,
+  // normGw 를 실어 보낸다(#2161) — 형제 모듈이 게이트웨이 주소를 **비교**해야 하는데(노드 토큰은 그
+  //  게이트웨이에 매인다), 정규화를 각자 재구현하면 '/mcp'·끝슬래시 차이로 판정이 갈린다. 단일 출처.
+  normGw,
 });
 
 // ── 위탁(delegate, #869 §11) — 세션이 무거운 1회성 작업을 워커/중앙에 위탁하는 클라이언트 프로세스. ──
