@@ -112,21 +112,47 @@ eq(goneMode(null, false, true), "end", "㉖복원 직후여도 기록이 없으�
 eq(goneMode({ restorable: true, canRestore: true, exitedByUser: false }, false, false), "auto",
   "㉗표식이 없으면 종전대로 자동 복원");
 
-// 복원이 새 주소에 표식을 붙이는지 — 붙이지 않으면 위 브레이크가 영원히 안 걸린다(소스로 확인).
+// ★ #2231 — **이미 이어진 세션**(서버가 movedTo 이정표를 준다). 되살릴 것도, 끝난 것도 아니다: 옮겨 가야 한다.
+//  종전엔 이 메타에 restorable 이 없어 'end'(진짜 끝난 세션)로 접혔고, 살아 있는 대화 옆에서 종료 배너가 떴다
+//  (2026-08-27 실측 신고 — 옛 화면이 `복원할 세션 상태가 없습니다` 앞에서 멈췄다).
+eq(goneMode({ movedTo: "box-yoon-99887766" }, false, false), "moved", "㉙B1 이어진 세션 → 옮김");
+eq(goneMode({ movedTo: "box-yoon-99887766", restorable: true, canRestore: true }, false, false), "moved",
+  "㉙B2 이정표가 복원 신호를 이긴다(되살리면 같은 대화가 둘이 된다)");
+eq(goneMode({ movedTo: "box-yoon-99887766" }, false, true, true), "moved",
+  "㉙B3 복원 직후·조작 중이어도 이정표가 이긴다(loop·ask 로 새지 않는다)");
+eq(goneMode({ movedTo: "" }, false, false), "end", "㉙B4 빈 이정표는 이정표가 아니다 — 종전 판정");
+
+// 복원·이동이 새 주소에 표식을 붙이는지 — 붙이지 않으면 위 브레이크가 영원히 안 걸린다(소스로 확인).
+//  ⚠ 그 주소를 만드는 자리가 둘이다(복원 restoreThisSession · 이동 goToMoved, #2231) — **전부** 확인한다.
 {
-  const line = src.split("\n").find((l) => l.includes("location.replace(apiUrl('/ui/terminal.html?session=')"));
-  assert.ok(line, "복원 후 이동 줄을 찾지 못했습니다");
-  const blk = src.slice(src.indexOf(line), src.indexOf(line) + 400);
-  assert.ok(/restored=1/.test(blk), "㉘복원 후 주소에 restored=1 표식이 없습니다 — 루프 차단이 발동하지 않습니다");
-  pass++; console.log("ok  ㉘복원 후 주소에 restored=1 표식을 붙인다");
+  const lines = src.split("\n").filter((l) => l.includes("location.replace(apiUrl('/ui/terminal.html?session=')"));
+  assert.ok(lines.length >= 2, "복원 후 이동 줄을 찾지 못했습니다(복원·이동 두 자리)");
+  for (const l of lines) {
+    const b = src.slice(src.indexOf(l), src.indexOf(l) + 400);
+    assert.ok(/restored=1/.test(b), "㉘복원·이동 주소에 restored=1 표식이 없습니다 — 루프 차단이 발동하지 않습니다");
+  }
+  pass++; console.log("ok  ㉘복원·이동 후 주소에 restored=1 표식을 붙인다");
 }
 // #1791 — 노드에서 복원된 새 세션은 **그 노드로** 붙어야 한다(서버가 session.node 를 준다). 이걸 안 붙이면 새 주소가 박스로 가서
 //  4410(박스엔 그 세션이 없다) → 종료 배너로 끝난다. 배선(주소 조립)만 소스로 확인한다.
 {
-  const line = src.split("\n").find((l) => l.includes("location.replace(apiUrl('/ui/terminal.html?session=')"));
-  const blk = src.slice(src.indexOf(line), src.indexOf(line) + 600);
+  // ⚠ **복원 함수 안의** 그 줄을 본다(#2231 로 같은 모양의 줄이 이동 경로에도 생겼다 — 첫 매치를 집으면 엉뚱한 줄을 잰다).
+  const from = src.indexOf("async function restoreThisSession()");
+  assert.ok(from > 0, "restoreThisSession 을 찾지 못했습니다");
+  const body = src.slice(from);
+  const line = body.split("\n").find((l) => l.includes("location.replace(apiUrl('/ui/terminal.html?session=')"));
+  assert.ok(line, "복원 후 이동 줄을 찾지 못했습니다");
+  const blk = body.slice(body.indexOf(line), body.indexOf(line) + 600);
   assert.ok(/ns\.node\s*&&\s*ns\.node\.id[\s\S]*&node=/.test(blk), "㉙-b 복원 후 주소에 새 세션의 node 를 붙이지 않습니다 — 노드 복원이 박스로 가서 끝납니다");
   pass++; console.log("ok  ㉙-b 노드에서 복원된 세션은 그 노드로 붙는다(배선)");
+}
+// ★ #2231 — **이동**(이미 이어진 세션으로 옮기기)도 같은 함정을 밟는다: 노드 좌표를 안 이고 가면 박스를 뒤지다 끝난다.
+{
+  const from = src.indexOf("function goToMoved(");
+  assert.ok(from > 0, "goToMoved 를 찾지 못했습니다");
+  const blk = src.slice(from, from + 1200);
+  assert.ok(/location\.replace\([\s\S]*nodeQ\('&'\)/.test(blk), "㉙-c 이동 주소에 node 좌표를 안 이고 갑니다 — 노드 세션이 박스로 가서 끝납니다");
+  pass++; console.log("ok  ㉙-c 이어진 세션으로 옮길 때 노드 좌표를 이고 간다(배선)");
 }
 // 노드 세션도 메타를 묻는다(종전엔 !NODE_ID 게이트로 아예 안 물었다 — 그러면 ⑧ 이 영영 발동 못 한다).
 {

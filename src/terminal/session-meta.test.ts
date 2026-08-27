@@ -168,3 +168,21 @@ test("표A-4 dead 는 확답과 무관하게 복원 가능 — 이 게이트의 
 test("표A-5 alive 도 이 게이트가 건드리지 않는다", () => {
   assert.equal(nodeMetaRestorable({ mode: "alive", nodeGone: false }), true);
 });
+
+// ★ #2231 — 복원에 성공한 옛 id 는 **지워지지 않고 이정표로 남는다**(org_session_state.superseded_by).
+//  그 id 로 오는 조회에 restorable 을 내면 화면은 "이어받을 수 있어요"라고 약속한 뒤 404 를 받는다 —
+//  2026-08-27 실측 신고가 정확히 그 화면이었다(`null` + `복원할 세션 상태가 없습니다` ×2).
+//  약속 대신 **이어진 곳**을 말한다. 접근권 판정은 종전과 같은 자리에서 먼저 끝난다(남의 새 id 를 흘리지 않는다).
+test("★#2231 이어진 세션 — 'moved' 로 새 id 를 알린다(되살릴 수 있다고 하지 않는다)", () => {
+  const NEW = "box-yoon-99887766";
+  const r = deadSessionMeta(ID, st({ superseded_by: NEW }), "yoon", false, shared);
+  assert.equal(r.kind, "moved");
+  if (r.kind !== "moved") throw new Error("unreachable");
+  assert.equal(r.to, NEW);
+  // 남의 개인 세션이면 이어진 곳도 알리지 않는다 — 접근 판정이 먼저다.
+  assert.equal(deadSessionMeta(ID, st({ owner: "jang", dir: PERSONAL, superseded_by: NEW }), "yoon", false, shared).kind, "forbidden");
+  // 남의 **프로젝트** 세션은 종전대로 보이고(#452), 이어진 곳도 함께 보인다.
+  assert.equal(deadSessionMeta(ID, st({ owner: "jang", dir: SHARED, superseded_by: NEW }), "yoon", false, shared).kind, "moved");
+  // 자기 자신을 가리키는 값은 이정표가 아니다(무한고리) — 종전 판정으로 돌아간다.
+  assert.equal(okBody(deadSessionMeta(ID, st({ superseded_by: ID }), "yoon", false, shared)).restorable, true);
+});

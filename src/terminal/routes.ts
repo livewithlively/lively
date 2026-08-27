@@ -19,7 +19,7 @@ import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js";
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다
 import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
@@ -515,6 +515,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       });
       if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge }); return; }
       const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
+      // #2231 — 이미 이어진 id 다. 되살리라고 하지 말고 **이어진 세션을 알려 준다**(화면이 그리로 옮긴다).
+      if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to, node: nodeBadge }); return; }
       if (dead.kind !== "ok") throw new HttpError(403, "세션에 접근할 수 없습니다");
       // 🔴 #2108 — 스냅샷이 모르는 자리(ask)는 **노드에 확답을 구한다**(#835 '확답 only'). 부재는 죽음의 근거가
       //  아니다 — 상태 push 3초 주기 때문에 방금 만든 살아있는 세션이 그 창 동안 목록에서 빠진다.
@@ -539,8 +541,15 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (await sessionGone(id)) {
       const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       if (dead.kind === "ok") { res.json(dead.body); return; }
+      // #2231 — 이 id 는 이미 새 세션으로 이어졌다. '중단된 세션'이라고 말하면 화면이 복원을 약속했다가 404 를 받는다.
+      if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to }); return; }
       if (dead.kind === "forbidden") throw new HttpError(403, "세션에 접근할 수 없습니다");
-      // kind === "none" — 되살릴 근거(desired-state)가 없는 진짜 끝난 세션. 종전 흐름이 답한다.
+      // kind === "none" — 행이 없다. 종전엔 곧장 종전 흐름(→ 403/빈 라벨)으로 흘러 화면이 막다른 길이었다.
+      //  #2231 — 그 전에 **대화로 한 번 더 찾아본다**: 같은 대화를 들고 있는 내 최신 세션이 있으면 그리로 안내한다.
+      //  (이정표가 없는 옛 id — 이 변경 이전에 복원됐거나, 사람이 지웠거나, 워크스페이스 회수로 사라진 행.)
+      const moved = await resolveSessionSuccessor(id).catch(() => null);
+      const movedSt = moved ? await getSessionState(moved).catch(() => undefined) : undefined;
+      if (moved && movedSt && (movedSt.owner === uid || isAdmin)) { res.json({ id, movedTo: moved }); return; }
     }
     if (!(await canAttach(id, uid))) {
       // #1059 E — tmux 에 없어도(재부팅·회수·정상종료) desired-state 가 남아 있으면 '복원 가능'으로 알린다.
@@ -1079,7 +1088,32 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     res.setHeader("Cache-Control", "no-store");
     const id = req.params.id;
     const st = await getSessionState(id);
-    if (!st) throw new HttpError(404, "복원할 세션 상태가 없습니다");
+    // #2231 — 이 id 는 **이미 이어졌다**(다른 탭·다른 칸이 먼저 눌렀거나, 이 화면이 그 전에 열린 낡은 화면이다).
+    //  종전엔 옛 행을 지워 404 였고, 사용자는 대화가 멀쩡히 도는데도 `복원할 세션 상태가 없습니다` 앞에서 멈췄다.
+    //  이제는 두 번째 사람에게 **이어진 세션을 돌려준다** — 화면이 그리로 옮겨 가면 끝이다(경합이 곧 정답이 된다).
+    if (st?.superseded_by) {
+      if (st.owner !== idOf(userOf(req)) && !userOf(req).scopes?.includes("admin")) throw new HttpError(403, "이 세션을 복원할 수 없습니다(소유자만 가능).");
+      const to = (await resolveSessionSuccessor(id).catch(() => null)) ?? st.superseded_by;
+      res.json({ ok: true, already: true, id: to, movedTo: to });
+      return;
+    }
+    // 행이 아예 없는 옛 세션(이정표가 생기기 전에 복원된 것·사람이 완전 삭제한 것·워크스페이스 회수).
+    //  그래도 포기하지 않는다 — **대화로 되찾는다**(resolveSessionSuccessor → successorByConversation).
+    //  ⚠ 안내는 **행이 있고 내 것인** 세션으로만 한다(남의 세션으로 보내지 않는다).
+    if (!st) {
+      const to = await resolveSessionSuccessor(id).catch(() => null);
+      const toSt = to ? await getSessionState(to).catch(() => undefined) : undefined;
+      const uid = idOf(userOf(req));
+      if (to && toSt && (toSt.owner === uid || userOf(req).scopes?.includes("admin"))) {
+        logger.info({ id, movedTo: to }, "restore: 행이 없는 옛 id — 같은 대화의 최신 세션으로 안내(#2231)");
+        res.json({ ok: true, already: true, id: to, movedTo: to });
+        return;
+      }
+      // 🔴 4xx 는 wrap() 이 로그를 안 남긴다(rest-util) — 이 404 가 어떤 id 였는지 흔적이 0건이라
+      //  2026-08-27 신고 재구성에 로그 대신 DB·tmux·트랜스크립트를 맞춰 봐야 했다. 여기만은 남긴다.
+      logger.warn({ id, requester: uid }, "restore: 되살릴 desired-state 가 없다(#2231 — 대화로도 못 찾음)");
+      throw new HttpError(404, "이 세션은 이미 이어졌거나 정리돼 되살릴 것이 없습니다 — 목록을 새로고침하면 이어진 세션이 보입니다.");
+    }
     const u = userOf(req);
     const me = idOf(u);
     if (st.owner !== me && !u.scopes?.includes("admin")) throw new HttpError(403, "이 세션을 복원할 수 없습니다(소유자만 가능).");
@@ -1147,7 +1181,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  ⚠ 옛 행은 **승계가 확인됐을 때만** 지운다. 종전엔 무조건 지워서, 승계가 조용히 실패하면 매핑의 마지막
       //   사본이 함께 사라졌다(그 뒤 복원은 영구 picker). 남겨두면 복원 목록에 옛 카드가 한 장 남지만(눈에 보이고
       //   사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
-      if (carried) await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 정리 실패(비치명)"));
+      //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
+      if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 이정표 기록 실패(비치명)"));
       const ln = liveNodes().find((n) => n.id === nodeId);
       res.json({ ok: true, session: { ...session, node: { id: nodeId, name: ln?.name || nodeId, online: true } } });
       return;
@@ -1223,7 +1258,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));
     //  ⚠ #2122 — 옛 행은 **승계가 확인됐을 때만** 지운다(위). 남겨두면 복원 목록에 옛 카드가 한 장 남지만(눈에
     //   보이고 사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
-    if (carried) await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
+    //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
+    if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 이정표 기록 실패(비치명)"));
     res.json({ ok: true, session });
   }));
 

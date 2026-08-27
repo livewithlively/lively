@@ -78,8 +78,19 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   // 2026-08-26 — 프레임이 "되살릴 수 있다"고 말했으면 **그 말을 이어받기 분기까지 들고 간다**. 목록 행의
   //  restorable 만 보면, 목록이 좌표를 접느라 그 값을 못 받은 세션이 대화록 기반 이어받기로 흘러 빈 새 세션이 된다
   //  (실측: 프로젝트 하나에 「새 세션(원본 기반)」 4개). 신호를 만들어 놓고 안 넘기면 조용히 무효가 되는 자리다.
-  ok(/lively-term-gone[\s\S]{0,400}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
+  //  ⚠ 창을 900자로 잡는다 — 같은 핸들러 안에 #2231(이미 이어진 세션이면 그리로 옮긴다)이 **먼저** 서 있다.
+  //   그 분기가 앞서는 건 의도다(되살리면 같은 대화가 둘이 된다). 창이 좁으면 배선이 멀쩡한데 테스트만 빨개진다.
+  ok(/lively-term-gone[\s\S]{0,900}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
     "③-g 프레임이 말한 canRestore 를 resumeSession 에 넘긴다");
+  // ★ #2231 — 그 핸들러에서 **이정표(movedTo)가 canRestore 보다 앞**이어야 한다. 순서가 뒤집히면 이미 이어진
+  //  세션을 한 번 더 되살려 같은 대화가 둘로 갈라진다(그리고 옛 화면은 계속 막다른 길에 남는다).
+  {
+    const h = chat.slice(chat.indexOf("lively-term-gone"));
+    const iMoved = h.indexOf("m.movedTo");
+    const iRestore = h.indexOf("m.canRestore");
+    ok(iMoved > 0 && iRestore > 0 && iMoved < iRestore,
+      "③-i 이미 이어진 세션이면 되살리기 전에 그리로 옮긴다(movedTo 가 canRestore 보다 먼저)");
+  }
   ok(/if\s*\(isBox\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
     "③-h 복원 분기가 목록의 restorable **또는** 프레임이 말한 canRestore 를 본다(둘 중 하나면 /restore)");
 }
@@ -112,7 +123,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
 {
   const chat = read("web/session-chat.ts");
   const i = chat.indexOf("async function resumeSession(");
-  const blk = chat.slice(i, i + 1600);
+  const blk = chat.slice(i, i + 2200);   // #2231 로 이 함수에 이정표(movedTo) 처리가 들어와 길어졌다 — 창을 넓힌다
   ok((blk.match(/rememberCreated\(/g) || []).length >= 2,
     "⑤복원·이어받기 둘 다 생성 응답을 created-cache 에 남긴다(새 id 로 옮긴 직후의 '세션을 찾을 수 없어요' 방지)");
 }
