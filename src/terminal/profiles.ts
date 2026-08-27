@@ -8,7 +8,8 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
-import { getMember, mintToken, listTokens, revokeToken } from "../org/store.js";
+import { getMember } from "../org/store/members.js";
+import { mintToken, listTokens, revokeToken } from "../org/store/tokens.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug } from "./terminal-isolation.js";
