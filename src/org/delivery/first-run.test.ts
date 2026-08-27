@@ -81,10 +81,46 @@ test("P6 이 축을 안 주는 호출부는 종전 판정 그대로", () => {
 //  전환은 location.reload() 라 이 판정을 처음부터 다시 타는데, 옮겨 간 워크스페이스엔 흔적이 0이라
 //  «처음 오는 사람»이 참이 된다. 화면(main.ts wsSwitched)이 그 부팅을 걸러 내지만, 서버 규칙에서도
 //  «이미 보여줬으면 끝»이 진행중보다 세다는 것을 못박는다 — 안 그러면 전환마다 다시 끌려간다.
-test("★ 보여준 적 있으면 하다 만 자리가 있어도 자동 진입 안 한다 — 대신 이어서 하기", () => {
-  const f = { onboardedAt: null, shownAt: "2026-08-27T00:00:00Z", welcomeInProgress: true, everCalledMcp: false, everHadSession: false };
-  assert.equal(isFirstRun(f), false, "보여준 뒤에도 끌고 가면 전환·재접속마다 다시 뜬다");
+test("보여준 적 있어도 답 없이 보기만 했으면 자동 진입 안 한다 — 대신 이어서 하기(#2171 유지)", () => {
+  const f = { onboardedAt: null, shownAt: "2026-08-27T00:00:00Z", welcomeInProgress: false, everCalledMcp: false, everHadSession: false };
+  assert.equal(isFirstRun(f), false, "답 없이 본 것만으로 끌고 가면 전환·재접속마다 다시 뜬다");
   assert.equal(isWelcomePending(f), true, "끌고 가지 않는 대신 길은 남긴다");
+});
+
+// ── #2232 (원준님 지시 2026-08-28) — «하다 만 자리»는 «보여줬다»보다 세다 ────────────────
+//  실측: 노션을 잇고 클릭업을 잇던 중 나갔다가 [시작하기]로 돌아오니 하던 장면이 아니라 홈. 사람의 기대는
+//  "어디까지 했는지 기억해서 거기부터". 표 「보여줌 × 진행중 × 미룸 → 자동 진입」:
+//   R1 보여줌 + 진행중 + 안 미룸          → true  (★ #2171 의 순서를 뒤집는다)
+//   R2 보여줌 + 진행중 + [나중에 할게요]   → false (사람이 스스로 미뤘다 — 홈 + 이어서 하기)
+//   R3 안 보여줌 + 진행중 + 미룸           → false (미룸은 보여줌과 무관하게 이긴다)
+//   R4 미룸 + 진행 없음                   → false, pending true
+//   R5 끝냄 + 진행중 + 미룸               → false, pending false (끝냈다는 사실이 전부보다 세다)
+//   R6 deferredAt 을 안 주는 옛 호출부    → R1 과 같다(undefined 는 '안 미룸')
+test("R1 ★ 보여줬어도 하다 만 자리가 있으면 그 장면으로 자동 복귀", () => {
+  const f = { onboardedAt: null, shownAt: "2026-08-27T14:48:04Z", welcomeInProgress: true, deferredAt: null, everCalledMcp: true, everHadSession: true };
+  assert.equal(isFirstRun(f), true, "하다 만 사람은 끌려가는 게 아니라 돌아가는 것이다");
+  assert.equal(isWelcomePending(f), true);
+});
+test("R2 [나중에 할게요] 로 미뤘으면 끌고 가지 않는다 — 홈 + 이어서 하기", () => {
+  const f = { onboardedAt: null, shownAt: "2026-08-27T14:48:04Z", welcomeInProgress: true, deferredAt: "2026-08-27T15:00:00Z", everCalledMcp: false, everHadSession: false };
+  assert.equal(isFirstRun(f), false);
+  assert.equal(isWelcomePending(f), true);
+});
+test("R3 미룸은 보여줌과 무관하게 이긴다", () => {
+  assert.equal(isFirstRun({ onboardedAt: null, shownAt: null, welcomeInProgress: true, deferredAt: "2026-08-27T15:00:00Z", everCalledMcp: false, everHadSession: false }), false);
+});
+test("R4 미뤘는데 진행이 없어도 이어서 하기 줄은 남는다", () => {
+  const f = { onboardedAt: null, shownAt: null, welcomeInProgress: false, deferredAt: "2026-08-27T15:00:00Z", everCalledMcp: false, everHadSession: false };
+  assert.equal(isFirstRun(f), false);
+  assert.equal(isWelcomePending(f), true);
+});
+test("R5 끝냈으면 진행중·미룸이 있어도 홈, 이어서 하기도 없음", () => {
+  const f = { onboardedAt: "2026-08-27T16:00:00Z", shownAt: "2026-08-27T14:48:04Z", welcomeInProgress: true, deferredAt: "2026-08-27T15:00:00Z", everCalledMcp: true, everHadSession: true };
+  assert.equal(isFirstRun(f), false);
+  assert.equal(isWelcomePending(f), false);
+});
+test("R6 deferredAt 을 안 주는 옛 호출부는 '안 미룸'으로 본다", () => {
+  assert.equal(isFirstRun({ onboardedAt: null, shownAt: "2026-08-27T14:48:04Z", welcomeInProgress: true, everCalledMcp: false, everHadSession: false }), true);
 });
 
 test("아직 안 보여준 사람은 하다 만 자리가 흔적을 이긴다(#2207 유지)", () => {
