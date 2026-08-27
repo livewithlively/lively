@@ -29,7 +29,7 @@ import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { WS_SWITCH_KEY } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
-import { drawRail, mountRail, railIsHidden, railSection, toggleRail, type RailSection } from './rail.js';
+import { drawRail, mountRail, railIsHidden, railSection, resetRailSection, toggleRail, type RailSection } from './rail.js';
 import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
@@ -191,6 +191,14 @@ export async function bootV2(): Promise<void> {
   if (!root) return;
   root.hidden = false;
   watchStaleShell();   // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
+  // ★ 이 부팅이 «워크스페이스 전환»으로 온 것인가 — switcher.ts switchTo 가 찍고 가는 표식(#2171).
+  //  표식은 **딱 이 한 번의 부팅**만 살아야 하므로 읽는 즉시 지운다. 아래 세 자리가 이 값을 본다:
+  //   ① 구역을 홈으로 되돌리기(#2230, 바로 아래) ② 처음 설정 자동 진입 차단(#2171) ③ 착지 탭을 홈으로(#2230).
+  //  ⚠ 여기서 한 번만 읽는다 — 자리마다 따로 읽으면 먼저 읽은 쪽이 지워서 뒤의 자리는 늘 거짓을 본다.
+  const wsSwitched = (() => {
+    try { const v = sessionStorage.getItem(WS_SWITCH_KEY) === '1'; if (v) sessionStorage.removeItem(WS_SWITCH_KEY); return v; }
+    catch (_) { return false; }   // 프라이빗 모드 — 표식을 못 읽으면 종전 동작(복원·자동 진입 판정 그대로)
+  })();
   // 릴레이 복귀 알림(#1881) — CP OAuth 릴레이(슬랙·노션)가 테넌트로 돌려보낼 때 ?slack=ok|slack_error= /
   //  ?notion=ok|notion_error= 를 붙인다(해시 라우트 #/connect/<앱> 은 그대로 열린다). 여기서 한 번 알리고
   //  주소에서 지운다 — 안 지우면 새로고침·탭 복제 때마다 같은 토스트가 또 뜬다.
@@ -270,6 +278,10 @@ export async function bootV2(): Promise<void> {
     });
     //  즐겨찾기는 [프로젝트] 착지를 정하는 재료다(#2061) — 구역에 들어간 뒤 당기면 첫 진입이 답을 못 기다린다. 미리 당겨 둔다.
     loadFavLists();
+    //  ★ #2230 — 전환으로 온 부팅이면 **구역도 홈에서 선다.** 구역은 워크스페이스가 아니라 이 기기의
+    //   기억이라(SEC_STORE), 옮겨 가도 [위키]·[프로젝트]에 그대로 머물러 본문(홈)과 레일이 서로 다른
+    //   곳을 가리켰다. 훅이 붙기 전에 조용히 되돌린다 — setRailSection 은 주소까지 옮긴다(rail.ts 머리말).
+    if (wsSwitched) resetRailSection('home');
     mountRail(railEl!, {
       counts: railCounts,
       activeKey: () => activeKey(),
@@ -373,15 +385,24 @@ export async function bootV2(): Promise<void> {
   //   부른 적도 세션을 연 적도 없다) «처음 오는 사람»이 참이 되어 **전환할 때마다 처음 설정이 떴다**
   //   (원준님 신고 2026-08-27 — 데스크톱 앱에서 워크스페이스 전환 중). 전환은 처음 오는 것이 아니라
   //   있던 곳으로 가는 것이다 — 그 자리는 홈이어야 한다. 필요한 사람에겐 홈의 «이어서 하기»가 남는다.
-  const wsSwitched = (() => {
-    try { const v = sessionStorage.getItem(WS_SWITCH_KEY) === '1'; if (v) sessionStorage.removeItem(WS_SWITCH_KEY); return v; }
-    catch (_) { return false; }   // 프라이빗 모드 — 표식을 못 읽으면 종전 동작(자동 진입 판정 그대로)
-  })();
+  //  (전환 표식 wsSwitched 는 부팅 맨 앞에서 한 번 읽어 둔다 — 이 함수 머리 참조.)
   if (!boot && !wsSwitched && state.me && state.me.first_run === true && !onboardingDone()) {
     boot = '#/welcome';
     markWelcomeSeen();
   }
   if (boot && tabsApi.find(boot)) { const hit = tabsApi.find(boot)!; hit.route = boot; tabsApi.activate(hit); }
+  else if (!boot && wsSwitched) {
+    // ★ #2230 — **전환으로 온 부팅은 되살린 탭이 아니라 빈 홈에서 선다**(원준님 신고 2026-08-27:
+    //  "워크스페이스를 전환하면 홈에 들어가서 맨 위 세션을 띄운다 — 레일에서 홈을 눌렀을 때 모두에게
+    //  나오는 그 첫 화면으로 해 줘"). #2171 이 «전환의 도착지는 언제나 홈»으로 주소를 `#/` 로 맞춰 두었지만,
+    //  `#/` 는 위에서 딥링크로 치지 않으므로(boot=null) 아래 복원(tabsApi.initial)이 그 뜻을 덮고
+    //  **그 워크스페이스에서 마지막에 보던 세션**을 다시 켰다 — 열린 탭은 워크스페이스별로 살아 있어서다(#1875 wsKey).
+    //  ⚠ 열린 화면 자체는 그대로 둔다 — 닫는 것이 아니라 **활성만** 홈으로 옮긴다(사이드바의 '열린 창'은 그대로 있고,
+    //   눌러서 두고 간 자리로 바로 돌아갈 수 있다). 전환은 잃는 일이 아니라 장소를 옮기는 일이다.
+    const home = tabsApi.find('#/') || tabsApi.add('#/', { activate: false });
+    home.route = '#/';
+    tabsApi.activate(home);
+  }
   else {
     const saved = tabsApi.initial();
     const t = saved || tabsApi.add(boot || '#/', { activate: false });
