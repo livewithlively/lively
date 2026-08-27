@@ -24,7 +24,7 @@ import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import {
   activeWorkspaceSlug, listWorkspaces, managedWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
-  archiveWorkspace, createWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam,
+  archiveWorkspace, createWorkspace, leaveWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam,
 } from './switcher.js';
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 
@@ -258,6 +258,16 @@ function openPopover(anchor: HTMLElement): void {
     hr(),
     //  설정 — 이름 · 연결한 팀 · 보관. 만든 사람(owner)만. 종전엔 목록 행 옆 ✎ ✕ 였다(무엇인지 읽히지 않았다).
     isOwner ? row('gear', '워크스페이스 설정', settingsSub(), () => openSettingsPanel(anchor, curSlug)) : null,
+    //  #1875 D5' — 구성원(주인 아님)에게는 설정 판이 없다. 그래도 **나갈 문은 있어야 한다** —
+    //   팀에서 삭제가 막힌 대신 나가기가 그 자리를 받았는데, 그 문이 owner 판 안에만 있으면 갇힌다.
+    !isOwner && me && curSlug !== 'primary' && typeof me.member_count === 'number' && me.member_count >= 2
+      ? row('archive', '워크스페이스 나가기', `나만 빠집니다 · 올린 것은 남습니다`, () => {
+          if (!confirm(`'${me.name || curSlug}' 워크스페이스에서 나갈까요?\n나만 빠지고, 올린 지식·프로젝트는 그대로 남아요.\n다시 들어오려면 초대를 받아야 해요.`)) return;
+          void leaveWorkspace(curSlug)
+            .then(() => { toast(`'${me.name || curSlug}' 에서 나왔어요.`); switchWorkspace('primary'); })
+            .catch((e: any) => toast('나가지 못했어요 — ' + (e?.message || e), true));
+        })
+      : null,
     isOwner ? hr() : null,
     //  추가 — 누르면 **바로 만드는 판**이 뜬다(종전엔 옛 메뉴 전체가 떴다 — "저 드롭다운으로 보내는 이유를 모르겠음").
     row('plus', '워크스페이스 추가', registryActive() ? '혼자 시작합니다 — 사람을 부르면 팀이 됩니다' : '지금은 만들 수 없어요', () => openCreatePanel(anchor)),
@@ -302,7 +312,39 @@ function addPeopleBtn(w: { slug: string; name: string; kind: string; is_primary?
     icon('adduser')) as HTMLElement;
 }
 
-function settingsSub(): string { return promoN ? `이름 · 연결한 팀 · 보관 · 승인 대기 ${promoN}` : '이름 · 연결한 팀 · 보관'; }
+/**
+ * 이 워크스페이스에서 «떠나는 문» 한 줄 (#1875 D5') — 인원수가 어느 문을 그릴지 정한다.
+ *  · 2명 이상이면 나가기. 단 **만든 사람은 아직 못 나간다**(주인 없는 팀이 남는다) → 버튼 대신 문장.
+ *  · 혼자면 보관. 되돌릴 수 있는 치우기라 위험 톤은 이 한 줄에만 준다.
+ */
+function exitRow(w: any, slug: string, wsName: string): HTMLElement {
+  const n = typeof w?.member_count === 'number' ? w.member_count : 1;
+  if (n >= 2) {
+    // 만든 사람 판정은 서버가 정본이다(등록부 owner_member). 화면은 role 로 근사하되, 눌러도 서버가 다시 막는다.
+    if (w?.role === 'owner') {
+      return hint(`함께 쓰는 분이 ${n - 1}명 있어 이 워크스페이스는 보관할 수 없어요. 만든 사람이라 나가기도 아직 안 돼요 — `
+        + '나가면 아무도 이 워크스페이스를 관리할 수 없게 되거든요. 주인 넘기기는 준비 중이에요.');
+    }
+    return el('button', { class: 'v2-wspop-row danger', type: 'button', onclick: async () => {
+      if (!confirm(`'${wsName}' 워크스페이스에서 나갈까요?\n나만 빠지고, 올린 지식·프로젝트는 그대로 남아요.\n다시 들어오려면 초대를 받아야 해요.`)) return;
+      try { await leaveWorkspace(slug); closePopover(); toast(`'${wsName}' 에서 나왔어요.`); switchWorkspace('primary'); }
+      catch (e: any) { toast('나가지 못했어요 — ' + (e?.message || e), true); }
+    } }, el('span', { class: 'v2-wspop-ic' }, icon('archive')),
+      tt('나가기', `나만 빠집니다 · 함께 쓰는 분 ${n - 1}명이 있어 보관은 안 됩니다`)) as HTMLElement;
+  }
+  return el('button', { class: 'v2-wspop-row danger', type: 'button', onclick: async () => {
+    if (!confirm(`'${wsName}' 워크스페이스를 보관할까요?\n목록에서 사라지지만 데이터는 지워지지 않아요.`)) return;
+    try { await archiveWorkspace(slug); closePopover(); toast(`'${wsName}' 을 보관했어요.`); switchWorkspace('primary'); }
+    catch (e: any) { toast('보관하지 못했어요 — ' + (e?.message || e), true); }
+  } }, el('span', { class: 'v2-wspop-ic' }, icon('archive')), tt('보관하기', '목록에서 숨깁니다 · 데이터는 남습니다')) as HTMLElement;
+}
+
+function settingsSub(): string {
+  // 설정 판의 마지막 줄이 인원수에 따라 갈리므로 부제도 같이 갈린다 — 열기 전에 무엇이 있는지 맞아야 한다.
+  const me = spaces.find((w) => w.slug === activeWorkspaceSlug());
+  const tail = typeof me?.member_count === 'number' && me.member_count >= 2 ? '나가기' : '보관';
+  return promoN ? `이름 · 연결한 팀 · ${tail} · 승인 대기 ${promoN}` : `이름 · 연결한 팀 · ${tail}`;
+}
 let promoN = 0;   // 승인 대기 승격 수 — 설정 행 부제에 싣는다(판 안에 숨기면 아무도 못 본다)
 
 /** primary(박스의 팀) 구성원 모달 — 박스 계정 전원이다(명부가 따로 없다). 관리자면 「사람 추가」가 설정 ▸ 구성원으로
@@ -418,12 +460,11 @@ function openSettingsPanel(anchor: HTMLElement, slug: string): void {
   };
   void paintTeams();
 
-  // 보관 — 되돌릴 수 있는 치우기(데이터는 남는다). 위험 톤은 이 한 줄에만.
-  pop.append(hr(), el('button', { class: 'v2-wspop-row danger', type: 'button', onclick: async () => {
-    if (!confirm(`'${wsName}' 워크스페이스를 보관할까요?\n목록에서 사라지지만 데이터는 지워지지 않아요.`)) return;
-    try { await archiveWorkspace(slug); closePopover(); toast(`'${wsName}' 을 보관했어요.`); switchWorkspace('primary'); }
-    catch (e: any) { toast('보관하지 못했어요 — ' + (e?.message || e), true); }
-  } }, el('span', { class: 'v2-wspop-ic' }, icon('archive')), tt('보관하기', '목록에서 숨깁니다 · 데이터는 남습니다')));
+  // 떠나는 문 — 보관과 나가기 중 **정확히 하나만** 그린다(#1875 D5', 2026-08-27 장원준).
+  //  보관은 «내 목록에서 숨기기»가 아니라 등록부 state 를 내리는 것이라 **모두의 접근이 끊긴다** —
+  //  그래서 함께 쓰는 사람이 있으면 보관은 없고 나가기만 있다. 혼자면 반대다(나갈 곳이 없다).
+  //  둘 다 그려 놓고 한쪽이 서버에서 400 을 내는 화면은 «고를 수 있는 것처럼 보이는 것»을 만든다.
+  pop.append(hr(), exitRow(w, slug, wsName));
   place(pop, anchor, !!anchor.closest('.v2-side'));
 }
 

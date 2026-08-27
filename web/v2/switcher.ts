@@ -469,6 +469,10 @@ export async function renameWorkspace(slug: string, name: string): Promise<void>
 export async function archiveWorkspace(slug: string): Promise<void> {
   await api('/api/ui/me/workspaces/delete', { method: 'POST', body: JSON.stringify({ slug }) });
 }
+/** 나가기(#1875 D5') — 나 하나만 빠진다. 보관과 **서로 배타**다(인원 2명 이상이면 보관이 막히고 이것만 열린다). */
+export async function leaveWorkspace(slug: string): Promise<void> {
+  await api('/api/ui/me/workspaces/leave', { method: 'POST', body: JSON.stringify({ slug }) });
+}
 /** 연결한 팀(다른 게이트웨이, 승격 경로 #1750). */
 export async function linkedTeams(): Promise<any[]> {
   try { const d: any = await api('/api/ui/me/linked-workspaces'); return (d && d.links) || []; } catch (_) { return []; }
