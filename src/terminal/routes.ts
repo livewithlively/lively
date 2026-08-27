@@ -21,7 +21,7 @@ import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js";
 import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
-import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본
+import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
@@ -433,6 +433,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         });
       }
     } catch { /* 표식 조회 실패 — 휴지통 없이 나간다 */ }
+    // #1875 — 라이브 목록도 **지금 워크스페이스**의 세션만. tmux/노드 목록은 owner 로만 걸러(전역 신원) 개인
+    //  워크스페이스에 박스 전체 세션이 샜다(실측 신고). gw_session_map 부재/보관됨 = primary. 필터 실패는
+    //  fail-closed 하지 않는다(격리는 v6/sessions SQL 필터가 이중으로 지킨다 — 여기서 막히면 목록이 통째로 빈다).
+    try {
+      const curWs = currentTenant()?.id ?? PRIMARY_TENANT_ID;
+      const wsMap = await sessionWorkspaceIds(merged.map((s) => s.id));
+      merged = merged.filter((s) => sessionInWorkspace(wsMap.get(s.id), curWs));
+    } catch (e) { logger.warn({ err: e }, "세션 목록 워크스페이스 필터 실패 — 격리 없이 나간다(v6/sessions 가 이중 방어)"); }
     res.json({ sessions: merged });
   }));
   // 세션 종료 확인창이 '대화 기록이 남는지'를 **사실대로** 말하기 위한 최소 정책 조회(#1582).

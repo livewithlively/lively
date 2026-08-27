@@ -315,3 +315,29 @@ export async function workspaceForSession(sessionId: string): Promise<RegistryWo
   sessionWsCache.set(sessionId, { ws, at: Date.now() });
   return ws;
 }
+
+/**
+ * 여러 세션의 **소속 워크스페이스 id** 를 한 번에(#1875 세션 목록 격리). 반환 맵에 없는 세션 = 부재/보관됨 =
+ *  primary(호출자가 PRIMARY_TENANT_ID 로 채운다 — workspaceForSession 과 같은 규칙: active 만, 그 외 primary).
+ *  목록 필터 전용이라 캐시를 태우지 않는다(대량 id 를 한 방에 — 세션당 왕복은 목록 크기만큼의 지연이 된다).
+ */
+/**
+ * 세션이 **지금 보고 있는 워크스페이스**의 것인가(#1875 목록 격리의 단일 규칙 — SQL·JS 두 필터가 같은 명제를 쓴다).
+ *  `mappedWsId` = gw_session_map 이 준 소속(active 만; 부재/보관됨이면 undefined). 규칙: 소속 = mappedWsId ?? primary,
+ *  그것이 현재 워크스페이스와 같을 때만 보인다. 그래서 ① 안 묶인 옛 세션은 primary(박스)에서만 보이고 개인 ws 엔
+ *  안 새며 ② 개인 ws 세션은 그 ws 에서만 보이고 primary·다른 개인 ws 엔 안 샌다.
+ */
+export function sessionInWorkspace(mappedWsId: string | null | undefined, currentWsId: string): boolean {
+  return (mappedWsId ?? PRIMARY_TENANT_ID) === currentWsId;
+}
+
+export async function sessionWorkspaceIds(sessionIds: string[]): Promise<Map<string, string>> {
+  const ids = Array.from(new Set(sessionIds.filter((s) => typeof s === "string" && s)));
+  if (!ids.length) return new Map();
+  const r = await itemsPool.query(
+    `SELECT m.session_id, m.workspace_id::text AS wsid
+       FROM gw_session_map m JOIN gw_workspace w ON w.id = m.workspace_id
+      WHERE w.state='active' AND m.session_id = ANY($1::text[])`,
+    [ids]);
+  return new Map(r.rows.map((x) => [x.session_id as string, x.wsid as string]));
+}
