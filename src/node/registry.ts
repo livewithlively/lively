@@ -42,6 +42,9 @@ interface NodeConn {
   nextChan: number;
   chans: Map<number, { browser: WebSocket; opened: boolean }>;
   lastTouch: number;
+  // 이 연결이 **언제 붙었나**(#2172) — '가장 최근에 켠 내 컴퓨터'를 새 세션의 기본 실행 노드로 고르기 위한 근거.
+  //  last_seen(60s 스로틀)·상태 push(3s)는 온라인인 동안 계속 갱신돼 노드끼리 구분이 안 된다 — 필요한 건 '언제부터' 다.
+  connectedAt: number;
   hasDocker: boolean;
   // 이 노드가 실제로 할 수 있는 op(#905 C4). hello 전에는 **기준선으로 시작한다** — hello 는 연결 직후 오지만
   //  그 사이 도착한 req 를 "미지원"으로 오판해 떨구면 안 되기 때문(구 노드도 기준선은 전부 한다).
@@ -107,7 +110,7 @@ export async function hydrateNodeStates(): Promise<number> {
 }
 let heartbeat: NodeJS.Timeout | null = null;
 
-export interface NodePublic { id: string; name: string; kind: string; owner: string; online: boolean; lastStateTs: number | null; sessions: number }
+export interface NodePublic { id: string; name: string; kind: string; owner: string; online: boolean; lastStateTs: number | null; sessions: number; connectedAt: number | null }
 
 // 관리/생성폼용 노드 현황(연결 관점) — DB 목록과 조인은 라우트가(여긴 라이브 연결만 안다).
 export function liveNodes(): NodePublic[] {
@@ -115,12 +118,12 @@ export function liveNodes(): NodePublic[] {
   const seen = new Set<string>();
   for (const [id, c] of inScope(conns)) {
     const st = states.get(keyOf(id));
-    out.push({ id, name: c.node.name, kind: c.node.kind, owner: c.node.owner_member, online: true, lastStateTs: st?.ts ?? null, sessions: st?.sessions.length ?? 0 });
+    out.push({ id, name: c.node.name, kind: c.node.kind, owner: c.node.owner_member, online: true, lastStateTs: st?.ts ?? null, sessions: st?.sessions.length ?? 0, connectedAt: c.connectedAt });
     seen.add(id);
   }
   for (const [id, st] of inScope(states)) {
     if (seen.has(id)) continue;
-    out.push({ id, name: st.name, kind: st.kind, owner: st.owner, online: false, lastStateTs: st.ts, sessions: st.sessions.length });
+    out.push({ id, name: st.name, kind: st.kind, owner: st.owner, online: false, lastStateTs: st.ts, sessions: st.sessions.length, connectedAt: null });
   }
   return out;
 }
@@ -545,7 +548,7 @@ export function setupNodeUpgrade(server: Server): void {
         //  hello 를 받으면 그 노드가 선언한 실제 목록으로 교체된다.
         const c: NodeConn = {
           node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(),
-          lastTouch: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS), harnesses: [...NODE_BASELINE_HARNESSES],
+          lastTouch: Date.now(), connectedAt: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS), harnesses: [...NODE_BASELINE_HARNESSES],
           tenant,
         };
         conns.set(k, c);
