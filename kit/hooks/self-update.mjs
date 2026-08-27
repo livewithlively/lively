@@ -131,9 +131,34 @@ const releaseLock = () => { try { rmSync(LOCK, { force: true }); } catch { /* */
 const loadState = () => { try { const s = JSON.parse(readFileSync(STATE, "utf8")); return (s && typeof s === "object") ? s : {}; } catch { return {}; } };
 const saveState = (s) => { try { writeFileSync(STATE, JSON.stringify(s, null, 2), { mode: 0o600 }); } catch { /* */ } };
 
-// 설치된 하네스 — '무엇이 PATH 에 있나'가 아니라 **무엇에 lively 가 배선돼 있나**로 판정한다.
-//  detached 자식은 PATH 가 빈약할 수 있어 command -v 류 탐지는 못 믿는다. 디스크의 배선이 진실이다.
-function installedHarnesses() {
+// PATH 에 그 바이너리가 있나 — 외부 프로세스 없이 fs 로만 훑는다(셸 spawn 불요 → hostEffects 샌드박스 정책과 무관).
+//  detached 자식은 PATH 가 빈약할 수 있어 이 신호는 **보조**다: 못 찾으면 종전대로 배선 신호만 쓴다(fail-safe).
+function binOnPath(bin) {
+  const sep = process.platform === "win32" ? ";" : ":";
+  const exts = process.platform === "win32" ? String(process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const dir of String(process.env.PATH || "").split(sep)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      try { if (statSync(join(dir, bin + ext)).isFile()) return true; } catch { /* 다음 후보 */ }
+    }
+  }
+  return false;
+}
+
+// 설치된 하네스 — **배선 신호 ∪ PATH 감지**. 배선(디스크)이 정본이고 PATH 는 보탬이다.
+//  ⚠ 왜 PATH 도 보나(2026-08-27 실측): 배선 신호만 보면 **한 번도 배선된 적 없는 하네스는 영영 배선되지
+//   않는다** — 센티넬이 없으니 목록에 안 들고, 다른 하네스가 배선돼 있으면 아래 폴백(!out.length)도 안 탄다.
+//   그 자기증식 데드락이 실제로 관측됐다: 한 박스의 격리 멤버 23홈에서 claude 는 23/23 배선인데 codex 는 3홈뿐,
+//   그 3홈은 전부 사람이 `lively update` 를 직접 친 홈이었다(나머지는 웹세션 Codex 에 MCP 가 안 붙은 채로 방치).
+//   CLI 의 detectHarnesses() 는 처음부터 PATH 도 봤으므로(kit/cli/lively.mjs) 사람이 치면 붙었던 것 —
+//   즉 **두 판정이 갈리는 것이 결함**이었다. 여기서 CLI 와 같은 판정으로 통일한다.
+//  PATH 감지의 하네스 목록은 번들 레지스트리에서 가져온다(CLI 의 augmentHarnessesFromBundle 과 같은 소스) —
+//   새 하네스가 늘어도 그 부분은 손댈 필요가 없다(아래 세션 힌트 화이트리스트는 레지스트리 없이도 답해야
+//   하므로 하드코딩으로 남는다). 레지스트리가 없는 구 번들이면 import 가 실패하고 종전 동작만 남는다.
+//  경계: `lively uninstall --harness X` 는 opt-out 흔적을 남기지 않으므로, 뗀 하네스가 PATH 에 남아 있으면
+//   다시 배선된다 — 그건 CLI update 가 이미 하던 동작이라 새로 생기는 위험이 아니다(영구 off 는 --harness all
+//   또는 LIVELY_NO_AUTO_UPDATE=1).
+async function installedHarnesses() {
   const out = [];
   try { if (readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8").includes(".lively/hooks/")) out.push("claude"); } catch { /* 미배선 */ }
   try { if (readFileSync(join(CODEX_DIR, "config.toml"), "utf8").includes("lively-managed")) out.push("codex"); } catch { /* 미배선 */ }
@@ -149,10 +174,20 @@ function installedHarnesses() {
   //   #2255 로 grok 을 우리가 깔아 주게 되면서 «깔아는 주는데 갱신은 안 되는» 조합이 실제로 생겨 여기서 닫는다.
   const GROK_DIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
   try { if (existsSync(join(GROK_DIR, "hooks", "lively-grok.json"))) out.push("grok"); } catch { /* 미배선 */ }
-  if (!out.length) {
-    const h = (argOf("--harness") || process.env.LIVELY_HARNESS || "").toLowerCase();
-    if (["claude", "codex", "opencode", "antigravity", "grok"].includes(h)) out.push(h); // 배선을 못 읽었지만 그 하네스 세션에서 불려왔다
-  }
+  // PATH 감지 합집합 — 배선은 없지만 바이너리가 있는 하네스를 보탠다(위 머리말의 데드락 해소).
+  try {
+    const reg = await import("./harness-registry.mjs");
+    for (const id of reg.HARNESS_IDS || []) {
+      const bin = reg.HARNESS?.[id]?.bin;
+      if (typeof bin === "string" && bin && !out.includes(id) && binOnPath(bin)) out.push(id);
+    }
+  } catch { /* 구 번들 — 레지스트리 없음. 배선 신호만으로 종전 동작 */ }
+  // 세션 하네스 힌트 — '지금 그 하네스 안에서 불려왔다'는 **가장 강한 신호**라 합집합으로 넣는다(폴백 아님).
+  //  ⚠ 종전엔 `!out.length` 가드 안이었다: 배선 신호가 하나도 없을 때만 발동. 위 PATH 감지가 out 을 먼저
+  //   채우게 된 뒤로는 그 가드가 곧 **선점**이 된다 — detached PATH 에 자기 바이너리는 없고 남의 하네스만
+  //   있으면 정작 자기 세션 하네스가 목록에서 빠진다(claude 면 reconcileClaudeMcp 까지 조용히 스킵).
+  const hint = (argOf("--harness") || process.env.LIVELY_HARNESS || "").toLowerCase();
+  if (["claude", "codex", "opencode", "antigravity", "grok"].includes(hint) && !out.includes(hint)) out.push(hint);
   return out;
 }
 
@@ -335,7 +370,7 @@ async function main() {
   if (!target) return;                               // 게이트웨이가 버전을 안 줌(구버전/장애) → 무동작(fail-safe)
   const local = readL("kit-version");
   const forced = process.argv.includes("--force");
-  const harnesses = installedHarnesses();
+  const harnesses = await installedHarnesses();
 
   // 최신이어도 **MCP 등록 정합은 맞춘다**(#1079 실측 결함).
   //  새 배선이 담긴 버전을 설치하는 실행은 언제나 **구버전 코드**가 수행한다 → 그 배선(#862 additive 등록,
