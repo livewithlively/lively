@@ -647,6 +647,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  자기 주소만 갈아타면 셸 주소·탭 제목·사이드바는 옛 세션 그대로인 어긋난 화면이 된다(#1808 사고).
     //  여기서 부르는 resumeSession 은 [이어서 대화하기]와 같은 경로라 주소(#/s/<새 id>)까지 함께 옮긴다.
     if (m && m.type === 'lively-term-gone' && String(m.id || '') === target.id) {
+      // #2231 — 프레임이 "이 세션은 이미 이어졌고 새 id 는 이것"이라고 말해 왔다. 되살릴 것이 없으니
+      //  **자리만 옮긴다**(자동복원 상한도 쓰지 않는다 — 이건 시도가 아니라 이동이다).
+      const mv = String(m.movedTo || '');
+      if (mv && mv !== target.id) {
+        toast('이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.');
+        if (opts.onResumed) opts.onResumed(mv); else location.hash = '#/s/' + encodeURIComponent(mv);
+        return;
+      }
       if (m.canRestore && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
     }
@@ -1338,6 +1346,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
       let nextId = '';
+      let moved = '';                            // #2231 — 이 세션은 이미 이어졌다(서버가 알려준 새 id)
       // ⚠ hint.canRestore — **프레임이 방금 서버에게 들은 말**이다(lively-term-gone). 종전엔 이 분기가 목록 행의
       //  restorable 만 봤는데, 목록은 좌표를 접으면서 그 값을 못 받는 경우가 있다(session-merge.ts) — 그래서
       //  되살릴 좌표(desired-state)가 멀쩡히 있는 세션이 **대화록 기반 이어받기**로 흘렀고, 서버는 그 대화의 cwd 를
@@ -1347,7 +1356,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (isBox && (target.raw?.restorable || hint?.canRestore)) {
         const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
         if (r?.session) rememberCreated(r.session);
-        nextId = String(r?.session?.id || (r?.already ? target.id : ''));
+        // #2231 — `movedTo` = "그 id 는 이미 이어졌고, 대화는 이 새 세션에서 돌고 있다". 종전엔 이 경우 서버가
+        //  404(`복원할 세션 상태가 없습니다`)를 냈고 화면은 거기서 멈췄다 — 낡은 탭·두 번째로 누른 칸이 전부
+        //  막다른 길이었다. 이제는 그 새 id 로 **옮겨 간다**(아래 공통 라우팅). 새로고침을 시킬 이유가 없다.
+        moved = String(r?.movedTo || '');
+        nextId = String(r?.session?.id || moved || (r?.already ? target.id : ''));
       } else {
         const sid = !isBox ? target.id : String(target.logId || target.raw?.claudeSessionId || '');
         const node = !isBox ? String(target.node ?? '') : String(target.logNode ?? '');
@@ -1358,7 +1371,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         if (r?.mode === 'fallback' && r?.reason) toast(String(r.reason));
       }
       if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
-      toast('이어받기 세션을 열었어요.');
+      // 이미 이어져 있던 것과 지금 새로 이어받은 것은 사람에게 **다른 사실**이다 — 문구를 가른다.
+      toast(moved && moved !== target.id ? '이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.' : '이어받기 세션을 열었어요.');
       // 라우팅은 호출자(탭)에게 — 전역 주소를 여기서 바꾸면 숨은 탭의 복원이 활성 탭을 끌고 간다(opts.onResumed 주석).
       if (opts.onResumed) opts.onResumed(nextId);
       else location.hash = '#/s/' + encodeURIComponent(nextId);

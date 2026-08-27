@@ -19,6 +19,8 @@ export interface DeadSessionStateLike {
   harness?: string | null;
   exited_at?: string | null;
   exit_reason?: string | null;
+  /** #2231 — 이 세션이 이어진 새 id. 있으면 '되살릴 세션'이 아니라 **이정표**다(아래 kind:"moved"). */
+  superseded_by?: string | null;
 }
 
 /** 죽은 세션의 메타 응답 본문. `restorable: true` 가 곧 "박스에 없다 = 되살릴 수 있다". */
@@ -41,6 +43,11 @@ export type DeadSessionMetaResult =
   | { kind: "ok"; body: DeadSessionMeta }
   /** desired-state 가 없다 = 되살릴 근거가 없는 '진짜 끝난 세션'. 호출자는 종전 흐름을 계속한다. */
   | { kind: "none" }
+  /**
+   * #2231 — 이 id 는 **이미 이어졌다**. 되살릴 것이 아니라 새 세션으로 보내야 한다.
+   *  (여기서 restorable 을 내면 화면이 "이어받을 수 있어요"라고 약속한 뒤 404 를 받는다 — 그 약속을 하지 않는다.)
+   */
+  | { kind: "moved"; to: string }
   /** 남의 개인 세션 — 존재조차 알리지 않는다. 호출자는 403. */
   | { kind: "forbidden" };
 
@@ -68,6 +75,9 @@ export function deadSessionMeta(
   const mine = st.owner === viewerId || isAdmin;
   const projectId = Number(st.project_id ?? 0) || 0;
   if (!mine && !sharedByFolder(st.dir || "")) return { kind: "forbidden" };
+  // #2231 — 이어진 세션. **접근권을 확인한 뒤에** 알린다(남의 세션의 새 id 를 흘리지 않는다).
+  //  사슬 끝까지 따라가는 건 호출자 몫이다(DB 조회 — 이 모듈은 순수하게 둔다). 여기선 '이어졌다'는 사실만 말한다.
+  if (st.superseded_by && st.superseded_by !== id) return { kind: "moved", to: st.superseded_by };
   return {
     kind: "ok",
     body: {

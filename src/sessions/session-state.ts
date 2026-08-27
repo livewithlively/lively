@@ -67,6 +67,10 @@ export interface SessionState {
   // #1791 — 이 세션이 도는 노드 id(org_node.id). null = 게이트웨이 박스(중앙 tmux). 복원은 이 노드에 create 를 릴레이하고,
   //  목록은 이 값으로 '그 노드의 세션'임을 표시한다. 조회 결과엔 항상 있고, 입력에선 선택(없으면 박스).
   node_id?: string | null;
+  // #2231 — 이 세션이 **이어진 새 세션의 id**(복원 성공 시 기록). null = 아직 이어지지 않음(= 되살릴 수 있는 행).
+  //  옛 id 를 가리키던 화면·링크가 막다른 길이 되지 않게 하는 이정표다 — 목록에는 안 나오고(listAllSessionStates),
+  //  옛 id 로 오는 복원·메타 조회만 이 값을 따라 새 세션으로 안내한다(terminal/routes.ts · session-meta.ts).
+  superseded_by?: string | null;
 }
 
 // createSession 이 넘기는 desired-state(생성/재생성 시 upsert). last_seen 은 서버가 now(), claude_session_id·exited_at·
@@ -96,6 +100,7 @@ export function rowToState(r: Record<string, any>): SessionState {
     exit_reason: r.exit_reason ?? null,
     node_id: (r.node_id as string | null) ?? null,
     discovered: !!r.discovered,   // #2022 — 노드 스냅샷에서 발견한 행(좌표 미상)
+    superseded_by: (r.superseded_by as string | null) ?? null,   // #2231 — 이어진 새 세션 id(이정표)
   };
 }
 
@@ -262,13 +267,16 @@ export async function getSessionStates(ids: string[]): Promise<Map<string, Sessi
 }
 
 // 한 소유자의 desired-state 전부(복원 목록의 원천 — 호출자가 tmux 라이브와 병합해 offline 만 남긴다).
+//  ⚠ #2231 — **이어진 행(superseded_by)은 뺀다.** 이 목록의 뜻은 "지금 되살릴 수 있는 세션"이고, 이어진 행은
+//   되살릴 대상이 아니라 **새 id 로 가는 이정표**다(옛 id 로 오는 조회만 getSessionState 로 그 값을 읽는다).
+//   종전 DELETE 와 같은 가시성이라 목록·회수·정리 쪽 호출자는 동작이 그대로다.
 export async function listSessionStatesForOwner(owner: string): Promise<SessionState[]> {
-  const r = await itemsPool.query("SELECT * FROM org_session_state WHERE owner=$1 ORDER BY COALESCE(last_busy, created, 0) DESC", [owner]);
+  const r = await itemsPool.query("SELECT * FROM org_session_state WHERE owner=$1 AND superseded_by IS NULL ORDER BY COALESCE(last_busy, created, 0) DESC", [owner]);
   return r.rows.map(rowToState);
 }
 
 export async function listAllSessionStates(): Promise<SessionState[]> {
-  const r = await itemsPool.query("SELECT * FROM org_session_state ORDER BY COALESCE(last_busy, created, 0) DESC");
+  const r = await itemsPool.query("SELECT * FROM org_session_state WHERE superseded_by IS NULL ORDER BY COALESCE(last_busy, created, 0) DESC");
   return r.rows.map(rowToState);
 }
 
@@ -349,6 +357,86 @@ export async function claimSessionLabel(id: string, label: string, source: Label
 export async function touchSessionBusy(id: string, lastBusy: number): Promise<void> {
   if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다(노드 세션의 last_busy 는 상태 push 로 게이트웨이가 알고 있다)
   await itemsPool.query("UPDATE org_session_state SET last_busy=$2, last_seen=now(), updated_at=now() WHERE id=$1", [id, lastBusy]);
+}
+
+// #2231 — 복원이 성공했다: 옛 행을 **지우는 대신** 새 id 로 가는 이정표로 바꾼다.
+//  종전(deleteSessionState)엔 옛 id 가 서버에서 통째로 사라져, 그 id 를 들고 있던 화면·탭·링크가 전부
+//  `복원할 세션 상태가 없습니다`(404) 막다른 길이 됐다 — 대화는 새 id 로 멀쩡히 도는데 갈 길이 없었다.
+//  이정표가 남으면 그 옛 주소들이 **영구히** 새 세션으로 이어진다(만료 없음 — 옛 링크는 나중에 눌릴수록 값지다).
+//  ⚠ 목록에서 빠지는 건 종전과 같다(listAllSessionStates 가 superseded_by IS NULL 로 거른다).
+export async function markSessionSuperseded(id: string, newId: string): Promise<boolean> {
+  if (ON_NODE) return false;   // #1791 — 노드엔 DB 가 없다(복원은 게이트웨이가 하므로 노드에선 안 불린다)
+  if (!id || !newId || id === newId) return false;   // 자기 자신을 가리키면 이정표가 아니라 무한고리다
+  const r = await itemsPool.query("UPDATE org_session_state SET superseded_by=$2, updated_at=now() WHERE id=$1", [id, newId]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * #2231 — 옛 세션 id 가 **결국 어디로 이어졌나**(이정표 사슬의 끝).
+ *
+ *  한 세션이 여러 번 복원되면 사슬이 길어진다(A→B→C…). 옛 화면은 사슬 어디를 가리키고 있을지 모르므로
+ *  **끝까지** 따라가 지금 살아 있는 id 를 준다. 사슬 중간이 사람 손으로 완전 삭제됐으면(행 없음) 거기서 멈춘다 —
+ *  그 id 가 마지막으로 알려진 자리이고, 그 화면이 자기 사정을 다시 말해 준다(추측해서 더 가지 않는다).
+ *
+ *  ⚠ 고리 방어 — 이론상 A→B→A 가 생기면 영원히 돈다. 본 적 있는 id 를 만나면 멈춘다(hop 상한도 함께).
+ */
+export async function resolveSessionSuccessor(id: string, maxHops = 16): Promise<string | null> {
+  if (ON_NODE) return null;
+  const seen = new Set<string>([id]);
+  let cur = id;
+  let last: string | null = null;
+  for (let i = 0; i < maxHops; i++) {
+    const r = await itemsPool.query("SELECT superseded_by FROM org_session_state WHERE id=$1", [cur]);
+    const next = (r.rows[0]?.superseded_by as string | null) ?? null;
+    if (!next || seen.has(next)) break;
+    seen.add(next);
+    last = next;
+    cur = next;
+  }
+  // 이정표가 없으면 **대화로 찾는다**(아래). 사슬 끝이 또 이정표 없는 죽은 자리일 수도 있으니 그 끝에서 이어 본다.
+  return last ?? await successorByConversation(id);
+}
+
+/**
+ * #2231 — 이정표가 **없는** 옛 id 를 대화로 되찾는다. 이 스킬의 핵심 안전망이다.
+ *
+ *  이정표(superseded_by)는 이 변경 이후의 복원에만 생긴다. 그런데 옛 행이 사라지는 길은 복원 말고도 있다 —
+ *  사람이 완전 삭제, 휴지통 비우기, 워크스페이스 회수, 이 변경 이전에 이미 복원된 세션. 그 전부에서 화면은
+ *  똑같이 막다른 길이 됐다. 그래서 **행이 없어도** 답할 수 있는 축이 필요하다: **대화 id**.
+ *
+ *  `org_node_session_map` 은 세션 수명과 무관하게 남는 표다(#1752) — box_id ↔ conv_uuid. 그래서 행이 지워진
+ *  옛 세션도 "그 세션이 무슨 대화였는지"는 남아 있고, **같은 대화를 들고 있는 최신 세션**이 곧 갈 곳이다.
+ *  (2026-08-27 실측: `box-jang-b830d01a` 는 행이 없지만 이 표에 대화가 남아 있어 `box-jang-fa34ad1e` 로 이어진다.)
+ *
+ *  ⚠ 소유자 스코프 — 남의 세션으로 보내지 않는다. 대화 id 는 세션 사이를 승계하지만 소유자는 승계되지 않는다.
+ *  ⚠ 이어받기로 대화가 갈라져 후보가 여럿이면 **가장 최근**을 준다(사람이 마지막으로 쓰던 자리).
+ */
+async function successorByConversation(id: string): Promise<string | null> {
+  const cur = await itemsPool.query(
+    `SELECT COALESCE(s.claude_session_id, m.conv_uuid) AS conv, COALESCE(s.owner, m.owner) AS owner
+       FROM (SELECT $1::text AS id) AS q
+       LEFT JOIN org_session_state AS s ON s.id = q.id
+       LEFT JOIN org_node_session_map AS m ON m.box_id = q.id`,
+    [id],
+  );
+  const conv = (cur.rows[0]?.conv as string | null) ?? null;
+  const owner = (cur.rows[0]?.owner as string | null) ?? null;
+  if (!conv || !owner) return null;
+  // 같은 대화를 들고 있는 다른 세션 — desired-state 행(살아있거나 되살릴 수 있는 것)을 먼저, 없으면 매핑 표에서.
+  const byState = await itemsPool.query(
+    `SELECT id FROM org_session_state
+      WHERE claude_session_id=$1 AND owner=$2 AND id<>$3 AND superseded_by IS NULL
+      ORDER BY COALESCE(last_busy, created, 0) DESC, created_at DESC LIMIT 1`,
+    [conv, owner, id],
+  );
+  if (byState.rows[0]?.id) return String(byState.rows[0].id);
+  const byMap = await itemsPool.query(
+    `SELECT m.box_id FROM org_node_session_map AS m
+      WHERE m.conv_uuid=$1 AND m.owner=$2 AND m.box_id<>$3
+      ORDER BY m.updated_at DESC LIMIT 1`,
+    [conv, owner, id],
+  );
+  return byMap.rows[0]?.box_id ? String(byMap.rows[0].box_id) : null;
 }
 
 // desired-state 삭제 — 사용자가 **명시적으로 kill** 한 세션만(복원 안 함). reaper 회수는 보존(restorable) 하므로 호출 안 함.

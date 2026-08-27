@@ -2562,6 +2562,7 @@ async function maybeRestoreOnOpen(meta) {
   restoreTried = true;                                  // 이 화면의 복원 시도는 여기서 소진(4410 경로와 이중 실행 금지)
   // 방금 연 화면이라 '이 탭에서 조작함'(typed)은 언제나 false 다 — 그래서 판정표의 ask 행은 여기서 나오지 않는다.
   const mode = goneMode(meta, !!NODE_ID, RESTORED, false);
+  if (mode === 'moved') { goToMoved(meta.movedTo); return true; }   // #2231 — 이어진 세션으로 옮긴다
   if (mode === 'notowner') {
     endSession({ info: true, icon: '↻', title: '이 세션은 멈춰 있습니다.',
       body: '이어서 여는 건 세션을 만든 사람만 할 수 있어요. 아래 마지막 화면은 그대로 읽고 복사할 수 있습니다.' });
@@ -2594,6 +2595,28 @@ function handOffToShell(meta) {
   showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '이어서 열고 있습니다 — 잠시만요.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
   return true;
 }
+/**
+ * #2231 — **이미 이어진 세션으로 옮긴다.** 되살리는 것이 아니라 자리를 옮기는 것이다(새 세션은 이미 돌고 있다).
+ *
+ *  셸 안의 프레임이면 위 handOffToShell 과 같은 이유로 **셸에게 넘긴다** — 프레임만 새 세션으로 갈아타면
+ *  주소·탭 제목·사이드바가 옛 세션 그대로인 어긋난 화면이 된다(#1808). 단독 탭이면 이 페이지가 직접 옮긴다.
+ *  ⚠ `restored=1` 을 붙인다 — 옮겨 간 그 세션이 또 죽어 있어도 자동 복원이 다시 돌지 않게(루프 차단, goneMode).
+ */
+function goToMoved(movedTo) {
+  const to = String(movedTo || '');
+  if (!to || to === SESSION_ID) return;                 // 자기 자신으로는 안 옮긴다(무한 새로고침 방지)
+  sessionEnded = true;
+  try { if (ws && ws.readyState <= 1) ws.close(); } catch (_) { /* noop */ }
+  if (EMBED && window.parent !== window) {
+    try { window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, movedTo: to }, location.origin); } catch (_) { /* 부모가 없거나 닫혔다 */ }
+    showEndedBar({ info: true, icon: '↻', title: '이 세션은 이미 이어졌어요.', body: '이어진 세션으로 옮기고 있습니다 — 잠시만요.' });
+    return;
+  }
+  //  ⚠ 노드 좌표(&node=)를 그대로 이고 간다 — 복원은 **같은 노드**에 릴레이되므로 이어진 세션도 그 노드에 있다.
+  //   빠뜨리면 새 주소가 게이트웨이 박스를 뒤지다 4410(그런 세션 없음) → 종료 배너로 끝난다(#1791 과 같은 함정).
+  location.replace(apiUrl('/ui/terminal.html?session=') + encodeURIComponent(to) + '&restored=1' + nodeQ('&'));
+}
+
 /** 이 화면에서 복원을 실행한다 — 진행 배너를 띄우고 재연결 스케줄러를 세운 뒤 POST /restore. */
 function startRestore(meta) {
   // ⚠ sessionEnded 를 먼저 세운다 — ws.close() 의 onclose 가 재연결 스케줄러를 깨우면 복원 중에 죽은 id 로
@@ -2743,6 +2766,10 @@ export function goneMode(meta, isNode, alreadyRestored, typed) {
   // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
   //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
   void isNode;
+  // #2231 — 이 id 는 **이미 새 세션으로 이어졌다**(서버가 이정표를 준다). 되살릴 것도 끝난 것도 아니다:
+  //  옛 주소를 그대로 든 화면(먼저 열려 있던 탭·다른 칸·북마크)이 갈 곳은 그 새 세션이다. 종전엔 이 메타에
+  //  restorable 이 없어 'end'(진짜 끝난 세션)로 접혔고, 사람은 살아 있는 대화 옆에서 종료 배너를 봤다.
+  if (meta && meta.movedTo) return 'moved';
   if (!meta || !meta.restorable) return 'end';    // 기록이 없거나 남의 세션(403) — 진짜 끝난 세션
   if (!meta.canRestore) return 'notowner';        // 프로젝트 세션이라 보이지만 복원은 소유자 몫
   // ★ 유일한 '되살리지 않음' 신호는 **이 탭에서 사용자가 조작했다**(typed)는 것이다. 그건 '여는 중'이 아니라
@@ -2769,6 +2796,7 @@ async function onSessionGone() {
   // #1791 — 노드 세션도 묻는다(sUrl 이 &node= 를 붙인다): 스냅샷에 없으면 서버가 desired-state 로 '복원 가능'을 알린다.
   try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ }
   const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped);
+  if (mode === 'moved') { goToMoved(meta.movedTo); return; }   // #2231 — 붙어 있다 끊겼는데 그새 이어져 있었다
   if (mode === 'end') { endSession(); return; }
   if (mode === 'loop') {
     // 복원은 됐는데 그 세션이 곧 또 끝났다. 가장 흔한 원인은 '이어받을 대화가 없음'(claude 가
@@ -2816,6 +2844,9 @@ async function restoreThisSession() {
     showEndedBar({ title: '열지 못했습니다.', body: (e && e.message || String(e)) + ' — 세션 목록에서 다시 시도해 주세요.' });
     return;
   }
+  // #2231 — 이 id 는 이미 이어졌다(다른 탭·다른 칸이 먼저 눌렀다). **새 세션으로 옮긴다** — 여기서 그냥
+  //  새로고침하면 같은 옛 id 를 다시 열어 영원히 제자리다(아래 already 분기가 그 함정이었다).
+  if (r && r.movedTo) { goToMoved(r.movedTo); return; }
   // 라이브 경합: 그새 세션이 다시 떠 있으면 새로 만들지 않고 이 주소로 그대로 재연결한다.
   if (r && r.already) { location.reload(); return; }
   const ns = r && r.session;
