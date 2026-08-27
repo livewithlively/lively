@@ -1,6 +1,7 @@
 // org_member — 구성원 CRUD + jsonb 부속(온보딩 보고·하네스 관측 스냅샷·머신 별명·로컬 토글 지시)
 //  + person/person_identity 동기화. (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { logger } from "../../log.js";
 
@@ -82,7 +83,10 @@ export async function listMembers(): Promise<OrgMember[]> {
 }
 
 export async function getMember(id: string): Promise<OrgMember | null> {
-  const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1`, [id]);
+  //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
+  //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.
+  const r = await itemsPool.query(
+    `SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1 AND tenant_id = ${TENANT_DEFAULT_EXPR}`, [id]);
   return r.rows[0] ? mapMember(r.rows[0]) : null;
 }
 
