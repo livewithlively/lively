@@ -295,8 +295,16 @@ async function boot() {
   //             조직이 ui_mode 를 classic 으로 두었더라도 이 주소는 새 셸이어야 한다(그 화면을 가리키는 링크이므로).
   const embedded = new URLSearchParams(location.search).get('embed') === '1';
   const solo = new URLSearchParams(location.search).get('solo') === '1';
+  //  ★ 셸을 정하는 것은 **shell** 이다(#2208). embed 는 '끼워 넣은 판'이라는 표지일 뿐 — 저장소 격리와
+  //   크롬 걷기가 그 뜻이고(embed.ts), 셸 선택과는 상관이 없다. 종전엔 둘이 한 플래그에 얹혀 있어서,
+  //   embed 를 붙이는 **다른 자리**까지 클래식으로 끌려갔다: 곁칸 웹 칸은 우리 오리진 주소에 embed=1 을
+  //   자동으로 붙이는데(web-url.ts — 안 붙이면 안쪽 라이블리가 바깥 저장값을 복제한다), 그 탓에 칸에
+  //   라이블리 주소를 넣으면 **언제나 클래식 홈**이 떴다(상민님 2026-08-27: "다른 브라우저에서는 안 그런데
+  //   앱의 우측 웹 위젯에서만 그럼" — 해시가 없으니 클래식 기본 라우트 #/dashboard 로 떨어진다).
+  //  런치패드가 클래식 페이지를 실을 때만 shell=classic 을 명시한다(apps.ts embedUrl) — 그쪽은 종전 그대로다.
+  const classicShell = new URLSearchParams(location.search).get('shell') === 'classic';
   if (embedded) document.body.classList.add('embed');
-  else if (solo || uiMode() === 'v2') {
+  if (!classicShell && (solo || uiMode() === 'v2')) {
     uiV2Active = true;
     document.body.dataset.ui = 'v2';
     await bootV2();
