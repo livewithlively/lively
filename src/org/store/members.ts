@@ -36,6 +36,7 @@ export interface OrgMember {
   kind: "human" | "agent" | "system";
   display_name: string | null;
   nickname: string | null; // 표시 이름과 별개의 닉네임(#762). 활동 로그 등 캐주얼 표기용. null/''=display_name 폴백.
+  use_nickname: boolean;     // 「이 닉네임을 내 이름으로 사용」(#1813) — 켜면 이름을 보이는 자리 전부에서 nickname 이 이긴다.
   email: string | null;
   identities: MemberIdentity[];
   body_md: string;
@@ -57,6 +58,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
     kind: row.kind as OrgMember["kind"],
     display_name: (row.display_name as string) ?? null,
     nickname: (row.nickname as string) ?? null,
+    use_nickname: row.use_nickname === true,
     email: (row.email as string) ?? null,
     identities: (row.identities as MemberIdentity[]) ?? [],
     body_md: (row.body_md as string) ?? "",
@@ -72,7 +74,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
   };
 }
 
-const MEMBER_COLS = "id, kind, display_name, nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by";
+const MEMBER_COLS = "id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by";
 
 export async function listMembers(): Promise<OrgMember[]> {
   const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member ORDER BY sort, id`);
@@ -120,6 +122,26 @@ export async function setMemberOnboardingStep(
 export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
 /** 처음 설정의 결과. 무엇을 만들었는지까지 남긴다 — "왜 이 서랍이 있죠?" 에 답할 유일한 근거다. */
 export interface LivWelcome { done_at: string; drawers?: string[]; first_order?: string | null }
+/**
+ * 처음 설정을 **하다 만 자리**(#2207). 끝난 결과(LivWelcome)와 별개다 — 이건 아직 안 끝난 사람의 자리표다.
+ *
+ * 왜 서버에 두나: 종전엔 진행 상태가 브라우저 sessionStorage(`lively-ob-v2`) 하나였다. sessionStorage 는
+ *  **탭을 닫으면 사라진다** — 온보딩을 하다 창을 닫고 app.lvly.io 로 다시 들어오면 이름부터 다시 물었고,
+ *  거기까지 답한 것(무대·직무·고른 AI·자료함 갈래)은 아무 데도 안 남았다. 답을 받아 놓고 잃는 것은
+ *  이름·업무를 그 자리에서 저장하기로 한 결정(#1813)과 같은 이유로 고쳐야 하는 결함이다.
+ *
+ * `state` 는 **화면이 쥔 상태 그대로**(불투명)다. 서버는 해석하지 않는다 — 장면이 늘고 줄 때마다
+ *  서버 스키마를 따라 고치게 만들면 그 순간부터 두 벌이 어긋난다. 서버가 아는 것은 두 가지뿐:
+ *  «어느 장면에서 멈췄나»(scene — 되돌아갈 자리)와 «언제»(at). 나머지는 화면이 읽고 화면이 쓴다.
+ */
+export interface LivWelcomeProgress {
+  /** 마지막으로 저장된 시각(ISO). */
+  at: string;
+  /** 멈춘 장면 key(화면의 SCENES/CHAT_STEPS key). 되돌아갈 자리. */
+  scene: string;
+  /** 화면이 쥔 진행 상태 그대로 — 서버는 해석하지 않는다. */
+  state: Record<string, unknown>;
+}
 export interface LivDecision { at: string; what: string; why?: string; by?: string }
 /** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
 export interface LivDeclined { at: string; key: string; why?: string }
@@ -228,6 +250,8 @@ export interface LivProfile {
   work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[];
   /** 처음 설정(#/welcome)을 끝낸 시각. 종전엔 브라우저 localStorage 표식이라 기기를 바꾸면 온보딩이 다시 떴다(#1813). */
   welcome?: LivWelcome | null;
+  /** 처음 설정을 **하다 만 자리**(#2207). 끝나면 지운다(끝난 사실은 위 welcome·onboarded_at 이 말한다). */
+  welcome_progress?: LivWelcomeProgress | null;
   /** 처음 설정(#/welcome)을 끝낸 시각(#2039). **브라우저가 아니라 여기가 정본** — 기기를 바꿔도 다시 안 뜬다. */
   onboarded_at?: string | null;
   /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
@@ -260,6 +284,21 @@ export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Pro
   if (!chat) return cur;                       // 대화가 없으면 이을 곳도 없다
   const turns = [...(chat.turns ?? []), turn].slice(-cap);
   const next: LivProfile = { ...cur, chat: { ...chat, turns } };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+/**
+ * 처음 설정을 하다 만 자리를 남긴다(null = 지운다 — 끝났거나 처음부터 다시 하기로 했을 때) (#2207).
+ *
+ * ⚠ 읽고-쓰기라 같은 사람이 두 탭에서 온보딩을 하면 뒤가 앞을 덮는다. 그게 맞다 — **마지막으로 만진
+ *  화면이 그 사람의 지금**이고, 두 진행을 합칠 방법도 뜻도 없다(반쯤 A, 반쯤 B 인 답은 답이 아니다).
+ */
+export async function setLivWelcomeProgress(id: string, progress: LivWelcomeProgress | null): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur, welcome_progress: progress };
   const r = await itemsPool.query(
     `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
@@ -481,6 +520,7 @@ export interface MemberInput {
   kind?: "human" | "agent" | "system";
   display_name?: string | null;
   nickname?: string | null; // undefined=보존, null/''=닉네임 지움(→display_name 폴백).
+  use_nickname?: boolean;   // undefined=보존. 「이 닉네임을 내 이름으로 사용」(#1813).
   email?: string | null;
   identities?: MemberIdentity[];
   body_md?: string;
@@ -505,15 +545,17 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
     : (/^#[0-9a-fA-F]{6}$/.test((m.avatar_color || "").trim()) ? (m.avatar_color as string).trim() : null);
   // nickname — undefined=보존, 그 외=trim 후 빈값이면 null(→ display_name 폴백).
   const nickname = m.nickname === undefined ? (before?.nickname ?? null) : ((m.nickname || "").trim() || null);
+  // use_nickname — undefined=보존. 닉네임이 비면 **끈다**: 켜 둔 채 닉네임만 지우면 이름이 사라진 것처럼 보인다(#1813).
+  const useNick = nickname ? (m.use_nickname === undefined ? (before?.use_nickname ?? false) : !!m.use_nickname) : false;
   await itemsPool.query(
-    `INSERT INTO org_member(id, kind, display_name, nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13,1,now(),$14)
+    `INSERT INTO org_member(id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13::jsonb,$14,1,now(),$15)
      ON CONFLICT (tenant_id, id) DO UPDATE SET
-       kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, nickname=EXCLUDED.nickname, email=EXCLUDED.email,
+       kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, nickname=EXCLUDED.nickname, use_nickname=EXCLUDED.use_nickname, email=EXCLUDED.email,
        identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, avatar=EXCLUDED.avatar,
        avatar_char=EXCLUDED.avatar_char, avatar_color=EXCLUDED.avatar_color, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
        version=org_member.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [m.id, kind, m.display_name ?? before?.display_name ?? null, nickname, m.email ?? before?.email ?? null,
+    [m.id, kind, m.display_name ?? before?.display_name ?? null, nickname, useNick, m.email ?? before?.email ?? null,
      JSON.stringify(identities), m.body_md ?? before?.body_md ?? "", avatar, avatarChar, avatarColor,
      m.state ?? before?.state ?? "active", JSON.stringify(scopes), m.sort ?? before?.sort ?? 0, actor ?? null],
   );

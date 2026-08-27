@@ -1558,6 +1558,16 @@
   "input_hash": "1aa36e96f800bcb3"
  },
  {
+  "name": "me_welcome_progress",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/welcome/progress"
+  ],
+  "input_hash": "82cdcf2e0e6c5a23"
+ },
+ {
   "name": "me_welcome_apply",
   "scope": null,
   "mcp": false,
