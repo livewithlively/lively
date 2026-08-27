@@ -230,6 +230,12 @@ export interface LivProfile {
   welcome?: LivWelcome | null;
   /** 처음 설정(#/welcome)을 끝낸 시각(#2039). **브라우저가 아니라 여기가 정본** — 기기를 바꿔도 다시 안 뜬다. */
   onboarded_at?: string | null;
+  /**
+   * 처음 설정으로 **자동으로 보낸** 시각(#2171). onboarded_at 과 다른 사실이다 —
+   *  저건 «끝냈다», 이건 «보여는 줬다». 자동 진입은 이 표식으로 **평생 한 번**만 한다.
+   *  종전엔 완주(onboarded_at)만이 유일한 탈출구라, 중간에 나간 사람은 앱을 열 때마다 다시 끌려갔다.
+   */
+  welcome_shown_at?: string | null;
   /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
@@ -321,7 +327,7 @@ export async function getLivProfile(id: string): Promise<LivProfile> {
  *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
  */
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
@@ -329,6 +335,9 @@ export async function appendLivProfile(
   if (patch.welcome) next.welcome = patch.welcome;
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
+  // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).
+  //  처음 찍힌 시각을 지킨다 — 이 값이 곧 '자동 진입은 평생 한 번' 의 근거라 뒤로 밀리면 안 된다.
+  if (patch.welcomeSeen && !cur.welcome_shown_at) next.welcome_shown_at = new Date().toISOString();
   if (patch.decision) next.decisions = [...(cur.decisions ?? []), patch.decision].slice(-LIV_LIST_CAP);
   if (patch.declined) {
     const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);

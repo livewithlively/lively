@@ -7,7 +7,7 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
-import { renderOnboarding, onboardingDone } from './onboarding.js'; // #/welcome 처음 설정(#1813)
+import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
 import { $view, anchoredPopover, api, el, state, toast } from '../core.js';
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { renderLiv } from '../liv.js';
@@ -353,12 +353,24 @@ export async function bootV2(): Promise<void> {
 
   // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
   let boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
+  // ★ #2171 — 주소에 남은 `#/welcome` 은 **딥링크로 인정하지 않는다.**
+  //  처음 설정이 한 번 뜨면 주소창이 #/welcome 으로 바뀌는데(applyTabChrome), 그 뒤 새로고침하면 그게
+  //  딥링크로 읽혀 **서버 판정도 로컬 표식도 안 보고** 그대로 다시 떴다. 게이트를 아무리 정확히 해도
+  //  그 뒤로는 자기가 자기를 되살리는 고리가 된다(원준님 신고 2026-08-27 "시도때도없이 떠서 돌아버리겠어").
+  //  ⚠ 사람이 **스스로** 처음 설정을 다시 열 길은 남긴다 — 홈의 «이어서 하기» 가 붙이는 `?resume=1` 은 통과.
+  if (boot && routeKey(boot) === 'raw:welcome' && !boot.includes('resume=1')) boot = null;
   // 처음 설정을 아직 안 끝낸 **처음 오는 사람**만 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
   //  ⚠ 판정은 **서버**(me.first_run — src/org/delivery/first-run.ts)다. 종전엔 localStorage 하나로 정해서
   //   몇 달째 쓰던 사람도 새 브라우저·다른 기기·시크릿창이면 홈 대신 처음 설정이 떴다(원준님 신고 2026-08-26,
   //   #2039). localStorage 는 **끄는 쪽으로만** 쓴다 — 방금 이 브라우저에서 끝냈으면 표식이 서버에 닿기 전에도
   //   다시 안 뜨게. 값을 못 받았으면(옛 서버·조회 실패) 홈이다.
-  if (!boot && state.me && state.me.first_run === true && !onboardingDone()) boot = '#/welcome';
+  //  ★ #2171 — 보내는 순간 **서버에 '보냈다'를 찍는다**(welcome_seen). 자동 진입은 평생 한 번이다.
+  //   종전엔 맨 끝 [준비 끝, 정리해 주세요] 를 눌러야만 표식이 남아서, 중간에 나간 사람·웹만 쓰는 사람은
+  //   앱을 열 때마다 다시 끌려갔다. 못 끝낸 사람은 홈의 «이어서 하기»(me.welcome_pending)로 안내한다.
+  if (!boot && state.me && state.me.first_run === true && !onboardingDone()) {
+    boot = '#/welcome';
+    markWelcomeSeen();
+  }
   if (boot && tabsApi.find(boot)) { const hit = tabsApi.find(boot)!; hit.route = boot; tabsApi.activate(hit); }
   else {
     const saved = tabsApi.initial();

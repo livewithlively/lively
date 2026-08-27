@@ -225,6 +225,8 @@ export const welcomeCapabilities: Capability[] = [
       return {
         done: !!(liv.welcome?.done_at || liv.onboarded_at),   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
         done_at: liv.welcome?.done_at ?? null,
+        // #2171 — **보여준 적 있나**(끝냈나와 별개). 자동 진입은 이 표식으로 평생 한 번만 한다.
+        shown_at: liv.welcome_shown_at ?? null,
         // 이 사람의 AI 가 이어졌나(분석이 실제로 돌 수 있나) + 무엇으로 도는가. 자격 값은 절대 싣지 않는다.
         ai_ready: aiHarnesses.length > 0,
         ai_harnesses: aiHarnesses,
