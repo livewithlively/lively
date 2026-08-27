@@ -1076,7 +1076,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       html: () => qHead('terminal',
         S.ai === '아직 없어요' ? `AI 구독이 아직 없으셔도 괜찮아요. 자료 쌓기·정리·검색은 지금부터 됩니다.` : (S.aiConnected ? '이어졌어요. 거의 끝났습니다.' : '거의 끝났습니다.'),
         '터미널에서 Claude Code나 Codex 등을 쓰시나요?',
-        '쓰신다면 그 컴퓨터에 라이블리를 깔아 드릴게요. 창 하나 열고 두 줄만 붙여넣으면 끝나요.')
+        '쓰신다면 그 컴퓨터에 라이블리를 깔아 드릴게요. 앱을 받아서 여시면 앱이 알아서 합니다.')
         /* ⚠ 문구는 **설치만 하면 참인 것**으로 맞춘다. 종전 3줄 중 «웹에서 그 컴퓨터의 세션을 연다»·
          *  «오래 걸리는 일을 맡긴다» 는 설치가 아니라 노드 연결(`lively node --daemon`)이 있어야 참인데,
          *  설치만 안내하고 그 문장을 보여 주면 화면이 못 지킬 약속을 하는 것이 된다. 노드는 다음 장면에서
@@ -1084,7 +1084,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         + `<div class="ob-benefits">
             <p class="ob-benefit">내 컴퓨터에서 켜는 그 AI가 회사 자료·규칙을 그대로 압니다</p>
             <p class="ob-benefit">지금까지 쓰시던 작업 메모·직접 만든 기능을 그대로 가져올 수 있어요</p>
-            <p class="ob-benefit">원하시면 그 컴퓨터를 웹에서도 열 수 있어요 (한 줄 더)</p>
+            <p class="ob-benefit">그 컴퓨터를 웹에서도 열 수 있어요 — 앱이 그것까지 해 둡니다</p>
           </div>
           <button class="ob-btn ob-btn-pri" id="tYes">네, 씁니다. 깔아 둘게요</button>
           <button class="ob-btn ob-btn-sub" id="tNo">아니요</button>`,
@@ -1190,7 +1190,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const poll = async () => {
           const now = await connectSignal();
           if (now === null) return;                          // 못 물었다 — 조용히 다음 차례에 다시
-          if (localBase === null) { localBase = now; if (now) say('', '이 계정으로 AI가 라이블리를 쓴 기록이 이미 있어서, 여기선 자동 확인을 하지 않을게요. 위 세 걸음을 마치고 [계속]을 눌러 주세요.'); return; }
+          if (localBase === null) { localBase = now; if (now) say('', '이 계정으로 AI가 라이블리를 쓴 기록이 이미 있어서, 설치가 끝났는지는 제가 자동으로 가려내지 못해요. 아래 [앱 받기]로 시작하시면 됩니다.'); return; }
           if (localBase === true) return;                    // 기준값이 참 — 전이를 볼 수 없다
           if (!now) return;
           clearInterval(localTimer); localTimer = null;
