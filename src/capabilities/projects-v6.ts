@@ -11,6 +11,10 @@ import { listSessionsForProject } from "../v6/session-log-store.js";          //
 import { bundleTrashedIds } from "../sessions/session-trash.js";
 import { sessionsCurrentlyBound } from "../v6/project-session-store.js";
 import { applySessionTrashOp } from "../sessions/session-trash-ops.js";
+import { sessionFootprint, purgeFootprint, claudeSessionIdsFor } from "../v6/session-footprint-store.js";   // #1850 P4 — 프로젝트 완전 삭제가 묶음 세션의 결과물을 서버에서 스스로 되돌린다
+import { purgeSessionLog } from "../v6/session-log-store.js";
+import { projectDirOnThisHost } from "../terminal/session-project.js";
+import { rm as fsRm } from "node:fs/promises";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 import { syncFolderAcls } from "../v6/folder-acl-sync.js";
 // 워크스페이스 회수(#813 T3-2) — 프로젝트 마무리 시 '복구 가능한 것'만 되돌린다(파생물 + 푸시된 워크트리).
@@ -538,7 +542,7 @@ const projectTrashV6: Capability = {
 const projectPurgeV6: Capability = {
   name: "project_purge_v6",
   title: "프로젝트 완전 삭제(v6)",
-  description: "휴지통에 있는 프로젝트를 완전히 지운다 — 프로젝트는 하드 삭제(자식 작업·팀원·연결 CASCADE, 감사 스냅샷은 남음), 함께 들어간 내 세션은 되살릴 수 없게 된다. 휴지통에 없으면 409(먼저 project_trash_v6). 웹 전용.",
+  description: "휴지통에 있는 프로젝트를 완전히 지운다 — 프로젝트 하드 삭제(자식 작업·팀원·연결 CASCADE, 감사 스냅샷은 남음) + 폴더 + 함께 들어간 내 세션의 결과물(만든 지식·자료·태스크·작업 기록, 고친 지식은 세션 전 판으로) 되돌림. 남이 손댄 것은 남는다(규칙 B). 휴지통에 없으면 409(먼저 project_trash_v6).",
   scope: "memory",
   input: { id: z.number().int().positive() },
   expose: {
@@ -554,9 +558,50 @@ const projectPurgeV6: Capability = {
     if (!before) throw new HttpError(404, `프로젝트 #${input.id} 없음`);
     if (!before.trashed_at) throw new HttpError(409, "휴지통에 없는 프로젝트예요 — 먼저 휴지통으로 보낸 뒤 완전히 지울 수 있습니다");
     const bundle = await bundleTrashedIds(me, input.id);
+    // #1850 P4 — 묶음 세션의 **결과물 되돌리기를 서버가 스스로** 한다. 종전엔 화면이 세션마다 먼저 지워 줘야만 됐고,
+    //  AI(MCP)가 이 능력만 부르면 지식·자료·작업 기록이 전부 남았다. 웹이 먼저 세션별로 지웠으면 중앙 기록이 이미
+    //  없어 발자국이 비고, 이 구간은 자연히 0건으로 지나간다(멱등). 규칙 B(남이 손댄 것·다른 세션이 붙은 것)는
+    //  sessionFootprint 판정이 그대로 지킨다. 이 프로젝트 자신(input.id)은 발자국의 projects 에서 빼고 아래
+    //  deleteProject 가 지운다 — 같은 행을 두 경로가 지우면 뒤쪽이 404 로 헛돈다(실측 지적).
+    const rollback = { sessions: 0, knowledge_deleted: 0, knowledge_reverted: 0, sources_deleted: 0, tasks_deleted: 0, categories_deleted: 0, activities_deleted: 0 };
+    for (const tmuxId of bundle) {
+      const pairs = await claudeSessionIdsFor(tmuxId).catch(() => []);
+      for (const pair of pairs) {
+        try {
+          const fp = await sessionFootprint(pair.nodeId, pair.sessionId, me);
+          if (!fp.window) continue;
+          const knowledge = fp.knowledge_created.filter((k) => !k.touched_after && !k.others_during).map((k) => k.name);
+          const r = await purgeFootprint({
+            knowledge,
+            revert: fp.knowledge_edited.filter((k) => !k.touched_after && !k.others_during).map((k) => k.name),
+            projects: fp.projects.filter((x) => x.created_here && !x.touched_after && x.other_sessions === 0 && x.id !== input.id).map((x) => x.id),
+            sources: fp.sources.filter((x) => !x.linked || knowledge.length > 0).map((x) => x.id),
+            tasks: fp.tasks.map((t) => t.id),
+            categories: fp.categories.map((c) => c.id),
+            activities: true,
+          }, fp.tmux_session_id, fp.window.from, me);
+          rollback.sessions++;
+          rollback.knowledge_deleted += r.knowledge_deleted; rollback.knowledge_reverted += r.knowledge_reverted;
+          rollback.sources_deleted += r.sources_deleted; rollback.tasks_deleted += r.tasks_deleted;
+          rollback.categories_deleted += r.categories_deleted; rollback.activities_deleted += r.activities_deleted;
+          for (const folder of r.project_folders) {
+            const abs = projectDirOnThisHost(folder);
+            if (abs) await fsRm(abs, { recursive: true, force: true }).catch(() => { /* 비치명 */ });
+          }
+          await purgeSessionLog(pair.nodeId, pair.sessionId, me);
+        } catch { /* 세션 하나의 실패가 프로젝트 삭제를 막지 않는다 — 남은 기록은 다음 시도가 다시 잡는다 */ }
+      }
+    }
     const sessions = bundle.length ? await applySessionTrashOp(user, me, "purge", bundle) : { done: [], skipped: [] };
+    const folder = (before as { folder?: string | null }).folder ?? null;
     await deleteProject(input.id, { actor: me, source: ctx?.source ?? "web" });
-    return { deleted: true, id: input.id, sessions };
+    // 프로젝트 폴더(첨부·자료 파일) — 세션 경로와 같은 원칙(#1850 P4): DB 확정 **뒤** 디스크. 종전엔 여기만 안 지웠다.
+    let folder_deleted = false;
+    if (folder) {
+      const abs = projectDirOnThisHost(String(folder));
+      if (abs) { try { await fsRm(abs, { recursive: true, force: true }); folder_deleted = true; } catch { /* 비치명 */ } }
+    }
+    return { deleted: true, id: input.id, sessions, rollback, folder_deleted };
   },
 };
 

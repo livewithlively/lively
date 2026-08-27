@@ -24,7 +24,7 @@ export const meProfileCapabilities: Capability[] = [
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const m = await getMember(userId);
       // 이메일은 표시 전용(읽기) — 셀프 편집 대상 아님. 멤버행이 없어도 모달은 열리게 안전 폴백.
-      return { id: userId, display_name: m?.display_name ?? null, nickname: m?.nickname ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null, avatar_char: m?.avatar_char ?? null, avatar_color: m?.avatar_color ?? null };
+      return { id: userId, display_name: m?.display_name ?? null, nickname: m?.nickname ?? null, use_nickname: m?.use_nickname === true, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null, avatar_char: m?.avatar_char ?? null, avatar_color: m?.avatar_color ?? null };
     }),
 
   restRead("me_profile_update", "내 프로필 수정",
@@ -40,6 +40,8 @@ export const meProfileCapabilities: Capability[] = [
       const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
       // 닉네임(#762): 미전송이면 보존, 빈 문자열이면 지움(→ display_name 폴백). 정규화는 upsertMember 담당.
       const nickname = input.nickname == null ? undefined : str(input.nickname, "nickname", 80).trim();
+      // 「이 닉네임을 내 이름으로 사용」(#1813) — 미전송이면 보존. 닉네임이 비면 저장 쪽(upsertMember)이 알아서 끈다.
+      const useNickname = input.use_nickname === undefined ? undefined : input.use_nickname === true;
       // 개인레이어(body_md)는 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
       const memberBody = input.body_md == null ? undefined : str(input.body_md, "body_md", 20000);
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
@@ -57,8 +59,8 @@ export const meProfileCapabilities: Capability[] = [
       const avatarChar = input.avatar_char === undefined ? undefined : (input.avatar_char === null ? null : str(input.avatar_char, "avatar_char", 8).trim());
       const avatarColor = input.avatar_color === undefined ? undefined : (input.avatar_color === null ? null : str(input.avatar_color, "avatar_color", 32).trim());
       // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
-      const member = await upsertMember({ id: userId, display_name: displayName, nickname, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
-      return { member: { id: member.id, display_name: member.display_name, nickname: member.nickname, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
+      const member = await upsertMember({ id: userId, display_name: displayName, nickname, use_nickname: useNickname, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
+      return { member: { id: member.id, display_name: member.display_name, nickname: member.nickname, use_nickname: member.use_nickname, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
     }),
 ];
 

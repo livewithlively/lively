@@ -424,8 +424,8 @@ async function syncShell(): Promise<void> {
   const at = tabsApi.active();
   const atPage = parseRoute(at.route).segs[0];
   if (atPage === 'inbox') renderInbox(at.center, data);   // 확인할 것 — 같은 결로 따라온다
-  else if (atPage === 'archive') renderArchive(at.center, data, binHooks);   // 아카이브·휴지통도 같은 결(#1851)
-  else if (atPage === 'trash') renderTrash(at.center, data, binHooks);
+  else if (atPage === 'archive') renderArchive(at.center, data, binHooks, at.aside);   // 아카이브·휴지통도 같은 결(#1851 → #1850 안 A: 곁칸 포함)
+  else if (atPage === 'trash') renderTrash(at.center, data, binHooks, at.aside);
   for (const t of tabsApi.tabs) {
     if (!t.chat) continue;
     const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
@@ -466,7 +466,7 @@ const binHooks = { onChanged: () => { void loadData({ projects: true }).then(() 
   drawSide(); tabsApi?.paint();
   // 그 화면 자체도 다시 — 되돌리기·완전 삭제 뒤 행이 그 자리에 남아 있으면 '안 됐나?'로 읽힌다(20초 결을 기다리지 않는다).
   const at = tabsApi?.active();
-  if (at) { const pg = parseRoute(at.route).segs[0]; if (pg === 'archive') renderArchive(at.center, data, binHooks); else if (pg === 'trash') renderTrash(at.center, data, binHooks); }
+  if (at) { const pg = parseRoute(at.route).segs[0]; if (pg === 'archive') renderArchive(at.center, data, binHooks, at.aside); else if (pg === 'trash') renderTrash(at.center, data, binHooks, at.aside); }
 }); } };
 
 // ── 데이터 ──
@@ -680,8 +680,8 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   //  돌아보기는 불러오는 것 — 프로젝트 화면은 문패 [타임라인](알림 센터)이 그 자리를 맡는다.
   if (!p || p === 'dashboard') return { title: '홈', noAside: true };
   if (p === 'inbox') return { title: '확인할 것', noAside: true };
-  if (p === 'archive') return { title: '아카이브', noAside: true };   // #1851
-  if (p === 'trash') return { title: '휴지통', noAside: true };
+  if (p === 'archive') return { title: '아카이브', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
+  if (p === 'trash') return { title: '휴지통', noAside: false };
   if (p === 'connect') return { title: segs[1] ? '앱 연결' : '외부 앱 연결', noAside: true };
   if (p === 'liv') return { title: '리브', noAside: true };
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
@@ -861,8 +861,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 아카이브·휴지통(#1851) — 사이드바 발치의 두 행이 여는 화면. ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
       //  이 분기가 그보다 **앞에** 서야 한다(뒤에 두면 WIKI 앱 프레임의 옛 휴지통이 열린다 — 그쪽은 화면 안 링크로 간다).
       markActive(page);
-      if (page === 'archive') renderArchive(tab.center, data, binHooks); else renderTrash(tab.center, data, binHooks);
-      tab.aside.replaceChildren();
+      if (page === 'archive') renderArchive(tab.center, data, binHooks, tab.aside); else renderTrash(tab.center, data, binHooks, tab.aside);
     } else if (page === 'connect') {
       markActive('connect');
       tab.aside.replaceChildren();

@@ -299,6 +299,9 @@ export interface SessionInfo {
   awaiting?: boolean;
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
+  // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt, 300자 상한). 사이드바 세션 행
+  //  둘째 줄의 정본. 없으면 undefined → 화면이 대화 꼬리 조회로 폴백(옛 훅·코덱스·셸 세션).
+  lastPrompt?: string;
   // 마지막 '작업(busy)' 시각(epoch초) — 클로드가 마지막으로 턴을 돌리고 있던(또는 끝낸) 때. 정렬·카드 시간 표시용.
   //  ⚠ '내가 열어본(브라우저 접속)' 시각은 섞지 않는다(#853) — 열어보기는 작업이 아니다.
   //  @box_last_busy(tmux 세션 옵션)로 영속 → 게이트웨이가 재기동해도 유지(tmux 서버가 더 오래 산다).

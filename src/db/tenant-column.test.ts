@@ -1,8 +1,9 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  IDENTITY_GLOBAL_DEFAULT_EXPR, SINGLE_TENANT_ID, SURROGATE_GEN_RE, TENANT_DEFAULT_EXPR,
-  buildIdentityGlobalFoldSql, buildIdentityGlobalPinDdl, buildTenantColumnDdl, isNaturalKey, rewritePartialUniqueDef,
+  IDENTITY_GLOBAL_DEFAULT_EXPR, SINGLE_TENANT_ID, SQL_IDENTITY_GLOBAL, SURROGATE_GEN_RE, TENANT_DEFAULT_EXPR,
+  buildIdentityGlobalFoldSql, buildIdentityGlobalPinDdl, buildTenantColumnDdl, identityGlobalPinPlan, isNaturalKey,
+  rewritePartialUniqueDef,
 } from "./tenant-column.js";
 
 const G = (...pairs: string[]) => new Set(pairs);
@@ -215,6 +216,32 @@ test("★ 키 컬럼이 없으면 접기 문장을 만들지 않는다 — 추�
   assert.throws(() => buildIdentityGlobalFoldSql("org_member", []), /키 컬럼/);
 });
 
+// ── ★★ PK 가 tenant_id 하나뿐인 표(=자연키가 전부 tenant_id 에 얹힌 표) ──────────────
+//  실측 사고(2026-08-27 c60 롤): member_credential 의 PK 는 `member_id` 인데, tenant 화가 그 PK 를
+//   (tenant_id, member_id) 로 바꿔 놓았다. 그러면 PK 조회(SQL_IDENTITY_GLOBAL)가 tenant_id 를 빼고
+//   `member_id` 를 돌려주므로 짝 판정은 맞다 — 여기까지는 정상이다.
+//  그런데 **PK 에서 tenant_id 를 뺀 나머지가 비는 표**가 있으면 얘기가 다르다: 짝 조건이 `AND` 없이
+//   비어 `NOT EXISTS (SELECT 1 FROM t p WHERE p.tenant_id = <기본>)` 가 되어, primary 에 행이
+//   **하나라도** 있으면 전부 건너뛰거나(무해) 하나도 없으면 **전부 옮겨** PK 충돌을 낸다.
+//  그래서 그런 표는 문장을 만들지 않고 던진다 — 위 '키 컬럼 없음' 가드가 정확히 그 자리다.
+//  이 테스트는 그 가드가 **빈 배열뿐 아니라 tenant_id 만 남은 경우에도** 걸리는지 못박는다.
+test("★★ 짝 조건이 비면 접지 않는다 — tenant_id 만 남은 키로는 '같은 행'을 못 가른다", () => {
+  // tenant_id 는 SQL_IDENTITY_GLOBAL 이 애초에 빼고 주므로, 여기 남는 건 빈 배열이다.
+  assert.throws(() => buildIdentityGlobalFoldSql("member_credential", []), /키 컬럼/);
+  // 공백만 든 배열도 같은 취급이어야 한다 — 호출부가 filter(Boolean) 을 빠뜨려도 여기서 막힌다.
+  assert.throws(() => buildIdentityGlobalFoldSql("member_credential", ["", ""]), /키 컬럼/);
+});
+
+// ── ★★ 접기는 **한 행이 여러 후보와 겹칠 때**도 안전해야 한다 ────────────────────────
+//  NOT EXISTS 는 '짝이 이미 있으면 건너뛴다' 를 보장하지만, **옮기는 행끼리** 서로 같은 키를 가지면
+//   막지 못한다(둘 다 primary 에 짝이 없으므로 둘 다 통과 → 같은 키 두 행이 primary 로 들어가 PK 충돌).
+//   실측 사고가 정확히 이 모양이었다: secondary 두 워크스페이스에 같은 member_id 자격이 하나씩.
+//  그래서 문장은 **행 단위 dedup** 을 함께 가져야 한다.
+test("★★ 옮기는 행끼리 같은 키면 하나만 옮긴다 — 둘 다 통과하면 PK 충돌이다", () => {
+  const sql = buildIdentityGlobalFoldSql("member_credential", ["member_id"]);
+  assert.match(sql, /ctid/, "행 단위 dedup 이 없다 — 같은 키를 가진 secondary 행 둘이 함께 옮겨진다");
+});
+
 // ── ★★ 감사 서브쿼리는 신원 전역 표를 **못박아** 읽는다 ─────────────────────
 // 이 한 줄이 없으면 갈라진 행 하나가 감사가 걸린 **모든 org 쓰기**를 500 으로 만든다.
 //  스칼라 서브쿼리는 2행을 받으면 그 자리에서 오류이고, 그 오류는 INSERT 뒤에 나서 되돌릴 수도 없다.
@@ -224,4 +251,37 @@ test("★★ audit() 의 org_member 서브쿼리가 tenant 로 못박혀 있다"
   const m = /FROM org_member m WHERE[^)]*/.exec(src);
   assert.ok(m, "audit.ts 에서 org_member 서브쿼리를 못 찾았다 — 이 가드를 따라 옮길 것");
   assert.match(m[0], /m\.tenant_id\s*=/, `스칼라 서브쿼리가 테넌트로 좁혀지지 않았다: ${m[0]}`);
+});
+
+// ── 못박기 계획 — 바깥 정책 계층이 격리한 표는 건드리지 않는다(#2198) ─────────
+//
+// ★★ 2026-08-27 실측. 매니지드 공용 DB(lvly-cloud) 에서는 '테넌트'가 워크스페이스가 아니라 **고객사**라
+//  토큰·세션·구성원도 테넌트별이고, 그래서 그 표들에 tenant_isolation(FORCE RLS)이 걸려 있다. 그 위에서
+//  #1879 의 못박기·접기가 돌아 auth_token 290/290 · web_session 325/325 행이 단일테넌트 UUID 로 옮겨졌고,
+//  정책이 그 행을 어느 테넌트에도 안 보여 줘 **전 테넌트가 invalid_token** 이 됐다(app.lvly.io 워크스페이스
+//  열기 500). "정책이 걸린 표"는 그 배포가 테넌트별로 쓰는 표다 — 거기서 전역화는 곧 장애다.
+
+const igRow = (t: string, over: Partial<{ pk: string[] | null; rls_forced: boolean; tenant_policy: boolean }> = {}) =>
+  ({ t, pk: ["id"], rls_forced: false, tenant_policy: false, ...over });
+
+test("★★ tenant_isolation 정책이 걸린 신원 표는 못박지도 접지도 않는다 — 매니지드 공용 DB 전 테넌트 로그인이 죽는다(#2198)", () => {
+  const plan = identityGlobalPinPlan([
+    igRow("org_member"),
+    igRow("auth_token", { tenant_policy: true }),
+    igRow("web_session", { rls_forced: true }),
+  ]);
+  assert.deepEqual(plan.pin.map((r) => r.t), ["org_member"]);
+  assert.deepEqual(plan.skipped, ["auth_token", "web_session"]);
+});
+
+test("정책이 없는 표는 종전대로 전부 못박는다(셀프호스트 registry 모드 무회귀)", () => {
+  const plan = identityGlobalPinPlan([igRow("org_member"), igRow("auth_token"), igRow("web_session")]);
+  assert.equal(plan.pin.length, 3);
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("★ 카탈로그 조회가 정책 이름과 FORCE 를 실제로 읽는다 — 판정 재료가 없으면 건너뛸 수 없다", () => {
+  assert.match(SQL_IDENTITY_GLOBAL, /pg_policy/);
+  assert.match(SQL_IDENTITY_GLOBAL, /'tenant_isolation'/);
+  assert.match(SQL_IDENTITY_GLOBAL, /relforcerowsecurity/);
 });
