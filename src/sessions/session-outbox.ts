@@ -35,7 +35,7 @@
 import path from "node:path";
 import { itemsPool } from "../db/client.js";
 import { tmux, isSessionGoneError } from "../terminal/tmux-exec.js";
-import { sendKeysToSession, sendKeyToSession } from "../terminal/send-keys.js";
+import { sendKeysToSession, sendKeyToSession, SendKeysNotStarted } from "../terminal/send-keys.js";
 import { firstPromptStep } from "../terminal/session-first-prompt.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
@@ -59,9 +59,11 @@ export const READY_WINDOW_MS = 20_000;
 /** 준비 안 됨 재시도 간격 — 시도 횟수에 따라 완만히 늘린다(로그인 화면을 10초마다 두드릴 이유가 없다). */
 export function retryDelayMs(attempts: number): number { return Math.min(10_000 + attempts * 5_000, 30_000); }
 /** 이 시간까지 입력창이 안 뜨면 포기(failed not-ready) — 로그인·오류 화면에 영영 멈춘 세션.
- *  ⚠ 30분이었다(#2154 로 상향). 실측한 사용 모양이 "첫 지시만 주고 자리를 비운다"라, 30분은 **사람이 로그인하러
- *   돌아오기 전에** 지시를 버리는 길이였다. 버려도 화면에 failed 로 남아 되살릴 수는 있지만, 그 사이 세션은
- *   빈손으로 논다 — 기다리는 쪽이 맞다(기다리는 비용은 30초에 한 번 tmux 폴 하나뿐). */
+ *  ⚠ 30분이었다(#2154 로 상향). 큐가 들고 있는 목적이 바로 **사람이 로그인하고 돌아올 때까지**인데(파일 머리말
+ *   "로그인하면 다 날아감이 없어진다"), 30분은 그 사람이 돌아오기 전에 지시를 버리는 길이였다.
+ *   실측 2026-08-27 의 not-ready 4건은 전부 codex 세션 — app-server 를 못 열어(로그인 전) 아웃박스로 내려온
+ *   첫 지시들이고, 로그인 뒤에야 입력창이 뜬다. 그 4건은 30분에 잘렸다.
+ *   기다리는 비용은 30초에 한 번 tmux 폴 하나뿐이고, 화면은 60초부터 '터미널 열기'로 사람을 부른다. */
 export const NOT_READY_TTL_MS = 2 * 60 * 60_000;
 /** 세션에 **닿지 못하는** 동안 큐가 지시를 들고 있는 상한(#2154 ②) — 노드 재기동·복원 대기가 여기 걸린다.
  *  하루를 넘기면 그 세션은 사람이 잊은 것으로 본다(그때는 failed 로 남겨 화면이 재시도·삭제를 준다). */
@@ -251,33 +253,48 @@ async function deliverLoop(sessionId: string): Promise<void> {
     //  모르면(DB 장애) **보존 쪽**으로 — 판정 불가를 이유로 사람의 지시를 버리지 않는다.
     const restorable = stateKnown ? !!st && !st.discovered : true;
 
-    await mark(row.id, "sending");
-    const ready = await waitReady(sessionId, harness, row.trust_ok);
-    if (ready !== "ready") {
-      const age = Date.now() - Date.parse(row.created_at);
-      const { action, reason } = stallAction(ready, { ageMs: age, restorable });
+    //  배달을 못 한 순간의 처분을 **한 자로** 재고 실행한다(#2154 ②) — 준비 판정에서 막힌 것이든, 글자를
+    //   싣기 전에 못 닿은 것이든 같은 사실(아직 아무것도 안 갔다)이므로 같은 규칙이어야 한다.
+    //   반환 true = 루프를 내려놓았다(타이머·전량실패로 끝냈다) · false = 이 행을 실패로 마감했으니 다음 행으로.
+    const settleStall = async (verdict: Exclude<ReadyVerdict, "ready">): Promise<boolean> => {
+      const { action, reason } = stallAction(verdict, { ageMs: Date.now() - Date.parse(row.created_at), restorable });
       if (action === "fail") {
-        if (ready === "gone" && !restorable) {
+        if (verdict === "gone" && !restorable) {
           // 확답으로 사라졌고 되살릴 자리도 없다 — 나이와 무관하게 같은 결말이니 대기분 전부 실패로(종전과 같다).
           //  ⚠ 나이로 갈리는 실패(TTL 초과)는 여기 오면 안 된다 — 아직 어린 뒷줄까지 같이 버리게 된다.
           await itemsPool.query(
             `UPDATE org_session_outbox SET status='failed', last_error=$2, updated_at=now()
              WHERE session_id=$1 AND status IN ('queued','sending')`, [sessionId, reason]);
-          return;
+          return true;
         }
         await mark(row.id, "failed", reason);   // 입력창이 끝내 안 떴다·끝내 못 닿았다 — 화면이 사유와 함께 보여준다
-        continue;                               // 다음 행은 다음 준비 판정에서 다시 본다(같은 벽이면 곧 같은 결말)
+        return false;                           // 다음 행은 다음 준비 판정에서 다시 본다(같은 벽이면 곧 같은 결말)
       }
       await itemsPool.query(`UPDATE org_session_outbox SET status='queued', attempts=attempts+1, last_error=$2, updated_at=now() WHERE id=$1`, [row.id, reason]);
-      const delay = ready === "not-ready" ? retryDelayMs(row.attempts + 1) : unreachableDelayMs(row.attempts);
+      const delay = verdict === "not-ready" ? retryDelayMs(row.attempts + 1) : unreachableDelayMs(row.attempts);
       retryTimers.set(sessionId, setTimeout(() => { retryTimers.delete(sessionId); kickOutbox(sessionId); }, delay));
-      return;                                   // 루프를 내려놓는다 — 타이머가 다시 kick
+      return true;                              // 루프를 내려놓는다 — 타이머가 다시 kick
+    };
+
+    await mark(row.id, "sending");
+    const ready = await waitReady(sessionId, harness, row.trust_ok);
+    if (ready !== "ready") {
+      if (await settleStall(ready)) return;
+      continue;
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).
     const oneLine = flatOneLine(row.text);
     try { await sendKeysToSession(sessionId, row.text); }
     catch (e) {
+      // ⚠ **글자를 싣기 전에** 죽은 경우(SendKeysNotStarted = has-session 실패)만 되돌릴 수 있다 — 한 글자도
+      //  안 갔으니 중복 위험이 없다. 실측 2026-08-27: 진짜 유실 5건 중 하나가 정확히 여기였다(`send:
+      //  … has-session … node channel unavailable` → failed). 순간 장애 하나로 사람의 지시를 버리지 않는다.
+      //  글자를 싣기 시작한 뒤의 실패는 종전대로 failed — 입력칸에 반쪽이 남아 있을 수 있다.
+      if (e instanceof SendKeysNotStarted) {
+        if (await settleStall(readyVerdictOnError(e.cause))) return;
+        continue;
+      }
       await mark(row.id, "failed", `send: ${(e as Error)?.message ?? e}`.slice(0, 300));
       continue;
     }

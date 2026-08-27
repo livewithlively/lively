@@ -127,3 +127,47 @@ t("[16] mux 경로를 모르면 일반 mux 취급 — Windows 전용 표면을 �
 });
 
 console.log(`\n${pass} passed`);
+
+// ── #2154 '한 글자도 안 갔다' 를 호출자가 알 수 있어야 한다 ────────────────────────────────
+//  이 파일은 원래 순수 계획만 잰다(머리말). 이 두 건만 실행부를 띄우는 이유: 고치는 대상이 **어느 단계에서
+//  죽었나**라 계획으로는 표현되지 않는다. 대신 tmux 를 가짜 중계(node 한 줄)로 갈아 끼워 프로세스는 가볍게 둔다.
+//  실측 2026-08-27: 아웃박스의 진짜 유실 5건 중 하나가 `send: … has-session … node channel unavailable`
+//  이었다 — 노드 채널이 순간 빈 것뿐인데 사람의 지시가 통째로 버려졌다.
+{
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { sendKeysToSession, SendKeysNotStarted } = await import("./send-keys.js");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sk-"));
+  /** failOn 이 argv 에 있으면 그 단계에서 비-0 으로 죽는 가짜 tmux. */
+  const fakeTmux = (name: string, failOn: string, stderr: string): string => {
+    const f = path.join(tmp, `${name}.mjs`);
+    fs.writeFileSync(f, [
+      `if (process.argv.slice(2).includes(${JSON.stringify(failOn)})) {`,
+      `  process.stderr.write(${JSON.stringify(stderr)}); process.exit(1);`,
+      "}",
+      "process.stdout.write('');",
+    ].join("\n"));
+    return `${process.execPath} ${f}`;
+  };
+  const saved = process.env.LIVELY_TMUX_EXEC;
+  const at = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+
+  process.env.LIVELY_TMUX_EXEC = fakeTmux("nostart", "has-session", "lvly tmux-relay: node channel unavailable\n");
+  await at("[#2154] 존재 확인에서 죽으면 SendKeysNotStarted — 한 글자도 안 갔으니 호출자가 되돌릴 수 있다", async () => {
+    const e = await sendKeysToSession("box-yoon-1", "안녕").then(() => null, (x) => x);
+    assert.ok(e instanceof SendKeysNotStarted, `받은 것: ${e && e.name}`);
+    assert.match(String((e.cause as { stderr?: string })?.stderr ?? ""), /node channel unavailable/,
+      "원래 tmux 오류를 그대로 들고 있어야 gone 확답 판정에 쓸 수 있다");
+  });
+
+  process.env.LIVELY_TMUX_EXEC = fakeTmux("midsend", "-l", "boom\n");
+  await at("[#2154] 글자를 싣기 시작한 뒤 죽으면 **그냥 오류** — 입력칸에 반쪽이 남았을 수 있어 재전송 금지", async () => {
+    const e = await sendKeysToSession("box-yoon-1", "안녕").then(() => null, (x) => x);
+    assert.ok(e instanceof Error, "실패는 실패다");
+    assert.ok(!(e instanceof SendKeysNotStarted), "여기서 '안 갔다'고 말하면 같은 지시가 두 번 간다");
+  });
+
+  if (saved === undefined) delete process.env.LIVELY_TMUX_EXEC; else process.env.LIVELY_TMUX_EXEC = saved;
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
