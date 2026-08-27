@@ -16,6 +16,21 @@ export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
 export function onboardingDone(): boolean { try { return localStorage.getItem(OB_DONE_KEY) === '1'; } catch (_) { return false; } }
 /**
+ * 처음 설정으로 **자동으로 보냈다**를 서버에 남긴다(#2171). «끝냈다»(onboarded)와 다른 사실이다.
+ *
+ *  왜 필요한가: 종전엔 끝냄 표식이 온보딩 맨 끝 [준비 끝, 정리해 주세요] 한 자리에서만 찍혔다. 그래서
+ *   중간에 나간 사람은 서버 눈에 영영 '처음 오는 사람'이라 **앱을 열 때마다 다시 끌려갔다**(원준님 신고
+ *   2026-08-27). 자동 진입은 평생 한 번이어야 하고, 그 근거는 «보여줬다»는 사실이지 «끝냈다»가 아니다.
+ *
+ *  ⚠ 실패해도 삼킨다 — 표식을 못 남겼다고 화면이 안 뜨면 안 된다. 다음 부팅에 한 번 더 뜨는 것이
+ *   최악이고, 그건 종전과 같지 더 나쁘지 않다(구 서버도 400 을 낼 뿐 화면은 그대로 뜬다).
+ */
+export function markWelcomeSeen(): void {
+  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ welcome_seen: true }) })
+    .catch(() => { /* 비치명 — 위 ⚠ */ });
+}
+
+/**
  * 처음 설정을 끝냈는지 **서버에 묻는다**(#1813). 종전엔 localStorage 표식뿐이라 기기·브라우저를 바꾸면
  *  이미 끝낸 사람에게 온보딩이 다시 떴다. 서버가 답을 주면 로컬 캐시도 그 값으로 맞춘다.
  *  못 물으면(오프라인·구 서버) 로컬 캐시로 떨어진다 — 온보딩 때문에 앱이 안 열리는 일은 없어야 한다.
@@ -88,7 +103,10 @@ async function desktopLink() {
 
 export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boolean) => void; onDone?: () => void } = {}): { destroy(): void } {
   host.className = 'ob-root';
-  host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span><button class="ob-q-back" id="obBack" data-back hidden>← 이전</button></div>
+  // ⚠ 나가는 문(#2171). 종전엔 처음 설정에서 **스스로 나갈 길이 없었다** — 장면마다 「나중에 정할게요」가
+  //  있었지만 그건 다음 질문으로 넘기는 버튼이지 나가는 버튼이 아니었고, 끝까지 완주해야만 벗어날 수 있었다.
+  //  홈으로 보내면서 «이어서 하기» 를 남긴다(포기가 아니라 미룸 — views.ts 의 홈 줄이 받는다).
+  host.innerHTML = `<div class="ob-crumb" id="crumb"><span class="ob-lm">L</span><span style="font-weight:600">리브</span><span class="ob-sep">/</span><span>처음 설정</span><button class="ob-q-back" id="obBack" data-back hidden>← 이전</button><button class="ob-q-back ob-q-exit" id="obExit" title="홈으로 갑니다. 남은 설정은 홈에서 이어서 하실 수 있어요.">나중에 할게요</button></div>
     <div class="ob-qwrap"><div class="ob-qcol" id="qcol"></div></div>
     <div class="ob-chat"><div class="ob-thread" id="thread"></div></div>
     <div class="ob-composer"><div class="ob-composer-in">
@@ -97,6 +115,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     </div></div>
 <div class="ob-toast" id="toast"></div>`;
   const DONE_KEY = OB_DONE_KEY;
+  // 나가는 문 배선(#2171) — 화면에 들어온 것 자체가 «보여줬다» 이므로 표식을 찍고 홈으로 보낸다.
+  //  ★ 여기서 markWelcomeSeen 을 한 번 더 부르는 이유: 자동 진입이 아니라 **사람이 스스로** 이 화면을
+  //   열었을 수도 있다(홈의 «이어서 하기» · 주소 직접 입력). 그때도 자동 진입 표식은 있어야 옳다 —
+  //   서버는 이미 찍혔으면 처음 시각을 지키므로(appendLivProfile) 두 번 불러도 값이 밀리지 않는다.
+  markWelcomeSeen();
+  //  ⚠ `$` 는 아래에서 선언된다(const, TDZ) — 여기선 host 에서 직접 집는다.
+  const exitBtn = host.querySelector('#obExit') as HTMLButtonElement | null;
+  if (exitBtn) exitBtn.onclick = () => { location.hash = '#/'; };
   /* 서버 실측 — 내가 올린 자료·종류별 집계·지금 갈래. 연출 숫자를 여기 값으로 갈아끼운다(#1813). */
   let WS: any = null;
   async function loadWelcome() {

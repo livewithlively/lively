@@ -72,6 +72,18 @@ export function routeKey(route: string): string {
   return 'raw:' + h;
 }
 
+/**
+ * 이 화면을 **탭 저장본에 남길까**(#2171).
+ *
+ * 처음 설정(#/welcome)은 «지나가는 자리»다 — 한 번 지나가면 끝이지, 다음에 앱을 켤 때 되살아날 화면이
+ *  아니다. 그런데 종전엔 그냥 탭으로 저장돼서, 자동 진입이 한 번 일어나면 그 탭이 저장본에 박히고
+ *  **다음 부팅마다 서버 판정을 보지도 않고 복원**됐다(부팅 라우팅은 저장된 탭을 그대로 되살린다).
+ *  즉 게이트가 아무리 정확해져도 그 뒤로는 무의미했다 — '시도때도없이 뜬다'의 실제 정체가 이것이다.
+ */
+export function routeSticky(route: string): boolean {
+  return routeKey(route) !== 'raw:welcome';
+}
+
 export interface TabsApi {
   strip: HTMLElement;
   tabs: ShellTab[];
@@ -123,8 +135,10 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         //  draft(아직 안 보낸 지시)는 있을 때만 싣는다 — 빈 문자열까지 적으면 저장본이 쓸데없이 커진다.
-        tabs: tabs.map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
-        active: activeTab ? tabs.indexOf(activeTab) : 0,
+        //  ⚠ 지나가는 화면(#/welcome)은 저장하지 않는다 — 되살아나면 서버 판정을 우회한다(routeSticky).
+        tabs: tabs.filter((t) => routeSticky(t.route))
+          .map((t) => (t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title })),
+        active: Math.max(0, tabs.filter((t) => routeSticky(t.route)).indexOf(activeTab as ShellTab)),
       }));
     } catch (_) { /* noop */ }
   }
@@ -434,6 +448,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       const wantIdx = Math.max(0, Number(st.active) || 0);
       st.tabs.slice(0, 12).forEach((t: any, i: number) => {
         if (!t || typeof t.route !== 'string') return;
+        if (!routeSticky(t.route)) return;   // 옛 저장본에 박혀 있던 #/welcome 을 되살리지 않는다(#2171)
         const k = routeKey(t.route);
         if (seen.has(k)) return;
         seen.add(k);
