@@ -698,7 +698,8 @@ t('U15 ★ 배선 — 웹 창이 상태를 받고(밀기+물어보기) 그 자�
   assert.match(ui, /if \(!cur\.ready\)/, '받아 두지 않았는데도 무언가 그린다');
   assert.match(ui, /다시 시작하여 반영하기/, '사람이 누를 문구가 없다');
   assert.ok(!/다시 켜|직접 켜/.test(ui), '사람에게 앱을 켜라고 말하면 종전 경쟁(U10 머리말)이 재현된다');
-  // 두 셸 모두 그 자리를 가진다 — 클래식이 제품 기본이고(web/lib/state.ts uiMode), v2 는 사이드바 발치.
+  // 두 셸 모두 그 자리를 가진다 — v2 가 제품 기본이고(web/lib/state.ts uiMode) 거기선 사이드바 발치,
+  //  클래식은 고른 사람에게만 뜨지만 그 셸에도 자리가 있어야 한다.
   const classic = readFileSync(fileURLToPath(new URL('../../web/main.ts', import.meta.url)), 'utf8');
   assert.match(classic, /mountDesktopUpdate\(deskUp, 'bar'\)/, '클래식 셸에 자리가 없다');
   const side = readFileSync(fileURLToPath(new URL('../../web/v2/side.ts', import.meta.url)), 'utf8');
