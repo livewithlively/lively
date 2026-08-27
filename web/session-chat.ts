@@ -879,7 +879,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (!row) { pd.state.textContent = ''; return; }              // 큐에서 사라짐(delivered/sent) — 에코가 곧 마감한다
     if (row.status === 'failed') {
       const why = row.last_error === 'not-ready' ? '입력창이 끝내 안 떴어요(로그인·오류 화면)'
-        : row.last_error === 'session-gone' ? '세션이 그새 닫혔어요' : (row.last_error || '알 수 없는 이유');
+        : row.last_error === 'session-gone' ? '세션이 그새 닫혔어요'
+        // #2154 ② — 큐가 오래 들고 있다가 끝낸 두 경우. 어느 쪽도 '입력창' 이야기가 아니다.
+        : row.last_error === 'unreachable' ? '세션이 있는 컴퓨터에 끝내 못 닿았어요'
+        : row.last_error === 'session-gone-restorable' ? '세션이 닫힌 채로 오래 지났어요 — 이어서 열면 다시 보낼 수 있어요'
+        : (row.last_error || '알 수 없는 이유');
       const retry = el('button', { class: 'btn-text dt-qact', type: 'button', text: '다시 보내기', onclick: () => { void outboxAct(pd, 'retry'); } });
       const drop = el('button', { class: 'btn-text dt-qact', type: 'button', text: '지우기', onclick: () => { void outboxAct(pd, 'discard'); } });
       pd.state.replaceChildren(el('span', { class: 'dt-qfail', text: `전달 안 됨 — ${why} ` }), retry, drop);
@@ -893,6 +897,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const drop = el('button', { class: 'btn-text dt-qact', type: 'button', text: '지우기', onclick: () => { void outboxAct(pd, 'discard'); } });
       pd.state.replaceChildren(el('span', { class: 'dt-qfail', text: '보냈지만 세션 기록에서 확인되지 않았어요 — 안 들어갔을 수 있어요 ' }), retry, drop);
       if (pd.t === cur?.t) { running = false; view.settle(pd.t); view.busy(false); }
+      return;
+    }
+    // 대기 중인데 **입력창이 문제가 아닌** 두 경우(#2154 ②) — 사실대로 말한다. 종전 문구('입력창이 뜨면 들어갑니다')는
+    //  닿지도 못하는 상태에서 사람을 엉뚱한 곳(터미널 로그인)으로 보낸다.
+    if (row.status === 'queued' && row.last_error === 'unreachable') {
+      pd.state.textContent = '전달 대기 중 — 세션이 있는 컴퓨터에 지금 못 닿아요. 닿는 대로 들어갑니다';
+      return;
+    }
+    if (row.status === 'queued' && row.last_error === 'session-gone-restorable') {
+      pd.state.textContent = '전달 대기 중 — 세션이 닫혀 있어요. 이어서 열면 그때 들어갑니다';
       return;
     }
     // 오래 못 들어가고 있다(로그인·대화상자 의심) — 글자만 두지 않는다: 눌러서 그 화면(터미널)을 바로 연다(막다른 안내 금지).

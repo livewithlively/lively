@@ -18,17 +18,30 @@
 //  · 실패는 조용히 삼키지 않는다 — failed 행이 사유와 함께 남고, 화면이 그 자리에서 재시도·삭제를 준다.
 //  · 노드(멤버 PC) 세션은 이 큐를 안 탄다(파일·tmux 가 그 컴퓨터에 있다) — 종전 릴레이 경로 그대로(후속).
 //
+//  ── #2154 매니지드 첫 지시 유실 ──
+//  실측 2026-08-27(상민님): 홈 컴포저로 세션을 열고 첫 지시만 준 뒤 자리를 비웠는데, 6시간 뒤 대화가 0개였다.
+//   아웃박스 40건을 세어 보니 delivered 24 · echo-unreadable 5 · session-gone 6 · not-ready 4 · 채널없음 1.
+//   두 갈래가 근본이었다:
+//   ① **에코를 게이트웨이 로컬 fs 로 확인했다.** 매니지드(중앙 게이트웨이 1개)에서 대화 파일은 노드의 멤버 홈에
+//      있어 늘 못 읽는다 → 실제로는 배달됐는데 `sent/echo-unreadable`(거짓 실패 상태). 복원의 정밀재개가 같은
+//      이유로 죽어 있던 것(#1437 ②)과 **같은 클래스**다. → 대화창·복원과 **같은 관문**(transcriptFsFor)으로 읽는다.
+//   ② **'세션에 못 닿음'을 '세션이 죽었다'로 단정했다.** waitReady 는 tmux 호출이 던지기만 하면 gone 을 돌려줬고,
+//      배달자는 그 세션의 대기분을 **전부 failed** 로 버렸다. 노드 채널이 순간 비어 503 한 번이면(파킹 소켓 좀비)
+//      첫 지시가 사라진다. → gone 은 #835 **확답**일 때만이고, 확답이어도 복원 가능한 세션이면 큐가 들고 있는다.
+//   교훈은 #2120~#2122 와 같다: **판정 함수의 정확성과 그 함수가 불리는 조건은 별개의 결함 축이다.**
+//
 //  관련: session-first-prompt.ts(준비 판정의 원조 — 홈 첫 지시도 이제 이 큐를 탄다) · harness-io/locate.ts(에코 확인의
-//  파일 찾기) · terminal/routes.ts(웹 보내기 → enqueue) · web/session-chat.ts(대기·실패 상태 렌더).
+//  파일 찾기) · terminal/routes.ts(웹 보내기 → enqueue · 복원의 큐 승계) · web/session-chat.ts(대기·실패 상태 렌더).
 import path from "node:path";
-import fsp from "node:fs/promises";
 import { itemsPool } from "../db/client.js";
-import { tmux } from "../terminal/tmux-exec.js";
+import { tmux, isSessionGoneError } from "../terminal/tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession } from "../terminal/send-keys.js";
 import { firstPromptStep } from "../terminal/session-first-prompt.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
-import { getSessionState } from "./session-state.js";
+import { localTranscriptFs, transcriptFsFor, type TranscriptFs } from "../terminal/harness-io/transcript-fs.js";
+import { sessionOsUser } from "../terminal/profiles.js";
+import { getSessionState, type SessionState } from "./session-state.js";
 import { logger } from "../log.js";
 
 export type OutboxStatus = "queued" | "sending" | "delivered" | "sent" | "failed";
@@ -45,10 +58,59 @@ export interface OutboxRow {
 export const READY_WINDOW_MS = 20_000;
 /** 준비 안 됨 재시도 간격 — 시도 횟수에 따라 완만히 늘린다(로그인 화면을 10초마다 두드릴 이유가 없다). */
 export function retryDelayMs(attempts: number): number { return Math.min(10_000 + attempts * 5_000, 30_000); }
-/** 이 시간까지 입력창이 안 뜨면 포기(failed not-ready) — 로그인·오류 화면에 영영 멈춘 세션. */
-export const NOT_READY_TTL_MS = 30 * 60_000;
+/** 이 시간까지 입력창이 안 뜨면 포기(failed not-ready) — 로그인·오류 화면에 영영 멈춘 세션.
+ *  ⚠ 30분이었다(#2154 로 상향). 실측한 사용 모양이 "첫 지시만 주고 자리를 비운다"라, 30분은 **사람이 로그인하러
+ *   돌아오기 전에** 지시를 버리는 길이였다. 버려도 화면에 failed 로 남아 되살릴 수는 있지만, 그 사이 세션은
+ *   빈손으로 논다 — 기다리는 쪽이 맞다(기다리는 비용은 30초에 한 번 tmux 폴 하나뿐). */
+export const NOT_READY_TTL_MS = 2 * 60 * 60_000;
+/** 세션에 **닿지 못하는** 동안 큐가 지시를 들고 있는 상한(#2154 ②) — 노드 재기동·복원 대기가 여기 걸린다.
+ *  하루를 넘기면 그 세션은 사람이 잊은 것으로 본다(그때는 failed 로 남겨 화면이 재시도·삭제를 준다). */
+export const UNREACHABLE_TTL_MS = 24 * 60 * 60_000;
 /** 보낸 뒤 에코(트랜스크립트 등장)를 기다리는 시간. 하네스가 받았다면 user 줄은 수 초 안에 적힌다. */
 export const ECHO_WINDOW_MS = 15_000;
+/** 에코를 찾을 때 읽는 파일 꼬리 크기 — 중계에선 이 바이트가 그대로 네트워크를 탄다(작게 유지할 이유). */
+export const ECHO_TAIL_BYTES = 256 * 1024;
+/** 에코 폴 간격 — 로컬은 파일 한 번 읽기라 촘촘히, **중계는 폴마다 원격 프로세스 왕복**이라 성기게(#2154 ①).
+ *  창(ECHO_WINDOW_MS)은 같으니 중계에서도 확인 기회가 여러 번 있고, 자라지 않은 파일은 아예 안 읽는다(아래 waitEcho). */
+export const ECHO_POLL_LOCAL_MS = 700;
+export const ECHO_POLL_RELAY_MS = 2_000;
+
+/** 준비 판정의 결말(#2154 ②) — 종전엔 gone 하나가 '확답으로 죽음'과 '못 닿음'을 겸했다. 그게 유실의 통로였다. */
+export type ReadyVerdict = "ready" | "not-ready" | "gone" | "unknown";
+
+/**
+ * 배달을 못 한 이 순간, 지시를 **버릴 것인가 들고 있을 것인가**(순수 — 표가 못박는다, #2154 ②).
+ *
+ *  · unknown(못 닿음: 노드 채널 503·중계 타임아웃·tmux 무응답) — 세션의 생사를 **모른다**. 버리면 살아 있는
+ *    세션의 첫 지시를 순간 장애 하나로 잃는다. 상한(UNREACHABLE_TTL)까지 들고 있는다.
+ *  · gone + 복원 가능 — tmux 는 확답으로 없다지만 desired-state 가 남아 '이어서 열기'가 가능하다. 그 복원이
+ *    큐를 승계하므로(routes.ts), 들고 있으면 되살아난 세션에서 그대로 실행된다.
+ *  · gone + 복원 불가 — 되살릴 자리가 없다. 종전대로 failed(화면이 사유와 함께 보여준다).
+ *  · not-ready(입력창이 안 뜬다: 로그인·오류 화면) — 세션은 살아 있다. NOT_READY_TTL 까지 기다린다.
+ */
+export function stallAction(
+  verdict: Exclude<ReadyVerdict, "ready">,
+  o: { ageMs: number; restorable: boolean },
+): { action: "requeue" | "fail"; reason: string } {
+  if (verdict === "not-ready") return { action: o.ageMs >= NOT_READY_TTL_MS ? "fail" : "requeue", reason: "not-ready" };
+  if (verdict === "gone" && !o.restorable) return { action: "fail", reason: "session-gone" };
+  const reason = verdict === "gone" ? "session-gone-restorable" : "unreachable";
+  return { action: o.ageMs >= UNREACHABLE_TTL_MS ? "fail" : "requeue", reason };
+}
+
+/** 못 닿는 동안의 재시도 간격 — 입력창 대기(초 단위)와 달리 **분 단위** 사건이다(노드 재기동·사람의 복원). */
+export function unreachableDelayMs(attempts: number): number { return Math.min(30_000 * (attempts + 1), 5 * 60_000); }
+
+/**
+ * tmux 호출이 던졌다 — 이 세션은 **죽은 것인가, 못 닿는 것인가**(#2154 ②).
+ *
+ *  종전 코드는 `catch { return "gone" }` 였다. 그래서 노드 채널이 순간 빈 503(파킹 소켓 좀비) 하나, 중계
+ *  타임아웃 하나로 그 세션의 대기 지시가 전부 버려졌다. 판정의 정본은 #835 의 isSessionGoneError 다 —
+ *  tmux 가 **응답해서** "그런 세션 없음"이라고 말했거나(중계면 tmux 서버 증발까지) 그때만 gone 이다.
+ */
+export function readyVerdictOnError(err: unknown): "gone" | "unknown" {
+  return isSessionGoneError(err) ? "gone" : "unknown";
+}
 
 /** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다.
  *  ⚠ **접두 160자만** 쓴다: 아주 긴 텍스트는 TUI 를 지나며 꼬리가 뒤섞일 수 있어(실측 2026-08-18, 3천자 프롬프트)
@@ -113,6 +175,34 @@ export async function retryOutbox(sessionId: string, id: number): Promise<boolea
   return false;
 }
 
+/**
+ * 복원 승계(#2154 ②) — 옛 세션의 **아직 배달 안 된** 지시를 새 세션 id 로 옮긴다.
+ *
+ *  왜 필요한가: 복원은 새 id 로 세션을 다시 만든다. 큐의 라우팅 키는 session_id 라, 옮기지 않으면 '보존한' 지시가
+ *   죽은 id 에 묶여 **영영 못 나간다** — 그러면 stallAction 의 '복원 가능하면 들고 있는다'가 말만 남는다.
+ *   #2122 의 대화 매핑 승계와 같은 자리·같은 이유(옛 행이 유일한 사본이다).
+ *
+ *  · 옮기는 것: queued·sending·failed = **하네스가 받았다는 증거가 없는** 것들. seq 는 새 세션 뒤에 이어 붙인다.
+ *  · 안 옮기는 것: delivered·sent — 이미 갔거나 갔을 수 있다. 옮겨서 다시 넣으면 **같은 지시가 두 번** 실행된다
+ *    (이 파일 머리말의 '재전송으로 중복을 만들지 않는다').
+ *  · 상태는 **보존한다**: queued 는 queued(배달자가 곧 집는다), failed 는 failed(사람이 화면에서 재시도·삭제를
+ *    고른다 — 사람이 이미 결말을 본 것을 복원이 몰래 실행하지 않는다). sending 은 죽은 배달자의 잔재라 queued 로.
+ *  반환 = 옮긴 행 수.
+ */
+export async function carryOutbox(oldId: string, newId: string): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE org_session_outbox o
+        SET session_id = $2,
+            seq = COALESCE((SELECT MAX(seq) FROM org_session_outbox WHERE session_id=$2), 0) + o.seq,
+            status = CASE WHEN o.status='sending' THEN 'queued' ELSE o.status END,
+            updated_at = now()
+      WHERE o.session_id = $1 AND o.status IN ('queued','sending','failed')`,
+    [oldId, newId]);
+  const moved = r.rowCount ?? 0;
+  if (moved) kickOutbox(newId);
+  return moved;
+}
+
 export async function discardOutbox(sessionId: string, id: number): Promise<boolean> {
   const r = await itemsPool.query(
     `DELETE FROM org_session_outbox WHERE session_id=$1 AND id=$2 AND (status IN ('queued','failed') OR (status='sent' AND last_error='echo-unconfirmed'))`,
@@ -153,28 +243,35 @@ async function deliverLoop(sessionId: string): Promise<void> {
       `SELECT * FROM org_session_outbox WHERE session_id=$1 AND status='queued' ORDER BY seq LIMIT 1`, [sessionId]);
     if (!q.rows[0]) return;
     const row = rowToOutbox(q.rows[0]);
-    const st = await getSessionState(sessionId).catch(() => undefined);
+    // ⚠ 조회 실패(DB 순간 장애)와 '행이 없다'를 구별한다 — 아래 복원 가능 판정이 그 차이로 갈린다(#2154 ②).
+    let st: SessionState | undefined; let stateKnown = true;
+    try { st = await getSessionState(sessionId); } catch { stateKnown = false; }
     const harness = st?.harness || "claude";
+    //  '이어서 열기'가 가능한가 = desired-state 행이 남아 있고 좌표를 아는가(#2022 discovered 행은 되살릴 수 없다).
+    //  모르면(DB 장애) **보존 쪽**으로 — 판정 불가를 이유로 사람의 지시를 버리지 않는다.
+    const restorable = stateKnown ? !!st && !st.discovered : true;
 
     await mark(row.id, "sending");
     const ready = await waitReady(sessionId, harness, row.trust_ok);
-    if (ready === "gone") {
-      // 세션 자체가 사라졌다(닫힘·죽음) — 이 세션의 대기분 전부 실패로. 되살리면(복원) 사람이 재시도한다.
-      await itemsPool.query(
-        `UPDATE org_session_outbox SET status='failed', last_error='session-gone', updated_at=now()
-         WHERE session_id=$1 AND status IN ('queued','sending')`, [sessionId]);
-      return;
-    }
-    if (ready === "not-ready") {
+    if (ready !== "ready") {
       const age = Date.now() - Date.parse(row.created_at);
-      if (age >= NOT_READY_TTL_MS) {
-        await mark(row.id, "failed", "not-ready");   // 입력창이 끝내 안 떴다(로그인·오류 화면) — 화면이 사유와 함께 보여준다
-        continue;                                    // 다음 행은 다음 준비 판정에서 다시 본다(같은 벽이면 곧 같은 결말)
+      const { action, reason } = stallAction(ready, { ageMs: age, restorable });
+      if (action === "fail") {
+        if (ready === "gone" && !restorable) {
+          // 확답으로 사라졌고 되살릴 자리도 없다 — 나이와 무관하게 같은 결말이니 대기분 전부 실패로(종전과 같다).
+          //  ⚠ 나이로 갈리는 실패(TTL 초과)는 여기 오면 안 된다 — 아직 어린 뒷줄까지 같이 버리게 된다.
+          await itemsPool.query(
+            `UPDATE org_session_outbox SET status='failed', last_error=$2, updated_at=now()
+             WHERE session_id=$1 AND status IN ('queued','sending')`, [sessionId, reason]);
+          return;
+        }
+        await mark(row.id, "failed", reason);   // 입력창이 끝내 안 떴다·끝내 못 닿았다 — 화면이 사유와 함께 보여준다
+        continue;                               // 다음 행은 다음 준비 판정에서 다시 본다(같은 벽이면 곧 같은 결말)
       }
-      await itemsPool.query(`UPDATE org_session_outbox SET status='queued', attempts=attempts+1, last_error='not-ready', updated_at=now() WHERE id=$1`, [row.id]);
-      const delay = retryDelayMs(row.attempts + 1);
+      await itemsPool.query(`UPDATE org_session_outbox SET status='queued', attempts=attempts+1, last_error=$2, updated_at=now() WHERE id=$1`, [row.id, reason]);
+      const delay = ready === "not-ready" ? retryDelayMs(row.attempts + 1) : unreachableDelayMs(row.attempts);
       retryTimers.set(sessionId, setTimeout(() => { retryTimers.delete(sessionId); kickOutbox(sessionId); }, delay));
-      return;                                        // 루프를 내려놓는다 — 타이머가 다시 kick
+      return;                                   // 루프를 내려놓는다 — 타이머가 다시 kick
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).
@@ -188,12 +285,12 @@ async function deliverLoop(sessionId: string): Promise<void> {
     //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
     //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
     if (row.kind === "control") { await mark(row.id, "sent", "control-no-echo"); continue; }
-    let echoed = await waitEcho(st, oneLine);
+    let echoed = await waitEcho(sessionId, st, oneLine);
     if (needsSubmitRetry(echoed, harness)) {
       // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
       //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867).
       await sendKeyToSession(sessionId, "Enter").catch(() => { /* 다음 에코 창에서 판정 */ });
-      echoed = await waitEcho(st, oneLine);
+      echoed = await waitEcho(sessionId, st, oneLine);
     }
     if (echoed === "confirmed") await mark(row.id, "delivered");
     else await mark(row.id, "sent", echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed");
@@ -208,8 +305,11 @@ async function mark(id: number, status: OutboxStatus, err?: string): Promise<voi
     [id, status, err ?? null]);
 }
 
-/** 준비 판정 — 입력창이 뜰 때까지 READY_WINDOW_MS 안에서 폴링. 신뢰 대화상자는 trust_ok 일 때만 대신 누른다. */
-async function waitReady(sessionId: string, harness: string, trustOk: boolean): Promise<"ready" | "not-ready" | "gone"> {
+/** 준비 판정 — 입력창이 뜰 때까지 READY_WINDOW_MS 안에서 폴링. 신뢰 대화상자는 trust_ok 일 때만 대신 누른다.
+ *  ⚠ tmux 가 던졌다고 'gone' 이 아니다(#2154 ② · #835 와 같은 교리): 확답("그런 세션 없음"·중계 tmux 서버 증발)만
+ *   gone 이고, 나머지(노드 채널 503·중계 타임아웃·도커 일시장애)는 **모름**이다. 종전엔 둘이 한 값이라, 순간 장애
+ *   하나가 그 세션의 대기 지시를 전부 버리게 했다. */
+async function waitReady(sessionId: string, harness: string, trustOk: boolean): Promise<ReadyVerdict> {
   const t0 = Date.now();
   let acceptedTrust = false;
   for (;;) {
@@ -219,7 +319,7 @@ async function waitReady(sessionId: string, harness: string, trustOk: boolean): 
         tmux(["capture-pane", "-t", sessionId, "-p"]),
         tmux(["display-message", "-p", "-t", sessionId, "#{pane_current_command}"]).then((s) => s.trim()),
       ]);
-    } catch { return "gone"; }
+    } catch (e) { return readyVerdictOnError(e); }
     const step = firstPromptStep({ pane, paneCmd, harness, elapsedMs: Date.now() - t0, maxMs: READY_WINDOW_MS, trustOk });
     if (step === "send") return "ready";
     if (step === "give-up") return "not-ready";
@@ -234,7 +334,12 @@ async function waitReady(sessionId: string, harness: string, trustOk: boolean): 
 /**
  * 에코 확인 — 보낸 한 줄이 트랜스크립트에 user 메시지로 적혔나.
  *  파일 찾기: 훅 보고 경로 → 규약(locateTranscript). 매핑이 아직 없으면(방금 뜬 세션) 그 폴더의 **보낸 뒤 자란 파일**을 훑는다.
- *  파일을 아예 못 읽는 자리(격리 홈·미지원 하네스)는 'unreadable' — 보냈다는 사실만 남긴다(재전송 금지).
+ *  파일을 아예 못 읽는 자리(미지원 하네스)는 'unreadable' — 보냈다는 사실만 남긴다(재전송 금지).
+ *
+ *  ⚠ #2154 ① — 읽는 자리는 **세션 소유자의 실행환경**이다(transcriptFsFor). 종전엔 게이트웨이 로컬 fs 를 직독해,
+ *   매니지드(중앙 게이트웨이·마운트 0)에서는 대화 파일이 노드의 멤버 홈에 있어 **늘** unreadable 이었다 —
+ *   실제로 배달된 지시가 `sent/echo-unreadable` 로 남아 delivered_at 이 영영 안 찍혔다(거짓 실패 상태 + 진짜
+ *   실패와 구별 불가). 대화창(chat-routes)·복원(transcriptResumable)이 이미 지나는 그 관문을 여기서도 쓴다.
  */
 /**
  * 순수 — 에코 판정 뒤 **Enter 를 한 번 더 눌러야 하는가**(미제출 방어, send-keys 규약 ②).
@@ -250,64 +355,62 @@ export function needsSubmitRetry(echoed: "confirmed" | "timeout" | "unreadable",
   return echoed !== "confirmed" && harness === "claude";
 }
 
-async function waitEcho(st: Awaited<ReturnType<typeof getSessionState>>, oneLine: string): Promise<"confirmed" | "timeout" | "unreadable"> {
+async function waitEcho(sessionId: string, st: SessionState | undefined, oneLine: string): Promise<"confirmed" | "timeout" | "unreadable"> {
   const io = harnessIo(st?.harness || "claude");
   if (!io || !io.parse) return "unreadable";
+  const tfs = transcriptFsFor(await sessionOsUser(sessionId).catch(() => null));
+  const pollMs = tfs === localTranscriptFs ? ECHO_POLL_LOCAL_MS : ECHO_POLL_RELAY_MS;
   const needle = echoNeedle(oneLine);
   const sentAt = Date.now();
   const cwd = st?.dir || "";
+  //  같은 바이트를 다시 읽지 않는다 — 파일이 **자랐을 때만** 꼬리를 본다(중계에선 이 읽기가 네트워크를 탄다).
+  let seenFile = ""; let seenSize = -1;
   for (;;) {
-    let file: string | null = null;
+    let file: string | null = null; let size = -1;
     if (st) {
-      const found = await locateTranscript(io, { cwd, convId: st.claude_session_id || "", owner: st.owner || "", reportedPath: st.transcript_path }).catch(() => null);
-      if (found) file = found.file;
+      const found = await locateTranscript(io, { cwd, convId: st.claude_session_id || "", owner: st.owner || "", reportedPath: st.transcript_path }, tfs.stat).catch(() => null);
+      if (found) { file = found.file; size = found.size; }        // locate 가 이미 stat 했다 — 다시 묻지 않는다
     }
-    if (!file && cwd && st) file = await newestGrownFile(io, cwd, st.owner || "", sentAt - 10_000);
+    if (!file && cwd && st) file = await newestGrownFile(tfs, io, cwd, st.owner || "", sentAt - 10_000);
     if (file) {
-      const hit = await tailContains(file, needle).catch(() => null);
-      if (hit === null) return "unreadable";
-      if (hit) return "confirmed";
+      if (size < 0) size = (await tfs.stat(file).catch(() => null)) ?? -1;
+      if (size < 0) return "unreadable";
+      if (file !== seenFile || size !== seenSize) {
+        seenFile = file; seenSize = size;
+        const hit = await tailContains(tfs, file, size, needle).catch(() => null);
+        if (hit === null) return "unreadable";
+        if (hit) return "confirmed";
+      }
     }
     if (Date.now() - sentAt >= ECHO_WINDOW_MS) return file ? "timeout" : "unreadable";
-    await sleep(700);
+    await sleep(pollMs);
   }
 }
 
 /** 매핑이 없을 때의 폴백 — **claude 한정**(대화 폴더 = pathFor 의 dirname 이 conv 무관). 홈 첫 지시의 실제 케이스가 이것이다:
  *  방금 뜬 세션은 훅이 아직 uuid 를 보고하기 전이라 매핑이 없다. 다른 하네스는 폴더 규약에 conv-id 가 끼어 훑을 수 없다 — unreadable. */
 const DUMMY_CONV = "00000000-0000-0000-0000-000000000000";
-async function newestGrownFile(io: NonNullable<ReturnType<typeof harnessIo>>, cwd: string, owner: string, sinceMs: number): Promise<string | null> {
+async function newestGrownFile(tfs: TranscriptFs, io: NonNullable<ReturnType<typeof harnessIo>>, cwd: string, owner: string, sinceMs: number): Promise<string | null> {
   if (io.key !== "claude" || !io.pathFor) return null;
   let best: { file: string; m: number } | null = null;
   for (const root of io.roots(ownerHomes(owner), owner)) {
     const sample = io.pathFor(root, { cwd, convId: DUMMY_CONV });
     if (!sample) continue;
     const dir = path.dirname(sample);
-    let names: string[] = [];
-    try { names = await fsp.readdir(dir); } catch { continue; }
-    for (const n of names) {
-      if (!io.filePattern.test(n)) continue;
-      const f = path.join(dir, n);
-      try {
-        const s = await fsp.stat(f);
-        if (s.isFile() && s.mtimeMs >= sinceMs && (!best || s.mtimeMs > best.m)) best = { file: f, m: s.mtimeMs };
-      } catch { /* 사라짐 — 다음 */ }
+    for (const e of await tfs.listDir(dir)) {
+      if (!io.filePattern.test(e.name)) continue;
+      if (e.mtimeMs >= sinceMs && (!best || e.mtimeMs > best.m)) best = { file: path.join(dir, e.name), m: e.mtimeMs };
     }
   }
   return best?.file ?? null;
 }
 
-/** 파일 꼬리(256KB)에 바늘이 있나. 읽기 실패는 null(못 읽는 자리 — 재전송 금지 신호). */
-async function tailContains(file: string, needle: string): Promise<boolean | null> {
+/** 파일 꼬리(ECHO_TAIL_BYTES)에 바늘이 있나. size 는 부른 쪽이 방금 잰 값. 읽기 실패는 null(못 읽는 자리 — 재전송 금지 신호). */
+async function tailContains(tfs: TranscriptFs, file: string, size: number, needle: string): Promise<boolean | null> {
+  if (size <= 0) return false;
+  const from = Math.max(0, size - ECHO_TAIL_BYTES);
   try {
-    const st = await fsp.stat(file);
-    const from = Math.max(0, st.size - 256 * 1024);
-    const fh = await fsp.open(file, "r");
-    try {
-      const buf = Buffer.alloc(st.size - from);
-      const r = await fh.read(buf, 0, buf.length, from);
-      return buf.subarray(0, r.bytesRead).toString("utf8").includes(needle);
-    } finally { await fh.close(); }
+    return await tfs.read(file, size, async (r) => (await r.read(from, size)).toString("utf8").includes(needle));
   } catch { return null; }
 }
 

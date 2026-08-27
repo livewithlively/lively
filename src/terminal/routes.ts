@@ -1176,6 +1176,14 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //  박스 세션엔 내구 맵이 없다(노드 세션의 org_node_session_map 은 노드 전용) → 세 번째 인자는 늘 false.
     const carried = mayForgetOldState(mappedId, inRow, false);
     if (!carried) logger.error({ id, newId: session.id, convId: mappedId }, "restore: 대화 id 승계 실패 — 옛 desired-state 를 보존한다(#2122)");
+    // #2154 ② — **아직 배달 안 된 지시**를 새 세션으로 승계한다. 큐의 라우팅 키가 session_id 라, 안 옮기면
+    //  세션이 죽어 있는 동안 큐가 들고 있던 첫 지시가 죽은 id 에 묶여 영영 못 나간다(그러면 '보존'이 말뿐이다).
+    //  이미 배달된(delivered·sent) 것은 안 옮긴다 — 옮기면 같은 지시가 두 번 실행된다(carryOutbox 머리말).
+    try {
+      const { carryOutbox } = await import("../sessions/session-outbox.js");
+      const moved = await carryOutbox(id, session.id);
+      if (moved) logger.info({ id, newId: session.id, moved }, "restore: 미배달 지시 승계");
+    } catch (e) { logger.warn({ err: e, id, newId: session.id }, "restore: 미배달 지시 승계 실패(비치명 — 옛 행은 남는다)"); }
     //  복원도 세션 생성이다 — 새 id 로 인스턴스를 세운다(옛 세션의 인스턴스는 아래 옛 행 정리와 함께 닫힌다).
     await registerSessionInstance(session.id, st.owner, { appId: st.app_id, projectId: st.project_id, title: st.label || session.label });
     await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));

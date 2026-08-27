@@ -79,6 +79,22 @@ await t("[F3] prevTranscript — 압축 파일의 형제에서 부모 uuid 를 �
   assert.equal(await m.prevTranscript(cur), parent);
   assert.equal(relayCalls().length, before, "캐시 — 같은 파일은 다시 중계하지 않는다");
 });
+await t("[F4] listDir — 멤버 구현이 로컬과 같은 이름·순서무관 집합을 준다(#2154 에코의 폴백 훑기) · 폴더 없음/파일은 []", async () => {
+  const dir = path.join(tmp, "grown"); fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, "a.jsonl"), "a\n");
+  fs.writeFileSync(path.join(dir, "b.jsonl"), "bb\n");
+  fs.mkdirSync(path.join(dir, "sub"));
+  const m = memberTranscriptFs(OS);
+  const names = (rows: Array<{ name: string }>): string[] => rows.map((r) => r.name).sort();
+  assert.deepEqual(names(await m.listDir(dir)), ["a.jsonl", "b.jsonl"], "하위 폴더는 빠진다(파일만)");
+  assert.deepEqual(names(await localTranscriptFs.listDir(dir)), ["a.jsonl", "b.jsonl"], "로컬 구현과 같은 답");
+  // mtime 이 실제 값이어야 '보낸 뒤 자란 파일' 판정이 선다 — 0 이면 그 필터가 전부 통과해 버린다.
+  const rows = await m.listDir(dir);
+  const wantM = fs.statSync(path.join(dir, "a.jsonl")).mtimeMs;
+  assert.ok(Math.abs(rows.find((r) => r.name === "a.jsonl")!.mtimeMs - wantM) <= 1000, "mtime 이 실측값");
+  assert.deepEqual(await m.listDir(path.join(tmp, "no-such-dir")), [], "없는 폴더는 빈 배열(던지지 않는다)");
+  assert.deepEqual(await localTranscriptFs.listDir(hello), [], "파일을 폴더로 물어도 빈 배열");
+});
 await t("[S1] transcriptFsFor — 중계 X 면 osUser 가 있어도 로컬 · 중계 O + osUser null 은 로컬 · 둘 다 있을 때만 멤버", () => {
   const saved = process.env.LIVELY_MEMBER_EXEC;
   delete process.env.LIVELY_MEMBER_EXEC;
