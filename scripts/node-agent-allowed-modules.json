@@ -61,6 +61,7 @@
  "dist/project/project-fs.js",
  "dist/project/project-origin.js",
  "dist/project/project-provision.js",
+ "dist/sessions/gateway-capabilities.js",
  "dist/sessions/session-label-source.js",
  "dist/sessions/session-memory-policy.js",
  "dist/sessions/session-reclaim-policy.js",

@@ -15,7 +15,7 @@ import { sanitizeCloneUrl } from "../domainmap/core/url-util.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import { hostOf, isAuthError, prepareGitAuth, describeGitError } from "../org/credentials/git-auth-prepare.js";   // #2165 잎 모듈 — 노드도 쓰는 순수/fs 헬퍼
-import { resolveGitSecret, leaseGitSecretForNode } from "../org/credentials/git-credential-store.js";
+import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB 를 타는 자격 해소는 게이트웨이 능력이다
 //  ⚠ 위 둘은 DB(itemsPool)와 GitHub App 자격을 탄다. 노드는 이 경로를 **부르지 않지만**(아래 주입 경로 #905 C4)
 //   이 모듈이 노드 번들 진입 경로라 코드 자체는 실린다. `await import()` 로 미뤄도 소용없다 —
 //   esbuild 는 단일 outfile 이면 동적 import 를 그대로 인라인한다(#2165 실측). 진짜로 빼려면 **모듈을 갈라야** 한다.
@@ -40,7 +40,7 @@ export async function resolveRepoInject(
 ): Promise<RepoProvisionAuth> {
   const row = await getRepo(repo).catch(() => null);
   const host = hostOf(row?.git_url);
-  const secret = host ? await leaseGitSecretForNode(requesterId, host, nodeKind).catch(() => null) : null;
+  const secret = host ? await (gatewayCapability("leaseGitSecretForNode")?.(requesterId, host, nodeKind) ?? Promise.resolve(null)).catch(() => null) : null;
   return { gitUrl: row?.git_url ?? null, secret };
 }
 // hostOf·isAuthError·prepareGitAuth 는 git-credential-store 로 이관(#606, 스캐너와 공유). 하위호환·기존 테스트 위해 re-export.
@@ -164,7 +164,7 @@ export async function refreshSharedRepo(name: string, memberId?: string | null):
   // 자격 주입 — 요청멤버 우선, 없으면 게이트웨이. host: 레지스트리 git_url → origin remote → github.com.
   const row = await getRepo(clean).catch(() => null);
   const host = hostOf(row?.git_url) ?? hostOf(await originUrl(repoPath)) ?? "github.com";
-  const secret = await resolveGitSecret(memberId ?? null, host).catch(() => null);
+  const secret = await (gatewayCapability("resolveGitSecret")?.(memberId ?? null, host) ?? Promise.resolve(null)).catch(() => null);
   const auth = await prepareGitAuth(secret);
   try {
     const f = await git(["fetch", "--prune"], repoPath, auth.env);
@@ -216,7 +216,7 @@ export async function checkGitRemote(gitUrl: string, memberId?: string | null): 
   const host = hostOf(url);
   if (!host) throw new HttpError(400, "git 주소를 해석할 수 없습니다 — https://호스트/그룹/레포.git 또는 git@호스트:그룹/레포.git 형식이어야 합니다");
 
-  const secret = await resolveGitSecret(memberId ?? null, host).catch(() => null);
+  const secret = await (gatewayCapability("resolveGitSecret")?.(memberId ?? null, host) ?? Promise.resolve(null)).catch(() => null);
   const auth = await prepareGitAuth(secret);
   try {
     // --symref: HEAD 의 심볼릭 참조(=원격 기본 브랜치)를 클론 없이 읽는다. 접근 확인과 브랜치 확인이 한 번에 끝난다.
@@ -279,7 +279,7 @@ async function ensureBaseClone(
   //  레포 이름을 함께 넘긴다(#1881 G8) — GitHub App 폴백이 토큰을 그 레포로 좁힌다(최소권한 + 설치가 여럿일 때 상류가 판정).
   const secret = inject ? (inject.secret ?? null)
     : await (async () => {
-              return resolveGitSecret(memberId, host, { repoFullName: githubRepoFullName(row?.git_url ?? null) }).catch(() => null);
+              return (gatewayCapability("resolveGitSecret")?.(memberId, host, { repoFullName: githubRepoFullName(row?.git_url ?? null) }) ?? Promise.resolve(null)).catch(() => null);
       })();
   const auth = await prepareGitAuth(secret);
   let cloned = false;

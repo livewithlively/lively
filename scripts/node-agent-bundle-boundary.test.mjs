@@ -27,7 +27,7 @@ const GUARD = join(HERE, "build-node-agent.mjs");
 
 //  래칫 상한 — 부채는 **줄어들기만 해야 한다**. 줄었으면 이 수를 낮춰라(그게 진척의 기록이다).
 //  올리려면 왜 못 고치는지가 커밋 메시지에 있어야 한다.
-const DEBT_CEILING = 49;
+const DEBT_CEILING = 43;
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
