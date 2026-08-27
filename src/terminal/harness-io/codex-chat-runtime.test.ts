@@ -303,14 +303,23 @@ const SRC = (): string => {
 //   맥·CI 에서는 재현할 수 없는데, **틀렸을 때 증상이 조용하다** — 대화창이 비고(다른 홈의 rollout 을
 //   찾는다) 격리가 뚫린다(에이전트가 게이트웨이 권한으로 돈다). 그래서 «어느 자리에서 띄우는가» 를
 //   본문 계약으로 못박는다. lvly-cloud 의 중계 계약 테스트와 같은 처방이다.
-await t("★ 격리 배포는 app-server 를 **멤버 uid 로** 띄운다 — 게이트웨이 uid 로 띄우면 자격도 rollout 도 어긋난다", async () => {
+await t("★ 격리 배포는 **TCP 를 안 쓴다** — loopback 포트는 uid 를 안 가려 같은 박스의 남이 붙을 수 있다", async () => {
   const src = SRC();
-  const connect = src.slice(src.indexOf("async function connect("), src.indexOf("세션 컨테이너 안 ws 포트에 붙는"));
-  assert.ok(connect.includes("if (o.osUser)"), "osUser 분기가 있다");
-  const iso = connect.slice(connect.indexOf("if (o.osUser)"), connect.indexOf("로컬(비격리·dev)"));
-  assert.ok(iso.length > 100, "격리 분기 구간을 못 잘랐다");
+  const connect = src.slice(src.indexOf("async function connect("), src.indexOf("로컬(비격리·dev)"));
+  const iso = connect.slice(connect.indexOf("if (o.osUser)"));
+  assert.ok(iso.length > 200, "격리 분기를 못 잘랐다");
+  assert.ok(!/127\.0\.0\.1|sessionPort|ws:\/\//.test(iso), "격리 분기에 포트·loopback 이 없다");
+  assert.ok(iso.includes("sessionSockName"), "유닉스 소켓 경로를 쓴다");
+});
+
+await t("★ 격리 배포는 감독자·다리를 **멤버 자리에서** 돌린다 — 게이트웨이 uid 로 돌면 격리가 뚫린다", async () => {
+  const src = SRC();
+  const connect = src.slice(src.indexOf("async function connect("), src.indexOf("로컬(비격리·dev)"));
+  const iso = connect.slice(connect.indexOf("if (o.osUser)"));
+  assert.ok(iso.includes("memberWriteFile(o.osUser"), "감독자를 멤버 소유로 심는다");
   assert.ok(iso.includes("memberShOut(o.osUser"), "멤버 자리에서 띄운다");
-  assert.ok(iso.indexOf("spawnDetachedLocal") === -1, "격리 분기가 게이트웨이 로컬 spawn 으로 새지 않는다");
+  assert.ok(iso.includes("memberSpawnArgv(o.osUser"), "다리도 멤버 자리에서 돈다");
+  assert.ok(!iso.includes("spawnDetachedLocal"), "게이트웨이 로컬 spawn 으로 새지 않는다");
 });
 
 await t("★ rolloutPath 는 stdout 을 받는 통로를 쓴다 — memberSh 는 void 라 **항상 빈 경로**가 된다", async () => {

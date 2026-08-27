@@ -23,7 +23,7 @@ import { loadStoragePolicy } from "../org/policies/runtime-loaders.js"; // #1313
 import { assertDiskWritable } from "../ops/disk-guard.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
-import { wrapAsMember, type CgroupLimit, isolationInfraReady } from "./terminal-isolation.js";
+import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
@@ -291,7 +291,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     //  화면은 입력칸 대신 '이어서 대화하기' 바를 띄웠다(=말을 걸 수 없다). 탭 유무(attached)도 무의미하다:
     //  이 세션의 기본 화면은 터미널이 아니라 대화창이라 아무도 pane 에 붙지 않는다.
     //  그래서 이 갈래만 **런타임에게 직접 묻는다** — 그게 그 세션의 AI 다. 실측 2026-08-26(사용자 신고).
-    const appServer = codexChatMode({ harness: r.harness, isolated: isolationInfraReady() }) === "app-server";
+    const appServer = codexChatMode({ harness: r.harness }) === "app-server";
     const asPhase = appServer ? codexChatPhase(r.name) : null;
     // #1221 — AI 실행 단계(busy·waiting·idle)는 이제 **한 곳에서** 판정한다(하네스 보고 우선, 화면 스크래핑 폴백).
     //  그 위의 세 갈래(셸 하네스 · AI 종료 · 탭 없음)는 실행 단계와 다른 축이라 종전 순서 그대로다.
@@ -468,7 +468,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  · 셸 하네스 — 그대로(감쌀 하네스가 없다).
   //  · codex app-server 모드(#2055) — pane 은 **셸**이다. 대화는 대화창(app-server)이 전담하고, TUI 를 띄우면
   //    스레드 writer 가 둘이 돼 대화가 갈린다(codex 는 스레드당 writer 를 하나만 허용한다 — 실측).
-  const chatMode = codexChatMode({ harness: harness.key, loginFor: input.loginFor, isolated: isolationInfraReady() });
+  const chatMode = codexChatMode({ harness: harness.key, loginFor: input.loginFor });
   const launch = input.loginFor
     ? (harnessLoginArgv(input.loginFor) ?? cmd)
     : chatMode === "app-server"

@@ -20,7 +20,9 @@ import path from "node:path";
 import { CodexAppServer, type AppServerTransport, type ApprovalDecision, type ApprovalRequest } from "./codex-app-server.js";
 import { detachedStartSh, portAlive, sessionPort, spawnDetachedLocal, waitPort, wsTransport } from "./codex-app-server-daemon.js";
 import { spawn } from "node:child_process";
-import { memberShOut } from "../terminal-member-fs.js";       // 파일 op 는 종전 경계(멤버 홈이 보이는 곳)
+import { memberShOut, memberSpawnArgv, memberWriteFile } from "../terminal-member-fs.js";   // 파일 op·멤버 자리 실행
+import { MEMBER_HOME_BASE } from "../terminal-transcript.js";
+import { SUPERVISOR_JS, sessionSockName, supervisorStartSh } from "./codex-as-supervisor.js";
 import { sessionExecConfigured, sessionSpawnArgv } from "../session-exec.js";   // 프로세스는 세션 경계
 import type { ChatLine } from "./chat-line.js";
 
@@ -219,26 +221,29 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
     if (!/started|already/.test(String(out ?? ""))) throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
     return bridgeTransport(o.sessionId, port);
   }
-  // ── 격리 리눅스 박스(#524): 서버를 **그 멤버 uid 로** 띄운다. ──
-  //  게이트웨이 uid 로 띄우면 두 군데가 동시에 어긋난다(실측 2026-08-27 코드 대조):
-  //   ① codex 가 **게이트웨이 유저의 `~/.codex`** 를 본다 — 멤버 자격이 없어 턴이 안 돈다.
-  //   ② 답이 쓰이는 rollout 은 게이트웨이 홈에 생기는데, 읽기 경로(rolloutPath)는 memberShOut 으로
-  //      **멤버 홈**을 뒤진다 — 서로 다른 홈을 봐서 대화창이 빈 채로 남는다(«답이 안 온다»).
-  //   그리고 무엇보다 그 배포의 존재 이유인 격리가 뚫린다 — 에이전트가 멤버가 아니라 게이트웨이 권한으로 돈다.
-  //  매니지드와 같은 셸(detachedStartSh)을 쓴다: `$HOME` 이 그 멤버 홈으로 풀려 위 ②가 저절로 맞는다.
-  //  ⚠ 게이트웨이는 같은 호스트의 loopback 에 그냥 닿는다(매니지드처럼 다리가 필요 없다) — 컨테이너 경계가
-  //   없기 때문이다. 그 사실이 곧 아래 «켤 때 명시 동의» 의 이유이기도 하다(codex-chat-mode.ts 머리말).
+  // ── 격리 리눅스 박스(#524): 멤버 uid 로 띄우고 **유닉스 소켓(0600)** 으로만 잇는다. ──
+  //  포트를 쓰지 않는 이유와 codex 의 daemon/proxy 를 못 쓰는 이유는 codex-as-supervisor.ts 머리말이 정본이다.
+  //  요점만: loopback 포트는 uid 를 안 가려서 **같은 박스의 다른 멤버가 남의 대화에 붙을 수 있다**.
+  //  0600 소켓이면 그 자체로 경계가 서므로, «켤 때 동의를 받는 노브» 없이 대화 UI 를 기본으로 둘 수 있다.
+  //  게이트웨이는 소켓을 직접 열지 않는다(다른 uid 라 못 연다) — 멤버 자리에서 도는 `connect` 자식의
+  //  stdio 로만 말한다. 매니지드가 컨테이너 중계로 하는 것과 같은 모양이다.
   if (o.osUser) {
-    if (!(await portAlive(port))) {
-      const log = `$HOME/.codex/lively-app-server-${o.sessionId}.log`;
-      const out = await memberShOut(o.osUser, detachedStartSh(port, log, sessionEnv(o.sessionId))).catch((e: unknown) => {
+    const home = `${MEMBER_HOME_BASE}/${o.osUser}`;
+    const script = `${home}/.codex/lively-as-supervisor.cjs`;
+    const sock = `${home}/.codex/${sessionSockName(o.sessionId)}`;
+    const log = `${home}/.codex/lively-app-server-${o.sessionId}.log`;
+    // 감독자 원문을 멤버 소유로 심는다(멱등). 0700 — 남이 읽고 흉내 낼 이유가 없다.
+    await memberWriteFile(o.osUser, script, SUPERVISOR_JS, 0o700).catch((e: unknown) => {
+      throw new CodexChatUnavailable(`멤버 자리(${o.osUser})에 app-server 감독자를 심지 못했습니다 — ${msg(e)}`, e);
+    });
+    const out = await memberShOut(o.osUser, supervisorStartSh({ script, sock, log, env: sessionEnv(o.sessionId) }))
+      .catch((e: unknown) => {
         throw new CodexChatUnavailable(`멤버 자리(${o.osUser})에서 codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
       });
-      if (!/started|already/.test(String(out ?? ""))) {
-        throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
-      }
+    if (!/started|already/.test(String(out ?? ""))) {
+      throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
     }
-    return wsTransport(`ws://127.0.0.1:${port}`);
+    return childStdioTransport(memberSpawnArgv(o.osUser, ["node", script, "connect", sock]));
   }
   // ── 로컬(비격리·dev): detached + 로그파일. 이미 그 포트에 살아 있으면 그대로 붙는다. ──
   if (!(await portAlive(port))) {
@@ -282,7 +287,15 @@ function bridgeTransport(sessionId: string, port: number): AppServerTransport {
     `ws.onclose=()=>process.exit(0);`,
     `let buf="";process.stdin.on("data",c=>{buf+=c;let i;while((i=buf.indexOf("\\n"))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;if(open)ws.send(l);else q.push(l);}});`,
   ].join("");
-  const argv = sessionSpawnArgv(sessionId, ["node", "-e", BRIDGE]);
+  return childStdioTransport(sessionSpawnArgv(sessionId, ["node", "-e", BRIDGE]));
+}
+
+/**
+ * 자식 프로세스의 stdio 에 줄 단위 전송을 얹는다 — **다리의 공통 몸통**.
+ *  매니지드(세션 컨테이너 안 ws 다리)와 격리(멤버 자리 유닉스 소켓 다리)가 같은 몸통을 쓴다:
+ *  둘 다 «서버는 남고 다리만 끊긴다» 가 핵심이라 수명·종료 처리가 같아야 한다.
+ */
+function childStdioTransport(argv: string[]): AppServerTransport {
   const p = spawn(argv[0], argv.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
   let buf = "";
   let onLineCb: ((l: string) => void) | null = null;
