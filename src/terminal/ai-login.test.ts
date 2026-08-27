@@ -87,6 +87,25 @@ t("⑥ 프로브는 **뜨거운 경로에 없다** — /welcome 폴링이 매번
     "프로브를 돌리는 자리가 POST 가 아니다 — 부수효과 있는 조회를 GET 계약에 얹으면 캐시·프리페치가 붙는다");
 });
 
+t("⑦b ★설치는 **게이트웨이 자신**에서 잰다 — 멤버 자리(tmux 컨테이너)는 이미지가 다를 수 있다", () => {
+  // 2026-08-27 라이브 실측: 중계는 늘 tmux 컨테이너로 exec 하는데(member-exec-relay `/containers/…-tmux/exec`)
+  //  하네스가 도는 곳은 멤버 세션 컨테이너다. 같은 테넌트에서 tmux=c36(agy 없음) / 세션=c48(agy 있음) →
+  //  화면이 «이 자리엔 Gemini 가 없어요» 라고 거짓말했다. 새 세션엔 실제로 있었다.
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
+  assert.match(fn, /out\.installed = await runAtMemberSeat\(null,/,
+    "설치를 멤버 자리에서 재고 있다 — tmux 컨테이너가 스테일하면 거짓 '미설치' 가 된다");
+  // 반대로 자격은 멤버 자리가 맞다(홈이 볼륨) — 그쪽까지 게이트웨이로 옮기면 남의 자격을 보게 된다.
+  assert.match(fn, /aiAccountStatus\(user, osSt\)/, "자격 판정이 멤버 축(aiAccountStatus)을 안 쓴다");
+});
+
+t("⑦c 프로브를 못 돌리는 자리면 '미로그인' 이 아니라 '모름' 이다", () => {
+  // 프로브는 그 사람 자격(HOME)을 봐야 해서 멤버 자리에서 돌아야 하는데, 그 자리에 바이너리가 없을 수 있다.
+  //  그 실패를 false 로 접으면 **로그인한 사람에게** «아직 로그인이 안 보여요» 라고 한다.
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
+  assert.match(fn, /if \(await runAtMemberSeat\(osUser, `command -v[\s\S]{0,120}out\.loggedIn = null;/,
+    "프로브 자리에 바이너리가 없을 때를 모름(null)으로 접지 않는다");
+});
+
 t("⑦ 설치가 아니면 로그인을 묻지 않는다 — 없는 CLI 의 답은 늘 '미로그인' 이라 사람을 오도한다", () => {
   const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
   assert.match(fn, /out\.installed = await runAtMemberSeat[\s\S]{0,200}if \(out\.installed !== true\) return out;/,
