@@ -52,6 +52,13 @@ export async function setMemberPassword(
   );
 }
 
+// 탈퇴(#1876) — 비밀번호 자격을 지운다. state='inactive' 만으로도 로그인은 막히지만(위 SELECT 의
+//  state='active'), 탈퇴한 사람의 비밀번호 해시를 계속 들고 있을 이유가 없다. 두 겹인 것이 맞다 —
+//  나중에 누군가 state 를 되돌려도 옛 비밀번호가 되살아나지 않는다.
+export async function clearMemberPassword(memberId: string): Promise<void> {
+  await itemsPool.query(`DELETE FROM member_credential WHERE member_id=$1`, [memberId]);
+}
+
 export async function hasCredential(memberId: string): Promise<boolean> {
   const r = await itemsPool.query(`SELECT 1 FROM member_credential WHERE member_id=$1`, [memberId]);
   return (r.rowCount ?? 0) > 0;
