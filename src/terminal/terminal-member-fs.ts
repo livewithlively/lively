@@ -97,6 +97,24 @@ export function memberLs(osUser: string, absPath: string): Promise<LsEntry[]> {
   });
 }
 
+// 멤버 uid 로 `sh -c <script>` 를 돌리고 **stdout 을 받는다**.
+//  ⚠ memberSh 와 다르다: 그쪽은 stdout 을 **버리고** `Promise<void>` 를 돌려준다(성공/실패만 본다).
+//   출력이 필요한 자리에서 memberSh 를 쓰면 `await` 값이 undefined 라 **조용히 빈 문자열**이 된다 —
+//   실측(2026-08-27, #2055): rolloutPath 가 그렇게 써서 격리·매니지드 배포에서 대화 파일 경로를 **항상 ""**
+//   로 돌려줬고, 그 결과 화면이 답이 쓰인 파일을 못 찾아 «답이 안 온다» 가 됐다. 타입이 void 라
+//   컴파일러도 안 잡는 자리다(String(undefined ?? "") 는 합법). 그래서 통로를 따로 둔다.
+//  스크립트는 우리 코드의 **고정 리터럴**만(사용자 입력 X → 인젝션 없음) — memberSh 와 같은 계약이다.
+export function memberShOut(osUser: string, script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", script], ["ignore", "pipe", "pipe"]);
+    const err = collectErr(c);
+    let out = "";
+    c.stdout?.on("data", (d) => (out += d));
+    c.on("error", reject);
+    c.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.get() || `member sh exit ${code}`))));
+  });
+}
+
 // 멤버 uid 로 node 한 줄(고정 리터럴)을 돌리고 stdin JSON → stdout JSON 을 받는다(#1719 session-project — 세션 폴더 안
 //  마커·링크·셔틀을 격리 홈(700)에 쓰려면 이 통로뿐이다). 스크립트는 우리 코드의 **고정 리터럴**, 값은 전부 stdin JSON.
 export function memberNodeJson<T>(osUser: string, js: string, input: unknown): Promise<T> {

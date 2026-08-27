@@ -17,9 +17,27 @@
 
 export type CodexChatMode = "tmux" | "app-server";
 
-/** 이 배포의 기본 모드. 값이 정확히 app-server 일 때만 켠다(오타는 종전 동작으로 접는다 — 조용한 전환 금지). */
-export function codexChatModeDefault(env: NodeJS.ProcessEnv = process.env): CodexChatMode {
-  return String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() === "app-server" ? "app-server" : "tmux";
+/**
+ * 이 배포의 기본 모드. 값이 정확히 app-server 일 때만 켠다(오타는 종전 동작으로 접는다 — 조용한 전환 금지).
+ *
+ *  ── ★ 격리 리눅스 박스(#524)는 한 겹 더 묻는다 ──
+ *  app-server 는 `ws://127.0.0.1:<포트>` 로 말하는데 **그 포트에는 인증이 없다**. 경계를 누가 대신 서느냐가
+ *  배포마다 다르다:
+ *   · 매니지드      세션 컨테이너가 선다 — loopback 이 그 세션 안이라 밖에서 못 닿는다.
+ *   · 비격리(맥·dev) 어차피 단일 사용자 박스다 — 지킬 경계가 없다.
+ *   · **격리 리눅스**  여러 멤버가 **같은 호스트**를 나눠 쓴다. 같은 박스의 다른 멤버 OS 유저가 그 포트에
+ *     붙어 **남의 대화를 조종**할 수 있다 — 이 배포의 존재 이유인 그 경계가 여기서만 비어 있다.
+ *  그래서 격리에서는 `LIVELY_CODEX_CHAT_ISOLATED=1` 로 **운영자가 그 사실을 알고** 켜야 한다. 없으면 tmux 로
+ *  접는다(종전 동작 = 안전한 쪽). codex 가 `unix://` 를 지원하면 이 노브는 사라진다 — 지금은 그 표면이
+ *  initialize 에서 연결을 끊는다(codex-app-server-daemon.ts 머리말 실측).
+ */
+export function codexChatModeDefault(
+  env: NodeJS.ProcessEnv = process.env,
+  o: { isolated?: boolean } = {},
+): CodexChatMode {
+  if (String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() !== "app-server") return "tmux";
+  if (o.isolated && String(env.LIVELY_CODEX_CHAT_ISOLATED || "").trim() !== "1") return "tmux";
+  return "app-server";
 }
 
 /**
@@ -28,10 +46,10 @@ export function codexChatModeDefault(env: NodeJS.ProcessEnv = process.env): Code
  *  · 로그인 전용 세션(loginFor)은 언제나 tmux — 그 세션의 일은 대화가 아니라 `codex login` 이다.
  */
 export function codexChatMode(
-  o: { harness: string; loginFor?: string | null },
+  o: { harness: string; loginFor?: string | null; isolated?: boolean },
   env: NodeJS.ProcessEnv = process.env,
 ): CodexChatMode {
   if (String(o.harness || "") !== "codex") return "tmux";
   if (o.loginFor) return "tmux";
-  return codexChatModeDefault(env);
+  return codexChatModeDefault(env, { isolated: o.isolated });
 }

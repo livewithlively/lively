@@ -35,4 +35,26 @@ t("★ S2 로그인 전용 세션은 언제나 tmux — 그 세션의 일은 대
   assert.equal(codexChatMode({ harness: "codex", loginFor: null }, E("app-server")), "app-server");
 });
 
+t("★ I1 격리 박스는 명시 동의 없이는 안 켜진다 — loopback 포트에 인증이 없어 같은 박스의 남이 붙을 수 있다", () => {
+  assert.equal(codexChatModeDefault(E("app-server"), { isolated: true }), "tmux");
+  assert.equal(codexChatMode({ harness: "codex", isolated: true }, E("app-server")), "tmux");
+});
+
+t("★ I2 격리에서 LIVELY_CODEX_CHAT_ISOLATED=1 이면 켠다(운영자가 알고 켠 것)", () => {
+  const env = { LIVELY_CODEX_CHAT: "app-server", LIVELY_CODEX_CHAT_ISOLATED: "1" };
+  assert.equal(codexChatModeDefault(env, { isolated: true }), "app-server");
+  assert.equal(codexChatMode({ harness: "codex", isolated: true }, env), "app-server");
+});
+
+t("★ I3 그 노브만으로는 절대 안 켜진다 — 본 스위치가 여전히 정본이다", () => {
+  const only = { LIVELY_CODEX_CHAT_ISOLATED: "1" };
+  assert.equal(codexChatModeDefault(only, { isolated: true }), "tmux");
+  assert.equal(codexChatModeDefault(only, { isolated: false }), "tmux");
+});
+
+t("I4 비격리 배포는 그 노브와 무관하다 — 지킬 경계가 없다(단일 사용자 박스·매니지드는 컨테이너가 선다)", () => {
+  assert.equal(codexChatModeDefault(E("app-server"), { isolated: false }), "app-server");
+  assert.equal(codexChatModeDefault(E("app-server")), "app-server");
+});
+
 console.log(`\n${pass} passed`);

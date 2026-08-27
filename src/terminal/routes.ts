@@ -10,6 +10,7 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { codexChatMode } from "./codex-chat-mode.js";   // #2055 codex 대화 런타임 선택
+import { isolationInfraReady } from "./terminal-isolation.js";
 import { rememberCodexThread } from "./codex-chat-thread.js";   // #2055 — 대화 좌표를 남기는 한 곳
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
@@ -411,7 +412,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       s.chat = chatIoCaps(s.harness);
       // #2055 — 이 세션의 대화가 **어디서 도나**. app-server 면 pane 이 셸이라 화면은 대화창을 먼저 열어야 한다
       //  (터미널로 열면 사람이 말 걸 곳이 없는 화면을 먼저 본다 — 실측으로 그렇게 헤맸다).
-      s.chatMode = codexChatMode({ harness: s.harness });
+      s.chatMode = codexChatMode({ harness: s.harness, isolated: isolationInfraReady() });
     }
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
@@ -663,7 +664,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   그 박스의 **로컬 세션까지 노드 스냅샷에 잡혀**(applyLiveTheme 주석과 같은 함정) 아래 노드 릴레이로
     //   빠져 이 분기가 통째로 무시됐다 — 응답이 `{ok:true}` 한 줄로 와서 겉으론 성공처럼 보인다.
     //   그래서 '노드에 등록됐나'가 아니라 **'이 박스의 tmux 에 그 세션이 실제로 있나'** 로 가른다.
-    if (codexChatMode({ harness: await sessionHarnessKey(req.params.id) }) === "app-server"
+    if (codexChatMode({ harness: await sessionHarnessKey(req.params.id), isolated: isolationInfraReady() }) === "app-server"
         && !(await sessionGone(req.params.id))) {
       //  아웃박스+send-keys 는 pane 화면을 읽어 타이밍을 맞추는 경로라, 로그인·대화상자에 걸리면 배달이 지연되거나
       //  조용히 사라진다. app-server 는 turn/start 의 **응답으로 성공/실패가 온다** — 애매함이 없다.
