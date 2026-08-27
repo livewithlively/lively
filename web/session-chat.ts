@@ -1364,11 +1364,53 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
   // codex app-server 세션의 **실시간 층**(#2055) — 승인·타이핑·사용량. 완성된 대화는 종전대로 파일 폴링이 그린다.
   //  승인이 여기 안 뜨면 서버는 기본값(거부)으로 닫아 codex 가 아무 명령도 못 돌린다 — 이 층이 없으면 대화가 성립하지 않는다.
+  // ★ 로그인 관문 — **세션을 여는 순간** 알려준다(#2055, 2026-08-27 사용자 신고).
+  //
+  //  신고 그대로: 「매니지드에서 코덱스 세션 만들어봤는데 로그인 하라는 안내도 없고 이거 뭐 어쩌라는거야」.
+  //  맞는 지적이다. 그 전에 우리가 고친 건 «턴이 401 로 죽으면 이유를 말한다» 였는데, 그건 **사람이 한 번
+  //  헛수고한 뒤에야** 뜬다. 로그인 여부는 보내기 전에 알 수 있는 사실이므로 그때 말해야 한다.
+  //
+  //  ⚠ loggedIn 이 **null(모름)이면 아무 말도 안 한다** — 코어의 교리와 같다(profiles.ts AiLoginCheck):
+  //   모르면서 «미로그인» 이라고 하면 **로그인한 사람을 막는다**. 이건 관문이 아니라 안내이므로,
+  //   조회가 실패해도 조용히 넘어가고 사람은 그대로 보낼 수 있다.
+  let gateShown = false;
+  async function loginGate(): Promise<void> {
+    if (gateShown || destroyed) return;
+    gateShown = true;
+    let c: { loggedIn?: boolean | null; label?: string; steps?: string[] } | null = null;
+    try { c = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: 'codex' }) }); }
+    catch { return; }                                  // 못 물었으면 침묵 — 사람을 막지 않는다
+    if (!c || c.loggedIn !== false || destroyed) return;
+    const label = c.label || '코덱스';
+    const box = el('div', { class: 'cxl-gate' });
+    box.append(el('div', { class: 'cxl-gate-t', text: label + ' 에 로그인되어 있지 않습니다' }));
+    box.append(el('div', { class: 'cxl-gate-d', text: '지금 보내면 답이 오지 않습니다 — 먼저 로그인하세요.' }));
+    const go = el('button', { class: 'btn btn-primary', text: '로그인 세션 열기' }) as HTMLButtonElement;
+    go.onclick = async (): Promise<void> => {
+      go.disabled = true;
+      try {
+        // me-ai.ts 와 **같은 방식**이다 — codex 는 셸 세션 + 로그인 명령(loginFor)으로 연다(TUI 안이 아니라 자동화 가능).
+        const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
+          label: '내 계정 로그인 (' + label + ')', rootKey: 'personal', subpath: '',
+          harness: 'shell', loginFor: 'codex', flags: {}, autoApprove: false, loginProfile: true,
+        }) });
+        toast('로그인용 세션을 열었습니다 — 그 세션에서 화면 안내를 따르세요.');
+        if (out?.session?.id) window.open('#/s/' + encodeURIComponent(out.session.id), '_blank');
+        box.remove();
+      } catch (e) { toast('로그인 세션을 열지 못했습니다 — ' + ((e as Error)?.message || e), true); go.disabled = false; }
+    };
+    box.append(go);
+    // 실측된 절차가 있으면 같이 보여준다(catalog.loginSteps) — 버튼을 못 쓰는 상황의 탈출로.
+    for (const st of (c.steps || []).slice(0, 3)) box.append(el('div', { class: 'cxl-gate-s', text: st }));
+    liveDock.prepend(box);
+  }
+
   let live: CodexLive | null = null;
   function ensureLive(): void {
     // ⚠ 열 때 세션 행에 chatMode 가 아직 없을 수 있다(방금 만든 세션 — 목록 갱신이 나중에 실어 준다).
     //  그때 한 번만 보고 말면 그 세션은 **영원히 승인을 못 받는다**. 그래서 update() 도 이 문을 두드린다.
     if (live || !chatFirst() || destroyed) return;
+    void loginGate();
     live = mountCodexLive({
       sessionId: target.id, view, dock: liveDock,
       liveTurn: () => cur?.t ?? null,
