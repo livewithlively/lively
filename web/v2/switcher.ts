@@ -305,6 +305,11 @@ export function openWorkspaceMenu(anchor: HTMLElement): void {
  *
  * sessionStorage 인 이유: 이 표식은 **딱 다음 부팅 한 번**만 살아야 한다. localStorage 에 두면 지우기
  *  전까지 자동 진입이 영영 죽고, 그러면 새로 온 사람이 처음 설정을 못 본다.
+ *
+ * ★ #2230 — 표식을 읽는 자리가 하나 더 늘었다. 아래 `location.hash = '#/'` 만으로는 «도착지는 홈»이
+ *  성립하지 않았다: 셸은 `#/` 를 딥링크로 치지 않아서, 그 워크스페이스에 저장된 **열린 탭**이 복원되며
+ *  마지막에 보던 세션이 그대로 다시 떴다(원준님 신고 2026-08-27 "전환하면 맨 위 세션이 떠 있다").
+ *  그래서 셸(main.ts bootV2)이 이 표식을 보고 착지 탭과 레일 구역까지 홈으로 되돌린다.
  */
 export const WS_SWITCH_KEY = 'lively_ws_switching';
 
