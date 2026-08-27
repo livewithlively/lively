@@ -16,6 +16,7 @@
 // 관련: src/sessions/session-reaper.ts(이 정책으로 통합목록을 순회·회수) · src/sessions/session-memory-policy.ts(같은 seam 원형) ·
 //  src/sessions/session-state.ts(회수해도 보존되는 desired-state).
 
+import { tenantTtlCache } from "../org/tenant-ttl-cache.js";
 import { definePolicy } from "../org/policies/knob.js";
 
 export interface SessionReclaimPolicy {
@@ -161,24 +162,21 @@ export function sessionReclaimPolicySource(dbRaw: unknown): "db" | "env" | "defa
 // ── 캐시 ──
 // reaper 는 주기(수 분)로만 조회하나, storage/session-memory 와 동형으로 짧은 캐시 + DB 실패 시 폴백(회수 판정이
 //  정책 조회로 막히지 않게 — 못 읽으면 마지막 값→기본값(0=끔)으로, 절대 throw 하지 않는다).
-let cache: { at: number; policy: SessionReclaimPolicy } | null = null;
+// ★ **테넌트별** 캐시다 — 전역 한 칸이면 중앙 게이트웨이에서 먼저 읽은 테넌트의 값이 TTL 동안
+//  다른 테넌트에도 적용된다(실측 2026-08-27: 갓 만든 테넌트의 기본값 0/0 이 정상 테넌트 1536 을 덮어
+//  세션 컨테이너 격리가 조용히 꺼졌다). 근거·전말은 org/tenant-ttl-cache.ts 머리말이 정본이다.
+const cache = tenantTtlCache<SessionReclaimPolicy>(30_000, () => normalizeSessionReclaimPolicy(null));
 
 export async function effectiveSessionReclaimPolicy(
   load: () => Promise<SessionReclaimPolicy>,
   ttlMs = 30_000,
   now: () => number = Date.now,
 ): Promise<SessionReclaimPolicy> {
-  if (cache && now() - cache.at < ttlMs) return cache.policy;
-  try {
-    const policy = await load();
-    cache = { at: now(), policy };
-    return policy;
-  } catch {
-    return cache?.policy ?? normalizeSessionReclaimPolicy(null);
-  }
+  // ttlMs·now 는 종전 시그니처 그대로 **캐시에 넘긴다** — 새 캐시를 만들면 그게 곧 캐시를 없앤 것이다.
+  return cache.get(load, ttlMs, now);
 }
 
 /** 관리탭에서 정책을 저장한 직후 호출 — 다음 회수 tick 이 즉시 새 값을 보게. */
 export function invalidateSessionReclaimPolicyCache(): void {
-  cache = null;
+  cache.invalidate();
 }
