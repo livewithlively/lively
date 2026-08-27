@@ -136,14 +136,26 @@ mkdir -p "$(dirname "$2")" && cp "$1" "$2"
 }
 
 {
-  // 번들에서 공유 모듈이 빠진 경우 = 그날의 상태. 조용히 넘어가지 않고 **시끄럽게** 실패해야 한다.
+  // ⑦ 번들에서 공유 모듈이 빠진 경우 = 그날의 상태. 조용히 넘어가지 않고 **시끄럽게** 실패해야 하고,
+  //   ★ 무엇보다 **멤버의 살아 있는 트리를 건드리면 안 된다**.
+  //   왜 이게 종료코드보다 중요한가 — 훅이 깨지면 self-update 를 띄우는 유일한 주체(session-preload)가
+  //   함께 죽는다. 즉 나쁜 kit 이 한 번 닿으면 멤버는 스스로 복구하지 못하고 관리자가 홈마다 손대야 한다
+  //   (2026-08-27 실측). 그래서 «덮어쓰고 검증» 이 아니라 «스테이지에서 검증하고 통과분만 적용» 이어야 한다.
   const { deploy, bin } = stubEnv({ withHostEffects: false });
+  // 기존 트리에 표식을 남겨 둔다 — 실패 경로가 이걸 덮으면 «이미 깨뜨린 뒤 알려주는» 종전 동작이다.
+  const live = join(HOMEDIR, ".lively", "hooks", "run-custom.mjs");
+  writeFileSync(live, "// 돌고 있던 기존 러너(표식)\n");
   const r = spawnSync("bash", [join(deploy, "refresh-member-kits.sh")], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OFFLINE: "1" },
   });
+  // ★ 가장 중요한 단언을 **먼저** — 로그 문구 단언이 앞서면 문구만 바뀌어도 이게 가려진다(실측).
+  assert.strictEqual(readFileSync(live, "utf8"), "// 돌고 있던 기존 러너(표식)\n",
+    `검증 실패 시 멤버의 살아 있는 트리는 **한 바이트도** 바뀌면 안 된다 — 덮어쓴 뒤 알려주면 그 멤버는 self-update 를 띄울 주체(session-preload)까지 잃어 스스로 복구할 수 없다\n${r.stdout}`);
+  assert.ok(!existsSync(join(HOMEDIR, ".lively", ".refresh-stage")),
+    `스테이지는 실패 경로에서도 정리돼야 한다\n${r.stdout}`);
   assert.strictEqual(r.status, 1, `공유 모듈 누락은 종료코드 1이어야 한다 — status=${r.status}\n${r.stdout}${r.stderr}`);
-  assert.ok(/설치 검증 실패/.test(r.stdout), `검증 실패가 로그에 이름으로 남아야 한다\n${r.stdout}`);
+  assert.ok(/검증/.test(r.stdout) && /실패/.test(r.stdout), `검증 실패가 로그에 남아야 한다\n${r.stdout}`);
   assert.ok(/host-effects/.test(r.stdout), `무엇이 없는지 찍어야 한다\n${r.stdout}`);
 }
 
