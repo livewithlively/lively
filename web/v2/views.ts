@@ -68,6 +68,23 @@ const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
 //    사용자에겐 넷 다 "다시 이어서 할 수 있는 지난 세션"이라 한 묶음으로 다룬다(구분은 상태점·툴팁·세션 화면이 말한다).
 export const isLiveSess = (s: Sess): boolean => s.live && s.alive;
 export const isPastSess = (s: Sess): boolean => !isLiveSess(s);
+/**
+ * **내 세션인가** — 「확인할 것」 계열이 쓰는 단일 술어(#1875 사용자별 격리).
+ *
+ * 세션 목록은 내 것만 오지 않는다: 프로젝트 세션은 로그인한 전원에게 공개고(#452), 초대받은 세션도 온다.
+ *  그래서 목록을 그냥 세면 **남이 답할 것이 내 「확인할 것」에 선다** — 원준 신고(2026-08-27):
+ *  *"다른 사람이 만든 세션에서 그 사람이 확인할 것도 내가 확인할 것중에 하나로 뜬다."* 그 화면의 약속은
+ *  "**내** 답을 기다리는 세션"이므로, 세는 자리·긋는 자리·배지가 전부 이 술어를 지나야 한다.
+ *
+ * `owned` 는 서버가 판정한 정본(terminal/sessions.ts — `d.owner === me`)이고, `raw.owner` 대조는
+ *  그 값이 안 실린 행(구 응답·노드 raw 수집)용 폴백이다. 둘 다 없으면 **내 것이 아니다**(fail-closed —
+ *  모르는 세션을 내 할 일로 세는 쪽이 더 나쁘다).
+ */
+export const isMineSess = (s: Sess): boolean => {
+  if (s.owned) return true;
+  const me = String((state.me && (state.me as { userId?: string }).userId) || '');
+  return !!me && String((s.raw && s.raw.owner) || '') === me;
+};
 // 휴지통(#1851) — 멈춘 세션 중 사람이 휴지통으로 보낸 것. 사이드바·홈·확인할 것 어디에도 안 나오고 휴지통 화면에만 있다.
 export const isTrashedSess = (s: Sess): boolean => !!s.trashedAt;
 export const isArchivedProj = (p: Proj | null | undefined): boolean => !!(p && p.archived_at);
@@ -105,7 +122,9 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
   const name = String(me.display_name || me.email || me.userId || '');
   const live = data.sessions.filter((s) => s.live && s.alive);
   const busy = live.filter((s) => s.stateKey === 'busy').length;
-  const waiting = live.filter((s) => s.stateKey === 'waiting').length;
+  //  '답 기다림' 은 **나를** 기다린다는 말이라 내 것만 센다(#1875) — '작업 중' 은 "무엇이 돌고 있나" 라
+  //   소유를 안 본다(할 일이 아니라 현황이다). 두 숫자의 뜻이 다르므로 필터도 다르다.
+  const waiting = live.filter((s) => isMineSess(s) && s.stateKey === 'waiting').length;
   const h = new Date().getHours(); const tod = h < 12 ? '좋은 아침이에요' : h < 18 ? '좋은 오후예요' : '좋은 저녁이에요';
   const d = new Date(); const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -190,8 +209,14 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
 //  지난 세션은 그 폴더의 '지난 세션'과 AI 세션 앱. 홈에 네 번째 사본을 두지 않는다.
 
 // ── 확인할 것(#1719 사이드바 개편 안2) — 시키다→기다리다→**확인**의 병목을 한 화면에 모은다 ───────
-//  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — 보이는 것 전부(프로젝트 세션은 팀 누구든 답할 수 있다).
+//  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — **내 것만**(isMineSess).
+//    ★2026-08-27 뒤집힘(#1875, 원준). 종전 규칙은 "보이는 것 전부 — 프로젝트 세션은 팀 누구든 답할 수 있으니까"
+//     였다. 실제로 써 보니 그 이득보다 **내가 답할 수 없는 줄이 내 할 일로 서는** 비용이 컸다: 목록에는 동료의
+//     프로젝트 세션이 상시로 들어오고(#452 전원 공개), 배지 숫자가 남의 대기로 올라 내 것이 몇 건인지 알 수 없게
+//     된다. 신고: *"다른 사람이 만든 세션에서 그 사람이 확인할 것도 내가 확인할 것중에 하나로 뜬다."*
+//     동료 세션을 **보는** 길은 그대로다(사이드바·프로젝트 화면) — 「확인할 것」만 내 것으로 좁혔다.
 //  · 끝났어요: 시킨 작업이 끝났는데 아직 안 본 세션(stateKey 'done') — 내 것만(남의 완료를 내가 '확인'할 일은 없다).
+//    ↑ 이 구획은 처음부터 내 것만이었다. 두 구획의 규칙이 갈려 있던 것이 위 신고의 형태였다.
 //  행은 홈의 nowList 와 같은 문법(v2-now-row) — 새 시각 언어를 만들지 않는다. 들어가 보면(lastAttached 갱신) 목록에서 빠진다.
 /**
  * 「확인할 것」 = **받은 알림의 이력**(#1891) + 지금 내 답을 기다리는 세션.
@@ -201,8 +226,10 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
  *  성격이 다르다: 알림은 **그때 무슨 일이 있었나**, 대기 세션은 **지금 무엇이 막혀 있나**.
  */
 export function renderInbox(host: HTMLElement, data: V2Data): void {
-  const waits = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
-  const dones = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
+  //  #1875 — 「확인할 것」은 **내 것만**. 남의 프로젝트 세션이 답을 기다리는 것까지 여기 세우면
+  //   내가 답할 수 없는 줄에 [답하기] 가 붙는다(원준 신고 2026-08-27). isMineSess 가 그 단일 술어다.
+  const waits = data.sessions.filter((s) => isLiveSess(s) && isMineSess(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
+  const dones = data.sessions.filter((s) => isLiveSess(s) && isMineSess(s) && s.stateKey === 'done').sort((a, b) => b.lastSeen - a.lastSeen);
   const rowOf = (s: Sess): HTMLElement => {
     const pn = projName(data, s.projectId);
     const title = sessDisplayName(s, pn);

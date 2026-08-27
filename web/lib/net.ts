@@ -64,6 +64,34 @@ function setCurrentWorkspace(slug: string): void {
   try { if (!s || s === 'primary') localStorage.removeItem(WORKSPACE_KEY); else localStorage.setItem(WORKSPACE_KEY, s); } catch (_) { /* 프라이빗 모드 등 — 선택이 세션 한정이 될 뿐 */ }
 }
 
+// ── ★ 워크스페이스에 매인 브라우저 기억의 키 (#1875, 2026-08-27) ──────────────
+//
+// 신고(장원준): *"내가 새 워크스페이스 만든 다음에 사이드바는 깨끗하고 아무것도 없어야 할 거 아니야.
+//  왜 사이드바에 내가 그 워크스페이스에서 안 만든 게 있는지 봐봐."*
+//
+// 서버는 이미 워크스페이스로 갈라 준다(새 워크스페이스: 세션 0·프로젝트 0·앱 0 — 실측). 그런데 **화면의
+//  기억이 워크스페이스를 몰랐다.** 열린 탭·고정한 것·최근에 연 앱·접어 둔 폴더가 전부 이 브라우저에
+//  워크스페이스 구분 없이 한 벌로 살아서, 워크스페이스를 바꿔도 그대로 되살아났다.
+//  실측 재현(2026-08-27, dev): 팀에서 세션 두 개를 연 뒤 새 워크스페이스로 전환 → 그 워크스페이스의
+//  세션은 0건인데 사이드바에 `sess:box-yoon-72399d78`·`sess:box-yoon-ef5009c0` 두 행이 그대로 섰다.
+//  (사이드바 목록의 셋째 줄기 ③ '지금 열린 창' 은 force=true 라 서버 데이터를 안 보고 행을 세운다 —
+//   그 규칙 자체는 옳다. 틀린 것은 **그 창 목록이 워크스페이스를 안 나눈 것**이다.)
+//
+// 그래서 워크스페이스의 **내용을 가리키는** 기억은 전부 이 함수로 키를 만든다.
+//  · primary 는 접미사 없음 — 기존 사용자의 기억이 그대로 살아 있다(이관 없음, 무회귀).
+//  · 다른 워크스페이스는 `키@슬러그` — **처음엔 비어 있다 = 새 워크스페이스는 깨끗하다.**
+//  · 전환은 언제나 location.reload() 를 거치므로(v2/switcher.ts switchTo) 모듈 상수로 한 번 평가해도
+//    어긋나지 않는다. 반대로 여기서 캐시하면 안 된다 — 호출 시점의 선택을 그대로 읽어야 한다.
+//
+// ⚠ **무엇을 스코프하나**: "그 워크스페이스의 세션·프로젝트·앱·지식을 가리키는가"로 가른다.
+//  가리키면 스코프(탭·열린 것·고정·최근 앱·이름 캐시·접어 둔 폴더…), 사람·기기의 취향이면 스코프하지
+//  않는다(테마·글꼴·나눔선 폭·필터 토글·레일 열림). 취향까지 나누면 워크스페이스를 옮길 때마다 사람이
+//  설정을 다시 해야 한다 — 격리의 목적은 **남의 내용이 안 보이는 것**이지 취향을 잃는 것이 아니다.
+function wsKey(base: string): string {
+  const ws = currentWorkspace();
+  return !ws || ws === 'primary' ? base : base + '@' + ws;
+}
+
 // ── fetch 헬퍼 — 401 은 토큰 폐기 + 주입된 처리기, 그 외 비정상은 {error} 메시지로 throw ──
 async function api(path: string, opts: any = {}): Promise<any> {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -124,4 +152,5 @@ export {
   setUnauthorizedHandler,
   currentWorkspace,
   setCurrentWorkspace,
+  wsKey,
 };
