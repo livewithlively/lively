@@ -143,6 +143,28 @@ export async function nodeSessionMapFor(ids: string[]): Promise<Map<string, { no
   return out;
 }
 
+// ── #2197 — 사람이 **마지막으로 시킨 말**(org_session_state.last_prompt). work-flag 훅이 UserPromptSubmit 순간 보고한다. ──
+//  사이드바 세션 행 둘째 줄의 정본. owner-gate 는 setClaudeSessionId 와 같은 이유(남의 세션 오염 차단). last-write-wins.
+//  박스·노드 세션 모두 같은 행(#1791) — 노드로 릴레이하지 않는다(소비자가 중앙 목록뿐이라 중앙이 정본).
+export async function setLastPrompt(id: string, prompt: string, owner: string): Promise<boolean> {
+  const r = await itemsPool.query(
+    "UPDATE org_session_state SET last_prompt=$2, last_prompt_at=now(), updated_at=now() WHERE id=$1 AND owner=$3",
+    [id, prompt, owner],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+/** 목록 보강용 일괄 조회 — id → last_prompt(있는 것만). claudeSessionIdsFor 와 짝. */
+export async function lastPromptsFor(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  const r = await itemsPool.query(
+    "SELECT id, last_prompt FROM org_session_state WHERE id = ANY($1::text[]) AND last_prompt IS NOT NULL AND last_prompt <> ''",
+    [ids],
+  );
+  for (const row of r.rows) out.set(String(row.id), String(row.last_prompt));
+  return out;
+}
+
 // #1059 — 사용자 **정상 종료** 표시(claude SessionEnd 훅 보고). setClaudeSessionId 와 **동형**: owner-gated(호출자가 그
 //  box 소유자일 때만) + 레코드 존재 시에만 UPDATE(INSERT 안 함). 재부팅·강제kill·reaper 는 훅이 못 떠서 안 찍히고(중단됨),
 //  이건 사용자가 명시적으로 나간 것만 찍힌다(→ 복원목록에서 '종료됨'으로 구분). 반환 rowCount>0 = 찍힘. best-effort(실패 무해).

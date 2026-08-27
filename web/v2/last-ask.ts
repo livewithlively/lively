@@ -6,7 +6,8 @@
 //  꼬리를 행마다 한 번씩 받아(sess-tail fetchTurns — 세션 카드가 같은 길) 이 기기에 캐시한다.
 //   · 같은 lastSeen 이면 다시 묻지 않는다(활동이 있어야 새 말이 있다) · 동시 4건 · 도착하면 onReady 로 목록만 갈아 끼운다.
 //   · 새 활동이 생기면 옛 글을 먼저 보여 주고 뒤에서 바꾼다 — 빈 줄이 깜빡이지 않게.
-//  ⚠ 서버 칸(session.last_prompt)으로 올리는 것이 정답이다 — 그때 이 파일은 그 값을 읽는 한 줄로 줄어든다.
+//  ★ 서버 칸이 생겼다(#2197 — org_session_state.last_prompt, work-flag 훅이 UserPromptSubmit 순간 보고). 목록 행에
+//   lastPrompt 가 실리면 그것이 정본이고 아래 꼬리 조회는 **그 값이 없는 세션**(옛 훅·코덱스·기록 세션)의 폴백이다.
 import { fetchLastAsk } from './sess-tail.js';
 import type { Sess } from './views.js';
 
@@ -42,6 +43,10 @@ export function watchLastAsk(cb: () => void): void { ready = cb; }
 
 /** 이 세션에 내가 마지막으로 시킨 말(짧게). 아직 모르면 null 을 주고 뒤에서 찾아 onReady 로 알린다. */
 export function lastAsk(s: Sess): string | null {
+  // #2197 — 서버 칸이 먼저다: 훅이 프롬프트를 친 **그 순간** 보고한 값(목록 API lastPrompt). 있으면 꼬리 조회를 아예 안 한다
+  //  (행마다 48~240KB 를 받던 비용이 0, 노드 세션도 턴이 끝나기 전에 바뀐다). 없는 세션(옛 훅·코덱스·기록 세션)만 아래 폴백.
+  const served = s.raw && typeof s.raw.lastPrompt === 'string' ? shorten(s.raw.lastPrompt) : '';
+  if (served) return served;
   const hit = cache.get(s.id);
   const seen = Number(s.lastSeen || 0);
   if (hit && (hit.seen === seen || (hit.hold && Date.now() - hit.at < RETRY_MS))) return hit.text;

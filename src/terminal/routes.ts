@@ -48,7 +48,8 @@ import { autoTrustWorkspace } from "./session-create-guards.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
-import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
+import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
+import { cleanLastPrompt } from "./last-prompt.js";
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
@@ -399,6 +400,13 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const map = await claudeSessionIdsFor([...local, ...remote].map((s) => s.id));
       for (const s of [...local, ...remote]) { const u = map.get(s.id); if (u) s.claudeSessionId = u; }
     } catch { /* 미러 조회 실패 — uuid 없이 나간다(화면은 '기록 없음'으로 다룬다) */ }
+    // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt). 사이드바 둘째 줄의 정본 —
+    //  종전엔 화면이 세션마다 대화 꼬리(48~240KB)를 받아 찾았고, 노드 세션은 기록이 턴 끝에만 올라와 실시간이 아니었다.
+    //  박스·노드 세션 모두 같은 행에 있다(#1791). 없으면(옛 훅·코덱스·셸) 화면이 종전 꼬리 조회로 폴백한다.
+    try {
+      const pm = await lastPromptsFor([...local, ...remote].map((s) => s.id));
+      for (const s of [...local, ...remote]) { const p = pm.get(s.id); if (p) s.lastPrompt = p; }
+    } catch { /* 조회 실패 — 값 없이 나간다(화면 폴백) */ }
     // #1752 갭2 — 노드 세션 행에도 대화 uuid 를 싣는다(org_node_session_map — /claude-uuid 노드 분기가 채움).
     //  이 값이 실려야 새 셸 채팅창이 노드 세션을 중앙 기록(v6/sessions/:uuid/log)으로 읽고, 같은 기록 행과 한 장으로 접힌다.
     //  매핑의 node_id 와 지금 행의 노드가 다르면 버린다(노드 재등록·이름 재사용으로 남은 낡은 매핑 오염 방지).
@@ -1256,6 +1264,24 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       const change = (relay as { change?: { prev: string | null; phase: string; at: number } | null } | null)?.change;
       if (change) void notifyPhaseChange(id, me, change, ns.label);
     }
+    res.json({ ok: true });
+  }));
+
+  // #2197 — **사람이 방금 시킨 말** 보고(work-flag 훅 UserPromptSubmit). 사이드바 세션 행 둘째 줄의 정본이다 — 종전엔 화면이
+  //  대화 꼬리를 세션마다 받아 찾았고, 노드 세션은 기록이 턴 끝(Stop 캡처)에만 중앙에 올라와 '방금 친 말'이 턴이 끝나야 보였다.
+  //  박스·노드 세션 모두 org_session_state 행(#1791)에 쓴다 — 노드로 릴레이하지 않는다(소비자가 중앙 목록뿐이라 중앙이 정본).
+  //  owner-gated(남의 세션 오염 차단) · 본문은 서버가 다듬는다(cleanLastPrompt — 제어문자 제거·공백 접기·300자). best-effort — 훅은 fire-and-forget.
+  app.post("/api/ui/terminal/sessions/:id/last-prompt", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    const prompt = cleanLastPrompt(((req.body ?? {}) as Record<string, unknown>).prompt);
+    if (!prompt) throw new HttpError(400, "prompt 가 비어 있습니다");
+    const me = idOf(userOf(req));
+    const st = await getSessionState(id);
+    if (!st) throw new HttpError(404, "세션 상태 기록이 없습니다");
+    if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
+    await setLastPrompt(id, prompt, me);
     res.json({ ok: true });
   }));
 
