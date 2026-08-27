@@ -118,7 +118,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       return { deleted: await pruneCallLog(cfg.call_log_policy?.retention_days ?? 0) };
     });
     await step("session-backfill", async () => { await backfillSessionStates(); return "ok"; });
-    await step("session-reaper", async () => { await reapIdleSessions(); return "ok"; });
+    // ★ 결과를 **그대로 돌려준다**(종전 "ok") — 이 틱을 부르는 쪽(매니지드 CP)이 "정책이 켜져 있나 ·
+    //  몇 개를 왜 안 걷었나"를 볼 수 있어야 한다. 리퍼는 정책이 0 이면 로그 한 줄 없이 no-op 으로
+    //  돌아가므로, "ok" 만 보내면 **한 번도 안 돈 것과 돌았지만 걷을 게 없던 것이 구분되지 않는다**
+    //  (#2148 실측: 매니지드에서 이 리퍼가 도는지조차 아무도 몰랐다).
+    await step("session-reaper", () => reapIdleSessions());
     res.json({ ok: true, steps: out });
   }));
 
