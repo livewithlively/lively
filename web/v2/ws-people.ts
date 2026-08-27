@@ -8,7 +8,7 @@
 // ★ 이 화면의 명제 하나: **개인이냐 팀이냐는 지금 명부에 몇 명인가**다. 그래서 배지·문구가 전부
 //  member_count 에서 나오고, 서버도 같은 값으로 판정한다(kind_effective). 어디에도 "팀으로 바꾸기"
 //  버튼이 없는 이유 — 사람이 들어오는 것이 곧 전환이다.
-import { api, el, profileAvatar, state, toast } from '../core.js';
+import { api, el, personName, profileAvatar, state, toast } from '../core.js';
 import { confirmDialog, copyButton, skeletonRows } from '../ui-primitives.js';
 import { ctxMenu } from './panes-kit.js';   // ⋯ 메뉴 — 곁칸·프로젝트 행과 같은 부품
 
@@ -22,7 +22,7 @@ export interface PeopleData {
   candidates: Array<{ id: string; email: string; display_name: string | null }>;
 }
 
-const who = (m: PeopleData['members'][number]): string => m.display_name || m.email || m.member_id;
+const who = (m: PeopleData['members'][number]): string => personName(m as never) || m.member_id;
 
 /**
  * 개인 워크스페이스의 **첫 초대**만 한 번 확인받는다. 되돌리기 어려운 전환이라서인데,
@@ -320,7 +320,7 @@ async function loadBoxView(wsName: string): Promise<View> {
   const people: Person[] = rows.map((m) => {
     const f = faces.get(String(m.id)) || {};
     const scopes: string[] = Array.isArray(m.scopes) ? m.scopes : [];
-    return { id: String(m.id), name: String(m.display_name || m.email || m.id), email: m.email || null,
+    return { id: String(m.id), name: personName(m as never) || String(m.id), email: m.email || null,
       role: scopes.includes('admin') ? 'admin' : 'member', scopes,
       avatar: f.avatar ?? m.avatar, avatar_char: f.avatar_char ?? m.avatar_char, avatar_color: f.avatar_color ?? m.avatar_color };
   });

@@ -50,6 +50,10 @@ export async function initOrgCore(pool: Pool): Promise<void> {
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar_color TEXT;
     -- nickname = 표시 이름(display_name)과 별개의 닉네임(#762). 활동 로그 등 캐주얼 표기에 쓴다. null/'' = display_name 폴백.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS nickname TEXT;
+    -- use_nickname = 「이 닉네임을 내 이름으로 사용」(#1813). 켜면 **사람 이름을 보이는 자리 전부**에서
+    --  nickname 이 display_name 을 대체한다(memberName() 단일 판정). 끄면 nickname 은 활동 로그 등
+    --  캐주얼 표기에만 남는다. 닉네임이 비어 있으면 이 플래그는 의미가 없다(판정이 display_name 으로 떨어진다).
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS use_nickname BOOLEAN NOT NULL DEFAULT false;
     -- onboarding = 구성원 온보딩의 **보고된** 상태(#846/850). 형태:
     --   { "<step>": { "state": "done"|"skipped", "at": "<iso>", "by": "ai"|"self", "note": "…" } }
     -- ⚠ 자동 판정되는 것(MCP 호출 이력·자격 등록·레포 연결)은 **여기 저장하지 않는다** — 조회 시점에 라이브

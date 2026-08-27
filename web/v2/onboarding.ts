@@ -944,11 +944,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   앞부분(프로비저닝이 넣은 값)이 계속 떠 있었다(원준님 신고 2026-08-26).
         const saveName = (v) => {
           if (!v) return;
-          void api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ display_name: v, nickname: v }) })
+          //  ⚠ **display_name 만** 넣는다(닉네임은 건드리지 않는다). 「어떻게 불러 드릴까요」는 곧 표시이름이고,
+          //   닉네임은 [내 설정 ▸ 프로필]에서 따로 정한 뒤 「이 닉네임을 내 이름으로 사용」을 켜야 이름을 대체한다.
+          //   종전엔 여기서 nickname 까지 덮어써서, 프로필에 정해 둔 닉네임이 온보딩을 다시 지나면 날아갔다.
+          void api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ display_name: v }) })
             .then(() => {
               // 화면이 읽는 값을 그 자리에서 갈아끼우고 레일을 다시 그린다 — 안 그리면 새로고침 전엔
               //  사이드바 발치가 옛 이름(이메일 앞부분)을 그대로 들고 있다.
-              try { if (state && (state as any).me) { (state as any).me.display_name = v; (state as any).me.nickname = v; } } catch (_) { /* noop */ }
+              try { if (state && (state as any).me) { (state as any).me.display_name = v; } } catch (_) { /* noop */ }
               try { drawRail(); } catch (_) { /* 레일이 없는 배포(클래식)면 그냥 넘어간다 */ }
             })
             .catch(() => { /* 비치명 — 마무리에서 한 번 더 보낸다 */ });
@@ -978,7 +981,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           const id = ID[c.dataset.opt]; if (S.stage !== id) { S.job = null; }
-          S.stage = id; save(); await sleep(200); goScene('role');
+          S.stage = id; save(); saveWork(); await sleep(200); goScene('role');
         });
         $('[data-skip]', el).onclick = () => { S.stage = S.stage || 'company'; goScene('role'); };
       },
@@ -995,11 +998,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
-          S.job = c.dataset.opt; save(); await sleep(200); goScene('files');
+          S.job = c.dataset.opt; save(); saveWork(); await sleep(200); goScene('files');
         });
         const wr = $('.ob-q-write', el), win = $('#roleIn', el);
         $('[data-other]', el).onclick = (e) => { wr.hidden = false; e.target.hidden = true; win.focus(); };
-        const commit = () => { const v = win.value.trim(); if (!v) return; S.job = v; save(); goScene('files'); };
+        const commit = () => { const v = win.value.trim(); if (!v) return; S.job = v; save(); saveWork(); goScene('files'); };
         $('#roleInGo', el).onclick = commit;
         win.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) commit(); });
         $('[data-skip]', el).onclick = () => goScene('files');
@@ -1692,6 +1695,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       return { drawers: null, why: 'AI 판정을 읽지 못해서, 파일 종류로 나눈 결과예요.' };
     }
     return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
+  }
+
+  /* 하는 일(무대·직무)을 **고른 즉시** 남긴다 (#1813).
+   *  이 값은 매 세션 개인 층으로 주입된다(publish.ts renderLivOnboarding → 「### 온보딩에서 알려주신 것」).
+   *  ⚠ 종전엔 마무리(POST /api/ui/me/welcome)에서만 저장돼서, 중간에 나간 사람은 답을 해 놓고도
+   *   AI 가 그걸 모른 채 일했다 — 이름과 같은 구조의 결함이었다(원준님 실측 2026-08-26).
+   *  실패해도 진행은 막지 않는다(마무리에서 한 번 더 보낸다). */
+  const STAGE_TEXT = { company: '회사·조직에서 팀과 함께 일한다', solo: '1인·프리랜서로 여러 일을 한다',
+    academy: '학교·연구실에서 연구한다', student: '학생으로 수업·시험·진로를 준비한다' };
+  function saveWork() {
+    const asis = [S.stage ? STAGE_TEXT[S.stage] : null, S.job].filter(Boolean).join(' · ');
+    if (!asis) return;
+    void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ work: { asis, by: 'self' } }) })
+      .catch(() => { /* 비치명 */ });
   }
 
   /* 고른 AI → **하네스 키**(서버 catalog/HEADLESS 표의 key). 헤드리스 규약을 아는 넷만 여기 있다 —

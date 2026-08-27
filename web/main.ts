@@ -5,7 +5,7 @@
 //  import 방향: main → 각 탭 모듈(단방향). **역으로 어떤 모듈도 main 을 import 하지 않는다** — 그러면
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
-import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, personName, profileAvatar, showGate, state } from './core.js';
 import { watchStaleShell } from './gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
@@ -304,7 +304,7 @@ async function boot() {
   // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→'내 정보' 팝업(#762).
   const userBtn = document.getElementById('user-email');
   if (userBtn) {
-    const nm = state.me.display_name || state.me.email || state.me.userId || '';
+    const nm = personName(state.me as never);   // 이름 판정은 한 곳(#1813)
     userBtn.replaceChildren(profileAvatar(state.me.avatar, nm, state.me.userId, 'topbar-ava', { char: state.me.avatar_char, color: state.me.avatar_color }), el('span', { text: nm }));
     userBtn.hidden = false;
   }

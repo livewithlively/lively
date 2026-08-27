@@ -288,13 +288,17 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
 //  주입의 목적이 "이 세션의 사람이 어느 키로 조인되는가"라서, 이름은 없어도 되지만 키가 없으면 블록이 무의미하다.
 export function renderMeBlock(
   memberId: string,
-  member: { display_name?: string | null; email?: string | null } | null,
+  member: { display_name?: string | null; nickname?: string | null; use_nickname?: boolean | null; email?: string | null } | null,
 ): string {
   if (!memberId) return ""; // 멤버 무관(정적) 경로 — 출력 불변
   const bits = [`member_id \`${memberId}\``];
   const email = member?.email?.trim();
   if (email) bits.push(email);
-  return `## 나 (현재 로그인)\n- **${member?.display_name?.trim() || memberId}** · ${bits.join(" · ")}`
+  //  ⚠ 이름은 화면과 **같은 규칙**으로 부른다(#1813) — 「이 닉네임을 내 이름으로 사용」을 켠 사람은 닉네임으로.
+  //   여기만 display_name 을 쓰면 화면은 «원준», AI 는 «장원준» 으로 부르는 어긋남이 생긴다.
+  //   (규칙 원본은 web/lib/person-name.ts — 여기 한 줄은 그 판정의 서버 쪽 적용이다.)
+  const shownName = (member?.use_nickname && member?.nickname?.trim()) || member?.display_name?.trim() || memberId;
+  return `## 나 (현재 로그인)\n- **${shownName}** · ${bits.join(" · ")}`
     + " — 내가 맡은 프로젝트는 `project_list_v6 {mine:true}`, 상세 신원(외부계정·팀·권한)은 `whoami`.";
 }
 

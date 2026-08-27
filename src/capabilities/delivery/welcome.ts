@@ -365,7 +365,10 @@ export const welcomeCapabilities: Capability[] = [
         // ⚠ **display_name 도 함께** 넣는다. 화면이 사람 이름을 읽는 자리는 전부 display_name 이고
         //  (rail.ts·side.ts·views.ts 모두 `display_name || email || userId`), nickname 은 활동 로그·알림에서만 쓰인다.
         //  nickname 만 넣으면 「어떻게 불러 드릴까요」에 답해도 사이드바엔 이메일 앞부분이 계속 뜬다(#1813).
-        await upsertMember({ id: userId, display_name: nickname, nickname }, { actor: userId, source: "welcome" } as never)
+        // ⚠ **display_name 만** 넣는다. 「어떻게 불러 드릴까요」의 답은 곧 표시이름이다.
+        //  닉네임은 [내 설정 ▸ 프로필]에서 따로 정하고, 「이 닉네임을 내 이름으로 사용」을 켠 사람만 그것으로 불린다
+        //  (personName 단일 판정). 여기서 nickname 까지 덮으면 그 사람이 정해 둔 닉네임이 날아간다.
+        await upsertMember({ id: userId, display_name: nickname }, { actor: userId, source: "welcome" } as never)
           .catch(() => { /* 이름은 못 바꿔도 온보딩을 막지 않는다 */ });
       }
 

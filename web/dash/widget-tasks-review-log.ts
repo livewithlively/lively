@@ -7,7 +7,7 @@
 //   · dashDueDays/dashDueLabel — 마감일 계산 1벌(#1313 R43). 예전엔 여기 dashDueDays 와 알림 쪽 dueInDays 가
 //     같은 값을 서로 다른 파싱으로 구했다(주석이 자인). 로컬 자정 파싱이 더 방어적인 이쪽을 남기고 그쪽을 지웠다 —
 //     라벨 문구는 자리마다 달라(‘3일 남음’ vs ‘3일 뒤’) 계산만 합쳤다.
-import { api, el, errorNote, relTime } from '../core.js';
+import { api, el, errorNote, personName, relTime } from '../core.js';
 // 작업 상세 = 회사 타임라인·프로젝트 타임라인과 **같은** 범용 템플릿(#852) — 한 곳에서 고치면 모든 뷰가 같이 나아진다.
 import { activityDetailView, activityHasDetail } from '../activity-view.js';
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용.
@@ -202,7 +202,7 @@ async function fillActivity(zone) {
   const nameOf = (pid) => {
     if (!pid) return '';
     const m = people.find((x) => x.author_person === pid);
-    return (m && (m.nickname || m.display_name)) || pid;
+    return (m && personName(m as never)) || pid;
   };
   // #req R14 — 팀원(인물) 필터 제거 → '팀이 한 작업의 성격(유형)'으로 필터. 유형 = feature·fix·decision·docs·research·review·chore·other.
   const TYPE_ORDER = ['feature', 'fix', 'decision', 'docs', 'research', 'review', 'chore', 'other'];
