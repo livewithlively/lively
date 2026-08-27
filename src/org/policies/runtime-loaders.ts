@@ -6,7 +6,9 @@
 //  ⚠ 왜 org/policies/storage-policy.ts 가 아니라 별도 파일인가: storage-policy.ts 는 org/store(runtime-config)가
 //   import 하는 seam 이다. 거기서 getRuntimeConfig 를 역-import 하면 policies ↔ store 순환이 생겨
 //   scripts/check-imports.mjs 의 '순환 0' 게이트가 막는다. 이 파일은 store 를 **단방향으로만** 쓰는 얇은 조립층이다.
-import { getRuntimeConfig } from "../store.js";
+import { getRuntimeConfig } from "../store/runtime-config.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈.
+//  ⚠ 배럴을 타면 커넥터·수집기·토큰소스가 전부 딸려온다. 이 파일은 terminal/sessions 를 거쳐 노드 에이전트
+//   번들에 들어가므로, 그 한 줄이 OAuth 토큰소스·시크릿 금고를 멤버 PC 로 실어 날랐다.
 
 // 저장소 정책(#813) — 디스크 임계치·로그 상한의 단일 출처는 **관리탭(DB)**, .env 는 시드일 뿐(고객 박스는 우리가
 //  못 들어가므로 env 전용이면 아무도 못 바꾼다). effectiveStoragePolicy 는 짧게 캐시하고 **DB 가 죽어도 throw 하지

@@ -76,6 +76,25 @@ setToolCandidates(buildToolCandidates());
 //  값이 이상하면 여기서 던져 기동을 막는다(조용히 안 켜지면 그게 곧 유출이다).
 console.log(`[boot] ${installTenantBinding()}`);
 
+// #2165 — 게이트웨이 전용 능력 등록. 노드 에이전트 번들에서 DB·자격 코드를 떼어내기 위해 방향을 뒤집었다:
+//  노드가 도달하는 모듈(terminal/sessions·project/project-provision)이 이 구현들을 **정적으로 import 하지 않고**,
+//  게이트웨이인 여기가 부팅 때 꽂는다. 노드에선 아무도 등록하지 않으므로 그쪽은 종전대로 '없음' 분기를 탄다.
+//  ⚠ 여기서 빠뜨리면 git 자격이 조용히 죽는다(사설 레포 clone·세션 자격 주입). 그래서
+//   scripts/gateway-capabilities-wired.test.mjs 가 선언된 능력이 전부 등록되는지 소스로 못박는다.
+{
+  const { registerGatewayCapabilities } = await import("./sessions/gateway-capabilities.js");
+  const { materializeMemberGit } = await import("./org/credentials/git-credential-materialize-gateway.js");
+  const { resolveGitSecret, leaseGitSecretForNode } = await import("./org/credentials/git-credential-store.js");
+  const { getMember } = await import("./org/store.js");
+  const { buildInstallBundle } = await import("./org/delivery/publish.js");
+  const { SEED_HARNESSES } = await import("./terminal/member-kit-seed.js");
+  const { mintAppToken } = await import("./apps/principal.js");
+  const { materializeAppAssets } = await import("./apps/session-assets-gateway.js");
+  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
+    mintAppToken, materializeAppAssets: materializeAppAssets as never,
+    kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
+}
+
 const app = express();
 
 // ★★ 테넌트 컨텍스트를 **가장 바깥**에서 연다(#1437 v1 5단계). 라우터마다 붙이면 새로 만든 라우터가

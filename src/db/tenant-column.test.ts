@@ -1,8 +1,8 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  SINGLE_TENANT_ID, SURROGATE_GEN_RE, TENANT_DEFAULT_EXPR,
-  buildTenantColumnDdl, isNaturalKey, rewritePartialUniqueDef,
+  IDENTITY_GLOBAL_DEFAULT_EXPR, SINGLE_TENANT_ID, SURROGATE_GEN_RE, TENANT_DEFAULT_EXPR,
+  buildIdentityGlobalFoldSql, buildIdentityGlobalPinDdl, buildTenantColumnDdl, isNaturalKey, rewritePartialUniqueDef,
 } from "./tenant-column.js";
 
 const G = (...pairs: string[]) => new Set(pairs);
@@ -160,4 +160,68 @@ test("★★ 재작성 제외 테이블(project_member 등)에 tenant_id 중재�
     }
   }
   assert.deepEqual([...new Set(bad)], [], `이 표들의 PK 는 (tenant_id, …) 로 재작성되지 않는다 — tenant_id 를 빼라: ${bad.join(", ")}`);
+});
+
+// ── ★★ 신원 전역 표(#1879) — 컬럼은 두되 값은 **상수로 못박는다** ──────────────
+// activate.ts 의 IDENTITY_GLOBAL_TABLES 머리말은 "컬럼은 남지만 정책이 없으면 불활성이다 — 무해한
+//  16바이트" 라고 적혀 있었다. **그 전제가 틀렸다.** 정책이 없어도 컬럼 기본값은 살아 있어서
+//  `current_setting('app.tenant_id')` 를 따라간다. PK 가 (tenant_id, id) 이므로 비-primary
+//  워크스페이스에서 들어온 INSERT 는 **같은 사람의 계정행을 하나 더 만든다**.
+// 실측(2026-08-27, dev.lvly.io): 개인 워크스페이스에서 온보딩 1막이 이름을 저장하자 org_member 에
+//  yoon 행이 둘이 됐고, 그때부터 audit() 의 스칼라 서브쿼리가 2행을 받아
+//  `more than one row returned by a subquery used as an expression` 로 **감사가 걸린 모든 org 쓰기가
+//  500** 이 됐다(쓰기는 이미 커밋된 뒤라 데이터는 들어가고 응답만 실패 — 가장 나쁜 조합).
+//  getMember() 도 tenant 조건이 없어 **아무 행이나** 돌려줬다.
+
+test("★★ 신원 전역 표의 tenant_id 기본값은 상수다 — 컨텍스트를 따라가면 계정이 갈라진다", () => {
+  assert.equal(IDENTITY_GLOBAL_DEFAULT_EXPR, `'${SINGLE_TENANT_ID}'::uuid`);
+  // 여기에 current_setting 이 들어가는 순간 이 표들은 다시 워크스페이스마다 갈라진다.
+  assert.ok(!/current_setting/.test(IDENTITY_GLOBAL_DEFAULT_EXPR), "신원 전역 표는 컨텍스트를 보면 안 된다");
+});
+
+test("★★ 못박기 DDL 은 기본값을 상수로 되돌린다(멱등)", () => {
+  const ddl = buildIdentityGlobalPinDdl(["org_member", "auth_token"]);
+  assert.equal(ddl.length, 2);
+  assert.match(ddl[0], /^ALTER TABLE "org_member" ALTER COLUMN tenant_id SET DEFAULT '00000000-0000-0000-0000-000000000000'::uuid$/);
+  assert.match(ddl[1], /^ALTER TABLE "auth_token" ALTER COLUMN tenant_id SET DEFAULT/);
+  for (const s of ddl) assert.ok(!/current_setting/.test(s), s);
+});
+
+test("★ 못박기도 안전하지 않은 식별자를 거부한다", () => {
+  assert.throws(() => buildIdentityGlobalPinDdl(['x"; DROP TABLE y; --']), /안전하지 않은/);
+});
+
+// ★★ 이미 갈라진 행은 **짝이 없을 때만** 옮긴다. 짝이 있으면(같은 사람이 두 워크스페이스에서 다른
+//  값을 쌓았을 수 있다) 자동 병합은 어느 쪽을 버릴지 정할 수 없다 — 옮기지 않고 보고만 한다.
+//  이 규칙 덕분에 이 마이그레이션은 **행을 지우지도 덮어쓰지도 않는다**.
+test("★★ 갈라진 행 접기 — 짝이 없는 것만 옮기고, 짝이 있으면 손대지 않는다", () => {
+  const sql = buildIdentityGlobalFoldSql("org_member", ["id"]);
+  assert.match(sql, /UPDATE "org_member"/);
+  assert.match(sql, /SET tenant_id = '00000000-0000-0000-0000-000000000000'::uuid/);
+  assert.match(sql, /WHERE x\.tenant_id <> '00000000-0000-0000-0000-000000000000'::uuid/);
+  // 짝(primary 에 같은 키가 이미 있는 행)은 제외 — 여기가 이 문장의 안전장치다.
+  assert.match(sql, /NOT EXISTS/);
+  assert.match(sql, /p\."id" = x\."id"/);
+  assert.ok(!/DELETE/i.test(sql), "접기는 절대 지우지 않는다");
+});
+
+test("★ 복합키도 전부 짝 조건에 들어간다 — 한 컬럼만 보면 남의 행을 덮는다", () => {
+  const sql = buildIdentityGlobalFoldSql("member_credential", ["member_id", "kind"]);
+  assert.match(sql, /p\."member_id" = x\."member_id"/);
+  assert.match(sql, /p\."kind" = x\."kind"/);
+});
+
+test("★ 키 컬럼이 없으면 접기 문장을 만들지 않는다 — 추측하지 않는다", () => {
+  assert.throws(() => buildIdentityGlobalFoldSql("org_member", []), /키 컬럼/);
+});
+
+// ── ★★ 감사 서브쿼리는 신원 전역 표를 **못박아** 읽는다 ─────────────────────
+// 이 한 줄이 없으면 갈라진 행 하나가 감사가 걸린 **모든 org 쓰기**를 500 으로 만든다.
+//  스칼라 서브쿼리는 2행을 받으면 그 자리에서 오류이고, 그 오류는 INSERT 뒤에 나서 되돌릴 수도 없다.
+test("★★ audit() 의 org_member 서브쿼리가 tenant 로 못박혀 있다", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync("src/org/store/audit.ts", "utf8");
+  const m = /FROM org_member m WHERE[^)]*/.exec(src);
+  assert.ok(m, "audit.ts 에서 org_member 서브쿼리를 못 찾았다 — 이 가드를 따라 옮길 것");
+  assert.match(m[0], /m\.tenant_id\s*=/, `스칼라 서브쿼리가 테넌트로 좁혀지지 않았다: ${m[0]}`);
 });

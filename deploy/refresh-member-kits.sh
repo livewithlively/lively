@@ -42,6 +42,11 @@ members="$(getent group box_members 2>/dev/null | awk -F: '{print $4}' | tr ',' 
 
 n=0
 failed=0
+# 번들에 없는 파일(매니페스트와 불일치) 총계 — **경고로 끝내지 않는다**.
+#  2026-08-27 사고가 정확히 이 모양이었다: 공유 모듈 하나가 번들에서 빠져 전 멤버의 훅이 죽었는데,
+#  리프레시는 «성공»으로 끝나 배포 로그에 아무 신호가 없었다. 부르는 쪽(update.sh)은 `|| warn` 이라
+#  **종료코드가 유일한 신호**다 — 누락이 하나라도 있으면 1로 알린다.
+missing_total=0
 for u in $members; do
   id "$u" >/dev/null 2>&1 || continue
   h="$(getent passwd "$u" | cut -d: -f6)"
@@ -81,11 +86,21 @@ EOF
     echo "  ✗ $u — 설치 검증 실패(이 멤버의 훅은 동작하지 않는다):"
     printf '%s\n' "$vout" | sed 's/^/      /'
   fi
-  [ "$gone" -eq 0 ] || echo "    ⚠ $u — 번들 누락 ${gone}건(위 목록)"
+  if [ "$gone" -ne 0 ]; then
+    echo "    ⚠ $u — 번들 누락 ${gone}건(위 목록)"
+    missing_total=$((missing_total + gone))
+  fi
   n=$((n + 1))
 done
 echo "✓ 격리 멤버 훅 러너 리프레시 완료(${n}명, 소스=$KIT)"
 if [ "$failed" -gt 0 ]; then
   echo "✗ 그중 ${failed}명은 설치 검증 실패 — 훅이 죽은 채로 세션이 뜬다(위 진단 참조)"
+  exit 1
+fi
+# ⚠ 검증을 통과했더라도 **번들↔매니페스트 불일치**는 그 자체로 실패다. verify 는 «심어진 트리가 import 를
+#  푸는가»를 보므로, 빠진 파일을 아무 훅도 아직 import 하지 않으면 조용히 통과한다 — 그 상태로 배포가
+#  «성공»하면 다음 훅이 그걸 import 하는 순간 전 멤버가 죽는다(2026-08-27). 여기서 끊는다.
+if [ "$missing_total" -gt 0 ]; then
+  echo "✗ 번들에 없는 설치 대상 ${missing_total}건 — 발행 번들과 kit-manifest 가 어긋났다(위 ⚠ 목록)"
   exit 1
 fi

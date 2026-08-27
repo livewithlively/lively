@@ -13,7 +13,8 @@ import { HttpError } from "../http-error.js";
 import { dirToProjectFolder } from "../project/project-fs.js";
 import { hiddenProjects, type HiddenProjects } from "../v6/visibility.js";
 import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
-import { listMembers, getRuntimeConfig } from "../org/store.js";
+import { listMembers } from "../org/store/members.js";
+import { getRuntimeConfig } from "../org/store/runtime-config.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 // 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
 import { sessionCacheEnv } from "../ops/build-cache.js";
 import { effectiveStoragePolicy } from "../org/policies/storage-policy.js";
@@ -28,10 +29,12 @@ import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
 import { autoTrustWorkspace } from "./session-create-guards.js";
-import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
+import { ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
+import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB 를 타는 자격 주입은 게이트웨이 능력이다
 // #1780 D3·D4 — 앱 세션: 앱 토큰 발급 + 세션 폴더에 앱 홈·앱 하네스 자산 물질화.
-import { mintAppToken } from "../apps/principal.js";
-import { appPluginArgs, writeAppHome, materializeAppAssets, materializePreparedAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
+import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
+//  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
+//   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
@@ -374,7 +377,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     // 공유 레포 dubious-ownership 방지(#522) — 자격 유무와 무관하게 항상(게이트웨이-소유 클론을 멤버 git 이 거부 않게). best-effort.
     await ensureGitSafeDirectory(osUser).catch((e) => console.warn("[terminal] safe.directory 설정 실패 — 세션은 계속:", (e as Error)?.message ?? e));
     const mid = ownerId(user);
-    if (mid) await materializeMemberGit(osUser, mid).catch((e) => console.warn(`[terminal] git 자격 materialize 실패(${mid}) — 세션은 계속:`, (e as Error)?.message ?? e));
+    //  #2165 — 노드엔 DB 가 없어 이 호출은 원래도 실패하고 아래 catch 로 넘어갔다(= 노드에선 죽은 코드).
+    //   그런데 정적 import 라 자격 금고·GitHub App 코드가 노드 번들에 실렸다. 이제 능력이 없으면 그냥 건너뛴다.
+    const materializeMemberGit = gatewayCapability("materializeMemberGit");
+    if (mid && materializeMemberGit) await materializeMemberGit(osUser, mid).catch((e) => console.warn(`[terminal] git 자격 materialize 실패(${mid}) — 세션은 계속:`, (e as Error)?.message ?? e));
   }
 
   // ── 앱 세션(#1780 D3·D4) — appId가 있으면 grant 검사 → 앱 토큰 발급 → cwd와 분리된 private app home에 자산 물질화. ──
@@ -400,6 +406,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     } else {
       const memberId = ownerId(user);
       // 중앙 실행은 종전대로 이 호스트에서 grant 를 재검하고 토큰·자산을 준비한다.
+      const mintAppToken = gatewayCapability("mintAppToken");
+      const materializeAppAssets = gatewayCapability("materializeAppAssets");
+      if (!mintAppToken || !materializeAppAssets) throw new HttpError(503, "앱 세션은 게이트웨이에서만 새로 띄울 수 있습니다");
       const { token } = await mintAppToken(memberId, appId, "app-spawn");
       const gwUrl = await gatewayUrl();
       await writeAppHome(sessionHome, token, gwUrl, writer);

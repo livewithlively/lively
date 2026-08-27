@@ -582,15 +582,52 @@ const graceHook = (id) => ({ id, src: decide({ decision: "deny", reason: id }) }
   try { rmSync(sentinel, { force: true }); } catch { /* 없으면 무시 */ }
   // 캐시된 SessionEnd 훅 1개 — 실행되면 sentinel 을 남긴다(SessionEnd stdout 은 미소비라 side-effect 로 관측).
   const src = `require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "ran");\n`;
-  const r = run("SessionEnd", [{ id: "se-cleanup", src }], {
-    token: "x", gatewayUrl: `http://127.0.0.1:${port}`, timeoutMs: 9000,
-  });
+  // ── 대조군: **닫힌 포트**(ECONNREFUSED) ────────────────────────────────────
+  //  같은 실패 경로(fetch 실패 → 캐시 폴백)를 타되 **기다리지 않는다** — 러너 주석의 실측대로
+  //  "ECONNREFUSED 는 ~20ms 즉시실패". 그래서 두 실행의 차이가 곧 **네트워크를 기다린 시간**이고,
+  //  부하는 양쪽에 똑같이 얹히므로 그 차이에서 상쇄된다.
+  //
+  //  ⚠ 왜 총 경과시간(elapsed<1500)을 직접 안 재나 — 그게 이 테스트를 플레이크로 만들었다.
+  //   실측 2026-08-27: 8병렬 × 3라운드에서 **24회 중 7회(29%) 실패**, 관측 1531~2052ms.
+  //   전부 상한을 살짝 넘긴 것이고 원인은 코드가 아니라 **부하**다(SessionEnd 예산 800ms + 러너 오버헤드).
+  //   상한을 그냥 올리면 사양이 약해지고, -j 를 낮추면 러너 방침("상한을 부하 내성 있게 고쳐라")에 어긋난다.
+  //   그래서 **재는 대상을 바꾼다** — 이 테스트가 정말 지켜야 할 것은 «러너가 네트워크를 기다리지 않는다» 이고,
+  //   델타는 그것을 부하와 무관하게 잰다.
+  const closed = createServer(() => {});
+  await new Promise((res) => closed.listen(0, "127.0.0.1", res));
+  const deadPort = closed.address().port;
+  await new Promise((res) => closed.close(res));           // 포트를 비워 ECONNREFUSED 를 보장
+  //  ⚠ 각 변을 **2회 재고 더 빠른 쪽**을 쓴다. 델타는 평균 부하를 상쇄하지만 **분산**은 못 지운다 —
+  //   실측(8병렬): 델타가 201~1187ms 로 흔들려 상한 1500 에 여유가 313ms 밖에 없었다. min-of-2 는 그
+  //   위쪽 꼬리를 깎는다. 회귀(예산 3000)는 두 번 다 느리므로 min 을 써도 그대로 잡힌다.
+  const fastest = (label, gw) => {
+    let best = null;
+    for (let i = 0; i < 2; i++) {
+      const x = run("SessionEnd", [{ id: "se-cleanup", src }], { token: "x", gatewayUrl: gw, timeoutMs: 9000 });
+      if (!best || x.elapsed < best.elapsed) best = x;
+      if (x.status !== 0) return x;                     // 비정상 종료는 즉시 드러낸다(감추지 않는다)
+    }
+    return best;
+  };
+  const base = fastest("즉시실패", `http://127.0.0.1:${deadPort}`);
+  try { rmSync(sentinel, { force: true }); } catch { /* 없으면 무시 */ }
+
+  const r = fastest("무응답", `http://127.0.0.1:${port}`);
   hang.close();
-  // J1: 도달불가 게이트웨이여도 러너가 하네스 1500ms 취소창 안에 exit 0 — 이게 곧 'Hook cancelled 안 뜬다'의 사양.
-  //  (수정 전이면 fetch 가 3000ms 매달려 elapsed>3000 → 이 단언이 red.)
-  r.status === 0 && r.elapsed < 1500
-    ? ok(`J1 SessionEnd 오프라인이 하네스 1500ms 취소창 안에 exit 0 (${r.elapsed}ms)`)
-    : bad("J1 SessionEnd 1500ms 취소창", `${dbg(r)} ms=${r.elapsed}`);
+  // J1: 도달불가(무응답) 게이트웨이가 **하네스 1500ms 취소창을 넘게 만들지 않는다**.
+  //  1500 은 하네스 계약이다(Claude Code 2.1.215 실측 getSessionEndHookTimeoutMs 바닥값) — 그래서 러너의
+  //  SessionEnd fetch 예산이 800ms 로 잘려 있다(FETCH_MS_SESSIONEND). 회귀는 그 예산이 FETCH_MS(3000ms)로
+  //  돌아가는 것이고, 그러면 델타가 ~3000 이 돼 여기서 잡힌다.
+  const delta = r.elapsed - base.elapsed;
+  // 배선 확인 — 대조군이 정상 종료했어야 델타가 뜻을 갖는다(둘 다 죽으면 델타 0으로 조용히 통과한다).
+  if (base.status !== 0) {
+    bad("J1 SessionEnd 취소창(대조군)", `대조군(ECONNREFUSED)이 exit ${base.status} — 델타가 vacuous 하다 ${dbg(base)}`);
+  } else if (r.status === 0 && delta < 1500) {
+    ok(`J1 무응답 게이트웨이가 1500ms 취소창을 넘기지 않는다 (델타 ${delta}ms = 무응답 ${r.elapsed} − 즉시실패 ${base.elapsed})`);
+  } else {
+    bad("J1 SessionEnd 1500ms 취소창",
+      `${dbg(r)} 델타=${delta}ms (무응답 ${r.elapsed}ms − 즉시실패 ${base.elapsed}ms) — 러너가 네트워크를 기다린다`);
+  }
   // J2: 예산에서 손을 뗐어도 캐시된 SessionEnd 훅은 여전히 돌았다(오프라인 last-known-good 기능 보존).
   existsSync(sentinel)
     ? ok("J2 오프라인에서도 캐시된 SessionEnd 훅은 실행된다(기능 보존)")

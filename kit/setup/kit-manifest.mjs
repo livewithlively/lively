@@ -16,7 +16,7 @@
 //
 // ⚠ 여기는 **훅 런타임만** 담는다. ~/.lively/work.mjs · lively CLI(lib/lively.mjs 등)는 설치 단위가
 //  달라 user-install 이 따로 다룬다 — 이 매니페스트를 "멤버 홈 전체 목록"으로 오해하지 말 것.
-import { readdirSync } from "node:fs";
+import { readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -84,9 +84,31 @@ export function hookSourceFiles(kitRoot) {
     .sort();
 }
 
+// ── "이 파일이 직접 실행됐나" 판정 (공유) ───────────────────────────────────
+//  ⚠ **심링크를 반드시 푼다.** `path.resolve` 는 어휘적 정규화라 심링크를 남기는데, `import.meta.url` 은
+//   Node 가 실제로 로드한 **realpath** 다. 심링크 경로로 부르면 두 값이 어긋나 CLI 블록이 통째로 안 돌고
+//   **출력 0줄에 exit 0** 이 된다 — 실패가 아니라 침묵이라 부르는 쪽은 «결과가 비었다»로만 본다.
+//
+//  이게 왜 사고였나: 배포 레이아웃은 심링크 투성이다(`current → <color> → releases/<id>`, deploy-release.sh)
+//   이고 bash 의 `cd`+`pwd` 는 심링크를 **보존**한다. 그래서 `/opt/lively/current/deploy` 에서 부르면
+//   ① kit-manifest --install-plan 이 빈 목록을 내 refresh-member-kits.sh 가 중단하고
+//   ② verify-kit-install 은 **검증을 통째로 건너뛰고 exit 0** 을 내 «설치 검증 통과» 로 오독된다.
+//   ②가 특히 나쁘다 — 2026-08-27 «멤버 훅 전멸» 을 잡으라고 만든 안전망이 그 자체로 무음이 된다.
+//
+//  ⚠ 새 CLI 진입점을 만들 땐 이 함수를 써라. 손으로 `pathToFileURL(resolve(argv[1]))` 를 비교하면 같은
+//   침묵이 재생산된다(회귀 가드: kit/setup/kit-manifest.test.mjs 의 M7).
+export function isDirectRun(importMetaUrl) {
+  if (!process.argv[1]) return false;
+  const abs = resolve(process.argv[1]);
+  // realpathSync 는 경로가 없으면 throw — 그땐 어휘 경로로 떨어진다(판정만 못할 뿐 안전).
+  let href;
+  try { href = pathToFileURL(realpathSync(abs)).href; } catch { href = pathToFileURL(abs).href; }
+  return href === importMetaUrl;
+}
+
 // ── CLI: 셸(deploy/refresh-member-kits.sh)이 목록을 읽어 가는 창구 ───────────
 //  출력은 `<절대 src>\t<~/.lively 기준 dest>` TSV — 셸에서 while read 로 그대로 돈다.
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+if (isDirectRun(import.meta.url)) {
   const args = process.argv.slice(2);
   if (!args.includes("--install-plan")) {
     console.error("사용: node kit/setup/kit-manifest.mjs --install-plan [--kit-root <dir>]");

@@ -4,7 +4,8 @@
 //  org_node.token_hash 직접 매칭 + 토큰 미회수 + 소유 멤버 active 를 모두 요구한다(F7 blast radius).
 import crypto from "node:crypto";
 import { itemsPool, withTx } from "../db/client.js";
-import { mintToken, revokeToken, getMember } from "../org/store.js";
+import { mintToken, revokeToken } from "../org/store/tokens.js";
+import { getMember } from "../org/store/members.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 import { HttpError } from "../http-error.js";
 import type { KeepAwakeStatus } from "./keep-awake.js";
 import { LINK_LOG_KEEP } from "../org/schema/node-link-log.js";   // #1849 — 노드당 보관 이벤트 상한(단일 출처)
