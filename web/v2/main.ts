@@ -761,7 +761,12 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
     }
     const t = sessText(s, projName(data, s.projectId));
     const title = t.main || t.sub || String(s.raw?.harness || '세션');
-    rememberSessName(sid, title);   // 목록에서 사라진 뒤에도 이 이름을 쓴다
+    //  ★ **그 세션의 이름일 때만** 기억한다(#2234 — #2028 규칙의 나머지 반쪽).
+    //   sessText 는 이름이 없으면(라벨이 프로젝트명 되풀이거나 기계 이름이면) 하네스의 pane 제목을 그 자리에
+    //   빌려 온다. 그 값을 기억에 넣으면 다음 콜드 스타트마다 그게 이름으로 되살아난다 — 실측 2026-08-27:
+    //   좌측 목록에 「작성」·「구현 전 논의 사항」·「Session names loading incorrectly」(하네스가 지은 영어 제목)
+    //   가 세션 이름 자리에 떠 있었다. 화면에 쓰는 건 그대로 두되, **굳히지는 않는다**.
+    if (t.named) rememberSessName(sid, title);   // 목록에서 사라진 뒤에도 이 이름을 쓴다
     // 아이콘 색이 될 상태 — 사이드바 점과 같은 판정(dotCls): 도는 중·확인 필요·끝남만 색을 갖는다.
     return { title, noAside: !SOLO, state: dotCls(s.stateKey) };
   }
