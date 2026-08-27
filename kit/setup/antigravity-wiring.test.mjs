@@ -43,6 +43,9 @@ const REAL_BEFORE = realFingerprint();
 
 // ── 발행물 번들(publish() 배치 최소 재현) ────────────────────────────────────
 const { HOOK_SCRIPTS: HOOKS } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")).href);
+// 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
+//  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
+const { SETUP_FILES } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
 function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowledge_get"], withAdapter = true } = {}) {
   rmSync(BUNDLE, { recursive: true, force: true });
   mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
@@ -53,7 +56,7 @@ function makeBundle({ autoApprove = ["mcp__lively__whoami", "mcp__lively__knowle
     if (!withAdapter && h === "antigravity-adapter.mjs") continue;   // [AW10] 구버전 번들 흉내
     cpSync(join(KIT, "hooks", h), join(BUNDLE, ".claude", "hooks", h));
   }
-  for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
+  for (const f of SETUP_FILES) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
   for (const f of ["lively.mjs", "lively-mcp-gateway.mjs"]) cpSync(join(KIT, "cli", f), join(BUNDLE, "cli", f));
   writeFileSync(join(BUNDLE, ".lively-org-name"), "테스트조직\n");
   writeFileSync(join(BUNDLE, ".lively", "auto-approve.json"), JSON.stringify({ allow: autoApprove }));

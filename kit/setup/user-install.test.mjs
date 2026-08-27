@@ -164,7 +164,15 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
   const KIT = join(HERE, "..");                                     // kit
   const installSrc = readFileSync(join(HERE, "user-install.mjs"), "utf8");
   const buildCtxSrc = readFileSync(join(KIT, "generator", "build-context.mjs"), "utf8");
-  const cliMods = readdirSync(join(KIT, "cli")).filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs"));
+  // ⚠ cli/host-effects.mjs 는 예외다 — 이건 발행되는 모듈이 아니라 **소스트리 전용 포트**로,
+  //  `../setup/host-effects.mjs` 를 다시 export 할 뿐이다. 설치 자리에서 cli 모듈들이 쓰는
+  //  `./host-effects.mjs` 는 installCli 가 **setup/host-effects.mjs 를 lib/ 로 복사**해 채운다
+  //  (kit-manifest.LIB_FILES 와 같은 목적지). 즉 발행 목록에 있으면 오히려 틀리다.
+  //  종전엔 이 예외 없이도 통과했는데, build-context 소스에 우연히 "host-effects.mjs" 문자열이
+  //  섞여 있어서였다(단순 substring 검사) — 그 문자열이 사라지자 드러난 자리다.
+  const CLI_SOURCE_ONLY = new Set(["host-effects.mjs"]);
+  const cliMods = readdirSync(join(KIT, "cli"))
+    .filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs") && !CLI_SOURCE_ONLY.has(f));
   const missing = [];
   for (const m of cliMods) {
     if (!installSrc.includes(m)) missing.push(`user-install(installCli): ${m}`);

@@ -105,6 +105,9 @@ const PORT = await new Promise((resolve, reject) => {
 
 // ── 샌드박스 구성: 발행 번들 재현 → user-install --harness grok → 러너를 캡처 스텁으로 치환 ──
 const { HOOK_SCRIPTS } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")).href);
+// 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
+//  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
+const { SETUP_FILES } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
 function setup() {
   mkdirSync(join(PROJ), { recursive: true });
   mkdirSync(CAP, { recursive: true }); mkdirSync(REQLOG, { recursive: true });
@@ -116,7 +119,7 @@ function setup() {
   mkdirSync(join(BUNDLE, "setup"), { recursive: true });
   mkdirSync(join(BUNDLE, "cli"), { recursive: true });
   for (const h of HOOK_SCRIPTS) cpSync(join(KIT, "hooks", h), join(BUNDLE, ".claude", "hooks", h));
-  for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
+  for (const f of SETUP_FILES) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
   for (const f of ["lively.mjs", "lively-mcp-gateway.mjs"]) cpSync(join(KIT, "cli", f), join(BUNDLE, "cli", f));
   writeFileSync(join(BUNDLE, ".lively-org-name"), "테스트조직\n");
   writeFileSync(join(BUNDLE, ".lively", "auto-approve.json"), JSON.stringify({ allow: ["mcp__lively__whoami"] }));
