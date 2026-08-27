@@ -31,6 +31,41 @@ export const SINGLE_TENANT_ID = "00000000-0000-0000-0000-000000000000";
 export const TENANT_DEFAULT_EXPR =
   `COALESCE(current_setting('app.tenant_id', true), '${SINGLE_TENANT_ID}')::uuid`;
 
+/**
+ * 신원·전역 표(#1750) — 컬럼은 두되 **값을 상수로 못박는다**.
+ *
+ * 계정은 박스에 하나다(사람·세션·토큰·자격은 워크스페이스를 넘나든다). 매니지드 쪽 정책 계층은
+ *  이 표들에 RLS 를 걸지 않는다(org/tenancy/activate.ts) — 거기 머리말은 오래도록 "컬럼은 남지만
+ *  정책이 없으면 불활성이다 — 무해한 16바이트" 라고 적혀 있었다. **그 전제가 틀렸다.**
+ *
+ * 정책이 없어도 **기본값은 살아 있다**. TENANT_DEFAULT_EXPR 은 `current_setting('app.tenant_id')` 를
+ *  따라가므로, 비-primary 워크스페이스 컨텍스트에서 들어온 INSERT 는 PK (tenant_id, id) 아래
+ *  **같은 사람의 행을 하나 더** 만든다. 그러면
+ *   · audit() 의 스칼라 서브쿼리가 2행을 받아 `more than one row returned by a subquery` —
+ *     감사가 걸린 **모든 org 쓰기가 500**. 오류는 INSERT **뒤에** 나므로 데이터는 들어가고 응답만 실패한다.
+ *   · getMember() 류의 tenant 없는 조회가 **아무 행이나** 돌려준다.
+ *  실측 2026-08-27 dev.lvly.io(#1879): 개인 워크스페이스에서 온보딩 1막이 이름을 저장한 것이 방아쇠였다.
+ *
+ * 그래서 이 표들의 기본값만 상수로 되돌린다 — 그러면 위 머리말이 **비로소 참이 된다**.
+ * ⚠ 늘리는 것은 "이 표엔 워크스페이스 사유 데이터가 절대 없다"는 판단이다.
+ */
+export const IDENTITY_GLOBAL_TABLES: ReadonlySet<string> = new Set([
+  // 사람과 그 자격 — 계정은 박스에 하나, 워크스페이스는 접근 명부(gw_workspace_member)로 가른다.
+  "org_member", "web_session", "auth_token", "member_credential", "member_secret", "git_credential",
+  // 인증 진행중 상태 — 로그인 플로우는 워크스페이스 이전에 일어난다.
+  "pending_device_auth", "pending_oidc_auth", "pending_oidc_link", "pending_session_mint",
+  // OAuth AS(이 게이트웨이가 인가서버) — 클라이언트 등록·코드·리프레시는 배포 전체의 사실.
+  "oauth_client", "oauth_auth_code", "oauth_auth_request", "oauth_refresh",
+  // 실행 노드 — 기계는 박스에 붙는다(어느 워크스페이스의 세션이든 같은 노드에서 뜰 수 있다).
+  "org_node",
+  // ground-truth 레지스트리 — 스키마 초기화(소유자)가 시드하는 정의 표. 테넌트로 가르면
+  //  secondary 가 빈 레지스트리를 본다(시드는 primary 에만 떨어지므로).
+  "kind_registry", "data_source",
+]);
+
+/** 신원 전역 표의 기본값 — 컨텍스트를 **보지 않는다**. 이게 상수라야 계정이 하나로 남는다. */
+export const IDENTITY_GLOBAL_DEFAULT_EXPR = `'${SINGLE_TENANT_ID}'::uuid`;
+
 /** 검사·변경에서 제외 — 테넌트 축이 없는 것이 정상인 테이블. */
 export const TENANT_COLUMN_EXEMPT: ReadonlySet<string> = new Set([
   "schema_migrations",
@@ -135,6 +170,33 @@ export function buildTenantColumnDdl(plan: TenantColumnPlan): string[] {
   return ddl;
 }
 
+// ── 신원 전역 표 못박기(#1879) ──────────────────────────────────────────────
+
+/**
+ * 기본값을 상수로 되돌린다(멱등). `ensureTenantColumn` 은 컬럼이 **없는** 표에만 손대므로
+ *  이미 붙어 있는 컬럼의 기본값은 여기서 따로 고친다(선례: org_runtime_config.ui_mode SET DEFAULT).
+ */
+export function buildIdentityGlobalPinDdl(tables: readonly string[]): string[] {
+  return tables.map((t) => `ALTER TABLE ${qi(t)} ALTER COLUMN tenant_id SET DEFAULT ${IDENTITY_GLOBAL_DEFAULT_EXPR}`);
+}
+
+/**
+ * 이미 갈라진 행을 primary 로 접는다 — **짝이 없는 것만**.
+ *
+ * 짝이 있으면(primary 에 같은 키가 이미 있으면) 두 행 중 어느 쪽이 맞는지는 사람만 안다:
+ *  워크스페이스에서 쌓은 값이 진짜일 수도, primary 가 진짜일 수도 있다. 자동으로 고르면 데이터를
+ *  잃는다. 그래서 **옮기지 않고 남겨 두고 보고만 한다** — 이 문장은 행을 지우지도 덮어쓰지도 않는다.
+ *  남은 행이 다시 500 을 내지 않도록 읽는 쪽(audit)이 테넌트로 못박혀 있다.
+ */
+export function buildIdentityGlobalFoldSql(table: string, keyColumns: readonly string[]): string {
+  if (!keyColumns.length) throw new Error(`${table}: 키 컬럼을 모르면 접기 문장을 만들 수 없다`);
+  const tbl = qi(table);
+  const match = keyColumns.map((c) => `p.${qi(c)} = x.${qi(c)}`).join(" AND ");
+  return `UPDATE ${tbl} x SET tenant_id = ${IDENTITY_GLOBAL_DEFAULT_EXPR}
+     WHERE x.tenant_id <> ${IDENTITY_GLOBAL_DEFAULT_EXPR}
+       AND NOT EXISTS (SELECT 1 FROM ${tbl} p WHERE p.tenant_id = ${IDENTITY_GLOBAL_DEFAULT_EXPR} AND ${match})`;
+}
+
 // ── 카탈로그 ────────────────────────────────────────────────────────────────
 // ⚠ `pg_constraint.conindid` 는 **FK 도 가리킨다** — contype 을 p·u 로 좁히지 않으면 PK 이름 자리에
 //  FK 이름이 들어가 `ADD CONSTRAINT <fk이름> PRIMARY KEY` 라는 헛소리가 생성된다(실측으로 밟았다).
@@ -182,6 +244,44 @@ const SQL_UNIQUE = `SELECT c.relname::text tbl, ic.relname::text idx, i.indispri
  * ⚠ 전 과정을 **한 트랜잭션**에서 돌린다 — 중간에 끊기면 UNIQUE 없는 구간이 생기고, 그때 들어온
  *  중복 행은 나중에 되돌릴 수 없다(제약을 다시 걸 수 없게 된다).
  */
+/** 신원 전역 표의 현재 모습 — tenant_id 컬럼이 있나, PK 는 무엇인가. */
+const SQL_IDENTITY_GLOBAL = `SELECT c.relname::text t,
+    (SELECT array_agg(a.attname::text ORDER BY x.ord)
+       FROM pg_index i, unnest(i.indkey::int2[]) WITH ORDINALITY x(k,ord)
+       JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=x.k
+      WHERE i.indrelid=c.oid AND i.indisprimary AND a.attname<>'tenant_id') pk
+  FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])
+    AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnum>0 AND NOT a.attisdropped)`;
+
+/**
+ * 신원 전역 표의 tenant_id 를 primary 로 못박고, 이미 갈라진 행을 접는다(#1879).
+ *
+ * `ensureTenantColumn()` **뒤에** 돈다 — 컬럼이 붙은 다음이라야 기본값을 고칠 수 있다.
+ *  멱등이고, 접기는 짝이 없는 행만 옮긴다(지우지도 덮어쓰지도 않는다).
+ *  짝이 남은 표는 **경고로 알린다** — 사람이 어느 쪽을 남길지 정해야 하는 자리다.
+ */
+export async function pinIdentityGlobalTenant(): Promise<{ pinned: number; folded: number; conflicts: string[] }> {
+  const names = [...IDENTITY_GLOBAL_TABLES];
+  const rows = (await itemsPool.query(SQL_IDENTITY_GLOBAL, [names])).rows as Array<{ t: string; pk: string[] | null }>;
+  if (!rows.length) return { pinned: 0, folded: 0, conflicts: [] };
+
+  for (const sql of buildIdentityGlobalPinDdl(rows.map((r) => r.t))) await itemsPool.query(sql);
+
+  let folded = 0;
+  const conflicts: string[] = [];
+  for (const r of rows) {
+    const pk = (r.pk ?? []).filter(Boolean);
+    // PK 를 못 읽었으면 접지 않는다 — 어떤 행이 '같은 행'인지 모르는 채로 옮기면 남의 행을 덮는다.
+    if (!pk.length) { conflicts.push(`${r.t}(PK 불명 — 접기 건너뜀)`); continue; }
+    folded += (await itemsPool.query(buildIdentityGlobalFoldSql(r.t, pk))).rowCount ?? 0;
+    const left = (await itemsPool.query(
+      `SELECT count(*)::int n FROM ${qi(r.t)} WHERE tenant_id <> ${IDENTITY_GLOBAL_DEFAULT_EXPR}`)).rows[0]?.n ?? 0;
+    if (left > 0) conflicts.push(`${r.t}(${left}행 — primary 에 같은 키가 이미 있다)`);
+  }
+  return { pinned: rows.length, folded, conflicts };
+}
+
 export async function ensureTenantColumn(): Promise<{ tables: number; ddl: number }> {
   const client = await itemsPool.connect();
   try {

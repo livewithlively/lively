@@ -12,7 +12,7 @@ import { initOrgSchema } from "../org/schema.js";
 import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initActivitySchema } from "../activity/schema.js";
 import { initV6Schema } from "../v6/schema.js";
-import { ensureTenantColumn } from "../db/tenant-column.js";
+import { ensureTenantColumn, pinIdentityGlobalTenant } from "../db/tenant-column.js";
 import { logger } from "../log.js";
 
 // 직렬 체인 — 멱등(부팅마다·단독 CLI 신규 DB 에서도 성립). quiet: run-sync CLI 는 종전대로 무로그(부팅 로그는 유지).
@@ -49,4 +49,14 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
   //  단일 테넌트에서는 값이 상수라 동작이 달라지지 않는다 — SQL 방언을 하나로 유지하기 위한 것이다.
   const tc = await ensureTenantColumn();
   if (tc.ddl) note(`tenant column ready (테이블 ${tc.tables} · DDL ${tc.ddl})`);
+  // #1879 — 신원 전역 표(사람·세션·토큰·자격)는 컬럼은 두되 값을 primary 로 **못박는다**. 기본값이
+  //  컨텍스트를 따라가면 정책이 없어도 계정행이 워크스페이스마다 갈라진다(그러면 감사 서브쿼리가
+  //  2행을 받아 org 쓰기가 전부 500 이 되고, tenant 없는 조회가 아무 행이나 돌려준다).
+  //  ensureTenantColumn **뒤**여야 한다 — 컬럼이 붙은 다음이라야 기본값을 고칠 수 있다.
+  const ig = await pinIdentityGlobalTenant();
+  if (ig.folded) note(`identity-global tenant pinned (${ig.pinned}표 · ${ig.folded}행 primary 로 접음)`);
+  if (ig.conflicts.length) {
+    // 짝이 있어 접지 못한 행 — 자동으로 고르면 데이터를 잃는다. 사람이 정해야 한다.
+    logger.warn(`[schema] 신원 전역 표에 워크스페이스로 갈라진 행이 남아 있습니다 — ${ig.conflicts.join(" · ")}`);
+  }
 }
