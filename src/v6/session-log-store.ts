@@ -300,8 +300,18 @@ export async function listSessionsForOwner(owner: string, limit = 200, workspace
 
 // 프로젝트 세션 목록(#905 C1 슬⑤b) — 이 프로젝트에 **한 번이라도** 바인딩된 세션(시간구간 전체). 프로젝트 상세 탭용.
 //  인가는 라우트에서(프로젝트 멤버). (node,session) 중복 제거 후 마지막활동 순.
-export async function listSessionsForProject(projectId: number, limit = 200): Promise<SessionListRow[]> {
-  if (!projectId) return [];
+/**
+ * 이 프로젝트에 바인딩된 중앙 기록 세션 — **내가 볼 수 있는 것만**(#1876 S2).
+ *
+ * ⚠ 종전엔 «프로젝트 멤버면 그 프로젝트의 세션 기록 목록 전부» 였다. 라우트 게이트(isProjectMember)를
+ *  통과한 사람에게 남의 세션 제목·시각이 통째로 나갔다 — 세션이 프라이빗이면 그 **존재와 제목**도
+ *  프라이빗이어야 한다(D1). 그래서 술어를 목록·입장과 같은 축(소유자 + 명시 초대)으로 좁힌다.
+ *
+ * 초대는 박스 세션 축(`org_session_state.invites`)에 있고 이 표의 키는 대화 uuid 라, `org_session_conv`
+ *  로 잇는다(양쪽 키 모두 대조 — 노드 세션·구 경로는 대화 uuid 가 곧 박스 id 인 경우가 있다).
+ */
+export async function listSessionsForProject(projectId: number, viewer: string, limit = 200): Promise<SessionListRow[]> {
+  if (!projectId || !viewer) return [];
   const r = await itemsPool.query(
     `SELECT * FROM (
        SELECT DISTINCT ON (s.node_id, s.session_id) ${SESSION_LIST_COLS}
@@ -310,9 +320,14 @@ export async function listSessionsForProject(projectId: number, limit = 200): Pr
          JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
          LEFT JOIN org_member m ON m.id = s.owner
         WHERE l.bytes > 0 AND s.parent_session_id IS NULL
+          AND (s.owner = $3 OR EXISTS(
+                SELECT 1 FROM org_session_state st
+                 WHERE (st.id = s.session_id
+                        OR st.id IN (SELECT box_id FROM org_session_conv WHERE conv_uuid = s.session_id))
+                   AND st.invites @> to_jsonb(ARRAY[$3::text])))
         ORDER BY s.node_id, s.session_id
      ) t ORDER BY t.last_seen DESC LIMIT $2`,
-    [projectId, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
+    [projectId, Math.min(Math.max(Number(limit) || 200, 1), 500), viewer]);
   return r.rows.map(mapSessionRow);
 }
 

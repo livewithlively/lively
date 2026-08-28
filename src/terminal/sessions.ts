@@ -771,23 +771,28 @@ async function ownerMeta(id: string): Promise<OwnerMeta | null> {
   if (!owner) return null; // box 세션이지만 메타 없음(우리 것 아님) → 거부
   return { owner, invites: parseInvites(await getOpt(id, "@box_invites")) };
 }
-// attach·파일접근 = 소유자 OR 초대된 멤버. 프로젝트 폴더 세션은 로그인한 누구나(어사이니 무관, #452). kill/edit = 소유자만.
+/**
+ * attach·파일접근·프롬프트 = **소유자 OR 초대된 멤버.** kill/edit 은 소유자만(assertManage).
+ *
+ * ★ #1876 S1 — 목록(`canSeeSession`)과 **같은 술어**(`sessionVisible`)를 쓴다. 종전엔 두 곳이 각자
+ *  구현해 놓고 둘 다 «프로젝트 폴더면 전원» 분기를 갖고 있었다. 그 예외는 폐기됐다(장원준 2026-08-25 D1).
+ *  두 벌로 갈리면 "목록엔 없는데 링크로는 들어가지는" 상태가 생긴다 — 그게 이 기능의 원래 신고였다.
+ *  구조 테스트가 두 자리가 같은 함수를 부르는지 잠근다(session-privacy-invite-only.test.ts).
+ */
 export async function canAttach(id: string, userId: string): Promise<boolean> {
   const m = await ownerMeta(id);
   if (!m) return false;
-  // 프로젝트 폴더 세션은 '공동 세션' — 어사이니/멤버십과 무관하게 로그인한 누구나 입장·조작·파일접근 가능(#452).
-  //  단 공개범위가 걸린 프로젝트라면 그 대상만(#1291) — 입장하면 그 프로젝트의 파일·대화를 그대로 보게 되므로
-  //  목록에서만 감추는 건 의미가 없다. 판정 불가(DB 다운)면 거부한다 — 여기서 열어주면 잠금이 뚫린다.
+  if (m.owner === userId) return true;                        // 소유자 — 폴더를 볼 것도 없다
+  if (!m.invites.includes(userId)) return false;              // ★ 초대받지 않았으면 끝(프로젝트 예외 없음)
+  //  초대자에게만 #1291 추가 제약을 건다 — 입장하면 그 프로젝트의 파일·대화가 그대로 흐르므로
+  //  메타만 잠그고 세션을 열어두면 잠금이 무의미하다. 판정 불가(DB 다운)면 거부한다.
   const folder = dirToProjectFolder(await resolveSessionDir(id, () => sessionDir(id)));
-  if (folder) {
-    try {
-      const hidden = await hiddenProjects(userId);
-      const pid = Number(await getOpt(id, "@box_project")) || 0;
-      return !(hidden.ids.has(pid) || hidden.folders.has(folder));
-    } catch { return false; }
-  }
-  // 개인(비프로젝트) 세션: 소유자 또는 초대된 멤버만.
-  return m.owner === userId || m.invites.includes(userId);
+  if (!folder) return true;
+  try {
+    const hidden = await hiddenProjects(userId);
+    const pid = Number(await getOpt(id, "@box_project")) || 0;
+    return !(hidden.ids.has(pid) || hidden.folders.has(folder));
+  } catch { return false; }
 }
 async function assertManage(user: LivelyUser, id: string): Promise<void> {
   const m = await ownerMeta(id);

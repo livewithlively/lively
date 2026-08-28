@@ -225,7 +225,17 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   //  — 경로를 하드코딩하면 박스마다 base 가 달라(고객사 A=/srv/lively/shared, dev=~/.openclaw/...) 헛통과한다.
   const proj = path.join(PROJECT_SHARED_BASE, "project", "714", "repo");
   const priv = path.join(os.homedir(), "box", "work");
-  ok2(canSeeSession({ dir: proj, owner: "mike", invites: [] }, "haru"), "프로젝트 폴더 세션은 남이어도 보인다(#452)");
+  //  ★ 2026-08-28 뒤집힘(#1876 D1, 장원준) — 종전 단언은 "프로젝트 폴더 세션은 남이어도 보인다(#452)" 였다.
+  //   그 예외가 폐기됐다: 세션은 **소유자 + 명시 초대만**. 초대 창구는 세션 문패의 「공유」(#2116)다.
+  ok2(!canSeeSession({ dir: proj, owner: "mike", invites: [] }, "haru"), "★프로젝트 폴더 세션도 초대 없으면 안 보인다(#1876 D1)");
+  //  ⚠ 프로젝트 세션의 **초대자**는 #1291 공개범위까지 통과해야 한다 — 그래서 판정 재료(hidden)가 필요하고,
+  //   없으면 닫는다(fail-closed). 운영 호출부는 언제나 넘긴다(sessions.ts:107·266). 소유자는 이 제약을 안 탄다.
+  const noneHidden = { ids: new Set<number>(), folders: new Set<string>() };
+  ok2(canSeeSession({ dir: proj, owner: "mike", invites: ["haru"] }, "haru", noneHidden), "프로젝트 세션도 초대하면 보인다");
+  ok2(!canSeeSession({ dir: proj, owner: "mike", invites: ["haru"] }, "haru"), "★판정 재료가 없으면 초대자도 닫는다(fail-closed)");
+  ok2(!canSeeSession({ dir: proj, owner: "mike", invites: ["haru"], projectId: 714 }, "haru",
+    { ids: new Set([714]), folders: new Set<string>() }), "★감춰진 프로젝트면 초대받았어도 안 보인다(#1291)");
+  ok2(canSeeSession({ dir: proj, owner: "mike", invites: [] }, "mike"), "프로젝트 세션은 소유자에게 보인다");
   ok2(!canSeeSession({ dir: priv, owner: "mike", invites: [] }, "haru"), "개인 세션은 남에게 안 보인다");
   ok2(canSeeSession({ dir: priv, owner: "mike", invites: [] }, "mike"), "개인 세션은 소유자에게 보인다");
   ok2(canSeeSession({ dir: priv, owner: "mike", invites: ["haru"] }, "haru"), "초대된 사람에게 보인다");

@@ -37,6 +37,29 @@ export async function sessionBoundToMemberProject(sessionId: string, memberId: s
   return (r.rowCount ?? 0) > 0;
 }
 
+/**
+ * 이 사람이 그 세션에 **초대돼 있나** — 대화록 열람 게이트의 술어(#1876 S2).
+ *
+ * 종전엔 대화록만 «그 세션이 붙은 프로젝트의 멤버»(sessionBoundToMemberProject)로 판정해서, 목록·입장과
+ *  **다른 술어**를 썼다. 그래서 같은 세션이 "들어가지는데 기록은 안 보이거나" 그 반대가 됐다 —
+ *  실측(2026-08-28): `yoon` 이 `jang` 의 세션에 입장은 되는데(canAttach 200) 대화록은 403 이었다.
+ *  #1876 D1 이 세 축을 하나로 모았으므로 여기도 초대 축으로 옮긴다.
+ *
+ * ⚠ 트랜스크립트의 키는 **대화 uuid** 이고 초대는 **박스 세션** 축에 있다 — `org_session_conv` 가 그 둘을 잇는다.
+ *  죽은 세션도 판정된다: 초대 목록이 `org_session_state.invites` 에 미러돼 있어 tmux 가 없어도 남는다.
+ *  ⚠ 대화 uuid 를 박스 id 로 그대로 넣는 호출자도 있으므로(노드 세션·구 경로) **양쪽 키로 찾는다**.
+ */
+export async function sessionInvitesMember(sessionId: string, memberId: string): Promise<boolean> {
+  if (!sessionId || !memberId) return false;
+  const r = await itemsPool.query(
+    `SELECT 1 FROM org_session_state st
+      WHERE (st.id = $1 OR st.id IN (SELECT box_id FROM org_session_conv WHERE conv_uuid = $1))
+        AND st.invites @> to_jsonb(ARRAY[$2::text])
+      LIMIT 1`,
+    [sessionId, memberId]);
+  return (r.rowCount ?? 0) > 0;
+}
+
 // 세션↔프로젝트 영속 기록 — 프로젝트 터미널 세션 생성/재바인딩 시 호출. 끝난 세션의 AI 작업도 이 프로젝트로 귀속.
 //  시간구간 모델(#905 C1): 마지막 구간의 프로젝트와 **다를 때만** 새 구간(valid_from=now())을 덧붙인다.
 //   - 같은 프로젝트 반복 바인딩(세션 시작마다 호출됨)은 새 구간을 안 만든다 → 구간 폭증 방지.
