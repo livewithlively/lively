@@ -1,6 +1,7 @@
 // v2/onboarding.ts — 처음 설정(#/welcome). 프로토타입 public/onboarding-proto/v2.html 의 가운데 화면을 v2 셸 안으로 옮긴 것(#1813).
 //  노션 온보딩 실측(원준님 PDF 2026-08-24)의 3막 구조: 막1 이름만(사이드바 숨김) → 막2 질문 기둥 → 막3 리브와의 채팅.
-//  사이드바는 실제 것(side.ts)이 그린다 — 여기선 막1에서 숨겨 달라고만 부탁한다(ctx.onBare).
+//  사이드바는 실제 것(side.ts)이 그린다 — 여기선 막1에서 숨겨 달라고(ctx.onBare), 막2·3에서는 **유령**으로
+//  세워 달라고(ctx.onGhost — 보이되 만질 수 없다, 노션 p2~4 · 원준님 지시 #2232)만 부탁한다.
 //  문구는 원준님 교정 31건 반영본. 새로 쓴 연결부는 [새문구] 주석. 상태는 sessionStorage(진행)·localStorage(끝남 표식).
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
@@ -121,7 +122,7 @@ async function desktopLink() {
   return dlCache;
 }
 
-export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boolean) => void; onDone?: () => void } = {}): { destroy(): void } {
+export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boolean) => void; onGhost?: (on: boolean) => void; onDone?: () => void } = {}): { destroy(): void } {
   host.className = 'ob-root';
   // ⚠ 나가는 문(#2171). 종전엔 처음 설정에서 **스스로 나갈 길이 없었다** — 장면마다 「나중에 정할게요」가
   //  있었지만 그건 다음 질문으로 넘기는 버튼이지 나가는 버튼이 아니었고, 끝까지 완주해야만 벗어날 수 있었다.
@@ -142,6 +143,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   markWelcomeSeen();
   //  #2232 — 이 화면이 떴다 = 사람이 다시 열었다(미룬 사람에겐 자동 진입이 오지 않는다) → 미룸을 푼다.
   clearWelcomeDeferred();
+  //  #2232 — 떴다(보여줬다) = 끝낼 때까지 «하다 만 것» 이다. 홈의 «이어서 하기» 줄은 me.welcome_pending 을 보는데
+  //   me 는 부팅 때 한 번 읽는다 — 그래서 [나중에 할게요] 가 아닌 길(사이드바·뒤로·주소창)로 나가면 새로고침 전엔
+  //   줄이 안 떴다(원준님 실측 2026-08-28 "어떻게 해야 하던 데까지 다시 돌아가?"). 서버 판정(seen && !done)과 같은 값을
+  //   여기서 미리 맞춰 둔다. 끝내면 아래 마무리에서 끈다.
+  try { if (state.me && !onboardingDone()) (state.me as { welcome_pending?: boolean }).welcome_pending = true; } catch (_) { /* 비치명 */ }
   //  ⚠ `$` 는 아래에서 선언된다(const, TDZ) — 여기선 host 에서 직접 집는다.
   const exitBtn = host.querySelector('#obExit') as HTMLButtonElement | null;
   if (exitBtn) exitBtn.onclick = () => {
@@ -221,7 +227,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const more = line.length > 6 ? `<div class="ob-files-more">전체 ${line.length}줄 — 목록 안에서 스크롤하세요</div>` : '';
     return sum + `<div class="ob-files-list">${line.join('')}</div>` + more;
   }
-  const setStage = (s) => { host.className = 'ob-root ob-' + s; ctx.onBare && ctx.onBare(s === 'stage-name'); };
+  /* 막1(이름)은 민낯(셸 숨김), 막2·3(질문·채팅)은 유령 셸(#2232) — 사이드바를 누르면 처음 설정에서 **빠져나가 버렸다**
+   *  (원준님 실측 2026-08-28). 나가는 문은 [나중에 할게요] 하나다. */
+  const setStage = (s) => { host.className = 'ob-root ob-' + s; ctx.onBare && ctx.onBare(s === 'stage-name'); ctx.onGhost && ctx.onGhost(s !== 'stage-name'); };
   /* ══════════════ 데이터 — 기존 프로토(app.js)에서 그대로 추출한 확정본 ══════════════ */
   const DATA = {
    "STAGES": {
@@ -2295,6 +2303,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           await sleep(1200); location.hash = '#/'; return;
         }
         try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
+        try { if (state.me) (state.me as { welcome_pending?: boolean }).welcome_pending = false; } catch (_) {}   // 홈의 «이어서 하기» 줄을 내린다(#2232)
+        ctx.onGhost && ctx.onGhost(false);   // 끝났다 — 셸을 돌려준다(막3 → 워크스페이스)
         //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 서버 쪽 자리표는 반영이 지웠다 —
         //   여기서 늦게 도착한 push 하나가 그걸 되살리면 다음 로그인이 다시 온보딩으로 간다.
         pushOff = true; clearTimeout(pushT); pushT = null;
@@ -2502,5 +2512,6 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     document.removeEventListener('visibilitychange', onLeave);
     void flushProgress();          // 화면을 떠나는 것도 '중간에 나간 것'이다 — 마지막 한 걸음을 남긴다
     ctx.onBare && ctx.onBare(false);
+    ctx.onGhost && ctx.onGhost(false);   // 유령 셸도 반드시 푼다 — 어떤 길로 나갔든(#2232)
   } };
 }

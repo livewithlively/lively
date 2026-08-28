@@ -49,6 +49,16 @@ const SOLO = new URLSearchParams(location.search).get('solo') === '1';
 let root: HTMLElement | null = null;
 let railEl: HTMLElement | null = null;    // #2016 좌측 끝 레일 — 구역 넷·워크스페이스·최근 앱·[앱]·[나]
 let sideEl: HTMLElement | null = null;
+/** 처음 설정 막2·3의 «유령 셸»(#2232, 노션 p2~4) — 사이드바·레일·맨윗줄·손잡이가 **보이되 만질 수 없다**.
+ *  종전엔 온보딩 중에 실제 사이드바가 그대로 살아 있어 세션 하나만 눌러도 처음 설정에서 빠져나갔다(원준님 실측 2026-08-28).
+ *  흐림은 CSS(#v2-root.ob-ghost, 41-onboarding.css), 차단은 `inert` — 클릭뿐 아니라 Tab 포커스·보조기기까지 막아야
+ *  «아무것도 안 눌린다» 가 참이다(pointer-events 만으론 키보드로 들어간다). 나가는 문은 화면 안의 [나중에 할게요] 뿐. */
+function setObGhost(on: boolean): void {
+  if (!root) return;
+  root.classList.toggle('ob-ghost', on);
+  const parts: (Element | null)[] = [sideEl, railEl, root.querySelector(':scope > .v2-topbar'), ...Array.from(root.querySelectorAll(':scope > .v2-split-x'))];
+  for (const p of parts) if (p) p.toggleAttribute('inert', on);
+}
 let centerEl: HTMLElement | null = null;
 let asideEl: HTMLElement | null = null;
 let tabsApi: TabsApi | null = null;
@@ -955,6 +965,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       markActive('liv');
       (tab as any).ob = renderOnboarding(host, {
         onBare: (bare) => root?.classList.toggle('ob-bare', bare),
+        onGhost: (on) => setObGhost(on),
         onDone: () => { void loadData().then(() => drawSide()); },
       });
     } else if (page === 'p' && segs[1]) {
