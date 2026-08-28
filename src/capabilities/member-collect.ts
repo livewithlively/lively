@@ -32,6 +32,8 @@ export interface MemberCollectSpec {
   extraConfig?: (actor: string) => Promise<Record<string, string>>;
   /** 자격이 없을 때 **여기서 동의를 시작**한다(토글이 곧 연결 — 노션·구글 규약). needs_connect 응답에 authorization_url 이 실린다. */
   connectStart?: (actor: string) => Promise<{ authorization_url: string }>;
+  /** 상태에 얹을 앱 고유 사실(예 Linear: 라이블리 앱 client 등록 여부 app_ready). 화면이 «다음에 뭘 누를지» 정하는 데 쓴다. */
+  extraState?: () => Promise<Record<string, unknown>>;
   /** 앱 이름(응답 문장). */
   appLabel: string;
   /** 수집기 label 기본값. */
@@ -114,11 +116,13 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
     const r = await getMemberSecret(memberOwner(memberId), spec.credKind, "").catch(() => null);
     return !!r?.secret;
   };
-  const stateOf = async (callerId: string): Promise<MemberCollectState> => {
+  const stateOf = async (callerId: string): Promise<MemberCollectState & Record<string, unknown>> => {
     const inst = find(await listCollectors());
     const member = tokenSourceMember(inst);
     const scope = pickScope(spec, inst?.config);
+    const extra = spec.extraState ? await spec.extraState().catch(() => ({})) : {};
     return {
+      ...extra,
       enabled: !!inst?.enabled, collector_id: inst?.id ?? null, member,
       member_connected: inst?.enabled && member ? await connected(member) : null,
       me_connected: await connected(callerId),
