@@ -1407,7 +1407,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
 
 // ── H. 웹 UI 셸 (#1541 · web-shell.mjs) — 앱 창에 게이트웨이의 /ui/ 를 그대로 싣는다(화면 코드 두 벌 금지) ─────────
 {
-  const { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } = await import("./web-shell.mjs");
+  const { appReady, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } = await import("./web-shell.mjs");
   const { IPC_WEB } = await import("./ipc-contract.mjs");
   const GW = "https://dev.lvly.io";
   const okState = { cliFound: true, cliOutdated: false, cliBroken: null, loggedIn: true, kitInstalled: true };
@@ -1439,6 +1439,56 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(webOrigin("https://dev.lvly.io/lively/"), "https://dev.lvly.io");
     assert.equal(webOrigin("http://localhost:8080"), "http://localhost:8080");
     assert.equal(webOrigin("nope"), null);
+  });
+
+  // ── 워크스페이스 어긋남 감지(#2215) ───────────────────────────────────────
+  //  사양: 계정 1 : 워크스페이스 N 인데 로컬 상태는 한 벌이다. 사람이 웹에서 워크스페이스를 바꾸면
+  //   웹뷰만 옮겨가고 로컬(토큰·노드·MCP)은 그대로라 조용히 어긋난다 — 앱이 그걸 알아채는 자리.
+  //  엣지 표: ①같은 곳(=null) ②다른 워크스페이스 /ui ③CP 홈·로그인(=워크스페이스 아님) ④경로 접두 게이트웨이
+  //   ⑤스킴/포트만 다른 곳 ⑥http(s) 아님 ⑦로컬 주소를 모를 때 ⑧'/ui' 로 시작하는 남의 경로(/uifoo)
+  t("H3-a 같은 워크스페이스면 아무 일도 없다(기준선 — 여기서 물으면 매번 묻는다)", () => {
+    assert.equal(workspaceDriftFrom("https://dev.lvly.io/ui/#/s/box-1", GW), null);
+    assert.equal(workspaceDriftFrom("https://dev.lvly.io/ui/", GW), null);
+  });
+
+  t("H3-b ★ 다른 워크스페이스의 웹 UI 로 가면 두 출처를 돌려준다", () => {
+    assert.deepEqual(
+      workspaceDriftFrom("https://lively-46e3.app.lvly.io/ui/#/home", GW),
+      { from: "https://dev.lvly.io", to: "https://lively-46e3.app.lvly.io" },
+    );
+  });
+
+  t("H3-c ★ CP 홈·승인 화면은 워크스페이스가 아니다 — 로그인 흐름 중에 묻지 않는다", () => {
+    assert.equal(workspaceDriftFrom("https://app.lvly.io/home", GW), null);
+    assert.equal(workspaceDriftFrom("https://app.lvly.io/cli/device", GW), null);
+    assert.equal(workspaceDriftFrom("https://accounts.google.com/o/oauth2", GW), null);
+  });
+
+  t("H3-d 경로 접두가 있는 게이트웨이도 출처로 가른다(경로가 아니라 출처가 워크스페이스다)", () => {
+    assert.equal(workspaceDriftFrom("https://corp.example.com/lively/ui/", "https://corp.example.com/lively"), null);
+  });
+
+  t("H3-e 스킴·포트만 달라도 다른 워크스페이스다", () => {
+    assert.deepEqual(workspaceDriftFrom("http://dev.lvly.io/ui/", GW), { from: GW, to: "http://dev.lvly.io" });
+    assert.deepEqual(workspaceDriftFrom("https://dev.lvly.io:444/ui/", GW), { from: GW, to: "https://dev.lvly.io:444" });
+  });
+
+  t("H3-f http(s) 가 아니거나 주소가 아니면 묻지 않는다", () => {
+    for (const bad of ["", null, "nope", "file:///etc/passwd", "javascript:alert(1)", "data:text/html,x"]) {
+      assert.equal(workspaceDriftFrom(bad, GW), null, String(bad));
+    }
+  });
+
+  t("H3-g 로컬이 어디에 매였는지 모르면 묻지 않는다 — 비교 기준이 없다", () => {
+    assert.equal(workspaceDriftFrom("https://lively-46e3.app.lvly.io/ui/", null), null);
+    assert.equal(workspaceDriftFrom("https://lively-46e3.app.lvly.io/ui/", "nope"), null);
+  });
+
+  t("H3-h ★ '/ui' 로 시작하기만 하는 남의 경로는 게이트웨이 UI 가 아니다(세그먼트 경계)", () => {
+    assert.equal(workspaceDriftFrom("https://other.example.com/uifoo", GW), null);
+    // 반대로 '/ui' 딱 그것과 '/ui/...' 는 게이트웨이 UI 다.
+    assert.ok(workspaceDriftFrom("https://other.example.com/ui", GW));
+    assert.ok(workspaceDriftFrom("https://other.example.com/ui/x", GW));
   });
 
   t("H3 ★ 창 열기 규칙 — 같은 출처는 앱 안 새 창, 다른 출처는 브라우저, http(s) 아니면 거부", () => {

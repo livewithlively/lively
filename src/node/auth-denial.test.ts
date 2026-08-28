@@ -6,7 +6,7 @@
 //  종전 store 의 `catch { return null }` 이 정확히 이 둘을 한 값으로 뭉갰고, 그래서 인프라 오류가
 //  '토큰 불일치'로 둔갑해 매니지드에서 노드가 502 를 도는 동안 게이트웨이에 로그 한 줄이 없었다.
 import assert from "node:assert/strict";
-import { denialMessage, shouldLogDenial, denialKey, DENIAL_LOG_COOLDOWN_MS, type NodeAuthDenial } from "./auth-denial.js";
+import { denialMessage, shouldLogDenial, denialKey, DENIAL_LOG_COOLDOWN_MS, nodeTokenIssuedByRegistration, type NodeAuthDenial } from "./auth-denial.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -113,6 +113,64 @@ t("C5 같은 토큰이라도 사유가 다르면 별개로 남긴다(사유 변�
   assert.equal(denialKey("abc123", "unknown-token"), denialKey("abc123", "unknown-token"));
   // 토큰이 다르면 별개다 — 한 노드의 실패가 다른 노드의 첫 기록을 삼키면 안 된다.
   assert.notEqual(denialKey("abc123", "unknown-token"), denialKey("def456", "unknown-token"));
+});
+
+// ── D. 노드 토큰 불변식(#2215) ─────────────────────────────────────────────────
+//  사양: `org_node.token_hash` 가 가리키는 토큰은 **노드 등록이 발급한 것**이어야 한다
+//   = label 이 정확히 `node:<그 노드 id>` 이고 scope 가 공집합. 그 둘을 함께 세우는 곳은
+//   createNode·rotateNodeToken 뿐이므로(store.ts), 표를 어기는 행은 그 두 경로 밖에서 들어온 것이다.
+//  아래는 사양 엣지 표의 9행 전수 — 행마다 하나.
+const issued = nodeTokenIssuedByRegistration;
+
+t("D1 ★ 정상 등록 토큰은 통과한다 — 무회귀 기준선(createNode 가 만드는 모양 그대로)", () => {
+  assert.equal(issued({ nodeId: "hammurabi", label: "node:hammurabi", scopes: [] }), true);
+});
+
+t("D2 ★ 로그인 토큰이 노드 자리에 앉으면 거부한다(2026-08-28 실측 사고 모양)", () => {
+  assert.equal(issued({
+    nodeId: "hammurabi", label: "라이블리 데스크톱",
+    scopes: ["items", "context", "admin", "runtime", "db", "memory", "code"],
+  }), false);
+});
+
+t("D3 label 이 맞아도 권한이 있으면 거부한다 — 권한 없음이 노드 토큰의 본질이다(scope 0/1 경계)", () => {
+  assert.equal(issued({ nodeId: "n1", label: "node:n1", scopes: ["items"] }), false);
+});
+
+t("D4 접두 일치가 아니라 정확 일치 — 'node:n1' 토큰은 노드 'n1-2' 의 것이 아니다", () => {
+  assert.equal(issued({ nodeId: "n1-2", label: "node:n1", scopes: [] }), false);
+});
+
+t("D5 반대 방향도 같다 — 'node:n1-2' 토큰은 노드 'n1' 의 것이 아니다", () => {
+  assert.equal(issued({ nodeId: "n1", label: "node:n1-2", scopes: [] }), false);
+});
+
+t("D6 label 이 없는 옛 토큰은 통과시키지 않는다 — 모르면 거부", () => {
+  assert.equal(issued({ nodeId: "n1", label: null, scopes: [] }), false);
+});
+
+t("D7 scope 가 배열이 아니면 거부한다(모르는 모양)", () => {
+  assert.equal(issued({ nodeId: "n1", label: "node:n1", scopes: null }), false);
+});
+
+t("D8 scope 가 문자열 '[]' 로 와도 거부한다 — 모양이 다르면 통과가 아니다", () => {
+  assert.equal(issued({ nodeId: "n1", label: "node:n1", scopes: "[]" }), false);
+});
+
+t("D9 ★ 빈 값 구멍 — 노드 id 가 비면 'node:' 라벨과 빈 값끼리 일치해선 안 된다(#2170 ③ 과 같은 함정)", () => {
+  assert.equal(issued({ nodeId: "", label: "node:", scopes: [] }), false);
+  assert.equal(issued({ nodeId: "   ", label: "node:   ", scopes: [] }), false);
+});
+
+t("D10 거부 메시지가 무엇이 틀렸는지와 사람이 할 행동을 함께 준다", () => {
+  const m = denialMessage({ reason: "token-not-node-issued", node: "hammurabi", label: "라이블리 데스크톱", scopes: ["admin"] });
+  assert.ok(m.includes("hammurabi"), `어느 노드인지 없다: ${m}`);
+  assert.ok(m.includes("라이블리 데스크톱"), `그 자리에 앉은 토큰이 무엇인지 없다: ${m}`);
+  assert.ok(m.includes("admin"), `무엇이 위험한지(가진 권한) 없다: ${m}`);
+  assert.ok(m.includes("lively node"), `사람이 할 행동이 없다: ${m}`);
+  // 다른 사유와 **다른 말**이어야 한다 — 뭉개지면 또 토큰만 의심하게 된다.
+  assert.notEqual(m, denialMessage({ reason: "unknown-token" }));
+  assert.notEqual(m, denialMessage({ reason: "not-a-node-token", label: "라이블리 데스크톱", member: "sangmin-yoon" }));
 });
 
 console.log(`\n${pass} passed`);
