@@ -1731,13 +1731,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   하네스의 폴백으로만 남긴다.
         const h = c.harness || aiHarness();
         const g = AI_GUIDE[h];
+        const li = (t) => `<li>${t}</li>`;
         const steps = (g ? g.steps : (c.steps && c.steps.length ? c.steps : [`터미널에  ${c.bin || 'claude'}  를 입력해 안내대로 로그인합니다`]).map((t) => esc(t)))
-          .map((t) => `<li>${t}</li>`).join('');
+          .map(li).join('');
+        //  안 1(#2232) — 3걸음 뒤에 «그 사이 물음은 Enter» 한 줄 + 그 자리 펼침. 펼침은 팝오버·모달이 아니라 인라인(원준님 규칙).
+        const hasDetail = !!(g && g.detail && g.detail.length);
+        const more = hasDetail ? `<button type="button" class="ob-more" id="cMore" data-label="${esc(g.more || '화면마다 자세히 보기')}" aria-expanded="false" aria-controls="cDetail">${esc(g.more || '화면마다 자세히 보기')} ▾</button>` : '';
         return qHead('claude', lead, `${picked} 계정을 연결해 주세요.`,
-          '아래 버튼으로 로그인 창을 열고 순서대로 하시면 됩니다. 쳐야 할 글자는 누르면 복사돼요.')
+          (g && g.help) || '아래 버튼으로 로그인 창을 열고 순서대로 하시면 됩니다. 쳐야 할 글자는 누르면 복사돼요.')
           + `<div class="ob-tok">
               <button class="ob-btn ob-btn-sub ob-btn-inline" id="cTerm">${picked} 로그인 창 열기 ↗</button>
               <ol>${steps}</ol>
+              ${g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
+              ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map(li).join('')}</ol></div>` : ''}
               ${g && g.note ? `<p class="ob-note ob-fine2">${g.note}</p>` : ''}
               ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${picked} 로그인 여부를 서버가 확인하지 못해요. 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
               <p class="ob-err" id="cErr"></p>
@@ -1748,6 +1754,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       },
       bind: (el) => {
         const err = $('#cErr', el), go = $('#cGo', el);
+        // 안 1(#2232) — «화면마다 자세히 보기» 는 그 자리에서 펼치고 접는다(팝오버·모달 금지). 상태는 화면에만(저장 안 함).
+        const more = $('#cMore', el), det = $('#cDetail', el);
+        if (more && det) more.onclick = () => {
+          const open = det.hidden; det.hidden = !open;
+          more.setAttribute('aria-expanded', String(open));
+          more.textContent = open ? '접기 ▴' : `${more.dataset.label || '화면마다 자세히 보기'} ▾`;
+        };
         // 쳐야 할 글자 — 누르면 복사(#2232). 클립보드가 막힌 자리면 글자를 그대로 토스트로 보여 준다.
         $$('code[data-copy]', el).forEach((cd) => cd.onclick = async () => {
           const t = cd.dataset.copy || cd.textContent || '';
@@ -2207,45 +2220,73 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const CLI_NOTE = '터미널 창 조작: 글자만 있는 창이에요. 고르는 화면에선 <b>↑ ↓</b> 로 옮기고 <b>Enter</b> 로 확정, 붙여넣기는 <b>⌘V</b>(윈도우 Ctrl+V), 창 안 글자는 마우스로 끌어 복사할 수 있어요.';
   const cp = (t) => `<code class="ob-copy" data-copy="${esc(t)}" title="누르면 복사돼요">${esc(t)}</code>`;
   //  버튼은 이 글 **위**에 있다(qHead 다음 줄) — «아래» 라고 쓰면 사람이 아래를 뒤진다(원준님 실측 2026-08-28).
+  //  #2232 원준님(2026-08-28, 안 1) — 기본 노출은 **사람이 손을 대는 3걸음**만. Enter 로 넘기기만 하는 화면(글자 스타일·로그인 방법·
+  //   보안 안내·폴더 신뢰…)은 `between` 한 문장으로 «정상이니 넘기세요» 만 말하고, 궁금한 사람만 그 자리에서 펼친다(`detail`,
+  //   팝오버·모달 아님). 종전 7걸음 원문은 detail 에 그대로 살아 있다 — 친절함을 버린 게 아니라 **노출 순서**를 바꾼 것.
+  //   왜: 7걸음을 같은 무게로 늘어놓으니 읽기 전에 스크롤부터 하게 됐다(원준님 실측). 실제로 사람이 결정하는 건 3번뿐이다.
+  //  ⚠ 설정 미리 쓰기(theme·trust)로 물음 자체를 없애는 안은 실측(2.1.250)에서 theme 만으론 «글자 스타일» 이 그대로 뜨고,
+  //   hasCompletedOnboarding 까지 쓰면 로그인 흐름 없이 «Not logged in» 입력칸에 떨어져 보류 — 그래서 between 은 «나올 수 있어요».
   const AI_GUIDE = {
-    //  #2232 원준님 — Claude Code 첫 실행을 실제 화면(2.1.2xx 캡처)대로: 글자 스타일 → 로그인 방법 → 주소(브라우저가 안 열림) → 코드 붙여넣기
-    //   → Login successful → 보안 안내·폴더 신뢰 → 입력칸. 이미 켜져 있던 창(첫 실행 안내가 안 뜸)은 /login 으로 4번부터.
-    claude: { steps: [
-      `위의 ${kbd('Claude 로그인 창 열기')}를 누르면 새 탭에 <b>Claude Code</b> 가 켜진 터미널 창이 열려요(«Welcome to Claude Code»).`,
-      `처음 켜면 <b>Choose the text style that looks best with your terminal</b>(글자 스타일 고르기)가 나와요. 아무거나 — 기본 «2. Dark mode», 창이 밝으면 «3. Light mode» — ↑ ↓ 로 맞추고 <b>Enter</b>.`,
-      `<b>Select login method:</b> 가 나와요. <b>Claude account with subscription · Pro, Max, Team, or Enterprise</b>(내 Claude 구독 계정)에 «❯» 가 있는 채로 <b>Enter</b>. (회사 API 콘솔 계정이면 두 번째 «Anthropic Console account».)`,
-      `<b>Opening browser to sign in…</b> 뒤에 <b>Browser didn't open? Use the url below to sign in (c to copy)</b> 와 긴 주소가 나와요 — 이 창은 우리 서버에서 돌아서 브라우저가 저절로 안 열려요. 그 주소를 누르거나(또는 키보드 <b>c</b> 를 눌러 복사해 브라우저 주소창에 붙여) 열고, Claude(Anthropic) 계정으로 로그인한 뒤 <b>Authorize</b>(허용)를 누르세요.`,
-      `브라우저에 <b>코드</b>(Paste this code back into Claude Code)가 나와요. 복사해서 터미널 창의 <b>Paste code here if prompted &gt;</b> 자리에 붙여넣고(⌘V) <b>Enter</b>.`,
-      `<b>Login successful. Press Enter to continue…</b> 가 보이면 Enter. 이어서 <b>Security notes</b>(안내), 터미널 설정 물음(<b>Use Claude Code's terminal setup?</b>), <b>Do you trust the files in this folder?</b>(이 폴더를 믿나요 — «Yes, proceed»)가 차례로 나오면 각각 <b>Enter</b> 로 넘기세요. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
-      `창에 글을 치는 입력칸(<b>&gt;</b> 표시)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요. 첫 실행 안내가 안 뜨고 바로 입력칸이면(이미 켜져 있던 창) ${cp('/login')} 을 붙여넣고 Enter 한 뒤 4번부터 하시면 됩니다.`,
-    ], note: CLI_NOTE },
-    codex: { steps: [
-      `위의 ${kbd('ChatGPT 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열리고, 로그인 절차가 저절로 시작돼요.`,
-      `잠시 뒤 창에 <b>주소 하나</b>와 <b>짧은 코드</b>가 나와요. 주소를 누르거나(또는 복사해 브라우저에 붙여) 열고, 그 코드를 입력하세요.`,
-      `ChatGPT 계정으로 로그인하고 허용을 누르세요.`,
-      //  #2232 원준님 실측 — 계정에 «장치 코드 인증»이 꺼져 있으면 ChatGPT 화면이 빨간 글로 막는다. 켜고 다시 시작해야 한다.
-      `ChatGPT 화면에 빨간 글로 «ChatGPT 보안 설정 내 <b>Codex용 장치 코드 인증</b>을 활성화한 뒤 다시 실행하세요» 가 나오면: 그 글의 <b>ChatGPT 보안 설정</b> 링크를 눌러(또는 chatgpt.com ▸ 프로필 ▸ ${kbd('설정')} ▸ ${kbd('보안')}) <b>Codex용 장치 코드 인증</b>을 켜세요. 그런 다음 터미널 창을 한 번 누르고 ${cp('codex login --device-auth')} 를 붙여넣고 Enter — 주소와 코드가 새로 나오니 2번부터 다시 하시면 됩니다.`,
-      `터미널 창에 «로그인 절차가 끝났습니다» 가 보이면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
-    ], note: DEVICE_NOTE + ' ' + CLI_NOTE },
-    //  #2232 원준님 실측(2026-08-28) — Antigravity 첫 실행 순서: 로그인 방법 고르기(1. Google OAuth) → «Click here to authenticate» →
-    //   브라우저 로그인 → 색 테마 고르기 → 입력칸. 화면 원문(영어)을 함께 적는다(사람이 보는 글자가 영어라서).
-    antigravity: { steps: [
-      `위의 ${kbd('Gemini 로그인 창 열기')}를 누르면 새 탭에 <b>Antigravity</b>(Gemini 를 쓰는 CLI)가 켜진 터미널 창이 열려요.`,
-      `처음 켜면 <b>Select login method:</b> 라고 물어요. <b>1. Google OAuth</b> 앞에 «&gt;» 가 있는지 보고(기본으로 그 자리예요) <b>Enter</b> 를 누르세요. 다른 줄에 가 있으면 ↑ ↓ 로 1번에 맞춘 뒤 Enter.`,
-      `그러면 <b>→ Click here to authenticate</b> 가 나와요. 그 글자를 누르면(누르면 열려요) 브라우저에 Google 로그인 화면이 뜹니다 — 거기서 Google 계정으로 로그인하고 허용을 누르세요. 안 눌리면 그 줄의 주소를 복사해 브라우저에 붙여 여세요.`,
-      `로그인이 끝나고 창에 <b>코드</b>를 넣으라고 하면, 브라우저에 나온 코드를 복사해 터미널 창에 붙여넣고 Enter. (코드를 안 물으면 그냥 넘어가요.)`,
-      `이어서 <b>Choose your color scheme:</b>(색 테마 고르기)가 나와요. ↑ ↓ 로 아무거나(예: terminal) 고르고 Enter, <b>[Next]</b> 가 있으면 Enter 로 넘기세요.`,
-      //  #2232 원준님 실측 — 테마 뒤에 두 화면이 더 있다: 사용 정보 수집 동의, 폴더 신뢰. 여기까지 지나야 입력칸이 나온다.
-      `다음은 <b>Yes, I agree to help improve Antigravity CLI…</b>(사용 정보를 Google 에 보내는 데 동의) 화면이에요. 동의는 선택이에요 — 끄고 싶으면 그 줄에서 Enter 를 눌러 체크를 빼세요. 그다음 ↓ 로 <b>[Done]</b> 에 옮기고 Enter.`,
-      `마지막으로 <b>Do you trust the contents of this project?</b>(이 폴더의 내용을 믿나요) 가 나와요. <b>Yes, I trust this folder</b> 앞에 «&gt;» 가 있는 채로 Enter — 라이블리가 만든 작업 폴더라 괜찮습니다.`,
-      `창에 글을 치는 입력칸(<b>&gt;</b> 표시, 오른쪽 아래에 <b>Gemini …</b> 모델 이름)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
-    ], note: CLI_NOTE },
-    grok: { steps: [
-      `위의 ${kbd('Grok 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열려요.`,
-      `그 창을 한 번 누른 뒤 ${cp('grok login --device-auth')} 를 붙여넣고 Enter 를 누르세요.`,
-      `창에 <b>주소 하나</b>와 <b>짧은 코드</b>가 나와요. 주소를 열고 그 코드를 입력한 뒤 X(xAI) 계정으로 로그인하세요.`,
-      `창에 로그인이 끝났다고 나오면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
-    ], note: DEVICE_NOTE + ' ' + CLI_NOTE },
+    claude: {
+      help: '로그인 창에서 직접 하실 일은 세 가지뿐이에요.',
+      steps: [
+        `위의 ${kbd('Claude 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열려요(«Welcome to Claude Code»).`,
+        `창에 뜨는 <b>긴 주소</b>를 열어 Claude 계정으로 로그인하고 <b>Authorize</b>(허용)를 누르면 코드가 나와요. 그 코드를 창의 <b>Paste code here if prompted &gt;</b> 자리에 붙여넣고(⌘V) <b>Enter</b>.`,
+        `창에 글을 치는 입력칸(<b>&gt;</b> 표시)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}.`,
+      ],
+      between: `그 사이에 <b>글자 스타일 · 로그인 방법 · 보안 안내 · 폴더 신뢰</b>를 묻는 화면이 나올 수 있어요. 라이블리가 준비한 창이라 전부 그대로 <b>Enter</b> 로 넘기면 됩니다.`,
+      more: '화면마다 자세히 보기',
+      detail: [
+        `<b>Choose the text style that looks best with your terminal</b>(글자 스타일) — 아무거나. 기본 «2. Dark mode», 창이 밝으면 «3. Light mode». ↑ ↓ 로 맞추고 Enter.`,
+        `<b>Select login method:</b> — <b>Claude account with subscription · Pro, Max, Team, or Enterprise</b>(내 구독 계정)에 «❯» 가 있는 채로 Enter. 회사 API 콘솔 계정이면 두 번째 «Anthropic Console account».`,
+        `<b>Browser didn't open? Use the url below to sign in (c to copy)</b> — 이 창은 우리 서버에서 돌아서 브라우저가 저절로 안 열려요. 그 주소를 누르거나 키보드 <b>c</b> 로 복사해 브라우저 주소창에 붙여 여세요.`,
+        `<b>Login successful. Press Enter to continue…</b> → Enter. 이어서 <b>Security notes</b>(안내), <b>Use Claude Code's terminal setup?</b>(터미널 설정), <b>Do you trust the files in this folder?</b>(이 폴더를 믿나요 — «Yes, proceed»)가 나오면 각각 Enter. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
+        `첫 실행 안내 없이 바로 입력칸이면(이미 켜져 있던 창) ${cp('/login')} 을 붙여넣고 Enter 한 뒤 2번부터 하시면 됩니다.`,
+      ],
+      note: CLI_NOTE },
+    codex: {
+      help: '직접 하실 일은 세 가지뿐이에요. 코드는 눌러서 복사돼요.',
+      steps: [
+        `위의 ${kbd('ChatGPT 로그인 시작')}을 누르면 이 자리에 <b>주소</b>와 <b>짧은 코드</b>가 나와요.`,
+        `주소를 열고 그 코드를 입력한 뒤, ChatGPT 계정으로 로그인하고 허용을 누르세요.`,
+        `이 자리에 «로그인이 끝났어요» 가 뜨면 아래 ${kbd('로그인했어요')}.`,
+      ],
+      //  #2232 원준님 실측 — 계정에 «장치 코드 인증»이 꺼져 있으면 ChatGPT 화면이 빨간 글로 막는다. 켜고 다시 시작하면 된다 —
+      //   막힌 게 아니라는 것부터 말한다(막다른 안내 금지). 켜는 길은 펼침에.
+      between: `ChatGPT 화면에 빨간 글로 «<b>Codex용 장치 코드 인증</b>을 활성화한 뒤 다시 실행하세요» 가 나와도 막힌 게 아니에요 — 계정 설정 하나를 켜고 다시 시작하면 됩니다.`,
+      more: '켜는 방법 보기',
+      detail: [
+        `그 글의 <b>ChatGPT 보안 설정</b> 링크를 눌러(또는 chatgpt.com ▸ 프로필 ▸ ${kbd('설정')} ▸ ${kbd('보안')}) <b>Codex용 장치 코드 인증</b>을 켜세요.`,
+        `그런 다음 이 자리에서 ${kbd('ChatGPT 로그인 시작')}을 다시 누르면 주소와 코드가 새로 나와요.`,
+        DEVICE_NOTE,
+      ],
+      note: '' },
+    antigravity: {
+      help: '로그인 창에서 직접 하실 일은 세 가지뿐이에요.',
+      steps: [
+        `위의 ${kbd('Gemini 로그인 창 열기')}를 누르면 새 탭에 <b>Antigravity</b>(Gemini 를 쓰는 CLI)가 켜진 터미널 창이 열려요.`,
+        `창의 <b>→ Click here to authenticate</b> 를 누르면(안 눌리면 그 줄의 주소를 복사해 브라우저에 붙여 여세요) Google 로그인 화면이 떠요 — Google 계정으로 로그인하고 허용을 누르세요. 코드를 물으면 브라우저에 나온 코드를 창에 붙여넣고 Enter.`,
+        `창에 글을 치는 입력칸(<b>&gt;</b> 표시, 오른쪽 아래에 <b>Gemini …</b> 모델 이름)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}.`,
+      ],
+      //  #2232 원준님 실측 — 로그인 방법 → (인증) → 색 테마 → 사용 정보 동의 → 폴더 신뢰. 여기까지 지나야 입력칸이 나온다.
+      between: `그 사이에 <b>로그인 방법 · 색 테마 · 사용 정보 동의 · 폴더 신뢰</b>를 묻는 화면이 나와요. 기본값 그대로 <b>Enter</b> 로 넘기면 됩니다(동의는 선택이에요 — 끄고 싶으면 펼쳐 보세요).`,
+      more: '화면마다 자세히 보기',
+      detail: [
+        `<b>Select login method:</b> — <b>1. Google OAuth</b> 앞에 «&gt;» 가 있는지 보고(기본으로 그 자리예요) Enter. 다른 줄에 가 있으면 ↑ ↓ 로 1번에 맞춘 뒤 Enter.`,
+        `<b>Choose your color scheme:</b>(색 테마) — ↑ ↓ 로 아무거나(예: terminal) 고르고 Enter, <b>[Next]</b> 가 있으면 Enter.`,
+        `<b>Yes, I agree to help improve Antigravity CLI…</b>(사용 정보를 Google 에 보내는 데 동의) — 선택이에요. 끄고 싶으면 그 줄에서 Enter 를 눌러 체크를 빼고, ↓ 로 <b>[Done]</b> 에 옮겨 Enter.`,
+        `<b>Do you trust the contents of this project?</b>(이 폴더를 믿나요) — <b>Yes, I trust this folder</b> 앞에 «&gt;» 가 있는 채로 Enter. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
+      ],
+      note: CLI_NOTE },
+    grok: {
+      help: '로그인 창에서 직접 하실 일은 세 가지뿐이에요. 쳐야 할 글자는 누르면 복사돼요.',
+      steps: [
+        `위의 ${kbd('Grok 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열려요. 그 창을 한 번 누른 뒤 ${cp('grok login --device-auth')} 를 붙여넣고 Enter.`,
+        `창에 뜬 <b>주소</b>를 열고 <b>짧은 코드</b>를 입력한 뒤 X(xAI) 계정으로 로그인하세요.`,
+        `창에 로그인이 끝났다고 나오면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}.`,
+      ],
+      between: '', more: '왜 주소와 코드냐면', detail: [DEVICE_NOTE],
+      note: CLI_NOTE },
   };
   const LOGIN_SESSION = { claude: { harness: 'claude' }, codex: { harness: 'shell', loginFor: 'codex' }, antigravity: { harness: 'antigravity' }, grok: { harness: 'shell', loginFor: 'grok' } };
 
