@@ -2066,7 +2066,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/leave"
   ],
-  "input_hash": "287a03b0f581d3e7"
+  "input_hash": "051dd9c005c2c3ca"
  },
  {
   "name": "workspace_people",

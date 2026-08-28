@@ -24,7 +24,7 @@ import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import {
   activeWorkspaceSlug, listWorkspaces, managedWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
-  archiveWorkspace, createWorkspace, leaveWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam,
+  archiveWorkspace, createWorkspace, leaveWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam, workspaceMembers,
 } from './switcher.js';
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 
@@ -218,7 +218,7 @@ function openPopover(anchor: HTMLElement): void {
   closePopover();
   const cur = workspaceInfo();
   const curSlug = activeWorkspaceSlug();
-  const rows: Array<{ slug: string; name: string; kind: string; active: boolean; enter_url?: string; tenant_state?: string | null }> = spaces.length
+  const rows: Array<WsRow & { kind: string; active: boolean; enter_url?: string; tenant_state?: string | null }> = spaces.length
     //  ★ 종류는 저장된 kind 가 아니라 **지금 명부에 몇 명인가**에서 나온다(#1875 kind_effective).
     //  '지금 여기'의 판정 — 셀프호스트는 브라우저가 고른 slug 로, **매니지드는 서버가 준 is_current 로**.
     //   매니지드에선 워크스페이스마다 게이트웨이가 달라 브라우저에 고른 값이 없다(주소 자체가 답이다).
@@ -226,8 +226,14 @@ function openPopover(anchor: HTMLElement): void {
         active: typeof (w as any).is_current === 'boolean'
           ? !!(w as any).is_current
           : (w.slug === curSlug || (!!w.is_primary && curSlug === 'primary')),
-        enter_url: (w as any).enter_url, tenant_state: (w as any).tenant_state }))
-    : [{ slug: 'primary', name: cur.name, kind: cur.kind, active: true }];
+        enter_url: (w as any).enter_url, tenant_state: (w as any).tenant_state,
+        //  #1875 D5″ — ✕ 가 어느 문을 여는지는 이 셋이 정한다(인원 · 어드민 수 · 내 역할).
+        //   행마다 다르므로 «지금 워크스페이스»의 값이 아니라 그 행의 값을 그대로 들고 다닌다.
+        is_primary: !!w.is_primary || String(w.slug) === 'primary',
+        role: (w as any).role ?? null,
+        member_count: typeof w.member_count === 'number' ? w.member_count : null,
+        owner_count: typeof (w as any).owner_count === 'number' ? (w as any).owner_count : null }))
+    : [{ slug: 'primary', name: cur.name, kind: cur.kind, active: true, is_primary: true, role: null, member_count: null, owner_count: null }];
   const me = spaces.find((w) => (typeof (w as any).is_current === 'boolean' ? !!(w as any).is_current : (w.slug === curSlug || (!!w.is_primary && curSlug === 'primary'))));
   const isOwner = !!me && (me as any).role === 'owner' && (managedWorkspaces() || curSlug !== 'primary');
 
@@ -254,20 +260,16 @@ function openPopover(anchor: HTMLElement): void {
         tt(w.name, (w as any).tenant_state && (w as any).tenant_state !== 'running'
           ? '준비 중이에요 — 곧 열립니다'
           : w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스')),
-      addPeopleBtn(w))),
+      addPeopleBtn(w), exitBtn(w))),
+    //  #1875 D5″ — 워크스페이스가 하나도 없을 때(매니지드에서 마지막 것을 지운 직후). 다른 줄을 그리면
+    //   **누를 수 없는 것을 그리는 것**이라 거짓이다 — 할 일이 하나뿐이니 그 하나만 남긴다.
+    rows.length ? null : hint('워크스페이스가 하나도 없어요. 하나 만들면 거기서 다시 시작합니다.'),
     hr(),
     //  설정 — 이름 · 연결한 팀 · 보관. 만든 사람(owner)만. 종전엔 목록 행 옆 ✎ ✕ 였다(무엇인지 읽히지 않았다).
     isOwner ? row('gear', '워크스페이스 설정', settingsSub(), () => openSettingsPanel(anchor, curSlug)) : null,
-    //  #1875 D5' — 구성원(주인 아님)에게는 설정 판이 없다. 그래도 **나갈 문은 있어야 한다** —
-    //   팀에서 삭제가 막힌 대신 나가기가 그 자리를 받았는데, 그 문이 owner 판 안에만 있으면 갇힌다.
-    !isOwner && me && curSlug !== 'primary' && typeof me.member_count === 'number' && me.member_count >= 2
-      ? row('archive', '워크스페이스 나가기', `나만 빠집니다 · 올린 것은 남습니다`, () => {
-          if (!confirm(`'${me.name || curSlug}' 워크스페이스에서 나갈까요?\n나만 빠지고, 올린 지식·프로젝트는 그대로 남아요.\n다시 들어오려면 초대를 받아야 해요.`)) return;
-          void leaveWorkspace(curSlug)
-            .then(() => { toast(`'${me.name || curSlug}' 에서 나왔어요.`); switchWorkspace('primary'); })
-            .catch((e: any) => toast('나가지 못했어요 — ' + (e?.message || e), true));
-        })
-      : null,
+    //  #1875 D5″ — 종전엔 여기에 「워크스페이스 나가기」 줄이, 설정 판 안엔 「보관/나가기」가 따로 있었다.
+    //   둘 다 **지금 워크스페이스**만 다뤘고, 이제 행마다 ✕ 가 그 일을 한다(어느 워크스페이스인지가
+    //   행에서 이미 보인다). 같은 일을 하는 문을 셋 두면 어느 것이 진짜인지가 사라진다 — 걷었다.
     isOwner ? hr() : null,
     //  추가 — 누르면 **바로 만드는 판**이 뜬다(종전엔 옛 메뉴 전체가 떴다 — "저 드롭다운으로 보내는 이유를 모르겠음").
     row('plus', '워크스페이스 추가', registryActive() ? '혼자 시작합니다 — 사람을 부르면 팀이 됩니다' : '지금은 만들 수 없어요', () => openCreatePanel(anchor)),
@@ -312,38 +314,141 @@ function addPeopleBtn(w: { slug: string; name: string; kind: string; is_primary?
     icon('adduser')) as HTMLElement;
 }
 
+// ── ✕ — 이 워크스페이스를 «치우는» 문 (#1875 D5″, 2026-08-28 장원준) ────────
+//
+// 원준 지시: 「구성원 추가 옆에 X 아이콘 하나 추가로 만들어서」. 그래서 사람+ 와 **같은 자리·같은 규격**이다.
+//
+// ★ 누르면 다른 판으로 보내지 않고 **그 행 아래가 그 자리에서 열린다**(안 A, 2026-08-28 선택).
+//  목록을 안 떠나므로 «어느 워크스페이스 얘기인지»가 눈에서 안 사라진다 — 확인창이 가장 자주 틀리는 자리다.
+//
+// 갈래는 서버와 **같은 규칙**이다(registry.planWorkspaceLeave): 어드민 수가 문을 정한다.
+//   · 혼자                     → 삭제 (되돌릴 수 없다고 말한다)
+//   · 팀 · 어드민 아님/여럿     → 그냥 나가기
+//   · 팀 · 어드민이 나뿐        → 넘길 사람을 고르고 나가기
+//  화면이 여기서 더 좁게/넓게 세면 «눌렀더니 안 되더라» 가 된다. 그래도 서버가 정본이라 틀리면 서버가 막는다.
+//
+// primary 에는 안 그린다 — 박스 그 자체라 나갈 수도 지울 수도 없다(명부가 없다 = 로그인이 곧 접근).
+type WsRow = { slug: string; name: string; is_primary?: boolean; role?: string | null; member_count?: number | null; owner_count?: number | null };
+
+function exitBtn(w: WsRow): HTMLElement | null {
+  if (w.is_primary || w.slug === 'primary') return null;
+  if (!inviteAxisOn()) return null;   // 서버가 아직 이 축을 모르는 게이트웨이 — 그리면 404 만 난다
+  const alone = (w.member_count ?? 1) < 2;
+  return el('button', { class: 'v2-wspop-x', type: 'button',
+    title: alone ? `${w.name} 삭제` : `${w.name} 에서 나가기`,
+    'aria-label': alone ? `${w.name} 삭제` : `${w.name} 에서 나가기`,
+    onclick: (e: Event) => { e.stopPropagation(); openExitInline(e.currentTarget as HTMLElement, w); } },
+    icon('x')) as HTMLElement;
+}
+
+/** 열려 있는 확인은 언제나 하나다 — 둘이 열리면 어느 것에 답하는 중인지가 사라진다. */
+function closeExitInline(): void { popEl?.querySelectorAll('.v2-wspop-exit').forEach((n) => n.remove()); }
+
+function openExitInline(btn: HTMLElement, w: WsRow): void {
+  const row = btn.closest('.v2-wspop-row') as HTMLElement | null;
+  if (!row) return;
+  const already = row.nextElementSibling?.classList.contains('v2-wspop-exit');
+  closeExitInline();
+  if (already) return;   // 같은 ✕ 를 다시 누르면 닫힌다(토글)
+
+  const box = el('div', { class: 'v2-wspop-exit', role: 'group', 'aria-label': `${w.name} 정리` }) as HTMLElement;
+  row.after(box);
+  const alone = (w.member_count ?? 1) < 2;
+  const iAmAdmin = w.role === 'owner';
+  const soleAdmin = iAmAdmin && (w.owner_count ?? 1) < 2;
+
+  if (alone) paintDelete(box, w);
+  else if (soleAdmin) paintTransfer(box, w);
+  else paintLeave(box, w);
+  (box.querySelector('button, select') as HTMLElement | null)?.focus();
+}
+
+/** 확인 한 벌 — 문장 + [취소][실행]. 세 갈래가 같은 모양이어야 «무엇이 다른지»가 문장에서만 읽힌다. */
+function exitForm(box: HTMLElement, opts: { lines: string[]; extra?: HTMLElement | null; go: string; danger?: boolean; run: () => Promise<void> }): void {
+  const note = el('span', { class: 'v2-wspop-note' });
+  //  버튼 규격은 이 팝오버가 이미 쓰는 공용 btn 을 그대로 쓴다 — 여기만 새 클래스를 만들면
+  //   같은 메뉴 안에서 «만들기» 와 «나가기» 가 서로 다른 시대의 버튼이 된다.
+  const go = el('button', { class: 'btn btn-sm ' + (opts.danger ? 'btn-danger' : 'btn-primary'), type: 'button', text: opts.go,
+    onclick: async () => {
+      (go as HTMLButtonElement).disabled = true; note.textContent = '';
+      try { await opts.run(); }
+      catch (e: any) { (go as HTMLButtonElement).disabled = false; note.textContent = String(e?.message || e); }
+    } });
+  box.append(
+    ...opts.lines.map((t) => el('p', { class: 'v2-wspop-exit-l', text: t })),
+    ...(opts.extra ? [opts.extra] : []),
+    el('div', { class: 'v2-wspop-actions' },
+      el('button', { class: 'btn btn-sm', type: 'button', text: '취소', onclick: () => closeExitInline() }),
+      go, note));
+}
+
+function paintDelete(box: HTMLElement, w: WsRow): void {
+  exitForm(box, {
+    lines: [`'${w.name}' 을(를) 삭제할까요?`, '혼자 쓰는 워크스페이스라 나만 잃습니다. 되돌릴 수 없어요.'],
+    go: '삭제', danger: true,
+    run: async () => {
+      await archiveWorkspace(w.slug);
+      closePopover(); toast(`'${w.name}' 을(를) 삭제했어요.`);
+      await afterExit(w.slug);
+    },
+  });
+}
+
+function paintLeave(box: HTMLElement, w: WsRow): void {
+  const others = Math.max(0, (w.member_count ?? 2) - 1);
+  exitForm(box, {
+    lines: [`'${w.name}' 에서 나갈까요?`,
+      `나만 빠집니다 — 함께 쓰는 분 ${others}명과 올린 지식·프로젝트는 그대로 남아요.`,
+      '다시 들어오려면 초대를 받아야 해요.'],
+    go: '나가기', danger: true,
+    run: async () => {
+      await leaveWorkspace(w.slug);
+      closePopover(); toast(`'${w.name}' 에서 나왔어요.`);
+      await afterExit(w.slug);
+    },
+  });
+}
+
 /**
- * 이 워크스페이스에서 «떠나는 문» 한 줄 (#1875 D5') — 인원수가 어느 문을 그릴지 정한다.
- *  · 2명 이상이면 나가기. 단 **만든 사람은 아직 못 나간다**(주인 없는 팀이 남는다) → 버튼 대신 문장.
- *  · 혼자면 보관. 되돌릴 수 있는 치우기라 위험 톤은 이 한 줄에만 준다.
+ * 어드민이 나뿐일 때 — **넘길 사람을 고르고서야** 나간다(#1875 D5″).
+ *  8/27 엔 여기서 막고 "준비 중"이라 말했다. 막힌 문을 그리는 대신 답할 수 있는 컨트롤을 준다는 것이
+ *  이번 변경의 핵심이다([[ui-question-needs-answerable-control]]).
  */
-function exitRow(w: any, slug: string, wsName: string): HTMLElement {
-  const n = typeof w?.member_count === 'number' ? w.member_count : 1;
-  if (n >= 2) {
-    // 만든 사람 판정은 서버가 정본이다(등록부 owner_member). 화면은 role 로 근사하되, 눌러도 서버가 다시 막는다.
-    if (w?.role === 'owner') {
-      return hint(`함께 쓰는 분이 ${n - 1}명 있어 이 워크스페이스는 보관할 수 없어요. 만든 사람이라 나가기도 아직 안 돼요 — `
-        + '나가면 아무도 이 워크스페이스를 관리할 수 없게 되거든요. 주인 넘기기는 준비 중이에요.');
-    }
-    return el('button', { class: 'v2-wspop-row danger', type: 'button', onclick: async () => {
-      if (!confirm(`'${wsName}' 워크스페이스에서 나갈까요?\n나만 빠지고, 올린 지식·프로젝트는 그대로 남아요.\n다시 들어오려면 초대를 받아야 해요.`)) return;
-      try { await leaveWorkspace(slug); closePopover(); toast(`'${wsName}' 에서 나왔어요.`); switchWorkspace('primary'); }
-      catch (e: any) { toast('나가지 못했어요 — ' + (e?.message || e), true); }
-    } }, el('span', { class: 'v2-wspop-ic' }, icon('archive')),
-      tt('나가기', `나만 빠집니다 · 함께 쓰는 분 ${n - 1}명이 있어 보관은 안 됩니다`)) as HTMLElement;
-  }
-  return el('button', { class: 'v2-wspop-row danger', type: 'button', onclick: async () => {
-    if (!confirm(`'${wsName}' 워크스페이스를 보관할까요?\n목록에서 사라지지만 데이터는 지워지지 않아요.`)) return;
-    try { await archiveWorkspace(slug); closePopover(); toast(`'${wsName}' 을 보관했어요.`); switchWorkspace('primary'); }
-    catch (e: any) { toast('보관하지 못했어요 — ' + (e?.message || e), true); }
-  } }, el('span', { class: 'v2-wspop-ic' }, icon('archive')), tt('보관하기', '목록에서 숨깁니다 · 데이터는 남습니다')) as HTMLElement;
+function paintTransfer(box: HTMLElement, w: WsRow): void {
+  const pick = el('select', { class: 'v2-wspop-in', 'aria-label': '주인을 넘길 사람' }) as HTMLSelectElement;
+  pick.append(el('option', { value: '', text: '불러오는 중…' }));
+  exitForm(box, {
+    lines: [`'${w.name}' 의 관리자가 나 하나예요.`,
+      '나가려면 관리자를 넘겨야 해요 — 넘기지 않으면 아무도 이 워크스페이스를 관리할 수 없게 되거든요.'],
+    extra: pick, go: '넘기고 나가기', danger: true,
+    run: async () => {
+      const to = pick.value;
+      if (!to) throw new Error('넘길 분을 골라 주세요');
+      await leaveWorkspace(w.slug, to);
+      closePopover(); toast(`'${w.name}' 의 관리자를 넘기고 나왔어요.`);
+      await afterExit(w.slug);
+    },
+  });
+  void workspaceMembers(w.slug).then((ms) => {
+    const me = state.me && (state.me as { userId?: string }).userId;
+    const cand = ms.filter((m) => m.member_id !== me);
+    pick.replaceChildren(...(cand.length
+      ? cand.map((m) => el('option', { value: m.member_id, text: personName(m as never) || m.display_name || m.email || m.member_id }))
+      : [el('option', { value: '', text: '넘길 분이 없어요 — 먼저 초대하세요' })]));
+  }).catch(() => pick.replaceChildren(el('option', { value: '', text: '구성원을 불러오지 못했어요' })));
+}
+
+/** 나가거나 지운 뒤 — 지금 보고 있던 곳이면 옮겨 가야 하고, 아니면 목록만 새로 그리면 된다. */
+async function afterExit(slug: string): Promise<void> {
+  await refreshSpaces();
+  if (slug === activeWorkspaceSlug()) switchWorkspace('primary');
 }
 
 function settingsSub(): string {
-  // 설정 판의 마지막 줄이 인원수에 따라 갈리므로 부제도 같이 갈린다 — 열기 전에 무엇이 있는지 맞아야 한다.
-  const me = spaces.find((w) => w.slug === activeWorkspaceSlug());
-  const tail = typeof me?.member_count === 'number' && me.member_count >= 2 ? '나가기' : '보관';
-  return promoN ? `이름 · 연결한 팀 · ${tail} · 승인 대기 ${promoN}` : `이름 · 연결한 팀 · ${tail}`;
+  //  부제는 판 안에 **실제로 있는 것**을 그대로 읽는다. #1875 D5″ 로 떠나는 문이 행의 ✕ 로 옮겨 갔으므로
+  //   여기서 '보관/나가기' 를 말하면 열었을 때 없는 것을 약속한 것이 된다(규칙을 바꾸면 그 규칙을
+  //   설명하던 문장도 같이 늙는다 — D5' 에서 한 번 밟은 자리다).
+  return promoN ? `이름 · 연결한 팀 · 승인 대기 ${promoN}` : '이름 · 연결한 팀';
 }
 let promoN = 0;   // 승인 대기 승격 수 — 설정 행 부제에 싣는다(판 안에 숨기면 아무도 못 본다)
 
@@ -460,11 +565,8 @@ function openSettingsPanel(anchor: HTMLElement, slug: string): void {
   };
   void paintTeams();
 
-  // 떠나는 문 — 보관과 나가기 중 **정확히 하나만** 그린다(#1875 D5', 2026-08-27 장원준).
-  //  보관은 «내 목록에서 숨기기»가 아니라 등록부 state 를 내리는 것이라 **모두의 접근이 끊긴다** —
-  //  그래서 함께 쓰는 사람이 있으면 보관은 없고 나가기만 있다. 혼자면 반대다(나갈 곳이 없다).
-  //  둘 다 그려 놓고 한쪽이 서버에서 400 을 내는 화면은 «고를 수 있는 것처럼 보이는 것»을 만든다.
-  pop.append(hr(), exitRow(w, slug, wsName));
+  //  #1875 D5″ — 떠나는 문은 여기 없다. 목록 행의 ✕ 하나로 모았다(위 팝오버 주석).
+  //   여기 두면 «지금 워크스페이스»만 치울 수 있어, 다른 워크스페이스를 치우려면 거기로 들어갔다 나와야 했다.
   place(pop, anchor, !!anchor.closest('.v2-side'));
 }
 

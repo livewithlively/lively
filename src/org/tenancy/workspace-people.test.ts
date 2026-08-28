@@ -173,21 +173,27 @@ test("E31 나가기가 있다 — 삭제를 막았으면 나갈 문이 있어야
   assert.ok(at > 0, "workspace_leave 가 없다 — 팀에서 나갈 문이 없으면 보관 금지는 갇힘이 된다");
   const body = src.slice(at, src.indexOf('restRead("workspace_people"', at));
   assert.match(body, /"\/api\/ui\/me\/workspaces\/leave"/, "REST 경로가 없다");
-  assert.match(body, /n\s*<\s*2/, "혼자인 워크스페이스에서 나가기가 열린다(보관과 배타가 깨진다)");
-  assert.match(body, /id === ws\.owner_member/, "만든 사람이 나가 주인 없는 팀이 남는다");
+  //  #1875 D5″ — 갈래(혼자냐 · 어드민이 나뿐이냐 · 아니냐)는 이제 핸들러가 세지 않고
+  //   registry.planWorkspaceLeave **한 벌**이 정한다. 규칙 자체의 엣지는 그쪽 테스트가 잡는다
+  //   (workspace-leave-transfer.test.ts E1~E12). 여기서는 **핸들러가 그 한 벌을 따르는지**만 본다 —
+  //   핸들러가 자기 판정을 되살리면 화면·서버·MCP 가 서로 다른 말을 하기 시작한다.
+  assert.match(body, /const plan = planWorkspaceLeave\(\{[\s\S]{0,400}ownerMember: ws\.owner_member/,
+    "★ 나가기 갈래를 한 벌(planWorkspaceLeave)로 안 정한다 — 핸들러가 규칙을 따로 세면 갈린다");
+  assert.match(body, /if \(!plan\.ok\) throw leaveRefusal\(/, "거절을 사람 말로 옮기는 자리가 없다");
+  assert.ok(body.indexOf("transferWorkspaceOwner") < body.indexOf("removeWorkspaceMember(ws.id, id)"),
+    "★ 주인을 넘기기 전에 먼저 나가진다 — 넘기기가 실패하면 주인 없는 팀이 남는다");
   assert.match(body, /removeWorkspaceMember\(ws\.id, id\)/, "명부에서 안 빠진다");
   assert.ok(!body.includes("requireOwner"), "구성원이 자기 발로 나갈 수 없다 — 나가기는 owner 전용이 아니다");
 });
 
-test("E32 화면도 같은 규칙을 쓴다 — 인원 2명 이상이면 보관 대신 나가기를 그린다", () => {
+test("E32 화면도 같은 규칙을 쓴다 — 갈래를 인원·어드민 수로 가른다", () => {
+  //  #1875 D5″ — 떠나는 문이 «설정 판의 한 줄»(exitRow)에서 «목록 행의 ✕»로 옮겨 갔다.
+  //   화면 구조의 엣지는 workspace-exit-ui.test.ts 가 전담한다(E1~E11 + 돌연변이 확인).
+  //   여기서는 그 한 가지만 본다 — **화면의 임계가 서버와 같은 축인가.** 축이 갈리면 눌러도 400 만 난다.
   const rail = readSrc("web/v2/rail.ts");
-  const at = rail.indexOf("function exitRow(");
+  const at = rail.indexOf("function openExitInline(");
   assert.ok(at > 0, "떠나는 문을 고르는 자리가 없다 — 화면과 서버가 갈리면 눌러도 400 만 난다");
-  const body = rail.slice(at, at + 1600);
-  assert.match(body, /member_count/, "화면이 인원수가 아닌 다른 축으로 판정한다");
-  assert.match(body, /n\s*>=\s*2/, "화면의 임계가 서버(2명)와 다르다");
-  const leave = body.indexOf("leaveWorkspace(slug)");
-  const archive = body.indexOf("archiveWorkspace(slug)");
-  assert.ok(leave > 0 && archive > 0, "두 문 중 하나가 아예 없다");
-  assert.ok(leave < archive, "인원이 많은 쪽(나가기)이 먼저 갈라져야 한다");
+  const body = rail.slice(at, at + 1400);
+  assert.match(body, /\(w\.member_count \?\? 1\) < 2/, "화면의 '혼자' 임계가 서버(2명)와 다르다");
+  assert.match(body, /\(w\.owner_count \?\? 1\) < 2/, "화면이 어드민 수를 안 본다 — 서버는 그걸로 갈린다");
 });
