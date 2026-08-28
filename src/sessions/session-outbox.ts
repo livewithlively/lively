@@ -310,7 +310,15 @@ async function deliverLoop(sessionId: string): Promise<void> {
     //  이 폴백의 의도는 원래 "로그인 전이라 서버를 못 여는 경우에도 지시가 큐에 남는다"(sessions.ts)인데,
     //  나르는 수단이 send-keys 하나뿐이라 그 의도가 성립한 적이 없다. 수단을 하나 더 준다.
     //  ⚠ control(설정 슬래시 명령)은 여기 올 수 없다 — codex 는 runtimeCmd 가 없어 /runtime 이 409 로 막는다.
-    if (deliveryTransport(harness) === "codex-chat") {
+    // 갈린 **결과**를 한 줄 남긴다 — 나중에 "이 지시가 왜 저쪽으로 갔나"를 묻게 될 자리다(#2169).
+    //  ⚠ 이 로그가 없어서 codex 배달은 **성공 시 무음**이었다: 세션이 열려도 `docker logs` 에 아무것도
+    //   안 뜨고, 어디로 갔는지는 DB 를 읽어 추론해야 했다(실측 2026-08-27 — 그 경로를 쓴 내가 몰랐다).
+    //  일반화: **경로가 갈리는 자리(분기·폴백·전송수단 선택)에는 갈린 결과를 남긴다.** 산출물이 '행위'인
+    //   수정은 스스로를 증명하지 못해 사람이 재현해 줄 때까지 기다리는데, 이 한 줄이 그 성질을 바꾼다.
+    //  볼륨: 사람이 친 프롬프트 단위라 핫패스가 아니다(control 포함해도 세션당 수십 건/일).
+    const transport = deliveryTransport(harness);
+    logger.info({ sessionId, seq: row.seq, harness, transport }, "outbox: 전송수단");
+    if (transport === "codex-chat") {
       if (await deliverViaCodexChat(sessionId, st, row, settleStall)) return;
       continue;
     }
