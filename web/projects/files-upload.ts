@@ -204,7 +204,7 @@ async function upFromDrop(dt): Promise<{ items: UpItem[]; emptyDirs: string[] }>
 // '＋ 업로드' 버튼 — 파일 / 폴더 선택 메뉴(폴더는 <input webkitdirectory> 로만 고를 수 있어 입력이 따로다).
 //  반환한 입력 두 개는 호출부가 헤더에 함께 append 한다(숨김 input).
 //  opts.className/label — 버튼 톤을 부르는 화면에 맞춘다(프로젝트 카드 = btn btn-ghost, 대시보드 브라우저 = dash-fb-btn, #795).
-function upControl(onPick: (items: UpItem[]) => void, opts?: { className?: string; label?: string }) {
+function upControl(onPick: (items: UpItem[]) => void, opts?: { className?: string; label?: string; fileLabel?: string; dirLabel?: string; note?: string }) {
   const fileIn = el('input', { type: 'file', multiple: '', style: 'display:none' });
   const dirIn = el('input', { type: 'file', multiple: '', webkitdirectory: '', style: 'display:none' });
   fileIn.addEventListener('change', () => { onPick(upFromInput(fileIn)); fileIn.value = ''; });
@@ -221,8 +221,10 @@ function upControl(onPick: (items: UpItem[]) => void, opts?: { className?: strin
       item.onclick = (ev) => { ev.stopPropagation(); close(); fn(); };
       return item;
     };
-    menu.append(mk('파일 올리기', '여러 개 선택 가능', () => fileIn.click()));
-    if (upDirSupported()) menu.append(mk('폴더 올리기', '하위 폴더까지 구조 그대로', () => dirIn.click()));
+    menu.append(mk((opts && opts.fileLabel) || '파일 올리기', '여러 개 선택 가능', () => fileIn.click()));
+    if (upDirSupported()) menu.append(mk((opts && opts.dirLabel) || '폴더 올리기', '하위 폴더까지 구조 그대로', () => dirIn.click()));
+    //  #2232 — 왜 둘로 갈리는지(브라우저 창 하나로는 파일·폴더를 같이 못 고른다)를 부르는 화면이 한 줄 붙일 수 있다.
+    if (opts && opts.note) menu.append(el('p', { class: 'pjv-menu-note', text: opts.note }));
   };
   return { btn, fileIn, dirIn };
 }
