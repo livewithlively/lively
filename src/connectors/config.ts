@@ -17,6 +17,7 @@ import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-t
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
 import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
 import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
+import { resolveGithubTokenSource, githubVaultDeps } from "../org/credentials/github-token-source.js";
 import { resolveGoogleTokenSource, googleVaultReader, isGoogleCollectorSystem } from "../org/credentials/google-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
@@ -139,6 +140,28 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "include_list_ids", env: "CLICKUP_INCLUDE_LIST_IDS", secret: false, label: "포함 리스트", picker: "clickup_lists", hint: "설정 시 이 리스트만 싱크 (쉼표구분)" },
       { key: "exclude_list_ids", env: "CLICKUP_EXCLUDE_LIST_IDS", secret: false, label: "제외 리스트", picker: "clickup_lists", hint: "노이즈/샘플 리스트 (쉼표구분)" },
       { key: "container_list_id", env: "CLICKUP_CONTAINER_LIST_ID", secret: false, label: "컨테이너 리스트", picker: "clickup_lists", hint: "아웃바운드 create 대상 List" },
+    ],
+  },
+  // GitHub 커넥터(#2247) — 이슈·PR 대화·릴리스. 토큰은 금고(github_pat: PAT 또는 [GitHub 연결] 묶음)를 token_source 로 가리킨다.
+  github: {
+    system: "github",
+    label: "GitHub",
+    guide: {
+      intro: "고른 저장소의 이슈·PR 본문과 댓글, 릴리스 노트를 자료로 모읍니다. 토큰은 [외부 앱 연결 ▸ GitHub]에서 계정을 연결하면 그걸 그대로 씁니다(토큰 출처 member:<내 구성원 id>).",
+      steps: [
+        "[외부 앱 연결 ▸ GitHub]에서 [계정으로 연결](저장소 고르기)하거나 PAT 를 저장합니다",
+        "'토큰 출처'에 member:<내 구성원 id> 를 적습니다(토큰 칸은 비워 둡니다)",
+        "'저장소'에 owner/repo 를 넣습니다(공백·줄바꿈으로 여러 개, 주소를 그대로 붙여넣어도 됩니다) — 비우면 연결 화면에서 고른 저장소가 기본값입니다",
+      ],
+      url: "https://github.com/settings/tokens",
+    },
+    fields: [
+      { key: "token", env: "GITHUB_TOKEN", secret: true, label: "토큰", hint: "ghp_… / github_pat_… — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "GITHUB_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = 관리탭 자격 금고의 조직 공용 github_pat · member:<구성원 id> = 그 사람의 [GitHub 연결]/PAT · 비우면 위 토큰 칸을 씁니다" },
+      { key: "host", env: "GITHUB_HOST", secret: false, label: "호스트", hint: "기본 github.com — GitHub Enterprise 면 그 호스트" },
+      { key: "repos", env: "GITHUB_REPOS", secret: false, label: "저장소", hint: "owner/repo — 공백·줄바꿈으로 여러 개. GitHub 주소를 그대로 붙여넣어도 됩니다" },
+      { key: "include_prs", env: "GITHUB_INCLUDE_PRS", secret: false, label: "PR 포함", hint: "on(기본) | off — PR 본문·리뷰 댓글" },
+      { key: "include_releases", env: "GITHUB_INCLUDE_RELEASES", secret: false, label: "릴리스 포함", hint: "on(기본) | off — 릴리스 노트" },
     ],
   },
   // Google 커넥터 — OAuth2 refresh-token(google-auth.ts). client_id 는 공개 식별자(secret 아님), client_secret·refresh_token 은 시크릿.
@@ -416,6 +439,14 @@ async function loadConnectorConfig(
     if (r) {
       if (r.warning) console.warn(`clickup token_source: ${r.warning}`);
       out.api_token = r.token;
+    }
+  }
+  // ── GitHub 토큰 출처(#2247) — 같은 규약. 묶음/정적·만료 갱신은 http_proxy 와 같은 부품(github-token-source.ts).
+  if (system === "github" && out.token_source) {
+    const r = await resolveGithubTokenSource(out.token_source, out.host ?? "github.com", githubVaultDeps);
+    if (r) {
+      if (r.warning) console.warn(`github token_source: ${r.warning}`);
+      out.token = r.token;
     }
   }
   // ── 구글 토큰 출처(#1881 G3) — 같은 규약이되 **액세스 토큰이 아니라 갱신 자격 3칸**을 채운다.

@@ -17,6 +17,7 @@ export function sourceKindOf(system: string): string {
     case "discord": return "discord";   // #735 커넥터별 kind 충실화(종전 'other' 로 뭉뚱그려져 UI 필터 불가)
     case "local": return "local_file";  // #1881 내 컴퓨터 업로드(폴더·파일) — drive_file 과 섞이면 자료함 필터·증류기 match_kinds 가 갈린다
     case "figma": return "figma_comment"; // #1881 F5 디자인 코멘트 — 결정·피드백·QA 지적이 섞여 슬랙 메시지와 증류 기준이 다르다
+    case "github": return "github_issue"; // #2247 이슈·PR 대화·릴리스 — 닫힘·머지가 결론 신호라 증류 기준이 따로 있다
     default: return "other";
   }
 }

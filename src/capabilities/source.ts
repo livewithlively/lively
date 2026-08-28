@@ -18,7 +18,7 @@ async function assertSourceVisible(id: unknown, viewer: Viewer): Promise<void> {
   if (!(await canSeeSource(Number(id), viewer))) throw new HttpError(404, `자료 #${Number(id)} 없음`);
 }
 
-export const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "discord", "notion_doc", "clickup_doc", "drive_file", "local_file", "figma_comment", "other"] as const;
+export const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "discord", "notion_doc", "clickup_doc", "drive_file", "local_file", "figma_comment", "github_issue", "other"] as const;
 
 const sourceListInput = {
   kind: z.enum(SOURCE_KINDS).optional(),

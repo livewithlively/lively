@@ -956,10 +956,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *   · 노션 — 라이블리 공개 통합 동의(노션 화면의 페이지 고르기)가 곧 연결이자 범위. 개인 MCP 로그인은 시키지 않는다.
    *   · 슬랙 — 내 계정 로그인(라이블리 슬랙 앱, 유저+봇 토큰)이 곧 수집기의 자격이다. 로그인 뒤 수집기를 켠다. */
   //  #2247 — 피그마·ClickUp 도 같은 축: 토큰(금고)이 자격, 켜면 수집기가 그 토큰을 가리킨다. 피그마는 범위(파일 링크)가 있어야 켜진다.
-  const COLLECT_FIRST = { slack: 'slack', notion: 'notion', figma: 'figma', clickup: 'clickup' };
+  const COLLECT_FIRST = { slack: 'slack', notion: 'notion', figma: 'figma', clickup: 'clickup', github: 'github' };
   const COLLECT_ON_DESC = {
     notion: '노션에서 고른 페이지를 팀 자료함에 모으고 있어요.', slack: '공개 채널 대화를 팀 자료함에 모으고 있어요.',
     figma: '고른 피그마 파일의 코멘트를 팀 자료함에 모으고 있어요.', clickup: 'ClickUp 작업·댓글을 프로젝트 탭으로 가져오고 있어요.',
+    github: '고른 저장소의 이슈·PR 대화를 팀 자료함에 모으고 있어요.',
   };
   /** 토큰형 앱의 자격이 이미 금고에 있나(개인 축 실측). */
   const tokenSaved = (id) => !!(CONN && SVC_OF[id] && CONN.connected.some((s) => s.key === SVC_OF[id]));
@@ -1015,7 +1016,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (c) {
         if (id === 'notion') return c.enabled ? 'on' : (!c.ready && !(c.workspaces || []).length ? 'blocked' : 'off');
         if (id === 'slack') return (c.search && c.search.enabled) ? 'on' : 'off';
-        if (id === 'figma' || id === 'clickup') return c.enabled ? 'on' : 'off';
+        if (id === 'figma' || id === 'clickup' || id === 'github') return c.enabled ? 'on' : 'off';
       }
       // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
     }
@@ -1124,7 +1125,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       try { await loadConn(); } finally { busy = false; }
       if (done) return;
       if (collectMode(id) && connState(id) !== 'on') {
-        const ready = id === 'notion' ? !!(COLL[id] && (COLL[id].workspaces || []).length) : (id === 'slack' || id === 'clickup') && tokenSaved(id);
+        const ready = id === 'notion' ? !!(COLL[id] && (COLL[id].workspaces || []).length) : (id === 'slack' || id === 'clickup' || id === 'github') && tokenSaved(id);
         if (ready) {
           busy = true;
           try { await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify({ enabled: true }) }); await loadConn(); }
@@ -1598,6 +1599,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               window.open(url, '_blank', 'noopener');
               watchConnect(id, fin);
             } catch (e) { fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
+            return;
+          }
+          //  #2247 GitHub — 계정 연결(저장소 고르기)이 곧 범위. 연결돼 있으면 바로 켠다(서버가 고른 저장소를 기본 범위로 채운다).
+          if (id === 'github' && tokenSaved(id)) {
+            const r: any = await startMemberCollect(id, '');
+            await loadConn();
+            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요 — [외부 앱 연결 ▸ GitHub]에서 저장소를 넣고 켜 주세요.'));
             return;
           }
           //  #2247 피그마·ClickUp — 토큰이 없으면 토큰 폼(피그마는 범위 칸 포함), 있으면 바로 켠다. 범위가 없다면(피그마) 폼을 연다.
