@@ -254,14 +254,13 @@ export function switcherName(): HTMLElement {
 }
 
 /** 이 게이트웨이의 워크스페이스 목록. registry 가 꺼져 있으면 빈 배열(전환할 목록 자체가 없다). */
-export async function listWorkspaces(): Promise<Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string }>> {
-  const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
-  if (!reg.active) return [];
+export async function listWorkspaces(): Promise<Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string; enter_url?: string; id?: string; tenant_state?: string | null; is_current?: boolean }>> {
+  if (!registryActive()) return [];
   try {
     const d: any = await api('/api/ui/me/workspaces');
     //  #1875 — 같은 응답이 「나에게 온 초대」도 싣고 온다. 그 하나를 위해 같은 주소를 두 번 부르지 않는다.
     lastInvites = ((d && d.invites_for_me) || []) as InviteForMe[];
-    return ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string }>;
+    return ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string; enter_url?: string; id?: string; tenant_state?: string | null; is_current?: boolean }>;
   } catch (_) { return []; }
 }
 
@@ -275,7 +274,17 @@ export function myInvites(): InviteForMe[] { return lastInvites; }
 export function activeWorkspaceSlug(): string { return currentWorkspace() || 'primary'; }
 
 /** 그 워크스페이스로 전환(헤더 선택 + 리로드). 메뉴 안의 전환과 **같은 경로**다. */
-export function switchWorkspace(slug: string): void { switchTo(slug); }
+/**
+ * 그 워크스페이스로 간다.
+ *
+ * ★ 매니지드에서는 **헤더 전환이 성립하지 않는다** — 워크스페이스 1개 = 테넌트 1개 = 주소 1개라(1:1),
+ *  같은 게이트웨이에 헤더만 바꿔 봐야 그 워크스페이스가 거기 없다. 그래서 계정 서버가 준 `enter_url` 로
+ *  **이동**한다(그 주소가 로그인까지 태워 준다). 셀프호스트(registry)는 종전대로 헤더+새로고침.
+ */
+export function switchWorkspace(slug: string, enterUrl?: string | null): void {
+  if (enterUrl) { window.location.assign(enterUrl); return; }
+  switchTo(slug);
+}
 
 /** 지금 워크스페이스의 이름·종류 — 레일의 스택 타일·팝오버가 쓴다. */
 export function workspaceInfo(): { kind: 'personal' | 'team'; hub: string | null; name: string } { return ws(); }
@@ -448,9 +457,11 @@ function promoRow(p: any, wrap: HTMLElement): HTMLElement {
 
 // ── #1875 — 레일 팝오버(rail.ts)가 쓰는 워크스페이스 조작. 옛 메뉴(openMenu)의 인라인 fetch 를 꺼낸 것이다.
 //  화면은 rail.ts 가 새 문법으로 그리고, 서버와 말하는 법은 여기 한 곳에 둔다(주소·본문이 두 벌로 갈리지 않게).
-export async function createWorkspace(name: string, kind: 'personal' | 'team'): Promise<{ slug: string; name: string }> {
+export async function createWorkspace(name: string, kind: 'personal' | 'team'): Promise<{ slug: string; name: string; enter_url?: string }> {
   const d: any = await api('/api/ui/me/workspaces', { method: 'POST', body: JSON.stringify({ name, kind }) });
-  return { slug: String(d?.workspace?.slug || ''), name: String(d?.workspace?.name || name) };
+  //  enter_url 은 매니지드에서만 온다(새 워크스페이스 = 새 테넌트 = 새 주소). 셀프호스트는 undefined 라
+  //  호출부가 종전대로 헤더 전환을 탄다 — 한 함수가 두 배포를 덮는다.
+  return { slug: String(d?.workspace?.slug || ''), name: String(d?.workspace?.name || name), enter_url: d?.workspace?.enter_url || undefined };
 }
 export async function renameWorkspace(slug: string, name: string): Promise<void> {
   await api('/api/ui/me/workspaces/update', { method: 'POST', body: JSON.stringify({ slug, name }) });
@@ -480,8 +491,20 @@ export async function resolvePromotion(id: string | number, decision: 'approve' 
   const d: any = await api('/api/ui/me/promotions/' + id + '/resolve', { method: 'POST', body: JSON.stringify({ decision }) });
   return { state: String(d?.promotion?.state || ''), error: d?.promotion?.error };
 }
-/** 다중 워크스페이스(registry)가 켜져 있는가 — 꺼져 있으면 만들 목록 자체가 없다. */
+/**
+ * 여기서 워크스페이스를 **만들고 고를 수 있는가**.
+ *
+ * 축이 둘이다(#2188) — `active` 는 이 박스의 등록부가 도는 것(셀프호스트 다중), `managed` 는 계정 서버
+ *  (app.lvly.io)가 대신 해 주는 것(매니지드). 화면 입장에서는 **둘 다 "여기서 된다"** 이므로 하나로 본다.
+ *  종전엔 `active` 만 봐서 매니지드가 전부 꺼진 것으로 읽혔고, 그래서 목록도 만들기도 없이
+ *  "그건 app.lvly.io 에서 하세요" 링크만 남았다 — 원준 신고 *"????? 이건 왜..?"*.
+ */
 export function registryActive(): boolean {
   const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
-  return !!reg.active;
+  return !!reg.active || !!reg.managed;
+}
+/** 매니지드인가 — 전환이 **헤더가 아니라 이동**이라는 뜻이다(워크스페이스마다 주소가 다르다). */
+export function managedWorkspaces(): boolean {
+  const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
+  return !!reg.managed;
 }

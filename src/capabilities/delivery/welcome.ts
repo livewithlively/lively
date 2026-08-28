@@ -494,6 +494,16 @@ export const welcomeCapabilities: Capability[] = [
         //  (personName 단일 판정). 여기서 nickname 까지 덮으면 그 사람이 정해 둔 닉네임이 날아간다.
         await upsertMember({ id: userId, display_name: nickname }, { actor: userId, source: "welcome" } as never)
           .catch(() => { /* 이름은 못 바꿔도 온보딩을 막지 않는다 */ });
+        // #2188 ① — 매니지드면 **계정 서버에도 알린다.** 워크스페이스는 이 화면보다 **먼저** 만들어지므로
+        //  이름이 자리표시자("내 워크스페이스")로 굳는다. 신고(장원준 2026-08-27):
+        //  *"처음에 입력한 이름이 워크스페이스에 반영되지 않았어 — ~~의 워크스페이스로 되어 있어야 하는데."*
+        //  구글 SSO 경로는 계정 이름을 알아서 처음부터 «<이름>의 워크스페이스» 로 짓는다(CP ensurePersonalWorkspace) —
+        //  이메일+비밀번호 경로만 그 이름을 알 자리가 없었고, 그 자리가 바로 여기다.
+        //  ⚠ **부수효과다** — 계정 서버가 죽어도 온보딩은 그대로 진행된다(이름은 이미 이 워크스페이스에 저장됐다).
+        //  CP 는 비어 있는 값만 채운다(사람이 고쳐 둔 이름은 안 덮는다 — tenant-workspace-routes.ts B3).
+        const { resolveCpTarget, callCpBestEffort } = await import("./managed-cp.js");
+        await callCpBestEffort(await resolveCpTarget(user, { optional: true }).catch(() => null),
+          "/api/tenant/account-name", { name: nickname });
       }
 
       // ── 자료함 갈래 ── 사람이 승인한 것만 만든다. 이미 있으면 건너뛴다(다시 눌러도 안전).

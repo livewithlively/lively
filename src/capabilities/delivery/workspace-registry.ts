@@ -32,6 +32,8 @@ import { updateOrgProfile } from "../../org/store/profile.js";
 import { updateRuntimeConfig } from "../../org/store/runtime-config.js";
 import { seedDefaultContent } from "../../org/delivery/seed-content.js";
 import { logger } from "../../log.js";
+// #2188 — 매니지드에서 워크스페이스의 권위는 CP(app.lvly.io)다. 여기서는 **묻고 전달만** 한다.
+import { resolveCpTarget, callCp, hubOrigin, type CpWorkspace } from "./managed-cp.js";
 
 const requireMember = (user: LivelyUser): string => {
   const id = user?.userId;
@@ -89,6 +91,27 @@ const requireRegistry = (): void => {
   }
 };
 
+/**
+ * 이 게이트웨이가 **매니지드**인가(#2188). CP 서명 헤더 모드 = CP 가 워크스페이스 축의 권위.
+ *  registry(셀프호스트 다중)와 **배타**다 — 둘 다 켜지는 배포는 없다(tenant-middleware 머리말).
+ */
+const managedMode = (): boolean => !!(process.env.LIVELY_TENANT_HEADER_SECRET || "").trim();
+
+/**
+ * CP 의 워크스페이스 한 줄 → 화면이 이미 아는 모양(wsView)으로. **필드 이름을 새로 만들지 않는다** —
+ *  스위처·문패·구성원 창이 registry 판과 매니지드 판에서 같은 코드로 그려야 한다(두 벌이 되면 한쪽만 낡는다).
+ *  다른 점은 딱 하나, `enter_url` 이다: 매니지드는 워크스페이스마다 테넌트·주소가 달라서(1:1)
+ *  전환이 헤더가 아니라 **이동**이다.
+ */
+const cpWsView = (w: CpWorkspace) => ({
+  slug: w.slug, name: w.name, kind: w.kind, state: "active", role: w.role,
+  is_primary: false, created_at: null,
+  member_count: w.member_count, pending_invites: w.pending_invites,
+  kind_effective: w.kind,
+  // 매니지드 전용 — 화면이 이 값이 있으면 '전환'이 아니라 '이동'으로 다룬다.
+  enter_url: w.enter_url, id: w.id, tenant_state: w.tenant_state, is_current: w.is_current,
+});
+
 export const workspaceRegistryCapabilities: Capability[] = [
   restRead("workspace_registry_status", "워크스페이스 목록·상태",
     "이 게이트웨이의 다중 워크스페이스 상태와 **내가 속한 워크스페이스 목록**(좌상단 스위처 재료). " +
@@ -96,13 +119,28 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "GET", paths: ["/api/ui/me/workspaces"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       const id = requireMember(user);
-      const managed = !!(process.env.LIVELY_TENANT_HEADER_SECRET || "").trim();
+      const managed = managedMode();
       const mode = managed ? "managed" : registryModeActive() ? "registry" : "single";
       const current = currentTenant()?.slug ?? PRIMARY_SLUG;
+      if (managed) {
+        // #2188 ★ 종전엔 여기서 **무조건 빈 배열**을 돌려줬다. 그래서 app.lvly.io 에서 워크스페이스를
+        //  만들고 활성화까지 끝나도 게이트웨이 스위처엔 영영 안 나타났다(원준 실측 신고).
+        //  목록의 권위는 CP 지만, **묻지 않으면 없는 것과 같다.**
+        const t = await resolveCpTarget(user, { optional: true });
+        if (!t) return { mode, current, workspaces: [], can_create: false, hub: await hubOrigin().catch(() => null) };
+        const r = await callCp<{ workspaces: CpWorkspace[] }>(t, "/api/tenant/workspaces");
+        return {
+          mode, current, hub: t.base,
+          // 매니지드에서도 **여기서 만들 수 있다**(#2188 ②) — 실행만 CP 가 한다.
+          can_create: true,
+          workspaces: (r.workspaces ?? []).map(cpWsView),
+          invites_for_me: [],
+        };
+      }
       if (mode !== "registry") {
         // single = 자동 활성화가 아직/실패 — 실패 사유는 admin 에게만(오류 문구에 DSN 호스트 등이 실릴 수 있다).
         const err = (user.scopes || []).includes("admin") ? lastActivationError() : null;
-        return { mode, current, workspaces: [], ...(err ? { activation_error: err } : {}) };
+        return { mode, current, workspaces: [], can_create: false, ...(err ? { activation_error: err } : {}) };
       }
       const mine = await listWorkspacesForMember(id);
       // primary 는 명부 없이도 모두의 것 — 명부에 없어도 목록 맨 앞에 세운다(박스 로그인 = primary 접근).
@@ -151,8 +189,18 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/me/workspaces"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      const nameIn = String(input.name ?? "").replace(/\s+/g, " ").trim();
+      if (managedMode()) {
+        // #2188 ② — 사람을 app.lvly.io 로 내보내지 않는다. 캡·슬러그·프로비저닝 판정은 그대로 CP 가 한다.
+        if (!nameIn) throw new HttpError(400, "워크스페이스 이름을 입력하세요");
+        const t = await resolveCpTarget(user);
+        const r = await callCp<{ workspace: CpWorkspace }>(t!, "/api/tenant/workspace-create", { name: nameIn });
+        //  ⚠ 새 워크스페이스는 **새 테넌트**라 주소가 다르다 — 헤더로 전환할 수 없다.
+        //   그래서 header 대신 enter_url 을 준다(화면이 그리로 이동한다).
+        return { workspace: cpWsView(r.workspace) };
+      }
       requireRegistry();
-      const name = String(input.name ?? "").trim();
+      const name = nameIn;
       if (!name) throw new HttpError(400, "name 이 필요합니다");
       const kind = input.kind === "team" ? "team" as const : "personal" as const;
       const slug = input.slug ? normalizeWorkspaceSlug(input.slug) : autoSlug();
@@ -263,9 +311,35 @@ export const workspaceRegistryCapabilities: Capability[] = [
   restRead("workspace_people", "구성원 · 초대 현황",
     "이 워크스페이스의 명부(사람·역할)와 **보류 중인 초대**, 그리고 부를 수 있는 사람 후보를 함께 준다. " +
     "member_count 로 개인/팀이 갈린다(kind_effective) — 저장된 kind 가 아니라 지금 몇 명인가가 정본이다.",
-    [{ method: "GET", paths: ["/api/ui/me/workspaces/people"], parse: (req) => ({ slug: req.query?.slug }) }],
+    [{ method: "GET", paths: ["/api/ui/me/workspaces/people"], parse: (req) => ({ slug: req.query?.slug, workspace_id: req.query?.workspace_id }) }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      if (managedMode()) {
+        // #2188 — 매니지드 명부의 축은 CP 계정(이메일)이다. 화면은 같은 창을 쓰고 재료만 CP 에서 온다.
+        //  대상은 slug 가 아니라 workspace_id 로 지목한다(CP 의 키). 화면이 목록에서 받은 값을 그대로 준다.
+        const t = await resolveCpTarget(user);
+        const r = await callCp<{
+          workspace: { id: string; name: string; kind: "personal" | "team" };
+          my_role: string;
+          members: Array<{ email: string; name: string | null; role: string; is_me: boolean }>;
+          pending: Array<{ email: string | null; expires_at: string }>;
+        }>(t!, "/api/tenant/workspace-people", { workspace_id: input.workspace_id ?? input.slug });
+        const isOwner = r.my_role === "owner";
+        return {
+          workspace: { slug: r.workspace.id, name: r.workspace.name, kind: r.workspace.kind, state: "active",
+            role: r.my_role, is_primary: false, created_at: null,
+            member_count: r.members.length, pending_invites: r.pending.length, kind_effective: r.workspace.kind },
+          member_count: r.members.length,
+          kind_effective: r.workspace.kind,
+          can_invite: isOwner,
+          members: r.members.map((m) => ({ member_id: m.email, role: m.role, email: m.email,
+            display_name: m.name, is_creator: m.role === "owner" })),
+          pending: isOwner ? r.pending.map((pi) => ({ id: pi.email ?? "", email: pi.email, role: "member",
+            invited_by: null, created_at: pi.expires_at })) : [],
+          // 매니지드는 '이 박스의 사람' 이라는 후보 개념이 없다 — 초대는 **이메일로** 부른다.
+          candidates: [],
+        };
+      }
       requireRegistry();
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID)
@@ -297,7 +371,11 @@ export const workspaceRegistryCapabilities: Capability[] = [
         // 이미 들어와 있거나 이미 부른 사람은 후보에서 뺀다(같은 사람을 두 번 부르는 화면을 만들지 않는다).
         candidates: isOwner ? people.filter((p) => !memberIds.has(p.id) && !pendingEmails.has(p.email)) : [],
       };
-    }, true, { slug: z.string().describe("대상 워크스페이스 slug") }),
+    }, true, {
+      slug: z.string().optional().describe("대상 워크스페이스 slug(셀프호스트 등록부의 키)"),
+      // #2188 매니지드 — CP 의 키는 uuid 다. 화면은 목록에서 받은 값을 그대로 넘기고, CP 는 uuid·slug 둘 다 받는다.
+      workspace_id: z.string().optional().describe("대상 워크스페이스 id(매니지드 — 계정 서버의 키). slug 대신 쓸 수 있다"),
+    }),
 
   restWork("workspace_invite", "구성원 초대(이메일)",
     "이 워크스페이스로 사람을 부른다(owner 전용). 초대는 **보류**로 만들어지고, 받는 사람이 수락해야 명부에 들어온다 — " +
@@ -307,6 +385,16 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/me/workspaces/invite"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      if (managedMode()) {
+        // #2188 — 초대도 여기서. owner 게이트·인원 캡·중복은 CP 의 inviteMember 가 그대로 판정한다.
+        //  ⚠ CP 는 **메일을 보내지 않는다** — 초대 링크를 돌려주고 사람이 전달한다. 화면도 그대로 말해야 한다.
+        const t = await resolveCpTarget(user);
+        const r = await callCp<{ ok: boolean; existing_account: boolean; invite_url: string; becomes_team: boolean }>(
+          t!, "/api/tenant/workspace-invite",
+          { workspace_id: input.workspace_id ?? input.slug, email: input.email });
+        return { invite: { email: String(input.email ?? "").trim().toLowerCase(), url: r.invite_url,
+          existing_account: r.existing_account, becomes_team: r.becomes_team, delivery: "link" as const } };
+      }
       requireRegistry();
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID)
@@ -344,7 +432,9 @@ export const workspaceRegistryCapabilities: Capability[] = [
         throw e;
       }
     }, {
-      slug: z.string().describe("초대할 워크스페이스 slug"),
+      slug: z.string().optional().describe("초대할 워크스페이스 slug(셀프호스트 등록부의 키)"),
+      // #2188 매니지드 — 위 workspace_people 과 같은 이유. 둘 중 하나면 된다.
+      workspace_id: z.string().optional().describe("초대할 워크스페이스 id(매니지드 — 계정 서버의 키)"),
       email: z.string().describe("부를 사람의 이메일"),
       role: z.enum(["owner", "member"]).optional().describe("기본 member. owner 면 공동 owner"),
     }),

@@ -86,10 +86,14 @@ const me: Capability = {
       //   registry 이름("라이블리")을 그려 **같은 워크스페이스가 두 이름으로** 보인다(2026-08-19 실측 신고).
       workspace_registry: await (async () => {
         const active = registryModeActive();
-        if (!active) return { active, current: "primary" };
+        // #2188 — 매니지드는 registry 를 **켜지 않는다**(워크스페이스 축의 권위는 CP 다 — 켜면 CP 캡이 우회된다).
+        //  그런데 화면은 "여기서 만들고 부를 수 있나"를 알아야 한다. 그래서 축을 하나 더 둔다:
+        //  `active` = 이 박스의 등록부가 도나 / `managed` = CP 가 대신 해 주나. 화면은 둘 중 하나면 UI 를 연다.
+        const managed = !!(process.env.LIVELY_TENANT_HEADER_SECRET || "").trim();
+        if (!active) return { active, managed, current: currentTenant()?.slug ?? "primary" };
         const slug = currentTenant()?.slug ?? PRIMARY_SLUG;
         const row = await getWorkspaceBySlug(slug).catch(() => null);
-        return { active, current: slug, name: row?.name ?? null, kind: row?.kind ?? null };
+        return { active, managed, current: slug, name: row?.name ?? null, kind: row?.kind ?? null };
       })(),
       incognito: ctx?.incognito ?? false,
     };
