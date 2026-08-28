@@ -4,7 +4,7 @@
 //  문구는 원준님 교정 31건 반영본. 새로 쓴 연결부는 [새문구] 주석. 상태는 sessionStorage(진행)·localStorage(끝남 표식).
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
-import { authUploadProgress, upControl, upDropZone } from '../projects/files-upload.js';
+import { authUploadProgress, upDropZone, upFromInput } from '../projects/files-upload.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #2232 — AI 로그인 창(터미널 한 장) 주소는 한 곳에서만 만든다   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
@@ -1230,9 +1230,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         `${esc(S.name)}님, 먼저 파일부터 받겠습니다.`,
         '지금 가지고 계신 파일을 올려 주세요.',
         '파일이든 폴더든 끌어다 놓으시면 됩니다. 받는 즉시 읽기 시작해서, 다음 단계를 하시는 동안 정리해 둡니다.')
+        //  #1813 f27094f2 — 고르기는 **한 번에 끝난다**(모달·팝오버·버튼 둘 전부 폐기, 원준님 2026-08-27). 폴더째는 끌어다 놓기가 받는다.
         + `<div class="ob-drop ${S.upN ? 'ob-has' : ''}" id="upZone">
             <span class="ob-drop-t" id="upZoneT">${S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요'}</span>
-            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더 정리도, 이름 짓기도 필요 없습니다.')}</span>
+            <span class="ob-drop-d" id="upZoneD">${S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.')}</span>
             <span class="ob-drop-pick" id="upPick"></span>
           </div>
           <div class="ob-files" id="upList" hidden></div>
@@ -1240,16 +1241,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           <button class="ob-q-skip" data-skip>지금은 건너뛰기. 나중에 올려도 됩니다</button>`,
       bind: (el) => {
         const zone = $('#upZone', el), list = $('#upList', el);
-        let pick = null;
+        let pickBtn = null;
         const paintList = () => { if (!list) return; const tiles = fileTiles(); list.hidden = !tiles.length; list.innerHTML = tiles.join(''); };
         const paintZone = () => {
           const t = $('#upZoneT', el), d = $('#upZoneD', el), go = $('#fGo', el);
           if (!t || !d) return;
           t.textContent = S.upN ? `${S.upN}개를 받았어요` : '여기에 끌어다 놓으세요';
-          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다.' : '폴더 정리도, 이름 짓기도 필요 없습니다.');
+          d.textContent = S.upBusy ? `올리는 중 ${S.upBusy}개` : (S.upN ? '더 올리셔도 됩니다. 폴더째는 끌어다 놓으세요.' : '폴더째는 여기에 끌어다 놓으세요(고르기 창은 파일만 골라요). 정리도, 이름 짓기도 필요 없습니다.');
           zone.classList.toggle('ob-has', !!S.upN);
           if (go) { go.disabled = !S.upN; go.textContent = S.upN ? `${S.upN}개 올리고 계속` : '계속'; }
-          if (pick) pick.btn.textContent = (S.upN || S.upBusy) ? '파일 추가' : '파일·폴더 고르기';
+          if (pickBtn) pickBtn.textContent = (S.upN || S.upBusy) ? '파일 추가' : '파일 고르기';
           paintList();
         };
         const sendAll = async (items) => {
@@ -1272,17 +1273,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           renderSB();
         };
         upDropZone(zone, zone, (items) => void sendAll(items));
-        // 고르기는 **공용 부품 하나**를 쓴다(upControl) — 버튼 한 개를 누르면 [파일 고르기 / 폴더 고르기] 가 뜬다.
-        //  구글 드라이브·슬랙과 같은 문법이고, 무엇보다 이 레포의 규칙이다(files-upload.ts: "새 업로드 코드 금지").
-        //  ⚠ 파일과 폴더를 **한 창에서** 같이 고르게 할 수는 없다 — 브라우저의 고르기 창이 그렇게 생겼다(파일 창은
-        //   폴더를, 폴더 창은 파일을 못 고른다 — 크롬·사파리·파폭 공통이고 File System Access API 도 둘로 갈린다).
-        //   섞어 올리는 유일한 길은 끌어다 놓기라, 메뉴에 그 사실을 한 줄로 적는다(원준님 2026-08-28).
-        pick = upControl((items) => void sendAll(items), {
-          className: 'ob-btn ob-btn-sub ob-btn-inline', label: S.upN ? '파일 추가' : '파일·폴더 고르기',
-          fileLabel: '파일 고르기', dirLabel: '폴더 고르기',
-          note: '브라우저 창 하나로는 파일과 폴더를 같이 못 골라요. 섞어서 올리려면 위 상자에 끌어다 놓으세요.',
-        });
-        $('#upPick', el).append(pick.btn, pick.fileIn, pick.dirIn);   // 숨김 input 도 DOM 에 있어야 click 이 먹는다
+        // 고르기는 **한 번에 끝난다** — 묻지 않는다(원준님 2026-08-27: "모달로 또 떠서 고르라는데").
+        //  ⚠ 브라우저 제약은 그대로다: 고르기 창은 파일만(폴더는 webkitdirectory 입력이 따로라 **한 창에서 같이 못 고른다** —
+        //   크롬·사파리·파폭 공통, File System Access API 도 둘로 갈린다). 그건 **우리 사정**이지 사람에게 물을 일이 아니다.
+        //   그래서 [파일 고르기] 하나만 두고, 폴더째는 **끌어다 놓기**가 받는다(드롭은 파일·폴더를 함께 받는다) — 그 사실은
+        //   상자 문구가 말한다. 프로젝트 화면의 팝오버 메뉴(upControl)는 파일 브라우저의 문법이라 이 자리에는 맞지 않는다.
+        //   (#2232 에서 잠깐 그 메뉴를 다시 붙였다가 되돌렸다 — 같은 지적을 두 번 받을 일이다.)
+        //  #2232 — 첫 파일 뒤엔 [파일 추가]로 이름이 바뀐다(paintZone).
+        const fileIn = document.createElement('input');
+        fileIn.type = 'file'; fileIn.multiple = true; fileIn.style.display = 'none';
+        fileIn.addEventListener('change', () => { void sendAll(upFromInput(fileIn)); fileIn.value = ''; });
+        pickBtn = document.createElement('button');
+        pickBtn.type = 'button'; pickBtn.className = 'ob-btn ob-btn-sub ob-btn-inline'; pickBtn.textContent = S.upN ? '파일 추가' : '파일 고르기';
+        pickBtn.onclick = (ev) => { ev.stopPropagation(); fileIn.click(); };
+        $('#upPick', el).append(pickBtn, fileIn);
         paintList();
         // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
         $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
