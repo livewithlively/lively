@@ -6,7 +6,8 @@
 //  (resolveOAuthMemberSecret → resolveProxyBearer: 묶음/정적 판별·만료 갱신·금고 재기록)을 그대로 쓴다.
 //  분업은 슬랙·피그마와 같다: 순수 슬롯 선택(주입 가능한 표) + 실제 금고 리더.
 import { GATEWAY_OWNER, listMemberSecretsPublic, resolveMemberSecret, type MemberSecretPublic, type MemberSecretResolved } from "./member-secret-store.js";
-import { resolveOAuthMemberSecret, resolveProxyBearer } from "./oauth-proxy-auth.js";
+//  ⚠ oauth-proxy-auth 는 **동적 import** — 정적으로 물면 connectors/config → 여기 → oauth-proxy-auth → oauth-broker → org/store →
+//   org/store/collectors → connectors/config 순환이 생긴다(check-imports 게이트). 해소 시점에만 필요한 부품이라 그때 든다.
 
 export const GITHUB_TOKEN_KIND = "github_pat";
 export interface GithubTokenResolution { token?: string; warning?: string }
@@ -62,6 +63,9 @@ export async function resolveGithubTokenSource(
 /** 실제 금고 리더 — 커넥터 설정 해소(connectors/config.ts)가 쓴다. */
 export const githubVaultDeps: GithubVaultDeps = {
   list: (owner) => listMemberSecretsPublic(owner),
-  resolve: (memberId, scopeKey, allowFallback) => resolveOAuthMemberSecret(memberId, GITHUB_TOKEN_KIND, { scopeKey, allowFallback }, resolveMemberSecret),
-  bearer: (resolved) => resolveProxyBearer(resolved, GITHUB_TOKEN_KIND),
+  resolve: async (memberId, scopeKey, allowFallback) => {
+    const { resolveOAuthMemberSecret } = await import("./oauth-proxy-auth.js");
+    return resolveOAuthMemberSecret(memberId, GITHUB_TOKEN_KIND, { scopeKey, allowFallback }, resolveMemberSecret);
+  },
+  bearer: async (resolved) => { const { resolveProxyBearer } = await import("./oauth-proxy-auth.js"); return resolveProxyBearer(resolved, GITHUB_TOKEN_KIND); },
 };

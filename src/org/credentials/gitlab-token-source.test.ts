@@ -14,16 +14,16 @@ await t("슬롯 — 수집기 host 와 맞는 것 > '' > 첫 것; github_pat 은
   assert.equal(pickGitlabSlot([], "gitlab.com"), null);
 });
 await t("host 가 비면 슬롯의 호스트가 수집기 host 가 된다(회사 GitLab 을 두 번 적지 않는다)", async () => {
-  const deps: GitlabVaultDeps = { list: async () => [row("Git.Corp.com")], secret: async () => "glpat-x" };
+  const deps: GitlabVaultDeps = { list: async () => [row("Git.Corp.com")], secret: async () => "glpat-x", bearer: async (s) => s };
   const r = await resolveGitlabTokenSource("member:yoon", "", deps);
   assert.equal(r?.token, "glpat-x"); assert.equal(r?.host, "git.corp.com");
 });
 await t("토큰이 없으면 warning 에 저장 화면·read_api 를 말한다", async () => {
-  const deps: GitlabVaultDeps = { list: async () => [], secret: async () => null };
+  const deps: GitlabVaultDeps = { list: async () => [], secret: async () => null, bearer: async (s) => s };
   const r = await resolveGitlabTokenSource("member:yoon", "gitlab.com", deps);
   assert.equal(r?.token, undefined); assert.match(String(r?.warning), /read_api/);
 });
 await t("미지정 → null", async () => {
-  assert.equal(await resolveGitlabTokenSource(undefined, "gitlab.com", { list: async () => [], secret: async () => null }), null);
+  assert.equal(await resolveGitlabTokenSource(undefined, "gitlab.com", { list: async () => [], secret: async () => null, bearer: async (s) => s }), null);
 });
 console.log(`\n${pass} passed`);

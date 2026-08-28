@@ -1,8 +1,8 @@
 // Linear 수집기 토큰 출처 해소(#2247) — token_source="member:<id>" | "org" → 금고 linear_app 슬롯(라이블리 앱 토큰 묶음).
 //  묶음/만료 판별은 http_proxy 와 같은 부품(resolveOAuthMemberSecret → resolveProxyBearer)으로 — 손파싱 0.
 import { GATEWAY_OWNER, resolveMemberSecret, type MemberSecretResolved } from "./member-secret-store.js";
-import { resolveOAuthMemberSecret, resolveProxyBearer } from "./oauth-proxy-auth.js";
 import { LINEAR_APP_KIND } from "./linear-oauth.js";
+//  ⚠ oauth-proxy-auth 는 동적 import — github-token-source 와 같은 이유(connectors/config 순환).
 
 export interface LinearTokenResolution { token?: string; warning?: string }
 export interface LinearVaultDeps {
@@ -30,6 +30,6 @@ export async function resolveLinearTokenSource(source: string | undefined, deps:
 }
 
 export const linearVaultDeps: LinearVaultDeps = {
-  resolve: (memberId, allowFallback) => resolveOAuthMemberSecret(memberId, LINEAR_APP_KIND, { scopeKey: "", allowFallback }, resolveMemberSecret),
-  bearer: (resolved) => resolveProxyBearer(resolved, LINEAR_APP_KIND),
+  resolve: async (memberId, allowFallback) => { const { resolveOAuthMemberSecret } = await import("./oauth-proxy-auth.js"); return resolveOAuthMemberSecret(memberId, LINEAR_APP_KIND, { scopeKey: "", allowFallback }, resolveMemberSecret); },
+  bearer: async (resolved) => { const { resolveProxyBearer } = await import("./oauth-proxy-auth.js"); return resolveProxyBearer(resolved, LINEAR_APP_KIND); },
 };
