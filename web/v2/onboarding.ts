@@ -521,8 +521,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      "k": "문서·위키",
      "items": [
       { "id": "notion", "label": "Notion", "logo": "notion", "live": true },
-      { "id": "gdrive", "label": "Google Drive", "logo": "googledrive", "live": true },
-      { "id": "figma", "label": "Figma", "logo": "figma", "live": true }
+      { "id": "figma", "label": "Figma", "logo": "figma", "live": true },
+      { "id": "gdrive", "label": "Google Drive", "logo": "googledrive", "live": true }
      ]
     },
     {
