@@ -24,7 +24,7 @@ import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
-import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
+import { appReady, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -76,11 +76,16 @@ const pendingPrompts = new Map();   // prompt id → resolve (렌더러의 답�
 // 파일 존재는 **싸고 즉시** 알 수 있는 축이라 먼저 채운다(창을 여는 판단이 여기 달렸다).
 //  노드의 실행 여부는 프로세스를 재야 알 수 있어 `lively status --json` 으로 따로 가져온다(#1541 T4).
 //  ⚠ 못 잰 축은 null 로 남긴다 — 모르는 걸 false 로 눕히면 화면이 "정지됨" 이라고 거짓말한다.
+// 워크스페이스 어긋남을 이미 물어본 곳(#2215) — 선언이 refreshState 보다 앞이어야 한다(그 함수가 clear 한다).
+const driftAsked = new Set();
 async function refreshState({ deep = false } = {}) {
   const wasReady = appReady(state);
   const cliPath = locateCli(existsSync);
   const next = { ...state, cliPath, cliFound: !!cliPath };
   next.gatewayUrl = readTrim(join(LIVELY_DIR, "gateway-url"));
+  // 매인 곳이 바뀌었으면(워크스페이스 이동) '이미 물어봤다' 기록을 버린다(#2215) — 안 그러면 되돌아왔을 때
+  //  다시 어긋나 있는데도 영영 안 묻는다. 기록의 뜻이 "그 주소를 그때 물었다"가 아니라 "지금 기준에서 물었다"이므로.
+  if (next.gatewayUrl !== state.gatewayUrl) driftAsked.clear();
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
   // 토큰이 **있다**와 **먹힌다**는 다르다 — 게이트웨이가 401 로 거부한 그 토큰이 그대로면 로그인이 필요한 상태다.
   //  파일의 토큰이 바뀌면(다시 로그인) 저절로 풀린다 — 따로 초기화할 자리가 없어 빠뜨릴 일이 없다.
@@ -764,6 +769,12 @@ function showApp() {
       showWindow(); void refreshState();
     });
     appWin.webContents.on("did-finish-load", () => { if (webError) { webError = null; void refreshState(); } });
+    // 사람이 웹에서 **다른 워크스페이스로 옮겨 갔나**(#2215) — 웹뷰만 옮겨가고 이 PC 의 로컬(토큰·노드·MCP)은
+    //  그대로라 조용히 어긋난다. 해시 라우팅이라 in-page 도 함께 듣는다(둘 다 같은 자리로 보낸다).
+    appWin.webContents.on("did-navigate", (_e, navUrl) => void offerWorkspaceRebind(navUrl));
+    appWin.webContents.on("did-navigate-in-page", (_e, navUrl, isMainFrame) => {
+      if (isMainFrame) void offerWorkspaceRebind(navUrl);
+    });
   }
   // 주소나 토큰이 바뀌었으면(다른 게이트웨이·다시 로그인) 다시 싣는다 — preload 가 문서 시작 때 새 토큰을 넣는다.
   //  ⚠ loadURL 의 거절을 받아 둔다 — 안 받으면 게이트웨이가 꺼져 있을 때 unhandled rejection 이 uncaughtException 으로 올라가
@@ -1089,6 +1100,35 @@ app.on("web-contents-created", (_e, wc) => {
 });
 
 // ── CLI 구동 ────────────────────────────────────────────────────────────────
+// ── 워크스페이스 어긋남 제안(#2215) ─────────────────────────────────────────────
+//  계정 1 : 워크스페이스 N 인데 이 PC 의 로컬 상태는 **한 벌**이다(`~/.lively/{gateway-url,token}` +
+//  `node-agent.env` + 하네스 MCP). 사람이 웹에서 워크스페이스를 옮기면 웹뷰만 따라가고 로컬은 그대로라,
+//  새 워크스페이스에선 이 PC 로 세션을 못 열고 **옛 워크스페이스에는 노드가 계속 붙어 있다.**
+//  그 어긋남이 조용하면 아무도 모르므로 여기서 알아채고 묻는다.
+//
+//  ⚠ 판정은 web-shell.workspaceDriftFrom 한 벌이다(테스트가 표로 못박는다) — 여기선 **묻는 정책**만 정한다:
+//   · 같은 곳을 두 번 묻지 않는다(세션 동안 기억) — 해시 라우팅이라 did-navigate-in-page 가 자주 온다.
+//   · 작업 중이면 묻지 않는다(설치·로그인 도중에 또 로그인을 걸면 서로 밟는다).
+//   · 수락 = `setup --cloud` 재실행. 승인 화면에서 그 워크스페이스를 고르면 CLI 의 afterLogin 이
+//     노드·MCP 를 그리로 따라오게 한다(kit/cli/lively.mjs). 앱이 따로 노드를 만지지 않는다 — 정본은 CLI 다.
+async function offerWorkspaceRebind(navUrl) {
+  if (running) return;
+  const drift = workspaceDriftFrom(navUrl, state.gatewayUrl);
+  if (!drift || driftAsked.has(drift.to)) return;
+  driftAsked.add(drift.to);
+  const { response } = await dialog.showMessageBox(appWin && !appWin.isDestroyed() ? appWin : undefined, {
+    type: "question",
+    buttons: ["이 워크스페이스로 옮기기", "나중에"],
+    defaultId: 0,
+    cancelId: 1,
+    message: "다른 워크스페이스를 보고 계십니다.",
+    detail: `이 PC 의 연결(노드·MCP)은 아직 ${drift.from} 에 매여 있습니다.\n`
+      + `${drift.to} 로 옮기면 이 PC 에서 그 워크스페이스의 세션을 열 수 있고, 옛 워크스페이스와의 연결은 끊깁니다.\n\n`
+      + "옮기려면 승인 화면에서 이 워크스페이스를 고르세요.",
+  });
+  if (response === 0) await start("setup-cloud", {});
+}
+
 async function start(kind, opts) {
   if (running) return { ok: false, error: "이미 실행 중인 작업이 있습니다." };
   if (!RUN_KINDS.includes(kind)) return { ok: false, error: `알 수 없는 작업: ${kind}` };

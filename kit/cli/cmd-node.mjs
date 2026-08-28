@@ -33,7 +33,9 @@ const fetch = (...args) => hostEffects.fetch(...args);
 export function nodeCommands(ctx) {
   ({ say, dim, green, yellow, die, has, api, gateway, token, writeLively, normGw } = ctx);
   hostEffects = ctx.hostEffects || entrypointHostEffects();
-  return { cmdNode };
+  //  nodeUnbind·nodeRebindForGateway(#2215)는 로그아웃·로그인이 부른다 — 노드를 '로그인한 테넌트'에 맞춰
+  //  따라가게 하는 두 자리다(종전엔 어느 쪽도 노드를 건드리지 않았다).
+  return { cmdNode, nodeUnbind, nodeRebindForGateway };
 }
 
 // ── 노드(#869) — 이 PC 를 라이블리 노드로 연결(로컬 터미널 원격 관리 + 위탁 워커). ──
@@ -1082,7 +1084,77 @@ function winTaskExists() {
   catch { return false; }
 }
 
-function nodeStop() {
+/**
+ * 로그아웃이 부르는 노드 정리(#2215) — **서버 토큰 회수 + 로컬 접속정보 삭제 + 데몬 중지.**
+ *
+ * 왜: 종전 `lively logout` 은 `~/.lively/token` 파일 하나만 지웠다. 노드 토큰은 그와 **별개 토큰**이라
+ *  로그아웃과 무관하게 유효했고, 그래서 로그아웃한 PC 가 **옛 테넌트에 계속 붙어 세션을 서빙했다.**
+ *  기기 회수·퇴사·워크스페이스 이동에서 그건 그대로 구멍이다.
+ *
+ * 순서가 곧 안전성이다:
+ *  ① 서버 회수를 **로컬 토큰이 아직 살아 있을 때** 한다(이 호출에 그 토큰이 필요하다).
+ *  ② 로컬 접속정보를 지운다 — 데몬 중지보다 **먼저**. 중지가 실패해도 그 기계는 다음 시작에서
+ *     반드시 재등록을 타고, 살아 있는 에이전트는 토큰이 죽어 어차피 붙지 못한다.
+ *  ③ 데몬 중지(soft — 여기서 죽으면 로그아웃이 안 끝난다).
+ *
+ * 네트워크가 없어도 로그아웃은 끝난다 — ① 이 실패하면 **경고만** 하고 ②③ 을 계속한다.
+ */
+async function nodeUnbind() {
+  const st = nodeStatus();
+  if (!st.registered) return { unbound: false, why: "등록된 노드 없음" };
+  const id = st.id || "";
+  let revoked = false;
+  if (id && gateway() && token()) {
+    try {
+      await api(`/api/ui/nodes/${encodeURIComponent(id)}/revoke-token`, { method: "POST", body: {} });
+      revoked = true;
+    } catch (e) {
+      say(yellow(`⚠ 서버에서 노드 토큰을 회수하지 못했습니다 — ${e.message}`));
+      say(dim("   그 토큰은 아직 서버에서 유효합니다. 관리탭 ▸ 노드에서 회전하거나 노드를 삭제해 정리하세요."));
+    }
+  }
+  rmSync(NODE_ENV_FILE, { force: true });
+  if (st.daemon || st.running) nodeStop({ soft: true });
+  say(green(`✅ 노드 '${id || "(이름 없음)"}' 연결 해제${revoked ? " — 서버 토큰도 회수했습니다" : ""}`));
+  return { unbound: true, revoked, id };
+}
+
+/**
+ * 로그인 뒤 노드를 **지금 로그인한 게이트웨이로 다시 맨다**(#2215).
+ *
+ * 왜: 종전 `afterLogin` 은 MCP 만 다시 구웠다(`registerClaudeMcp`). 노드는 옛 게이트웨이·옛 토큰 그대로라,
+ *  워크스페이스를 옮겨도 그 PC 는 여전히 **이전 테넌트의 노드**였다 — 새 워크스페이스에서는 세션을 못 열고,
+ *  옛 워크스페이스에는 계속 붙어 있는 최악의 조합이다.
+ *
+ * ⚠ 옛 게이트웨이의 토큰은 여기서 **회수하지 못한다** — 그 서버에 칠 자격이 이미 없기 때문이다(방금 새 곳에
+ *  로그인했다). 회수는 로그아웃 경로(nodeUnbind)의 몫이고, 여기서는 로컬 접속정보를 버려 **다음 시작이
+ *  반드시 재등록을 타게** 한다. 그래서 로그아웃 → 로그인 순서가 가장 깨끗하다.
+ *
+ * 돌고 있던 노드만 다시 세운다 — 로그인 한 번이 꺼져 있던 노드를 켜지는 않는다.
+ */
+async function nodeRebindForGateway(newGw) {
+  const st = nodeStatus();
+  if (!st.registered) return { rebound: false, why: "등록된 노드 없음" };
+  const prev = normGw(st.gateway || ""), next = normGw(newGw || "");
+  if (prev && prev === next) return { rebound: false, why: "같은 게이트웨이" };
+  const wasUp = !!(st.daemon || st.running);
+  say(dim(`· 이 PC 의 노드가 이전 게이트웨이(${prev || "(기록 없음)"})에 매여 있습니다 — 지금 로그인한 곳으로 옮깁니다.`));
+  if (wasUp) nodeStop({ soft: true });
+  rmSync(NODE_ENV_FILE, { force: true });
+  if (!wasUp) {
+    say(dim("   노드가 돌고 있지 않아 접속정보만 정리했습니다 — `lively node --daemon` 으로 켜면 여기로 등록됩니다."));
+    return { rebound: false, cleared: true };
+  }
+  await cmdNode(["--daemon"]);
+  return { rebound: true, id: st.id };
+}
+
+/**
+ * 데몬 해제. `soft` 면 잔여 프로세스를 못 죽여도 **die 하지 않는다**(#2215).
+ *  왜 필요한가: 로그아웃·재바인딩이 이 함수를 부르는데, 거기서 die(=프로세스 종료)가 나면
+ *  **그 뒤에 와야 할 정리(토큰 파일 삭제)가 통째로 안 돈다.** 로그아웃은 어떤 상태에서도 끝나야 한다.
+ */
+function nodeStop(o = {}) {
   if (process.platform === "darwin") {
     spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, PLIST_PATH], { stdio: "ignore" });
     rmSync(PLIST_PATH, { force: true });
@@ -1111,7 +1183,10 @@ function nodeStop() {
     winKillAgentProcs();
     // ★ 죽였는지 **다시 센다** — 못 죽였는데 ✅ 를 찍으면 앱은 계속 "실행 중" 인데 사람은 뭘 해야 할지 모른다(실측).
     const residual = winResidualAgentProcs();
-    if (residual.pids.length) die(stopResidualNote(residual), 3);
+    if (residual.pids.length) {
+      if (!o.soft) die(stopResidualNote(residual), 3);
+      say(yellow(stopResidualNote(residual)));
+    }
     say(green(`✅ 노드 데몬 해제(${hadTask ? "작업 스케줄러" : hadVbs ? "시작프로그램" : "등록 없음 — 잔여 프로세스만 회수"})`));
   } else { die(`미지원 OS: ${process.platform}`, 1); }
   say(dim("   (노드 등록·번들은 남습니다 — 완전 제거는 웹/REST 로 노드 삭제)"));

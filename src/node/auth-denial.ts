@@ -27,6 +27,14 @@ export type NodeAuthDenial =
   | { reason: "unknown-token" }
   /** 토큰은 있으나 노드 토큰이 아니다(로그인·세션 토큰 등). label 로 어느 표면의 토큰인지 드러난다. */
   | { reason: "not-a-node-token"; label: string | null; member: string | null }
+  /**
+   * org_node 행이 그 토큰을 가리키기는 하는데, 그 토큰이 **노드 등록이 발급한 것이 아니다**(#2215).
+   *  실측 2026-08-28: 매니지드 `org_node.hammurabi.token_hash` 가 label "라이블리 데스크톱" 인
+   *  **admin 전체 scope 로그인 토큰**의 해시였다. `createNode`·`rotateNodeToken` 은 언제나
+   *  `label='node:<id>'` + `scopes=[]` 로 발급하므로(store.ts) 정상 경로로는 나올 수 없는 상태다.
+   *  노드 채널은 scope 를 안 보고 조인만 하므로 **조용히 통과했다** — 그래서 여기서 막는다.
+   */
+  | { reason: "token-not-node-issued"; node: string; label: string | null; scopes: string[] }
   /** 회수된 토큰. */
   | { reason: "revoked"; label: string | null }
   /** 노드가 비활성(관리탭에서 껐다). */
@@ -58,6 +66,12 @@ export function denialMessage(d: NodeAuthDenial): string {
       // 실측(#2161)에서 의심된 모양 — 로그인 토큰으로 노드 채널에 붙는 경우.
       return `노드 토큰이 아니라 다른 용도의 토큰입니다(label=${d.label ?? "(없음)"}${d.member ? `, member=${d.member}` : ""}) `
         + "— 노드 등록(POST /api/ui/nodes)을 안 타고 붙은 것입니다. 그 컴퓨터에서 `lively node --daemon` 으로 재등록하세요.";
+    case "token-not-node-issued":
+      // ★ 여기 걸린 노드는 **끊는 것이 맞다** — 그 자리에 앉은 토큰이 로그인 토큰이면 권한이 노드 채널의
+      //  전제(scope 공집합)를 넘어선다. 사람이 할 일은 재등록 하나이므로 그 한 줄을 준다.
+      return `노드 '${d.node}' 에 걸린 토큰이 노드 등록으로 발급된 것이 아닙니다`
+        + `(label=${d.label ?? "(없음)"}, scopes=[${d.scopes.join(", ")}]) — 노드 토큰은 label 'node:${d.node}' 에 `
+        + "권한 없음(scopes=[])이어야 합니다. 그 컴퓨터에서 `lively node --daemon` 으로 재등록하세요.";
     case "revoked":
       return `회수된 토큰입니다(label=${d.label ?? "(없음)"}) — `
         + "`lively node --daemon` 으로 재등록하거나 관리탭에서 토큰을 회전하세요.";
@@ -66,6 +80,29 @@ export function denialMessage(d: NodeAuthDenial): string {
     case "owner-inactive":
       return `노드 '${d.node}' 의 소유 구성원 '${d.owner}' 가 active 가 아닙니다(state=${d.state ?? "없음"}) — 설계상 차단입니다.`;
   }
+}
+
+/**
+ * 이 토큰이 **노드 등록이 발급한 것인가**(순수, #2215). 노드 채널 인증의 불변식이다.
+ *
+ * 근거: `org_node.token_hash` 에 쓰는 곳은 `createNode`(INSERT)와 `rotateNodeToken`(UPDATE) **둘뿐**이고,
+ *  둘 다 `mintToken({ scopes: [], label: 'node:<id>' })` 로 발급한다(store.ts). 그러니 정상 등록된 노드는
+ *  정의상 이 검사를 통과한다 — 걸리는 것은 **그 두 경로 밖에서 들어온 행**뿐이다.
+ *
+ * 왜 조인만으로 부족한가(실측 2026-08-28, #2215): 매니지드 `org_node.hammurabi` 의 token_hash 가
+ *  label "라이블리 데스크톱"·`scopes=["items","context","admin",…]` 인 **로그인 토큰**의 해시였다.
+ *  노드 채널은 scope 를 보지 않으므로 그 상태가 조용히 통과했다. 노드 토큰의 설계 전제는
+ *  "유효 scope 가 공집합"(store.ts 머리말)이므로, 그 전제가 깨진 토큰은 노드로 인정하지 않는다.
+ *
+ * ⚠ `scopes` 가 배열이 아니면(null·객체 등 모르는 모양) **통과시키지 않는다** — 모르면 거부가 안전한 쪽이다.
+ */
+export function nodeTokenIssuedByRegistration(o: { nodeId: string; label: string | null; scopes: unknown }): boolean {
+  // ⚠ 빈 노드 id 를 먼저 쳐낸다 — 안 그러면 id 가 빈 값일 때 label 'node:' 와 **빈 값끼리 일치**해 통과한다.
+  //  #2170 ③ 이 정확히 같은 함정을 상시세션 정리기에서 겪었다(기준값이 비면 아무거나 '내 것'이 된다).
+  const nodeId = String(o.nodeId ?? "").trim();
+  if (!nodeId) return false;
+  if (String(o.label ?? "") !== `node:${nodeId}`) return false;
+  return Array.isArray(o.scopes) && o.scopes.length === 0;
 }
 
 /**

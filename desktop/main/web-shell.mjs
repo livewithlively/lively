@@ -35,6 +35,29 @@ export function webOrigin(gatewayUrl) {
 }
 
 /**
+ * 앱 창이 다다른 곳이 **이 PC 가 매인 워크스페이스와 다른 워크스페이스**인가(순수, #2215).
+ *
+ * 왜: 계정 하나가 여러 워크스페이스에 속하는데(1:N) 이 PC 의 로컬 상태는 한 벌이다
+ *  (`~/.lively/{gateway-url,token}` + `node-agent.env` + 하네스 MCP). 사람이 웹에서 워크스페이스를 바꾸면
+ *  **웹뷰만 옮겨가고 로컬은 그대로**라, 새 워크스페이스에선 이 PC 로 세션을 못 열고 옛 워크스페이스에는
+ *  노드가 계속 붙어 있다. 그 어긋남이 조용하면 아무도 모른다 — 그래서 앱이 알아채고 묻는다.
+ *
+ * 판정은 **게이트웨이 웹 UI(`/ui`)로 간 것만** 센다. CP 홈(`/home`)·로그인·승인 화면은 워크스페이스가
+ *  아니라 그 앞단이라, 거기까지 세면 로그인 흐름 도중에 매번 물어보게 된다.
+ *
+ * @returns {{from: string, to: string} | null} 옮겨갈 곳이 있으면 두 출처, 아니면 null.
+ */
+export function workspaceDriftFrom(navigatedUrl, gatewayUrl) {
+  let u;
+  try { u = new URL(String(navigatedUrl || "")); } catch { return null; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  if (!/^\/ui(\/|$)/.test(u.pathname)) return null;
+  const from = webOrigin(gatewayUrl);
+  if (!from || u.origin === from) return null;
+  return { from, to: u.origin };
+}
+
+/**
  * 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`) 어디에 열지.
  *  - "child"    같은 출처의 http(s) → 앱 안의 새 창(터미널 새 창·그래프 등 — 토큰이 같은 localStorage 라 그대로 로그인 상태)
  *  - "external" 다른 출처의 http(s) → 시스템 브라우저(노션 링크·IdP·문서 — 앱 안에 남의 사이트를 두지 않는다)

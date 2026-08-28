@@ -1064,7 +1064,7 @@ async function loginWithPastedToken(gw) {
   const tok = String(await askHidden("  접속 토큰을 붙여넣으세요 (화면에 안 보입니다): ") || "").trim();
   if (!tok) die("토큰이 비어 있습니다.");
   const me = await validateAndStore(gw, tok);
-  afterLogin(gw, tok);
+  await afterLogin(gw, tok);
   return me;
 }
 
@@ -1260,7 +1260,7 @@ const loginEscapeToken = ({ flagToken = "", envToken = "", fileToken = "", isInt
 //   헤더로 **멤버 개인 게이트웨이 토큰**을 구울 수 있다(auth_env 는 org MCP 서버 경로에서 화이트리스트
 //   강제가 없다 — allowed_auth_envs 는 org_tool 전용, dynamic-tools.ts:115). 필요 없기도 하다: token() 이
 //   파일 우선이고 로그인이 방금 파일을 썼으므로 같은 프로세스의 후속 호출은 이미 새 토큰을 본다.
-function afterLogin(gw, tok) {
+async function afterLogin(gw, tok) {
   // .claude.json 의 lively 항목은 **토큰의 사본**이고 방금 로그인이 그걸 무효화했다 → 여기서 다시 굽는다.
   //  없으면: 사용자가 로그인만 하고 멈췄을 때(bootstrap.sh·웹 안내가 그렇게 시킨다) MCP 는 옛 신원으로 남는다.
   registerClaudeMcp(); // claude 미설치 판정·안내 포함. (#247 — 구명 registerLivelyMcp 잔재 호출이 여기서 크래시했다)
@@ -1268,6 +1268,16 @@ function afterLogin(gw, tok) {
   //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
   if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
     warn(`이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — ${RELOAD_SHELL_HINT} 뒤에 codex 를 쓰세요.`);
+  }
+  // ★ 노드도 지금 로그인한 곳으로 따라오게 한다(#2215). 종전엔 MCP 만 다시 굽고 노드는 그대로 뒀다 —
+  //  그래서 워크스페이스를 옮겨도 그 PC 는 여전히 **이전 테넌트의 노드**였다(새 곳에선 세션이 안 열리고,
+  //  옛 곳에는 계속 붙어 있는 조합). 게이트웨이가 그대로면 아무 일도 하지 않는다.
+  try {
+    const { nodeCommands } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    await nodeCommands(cliCtx()).nodeRebindForGateway(gw);
+  } catch (e) {
+    warn(`노드를 새 게이트웨이로 옮기지 못했습니다 — ${e.message}`);
+    info("그 PC 에서 `lively node --daemon` 을 다시 실행하면 지금 로그인한 곳으로 등록됩니다.");
   }
 }
 
@@ -1277,7 +1287,7 @@ async function cmdLogin(opts) {
     const r = await cloudLogin(opts.cloud);
     const me = await validateAndStore(r.gateway, r.token);
     say(dim(`  워크스페이스: ${bold(r.workspace || r.gateway)}`));
-    afterLogin(r.gateway, r.token);
+    await afterLogin(r.gateway, r.token);
     return me;
   }
   if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
@@ -1289,7 +1299,7 @@ async function cmdLogin(opts) {
   const escape = loginEscapeToken({
     flagToken: opts.token, envToken: process.env.LIVELY_TOKEN, fileToken: readLively("token"), isInteractive,
   });
-  if (escape) { const me = await validateAndStore(gw, escape); afterLogin(gw, escape); return me; }
+  if (escape) { const me = await validateAndStore(gw, escape); await afterLogin(gw, escape); return me; }
 
   // ② 비대화형(TTY 없음)인데 토큰도 없음 → 명확 안내.
   if (!isInteractive) die("비대화형 환경입니다 — `lively login --token <토큰>` 또는 LIVELY_TOKEN 환경변수를 쓰세요.");
@@ -1315,13 +1325,23 @@ async function cmdLogin(opts) {
   writeLively("token", dev.token);
   writeLively("gateway-url", gw);
   ok(`${bold(who)} 님으로 로그인됐습니다. (토큰 저장: ~/.lively/token)`);
-  afterLogin(gw, dev.token);
+  await afterLogin(gw, dev.token);
   return me;
 }
 
-function cmdLogout() {
+async function cmdLogout() {
   const p = join(LIVELY, "token");
   if (!existsSync(p)) { info("이미 로그아웃 상태입니다(저장된 토큰 없음)."); return; }
+  // ★ 노드부터 끊는다(#2215) — **토큰을 지우기 전에.** 서버에 토큰 회수를 치려면 그 토큰이 아직 있어야 한다.
+  //  종전엔 이 함수가 파일 하나만 지웠고, 그래서 로그아웃한 PC 가 **옛 테넌트에 계속 붙어 세션을 서빙했다**
+  //  (노드 토큰은 로그인 토큰과 별개라 무관하게 유효하다). 네트워크가 없어도 로그아웃은 끝난다 — nodeUnbind 머리말.
+  try {
+    const { nodeCommands } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    await nodeCommands(cliCtx()).nodeUnbind();
+  } catch (e) {
+    warn(`노드 정리 중 문제가 있었습니다 — ${e.message}`);
+    info("로그아웃은 계속합니다. 그 PC 의 노드는 `lively node stop` 으로 멈출 수 있습니다.");
+  }
   rmSync(p, { force: true });
   ok("토큰을 지웠습니다 (~/.lively/token).");
   // 파일만 지울 수 있다 — 이 셸의 env 는 자식이 못 고친다. 남아 있으면 token() 이 env 로 폴백해
@@ -1329,6 +1349,55 @@ function cmdLogout() {
   if (ENV_TOKEN_AT_START) warn("이 셸의 LIVELY_TOKEN 은 아직 남아 있습니다 — 새 터미널을 열거나 `unset LIVELY_TOKEN` 하세요.");
   info("설치 파일은 그대로입니다 — 완전 제거는 `lively uninstall`.");
   info("claude 에 등록된 MCP 항목은 남아 있습니다 — 지우려면 `claude mcp remove lively`.");
+}
+
+/**
+ * `lively workspace` — 지금 이 PC 가 **어느 워크스페이스에 매여 있나**, 그리고 전환(#2215).
+ *
+ * 왜 이 명령이 필요한가: 계정 하나가 여러 워크스페이스에 속하는데(1:N), 이 PC 의 로컬 상태는 **한 벌**이다
+ *  (`~/.lively/{gateway-url,token}` + `node-agent.env` + 하네스 MCP 등록). 그 셋이 서로 다른 곳을 가리켜도
+ *  종전엔 아무도 그걸 말해 주지 않았다 — 웹에서 워크스페이스를 바꿔도 로컬은 따라가지 않으므로
+ *  "새 워크스페이스에선 세션이 안 열리고 옛 워크스페이스에는 계속 붙어 있는" 상태가 조용히 생긴다.
+ *  그래서 이 화면의 요지는 목록이 아니라 **어긋남을 보이는 것**이다.
+ *
+ * 전환은 새 API 를 만들지 않는다 — 클라우드 로그인을 다시 타면 CP 승인 화면이 워크스페이스를 고르게 하고,
+ *  `afterLogin` 이 노드·MCP 를 그 워크스페이스로 따라오게 한다. 즉 **전환 = 다시 로그인**이 정본 경로다.
+ */
+async function cmdWorkspace(rest) {
+  const sub = String(rest[0] || "").trim();
+  if (sub === "switch") {
+    say(dim("· 워크스페이스 전환 = 다시 로그인입니다 — 승인 화면에서 옮겨 갈 워크스페이스를 고르세요."));
+    say(dim("  (이 PC 의 노드·MCP 도 고른 워크스페이스로 따라갑니다.)\n"));
+    return cmdLogin({ cloud: true });
+  }
+  if (sub && sub !== "status") die(`알 수 없는 하위 명령입니다: ${sub} — \`lively workspace\` 또는 \`lively workspace switch\``, 2);
+
+  const gw = gateway();
+  if (!gw) { info("로그인돼 있지 않습니다 — `lively login --cloud` 로 시작하세요."); return; }
+  say(`\n${bold("이 PC 가 매여 있는 곳")}`);
+
+  // 워크스페이스 이름은 게이트웨이가 안다(org 프로필). 못 읽어도 주소는 보여준다 — 조회 실패로 화면을 비우지 않는다.
+  let orgName = null;
+  try { orgName = (await api("/api/ui/me/whoami"))?.org?.name ?? null; } catch { /* 주소만으로도 쓸모 있다 */ }
+  say(`  워크스페이스  ${bold(orgName || "(이름을 못 읽음)")}  ${dim(normGw(gw))}`);
+
+  // 노드·MCP 가 **같은 곳을 보고 있나** — 이 명령의 존재 이유.
+  const { nodeStatus } = await import(new URL("./cmd-node.mjs", import.meta.url));
+  const st = nodeStatus();
+  const nodeGw = st.registered ? normGw(st.gateway || "") : null;
+  const nodeState = !st.registered ? dim("등록 없음")
+    : st.running === true ? green("실행 중") : st.running === false ? yellow("멈춤") : dim("상태 모름");
+  say(`  이 PC 노드    ${st.registered ? bold(st.id || "(이름 없음)") : dim("(없음)")}  ${nodeState}${nodeGw ? `  ${dim(nodeGw)}` : ""}`);
+
+  const mismatch = nodeGw && nodeGw !== normGw(gw);
+  if (mismatch) {
+    warn("노드가 지금 로그인한 워크스페이스와 다른 곳에 매여 있습니다.");
+    say(dim("   그 상태에서는 이 워크스페이스에서 그 PC 로 세션을 열 수 없고, 옛 워크스페이스에는 계속 붙어 있습니다."));
+    say(`   ${bold("lively node --daemon")} ${dim("을 실행하면 지금 로그인한 곳으로 다시 등록됩니다.")}`);
+  } else if (st.registered) {
+    ok("노드가 이 워크스페이스에 매여 있습니다.");
+  }
+  say(dim(`\n  다른 워크스페이스로: ${bold("lively workspace switch")}`));
 }
 
 const cmdInstall = () => syncKit({ label: "라이블리 설치", offerHarness: true });
@@ -2333,6 +2402,8 @@ ${bold("작업")}
       ${dim("레포를 못 가져와도(자격·네트워크 등) 세션은 그대로 시작하고, 무엇이 왜 실패했는지 사람·AI 에게 함께 알립니다.")}
       --require-repo     ${dim("반대로 레포 준비 실패 시 실행을 중단(자동화·프로비저닝 스크립트용)")}
   mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
+  workspace              지금 매여 있는 워크스페이스 + 이 PC 노드가 같은 곳을 보고 있는지
+      switch             다른 워크스페이스로 옮기기 ${dim("(다시 로그인 — 노드·MCP 도 함께 따라갑니다)")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
   backfill                이 PC 의 기존 claude 대화 기록을 중앙에 소급 업로드(웹뷰에 과거 세션도) ${dim("--dry-run")}
   share [<세션id>]         이 세션(진행 중 포함)을 팀원과 공유 — 최신 내용 올리고 열람 링크 출력 ${dim("--node <id>  --json")}
@@ -2479,6 +2550,8 @@ async function dispatch(cmd, o, argv) {
     case "run": return cmdRun(argv.slice(argv.indexOf("run") + 1));
     // mode — 디폴트 실행 모드(normal|readonly|incognito) 조회/설정(#1007+). lively run 이 이걸 읽는다.
     case "mode": return cmdMode(argv.slice(argv.indexOf("mode") + 1));
+    // workspace — 지금 어느 워크스페이스에 매여 있나 + 전환(#2215). 계정 하나가 여러 워크스페이스에 속한다.
+    case "workspace": return cmdWorkspace(argv.slice(argv.indexOf("workspace") + 1));
     // delegate 도 나머지 인자 원형 보존(--ram 등 delegate 전용 옵션이 CLI 공통 파서에 안 먹히게).
     case "delegate": return cmdDelegate(argv.slice(argv.indexOf("delegate") + 1));
     // node — 이 PC 를 라이블리 노드로 연결(데몬 없이 foreground). 나머지 인자 원형 보존.

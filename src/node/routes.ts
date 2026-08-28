@@ -12,7 +12,7 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { authNodeTokenDetailed, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, loadRecentLinkEvents, type OrgNode } from "./store.js";
+import { authNodeTokenDetailed, createNode, deleteNode, getNode, listNodes, revokeNodeToken, rotateNodeToken, setNodeEnabled, setNodeShared, loadRecentLinkEvents, type OrgNode } from "./store.js";
 import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
 import { linkDiagMessage, linkDiagSummary, keepAwakeLine, staleAgentNote } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로 · #2127 낡은 인스턴스
 import { nodeOpenTo } from "./node-access.js";
@@ -149,6 +149,16 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     if (n.owner_member !== idOf(u) && !isAdmin(u)) throw new HttpError(403, "본인 노드가 아닙니다");
     return n;
   };
+
+  // 토큰 회수(#2215) — **등록은 남기고 접속만 끊는다.** `lively logout` 이 부른다: 로그아웃했는데 그 PC 가
+  //  옛 테넌트에 계속 붙어 있는 구멍을 막는 자리다. 회전(rotate)과 다르다 — 새 토큰을 주지 않는다.
+  app.post("/api/ui/nodes/:id/revoke-token", auth, wrap(async (req, res) => {
+    const n = await requireOwn(req);
+    const r = await revokeNodeToken(n.id, idOf(userOf(req)));
+    logger.info({ node: n.id, actor: idOf(userOf(req)), revoked: r.revoked }, "노드 토큰 회수");
+    res.setHeader("Cache-Control", "no-store");
+    res.json(r);
+  }));
 
   // 토큰 회전 — 구 토큰 revoke + 새 토큰 1회 반환(재설치/유출 대응).
   app.post("/api/ui/nodes/:id/rotate", auth, wrap(async (req, res) => {
