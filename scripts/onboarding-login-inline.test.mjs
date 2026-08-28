@@ -33,8 +33,11 @@ test("★ claude 안내는 «첫 세션에서 물음이 더 나온다» 를 숨�
   const guide = SRC.slice(SRC.indexOf("const AI_GUIDE = {"), SRC.indexOf("const LOGIN_SESSION"));
   const claude = guide.slice(guide.indexOf("claude:"), guide.indexOf("codex:"))
     .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
-  assert.match(claude, /첫 세션에서 물음이 몇 개 더 나와요/, "미뤄진 물음을 말한다");
+  // 글자 스타일·보안 안내는 키트가 미리 넘긴다(member-kit-seed). 남는 건 폴더 신뢰 하나 — 그건 반드시 말한다.
+  assert.match(claude, /첫 세션에서/, "첫 세션에 남는 몫을 말한다");
   assert.match(claude, /이 폴더를 믿나요|trust the files/, "그 물음이 무엇인지도 말한다");
+  // 그리고 «로그인 방법» 화면을 만나도 로그인이 풀린 게 아님을 말해 준다 — 실측으로 사람이 그렇게 읽었다.
+  assert.match(claude, /Select login method|로그인 방법/, "첫 실행 안내와 미로그인을 구분해 준다");
 });
 
 test("★ 대상이 아닌 하네스는 종전 «로그인 창» 그대로다 — 그쪽은 비대화형 한 줄이 없다", () => {
