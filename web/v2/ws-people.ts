@@ -131,9 +131,18 @@ function inviteForm(d: PeopleData, slug: string, again: () => void): HTMLElement
     try {
       const r: any = await api('/api/ui/me/workspaces/invite', { method: 'POST', body: JSON.stringify({ slug, email }) });
       input.value = '';
-      toast(r?.known_member
-        ? `${email} 님에게 초대를 보냈어요. 그분 화면에 수락 요청이 뜹니다.`
-        : `${email} 님을 불러 뒀어요. 그분이 이 워크스페이스에 로그인하면 수락 요청이 뜹니다.`);
+      //  #2188 매니지드 — 계정 서버는 메일을 보내지 않는다. 링크가 오면 그것이 초대이므로 **링크를 준다**
+      //   ("보냈어요" 라고 말하면 거짓이고, 사람은 아무도 안 오는 이유를 영영 모른다).
+      if (r?.invite?.url) {
+        note.replaceChildren(
+          el('span', { text: `${email} 님의 초대 링크예요 — 전해 주세요: ` }),
+          el('a', { href: String(r.invite.url), target: '_blank', rel: 'noopener', text: String(r.invite.url) }));
+        toast('초대 링크를 만들었어요 — 아래 링크를 전해 주세요.');
+      } else {
+        toast(r?.known_member
+          ? `${email} 님에게 초대를 보냈어요. 그분 화면에 수락 요청이 뜹니다.`
+          : `${email} 님을 불러 뒀어요. 그분이 이 워크스페이스에 로그인하면 수락 요청이 뜹니다.`);
+      }
       again();
     } catch (e: any) { note.textContent = e?.message || String(e); }
     finally { go.removeAttribute('disabled'); }
@@ -228,8 +237,13 @@ interface View {
   wsName: string; kind: 'personal' | 'team'; count: number; canManage: boolean;
   people: Person[]; pending: PeopleData['pending']; candidates: PeopleData['candidates'];
 }
-/** 방금 만든 계정·재설정한 비밀번호 — 창을 닫으면 사라진다(서버가 다시 주지 않는다). */
-interface Issued { title: string; email: string; password: string }
+/**
+ * 방금 만든 계정의 임시 비밀번호, 또는 방금 만든 **초대 링크** — 창을 닫으면 사라진다(서버가 다시 주지 않는다).
+ *
+ * #2188 — 매니지드에서 초대는 **링크**다. 계정 서버(app.lvly.io)가 메일을 보내지 않으므로, 화면이
+ *  "보냈어요" 라고 말하면 그건 거짓이고 사람은 아무도 안 오는 이유를 영영 모른다. 그래서 **줄 것을 준다.**
+ */
+interface Issued { title: string; email: string; password?: string; inviteUrl?: string; note?: string }
 
 const ROLE_LABEL: Record<Role, string> = { creator: '만든 사람', owner: '공동 관리자', admin: '관리자', member: '구성원' };
 
@@ -383,6 +397,7 @@ function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issu
   const chips = chipInput(v.candidates, () => void send());
 
   const send = async (): Promise<void> => {
+    let linkIssued = false;   // #2188 — 링크를 준 경우엔 "보냈어요" 라고 말하지 않는다(우리가 안 보냈다)
     const emails = chips.values();
     if (!emails.length) { note.textContent = '이메일을 넣어 주세요.'; chips.focus(); return; }
     const bad = emails.filter((e) => !EMAIL_RE.test(e));
@@ -410,13 +425,26 @@ function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issu
           const r: any = await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify({ kind: 'human', email, display_name: email.split('@')[0] }) });
           if (r?.initialPassword) onIssued({ title: `${email} 계정을 만들었어요`, email, password: String(r.initialPassword) });
         } else {
-          await api('/api/ui/me/workspaces/invite', { method: 'POST', body: JSON.stringify({ slug, email, role: roleSel?.value || 'member' }) });
+          const r: any = await api('/api/ui/me/workspaces/invite', { method: 'POST', body: JSON.stringify({ slug, email, role: roleSel?.value || 'member' }) });
+          //  #2188 매니지드 — 계정 서버는 메일을 보내지 않고 **링크**를 준다. 받으면 그대로 보여 준다.
+          if (r?.invite?.url) {
+            linkIssued = true;
+            onIssued({ title: `${email} 님을 초대했어요`, email, inviteUrl: String(r.invite.url),
+              note: r.invite.becomes_team
+                ? '이 링크를 그분에게 전해 주세요. 수락하면 이 워크스페이스가 팀이 됩니다.'
+                : '이 링크를 그분에게 전해 주세요. 열어서 수락해야 구성원이 됩니다.' });
+          }
         }
         okd.push(email);
       } catch (e: any) { failed.push(`${email} — ${e?.message || e}`); }
     }
     go.disabled = false;
-    if (okd.length) { chips.clear(); toast(primary ? `${okd.length}명의 계정을 만들었어요 — 임시 비밀번호를 전해 주세요.` : `${okd.length}명에게 초대를 보냈어요 — 수락하면 구성원이 됩니다.`); }
+    if (okd.length) {
+      chips.clear();
+      toast(primary ? `${okd.length}명의 계정을 만들었어요 — 임시 비밀번호를 전해 주세요.`
+        : linkIssued ? `초대 링크를 만들었어요 — 아래 링크를 전해 주세요.`
+        : `${okd.length}명에게 초대를 보냈어요 — 수락하면 구성원이 됩니다.`);
+    }
     note.textContent = failed.length ? '못 했어요: ' + failed.join(' · ') : '';
     if (okd.length) again();
   };
@@ -433,13 +461,24 @@ function inviteBlock(v: View, slug: string, primary: boolean, onIssued: (i: Issu
 
 /** 방금 만든 계정 — 임시 비밀번호는 지금만 보인다. 세 줄을 한 번에 복사해 그분에게 전한다. */
 function issuedCard(i: Issued): HTMLElement {
-  const loginUrl = location.origin;
-  const text = `로그인 주소: ${loginUrl}\n이메일: ${i.email}\n임시 비밀번호: ${i.password}`;
   const row = (k: string, val: string, mono = false): HTMLElement =>
     el('div', { class: 'v2mem-cred-row' }, el('span', { class: 'v2mem-cred-k', text: k }), el('span', { class: 'v2mem-cred-v' + (mono ? ' mono' : ''), text: val }));
-  return el('section', { class: 'v2mem-cred', role: 'status' },
-    el('div', { class: 'v2mem-cred-h' }, svg(['M5 12.5l4.2 4.2L19 7'], 'v2mem-cred-ic'), el('b', { text: i.title })),
-    row('로그인 주소', loginUrl), row('이메일', i.email), row('임시 비밀번호', i.password, true),
+  const head = el('div', { class: 'v2mem-cred-h' }, svg(['M5 12.5l4.2 4.2L19 7'], 'v2mem-cred-ic'), el('b', { text: i.title }));
+
+  //  #2188 초대 링크 — 이 링크가 곧 초대다. 상대에게 **전달해야** 한다(우리가 메일을 보내지 않는다).
+  if (i.inviteUrl) {
+    const text = `${i.email} 님을 라이블리 워크스페이스에 초대했습니다.\n${i.inviteUrl}`;
+    return el('section', { class: 'v2mem-cred', role: 'status' }, head,
+      row('초대한 사람', i.email), row('초대 링크', i.inviteUrl, true),
+      el('div', { class: 'v2mem-cred-f' },
+        el('span', { class: 'v2mem-help', text: i.note || '이 링크를 그분에게 전해 주세요. 열어서 수락해야 구성원이 됩니다. 창을 닫으면 링크를 다시 볼 수 없어요.' }),
+        copyButton(() => text, '초대 링크 복사')));
+  }
+
+  const loginUrl = location.origin;
+  const text = `로그인 주소: ${loginUrl}\n이메일: ${i.email}\n임시 비밀번호: ${i.password}`;
+  return el('section', { class: 'v2mem-cred', role: 'status' }, head,
+    row('로그인 주소', loginUrl), row('이메일', i.email), row('임시 비밀번호', String(i.password || ''), true),
     el('div', { class: 'v2mem-cred-f' },
       el('span', { class: 'v2mem-help', text: '처음 로그인하면 새 비밀번호를 정해요. 이 창을 닫으면 임시 비밀번호는 다시 볼 수 없어요.' }),
       copyButton(() => text, '세 줄 복사')));

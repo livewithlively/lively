@@ -115,7 +115,10 @@ export async function setClaudeSessionId(id: string, claudeUuid: string, owner: 
     "UPDATE org_session_state SET claude_session_id=$2, transcript_path=COALESCE($4, transcript_path), updated_at=now() WHERE id=$1 AND owner=$3",
     [id, claudeUuid, owner, transcriptPath ?? null],
   );
-  return (r.rowCount ?? 0) > 0;
+  const ok = (r.rowCount ?? 0) > 0;
+  // #2233 — 덮어쓴 옛 uuid 를 잃지 않게 사슬에도 쌓는다. 갱신된 행(= 소유자 확인됨)일 때만.
+  if (ok) await recordSessionConv(id, claudeUuid, owner, transcriptPath ?? null).catch(() => false);
+  return ok;
 }
 
 // ── #1752 갭2 — **노드 세션**의 box-id ↔ 대화 uuid 매핑(org_node_session_map). ──
@@ -137,7 +140,9 @@ export async function setNodeSessionMap(
      WHERE org_node_session_map.owner = EXCLUDED.owner`,
     [boxId, nodeId, convUuid, transcriptPath ?? null, owner],
   );
-  return (r.rowCount ?? 0) > 0;
+  const ok = (r.rowCount ?? 0) > 0;
+  if (ok) await recordSessionConv(boxId, convUuid, owner, transcriptPath ?? null, nodeId).catch(() => false);   // #2233 사슬
+  return ok;
 }
 
 // 목록 보강용 일괄 조회 — box_id → {node_id, conv_uuid}. claudeSessionIdsFor(박스 세션)와 짝(노드 세션판).
@@ -149,6 +154,88 @@ export async function nodeSessionMapFor(ids: string[]): Promise<Map<string, { no
     [ids],
   );
   for (const row of r.rows) out.set(String(row.box_id), { node_id: String(row.node_id), conv_uuid: String(row.conv_uuid) });
+  return out;
+}
+
+// ── #2233 — 한 박스가 **살면서 돌린 대화 전부**(org_session_conv). 위 두 표는 last-write-wins 라 갈아탄 옛 대화가 증발한다. ──
+//  왜 필요한가: /clear·resume·포크·압축 롤오버로 대화 uuid 가 바뀌면 그 전에 사람이 던진 질문이 세션 화면에서 사라졌다
+//  (실측 2026-08-27 box-jang-ebdb3a82: 파일 5개·질문 43개인데 타임라인엔 1개). 보고를 덮지 않고 **쌓아** 그 사슬을 남긴다.
+//  owner 가드는 setClaudeSessionId 와 같은 이유(남의 box_id 를 가로채 남의 대화를 매다는 오염 차단).
+//  best-effort — 실패해도 호출부는 종전대로 간다(사슬이 한 칸 짧아질 뿐, 지금 대화는 늘 보인다).
+//  ⚠ ON CONFLICT 에 **대상을 적지 않는다** — PK 는 테넌트화(db/tenant-column.ts)가 (tenant_id, …) 로 다시 쓰므로
+//   배포 시점에 따라 모양이 다르다. 대상 없는 DO NOTHING 은 어느 모양에서도 서고, 소유자 가드는 뒤이은 UPDATE 가 쥔다.
+//  훅은 툴을 쓸 때마다 보고하므로(60초 스로틀) 프로세스 안에서 같은 쌍은 잠깐 기억해 두고 건너뛴다 — 사슬을 만드는 데
+//   필요한 것은 '그 쌍이 있었다'는 사실 하나이고, last_seen 의 분 단위 신선도는 아무도 안 본다.
+const convMemo = new Map<string, number>();
+const CONV_MEMO_MS = 10 * 60_000;
+export async function recordSessionConv(
+  boxId: string, convUuid: string, owner: string, transcriptPath?: string | null, nodeId?: string | null,
+): Promise<boolean> {
+  if (!boxId || !convUuid || !owner) return false;
+  const memoKey = `${boxId}|${convUuid}|${owner}`;
+  const seen = convMemo.get(memoKey);
+  if (seen && Date.now() - seen < CONV_MEMO_MS) return true;
+  await itemsPool.query(
+    `INSERT INTO org_session_conv(box_id, conv_uuid, transcript_path, owner, node_id)
+     VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+    [boxId, convUuid, transcriptPath ?? null, owner, nodeId ?? null],
+  );
+  const r = await itemsPool.query(
+    `UPDATE org_session_conv SET last_seen=now(),
+       transcript_path=COALESCE($3, transcript_path), node_id=COALESCE($5, node_id)
+     WHERE box_id=$1 AND conv_uuid=$2 AND owner=$4`,
+    [boxId, convUuid, transcriptPath ?? null, owner, nodeId ?? null],
+  );
+  const ok = (r.rowCount ?? 0) > 0;
+  if (ok) { convMemo.set(memoKey, Date.now()); if (convMemo.size > 4000) convMemo.clear(); }
+  return ok;
+}
+
+export interface SessionConv { conv_uuid: string; transcript_path: string | null; first_seen: string }
+/** 이 박스가 돌린 대화들 — 오래된 순. 지금 붙어 있는 대화도 포함된다(보고 때 함께 쌓이므로). */
+export async function sessionConvsFor(boxId: string): Promise<SessionConv[]> {
+  if (!boxId) return [];
+  const r = await itemsPool.query(
+    "SELECT conv_uuid, transcript_path, first_seen FROM org_session_conv WHERE box_id=$1 ORDER BY first_seen ASC LIMIT 64",
+    [boxId],
+  );
+  return r.rows.map((row) => ({
+    conv_uuid: String(row.conv_uuid),
+    transcript_path: (row.transcript_path as string | null) ?? null,
+    first_seen: row.first_seen ? new Date(row.first_seen).toISOString() : "",
+  }));
+}
+
+/**
+ * 이 실행 폴더를 **다른 박스도** 쓰고 있나(#2233).
+ *
+ * 폴더 안의 대화 파일 전부를 이 세션의 것으로 볼 수 있는지를 가르는 유일한 기준이다. 박스 세션의 폴더
+ *  (`~/box/<나>/sessions/<box-id>`)는 박스마다 따로라 늘 단독이고, 프로젝트 폴더는 한 프로젝트에 세션을
+ *  여러 개 띄우면 공유된다(실측: project/1719 에 박스 11개). 공유 폴더에서 폴더째 합치면 **남의 질문이
+ *  내 타임라인에 뜬다** — 없는 것보다 나쁘다. 그래서 공유면 기록된 사슬만 쓴다.
+ * 조회 실패는 '공유'로 본다 — 모를 때는 섞지 않는 쪽이 안전하다.
+ */
+export async function dirSharedWithOtherSession(id: string, dir: string): Promise<boolean> {
+  if (!id || !dir) return true;
+  try {
+    const r = await itemsPool.query("SELECT 1 FROM org_session_state WHERE dir=$1 AND id<>$2 LIMIT 1", [dir, id]);
+    return (r.rowCount ?? 0) > 0;
+  } catch { return true; }
+}
+
+/** 이 대화들을 **다른 박스가** 자기 것으로 갖고 있나 — 그런 대화는 어떤 경우에도 이 세션에 섞지 않는다. */
+export async function convsTakenByOtherSession(id: string, convUuids: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!id || !convUuids.length) return out;
+  try {
+    const r = await itemsPool.query(
+      `SELECT conv_uuid FROM org_session_conv WHERE box_id<>$1 AND conv_uuid = ANY($2::text[])
+       UNION SELECT claude_session_id AS conv_uuid FROM org_session_state WHERE id<>$1 AND claude_session_id = ANY($2::text[])
+       UNION SELECT conv_uuid FROM org_node_session_map WHERE box_id<>$1 AND conv_uuid = ANY($2::text[])`,
+      [id, convUuids],
+    );
+    for (const row of r.rows) if (row.conv_uuid) out.add(String(row.conv_uuid));
+  } catch { /* 못 물어봤으면 아무것도 배제하지 않는다 — 폴더 단독 판정이 이미 앞을 막았다 */ }
   return out;
 }
 

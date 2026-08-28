@@ -2066,7 +2066,7 @@
   "rest": [
    "GET /api/ui/me/workspaces/people"
   ],
-  "input_hash": "42e56e1c69815818"
+  "input_hash": "26e5e45fafefad0f"
  },
  {
   "name": "workspace_invite",
@@ -2076,7 +2076,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/invite"
   ],
-  "input_hash": "60220ba0c21fbaf7"
+  "input_hash": "e29202b6f5da6c16"
  },
  {
   "name": "workspace_invite_resolve",

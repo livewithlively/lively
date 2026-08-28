@@ -168,3 +168,7 @@ export function toThinNdjson(lines: ChatLine[]): string {
 
 /** 얇은 판이 한 번에 훑는 상한 — 이보다 큰 파일은 **꼬리부터** 이만큼만 본다(화면이 X-Log-From 으로 알아챈다). */
 export const THIN_MAX_BYTES = 64 * 1024 * 1024;
+/** 사슬(#2233 — 한 박스가 갈아탄 대화들) **전체**가 훑는 상한 — 지금 대화까지 포함한 총량이다.
+ *  한 파일 상한과 같은 값으로 둔다: 사슬이 생겼다고 게이트웨이가 한 번에 파싱하는 양의 천장이 올라가면 안 된다
+ *  (실측 참고: 대화 5개짜리 실제 박스가 36MB — 이 천장 안에 통째로 들어온다). 넘치면 최신 대화부터 담고 끊는다. */
+export const THIN_CHAIN_MAX_BYTES = THIN_MAX_BYTES;
