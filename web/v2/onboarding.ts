@@ -1547,6 +1547,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
                 : scopeOnly ? (id === 'gitlab' ? (open ? '모을 프로젝트 경로를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 프로젝트(group/project)를 넣어 주세요.') : (open ? '모을 파일 링크를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 파일 링크를 넣어 주세요.'))
                 : tokOnly ? (id === 'github' ? '계정은 이어져 있어요 — 누르면 고른 저장소의 이슈·PR 모으기가 켜져요.' : '토큰은 받았어요 — 누르면 바로 가져오기가 켜져요.')
+                : (collectMode(id) && id === 'gitlab') ? (open ? '아래 세 칸을 채워 주세요.' : '눌러 주세요 — 개인 토큰 한 줄을 받아 오면 됩니다.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
                 : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
