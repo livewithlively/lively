@@ -22,6 +22,32 @@ export function appReady(s) {
   return !!(st.cliFound && !st.cliOutdated && !st.cliBroken && st.loggedIn && st.kitInstalled && !st.tokenRejected);
 }
 
+/**
+ * 노드 상태 판정 — **한 자리**(#2215). 배지·상세 문구·트레이가 전부 이걸 본다.
+ *
+ * 왜 한 자리인가: 종전엔 세 곳이 각자 식을 적었고 **실제로 어긋나 있었다** — `renderer/app.js` 의 배지는
+ *  `running === null`(못 쟀다)을 «노드 정지됨» 으로 떨어뜨렸는데, 같은 파일의 상세 문구는 «확인하지
+ *  못했습니다» 로 그렸다. `appReady` 가 같은 이유로 이미 한 자리에 모여 있다.
+ *
+ * ★ 두 축을 섞지 않는다:
+ *  · `running`   — 이 PC 의 프로세스 실측(true/false/**null=못 쟀다**)
+ *  · `connected` — 게이트웨이가 보는 사실(true/false/null=모름)
+ *
+ * ★ `connected === true` 면 «정지됨» 이라 말하지 않는다. 게이트웨이가 붙어 있다고 보는 것은 그 프로세스가
+ *  산다는 강한 증거다 — 로컬 프로브가 못 봐도 그쪽이 이긴다. 실측(2026-08-28, hammurabi): 윈도우 제한
+ *  계정에서 프로브가 실패해 `running=false` 가 됐는데 노드는 멀쩡히 붙어 있었고, 화면만 «정지됨» 이었다.
+ *
+ * @returns {"unregistered"|"running"|"zombie"|"unknown"|"stopped"}
+ */
+export function nodeStateOf(s) {
+  const st = s || {};
+  if (!st.nodeRegistered) return "unregistered";
+  if (st.nodeConnected === true) return "running";       // 붙어 있다 = 돈다(프로브보다 강한 증거)
+  if (st.nodeRunning === true) return st.nodeConnected === false ? "zombie" : "running";
+  if (st.nodeRunning === null || st.nodeRunning === undefined) return "unknown";  // 모름 — 정지됐다고 말하지 않는다
+  return "stopped";
+}
+
 /** 게이트웨이 주소 → 웹 UI 주소. 뒤 슬래시를 정리하고 `/ui/` 를 붙인다(경로 접두가 있는 게이트웨이도 그대로 살린다). 형식이 아니면 null. */
 export function webUiUrl(gatewayUrl) {
   const gw = String(gatewayUrl || "").trim().replace(/\/+$/, "");

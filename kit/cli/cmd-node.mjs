@@ -1014,13 +1014,32 @@ export function nodeProcProbe(platform = process.platform) {
   return { cmd: "pgrep", args: ["-f", "node-agent/agent.mjs"] };
 }
 
-/** 프로브 출력 → 실행 중 개수(순수). pgrep 은 pid 줄, PowerShell 은 숫자 한 줄. */
+/**
+ * 프로브 출력 → 실행 중 개수(순수). pgrep 은 pid 줄, PowerShell 은 숫자 한 줄.
+ *  **읽지 못했으면 `null`(모름)** — 0 이 아니다.
+ *
+ * 왜 null 이 필요한가(#2215 실측 2026-08-28): 종전 계약은 "쓰레기 출력을 0 으로" 였다. 의도는
+ *  «있다» 로 잘못 읽지 않으려는 것이었는데, 그 대가로 «없다» 라고 **확답**해 버렸다. 실제로 윈도우
+ *  제한 계정에서 PowerShell 이 떠도 명령이 실패해 stdout 이 비면(권한·정책) 그게 `0` 이 됐고,
+ *  화면은 게이트웨이가 «연결됨» 이라 보는 노드를 «노드 정지됨» 으로 그렸다.
+ *  세 번째 값이 이미 시스템에 있다(`nodeStatus().running` 은 null 을 낸다) — 파서가 그걸 표현하면 된다.
+ *
+ * 유일한 예외: `pgrep` 의 **exit≠0 + 빈 출력**은 미검출의 확답이라 `0`. (찾았는데 못 셌으면 pid 가 나온다.)
+ *
+ * @returns {number|null} 개수, 또는 못 읽었으면 null
+ */
 export function parseProcCount(platform, stdout, status) {
   const s = String(stdout || "").trim();
-  if (platform === "win32") { const n = Number(s.split(/\r?\n/).filter(Boolean).pop()); return Number.isFinite(n) ? n : 0; }
-  // pgrep 은 못 찾으면 exit 1 + 빈 출력 — 그걸 '모름' 이 아니라 0 으로 읽는다(찾았는데 못 셌으면 pid 가 나온다).
-  if (status !== 0 && !s) return 0;
-  return s.split(/\r?\n/).filter((l) => /^\d+$/.test(l.trim())).length;
+  if (platform === "win32") {
+    const last = s.split(/\r?\n/).filter(Boolean).pop();
+    if (last === undefined) return null;                 // 빈 출력 = 명령이 아무것도 못 냈다
+    const n = Number(last);
+    return Number.isFinite(n) ? n : null;                // 숫자가 아니면 못 읽은 것
+  }
+  if (status !== 0 && !s) return 0;                      // pgrep 미검출의 확답
+  if (!s) return null;                                   // exit 0 인데 빈 출력 = 이상
+  const pids = s.split(/\r?\n/).filter((l) => /^\d+$/.test(l.trim()));
+  return pids.length ? pids.length : null;               // pid 줄이 하나도 없다 = 못 읽은 것
 }
 
 /** 노드 상태 실측 — 앱·`status --json` 이 쓰는 단일 통로. 못 재는 축은 null(모르는 걸 false 로 눕히지 않는다). */
@@ -1075,7 +1094,9 @@ export function nodeStatus() {
     const probe = nodeProcProbe();
     const r = spawnSync(probe.cmd, probe.args, { encoding: "utf8", timeout: 8000 });
     // 프로브 자체를 못 돌렸으면(명령 없음 등) **모름(null)** 이다 — 0 으로 적으면 "정지됨" 이라고 거짓말한다.
-    out.running = r.error ? null : parseProcCount(process.platform, r.stdout, r.status) > 0;
+    //  파서도 같은 규율을 지킨다(#2215): 출력을 못 읽으면 null 을 내므로 그대로 실어 보낸다.
+    const cnt = r.error ? null : parseProcCount(process.platform, r.stdout, r.status);
+    out.running = cnt === null ? null : cnt > 0;
   } catch { out.running = null; }
   return out;
 }

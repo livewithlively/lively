@@ -418,7 +418,14 @@ t("F6 상태 문구는 가장 급한 것부터(CLI→로그인→키트→노드
   assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: false }), "키트 설치 필요");
   assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true, nodeDaemon: true }), "노드 실행 중 (자동 시작 켜짐)");
   assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true }), "노드 실행 중 (이 세션만)");
-  assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true }), "노드 정지됨");
+  // #2215 — 실행 여부를 **모를 때**(nodeRunning 미측정)는 «정지됨» 이라 말하지 않는다. 종전엔 이 줄이
+  //  "노드 정지됨" 을 계약으로 박고 있었고, 그게 곧 화면의 거짓말이었다(실측: 게이트웨이엔 붙어 있는데 «정지됨»).
+  assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true }), "노드 상태 확인 중");
+  assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: false }), "노드 정지됨",
+    "0 개라는 확답일 때만 «정지됨»");
+  // ★ 프로브가 «없다» 해도 게이트웨이가 «연결됨» 이면 실행 중이다 — 그쪽이 더 강한 증거다.
+  assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: false, nodeConnected: true }),
+    "노드 실행 중 (이 세션만)");
   assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true }), "노드 미등록");
 });
 
@@ -922,7 +929,9 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
   assert.match(main, /nodeConnected: typeof n\.connected === "boolean" \? n\.connected : null/, 'connected 를 boolean 일 때만 옮기지 않는다');
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
-  assert.match(js, /nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
+  // #2215 — 판정이 web-shell.nodeStateOf 한 자리로 옮겨갔다(종전엔 렌더러가 `nodeConnected === false` 식을
+  //  직접 적었다). 계약의 대상은 «렌더러가 좀비를 구분하는가» 이지 그 식의 모양이 아니다.
+  assert.match(js, /nodeState === "zombie"|nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
   assert.match(js, /nodeSleepNote/, '렌더러가 잠자기 원인 문구를 띄우지 않는다(#1849)');
   assert.match(main, /nodeSleepNote:/, 'main 이 status 의 sleep.note 를 앱 상태로 옮기지 않는다(#1849)');
   assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
@@ -1407,7 +1416,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
 
 // ── H. 웹 UI 셸 (#1541 · web-shell.mjs) — 앱 창에 게이트웨이의 /ui/ 를 그대로 싣는다(화면 코드 두 벌 금지) ─────────
 {
-  const { appReady, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } = await import("./web-shell.mjs");
+  const { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } = await import("./web-shell.mjs");
   const { IPC_WEB } = await import("./ipc-contract.mjs");
   const GW = "https://dev.lvly.io";
   const okState = { cliFound: true, cliOutdated: false, cliBroken: null, loggedIn: true, kitInstalled: true };
@@ -1421,13 +1430,66 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(appReady(null), false); assert.equal(appReady({}), false);
     // ★ 세 곳(메인·트레이·렌더러)이 각자 식을 적지 않는다 — 트레이는 appReady 를 import 하고, 렌더러는 state.ready 를 받는다
     const tray = readFileSync(fileURLToPath(new URL("./tray-menu.mjs", import.meta.url)), "utf8");
-    assert.match(tray, /import \{ appReady \} from "\.\/web-shell\.mjs"/, "트레이가 appReady 를 안 쓴다");
+    // import 목록은 늘어난다(#2215 에 nodeStateOf 가 붙었다) — 계약은 «appReady 를 web-shell 에서 가져오는가» 다.
+    assert.match(tray, /import \{[^}]*\bappReady\b[^}]*\} from "\.\/web-shell\.mjs"/, "트레이가 appReady 를 안 쓴다");
     assert.ok(!/!s\.cliFound \|\| s\.cliOutdated \|\| s\.cliBroken \|\| !s\.loggedIn \|\| !s\.kitInstalled/.test(tray), "트레이에 준비 식이 따로 남아 있다");
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     assert.match(main, /next\.ready = appReady\(next\)/, "메인이 state.ready 를 안 채운다");
     assert.ok(!/if \(!state\.cliFound \|\| state\.cliOutdated \|\| state\.cliBroken \|\| !state\.loggedIn \|\| !state\.kitInstalled\) showWindow\(\)/.test(main), "메인 시작 경로에 옛 준비 식이 남아 있다");
     const js = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
     assert.match(js, /const ready = !!s\?\.ready;/, "렌더러가 state.ready 대신 자기 식을 쓴다");
+  });
+
+  // ── 노드 상태 판정 한 자리(#2215) ─────────────────────────────────────────
+  //  사양: 두 축(도는가 running · 붙어 있는가 connected)을 섞지 않는다. 못 잰 것을 «정지됨» 이라
+  //   말하지 않고, 게이트웨이가 «연결됨» 이라 보면 로컬 프로브가 못 봐도 «실행 중» 이다.
+  //  엣지 표 B1~B7 전수.
+  t("H1-n1 B1 등록 전이면 unregistered — 다른 축을 보기 전에 갈린다", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: false, nodeRunning: true, nodeConnected: true }), "unregistered");
+    assert.equal(nodeStateOf({}), "unregistered");
+    assert.equal(nodeStateOf(null), "unregistered");
+  });
+
+  t("H1-n2 B2 돌고 붙어 있으면 running", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: true, nodeConnected: true }), "running");
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: true, nodeConnected: null }), "running");
+  });
+
+  t("H1-n3 B3 도는데 게이트웨이엔 안 붙어 있으면 zombie(#1541 절전 좀비)", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: true, nodeConnected: false }), "zombie");
+  });
+
+  t("H1-n4 ★ B4 프로브가 «없다» 해도 게이트웨이가 «연결됨» 이면 running — 그쪽이 더 강한 증거다", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: false, nodeConnected: true }), "running");
+  });
+
+  t("H1-n5 ★ B5 프로브를 못 쟀고 게이트웨이가 «연결됨» 이면 running (이번 신고 그 모양)", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: null, nodeConnected: true }), "running");
+  });
+
+  t("H1-n6 ★ B6 못 쟀고 연결도 모르면 unknown — «정지됨» 이라 말하지 않는다", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: null, nodeConnected: null }), "unknown");
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: null, nodeConnected: false }), "unknown");
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeConnected: null }), "unknown", "running 이 아예 없으면(undefined) 모름이다");
+  });
+
+  t("H1-n7 B7 «정지됨» 은 프로브가 0 을 확답하고 연결도 아닐 때만", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: false, nodeConnected: false }), "stopped");
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: false, nodeConnected: null }), "stopped");
+  });
+
+  t("H1-n8 ★ 판정은 한 자리 — 배지·상세·트레이가 각자 식을 적지 않는다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.match(main, /nodeState = nodeStateOf\(/, "메인이 state.nodeState 를 안 채운다");
+    // patchState 와 refreshState 두 경로가 **둘 다** 채워야 한다(하나만 채우면 옛 판정이 남는다).
+    assert.ok((main.match(/nodeStateOf\(/g) || []).length >= 2, "state 를 쓰는 두 경로 중 하나가 빠졌다");
+    const tray = readFileSync(fileURLToPath(new URL("./tray-menu.mjs", import.meta.url)), "utf8");
+    assert.match(tray, /s\.nodeState === "running"/, "트레이가 nodeState 를 안 쓴다");
+    assert.ok(!/if \(s\.nodeRunning\) return s\.nodeDaemon/.test(tray), "트레이에 옛 판정 식이 남아 있다");
+    const js = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+    assert.match(js, /s\.nodeState === "running"/, "렌더러 배지가 nodeState 를 안 쓴다");
+    assert.ok(!/s\.nodeRunning \? "노드 실행 중" : s\.nodeRegistered \? "노드 정지됨"/.test(js),
+      "렌더러 배지에 옛 식이 남아 있다 — 못 잰 것을 «정지됨» 으로 그린다");
   });
 
   t("H2 웹 UI 주소·출처 — 뒤 슬래시 정리·경로 접두 보존·형식 아니면 null", () => {
