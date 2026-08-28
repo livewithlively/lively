@@ -23,7 +23,7 @@ import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import {
-  activeWorkspaceSlug, listWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
+  activeWorkspaceSlug, listWorkspaces, managedWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
   archiveWorkspace, createWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam,
 } from './switcher.js';
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
@@ -218,12 +218,18 @@ function openPopover(anchor: HTMLElement): void {
   closePopover();
   const cur = workspaceInfo();
   const curSlug = activeWorkspaceSlug();
-  const rows: Array<{ slug: string; name: string; kind: string; active: boolean }> = spaces.length
+  const rows: Array<{ slug: string; name: string; kind: string; active: boolean; enter_url?: string; tenant_state?: string | null }> = spaces.length
     //  ★ 종류는 저장된 kind 가 아니라 **지금 명부에 몇 명인가**에서 나온다(#1875 kind_effective).
-    ? spaces.map((w) => ({ slug: String(w.slug), name: String(w.name || w.slug), kind: String(w.kind_effective || w.kind || 'team'), active: w.slug === curSlug || (!!w.is_primary && curSlug === 'primary') }))
+    //  '지금 여기'의 판정 — 셀프호스트는 브라우저가 고른 slug 로, **매니지드는 서버가 준 is_current 로**.
+    //   매니지드에선 워크스페이스마다 게이트웨이가 달라 브라우저에 고른 값이 없다(주소 자체가 답이다).
+    ? spaces.map((w) => ({ slug: String(w.slug), name: String(w.name || w.slug), kind: String(w.kind_effective || w.kind || 'team'),
+        active: typeof (w as any).is_current === 'boolean'
+          ? !!(w as any).is_current
+          : (w.slug === curSlug || (!!w.is_primary && curSlug === 'primary')),
+        enter_url: (w as any).enter_url, tenant_state: (w as any).tenant_state }))
     : [{ slug: 'primary', name: cur.name, kind: cur.kind, active: true }];
-  const me = spaces.find((w) => w.slug === curSlug || (!!w.is_primary && curSlug === 'primary'));
-  const isOwner = !!me && me.role === 'owner' && curSlug !== 'primary';
+  const me = spaces.find((w) => (typeof (w as any).is_current === 'boolean' ? !!(w as any).is_current : (w.slug === curSlug || (!!w.is_primary && curSlug === 'primary'))));
+  const isOwner = !!me && (me as any).role === 'owner' && (managedWorkspaces() || curSlug !== 'primary');
 
   //  #1875 — 나에게 온 초대는 **맨 위**. 내가 결정해 줘야 저쪽이 기다림을 멈추고, '내가 갈 수 있는 곳'이라
   //   워크스페이스 목록과 같은 질문에 답한다.
@@ -241,9 +247,13 @@ function openPopover(anchor: HTMLElement): void {
     ...rows.map((w) => el('div', { class: 'v2-wspop-row' + (w.active ? ' cur' : '') },
       el('button', { class: 'v2-wspop-switch', type: 'button', role: 'menuitemradio', 'aria-checked': String(w.active),
         title: w.active ? '지금 이 워크스페이스예요' : `${w.name} 워크스페이스로 전환`,
-        onclick: () => { closePopover(); if (!w.active) switchWorkspace(w.slug); } },
+        onclick: () => { closePopover(); if (!w.active) switchWorkspace(w.slug, (w as any).enter_url); } },
         wsTile(w, 'v2-wscard-big'),
-        tt(w.name, w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스')),
+        //  #2188 — 매니지드에서 갓 만든 워크스페이스는 뜨는 데 시간이 걸린다(테넌트 프로비저닝).
+        //   목록에는 **바로** 세우되 상태를 사실대로 말한다 — 안 그러면 눌렀을 때 빈 화면을 만난다.
+        tt(w.name, (w as any).tenant_state && (w as any).tenant_state !== 'running'
+          ? '준비 중이에요 — 곧 열립니다'
+          : w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스')),
       addPeopleBtn(w))),
     hr(),
     //  설정 — 이름 · 연결한 팀 · 보관. 만든 사람(owner)만. 종전엔 목록 행 옆 ✎ ✕ 였다(무엇인지 읽히지 않았다).
@@ -301,12 +311,12 @@ let promoN = 0;   // 승인 대기 승격 수 — 설정 행 부제에 싣는다
  *  혼자면 개인, 사람을 부르면 그 순간 팀. 그래서 종류 선택 칸을 두지 않는다 — 있으면 '지금 정해야 하는 것'으로 읽힌다. */
 function openCreatePanel(anchor: HTMLElement): void {
   closePopover();
-  const info = workspaceInfo();
   const pop = el('div', { class: 'v2-wspop v2-wspop--panel', role: 'dialog', 'aria-label': '새 워크스페이스' }, panelHead('새 워크스페이스', anchor)) as HTMLElement;
   if (!registryActive()) {
-    //  만들 수 없는 상태를 **조용히 숨기지 않는다** — 매니지드면 허브가 답이고, 셀프호스트면 자동 활성화 대기다.
-    pop.append(hint(info.hub ? '이 워크스페이스는 app.lvly.io 가 관리해요. 새 워크스페이스도 거기서 만듭니다.' : '다중 워크스페이스 준비 중이에요(부팅 자동 활성화). 계속 안 되면 관리자 로그를 확인하세요.'));
-    if (info.hub) pop.append(el('a', { class: 'v2-wspop-row', href: info.hub, target: '_blank', rel: 'noopener' }, el('span', { class: 'v2-wspop-ic' }, icon('web')), tt('app.lvly.io 에서 만들기', '새 탭으로 열립니다')));
+    //  #2188 — 매니지드는 이제 **여기서 만든다**(계정 서버가 실행만 대신한다). 그래서 이 갈래에 남는 것은
+    //   셀프호스트 자동 활성화 대기뿐이다. 종전엔 여기서 «app.lvly.io 에서 만들기 · 새 탭으로 열립니다» 로
+    //   사람을 내보냈고, 원준 신고가 정확히 그 화면이었다 — *"????? 이건 왜..? 앱에서처럼 해줘."*
+    pop.append(hint('다중 워크스페이스 준비 중이에요(부팅 자동 활성화). 계속 안 되면 관리자 로그를 확인하세요.'));
     place(pop, anchor, !!anchor.closest('.v2-side')); return;
   }
   const name = field('워크스페이스 이름');
@@ -319,13 +329,18 @@ function openCreatePanel(anchor: HTMLElement): void {
     try {
       const w = await createWorkspace(v, 'personal');
       toast(`'${w.name}' 워크스페이스를 만들었어요.`);
-      closePopover(); switchWorkspace(w.slug);   // 만들자마자 그리로 — 빈 목록 앞에서 헤매지 않게
+      closePopover();
+      //  만들자마자 그리로 — 빈 목록 앞에서 헤매지 않게. 매니지드는 **새 테넌트**라 주소가 다르므로
+      //  계정 서버가 준 enter_url 로 이동한다(그 주소가 로그인까지 태워 준다).
+      switchWorkspace(w.slug, w.enter_url);
     } catch (e: any) { note.textContent = e?.message || String(e); go.disabled = false; }
   };
   go.onclick = () => void submit();
   name.onkeydown = (e) => { if (e.key === 'Enter' && !(e as any).isComposing) { e.preventDefault(); void submit(); } };
   pop.append(el('div', { class: 'v2-wspop-form' }, name, el('div', { class: 'v2-wspop-actions' }, go, note),
-    hint('혼자 시작합니다. 관리자를 포함해 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다.')));
+    hint(managedWorkspaces()
+      ? '혼자 시작합니다. 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다. 만들면 준비되는 데 잠깐 걸려요.'
+      : '혼자 시작합니다. 관리자를 포함해 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다.')));
   place(pop, anchor, !!anchor.closest('.v2-side'));
   window.setTimeout(() => name.focus(), 0);
 }
