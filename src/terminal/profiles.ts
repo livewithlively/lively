@@ -11,7 +11,7 @@ import { HttpError } from "../http-error.js";
 import { getMember, mintToken, listTokens, revokeToken } from "../org/store.js";
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
-import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug } from "./terminal-isolation.js";
+import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug, memberExecConfigured } from "./terminal-isolation.js";
 import { memberSh } from "./terminal-member-fs.js";
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
