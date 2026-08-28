@@ -18,6 +18,7 @@ import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/
 import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
 import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
 import { resolveGithubTokenSource, githubVaultDeps } from "../org/credentials/github-token-source.js";
+import { resolveGitlabTokenSource, gitlabVaultDeps } from "../org/credentials/gitlab-token-source.js";
 import { resolveGoogleTokenSource, googleVaultReader, isGoogleCollectorSystem } from "../org/credentials/google-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
@@ -162,6 +163,28 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "repos", env: "GITHUB_REPOS", secret: false, label: "저장소", hint: "owner/repo — 공백·줄바꿈으로 여러 개. GitHub 주소를 그대로 붙여넣어도 됩니다" },
       { key: "include_prs", env: "GITHUB_INCLUDE_PRS", secret: false, label: "PR 포함", hint: "on(기본) | off — PR 본문·리뷰 댓글" },
       { key: "include_releases", env: "GITHUB_INCLUDE_RELEASES", secret: false, label: "릴리스 포함", hint: "on(기본) | off — 릴리스 노트" },
+    ],
+  },
+  // GitLab 커넥터(#2247) — 이슈·MR 대화·릴리스. 개인 액세스 토큰(read_api)만 — [계정 로그인] 토큰(DCR)은 REST 불가.
+  gitlab: {
+    system: "gitlab",
+    label: "GitLab",
+    guide: {
+      intro: "고른 프로젝트의 이슈·MR 본문과 노트, 릴리스 노트를 자료로 모읍니다. 토큰은 [외부 앱 연결 ▸ GitLab]에 저장한 개인 액세스 토큰(read_api)을 그대로 씁니다 — 계정 로그인으로 받은 토큰으로는 GitLab 이 자료 읽기를 막습니다.",
+      steps: [
+        "GitLab ▸ 프로필 ▸ Preferences ▸ Access Tokens 에서 read_api 범위의 토큰을 만들어 [외부 앱 연결 ▸ GitLab]에 저장합니다(회사 GitLab 이면 호스트도 함께)",
+        "'토큰 출처'에 member:<내 구성원 id> 를 적습니다(토큰 칸은 비워 둡니다) — 호스트는 그 토큰의 호스트를 따라갑니다",
+        "'프로젝트'에 group/project 경로를 넣습니다(공백·줄바꿈으로 여러 개, 주소를 그대로 붙여넣어도 됩니다)",
+      ],
+      url: "https://gitlab.com/-/user_settings/personal_access_tokens",
+    },
+    fields: [
+      { key: "token", env: "GITLAB_TOKEN", secret: true, label: "토큰", hint: "glpat-… (read_api) — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "GITLAB_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = 관리탭 자격 금고의 조직 공용 gitlab_pat · member:<구성원 id> = 그 사람이 저장한 개인 토큰 · 비우면 위 토큰 칸을 씁니다" },
+      { key: "host", env: "GITLAB_HOST", secret: false, label: "호스트", hint: "기본 gitlab.com — 회사 GitLab 이면 그 호스트. 토큰 출처를 쓰면 그 토큰의 호스트가 기본값" },
+      { key: "projects", env: "GITLAB_PROJECTS", secret: false, label: "프로젝트", hint: "group/project — 공백·줄바꿈으로 여러 개. 주소를 그대로 붙여넣어도 됩니다" },
+      { key: "include_mrs", env: "GITLAB_INCLUDE_MRS", secret: false, label: "MR 포함", hint: "on(기본) | off" },
+      { key: "include_releases", env: "GITLAB_INCLUDE_RELEASES", secret: false, label: "릴리스 포함", hint: "on(기본) | off" },
     ],
   },
   // Google 커넥터 — OAuth2 refresh-token(google-auth.ts). client_id 는 공개 식별자(secret 아님), client_secret·refresh_token 은 시크릿.
@@ -447,6 +470,15 @@ async function loadConnectorConfig(
     if (r) {
       if (r.warning) console.warn(`github token_source: ${r.warning}`);
       out.token = r.token;
+    }
+  }
+  // ── GitLab 토큰 출처(#2247) — 같은 규약 + host 가 비면 토큰 슬롯의 호스트를 쓴다.
+  if (system === "gitlab" && out.token_source) {
+    const r = await resolveGitlabTokenSource(out.token_source, out.host, gitlabVaultDeps);
+    if (r) {
+      if (r.warning) console.warn(`gitlab token_source: ${r.warning}`);
+      out.token = r.token;
+      if (r.host && !out.host) out.host = r.host;
     }
   }
   // ── 구글 토큰 출처(#1881 G3) — 같은 규약이되 **액세스 토큰이 아니라 갱신 자격 3칸**을 채운다.

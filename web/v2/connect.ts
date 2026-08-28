@@ -178,7 +178,7 @@ const SCOPE_NOUN: Record<string, string> = {
   notion: '페이지', linear: '이슈', slack: '대화', google: 'Drive 파일과 캘린더 일정', github: '저장소', gitlab: '프로젝트',
   clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행',
 };
-const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화' };
+const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화' };
 const ICON_PATH: Record<string, string> = {
   zap: 'M13 2L4 14h7l-1 8 9-12h-7z',
   box: 'M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4',
@@ -375,6 +375,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   else if (svc.key === 'google') collect = isAdmin ? googleTeamCollectCard(onCollect)
     : quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — Drive 문서가 함께 보는 자료함에 모여요.', onCollect);
   //  #2247 피그마·ClickUp — 토큰이 곧 자격. 위에서 토큰을 저장했으면 여기서 켠다(수집기는 그 토큰을 가리킨다, 복사 0).
+  //  #2247 GitLab — 계정 로그인(DCR) 토큰으로는 자료를 못 읽는다. 개인 토큰(read_api)이 있어야 켠다.
+  else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함에 모여요.', onCollect)
+    : !(cred && cred.has_secret) ? quietCollectPanel(collectDesc, '꺼짐', 'GitLab 은 계정 로그인 토큰으로는 자료를 못 읽어요 — 위에서 [토큰으로 연결]로 개인 액세스 토큰(read_api)을 저장하면 여기서 켤 수 있어요.', onCollect)
+    : memberTokenCollectCard(svc.key, onCollect);
   else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectPanel(collectDesc, '관리자만', `워크스페이스 관리자가 켤 수 있어요 — 켜면 ${svc.label}의 ${COLLECT_UNIT[svc.key]}이(가) 함께 보는 곳에 모여요.`, onCollect)
     : st !== 'on' ? quietCollectPanel(collectDesc, '꺼짐', svc.key === 'github' ? '위에서 바로 쓰기(계정 연결)를 먼저 켜면 여기서 켤 수 있어요 — 연결 화면에서 고른 저장소가 범위가 돼요.' : '위에서 바로 쓰기(토큰 저장)를 먼저 켜면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
@@ -491,6 +495,8 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
     on: '고른 파일의 코멘트를 모으고 있어요.', off: '켜면 내 Figma 토큰으로 고른 파일의 코멘트를 읽어 옵니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
   clickup: { desc: '내 ClickUp 워크스페이스의 작업·댓글을 라이블리 프로젝트 탭으로 가져와요. 자료함이 아니라 프로젝트로 들어옵니다.',
     on: '작업·댓글을 프로젝트 탭으로 가져오고 있어요.', off: '켜면 내 ClickUp 토큰으로 워크스페이스의 작업·댓글을 프로젝트 탭으로 가져옵니다.', where: '워크스페이스 함께 — 프로젝트 탭에서 같이 봐요' },
+  gitlab: { desc: '내가 고른 프로젝트의 이슈·MR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.',
+    on: '고른 프로젝트의 이슈·MR 대화를 모으고 있어요.', off: '켜면 내 GitLab 개인 토큰으로 고른 프로젝트의 이슈·MR 대화를 읽어 옵니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
   github: { desc: '내가 고른 저장소의 이슈·PR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.',
     on: '고른 저장소의 이슈·PR 대화를 모으고 있어요.', off: '켜면 내 GitHub 연결로 고른 저장소의 이슈·PR 대화를 읽어 옵니다. 연결 화면에서 고른 저장소가 기본 범위예요.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
 };
@@ -498,6 +504,8 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
 const SCOPE_FIELD: Record<string, { ph: string; keys: string[]; parse: (t: string) => Record<string, string>; missing: string; note: string }> = {
   figma: { ph: '피그마 파일 링크 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체는 팀 id', keys: ['file_keys', 'team_ids'], parse: (t) => figmaScopeOf(t) as Record<string, string>,
     missing: '파일 링크나 팀 id 를 하나는 넣어 주세요', note: '아직 범위가 없어요 — 아래에 파일 링크(또는 팀 id)를 넣고 켜 주세요. 피그마엔 목록이 없어서 링크로 정합니다.' },
+  gitlab: { ph: 'group/project — 여러 개면 공백으로. GitLab 주소를 그대로 붙여넣어도 돼요', keys: ['projects'], parse: (t): Record<string, string> => (t.trim() ? { projects: t.trim() } : {}),
+    missing: '프로젝트 경로를 하나는 넣어 주세요(group/project)', note: '아직 범위가 없어요 — 아래에 프로젝트 경로(group/project)를 넣고 켜 주세요.' },
   github: { ph: 'owner/repo — 여러 개면 공백으로. GitHub 주소를 그대로 붙여넣어도 돼요', keys: ['repos'], parse: (t): Record<string, string> => (t.trim() ? { repos: t.trim() } : {}),
     missing: '저장소를 하나는 넣어 주세요(owner/repo)', note: '아직 범위가 없어요 — 아래에 저장소(owner/repo)를 넣고 켜 주세요. [계정으로 연결]에서 저장소를 골랐다면 켤 때 그게 기본값이 됩니다.' },
 };

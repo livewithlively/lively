@@ -11,13 +11,13 @@ import { upsertDistiller } from "../store/ingest.js";
 import { getDistiller } from "./distiller.js";
 import { upsertCronJob } from "../cron-store.js";
 
-export const GITHUB_DISTILLER_KEY = "github-issues";
-export const GITHUB_DISTILL_JOB_ID = "distill-github-issues";
+export const GITHUB_DISTILLER_KEY = "code-host-issues";   // GitHub·GitLab 공용 — 이슈/PR/MR 대화는 같은 모양이라 기준이 하나다
+export const GITHUB_DISTILL_JOB_ID = "distill-code-host-issues";
 export const GITHUB_DISTILL_INTERVAL_SEC = 900;
 
 export const GITHUB_CRITERIA_MD = `## 판단 단위 — 이슈/PR 하나가 한 사건이다
 - 자료 1건 = 이슈·PR 본문 1건 또는 댓글 1건. **본문 + 댓글 + 리뷰 댓글을 묶어 하나로 판단한다**(parent 가 같은 것이 한 스레드).
-- 채널(container_name) = **저장소(owner/repo)**. fields.kind 가 issue | pr | comment | review_comment | release 다. fields.number 가 같으면 같은 사건이다.
+- 채널(container_name) = **저장소/프로젝트(owner/repo)**. fields.kind 가 issue | pr | mr | comment | review_comment | note | mr_note | release 다(GitLab 의 MR = PR). fields.number 가 같으면 같은 사건이다.
 - 릴리스 노트(kind=release)는 단독으로 판단한다 — 그 버전에 무엇이 들어갔는지가 곧 지식이다.
 
 ## ★ 닫힘·머지를 먼저 본다
@@ -58,18 +58,18 @@ export const GITHUB_FORMAT_MD = `- **제목**: 무엇이 정해졌는지/무엇�
   - **반려된 대안도 왜 탈락했는지 남겨라.**
 - **인용**: 원인 문장·조건·수치·명령·파일 경로는 원문 그대로. 추론한 것은 "…로 보인다" 로 표시한다.
 - **열린 이슈**: 결론 대신 "열린 사항" 으로 적고, 무엇이 정해져야 닫히는지까지 쓴다.
-- **출처**: 본문 끝에 "출처: GitHub <owner/repo>#<번호> · <날짜> · <참여자>" 한 줄. 주소(external_url)가 있으면 함께. ⚠ 자료 id 를 본문에 나열하지 마라.
+- **출처**: 본문 끝에 "출처: GitHub/GitLab <owner/repo>#<번호> · <날짜> · <참여자>" 한 줄. 주소(external_url)가 있으면 함께. ⚠ 자료 id 를 본문에 나열하지 마라.
 - 개인정보: 사람은 GitHub 표시 이름까지만.
 `;
 
 export function githubIssuesDistillerDraft(): DistillerUpsertInput {
   return {
     key: GITHUB_DISTILLER_KEY,
-    label: "GitHub 이슈·PR 대화",
+    label: "GitHub·GitLab 이슈·PR/MR 대화",
     enabled: false,
     priority: -10,
-    match_kinds: ["github_issue"],
-    match_system: "github",
+    match_kinds: ["github_issue", "gitlab_issue"],
+    match_system: null,
     include_channels: null, exclude_channels: null, include_authors: null, exclude_authors: null,
     exclude_bots: true,          // CI·의존성 봇 댓글은 actor.is_bot 으로 표식이 온다 — 걸러도 근거가 있다
     min_chars: 0,
@@ -85,7 +85,7 @@ export function githubIssuesDistillerDraft(): DistillerUpsertInput {
     batch_size: 8,
     batch_max_msgs: 60,          // PR 하나에 리뷰 댓글이 수십 개 붙는다
     mode: "headless",
-    note: "GitHub 이슈·PR 대화와 릴리스 노트(자료 kind=github_issue)를 지식으로. 첫 GitHub 수집기를 켤 때 꺼진 채로 준비되고, 사람이 표본을 보고 켠다(#2247).",
+    note: "GitHub·GitLab 이슈·PR/MR 대화와 릴리스 노트(자료 kind=github_issue·gitlab_issue)를 지식으로. 첫 GitHub/GitLab 수집기를 켤 때 꺼진 채로 준비되고, 사람이 표본을 보고 켠다(#2247).",
   };
 }
 
@@ -111,7 +111,7 @@ export async function ensureGithubIssuesDistiller(opts: EnsureGithubDistillerOpt
   let job: { id: string; enabled: boolean } | null = null;
   if (opts.enable) {
     const j = await upsertCronJob({
-      id: GITHUB_DISTILL_JOB_ID, label: "GitHub 이슈·PR 증류", action: "distill_sources_headless",
+      id: GITHUB_DISTILL_JOB_ID, label: "GitHub·GitLab 이슈·PR/MR 증류", action: "distill_sources_headless",
       params: JSON.stringify({ distiller: GITHUB_DISTILLER_KEY }),
       interval_sec: GITHUB_DISTILL_INTERVAL_SEC, cron_expr: null, enabled: true,
       note: "GitHub 이슈·PR 대화(자료 kind=github_issue)를 지식으로 — 증류기 'github-issues' 전용(#2247).",
