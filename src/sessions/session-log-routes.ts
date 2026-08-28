@@ -27,7 +27,7 @@ import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 �
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import { parseWindow } from "../terminal/harness-io/parse-cache.js";
 import { toNdjson, toThinNdjson, THIN_MAX_BYTES } from "../terminal/harness-io/chat-line.js";
-import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
+import { sessionInvitesMember, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { executionSessionProject } from "../v6/execution-session-store.js";
 
 /** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
@@ -71,17 +71,23 @@ export function checkAppendGate(g: AppendGateInput): { status: number; message: 
   return null;
 }
 
-// 웹뷰 열람 인가 판정(순수, #905 C1 슬2d) — 트랜스크립트 **전문**이 나가므로 프라이버시 게이트. ok면 null.
-//  · 신원부재 → 403. · 소유자면 항상 허용(view_policy 무관 — 자기 로그). · view_policy="attach" 면 프로젝트 멤버도 허용.
-//  · 그 외(owner 정책의 비소유자 등) → 403. 열람은 resume 보다 넓다(canViewLog ≠ canResumeAsOrigin, 설계 §5).
-//    isProjectMember 는 라우트가 DB 로 채운다(attach 이고 비소유자일 때만 필요 — 소유자면 조회조차 안 함).
+/**
+ * 웹뷰 열람 인가 판정(순수, #905 C1 슬2d) — 트랜스크립트 **전문**이 나가므로 프라이버시 게이트. ok면 null.
+ *
+ * ★ #1876 S2 — `attach` 분기가 «프로젝트 멤버» 에서 **«그 세션에 초대된 사람»** 으로 바뀌었다.
+ *  목록·입장과 같은 축이다(소유자 + 명시 초대). 노브 `view_policy` 는 이름을 그대로 두고 뜻만 정확해졌다 —
+ *  attach = "그 세션에 들어갈 수 있는 사람", 그리고 이제 그 말이 실제로 참이다(관리탭 문구 "세션 입장 가능자").
+ *
+ *  · 신원부재 → 403(라우트가 404 로 옮긴다 — S3). · 소유자면 항상 허용(view_policy 무관 — 자기 로그).
+ *  · invited 는 라우트가 DB 로 채운다(attach 이고 비소유자일 때만 필요 — 소유자면 조회조차 안 함).
+ */
 export interface ViewGateInput {
-  requester: string; owner: string | null; viewPolicy: string; isProjectMember: boolean;
+  requester: string; owner: string | null; viewPolicy: string; invited: boolean;
 }
 export function checkViewGate(g: ViewGateInput): { status: number; message: string } | null {
   if (!g.requester) return { status: 403, message: "사용자 신원이 없습니다" };
   if (g.owner && g.owner === g.requester) return null;                    // 소유자는 언제나 자기 로그를 본다
-  if (g.viewPolicy === "attach" && g.isProjectMember) return null;        // 프로젝트 멤버 열람(DB 기반, 죽은 세션도)
+  if (g.viewPolicy === "attach" && g.invited) return null;                // 초대된 사람(미러 기반 — 죽은 세션도)
   return { status: 403, message: "이 세션 로그를 볼 권한이 없습니다" };
 }
 // 완전 삭제 인가 판정(순수, #1850) — 개인정보 삭제요구권의 이행 경로라 게이트를 좁게 잡는다. ok면 null.
@@ -157,7 +163,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     res.json({ sessions: rows, truncated: page.truncated });
   }));
 
-  // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함). 인가: 프로젝트 멤버.
+  // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함).
+  //  인가는 **두 겹**이다(#1876 S2): 프로젝트 멤버여야 이 창구를 열 수 있고(종전), 그 안에서 보이는 것은
+  //  **내가 소유·초대받은 세션뿐**이다(신설). 종전엔 둘째가 없어 프로젝트 멤버가 남의 세션 제목·시각을 다 봤다.
   //  ⚠ 경로가 `/sessions` 가 아니라 `/session-logs` — `/projects/:id/sessions`(project-routes.ts)는 **살아있는
   //    tmux 세션**을 돌려주는 별개 엔드포인트라 충돌한다. 여기는 중앙 로그 이력(죽은 세션 포함)이라 개념도 다르다.
   app.get("/api/ui/v6/projects/:id/session-logs", auth, wrap(async (req, res) => {
@@ -167,7 +175,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!Number.isInteger(projectId) || projectId <= 0) throw new HttpError(400, "프로젝트 id 형식 오류");
     if (!(await isProjectMember(projectId, requester))) throw new HttpError(403, "이 프로젝트의 멤버가 아닙니다");
     res.setHeader("Cache-Control", "no-store");
-    res.json({ sessions: await listSessionsForProject(projectId) });
+    res.json({ sessions: await listSessionsForProject(projectId, requester) });
   }));
 
   // 델타 append — offset-CAS. at=현재 보낸 쪽 오프셋, node=실행 노드('' 기본). 응답 {ok, verdict, bytes} 로 오프셋 정정.
@@ -280,9 +288,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const cfg = (await getRuntimeConfig()).session_share;
     const owner = await sessionOwner(nodeId, sessionId);
     const isOwner = !!owner && owner === requester;
-    const isProjectMember = !isOwner && cfg.view_policy === "attach"
-      ? await sessionBoundToMemberProject(sessionId, requester) : false;
-    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, isProjectMember });
+    const invited = !isOwner && cfg.view_policy === "attach"
+      ? await sessionInvitesMember(sessionId, requester) : false;
+    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, invited });
     if (denied) throw new HttpError(denied.status, denied.message);
 
     // #1719 세션 대화창 — to/tail 이 오면 창(window)으로 읽는다(꼬리부터, 상한 4MB — transcript-range.ts).
@@ -331,8 +339,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
             const o = await sessionOwner(nodeId, c.conv_uuid);
             if (!o) continue;
             const mine = o === requester;
-            const memberOk = !mine && cfg.view_policy === "attach" ? await sessionBoundToMemberProject(c.conv_uuid, requester) : false;
-            if (checkViewGate({ requester, owner: o, viewPolicy: cfg.view_policy, isProjectMember: memberOk })) continue;
+            const inv = !mine && cfg.view_policy === "attach" ? await sessionInvitesMember(c.conv_uuid, requester) : false;
+            if (checkViewGate({ requester, owner: o, viewPolicy: cfg.view_policy, invited: inv })) continue;
             heads.push(await readThin(c.conv_uuid).catch(() => ""));
           }
           ndjson = heads.filter(Boolean).join("") + (ndjson ?? "");
@@ -377,8 +385,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const cfg = (await getRuntimeConfig()).session_share;
     const owner = await sessionOwner(nodeId, sessionId);
     const isOwner = !!owner && owner === requester;
-    const isMember = !isOwner && cfg.view_policy === "attach" ? await sessionBoundToMemberProject(sessionId, requester) : false;
-    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, isProjectMember: isMember });
+    const invited = !isOwner && cfg.view_policy === "attach" ? await sessionInvitesMember(sessionId, requester) : false;
+    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, invited });
     if (denied) throw new HttpError(denied.status, denied.message);
     res.setHeader("Cache-Control", "no-store");
     res.json({ subagents: await listSubagentsForSession(nodeId, sessionId) });
