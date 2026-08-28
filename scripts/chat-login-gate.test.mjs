@@ -31,11 +31,28 @@ test("★ 한 번만 뜬다 — 폴링마다 배너가 쌓이면 안 된다", ()
   assert.match(GATE, /gateShown/);
 });
 
-test("로그인은 me-ai 와 같은 방식(셸 세션 + loginFor) — 두 길이 갈리면 한쪽만 고쳐진다", () => {
-  assert.match(GATE, /harness: 'shell', loginFor: 'codex'/);
-  assert.match(GATE, /loginProfile: true/);
+test("★ 로그인을 **이 자리에서** 끝낸다 — 새 탭·새 창을 열지 않는다", () => {
+  // 2026-08-28 지시: 앱에서는 새 창까지 떴다. 사람이 할 일은 «주소를 열고 코드를 넣는 것» 뿐이다.
+  assert.match(GATE, /ai-login\/start/, "서버가 로그인 명령을 대신 돌린다");
+  assert.match(GATE, /ai-login\/state/, "주소·코드를 폴링해 카드로 보여준다");
+  assert.ok(!/window\.open/.test(GATE), "새 탭을 열지 않는다");
+  assert.ok(!/loginProfile/.test(GATE), "로그인 전용 세션을 더 만들지 않는다");
+});
+
+test("★ 주소·코드는 눌러서 복사된다 — 사람이 옮겨 적게 하지 않는다", () => {
+  assert.match(GATE, /clipboard\?\.writeText/);
+});
+
+test("★ 코드를 되받아야 하는 하네스(claude)의 통로도 있다 — codex 만 보고 만들면 claude 가 빠진다", () => {
+  assert.match(GATE, /needsPaste/);
+  assert.match(GATE, /ai-login\/paste/);
+});
+
+test("★ 시작조차 못 하면 종전 안내(터미널 절차)로 정직하게 내려간다 — 막다른 카드 금지", () => {
+  assert.match(GATE, /여기서 바로 로그인할 수 없어요/);
+  assert.match(GATE, /c\?\.steps/);
 });
 
 test("실측된 절차(steps)가 있으면 같이 보여준다 — 버튼을 못 쓰는 상황의 탈출로", () => {
-  assert.match(GATE, /c\.steps/);
+  assert.match(GATE, /c\??\.steps/);
 });
