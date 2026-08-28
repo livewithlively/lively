@@ -86,12 +86,17 @@ function runSchemaInitChild(): Promise<void> {
  *
  * 판정: 바인딩이 rls 인데 고정 테넌트가 없다 = 요청별 모드.
  *
+ * ⓘ **밖으로 연 이유**(#2246): 이 판정이 참이면 스케줄러 스텝이 안 도는데, 그중 일부는 *누군가는*
+ *  해야 하는 일이다(아웃박스 회수·청소). 그 대체 경로(`outboxRequestSweepMiddleware`)는 **이 판정이
+ *  참일 때만** 돌아야 한다 — 아니면 하우스키핑과 이중으로 돈다. 그러니 그쪽이 이 함수를 직접 보는 것이
+ *  맞다: "여기가 안 도니까 저기가 돈다"는 관계를 코드가 말하게 한다(주석으로만 두면 다음 사람이 못 본다).
+ *
  * ⚠ registry(#1750 셀프호스트 다중 워크스페이스)는 **제외한다** — 같은 요청별 컨텍스트지만 폴백이
  *  다르다(컨텍스트 없음 = primary). 하우스키핑의 컨텍스트 밖 DB 작업은 전부 primary 의 일로
  *  떨어지며, 그게 종전 단일 워크스페이스와 동일 동작이다(하위호환의 핵심). 매니지드 request 모드의
  *  "누구의 것인지 모르는 정리 작업" 문제가 registry 에는 없다.
  */
-const requestScopedTenancy = (): boolean =>
+export const requestScopedTenancy = (): boolean =>
   (process.env.LIVELY_TENANT_BINDING || "").trim().toLowerCase() === "rls"
   && !(process.env.LIVELY_TENANT_ID || "").trim()
   && !registryModeActive();

@@ -11,6 +11,7 @@ import { itemsPool } from "./db/client.js";
 import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { installTenantBinding } from "./db/tenant-binding-boot.js";
 import { tenantContextMiddleware } from "./org/tenant-middleware.js";
+import { outboxRequestSweepMiddleware } from "./sessions/outbox-request-sweep.js";
 import { lookupWorkspace, workspaceForSession } from "./org/tenancy/registry.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
@@ -103,6 +104,14 @@ const app = express();
 //  registry 모드(#1750 셀프호스트 다중 워크스페이스)에서는 x-lively-workspace 헤더를 등록부로 해석한다 —
 //  해석기는 여기서 주입한다(미들웨어 모듈이 스토어를 직접 물면 계층이 꼬인다).
 app.use(tenantContextMiddleware(process.env, lookupWorkspace, workspaceForSession));
+
+// 아웃박스 정비를 **요청에 얹는다**(#2246) — 요청별 테넌시에서는 하우스키핑의 스케줄러 스텝이 안 돌아
+//  회수·청소·재-kick 이 통째로 없다(#2244 실측). 컨텍스트가 열린 **직후**에 둔다: RLS 가 그 테넌트로
+//  스코프하려면 컨텍스트가 있어야 하고, 인증보다 앞이어도 새는 것이 없다 — 이 미들웨어는 응답에
+//  아무것도 싣지 않고 **그 테넌트 자신의** 대기분만 밀어준다(테넌트는 서명 헤더/등록부가 정한 값이다).
+//  ⚠ 요청을 늦추지 않는다(동기 코드는 Map 조회 하나, DB 작업은 기다리지 않는다) · 테넌트당 5분 디바운스
+//   · 하우스키핑이 도는 배포(자가호스팅·registry)에선 **무동작** — 이중 실행을 막는다.
+app.use(outboxRequestSweepMiddleware());
 
 // domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.
