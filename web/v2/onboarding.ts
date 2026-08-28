@@ -1112,9 +1112,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   /** 연결된 앱 카드 — 잠긴 카드지만 **해제 문**은 열려 있다(인라인 확인 한 번). 두 장면(sources·connect)이 같이 쓴다. */
   function doneCardHtml(id, label, icon, desc) {
     const ask = unlinkAsk === id;
-    return `<div class="ob-opt-card ob-on ob-locked ob-done" data-done="1" data-conn="${esc(id)}"><span class="ob-oc-ic">${icon}</span><span><span class="ob-oc-t">${esc(label)}</span><span class="ob-oc-d">${ask ? '연결을 해제할까요? 저장된 로그인 정보가 지워져요.' : esc(desc)}</span></span>
+    return `<div class="ob-opt-card ob-on ob-locked ob-done" data-done="1" data-conn="${esc(id)}"><span class="ob-oc-ic">${icon}</span><span><span class="ob-oc-t">${esc(label)}</span><span class="ob-oc-d">${ask ? '정말 해제할까요?' : esc(desc)}</span></span>
       <span class="ob-oc-act">${ask
-        ? `<button type="button" class="ob-oc-unlink ob-danger" data-unlink-go="${esc(id)}">해제</button><button type="button" class="ob-oc-unlink" data-unlink-no="1">아니요</button>`
+        ? `<button type="button" class="ob-oc-unlink ob-danger" data-unlink-go="${esc(id)}" title="저장된 로그인 정보가 지워져요">해제</button><button type="button" class="ob-oc-unlink" data-unlink-no="1">아니요</button>`
         : `<span class="v2-dot done" style="margin:0"></span><button type="button" class="ob-oc-unlink" data-unlink="${esc(id)}" title="이 앱 연결을 끊습니다">연결 해제</button>`}</span></div>`;
   }
   /** 해제 버튼 배선 — 장면이 자기 redraw 를 넘긴다. */
