@@ -7,6 +7,8 @@ import { CLICKUP_TOKEN_KIND } from "../org/credentials/plain-token-source.js";
 import { GITHUB_TOKEN_KIND } from "../org/credentials/github-token-source.js";
 import { ensureGithubIssuesDistiller } from "../org/distill/github-preset.js";
 import { listInstallationRepos } from "../org/credentials/github-app-git.js";
+import { GITLAB_TOKEN_KIND, pickGitlabSlot } from "../org/credentials/gitlab-token-source.js";
+import { listMemberSecretsPublic, memberOwner } from "../org/credentials/member-secret-store.js";
 
 /** 토글이 만드는 인스턴스 키 — 관리탭에서 손으로 만든 것('_' 등)과 겹치지 않게 고정 이름. */
 export const MEMBER_INSTANCE = "lively-member";
@@ -46,4 +48,21 @@ export const githubCollectCapabilities = makeMemberTokenCollect({
   onEnabled: async ({ actor, source }) => { await ensureGithubIssuesDistiller({ actor, source: `collect-toggle:${source}` }); },
 });
 
-export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities, ...githubCollectCapabilities];
+export const gitlabCollectCapabilities = makeMemberTokenCollect({
+  system: "gitlab", preset: "gitlab", instance: MEMBER_INSTANCE, credKind: GITLAB_TOKEN_KIND, credAnyScope: true, appLabel: "GitLab",
+  label: "GitLab — 고른 프로젝트의 이슈·MR",
+  note: "[GitLab 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 개인 토큰(read_api)으로 고른 프로젝트의 이슈·MR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
+  connectHint: "[외부 앱 연결 ▸ GitLab]에서 개인 액세스 토큰(read_api)을 저장하세요 — 계정 로그인 토큰으로는 GitLab 이 자료 읽기를 막습니다",
+  scopeKeys: ["projects"], requireScope: true,
+  scopeHint: "모을 프로젝트 경로(group/project)를 하나는 넣어 주세요 — GitLab 주소를 그대로 붙여넣어도 됩니다.",
+  // 호스트는 그 사람 토큰의 scope_key(회사 GitLab)를 따른다 — 두 번 적게 하지 않는다.
+  extraConfig: async (actor): Promise<Record<string, string>> => {
+    const rows = await listMemberSecretsPublic(memberOwner(actor)).catch(() => []);
+    const slot = pickGitlabSlot(rows, undefined);
+    return { host: (slot?.scope_key || "gitlab.com").toLowerCase() };
+  },
+  outcome: "이슈·MR 본문과 노트, 릴리스 노트가 자료함에 들어오고, 코드 호스트 이슈 증류기가 꺼진 채로 함께 준비된다.",
+  onEnabled: async ({ actor, source }) => { await ensureGithubIssuesDistiller({ actor, source: `collect-toggle:${source}` }); },
+});
+
+export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities, ...githubCollectCapabilities, ...gitlabCollectCapabilities];

@@ -28,6 +28,8 @@ export interface MemberCollectSpec {
   credAnyScope?: boolean;
   /** 범위가 비어 있을 때 채울 기본값(예 [GitHub 연결]에서 고른 저장소). 이것도 비면 needs_scope. */
   defaultScope?: () => Promise<Record<string, string>>;
+  /** 켤 때 함께 저장할 설정(예 GitLab host = 그 사람 토큰의 호스트). 입력 scope 가 우선한다. */
+  extraConfig?: (actor: string) => Promise<Record<string, string>>;
   /** 앱 이름(응답 문장). */
   appLabel: string;
   /** 수집기 label 기본값. */
@@ -177,10 +179,11 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
         return { ok: false, needs_scope: true, message: spec.scopeHint ?? "모을 범위를 먼저 넣어 주세요.", state: await stateOf(actor) };
       }
       // enable — 항상 호출자의 자격으로. 범위 입력은 프리셋 필드에 있는 키만 저장된다(upsertCollector 계약).
+      const extra = spec.extraConfig ? await spec.extraConfig(actor).catch(() => ({})) : {};
       await upsertCollector({
         id: inst?.id, preset_key: spec.preset, instance_key: spec.instance,
         label: inst?.label ?? spec.label, enabled: true,
-        config: { ...scopeIn, token_source: `member:${actor}` },
+        config: { ...extra, ...scopeIn, token_source: `member:${actor}` },
         note: inst?.note ?? spec.note,
       }, actor, source);
       resetConnectorConfigCache();
