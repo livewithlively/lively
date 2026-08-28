@@ -203,7 +203,7 @@ function panel(id: string, ic: string, title: string, desc: string, right: HTMLE
     ...rows);
 }
 /** 모아 두기 패널 — 앱별 어댑터(slack·notion·google 카드)가 스위치·줄을 채운다. body 는 오류 표시용 자리. */
-function collectPanel(desc: string, onState: CollectState): { box: HTMLElement; body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
+function collectPanel(desc: string, onState: CollectState, where = '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요'): { box: HTMLElement; body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
   const swWrap = el('span', { class: 'cn-swwrap' });
   const body = el('div', { class: 'cn-prows' }, srow('상태', '불러오는 중…', [], 'note'));
   const box = panel('cn-collect', 'box', '모아 두기', desc, [swWrap], [body]);
@@ -214,7 +214,7 @@ function collectPanel(desc: string, onState: CollectState): { box: HTMLElement; 
       swWrap.replaceChildren(el('span', { class: 'cn-swl', text: stateText }), chk);
       body.replaceChildren(
         ...notes.map((t, i) => srow(i === 0 ? '지금' : '', t, [], 'note')),
-        srow('누가 봐요', '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요'),
+        srow('누가 봐요', where),
         ...(extra.length ? [el('div', { class: 'cn-srow stack' }, ...extra)] : []));
       onState(stateText, chk.checked);
     },
@@ -503,7 +503,7 @@ export function figmaScopeOf(text: string): { file_keys?: string; team_ids?: str
 }
 function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement {
   const T = MEMBER_COLLECT_TEXT[key];
-  const panel = collectPanel(T.desc, onState);
+  const panel = collectPanel(T.desc, onState, T.where);
   const box = panel.box, body = panel.body;
   const post = async (bodyObj: any): Promise<any> => api(`/api/ui/org/${key}/collect`, { method: 'POST', body: JSON.stringify(bodyObj) });
   const paint = async (): Promise<void> => {
