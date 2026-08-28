@@ -2132,20 +2132,26 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const DEVICE_NOTE = '왜 주소와 코드냐면: 그 창은 우리 서버에서 돌아서 로그인 페이지를 스스로 못 열어요. 그래서 주소는 사람이 열고, 코드를 넣어 «이 창이 내 것» 이라고 알려 주는 방식이에요.';
   //  #2232 원준님 실측 — 창은 검지 않을 수도 있고(밝은 테마), 사람은 CLI 조작법(↑↓·Enter)을 모를 수 있다. «터미널 창» 으로 부르고 조작법을 한 줄 준다.
   const CLI_NOTE = '터미널 창 조작: 글자만 있는 창이에요. 고르는 화면에선 <b>↑ ↓</b> 로 옮기고 <b>Enter</b> 로 확정, 붙여넣기는 <b>⌘V</b>(윈도우 Ctrl+V), 창 안 글자는 마우스로 끌어 복사할 수 있어요.';
+  //  claude 는 codex 와 달리 **코드를 되받는다** — 왜 입력칸이 있는지 한 줄로 말해 준다.
+  const PASTE_NOTE = '왜 코드를 다시 넣냐면: 로그인은 브라우저에서 끝나고, 그 결과를 우리 서버에서 도는 Claude 에게 전해 줘야 하기 때문이에요. 브라우저가 준 코드가 그 전달표입니다.';
   const cp = (t) => `<code class="ob-copy" data-copy="${esc(t)}" title="누르면 복사돼요">${esc(t)}</code>`;
   //  버튼은 이 글 **위**에 있다(qHead 다음 줄) — «아래» 라고 쓰면 사람이 아래를 뒤진다(원준님 실측 2026-08-28).
   const AI_GUIDE = {
-    //  #2232 원준님 — Claude Code 첫 실행을 실제 화면(2.1.2xx 캡처)대로: 글자 스타일 → 로그인 방법 → 주소(브라우저가 안 열림) → 코드 붙여넣기
-    //   → Login successful → 보안 안내·폴더 신뢰 → 입력칸. 이미 켜져 있던 창(첫 실행 안내가 안 뜸)은 /login 으로 4번부터.
+    //  claude 도 이 자리에서 끝낸다(2026-08-28 상민님 지시). 종전 판(#2232 원준님)은 터미널 창에서 Claude Code 를
+    //   켜 일곱 걸음을 밟는 안내였는데, 이제 서버가 `claude auth login` 을 대신 돌린다 — 창이 안 뜨므로 그 걸음들
+    //   중 «창 조작» 부분은 사라진다. 다만 **브라우저 쪽 걸음은 그대로 남아** 그 실측(Authorize · «Paste this code
+    //   back into Claude Code»)을 여기로 옮겨 적는다. 지우면 사람이 브라우저에서 무엇을 볼지 모른다.
+    //  ⚠ 한 가지는 옮겨지지 않는다: claude 는 로그인과 별개로 **첫 실행 설정**(글자 스타일·보안 안내·폴더 신뢰)을
+    //   그 TUI 에서 묻는다(바이너리에 hasCompletedOnboarding·hasTrustDialogAccepted·theme 문자열이 있다 — 실측
+    //   2026-08-28, lvly-tenant:c83). 로그인만 이 자리로 빼면 그 물음은 **없어지는 게 아니라 첫 세션으로 미뤄진다.**
+    //   숨기지 않고 마지막 줄에 적는다.
     claude: { steps: [
-      `위의 ${kbd('Claude 로그인 창 열기')}를 누르면 새 탭에 <b>Claude Code</b> 가 켜진 터미널 창이 열려요(«Welcome to Claude Code»).`,
-      `처음 켜면 <b>Choose the text style that looks best with your terminal</b>(글자 스타일 고르기)가 나와요. 아무거나 — 기본 «2. Dark mode», 창이 밝으면 «3. Light mode» — ↑ ↓ 로 맞추고 <b>Enter</b>.`,
-      `<b>Select login method:</b> 가 나와요. <b>Claude account with subscription · Pro, Max, Team, or Enterprise</b>(내 Claude 구독 계정)에 «❯» 가 있는 채로 <b>Enter</b>. (회사 API 콘솔 계정이면 두 번째 «Anthropic Console account».)`,
-      `<b>Opening browser to sign in…</b> 뒤에 <b>Browser didn't open? Use the url below to sign in (c to copy)</b> 와 긴 주소가 나와요 — 이 창은 우리 서버에서 돌아서 브라우저가 저절로 안 열려요. 그 주소를 누르거나(또는 키보드 <b>c</b> 를 눌러 복사해 브라우저 주소창에 붙여) 열고, Claude(Anthropic) 계정으로 로그인한 뒤 <b>Authorize</b>(허용)를 누르세요.`,
-      `브라우저에 <b>코드</b>(Paste this code back into Claude Code)가 나와요. 복사해서 터미널 창의 <b>Paste code here if prompted &gt;</b> 자리에 붙여넣고(⌘V) <b>Enter</b>.`,
-      `<b>Login successful. Press Enter to continue…</b> 가 보이면 Enter. 이어서 <b>Security notes</b>(안내), 터미널 설정 물음(<b>Use Claude Code's terminal setup?</b>), <b>Do you trust the files in this folder?</b>(이 폴더를 믿나요 — «Yes, proceed»)가 차례로 나오면 각각 <b>Enter</b> 로 넘기세요. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
-      `창에 글을 치는 입력칸(<b>&gt;</b> 표시)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요. 첫 실행 안내가 안 뜨고 바로 입력칸이면(이미 켜져 있던 창) ${cp('/login')} 을 붙여넣고 Enter 한 뒤 4번부터 하시면 됩니다.`,
-    ], note: CLI_NOTE },
+      `위의 ${kbd('Claude 로그인 시작')}을 누르면 이 자리에 <b>주소</b>가 나와요.`,
+      `그 주소를 눌러 열고, <b>Claude(Anthropic) 계정</b>으로 로그인한 뒤 <b>Authorize</b>(허용)를 누르세요. 구독 계정(Pro·Max·Team)이면 그대로, 회사 API 콘솔 계정이면 그 계정으로 로그인하시면 됩니다.`,
+      `브라우저에 <b>코드</b>가 나와요(«Paste this code back into Claude Code»). 그 코드를 복사해 <b>이 자리 입력칸</b>에 붙여넣고 ${kbd('넣기')}를 누르세요.`,
+      `이 자리에 «로그인이 끝났어요» 가 뜨면 아래 ${kbd('로그인했어요')}를 누르세요.`,
+      `<b>첫 세션에서 물음이 몇 개 더 나와요</b> — 글자 스타일, 보안 안내, 그리고 «이 폴더를 믿나요»(<b>Do you trust the files in this folder?</b>). Claude Code 가 로그인과 별개로 처음 한 번 묻는 것이라 여기서 미리 대신 답해 두지 않았습니다. 라이블리가 만든 작업 폴더이니 «Yes, proceed» 로 넘기시면 됩니다.`,
+    ], note: PASTE_NOTE },
     codex: { steps: [
       `위의 ${kbd('ChatGPT 로그인 시작')}을 누르면 이 자리에 <b>주소</b>와 <b>짧은 코드</b>가 나와요.`,
       `주소를 눌러 열고, 그 코드를 입력하세요(코드는 눌러서 복사돼요).`,
@@ -2177,14 +2183,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const LOGIN_SESSION = { claude: { harness: 'claude' }, codex: { harness: 'shell', loginFor: 'codex' }, antigravity: { harness: 'antigravity' }, grok: { harness: 'shell', loginFor: 'grok' } };
   /* 화면에서 바로 로그인이 되는 하네스(#2055 후속, 2026-08-28) — 서버가 로그인 명령을 대신 돌리고 주소·코드만 준다.
      · codex  `codex login --device-auth` → 주소 + 일회용 코드. 되돌려 줄 입력이 없다.
-     그 밖은 종전 «로그인 창» 그대로다. agy·grok 은 비대화형 한 줄이 아예 없고(catalog.harnessLoginArgv 머리말),
-     **claude 는 서버 통로가 있는데도(ai-login-flow 가 `claude auth login` 을 다룬다) 일부러 안 켰다**:
-     claude 는 그 창에서 로그인만 하는 게 아니라 첫 실행 설정(글자 스타일·보안 안내·폴더 신뢰)을 함께 지난다.
-     인라인으로 옮기면 로그인은 짧아지지만 그 설정이 **첫 세션에서 뒤늦게** 사람 앞에 떨어진다 — 대화창에서 그걸
-     만나면 더 나쁘다. #2232 안내가 그 일곱 걸음을 실제 화면대로 적어 둔 것도 같은 이유다. 대화창 관문(session-chat)
-     역시 claude 는 종전 경로다 — 두 자리의 판정이 갈리면 안 된다.
+     · claude `claude auth login`        → 주소를 주고 **코드를 되받는다**(브라우저의 «Paste this code back…»).
+     그 밖(agy·grok)은 비대화형 한 줄이 아예 없어(catalog.harnessLoginArgv 머리말) 종전 «로그인 창» 그대로다.
+     ⚠ claude 는 로그인과 별개로 **첫 실행 설정**(글자 스타일·보안 안내·폴더 신뢰)을 TUI 에서 묻는다. 로그인만
+     이 자리로 빼면 그 물음은 없어지는 게 아니라 **첫 세션으로 미뤄진다** — 그래서 안내 마지막 줄에 그대로 적는다.
+     대신 답해 두지 않는 이유는 «이 폴더를 믿나요» 가 사람이 할 보안 판단이라서다(미리 눌러 주면 그 판단을 뺏는다).
      판정·파싱의 정본은 서버 ai-login-flow.ts 다 — 여기서 형식을 다시 짐작하지 않는다. */
-  const LOGIN_INLINE = { codex: true };
+  const LOGIN_INLINE = { codex: true, claude: true };
 
   /* 터미널 없이 로그인 — 서버가 명령을 멤버 자리에서 돌리고, 여기서는 주소·코드만 보여 준다(#2055 후속).
      ⚠ «막다른 카드» 를 만들지 않는다: 시작조차 못 하면 종전 «로그인 창» 경로로 정직하게 내려간다.

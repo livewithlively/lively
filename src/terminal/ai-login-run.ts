@@ -25,6 +25,18 @@ function slot(osUser: string | null, h: AiLoginHarness): string {
 }
 const logOf = (home: string, s: string): string => `${home}/.cache/${s}.log`;
 const inOf = (home: string, s: string): string => `${home}/.cache/${s}.in`;
+/**
+ * 러너의 PID 파일.
+ *
+ *  ⚠ 왜 pgrep 이 아니라 파일인가 — **실측 2026-08-28, 매니지드 프로덕션에서 이 통로를 통째로 죽인 결함이다.**
+ *  종전 판은 `pgrep -f <슬롯>` 으로 «이미 돌고 있나» 를 봤다. 그런데 이 스크립트는 멤버 중계가
+ *  `sh -c "<스크립트 전문>"` 으로 돌리고, 스크립트 본문에 그 슬롯 이름이 들어 있다. 그래서 pgrep 은
+ *  **자기를 실행 중인 셸을 잡는다** — 늘 «돌고 있다» 가 되어 로그인이 **한 번도 안 떴다**(화면은 조용히
+ *  «시작하는 중» 에서 멈춘다). 같은 이유로 cancel 의 `pkill -f <슬롯>` 은 **자기 셸을 죽여** 뒤의 rm 까지
+ *  가지도 못했다 — 만료된 옛 로그가 남아 다음 사람에게 옛 오류를 보여 줬다.
+ *  PID 파일은 그 자기참조가 원리적으로 없다: 우리가 쓴 것만 본다.
+ */
+const pidOf = (home: string, s: string): string => `${home}/.cache/${s}.pid`;
 
 /** 셸 리터럴 — 우리가 만든 값만 넣지만(하네스 키·해시) 그래도 감싼다. */
 const q = (s: string): string => `'${String(s).replace(/'/g, "'\\''")}'`;
@@ -39,18 +51,24 @@ const q = (s: string): string => `'${String(s).replace(/'/g, "'\\''")}'`;
 export function loginStartSh(o: { home: string; slotName: string; argv: string[] }): string {
   const log = logOf(o.home, o.slotName);
   const inp = inOf(o.home, o.slotName);
+  const pid = pidOf(o.home, o.slotName);
   const bin = o.argv[0];
   const runner = [
     `const cp=require("child_process"),fs=require("fs");`,
-    // ⚠ `node -e <script> a b c` 는 a 가 **argv[1]** 이다. 첫 인자는 pgrep 이 이 프로세스를 찾을
+    // ⚠ `node -e <script> a b c` 는 a 가 **argv[1]** 이다. 첫 인자는 사람이 프로세스 목록에서 알아볼
     //  «슬롯 이름표» 라 실제 인자는 하나씩 밀린다 — 실측으로 밟았다(로그가 영영 빈 채였다).
-    `const log=process.argv[2],inp=process.argv[3],argv=process.argv.slice(4);`,
+    `const log=process.argv[2],inp=process.argv[3],pidf=process.argv[4],argv=process.argv.slice(5);`,
+    // 생존 판정의 근거 — pgrep 과 달리 **우리가 쓴 것만** 본다(pidOf 머리말).
+    `try{fs.writeFileSync(pidf,String(process.pid))}catch(_){}`,
     `const out=fs.openSync(log,"a");`,
     `const c=cp.spawn(argv[0],argv.slice(1),{stdio:["pipe",out,out]});`,
-    `c.on("error",e=>{try{fs.appendFileSync(log,"\\nError: "+e.message+"\\n${EXIT_MARK} 127\\n")}catch(_){};process.exit(0)});`,
+    `const done=()=>{try{fs.unlinkSync(pidf)}catch(_){}};`,
+    `c.on("error",e=>{try{fs.appendFileSync(log,"\\nError: "+e.message+"\\n${EXIT_MARK} 127\\n")}catch(_){};done();process.exit(0)});`,
     // 사람이 코드를 넣을 때만 파일이 생긴다 — 0.5초 폴링이면 체감이 즉시다.
     `const t=setInterval(()=>{try{const v=fs.readFileSync(inp,"utf8");fs.unlinkSync(inp);c.stdin.write(v.trim()+"\\n")}catch(_){}} ,500);`,
-    `c.on("exit",code=>{clearInterval(t);try{fs.appendFileSync(log,"\\n${EXIT_MARK} "+(code==null?-1:code)+"\\n")}catch(_){};process.exit(0)});`,
+    // 취소는 이 프로세스에 SIGTERM 을 보낸다 — 자식(하네스 CLI)까지 같이 내려야 자격 파일을 반쯤 쓴 채로 남지 않는다.
+    `process.on("SIGTERM",()=>{clearInterval(t);try{c.kill()}catch(_){};done();process.exit(0)});`,
+    `c.on("exit",code=>{clearInterval(t);try{fs.appendFileSync(log,"\\n${EXIT_MARK} "+(code==null?-1:code)+"\\n")}catch(_){};done();process.exit(0)});`,
   ].join("");
   return [
     `command -v ${q(bin)} >/dev/null 2>&1 || { echo "${bin} 없음" >&2; exit 127; }`,
@@ -59,9 +77,11 @@ export function loginStartSh(o: { home: string; slotName: string; argv: string[]
     //  갓 만든 멤버 홈에는 그 폴더가 아직 없다 — app-server 기동에서 밟은 것과 같은 함정이다.
     `mkdir -p ${q(`${o.home}/.cache`)} ${q(`${o.home}/.codex`)} ${q(`${o.home}/.claude`)} 2>/dev/null || true`,
     // 이미 도는 중이면 그대로 둔다(로그도 지우지 않는다 — 그 화면이 이미 사람에게 주소를 보여 주고 있다).
-    `if pgrep -f ${q(o.slotName)} >/dev/null 2>&1; then echo running; exit 0; fi`,
-    `rm -f ${q(log)} ${q(inp)} 2>/dev/null || true`,
-    `nohup node -e ${q(runner)} ${q(o.slotName)} ${q(log)} ${q(inp)} ${o.argv.map(q).join(" ")} >/dev/null 2>&1 &`,
+    //  ⚠ pgrep 을 쓰지 않는다 — 이 스크립트를 도는 셸의 명령줄에 슬롯 이름이 있어 **자기를 잡는다**(pidOf 머리말).
+    `if [ -f ${q(pid)} ] && kill -0 "$(cat ${q(pid)} 2>/dev/null)" 2>/dev/null; then echo running; exit 0; fi`,
+    // 죽은 자리는 흔적째 치운다 — 안 그러면 지난 시도의 **만료된 코드·옛 오류**를 다음 사람이 본다(실측).
+    `rm -f ${q(log)} ${q(inp)} ${q(pid)} 2>/dev/null || true`,
+    `nohup node -e ${q(runner)} ${q(o.slotName)} ${q(log)} ${q(inp)} ${q(pid)} ${o.argv.map(q).join(" ")} >/dev/null 2>&1 &`,
     `echo started`,
   ].join("\n");
 }
@@ -114,6 +134,12 @@ export async function pasteAiLogin(osUser: string | null, h: AiLoginHarness, cod
 export async function cancelAiLogin(osUser: string | null, h: AiLoginHarness): Promise<void> {
   const s = slot(osUser, h);
   const home = homeOf(osUser);
-  await sh(osUser, `pkill -f ${q(s)} 2>/dev/null || true; rm -f ${q(logOf(home, s))} ${q(inOf(home, s))} 2>/dev/null || true; echo ok`)
-    .catch(() => "");
+  const pid = pidOf(home, s);
+  //  ⚠ `pkill -f <슬롯>` 이었다 — 이 스크립트를 도는 셸의 명령줄에 슬롯 이름이 있어 **자기를 죽였다.**
+  //   그래서 뒤의 rm 까지 가지도 못했고, 만료된 옛 로그가 남아 다음 사람에게 옛 오류를 보여 줬다(실측 2026-08-28).
+  await sh(osUser, [
+    `if [ -f ${q(pid)} ]; then kill "$(cat ${q(pid)} 2>/dev/null)" 2>/dev/null || true; fi`,
+    `rm -f ${q(logOf(home, s))} ${q(inOf(home, s))} ${q(pid)} 2>/dev/null || true`,
+    `echo ok`,
+  ].join("\n")).catch(() => "");
 }

@@ -14,8 +14,8 @@ test("배선 · 소스를 실제로 읽었다(vacuous 방지)", () => {
   assert.match(SRC, /LOGIN_INLINE/);
 });
 
-test("★ codex 는 이 자리에서 로그인한다 — 새 탭을 열지 않는다", () => {
-  assert.match(SRC, /const LOGIN_INLINE = \{ codex: true \}/);
+test("★ codex·claude 는 이 자리에서 로그인한다 — 새 탭을 열지 않는다", () => {
+  assert.match(SRC, /const LOGIN_INLINE = \{ codex: true, claude: true \}/);
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
   assert.ok(fn.length > 500, "카드 함수를 못 찾았다");
   // 주석은 계약이 아니다 — «window.open 은 팝업차단으로 막힌다» 라고 **설명한** 줄에 걸리면 검열이다.
@@ -25,16 +25,16 @@ test("★ codex 는 이 자리에서 로그인한다 — 새 탭을 열지 않�
   assert.match(fn, /ai-login\/state/);
 });
 
-test("★ claude 는 서버 통로가 있어도 인라인이 아니다 — 그 창은 로그인만 하는 게 아니다", () => {
-  // 왜 잠그나: `claude auth login` 은 서버가 돌릴 수 있다(ai-login-flow.ts 가 다룬다). 그래서 «되니까 켜자» 가
-  //  쉽게 나온다. 그런데 claude 는 그 창에서 첫 실행 설정(글자 스타일·보안 안내·폴더 신뢰)을 함께 지나므로,
-  //  로그인만 인라인으로 빼면 그 설정이 **첫 세션에서 뒤늦게** 떨어진다. 그 판단을 코드가 아니라 여기에 남긴다.
-  assert.ok(!/LOGIN_INLINE = \{[^}]*claude/.test(SRC), "claude 는 인라인 표에 없다");
-  // 대화창 관문(session-chat)도 codex 고정이다 — 두 자리의 판정이 갈리면 사람이 자리마다 다른 걸 본다.
-  const CHAT = readFileSync(new URL("../web/session-chat.ts", import.meta.url), "utf8");
-  const gate = CHAT.slice(CHAT.indexOf("async function loginGate"));
-  assert.ok(gate.length > 500, "관문을 못 찾았다");
-  assert.ok(!/ai-login\/start[^]{0,200}claude/.test(gate), "관문도 codex 만 인라인이다");
+test("★ claude 안내는 «첫 세션에서 물음이 더 나온다» 를 숨기지 않는다", () => {
+  // claude 는 로그인과 별개로 첫 실행 설정(글자 스타일·보안 안내·폴더 신뢰)을 TUI 에서 묻는다 — 바이너리에
+  //  hasCompletedOnboarding·hasTrustDialogAccepted·theme 문자열이 있다(실측 2026-08-28, lvly-tenant:c83).
+  //  로그인만 이 자리로 빼면 그 물음은 없어지는 게 아니라 **첫 세션으로 미뤄진다.** 안 적으면 사람이 놀란다.
+  //  «폴더를 믿나요» 를 미리 대신 눌러 두지 않는 것은 그게 사람이 할 보안 판단이기 때문이다.
+  const guide = SRC.slice(SRC.indexOf("const AI_GUIDE = {"), SRC.indexOf("const LOGIN_SESSION"));
+  const claude = guide.slice(guide.indexOf("claude:"), guide.indexOf("codex:"))
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.match(claude, /첫 세션에서 물음이 몇 개 더 나와요/, "미뤄진 물음을 말한다");
+  assert.match(claude, /이 폴더를 믿나요|trust the files/, "그 물음이 무엇인지도 말한다");
 });
 
 test("★ 대상이 아닌 하네스는 종전 «로그인 창» 그대로다 — 그쪽은 비대화형 한 줄이 없다", () => {
@@ -50,19 +50,18 @@ test("★ 시작조차 못 하면 창으로 내려간다 — 막다른 카드 �
   assert.match(fn, /openLoginWindow\(h, label\)/, "그 탈출로가 종전 창 경로로 간다");
 });
 
-test("★ 문구가 동작과 어긋나지 않는다 — codex 안내에 «검은 창»·«새 탭» 이 없다", () => {
+test("★ 문구가 동작과 어긋나지 않는다 — codex·claude 안내에 «검은 창»·«새 탭» 이 없다", () => {
   const guide = SRC.slice(SRC.indexOf("const AI_GUIDE = {"), SRC.indexOf("const LOGIN_SESSION"));
   // 주석이 아니라 **화면에 나가는 문구만** 본다 — 주석에 «검은 창» 이라 적었다고 걸리면 계약이 아니라 검열이다
   //  (실측: 이 단언의 첫 판이 내가 쓴 설명 주석에 걸렸다).
-  const inline = guide.slice(guide.indexOf("codex:"), guide.indexOf("antigravity:"))
+  const inline = guide.slice(guide.indexOf("claude:"), guide.indexOf("antigravity:"))
     .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   // «창» 을 가리키는 말은 판마다 바뀐다(#2232 가 «검은 창» → «터미널 창» 으로 고쳤다). 그래서 특정 낱말이 아니라
   //  **창을 연다는 뜻의 표현 전부**를 본다 — 낱말 하나만 잠그면 다음 판올림에서 조용히 통과한다.
   const OPENS_WINDOW = /검은 창|터미널 창|새 탭/;
   assert.ok(!OPENS_WINDOW.test(inline), "그 둘은 더 이상 창을 안 띄운다");
   assert.match(inline, /이 자리에/, "«이 자리에서 한다» 고 말한다");
-  // 대조군 — claude·agy·grok 은 여전히 창이 뜨므로 그 표현이 남아 있어야 한다(안 남으면 이 표가 아무것도 안 지킨다).
-  assert.match(guide.slice(guide.indexOf("claude:"), guide.indexOf("codex:")), OPENS_WINDOW);
+  // 대조군 — agy·grok 은 여전히 창이 뜨므로 그 표현이 남아 있어야 한다(안 남으면 이 표가 아무것도 안 지킨다).
   assert.match(guide.slice(guide.indexOf("antigravity:")), OPENS_WINDOW);
 });
 
