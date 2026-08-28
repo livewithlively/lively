@@ -933,6 +933,52 @@ function registerClaudeMcp() {
   return { registered, failed };
 }
 
+// ── claude 설치기가 쓰는 ~/.local/bin 을 셸 rc 에 영속화 (#2172) ────────────
+//  센티넬 리터럴은 **user-uninstall.mjs 와 공유하는 약속**이다 — 거기서 "local-bin 블록은 claude 소유라
+//  의도적으로 보존한다" 고 적고 있다(라이블리를 지워도 claude 는 사용자 것이라 계속 필요하므로).
+//  bootstrap.sh 의 `PATH: cli` 블록과 **같은 규약**: 비파괴·멱등·pristine 백업 1회·이미 있으면 건너뜀.
+//  Windows 는 대상이 아니다 — 거기선 애초에 우리가 claude 를 깔지 않는다(설치 안내만 한다).
+export const LOCAL_BIN_BEGIN = "# >>> lively-managed (PATH: local-bin) >>>";
+export const LOCAL_BIN_END = "# <<< lively-managed (PATH: local-bin) <<<";
+
+/**
+ * (순수) rc 에 이어붙일 블록. 이미 있으면 **null** — 호출부가 그걸 '건드리지 않는다'로 읽는다.
+ *  블록 안의 `case` 문은 rc 를 두 번 source 해도 PATH 가 안 자라게 한다(bootstrap.sh 의 cli 블록과 같은 모양).
+ */
+export function localBinRcBlock(currentRc) {
+  const cur = String(currentRc || "");
+  if (cur.includes(LOCAL_BIN_BEGIN)) return null;               // 멱등
+  const lines = [
+    LOCAL_BIN_BEGIN,
+    "# Claude Code 등 사용자 도구가 깔리는 자리를 PATH 에 추가(라이블리를 지워도 이 블록은 남습니다).",
+    'if [ -d "$HOME/.local/bin" ]; then case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac; fi',
+    LOCAL_BIN_END,
+    "",
+  ];
+  const lead = cur ? (cur.endsWith("\n") ? "\n" : "\n\n") : "";
+  return lead + lines.join("\n");
+}
+
+function wireLocalBinPath() {
+  if (WIN) return;                                              // 윈도우는 우리가 claude 를 안 깐다 → 남의 PATH 를 안 건드린다
+  const rcs = [".zshrc", ".bashrc", ".bash_profile", ".profile"]
+    .map((f) => join(HOME, f)).filter((f) => existsSync(f));
+  if (!rcs.length) { const z = join(HOME, ".zshrc"); try { writeFileSync(z, ""); rcs.push(z); } catch { return; } }
+  for (const rc of rcs) {
+    let cur = "";
+    try { cur = readFileSync(rc, "utf8"); } catch { continue; }
+    const block = localBinRcBlock(cur);
+    if (block === null) continue;
+    try {
+      const bak = join(HOME, ".lively", "backups", `${rc.split(sep).pop()}.path-local-bin.bak`);
+      mkdirSync(join(HOME, ".lively", "backups"), { recursive: true });
+      if (!existsSync(bak)) writeFileSync(bak, cur);             // pristine 스냅샷 1회만 — 덮으면 복구가 죽는다
+      writeFileSync(rc, cur + block);                            // append-only(비파괴)
+      info(`${rc.replace(HOME, "~")} 에 PATH 블록 추가 — 새 터미널에서도 claude 가 잡힙니다.`);
+    } catch { /* rc 를 못 쓰면 이 프로세스 PATH 만으로 진행(종전과 동일) */ }
+  }
+}
+
 // ── 8. 설치/업데이트의 단일 코드 경로 ───────────────────────────────────────
 //  install 과 update 는 같은 일을 한다(멱등). 다른 건 문구와, install 이 claude 부재 시 설치를 제안한다는 것뿐.
 async function syncKit({ label, offerHarness }) {
@@ -947,8 +993,14 @@ async function syncKit({ label, offerHarness }) {
       info("Claude Code 를 먼저 설치하세요: https://code.claude.com/docs/setup  → 설치 후 `lively install` 재실행");
     } else if (await askYesNo("  Claude Code 를 지금 설치할까요?", true)) {
       run("sh", ["-c", "curl -fsSL https://claude.ai/install.sh | bash"], { allowFail: true });
-      // claude 설치기는 ~/.local/bin 에 넣고 PATH 영속화는 사용자 몫으로 남긴다 — 이 프로세스에서만 보이게 해 둔다.
+      // 이 프로세스에서 바로 쓰이도록(아래 detectHarnesses) + **새 터미널에서도 잡히도록**(rc 영속화).
+      //  ⚠ 종전엔 앞줄만 있고 "PATH 영속화는 사용자 몫" 이라 적혀 있었다. 그러면 우리가 깔아준 claude 가
+      //   **그 창에서만** 보이고 새 터미널에선 `command not found` 다 — 깔아 준 의미가 없다. claude 설치기가
+      //   그 일을 사용자에게 떠넘기므로(경고만 출력) 우리가 대신 심는다. #355 의 setup-mac.sh 가 하던 일인데
+      //   CLI(#864)로 오면서 빠졌고, uninstall 쪽엔 "local-bin 블록은 claude 소유라 보존한다"는 주석만 유물로
+      //   남아 있었다(쓰는 쪽이 없어 그 보존 규칙이 죽은 문장이었다).
       process.env.PATH = `${join(HOME, ".local", "bin")}:${process.env.PATH || ""}`;
+      wireLocalBinPath();
       harnesses = detectHarnesses();
     }
   }
