@@ -1370,9 +1370,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           const hit = rows.find((x) => x.k === k);
           if (hit) hit.items.push(...items); else rows.push({ k, items: [...items] });
         }
+        const notYet = (it) => it.soon || connState(it.id) === 'blocked';
+        //  #2232 — «준비 중» 카드는 묶음 안에서 **맨 오른쪽**으로(원준님 2026-08-28). 문서·위키는 Notion · Figma · Google Drive 순이 된다.
+        for (const r of rows) r.items = [...r.items.filter((it) => !notYet(it)), ...r.items.filter(notYet)];
         const flat = rows.flatMap((r) => r.items);
         const already = flat.filter((it) => connState(it.id) === 'on');
-        const notYet = (it) => it.soon || connState(it.id) === 'blocked';
         const ic = (it) => BRAND[it.logo] || GLYPH[it.id] || '';
         const doneCard = (id, label, icon) => doneCardHtml(id, label, icon, '연결돼 있어요');
         //  아직 안 되는 곳 — **고를 수 없게 잠그고 그 사실을 적는다.** 고를 수 있게 두면 골랐는데 아무 일도 안 일어나고,
