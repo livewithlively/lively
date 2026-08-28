@@ -1763,3 +1763,12 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-side-detail .li .v.keep { color: var(--mint-deep); max-width: 46%; white-space: normal; text-align: right; line-height: 1.4; }
 .v2-bin-side-detail .fp h5:first-child { margin-top: 12px; }
 .v2-bin-side-detail .act, .v2-bin-side-sum .act { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ══ #2232 OAuth 릴레이 복귀 탭 — 셸 없이 결과 한 장 ══ */
+.v2-relay-landing{display:grid; place-items:center; min-height:100vh; padding:24px; background:var(--bg)}
+.v2-relay-card{max-width:460px; width:100%; padding:34px 32px; border:1px solid var(--line); border-radius:16px; background:var(--card); text-align:center; display:flex; flex-direction:column; gap:12px}
+.v2-relay-mark{width:46px; height:46px; border-radius:50%; margin:0 auto 4px; display:grid; place-items:center; font-size:22px; font-weight:800; color:#fff; background:#1a9c5b}
+.v2-relay-mark.off{background:#C0392B}
+.v2-relay-card h1{font-size:20px; margin:0; letter-spacing:-.01em}
+.v2-relay-card p{margin:0; color:var(--ink-sub); line-height:1.75; font-size:14px}
+.v2-relay-link{color:var(--blue); font-size:13px; text-underline-offset:2px}

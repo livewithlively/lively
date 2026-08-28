@@ -232,21 +232,27 @@
 .ob-drop-pick{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:12px}
 .ob-drop-pick .ob-btn{margin-top:0}
 
-/* ══ #2232 올린 파일 목록 — 무엇을 받았는지 눈으로 보인다(종류 배지·그림 미리보기·폴더는 하나로 접기) ══ */
-.ob-files{display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:8px; margin:12px 0 2px}
-.ob-file{display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--line); border-radius:11px; background:var(--card); min-width:0}
-.ob-fi{position:relative; width:30px; height:36px; flex:0 0 30px; border-radius:6px; background:var(--line-row); display:grid; place-items:center; overflow:hidden; color:#C98A16}
+/* ══ #2232 받은 파일 목록 — 요약 칩 한 줄 + 여섯 줄 높이에서 멈추는 촘촘한 목록(안에서 스크롤). 타일 격자는 8개만 돼도 화면을 다 먹었다. ══ */
+.ob-files{display:flex; flex-direction:column; gap:8px; margin:12px 0 2px}
+.ob-files-sum{display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:12.5px; color:var(--muted)}
+.ob-files-n{font-weight:700; color:var(--ink); font-size:13px; margin-right:4px}
+.ob-fchip{display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border:1px solid var(--line); border-radius:999px; background:var(--card)}
+.ob-fchip b{color:var(--ink); font-weight:600}
+.ob-fchip i{width:7px; height:7px; border-radius:50%; background:#6b7280; display:inline-block}
+.ob-fchip.ob-fi-doc i{background:#2f6bff} .ob-fchip.ob-fi-sheet i{background:#1a9c5b} .ob-fchip.ob-fi-slide i{background:#e0741a} .ob-fchip.ob-fi-img i{background:#8b5cf6} .ob-fchip.ob-fi-code i{background:#0f766e} .ob-fchip.ob-fi-zip i{background:#a16207} .ob-fchip.ob-fi-dir i{background:#C98A16}
+.ob-files-list{border:1px solid var(--line); border-radius:11px; background:var(--card); max-height:228px; overflow-y:auto; overscroll-behavior:contain}
+.ob-file{display:flex; align-items:center; gap:10px; padding:7px 12px; border-bottom:1px solid var(--line-row); min-width:0}
+.ob-file:last-child{border-bottom:0}
+.ob-fi{position:relative; width:22px; height:26px; flex:0 0 22px; border-radius:5px; background:var(--line-row); display:grid; place-items:center; overflow:hidden; color:#C98A16}
 .ob-fi img{width:100%; height:100%; object-fit:cover; display:block}
-.ob-fi i{font-style:normal; font-size:9px; font-weight:800; letter-spacing:.02em; color:#fff; padding:1px 4px; border-radius:4px; background:#6b7280; max-width:28px; overflow:hidden}
+.ob-fi i{font-style:normal; font-size:7.5px; font-weight:800; letter-spacing:.02em; color:#fff; padding:1px 3px; border-radius:3px; background:#6b7280; max-width:22px; overflow:hidden}
 .ob-fi-doc i{background:#2f6bff} .ob-fi-sheet i{background:#1a9c5b} .ob-fi-slide i{background:#e0741a} .ob-fi-img i{background:#8b5cf6} .ob-fi-code i{background:#0f766e} .ob-fi-zip i{background:#a16207}
-.ob-fi-dir{background:#fff4d6} .ob-fi-dir .ob-blogo{width:18px; height:18px}
-.ob-file-body{min-width:0; display:flex; flex-direction:column; gap:1px}
-.ob-file-n{font-size:13px; font-weight:600; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.ob-file-m{font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.ob-fi-dir{background:#fff4d6} .ob-fi-dir .ob-blogo{width:15px; height:15px}
+.ob-file-n{flex:1; min-width:0; font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.ob-file-m{flex:none; font-size:11.5px; color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums}
 .ob-file.ob-up .ob-file-m{color:var(--blue)}
 .ob-file.ob-err .ob-file-m{color:#C0392B}
-.ob-files-more{font-size:12.5px; color:var(--muted); align-self:center; padding:0 4px}
-
+.ob-files-more{font-size:12px; color:var(--muted); text-align:center}
 /* ══ #2232 AI 로그인 안내 — 누르면 복사되는 글자 · 글 안의 작은 버튼 ══ */
 .ob-tok code.ob-copy{cursor:pointer; border:1px dashed var(--line); user-select:all}
 .ob-tok code.ob-copy:hover{border-color:var(--blue); color:var(--blue)}
