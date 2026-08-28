@@ -22,6 +22,7 @@ $GW = $GW.TrimEnd('/')
 function Say($m, $c = "Gray") { Write-Host $m -ForegroundColor $c }
 function OK($m)   { Write-Host "  * $m" -ForegroundColor Green }
 function Info($m) { Write-Host "  · $m" -ForegroundColor DarkGray }
+function Warn($m) { Write-Host "  ! $m" -ForegroundColor Yellow }
 # ⚠ **exit 금지**(#1087) — `irm … | iex` 는 사용자의 **현재 PowerShell 세션 안에서** 돈다. 여기서 exit 를 부르면
 #  스크립트가 아니라 **사용자 창이 닫히고**, 방금 찍은 에러 메시지가 통째로 증발한다 → 사용자도 우리도 원인을
 #  못 본다(실측: `iex 'Write-Host A; exit 3'` 은 A 만 찍고 세션을 종료시킨다. 실제로 그 사고가 났다).
@@ -200,14 +201,45 @@ if ($Mode -eq "gateway") {
 }
 
 # ── [3] PATH 배선 (User 스코프 — 관리자 권한 불필요) ──────────────────────────
+# ⚠ 쓰기 전에 **줄인다**(#2172). 종전엔 새 항목을 무조건 앞에 붙이기만 해서 사용자 PATH 가 조용히 자랐다.
+#  실측(2026-08-28 amorite): 84개 / 6224자까지 불어났고 그중 70개가 **삭제된 테스트 임시홈**이었다. 그런데
+#  윈도우는 사용자 PATH 가 너무 길면 **뒤를 자르는 게 아니라 통째로 안 합친다** — 그 PC 의 프로세스 PATH 는
+#  616자(시스템만)였고 `.lively\bin`·`.local\bin`·`Roaming\npm` 이 어느 프로세스에도 안 보였다.
+#  결과: lively·claude 미검출, 노드 하네스 탐지 5종 전멸. 정리 후 14개/727자 → 전부 복구.
+#  버리는 기준은 **"TEMP 아래인데 지금 없다"** 로 좁게 잡는다 — 없다는 이유만으로 버리면 이동식·네트워크
+#  드라이브를 뺏는다(되돌릴 수도, 원인을 볼 수도 없다). 판정 규칙은 kit/setup/host-effects.mjs 와 같다.
 $binDir = Join-Path $LV "bin"
 $uPath  = [Environment]::GetEnvironmentVariable("PATH", "User")
 if (-not $uPath) { $uPath = "" }
-if (($uPath -split ';') -notcontains $binDir) {
-  [Environment]::SetEnvironmentVariable("PATH", ($binDir + ";" + $uPath).TrimEnd(';'), "User")
-  OK "PATH 에 추가: $binDir  (새 창부터 적용)"
+$tempRoots = @($env:TEMP, $env:TMP, (Join-Path $env:LOCALAPPDATA "Temp")) |
+  Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\').ToLower() } | Select-Object -Unique
+$norm = { param($e) $e.Trim().TrimEnd('\','/').Replace('/','\').ToLower() }
+$kept = New-Object System.Collections.ArrayList
+$seen = New-Object System.Collections.Generic.HashSet[string]
+$deadCount = 0; $dupCount = 0
+foreach ($e in ($uPath -split ';')) {
+  if (-not $e -or -not $e.Trim()) { continue }
+  $n = & $norm $e
+  $underTemp = $false
+  foreach ($t in $tempRoots) { if ($n -eq $t -or $n.StartsWith($t + '\')) { $underTemp = $true; break } }
+  if ($underTemp -and -not (Test-Path -LiteralPath $e)) { $deadCount++; continue }
+  if ($seen.Contains($n)) { $dupCount++; continue }
+  [void]$seen.Add($n); [void]$kept.Add($e.Trim())
+}
+$binNorm = & $norm $binDir
+if (-not $seen.Contains($binNorm)) { [void]$kept.Insert(0, $binDir) }
+$newPath = ($kept -join ';')
+if ($newPath -ne $uPath) {
+  [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+  if ($deadCount -or $dupCount) { OK "PATH 정리: 죽은 임시경로 $deadCount 개 · 중복 $dupCount 개 제거" }
+  OK "PATH 준비 완료: $binDir  (새 창부터 적용)"
 } else {
   Info "PATH 기존 유지"
+}
+# 길이 경고 — 조용히 넘기면 어느 날 사용자 PATH 가 통째로 무효가 되고, 그때는 원인이 안 보인다.
+if ($newPath.Length -gt 1800) {
+  Warn "사용자 PATH 가 $($newPath.Length)자로 깁니다 — 너무 길면 윈도우가 이 PATH 를 통째로 무시합니다."
+  Warn "  불필요한 항목을 정리하세요:  [Environment]::GetEnvironmentVariable('PATH','User') -split ';'"
 }
 $env:PATH = "$binDir;$env:PATH"   # 현재 세션 즉시 반영
 
