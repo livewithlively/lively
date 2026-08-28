@@ -84,25 +84,58 @@ export async function deriveWriteCap(dir: string | null | undefined): Promise<Wr
   } catch { return "private"; }
 }
 
-// 이 세션을 이 사람이 **볼 수 있나** — 라이브(collectSessions)와 restorable 목록이 공유하는 단일 술어.
-//  프로젝트 폴더 세션은 로그인한 전원(#452 공동 세션), 개인 세션은 소유자·초대자만.
-//  ⚠ 두 목록이 이 규칙을 따로 구현하면 "라이브일 땐 보이는데 회수되면 사라지는" 비대칭이 생긴다(실측 사고:
-//   F 를 켜자 남의 프로젝트 세션이 팀원 화면에서 사라져 삭제된 줄 알았다 — 2026-07-28).
-//  #1291: '전원 공개'는 **공개된 프로젝트**에 한한다. 공개범위가 걸린 리스트의 프로젝트라면 그 대상만 본다 —
-//   세션 화면에는 그 프로젝트의 파일·대화가 그대로 흐르므로, 메타만 잠그고 세션을 열어두면 잠금이 무의미하다.
-//   hidden 은 호출부가 한 번 조회해 넘긴다(세션마다 DB 를 때리지 않게 — 이 목록은 5초마다 폴링된다).
-export function canSeeSession(
+/**
+ * 이 세션을 이 사람이 **볼 수 있나 / 들어갈 수 있나** — 목록·입장이 공유하는 **단일 술어**(#1876 S1).
+ *
+ * ── 규칙 ────────────────────────────────────────────────────────────────────
+ *   **소유자 + 명시 초대만.** 프로젝트 폴더 예외 없음.
+ *
+ * ── 무엇이 바뀌었나(2026-08-28) ─────────────────────────────────────────────
+ * 종전엔 프로젝트 공유폴더 세션이 **로그인한 전원**에게 열려 있었다(#452 «공동 세션»). 그게 설계였고
+ *  버그가 아니었지만, 2026-08-25 장원준 결정(#1876 D1)이 그 예외를 폐기했다 — *"워크스페이스 내 세션은
+ *  디폴트가 프라이빗. 초대하면 보이게."*
+ *
+ * 실측(2026-08-28 dev, 이 변경 직전): 라이브 세션 377건 중 **224건(59%)** 이 공유폴더에 있어 전원에게
+ *  열려 있었고, 실제로 초대가 걸린 세션은 **0건**이었다. `yoon` 토큰으로 `jang` 의 세션 44건이 목록에
+ *  잡혔고 `canAttach` 게이트도 통과했다(입장·프롬프트·파일까지).
+ *
+ * ⚠ **초대 창구는 이미 있다** — 세션 문패의 「공유」(#2116, web/v2/share-session.ts)가 `invites` 를
+ *  그대로 쓴다(소유자만 편집). 종전엔 프로젝트 세션에서 그 값이 **무시돼서** «비공개로 바꿨어요» 라는
+ *  그 화면의 문구가 거짓이었다. 이 변경이 그 문구를 참으로 만든다.
+ *
+ * ⚠ 기존 세션은 **백필하지 않는다**(장원준 2026-08-28 "기존 것도 전부 잠가"). 배포 순간 남의 프로젝트
+ *  세션은 목록에서 사라진다 — 의도된 동작이고, 다시 보려면 소유자가 「공유」로 부른다.
+ *
+ * ── #1291 공개범위와의 관계 ─────────────────────────────────────────────────
+ * 소유권/초대가 **본체**이고, 감춰진 프로젝트(#1291)는 그 위에 얹는 **추가 제약**이다. 초대를 받았어도
+ *  그 프로젝트가 나에게 감춰져 있으면 열지 않는다 — 세션 화면엔 그 프로젝트의 파일·대화가 그대로 흐르므로
+ *  메타만 잠그고 세션을 열어두면 잠금이 무의미하다.
+ *
+ * ⚠ 단 **소유자 자신은 이 추가 제약을 타지 않는다.** 판정 재료(hidden)를 못 구했을 때 거부하면 DB 가
+ *  한 번 흔들리는 것만으로 **자기 세션이 자기 목록에서 사라진다** — 그건 유출이 아니라 자해다.
+ *  초대자에게만 fail-closed 를 건다(모르면 안 보여주는 쪽).
+ */
+export function sessionVisible(
   s: { dir?: string | null; owner?: string | null; invites?: string[] | null; projectId?: number | null },
   me: string,
   hidden?: HiddenProjects,
 ): boolean {
   if (!me) return false;
+  if (s.owner === me) return true;                            // 소유자 — 언제나 자기 세션
+  if (!(s.invites || []).includes(me)) return false;          // ★ 초대받지 않았으면 끝(프로젝트 예외 없음)
   const folder = dirToProjectFolder(s.dir || "");
-  if (folder) {                                              // 프로젝트 공동 세션
-    if (!hidden) return true;                                // 판정 재료 없음 = 종전 동작(전원 공개)
-    if (s.projectId && hidden.ids.has(Number(s.projectId))) return false;
-    if (hidden.folders.has(folder)) return false;
-    return true;
-  }
-  return s.owner === me || (s.invites || []).includes(me);   // 개인 세션 = 소유자·초대자
+  if (!folder) return true;                                   // 개인 폴더 세션 — 초대만으로 충분
+  if (!hidden) return false;                                  // 판정 불가 → 초대자에겐 닫는다
+  if (s.projectId && hidden.ids.has(Number(s.projectId))) return false;
+  if (hidden.folders.has(folder)) return false;
+  return true;
+}
+
+/** @deprecated 이름만 남긴 별칭 — 목록·입장이 **같은 함수**를 쓰는지 구조 테스트가 잠근다(#1876 S1). */
+export function canSeeSession(
+  s: { dir?: string | null; owner?: string | null; invites?: string[] | null; projectId?: number | null },
+  me: string,
+  hidden?: HiddenProjects,
+): boolean {
+  return sessionVisible(s, me, hidden);
 }

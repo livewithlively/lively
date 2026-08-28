@@ -172,6 +172,21 @@ const lookupTicket: TicketLookup = (cookieHeader) => {
   return null;
 };
 
+/**
+ * 세션 스코프 거부 문구 — **존재를 확인해 주지 않는다**(#1876 S3 / D3 "링크만 알면 열리는 경로를 막는다").
+ *
+ * 종전 403 "세션에 접근할 수 없습니다" 는 *그 세션이 있다*는 사실을 알려 줬다. 세션이 프라이빗이면
+ *  그 **존재와 제목**도 프라이빗이어야 하고(id 열거 방지), 없는 세션과 구분되지 않아야 한다.
+ *  그래서 세션 스코프 라우트의 거부를 404 로 통일한다 — 화면 문구도 두 경우를 합쳐 말한다.
+ *
+ * ⚠ WS close 코드(4403 no-access / 4410 session-gone)는 **합치지 않았다.** 그 축의 4403 은
+ *  "권한 없음"뿐 아니라 **판정 불가**(tmux 타임아웃 등)에도 쓰이고 클라이언트가 그때 재시도한다
+ *  (terminal-pty.ts:163-169). 합치면 살아 있는 세션을 '종료됨'으로 오인해 재연결을 끊는다 —
+ *  프라이버시 이득(닫힌 소켓의 코드 한 자리)보다 회귀 위험이 크다. 두 사유를 코드에서 가를 수 있게 된
+ *  뒤에 다시 본다.
+ */
+const SESSION_NOT_FOUND = "없거나 접근할 수 없는 세션입니다";
+
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
@@ -566,7 +581,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       // #2231 — 이미 이어진 id 다. 되살리라고 하지 말고 **이어진 세션을 알려 준다**(화면이 그리로 옮긴다).
       if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to, node: nodeBadge }); return; }
-      if (dead.kind !== "ok") throw new HttpError(403, "세션에 접근할 수 없습니다");
+      if (dead.kind !== "ok") throw new HttpError(404, SESSION_NOT_FOUND);
       // 🔴 #2108 — 스냅샷이 모르는 자리(ask)는 **노드에 확답을 구한다**(#835 '확답 only'). 부재는 죽음의 근거가
       //  아니다 — 상태 push 3초 주기 때문에 방금 만든 살아있는 세션이 그 창 동안 목록에서 빠진다.
       //  확답을 못 받으면(null: 오프라인·무응답) 종전대로 '복원 가능'이다 — 그 경우 복원 라우트가 다시 gone 을
@@ -592,7 +607,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (dead.kind === "ok") { res.json(dead.body); return; }
       // #2231 — 이 id 는 이미 새 세션으로 이어졌다. '중단된 세션'이라고 말하면 화면이 복원을 약속했다가 404 를 받는다.
       if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to }); return; }
-      if (dead.kind === "forbidden") throw new HttpError(403, "세션에 접근할 수 없습니다");
+      if (dead.kind === "forbidden") throw new HttpError(404, SESSION_NOT_FOUND);
       // kind === "none" — 행이 없다. 종전엔 곧장 종전 흐름(→ 403/빈 라벨)으로 흘러 화면이 막다른 길이었다.
       //  #2231 — 그 전에 **대화로 한 번 더 찾아본다**: 같은 대화를 들고 있는 내 최신 세션이 있으면 그리로 안내한다.
       //  (이정표가 없는 옛 id — 이 변경 이전에 복원됐거나, 사람이 지웠거나, 워크스페이스 회수로 사라진 행.)
@@ -607,7 +622,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  프로젝트 세션은 #452 로 전원 공개라 라벨까지는 보이되 복원은 소유자 몫으로 둔다.
       const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
       if (dead.kind === "ok") { res.json(dead.body); return; }
-      throw new HttpError(403, "세션에 접근할 수 없습니다");
+      throw new HttpError(404, SESSION_NOT_FOUND);
     }
     // 라벨 + 프로젝트 id 를 함께 반환 — 프로젝트 세션이면 프론트가 상단 '프로젝트 페이지 열기' 버튼을 켠다(개인 세션은 0 → 숨김).
     const [label, projectId] = await Promise.all([
@@ -627,7 +642,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const out = await relayNodeOp(nodeId, "prompts", { id: req.params.id, user: { userId: uid } });
       res.setHeader("Cache-Control", "no-store"); res.json(out); return;
     }
-    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
     const out = await sessionPrompts(await resolveSessionDir(req.params.id, () => sessionDir(req.params.id)));
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
@@ -652,7 +667,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const { nodeOfSession } = await import("../node/registry.js");
     const results: Array<{ id: string; status: string; detail?: string; harness?: string }> = [];
     for (const id of ids) {
-      if (!(await canAttach(id, uid))) { results.push({ id, status: "error", detail: "접근할 수 없는 세션입니다" }); continue; }
+      if (!(await canAttach(id, uid))) { results.push({ id, status: "error", detail: SESSION_NOT_FOUND }); continue; }
       const harness = await sessionHarnessKey(id);
       const r = await applyLiveTheme(id, harness, theme);
       // ⚠ 노드(멤버 PC) 세션 판정은 **라이브 관측 뒤에** 한다(#1716 과 같은 함정): 게이트웨이 박스가 노드로도
@@ -674,7 +689,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   //  폴링으로도 못 한다(승인은 '지금 답해야 진행되는' 요청이라 왕복 지연이 곧 멈춤이다).
   app.get("/api/ui/terminal/sessions/:id/codex-chat/events", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
-    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
     const { onChatEvent, pendingApprovals, codexChatStatus } = await import("./harness-io/codex-chat-runtime.js");
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
@@ -695,7 +710,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // 승인 답하기 — 화면의 [허용]·[이번만]·[거부] 가 부른다.
   app.post("/api/ui/terminal/sessions/:id/codex-chat/approve", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
-    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const id = String(b.id ?? "");
     const decision = String(b.decision ?? "");
@@ -712,7 +727,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // 돌던 턴 멈추기 — 대화창의 [멈춤]. 런타임이 없으면 false(화면이 종전 Esc 경로로 간다).
   app.post("/api/ui/terminal/sessions/:id/codex-chat/interrupt", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
-    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
     const { interruptCodexChat } = await import("./harness-io/codex-chat-runtime.js");
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, interrupted: await interruptCodexChat(req.params.id) });
@@ -724,7 +739,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   //  돌려주는 thread_id 로 화면이 `codex resume <id>` 를 안내하면 대화가 안 끊긴다.
   app.post("/api/ui/terminal/sessions/:id/codex-chat/release", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
-    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
     const { releaseCodexChat } = await import("./harness-io/codex-chat-runtime.js");
     const r = releaseCodexChat(req.params.id);
     res.setHeader("Cache-Control", "no-store");
@@ -742,7 +757,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const v = await nodeCanAttach(nodeId, req.params.id, uid);
       if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
     } else if (!(await canAttach(req.params.id, uid))) {
-      throw new HttpError(403, "세션에 접근할 수 없습니다");
+      throw new HttpError(404, SESSION_NOT_FOUND);
     }
     // ── codex app-server 모드(#2055) — 글자를 화면에 '넣는' 대신 **프로토콜로 보낸다**. ──
     //  ⚠ **노드 판정보다 먼저** 본다(실측 2026-08-26, dev): 게이트웨이 박스가 노드로도 등록돼 있으면
@@ -827,7 +842,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const v = await nodeCanAttach(nodeId, req.params.id, uid);
       if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
     } else if (!(await canAttach(req.params.id, uid))) {
-      throw new HttpError(403, "세션에 접근할 수 없습니다");
+      throw new HttpError(404, SESSION_NOT_FOUND);
     }
     const st = await getSessionState(req.params.id);
     const key = (nodeId ? nodeSessionHarness(nodeId, req.params.id) : "")
@@ -875,8 +890,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   app.get("/api/ui/terminal/prompts/search", auth, wrap(async (req, res) => {
     const q = String((req.query.q ?? "") as string);
     const all = await listSessions(userOf(req));
+    //  #1876 S2 — 여기 별도 필터를 두지 않는다. 종전엔 목록이 프로젝트 세션을 **전원에게** 주는 바람에
+    //   `!isProjectSessionDir || s.owned` 로 급히 좁혀 놨는데, 그 표현은 두 가지를 동시에 틀렸다:
+    //   남의 프로젝트 세션 질문이 새는 걸 막지 못하는 경우가 있었고(#1876 설계 §4-2), 반대로
+    //   **내가 초대받은** 프로젝트 세션은 검색에서 빠졌다. 이제 listSessions 자체가 소유·초대로 걸러지므로
+    //   그 결과를 그대로 쓰는 것이 정확하다 — 술어를 두 벌로 두지 않는다.
     const sessions = all
-      .filter((s) => !isProjectSessionDir(s.dir) || s.owned)   // 개인(소유/초대) + 내가 만든 프로젝트 세션만(남의 비공개 미검색)
       .map((s) => ({ id: s.id, label: s.label, dir: s.dir, projectId: s.projectId }));
     // 임베딩 provider 켜져 있으면 의미(하이브리드) 검색, 아니면 렉시컬(토큰 AND+랭킹). 하이브리드 실패 시 렉시컬 폴백.
     const provider = await activeEmbeddingProvider().catch(() => null);
