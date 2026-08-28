@@ -1426,27 +1426,89 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     catch { return; }                                  // 못 물었으면 침묵 — 사람을 막지 않는다
     if (!c || c.loggedIn !== false || destroyed) return;
     const label = c.label || '코덱스';
+
+    // ★ 로그인을 **이 자리에서** 끝낸다(#2055 후속, 2026-08-28 지시).
+    //  종전엔 «로그인 세션을 만들고 그 터미널을 새 탭»(앱에서는 **새 창**)이었다. 사람이 실제로 할 일은
+    //  «주소를 열고 코드를 넣는 것» 뿐인데 그걸 하려고 터미널을 통째로 봤다 — 맥락도 끊긴다.
+    //  이제 서버가 로그인 명령을 멤버 자리에서 돌리고 주소·코드만 준다(ai-login-flow.ts).
     const box = el('div', { class: 'cxl-gate' });
-    box.append(el('div', { class: 'cxl-gate-t', text: label + ' 에 로그인되어 있지 않습니다' }));
-    box.append(el('div', { class: 'cxl-gate-d', text: '지금 보내면 답이 오지 않습니다 — 먼저 로그인하세요.' }));
-    const go = el('button', { class: 'btn btn-primary', text: '로그인 세션 열기' }) as HTMLButtonElement;
-    go.onclick = async (): Promise<void> => {
-      go.disabled = true;
-      try {
-        // me-ai.ts 와 **같은 방식**이다 — codex 는 셸 세션 + 로그인 명령(loginFor)으로 연다(TUI 안이 아니라 자동화 가능).
-        const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-          label: '내 계정 로그인 (' + label + ')', rootKey: 'personal', subpath: '',
-          harness: 'shell', loginFor: 'codex', flags: {}, autoApprove: false, loginProfile: true,
-        }) });
-        toast('로그인용 세션을 열었습니다 — 그 세션에서 화면 안내를 따르세요.');
-        if (out?.session?.id) window.open('#/s/' + encodeURIComponent(out.session.id), '_blank');
-        box.remove();
-      } catch (e) { toast('로그인 세션을 열지 못했습니다 — ' + ((e as Error)?.message || e), true); go.disabled = false; }
-    };
-    box.append(go);
-    // 실측된 절차가 있으면 같이 보여준다(catalog.loginSteps) — 버튼을 못 쓰는 상황의 탈출로.
-    for (const st of (c.steps || []).slice(0, 3)) box.append(el('div', { class: 'cxl-gate-s', text: st }));
+    const title = el('div', { class: 'cxl-gate-t', text: label + ' 에 로그인되어 있지 않습니다' });
+    const desc = el('div', { class: 'cxl-gate-d', text: '지금 보내면 답이 오지 않습니다 — 여기서 로그인하세요.' });
+    const body = el('div', { class: 'cxl-gate-body' });
+    box.append(title, desc, body);
     liveDock.prepend(box);
+
+    /** 눌러서 복사되는 값 한 줄 — 주소도 코드도 같은 모양으로 준다(사람이 옮겨 적을 일이 없게). */
+    const copyRow = (labelText: string, value: string, href?: string): HTMLElement => {
+      const v = el('code', { class: 'cxl-gate-v', text: value, title: '눌러서 복사' });
+      v.onclick = (): void => { void navigator.clipboard?.writeText(value).then(() => toast('복사했어요')); };
+      const row = el('div', { class: 'cxl-gate-row' }, el('span', { class: 'cxl-gate-k', text: labelText }), v);
+      if (href) row.append(el('a', { class: 'btn btn-sm', href, target: '_blank', rel: 'noopener', text: '열기' }));
+      return row;
+    };
+
+    let stop = false;
+    const cleanup = (): void => { stop = true; };
+    let pasted = false;
+    async function tick(): Promise<void> {
+      if (stop || destroyed) return;
+      let st: any = null;
+      try { st = await api('/api/ui/me/ai-login/state?harness=codex'); } catch { /* 잠깐 못 물었다 — 다음 틱에 */ }
+      if (st?.loggedIn === true) {
+        cleanup();
+        body.replaceChildren(el('div', { class: 'cxl-gate-d', text: '로그인이 끝났어요 — 이제 보내시면 됩니다.' }));
+        title.textContent = label + ' 로그인 완료';
+        setTimeout(() => box.remove(), 4000);
+        void api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness: 'codex' }) }).catch(() => {});
+        return;
+      }
+      if (st?.step === 'failed') {
+        body.replaceChildren(el('div', { class: 'cxl-gate-d', text: String(st.error || '로그인이 실패했어요.') }), retryBtn());
+        return;                                        // 폴링을 멈춘다 — 사람이 다시 누를 때까지
+      }
+      if (st?.url) {
+        const rows: HTMLElement[] = [copyRow('주소', st.url, st.url)];
+        if (st.code) rows.push(copyRow('일회용 코드', st.code));
+        rows.push(el('div', { class: 'cxl-gate-s', text: st.code
+          ? '주소를 열고 위 코드를 넣으면 끝납니다 — 끝나면 이 카드가 스스로 사라져요.'
+          : '주소를 열고 로그인하세요 — 끝나면 이 카드가 스스로 사라져요.' }));
+        if (st.needsPaste && !pasted) rows.push(pasteRow());
+        body.replaceChildren(...rows);
+      } else if (!body.childElementCount) {
+        body.replaceChildren(el('div', { class: 'cxl-gate-s', text: '로그인 절차를 시작하는 중이에요…' }));
+      }
+      setTimeout(() => { void tick(); }, 2000);
+    }
+    /** claude 처럼 **코드를 되받아야** 하는 하네스 — 그 입력칸(지금은 codex 라 안 쓰이지만 통로는 같다). */
+    function pasteRow(): HTMLElement {
+      const inp = el('input', { class: 'input', type: 'text', placeholder: '브라우저에서 받은 코드' }) as HTMLInputElement;
+      const ok = el('button', { class: 'btn btn-sm btn-primary', text: '넣기' }) as HTMLButtonElement;
+      ok.onclick = async (): Promise<void> => {
+        const v = inp.value.trim(); if (!v) return;
+        ok.disabled = true;
+        try { await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness: 'codex', code: v }) }); pasted = true; toast('코드를 넣었어요'); }
+        catch (e) { toast('코드를 넣지 못했어요 — ' + ((e as Error)?.message || e), true); ok.disabled = false; }
+      };
+      return el('div', { class: 'cxl-gate-row' }, inp, ok);
+    }
+    function retryBtn(): HTMLElement {
+      const b = el('button', { class: 'btn btn-sm', text: '다시 시도' }) as HTMLButtonElement;
+      b.onclick = (): void => { b.disabled = true; void begin(); };
+      return b;
+    }
+    async function begin(): Promise<void> {
+      stop = false; pasted = false;
+      body.replaceChildren(el('div', { class: 'cxl-gate-s', text: '로그인 절차를 시작하는 중이에요…' }));
+      try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: 'codex' }) }); }
+      catch (e) {
+        // 시작조차 못 했다 — 종전 안내(터미널 절차)로 정직하게 내려간다. 막다른 카드로 두지 않는다.
+        body.replaceChildren(el('div', { class: 'cxl-gate-d', text: '여기서 바로 로그인할 수 없어요 — ' + ((e as Error)?.message || e) }),
+          ...(c?.steps || []).slice(0, 3).map((x) => el('div', { class: 'cxl-gate-s', text: x })));
+        return;
+      }
+      void tick();
+    }
+    void begin();
   }
 
   let live: CodexLive | null = null;
