@@ -2646,7 +2646,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "c5af77aec9a1cc7f"
+  "input_hash": "c2170041611d6a82"
  },
  {
   "name": "source_undistilled",
@@ -2676,7 +2676,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "792ed81e3324e631"
+  "input_hash": "f077d64e6b609430"
  },
  {
   "name": "source_link_knowledge",
@@ -4225,6 +4225,86 @@
    "POST /api/ui/org/clickup/collect"
   ],
   "input_hash": "bd612ab0c3942d49"
+ },
+ {
+  "name": "org_github_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/github/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_github_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/github/collect"
+  ],
+  "input_hash": "629c0c24c7f24963"
+ },
+ {
+  "name": "org_gitlab_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/gitlab/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_gitlab_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/gitlab/collect"
+  ],
+  "input_hash": "d895fcc91eb134f7"
+ },
+ {
+  "name": "org_linear_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/linear/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_linear_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/collect"
+  ],
+  "input_hash": "dd7b58fd833afe7b"
+ },
+ {
+  "name": "org_linear_collect_connect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/collect/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_linear_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/oauth-complete"
+  ],
+  "input_hash": "90172574917c2fd4"
  },
  {
   "name": "org_google_collect",

@@ -956,13 +956,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *   · 노션 — 라이블리 공개 통합 동의(노션 화면의 페이지 고르기)가 곧 연결이자 범위. 개인 MCP 로그인은 시키지 않는다.
    *   · 슬랙 — 내 계정 로그인(라이블리 슬랙 앱, 유저+봇 토큰)이 곧 수집기의 자격이다. 로그인 뒤 수집기를 켠다. */
   //  #2247 — 피그마·ClickUp 도 같은 축: 토큰(금고)이 자격, 켜면 수집기가 그 토큰을 가리킨다. 피그마는 범위(파일 링크)가 있어야 켜진다.
-  const COLLECT_FIRST = { slack: 'slack', notion: 'notion', figma: 'figma', clickup: 'clickup' };
+  const COLLECT_FIRST = { slack: 'slack', notion: 'notion', figma: 'figma', clickup: 'clickup', github: 'github', gitlab: 'gitlab', linear: 'linear' };
   const COLLECT_ON_DESC = {
     notion: '노션에서 고른 페이지를 팀 자료함에 모으고 있어요.', slack: '공개 채널 대화를 팀 자료함에 모으고 있어요.',
     figma: '고른 피그마 파일의 코멘트를 팀 자료함에 모으고 있어요.', clickup: 'ClickUp 작업·댓글을 프로젝트 탭으로 가져오고 있어요.',
+    github: '고른 저장소의 이슈·PR 대화를 팀 자료함에 모으고 있어요.', gitlab: '고른 프로젝트의 이슈·MR 대화를 팀 자료함에 모으고 있어요.',
+    linear: 'Linear 이슈·댓글·문서를 팀 자료함에 모으고 있어요.',
   };
   /** 토큰형 앱의 자격이 이미 금고에 있나(개인 축 실측). */
-  const tokenSaved = (id) => !!(CONN && SVC_OF[id] && CONN.connected.some((s) => s.key === SVC_OF[id]));
+  const tokenSaved = (id) => {
+    if (!CONN || !SVC_OF[id]) return false;
+    //  GitLab 은 계정 로그인(DCR) 토큰으로는 자료를 못 읽는다 — 수집기 축에선 개인 토큰(gitlab_pat)만 «있음»으로 친다.
+    if (id === 'gitlab') { const c = CONN.credMap.get('gitlab_pat'); return !!(c && c.has_secret); }
+    return CONN.connected.some((s) => s.key === SVC_OF[id]);
+  };
   /** 피그마 범위 입력 → 서버 scope(숫자만인 토막 = 팀 id, 나머지 = 파일 링크). */
   const figmaScope = (text) => {
     const toks = String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean);
@@ -973,6 +980,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   async function startMemberCollect(id, scopeText) {
     const body: any = { enabled: true };
     if (id === 'figma' && scopeText && scopeText.trim()) body.scope = figmaScope(scopeText);
+    if (id === 'gitlab' && scopeText && scopeText.trim()) body.scope = { projects: scopeText.trim() };
     try { return await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify(body) }); }
     catch (e) { return { ok: false, message: (e && e.message) || '모으기를 켜지 못했어요.' }; }
   }
@@ -1015,7 +1023,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (c) {
         if (id === 'notion') return c.enabled ? 'on' : (!c.ready && !(c.workspaces || []).length ? 'blocked' : 'off');
         if (id === 'slack') return (c.search && c.search.enabled) ? 'on' : 'off';
-        if (id === 'figma' || id === 'clickup') return c.enabled ? 'on' : 'off';
+        if (id === 'figma' || id === 'clickup' || id === 'github' || id === 'gitlab' || id === 'linear') return c.enabled ? 'on' : 'off';
       }
       // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
     }
@@ -1124,7 +1132,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       try { await loadConn(); } finally { busy = false; }
       if (done) return;
       if (collectMode(id) && connState(id) !== 'on') {
-        const ready = id === 'notion' ? !!(COLL[id] && (COLL[id].workspaces || []).length) : (id === 'slack' || id === 'clickup') && tokenSaved(id);
+        const ready = id === 'notion' ? !!(COLL[id] && (COLL[id].workspaces || []).length)
+          : id === 'linear' ? !!(COLL[id] && COLL[id].me_connected)
+          : (id === 'slack' || id === 'clickup' || id === 'github' || id === 'gitlab') && tokenSaved(id);
         if (ready) {
           busy = true;
           try { await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify({ enabled: true }) }); await loadConn(); }
@@ -1142,11 +1152,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     WATCH.set(id, stop);
   }
   /** 토큰 저장 — 저장되면 곧바로 서버에 다시 물어 **정말 이어졌는지** 확인하고 넘어간다. */
-  async function svcToken(id, value) {
+  async function svcToken(id, value, scopeKey?) {
     const svc = svcOf(id); const spec = credSpec(svc);
     if (!svc || !spec) throw new Error('이 앱은 글자로 연결하는 곳이 아니에요.');
     const payload: any = { kind: spec.kind, secret: value };
     if (spec.meta) payload.meta = spec.meta;
+    if (scopeKey) payload.scope_key = scopeKey;   // #2247 GitLab — 호스트가 곧 scope_key(회사 GitLab 구분)
     await api('/api/ui/me/credential', { method: 'POST', body: JSON.stringify(payload) });
     //  #2232 — 저장은 **아무 글자나** 성공한다(금고는 값을 검사하지 않는다). 그래서 저장만 보고 초록불을 켜면
     //   오타를 넣어도 «이어졌어요» 가 된다. 관리 화면(admin-credentials.ts)이 이미 쓰는 확인 창구를 여기서도 부른다.
@@ -1154,7 +1165,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     let verdict = null;
     try {
       const r: any = await api('/api/ui/me/credential/verify',
-        { method: 'POST', body: JSON.stringify({ kind: spec.kind, scope_key: '' }) });
+        { method: 'POST', body: JSON.stringify({ kind: spec.kind, scope_key: scopeKey || '' }) });
       if (r && r.supported !== false) verdict = { ok: !!r.ok, message: String(r.message || '') };
     } catch (_) { /* 확인 경로 없음 — 저장은 이미 됐다 */ }
     await loadConn();
@@ -1223,6 +1234,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
       ${collectMode(id) && id === 'figma' ? `<p class="ob-note">모을 <b>피그마 파일 링크</b>를 넣어 주세요 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체를 모으려면 팀 주소(figma.com/files/team/&lt;id&gt;/…)의 숫자 id 를 넣어도 돼요.</p>
       <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/design/…">` : ''}
+      ${collectMode(id) && id === 'gitlab' ? `<p class="ob-note">회사 GitLab 을 쓰면 아래에 그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
+      <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com">
+      <p class="ob-note">모을 <b>프로젝트 경로</b>(group/project)를 넣어 주세요 — 여러 개면 공백으로. 프로젝트 주소를 그대로 붙여넣어도 돼요.</p>
+      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="group/project">
+      <p class="ob-note ob-fine2">토큰은 <b>read_api</b> 범위로 만든 개인 액세스 토큰이어야 해요 — [계정 로그인]으로 받은 토큰으로는 GitLab 이 자료 읽기를 막습니다.</p>` : ''}
       <p class="ob-err" id="tokErr"></p>
       ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
       <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
@@ -1529,11 +1545,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const st = connState(id);
               const how = connHow(id);
               const open = tokOpen === id;
-              const scopeOnly = collectMode(id) && id === 'figma' && tokenSaved(id);
-              const tokOnly = collectMode(id) && id === 'clickup' && tokenSaved(id);
+              const scopeOnly = collectMode(id) && (id === 'figma' || id === 'gitlab') && tokenSaved(id);
+              const tokOnly = collectMode(id) && (id === 'clickup' || id === 'github') && tokenSaved(id);
               const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
-                : scopeOnly ? (open ? '모을 파일 링크를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 파일 링크를 넣어 주세요.')
-                : tokOnly ? '토큰은 받았어요 — 누르면 바로 가져오기가 켜져요.'
+                : scopeOnly ? (id === 'gitlab' ? (open ? '모을 프로젝트 경로를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 프로젝트(group/project)를 넣어 주세요.') : (open ? '모을 파일 링크를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 파일 링크를 넣어 주세요.'))
+                : tokOnly ? (id === 'github' ? '계정은 이어져 있어요 — 누르면 고른 저장소의 이슈·PR 모으기가 켜져요.' : '토큰은 받았어요 — 누르면 바로 가져오기가 켜져요.')
+                : (collectMode(id) && id === 'gitlab') ? (open ? '아래 세 칸을 채워 주세요.' : '눌러 주세요 — 개인 토큰 한 줄을 받아 오면 됩니다.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
                 : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
@@ -1600,8 +1617,26 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             } catch (e) { fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
             return;
           }
+          //  #2247 Linear — 토글이 곧 연결(노션과 같은 모양): 켜기를 먼저 시도하고, 자격이 없으면 서버가 준 라이블리 앱 동의 URL 을 연다.
+          if (id === 'linear') {
+            const r: any = await startMemberCollect(id, '');
+            if (r && r.ok) { await loadConn(); fin(); return; }
+            const url = r && r.needs_connect && r.authorization_url;
+            if (!url) { fin((r && r.message) || 'Linear 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+            if (d) d.textContent = 'Linear 화면에서 [허용]을 누르면 여기가 저절로 바뀌어요…';
+            window.open(url, '_blank', 'noopener');
+            watchConnect(id, fin);
+            return;
+          }
+          //  #2247 GitHub — 계정 연결(저장소 고르기)이 곧 범위. 연결돼 있으면 바로 켠다(서버가 고른 저장소를 기본 범위로 채운다).
+          if (id === 'github' && tokenSaved(id)) {
+            const r: any = await startMemberCollect(id, '');
+            await loadConn();
+            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요 — [외부 앱 연결 ▸ GitHub]에서 저장소를 넣고 켜 주세요.'));
+            return;
+          }
           //  #2247 피그마·ClickUp — 토큰이 없으면 토큰 폼(피그마는 범위 칸 포함), 있으면 바로 켠다. 범위가 없다면(피그마) 폼을 연다.
-          if (id === 'figma' || id === 'clickup') {
+          if (id === 'figma' || id === 'clickup' || id === 'gitlab') {
             if (!tokenSaved(id)) { tokOpen = id; redraw(); return; }
             const r: any = await startMemberCollect(id, '');
             if (r && r.needs_scope) { tokOpen = id; redraw(); return; }
@@ -1647,7 +1682,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             tokGo.disabled = true; tokGo.textContent = '연결하는 중…'; if (tokErr) tokErr.textContent = '';
             let verdict = null;
             try {
-              if (v) verdict = await svcToken(id, v);
+              const hostIn = $('#tokHost', el);
+              if (v) verdict = await svcToken(id, v, id === 'gitlab' ? ((hostIn && hostIn.value.trim()) || 'gitlab.com') : undefined);
             } catch (e) {
               tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
               if (tokErr) tokErr.textContent = (e && e.message) || '연결하지 못했어요. 글자를 다시 확인해 주세요.';
