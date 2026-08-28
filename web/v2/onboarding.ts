@@ -1671,7 +1671,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // 쳐야 할 글자 — 누르면 복사(#2232). 클립보드가 막힌 자리면 글자를 그대로 토스트로 보여 준다.
         $$('code[data-copy]', el).forEach((cd) => cd.onclick = async () => {
           const t = cd.dataset.copy || cd.textContent || '';
-          try { await navigator.clipboard.writeText(t); toast('복사했어요. 검은 창을 한 번 누른 뒤 붙여넣고 Enter 를 누르세요.'); }
+          try { await navigator.clipboard.writeText(t); toast('복사했어요. 터미널 창을 한 번 누른 뒤 붙여넣고 Enter 를 누르세요.'); }
           catch (_) { toast(t); }
         });
         // 로그인 창 열기 — 그 AI 를 내 격리 홈에서 띄운 터미널 한 장(사이드바 없는 페이지). me-ai.ts [내 계정 로그인]과 같은 규약.
@@ -2120,36 +2120,45 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  (catalog.harnessLoginArgv), grok 은 셸을 열어 사람이 한 줄을 붙여넣는다. 붙여넣을 글자는 code[data-copy] 로 — 누르면 복사.
    *  ⚠ 여기 적은 화면 문구(«Login successful» 등)는 그 회사가 바꿀 수 있다 — 그래서 «같은 말» 로 느슨하게 적었다. */
   const DEVICE_NOTE = '왜 주소와 코드냐면: 그 창은 우리 서버에서 돌아서 로그인 페이지를 스스로 못 열어요. 그래서 주소는 사람이 열고, 코드를 넣어 «이 창이 내 것» 이라고 알려 주는 방식이에요.';
+  //  #2232 원준님 실측 — 창은 검지 않을 수도 있고(밝은 테마), 사람은 CLI 조작법(↑↓·Enter)을 모를 수 있다. «터미널 창» 으로 부르고 조작법을 한 줄 준다.
+  const CLI_NOTE = '터미널 창 조작: 글자만 있는 창이에요. 고르는 화면에선 <b>↑ ↓</b> 로 옮기고 <b>Enter</b> 로 확정, 붙여넣기는 <b>⌘V</b>(윈도우 Ctrl+V), 창 안 글자는 마우스로 끌어 복사할 수 있어요.';
   const cp = (t) => `<code class="ob-copy" data-copy="${esc(t)}" title="누르면 복사돼요">${esc(t)}</code>`;
+  //  버튼은 이 글 **위**에 있다(qHead 다음 줄) — «아래» 라고 쓰면 사람이 아래를 뒤진다(원준님 실측 2026-08-28).
   const AI_GUIDE = {
     claude: { steps: [
-      `아래 ${kbd('Claude 로그인 창 열기')}를 누르면 새 탭에 Claude 가 켜진 검은 창이 열려요.`,
+      `위의 ${kbd('Claude 로그인 창 열기')}를 누르면 새 탭에 Claude 가 켜진 터미널 창이 열려요.`,
       `그 창을 한 번 누른 뒤 ${cp('/login')} 을 붙여넣고 Enter 를 누르세요.`,
       `창에 긴 주소가 나와요. 그 주소를 누르거나(또는 복사해 브라우저 주소창에 붙여) 열고, Anthropic 계정으로 로그인하세요.`,
-      `로그인이 끝나면 화면에 긴 코드가 나와요. 그 코드를 복사해 검은 창에 붙여넣고 Enter.`,
+      `로그인이 끝나면 화면에 긴 코드가 나와요. 그 코드를 복사해 터미널 창에 붙여넣고 Enter.`,
       `창에 «Login successful» 같은 말이 보이면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
-    ] },
+    ], note: CLI_NOTE },
     codex: { steps: [
-      `아래 ${kbd('ChatGPT 로그인 창 열기')}를 누르면 새 탭에 검은 창이 열리고, 로그인 절차가 저절로 시작돼요.`,
+      `위의 ${kbd('ChatGPT 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열리고, 로그인 절차가 저절로 시작돼요.`,
       `잠시 뒤 창에 <b>주소 하나</b>와 <b>짧은 코드</b>가 나와요. 주소를 누르거나(또는 복사해 브라우저에 붙여) 열고, 그 코드를 입력하세요.`,
       `ChatGPT 계정으로 로그인하고 허용을 누르세요.`,
       //  #2232 원준님 실측 — 계정에 «장치 코드 인증»이 꺼져 있으면 ChatGPT 화면이 빨간 글로 막는다. 켜고 다시 시작해야 한다.
-      `ChatGPT 화면에 빨간 글로 «ChatGPT 보안 설정 내 <b>Codex용 장치 코드 인증</b>을 활성화한 뒤 다시 실행하세요» 가 나오면: 그 글의 <b>ChatGPT 보안 설정</b> 링크를 눌러(또는 chatgpt.com ▸ 프로필 ▸ ${kbd('설정')} ▸ ${kbd('보안')}) <b>Codex용 장치 코드 인증</b>을 켜세요. 그런 다음 검은 창을 한 번 누르고 ${cp('codex login --device-auth')} 를 붙여넣고 Enter — 주소와 코드가 새로 나오니 2번부터 다시 하시면 됩니다.`,
-      `검은 창에 «로그인 절차가 끝났습니다» 가 보이면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
-    ], note: DEVICE_NOTE },
+      `ChatGPT 화면에 빨간 글로 «ChatGPT 보안 설정 내 <b>Codex용 장치 코드 인증</b>을 활성화한 뒤 다시 실행하세요» 가 나오면: 그 글의 <b>ChatGPT 보안 설정</b> 링크를 눌러(또는 chatgpt.com ▸ 프로필 ▸ ${kbd('설정')} ▸ ${kbd('보안')}) <b>Codex용 장치 코드 인증</b>을 켜세요. 그런 다음 터미널 창을 한 번 누르고 ${cp('codex login --device-auth')} 를 붙여넣고 Enter — 주소와 코드가 새로 나오니 2번부터 다시 하시면 됩니다.`,
+      `터미널 창에 «로그인 절차가 끝났습니다» 가 보이면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
+    ], note: DEVICE_NOTE + ' ' + CLI_NOTE },
+    //  #2232 원준님 실측(2026-08-28) — Antigravity 첫 실행 순서: 로그인 방법 고르기(1. Google OAuth) → «Click here to authenticate» →
+    //   브라우저 로그인 → 색 테마 고르기 → 입력칸. 화면 원문(영어)을 함께 적는다(사람이 보는 글자가 영어라서).
     antigravity: { steps: [
-      `아래 ${kbd('Gemini 로그인 창 열기')}를 누르면 새 탭에 Gemini(agy)가 켜진 검은 창이 열려요.`,
-      `처음 켜면 로그인 방법을 물어요. <b>Google 계정으로 로그인</b>을 고르세요.`,
-      `그 창은 우리 서버에서 돌아서 로그인 페이지가 저절로 안 열려요. 대신 창에 <b>주소</b>가 나와요. 그 주소를 누르거나(또는 복사해 브라우저에 붙여) 열고 Google 계정으로 로그인하세요.`,
-      `로그인이 끝나고 화면에 <b>코드</b>가 나오면, 복사해 검은 창에 붙여넣고 Enter 를 누르세요.`,
-      `창에 Gemini 입력칸이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
-    ] },
+      `위의 ${kbd('Gemini 로그인 창 열기')}를 누르면 새 탭에 <b>Antigravity</b>(Gemini 를 쓰는 CLI)가 켜진 터미널 창이 열려요.`,
+      `처음 켜면 <b>Select login method:</b> 라고 물어요. <b>1. Google OAuth</b> 앞에 «&gt;» 가 있는지 보고(기본으로 그 자리예요) <b>Enter</b> 를 누르세요. 다른 줄에 가 있으면 ↑ ↓ 로 1번에 맞춘 뒤 Enter.`,
+      `그러면 <b>→ Click here to authenticate</b> 가 나와요. 그 글자를 누르면(누르면 열려요) 브라우저에 Google 로그인 화면이 뜹니다 — 거기서 Google 계정으로 로그인하고 허용을 누르세요. 안 눌리면 그 줄의 주소를 복사해 브라우저에 붙여 여세요.`,
+      `로그인이 끝나고 창에 <b>코드</b>를 넣으라고 하면, 브라우저에 나온 코드를 복사해 터미널 창에 붙여넣고 Enter. (코드를 안 물으면 그냥 넘어가요.)`,
+      `이어서 <b>Choose your color scheme:</b>(색 테마 고르기)가 나와요. ↑ ↓ 로 아무거나(예: terminal) 고르고 Enter, <b>[Next]</b> 가 있으면 Enter 로 넘기세요.`,
+      //  #2232 원준님 실측 — 테마 뒤에 두 화면이 더 있다: 사용 정보 수집 동의, 폴더 신뢰. 여기까지 지나야 입력칸이 나온다.
+      `다음은 <b>Yes, I agree to help improve Antigravity CLI…</b>(사용 정보를 Google 에 보내는 데 동의) 화면이에요. 동의는 선택이에요 — 끄고 싶으면 그 줄에서 Enter 를 눌러 체크를 빼세요. 그다음 ↓ 로 <b>[Done]</b> 에 옮기고 Enter.`,
+      `마지막으로 <b>Do you trust the contents of this project?</b>(이 폴더의 내용을 믿나요) 가 나와요. <b>Yes, I trust this folder</b> 앞에 «&gt;» 가 있는 채로 Enter — 라이블리가 만든 작업 폴더라 괜찮습니다.`,
+      `창에 글을 치는 입력칸(<b>&gt;</b> 표시, 오른쪽 아래에 <b>Gemini …</b> 모델 이름)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
+    ], note: CLI_NOTE },
     grok: { steps: [
-      `아래 ${kbd('Grok 로그인 창 열기')}를 누르면 새 탭에 검은 창이 열려요.`,
+      `위의 ${kbd('Grok 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열려요.`,
       `그 창을 한 번 누른 뒤 ${cp('grok login --device-auth')} 를 붙여넣고 Enter 를 누르세요.`,
       `창에 <b>주소 하나</b>와 <b>짧은 코드</b>가 나와요. 주소를 열고 그 코드를 입력한 뒤 X(xAI) 계정으로 로그인하세요.`,
       `창에 로그인이 끝났다고 나오면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
-    ], note: DEVICE_NOTE },
+    ], note: DEVICE_NOTE + ' ' + CLI_NOTE },
   };
   const LOGIN_SESSION = { claude: { harness: 'claude' }, codex: { harness: 'shell', loginFor: 'codex' }, antigravity: { harness: 'antigravity' }, grok: { harness: 'shell', loginFor: 'grok' } };
 
