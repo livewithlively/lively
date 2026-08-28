@@ -81,6 +81,21 @@ function startProxy(serveMcpGateway) {
   return { send, sendRaw, waitFor, waitNotify, msgs, end: () => { input.end(); return done; } };
 }
 
+// real 상류(툴이 있는)에서 tools/list 가 non-empty 를 낼 때까지 새 id 로 짧게 재시도한다.
+//  왜: 게이트웨이는 상류 fetch 가 일시 실패하면 [] 로 폴백하고 복구는 list_changed 로 민다(최종일관성).
+//  Windows loopback 은 mock 서버 accept 직후 첫 연결이 간헐 reset 돼 그 폴백을 밟는데(E14 실측 flaky),
+//  단발 assert 는 이 최종일관성에 취약하다. non-empty 를 기다려 흡수한다(정상 경로는 첫 시도에 바로 반환).
+//  ⚠ 상류 미도달(빈 목록이 정답)인 케이스엔 쓰지 않는다 — real 상류 + tools 존재 케이스 전용.
+async function listUntilTools(p, startId, tries = 10) {
+  let last;
+  for (let k = 0; k < tries; k++) {
+    p.send({ jsonrpc: "2.0", id: startId + k, method: "tools/list" });
+    last = await p.waitFor(startId + k);
+    if ((last?.result?.tools || []).length > 0) return last;
+  }
+  return last;
+}
+
 const HOME = mkdtempSync(join(tmpdir(), "mcpgw-"));
 const LIVELY = join(HOME, ".lively");
 mkdirSync(LIVELY, { recursive: true });
@@ -125,8 +140,7 @@ try {
     setGw(up.url);
     process.env.LIVELY_TOKEN = "tok-env-stale";        // 스테일 env 를 일부러 심는다(#916)
     const p = startProxy(serveMcpGateway);
-    p.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    const r = await p.waitFor(2);
+    const r = await listUntilTools(p, 2);
     const got = (r?.result?.tools || []).map((t) => t.name);
     let cached = null; try { cached = JSON.parse(readFileSync(CACHE, "utf8")); } catch { /* */ }
     const h = up.seen[0]?.headers || {};
@@ -145,8 +159,7 @@ try {
     const up = await startUpstream({ tools: T(["j1"]), sse: false });
     setGw(up.url);
     const p = startProxy(serveMcpGateway);
-    p.send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
-    const r = await p.waitFor(3);
+    const r = await listUntilTools(p, 3);
     check("E14 tools/list — JSON 응답 해석", (r?.result?.tools || []).map((t) => t.name).join() === "j1", `r=${JSON.stringify(r?.result)}`);
     await p.end(); await up.close();
   }
