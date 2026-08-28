@@ -2133,6 +2133,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       `아래 ${kbd('ChatGPT 로그인 창 열기')}를 누르면 새 탭에 검은 창이 열리고, 로그인 절차가 저절로 시작돼요.`,
       `잠시 뒤 창에 <b>주소 하나</b>와 <b>짧은 코드</b>가 나와요. 주소를 누르거나(또는 복사해 브라우저에 붙여) 열고, 그 코드를 입력하세요.`,
       `ChatGPT 계정으로 로그인하고 허용을 누르세요.`,
+      //  #2232 원준님 실측 — 계정에 «장치 코드 인증»이 꺼져 있으면 ChatGPT 화면이 빨간 글로 막는다. 켜고 다시 시작해야 한다.
+      `ChatGPT 화면에 빨간 글로 «ChatGPT 보안 설정 내 <b>Codex용 장치 코드 인증</b>을 활성화한 뒤 다시 실행하세요» 가 나오면: 그 글의 <b>ChatGPT 보안 설정</b> 링크를 눌러(또는 chatgpt.com ▸ 프로필 ▸ ${kbd('설정')} ▸ ${kbd('보안')}) <b>Codex용 장치 코드 인증</b>을 켜세요. 그런 다음 검은 창을 한 번 누르고 ${cp('codex login --device-auth')} 를 붙여넣고 Enter — 주소와 코드가 새로 나오니 2번부터 다시 하시면 됩니다.`,
       `검은 창에 «로그인 절차가 끝났습니다» 가 보이면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
     ], note: DEVICE_NOTE },
     antigravity: { steps: [
