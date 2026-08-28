@@ -141,6 +141,30 @@ test("E10 '밖에서 만드세요' 안내가 화면에서 사라졌다", () => {
     "'새 탭으로 열립니다' 행이 남아 있다");
 });
 
+test("★★ E12 매니지드에서도 ✕ 가 돈다 — 삭제·나가기가 CP 창구로 간다 (#1875 D5\u2033)", () => {
+  //  이 축이 빠지면 게이트웨이의 ✕ 는 매니지드에서 requireRegistry() 에 걸려 400 만 낸다 —
+  //   «있는데 안 되는 버튼» 이 되고, 그건 신고 ②(밖으로 내보내는 화면)와 같은 종류의 실패다.
+  for (const [cap, route] of [
+    ["workspace_delete", "/api/tenant/workspace-delete"],
+    ["workspace_leave", "/api/tenant/workspace-leave"],
+  ] as Array<[string, string]>) {
+    const body = capBody(cap);
+    assert.match(body, /if \(managedMode\(\)\) \{[\s\S]{0,900}"\/api\/tenant\/workspace-(delete|leave)"/,
+      `${cap} 이 매니지드에서 CP 창구를 부르지 않는다 — ✕ 가 매니지드에서 죽는다`);
+    assert.ok(body.includes(route), `${cap} 이 ${route} 를 부르지 않는다`);
+    const m = body.indexOf("managedMode()"), r = body.indexOf("requireRegistry()");
+    assert.ok(r === -1 || m < r, `${cap} 의 매니지드 분기가 requireRegistry 보다 뒤다 — 그 자리에서 400 이다`);
+  }
+  //  ★ 갈래 재료(어드민 수)가 매니지드 목록에도 실려야 한다. 없으면 owner 는 늘 «유일 어드민» 으로
+  //   보여서, 공동 어드민이 있어도 이양을 강요당한다(서버는 안 시키는데 화면만 시킨다).
+  assert.match(REG, /member_count: w\.member_count, owner_count: w\.owner_count/,
+    "★ cpWsView 가 owner_count 를 안 싣는다 — 매니지드에서 공동 어드민도 이양을 강요당한다");
+  //  ★ «나» 를 가리키는 키가 배포마다 다르다(코어 member_id vs CP 이메일) — is_me 를 흘려야
+  //   «넘길 사람» 후보에서 내가 빠진다.
+  assert.match(REG, /is_creator: m\.role === "owner", is_me: m\.is_me/,
+    "★ 매니지드 명부가 is_me 를 안 흘린다 — 넘길 후보에 내가 남는다(고르면 400)");
+});
+
 test("E11 초대는 '보냈다'고 말하지 않는다 — 링크를 준다(계정 서버가 메일을 안 보낸다)", () => {
   const people = read("web/v2/ws-people.ts");
   assert.match(people, /invite\?\.url/, "초대 응답의 링크를 읽지 않는다 — 사람에게 줄 것이 없다");

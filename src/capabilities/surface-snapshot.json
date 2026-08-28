@@ -2059,6 +2059,16 @@
   "input_hash": "de9c8a98f1ec1cd9"
  },
  {
+  "name": "workspace_leave",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/leave"
+  ],
+  "input_hash": "051dd9c005c2c3ca"
+ },
+ {
   "name": "workspace_people",
   "scope": null,
   "mcp": true,

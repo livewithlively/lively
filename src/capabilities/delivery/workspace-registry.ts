@@ -24,6 +24,8 @@ import {
   kindEffective, countWorkspaceMembers, memberCounts, normalizeInviteEmail, createInvite,
   listWorkspaceInvites, listInvitesForEmail, getInvite, resolveInvite, revokeInvitesForWorkspace,
   inviteResolvable, inviteDecisionActor, inviteNextState, inviteRecipientMatches, type InviteDecision,
+  // #1875 D5″ — 나가기의 세 갈래(어드민 수) + 주인 넘기기
+  planWorkspaceLeave, transferWorkspaceOwner, ownerCounts, type LeavePlan,
 } from "../../org/tenancy/registry.js";
 import { currentTenant, withTenant } from "../../org/tenant-context.js";
 import { itemsPool } from "../../db/client.js";
@@ -44,13 +46,16 @@ const requireMember = (user: LivelyUser): string => {
 // #1875 — 화면이 쓰는 것은 `kind_effective`(인원 수 파생)다. `kind` 컬럼도 계속 실어 보내되 그건
 //  "만들 때의 의도"이지 지금의 사실이 아니다 — 사람이 들고 나면 조용히 거짓이 된다.
 //  primary 는 명부를 쓰지 않으므로(박스 로그인 = 접근) 언제나 팀으로 본다.
-const wsView = (w: RegistryWorkspace & { role?: string }, memberCount?: number, pending = 0) => {
+const wsView = (w: RegistryWorkspace & { role?: string }, memberCount?: number, pending = 0, ownerCount?: number) => {
   const isPrimary = w.id === PRIMARY_TENANT_ID;
   const n = memberCount ?? 0;
   return {
     slug: w.slug, name: w.name, kind: w.kind, state: w.state, role: w.role ?? null,
     is_primary: isPrimary, created_at: w.created_at,
     member_count: isPrimary ? null : n,
+    // #1875 D5″ — 나가기의 갈래를 정하는 값. 화면이 이걸로 «그냥 나가기»와 «넘기고 나가기»를 갈라 그린다.
+    //  primary 는 명부가 없어 셀 것도 없다(박스 로그인 = 접근).
+    owner_count: isPrimary ? null : (ownerCount ?? null),
     pending_invites: pending,
     kind_effective: isPrimary ? "team" : kindEffective(n),
   };
@@ -70,6 +75,30 @@ async function requireOwner(ws: RegistryWorkspace, memberId: string): Promise<vo
   if (ws.owner_member === memberId) return;
   if ((await getWorkspaceMemberRole(ws.id, memberId)) === "owner") return;
   throw new HttpError(403, "이 워크스페이스의 owner 만 할 수 있습니다");
+}
+
+/**
+ * 나가기 거절을 사람 말로 옮긴다(#1875 D5\u2033). ★ `needs-transfer` 는 **후보 명단을 함께 싣는다** —
+ *  화면이 "넘길 사람을 고르세요" 드롭다운을 그 자리에서 그릴 수 있어야 하고, 아니면 사람은
+ *  «안 된다»만 듣고 다음에 뭘 해야 하는지 모른 채 멈춘다([[ui-question-needs-answerable-control]]).
+ */
+function leaveRefusal(plan: Exclude<LeavePlan, { ok: true }>, wsName: string): HttpError {
+  switch (plan.reason) {
+    case "primary":
+      return new HttpError(400, "primary 는 명부가 없습니다 — 박스 멤버 전원이 접근합니다");
+    case "not-member":
+      return new HttpError(403, "이 워크스페이스의 구성원이 아닙니다");
+    case "alone":
+      return new HttpError(400, "혼자 쓰는 워크스페이스입니다 — 나가기 대신 보관(workspace_delete)하세요");
+    case "bad-transfer":
+      return new HttpError(400, "주인을 넘길 사람이 이 워크스페이스의 구성원이 아닙니다(자기 자신에게는 넘길 수 없습니다)");
+    case "needs-transfer": {
+      const err = new HttpError(400,
+        `'${wsName}' 의 관리자가 나 하나뿐이라 그냥 나갈 수 없습니다 — transfer_to 로 넘길 분을 정해 주세요.`);
+      (err as HttpError & { candidates?: string[] }).candidates = plan.candidates;
+      return err;
+    }
+  }
 }
 
 async function findWs(slugRaw: unknown): Promise<RegistryWorkspace> {
@@ -106,7 +135,7 @@ const managedMode = (): boolean => !!(process.env.LIVELY_TENANT_HEADER_SECRET ||
 const cpWsView = (w: CpWorkspace) => ({
   slug: w.slug, name: w.name, kind: w.kind, state: "active", role: w.role,
   is_primary: false, created_at: null,
-  member_count: w.member_count, pending_invites: w.pending_invites,
+  member_count: w.member_count, owner_count: w.owner_count, pending_invites: w.pending_invites,
   kind_effective: w.kind,
   // 매니지드 전용 — 화면이 이 값이 있으면 '전환'이 아니라 '이동'으로 다룬다.
   enter_url: w.enter_url, id: w.id, tenant_state: w.tenant_state, is_current: w.is_current,
@@ -149,13 +178,16 @@ export const workspaceRegistryCapabilities: Capability[] = [
       // #1875 — 인원 수를 한 번에 세어 함께 보낸다. 스위처 배지가 이 값에서 나오므로(파생 kind),
       //  목록과 배지가 서로 다른 시점의 사실을 말하는 일이 없다.
       const counts = await memberCounts(rows.map((w) => w.id));
+      // #1875 D5″ — 어드민 수도 함께. 화면이 ✕ 를 그리기 전에 «그냥 나가지나, 넘겨야 하나»를 알아야
+      //  «눌렀더니 안 되더라» 가 안 된다. 인원 수와 같은 배치 조회라 n+1 이 늘지 않는다.
+      const owners = await ownerCounts(rows.map((w) => w.id));
       // 나에게 온 보류 초대 — **내 이메일** 기준이라 지금 어느 워크스페이스에 있든 보인다.
       //  이게 없으면 초대받은 사람이 자기 화면에서 초대를 볼 방법이 없다(종전: 링크를 따로 받아야 했다).
       const me = await getMember(id);
       const inbox = me?.email ? await listInvitesForEmail(String(me.email).toLowerCase()) : [];
       return {
         mode, current,
-        workspaces: rows.map((w) => wsView(w, counts.get(w.id) ?? 0)),
+        workspaces: rows.map((w) => wsView(w, counts.get(w.id) ?? 0, 0, owners.get(w.id) ?? 0)),
         invites_for_me: inbox.map((i) => ({
           id: i.id, workspace_slug: i.workspace_slug, workspace_name: i.workspace_name,
           role: i.role, invited_by: i.invited_by, created_at: i.created_at,
@@ -243,15 +275,35 @@ export const workspaceRegistryCapabilities: Capability[] = [
     }),
 
   restWork("workspace_delete", "워크스페이스 보관(삭제)",
-    "워크스페이스를 보관(archive)한다(owner 전용) — 스위처·접근에서 사라지지만 **데이터는 지우지 않는다**" +
-    "(복구는 관리자가 등록부 state 를 되돌리면 된다. 물리 삭제는 v1 범위 밖 — 파괴 반경이 워크스페이스 전체라 사람 손으로만). primary 는 보관할 수 없다.",
+    "워크스페이스를 보관(archive)한다 — 스위처·접근에서 사라지지만 **데이터는 지우지 않는다**" +
+    "(복구는 관리자가 등록부 state 를 되돌리면 된다. 물리 삭제는 v1 범위 밖 — 파괴 반경이 워크스페이스 전체라 사람 손으로만). " +
+    "**나 혼자 있는 워크스페이스만 보관할 수 있다**(owner 전용, #1875 D5'): 함께 쓰는 사람이 있으면 보관은 막히고 " +
+    "`workspace_leave`(나가기)만 열린다 — 보관은 남은 사람들의 접근까지 함께 끊기 때문이다. primary 는 보관할 수 없다.",
     [{ method: "POST", paths: ["/api/ui/me/workspaces/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      if (managedMode()) {
+        //  #1875 D5″ — 매니지드에선 삭제도 CP 가 판정한다(소유자·인원수·프로비저닝 해제).
+        //   ⚠ **requireRegistry() 앞**이어야 한다 — 뒤면 매니지드는 그 자리에서 400 으로 끊긴다(#2188 E2).
+        //   대상은 slug 가 아니라 workspace_id 다(CP 의 키) — 화면이 목록에서 받은 값을 그대로 준다.
+        const t = await resolveCpTarget(user);
+        await callCp(t!, "/api/tenant/workspace-delete", { workspace_id: String(input.slug ?? "") });
+        return { archived: String(input.slug ?? "") };
+      }
       requireRegistry();
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary(기존 박스 워크스페이스)는 보관할 수 없습니다");
       await requireOwner(ws, id);
+      // #1875 D5' (2026-08-27, 장원준) — **함께 쓰는 사람이 있으면 치우는 조작은 없다. 나가기만 있다.**
+      //  보관은 «내 목록에서 숨기기»가 아니라 등록부 state 를 내리는 것이라 **모두의 접근이 끊긴다**.
+      //  owner 라는 자격이 남의 자료를 남의 동의 없이 닫을 권한까지 주지는 않는다는 것이 이 결정이다.
+      //  판정은 역할이나 저장된 kind 가 아니라 **지금 인원수**다(#1875 D1 과 같은 축).
+      const n = await countWorkspaceMembers(ws.id);
+      if (n >= 2) {
+        throw new HttpError(400,
+          `함께 쓰는 분이 ${n - 1}명 있어 이 워크스페이스는 보관할 수 없습니다 — ` +
+          "나만 빠지려면 workspace_leave(나가기)를 쓰고, 치우려면 구성원이 모두 나간 뒤에 하세요.");
+      }
       await archiveWorkspace(ws.id);
       // 보관된 워크스페이스로 가는 초대는 갈 곳이 없다 — 함께 거둬야 받는 사람 화면에 유령이 남지 않는다.
       const revoked = await revokeInvitesForWorkspace(ws.id, actorOf(user));
@@ -295,13 +347,52 @@ export const workspaceRegistryCapabilities: Capability[] = [
       await requireOwner(ws, id);
       const memberId = String(input.member_id ?? "").trim();
       if (!memberId) throw new HttpError(400, "member_id 가 필요합니다");
-      if (memberId === ws.owner_member) throw new HttpError(400, "만든 사람(owner)은 뺄 수 없습니다 — 워크스페이스를 보관하세요");
+      // #1875 D5' — 종전 안내("워크스페이스를 보관하세요")는 이제 거짓이다: 팀은 보관 자체가 막힌다.
+      if (memberId === ws.owner_member) throw new HttpError(400,
+        "만든 사람(owner)은 뺄 수 없습니다 — 구성원이 모두 나간 뒤에 보관할 수 있습니다");
       await removeWorkspaceMember(ws.id, memberId);
       const n = await countWorkspaceMembers(ws.id);
       return { workspace: ws.slug, members: await listWorkspaceMembers(ws.id), member_count: n, kind_effective: kindEffective(n) };
     }, {
       slug: z.string().describe("팀 워크스페이스 slug"),
       member_id: z.string().describe("뺄 멤버 id"),
+    }),
+
+  restWork("workspace_leave", "워크스페이스 나가기",
+    "함께 쓰는 워크스페이스에서 **나 하나만** 빠진다(#1875 D5') — 워크스페이스와 그 안의 지식·프로젝트는 그대로 남는다. " +
+    "보관(workspace_delete)과 **서로 배타**다: 인원이 2명 이상이면 보관이 막히고 이것만 열리며, 혼자면 반대다. " +
+    "갈래는 **어드민 수**가 정한다(#1875 D5\u2033, planWorkspaceLeave): 어드민이 아니거나 여럿이면 그냥 나가고, " +
+    "**어드민이 나뿐이면 `transfer_to` 로 넘길 사람을 지정해야** 나간다(안 주면 400 과 함께 후보 명단을 돌려준다). " +
+    "내가 «만든 사람»인데 공동 어드민이 있으면 그 자리는 자동 승계된다. 다시 들어오려면 owner 의 초대를 받아야 한다.",
+    [{ method: "POST", paths: ["/api/ui/me/workspaces/leave"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = requireMember(user);
+      if (managedMode()) {
+        //  #1875 D5″ — 갈래 판정(어드민 수·이양)은 CP 의 leaveWorkspace 가 한다. 코어는 묻고 전달만 한다.
+        const t = await resolveCpTarget(user);
+        await callCp(t!, "/api/tenant/workspace-leave", {
+          workspace_id: String(input.slug ?? ""),
+          transfer_to: typeof input.transfer_to === "string" ? input.transfer_to : "",
+        });
+        return { left: String(input.slug ?? ""), transferred_to: input.transfer_to ?? null };
+      }
+      requireRegistry();
+      const ws = await findWs(input.slug);
+      const members = await listWorkspaceMembers(ws.id);
+      // 갈래 판정은 **한 벌**이다(registry.planWorkspaceLeave) — 여기서 다시 세면 화면과 서버가 갈린다.
+      const plan = planWorkspaceLeave({
+        me: id, ownerMember: ws.owner_member, isPrimary: ws.id === PRIMARY_TENANT_ID,
+        members, transferTo: typeof input.transfer_to === "string" ? input.transfer_to : null,
+      });
+      if (!plan.ok) throw leaveRefusal(plan, ws.name);
+      // 넘길 사람이 정해졌으면 **먼저** 넘긴다 — 순서를 뒤집으면 넘기기가 실패했을 때 주인 없는 팀이 남는다.
+      if (plan.transferTo) await transferWorkspaceOwner(ws.id, plan.transferTo);
+      await removeWorkspaceMember(ws.id, id);
+      const left = await countWorkspaceMembers(ws.id);
+      return { left: ws.slug, transferred_to: plan.transferTo, member_count: left, kind_effective: kindEffective(left) };
+    }, {
+      slug: z.string().describe("나갈 워크스페이스 slug"),
+      transfer_to: z.string().optional().describe("주인을 넘길 구성원 member_id — 어드민이 나뿐일 때만 필요하고, 그때는 필수다"),
     }),
 
   // ── #1875 구성원 초대 ─────────────────────────────────────────────────────
@@ -332,8 +423,11 @@ export const workspaceRegistryCapabilities: Capability[] = [
           member_count: r.members.length,
           kind_effective: r.workspace.kind,
           can_invite: isOwner,
+          //  ⚠ 매니지드의 사람 축은 **이메일**이다(CP 계정). member_id 자리에 이메일이 들어가는 이유다.
+          //   #1875 D5″ — is_me 를 그대로 흘린다: 화면이 «넘길 사람» 후보에서 나를 뺄 때, 셀프호스트의
+          //   member_id 비교는 여기서 통하지 않는다(내 core member_id ≠ 내 이메일).
           members: r.members.map((m) => ({ member_id: m.email, role: m.role, email: m.email,
-            display_name: m.name, is_creator: m.role === "owner" })),
+            display_name: m.name, is_creator: m.role === "owner", is_me: m.is_me })),
           pending: isOwner ? r.pending.map((pi) => ({ id: pi.email ?? "", email: pi.email, role: "member",
             invited_by: null, created_at: pi.expires_at })) : [],
           // 매니지드는 '이 박스의 사람' 이라는 후보 개념이 없다 — 초대는 **이메일로** 부른다.
