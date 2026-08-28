@@ -2227,23 +2227,26 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   //  ⚠ 설정 미리 쓰기(theme·trust)로 물음 자체를 없애는 안은 실측(2.1.250)에서 theme 만으론 «글자 스타일» 이 그대로 뜨고,
   //   hasCompletedOnboarding 까지 쓰면 로그인 흐름 없이 «Not logged in» 입력칸에 떨어져 보류 — 그래서 between 은 «나올 수 있어요».
   const AI_GUIDE = {
+    //  ★ 2026-08-28 저녁 — claude 도 **이 자리에서** 끝난다(상민님 지시, LOGIN_INLINE.claude): 서버가 `claude auth login` 을 대신 돌리고
+    //   주소가 이 자리에 뜨며, 브라우저가 준 코드를 이 자리 입력칸에 넣는다. 그래서 «창 조작» 걸음은 없고, 첫 실행 설정(글자 스타일·
+    //   보안 안내·폴더 신뢰)은 **첫 세션으로 미뤄진다** — 없어지는 게 아니므로 between 에 적고, 화면별 답은 펼침에 둔다.
     claude: {
-      help: '로그인 창에서 직접 하실 일은 세 가지뿐이에요.',
+      help: '직접 하실 일은 세 가지뿐이에요.',
       steps: [
-        `위의 ${kbd('Claude 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열려요(«Welcome to Claude Code»).`,
-        `창에 뜨는 <b>긴 주소</b>를 열어 Claude 계정으로 로그인하고 <b>Authorize</b>(허용)를 누르면 코드가 나와요. 그 코드를 창의 <b>Paste code here if prompted &gt;</b> 자리에 붙여넣고(⌘V) <b>Enter</b>.`,
-        `창에 글을 치는 입력칸(<b>&gt;</b> 표시)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}.`,
+        `위의 ${kbd('Claude 로그인 시작')}을 누르면 이 자리에 <b>주소</b>가 나와요.`,
+        `그 주소를 열어 <b>Claude(Anthropic) 계정</b>으로 로그인하고 <b>Authorize</b>(허용)를 누르면 브라우저에 <b>코드</b>가 나와요(«Paste this code back into Claude Code»). 그 코드를 복사해 <b>이 자리 입력칸</b>에 붙여넣고 ${kbd('넣기')}.`,
+        `이 자리에 «로그인이 끝났어요» 가 뜨면 아래 ${kbd('로그인했어요')}.`,
       ],
-      between: `그 사이에 <b>글자 스타일 · 로그인 방법 · 보안 안내 · 폴더 신뢰</b>를 묻는 화면이 나올 수 있어요. 라이블리가 준비한 창이라 전부 그대로 <b>Enter</b> 로 넘기면 됩니다.`,
-      more: '화면마다 자세히 보기',
+      between: `<b>첫 세션에서 물음이 몇 개 더 나와요</b> — 글자 스타일 · 보안 안내 · «이 폴더를 믿나요». Claude Code 가 로그인과 별개로 처음 한 번 묻는 것이고, 라이블리가 만든 작업 폴더라 전부 그대로 <b>Enter</b>(폴더는 «Yes, proceed»)로 넘기면 됩니다.`,
+      more: '어떤 물음인지 보기',
       detail: [
         `<b>Choose the text style that looks best with your terminal</b>(글자 스타일) — 아무거나. 기본 «2. Dark mode», 창이 밝으면 «3. Light mode». ↑ ↓ 로 맞추고 Enter.`,
-        `<b>Select login method:</b> — <b>Claude account with subscription · Pro, Max, Team, or Enterprise</b>(내 구독 계정)에 «❯» 가 있는 채로 Enter. 회사 API 콘솔 계정이면 두 번째 «Anthropic Console account».`,
-        `<b>Browser didn't open? Use the url below to sign in (c to copy)</b> — 이 창은 우리 서버에서 돌아서 브라우저가 저절로 안 열려요. 그 주소를 누르거나 키보드 <b>c</b> 로 복사해 브라우저 주소창에 붙여 여세요.`,
-        `<b>Login successful. Press Enter to continue…</b> → Enter. 이어서 <b>Security notes</b>(안내), <b>Use Claude Code's terminal setup?</b>(터미널 설정), <b>Do you trust the files in this folder?</b>(이 폴더를 믿나요 — «Yes, proceed»)가 나오면 각각 Enter. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
-        `첫 실행 안내 없이 바로 입력칸이면(이미 켜져 있던 창) ${cp('/login')} 을 붙여넣고 Enter 한 뒤 2번부터 하시면 됩니다.`,
+        `<b>Security notes</b>(안내) · <b>Use Claude Code's terminal setup?</b>(터미널 설정) — 각각 Enter.`,
+        `<b>Do you trust the files in this folder?</b>(이 폴더를 믿나요) — «Yes, proceed» 에서 Enter. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
+        `구독 계정(Pro·Max·Team)이면 그대로, 회사 API 콘솔 계정이면 그 계정으로 로그인하시면 됩니다.`,
+        PASTE_NOTE,
       ],
-      note: CLI_NOTE },
+      note: '' },
     codex: {
       help: '직접 하실 일은 세 가지뿐이에요. 코드는 눌러서 복사돼요.',
       steps: [
