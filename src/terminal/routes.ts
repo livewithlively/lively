@@ -366,9 +366,9 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     const member = String((req.body ?? {} as Record<string, unknown>).member ?? "").trim();
     if (!member) throw new HttpError(400, "member(구성원 id)가 필요합니다");
     if (!(await listMembers().catch(() => [])).some((m) => m.id === member)) throw new HttpError(400, "존재하지 않는 구성원입니다");
-    // #549 후속: admin 이 명시 opt-in(includeControlPlane) 하면 관리 권한(admin/runtime)도 프로필 토큰에 싣는다(멤버 scope 가 상한).
-    const includeControlPlane = !!((req.body ?? {}) as Record<string, unknown>).includeControlPlane;
-    const { slug, dir } = await provisionProfile(member, { includeControlPlane });
+    // #2174 — 프로필 토큰은 **멤버 추종**으로 굽는다(세션 권한 = 멤버 권한). 종전의 includeControlPlane opt-in 은
+    //  사라졌다 — 옛 화면이 그 필드를 계속 보내도 무시된다(무해).
+    const { slug, dir } = await provisionProfile(member);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, member, slug, dir, status: await profileStatusFor(member),
       loginHint: `로그인(그 멤버 계정): 웹터미널에서 'CLAUDE_CONFIG_DIR=${dir} claude' 실행 후 /login` });
@@ -382,8 +382,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     if (!(await listMembers().catch(() => [])).some((m) => m.id === member)) throw new HttpError(400, "존재하지 않는 구성원입니다");
     const os = await memberOsStatus(member);
     if (!os.ready) throw new HttpError(409, "격리 인프라 미설치 — 박스에서 install-isolation.sh 를 먼저 실행하세요(box-spawn·sudoers·그룹).");
-    const includeControlPlane = !!((req.body ?? {}) as Record<string, unknown>).includeControlPlane;
-    const { slug, osUser } = await provisionMemberOs(member, { includeControlPlane });
+    // #2174 — 추종 토큰이라 opt-in 이 없다(위 provision 라우트와 같다). 옛 화면의 필드는 무시된다.
+    const { slug, osUser } = await provisionMemberOs(member);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, member, slug, osUser, os: await memberOsStatus(member),
       loginHint: `이제 이 멤버가 자기 새 세션에서 'claude' → /login 하면 자격증명이 /home/${osUser}/.claude(700)에 격리 저장됩니다.` });
