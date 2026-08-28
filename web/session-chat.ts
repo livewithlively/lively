@@ -332,7 +332,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let fontStep = parseFontStep(localStorage.getItem(CHAT_FONT_KEY));   // 글자 크기(#2055) — 지난번에 고른 값
 
   /** 이 세션은 대화창이 기본인가 — codex app-server 세션(pane 이 셸이라 터미널엔 말 걸 곳이 없다). */
-  const chatFirst = (): boolean => String(target.raw?.chatMode || '') === 'app-server';
+  // #2055 — 이 세션의 대화가 app-server 에서 도나(= 대화창이 본자리, pane 은 셸).
+  //  ⚠ **모를 때 터미널로 추정하지 않는다.** 서버가 chatMode 를 실어 주지만 직접 주소(#/s/<id>)로 연 첫 순간처럼
+  //   아직 행이 얇을 수 있다. 종전엔 그때 터미널로 열었다가 목록 갱신이 오면 대화로 되돌려서, 사람 눈에는
+  //   «터미널이 몇 초 뜨다가 대화창으로 넘어가는» 화면이 됐다(2026-08-28 상민님 신고).
+  //   codex 는 이 배포의 기본이 app-server 이므로(codex-chat-mode.ts), 모르면 codex 를 대화로 본다 —
+  //   틀렸다면(tmux 로 끈 배포) 행이 오는 즉시 아래 update() 가 터미널로 돌린다. 어느 쪽으로 틀려도 한 번만 바뀌는데,
+  //   **빈 셸을 먼저 보여주는 쪽이 사람에게 더 나쁘다**(말 걸 곳이 없는 화면이다).
+  const chatFirst = (): boolean => {
+    const m = String(target.raw?.chatMode || '');
+    if (m) return m === 'app-server';
+    return String(target.raw?.harness || '') === 'codex';
+  };
 
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
@@ -1495,6 +1506,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const hadLive = !!live;
       ensureLive();
       if (!hadLive && live && !modeChosen && mode === 'term') setMode('chat');
+      // 반대 방향도 마감한다 — 위 추정(모르면 codex=대화)이 틀린 배포(tmux 로 끈 곳)에서는 행이 오는 즉시 터미널로.
+      if (!modeChosen && mode === 'chat' && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
