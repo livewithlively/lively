@@ -1600,9 +1600,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const otherNote = others.length
           ? `<p class="ob-note">지금은 ${esc(others.join(' · '))}${josa(others[others.length - 1], 0)} 연결돼 있어요. ${picked}${josa(S.ai, 1)} 연결하지 않으셔도 제 분석은 그걸로 돌아갑니다.</p>`
           : '';
-        const skip = `<button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`;
         const goOther = `<button class="ob-btn ob-btn-sub" data-other>다른 AI 고르기</button>`;
+        //  #2232 — [이대로 계속]과 [나중에 할게요]는 결국 같은 곳으로 간다(원준님). 다른 AI 가 이미 연결돼 있으면 «이대로 계속» 하나만,
+        //   아무것도 없으면 «나중에 할게요» 하나만 보인다.
         const keepBtn = (others.length || S.aiConnected) ? `<button class="ob-btn ob-btn-sub" id="cKeep">이대로 계속</button>` : '';
+        const skip = keepBtn ? '' : `<button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`;
         //  #2232 — 이름을 아직 안 주신 분에게 «당신님» 이라고 부르던 자리(실측). 이름이 없으면 부르지 않는다.
         const lead = `연결해 두시면 제(리브)가 일할 때도 ${nick() ? `${esc(nick())}님의` : '쓰시던'} 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
 
@@ -1712,6 +1714,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
           const c = await checkAi();
           if (c && c.loggedIn === true) return pass(AI_LABEL[c.harness] || S.ai, c.harness);
+          //  #2232 — 서버가 «모름»(null: 프로브를 못 돌림·자리에 CLI 없음)이면 사람을 가두지 않는다. 로그인했다는 말을 믿고 넘어간다 —
+          //   분석은 서버가 실제 로그인된 하네스로 고르므로(resolveHeadlessHarness) 여기서 믿어도 거짓 실행은 안 난다.
+          if (c && c.installed !== false && c.loggedIn === null) { toast('서버가 로그인을 직접 확인하진 못했지만, 말씀대로 진행할게요.'); return pass(AI_LABEL[c.harness] || S.ai, c.harness); }
           renderScene('claude', false);
           const e2 = $('#cErr', el);
           if (e2 && c && c.installed === true && c.loggedIn === false) {
