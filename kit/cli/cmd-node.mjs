@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync
 import { homedir, hostname } from "node:os";
 import { join, dirname, win32 as pwin, posix as pposix } from "node:path";
 import { createHash } from "node:crypto";
-import { createHostEffects, entrypointHostEffects } from "./host-effects.mjs";
+import { createHostEffects, entrypointHostEffects, mergeWindowsRegistryPath } from "./host-effects.mjs";
 
 // lively.mjs 와 같은 계약(LIVELY_HOME 은 HOME 리다이렉트 — 샌드박스/테스트).
 const HOME = process.env.LIVELY_HOME || homedir();
@@ -358,7 +358,11 @@ function tmuxHelp() {
 // ── PATH 굽기 (#1541) — env 파일의 PATH 는 pane 안 하네스(claude 등)의 명령 해석 전부를 정한다. ──
 //  로그인 셸의 PATH 를 물어 현재 PATH 와 **합집합**으로 굽는다(순서: 로그인 셸 먼저 — 사용자가 rc 에서 정한
 //  우선순위 보존). 로그인 셸이 실패하면(비대화 환경·이상한 rc) 현재 PATH 그대로 — 종전보다 나빠지지 않는다.
-//  Windows 는 GUI 도 레지스트리(머신+사용자) PATH 를 받으므로 손대지 않는다.
+//  ⚠ Windows 도 **다시 읽는다**(#2172). 종전엔 "GUI 도 레지스트리(머신+사용자) PATH 를 받으므로 손대지 않는다"
+//   였는데, 그 전제는 **기동 시점에만** 참이다 — 프로세스는 그때의 환경 블록을 스냅샷으로 받고, 그 뒤 PATH 가
+//   바뀌어도(하네스를 나중에 깔거나, 오염된 PATH 를 정리하거나) `WM_SETTINGCHANGE` 를 처리하지 않는 Node 는
+//   영원히 모른다. 실측(2026-08-28 hammurabi): 사용자 PATH 를 고쳤는데도 상시구동 중이던 에이전트는 계속 옛
+//   PATH 로 하네스를 못 찾아 `["shell"]` 만 보고했다(런처가 옛 환경을 물려주면 재시작해도 같다).
 /** (순수 — 테스트 seam) 로그인 셸 PATH ∪ 현재 PATH ∪ 필수 항목. 빈 조각·중복 제거, 순서 보존. */
 export function mergePathDirs(loginPath, currentPath, extras, sep) {
   const out = [];
@@ -386,8 +390,25 @@ function loginShellPath() {
   }
   return paths.join(":");
 }
+/** 윈도우 레지스트리 PATH(HKCU·HKLM) — 못 읽으면 null. `reg.exe` 는 System32 동봉이라 빈약한 PATH 에서도 절대경로로 잡힌다. */
+function winRegistryPath(hive, key) {
+  try {
+    const reg = join(process.env.SystemRoot || "C:\\Windows", "System32", "reg.exe");
+    const out = execFileSync(reg, ["query", hive, "/v", key], { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] });
+    // `    Path    REG_EXPAND_SZ    C:\a;C:\b` — 값 이름·타입 뒤의 나머지가 전부 값이다(값에 공백이 흔하다).
+    const m = new RegExp(`^\\s*${key}\\s+REG_(?:EXPAND_)?SZ\\s+(.*)$`, "mi").exec(out);
+    if (!m) return null;
+    // %USERPROFILE% 같은 확장 토큰을 편다 — 안 펴면 그 항목이 통째로 죽는다.
+    return m[1].trim().replace(/%([^%]+)%/g, (whole, name) => process.env[name] ?? whole);
+  } catch { return null; }
+}
 function bakedNodePath() {
-  if (process.platform === "win32") return process.env.PATH || "";
+  if (process.platform === "win32") {
+    // 레지스트리를 다시 읽어 지금 프로세스 PATH 와 합집합(머리말 참조). 둘 다 못 읽으면 종전 그대로.
+    const machine = winRegistryPath("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "Path");
+    const user = winRegistryPath("HKCU\\Environment", "Path");
+    return mergeWindowsRegistryPath(machine, user, process.env.PATH || "");
+  }
   // ~/.lively/bin 은 항상 넣는다 — pane 안에서 `lively` 자신이 잡혀야 안내 문구("lively node …")가 실행 가능하다.
   return mergePathDirs(loginShellPath(), process.env.PATH || "", [join(HOME, ".lively", "bin")], ":");
 }

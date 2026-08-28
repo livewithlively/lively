@@ -113,8 +113,12 @@ ok(/node:\s*nodeKey/.test(codeOnly), "E4 고른 값을 기억에 되쓰는 것�
 
 // ── W. 배선 — 빈 목록 문구가 둘로 갈리나, 셸 판정이 한 곳인가 ────────────────
 //  값(규칙)이 맞아도 화면이 여전히 '지난번 설정 그대로'만 말하면, 왜 못 고르는지는 화면에서 답을 못 얻는다.
-ok(/harnesses\.length \? '이 컴퓨터엔 AI 가 없어요' : '지난번 설정 그대로'/.test(codeOnly),
-  "W1 고를 것이 없을 때 — 카탈로그를 받았으면 'AI 가 없어요', 못 받았으면 '지난번 설정 그대로'");
+ok(/harnesses\.length \? 'AI 를 못 찾았어요' : '지난번 설정 그대로'/.test(codeOnly),
+  "W1 고를 것이 없을 때 — 카탈로그를 받았으면 'AI 를 못 찾았어요', 못 받았으면 '지난번 설정 그대로'");
+//  #2172 실측 — 그 PC 에 AI 가 깔려 있어도 PATH 를 못 물려받으면 탐지가 빈손이 된다. 화면이 '없다'고
+//  단정하면 사람이 설치를 다시 하러 간다. 단정하는 문구가 다시 들어오면 여기서 잡는다.
+ok(!/AI 가 없어요/.test(codeOnly), "W1b 없다고 단정하는 문구를 쓰지 않는다");
+ok(/provSel\.title = harnesses\.length/.test(codeOnly), "W1c 왜 못 찾았는지 확인할 거리를 title 로 남긴다");
 ok(/const isAiHarness = \(key: string\): boolean => key !== 'shell'/.test(codeOnly),
   "W2a 셸 제외 판정이 이름 붙은 한 곳에 있다");
 ok(/filter\(\(h\) => isAiHarness\(h\.key\)/.test(codeOnly) && /harnesses\.some\(isAiHarness\)/.test(codeOnly),
