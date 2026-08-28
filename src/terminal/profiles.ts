@@ -13,7 +13,7 @@ import { mintToken, listTokens, revokeToken } from "../org/store/tokens.js";   /
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug } from "./terminal-isolation.js";
-import { memberSh } from "./terminal-member-fs.js";
+import { memberSh, memberShOut } from "./terminal-member-fs.js";
 import { memberExecConfigured } from "./terminal-isolation.js";   // #2148 — 중계 배포에는 멤버 OS 계정이 없다(아래 memberOsStatus)
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
@@ -348,7 +348,7 @@ export interface AiLoginCheck {
 }
 
 // `sh -c` 한 줄을 이 사람의 실행 자리에서 돌린다. 격리면 box_ 로 drop-priv(중계 배포면 그 노드), 아니면 게이트웨이 로컬.
-//  ⚠ 격리에서 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberFileExists
+//  ⚠ 격리에서 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberLoggedInHarnesses
 //   머리말과 같은 함정), agy 는 자격을 HOME 기준으로 찾으므로 그 한 글자에 판정이 통째로 뒤집힌다.
 //  반환: true=exit 0 · false=exit≠0 · null=상한 초과/실행 자체 실패(=모름).
 //  ⚠ **stdin 을 반드시 닫는다**(`< /dev/null`). execFile 은 자식에게 stdin 파이프를 주고 **EOF 를 안 보내는데**,
@@ -425,34 +425,36 @@ export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLog
   return out;
 }
 
-// box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
-//  '존재'만 확인(내용은 안 봄). exit0=있음. 미프로비저닝/에러=false.
-//  memberSh(=memberSpawn seam)를 탄다 — 원격 중계 배포(LIVELY_MEMBER_EXEC)에서도 이 판정이 실행 노드에서
-//  돌아야 한다(로그인 판정이 게이트웨이 로컬 fs 를 보면 항상 false = #1471 부류의 거짓 '미로그인').
-//  경로는 $HOME 이 아니라 명시 /home/<osUser> — 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르다.
-async function memberFileExists(osUser: string, rel: string): Promise<boolean> {
-  try {
-    await memberSh(osUser, `test -f "/home/${osUser}/${rel}"`);
-    return true;
-  } catch { return false; }
-}
 // box_ 홈의 파일 삭제(로그아웃) — 같은 drop-priv 경계. rm -f 라 없는 파일에도 성공(멱등).
 async function memberFileRemove(osUser: string, rel: string): Promise<void> {
   await memberSh(osUser, `rm -f "/home/${osUser}/${rel}"`);
 }
 // box_ 홈에 자격 파일이 있는 하네스들(#1884) — 종전 `memberClaudeLoggedIn` 은 claude 파일만 봐서, codex 로만 로그인한
 //  멤버는 memberOsStatus.loggedIn=false → 컨트롤플레인 T9 관문(자율 파이프라인 가동)이 영영 안 열렸다. 표(HARNESS_CRED)의
-//  하네스를 전부 본다(drop-priv 존재확인 n회 — 세션 생성 경로가 아니라 상태 조회라 비용은 무시할 만하다).
+//  하네스를 전부 본다.
+//
+//  ⚠ **한 번의 왕복으로 전부 본다.** 종전 판은 하네스마다 `await memberFileExists` 를 순차로 걸었다. 로컬 격리에서는
+//   drop-priv 한 번이라 싸지만, **중계 배포(매니지드)에서는 한 번이 게이트웨이 → 허브 → 노드 → docker exec 이다.**
+//   실측 2026-08-28(프로덕션): 그래서 온보딩의 «ChatGPT 가 연결돼 있는지 확인하고 있어요…» 와 [로그인했어요] 가
+//   **10초 넘게** 걸렸다 — 사람은 그 사이 로그인이 안 된 줄 안다. 표가 늘어날수록 더 느려지는 모양이라 접는다.
+//   (키·경로는 우리 표의 리터럴이고 osUser 는 슬러그라 셸 주입 여지가 없다.)
+//  ⚠ 왜 게이트웨이 로컬 fs 를 안 보나: 게이트웨이는 멤버 700 홈을 '읽지' 못하고(격리의 본질), 중계 배포에서는
+//   그 홈이 **게이트웨이가 아니라 실행 노드**에 있다. 로컬에서 보면 늘 false = #1471 부류의 거짓 '미로그인'이다.
+//   경로도 $HOME 이 아니라 명시 /home/<osUser> 다 — 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르다.
 async function memberLoggedInHarnesses(osUser: string): Promise<string[]> {
-  const out: string[] = [];
-  for (const [key, rel] of Object.entries(HARNESS_CRED)) if (await memberFileExists(osUser, rel)) out.push(key);
-  return out;
+  const entries = Object.entries(HARNESS_CRED);
+  //  마지막 `true` 가 없으면 아무 파일도 없을 때 스크립트가 1 로 끝나 «중계 실패» 와 구분되지 않는다.
+  const script = entries.map(([key, rel]) => `[ -f "/home/${osUser}/${rel}" ] && echo ${key}`).join("\n") + "\ntrue";
+  try {
+    const seen = new Set((await memberShOut(osUser, script)).split(/\s+/).filter(Boolean));
+    return entries.map(([key]) => key).filter((key) => seen.has(key));
+  } catch { return []; }   // 중계가 안 되면 «없다» 가 아니라 판정 불가 — 상위(judgeMemberOs)가 그 뜻으로 읽는다
 }
 // box_ 홈 dir 존재 — **OS 유저와 별개**로 본다. 홈 부모(/home)는 755 라 게이트웨이가 stat 할 수 있고
 //  (내용은 700 이라 여전히 못 읽는다), 이 한 비트가 아래 '고아 홈' 판정의 유일한 근거다.
 async function memberHomeExists(osUser: string): Promise<boolean> {
   // 중계 배포(매니지드)는 홈이 **게이트웨이가 아니라 실행 노드**에 있다 — 로컬 stat 은 늘 false 다
-  //  (memberFileExists 머리말과 같은 함정). 자격 확인과 같은 자리에서 본다.
+  //  (memberLoggedInHarnesses 머리말과 같은 함정). 자격 확인과 같은 자리에서 본다.
   if (memberExecConfigured()) {
     try { await memberSh(osUser, `test -d "/home/${osUser}"`); return true; } catch { return false; }
   }
@@ -509,7 +511,7 @@ export async function memberOsStatus(memberId: string): Promise<MemberOsStatus> 
   // ★ 중계 배포(매니지드)에는 **멤버 OS 계정이 아예 없다** — 중계는 테넌트 tmux 컨테이너로 나가고 그 안의 uid 는
   //  테넌트다(member-exec-relay 머리말: "컨테이너 안엔 멤버 계정이 없어 uid 는 테넌트다"). 즉 provisioned 는
   //  구조적으로 영원히 false 인데, 종전엔 그걸 자격 확인의 **전제**로 삼아 로그인이 영영 안 보였다.
-  //  자격 확인 자체는 경로만 있으면 되므로(memberFileExists 는 중계를 탄다) 중계가 있으면 그냥 돌린다.
+  //  자격 확인 자체는 경로만 있으면 되므로(자격 확인은 중계를 탄다) 중계가 있으면 그냥 돌린다.
   const credChecked = provisioned || memberExecConfigured();
   const loggedInHarnesses = credChecked ? await memberLoggedInHarnesses(osUser) : [];
   const credExists = loggedInHarnesses.length > 0;
