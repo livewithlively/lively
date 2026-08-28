@@ -5,7 +5,7 @@
 //  gitlab_pat 의 scope_key 는 **호스트**다(회사 GitLab 이 여럿일 수 있다) — 수집기 host 와 맞는 슬롯을 고르고,
 //  host 가 비어 있으면 슬롯의 호스트를 수집기 host 로 쓴다.
 import { GATEWAY_OWNER, listMemberSecretsPublic, resolveMemberSecret, type MemberSecretPublic } from "./member-secret-store.js";
-import { bearerOf } from "../repo-discover.js";
+//  ⚠ repo-discover(bearerOf) 는 동적 import — 정적으로 물면 connectors/config → 여기 → repo-discover → oauth-broker → org/store → … → config 순환.
 
 export const GITLAB_TOKEN_KIND = "gitlab_pat";
 export interface GitlabTokenResolution { token?: string; host?: string; warning?: string }
@@ -21,6 +21,8 @@ export function pickGitlabSlot(rows: MemberSecretPublic[], host: string | undefi
 export interface GitlabVaultDeps {
   list: (owner: string) => Promise<MemberSecretPublic[]>;
   secret: (memberId: string | null, scopeKey: string, allowFallback: boolean) => Promise<string | null>;
+  /** 금고 값 → 헤더에 실을 토큰(묶음이면 access_token, 정적이면 그대로 — repo-discover.bearerOf 와 같은 규칙). */
+  bearer: (secret: string) => Promise<string>;
 }
 
 const CONNECT = "— [외부 앱 연결 ▸ GitLab]에서 개인 액세스 토큰(read_api)을 저장하세요";
@@ -45,10 +47,11 @@ export async function resolveGitlabTokenSource(
   const secret = await deps.secret(memberId, slot.scope_key, isOrg).catch(() => null);
   if (!secret) return { warning: `GitLab 토큰을 읽지 못했습니다(${owner}) ${CONNECT}` };
   const resolvedHost = String(host ?? "").trim().toLowerCase() || slot.scope_key.toLowerCase() || "gitlab.com";
-  return { token: bearerOf(secret), host: resolvedHost };
+  return { token: await deps.bearer(secret), host: resolvedHost };
 }
 
 export const gitlabVaultDeps: GitlabVaultDeps = {
   list: (owner) => listMemberSecretsPublic(owner),
   secret: async (memberId, scopeKey, allowFallback) => (await resolveMemberSecret(memberId, GITLAB_TOKEN_KIND, { scopeKey, allowFallback }))?.secret ?? null,
+  bearer: async (secret) => { const { bearerOf } = await import("../repo-discover.js"); return bearerOf(secret); },
 };
