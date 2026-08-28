@@ -1085,6 +1085,49 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return verdict;
   }
 
+  /** 팀 자료로 모으기(수집)가 짝인 앱 — 연결 성사 뒤 켜고(관리자), 해제 때 끈다. */
+  const COLLECT_OF = { slack: 'slack', notion: 'notion', gdrive: 'google', gmail: 'google', gcal: 'google' };
+  const isAdmin = () => { try { return (state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin')) === true; } catch (_) { return false; } };
+  /** 연결 해제 — [외부 앱 연결](v2/connect.ts)과 **같은 창구**다(계정 로그인 = oauth/disconnect · 토큰 = credential/delete).
+   *  #2232 — 종전엔 «연결됐어요» 카드가 잠겨 되돌릴 길이 없었다(원준님 2026-08-28: "마음이 바뀌어서 해제할 수도 있게").
+   *  관리자가 이 연결로 켠 팀 수집은 함께 끈다 — 연결이 없는데 «모으는 중» 으로 남으면 거짓 상태다. */
+  async function svcDisconnect(id) {
+    const svc = svcOf(id); if (!svc || !CONN) throw new Error('연결 상태를 아직 못 읽었어요. 잠시 뒤 다시 눌러 주세요.');
+    const oc = svc.oauth ? CONN.oauthMap.get(svc.oauth) : null;
+    const cred = svc.token ? CONN.credMap.get(svc.token) : null;
+    let did = false;
+    if (oc && oc.connected) { await api('/api/ui/me/oauth/disconnect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) }); did = true; }
+    if (cred && cred.has_secret) { await api('/api/ui/me/credential/delete', { method: 'POST', body: JSON.stringify({ kind: svc.token, scope_key: cred.scope_key || '' }) }); did = true; }
+    if (!did) throw new Error('해제할 연결을 찾지 못했어요. [외부 앱 연결]에서 확인해 주세요.');
+    const col = COLLECT_OF[id];
+    if (col && isAdmin()) { try { await api(`/api/ui/org/${col}/collect`, { method: 'POST', body: JSON.stringify({ enabled: false }) }); } catch (_) { /* 비치명 */ } }
+    const label = srcLabel(id);
+    S.connected = S.connected.filter((x) => x !== id);
+    S.decisions = S.decisions.filter((d) => d !== `${label} 연결`);
+    save(); renderSB();
+    await loadConn();
+  }
+  /** 지금 «연결 해제할까요?» 를 묻고 있는 앱(한 번에 하나). */
+  let unlinkAsk = null;
+  /** 연결된 앱 카드 — 잠긴 카드지만 **해제 문**은 열려 있다(인라인 확인 한 번). 두 장면(sources·connect)이 같이 쓴다. */
+  function doneCardHtml(id, label, icon, desc) {
+    const ask = unlinkAsk === id;
+    return `<div class="ob-opt-card ob-on ob-locked ob-done" data-done="1" data-conn="${esc(id)}"><span class="ob-oc-ic">${icon}</span><span><span class="ob-oc-t">${esc(label)}</span><span class="ob-oc-d">${ask ? '연결을 해제할까요? 저장된 로그인 정보가 지워져요.' : esc(desc)}</span></span>
+      <span class="ob-oc-act">${ask
+        ? `<button type="button" class="ob-oc-unlink ob-danger" data-unlink-go="${esc(id)}">해제</button><button type="button" class="ob-oc-unlink" data-unlink-no="1">아니요</button>`
+        : `<span class="v2-dot done" style="margin:0"></span><button type="button" class="ob-oc-unlink" data-unlink="${esc(id)}" title="이 앱 연결을 끊습니다">연결 해제</button>`}</span></div>`;
+  }
+  /** 해제 버튼 배선 — 장면이 자기 redraw 를 넘긴다. */
+  function wireUnlink(el, redraw) {
+    $$('[data-unlink]', el).forEach((b) => b.onclick = (e) => { e.stopPropagation(); unlinkAsk = b.dataset.unlink; redraw(); });
+    $$('[data-unlink-no]', el).forEach((b) => b.onclick = (e) => { e.stopPropagation(); unlinkAsk = null; redraw(); });
+    $$('[data-unlink-go]', el).forEach((b) => b.onclick = async (e) => {
+      e.stopPropagation(); const id = b.dataset.unlinkGo; b.disabled = true; b.textContent = '해제 중…';
+      try { await svcDisconnect(id); toast(`${srcLabel(id)} 연결을 해제했어요.`); }
+      catch (err) { toast((err && err.message) || '해제하지 못했어요.'); }
+      unlinkAsk = null; redraw();
+    });
+  }
   /** 지금 «글자 받아 오기»가 펼쳐진 앱. 한 번에 하나만 편다 — 한 번에 한 걸음이 이 화면의 규칙이다. */
   let tokOpen = null;
   /** 그 카드 아래에서 펼쳐지는 세 걸음. 발급처 주소·값의 생김새는 CRED_KINDS 에서 읽는다.
@@ -1111,10 +1154,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
 
   /* ══════════════ 장면 차례 ══════════════ */
-  const ORDER = ['name', 'stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'local', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
+  //  #2232 — 순서: 파일 → **AI 고르기·연결** → 외부 앱 → 내 컴퓨터(원준님 2026-08-28: "AI 골라서 연결하는 플로우가 먼저, 그 다음 외부 앱, 로컬은 그 다음").
+  const ORDER = ['name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
   const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
   const CHAT_FROM = STEP_OF.read;          // 여기부터 막3(채팅)
-  const QPROG = ['stage', 'role', 'files', 'sources', 'connect', 'ai', 'claude', 'terminal', 'local', 'app'];   // 막2 진행 눈금
+  const QPROG = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
   function qHead(prog, lead, title, help) {
@@ -1289,8 +1333,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         $('#upPick', el).append(pickBtn, fileIn);
         paintList();
         // 올린 것을 서버가 어떻게 세었는지 곧바로 읽어 온다 — 뒤 채팅이 쓸 숫자가 여기서 정해진다.
-        $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('sources'); };
-        $('[data-skip]', el).onclick = () => goScene('sources');
+        $('#fGo', el).onclick = () => { void loadWelcome(); startReading(); goScene('ai'); };
+        $('[data-skip]', el).onclick = () => goScene('ai');
       },
     },
     /* 앱 고르기 — 로컬 파일은 앞에서 받았으므로 '내 컴퓨터 폴더' 항목은 뺀다. */
@@ -1318,7 +1362,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const already = flat.filter((it) => connState(it.id) === 'on');
         const notYet = (it) => it.soon || connState(it.id) === 'blocked';
         const ic = (it) => BRAND[it.logo] || GLYPH[it.id] || '';
-        const doneCard = (label, icon) => `<button class="ob-opt-card ob-on ob-locked" data-done="1" aria-disabled="true"><span class="ob-oc-ic">${icon}</span><span><span class="ob-oc-t">${esc(label)}</span><span class="ob-oc-d">연결돼 있어요</span></span><span class="ob-oc-chk">✓</span></button>`;
+        const doneCard = (id, label, icon) => doneCardHtml(id, label, icon, '연결돼 있어요');
         //  아직 안 되는 곳 — **고를 수 없게 잠그고 그 사실을 적는다.** 고를 수 있게 두면 골랐는데 아무 일도 안 일어나고,
         //   그때 사람은 서비스가 고장 났다고 읽는다.
         const soonCard = (label, icon) => `<button class="ob-opt-card ob-locked ob-soon" aria-disabled="true" disabled title="아직 준비 중이에요"><span class="ob-oc-ic">${icon}</span><span><span class="ob-oc-t">${esc(label)}</span><span class="ob-oc-d">준비 중</span></span></button>`;
@@ -1328,7 +1372,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           '고르신 곳에 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요.')
           + (already.length ? `<p class="ob-q-fine" style="text-align:left;margin:0 0 14px">이미 연결된 곳이 있어요 — ${esc(already.map((it) => it.label).join(' · '))}. 다시 하실 필요 없습니다.</p>` : '')
           + rows.map((r) => `<p class="ob-opt-group">${esc(r.k)}</p><div class="ob-opt-grid">
-              ${r.items.map((it) => connState(it.id) === 'on' ? doneCard(it.label, ic(it))
+              ${r.items.map((it) => connState(it.id) === 'on' ? doneCard(it.id, it.label, ic(it))
                 : notYet(it) ? soonCard(it.label, ic(it))
                 : card(it.label, '', ic(it), S.sources.includes(it.id))).join('')}</div>`).join('')
           //  #2232 — 표에 없지만 **이 워크스페이스에 등록된 앱**(관리자가 등록한 MCP 커넥터). 종전엔 코드를 고쳐 표에
@@ -1336,7 +1380,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           //   목록을 보여 주고 있었다. 로고만 없을 뿐 연결하는 길은 같다.
           + (dynSvcs().length ? `<p class="ob-opt-group">그 밖에 연결할 수 있는 앱</p><div class="ob-opt-grid">
               ${dynSvcs().map((sv) => connState(sv.key) === 'on'
-                ? doneCard(sv.label, esc((sv.label || '?').slice(0, 1)))
+                ? doneCard(sv.key, sv.label, esc((sv.label || '?').slice(0, 1)))
                 : card(sv.label, '', esc((sv.label || '?').slice(0, 1)), S.sources.includes(sv.key))).join('')}</div>` : '')
           + (flat.some(notYet) ? `<p class="ob-q-fine" style="text-align:left;margin:2px 0 0">흐리게 보이는 앱은 아직 준비 중이에요. 열리면 [외부 앱 연결]에서 바로 연결하실 수 있어요.</p>` : '')
           + `<button class="ob-btn ob-btn-pri" id="srcGo" disabled>계속</button>
@@ -1362,8 +1406,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           c.classList.toggle('ob-on');
           S.sources = $$('.ob-opt-card.ob-on:not(.ob-locked)', el).map((x) => idOf(x.dataset.opt)).filter(Boolean); save(); renderSB(); sync();
         });
-        go.onclick = () => goScene(pickedIds().length ? 'connect' : 'ai');
-        $('[data-skip]', el).onclick = () => { S.sources = ['none']; save(); goScene('ai'); };
+        wireUnlink(el, () => renderScene('sources', false));
+        go.onclick = () => goScene(pickedIds().length ? 'connect' : 'terminal');
+        $('[data-skip]', el).onclick = () => { S.sources = ['none']; save(); goScene('terminal'); };
       },
     },
     /* ══ #1879 — 고른 곳을 **실제로** 잇는다. 이 동안 앞에서 받은 파일이 배경에서 읽힌다(대기 없음). ══
@@ -1406,9 +1451,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                 : unknown ? '연결 상태를 확인하고 있어요.'
                 : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
                 : '눌러 주세요 — 새 탭에서 [허용]만 누르면 됩니다.';
-              return `<button class="ob-opt-card ${st === 'on' ? 'ob-on' : ''}${open ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
+              if (st === 'on') return doneCardHtml(id, it.label, BRAND[it.logo] || GLYPH[it.id] || '', desc);
+              return `<button class="ob-opt-card${open ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
                 <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${esc(desc)}</span></span>
-                <span class="ob-oc-st">${st === 'on' ? '<span class="v2-dot done" style="margin:0"></span>' : ''}</span></button>`
+                <span class="ob-oc-st"></span></button>`
                 + (open ? tokPanel(id) : ''); }).join('')}</div>
           <button class="ob-btn ob-btn-pri" id="upGo" ${done.length ? '' : 'disabled'}>${left > 0 && done.length ? `${left}곳은 나중에, 계속` : '다 연결했어요, 계속'}</button>
           <button class="ob-q-skip" data-skip>나중에 가져올게요. 지금은 넘어갈게요</button>
@@ -1435,8 +1481,6 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           });
         };
         /** 팀 자료로 모으기(수집) 켜기 — 관리자만. 실패·미지원은 조용히 false(온보딩을 막지 않는다). */
-        const COLLECT_OF = { slack: 'slack', notion: 'notion', gdrive: 'google', gmail: 'google', gcal: 'google' };
-        const isAdmin = () => { try { return (state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin')) === true; } catch (_) { return false; } };
         async function startCollect(id) {
           //  피그마는 수집기가 아니라 **코멘트 증류기**가 짝이다(#1881 F8) — 있으면 꺼진 채로 준비만 해 둔다.
           if (id === 'figma' && isAdmin()) {
@@ -1448,6 +1492,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             return !(r && r.needs_connect === true);
           } catch (_) { return false; }
         }
+        wireUnlink(el, redraw);
         $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
           const id = c.dataset.conn;
           if (connState(id) === 'on') return;                       // 이미 이어졌다 — 더 시킬 일이 없다
@@ -1496,8 +1541,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           tokIn.focus();
         }
         //  남겨 두고 가는 사람에게는 **어디로 돌아오면 되는지**를 말한다 — 안 그러면 '나중에'가 갈 곳 없는 말이 된다.
-        $('#upGo', el).onclick = () => { if (pickedIds().some((id) => connState(id) !== 'on')) toast('남은 곳은 왼쪽 [외부 앱 연결]에서 언제든 연결하실 수 있어요.'); goScene('ai'); };
-        $('[data-skip]', el).onclick = () => { toast('나중에 하셔도 돼요 — 왼쪽 [외부 앱 연결]에 그대로 있습니다.'); goScene('ai'); };
+        $('#upGo', el).onclick = () => { if (pickedIds().some((id) => connState(id) !== 'on')) toast('남은 곳은 왼쪽 [외부 앱 연결]에서 언제든 연결하실 수 있어요.'); goScene('terminal'); };
+        $('[data-skip]', el).onclick = () => { toast('나중에 하셔도 돼요 — 왼쪽 [외부 앱 연결]에 그대로 있습니다.'); goScene('terminal'); };
       },
     },
     ai: {
@@ -1510,9 +1555,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
           S.ai = c.dataset.opt; AIC = null; save(); renderSB(); await sleep(200);
-          goScene(S.ai === '아직 없어요' ? 'terminal' : 'claude');
+          goScene(S.ai === '아직 없어요' ? 'sources' : 'claude');
         });
-        $('[data-skip]', el).onclick = () => goScene('terminal');
+        $('[data-skip]', el).onclick = () => goScene('sources');
       },
     },
     /* AI 잇기 — **실물**이다(#1813). 종전엔 900ms 기다렸다 무조건 «연결됐어요» 라고만 했다.
@@ -1649,7 +1694,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         };
         const pass = (name, key) => { mark(name, key); toast('연결됐어요.'); renderScene('claude', false); };
         if (go) go.onclick = async () => {
-          if (AIC && aiOn(AIC.harness)) return goScene('terminal');
+          if (AIC && aiOn(AIC.harness)) return goScene('sources');
           go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
           const c = await checkAi();
           if (c && c.loggedIn === true) return pass(AI_LABEL[c.harness] || S.ai, c.harness);
@@ -1664,13 +1709,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // 다른 AI 가 이미 연결돼 있을 때의 문 — 고른 것을 못 연결했다고 사람을 가두지 않는다.
         //  (분석은 서버가 resolveHeadlessHarness 로 고른 **실제 로그인된** 하네스로 돈다.)
         const keep = $('#cKeep', el);
-        if (keep) keep.onclick = () => { const o = (AIC && AIC.others || [])[0]; if (!S.aiConnected && o) mark(AI_LABEL[o] || o, o); goScene('terminal'); };
+        if (keep) keep.onclick = () => { const o = (AIC && AIC.others || [])[0]; if (!S.aiConnected && o) mark(AI_LABEL[o] || o, o); goScene('sources'); };
         const other = $('[data-other]', el);
         if (other) other.onclick = () => { AIC = null; goScene('ai'); };
         // ⚠ 갈래마다 버튼 구성이 다르다 — «연결됐어요» 화면엔 [나중에]가 없다. 무조건 잡으면 bind 가 그 자리에서
         //  throw 하고, 그 뒤에 배선이 더 붙는 날 그것들이 통째로 조용히 안 걸린다(지금은 마지막 줄이라 안 드러났다).
         const skip = $('[data-skip]', el);
-        if (skip) skip.onclick = () => goScene('terminal');
+        if (skip) skip.onclick = () => goScene('sources');
       },
     },
     /* 노션 p4(데스크톱 앱 유도)와 같은 자리 — 우리는 터미널 질문 */
