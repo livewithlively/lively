@@ -285,3 +285,12 @@ await ta("L11 아무 구글 슬롯도 없으면 null — 여기서 '있는 척' 
 });
 
 console.log(`\n${pass} passed`);
+
+// #2247 — GitHub 사용자 토큰 묶음(github_pat)도 갱신 발급처·client 가 있어야 한다(없으면 8시간 뒤 도구·수집기 전부 죽는다).
+{
+  const { oauthTokenUrlFor, clientKindFor } = await import("./oauth-proxy-auth.js");
+  assert.equal(oauthTokenUrlFor("github_pat"), "https://github.com/login/oauth/access_token");
+  assert.equal(clientKindFor("github_pat"), "github_app");
+  assert.equal(clientKindFor("linear_app"), "linear_app");
+  console.log("ok  github_pat 갱신 발급처·client kind 매핑");
+}
