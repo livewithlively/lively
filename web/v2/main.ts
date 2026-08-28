@@ -186,18 +186,16 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 const PROJ_TTL_MS = 5 * 60 * 1000;
 
-/** OAuth 릴레이에서 돌아온 탭 한 장(#2232) — 셸 없이 결과와 «원래 탭으로» 한 마디. 이어서 할 사람은 링크로 셸을 새로 연다. */
+/** OAuth 릴레이에서 돌아온 탭 한 장(#2232) — 셸 없이, 코어 /oauth/callback 페이지와 **같은 생김새**(원준님: "이거 참고하면 될듯").
+ *  결과 한 줄 + «이 창을 닫고 원래 탭으로» 한 마디뿐이다. 원래 탭은 신호(BroadcastChannel)로 이미 «연결됨» 으로 바뀌고 있다. */
 function renderRelayLanding(root: HTMLElement, l: { app: string; label: string; ok: boolean; err: string }): void {
-  const back = `${location.pathname}#/connect/${l.app}`;
   root.className = 'v2-relay-landing';
-  root.replaceChildren(el('div', { class: 'v2-relay-card', role: 'status' },
-    el('div', { class: 'v2-relay-mark' + (l.ok ? ' on' : ' off'), 'aria-hidden': 'true', text: l.ok ? '✓' : '!' }),
-    el('h1', { text: l.ok ? `${l.label} 연결이 끝났어요.` : `${l.label} 연결에 실패했어요.` }),
-    el('p', { text: l.ok
-      ? '처음 설정이나 다른 화면에서 시작하셨다면 이 탭은 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
-      : l.err }),
-    el('a', { class: 'v2-relay-link', href: back, text: l.ok ? '이 탭에서 계속하기 → 외부 앱 연결' : '다시 시도하기 → 외부 앱 연결',
-      onclick: (e: Event) => { e.preventDefault(); location.href = back; location.reload(); } })));
+  root.replaceChildren(el('div', { class: 'v2-relay-page', role: 'status' },
+    el('h2', { text: 'Lively 커넥터' }),
+    el('p', { text: l.ok ? `연결이 완료되었습니다 — ${l.label}. 이 창을 닫아도 됩니다.` : `연결에 실패했습니다: ${l.err}` }),
+    el('p', { class: 'v2-relay-sub', text: l.ok
+      ? '처음 설정이나 [외부 앱 연결] 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
+      : '원래 탭으로 돌아가 [외부 앱 연결]에서 다시 시도해 주세요.' })));
 }
 
 export async function bootV2(): Promise<void> {
