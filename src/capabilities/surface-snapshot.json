@@ -2646,7 +2646,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "3a829cee2809d9ae"
+  "input_hash": "c2170041611d6a82"
  },
  {
   "name": "source_undistilled",
@@ -2676,7 +2676,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "2369fd054c4e8b45"
+  "input_hash": "f077d64e6b609430"
  },
  {
   "name": "source_link_knowledge",
@@ -4265,6 +4265,46 @@
    "POST /api/ui/org/gitlab/collect"
   ],
   "input_hash": "d895fcc91eb134f7"
+ },
+ {
+  "name": "org_linear_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/linear/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_linear_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/collect"
+  ],
+  "input_hash": "dd7b58fd833afe7b"
+ },
+ {
+  "name": "org_linear_collect_connect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/collect/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_linear_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/oauth-complete"
+  ],
+  "input_hash": "90172574917c2fd4"
  },
  {
   "name": "org_google_collect",

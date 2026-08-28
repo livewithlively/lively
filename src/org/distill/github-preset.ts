@@ -11,8 +11,8 @@ import { upsertDistiller } from "../store/ingest.js";
 import { getDistiller } from "./distiller.js";
 import { upsertCronJob } from "../cron-store.js";
 
-export const GITHUB_DISTILLER_KEY = "code-host-issues";   // GitHub·GitLab 공용 — 이슈/PR/MR 대화는 같은 모양이라 기준이 하나다
-export const GITHUB_DISTILL_JOB_ID = "distill-code-host-issues";
+export const GITHUB_DISTILLER_KEY = "issue-threads";   // GitHub·GitLab·Linear 공용 — 이슈/PR/MR 대화는 같은 모양이라 기준이 하나다
+export const GITHUB_DISTILL_JOB_ID = "distill-issue-threads";
 export const GITHUB_DISTILL_INTERVAL_SEC = 900;
 
 export const GITHUB_CRITERIA_MD = `## 판단 단위 — 이슈/PR 하나가 한 사건이다
@@ -21,7 +21,7 @@ export const GITHUB_CRITERIA_MD = `## 판단 단위 — 이슈/PR 하나가 한 
 - 릴리스 노트(kind=release)는 단독으로 판단한다 — 그 버전에 무엇이 들어갔는지가 곧 지식이다.
 
 ## ★ 닫힘·머지를 먼저 본다
-- \`state: closed\` 이슈 / \`merged_at\` 이 있는 PR = **결론이 난 것**. 무엇이 원인이었고 어떻게 고쳤는지를 남긴다.
+- \`state: closed\` 이슈 / \`merged_at\` 이 있는 PR / Linear 의 \`closed: true\`(completed·canceled) = **결론이 난 것**. 무엇이 원인이었고 어떻게 고쳤는지를 남긴다.
 - \`state: open\` = **아직 진행 중**. 결론처럼 단정하지 말고 "열린 사항"으로 남긴다(값어치가 있을 때만).
 - 닫혔는데 이유 없이 닫힌 것(중복·무효)은 지식이 아니다.
 
@@ -65,10 +65,10 @@ export const GITHUB_FORMAT_MD = `- **제목**: 무엇이 정해졌는지/무엇�
 export function githubIssuesDistillerDraft(): DistillerUpsertInput {
   return {
     key: GITHUB_DISTILLER_KEY,
-    label: "GitHub·GitLab 이슈·PR/MR 대화",
+    label: "이슈 대화(GitHub·GitLab·Linear)",
     enabled: false,
     priority: -10,
-    match_kinds: ["github_issue", "gitlab_issue"],
+    match_kinds: ["github_issue", "gitlab_issue", "linear_issue"],
     match_system: null,
     include_channels: null, exclude_channels: null, include_authors: null, exclude_authors: null,
     exclude_bots: true,          // CI·의존성 봇 댓글은 actor.is_bot 으로 표식이 온다 — 걸러도 근거가 있다
@@ -85,7 +85,7 @@ export function githubIssuesDistillerDraft(): DistillerUpsertInput {
     batch_size: 8,
     batch_max_msgs: 60,          // PR 하나에 리뷰 댓글이 수십 개 붙는다
     mode: "headless",
-    note: "GitHub·GitLab 이슈·PR/MR 대화와 릴리스 노트(자료 kind=github_issue·gitlab_issue)를 지식으로. 첫 GitHub/GitLab 수집기를 켤 때 꺼진 채로 준비되고, 사람이 표본을 보고 켠다(#2247).",
+    note: "GitHub·GitLab·Linear 이슈 대화와 릴리스·문서(자료 kind=github_issue·gitlab_issue·linear_issue)를 지식으로. 첫 수집기를 켤 때 꺼진 채로 준비되고, 사람이 표본을 보고 켠다(#2247).",
   };
 }
 
@@ -111,10 +111,10 @@ export async function ensureGithubIssuesDistiller(opts: EnsureGithubDistillerOpt
   let job: { id: string; enabled: boolean } | null = null;
   if (opts.enable) {
     const j = await upsertCronJob({
-      id: GITHUB_DISTILL_JOB_ID, label: "GitHub·GitLab 이슈·PR/MR 증류", action: "distill_sources_headless",
+      id: GITHUB_DISTILL_JOB_ID, label: "이슈 대화 증류(GitHub·GitLab·Linear)", action: "distill_sources_headless",
       params: JSON.stringify({ distiller: GITHUB_DISTILLER_KEY }),
       interval_sec: GITHUB_DISTILL_INTERVAL_SEC, cron_expr: null, enabled: true,
-      note: "GitHub 이슈·PR 대화(자료 kind=github_issue)를 지식으로 — 증류기 'github-issues' 전용(#2247).",
+      note: "이슈 대화(github_issue·gitlab_issue·linear_issue)를 지식으로 — 증류기 'issue-threads' 전용(#2247).",
       run_once: null, actor: opts.actor ?? null,
     });
     job = { id: String(j.id), enabled: !!j.enabled };

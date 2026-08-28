@@ -19,6 +19,7 @@ import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/fi
 import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
 import { resolveGithubTokenSource, githubVaultDeps } from "../org/credentials/github-token-source.js";
 import { resolveGitlabTokenSource, gitlabVaultDeps } from "../org/credentials/gitlab-token-source.js";
+import { resolveLinearTokenSource, linearVaultDeps } from "../org/credentials/linear-token-source.js";
 import { resolveGoogleTokenSource, googleVaultReader, isGoogleCollectorSystem } from "../org/credentials/google-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
@@ -185,6 +186,26 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "projects", env: "GITLAB_PROJECTS", secret: false, label: "프로젝트", hint: "group/project — 공백·줄바꿈으로 여러 개. 주소를 그대로 붙여넣어도 됩니다" },
       { key: "include_mrs", env: "GITLAB_INCLUDE_MRS", secret: false, label: "MR 포함", hint: "on(기본) | off" },
       { key: "include_releases", env: "GITLAB_INCLUDE_RELEASES", secret: false, label: "릴리스 포함", hint: "on(기본) | off" },
+    ],
+  },
+  // Linear 커넥터(#2247) — 이슈·댓글·문서(GraphQL). 토큰은 라이블리 Linear 앱(linear_app)을 token_source 로 가리킨다.
+  linear: {
+    system: "linear",
+    label: "Linear",
+    guide: {
+      intro: "워크스페이스의 이슈·댓글과 문서를 자료로 모읍니다. [외부 앱 연결 ▸ Linear ▸ 모아 두기]를 켜면 Linear 화면에서 [허용] 한 번으로 연결됩니다(토큰 출처 member:<내 구성원 id>).",
+      steps: [
+        "[외부 앱 연결 ▸ Linear]에서 모아 두기를 켜면 Linear 동의 화면이 열립니다 — [허용]",
+        "'토큰 출처'에 member:<내 구성원 id> 를 적습니다(토큰 칸은 비워 둡니다)",
+        "팀을 좁히려면 '팀'에 팀 키(예 ENG PRD)를 넣습니다 — 비우면 워크스페이스 전체",
+      ],
+      url: "https://linear.app/settings/api",
+    },
+    fields: [
+      { key: "token", env: "LINEAR_TOKEN", secret: true, label: "토큰", hint: "lin_api_… 개인 API 키도 됩니다 — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "LINEAR_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [모아 두기]에서 연결한 라이블리 Linear 앱 토큰 · 비우면 위 토큰 칸을 씁니다" },
+      { key: "teams", env: "LINEAR_TEAMS", secret: false, label: "팀", hint: "팀 키(예 ENG PRD) — 공백·쉼표로 여러 개. 비우면 워크스페이스 전체" },
+      { key: "include_documents", env: "LINEAR_INCLUDE_DOCUMENTS", secret: false, label: "문서 포함", hint: "on(기본) | off — Linear Documents" },
     ],
   },
   // Google 커넥터 — OAuth2 refresh-token(google-auth.ts). client_id 는 공개 식별자(secret 아님), client_secret·refresh_token 은 시크릿.
@@ -479,6 +500,14 @@ async function loadConnectorConfig(
       if (r.warning) console.warn(`gitlab token_source: ${r.warning}`);
       out.token = r.token;
       if (r.host && !out.host) out.host = r.host;
+    }
+  }
+  // ── Linear 토큰 출처(#2247) — 같은 규약(라이블리 앱 토큰 묶음, 만료 갱신은 http_proxy 부품).
+  if (system === "linear" && out.token_source) {
+    const r = await resolveLinearTokenSource(out.token_source, linearVaultDeps);
+    if (r) {
+      if (r.warning) console.warn(`linear token_source: ${r.warning}`);
+      out.token = r.token;
     }
   }
   // ── 구글 토큰 출처(#1881 G3) — 같은 규약이되 **액세스 토큰이 아니라 갱신 자격 3칸**을 채운다.

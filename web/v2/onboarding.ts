@@ -956,11 +956,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *   · 노션 — 라이블리 공개 통합 동의(노션 화면의 페이지 고르기)가 곧 연결이자 범위. 개인 MCP 로그인은 시키지 않는다.
    *   · 슬랙 — 내 계정 로그인(라이블리 슬랙 앱, 유저+봇 토큰)이 곧 수집기의 자격이다. 로그인 뒤 수집기를 켠다. */
   //  #2247 — 피그마·ClickUp 도 같은 축: 토큰(금고)이 자격, 켜면 수집기가 그 토큰을 가리킨다. 피그마는 범위(파일 링크)가 있어야 켜진다.
-  const COLLECT_FIRST = { slack: 'slack', notion: 'notion', figma: 'figma', clickup: 'clickup', github: 'github', gitlab: 'gitlab' };
+  const COLLECT_FIRST = { slack: 'slack', notion: 'notion', figma: 'figma', clickup: 'clickup', github: 'github', gitlab: 'gitlab', linear: 'linear' };
   const COLLECT_ON_DESC = {
     notion: '노션에서 고른 페이지를 팀 자료함에 모으고 있어요.', slack: '공개 채널 대화를 팀 자료함에 모으고 있어요.',
     figma: '고른 피그마 파일의 코멘트를 팀 자료함에 모으고 있어요.', clickup: 'ClickUp 작업·댓글을 프로젝트 탭으로 가져오고 있어요.',
     github: '고른 저장소의 이슈·PR 대화를 팀 자료함에 모으고 있어요.', gitlab: '고른 프로젝트의 이슈·MR 대화를 팀 자료함에 모으고 있어요.',
+    linear: 'Linear 이슈·댓글·문서를 팀 자료함에 모으고 있어요.',
   };
   /** 토큰형 앱의 자격이 이미 금고에 있나(개인 축 실측). */
   const tokenSaved = (id) => {
@@ -1022,7 +1023,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (c) {
         if (id === 'notion') return c.enabled ? 'on' : (!c.ready && !(c.workspaces || []).length ? 'blocked' : 'off');
         if (id === 'slack') return (c.search && c.search.enabled) ? 'on' : 'off';
-        if (id === 'figma' || id === 'clickup' || id === 'github' || id === 'gitlab') return c.enabled ? 'on' : 'off';
+        if (id === 'figma' || id === 'clickup' || id === 'github' || id === 'gitlab' || id === 'linear') return c.enabled ? 'on' : 'off';
       }
       // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
     }
@@ -1131,7 +1132,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       try { await loadConn(); } finally { busy = false; }
       if (done) return;
       if (collectMode(id) && connState(id) !== 'on') {
-        const ready = id === 'notion' ? !!(COLL[id] && (COLL[id].workspaces || []).length) : (id === 'slack' || id === 'clickup' || id === 'github' || id === 'gitlab') && tokenSaved(id);
+        const ready = id === 'notion' ? !!(COLL[id] && (COLL[id].workspaces || []).length)
+          : id === 'linear' ? !!(COLL[id] && COLL[id].me_connected)
+          : (id === 'slack' || id === 'clickup' || id === 'github' || id === 'gitlab') && tokenSaved(id);
         if (ready) {
           busy = true;
           try { await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify({ enabled: true }) }); await loadConn(); }
@@ -1612,6 +1615,17 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               window.open(url, '_blank', 'noopener');
               watchConnect(id, fin);
             } catch (e) { fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
+            return;
+          }
+          //  #2247 Linear — 토글이 곧 연결(노션과 같은 모양): 켜기를 먼저 시도하고, 자격이 없으면 서버가 준 라이블리 앱 동의 URL 을 연다.
+          if (id === 'linear') {
+            const r: any = await startMemberCollect(id, '');
+            if (r && r.ok) { await loadConn(); fin(); return; }
+            const url = r && r.needs_connect && r.authorization_url;
+            if (!url) { fin((r && r.message) || 'Linear 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+            if (d) d.textContent = 'Linear 화면에서 [허용]을 누르면 여기가 저절로 바뀌어요…';
+            window.open(url, '_blank', 'noopener');
+            watchConnect(id, fin);
             return;
           }
           //  #2247 GitHub — 계정 연결(저장소 고르기)이 곧 범위. 연결돼 있으면 바로 켠다(서버가 고른 저장소를 기본 범위로 채운다).

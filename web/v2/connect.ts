@@ -178,7 +178,7 @@ const SCOPE_NOUN: Record<string, string> = {
   notion: '페이지', linear: '이슈', slack: '대화', google: 'Drive 파일과 캘린더 일정', github: '저장소', gitlab: '프로젝트',
   clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행',
 };
-const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화' };
+const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈' };
 const ICON_PATH: Record<string, string> = {
   zap: 'M13 2L4 14h7l-1 8 9-12h-7z',
   box: 'M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4',
@@ -375,6 +375,9 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   else if (svc.key === 'google') collect = isAdmin ? googleTeamCollectCard(onCollect)
     : quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — Drive 문서가 함께 보는 자료함에 모여요.', onCollect);
   //  #2247 피그마·ClickUp — 토큰이 곧 자격. 위에서 토큰을 저장했으면 여기서 켠다(수집기는 그 토큰을 가리킨다, 복사 0).
+  //  #2247 Linear — 라이블리 Linear 앱(위의 계정 로그인=MCP 와 다른 토큰). 토글이 곧 연결: 켜면 Linear 화면이 열리고 돌아오면 켜진다.
+  else if (svc.key === 'linear') collect = isAdmin ? memberTokenCollectCard(svc.key, onCollect)
+    : quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 이슈·댓글·문서가 함께 보는 자료함에 모여요.', onCollect);
   //  #2247 GitLab — 계정 로그인(DCR) 토큰으로는 자료를 못 읽는다. 개인 토큰(read_api)이 있어야 켠다.
   else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함에 모여요.', onCollect)
     : !(cred && cred.has_secret) ? quietCollectPanel(collectDesc, '꺼짐', 'GitLab 은 계정 로그인 토큰으로는 자료를 못 읽어요 — 위에서 [토큰으로 연결]로 개인 액세스 토큰(read_api)을 저장하면 여기서 켤 수 있어요.', onCollect)
@@ -495,6 +498,8 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
     on: '고른 파일의 코멘트를 모으고 있어요.', off: '켜면 내 Figma 토큰으로 고른 파일의 코멘트를 읽어 옵니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
   clickup: { desc: '내 ClickUp 워크스페이스의 작업·댓글을 라이블리 프로젝트 탭으로 가져와요. 자료함이 아니라 프로젝트로 들어옵니다.',
     on: '작업·댓글을 프로젝트 탭으로 가져오고 있어요.', off: '켜면 내 ClickUp 토큰으로 워크스페이스의 작업·댓글을 프로젝트 탭으로 가져옵니다.', where: '워크스페이스 함께 — 프로젝트 탭에서 같이 봐요' },
+  linear: { desc: '워크스페이스의 이슈·댓글과 문서를 라이블리가 미리 읽어 자료함에 둬요. 팀으로 좁힐 수 있어요. 워크스페이스가 함께 봐요.',
+    on: '이슈·댓글·문서를 모으고 있어요.', off: '켜면 Linear 화면이 열려요 — [허용] 한 번이면 연결과 모으기가 함께 켜집니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
   gitlab: { desc: '내가 고른 프로젝트의 이슈·MR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.',
     on: '고른 프로젝트의 이슈·MR 대화를 모으고 있어요.', off: '켜면 내 GitLab 개인 토큰으로 고른 프로젝트의 이슈·MR 대화를 읽어 옵니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
   github: { desc: '내가 고른 저장소의 이슈·PR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.',
@@ -504,6 +509,8 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
 const SCOPE_FIELD: Record<string, { ph: string; keys: string[]; parse: (t: string) => Record<string, string>; missing: string; note: string }> = {
   figma: { ph: '피그마 파일 링크 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체는 팀 id', keys: ['file_keys', 'team_ids'], parse: (t) => figmaScopeOf(t) as Record<string, string>,
     missing: '파일 링크나 팀 id 를 하나는 넣어 주세요', note: '아직 범위가 없어요 — 아래에 파일 링크(또는 팀 id)를 넣고 켜 주세요. 피그마엔 목록이 없어서 링크로 정합니다.' },
+  linear: { ph: '팀 키 — 예 ENG PRD (비우면 워크스페이스 전체)', keys: ['teams'], parse: (t): Record<string, string> => ({ teams: t.trim() }),
+    missing: '', note: '' },
   gitlab: { ph: 'group/project — 여러 개면 공백으로. GitLab 주소를 그대로 붙여넣어도 돼요', keys: ['projects'], parse: (t): Record<string, string> => (t.trim() ? { projects: t.trim() } : {}),
     missing: '프로젝트 경로를 하나는 넣어 주세요(group/project)', note: '아직 범위가 없어요 — 아래에 프로젝트 경로(group/project)를 넣고 켜 주세요.' },
   github: { ph: 'owner/repo — 여러 개면 공백으로. GitHub 주소를 그대로 붙여넣어도 돼요', keys: ['repos'], parse: (t): Record<string, string> => (t.trim() ? { repos: t.trim() } : {}),
@@ -542,7 +549,7 @@ function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement
       const inp = el('input', { type: 'text', class: 'cn-scope-in', value: cur, placeholder: SF.ph }) as HTMLInputElement;
       const save = el('button', { class: 'btn btn-sm', type: 'button', text: s.enabled ? '범위 저장' : '이 범위로 켜기', onclick: async () => {
         const sc = SF.parse(inp.value);
-        if (!Object.keys(sc).length) { toast(SF.missing, true); inp.focus(); return; }
+        if (SF.missing && !Object.keys(sc).length) { toast(SF.missing, true); inp.focus(); return; }
         save.setAttribute('disabled', 'true');
         try {
           const r: any = await post({ enabled: true, scope: sc });
@@ -552,13 +559,33 @@ function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement
         await paint();
       } });
       extra.push(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '범위' }), inp, save));
-      if (s.needs_scope) notes.push(SF.note);
+      if (s.needs_scope && SF.note) notes.push(SF.note);
     }
+    //  #2247 Linear — 토글이 곧 연결. 자격이 없으면 서버가 동의 URL 을 준다: 새 탭으로 열고, 돌아온 것(me_connected)이 보이면 다시 켠다.
+    const consentThen = async (r: any): Promise<boolean> => {
+      if (!(r && r.needs_connect && r.authorization_url)) return false;
+      window.open(r.authorization_url, '_blank', 'noopener');
+      toast(T.desc.split(' ')[0] === '워크스페이스의' ? 'Linear 화면에서 [허용]을 누르세요 — 돌아오면 여기가 저절로 켜집니다' : '새 탭에서 [허용]을 누르세요 — 돌아오면 여기가 저절로 켜집니다');
+      const until = Date.now() + 4 * 60 * 1000;
+      const tick = async (): Promise<void> => {
+        if (Date.now() > until) { await paint(); return; }
+        let st: any = null;
+        try { st = await api('/api/ui/org/' + key + '/collect'); } catch (_) { /* 다음 tick */ }
+        if (st && st.me_connected) {
+          try { const r2: any = await post({ enabled: true }); if (r2 && r2.ok) toast('모아 두기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다'); } catch (_) { /* 화면이 상태를 보여준다 */ }
+          await paint(); return;
+        }
+        setTimeout(() => { void tick(); }, 3000);
+      };
+      setTimeout(() => { void tick(); }, 3000);
+      return true;
+    };
     chk.onchange = async () => {
       chk.disabled = true;
       try {
         const r: any = await post({ enabled: chk.checked });
         if (r && r.ok) toast(chk.checked ? '모아 두기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다' : '모아 두기를 껐어요');
+        else if (await consentThen(r)) { /* 동의 창을 열었다 — 폴링이 켠다 */ }
         else { toast((r && r.message) || '바꾸지 못했습니다', true); }
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
