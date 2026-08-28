@@ -1506,13 +1506,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
     function retryBtn(): HTMLElement {
       const b = el('button', { class: 'btn btn-sm', text: '다시 시도' }) as HTMLButtonElement;
-      b.onclick = (): void => { b.disabled = true; void begin(); };
+      b.onclick = (): void => { b.disabled = true; void begin(true); };
       return b;
     }
-    async function begin(): Promise<void> {
+    async function begin(restart?: boolean): Promise<void> {
       stop = false; pasted = false;
       body.replaceChildren(el('div', { class: 'cxl-gate-s', text: '로그인 절차를 시작하는 중이에요…' }));
-      try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: 'codex' }) }); }
+      //  ⚠ 다시 시도는 **새로** 띄운다 — 사람이 브라우저에서 막히면(예: ChatGPT 의 «장치 코드 인증» 이 꺼져 있음)
+      //   그 코드는 거기서 죽는데 우리 프로세스는 15분을 더 기다린다. 그대로 두면 죽은 코드를 다시 보여 준다.
+      try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: 'codex', restart: restart === true }) }); }
       catch (e) {
         // 시작조차 못 했다 — 종전 안내(터미널 절차)로 정직하게 내려간다. 막다른 카드로 두지 않는다.
         body.replaceChildren(el('div', { class: 'cxl-gate-d', text: '여기서 바로 로그인할 수 없어요 — ' + ((e as Error)?.message || e) }),

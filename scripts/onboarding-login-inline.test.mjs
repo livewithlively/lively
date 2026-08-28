@@ -33,8 +33,11 @@ test("★ claude 안내는 «첫 세션에서 물음이 더 나온다» 를 숨�
   const guide = SRC.slice(SRC.indexOf("const AI_GUIDE = {"), SRC.indexOf("const LOGIN_SESSION"));
   const claude = guide.slice(guide.indexOf("claude:"), guide.indexOf("codex:"))
     .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
-  assert.match(claude, /첫 세션에서 물음이 몇 개 더 나와요/, "미뤄진 물음을 말한다");
+  // 글자 스타일·보안 안내는 키트가 미리 넘긴다(member-kit-seed). 남는 건 폴더 신뢰 하나 — 그건 반드시 말한다.
+  assert.match(claude, /첫 세션에서/, "첫 세션에 남는 몫을 말한다");
   assert.match(claude, /이 폴더를 믿나요|trust the files/, "그 물음이 무엇인지도 말한다");
+  // 그리고 «로그인 방법» 화면을 만나도 로그인이 풀린 게 아님을 말해 준다 — 실측으로 사람이 그렇게 읽었다.
+  assert.match(claude, /Select login method|로그인 방법/, "첫 실행 안내와 미로그인을 구분해 준다");
 });
 
 test("★ 대상이 아닌 하네스는 종전 «로그인 창» 그대로다 — 그쪽은 비대화형 한 줄이 없다", () => {
@@ -79,6 +82,23 @@ test("★ 탈출로는 사람이 누르는 버튼이다 — await 뒤의 window.
   // 카드 경로에 자동 창열기가 없어야 한다. openLoginWindow 는 **버튼 onclick 안에서만** 불린다.
   assert.ok(!/await openLoginWindow\(/.test(fn), "자동으로 창을 열지 않는다");
   assert.match(fn, /b\.onclick = \(\) => \{ void openLoginWindow\(h, label\); \}/);
+});
+
+test("★ 다시 시도는 **새로** 띄운다 — 안 그러면 죽은 코드를 다시 보여 준다", () => {
+  // 실측 2026-08-28: ChatGPT 계정에 «Codex용 장치 코드 인증» 이 꺼져 있으면 그 코드가 브라우저에서 죽는다.
+  //  그런데 우리 쪽 프로세스는 15분을 더 기다리므로, 설정을 켜고 다시 눌러도 start 가 «이미 돌고 있다» 며
+  //  **같은 죽은 코드**를 돌려줬다. 몇 번을 눌러도 같은 벽이다.
+  const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
+  assert.match(fn, /restart: restart === true/, "start 에 restart 를 실어 보낸다");
+  assert.match(fn, /again\.onclick = \(\) => \{ void startInlineLogin\(el, h, label, true\); \}/, "다시 시도가 restart 로 부른다");
+});
+
+test("★ 막히는 갈래에 누를 수 있는 출구가 있다 — 터미널 명령을 시키지 않는다", () => {
+  const guide = SRC.slice(SRC.indexOf("const AI_GUIDE = {"), SRC.indexOf("const LOGIN_SESSION"));
+  const codex = guide.slice(guide.indexOf("codex:"), guide.indexOf("antigravity:"))
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.match(codex, /href="https:\/\/chatgpt\.com/, "설정을 누를 수 있게 준다");
+  assert.match(codex, /다시 시도/, "화면에 실제로 있는 버튼 이름으로 말한다");
 });
 
 test("코드는 눌러서 복사된다 — 사람이 옮겨 적게 하지 않는다", () => {

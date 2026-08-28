@@ -2292,12 +2292,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         `그 주소를 열어 <b>Claude(Anthropic) 계정</b>으로 로그인하고 <b>Authorize</b>(허용)를 누르면 브라우저에 <b>코드</b>가 나와요(«Paste this code back into Claude Code»). 그 코드를 복사해 <b>이 자리 입력칸</b>에 붙여넣고 ${kbd('넣기')}.`,
         `이 자리에 «로그인이 끝났어요» 가 뜨면 아래 ${kbd('로그인했어요')}.`,
       ],
-      between: `<b>첫 세션에서 물음이 몇 개 더 나와요</b> — 글자 스타일 · 보안 안내 · «이 폴더를 믿나요». Claude Code 가 로그인과 별개로 처음 한 번 묻는 것이고, 라이블리가 만든 작업 폴더라 전부 그대로 <b>Enter</b>(폴더는 «Yes, proceed»)로 넘기면 됩니다.`,
+      //  글자 스타일·보안 안내는 키트가 미리 넘긴다(member-kit-seed 의 .claude.json 시딩) — 로그인을 터미널 밖으로
+      //   뺐는데 그 안내가 그대로 나오면 사람 눈엔 «또 로그인하라» 다(실측 2026-08-28: «Select login method» 화면).
+      //   폴더 신뢰만 남긴다 — 그건 사람이 할 보안 판단이라 한 번 묻는 게 맞다.
+      between: `첫 세션에서 <b>«이 폴더를 믿나요»</b>(<b>Do you trust the files in this folder?</b>) 한 번만 더 물어요. 라이블리가 만든 작업 폴더이니 «<b>Yes, proceed</b>» 에서 <b>Enter</b>.`,
       more: '어떤 물음인지 보기',
       detail: [
-        `<b>Choose the text style that looks best with your terminal</b>(글자 스타일) — 아무거나. 기본 «2. Dark mode», 창이 밝으면 «3. Light mode». ↑ ↓ 로 맞추고 Enter.`,
-        `<b>Security notes</b>(안내) · <b>Use Claude Code's terminal setup?</b>(터미널 설정) — 각각 Enter.`,
         `<b>Do you trust the files in this folder?</b>(이 폴더를 믿나요) — «Yes, proceed» 에서 Enter. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
+        `혹시 <b>Choose the text style…</b>(글자 스타일)이나 <b>Select login method:</b>(로그인 방법)이 나오면 — 그건 로그인이 풀린 게 아니라 <b>첫 실행 안내</b>예요(보통은 라이블리가 미리 넘겨 둡니다). 1번 그대로 <b>Enter</b> 로 넘기면 이미 로그인된 계정으로 이어집니다.`,
         `구독 계정(Pro·Max·Team)이면 그대로, 회사 API 콘솔 계정이면 그 계정으로 로그인하시면 됩니다.`,
         PASTE_NOTE,
       ],
@@ -2314,8 +2316,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       between: `ChatGPT 화면에 빨간 글로 «<b>Codex용 장치 코드 인증</b>을 활성화한 뒤 다시 실행하세요» 가 나와도 막힌 게 아니에요 — 계정 설정 하나를 켜고 다시 시작하면 됩니다.`,
       more: '켜는 방법 보기',
       detail: [
-        `그 글의 <b>ChatGPT 보안 설정</b> 링크를 눌러(또는 chatgpt.com ▸ 프로필 ▸ ${kbd('설정')} ▸ ${kbd('보안')}) <b>Codex용 장치 코드 인증</b>을 켜세요.`,
-        `그런 다음 이 자리에서 ${kbd('ChatGPT 로그인 시작')}을 다시 누르면 주소와 코드가 새로 나와요.`,
+        `<a href="https://chatgpt.com/#settings" target="_blank" rel="noopener"><b>ChatGPT 설정 열기 ↗</b></a> ▸ ${kbd('보안')} 에서 <b>Codex용 장치 코드 인증</b>을 켜세요(그 빨간 글의 <b>ChatGPT 보안 설정</b> 링크로 가도 같은 자리예요).`,
+        `켠 뒤 이 자리에서 ${kbd('다시 시도')}를 누르면 <b>새 주소와 새 코드</b>가 나옵니다 — 아까 코드는 이미 죽어서 다시 넣어도 같은 벽이에요.`,
+        `그 빨간 글이 «codex login --device-auth 를 다시 실행하세요» 라고 하는데 그건 터미널 이야기예요. 여기서는 ${kbd('다시 시도')}가 그 역할입니다.`,
         DEVICE_NOTE,
       ],
       note: '' },
@@ -2361,7 +2364,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      ⚠ «막다른 카드» 를 만들지 않는다: 시작조차 못 하면 종전 «로그인 창» 경로로 정직하게 내려간다.
      ⚠ 완료 판정은 서버의 **자격 확인**이 한다(프로세스가 끝난 것과 로그인 성공은 다르다). */
   let inlineStop = false;
-  async function startInlineLogin(el, h, label) {
+  async function startInlineLogin(el, h, label, restart) {
     const card = $('#cCard', el); if (!card) return;
     inlineStop = false;
     card.hidden = false;
@@ -2386,7 +2389,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       say(line('ob-note', why), b);
     };
     say(line('ob-fine2', '로그인 절차를 시작하는 중이에요…'));
-    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h }) }); }
+    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h, restart: restart === true }) }); }
     catch (e) {
       // 여기서 못 하면 사람을 세우지 않는다 — 종전 경로로 내려간다(원준님이 지적한 «막다른 안내» 금지).
       escape(`여기서 바로 로그인할 수 없어요 — ${(e && e.message) || e}`);
@@ -2414,7 +2417,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       }
       if (st && st.step === 'failed') {
         const again = document.createElement('button'); again.className = 'ob-btn ob-btn-sub ob-btn-inline'; again.textContent = '다시 시도';
-        again.onclick = () => { void startInlineLogin(el, h, label); };
+        //  ⚠ 반드시 **새로** 띄운다 — 옛 프로세스가 살아 있으면 죽은 코드를 그대로 다시 보여 준다(위 restart 머리말).
+        again.onclick = () => { void startInlineLogin(el, h, label, true); };
         say(line('ob-note', String((st && st.error) || '로그인이 실패했어요.')), again);
         return;
       }

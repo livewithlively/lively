@@ -138,6 +138,38 @@ await t("[K7] installScript(순수) — set -e · 번들 검사 · user-install 
   assert.ok(a < b && b < c, "설치 → MCP 등록 → 마커 순서");
 });
 
+await t("[K8] claude 첫 실행 안내를 미리 넘긴다 — 로그인은 끝났는데 그 화면이 «또 로그인하라» 로 보인다", () => {
+  // 실측 2026-08-28(매니지드): 화면에서 인라인 로그인을 마쳐 oauthAccount 가 붙고 자격도 유효한데,
+  //  세션의 Claude Code 가 첫 실행 순서(글자 스타일 → 로그인 방법 → 보안 안내)를 처음부터 보여 줬다.
+  //  ⚠ 문자열 존재만 보지 않는다 — 그 한 줄을 **실제로 돌려** 병합 규칙(있는 값은 안 덮는다)을 검사한다.
+  const s = installScript("/home/box_x");
+  const line = s.split("\n").find((l) => l.includes(".claude.json"));
+  assert.ok(line, "첫 실행 시딩 줄이 없다");
+  const snippet = /node -e '([^]*?)' \|\| true/.exec(line as string)?.[1];
+  assert.ok(snippet, "node -e 한 줄을 못 뽑았다");
+
+  const run = (home: string): Record<string, unknown> => {
+    execFileSync(process.execPath, ["-e", snippet as string], { env: { ...process.env, HOME: home } });
+    return JSON.parse(fs.readFileSync(path.join(home, ".claude.json"), "utf8")) as Record<string, unknown>;
+  };
+  // ① 파일이 없어도 만든다(첫 세션 전에는 claude 가 아직 안 돌았다).
+  const h1 = fs.mkdtempSync(path.join(tmp, "h1-")); 
+  const a = run(h1);
+  assert.equal(a.hasCompletedOnboarding, true);
+  assert.equal(a.theme, "dark");
+  // ② 있는 값은 **안 덮는다** — 사람이 고른 테마와 계정 정보를 건드리면 안 된다.
+  const h2 = fs.mkdtempSync(path.join(tmp, "h2-"));
+  fs.writeFileSync(path.join(h2, ".claude.json"), JSON.stringify({ theme: "light", oauthAccount: { emailAddress: "x@y" }, numStartups: 3 }));
+  const b = run(h2);
+  assert.equal(b.theme, "light", "사람이 고른 테마를 덮었다");
+  assert.deepEqual(b.oauthAccount, { emailAddress: "x@y" }, "계정 정보를 건드렸다");
+  assert.equal(b.numStartups, 3);
+  assert.equal(b.hasCompletedOnboarding, true, "없던 것만 채운다");
+  // ③ 폴더 신뢰는 **손대지 않는다** — 사람이 할 보안 판단이다.
+  assert.equal(b.projects, undefined);
+  assert.ok(!/hasTrustDialogAccepted/.test(snippet as string), "폴더 신뢰를 대신 눌렀다");
+});
+
 installTenantSlugResolver(() => null);
 delete process.env.LIVELY_MEMBER_EXEC;
 fs.rmSync(tmp, { recursive: true, force: true });
