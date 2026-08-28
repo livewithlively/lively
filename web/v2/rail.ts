@@ -430,8 +430,10 @@ function paintTransfer(box: HTMLElement, w: WsRow): void {
     },
   });
   void workspaceMembers(w.slug).then((ms) => {
+    //  ⚠ «나» 를 가리키는 키가 배포마다 다르다 — 셀프호스트는 core member_id, 매니지드는 CP 계정 이메일.
+    //   그래서 서버가 실어 주는 is_me 를 먼저 믿고, 없을 때만(옛 게이트웨이) member_id 로 떨어진다.
     const me = state.me && (state.me as { userId?: string }).userId;
-    const cand = ms.filter((m) => m.member_id !== me);
+    const cand = ms.filter((m) => (typeof m.is_me === 'boolean' ? !m.is_me : m.member_id !== me));
     pick.replaceChildren(...(cand.length
       ? cand.map((m) => el('option', { value: m.member_id, text: personName(m as never) || m.display_name || m.email || m.member_id }))
       : [el('option', { value: '', text: '넘길 분이 없어요 — 먼저 초대하세요' })]));

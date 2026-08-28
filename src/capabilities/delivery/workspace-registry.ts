@@ -135,7 +135,7 @@ const managedMode = (): boolean => !!(process.env.LIVELY_TENANT_HEADER_SECRET ||
 const cpWsView = (w: CpWorkspace) => ({
   slug: w.slug, name: w.name, kind: w.kind, state: "active", role: w.role,
   is_primary: false, created_at: null,
-  member_count: w.member_count, pending_invites: w.pending_invites,
+  member_count: w.member_count, owner_count: w.owner_count, pending_invites: w.pending_invites,
   kind_effective: w.kind,
   // 매니지드 전용 — 화면이 이 값이 있으면 '전환'이 아니라 '이동'으로 다룬다.
   enter_url: w.enter_url, id: w.id, tenant_state: w.tenant_state, is_current: w.is_current,
@@ -282,6 +282,14 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/me/workspaces/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      if (managedMode()) {
+        //  #1875 D5″ — 매니지드에선 삭제도 CP 가 판정한다(소유자·인원수·프로비저닝 해제).
+        //   ⚠ **requireRegistry() 앞**이어야 한다 — 뒤면 매니지드는 그 자리에서 400 으로 끊긴다(#2188 E2).
+        //   대상은 slug 가 아니라 workspace_id 다(CP 의 키) — 화면이 목록에서 받은 값을 그대로 준다.
+        const t = await resolveCpTarget(user);
+        await callCp(t!, "/api/tenant/workspace-delete", { workspace_id: String(input.slug ?? "") });
+        return { archived: String(input.slug ?? "") };
+      }
       requireRegistry();
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary(기존 박스 워크스페이스)는 보관할 수 없습니다");
@@ -359,6 +367,15 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/me/workspaces/leave"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      if (managedMode()) {
+        //  #1875 D5″ — 갈래 판정(어드민 수·이양)은 CP 의 leaveWorkspace 가 한다. 코어는 묻고 전달만 한다.
+        const t = await resolveCpTarget(user);
+        await callCp(t!, "/api/tenant/workspace-leave", {
+          workspace_id: String(input.slug ?? ""),
+          transfer_to: typeof input.transfer_to === "string" ? input.transfer_to : "",
+        });
+        return { left: String(input.slug ?? ""), transferred_to: input.transfer_to ?? null };
+      }
       requireRegistry();
       const ws = await findWs(input.slug);
       const members = await listWorkspaceMembers(ws.id);
@@ -406,8 +423,11 @@ export const workspaceRegistryCapabilities: Capability[] = [
           member_count: r.members.length,
           kind_effective: r.workspace.kind,
           can_invite: isOwner,
+          //  ⚠ 매니지드의 사람 축은 **이메일**이다(CP 계정). member_id 자리에 이메일이 들어가는 이유다.
+          //   #1875 D5″ — is_me 를 그대로 흘린다: 화면이 «넘길 사람» 후보에서 나를 뺄 때, 셀프호스트의
+          //   member_id 비교는 여기서 통하지 않는다(내 core member_id ≠ 내 이메일).
           members: r.members.map((m) => ({ member_id: m.email, role: m.role, email: m.email,
-            display_name: m.name, is_creator: m.role === "owner" })),
+            display_name: m.name, is_creator: m.role === "owner", is_me: m.is_me })),
           pending: isOwner ? r.pending.map((pi) => ({ id: pi.email ?? "", email: pi.email, role: "member",
             invited_by: null, created_at: pi.expires_at })) : [],
           // 매니지드는 '이 박스의 사람' 이라는 후보 개념이 없다 — 초대는 **이메일로** 부른다.
