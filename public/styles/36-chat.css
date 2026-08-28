@@ -327,6 +327,16 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .cxl-gate-t { font-weight: 600; }
 .cxl-gate-d { color: var(--muted); font-size: 13px; }
 .cxl-gate-s { color: var(--muted); font-size: 12px; font-family: var(--mono, monospace); }
+/* 로그인 카드 안 «주소·코드» 줄 — 눌러서 복사(사람이 옮겨 적을 일이 없게). */
+.cxl-gate-body { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.cxl-gate-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cxl-gate-k { color: var(--muted); font-size: 12px; min-width: 68px; }
+.cxl-gate-v {
+  font-family: var(--mono, monospace); background: var(--bg-soft, rgba(0,0,0,.05));
+  border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; cursor: pointer;
+  overflow-wrap: anywhere; max-width: 100%;
+}
+.cxl-gate-v:hover { border-color: var(--blue); }
 
 .cxl-asks:empty { display: none; }
 .cxl-asks { display: flex; flex-direction: column; gap: 8px; margin: 0 16px 10px; max-height: 46vh; overflow: auto; }

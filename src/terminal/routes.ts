@@ -11,6 +11,8 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { codexChatMode } from "./codex-chat-mode.js";   // #2055 codex 대화 런타임 선택
+import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
+import { cancelAiLogin, pasteAiLogin, readAiLogin, startAiLogin } from "./ai-login-run.js";
 import { rememberCodexThread } from "./codex-chat-thread.js";   // #2055 — 대화 좌표를 남기는 한 곳
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
@@ -268,6 +270,52 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.setHeader("Cache-Control", "no-store");
     res.json({ accounts: await aiAccountStatus(userOf(req)) });
   }));
+  // ── AI 로그인을 **터미널 없이** (#2055 후속, 2026-08-28) ─────────────────────────────────
+  //  종전엔 «로그인 전용 세션 + 그 터미널을 새 탭»(웹) / **새 창**(데스크톱 앱)이었다. 사람이 실제로 할 일은
+  //  «주소를 열고 코드를 넣는 것» 뿐인데 그걸 하려고 터미널 화면을 통째로 봤다. 여기서는 그 두 값만 준다.
+  //  하네스별 차이는 ai-login-flow.ts 머리말이 정본이다(codex=코드를 보여준다 · claude=코드를 되받는다).
+  //  ⚠ 대상은 codex·claude 뿐이다. agy 는 로그인 서브커맨드가 없고 grok·opencode 는 비대화형 한 줄이
+  //   아니라(catalog.harnessLoginArgv 머리말), 그 둘은 종전 안내(터미널)로 간다 — 지어내지 않는다.
+  const loginSeat = async (req: express.Request): Promise<string | null> => {
+    const { resolveMemberOsUser } = await import("./terminal-isolation.js");
+    const { userSlug } = await import("./profiles.js");
+    return resolveMemberOsUser(userSlug(userOf(req)));
+  };
+  const loginHarnessOf = (req: express.Request): AiLoginHarness => {
+    const h = String(((req.body ?? {}) as Record<string, unknown>).harness ?? (req.query.harness ?? "")).trim();
+    if (!isAiLoginHarness(h)) throw new HttpError(400, "이 AI 는 화면에서 바로 로그인할 수 없습니다 — 터미널 안내를 따라 주세요.");
+    return h;
+  };
+  app.post("/api/ui/me/ai-login/start", auth, wrap(async (req, res) => {
+    const h = loginHarnessOf(req);
+    await startAiLogin(await loginSeat(req), h);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true });
+  }));
+  //  화면이 폴링하는 자리 — 주소·코드·다음 단계. loggedIn 은 **자격 확인**이 정한다(프로세스가 끝난 것과 다르다).
+  app.get("/api/ui/me/ai-login/state", auth, wrap(async (req, res) => {
+    const h = loginHarnessOf(req);
+    const seat = await loginSeat(req);
+    const [raw, check] = await Promise.all([
+      readAiLogin(seat, h),
+      aiLoginCheck(userOf(req), h).catch(() => null),
+    ]);
+    const st = parseAiLogin(h, raw);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ...st, loggedIn: check?.loggedIn ?? null, step: aiLoginStep(st, check?.loggedIn ?? null) });
+  }));
+  //  claude 전용 — 사람이 브라우저에서 받아 온 코드를 프로세스에 넣는다.
+  app.post("/api/ui/me/ai-login/paste", auth, wrap(async (req, res) => {
+    const h = loginHarnessOf(req);
+    const code = String(((req.body ?? {}) as Record<string, unknown>).code ?? "");
+    await pasteAiLogin(await loginSeat(req), h, code);
+    res.json({ ok: true });
+  }));
+  app.post("/api/ui/me/ai-login/cancel", auth, wrap(async (req, res) => {
+    await cancelAiLogin(await loginSeat(req), loginHarnessOf(req));
+    res.json({ ok: true });
+  }));
+
   // 로그아웃 = 내 자격증명 파일 삭제(재로그인으로 복구 가능). 공유 계정(비격리 codex 등)은 서비스가 409 로 막는다.
   app.post("/api/ui/me/ai-accounts/logout", auth, wrap(async (req, res) => {
     const harness = String(((req.body ?? {}) as Record<string, unknown>).harness ?? "").trim();
