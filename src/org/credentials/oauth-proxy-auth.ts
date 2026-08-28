@@ -14,6 +14,7 @@ import { decodeTokenBlob, encodeTokenBlob, tokenMeta, CLIENT_SCOPE, gatewaySsrfF
 import { getMemberSecret, setMemberSecret, resolveMemberSecret, type MemberSecretResolved, type ResolveOpts } from "./member-secret-store.js";
 import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
 import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
+import { LINEAR_APP_KIND, LINEAR_TOKEN_URL } from "./linear-oauth.js";
 import { logger } from "../../log.js";
 
 /** 만료 여유(초) — 호출이 나가는 동안 만료돼 상류가 401 을 주는 것까지 막는다. */
@@ -49,7 +50,7 @@ export function mergeRefreshedTokens(prev: OAuthTokens, next: Partial<OAuthToken
  *  인증 앵커만 Developer Preview 엔드포인트에 남아 있어 MCP 행 의존을 끊었기 때문이다.
  *  (슬랙 `slack_oauth`·노션 `notion_public` 은 이 경로를 안 탄다 — 슬랙은 토큰 회전 off 라 만료가 없고, 노션 갱신은 CP 프록시.)
  */
-const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_TOKEN_URL };
+const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_TOKEN_URL, [LINEAR_APP_KIND]: LINEAR_TOKEN_URL };
 
 export function oauthTokenUrlFor(authKind: string | null | undefined): string | undefined {
   if (!authKind) return undefined;

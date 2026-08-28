@@ -30,6 +30,8 @@ export interface MemberCollectSpec {
   defaultScope?: () => Promise<Record<string, string>>;
   /** 켤 때 함께 저장할 설정(예 GitLab host = 그 사람 토큰의 호스트). 입력 scope 가 우선한다. */
   extraConfig?: (actor: string) => Promise<Record<string, string>>;
+  /** 자격이 없을 때 **여기서 동의를 시작**한다(토글이 곧 연결 — 노션·구글 규약). needs_connect 응답에 authorization_url 이 실린다. */
+  connectStart?: (actor: string) => Promise<{ authorization_url: string }>;
   /** 앱 이름(응답 문장). */
   appLabel: string;
   /** 수집기 label 기본값. */
@@ -172,6 +174,13 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
         return { ok: true, enabled: false, state: await stateOf(actor) };
       }
       if (plan === "needs_connect") {
+        if (spec.connectStart) {
+          // 토글이 곧 연결(노션·구글 규약) — 동의 URL 을 함께 준다. 웹은 새 탭으로 열고 돌아오면 다시 켠다.
+          try {
+            const c = await spec.connectStart(actor);
+            return { ok: false, needs_connect: true, authorization_url: c.authorization_url, message: spec.appLabel + " 화면에서 [허용]을 누르면 연결되고, 다시 켜면 모으기가 시작됩니다.", state: await stateOf(actor) };
+          } catch (e) { throw new HttpError(409, (e as Error).message); }
+        }
         return { ok: false, needs_connect: true, message: `먼저 ${spec.connectHint} — 팀 자료 수집은 그 자격으로 돕니다.`, state: await stateOf(actor) };
       }
       if (plan === "needs_scope") {
