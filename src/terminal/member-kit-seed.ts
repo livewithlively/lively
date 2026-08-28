@@ -67,7 +67,12 @@ function registryDeps(): KitSeedDeps | null {
   if (!d) return null;
   return {
     getMember: d.getMember,
-    mintToken: (memberId, scopes, slug) => mintCentralBoxToken(memberId, scopes, slug, false),
+    // #2174 — 종전엔 여기서 4번째 인자로 `false`(관리 권한 제외)를 **하드코딩**했다. 그래서 관리탭에서
+    //  '관리 권한 포함'을 켜도 매니지드 박스의 멤버 홈에 심기는 토큰은 언제나 admin 이 빠진 것이었다
+    //  (2026-08-28 실측: 체크하고 재프로비저닝해도 세션 whoami 의 scopes 에 admin 이 끝내 안 붙었다).
+    //  이제 mintCentralBoxToken 이 멤버 추종으로 굽으므로 실을지 말지를 여기서 정하지 않는다 — 그 토큰의
+    //  유효권한은 쓰는 시점의 멤버 scope 다.
+    mintToken: (memberId, scopes, slug) => mintCentralBoxToken(memberId, scopes, slug),
     buildBundle: d.buildBundle,
   };
 }

@@ -143,27 +143,34 @@ export function profileStatusFor(memberId: string): ReturnType<typeof profileSta
 //  ⭐ per-member lively 신원: 프로필 .claude.json 의 lively MCP 를 '공용 agent' 가 아니라 '이 멤버' 토큰으로 굽는다.
 //   → 그 프로필로 뜬 세션의 MCP 쓰기(knowledge_save 등)가 멤버로 귀속(updated_by=멤버)·토큰탭 표시·회수가능.
 //   멤버 DB 토큰(lvk_)을 발급 → LIVELY_TOKEN 으로 넘김(register-clients 가 프로필 .claude.json 에 구움).
-//   유효권한 = verifyDbToken 이 '라이브 멤버 스코프'와 매 호출 교집합(퇴사·강등 즉시 무효). admin/runtime 은 기본 제외(세션 최소권한) — 관리탭에서 admin 이 명시 opt-in(includeControlPlane) 시에만 포함(#549 후속).
+//   유효권한 = **그때그때의 멤버 scope**(#2174 멤버 추종) — 퇴사·강등이 즉시 무효인 건 종전 그대로고, 승격도
+//   재발급 없이 닿는다. 세션 권한 = 멤버 권한이 정책이라 '관리 권한 포함' opt-in(#549)은 없어졌다.
 //   ⚠ KIT_PROFILE_ONLY=1 — install-kit 이 공유 ~/.lively/token(훅 fetch·전 세션 공유)을 멤버 토큰으로 덮지 않게(프로필 .claude.json 만).
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");   // dist/terminal/ → 리포 루트
 
 // 중앙박스 프로필/OS 유저 토큰 발급 — 기존 central-box 토큰 회수 후 새로 굽는다(평문은 못 되찾으니 매번 새로).
-//  기본은 admin/runtime 제외(세션 최소권한). includeControlPlane=true(관리탭에서 admin 이 '관리 권한 포함'을 명시
-//  opt-in)면 멤버 scope 의 admin/runtime 도 싣는다 — 에이전트가 관리 기능(MCP org_*)을 세션에서 쓰게(#549 후속).
-//  멤버 scope 가 상한이라 멤버에 admin 없으면 자연히 안 실리고, 멤버 scope 하향 시 매 호출 intersection 으로 즉시
-//  무효(회수의 진짜 지점 = 멤버 scope지 발급 경로가 아니다). 발급은 org_content_audit 에 남는다(누가 어느 에이전트에 관리권한 실었나).
-export async function mintCentralBoxToken(memberId: string, memberScopes: string[], slug: string, includeControlPlane: boolean): Promise<string> {
+//  #2174 — **멤버 추종**(followMemberScopes)으로 굽는다: 이 토큰의 유효권한은 발급 시점 값이 아니라 **그때그때의
+//  멤버 scope** 다. 멤버가 상한이라는 규칙은 그대로고(멤버에 admin 이 없으면 여전히 안 실린다), 달라지는 건
+//  승격이 재발급 없이 닿는다는 것 하나다.
+//  왜 바꿨나(2026-08-28 실측) — 이 토큰은 사람이 들고 다니는 게 아니라 **박스 홈(~/.lively/token)에 심긴 것**이라,
+//   관리자가 권한을 올려도 그 파일이 다시 심겨야 반영됐다. 그런데 격리 박스에서 재프로비저닝이 그 파일까지
+//   닿지 못하는 일이 실제로 났고(다른 키트 파일은 갱신되는데 토큰만 옛것), 그러면 올린 권한이 영영 도달하지 않는다.
+//   종전 설계는 강등만 즉시 반영하고 승격은 재발급을 요구하는 비대칭이었는데, 그 '재발급'이 사람 눈에 안 보이는
+//   경로라 실패해도 아무도 모른다 — 그래서 비대칭을 없앴다.
+//  ⚠ 그래서 includeControlPlane opt-in 은 사라졌다. 세션 권한 = 멤버 권한이 정책이다(관리 행위는 감사 로그에 남는다).
+//  발급은 org_content_audit 에 남는다(누가 어느 에이전트에 이 토큰을 실었나).
+export async function mintCentralBoxToken(memberId: string, memberScopes: string[], slug: string): Promise<string> {
   // 재프로비저닝 누적 방지 — 이 멤버의 기존 central-box 토큰 회수(평문은 못 되찾으니 매번 새로 굽는다).
   for (const t of await listTokens()) {
     if (t.member_id === memberId && !t.revoked_at && (t.label || "").startsWith("central-box:")) {
       await revokeToken(t.token_hash, "provisionCentralBox", "terminal-sessions");
     }
   }
-  const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
-  // 기본: admin/runtime 제외. opt-in: 멤버 scope 그대로(admin/runtime 포함 — 멤버가 그 권한을 가질 때만 실제로 실림).
-  const scopes = (memberScopes || []).filter((s) => isScope(s) && (includeControlPlane || !dangerous.has(s)));
+  // scopes 는 '발급 당시 스냅샷'으로 남긴다 — 유효권한은 추종 플래그가 정하지만, 토큰탭·감사가 그때 무엇이었는지
+  //  읽을 수 있어야 하고 추종을 끄면 이 값이 그대로 상한으로 돌아온다.
+  const scopes = (memberScopes || []).filter((s) => isScope(s));
   const { token } = await mintToken(
-    { userId: memberId, memberId, scopes, label: `central-box:${slug}${includeControlPlane ? " +admin" : ""}` },
+    { userId: memberId, memberId, scopes, label: `central-box:${slug}`, followMemberScopes: true },
     "provisionCentralBox", "terminal-sessions",
   );
   return token;
@@ -231,19 +238,21 @@ export async function mintSessionMcpToken(memberId: string, boxId: string): Prom
   await revokeSessionTokensLabeled(new Set([`${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "createSession");
   const scopes = (member.scopes || []).filter((s) => isScope(s));
   if (!scopes.length) return null;                // 실어 봐야 아무것도 못 한다 — 종전 경로를 막지 않는다
+  // #2174 — 추종으로 굽는다. 이 토큰은 세션 수명 내내 살아 있어서, 그 사이 멤버 권한이 바뀌면 세션만 옛 권한에
+  //  묶인다(세션을 껐다 켜야 반영되는 건 사람이 알 길이 없다). 추종이면 다음 호출부터 바로 맞는다.
   const { token } = await mintToken(
-    { userId: memberId, memberId, scopes, label: `${SESSION_MCP_TOKEN_LABEL}${boxId}` },
+    { userId: memberId, memberId, scopes, label: `${SESSION_MCP_TOKEN_LABEL}${boxId}`, followMemberScopes: true },
     "createSession", "terminal-sessions",
   );
   return token;
 }
 
-export async function provisionProfile(memberId: string, opts?: { includeControlPlane?: boolean }): Promise<{ slug: string; dir: string }> {
+export async function provisionProfile(memberId: string): Promise<{ slug: string; dir: string }> {
   const u = { userId: memberId } as LivelyUser;
   const member = await getMember(memberId);
   if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
   const slug = userSlug(u);
-  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug, !!opts?.includeControlPlane);
+  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug);
 
   const script = path.join(REPO_ROOT, "deploy", "provision-profile.sh");
   // 게이트웨이 env 상속 + 멤버 토큰(프로필 .claude.json 에 구움) + KIT_PROFILE_ONLY(공유 ~/.lively 보존). 최대 3분(키트 다운로드+등록).
@@ -261,12 +270,12 @@ export async function provisionProfile(memberId: string, opts?: { includeControl
 //  반드시 /opt/lively/libexec 의 root 소유본을 쓴다. 멤버 토큰은 provisionProfile 과 동일하게 민팅해 넘긴다
 //  (sudoers env_keep=LIVELY_TOKEN/MEMBER_NAME/MEMBER_EMAIL 로 통과 — PATH 는 미보존이라 secure_path). admin 게이트는 라우트가.
 const PROVISION_BIN = process.env.LIVELY_PROVISION_BIN || "/opt/lively/libexec/provision-member";
-export async function provisionMemberOs(memberId: string, opts?: { includeControlPlane?: boolean }): Promise<{ slug: string; osUser: string }> {
+export async function provisionMemberOs(memberId: string): Promise<{ slug: string; osUser: string }> {
   const u = { userId: memberId } as LivelyUser;
   const member = await getMember(memberId);
   if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
   const slug = userSlug(u);
-  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug, !!opts?.includeControlPlane);
+  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug);
   await execFileAsync("sudo", ["-n", PROVISION_BIN, memberId], {
     timeout: 180_000,
     env: { ...process.env, LIVELY_TOKEN: token, MEMBER_NAME: member.display_name || slug, MEMBER_EMAIL: member.email || "" },
