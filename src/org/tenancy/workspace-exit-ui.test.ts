@@ -62,8 +62,10 @@ test("★★ E3/E4/E5 갈래는 어드민 수 — 유일 어드민에겐 넘길 
   assert.ok(tAt > 0, "paintTransfer 가 없다 — 8/27 의 '막고 준비 중' 으로 되돌아갔다");
   const t = RAIL.slice(tAt, RAIL.indexOf("\nasync function afterExit", tAt));
   assert.match(t, /await leaveWorkspace\(w\.slug, to\)/, "고른 사람을 서버로 안 넘긴다");
-  assert.match(t, /filter\(\(m\) => m\.member_id !== me\)/,
-    "★ 넘길 사람 목록에서 나를 빼지 않는다 — 고르면 서버가 400 을 낸다(고를 수 없는 걸 그리는 것)");
+  //  ⚠ «나» 를 가리키는 키가 배포마다 다르다 — 셀프호스트는 core member_id, 매니지드는 CP 계정 이메일.
+  //   member_id 비교만 하면 매니지드에서 내가 후보에 남는다(고르면 400). 서버가 실어 주는 is_me 를 먼저 본다.
+  assert.match(t, /filter\(\(m\) => \(typeof m\.is_me === 'boolean' \? !m\.is_me : m\.member_id !== me\)\)/,
+    "★ 넘길 사람 목록에서 나를 빼지 않는다(또는 매니지드에서 못 뺀다) — 고르면 서버가 400 을 낸다");
 });
 
 test("★ E6/E7 확인은 그 행 아래에서, 하나만 열린다(안 A)", () => {

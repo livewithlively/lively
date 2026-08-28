@@ -478,9 +478,9 @@ export async function leaveWorkspace(slug: string, transferTo?: string | null): 
 }
 
 /** 그 워크스페이스의 구성원 — 주인을 넘길 사람을 고르는 드롭다운이 이걸 먹는다. */
-export async function workspaceMembers(slug: string): Promise<Array<{ member_id: string; role: string; display_name: string | null; email: string | null }>> {
+export async function workspaceMembers(slug: string): Promise<Array<{ member_id: string; role: string; display_name: string | null; email: string | null; is_me?: boolean }>> {
   const d: any = await api('/api/ui/me/workspaces/people?slug=' + encodeURIComponent(slug));
-  return ((d && d.members) || []) as Array<{ member_id: string; role: string; display_name: string | null; email: string | null }>;
+  return ((d && d.members) || []) as Array<{ member_id: string; role: string; display_name: string | null; email: string | null; is_me?: boolean }>;
 }
 /** 연결한 팀(다른 게이트웨이, 승격 경로 #1750). */
 export async function linkedTeams(): Promise<any[]> {
