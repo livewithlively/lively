@@ -240,8 +240,16 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
       // 고를 것이 없는 두 경우는 **사람에게 다른 사실**이라 문구를 나눈다(종전엔 한 문장이 둘을 덮어, AI 가 없는
       //  PC 가 기본으로 잡혔을 때 "왜 못 고르지"가 화면에서 답을 못 얻었다 — 윤상민 2026-08-28 신고).
       //  · 카탈로그를 못 받았다 = 무엇이 있는지 **모른다** → 기억한 설정 그대로 연다(종전 문구가 맞는 자리).
-      //  · 카탈로그는 받았는데 그 PC 가 띄울 AI 가 없다 = **안다** → 그 사실을 말한다. 옆 칸에서 다른 컴퓨터를 고르면 된다.
-      provSel.replaceChildren(el('option', { value: '' }, harnesses.length ? '이 컴퓨터엔 AI 가 없어요' : '지난번 설정 그대로'));
+      //  · 카탈로그는 받았는데 그 PC 가 띄울 AI 가 **안 잡힌다** → 그 사실만 말한다.
+      //  ⚠ "없어요"라고 **단정하지 않는다**(#2172 실측). 그 PC 에 AI 가 깔려 있어도 노드 에이전트가 PATH 를
+      //   못 물려받으면 탐지가 통째로 빈손이 된다 — 실제로 사용자 PATH 가 오염돼 길어지자 윈도우가 그것을
+      //   프로세스에 안 합쳤고, claude 가 멀쩡히 깔려 있는데 5종이 전부 미검출됐다. 그때 화면이 "AI 가 없어요"
+      //   라고 단정하면 사람을 엉뚱한 곳으로 보낸다(설치를 다시 하러 간다). 못 찾았다고만 말하고,
+      //   무엇을 볼지는 title 로 남긴다.
+      provSel.title = harnesses.length
+        ? '이 컴퓨터의 노드 에이전트가 claude·codex 같은 AI 명령을 찾지 못했어요. 그 컴퓨터에서 `claude --version` 이 되는지, 노드를 다시 시작하면 잡히는지 확인해 보세요.'
+        : '어느 AI 가 있는지 아직 못 받아서, 지난번 설정 그대로 엽니다.';
+      provSel.replaceChildren(el('option', { value: '' }, harnesses.length ? 'AI 를 못 찾았어요' : '지난번 설정 그대로'));
       modelSel.hidden = true; effortSel.hidden = true; return;
     }
     if (!list.some((h) => h.key === harnessKey)) harnessKey = list[0].key;   // 그 노드가 못 띄우는 하네스였으면 첫 후보로
