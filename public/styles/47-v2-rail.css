@@ -158,6 +158,18 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-wspop-actions { display: flex; align-items: center; gap: 8px; }
 .v2-wspop-note { flex: 1; min-width: 0; font-size: 11.5px; color: var(--coral-text); line-height: 1.4; }
 .v2-wspop-hint { margin: 2px 0 0; padding: 0 2px; font-size: 11.5px; line-height: 1.55; color: var(--muted); }
+/* ✕ — 워크스페이스를 «치우는» 문(#1875 D5″). 사람+(.v2-wspop-add)와 **같은 규격**이라야 한 쌍으로 읽힌다:
+   같은 크기·같은 자리·같은 평소 색. 다른 것은 hover 때 드러나는 색 하나뿐이다(치우는 일이라 coral). */
+.v2-wspop-x { flex: none; width: 34px; height: 34px; margin: 0 6px 0 0; display: inline-grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+.v2-wspop-x:hover { background: var(--danger-bg); color: var(--coral-text); }
+.v2-wspop-x:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-x .v2-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+/* 확인은 **그 행 아래에서** 열린다(안 A) — 목록을 안 떠나므로 어느 워크스페이스 얘기인지가 눈에서 안 사라진다.
+   왼쪽 띠는 «이 행에 딸린 것»이라는 표시다(형제 div 라 들여쓰기만으로는 소속이 안 읽힌다). */
+.v2-wspop-exit { margin: 2px 4px 6px 12px; padding: 10px 12px; border-left: 2px solid var(--coral-fill); border-radius: 0 10px 10px 0; background: var(--bg-tint); display: flex; flex-direction: column; gap: 7px; }
+.v2-wspop-exit-l { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink); }
+.v2-wspop-exit-l:not(:first-child) { font-size: 11.5px; color: var(--muted); }
+.v2-wspop-exit .v2-wspop-in { font-size: 12.5px; }
 .v2-wspop-row.danger .v2-wspop-ic { color: var(--coral-text); }
 .v2-wspop-row.danger .v2-wspop-tt b { color: var(--coral-text); }
 /* 연결한 팀 · 승인 대기 — 행 하나에 이름 + 작은 조작 둘. 타일 행보다 촘촘하다(목록이 아니라 관리다). */
