@@ -5,11 +5,13 @@
 //
 // ⚠ 이 앱은 **상시성의 주체가 아니다.** 노드를 살려 두는 건 OS 데몬(launchd·systemd·작업 스케줄러)이고
 //  앱은 그 데몬을 켜고 끄는 리모컨이다 — 그래서 '앱 종료' 가 노드를 끄지 않는다는 걸 메뉴가 말해 준다.
-import { appReady } from "./web-shell.mjs";
+import { appReady, nodeStateOf } from "./web-shell.mjs";
 
 /** 상태 뱃지 문구 — 사람이 한 줄로 이해하는 축은 '노드가 지금 도는가' 다. */
 export function statusLabel(st) {
-  const s = st || {};
+  // 판정은 web-shell.nodeStateOf 한 자리(#2215). 호출부(main)가 state.nodeState 를 채워 주지만,
+  //  안 채워도 **같은 함수로 파생**한다 — 두 벌이 될 수 없게 하면서 호출부 순서에 기대지 않는다.
+  const s0 = st || {}, s = { ...s0, nodeState: s0.nodeState || nodeStateOf(s0) };
   if (!s.cliFound) return "라이블리 CLI 없음";
   // ⚠ '있다'와 '쓸 수 있다'는 다르다. 앱보다 먼저 깔아 둔 구 CLI 는 `--json-events` 를 조용히 무시해
   //  앱이 아무 말도 못 듣는다 — 그걸 '설치 완료' 로 그리면 화면이 거짓말을 한다.
@@ -23,10 +25,13 @@ export function statusLabel(st) {
   // 프로세스는 도는데 게이트웨이엔 안 붙어 있음(#1541 실측: 절전 뒤 좀비 3시간·나흘) — '실행 중' 이라 하면 거짓말이다.
   // #1849 — **원인을 아는 끊김**은 "다시 시작 필요" 라고 하면 안 된다: 자는 PC 는 재시작해도 또 잔다.
   //  잠자기로 추정되면 그 사실을 먼저 말한다(자세한 문구는 창에서).
-  if (s.nodeRunning && s.nodeConnected === false && s.nodeSleepNote) return "노드 연결 끊김 — 이 PC 가 잠자기에 듭니다";
-  if (s.nodeRunning && s.nodeConnected === false) return "노드 연결 끊김 — 다시 시작 필요";
-  if (s.nodeRunning) return s.nodeDaemon ? "노드 실행 중 (자동 시작 켜짐)" : "노드 실행 중 (이 세션만)";
-  return s.nodeRegistered ? "노드 정지됨" : "노드 미등록";
+  //  판정은 web-shell.nodeStateOf 한 자리(#2215) — 여기선 문구만 고른다.
+  if (s.nodeState === "zombie" && s.nodeSleepNote) return "노드 연결 끊김 — 이 PC 가 잠자기에 듭니다";
+  if (s.nodeState === "zombie") return "노드 연결 끊김 — 다시 시작 필요";
+  if (s.nodeState === "running") return s.nodeDaemon ? "노드 실행 중 (자동 시작 켜짐)" : "노드 실행 중 (이 세션만)";
+  // 못 잰 것을 «정지됨» 이라 하지 않는다 — 그 거짓말이 이 이슈의 신고 내용이었다.
+  if (s.nodeState === "unknown") return "노드 상태 확인 중";
+  return s.nodeState === "stopped" ? "노드 정지됨" : "노드 미등록";
 }
 
 /** 버전 한 줄 — 앱과 키트를 **따로** 적는다(갱신 주기가 다르다). 못 읽은 축은 '알 수 없음'으로 남긴다. */
@@ -41,7 +46,7 @@ export function versionLabel(st) {
  * 실행 중(busy)이면 상태를 바꾸는 항목을 전부 잠근다 — 설치 도중 '노드 시작' 을 누르면 CLI 두 개가 겹친다.
  */
 export function trayMenuModel(st) {
-  const s = st || {};
+  const s0 = st || {}, s = { ...s0, nodeState: s0.nodeState || nodeStateOf(s0) };   // #2215 — statusLabel 과 같은 규율
   const busy = !!s.busy;
   const items = [{ id: "status", label: statusLabel(s), enabled: false }, { type: "separator" }];
   // 받아 둔 업데이트가 있으면 **가장 위**에 — 트레이만 보는 사람에게 유일한 입구다. 창을 안 열면 자동으로도
@@ -67,11 +72,11 @@ export function trayMenuModel(st) {
             : s.cliFound ? "설치 계속하기…" : "라이블리 설치…",
       enabled: !busy,
     });
-  } else if (s.nodeRunning && s.nodeConnected === false) {
+  } else if (s.nodeState === "zombie") {
     // 좀비 — 다시 시작(node-start 는 옛 인스턴스를 회수하고 새로 띄운다)이 첫 항목, 정지는 그 아래
     items.push({ id: "node-start", label: "노드 다시 시작", enabled: !busy });
     items.push({ id: "node-stop", label: "노드 정지", enabled: !busy });
-  } else if (s.nodeRunning) {
+  } else if (s.nodeState === "running") {
     items.push({ id: "node-stop", label: "노드 정지", enabled: !busy });
   } else {
     items.push({ id: "node-start", label: "노드 시작", enabled: !busy });

@@ -23,10 +23,17 @@ function renderState(s) {
           // 토큰은 있는데 게이트웨이가 거부했다(만료·회수) — 웹 창이 401 을 만나면 메인이 이 축을 세운다(web-shell).
           : s.tokenRejected ? "로그인이 만료되었습니다 — 다시 로그인하세요"
             : !s.kitInstalled ? "키트 설치가 필요합니다"
-              : s.nodeRunning ? "노드 실행 중" : s.nodeRegistered ? "노드 정지됨" : "설치 완료";
+              // 노드 축은 **메인이 판정한다**(web-shell.nodeStateOf → state.nodeState, #2215).
+              //  종전엔 여기서 `s.nodeRunning ? … : "노드 정지됨"` 이라 적어, 못 잰 것(null)과 게이트웨이가
+              //  «연결됨» 이라 보는 노드까지 «정지됨» 으로 그렸다(실측 hammurabi).
+              : s.nodeState === "running" ? "노드 실행 중"
+                : s.nodeState === "zombie" ? "노드 연결 끊김"
+                  : s.nodeState === "unknown" ? "노드 상태 확인 중"
+                    : s.nodeState === "stopped" ? "노드 정지됨" : "설치 완료";
   $("status").textContent = label;
   $("sub").textContent = s?.gatewayUrl || "";
-  $("dot").className = "dot " + (s?.nodeRunning ? "on" : s?.loggedIn ? "warn" : "off");
+  // 초록불은 '돈다' 가 아니라 '돌고 붙어 있다' 일 때만 — zombie·unknown 은 초록이 아니다.
+  $("dot").className = "dot " + (s?.nodeState === "running" ? "on" : s?.loggedIn ? "warn" : "off");
   // 설치가 끝났나 — 이 한 줄이 마법사와 평상시 화면을 가른다.
   // ⚠ 판정은 **메인이 한다**(web-shell.appReady → state.ready). 렌더러가 식을 따로 적으면 한 축(계약 지원·토큰 거부)이
   //  빠진 채 '설치 완료' 화면이 뜨고 버튼은 조용히 아무 일도 안 한다(실측: 구 CLI 인 PC 가 그랬다).
@@ -72,13 +79,13 @@ function renderState(s) {
   $("apply-update").disabled = !!s?.busy;
   for (const id of ["doctor", "kit-update", "logout"]) $(id).disabled = !!s?.busy;
   // 실행 여부를 **모를 때**(측정 실패)는 버튼을 잠그지 않는다 — 모른다고 사용자를 가두면 안 된다.
-  const running = s?.nodeRunning === true, stopped = s?.nodeRunning === false;
-  // 프로세스는 도는데 게이트웨이엔 안 붙어 있음(절전 뒤 좀비 — 실측 3시간·나흘). '실행 중' 이라 그리면 거짓말이라 따로 말한다.
-  const zombie = running && s?.nodeConnected === false;
-  $("node-state").textContent = !s?.nodeRegistered ? "아직 이 PC 는 노드로 등록되지 않았습니다."
-    : s?.nodeRunning === null ? `노드 ${s?.nodeId || ""} — 실행 여부를 확인하지 못했습니다.`
-      : zombie ? `노드 ${s?.nodeId || ""} — 프로세스는 돌지만 게이트웨이에 연결돼 있지 않습니다. 다시 시작하세요.`
-        : running ? `노드 ${s?.nodeId || ""} 실행 중${s?.nodeDaemon ? " · PC 켤 때 자동 시작" : " · 이 세션만"}`
+  // 판정은 메인 한 자리(state.nodeState) — 여기선 문구만 고른다(#2215).
+  const ns = s?.nodeState, zombie = ns === "zombie", running = ns === "running", stopped = ns === "stopped";
+  $("node-state").textContent = ns === "unregistered" ? "아직 이 PC 는 노드로 등록되지 않았습니다."
+    : zombie ? `노드 ${s?.nodeId || ""} — 프로세스는 돌지만 게이트웨이에 연결돼 있지 않습니다. 다시 시작하세요.`
+      : running ? `노드 ${s?.nodeId || ""} 실행 중${s?.nodeDaemon ? " · PC 켤 때 자동 시작" : " · 이 세션만"}`
+          + (s?.nodeRunning === true ? "" : " (게이트웨이 기준)")
+        : ns === "unknown" ? `노드 ${s?.nodeId || ""} — 실행 여부를 확인하지 못했습니다.`
           : `노드 ${s?.nodeId || ""} 정지됨`;
   // #1849 — 잠자기로 추정되면 원인·조치를 그대로 띄운다(서버가 만든 문구). 재시작 버튼만 있으면
   //  사용자는 자는 PC 를 계속 재시작하게 된다 — 그건 고쳐지지 않는다.

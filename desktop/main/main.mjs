@@ -24,7 +24,7 @@ import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
-import { appReady, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
+import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -107,6 +107,7 @@ async function refreshState({ deep = false } = {}) {
   next.logViews = LOG_VIEWS.map((v) => ({ id: v.id, label: v.label }));
   // '다 갖춰졌다' 는 **한 자리**(web-shell.appReady)에서만 판정한다 — 트레이·마법사·창 선택이 전부 이 값을 본다.
   next.ready = appReady(next);
+  next.nodeState = nodeStateOf(next);   // #2215 — patchState 를 안 거치는 경로라 여기서도 채운다(빠뜨리면 옛 판정이 남는다)
   state = next;
   renderTray(); send(IPC.STATE, state); pushWebUpdate();
   if (deep && cliPath && !running) await refreshNodeStatus(cliPath);
@@ -153,8 +154,12 @@ async function refreshNodeStatus(cli) {
     nodeSleepNote: (n.sleep && typeof n.sleep.note === "string" && n.sleep.note) ? n.sleep.note : null });
   renderTray(); send(IPC.STATE, state);
 }
-/** 상태 일부를 바꾸면 `ready` 도 같이 다시 잰다 — 이걸 빼먹은 자리가 하나라도 있으면 트레이·창이 옛 판정으로 움직인다. */
-function patchState(patch) { state = { ...state, ...patch }; state.ready = appReady(state); }
+/** 상태 일부를 바꾸면 `ready`·`nodeState` 도 같이 다시 잰다 — 이걸 빼먹은 자리가 하나라도 있으면 트레이·창이 옛 판정으로 움직인다. */
+function patchState(patch) {
+  state = { ...state, ...patch };
+  state.ready = appReady(state);
+  state.nodeState = nodeStateOf(state);   // #2215 — 배지·상세·트레이가 각자 식을 적지 않게 여기서 한 번
+}
 function readTrim(p) { try { return readFileSync(p, "utf8").trim() || null; } catch { return null; } }
 /** CLI 를 '어떻게' 띄울지 — Windows 의 `.cmd` EINVAL 을 피하는 유일한 자리(cli-locate 주석 참조). */
 function launchSpecFor(cli, args) {
