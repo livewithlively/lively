@@ -270,3 +270,11 @@
 .ob-tok code.ob-copy::after{content:' ⧉'; font-size:11px; opacity:.6}
 .ob-tok ol .ob-kbd{font-size:12px}
 .ob-btn.ob-btn-mini{padding:2px 9px; font-size:12.5px; margin:0 1px; vertical-align:baseline; line-height:1.5; border-radius:7px; min-height:0}
+
+/* ══ #2232 연결된 앱 카드의 «연결 해제» — 잠긴 카드지만 되돌릴 문은 열려 있다(인라인 확인 한 번) ══ */
+.ob-opt-card.ob-done{cursor:default}
+.ob-oc-act{margin-left:auto; display:flex; align-items:center; gap:10px; flex:none}
+.ob-oc-unlink{font:inherit; font-size:12px; color:var(--muted); background:none; border:0; padding:2px 4px; cursor:pointer; text-decoration:underline; text-underline-offset:2px; white-space:nowrap}
+.ob-oc-unlink:hover{color:var(--ink)}
+.ob-oc-unlink.ob-danger{color:#C0392B; font-weight:700}
+.ob-oc-unlink:disabled{opacity:.6; cursor:default}
