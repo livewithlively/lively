@@ -2130,12 +2130,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const cp = (t) => `<code class="ob-copy" data-copy="${esc(t)}" title="누르면 복사돼요">${esc(t)}</code>`;
   //  버튼은 이 글 **위**에 있다(qHead 다음 줄) — «아래» 라고 쓰면 사람이 아래를 뒤진다(원준님 실측 2026-08-28).
   const AI_GUIDE = {
+    //  #2232 원준님 — Claude Code 첫 실행을 실제 화면(2.1.2xx 캡처)대로: 글자 스타일 → 로그인 방법 → 주소(브라우저가 안 열림) → 코드 붙여넣기
+    //   → Login successful → 보안 안내·폴더 신뢰 → 입력칸. 이미 켜져 있던 창(첫 실행 안내가 안 뜸)은 /login 으로 4번부터.
     claude: { steps: [
-      `위의 ${kbd('Claude 로그인 창 열기')}를 누르면 새 탭에 Claude 가 켜진 터미널 창이 열려요.`,
-      `그 창을 한 번 누른 뒤 ${cp('/login')} 을 붙여넣고 Enter 를 누르세요.`,
-      `창에 긴 주소가 나와요. 그 주소를 누르거나(또는 복사해 브라우저 주소창에 붙여) 열고, Anthropic 계정으로 로그인하세요.`,
-      `로그인이 끝나면 화면에 긴 코드가 나와요. 그 코드를 복사해 터미널 창에 붙여넣고 Enter.`,
-      `창에 «Login successful» 같은 말이 보이면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요.`,
+      `위의 ${kbd('Claude 로그인 창 열기')}를 누르면 새 탭에 <b>Claude Code</b> 가 켜진 터미널 창이 열려요(«Welcome to Claude Code»).`,
+      `처음 켜면 <b>Choose the text style that looks best with your terminal</b>(글자 스타일 고르기)가 나와요. 아무거나 — 기본 «2. Dark mode», 창이 밝으면 «3. Light mode» — ↑ ↓ 로 맞추고 <b>Enter</b>.`,
+      `<b>Select login method:</b> 가 나와요. <b>Claude account with subscription · Pro, Max, Team, or Enterprise</b>(내 Claude 구독 계정)에 «❯» 가 있는 채로 <b>Enter</b>. (회사 API 콘솔 계정이면 두 번째 «Anthropic Console account».)`,
+      `<b>Opening browser to sign in…</b> 뒤에 <b>Browser didn't open? Use the url below to sign in (c to copy)</b> 와 긴 주소가 나와요 — 이 창은 우리 서버에서 돌아서 브라우저가 저절로 안 열려요. 그 주소를 누르거나(또는 키보드 <b>c</b> 를 눌러 복사해 브라우저 주소창에 붙여) 열고, Claude(Anthropic) 계정으로 로그인한 뒤 <b>Authorize</b>(허용)를 누르세요.`,
+      `브라우저에 <b>코드</b>(Paste this code back into Claude Code)가 나와요. 복사해서 터미널 창의 <b>Paste code here if prompted &gt;</b> 자리에 붙여넣고(⌘V) <b>Enter</b>.`,
+      `<b>Login successful. Press Enter to continue…</b> 가 보이면 Enter. 이어서 <b>Security notes</b>(안내), 터미널 설정 물음(<b>Use Claude Code's terminal setup?</b>), <b>Do you trust the files in this folder?</b>(이 폴더를 믿나요 — «Yes, proceed»)가 차례로 나오면 각각 <b>Enter</b> 로 넘기세요. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
+      `창에 글을 치는 입력칸(<b>&gt;</b> 표시)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}를 누르세요. 첫 실행 안내가 안 뜨고 바로 입력칸이면(이미 켜져 있던 창) ${cp('/login')} 을 붙여넣고 Enter 한 뒤 4번부터 하시면 됩니다.`,
     ], note: CLI_NOTE },
     codex: { steps: [
       `위의 ${kbd('ChatGPT 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열리고, 로그인 절차가 저절로 시작돼요.`,
