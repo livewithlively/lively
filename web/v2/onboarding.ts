@@ -2205,19 +2205,35 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (href) { const a = document.createElement('a'); a.className = 'ob-btn ob-btn-sub ob-btn-inline'; a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = '열기'; row.append(a); }
       return row;
     };
+    //  ⚠ 창을 **자동으로** 열지 않는다. `await` 뒤의 window.open 은 사람이 누른 순간과 끊겨 있어 브라우저가
+    //   조용히 막는다(팝업 차단 — 오류도 안 난다). 그러면 화면엔 작은 글 한 줄뿐이라 «눌러도 반응이 없다» 가 된다.
+    //   그래서 탈출로는 **사람이 누르는 버튼**으로 준다 — 그 클릭이 곧 창을 열 자격이다.
+    const escape = (why) => {
+      const b = document.createElement('button');
+      b.className = 'ob-btn ob-btn-sub ob-btn-inline'; b.textContent = `${label} 로그인 창 열기 ↗`;
+      b.onclick = () => { void openLoginWindow(h, label); };
+      say(line('ob-note', why), b);
+    };
     say(line('ob-fine2', '로그인 절차를 시작하는 중이에요…'));
     try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h }) }); }
     catch (e) {
       // 여기서 못 하면 사람을 세우지 않는다 — 종전 경로로 내려간다(원준님이 지적한 «막다른 안내» 금지).
-      say(line('ob-note', `여기서 바로 로그인할 수 없어 창으로 엽니다 — ${(e && e.message) || e}`));
-      await openLoginWindow(h, label);
+      escape(`여기서 바로 로그인할 수 없어요 — ${(e && e.message) || e}`);
       return;
     }
     let pasted = false;
+    //  주소가 안 오는 채로 버티지 않는다 — codex 는 실측 1초 안에 찍는다. 상한을 넘기면 탈출로를 준다.
+    const STALL_MS = 30000;
+    const startedAt = Date.now();
     const tick = async () => {
       if (inlineStop || !document.body.contains(card)) return;
       let st = null;
       try { st = await api(`/api/ui/me/ai-login/state?harness=${encodeURIComponent(h)}`); } catch (_) { /* 다음 틱에 */ }
+      if (!(st && st.url) && !(st && st.loggedIn === true) && !(st && st.step === 'failed') && Date.now() - startedAt > STALL_MS) {
+        inlineStop = true;
+        escape('로그인 주소가 오지 않았어요. 창으로 열어 주세요.');
+        return;
+      }
       if (st && st.loggedIn === true) {
         inlineStop = true;
         say(line('ob-ok', `${label} 로그인이 끝났어요 — 아래 [로그인했어요]를 누르시면 됩니다.`));

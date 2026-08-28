@@ -18,7 +18,9 @@ test("★ codex 는 이 자리에서 로그인한다 — 새 탭을 열지 않�
   assert.match(SRC, /const LOGIN_INLINE = \{ codex: true \}/);
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
   assert.ok(fn.length > 500, "카드 함수를 못 찾았다");
-  assert.ok(!/window\.open/.test(fn), "카드 경로에 새 탭이 없다");
+  // 주석은 계약이 아니다 — «window.open 은 팝업차단으로 막힌다» 라고 **설명한** 줄에 걸리면 검열이다.
+  const code = fn.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.ok(!/window\.open/.test(code), "카드 경로에 새 탭이 없다");
   assert.match(fn, /ai-login\/start/);
   assert.match(fn, /ai-login\/state/);
 });
@@ -43,7 +45,9 @@ test("★ 대상이 아닌 하네스는 종전 «로그인 창» 그대로다 �
 
 test("★ 시작조차 못 하면 창으로 내려간다 — 막다른 카드 금지", () => {
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
-  assert.match(fn, /await openLoginWindow\(h, label\)/);
+  // 탈출로는 «자동으로 연다» 가 아니라 «누를 것을 준다» 로 바뀌었다(팝업차단) — 계약은 그대로 «막다른 카드 금지».
+  assert.match(fn, /catch \(e\) \{[^]{0,400}escape\(/, "시작 실패에 탈출로를 준다");
+  assert.match(fn, /openLoginWindow\(h, label\)/, "그 탈출로가 종전 창 경로로 간다");
 });
 
 test("★ 문구가 동작과 어긋나지 않는다 — codex 안내에 «검은 창»·«새 탭» 이 없다", () => {
@@ -60,6 +64,22 @@ test("★ 문구가 동작과 어긋나지 않는다 — codex 안내에 «검�
   // 대조군 — claude·agy·grok 은 여전히 창이 뜨므로 그 표현이 남아 있어야 한다(안 남으면 이 표가 아무것도 안 지킨다).
   assert.match(guide.slice(guide.indexOf("claude:"), guide.indexOf("codex:")), OPENS_WINDOW);
   assert.match(guide.slice(guide.indexOf("antigravity:")), OPENS_WINDOW);
+});
+
+test("★ 주소가 안 오면 «시작하는 중» 으로 버티지 않는다 — 무반응으로 보인다", () => {
+  // 실측(2026-08-28 프로덕션, dabetai-68ca): 이 상한이 없어서 카드가 «로그인 절차를 시작하는 중이에요…» 를
+  //  영원히 띄웠다. 사람에게 그건 «눌러도 반응이 없다» 다. 상한과 탈출로가 반드시 있어야 한다.
+  const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
+  assert.match(fn, /STALL_MS/, "상한이 있다");
+  assert.match(fn, /Date\.now\(\) - startedAt > STALL_MS/, "상한을 실제로 잰다");
+  assert.match(fn, /escape\(/, "상한을 넘기면 탈출로를 준다");
+});
+
+test("★ 탈출로는 사람이 누르는 버튼이다 — await 뒤의 window.open 은 팝업차단으로 조용히 막힌다", () => {
+  const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
+  // 카드 경로에 자동 창열기가 없어야 한다. openLoginWindow 는 **버튼 onclick 안에서만** 불린다.
+  assert.ok(!/await openLoginWindow\(/.test(fn), "자동으로 창을 열지 않는다");
+  assert.match(fn, /b\.onclick = \(\) => \{ void openLoginWindow\(h, label\); \}/);
 });
 
 test("코드는 눌러서 복사된다 — 사람이 옮겨 적게 하지 않는다", () => {

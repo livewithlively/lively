@@ -72,7 +72,10 @@ function homeOf(osUser: string | null): string {
 }
 
 async function sh(osUser: string | null, script: string): Promise<string> {
-  if (osUser) return memberShOut(osUser, `HOME=${q(homeOf(osUser))} ${script}`);
+  //  ⚠ `HOME=x <script>` 로 붙이면 그 값은 **첫 줄에만** 걸린다(셸의 명령 앞 변수 대입 규칙). 스크립트가
+  //   여러 줄이라 둘째 줄부터는 중계가 준 기본 HOME 으로 돈다 — 지금 배포는 그 둘이 우연히 같아서 안 터졌을
+  //   뿐이고, 다르면 «로그인은 됐다는데 세션은 미로그인» 이 된다. 그래서 export 로 스크립트 전체에 건다.
+  if (osUser) return memberShOut(osUser, `export HOME=${q(homeOf(osUser))}\n${script}`);
   return new Promise((resolve, reject) => {
     const p = spawn("sh", ["-c", script], { stdio: ["ignore", "pipe", "pipe"] });
     let out = ""; let err = "";
