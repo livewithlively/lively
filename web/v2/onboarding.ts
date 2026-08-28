@@ -955,7 +955,27 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  판정·해제도 그 축으로 본다. 수집기는 관리자만 켤 수 있다(셀프서브에선 만든 사람 본인) — 관리자가 아니면 종전 길.
    *   · 노션 — 라이블리 공개 통합 동의(노션 화면의 페이지 고르기)가 곧 연결이자 범위. 개인 MCP 로그인은 시키지 않는다.
    *   · 슬랙 — 내 계정 로그인(라이블리 슬랙 앱, 유저+봇 토큰)이 곧 수집기의 자격이다. 로그인 뒤 수집기를 켠다. */
-  const COLLECT_FIRST = { slack: 'slack', notion: 'notion' };
+  //  #2247 — 피그마·ClickUp 도 같은 축: 토큰(금고)이 자격, 켜면 수집기가 그 토큰을 가리킨다. 피그마는 범위(파일 링크)가 있어야 켜진다.
+  const COLLECT_FIRST = { slack: 'slack', notion: 'notion', figma: 'figma', clickup: 'clickup' };
+  const COLLECT_ON_DESC = {
+    notion: '노션에서 고른 페이지를 팀 자료함에 모으고 있어요.', slack: '공개 채널 대화를 팀 자료함에 모으고 있어요.',
+    figma: '고른 피그마 파일의 코멘트를 팀 자료함에 모으고 있어요.', clickup: 'ClickUp 작업·댓글을 프로젝트 탭으로 가져오고 있어요.',
+  };
+  /** 토큰형 앱의 자격이 이미 금고에 있나(개인 축 실측). */
+  const tokenSaved = (id) => !!(CONN && SVC_OF[id] && CONN.connected.some((s) => s.key === SVC_OF[id]));
+  /** 피그마 범위 입력 → 서버 scope(숫자만인 토막 = 팀 id, 나머지 = 파일 링크). */
+  const figmaScope = (text) => {
+    const toks = String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean);
+    const teams = toks.filter((x) => /^\d{5,}$/.test(x)), files = toks.filter((x) => !/^\d{5,}$/.test(x));
+    const out: any = {}; if (files.length) out.file_keys = files.join(' '); if (teams.length) out.team_ids = teams.join(' '); return out;
+  };
+  /** 토큰형 앱 수집기 켜기 — 서버 답(ok / needs_connect / needs_scope)을 그대로 돌려준다. 던지지 않는다. */
+  async function startMemberCollect(id, scopeText) {
+    const body: any = { enabled: true };
+    if (id === 'figma' && scopeText && scopeText.trim()) body.scope = figmaScope(scopeText);
+    try { return await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify(body) }); }
+    catch (e) { return { ok: false, message: (e && e.message) || '모으기를 켜지 못했어요.' }; }
+  }
   let COLL: any = {};
   const collectMode = (id) => !!COLLECT_FIRST[id] && isAdmin();
   async function loadColl() {
@@ -995,6 +1015,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (c) {
         if (id === 'notion') return c.enabled ? 'on' : (!c.ready && !(c.workspaces || []).length ? 'blocked' : 'off');
         if (id === 'slack') return (c.search && c.search.enabled) ? 'on' : 'off';
+        if (id === 'figma' || id === 'clickup') return c.enabled ? 'on' : 'off';
       }
       // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
     }
@@ -1103,8 +1124,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       try { await loadConn(); } finally { busy = false; }
       if (done) return;
       if (collectMode(id) && connState(id) !== 'on') {
-        const ready = id === 'slack' ? !!(CONN && CONN.connected.some((s) => s.key === 'slack'))
-          : !!(COLL[id] && (COLL[id].workspaces || []).length);
+        const ready = id === 'notion' ? !!(COLL[id] && (COLL[id].workspaces || []).length) : (id === 'slack' || id === 'clickup') && tokenSaved(id);
         if (ready) {
           busy = true;
           try { await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify({ enabled: true }) }); await loadConn(); }
@@ -1199,7 +1219,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       <p class="ob-note">${h ? h.why : `${esc(it.label)} 에서 받은 글자를 아래에 붙여넣으면 연결됩니다.`}</p>
       ${doc ? `<a class="ob-btn ob-btn-sub ob-btn-inline" href="${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(h ? h.go : it.label + ' 열기')} ↗</a>` : ''}
       ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
-      <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(ph)}">
+      ${tokenSaved(id) ? '<p class="ob-note">토큰은 이미 저장돼 있어요 — 바꿀 때만 다시 붙여넣으세요.</p>' : ''}
+      <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
+      ${collectMode(id) && id === 'figma' ? `<p class="ob-note">모을 <b>피그마 파일 링크</b>를 넣어 주세요 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체를 모으려면 팀 주소(figma.com/files/team/<id>/…)의 숫자 id 를 넣어도 돼요.</p>
+      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/design/…">` : ''}
       <p class="ob-err" id="tokErr"></p>
       ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
       <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
@@ -1506,7 +1529,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const st = connState(id);
               const how = connHow(id);
               const open = tokOpen === id;
-              const desc = st === 'on' ? (collectMode(id) ? (id === 'notion' ? '노션에서 고른 페이지를 팀 자료함에 모으고 있어요.' : '공개 채널 대화를 팀 자료함에 모으고 있어요.') : '연결됐어요.')
+              const scopeOnly = collectMode(id) && id === 'figma' && tokenSaved(id);
+              const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
+                : scopeOnly ? (open ? '모을 파일 링크를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 파일 링크를 넣어 주세요.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
                 : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
@@ -1573,6 +1598,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             } catch (e) { fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
             return;
           }
+          //  #2247 피그마·ClickUp — 토큰이 없으면 토큰 폼(피그마는 범위 칸 포함), 있으면 바로 켠다. 범위가 없다면(피그마) 폼을 연다.
+          if (id === 'figma' || id === 'clickup') {
+            if (!tokenSaved(id)) { tokOpen = id; redraw(); return; }
+            const r: any = await startMemberCollect(id, '');
+            if (r && r.needs_scope) { tokOpen = id; redraw(); return; }
+            await loadConn();
+            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요 — [외부 앱 연결]에서 다시 시도해 주세요.'));
+            return;
+          }
           //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다.
           if (CONN && CONN.connected.some((s) => s.key === 'slack')) {
             const on = await startCollect(id);
@@ -1607,11 +1641,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           const submit = async () => {
             const id = tokOpen, v = (tokIn.value || '').trim();
             if (!id) return;
-            if (!v) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
+            if (!v && !tokenSaved(id)) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
             tokGo.disabled = true; tokGo.textContent = '연결하는 중…'; if (tokErr) tokErr.textContent = '';
             let verdict = null;
             try {
-              verdict = await svcToken(id, v);
+              if (v) verdict = await svcToken(id, v);
             } catch (e) {
               tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
               if (tokErr) tokErr.textContent = (e && e.message) || '연결하지 못했어요. 글자를 다시 확인해 주세요.';
@@ -1623,6 +1657,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
               if (tokErr) tokErr.textContent = verdict.message || '그 글자로는 아직 연결되지 않았어요. 값을 다시 확인해 주세요.';
               return;
+            }
+            //  #2247 수집기 축 — 토큰이 저장됐으면 그 토큰으로 수집기를 켠다(피그마는 범위 칸의 링크와 함께).
+            if (collectMode(id)) {
+              const sc = $('#tokScope', el);
+              const r: any = await startMemberCollect(id, sc ? sc.value : '');
+              if (!r || !r.ok) {
+                tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
+                if (tokErr) tokErr.textContent = (r && r.message) || '모으기를 켜지 못했어요. 잠시 뒤 다시 눌러 주세요.';
+                if (r && r.needs_scope && sc) sc.focus();
+                await loadConn(); return;
+              }
+              await loadConn();
             }
             if (connState(id) === 'on') { markConnected(id); tokOpen = null; redraw(); return; }
             tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';

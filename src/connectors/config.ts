@@ -16,6 +16,7 @@ import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js"
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
 import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
+import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
 import { resolveGoogleTokenSource, googleVaultReader, isGoogleCollectorSystem } from "../org/credentials/google-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
@@ -133,7 +134,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       url: "https://app.clickup.com/settings/apps",
     },
     fields: [
-      { key: "api_token", env: "CLICKUP_API_TOKEN", secret: true, required: true, label: "API Token", hint: "personal token (pk_...)" },
+      { key: "api_token", env: "CLICKUP_API_TOKEN", secret: true, label: "API Token", hint: "personal token (pk_...) — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "CLICKUP_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = 관리탭 자격 금고의 조직 공용 clickup_token · member:<구성원 id> = 그 사람이 [외부 앱 연결 ▸ ClickUp]에 저장한 토큰 · 비우면 위 API Token 칸을 씁니다" },
       { key: "include_list_ids", env: "CLICKUP_INCLUDE_LIST_IDS", secret: false, label: "포함 리스트", picker: "clickup_lists", hint: "설정 시 이 리스트만 싱크 (쉼표구분)" },
       { key: "exclude_list_ids", env: "CLICKUP_EXCLUDE_LIST_IDS", secret: false, label: "제외 리스트", picker: "clickup_lists", hint: "노이즈/샘플 리스트 (쉼표구분)" },
       { key: "container_list_id", env: "CLICKUP_CONTAINER_LIST_ID", secret: false, label: "컨테이너 리스트", picker: "clickup_lists", hint: "아웃바운드 create 대상 List" },
@@ -406,6 +408,14 @@ async function loadConnectorConfig(
     if (r) {
       if (r.warning) console.warn(`figma token_source: ${r.warning}`);
       out.token = r.token;
+    }
+  }
+  // ── ClickUp 토큰 출처(#2247) — 같은 규약(출처를 명시했으면 그 출처만). 개인 API 토큰(pk_…) 평문.
+  if (system === "clickup" && out.token_source) {
+    const r = await resolvePlainTokenSource(out.token_source, plainVaultReader(CLICKUP_TOKEN_KIND), CLICKUP_TOKEN_SPEC);
+    if (r) {
+      if (r.warning) console.warn(`clickup token_source: ${r.warning}`);
+      out.api_token = r.token;
     }
   }
   // ── 구글 토큰 출처(#1881 G3) — 같은 규약이되 **액세스 토큰이 아니라 갱신 자격 3칸**을 채운다.
