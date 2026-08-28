@@ -305,8 +305,46 @@ function toolSpec(t) {
   };
 }
 
+// ── stdio 피어(하네스)가 사라지면 종료한다 ──────────────────────────────────
+//  근거·기전은 lively-mcp-gateway.mjs 의 §피어 주석에 전문이 있다(2026-08-28 실측: 그쪽은 재귀 고리로
+//  100% CPU 를 태웠다). 이 파일은 최상위 핸들러가 없어 스핀까지는 안 갔지만, **형제가 파이프의 반대편을
+//  물고 있으면 stdin EOF 도 EPIPE 도 안 와서 유휴 상태로 영영 남는다**(실측: 그 상태로 생존 = 메모리만 축낸다).
+//  그래서 같은 두 축을 건다 — ① 깨진 파이프면 종료 ② 부모가 바뀌면 종료.
+//  ⚠ 무장은 **진짜 stdio 일 때만** — 테스트는 가짜 스트림을 넘기고, 거기서 exit(0) 이 나가면
+//   러너가 그 자리에서 끝나 실패가 성공으로 둔갑한다.
+const PEER_GONE_CODES = new Set(["EPIPE", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END", "EBADF"]);
+const isPeerGone = (e) => !!e && PEER_GONE_CODES.has(e.code);
+let peerExiting = false;
+function peerGone() {                       // ⚠ 로그를 남기지 마라 — stderr 도 같이 끊겨 있다.
+  if (peerExiting) return;
+  peerExiting = true;
+  process.exit(0);
+}
+let peerGuardsArmed = false;
+function armPeerGuards() {
+  if (peerGuardsArmed) return;
+  peerGuardsArmed = true;
+  for (const s of [process.stdout, process.stderr]) {
+    try { s.on("error", (e) => { if (isPeerGone(e)) peerGone(); }); } catch { /* 스트림 없음 */ }
+  }
+  // 기동 시점 ppid 와 달라졌는지를 본다(`=== 1` 이 아니다 — 리눅스 subreaper·컨테이너 --init 대응).
+  const ms = Number(process.env.LIVELY_MCP_PARENT_WATCH_MS || 30_000);
+  if (ms > 0) {
+    const initialPpid = process.ppid;
+    const pw = setInterval(() => { if (process.ppid !== initialPpid) peerGone(); }, ms);
+    if (typeof pw.unref === "function") pw.unref();
+  }
+}
+
 export function serveMcpLocal({ input = process.stdin, output = process.stdout } = {}) {
-  const send = (m) => output.write(JSON.stringify(m) + "\n");
+  const realStdio = input === process.stdin && output === process.stdout;
+  if (realStdio) armPeerGuards();
+  //  ⚠ 깨진 파이프의 쓰기 오류는 **비동기**로 온다 — write 콜백으로도 받는다.
+  const send = (m) => {
+    const onWritten = realStdio ? (err) => { if (isPeerGone(err)) peerGone(); } : undefined;
+    try { output.write(JSON.stringify(m) + "\n", onWritten); }
+    catch (e) { if (realStdio && isPeerGone(e)) peerGone(); else throw e; }
+  };
   const okr = (id, result) => send({ jsonrpc: "2.0", id, result });
   const errr = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
   const rl = createInterface({ input });

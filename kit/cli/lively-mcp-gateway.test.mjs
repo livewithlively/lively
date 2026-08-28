@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";   // E24 가 하위프로세스로 진짜 stdio 를 띄우는 데 쓴다
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -388,6 +389,41 @@ try {
       call("delegate_run", { wait_sec: 600 }) === 600_000 + slack, `got=${call("delegate_run", { wait_sec: 600 })}`);
     check("E23 delegate_run(wait=false, 즉시접수) → 기본 CALL 타임아웃(길게 줄 이유 없음)",
       call("delegate_run", { wait: false, wait_sec: 600 }) === base, `got=${call("delegate_run", { wait: false, wait_sec: 600 })}`);
+  }
+  // ── E24 피어(하네스) 소멸 = 이 프로세스가 죽어야 하는 유일한 경우 (#2213 릭 회귀) ──────────
+  //  왜 하위프로세스로 재는가: 이 방어는 **진짜 stdio 로 서빙할 때만** 무장한다(가짜 스트림으로 무장하면
+  //  테스트 러너가 exit(0) 으로 끝나 실패가 성공으로 둔갑한다). 그래서 이 한 건만 실제로 띄워서 잰다.
+  //  실측 배경(2026-08-28): 이 방어가 없어 고아 19개가 CPU 1,540%(코어 9.4개)를 태웠다 — 최장 1일 11시간.
+  //  기전은 재귀였다 — stdout 이 깨진 뒤 write 가 비동기 EPIPE → 리스너 없음 → uncaughtException →
+  //  그 핸들러의 log() 가 **역시 깨진 stderr** 로 쓰며 또 EPIPE → 무한 고리.
+  {
+    const { spawn } = await import("node:child_process");
+    const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+    const entry = fileURLToPath(new URL("./lively-mcp-gateway.mjs", import.meta.url));
+    const child = spawn(process.execPath, [entry], {
+      stdio: ["pipe", "pipe", "pipe"],
+      // 부모 감시는 끈다 — 여기서 재는 것은 «깨진 파이프» 축 하나다(부모는 살아 있다).
+      env: { ...process.env, LIVELY_HOME: HOME, LIVELY_MCP_PARENT_WATCH_MS: "0" },
+    });
+    child.stdout.on("data", () => {});
+    child.stderr.on("data", () => {});
+    // ⚠ exit 리스너는 **spawn 직후** 단다. 아래 write 들 사이에 이미 죽으면 그 이벤트는 한 번 나고 끝이라,
+    //  나중에 달면 영영 못 받는다(그 실수로 통과해야 할 테스트가 FAIL 로 나왔다).
+    let exitedFlag = false;
+    const exitOnce = new Promise((r) => child.on("exit", () => { exitedFlag = true; r(true); }));
+    await nap(1500);
+    try { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) + "\n"); } catch { /* */ }
+    await nap(1000);
+    // 하네스가 죽은 상황 그대로: 읽는 쪽이 사라진다(stdin 은 형제가 물고 있어 EOF 가 안 온다).
+    child.stdout.destroy();
+    child.stderr.destroy();
+    for (let i = 0; i < 3; i++) {
+      try { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2 + i, method: "ping" }) + "\n"); } catch { /* */ }
+      await nap(150);
+    }
+    const exited = exitedFlag || await Promise.race([exitOnce, nap(8000).then(() => false)]);
+    check("E26 피어가 사라지면 스스로 종료한다(고아 스핀 회귀 #2213)", exited === true, "8초 안에 종료 안 됨 = 릭 재발");
+    if (!exited) { try { child.kill("SIGKILL"); } catch { /* */ } }
   }
 } finally {
   try { rmSync(HOME, { recursive: true, force: true }); } catch { /* */ }

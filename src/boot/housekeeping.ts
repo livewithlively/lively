@@ -260,7 +260,16 @@ function startBoxWatchStep(): void {
     //  원리적으로 안 걸리는 별개 축이라 같은 ps 스캔에서 함께 센다(#687 버그B — 안 세면 0 으로 보인다).
     leakProbe: async () => {
       const procs = await scanAttachProcs();
-      return { ptmxFd: selfPtmxFdCount(), attachChildren: procs ? procs.children : null, orphanAttach: procs ? procs.orphans : null };
+      return {
+        ptmxFd: selfPtmxFdCount(),
+        attachChildren: procs ? procs.children : null,
+        orphanAttach: procs ? procs.orphans : null,
+        // #2213 — 부모를 잃은 stdio MCP 서버. 회수(리퍼)는 tmux 세션만 세므로 이 축은 원리적으로 안 잡힌다.
+        //  실측에서 19개가 코어 9.4개를 태우는 동안 어떤 화면에도 안 떴다. 나이를 함께 내보내는 이유는
+        //  «방금 한두 개»와 «며칠째 쌓이는 중»이 전혀 다른 신호이기 때문이다.
+        orphanMcp: procs ? procs.orphanMcp : null,
+        oldestOrphanMcpSec: procs ? procs.oldestOrphanMcpSec : null,
+      };
     },
     send: async (a) => (await sendBoxAlert(a)).sent,
   });
