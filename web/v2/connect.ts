@@ -19,17 +19,18 @@ import { svcTile } from '../svc-icons.js';
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard, type SvcView } from '../me-logins.js';
 //  관리자 절반(조직에 앱 열기) — 같은 화면의 다른 층. 관리자가 아니면 통째로 null 이라 화면에 자국도 남지 않는다.
-import { loadOrgMcp, orgAdminSection, presetOf, type OrgMcp } from './connect-admin.js';
+import { loadOrgMcp, orgAdminSection, type OrgMcp } from './connect-admin.js';
 import { overlay } from '../ui-primitives.js';
 
 type Svc = (typeof LOGIN_SERVICES)[number];
 
 // 화면이 그때그때 서버에서 읽는다 — 연결 상태는 서버에만 있고 셸 데이터(V2Data)에는 없다.
-async function load(): Promise<{ v: SvcView; org: OrgMcp | null }> {
+async function load(withOrg = true): Promise<{ v: SvcView; org: OrgMcp | null }> {
   const creds = await api('/api/ui/me/credentials');
   const oauth = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
   //  조직 쪽(등록된 MCP 서버·프리셋)은 **관리자에게만** 내려온다 — 아니면 null 이고 화면의 그 층이 사라진다.
-  const org = await loadOrgMcp().catch(() => null);
+  //   목록(#2243)은 조직 층을 안 쓰므로 withOrg=false 로 그 요청을 건너뛴다.
+  const org = withOrg ? await loadOrgMcp().catch(() => null) : null;
   return { v: partition(oauth, creds), org };
 }
 
@@ -42,17 +43,25 @@ type State = 'on' | 'off' | 'blocked';
 function stateOf(v: SvcView, svc: Svc): State {
   if (v.connected.some((s: Svc) => s.key === svc.key)) return 'on';
   if (v.blockedOAuth.some((s: Svc) => s.key === svc.key)) return 'blocked';
+  if (v.soon.some((s: Svc) => s.key === svc.key)) return 'blocked';   // #2243 카탈로그가 준비 중이라 한 앱도 같은 자리
   return 'off';
 }
 
 // ══ 목록 (#/connect) ═══════════════════════════════════════════════════════════
+//  #2243 안 2 «진열대» — 행이 아니라 카드다. 카드마다 «무엇을 해 주는지» 한 줄(LOGIN_SERVICES.short)이 있어 누르기 전에 고를 수 있다.
+//  상태는 셋뿐: 연결됨 · 연결할 수 있음 · 준비 중. «조직에 열어 둠»은 이 앱(셀프서브·비엔터프라이즈)에서 사용자의 세계관이
+//   아니다(원준 2026-08-28) — 조직이 아직 안 연 OAuth 앱은 사용자 눈엔 «라이블리가 아직 준비 중»과 같고, 온보딩(#2232)도
+//   같은 판정(soon || blocked)을 쓴다. 그래서 요약 칩·구역·관리자 문구가 전부 사라졌다.
+//  «둘 다 비활성처럼 보이면 헷갈린다»를 이렇게 푼다 — 회색 로고의 뜻을 «준비 중» 하나로 좁히고, 켤 수 있는 앱은 제 색 로고에
+//   [연결] 버튼이 붙어 «누를 수 있다»가 보인다. 준비 중 카드는 점선 테두리·틴트 바탕에 갈 곳(버튼) 대신 «준비 중 + 이유».
+type ListState = 'on' | 'off' | 'soon';
 export async function renderConnect(host: HTMLElement): Promise<void> {
   host.replaceChildren(el('div', { class: 'v2-center' }, skeleton('연결 상태를 불러오는 중')));
-  let v: SvcView, org: OrgMcp | null;
-  try { ({ v, org } = await load()); }
+  let v: SvcView;
+  try { ({ v } = await load(false)); }
   catch (e) { host.replaceChildren(el('div', { class: 'v2-center' }, errorNote(e, '연결 상태를 불러오지 못했습니다'))); return; }
-  //  관리자에게는 셋째 묶음이 '남에게 부탁할 것'이 아니라 **내가 지금 할 수 있는 일**이다 — 이름부터 바꾼다.
-  const iAmAdmin = !!(org && org.admin);
+  const soon = [...(v.soon as Svc[]), ...(v.blockedOAuth as Svc[])];
+  const reload = () => { void renderConnect(host); };
 
   let q = '';
   const listHost = el('div', { class: 'cn-groups' });
@@ -61,45 +70,70 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
     oninput: (e: any) => { q = String(e.target.value || '').trim().toLowerCase(); paint(); },
   }) as HTMLInputElement;
 
-  // 요약 — 세 숫자가 이 화면의 전부다("몇 개 켜져 있나 · 더 켤 수 있나 · 내가 못 켜는 게 있나").
+  // 요약 — «몇 개 켜져 있나 · 더 켤 수 있나 · 아직 못 켜는 게 있나». 준비 중은 있을 때만 센다(0 은 소음).
   const sum = el('div', { class: 'cn-sum' },
     el('span', { class: 'cn-sum-i on' }, el('b', { text: String(v.connected.length) }), el('span', { text: '연결됨' })),
     el('span', { class: 'cn-sum-i' }, el('b', { text: String(v.available.length) }), el('span', { text: '연결할 수 있음' })),
-    ...(v.blockedOAuth.length ? [el('span', { class: 'cn-sum-i' }, el('b', { text: String(v.blockedOAuth.length) }),
-      el('span', { text: iAmAdmin ? '내가 열 수 있음' : '관리자 필요' }))] : []),
-    ...(iAmAdmin ? [el('span', { class: 'cn-sum-i cn-sum-adm' }, el('b', { text: String(org!.servers.length) }), el('span', { text: '조직에 열어 둠' }))] : []));
+    ...(soon.length ? [el('span', { class: 'cn-sum-i soon' }, el('b', { text: String(soon.length) }), el('span', { text: '준비 중' }))] : []));
 
-  function group(title: string, note: string, items: Svc[], st: State): HTMLElement | null {
-    const hit = items.filter((s) => !q || s.label.toLowerCase().includes(q) || s.key.includes(q));
-    if (!hit.length) return null;
-    return el('section', { class: 'cn-group' },
-      el('div', { class: 'cn-group-h' }, el('span', { class: 'v2-k', text: `${title} · ${hit.length}` }),
-        el('span', { class: 'cn-group-note', text: note })),
-      el('div', { class: 'cn-list' }, ...hit.map((s) => row(s, st))));
+  /** 지금 이 앱을 켜는 길 — 계정(조직이 등록한 OAuth 또는 전용 창구)이 있으면 그것, 아니면 토큰.
+   *  ⚠ svc.oauth 만 보면 안 된다: Slack 처럼 oauth·token 을 다 가진 앱은 OAuth 가 안 열려 있어도 토큰으로 «켤 수 있음»에 온다
+   *   (#2202 A1). 그때 계정 길을 내밀면 눌러도 안 되는 버튼이 된다 — 실제로 열려 있는 길만 버튼에 건다. */
+  const viaAccount = (svc: Svc) => !!((svc.oauth && v.oauthMap.has(svc.oauth)) || (svc as any).appConnect);
+
+  function groupHead(title: string, n: number | null, note: string): HTMLElement {
+    // 한글 소제목 — .v2-k(영문 대문자 스타일) 대신 굵은 잉크 + 개수 + 힌트(#2202 C1).
+    return el('div', { class: 'cn-gh' }, el('b', { text: title }),
+      n == null ? null : el('span', { class: 'n', text: String(n) }), el('span', { class: 'h', text: note }));
   }
 
-  function row(svc: Svc, st: State): HTMLElement {
-    const how = svc.oauth ? '계정 로그인' : '토큰';
-    const meta = st === 'on' ? connMeta(v, svc)
-      : st === 'blocked' ? (iAmAdmin
-        ? (presetOf(org, svc.key) ? '조직에 열면 팀 전체가 쓸 수 있어요 — 내가 열 수 있습니다' : '조직에 열어야 해요 — 관리탭에서 직접 등록')
-        : '관리자가 조직에 등록해야 연결할 수 있어요')
-      : how + '으로 연결';
-    return el('a', { class: 'cn-row' + (st === 'blocked' ? ' blocked' : ''), href: '#/connect/' + svc.key, title: svc.label },
-      svcTile(svc.key, svc.label, st === 'on'),
-      el('div', { class: 'cn-row-main' },
-        el('div', { class: 't' }, el('span', { text: svc.label }),
+  function group(title: string, note: string, items: Svc[], st: ListState): HTMLElement | null {
+    const hit = items.filter((s) => !q || s.label.toLowerCase().includes(q) || s.key.includes(q));
+    if (!hit.length) return null;
+    return el('section', { class: 'cn-group' }, groupHead(title, hit.length, note),
+      el('div', { class: 'cn-cards' }, ...hit.map((s) => card(s, st))));
+  }
+
+  function card(svc: Svc, st: ListState): HTMLElement {
+    const href = '#/connect/' + svc.key;
+    const head = (sub: string) => el('div', { class: 'cn-card-hd' },
+      //  회색 로고 = 준비 중뿐. 켤 수 있는 앱도 제 색이다(무엇인지 먼저 읽히고, 버튼이 «누를 수 있다»를 말한다).
+      svcTile(svc.key, svc.label, st !== 'soon'),
+      el('div', { class: 'cn-card-tt' },
+        el('div', { class: 'cn-card-nm' }, el('span', { text: svc.label }),
           st === 'on' ? el('span', { class: 'cn-dot on', 'aria-label': '연결됨' }) : null),
-        el('div', { class: 'm', text: meta })),
-      el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
+        el('div', { class: 'cn-card-st', text: sub })));
+    const blurb = el('p', { class: 'cn-card-bl', text: String((svc as any).short || svc.blurb || '') });
+    if (st === 'on') {
+      return el('a', { class: 'cn-card', href, title: svc.label },
+        head(connMeta(v, svc)), blurb,
+        el('div', { class: 'cn-card-ft' }, el('span', { class: 'pill pill-state confirmed', text: '연결됨' }),
+          el('span', { class: 'cn-card-go', text: '관리 ›' })));
+    }
+    if (st === 'soon') {
+      return el('a', { class: 'cn-card soon', href, title: svc.label },
+        head(svc.oauth ? '계정 로그인' : '토큰'), blurb,
+        el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-pill-soon', text: '준비 중' }),
+          el('span', { class: 'cn-card-h', text: String((svc as any).soon || '준비를 마치면 여기서 바로 켤 수 있어요') })));
+    }
+    //  켤 수 있음 — 카드는 상세로, [연결]은 그 자리에서 바로 시작. 버튼은 <a> 안에 못 들어가므로 카드가 role=link 인 div 가 된다.
+    const account = viaAccount(svc);
+    const go = () => { location.hash = href; };
+    return el('div', {
+      class: 'cn-card', role: 'link', tabindex: '0', title: svc.label, onclick: go,
+      onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } },
+    },
+      head(account ? '계정 로그인' : '토큰'), blurb,
+      el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-card-h', text: '아직 연결 안 함' }),
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '연결',
+          onclick: (e: Event) => { e.stopPropagation(); if (account) void startOAuth(svc, reload); else openToken(svc, reload); } })));
   }
 
   function paint(): void {
     const kids = [
       group('연결된 앱', 'AI가 지금 내 계정으로 쓸 수 있어요', v.connected, 'on'),
-      group('연결할 수 있는 앱', '지금 바로 내가 켤 수 있어요', v.available, 'off'),
-      group(iAmAdmin ? '아직 조직에 열지 않은 앱' : '관리자가 등록해야 하는 앱',
-        iAmAdmin ? '열면 팀 전체가 각자 계정으로 연결할 수 있어요' : '내 힘으로는 켤 수 없어요', v.blockedOAuth, 'blocked'),
+      group('연결할 수 있는 앱', '눌러서 바로 켤 수 있어요', v.available, 'off'),
+      group('준비하고 있어요', '라이블리가 준비를 마치면 여기서 바로 켤 수 있어요', soon, 'soon'),
     ].filter(Boolean) as HTMLElement[];
     if (!kids.length) kids.push(el('p', { class: 'v2-empty', text: `'${q}' 와(과) 맞는 앱이 없어요.` }));
     listHost.replaceChildren(...kids);
@@ -108,13 +142,13 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
 
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect' },
     el('h1', { class: 'v2-title', text: '외부 앱 연결' }),
-    el('p', { class: 'v2-desc' }, ...uiText('AI가 내 계정으로 쓸 수 있는 앱이에요. 연결은 **나에게만** 적용되고 팀에는 공유되지 않습니다.')),
+    //  «팀에는 공유되지 않습니다»를 뺐다 — 팀 자료로 모으기는 워크스페이스가 함께 보므로 그 문장이 틀려진다. 범위 이야기는 상세가 한다.
+    el('p', { class: 'v2-desc', text: 'AI가 내 계정으로 쓸 수 있는 앱이에요. 원하는 앱을 골라 바로 연결하세요.' }),
     el('div', { class: 'cn-top' }, sum, search),
     listHost,
     // 레포 접근 — 같은 '외부 연결'인데 종전엔 관리탭에만 있었다. 개발 안 하면 안 건드려도 되는 것이라 맨 아래.
     el('section', { class: 'cn-group cn-extra' },
-      el('div', { class: 'cn-group-h' }, el('span', { class: 'v2-k', text: '코드 저장소 접근' }),
-        el('span', { class: 'cn-group-note', text: '개발자용 — 클론·푸시에 쓰는 SSH 키·토큰' })),
+      groupHead('코드 저장소 접근', null, '개발자용 — 클론·푸시에 쓰는 SSH 키·토큰'),
       el('button', { class: 'cn-row cn-row-btn', type: 'button', onclick: () => openGitCredentialManager('me') },
         el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: '{ }' }),
         el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: 'git 인증' }),
@@ -194,9 +228,8 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     // 관리자 필요 — 눌러도 안 되는 버튼을 내밀지 않는다. 대신 **그대로 전달할 수 있는 문장**을 복사해 준다.
     //  ⚠ 관리자에게는 이 버튼을 주지 않는다 — 자기가 열 수 있는데 자기에게 부탁 문구를 복사시키는 꼴이 된다.
     //   그 자리는 아래 '조직 설정' 구역(orgAdminSection)이 받는다.
-    const ask = `라이블리에서 ${svc.label} 을(를) 쓰고 싶습니다. 관리 ▸ 외부 서비스에서 ${svc.label} 커넥터를 등록해 주세요.`;
-    acts.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '요청 문구 복사',
-      onclick: () => { void navigator.clipboard?.writeText(ask).then(() => toast('요청 문구를 복사했어요 — 관리자에게 그대로 보내세요')).catch(() => toast('복사하지 못했습니다', true)); } }));
+    //  #2243 — 조직 축을 화면에서 뺐다(셀프서브에선 «관리자」가 곧 나라 부탁 문구가 거짓말이 된다). 목록과 같은 말로 «준비 중».
+    acts.push(el('span', { class: 'cn-soon-note', text: String((svc as any).soon || '라이블리가 이 앱을 준비하고 있어요 — 준비를 마치면 여기서 바로 연결할 수 있어요.') }));
   }
 
   // ── 사실 줄 — 화면이 아는 것만 쓴다(모르면 그 줄을 아예 안 쓴다) ──
@@ -239,7 +272,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
         el('div', { class: 'cn-head-st' + (st === 'on' ? ' on' : '') },
           st === 'on' ? [el('span', { class: 'cn-dot on', 'aria-hidden': 'true' }), el('span', { text: '연결됨' })]
             : st === 'off' ? el('span', { text: '연결 안 됨' })
-            : el('span', { text: org && org.admin ? '아직 조직에 열지 않음' : '관리자가 등록해야 해요' })))),
+            : el('span', { text: '준비 중' })))),   // #2243 목록과 같은 말 — 관리자에겐 아래 조직 카드가 «왜»를 말한다
     el('p', { class: 'v2-desc' }, ...uiText(svc.blurb)),
     el('div', { class: 'cn-acts' }, ...acts),
     // 아래 절반은 **두 칸**이다(넓은 화면에서만 — 좁으면 CSS 가 한 칸으로 되돌린다): 왼쪽 = 이 연결의 사실과
