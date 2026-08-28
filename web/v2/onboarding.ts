@@ -1221,7 +1221,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
       ${tokenSaved(id) ? '<p class="ob-note">토큰은 이미 저장돼 있어요 — 바꿀 때만 다시 붙여넣으세요.</p>' : ''}
       <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
-      ${collectMode(id) && id === 'figma' ? `<p class="ob-note">모을 <b>피그마 파일 링크</b>를 넣어 주세요 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체를 모으려면 팀 주소(figma.com/files/team/<id>/…)의 숫자 id 를 넣어도 돼요.</p>
+      ${collectMode(id) && id === 'figma' ? `<p class="ob-note">모을 <b>피그마 파일 링크</b>를 넣어 주세요 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체를 모으려면 팀 주소(figma.com/files/team/&lt;id&gt;/…)의 숫자 id 를 넣어도 돼요.</p>
       <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/design/…">` : ''}
       <p class="ob-err" id="tokErr"></p>
       ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
@@ -1530,8 +1530,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const how = connHow(id);
               const open = tokOpen === id;
               const scopeOnly = collectMode(id) && id === 'figma' && tokenSaved(id);
+              const tokOnly = collectMode(id) && id === 'clickup' && tokenSaved(id);
               const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
                 : scopeOnly ? (open ? '모을 파일 링크를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 파일 링크를 넣어 주세요.')
+                : tokOnly ? '토큰은 받았어요 — 누르면 바로 가져오기가 켜져요.'
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
                 : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
