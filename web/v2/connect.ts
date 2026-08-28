@@ -153,6 +153,15 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const viaOAuth = !!oc?.connected;
   const viaToken = !!cred?.has_secret;
   const spec = svc.token ? CRED_KINDS.find((x: any) => x.kind === svc.token) : null;
+  //  #2232 — OAuth 릴레이에서 **막 돌아온 탭**이다(main.ts 가 표식을 남긴다). 이 탭은 [허용]을 누르느라 새로 열린 탭이라
+  //   사람은 «그래서 이제 뭘 하지?» 상태다(원준님 실측 2026-08-28, Slack). 원래 하던 화면으로 돌아가라고 **글로** 말한다.
+  let arrivedFrom = false;
+  try { arrivedFrom = sessionStorage.getItem('lively.connect.return') === key; if (arrivedFrom) sessionStorage.removeItem('lively.connect.return'); } catch (_) { arrivedFrom = false; }
+  const arrived = arrivedFrom ? el('div', { class: 'cn-arrived' + (st === 'on' ? ' on' : ' off') },
+    el('b', { text: st === 'on' ? `${svc.label} 연결이 끝났어요. ` : `${svc.label} 연결을 아직 확인하지 못했어요. ` }),
+    el('span', { text: st === 'on'
+      ? '처음 설정이나 다른 화면에서 시작하셨다면 이 탭은 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
+      : '아래 [계정으로 연결]로 한 번 더 해 보세요.' })) : null;
 
   // ── 동작 줄 ──
   const acts: HTMLElement[] = [];
@@ -222,6 +231,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
 
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
     backLink(),
+    ...(arrived ? [arrived] : []),
     el('div', { class: 'cn-head' },
       svcTile(svc.key, svc.label, st === 'on'),
       el('div', { class: 'cn-head-tt' },

@@ -207,7 +207,13 @@ export async function bootV2(): Promise<void> {
     const q = new URLSearchParams(location.search);
     let seen = false;
     for (const [app, label] of [['slack', 'Slack'], ['notion', '노션']] as const) {
-      if (q.get(app) === 'ok') { toast(`${label} 연결이 끝났어요`); seen = true; }
+      if (q.get(app) === 'ok') {
+        toast(`${label} 연결이 끝났어요`); seen = true;
+        //  #2232 — 이 탭은 [허용]을 누르느라 열린 **새 탭**이다. 원래 탭(처음 설정·외부 앱 연결)이 곧바로 알게 신호를
+        //   보내고, 이 탭의 연결 화면에는 «원래 탭으로 돌아가세요» 를 띄울 표식을 남긴다(connect.ts 가 읽고 지운다).
+        try { sessionStorage.setItem('lively.connect.return', app); } catch (_) { /* 프라이빗 모드 */ }
+        try { const bc = new BroadcastChannel('lively-connect'); bc.postMessage({ app, ok: true }); bc.close(); } catch (_) { /* 미지원 */ }
+      }
       const err = q.get(`${app}_error`);
       if (err) { toast(`${label} 연결에 실패했어요 — ${err}`, true); seen = true; }
       q.delete(app); q.delete(`${app}_error`);
