@@ -948,12 +948,30 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let CONN = null;
   /** 한 번이라도 물어봤나. ⚠ 이게 없으면 서버가 답을 못 줄 때 '못 읽음 → 다시 그림 → 또 물음'이 영원히 돈다. */
   let connTried = false;
+  const isAdmin = () => { try { return (state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin')) === true; } catch (_) { return false; } };
+  /* ★ #2243 (원준 2026-08-28: "온보딩 <연결하기> 로 슬랙·노션은 MCP 말고 수집기가 돌아가게") ──────────────────
+   *  이 화면이 약속하는 것은 «그동안 쌓인 자료를 가져온다» 다. 개인 연결(금고에 자격 한 줄 = AI 도구·MCP)은 그 약속과
+   *  무관하고, 노션은 그 토큰(DCR)으로 수집도 못 한다(#1881). 그래서 슬랙·노션은 **수집기 축(org_collector)** 으로 잇고
+   *  판정·해제도 그 축으로 본다. 수집기는 관리자만 켤 수 있다(셀프서브에선 만든 사람 본인) — 관리자가 아니면 종전 길.
+   *   · 노션 — 라이블리 공개 통합 동의(노션 화면의 페이지 고르기)가 곧 연결이자 범위. 개인 MCP 로그인은 시키지 않는다.
+   *   · 슬랙 — 내 계정 로그인(라이블리 슬랙 앱, 유저+봇 토큰)이 곧 수집기의 자격이다. 로그인 뒤 수집기를 켠다. */
+  const COLLECT_FIRST = { slack: 'slack', notion: 'notion' };
+  let COLL: any = {};
+  const collectMode = (id) => !!COLLECT_FIRST[id] && isAdmin();
+  async function loadColl() {
+    const out: any = {};
+    await Promise.all(Object.entries(COLLECT_FIRST).map(async ([id, svc]) => {
+      try { out[id] = await api(`/api/ui/org/${svc}/collect`); } catch (_) { out[id] = null; }
+    }));
+    COLL = out;
+  }
   async function loadConn() {
     connTried = true;
     try {
       const creds = await api('/api/ui/me/credentials');
       const oauth = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
       CONN = partition(oauth, creds);
+      if (isAdmin()) await loadColl();
     } catch (_) { CONN = null; }
     return CONN;
   }
@@ -972,6 +990,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   /** 이 앱이 지금 어떤 자리에 있나 — 'on'(이어짐) · 'off'(내가 켤 수 있다) · 'blocked'(관리자가 열어야) · null(모른다). */
   function connState(id) {
     const svc = svcOf(id); if (!svc || !CONN) return null;
+    if (collectMode(id)) {
+      const c = COLL[id];
+      if (c) {
+        if (id === 'notion') return c.enabled ? 'on' : (!c.ready && !(c.workspaces || []).length ? 'blocked' : 'off');
+        if (id === 'slack') return (c.search && c.search.enabled) ? 'on' : 'off';
+      }
+      // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
+    }
     if (CONN.connected.some((s) => s.key === svc.key)) return 'on';
     if (CONN.blockedOAuth.some((s) => s.key === svc.key)) return 'blocked';
     return 'off';
@@ -1076,6 +1102,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (done || busy) return; busy = true;
       try { await loadConn(); } finally { busy = false; }
       if (done) return;
+      if (collectMode(id) && connState(id) !== 'on') {
+        const ready = id === 'slack' ? !!(CONN && CONN.connected.some((s) => s.key === 'slack'))
+          : !!(COLL[id] && (COLL[id].workspaces || []).length);
+        if (ready) {
+          busy = true;
+          try { await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify({ enabled: true }) }); await loadConn(); }
+          catch (_) { /* 다음 폴링에 다시 */ } finally { busy = false; }
+          if (done) return;
+        }
+      }
       if (connState(id) === 'on') { stop(); after(); }
     };
     const poke = () => { void check(); };
@@ -1107,7 +1143,6 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   /** 팀 자료로 모으기(수집)가 짝인 앱 — 연결 성사 뒤 켜고(관리자), 해제 때 끈다. */
   const COLLECT_OF = { slack: 'slack', notion: 'notion', gdrive: 'google', gmail: 'google', gcal: 'google' };
-  const isAdmin = () => { try { return (state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin')) === true; } catch (_) { return false; } };
   /** 연결 해제 — [외부 앱 연결](v2/connect.ts)과 **같은 창구**다(계정 로그인 = oauth/disconnect · 토큰 = credential/delete).
    *  #2232 — 종전엔 «연결됐어요» 카드가 잠겨 되돌릴 길이 없었다(원준님 2026-08-28: "마음이 바뀌어서 해제할 수도 있게").
    *  관리자가 이 연결로 켠 팀 수집은 함께 끈다 — 연결이 없는데 «모으는 중» 으로 남으면 거짓 상태다. */
@@ -1118,6 +1153,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     let did = false;
     if (oc && oc.connected) { await api('/api/ui/me/oauth/disconnect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) }); did = true; }
     if (cred && cred.has_secret) { await api('/api/ui/me/credential/delete', { method: 'POST', body: JSON.stringify({ kind: svc.token, scope_key: cred.scope_key || '' }) }); did = true; }
+    if (collectMode(id)) {
+      try { await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify({ enabled: false }) }); did = true; } catch (_) { /* 아래에서 판정 */ }
+    }
     if (!did) throw new Error('해제할 연결을 찾지 못했어요. [외부 앱 연결]에서 확인해 주세요.');
     const col = COLLECT_OF[id];
     if (col && isAdmin()) { try { await api(`/api/ui/org/${col}/collect`, { method: 'POST', body: JSON.stringify({ enabled: false }) }); } catch (_) { /* 비치명 */ } }
@@ -1468,11 +1506,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const st = connState(id);
               const how = connHow(id);
               const open = tokOpen === id;
-              const desc = st === 'on' ? '연결됐어요.'
+              const desc = st === 'on' ? (collectMode(id) ? (id === 'notion' ? '노션에서 고른 페이지를 팀 자료함에 모으고 있어요.' : '공개 채널 대화를 팀 자료함에 모으고 있어요.') : '연결됐어요.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
                 : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
-                : '눌러 주세요 — 새 탭에서 [허용]만 누르면 됩니다.';
+                : (collectMode(id) && id === 'notion' ? '눌러 주세요 — 노션 화면에서 모을 페이지를 고르고 [액세스 허용]을 누르면 됩니다.' : '눌러 주세요 — 새 탭에서 [허용]만 누르면 됩니다.');
               if (st === 'on') return doneCardHtml(id, it.label, BRAND[it.logo] || GLYPH[it.id] || '', desc);
               return `<button class="ob-opt-card${open ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
                 <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${esc(desc)}</span></span>
@@ -1514,6 +1552,37 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             return !(r && r.needs_connect === true);
           } catch (_) { return false; }
         }
+        /** #2243 수집기 축 연결 — 노션은 공개 통합 동의(페이지 고르기), 슬랙은 계정 로그인 뒤 수집기 켜기. */
+        async function collectConnect(id, c) {
+          const d = c.querySelector('.ob-oc-d');
+          const fin = (err) => {
+            if (err) { toast(err); if (S.scene === 'connect') redraw(); return; }
+            if (connState(id) === 'on') markConnected(id);
+            if (S.scene === 'connect') redraw();
+          };
+          if (id === 'notion') {
+            try {
+              //  켜기를 먼저 시도한다 — 이미 연결된 워크스페이스가 있으면 그 자리에서 켜지고, 없으면 노션 동의 주소가 온다.
+              const r: any = await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: true }) });
+              if (r && r.ok) { await loadConn(); fin(); return; }
+              const url = r && r.authorization_url;
+              if (!url) { fin('노션 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+              if (d) d.textContent = '노션 화면에서 모을 페이지를 고르고 [액세스 허용]을 누르면 여기가 저절로 바뀌어요…';
+              window.open(url, '_blank', 'noopener');
+              watchConnect(id, fin);
+            } catch (e) { fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
+            return;
+          }
+          //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다.
+          if (CONN && CONN.connected.some((s) => s.key === 'slack')) {
+            const on = await startCollect(id);
+            await loadConn();
+            fin(on ? null : '슬랙 자료 모으기를 켜지 못했어요 — [외부 앱 연결]에서 다시 시도해 주세요.');
+            return;
+          }
+          if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
+          await svcOAuth(id, fin);
+        }
         wireUnlink(el, redraw);
         $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
           const id = c.dataset.conn;
@@ -1522,6 +1591,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           //  ⚠ 아직 서버를 못 읽었으면 **어느 길로 이을지 고를 수 없다**: Slack·GitLab 은 계정 로그인과 글자 받아
           //   오기가 둘 다 있어서, 모르는 채로 정하면 회사가 이미 열어 둔 쉬운 길을 두고 어려운 길로 보내게 된다.
           if (!CONN) { toast('연결 상태를 아직 확인하는 중이에요 — 잠시 뒤 다시 눌러 주세요.'); if (!connTried) void loadConn().then(redraw); return; }
+          if (collectMode(id)) { await collectConnect(id, c); return; }
           if (connHow(id) === 'token') { tokOpen = tokOpen === id ? null : id; redraw(); return; }
           const d = c.querySelector('.ob-oc-d'); if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
           await svcOAuth(id, (err) => {
