@@ -1838,7 +1838,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         + `<div class="ob-benefits">
             <p class="ob-benefit">더 빠르게 열리고, 로그인이 유지돼요</p>
             <p class="ob-benefit">리브가 확인이 필요할 때 알림으로 바로 알려 드려요</p>
-            <p class="ob-benefit">내 컴퓨터 폴더와 로컬 깃 저장소를 앱이 직접 이어 줘요</p>
+            <p class="ob-benefit">내 컴퓨터 폴더와 로컬 깃 저장소를 앱이 직접 연결해 줘요</p>
           </div>
           <button class="ob-btn ob-btn-pri" id="appGet">앱 받기</button>
           <button class="ob-btn ob-btn-sub" id="appSkip">지금은 웹으로 할게요</button>`,
