@@ -284,3 +284,15 @@
 .ob-oc-unlink:hover{color:var(--ink)}
 .ob-oc-unlink.ob-danger{color:#C0392B; font-weight:700}
 .ob-oc-unlink:disabled{opacity:.6; cursor:default}
+
+/* 로그인 카드(#2055 후속) — 주소·코드를 이 자리에서 준다. 종전 «새 탭 검은 창» 을 대신한다. */
+.ob-login-card { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ob-login-card:empty { display: none; }
+.ob-login-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ob-login-k { color: var(--muted); font-size: 12px; min-width: 74px; }
+.ob-login-v {
+  font-family: var(--mono, monospace); background: var(--bg-soft, rgba(0,0,0,.05));
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; cursor: pointer;
+  overflow-wrap: anywhere; max-width: 100%;
+}
+.ob-login-v:hover { border-color: var(--blue); }
