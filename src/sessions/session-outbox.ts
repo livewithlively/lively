@@ -164,7 +164,16 @@ export async function listOutbox(sessionId: string): Promise<OutboxRow[]> {
     `SELECT * FROM org_session_outbox WHERE session_id=$1 AND kind='prompt' AND
        (status IN ('queued','sending','failed') OR (status='sent' AND last_error='echo-unconfirmed')) ORDER BY seq`,
     [sessionId]);
-  return r.rows.map(rowToOutbox);
+  const rows = r.rows.map(rowToOutbox);
+  // **덜 끝난 게 보이면** 배달자를 한 번 깨운다(#2244). 매니지드에는 전역 스윕이 없어(recoverStaleSending 머리말)
+  //  재기동 뒤 큐가 스스로 되살아나지 못한다 — 사람이 그 대기분을 보고 있는 이 순간이 남은 유일한 자리다.
+  //  이 호출은 **요청 안**이라 테넌트 컨텍스트도 있다.
+  //  ⚠ 조건 없이 부르면 안 된다: 화면이 이 엔드포인트를 **3초마다** 친다(web/session-chat.ts). 아무것도
+  //   안 걸렸을 때도 매번 배달 루프가 떠 UPDATE+SELECT 를 헛돌린다. 위 결과에 이미 답이 있으므로 그걸 본다.
+  //  ⓘ 여기 안 걸리는 것: kind='control'(부른 쪽이 waitOutboxSettled 로 그 자리에서 기다린다)과
+  //   **대화창을 아무도 안 연 세션**. 후자는 이 축으로는 안 살아난다 — 그건 housekeeping 머리말이 말한 '별도 러너'의 몫이다.
+  if (rows.some((x) => x.status === "queued" || x.status === "sending")) kickOutbox(sessionId);
+  return rows;
 }
 
 /**
@@ -259,6 +268,9 @@ export function kickOutbox(sessionId: string): void {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 async function deliverLoop(sessionId: string): Promise<void> {
+  // 돌기 전에 **내 세션의** 죽은 잔재부터 되살린다(#2244) — 매니지드에는 전역 스윕이 없다(recoverStaleSending 머리말).
+  //  실패는 삼킨다: 회수가 안 돼도 아래 queued 처리는 계속돼야 한다(회수는 보조 축이지 전제가 아니다).
+  await recoverStaleSending(sessionId).catch((e) => logger.warn({ err: e, sessionId }, "outbox: 잔재 회수 실패(비치명)"));
   for (;;) {
     const q = await itemsPool.query(
       `SELECT * FROM org_session_outbox WHERE session_id=$1 AND status='queued' ORDER BY seq LIMIT 1`, [sessionId]);
@@ -519,6 +531,41 @@ async function tailContains(tfs: TranscriptFs, file: string, size: number, needl
   } catch { return null; }
 }
 
+/** 'sending' 이 이 시간을 넘으면 **죽은 배달자의 잔재**로 본다 — 준비 판정+에코까지 한 행이 2분을 넘지 않는다
+ *  (READY_WINDOW 20s + ECHO 15s + 여유). resumeOutbox 와 recoverStaleSending 이 같은 자를 쓴다. */
+export const STALE_SENDING = "2 minutes";
+
+/**
+ * **이 세션의** 죽은 배달 잔재를 회수한다(#2244) — 배달자가 돌기 직전에 스스로 부른다.
+ *
+ *  ── 왜 세션 스코프인가 ──
+ *  종전엔 회수가 `resumeOutbox`(전 세션 일괄) 하나뿐이었고, 그건 부팅·5분 스윕에서 불린다.
+ *  그런데 **매니지드(요청별 테넌시)에서는 그 스윕이 통째로 안 돈다** — 요청 밖이라 테넌트 컨텍스트가
+ *  없어서 `boot/housekeeping` 이 `gate:"scheduler"` 스텝을 아예 건너뛴다(그쪽 requestScopedTenancy
+ *  머리말이 그 판단의 정본이다: "조용히 넘기지 않고 아예 안 도는 것이 맞다"). 그래서 회수가 없었다.
+ *
+ *  실측 2026-08-28(프로덕션 c77): 이미지 롤로 게이트웨이가 재생성되며 배달 루프가 죽었고, 첫 지시 한 건이
+ *  `sending` 인 채 **13분 넘게** 갇혀 있었다(`updated_at` 고정·attempts=0·세션은 살아 있음). 같은 배포에서
+ *  하루 넘은 delivered/sent 행 30건이 안 지워진 것이 그 경로가 **아예 안 돈다**는 대조 증거였다.
+ *
+ *  ── 왜 이 자리인가 ──
+ *  회수는 **테넌트 컨텍스트 안**에서 일어나야 한다. `kickOutbox` 는 요청(enqueue·조회)에서 시작되므로
+ *  그 컨텍스트를 물려받는다. 세션 하나로 스코프가 좁아 "누구의 것인지 모르는 정리 작업"도 아니다 —
+ *  housekeeping 머리말이 전역 스윕을 거부한 바로 그 이유를 여기서는 피해 간다.
+ *
+ *  ⚠ 되살린 행은 **다시 보내진다**. `sending` 중 죽었으면 실제로는 이미 전달됐을 수 있어 중복 위험이 있다 —
+ *   종전 resumeOutbox 와 같은 판단으로 attempts 를 올려, 반복되면 배달자가 실패로 떨어뜨리게 둔다.
+ */
+export async function recoverStaleSending(sessionId: string): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE org_session_outbox SET status='queued', attempts=attempts+1, updated_at=now()
+      WHERE session_id=$1 AND status='sending' AND updated_at < now() - interval '${STALE_SENDING}'`,
+    [sessionId]);
+  const n = r.rowCount ?? 0;
+  if (n) logger.info({ sessionId, rows: n }, "outbox: 죽은 배달 잔재 회수");
+  return n;
+}
+
 /** 부팅 재개 — 죽는 순간 'sending' 이던 행을 queued 로 되돌리고, 대기분이 있는 세션들을 다시 돌린다.
  *  ⚠ sending 중 재기동이면 실제로는 이미 전달됐을 수 있다 — 재전송 중복 위험이 있지만, 재기동은 드물고
  *   에코 확인이 그 창을 좁힌다(이미 적혔으면 배달자가 준비 판정→send 전에 … 아니, 여기선 알 수 없다).
@@ -529,7 +576,7 @@ export async function resumeOutbox(): Promise<void> {
   // ⚠ 'sending' 을 무조건 되돌리면 **지금 배달 중인** 행을 건드린다(5분 sweep 에서도 불린다) — 준비 판정+에코까지 한 행이
   //  2분을 넘지 않으므로(READY_WINDOW 20s + ECHO 15s + 여유), 2분 넘게 sending 인 것만 '죽은 배달자의 잔재'로 본다.
   await itemsPool.query(`UPDATE org_session_outbox SET status='queued', attempts=attempts+1, updated_at=now()
-    WHERE status='sending' AND updated_at < now() - interval '2 minutes'`);
+    WHERE status='sending' AND updated_at < now() - interval '${STALE_SENDING}'`);
   const r = await itemsPool.query(`SELECT DISTINCT session_id FROM org_session_outbox WHERE status='queued'`);
   for (const row of r.rows) kickOutbox(String(row.session_id));
 }
