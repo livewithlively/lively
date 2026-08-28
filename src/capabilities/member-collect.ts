@@ -12,7 +12,7 @@ import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
-import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
+import { getMemberSecret, listMemberSecretsPublic, memberOwner } from "../org/credentials/member-secret-store.js";
 import { resetConnectorConfigCache } from "../connectors/config.js";
 
 export interface MemberCollectSpec {
@@ -24,6 +24,10 @@ export interface MemberCollectSpec {
   instance: string;
   /** 켠 사람의 금고에서 찾을 자격 kind(예 figma_token). scope_key 는 ''(단일 대상 kind). */
   credKind: string;
+  /** true 면 scope_key 를 가리지 않고 그 kind 슬롯이 하나라도 있으면 연결로 본다(github_pat: 호스트 키 PAT 또는 '' 키 OAuth 묶음). */
+  credAnyScope?: boolean;
+  /** 범위가 비어 있을 때 채울 기본값(예 [GitHub 연결]에서 고른 저장소). 이것도 비면 needs_scope. */
+  defaultScope?: () => Promise<Record<string, string>>;
   /** 앱 이름(응답 문장). */
   appLabel: string;
   /** 수집기 label 기본값. */
@@ -99,6 +103,10 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
   const find = (all: CollectorView[]): CollectorView | undefined =>
     all.find((c) => c.preset_key === spec.preset && c.instance_key === spec.instance);
   const connected = async (memberId: string): Promise<boolean> => {
+    if (spec.credAnyScope) {
+      const rows = await listMemberSecretsPublic(memberOwner(memberId)).catch(() => []);
+      return rows.some((r) => r.kind === spec.credKind && r.has_secret);
+    }
     const r = await getMemberSecret(memberOwner(memberId), spec.credKind, "").catch(() => null);
     return !!r?.secret;
   };
@@ -146,8 +154,13 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
       const actor = user.userId;
       const source = ctx?.source ?? "web";
       const inst = find(await listCollectors());
-      const scopeIn = normalizeScopeInput(spec, i.scope);
-      const merged: Record<string, unknown> = { ...(inst?.config ?? {}), ...scopeIn };
+      let scopeIn = normalizeScopeInput(spec, i.scope);
+      let merged: Record<string, unknown> = { ...(inst?.config ?? {}), ...scopeIn };
+      // 범위가 비면 앱이 아는 기본값(예 [GitHub 연결]에서 고른 저장소)으로 채운다 — 그 선택이 곧 범위라 사람이 두 번 고르지 않는다.
+      if (i.enabled === true && spec.defaultScope && !scopeSatisfied(spec, merged)) {
+        const dflt = normalizeScopeInput(spec, await spec.defaultScope().catch(() => ({})));
+        if (scopeSatisfied(spec, dflt)) { scopeIn = { ...dflt, ...scopeIn }; merged = { ...merged, ...scopeIn }; }
+      }
       const plan = memberCollectPlan({
         enabled: i.enabled === true, meConnected: await connected(actor), scopeOk: scopeSatisfied(spec, merged),
       });

@@ -4,6 +4,9 @@ import { makeMemberTokenCollect } from "./member-collect.js";
 import { ensureFigmaCommentsDistiller } from "../org/distill/figma-preset.js";
 import { FIGMA_TOKEN_KIND } from "../org/credentials/figma-token-source.js";
 import { CLICKUP_TOKEN_KIND } from "../org/credentials/plain-token-source.js";
+import { GITHUB_TOKEN_KIND } from "../org/credentials/github-token-source.js";
+import { ensureGithubIssuesDistiller } from "../org/distill/github-preset.js";
+import { listInstallationRepos } from "../org/credentials/github-app-git.js";
 
 /** 토글이 만드는 인스턴스 키 — 관리탭에서 손으로 만든 것('_' 등)과 겹치지 않게 고정 이름. */
 export const MEMBER_INSTANCE = "lively-member";
@@ -30,4 +33,17 @@ export const clickupCollectCapabilities = makeMemberTokenCollect({
   outcome: "작업·댓글·시간기록이 프로젝트 탭의 미러로 들어온다(자료함이 아니다 — 구조 엔티티는 output_mode 로 못 바꾼다).",
 });
 
-export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities];
+export const githubCollectCapabilities = makeMemberTokenCollect({
+  system: "github", preset: "github", instance: MEMBER_INSTANCE, credKind: GITHUB_TOKEN_KIND, credAnyScope: true, appLabel: "GitHub",
+  label: "GitHub — 고른 저장소의 이슈·PR",
+  note: "[GitHub 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 GitHub 연결로 고른 저장소의 이슈·PR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
+  connectHint: "[외부 앱 연결 ▸ GitHub]에서 계정을 연결하거나 토큰을 저장하세요",
+  scopeKeys: ["repos"], requireScope: true,
+  scopeHint: "모을 저장소(owner/repo)를 하나는 넣어 주세요 — [GitHub 연결] 화면에서 저장소를 골랐다면 그게 기본값이 됩니다.",
+  // [GitHub 연결]의 저장소 고르기가 곧 범위 — 설치에 열린 저장소를 기본값으로(그 화면이 없는 PAT 연결은 손으로 넣는다).
+  defaultScope: async (): Promise<Record<string, string>> => { const open = await listInstallationRepos(); return open?.length ? { repos: open.join(" ") } : {}; },
+  outcome: "이슈·PR 본문과 댓글, 릴리스 노트가 자료함에 들어오고, 이슈·PR 증류기가 꺼진 채로 함께 준비된다.",
+  onEnabled: async ({ actor, source }) => { await ensureGithubIssuesDistiller({ actor, source: `collect-toggle:${source}` }); },
+});
+
+export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities, ...githubCollectCapabilities];
