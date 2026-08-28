@@ -95,6 +95,13 @@ export function installScript(home: string): string {
     `node "$K/setup/user-install.mjs" --allow-host-effects --harness ${SEED_HARNESSES} >/dev/null`,
     `STORE_URL="http://localhost:8080/mcp" bash "$K/setup/register-clients.sh" >/dev/null`,
     `rm -f "$H/${BUNDLE_TMP}"`,
+    // claude 첫 실행 안내를 미리 넘긴다 — **로그인과 별개의 화면**인데 사람에겐 «또 로그인하라» 로 보인다.
+    //  실측 2026-08-28(매니지드, dabetai-68ca): 화면에서 인라인 로그인을 끝내(oauthAccount 바인딩 · 자격 유효)
+    //  세션을 열었는데 Claude Code 가 첫 실행 순서(글자 스타일 → 로그인 방법 → 보안 안내)를 처음부터 보여 줬다.
+    //  로그인을 터미널 밖으로 뺐으면 이 안내도 같이 치워야 «로그인이 끝났다» 가 사람 눈에도 사실이 된다.
+    //  ⚠ 있는 값은 덮지 않는다(사람이 고른 테마·계정 정보를 건드리면 안 된다). 폴더 신뢰는 **손대지 않는다** —
+    //   그건 사람이 할 보안 판단이라 첫 세션에서 한 번 묻는 게 맞다.
+    `node -e 'const fs=require("fs"),p=process.env.HOME+"/.claude.json";let d={};try{d=JSON.parse(fs.readFileSync(p,"utf8"))}catch(_){};let ch=0;if(d.hasCompletedOnboarding===undefined){d.hasCompletedOnboarding=true;ch++}if(d.theme===undefined){d.theme="dark";ch++}if(ch)fs.writeFileSync(p,JSON.stringify(d))' || true`,
     `printf %s ok > "$H/${MARKER}"`,
   ].join("\n");
 }
