@@ -2313,7 +2313,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      ⚠ «막다른 카드» 를 만들지 않는다: 시작조차 못 하면 종전 «로그인 창» 경로로 정직하게 내려간다.
      ⚠ 완료 판정은 서버의 **자격 확인**이 한다(프로세스가 끝난 것과 로그인 성공은 다르다). */
   let inlineStop = false;
-  async function startInlineLogin(el, h, label) {
+  async function startInlineLogin(el, h, label, restart) {
     const card = $('#cCard', el); if (!card) return;
     inlineStop = false;
     card.hidden = false;
@@ -2338,7 +2338,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       say(line('ob-note', why), b);
     };
     say(line('ob-fine2', '로그인 절차를 시작하는 중이에요…'));
-    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h }) }); }
+    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h, restart: restart === true }) }); }
     catch (e) {
       // 여기서 못 하면 사람을 세우지 않는다 — 종전 경로로 내려간다(원준님이 지적한 «막다른 안내» 금지).
       escape(`여기서 바로 로그인할 수 없어요 — ${(e && e.message) || e}`);
@@ -2366,7 +2366,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       }
       if (st && st.step === 'failed') {
         const again = document.createElement('button'); again.className = 'ob-btn ob-btn-sub ob-btn-inline'; again.textContent = '다시 시도';
-        again.onclick = () => { void startInlineLogin(el, h, label); };
+        //  ⚠ 반드시 **새로** 띄운다 — 옛 프로세스가 살아 있으면 죽은 코드를 그대로 다시 보여 준다(위 restart 머리말).
+        again.onclick = () => { void startInlineLogin(el, h, label, true); };
         say(line('ob-note', String((st && st.error) || '로그인이 실패했어요.')), again);
         return;
       }

@@ -288,7 +288,13 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   };
   app.post("/api/ui/me/ai-login/start", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
-    await startAiLogin(await loginSeat(req), h);
+    const seat = await loginSeat(req);
+    //  ⚠ restart 가 필요한 이유(실측 2026-08-28): 사람이 브라우저에서 **막히는** 경우가 있다 — 예컨대 ChatGPT
+    //   계정에 «Codex용 장치 코드 인증» 이 꺼져 있으면 그 코드가 거기서 죽는다(#2232 원준님 실측). 그런데 우리
+    //   쪽 프로세스는 15분을 더 기다리므로, 사람이 설정을 켜고 [다시 시도] 를 눌러도 start 는 «이미 돌고 있다» 며
+    //   **죽은 코드를 그대로 다시 보여 준다.** 그러면 몇 번을 눌러도 같은 벽이다. 다시 시도는 새로 띄워야 한다.
+    if (((req.body ?? {}) as Record<string, unknown>).restart === true) await cancelAiLogin(seat, h);
+    await startAiLogin(seat, h);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true });
   }));
