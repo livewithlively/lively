@@ -98,6 +98,13 @@ t("⑦b ★설치는 **게이트웨이 자신**에서 잰다 — 멤버 자리(t
   assert.match(fn, /aiAccountStatus\(user, osSt\)/, "자격 판정이 멤버 축(aiAccountStatus)을 안 쓴다");
 });
 
+t("★ 매니지드 중계 배포(LIVELY_MEMBER_EXEC)에서도 자격 판정은 멤버 홈이다 — 게이트웨이 자기 홈을 보면 늘 «미로그인» (#2232)", () => {
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiAccountStatus"), PROFILES.indexOf("export async function memberLoggedInHarnessesAny"));
+  assert.match(fn, /const relayed = !isolated && memberExecConfigured\(\)/, "중계 배포 분기가 없다");
+  assert.match(fn, /if \(isolated \|\| relayed\)/, "중계 배포가 격리와 같은 축(osSt.loggedInHarnesses)을 안 탄다");
+
+});
+
 t("⑦c 프로브를 못 돌리는 자리면 '미로그인' 이 아니라 '모름' 이다", () => {
   // 프로브는 그 사람 자격(HOME)을 봐야 해서 멤버 자리에서 돌아야 하는데, 그 자리에 바이너리가 없을 수 있다.
   //  그 실패를 false 로 접으면 **로그인한 사람에게** «아직 로그인이 안 보여요» 라고 한다.
