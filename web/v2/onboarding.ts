@@ -185,31 +185,41 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const kindOf = (name) => { for (const [k, re] of KIND_OF) if (re.test(name)) return k; return 'file'; };
   const extOf = (name) => { const m = /\.([a-z0-9]{1,5})$/i.exec(name); return m ? m[1].toUpperCase().slice(0, 4) : '파일'; };
   const fmtSize = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
-  /** 타일 HTML 목록 — 폴더째 올린 것은 폴더 하나로 접고(안에 몇 개), 낱개 파일은 하나씩. */
-  function fileTiles() {
+  const KIND_LABEL = { dir: '폴더', img: '사진', doc: '문서', sheet: '표', slide: '발표', code: '코드', zip: '압축', file: '기타' };
+  /** 받은 파일 목록 HTML — **요약 칩 한 줄 + 스크롤 되는 촘촘한 줄 목록**(#2232 원준님: 타일 카드는 8개만 돼도 화면을 다 먹는다).
+   *  폴더째 올린 것은 폴더 한 줄(안에 몇 개), 낱개 파일은 한 줄씩, 방금 올린 것이 맨 위. 목록은 여섯 줄 높이에서 멈추고
+   *  안에서만 스크롤한다 — 몇 백 개를 올려도 화면 길이는 같다. 비어 있으면 ''. */
+  function fileListHtml() {
     const rows = Array.isArray(S.upFiles) ? S.upFiles : [];
-    if (!rows.length) return [];
+    if (!rows.length && !(S.upN || 0)) return '';
     const dirs = new Map(), loose = [];
     for (const r of rows) {
       const i = String(r.r || '').indexOf('/');
       if (i > 0) { const top = r.r.slice(0, i); const d = dirs.get(top) || { n: top, c: 0, s: 0, up: 0 }; d.c++; d.s += r.s || 0; if (r.st === 'up') d.up++; dirs.set(top, d); }
       else loose.push(r);
     }
-    const out = [];
-    for (const d of dirs.values()) {
-      out.push(`<div class="ob-file${d.up ? ' ob-up' : ''}"><span class="ob-fi ob-fi-dir">${GLYPH.folder}</span><span class="ob-file-body"><span class="ob-file-n" title="${esc(d.n)}">${esc(d.n)}</span><span class="ob-file-m">폴더 · ${d.c}개 · ${fmtSize(d.s)}${d.up ? ' · 올리는 중' : ''}</span></span></div>`);
+    // 요약 — 종류별 개수(폴더는 안의 파일 수가 아니라 폴더 수)
+    const cnt = {};
+    for (const r of loose) { const k = kindOf(r.n); cnt[k] = (cnt[k] || 0) + 1; }
+    if (dirs.size) cnt.dir = dirs.size;
+    const missing = Math.max(0, (S.upN || 0) - rows.length);   // 저장 상한(UP_KEEP)을 넘긴 몫 — 이름 없이 숫자로만
+    const order = ['dir', 'img', 'doc', 'sheet', 'slide', 'code', 'zip', 'file'];
+    const chips = order.filter((k) => cnt[k]).map((k) => `<span class="ob-fchip ob-fi-${k}"><i></i>${KIND_LABEL[k]} <b>${cnt[k]}</b></span>`).join('')
+      + (missing ? `<span class="ob-fchip"><i></i>그 밖 <b>${missing}</b></span>` : '');
+    const busy = rows.filter((r) => r.st === 'up').length;
+    const sum = `<div class="ob-files-sum"><span class="ob-files-n">${(S.upN || 0) + busy}개</span>${chips}</div>`;
+    const line = [];
+    for (const d of [...dirs.values()].reverse()) {
+      line.push(`<div class="ob-file${d.up ? ' ob-up' : ''}"><span class="ob-fi ob-fi-dir">${GLYPH.folder}</span><span class="ob-file-n" title="${esc(d.n)}">${esc(d.n)}</span><span class="ob-file-m">${d.up ? '올리는 중' : `${d.c}개 · ${fmtSize(d.s)}`}</span></div>`);
     }
-    for (const r of loose) {
+    for (const r of loose.slice().reverse()) {
       const k = kindOf(r.n), th = THUMB.get(r.r);
       const ic = th ? `<span class="ob-fi ob-fi-img"><img src="${esc(th)}" alt=""></span>` : `<span class="ob-fi ob-fi-${k}"><i>${esc(extOf(r.n))}</i></span>`;
-      const m = r.st === 'up' ? '올리는 중…' : r.st === 'err' ? '올리지 못했어요' : `${fmtSize(r.s)} · 받았어요`;
-      out.push(`<div class="ob-file${r.st === 'up' ? ' ob-up' : ''}${r.st === 'err' ? ' ob-err' : ''}">${ic}<span class="ob-file-body"><span class="ob-file-n" title="${esc(r.n)}">${esc(r.n)}</span><span class="ob-file-m">${m}</span></span></div>`);
+      const m = r.st === 'up' ? '올리는 중…' : r.st === 'err' ? '올리지 못했어요' : fmtSize(r.s);
+      line.push(`<div class="ob-file${r.st === 'up' ? ' ob-up' : ''}${r.st === 'err' ? ' ob-err' : ''}">${ic}<span class="ob-file-n" title="${esc(r.n)}">${esc(r.n)}</span><span class="ob-file-m">${m}</span></div>`);
     }
-    const MAX = 24;
-    const shown = out.slice(0, MAX);
-    const more = (out.length - MAX) + Math.max(0, (S.upN || 0) - rows.length);   // 화면 상한 + 저장 상한을 넘긴 몫
-    if (more > 0) shown.push(`<div class="ob-files-more">… 외 ${more}개</div>`);
-    return shown;
+    const more = line.length > 6 ? `<div class="ob-files-more">전체 ${line.length}줄 — 목록 안에서 스크롤하세요</div>` : '';
+    return sum + `<div class="ob-files-list">${line.join('')}</div>` + more;
   }
   const setStage = (s) => { host.className = 'ob-root ob-' + s; ctx.onBare && ctx.onBare(s === 'stage-name'); };
   /* ══════════════ 데이터 — 기존 프로토(app.js)에서 그대로 추출한 확정본 ══════════════ */
@@ -511,8 +521,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      "k": "문서·위키",
      "items": [
       { "id": "notion", "label": "Notion", "logo": "notion", "live": true },
-      { "id": "gdrive", "label": "Google Drive", "logo": "googledrive", "live": true },
-      { "id": "figma", "label": "Figma", "logo": "figma", "live": true }
+      { "id": "figma", "label": "Figma", "logo": "figma", "live": true },
+      { "id": "gdrive", "label": "Google Drive", "logo": "googledrive", "live": true }
      ]
     },
     {
@@ -1002,12 +1012,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     clickup: {
       why: 'ClickUp 에서 <b>글자 한 줄</b>을 받아 오면 돼요. 이걸 주면 제가 거기 쌓인 일감을 읽을 수 있습니다.',
       go: 'ClickUp 설정 열기',
+      //  #2232 — 로그인이 안 된 브라우저에선 이 화면이 아예 안 열리거나 Generate/Copy 가 안 눌린다(원준님 실측 2026-08-28,
+      //   구글 계정으로 쓰는 클릭업). 그래서 «먼저 로그인» 을 첫 걸음으로 적는다.
       steps: [
-        '새 탭이 열리면 <b>Apps</b> 화면이 나와요.',
-        '<b>API Token</b> 자리에서 <b>Generate</b> 를 누르세요(이미 있으면 <b>Copy</b>).',
+        '새 탭이 열리면 먼저 ClickUp 에 <b>로그인돼 있는지</b> 보세요. 로그인 화면이 나오면 평소 쓰는 방법(구글로 계속 등)으로 로그인한 뒤, 왼쪽 위 <b>내 아바타</b> ▸ <span class="ob-kbd">Settings</span> ▸ <span class="ob-kbd">Apps</span> 로 오세요.',
+        '<b>API Token</b> 자리에서 <span class="ob-kbd">Generate</span> 를 누르세요(이미 만들어 둔 게 있으면 <span class="ob-kbd">Copy</span>). 버튼이 안 눌리거나 안 보이면 로그인이 덜 된 것이니 로그인한 뒤 새로고침하세요.',
         '<b>pk_</b> 로 시작하는 글자를 복사해 아래에 붙여넣으세요.',
       ],
-      last: '언제든 같은 자리에서 새로 만들거나 지울 수 있어요.',
+      last: '언제든 같은 자리에서 새로 만들거나(Regenerate) 지울 수 있어요. 새로 만들면 예전 글자는 그 자리에서 무효가 됩니다.',
     },
     slack: {
       why: 'Slack 에서 <b>글자 한 줄</b>을 받아 와야 해요.',
@@ -1286,7 +1298,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       bind: (el) => {
         const zone = $('#upZone', el), list = $('#upList', el);
         let pickBtn = null;
-        const paintList = () => { if (!list) return; const tiles = fileTiles(); list.hidden = !tiles.length; list.innerHTML = tiles.join(''); };
+        const paintList = () => { if (!list) return; const h = fileListHtml(); list.hidden = !h; list.innerHTML = h; };
         const paintZone = () => {
           const t = $('#upZoneT', el), d = $('#upZoneD', el), go = $('#fGo', el);
           if (!t || !d) return;
@@ -1358,9 +1370,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           const hit = rows.find((x) => x.k === k);
           if (hit) hit.items.push(...items); else rows.push({ k, items: [...items] });
         }
+        const notYet = (it) => it.soon || connState(it.id) === 'blocked';
+        //  #2232 — «준비 중» 카드는 묶음 안에서 **맨 오른쪽**으로(원준님 2026-08-28). 문서·위키는 Notion · Figma · Google Drive 순이 된다.
+        for (const r of rows) r.items = [...r.items.filter((it) => !notYet(it)), ...r.items.filter(notYet)];
         const flat = rows.flatMap((r) => r.items);
         const already = flat.filter((it) => connState(it.id) === 'on');
-        const notYet = (it) => it.soon || connState(it.id) === 'blocked';
         const ic = (it) => BRAND[it.logo] || GLYPH[it.id] || '';
         const doneCard = (id, label, icon) => doneCardHtml(id, label, icon, '연결돼 있어요');
         //  아직 안 되는 곳 — **고를 수 없게 잠그고 그 사실을 적는다.** 고를 수 있게 두면 골랐는데 아무 일도 안 일어나고,
