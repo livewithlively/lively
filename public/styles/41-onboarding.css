@@ -263,6 +263,8 @@
 .ob-file.ob-up .ob-file-m{color:var(--blue)}
 .ob-file.ob-err .ob-file-m{color:#C0392B}
 .ob-files-more{font-size:12.5px; color:var(--muted); align-self:center; padding:0 4px}
+/* 고르기 메뉴의 한 줄 설명(파일·폴더를 한 창에서 같이 못 고르는 이유) */
+.pjv-menu .pjv-menu-note{margin:6px 12px 6px; font-size:11.5px; color:var(--muted); line-height:1.5; max-width:250px; white-space:normal}
 
 /* ══ #2232 AI 로그인 안내 — 누르면 복사되는 글자 · 글 안의 작은 버튼 ══ */
 .ob-tok code.ob-copy{cursor:pointer; border:1px dashed var(--line); user-select:all}
