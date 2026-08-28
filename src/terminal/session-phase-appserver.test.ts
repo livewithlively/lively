@@ -11,6 +11,7 @@
 //   ① sessions.ts 목록 — 여기서 검증하는 조합 규칙
 //   ② codexChatPhase — 런타임이 들고 있는 사실(도는 턴 · 대기 중 승인)
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { codexChatMode } from "./codex-chat-mode.js";
 
 let pass = 0;
@@ -78,3 +79,32 @@ t("A8 claude 세션은 스위치가 켜져 있어도 종전 판정 그대로다(
 });
 
 console.log(`\n${pass} passed`);
+
+// ── B. 열리는 화면 (2026-08-28 상민님 신고) ────────────────────────────────────────────────
+//  「코덱스 열면 터미널 보이다가 몇 초 뒤에 대화창으로 넘어감」. 원인은 두 겹이었다:
+//   ① 생성 응답에 chatMode 가 없었다(목록에만 실렸다) → 방금 만든 세션은 행이 얇다.
+//   ② 화면이 «모르면 터미널» 로 추정했다 → 터미널로 열렸다가 목록 갱신이 오면 대화로 되돌렸다.
+//  둘 다 «한 곳에서 만들고, 모르면 안전한 쪽으로» 로 고쳤다. 빈 셸을 먼저 보여주는 쪽이 사람에게 더 나쁘다.
+const readSrc = (rel: string): string =>
+  readFileSync(new URL("../../" + rel, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+
+t("★ B1 생성 응답도 목록과 **같은 곳**에서 대화 필드를 만든다 — 갈리면 방금 만든 세션만 잘못 열린다", () => {
+  const src = readSrc("src/terminal/routes.ts");
+  assert.match(src, /const chatFieldsOf =/, "공용 헬퍼가 있다");
+  assert.match(src, /res\.json\(\{ session: withChatFields\(session\) \}\)/, "로컬 생성 응답이 대화 필드를 싣는다");
+  assert.match(src, /withChatFields\(session\), node:/, "노드 생성 응답도 싣는다");
+  assert.ok(!/s\.chatMode = codexChatMode/.test(src), "목록이 헬퍼를 안 쓰고 따로 만들지 않는다");
+});
+
+t("★ B2 화면은 모를 때 터미널로 추정하지 않는다 — codex 는 이 배포의 기본이 app-server 다", () => {
+  const src = readSrc("web/session-chat.ts");
+  const fn = src.slice(src.indexOf("const chatFirst ="), src.indexOf("const chatFirst =") + 900);
+  assert.match(fn, /harness \|\| ''\) === 'codex'/, "chatMode 가 없으면 하네스로 판단한다");
+  assert.ok(!/^\s*const chatFirst = \(\): boolean => String\(target\.raw\?\.chatMode/m.test(src),
+    "종전의 «모르면 터미널» 한 줄이 남아 있지 않다");
+});
+
+t("B3 추정이 틀린 배포(tmux)에서는 행이 오는 즉시 터미널로 되돌린다 — 한 방향만 마감하면 반쪽이다", () => {
+  const src = readSrc("web/session-chat.ts");
+  assert.match(src, /chatMode \|\| ''\) === 'tmux' && opts\.terminalSrc && isBox\) setMode\('term'\)/);
+});

@@ -427,12 +427,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
     } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
-    for (const s of [...local, ...localRestorable, ...remote]) {
-      s.chat = chatIoCaps(s.harness);
-      // #2055 — 이 세션의 대화가 **어디서 도나**. app-server 면 pane 이 셸이라 화면은 대화창을 먼저 열어야 한다
-      //  (터미널로 열면 사람이 말 걸 곳이 없는 화면을 먼저 본다 — 실측으로 그렇게 헤맸다).
-      s.chatMode = codexChatMode({ harness: s.harness });
-    }
+    for (const s of [...local, ...localRestorable, ...remote]) Object.assign(s, chatFieldsOf(s.harness));
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
@@ -927,19 +922,28 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           trustOk: autoTrustWorkspace({ projectId: input.projectId, subpath: input.subpath }),
         });
       }
-      res.json({ session: { ...session, node: { id: nodeId, online: true } } });
+      res.json({ session: { ...withChatFields(session), node: { id: nodeId, online: true } } });
       return;
     }
     const session = await createSession(userOf(req), input);
     await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
     await registerSessionInstance(session.id, idOf(userOf(req)), { appId: input.appId, projectId: input.projectId, title: session.label });
-    res.json({ session });
+    res.json({ session: withChatFields(session) });
   }));
   // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
   // CLI마다 런타임 설정 수단이 다르고(Codex는 /model 피커, Antigravity는 launch flag),
   // 같은 프로세스 안에서 정직하게 통일할 수 없다. 대신 같은 작업 폴더·프로젝트·권한으로 새 세션을 띄우고,
   // 화면이 보내 준 최근 공통 ChatLine 요약을 첫 지시로 주입한다. 사용자는 새 세션으로 곧바로 이동하고 계속 입력한다.
   // 원 세션은 건드리지 않는다 — 새 세션 생성이나 첫 지시가 실패해도 진행 중 작업을 잃지 않는 안전망이다.
+  // #2055 — 세션 행의 «대화» 두 값을 **한 곳에서** 만든다. 목록과 생성 응답이 갈리면 방금 만든 세션만
+  //  화면이 잘못 열린다(실측 2026-08-28 신고: codex 를 열면 터미널이 먼저 뜨고 몇 초 뒤 대화창으로 넘어갔다 —
+  //  생성 응답에 chatMode 가 없어 화면이 «모르면 터미널» 로 추정했다가, 목록 갱신이 오면 되돌린 것이다).
+  const chatFieldsOf = (harness: string): { chat: ReturnType<typeof chatIoCaps>; chatMode: ReturnType<typeof codexChatMode> } => ({
+    chat: chatIoCaps(harness),                       // #1746 하네스별 대화창 능력(읽기·승인)
+    chatMode: codexChatMode({ harness }),            // 이 세션의 대화가 어디서 도나 — app-server 면 pane 이 셸이다
+  });
+  const withChatFields = <T extends { harness?: string }>(s: T): T => Object.assign(s, chatFieldsOf(String(s.harness || "")));
+
   app.post("/api/ui/terminal/sessions/:id/handoff", auth, wrap(async (req, res) => {
     const id = String(req.params.id || "");
     const me = idOf(userOf(req));
