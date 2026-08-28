@@ -1765,7 +1765,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-side-detail .act, .v2-bin-side-sum .act { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
 /* ══ #2232 OAuth 릴레이 복귀 탭 — 셸 없이 결과 한 장(코어 /oauth/callback 페이지와 같은 생김새) ══ */
-.v2-relay-landing{display:block; min-height:100vh; background:var(--bg); color:var(--ink)}
+/* ⚠ #v2-root 는 id 선택자로 grid(왼쪽 316px 열)를 깐다 — 클래스만으로는 못 이겨 안내가 첫 열에 갇혔다(원준님 실측 2026-08-28). id 로 덮는다. */
+#v2-root.v2-relay-landing, .v2-relay-landing{display:block; grid-template-columns:none; height:auto; min-height:100vh; background:var(--bg); color:var(--ink)}
 .v2-relay-page{font-family:system-ui,-apple-system,"Apple SD Gothic Neo",sans-serif; max-width:34rem; margin:4rem auto; padding:0 1rem; line-height:1.6}
 .v2-relay-page h2{font-size:1.5em; margin:0 0 .6em}
 .v2-relay-page p{margin:0 0 1em}
