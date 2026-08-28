@@ -1450,10 +1450,23 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     let stop = false;
     const cleanup = (): void => { stop = true; };
     let pasted = false;
+    //  ⚠ 주소가 영영 안 나올 수 있다(러너가 그 자리에서 못 떴다·자격 파일이 안 열린다). 그때 종전 판은 «로그인
+    //   절차를 시작하는 중이에요…» 를 **영원히** 보여 줬다 — 사람에겐 그냥 «눌러도 반응이 없다» 이다.
+    //   그래서 상한을 둔다. 상한은 codex 가 주소를 찍기까지의 실측(1초 안쪽)보다 한참 넉넉하다.
+    const STALL_MS = 30_000;
+    const startedAt = Date.now();
     async function tick(): Promise<void> {
       if (stop || destroyed) return;
       let st: any = null;
       try { st = await api('/api/ui/me/ai-login/state?harness=codex'); } catch { /* 잠깐 못 물었다 — 다음 틱에 */ }
+      if (!st?.url && st?.loggedIn !== true && st?.step !== 'failed' && Date.now() - startedAt > STALL_MS) {
+        cleanup();
+        body.replaceChildren(
+          el('div', { class: 'cxl-gate-d', text: '로그인 주소가 오지 않았어요. 이 자리에서는 못 하니 터미널에서 아래대로 해 주세요.' }),
+          ...(c?.steps || []).slice(0, 3).map((x: string) => el('div', { class: 'cxl-gate-s', text: x })),
+          retryBtn());
+        return;
+      }
       if (st?.loggedIn === true) {
         cleanup();
         body.replaceChildren(el('div', { class: 'cxl-gate-d', text: '로그인이 끝났어요 — 이제 보내시면 됩니다.' }));
