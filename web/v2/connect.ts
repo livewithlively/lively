@@ -178,7 +178,7 @@ const SCOPE_NOUN: Record<string, string> = {
   notion: '페이지', linear: '이슈', slack: '대화', google: 'Drive 파일과 캘린더 일정', github: '저장소', gitlab: '프로젝트',
   clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행',
 };
-const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서' };
+const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업' };
 const ICON_PATH: Record<string, string> = {
   zap: 'M13 2L4 14h7l-1 8 9-12h-7z',
   box: 'M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4',
@@ -203,7 +203,7 @@ function panel(id: string, ic: string, title: string, desc: string, right: HTMLE
     ...rows);
 }
 /** 모아 두기 패널 — 앱별 어댑터(slack·notion·google 카드)가 스위치·줄을 채운다. body 는 오류 표시용 자리. */
-function collectPanel(desc: string, onState: CollectState): { box: HTMLElement; body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
+function collectPanel(desc: string, onState: CollectState, where = '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요'): { box: HTMLElement; body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
   const swWrap = el('span', { class: 'cn-swwrap' });
   const body = el('div', { class: 'cn-prows' }, srow('상태', '불러오는 중…', [], 'note'));
   const box = panel('cn-collect', 'box', '모아 두기', desc, [swWrap], [body]);
@@ -214,7 +214,7 @@ function collectPanel(desc: string, onState: CollectState): { box: HTMLElement; 
       swWrap.replaceChildren(el('span', { class: 'cn-swl', text: stateText }), chk);
       body.replaceChildren(
         ...notes.map((t, i) => srow(i === 0 ? '지금' : '', t, [], 'note')),
-        srow('누가 봐요', '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요'),
+        srow('누가 봐요', where),
         ...(extra.length ? [el('div', { class: 'cn-srow stack' }, ...extra)] : []));
       onState(stateText, chk.checked);
     },
@@ -374,6 +374,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   //  #1881 G5 구글 — 무엇을 켜느냐가 곧 비용이라 서비스를 고르게 한다.
   else if (svc.key === 'google') collect = isAdmin ? googleTeamCollectCard(onCollect)
     : quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — Drive 문서가 함께 보는 자료함에 모여요.', onCollect);
+  //  #2247 피그마·ClickUp — 토큰이 곧 자격. 위에서 토큰을 저장했으면 여기서 켠다(수집기는 그 토큰을 가리킨다, 복사 0).
+  else if (svc.key === 'figma' || svc.key === 'clickup') collect = !isAdmin ? quietCollectPanel(collectDesc, '관리자만', `워크스페이스 관리자가 켤 수 있어요 — 켜면 ${svc.label}의 ${COLLECT_UNIT[svc.key]}이(가) 함께 보는 곳에 모여요.`, onCollect)
+    : st !== 'on' ? quietCollectPanel(collectDesc, '꺼짐', '위에서 바로 쓰기(토큰 저장)를 먼저 켜면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
+    : memberTokenCollectCard(svc.key, onCollect);
   else collect = quietCollectPanel(collectDesc, '아직 없어요',
     `${svc.label}는 아직 모아 두기가 없어요. 바로 쓰기로 ${noun}을(를) 그때그때 읽어요 — 준비되면 여기서 켤 수 있어요.`, onCollect);
 
@@ -475,6 +479,73 @@ function slackTeamCollectCard(onState: CollectState): HTMLElement {
       await paint();
     };
     panel.set(chk, chk.checked ? '켜짐' : '꺼짐', notes, []);
+  };
+  void paint();
+  return box;
+}
+
+// ── 모아 두기(#2247 피그마·ClickUp) — 토큰형 앱의 공통 카드. 서버는 org_<app>_collect(_set) 한 쌍(member-collect.ts 팩토리).
+//  피그마는 범위(파일 링크/팀 id)가 없으면 서버가 needs_scope 로 켜 주지 않는다 — 그래서 이 카드에 범위 칸이 있다.
+const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: string; where: string }> = {
+  figma: { desc: '내가 고른 파일의 코멘트만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.',
+    on: '고른 파일의 코멘트를 모으고 있어요.', off: '켜면 내 Figma 토큰으로 고른 파일의 코멘트를 읽어 옵니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
+  clickup: { desc: '내 ClickUp 워크스페이스의 작업·댓글을 라이블리 프로젝트 탭으로 가져와요. 자료함이 아니라 프로젝트로 들어옵니다.',
+    on: '작업·댓글을 프로젝트 탭으로 가져오고 있어요.', off: '켜면 내 ClickUp 토큰으로 워크스페이스의 작업·댓글을 프로젝트 탭으로 가져옵니다.', where: '워크스페이스 함께 — 프로젝트 탭에서 같이 봐요' },
+};
+/** 피그마 범위 입력 → 서버 scope. 숫자만인 토막은 팀 id, 나머지는 파일 링크(키). */
+export function figmaScopeOf(text: string): { file_keys?: string; team_ids?: string } {
+  const toks = String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean);
+  const teams = toks.filter((x) => /^\d{5,}$/.test(x)), files = toks.filter((x) => !/^\d{5,}$/.test(x));
+  const out: { file_keys?: string; team_ids?: string } = {};
+  if (files.length) out.file_keys = files.join(' ');
+  if (teams.length) out.team_ids = teams.join(' ');
+  return out;
+}
+function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement {
+  const T = MEMBER_COLLECT_TEXT[key];
+  const panel = collectPanel(T.desc, onState, T.where);
+  const box = panel.box, body = panel.body;
+  const post = async (bodyObj: any): Promise<any> => api(`/api/ui/org/${key}/collect`, { method: 'POST', body: JSON.stringify(bodyObj) });
+  const paint = async (): Promise<void> => {
+    let s: any;
+    try { s = await api(`/api/ui/org/${key}/collect`); }
+    catch (e) { body.replaceChildren(errorNote(e, '수집 상태를 불러오지 못했습니다')); return; }
+    const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    chk.checked = !!s.enabled;
+    const notes: string[] = [];
+    if (s.enabled) {
+      notes.push((s.member ? `${s.member} 님의 연결로 ` : '') + T.on
+        + (s.member_connected === false ? ' 그 토큰이 지워졌습니다 — 껐다 켜면 내 토큰으로 바뀝니다.' : ''));
+    } else notes.push(T.off);
+    const extra: HTMLElement[] = [];
+    if (key === 'figma') {
+      //  범위 — 피그마엔 목록이 없어서 링크로 정한다. 켜져 있어도 여기서 바꾼다(enabled:true + scope).
+      const cur = [s.scope && s.scope.file_keys, s.scope && s.scope.team_ids].filter(Boolean).join(' ');
+      const inp = el('input', { type: 'text', class: 'cn-scope-in', value: cur, placeholder: '피그마 파일 링크 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체는 팀 id' }) as HTMLInputElement;
+      const save = el('button', { class: 'btn btn-sm', type: 'button', text: s.enabled ? '범위 저장' : '이 범위로 켜기', onclick: async () => {
+        const sc = figmaScopeOf(inp.value);
+        if (!sc.file_keys && !sc.team_ids) { toast('파일 링크나 팀 id 를 하나는 넣어 주세요', true); inp.focus(); return; }
+        save.setAttribute('disabled', 'true');
+        try {
+          const r: any = await post({ enabled: true, scope: sc });
+          if (r && r.ok) toast(s.enabled ? '범위를 저장했어요' : '모아 두기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다');
+          else toast((r && r.message) || '바꾸지 못했습니다', true);
+        } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+        await paint();
+      } });
+      extra.push(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '범위' }), inp, save));
+      if (s.needs_scope) notes.push('아직 범위가 없어요 — 아래에 파일 링크(또는 팀 id)를 넣고 켜 주세요. 피그마엔 목록이 없어서 링크로 정합니다.');
+    }
+    chk.onchange = async () => {
+      chk.disabled = true;
+      try {
+        const r: any = await post({ enabled: chk.checked });
+        if (r && r.ok) toast(chk.checked ? '모아 두기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다' : '모아 두기를 껐어요');
+        else { toast((r && r.message) || '바꾸지 못했습니다', true); }
+      } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+      await paint();
+    };
+    panel.set(chk, chk.checked ? '켜짐' : (s.needs_scope && key === 'figma' ? '범위 필요' : '꺼짐'), notes, extra);
   };
   void paint();
   return box;

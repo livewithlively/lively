@@ -4187,6 +4187,46 @@
   "input_hash": "3341637643557f3f"
  },
  {
+  "name": "org_figma_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/figma/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_figma_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/figma/collect"
+  ],
+  "input_hash": "cd6cbcc688e521b5"
+ },
+ {
+  "name": "org_clickup_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/clickup/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_clickup_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/clickup/collect"
+  ],
+  "input_hash": "bd612ab0c3942d49"
+ },
+ {
   "name": "org_google_collect",
   "scope": "admin",
   "mcp": true,
