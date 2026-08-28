@@ -218,6 +218,13 @@
   font-family:inherit; line-height:1.6; white-space:nowrap}
 
 .ob-tok .ob-fine2{font-size:12.5px; color:var(--muted)}
+/* 안 1(#2232, 2026-08-28) — 로그인 안내는 사람이 손대는 3걸음만 기본 노출, 나머지 화면은 한 줄(.ob-between) + 그 자리 펼침(.ob-detail).
+   펼침은 인라인이다 — 팝오버·모달은 원준님 규칙으로 금지. 열림 상태는 저장하지 않는다(매번 접힌 채). */
+.ob-tok .ob-more{display:inline-block; margin-left:6px; padding:0; background:none; border:0; font:inherit; font-size:13px; font-weight:600; color:var(--blue); cursor:pointer}
+.ob-tok .ob-more:hover{text-decoration:underline}
+.ob-tok .ob-detail{margin:-3px 0 0; padding:6px 0 6px 12px; border-left:2px solid var(--line)}
+.ob-tok .ob-detail ol{font-size:12.5px; color:var(--muted); line-height:1.75}
+.ob-tok .ob-detail[hidden]{display:none}
 /* 터미널 갈래 접힘 — 주된 길(앱) 아래에 조용히. 여는 사람만 본다. */
 .ob-ins-alt{margin-top:22px; border-top:1px solid var(--line); padding-top:14px; margin-bottom:40px}   /* 아래 여백 — 펼치면 화면 끝에 붙어 잘려 보였다(#2232) */
 .ob-ins-alt>summary{font-size:13px; color:var(--muted); cursor:pointer; list-style:none}
