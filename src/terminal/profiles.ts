@@ -441,14 +441,16 @@ async function memberFileRemove(osUser: string, rel: string): Promise<void> {
 //  ⚠ 왜 게이트웨이 로컬 fs 를 안 보나: 게이트웨이는 멤버 700 홈을 '읽지' 못하고(격리의 본질), 중계 배포에서는
 //   그 홈이 **게이트웨이가 아니라 실행 노드**에 있다. 로컬에서 보면 늘 false = #1471 부류의 거짓 '미로그인'이다.
 //   경로도 $HOME 이 아니라 명시 /home/<osUser> 다 — 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르다.
-async function memberLoggedInHarnesses(osUser: string): Promise<string[]> {
+//  반환 null = **확인 자체를 못 했다**(중계 실패). 빈 배열(= 확인했고 하나도 없다)과 다르다 — 아래 judgeMemberOs
+//   가 그 둘을 «미로그인» 과 «모름» 으로 갈라 읽는다.
+async function memberLoggedInHarnesses(osUser: string): Promise<string[] | null> {
   const entries = Object.entries(HARNESS_CRED);
   //  마지막 `true` 가 없으면 아무 파일도 없을 때 스크립트가 1 로 끝나 «중계 실패» 와 구분되지 않는다.
   const script = entries.map(([key, rel]) => `[ -f "/home/${osUser}/${rel}" ] && echo ${key}`).join("\n") + "\ntrue";
   try {
     const seen = new Set((await memberShOut(osUser, script)).split(/\s+/).filter(Boolean));
     return entries.map(([key]) => key).filter((key) => seen.has(key));
-  } catch { return []; }   // 중계가 안 되면 «없다» 가 아니라 판정 불가 — 상위(judgeMemberOs)가 그 뜻으로 읽는다
+  } catch { return null; }   // 중계가 안 되면 «없다» 가 아니라 **판정 불가** — 상위가 그 뜻으로 읽는다
 }
 // box_ 홈 dir 존재 — **OS 유저와 별개**로 본다. 홈 부모(/home)는 755 라 게이트웨이가 stat 할 수 있고
 //  (내용은 700 이라 여전히 못 읽는다), 이 한 비트가 아래 '고아 홈' 판정의 유일한 근거다.
@@ -495,7 +497,16 @@ export function judgeMemberOs(i: {
    * 중계 확인은 경로만 있으면 된다 — 그래서 provisioned 가 false 여도 답을 얻을 수 있다.
    */
   credChecked?: boolean;
+  /**
+   * 확인을 **시도했는데 중계가 실패**했나(#2055 후속). true 면 답은 false 가 아니라 null(모름)이다.
+   *  ⚠ 실측 2026-08-28 프로덕션: 컨트롤플레인이 두 프로세스로 떠(reusePort) 노드 채널이 한쪽에만 붙는 바람에
+   *   멤버 중계 호출의 **절반이 503** 이었다. 그 실패를 «파일 없음» 으로 삼키던 종전 코드는, codex 로그인을
+   *   막 마친 사람에게 «아직 로그인이 안 보여요» 를 반복해서 보여 줬다. 인프라 장애가 사람에게 거짓말이 된다.
+   */
+  credScanFailed?: boolean;
 }): { loggedIn: boolean | null; orphanHome: boolean } {
+  // 시도했으나 확인하지 못했다 = 모름. 이 파일의 나머지 판정과 같은 원칙이다(머리말: "미탐이 아니라 '모름'").
+  if (i.credScanFailed) return { loggedIn: null, orphanHome: false };
   // 확인을 실제로 돌렸으면 **그 답이 권위다.** passwd 항목 유무는 그 답을 뒤집을 근거가 아니다 — 매니지드에서는
   //  멤버 OS 계정이 아예 없는 것이 정상이고(uid 는 테넌트, member-exec-relay 머리말), 그걸 '미로그인'으로 읽으면
   //  자율 파이프라인이 영영 안 켜진다(2026-08-27 실측: 가동 성공 누적 0건).
@@ -513,10 +524,14 @@ export async function memberOsStatus(memberId: string): Promise<MemberOsStatus> 
   //  구조적으로 영원히 false 인데, 종전엔 그걸 자격 확인의 **전제**로 삼아 로그인이 영영 안 보였다.
   //  자격 확인 자체는 경로만 있으면 되므로(자격 확인은 중계를 탄다) 중계가 있으면 그냥 돌린다.
   const credChecked = provisioned || memberExecConfigured();
-  const loggedInHarnesses = credChecked ? await memberLoggedInHarnesses(osUser) : [];
+  const scan = credChecked ? await memberLoggedInHarnesses(osUser) : null;
+  const loggedInHarnesses = scan ?? [];
   const credExists = loggedInHarnesses.length > 0;
   const homeExists = provisioned ? true : await memberHomeExists(osUser);
-  return { ready, provisioned, osUser, loggedInHarnesses, ...judgeMemberOs({ ready, provisioned, homeExists, credExists, credChecked }) };
+  return {
+    ready, provisioned, osUser, loggedInHarnesses,
+    ...judgeMemberOs({ ready, provisioned, homeExists, credExists, credChecked, credScanFailed: credChecked && scan === null }),
+  };
 }
 
 // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 계정] 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
