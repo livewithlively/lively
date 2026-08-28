@@ -173,5 +173,10 @@ t("⑫ 화면이 CLI 이름을 박아 두지 않는다 — 하네스 표가 바�
   assert.match(ONBOARDING, /c\.bin/, "실행 파일 이름을 서버 답에서 읽지 않는다");
 });
 
+t("★ 프로브형(antigravity)도 중계 배포에선 멤버 자리에서 돈다 — 게이트웨이 자리에서 돌면 늘 «미로그인» (#2232)", () => {
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"), PROFILES.indexOf("async function memberFileExists"));
+  assert.match(fn, /const osUser = \(osSt\.ready && osSt\.provisioned\) \|\| memberExecConfigured\(\) \? osSt\.osUser : null/, "중계 배포에서 프로브 자리가 게이트웨이다");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
