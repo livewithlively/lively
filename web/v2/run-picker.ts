@@ -52,13 +52,33 @@ export interface RunNode {
 /** 내 소유인가 — 구 게이트웨이(mine 미보고)면 '공유가 아니면 내 것'으로 본다(서버가 내 소유 ∪ 공유만 주므로 정확한 폴백). */
 const nodeIsMine = (n: RunNode): boolean => (typeof n.mine === 'boolean' ? n.mine : !n.shared);
 
+/** 이 칸이 후보로 삼는 하네스인가 — **셸은 AI 가 아니다**(이 칸은 '무엇에게 시킬까'를 묻는다). paint() 와 같은 규칙. */
+const isAiHarness = (key: string): boolean => key !== 'shell';
+
+/**
+ * 이 노드로 **AI 세션을 열 수 있나**(#2172 후속) — 그 PC 가 보고한 하네스에 AI 가 하나라도 있나.
+ *
+ * 미보고(구 번들)는 '제한 없음'으로 본다 — nodeAllow() 와 **같은 규칙**이라야 목록과 기본값이 갈리지 않는다.
+ *
+ * ⚠ 이게 없으면 아래 defaultNodeId 가 **AI 가 하나도 없는 PC 를 기본으로 뽑는다**. 그러면 제공자·모델·추론강도
+ *  칸이 통째로 잠기고(paint 의 빈 목록 분기), 사람은 고른 적도 없는 그 PC 때문에 AI 를 못 고른다 —
+ *  실측(윤상민 2026-08-28, 매니지드): 윈도우 PC 한 대가 `shell` 만 보고하는데 그게 '가장 최근에 붙은 내 노드'라
+ *  기본이 되어, 세 칸이 잠긴 채 **기억해 둔 하네스로만** 세션이 열렸다(클로드를 고를 방법이 없었다).
+ */
+export const nodeCanRunAi = (n: RunNode): boolean =>
+  !Array.isArray(n.harnesses) || !n.harnesses.length || n.harnesses.some(isAiHarness);
+
 /**
  * 새 세션의 **기본 실행 노드**(#2172) — 켜져 있는 내 컴퓨터 > 켜져 있는 공유 컴퓨터 > 중앙('').
  *  같은 등급이면 **가장 최근에 붙은 것**. connectedAt 을 안 주는 구 게이트웨이에서는 서버가 준 목록 순서를 따른다
- *  (sort 가 안정 정렬이라 동률이 뒤섞이지 않는다). 꺼진 노드는 애초에 후보가 아니다 — 세션을 못 만든다(서버 409).
+ *  (sort 가 안정 정렬이라 동률이 뒤섞이지 않는다).
+ *
+ *  후보에서 빠지는 것 둘 — ⓐ **꺼진 노드**(세션을 못 만든다, 서버 409) ⓑ **AI 를 하나도 못 띄우는 노드**
+ *  (nodeCanRunAi). ⓑ 를 빼는 이유는 이 규칙의 목적이 '내 컴퓨터에서 열기'이지 '고를 수 없는 자리에 데려다 놓기'가
+ *  아니기 때문이다 — 자동으로만 빼고, 사람이 그 PC 를 **직접 고르는 것은 그대로 된다**.
  */
 export function defaultNodeId(nodes: RunNode[]): string {
-  const live = nodes.filter((n) => n.online);
+  const live = nodes.filter((n) => n.online && nodeCanRunAi(n));
   if (!live.length) return '';
   const best = live.slice().sort((a, b) =>
     (nodeIsMine(b) ? 1 : 0) - (nodeIsMine(a) ? 1 : 0) || (b.connectedAt || 0) - (a.connectedAt || 0))[0];
@@ -214,9 +234,16 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     paintNode();
     // 셸은 AI 가 아니라 여기 후보가 아니다 — 이 칸은 '무엇에게 시킬까'를 묻는다. 노드를 골랐으면 그 PC 가 띄울 수 있는 것만.
     const allow = nodeAllow();
-    const list = harnesses.filter((h) => h.key !== 'shell' && (!allow || allow.has(h.key)));
+    const list = harnesses.filter((h) => isAiHarness(h.key) && (!allow || allow.has(h.key)));
     provSel.disabled = !list.length;
-    if (!list.length) { provSel.replaceChildren(el('option', { value: '' }, '지난번 설정 그대로')); modelSel.hidden = true; effortSel.hidden = true; return; }
+    if (!list.length) {
+      // 고를 것이 없는 두 경우는 **사람에게 다른 사실**이라 문구를 나눈다(종전엔 한 문장이 둘을 덮어, AI 가 없는
+      //  PC 가 기본으로 잡혔을 때 "왜 못 고르지"가 화면에서 답을 못 얻었다 — 윤상민 2026-08-28 신고).
+      //  · 카탈로그를 못 받았다 = 무엇이 있는지 **모른다** → 기억한 설정 그대로 연다(종전 문구가 맞는 자리).
+      //  · 카탈로그는 받았는데 그 PC 가 띄울 AI 가 없다 = **안다** → 그 사실을 말한다. 옆 칸에서 다른 컴퓨터를 고르면 된다.
+      provSel.replaceChildren(el('option', { value: '' }, harnesses.length ? '이 컴퓨터엔 AI 가 없어요' : '지난번 설정 그대로'));
+      modelSel.hidden = true; effortSel.hidden = true; return;
+    }
     if (!list.some((h) => h.key === harnessKey)) harnessKey = list[0].key;   // 그 노드가 못 띄우는 하네스였으면 첫 후보로
     provSel.replaceChildren(...list.map((h) => el('option', { value: h.key }, providerLabel(h) + ' · ' + h.label)));
     provSel.value = harnessKey;
