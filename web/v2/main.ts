@@ -186,6 +186,18 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 const PROJ_TTL_MS = 5 * 60 * 1000;
 
+/** OAuth 릴레이에서 돌아온 탭 한 장(#2232) — 셸 없이, 코어 /oauth/callback 페이지와 **같은 생김새**(원준님: "이거 참고하면 될듯").
+ *  결과 한 줄 + «이 창을 닫고 원래 탭으로» 한 마디뿐이다. 원래 탭은 신호(BroadcastChannel)로 이미 «연결됨» 으로 바뀌고 있다. */
+function renderRelayLanding(root: HTMLElement, l: { app: string; label: string; ok: boolean; err: string }): void {
+  root.className = 'v2-relay-landing';
+  root.replaceChildren(el('div', { class: 'v2-relay-page', role: 'status' },
+    el('h2', { text: 'Lively 커넥터' }),
+    el('p', { text: l.ok ? `연결이 완료되었습니다 — ${l.label}. 이 창을 닫아도 됩니다.` : `연결에 실패했습니다: ${l.err}` }),
+    el('p', { class: 'v2-relay-sub', text: l.ok
+      ? '처음 설정이나 [외부 앱 연결] 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
+      : '원래 탭으로 돌아가 [외부 앱 연결]에서 다시 시도해 주세요.' })));
+}
+
 export async function bootV2(): Promise<void> {
   root = document.getElementById('v2-root');
   if (!root) return;
@@ -205,19 +217,24 @@ export async function bootV2(): Promise<void> {
   {
     const q = new URLSearchParams(location.search);
     let seen = false;
+    let landing: { app: string; label: string; ok: boolean; err: string } | null = null;
     for (const [app, label] of [['slack', 'Slack'], ['notion', '노션']] as const) {
       if (q.get(app) === 'ok') {
-        toast(`${label} 연결이 끝났어요`); seen = true;
+        seen = true; landing = { app, label, ok: true, err: '' };
         //  #2232 — 이 탭은 [허용]을 누르느라 열린 **새 탭**이다. 원래 탭(처음 설정·외부 앱 연결)이 곧바로 알게 신호를
         //   보내고, 이 탭의 연결 화면에는 «원래 탭으로 돌아가세요» 를 띄울 표식을 남긴다(connect.ts 가 읽고 지운다).
         try { sessionStorage.setItem('lively.connect.return', app); } catch (_) { /* 프라이빗 모드 */ }
         try { const bc = new BroadcastChannel('lively-connect'); bc.postMessage({ app, ok: true }); bc.close(); } catch (_) { /* 미지원 */ }
       }
       const err = q.get(`${app}_error`);
-      if (err) { toast(`${label} 연결에 실패했어요 — ${err}`, true); seen = true; }
+      if (err) { seen = true; landing = { app, label, ok: false, err }; }
       q.delete(app); q.delete(`${app}_error`);
     }
     if (seen) { const rest = q.toString(); history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash); }
+    //  #2232 — 돌아온 탭은 **셸을 통째로 띄우지 않는다.** «연결이 끝났어요 · 이 탭은 닫고 원래 탭으로» 한 장만 보인다
+    //   (원준님 2026-08-28: "이것만 써있는 창 새로 만들어서 거기로 보내"). 종전엔 #/connect/<앱> 전체 화면 위에 배너였는데,
+    //   설정·팀 수집·대화별 허용까지 다 펼쳐진 화면에서 사람은 «그래서 뭘 하지?» 가 된다. 이어서 할 사람에겐 링크 하나.
+    if (landing) { renderRelayLanding(root, landing); return; }
   }
   // #1891 — 받은 알림 배너. 화면과 무관하게 돈다(「확인할 것」 안에서만 띄우면 보고 있어야 알림이 뜬다).
   //  데스크톱 앱 안에서는 스스로 물러난다 — 그 앱이 트레이에서 같은 사건을 이미 띄운다(#1842).
