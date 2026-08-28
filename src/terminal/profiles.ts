@@ -330,7 +330,10 @@ export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLog
   const h = HARNESSES.find((x) => x.key === key);
   if (!h || !h.bin) throw new HttpError(404, `모르는 AI: ${key}`);
   const osSt = await memberOsStatus(ownerId(user));
-  const osUser = osSt.ready && osSt.provisioned ? osSt.osUser : null;
+  //  #2232 — 매니지드 중계 배포(LIVELY_MEMBER_EXEC)에선 게이트웨이에 멤버 OS 유저가 없어 provisioned=false 지만, 프로브(agy 등)는
+  //   **그 사람 자리(멤버 홈)** 에서 돌아야 한다. null 로 접으면 게이트웨이 자기 자리에서 돌아 늘 «미로그인» — 원준님 실측(2026-08-28):
+  //   Antigravity 로그인을 끝내고 입력칸까지 봤는데 «아직 로그인이 안 보여요». aiAccountStatus 의 relayed 분기와 같은 사고.
+  const osUser = (osSt.ready && osSt.provisioned) || memberExecConfigured() ? osSt.osUser : null;
   const out: AiLoginCheck = {
     harness: h.key, label: h.label, bin: h.bin,
     installed: null, loggedIn: null, how: "none", steps: h.loginSteps ?? [],
