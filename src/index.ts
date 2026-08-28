@@ -190,8 +190,10 @@ app.get("/install", auth, async (_req, res) => {
 
 // OAuth 콜백(#746 T2) — 인가서버가 code+state 로 리다이렉트하는 착지점. 브라우저-facing 이라 bearer 인증 밖:
 //  보안은 서명된 state(HMAC·만료·멤버 귀속)가 담보한다 — 위조 불가 → 타인 vault 에 토큰 주입 불가. finishConsent 가 검증·교환·저장.
-const oauthPage = (msg: string): string =>
-  `<!doctype html><meta charset="utf-8"><title>Lively 커넥터</title><body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem;line-height:1.6"><h2>Lively 커넥터</h2><p>${String(msg).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string))}</p></body>`;
+//  #2232 — 성공 페이지는 **원래 탭이 곧바로 알게** 신호를 쏜다(BroadcastChannel 'lively-connect', 같은 출처의 온보딩·외부 앱 연결
+//   화면이 듣는다). 이 창은 [허용]을 누르느라 열린 새 탭이라 «이제 뭘 하지?» 가 되기 쉽다 — 돌아가라고 글로 말한다.
+const oauthPage = (msg: string, ok = false): string =>
+  `<!doctype html><meta charset="utf-8"><title>Lively 커넥터</title><body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem;line-height:1.6"><h2>Lively 커넥터</h2><p>${String(msg).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string))}</p>${ok ? '<p style="color:#666">처음 설정이나 [외부 앱 연결] 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.</p><script>try{var b=new BroadcastChannel("lively-connect");b.postMessage({ok:true});b.close()}catch(e){}</script>' : ''}</body>`;
 app.get("/oauth/callback", async (req, res) => {
   const q = req.query as Record<string, string | undefined>;
   if (q.error) {
@@ -203,7 +205,7 @@ app.get("/oauth/callback", async (req, res) => {
     //  GitHub App 은 설치 직후 installation_id 를 함께 보낸다(#1881 G5) — 숫자만 통과시킨다(그 값이 API 경로에 들어간다).
     const r = await finishConsent(String(q.state), String(q.code), undefined,
       { installationId: parseInstallCallback(q).installationId });
-    res.send(oauthPage(`연결이 완료되었습니다 — ${r.serverName}. 이 창을 닫아도 됩니다.`));
+    res.send(oauthPage(`연결이 완료되었습니다 — ${r.serverName}. 이 창을 닫아도 됩니다.`, true));
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "oauth 콜백 실패");
     res.status(400).send(oauthPage(`연결에 실패했습니다: ${(err as Error).message}`));

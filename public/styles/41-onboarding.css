@@ -209,7 +209,7 @@
 
 .ob-tok .ob-fine2{font-size:12.5px; color:var(--muted)}
 /* 터미널 갈래 접힘 — 주된 길(앱) 아래에 조용히. 여는 사람만 본다. */
-.ob-ins-alt{margin-top:22px; border-top:1px solid var(--line); padding-top:14px}
+.ob-ins-alt{margin-top:22px; border-top:1px solid var(--line); padding-top:14px; margin-bottom:40px}   /* 아래 여백 — 펼치면 화면 끝에 붙어 잘려 보였다(#2232) */
 .ob-ins-alt>summary{font-size:13px; color:var(--muted); cursor:pointer; list-style:none}
 .ob-ins-alt>summary::-webkit-details-marker{display:none}
 .ob-ins-alt>summary::before{content:'＋ '; color:var(--ghost)}
@@ -248,3 +248,27 @@
    폴더 올리기가 메뉴 안에 숨어 있어 사람이 못 찾았다 — 고를 것이 둘뿐이면 숨기지 않는다. */
 .ob-drop-pick{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:12px}
 .ob-drop-pick .ob-btn{margin-top:0}
+
+/* ══ #2232 올린 파일 목록 — 무엇을 받았는지 눈으로 보인다(종류 배지·그림 미리보기·폴더는 하나로 접기) ══ */
+.ob-files{display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:8px; margin:12px 0 2px}
+.ob-file{display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--line); border-radius:11px; background:var(--card); min-width:0}
+.ob-fi{position:relative; width:30px; height:36px; flex:0 0 30px; border-radius:6px; background:var(--line-row); display:grid; place-items:center; overflow:hidden; color:#C98A16}
+.ob-fi img{width:100%; height:100%; object-fit:cover; display:block}
+.ob-fi i{font-style:normal; font-size:9px; font-weight:800; letter-spacing:.02em; color:#fff; padding:1px 4px; border-radius:4px; background:#6b7280; max-width:28px; overflow:hidden}
+.ob-fi-doc i{background:#2f6bff} .ob-fi-sheet i{background:#1a9c5b} .ob-fi-slide i{background:#e0741a} .ob-fi-img i{background:#8b5cf6} .ob-fi-code i{background:#0f766e} .ob-fi-zip i{background:#a16207}
+.ob-fi-dir{background:#fff4d6} .ob-fi-dir .ob-blogo{width:18px; height:18px}
+.ob-file-body{min-width:0; display:flex; flex-direction:column; gap:1px}
+.ob-file-n{font-size:13px; font-weight:600; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.ob-file-m{font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.ob-file.ob-up .ob-file-m{color:var(--blue)}
+.ob-file.ob-err .ob-file-m{color:#C0392B}
+.ob-files-more{font-size:12.5px; color:var(--muted); align-self:center; padding:0 4px}
+/* 고르기 메뉴의 한 줄 설명(파일·폴더를 한 창에서 같이 못 고르는 이유) */
+.pjv-menu .pjv-menu-note{margin:6px 12px 6px; font-size:11.5px; color:var(--muted); line-height:1.5; max-width:250px; white-space:normal}
+
+/* ══ #2232 AI 로그인 안내 — 누르면 복사되는 글자 · 글 안의 작은 버튼 ══ */
+.ob-tok code.ob-copy{cursor:pointer; border:1px dashed var(--line); user-select:all}
+.ob-tok code.ob-copy:hover{border-color:var(--blue); color:var(--blue)}
+.ob-tok code.ob-copy::after{content:' ⧉'; font-size:11px; opacity:.6}
+.ob-tok ol .ob-kbd{font-size:12px}
+.ob-btn.ob-btn-mini{padding:2px 9px; font-size:12.5px; margin:0 1px; vertical-align:baseline; line-height:1.5; border-radius:7px; min-height:0}
