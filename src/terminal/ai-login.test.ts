@@ -87,6 +87,32 @@ t("⑥ 프로브는 **뜨거운 경로에 없다** — /welcome 폴링이 매번
     "프로브를 돌리는 자리가 POST 가 아니다 — 부수효과 있는 조회를 GET 계약에 얹으면 캐시·프리페치가 붙는다");
 });
 
+t("⑦b ★설치는 **게이트웨이 자신**에서 잰다 — 멤버 자리(tmux 컨테이너)는 이미지가 다를 수 있다", () => {
+  // 2026-08-27 라이브 실측: 중계는 늘 tmux 컨테이너로 exec 하는데(member-exec-relay `/containers/…-tmux/exec`)
+  //  하네스가 도는 곳은 멤버 세션 컨테이너다. 같은 테넌트에서 tmux=c36(agy 없음) / 세션=c48(agy 있음) →
+  //  화면이 «이 자리엔 Gemini 가 없어요» 라고 거짓말했다. 새 세션엔 실제로 있었다.
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
+  assert.match(fn, /out\.installed = await runAtMemberSeat\(null,/,
+    "설치를 멤버 자리에서 재고 있다 — tmux 컨테이너가 스테일하면 거짓 '미설치' 가 된다");
+  // 반대로 자격은 멤버 자리가 맞다(홈이 볼륨) — 그쪽까지 게이트웨이로 옮기면 남의 자격을 보게 된다.
+  assert.match(fn, /aiAccountStatus\(user, osSt\)/, "자격 판정이 멤버 축(aiAccountStatus)을 안 쓴다");
+});
+
+t("★ 매니지드 중계 배포(LIVELY_MEMBER_EXEC)에서도 자격 판정은 멤버 홈이다 — 게이트웨이 자기 홈을 보면 늘 «미로그인» (#2232)", () => {
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiAccountStatus"), PROFILES.indexOf("export async function memberLoggedInHarnessesAny"));
+  assert.match(fn, /const relayed = !isolated && memberExecConfigured\(\)/, "중계 배포 분기가 없다");
+  assert.match(fn, /if \(isolated \|\| relayed\)/, "중계 배포가 격리와 같은 축(osSt.loggedInHarnesses)을 안 탄다");
+
+});
+
+t("⑦c 프로브를 못 돌리는 자리면 '미로그인' 이 아니라 '모름' 이다", () => {
+  // 프로브는 그 사람 자격(HOME)을 봐야 해서 멤버 자리에서 돌아야 하는데, 그 자리에 바이너리가 없을 수 있다.
+  //  그 실패를 false 로 접으면 **로그인한 사람에게** «아직 로그인이 안 보여요» 라고 한다.
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
+  assert.match(fn, /if \(await runAtMemberSeat\(osUser, `command -v[\s\S]{0,120}out\.loggedIn = null;/,
+    "프로브 자리에 바이너리가 없을 때를 모름(null)으로 접지 않는다");
+});
+
 t("⑦ 설치가 아니면 로그인을 묻지 않는다 — 없는 CLI 의 답은 늘 '미로그인' 이라 사람을 오도한다", () => {
   const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"));
   assert.match(fn, /out\.installed = await runAtMemberSeat[\s\S]{0,200}if \(out\.installed !== true\) return out;/,
@@ -126,6 +152,19 @@ t("⑪ 막다른 길이 없다 — CLI 가 없어도 계속할 문이 있다", (
   assert.match(scene, /c\.installed === false/, "미설치 갈래가 없다 — 그 사람은 없는 명령을 치라는 안내를 받는다");
   assert.match(scene, /data-other/, "다른 AI 를 고를 문이 없다");
   assert.match(scene, /id="cKeep"/, "이미 이어진 다른 AI 로 계속할 문이 없다");
+});
+
+t("⑬ ★화면이 «이어졌다» 를 지어내지 않는다 — 참으로 만드는 자리는 서버 확인 뒤 한 곳뿐", () => {
+  // 종전 replayChatTo 가 `S.aiConnected = S.ai !== '아직 없어요'` 로 **무조건 대입**했다(|| 폴백이 아니다).
+  //  그래서 AI 잇기를 건너뛴 사람도 채팅 단계에 닿는 순간 참이 됐고, AI 화면으로 돌아가면
+  //  «이어졌어요 · 로그인이 확인됐어요» 라고 말했다 — 서버는 그런 적이 없다.
+  //  #1813 이 걷어낸 «900ms 뒤 무조건 연결됐어요» 와 같은 모양의 잔재였다.
+  const sets = [...ONBOARDING.matchAll(/S\.aiConnected\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
+  assert.deepEqual(sets, ["true"],
+    `S.aiConnected 를 참으로 만드는 자리가 하나가 아니거나 서버 판정이 아니다: ${JSON.stringify(sets)}`);
+  // 그 한 곳은 checkAi() 결과나 «이대로 계속»(다른 AI 가 실제로 이어져 있음) 뒤여야 한다.
+  const scene = ONBOARDING.slice(ONBOARDING.indexOf("    claude: {"), ONBOARDING.indexOf("    terminal: {"));
+  assert.match(scene, /S\.aiConnected = true/, "이음 처리가 claude 장면(서버 판정 자리) 밖에 있다");
 });
 
 t("⑫ 화면이 CLI 이름을 박아 두지 않는다 — 하네스 표가 바뀌면 그 줄만 조용히 틀려진다", () => {

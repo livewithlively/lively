@@ -459,6 +459,12 @@ async function macClaudeKeychainHas(): Promise<boolean> {
 export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): Promise<AiAccountStatus[]> {
   osSt ??= await memberOsStatus(ownerId(user));
   const isolated = osSt.ready && osSt.provisioned;
+  //  #2232 — 매니지드(중앙 게이트웨이 + 노드의 세션 컨테이너, LIVELY_MEMBER_EXEC 중계)에선 게이트웨이에 멤버 OS 유저가 없어
+  //   provisioned=false 다. 그런데 자격 판정은 memberOsStatus 가 이미 **중계로 멤버 홈(/home/box_*)을 봤다**(credChecked).
+  //   그걸 안 쓰고 아래 프로필/공유 분기로 떨어지면 게이트웨이 **자기 홈**(/root)을 보고 «미로그인» 이 된다 —
+  //   실측 2026-08-28(원준님): 로그인 창에서 /login 을 끝냈는데도 «아직 로그인이 안 보여요». 자격 파일은
+  //   homes/box_<id>/.claude/.credentials.json 에 멀쩡히 있었다. 중계 배포도 멤버 축으로 본다.
+  const relayed = !isolated && memberExecConfigured();
   const darwin = process.platform === "darwin";
   const out: AiAccountStatus[] = [];
   for (const h of HARNESSES) {
@@ -466,9 +472,9 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
     if (!rel) continue;   // 셸 등 — 로그인 개념이 없는 하네스
     let scope: AiAccountStatus["scope"]; let where: string;
     let loggedIn: boolean | null;
-    if (isolated) {
-      scope = "isolated"; where = `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
-      loggedIn = osSt.loggedInHarnesses.includes(h.key);   // memberOsStatus 가 같은 표(HARNESS_CRED)로 이미 drop-priv 확인했다
+    if (isolated || relayed) {
+      scope = "isolated"; where = relayed ? `내 세션 홈(${osSt.osUser})의 ${rel}` : `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
+      loggedIn = osSt.loggedInHarnesses.includes(h.key);   // memberOsStatus 가 같은 표(HARNESS_CRED)로 이미 drop-priv/중계 확인했다
     } else if (h.key === "claude" && darwin) {
       // 맥 = 키체인(OS 유저 단위) → 멤버별로 갈릴 수 없다. 공용으로 **정직하게** 표시한다.
       scope = "shared"; where = "이 서버 macOS 키체인(Claude Code-credentials)";
