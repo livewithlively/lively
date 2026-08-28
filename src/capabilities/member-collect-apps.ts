@@ -78,6 +78,8 @@ export const linearCollectCapabilities = makeMemberTokenCollect({
   scopeKeys: ["teams"],
   outcome: "이슈·댓글·문서가 자료함에 들어오고, 이슈 대화 증류기가 꺼진 채로 함께 준비된다. 자격이 없으면 needs_connect 와 함께 Linear 동의 URL 을 준다(토글이 곧 연결).",
   connectStart: async (actor) => { const c = await startLinearAppConsent(actor); return { authorization_url: c.authorizationUrl ?? "" }; },
+  // 라이블리 Linear 앱(client id/secret)이 아직 없으면 화면이 «앱 등록 칸»을 먼저 보여 준다 — 그게 없으면 [허용] 화면조차 못 연다.
+  extraState: async () => ({ app_ready: await linearAppReady() }),
   onEnabled: async ({ actor, source }) => { await ensureGithubIssuesDistiller({ actor, source: "collect-toggle:" + source }); },
 });
 

@@ -561,6 +561,24 @@ function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement
       extra.push(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '범위' }), inp, save));
       if (s.needs_scope && SF.note) notes.push(SF.note);
     }
+    //  #2247 Linear — 라이블리 Linear OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 관리자에게 등록 칸을 먼저 낸다.
+    //   값은 이 화면에서 금고(조직 슬롯 linear_app/oauth:client)로 바로 간다 — 채팅·문서에 붙여넣을 일이 없다.
+    if (key === 'linear' && s.app_ready === false) {
+      const idIn = el('input', { type: 'text', class: 'cn-scope-in', placeholder: 'Client ID', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
+      const secIn = el('input', { type: 'password', class: 'cn-scope-in', placeholder: 'Client Secret', autocomplete: 'new-password' }) as HTMLInputElement;
+      const reg = el('button', { class: 'btn btn-sm', type: 'button', text: '앱 등록', onclick: async () => {
+        const cid = idIn.value.trim(), sec = secIn.value.trim();
+        if (!cid || !sec) { toast('Client ID 와 Client Secret 둘 다 넣어 주세요', true); (cid ? secIn : idIn).focus(); return; }
+        reg.setAttribute('disabled', 'true');
+        try {
+          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: 'linear_app', scope_key: 'oauth:client', label: 'Linear 라이블리 앱(OAuth 클라이언트)', secret: JSON.stringify({ client_id: cid, client_secret: sec }) }) });
+          secIn.value = ''; toast('Linear 앱을 등록했어요 — 이제 스위치를 켜면 Linear 화면이 열립니다');
+        } catch (e: any) { toast((e && e.message) || '등록하지 못했습니다', true); }
+        await paint();
+      } });
+      notes.push('라이블리 Linear 앱이 아직 등록되지 않았어요 — Linear ▸ Settings ▸ API ▸ OAuth Applications 에서 만든 앱의 Client ID 와 Client Secret 을 아래에 넣어 주세요(관리자 1회). 값은 금고로 바로 저장되고 다시 보이지 않습니다.');
+      extra.push(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '앱 등록' }), idIn, secIn, reg));
+    }
     //  #2247 Linear — 토글이 곧 연결. 자격이 없으면 서버가 동의 URL 을 준다: 새 탭으로 열고, 돌아온 것(me_connected)이 보이면 다시 켠다.
     const consentThen = async (r: any): Promise<boolean> => {
       if (!(r && r.needs_connect && r.authorization_url)) return false;
@@ -590,7 +608,8 @@ function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
     };
-    panel.set(chk, chk.checked ? '켜짐' : (s.needs_scope && SF ? '범위 필요' : '꺼짐'), notes, extra);
+    if (key === 'linear' && s.app_ready === false) chk.disabled = true;   // 앱이 없으면 켤 수 없다 — 등록 칸이 먼저
+    panel.set(chk, chk.checked ? '켜짐' : (key === 'linear' && s.app_ready === false ? '앱 등록 필요' : (s.needs_scope && SF ? '범위 필요' : '꺼짐')), notes, extra);
   };
   void paint();
   return box;
