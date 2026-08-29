@@ -125,7 +125,8 @@ export async function setMemberOnboardingStep(
 //  계산되므로 여기 복제하면 두 개의 진실이 생긴다(#850 이 온보딩에서 이미 내린 결론).
 export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
 /** 처음 설정의 결과. 무엇을 만들었는지까지 남긴다 — "왜 이 서랍이 있죠?" 에 답할 유일한 근거다. */
-export interface LivWelcome { done_at: string; drawers?: string[]; first_order?: string | null }
+//  session_id(#1631) — 처음 설정 직후 열린 **리브 세션**. 다시 반영해도 세션을 또 열지 않는 근거(멱등)이자 화면이 그리로 보내는 좌표.
+export interface LivWelcome { done_at: string; drawers?: string[]; first_order?: string | null; session_id?: string | null }
 /**
  * 처음 설정을 **하다 만 자리**(#2207). 끝난 결과(LivWelcome)와 별개다 — 이건 아직 안 끝난 사람의 자리표다.
  *
