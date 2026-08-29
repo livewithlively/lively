@@ -312,6 +312,14 @@ function startBackgroundSweeps(): void {
     void sweepAwaitingNotifications()
       .catch((err) => logger.warn({ err }, "awaiting 알림 스윕 실패(비치명 — 다음 tick 재시도)"));
   }, 30_000).unref();
+  // #1631 — 리브 2턴: 처음 설정 직후 열린 리브 세션에, 첫 수집 배치가 돈 뒤 증류 지시를 넣는다.
+  //  판정은 순수 함수(decideSecondTurn)·멱등(distill_at) — 1분 주기로 돌아도 같은 세션에 두 번 넣지 않는다.
+  //  부팅 직후엔 돌리지 않는다(세션 목록·아웃박스 재개가 먼저).
+  setInterval(() => {
+    void import("../org/liv/second-turn-sweep.js")
+      .then(({ sweepLivSecondTurn }) => sweepLivSecondTurn())
+      .catch((err) => logger.warn({ err }, "리브 2턴 스윕 실패(비치명 — 다음 tick 재시도)"));
+  }, 60_000).unref();
 
   // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
   //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.

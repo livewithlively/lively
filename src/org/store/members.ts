@@ -126,7 +126,23 @@ export async function setMemberOnboardingStep(
 export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
 /** 처음 설정의 결과. 무엇을 만들었는지까지 남긴다 — "왜 이 서랍이 있죠?" 에 답할 유일한 근거다. */
 //  session_id(#1631) — 처음 설정 직후 열린 **리브 세션**. 다시 반영해도 세션을 또 열지 않는 근거(멱등)이자 화면이 그리로 보내는 좌표.
-export interface LivWelcome { done_at: string; drawers?: string[]; first_order?: string | null; session_id?: string | null }
+//  distill_at / distill_gave_up_at / distill_note — 2턴(증류 지시)을 그 세션에 넣었나·포기했나·왜(second-turn-sweep). 둘 다 없으면 대기 중.
+export interface LivWelcome {
+  done_at: string; drawers?: string[]; first_order?: string | null; session_id?: string | null;
+  distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
+}
+
+/** (#1631) 2턴 대기 중인 사람 — 리브 세션은 열렸는데 증류 지시를 아직 안 넣었고 포기도 안 한 구성원. 신원 전역 표라 테넌트 컨텍스트 불요. */
+export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string; display_name: string | null; welcome: LivWelcome }>> {
+  const r = await itemsPool.query(
+    `SELECT id, display_name, liv_profile->'welcome' AS welcome FROM org_member
+      WHERE state='active' AND kind='human'
+        AND liv_profile->'welcome'->>'session_id' IS NOT NULL
+        AND liv_profile->'welcome'->>'distill_at' IS NULL
+        AND liv_profile->'welcome'->>'distill_gave_up_at' IS NULL
+      ORDER BY liv_profile->'welcome'->>'done_at' ASC LIMIT 200`);
+  return r.rows.map((x) => ({ id: String(x.id), display_name: (x.display_name as string | null) ?? null, welcome: x.welcome as LivWelcome }));
+}
 /**
  * 처음 설정을 **하다 만 자리**(#2207). 끝난 결과(LivWelcome)와 별개다 — 이건 아직 안 끝난 사람의 자리표다.
  *

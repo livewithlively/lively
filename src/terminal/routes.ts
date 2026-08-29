@@ -13,7 +13,6 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { codexChatMode } from "./codex-chat-mode.js";   // #2055 codex 대화 런타임 선택
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
 import { cancelAiLogin, pasteAiLogin, readAiLogin, startAiLogin } from "./ai-login-run.js";
-import { rememberCodexThread } from "./codex-chat-thread.js";   // #2055 — 대화 좌표를 남기는 한 곳
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
@@ -64,11 +63,7 @@ import { mintAppToken } from "../apps/principal.js";
 import { prepareAppAssets } from "../apps/session-assets-gateway.js";   // #2165 — DB 를 타는 조각
 import { gatewayUrl } from "../gateway-url.js";
 
-/** #1683 후속2 — 그 세션이 어느 하네스로 떴나(tmux 세션 옵션 @box_harness). 모르면 빈 문자열. */
-async function sessionHarnessKey(id: string): Promise<string> {
-  try { const { getOpt } = await import("./tmux-exec.js"); return String((await getOpt(id, "@box_harness")) || ""); }
-  catch { return ""; }
-}
+import { sessionHarnessKey } from "./deliver-prompt.js";   // #1683 후속2 — 정의는 deliver-prompt.ts(#1631 이동)
 
 // #1437 ② — 복원이 `--resume <uuid>` 로 **정밀 재개**해도 되는가(그 대화 파일이 소유자가 읽을 자리에 실제로 있나).
 //  왜 transcriptExists(terminal-transcript) 를 안 쓰나: 그건 게이트웨이 **로컬 fs** 를 stat 한다. 중계 배포(중앙 게이트웨이·
@@ -755,67 +750,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     } else if (!(await canAttach(req.params.id, uid))) {
       throw new HttpError(404, SESSION_NOT_FOUND);
     }
-    // ── codex app-server 모드(#2055) — 글자를 화면에 '넣는' 대신 **프로토콜로 보낸다**. ──
-    //  ⚠ **노드 판정보다 먼저** 본다(실측 2026-08-26, dev): 게이트웨이 박스가 노드로도 등록돼 있으면
-    //   그 박스의 **로컬 세션까지 노드 스냅샷에 잡혀**(applyLiveTheme 주석과 같은 함정) 아래 노드 릴레이로
-    //   빠져 이 분기가 통째로 무시됐다 — 응답이 `{ok:true}` 한 줄로 와서 겉으론 성공처럼 보인다.
-    //   그래서 '노드에 등록됐나'가 아니라 **'이 박스의 tmux 에 그 세션이 실제로 있나'** 로 가른다.
-    if (codexChatMode({ harness: await sessionHarnessKey(req.params.id) }) === "app-server"
-        && !(await sessionGone(req.params.id))) {
-      //  아웃박스+send-keys 는 pane 화면을 읽어 타이밍을 맞추는 경로라, 로그인·대화상자에 걸리면 배달이 지연되거나
-      //  조용히 사라진다. app-server 는 turn/start 의 **응답으로 성공/실패가 온다** — 애매함이 없다.
-      //  ⚠ 실패하면 반드시 종전 경로로 폴백한다(app-server 는 공식 문서상 experimental). 폴백했다는 사실은
-      //   응답에 실어 화면·게이트가 볼 수 있게 한다 — 조용히 접으면 "왜 느리지"의 원인을 아무도 모른다.
-      const { sendCodexChat, CodexChatUnavailable } = await import("./harness-io/codex-chat-runtime.js");
-      try {
-        const dir = await sessionDir(req.params.id);
-        const osUser = await sessionOsUser(req.params.id);
-        const st = await getSessionState(req.params.id);
-        const r = await sendCodexChat({
-          sessionId: req.params.id, text, cwd: dir, osUser,
-          threadId: st?.claude_session_id || null,
-        });
-        // 스레드 id **와 대화 파일 경로**를 세션 상태에 남긴다.
-        //  · id — 게이트웨이가 재시작해도 같은 대화로 이어 붙는다(없으면 새 스레드가 열려 대화가 갈린다).
-        //  · 경로 — **화면이 대화를 읽는 유일한 단서**다. 평소엔 세션 안 훅이 보고하지만 app-server 턴에서는
-        //    그 훅이 돌지 않는다(실측 2026-08-26 — 그래서 답이 파일에 있는데도 대화창이 비어 있었다).
-        //    우리는 threadId 를 아니 직접 찾아 넣는다.
-        await rememberCodexThread({
-          sessionId: req.params.id, threadId: r.threadId, owner: uid, osUser,
-          knownThreadId: st?.claude_session_id, knownPath: st?.transcript_path,
-        });
-        // steered = 새 턴이 아니라 **도는 턴에 얹었다**. 화면이 그 말풍선을 다르게 말할 수 있게 사실대로 싣는다.
-        res.json({ ok: true, delivered: true, transport: "app-server", thread_id: r.threadId, steered: !!r.steered });
-        return;
-      } catch (e) {
-        if (!(e instanceof CodexChatUnavailable)) throw e;
-        logger.warn({ id: req.params.id, err: (e as Error).message }, "codex app-server 전송 실패 — 종전 경로로 폴백");
-        const { enqueuePrompt } = await import("../sessions/session-outbox.js");
-        const q = await enqueuePrompt(req.params.id, text);
-        res.json({ ok: true, queued: true, outbox_id: q.id, seq: q.seq, transport: "outbox", fallback: (e as Error).message });
-        return;
-      }
-    }
-    if (!nodeId) {
-      // 이 박스 세션 — 아웃박스(#1753)로. 곧바로 send-keys 하지 않는다: 로그인·대화상자에 멈춘 세션이면 글자가 조용히
-      //  사라진다(실측). 배달자가 입력창을 확인하고 넣고, 트랜스크립트 에코로 delivered 를 확정한다. 화면은 seq 로 상태를 따라간다.
-      const { enqueuePrompt } = await import("../sessions/session-outbox.js");
-      const q = await enqueuePrompt(req.params.id, text);
-      res.json({ ok: true, queued: true, outbox_id: q.id, seq: q.seq });
-      return;
-    }
-    // 노드(멤버 PC) 세션 — 파일·tmux 가 그 컴퓨터에 있어 아웃박스 배달자가 닿지 않는다. 종전 릴레이 그대로(후속 #1753 P2).
-    const { injectPrompt } = await import("../node/session-inject.js");
-    try { await injectPrompt(req.params.id, text); }
-    catch (e) {
-      // 노드가 꺼졌거나 구버전이면 nodeRpc 가 고정 문자열로 던진다 — 사람 말로 옮긴다(그냥 500 이면 원인을 모른다).
-      const msg = (e as Error)?.message ?? String(e);
-      if (msg === "node-offline") throw new HttpError(503, "그 컴퓨터가 지금 연결돼 있지 않습니다.");
-      if (msg.startsWith("node-unsupported-op:")) throw new HttpError(409, "그 컴퓨터의 라이블리가 오래돼 프롬프트를 받지 못합니다. 업데이트가 필요합니다.");
-      if (msg === "node-rpc-timeout") throw new HttpError(504, "그 컴퓨터가 응답하지 않습니다.");
-      throw e;
-    }
-    res.json({ ok: true });
+    // 배달 본체는 deliver-prompt.ts(#1631 — 리브 2턴이 같은 통로를 탄다). 접근 판정은 위에서 끝났다.
+    const { deliverPrompt } = await import("./deliver-prompt.js");
+    res.json(await deliverPrompt(req.params.id, text, { owner: uid, nodeId }));
   }));
   // 이미 떠 있는 세션의 **모델·추론강도**를 바꾼다(#1758) — 대화창 입력칸 아래 드롭다운이 부른다.
   //  세션은 이미 argv 로 떠 있어 플래그로는 못 바꾼다. 사람이 터미널에서 치는 것과 **같은 슬래시 명령**을 넣는 수밖에 없고,

@@ -31,7 +31,7 @@ export {
   getHarnessLocalPref, setHarnessLocalPref,
   getLocalModePreferences, setLocalModePreference,
   getLivProfile, appendLivProfile, setLivSecretAsk, appendLivAnswer, livAnswerStats, setLivChat, appendLivTurn,
-  setLivWelcomeProgress,
+  setLivWelcomeProgress, listLivSecondTurnCandidates,
   memberIdByEmail, upsertMember, removeMember,
 } from "./store/members.js";
 export type {
