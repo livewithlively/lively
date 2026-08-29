@@ -18,17 +18,36 @@ export async function sweepLivSecondTurn(): Promise<{ fired: number; waited: num
   const { collectorJobId } = await import("../store/collectors.js");
   const { deliverPrompt } = await import("../../terminal/deliver-prompt.js");
 
+  const { sessionGone } = await import("../../terminal/tmux-exec.js");
+
   const out = { fired: 0, waited: 0, gaveUp: 0, failed: 0 };
   const candidates = await listLivSecondTurnCandidates();
   if (!candidates.length) return out;
-  const sessions = new Map((await listSessionsRaw()).map((s) => [s.id, s]));
   const now = Date.now();
+  // ★ 세션 목록은 **워크스페이스 컨텍스트로 걸러진다**(실측 2026-08-29 dev: 같은 세션이 그 워크스페이스 헤더로는 보이고
+  //  primary 로는 안 보였다 → 컨텍스트 없이 읽은 첫 판은 살아 있는 세션을 'session-gone' 으로 포기했다).
+  //  그래서 목록은 그 세션의 테넌트 안에서 읽는다(테넌트별 1회 캐시). 그래도 없으면 tmux 에 직접 묻는다 —
+  //  **없다고 확인된 것만 포기**한다(모르는 상태를 '없음'으로 읽어 파괴적 결정을 내리지 않는다, #1675 규율).
+  const listCache = new Map<string, Map<string, { working?: boolean; agentState?: string | null }>>();
+  const sessionIn = async (tenant: { id: string; slug: string }, sid: string) => {
+    let m = listCache.get(tenant.id);
+    if (!m) {
+      const rows = await withTenant(tenant, () => listSessionsRaw()).catch(() => [] as Array<{ id: string; working?: boolean; agentState?: string | null }>);
+      m = new Map(rows.map((s) => [s.id, { working: s.working, agentState: s.agentState ?? null }]));
+      listCache.set(tenant.id, m);
+    }
+    const hit = m.get(sid);
+    if (hit) return hit;
+    // 목록엔 없지만 tmux 엔 있다(노드 세션·목록 필터 밖) → 상태를 모르는 채로 살아 있음. 없다고 확인되면 null.
+    const gone = await sessionGone(sid).catch(() => false);
+    return gone ? null : { working: false, agentState: "unknown" };
+  };
 
   for (const c of candidates) {
     const sid = String(c.welcome.session_id);
-    const s = sessions.get(sid) ?? null;
     const ws = await workspaceForSession(sid).catch(() => null);
     const tenant = ws ? { id: ws.id, slug: ws.slug } : { id: PRIMARY_TENANT_ID, slug: PRIMARY_SLUG };
+    const s = await sessionIn(tenant, sid);
     // 수집기와 그 잡의 마지막 실행 — 그 워크스페이스 안에서 읽는다.
     const collectors = await withTenant(tenant, async () => {
       const cols = await listCollectors().catch(() => []);
