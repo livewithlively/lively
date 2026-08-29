@@ -83,7 +83,8 @@ test("⑮ 프롬프트 — partial 이면 '최대 1분' 문구, 아니면 없음
 test("⑯ 프롬프트 — 이름 없으면 '이 사람', 수집기 없음 문구, 마친 것/안 끝난 것 분리", () => {
   const p = buildSecondTurnPrompt(pin({ displayName: null, collectors: [] }));
   assert.match(p, /이 사람의 일하는 방식/);
-  assert.match(p, /- 수집기: 없음\(올린 자료만 있다\)/);
+  assert.match(p, /- 수집기: 없음\(외부 앱을 잇지 않음\)/);
+  assert.doesNotMatch(p, /올린 자료만 있다/);   // 자료 0건일 때 전제가 틀리는 단정(태오 채점 실측)을 다시 넣지 않는다
   const q = buildSecondTurnPrompt(pin());
   assert.match(q, /첫 수집을 마친 것 슬랙 #design \/ 아직 안 끝난 것 노션/);
 });
