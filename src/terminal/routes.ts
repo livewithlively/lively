@@ -427,13 +427,15 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
  *   이 라우트 층 한 곳에 둔다.
  *  subject 로 멱등하다(store createAppInstance) — 복원처럼 같은 세션이 다시 와도 하나다. 실패해도 세션은 산다.
  */
-const registerSessionInstance = async (sessionId: string, owner: string, opts: { appId?: string | null; projectId?: number | null; title?: string | null }): Promise<void> => {
+//  (#1631) export — 리브 킥오프(org/liv/kickoff.ts)가 서버에서 세션을 열 때 **같은 등록·바인딩**을 밟는다. 라우트 밖에서
+//   세션을 여는 길이 생기면 이 둘을 반드시 함께 부른다(안 부르면 목록에 안 뜨고 primary 로 취급된다).
+export const registerSessionInstance = async (sessionId: string, owner: string, opts: { appId?: string | null; projectId?: number | null; title?: string | null }): Promise<void> => {
   await createAppInstance({ appId: opts.appId || "ai-session", owner, projectId: opts.projectId ?? null,
     subjectKind: "session", subjectRef: sessionId, title: opts.title || null })
     .catch((e) => logger.warn({ err: e, sessionId }, "앱 인스턴스 등록 실패(비치명) — 세션은 살아 있다"));
 };
 
-const recordSessionTenant = async (sessionId: string, killOnFail?: () => Promise<unknown>): Promise<void> => {
+export const recordSessionTenant = async (sessionId: string, killOnFail?: () => Promise<unknown>): Promise<void> => {
   const t = currentTenant();
   if (!t || t.id === PRIMARY_TENANT_ID) return;
   try { await setSessionWorkspace(sessionId, t.id); }
