@@ -29,7 +29,7 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
   const pending = i.collectors.filter((c) => c.enabled && !c.ran);
   const collectLine = i.collectors.length
     ? `- 수집기: ${ran.length ? `첫 수집을 마친 것 ${ran.map((c) => c.label).join(" · ")}` : "첫 수집을 마친 것 없음"}${pending.length ? ` / 아직 안 끝난 것 ${pending.map((c) => c.label).join(" · ")}` : ""}`
-    : "- 수집기: 없음(올린 자료만 있다)";
+    : "- 수집기: 없음(외부 앱을 잇지 않음) — 자료는 올린 것뿐이며, 그것도 0건일 수 있다";   // 실측(태오 채점): "올린 자료만 있다"로 단정하면 자료 0건일 때 전제가 틀린다
   return [
     `리브, 이제 **증류 작업**을 시작한다. 처음 설정이 끝난 지 ${i.waitedMin}분 지났다.`,
     "",
