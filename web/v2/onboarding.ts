@@ -2507,12 +2507,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         pushOff = true; clearTimeout(pushT); pushT = null;
         ctx.onDone && ctx.onDone();
         const made = (applied && applied.created) || [];
+        // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다 — 리브가 1턴에서 현황을 읽어 주고 있다.
+        //  못 열었으면(AI 미로그인 등) 종전처럼 홈으로. 사유는 응답(liv.error)에 있지만 여기서 사람을 붙들지 않는다.
+        const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
+        const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.' : '워크스페이스로 모시겠습니다.';
         m.querySelector('.ob-body').innerHTML = made.length
-          ? `정리했어요. 자료함에 <b>${made.map((x) => esc(x)).join(' · ')}</b> 서랍을 만들어 뒀습니다. 워크스페이스로 모시겠습니다.`
-          : '정리했어요. 워크스페이스로 모시겠습니다.';
+          ? `정리했어요. 자료함에 <b>${made.map((x) => esc(x)).join(' · ')}</b> 서랍을 만들어 뒀습니다. ${where}`
+          : `정리했어요. ${where}`;
         scrollChat();
         await sleep(1100);
-        location.hash = '#/';
+        location.hash = livHref || '#/';
       } }]);
       fineRow('지금 시키지 않으셔도 됩니다. 홈에서 언제든 그대로 말씀하시면 돼요.');
     }
