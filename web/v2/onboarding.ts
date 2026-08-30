@@ -1039,6 +1039,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (c) {
         if (id === 'notion') return c.enabled ? 'on' : (!c.ready && !(c.workspaces || []).length ? 'blocked' : 'off');
         if (id === 'slack') return (c.search && c.search.enabled) ? 'on' : 'off';
+        //  ⚠ 리니어는 **라이블리 OAuth 앱이 조직에 등록돼 있어야** 동의 화면이 열린다(app_ready).
+        //   종전엔 그 사실을 안 보고 «연결하기» 로 안내해, 누르면 409 로 끝나고 토스트만 스치는 막다른 길이었다
+        //   (원준님 실측 2026-08-30). 등록 전이면 잠근다 — 관리자에겐 아래 안내가 등록 자리를 가리킨다.
+        if (id === 'linear' && c.app_ready === false) return 'blocked';
         if (id === 'figma' || id === 'clickup' || id === 'github' || id === 'gitlab' || id === 'linear') return c.enabled ? 'on' : 'off';
       }
       // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
@@ -1683,7 +1687,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
           const id = c.dataset.conn;
           if (connState(id) === 'on') return;                       // 이미 이어졌다 — 더 시킬 일이 없다
-          if (connState(id) === 'blocked') { toast('이 앱은 아직 준비 중이에요. 열리면 [외부 앱 연결]에서 바로 연결하실 수 있어요.'); return; }
+          if (connState(id) === 'blocked') {
+            //  관리자에게 «준비 중» 은 거짓이다 — 등록만 하면 열린다. 어디서 무엇을 넣는지까지 말한다.
+            const needsApp = id === 'linear' && COLL[id] && COLL[id].app_ready === false;
+            toast(needsApp && isAdmin()
+              ? '라이블리 Linear 앱을 먼저 등록해야 열려요 — [외부 앱 연결] ▸ Linear 에서 Client ID·Secret 을 넣어 주세요(관리자 1회).'
+              : needsApp
+                ? '이 앱은 관리자가 Linear 앱을 등록해야 열려요. 관리자에게 알려 주세요.'
+                : '이 앱은 아직 준비 중이에요. 열리면 [외부 앱 연결]에서 바로 연결하실 수 있어요.');
+            return;
+          }
           //  ⚠ 아직 서버를 못 읽었으면 **어느 길로 이을지 고를 수 없다**: Slack·GitLab 은 계정 로그인과 글자 받아
           //   오기가 둘 다 있어서, 모르는 채로 정하면 회사가 이미 열어 둔 쉬운 길을 두고 어려운 길로 보내게 된다.
           if (!CONN) { toast('연결 상태를 아직 확인하는 중이에요 — 잠시 뒤 다시 눌러 주세요.'); if (!connTried) void loadConn().then(redraw); return; }
