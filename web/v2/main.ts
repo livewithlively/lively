@@ -230,8 +230,8 @@ function renderRelayLanding(root: HTMLElement, l: { app: string; label: string; 
     el('h2', { text: 'Lively 커넥터' }),
     el('p', { text: l.ok ? `연결이 완료되었습니다 — ${l.label}. 이 창을 닫아도 됩니다.` : `연결에 실패했습니다: ${l.err}` }),
     el('p', { class: 'v2-relay-sub', text: l.ok
-      ? '처음 설정이나 [외부 앱 연결] 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
-      : '원래 탭으로 돌아가 [외부 앱 연결]에서 다시 시도해 주세요.' })));
+      ? '처음 설정이나 «외부 앱 연결» 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
+      : '원래 탭으로 돌아가 «외부 앱 연결»에서 다시 시도해 주세요.' })));
 }
 
 export async function bootV2(): Promise<void> {

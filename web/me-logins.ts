@@ -404,7 +404,7 @@ async function myLoginsSection(detail) {
     el('div', { class: 'admin-actions' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
   detail.replaceChildren(
-    sectionHead('외부 서비스 관리', 'AI가 내 계정으로 외부 서비스를 직접 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 여기 설정은 나에게만 적용됩니다 — 자료를 워크스페이스가 함께 보는 자료함으로 가져오는 것은 [외부 앱 연결]의 «자료 가져오기»가 따로 합니다.'),
+    sectionHead('외부 서비스 관리', 'AI가 내 계정으로 외부 서비스를 직접 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 여기 설정은 나에게만 적용됩니다. 자료를 워크스페이스가 함께 보는 자료함으로 가져오는 것은 «외부 앱 연결»의 «자료 가져오기»가 따로 합니다.'),
     el('div', { class: 'admin-stack' }, svcHost, gitCard));
   await renderServices(svcHost);
 }
