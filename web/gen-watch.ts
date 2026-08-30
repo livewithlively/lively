@@ -163,4 +163,10 @@ export function watchStaleShell(): void {
   armed = true;
   document.addEventListener("visibilitychange", () => { if (!document.hidden) void checkStale(); });
   window.addEventListener("focus", () => { void checkStale(); });
+  //  #2243 — 탭을 떠나지 않고 **화면 안에서만** 돌아다니는 사람에게는 위 둘이 영영 안 걸린다.
+  //   실측(원준 2026-08-30): 배포를 세 번 했는데도 «여전히 옛 화면»이었다 — 그 탭은 계속 포커스를 쥔 채
+  //   #/connect → #/connect/figma 로만 옮겨 다녔고, 그동안 낡은 판이라는 사실을 알 길이 없었다.
+  //   화면을 옮기는 순간은 «방금까지 보던 것»이 없는 자리라 배너를 띄우기에도 가장 안전하다.
+  //   서버 요청은 MIN_GAP_MS(5초)가 이미 막아 준다 — 라우트를 빠르게 오가도 두들기지 않는다.
+  window.addEventListener("hashchange", () => { void checkStale(); });
 }
