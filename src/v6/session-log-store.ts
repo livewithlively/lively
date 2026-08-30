@@ -54,6 +54,24 @@ export async function sessionOwner(nodeId: string, sessionId: string): Promise<s
   return (r.rows[0]?.owner as string | null) ?? null;
 }
 
+/**
+ * **세션 레지스트리**가 아는 주인(#1631) — 기록(session.owner)과 다른 축이다.
+ *
+ *  왜 필요한가: 위 `sessionOwner` 는 «첫 append 한 멤버» 라 대화가 한 줄도 없으면 null 이다. 그런데 열람
+ *   게이트가 그 값만 보면, 자기가 방금 연 세션을 여는 사람에게 «이 세션 로그를 볼 권한이 없습니다»(403)가
+ *   나간다 — 온보딩 직후 착지하는 화면이 정확히 그랬다(실측 2026-08-31). 정직한 답은 «아직 기록이 없습니다» 다.
+ *
+ *  ⚠ 이건 **보조 축**이다: 기록 축이 답을 가지고 있으면 그쪽이 정본이다(checkViewGate 참조).
+ *   여기서 덮으면 남의 기록을 자기 세션 id 로 여는 길이 생긴다.
+ *  ⚠ 조회 실패는 null(모름) — 인가에서 모름은 허용이 아니다. 게이트가 그대로 막는다.
+ */
+export async function sessionRegistryOwner(sessionId: string): Promise<string | null> {
+  try {
+    const r = await itemsPool.query(`SELECT owner FROM org_session_state WHERE id=$1`, [sessionId]);
+    return (r.rows[0]?.owner as string | null) ?? null;
+  } catch { return null; }
+}
+
 // 이 기록을 남긴 하네스(캡처 훅이 보고, #1746) — 읽을 때 어느 어댑터 파서로 공통 ChatLine 을 만들지 정한다. 미보고(구 행)면 null.
 export async function sessionHarness(nodeId: string, sessionId: string): Promise<string | null> {
   const r = await itemsPool.query(`SELECT harness FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);

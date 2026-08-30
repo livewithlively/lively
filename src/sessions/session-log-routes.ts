@@ -18,7 +18,7 @@ import { auditOrgContent } from "../v6/content-audit.js";
 import { sessionFootprint, purgeFootprint, type PurgeSelection } from "../v6/session-footprint-store.js";
 import { projectDirOnThisHost } from "../terminal/session-project.js";   // #1850 — 완전 삭제한 프로젝트의 폴더(첨부·자료 파일)
 import { rm as fsRm } from "node:fs/promises";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
-import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
+import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionRegistryOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
 import { trashMapFor } from "./session-trash.js";   // #1851 — 내 세션 목록에 휴지통 표식
 import { sessionConvsFor, convsTakenByOtherSession } from "./session-state.js";   // #2233 — 한 박스가 갈아탄 대화 사슬
 import { currentTenant } from "../org/tenant-context.js";   // #1875 — 세션 목록 워크스페이스 격리
@@ -83,10 +83,20 @@ export function checkAppendGate(g: AppendGateInput): { status: number; message: 
  */
 export interface ViewGateInput {
   requester: string; owner: string | null; viewPolicy: string; invited: boolean;
+  /**
+   * 레지스트리가 아는 이 세션의 주인(#1631). `owner` 는 **첫 append 한 멤버**라 기록이 한 줄도 없으면 null 인데,
+   *  그러면 소유자 검사가 통째로 건너뛰어져 **자기 세션을 연 사람에게 «권한이 없습니다»** 가 나갔다
+   *  (실측 2026-08-31: 온보딩 직후 착지하는 그 화면이 정확히 이 모양이었다). 호출자가 알면 넘긴다 — 모르면 생략.
+   */
+  registryOwner?: string | null;
 }
 export function checkViewGate(g: ViewGateInput): { status: number; message: string } | null {
   if (!g.requester) return { status: 403, message: "사용자 신원이 없습니다" };
   if (g.owner && g.owner === g.requester) return null;                    // 소유자는 언제나 자기 로그를 본다
+  //  ★ 기록이 아직 없는 자기 세션(#1631) — 「기록이 없다」와 「볼 권한이 없다」는 다른 사실이다.
+  //   기록 축(owner)이 비었을 때만 레지스트리 축을 본다. 기록이 있는데 주인이 다르면 그 답이 정본이다
+  //   (레지스트리로 덮으면 남의 기록을 자기 세션 id 로 열 수 있다).
+  if (!g.owner && g.registryOwner && g.registryOwner === g.requester) return null;
   if (g.viewPolicy === "attach" && g.invited) return null;                // 초대된 사람(미러 기반 — 죽은 세션도)
   return { status: 403, message: "이 세션 로그를 볼 권한이 없습니다" };
 }
@@ -287,10 +297,12 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // 열람 게이트(순수 checkViewGate) — owner·view_policy·멤버십. attach 이고 비소유자일 때만 멤버십 DB 조회.
     const cfg = (await getRuntimeConfig()).session_share;
     const owner = await sessionOwner(nodeId, sessionId);
-    const isOwner = !!owner && owner === requester;
+    //  기록이 아직 없으면(첫 대화 전) owner 는 null 이다 — 그때만 레지스트리 축을 보조로 본다(#1631).
+    const registryOwner = owner ? null : await sessionRegistryOwner(sessionId);
+    const isOwner = (!!owner && owner === requester) || (!owner && !!registryOwner && registryOwner === requester);
     const invited = !isOwner && cfg.view_policy === "attach"
       ? await sessionInvitesMember(sessionId, requester) : false;
-    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, invited });
+    const denied = checkViewGate({ requester, owner, registryOwner, viewPolicy: cfg.view_policy, invited });
     if (denied) throw new HttpError(denied.status, denied.message);
 
     // #1719 세션 대화창 — to/tail 이 오면 창(window)으로 읽는다(꼬리부터, 상한 4MB — transcript-range.ts).
@@ -384,9 +396,11 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
     const cfg = (await getRuntimeConfig()).session_share;
     const owner = await sessionOwner(nodeId, sessionId);
-    const isOwner = !!owner && owner === requester;
+    //  기록이 아직 없으면(첫 대화 전) owner 는 null 이다 — 그때만 레지스트리 축을 보조로 본다(#1631).
+    const registryOwner = owner ? null : await sessionRegistryOwner(sessionId);
+    const isOwner = (!!owner && owner === requester) || (!owner && !!registryOwner && registryOwner === requester);
     const invited = !isOwner && cfg.view_policy === "attach" ? await sessionInvitesMember(sessionId, requester) : false;
-    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, invited });
+    const denied = checkViewGate({ requester, owner, registryOwner, viewPolicy: cfg.view_policy, invited });
     if (denied) throw new HttpError(denied.status, denied.message);
     res.setHeader("Cache-Control", "no-store");
     res.json({ subagents: await listSubagentsForSession(nodeId, sessionId) });
