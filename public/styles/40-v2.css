@@ -1905,8 +1905,15 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .cn-act-m { display: block; font-size: 13px; color: var(--ink-sub); margin-top: 3px; line-height: 1.6; }
 .cn-act-m b { color: var(--ink); font-weight: 700; }
 .cn-act.write .cn-act-m, .cn-act.write .cn-act-m b { color: var(--warn-text); }
-.cn-act-sub { display: flex; align-items: center; gap: 9px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--warn-line); font-size: 12.5px; font-weight: 600; color: var(--warn-text); cursor: pointer; }
+/*  줄에 딸린 것(연결 방식 버튼 · 쓰기 확인 · 관리자 안내)은 **그 카드 안에** 둔다 — 카드 밖에 두면
+    어디에도 안 붙은 채 떠서 카드 리듬(9px)까지 깨진다(GitHub 만 43px 였던 것, 원준 실측 2026-08-30). */
+.cn-act-more { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-row); }
+.cn-act.write .cn-act-more { border-top-color: var(--warn-line); }
+.cn-act-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.cn-act-sub { display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 600; color: var(--warn-text); cursor: pointer; }
 .cn-act-sub .h { margin-left: auto; font-weight: 600; color: var(--muted-head); }
+.cn-act-note { font-size: 12px; line-height: 1.55; color: var(--muted-head); }
+.cn-act.write .cn-act-note { color: var(--warn-text); opacity: .85; }
 .cn-act-rt { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; flex: none; padding-top: 2px; }
 .cn-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .cn-pill .v2-ic { width: 13px; height: 13px; }
