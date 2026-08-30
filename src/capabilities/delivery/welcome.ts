@@ -636,14 +636,14 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
   firstOrder: string | null;
   decisions: Array<{ what: string; why?: string }>;
   work: { asis?: string; tobe?: string } | null;
-}): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string }> {
+}): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string; reason?: string }> {
   const userId = user?.userId;
   if (!userId) return { session_id: null, href: null, error: "인증된 사용자가 아닙니다" };
-  if (o.priorSession) return { session_id: o.priorSession, href: `#/s/${encodeURIComponent(o.priorSession)}`, reused: true };
   try {
     const { listCollectors, appendLivProfile } = await import("../../org/store.js");
     const { buildFirstTurnPrompt } = await import("../../org/liv/first-turn.js");
     const { livKickoff } = await import("../../org/liv/kickoff.js");
+    const { planLivKickoff } = await import("../../org/liv/kickoff-plan.js");
     const [snap, collectors] = await Promise.all([
       welcomeSnapshot(userId),
       listCollectors().catch(() => [] as Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>),
@@ -660,7 +660,16 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       aiHarnesses: snap.ai_harnesses,
       harness: snap.ai_harnesses[0] ?? "claude",
     });
-    const made = await livKickoff(user, { prompt, harness: snap.ai_harnesses[0] ?? null });
+    //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다.
+    const plan = planLivKickoff(o.priorSession, snap.ai_harnesses);
+    if (plan.action === "reuse") return { session_id: plan.sessionId, href: `#/s/${encodeURIComponent(plan.sessionId)}`, reused: true };
+    if (plan.action === "skip") {
+      // AI 가 안 이어져 있으면 **세션을 열지 않는다.** 열어 봐야 답을 못 해 '조용히 멈춘 창'이 된다.
+      //  처음 설정은 끝난 것으로 두고(사람이 답한 건 이미 반영됐다) 사유만 돌려준다 — 화면이 «AI 연결» 로 안내한다.
+      console.info(`[welcome] 리브 킥오프 보류(${userId}) — AI 미연결`);
+      return { session_id: null, href: null, reason: plan.reason, error: "AI 를 아직 연결하지 않아 리브 세션을 열지 않았습니다" };
+    }
+    const made = await livKickoff(user, { prompt, harness: plan.harness });
     //  세션 좌표를 welcome 에 남긴다 — 다음 반영이 이걸 보고 재사용하고, 2턴(증류 트리거)이 이 세션을 찾는다.
     const cur = await import("../../org/store.js").then((m) => m.getLivProfile(userId)).catch(() => null);
     if (cur?.welcome) await appendLivProfile(userId, { welcome: { ...cur.welcome, session_id: made.session_id } }).catch(() => { /* 비치명 */ });
