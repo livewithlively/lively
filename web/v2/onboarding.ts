@@ -2581,7 +2581,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         await sleep(200); doneStep('b1'); chatStep('b2', token); return;
       }
       // ① 먼저 **실제로 센 것**을 보여 준다. AI 가 없어도 이 숫자는 진짜다.
-      const bubble = msgLiv(`${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 자료 <b>${total}건</b>을 종류별로 세어 봤어요.
+      //  ⚠ 총계(realTotal)는 **이 워크스페이스 전체**다 — 자료에 사람 축이 없어서(source 는 author='connector:local'
+      //   까지만 안다) «누가 올렸나» 로 못 가른다. 그래서 팀 워크스페이스에 새로 들어온 사람에게 «○○님이 올려 주신
+      //   자료 2,274건» 이라고 말했다(실제로 올린 건 5건 — 실측 2026-08-31). 남이 모아 둔 것을 그 사람 것이라고
+      //   부르는 셈이라, 첫 대면에서 제품이 사실이 아닌 말을 한다.
+      //  → 이번에 올린 수(S.upN)를 아는 화면이므로 **말을 가른다**: 그 수만 «올려 주신» 이라 부르고, 나머지는
+      //   «이 워크스페이스에 쌓여 있는» 이라고 정직하게 말한다. 세는 대상은 그대로다(갈래는 전체를 보고 잡는 게 맞다).
+      const mine = S.upN || 0;
+      const lead = mine > 0 && total > mine
+        ? `${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 <b>${mine}건</b>을 포함해, 이 워크스페이스에 쌓여 있는 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`
+        : mine > 0
+          ? `${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`
+          : `이 워크스페이스에 쌓여 있는 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`;
+      const bubble = msgLiv(`${lead}
         <div class="ob-tags" data-tags>${realKinds().map((k) => `<span class="ob-tag">${esc(k.name)} <b>${k.n}</b></span>`).join('')}</div>
         <p style="margin-top:8px" data-note>AI 가 파일을 훑어보고 더 나은 갈래를 제안하는 중이에요.</p>`);
       // ② 그 위에 **진짜 LLM 판정**을 얹는다. 실패하면 ①이 그대로 답이 된다(감추지 않고 이유를 적는다).
