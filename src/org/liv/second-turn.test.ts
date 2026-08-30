@@ -77,6 +77,7 @@ test("⑮ 프롬프트 — partial 이면 '최대 1분' 문구, 아니면 없음
   assert.match(p, /me_liv_ask_choice/);
   assert.match(p, /그리고 턴을 끝낸다/);
   assert.match(p, /처음 설정이 끝난 지 20분 지났다/);
+  assert.match(p, /`liv-distill` 스킬을 열어/);   // 두뇌는 스킬에 있다 — 지시문이 먼저 열게 한다(1라운드 채점 뒤 도입)
   const q = buildSecondTurnPrompt(pin({ partial: false, collectors: [] }));
   assert.doesNotMatch(q, /최대 1분/);
 });
