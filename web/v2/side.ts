@@ -31,6 +31,7 @@ import { SESS_STATES } from '../session-status.js';
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
+import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
 import { ctxMenu } from './panes-kit.js';
@@ -2188,6 +2189,25 @@ function newSessBtn(projectId: number): HTMLElement {
 export function isAppPinned(key: string): boolean { return appPinned.has(key); }
 /** 고정된 키 전부 — 셸이 **끝난 세션도 고정돼 있으면 행을 세우는** 데 쓴다(원준 2026-08-27: 지난 세션이 되면 핀이 빠져 보였다). */
 export function appPinnedKeys(): string[] { return [...appPinned]; }
+
+/**
+ * 복원으로 세션 id 가 바뀌었다 — 그 세션에 걸어 둔 핀을 **새 id 로 옮긴다**(#2402).
+ *
+ * 왜 필요한가(원준 신고 2026-08-28: "핀 해 둔 것도 다시 사라졌다. 반복된다"):
+ *  핀은 서버에 없고 이 브라우저의 localStorage 에만 있는데, 키가 **박스 id**(`sess:<id>`)다. 그런데 박스 id 는
+ *  복원 한 번에 바뀐다(옛 행은 superseded_by 이정표가 되고 목록에서 빠진다, #2231). 그래서 핀은 지워진 적이
+ *  없는데도 **가리킬 행이 사라져** 사람 눈엔 핀이 풀린 것으로 보였다. 수명이 짧은 id 를 키로 쓰면
+ *  그 id 가 바뀔 때 **따라가는 길**이 반드시 있어야 한다(session-tab-name-frozen-to-box-id 의 그 교훈).
+ *
+ * @returns 실제로 옮겼나(핀이 안 걸려 있던 세션이면 false — 호출부가 다시 그릴지 판단한다).
+ */
+export function movePinnedSession(oldId: string, newId: string): boolean {
+  const { keys, moved } = migratePinKeys(appPinned, oldId, newId);
+  if (!moved) return false;   // 못 옮기는 경우엔 저장도 안 한다(규칙은 pin-migrate.ts)
+  appPinned = new Set(keys);
+  saveSet(APP_PIN_STORE, appPinned);
+  return true;
+}
 
 /** 문패 카드가 쓰는 사람 지도 — side.ts 가 이미 한 번 당겨 둔 것을 레일도 함께 쓴다(두 번 당기지 않는다). */
 export function sidePeople(): Record<string, any> { return people; }
