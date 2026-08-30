@@ -100,6 +100,11 @@ process.env.LIVELY_MCP_LIST_TIMEOUT_MS = "1500";
 process.env.LIVELY_MCP_CALL_TIMEOUT_MS = "1500";
 delete process.env.LIVELY_GATEWAY_URL;
 delete process.env.LIVELY_TOKEN;
+//  ⚠ 세션 자격도 반드시 지운다(#2251) — 라이블리 세션 **안에서** 테스트를 돌리면 게이트웨이가 그 pane 에
+//   심어 준 LIVELY_MCP_TOKEN 이 상속돼, 토큰 우선순위를 재는 E11·E12 가 진짜 토큰을 집는다.
+//   실측 2026-08-28: E11 이 `Bearer lvk_…`(실 토큰)로 실패했다. CI 는 깨끗한 env 라 안 잡혔다 —
+//   env 를 읽는 테스트는 **자기가 읽는 변수를 전부** 스크럽해야 한다.
+delete process.env.LIVELY_MCP_TOKEN;
 
 const { serveMcpGateway, callTimeoutFor } = await import("./lively-mcp-gateway.mjs");
 
