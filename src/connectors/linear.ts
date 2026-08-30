@@ -139,7 +139,7 @@ export const linearConnector: Connector = {
   async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     const cfg = await resolveConnectorConfig("linear");
     const token = cfg.token;
-    if (!token) throw new Error("Linear 토큰이 없습니다 — '토큰 출처'를 member:<구성원 id> 로 지정하세요(그 사람이 [Linear 모아 두기]에서 연결한 라이블리 앱 토큰을 씁니다).");
+    if (!token) throw new Error("Linear 토큰이 없습니다 — '토큰 출처'를 member:<구성원 id> 로 지정하세요(그 사람이 [Linear 자료 가져오기]에서 연결한 라이블리 앱 토큰을 씁니다).");
     const teams = parseTeamKeys(cfg.teams);
     const includeDocs = String(cfg.include_documents ?? "").toLowerCase() !== "off";
     const viewer = await gql<{ viewer?: { organization?: { urlKey?: string; id?: string } } }>(token, VIEWER_QUERY, {});

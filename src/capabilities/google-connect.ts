@@ -1,4 +1,4 @@
-// 구글 "팀 자료로 모으기"(#1881 G5 백엔드) — 드라이브·Gmail 수집기를 **토큰 복사 없이** 켠다.
+// 구글 "자료 가져오기"(#1881 G5 백엔드) — 드라이브·Gmail 수집기를 **토큰 복사 없이** 켠다.
 //
 //  슬랙(slack-connect.ts)과 같은 그림이다: 토글을 켠 **관리자 본인의 연결**을 수집기가 가리킨다
 //  (`token_source=member:<id>`). 노션처럼 조직 슬롯을 따로 두지 않는 이유는 구글엔 봇/통합 개념이 없어
@@ -174,9 +174,9 @@ export async function googleCollectState(memberId: string): Promise<GoogleCollec
 const SERVICES = z.array(z.enum(["drive", "gmail", "calendar"])).describe("모을 서비스. 비우면 드라이브만. ★Gmail 은 1차 런칭 대상이 아니라 넣어도 켜지지 않는다. calendar 는 수집기가 없어 동의 범위만 넓힌다(도구 전용).");
 
 const orgGoogleCollect: Capability = {
-  name: "org_google_collect", title: "구글 팀 자료 수집 상태",
+  name: "org_google_collect", title: "구글 자료 가져오기 상태",
   description:
-    "\"팀 자료로 모으기\" 상태 — 드라이브·Gmail 수집기의 켜짐 여부, 이 관리자의 구글 연결과 동의 범위, 동의 시작 가능 여부, " +
+    "\"자료 가져오기\" 상태 — 드라이브·Gmail 수집기의 켜짐 여부, 이 관리자의 구글 연결과 동의 범위, 동의 시작 가능 여부, " +
     "그리고 지금 조합이 구글 미검증 100명 한도를 태우는지(consumes_user_cap). 토글은 org_google_collect_set.",
   scope: "admin", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/google/collect"], parse: () => ({}) }] },
@@ -187,9 +187,9 @@ const orgGoogleCollect: Capability = {
 };
 
 const orgGoogleCollectSet: Capability = {
-  name: "org_google_collect_set", title: "구글 팀 자료 수집 켜기/끄기",
+  name: "org_google_collect_set", title: "구글 자료 가져오기 켜기/끄기",
   description:
-    "\"팀 자료로 모으기\" 토글(admin). enabled=true 인데 내 구글 연결이 없으면 needs_connect=true 와 authorization_url 을 " +
+    "\"자료 가져오기\" 토글(admin). enabled=true 인데 내 구글 연결이 없으면 needs_connect=true 와 authorization_url 을 " +
     "돌려준다 — 그 화면에서 [허용]하면 연결이 저장되고, 다시 이 토글을 부르면 수집기가 만들어진다(token_source=member:<나>, " +
     "토큰 복사 0). services 로 모을 서비스를 고른다. ★**Gmail 은 1차 런칭 대상이 아니다**(2026-08-26 결정) — 제한범위라 " +
     "CASA·불가역 100명 한도를 태운다. 넣어 불러도 켜지지 않고, 이미 켜져 있던 것은 건드리지 않고 skipped 로 알린다. " +
@@ -254,7 +254,7 @@ const orgGoogleCollectSet: Capability = {
         id: inst?.id, preset_key: c.preset, instance_key: c.instance,
         label: inst?.label ?? c.label, enabled: true,
         config: { ...(inst?.config ?? {}), token_source: `member:${actor}` },
-        note: inst?.note ?? "[팀 자료로 모으기] 토글로 만들어진 수집기 — 켠 사람의 Google 연결로 돕니다(#1881). Client ID/Secret/Refresh Token 칸은 비워 두세요.",
+        note: inst?.note ?? "[자료 가져오기] 토글로 만들어진 수집기 — 켠 사람의 Google 연결로 돕니다(#1881). Client ID/Secret/Refresh Token 칸은 비워 두세요.",
       }, actor, source);
       changed.push(c.instance);
     }

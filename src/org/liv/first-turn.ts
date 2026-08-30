@@ -57,10 +57,10 @@ function factsBlock(i: FirstTurnInput): string {
   lines.push("");
   if (i.collectors.length) {
     const on = i.collectors.filter((c) => c.enabled);
-    lines.push(`- 연결한 수집기 ${i.collectors.length}개(켜짐 ${on.length}): ${i.collectors.map((c) => `${c.label}(${c.preset_key}, ${Math.round(c.sync_interval_sec / 60)}분 주기${c.enabled ? "" : ", 꺼짐"})`).join(" · ")}`);
+    lines.push(`- 연결한 자료 가져오기 ${i.collectors.length}개(켜짐 ${on.length}): ${i.collectors.map((c) => `${c.label}(${c.preset_key}, ${Math.round(c.sync_interval_sec / 60)}분 주기${c.enabled ? "" : ", 꺼짐"})`).join(" · ")}`);
     lines.push("- 수집 상태: 첫 수집이 **지금 돌고 있거나 곧 돈다**. 아직 들어온 것이 적어 보여도 정상이다.");
   } else {
-    lines.push("- 연결한 수집기: 없음(외부 앱을 잇지 않음)");
+    lines.push("- 연결한 자료 가져오기: 없음(외부 앱을 잇지 않음)");
   }
   lines.push(`- AI: 이 세션은 ${i.harness} 로 돈다${i.aiHarnesses.length ? ` (로그인 확인: ${i.aiHarnesses.join(", ")})` : ""}`);
   return lines.join("\n");
