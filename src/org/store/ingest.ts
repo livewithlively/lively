@@ -197,6 +197,21 @@ export function pickDistillerField<T>(
   return given || !before ? computed : (before[key] as T);
 }
 
+// #2415 — 켜진 채로 저장된 증류기는 **그것을 돌릴 잡**이 있어야 한다. 없으면 마련한다(정책은 distill/ensure-job.ts).
+//  실패는 삼킨다: 증류기 저장은 이미 끝났고, 잡 정비 실패가 그것을 되돌릴 이유는 아니다.
+async function ensureJobForEnabled(row: Record<string, unknown>, actor?: string): Promise<void> {
+  if (!row?.enabled) return;
+  const key = String(row.key ?? "").trim();
+  if (!key) return;
+  try {
+    const { ensureDistillJob } = await import("../distill/ensure-job.js");
+    const plan = await ensureDistillJob(key, actor ?? null);
+    if (plan.action !== "none") console.info(`[distill] 증류기 '${key}' 를 켜며 잡 정비: ${plan.action} — ${plan.reason}`);
+  } catch (e) {
+    console.warn(`[distill] 증류기 '${key}' 잡 정비 실패: ${(e as Error)?.message ?? e}`);
+  }
+}
+
 export async function upsertDistiller(input: DistillerUpsertInput, actor?: string, source?: string): Promise<Record<string, unknown>> {
   // 대상 행 — id 우선, 없으면 key(멱등 upsert: 같은 key 로 다시 저장하면 갱신).
   let targetId = input.id ?? null;
@@ -287,6 +302,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
        vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null]);
     await audit("org_distiller", String(targetId), "update", before, r.rows[0], actor, source);
+    await ensureJobForEnabled(r.rows[0], actor);
     return r.rows[0];
   }
 
@@ -307,6 +323,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
      vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
      vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null]);
   await audit("org_distiller", String(r.rows[0].id), "insert", null, r.rows[0], actor, source);
+  await ensureJobForEnabled(r.rows[0], actor);
   return r.rows[0];
 }
 
