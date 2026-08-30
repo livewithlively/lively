@@ -521,7 +521,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
         el('p', { class: 'v2-desc', style: 'margin-top:4px', text: String((svc as any).blurb || '') }))),
     el('section', { class: 'cn-sect', id: 'cn-tool' },
       sectHead('1', `AI가 내 ${svc.label} 계정으로 하는 일`, '한 줄씩 따로 끄고 켤 수 있어요'),
-      readRow, writeHost, collect.row),
+      el('div', { class: 'cn-actlist' }, readRow, writeHost, collect.row)),
     el('section', { class: 'cn-sect', id: 'cn-collect-sect' },
       sectHead('2', '자료함에 모아 두는 것', '내 쓰임에 맞게 정합니다'),
       collect.box),
