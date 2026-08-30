@@ -118,6 +118,14 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       return { deleted: await pruneCallLog(cfg.call_log_policy?.retention_days ?? 0) };
     });
     await step("session-backfill", async () => { await backfillSessionStates(); return "ok"; });
+    // #1631 — 리브 2턴(증류 지시). 자체호스팅은 background-sweeps 가 1분마다 돌리지만 그 스텝은
+    //  요청별 테넌시에서 통째로 꺼진다(gate:'scheduler') — 되살리는 자리가 여기다. 이게 없으면
+    //  매니지드 고객은 처음 설정 뒤 1턴(현황 보고)만 받고 **2턴이 영영 안 와서 레인이 안 세워진다.**
+    //  후보 목록은 신원 전역이라 어느 테넌트의 틱으로 불러도 전부 훑는다(내부 가드가 동시 실행을 막는다).
+    await step("liv-second-turn", async () => {
+      const { sweepLivSecondTurn } = await import("./org/liv/second-turn-sweep.js");
+      return await sweepLivSecondTurn();
+    });
     // ★ 결과를 **그대로 돌려준다**(종전 "ok") — 이 틱을 부르는 쪽(매니지드 CP)이 "정책이 켜져 있나 ·
     //  몇 개를 왜 안 걷었나"를 볼 수 있어야 한다. 리퍼는 정책이 0 이면 로그 한 줄 없이 no-op 으로
     //  돌아가므로, "ok" 만 보내면 **한 번도 안 돈 것과 돌았지만 걷을 게 없던 것이 구분되지 않는다**

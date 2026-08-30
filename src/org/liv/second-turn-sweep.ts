@@ -1,4 +1,5 @@
-// 리브 2턴 스윕(#1631) — 하우스키핑이 1분마다 부른다. 판정(decideSecondTurn)이 fire 면 그 세션에 증류 지시를 넣는다.
+// 리브 2턴 스윕(#1631) — 자체호스팅은 하우스키핑이 1분마다, **매니지드는 CP 가 테넌트마다 두드리는
+//  하우스키핑 틱**(/api/ops/housekeeping/tick)이 부른다. 판정(decideSecondTurn)이 fire 면 그 세션에 증류 지시를 넣는다.
 //
 //  · 후보 = org_member.liv_profile.welcome 에 session_id 는 있고 distill_at·distill_gave_up_at 이 없는 사람(신원 전역 표).
 //  · 그 세션의 워크스페이스는 gw_session_map(workspaceForSession)이 정본이다 — liv_profile 엔 워크스페이스 축이 없다(#2265).
@@ -7,8 +8,17 @@
 //  · 실패는 삼키지 않는다: 쏘지 못한 이유는 로그에, 포기는 distill_gave_up_at + distill_note 로 프로필에 남는다.
 import { logger } from "../../log.js";
 import { buildSecondTurnPrompt, decideSecondTurn } from "./second-turn.js";
+import { onceAtATime } from "../../util/once-at-a-time.js";
 
-export async function sweepLivSecondTurn(): Promise<{ fired: number; waited: number; gaveUp: number; failed: number }> {
+// 동시 호출 가드(#1631) — 매니지드는 **테넌트마다** 틱이 들어오는데 후보 목록은 신원 전역(org_member)이라
+//  같은 후보를 여러 틱이 동시에 본다. `distill_at` 은 배달 **뒤에** 찍히므로 그 사이가 겹치면 같은 세션에
+//  2턴이 두 번 들어간다. 근거·한계는 util/once-at-a-time.ts 머리말.
+export const sweepLivSecondTurn = onceAtATime(
+  () => runSweep(),
+  () => ({ fired: 0, waited: 0, gaveUp: 0, failed: 0 }),
+);
+
+async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: number; failed: number }> {
   const { listLivSecondTurnCandidates, appendLivProfile, getLivProfile, listCollectors } = await import("../store.js");
   const { listSessionsRaw } = await import("../../terminal/terminal-sessions.js");
   const { listOutbox } = await import("../../sessions/session-outbox.js");
