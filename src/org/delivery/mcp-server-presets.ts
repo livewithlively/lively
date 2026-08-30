@@ -140,7 +140,7 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
       steps: [
         "아래 [Slack 앱 만들기 링크 열기] — 채워진 생성 화면이 뜹니다. 워크스페이스를 고르고 [Create] (콜백 {callback} 이 이미 들어 있습니다)",
         "[Basic Information] ▸ App Credentials 의 Client ID·Client Secret 을 아래 [OAuth 클라이언트] 칸에 넣고 저장",
-        "[외부 앱 연결 ▸ Slack ▸ 계정으로 연결] — 관리자가 먼저 연결하면 '팀 자료로 모으기'를 켤 수 있고, 구성원은 각자 [연결]만 하면 됩니다. [발행]은 누르지 않습니다(도구는 Web API 프리셋).",
+        "[외부 앱 연결 ▸ Slack ▸ 계정으로 연결] — 관리자가 먼저 연결하면 '자료 가져오기'를 켤 수 있고, 구성원은 각자 [연결]만 하면 됩니다. [발행]은 누르지 않습니다(도구는 Web API 프리셋).",
       ],
     },
   },

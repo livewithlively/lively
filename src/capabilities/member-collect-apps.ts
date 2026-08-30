@@ -22,7 +22,7 @@ export const MEMBER_INSTANCE = "lively-member";
 export const figmaCollectCapabilities = makeMemberTokenCollect({
   system: "figma", preset: "figma", instance: MEMBER_INSTANCE, credKind: FIGMA_TOKEN_KIND, appLabel: "Figma",
   label: "Figma — 내 파일의 코멘트",
-  note: "[Figma 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 Figma 토큰으로 고른 파일의 코멘트를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
+  note: "[Figma 자료 가져오기] 토글로 만들어진 가져오기 — 켠 사람의 Figma 토큰으로 고른 파일의 코멘트를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ Figma]에서 개인 액세스 토큰을 저장하세요",
   scopeKeys: ["file_keys", "team_ids"], requireScope: true,
   scopeHint: "모을 피그마 파일 링크(또는 팀 id)를 하나는 넣어 주세요 — 피그마엔 목록이 없어서 링크로 범위를 정합니다.",
@@ -34,7 +34,7 @@ export const figmaCollectCapabilities = makeMemberTokenCollect({
 export const clickupCollectCapabilities = makeMemberTokenCollect({
   system: "clickup", preset: "clickup", instance: MEMBER_INSTANCE, credKind: CLICKUP_TOKEN_KIND, appLabel: "ClickUp",
   label: "ClickUp — 내 워크스페이스",
-  note: "[ClickUp 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 ClickUp 토큰으로 워크스페이스의 작업·댓글을 가져옵니다(#2247). API Token 칸은 비워 두세요.",
+  note: "[ClickUp 자료 가져오기] 토글로 만들어진 가져오기 — 켠 사람의 ClickUp 토큰으로 워크스페이스의 작업·댓글을 가져옵니다(#2247). API Token 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ ClickUp]에서 API 토큰을 저장하세요",
   // ClickUp 은 구조 엔티티(스페이스·리스트·작업)라 자료함이 아니라 **프로젝트 탭의 미러**로 들어온다 — 문구가 그것을 말해야 한다.
   scopeKeys: ["include_list_ids", "exclude_list_ids"],
@@ -44,7 +44,7 @@ export const clickupCollectCapabilities = makeMemberTokenCollect({
 export const githubCollectCapabilities = makeMemberTokenCollect({
   system: "github", preset: "github", instance: MEMBER_INSTANCE, credKind: GITHUB_TOKEN_KIND, credAnyScope: true, appLabel: "GitHub",
   label: "GitHub — 고른 저장소의 이슈·PR",
-  note: "[GitHub 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 GitHub 연결로 고른 저장소의 이슈·PR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
+  note: "[GitHub 자료 가져오기] 토글로 만들어진 가져오기 — 켠 사람의 GitHub 연결로 고른 저장소의 이슈·PR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ GitHub]에서 계정을 연결하거나 토큰을 저장하세요",
   scopeKeys: ["repos"], requireScope: true,
   //  #2243 3차 — 사람이 정하는 «무엇을·언제부터». 범위(repos)와 달리 비어 있어도 켜진다(커넥터 기본값 = 전부 켬).
@@ -59,7 +59,7 @@ export const githubCollectCapabilities = makeMemberTokenCollect({
 export const gitlabCollectCapabilities = makeMemberTokenCollect({
   system: "gitlab", preset: "gitlab", instance: MEMBER_INSTANCE, credKind: GITLAB_TOKEN_KIND, credAnyScope: true, appLabel: "GitLab",
   label: "GitLab — 고른 프로젝트의 이슈·MR",
-  note: "[GitLab 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 개인 토큰(read_api)으로 고른 프로젝트의 이슈·MR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
+  note: "[GitLab 자료 가져오기] 토글로 만들어진 가져오기 — 켠 사람의 개인 토큰(read_api)으로 고른 프로젝트의 이슈·MR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ GitLab]에서 개인 액세스 토큰(read_api)을 저장하세요 — 계정 로그인 토큰으로는 GitLab 이 자료 읽기를 막습니다",
   scopeKeys: ["projects"], requireScope: true,
   optionKeys: ["include_mrs", "include_releases", "backfill_since"],
@@ -120,7 +120,7 @@ const orgLinearOauthComplete: Capability = {
 // 범위 선택지(#2243) — «외부 앱에 들어가지 않고» 우리 화면에서 토글로 고르게 하는 목록.
 //  그 사람의 자격으로 조회하고, 실패는 freeform 으로 떨어뜨린다(막다른 길 금지 — collect-scope-options.ts 머리말).
 const orgCollectScopeOptions: Capability = {
-  name: "org_collect_scope_options", title: "모아 두기 범위 선택지 조회",
+  name: "org_collect_scope_options", title: "가져올 자료 범위 선택지 조회",
   description:
     "그 앱에서 «고를 수 있는 것»(저장소·프로젝트·팀·파일·리스트·채널)을 **호출자 본인의 연결**로 조회한다 — 화면이 토글 목록으로 그린다. " +
     "지원: github(저장소) · gitlab(프로젝트) · linear(팀) · figma(파일, 팀 id 를 넣은 경우) · clickup(리스트) · slack(공개 채널). " +

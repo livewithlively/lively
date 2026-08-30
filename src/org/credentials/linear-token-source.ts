@@ -9,7 +9,7 @@ export interface LinearVaultDeps {
   resolve: (memberId: string | null, allowFallback: boolean) => Promise<MemberSecretResolved | null>;
   bearer: (resolved: MemberSecretResolved) => Promise<string>;
 }
-const CONNECT = "— [외부 앱 연결 ▸ Linear ▸ 모아 두기]를 켜면 Linear 화면에서 [허용] 한 번으로 연결됩니다";
+const CONNECT = "— [외부 앱 연결 ▸ Linear ▸ 자료 가져오기]를 켜면 Linear 화면에서 [허용] 한 번으로 연결됩니다";
 
 export async function resolveLinearTokenSource(source: string | undefined, deps: LinearVaultDeps): Promise<LinearTokenResolution | null> {
   const s = String(source ?? "").trim();
