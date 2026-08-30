@@ -83,6 +83,46 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       logger.info({ member: c.id, session: sid, reason: d.reason }, "리브 2턴 — 포기");
       out.gaveUp++; continue;
     }
+    //  ★ reopen(#1631) — 세션이 사라졌지만 **일은 남아 있다.** 새 창구를 열고 2턴 지시를 그 첫 지시로 넣는다.
+    //   실측 2026-08-31(dev): 1턴을 성공으로 끝낸 리브 세션이 수집 대기 20분 사이에 사라졌고, 종전 코드는 그 자리에서
+    //   영구 포기해 그 사람의 증류기 15개가 영원히 꺼진 채 남았다(온보딩 완주 → 지식 0건).
+    //   ⚠ 딱 한 번이다 — `distill_reopened_at` 을 **먼저** 찍고 연다. 세션 생성이 실패해도 다시 시도하지 않는다
+    //    (실패를 재시도하면 유령 세션이 쌓인다). 실패는 포기 표식으로 남아 화면이 «왜 안 왔나»에 답할 수 있다.
+    if (d.action === "reopen") {
+      const done0 = Date.parse(String(c.welcome.done_at));
+      const prompt0 = buildSecondTurnPrompt({
+        displayName: c.display_name,
+        drawers: c.welcome.drawers ?? [],
+        firstOrder: c.welcome.first_order ?? null,
+        collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) > done0 })),
+        partial: true, waitedMin: Math.max(0, Math.round((now - done0) / 60_000)),
+      });
+      const stampedAt = new Date(now).toISOString();
+      try {
+        await withTenant(tenant, async () => {
+          const cur = await getLivProfile(c.id).catch(() => null);
+          await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt } });
+        });
+        const { livKickoff } = await import("./kickoff.js");
+        const made = await withTenant(tenant, () => livKickoff({ userId: c.id, email: "", scopes: [], projects: [] } as never, { prompt: prompt0 }));
+        await withTenant(tenant, async () => {
+          const cur = await getLivProfile(c.id).catch(() => null);
+          await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt,
+            session_id: made.session_id, distill_at: stampedAt, distill_note: "reopened" } });
+        });
+        logger.info({ member: c.id, gone: sid, session: made.session_id }, "리브 2턴 — 세션이 사라져 새로 열고 배달");
+        out.fired++;
+      } catch (err) {
+        await withTenant(tenant, async () => {
+          const cur = await getLivProfile(c.id).catch(() => null);
+          await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt,
+            distill_gave_up_at: stampedAt, distill_note: "reopen-failed" } });
+        }).catch(() => { /* 비치명 */ });
+        out.gaveUp++;
+        logger.warn({ err, member: c.id, gone: sid }, "리브 2턴 — 다시 열기 실패(재시도하지 않는다)");
+      }
+      continue;
+    }
     // fire — 프롬프트를 조립해 그 세션에 넣는다. 배달 성공(큐 등록 포함)이면 distill_at 을 찍는다(멱등: 다음 tick 엔 후보에서 빠진다).
     const done = Date.parse(String(c.welcome.done_at));
     const prompt = buildSecondTurnPrompt({

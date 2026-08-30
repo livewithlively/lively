@@ -130,6 +130,8 @@ export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" 
 export interface LivWelcome {
   done_at: string; drawers?: string[]; first_order?: string | null; session_id?: string | null;
   distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
+  /** 세션이 사라져 **다시 연** 시각(#1631). 딱 한 번만 다시 연다 — 이 값이 있으면 다음엔 포기한다. */
+  distill_reopened_at?: string | null;
 }
 
 /**
