@@ -415,7 +415,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     : st === 'blocked'
       ? String((svc as any).soon || '라이블리가 이 앱을 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있어요.')
       : account ? `켜면 ${svc.label} 화면에서 [허용]을 한 번 누르는 것으로 끝나요.` : '켜면 토큰을 넣는 창이 열려요.';
-  const readActs = el('div', { class: 'cn-act-sub', style: 'border-top-color:var(--line-net); color:var(--ink-sub)' });
+  const readActs = el('div', { class: 'cn-act-row' });
   if (st === 'on') {
     if (viaOAuth) readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 연결', onclick: () => void startOAuth(svc, reload) }));
     if (viaToken) readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '토큰 교체', onclick: () => openToken(svc, reload) }));
@@ -429,7 +429,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     kind: 'read', verb: '읽기', detail: uiText(readDetail), on: st === 'on', sw: st === 'blocked' ? undefined : sw,
     pill: st === 'on' ? { text: '나만 봐요', cls: 'cn-pill-me', ic: 'usr' }
       : { text: st === 'blocked' ? '준비 중' : '아직 꺼짐', cls: 'cn-pill-off' },
-    sub: readActs.childNodes.length ? readActs : undefined,
+    sub: readActs.childNodes.length ? el('div', { class: 'cn-act-more' }, readActs) : undefined,
   });
 
   // ── ① 쓰기 줄 — «내 이름으로 남는다». 이 화면에서 유일하게 되돌릴 수 없는 것이라 색이 다르다. ──
@@ -460,20 +460,21 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
       await paintWrite();
     };
     const verbs = writes.map((t) => t.title).join(' · ');
-    const sub = el('label', { class: 'cn-act-sub' }, icon('check'),
-      el('span', { text: '쓰기 전에 내 컴퓨터에서 한 번 확인을 받습니다' }),
-      el('span', { class: 'h', text: '자동 승인 목록에서 항상 빠집니다' }));
+    //  딸린 줄은 카드 안에 — 확인 문구(켜져 있을 때)와 관리자 안내(늘). 카드 밖에 두면 떠 보이고 리듬이 깨진다.
+    const more = el('div', { class: 'cn-act-more' },
+      ...(wsw.checked ? [el('label', { class: 'cn-act-sub' }, icon('check'),
+        el('span', { text: '쓰기 전에 내 컴퓨터에서 한 번 확인을 받습니다' }),
+        el('span', { class: 'h', text: '자동 승인 목록에서 항상 빠집니다' }))] : []),
+      ...(isAdmin ? [el('span', { class: 'cn-act-note',
+        text: '끄고 켜는 것은 워크스페이스 전체에 적용돼요 — 사람마다 따로 끄는 건 아직 없습니다.' })] : []));
     writeHost.replaceChildren(actRow({
       kind: 'write', verb: `쓰기 — 내 이름으로 ${svc.label}에 남습니다`, on: wsw.checked, sw: wsw,
       detail: uiText(st === 'on'
         ? `AI가 **내 ${svc.label} 계정**으로 ${verbs}. 받는 사람은 내가 한 것으로 봅니다 — 되돌리려면 ${svc.label}에서 직접 지워야 해요.`
         : `켜면 AI가 **내 ${svc.label} 계정**으로 ${verbs}. 받는 사람은 내가 한 것으로 봅니다.`),
       pill: { text: '내 이름으로', cls: 'cn-pill-write', ic: 'pen' },
-      sub: wsw.checked ? sub : undefined,
+      sub: more.childNodes.length ? more : undefined,
     }));
-    if (!isAdmin) return;
-    writeHost.appendChild(el('p', { class: 'cn-set-hint', style: 'margin:6px 0 0 4px',
-      text: '쓰기 끄기는 워크스페이스 전체에 적용돼요 — 사람마다 따로 끄는 건 아직 없습니다.' }));
   };
   void paintWrite();
 
