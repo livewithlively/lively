@@ -1252,13 +1252,23 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
       ${tokenSaved(id) ? '<p class="ob-note">토큰은 이미 저장돼 있어요 — 바꿀 때만 다시 붙여넣으세요.</p>' : ''}
       <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
-      ${collectMode(id) && id === 'figma' ? `<p class="ob-note"><b>팀 주소</b>를 넣어 주세요 — Figma 에서 팀을 연 다음 주소창을 그대로 복사하시면 됩니다(<span class="ob-fine2">figma.com/files/team/…</span>).
-      그 팀의 파일을 제가 알아서 훑습니다. 파일 몇 개만 모으고 싶으시면 그 <b>파일 링크</b>를 넣으셔도 돼요 — 여러 개면 공백으로 띄우세요.</p>
-      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…">` : ''}
+      ${collectMode(id) && id === 'figma' ? `<p class="ob-note"><b>어느 팀을 모을지</b>만 알려 주시면 됩니다 — 그 안의 파일은 제가 알아서 훑어요.</p>
+      <a class="ob-btn ob-btn-sub ob-btn-inline" href="https://www.figma.com/files" target="_blank" rel="noopener noreferrer">Figma 파일 화면 열기 ↗</a>
+      <ol>
+        <li>새 탭에 Figma 파일 화면이 열려요. <b>왼쪽 목록</b>에서 모을 <b>팀 이름</b>을 누르세요(팀이 하나면 그게 그 팀이에요).</li>
+        <li>그 상태로 브라우저 <b>주소창</b>을 통째로 복사하세요 — <b>figma.com/files/team/…</b> 처럼 생긴 주소예요.</li>
+        <li>복사한 주소를 <b>아래 칸</b>에 붙여넣으세요(⌘V).</li>
+      </ol>
+      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…">
+      <p class="ob-note ob-fine2">팀 전체가 아니라 <b>파일 몇 개만</b> 모으고 싶으시면, 그 파일을 연 뒤 주소창을 복사해 넣으셔도 돼요(여러 개면 공백으로 띄우기).</p>` : ''}
       ${collectMode(id) && id === 'gitlab' ? `<p class="ob-note">회사 GitLab 을 쓰면 아래에 그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
       <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com">
-      <p class="ob-note">모을 <b>프로젝트 경로</b>(group/project)를 넣어 주세요 — 여러 개면 공백으로. 프로젝트 주소를 그대로 붙여넣어도 돼요.</p>
-      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="group/project">
+      <p class="ob-note">모을 <b>프로젝트</b>를 알려 주세요.</p>
+      <ol>
+        <li>GitLab 에서 모을 <b>프로젝트를 여세요</b>.</li>
+        <li>브라우저 <b>주소창</b>을 통째로 복사해 아래 칸에 붙여넣으세요 — <b>gitlab.com/그룹/프로젝트</b> 처럼 생겼어요. 여러 개면 공백으로 띄우세요.</li>
+      </ol>
+      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://gitlab.com/그룹/프로젝트">
       <p class="ob-note ob-fine2">토큰은 <b>read_api</b> 범위로 만든 개인 액세스 토큰이어야 해요 — [계정 로그인]으로 받은 토큰으로는 GitLab 이 자료 읽기를 막습니다.</p>` : ''}
       <p class="ob-err" id="tokErr"></p>
       ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
