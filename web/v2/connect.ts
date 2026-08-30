@@ -336,7 +336,9 @@ function quietCollectFace(stateText: string, note: string, onState: CollectState
       kind: 'collect', verb: '모아 두기', detail: uiText(note), on: false,
       pill: { text: stateText, cls: 'cn-pill-off' },
     }),
-    box: el('div', { class: 'cn-collect-body', id: 'cn-collect' }, el('span', { class: 'cn-set-hint', text: note })),
+    box: el('div', { class: 'cn-collect-body', id: 'cn-collect' },
+      el('span', { class: 'cn-set-hint', style: 'margin-top:0', text: note }),
+      el('span', { class: 'cn-set-hint', text: '켜면 여기서 무엇을 · 얼마나 자주 · 언제부터 · 어디서를 정합니다.' })),
   };
 }
 
@@ -501,7 +503,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const whos = el('div', { class: 'cn-whos' },
     el('div', { class: 'cn-who' },
       el('div', { class: 'cn-who-t' }, icon('usr'), el('span', { text: '물어볼 때 읽고 쓰는 것 — 나만' })),
-      el('span', { class: 'cn-who-s', text: `AI가 그 자리에서 내 계정으로 ${svc.label}을(를) 읽고 씁니다. 라이블리에 남지 않으니 다른 사람은 볼 수 없어요.` })),
+      el('span', { class: 'cn-who-s', text: `위 [읽기]·[쓰기]는 내 ${svc.label} 계정으로 그 자리에서 일어납니다. 라이블리에 남지 않으니 다른 사람은 볼 수 없어요.` })),
     el('div', { class: 'cn-who team' },
       el('div', { class: 'cn-who-t' }, icon('team'), el('span', { text: '모아 둔 것 — 워크스페이스 함께' })),
       el('span', { class: 'cn-who-s', text: '자료함에 쌓인 것은 이 워크스페이스 사람들의 AI가 함께 찾아봅니다. 그래서 «무엇을 모을지»를 위에서 고릅니다.' })));
