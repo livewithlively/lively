@@ -578,6 +578,9 @@ export async function welcomeSnapshot(userId: string) {
   //   헤드리스 실행은 그 프로필로 폴백한다(tasks.ts: "리스가 없으면 노드 로컬 프로필/자격 폴백").
   //   setup-token 리스는 **그 프로필이 없는 자리**(남의 노드 위탁)에서 쓰는 보조 수단이라, 그걸로 판정하면
   //   웹 터미널에서 이미 로그인한 사람을 «AI 안 이었음» 으로 잘못 막는다.
+  //  ⚠ 여기는 **폴링 자리**다(화면이 온보딩 내내 되묻는다) — 로그인 프로브(실측 4.3초·상한 25초)를 붙이면
+  //   조회마다 네트워크 왕복이 붙는다. 그래서 싼 판정(자격 파일)만 쓴다. 자격 파일이 없는 하네스를 구하는
+  //   일은 **결정 지점**에서 한 번만 한다 — 아래 kickoffLivAfterWelcome 참조(#1631). ai-login.test ⑥ 이 지킨다.
   const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
   const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
 
@@ -648,6 +651,15 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       welcomeSnapshot(userId),
       listCollectors().catch(() => [] as Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>),
     ]);
+    //  #1631 — 화면·게이트·1턴 프롬프트가 **같은 사실**을 봐야 한다. `snap.ai_harnesses` 는 폴링용이라 자격
+    //   **파일**이 있는 하네스만 센다 — 제미나이(antigravity)는 자격 파일이 없어 구조적으로 빠진다. 그대로
+    //   쓰면, 화면이 «Gemini 로그인이 확인됐어요» 라고 확정해 준 사람에게 리브를 **안 열어 준다**(planLivKickoff
+    //   가 skip). 여기는 온보딩당 한 번뿐이라 정확한 쪽을 쓴다 — 파일 표가 빌 때만 프로브가 돌고, 하나라도
+    //   있으면 프로브 0회다(무회귀).
+    const { memberUsableHarnesses } = await import("../../terminal/profiles.js");
+    const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
+    const usable = (await memberUsableHarnesses(userId).catch(() => snap.ai_harnesses))
+      .filter((k) => HEADLESS_KEYS.includes(k));
     const prompt = buildFirstTurnPrompt({
       displayName: snap.profile.display_name,
       work: o.work,
@@ -657,11 +669,11 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       uploads: snap.uploads,
       categories: snap.categories.map((c) => ({ name: c.name, space: c.space })),
       collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled, sync_interval_sec: c.sync_interval_sec })),
-      aiHarnesses: snap.ai_harnesses,
-      harness: snap.ai_harnesses[0] ?? "claude",
+      aiHarnesses: usable,
+      harness: usable[0] ?? "claude",
     });
     //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다.
-    const plan = planLivKickoff(o.priorSession, snap.ai_harnesses);
+    const plan = planLivKickoff(o.priorSession, usable);
     if (plan.action === "reuse") return { session_id: plan.sessionId, href: `#/s/${encodeURIComponent(plan.sessionId)}`, reused: true };
     if (plan.action === "skip") {
       // AI 가 안 이어져 있으면 **세션을 열지 않는다.** 열어 봐야 답을 못 해 '조용히 멈춘 창'이 된다.

@@ -586,6 +586,34 @@ export async function memberLoggedInHarnessesAny(memberId: string): Promise<stri
   return [...new Set([...osSt.loggedInHarnesses, ...accts.filter((a) => a.loggedIn === true).map((a) => a.key)])];
 }
 
+/** 자격 **파일이 없는** 하네스(antigravity) — 로그인 여부를 프로브로만 잴 수 있는 것들. */
+export function probeOnlyHarnessKeys(): string[] {
+  return Object.keys(HARNESS_PROBE).filter((k) => !harnessHasCredential(k));
+}
+
+/**
+ * 이 멤버가 **실제로 돌릴 수 있는** 하네스(#1631). 위 함수는 자격 **파일**만 보므로 자격 파일이 없는
+ *  하네스(antigravity=제미나이)를 구조적으로 못 본다 — 그래서 제미나이만 이은 사람은
+ *  `welcome.ai_harnesses` 가 비어 리브가 안 열리고(planLivKickoff skip), 헤드리스 잡은 기본값 `claude` 로
+ *  떨어져 무출력 hang 이 됐다. 화면은 그 사람에게 «Gemini 로그인이 확인됐어요» 라고 확정해 준 뒤였다.
+ *
+ * ⚠ 프로브는 비싸다(실측 4.3초·상한 25초). 그래서 **파일 표가 빈 경우에만** 돌린다 — 그 순간이 곧
+ *  «AI 안 이었음» 이라 말하려는 순간이라, 비용은 어차피 막힐 사람에게만 들고 나머지는 프로브 0회다.
+ *  판정 자체는 순수 함수로 갈라 뒀다(harness-login-probe.ts) — 표로 테스트한다.
+ */
+export async function memberUsableHarnesses(memberId: string): Promise<string[]> {
+  const { planLoginProbe, mergeProbeResults } = await import("./harness-login-probe.js");
+  const fileList = await memberLoggedInHarnessesAny(memberId).catch(() => [] as string[]);
+  const todo = planLoginProbe(fileList, probeOnlyHarnessKeys());
+  if (!todo.length) return fileList;
+  const user = { userId: memberId, email: "", scopes: [], projects: [] } as LivelyUser;
+  const probed = await Promise.all(todo.map(async (key) => ({
+    key,
+    loggedIn: await aiLoginCheck(user, key).then((c) => c.loggedIn).catch(() => null),
+  })));
+  return mergeProbeResults(fileList, probed);
+}
+
 // 로그아웃 = 자격증명 파일 삭제(재로그인으로 되돌릴 수 있다). **본인 것만** — 호출자(라우트)가 principal 을 넘긴다.
 //  ⚠ 이미 떠 있는 세션의 하네스는 메모리에 인증을 들고 있을 수 있어 그 자리에서 끊기지 않는다(다음 로그인부터 적용).
 export async function aiAccountLogout(user: LivelyUser, key: string): Promise<void> {

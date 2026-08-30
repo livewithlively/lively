@@ -12,7 +12,7 @@
 //
 // ⚠ 게이트웨이 전용이다 — profiles(DB·drop-priv)를 읽는다. 노드 번들(tasks.ts 가 끌려가는 쪽)에서 import 하지 말 것.
 import { HEADLESS } from "./tasks.js";
-import { memberLoggedInHarnessesAny } from "../terminal/profiles.js";
+import { memberUsableHarnesses } from "../terminal/profiles.js";   // #1631 — 자격 파일 없는 하네스(제미나이)를 잃지 않는다
 import { logger } from "../log.js";
 
 /** 헤드리스 규약을 아는 하네스 — 표 순서가 곧 동률 판정 순서다(claude, codex, antigravity, grok). */
@@ -44,7 +44,7 @@ export async function resolveHeadlessHarness(memberId: string, explicit?: string
   let loggedIn: string[] = [];
   let why: string;
   try {
-    loggedIn = await memberLoggedInHarnessesAny(memberId);
+    loggedIn = await memberUsableHarnesses(memberId);
     why = loggedIn.length ? `로그인 [${loggedIn.join(",")}]` : "로그인 확인된 하네스 없음 → 기본";
   } catch (e) {
     why = `로그인 프로브 실패(${(e as Error)?.message ?? String(e)}) → 기본`;
