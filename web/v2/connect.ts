@@ -190,6 +190,15 @@ const ICON_PATH: Record<string, string> = {
   usr: 'M12 4.4a3.6 3.6 0 1 1 0 7.2 3.6 3.6 0 0 1 0-7.2Z M4.5 20c0-3.8 3.4-6 7.5-6s7.5 2.2 7.5 6',
   team: 'M9 5.3a3.2 3.2 0 1 1 0 6.4 3.2 3.2 0 0 1 0-6.4Z M2.5 19.5c0-3.4 2.9-5.4 6.5-5.4s6.5 2 6.5 5.4 M16.5 6.6a3.2 3.2 0 0 1 0 6.3 M18 14.6c2.2.6 3.5 2.3 3.5 4.9',
 };
+/**
+ * 목적격 조사 — 앞 글자 받침으로 «을/를». 화면에 «저장소을(를)» 같은 자리가 남으면 사람이 «기계가 쓴 글»로 읽는다.
+ * 한글이 아니면(영문 앱 이름 등) «를». 순수라 테스트가 표를 돈다.
+ */
+export function eulReul(word: string): string {
+  const c = (word || '').charCodeAt((word || '').length - 1);
+  if (!(c >= 0xAC00 && c <= 0xD7A3)) return '를';
+  return (c - 0xAC00) % 28 ? '을' : '를';
+}
 const icon = (k: string): SVGElement => sv('svg', { class: 'v2-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: ICON_PATH[k] })) as SVGElement;
 
 /** 설정 줄 — «라벨 | 값 | 동작». 값은 문자열(uiText)이나 노드. */
@@ -287,7 +296,7 @@ function srow(k: string, v: string | Node[], acts: HTMLElement[] = [], cls = '')
  * 종전엔 스위치·«누가 봐요»가 카드마다 따로 있어 화면에 같은 말이 세 번 나왔다.
  */
 export interface CollectFace { box: HTMLElement; row: HTMLElement }
-function collectFace(onState: CollectState, teamSee = true): CollectFace & { body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
+function collectFace(onState: CollectState, teamSee = true, countKind = ''): CollectFace & { body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
   const rowHost = el('div');
   const body = el('div', { class: 'cn-set-bd' }, el('span', { class: 'cn-set-hint', text: '불러오는 중…' }));
   const box = el('div', { class: 'cn-collect-body', id: 'cn-collect' }, body);
@@ -305,6 +314,17 @@ function collectFace(onState: CollectState, teamSee = true): CollectFace & { bod
       }));
       body.replaceChildren(...extra);
       onState(stateText, chk.checked);
+      //  자료함에 실제로 몇 건 들어왔는지 — 목록 총계를 한 번 물어 줄 앞에 붙인다(본문은 안 받는다: limit=1).
+      if (chk.checked && countKind) {
+        void api(`/api/ui/sources?kind=${encodeURIComponent(countKind)}&limit=1`)
+          .then((r: any) => {
+            const n = Number(r?.total);
+            if (!Number.isFinite(n) || n <= 0) return;
+            const m = rowHost.querySelector('.cn-act-m');
+            if (m) m.prepend(...uiText(`지금까지 **${n.toLocaleString('ko-KR')}건** 모았어요. `));
+          })
+          .catch(() => { /* 숫자는 덤이다 — 없다고 줄이 비면 안 된다 */ });
+      }
     },
   };
 }
@@ -389,7 +409,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const usedAt = viaToken && cred?.last_used_at ? ` · ${relTime(cred.last_used_at)}에 마지막으로 썼어요`
     : viaToken && cred?.updated_at ? ` · ${relTime(cred.updated_at)}에 연결했어요` : '';
   const readDetail = st === 'on'
-    ? `내가 물어볼 때 ${noun}을(를) **내 계정 권한 그대로** 읽어 옵니다. 라이블리에는 남지 않아요. ${howNow}${usedAt}`
+    ? `내가 물어볼 때 ${noun}${eulReul(noun)} **내 계정 권한 그대로** 읽어 옵니다. 라이블리에는 남지 않아요. ${howNow}${usedAt}`
     : st === 'blocked'
       ? String((svc as any).soon || '라이블리가 이 앱을 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있어요.')
       : account ? `켜면 ${svc.label} 화면에서 [허용]을 한 번 누르는 것으로 끝나요.` : '켜면 토큰을 넣는 창이 열려요.';
@@ -471,11 +491,11 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함에 모여요.', onCollect)
     : !(cred && cred.has_secret) ? quietCollectFace('꺼짐', 'GitLab 은 계정 로그인 토큰으로는 자료를 못 읽어요 — 위 [읽기]에서 개인 액세스 토큰(read_api)을 저장하면 여기서 켤 수 있어요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
-  else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectFace('관리자만', `워크스페이스 관리자가 켤 수 있어요 — 켜면 ${svc.label}의 ${unit}이(가) 함께 보는 곳에 모여요.`, onCollect)
+  else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectFace('관리자만', `워크스페이스 관리자가 켤 수 있어요 — 켜면 ${svc.label}의 ${unit}${eulReul(unit) === '을' ? '이' : '가'} 함께 보는 곳에 모여요.`, onCollect)
     : st !== 'on' ? quietCollectFace('꺼짐', svc.key === 'github' ? '위 [읽기]를 먼저 켜면 여기서 켤 수 있어요 — 연결 화면에서 고른 저장소가 범위가 돼요.' : '위 [읽기]에서 토큰을 저장하면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
   else collect = quietCollectFace('아직 없어요',
-    `${svc.label}는 아직 모아 두기가 없어요. 위 [읽기]로 ${noun}을(를) 그때그때 읽어요 — 준비되면 여기서 켤 수 있어요.`, onCollect);
+    `${svc.label}는 아직 모아 두기가 없어요. 위 [읽기]로 ${noun}${eulReul(noun)} 그때그때 읽어요 — 준비되면 여기서 켤 수 있어요.`, onCollect);
 
   // ── ③ 보는 사람 ──
   const whos = el('div', { class: 'cn-whos' },
@@ -568,7 +588,7 @@ function githubReposCard(): HTMLElement {
 }
 
 function slackTeamCollectCard(onState: CollectState): CollectFace {
-  const panel = collectFace(onState);
+  const panel = collectFace(onState, true, 'slack');
   const body = panel.body;
   const paint = async (): Promise<void> => {
     let s: any;
@@ -694,7 +714,7 @@ function scopeChooser(app: string, cur: Record<string, string>, enabled: boolean
         btn.setAttribute('disabled', 'true');
         await save(sc);
       } });
-      host.append(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '범위' }), inp, btn));
+      host.append(el('div', { class: 'cn-scope-row' }, inp, btn));
       return;
     }
     //  ── 토글 목록.
@@ -732,7 +752,7 @@ function scopeChooser(app: string, cur: Record<string, string>, enabled: boolean
       await save({ [o.key]: sel.join(' ') });
     } });
     host.append(
-      el('div', { class: 'cn-pick-hd' }, el('span', { class: 'k', text: '범위' }), ...bar, count,
+      el('div', { class: 'cn-pick-hd' }, ...bar, count,
         el('button', { class: 'btn-text', type: 'button', text: '전체', onclick: () => { for (const r of rows) if (r.row.style.display !== 'none') r.box.checked = true; count.textContent = summary(); } }),
         el('button', { class: 'btn-text', type: 'button', text: '해제', onclick: () => { for (const r of rows) r.box.checked = false; count.textContent = summary(); } })),
       list,
@@ -754,6 +774,10 @@ const COLLECT_KINDS: Record<string, { always: string; opts: Array<{ id: string; 
 };
 /** «언제부터» 를 지원하는 앱(커넥터가 backfill_since 를 since 하한으로 쓴다). */
 const HAS_BACKFILL = new Set(['github', 'gitlab', 'linear', 'slack']);
+/** 자료함에 들어가는 kind — src/v6/mirror/mirror-source.ts 의 sourceKindOf 와 같은 표. ClickUp 은 프로젝트 미러라 없다. */
+export const COLLECT_KIND_OF: Record<string, string> = {
+  github: 'github_issue', gitlab: 'gitlab_issue', linear: 'linear_issue', figma: 'figma_comment', slack: 'slack', notion: 'notion_doc',
+};
 const SINCE_OPTS = [{ id: '30', label: '최근 30일' }, { id: '90', label: '90일' }, { id: '365', label: '1년' }, { id: '', label: '전부' }];
 const EVERY_OPTS = [{ id: '600', label: '10분' }, { id: '1800', label: '30분' }, { id: '3600', label: '1시간' }, { id: '10800', label: '3시간' }, { id: '86400', label: '하루 한 번' }];
 
@@ -841,7 +865,7 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
 
 function memberTokenCollectCard(key: string, onState: CollectState): CollectFace {
   const T = MEMBER_COLLECT_TEXT[key];
-  const panel = collectFace(onState, T.where !== '나만 봐요');
+  const panel = collectFace(onState, T.where !== '나만 봐요', COLLECT_KIND_OF[key] ?? '');
   const body = panel.body;
   const post = async (bodyObj: any): Promise<any> => api(`/api/ui/org/${key}/collect`, { method: 'POST', body: JSON.stringify(bodyObj) });
   const paint = async (): Promise<void> => {
