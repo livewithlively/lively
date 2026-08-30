@@ -13,7 +13,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
-import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
+import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
@@ -118,6 +118,27 @@ function goSession(sid: string, tab: ShellTab): void {
 /** 같은 탭 안에서 이어지는 이동(리다이렉트)의 수 — onHash 의 '새 탭' 규칙만 건너뛴다(다시 그리기는 그대로 한다). */
 let inTabHops = 0;
 
+/** 이 탭이 지금 가리키는 세션의 박스 id(세션 탭이 아니면 ''). 복원 직전에 '옛 id' 를 집는 자리다. */
+function prevSessionIdOf(tab: ShellTab): string {
+  const k = routeKey(tab.route);
+  return k.startsWith('s:') ? k.slice(2) : '';
+}
+
+/**
+ * 박스 id 를 키로 쓰는 **이 브라우저의 세션별 상태**를 옛 id → 새 id 로 넘긴다(#2402).
+ *
+ *  옮기는 것은 사람이 그 세션에 **직접 건 것**뿐이다:
+ *   · 핀(고정) — 사람이 "이건 계속 여기 두라"고 고른 자리다. 복원했다고 풀릴 이유가 없다.
+ *   · 이름 기억 — 목록이 오기 전 첫 그림에서 쓰는 값(#2028). 새 박스도 같은 세션이니 같은 이름이다.
+ *  ⚠ 치움(dismissed)은 **안 옮긴다** — 그건 '지금 이 상태를 봤다'는 표시라, 복원은 새 상태다(다시 보여야 맞다).
+ */
+function adoptSessionLocalState(oldId: string, newId: string): void {
+  if (!oldId || !newId || oldId === newId) return;
+  movePinnedSession(oldId, newId);
+  const kept = recallSessName(oldId);
+  if (kept) rememberSessName(newId, kept);
+}
+
 /**
  * 복원(이어받기)으로 새 세션이 생겼다 — **그 탭만** 새 세션으로 옮긴다(#1834 후속).
  *
@@ -126,6 +147,10 @@ let inTabHops = 0;
  *  활성 탭이면 주소까지 맞추고, 숨은 탭이면 그 탭의 라우트·제목·화면만 바꾼다(그 탭을 열면 맞는 화면이다).
  */
 function resumedInTab(tab: ShellTab, sid: string): void {
+  //  ★ 이 탭이 새 세션으로 옮겨 가기 **전에** 옛 id 를 집어, 그 세션에 걸린 로컬 상태를 함께 옮긴다(#2402).
+  //   복원은 **새 박스 id** 를 만든다 — 핀·이름 기억처럼 박스 id 를 키로 쓰는 것들은 여기서 안 옮기면
+  //   가리킬 행이 사라져 사람 눈엔 "핀이 풀렸다 · 이름이 되돌아갔다"가 된다(원준 신고 2026-08-28).
+  adoptSessionLocalState(prevSessionIdOf(tab), sid);
   const href = '#/s/' + encodeURIComponent(sid);
   tab.route = href;
   if (tabsApi?.current() === tab && location.hash !== href) { suppressHash++; location.hash = href; }
@@ -397,6 +422,7 @@ export async function bootV2(): Promise<void> {
   drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
   await loadData();
   await repairUnknownSessNames();   // 이미 이름을 잃은 탭이 있을 때만 — 서버 기록에서 되찾아 온다(위 주석)
+  await repairPinnedSuccessors();   // 이미 끊긴 핀이 있을 때만 — 서버가 아는 이어진 세션으로 따라간다(#2402)
 
   // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
   let boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
@@ -732,6 +758,40 @@ async function repairUnknownSessNames(): Promise<void> {
       if (want.has(ref) && title && title !== 'AI 세션' && !recallSessName(ref)) rememberSessName(ref, title);
     }
   } catch { /* 못 찾으면 종전대로 id 꼬리로 — 이름 하나 때문에 화면을 막지 않는다 */ }
+}
+
+/**
+ * **이미 끊긴 핀**을 되살린다 — 이 고침 이전에 복원돼 옛 박스 id 로 남은 것들(#2402).
+ *
+ *  핀은 이 브라우저에만 있고 키가 박스 id 라(`sess:<id>`), 복원으로 id 가 바뀌면 가리킬 행이 사라진다.
+ *  위 adoptSessionLocalState 가 **앞으로의** 복원을 막아 주지만, 이미 굳은 것은 따로 되찾아야 한다
+ *  (그리고 복원이 다른 탭·다른 기기에서 일어났을 수도 있다).
+ *
+ *  서버는 그 답을 이미 알고 있다 — 옛 id 로 세션 메타를 물으면 `movedTo`(이어진 새 세션)를 준다(#2231,
+ *  src/terminal/routes.ts). 이정표가 없는 옛 id 도 **대화로 되찾아** 준다(successorByConversation).
+ *  ⚠ 그러니 새 API 를 만들지 않는다 — 있는 답을 안 물어봤을 뿐이다.
+ *  ⚠ **필요할 때만·한 번만** 나간다(repairUnknownSessNames 와 같은 규약): 해소 못 한 핀이 하나도 없으면
+ *   아예 안 나가고, 한 번 물어본 id 는 다시 안 묻는다(못 찾는 id 로 매 폴링마다 왕복하지 않게).
+ */
+const pinRepairAsked = new Set<string>();
+const PIN_REPAIR_MAX = 8;   // 핀은 사람이 고른 것이라 한 줌이다 — 그래도 상한을 둔다(한 판에 몰아 나가지 않게)
+async function repairPinnedSuccessors(): Promise<void> {
+  const want = appPinnedKeys()
+    .filter((k) => k.startsWith('sess:'))
+    .map((k) => k.slice(5))
+    .filter((id) => id && !pinRepairAsked.has(id) && !findSess(id))
+    .slice(0, PIN_REPAIR_MAX);
+  if (!want.length) return;
+  let moved = false;
+  for (const id of want) {
+    pinRepairAsked.add(id);
+    try {
+      const out: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(id));
+      const to = String((out && out.movedTo) || '').trim();
+      if (to && movePinnedSession(id, to)) { adoptSessionLocalState(id, to); moved = true; }
+    } catch { /* 못 찾으면 종전대로 — 핀 하나 때문에 화면을 막지 않는다 */ }
+  }
+  if (moved) { drawSide(); tabsApi?.paint(); }
 }
 
 // ── 라우터 ──
