@@ -77,8 +77,8 @@ export const gitlabCollectCapabilities = makeMemberTokenCollect({
 export const linearCollectCapabilities = makeMemberTokenCollect({
   system: "linear", preset: "linear", instance: MEMBER_INSTANCE, credKind: LINEAR_APP_KIND, appLabel: "Linear",
   label: "Linear — 워크스페이스 이슈·문서",
-  note: "[Linear 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 라이블리 Linear 앱 연결로 이슈·댓글·문서를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
-  connectHint: "[외부 앱 연결 ▸ Linear ▸ 모아 두기]를 켜서 Linear 화면에서 [허용]하세요",
+  note: "[Linear 자료 가져오기] 토글로 만들어진 수집기 — 켠 사람의 라이블리 Linear 앱 연결로 이슈·댓글·문서를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
+  connectHint: "[외부 앱 연결 ▸ Linear ▸ 자료 가져오기]를 켜서 Linear 화면에서 [허용]하세요",
   scopeKeys: ["teams"],
   optionKeys: ["include_documents", "backfill_since"],
   outcome: "이슈·댓글·문서가 자료함에 들어오고, 이슈 대화 증류기가 꺼진 채로 함께 준비된다. 자격이 없으면 needs_connect 와 함께 Linear 동의 URL 을 준다(토글이 곧 연결).",

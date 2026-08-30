@@ -1192,7 +1192,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return verdict;
   }
 
-  /** 팀 자료로 모으기(수집)가 짝인 앱 — 연결 성사 뒤 켜고(관리자), 해제 때 끈다. */
+  /** 자료 가져오기(수집)가 짝인 앱 — 연결 성사 뒤 켜고(관리자), 해제 때 끈다. */
   const COLLECT_OF = { slack: 'slack', notion: 'notion', gdrive: 'google', gmail: 'google', gcal: 'google' };
   /** 연결 해제 — [외부 앱 연결](v2/connect.ts)과 **같은 창구**다(계정 로그인 = oauth/disconnect · 토큰 = credential/delete).
    *  #2232 — 종전엔 «연결됐어요» 카드가 잠겨 되돌릴 길이 없었다(원준님 2026-08-28: "마음이 바뀌어서 해제할 수도 있게").
@@ -1619,7 +1619,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                             : `${label} 연결됐어요. 이제 제가 ${label} 을 직접 쓸 수 있어요.`);
           });
         };
-        /** 팀 자료로 모으기(수집) 켜기 — 관리자만. 실패·미지원은 조용히 false(온보딩을 막지 않는다). */
+        /** 자료 가져오기(수집) 켜기 — 관리자만. 실패·미지원은 조용히 false(온보딩을 막지 않는다). */
         async function startCollect(id) {
           //  피그마는 수집기가 아니라 **코멘트 증류기**가 짝이다(#1881 F8) — 있으면 꺼진 채로 준비만 해 둔다.
           if (id === 'figma' && isAdmin()) {

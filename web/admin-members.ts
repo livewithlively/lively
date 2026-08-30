@@ -204,7 +204,7 @@ function idnSummary(identities) {
     }
   }
   wrap.append(el('div', { class: 'admin-actions' },
-    el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/connectors', text: '외부 자료 수집에서 매핑 →' }),
+    el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/connectors', text: '[맥락 관리 ▸ 가져오는 곳]에서 매핑 →' }),
     el('span', { class: 'admin-hint', style: 'margin:0',
       text: '커넥터별 사용자 목록에서 골라 연결합니다 — 외부 ID를 직접 찾을 필요가 없어요.' })));
   return wrap;

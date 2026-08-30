@@ -161,8 +161,8 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
   };
 
   const get: Capability = {
-    name: `org_${spec.system}_collect`, title: `${spec.appLabel} 팀 자료 수집 상태`,
-    description: `"팀 자료로 모으기" 상태 — ${spec.appLabel} 수집기(켠 사람의 연결로 돈다)의 켜짐 여부·누구의 연결인지·내 자격 유무·범위. 토글은 org_${spec.system}_collect_set.`,
+    name: `org_${spec.system}_collect`, title: `${spec.appLabel} 자료 가져오기 상태`,
+    description: `"자료 가져오기" 상태 — ${spec.appLabel} 수집기(켠 사람의 연결로 돈다)의 켜짐 여부·누구의 연결인지·내 자격 유무·범위. 토글은 org_${spec.system}_collect_set.`,
     scope: "admin", input: {},
     expose: { mcp: true, rest: [{ method: "GET", paths: [`/api/ui/org/${spec.system}/collect`], parse: () => ({}) }] },
     handler: async (_input, user) => {
@@ -173,9 +173,9 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
 
   const scopeDesc = spec.scopeKeys?.length ? ` scope 로 범위를 넣는다(${spec.scopeKeys.join("·")}).` : "";
   const set: Capability = {
-    name: `org_${spec.system}_collect_set`, title: `${spec.appLabel} 팀 자료 수집 켜기/끄기`,
+    name: `org_${spec.system}_collect_set`, title: `${spec.appLabel} 자료 가져오기 켜기/끄기`,
     description:
-      `"팀 자료로 모으기" 토글(admin). enabled=true 면 호출자의 ${spec.appLabel} 자격(금고 ${spec.credKind})으로 수집기를 만들거나 켠다` +
+      `"자료 가져오기" 토글(admin). enabled=true 면 호출자의 ${spec.appLabel} 자격(금고 ${spec.credKind})으로 수집기를 만들거나 켠다` +
       `(token_source=member:<나>, 토큰 복사 0). ${spec.outcome}${scopeDesc} 자격이 없으면 needs_connect, ` +
       (spec.requireScope ? "범위가 비어 있으면 needs_scope 로 답하고 켜지 않는다. " : "") +
       "false 면 끈다(삭제 아님 — 커서·자료 보존).",
@@ -222,7 +222,7 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
             return { ok: false, needs_connect: true, authorization_url: c.authorization_url, message: spec.appLabel + " 화면에서 [허용]을 누르면 연결되고, 다시 켜면 모으기가 시작됩니다.", state: await stateOf(actor) };
           } catch (e) { throw new HttpError(409, (e as Error).message); }
         }
-        return { ok: false, needs_connect: true, message: `먼저 ${spec.connectHint} — 팀 자료 수집은 그 자격으로 돕니다.`, state: await stateOf(actor) };
+        return { ok: false, needs_connect: true, message: `먼저 ${spec.connectHint} — 자료 가져오기은 그 자격으로 돕니다.`, state: await stateOf(actor) };
       }
       if (plan === "needs_scope") {
         // 범위 입력이 왔지만 아직 부족하면(비어 있는 값) 저장할 것도 없다 — 켜지 않고 무엇이 필요한지만 말한다.
