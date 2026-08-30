@@ -484,6 +484,18 @@ export const welcomeCapabilities: Capability[] = [
           await ensureLocalFilesDistiller({ enable: true, actor: userId, requester: userId, source: "welcome" });
         } catch (e) { console.warn(`[welcome] 로컬 증류기를 켜지 못했습니다: ${(e as Error)?.message ?? e}`); }
       }
+      // ── 레인 뼈대(#1631) ── 서랍(만든 것 + 이미 있던 것)마다 꺼진 증류기 초안 + catch-all. 리브(2턴)가 표본을 읽고
+      //  이 초안을 채운다 — 서버는 답만으로 정해지는 뼈대를 즉시 만들어 AI 없이도 "정리 자리"가 보이게 한다. 멱등·비치명.
+      const skeletonDrawers = wanted
+        .map((d) => s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60))
+        .filter((n): n is string => !!n)
+        .map((n) => ({ key: drawerKey(n), name: n }));
+      if (skeletonDrawers.length) {
+        try {
+          const { applyLaneSkeleton } = await import("../../org/liv/lane-skeleton.js");
+          await applyLaneSkeleton({ drawers: skeletonDrawers, cadence: s(input.cadence, 20), actor: userId });
+        } catch (e) { console.warn(`[welcome] 레인 뼈대를 만들지 못했습니다: ${(e as Error)?.message ?? e}`); }
+      }
 
       // ── 업무 방식과 결정 ── 리브의 기억이 사는 자리에 남긴다(다음 세션의 리브가 이걸 읽는다).
       const job = s(input.job, 200);
