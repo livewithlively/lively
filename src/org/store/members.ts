@@ -132,16 +132,34 @@ export interface LivWelcome {
   distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
 }
 
-/** (#1631) 2턴 대기 중인 사람 — 리브 세션은 열렸는데 증류 지시를 아직 안 넣었고 포기도 안 한 구성원. 신원 전역 표라 테넌트 컨텍스트 불요. */
-export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string; display_name: string | null; welcome: LivWelcome }>> {
+/**
+ * (#1631) 2턴 대기 중인 사람 — 리브 세션은 열렸는데 증류 지시를 아직 안 넣었고 포기도 안 한 구성원.
+ *  신원 전역 표라 테넌트 컨텍스트 없이 **모든 워크스페이스를 한 번에** 훑는다(스윕이 워크스페이스마다 돌지 않는다).
+ *
+ * ⚠ welcome 은 #2265 이후 **워크스페이스 칸**(by_workspace)에 산다. 옛 최상위 자리도 아직 남아 있을 수
+ *  있으므로(승계 전) 둘을 합쳐 본다 — 한쪽만 보면 그 사람들에게 2턴이 영영 안 간다.
+ *  돌려주는 `workspace_id` 는 호출부가 **그 테넌트 컨텍스트 안에서** 표식을 찍는 데 쓴다(안 그러면 멱등이 깨져 반복 발사).
+ */
+export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string; display_name: string | null; welcome: LivWelcome; workspace_id: string | null }>> {
   const r = await itemsPool.query(
-    `SELECT id, display_name, liv_profile->'welcome' AS welcome FROM org_member
-      WHERE state='active' AND kind='human'
-        AND liv_profile->'welcome'->>'session_id' IS NOT NULL
-        AND liv_profile->'welcome'->>'distill_at' IS NULL
-        AND liv_profile->'welcome'->>'distill_gave_up_at' IS NULL
-      ORDER BY liv_profile->'welcome'->>'done_at' ASC LIMIT 200`);
-  return r.rows.map((x) => ({ id: String(x.id), display_name: (x.display_name as string | null) ?? null, welcome: x.welcome as LivWelcome }));
+    `WITH cand AS (
+       SELECT id, display_name, NULL::text AS ws, liv_profile->'welcome' AS welcome
+         FROM org_member WHERE state='active' AND kind='human' AND liv_profile ? 'welcome'
+       UNION ALL
+       SELECT m.id, m.display_name, e.key AS ws, e.value->'welcome' AS welcome
+         FROM org_member m,
+              LATERAL jsonb_each(COALESCE(m.liv_profile->'by_workspace', '{}'::jsonb)) e
+        WHERE m.state='active' AND m.kind='human' AND e.value ? 'welcome'
+     )
+     SELECT id, display_name, ws, welcome FROM cand
+      WHERE welcome->>'session_id' IS NOT NULL
+        AND welcome->>'distill_at' IS NULL
+        AND welcome->>'distill_gave_up_at' IS NULL
+      ORDER BY welcome->>'done_at' ASC LIMIT 200`);
+  return r.rows.map((x) => ({
+    id: String(x.id), display_name: (x.display_name as string | null) ?? null,
+    welcome: x.welcome as LivWelcome, workspace_id: (x.ws as string | null) ?? null,
+  }));
 }
 /**
  * 처음 설정을 **하다 만 자리**(#2207). 끝난 결과(LivWelcome)와 별개다 — 이건 아직 안 끝난 사람의 자리표다.

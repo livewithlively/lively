@@ -77,7 +77,8 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
     if (d.action === "skip") continue;
     if (d.action === "wait") { out.waited++; continue; }
     if (d.action === "giveup") {
-      await appendLivProfile(c.id, { welcome: { ...c.welcome, distill_gave_up_at: new Date(now).toISOString(), distill_note: d.reason } })
+      //  포기 표식도 그 워크스페이스 칸에 찍는다(#2265) — 밖에서 쓰면 후보에서 안 빠져 매 tick 다시 판정된다.
+      await withTenant(tenant, () => appendLivProfile(c.id, { welcome: { ...c.welcome, distill_gave_up_at: new Date(now).toISOString(), distill_note: d.reason } }))
         .catch((err) => logger.warn({ err, member: c.id }, "리브 2턴 — 포기 기록 실패"));
       logger.info({ member: c.id, session: sid, reason: d.reason }, "리브 2턴 — 포기");
       out.gaveUp++; continue;
@@ -93,8 +94,12 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
     });
     try {
       await withTenant(tenant, () => deliverPrompt(sid, prompt, { owner: c.id }));
-      const cur = await getLivProfile(c.id).catch(() => null);
-      await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_at: new Date(now).toISOString(), distill_note: d.partial ? "partial" : null } });
+      // ⚠ 표식은 **그 워크스페이스 컨텍스트 안에서** 찍는다(#2265) — welcome 은 워크스페이스 칸에 살아서,
+      //  컨텍스트 밖에서 쓰면 옛 최상위 자리에 남아 후보에서 안 빠진다(= 2턴이 매 tick 반복 발사된다).
+      await withTenant(tenant, async () => {
+        const cur = await getLivProfile(c.id).catch(() => null);
+        await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_at: new Date(now).toISOString(), distill_note: d.partial ? "partial" : null } });
+      });
       logger.info({ member: c.id, session: sid, partial: d.partial, waitedMin: d.waitedMin }, "리브 2턴 — 증류 지시 주입");
       out.fired++;
     } catch (err) {
