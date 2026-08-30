@@ -1,7 +1,32 @@
 /* 41-onboarding.css — 처음 설정(#/welcome) 화면. 프로토타입 public/onboarding-proto/v2.html 을 v2 셸 안으로 옮긴 것(#1813).
    토큰은 01-base 것만 쓴다. 클래스는 전부 ob- 접두 — 전역 .chip/.btn/.card 와 겹치지 않게. 사이드바는 실제 것(40-v2.css). */
-.ob-root{ --ghost:#D5DCE8; --blue-soft:#EEF5FF; --hover:#F6FAFF; --card:#FFFFFF; --shadow:0 1px 2px rgba(21,35,59,.05), 0 4px 14px rgba(21,35,59,.07);
+/* ★ 색은 **전부 토큰으로** 나간다 (2026-08-30).
+   종전엔 이 줄에서 `--card:#FFFFFF` 처럼 밝은 값을 못박아 두었다. 그래서 다크에서 **흰 판 위에 흰 글자**가 얹혀
+   무대 카드 제목·파일 목록이 통째로 안 보였다(원준님 실측). 지역 토큰은 01-base 것을 가리키고
+   (base 는 90-dark.css 가 두 갈래로 덮는다), base 에 대응이 없는 것만 아래 다크 블록에서 값을 바꾼다.
+   ⚠ 새 색을 넣을 땐 **하드코딩 대신 여기 토큰을 늘린다** — 이 화면은 셸 밖(민낯)에서도 뜨므로 스스로 성립해야 한다. */
+.ob-root{
+  --ghost:var(--muted-3); --blue-soft:var(--bg-tint-2); --hover:var(--bg-tint); --card:var(--surface);
+  --ob-sub:var(--line-row); --ob-sub-hover:var(--line);
+  --ob-on-fill:#fff;         /* 채운 파랑(--blue-fill, 두 테마 같은 값) 위의 글자 */
+  --ob-on-ink:var(--bg);     /* --ink 로 채운 자리(토스트·걸음 번호·보내기) 위의 글자 — 테마를 따라 뒤집힌다 */
+  --ob-mint-ring:#CDEFE3; --ob-amber:#A9750F; --ob-amber-soft:#FFF4D6;
+  /* 파일 종류 색 — 흰 글자를 얹는 **채움**이라 두 테마에서 대체로 같다. 다크에서 점으로 보기 어두운 둘만 아래에서 밝힌다. */
+  --ob-f-doc:#2f6bff; --ob-f-sheet:#1a9c5b; --ob-f-slide:#e0741a; --ob-f-img:#8b5cf6;
+  --ob-f-code:#0f766e; --ob-f-zip:#a16207; --ob-f-etc:#6b7280;
+  --shadow:0 1px 2px rgba(21,35,59,.05), 0 4px 14px rgba(21,35,59,.07);
   display:flex; flex-direction:column; flex:1; min-height:0; height:100%; background:var(--bg); color:var(--ink); font-size:14px; line-height:1.5; position:relative }
+/*  다크 — base 에 대응 토큰이 없는 것만. **두 선택자를 다 쓴다**: 명시 선택(data-theme=dark)과
+    «시스템 설정»(스탬프 없음 → prefers-color-scheme). 하나만 쓰면 그 갈래에서 조용히 밝은 값이 남는다. */
+:root[data-theme="dark"] .ob-root{
+  --ob-mint-ring:rgba(61,189,151,.38); --ob-amber:#F0A32B; --ob-amber-soft:#33280F;
+  --ob-f-code:#17A392; --ob-f-zip:#C98A16;
+  --shadow:0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.45) }
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .ob-root{
+    --ob-mint-ring:rgba(61,189,151,.38); --ob-amber:#F0A32B; --ob-amber-soft:#33280F;
+    --ob-f-code:#17A392; --ob-f-zip:#C98A16;
+    --shadow:0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.45) } }
 .ob-root *{box-sizing:border-box}
 /* 버튼 리셋 — **명시도를 0 으로 눕힌다**(`:where()`).
    ⚠ 이식(3ad440e7) 때 프로토의 `button{…}`(0,0,1)을 `.ob-root button`(0,1,1)로 감쌌는데, 그 순간
@@ -33,7 +58,7 @@
 .ob-qcol{width:min(560px, 92%); padding:8vh 0 60px; animation:rise .45s ease-out}
 .ob-qcol.ob-wide{width:min(820px, 94%)}
 @keyframes rise{from{opacity:0; transform:translateY(10px)}to{opacity:1; transform:none}}
-.ob-q-ic{width:40px; height:40px; border-radius:50%; background:var(--bg-success); border:1px solid #CDEFE3; display:grid; place-items:center; color:var(--mint-deep); font-size:15px; font-weight:800; margin-bottom:14px}
+.ob-q-ic{width:40px; height:40px; border-radius:50%; background:var(--bg-success); border:1px solid var(--ob-mint-ring); display:grid; place-items:center; color:var(--mint-deep); font-size:15px; font-weight:800; margin-bottom:14px}
 .ob-q-prog{display:flex; gap:4px; margin:0 0 22px; width:96px}
 .ob-q-prog i{flex:1; height:3px; border-radius:2px; background:var(--ghost)}
 .ob-q-prog i.ob-on,.ob-q-prog button.ob-on{background:var(--ink)}
@@ -43,7 +68,7 @@
 /* 노션식 선택 카드 */
 .ob-opt-cards{display:flex; flex-direction:column; gap:10px}
 .ob-opt-card{display:flex; align-items:center; gap:12px; text-align:left; border:1px solid var(--line); border-radius:10px; padding:13px 15px; background:var(--card); transition:border-color .12s, box-shadow .12s}
-.ob-opt-card:hover{border-color:#cfcecb; box-shadow:var(--shadow)}
+.ob-opt-card:hover{border-color:var(--muted-3); box-shadow:var(--shadow)}
 .ob-opt-card.ob-on{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
 .ob-opt-card .ob-oc-ic{width:22px; display:grid; place-items:center; flex:0 0 22px}
 .ob-blogo{width:17px; height:17px; flex:none; display:block}
@@ -51,8 +76,8 @@
 .ob-oc-st{margin-left:auto; display:grid; place-items:center; width:16px; flex:0 0 16px}
 .ob-opt-card .ob-oc-t{font-weight:600; font-size:14.5px}
 .ob-opt-card .ob-oc-d{display:block; font-size:12.5px; color:var(--muted); margin-top:1px}
-.ob-opt-card .ob-oc-chk{margin-left:auto; width:16px; height:16px; border-radius:4px; border:1.5px solid var(--ghost); flex:0 0 16px; display:grid; place-items:center; color:#fff; font-size:10px}
-.ob-opt-card.ob-on .ob-oc-chk{background:var(--blue); border-color:var(--blue)}
+.ob-opt-card .ob-oc-chk{margin-left:auto; width:16px; height:16px; border-radius:4px; border:1.5px solid var(--ghost); flex:0 0 16px; display:grid; place-items:center; color:var(--ob-on-fill); font-size:10px}
+.ob-opt-card.ob-on .ob-oc-chk{background:var(--blue-fill); border-color:var(--blue-fill)}
 .ob-opt-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px; margin-bottom:10px}
 .ob-opt-grid .ob-opt-card{padding:9px 11px; gap:9px}
 .ob-opt-grid .ob-opt-card .ob-oc-t{font-size:13.5px}
@@ -61,11 +86,11 @@
 .ob-q-write input{flex:1; border:1px solid var(--line); border-radius:8px; padding:9px 12px; outline:none}
 .ob-q-write input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
 .ob-btn{display:block; width:100%; text-align:center; border-radius:8px; padding:10px 14px; font-weight:600; font-size:14px; margin-top:18px}
-.ob-btn-pri{background:var(--blue); color:#fff}
-.ob-btn-pri:hover{background:#1b74cc}
-.ob-btn-pri:disabled{background:var(--blue-soft); color:#9cc7ec; cursor:default}
-.ob-btn-sub{background:#f1f1ef; color:var(--ink-sub); margin-top:8px}
-.ob-btn-sub:hover{background:#e9e9e6}
+.ob-btn-pri{background:var(--blue-fill); color:var(--ob-on-fill)}
+.ob-btn-pri:hover{background:var(--blue-fill-deep)}
+.ob-btn-pri:disabled{background:var(--line-row); color:var(--muted-2); cursor:default}
+.ob-btn-sub{background:var(--ob-sub); color:var(--ink-sub); margin-top:8px}
+.ob-btn-sub:hover{background:var(--ob-sub-hover)}
 .ob-btn-inline{width:auto; display:inline-block; padding:8px 14px}
 .ob-q-skip{display:block; margin:16px auto 0; font-size:13px; color:var(--muted)}
 .ob-q-skip:hover{color:var(--ink-sub); text-decoration:underline}
@@ -78,26 +103,26 @@
 .ob-chat{flex:1; overflow-y:auto; display:flex; justify-content:center}
 .ob-thread{width:min(680px,94%); padding:26px 0 20px; display:flex; flex-direction:column; gap:14px}
 .ob-msg{display:flex; gap:10px; animation:rise .35s ease-out}
-.ob-msg .ob-ava{width:26px; height:26px; border-radius:50%; background:var(--bg-success); border:1px solid #CDEFE3; flex:0 0 26px; display:grid; place-items:center; color:var(--mint-deep); font-size:11px; font-weight:800; margin-top:2px}
+.ob-msg .ob-ava{width:26px; height:26px; border-radius:50%; background:var(--bg-success); border:1px solid var(--ob-mint-ring); flex:0 0 26px; display:grid; place-items:center; color:var(--mint-deep); font-size:11px; font-weight:800; margin-top:2px}
 .ob-msg .ob-body{max-width:86%; font-size:14.5px; line-height:1.65}
 .ob-msg .ob-body p{margin-bottom:6px}
 .ob-msg .ob-body p:last-child{margin-bottom:0}
 .ob-msg.ob-user{justify-content:flex-end}
-.ob-msg.ob-user .ob-body{background:#f1f1ef; border-radius:14px; padding:8px 14px; font-size:14px}
+.ob-msg.ob-user .ob-body{background:var(--ob-sub); border-radius:14px; padding:8px 14px; font-size:14px}
 .ob-chips{display:flex; flex-wrap:wrap; gap:8px; padding-left:36px; animation:rise .35s ease-out}
 .ob-chip{border:1px solid var(--line); border-radius:100px; padding:7px 14px; font-size:13.5px; font-weight:500; background:var(--card)}
-.ob-chip:hover{background:var(--hover); border-color:#cfcecb}
+.ob-chip:hover{background:var(--hover); border-color:var(--muted-3)}
 .ob-chip.ob-cta{background:var(--blue-soft); color:var(--blue); border-color:transparent; font-weight:600}
-.ob-chip.ob-cta:hover{background:#d8ebfb}
+.ob-chip.ob-cta:hover{background:var(--bg-note)}
 .ob-chip.ob-ghost{color:var(--ink-sub)}
 .ob-tags{display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 2px}
 .ob-tag{border:1px solid var(--line); border-radius:6px; padding:3px 9px; font-size:12.5px; color:var(--ink-sub); background:var(--canvas)}
 .ob-tag b{color:var(--ink); font-variant-numeric:tabular-nums}
 .ob-excard{border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin:8px 0 0; cursor:pointer; transition:border-color .12s, box-shadow .12s; background:var(--card)}
-.ob-excard:hover{border-color:#cfcecb; box-shadow:var(--shadow)}
+.ob-excard:hover{border-color:var(--muted-3); box-shadow:var(--shadow)}
 .ob-excard .ob-xt{font-size:14px; font-weight:600; margin-bottom:5px}
 .ob-excard .ob-xd{font-size:12.5px; color:var(--muted)}
-.ob-excard .ob-xd b{color:var(--amber); font-weight:600}
+.ob-excard .ob-xd b{color:var(--ob-amber); font-weight:600}
 .ob-fine{font-size:12.5px; color:var(--muted); padding-left:36px}
 .ob-readline{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink-sub)}
 .ob-readbar{flex:0 0 120px; height:4px; border-radius:2px; background:var(--line-net); overflow:hidden}
@@ -108,14 +133,14 @@
 .ob-composer-in{width:min(680px,94%); border:1.5px solid var(--blue); border-radius:14px; padding:10px 14px 8px; box-shadow:0 4px 18px rgba(35,131,226,.08)}
 .ob-composer-in input{width:100%; border:0; outline:none; font-size:14.5px; padding:2px 0 8px; background:none}
 .ob-composer-row{display:flex; align-items:center; gap:10px; color:var(--muted); font-size:12px}
-.ob-composer-row .ob-send{margin-left:auto; width:26px; height:26px; border-radius:50%; background:var(--ink); color:#fff; display:grid; place-items:center; font-size:12px}
+.ob-composer-row .ob-send{margin-left:auto; width:26px; height:26px; border-radius:50%; background:var(--ink); color:var(--ob-on-ink); display:grid; place-items:center; font-size:12px}
 .ob-composer-row .ob-send:disabled{background:var(--ghost); cursor:default}
 .ob-root:not(.ob-stage-chat) .ob-composer{display:none}
 .ob-chat, .ob-composer{background:var(--bg)}
 .ob-root:not(.ob-stage-chat) .ob-chat{display:none}
 .ob-root.ob-stage-chat .ob-qwrap{display:none}
 
-.ob-toast{position:fixed; left:50%; bottom:70px; transform:translateX(-50%); background:var(--ink); color:#fff; border-radius:100px; padding:8px 18px; font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; z-index:60}
+.ob-toast{position:fixed; left:50%; bottom:70px; transform:translateX(-50%); background:var(--ink); color:var(--ob-on-ink); border-radius:100px; padding:8px 18px; font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; z-index:60}
 .ob-toast.ob-on{opacity:1}
 
 /* 막1(이름) — 노션 p1 처럼 아무것도 없는 가운데 카드. 셸(사이드바·손잡이·탭 줄)을 잠깐 숨긴다. */
@@ -178,8 +203,8 @@
 .ob-tok input{border:1px solid var(--line); border-radius:9px; padding:11px 13px; outline:none;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px}
 .ob-tok input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
-.ob-tok .ob-err{font-size:13px; color:#C0392B; min-height:1px}
-.ob-tok .ob-ok{font-size:13px; color:var(--mint-text)}
+.ob-tok .ob-err{font-size:13px; color:var(--danger); min-height:1px}
+.ob-tok .ob-ok{font-size:13px; color:var(--mint-deep)}
 /* #1879 — 사실을 덧붙이는 줄(다른 AI 가 이미 이어져 있음·판정 불가 등). 오류(빨강)도 성공(민트)도 아닌
    '그냥 알려 드리는 것' 이라 본문과 같은 톤으로 낮춰 둔다. */
 .ob-tok .ob-note{font-size:13px; color:var(--ink-sub); line-height:1.7}
@@ -192,7 +217,7 @@
 .ob-ins-list{display:flex; flex-direction:column; gap:22px; margin:0 0 22px}
 .ob-ins{position:relative; padding-left:34px}
 .ob-ins::before{content:attr(data-n); position:absolute; left:0; top:0; width:23px; height:23px;
-  border-radius:50%; background:var(--ink); color:#fff; font-size:12.5px; font-weight:700;
+  border-radius:50%; background:var(--ink); color:var(--ob-on-ink); font-size:12.5px; font-weight:700;
   display:grid; place-items:center; font-variant-numeric:tabular-nums}
 .ob-ins-t{display:block; font-size:15px; font-weight:700; margin:1px 0 7px; line-height:1.45}
 .ob-ins-p{font-size:13.5px; color:var(--ink-sub); line-height:1.8; margin:0 0 8px}
@@ -210,7 +235,7 @@
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
 .ob-cmd-copy{flex:none; border:1px solid var(--line); border-radius:7px; background:var(--card);
   padding:5px 11px; font-size:12.5px; font-weight:600; color:var(--ink-sub)}
-.ob-cmd-copy:hover{border-color:#cfcecb; color:var(--ink)}
+.ob-cmd-copy:hover{border-color:var(--muted-3); color:var(--ink)}
 .ob-cmd-copy.ob-on{border-color:var(--blue); color:var(--blue)}
 
 .ob-kbd{display:inline-block; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px;
@@ -244,9 +269,9 @@
    설명 줄은 대기 색(앰버)으로 둔다. 체크 자리는 아예 비운다(고를 수 없으므로). */
 .ob-opt-card.ob-soon{opacity:.58; background:var(--bg); border-style:dashed}
 .ob-opt-card.ob-soon:hover{border-color:var(--line); box-shadow:none}
-.ob-opt-card.ob-soon .ob-oc-d{color:var(--amber, #C98A16); font-weight:600}
+.ob-opt-card.ob-soon .ob-oc-d{color:var(--ob-amber); font-weight:600}
 .ob-opt-card.ob-soon .ob-blogo{filter:grayscale(1)}
-.ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:#cfcecb; box-shadow:var(--shadow)}
+.ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:var(--muted-3); box-shadow:var(--shadow)}
 /* 펼쳐 둔 카드 — 아래 패널과 한 덩어리로 읽히게 아랫모서리를 편다. */
 .ob-opt-card.ob-open{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue);
   border-bottom-left-radius:0; border-bottom-right-radius:0}
@@ -258,7 +283,7 @@
 .ob-tok-in .ob-err:empty{display:none}
 .ob-root a.ob-btn{text-decoration:none}
 /* #2232 — 본문 안에서 실제로 갈 수 있는 자리로 보내는 링크(«외부 앱 연결» 등). 문구로만 이름을 부르면 사람이 못 찾는다. */
-.ob-link{color:var(--accent, #2f6bff); text-underline-offset:2px}
+.ob-link{color:var(--accent); text-underline-offset:2px}
 .ob-link:hover{text-decoration:underline}
 
 /* 자료 올리기 — 고르기 버튼 둘을 드롭존 안에 나란히(팝오버 메뉴 폐기, #1813).
@@ -272,20 +297,20 @@
 .ob-files-n{font-weight:700; color:var(--ink); font-size:13px; margin-right:4px}
 .ob-fchip{display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border:1px solid var(--line); border-radius:999px; background:var(--card)}
 .ob-fchip b{color:var(--ink); font-weight:600}
-.ob-fchip i{width:7px; height:7px; border-radius:50%; background:#6b7280; display:inline-block}
-.ob-fchip.ob-fi-doc i{background:#2f6bff} .ob-fchip.ob-fi-sheet i{background:#1a9c5b} .ob-fchip.ob-fi-slide i{background:#e0741a} .ob-fchip.ob-fi-img i{background:#8b5cf6} .ob-fchip.ob-fi-code i{background:#0f766e} .ob-fchip.ob-fi-zip i{background:#a16207} .ob-fchip.ob-fi-dir i{background:#C98A16}
+.ob-fchip i{width:7px; height:7px; border-radius:50%; background:var(--ob-f-etc); display:inline-block}
+.ob-fchip.ob-fi-doc i{background:var(--ob-f-doc)} .ob-fchip.ob-fi-sheet i{background:var(--ob-f-sheet)} .ob-fchip.ob-fi-slide i{background:var(--ob-f-slide)} .ob-fchip.ob-fi-img i{background:var(--ob-f-img)} .ob-fchip.ob-fi-code i{background:var(--ob-f-code)} .ob-fchip.ob-fi-zip i{background:var(--ob-f-zip)} .ob-fchip.ob-fi-dir i{background:var(--ob-amber)}
 .ob-files-list{border:1px solid var(--line); border-radius:11px; background:var(--card); max-height:228px; overflow-y:auto; overscroll-behavior:contain}
 .ob-file{display:flex; align-items:center; gap:10px; padding:7px 12px; border-bottom:1px solid var(--line-row); min-width:0}
 .ob-file:last-child{border-bottom:0}
-.ob-fi{position:relative; width:22px; height:26px; flex:0 0 22px; border-radius:5px; background:var(--line-row); display:grid; place-items:center; overflow:hidden; color:#C98A16}
+.ob-fi{position:relative; width:22px; height:26px; flex:0 0 22px; border-radius:5px; background:var(--line-row); display:grid; place-items:center; overflow:hidden; color:var(--ob-amber)}
 .ob-fi img{width:100%; height:100%; object-fit:cover; display:block}
-.ob-fi i{font-style:normal; font-size:7.5px; font-weight:800; letter-spacing:.02em; color:#fff; padding:1px 3px; border-radius:3px; background:#6b7280; max-width:22px; overflow:hidden}
-.ob-fi-doc i{background:#2f6bff} .ob-fi-sheet i{background:#1a9c5b} .ob-fi-slide i{background:#e0741a} .ob-fi-img i{background:#8b5cf6} .ob-fi-code i{background:#0f766e} .ob-fi-zip i{background:#a16207}
-.ob-fi-dir{background:#fff4d6} .ob-fi-dir .ob-blogo{width:15px; height:15px}
+.ob-fi i{font-style:normal; font-size:7.5px; font-weight:800; letter-spacing:.02em; color:var(--ob-on-fill); padding:1px 3px; border-radius:3px; background:var(--ob-f-etc); max-width:22px; overflow:hidden}
+.ob-fi-doc i{background:var(--ob-f-doc)} .ob-fi-sheet i{background:var(--ob-f-sheet)} .ob-fi-slide i{background:var(--ob-f-slide)} .ob-fi-img i{background:var(--ob-f-img)} .ob-fi-code i{background:var(--ob-f-code)} .ob-fi-zip i{background:var(--ob-f-zip)}
+.ob-fi-dir{background:var(--ob-amber-soft)} .ob-fi-dir .ob-blogo{width:15px; height:15px}
 .ob-file-n{flex:1; min-width:0; font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .ob-file-m{flex:none; font-size:11.5px; color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums}
 .ob-file.ob-up .ob-file-m{color:var(--blue)}
-.ob-file.ob-err .ob-file-m{color:#C0392B}
+.ob-file.ob-err .ob-file-m{color:var(--danger)}
 .ob-files-more{font-size:12px; color:var(--muted); text-align:center}
 /* ══ #2232 AI 로그인 안내 — 누르면 복사되는 글자 · 글 안의 작은 버튼 ══ */
 .ob-tok code.ob-copy{cursor:pointer; border:1px dashed var(--line); user-select:all}
@@ -299,7 +324,7 @@
 .ob-oc-act{margin-left:auto; display:flex; align-items:center; gap:10px; flex:none}
 .ob-oc-unlink{font:inherit; font-size:12px; color:var(--muted); background:none; border:0; padding:2px 4px; cursor:pointer; text-decoration:underline; text-underline-offset:2px; white-space:nowrap}
 .ob-oc-unlink:hover{color:var(--ink)}
-.ob-oc-unlink.ob-danger{color:#C0392B; font-weight:700}
+.ob-oc-unlink.ob-danger{color:var(--danger); font-weight:700}
 .ob-oc-unlink:disabled{opacity:.6; cursor:default}
 
 /* 로그인 카드(#2055 후속) — 주소·코드를 이 자리에서 준다. 종전 «새 탭 검은 창» 을 대신한다. */
@@ -308,7 +333,7 @@
 .ob-login-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ob-login-k { color: var(--muted); font-size: 12px; min-width: 74px; }
 .ob-login-v {
-  font-family: var(--mono, monospace); background: var(--bg-soft, rgba(0,0,0,.05));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--line-row);
   border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; cursor: pointer;
   overflow-wrap: anywhere; max-width: 100%;
 }

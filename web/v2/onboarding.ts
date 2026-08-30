@@ -971,10 +971,26 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return CONN.connected.some((s) => s.key === SVC_OF[id]);
   };
   /** 피그마 범위 입력 → 서버 scope(숫자만인 토막 = 팀 id, 나머지 = 파일 링크). */
+  /**
+   * 붙여 넣은 것에서 **팀**과 **파일**을 갈라낸다 (#2232 원준님 2026-08-30:
+   *  "피그마 파일 하나하나마다 링크를 넣어야 하면 수백 개인데 이게 맞냐" — 맞지 않다. 기본은 **팀**이다).
+   *  ⚠ 종전엔 «숫자만» 을 팀으로 봤다. 그래서 팀 주소를 그대로 붙여 넣으면(사람이 하는 그대로)
+   *   파일 링크로 분류돼 팀이 통째로 안 잡혔다. 이제 주소에서 팀 id 를 뽑는다.
+   *   · 팀   figma.com/files/team/<숫자>/… · figma.com/team/<숫자>  · 숫자만
+   *   · 파일 figma.com/design/<키>/… · figma.com/file/<키>/…       · 키만
+   */
   const figmaScope = (text) => {
-    const toks = String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean);
-    const teams = toks.filter((x) => /^\d{5,}$/.test(x)), files = toks.filter((x) => !/^\d{5,}$/.test(x));
-    const out: any = {}; if (files.length) out.file_keys = files.join(' '); if (teams.length) out.team_ids = teams.join(' '); return out;
+    const teams: string[] = [], files: string[] = [];
+    for (const raw of String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean)) {
+      const team = raw.match(/(?:^|\/)team\/(\d{5,})/) || raw.match(/^(\d{5,})$/);
+      if (team) { teams.push(team[1]); continue; }
+      const file = raw.match(/\/(?:design|file|board|proto)\/([A-Za-z0-9]{10,})/);
+      files.push(file ? file[1] : raw);
+    }
+    const out: any = {};
+    if (files.length) out.file_keys = files.join(' ');
+    if (teams.length) out.team_ids = teams.join(' ');
+    return out;
   };
   /** 토큰형 앱 수집기 켜기 — 서버 답(ok / needs_connect / needs_scope)을 그대로 돌려준다. 던지지 않는다. */
   async function startMemberCollect(id, scopeText) {
@@ -1023,6 +1039,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (c) {
         if (id === 'notion') return c.enabled ? 'on' : (!c.ready && !(c.workspaces || []).length ? 'blocked' : 'off');
         if (id === 'slack') return (c.search && c.search.enabled) ? 'on' : 'off';
+        //  ⚠ 리니어는 **라이블리 OAuth 앱이 조직에 등록돼 있어야** 동의 화면이 열린다(app_ready).
+        //   종전엔 그 사실을 안 보고 «연결하기» 로 안내해, 누르면 409 로 끝나고 토스트만 스치는 막다른 길이었다
+        //   (원준님 실측 2026-08-30). 등록 전이면 잠근다 — 관리자에겐 아래 안내가 등록 자리를 가리킨다.
+        if (id === 'linear' && c.app_ready === false) return 'blocked';
         if (id === 'figma' || id === 'clickup' || id === 'github' || id === 'gitlab' || id === 'linear') return c.enabled ? 'on' : 'off';
       }
       // 수집 상태를 못 읽었으면(구 이미지·권한) 개인 축 판정으로 떨어진다 — 화면을 비우지 않는다.
@@ -1232,8 +1252,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
       ${tokenSaved(id) ? '<p class="ob-note">토큰은 이미 저장돼 있어요 — 바꿀 때만 다시 붙여넣으세요.</p>' : ''}
       <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
-      ${collectMode(id) && id === 'figma' ? `<p class="ob-note">모을 <b>피그마 파일 링크</b>를 넣어 주세요 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체를 모으려면 팀 주소(figma.com/files/team/&lt;id&gt;/…)의 숫자 id 를 넣어도 돼요.</p>
-      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/design/…">` : ''}
+      ${collectMode(id) && id === 'figma' ? `<p class="ob-note"><b>팀 주소</b>를 넣어 주세요 — Figma 에서 팀을 연 다음 주소창을 그대로 복사하시면 됩니다(<span class="ob-fine2">figma.com/files/team/…</span>).
+      그 팀의 파일을 제가 알아서 훑습니다. 파일 몇 개만 모으고 싶으시면 그 <b>파일 링크</b>를 넣으셔도 돼요 — 여러 개면 공백으로 띄우세요.</p>
+      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…">` : ''}
       ${collectMode(id) && id === 'gitlab' ? `<p class="ob-note">회사 GitLab 을 쓰면 아래에 그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
       <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com">
       <p class="ob-note">모을 <b>프로젝트 경로</b>(group/project)를 넣어 주세요 — 여러 개면 공백으로. 프로젝트 주소를 그대로 붙여넣어도 돼요.</p>
@@ -1579,9 +1600,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           //   **AI 가 그 앱을 쓸 수 있게** 할 뿐, 지난 자료를 끌어오지는 않는다 — 그건 수집기(org_collector)이고
           //   새 워크스페이스에는 꺼진 채로 깔린다. 그래서 켤 수 있는 사람(=관리자, 셀프서브에선 만든 사람 본인)
           //   에게는 여기서 **실제로 켠다**. 못 켜는 사람에게는 약속하지 않는다(문구가 갈린다).
+          //  ⚠ 수집이 켜졌는지는 **서버 상태로** 판정한다. startCollect 는 COLLECT_OF 축(슬랙·노션·구글)만 알아서,
+          //   COLLECT_FIRST 축(깃헙·피그마·클릭업·깃랩·리니어)은 각자 분기에서 실제로 켜 놓고도 «못 켰다» 쪽
+          //   문구가 나갔다 — 화면이 자기가 한 일을 부정하면 안 된다.
           void startCollect(id).then((on) => {
-            toast(on ? `${label} 연결됐어요. 그동안 쌓인 자료를 가져오기 시작합니다.`
-                     : `${label} 연결됐어요. 이제 제가 ${label} 을 직접 쓸 수 있어요.`);
+            const collected = on || !!(COLL[id] && COLL[id].enabled);
+            toast(collected ? `${label} 연결됐어요. 그동안 쌓인 자료를 가져오기 시작합니다.`
+                            : `${label} 연결됐어요. 이제 제가 ${label} 을 직접 쓸 수 있어요.`);
           });
         };
         /** 팀 자료로 모으기(수집) 켜기 — 관리자만. 실패·미지원은 조용히 false(온보딩을 막지 않는다). */
@@ -1645,10 +1670,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             return;
           }
           //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다.
-          if (CONN && CONN.connected.some((s) => s.key === 'slack')) {
+          //  ⚠ **`id` 를 반드시 본다.** 종전엔 «슬랙이 이미 이어져 있으면» 만 봐서, 아직 토큰이 없는 GitHub 를 누른
+          //   사람이 이 분기로 흘러들었다 — 그리고 startCollect('github') 는 COLLECT_OF 축에 없어 곧바로 false 라
+          //   «슬랙 자료 모으기를 켜지 못했어요» 가 떴다(원준님 실측 2026-08-30: GitHub 를 눌렀는데 슬랙 실패 토스트).
+          //   라벨도 하드코딩하지 않는다 — 이 분기에 다른 앱이 흘러들어도 **누른 앱 이름**이 나와야 원인이 보인다.
+          if (id === 'slack' && CONN && CONN.connected.some((s) => s.key === 'slack')) {
             const on = await startCollect(id);
             await loadConn();
-            fin(on ? null : '슬랙 자료 모으기를 켜지 못했어요 — [외부 앱 연결]에서 다시 시도해 주세요.');
+            fin(on ? null : `${srcLabel(id)} 자료 모으기를 켜지 못했어요 — [외부 앱 연결]에서 다시 시도해 주세요.`);
             return;
           }
           if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
@@ -1658,7 +1687,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
           const id = c.dataset.conn;
           if (connState(id) === 'on') return;                       // 이미 이어졌다 — 더 시킬 일이 없다
-          if (connState(id) === 'blocked') { toast('이 앱은 아직 준비 중이에요. 열리면 [외부 앱 연결]에서 바로 연결하실 수 있어요.'); return; }
+          if (connState(id) === 'blocked') {
+            //  관리자에게 «준비 중» 은 거짓이다 — 등록만 하면 열린다. 어디서 무엇을 넣는지까지 말한다.
+            const needsApp = id === 'linear' && COLL[id] && COLL[id].app_ready === false;
+            toast(needsApp && isAdmin()
+              ? '라이블리 Linear 앱을 먼저 등록해야 열려요 — [외부 앱 연결] ▸ Linear 에서 Client ID·Secret 을 넣어 주세요(관리자 1회).'
+              : needsApp
+                ? '이 앱은 관리자가 Linear 앱을 등록해야 열려요. 관리자에게 알려 주세요.'
+                : '이 앱은 아직 준비 중이에요. 열리면 [외부 앱 연결]에서 바로 연결하실 수 있어요.');
+            return;
+          }
           //  ⚠ 아직 서버를 못 읽었으면 **어느 길로 이을지 고를 수 없다**: Slack·GitLab 은 계정 로그인과 글자 받아
           //   오기가 둘 다 있어서, 모르는 채로 정하면 회사가 이미 열어 둔 쉬운 길을 두고 어려운 길로 보내게 된다.
           if (!CONN) { toast('연결 상태를 아직 확인하는 중이에요 — 잠시 뒤 다시 눌러 주세요.'); if (!connTried) void loadConn().then(redraw); return; }
@@ -2404,6 +2442,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const card = $('#cCard', el); if (!card) return;
     inlineStop = false;
     card.hidden = false;
+    //  #2232 원준님 2026-08-30 — 시작 버튼은 **누른 순간 사라진다.** 종전엔 로그인이 끝난 뒤에도
+    //   «Claude 로그인 시작» 이 위에 남아 있어 «끝났는데 왜 시작 버튼이?» 가 됐다. 이 아래 카드가 그 자리를 대신한다.
+    //   (탈출로가 필요하면 escape() 가 자기 버튼을 따로 그린다.)
+    const startBtn = $('#cTerm', el); if (startBtn) startBtn.hidden = true;
+    /** 로그인이 끝나면 «하는 방법» 은 더 이상 할 일이 아니다 — 걸음표·펼침·조작법을 걷는다. */
+    const hideHowto = () => {
+      for (const sel of ['#cTerm', '.ob-tok > ol', '.ob-between', '#cDetail', '.ob-fine2']) {
+        const n = $(sel, el); if (n) n.hidden = true;
+      }
+    };
     const say = (...nodes) => { card.replaceChildren(...nodes); };
     const line = (cls, text) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; };
     const copyRow = (k, v, href) => {
@@ -2432,6 +2480,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       return;
     }
     let pasted = false;
+    let lastSig = '';   // 지금 카드에 그려진 상태의 지문 — 같은 내용을 다시 그리지 않기 위해(입력 중인 글자를 지우지 않는다)
     //  주소가 안 오는 채로 버티지 않는다 — codex 는 실측 1초 안에 찍는다. 상한을 넘기면 탈출로를 준다.
     const STALL_MS = 30000;
     const startedAt = Date.now();
@@ -2446,6 +2495,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       }
       if (st && st.loggedIn === true) {
         inlineStop = true;
+        hideHowto();
         say(line('ob-ok', `${label} 로그인이 끝났어요 — 아래 [로그인했어요]를 누르시면 됩니다.`));
         try { await api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness: h }) }); } catch (_) { /* noop */ }
         const go = $('#cGo', el); if (go) go.focus();
@@ -2459,6 +2509,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         return;
       }
       if (st && st.url) {
+        //  ★ 같은 내용이면 **다시 그리지 않는다**(원준님 2026-08-30: "코드를 붙여넣고 조금 있으면 코드가 사라진다").
+        //   종전엔 2초 폴링이 매번 card.replaceChildren 을 불러 **사람이 입력 중이던 칸을 통째로 갈아치웠다** —
+        //   붙여넣고 2초 안에 [넣기]를 눌러야 하는 화면이 됐다. 상태가 실제로 바뀔 때만 그린다.
+        const sig = `${st.url}|${st.code || ''}|${st.needsPaste && !pasted ? 'p' : ''}`;
+        if (sig === lastSig) { setTimeout(tick, 2000); return; }
+        //  그려야 한다면 **치던 글자는 살려서** 옮긴다(코드가 늦게 도착해 한 번 더 그리는 경우).
+        const keep = (($('.ob-login-in', card) as HTMLInputElement | null) || { value: '' }).value;
+        lastSig = sig;
         const rows = [copyRow('주소', st.url, st.url)];
         if (st.code) rows.push(copyRow('일회용 코드', st.code));
         rows.push(line('ob-fine2', st.code
@@ -2466,11 +2524,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           : '주소를 열고 로그인해 주세요. 끝나면 이 자리에 «끝났어요» 가 뜹니다.'));
         if (st.needsPaste && !pasted) {
           const row = document.createElement('div'); row.className = 'ob-login-row';
-          const inp = document.createElement('input'); inp.className = 'ob-input'; inp.type = 'text'; inp.placeholder = '브라우저에서 받은 코드';
+          const inp = document.createElement('input'); inp.className = 'ob-input ob-login-in'; inp.type = 'text'; inp.placeholder = '브라우저에서 받은 코드';
+          inp.value = keep;
+          //  Enter 로도 넣는다 — 붙여넣고 바로 확정하는 것이 사람의 손버릇이다.
+          inp.onkeydown = (ev) => { if ((ev as KeyboardEvent).key === 'Enter') { ev.preventDefault(); ok.click(); } };
           const ok = document.createElement('button'); ok.className = 'ob-btn ob-btn-sub ob-btn-inline'; ok.textContent = '넣기';
           ok.onclick = async () => {
             const v = inp.value.trim(); if (!v) return; ok.disabled = true;
-            try { await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness: h, code: v }) }); pasted = true; toast('코드를 넣었어요'); }
+            try {
+              await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness: h, code: v }) });
+              pasted = true; lastSig = '';   // 다음 틱은 «코드 칸 없는» 화면으로 한 번 다시 그린다
+              ok.textContent = '넣었어요'; toast('코드를 넣었어요 — 확인하는 중이에요');
+            }
             catch (e) { toast(`코드를 넣지 못했어요 — ${(e && e.message) || e}`); ok.disabled = false; }
           };
           row.append(inp, ok); rows.push(row);
