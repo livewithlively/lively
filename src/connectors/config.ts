@@ -78,7 +78,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "bot_token", env: "SLACK_BOT_TOKEN", secret: true, label: "Bot Token", hint: "xoxb-... — 봇이 초대된 채널만 수집(**비공개 채널 포함**). User Token 을 함께 넣으면 그쪽이 우선합니다" },
       // #1881 — 붙여넣기 대신 금고에서: [Slack 연결]로 저장된 토큰을 그대로 쓴다. 값이 있으면 위 두 칸·env 를 덮어쓴다.
       { key: "token_source", env: "SLACK_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Slack 연결]로 저장한 계정(공개채널 검색 수집) · bot = Lively 봇(초대된 채널·비공개 포함, 워크스페이스가 둘이면 bot:<team_id>) · 비우면 위 토큰 칸을 씁니다" },
-      { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "봇 모드 전용 — 채널명·id 를 공백·쉼표로 구분(비우면 봇이 초대된 전체). 예: hai솔루션_front hai솔루션_closing" },
+      { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "모을 채널 — 채널명·id 를 공백·쉼표로 구분(비우면 전체). 검색 모드(개인 연결)·봇 모드 **둘 다** 적용됩니다(#2243)" },
       { key: "noise_exclude", env: "SLACK_NOISE_EXCLUDE", secret: false, label: "제외 채널", hint: "수집에서 제외할 채널명을 공백·쉼표로 구분해 입력 (예: alerts monitoring) — 모니터링·알람 등 메시지가 많은 봇 채널에 사용합니다." },
       { key: "backfill_since", env: "SLACK_BACKFILL_SINCE", secret: false, label: "최초 수집 시작일", hint: "이 날짜 이후의 자료만 수집합니다 (YYYY-MM-DD, 비우면 활동이 있는 과거 전체를 자동 수집)" },
     ],

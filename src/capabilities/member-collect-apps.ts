@@ -14,6 +14,7 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { LINEAR_APP_KIND } from "../org/credentials/linear-oauth.js";
 import { startLinearAppConsent, completeLinearAppInstall, linearAppReady } from "../org/credentials/oauth-broker.js";
+import { collectScopeOptions, scopeOptionsSupported } from "../org/collect-scope-options.js";
 
 /** 토글이 만드는 인스턴스 키 — 관리탭에서 손으로 만든 것('_' 등)과 겹치지 않게 고정 이름. */
 export const MEMBER_INSTANCE = "lively-member";
@@ -112,4 +113,22 @@ const orgLinearOauthComplete: Capability = {
   },
 };
 
-export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities, ...githubCollectCapabilities, ...gitlabCollectCapabilities, ...linearCollectCapabilities, orgLinearCollectConnect, orgLinearOauthComplete];
+// 범위 선택지(#2243) — «외부 앱에 들어가지 않고» 우리 화면에서 토글로 고르게 하는 목록.
+//  그 사람의 자격으로 조회하고, 실패는 freeform 으로 떨어뜨린다(막다른 길 금지 — collect-scope-options.ts 머리말).
+const orgCollectScopeOptions: Capability = {
+  name: "org_collect_scope_options", title: "모아 두기 범위 선택지 조회",
+  description:
+    "그 앱에서 «고를 수 있는 것»(저장소·프로젝트·팀·파일·리스트·채널)을 **호출자 본인의 연결**로 조회한다 — 화면이 토글 목록으로 그린다. " +
+    "지원: github(저장소) · gitlab(프로젝트) · linear(팀) · figma(파일, 팀 id 를 넣은 경우) · clickup(리스트) · slack(공개 채널). " +
+    "읽기 전용이고 권한을 넓히지 않는다. 목록을 못 만들면 에러가 아니라 freeform=true + note 로 답한다(화면은 텍스트 입력으로 떨어진다).",
+  scope: "admin", input: {},
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/:system/collect/options"], parse: (req) => ({ system: String((req.params as Record<string, string>)?.system ?? "") }) }] },
+  handler: async (input, user) => {
+    if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+    const system = String((input as { system?: unknown })?.system ?? "").toLowerCase();
+    if (!scopeOptionsSupported(system)) throw new HttpError(404, `'${system}' 은 범위 목록 조회를 지원하지 않습니다`);
+    return collectScopeOptions(system, user.userId);
+  },
+};
+
+export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities, ...githubCollectCapabilities, ...gitlabCollectCapabilities, ...linearCollectCapabilities, orgLinearCollectConnect, orgLinearOauthComplete, orgCollectScopeOptions];

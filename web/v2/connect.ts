@@ -485,7 +485,17 @@ function slackTeamCollectCard(onState: CollectState): HTMLElement {
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
     };
-    panel.set(chk, chk.checked ? '켜짐' : '꺼짐', notes, []);
+    //  #2243 — 채널도 여기서 고른다. 종전엔 관리탭 수집기 설정에만 있었고, 검색 모드(개인 연결)에는 포함 지정 자체가 없었다.
+    const chanExtra = s.search && s.search.enabled
+      ? [scopeChooser('slack', { channels: String(s.channels ?? '') }, true, async (sc) => {
+          try {
+            await api('/api/ui/org/slack/collect', { method: 'POST', body: JSON.stringify({ enabled: true, channels: sc.channels ?? '' }) });
+            toast(String(sc.channels ?? '').trim() ? '모을 채널을 저장했어요' : '전체 공개 채널을 모읍니다');
+          } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+          await paint();
+        })]
+      : [];
+    panel.set(chk, chk.checked ? '켜짐' : '꺼짐', notes, chanExtra);
   };
   void paint();
   return box;
@@ -525,6 +535,82 @@ export function figmaScopeOf(text: string): { file_keys?: string; team_ids?: str
   if (teams.length) out.team_ids = teams.join(' ');
   return out;
 }
+/**
+ * 범위 고르기(#2243) — **외부 앱에 들어가지 않고** 우리 화면에서 토글로 고른다.
+ *
+ *  왜: 범위의 최소 단위(저장소·프로젝트·팀·파일·리스트·채널)를 동의 화면에서 고르게 해 주는 앱은 셋뿐이라
+ *   (노션·GitHub·ClickUp OAuth), 나머지는 사용자가 `owner/repo`·팀 키를 **외워서 손으로 쳐야** 했다
+ *   (조사: collector-scope-personalization-per-app-2243). 그 사람의 자격으로 목록을 받아 체크박스로 준다.
+ *  ⚠ 목록을 못 만드는 경우가 **정상적으로 존재한다**(피그마는 팀 id 없이 열거 불가 — 상류 제약).
+ *   그때는 에러가 아니라 종전 텍스트 칸으로 떨어진다. 목록이 없다고 범위를 못 정하면 그게 막다른 길이다.
+ */
+function scopeChooser(app: string, cur: Record<string, string>, enabled: boolean,
+  save: (scope: Record<string, string>) => Promise<void>): HTMLElement {
+  const host = el('div', { class: 'cn-pick' }, srow('범위', '고를 수 있는 목록을 불러오는 중…', [], 'note'));
+  const vals = (v: unknown): string[] => String(v ?? '').split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  void (async () => {
+    let o: any = null;
+    try { o = await api(`/api/ui/org/${app}/collect/options`); } catch (_) { o = null; }
+    host.replaceChildren();
+    const SF = SCOPE_FIELD[app];
+    //  ── 목록을 못 만들었다 → 이유를 말하고 텍스트 칸으로(그 앱에 칸이 있으면).
+    if (!o || o.freeform || !Array.isArray(o.options) || o.options.length === 0) {
+      if (o && o.note) host.append(srow('', String(o.note), [], 'note'));
+      if (!SF) return;
+      const inp = el('input', { type: 'text', class: 'cn-scope-in', value: SF.keys.map((k) => cur[k]).filter(Boolean).join(' '), placeholder: SF.ph }) as HTMLInputElement;
+      const btn = el('button', { class: 'btn btn-sm', type: 'button', text: enabled ? '범위 저장' : '이 범위로 켜기', onclick: async () => {
+        const sc = SF.parse(inp.value);
+        if (SF.missing && !Object.keys(sc).length) { toast(SF.missing, true); inp.focus(); return; }
+        btn.setAttribute('disabled', 'true');
+        await save(sc);
+      } });
+      host.append(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '범위' }), inp, btn));
+      return;
+    }
+    //  ── 토글 목록.
+    const chosen = new Set(vals(cur[o.key]));
+    const rows: Array<{ id: string; box: HTMLInputElement; row: HTMLElement; text: string }> = [];
+    const list = el('div', { class: 'cn-pick-list' });
+    const count = el('span', { class: 'cn-pick-n' });
+    const picked = (): string[] => rows.filter((r) => r.box.checked).map((r) => r.id);
+    const summary = (): string => {
+      const n = picked().length;
+      if (n > 0) return `${n}개 선택됨`;
+      return o.emptyMeansAll ? `아무것도 안 고르면 전체 ${o.unit}를 모아요` : `모을 ${o.unit}을(를) 하나는 골라 주세요`;
+    };
+    for (const opt of o.options as Array<{ id: string; label: string; hint?: string }>) {
+      const box = el('input', { type: 'checkbox' }) as HTMLInputElement;
+      box.checked = chosen.has(opt.id);
+      box.onchange = () => { count.textContent = summary(); };
+      const row = el('label', { class: 'cn-pick-row' }, box, el('span', { class: 't', text: opt.label }),
+        opt.hint ? el('span', { class: 'h', text: opt.hint }) : null);
+      rows.push({ id: opt.id, box, row, text: (opt.label + ' ' + (opt.hint ?? '')).toLowerCase() });
+      list.append(row);
+    }
+    count.textContent = summary();
+    const bar: HTMLElement[] = [];
+    //  많으면 찾기 칸 — 저장소·채널은 수백 개가 되기도 한다.
+    if (rows.length > 8) {
+      const q = el('input', { type: 'search', class: 'cn-pick-q', placeholder: `${o.unit} 이름으로 찾기`,
+        oninput: () => { const t = q.value.trim().toLowerCase(); for (const r of rows) r.row.style.display = !t || r.text.includes(t) ? '' : 'none'; } }) as HTMLInputElement;
+      bar.push(q);
+    }
+    const save1 = el('button', { class: 'btn btn-sm', type: 'button', text: enabled ? '범위 저장' : '이 범위로 켜기', onclick: async () => {
+      const sel = picked();
+      if (!sel.length && !o.emptyMeansAll) { toast(`모을 ${o.unit}을(를) 하나는 골라 주세요`, true); return; }
+      save1.setAttribute('disabled', 'true');
+      await save({ [o.key]: sel.join(' ') });
+    } });
+    host.append(
+      el('div', { class: 'cn-pick-hd' }, el('span', { class: 'k', text: '범위' }), ...bar, count,
+        el('button', { class: 'btn-text', type: 'button', text: '전체', onclick: () => { for (const r of rows) if (r.row.style.display !== 'none') r.box.checked = true; count.textContent = summary(); } }),
+        el('button', { class: 'btn-text', type: 'button', text: '해제', onclick: () => { for (const r of rows) r.box.checked = false; count.textContent = summary(); } })),
+      list,
+      el('div', { class: 'cn-pick-ft' }, save1));
+  })();
+  return host;
+}
+
 function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement {
   const T = MEMBER_COLLECT_TEXT[key];
   const panel = collectPanel(T.desc, onState, T.where);
@@ -542,25 +628,17 @@ function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement
         + (s.member_connected === false ? ' 그 토큰이 지워졌습니다 — 껐다 켜면 내 토큰으로 바뀝니다.' : ''));
     } else notes.push(T.off);
     const extra: HTMLElement[] = [];
+    //  #2243 — 범위는 목록에서 토글로 고른다(못 만들면 텍스트 칸으로 떨어진다).
+    extra.push(scopeChooser(key, (s.scope ?? {}) as Record<string, string>, !!s.enabled, async (sc) => {
+      try {
+        const r: any = await post({ enabled: true, scope: sc });
+        if (r && r.ok) toast(s.enabled ? '범위를 저장했어요' : '모아 두기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다');
+        else toast((r && r.message) || '바꾸지 못했습니다', true);
+      } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+      await paint();
+    }));
     const SF = SCOPE_FIELD[key];
-    if (SF) {
-      //  범위 — 켜져 있어도 여기서 바꾼다(enabled:true + scope). 서버가 프리셋 필드에 있는 키만 저장한다.
-      const cur = SF.keys.map((k) => s.scope && s.scope[k]).filter(Boolean).join(' ');
-      const inp = el('input', { type: 'text', class: 'cn-scope-in', value: cur, placeholder: SF.ph }) as HTMLInputElement;
-      const save = el('button', { class: 'btn btn-sm', type: 'button', text: s.enabled ? '범위 저장' : '이 범위로 켜기', onclick: async () => {
-        const sc = SF.parse(inp.value);
-        if (SF.missing && !Object.keys(sc).length) { toast(SF.missing, true); inp.focus(); return; }
-        save.setAttribute('disabled', 'true');
-        try {
-          const r: any = await post({ enabled: true, scope: sc });
-          if (r && r.ok) toast(s.enabled ? '범위를 저장했어요' : '모아 두기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다');
-          else toast((r && r.message) || '바꾸지 못했습니다', true);
-        } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
-        await paint();
-      } });
-      extra.push(el('div', { class: 'cn-scope-row' }, el('span', { class: 'k', text: '범위' }), inp, save));
-      if (s.needs_scope && SF.note) notes.push(SF.note);
-    }
+    if (s.needs_scope && SF && SF.note) notes.push(SF.note);
     //  #2247 Linear — 라이블리 Linear OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 관리자에게 등록 칸을 먼저 낸다.
     //   값은 이 화면에서 금고(조직 슬롯 linear_app/oauth:client)로 바로 간다 — 채팅·문서에 붙여넣을 일이 없다.
     if (key === 'linear' && s.app_ready === false) {

@@ -1856,3 +1856,18 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .cn-scope-row .cn-scope-in { flex: 1 1 auto; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
 .cn-scope-row .btn { flex: 0 0 auto; }
 @media (max-width: 900px) { .cn-scope-row { flex-wrap: wrap; } .cn-scope-row .cn-scope-in { flex-basis: 100%; } }
+
+/* ── #2243 범위 고르기 — 외부 앱에 들어가지 않고 목록에서 토글로 고른다 ── */
+.cn-pick { display: flex; flex-direction: column; width: 100%; gap: 8px; }
+.cn-pick-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cn-pick-hd .k { color: var(--muted-head); font-weight: 600; font-size: 12.5px; min-width: 40px; }
+.cn-pick-n { color: var(--muted-2); font-size: 12.5px; margin-left: auto; }
+.cn-pick-q { flex: 1 1 160px; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; }
+.cn-pick-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.cn-pick-row { display: flex; align-items: center; gap: 9px; padding: 7px 11px; cursor: pointer; font-size: 13px; }
+.cn-pick-row + .cn-pick-row { border-top: 1px solid var(--line-row); }
+.cn-pick-row:hover { background: var(--bg-tint-2); }
+.cn-pick-row .t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-pick-row .h { flex: none; color: var(--muted-2); font-size: 11.5px; }
+.cn-pick-ft { display: flex; justify-content: flex-end; }
