@@ -1879,13 +1879,18 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .cn-sect { margin-top: 26px; }
 .cn-sect-h { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .cn-sect-n { width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 800; display: grid; place-items: center; flex: none; }
-.cn-sect-t { font-size: 18px; font-weight: 800; letter-spacing: -.35px; color: var(--ink); }
+/*  ★ h3 는 브라우저 기본 마진(1em)이 살아 있다 — flex 안에선 병합도 안 돼 머리가 64px 로 부푼다(실측). */
+.cn-sect-t { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.35px; color: var(--ink); }
 .cn-sect-s { font-size: 12.5px; color: var(--muted); }
 .cn-sect-a { margin-left: auto; display: flex; gap: 12px; }
 
-/* «하는 일» 한 줄 — 읽기 / 쓰기 / 모아 두기. 줄마다 따로 끄고 켠다. */
+/* «하는 일» 한 줄 — 읽기 / 쓰기 / 모아 두기. 줄마다 따로 끄고 켠다.
+   ★ 간격은 목록(.cn-actlist)의 gap 이 준다 — 종전 `.cn-act + .cn-act { margin-top }` 은 쓰기·모아 두기가
+     각자 <div> 래퍼(비동기로 다시 그려지는 자리) 안에 있어 **인접 선택자가 아예 안 걸렸다**. 그래서 세 카드가
+     0px 로 붙어 한 덩어리로 보였다(원준 실측 2026-08-30). 래퍼는 display:contents 로 레이아웃에서 지운다. */
+.cn-actlist { display: flex; flex-direction: column; gap: 9px; }
+.cn-actlist > div:not(.cn-act) { display: contents; }
 .cn-act { display: flex; align-items: flex-start; gap: 14px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
-.cn-act + .cn-act { margin-top: 9px; }
 .cn-act.on { border-color: var(--line-net-2); background: var(--bg-tint); }
 /* ★쓰기만 색이 다르다 — «내 이름으로 남는다»는 이 화면에서 유일하게 되돌릴 수 없는 것이다. */
 .cn-act.write { border: 1px solid var(--warn-line); background: var(--warn-bg); }
