@@ -190,8 +190,32 @@ const PROVIDERS: Record<string, (memberId: string) => Promise<ScopeOptionsResult
   figma: figmaOptions, clickup: clickupOptions, slack: slackOptions,
 };
 
+/**
+ * 앱별 «단위» 정의 — 조회가 실패해도 화면이 계속 저장할 수 있게, 실패 경로도 **같은 scope key** 를 돌려준다.
+ * (여기서 key 를 비우면 화면은 텍스트를 받아 놓고 어디에도 못 넣는 막다른 길이 된다.)
+ */
+const UNITS: Record<string, { key: string; unit: string; emptyMeansAll: boolean }> = {
+  github: { key: "repos", unit: "저장소", emptyMeansAll: false },
+  gitlab: { key: "projects", unit: "프로젝트", emptyMeansAll: false },
+  linear: { key: "teams", unit: "팀", emptyMeansAll: true },
+  figma: { key: "file_keys", unit: "파일", emptyMeansAll: false },
+  clickup: { key: "include_list_ids", unit: "리스트", emptyMeansAll: true },
+  slack: { key: "channels", unit: "채널", emptyMeansAll: true },
+};
+
 export function scopeOptionsSupported(system: string): boolean {
   return Object.prototype.hasOwnProperty.call(PROVIDERS, String(system ?? "").toLowerCase());
+}
+
+/** 네트워크 실패(`fetch failed`)는 사람에게 아무 뜻이 없다 — 못 닿은 곳을 말해 준다. */
+export function describeOptionsError(system: string, e: unknown): string {
+  const msg = (e as Error)?.message ?? String(e);
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|network/i.test(msg)) {
+    return system === "gitlab"
+      ? "GitLab 서버에 닿지 못했습니다 — 사내망 전용 주소면 라이블리 서버에서는 목록을 못 불러옵니다. 아래에 직접 적어 주세요."
+      : "서버에 닿지 못했습니다 — 잠시 뒤 다시 시도하거나, 아래에 직접 적어 주세요.";
+  }
+  return `목록을 불러오지 못했습니다 — ${msg}`;
 }
 
 /**
@@ -203,10 +227,10 @@ export async function collectScopeOptions(system: string, memberId: string): Pro
   const key = String(system ?? "").toLowerCase();
   const fn = PROVIDERS[key];
   if (!fn) return free("", "", "이 앱은 목록 조회를 지원하지 않습니다.");
+  const u = UNITS[key] ?? { key: "", unit: "", emptyMeansAll: false };
   try {
     return await fn(memberId);
   } catch (e) {
-    const unit = key === "slack" ? "채널" : key === "linear" ? "팀" : key === "clickup" ? "리스트" : key === "figma" ? "파일" : key === "gitlab" ? "프로젝트" : "저장소";
-    return free("", unit, `목록을 불러오지 못했습니다 — ${(e as Error).message}`);
+    return free(u.key, u.unit, describeOptionsError(key, e), u.emptyMeansAll);
   }
 }

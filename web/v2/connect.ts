@@ -365,8 +365,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const collectDesc = unit ? `내가 고른 ${unit}만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.` : '내가 고른 것만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.';
   let collect: HTMLElement;
   //  #1881 슬랙 — 연결이 곧 토큰이라 켜면 수집기가 그 연결로 돈다. 계정이 먼저.
+  //  ⚠ 모아 두기를 «바로 쓰기» 축에 매달지 않는다 — 그 축의 판정(v.connected)과 수집기의 실제 상태는 근거가 달라서
+  //   어긋난다(#2202 실측: 수집기가 돌고 있는데 화면은 «꺼짐»이라 채널 고르기에 닿을 수조차 없었다).
+  //   카드가 /org/slack/collect 의 me_connected·enabled 를 직접 읽어 스스로 판정한다.
   if (svc.key === 'slack') collect = !isAdmin ? quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 공개 채널이 함께 보는 자료함에 모여요.', onCollect)
-    : st !== 'on' ? quietCollectPanel(collectDesc, '꺼짐', '위에서 바로 쓰기(계정 연결)를 먼저 켜면 여기서 켤 수 있어요 — 내 연결로 공개 채널을 읽어 와요.', onCollect)
     : slackTeamCollectCard(onCollect);
   //  #1881 노션 — 개인 연결(MCP)과 무관. 토글이 여는 노션 화면(페이지 선택)이 곧 연결이자 범위다.
   else if (svc.key === 'notion') collect = isAdmin ? notionTeamCollectCard(onCollect)
@@ -466,17 +468,23 @@ function slackTeamCollectCard(onState: CollectState): HTMLElement {
     catch (e) { body.replaceChildren(errorNote(e, '수집 상태를 불러오지 못했습니다')); return; }
     const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
     chk.checked = !!(s.search && s.search.enabled);
+    //  아직 아무도 안 켰고 내 Slack 연결도 없다 → 켤 수 없다고 카드가 직접 말한다(빈 스위치를 켜 봐야 서버가 거절한다).
+    const noCred = !chk.checked && s.me_connected === false;
+    if (noCred) chk.disabled = true;
     const notes: string[] = [];
-    if (s.search && s.search.enabled) {
+    if (noCred) {
+      notes.push('위에서 바로 쓰기(계정 연결)를 먼저 켜 주세요 — 내 Slack 연결로 공개 채널을 읽어 옵니다.');
+    } else if (s.search && s.search.enabled) {
       notes.push((s.search.member ? `${s.search.member} 님의 연결로 모으고 있어요.` : '모으고 있어요.')
         + (s.search.member_connected === false ? ' 그 연결이 끊겼습니다 — 껐다 켜면 내 연결로 바뀝니다.' : ''));
     } else {
       notes.push('켜면 내 Slack 연결로 공개 채널을 읽어 옵니다. 팀원 모두의 AI가 그 자료를 찾아볼 수 있어요.');
     }
-    notes.push(s.bot && s.bot.available
+    if (!noCred) notes.push(s.bot && s.bot.available
       ? (s.bot.enabled ? '비공개 채널도 모으려면 그 채널에서 `/invite @Lively` 를 입력하세요 — 초대된 채널만 읽습니다.'
                        : '비공개 채널은 켜면 함께 모읍니다 — 그 채널에서 `/invite @Lively` 로 초대한 것만.')
       : '비공개 채널까지 모으려면 Lively 봇이 필요해요 — [다시 연결]하면 봇이 함께 설치됩니다.');
+
     chk.onchange = async () => {
       chk.disabled = true;
       try {
