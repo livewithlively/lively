@@ -4104,7 +4104,7 @@
   "rest": [
    "POST /api/ui/org/slack/collect"
   ],
-  "input_hash": "2551457e5b831803"
+  "input_hash": "0a4c61f36e8ea201"
  },
  {
   "name": "org_slack_app_manifest",
@@ -4197,6 +4197,26 @@
   "input_hash": "3341637643557f3f"
  },
  {
+  "name": "org_app_tools",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/:system/tools"
+  ],
+  "input_hash": "c3c5f68ce3ee9ea2"
+ },
+ {
+  "name": "org_app_tools_set_write",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/:system/tools/write"
+  ],
+  "input_hash": "86e96ecaa6655fcd"
+ },
+ {
   "name": "org_figma_collect",
   "scope": "admin",
   "mcp": true,
@@ -4214,7 +4234,7 @@
   "rest": [
    "POST /api/ui/org/figma/collect"
   ],
-  "input_hash": "cd6cbcc688e521b5"
+  "input_hash": "26e355332def616d"
  },
  {
   "name": "org_clickup_collect",
@@ -4234,7 +4254,7 @@
   "rest": [
    "POST /api/ui/org/clickup/collect"
   ],
-  "input_hash": "bd612ab0c3942d49"
+  "input_hash": "7be457c555b3532c"
  },
  {
   "name": "org_github_collect",
@@ -4254,7 +4274,7 @@
   "rest": [
    "POST /api/ui/org/github/collect"
   ],
-  "input_hash": "629c0c24c7f24963"
+  "input_hash": "d32f2391669423cb"
  },
  {
   "name": "org_gitlab_collect",
@@ -4274,7 +4294,7 @@
   "rest": [
    "POST /api/ui/org/gitlab/collect"
   ],
-  "input_hash": "d895fcc91eb134f7"
+  "input_hash": "7fbb18feb3d790a5"
  },
  {
   "name": "org_linear_collect",
@@ -4294,7 +4314,7 @@
   "rest": [
    "POST /api/ui/org/linear/collect"
   ],
-  "input_hash": "dd7b58fd833afe7b"
+  "input_hash": "50798dbce4c3f367"
  },
  {
   "name": "org_linear_collect_connect",

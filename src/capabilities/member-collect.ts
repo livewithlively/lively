@@ -48,6 +48,12 @@ export interface MemberCollectSpec {
   requireScope?: boolean;
   /** needs_scope 문장. */
   scopeHint?: string;
+  /**
+   * #2243 3차 — 범위가 아니라 «어떻게 모을지»인 config 키(무엇을 include_prs · 언제부터 backfill_since).
+   * scopeKeys 와 나눠 두는 이유: scopeSatisfied 는 scopeKeys 만 본다. 여기 값이 찼다고 «범위를 골랐다»가 되면
+   * 저장소를 하나도 안 고른 채로 수집기가 켜진다(github·figma 는 그러면 전량을 훑는다).
+   */
+  optionKeys?: string[];
   /** 켜진 뒤 한 번 더 할 일(예 피그마 증류기 준비). best-effort — 실패가 토글을 되돌리면 안 된다. */
   onEnabled?: (ctx: { actor: string; source: string }) => Promise<void>;
   /** 토글 설명에 붙는 한 줄(무엇이 어디로 가는지). */
@@ -67,6 +73,22 @@ export interface MemberCollectState {
   scope: Record<string, string>;
   /** 범위가 필요한데 비어 있다(켜기 전·후 모두 의미 있음). */
   needs_scope: boolean;
+  /**
+   * #2243 3차 — 얼마나 자주 다시 읽는지(초). 종전엔 관리탭에만 있어 앱 상세는 «30분»을 글로만 말했다.
+   * DB(org_collector.sync_interval_sec)·크론(collector-<id>)은 원래 수집기별이었고, 막혀 있던 건 이 멤버 창구뿐이다.
+   */
+  sync_interval_sec: number | null;
+  /** 마지막으로 실제 읽은 때 — «켰는데 뭐가 되고 있는지 모르겠다»에 답하는 값. */
+  last_run: { status: string; started_at: string; finished_at: string | null } | null;
+}
+
+/** 화면이 고르게 하는 주기 — 초. 관리탭 드롭다운(300~86400)과 같은 눈금에 10분 아래를 하나 더 뒀다. */
+export const COLLECT_INTERVALS = [600, 1800, 3600, 10800, 86400] as const;
+/** 서버가 받아 주는 범위 — DB CHECK(60~604800)보다 좁게 잡는다(사람이 고르는 값이라). */
+export function normalizeInterval(v: unknown): number | null {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return null;
+  return COLLECT_INTERVALS.includes(n as (typeof COLLECT_INTERVALS)[number]) ? n : null;
 }
 
 /** 범위가 찼는가 — 순수. scopeKeys 가 없거나 requireScope 가 아니면 늘 참. */
@@ -88,16 +110,20 @@ function tokenSourceMember(c: CollectorView | undefined): string | null {
   const ts = c?.config?.token_source ?? "";
   return ts.startsWith("member:") ? ts.slice("member:".length) : null;
 }
+/** 화면이 되돌려 보낼 수 있는 config 키 전부 — 범위 + 옵션. */
+function memberKeys(spec: Pick<MemberCollectSpec, "scopeKeys" | "optionKeys">): string[] {
+  return [...(spec.scopeKeys ?? []), ...(spec.optionKeys ?? [])];
+}
 function pickScope(spec: MemberCollectSpec, config: Record<string, unknown> | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const k of spec.scopeKeys ?? []) { const v = config?.[k]; if (typeof v === "string" && v) out[k] = v; }
+  for (const k of memberKeys(spec)) { const v = config?.[k]; if (typeof v === "string" && v) out[k] = v; }
   return out;
 }
 /** 입력 scope 를 문자열 맵으로 — 배열은 공백 구분으로 합친다(피그마 file_keys 는 공백·줄바꿈 구분 규약). */
-export function normalizeScopeInput(spec: Pick<MemberCollectSpec, "scopeKeys">, raw: unknown): Record<string, string> {
+export function normalizeScopeInput(spec: Pick<MemberCollectSpec, "scopeKeys" | "optionKeys">, raw: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-  for (const k of spec.scopeKeys ?? []) {
+  for (const k of memberKeys(spec)) {
     const v = (raw as Record<string, unknown>)[k];
     if (v === undefined || v === null) continue;
     out[k] = Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean).join(" ") : String(v).trim();
@@ -127,6 +153,10 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
       member_connected: inst?.enabled && member ? await connected(member) : null,
       me_connected: await connected(callerId),
       scope, needs_scope: !scopeSatisfied(spec, inst?.config ?? {}),
+      sync_interval_sec: inst?.sync_interval_sec ?? null,
+      last_run: inst?.last_run
+        ? { status: inst.last_run.status, started_at: inst.last_run.started_at, finished_at: inst.last_run.finished_at }
+        : null,
     };
   };
 
@@ -154,11 +184,15 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
       enabled: z.boolean().describe("true=켜기(내 자격으로) · false=끄기"),
       scope: z.record(z.union([z.string(), z.array(z.string())])).optional().describe(
         spec.scopeKeys?.length ? `범위(${spec.scopeKeys.join(" | ")}) — 켜면서 함께 저장. 켜진 뒤 범위만 바꿀 때도 enabled:true 와 함께` : "이 앱은 범위 입력이 없다"),
+      sync_interval_sec: z.number().int().optional().describe(
+        `얼마나 자주 다시 읽을지(초). 고를 수 있는 값: ${COLLECT_INTERVALS.join(" | ")}. 생략하면 지금 주기를 유지한다`),
     },
     expose: { mcp: true, rest: [{ method: "POST", paths: [`/api/ui/org/${spec.system}/collect`], parse: (req) => req.body ?? {} }] },
     handler: async (input, user, ctx) => {
       if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
-      const i = (input ?? {}) as { enabled?: unknown; scope?: unknown };
+      const i = (input ?? {}) as { enabled?: unknown; scope?: unknown; sync_interval_sec?: unknown };
+      //  주기는 «켜기»와 무관하게 저장된다 — 값이 안 오면 undefined 로 두어 upsert 가 지금 값을 유지하게 한다.
+      const interval = i.sync_interval_sec === undefined ? undefined : (normalizeInterval(i.sync_interval_sec) ?? undefined);
       const actor = user.userId;
       const source = ctx?.source ?? "web";
       const inst = find(await listCollectors());
@@ -174,7 +208,10 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
       });
 
       if (plan === "disable") {
-        if (inst?.enabled) { await upsertCollector({ id: inst.id, enabled: false }, actor, source); resetConnectorConfigCache(); }
+        if (inst?.enabled || (interval && inst)) {
+          await upsertCollector({ id: inst!.id, enabled: false, ...(interval ? { sync_interval_sec: interval } : {}) }, actor, source);
+          resetConnectorConfigCache();
+        }
         return { ok: true, enabled: false, state: await stateOf(actor) };
       }
       if (plan === "needs_connect") {
@@ -198,6 +235,7 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
         label: inst?.label ?? spec.label, enabled: true,
         config: { ...extra, ...scopeIn, token_source: `member:${actor}` },
         note: inst?.note ?? spec.note,
+        ...(interval ? { sync_interval_sec: interval } : {}),
       }, actor, source);
       resetConnectorConfigCache();
       if (spec.onEnabled) {

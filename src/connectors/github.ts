@@ -20,6 +20,7 @@
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { GITHUB_USER_AGENT } from "../org/credentials/github-app.js";
+import { sinceFloor } from "./sync-cursor.js";
 
 const PAGE_SIZE = 100;
 /** 엔드포인트·저장소당 한 run 에 받는 최대 페이지 — 오름차순 커서라 잘려도 다음 run 이 이어간다. */
@@ -206,8 +207,10 @@ export const githubConnector: Connector = {
     }
     const includePrs = on(cfg.include_prs, true);
     const includeReleases = on(cfg.include_releases, true);
-    const since = opts?.since ? `&since=${encodeURIComponent(opts.since)}` : "";
-    const sinceMs = opts?.since ? Date.parse(opts.since) : NaN;
+    //  #2243 3차 — 설정한 «언제부터»가 커서보다 과거면 커서가 이긴다(sinceFloor).
+    const sinceIso = sinceFloor(opts?.since, cfg.backfill_since);
+    const since = sinceIso ? `&since=${encodeURIComponent(sinceIso)}` : "";
+    const sinceMs = sinceIso ? Date.parse(sinceIso) : NaN;
 
     for (const repo of repos) {
       const rp = `${base}/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}`;

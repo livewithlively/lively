@@ -57,6 +57,7 @@ import { notionConnectCapabilities } from "./notion-connect.js";
 import { githubConnectCapabilities } from "./github-connect.js";
 import { googleConnectCapabilities } from "./google-connect.js";
 import { memberCollectAppCapabilities } from "./member-collect-apps.js";
+import { orgAppTools, orgAppToolsSetWrite } from "./app-tools.js";
 import { appInstanceCapabilities } from "./app-instances.js";
 import { appNotificationCapabilities } from "./app-notifications.js";
 import { channelPolicyCapabilities } from "./channel-policy.js";
@@ -129,6 +130,7 @@ const all: Capability[] = [
   ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
   ...notionConnectCapabilities,
   ...githubConnectCapabilities, // #1881: 노션 "팀 자료로 모으기" — org_notion_collect(상태)/set(토글=동의 시작)/connect(페이지 더 고르기)/oauth_complete(CP 릴레이). 동의 화면의 페이지 선택이 곧 수집 범위, 수집기는 token_source=org 로 조직 슬롯을 가리킨다. 토큰 복사 0.
+  orgAppTools, orgAppToolsSetWrite, // #2243 3차: 앱 상세가 «AI가 내 계정으로 하는 일»을 읽기/쓰기 동사로 보여 주는 창구(org_tool.level=L2 가 쓰기).
   ...memberCollectAppCapabilities, // #2247: 피그마·ClickUp "모아 두기" — org_{figma,clickup}_collect(상태)/set(admin 토글). 켠 사람의 금고 토큰(figma_token·clickup_token)을 token_source=member:<나> 로 가리키는 수집기 인스턴스(lively-member). 피그마는 범위(파일 링크/팀 id) 없이는 needs_scope 로 켜지 않는다.
   ...googleConnectCapabilities, // #1881 G5: 구글 "팀 자료로 모으기" — org_google_collect(상태)/set(토글=동의 시작)/connect(범위 넓히기)/oauth_complete(CP 릴레이). 수집기는 token_source=member:<켠 관리자> 로 그 사람의 연결을 가리킨다(구글엔 봇 개념이 없어 조직 토큰이라는 게 없다). ★Gmail 은 제한범위라 명시적으로 골라야 켜진다 — 안 쓰는 서비스를 끼우면 미검증 100명 한도를 되돌릴 수 없게 태운다.
   ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.

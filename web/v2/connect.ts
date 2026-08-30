@@ -184,46 +184,140 @@ const ICON_PATH: Record<string, string> = {
   box: 'M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4',
   check: 'M5 12l4 4L19 7',
   x: 'M6 6l12 12M18 6L6 18',
+  //  #2243 3차 — «하는 일» 세 동사와 «보는 사람» 두 축.
+  eye: 'M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z M12 9.4a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2Z',
+  pen: 'M4.5 19.5h4L20 8l-4-4L4.5 15.5z M14.5 5.5l4 4',
+  usr: 'M12 4.4a3.6 3.6 0 1 1 0 7.2 3.6 3.6 0 0 1 0-7.2Z M4.5 20c0-3.8 3.4-6 7.5-6s7.5 2.2 7.5 6',
+  team: 'M9 5.3a3.2 3.2 0 1 1 0 6.4 3.2 3.2 0 0 1 0-6.4Z M2.5 19.5c0-3.4 2.9-5.4 6.5-5.4s6.5 2 6.5 5.4 M16.5 6.6a3.2 3.2 0 0 1 0 6.3 M18 14.6c2.2.6 3.5 2.3 3.5 4.9',
 };
 const icon = (k: string): SVGElement => sv('svg', { class: 'v2-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: ICON_PATH[k] })) as SVGElement;
 
 /** 설정 줄 — «라벨 | 값 | 동작». 값은 문자열(uiText)이나 노드. */
+// ══ #2243 3차 «다듬은 안 B» — 상세 화면 부품 ═══════════════════════════════════════════════
+//  종전 상세는 [바로 쓰기] [모아 두기] 두 패널이 같은 모양이라 «뭐가 다른지»를 배울 단서가 없었다.
+//  이제 화면은 세 부분이다: ① AI가 하는 일(읽기·쓰기·모아 두기 — 동사 한 목록) ② 자료함에 모아 두는 것
+//  (무엇을·얼마나 자주·언제부터·어디서) ③ 보는 사람. 제목은 질문이 아니라 서술문(원준 2026-08-30).
+
+/** 서술형 섹션 머리 — «① AI가 내 GitHub 계정으로 하는 일». 오른쪽에 전체/해제 같은 동작을 달 수 있다. */
+function sectHead(n: string, title: string, sub = '', acts: HTMLElement[] = []): HTMLElement {
+  return el('div', { class: 'cn-sect-h' },
+    el('span', { class: 'cn-sect-n', 'aria-hidden': 'true', text: n }),
+    el('h3', { class: 'cn-sect-t', text: title }),
+    ...(sub ? [el('span', { class: 'cn-sect-s', text: sub })] : []),
+    ...(acts.length ? [el('span', { class: 'cn-sect-a' }, ...acts)] : []));
+}
+
+export interface ActRow {
+  kind: 'read' | 'write' | 'collect';
+  verb: string;             // «읽기» · «쓰기 — 내 이름으로 GitHub에 남습니다»
+  detail: Node[];           // 그 줄이 실제로 무엇을 하는지(굵은 조각 포함)
+  on: boolean;
+  pill: { text: string; cls: string; ic?: string };
+  sw?: HTMLInputElement;    // 없으면 스위치 자리를 비운다(상태만 보여 주는 줄)
+  sub?: HTMLElement;        // 쓰기의 «쓰기 전에 물어보기» 같은 딸린 줄
+}
+
+/** «하는 일» 한 줄. 쓰기만 색이 다르다 — 이 화면에서 유일하게 되돌릴 수 없는 것이라서. */
+function actRow(a: ActRow): HTMLElement {
+  const icName = a.kind === 'read' ? 'eye' : a.kind === 'write' ? 'pen' : 'box';
+  return el('div', {
+    class: 'cn-act cn-act-' + a.kind + (a.kind === 'write' ? ' write' : '') + (a.on ? ' on' : ' off')
+      + (a.kind === 'collect' ? ' collect' : ''),
+  },
+    el('span', { class: 'cn-act-ic', 'aria-hidden': 'true' }, icon(icName)),
+    el('span', { class: 'cn-act-tx' },
+      el('span', { class: 'cn-act-v', text: a.verb }),
+      el('span', { class: 'cn-act-m' }, ...a.detail),
+      ...(a.sub ? [a.sub] : [])),
+    el('span', { class: 'cn-act-rt' },
+      ...(a.sw ? [a.sw] : []),
+      el('span', { class: 'cn-pill ' + a.pill.cls }, ...(a.pill.ic ? [icon(a.pill.ic)] : []), el('span', { text: a.pill.text }))));
+}
+
+/** 개인화 설정 한 줄 — 왼쪽에 «무엇을» 같은 이름과 한 줄 설명, 오른쪽에 컨트롤. */
+function setRow(label: string, note: string, body: Node[], hint = ''): HTMLElement {
+  return el('div', { class: 'cn-set' },
+    el('span', { class: 'cn-set-lb' }, el('b', { text: label }), ...(note ? [el('i', { text: note })] : [])),
+    el('span', { class: 'cn-set-bd' }, ...body, ...(hint ? [el('span', { class: 'cn-set-hint', text: hint })] : [])));
+}
+
+/** 세그먼트 — 주기·기간처럼 «하나만 고르는» 값. 값은 opts 의 id. */
+function segment(opts: Array<{ id: string; label: string }>, cur: string, onPick: (id: string) => void): HTMLElement {
+  const wrap = el('div', { class: 'cn-seg', role: 'radiogroup' });
+  const btns: HTMLButtonElement[] = [];
+  for (const o of opts) {
+    const b = el('button', {
+      type: 'button', class: o.id === cur ? 'on' : '', role: 'radio',
+      'aria-checked': o.id === cur ? 'true' : 'false', text: o.label,
+      onclick: () => { for (const x of btns) { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-checked', on ? 'true' : 'false'); } onPick(o.id); },
+    }) as HTMLButtonElement;
+    btns.push(b); wrap.appendChild(b);
+  }
+  return wrap;
+}
+
+/** 종류 칩 — 여러 개 고르는 값(이슈 대화·PR 리뷰 대화…). 체크박스를 품어 키보드로도 켜진다. */
+function chipSet(opts: Array<{ id: string; label: string }>, cur: Set<string>, onChange: (picked: Set<string>) => void): HTMLElement {
+  const wrap = el('div', { class: 'cn-chips' });
+  for (const o of opts) {
+    const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    cb.checked = cur.has(o.id);
+    const lab = el('label', { class: 'cn-chip' + (cb.checked ? ' on' : '') }, cb, el('span', { text: o.label }));
+    cb.onchange = () => {
+      lab.classList.toggle('on', cb.checked);
+      if (cb.checked) cur.add(o.id); else cur.delete(o.id);
+      onChange(cur);
+    };
+    wrap.appendChild(lab);
+  }
+  return wrap;
+}
+
 function srow(k: string, v: string | Node[], acts: HTMLElement[] = [], cls = ''): HTMLElement {
   return el('div', { class: 'cn-srow' + (cls ? ' ' + cls : '') },
     el('span', { class: 'k', text: k }),
     el('span', { class: 'v' }, ...(typeof v === 'string' ? uiText(v) : v)),
     ...acts);
 }
-/** 패널 — 머리(아이콘·제목·설명·오른쪽 슬롯) + 줄들. */
-function panel(id: string, ic: string, title: string, desc: string, right: HTMLElement[], rows: HTMLElement[]): HTMLElement {
-  return el('section', { class: 'cn-panel', id },
-    el('div', { class: 'cn-ph' }, el('span', { class: 'cn-fi', 'aria-hidden': 'true' }, icon(ic)),
-      el('div', { class: 'tt' }, el('div', { class: 't', text: title }), el('div', { class: 's', text: desc })),
-      ...right),
-    ...rows);
-}
-/** 모아 두기 패널 — 앱별 어댑터(slack·notion·google 카드)가 스위치·줄을 채운다. body 는 오류 표시용 자리. */
-function collectPanel(desc: string, onState: CollectState, where = '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요'): { box: HTMLElement; body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
-  const swWrap = el('span', { class: 'cn-swwrap' });
-  const body = el('div', { class: 'cn-prows' }, srow('상태', '불러오는 중…', [], 'note'));
-  const box = panel('cn-collect', 'box', '모아 두기', desc, [swWrap], [body]);
+/**
+ * 모아 두기 얼굴 — #2243 3차로 **두 조각**이 됐다.
+ *  · row      : 섹션 ① «AI가 하는 일»의 «모아 두기» 한 줄(스위치·상태·결과)
+ *  · box      : 섹션 ② «자료함에 모아 두는 것»의 본문(무엇을·얼마나 자주·언제부터·어디서)
+ * 앱별 어댑터(slack·notion·google·memberToken) 넷이 전부 이걸로 만든다 — 한 자리를 고치면 넷이 같이 움직인다.
+ * 종전엔 스위치·«누가 봐요»가 카드마다 따로 있어 화면에 같은 말이 세 번 나왔다.
+ */
+export interface CollectFace { box: HTMLElement; row: HTMLElement }
+function collectFace(onState: CollectState, teamSee = true): CollectFace & { body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
+  const rowHost = el('div');
+  const body = el('div', { class: 'cn-set-bd' }, el('span', { class: 'cn-set-hint', text: '불러오는 중…' }));
+  const box = el('div', { class: 'cn-collect-body', id: 'cn-collect' }, body);
   return {
-    box, body,
+    box, row: rowHost, body,
     set(chk, stateText, notes, extra) {
       chk.className = 'cn-sw'; chk.setAttribute('role', 'switch'); chk.setAttribute('aria-label', '모아 두기');
-      swWrap.replaceChildren(el('span', { class: 'cn-swl', text: stateText }), chk);
-      body.replaceChildren(
-        ...notes.map((t, i) => srow(i === 0 ? '지금' : '', t, [], 'note')),
-        srow('누가 봐요', where),
-        ...(extra.length ? [el('div', { class: 'cn-srow stack' }, ...extra)] : []));
+      rowHost.replaceChildren(actRow({
+        kind: 'collect', verb: '모아 두기',
+        detail: uiText(notes.join(' ')),
+        on: chk.checked, sw: chk,
+        pill: chk.checked && teamSee
+          ? { text: '함께 봐요', cls: 'cn-pill-team', ic: 'team' }
+          : { text: chk.checked ? '나만 봐요' : '아직 꺼짐', cls: chk.checked ? 'cn-pill-me' : 'cn-pill-off', ic: chk.checked ? 'usr' : undefined },
+      }));
+      body.replaceChildren(...extra);
       onState(stateText, chk.checked);
     },
   };
 }
-function quietCollectPanel(desc: string, stateText: string, note: string, onState: CollectState): HTMLElement {
+/** 얼굴이 없는(또는 아직 못 켜는) 앱 — 칸을 비우지 않는다. 틀이 흔들리면 앱마다 다른 화면이 된다. */
+function quietCollectFace(stateText: string, note: string, onState: CollectState): CollectFace {
   onState(stateText, false);
-  return panel('cn-collect', 'box', '모아 두기', desc, [el('span', { class: 'cn-pill-soon', text: stateText })],
-    [srow('', note, [], 'note')]);
+  return {
+    row: actRow({
+      kind: 'collect', verb: '모아 두기', detail: uiText(note), on: false,
+      pill: { text: stateText, cls: 'cn-pill-off' },
+    }),
+    box: el('div', { class: 'cn-collect-body', id: 'cn-collect' }, el('span', { class: 'cn-set-hint', text: note })),
+  };
 }
 
 //  이 앱에 대한 모든 것이 여기 있다 — 두 얼굴의 상태 · 범위 · 방식 · 해제.
@@ -247,7 +341,6 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const account = !!((svc.oauth && v.oauthMap.has(svc.oauth)) || (svc as any).appConnect);
   const isAdmin = hasScope('admin');
   const noun = SCOPE_NOUN[svc.key] || '것';
-  const toolWord = st === 'on' ? '켜짐' : st === 'off' ? '꺼짐' : '준비 중';
 
   //  #2232 — OAuth 릴레이에서 **막 돌아온 탭**이다(main.ts 가 표식을 남긴다). 이 탭은 [허용]을 누르느라 새로 열린 탭이라
   //   사람은 «그래서 이제 뭘 하지?» 상태다(원준님 실측 2026-08-28, Slack). 원래 하던 화면으로 돌아가라고 **글로** 말한다.
@@ -273,132 +366,147 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     } catch (e: any) { toast((e && e.message) || '해제하지 못했습니다', true); reload(); }
   };
 
-  // ── 왼쪽 목차 ──
-  const navSub = el('span', { class: 's', text: `바로 쓰기 ${toolWord}` });
-  const navCollectDot = el('span', { class: 'cn-dot soon', 'aria-hidden': 'true' });
-  const navBtns = new Map<string, HTMLElement>();
-  const jump = (id: string): void => {
-    const t = host.querySelector('#' + id);
-    if (t) (t as HTMLElement).scrollIntoView({ block: 'start' });
-    for (const [k, b] of navBtns) b.classList.toggle('on', k === id);
-  };
-  const navItem = (id: string, ic: string, label: string, dot: HTMLElement | null, cls = ''): HTMLElement => {
-    const b = el('button', { class: 'cn-sn' + (cls ? ' ' + cls : ''), type: 'button', onclick: () => jump(id) }, icon(ic), el('span', { text: label }), dot);
-    navBtns.set(id, b);
-    return b;
-  };
-  const nav = el('nav', { class: 'cn-snav', 'aria-label': svc.label + ' 설정 목차' },
-    el('div', { class: 'cn-snav-app' }, svcTile(svc.key, svc.label, st === 'on'),
-      el('div', { style: 'min-width:0' }, el('b', { text: svc.label }), navSub)),
-    navItem('cn-tool', 'zap', '바로 쓰기', el('span', { class: 'cn-dot' + (st === 'on' ? ' on' : st === 'off' ? ' off' : ' soon'), 'aria-hidden': 'true' })),
-    navItem('cn-collect', 'box', '모아 두기', navCollectDot),
-    navItem('cn-scope', 'check', '범위', null),
-    ...(st === 'on' ? [navItem('cn-dz', 'x', '연결 해제', null, 'danger')] : []));
-  navBtns.get('cn-tool')!.classList.add('on');
+  // ══ 화면 — 세 부분(#2243 3차) ═════════════════════════════════════════════════════════
+  //  ① AI가 내 <앱> 계정으로 하는 일 — 읽기 · 쓰기 · 모아 두기 (동사 한 목록. 종전엔 «바로 쓰기 / 모아 두기»
+  //     두 패널이 같은 모양이라 차이를 배울 단서가 없었다)
+  //  ② 자료함에 모아 두는 것 — 무엇을 · 얼마나 자주 · 언제부터 · 어디서 (전부 사람이 정한다)
+  //  ③ 보는 사람 — 이 화면의 진짜 차이라 표 한 줄이 아니라 비교 카드
+  //  왼쪽 목차는 걷었다 — 칸이 셋이라 목차가 화면보다 길었다.
 
-  // ── 패널 1 · 바로 쓰기 ──
-  const sw = el('input', { type: 'checkbox', class: 'cn-sw', role: 'switch', 'aria-label': '바로 쓰기' }) as HTMLInputElement;
-  const swl = el('span', { class: 'cn-swl', text: toolWord });
+  // ── ① 읽기 줄 — 연결 그 자체(켜면 계정 로그인·토큰 창) ──
+  const sw = el('input', { type: 'checkbox', class: 'cn-sw', role: 'switch', 'aria-label': '읽기' }) as HTMLInputElement;
   sw.checked = st === 'on';
   if (st === 'blocked') sw.disabled = true;
   sw.onchange = () => {
     if (sw.checked) {
       //  켜짐은 서버가 확인해야 켜진 것 — 스위치는 되돌리고, 외부 동의(또는 토큰 창)로 보낸 뒤 돌아오면 다시 그린다.
       sw.checked = false;
-      if (account) { swl.textContent = '동의 기다리는 중'; sw.disabled = true; void startOAuth(svc, reload); }
+      if (account) { sw.disabled = true; void startOAuth(svc, reload); }
       else openToken(svc, reload);
     } else { sw.checked = true; void disconnect(); }
   };
-  const howText = svc.oauth && svc.token ? '계정 로그인 또는 토큰' : (svc.oauth || (svc as any).appConnect) ? '계정 로그인 — 그 서비스에서 동의 한 번' : '토큰 붙여넣기';
-  const howRow = st === 'on'
-    ? srow('방식', [el('span', { text: viaOAuth ? '계정 로그인' : '토큰' }),
-        ...(viaToken && cred?.scope_key ? [el('span', { class: 'h', text: String(cred.scope_key) })] : []),
-        ...(viaToken && cred?.last_used_at ? [el('span', { class: 'h', text: '마지막 사용 ' + relTime(cred.last_used_at) })]
-          : viaToken && cred?.updated_at ? [el('span', { class: 'h', text: '연결 ' + relTime(cred.updated_at) })] : [])],
-      [...(viaOAuth ? [el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 연결', onclick: () => void startOAuth(svc, reload) })] : []),
-       ...(viaToken ? [el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '토큰 교체', onclick: () => openToken(svc, reload) })] : [])])
-    : srow('방식', st === 'blocked' ? howText : [el('span', { text: account ? '계정 로그인' : '토큰 붙여넣기' }),
-        el('span', { class: 'h', text: account ? '켜면 ' + svc.label + ' 화면에서 [허용] 한 번' : '켜면 토큰을 넣는 창이 열려요' })]);
+  const howNow = viaOAuth ? '계정 로그인으로 연결했어요' : viaToken ? '토큰으로 연결했어요' : '';
+  const usedAt = viaToken && cred?.last_used_at ? ` · ${relTime(cred.last_used_at)}에 마지막으로 썼어요`
+    : viaToken && cred?.updated_at ? ` · ${relTime(cred.updated_at)}에 연결했어요` : '';
+  const readDetail = st === 'on'
+    ? `내가 물어볼 때 ${noun}을(를) **내 계정 권한 그대로** 읽어 옵니다. 라이블리에는 남지 않아요. ${howNow}${usedAt}`
+    : st === 'blocked'
+      ? String((svc as any).soon || '라이블리가 이 앱을 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있어요.')
+      : account ? `켜면 ${svc.label} 화면에서 [허용]을 한 번 누르는 것으로 끝나요.` : '켜면 토큰을 넣는 창이 열려요.';
+  const readActs = el('div', { class: 'cn-act-sub', style: 'border-top-color:var(--line-net); color:var(--ink-sub)' });
+  if (st === 'on') {
+    if (viaOAuth) readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 연결', onclick: () => void startOAuth(svc, reload) }));
+    if (viaToken) readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '토큰 교체', onclick: () => openToken(svc, reload) }));
+    if (svc.key === 'slack') readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '대화별 허용 정하기', onclick: () => overlay('Slack 대화별 허용', slackChannelPolicyCard()) }));
+    if (svc.key === 'github') readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '열린 저장소 보기', onclick: () => overlay('GitHub 열린 저장소', githubReposCard()) }));
+  } else if (spec && (spec.help || spec.docUrl) && !account) {
+    readActs.appendChild(el('span', { class: 'h', style: 'margin-left:0', text: String(spec.help || '') }));
+    if (spec.docUrl) readActs.appendChild(el('a', { class: 'btn btn-ghost btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' }));
+  }
+  const readRow = actRow({
+    kind: 'read', verb: '읽기', detail: uiText(readDetail), on: st === 'on', sw: st === 'blocked' ? undefined : sw,
+    pill: st === 'on' ? { text: '나만 봐요', cls: 'cn-pill-me', ic: 'usr' }
+      : { text: st === 'blocked' ? '준비 중' : '아직 꺼짐', cls: 'cn-pill-off' },
+    sub: readActs.childNodes.length ? readActs : undefined,
+  });
 
-  //  범위 — 앱마다 다르다. 슬랙은 대화별 허용(#1226), GitHub 은 설치 때 고른 저장소(#1881 G10). 나머지는 계정 권한 그대로.
-  let scopeRow: HTMLElement;
-  const expandHost = el('div');
-  const expander = (label: string, build: () => HTMLElement): HTMLElement => {
-    let open = false;
-    const btn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: label }) as HTMLButtonElement;
-    btn.onclick = () => {
-      open = !open;
-      btn.textContent = open ? label.replace(/보기|고르기/, '닫기') : label;
-      expandHost.replaceChildren(...(open ? [el('div', { class: 'cn-expand cn-slack' }, build())] : []));
+  // ── ① 쓰기 줄 — «내 이름으로 남는다». 이 화면에서 유일하게 되돌릴 수 없는 것이라 색이 다르다. ──
+  const writeHost = el('div');
+  const paintWrite = async (): Promise<void> => {
+    let tools: { tools: Array<{ name: string; title: string; write: boolean; enabled: boolean }>; writes: number } | null = null;
+    try { tools = await api(`/api/ui/org/${encodeURIComponent(svc.key)}/tools`); } catch (_) { tools = null; }
+    const writes = (tools?.tools ?? []).filter((t) => t.write);
+    if (!writes.length) {
+      //  쓰기 도구가 아예 없는 앱(GitLab·Figma·ClickUp) — 칸을 지우지 않고 사실을 말한다.
+      writeHost.replaceChildren(actRow({
+        kind: 'write', verb: '쓰기', on: false,
+        detail: uiText(`${svc.label}에는 쓰기 도구가 없어요 — AI가 읽기만 합니다. ${svc.label}에 남는 기록은 없습니다.`),
+        pill: { text: '없음', cls: 'cn-pill-off' },
+      }));
+      return;
+    }
+    const on = writes.some((t) => t.enabled);
+    const wsw = el('input', { type: 'checkbox', class: 'cn-sw', role: 'switch', 'aria-label': '쓰기' }) as HTMLInputElement;
+    wsw.checked = on && st === 'on';
+    wsw.disabled = !isAdmin;
+    wsw.onchange = async () => {
+      wsw.disabled = true;
+      try {
+        await api(`/api/ui/org/${encodeURIComponent(svc.key)}/tools/write`, { method: 'POST', body: JSON.stringify({ enabled: wsw.checked }) });
+        toast(wsw.checked ? '쓰기를 켰어요' : '쓰기를 껐어요 — AI가 이 앱에 아무것도 남기지 않습니다');
+      } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+      await paintWrite();
     };
-    return btn;
+    const verbs = writes.map((t) => t.title).join(' · ');
+    const sub = el('label', { class: 'cn-act-sub' }, icon('check'),
+      el('span', { text: '쓰기 전에 내 컴퓨터에서 한 번 확인을 받습니다' }),
+      el('span', { class: 'h', text: '자동 승인 목록에서 항상 빠집니다' }));
+    writeHost.replaceChildren(actRow({
+      kind: 'write', verb: `쓰기 — 내 이름으로 ${svc.label}에 남습니다`, on: wsw.checked, sw: wsw,
+      detail: uiText(st === 'on'
+        ? `AI가 **내 ${svc.label} 계정**으로 ${verbs}. 받는 사람은 내가 한 것으로 봅니다 — 되돌리려면 ${svc.label}에서 직접 지워야 해요.`
+        : `켜면 AI가 **내 ${svc.label} 계정**으로 ${verbs}. 받는 사람은 내가 한 것으로 봅니다.`),
+      pill: { text: '내 이름으로', cls: 'cn-pill-write', ic: 'pen' },
+      sub: wsw.checked ? sub : undefined,
+    }));
+    if (!isAdmin) return;
+    writeHost.appendChild(el('p', { class: 'cn-set-hint', style: 'margin:6px 0 0 4px',
+      text: '쓰기 끄기는 워크스페이스 전체에 적용돼요 — 사람마다 따로 끄는 건 아직 없습니다.' }));
   };
-  if (svc.key === 'slack') {
-    scopeRow = srow('범위', [el('span', { text: '대화별로 정해요' }), el('span', { class: 'h', text: '비공개 대화와 DM은 기본 꺼짐' })],
-      st === 'on' ? [expander('범위 고르기', () => slackChannelPolicyCard())] : []);
-  } else if (svc.key === 'github') {
-    scopeRow = srow('범위', [el('span', { text: '이슈·PR·댓글은 내 계정 권한 그대로' }), el('span', { class: 'h', text: '코드는 설치할 때 고른 저장소만' })],
-      st === 'on' ? [expander('저장소 보기', () => githubReposCard())] : []);
-  } else if (svc.key === 'claude-headless') {
-    scopeRow = srow('범위', '헤드리스 분류·에이전트 크론이 이 계정으로 실행돼요 — 구독 크레딧이 쓰입니다');
-  } else {
-    scopeRow = srow('범위', `내 계정이 볼 수 있는 ${noun} 전부`);
-  }
-  scopeRow.id = 'cn-scope';
-  const toolRows: HTMLElement[] = [howRow, scopeRow, expandHost, srow('누가 봐요', '나만 — 라이블리에 복사되지 않아요')];
-  if (st === 'blocked') toolRows.splice(0, 0, srow('지금', String((svc as any).soon || '라이블리가 이 앱을 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있어요.'), [], 'note'));
-  //  발급 방법 — CRED_KINDS 의 help·docUrl 을 그대로 읽는다. 토큰형인데 아직 연결 안 했을 때 가장 막히는 자리다.
-  if (spec && (spec.help || spec.docUrl) && st !== 'on' && !account) {
-    toolRows.push(srow('토큰 발급', String(spec.help || ''),
-      spec.docUrl ? [el('a', { class: 'btn btn-ghost btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' })] : [], 'note'));
-  }
-  const toolPanel = panel('cn-tool', 'zap', '바로 쓰기',
-    `AI가 내 계정으로 ${svc.label}에 직접 들어가 일해요. 내가 시킬 때만, 라이블리에 복사 없이.`,
-    [el('span', { class: 'cn-swwrap' }, swl, sw)], toolRows);
+  void paintWrite();
 
-  // ── 패널 2 · 모아 두기 — 앱별 어댑터. 없는 앱도 칸을 비우지 않는다(틀이 흔들리면 앱마다 다른 화면이 된다). ──
-  const onCollect: CollectState = (text, on) => {
-    navSub.textContent = `바로 쓰기 ${toolWord} · 모아 두기 ${text}`;
-    navCollectDot.className = 'cn-dot' + (on ? ' on' : text === '꺼짐' ? ' off' : ' soon');
-  };
+  // ── ① 모아 두기 줄 + ② 설정 — 앱별 어댑터. 없는 앱도 칸을 비우지 않는다. ──
+  const onCollect: CollectState = () => { /* 목차가 사라져 더 알릴 곳이 없다 — 줄 자체가 상태다 */ };
   const unit = COLLECT_UNIT[svc.key];
-  const collectDesc = unit ? `내가 고른 ${unit}만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.` : '내가 고른 것만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.';
-  let collect: HTMLElement;
-  //  #1881 슬랙 — 연결이 곧 토큰이라 켜면 수집기가 그 연결로 돈다. 계정이 먼저.
-  //  ⚠ 모아 두기를 «바로 쓰기» 축에 매달지 않는다 — 그 축의 판정(v.connected)과 수집기의 실제 상태는 근거가 달라서
-  //   어긋난다(#2202 실측: 수집기가 돌고 있는데 화면은 «꺼짐»이라 채널 고르기에 닿을 수조차 없었다).
-  //   카드가 /org/slack/collect 의 me_connected·enabled 를 직접 읽어 스스로 판정한다.
-  if (svc.key === 'slack') collect = !isAdmin ? quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 공개 채널이 함께 보는 자료함에 모여요.', onCollect)
+  let collect: CollectFace;
+  //  ⚠ 모아 두기를 «읽기» 축에 매달지 않는다 — 근거가 달라 어긋난다(#2202 실측: 수집기가 돌고 있는데 화면은 «꺼짐»).
+  if (svc.key === 'slack') collect = !isAdmin ? quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 공개 채널이 함께 보는 자료함에 모여요.', onCollect)
     : slackTeamCollectCard(onCollect);
-  //  #1881 노션 — 개인 연결(MCP)과 무관. 토글이 여는 노션 화면(페이지 선택)이 곧 연결이자 범위다.
   else if (svc.key === 'notion') collect = isAdmin ? notionTeamCollectCard(onCollect)
-    : quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — 노션에서 고른 페이지만 함께 보는 자료함에 모여요.', onCollect);
-  //  #1881 G5 구글 — 무엇을 켜느냐가 곧 비용이라 서비스를 고르게 한다.
+    : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 노션에서 고른 페이지만 함께 보는 자료함에 모여요.', onCollect);
   else if (svc.key === 'google') collect = isAdmin ? googleTeamCollectCard(onCollect)
-    : quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — Drive 문서가 함께 보는 자료함에 모여요.', onCollect);
-  //  #2247 피그마·ClickUp — 토큰이 곧 자격. 위에서 토큰을 저장했으면 여기서 켠다(수집기는 그 토큰을 가리킨다, 복사 0).
-  //  #2247 Linear — 라이블리 Linear 앱(위의 계정 로그인=MCP 와 다른 토큰). 토글이 곧 연결: 켜면 Linear 화면이 열리고 돌아오면 켜진다.
+    : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — Drive 문서가 함께 보는 자료함에 모여요.', onCollect);
   else if (svc.key === 'linear') collect = isAdmin ? memberTokenCollectCard(svc.key, onCollect)
-    : quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 이슈·댓글·문서가 함께 보는 자료함에 모여요.', onCollect);
-  //  #2247 GitLab — 계정 로그인(DCR) 토큰으로는 자료를 못 읽는다. 개인 토큰(read_api)이 있어야 켠다.
-  else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectPanel(collectDesc, '관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함에 모여요.', onCollect)
-    : !(cred && cred.has_secret) ? quietCollectPanel(collectDesc, '꺼짐', 'GitLab 은 계정 로그인 토큰으로는 자료를 못 읽어요 — 위에서 [토큰으로 연결]로 개인 액세스 토큰(read_api)을 저장하면 여기서 켤 수 있어요.', onCollect)
+    : quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 이슈·댓글·문서가 함께 보는 자료함에 모여요.', onCollect);
+  else if (svc.key === 'gitlab') collect = !isAdmin ? quietCollectFace('관리자만', '워크스페이스 관리자가 켤 수 있어요 — 켜면 고른 프로젝트의 이슈·MR 대화가 함께 보는 자료함에 모여요.', onCollect)
+    : !(cred && cred.has_secret) ? quietCollectFace('꺼짐', 'GitLab 은 계정 로그인 토큰으로는 자료를 못 읽어요 — 위 [읽기]에서 개인 액세스 토큰(read_api)을 저장하면 여기서 켤 수 있어요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
-  else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectPanel(collectDesc, '관리자만', `워크스페이스 관리자가 켤 수 있어요 — 켜면 ${svc.label}의 ${COLLECT_UNIT[svc.key]}이(가) 함께 보는 곳에 모여요.`, onCollect)
-    : st !== 'on' ? quietCollectPanel(collectDesc, '꺼짐', svc.key === 'github' ? '위에서 바로 쓰기(계정 연결)를 먼저 켜면 여기서 켤 수 있어요 — 연결 화면에서 고른 저장소가 범위가 돼요.' : '위에서 바로 쓰기(토큰 저장)를 먼저 켜면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
+  else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectFace('관리자만', `워크스페이스 관리자가 켤 수 있어요 — 켜면 ${svc.label}의 ${unit}이(가) 함께 보는 곳에 모여요.`, onCollect)
+    : st !== 'on' ? quietCollectFace('꺼짐', svc.key === 'github' ? '위 [읽기]를 먼저 켜면 여기서 켤 수 있어요 — 연결 화면에서 고른 저장소가 범위가 돼요.' : '위 [읽기]에서 토큰을 저장하면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
-  else collect = quietCollectPanel(collectDesc, '아직 없어요',
-    `${svc.label}는 아직 모아 두기가 없어요. 바로 쓰기로 ${noun}을(를) 그때그때 읽어요 — 준비되면 여기서 켤 수 있어요.`, onCollect);
+  else collect = quietCollectFace('아직 없어요',
+    `${svc.label}는 아직 모아 두기가 없어요. 위 [읽기]로 ${noun}을(를) 그때그때 읽어요 — 준비되면 여기서 켤 수 있어요.`, onCollect);
 
-  // ── 패널 3 · 연결 해제 ──
-  const dz = st === 'on' ? panel('cn-dz', 'x', '연결 해제', '저장해 둔 로그인 정보가 지워지고, 이 연결로 돌던 모아 두기도 멈춰요.',
-    [el('button', { class: 'btn btn-ghost btn-sm cn-dz-btn', type: 'button', text: svc.label + ' 연결 모두 해제', onclick: () => void disconnect() })], []) : null;
+  // ── ③ 보는 사람 ──
+  const whos = el('div', { class: 'cn-whos' },
+    el('div', { class: 'cn-who' },
+      el('div', { class: 'cn-who-t' }, icon('usr'), el('span', { text: '물어볼 때 읽고 쓰는 것 — 나만' })),
+      el('span', { class: 'cn-who-s', text: `AI가 그 자리에서 내 계정으로 ${svc.label}을(를) 읽고 씁니다. 라이블리에 남지 않으니 다른 사람은 볼 수 없어요.` })),
+    el('div', { class: 'cn-who team' },
+      el('div', { class: 'cn-who-t' }, icon('team'), el('span', { text: '모아 둔 것 — 워크스페이스 함께' })),
+      el('span', { class: 'cn-who-s', text: '자료함에 쌓인 것은 이 워크스페이스 사람들의 AI가 함께 찾아봅니다. 그래서 «무엇을 모을지»를 위에서 고릅니다.' })));
+
+  // ── 연결 지우기 — 잃는 것만 말한다(#1582) ──
+  const gone = st === 'on' ? el('div', { class: 'cn-gone' }, icon('x'),
+    el('span', { class: 'm', text: '연결을 지우면 위의 읽기·쓰기·모아 두기가 한꺼번에 멈추고, 이미 모은 자료는 자료함에 남습니다.' }),
+    el('button', { class: 'btn btn-ghost btn-sm cn-dz-btn', type: 'button', text: svc.label + ' 연결 지우기', onclick: () => void disconnect() })) : null;
 
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
     backLink(),
     ...(arrived ? [arrived] : []),
-    el('div', { class: 'cn-settings' }, nav,
-      el('div', { class: 'cn-panels' }, toolPanel, collect, ...(dz ? [dz] : [])))));
+    el('div', { class: 'cn-head' }, svcTile(svc.key, svc.label, st === 'on'),
+      el('div', { class: 'cn-head-tt' }, el('h1', { class: 'v2-title', text: svc.label }),
+        el('p', { class: 'v2-desc', style: 'margin-top:4px', text: String((svc as any).blurb || '') }))),
+    el('section', { class: 'cn-sect', id: 'cn-tool' },
+      sectHead('1', `AI가 내 ${svc.label} 계정으로 하는 일`, '한 줄씩 따로 끄고 켤 수 있어요'),
+      readRow, writeHost, collect.row),
+    el('section', { class: 'cn-sect', id: 'cn-collect-sect' },
+      sectHead('2', '자료함에 모아 두는 것', '내 쓰임에 맞게 정합니다'),
+      collect.box),
+    el('section', { class: 'cn-sect', id: 'cn-who' },
+      sectHead('3', '보는 사람', '읽기·쓰기는 나만, 모아 둔 자료는 워크스페이스가 함께'),
+      whos),
+    ...(gone ? [gone] : [])));
 }
 
 // ── 팀 자료로 모으기(#1881) — 슬랙 수집을 토글 하나로. 상태·토글·비공개 채널 안내를 한 카드에. ──
@@ -459,9 +567,9 @@ function githubReposCard(): HTMLElement {
   return box;
 }
 
-function slackTeamCollectCard(onState: CollectState): HTMLElement {
-  const panel = collectPanel("내가 고른 대화만 라이블리가 미리 읽어 자료함에 둬요. 공개 채널이 기본이고, 워크스페이스가 함께 봐요.", onState);
-  const box = panel.box, body = panel.body;
+function slackTeamCollectCard(onState: CollectState): CollectFace {
+  const panel = collectFace(onState);
+  const body = panel.body;
   const paint = async (): Promise<void> => {
     let s: any;
     try { s = await api('/api/ui/org/slack/collect'); }
@@ -473,9 +581,12 @@ function slackTeamCollectCard(onState: CollectState): HTMLElement {
     if (noCred) chk.disabled = true;
     const notes: string[] = [];
     if (noCred) {
-      notes.push('위에서 바로 쓰기(계정 연결)를 먼저 켜 주세요 — 내 Slack 연결로 공개 채널을 읽어 옵니다.');
+      notes.push('위 [읽기]를 먼저 켜 주세요 — 내 Slack 연결로 공개 채널을 읽어 옵니다.');
     } else if (s.search && s.search.enabled) {
-      notes.push((s.search.member ? `${s.search.member} 님의 연결로 모으고 있어요.` : '모으고 있어요.')
+      const last = s.last_run?.finished_at || s.last_run?.started_at;
+      notes.push(`**${everyLabel(s.sync_interval_sec)}마다** 저절로 미리 읽어 자료함에 둡니다.`
+        + (last ? ` ${relTime(last)}에 마지막으로 읽었어요.` : ' 첫 수집을 기다리는 중이에요.')
+        + (s.search.member ? ` ${s.search.member} 님의 연결로 돌고 있어요.` : '')
         + (s.search.member_connected === false ? ' 그 연결이 끊겼습니다 — 껐다 켜면 내 연결로 바뀝니다.' : ''));
     } else {
       notes.push('켜면 내 Slack 연결로 공개 채널을 읽어 옵니다. 팀원 모두의 AI가 그 자료를 찾아볼 수 있어요.');
@@ -494,19 +605,30 @@ function slackTeamCollectCard(onState: CollectState): HTMLElement {
       await paint();
     };
     //  #2243 — 채널도 여기서 고른다. 종전엔 관리탭 수집기 설정에만 있었고, 검색 모드(개인 연결)에는 포함 지정 자체가 없었다.
-    const chanExtra = s.search && s.search.enabled
-      ? [scopeChooser('slack', { channels: String(s.channels ?? '') }, true, async (sc) => {
-          try {
-            await api('/api/ui/org/slack/collect', { method: 'POST', body: JSON.stringify({ enabled: true, channels: sc.channels ?? '' }) });
-            toast(String(sc.channels ?? '').trim() ? '모을 채널을 저장했어요' : '전체 공개 채널을 모읍니다');
-          } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
-          await paint();
-        })]
-      : [];
+    const scopeNode = scopeChooser('slack', { channels: String(s.channels ?? '') }, true, async (sc) => {
+      try {
+        await api('/api/ui/org/slack/collect', { method: 'POST', body: JSON.stringify({ enabled: true, channels: sc.channels ?? '' }) });
+        toast(String(sc.channels ?? '').trim() ? '모을 채널을 저장했어요' : '전체 공개 채널을 모읍니다');
+      } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+      await paint();
+    });
+    const chanExtra = collectSettings({
+      key: 'slack',
+      s: { ...s, scope: {}, collector_id: s.search?.collector_id ?? null, enabled: !!s.search?.enabled },
+      scopeNode: setRow('어디서', '모을 대화', [scopeNode]),
+      since: String(s.backfill_since ?? ''),
+      save: async (patch) => {
+        try {
+          await api('/api/ui/org/slack/collect', { method: 'POST', body: JSON.stringify({ enabled: !!s.search?.enabled, ...patch }) });
+          toast('저장했어요');
+        } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+        await paint();
+      },
+    });
     panel.set(chk, chk.checked ? '켜짐' : '꺼짐', notes, chanExtra);
   };
   void paint();
-  return box;
+  return { box: panel.box, row: panel.row };
 }
 
 // ── 모아 두기(#2247 피그마·ClickUp) — 토큰형 앱의 공통 카드. 서버는 org_<app>_collect(_set) 한 쌍(member-collect.ts 팩토리).
@@ -619,10 +741,108 @@ function scopeChooser(app: string, cur: Record<string, string>, enabled: boolean
   return host;
 }
 
-function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement {
+// ══ 섹션 ② «자료함에 모아 두는 것» — 무엇을 · 얼마나 자주 · 언제부터 · 어디서 (#2243 3차) ═══════════
+//  원준 2026-08-30: «저 30분이라는 숫자와 상세 설정들도 사용자가 개인화할 수 있도록 하고싶은데 그런 UI가 없음».
+//  서버는 원래 수집기별로 갖고 있었다(org_collector.sync_interval_sec → 크론 collector-<id>) — 막혀 있던 건
+//  멤버 창구뿐이라 이번에 뚫었다. 종류(include_*)·언제부터(backfill_since)도 커넥터가 이미 읽는 config 키다.
+
+/** 앱이 «무엇을» 고르게 하는 종류 — 값은 config 키. 없는 앱은 그 줄을 «전부» 한 줄로 대신한다. */
+const COLLECT_KINDS: Record<string, { always: string; opts: Array<{ id: string; label: string }> }> = {
+  github: { always: '이슈 대화', opts: [{ id: 'include_prs', label: 'PR 리뷰 대화' }, { id: 'include_releases', label: '릴리스 노트' }] },
+  gitlab: { always: '이슈 대화', opts: [{ id: 'include_mrs', label: 'MR 리뷰 대화' }, { id: 'include_releases', label: '릴리스 노트' }] },
+  linear: { always: '이슈·댓글', opts: [{ id: 'include_documents', label: 'Linear 문서' }] },
+};
+/** «언제부터» 를 지원하는 앱(커넥터가 backfill_since 를 since 하한으로 쓴다). */
+const HAS_BACKFILL = new Set(['github', 'gitlab', 'linear', 'slack']);
+const SINCE_OPTS = [{ id: '30', label: '최근 30일' }, { id: '90', label: '90일' }, { id: '365', label: '1년' }, { id: '', label: '전부' }];
+const EVERY_OPTS = [{ id: '600', label: '10분' }, { id: '1800', label: '30분' }, { id: '3600', label: '1시간' }, { id: '10800', label: '3시간' }, { id: '86400', label: '하루 한 번' }];
+
+/** 저장된 날짜 → 세그먼트 id(가장 가까운 눈금). 비어 있으면 «전부». */
+export function sinceBucket(iso: string): string {
+  const t = Date.parse(String(iso || '').length === 10 ? iso + 'T00:00:00Z' : iso);
+  if (!Number.isFinite(t)) return '';
+  const days = Math.round((Date.now() - t) / 86400000);
+  let best = SINCE_OPTS[0];
+  for (const o of SINCE_OPTS) { if (!o.id) continue; if (Math.abs(Number(o.id) - days) < Math.abs(Number(best.id) - days)) best = o; }
+  return best.id;
+}
+/** 세그먼트 id → 저장할 날짜(YYYY-MM-DD). «전부»는 빈 문자열. */
+function sinceValue(id: string): string {
+  if (!id) return '';
+  return new Date(Date.now() - Number(id) * 86400000).toISOString().slice(0, 10);
+}
+const everyLabel = (sec: number | null): string =>
+  EVERY_OPTS.find((o) => Number(o.id) === sec)?.label ?? (sec ? Math.round(sec / 60) + '분' : '30분');
+
+interface SettingsCtx {
+  key: string;
+  /** 서버 상태(scope·sync_interval_sec·backfill_since·collector_id·enabled). */
+  s: any;
+  /** 바꾼 값을 저장한다 — 앱마다 창구가 달라(slack 은 최상위 키) 카드가 넘긴다. */
+  save: (patch: Record<string, unknown>) => Promise<void>;
+  /** 범위 칸(어디서) — 이미 만들어 둔 노드. */
+  scopeNode: HTMLElement;
+  /** 지금 저장된 «언제부터»(YYYY-MM-DD 또는 ''). */
+  since: string;
+}
+
+/** 네 줄을 만든다 — 앱이 못 하는 줄은 지우지 않고 사실을 말한다(틀이 흔들리면 앱마다 다른 화면이 된다). */
+function collectSettings(c: SettingsCtx): HTMLElement[] {
+  const rows: HTMLElement[] = [];
+
+  // ① 무엇을
+  const K = COLLECT_KINDS[c.key];
+  if (K) {
+    const cur = new Set(K.opts.filter((o) => String(c.s.scope?.[o.id] ?? 'on') !== 'off').map((o) => o.id));
+    rows.push(setRow('무엇을', '고른 종류만 모읍니다', [
+      el('div', { class: 'cn-chips' },
+        el('span', { class: 'cn-chip on', style: 'cursor:default; opacity:.75' }, el('span', { text: K.always + ' (늘 모음)' })),
+        chipSet(K.opts, cur, (picked) => {
+          const patch: Record<string, string> = {};
+          for (const o of K.opts) patch[o.id] = picked.has(o.id) ? 'on' : 'off';
+          void c.save({ scope: patch });
+        })),
+    ]));
+  } else {
+    rows.push(setRow('무엇을', '', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
+      text: c.key === 'figma' ? '고른 파일의 코멘트를 모읍니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
+        : c.key === 'clickup' ? '작업·댓글·시간기록을 함께 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
+        : '대화와 올린 파일 제목을 모읍니다 — 이 앱은 종류를 나눠 고를 수 없어요.' })]));
+  }
+
+  // ② 얼마나 자주
+  const cur = String(c.s.sync_interval_sec ?? 1800);
+  const perDay = Math.round(86400 / Number(cur || 1800));
+  rows.push(setRow('얼마나 자주', '다시 읽는 주기', [
+    segment(EVERY_OPTS, EVERY_OPTS.some((o) => o.id === cur) ? cur : '1800', (id) => { void c.save({ sync_interval_sec: Number(id) }); }),
+  ], `자주 읽을수록 최신이지만 그 앱의 사용량을 더 씁니다. 지금 설정이면 하루 ${perDay}번 읽어요.`));
+
+  // ③ 언제부터
+  if (HAS_BACKFILL.has(c.key)) {
+    const b = sinceBucket(c.since);
+    rows.push(setRow('언제부터', '처음 읽을 때 거슬러 올라갈 범위', [
+      segment(SINCE_OPTS, b, (id) => { void c.save({ backfill_since: sinceValue(id) }); }),
+      ...(c.s.collector_id ? [el('div', { style: 'margin-top:9px' },
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '지금 전부 다시 읽기', onclick: async (ev: Event) => {
+          const b2 = ev.currentTarget as HTMLButtonElement; b2.disabled = true;
+          try { await api(`/api/ui/org/collectors/${c.s.collector_id}/sync`, { method: 'POST', body: JSON.stringify({ full: true }) }); toast('처음부터 다시 읽기 시작했어요'); }
+          catch (e: any) { toast((e && e.message) || '시작하지 못했습니다', true); b2.disabled = false; }
+        } }))] : []),
+    ], '이미 모은 것은 그대로 둡니다. 범위를 넓혔으면 [지금 전부 다시 읽기]를 눌러야 과거가 들어와요.'));
+  } else {
+    rows.push(setRow('언제부터', '', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
+      text: '이 앱은 내가 볼 수 있는 것 전체를 훑고, 그 뒤로는 바뀐 것만 따라갑니다 — 시작 시점을 정할 수 없어요.' })]));
+  }
+
+  // ④ 어디서
+  rows.push(c.scopeNode);
+  return rows;
+}
+
+function memberTokenCollectCard(key: string, onState: CollectState): CollectFace {
   const T = MEMBER_COLLECT_TEXT[key];
-  const panel = collectPanel(T.desc, onState, T.where);
-  const box = panel.box, body = panel.body;
+  const panel = collectFace(onState, T.where !== '나만 봐요');
+  const body = panel.body;
   const post = async (bodyObj: any): Promise<any> => api(`/api/ui/org/${key}/collect`, { method: 'POST', body: JSON.stringify(bodyObj) });
   const paint = async (): Promise<void> => {
     let s: any;
@@ -632,19 +852,34 @@ function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement
     chk.checked = !!s.enabled;
     const notes: string[] = [];
     if (s.enabled) {
-      notes.push((s.member ? `${s.member} 님의 연결로 ` : '') + T.on
+      const last = s.last_run?.finished_at || s.last_run?.started_at;
+      notes.push(`**${everyLabel(s.sync_interval_sec)}마다** 저절로 미리 읽어 자료함에 둡니다.`
+        + (last ? ` ${relTime(last)}에 마지막으로 읽었어요.` : ' 첫 수집을 기다리는 중이에요.')
+        + (s.member ? ` ${s.member} 님의 연결로 돌고 있어요.` : '')
         + (s.member_connected === false ? ' 그 토큰이 지워졌습니다 — 껐다 켜면 내 토큰으로 바뀝니다.' : ''));
     } else notes.push(T.off);
-    const extra: HTMLElement[] = [];
     //  #2243 — 범위는 목록에서 토글로 고른다(못 만들면 텍스트 칸으로 떨어진다).
-    extra.push(scopeChooser(key, (s.scope ?? {}) as Record<string, string>, !!s.enabled, async (sc) => {
+    const scopeNode = scopeChooser(key, (s.scope ?? {}) as Record<string, string>, !!s.enabled, async (sc) => {
       try {
         const r: any = await post({ enabled: true, scope: sc });
         if (r && r.ok) toast(s.enabled ? '범위를 저장했어요' : '모아 두기를 켰어요 — 첫 수집은 잠시 뒤 시작됩니다');
         else toast((r && r.message) || '바꾸지 못했습니다', true);
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
-    }));
+    });
+    //  #2243 3차 — «무엇을·얼마나 자주·언제부터» 는 켜기와 무관하게 저장된다(꺼져 있어도 미리 정해 둘 수 있다).
+    const extra: HTMLElement[] = collectSettings({
+      key, s, scopeNode: setRow('어디서', SCOPE_NOUN[key] ? `모을 ${SCOPE_NOUN[key]}` : '', [scopeNode]),
+      since: String(s.scope?.backfill_since ?? ''),
+      save: async (patch) => {
+        try {
+          const r: any = await post({ enabled: !!s.enabled, ...patch });
+          if (r && r.ok) toast('저장했어요');
+          else toast((r && r.message) || '바꾸지 못했습니다', true);
+        } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+        await paint();
+      },
+    });
     const SF = SCOPE_FIELD[key];
     if (s.needs_scope && SF && SF.note) notes.push(SF.note);
     //  #2247 Linear — 라이블리 Linear OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 관리자에게 등록 칸을 먼저 낸다.
@@ -698,14 +933,14 @@ function memberTokenCollectCard(key: string, onState: CollectState): HTMLElement
     panel.set(chk, chk.checked ? '켜짐' : (key === 'linear' && s.app_ready === false ? '앱 등록 필요' : (s.needs_scope && SF ? '범위 필요' : '꺼짐')), notes, extra);
   };
   void paint();
-  return box;
+  return { box: panel.box, row: panel.row };
 }
 
 // ── 팀 자료로 모으기(#1881 노션) — 토글이 곧 연결: 켜면 노션 화면이 열리고 거기서 고른 페이지가 수집 범위가 된다.
 //  슬랙 카드와 달리 개인 연결 상태를 보지 않는다 — 조직 슬롯(공개 통합 토큰)이 따로 있고, 이 카드가 그 전부를 다룬다.
-function notionTeamCollectCard(onState: CollectState): HTMLElement {
-  const panel = collectPanel("내가 고른 페이지(와 그 하위)만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.", onState);
-  const box = panel.box, body = panel.body;
+function notionTeamCollectCard(onState: CollectState): CollectFace {
+  const panel = collectFace(onState);
+  const body = panel.body;
   const openConsent = (url: string, after: () => void): void => {
     window.open(url, '_blank', 'noopener');
     toast('노션 화면에서 모을 페이지를 고르고 [액세스 허용]을 누르세요 — 돌아오면 이 화면이 갱신됩니다');
@@ -800,7 +1035,7 @@ function notionTeamCollectCard(onState: CollectState): HTMLElement {
     panel.set(chk, (s && s.enabled) ? (on.length > 1 ? `켜짐 · ${on.length}곳` : '켜짐') : '꺼짐', notes, extra);
   };
   void paint();
-  return box;
+  return { box: panel.box, row: panel.row };
 }
 
 // ── 팀 자료로 모으기 · 구글(#1881 G5) ─────────────────────────────────────────────
@@ -810,9 +1045,9 @@ function notionTeamCollectCard(onState: CollectState): HTMLElement {
 //  안 쓰는 Gmail 을 기본으로 켜 두면 구성원 한 명이 연결할 때마다 한 칸씩 영구히 사라진다.
 //  → 기본은 드라이브만. Gmail 은 사람이 명시적으로 고르고, 그 대가를 화면이 먼저 말한다.
 //  (근거·수치: 지식 google-single-connect-design-1881 §9)
-function googleTeamCollectCard(onState: CollectState): HTMLElement {
-  const panel = collectPanel("내가 고른 구글 문서만 라이블리가 미리 읽어 자료함에 둬요. 워크스페이스가 함께 봐요.", onState);
-  const box = panel.box, body = panel.body;
+function googleTeamCollectCard(onState: CollectState): CollectFace {
+  const panel = collectFace(onState);
+  const body = panel.body;
   const openConsent = (url: string, after: () => void): void => {
     window.open(url, '_blank', 'noopener');
     toast('구글 화면에서 [허용]을 누르세요 — 돌아오면 이 화면이 갱신됩니다');
@@ -968,7 +1203,7 @@ function googleTeamCollectCard(onState: CollectState): HTMLElement {
     panel.set(chk, anyOn ? '켜짐' : '꺼짐', notes, [svcRow, cost, ...extra]);
   };
   void paint();
-  return box;
+  return { box: panel.box, row: panel.row };
 }
 
 function backLink(): HTMLElement {

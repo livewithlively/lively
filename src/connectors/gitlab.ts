@@ -7,6 +7,7 @@
 //   · 페이지네이션은 `x-next-page` 헤더.
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
+import { sinceFloor } from "./sync-cursor.js";
 
 const PAGE_SIZE = 100;
 export const MAX_PAGES = 30;
@@ -147,8 +148,9 @@ export const gitlabConnector: Connector = {
     if (projects.length === 0) throw new Error("수집할 프로젝트가 없습니다 — '프로젝트'에 group/project 경로를 넣으세요.");
     const includeMrs = on(cfg.include_mrs, true);
     const includeReleases = on(cfg.include_releases, true);
-    const since = opts?.since ? `&updated_after=${encodeURIComponent(opts.since)}` : "";
-    const sinceMs = opts?.since ? Date.parse(opts.since) : NaN;
+    const sinceIso = sinceFloor(opts?.since, cfg.backfill_since);
+    const since = sinceIso ? `&updated_after=${encodeURIComponent(sinceIso)}` : "";
+    const sinceMs = sinceIso ? Date.parse(sinceIso) : NaN;
 
     for (const project of projects) {
       const pp = `${api}/projects/${encodeURIComponent(project)}`;
