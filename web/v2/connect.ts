@@ -298,7 +298,9 @@ function srow(k: string, v: string | Node[], acts: HTMLElement[] = [], cls = '')
 export interface CollectFace { box: HTMLElement; row: HTMLElement }
 function collectFace(onState: CollectState, teamSee = true, countKind = ''): CollectFace & { body: HTMLElement; set: (chk: HTMLInputElement, stateText: string, notes: string[], extra: HTMLElement[]) => void } {
   const rowHost = el('div');
-  const body = el('div', { class: 'cn-set-bd' }, el('span', { class: 'cn-set-hint', text: '불러오는 중…' }));
+  //  ★ ② 는 어떤 앱에서도 같은 «카드 + 라벨 열» 이어야 한다(#2243 최우선 요구). 어댑터가 무엇을 넣든
+  //   이 틀 안에 들어간다 — 종전엔 노션·구글이 라벨 없이 체크박스만 떨궈 ①·③ 과 딴판이었다(원준 실측 2026-08-30).
+  const body = el('div', { class: 'cn-setlist' }, el('span', { class: 'cn-set-hint', text: '불러오는 중…' }));
   const box = el('div', { class: 'cn-collect-body', id: 'cn-collect' }, body);
   return {
     box, row: rowHost, body,
@@ -336,9 +338,12 @@ function quietCollectFace(stateText: string, note: string, onState: CollectState
       kind: 'collect', verb: '자료 가져오기', detail: uiText(note), on: false,
       pill: { text: stateText, cls: 'cn-pill-off' },
     }),
+    //  아직 못 켠 앱 — 정할 것을 «회색으로 미리» 보여 준다. 안내문만 두 줄 떨구면 ①·③ 은 카드인데 여기만 맨 텍스트가 된다.
     box: el('div', { class: 'cn-collect-body', id: 'cn-collect' },
-      el('span', { class: 'cn-set-hint', style: 'margin-top:0', text: note }),
-      el('span', { class: 'cn-set-hint', text: '켜면 여기서 무엇을 · 얼마나 자주 · 언제부터 · 어디서를 정합니다.' })),
+      el('div', { class: 'cn-setlist off' },
+        el('div', { class: 'cn-set-why' }, icon('box'), el('span', { text: note })),
+        ...['무엇을', '얼마나 자주', '언제부터', '어디서'].map((k) =>
+          setRow(k, '', [el('span', { class: 'cn-set-hint', style: 'margin-top:0', text: '켜면 여기서 정합니다' })])))),
   };
 }
 
@@ -1055,7 +1060,14 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
     };
-    panel.set(chk, (s && s.enabled) ? (on.length > 1 ? `켜짐 · ${on.length}곳` : '켜짐') : '꺼짐', notes, extra);
+    //  #2243 — 노션의 범위는 «노션 동의 화면에서 고른 페이지»다. 그래도 칸 이름은 다른 앱과 같아야 한다.
+    panel.set(chk, (s && s.enabled) ? (on.length > 1 ? `켜짐 · ${on.length}곳` : '켜짐') : '꺼짐', notes, [
+      setRow('무엇을', '고른 페이지와 그 하위', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
+        text: '노션은 종류를 나눠 고를 수 없어요 — 고른 페이지 아래의 문서를 함께 가져옵니다.' })]),
+      setRow('얼마나 자주', '다시 읽는 주기', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
+        text: '노션은 아직 주기를 고를 수 없어요 — 기본 주기로 돕니다.' })]),
+      setRow('어디서', '가져올 워크스페이스와 페이지', extra),
+    ]);
   };
   void paint();
   return { box: panel.box, row: panel.row };
@@ -1223,7 +1235,12 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
     };
-    panel.set(chk, anyOn ? '켜짐' : '꺼짐', notes, [svcRow, cost, ...extra]);
+    panel.set(chk, anyOn ? '켜짐' : '꺼짐', notes, [
+      setRow('무엇을', '가져올 구글 서비스', [svcRow, cost]),
+      setRow('얼마나 자주', '다시 읽는 주기', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
+        text: '구글은 아직 주기를 고를 수 없어요 — 기본 주기로 돕니다.' })]),
+      ...(extra.length ? [setRow('어디서', '가져올 범위', extra)] : []),
+    ]);
   };
   void paint();
   return { box: panel.box, row: panel.row };

@@ -1978,3 +1978,14 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .cn-act { flex-wrap: wrap; }
   .cn-act-rt { flex-direction: row; align-items: center; width: 100%; justify-content: flex-end; }
 }
+
+/* ── #2243 4차 — ② «가져올 자료 정하기» 는 어떤 앱에서도 같은 카드다 ────────────────
+   종전엔 노션·구글이 라벨 없이 체크박스만 떨구고, 아직 못 켠 앱은 안내문 두 줄만이라
+   ①·③ 은 카드인데 ② 만 맨 텍스트로 떠 보였다(원준 실측 2026-08-30 — «상세페이지가 깨져 있다»). */
+.cn-setlist { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); padding: 4px 18px 14px; }
+.cn-setlist.off { background: var(--bg-tint); border-style: dashed; }
+.cn-setlist.off .cn-set-lb b { color: var(--muted-head); }
+.cn-set-why { display: flex; align-items: flex-start; gap: 9px; padding: 13px 0 4px; font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
+.cn-set-why .v2-ic { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--muted-2); }
+.cn-setlist .cn-set:first-child { border-top: 0; }
+.cn-set-why + .cn-set { border-top: 1px solid var(--line-row); }
