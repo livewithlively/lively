@@ -40,7 +40,7 @@ function isVisionBinary(mime: string): boolean {
 // files.list fields — 우리가 실제로 읽는 필드만 요청(응답 최소화). ⚠ 여기 없는 필드는 응답에 안 온다.
 //  size: [BINARY] 스텁의 판단 근거(distill 이 크기로 노이즈 선별) — Google 네이티브 문서엔 없을 수 있음(문자열, 바이트).
 const LIST_FIELDS =
-  "nextPageToken,files(id,name,mimeType,modifiedTime,trashed,owners(displayName,emailAddress),webViewLink,version,size)";
+  "nextPageToken,files(id,name,mimeType,modifiedTime,trashed,owners(displayName,emailAddress),webViewLink,version,size,parents)";
 
 // RFC3339(= q 에 안전 보간 가능한 형태). 따옴표·공백 등 인젝션 문자를 원천 배제.
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
@@ -73,6 +73,7 @@ interface DriveFile {
   webViewLink?: string;
   version?: string; // v3 는 int64 를 문자열로 표현
   size?: string; // 바이트(문자열, v3 int64). Google 네이티브 문서엔 부재.
+  parents?: string[]; // 상위 폴더 id(보통 1개) — 채널(container_name)의 근거(#2416).
   [k: string]: unknown;
 }
 
@@ -297,9 +298,29 @@ export async function gdriveFetchArtifact(
   };
 }
 
+// 폴더 id → 폴더명 (#2416). 파일마다 부르지 않고 **폴더당 1회**만 조회해 캐시한다(폴더 수는 파일 수보다 훨씬 적다).
+//  실패·부재는 빈 문자열로 수렴 — 채널을 못 정했다고 파일 수집을 멈추지 않는다.
+const folderNameCache = new Map<string, string>();
+async function folderNameOf(id: string | undefined): Promise<string> {
+  const fid = String(id ?? "").trim();
+  if (!fid || !DRIVE_ID.test(fid)) return "";
+  const hit = folderNameCache.get(fid);
+  if (hit !== undefined) return hit;
+  let name = "";
+  try {
+    const params = new URLSearchParams({ fields: "name", supportsAllDrives: "true" });
+    const res = await driveFetch(`${API_BASE}/files/${encodeURIComponent(fid)}?${params.toString()}`, "application/json");
+    if (res.ok) name = String(((await res.json()) as { name?: string })?.name ?? "").trim();
+  } catch (e) {
+    console.warn(`gdrive: 폴더명 조회 실패(채널 없이 진행) ${fid}: ${(e as Error).message}`);
+  }
+  folderNameCache.set(fid, name);   // 실패도 캐시 — 같은 폴더로 매번 재시도하지 않는다
+  return name;
+}
+
 // ── 순수 변환(네트워크 X) — 단위 테스트 대상. 원본 file 메타(+미리 받아둔 body) → RawItem. ──
 //  네트워크 의존(본문 추출)은 ctx.body 로 주입받아 순수하게 유지한다(notion.toRawItem 과 동형).
-export function toRawItem(file: DriveFile, ctx: { body?: string; instance?: string } = {}): RawItem {
+export function toRawItem(file: DriveFile, ctx: { body?: string; instance?: string; container?: string } = {}): RawItem {
   const instance = ctx.instance || INSTANCE_DEFAULT;
   const owner = file.owners?.[0]; // ⚠ 공유 드라이브 파일은 owners 부재 → actor 없음
 
@@ -323,6 +344,10 @@ export function toRawItem(file: DriveFile, ctx: { body?: string; instance?: stri
     body: ctx.body || undefined,
     occurred_at: file.modifiedTime, // 이미 RFC3339
     updated_at: file.modifiedTime,
+    // 채널(#2416) = **상위 폴더 이름**. 사람이 드라이브를 나누는 단위가 폴더이고, 증류기 레인은 이 축으로만 좁힐 수 있다.
+    //  ⚠ 파일명을 넣으면 안 된다 — 자료마다 값이 달라 '묶음'이 아니게 되고 채널이 파일 수만큼 생긴다.
+    container_ref: file.parents?.[0],
+    container_name: ctx.container?.trim() || undefined,
     fields: {
       mimeType: file.mimeType,
       trashed: file.trashed ?? false,
@@ -364,7 +389,8 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
       if (!file.id) continue; // id 없는 이례적 레코드 방어
       try {
         const body = await fetchBodyText(file);
-        yield toRawItem(file, { body });
+        const container = await folderNameOf(file.parents?.[0]);   // 채널(#2416) — 폴더당 1회 캐시
+        yield toRawItem(file, { body, container });
       } catch (e) {
         // 단일 파일 처리 실패는 skip/continue — 전체 백필을 죽이지 않는다.
         console.warn(`gdrive: 파일 처리 실패(skip) ${file.id}: ${(e as Error).message}`);

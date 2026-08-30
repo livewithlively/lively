@@ -13,6 +13,8 @@ import { CRON_ACTIONS, type CronJob } from "./registry.js";
 import { cronBreakerDecision } from "./cron-breaker.js";
 import { sendBoxAlert } from "../ops/alerts.js";
 import { logger } from "../log.js";
+import { withTenant } from "../org/tenant-context.js";
+import { schedulerTargets } from "./tenant-fanout.js";
 
 /** 구 DB(컬럼 부재)에서 쓸 기본 임계 — 스키마 마이그레이션 전에도 보호가 걸리게. */
 const DEFAULT_MAX_FAIL_STREAK = 5;
@@ -125,6 +127,19 @@ function isDue(job: CronJob, now: number, tz: string): boolean {
  */
 export async function runSchedulerTickOnce(): Promise<void> { return tick(); }
 
+// 워크스페이스 순회 (#2418) — 판정·대상 조회는 scheduler/tenant-fanout.ts(위탁 큐와 공유).
+//  tick() 자체는 그대로다: **테넌트 컨텍스트 안에서 부르면** itemsPool 파사드가 그 테넌트로 바인딩돼
+//  org_cron 조회·실행이 전부 그 스코프가 된다. 바뀐 것은 "누가 어떤 컨텍스트로 부르는가" 뿐이다.
+async function tickAllTenants(): Promise<void> {
+  const targets = await schedulerTargets();
+  if (targets === null) return tick();     // 단일 테넌트 배포 — 종전 경로
+  for (const t of targets) {
+    // 한 워크스페이스의 실패가 나머지를 막지 않는다(잡 단위 격리는 executeAndRecord 가 이미 한다).
+    try { await withTenant(t, () => tick()); }
+    catch (e) { logger.warn({ err: e, workspace: t.slug }, "scheduler tick failed (workspace)"); }
+  }
+}
+
 async function tick(): Promise<void> {
   let jobs: CronJob[];
   try { jobs = await q(itemsPool, `SELECT * FROM org_cron WHERE enabled=true`); }
@@ -152,7 +167,7 @@ let timer: NodeJS.Timeout | null = null;
 export function startScheduler(): void {
   if (timer) return;
   logger.info("scheduler started (in-process, org_cron)");
-  timer = setInterval(() => { tick().catch((e) => logger.warn({ err: e }, "scheduler tick failed")); }, TICK_MS);
+  timer = setInterval(() => { tickAllTenants().catch((e) => logger.warn({ err: e }, "scheduler tick failed")); }, TICK_MS);
   if (timer.unref) timer.unref(); // 스케줄러 타이머가 프로세스 정상 종료를 막지 않게.
   // 기존 설치 이행(#586) — notion 활성 커넥터의 일일 full 스윕 잡이 없으면 생성(커넥터 재저장 없이도 적용).
   //  증분이 델타(변경 비례)로 바뀌면서 아카이브·멘션 제목·댓글 단독 변경의 수렴은 이 잡이 담보한다.
