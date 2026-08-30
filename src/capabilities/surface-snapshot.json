@@ -4317,6 +4317,16 @@
   "input_hash": "90172574917c2fd4"
  },
  {
+  "name": "org_collect_scope_options",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/:system/collect/options"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "org_google_collect",
   "scope": "admin",
   "mcp": true,

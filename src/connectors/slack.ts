@@ -1064,6 +1064,10 @@ export const slackConnector: Connector = {
     const userMap = await loadUserMap(token);
     const base: SweepBase = { instance, teamDomain, userMap };
     const noise = parseNoise(cfg.noise_exclude);
+    //  #2243 — 검색 모드에도 **포함 지정**을 준다. 종전엔 allowlist 가 봇 모드 전용이라 개인 연결(유저 토큰)로는
+    //   «내가 고른 채널만»이 성립하지 않았다(제외만 가능). search.messages 는 여러 채널을 OR 로 묶는 문법이 없어
+    //   쿼리로는 못 좁히므로 **매치 단계에서 고른 채널만 통과**시킨다(요청 수는 그대로, 들어오는 자료가 정확해진다).
+    const only = new Set(parseNoise(cfg.channels).map((c) => c.replace(/^#/, "").toLowerCase()));
 
     // 증분: since 하한(위에서 계산). 최초: backfill_since(설정) 하한, 없으면 -Infinity(활동 끊길 때까지 과거 탐색).
     const incremental = sinceMs !== undefined;
@@ -1089,7 +1093,9 @@ export const slackConnector: Connector = {
 
       let n = 0;
       for await (const it of sweepRange(token, base, windowStart, cursorEnd, noise)) {
-        n++;
+        n++;   // ⚠ 창의 «비었나» 판정(dry stop)은 **고르기 전** 건수로 센다 — 고른 채널이 조용하다고 과거 탐색을 멈추면
+               //  그 창 너머의 자료를 영영 못 본다(전체는 활발한데 내 채널만 뜸한 것이 정상이다).
+        if (only.size && !only.has(String(it.container_name ?? "").replace(/^#/, "").toLowerCase())) continue;
         yield it;
       }
 

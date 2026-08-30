@@ -35,6 +35,8 @@ export interface SlackCollectState {
   bot: { enabled: boolean; collector_id: number | null; available: boolean; team_ids: string[] };
   /** 호출자 본인이 Slack 을 연결해 뒀는가 — 켜기 버튼의 활성 조건. */
   me_connected: boolean;
+  /** 지금 저장된 «모을 채널»(공백 구분, 비면 전체). #2243 — 화면이 토글 목록을 미리 체크하는 근거. */
+  channels: string;
 }
 
 async function memberConnected(memberId: string): Promise<boolean> {
@@ -59,6 +61,7 @@ export async function slackCollectState(callerId: string): Promise<SlackCollectS
     },
     bot: { enabled: !!bot?.enabled, collector_id: bot?.id ?? null, available: teams.length > 0, team_ids: teams },
     me_connected: await memberConnected(callerId),
+    channels: String(search?.config?.channels ?? bot?.config?.channels ?? ""),
   };
 }
 
@@ -83,12 +86,15 @@ const orgSlackCollectSet: Capability = {
   input: {
     enabled: z.boolean().describe("true=켜기(내 연결로) · false=끄기"),
     bot: z.boolean().optional().describe("봇 수집기도 함께(기본 true — 봇 토큰이 없으면 조용히 건너뛴다)"),
+    channels: z.string().optional().describe("모을 채널(채널명·id, 공백·쉼표 구분). 비우면 전체. #2243 — 화면의 채널 토글이 이 값을 보낸다"),
   },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/slack/collect"], parse: (req) => req.body ?? {} }] },
   handler: async (input, user, ctx) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
-    const i = (input ?? {}) as { enabled?: unknown; bot?: unknown };
+    const i = (input ?? {}) as { enabled?: unknown; bot?: unknown; channels?: unknown };
     const enabled = i.enabled === true;
+    //  채널 지정은 «켜기»와 독립이다 — 이미 켜진 뒤 범위만 바꾸는 경로가 정상 사용이다.
+    const channels = i.channels === undefined ? undefined : String(i.channels ?? "").trim();
     const withBot = i.bot !== false;
     const actor = user.userId;
     const source = ctx?.source ?? "web";
@@ -110,7 +116,7 @@ const orgSlackCollectSet: Capability = {
     await upsertCollector({
       id: search?.id, preset_key: "slack", instance_key: SEARCH_INSTANCE,
       label: search?.label ?? "Slack — 팀 공개 채널", enabled: true,
-      config: { ...(search?.config ?? {}), token_source: `member:${actor}` },
+      config: { ...(search?.config ?? {}), token_source: `member:${actor}`, ...(channels === undefined ? {} : { channels }) },
       note: search?.note ?? "[Slack 연결] 토글로 만들어진 수집기 — 켠 사람의 연결로 전 공개채널을 검색 수집합니다(#1881). 토큰 칸은 비워 두세요.",
     }, actor, source);
     changed.push(SEARCH_INSTANCE);
@@ -122,7 +128,7 @@ const orgSlackCollectSet: Capability = {
         await upsertCollector({
           id: bot?.id, preset_key: "slack", instance_key: BOT_INSTANCE,
           label: bot?.label ?? "Slack — Lively 봇이 초대된 채널", enabled: true,
-          config: { ...(bot?.config ?? {}), token_source: src },
+          config: { ...(bot?.config ?? {}), token_source: src, ...(channels === undefined ? {} : { channels }) },
           note: bot?.note ?? "[Slack 연결] 토글로 만들어진 수집기 — Lively 봇이 초대된 채널(비공개 포함)을 수집합니다. 채널에서 /invite @Lively 로 범위를 넓히세요(#1881).",
         }, actor, source);
         changed.push(BOT_INSTANCE);
