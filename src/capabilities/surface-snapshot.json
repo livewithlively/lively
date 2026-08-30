@@ -4104,7 +4104,7 @@
   "rest": [
    "POST /api/ui/org/slack/collect"
   ],
-  "input_hash": "6115cebec72e3d5d"
+  "input_hash": "2551457e5b831803"
  },
  {
   "name": "org_slack_app_manifest",
@@ -4315,6 +4315,16 @@
    "POST /api/ui/org/linear/oauth-complete"
   ],
   "input_hash": "90172574917c2fd4"
+ },
+ {
+  "name": "org_collect_scope_options",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/:system/collect/options"
+  ],
+  "input_hash": "6206790908a5980c"
  },
  {
   "name": "org_google_collect",
