@@ -16,6 +16,7 @@ import { getMemberSecret, listSecretsByKindPublic, memberOwner, GATEWAY_OWNER } 
 import { SLACK_BOT_KIND, buildSlackAppManifest, slackAppCreateUrl } from "../org/credentials/slack-oauth.js";
 import { getOrgProfile } from "../org/store.js";
 import { completeSlackInstall } from "../org/credentials/oauth-broker.js";
+import { COLLECT_INTERVALS, normalizeInterval } from "./member-collect.js";
 
 export const SEARCH_INSTANCE = "lively-search";
 export const BOT_INSTANCE = "lively-bot";
@@ -37,6 +38,12 @@ export interface SlackCollectState {
   me_connected: boolean;
   /** 지금 저장된 «모을 채널»(공백 구분, 비면 전체). #2243 — 화면이 토글 목록을 미리 체크하는 근거. */
   channels: string;
+  /** #2243 3차 — 얼마나 자주 다시 읽는지(초, 검색 수집기 기준). */
+  sync_interval_sec: number | null;
+  /** #2243 3차 — 언제부터 읽는지(YYYY-MM-DD, 비면 활동이 있는 과거 전체). */
+  backfill_since: string;
+  /** 마지막으로 실제 읽은 때. */
+  last_run: { status: string; started_at: string; finished_at: string | null } | null;
 }
 
 async function memberConnected(memberId: string): Promise<boolean> {
@@ -62,6 +69,11 @@ export async function slackCollectState(callerId: string): Promise<SlackCollectS
     bot: { enabled: !!bot?.enabled, collector_id: bot?.id ?? null, available: teams.length > 0, team_ids: teams },
     me_connected: await memberConnected(callerId),
     channels: String(search?.config?.channels ?? bot?.config?.channels ?? ""),
+    sync_interval_sec: search?.sync_interval_sec ?? bot?.sync_interval_sec ?? null,
+    backfill_since: String(search?.config?.backfill_since ?? bot?.config?.backfill_since ?? ""),
+    last_run: search?.last_run
+      ? { status: search.last_run.status, started_at: search.last_run.started_at, finished_at: search.last_run.finished_at }
+      : null,
   };
 }
 
@@ -87,11 +99,15 @@ const orgSlackCollectSet: Capability = {
     enabled: z.boolean().describe("true=켜기(내 연결로) · false=끄기"),
     bot: z.boolean().optional().describe("봇 수집기도 함께(기본 true — 봇 토큰이 없으면 조용히 건너뛴다)"),
     channels: z.string().optional().describe("모을 채널(채널명·id, 공백·쉼표 구분). 비우면 전체. #2243 — 화면의 채널 토글이 이 값을 보낸다"),
+    sync_interval_sec: z.number().int().optional().describe(`얼마나 자주 다시 읽을지(초): ${COLLECT_INTERVALS.join(" | ")}. 생략하면 유지`),
+    backfill_since: z.string().optional().describe("언제부터 읽을지(YYYY-MM-DD). 비우면 활동이 있는 과거 전체. 생략하면 유지"),
   },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/slack/collect"], parse: (req) => req.body ?? {} }] },
   handler: async (input, user, ctx) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
-    const i = (input ?? {}) as { enabled?: unknown; bot?: unknown; channels?: unknown };
+    const i = (input ?? {}) as { enabled?: unknown; bot?: unknown; channels?: unknown; sync_interval_sec?: unknown; backfill_since?: unknown };
+    const interval = i.sync_interval_sec === undefined ? undefined : (normalizeInterval(i.sync_interval_sec) ?? undefined);
+    const backfill = i.backfill_since === undefined ? undefined : String(i.backfill_since ?? "").trim();
     const enabled = i.enabled === true;
     //  채널 지정은 «켜기»와 독립이다 — 이미 켜진 뒤 범위만 바꾸는 경로가 정상 사용이다.
     const channels = i.channels === undefined ? undefined : String(i.channels ?? "").trim();
@@ -104,8 +120,8 @@ const orgSlackCollectSet: Capability = {
     const changed: string[] = [];
 
     if (!enabled) {
-      if (search?.enabled) { await upsertCollector({ id: search.id, enabled: false }, actor, source); changed.push(SEARCH_INSTANCE); }
-      if (bot?.enabled) { await upsertCollector({ id: bot.id, enabled: false }, actor, source); changed.push(BOT_INSTANCE); }
+      if (search?.enabled) { await upsertCollector({ id: search.id, enabled: false, ...(interval ? { sync_interval_sec: interval } : {}) }, actor, source); changed.push(SEARCH_INSTANCE); }
+      if (bot?.enabled) { await upsertCollector({ id: bot.id, enabled: false, ...(interval ? { sync_interval_sec: interval } : {}) }, actor, source); changed.push(BOT_INSTANCE); }
       return { ok: true, enabled: false, changed, state: await slackCollectState(actor) };
     }
 
@@ -116,8 +132,9 @@ const orgSlackCollectSet: Capability = {
     await upsertCollector({
       id: search?.id, preset_key: "slack", instance_key: SEARCH_INSTANCE,
       label: search?.label ?? "Slack — 팀 공개 채널", enabled: true,
-      config: { ...(search?.config ?? {}), token_source: `member:${actor}`, ...(channels === undefined ? {} : { channels }) },
+      config: { ...(search?.config ?? {}), token_source: `member:${actor}`, ...(channels === undefined ? {} : { channels }), ...(backfill === undefined ? {} : { backfill_since: backfill }) },
       note: search?.note ?? "[Slack 연결] 토글로 만들어진 수집기 — 켠 사람의 연결로 전 공개채널을 검색 수집합니다(#1881). 토큰 칸은 비워 두세요.",
+      ...(interval ? { sync_interval_sec: interval } : {}),
     }, actor, source);
     changed.push(SEARCH_INSTANCE);
 
@@ -128,8 +145,9 @@ const orgSlackCollectSet: Capability = {
         await upsertCollector({
           id: bot?.id, preset_key: "slack", instance_key: BOT_INSTANCE,
           label: bot?.label ?? "Slack — Lively 봇이 초대된 채널", enabled: true,
-          config: { ...(bot?.config ?? {}), token_source: src, ...(channels === undefined ? {} : { channels }) },
+          config: { ...(bot?.config ?? {}), token_source: src, ...(channels === undefined ? {} : { channels }), ...(backfill === undefined ? {} : { backfill_since: backfill }) },
           note: bot?.note ?? "[Slack 연결] 토글로 만들어진 수집기 — Lively 봇이 초대된 채널(비공개 포함)을 수집합니다. 채널에서 /invite @Lively 로 범위를 넓히세요(#1881).",
+          ...(interval ? { sync_interval_sec: interval } : {}),
         }, actor, source);
         changed.push(BOT_INSTANCE);
       }

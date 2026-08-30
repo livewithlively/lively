@@ -1871,3 +1871,89 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .cn-pick-row .t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn-pick-row .h { flex: none; color: var(--muted-2); font-size: 11.5px; }
 .cn-pick-ft { display: flex; justify-content: flex-end; }
+
+/* ── #2243 3차 «다듬은 안 B» — 앱 상세를 «AI가 하는 일 한 목록 + 개인화 설정»으로 ──────────────
+   종전 두 패널(바로 쓰기 / 모아 두기)은 같은 카드·같은 표·같은 스위치라 차이를 배울 단서가 없었다(원준 실측:
+   «뭔소린지 하나도 모르겠어»). 이제 화면은 세 부분이다 — ① AI가 하는 일(읽기·쓰기·모아 두기 세 줄)
+   ② 자료함에 모아 두는 것(무엇을·얼마나 자주·언제부터·어디서) ③ 보는 사람. 제목은 질문이 아니라 서술문. */
+.cn-sect { margin-top: 26px; }
+.cn-sect-h { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.cn-sect-n { width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 800; display: grid; place-items: center; flex: none; }
+.cn-sect-t { font-size: 18px; font-weight: 800; letter-spacing: -.35px; color: var(--ink); }
+.cn-sect-s { font-size: 12.5px; color: var(--muted); }
+.cn-sect-a { margin-left: auto; display: flex; gap: 12px; }
+
+/* «하는 일» 한 줄 — 읽기 / 쓰기 / 모아 두기. 줄마다 따로 끄고 켠다. */
+.cn-act { display: flex; align-items: flex-start; gap: 14px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.cn-act + .cn-act { margin-top: 9px; }
+.cn-act.on { border-color: var(--line-net-2); background: var(--bg-tint); }
+/* ★쓰기만 색이 다르다 — «내 이름으로 남는다»는 이 화면에서 유일하게 되돌릴 수 없는 것이다. */
+.cn-act.write { border: 1px solid var(--warn-line); background: var(--warn-bg); }
+.cn-act.write.off { border-style: dashed; }
+.cn-act-ic { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; flex: none; margin-top: 1px; background: var(--bg-tint-2); color: var(--muted); }
+.cn-act.on .cn-act-ic { background: var(--bg-punch); color: var(--blue); }
+.cn-act.collect .cn-act-ic { background: color-mix(in srgb, var(--mint-deep) 13%, transparent); color: var(--mint-deep); }
+.cn-act.write .cn-act-ic { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
+.cn-act-tx { flex: 1; min-width: 0; }
+.cn-act-v { display: block; font-size: 15px; font-weight: 800; color: var(--ink); line-height: 1.5; }
+.cn-act.write .cn-act-v { color: var(--warn-text); }
+.cn-act-m { display: block; font-size: 13px; color: var(--ink-sub); margin-top: 3px; line-height: 1.6; }
+.cn-act-m b { color: var(--ink); font-weight: 700; }
+.cn-act.write .cn-act-m, .cn-act.write .cn-act-m b { color: var(--warn-text); }
+.cn-act-sub { display: flex; align-items: center; gap: 9px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--warn-line); font-size: 12.5px; font-weight: 600; color: var(--warn-text); cursor: pointer; }
+.cn-act-sub .h { margin-left: auto; font-weight: 600; color: var(--muted-head); }
+.cn-act-rt { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; flex: none; padding-top: 2px; }
+.cn-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.cn-pill .v2-ic { width: 13px; height: 13px; }
+.cn-pill-me { color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); }
+.cn-pill-team { color: var(--on-fill); background: var(--mint-deep); }
+.cn-pill-write { color: var(--warn-text); background: color-mix(in srgb, var(--warn) 13%, transparent); border: 1px solid var(--warn-line); }
+.cn-pill-off { color: var(--muted-head); background: var(--bg-tint); border: 1px solid var(--line-net); }
+
+/* 개인화 설정 — 무엇을 · 얼마나 자주 · 언제부터 · 어디서 */
+.cn-set { display: flex; align-items: flex-start; gap: 16px; padding: 14px 0; border-top: 1px solid var(--line-row); }
+.cn-set:first-child { border-top: 0; padding-top: 4px; }
+.cn-set-lb { width: 128px; flex: none; padding-top: 6px; }
+.cn-set-lb b { display: block; font-size: 13.5px; font-weight: 800; color: var(--ink); }
+.cn-set-lb i { display: block; font-style: normal; font-size: 11.5px; color: var(--muted-2); margin-top: 3px; line-height: 1.5; }
+.cn-set-bd { flex: 1; min-width: 0; }
+.cn-set-hint { display: block; font-size: 12px; color: var(--muted); margin-top: 7px; line-height: 1.6; }
+.cn-seg { display: inline-flex; border: 1px solid var(--line-net); border-radius: 10px; overflow: hidden; background: var(--surface); max-width: 100%; flex-wrap: wrap; }
+.cn-seg button { padding: 7px 14px; border: 0; border-right: 1px solid var(--line-net); background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
+.cn-seg button:last-child { border-right: 0; }
+.cn-seg button:hover { background: var(--bg-tint); }
+.cn-seg button.on { background: var(--bg-punch); color: var(--blue); font-weight: 800; }
+.cn-seg button:disabled { opacity: .5; cursor: not-allowed; }
+.cn-chips { display: flex; gap: 7px; flex-wrap: wrap; }
+.cn-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 10px; border: 1px solid var(--line-net); background: var(--surface); font-size: 13px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
+.cn-chip:hover { border-color: var(--line-note); }
+.cn-chip.on { background: var(--bg-punch); border-color: var(--line-note); color: var(--ink-note); font-weight: 700; }
+.cn-chip input { margin: 0; }
+
+/* «아직 저장 안 함» — 체크만 하고 나가면 반영이 안 되던 것(#2243 진단 5) */
+.cn-savebar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-top: 14px; border-radius: 12px; background: var(--warn-bg); border: 1px solid var(--warn-line); flex-wrap: wrap; }
+.cn-savebar .m { flex: 1; min-width: 160px; font-size: 13px; color: var(--warn-text); font-weight: 600; line-height: 1.5; }
+
+/* 보는 사람 — 두 얼굴의 진짜 차이라 표의 한 줄이 아니라 비교 카드다(#2243 진단 6) */
+.cn-whos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cn-who { border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; }
+.cn-who.team { background: var(--bg-tint); border-color: var(--line-net-2); }
+.cn-who-t { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; color: var(--ink); }
+.cn-who-t .v2-ic { width: 16px; height: 16px; color: var(--muted-head); }
+.cn-who.team .cn-who-t .v2-ic { color: var(--mint-deep); }
+.cn-who-s { display: block; font-size: 12.5px; color: var(--ink-sub); line-height: 1.6; margin-top: 7px; }
+.cn-faces { display: flex; margin-top: 11px; }
+.cn-face { width: 27px; height: 27px; border-radius: 50%; display: grid; place-items: center; font-size: 11.5px; font-weight: 800; color: var(--on-fill); border: 2px solid var(--bg); background: var(--muted-2); }
+.cn-face + .cn-face { margin-left: -8px; }
+.cn-who.team .cn-face { border-color: var(--bg-tint); }
+
+.cn-gone { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+.cn-gone .v2-ic { width: 14px; height: 14px; color: var(--muted-2); }
+.cn-gone .m { flex: 1; min-width: 200px; line-height: 1.6; }
+@media (max-width: 760px) {
+  .cn-whos { grid-template-columns: minmax(0, 1fr); }
+  .cn-set { flex-direction: column; gap: 8px; }
+  .cn-set-lb { width: 100%; padding-top: 0; }
+  .cn-act { flex-wrap: wrap; }
+  .cn-act-rt { flex-direction: row; align-items: center; width: 100%; justify-content: flex-end; }
+}

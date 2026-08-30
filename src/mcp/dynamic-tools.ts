@@ -274,7 +274,12 @@ export async function registerDynamicTools(server: McpServer): Promise<void> {
     markExternalTool(tool.name, tool.log_args);
     server.registerTool(
       tool.name,
-      { title: tool.title || tool.name, description: tool.description || "", inputSchema: shape },
+      {
+        title: tool.title || tool.name, description: tool.description || "", inputSchema: shape,
+        //  #2243 3차 — A 레인(mcp-proxy)은 이미 내보내던 힌트를 B 레인도 내보낸다. 이게 없으면 GitHub 이슈 만들기·
+        //   Slack 메시지 보내기가 «파괴적»이라는 표식 없이 하네스에 나가, 컨펌 UX 가 그 줄을 조용히 지나친다.
+        annotations: { readOnlyHint: tool.level === "L0", destructiveHint: tool.level === "L2" },
+      },
       async (args: Record<string, unknown>, extra: unknown) => {
         const u: LivelyUser = resolveUser(extra);
         requireScope(u, callScope);

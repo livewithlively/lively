@@ -47,6 +47,8 @@ export const githubCollectCapabilities = makeMemberTokenCollect({
   note: "[GitHub 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 GitHub 연결로 고른 저장소의 이슈·PR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ GitHub]에서 계정을 연결하거나 토큰을 저장하세요",
   scopeKeys: ["repos"], requireScope: true,
+  //  #2243 3차 — 사람이 정하는 «무엇을·언제부터». 범위(repos)와 달리 비어 있어도 켜진다(커넥터 기본값 = 전부 켬).
+  optionKeys: ["include_prs", "include_releases", "backfill_since"],
   scopeHint: "모을 저장소(owner/repo)를 하나는 넣어 주세요 — [GitHub 연결] 화면에서 저장소를 골랐다면 그게 기본값이 됩니다.",
   // [GitHub 연결]의 저장소 고르기가 곧 범위 — 설치에 열린 저장소를 기본값으로(그 화면이 없는 PAT 연결은 손으로 넣는다).
   defaultScope: async (): Promise<Record<string, string>> => { const open = await listInstallationRepos(); return open?.length ? { repos: open.join(" ") } : {}; },
@@ -60,6 +62,7 @@ export const gitlabCollectCapabilities = makeMemberTokenCollect({
   note: "[GitLab 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 개인 토큰(read_api)으로 고른 프로젝트의 이슈·MR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ GitLab]에서 개인 액세스 토큰(read_api)을 저장하세요 — 계정 로그인 토큰으로는 GitLab 이 자료 읽기를 막습니다",
   scopeKeys: ["projects"], requireScope: true,
+  optionKeys: ["include_mrs", "include_releases", "backfill_since"],
   scopeHint: "모을 프로젝트 경로(group/project)를 하나는 넣어 주세요 — GitLab 주소를 그대로 붙여넣어도 됩니다.",
   // 호스트는 그 사람 토큰의 scope_key(회사 GitLab)를 따른다 — 두 번 적게 하지 않는다.
   extraConfig: async (actor): Promise<Record<string, string>> => {
@@ -77,6 +80,7 @@ export const linearCollectCapabilities = makeMemberTokenCollect({
   note: "[Linear 모아 두기] 토글로 만들어진 수집기 — 켠 사람의 라이블리 Linear 앱 연결로 이슈·댓글·문서를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ Linear ▸ 모아 두기]를 켜서 Linear 화면에서 [허용]하세요",
   scopeKeys: ["teams"],
+  optionKeys: ["include_documents", "backfill_since"],
   outcome: "이슈·댓글·문서가 자료함에 들어오고, 이슈 대화 증류기가 꺼진 채로 함께 준비된다. 자격이 없으면 needs_connect 와 함께 Linear 동의 URL 을 준다(토글이 곧 연결).",
   connectStart: async (actor) => { const c = await startLinearAppConsent(actor); return { authorization_url: c.authorizationUrl ?? "" }; },
   // 라이블리 Linear 앱(client id/secret)이 아직 없으면 화면이 «앱 등록 칸»을 먼저 보여 준다 — 그게 없으면 [허용] 화면조차 못 연다.
