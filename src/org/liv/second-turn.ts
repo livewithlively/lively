@@ -73,8 +73,8 @@ export interface SecondTurnState {
 }
 export type SecondTurnDecision =
   | { action: "skip"; reason: "no-kickoff" | "already-fired" | "gave-up" }
-  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" }
-  | { action: "giveup"; reason: "session-gone" | "turn1-never-delivered" }
+  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" }
+  | { action: "giveup"; reason: "session-gone" | "turn1-never-delivered" | "turn1-session-offline" }
   | { action: "fire"; partial: boolean; waitedMin: number };
 
 /** 수집 대기 상한 — 이 안에 첫 배치가 안 끝나면 있는 것으로 시작한다(영원히 안 쏘는 것이 최악이다). */
@@ -94,6 +94,17 @@ export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
     return waited > TURN1_DELIVERY_TTL_MS ? { action: "giveup", reason: "turn1-never-delivered" } : { action: "wait", reason: "turn1-undelivered" };
   }
   if (s.session.working || s.session.agentState === "busy") return { action: "wait", reason: "turn1-running" };
+  // ★ 세션이 살아 있지 않으면 1턴은 **아직 한 글자도 안 나왔다.** 'busy 가 아님' 을 '끝났음' 으로 읽으면
+  //  안 된다 — 실측(2026-08-30 dev): 세션이 안 뜬 채로 온보딩 31초 만에 2턴이 발사되고 distill_at 이
+  //  찍혀, 그 사람은 **영영 증류 지시를 못 받았다**(멱등 가드가 재시도를 막는다). 자료 8건·레인 0.
+  //  AI 미로그인·스폰 실패·노드 오프라인이 전부 이 모양으로 들어온다.
+  //  그래서 기다린다 — 사람이 로그인하거나 세션이 뜨면 그때 쏜다. TTL 을 넘기면 포기하고 사유를 남긴다
+  //  (포기는 distill_gave_up_at 으로 남아 화면이 "왜 안 왔나"에 답할 수 있다).
+  if (s.session.agentState === "offline") {
+    return waited > TURN1_DELIVERY_TTL_MS
+      ? { action: "giveup", reason: "turn1-session-offline" }
+      : { action: "wait", reason: "session-offline" };
+  }
   const enabled = s.collectors.filter((c) => c.enabled);
   const notYet = enabled.filter((c) => !c.lastRunAt || Date.parse(c.lastRunAt) < done);
   const waitedMin = Math.max(0, Math.round(waited / 60_000));
