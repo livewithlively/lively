@@ -295,7 +295,35 @@ export async function listSessionsForOwner(owner: string, limit = 200, workspace
       ORDER BY s.last_seen DESC
       LIMIT $2`,
     params);
-  return r.rows.map(mapSessionRow);
+  return withNamedLabels(r.rows.map(mapSessionRow), owner);
+}
+
+// ── 사람·에이전트가 **지은** 이름을 기록 행에도(#2251) ──────────────────────────
+//  `name` 의 기본값은 대화 제목에서 유도한 자동 이름이다(mapSessionRow) — 그건 '아직 아무도 안 지었을 때'의 값이다.
+//  누가 실제로 이름을 지었으면(label_source 가 human·agent) 그게 정본이고, 목록도 그걸 걸어야 한다.
+//  안 그러면 박스가 정리돼 기록만 남는 순간 사람이 고쳐 둔 이름이 **첫 지시 자동 이름으로 되돌아간다**
+//  (원준 신고 2026-08-28: "이름을 수도 없이 고쳤는데 계속 되돌아간다" 의 나머지 절반 — 앞 절반은 노드 rename 이
+//   게이트웨이 DB 에 안 닿던 것, terminal/routes.ts).
+//  ⚠ 왕복을 행 수에 비례시키지 않는다 — 대화 uuid 배열 하나로 한 번만 묻는다(#2234 의 교훈).
+//  ⚠ **owner 로 잠근다** — 목록과 같은 소유자의 행만 본다(대화 uuid 가 겹쳐도 남의 이름이 실리지 않게).
+//  ⚠ rule·id 출처는 일부러 무시한다 — 그건 이 목록이 title 에서 이미 같은 규칙으로 만들어 내는 값이다.
+async function withNamedLabels(rows: SessionListRow[], owner: string): Promise<SessionListRow[]> {
+  const ids = [...new Set(rows.map((r) => r.session_id).filter(Boolean))];
+  if (!ids.length) return rows;
+  try {
+    const r = await itemsPool.query(
+      `SELECT claude_session_id, label FROM org_session_state
+        WHERE owner = $1 AND claude_session_id = ANY($2::text[])
+          AND label_source IN ('human','agent') AND label IS NOT NULL AND btrim(label) <> ''`,
+      [owner, ids]);
+    if (!r.rows.length) return rows;
+    const named = new Map<string, string>(r.rows.map((x) => [String(x.claude_session_id), String(x.label).trim()]));
+    return rows.map((row) => { const n = named.get(row.session_id); return n ? { ...row, name: n } : row; });
+  } catch (e) {
+    //  이름 하나 때문에 목록을 못 주지는 않는다 — 못 읽으면 종전대로 자동 이름이 선다.
+    console.warn("[v6] 세션 목록 지어진 이름 조회 실패(비치명):", (e as Error)?.message ?? e);
+    return rows;
+  }
 }
 
 // 프로젝트 세션 목록(#905 C1 슬⑤b) — 이 프로젝트에 **한 번이라도** 바인딩된 세션(시간구간 전체). 프로젝트 상세 탭용.
