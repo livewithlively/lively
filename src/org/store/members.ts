@@ -301,10 +301,7 @@ const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터
 export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, secret_ask: ask };
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 /** 이어갈 대화를 정한다(null = 다음 턴이 첫 턴). 대화 **본문은 저장하지 않는다** — 이어받을 열쇠만.
@@ -317,10 +314,7 @@ export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Pro
   if (!chat) return cur;                       // 대화가 없으면 이을 곳도 없다
   const turns = [...(chat.turns ?? []), turn].slice(-cap);
   const next: LivProfile = { ...cur, chat: { ...chat, turns } };
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 /**
@@ -337,19 +331,13 @@ export async function setLivWelcomeProgress(id: string, progress: LivWelcomeProg
   //   뒤집히면 방금 찍은 미룸이 그 자리에서 지워져 다음 입장에 또 끌려간다. 미룸을 푸는 자리는 **사람이
   //   처음 설정 화면을 다시 연 순간**이다(web/v2/onboarding.ts clearWelcomeDeferred) — 그건 나가기보다
   //   한참 앞서 일어나므로 경합이 없다.
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 export async function setLivChat(id: string, chat: LivChat | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, chat };
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 /**
@@ -362,10 +350,7 @@ export async function appendLivAnswer(id: string, answer: LivAnswer): Promise<Li
   const cur = await getLivProfile(id);
   const { mergeAnswer } = await import("../delivery/liv-secret.js");
   const next: LivProfile = { ...cur, answers: mergeAnswer(cur.answers ?? [], answer, LIV_LIST_CAP) as LivAnswer[], secret_ask: null };
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 /**
@@ -384,10 +369,118 @@ export async function livAnswerStats(): Promise<Array<{
   return foldAnswerStats(r.rows.map((row) => row.liv_profile?.answers ?? []));
 }
 
+// ── 리브 프로필의 층 가르기(#2265) — 계정 축과 워크스페이스 축을 한 컬럼 안에서 나눈다.
+//  ⚠ **별도 모듈로 빼지 않는다.** members.ts 는 노드 에이전트 번들에 이미 실려 있어서, 여기서 새 파일을
+//   import 하면 그 잎이 번들에 따라 들어가 경계 부채가 늘어난다(scripts/node-agent-bundle-boundary.test.mjs
+//   가 상한으로 막는다). 순수 함수라 여기 있어도 테스트에 지장이 없다.
+//
+//  ── 문제 ──
+//  `org_member` 는 IDENTITY_GLOBAL 표라(db/tenant-column.ts) `liv_profile` 이 **계정당 한 벌**이다.
+//  그런데 그 안의 상당수는 워크스페이스마다 달라야 하는 사실이다(서랍·첫 지시·리브 세션 좌표·설정 결정).
+//  그래서 워크스페이스 두 곳에서 온보딩하면 **뒤가 앞을 덮는다**
+//  (실측: 한 계정으로 여러 워크스페이스를 시딩했더니 그 계정의 결정 이력 27건이 사라졌다).
+//
+//  ── 왜 새 표를 안 만드나 ──
+//  같은 컬럼 안에서 층만 가르면 마이그레이션이 필요 없고 되돌리기도 쉽다. RLS·백업·복구 표면도 안 늘어난다.
+//  옛 데이터는 **옮기지 않는다** — 읽을 때 워크스페이스 자리가 비어 있으면 옛 최상위 값으로 폴백하므로,
+//  기존 사용자는 자기 첫 워크스페이스에서 종전과 똑같이 보인다. 쓸 때부터 새 자리에 넣는다.
+
+/** 워크스페이스마다 달라야 하는 키 — 이 표가 이 변경의 전부다. */
+export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions"] as const;
+export type WorkspaceScopedKey = (typeof WORKSPACE_SCOPED_KEYS)[number];
+
+/** 워크스페이스 층이 사는 자리. */
+export const BY_WORKSPACE = "by_workspace";
+
+type Rec = Record<string, unknown>;
+const isRec = (v: unknown): v is Rec => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * 저장된 프로필에서 **이 워크스페이스가 보는 한 벌**을 만든다(순수).
+ *
+ * 계정 층은 그대로 얹고, 워크스페이스 층은 `by_workspace[wsId]` 에서 가져온다.
+ * 그 자리가 없으면 **옛 최상위 값으로 폴백**한다(하위호환) — 단, 워크스페이스 id 가 없을 때(단일 테넌트)도 같다.
+ *
+ * ⚠ 폴백은 **옛 최상위**만 본다. 다른 워크스페이스의 값을 빌려 오지 않는다 — 그게 이 결함의 본체다.
+ */
+export function viewForWorkspace(profile: Rec | null | undefined, workspaceId: string | null | undefined): Rec {
+  const p = isRec(profile) ? profile : {};
+  const ws = String(workspaceId ?? "").trim();
+  const out: Rec = {};
+  // ① 계정 층 — by_workspace 와 워크스페이스 전용 키를 뺀 나머지 전부.
+  for (const [k, v] of Object.entries(p)) {
+    if (k === BY_WORKSPACE) continue;
+    if ((WORKSPACE_SCOPED_KEYS as readonly string[]).includes(k)) continue;
+    out[k] = v;
+  }
+  // ② 워크스페이스 층 — 새 자리가 있으면 그것, 없으면 옛 최상위(폴백).
+  const box = isRec(p[BY_WORKSPACE]) ? (p[BY_WORKSPACE] as Rec) : {};
+  const mine = ws && isRec(box[ws]) ? (box[ws] as Rec) : null;
+  for (const k of WORKSPACE_SCOPED_KEYS) {
+    if (mine && k in mine) out[k] = mine[k];
+    else if (!mine && k in p) out[k] = p[k];    // 새 자리가 아예 없을 때만 옛 값을 쓴다
+  }
+  return out;
+}
+
+/**
+ * 갱신할 조각을 층에 맞게 **꽂아 넣은 새 프로필**을 만든다(순수 — 원본을 안 바꾼다).
+ *
+ * 워크스페이스 전용 키는 `by_workspace[wsId]` 로, 나머지는 최상위로 간다.
+ * 워크스페이스 id 가 없으면(단일 테넌트·컨텍스트 밖) 종전처럼 최상위에 쓴다 — 무회귀.
+ */
+export function mergeForWorkspace(profile: Rec | null | undefined, patch: Rec, workspaceId: string | null | undefined): Rec {
+  const p: Rec = { ...(isRec(profile) ? profile : {}) };
+  const ws = String(workspaceId ?? "").trim();
+  if (!ws) return { ...p, ...patch };
+
+  const box: Rec = isRec(p[BY_WORKSPACE]) ? { ...(p[BY_WORKSPACE] as Rec) } : {};
+  const mine: Rec = isRec(box[ws]) ? { ...(box[ws] as Rec) } : {};
+  //  새 자리를 처음 만들 때는 **옛 최상위 값을 밑에 깔아** 시작한다(그 워크스페이스가 첫 워크스페이스였을 수 있다).
+  //  안 깔면 기존 사용자가 한 번 쓰는 순간 종전 값이 사라진 것처럼 보인다.
+  const seeded = isRec(box[ws]) ? mine : Object.fromEntries(
+    WORKSPACE_SCOPED_KEYS.filter((k) => k in p).map((k) => [k, p[k]]));
+
+  const nextMine: Rec = { ...seeded };
+  for (const [k, v] of Object.entries(patch)) {
+    if ((WORKSPACE_SCOPED_KEYS as readonly string[]).includes(k)) nextMine[k] = v;
+    else p[k] = v;
+  }
+  box[ws] = nextMine;
+  p[BY_WORKSPACE] = box;
+  //  승계가 끝났으면 **옛 최상위 자리를 비운다.** 남겨 두면 아직 칸이 없는 *다른* 워크스페이스가
+  //  그 값을 폴백으로 상속해 «이미 온보딩했고 리브 세션도 있다»고 오인한다(그러면 2턴이 안 간다).
+  //  폴백은 '아무 워크스페이스도 아직 쓴 적 없을 때' 한 번만 쓰이는 다리여야 한다.
+  for (const k of WORKSPACE_SCOPED_KEYS) delete p[k];
+  return p;
+}
+
+// ── 워크스페이스 층(#2265) ──────────────────────────────────────────────────
+//  org_member 는 IDENTITY_GLOBAL 표라 liv_profile 이 계정당 한 벌인데, 그 안의 서랍·첫 지시·리브 세션
+//  좌표·설정 결정은 **워크스페이스마다 달라야 한다**. 그래서 같은 컬럼 안에서 층을 가른다
+//  (형태·폴백 규율은 org/liv/profile-scope.ts 머리말).
+//
+//  ⚠ **쓰기는 반드시 이 창구를 지난다.** 읽어 온 프로필은 '이 워크스페이스가 보는 뷰'라,
+//   그걸 `{...cur}` 로 통째로 되쓰면 **다른 워크스페이스 칸이 통째로 날아간다.**
+async function writeLivProfile(id: string, patch: Record<string, unknown>): Promise<LivProfile> {
+  const { currentTenant } = await import("../tenant-context.js");
+  const ws = currentTenant()?.id ?? null;
+  const raw = await itemsPool.query(`SELECT liv_profile FROM org_member WHERE id=$1`, [id]);
+  if (!raw.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  const cur = (raw.rows[0].liv_profile ?? {}) as Record<string, unknown>;
+  const next = mergeForWorkspace(cur, patch, ws);
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return viewForWorkspace((r.rows[0].liv_profile ?? {}) as Record<string, unknown>, ws) as LivProfile;
+}
+
 export async function getLivProfile(id: string): Promise<LivProfile> {
+  const { currentTenant } = await import("../tenant-context.js");
   const r = await itemsPool.query(`SELECT liv_profile FROM org_member WHERE id=$1`, [id]);
   const v = r.rows[0]?.liv_profile as unknown;
-  return (v && typeof v === "object" && !Array.isArray(v)) ? v as LivProfile : {};
+  const raw = (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, unknown> : {};
+  return viewForWorkspace(raw, currentTenant()?.id ?? null) as LivProfile;
 }
 
 /**
@@ -417,10 +510,7 @@ export async function appendLivProfile(
     const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);
     next.declined = [...rest, patch.declined].slice(-LIV_LIST_CAP);
   }
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 // ── 로컬 하네스 관측 스냅샷(#891 온보딩 C) — 세션훅이 push, 웹이 라이블리 자산과 대조 ──
