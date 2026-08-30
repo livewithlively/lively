@@ -971,10 +971,26 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return CONN.connected.some((s) => s.key === SVC_OF[id]);
   };
   /** 피그마 범위 입력 → 서버 scope(숫자만인 토막 = 팀 id, 나머지 = 파일 링크). */
+  /**
+   * 붙여 넣은 것에서 **팀**과 **파일**을 갈라낸다 (#2232 원준님 2026-08-30:
+   *  "피그마 파일 하나하나마다 링크를 넣어야 하면 수백 개인데 이게 맞냐" — 맞지 않다. 기본은 **팀**이다).
+   *  ⚠ 종전엔 «숫자만» 을 팀으로 봤다. 그래서 팀 주소를 그대로 붙여 넣으면(사람이 하는 그대로)
+   *   파일 링크로 분류돼 팀이 통째로 안 잡혔다. 이제 주소에서 팀 id 를 뽑는다.
+   *   · 팀   figma.com/files/team/<숫자>/… · figma.com/team/<숫자>  · 숫자만
+   *   · 파일 figma.com/design/<키>/… · figma.com/file/<키>/…       · 키만
+   */
   const figmaScope = (text) => {
-    const toks = String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean);
-    const teams = toks.filter((x) => /^\d{5,}$/.test(x)), files = toks.filter((x) => !/^\d{5,}$/.test(x));
-    const out: any = {}; if (files.length) out.file_keys = files.join(' '); if (teams.length) out.team_ids = teams.join(' '); return out;
+    const teams: string[] = [], files: string[] = [];
+    for (const raw of String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean)) {
+      const team = raw.match(/(?:^|\/)team\/(\d{5,})/) || raw.match(/^(\d{5,})$/);
+      if (team) { teams.push(team[1]); continue; }
+      const file = raw.match(/\/(?:design|file|board|proto)\/([A-Za-z0-9]{10,})/);
+      files.push(file ? file[1] : raw);
+    }
+    const out: any = {};
+    if (files.length) out.file_keys = files.join(' ');
+    if (teams.length) out.team_ids = teams.join(' ');
+    return out;
   };
   /** 토큰형 앱 수집기 켜기 — 서버 답(ok / needs_connect / needs_scope)을 그대로 돌려준다. 던지지 않는다. */
   async function startMemberCollect(id, scopeText) {
@@ -1232,8 +1248,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
       ${tokenSaved(id) ? '<p class="ob-note">토큰은 이미 저장돼 있어요 — 바꿀 때만 다시 붙여넣으세요.</p>' : ''}
       <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
-      ${collectMode(id) && id === 'figma' ? `<p class="ob-note">모을 <b>피그마 파일 링크</b>를 넣어 주세요 — 주소창에서 복사, 여러 개면 공백으로. 팀 전체를 모으려면 팀 주소(figma.com/files/team/&lt;id&gt;/…)의 숫자 id 를 넣어도 돼요.</p>
-      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/design/…">` : ''}
+      ${collectMode(id) && id === 'figma' ? `<p class="ob-note"><b>팀 주소</b>를 넣어 주세요 — Figma 에서 팀을 연 다음 주소창을 그대로 복사하시면 됩니다(<span class="ob-fine2">figma.com/files/team/…</span>).
+      그 팀의 파일을 제가 알아서 훑습니다. 파일 몇 개만 모으고 싶으시면 그 <b>파일 링크</b>를 넣으셔도 돼요 — 여러 개면 공백으로 띄우세요.</p>
+      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…">` : ''}
       ${collectMode(id) && id === 'gitlab' ? `<p class="ob-note">회사 GitLab 을 쓰면 아래에 그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
       <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com">
       <p class="ob-note">모을 <b>프로젝트 경로</b>(group/project)를 넣어 주세요 — 여러 개면 공백으로. 프로젝트 주소를 그대로 붙여넣어도 돼요.</p>
@@ -1550,6 +1567,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
                 : scopeOnly ? (id === 'gitlab' ? (open ? '모을 프로젝트 경로를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 프로젝트(group/project)를 넣어 주세요.') : (open ? '모을 파일 링크를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 파일 링크를 넣어 주세요.'))
                 : tokOnly ? (id === 'github' ? '계정은 이어져 있어요 — 누르면 고른 저장소의 이슈·PR 모으기가 켜져요.' : '토큰은 받았어요 — 누르면 바로 가져오기가 켜져요.')
+                : (collectMode(id) && id === 'gitlab') ? (open ? '아래 세 칸을 채워 주세요.' : '눌러 주세요 — 개인 토큰 한 줄을 받아 오면 됩니다.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
                 : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
@@ -1823,7 +1841,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         return qHead('claude', lead, `${picked} 계정을 연결해 주세요.`,
           (g && g.help) || '아래 버튼으로 로그인 창을 열고 순서대로 하시면 됩니다. 쳐야 할 글자는 누르면 복사돼요.')
           + `<div class="ob-tok">
-              <button class="ob-btn ob-btn-sub ob-btn-inline" id="cTerm">${picked} 로그인 창 열기 ↗</button>
+              <button class="ob-btn ob-btn-sub ob-btn-inline" id="cTerm">${LOGIN_INLINE[h] ? `${picked} 로그인 시작` : `${picked} 로그인 창 열기 ↗`}</button>
+              <div class="ob-login-card" id="cCard" hidden></div>
               <ol>${steps}</ol>
               ${g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
               ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map(li).join('')}</ol></div>` : ''}
@@ -1857,6 +1876,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         if (term) term.onclick = async () => {
           const h = (AIC && AIC.harness) || aiHarness();
           const label = AI_LABEL[h] || S.ai || h;
+          // ★ 터미널 없이 여기서 끝내는 하네스(#2055 후속) — 새 탭·새 창을 열지 않는다.
+          //  사람이 할 일은 «주소를 열고 코드를 넣는 것» 뿐인데 종전엔 그걸 하려고 검은 창을 통째로 봤다.
+          //  대상이 아닌 하네스(agy·grok)는 아래 종전 경로 그대로다 — 그쪽은 비대화형 한 줄이 없다.
+          if (LOGIN_INLINE[h]) { await startInlineLogin(el, h, label); return; }
           term.disabled = true; const was = term.textContent; term.textContent = '여는 중…';
           try {
             const out: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
@@ -2301,6 +2324,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const DEVICE_NOTE = '왜 주소와 코드냐면: 그 창은 우리 서버에서 돌아서 로그인 페이지를 스스로 못 열어요. 그래서 주소는 사람이 열고, 코드를 넣어 «이 창이 내 것» 이라고 알려 주는 방식이에요.';
   //  #2232 원준님 실측 — 창은 검지 않을 수도 있고(밝은 테마), 사람은 CLI 조작법(↑↓·Enter)을 모를 수 있다. «터미널 창» 으로 부르고 조작법을 한 줄 준다.
   const CLI_NOTE = '터미널 창 조작: 글자만 있는 창이에요. 고르는 화면에선 <b>↑ ↓</b> 로 옮기고 <b>Enter</b> 로 확정, 붙여넣기는 <b>⌘V</b>(윈도우 Ctrl+V), 창 안 글자는 마우스로 끌어 복사할 수 있어요.';
+  //  claude 는 codex 와 달리 **코드를 되받는다** — 왜 입력칸이 있는지 한 줄로 말해 준다.
+  const PASTE_NOTE = '왜 코드를 다시 넣냐면: 로그인은 브라우저에서 끝나고, 그 결과를 우리 서버에서 도는 Claude 에게 전해 줘야 하기 때문이에요. 브라우저가 준 코드가 그 전달표입니다.';
   const cp = (t) => `<code class="ob-copy" data-copy="${esc(t)}" title="누르면 복사돼요">${esc(t)}</code>`;
   //  버튼은 이 글 **위**에 있다(qHead 다음 줄) — «아래» 라고 쓰면 사람이 아래를 뒤진다(원준님 실측 2026-08-28).
   //  #2232 원준님(2026-08-28, 안 1) — 기본 노출은 **사람이 손을 대는 3걸음**만. Enter 로 넘기기만 하는 화면(글자 스타일·로그인 방법·
@@ -2320,12 +2345,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         `그 주소를 열어 <b>Claude(Anthropic) 계정</b>으로 로그인하고 <b>Authorize</b>(허용)를 누르면 브라우저에 <b>코드</b>가 나와요(«Paste this code back into Claude Code»). 그 코드를 복사해 <b>이 자리 입력칸</b>에 붙여넣고 ${kbd('넣기')}.`,
         `이 자리에 «로그인이 끝났어요» 가 뜨면 아래 ${kbd('로그인했어요')}.`,
       ],
-      between: `<b>첫 세션에서 물음이 몇 개 더 나와요</b> — 글자 스타일 · 보안 안내 · «이 폴더를 믿나요». Claude Code 가 로그인과 별개로 처음 한 번 묻는 것이고, 라이블리가 만든 작업 폴더라 전부 그대로 <b>Enter</b>(폴더는 «Yes, proceed»)로 넘기면 됩니다.`,
+      //  글자 스타일·보안 안내는 키트가 미리 넘긴다(member-kit-seed 의 .claude.json 시딩) — 로그인을 터미널 밖으로
+      //   뺐는데 그 안내가 그대로 나오면 사람 눈엔 «또 로그인하라» 다(실측 2026-08-28: «Select login method» 화면).
+      //   폴더 신뢰만 남긴다 — 그건 사람이 할 보안 판단이라 한 번 묻는 게 맞다.
+      between: `첫 세션에서 <b>«이 폴더를 믿나요»</b>(<b>Do you trust the files in this folder?</b>) 한 번만 더 물어요. 라이블리가 만든 작업 폴더이니 «<b>Yes, proceed</b>» 에서 <b>Enter</b>.`,
       more: '어떤 물음인지 보기',
       detail: [
-        `<b>Choose the text style that looks best with your terminal</b>(글자 스타일) — 아무거나. 기본 «2. Dark mode», 창이 밝으면 «3. Light mode». ↑ ↓ 로 맞추고 Enter.`,
-        `<b>Security notes</b>(안내) · <b>Use Claude Code's terminal setup?</b>(터미널 설정) — 각각 Enter.`,
         `<b>Do you trust the files in this folder?</b>(이 폴더를 믿나요) — «Yes, proceed» 에서 Enter. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
+        `혹시 <b>Choose the text style…</b>(글자 스타일)이나 <b>Select login method:</b>(로그인 방법)이 나오면 — 그건 로그인이 풀린 게 아니라 <b>첫 실행 안내</b>예요(보통은 라이블리가 미리 넘겨 둡니다). 1번 그대로 <b>Enter</b> 로 넘기면 이미 로그인된 계정으로 이어집니다.`,
         `구독 계정(Pro·Max·Team)이면 그대로, 회사 API 콘솔 계정이면 그 계정으로 로그인하시면 됩니다.`,
         PASTE_NOTE,
       ],
@@ -2342,8 +2369,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       between: `ChatGPT 화면에 빨간 글로 «<b>Codex용 장치 코드 인증</b>을 활성화한 뒤 다시 실행하세요» 가 나와도 막힌 게 아니에요 — 계정 설정 하나를 켜고 다시 시작하면 됩니다.`,
       more: '켜는 방법 보기',
       detail: [
-        `그 글의 <b>ChatGPT 보안 설정</b> 링크를 눌러(또는 chatgpt.com ▸ 프로필 ▸ ${kbd('설정')} ▸ ${kbd('보안')}) <b>Codex용 장치 코드 인증</b>을 켜세요.`,
-        `그런 다음 이 자리에서 ${kbd('ChatGPT 로그인 시작')}을 다시 누르면 주소와 코드가 새로 나와요.`,
+        `<a href="https://chatgpt.com/#settings" target="_blank" rel="noopener"><b>ChatGPT 설정 열기 ↗</b></a> ▸ ${kbd('보안')} 에서 <b>Codex용 장치 코드 인증</b>을 켜세요(그 빨간 글의 <b>ChatGPT 보안 설정</b> 링크로 가도 같은 자리예요).`,
+        `켠 뒤 이 자리에서 ${kbd('다시 시도')}를 누르면 <b>새 주소와 새 코드</b>가 나옵니다 — 아까 코드는 이미 죽어서 다시 넣어도 같은 벽이에요.`,
+        `그 빨간 글이 «codex login --device-auth 를 다시 실행하세요» 라고 하는데 그건 터미널 이야기예요. 여기서는 ${kbd('다시 시도')}가 그 역할입니다.`,
         DEVICE_NOTE,
       ],
       note: '' },
@@ -2375,6 +2403,138 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       note: CLI_NOTE },
   };
   const LOGIN_SESSION = { claude: { harness: 'claude' }, codex: { harness: 'shell', loginFor: 'codex' }, antigravity: { harness: 'antigravity' }, grok: { harness: 'shell', loginFor: 'grok' } };
+  /* 화면에서 바로 로그인이 되는 하네스(#2055 후속, 2026-08-28) — 서버가 로그인 명령을 대신 돌리고 주소·코드만 준다.
+     · codex  `codex login --device-auth` → 주소 + 일회용 코드. 되돌려 줄 입력이 없다.
+     · claude `claude auth login`        → 주소를 주고 **코드를 되받는다**(브라우저의 «Paste this code back…»).
+     그 밖(agy·grok)은 비대화형 한 줄이 아예 없어(catalog.harnessLoginArgv 머리말) 종전 «로그인 창» 그대로다.
+     ⚠ claude 는 로그인과 별개로 **첫 실행 설정**(글자 스타일·보안 안내·폴더 신뢰)을 TUI 에서 묻는다. 로그인만
+     이 자리로 빼면 그 물음은 없어지는 게 아니라 **첫 세션으로 미뤄진다** — 그래서 안내 마지막 줄에 그대로 적는다.
+     대신 답해 두지 않는 이유는 «이 폴더를 믿나요» 가 사람이 할 보안 판단이라서다(미리 눌러 주면 그 판단을 뺏는다).
+     판정·파싱의 정본은 서버 ai-login-flow.ts 다 — 여기서 형식을 다시 짐작하지 않는다. */
+  const LOGIN_INLINE = { codex: true, claude: true };
+
+  /* 터미널 없이 로그인 — 서버가 명령을 멤버 자리에서 돌리고, 여기서는 주소·코드만 보여 준다(#2055 후속).
+     ⚠ «막다른 카드» 를 만들지 않는다: 시작조차 못 하면 종전 «로그인 창» 경로로 정직하게 내려간다.
+     ⚠ 완료 판정은 서버의 **자격 확인**이 한다(프로세스가 끝난 것과 로그인 성공은 다르다). */
+  let inlineStop = false;
+  async function startInlineLogin(el, h, label, restart) {
+    const card = $('#cCard', el); if (!card) return;
+    inlineStop = false;
+    card.hidden = false;
+    //  #2232 원준님 2026-08-30 — 시작 버튼은 **누른 순간 사라진다.** 종전엔 로그인이 끝난 뒤에도
+    //   «Claude 로그인 시작» 이 위에 남아 있어 «끝났는데 왜 시작 버튼이?» 가 됐다. 이 아래 카드가 그 자리를 대신한다.
+    //   (탈출로가 필요하면 escape() 가 자기 버튼을 따로 그린다.)
+    const startBtn = $('#cTerm', el); if (startBtn) startBtn.hidden = true;
+    /** 로그인이 끝나면 «하는 방법» 은 더 이상 할 일이 아니다 — 걸음표·펼침·조작법을 걷는다. */
+    const hideHowto = () => {
+      for (const sel of ['#cTerm', '.ob-tok > ol', '.ob-between', '#cDetail', '.ob-fine2']) {
+        const n = $(sel, el); if (n) n.hidden = true;
+      }
+    };
+    const say = (...nodes) => { card.replaceChildren(...nodes); };
+    const line = (cls, text) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; };
+    const copyRow = (k, v, href) => {
+      const row = document.createElement('div'); row.className = 'ob-login-row';
+      const key = document.createElement('span'); key.className = 'ob-login-k'; key.textContent = k;
+      const val = document.createElement('code'); val.className = 'ob-login-v'; val.textContent = v; val.title = '눌러서 복사';
+      val.onclick = async () => { try { await navigator.clipboard.writeText(v); toast('복사했어요'); } catch (_) { toast(v); } };
+      row.append(key, val);
+      if (href) { const a = document.createElement('a'); a.className = 'ob-btn ob-btn-sub ob-btn-inline'; a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = '열기'; row.append(a); }
+      return row;
+    };
+    //  ⚠ 창을 **자동으로** 열지 않는다. `await` 뒤의 window.open 은 사람이 누른 순간과 끊겨 있어 브라우저가
+    //   조용히 막는다(팝업 차단 — 오류도 안 난다). 그러면 화면엔 작은 글 한 줄뿐이라 «눌러도 반응이 없다» 가 된다.
+    //   그래서 탈출로는 **사람이 누르는 버튼**으로 준다 — 그 클릭이 곧 창을 열 자격이다.
+    const escape = (why) => {
+      const b = document.createElement('button');
+      b.className = 'ob-btn ob-btn-sub ob-btn-inline'; b.textContent = `${label} 로그인 창 열기 ↗`;
+      b.onclick = () => { void openLoginWindow(h, label); };
+      say(line('ob-note', why), b);
+    };
+    say(line('ob-fine2', '로그인 절차를 시작하는 중이에요…'));
+    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h, restart: restart === true }) }); }
+    catch (e) {
+      // 여기서 못 하면 사람을 세우지 않는다 — 종전 경로로 내려간다(원준님이 지적한 «막다른 안내» 금지).
+      escape(`여기서 바로 로그인할 수 없어요 — ${(e && e.message) || e}`);
+      return;
+    }
+    let pasted = false;
+    let lastSig = '';   // 지금 카드에 그려진 상태의 지문 — 같은 내용을 다시 그리지 않기 위해(입력 중인 글자를 지우지 않는다)
+    //  주소가 안 오는 채로 버티지 않는다 — codex 는 실측 1초 안에 찍는다. 상한을 넘기면 탈출로를 준다.
+    const STALL_MS = 30000;
+    const startedAt = Date.now();
+    const tick = async () => {
+      if (inlineStop || !document.body.contains(card)) return;
+      let st = null;
+      try { st = await api(`/api/ui/me/ai-login/state?harness=${encodeURIComponent(h)}`); } catch (_) { /* 다음 틱에 */ }
+      if (!(st && st.url) && !(st && st.loggedIn === true) && !(st && st.step === 'failed') && Date.now() - startedAt > STALL_MS) {
+        inlineStop = true;
+        escape('로그인 주소가 오지 않았어요. 창으로 열어 주세요.');
+        return;
+      }
+      if (st && st.loggedIn === true) {
+        inlineStop = true;
+        hideHowto();
+        say(line('ob-ok', `${label} 로그인이 끝났어요 — 아래 [로그인했어요]를 누르시면 됩니다.`));
+        try { await api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness: h }) }); } catch (_) { /* noop */ }
+        const go = $('#cGo', el); if (go) go.focus();
+        return;
+      }
+      if (st && st.step === 'failed') {
+        const again = document.createElement('button'); again.className = 'ob-btn ob-btn-sub ob-btn-inline'; again.textContent = '다시 시도';
+        //  ⚠ 반드시 **새로** 띄운다 — 옛 프로세스가 살아 있으면 죽은 코드를 그대로 다시 보여 준다(위 restart 머리말).
+        again.onclick = () => { void startInlineLogin(el, h, label, true); };
+        say(line('ob-note', String((st && st.error) || '로그인이 실패했어요.')), again);
+        return;
+      }
+      if (st && st.url) {
+        //  ★ 같은 내용이면 **다시 그리지 않는다**(원준님 2026-08-30: "코드를 붙여넣고 조금 있으면 코드가 사라진다").
+        //   종전엔 2초 폴링이 매번 card.replaceChildren 을 불러 **사람이 입력 중이던 칸을 통째로 갈아치웠다** —
+        //   붙여넣고 2초 안에 [넣기]를 눌러야 하는 화면이 됐다. 상태가 실제로 바뀔 때만 그린다.
+        const sig = `${st.url}|${st.code || ''}|${st.needsPaste && !pasted ? 'p' : ''}`;
+        if (sig === lastSig) { setTimeout(tick, 2000); return; }
+        //  그려야 한다면 **치던 글자는 살려서** 옮긴다(코드가 늦게 도착해 한 번 더 그리는 경우).
+        const keep = (($('.ob-login-in', card) as HTMLInputElement | null) || { value: '' }).value;
+        lastSig = sig;
+        const rows = [copyRow('주소', st.url, st.url)];
+        if (st.code) rows.push(copyRow('일회용 코드', st.code));
+        rows.push(line('ob-fine2', st.code
+          ? '주소를 열고 위 코드를 넣어 주세요. 끝나면 이 자리에 «끝났어요» 가 뜹니다.'
+          : '주소를 열고 로그인해 주세요. 끝나면 이 자리에 «끝났어요» 가 뜹니다.'));
+        if (st.needsPaste && !pasted) {
+          const row = document.createElement('div'); row.className = 'ob-login-row';
+          const inp = document.createElement('input'); inp.className = 'ob-input ob-login-in'; inp.type = 'text'; inp.placeholder = '브라우저에서 받은 코드';
+          inp.value = keep;
+          //  Enter 로도 넣는다 — 붙여넣고 바로 확정하는 것이 사람의 손버릇이다.
+          inp.onkeydown = (ev) => { if ((ev as KeyboardEvent).key === 'Enter') { ev.preventDefault(); ok.click(); } };
+          const ok = document.createElement('button'); ok.className = 'ob-btn ob-btn-sub ob-btn-inline'; ok.textContent = '넣기';
+          ok.onclick = async () => {
+            const v = inp.value.trim(); if (!v) return; ok.disabled = true;
+            try {
+              await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness: h, code: v }) });
+              pasted = true; lastSig = '';   // 다음 틱은 «코드 칸 없는» 화면으로 한 번 다시 그린다
+              ok.textContent = '넣었어요'; toast('코드를 넣었어요 — 확인하는 중이에요');
+            }
+            catch (e) { toast(`코드를 넣지 못했어요 — ${(e && e.message) || e}`); ok.disabled = false; }
+          };
+          row.append(inp, ok); rows.push(row);
+        }
+        say(...rows);
+      }
+      setTimeout(tick, 2000);
+    };
+    void tick();
+  }
+  /* 종전 «로그인 창»(새 탭) — 인라인 대상이 아닌 하네스와, 인라인이 시작조차 못 했을 때의 탈출로. */
+  async function openLoginWindow(h, label) {
+    const out: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
+      label: `내 계정 로그인 (${label})`, rootKey: 'personal', subpath: '', flags: {}, autoApprove: false, loginProfile: true,
+      ...(LOGIN_SESSION[h] || { harness: h }) }) });
+    const id = out && out.session && out.session.id;
+    if (!id) throw new Error('세션을 받지 못했어요');
+    window.open(sessionTermUrl(id, { label: (out.session && out.session.label) || label }), '_blank');
+    toast('새 탭에 로그인 창을 열었어요. 거기서 로그인을 마치고 돌아오세요.');
+  }
 
   const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
   async function chatStep(step, token) {
