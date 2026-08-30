@@ -7,6 +7,7 @@
 //   - 리눅스 서버 기본 TZ 는 대개 UTC 라, 그대로 두면 '매일 09:00' cron 이 **18:00 KST 에 돈다**(#778 의 진짜 버그).
 //  → 시간대를 제품 설정으로 올려 게이트웨이 안에서 결정론적으로 만든다. OS 는 건드리지 않는다.
 import { itemsPool } from "../db/client.js";
+import { currentTenant } from "./tenant-context.js";
 
 export const DEFAULT_TZ = "Asia/Seoul";
 
@@ -19,20 +20,28 @@ export function isValidTimezone(tz: string): boolean {
 }
 
 // 캐시 — cron 틱(30s)·세션 생성마다 DB 를 때리지 않게. 쓰기(updateOrgProfile)가 즉시 무효화하고 TTL 은 백스톱.
-let cached: { tz: string; at: number } | null = null;
+//  ⚠ **테넌트별로 키를 나눈다**(#2418). 종전엔 프로세스 전역 캐시 하나였는데, 스케줄러가 워크스페이스를 순회하게
+//   되면서 먼저 캐시된 워크스페이스의 시간대를 나머지 전부가 쓰게 된다 — '매일 09:00' 잡이 남의 시간대로 도는 부류다.
+let cached = new Map<string, { tz: string; at: number }>();
 const TTL_MS = 60_000;
+/** 캐시 키 — 테넌트 컨텍스트가 있으면 그 id, 없으면(단일 테넌트 배포) 고정 키. */
+function tzKey(): string {
+  return currentTenant()?.id ?? "single";
+}
 
 // 유효 시간대. 미설정(NULL)·미지의 존·DB 미연결 → DEFAULT_TZ (기본값의 단일 출처는 DB DEFAULT 가 아니라 여기).
 export async function orgTimezone(): Promise<string> {
-  if (cached && Date.now() - cached.at < TTL_MS) return cached.tz;
+  const key = tzKey();
+  const hit = cached.get(key);
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.tz;
   let tz = DEFAULT_TZ;
   try {
     const r = await itemsPool.query(`SELECT timezone FROM org_profile WHERE id=1`);
     const v = (r.rows[0] as { timezone?: string | null } | undefined)?.timezone;
     if (v && isValidTimezone(v)) tz = v;
   } catch { /* 테이블 부재(부팅 초기)·DB 미연결 → 기본값. 시간대 때문에 세션·틱을 죽이지 않는다. */ }
-  cached = { tz, at: Date.now() };
+  cached.set(key, { tz, at: Date.now() });
   return tz;
 }
 
-export function invalidateOrgTimezone(): void { cached = null; }
+export function invalidateOrgTimezone(): void { cached = new Map(); }
