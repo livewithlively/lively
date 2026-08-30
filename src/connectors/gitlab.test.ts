@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseProjectList, issueItem, noteItem, releaseItem } from "./gitlab.js";
+import { parseProjectList, issueItem, noteItem, releaseItem, makeProgressLogger } from "./gitlab.js";
 import { routeIngestV6 } from "../org/ingest/ingest-classify.js";
 import { sourceKindOf } from "../v6/mirror/mirror-source.js";
 import { SOURCE_KINDS } from "../capabilities/source.js";
@@ -28,5 +28,20 @@ t("릴리스 → note/source · kind gitlab_issue 등록", () => {
   const r = releaseItem("grp/proj", "gitlab.com", { tag_name: "v2.0", name: "봄", description: "- x", released_at: "2026-08-10T00:00:00Z" });
   assert.equal(r.type, "note"); assert.equal(routeIngestV6("note", "gitlab"), "source"); assert.equal(r.provenance.external_id, "grp/proj:release:v2.0");
   assert.equal(sourceKindOf("gitlab"), "gitlab_issue"); assert.ok((SOURCE_KINDS as readonly string[]).includes("gitlab_issue"));
+});
+t("진행 로그 — 첫 줄은 바로, 간격 안은 삼키고, 간격 지나면 다시(러너 정체 오판 방지)", () => {
+  let clock = 1_000;
+  const out: string[] = [];
+  const log = makeProgressLogger(15_000, () => clock, (m) => out.push(m));
+
+  log("a");                          // 첫 줄은 항상 나간다 — 시작했음을 알려야 한다
+  log("b");                          // 같은 시각 → 삼킨다
+  clock += 14_999; log("c");         // 아직 간격 미달 → 삼킨다
+  clock += 1; log("d");              // 15초 경과 → 나간다
+  assert.deepEqual(out, ["a", "d"]);
+
+  clock += 1; log("e", true);        // force 는 간격을 무시한다(프로젝트 경계는 항상 남긴다)
+  clock += 1; log("f");              // force 도 타이머를 갱신하므로 직후는 삼킨다
+  assert.deepEqual(out, ["a", "d", "e"]);
 });
 console.log(`\n${pass} passed`);
