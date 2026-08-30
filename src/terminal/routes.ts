@@ -51,7 +51,7 @@ import { autoTrustWorkspace } from "./session-create-guards.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
-import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
+import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
 import { cleanLastPrompt } from "./last-prompt.js";
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
@@ -992,6 +992,31 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         patch: { label: b.label !== undefined ? String(b.label) : undefined },
         ...(invites !== undefined ? { invites } : {}),
       });
+      // ★ **게이트웨이 DB 에도 남긴다**(#2251 · 원준 신고 2026-08-28: "이름을 수도 없이 고쳤는데 계속 되돌아간다").
+      //  종전엔 여기서 그냥 return 해서, 노드 세션의 사람 이름이 **그 노드의 tmux `@box_label` 에만** 적혔다.
+      //  노드는 DB 가 없어(#1791 ON_NODE) 노드측 editSession 의 미러도 통째로 no-op 이다. 그래서:
+      //   ① 화면이 tmux 스냅샷 대신 DB 로 그리는 순간(노드 오프라인·tmux 종료·**복원**) 이름이 옛 자동 이름으로 스냅백.
+      //      복원은 `label: st.label || id`(위 restore 분기)로 새 세션을 만들므로 되돌아간 이름이 그대로 굳는다.
+      //   ② 더 나쁜 것 — **사람 이름 걸쇠가 안 걸린다.** label_source 가 'rule' 에 머무니
+      //      `session_rename`(agent, RANK 3 > rule 2)이 claimSessionLabel 을 **이기고** 노드 tmux 까지 덮어쓴다
+      //      (session-relabel.ts). 사람이 고친 이름을 에이전트가 조용히 되돌리는 그림이 이것이다.
+      //      ※ #2234(PR #537)가 공유 홈 노드에서 session_rename 을 실제로 동작하게 만들면서 ②가 자주 터지게 됐다.
+      //  ⚠ 순서는 **릴레이 뒤**다 — 노드의 assertManage 가 소유자를 강제하므로, 거기서 거부된 요청이 DB 에 먼저
+      //   닿는 일이 없다(setSessionProject·relabelSession 과 같은 원칙: 남의 세션을 DB 에 먼저 claim 하지 않는다).
+      //  ⚠ best-effort — 미러 행이 없는 옛 노드 세션(#1791 이전)은 그냥 종전대로 tmux 만 바뀐다(무회귀).
+      if (b.label !== undefined) {
+        const clean = String(b.label).replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
+        if (clean) {
+          await claimSessionLabel(req.params.id, clean, "human", me)
+            .catch((e) => { console.warn(`[terminal] 노드 세션 이름 DB 반영 실패(${req.params.id}):`, (e as Error)?.message ?? e); return false; });
+        }
+      }
+      // 초대도 같은 이유로 미러한다 — 복원은 `invites: st.invites`(위 restore 분기)를 쓰므로, 여기서 안 남기면
+      //  노드 세션은 복원 한 번에 초대가 사라진다.
+      if (invites !== undefined) {
+        await updateSessionStateMeta(req.params.id, { invites })
+          .catch((e) => console.warn(`[terminal] 노드 세션 초대 DB 반영 실패(${req.params.id}):`, (e as Error)?.message ?? e));
+      }
       res.json({ ok: true });
       return;
     }
