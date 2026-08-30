@@ -67,7 +67,9 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
 
 // ── 판정 ────────────────────────────────────────────────────────────────────────
 export interface SecondTurnState {
-  welcome: { done_at?: string | null; session_id?: string | null; distill_at?: string | null; distill_gave_up_at?: string | null } | null;
+  welcome: { done_at?: string | null; session_id?: string | null; distill_at?: string | null; distill_gave_up_at?: string | null;
+    /** 세션이 사라져 **다시 연** 시각(#1631). 한 번만 다시 연다 — 무한 재생성은 비용이고 유령 세션을 만든다. */
+    distill_reopened_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
   session: { working?: boolean; agentState?: string | null } | null;
   /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거. */
@@ -78,7 +80,9 @@ export interface SecondTurnState {
 export type SecondTurnDecision =
   | { action: "skip"; reason: "no-kickoff" | "already-fired" | "gave-up" }
   | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" }
-  | { action: "giveup"; reason: "session-gone" | "turn1-never-delivered" | "turn1-session-offline" }
+  //  세션이 사라졌지만 **일은 남아 있다** — 새 창구를 열어 거기로 배달한다(#1631). 딱 한 번.
+  | { action: "reopen"; reason: "session-gone" }
+  | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" }
   | { action: "fire"; partial: boolean; waitedMin: number };
 
 /** 수집 대기 상한 — 이 안에 첫 배치가 안 끝나면 있는 것으로 시작한다(영원히 안 쏘는 것이 최악이다). */
@@ -93,7 +97,17 @@ export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   if (w.distill_gave_up_at) return { action: "skip", reason: "gave-up" };
   const done = Date.parse(w.done_at);
   const waited = s.now - done;
-  if (!s.session) return { action: "giveup", reason: "session-gone" };
+  if (!s.session) {
+    //  ★ #1631 실측(2026-08-31 dev): 1턴을 성공으로 끝낸 리브 세션이 **수집 대기 20분 사이에 사라졌다.**
+    //   종전엔 그 자리에서 영구 포기했고(distill_gave_up_at·멱등 가드), 그 사람의 증류기 15개가 **영원히 꺼진 채**
+    //   남아 온보딩을 완주하고도 지식을 하나도 못 얻었다. 세션이 왜 죽었는지는 게이트웨이 기록에 없다
+    //   (org_session_state 의 exited_at·exit_reason 이 비어 있다) — 원인을 모르는 채로도 사람이 손해 보면 안 된다.
+    //   사슬의 목적은 **일**이지 그 세션이 아니므로 새 창구를 연다. 단 **딱 한 번**이고(무한 재생성 금지),
+    //   1턴 배달 상한을 넘긴 뒤엔 열지 않는다 — 한참 뒤에 창이 불쑥 뜨는 편이 더 나쁘다.
+    if (w.distill_reopened_at) return { action: "giveup", reason: "session-gone-again" };
+    if (waited > TURN1_DELIVERY_TTL_MS) return { action: "giveup", reason: "session-gone" };
+    return { action: "reopen", reason: "session-gone" };
+  }
   if (s.outboxPending > 0) {
     return waited > TURN1_DELIVERY_TTL_MS ? { action: "giveup", reason: "turn1-never-delivered" } : { action: "wait", reason: "turn1-undelivered" };
   }
