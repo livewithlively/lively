@@ -68,10 +68,24 @@ export async function runningCountByNode(): Promise<Map<string, number>> {
 }
 
 export async function markRunning(id: number, nodeId: string, sessionId: string, taskDir: string): Promise<void> {
-  await itemsPool.query(
+  const r = await itemsPool.query(
     `UPDATE org_task SET status='running', node_id=$2, session_id=$3, task_dir=$4,
-        attempt=attempt+1, started_at=now(), node_lost_at=NULL, updated_at=now() WHERE id=$1`,
+        attempt=attempt+1, started_at=now(), node_lost_at=NULL, updated_at=now() WHERE id=$1
+      RETURNING tenant_id`,
     [id, nodeId, sessionId, taskDir]);
+  // #1631 — 위탁 세션을 **그 태스크의 워크스페이스에 묶는다.** 사람 세션은 라우트(recordSessionTenant)가 묶지만 위탁은
+  //  노드가 띄우고 여기서 처음 세션 id 를 알게 된다. 안 묶으면 그 세션의 MCP 호출(x-lively-session → gw_session_map)이
+  //  primary 로 떨어져, 증류 배치가 **다른 워크스페이스의 자료 id·분류 key 를 보고 저장을 거부**한다
+  //  (실측 2026-08-30 dev: 페르소나 워크스페이스의 distill 잡 #78 — 지식 본문은 뽑았는데 "원래 대상 워크스페이스에서 돌려 달라"로 차단).
+  //  primary 는 묶지 않는다(행 없음 = primary 가 이미 규약). 실패는 로그만 — 태스크는 이미 돌고 있다.
+  const tenantId = String((r.rows[0] as { tenant_id?: string } | undefined)?.tenant_id ?? "");
+  if (tenantId) {
+    const { PRIMARY_TENANT_ID, setSessionWorkspace } = await import("../org/tenancy/registry.js");
+    if (tenantId !== PRIMARY_TENANT_ID) {
+      await setSessionWorkspace(sessionId, tenantId)
+        .catch((e) => console.warn(`[task-store] 위탁 세션 워크스페이스 바인딩 실패(task ${id}, ${sessionId}): ${(e as Error)?.message ?? e}`));
+    }
+  }
 }
 export async function markFinished(id: number, ok: boolean, result: Record<string, unknown>, error?: string | null): Promise<void> {
   await itemsPool.query(
