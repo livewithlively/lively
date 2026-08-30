@@ -61,7 +61,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "slack",
     label: "Slack",
     guide: {
-      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Slack] 에서 계정을 연결한 뒤 '팀 자료로 모으기'를 켜면 이 수집기가 자동으로 만들어집니다(토큰 칸 비움, '토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우입니다. 토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Slack] 에서 계정을 연결한 뒤 '자료 가져오기'를 켜면 이 수집기가 자동으로 만들어집니다(토큰 칸 비움, '토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우입니다. 토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
       steps: [
         "api.slack.com/apps ▸ 앱 선택(없으면 [Create New App] ▸ From scratch — 워크스페이스 선택)",
         "[공개채널 전체를 훑을 때] OAuth & Permissions ▸ 'User Token Scopes': search:read, channels:read, users:read, users:read.email → [Install to Workspace] → 'User OAuth Token'(xoxp-…) 을 아래 User Token 에 저장. 채널 초대 불필요.",
@@ -103,7 +103,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "notion",
     label: "Notion",
     guide: {
-      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Notion] 에서 '팀 자료로 모으기'를 켜면 노션이 여는 화면에서 모을 페이지만 고르면 됩니다 — 이 수집기가 자동으로 만들어지고 토큰 칸은 비워 둡니다('토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우(셀프호스팅 등)입니다. 노션은 '내부(Internal) 통합'의 시크릿 토큰으로 읽습니다. 통합 생성은 워크스페이스 오너만 가능합니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Notion] 에서 '자료 가져오기'를 켜면 노션이 여는 화면에서 모을 페이지만 고르면 됩니다 — 이 수집기가 자동으로 만들어지고 토큰 칸은 비워 둡니다('토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우(셀프호스팅 등)입니다. 노션은 '내부(Internal) 통합'의 시크릿 토큰으로 읽습니다. 통합 생성은 워크스페이스 오너만 가능합니다.",
       steps: [
         "notion.so/profile/integrations → [+ 새 통합] — 이름 자유, 연결된 워크스페이스 = 싱크할 워크스페이스, 종류 = 내부(Internal). (Internal 이 안 보이면 그 워크스페이스 오너가 아닌 것 — 오너에게 생성을 요청하세요)",
         "통합 ▸ 기능(Capabilities): '콘텐츠 읽기' 필수 + '댓글 읽기'·'사용자 정보(이메일 포함) 읽기' 권장",
@@ -116,8 +116,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     fields: [
       { key: "token", env: "NOTION_TOKEN", secret: true, required: true, label: "Integration Token", hint: "secret_..." },
       { key: "instance", env: "NOTION_INSTANCE", secret: false, label: "Instance", hint: "워크스페이스 식별자 (기본 default)" },
-      // #1881 — 붙여넣기 대신 금고에서: [팀 자료로 모으기]로 저장된 Lively 연결을 그대로 쓴다. 값이 있으면 위 토큰 칸·env 를 덮어쓴다.
-      { key: "token_source", env: "NOTION_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = [팀 자료로 모으기]로 저장된 Lively 연결(워크스페이스가 둘이면 org:<workspace_id>) · 비우면 위 Integration Token 칸을 씁니다" },
+      // #1881 — 붙여넣기 대신 금고에서: [자료 가져오기]로 저장된 Lively 연결을 그대로 쓴다. 값이 있으면 위 토큰 칸·env 를 덮어쓴다.
+      { key: "token_source", env: "NOTION_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = [자료 가져오기]로 저장된 Lively 연결(워크스페이스가 둘이면 org:<workspace_id>) · 비우면 위 Integration Token 칸을 씁니다" },
       // #551 무손실 싱크 옵션
       { key: "root_pages", env: "NOTION_ROOT_PAGES", secret: false, label: "루트 페이지", picker: "notion_pages", hint: "페이지 URL·슬러그·id 아무 형태나 쉼표구분 — 지정 시 그 서브트리만 싱크(비우면 통합에 공유된 전체). 공유 직후엔 search 인덱싱 지연이 있어 루트 지정이 즉시 반영에 유리" },
       { key: "exclude_pages", env: "NOTION_EXCLUDE_PAGES", secret: false, label: "제외 페이지", picker: "notion_pages", hint: "여기 지정한 페이지·DB 와 그 하위 전체를 싱크에서 제외(쉼표구분). 루트 안의 특정 서브트리를 빼거나 전체 공유 중 일부만 뺄 때. 이미 싱크된 항목은 다음 전체 싱크에서 자동 보관 처리(제외 해제 시 복원)" },
@@ -199,9 +199,9 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "linear",
     label: "Linear",
     guide: {
-      intro: "워크스페이스의 이슈·댓글과 문서를 자료로 모읍니다. [외부 앱 연결 ▸ Linear ▸ 모아 두기]를 켜면 Linear 화면에서 [허용] 한 번으로 연결됩니다(토큰 출처 member:<내 구성원 id>).",
+      intro: "워크스페이스의 이슈·댓글과 문서를 자료로 모읍니다. [외부 앱 연결 ▸ Linear ▸ 자료 가져오기]를 켜면 Linear 화면에서 [허용] 한 번으로 연결됩니다(토큰 출처 member:<내 구성원 id>).",
       steps: [
-        "[외부 앱 연결 ▸ Linear]에서 모아 두기를 켜면 Linear 동의 화면이 열립니다 — [허용]",
+        "[외부 앱 연결 ▸ Linear]에서 자료 가져오기를 켜면 Linear 동의 화면이 열립니다 — [허용]",
         "'토큰 출처'에 member:<내 구성원 id> 를 적습니다(토큰 칸은 비워 둡니다)",
         "팀을 좁히려면 '팀'에 팀 키(예 ENG PRD)를 넣습니다 — 비우면 워크스페이스 전체",
       ],
@@ -209,7 +209,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     },
     fields: [
       { key: "token", env: "LINEAR_TOKEN", secret: true, label: "토큰", hint: "lin_api_… 개인 API 키도 됩니다 — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
-      { key: "token_source", env: "LINEAR_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [모아 두기]에서 연결한 라이블리 Linear 앱 토큰 · 비우면 위 토큰 칸을 씁니다" },
+      { key: "token_source", env: "LINEAR_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [자료 가져오기]에서 연결한 라이블리 Linear 앱 토큰 · 비우면 위 토큰 칸을 씁니다" },
       { key: "teams", env: "LINEAR_TEAMS", secret: false, label: "팀", hint: "팀 키(예 ENG PRD) — 공백·쉼표로 여러 개. 비우면 워크스페이스 전체" },
       { key: "include_documents", env: "LINEAR_INCLUDE_DOCUMENTS", secret: false, label: "문서 포함", hint: "on(기본) | off — Linear Documents" },
       //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
@@ -223,7 +223,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     label: "Gmail",
     guide: {
       intro:
-        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 에서 [팀 자료로 모으기]를 켜면 " +
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 에서 [자료 가져오기]를 켜면 " +
         "그 연결로 수집이 돌고(token_source=member:<켠 사람>), 토큰을 복사할 일이 없습니다(#1881 G3). " +
         "아래 3칸은 **셀프호스팅·기존 배포용 수동 경로**입니다.",
       steps: [
@@ -247,7 +247,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     label: "Google Drive",
     guide: {
       intro:
-        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 의 [팀 자료로 모으기] 토글이 " +
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 의 [자료 가져오기] 토글이 " +
         "연결 하나로 드라이브·Gmail 을 함께 켭니다(#1881 G3). 아래는 셀프호스팅·기존 배포용 수동 경로입니다.",
       steps: [
         "Gmail 가이드와 같은 OAuth 클라이언트를 쓰면 됩니다(1개 토큰이 Drive·Gmail 공용)",

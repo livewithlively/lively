@@ -1,4 +1,4 @@
-// "팀 자료로 모으기"(#1881) — 슬랙 수집기를 **토큰 복사 없이** 켠다.
+// "자료 가져오기"(#1881) — 슬랙 수집기를 **토큰 복사 없이** 켠다.
 //
 //  구성원이 [Slack 연결](me_oauth_connect, auth_kind=slack_oauth)을 마치면 그 사람 금고에 유저 토큰, 조직 슬롯에 봇 토큰이
 //  이미 있다. 관리자가 토글 하나를 켜면 이 capability 가 수집기 인스턴스를 만들고 token_source 로 금고를 가리킨다 —
@@ -78,8 +78,8 @@ export async function slackCollectState(callerId: string): Promise<SlackCollectS
 }
 
 const orgSlackCollect: Capability = {
-  name: "org_slack_collect", title: "슬랙 팀 자료 수집 상태",
-  description: "\"팀 자료로 모으기\" 상태 — 검색 수집기(공개채널, 켠 관리자의 연결로 돈다)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부. 토글은 org_slack_collect_set.",
+  name: "org_slack_collect", title: "슬랙 자료 가져오기 상태",
+  description: "\"자료 가져오기\" 상태 — 검색 수집기(공개채널, 켠 관리자의 연결로 돈다)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부. 토글은 org_slack_collect_set.",
   scope: "admin", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/slack/collect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
@@ -89,9 +89,9 @@ const orgSlackCollect: Capability = {
 };
 
 const orgSlackCollectSet: Capability = {
-  name: "org_slack_collect_set", title: "슬랙 팀 자료 수집 켜기/끄기",
+  name: "org_slack_collect_set", title: "슬랙 자료 가져오기 켜기/끄기",
   description:
-    "\"팀 자료로 모으기\" 토글(admin). enabled=true 면 호출자의 Slack 연결(금고)로 공개채널 검색 수집기를 만들거나 켜고(token_source=member:<나>), " +
+    "\"자료 가져오기\" 토글(admin). enabled=true 면 호출자의 Slack 연결(금고)로 공개채널 검색 수집기를 만들거나 켜고(token_source=member:<나>), " +
     "봇 토큰이 있으면 봇 수집기도 함께 켠다(비공개 채널은 그 채널에서 /invite @Lively 한 것만). 토큰을 복사하지 않는다. " +
     "false 면 둘 다 끈다(삭제 아님 — 커서·자료 보존). 켜려면 호출자가 먼저 me_oauth_connect 로 Slack 을 연결해야 한다.",
   scope: "admin",
@@ -126,7 +126,7 @@ const orgSlackCollectSet: Capability = {
     }
 
     if (!(await memberConnected(actor))) {
-      throw new HttpError(400, "먼저 [외부 앱 연결 ▸ Slack] 에서 내 계정을 연결하세요 — 팀 자료 수집은 그 연결로 돕니다.");
+      throw new HttpError(400, "먼저 [외부 앱 연결 ▸ Slack] 에서 내 계정을 연결하세요 — 자료 가져오기은 그 연결로 돕니다.");
     }
     // 검색 수집기 — 항상 **호출자**의 연결로 갈아끼운다(전임자가 나가서 멈춘 수집기를 다른 관리자가 이어받는 경로).
     await upsertCollector({

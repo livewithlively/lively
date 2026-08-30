@@ -1893,27 +1893,36 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .cn-act { display: flex; align-items: flex-start; gap: 14px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
 .cn-act.on { border-color: var(--line-net-2); background: var(--bg-tint); }
 /* ★쓰기만 색이 다르다 — «내 이름으로 남는다»는 이 화면에서 유일하게 되돌릴 수 없는 것이다. */
-.cn-act.write { border: 1px solid var(--warn-line); background: var(--warn-bg); }
-.cn-act.write.off { border-style: dashed; }
+/*  쓰기 — 연결 «안»의 상자다(세 번째 연결이 아니다, 원준 2026-08-30). 이 화면에서 유일하게 되돌릴 수 없는 것이라
+    색이 다르다. 꺼져 있으면 점선 + 채도를 뺀다 — «지금은 아무것도 안 남는다»가 한눈에 보이게. */
+.cn-write { border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: 11px; padding: 11px 13px; }
+.cn-write.off { border-style: dashed; background: var(--bg-tint); }
+.cn-write-t { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; color: var(--warn-text); }
+.cn-write.off .cn-write-t { color: var(--muted-head); }
+.cn-write-t .v2-ic { width: 15px; height: 15px; }
+.cn-write-m { display: block; margin-top: 5px; font-size: 12.5px; line-height: 1.6; color: var(--warn-text); }
+.cn-write.off .cn-write-m { color: var(--ink-sub); }
+.cn-write-m b { font-weight: 800; }
+.cn-write-ft { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.cn-write-n { font-size: 12px; font-weight: 700; color: var(--warn-text); }
+.cn-write.off .cn-write-n { color: var(--muted-head); }
+.cn-write-ok { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--warn-text); }
+.cn-write-ok .v2-ic { width: 14px; height: 14px; }
+.cn-write-ft .btn { margin-left: auto; }
 .cn-act-ic { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; flex: none; margin-top: 1px; background: var(--bg-tint-2); color: var(--muted); }
 .cn-act.on .cn-act-ic { background: var(--bg-punch); color: var(--blue); }
 .cn-act.collect .cn-act-ic { background: color-mix(in srgb, var(--mint-deep) 13%, transparent); color: var(--mint-deep); }
-.cn-act.write .cn-act-ic { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
 .cn-act-tx { flex: 1; min-width: 0; }
 .cn-act-v { display: block; font-size: 15px; font-weight: 800; color: var(--ink); line-height: 1.5; }
-.cn-act.write .cn-act-v { color: var(--warn-text); }
 .cn-act-m { display: block; font-size: 13px; color: var(--ink-sub); margin-top: 3px; line-height: 1.6; }
 .cn-act-m b { color: var(--ink); font-weight: 700; }
-.cn-act.write .cn-act-m, .cn-act.write .cn-act-m b { color: var(--warn-text); }
 /*  줄에 딸린 것(연결 방식 버튼 · 쓰기 확인 · 관리자 안내)은 **그 카드 안에** 둔다 — 카드 밖에 두면
     어디에도 안 붙은 채 떠서 카드 리듬(9px)까지 깨진다(GitHub 만 43px 였던 것, 원준 실측 2026-08-30). */
 .cn-act-more { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-row); }
-.cn-act.write .cn-act-more { border-top-color: var(--warn-line); }
 .cn-act-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .cn-act-sub { display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 600; color: var(--warn-text); cursor: pointer; }
 .cn-act-sub .h { margin-left: auto; font-weight: 600; color: var(--muted-head); }
 .cn-act-note { font-size: 12px; line-height: 1.55; color: var(--muted-head); }
-.cn-act.write .cn-act-note { color: var(--warn-text); opacity: .85; }
 .cn-act-rt { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; flex: none; padding-top: 2px; }
 .cn-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .cn-pill .v2-ic { width: 13px; height: 13px; }

@@ -1,4 +1,4 @@
-// 노션 "팀 자료로 모으기"(#1881 N3·N5·N7 백엔드) — 노션 수집기를 **토큰 복사 없이** 켠다.
+// 노션 "자료 가져오기"(#1881 N3·N5·N7 백엔드) — 노션 수집기를 **토큰 복사 없이** 켠다.
 //
 //  슬랙(slack-connect.ts)과 같은 그림이되 연결의 결이 다르다: 슬랙은 구성원의 [Slack 연결](개인 금고)을 수집기가
 //  가리키지만, 노션은 개인 MCP 연결(DCR)의 토큰이 REST 수집에 안 통한다(지식 notion-single-connect-design-1881 §1①).
@@ -129,7 +129,7 @@ async function bindWorkspace(w: NotionWorkspaceRow, actor: string, source: strin
   const all = await listCollectors();
   const existing = notionCollectors(all).find((c) => boundWorkspace(c) === w.id) ?? adoptable(all, allowLegacy);
   const label = w.name ? `Notion — ${w.name}` : "Notion — 팀 문서";
-  const note = "[팀 자료로 모으기] 토글로 만들어진 수집기 — 노션 동의 화면에서 고른 페이지(와 그 하위)를 모읍니다(#1881). "
+  const note = "[자료 가져오기] 토글로 만들어진 수집기 — 노션 동의 화면에서 고른 페이지(와 그 하위)를 모읍니다(#1881). "
     + "토큰 칸은 비워 두세요(연결은 '토큰 출처'가 가리킵니다). 범위 변경은 [페이지 더 고르기]로.";
   // 토글 경로로 **처음 들어오는** 수집기면 안내문을 바꿔 준다 — CP 가 심어 둔 껍데기의 안내문은
   //  "노션 통합 토큰을 넣고 활성화하세요"라, 접수한 뒤에도 그대로 두면 없는 절차를 시키는 글이 남는다.
@@ -172,7 +172,7 @@ async function syncCollectors(actor: string, source: string, enable: boolean | n
 
 // ★ 동의가 끝나면 그 자리에서 끝난다 — 연결이 저장되는 순간 수집기를 준비한다.
 //
-//  사람이 [팀 자료로 모으기]를 켜서 시작한 흐름이다. 그런데 저장은 OAuth 콜백(다른 탭·매니지드면 다른
+//  사람이 [자료 가져오기]를 켜서 시작한 흐름이다. 그런데 저장은 OAuth 콜백(다른 탭·매니지드면 다른
 //  도메인)에서 끝나므로, 아무도 수집기를 켜 주지 않으면 **돌아온 화면의 체크박스가 풀려 있다**. 사용자는
 //  실패한 줄 알고 한 번 더 누른다(#1881 매니지드 실측). 의도는 이미 표현됐으니 서버가 마무리한다.
 //
@@ -183,8 +183,8 @@ onNotionInstalled(async (memberId) => {
 });
 
 const orgNotionCollect: Capability = {
-  name: "org_notion_collect", title: "노션 팀 자료 수집 상태",
-  description: "\"팀 자료로 모으기\" 상태 — 연결된 노션 워크스페이스마다 수집기 유무·켜짐 여부, 동의 시작 가능 여부. 토글은 org_notion_collect_set, 워크스페이스 추가·범위 재선택은 org_notion_collect_connect.",
+  name: "org_notion_collect", title: "노션 자료 가져오기 상태",
+  description: "\"자료 가져오기\" 상태 — 연결된 노션 워크스페이스마다 수집기 유무·켜짐 여부, 동의 시작 가능 여부. 토글은 org_notion_collect_set, 워크스페이스 추가·범위 재선택은 org_notion_collect_connect.",
   scope: "admin", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/notion/collect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
@@ -194,9 +194,9 @@ const orgNotionCollect: Capability = {
 };
 
 const orgNotionCollectSet: Capability = {
-  name: "org_notion_collect_set", title: "노션 팀 자료 수집 켜기/끄기",
+  name: "org_notion_collect_set", title: "노션 자료 가져오기 켜기/끄기",
   description:
-    "\"팀 자료로 모으기\" 토글(admin). enabled=true 인데 노션 연결(조직 슬롯)이 아직 없으면 needs_connect=true 와 " +
+    "\"자료 가져오기\" 토글(admin). enabled=true 인데 노션 연결(조직 슬롯)이 아직 없으면 needs_connect=true 와 " +
     "authorization_url 을 돌려준다 — 그 URL 의 노션 화면에서 모을 페이지를 고르고 [허용]하면 연결이 저장되고 수집기가 " +
     "자동으로 준비된다(token_source=org:<workspace_id>, 토큰 복사 0). workspace_id 를 주면 그 워크스페이스만, " +
     "안 주면 연결된 전부를 켜고 끈다. 끄기는 삭제가 아니다 — 커서·자료가 남고 다시 켜면 이어받는다.",
@@ -245,7 +245,7 @@ const orgNotionCollectSet: Capability = {
 };
 
 const orgNotionCollectConnect: Capability = {
-  name: "org_notion_collect_connect", title: "노션 팀 자료 연결(워크스페이스 추가·범위 선택) 시작",
+  name: "org_notion_collect_connect", title: "노션 자료 가져오기 연결(워크스페이스 추가·범위 선택) 시작",
   description: "노션 공개 통합 동의를 시작한다(admin) — 반환된 authorization_url 의 노션 화면에서 워크스페이스를 고르고 모을 페이지를 고르면 조직 수집 슬롯이 저장·갱신되고 그 워크스페이스의 수집기가 준비된다. 이미 연결된 워크스페이스를 다시 고르면 [페이지 더 고르기](범위 재선언), 다른 워크스페이스를 고르면 **추가 연결**이 된다.",
   scope: "admin", input: {},
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/notion/collect/connect"], parse: () => ({}) }] },

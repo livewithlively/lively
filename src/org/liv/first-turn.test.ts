@@ -24,7 +24,7 @@ test("① 전부 있음 — 이름·일·서랍·자료·수집기·AI 가 실�
   assert.match(p, /- 하는 일: 회사·조직에서 팀과 함께 일한다 · 디자인/);
   assert.match(p, /처음 설정이 만든 서랍 2개: 산출물 · 기록/);
   assert.match(p, /올린 자료 3건 — 슬랙 2, 회의록 1/);
-  assert.match(p, /연결한 수집기 1개\(켜짐 1\): 슬랙 #design\(slack, 15분 주기\)/);
+  assert.match(p, /연결한 자료 가져오기 1개\(켜짐 1\): 슬랙 #design\(slack, 15분 주기\)/);
   assert.match(p, /이 세션은 claude 로 돈다 \(로그인 확인: claude\)/);
   assert.match(p, /- 매주 반복하는 문서가 있다/);
 });
@@ -33,7 +33,7 @@ test("② 빈 상태 — 서랍·자료·수집기 0, 첫 지시 없음 → 사�
   const p = buildFirstTurnPrompt(base({ drawers: [], categories: [], uploads: empty, collectors: [], firstOrder: null }));
   assert.match(p, /서랍: 아직 없음/);
   assert.match(p, /올린 자료: 없음/);
-  assert.match(p, /연결한 수집기: 없음/);
+  assert.match(p, /연결한 자료 가져오기: 없음/);
   assert.match(p, /첫 지시: \(고르지 않음\)/);
   assert.match(p, /\*\*자료가 들어오면 증류 작업/);
 });
@@ -81,7 +81,7 @@ test("⑧ 꺼진 수집기 — '꺼짐' 표시, 켜짐 수에서 제외", () => 
     { label: "노션", preset_key: "notion", enabled: true, sync_interval_sec: 3600 },
     { label: "깃허브", preset_key: "github", enabled: false, sync_interval_sec: 1800 },
   ] }));
-  assert.match(p, /연결한 수집기 2개\(켜짐 1\)/);
+  assert.match(p, /연결한 자료 가져오기 2개\(켜짐 1\)/);
   assert.match(p, /깃허브\(github, 30분 주기, 꺼짐\)/);
 });
 
