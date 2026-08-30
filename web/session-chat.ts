@@ -1218,7 +1218,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function schedule(): void {
     if (destroyed || !src) return;
     if (pollTimer) clearTimeout(pollTimer);
-    const ms = src.kind === 'log' ? (running && !dead() ? POLL_LOG_LIVE_MS : POLL_LOG_MS) : running ? POLL_RUN_MS : POLL_IDLE_MS;
+    //  ⚠ **죽은 세션에는 촘촘한 주기를 쓰지 않는다**(#1631, 2026-08-31 실측). `running` 은 대화 파일이 자라는 것으로
+    //   마감되는데, 대화가 **한 번도 없었던** 세션은 그 마감 경로(아래 `running && cur && !dead()`)에 애초에 못 들어간다
+    //   — `cur` 이 없기 때문이다. 그래서 즉사한 세션의 화면이 404 를 초당 1.4회로 **영원히** 되물었다
+    //   (8초에 11회·콘솔 에러 200+ 누적). 살아 있지 않으면 촘촘할 이유가 없다.
+    const ms = src.kind === 'log' ? (running && !dead() ? POLL_LOG_LIVE_MS : POLL_LOG_MS) : (running && !dead()) ? POLL_RUN_MS : POLL_IDLE_MS;
     if (dead() && src.kind === 'log' && !running) return;   // 죽은 세션의 중앙 기록은 더 안 는다
     pollTimer = window.setTimeout(() => { void poll(); }, ms);
   }
