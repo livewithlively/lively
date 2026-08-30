@@ -414,7 +414,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     ? `내가 요청할 때 AI가 내 ${svc.label} 계정으로 들어가 ${noun}${eulReul(noun)} **내 계정 권한 그대로** 다룹니다. 라이블리에는 남지 않아요.`
     : st === 'blocked'
       ? String((svc as any).soon || '라이블리가 이 앱을 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있어요.')
-      : account ? `켜면 ${svc.label} 화면에서 [허용]을 한 번 누르는 것으로 끝나요.` : '켜면 토큰을 넣는 창이 열려요.';
+      : account ? `켜면 ${svc.label} 화면에서 «허용»을 한 번 누르는 것으로 끝나요.` : '켜면 토큰을 넣는 창이 열려요.';
   const readActs = el('div', { class: 'cn-act-row' });
   if (st === 'on' && (howNow || usedAt)) readActs.appendChild(el('span', { class: 'cn-act-note', style: 'flex:1 1 100%', text: howNow + usedAt }));
   if (st === 'on') {
@@ -658,7 +658,7 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
   clickup: { desc: '내 ClickUp 워크스페이스의 작업·댓글을 라이블리 프로젝트 탭으로 가져와요. 자료함이 아니라 프로젝트로 들어옵니다.',
     on: '작업·댓글을 프로젝트 탭으로 가져오고 있어요.', off: '켜면 내 ClickUp 토큰으로 워크스페이스의 작업·댓글을 프로젝트 탭으로 가져옵니다.', where: '워크스페이스 함께 — 프로젝트 탭에서 같이 봐요' },
   linear: { desc: '워크스페이스의 이슈·댓글과 문서를 라이블리가 미리 읽어 자료함으로 가져와요. 팀으로 좁힐 수 있어요. 워크스페이스가 함께 봐요.',
-    on: '이슈·댓글·문서를 가져오고 있어요.', off: '켜면 Linear 화면이 열려요 — [허용] 한 번이면 연결과 가져오기가 함께 켜집니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
+    on: '이슈·댓글·문서를 가져오고 있어요.', off: '켜면 Linear 화면이 열려요. «허용» 한 번이면 연결과 가져오기가 함께 켜집니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   gitlab: { desc: '내가 고른 프로젝트의 이슈·MR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
     on: '고른 프로젝트의 이슈·MR 대화를 가져오고 있어요.', off: '켜면 내 GitLab 개인 토큰으로 고른 프로젝트의 이슈·MR 대화를 읽어 옵니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   github: { desc: '내가 고른 저장소의 이슈·PR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
@@ -927,7 +927,7 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
     const consentThen = async (r: any): Promise<boolean> => {
       if (!(r && r.needs_connect && r.authorization_url)) return false;
       window.open(r.authorization_url, '_blank', 'noopener');
-      toast(T.desc.split(' ')[0] === '워크스페이스의' ? 'Linear 화면에서 [허용]을 누르세요 — 돌아오면 여기가 저절로 켜집니다' : '새 탭에서 [허용]을 누르세요 — 돌아오면 여기가 저절로 켜집니다');
+      toast(T.desc.split(' ')[0] === '워크스페이스의' ? 'Linear 화면에서 «허용»을 누르세요. 돌아오면 여기가 저절로 켜집니다' : '새 탭에서 «허용»을 누르세요. 돌아오면 여기가 저절로 켜집니다');
       const until = Date.now() + 4 * 60 * 1000;
       const tick = async (): Promise<void> => {
         if (Date.now() > until) { await paint(); return; }
@@ -1073,7 +1073,7 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
   const body = panel.body;
   const openConsent = (url: string, after: () => void): void => {
     window.open(url, '_blank', 'noopener');
-    toast('구글 화면에서 [허용]을 누르세요 — 돌아오면 이 화면이 갱신됩니다');
+    toast('구글 화면에서 «허용»을 누르세요. 돌아오면 이 화면이 갱신됩니다');
     window.addEventListener('focus', () => after(), { once: true });
   };
   const paint = async (): Promise<void> => {
@@ -1116,7 +1116,7 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
       const on = [drive.enabled ? 'Google Drive' : '', gmail.enabled ? 'Gmail' : ''].filter(Boolean).join(' · ');
       notes.push(`${on} 에서 가져오고 있어요 — 켠 사람(${(s.connected && s.connected.kind) ? '내' : '내'}) 구글 연결로 돕니다.`);
     } else if (connected) notes.push('연결은 돼 있어요 — 모을 서비스를 고르고 켜면 바로 시작합니다.');
-    else if (s && s.ready) notes.push('켜면 구글 화면이 열려요 — [허용]만 누르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
+    else if (s && s.ready) notes.push('켜면 구글 화면이 열려요. «허용»만 누르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
     else notes.push('구글 연결 준비가 아직 안 됐어요 — 아래에 구글 OAuth 클라이언트 값 두 개를 넣으면 열립니다.');
 
     // ★ 비용 고지 — Gmail 을 고른 순간(또는 이미 켜진 순간) 무슨 대가가 붙는지 먼저 말한다.

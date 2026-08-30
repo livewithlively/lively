@@ -1092,6 +1092,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ],
       last: '그 글자는 <b>그 화면에서 한 번만</b> 보여요. 놓쳤으면 같은 자리에서 새로 만들면 됩니다. Figma 에서 토큰을 지우면 연결도 그때 끊깁니다.',
     },
+    gitlab: {
+      why: 'GitLab 에서 <b>개인 액세스 토큰</b>(글자 한 줄)을 하나 만들어 주시면 돼요. 이걸 주면 제가 이슈와 병합 요청(MR)에 오간 이야기를 읽을 수 있습니다.',
+      go: 'GitLab 토큰 화면 열기',
+      //  #2232 — 여는 자리를 버튼으로 주고, 그 다음 눌러야 할 것만 걸음으로 적는다(원준님 2026-08-31: "어디서 어떻게 뭘
+      //   누르란건지 너무 불친절"). 회사 GitLab 을 쓰면 이 주소의 gitlab.com 자리만 그 회사 주소로 바꾸면 같은 화면이다.
+      //   ★ read_api 가 없으면 토큰은 저장돼도 자료를 한 줄도 못 읽는다 — 그래서 이것만 «꼭»이라고 말한다.
+      steps: [
+        '새 탭에 GitLab 의 <b>액세스 토큰</b> 화면이 열려요(안 열리면 오른쪽 위 <b>내 아바타</b> ▸ <span class="ob-kbd">Edit profile</span> ▸ 왼쪽 목록의 <span class="ob-kbd">Access tokens</span>). 회사 GitLab 을 쓰시면 주소의 <b>gitlab.com</b> 자리만 그 회사 주소로 바꿔 주세요.',
+        '<span class="ob-kbd">Add new token</span> 을 누르고 <b>이름</b>(Token name)에 아무거나 적으세요(예: Lively). <b>만료</b>(Expiration date)는 가장 먼 날로 두면 다시 만들 일이 적어요. 짧게 잡으면 그 날짜 뒤에 연결이 끊깁니다.',
+        '<b>범위</b>(Scopes) 목록에서 <b>read_api</b> 앞 네모를 꼭 체크하세요. 이게 없으면 GitLab 이 자료 읽기를 막습니다. 코드까지 읽히고 싶으시면 <b>read_repository</b> 도 함께 켜 주세요.',
+        '맨 아래 <span class="ob-kbd">Create personal access token</span> 을 누르면 화면 위에 <b>glpat-</b> 로 시작하는 글자가 나와요. 그걸 복사해 아래 칸에 붙여넣으세요.',
+      ],
+      last: '그 글자는 <b>그 화면에서 한 번만</b> 보여요. 놓쳤으면 같은 자리에서 새로 만들면 됩니다. GitLab 에서 토큰을 지우면 연결도 그때 끊깁니다.',
+    },
     clickup: {
       why: 'ClickUp 에서 <b>글자 한 줄</b>을 받아 오면 돼요. 이걸 주면 제가 거기 쌓인 일감을 읽을 수 있습니다.',
       go: 'ClickUp 설정 열기',
@@ -1207,7 +1221,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (collectMode(id)) {
       try { await api(`/api/ui/org/${COLLECT_FIRST[id]}/collect`, { method: 'POST', body: JSON.stringify({ enabled: false }) }); did = true; } catch (_) { /* 아래에서 판정 */ }
     }
-    if (!did) throw new Error('해제할 연결을 찾지 못했어요. [외부 앱 연결]에서 확인해 주세요.');
+    if (!did) throw new Error('해제할 연결을 찾지 못했어요. «외부 앱 연결»에서 확인해 주세요.');
     const col = COLLECT_OF[id];
     if (col && isAdmin()) { try { await api(`/api/ui/org/${col}/collect`, { method: 'POST', body: JSON.stringify({ enabled: false }) }); } catch (_) { /* 비치명 */ } }
     const label = srcLabel(id);
@@ -1269,7 +1283,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         <li>브라우저 <b>주소창</b>을 통째로 복사해 아래 칸에 붙여넣으세요 — <b>gitlab.com/그룹/프로젝트</b> 처럼 생겼어요. 여러 개면 공백으로 띄우세요.</li>
       </ol>
       <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://gitlab.com/그룹/프로젝트">
-      <p class="ob-note ob-fine2">토큰은 <b>read_api</b> 범위로 만든 개인 액세스 토큰이어야 해요 — [계정 로그인]으로 받은 토큰으로는 GitLab 이 자료 읽기를 막습니다.</p>` : ''}
+      <p class="ob-note ob-fine2">위 걸음대로 <b>read_api</b> 를 켜서 만든 토큰이어야 해요. <span class="ob-kbd">계정으로 연결</span> 로 받은 토큰으로는 GitLab 이 자료 읽기를 막습니다.</p>` : ''}
       <p class="ob-err" id="tokErr"></p>
       ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
       <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
@@ -1512,7 +1526,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               ${dynSvcs().map((sv) => connState(sv.key) === 'on'
                 ? doneCard(sv.key, sv.label, esc((sv.label || '?').slice(0, 1)))
                 : card(sv.label, '', esc((sv.label || '?').slice(0, 1)), S.sources.includes(sv.key))).join('')}</div>` : '')
-          + (flat.some(notYet) ? `<p class="ob-q-fine" style="text-align:left;margin:2px 0 0">흐리게 보이는 앱은 아직 준비 중이에요. 열리면 [외부 앱 연결]에서 바로 연결하실 수 있어요.</p>` : '')
+          + (flat.some(notYet) ? `<p class="ob-q-fine" style="text-align:left;margin:2px 0 0">흐리게 보이는 앱은 아직 준비 중이에요. 열리면 <span class="ob-kbd">외부 앱 연결</span>에서 바로 연결하실 수 있어요.</p>` : '')
           + `<button class="ob-btn ob-btn-pri" id="srcGo" disabled>계속</button>
              <button class="ob-q-skip" data-skip>가져올 곳이 없어요</button>`;
       },
@@ -1579,13 +1593,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const scopeOnly = collectMode(id) && (id === 'figma' || id === 'gitlab') && tokenSaved(id);
               const tokOnly = collectMode(id) && (id === 'clickup' || id === 'github') && tokenSaved(id);
               const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
-                : scopeOnly ? (id === 'gitlab' ? (open ? '모을 프로젝트 경로를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 프로젝트(group/project)를 넣어 주세요.') : (open ? '모을 파일 링크를 넣어 주세요.' : '토큰은 받았어요 — 눌러서 모을 파일 링크를 넣어 주세요.'))
-                : tokOnly ? (id === 'github' ? '계정은 이어져 있어요 — 누르면 고른 저장소의 이슈·PR 모으기가 켜져요.' : '토큰은 받았어요 — 누르면 바로 가져오기가 켜져요.')
-                : (collectMode(id) && id === 'gitlab') ? (open ? '아래 세 칸을 채워 주세요.' : '눌러 주세요 — 개인 토큰 한 줄을 받아 오면 됩니다.')
+                : scopeOnly ? (id === 'gitlab' ? (open ? '모을 프로젝트 주소를 넣어 주세요.' : '토큰은 받았어요. 눌러서 모을 프로젝트 주소를 넣어 주세요.') : (open ? '모을 팀 주소를 넣어 주세요.' : '토큰은 받았어요. 눌러서 모을 팀 주소를 넣어 주세요.'))
+                : tokOnly ? (id === 'github' ? '계정은 이어져 있어요. 누르면 고른 저장소의 이슈·PR 모으기가 켜져요.' : '토큰은 받았어요. 누르면 바로 가져오기가 켜져요.')
+                : (collectMode(id) && id === 'gitlab') ? (open ? '아래 걸음을 따라 주세요.' : '눌러 주세요. 걸음대로 따라 하시면 됩니다.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
-                : how === 'token' ? (open ? '아래 세 걸음을 따라 주세요.' : '눌러 주세요 — 글자 한 줄을 받아 오면 됩니다.')
-                : (collectMode(id) && id === 'notion' ? '눌러 주세요 — 노션 화면에서 모을 페이지를 고르고 [액세스 허용]을 누르면 됩니다.' : '눌러 주세요 — 새 탭에서 [허용]만 누르면 됩니다.');
+                : how === 'token' ? (open ? '아래 걸음을 따라 주세요.' : '눌러 주세요. 글자 한 줄을 받아 오면 됩니다.')
+                : (collectMode(id) && id === 'notion' ? '눌러 주세요. 노션 화면에서 모을 페이지를 고르고 «액세스 허용»을 누르면 됩니다.' : '눌러 주세요. 새 탭에서 «허용»만 누르면 됩니다.');
               if (st === 'on') return doneCardHtml(id, it.label, BRAND[it.logo] || GLYPH[it.id] || '', desc);
               return `<button class="ob-opt-card${open ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
                 <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${esc(desc)}</span></span>
@@ -1646,7 +1660,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               if (r && r.ok) { await loadConn(); fin(); return; }
               const url = r && r.authorization_url;
               if (!url) { fin('노션 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
-              if (d) d.textContent = '노션 화면에서 모을 페이지를 고르고 [액세스 허용]을 누르면 여기가 저절로 바뀌어요…';
+              if (d) d.textContent = '노션 화면에서 모을 페이지를 고르고 «액세스 허용»을 누르면 여기가 저절로 바뀌어요…';
               window.open(url, '_blank', 'noopener');
               watchConnect(id, fin);
             } catch (e) { fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
@@ -1658,7 +1672,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             if (r && r.ok) { await loadConn(); fin(); return; }
             const url = r && r.needs_connect && r.authorization_url;
             if (!url) { fin((r && r.message) || 'Linear 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
-            if (d) d.textContent = 'Linear 화면에서 [허용]을 누르면 여기가 저절로 바뀌어요…';
+            if (d) d.textContent = 'Linear 화면에서 «허용»을 누르면 여기가 저절로 바뀌어요…';
             window.open(url, '_blank', 'noopener');
             watchConnect(id, fin);
             return;
@@ -1676,7 +1690,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             const r: any = await startMemberCollect(id, '');
             if (r && r.needs_scope) { tokOpen = id; redraw(); return; }
             await loadConn();
-            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요 — [외부 앱 연결]에서 다시 시도해 주세요.'));
+            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.'));
             return;
           }
           //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다.
@@ -1687,7 +1701,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           if (id === 'slack' && CONN && CONN.connected.some((s) => s.key === 'slack')) {
             const on = await startCollect(id);
             await loadConn();
-            fin(on ? null : `${srcLabel(id)} 자료 모으기를 켜지 못했어요 — [외부 앱 연결]에서 다시 시도해 주세요.`);
+            fin(on ? null : `${srcLabel(id)} 자료 모으기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.`);
             return;
           }
           if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
@@ -1701,10 +1715,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             //  관리자에게 «준비 중» 은 거짓이다 — 등록만 하면 열린다. 어디서 무엇을 넣는지까지 말한다.
             const needsApp = id === 'linear' && COLL[id] && COLL[id].app_ready === false;
             toast(needsApp && isAdmin()
-              ? '라이블리 Linear 앱을 먼저 등록해야 열려요 — [외부 앱 연결] ▸ Linear 에서 Client ID·Secret 을 넣어 주세요(관리자 1회).'
+              ? '라이블리 Linear 앱을 먼저 등록해야 열려요. «외부 앱 연결» ▸ Linear 에서 Client ID·Secret 을 넣어 주세요(관리자 1회).'
               : needsApp
                 ? '이 앱은 관리자가 Linear 앱을 등록해야 열려요. 관리자에게 알려 주세요.'
-                : '이 앱은 아직 준비 중이에요. 열리면 [외부 앱 연결]에서 바로 연결하실 수 있어요.');
+                : '이 앱은 아직 준비 중이에요. 열리면 «외부 앱 연결»에서 바로 연결하실 수 있어요.');
             return;
           }
           //  ⚠ 아직 서버를 못 읽었으면 **어느 길로 이을지 고를 수 없다**: Slack·GitLab 은 계정 로그인과 글자 받아
@@ -1765,8 +1779,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           tokIn.focus();
         }
         //  남겨 두고 가는 사람에게는 **어디로 돌아오면 되는지**를 말한다 — 안 그러면 '나중에'가 갈 곳 없는 말이 된다.
-        $('#upGo', el).onclick = () => { if (pickedIds().some((id) => connState(id) !== 'on')) toast('남은 곳은 왼쪽 [외부 앱 연결]에서 언제든 연결하실 수 있어요.'); goScene('terminal'); };
-        $('[data-skip]', el).onclick = () => { toast('나중에 하셔도 돼요 — 왼쪽 [외부 앱 연결]에 그대로 있습니다.'); goScene('terminal'); };
+        $('#upGo', el).onclick = () => { if (pickedIds().some((id) => connState(id) !== 'on')) toast('남은 곳은 왼쪽 «외부 앱 연결»에서 언제든 연결하실 수 있어요.'); goScene('terminal'); };
+        $('[data-skip]', el).onclick = () => { toast('나중에 하셔도 돼요. 왼쪽 «외부 앱 연결»에 그대로 있습니다.'); goScene('terminal'); };
       },
     },
     ai: {
@@ -2086,7 +2100,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const poll = async () => {
           const now = await connectSignal();
           if (now === null) return;                          // 못 물었다 — 조용히 다음 차례에 다시
-          if (localBase === null) { localBase = now; if (now) say('', '이 계정으로 AI가 라이블리를 쓴 기록이 이미 있어서, 설치가 끝났는지는 제가 자동으로 가려내지 못해요. 아래 [앱 받기]로 시작하시면 됩니다.'); return; }
+          if (localBase === null) { localBase = now; if (now) say('', '이 계정으로 AI가 라이블리를 쓴 기록이 이미 있어서, 설치가 끝났는지는 제가 자동으로 가려내지 못해요. 아래 «앱 받기»로 시작하시면 됩니다.'); return; }
           if (localBase === true) return;                    // 기준값이 참 — 전이를 볼 수 없다
           if (!now) return;
           clearInterval(localTimer); localTimer = null;
@@ -2506,7 +2520,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       if (st && st.loggedIn === true) {
         inlineStop = true;
         hideHowto();
-        say(line('ob-ok', `${label} 로그인이 끝났어요 — 아래 [로그인했어요]를 누르시면 됩니다.`));
+        say(line('ob-ok', `${label} 로그인이 끝났어요. 아래 «로그인했어요» 를 누르시면 됩니다.`));
         try { await api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness: h }) }); } catch (_) { /* noop */ }
         const go = $('#cGo', el); if (go) go.focus();
         return;
