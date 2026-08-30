@@ -89,3 +89,24 @@ test("⑯ 프롬프트 — 이름 없으면 '이 사람', 수집기 없음 문�
   const q = buildSecondTurnPrompt(pin());
   assert.match(q, /첫 수집을 마친 것 슬랙 #design \/ 아직 안 끝난 것 노션/);
 });
+
+// ── 세션이 안 떠 있으면 1턴은 안 끝난 것이다(#1631, 2026-08-30 실측) ──
+//  실측: 세션 미기동 상태에서 온보딩 31초 만에 fire → distill_at 소진 → 영영 증류 지시 없음(자료 8건·레인 0).
+test("세션이 offline 이면 fire 하지 않고 기다린다 — 1턴이 안 끝났다", () => {
+  const d = decideSecondTurn(st({ session: { working: false, agentState: "offline" }, collectors: [] }));
+  assert.equal(d.action, "wait");
+  assert.equal(d.reason, "session-offline");
+});
+
+test("offline 이 TTL(2시간)을 넘기면 포기하고 사유를 남긴다", () => {
+  const d = decideSecondTurn(st({
+    session: { working: false, agentState: "offline" }, collectors: [],
+    now: DONE + TURN1_DELIVERY_TTL_MS + 1_000,
+  }));
+  assert.equal(d.action, "giveup");
+  assert.equal(d.reason, "turn1-session-offline");
+});
+
+test("세션이 살아 있으면(offline 아님) 종전대로 fire 한다 — 무회귀", () => {
+  assert.equal(decideSecondTurn(st({ session: { working: false, agentState: "idle" }, collectors: [] })).action, "fire");
+});
