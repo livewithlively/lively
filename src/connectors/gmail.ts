@@ -151,6 +151,60 @@ function internalDateToIso(internalDate: string | undefined): string | undefined
 // toRawItem 에 넘기는 컨텍스트 — 변환을 네트워크와 분리하기 위한 순수 입력.
 export interface GmailToRawItemCtx {
   instance: string; // provenance.instance (gmail 은 단일 메일박스라 'default')
+  /** 채널(#2416) — 이 메일이 속한 묶음 이름(라벨). 호출부가 pickMailLabel 로 정해 넘긴다. 비면 채널 없음. */
+  container?: string;
+}
+
+// ── 채널(container_name) = 라벨 (#2416) ────────────────────────────────────────
+//  왜: 증류기 레인의 입구는 **자료 종류 + 채널** 둘로만 좁힐 수 있는데, 메일은 채널을 안 채워 왔다.
+//   그 결과 메일만 쓰는 사람은 레인을 '종류'로밖에 못 가르고, 그건 설계가 금지하는 축이다
+//   (실측: 페르소나 73명 중 43명이 채널축 없는 종류만 썼다). 사람이 메일을 나누는 단위가 라벨이므로 그것을 쓴다.
+//  ⚠ 제목·발신자를 넣으면 안 된다 — 자료마다 값이 달라 '묶음'이 아니게 되고 채널이 자료 수만큼 생긴다.
+
+/** 지메일 시스템 라벨(사람이 만든 묶음이 아니다) — 채널 후보에서 뺀다. */
+const SYSTEM_LABELS = new Set([
+  "INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "UNREAD", "STARRED", "IMPORTANT", "CHAT",
+]);
+/** 지메일 기본 분류 탭 — 사람이 만든 라벨은 아니지만 **묶음으로는 쓸모 있다**(예: 프로모션 통째 제외). */
+const CATEGORY_LABELS: Record<string, string> = {
+  CATEGORY_PERSONAL: "기본", CATEGORY_SOCIAL: "소셜", CATEGORY_PROMOTIONS: "프로모션",
+  CATEGORY_UPDATES: "알림", CATEGORY_FORUMS: "포럼",
+};
+
+/**
+ * 이 메일의 채널 이름을 고른다(순수).
+ *  ① 사람이 만든 라벨이 있으면 그것(여럿이면 **이름 오름차순 첫 번째** — 순서가 흔들리지 않게).
+ *  ② 없으면 기본 분류 탭의 한국어 이름.
+ *  ③ 둘 다 없으면 빈 문자열 — **지어내지 않는다**(채널 없음이 정답인 경우가 있다).
+ * @param labelIds 메시지의 labelIds
+ * @param labelNames 라벨 id → 표시 이름(users.labels.list 결과, 호출부가 캐시)
+ */
+export function pickMailLabel(labelIds: readonly string[] | undefined, labelNames: ReadonlyMap<string, string>): string {
+  const ids = (labelIds ?? []).filter((x) => typeof x === "string" && x.trim());
+  const user = ids
+    .filter((id) => !SYSTEM_LABELS.has(id) && !(id in CATEGORY_LABELS))
+    .map((id) => (labelNames.get(id) ?? "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  if (user.length) return user[0];
+  const cat = ids.filter((id) => id in CATEGORY_LABELS).map((id) => CATEGORY_LABELS[id]).sort((a, b) => a.localeCompare(b));
+  return cat[0] ?? "";
+}
+
+// 라벨 id → 표시 이름. 런당 **1회**만 부른다(메시지마다 부르지 않는다 — 라벨은 수십 개고 거의 안 변한다).
+//  실패는 삼킨다: 채널이 없다고 수집이 멈출 이유는 없다(빈 맵 = 채널 없음으로 수렴).
+let labelNamesCache: Map<string, string> | null = null;
+async function loadLabelNames(): Promise<Map<string, string>> {
+  if (labelNamesCache) return labelNamesCache;
+  const m = new Map<string, string>();
+  try {
+    const r = (await gmailFetch("/users/me/labels")) as { labels?: Array<{ id?: string; name?: string }> };
+    for (const l of r.labels ?? []) if (l?.id && l?.name) m.set(l.id, l.name);
+  } catch (e) {
+    console.warn(`gmail: 라벨 목록 조회 실패 — 채널 없이 진행합니다: ${(e as Error).message}`);
+  }
+  labelNamesCache = m;
+  return m;
 }
 
 // ── 순수 변환: 원본 메시지 1건(format=full) → RawItem (네트워크 없음, 단위테스트 대상) ──
@@ -193,6 +247,8 @@ export function toRawItem(message: GmailMessage, ctx: GmailToRawItemCtx): RawIte
     body,
     occurred_at: occurredAt,
     updated_at: occurredAt,
+    // 채널(#2416) — 빈 값이면 아예 넣지 않는다(mirror-source 가 truthy 일 때만 저장하므로 대칭).
+    container_name: ctx.container?.trim() || undefined,
     fields: {
       threadId,
       labelIds: message.labelIds,
@@ -276,6 +332,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     if (q) params.set("q", q);
     if (pageToken) params.set("pageToken", pageToken);
 
+    const labelNames = await loadLabelNames();   // 채널(#2416) — 런당 1회 캐시
     const list = (await gmailFetch(`/users/me/messages?${params.toString()}`)) as GmailListResponse;
 
     for (const ref of list.messages ?? []) {
@@ -293,7 +350,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
           if (Number.isFinite(t) && t < sinceMs) continue;
         }
 
-        yield toRawItem(full, { instance: INSTANCE });
+        yield toRawItem(full, { instance: INSTANCE, container: pickMailLabel(full.labelIds, labelNames) });
       } catch (err) {
         // 단일 메시지 fetch/파싱 실패는 skip/continue — 전체 백필을 죽이지 않는다.
         console.warn(`gmail 메시지 처리 skip (id=${ref.id}): ${(err as Error).message}`);
