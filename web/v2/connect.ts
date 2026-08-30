@@ -321,7 +321,7 @@ function collectFace(onState: CollectState, teamSee = true, countKind = ''): Col
             const n = Number(r?.total);
             if (!Number.isFinite(n) || n <= 0) return;
             const m = rowHost.querySelector('.cn-act-m');
-            if (m) m.prepend(...uiText(`지금까지 **${n.toLocaleString('ko-KR')}건** 모았어요. `));
+            if (m) m.prepend(...uiText(`지금까지 **${n.toLocaleString('ko-KR')}건** 가져왔어요. `));
           })
           .catch(() => { /* 숫자는 덤이다 — 없다고 줄이 비면 안 된다 */ });
       }
@@ -612,7 +612,7 @@ function slackTeamCollectCard(onState: CollectState): CollectFace {
     }
     if (!noCred) notes.push(s.bot && s.bot.available
       ? (s.bot.enabled ? '비공개 채널도 모으려면 그 채널에서 `/invite @Lively` 를 입력하세요 — 초대된 채널만 읽습니다.'
-                       : '비공개 채널은 켜면 함께 모읍니다 — 그 채널에서 `/invite @Lively` 로 초대한 것만.')
+                       : '비공개 채널은 켜면 함께 가져옵니다 — 그 채널에서 `/invite @Lively` 로 초대한 것만.')
       : '비공개 채널까지 모으려면 Lively 봇이 필요해요 — [다시 연결]하면 봇이 함께 설치됩니다.');
 
     chk.onchange = async () => {
@@ -627,14 +627,14 @@ function slackTeamCollectCard(onState: CollectState): CollectFace {
     const scopeNode = scopeChooser('slack', { channels: String(s.channels ?? '') }, true, async (sc) => {
       try {
         await api('/api/ui/org/slack/collect', { method: 'POST', body: JSON.stringify({ enabled: true, channels: sc.channels ?? '' }) });
-        toast(String(sc.channels ?? '').trim() ? '모을 채널을 저장했어요' : '전체 공개 채널을 모읍니다');
+        toast(String(sc.channels ?? '').trim() ? '가져올 채널을 저장했어요' : '전체 공개 채널을 가져옵니다');
       } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
       await paint();
     });
     const chanExtra = collectSettings({
       key: 'slack',
       s: { ...s, scope: {}, collector_id: s.search?.collector_id ?? null, enabled: !!s.search?.enabled },
-      scopeNode: setRow('어디서', '모을 대화', [scopeNode]),
+      scopeNode: setRow('어디서', '가져올 대화', [scopeNode]),
       since: String(s.backfill_since ?? ''),
       save: async (patch) => {
         try {
@@ -654,15 +654,15 @@ function slackTeamCollectCard(onState: CollectState): CollectFace {
 //  피그마는 범위(파일 링크/팀 id)가 없으면 서버가 needs_scope 로 켜 주지 않는다 — 그래서 이 카드에 범위 칸이 있다.
 const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: string; where: string }> = {
   figma: { desc: '내가 고른 파일의 코멘트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
-    on: '고른 파일의 코멘트를 모으고 있어요.', off: '켜면 내 Figma 토큰으로 고른 파일의 코멘트를 읽어 옵니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
+    on: '고른 파일의 코멘트를 가져오고 있어요.', off: '켜면 내 Figma 토큰으로 고른 파일의 코멘트를 읽어 옵니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   clickup: { desc: '내 ClickUp 워크스페이스의 작업·댓글을 라이블리 프로젝트 탭으로 가져와요. 자료함이 아니라 프로젝트로 들어옵니다.',
     on: '작업·댓글을 프로젝트 탭으로 가져오고 있어요.', off: '켜면 내 ClickUp 토큰으로 워크스페이스의 작업·댓글을 프로젝트 탭으로 가져옵니다.', where: '워크스페이스 함께 — 프로젝트 탭에서 같이 봐요' },
   linear: { desc: '워크스페이스의 이슈·댓글과 문서를 라이블리가 미리 읽어 자료함으로 가져와요. 팀으로 좁힐 수 있어요. 워크스페이스가 함께 봐요.',
-    on: '이슈·댓글·문서를 모으고 있어요.', off: '켜면 Linear 화면이 열려요 — [허용] 한 번이면 연결과 모으기가 함께 켜집니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
+    on: '이슈·댓글·문서를 가져오고 있어요.', off: '켜면 Linear 화면이 열려요 — [허용] 한 번이면 연결과 가져오기가 함께 켜집니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   gitlab: { desc: '내가 고른 프로젝트의 이슈·MR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
-    on: '고른 프로젝트의 이슈·MR 대화를 모으고 있어요.', off: '켜면 내 GitLab 개인 토큰으로 고른 프로젝트의 이슈·MR 대화를 읽어 옵니다.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
+    on: '고른 프로젝트의 이슈·MR 대화를 가져오고 있어요.', off: '켜면 내 GitLab 개인 토큰으로 고른 프로젝트의 이슈·MR 대화를 읽어 옵니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   github: { desc: '내가 고른 저장소의 이슈·PR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
-    on: '고른 저장소의 이슈·PR 대화를 모으고 있어요.', off: '켜면 내 GitHub 연결로 고른 저장소의 이슈·PR 대화를 읽어 옵니다. 연결 화면에서 고른 저장소가 기본 범위예요.', where: '워크스페이스 함께 — 모아 둔 자료는 함께 검색해요' },
+    on: '고른 저장소의 이슈·PR 대화를 가져오고 있어요.', off: '켜면 내 GitHub 연결로 고른 저장소의 이슈·PR 대화를 읽어 옵니다. 연결 화면에서 고른 저장소가 기본 범위예요.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
 };
 /** 범위 칸 — 앱마다 «무엇을 적는가»만 다르다. parse 가 입력 문자열을 서버 scope 로 바꾼다. */
 const SCOPE_FIELD: Record<string, { ph: string; keys: string[]; parse: (t: string) => Record<string, string>; missing: string; note: string }> = {
@@ -725,7 +725,7 @@ function scopeChooser(app: string, cur: Record<string, string>, enabled: boolean
     const summary = (): string => {
       const n = picked().length;
       if (n > 0) return `${n}개 선택됨`;
-      return o.emptyMeansAll ? `아무것도 안 고르면 전체 ${o.unit}를 모아요` : `모을 ${o.unit}을(를) 하나는 골라 주세요`;
+      return o.emptyMeansAll ? `아무것도 안 고르면 전체 ${o.unit}를 가져와요` : `가져올 ${o.unit}${eulReul(o.unit)} 하나는 골라 주세요`;
     };
     for (const opt of o.options as Array<{ id: string; label: string; hint?: string }>) {
       const box = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -746,7 +746,7 @@ function scopeChooser(app: string, cur: Record<string, string>, enabled: boolean
     }
     const save1 = el('button', { class: 'btn btn-sm', type: 'button', text: enabled ? '범위 저장' : '이 범위로 켜기', onclick: async () => {
       const sel = picked();
-      if (!sel.length && !o.emptyMeansAll) { toast(`모을 ${o.unit}을(를) 하나는 골라 주세요`, true); return; }
+      if (!sel.length && !o.emptyMeansAll) { toast(`가져올 ${o.unit}${eulReul(o.unit)} 하나는 골라 주세요`, true); return; }
       save1.setAttribute('disabled', 'true');
       await save({ [o.key]: sel.join(' ') });
     } });
@@ -817,7 +817,7 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
   const K = COLLECT_KINDS[c.key];
   if (K) {
     const cur = new Set(K.opts.filter((o) => String(c.s.scope?.[o.id] ?? 'on') !== 'off').map((o) => o.id));
-    rows.push(setRow('무엇을', '고른 종류만 모읍니다', [
+    rows.push(setRow('무엇을', '고른 종류만 가져옵니다', [
       el('div', { class: 'cn-chips' },
         el('span', { class: 'cn-chip on', style: 'cursor:default; opacity:.75' }, el('span', { text: K.always + ' (늘 모음)' })),
         chipSet(K.opts, cur, (picked) => {
@@ -828,9 +828,9 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
     ]));
   } else {
     rows.push(setRow('무엇을', '', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
-      text: c.key === 'figma' ? '고른 파일의 코멘트를 모읍니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
+      text: c.key === 'figma' ? '고른 파일의 코멘트를 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
         : c.key === 'clickup' ? '작업·댓글·시간기록을 함께 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.'
-        : '대화와 올린 파일 제목을 모읍니다 — 이 앱은 종류를 나눠 고를 수 없어요.' })]));
+        : '대화와 올린 파일 제목을 가져옵니다 — 이 앱은 종류를 나눠 고를 수 없어요.' })]));
   }
 
   // ② 얼마나 자주
@@ -892,7 +892,7 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
     });
     //  #2243 3차 — «무엇을·얼마나 자주·언제부터» 는 켜기와 무관하게 저장된다(꺼져 있어도 미리 정해 둘 수 있다).
     const extra: HTMLElement[] = collectSettings({
-      key, s, scopeNode: setRow('어디서', SCOPE_NOUN[key] ? `모을 ${SCOPE_NOUN[key]}` : '', [scopeNode]),
+      key, s, scopeNode: setRow('어디서', SCOPE_NOUN[key] ? `가져올 ${SCOPE_NOUN[key]}` : '', [scopeNode]),
       since: String(s.scope?.backfill_since ?? ''),
       save: async (patch) => {
         try {
@@ -966,7 +966,7 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
   const body = panel.body;
   const openConsent = (url: string, after: () => void): void => {
     window.open(url, '_blank', 'noopener');
-    toast('노션 화면에서 모을 페이지를 고르고 [액세스 허용]을 누르세요 — 돌아오면 이 화면이 갱신됩니다');
+    toast('노션 화면에서 가져올 페이지를 고르고 [액세스 허용]을 누르세요 — 돌아오면 이 화면이 갱신됩니다');
     window.addEventListener('focus', () => after(), { once: true });
   };
   const paint = async (): Promise<void> => {
@@ -982,13 +982,13 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
     const notes: string[] = [];
     if (s && s.enabled) {
       notes.push(on.length > 1
-        ? `노션 워크스페이스 ${on.length}곳에서 모으고 있어요 — 각 워크스페이스에서 고른 페이지(와 그 하위)만 읽습니다.`
-        : `'${wsName(on[0] || wsAll[0])}' 워크스페이스에서 모으고 있어요 — 노션에서 고른 페이지(와 그 하위)만 읽습니다.`);
+        ? `노션 워크스페이스 ${on.length}곳에서 가져오고 있어요 — 각 워크스페이스에서 고른 페이지(와 그 하위)만 읽습니다.`
+        : `'${wsName(on[0] || wsAll[0])}' 워크스페이스에서 가져오고 있어요 — 노션에서 고른 페이지(와 그 하위)만 읽습니다.`);
     }
     else if (wsAll.length) notes.push(wsAll.length > 1
       ? `노션 워크스페이스 ${wsAll.length}곳이 연결돼 있어요 — 켜면 바로 모으기 시작합니다.`
       : '연결은 돼 있어요 — 켜면 바로 모으기 시작합니다.');
-    else if (s && s.ready) notes.push('켜면 노션 화면이 열려요 — 거기서 모을 페이지를 고르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
+    else if (s && s.ready) notes.push('켜면 노션 화면이 열려요 — 거기서 가져올 페이지를 고르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
     else notes.push('노션 연결 준비가 아직 안 됐어요 — 아래에 Lively Notion 통합의 값 두 개를 넣으면 열립니다. 지금 당장은 관리 화면의 외부 자료 수집에서 토큰 방식으로도 연결할 수 있어요.');
     const extra: HTMLElement[] = [];
     if (!(s && s.ready) && !wsAll.length) {
@@ -1114,7 +1114,7 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
     const notes: string[] = [];
     if (anyOn) {
       const on = [drive.enabled ? 'Google Drive' : '', gmail.enabled ? 'Gmail' : ''].filter(Boolean).join(' · ');
-      notes.push(`${on} 에서 모으고 있어요 — 켠 사람(${(s.connected && s.connected.kind) ? '내' : '내'}) 구글 연결로 돕니다.`);
+      notes.push(`${on} 에서 가져오고 있어요 — 켠 사람(${(s.connected && s.connected.kind) ? '내' : '내'}) 구글 연결로 돕니다.`);
     } else if (connected) notes.push('연결은 돼 있어요 — 모을 서비스를 고르고 켜면 바로 시작합니다.');
     else if (s && s.ready) notes.push('켜면 구글 화면이 열려요 — [허용]만 누르면 바로 시작됩니다. 토큰이나 설정을 만질 일은 없어요.');
     else notes.push('구글 연결 준비가 아직 안 됐어요 — 아래에 구글 OAuth 클라이언트 값 두 개를 넣으면 열립니다.');
