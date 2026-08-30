@@ -8,6 +8,7 @@
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { LINEAR_GRAPHQL_URL } from "../org/credentials/linear-oauth.js";
+import { sinceFloor } from "./sync-cursor.js";
 
 const PAGE = 100;
 export const MAX_PAGES = 100;
@@ -144,7 +145,8 @@ export const linearConnector: Connector = {
     const viewer = await gql<{ viewer?: { organization?: { urlKey?: string; id?: string } } }>(token, VIEWER_QUERY, {});
     const instance = viewer.viewer?.organization?.urlKey || viewer.viewer?.organization?.id || "linear";
 
-    const filter = issueFilter(opts?.since, teams);
+    const sinceIso = sinceFloor(opts?.since, cfg.backfill_since);
+    const filter = issueFilter(sinceIso, teams);
     let after: string | null = null;
     for (let n = 0; ; n++) {
       if (n >= MAX_PAGES) {
@@ -162,7 +164,7 @@ export const linearConnector: Connector = {
     }
 
     if (includeDocs) {
-      const dfilter = opts?.since ? { updatedAt: { gt: opts.since } } : undefined;
+      const dfilter = sinceIso ? { updatedAt: { gt: sinceIso } } : undefined;
       let dafter: string | null = null;
       for (let n = 0; n < MAX_PAGES; n++) {
         const d: { documents: { nodes: LDocument[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } = await gql(

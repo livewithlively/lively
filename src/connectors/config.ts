@@ -164,6 +164,9 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "repos", env: "GITHUB_REPOS", secret: false, label: "저장소", hint: "owner/repo — 공백·줄바꿈으로 여러 개. GitHub 주소를 그대로 붙여넣어도 됩니다" },
       { key: "include_prs", env: "GITHUB_INCLUDE_PRS", secret: false, label: "PR 포함", hint: "on(기본) | off — PR 본문·리뷰 댓글" },
       { key: "include_releases", env: "GITHUB_INCLUDE_RELEASES", secret: false, label: "릴리스 포함", hint: "on(기본) | off — 릴리스 노트" },
+      //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
+      //   과거를 더 읽으려면 전량 다시 읽기가 필요하다(화면이 그 말을 한다).
+      { key: "backfill_since", env: "GITHUB_BACKFILL_SINCE", secret: false, label: "언제부터", hint: "YYYY-MM-DD — 비우면 볼 수 있는 과거 전체" },
     ],
   },
   // GitLab 커넥터(#2247) — 이슈·MR 대화·릴리스. 개인 액세스 토큰(read_api)만 — [계정 로그인] 토큰(DCR)은 REST 불가.
@@ -186,6 +189,9 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "projects", env: "GITLAB_PROJECTS", secret: false, label: "프로젝트", hint: "group/project — 공백·줄바꿈으로 여러 개. 주소를 그대로 붙여넣어도 됩니다" },
       { key: "include_mrs", env: "GITLAB_INCLUDE_MRS", secret: false, label: "MR 포함", hint: "on(기본) | off" },
       { key: "include_releases", env: "GITLAB_INCLUDE_RELEASES", secret: false, label: "릴리스 포함", hint: "on(기본) | off" },
+      //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
+      //   과거를 더 읽으려면 전량 다시 읽기가 필요하다(화면이 그 말을 한다).
+      { key: "backfill_since", env: "GITLAB_BACKFILL_SINCE", secret: false, label: "언제부터", hint: "YYYY-MM-DD — 비우면 볼 수 있는 과거 전체" },
     ],
   },
   // Linear 커넥터(#2247) — 이슈·댓글·문서(GraphQL). 토큰은 라이블리 Linear 앱(linear_app)을 token_source 로 가리킨다.
@@ -206,6 +212,9 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "token_source", env: "LINEAR_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [모아 두기]에서 연결한 라이블리 Linear 앱 토큰 · 비우면 위 토큰 칸을 씁니다" },
       { key: "teams", env: "LINEAR_TEAMS", secret: false, label: "팀", hint: "팀 키(예 ENG PRD) — 공백·쉼표로 여러 개. 비우면 워크스페이스 전체" },
       { key: "include_documents", env: "LINEAR_INCLUDE_DOCUMENTS", secret: false, label: "문서 포함", hint: "on(기본) | off — Linear Documents" },
+      //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
+      //   과거를 더 읽으려면 전량 다시 읽기가 필요하다(화면이 그 말을 한다).
+      { key: "backfill_since", env: "LINEAR_BACKFILL_SINCE", secret: false, label: "언제부터", hint: "YYYY-MM-DD — 비우면 볼 수 있는 과거 전체" },
     ],
   },
   // Google 커넥터 — OAuth2 refresh-token(google-auth.ts). client_id 는 공개 식별자(secret 아님), client_secret·refresh_token 은 시크릿.
