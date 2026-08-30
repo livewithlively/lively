@@ -103,6 +103,25 @@ export async function ensureLocalFilesDistiller(opts: EnsureLocalDistillerOpts =
   const existing = await getDistiller(LOCAL_DISTILLER_KEY);
   let created = false;
   let row: Record<string, unknown>;
+
+  // ★ 잡을 **증류기보다 먼저** 만든다(#2415 후속). 순서가 뒤바뀌면 증류기를 켜는 순간
+  //  ingest.ensureJobForEnabled 가 "증류 잡이 하나도 없다"고 보고 전체 접수 잡(distill-lanes)을
+  //  따로 만들어, 이 프리셋의 잡과 **둘 다** local-files 를 물어 배치가 두 번 나간다
+  //  (실측 2026-08-30 온보딩: distill-lanes{} + distill-local-files{local-files} 공존).
+  //  먼저 만들어 두면 그 훅이 "이미 접수하는 잡이 있다"로 보고 아무것도 안 한다. 그리고 나중에
+  //  리브가 첫 레인을 켤 때 이 잡의 묶음이 자동으로 풀려 하나로 수렴한다(planDistillJob 의 widen).
+  let job: { id: string; enabled: boolean } | null = null;
+  if (opts.enable) {
+    const j = await upsertCronJob({
+      id: LOCAL_DISTILL_JOB_ID, label: "내 컴퓨터 자료 증류", action: "distill_sources_headless",
+      params: JSON.stringify({ distiller: LOCAL_DISTILLER_KEY }),
+      interval_sec: LOCAL_DISTILL_INTERVAL_SEC, cron_expr: null, enabled: true,
+      note: "올린 파일(자료 kind=local_file)을 지식으로 — 증류기 'local-files' 전용. 온보딩 승인 때 등록됨(#1881 L3).",
+      run_once: null, actor: opts.actor ?? null,
+    });
+    job = { id: String(j.id), enabled: !!j.enabled };
+  }
+
   if (!existing) {
     row = await upsertDistiller(
       { ...localFilesDistillerDraft(), enabled: !!opts.enable, requester: opts.enable ? (opts.requester ?? opts.actor ?? null) : null },
@@ -117,18 +136,7 @@ export async function ensureLocalFilesDistiller(opts: EnsureLocalDistillerOpts =
     row = existing as unknown as Record<string, unknown>;
   }
 
-  let job: { id: string; enabled: boolean } | null = null;
-  if (opts.enable) {
-    // 켜짐 = 실제로 돈다 — 증류기별 헤드리스 잡을 같이 둔다(잡이 없으면 초록불인데 아무것도 안 도는 상태가 된다).
-    const j = await upsertCronJob({
-      id: LOCAL_DISTILL_JOB_ID, label: "내 컴퓨터 자료 증류", action: "distill_sources_headless",
-      params: JSON.stringify({ distiller: LOCAL_DISTILLER_KEY }),
-      interval_sec: LOCAL_DISTILL_INTERVAL_SEC, cron_expr: null, enabled: true,
-      note: "올린 파일(자료 kind=local_file)을 지식으로 — 증류기 'local-files' 전용. 온보딩 승인 때 등록됨(#1881 L3).",
-      run_once: null, actor: opts.actor ?? null,
-    });
-    job = { id: String(j.id), enabled: !!j.enabled };
-  } else {
+  if (!opts.enable) {
     try {
       const r = await itemsPool.query(`SELECT id, enabled FROM org_cron WHERE id=$1`, [LOCAL_DISTILL_JOB_ID]);
       if (r.rows[0]) job = { id: r.rows[0].id, enabled: !!r.rows[0].enabled };
