@@ -121,7 +121,9 @@ const orgCollectScopeOptions: Capability = {
     "그 앱에서 «고를 수 있는 것»(저장소·프로젝트·팀·파일·리스트·채널)을 **호출자 본인의 연결**로 조회한다 — 화면이 토글 목록으로 그린다. " +
     "지원: github(저장소) · gitlab(프로젝트) · linear(팀) · figma(파일, 팀 id 를 넣은 경우) · clickup(리스트) · slack(공개 채널). " +
     "읽기 전용이고 권한을 넓히지 않는다. 목록을 못 만들면 에러가 아니라 freeform=true + note 로 답한다(화면은 텍스트 입력으로 떨어진다).",
-  scope: "admin", input: {},
+  scope: "admin",
+  //  #923 — REST 는 :system 경로 파라미터로 싣지만, 스키마에 안 적으면 zod 가 strip 해 MCP 로는 부를 수 없다.
+  input: { system: z.enum(["github", "gitlab", "linear", "figma", "clickup", "slack"]).describe("어느 앱의 «고를 수 있는 것»을 볼지") },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/:system/collect/options"], parse: (req) => ({ system: String((req.params as Record<string, string>)?.system ?? "") }) }] },
   handler: async (input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
