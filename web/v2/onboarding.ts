@@ -1596,9 +1596,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           //   **AI 가 그 앱을 쓸 수 있게** 할 뿐, 지난 자료를 끌어오지는 않는다 — 그건 수집기(org_collector)이고
           //   새 워크스페이스에는 꺼진 채로 깔린다. 그래서 켤 수 있는 사람(=관리자, 셀프서브에선 만든 사람 본인)
           //   에게는 여기서 **실제로 켠다**. 못 켜는 사람에게는 약속하지 않는다(문구가 갈린다).
+          //  ⚠ 수집이 켜졌는지는 **서버 상태로** 판정한다. startCollect 는 COLLECT_OF 축(슬랙·노션·구글)만 알아서,
+          //   COLLECT_FIRST 축(깃헙·피그마·클릭업·깃랩·리니어)은 각자 분기에서 실제로 켜 놓고도 «못 켰다» 쪽
+          //   문구가 나갔다 — 화면이 자기가 한 일을 부정하면 안 된다.
           void startCollect(id).then((on) => {
-            toast(on ? `${label} 연결됐어요. 그동안 쌓인 자료를 가져오기 시작합니다.`
-                     : `${label} 연결됐어요. 이제 제가 ${label} 을 직접 쓸 수 있어요.`);
+            const collected = on || !!(COLL[id] && COLL[id].enabled);
+            toast(collected ? `${label} 연결됐어요. 그동안 쌓인 자료를 가져오기 시작합니다.`
+                            : `${label} 연결됐어요. 이제 제가 ${label} 을 직접 쓸 수 있어요.`);
           });
         };
         /** 팀 자료로 모으기(수집) 켜기 — 관리자만. 실패·미지원은 조용히 false(온보딩을 막지 않는다). */
@@ -1662,10 +1666,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             return;
           }
           //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다.
-          if (CONN && CONN.connected.some((s) => s.key === 'slack')) {
+          //  ⚠ **`id` 를 반드시 본다.** 종전엔 «슬랙이 이미 이어져 있으면» 만 봐서, 아직 토큰이 없는 GitHub 를 누른
+          //   사람이 이 분기로 흘러들었다 — 그리고 startCollect('github') 는 COLLECT_OF 축에 없어 곧바로 false 라
+          //   «슬랙 자료 모으기를 켜지 못했어요» 가 떴다(원준님 실측 2026-08-30: GitHub 를 눌렀는데 슬랙 실패 토스트).
+          //   라벨도 하드코딩하지 않는다 — 이 분기에 다른 앱이 흘러들어도 **누른 앱 이름**이 나와야 원인이 보인다.
+          if (id === 'slack' && CONN && CONN.connected.some((s) => s.key === 'slack')) {
             const on = await startCollect(id);
             await loadConn();
-            fin(on ? null : '슬랙 자료 모으기를 켜지 못했어요 — [외부 앱 연결]에서 다시 시도해 주세요.');
+            fin(on ? null : `${srcLabel(id)} 자료 모으기를 켜지 못했어요 — [외부 앱 연결]에서 다시 시도해 주세요.`);
             return;
           }
           if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
