@@ -28,6 +28,11 @@ export const WIN = process.platform === "win32";
 //   유일한 차단이고, 스텁 게이트웨이가 필요한 테스트는 이 조각 **뒤에** 자기 값을 세우면 된다(뒤 키가 이긴다).
 export const offlineLivelyEnv = () => ({
   LIVELY_TOKEN: "", LIVELY_SESSION_ID: "", LIVELY_GATEWAY_URL: "", LIVELY_NODE_TOKEN: "",
+  // #2457 — 세션 '종류'도 서버가 pane 에 실어 주는 신원이다. 훅의 사람/기계 판정이 이 값을 **먼저** 보므로
+  //  (project-auto-bind.org-hook.mjs 의 isWorkSessionEnv), 상속되면 테스트가 세우려는 위탁 시나리오가
+  //  통째로 성립하지 않는다. 실측: 라이블리 세션 안에서 돌리면 LIVELY_SESSION_KIND=human 이 상속돼
+  //  «위탁 세션엔 주입하지 않는다» 단언 2건이 그 기계에서만 빨간불이었다(CI 는 이 값이 없어 초록).
+  LIVELY_SESSION_KIND: "",
   // 파일 홈과 무관한 레지스트리 등 영속 호스트 효과 + 부모 셸의 allow 상속을 함께 차단한다.
   LIVELY_HOST_EFFECTS: "deny",
 });

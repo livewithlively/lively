@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const HOOKS = {
@@ -62,7 +63,7 @@ async function startGateway() {
 async function runHook(hookPath, cwd, base) {
   const child = spawn(process.execPath, [hookPath], {
     cwd,
-    env: { ...process.env, LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: base, LIVELY_HOME: cwd },
+    env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: base, LIVELY_HOME: cwd },
     stdio: ["pipe", "pipe", "pipe"],
   });
   child.stdin.end(JSON.stringify({ cwd }));

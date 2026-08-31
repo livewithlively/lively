@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { PassThrough } from "node:stream";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import { fileURLToPath } from "node:url";   // E24 가 하위프로세스로 진짜 stdio 를 띄우는 데 쓴다
 
 let pass = 0, fail = 0;
@@ -408,7 +409,7 @@ try {
     const child = spawn(process.execPath, [entry], {
       stdio: ["pipe", "pipe", "pipe"],
       // 부모 감시는 끈다 — 여기서 재는 것은 «깨진 파이프» 축 하나다(부모는 살아 있다).
-      env: { ...process.env, LIVELY_HOME: HOME, LIVELY_MCP_PARENT_WATCH_MS: "0" },
+      env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, LIVELY_MCP_PARENT_WATCH_MS: "0" },
     });
     child.stdout.on("data", () => {});
     child.stderr.on("data", () => {});

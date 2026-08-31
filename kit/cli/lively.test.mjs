@@ -16,6 +16,7 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 import { WIN } from "../testlib/os-sandbox.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 // CLI 런처 심의 파일명 — 윈도우는 `.cmd` 배치다(user-install.mjs 의 CLI_SHIM_CMD). 이름을 가정하면 윈도우에서 어긋난다(#1510).
 const SHIM = WIN ? "lively.cmd" : "lively";
 
@@ -162,7 +163,7 @@ async function lively(h, args, { env = {}, expectFail = false } = {}) {
   try {
     const r = await pExecFile(process.execPath, [CLI, ...args], {
       env: {
-        ...process.env,
+        ...process.env, ...offlineLivelyEnv(),
         HOME: h.home,
         LIVELY_HOME: h.home,
         CLAUDE_CONFIG_DIR: join(h.home, ".claude"),
@@ -423,7 +424,7 @@ try {
     // 게이트웨이가 서빙하듯 주소를 굽는다(src/web.ts 의 serveBootstrap 과 동일 치환).
     writeFileSync(boot, readFileSync(join(HERE, "bootstrap.sh"), "utf8").replaceAll("__LIVELY_GATEWAY__", GW));
     const r = await pExecFile("sh", [boot], {
-      env: { ...process.env, HOME: h.home, LIVELY_HOME: h.home, PATH: pathWith(h.bin) },
+      env: { ...process.env, ...offlineLivelyEnv(), HOME: h.home, LIVELY_HOME: h.home, PATH: pathWith(h.bin) },
       timeout: 60000,
     }).catch((e) => ({ stdout: e.stdout ?? "", stderr: e.stderr ?? String(e.message), failed: true }));
 
@@ -527,7 +528,7 @@ try {
       `backupUserMcp("linear");`,                                                             // 재호출 — 최초1회면 유저 원본 유지
     ].join("\n"));
     // ⚠ CLAUDE_CONFIG_DIR 를 명시적으로 비운다 — 안 그러면 개발자 셸의 값이 새어들어 엉뚱한 파일을 보게 된다.
-    execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box, CLAUDE_CONFIG_DIR: "" }, stdio: "ignore" });
+    execFileSync(process.execPath, [probe], { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: box, CLAUDE_CONFIG_DIR: "" }, stdio: "ignore" });
     let bak = {}; try { bak = JSON.parse(readFileSync(join(box, ".lively", "mcp-user-backup.json"), "utf8")); } catch { /* */ }
     check("⑰ backupUserMcp — 유저 원본 스냅샷 + 부재는 null + 최초1회(재설치 오염 방지)",
       !!(bak.linear && bak.linear.url === "https://user.example/mcp") && bak.notion === null, JSON.stringify(bak));
@@ -552,7 +553,7 @@ try {
       `import { backupUserMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,   // 절대경로 그대로면 윈도우에서 죽는다(#1510)
       `backupUserMcp("linear");`,
     ].join("\n"));
-    execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box, CLAUDE_CONFIG_DIR: prof }, stdio: "ignore" });
+    execFileSync(process.execPath, [probe], { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: box, CLAUDE_CONFIG_DIR: prof }, stdio: "ignore" });
     let bak = {}; try { bak = JSON.parse(readFileSync(join(box, ".lively", "mcp-user-backup.json"), "utf8")); } catch { /* */ }
     check("⑰-b backupUserMcp — 프로필 격리(#346)에서 CLAUDE_CONFIG_DIR 의 .claude.json 을 본다",
       !!(bak.linear && bak.linear.url === "https://user-profile.example/mcp"), JSON.stringify(bak));
@@ -576,7 +577,7 @@ try {
     ].join("\n"));
     execFileSync(process.execPath, [probe], {
       env: {
-        ...process.env, HOME: h.home, USERPROFILE: h.home, LIVELY_HOME: h.home,
+        ...process.env, ...offlineLivelyEnv(), HOME: h.home, USERPROFILE: h.home, LIVELY_HOME: h.home,
         PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
         CLAUDE_CONFIG_DIR: "",   // 지목 없음 — 빈 문자열을 '지목' 으로 읽으면 프로필이 통째로 빠진다
       },
@@ -612,7 +613,7 @@ try {
     execFileSync(process.execPath, [probe], {
       // HOME=가짜 실홈 · LIVELY_HOME=샌드박스 — 어긋난 상태를 그대로 재현한다.
       env: {
-        ...process.env,
+        ...process.env, ...offlineLivelyEnv(),
         HOME: live, USERPROFILE: live,          // 윈도우는 os.homedir() 가 USERPROFILE 을 본다(#1510)
         LIVELY_HOME: h.home, CLAUDE_CONFIG_DIR: "",
         PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",

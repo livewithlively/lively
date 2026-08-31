@@ -9,6 +9,19 @@ import pg from "pg";
 // activity_log 원자기록의 동시 부하를 감안해 max 명시(기본 10 → 20, 풀 고갈 방지).
 const rawPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 20 });
 
+// ── DB 주소가 없으면 접속을 시도하지 않는다 (#2457) ──────────────────────────
+//
+// pg 는 connectionString 이 비면 **libpq 기본값(localhost:5432)** 으로 붙는다. 그래서 이 모듈을
+//  import 하기만 한 유닛 테스트가 그 기계의 5432 상태에 시간을 의존했다 — 맥(포트 닫힘)은 즉시
+//  ECONNREFUSED 로 fail-open, CI(services.postgres 가 5432에 살아 있음)는 **파일당 60초씩 대기**.
+//  실측 2026-08-31: 같은 6개 파일이 맥 1.8초 / CI 363초(유닛 CPU 604초의 60%).
+//
+// 판정은 어차피 양쪽 다 fail-open 이라 같았고 바뀐 건 '기다렸다'뿐이다. 그러니 **주소가 없으면
+//  기다리지 않고 즉시 실패**시킨다 — 호출부의 try/catch 는 그대로 두고 던지는 쪽만 빨라진다.
+//  주소가 있으면 종전과 완전히 같다(아래 E4 무회귀 단언 — src/db/no-db-socket.test.ts).
+const DB_URL = (process.env.ITEMS_DATABASE_URL ?? "").trim();
+const NO_DB = DB_URL === "";
+
 // ── 테넌트 바인딩 파사드 ─────────────────────────────────────────────────────
 //
 // **왜 풀을 감싸는가**: 이 코드베이스에는 `itemsPool.query(...)` 호출이 597개, 144개 파일에 있다.
@@ -98,6 +111,20 @@ export function wrapClient(client: pg.PoolClient): pg.PoolClient {
 
 export const itemsPool: pg.Pool = new Proxy(rawPool, {
   get(target, prop, recv) {
+    // 주소가 없으면 소켓을 여는 두 경로(query·connect)만 막는다. end()·on() 등 나머지는 그대로
+    //  위임한다 — 풀을 닫는 것은 접속이 아니다(CLI 종료 경로 endPool() 무회귀).
+    //  ⚠ 목(mock)이 걸려 있으면 비켜선다 — 여러 유닛 테스트가 `(itemsPool as any).query = fake` 로 얇은 Db
+    //   페이크를 심는다(v6/project-store.test · domainmap/core/reconcile.test). 그건 소켓을 열지 않으므로
+    //   막을 이유가 없고, 가로채면 **가드가 테스트의 페이크를 무력화**한다(실측 2026-08-31에 그렇게 깨졌다).
+    //   프로토타입 메서드일 때만(= 진짜 pg 풀의 것) 가드가 선다.
+    if (NO_DB && (prop === "query" || prop === "connect") && !Object.hasOwn(target, prop)) {
+      return async () => {
+        throw new Error(
+          "ITEMS_DATABASE_URL 이 설정되지 않았습니다 — DB 접속을 시도하지 않습니다(#2457). " +
+          "DB 가 필요한 검증은 *.itest.mjs / *.pg-test.mjs 계층입니다(scripts/README.md).",
+        );
+      };
+    }
     if (prop === "query" && tenantBindingActive()) {
       // 단문 조회 — 바인딩을 걸려면 트랜잭션이 필요하다(SET LOCAL 은 트랜잭션 스코프).
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

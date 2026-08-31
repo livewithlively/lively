@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import { closedPath, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 const pExecFile = promisify(execFile);
@@ -81,7 +82,7 @@ const LIVELY_ENTRY = { lively: { type: "stdio", command: "/stub/lively", args: [
 //  ⚠ LIVELY_GATEWAY_URL·LIVELY_TOKEN·CLAUDE_CONFIG_DIR 을 **명시적으로** 덮는다 — 셸에 있으면 실제 설정을 읽는다.
 async function statusOf(c) {
   const env = {
-    ...process.env,
+    ...process.env, ...offlineLivelyEnv(),
     PATH: closedPath(c.bin),                          // 닫힌 PATH — 실제 claude 가 절대 안 잡히게
     LIVELY_HOME: c.home,                              // CLI 의 HOME(= 유저 설정파일 후보의 뿌리)도 이걸 따른다
     CLAUDE_CONFIG_DIR: c.ccd,

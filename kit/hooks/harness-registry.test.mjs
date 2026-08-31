@@ -18,6 +18,7 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { HOOK_SCRIPTS, SETUP_FILES } from "../setup/kit-manifest.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import {
   HARNESS, HARNESS_IDS, resolveHarness, isKnownHarness,
   harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher, allToolNames, mcpToolName,
@@ -204,7 +205,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     writeFileSync(join(DECOY, "settings.json"), DECOY_BEFORE);
 
     const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", BUNDLE],
-      { env: { ...process.env, LIVELY_HOME: HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8" });
+      { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8" });
     r.status === 0 ? ok("D1[E4] 설치기 성공") : bad("D1[E4] 설치기 성공", `exit=${r.status} ${r.stderr || r.stdout}`);
 
     // D4 — 미끼(실 프로필)는 바이트 하나 안 바뀌어야 한다. D5 — 대신 샌드박스 <HOME>/.claude/settings.json 에 배선된다.
@@ -223,7 +224,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     // ★ 핵심 — 설치된 자리에서 훅을 실제로 실행한다. import 가 안 풀리면 ERR_MODULE_NOT_FOUND 로 죽는다.
     //  토큰이 없으므로 훅은 즉시 exit 0(fail-open) 이어야 한다 — 그게 정상 동작이다.
     const h = spawnSync(process.execPath, [join(HOME, ".lively", "hooks", "sync-harness-assets.mjs")],
-      { env: { ...process.env, LIVELY_HOME: HOME, HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8", timeout: 20000 });
+      { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8", timeout: 20000 });
     if (h.status !== 0) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `exit=${h.status} ${String(h.stderr).slice(0, 300)}`);
     else if (/ERR_MODULE_NOT_FOUND|Cannot find module/.test(String(h.stderr))) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `모듈 해석 실패: ${String(h.stderr).slice(0, 300)}`);
     else ok("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨");

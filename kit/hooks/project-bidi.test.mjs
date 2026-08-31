@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PULL = path.join(here, "examples", "project-pull-turn.org-hook.mjs");
@@ -71,7 +72,7 @@ async function mkProj() {
 }
 async function run(hook, dir) {
   const c = spawn(process.execPath, [hook], {
-    cwd: dir, env: { ...process.env, LIVELY_TOKEN: "t", LIVELY_GATEWAY_URL: BASE, LIVELY_HOME: dir }, stdio: ["pipe", "pipe", "pipe"],
+    cwd: dir, env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "t", LIVELY_GATEWAY_URL: BASE, LIVELY_HOME: dir }, stdio: ["pipe", "pipe", "pipe"],
   });
   c.stdin.end(JSON.stringify({ cwd: dir }));
   assert.equal(await new Promise((r) => c.on("exit", r)), 0, "훅은 절대 세션을 막지 않는다(exit 0)");

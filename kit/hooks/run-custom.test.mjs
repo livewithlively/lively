@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const RUNNER = join(fileURLToPath(import.meta.url), "..", "run-custom.mjs");
 const SANDBOX = mkdtempSync(join(tmpdir(), "run-custom-test-"));
@@ -24,7 +25,7 @@ mkdirSync(join(HOME, ".lively"), { recursive: true });
 mkdirSync(TMP, { recursive: true });
 
 // 게이트웨이에 닿을 수 없는 구성원 머신을 재현한다 — 토큰/URL 이 없어야 러너가 로컬 캐시(우리가 심은 훅)로 폴백한다.
-const ENV = { ...process.env, HOME, LIVELY_HOME: HOME, TMPDIR: TMP, LIVELY_OFF: "", LIVELY_HOOKS_OFF: "" };
+const ENV = { ...process.env, ...offlineLivelyEnv(), HOME, LIVELY_HOME: HOME, TMPDIR: TMP, LIVELY_OFF: "", LIVELY_HOOKS_OFF: "" };
 delete ENV.LIVELY_TOKEN;
 delete ENV.LIVELY_GATEWAY_URL;
 

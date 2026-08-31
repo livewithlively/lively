@@ -17,6 +17,7 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SANDBOX = mkdtempSync(join(tmpdir(), "codex-wiring-test-"));
@@ -73,7 +74,7 @@ function freshHome({ userConfig = null, transport = null } = {}) {
 }
 function runInstall() {
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "codex", "--clone-root", BUNDLE],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`설치기 exit=${r.status}\n${r.stderr || r.stdout}`);
   if (!existsSync(CODEX_CFG)) throw new Error("설치기가 샌드박스에 config.toml 을 안 만들었다(샌드박스 계약 파손)");
   return readFileSync(CODEX_CFG, "utf8");
@@ -247,7 +248,7 @@ toml = runInstall(); toml = runInstall();
 // ── ⑫ 제거 라운드트립 ──────────────────────────────────────────────────────
 {
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-uninstall.mjs"), "--harness", "codex", "--yes"],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   const after = existsSync(CODEX_CFG) ? readFileSync(CODEX_CFG, "utf8") : "";
   const clean = !/lively-managed/.test(after) && !/mcp_servers\.lively/.test(after);
   const keeps = /model = "gpt-5\.5"/.test(after) && /command = "echo mine"/.test(after);
@@ -260,7 +261,7 @@ toml = runInstall(); toml = runInstall();
 makeBundle({ mcpServers: [{ name: "lively-local", transport: "stdio", command: "lively mcp-local", enabled: true }] });
 install({ userConfig: USER_CFG });
 {
-  const probe = spawnSync("codex", ["mcp", "list"], { env: { ...process.env, CODEX_HOME: join(HOME, ".codex") }, encoding: "utf8" });
+  const probe = spawnSync("codex", ["mcp", "list"], { env: { ...process.env, ...offlineLivelyEnv(), CODEX_HOME: join(HOME, ".codex") }, encoding: "utf8" });
   if (probe.error) {
     console.log("skip ⑮ codex 미설치 — 실파싱 검증 생략(정적 단언만)");
   } else {

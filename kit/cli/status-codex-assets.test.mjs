@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import { closedPath, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 const pExecFile = promisify(execFile);
@@ -87,7 +88,7 @@ function mkCase(name, { codexMode = "ok", codexInstalled = true, localAssets = {
 
 async function statusOf(c) {
   const env = {
-    ...process.env,
+    ...process.env, ...offlineLivelyEnv(),
     PATH: closedPath(c.bin),                          // 닫힌 PATH — 실제 codex/claude 가 안 잡히게
     LIVELY_HOME: c.home,
     CLAUDE_CONFIG_DIR: join(c.home, "claude-cfg"),
