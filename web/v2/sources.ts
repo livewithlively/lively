@@ -97,13 +97,39 @@ function myUploadName(): string | null {
 // ════════════════════════════════════════════════════════════════════════
 const PAGE = 60;
 
-export function renderSourcesApp(host: HTMLElement, params: URLSearchParams): void {
+// ── 앱 안 이동은 앱이 처리한다 ──────────────────────────────────────────────
+//  자료는 **한 창 안에서 돌아다니는 앱**이라 셸의 탭 키가 `#/sources…` 를 한 화면으로 접는다(tabs.ts routeKey).
+//  그 덕에 채널을 옮겨도 탭·좌측 행이 안 늘지만, 대신 **셸이 «같은 화면»이라 보고 다시 그리지 않는다** —
+//  종전엔 출처를 골라도 목록이 그대로였다(#2423 dev 실측). 그래서 주소 변화를 이 앱이 직접 듣는다.
+//  ⚠ 창이 닫히면 host 가 DOM 에서 빠진다 — 그때는 아무것도 하지 않는다(리스너는 모듈에 하나뿐이라 새지 않는다).
+let mounted: HTMLElement | null = null;
+let lastDrawn = '';
+
+function drawFor(host: HTMLElement, hash: string): void {
+  const h = hash.replace(/^#\/?/, '');
+  const qi = h.indexOf('?');
+  const segs = (qi >= 0 ? h.slice(0, qi) : h).split('/').filter(Boolean);
+  if (segs[0] !== 'sources') return;                       // 다른 화면으로 갔다 — 셸의 몫
+  const params = new URLSearchParams(qi >= 0 ? h.slice(qi + 1) : '');
+  lastDrawn = hash;
+  if (segs[1]) { paintDetail(host, Number(decodeURIComponent(segs[1]))); return; }
   const sel = selFromParams(params);
   const treeHost = el('nav', { class: 'v2-src-tree', 'aria-label': '자료 출처' });
   const boardHost = el('div', { class: 'v2-src-board' });
   host.replaceChildren(el('div', { class: 'v2-src' }, treeHost, boardHost));
   void paintTree(treeHost, sel);
   void paintList(boardHost, sel);
+}
+
+window.addEventListener('hashchange', () => {
+  if (!mounted || !document.contains(mounted)) { mounted = null; return; }
+  if (location.hash === lastDrawn) return;                 // 셸이 이미 그린 뒤면 두 번 그리지 않는다
+  drawFor(mounted, location.hash);
+});
+
+export function renderSourcesApp(host: HTMLElement, params: URLSearchParams): void {
+  mounted = host;
+  drawFor(host, location.hash.startsWith('#/sources') ? location.hash : '#/sources?' + params.toString());
 }
 
 // ── 왼쪽: 출처 나무 ────────────────────────────────────────────────────────
@@ -448,6 +474,12 @@ function lockGlyph(): SVGElement {
 // 자료 하나 — 원문이 주인공이다
 // ════════════════════════════════════════════════════════════════════════
 export function renderSourceDetail(host: HTMLElement, id: number): void {
+  mounted = host;
+  lastDrawn = location.hash;
+  paintDetail(host, id);
+}
+
+function paintDetail(host: HTMLElement, id: number): void {
   const box = el('div', { class: 'v2-src-detail' });
   host.replaceChildren(box);
   busy(box, el('div', { class: 'v2-src-skel' }));
