@@ -1382,9 +1382,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   /* ══════════════ 장면 차례 ══════════════ */
   //  #2232 — 순서: 파일 → **AI 고르기·연결** → 외부 앱 → 내 컴퓨터(원준님 2026-08-28: "AI 골라서 연결하는 플로우가 먼저, 그 다음 외부 앱, 로컬은 그 다음").
-  const ORDER = ['name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
+  //  ★ 2026-08-31(원준님) — 'read'·b1~can(리브와의 챗봇 문답)을 걷어냈다. [앱] 다음은 곧장 마무리다.
+  const ORDER = ['name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
   const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
-  const CHAT_FROM = STEP_OF.read;          // 여기부터 막3(채팅)
+
   const QPROG = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
@@ -2385,7 +2386,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             toast('받는 곳을 새 창으로 열었어요.');
           }
           get.textContent = '계속';
-          get.onclick = () => goScene('read');   // 앱을 받았으면 «앱 받기» 장면은 건너뛴다 — 같은 걸 두 번 권하지 않는다
+          get.onclick = () => void finishOnboarding();   // 앱을 받았으면 «앱 받기» 장면은 건너뛴다 — 바로 마무리(#1631 챗 제거)
         };
         get.onclick = doGet;
         $$('[data-get]', el).forEach((b) => b.onclick = (e) => { e.preventDefault(); doGet(); });
@@ -2422,10 +2423,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             toast('받는 곳을 새 창으로 열었어요.');
           }
           //  #2232 — 받기를 눌렀다고 곧장 다음으로 넘기지 않는다(원준님 2026-08-28). 받았으면 [계속]을 눌러 넘어간다.
-          get.textContent = '계속'; get.onclick = () => goScene('read');
+          get.textContent = '계속'; get.onclick = () => void finishOnboarding();
           if (sk) sk.hidden = true;
         };
-        sk.onclick = () => { S.app = 'web'; save(); goScene('read'); };
+        sk.onclick = () => { S.app = 'web'; save(); void finishOnboarding(); };
       },
     },
   };
@@ -2434,6 +2435,64 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let seqToken = 0;
   function msgLiv(html) { const el = document.createElement('div'); el.className = 'ob-msg'; el.innerHTML = `<span class="ob-ava">L</span><div class="ob-body">${html}</div>`; $('#thread').appendChild(el); keepChipsLast(); scrollChat(); return el; }
   function msgUser(text) { const el = document.createElement('div'); el.className = 'ob-msg ob-user'; el.innerHTML = `<div class="ob-body">${esc(text)}</div>`; $('#thread').appendChild(el); keepChipsLast(); scrollChat(); return el; }
+  /**
+   * 온보딩 마무리 — **여기가 실제로 워크스페이스를 바꾸는 자리다**(종전엔 localStorage 표식 하나가 전부였다).
+   *
+   *  ★ 2026-08-31(원준님) — 종전엔 이 자리에 닿으려면 리브와 챗봇처럼 다섯 문답(서랍 승인 · 주기 문서 ·
+   *   팀 공유 · 시간 쓰는 일 · 예시)을 거쳐야 했다. *"쓸데없이 … 거기 없애버려줘."* 그래서 [앱] 장면이
+   *   여기로 바로 온다. 문답에서만 나오던 값(cadence·share·nowline·first_order)은 **없는 채로 보낸다** —
+   *   지어내지 않는다. 서랍도 보내지 않는다: 승인받은 적 없는 분류를 조용히 만들면 «물어보지도 않고
+   *   나눠 놨다» 가 되고, 그건 문답을 없앤 이유와 정확히 반대다.
+   *  ⚠ 서랍이 없어도 자료는 안 굶는다 — 어느 레인에도 안 걸리는 자료는 폴백이 받는다(#632).
+   */
+  async function finishOnboarding() {
+    S.scene = 'done'; save(); renderSB();
+    //  ⚠ 챗을 걷어냈으므로 `#thread` 가 없다 — msgLiv 를 쓰면 그 자리에서 죽는다.
+    //   지금 서 있는 장면(#qcol)에 그대로 말한다. 그 칸도 없으면 토스트로 떨어진다(사람을 말없이 두지 않는다).
+    const col = $('#qcol');
+    const say = (html) => {
+      if (col) col.innerHTML = `<div class="ob-q"><div class="ob-ava">L</div><p class="ob-q-sub">${html}</p></div>`;
+      else toast(String(html).replace(/<[^>]+>/g, ''));
+    };
+    say('정리하고 있어요.');
+    let applied = null;
+    try {
+      applied = await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({
+        name: S.nameSet ? S.name : null,
+        stage: S.stage || null,
+        job: S.job || null,
+        drawers: [],
+        cadence: null,
+        share: null,
+        nowline: null,
+        first_order: null,
+      }) });
+    } catch (e) {
+      // 반영이 실패했으면 **끝났다고 말하지 않는다** — 다음에 다시 물을 수 있게 표식도 남기지 않는다.
+      say(`정리하다 막혔어요 — ${esc(e && e.message ? e.message : '알 수 없는 오류')}<p style="margin-top:6px">홈에서 이어서 하실 수 있습니다.</p>`);
+      await sleep(1200); location.hash = '#/'; return;
+    }
+    try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
+    try { if (state.me) (state.me as { welcome_pending?: boolean }).welcome_pending = false; } catch (_) {}   // 홈의 «이어서 하기» 줄을 내린다(#2232)
+    ctx.onGhost && ctx.onGhost(false);   // 끝났다 — 셸을 돌려준다
+    //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 늦게 도착한 push 하나가 자리표를 되살리면 다음 로그인이 다시 온보딩으로 간다.
+    pushOff = true; clearTimeout(pushT); pushT = null;
+    ctx.onDone && ctx.onDone();
+    // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다. 못 열었으면 사유를 말하고 홈으로.
+    const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
+    const noAi = !livHref && applied && applied.liv && applied.liv.reason === 'ai-not-connected';
+    const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.'
+      : noAi ? 'AI 를 아직 연결하지 않으셔서 리브는 지금 열지 않았어요 — 답을 못 하는 창이 되니까요. 왼쪽 [외부 앱 연결]에서 AI 를 이으면 리브가 이어서 정리해 드립니다. 워크스페이스로 모시겠습니다.'
+      : '워크스페이스로 모시겠습니다.';
+    //  읽는 동안 쌓인 사실(등록 못 한 파일 등)을 **여기서** 말한다 — 챗을 걷어내면서 말할 자리가
+    //   여기 하나 남았다. 조용히 삼키면 8개 올린 사람이 5건만 들어간 걸 모른 채 끝난다.
+    const notes = (S.notes || []).filter(Boolean);
+    say(`정리했어요. ${where}`
+      + (notes.length ? `<p style="margin-top:10px">${notes.join('<br>')}</p>` : ''));
+    await sleep(notes.length ? 3200 : 1400);
+    location.hash = livHref || '#/';
+  }
+
   function chipsRow(items) {
     const el = document.createElement('div'); el.className = 'ob-chips';
     const list = items.map(({ label, cta, ghost, cb }) => {
@@ -2520,17 +2579,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
 
   //  올렸는데 **자료로 안 들어간** 파일을 사실대로 말한다(#1631). 종전엔 화면에서 조용히 사라져서,
   //   8개를 올린 사람이 5건만 정리된 것을 모른 채 넘어갔다. 사유는 서버가 준 것만 옮긴다 — 지어내지 않는다.
-  //  ⚠ startReading 안이 아니라 **바깥**에 둔다 — enterChat 이 대화창을 비운 뒤 다시 불러야 하고,
-  //   읽기가 이미 끝나 있으면 startReading 은 첫 줄에서 return 해 아무 말도 안 하기 때문이다.
-  function sayFail() {
+  //  ★ 2026-08-31 챗을 걷어내면서 **말할 자리를 옮겼다.** 종전엔 msgLiv 로 대화창(#thread)에 썼는데,
+  //   그 칸은 챗 단계에서만 보인다 — 챗이 없어진 지금 거기 쓰면 **아무도 못 보는 글**이 된다.
+  //   그래서 S.notes 에 담아 두고 **마무리 화면**이 말한다(사람이 실제로 읽는 마지막 자리).
+  function noteFail() {
     const fails = (S.upFail || []).filter(Boolean);
     if (!fails.length || S._saidFail) return;
     S._saidFail = true;
     const names = fails.slice(0, 3).map((f) => esc(typeof f === 'string' ? f : f.n)).join(', ');
     const more = fails.length > 3 ? ` 외 ${fails.length - 3}건` : '';
     const why = failWhy(fails);
-    msgLiv(`파일 <b>${fails.length}건</b>(${names}${more})은 자료로 넣지 못했어요${why}.`
-      + ` 나머지로 진행할게요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+    S.notes.push(`파일 <b>${fails.length}건</b>(${names}${more})은 자료로 넣지 못했어요${why}.`
+      + ` 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+    save();
   }
 
   function startReading() {
@@ -2551,7 +2612,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       clearInterval(readTimer); readTimer = null; paint(); renderSB();
       document.dispatchEvent(new Event('read-done'));
     };
-    if (!target()) { finish(); sayFail(); return; }      // 등록된 자료 0건 — 기다릴 것이 없다(올린 게 있었다면 사유를 말한다)
+    if (!target()) { finish(); noteFail(); return; }      // 등록된 자료 0건 — 기다릴 것이 없다(올린 게 있었다면 사유를 말한다)
     //  ⚠ **상한을 둔다.** 종전엔 완료 조건에서만 멈춰서, 등록이 하나라도 빠지면 영원히 돌았다(실측 11/13).
     //   바로 옆 분석 단계엔 상한이 있는데(ANALYZE_TIMEOUT_MS) 여기만 없었다. 넘기면 **사실대로 말하고** 넘어간다 —
     //   온보딩 한복판에서 사람을 무한정 세워 두지 않는다.
@@ -2566,57 +2627,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
       const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
       paint(); save();
-      if (S.read.done >= target()) { finish(); sayFail(); return; }
+      if (S.read.done >= target()) { finish(); noteFail(); return; }
       if (Date.now() - readStarted > READ_MAX_MS) {
         const left = Math.max(0, target() - S.read.done);
-        finish(); sayFail();
-        if (left) msgLiv(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요. 나머지로 먼저 진행할게요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+        finish(); noteFail();
+        if (left) { S.notes.push(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`); save(); }
       }
     }, 1500);
   }
 
-  /**
-   * 올린 자료를 **실제로 AI 에게 보여** 갈래를 받아 온다(#1813).
-   *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 헤드리스 세션이 도는 것이 유일한 길이라,
-   *  AI 를 아직 안 이었으면 여기서 실패한다 — **감추지 않고 이유를 돌려준다**(화면은 실제 집계로 내려앉는다).
-   *  기다림에 상한을 둔다: 온보딩 한복판에서 사람을 무한정 세워 둘 수는 없다.
+  /*  올린 자료를 AI 에게 보여 갈래(서랍)를 받아 오던 analyzeUploads 는 2026-08-31 제거했다(#1631).
+   *  그 결과를 쓰던 곳이 챗 문답(b1 «자료함을 이렇게 나눠 둘까요?») 하나뿐이었는데 그 문답을 없앴다.
+   *  남겨 두면 아무도 안 보는 결과를 위해 **그 사람 AI 구독으로 헤드리스 세션이 매번 돌아** 비용만 나간다.
    */
-  const ANALYZE_TIMEOUT_MS = 75000;
-  async function analyzeUploads(token) {
-    // AI 가 안 이어졌으면 **묻지도 않는다.** 서버도 402 로 막지만, 여기서 먼저 접으면 헛왕복이 없고
-    //  사람이 기다리는 시간도 없다. 판정은 서버가 준 값이다(ai_ready — 실제로 리스가 붙는지로 잰 것).
-    if (WS && WS.ai_ready === false) {
-      return { drawers: null, why: 'AI 를 아직 연결하지 않으셔서, 파일 종류로 나눈 결과예요.' };
-    }
-    let started;
-    try {
-      started = await api('/api/ui/me/welcome/analyze', { method: 'POST', body: JSON.stringify({ job: S.job || null }) });
-    } catch (e) {
-      const m = e && e.message ? String(e.message) : '';
-      return { drawers: null, why: /402|50[0-9]|잇지 않으|연결하지 않으|시작하지 못/.test(m) ? 'AI 를 아직 연결하지 않으셔서, 파일 종류로 나눈 결과예요.' : '' };
-    }
-    const id = started && started.turn_id;
-    if (!id) return { drawers: null, why: '' };
-    const until = Date.now() + ANALYZE_TIMEOUT_MS;
-    let from = 0;
-    while (Date.now() < until) {
-      if (token !== seqToken) return { drawers: null, why: '' };
-      await sleep(2000);
-      let r;
-      try { r = await api(`/api/ui/me/welcome/analyze/${encodeURIComponent(id)}?from=${from}`); } catch (_) { continue; }
-      if (typeof r.next === 'number') from = r.next;
-      if (!r.done) continue;
-      if (r.drawers && r.drawers.length) return { drawers: r.drawers, why: '' };
-      return { drawers: null, why: 'AI 판정을 읽지 못해서, 파일 종류로 나눈 결과예요.' };
-    }
-    return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
-  }
 
-  /* 하는 일(무대·직무)을 **고른 즉시** 남긴다 (#1813).
-   *  이 값은 매 세션 개인 층으로 주입된다(publish.ts renderLivOnboarding → 「### 온보딩에서 알려주신 것」).
-   *  ⚠ 종전엔 마무리(POST /api/ui/me/welcome)에서만 저장돼서, 중간에 나간 사람은 답을 해 놓고도
-   *   AI 가 그걸 모른 채 일했다 — 이름과 같은 구조의 결함이었다(원준님 실측 2026-08-26).
-   *  실패해도 진행은 막지 않는다(마무리에서 한 번 더 보낸다). */
   const STAGE_TEXT = { company: '회사·조직에서 팀과 함께 일한다', solo: '1인·프리랜서로 여러 일을 한다',
     academy: '학교·연구실에서 연구한다', student: '학생으로 수업·시험·진로를 준비한다' };
   function saveWork() {
@@ -2865,200 +2889,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     toast('새 탭에 로그인 창을 열었어요. 거기서 로그인을 마치고 돌아오세요.');
   }
 
-  const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
-  async function chatStep(step, token) {
-    if (token !== seqToken) return;
-    const doneStep = (s) => { if (!S.chatDone.includes(s)) S.chatDone.push(s); save(); renderSB(); };
-    if (step === 'b1') {
-      await sleep(400);
-      await loadWelcome();
-      const total = realTotal();
-      if (!total) {
-        // 올린 자료가 없으면 셀 것도 없다. 없는 숫자를 지어내지 않는다.
-        msgLiv(`올려 주신 자료가 아직 없어서 자료함은 나중에 나누겠습니다. 홈에서 파일을 올리시면 그때 제가 갈래를 잡아 드릴게요.`);
-        await sleep(200); doneStep('b1'); chatStep('b2', token); return;
-      }
-      // ① 먼저 **실제로 센 것**을 보여 준다. AI 가 없어도 이 숫자는 진짜다.
-      //  ⚠ 총계(realTotal)는 **이 워크스페이스 전체**다 — 자료에 사람 축이 없어서(source 는 author='connector:local'
-      //   까지만 안다) «누가 올렸나» 로 못 가른다. 그래서 팀 워크스페이스에 새로 들어온 사람에게 «○○님이 올려 주신
-      //   자료 2,274건» 이라고 말했다(실제로 올린 건 5건 — 실측 2026-08-31). 남이 모아 둔 것을 그 사람 것이라고
-      //   부르는 셈이라, 첫 대면에서 제품이 사실이 아닌 말을 한다.
-      //  → 이번에 올린 수(S.upN)를 아는 화면이므로 **말을 가른다**: 그 수만 «올려 주신» 이라 부르고, 나머지는
-      //   «이 워크스페이스에 쌓여 있는» 이라고 정직하게 말한다. 세는 대상은 그대로다(갈래는 전체를 보고 잡는 게 맞다).
-      //  «올려 주신 N건» 도 등록된 수다 — 올리기만 하고 안 들어간 것을 «올려 주신 자료» 로 세면 총계와 어긋난다.
-      const mine = ingestedN();
-      const lead = mine > 0 && total > mine
-        ? `${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 <b>${mine}건</b>을 포함해, 이 워크스페이스에 쌓여 있는 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`
-        : mine > 0
-          ? `${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`
-          : `이 워크스페이스에 쌓여 있는 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`;
-      const bubble = msgLiv(`${lead}
-        <div class="ob-tags" data-tags>${realKinds().map((k) => `<span class="ob-tag">${esc(k.name)} <b>${k.n}</b></span>`).join('')}</div>
-        <p style="margin-top:8px" data-note>AI 가 파일을 훑어보고 더 나은 갈래를 제안하는 중이에요.</p>`);
-      // ② 그 위에 **진짜 LLM 판정**을 얹는다. 실패하면 ①이 그대로 답이 된다(감추지 않고 이유를 적는다).
-      let drawers = realKinds().map((k) => ({ name: k.name, n: k.n }));
-      const llm = await analyzeUploads(token);
-      if (token !== seqToken) return;
-      const note = $('[data-note]', bubble);
-      if (llm.drawers && llm.drawers.length) {
-        drawers = llm.drawers;
-        $('[data-tags]', bubble).innerHTML = drawers.map((d) => `<span class="ob-tag">${esc(d.name)}</span>`).join('');
-        note.innerHTML = `<b>자료함을 이렇게 나눠 둘까요?</b> 파일을 훑어보고 정한 갈래예요. 이대로 서랍을 만들어 두면 다음부터 새 자료가 알아서 제자리로 들어갑니다.`;
-      } else {
-        note.innerHTML = `<b>자료함을 이렇게 나눠 둘까요?</b> 옆의 숫자는 그 종류로 본 자료 수예요.`
-          + (llm.why ? `<br><span style="color:var(--muted)">${esc(llm.why)}</span>` : '');
-      }
-      S.drawers = drawers;
-      await sleep(200);
-      const approve = (l) => { msgUser(l); S.drawersOn = true; S.decisions.push(`자료함 ${S.drawers.length}갈래로 나눔`); doneStep('b1'); renderSB(); enableLocalDistiller(); chatStep('b2', token); };
-      chipsRow([
-        { label: '네, 이대로 나눠 주세요', cta: true, cb: approve },
-        { label: '빠진 종류가 있어요', cb: (l) => { msgUser(l);
-            msgLiv('어떤 종류인가요? 아래 입력창에 적어 주세요. 서랍을 하나 더 만들어 둘게요.');
-            armCompose('예: 고객 인터뷰', (v) => { S.drawers = [...(S.drawers || []), { name: v }]; S.drawersOn = true;
-              S.decisions.push(`갈래 추가: ${v}`); doneStep('b1'); renderSB(); enableLocalDistiller();
-              msgLiv(`<b>${esc(v)}</b> 서랍을 더해 뒀어요.`); chatStep('b2', token); }); } },
-      ]);
-    }
-    if (step === 'b2') {
-      await sleep(600);
-      // 관찰은 **실제 파일 이름에서 본 것만** 말한다. 못 봤으면 관찰을 지어내지 않고 그냥 묻는다.
-      const forms = (WS && WS.uploads && WS.uploads.forms) || [];   // 서버가 실제 파일 이름에서 본 것
-      const seen = forms.length
-        ? `같은 꼴 이름이 여러 개 보여요. ${forms.slice(0, 2).map((g) => `<b>${esc(g.names[0])}</b> 같은 것 ${g.names.length}개`).join(', ')}요.`
-        : '';
-      msgLiv(`${seen}<p style="margin-top:${seen ? '6px' : '0'}"><b>정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?</b> 주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.</p>`);
-      await sleep(300);
-      const pickB2 = (id, label) => { msgUser(label); S.b2 = id; if (id !== 'no') S.decisions.push(id === 'month' ? '매달 반복 작업으로 봄' : '매주 반복 작업으로 봄'); doneStep('b2'); chatStep('b3', token); };
-      chipsRow([
-        { label: '네, 매달', cb: () => pickB2('month', '네, 매달') },
-        { label: '네, 매주', cb: () => pickB2('week', '네, 매주') },
-        { label: '아니요', ghost: true, cb: () => pickB2('no', '아니요') },
-      ]);
-    }
-    if (step === 'b3') {
-      await sleep(600);
-      // 종전엔 "문서에 같은 이름이 반복해서 나와요"라고 했는데, 우리는 문서 **안**을 아직 안 읽었다.
-      //  근거 없는 관찰을 앞세우지 않고 묻기만 한다.
-      msgLiv(`<b>이 자료를 같이 보는 팀이 있나요?</b><p style="margin-top:6px">있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.</p>`);
-      await sleep(300);
-      const pickB3 = (id, label, dec) => { msgUser(label); S.b3 = id; S.decisions.push(dec); doneStep('b3'); renderSB(); chatStep('nowline', token); };
-      chipsRow([
-        { label: '나만 봐요', cb: () => pickB3('me', '나만 봐요', '나만 보는 자료로 봄') },
-        { label: '우리 팀이 같이 봐요', cb: () => pickB3('team', '우리 팀이 같이 봐요', '팀과 함께 보는 자료로 봄') },
-        { label: '회사의 여러 부서와 나눠요', cb: () => pickB3('dept', '회사의 여러 부서와 나눠요', '여러 부서와 나누는 자료로 봄') },
-        { label: '고객·외부에 냅니다', cb: () => pickB3('ext', '고객·외부에 냅니다', '고객·외부로 나가는 자료로 봄') },
-      ]);
-    }
-    if (step === 'nowline') {
-      await sleep(600);
-      msgLiv(`마지막 하나예요.<p style="margin-top:6px"><b>평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?</b> 한 주를 놓고 볼 때 제일 자주, 제일 오래 붙잡고 계신 일이요. 여기부터 제가 손을 보탭니다.</p>`);
-      await sleep(300);
-      const pickNow = (label) => { msgUser(label); S.nowline = label; S.decisions.push(`시간을 가장 많이 쓰는 일: ${label}`); doneStep('nowline'); waitRead(token); };
-      chipsRow(DATA.NOW_KINDS.map((t) => ({ label: t, cb: () => pickNow(t) }))
-        .concat([{ label: '직접 적을게요', ghost: true, cb: () => {
-          msgUser('직접 적을게요');
-          msgLiv('아래 입력창에 한 줄로 적어 주세요.'); /* [새문구] */
-          armCompose('예: 매주 실적 자료 만드는 일', (v) => { S.nowline = v; S.decisions.push(`시간을 가장 많이 쓰는 일: ${v}`); doneStep('nowline'); waitRead(token); });
-        } }, { label: '지금은 건너뛰기', ghost: true, cb: () => { msgUser('지금은 건너뛰기'); doneStep('nowline'); waitRead(token); } }]));
-    }
-    if (step === 'can') {
-      await sleep(500);
-      const C = canOf();
-      const readN = realTotal();
-      msgLiv(`${readN ? `자료 <b>${readN}건</b>을 다 읽었어요.` : '준비됐어요.'}${S.nowline ? ` <b>${esc(S.nowline)}</b>에 시간을 제일 많이 쓰신다고 하셨죠.` : (nick() ? ` ${esc(nick())}님이 하시는 일이라면,` : '')}
-        <p style="margin-top:6px"><b>이런 것까지 저한테 맡기실 수 있어요.</b> 보통은 몇 번씩 왔다 갔다 해야 하는 일이에요. 여기서는 한 문장이면 됩니다.</p>
-        <div class="ob-excard" data-ex="0"><div class="ob-xt">“${esc(C[0][0])}”</div><div class="ob-xd"><b>보통은</b> ${esc(C[0][1])}</div></div>
-        <div class="ob-excard" data-ex="1"><div class="ob-xt">“${esc(C[1][1])}”</div><div class="ob-xd"><b>${esc(C[1][0])} 쪽도</b> 이런 것까지 이어서 물으실 수 있어요.</div></div>`);
-      $$('.ob-excard').forEach((c) => c.onclick = () => {
-        if (c.dataset.taken) return; c.dataset.taken = '1';
-        const t = $('.ob-xt', c).textContent.replace(/^“|”$/g, '');
-        msgUser(t);
-        S.firstOrder = t; S.decisions.push(`첫 지시: ${t.slice(0, 40)}…`); save(); renderSB();
-        // ⚠ 종전엔 "세션을 하나 열어 뒀어요. 왼쪽에 보이죠?" 라고 했는데 **세션을 만들지 않았다**.
-        //  적어 두는 것은 실제로 한다(마무리에서 프로필의 결정으로 남는다) — 그 사실만 말한다.
-        msgLiv('적어 뒀어요. 정리가 끝나면 홈에서 이 문장으로 바로 시작하실 수 있어요. 다 됐으면 아래 <b>준비 끝, 정리해 주세요</b>를 눌러 주세요.');
-      });
-      await sleep(400);
-      chipsRow([{ label: '준비 끝, 정리해 주세요', cta: true, cb: async (l) => {
-        msgUser(l); doneStep('can'); S.scene = 'done'; save(); renderSB();
-        // ★ 여기가 온보딩이 **실제로 워크스페이스를 바꾸는** 자리다. 종전엔 localStorage 표식 하나가 전부였다.
-        const m = msgLiv('정리하고 있어요.');
-        let applied = null;
-        try {
-          applied = await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({
-            name: S.nameSet ? S.name : null,
-            stage: S.stage || null,
-            job: S.job || null,
-            drawers: (S.drawers || []).map((d) => ({ name: d.name, why: d.why || null })),
-            cadence: S.b2 || null,
-            share: S.b3 || null,
-            nowline: S.nowline || null,
-            first_order: S.firstOrder || null,
-          }) });
-        } catch (e) {
-          // 반영이 실패했으면 **끝났다고 말하지 않는다** — 다음에 다시 물을 수 있게 표식도 남기지 않는다.
-          m.querySelector('.ob-body').innerHTML = `정리하다 막혔어요 — ${esc(e && e.message ? e.message : '알 수 없는 오류')}<p style="margin-top:6px">홈에서 이어서 하실 수 있습니다.</p>`;
-          await sleep(1200); location.hash = '#/'; return;
-        }
-        try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
-        try { if (state.me) (state.me as { welcome_pending?: boolean }).welcome_pending = false; } catch (_) {}   // 홈의 «이어서 하기» 줄을 내린다(#2232)
-        ctx.onGhost && ctx.onGhost(false);   // 끝났다 — 셸을 돌려준다(막3 → 워크스페이스)
-        //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 서버 쪽 자리표는 반영이 지웠다 —
-        //   여기서 늦게 도착한 push 하나가 그걸 되살리면 다음 로그인이 다시 온보딩으로 간다.
-        pushOff = true; clearTimeout(pushT); pushT = null;
-        ctx.onDone && ctx.onDone();
-        const made = (applied && applied.created) || [];
-        // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다 — 리브가 1턴에서 현황을 읽어 주고 있다.
-        //  못 열었으면(AI 미로그인 등) 종전처럼 홈으로. 사유는 응답(liv.error)에 있지만 여기서 사람을 붙들지 않는다.
-        const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
-        //  ⚠ 리브가 안 열렸으면 **왜 안 열렸는지 말한다**(#1631). 서버는 사유를 준다(liv.reason='ai-not-connected' —
-        //   AI 가 없으면 답 못 하는 창을 열지 않는 것이 맞다). 그런데 종전엔 그 값을 안 쓰고 «워크스페이스로 모시겠습니다»
-        //   로만 끝냈다 — 시킨 것을 다 한 사람이 «리브는 어디 갔지» 로 남는다(실측 2026-08-31 원준님 신고).
-        const noAi = !livHref && applied && applied.liv && applied.liv.reason === 'ai-not-connected';
-        const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.'
-          : noAi ? 'AI 를 아직 연결하지 않으셔서 리브는 지금 열지 않았어요 — 답을 못 하는 창이 되니까요. 왼쪽 [외부 앱 연결]에서 AI 를 이으면 리브가 이어서 정리해 드립니다. 워크스페이스로 모시겠습니다.'
-          : '워크스페이스로 모시겠습니다.';
-        m.querySelector('.ob-body').innerHTML = made.length
-          ? `정리했어요. 자료함에 <b>${made.map((x) => esc(x)).join(' · ')}</b> 서랍을 만들어 뒀습니다. ${where}`
-          : `정리했어요. ${where}`;
-        scrollChat();
-        await sleep(1100);
-        location.hash = livHref || '#/';
-      } }]);
-      fineRow('지금 시키지 않으셔도 됩니다. 홈에서 언제든 그대로 말씀하시면 돼요.');
-    }
-  }
+  /* ── 리브와의 챗봇 문답(막3) — 2026-08-31 제거 ──────────────────────────────────
+   *  원준님: *"쓸데없이 중간에 연결 끝나고 앱 나온 다음에 리브랑 챗봇처럼 대화하는 부분 …
+   *   리브가 막 자료 분류해놓고, 매주 하는거 있냐고 물어보고 그러는 부분. 거기 없애버려줘."*
+   *  걷어낸 것: CHAT_STEPS(b1 서랍승인 · b2 주기문서 · b3 팀공유 · nowline · can 예시) ·
+   *   chatStep · waitRead · enterChat · replayChatTo. [앱] 다음은 finishOnboarding() 으로 곧장 간다.
+   *  ⚠ 서랍(자료 분류)도 함께 사라졌다 — 승인받은 적 없는 분류를 조용히 만들면 문답을 없앤 이유와
+   *   정확히 반대가 된다. 자료는 안 굶는다: 어느 레인에도 안 걸리면 폴백이 받는다(#632).
+   */
 
-  function waitRead(token) {
-    if (S.read.finished) { chatStep('can', token); return; }
-    const m = msgLiv(`<div class="ob-readline"><span>자료를 읽고 있어요.</span><span class="ob-readbar"><i></i></span><span id="readN">${S.read.done} / ${S.read.total}</span></div>`); /* [새문구] 읽기+사이드바 연결 */
-    readBarEl = $('.ob-readbar i', m); readNEl = $('#readN', m);
-    readBarEl.style.width = Math.round(100 * S.read.done / Math.max(1, S.read.total)) + '%';
-    document.addEventListener('read-done', () => { setTimeout(() => chatStep('can', token), 400); }, { once: true });
-  }
-
-  /* 채팅 시작(read 장면) — 노션 p5의 첫 인사에 대응 */
-  async function enterChat(token) {
-    setStage('stage-chat');
-    //  ⚠ 여기서 대화창을 **비운다.** 그러니 그 전에 한 말은 사라진다 — «N건은 못 넣었어요» 도 함께(실측 2026-08-31).
-    //   앞 장면에서 이미 말했다고 표시(_saidFail)를 남겨 두면, 사람은 그 말을 **영영 못 본 채** 지나간다.
-    //   지운 것은 다시 말해야 한다 — 여기가 사람에게 남는 대화창의 시작이다.
-    $('#thread').innerHTML = '';
-    S._saidFail = false;
-    await loadWelcome();
-    S.read.total = ingestedN();
-    startReading();
-    await sleep(300);
-    const n = S.read.total;
-    msgLiv(`${nick() ? esc(nick()) + '님, ' : ''}연결까지 끝났어요.`
-      + (n ? `<p style="margin-top:6px">지금 자료 <b>${n}건</b>을 읽고 있어요. 읽는 동안 몇 가지만 확인할게요.</p>`
-           : `<p style="margin-top:6px">몇 가지만 확인하고 바로 시작할게요.</p>`));
-    sayFail();   // 읽기가 이미 끝나 있으면 startReading 이 안 부른다 — 여기서 직접 말한다(_saidFail 이 중복을 막는다)
-    chatStep('b1', token);
-  }
-
-  /* ══════════════ 장면 전환 ══════════════ */
   function renderScene(key, animate) {
     const sc = SCENES[key];
     if (!sc) return;
@@ -3122,56 +2961,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     }
     S.scene = key; save(); renderSB();
     seqToken++;
-    if (STEP_OF[key] >= CHAT_FROM) {
-      S.trail = []; save();
-      replayChatTo(key, seqToken);
-    } else {
-      renderScene(key, true);
-    }
+    renderScene(key, true);   // 챗 단계가 없어졌다(#1631) — 모든 장면이 같은 길로 그려진다
     syncBack();
-  }
-
-  /* 채팅 단계로 점프·복원 — 앞 단계 문답을 압축해 깔아 놓고 그 단계부터 산다 */
-  function replayChatTo(key, token) {
-    setStage('stage-chat');
-    $('#thread').innerHTML = '';
-    // 막2 답이 비어 있으면 기본값으로 채움 (장면 점프용)
-    //  ⚠ **검토용 점프(?scene=)에서만 지어낸다**(#2207). 실제로 이어 여는 사람에게 쓰면, 이름을 건너뛴
-    //   사람이 갑자기 '원준' 으로 불리고 고른 적 없는 앱이 골라진 것으로 뜬다 — 그 사람의 답이 아니다.
-    //   중립 폴백(`||`)은 둘 다 쓴다: 없는 것을 주장하지 않고 화면이 깨지지만 않게 하는 값이라서다.
-    if (demoJump && !S.nameSet) { S.name = '원준'; S.nameSet = true; }
-    S.stage = S.stage || 'company'; S.job = S.job || stageOf().opts[1][0];
-    if (demoJump && !S.sources.length) S.sources = ['gdrive', 'notion'];
-    if (!S.connected.length) S.connected = S.sources.filter((x) => x !== 'none');
-    // ⚠ 여기서 **S.aiConnected 를 지어내지 않는다**(#1879). 종전엔 `S.ai !== '아직 없어요'` 로 무조건
-    //  덮어썼는데, 그건 `||` 폴백이 아니라 **대입**이라 AI 잇기를 건너뛴 사람도 채팅 단계에 닿는 순간
-    //  참이 됐다. 그 뒤 AI 화면으로 돌아가면 «이어졌어요 · 로그인이 확인됐어요» 라고 말한다 — 서버는
-    //  그런 적이 없다. #1813 이 걷어낸 «900ms 뒤 무조건 연결됐어요» 와 같은 모양의 잔재였다.
-    //  이음 여부는 서버가 답한다(ai-accounts/check) — 화면이 채워 넣을 값이 아니다.
-    //  나머지 둘은 사람의 '답'이라 점프용 기본값이 성립한다(중립값으로 채운다 — 없는 연결을 주장하지 않는다).
-    S.ai = S.ai || 'Claude';
-    S.terminal = S.terminal || 'no'; S.app = S.app || 'web';
-    //  읽고 있는 자료 수 — 이어 여는 사람에게는 **실측**을 쓴다(41 은 검토용 연출 숫자다).
-    if (!S.read.total) S.read.total = demoJump ? 41 : realTotal();
-    const past = [];
-    const target = key === 'read' ? 'b1' : key;
-    const upto = CHAT_STEPS.indexOf(target);
-    if (key !== 'read' && upto > 0) {
-      // 지나간 단계들을 요약 문답으로 재생
-      if (upto > CHAT_STEPS.indexOf('b1')) { past.push([`자료함을 이렇게 나눠 둘까요?`, '네, 이대로 나눠 주세요']); S.drawersOn = true; }
-      if (upto > CHAT_STEPS.indexOf('b2')) past.push([`정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?`, S.b2 === 'week' ? '네, 매주' : S.b2 === 'no' ? '아니요' : '네, 매달']);
-      if (upto > CHAT_STEPS.indexOf('b3')) past.push([`같이 보는 팀이 있나요?`, S.b3 === 'me' ? '나만 봐요' : '우리 팀이 같이 봐요']), S.b3 = S.b3 || 'team';
-      if (upto > CHAT_STEPS.indexOf('nowline')) { S.nowline = S.nowline || DATA.NOW_KINDS[2]; past.push([`평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?`, S.nowline]); }
-      Object.assign(S.read, { done: S.read.total, finished: true });
-      // 장면 건너뛰기(?scene=)로 중간에 들어온 경우에도 사이드바 숫자는 **실측**을 쓴다 —
-      //  여기만 상수 목표치를 쓰면 같은 화면이 두 가지 숫자를 말한다.
-      S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
-    }
-    save(); renderSB();
-    if (key === 'read') { enterChat(token); return; }
-    past.forEach(([q, a]) => { msgLiv(`<b>${esc(q)}</b>`); msgUser(a); });
-    if (!S.read.finished) startReading();
-    chatStep(target, token);
   }
 
   /* ── 이어서 열기 (#2207) ───────────────────────────────────────────────────
@@ -3182,8 +2973,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (!p || !p.state || typeof p.state !== 'object') return null;
     if (STEP_OF[p.scene] != null) return p.scene;
     //  'done' 은 차례표에 없다 — 마무리(반영)를 누른 뒤 그게 실패했거나 끊긴 자리다. 답은 다 받아 놨으니
-    //   맨 앞이 아니라 **마지막 채팅 단계**로 되돌려 «준비 끝, 정리해 주세요» 를 다시 누르게 한다.
-    if (Array.isArray(p.state.chatDone) && p.state.chatDone.length) return 'can';
+    //   맨 앞이 아니라 **마지막 장면**으로 되돌려 마무리를 다시 누르게 한다.
+    //   ⚠ 종전엔 'can'(챗 마지막 문답)이었다 — 그 장면은 없어졌다(#1631, 챗 제거).
+    if (p.scene === 'done') return 'app';
     return null;
   }
   /** 서버에 남은 자리로 화면을 연다. 못 물으면 처음부터 — 온보딩이 **안 열리는** 것보다 낫다. */

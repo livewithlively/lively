@@ -57,25 +57,27 @@ test("④ 상한을 넘기면 **사실대로 말한다** — 조용히 넘어가
 //  ★ 상한에 안 걸리고 **정상 완료**하는 길이 훨씬 흔하다(등록 축을 고쳤으니 이제 그쪽이 기본이다).
 //   그 길에서 아무 말도 안 하면, 8개를 올린 사람이 5건만 들어간 것을 모르고 넘어간다.
 test("④' 정상 완료·0건 완료에서도 등록 못 한 파일을 말한다", () => {
-  assert.match(SRC, /function sayFail\(\)/, "실패를 말하는 자리가 없다");
-  const calls = (READ.match(/sayFail\(\)/g) || []).length;
-  assert.ok(calls >= 3, `startReading 안에서 sayFail 이 ${calls}군데서만 불린다 — 정상완료·상한·0건 세 자리다`);
-  assert.match(READ, /if \(S\.read\.done >= target\(\)\) \{ finish\(\); sayFail\(\); return; \}/,
+  assert.match(SRC, /function noteFail\(\)/, "실패를 말하는 자리가 없다");
+  const calls = (READ.match(/noteFail\(\)/g) || []).length;
+  assert.ok(calls >= 3, `startReading 안에서 noteFail 이 ${calls}군데서만 불린다 — 정상완료·상한·0건 세 자리다`);
+  assert.match(READ, /if \(S\.read\.done >= target\(\)\) \{ finish\(\); noteFail\(\); return; \}/,
     "정상 완료 때 말하지 않는다");
 });
 
-//  ★ 실측(2026-08-31): 안내는 **떴다가 지워졌다.** enterChat 이 대화창을 비우기 때문이다.
-//   말했다는 표시(_saidFail)만 남아서, 사람은 «3건은 못 넣었어요» 를 **영영 못 본 채** 지나갔다.
-//   지운 쪽이 다시 말할 책임을 진다.
-test("④'' 대화창을 비운 뒤 다시 말한다 — 띄웠다 지우면 말 안 한 것과 같다", () => {
-  const chat = SRC.slice(SRC.indexOf("async function enterChat("));
-  const body = chat.slice(0, chat.indexOf("chatStep('b1'"));
-  assert.match(body, /\$\('#thread'\)\.innerHTML = '';\s*\n\s*S\._saidFail = false;/,
-    "대화창을 비우면서 «말했다» 표시를 안 지운다 — 안내가 지워진 채 다시 안 나온다");
-  assert.match(body, /\n\s*sayFail\(\);/, "비운 뒤 다시 말하지 않는다");
-  //  sayFail 은 startReading 바깥에 있어야 enterChat 이 부를 수 있다(읽기가 이미 끝났으면 startReading 은 즉시 return 한다).
-  assert.doesNotMatch(READ, /function sayFail\(\)/,
-    "sayFail 이 startReading 안에 갇혀 있다 — enterChat 이 못 부른다");
+//  ★ 안내가 **보이는 자리**에 있어야 한다(2026-08-31).
+//   1차: 안내를 띄웠는데 enterChat 이 대화창을 비워서 지워졌다 — 그래서 비운 쪽이 다시 말하게 했다.
+//   2차: 리브 챗 문답을 통째로 걷어내자(#1631, 원준님) 대화창(#thread)이 **어느 장면에서도 안 보이게** 됐다.
+//    거기 쓰면 죽지는 않지만 아무도 못 본다 — «말했다» 로 기록만 남는 가장 나쁜 모양이다.
+//    그래서 S.notes 에 담고 **마무리 화면**이 말한다(사람이 실제로 읽는 마지막 자리).
+test("④'' 안내가 사람이 보는 자리에 나온다 — 기록만 남기고 사라지지 않는다", () => {
+  assert.match(SRC, /function noteFail\(\)/, "등록 실패를 남기는 자리가 없다");
+  assert.match(SRC, /S\.notes\.push\(`파일 <b>\$\{fails\.length\}건<\/b>/, "안내를 S.notes 에 안 담는다");
+  //  ⚠ 안 보이는 칸(#thread)에 쓰면 안 된다 — 챗이 없어져 그 칸은 어느 장면에서도 안 뜬다.
+  assert.doesNotMatch(SRC, /msgLiv\(`파일 <b>/, "안 보이는 대화창에 쓴다 — 아무도 못 본다");
+  //  그리고 마무리가 그것을 실제로 말해야 한다.
+  const fin = SRC.slice(SRC.indexOf("async function finishOnboarding("));
+  assert.match(fin.slice(0, 3000), /const notes = \(S\.notes \|\| \[\]\)\.filter\(Boolean\);/, "마무리가 안내를 읽지 않는다");
+  assert.match(fin.slice(0, 3000), /notes\.length \? `<p[^`]*\$\{notes\.join/, "마무리가 안내를 화면에 안 쓴다");
 });
 
 //  사유는 **서버가 준 것만** 옮긴다. 지어내면 «압축이라 안 됩니다» 를 텍스트 파일에도 말하게 된다.
@@ -96,7 +98,7 @@ test("⑤ 리브가 안 열렸으면 **왜** 안 열렸는지 말한다", () => 
 });
 
 test("⑥ 올린 게 0건이면 기다리지 않는다(무회귀)", () => {
-  assert.match(READ, /if \(!target\(\)\) \{ finish\(\); sayFail\(\); return; \}/,
+  assert.match(READ, /if \(!target\(\)\) \{ finish\(\); noteFail\(\); return; \}/,
     "0건일 때 즉시 끝내는 길이 사라졌다");
 });
 
