@@ -11,7 +11,7 @@ import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.
 import { $view, anchoredPopover, api, el, state, toast, wsKey } from '../core.js';
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { renderLiv } from '../liv.js';
-import { CLASSIC_PAGES, appByKey, appFrame, noteAppUse } from './apps.js';
+import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, sessText, type SideInstance } from './side.js';
 import { dotCls, isMineSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
@@ -1006,6 +1006,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // #2423 자료 앱 — builtin(project=global·single). 주소가 정본이고 인스턴스는 뒤에서 멱등 확보(inbox 와 같은 규칙).
       //  `#/sources` = 목록(선택은 query 로 담아 채널 하나를 링크로 줄 수 있다), `#/sources/<id>` = 자료 하나.
       markActive('sources');
+      noteAppUse('sources');   // ② 최근 연 앱에 선다 — 자료의 문은 런치패드 하나이고, 독 고정은 거기서 사람이 한다(#2423)
       tab.aside.replaceChildren();
       if (segs[1]) renderSourceDetail(tab.center, Number(decodeURIComponent(segs[1])));
       else renderSourcesApp(tab.center, params);
@@ -1174,6 +1175,14 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         }
       }
       const a = appByKey(segs[1]);
+      //  native 앱은 액자에 실을 것이 없다 — 제 주소가 정본이다. 옛 링크·북마크가 `#/app/sources` 로 와도
+      //   빈 액자를 세우지 않고 그리로 넘긴다(#2423).
+      if (a && a.kind === 'native') {
+        const to = '#/' + a.route;
+        tab.route = to;
+        if (tabsApi?.current() === tab && location.hash !== to) { suppressHash++; location.replace(location.pathname + location.search + to); }
+        tabsApi?.routed(tab); void renderRoute(tab); return;
+      }
       if (a) noteAppUse(a.key);   // 홈 한 줄이 읽는 '최근에 연 앱'(#1954)
       const rest = segs.slice(2).join('/');
       // 브라우저 앱(#1829)은 우리 화면이 아니라 남의 웹이다 — iframe(appFrame)이 아니라 서피스로 띄운다.
@@ -1650,6 +1659,7 @@ function openAppKeys(): Set<string> {
   for (const tab of (tabsApi ? tabsApi.tabs : [])) {
     const seg = parseRoute(tab.route).segs;
     if (seg[0] === 'app' && seg[1]) out.add(seg[1]);
+    else if (seg[0] && nativeAppByRoute(seg[0])) out.add(seg[0]);   // native 앱(#/sources) — 액자가 아니라 셸이 직접 그린다
     else if (seg[0] && CLASSIC_PAGES[seg[0]]) out.add(CLASSIC_PAGES[seg[0]]);
   }
   return out;

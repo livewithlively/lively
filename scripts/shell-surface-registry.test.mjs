@@ -40,7 +40,11 @@ function slice(src, from, to) {
 }
 
 const APPS_TABLE = slice(APPS_SRC, "export const APPS", "\n];");
-const classicKeys = [...APPS_TABLE.matchAll(/^\s*\{\s*key:\s*(['"])([a-z0-9-]+)\1/gm)].map((m) => m[2]);
+const appsRows = [...APPS_TABLE.matchAll(/^\s*\{\s*key:\s*(['"])([a-z0-9-]+)\1.*$/gm)].map((m) => ({ key: m[2], line: m[0] }));
+//  native 앱 = 새 셸이 **직접 그리는** 화면. 표에 있는 이유는 런치패드·최근 연 앱·독 고정이 이 표를 읽기
+//   때문이고(#2423 자료가 첫 항목), 클래식 액자와는 아무 상관이 없다 — 그래서 **클래식 백로그가 아니다.**
+const nativeKeys = appsRows.filter((r) => /kind:\s*(['"])native\1/.test(r.line)).map((r) => r.key);
+const classicKeys = appsRows.filter((r) => !nativeKeys.includes(r.key)).map((r) => r.key);
 
 // ── 1. 파서가 살아 있나 (이게 죽으면 아래 전부가 조용히 무력해진다) ─────────────────
 const RENDER = slice(MAIN, "async function renderRoute", "\nfunction markActive");
@@ -103,6 +107,13 @@ ok(JSON.stringify(sortedKeys) === JSON.stringify(sortedBacklog), "APPS 표와 CL
   `  APPS:    ${sortedKeys.join(", ")}\n  BACKLOG: ${sortedBacklog.join(", ")}\n`
   + "  → 화면을 앱으로 옮겼으면 **양쪽에서** 지우세요. 한쪽만 지우면 대장이 거짓말을 합니다.");
 
+//  ★ native 를 백로그에서 뺀 대가를 여기서 받는다 — 뺐으니 **다른 자리에서는 앱이라고 적혀 있어야** 한다.
+//   이 검사가 없으면 `kind: 'native'` 한 줄로 어떤 화면이든 대장 감시 밖으로 빠져나간다.
+const nativeBad = nativeKeys.filter((k) => CLASSIC_BACKLOG.includes(k) || SHELL_SURFACES[k]?.kind !== "app");
+ok(nativeBad.length === 0, `native 앱 ${nativeKeys.length}개는 대장에서 'app' 이고 클래식 백로그에 없다`,
+  `  어긋난 것: ${nativeBad.map((k) => `'${k}'`).join(", ")}\n`
+  + "  → native 는 '이미 앱으로 옮겼다'는 뜻입니다. 대장(SHELL_SURFACES)에 kind:'app' 으로 적고 백로그에서 지우세요.");
+
 ok(classicKeys.length <= CLASSIC_BACKLOG.length, `클래식 화면이 늘지 않았다(${classicKeys.length} ≤ ${CLASSIC_BACKLOG.length})`,
   "  → APPS 표는 '아직 앱이 아닌 것' 목록입니다. 새 화면을 여기 더하지 말고 builtin AppPackage 로 만드세요.");
 
@@ -120,4 +131,5 @@ const kinds = Object.values(SHELL_SURFACES);
 console.log(`\nshell-surface-registry: ${pass} passed`);
 console.log(`  현황 — 앱 ${kinds.filter((v) => v.kind === "app").length}`
   + ` · OS 표면 ${kinds.filter((v) => v.kind === "os").length}`
-  + ` · 앱화 대상 ${todo.length}(그중 클래식 화면 ${classicKeys.length})`);
+  + ` · 앱화 대상 ${todo.length}(그중 클래식 화면 ${classicKeys.length})`
+  + ` · native 앱 ${nativeKeys.length}`);

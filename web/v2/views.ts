@@ -9,7 +9,7 @@ import { createRunPicker } from './run-picker.js';
 import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
-import { appGlassIcon, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
+import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
 import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
 
 export interface Proj {
@@ -213,7 +213,7 @@ export function renderHome(host: HTMLElement, data: V2Data, draft?: { text: stri
             el('span', { text: '모든 앱' }),
             sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' })))),
         el('div', { class: 'v2-home-apps-row', role: 'list' },
-          ...recentApps(6).map((a) => el('a', { class: 'v2-home-app', role: 'listitem', href: '#/app/' + a.key, title: a.desc },
+          ...recentApps(6).map((a) => el('a', { class: 'v2-home-app', role: 'listitem', href: appHref(a), title: a.desc },
             el('span', { class: 'v2-home-app-ico' }, appGlassIcon(a.icon)),
             el('span', { class: 'v2-home-app-t', text: a.title })))))));
   // ★ 홈에서 세션 목록을 걷었다(원준 2026-08-20 "이 부분 내용 빼고, 텍스트 치는 칸을 자연스러운 위치로").
