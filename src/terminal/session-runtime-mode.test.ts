@@ -9,18 +9,22 @@ let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
 
 const CHAT = { LIVELY_SESSION_RUNTIME: "chat" } as NodeJS.ProcessEnv;
+const TERM = { LIVELY_SESSION_RUNTIME: "terminal" } as NodeJS.ProcessEnv;
 const NONE = {} as NodeJS.ProcessEnv;
 
-t("[1] 기본은 terminal — 커버리지가 차기 전엔 남의 기본 화면을 바꾸지 않는다", () => {
-  assert.equal(sessionRuntimeDefault(NONE), "terminal");
-  assert.equal(sessionRuntimeMode({ harness: "claude" }, NONE), "terminal");
-  //  값이 이상해도 terminal 로 접는다(오타가 조용히 chat 을 켜지 않는다).
-  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: "CHATT" } as NodeJS.ProcessEnv), "terminal");
+t("[1] 기본은 chat — 커버리지가 찼고 화면을 실측으로 확인했다(2026-09-01)", () => {
+  assert.equal(sessionRuntimeDefault(NONE), "chat");
+  assert.equal(sessionRuntimeMode({ harness: "claude" }, NONE), "chat");
 });
 
-t("[2] 배포가 켜면 chat — 대소문자·공백은 관대하게", () => {
+t("[2] ★ 되돌리는 길은 env 하나 — 배포에서 문제가 보이면 코드를 안 고치고 끈다", () => {
+  assert.equal(sessionRuntimeDefault(TERM), "terminal");
+  assert.equal(sessionRuntimeMode({ harness: "claude" }, TERM), "terminal");
+  //  대소문자·공백은 관대하게 — 끄려던 사람이 오타 하나로 못 끄면 안 된다.
+  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: " Terminal " } as NodeJS.ProcessEnv), "terminal");
+  //  ⚠ 다만 **모르는 값은 chat 이다**(기본으로 접는다) — 끄기는 명시적이어야 한다.
+  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: "TERMINALL" } as NodeJS.ProcessEnv), "chat");
   assert.equal(sessionRuntimeMode({ harness: "claude" }, CHAT), "chat");
-  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: " Chat " } as NodeJS.ProcessEnv), "chat");
 });
 
 t("[3] ★ 아직 못 여는 하네스는 켜도 terminal — 빈 화면을 만들지 않는다", () => {
@@ -63,10 +67,10 @@ t("[6] paneIsShell 은 모드와 **다른 질문**이다 — 한 함수가 두 �
 t("[7] env 를 안 주면 process.env — 호출부가 매번 넘기지 않아도 된다", () => {
   const saved = process.env.LIVELY_SESSION_RUNTIME;
   try {
-    process.env.LIVELY_SESSION_RUNTIME = "chat";
-    assert.equal(sessionRuntimeMode({ harness: "claude" }), "chat");
-    delete process.env.LIVELY_SESSION_RUNTIME;
+    process.env.LIVELY_SESSION_RUNTIME = "terminal";
     assert.equal(sessionRuntimeMode({ harness: "claude" }), "terminal");
+    delete process.env.LIVELY_SESSION_RUNTIME;
+    assert.equal(sessionRuntimeMode({ harness: "claude" }), "chat");   // 안 세우면 기본(chat)
   } finally {
     if (saved === undefined) delete process.env.LIVELY_SESSION_RUNTIME;
     else process.env.LIVELY_SESSION_RUNTIME = saved;

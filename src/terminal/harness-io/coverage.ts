@@ -43,14 +43,16 @@ export const COVERAGE: readonly HarnessCoverage[] = [
     harness: "claude",
     axes: { read: "ok", send: "ok", tasks: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
-      //  ⚠ approve 를 "ok" 로 적은 근거를 남긴다 — 이 축만 라이브 물음을 재현하지 못했다.
-      //   ① 바이너리가 직접 말한다: --permission-prompt-tool 은 "permission prompts reach the host
-      //     over stdio" — 그래서 argv 에 `stdio` 를 명시했고, 그 플래그로 프로세스가 정상 기동한다(실측).
-      //   ② control_response 봉투가 CLI 에 받아들여진다: initialize 제어요청을 보내니 **같은 봉투로**
-      //     request_id 를 짝맞춰 응답이 왔다(실측 2026-09-01).
-      //   ③ 다만 이 맥에서는 환경이 도구를 자동 허용해(init.permissionMode 가 계속 default) can_use_tool
-      //     자체는 못 봤다. 물음이 뜨는 환경에서 한 번 더 확인할 것.
-      approve: "왕복 배선·봉투는 확인, 물음 자체는 미재현(이 환경이 자동 허용) — 위 주석 참조.",
+      //  ★ 이 축은 표에서 두 번 뒤집혔다. 그 자취를 남긴다 — 다음 사람이 같은 함정을 밟지 않게.
+      //   ① "ok" 로 적었다(근거 없이 — 배선이 준비된 것을 «된다» 로 옮겨 적었다).
+      //   ② "terminal" 로 되돌렸다(5가지를 시도했는데 물음이 0건이었다).
+      //   ③ 다시 "ok" — **실제로 받아서 답하고 턴이 끝나는 것까지 확인했다**(2026-09-01).
+      //
+      //  ⚠ ②에서 헛짚은 진짜 이유: **`echo` 로 시험했다.** claude 는 안전한 명령을 default 모드에서
+      //   자동 허용한다 — 그래서 물음이 안 온 것이지 기능이 없는 게 아니었다. 공식 Agent SDK 의
+      //   canUseTool 도 **같은 환경에서 똑같이 0건**이었고(오라클로 확인), 프롬프트를 «파일 쓰기» 로
+      //   바꾸자 SDK 도 우리 런타임도 **한 번에 물었다.**
+      //   → 승인을 시험할 땐 반드시 **권한이 필요한 동작**(Write·rm·네트워크)을 시킨다.
     },
   },
   {

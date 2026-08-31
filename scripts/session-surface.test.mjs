@@ -104,6 +104,28 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   ok(/terminalOnly/.test(chat), "㉑ 서버가 준 «못 하는 축» 을 화면에 넘긴다");
   ok(/events\/interrupt/.test(chat), "㉒ 멈춤이 하네스 무관 통로를 탄다");
 
+  //  ★ 2026-09-01 신고: 대화 런타임을 켰는데도 claude 세션이 **터미널로 열렸다.**
+  //   원인은 `chatFirst()` 가 두 뜻을 겸한 것 — «codex app-server 인가»(층을 붙일 근거)와
+  //   «대화창이 본자리인가»(어느 탭으로 열지)를 한 함수가 답하고 있었다. chatMode 가 'tmux' 인
+  //   claude 는 첫 뜻으로 거짓이라, 둘째 뜻까지 거짓이 되어 터미널이 기본이 됐다.
+  ok(/const chatHome = \(\): boolean => chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
+    "㉚ ★ «대화창이 본자리인가» 가 «codex 인가» 와 갈려 있다");
+  ok(/setMode\(chatHome\(\) \? 'chat' : 'term'\)/.test(chat),
+    "㉛ ★ 첫 화면을 그 축으로 정한다 — chatFirst() 로 정하면 claude 가 터미널로 열린다");
+  ok(/!modeChosen && mode === 'chat' && !chatHome\(\)/.test(chat),
+    "㉜ tmux 라고 되돌리는 분기가 대화 런타임 세션을 되돌리지 않는다(두 줄이 서로 밀치면 화면이 깜빡인다)");
+
+  //  ★ 2026-09-01 신고: "클로드 왜 중간 대답은 표시 안되냐? 최종대답밖에 표시못함?"
+  //   원인은 **대화 id 매핑**이었다. 화면이 대화 파일을 찾는 유일한 단서가 claude_session_id 인데
+  //   (chat-routes: «매핑이 없으면 404 가 정답이다»), 종전엔 세션 안에서 도는 훅만 그 값을 보고했다.
+  //   대화 런타임은 우리가 띄운 프로세스라 훅이 보고할 때까지(보통 툴 한 번 뒤) 파일을 못 찾고,
+  //   그때쯤이면 턴이 끝나 최종 답만 보였다. 우리는 첫 줄에서 이미 그 id 를 안다 — 그 자리에서 적는다.
+  const deliver = read("src/terminal/deliver-prompt.ts");
+  ok(/setClaudeSessionId\(sessionId, r\.convId/.test(deliver),
+    "㉝ ★ 대화 런타임이 연 대화 id 를 세션 매핑에 적는다 — 안 적으면 중간 응답이 화면에 안 온다");
+  ok(/r\.convId !== st\?\.claude_session_id/.test(deliver),
+    "㉝-b 같은 값이면 다시 쓰지 않는다(매 프롬프트마다 DB 를 두드리지 않게)");
+
   const css = read("public/styles/36-chat.css");
   ok(/\.stk-warn/.test(css) && /\.stk-slash/.test(css), "㉓ 경고·자동완성에 스타일이 있다(없으면 안 보인다)");
   ok(/\.cxl-ask\.is-risky/.test(css), "㉖ 위험 카드가 카드째로 티가 난다");

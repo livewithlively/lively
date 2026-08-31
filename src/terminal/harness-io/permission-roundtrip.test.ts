@@ -44,6 +44,35 @@ t("[1] ★ claude — control_request{can_use_tool} → 카드 → **request_id 
   assert.ok(denied.response.response.message, "거부에는 이유가 실려야 에이전트가 같은 것을 다시 안 시도한다");
 });
 
+t("[1-b] ★ **실측 봉투 그대로**(2.1.251, Write 한 번을 실제로 받아 뜬 것)", () => {
+  //  ⚠ 이 봉투를 얻기까지 헛짚었다: `echo` 로 시험하면 claude 가 **안전한 명령이라 자동 허용**해
+  //   물음이 안 온다(공식 SDK 의 canUseTool 도 같은 환경에서 0건이었다 — 오라클로 확인).
+  //   승인을 시험할 땐 **권한이 필요한 동작**(Write·rm·네트워크)을 시켜야 한다.
+  const ask = askOf(claudeStreamEvent({
+    type: "control_request", request_id: "a5386ace-0145-4ac9-8f61-8ce9ebb28227",
+    request: {
+      subtype: "can_use_tool", tool_name: "Write", display_name: "Write",
+      input: { file_path: "/tmp/ours2.txt", content: "HELLO\n" },
+      description: "ours2.txt",
+      permission_suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
+      tool_use_id: "toolu_01UvcEp5NrFmzCNoizhwsdR4",
+    },
+  }));
+  assert.equal(ask.id, "a5386ace-0145-4ac9-8f61-8ce9ebb28227");
+  assert.equal(ask.toolName, "Write");
+  assert.equal(ask.displayName, "Write");
+  //  ⚠ 필드 이름은 `description` 이다 — 종전엔 `reason` 만 읽어 카드의 «왜» 가 늘 비었다.
+  assert.equal(ask.description, "ours2.txt");
+  assert.equal(ask.title, "/tmp/ours2.txt", "제목은 «무엇을 하려는가» — 파일 경로");
+  assert.ok(Array.isArray(ask.suggestions) && ask.suggestions.length === 1, "«항상 허용» 근거가 실려 온다");
+
+  //  응답은 SDK 타입 PermissionResult 와 **같은 자리**여야 한다: allow → updatedInput·updatedPermissions.
+  const out = JSON.parse(chatAdapter("claude")!.respond!({ ask, value: { allow: true, scope: "always" }, convId: "c" })!) as any;
+  assert.equal(out.response.request_id, ask.id);
+  assert.equal(out.response.response.behavior, "allow");
+  assert.deepEqual(out.response.response.updatedPermissions, ask.suggestions);
+});
+
 t("[2] claude — «항상» 은 **하네스가 준 제안이 있을 때만** 실린다(규칙을 우리가 짓지 않는다)", () => {
   const bare = askOf(claudeStreamEvent({
     type: "control_request", request_id: "r1", request: { subtype: "can_use_tool", tool_name: "Bash", input: {} },

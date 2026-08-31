@@ -29,7 +29,8 @@ import { sessionHandoffContext } from './session-handoff-context.js';
 import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
 import { mountSessionTasks, type SessionTasksHandle } from './session-tasks.js';   // #2439 ③ 작업 표면(백그라운드 셸·서브에이전트)
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
-import { rememberCreated } from './v2/created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
+import { rememberCreated } from './v2/created-cache.js';
+import { rememberFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 
 // ── 자동복원 연쇄 상한 판정 (#1820 후속) — 순수 함수(스토리지·DOM 의존 없음) ────────────────────
 // 자동복원은 성공하면 새 세션으로 주소를 옮기고, 그때 화면이 새로 떠 화면 단위 가드가 리셋된다. 되살린
@@ -139,6 +140,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const isBox = first.live;                     // 라이브 행(박스) — 죽었어도(restorable) 박스다
   const dead = (): boolean => !target.live || !target.alive || !!target.raw?.restorable;
   const canType = (): boolean => !dead();
+  /**
+   * 이 멈춘 세션을 **말을 거는 것만으로** 되살릴 수 있나 (#2439 ②③).
+   *  되살릴 좌표(desired-state)가 있고 · 내 것이고 · 휴지통이 아니어야 한다 — 서버 `/restore` 의 판정과 같은 축이다.
+   *  이게 참이면 입력창을 **살려 둔다**: 사람이 «멈춤» 을 읽고 그 자리에서 이어 말할 수 있어야, 읽는 화면과
+   *  일하는 화면이 갈리지 않는다.
+   */
+  const canRevive = (): boolean => dead() && isBox && !!target.raw?.restorable && !!target.owned && !target.raw?.trashedAt;
   const caps = (): { read: boolean; answer: boolean } => (target.raw?.chat && typeof target.raw.chat === 'object') ? { read: target.raw.chat.read !== false, answer: target.raw.chat.answer !== false } : { read: true, answer: true };   // 서버 harness-io 능력(행의 chat) — 없으면(구 서버) 둘 다 있는 것으로
   const canKeys = (): boolean => canType() && !target.node && caps().answer;
 
@@ -371,6 +379,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     opening: null,
   });
 
+  /**
+   * **대화창이 이 세션의 본자리인가** — 어느 탭으로 열지를 정한다.
+   *
+   *  ⚠ `chatFirst()` 와 **다른 질문**이다. 그건 «codex app-server 세션인가» 이고(실시간 층·승인 층을
+   *   붙일지의 근거), 이건 «사람이 처음 볼 화면이 어디인가» 다. 한 함수가 둘을 겸하다가 실제로 사고가 났다:
+   *   대화 런타임(#2439)을 켜서 작업·승인·슬래시가 다 오는데도 **claude 세션은 터미널로 열렸다**
+   *   — chatMode 가 'tmux' 라 chatFirst() 가 거짓이었기 때문이다(2026-09-01 상민님 신고).
+   *
+   *  판정: codex app-server 이거나, **서버가 이 세션을 chat 런타임으로 연다**(runtimeMode).
+   *  ⚠ 구 서버 행엔 runtimeMode 가 없다 → 종전 판정만 남는다(무회귀).
+   */
+  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat';
+
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
   // 런타임 명령이 확인된 축은 POST …/runtime, 나머지는 POST …/handoff 로 같은 작업 자리의 새 프로세스를 연다.
   let hcat: RunHarness | null = null;          // 이 세션의 하네스 카탈로그 행(제공자 이름 · 선택지 · 바꿀 수 있나)
@@ -580,15 +601,30 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const paintDeadFooter = (): void => {
     if (deadFooterOn) return; deadFooterOn = true;
     const why = target.stateKey === 'exited_user' ? '내가 종료한 세션' : target.stateKey === 'oom_killed' ? '메모리 부족으로 끝난 세션' : target.stateKey === 'restorable' ? '중단된 세션' : '기록만 남은 세션';
+    //  ★ #2439 ②③ — **되살릴 수 있으면 입력창을 덮지 않는다.**
+    //   setFooter 는 입력 폼을 통째로 숨긴다(chat-view.ts). 그래서 멈춘 세션은 «읽기만 되는 화면» 이었고,
+    //   도는 세션과 화면이 갈렸다. 이제 그 자리에 말을 걸 수 있다 — 보내면 되살아나고 그 말이 첫 지시가 된다.
+    //   되살릴 수 없는 세션(남의 것·휴지통·좌표 없음)만 종전대로 footer 로 사실을 말한다(막다른 입력창을 두지 않는다).
+    if (canRevive()) {
+      view.setFooter(null);
+      view.setNote(`${why}이에요 — 아래에 말을 걸면 이어서 열립니다.`);
+      view.busy(false);
+      return;
+    }
     const btn = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '이어서 대화하기' }) as HTMLButtonElement;
     btn.addEventListener('click', () => { void resumeSession(btn); });
     view.setFooter(el('div', { class: 'sc-bar' },
       el('span', { class: 'sc-bar-t', text: `${why}이에요 — 대화는 그대로 이어받을 수 있어요.` }), btn));
     view.busy(false);
-    // ★ #1820 — 열면 되살린다. 이 화면에 온 것 자체가 "이 세션을 쓰겠다"는 뜻이라, 버튼을 한 번 더 누르게 하지
-    //  않는다. 되살아나면 새 id 로 주소가 옮겨 가고(셸이 라우팅을 쥔다 — 프레임이 몰래 갈아타지 않는다, #1808),
-    //  실패하면 이 기록 화면과 버튼이 그대로 남는다(자동이 막다른 길을 만들지 않는다).
-    if (opts.autoResume && !resumeAuto && visibleNow() && autoResumeAllowed()) {
+    // ★ #2439 — **보기만 해서는 되살리지 않는다.** 이게 이 프로젝트의 첫 요구사항이다(상민님):
+    //  «중단된 세션 눌러서 보려고 하기만 해도 복구가 필요하니까 세션 컨테이너 하나가 떠야 한다 —
+    //   실제 뜨는 시점은 프롬프트를 보낸 시점이면 좋겠다».
+    //  종전(#1820)엔 «이 화면에 온 것 자체가 쓰겠다는 뜻» 이라 보고 열자마자 되살렸다. 그 전제가 맞으려면
+    //  읽는 화면과 일하는 화면이 갈려 있어야 하는데(그래서 그때는 맞았다), 이제 **한 화면**이라
+    //  «읽으러 왔다» 와 «일하러 왔다» 가 겉으로 구분되지 않는다. 그러면 읽기만 해도 컨테이너가 뜬다.
+    //  → 되살릴 수 있으면 **기다린다.** 말을 걸거나(sendPrompt) 터미널을 열면 그때 되살아난다.
+    //  ⚠ 되살릴 수 **없는** 세션은 종전대로다 — 그건 기다릴 이유가 없다(막다른 화면을 오래 두지 않는다).
+    if (opts.autoResume && !canRevive() && !resumeAuto && visibleNow() && autoResumeAllowed()) {
       resumeAuto = true;
       view.setNote('세션을 이어서 여는 중…');
       void resumeSession(btn);
@@ -603,6 +639,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let modeChosen = false;              // 사람이 [보기] 메뉴에서 직접 골랐나 — 그 뒤엔 화면이 스스로 안 바꾼다
   function setMode(m: 'term' | 'chat'): void {
     if (m === 'term' && (!opts.terminalSrc || !isBox)) m = 'chat';
+    //  ★ #2439 — **터미널을 여는 것도 «쓰겠다»** 다. 보기만 할 때는 안 되살리지만(위 autoResume 주석),
+    //   터미널 탭은 그 자체가 «이 세션에서 무언가 하겠다» 라 그 자리에서 되살린다.
+    //   ⚠ 되살리지 않으면 빈 터미널(붙을 tmux 가 없는 iframe)이 뜬다 — 그게 진짜 막다른 길이다.
+    if (m === 'term' && canRevive() && !resumeAuto && autoResumeAllowed()) {
+      resumeAuto = true;
+      view.setNote('세션을 이어서 여는 중…');
+      void resumeSession(null, { canRestore: true });
+    }
     mode = m;
     if (m === 'term' && !termFrame && opts.terminalSrc) {
       termFrame = el('iframe', { class: 'sc-term-frame', src: opts.terminalSrc, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
@@ -670,7 +714,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         if (opts.onResumed) opts.onResumed(mv); else location.hash = '#/s/' + encodeURIComponent(mv);
         return;
       }
-      if (m.canRestore && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
+      //  ⚠ 여기도 «보기만 해서는 안 되살린다»(위 주석) — 되살릴 수 있으면 말을 걸 때까지 기다린다.
+      if (m.canRestore && !canRevive() && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
     }
     if (!m || m.type !== 'lively-term-status') return;
@@ -1313,6 +1358,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
   // ── 보내기·키·이어받기 ──────────────────────────────────────────────────────────────
   async function sendPrompt(text: string): Promise<void> {
+    //  ★ #2439 ②③ — 멈춘 세션에 말을 걸면 **그것이 켜는 신호**다. 세션이 뜨는 시점이 «열어볼 때» 가 아니라
+    //   «말을 걸 때» 가 된다(윤상민: "실제 뜨는 시점은 프롬프트를 보낸 시점이면 좋겠는데").
+    if (!canType() && canRevive()) { await reviveWithPrompt(text); return; }
     if (!canType()) { toast('끝난 세션이에요 — [이어서 대화하기]로 새 세션을 열어 보내세요.'); return; }
     // 낙관적으로 그리고 **서버 큐에 넣는다**(#1753). 배달자가 입력창을 확인하고 넣고 에코로 delivered 를 확정한다 —
     //  로그인·대화상자에 멈춘 세션이어도 유실되지 않고, 새로고침해도 큐에서 되살아난다. 미제출 Enter 재시도도 배달자 몫.
@@ -1384,7 +1432,35 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     } catch (e: any) { if (!quiet) view.setNote(e?.message || '키를 보내지 못했습니다.'); }
   }
   /** 이 세션을 되살려(또는 그 대화를 이어받아) 새 세션으로 간다. btn 없이도 부를 수 있다 — 자동 복원 경로(#1820). */
-  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean }): Promise<void> {
+  /**
+   * 멈춘 세션에 **말로** 말을 걸었다 (#2439 ②③) — 되살리고, 그 말을 되살아난 세션의 첫 지시로 넘긴다.
+   *
+   *  순서가 중요하다: 되살리기 → **말 전달** → 화면 이동. 옮겨 간 뒤에 넣으면 이 컴포넌트가 destroy 된 뒤라
+   *  실패해도 아무도 모른다. 그래서 resumeSession 의 `beforeRoute` 훅에서 보낸다.
+   *
+   *  전달은 종전 프롬프트 통로(`POST …/prompt`)를 그대로 쓴다 — 되살아난 세션의 하네스 입력창이 아직 안 떴어도
+   *  서버 아웃박스가 들고 있다가 넣는다(#1753). 여기서 «떴는지» 를 화면이 판정하지 않는다.
+   *  그리고 `rememberFirstPrompt` 로 새 세션 화면이 그 말을 낙관적으로 그리게 한다 — 옮겨 가는 순간 방금 친
+   *  말이 사라지면 사람은 그게 갔는지 알 수 없다.
+   */
+  async function reviveWithPrompt(text: string): Promise<void> {
+    view.removeOpening(); view.list.querySelector('.sc-empty')?.remove();
+    const pd = addPending(text);
+    pd.state.textContent = '세션을 이어서 여는 중…';
+    view.scrollToBottom();
+    try {
+      await resumeSession(null, { canRestore: true }, async (newId) => {
+        rememberFirstPrompt(newId, text);
+        await api(`/api/ui/terminal/sessions/${encodeURIComponent(newId)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
+      });
+    } catch (e: any) {
+      //  resumeSession 이 자기 실패는 toast 로 말한다 — 여기서는 **그 말이 안 갔다는 사실**을 말풍선에 남긴다.
+      pd.state.textContent = '보내지 못했어요 — 다시 시도해 주세요';
+      toast(e?.message || '세션을 이어서 열지 못했습니다.');
+    }
+  }
+
+  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean }, beforeRoute?: (newId: string) => Promise<void>): Promise<void> {
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
@@ -1416,6 +1492,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
       // 이미 이어져 있던 것과 지금 새로 이어받은 것은 사람에게 **다른 사실**이다 — 문구를 가른다.
       toast(moved && moved !== target.id ? '이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.' : '이어받기 세션을 열었어요.');
+      //  ⚠ 라우팅 **전에** 훅을 부른다(#2439) — 되살린 세션에 말을 넣는 일이 여기서 일어나야 한다. 옮겨 간 뒤에
+      //   넣으면 이 컴포넌트는 이미 destroy 된 뒤라 실패해도 아무도 모른다.
+      if (beforeRoute) await beforeRoute(nextId);
       // 라우팅은 호출자(탭)에게 — 전역 주소를 여기서 바꾸면 숨은 탭의 복원이 활성 탭을 끌고 간다(opts.onResumed 주석).
       if (opts.onResumed) opts.onResumed(nextId);
       else location.hash = '#/s/' + encodeURIComponent(nextId);
@@ -1574,6 +1653,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       sessionId: target.id, input: view.input,
       //  서버가 «이 하네스는 웹에서 이건 못 한다» 를 실어 준다(coverage 표) — 화면이 그걸 그대로 말한다.
       terminalOnly: (target.raw as any)?.terminalOnly ?? [],
+      //  ★ **승인은 한 층만 그린다.** codex 는 자기 실시간 층(mountCodexLive)이 이미 승인 카드를
+      //   그리고, codex 런타임은 같은 사건을 일반 버스로도 흘린다(#2439). 둘 다 그리면 한 번의
+      //   승인에 **카드가 두 장** 뜨고, 하나를 누르면 남은 하나가 답할 수 없는 유령으로 남는다.
+      //   ⚠ 언젠가 codex 도 이 표면으로 옮겨야 한다 — 그때 이 줄을 지운다(그전엔 도는 것을 흔들지 않는다).
+      drawAsks: !chatFirst(),
     });
   }
 
@@ -1613,7 +1697,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  전담한다) 터미널로 열면 사람이 **말 걸 곳이 없는 화면**을 먼저 본다 — 실제로 그렇게 헤맸다.
   //  나머지는 종전 그대로 터미널이 기본이다(2026-08-18 지시: 대화창이 미완성인 동안은 터미널이 정답).
   //  판정 근거는 세션 행의 chatMode — 서버가 '이 세션의 대화는 app-server 가 돈다'고 알려 주는 값이다.
-  setMode(chatFirst() ? 'chat' : 'term');
+  setMode(chatHome() ? 'chat' : 'term');
 
   void open();
 
@@ -1639,8 +1723,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       ensureLive();
       ensureTasksDock();   // 열 때는 행이 얇아 runtimeMode 를 몰랐을 수 있다(방금 만든 세션)
       if (!hadLive && live && !modeChosen && mode === 'term') setMode('chat');
+      //  ★ #2439 — 열 때는 행이 얇아 runtimeMode 를 몰랐을 수 있다(방금 만든 세션). 그 값이 지금 왔고
+      //   대화가 본자리라면 그때 대화로 옮긴다(사람이 직접 고른 뒤에는 건드리지 않는다).
+      if (!modeChosen && mode === 'term' && chatHome()) setMode('chat');
       // 반대 방향도 마감한다 — 위 추정(모르면 codex=대화)이 틀린 배포(tmux 로 끈 곳)에서는 행이 오는 즉시 터미널로.
-      if (!modeChosen && mode === 'chat' && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
+      //  ⚠ 단 **대화 런타임 세션은 예외**다. chatMode 는 'tmux' 여도 대화는 stream-json 이 쥔다 —
+      //   여기서 되돌리면 위 줄과 서로 밀치며 화면이 깜빡인다.
+      if (!modeChosen && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();

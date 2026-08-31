@@ -68,7 +68,18 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: { ow
         if (!e.conn.send(text)) throw new ClaudeChatUnavailable("opencode 에 말을 걸지 못했습니다");
         r = { convId: e.convId };
       } else {
-        r = sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
+        r = await sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
+      }
+      //  ★ **대화 id 를 적는다.** 화면이 대화 파일을 찾는 유일한 단서가 이 매핑이다(chat-routes:
+      //   «매핑이 없으면 404 가 정답이다 — 폴더의 최신 파일을 집지 않는다»). 종전엔 세션 **안에서** 도는
+      //   훅(work-flag)만 이 값을 보고했는데, 대화 런타임은 우리가 띄운 프로세스라 그 훅이 보고하기 전까지
+      //   화면이 파일을 못 찾는다 — 보통 툴을 한 번 쓴 뒤에야 보고되므로 **그 사이의 중간 응답이 통째로
+      //   안 보이고 최종 답만 뜬다**(2026-09-01 상민님 신고). 우리는 첫 줄에서 이미 그 id 를 안다.
+      //  ⚠ best-effort 다 — 실패해도 배달은 성공이다(훅이 뒤늦게 같은 값을 보고한다).
+      if (r.convId && r.convId !== st?.claude_session_id && st?.owner) {
+        const { setClaudeSessionId } = await import("../sessions/session-state.js");
+        void setClaudeSessionId(sessionId, r.convId, st.owner).catch((err) =>
+          logger.warn({ id: sessionId, err: (err as Error)?.message }, "대화 id 매핑 기록 실패 — 훅 보고를 기다린다"));
       }
       return { ok: true, delivered: true, transport: "chat-runtime", thread_id: r.convId, steered: false };
     } catch (e) {
