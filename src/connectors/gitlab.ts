@@ -145,7 +145,16 @@ export const gitlabConnector: Connector = {
     const host = String(cfg.host ?? "").trim().toLowerCase() || "gitlab.com";
     const api = `https://${host}/api/v4`;
     const projects = parseProjectList(cfg.projects, host);
-    if (projects.length === 0) throw new Error("수집할 프로젝트가 없습니다 — '프로젝트'에 group/project 경로를 넣으세요.");
+    if (projects.length === 0) {
+      // #2232 — 범위가 비면 «전체»(비공개 포함): 이 토큰의 계정이 구성원인 프로젝트를 전부 훑는다(github.ts 와 같은 결정).
+      for await (const page of pages<{ path_with_namespace?: string }>(
+        token, `${api}/projects?membership=true&simple=true&order_by=last_activity_at&per_page=${PAGE_SIZE}`, "프로젝트 전체 열거")) {
+        for (const pr of page) { const path = String(pr.path_with_namespace ?? "").trim(); if (path) projects.push(path); }
+      }
+      if (projects.length === 0) {
+        throw new Error("이 토큰으로 볼 수 있는 프로젝트가 하나도 없습니다 — 토큰 허용범위(read_api)를 확인하거나 '프로젝트'에 group/project 를 넣으세요.");
+      }
+    }
     const includeMrs = on(cfg.include_mrs, true);
     const includeReleases = on(cfg.include_releases, true);
     const sinceIso = sinceFloor(opts?.since, cfg.backfill_since);

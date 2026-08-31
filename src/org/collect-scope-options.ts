@@ -96,11 +96,15 @@ async function linearOptions(memberId: string): Promise<ScopeOptionsResult> {
 }
 
 // ── Figma — 팀 id 를 아는 경우에만 그 팀의 파일을 나열할 수 있다(공개 OAuth 는 열거 자체가 금지, team_id 는 API 로 못 얻는다). ──
-async function figmaOptions(memberId: string): Promise<ScopeOptionsResult> {
+async function figmaOptions(memberId: string, teamIdArg?: string): Promise<ScopeOptionsResult> {
   const r = await resolveFigmaTokenSource(MEMBER(memberId), figmaVaultReader);
   if (!r?.token) return free("file_keys", "파일", r?.warning ?? "Figma 토큰이 없습니다.");
   const cfg = await collectorConfig("figma");
-  const teamIds = String(cfg.team_ids ?? "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  //  #2232 — 화면이 team_id 를 인자로 주면 그것이 먼저다: 팀 주소를 «저장하기 전에» 그 팀의 파일 목록을
+  //  미리 보여 줄 수 있어야 한다(저장부터 하면 고르기도 전에 팀 전체 수집이 시작된다).
+  const teamIds = String(teamIdArg ?? "").trim()
+    ? [String(teamIdArg).trim()]
+    : String(cfg.team_ids ?? "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
   if (teamIds.length === 0) {
     return free("file_keys", "파일",
       "피그마는 팀 목록을 API 로 주지 않아요 — 팀 주소(figma.com/files/team/<id>/…)의 id 를 한 번 넣으면 그 팀의 파일을 여기서 고를 수 있어요. 그 전엔 파일 링크를 붙여넣으세요.");
@@ -185,7 +189,7 @@ async function slackOptions(memberId: string): Promise<ScopeOptionsResult> {
   return { key: "channels", unit: "채널", emptyMeansAll: true, freeform: false, options };
 }
 
-const PROVIDERS: Record<string, (memberId: string) => Promise<ScopeOptionsResult>> = {
+const PROVIDERS: Record<string, (memberId: string, teamId?: string) => Promise<ScopeOptionsResult>> = {
   github: githubOptions, gitlab: gitlabOptions, linear: linearOptions,
   figma: figmaOptions, clickup: clickupOptions, slack: slackOptions,
 };
@@ -195,8 +199,8 @@ const PROVIDERS: Record<string, (memberId: string) => Promise<ScopeOptionsResult
  * (여기서 key 를 비우면 화면은 텍스트를 받아 놓고 어디에도 못 넣는 막다른 길이 된다.)
  */
 const UNITS: Record<string, { key: string; unit: string; emptyMeansAll: boolean }> = {
-  github: { key: "repos", unit: "저장소", emptyMeansAll: false },
-  gitlab: { key: "projects", unit: "프로젝트", emptyMeansAll: false },
+  github: { key: "repos", unit: "저장소", emptyMeansAll: true },   // #2232 — 비면 이 토큰이 보는 전부(비공개 포함)
+  gitlab: { key: "projects", unit: "프로젝트", emptyMeansAll: true }, // #2232 — 비면 membership 전부
   linear: { key: "teams", unit: "팀", emptyMeansAll: true },
   figma: { key: "file_keys", unit: "파일", emptyMeansAll: false },
   clickup: { key: "include_list_ids", unit: "리스트", emptyMeansAll: true },
@@ -223,13 +227,13 @@ export function describeOptionsError(system: string, e: unknown): string {
  *  ⚠ 조회 실패는 던지지 않는다 — freeform 으로 떨어뜨려 화면이 텍스트 입력으로 계속 동작하게 한다
  *   (목록이 안 뜬다고 «범위를 못 정하는» 막다른 길이 되면 안 된다).
  */
-export async function collectScopeOptions(system: string, memberId: string): Promise<ScopeOptionsResult> {
+export async function collectScopeOptions(system: string, memberId: string, teamId?: string): Promise<ScopeOptionsResult> {
   const key = String(system ?? "").toLowerCase();
   const fn = PROVIDERS[key];
   if (!fn) return free("", "", "이 앱은 목록 조회를 지원하지 않습니다.");
   const u = UNITS[key] ?? { key: "", unit: "", emptyMeansAll: false };
   try {
-    return await fn(memberId);
+    return await fn(memberId, teamId);
   } catch (e) {
     return free(u.key, u.unit, describeOptionsError(key, e), u.emptyMeansAll);
   }
