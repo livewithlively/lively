@@ -23,7 +23,7 @@
 //  즉 **승인이 툴 호출로 표현된다** — 벤더가 headless control_request 를 안 주는 것과 별개로,
 //  그 툴이 불리는 step 을 잡으면 화면이 카드를 그릴 수 있다. 그 step 의 실제 모양은 미실측이라
 //  지금은 raw 로 흘린다(로그인한 세션이 한 번 돌면 형식이 드러난다).
-import type { SessionEvent, SessionFacts, UsageInfo } from "./session-event.js";
+import type { SessionEvent, SessionFacts, TaskInfo, UsageInfo } from "./session-event.js";
 
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -61,7 +61,37 @@ export function antigravityEvent(line: unknown): SessionEvent | null {
     //  대화 본문(text_delta)은 ChatLine 축 — 여기서 다루지 않는다.
     const stepType = str(s.step_type);
     if (stepType === "user_input" || stepType === "agent_response") return null;
-    //  ★ 그 밖의 step_type(툴 실행·승인 요청)은 **미실측**이다. 짐작해 작업으로 만들지 않고 관측한다.
+
+    //  ── 도구 실행 = 우리 어휘의 «작업» (실측 2026-09-01, agy 1.1.22) ──────────────
+    //   {"event":"step_update","step_update":{step_index:2,state:"ACTIVE"|"DONE",step_type:"tool",
+    //     tool_name:"run_command",tool_info:{name,parameters:{CommandLine:"echo …"},output:"…"}}}
+    //   ⚠ id 는 **step_index** 다(툴 자체 id 가 없다). 한 대화 안에서 단조 증가하므로 짝이 맞는다 —
+    //    그런데 대화가 바뀌면 0부터 다시 시작하므로 대화 id 를 앞에 붙인다(다른 턴의 행과 안 섞이게).
+    //   ⚠ state 는 ACTIVE/DONE **둘뿐**이다 — 실패를 따로 안 준다. 그러니 실패를 지어내지 않는다.
+    if (stepType === "tool") {
+      const info = rec(s.tool_info) ?? {};
+      const params = rec(info.parameters) ?? {};
+      const idx = num(s.step_index);
+      if (idx === undefined) return { t: "raw", source: "antigravity", payload: o };
+      const id = `${str(s.conversation_id) ?? "c"}#${idx}`;
+      const toolName = str(s.tool_name) ?? str(info.name) ?? "도구";
+      //  제목은 «무엇을 하는가» 다 — 명령이면 명령줄, 아니면 도구 이름(사람이 읽고 판단할 수 있는 것).
+      const cmd = str(params.CommandLine) ?? str(params.command) ?? str(params.TargetFile) ?? str(params.Query);
+      const title = cmd ? (cmd.length > 120 ? cmd.slice(0, 117) + "…" : cmd) : toolName;
+      const done = String(s.state ?? "").toUpperCase() === "DONE";
+      //  ★3 — 하네스 낱말(run_command)이 아니라 **우리 낱말**로 종류를 정한다.
+      const kind: TaskInfo["kind"] = /command|terminal|bash/i.test(toolName) ? "shell"
+        : /subagent|agent/i.test(toolName) ? "agent" : "other";
+      if (!done) return { t: "task.started", task: { id, kind, title, status: "running", startedAt: Date.now() } };
+      const secs = num(s.duration_seconds);
+      return { t: "task.updated", id, patch: {
+        status: "completed", title, endedAt: Date.now(),
+        ...(secs !== undefined ? { startedAt: Date.now() - Math.round(secs * 1000) } : {}),
+        ...(str(info.output) ? { summary: String(info.output).slice(0, 300) } : {}),
+      } };
+    }
+
+    //  ★ 그 밖의 step_type 은 **미실측**이다. 짐작해 작업으로 만들지 않고 관측한다.
     return { t: "raw", source: "antigravity", payload: o };
   }
 

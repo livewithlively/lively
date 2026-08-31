@@ -152,3 +152,17 @@ export async function opencodeReplyPermission(o: {
     return false;
   }
 }
+
+/**
+ * 도는 턴을 멈춘다 — opencode 는 이 축도 **REST 로 열려 있다**(`POST /session/{id}/abort`).
+ *  ⚠ 실패를 «멈췄다» 로 접지 않는다: false 를 주면 화면이 «터미널에서 Esc» 로 안내를 가른다.
+ */
+export async function opencodeAbort(o: {
+  base: string; opencodeSessionId: string; fetchFn?: typeof fetch;
+}): Promise<boolean> {
+  const doFetch = o.fetchFn ?? fetch;
+  try {
+    const res = await doFetch(`${o.base}/session/${encodeURIComponent(o.opencodeSessionId)}/abort`, { method: "POST" });
+    return res.ok;
+  } catch { return false; }
+}

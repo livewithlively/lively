@@ -12,16 +12,42 @@
 //  그래서 «작업(task)» 하나를 1급으로 두면 둘이 한 번에 덮인다. 서버가 그걸 `kind: shell|agent` 로
 //  옮겨 주므로(session-event.ts ★3) 이 화면은 **하네스를 모른다.**
 //
+//  ── ★ 작업만이 아니다 (#2439 ④) ────────────────────────────────────────────────
+//  이 파일은 세션 상태 통로(SSE)의 **유일한 구독자**다. 그래서 그 통로로 오는 축을 전부 여기서 그린다:
+//   작업(백그라운드 셸·서브에이전트) · **승인** · **세션 사실**(모델·슬래시 목록) · **사용량**.
+//  구독자를 축마다 따로 두면 SSE 가 세션당 네 개 열리고, 재접속·침묵감시 규칙이 네 벌이 된다 —
+//  그중 하나는 반드시 빠진다(이 프로젝트가 계속 마주친 실패 모양이다).
+//
 //  ── 화면이 하지 않는 것 ─────────────────────────────────────────────────────────
 //  · 접기를 다시 하지 않는다. 서버가 언제나 **접힌 스냅샷**을 준다(runtime-bus) — 두 벌이면 갈린다.
 //  · 모르는 이벤트에 던지지 않는다. 새 표면이 생겨도 화면은 조용히 건너뛴다(session-event.ts ★2).
+//  · **하네스 낱말을 모른다.** `behavior:"allow"` 도 `optionId` 도 서버의 respond 가 만든다(★3).
 import { apiUrl, el, TOKEN_KEY } from './core.js';
 import { splitSse } from './sse-frames.js';
 //  판단(무엇을 접고 무엇을 남기나)은 의존 없는 모듈에 둔다 — 화면 코드는 node 에서 로드조차 안 되므로
 //  그 규칙을 값으로 지킬 수 없다. 그래서 갈라 둔다(sess-face 와 같은 규율).
 import { dockHead, elapsed, visibleTasks, type TaskInfo } from './session-tasks-view.js';
+import {
+  applySlash, askChoices, askDetail, askHeadline, askIsRisky, askKind, factChips,
+  slashMatches, slashQuery, terminalOnlyNote, usageLine,
+  type AskInfo, type FactsInfo, type UsageInfo,
+} from './session-surface-view.js';
 
 export interface SessionTasksHandle { destroy(): void }
+
+export interface SessionTasksOpts {
+  sessionId: string;
+  /**
+   * 이 하네스가 **웹에서 못 하는 축들**(서버의 terminalOnly). 화면이 그 사실을 한 줄로 말한다.
+   *  ⚠ 안 주면 안내가 안 뜬다 — 그러면 사람은 없는 기능을 찾아 헤맨다(막다른 길).
+   */
+  terminalOnly?: readonly string[];
+  /**
+   * 슬래시 자동완성을 붙일 입력칸. 없으면 그 축은 안 그린다.
+   *  ⚠ 터미널에선 `/` 를 치면 목록이 뜬다 — 웹에 그게 없으면 그건 **기능 없음**이지 «디자인 차이» 가 아니다.
+   */
+  input?: HTMLTextAreaElement | null;
+}
 
 //  토큰은 주소가 아니라 헤더로 — EventSource 를 못 쓰는 이유이자, 이 한 줄이 그 대가를 갚는 자리다.
 function authHeaders(base: Record<string, string>): Record<string, string> {
@@ -39,14 +65,23 @@ const STATUS_LABEL: Record<string, string> = {
  *
  *  ⚠ 도는 작업이 없으면 **통째로 숨긴다** — 빈 상자를 늘 띄워 두면 대화가 그만큼 밀린다.
  */
-export function mountSessionTasks(host: HTMLElement, o: { sessionId: string }): SessionTasksHandle {
+export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): SessionTasksHandle {
   let tasks: TaskInfo[] = [];
+  let facts: FactsInfo = {};
   let closed = false;
   const ctl = new AbortController();
 
+  //  ── 자리 순서 = 급한 순서 ───────────────────────────────────────────────────────
+  //  승인이 **맨 위**다: 답해야 턴이 진행되는 유일한 것이라, 작업 목록에 밀려 화면 밖으로 나가면 안 된다.
+  //  그다음 작업(지금 무엇이 도나), 마지막이 사실·사용량(알아 두면 좋은 것).
+  const asksWrap = el('div', { class: 'cxl-asks' });          // ★ codex 승인과 **같은 클래스** — 화면이 하네스마다 갈리지 않게
   const wrap = el('div', { class: 'stk-dock' });
+  const info = el('div', { class: 'stk-info' });
   wrap.hidden = true;
-  host.append(wrap);
+  info.hidden = true;
+  host.append(asksWrap, wrap, info);
+
+  const askCards = new Map<string, HTMLElement>();
 
   function paint(): void {
     const now = Date.now();
@@ -72,10 +107,150 @@ export function mountSessionTasks(host: HTMLElement, o: { sessionId: string }): 
   //  도는 작업이 있으면 경과 시간을 1초마다 다시 그린다(없으면 타이머도 안 돈다).
   const tick = setInterval(() => { if (tasks.some((t) => t.status === 'running')) paint(); }, 1000);
 
+  // ── 승인 ──────────────────────────────────────────────────────────────────────
+  //  이 화면에서 **사람이 답해야 에이전트가 움직이는** 유일한 순간이다. 그래서:
+  //   · 입력칸 바로 위에 선다(스크롤을 올려도 안 사라진다 — 사라지면 그 턴이 통째로 선다).
+  //   · 무엇을 하려는지 **원문 그대로** 보여 준다(요약하면 무엇을 허용하는지 모른다).
+  //   · 되돌리기 어려운 것은 **경고 줄**을 세운다(모르고 누르지 않게 — 대신 결정하지는 않는다).
+  async function answerAsk(ask: AskInfo, choice: ReturnType<typeof askChoices>[number], card: HTMLElement): Promise<void> {
+    card.classList.add('is-busy');
+    try {
+      const res = await fetch(apiUrl(`/api/ui/terminal/sessions/${encodeURIComponent(o.sessionId)}/events/answer`), {
+        method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+        credentials: 'same-origin', body: JSON.stringify({ id: ask.id, value: choice.value }),
+      });
+      if (!res.ok) throw new Error(`답하지 못했습니다 (${res.status})`);
+      const j = await res.json().catch(() => ({})) as { stale?: boolean };
+      //  stale = 이미 처리됐거나 시간이 지나 닫혔다. 지어내지 않고 사실대로 적는다.
+      settleAsk(ask.id, j?.stale ? '이미 닫힘' : choice.label);
+    } catch (e) {
+      card.classList.remove('is-busy');
+      settleAsk(ask.id, (e as Error)?.message || '답하지 못했습니다');
+    }
+  }
+
+  function drawAsk(ask: AskInfo): void {
+    if (askCards.has(ask.id)) return;                 // 재접속 replay — 카드를 두 장 만들지 않는다
+    const card = el('div', { class: 'cxl-ask', role: 'group', 'aria-label': askHeadline(ask) });
+    const choices = askChoices(ask);
+    card.append(
+      el('div', { class: 'cxl-ask-head' },
+        el('span', { class: 'cxl-ask-kind', text: askKind(ask) }),
+        el('span', { class: 'cxl-ask-title', text: askHeadline(ask) })),
+      //  ⚠ 위험 경고는 **본문 위**에 둔다 — 명령을 읽고 나서 보면 이미 눌렀을 수 있다.
+      askIsRisky(ask)
+        ? el('div', { class: 'stk-warn', text: '⚠ 되돌리기 어려운 작업이에요. 명령을 꼭 읽어 보세요.' })
+        : null,
+      el('pre', { class: 'cxl-ask-body' }, el('code', { text: askDetail(ask) })),
+      ask.description ? el('div', { class: 'stk-askwhy', text: ask.description }) : null,
+      el('div', { class: 'cxl-ask-acts' },
+        ...choices.map((c) => el('button', {
+          class: 'cxl-ask-btn' + (c.primary ? ' is-go' : ''), type: 'button', title: c.hint, text: c.label,
+          onclick: () => { void answerAsk(ask, c, card); },
+        }))),
+    );
+    askCards.set(ask.id, card);
+    asksWrap.append(card);
+  }
+
+  function settleAsk(id: string, said: string): void {
+    const card = askCards.get(id);
+    if (!card) return;
+    askCards.delete(id);
+    card.classList.remove('is-busy');
+    card.classList.add('is-done');
+    card.querySelector('.cxl-ask-acts')?.replaceChildren(el('span', { class: 'cxl-ask-said', text: said }));
+    //  답한 카드는 잠깐 남긴다 — 즉시 사라지면 무엇을 골랐는지 알 수 없다.
+    window.setTimeout(() => { if (!closed) card.remove(); }, 2600);
+  }
+
+  // ── 사실·사용량 ────────────────────────────────────────────────────────────────
+  //  ⚠ **말할 것이 없으면 통째로 숨긴다.** 늘 떠 있는 줄은 대화를 그만큼 밀어낸다.
+  let usageText = '';
+  const onlyNote = terminalOnlyNote(o.terminalOnly ?? []);
+  function paintInfo(): void {
+    const chips = factChips(facts);
+    const parts = [...chips, ...(usageText ? [usageText] : [])];
+    info.hidden = parts.length === 0 && !onlyNote;
+    info.replaceChildren(
+      ...parts.map((t) => el('span', { class: 'stk-fact', text: t })),
+      //  ⚠ 안내는 칩이 없어도 뜬다 — «못 하는 것» 을 아는 게 «무슨 모델인지» 아는 것보다 급하다.
+      onlyNote ? el('span', { class: 'stk-fact stk-only', text: onlyNote }) : null,
+    );
+  }
+  paintInfo();
+
+  // ── 슬래시 자동완성 ────────────────────────────────────────────────────────────
+  //  터미널에선 `/` 를 치면 목록이 뜬다. 웹에 그게 없으면 **기능 없음**이다(디자인 차이가 아니다).
+  const menu = el('div', { class: 'stk-slash', hidden: true });
+  let picks: ReturnType<typeof slashMatches> = [];
+  let sel = 0;
+  host.append(menu);
+
+  function closeMenu(): void { menu.hidden = true; picks = []; sel = 0; }
+
+  function paintMenu(): void {
+    const ta = o.input;
+    if (!ta) return;
+    const q = slashQuery(ta.value, ta.selectionStart ?? ta.value.length);
+    if (q === null || !(facts.commands?.length)) { closeMenu(); return; }
+    picks = slashMatches(facts.commands, q);
+    if (!picks.length) { closeMenu(); return; }
+    sel = Math.min(sel, picks.length - 1);
+    menu.hidden = false;
+    menu.replaceChildren(...picks.map((c, i) => el('div', {
+      class: 'stk-slash-row' + (i === sel ? ' is-sel' : ''),
+      //  ⚠ mousedown 으로 받는다 — click 은 blur 뒤에 와서 입력칸이 이미 포커스를 잃는다.
+      onmousedown: (ev: Event) => { ev.preventDefault(); choose(i); },
+    },
+      el('span', { class: 'stk-slash-name', text: '/' + c.name }),
+      c.description ? el('span', { class: 'stk-slash-desc', text: c.description }) : null,
+    )));
+  }
+
+  function choose(i: number): void {
+    const ta = o.input;
+    const c = picks[i];
+    if (!ta || !c) return;
+    const next = applySlash(ta.value, ta.selectionStart ?? ta.value.length, c.name);
+    ta.value = next.text;
+    ta.setSelectionRange(next.caret, next.caret);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));   // 입력칸 높이 자동조절이 따라오게
+    closeMenu();
+    ta.focus();
+  }
+
+  const onInput = (): void => paintMenu();
+  const onKey = (ev: KeyboardEvent): void => {
+    if (menu.hidden || !picks.length) return;
+    if (ev.key === 'ArrowDown') { sel = (sel + 1) % picks.length; paintMenu(); ev.preventDefault(); return; }
+    if (ev.key === 'ArrowUp') { sel = (sel - 1 + picks.length) % picks.length; paintMenu(); ev.preventDefault(); return; }
+    //  ⚠ Enter 는 **목록이 열려 있을 때만** 가로챈다 — 안 그러면 평소 보내기가 막힌다.
+    if (ev.key === 'Enter' || ev.key === 'Tab') { choose(sel); ev.preventDefault(); ev.stopPropagation(); return; }
+    if (ev.key === 'Escape') { closeMenu(); ev.preventDefault(); ev.stopPropagation(); }
+  };
+  if (o.input) {
+    o.input.addEventListener('input', onInput);
+    //  ⚠ capture 로 받는다 — 입력칸의 기존 Enter 처리(보내기)보다 **먼저** 봐야 가로챌 수 있다.
+    o.input.addEventListener('keydown', onKey, true);
+    o.input.addEventListener('blur', () => window.setTimeout(closeMenu, 120));
+  }
+
   function handle(ev: unknown): void {
-    const e = ev as { t?: string; tasks?: TaskInfo[] };
+    const e = ev as { t?: string; tasks?: TaskInfo[]; ask?: AskInfo; id?: string; facts?: FactsInfo; usage?: UsageInfo };
     //  ★ 서버가 접어서 스냅샷으로 준다 — 화면은 접지 않는다.
     if (e?.t === 'tasks.snapshot' && Array.isArray(e.tasks)) { tasks = e.tasks; paint(); return; }
+    if (e?.t === 'permission.asked' && e.ask?.id) { drawAsk(e.ask); return; }
+    //  다른 창에서 답했거나 시간이 지나 닫혔다 — 이 화면의 카드도 함께 접는다(죽은 버튼을 남기지 않는다).
+    if (e?.t === 'permission.resolved' && e.id) { settleAsk(e.id, '닫힘'); return; }
+    if (e?.t === 'facts' && e.facts) {
+      //  ⚠ **덮어쓰지 않고 겹친다** — 하네스는 사실을 조각조각 보낸다(모델 따로, MCP 따로).
+      //   통째로 갈면 방금 받은 슬래시 목록이 다음 조각에 지워진다.
+      facts = { ...facts, ...e.facts };
+      paintInfo(); paintMenu();
+      return;
+    }
+    if (e?.t === 'usage' && e.usage) { usageText = usageLine(e.usage) ?? usageText; paintInfo(); return; }
     //  ★ 모르는 이벤트는 조용히 건너뛴다(새 표면이 생겨도 화면이 안 깨진다).
   }
 
@@ -134,7 +309,11 @@ export function mountSessionTasks(host: HTMLElement, o: { sessionId: string }): 
       closed = true;
       clearInterval(tick);
       try { ctl.abort(); } catch { /* noop */ }
-      wrap.remove();
+      if (o.input) {
+        o.input.removeEventListener('input', onInput);
+        o.input.removeEventListener('keydown', onKey, true);
+      }
+      wrap.remove(); asksWrap.remove(); info.remove(); menu.remove();
     },
   };
 }

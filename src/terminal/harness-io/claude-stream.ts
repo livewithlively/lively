@@ -56,6 +56,22 @@ function commandsOf(v: unknown): SlashCommandInfo[] | undefined {
 }
 
 /**
+ * 승인 카드의 한 줄 제목 — «무엇을 하려는가».
+ *  ⚠ 도구 이름만 적으면 사람이 판단할 수 없다("Bash 를 허용할까요?" 는 아무 정보가 아니다).
+ *   명령·경로처럼 **사람이 읽고 결정할 수 있는 것**을 앞세운다.
+ */
+function askTitle(tool: string | undefined, input: unknown): string | undefined {
+  const i = rec(input);
+  const one = (v: unknown): string | undefined => {
+    const t = typeof v === "string" ? v : Array.isArray(v) ? v.map(String).join(" ") : undefined;
+    if (!t) return undefined;
+    const flat = t.replace(/\s+/g, " ").trim();
+    return flat.length > 160 ? flat.slice(0, 157) + "…" : flat;
+  };
+  return one(i?.command) ?? one(i?.file_path) ?? one(i?.path) ?? one(i?.url) ?? one(i?.pattern) ?? tool;
+}
+
+/**
  * 한 줄(파싱된 JSON) → 세션 이벤트.
  *  · 상태 축이 아닌 줄(대화·훅 소음)은 **null**.
  *  · 상태 축인데 못 알아본 것은 **`raw`** — 버리지 않는다(session-event.ts ★2).
@@ -64,6 +80,37 @@ export function claudeStreamEvent(line: unknown): SessionEvent | null {
   const o = rec(line);
   if (!o) return null;
   const type = String(o.type ?? "");
+
+  //  ── 승인 — claude 는 **제어 요청**으로 묻는다(실측 2.1.251). ────────────────────
+  //   {"type":"control_request","request_id":"…","request":{"subtype":"can_use_tool","tool_name":…,"input":…}}
+  //   ⚠ 이 줄은 **답을 기다린다**. 답하지 않으면 그 턴이 선다 — 그래서 어휘의 `permission.asked` 로
+  //    올리고, 런타임이 버스의 ask() 를 통해 «반드시 한 번» 답한다(runtime-bus 불변식).
+  //   ⚠ `interrupt`·`set_permission_mode` 등 **우리가 보낸 요청의 응답**(control_response)은 여기로
+  //    오지 않는다 — 그건 런타임이 id 로 짝짓는다.
+  if (type === "control_request") {
+    const r = rec(o.request) ?? {};
+    const sub = String(r.subtype ?? "");
+    const id = str(o.request_id);
+    if (!id) return { t: "raw", source: "claude", payload: o };
+    if (sub === "can_use_tool") {
+      return { t: "permission.asked", ask: {
+        id,
+        toolName: str(r.tool_name) ?? "도구",
+        input: r.input,
+        //  제목은 «무엇을 하려는가» 다 — 명령이면 명령줄, 아니면 도구 이름이 곧 제목이다.
+        title: askTitle(str(r.tool_name), r.input),
+        description: str(r.reason) ?? str(rec(r.permission_suggestions)?.reason),
+        //  «항상 허용» 감은 하네스가 준다(claude: permission_suggestions) — 우리가 지어내지 않는다.
+        suggestions: Array.isArray(r.permission_suggestions) ? r.permission_suggestions : undefined,
+      } };
+    }
+    //  ★ 물어보는 다른 종류(elicitation 등)도 **답이 필요하다** — 모른다고 삼키면 그 턴이 영영 선다.
+    //   낱말을 지어내지 않고 도구 이름 자리에 subtype 을 적어 카드가 뜨게 한다(사람이 판단한다).
+    return { t: "permission.asked", ask: {
+      id, toolName: sub || "확인", input: r, title: str(r.message) ?? str(r.question),
+      description: sub === "elicitation" ? "하네스가 확인을 요청했습니다" : undefined,
+    } };
+  }
 
   //  사용량 — 한도(구독 창)와 이번 턴 비용은 다른 사건이라 둘 다 usage 로 올린다.
   if (type === "rate_limit_event") {

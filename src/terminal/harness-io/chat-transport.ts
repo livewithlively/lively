@@ -106,10 +106,13 @@ export function perTurnTransport(o: {
   /** 하네스가 준 대화 id 를 기억한다 — 다음 턴이 그걸로 이어 붙는다(잃으면 새 대화가 열린다). */
   onConvId?: (id: string) => void;
   spawnFn?: (argv: string[], cwd: string) => ChildProcess;
-}): ChatTransportConn & { setConvId(id: string): void } {
+}): ChatTransportConn & { setConvId(id: string): void; abort(): boolean } {
   let convId = "";
   let closed = false;
   let lineCb: ((line: string) => void) | null = null;
+  //  ★ **지금 도는 턴의 프로세스**. 이 전송에는 «멈춤을 보낼 파이프» 가 없으므로(stdin 이 안 열린다)
+  //   멈춤은 곧 그 프로세스를 끝내는 것이다. 그래서 여기서 쥐고 있어야 한다.
+  let running: ChildProcess | null = null;
 
   return {
     onLine(fn) { lineCb = fn; },
@@ -122,6 +125,10 @@ export function perTurnTransport(o: {
         const child = o.spawnFn
           ? o.spawnFn(argv, o.cwd)
           : spawn(argv[0], argv.slice(1), { cwd: o.cwd, stdio: ["ignore", "pipe", "pipe"] });
+        running = child;
+        //  턴이 끝나면 놓는다 — 안 놓으면 다음 «멈춤» 이 이미 죽은 프로세스를 겨눈다(멈춘 척이 된다).
+        const release = (): void => { if (running === child) running = null; };
+        child.on("exit", release); child.on("error", release);
         const feed = lineSplitter((line) => {
           //  첫 줄(init)이 대화 id 를 준다 — 다음 턴이 그걸로 이어 붙는다.
           if (!convId && line.includes('"conversation_id"')) {
@@ -142,7 +149,16 @@ export function perTurnTransport(o: {
     //  ★ 프로세스가 없는 게 **정상**이다(턴 사이). 여기서 false 를 내면 런타임이 매 턴 뒤
     //   «죽었다» 며 승인을 마감하고 작업 목록을 비운다.
     alive: () => !closed,
-    close() { closed = true; },
+    //  ★ 멈춤 = 그 턴의 프로세스를 끝낸다. 도는 턴이 없으면 **false** — 멈춘 척하지 않는다.
+    abort() {
+      if (!running) return false;
+      try { running.kill("SIGTERM"); return true; } catch { return false; }
+    },
+    close() {
+      closed = true;
+      try { running?.kill("SIGTERM"); } catch { /* 이미 죽음 */ }
+      running = null;
+    },
   };
 }
 

@@ -20,6 +20,7 @@ import { codexAppServerEvent } from "./codex-stream.js";
 import { grokAcpEvent } from "./grok-stream.js";
 import { antigravityEvent } from "./antigravity-stream.js";
 import { opencodeEvent } from "./opencode-stream.js";
+import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
 import type { SessionEvent } from "./session-event.js";
 
 export type ChatTransport = "stdio-jsonl" | "jsonrpc-stdio" | "http-sse";
@@ -35,6 +36,20 @@ export interface ChatAdapter {
   translate: ((line: unknown) => SessionEvent | null) | null;
   /** 사람 말 → 그 하네스가 받는 한 줄. transport 가 stdio-jsonl 일 때만 쓴다. */
   encode: ((text: string) => string) | null;
+  /**
+   * 사람의 승인 답 → 그 하네스에 **돌려보낼 한 줄**. null = 파이프로 답하지 않는다.
+   *
+   *  ⚠ 이 축이 없으면 승인 카드는 **그릴 수는 있어도 답할 수가 없다** — 그러면 그 턴은 TTL 까지 서고
+   *   사람은 «눌렀는데 아무 일도 안 난다» 를 본다. 카드를 그리는 하네스는 반드시 이 축을 채운다.
+   *  ⚠ null 이라도 **답할 길이 없다는 뜻은 아니다**: opencode 는 REST(POST /permission/{id}/reply)라
+   *   줄이 아니고, codex 는 자기 런타임이 쥔다. 그 경우 런타임이 Entry.respond 를 직접 세운다.
+   */
+  respond?: ((o: { ask: PermissionAsk; value: PermissionAnswer; convId: string }) => string | null) | null;
+  /**
+   * 도는 턴 **멈추기** → 하네스에 보낼 한 줄. null = 이 하네스는 파이프로 못 멈춘다.
+   *  ⚠ 멈춤이 없으면 사람은 잘못 보낸 프롬프트를 **끝날 때까지 지켜봐야 한다**(터미널에선 Esc 한 번이다).
+   */
+  interrupt?: ((o: { convId: string }) => string | null) | null;
   /**
    * 이 하네스의 런타임을 **누가 쥐고 있나**. 값이 있으면 그 모듈이 프로세스를 띄우고 버스로 흘린다
    *  — 이 표는 번역만 제공한다(같은 프로세스를 두 자리가 띄우려 들면 대화가 둘로 갈린다).
@@ -58,6 +73,29 @@ const claudeChat: ChatAdapter = {
   },
   translate: claudeStreamEvent,
   encode: (text) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n",
+  //  ★ 승인 응답 — claude 는 **제어 응답**으로 받는다(control_request 의 짝).
+  //   ⚠ `request_id` 를 그대로 되돌려야 한다. 다른 값을 넣으면 claude 는 그 답을 자기 물음의 답으로
+  //    보지 않고, 그 턴은 영영 선다(짝이 안 맞는 답은 «답이 없는 것» 과 같다).
+  //   ⚠ 거부에 `message` 를 넣는다 — 그게 없으면 에이전트가 왜 막혔는지 모르고 같은 것을 다시 시도한다.
+  respond: ({ ask, value }) => JSON.stringify({
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: ask.id,
+      response: value.allow
+        ? { behavior: "allow", updatedInput: (ask.input ?? {}) as Record<string, unknown>,
+            //  «앞으로도» 는 하네스가 준 제안을 **그대로** 돌려줄 때만 성립한다(우리가 규칙을 짓지 않는다).
+            ...(value.scope === "always" && Array.isArray(ask.suggestions) && ask.suggestions.length
+              ? { updatedPermissions: ask.suggestions } : {}) }
+        : { behavior: "deny", message: "사용자가 거부했습니다" },
+    },
+  }) + "\n",
+  //  ★ 멈춤 — 같은 제어 통로다. 터미널의 Esc 한 번에 해당한다.
+  interrupt: () => JSON.stringify({
+    type: "control_request",
+    request_id: `int-${Date.now()}`,
+    request: { subtype: "interrupt" },
+  }) + "\n",
   note: "실측 완료(2026-08-31, 2.1.251) — 작업(local_bash·local_agent)·승인·슬래시·사용량 전부 확인.",
 };
 
@@ -94,6 +132,30 @@ const grokChat: ChatAdapter = {
   //   여는 단계(session/new — 인증 필요)를 갖추면 grokPromptLine(sessionId, text) 로 잇는다.
   //   ★ 봉투 자체는 실측으로 검증됐다(형식이 틀렸다면 다른 오류가 났다) — 남은 것은 id 한 개다.
   encode: null,
+  //  ★ 승인 응답 — ACP 는 **요청의 id 에 result 로** 답한다(JSON-RPC 규약).
+  //   ⚠ 선택지를 에이전트가 줬으면 **그중 하나의 optionId** 를 돌려줘야 한다 — 우리가 지어낸 값은
+  //    `-32602 invalid params` 로 튕기고 그 턴이 선다. 그래서 고른 것이 없으면 kind 로 고른다.
+  respond: ({ ask, value }) => {
+    const opts = (Array.isArray(ask.suggestions) ? ask.suggestions : []) as Array<Record<string, unknown>>;
+    const pick = (want: string[]): string | undefined => {
+      for (const w of want) {
+        const hit = opts.find((o) => String(o.kind ?? "") === w);
+        if (hit) return String(hit.optionId);
+      }
+      return undefined;
+    };
+    const optionId = value.optionId
+      ?? (value.allow
+        ? pick(value.scope === "always" ? ["allow_always", "allow_once"] : ["allow_once", "allow_always"])
+        : pick(["reject_once", "reject_always"]));
+    //  고를 것이 없으면 **취소**로 답한다 — 답을 안 하는 것보다 낫다(턴이 서지 않는다).
+    const outcome = optionId ? { outcome: "selected", optionId } : { outcome: "cancelled" };
+    return JSON.stringify({ jsonrpc: "2.0", id: Number(ask.id) || ask.id, result: { outcome } }) + "\n";
+  },
+  //  ★ 멈춤 — ACP `session/cancel` 은 **알림**이다(id 없음: 답을 안 준다).
+  interrupt: ({ convId }) => convId
+    ? JSON.stringify({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: convId } }) + "\n"
+    : null,
   runsVia: "grok-acp",
   note: "ACP 실측 완료(1.0.13·2026-09-01 로그인 후): initialize→session/new→session/prompt 왕복 성공(stopReason:end_turn). tool_call{_meta.kind:execute}·available_commands_update 수신. 승인은 always-approve 라 이번에 안 떠 미실측(raw 로 관측).",
 };

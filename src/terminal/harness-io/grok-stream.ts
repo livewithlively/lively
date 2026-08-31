@@ -69,6 +69,30 @@ export function grokAcpEvent(line: unknown): SessionEvent | null {
     return { t: "facts", facts };
   }
 
+  //  ── 승인 — ACP 는 **서버→클라이언트 요청**으로 묻는다(`session/request_permission`). ──
+  //   params: { sessionId, toolCall:{title,kind,rawInput,…}, options:[{optionId,name,kind}] }
+  //   ⚠ 이 줄에는 **`id` 가 있다**(알림이 아니라 요청이다). 답하지 않으면 그 턴이 선다 —
+  //    그래서 우리 어휘의 승인으로 올리고 런타임이 반드시 한 번 응답한다(runtime-bus 불변식).
+  //   ⚠ 선택지를 **우리가 지어내지 않는다**: 무엇을 고를 수 있는지는 에이전트가 `options` 로 준다.
+  //    (실측 노트: 이번 로그인 계정은 always-approve 라 이 줄이 안 떴다. 형식은 ACP 규약을 따른다.)
+  if (String(o.method ?? "") === "session/request_permission") {
+    const p = rec(o.params) ?? {};
+    const call = rec(p.toolCall) ?? {};
+    const id = o.id !== undefined && o.id !== null ? String(o.id) : "";
+    if (!id) return { t: "raw", source: "grok", payload: o };
+    const options = (Array.isArray(p.options) ? p.options : [])
+      .map((x) => rec(x))
+      .filter((x): x is Record<string, unknown> => !!x && typeof x.optionId === "string");
+    return { t: "permission.asked", ask: {
+      id,
+      toolName: str(call.kind) ?? str(call.title) ?? "도구",
+      title: str(call.title),
+      input: call.rawInput ?? call,
+      //  ACP 의 선택지를 **그대로** 나른다 — 화면이 이름을 그리고, 고른 optionId 를 되돌려준다.
+      suggestions: options.length ? options : undefined,
+    } };
+  }
+
   //  ── MCP 서버 목록(x.ai 확장) ──
   if (String(o.method ?? "") === "_x.ai/mcp/servers_updated") {
     const p = rec(o.params) ?? {};

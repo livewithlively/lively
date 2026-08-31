@@ -55,6 +55,7 @@ import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPromp
 import { cleanLastPrompt } from "./last-prompt.js";
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";
 import { sessionRuntimeMode } from "./session-runtime-mode.js";   // #2439 — 세션 런타임 모드(terminal|chat)                 // #1746 — 행에 대화창 능력(읽기·승인)
+import { terminalOnlyAxes } from "./harness-io/coverage.js";        // #2439 — 웹에서 못 하는 축(화면이 «터미널에서» 를 정확히 말한다)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
@@ -728,19 +729,38 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     req.on("close", () => { off(); clearInterval(beat); });
   }));
 
-  // 세션 상태 통로의 승인 답하기(#2439) — 화면이 카드에서 고른 값을 그대로 돌려준다.
-  //  ⚠ 값을 해석하지 않는다: 무엇이 유효한지는 **런타임이** 안다(하네스마다 다르다). 여기서는 «답이 왔다» 만 전한다.
+  // 세션 상태 통로의 승인 답하기(#2439) — 화면이 카드에서 고른 값을 돌려준다.
+  //  ⚠ 값은 **우리 어휘**(PermissionAnswer)다 — 하네스 낱말로 번역하는 것은 어댑터의 `respond` 다.
+  //   여기서 하네스 값을 그대로 받으면 화면이 하네스를 알아야 하고, 그러면 하네스마다 화면이 갈린다.
+  //  ⚠ 모양을 확인하되 **넓게 여는 쪽을 기본값으로 두지 않는다**: allow 가 불리언이 아니면 거부로 친다.
   app.post("/api/ui/terminal/sessions/:id/events/answer", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const id = String(b.id ?? "");
     if (!id) throw new HttpError(400, "요청 id 가 필요합니다");
+    const raw = (b.value ?? {}) as Record<string, unknown>;
+    const value = {
+      allow: raw.allow === true,
+      scope: raw.scope === "always" ? "always" as const : "once" as const,
+      ...(typeof raw.optionId === "string" && raw.optionId ? { optionId: raw.optionId } : {}),
+    };
     const { answer } = await import("./harness-io/runtime-bus.js");
-    const ok = answer(req.params.id, id, b.value);
+    const ok = answer(req.params.id, id, value);
     res.setHeader("Cache-Control", "no-store");
     //  없는 id = 이미 처리됐거나 만료. 실패로 던지지 않고 사실대로 알린다(화면이 카드를 접으면 된다).
     res.json({ ok, stale: !ok });
+  }));
+
+  // 돌던 턴 멈추기(#2439) — 하네스 **무관**. 터미널의 Esc 한 번에 해당한다.
+  //  ⚠ 못 멈추는 하네스는 `interrupted:false` 를 준다 — 화면이 그 사실로 «터미널에서 Esc» 안내를 가른다.
+  //   여기서 true 로 접으면 사람은 멈춘 줄 알고 기다리다 결과를 보고 놀란다.
+  app.post("/api/ui/terminal/sessions/:id/events/interrupt", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
+    const { interruptChat } = await import("./harness-io/claude-chat-runtime.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, interrupted: interruptChat(req.params.id) });
   }));
 
   // 승인 답하기 — 화면의 [허용]·[이번만]·[거부] 가 부른다.
@@ -838,6 +858,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       cmds.push(make(w.v));
     }
     res.setHeader("Cache-Control", "no-store");
+
+    //  ★ #2439 — **대화 런타임 세션은 pane 이 셸이다.** 그 tmux 에 `/model …` 을 타이핑하면
+    //   하네스가 아니라 **bash 가 받는다**(`/model: command not found`). 사람 눈엔 «바꿨다는데 안 바뀜» 이다.
+    //   그래서 chat 모드면 프롬프트와 **같은 통로**(대화 런타임)로 보낸다 — claude·grok 은 슬래시를
+    //   그 통로에서 처리한다(실측: stream-json 안에서 is_meta 로 돌고 API 비용 0).
+    const { sessionRuntimeMode } = await import("./session-runtime-mode.js");
+    if (sessionRuntimeMode({ harness: h.key }) === "chat") {
+      const { deliverPrompt } = await import("./deliver-prompt.js");
+      for (const c of cmds) await deliverPrompt(req.params.id, c, { owner: uid, nodeId });
+      res.json({ ok: true, harness: h.key, sent: cmds, via: "chat" });
+      return;
+    }
+
     if (nodeId) {
       // 노드 세션은 아웃박스 배달자가 닿지 않는다(tmux 가 그 컴퓨터에 있다) — 프롬프트와 같은 릴레이 경로.
       const { injectPrompt } = await import("../node/session-inject.js");
@@ -993,12 +1026,17 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     chat: ReturnType<typeof chatIoCaps>;
     chatMode: ReturnType<typeof codexChatMode>;
     runtimeMode: ReturnType<typeof sessionRuntimeMode>;
+    terminalOnly: string[];
   } => ({
     chat: chatIoCaps(harness),                       // #1746 하네스별 대화창 능력(읽기·승인)
     chatMode: codexChatMode({ harness }),            // 이 세션의 대화가 어디서 도나 — app-server 면 pane 이 셸이다
     //  #2439 — 하네스 **무관**한 런타임 모드. chat 이면 작업·승인·슬래시가 이벤트로 오므로 화면이
     //   상태 통로(SSE)를 연다. terminal 이면 열지 않는다 — 올 것이 없는 연결을 세션마다 만들지 않는다.
     runtimeMode: sessionRuntimeMode({ harness }),
+    //  ★ #2439 — **이 하네스가 웹에서 못 하는 것들.** 화면이 그 자리에서 «터미널에서 하세요» 를
+    //   정확히 말하기 위한 재료다. 이걸 안 주면 사람은 없는 기능을 찾아 헤매다 포기한다(막다른 길).
+    //   빈 배열 = 이 하네스는 웹만으로 전부 된다.
+    terminalOnly: terminalOnlyAxes(harness),
   });
   const withChatFields = <T extends { harness?: string }>(s: T): T => Object.assign(s, chatFieldsOf(String(s.harness || "")));
 

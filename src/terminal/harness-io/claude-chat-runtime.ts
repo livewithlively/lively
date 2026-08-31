@@ -24,9 +24,10 @@ import { logger } from "../../log.js";
 import { sessionSpawnArgv } from "../session-exec.js";
 import { memberSpawnArgv } from "../terminal-member-fs.js";
 import { chatAdapter } from "./chat-adapters.js";
+import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
 import { grokPromptLine } from "./grok-stream.js";
 import { perTurnTransport, stdioTransport, type ChatTransportConn } from "./chat-transport.js";
-import { clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
+import { ask, clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
 import type { SessionEvent } from "./session-event.js";
 
 /** 이 세션에서는 대화 런타임을 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
@@ -65,6 +66,18 @@ export interface Entry {
   convId: string;
   startedAt: number;
   closing: boolean;
+  /**
+   * 승인 답을 **하네스에 돌려보내는 길**. 기본은 표의 `respond` → 파이프로 한 줄.
+   *  ⚠ opencode 는 REST 라 줄이 아니다 — 그 ensure* 가 여기에 HTTP 호출을 꽂는다.
+   *   이 훅이 비어 있으면 카드는 떠도 답이 안 가고, 그 턴은 TTL 까지 선다.
+   */
+  respond?: (ask: PermissionAsk, value: PermissionAnswer) => void;
+  /**
+   * 도는 턴을 멈추는 길. 표의 `interrupt`(한 줄) 로 표현 안 되는 하네스가 여기에 자기 길을 꽂는다
+   *  — opencode 는 REST(POST /session/{id}/abort), antigravity 는 **프로세스 kill**(턴마다 프로세스라
+   *  보낼 파이프가 없다). 없으면 «못 멈춘다» 로 사실대로 답한다(멈춘 척하지 않는다).
+   */
+  interrupt?: () => boolean;
 }
 
 const live = new Map<string, Entry>();
@@ -118,6 +131,15 @@ export async function ensureOpencodeChat(o: ClaudeChatOpts): Promise<Entry> {
   });
 
   const e: Entry = { conn, harness: "opencode", sessionId: o.sessionId, convId, startedAt: Date.now(), closing: false };
+  //  ★ opencode 의 승인 응답은 **줄이 아니라 REST** 다(POST /permission/{id}/reply) — 읽기와 쓰기의
+  //   주소가 다른 하네스이므로 표의 `respond`(한 줄) 로는 표현되지 않는다. 그 지식을 여기 꽂는다.
+  const { opencodeReplyPermission, opencodeAbort } = await import("./opencode-serve.js");
+  e.respond = (askInfo, value) => {
+    void opencodeReplyPermission({ base, requestId: askInfo.id, allow: value.allow, always: value.scope === "always" })
+      .catch((err) => logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "opencode 승인 응답 실패"));
+  };
+  //  멈춤도 REST 다(읽기 SSE·쓰기 POST 인 하네스라 파이프로 보낼 줄이 없다).
+  e.interrupt = () => { void opencodeAbort({ base, opencodeSessionId: convId }); return true; };
   live.set(o.sessionId, e);
   conn.onLine((line) => {
     try { feedLine(e, line); }
@@ -153,6 +175,8 @@ export function ensureAntigravityChat(o: ClaudeChatOpts): Entry {
   });
   if (e.convId) conn.setConvId(e.convId);
   e.conn = conn;
+  //  멈춤은 **프로세스 kill** 이다 — 이 하네스는 stdin 스트림이 벤더 미구현이라 보낼 줄이 없다.
+  e.interrupt = () => conn.abort();
   live.set(o.sessionId, e);
   conn.onLine((line) => {
     try { feedLine(e, line); }
@@ -258,7 +282,48 @@ function feedLine(e: Entry, line: string): void {
   if (!e.convId && typeof sid === "string" && sid) e.convId = sid;
   const translate = chatAdapter(e.harness)?.translate;
   const ev: SessionEvent | null = translate ? translate(parsed) : null;
-  if (ev) emitSessionEvent(e.sessionId, ev);
+  if (!ev) return;
+
+  //  ★ 승인은 **그냥 흘리지 않는다.** 이건 알림이 아니라 «답을 기다리는 물음» 이다 —
+  //   버스의 ask() 에 걸어 두고(화면이 카드를 그린다), 사람이 답하면 하네스로 돌려보낸다.
+  //   ⚠ 그냥 emit 만 하면 화면엔 카드가 뜨는데 눌러도 아무 데도 안 가고 그 턴은 영영 선다.
+  //    이 프로젝트가 «반쪽 UX» 라 불린 상태가 정확히 그 모양이었다.
+  if (ev.t === "permission.asked") {
+    const askInfo = ev.ask;
+    void ask<PermissionAnswer>(e.sessionId, askInfo.id, askInfo, DENY).then((value) => {
+      try { respondTo(e, askInfo, value); }
+      catch (err) { logger.warn({ sessionId: e.sessionId, id: askInfo.id, err: (err as Error)?.message }, "승인 응답 전송 실패"); }
+    });
+    return;
+  }
+  emitSessionEvent(e.sessionId, ev);
+}
+
+/** 답을 못 받았을 때의 기본값 — **거부**다(모르면 넓게 열지 않는다). */
+const DENY: PermissionAnswer = { allow: false, scope: "once" };
+
+/** 승인 답을 하네스로 돌려보낸다 — Entry 의 훅이 있으면 그것, 없으면 표의 `respond` 로 한 줄. */
+function respondTo(e: Entry, askInfo: PermissionAsk, value: PermissionAnswer): void {
+  if (e.respond) { e.respond(askInfo, value); return; }
+  const respond = chatAdapter(e.harness)?.respond;
+  const line = respond ? respond({ ask: askInfo, value, convId: e.convId }) : null;
+  //  ⚠ 답할 길이 없으면 **로그로 남긴다** — 조용히 삼키면 «왜 안 되지» 를 아무도 못 찾는다.
+  if (!line) { logger.warn({ sessionId: e.sessionId, harness: e.harness }, "이 하네스는 승인 응답 경로가 없다 — 턴이 설 수 있다"); return; }
+  e.conn.send(line.trimEnd());
+}
+
+/**
+ * 도는 턴을 멈춘다 — 터미널의 Esc 한 번에 해당한다.
+ *  ⚠ 못 멈추는 하네스는 **false 를 준다**(있는 척하지 않는다). 화면이 그 사실로 안내를 가른다.
+ */
+export function interruptChat(sessionId: string): boolean {
+  const e = live.get(sessionId);
+  if (!e) return false;
+  if (e.interrupt) return e.interrupt();
+  const make = chatAdapter(e.harness)?.interrupt;
+  const line = make ? make({ convId: e.convId }) : null;
+  if (!line) return false;
+  return e.conn.send(line.trimEnd());
 }
 
 /**
