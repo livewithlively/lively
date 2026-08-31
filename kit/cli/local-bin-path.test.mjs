@@ -60,20 +60,37 @@ test("경계 개행 없이 끝나는 rc 앞에는 개행을 넣는다", () => {
 const code = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const CLI = code(readFileSync(join(HERE, "lively.mjs"), "utf8"));
 
-// 9) claude 를 **우리가 깔았을 때만** 심는다 — 안 깔았으면 남의 PATH 를 안 건드린다.
-test("9 claude 설치 직후에만 PATH 를 심는다", () => {
-  const i = CLI.indexOf("claude.ai/install.sh");
-  assert.ok(i > 0, "설치 호출을 못 찾았다");
-  const after = CLI.slice(i, i + 600);
-  assert.ok(/wireLocalBinPath\(\)/.test(after), "설치 직후에 안 부른다");
-  //  정의(`function wireLocalBinPath()`)는 빼고 **호출**만 센다 — 호출이 여러 곳이면 우리가 안 깐 경우에도 심게 된다.
-  const calls = (CLI.match(/(?<!function )wireLocalBinPath\(\)/g) || []).length;
+// 9) 하네스를 **우리가 깔았을 때만** 심는다 — 안 깔았으면 남의 PATH 를 안 건드린다.
+//  ⚠ #2255 로 설치 URL 이 이 파일에서 **표**(kit/hooks/harness-registry.mjs 의 install 축)로 옮겨갔다.
+//   그래서 "claude.ai/install.sh 다음 줄" 로 고정하던 종전 단언은 성립하지 않는다. 지키려는 사실은 그대로다:
+//   ① 호출은 **한 곳**뿐이고 ② 그 자리는 **설치기를 실제로 돌린 뒤**이며 ③ **설치기가 스스로 안 심을 때만** 부른다.
+test("9 하네스를 깐 직후에만, 설치기가 안 심을 때만 PATH 를 심는다", () => {
+  //  정의(`function wireLocalBinPath(`)는 빼고 **호출**만 센다 — 호출이 여러 곳이면 우리가 안 깐 경우에도 심게 된다.
+  const calls = (CLI.match(/(?<!function )wireLocalBinPath\(/g) || []).length;
   assert.equal(calls, 1, `호출은 설치 직후 한 곳뿐이어야 한다(지금 ${calls}곳)`);
+  //  ⚠ 정의(`function runInstaller(plan) {`)가 아니라 **호출**을 앵커로 잡는다 — indexOf 는 정의를 먼저 찾는다.
+  const i = CLI.indexOf("= runInstaller(plan)");
+  assert.ok(i > 0, "설치기 실행 지점을 못 찾았다");
+  const after = CLI.slice(i, i + 900);
+  assert.ok(/wireLocalBinPath\(/.test(after), "설치 직후에 안 부른다");
+  assert.ok(/if \(!plan\.wiresPath && plan\.binDir\) wireLocalBinPath\(plan\.binDir\)/.test(CLI),
+    "설치기가 스스로 PATH 를 심는 하네스에도 또 심으면 rc 에 중복 블록이 쌓인다");
 });
 
-// 7) Windows 는 대상이 아니다 — 거기선 우리가 claude 를 안 깐다(안내만 한다).
-test("7 Windows 에서는 아무것도 하지 않는다", () => {
-  assert.ok(/function wireLocalBinPath\(\) \{\s*if \(WIN\) return;/.test(CLI), "win32 조기 반환이 없다");
+// 7) Windows 는 rc 축이 아니다 — 거기선 PATH 가 User 환경변수고, 공급사 설치기들이 직접 잡는다.
+test("7 Windows 에서는 rc 를 건드리지 않는다", () => {
+  //  기본값에 join(...) 이 들어 있어 인자부에 `)` 가 있다 — `[^)]` 로 끊으면 그 자체가 오탐이다.
+  assert.ok(/function wireLocalBinPath\([^{]*\)\s*\{\s*if \(WIN\) return;/.test(CLI), "win32 조기 반환이 없다");
+});
+
+// 10) 표가 실제로 그 설치기를 가리키나 — URL 이 코드에서 표로 옮겨갔으므로 **표를 검사**한다.
+//  (이게 없으면 위 9번은 "무언가를 깐 뒤"까지만 보고 무엇을 까는지는 아무도 안 본다.)
+test("10 표의 claude POSIX 설치 경로가 공식 설치기다", async () => {
+  const { installPlanFor } = await import(pathToFileURL(join(HERE, "..", "hooks", "harness-registry.mjs")));
+  const plan = installPlanFor("claude", { platform: "darwin", homeDir: "/h" });
+  assert.ok(plan.cmd.includes("claude.ai/install.sh"), `표가 가리키는 곳: ${plan.cmd}`);
+  assert.equal(plan.wiresPath, false, "claude POSIX 설치기는 rc 를 안 건드린다 — 그래서 우리가 심는다");
+  assert.equal(plan.binDir, "/h/.local/bin");
 });
 
 // 4) pristine 백업은 **한 번만** — 두 번째 실행이 백업을 덮으면 복구가 죽는다.
