@@ -36,14 +36,17 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: { ow
   //  **판정 조건이 같은 모양**(모드 + 살아있음)이라 나란히 두면 다음 하네스를 얹을 자리가 분명해진다.
   //  ⚠ codex 와 같은 이유로 «이 박스의 tmux 에 그 세션이 실제로 있나» 로 가른다 — 노드 등록 여부로
   //   가르면 게이트웨이 박스가 노드로도 등록된 배포에서 이 분기가 통째로 무시된다(#2055 실측 함정).
-  if (sessionRuntimeMode({ harness: await sessionHarnessKey(sessionId) }) === "chat"
+  const harnessKey = await sessionHarnessKey(sessionId);
+  if (sessionRuntimeMode({ harness: harnessKey }) === "chat"
       && !(await sessionGone(sessionId))) {
     const { sendClaudeChat, ClaudeChatUnavailable } = await import("./harness-io/claude-chat-runtime.js");
     try {
       const dir = await sessionDir(sessionId);
       const osUser = await sessionOsUser(sessionId);
       const st = await getSessionState(sessionId);
-      const r = sendClaudeChat({ sessionId, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
+      //  ⚠ 하네스를 **넘긴다** — 런타임은 하네스 무관이고 표에서 argv·번역·인코딩을 꺼낸다.
+      //   안 넘기면 claude 로 폴백해 «codex 세션에 claude 를 띄우는» 사고가 난다.
+      const r = sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
       return { ok: true, delivered: true, transport: "chat-runtime", thread_id: r.convId, steered: false };
     } catch (e) {
       if (!(e instanceof ClaudeChatUnavailable)) throw e;

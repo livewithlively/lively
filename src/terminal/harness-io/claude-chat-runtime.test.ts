@@ -142,4 +142,37 @@ await t("[9] 같은 세션에 두 번 ensure 하면 프로세스는 하나다", 
   stopClaudeChat(S, "테스트 정리");
 });
 
+await t("[10] ★ 하네스 무관 — 같은 런타임이 antigravity 를 연다(두 번째 런타임을 만들지 않는다)", async () => {
+  const S = "r10"; resetSessionBus(S);
+  const got: SessionEvent[] = [];
+  onSessionEvent(S, (e) => got.push(e));
+  const child = fakeChild();
+  //  ⚠ argv 는 **표가 정본**이다 — 여기서 손으로 적지 않는다. antigravity 는 argv 가 null 이라
+  //   (다중 턴 왕복 미실측) 런타임이 «못 연다» 고 말해야 한다. 있는 척하면 빈 세션이 열린다.
+  assert.throws(
+    () => ensureClaudeChat({ sessionId: S, harness: "antigravity", cwd: "/tmp", osUser: null, spawnFn: () => child } as any),
+    ClaudeChatUnavailable,
+    "표에 argv 가 없으면 런타임이 거부한다",
+  );
+  //  claude 는 표에 argv 가 있으니 열린다 — **같은 함수**로.
+  ensureClaudeChat(opts(S, child) as any);
+  child.stdout.write(JSON.stringify({ type: "system", subtype: "task_started", task_id: "T", task_type: "local_agent", description: "리뷰", subagent_type: "x", spawn_depth: 1 }) + "\n");
+  await new Promise((r) => setImmediate(r));
+  const snap = got.find((e) => e.t === "tasks.snapshot");
+  assert.equal((snap as any).tasks[0].kind, "agent");
+  stopClaudeChat(S, "테스트 정리");
+});
+
+await t("[11] ★ 인코딩을 모르는 하네스엔 말을 못 건다 — 있는 척하지 않는다", () => {
+  const S = "r11"; resetSessionBus(S);
+  //  grok·opencode·antigravity 는 translate 는 있는데 encode 가 없다(보내는 쪽 왕복 미실측).
+  //  그 상태에서 보내기가 «성공» 하면 사람은 답을 영영 기다린다.
+  for (const h of ["grok", "opencode", "antigravity"]) {
+    assert.throws(
+      () => sendClaudeChat({ sessionId: S, harness: h, cwd: "/tmp", osUser: null, text: "안녕", spawnFn: () => fakeChild() } as any),
+      ClaudeChatUnavailable, `${h}: 인코딩이 없으면 거부한다`,
+    );
+  }
+});
+
 console.log(`\n${pass}건 통과`);

@@ -1,4 +1,8 @@
-// claude 대화 런타임 (#2439 ②) — 세션 하나당 `claude --input-format stream-json` 프로세스 하나를 쥐고 산다.
+// 대화 런타임 (#2439) — 세션 하나당 하네스 프로세스/연결 하나를 쥐고 산다. **하네스 무관**.
+//
+//  ⚠ 이름이 `claude-*` 인 것은 처음 claude 로 세운 자취다. 지금은 전송(chat-transport)과 어댑터 표
+//   (chat-adapters)를 받아 **어느 하네스든** 연다 — 그래서 두 번째 런타임을 만들 이유가 없다.
+//   두 벌이 되면 「모든 요청은 반드시 한 번 답한다」 같은 불변식이 갈리고, 반드시 한쪽이 빠진다.
 //
 //  ── 무엇을 대체하나 ──────────────────────────────────────────────────────────────
 //  terminal 모드에서 쓰기 축은 tmux send-keys(아웃박스 경유)였고, 읽기 축은 대화 파일 tail 이었다.
@@ -15,11 +19,12 @@
 //  ── 왜 stdin 을 열어 두나 ────────────────────────────────────────────────────────
 //  `--input-format stream-json` 은 stdin 이 닫히면 프로세스가 끝난다. 세션이 사는 동안 계속 말을 걸어야
 //  하므로 파이프를 잡고 있는다. 그래서 **종료 경로가 중요하다** — 안 닫으면 컨테이너에 프로세스가 쌓인다.
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { logger } from "../../log.js";
 import { sessionSpawnArgv } from "../session-exec.js";
 import { memberSpawnArgv } from "../terminal-member-fs.js";
-import { claudeStreamEvent } from "./claude-stream.js";
+import { chatAdapter } from "./chat-adapters.js";
+import { stdioTransport, type ChatTransportConn } from "./chat-transport.js";
 import { clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
 import type { SessionEvent } from "./session-event.js";
 
@@ -37,6 +42,8 @@ export class ClaudeChatUnavailable extends Error {
 
 export interface ClaudeChatOpts {
   sessionId: string;
+  /** 어느 하네스인가. 없으면 claude(이 파일이 claude 로 시작한 자취 — 호출부가 점차 명시로 옮긴다). */
+  harness?: string;
   /** 턴이 도는 작업 폴더. */
   cwd: string;
   /** 격리 멤버 OS 계정. null 이면 비격리 배포 — 게이트웨이 uid 로 띄운다. */
@@ -49,34 +56,25 @@ export interface ClaudeChatOpts {
 }
 
 interface Entry {
-  child: ChildProcess;
+  conn: ChatTransportConn;
+  /** 이 세션이 어느 하네스로 도나 — 번역기·인코딩을 그 표에서 꺼낸다. */
+  harness: string;
   sessionId: string;
   /** 하네스가 알려준 이 대화의 id(init 에서 온다) — 재개·대화 파일 찾기의 단서. */
   convId: string;
-  /** 줄 경계가 안 맞는 꼬리(청크가 줄 가운데서 끊긴다). */
-  carry: string;
   startedAt: number;
   closing: boolean;
 }
 
 const live = new Map<string, Entry>();
 
-/** (순수 — 테스트 seam) 이 세션의 claude 를 대화 런타임으로 띄울 argv. */
-export function claudeChatArgv(o: { convId?: string | null; model?: string | null }): string[] {
-  const argv = [
-    "claude", "--print",
-    "--input-format", "stream-json",
-    "--output-format", "stream-json",
-    "--verbose",
-    //  우리가 보낸 말을 되돌려 받아 **배달 확인**에 쓴다(에코를 화면에서 찾지 않아도 된다).
-    "--replay-user-messages",
-    //  서브에이전트 발화를 parent_tool_use_id 를 달아 흘려 준다 — 작업 표면이 그걸로 귀속한다.
-    "--forward-subagent-text",
-  ];
-  if (o.model) argv.push("--model", String(o.model));
-  //  ⚠ 대화 이어받기는 **있을 때만**. 없는 id 로 --resume 하면 프로세스가 즉시 죽는다.
-  if (o.convId) argv.push("--resume", String(o.convId));
-  return argv;
+/**
+ * (순수 — 테스트 seam) 이 하네스를 대화 런타임으로 띄울 argv. **표가 정본**이다(chat-adapters).
+ *  여기 손으로 적으면 표와 갈리고, 갈리는 순간 «표엔 열린다는데 실제로는 다른 명령» 이 된다.
+ */
+export function claudeChatArgv(o: { harness?: string; convId?: string | null; model?: string | null }): string[] {
+  const a = chatAdapter(o.harness ?? "claude");
+  return a?.argv ? a.argv(o) : [];
 }
 
 /**
@@ -106,29 +104,22 @@ export function stopClaudeChat(sessionId: string, reason: string): boolean {
   live.delete(sessionId);
   settleAll(sessionId, reason);
   clearSessionTasks(sessionId);   // 죽은 세션의 «도는 중» 이 화면에 남지 않게
-  try { e.child.stdin?.end(); } catch { /* 이미 닫혔다 */ }
-  try { e.child.kill("SIGTERM"); } catch { /* 이미 죽었다 */ }
+  e.conn.close();
   logger.info({ sessionId, reason, aliveMs: Date.now() - e.startedAt }, "claude 대화 런타임 종료");
   return true;
 }
 
-/** 줄 단위로 잘라 번역기에 먹인다 — 청크는 줄 가운데서 끊긴다(carry). */
-function feed(e: Entry, chunk: string): void {
-  const text = e.carry + chunk;
-  const lines = text.split("\n");
-  e.carry = lines.pop() ?? "";
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || line[0] !== "{") continue;
-    let parsed: unknown;
-    try { parsed = JSON.parse(line); }
-    catch { continue; }   // 사람이 읽을 로그가 섞여 나올 수 있다 — 조용히 건너뛴다
-    //  대화 id 는 첫 init 에서 온다. 재개·대화 파일 찾기의 단서라 잡아 둔다.
-    const sid = (parsed as { session_id?: unknown })?.session_id;
-    if (!e.convId && typeof sid === "string" && sid) e.convId = sid;
-    const ev: SessionEvent | null = claudeStreamEvent(parsed);
-    if (ev) emitSessionEvent(e.sessionId, ev);
-  }
+/** 한 줄 → 번역기 → 버스. 줄 자르기는 전송이 이미 했다(chat-transport.lineSplitter). */
+function feedLine(e: Entry, line: string): void {
+  if (line[0] !== "{") return;                 // 사람이 읽을 로그가 섞여 나온다 — 조용히 건너뛴다
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return; }
+  //  대화 id 는 첫 init 에서 온다. 재개·대화 파일 찾기의 단서라 잡아 둔다.
+  const sid = (parsed as { session_id?: unknown })?.session_id;
+  if (!e.convId && typeof sid === "string" && sid) e.convId = sid;
+  const translate = chatAdapter(e.harness)?.translate;
+  const ev: SessionEvent | null = translate ? translate(parsed) : null;
+  if (ev) emitSessionEvent(e.sessionId, ev);
 }
 
 /**
@@ -139,39 +130,43 @@ export function ensureClaudeChat(o: ClaudeChatOpts): Entry {
   const found = live.get(o.sessionId);
   if (found) return found;
 
-  const argv = claudeChatSpawnArgv(o.sessionId, o.osUser, claudeChatArgv(o));
-  if (!argv.length) throw new ClaudeChatUnavailable("실행 경계를 만들지 못했습니다");
+  const harness = o.harness ?? "claude";
+  const argv = claudeChatSpawnArgv(o.sessionId, o.osUser, claudeChatArgv({ ...o, harness }));
+  if (!argv.length) throw new ClaudeChatUnavailable(`이 하네스는 대화 런타임을 못 엽니다(${harness})`);
 
-  let child: ChildProcess;
+  let conn: ChatTransportConn;
   try {
-    child = o.spawnFn
-      ? o.spawnFn(argv, o.cwd)
-      : spawn(argv[0], argv.slice(1), { cwd: o.cwd, stdio: ["pipe", "pipe", "pipe"] });
+    //  ⚠ 지금은 stdio 만 연다. http-sse(opencode)는 «서버를 띄우고 포트를 잡는» 선행 단계가 있어
+    //   여기서 바로 못 만든다 — 그 단계가 생기면 sseTransport 로 갈아 끼우면 되고, 아래는 안 바뀐다.
+    conn = stdioTransport(argv, o.cwd, {
+      spawnFn: o.spawnFn,
+      onStderr: (text) => logger.warn({ sessionId: o.sessionId, harness, stderr: text.slice(0, 500) }, "대화 런타임 stderr"),
+    });
   } catch (err) {
     throw new ClaudeChatUnavailable("대화 런타임을 띄우지 못했습니다", err);
   }
 
-  const e: Entry = { child, sessionId: o.sessionId, convId: String(o.convId || ""), carry: "", startedAt: Date.now(), closing: false };
+  const e: Entry = { conn, harness, sessionId: o.sessionId, convId: String(o.convId || ""), startedAt: Date.now(), closing: false };
   live.set(o.sessionId, e);
 
-  child.stdout?.setEncoding("utf8");
-  child.stdout?.on("data", (c: string) => { try { feed(e, c); } catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); } });
-  //  stderr 는 사람이 읽을 진단이다. 이벤트로 올리지 않되 버리지도 않는다.
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (c: string) => { const s = String(c).trim(); if (s) logger.warn({ sessionId: o.sessionId, stderr: s.slice(0, 500) }, "claude 대화 런타임 stderr"); });
+  conn.onLine((line) => {
+    try { feedLine(e, line); }
+    catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
+  });
 
   //  ★ 죽으면 **반드시** 마감한다 — 걸려 있던 승인이 있으면 그 턴은 영영 안 끝난다.
-  const onGone = (why: string) => () => {
-    if (e.closing) return;
-    live.delete(o.sessionId);
-    settleAll(o.sessionId, why);
+  //   전송이 alive=false 가 되는 순간을 폴링으로 잡는다(전송마다 종료 이벤트 모양이 다르므로 한 규약으로).
+  const watch = setInterval(() => {
+    if (e.closing || conn.alive()) return;
+    clearInterval(watch);
+    if (live.get(o.sessionId) === e) live.delete(o.sessionId);
+    settleAll(o.sessionId, "런타임 종료");
     clearSessionTasks(o.sessionId);
-    logger.warn({ sessionId: o.sessionId, why, aliveMs: Date.now() - e.startedAt }, "claude 대화 런타임이 끝났다");
-  };
-  child.on("exit", onGone("exit"));
-  child.on("error", onGone("error"));
+    logger.warn({ sessionId: o.sessionId, harness, aliveMs: Date.now() - e.startedAt }, "대화 런타임이 끝났다");
+  }, 1000);
+  if (typeof watch.unref === "function") watch.unref();   // 이 감시가 프로세스를 붙잡지 않게
 
-  logger.info({ sessionId: o.sessionId, resumed: !!o.convId }, "claude 대화 런타임 시작");
+  logger.info({ sessionId: o.sessionId, harness, resumed: !!o.convId }, "대화 런타임 시작");
   return e;
 }
 
@@ -183,16 +178,14 @@ export function ensureClaudeChat(o: ClaudeChatOpts): Entry {
 export function sendClaudeChat(o: ClaudeChatOpts & { text: string }): { convId: string } {
   const text = String(o.text || "");
   if (!text.trim()) throw new ClaudeChatUnavailable("보낼 내용이 없습니다");
-  const e = ensureClaudeChat(o);
-  const line = JSON.stringify({
-    type: "user",
-    message: { role: "user", content: [{ type: "text", text }] },
-  }) + "\n";
-  const ok = e.child.stdin?.write(line);
-  if (ok === false) logger.warn({ sessionId: o.sessionId }, "대화 런타임 stdin 이 밀렸다 — 버퍼가 비면 나간다");
-  if (!e.child.stdin || e.child.stdin.destroyed) {
-    stopClaudeChat(o.sessionId, "stdin 닫힘");
-    throw new ClaudeChatUnavailable("대화 런타임에 말을 걸 수 없습니다(stdin 닫힘)");
+  const harness = o.harness ?? "claude";
+  const encode = chatAdapter(harness)?.encode;
+  //  인코딩을 모르면 **말을 걸 수 없다** — 표가 그 사실을 안다(있는 척하지 않는다).
+  if (!encode) throw new ClaudeChatUnavailable(`이 하네스는 아직 말을 걸 수 없습니다(${harness})`);
+  const e = ensureClaudeChat({ ...o, harness });
+  if (!e.conn.send(encode(text))) {
+    stopClaudeChat(o.sessionId, "전송 실패");
+    throw new ClaudeChatUnavailable("대화 런타임에 말을 걸 수 없습니다");
   }
   return { convId: e.convId };
 }
