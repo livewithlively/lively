@@ -800,11 +800,17 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
+    aiHarness: '',          // #2255 고른 AI 의 **하네스 id** — `lively install` 이 이 값을 읽어 그것만 깐다(라벨은 못 읽는다)
     local: null,            // #1879 내 컴퓨터 설치 — 'done'|'getting'|'later'
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
     drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
-    upN: 0, upBusy: 0,      // #1881 실업로드 — 자료로 등록된 파일 수 / 올리는 중 수(연출 아님)
+    upN: 0, upBusy: 0,      // #1881 실업로드 — **올라간** 파일 수 / 올리는 중 수(연출 아님)
+    //  ⚠ upN(올라감)과 upIn(자료로 등록됨)은 **다른 수**다. 서버는 등록까지 됐을 때만 응답에 source_id 를 싣는다
+    //   (terminal-files.ts). 둘을 같은 것으로 보면 «읽는 중» 이 영영 안 끝난다 — 실측 2026-08-31: 13개를 올렸는데
+    //   11개만 등록돼 진행률이 11/13 에서 멈췄고, 폴러엔 상한이 없어 무한히 돌았다.
+    upIn: 0,                // 자료로 **등록된** 수 — 읽기 진행률의 목표는 이 수다
+    upFail: [],             // 올라갔지만 등록 안 된 파일 이름 — 사람에게 사실대로 말하려고 든다
     upFiles: [],            // #2232 받은 파일 목록 [{n,r,s,st}] — 화면에 보이는 근거(상한 UP_KEEP)
     aiDone: [],             // #2232 이 온보딩에서 로그인을 확인한 AI 하네스 키들 — «다른 AI 도?» 화면의 체크 근거
     b2: null, b3: null, nowline: null, firstOrder: null, decisions: [], notes: [],
@@ -1524,7 +1530,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             const it = items[i], row = rows[i];
             const rel = 'uploads/' + String(it.rel || it.file.name).replace(/^\/+/, '');
             try {
-              await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              //  응답에 source_id 가 있으면 **자료로 등록까지** 된 것이다. 없으면 파일만 올라갔다 —
+              //   그 차이를 여기서 안 세면 뒤(읽기 진행률)에서 «오지 않는 것» 을 기다리게 된다.
+              if (up && up.source_id) { S.upIn++; } else { S.upFail.push(it.file.name); if (row) row.st = 'part'; }
               // ⚠ 종전엔 응답의 source_id 가 있을 때만 셌다. 그런데 그 필드는 **자료 등록까지 성공했을 때만** 실린다
               //  (terminal-files.ts: `...(ing?.ingested ? { source_id } : {})`) — 등록이 조용히 실패하면 파일은 올라갔는데
               //  화면은 0개로 남아 «계속» 이 영영 안 켜졌다(실측 2026-08-26 원준님 신고). 올라간 건 올라간 것으로 센다.
@@ -1918,7 +1927,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
-          S.ai = c.dataset.opt; AIC = null; save(); renderSB(); await sleep(200);
+          setAi(c.dataset.opt); AIC = null; save(); renderSB(); await sleep(200);
           goScene(S.ai === '아직 없어요' ? 'sources' : 'claude');
         });
         $('[data-skip]', el).onclick = () => goScene('sources');
@@ -1986,10 +1995,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // ── CLI 가 이 자리에 없다. 로그인 절차를 보여 줘도 첫 줄에서 command not found 가 난다 —
         //    그러니 로그인을 시키지 않고 **없다는 사실**을 말한다(사람이 해야 할 일이 아예 다르다).
         if (c.installed === false) {
+          //  #2255 — 종전엔 여기서 «라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요» 로 **중앙 박스만**
+          //   가리켰다. 로컬로 쓰려는 사람에겐 답이 아니다(고르게는 해 놓고 이을 길이 없는 자리 — #1879 가
+          //   그록·제미나이에서 고친 것과 같은 모양의 잔재였다). 이제 진짜 답을 말한다: **다음 화면에서
+          //   이 컴퓨터를 이으면 그 AI 를 설치까지 해 준다**(`lively install` 이 고른 값을 서버에서 읽어 온다).
           return qHead('claude', lead, `이 자리엔 ${picked}${josa(S.ai, 0)} 아직 없어요.`,
             `${picked}${josa(S.ai, 1)} 쓰려면 그 CLI(<code>${bin}</code>)가 먼저 깔려 있어야 합니다.`)
             + `<div class="ob-tok">
-                <p class="ob-note">라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요. ${picked}${josa(S.ai, 2)} 그 CLI 가 깔린 내 컴퓨터를 연결해 두시면 그대로 쓸 수 있습니다(다음 화면).</p>
+                <p class="ob-note">여기(라이블리 서버)에는 Claude 와 ChatGPT 가 준비돼 있어요. <b>${picked}</b>${josa(S.ai, 2)} <b>내 컴퓨터</b>에서 씁니다 — 다음 화면에서 이 컴퓨터를 이어 두시면 <b>${picked}${josa(S.ai, 0)} 없을 때 설치까지 같이 해 드립니다</b>(무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요).</p>
                 ${otherNote}
               </div>`
             + (keepBtn ? keepBtn.replace('ob-btn-sub', 'ob-btn-pri') : '')
@@ -2092,7 +2105,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           }
         };
         // 다른 AI 도 연결하기 — 고른 것을 바꿔 같은 장면을 다시 연다(판정은 새로 묻는다).
-        $$('[data-more]', el).forEach((b) => b.onclick = () => { S.ai = b.dataset.more; AIC = null; save(); renderSB(); renderScene('claude', false); });
+        $$('[data-more]', el).forEach((b) => b.onclick = () => { setAi(b.dataset.more); AIC = null; save(); renderSB(); renderScene('claude', false); });
         // 다른 AI 가 이미 연결돼 있을 때의 문 — 고른 것을 못 연결했다고 사람을 가두지 않는다.
         //  (분석은 서버가 resolveHeadlessHarness 로 고른 **실제 로그인된** 하네스로 돈다.)
         const keep = $('#cKeep', el);
@@ -2170,6 +2183,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //  #2232 — [응용 프로그램]·[승인] 같은 대괄호 표기는 화면에서 못생겼다(원준님 2026-08-28) → 누를 것은 키캡(ob-kbd)으로,
         //   «앱 받기» 는 글 안에서도 **진짜 버튼**으로(눌러도 받아진다). 문장 사이 하이픈(—)도 걷었다.
         const getBtn = '<button type="button" class="ob-btn ob-btn-sub ob-btn-inline ob-btn-mini" data-get>앱 받기</button>';
+        //  #2255 — 고른 AI 가 이 컴퓨터에 없으면 **설치까지** 여기서 끝난다. 그 사실을 이름을 불러 말한다.
+        //   («어떤 AI 를 쓰세요» 에 답한 사람에게 그 답이 어디로 갔는지 보여 주는 자리이기도 하다.)
+        //   값이 없거나 '아직 없어요' 를 고른 사람에겐 아무 말도 하지 않는다 — 안 깔아도 될 것을 예고하지 않는다.
+        const aiNote = S.aiHarness
+          ? `<p class="ob-ins-n">이 컴퓨터에 <b>${esc(S.ai)}</b>${josa(S.ai, 0)} 없으면 <b>같이 깔아 드립니다</b>. 무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요. 나중에 <code>lively uninstall</code> 로 라이블리를 지워도 ${esc(S.ai)}${josa(S.ai, 2)} 그대로 남습니다.</p>`
+          : '';
         const step1 = win
           ? `아래 ${getBtn} 를 누르면 <b>Lively-Setup.exe</b> 가 내려받아져요. 내려받은 파일을 두 번 눌러 설치하세요.`
           : os === 'mac'
@@ -2187,6 +2206,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               <div class="ob-ins" data-n="2">
                 <b class="ob-ins-t">앱이 물어보는 대로 ${kbd('승인')} 한 번</b>
                 <p class="ob-ins-p">앱을 열면 설치 도우미가 뜹니다. 브라우저에 <b>라이블리 승인</b> 창이 열리면 ${kbd('승인')}을 누르세요. 그게 전부예요.</p>
+                ${aiNote}
               </div>
               <div class="ob-ins" data-n="3">
                 <b class="ob-ins-t">끝나면 이 한 마디만</b>
@@ -2374,7 +2394,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function startReading() {
     if (S.read.finished) return;
     clearInterval(readTimer);
-    const target = () => Math.max(S.upN || 0, S.read.total || 0);
+    //  목표는 **자료로 등록된 수**다(올라간 수가 아니다) — 서버가 세는 축과 같아야 만난다.
+    //  옛 진행(upIn 이 없던 판)에서 이어 들어온 경우엔 upN 으로 떨어진다.
+    const target = () => Math.max(S.upIn || 0, (S.upIn ? 0 : (S.upN || 0)), S.read.total || 0);
     const paint = () => {
       const tot = Math.max(1, target());
       const p = Math.min(1, S.read.done / tot);
@@ -2387,6 +2409,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       document.dispatchEvent(new Event('read-done'));
     };
     if (!target()) { finish(); return; }                 // 올린 자료 0건 — 기다릴 것이 없다
+    //  ⚠ **상한을 둔다.** 종전엔 완료 조건에서만 멈춰서, 등록이 하나라도 빠지면 영원히 돌았다(실측 11/13).
+    //   바로 옆 분석 단계엔 상한이 있는데(ANALYZE_TIMEOUT_MS) 여기만 없었다. 넘기면 **사실대로 말하고** 넘어간다 —
+    //   온보딩 한복판에서 사람을 무한정 세워 두지 않는다.
+    const READ_MAX_MS = 60000;
+    const readStarted = Date.now();
     readTimer = setInterval(async () => {
       const w = await loadWelcome();
       const got = (w && w.uploads && w.uploads.total) || 0;
@@ -2396,7 +2423,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
       const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
       paint(); save();
-      if (S.read.done >= target()) finish();
+      if (S.read.done >= target()) { finish(); return; }
+      if (Date.now() - readStarted > READ_MAX_MS) {
+        const left = Math.max(0, target() - S.read.done);
+        finish();
+        if (left) msgLiv(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요. 나머지로 먼저 진행할게요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+      }
     }, 1500);
   }
 
@@ -2464,6 +2496,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const AI_JOSA = { Claude: ['가', '를', '는'], ChatGPT: ['가', '를', '는'], Gemini: ['가', '를', '는'], Grok: ['이', '을', '은'] };
   const josa = (word, i) => (AI_JOSA[word] || ['이(가)', '을(를)', '은(는)'])[i];
   const aiHarness = () => AI_HARNESS[S.ai] || 'claude';
+  /** 고른 AI 를 상태에 남긴다 — 라벨(S.ai)과 **하네스 id**(S.aiHarness)를 함께.
+   *  ⚠ id 를 따로 남기는 이유(#2255): 이 값을 읽는 쪽이 `lively install`(터미널)이라 라벨을 못 읽는다.
+   *   라벨→id 표(AI_HARNESS)를 CLI 에도 두면 사본이 둘이 되고, 어긋나는 순간 «제미나이를 골랐는데
+   *   claude 가 깔리는» 상태가 된다. 표는 여기 하나만 두고 **결과만** 실어 보낸다.
+   *  ⚠ '아직 없어요' 는 고른 게 아니다 — aiHarness() 의 claude 폴백을 여기 쓰면 안 깔아도 될 것을 깐다. */
+  const setAi = (label: string) => { S.ai = label; S.aiHarness = AI_HARNESS[label] || ''; };
   /** 고른 AI 하나에 대한 마지막 판정(POST /api/ui/me/ai-accounts/check).
    *  null = 아직 안 물어봤다 — 화면은 «확인 중» 으로 살고, 없는 답을 지어내지 않는다. */
   let AIC = null;
@@ -2853,7 +2891,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다 — 리브가 1턴에서 현황을 읽어 주고 있다.
         //  못 열었으면(AI 미로그인 등) 종전처럼 홈으로. 사유는 응답(liv.error)에 있지만 여기서 사람을 붙들지 않는다.
         const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
-        const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.' : '워크스페이스로 모시겠습니다.';
+        //  ⚠ 리브가 안 열렸으면 **왜 안 열렸는지 말한다**(#1631). 서버는 사유를 준다(liv.reason='ai-not-connected' —
+        //   AI 가 없으면 답 못 하는 창을 열지 않는 것이 맞다). 그런데 종전엔 그 값을 안 쓰고 «워크스페이스로 모시겠습니다»
+        //   로만 끝냈다 — 시킨 것을 다 한 사람이 «리브는 어디 갔지» 로 남는다(실측 2026-08-31 원준님 신고).
+        const noAi = !livHref && applied && applied.liv && applied.liv.reason === 'ai-not-connected';
+        const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.'
+          : noAi ? 'AI 를 아직 연결하지 않으셔서 리브는 지금 열지 않았어요 — 답을 못 하는 창이 되니까요. 왼쪽 [외부 앱 연결]에서 AI 를 이으면 리브가 이어서 정리해 드립니다. 워크스페이스로 모시겠습니다.'
+          : '워크스페이스로 모시겠습니다.';
         m.querySelector('.ob-body').innerHTML = made.length
           ? `정리했어요. 자료함에 <b>${made.map((x) => esc(x)).join(' · ')}</b> 서랍을 만들어 뒀습니다. ${where}`
           : `정리했어요. ${where}`;
@@ -2878,7 +2922,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     setStage('stage-chat');
     $('#thread').innerHTML = '';
     await loadWelcome();
-    S.read.total = Math.max(S.upN || 0, 0);
+    S.read.total = Math.max(S.upIn || S.upN || 0, 0);
     startReading();
     await sleep(300);
     const n = S.read.total;
