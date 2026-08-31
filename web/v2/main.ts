@@ -1123,6 +1123,17 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         // 현재 세션의 공개·공유 링크는 #/s/:id가 정본이다. 복원된 #/i route만 같은 탭 안에서 그 정본으로 넘긴다.
         goSession(instance.subject_ref, tab);
         return;
+      } else if (instance.app.system?.route) {
+        //  ★ 정본 주소를 갖는 빌트인(확인할 것·자료)은 **UI 페이지(iframe)가 없다** — 화면은 셸이 그 주소에서 그린다.
+        //   그런데 런치패드·복원된 탭은 #/i/<id> 로 들어오고, 그러면 아래 mountAppUiFrame 이 UI 를 찾다가
+        //   «앱 'sources' 에 UI 페이지가 없습니다» 로 죽는다(#2423 실측, 원준 신고). 정본 주소로 넘긴다.
+        //   replace 라 뒤로가기에 빈 칸을 남기지 않는다(세션 인스턴스를 #/s/ 로 넘기는 바로 위 분기와 같은 규율).
+        const to = instance.app.system.route;
+        tab.route = to;
+        if (tabsApi?.current() === tab && location.hash !== to) { suppressHash++; location.replace(location.pathname + location.search + to); }
+        tabsApi?.routed(tab);
+        void renderRoute(tab);
+        return;
       } else {
         const frame = await mountAppUiFrame(instance.app_id, {
           page: instance.page_key || undefined,
