@@ -355,6 +355,12 @@ function startBackgroundSweeps(): void {
   //   순간 그 파괴가 *남의* 워크스페이스에서 일어나고, 정책이 켜진 박스(dev 실측 `idle_ttl_minutes=120`)
   //   에서는 실제로 죽는다. 매니지드 정비표(SWEEP_JOBS)가 같은 이유로 이것만 뺐고, 그 판단은 **#2148** 의 몫이다.
   //   짝인 백필은 순회한다 — 위 주석대로 백필이 **먼저** 돌아야 회수가 애초에 작동하기 때문이다.
+  //  ⚠ 아웃박스에도 **부팅 1회**를 둔다(50초). 5분 인터벌만으로는 부족하다 — **재기동이야말로 배달 루프를
+  //   죽여 좀비를 만드는 사건**이라(#2244) 그 직후가 가장 쓸어야 할 때인데, 첫 tick 이 5분 뒤다.
+  //   실측 2026-09-01: dev 는 stage 푸시마다 재시작하고 그 간격이 **2~4분**이었다(최근 1시간 9커밋).
+  //   그래서 5분 인터벌이 **한 번도 발화하지 못했다** — 45초 one-shot 은 매번 돌았는데.
+  //   매니지드 요청 정비표는 디바운스가 비어 있어 재기동 직후 **첫 요청에** 돈다. 여기도 같은 뜻이 되게 맞춘다.
+  setTimeout(() => { void perTenant("outbox", () => import("../sessions/session-outbox.js").then(({ resumeOutbox }) => resumeOutbox())); }, 50_000).unref();
   setInterval(() => {
     void perTenant("outbox", () => import("../sessions/session-outbox.js").then(({ resumeOutbox }) => resumeOutbox()));
     void perTenant("session-state-backfill", () => backfillSessionStates())
