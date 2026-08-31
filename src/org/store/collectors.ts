@@ -230,6 +230,24 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
 }
 
 /**
+ * 첫 수집을 그 자리에서 시작한다 — «켰다» 와 «돈다» 사이를 사람이 짐작하지 않게(#1631, 원준님 2026-08-31).
+ *  ⚠ 동적 import 다. 이 모듈은 store 층이고 run-tracker 는 connectors 층이라, 정적으로 얹으면 층이
+ *   거꾸로 물린다. 부를 때만 끌어오면 모듈 적재 순서에 영향이 없다.
+ *  ⚠ await 하지 않는다(호출부가 `void`). 백필은 길 수 있고, 켜기 응답이 그것을 기다리면 안 된다 —
+ *   startConnectorRun 자체가 run_id 를 즉시 주고 뒤는 백그라운드로 도는 계약이다.
+ */
+async function kickFirstSync(id: number, presetKey: string, actor?: string): Promise<void> {
+  try {
+    const { startConnectorRun } = await import("../../connectors/run-tracker.js");
+    const run = await startConnectorRun(presetKey, { trigger: "manual", startedBy: actor ?? null, collectorId: id });
+    console.info(`[collector] 첫 수집 시작 id=${id} preset=${presetKey} run=${run.runId}${run.alreadyRunning ? " (이미 도는 중)" : ""}`);
+  } catch (e) {
+    // 비치명 — 켜기는 이미 성공했다. 스케줄러가 다음 틱에 같은 일을 한다.
+    console.warn(`[collector] 첫 수집 시작 실패(비치명) id=${id}:`, (e as Error)?.message);
+  }
+}
+
+/**
  * 자동 싱크 잡 동기 — 수집기 활성화 = 싱크가 그냥 돈다(#586 계승, 인스턴스별로).
  *  이미 있으면 enabled·주기만 갱신하고 나머지(관리자가 조정한 파라미터)는 보존. 실패는 비치명(저장은 성공).
  */
@@ -239,12 +257,23 @@ async function syncCollectorJob(
   const jobId = collectorJobId(id);
   try {
     if (spec.enabled) {
-      await itemsPool.query(
+      const up = await itemsPool.query(
         `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
            VALUES($1,$2,'connector_sync',$3::jsonb,$4,true,$5)
          ON CONFLICT (tenant_id, id) DO UPDATE SET label=EXCLUDED.label, params=EXCLUDED.params,
-           interval_sec=EXCLUDED.interval_sec, enabled=true`,
+           interval_sec=EXCLUDED.interval_sec, enabled=true
+         RETURNING last_run_at`,
         [jobId, `${spec.label} 자동 수집`, JSON.stringify({ collector_id: id }), spec.interval, actor ?? null]);
+      //  ★ 첫 수집은 **켠 그 자리에서** 시작한다(원준님 2026-08-31).
+      //   종전엔 잡만 등록하고 스케줄러가 알아채기를 기다렸다. 그래서 켠 사람은 «만들어졌는데 아직 안 돎» 을
+      //   보고, 언제 도는지는 주기(10분·30분·하루)를 보고 **짐작**해야 했다 — 하루 주기면 그 짐작이 하루다.
+      //   더 나쁜 것은 그 기다림이 스케줄러가 살아 있다는 가정에 얹혀 있다는 점이다: 오늘 게이트웨이가
+      //   메모리 압력으로 26번 재시작한 날, 그 가정은 참이 아니었다.
+      //   ⚠ **한 번도 안 돈 것만** 민다(last_run_at IS NULL). 이미 돈 수집기를 저장할 때마다 밀면
+      //    설정 한 글자 고칠 때마다 전체 백필이 돈다. 재활성화는 스케줄러의 평소 판정에 맡긴다
+      //    (마지막 실행이 오래됐으면 그쪽이 다음 틱에 due 로 읽는다).
+      //   ⚠ 실패는 비치명이다 — 켜기 자체는 이미 성공했다. 못 밀어도 스케줄러가 결국 돌린다.
+      if (!up.rows[0]?.last_run_at) void kickFirstSync(id, spec.presetKey, actor);
       // 일일 full 스윕(notion) — 증분 델타가 구조적으로 못 보는 것들(댓글 단독 변경·아카이브 전파·
       //  search 인덱싱 장기 지연)의 수렴 경로(#586). 인스턴스마다 따로 돈다.
       if (spec.presetKey === "notion") {
