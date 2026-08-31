@@ -25,6 +25,9 @@ import { MEMBER_HOME_BASE } from "../terminal-transcript.js";
 import { SUPERVISOR_JS, sessionSockName, supervisorStartSh } from "./codex-as-supervisor.js";
 import { sessionExecConfigured, sessionSpawnArgv } from "../session-exec.js";   // 프로세스는 세션 경계
 import type { ChatLine } from "./chat-line.js";
+import { logger } from "../../log.js";
+import { codexAppServerEvent } from "./codex-stream.js";              // #2439 — 하네스 무관 어휘로도 흘린다
+import { emitSessionEvent, settleAll as settleBusAsks } from "./runtime-bus.js";
 
 /** 이 세션에서는 app-server 경로를 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
 export class CodexChatUnavailable extends Error {
@@ -105,6 +108,15 @@ function emit(sessionId: string, e: ChatEvent): void {
 }
 
 /** 아직 답을 기다리는 승인들(화면이 새로 붙었을 때 되살린다 — 새로고침에 승인이 사라지면 턴이 영영 선다). */
+/**
+ * #2439 — 이 세션의 codex 런타임이 끝났다: **새 버스의 대기도 함께 마감**한다.
+ *  기존 승인(pendings)은 이 파일이 TTL 로 닫지만, 버스 쪽 대기는 그 규율 밖이다.
+ *  통로가 둘이어도 «답 없이 매달린 요청은 없다» 는 불변식은 하나여야 한다.
+ */
+export function settleCodexBusAsks(sessionId: string, reason: string): number {
+  return settleBusAsks(sessionId, reason);
+}
+
 export function pendingApprovals(sessionId: string): Array<{ id: string; title: string; detail: string; kindHint: string }> {
   return [...(pendings.get(sessionId)?.values() ?? [])].map((p) => ({ id: p.id, title: p.title, detail: p.detail, kindHint: p.kindHint }));
 }
@@ -356,6 +368,22 @@ async function start(o: CodexChatOpts): Promise<Entry> {
       // 승인은 **사람에게 물어본다**. 정책을 명시로 준 호출자(리브 같은 자동 경로)는 그쪽이 이긴다.
       onApproval: o.onApproval ?? ((req) => askHuman(o.sessionId, req)),
       onNotify: (method, params) => {
+        //  #2439 — **같은 원문을 새 어휘로도 흘린다**(작업 도크·상태 통로가 그걸 그린다).
+        //   기존 emit 은 한 줄도 안 바꾼다: 저건 codex 낱말을 그대로 나르는 화면(session-codex-live)의
+        //   계약이고, 이건 하네스 무관 어휘다. 하나로 합치려면 그 화면까지 같이 옮겨야 하는데,
+        //   **매니지드 프로덕션에서 도는 것을 리팩터와 함께 흔들지 않는다.** 두 통로는 나중에 합친다.
+        //   ⚠ 번역이 던져도 여기서 삼킨다 — 새 어휘의 버그가 도는 codex 세션을 멈추게 하면 안 된다.
+        //  ⚠ 이 파일은 **노드 에이전트 번들에 들어간다** — 그래서 새로 무는 모듈은 허용 목록에 올려야 한다
+        //   (`scripts/node-agent-allowed-modules.json`, #2165 의 경계 가드가 실제로 이걸 잡았다).
+        //   셋 다 순수 모듈이라(프로세스·자격·DB 무의존) 그 번들에 실려도 안전하다 —
+        //   ⚠ 지연 import 로 피하려 해 봤지만 **안 된다**: esbuild 는 outfile 하나면 동적 import 도 인라인한다
+        //   (그 테스트 머리말이 실측으로 못박아 둔 사실이다). 유일한 길은 «모듈을 가르거나 목록에 올리거나» 다.
+        try {
+          const ev = codexAppServerEvent({ method, params });
+          if (ev) emitSessionEvent(o.sessionId, ev);
+        } catch (err) {
+          logger.warn({ sessionId: o.sessionId, method, err: (err as Error)?.message }, "codex → SessionEvent 번역 실패(무시)");
+        }
         if (method === "turn/started") { mark(o.sessionId, true); emit(o.sessionId, { kind: "status", running: true }); }
         else if (method === "turn/completed") { mark(o.sessionId, false); emit(o.sessionId, { kind: "status", running: false }); }
         else if (method === "thread/tokenUsage/updated") {

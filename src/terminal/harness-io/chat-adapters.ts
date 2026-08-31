@@ -32,6 +32,12 @@ export interface ChatAdapter {
   translate: ((line: unknown) => SessionEvent | null) | null;
   /** 사람 말 → 그 하네스가 받는 한 줄. transport 가 stdio-jsonl 일 때만 쓴다. */
   encode: ((text: string) => string) | null;
+  /**
+   * 이 하네스의 런타임을 **누가 쥐고 있나**. 값이 있으면 그 모듈이 프로세스를 띄우고 버스로 흘린다
+   *  — 이 표는 번역만 제공한다(같은 프로세스를 두 자리가 띄우려 들면 대화가 둘로 갈린다).
+   *  null = 아직 아무도 안 쥔다(또는 이 표의 argv 로 띄운다).
+   */
+  runsVia?: string | null;
   /** 왜 이 상태인가 — 다음 사람이 «안 했다» 와 «못 한다» 를 구분할 수 있게. */
   note: string;
 }
@@ -58,10 +64,13 @@ const codexChat: ChatAdapter = {
   //  ⚠ 기동·수명은 **기존 codex-chat-runtime 이 이미 쥐고 있다**(매니지드 프로덕션에서 돈다).
   //   여기서는 **번역만** 제공하고, 그 런타임이 이 함수를 불러 버스에도 흘리게 잇는다(#2439 후속).
   transport: "jsonrpc-stdio",
+  //  기동·전송은 [[codex-chat-runtime.ts]] 가 쥔다(매니지드 프로덕션에서 돈다) — 여기서 argv 를 주면
+  //  두 자리가 같은 프로세스를 띄우려 든다. 그래서 argv·encode 는 null 이고, `runsVia` 가 그 사실을 적는다.
   argv: null,
   translate: codexAppServerEvent,
   encode: null,
-  note: "번역 준비됨(스키마 근거). 기동은 기존 codex-chat-runtime 소유 — 그쪽에서 버스로 흘리도록 잇는 일이 남았다.",
+  runsVia: "codex-chat-runtime",
+  note: "번역·기동 모두 준비됨. 기동은 기존 codex-chat-runtime 소유이고 그 런타임이 onNotify 에서 버스로도 흘린다(#2439).",
 };
 
 const grokChat: ChatAdapter = {
@@ -116,5 +125,9 @@ export function chatAdapter(key: string | null | undefined): ChatAdapter | null 
  */
 export function canOpenChatRuntime(key: string | null | undefined): boolean {
   const a = chatAdapter(key);
-  return !!(a && a.transport === "stdio-jsonl" && a.argv && a.translate && a.encode);
+  if (!a || !a.translate) return false;                 // 번역기가 없으면 대화창이 빈 화면이 된다
+  //  ① 이 표가 직접 띄우는 하네스(stdio-jsonl) — argv·encode 가 다 있어야 한다.
+  if (a.transport === "stdio-jsonl") return !!(a.argv && a.encode);
+  //  ② 전용 런타임이 쥔 하네스(codex) — 그쪽이 띄우고 버스로 흘린다. 번역만 있으면 열린다.
+  return !!a.runsVia;
 }
