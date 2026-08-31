@@ -65,7 +65,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
     el('div', { class: 'cxm-stack' },
       ...(collectors.length
         ? collectors.map((c: any) => el('span', { class: 'cxm-mrow' },
-            el('i', { class: 'cxm-sic', 'aria-hidden': 'true', text: kindMark(c.kind) }),
+            el('i', { class: 'cxm-sic', 'aria-hidden': 'true', text: kindMark(String(c.kind || c.preset || c.label || c.key || '')) }),
             el('span', { class: 'cxm-mrow-tx', text: c.label || c.key || c.kind }),
             c.last_run ? el('span', { class: 'cxm-mrow-w', text: relTime(c.last_run.started_at) }) : null))
         : [el('span', { class: 'cxm-mrow cxm-mrow-empty', text: '연결된 곳이 없습니다 — 눌러서 연결' })])),
