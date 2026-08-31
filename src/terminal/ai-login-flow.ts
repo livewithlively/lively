@@ -19,7 +19,7 @@
 //  실행(멤버 자리에서 띄우고 로그를 읽는 것)은 호출자가 하고, 그래야 이 표를 하네스 바이너리 없이 검사할 수 있다.
 
 /** 이 통로로 로그인할 수 있는 하네스. 그 외는 종전 안내(터미널)로 간다 — 지어내지 않는다. */
-export const AI_LOGIN_HARNESSES = ["codex", "claude"] as const;
+export const AI_LOGIN_HARNESSES = ["codex", "claude", "grok"] as const;
 export type AiLoginHarness = (typeof AI_LOGIN_HARNESSES)[number];
 
 export function isAiLoginHarness(k: string): k is AiLoginHarness {
@@ -28,8 +28,20 @@ export function isAiLoginHarness(k: string): k is AiLoginHarness {
 
 /** 그 하네스의 로그인 명령(argv). 실행은 호출자가 한다. */
 export function aiLoginArgv(h: AiLoginHarness): string[] {
-  return h === "codex" ? ["codex", "login", "--device-auth"] : ["claude", "auth", "login"];
+  if (h === "codex") return ["codex", "login", "--device-auth"];
+  if (h === "grok") return ["grok", "login", "--device-auth"];
+  return ["claude", "auth", "login"];
 }
+
+/**
+ * 이 하네스는 코드를 **보여 주나**(장치 코드) — 아니면 사람이 브라우저에서 받아 온 코드를 **되받나**(claude).
+ *
+ *  ⚠ 하네스 이름으로 가르지 않고 **방향**으로 가른다. 종전 판은 `h === "codex"` 로 갈랐는데, 그러면 같은
+ *   모양(device-auth)인 하네스를 더할 때마다 그 조건을 고쳐야 하고 빠뜨리면 «코드가 안 보이는» 화면이 된다.
+ *   실측 2026-08-31 — grok 은 codex 와 출력 모양이 같다:
+ *     `https://accounts.x.ai/oauth2/device?user_code=CWWP-W2NG` + 한 줄에 `CWWP-W2NG` + "Waiting for authorization…"
+ */
+const SHOWS_CODE: Record<AiLoginHarness, boolean> = { codex: true, grok: true, claude: false };
 
 /** 로그인 프로세스가 끝났음을 로그에 남기는 표식 — 러너가 붙인다(종료코드까지). */
 export const EXIT_MARK = "LVLY_LOGIN_EXIT";
@@ -65,7 +77,7 @@ export function stripAnsi(s: string): string {
 /** 사람이 브라우저에서 열 주소만 고른다 — 로그인 도메인이 아닌 주소(문서 링크 등)에 낚이지 않게 한다. */
 function pickUrl(text: string): string | undefined {
   const all = text.match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
-  const login = all.find((u) => /(auth\.openai\.com|chatgpt\.com|claude\.com|anthropic\.com)/i.test(u));
+  const login = all.find((u) => /(auth\.openai\.com|chatgpt\.com|claude\.com|anthropic\.com|accounts\.x\.ai|auth\.x\.ai)/i.test(u));
   return login ?? all[0];
 }
 
@@ -86,8 +98,8 @@ export function parseAiLogin(harness: AiLoginHarness, raw: string): AiLoginState
   const url = pickUrl(text);
   if (url) st.url = url;
 
-  if (harness === "codex") {
-    // 예: `GTMY-691A5` — 대문자·숫자 덩어리 두 개를 하이픈으로 이은 한 줄(실측 2026-08-28).
+  if (SHOWS_CODE[harness]) {
+    // 예: codex `GTMY-691A5`(2026-08-28) · grok `CWWP-W2NG`(2026-08-31) — 대문자·숫자 덩어리 둘을 하이픈으로 이은 한 줄.
     const m = text.match(/^\s*([A-Z0-9]{3,8}-[A-Z0-9]{3,8})\s*$/m);
     if (m) st.code = m[1];
   } else {

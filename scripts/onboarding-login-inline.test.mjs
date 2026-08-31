@@ -14,8 +14,8 @@ test("배선 · 소스를 실제로 읽었다(vacuous 방지)", () => {
   assert.match(SRC, /LOGIN_INLINE/);
 });
 
-test("★ codex·claude 는 이 자리에서 로그인한다 — 새 탭을 열지 않는다", () => {
-  assert.match(SRC, /const LOGIN_INLINE = \{ codex: true, claude: true \}/);
+test("★ codex·claude·grok 은 이 자리에서 로그인한다 — 새 탭을 열지 않는다", () => {
+  assert.match(SRC, /const LOGIN_INLINE = \{ codex: true, claude: true, grok: true \}/);
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
   assert.ok(fn.length > 500, "카드 함수를 못 찾았다");
   // 주석은 계약이 아니다 — «window.open 은 팝업차단으로 막힌다» 라고 **설명한** 줄에 걸리면 검열이다.
@@ -74,8 +74,15 @@ test("★ 문구가 동작과 어긋나지 않는다 — codex·claude 안내에
   const OPENS_WINDOW = /검은 창|터미널 창|새 탭/;
   assert.ok(!OPENS_WINDOW.test(inline), "그 둘은 더 이상 창을 안 띄운다");
   assert.match(inline, /이 자리에/, "«이 자리에서 한다» 고 말한다");
-  // 대조군 — agy·grok 은 여전히 창이 뜨므로 그 표현이 남아 있어야 한다(안 남으면 이 표가 아무것도 안 지킨다).
-  assert.match(guide.slice(guide.indexOf("antigravity:")), OPENS_WINDOW);
+  // 대조군 — agy(antigravity)는 로그인 서브커맨드가 없어 여전히 창이 뜬다. 그 표현이 남아 있어야
+  //  이 표가 «전부 인라인» 으로 뭉개지지 않는다(실측 2026-08-31: `agy login` 은 일반 usage 를 찍는다).
+  const agy = guide.slice(guide.indexOf("antigravity:"), guide.indexOf("grok:"));
+  assert.match(agy, OPENS_WINDOW);
+  // grok 은 이제 인라인이다 — 창 표현이 남아 있으면 문구와 동작이 어긋난다.
+  const grok = guide.slice(guide.indexOf("grok:"))
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.ok(!OPENS_WINDOW.test(grok), "grok 은 더 이상 창을 안 띄운다");
+  assert.match(grok, /이 자리에/);
 });
 
 test("★ 주소가 안 오면 «시작하는 중» 으로 버티지 않는다 — 무반응으로 보인다", () => {
