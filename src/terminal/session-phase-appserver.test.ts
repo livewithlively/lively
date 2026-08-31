@@ -96,15 +96,27 @@ t("★ B1 생성 응답도 목록과 **같은 곳**에서 대화 필드를 만�
   assert.ok(!/s\.chatMode = codexChatMode/.test(src), "목록이 헬퍼를 안 쓰고 따로 만들지 않는다");
 });
 
-t("★ B2 화면은 모를 때 터미널로 추정하지 않는다 — codex 는 이 배포의 기본이 app-server 다", () => {
+t("★ B2 화면은 모를 때 터미널로 추정하지 않는다 — 기본은 서버 capability, 구 서버 행이면 하네스로 폴백", () => {
   const src = readSrc("web/session-chat.ts");
-  const fn = src.slice(src.indexOf("const chatFirst ="), src.indexOf("const chatFirst =") + 900);
-  assert.match(fn, /harness \|\| ''\) === 'codex'/, "chatMode 가 없으면 하네스로 판단한다");
+  //  #2439 — 기본 보기의 정본이 **서버**(행의 chat.chatFirst)로 올라갔다. 화면이 하네스를 하드코딩하면
+  //   또 갈린다(살아 있는 claude=터미널 / 멈춘 claude=대화창 이 정확히 그 사고였다).
+  assert.match(src, /const chatFirst = \(\): boolean => caps\(\)\.chatFirst;/, "기본 보기는 서버 capability 가 정한다");
+  //  구 서버 행엔 그 축이 없다 — **그때만** 종전 판정으로 내려간다. 이 폴백이 사라지면 옛 배포에서 화면이 뒤집힌다.
+  const fb = src.slice(src.indexOf("const legacyChatFirst ="), src.indexOf("const legacyChatFirst =") + 400);
+  assert.match(fb, /harness \|\| ''\) === 'codex'/, "구 서버 폴백은 chatMode 가 없으면 하네스로 판단한다");
   assert.ok(!/^\s*const chatFirst = \(\): boolean => String\(target\.raw\?\.chatMode/m.test(src),
     "종전의 «모르면 터미널» 한 줄이 남아 있지 않다");
 });
 
-t("B3 추정이 틀린 배포(tmux)에서는 행이 오는 즉시 터미널로 되돌린다 — 한 방향만 마감하면 반쪽이다", () => {
+//  ⚠ #2439 에서 이 계약이 **뒤집혔다.** 종전 B3 는 «chatMode 가 tmux 면 행이 오는 즉시 터미널로 되돌린다» 를
+//   지켰다 — 기본 보기를 chatMode 로 추정하던 시절의 마감이었다. 이제 기본 보기는 하네스 **능력**(서버
+//   capability)에서 나오므로 추정 자체가 없고, 그 되돌림은 **claude 를 터미널로 도로 보내 화면 통일을 깬다**
+//   (claude 는 chatMode 가 tmux 인데 대화창이 기본이다). 그래서 «있어야 한다» 를 «없어야 한다» 로 바꾼다.
+t("B3 기본 보기는 행이 와도 뒤집히지 않는다 — tmux 되돌림이 되살아나면 화면이 다시 갈린다 (#2439)", () => {
   const src = readSrc("web/session-chat.ts");
-  assert.match(src, /chatMode \|\| ''\) === 'tmux' && opts\.terminalSrc && isBox\) setMode\('term'\)/);
+  assert.ok(!/chatMode \|\| ''\) === 'tmux' && opts\.terminalSrc && isBox\) setMode\('term'\)/.test(src),
+    "tmux 되돌림이 남아 있지 않다");
+  //  다만 **반대 방향 마감은 남아 있어야 한다** — 실시간 층이 뒤늦게 붙은 세션은 대화로 올려 준다.
+  assert.match(src, /if \(!hadLive && live && !modeChosen && mode === 'term'\) setMode\('chat'\);/,
+    "실시간 층이 붙으면 대화로 올리는 마감은 유지된다");
 });
