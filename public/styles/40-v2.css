@@ -840,9 +840,12 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
     최상단 검색창이랑 같게"). 사이드바 행 격자(--row-h 34px)를 따르던 값이었는데, 이 칸은 목록의 행이 아니라
     **검색칸**이라 닮아야 할 짝이 위의 그 칸이다: 28px · 반경 8 · 12.5px · 옅은 테두리(--line-net).
     ⚠ 손가락 화면(≤900px)에서는 아래 미디어쿼리가 40px 로 되돌린다 — 그건 격자가 아니라 터치 표적 규칙이다. */
-.v2-find-in { width: 100%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 12.5px; background: var(--bg); }
-.v2-find-in::placeholder { color: var(--muted); }
-.v2-find-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
+/*  ⚠ `input.` 을 붙여야 먹는다 — 03-components 의 `input[type="search"]`(테두리·반경 9·14px)와 특이도를
+    맞춰야 뒤 파일인 여기가 이긴다. 클래스만 쓰면 글자·반경·테두리가 조용히 그 기본값으로 되돌아간다
+    (실측: 종전 `font-size: 13px` 도 이미 죽어 14px 로 그려지고 있었다). */
+input.v2-find-in { width: 100%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 12.5px; background: var(--bg); }
+input.v2-find-in::placeholder { color: var(--muted); }
+input.v2-find-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
 .v2-sugs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 12px; }
 .v2-sugs .chip { font-size: 13px; padding: 6px 12px; border-radius: 999px; }
 .v2-chat { flex: 1; min-height: 260px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
@@ -1411,7 +1414,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-side-top { padding: 12px 12px 6px; }
   .v2-liv-btn { padding: 11px 12px; font-size: 15px; }
   .v2-side-sec { padding: 12px 14px 6px 18px; }
-  .v2-find-in { height: 40px; }
+  input.v2-find-in { height: 40px; }
   .v2-pj-row { padding: 11px 10px 11px 6px; font-size: 15px; }
   .v2-pj.open > .v2-pj-row { padding: 11px 12px 8px 8px; }
   .v2-car { width: 30px; height: 30px; font-size: 17px; }
@@ -1473,7 +1476,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 }
 /* 터치 기기(폭 무관) — 입력칸 글자 16px: iOS 사파리는 16px 미만 입력칸에 포커스가 가면 화면을 확대한다(돌아오지 않는다). */
 @media (pointer: coarse) {
-  .v2-find-in, .v2-launch-in, input.v2-pad-search, .v2-pjpick-in, .v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
+  /*  ⚠ 여기도 `input.` 이 필요하다 — 03-components 의 `input[type=...]` 기본값(14px)이 클래스보다 특이도가
+      높아, 종전엔 이 줄이 **아무 칸에도 안 먹고 있었다**(그래서 iOS 에서 포커스마다 화면이 확대됐다).
+      textarea 인 .v2-launch-in 은 그 기본 규칙에 안 걸리므로 클래스 그대로 둔다. */
+  input.v2-find-in, .v2-launch-in, input.v2-pad-search, input.v2-pjpick-in, input.v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
 }
 
 /* 팝아웃 창(#1744)은 서랍 크롬(☰·타임라인 버튼)이 없다 — 좁은 화면에선 가운데 한 칸만 남긴다.
