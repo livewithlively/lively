@@ -68,7 +68,7 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: { ow
         if (!e.conn.send(text)) throw new ClaudeChatUnavailable("opencode 에 말을 걸지 못했습니다");
         r = { convId: e.convId };
       } else {
-        r = sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
+        r = await sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
       }
       return { ok: true, delivered: true, transport: "chat-runtime", thread_id: r.convId, steered: false };
     } catch (e) {

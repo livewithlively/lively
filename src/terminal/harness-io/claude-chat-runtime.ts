@@ -78,6 +78,15 @@ export interface Entry {
    *  보낼 파이프가 없다). 없으면 «못 멈춘다» 로 사실대로 답한다(멈춘 척하지 않는다).
    */
   interrupt?: () => boolean;
+  /**
+   * 이 프로세스가 **살아서 말을 시작했나**(첫 줄을 냈나).
+   *
+   *  ⚠ 왜 필요한가: `spawn` 은 비동기다. 인자를 모르는 빌드는 즉시 죽지만 그 `exit` 은 **다음 틱**에
+   *   온다 — 그 사이 `send()` 는 멀쩡한 파이프에 써서 **true 를 준다**. 그러면 상위는 «전달됨» 을
+   *   반환하고 폴백이 안 걸리고, 사람은 보낸 줄 알고 답을 영영 기다린다(가장 나쁜 결말).
+   *   그래서 **첫 전송만** 이 값이 설 때까지 잠깐 확인한다(둘째 턴부터는 비용이 없다).
+   */
+  spoke?: boolean;
 }
 
 const live = new Map<string, Entry>();
@@ -274,6 +283,8 @@ export function stopClaudeChat(sessionId: string, reason: string): boolean {
 
 /** 한 줄 → 번역기 → 버스. 줄 자르기는 전송이 이미 했다(chat-transport.lineSplitter). */
 function feedLine(e: Entry, line: string): void {
+  //  ★ 무슨 줄이든 «이 프로세스가 살아서 말을 시작했다» 는 증거다(JSON 이 아니어도 된다).
+  e.spoke = true;
   if (line[0] !== "{") return;                 // 사람이 읽을 로그가 섞여 나온다 — 조용히 건너뛴다
   let parsed: unknown;
   try { parsed = JSON.parse(line); } catch { return; }
@@ -379,17 +390,44 @@ export function ensureClaudeChat(o: ClaudeChatOpts): Entry {
  *  ⚠ 여기서 «답이 왔나» 를 기다리지 않는다. 답은 이벤트로 흐르고(버스), 화면이 그것을 그린다.
  *   기다리면 이 호출이 턴 전체만큼 길어져 HTTP 요청이 타임아웃 난다.
  */
-export function sendClaudeChat(o: ClaudeChatOpts & { text: string }): { convId: string } {
+export async function sendClaudeChat(o: ClaudeChatOpts & { text: string; startupMs?: number }): Promise<{ convId: string }> {
   const text = String(o.text || "");
   if (!text.trim()) throw new ClaudeChatUnavailable("보낼 내용이 없습니다");
   const harness = o.harness ?? "claude";
   const encode = chatAdapter(harness)?.encode;
   //  인코딩을 모르면 **말을 걸 수 없다** — 표가 그 사실을 안다(있는 척하지 않는다).
   if (!encode) throw new ClaudeChatUnavailable(`이 하네스는 아직 말을 걸 수 없습니다(${harness})`);
+  const had = live.has(o.sessionId);
   const e = ensureClaudeChat({ ...o, harness });
   if (!e.conn.send(encode(text))) {
     stopClaudeChat(o.sessionId, "전송 실패");
     throw new ClaudeChatUnavailable("대화 런타임에 말을 걸 수 없습니다");
   }
+  //  ★ **방금 띄운 프로세스**만 기동을 확인한다(이미 살아 있던 세션은 비용 0).
+  //   `send()` 가 true 를 줬다고 프로세스가 산 것이 아니다 — spawn 은 비동기라, 인자를 모르는 빌드는
+  //   즉시 죽지만 그 exit 은 다음 틱에 온다. 그 사이의 write 는 멀쩡한 파이프에 성공한다.
+  //   여기서 안 걸러 내면 상위가 «전달됨» 을 반환해 **폴백이 안 걸리고**, 사람은 보낸 줄 알고
+  //   답을 영영 기다린다. (2026-09-01 — --permission-prompt-tool 을 넣으며 이 구멍을 알았다.)
+  if (!had && !(await awaitStartup(e, o.startupMs ?? 1500))) {
+    stopClaudeChat(o.sessionId, "기동 실패");
+    throw new ClaudeChatUnavailable("대화 런타임이 시작되지 못했습니다");
+  }
   return { convId: e.convId };
+}
+
+/**
+ * 이 프로세스가 **말을 시작했나**를 잠깐 기다린다.
+ *  · 한 줄이라도 냈으면 true — 살아 있다.
+ *  · 그 전에 죽었으면 false — 호출자가 폴백을 탄다.
+ *  · 시간이 다 되도록 조용하면 **true 로 본다**(느린 기동을 죽음으로 오인하지 않는다 —
+ *    거짓 폴백은 멀쩡한 세션을 종전 경로로 떨어뜨린다).
+ */
+async function awaitStartup(e: Entry, ms: number): Promise<boolean> {
+  const until = Date.now() + Math.max(0, ms);
+  for (;;) {
+    if (e.spoke) return true;
+    if (!e.conn.alive()) return false;
+    if (Date.now() >= until) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
