@@ -11,7 +11,7 @@
 .st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); flex: none; }
 .st.ok::before { background: var(--mint); }       /* 확정/해결됨 */
 .st.dim { color: var(--muted-2); }
-.st.dim::before { background: var(--muted-3); }    /* 기각/무시됨 */
+.st.dim::before { background: var(--muted-3-line); }    /* 기각/무시됨 */
 .st.warn::before { background: var(--coral); }     /* 열린 이슈 */
 
 /* 인페이지 섹션 탭(언더라인 세그먼트 — 전역 내비 아님) */

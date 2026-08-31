@@ -70,7 +70,7 @@
 .pill-state.confirmed::before { background: var(--mint); }
 .pill-state.proposed::before { background: var(--muted-2); }
 .pill-state.rejected { color: var(--muted-2); }
-.pill-state.rejected::before { background: var(--muted-3); }
+.pill-state.rejected::before { background: var(--muted-3-line); }
 .pill-more { background: var(--bg); border: 1px solid var(--line); color: var(--muted-head); }
 .chip-by {
   display: inline-flex; border: 1px solid var(--line); background: var(--bg);
@@ -381,14 +381,14 @@ a.wikicat-owner:hover { text-decoration: underline; }
 .cov-lbl { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 /* §0.5: 커버리지 바 무채 + 우단 민트 끝점(살아있음 신호만 컬러) */
 .track { height: 6px; background: var(--line); border-radius: 3px; }
-.fill { height: 6px; background: var(--muted-3); border-radius: 3px; position: relative; min-width: 4px; }
+.fill { height: 6px; background: var(--muted-3-line); border-radius: 3px; position: relative; min-width: 4px; }
 .fill::after { content: ""; position: absolute; right: 0; top: 0; width: 4px; height: 6px; border-radius: 2px; background: var(--mint); }
 .cov-stat { font-size: 12px; font-weight: 600; color: var(--muted-2); white-space: nowrap; }
 .cov-stat .ok { color: var(--mint-deep); font-weight: 700; }
 
 /* ── 최근 유입 미니 바 ── */
 .bars { display: flex; gap: 3px; align-items: flex-end; height: 36px; margin-top: 6px; }
-.bar { width: 10px; background: var(--muted-3); border-radius: 2px; min-height: 2px; }
+.bar { width: 10px; background: var(--muted-3-line); border-radius: 2px; min-height: 2px; }
 .bar.today { background: var(--mint); } /* '오늘=살아있음' 끝점 의미 — 유지 */
 
 /* ── 도메인 페이지 ── */
