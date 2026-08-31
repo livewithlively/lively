@@ -42,7 +42,16 @@ export const COVERAGE: readonly HarnessCoverage[] = [
   {
     harness: "claude",
     axes: { read: "ok", send: "ok", tasks: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
-    notes: {},
+    notes: {
+      //  ⚠ approve 를 "ok" 로 적은 근거를 남긴다 — 이 축만 라이브 물음을 재현하지 못했다.
+      //   ① 바이너리가 직접 말한다: --permission-prompt-tool 은 "permission prompts reach the host
+      //     over stdio" — 그래서 argv 에 `stdio` 를 명시했고, 그 플래그로 프로세스가 정상 기동한다(실측).
+      //   ② control_response 봉투가 CLI 에 받아들여진다: initialize 제어요청을 보내니 **같은 봉투로**
+      //     request_id 를 짝맞춰 응답이 왔다(실측 2026-09-01).
+      //   ③ 다만 이 맥에서는 환경이 도구를 자동 허용해(init.permissionMode 가 계속 default) can_use_tool
+      //     자체는 못 봤다. 물음이 뜨는 환경에서 한 번 더 확인할 것.
+      approve: "왕복 배선·봉투는 확인, 물음 자체는 미재현(이 환경이 자동 허용) — 위 주석 참조.",
+    },
   },
   {
     harness: "codex",

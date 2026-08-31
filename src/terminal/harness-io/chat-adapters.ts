@@ -65,7 +65,15 @@ const claudeChat: ChatAdapter = {
   transport: "stdio-jsonl",
   argv: (o) => {
     const a = ["claude", "--print", "--input-format", "stream-json", "--output-format", "stream-json",
-      "--verbose", "--replay-user-messages", "--forward-subagent-text"];
+      "--verbose", "--replay-user-messages", "--forward-subagent-text",
+      //  ★ 승인 물음이 **우리에게 오게 하는 스위치**(실측 2.1.251 — 바이너리 자신의 설명):
+      //   "--permission-prompt-tool (permission prompts reach the host over stdio; an MCP tool cannot
+      //    answer them here)" — 즉 `stdio` 가 «호스트가 stdio 로 받는다» 는 뜻이고, 이 값이 없으면
+      //   control_request{can_use_tool} 이 **한 번도 안 온다**. 그러면 승인 카드는 영영 안 뜨고,
+      //   사람은 웹에서 승인을 못 한다(그게 이 프로젝트가 고치려던 «반쪽 UX» 다).
+      //  ⚠ 이 플래그를 모르는 옛 빌드에선 프로세스가 뜨자마자 죽는다 — 그 경우 deliverPrompt 가
+      //   ClaudeChatUnavailable 을 잡아 종전 터미널 경로로 되돌린다(조용히 망가지지 않는다).
+      "--permission-prompt-tool", "stdio"];
     if (o.model) a.push("--model", String(o.model));
     //  ⚠ 없는 대화 id 로 --resume 하면 프로세스가 즉시 죽는다 — 있을 때만.
     if (o.convId) a.push("--resume", String(o.convId));
@@ -96,7 +104,7 @@ const claudeChat: ChatAdapter = {
     request_id: `int-${Date.now()}`,
     request: { subtype: "interrupt" },
   }) + "\n",
-  note: "실측 완료(2026-08-31, 2.1.251) — 작업(local_bash·local_agent)·승인·슬래시·사용량 전부 확인.",
+  note: "실측(2026-08-31~09-01, 2.1.251): 작업(local_bash·local_agent)·슬래시(init.slash_commands 77건)·사용량(rate_limit_event) 라이브 확인. 승인은 control_response 봉투가 CLI 에 받아들여지는 것까지 확인(initialize 왕복이 같은 봉투로 응답), 다만 이 맥에서는 환경이 도구를 자동 허용해 can_use_tool 자체를 재현하지 못했다 — 그래서 --permission-prompt-tool stdio 를 명시한다.",
 };
 
 const codexChat: ChatAdapter = {

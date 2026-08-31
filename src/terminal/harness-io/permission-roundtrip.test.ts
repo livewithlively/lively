@@ -158,4 +158,14 @@ t("[9] 멈춤 — 파이프로 멈추는 하네스는 그 줄이 규약을 지�
   assert.equal(chatAdapter("grok")!.interrupt!({ convId: "" }), null);
 });
 
+t("[10] ★ claude argv 에 --permission-prompt-tool stdio 가 있다 — 없으면 물음이 **한 번도 안 온다**", () => {
+  //  근거는 바이너리 자신의 설명이다(2.1.251):
+  //   "--permission-prompt-tool (permission prompts reach the host over stdio; an MCP tool cannot answer them here)"
+  //  이 플래그가 빠지면 승인 카드는 영영 안 뜬다 — 코드 어디에도 오류가 안 나므로 눈으로는 못 잡는다.
+  const argv = chatAdapter("claude")!.argv!({});
+  const i = argv.indexOf("--permission-prompt-tool");
+  assert.ok(i >= 0, "플래그가 있다");
+  assert.equal(argv[i + 1], "stdio", "값은 stdio — MCP 도구 이름을 주면 CLI 가 거부한다");
+});
+
 console.log(`\n${pass}건 통과`);
