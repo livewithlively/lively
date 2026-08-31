@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { HARNESS, mcpMatcher, toolMatcher } from "./harness-registry.mjs";
 import { HOOK_SCRIPTS } from "../setup/kit-manifest.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ADAPTER = join(HOOKS_DIR, "antigravity-adapter.mjs");
@@ -85,7 +86,7 @@ process.stdin.on("end", () => {
 
 const runAdapter = (event, payload) => spawnSync(process.execPath, [ADAPTER, event], {
   input: typeof payload === "string" ? payload : JSON.stringify(payload), encoding: "utf8", timeout: 30000,
-  env: { ...process.env, LIVELY_HOME: SB },
+  env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: SB },
 });
 const outOf = (r) => { try { return JSON.parse(String(r.stdout || "").trim()); } catch { return { __invalid: String(r.stdout).slice(0, 120) }; } };
 const capOf = (name) => {

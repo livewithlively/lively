@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const HOOK = path.join(fileURLToPath(import.meta.url), "..", "examples", "session-log-capture.org-hook.mjs");
 let pass = 0;
@@ -58,7 +59,7 @@ async function runHook(ev, { harness = "claude", env = {} } = {}) {
   await fsp.writeFile(path.join(home, ".lively", "token"), "t\n");
   await fsp.writeFile(path.join(home, ".lively", "gateway-url"), BASE + "\n");
   const c = spawn(process.execPath, [HOOK], {
-    cwd: root, env: { ...process.env, LIVELY_HOME: home, LIVELY_HARNESS: harness, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t",
+    cwd: root, env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: home, LIVELY_HARNESS: harness, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t",
       LIVELY_SESSION_ID: "box-log-e2e", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "", ...env }, stdio: ["pipe", "pipe", "pipe"],
   });
   c.stdin.end(JSON.stringify(ev));

@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WIN } from "../testlib/os-sandbox.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "ui-test-"));
 process.env.LIVELY_HOME = SANDBOX;                       // HOME 리다이렉트(설치기 샌드박스 계약)
@@ -145,7 +146,7 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
   mkdirSync(join(home, ".claude"), { recursive: true });
   writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
   execFileSync(process.execPath, [join(box, "link", "bundle", "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", join(box, "link", "bundle")],
-    { env: { ...process.env, LIVELY_HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude") }, stdio: "ignore" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude") }, stdio: "ignore" });
   const after = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
   const n = countHooks(after);
   const hooksInstalled = existsSync(join(home, ".lively", "hooks", "sync-harness-assets.mjs"));
@@ -250,7 +251,7 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
   const before = JSON.stringify({ hooks: {}, marker: "untouched" });
   writeFileSync(join(decoy, "settings.json"), before);
   execFileSync(process.execPath, [join(bundle, "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", bundle],
-    { env: { ...process.env, LIVELY_HOME: home, CLAUDE_CONFIG_DIR: decoy }, stdio: "ignore" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: home, CLAUDE_CONFIG_DIR: decoy }, stdio: "ignore" });
   const decoyAfter = readFileSync(join(decoy, "settings.json"), "utf8");
   const sb = join(home, ".claude", "settings.json");
   const sbHooks = existsSync(sb) ? countHooks(JSON.parse(readFileSync(sb, "utf8"))) : 0;

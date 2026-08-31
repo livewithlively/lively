@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
-import { closedPath, writeStubBin } from "../testlib/os-sandbox.mjs";
+import { closedPath, writeStubBin, offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const pExecFile = promisify(execFile);
 const CLI = join(fileURLToPath(import.meta.url), "..", "lively.mjs");
@@ -66,7 +66,7 @@ const CLI_NOLIB = (() => {
 
 async function run(c, cmd, cli = CLI) {
   const env = {
-    ...process.env, PATH: closedPath(c.bin), LIVELY_HOME: c.home, CLAUDE_CONFIG_DIR: c.ccd,
+    ...process.env, ...offlineLivelyEnv(), PATH: closedPath(c.bin), LIVELY_HOME: c.home, CLAUDE_CONFIG_DIR: c.ccd,
     LIVELY_GATEWAY_URL: "", LIVELY_TOKEN: "", NO_COLOR: "1",
   };
   const r = await pExecFile(process.execPath, [cli, cmd, "--json"], { cwd: c.home, env, timeout: 30_000 })

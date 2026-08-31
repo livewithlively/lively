@@ -141,7 +141,7 @@ function setup() {
     "requires_openai_auth = false", "",
   ].join("\n"));
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "codex", "--clone-root", BUNDLE],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`설치기 exit=${r.status}\n${r.stderr || r.stdout}`);
   // 러너 5종을 캡처 스텁으로 치환(관측 장치) — 설치기가 쓴 config.toml 은 진짜 그대로 둔다.
   //  출력은 `<name>.<Event>.out`(이벤트별) → `<name>.out`(공통) 순으로 찾는다 — deny JSON 을 PreToolUse 에만 주기 위함
@@ -149,6 +149,7 @@ function setup() {
   for (const f of ["run-custom.mjs", "work-flag.mjs", "session-preload.mjs", "sync-harness-assets.mjs", "stop-writeback-gate.mjs"]) {
     writeFileSync(join(HOME, ".lively", "hooks", f), `#!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 let stdin = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => { stdin += c; });
