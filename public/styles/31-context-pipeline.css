@@ -449,3 +449,103 @@ a.ctx-preview-t:hover { color: var(--blue); }
   .cxh-flow { grid-template-columns: 1fr 1fr; }
   .cxh-arrow { display: none; }
 }
+
+/* ══ #762 전면 재구성 — 표지 = 흐름 지도(cxm) + 탭 1층 + 확인할 것 트레이 ══════════════
+ *  프로토타입 v5(2026-08-31 원준 확정)의 구현. 토큰만 쓴다(리터럴 색 0). 역·게이트·미니어처는
+ *  전부 HTML/CSS — SVG 프레젠테이션 속성에 CSS 변수를 쓰면 무효가 되는 함정(v4 실측)을 피한다. */
+
+/* 탭 줄 — 알약 층이 사라졌으므로 탭 줄이 곧 목차다. 오른쪽 끝 트레이(확인할 것). */
+.ctx-vtabs-sp { flex: 1 1 0; min-width: 8px; }
+.ctx-vtab-tray { margin-left: auto; }
+.ctx-tray-n { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 17px;
+  padding: 0 5px; border-radius: 999px; background: var(--coral); color: var(--on-fill, #fff);
+  font-size: 10.5px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+
+/* 화면 안 섹션 쌓기 — 한 탭 = 한 화면, 패널 사이 숨 고르기. */
+.ctx-stacked + .ctx-stacked { margin-top: 26px; }
+.ctx-crosslink { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.ctx-crosslink b { font-size: 13.5px; }
+.ctx-crosslink .admin-hint { margin: 0; }
+
+/* ── 지도 ──────────────────────────────────────────────────────────────── */
+.cxm { display: flex; flex-direction: column; gap: 14px; }
+.cxm .num { font-variant-numeric: tabular-nums; }
+.cxm-cap { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--muted-head); }
+.cxm-lane { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 2px 0 6px; }
+/* 역(驛) — 눌리는 카드. 상태색은 테두리·배지로만(면을 통째로 칠하면 지도가 경보판이 된다). */
+.cxm-st { flex: 1 1 0; min-width: 172px; display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+  padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  text-decoration: none; color: inherit; transition: border-color .15s, box-shadow .15s; }
+.cxm-st:hover { border-color: var(--blue); box-shadow: 0 4px 14px color-mix(in srgb, var(--ink) 8%, transparent); }
+.cxm-st.is-warn, .cxm-jam { border-color: var(--warn); }
+.cxm-st.is-off { border-color: var(--coral); }
+.cxm-st-t { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 13.5px; font-weight: 800; color: var(--ink); }
+.cxm-st-n { font-size: 19px; font-weight: 800; letter-spacing: -.3px; color: var(--ink); }
+.cxm-jam .cxm-st-n { color: var(--warn); }
+.cxm-st-def { font-size: 11px; line-height: 1.5; color: var(--muted-head); word-break: keep-all; margin-bottom: 6px; }
+.cxm-stack { display: grid; gap: 5px; }
+.cxm-st-more { margin-top: auto; padding-top: 8px; font-size: 10.5px; font-weight: 700; color: var(--muted); text-align: center; word-break: keep-all; }
+
+/* 실물 미니어처 — 수집기 행 · 지식 카드 · 종이 더미 · 세션 말풍선. */
+.cxm-mrow { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 11.5px; font-weight: 600; color: var(--ink); }
+.cxm-mrow-empty { color: var(--muted); font-weight: 500; justify-content: center; border-style: dashed; }
+.cxm-mrow-tx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cxm-mrow-w { margin-left: auto; flex: none; font-size: 10px; color: var(--muted-2); font-weight: 500; }
+.cxm-sic { flex: none; width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--line-net-2);
+  display: inline-flex; align-items: center; justify-content: center; font-style: normal;
+  font-size: 10.5px; font-weight: 800; color: var(--ink-sub); background: var(--bg-tint); }
+.cxm-paperz { position: relative; height: 56px; margin: 2px auto; width: 76px; }
+.cxm-paperz i { position: absolute; width: 46px; height: 54px; border: 1.5px solid var(--line-net-2); border-radius: 5px; background: var(--bg); }
+.cxm-paperz i::before, .cxm-paperz i::after { content: ''; position: absolute; left: 7px; right: 7px; height: 3px; border-radius: 2px; background: var(--line); }
+.cxm-paperz i::before { top: 9px; }
+.cxm-paperz i::after { top: 17px; right: 15px; }
+.cxm-paperz i:nth-child(1) { left: 0; top: 1px; transform: rotate(-7deg); }
+.cxm-paperz i:nth-child(2) { left: 12px; top: -2px; transform: rotate(2deg); }
+.cxm-paperz i:nth-child(3) { left: 24px; top: 2px; transform: rotate(8deg); }
+.cxm-know { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 7px 9px;
+  border: 1px solid var(--line); border-left: 3px solid var(--blue); border-radius: 8px; background: var(--bg); }
+.cxm-know-t { font-size: 11.5px; font-weight: 800; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cxm-know-s { display: flex; gap: 5px; flex-wrap: wrap; }
+.cxm-sess { display: flex; flex-direction: column; gap: 5px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.cxm-sess-u { align-self: flex-end; max-width: 100%; padding: 4px 8px; border-radius: 8px 8px 2px 8px;
+  background: var(--bg-tint); font-size: 11px; font-weight: 700; color: var(--ink); }
+.cxm-sess-a { align-self: flex-start; max-width: 100%; padding: 4px 8px; border-radius: 8px 8px 8px 2px;
+  background: var(--blue-bg, var(--bg-tint)); font-size: 11px; color: var(--ink-sub); line-height: 1.5; }
+.cxm-sess-ref { display: inline-block; margin-left: 4px; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); font-style: normal; font-size: 9.5px; font-weight: 800; color: var(--blue); white-space: nowrap; }
+
+/* 관(연결선) + 게이트 + 새는 곳 — 게이트는 관 위에 앉은 작은 기계 카드다. */
+.cxm-duct { flex: none; width: 104px; position: relative; display: flex; flex-direction: column; align-items: center;
+  justify-content: flex-start; padding-top: 58px; }
+.cxm-wire { position: absolute; top: 66px; left: -5px; right: -5px; height: 4px; border-radius: 2px;
+  background: repeating-linear-gradient(90deg, var(--line) 0 9px, transparent 9px 14px); }
+.cxm-gate { position: relative; z-index: 1; margin-top: -6px; width: 96px; padding: 7px 8px; text-align: center;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface); text-decoration: none; color: inherit;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 7%, transparent); }
+.cxm-gate:hover { border-color: var(--blue); }
+.cxm-gate b { display: block; font-size: 11.5px; font-weight: 800; color: var(--ink); }
+.cxm-gate-s { display: block; font-size: 10px; line-height: 1.5; color: var(--muted-head); word-break: keep-all; }
+.cxm-gate-warn { color: var(--warn); font-weight: 800; }
+.cxm-leak { z-index: 1; margin-top: 7px; padding: 2px 8px; border: 1px dashed var(--warn); border-radius: 8px;
+  background: var(--warn-bg, var(--bg-tint)); color: var(--warn-deep, var(--warn)); font-size: 10px; font-weight: 800;
+  text-decoration: none; white-space: nowrap; }
+.cxm-leak:hover { border-style: solid; }
+
+/* 지도 아래 두 줄 — 확인할 것 요약 · 자동 실행(cxh-jobs 재사용). */
+.cxm-line { display: flex; align-items: center; gap: 8px; }
+.cxm-line-inbox { padding: 11px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  text-decoration: none; color: var(--ink); font-size: 13px; }
+.cxm-line-inbox:hover { border-color: var(--blue); }
+.cxm-line-inbox > b { font-weight: 800; }
+.cxm-line-s { color: var(--muted-head); flex: 1; min-width: 0; font-size: 12.5px; }
+.cxm-line-inbox .btn { flex: none; }
+
+/* 확인할 것 화면 */
+.cxm-inbox .cxh-h { margin: 22px 0 10px; }
+
+/* 좁은 화면 — 지도는 가로 스크롤(cxm-lane 이 이미 overflow), 요약 줄은 세로로. */
+@media (max-width: 760px) {
+  .cxm-line-inbox { flex-wrap: wrap; }
+  .cxm-line-s { flex-basis: 100%; }
+}
