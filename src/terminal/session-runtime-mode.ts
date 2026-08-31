@@ -21,6 +21,8 @@
 //  («인증 방법을 제거·비활성·제한하지 않는다», code.claude.com/docs/en/legal-and-compliance)과도 맞물린다.
 //  그래서 **모드를 고르게 하고, 어느 쪽이든 터미널로 가는 길은 남긴다.**
 
+import { canOpenChatRuntime } from "./harness-io/chat-adapters.js";
+
 export type SessionRuntimeMode = "terminal" | "chat";
 
 /** 사람이 세션을 만들 때 고른 값(없으면 배포 기본을 따른다). */
@@ -34,8 +36,9 @@ export type SessionRuntimeChoice = SessionRuntimeMode | null | undefined;
  *  grok(ACP)·opencode(serve)는 경로가 있으나 우리 어댑터가 아직 없다 → false.
  */
 export function harnessSupportsChat(harness: string): boolean {
-  const h = String(harness || "").toLowerCase();
-  return h === "claude" || h === "codex";
+  //  ★ 표에서 **파생**한다(harness-io/chat-adapters.ts). 여기 손으로 적으면 «표엔 없는데 모드는
+  //   열리는» 상태가 생기고, 그 세션은 pane 이 셸인데 대화창이 아무것도 못 받는 빈 화면이 된다.
+  return canOpenChatRuntime(harness);
 }
 
 /**
