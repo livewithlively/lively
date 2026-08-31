@@ -1072,12 +1072,20 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const msg = chatFirst() && notYet && canType() ? '아직 주고받은 말이 없어요 — 아래에 바로 말을 걸어 보세요.'
         : nodeMsg ? nodeMsg
         : !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
-        : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인·확인 대화상자에 멈춰 있는 것일 수 있어요 — 터미널로 확인해 보세요.' : '이 세션의 대화 기록을 찾지 못했어요.')
+        //  ⚠ 죽은 세션에 «찾지 못했어요» 로 끝내지 않는다(#1631) — 하네스가 죽어도 래퍼는 **그 pane 에 사유를 적고
+        //   세션을 살려 둔다**(catalog.ts harnessExitNotice: «이 세션은 살아 있습니다»). 실측 2026-08-31: 온보딩
+        //   킥오프가 첫 실행 «폴더를 신뢰합니까?» 에 걸려 죽었고, 그 물음이 pane 에 그대로 떠 있었는데 화면은
+        //   그걸 안 보여 줬다. 답이 한 화면 뒤에 있는데 사람은 «기록을 못 찾았다» 만 읽는다.
+        : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인·확인 대화상자에 멈춰 있는 것일 수 있어요 — 터미널로 확인해 보세요.'
+          : '주고받은 말이 없이 끝났어요 — 시작하다 멈췄을 수 있어요. 터미널 화면에 그 이유가 적혀 있습니다.')
         : unreadable ? String(lastErr.message)
         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
         : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
+      //  ⚠ 안내가 «터미널 화면에 이유가 적혀 있다» 고 말했으면 **그 길도 줘야 한다**(#1631). 종전엔 살아 있는
+      //   세션에만 버튼을 뒀는데, 정작 그 안내가 필요한 것은 **죽은 세션**이다(래퍼가 사유를 pane 에 적어 두고
+      //   세션은 살려 둔다 — catalog.ts). 말만 하고 길이 없으면 막다른 길이다.
       view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }),
-        opts.terminalSrc && isBox && !chatFirst() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => setMode('term') }) : null));
+        opts.terminalSrc && isBox && !chatFirst() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: canType() ? '터미널로 보기' : '터미널에서 이유 보기', onclick: () => setMode('term') }) : null));
       paintState();
       // 라이브면 기록이 생기는 순간을 잡는다 — 박스는 파일, 노드는 중앙 기록(uuid 를 알 때만). 못 읽는 하네스면 기다려도 안 온다(폴링 X).
       if (canType() && !unreadable) { src = watch(); if (src) schedule(); }
