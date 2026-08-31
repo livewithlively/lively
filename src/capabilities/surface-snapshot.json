@@ -4207,6 +4207,16 @@
   "input_hash": "3341637643557f3f"
  },
  {
+  "name": "org_github_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/github/oauth-complete"
+  ],
+  "input_hash": "91c13448f6294c13"
+ },
+ {
   "name": "org_app_tools",
   "scope": "admin",
   "mcp": true,
