@@ -90,7 +90,8 @@ test("10 표의 claude POSIX 설치 경로가 공식 설치기다", async () => 
   const plan = installPlanFor("claude", { platform: "darwin", homeDir: "/h" });
   assert.ok(plan.cmd.includes("claude.ai/install.sh"), `표가 가리키는 곳: ${plan.cmd}`);
   assert.equal(plan.wiresPath, false, "claude POSIX 설치기는 rc 를 안 건드린다 — 그래서 우리가 심는다");
-  assert.equal(plan.binDir, "/h/.local/bin");
+  //  구분자 정규화 — 표는 호스트 구분자로 잇는다(윈도우 CI 에서 darwin 계획을 뽑으면 `\` 가 섞인다).
+  assert.equal(String(plan.binDir).replace(/\\/g, "/"), "/h/.local/bin");
 });
 
 // 4) pristine 백업은 **한 번만** — 두 번째 실행이 백업을 덮으면 복구가 죽는다.
