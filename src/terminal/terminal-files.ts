@@ -259,7 +259,13 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     // path = 절대경로(#1870) — 새 세션 컴포저가 개인 폴더(root=personal)에 올린 첨부를 첫 지시에 절대경로로 적는다
     //  (세션 cwd 는 세션 전용 폴더라 상대경로로는 못 찾는다 — 세션 라우트의 path 응답과 같은 이유).
     // source_id — 자료로 등록됐으면 그 id(#1881). 구 클라이언트는 무시.
-    res.json({ ok: true, path: abs, ...(ing?.ingested ? { source_id: ing.source_id } : {}) });
+    // skipped — 등록이 **안 된** 사유(#1631). 화면이 «왜 안 들어갔는지» 를 사람에게 사실대로 말하려면 이 값이 필요하다.
+    //  종전엔 성공만 알려 줘서, 실패한 파일은 화면에서 조용히 사라졌다(올린 사람은 다 들어간 줄 안다).
+    res.json({
+      ok: true, path: abs,
+      ...(ing?.ingested ? { source_id: ing.source_id } : {}),
+      ...(ing && !ing.ingested ? { skipped: ing.reason ?? ing.kind ?? "unknown" } : {}),
+    });
   }));
 
   // 디렉터리 목록(숨김 제외). 격리 세션(#524)은 멤버 uid 로(게이트웨이가 700 홈 못 읽으므로).
