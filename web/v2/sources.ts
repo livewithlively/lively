@@ -45,13 +45,14 @@ function bytesText(n: unknown): string {
   return (b / 1048576).toFixed(1) + ' MB';
 }
 
-/** 파일 자료가 실제로 읽혔나 — 증류가 볼 수 있는 상태인지를 사람 말로. local_kind 는 ingest/local-file-core.ts 가 정한다. */
-function readState(f: Record<string, any>): { text: string; tone: '' | 'no' | 'later' } {
+/** 파일 자료가 실제로 읽혔나 — 증류가 볼 수 있는 상태인지를 사람 말로. local_kind 는 ingest/local-file-core.ts 가 정한다.
+ *  열은 좁으니 한 낱말로 쓰고, 사연은 툴팁(why)에 둔다 — 목록에서 문장이 길면 파일 이름을 밀어낸다(#2423 실측). */
+function readState(f: Record<string, any>): { text: string; why: string; tone: '' | 'no' | 'later' } {
   const k = String(f.local_kind || '');
-  if (k === 'vision') return { text: '그림 — 필요할 때 열어 읽습니다', tone: 'later' };
-  if (k === 'unreadable') return { text: '못 읽었습니다 — PDF 로 저장해 다시 올려 주세요', tone: 'no' };
-  if (f.extracted === false) return { text: '아직 안 읽었습니다', tone: 'later' };
-  return { text: '읽었습니다', tone: '' };
+  if (k === 'vision') return { text: '그림', why: '글자가 없는 그림입니다. AI 가 필요할 때 원본을 열어 읽습니다.', tone: 'later' };
+  if (k === 'unreadable') return { text: '못 읽음', why: '이 형식은 글자를 뽑지 못했습니다. PDF 로 저장해 다시 올리면 읽습니다.', tone: 'no' };
+  if (f.extracted === false) return { text: '아직', why: '아직 글자를 뽑지 않았습니다.', tone: 'later' };
+  return { text: '읽음', why: '글자를 뽑아 두었습니다 — 검색과 지식 만들기에 쓰입니다.', tone: '' };
 }
 
 const authorOf = (r: SrcRow): string => String((r.fields || {}).author_name || '');
@@ -128,9 +129,13 @@ async function paintTree(host: HTMLElement, sel: SrcSel): Promise<void> {
 
   const mine = myUploadName();
   const quick: HTMLElement[] = [];
+  let mineRow: HTMLElement | null = null;
   if (mine) {
-    quick.push(treeRow({ label: '내가 올린 것', href: sourcesHref({ system: 'local', author: mine }),
-      on: sel.system === 'local' && sel.author === mine, icon: 'up' }));
+    //  나무 집계는 출처 × 자리라 사람 축이 없다 — 이 한 줄만 따로 센다(total 만 쓰므로 limit=1).
+    //   건수가 없는 줄이 하나 끼면 나머지가 다 있는 만큼 «못 센 것»으로 읽힌다.
+    mineRow = treeRow({ label: '내가 올린 것', href: sourcesHref({ system: 'local', author: mine }),
+      on: sel.system === 'local' && sel.author === mine, icon: 'up' });
+    quick.push(mineRow);
   }
   quick.push(treeRow({ label: '지식이 된 것', n: linked, href: sourcesHref({ linked: true }),
     on: sel.linked === true && !sel.system, icon: 'doc' }));
@@ -149,6 +154,12 @@ async function paintTree(host: HTMLElement, sel: SrcSel): Promise<void> {
     }
   }
   host.replaceChildren(...rows);
+  //  건수는 늦게 와도 된다 — 나무가 먼저 서고 숫자가 따라 붙는다(못 세면 그 줄만 숫자 없이 남는다).
+  if (mine && mineRow) {
+    void api('/api/ui/sources?' + selQuery({ system: 'local', author: mine }, { limit: '1' }))
+      .then((r: any) => { const n = Number(r && r.total); if (mineRow && Number.isFinite(n)) mineRow.append(el('span', { class: 'n', text: String(n) })); })
+      .catch(() => { /* 못 세도 줄은 선다 */ });
+  }
 }
 
 function treeRow(o: { label: string; n?: number; href: string; on?: boolean; icon?: string; grp?: boolean; sub?: boolean; top?: boolean }): HTMLElement {
@@ -308,7 +319,7 @@ function columnsFor(sel: SrcSel): Cols {
 
   if (sys === 'local') {
     return {
-      grid: '1fr 148px 74px 210px 116px 76px',
+      grid: 'minmax(0, 1fr) 124px 66px 70px 104px 66px',
       head: ['파일', '폴더', '크기', '읽었나', '올린 사람', '언제'],
       cells: (r) => {
         const f = r.fields || {};
@@ -317,7 +328,7 @@ function columnsFor(sel: SrcSel): Cols {
           null,
           txt(containerOf(r), 'c mono'),
           el('span', { class: 'c mono r', text: bytesText(f.bytes) }),
-          el('span', { class: 'c read' + (rs.tone ? ' ' + rs.tone : ''), text: rs.text }),
+          el('span', { class: 'c read' + (rs.tone ? ' ' + rs.tone : ''), text: rs.text, title: rs.why }),
           txt(shortPerson(authorOf(r))),
           at(r),
         ];
@@ -326,7 +337,7 @@ function columnsFor(sel: SrcSel): Cols {
   }
   if (sys === 'github' || sys === 'gitlab' || sys === 'linear') {
     return {
-      grid: '1fr 88px 100px 104px 128px 76px',
+      grid: 'minmax(0, 1fr) 74px 84px 92px 108px 66px',
       head: ['자료', '번호', '종류', '상태', '쓴 사람', '언제'],
       cells: (r) => {
         const f = r.fields || {};
@@ -348,7 +359,7 @@ function columnsFor(sel: SrcSel): Cols {
   if (sys === 'slack' || sys === 'discord') {
     const withChan = !sel.container;
     return {
-      grid: withChan ? '1fr 168px 132px 76px' : '1fr 150px 76px',
+      grid: withChan ? 'minmax(0, 1fr) 150px 118px 66px' : 'minmax(0, 1fr) 132px 66px',
       head: withChan ? ['자료', '채널', '쓴 사람', '언제'] : ['자료', '쓴 사람', '언제'],
       cells: (r) => [
         null,
@@ -360,14 +371,14 @@ function columnsFor(sel: SrcSel): Cols {
   }
   if (sys === 'authored') {
     return {
-      grid: '1fr 132px 76px',
+      grid: 'minmax(0, 1fr) 118px 66px',
       head: ['자료', '종류', '언제'],
       cells: (r) => [null, txt(kindLabel(r.kind)), at(r)],
     };
   }
   // 섞인 목록(모든 자료·지식이 된 것) — 여기서만 «어디서» 열이 선다.
   return {
-    grid: '1fr 180px 128px 76px',
+    grid: 'minmax(0, 1fr) 168px 116px 66px',
     head: ['자료', '어디서', '누가', '언제'],
     cells: (r) => [
       null,
@@ -491,7 +502,16 @@ function detailSheet(s: any): HTMLElement {
           el('a', { class: 'kl', href: '#/k/' + encodeURIComponent(d.name), text: d.title || d.name }))))
     : el('div', { class: 'v2-src-knnone', text: '이 자료에서 나온 지식은 아직 없습니다.' });
 
-  const bodyBox = el('div', { class: 'v2-src-body md-rendered' }, renderMarkdown(s.body_md || '(본문 없음)'));
+  //  ★ [BINARY] 스텁은 **증류 세션에게 주는 쪽지**다(«source_artifact 로 원본을 받아…»). 사람 화면에 그대로 두면
+  //   자기 파일을 열었는데 기계 지시문을 읽게 된다(#2423 실측). 파일의 사실만 사람 말로 다시 쓴다.
+  const body = String(s.body_md || '');
+  const stub = body.startsWith('[BINARY]');
+  const rs = isFile ? readState(f) : null;
+  const bodyBox = stub
+    ? el('div', { class: 'v2-src-body v2-src-stub' },
+        el('p', { class: 'h', text: rs ? rs.why : '글자가 없는 파일입니다.' }),
+        el('p', { class: 'sub', text: [kindLabel(s.kind), String(f.ext || '').toUpperCase(), bytesText(f.bytes)].filter(Boolean).join(' · ') }))
+    : el('div', { class: 'v2-src-body md-rendered' }, renderMarkdown(body || '(본문 없음)'));
 
   const thread: HTMLElement[] = [];
   if (s.parent) {

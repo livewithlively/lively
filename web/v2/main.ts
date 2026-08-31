@@ -1436,6 +1436,9 @@ function pinnedAt(key: string, group: string, at: number): number {
  *  끝난 세션의 인스턴스는 세우지 않는다(창이 붙어 있으면 ③이 세운다) — 아니면 지난 세션이 목록을 덮는다.
  *  묶음: 사람이 볼 일 있는 것(작업 중·확인 필요·완료 미확인)이 맨 위, 나머지는 마지막 작업 날짜별로.
  */
+/** 정본 주소를 갖는 단일 인스턴스 빌트인 — 좌측 목록에서 인스턴스 행과 창 행이 한 줄로 접힌다(#2423). */
+const CANON_ROUTE_APP: Record<string, string> = { inbox: '#/inbox', sources: '#/sources' };
+
 function sideInstances(): SideInstance[] {
   const activeTab = tabsApi ? tabsApi.current() : null;
   const activeKey = activeTab ? sideRowKey(activeTab.route) : '';
@@ -1514,8 +1517,14 @@ function sideInstances(): SideInstance[] {
     if (inst.status !== 'active') continue;
     if (inst.subject_kind === 'session') continue;                   // 세션 인스턴스는 아래 ④ 에서 그 세션 행에 붙인다
     const at = Date.parse(String(inst.updated_at || inst.created_at || '')) || 0;
-    sideRowInstance.set('inst:' + inst.id, inst.id);
-    put('inst:' + inst.id, '#/i/' + encodeURIComponent(inst.id), at);
+    //  ★ 정본 주소를 가진 단일 인스턴스 빌트인(확인할 것·자료)은 **인스턴스 줄기와 창 줄기가 같은 행**이어야 한다.
+    //   둘을 다른 키로 세우면 같은 앱이 목록에 두 줄로 뜬다 — 하나는 '모아 둔 원본 자료', 하나는 '라이블리 앱'
+    //   (#2423 실측). 정본 주소가 있는 앱은 그 주소를 키로 접는다(#/i/<id> 는 주소 없는 앱만 쓴다).
+    const canon = CANON_ROUTE_APP[inst.app_id];
+    const route = canon || '#/i/' + encodeURIComponent(inst.id);
+    const key = canon ? sideRowKey(route) : 'inst:' + inst.id;
+    sideRowInstance.set(key, inst.id);
+    put(key, route, at);
   }
   (tabsApi ? tabsApi.tabs : []).forEach((tab, i) => {                // ③ 지금 열린 창
     const key = sideRowKey(tab.route);
