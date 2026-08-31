@@ -195,13 +195,16 @@ const GLASS_ART: Record<string, GlassArt> = {
     frost: '<rect x="5" y="10" width="39" height="44" rx="5.5"/>',
     punch: '<rect x="13" y="21" width="21" height="3.6" rx="1.8"/><rect x="13" y="31" width="15" height="3.6" rx="1.8"/>',
   },
-  // 자료 — 아카이브 상자. 색 몸통 위에 서리 뚜껑이 얹혀 겹치고(층이 여기서 난다), 몸통이 뚜껑 아래로
-  //  삐져나온다. 손잡이 슬롯 하나만 뚫는다 — 종이·문서 모양은 위키(펼친 책)와 겹쳐서 쓰지 않는다.
+  // 자료 — **어긋나게 포갠 낱장 둘**. 뒤 장(색)이 기울어 있고 앞 장(서리)이 정면으로 겹친다.
+  //  겹친 자리가 유리이고, 뒤 장이 왼쪽·아래로 삐져나오는 자리가 층을 만든다.
+  //  ⚠ 상자로 그리지 마라 — 사이드바 발치의 「아카이브」와 같은 형태가 된다(첫 판이 그랬다, 원준 지적).
+  //   책(위키)·카드+체크(프로젝트)·판 셋(홈)과도 갈린다: 자료는 **제본되지 않은 낱장이 여러 장**이다.
+  //   접힌 모서리는 흰색으로 뚫어(punch) 서리 위에서도 읽히게 한다.
   src: {
-    span: [9, 22, 55, 56],
-    color: '<path d="M9 22h46v29a5 5 0 0 1-5 5H14a5 5 0 0 1-5-5z"/>',
-    frost: '<rect x="5" y="12" width="54" height="18" rx="5"/>',
-    punch: '<rect x="23" y="39" width="18" height="3.8" rx="1.9"/>',
+    span: [7, 10, 41, 58],
+    color: '<rect x="7" y="10" width="34" height="48" rx="5" transform="rotate(-13 24 34)"/>',
+    frost: '<path d="M30 11h13l9 9v33a4 4 0 0 1-4 4H30a4 4 0 0 1-4-4V15a4 4 0 0 1 4-4z"/>',
+    punch: '<path d="M43 11v9h9z"/>',
   },
   // 펼친 책 — 오른쪽 면이 색, 왼쪽 면이 서리. 두 면의 재질이 달라 펼쳐진 게 읽힌다.
   wiki: {
@@ -349,12 +352,21 @@ export function openLaunchpad(): void {
       .filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
       const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
+      //  정본 주소를 갖는 빌트인(확인할 것·자료)은 **화면 앱**이다 — UI 페이지가 없다고 «세션 앱» 이라 부르면
+      //   배지가 거짓말을 한다(그 앱을 열어도 AI 세션은 안 뜬다). 셋을 가르는 축은 pages 가 아니라 '무엇으로 뜨나'다.
+      const isScreen = !!a.system?.route || hasUi;
       return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
-        title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
-        onclick: () => { closeLaunchpad(); if (hasUi || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title }); } },
+        title: isScreen ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
+        onclick: () => {
+          closeLaunchpad();
+          //  정본 주소가 있는 앱(확인할 것·자료)은 **그 주소로** 간다 — 그 화면이 인스턴스를 뒤에서 멱등 확보한다.
+          //   여기서 openInstalledApp 을 부르면 #/i/<id> 로 가는데, 그 앱들은 UI 페이지가 없어 그 자리에서 죽는다(#2423).
+          if (a.system?.route) { location.hash = a.system.route; return; }
+          if (hasUi || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title });
+        } },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(BUILTIN_ICON[a.id] || (hasUi ? 'liv' : 'term'))),
         el('b', { text: a.title }),
-        el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
+        el('span', { class: 'v2-pad-badge', text: isScreen ? '앱' : '세션 앱' }));
     });
     grid.replaceChildren(...screen, ...session);
     grid.classList.toggle('v2-pad-grid--q', !!q);   // 검색 중이면 첫 칸이 Enter 로 열릴 자리 — 그걸 보인다.

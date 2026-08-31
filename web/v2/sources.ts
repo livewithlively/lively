@@ -204,7 +204,7 @@ const sysIconKey = (s: string): string =>
 /** 나무 아이콘 — 16px 자리라 선 글리프다(유리는 런치패드 64px 전용, `app-icon-design-system-glass-1841`). */
 function treeIcon(key: string): SVGElement {
   const D: Record<string, string> = {
-    box: 'M4 7h16v12H4zM4 7l2-3h5l2 3',
+    box: 'M10 4h5.5L19 7.5V19a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z M15.5 4v3.5H19 M5.6 6.4 3.7 16.6a1 1 0 0 0 .8 1.2l3.2.6',
     up: 'M12 16V5M7 10l5-5 5 5M4 19h16',
     doc: 'M6 4h9l3 3v13H6zM15 4v4h3',
     disk: 'M3 5h18v12H3zM8 20h8',
