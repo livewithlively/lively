@@ -338,6 +338,11 @@ function startBackgroundSweeps(): void {
   //   알림이 전이를 맞게 감지하고도 `notify-app-inactive` 로 거절된다. 프로비저닝 고침은 **신규**를,
   //   이 주기 스윕은 **이미 만들어진 84곳**을 덮는다(멱등 — 다 심기면 no-op). 매니지드의 `builtin-app-seed`
   //   정비와 같은 주기(6h)를 쓴다 — 새 정책을 만들지 않는다.
+  //  ⚠ 부팅 45초 뒤 **1회를 따로 둔다** — interval 만 두면 첫 실행이 6시간 뒤다. 이건 정기 점검이
+  //   아니라 **밀린 백필**이라(배포 시점에 이미 84곳이 비어 있다) 첫 판이 가장 중요하다.
+  //   매니지드의 요청 정비표는 디바운스가 비어 있어 **첫 요청에 곧바로** 돈다 — 그쪽과 같은 뜻이 되게 맞춘다.
+  //   (45초 = 스키마·시딩 뒤. `session-state-backfill` 40초 · `ghost-instance-sweep` 90초와 같은 관례.)
+  setTimeout(() => { void perTenant("builtin-app-seed", () => seedBuiltinApps()); }, 45_000).unref();
   setInterval(() => { void perTenant("builtin-app-seed", () => seedBuiltinApps()); }, 6 * 60 * 60_000).unref();
   // #1059 F — idle 세션 자동 회수(reaper). 정책(session_reclaim_policy) 0=끔이 기본이라 켜기 전엔 no-op.
   //  5분 주기(회수는 tmux kill 로 싸다). 켜지면 오래 idle 인 세션을 desired-state 보존하며 회수 → restorable(E lazy resume).
