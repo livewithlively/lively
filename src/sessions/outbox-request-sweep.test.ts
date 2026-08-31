@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { withTenant } from "../org/tenant-context.js";
 import { outboxRequestSweepMiddleware, resetSweepDebounce, shouldSweep, jobIntervalMs, sweptKeys, sweptAt,
-  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS,
+  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS, TASK_TICK_MS,
   type SweepJob } from "./outbox-request-sweep.js";
 
 let pass = 0;
@@ -43,7 +43,9 @@ function run(env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv, tenant: typeof TE
 t("[F1] 첫 목격이면 등록된 정비를 **전부** 발사한다 — 하나만 살리면 나머지가 죽은 채 남는다", () => {
   resetSweepDebounce();
   asManaged(() => { run(); });
-  assert.deepEqual(sweptKeys().sort(), SWEEP_JOBS.map((j) => `${j.key}:${TENANT.id}`).sort());
+  //  ⚠ 전역 정비는 키가 `<정비>:*` 다(테넌트를 안 탄다) — 전부 `키:테넌트` 라고 가정하면 안 된다.
+  const want = SWEEP_JOBS.map((j) => (j.scope === "global" ? `${j.key}:*` : `${j.key}:${TENANT.id}`));
+  assert.deepEqual(sweptKeys().sort(), want.sort());
   assert.ok(SWEEP_JOBS.length >= 2, "표에 정비가 둘 이상이어야 이 검사가 뜻이 있다");
 });
 
@@ -74,10 +76,12 @@ t("[F4] 같은 정비라도 테넌트마다 자기 시계 — 한쪽이 돌았�
   //  ⚠ 문자열 키로만 재지 않는다 — **실제 미들웨어를 두 테넌트로** 태워야 컨텍스트→키 배선까지 걸린다.
   asManaged(() => { run({} as NodeJS.ProcessEnv, TENANT); run({} as NodeJS.ProcessEnv, OTHER); });
   const keys = sweptKeys();
+  const perTenant = SWEEP_JOBS.filter((j) => (j.scope ?? "tenant") === "tenant");
   for (const who of [TENANT, OTHER])
-    for (const j of SWEEP_JOBS)
+    for (const j of perTenant)
       assert.ok(keys.includes(`${j.key}:${who.id}`), `${who.slug} 의 ${j.key} 가 안 돌았다`);
-  assert.equal(keys.length, SWEEP_JOBS.length * 2, "정비 × 테넌트 만큼의 슬롯이 있어야 한다");
+  const globals = SWEEP_JOBS.length - perTenant.length;
+  assert.equal(keys.length, perTenant.length * 2 + globals, "테넌트정비×2 + 전역×1 이어야 한다");
 });
 
 // ── F5 · P4 정비는 서로 독립이다 ────────────────────────────────────────────────
@@ -193,9 +197,14 @@ t("[F14] 정비 결과를 로그에 펼쳐 찍는다 — «돌았다»만 찍으
 // ── G1~G7 · 남은 정비를 표에 올린 뒤 (#2246) ────────────────────────────────
 t("[G1] 표에 여덟 정비가 있고 첫 목격에 전부 발사한다", () => {
   resetSweepDebounce();
-  assert.equal(SWEEP_JOBS.length, 8, "여덟 — background-sweeps 가 묶고 있던 수(파괴적인 하나는 제외)");
+  //  일곱 = background-sweeps 여덟 중 파괴적인 reapIdleSessions 를 뺀 수 · 하나 = 위탁 배차(별도 스텝).
+  const perTenant = SWEEP_JOBS.filter((j) => (j.scope ?? "tenant") === "tenant");
+  assert.equal(perTenant.length, 8, "테넌트 정비 여덟(background-sweeps 일곱 + 아웃박스)");
+  assert.equal(SWEEP_JOBS.length, 9, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
-  assert.deepEqual(sweptKeys().sort(), SWEEP_JOBS.map((j) => `${j.key}:${TENANT.id}`).sort());
+  //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
+  assert.deepEqual(sweptKeys().sort(),
+    SWEEP_JOBS.map((j) => (j.scope === "global" ? `${j.key}:*` : `${j.key}:${TENANT.id}`)).sort());
 });
 t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — 새 정책을 만들지 않았다", () => {
   const want: Record<string, number> = {
@@ -207,6 +216,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "session-log-reap": SIX_HOURS_MS,                // 종전 6h
     "session-title-backfill": SIX_HOURS_MS,          // 원래는 부팅 1회 — 멱등이라 긴 주기가 같은 뜻
     "session-state-backfill": SWEEP_MIN_INTERVAL_MS, // 종전 5분
+    "task-dispatch": TASK_TICK_MS,                   // 종전 task-scheduler 의 TICK_MS(5초)
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
@@ -253,6 +263,61 @@ t("[G7] 주기 오버라이드 env 이름이 정비마다 유일하다 — 겹�
   const env = { [`LIVELY_SWEEP_MS_${a!.key.replace(/-/g, "_").toUpperCase()}`]: "1234" } as NodeJS.ProcessEnv;
   assert.equal(jobIntervalMs(a!, env), 1234);
   assert.equal(jobIntervalMs(b!, env), b!.intervalMs);
+});
+
+// ── H1~H9 · 전역 스코프 정비 (#2246 — 위탁 배차) ─────────────────────────────
+t("[H1] 표에 전역 정비가 정확히 하나 있다 — 위탁 배차는 테넌트로 쪼갤 수 없다", () => {
+  const g = SWEEP_JOBS.filter((j) => j.scope === "global");
+  assert.equal(g.length, 1, "전역은 하나여야 한다(늘면 이 구조를 다시 생각해야 한다)");
+  assert.equal(g[0]!.key, "task-dispatch");
+});
+t("[H2] 테넌트가 둘이어도 전역 정비는 **한 번**, 테넌트 정비는 각각", () => {
+  resetSweepDebounce();
+  asManaged(() => { run({} as NodeJS.ProcessEnv, TENANT); run({} as NodeJS.ProcessEnv, OTHER); });
+  const keys = sweptKeys();
+  const perTenant = SWEEP_JOBS.filter((j) => (j.scope ?? "tenant") === "tenant").length;
+  assert.equal(keys.length, perTenant * 2 + 1, "테넌트정비×2 + 전역1 이어야 한다");
+  assert.equal(keys.filter((k) => k.startsWith("task-dispatch")).length, 1, "전역은 슬롯이 하나뿐");
+});
+t("[H3] 전역 정비의 디바운스 키에 테넌트 id 가 없다", () => {
+  resetSweepDebounce();
+  asManaged(() => { run(); });
+  const k = sweptKeys().find((x) => x.startsWith("task-dispatch"));
+  assert.ok(k, "전역 정비가 안 돌았다");
+  assert.ok(!k!.includes(TENANT.id), `키에 테넌트가 들어갔다: ${k}`);
+  assert.equal(k, "task-dispatch:*");
+});
+t("[H4] 하우스키핑이 도는 배포에서는 전역 정비도 무동작", () => {
+  resetSweepDebounce();
+  run();  // env 안 건드림 → requestScopedTenancy() 거짓
+  assert.deepEqual(sweptKeys(), []);
+});
+t("[H5] 컨텍스트가 없으면 전역 정비도 무동작 — 테넌트 무관 경로가 전량 작업을 촉발하면 안 된다", () => {
+  resetSweepDebounce();
+  asManaged(() => { run({} as NodeJS.ProcessEnv, null); });
+  assert.deepEqual(sweptKeys(), []);
+});
+t("[H6] 나머지 정비는 전부 테넌트 스코프다 — 기존 것이 안 바뀌었다(무회귀)", () => {
+  for (const j of SWEEP_JOBS) {
+    if (j.key === "task-dispatch") continue;
+    assert.notEqual(j.scope, "global", `${j.key} 가 전역이 됐다`);
+  }
+});
+t("[H8] 위탁 배차 주기는 원래 task-scheduler 의 TICK_MS 와 같다", () => {
+  assert.equal(TASK_TICK_MS, 5_000);
+  assert.equal(SWEEP_JOBS.find((j) => j.key === "task-dispatch")!.intervalMs, TASK_TICK_MS);
+});
+t("[H9] scope 미지정이면 tenant 로 동작한다 — 기본값이 안전한 쪽이다", () => {
+  resetSweepDebounce();
+  //  키 계산이 기본값을 tenant 로 쓰는지 직접 본다(신규 필드 부재 엣지).
+  assert.equal(shouldSweep("j", "t1", 0, 1000), true);
+  assert.equal(shouldSweep("j", "t2", 0, 1000), true, "기본이 tenant 면 다른 테넌트는 따로 돈다");
+  assert.equal(shouldSweep("j", "t1", 0, 1000), false);
+});
+t("[H7] 전역 정비는 있던 tickTasksAllTenants 를 부른다 — 여기서 재구현하지 않는다", () => {
+  const src = readFileSync(SRC, "utf8");
+  assert.match(src, /m\.tickTasksAllTenants\(\)/, "원래 함수를 불러야 한다");
+  assert.doesNotMatch(src, /assignQueued|runningCountByNode/, "배차 로직을 여기서 다시 쓰면 원본과 갈라진다");
 });
 
 console.log(`outbox-request-sweep: ${pass} passed`);
