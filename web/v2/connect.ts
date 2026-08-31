@@ -38,6 +38,9 @@ const findSvc = (v: SvcView, key: string): Svc | undefined =>
 /** 이 앱이 지금 어떤 상태인가 — 세 갈래. 목록의 구역도, 상세의 문구도 이 하나로 갈린다. */
 type State = 'on' | 'off' | 'blocked';
 function stateOf(v: SvcView, svc: Svc): State {
+  //  ★ «켜져 있나»는 목록 배치가 아니라 **자격 원본**으로 판정한다. 준비 중이 목록에서 connected 를 이기므로
+  //   배치로 물으면 이미 연결해 둔 앱이 상세에서 «준비 중»이 돼 스위치가 잠긴다 — 돌고 있는 것을 못 끄게 된다.
+  if ((svc.oauth && v.oauthMap.get(svc.oauth)?.connected) || (svc.token && v.credMap.get(svc.token)?.has_secret)) return 'on';
   if (v.connected.some((s: Svc) => s.key === svc.key)) return 'on';
   if (v.blockedOAuth.some((s: Svc) => s.key === svc.key)) return 'blocked';
   if (v.soon.some((s: Svc) => s.key === svc.key)) return 'blocked';   // #2243 카탈로그가 준비 중이라 한 앱도 같은 자리
@@ -108,10 +111,14 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
           el('span', { class: 'cn-card-go', text: '관리 ›' })));
     }
     if (st === 'soon') {
-      return el('a', { class: 'cn-card soon', href, title: svc.label },
+      //  준비 중인데 이미 연결해 둔 앱 — «준비 중»이라고 쓰던 연결을 없는 척하지 않는다(뺏지 않는다).
+      const on = (v as any).soonConnected?.has?.(svc.key);
+      return el('a', { class: 'cn-card soon' + (on ? ' soon-on' : ''), href, title: svc.label },
         head(svc.oauth ? '계정 로그인' : '토큰'), blurb,
-        el('div', { class: 'cn-card-ft' }, el('span', { class: 'cn-pill-soon', text: '준비 중' }),
-          el('span', { class: 'cn-card-h', text: String((svc as any).soon || '준비를 마치면 여기서 바로 켤 수 있어요') })));
+        el('div', { class: 'cn-card-ft' },
+          el('span', { class: 'cn-pill-soon', text: '준비 중' }),
+          el('span', { class: 'cn-card-h', text: on ? '지금 연결돼 있어요 — 쓰던 연결은 그대로 돕니다'
+            : String((svc as any).soon || '준비를 마치면 여기서 바로 켤 수 있어요') })));
     }
     //  켤 수 있음 — 카드는 상세로, [연결]은 그 자리에서 바로 시작. 버튼은 <a> 안에 못 들어가므로 카드가 role=link 인 div 가 된다.
     const account = viaAccount(svc);
