@@ -38,7 +38,8 @@ t("[3] ★ 번역기 없는 하네스는 chat 모드가 **안 열린다** — �
     const open = canOpenChatRuntime(a.key);
     //  여는 길은 둘이다: 이 표가 직접 띄우거나(stdio-jsonl+argv+encode), 전용 런타임이 쥐거나(runsVia).
     if (open) assert.ok(a.translate && (a.runsVia || (a.argv && a.encode)), `${a.key}: 연다면 번역 + (런타임|argv) 가 있어야 한다`);
-    else assert.ok(!a.translate, `${a.key}: 못 여는 이유는 번역기 부재다`);
+    else assert.ok(!a.translate || !(a.runsVia || (a.argv && a.encode)),
+      `${a.key}: 못 여는 이유가 있다(번역기 부재 또는 전송 왕복 미실측)`);
   }
 });
 
@@ -55,9 +56,37 @@ t("[5] 지금 실제로 열리는 것 — claude·codex(나머지는 왜 아닌�
   //  ⚠ 이 단언은 **진도를 재는 자리**다. codex·grok·opencode 가 열리면 여기서 빨간불이 나고,
   //   그때 이 목록을 늘리면서 «무엇이 실측됐나» 를 함께 갱신하게 된다.
   assert.equal(chatAdapter("codex")!.runsVia, "codex-chat-runtime", "codex 기동은 전용 런타임이 쥔다");
-  assert.equal(chatAdapter("grok")!.transport, "jsonrpc-stdio", "grok 은 ACP 표면 확인됨(payload 실측 남음)");
+  assert.equal(chatAdapter("grok")!.transport, "jsonrpc-stdio", "grok 은 ACP");
+  //  ★ grok 은 **번역기가 있는데도 안 열린다** — encode(사람 말 → session/prompt 왕복)가 미실측이라서다.
+  //   «번역만 있으면 열린다» 로 뭉뚱그리면 말을 걸 수 없는 세션이 열린다.
+  assert.ok(chatAdapter("grok")!.translate, "grok facts 축은 실측으로 채워졌다");
+  assert.equal(chatAdapter("grok")!.encode, null, "grok 은 보내는 쪽 왕복이 아직 미실측");
   assert.equal(chatAdapter("opencode")!.transport, "http-sse", "opencode 는 serve 경로");
   assert.equal(chatAdapter("antigravity")!.transport, null, "antigravity 는 전송 자체가 미확정 + 승인 벤더 미지원");
+});
+
+t("[6b] grok 번역기 — 핸드셰이크 실측분을 옮긴다(못 잰 것은 raw 로 관측한다)", () => {
+  const tr = chatAdapter("grok")!.translate!;
+  //  실측 원문(grok 1.0.13, 2026-08-31 핸드셰이크): initialize 응답
+  const init = tr({ jsonrpc: "2.0", id: 1, result: {
+    protocolVersion: 1,
+    agentCapabilities: { loadSession: true, sessionCapabilities: { list: {}, resume: {}, close: {} } },
+    authMethods: [{ id: "grok.com", name: "Grok" }],
+    _meta: { modelState: { currentModelId: "grok-4.6" }, agentVersion: "1.0.13" },
+  } });
+  assert.equal(init?.t, "facts");
+  assert.equal((init as any).facts.model, "grok-4.6");
+  //  ⚠ authMethods 가 남아 있다 = 아직 로그인 안 됐다. 화면이 그 사실을 말할 근거다(빈 화면 금지).
+  assert.equal((init as any).facts.permissionMode, "needs-auth");
+  //  실측 원문: MCP 목록 알림
+  const mcp = tr({ jsonrpc: "2.0", method: "_x.ai/mcp/servers_updated", params: { mcpServers: [] } });
+  assert.equal(mcp?.t, "facts");
+  assert.deepEqual((mcp as any).facts.mcpServers, []);
+  //  실측 원문: 인증 필요 오류 — 조용히 삼키지 않는다(사람이 왜 답이 없는지 알아야 한다)
+  const err = tr({ jsonrpc: "2.0", id: 2, error: { code: -32000, message: "Authentication required" } });
+  assert.equal((err as any).facts.permissionMode, "needs-auth");
+  //  ★ 못 잰 것(턴 이벤트)은 raw 로 올려 관측한다 — 짐작해서 채우지 않는다.
+  assert.equal(tr({ jsonrpc: "2.0", method: "session/update", params: { x: 1 } })?.t, "raw");
 });
 
 t("[6] codex 번역기는 실제로 무언가를 옮긴다(표에 달아 놓고 빈 함수를 두지 않는다)", () => {

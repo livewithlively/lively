@@ -17,6 +17,7 @@
 //  `harnessSupportsChat` 이 **이 표에서 파생**된다(두 곳에 손으로 적으면 반드시 갈린다).
 import { claudeStreamEvent } from "./claude-stream.js";
 import { codexAppServerEvent } from "./codex-stream.js";
+import { grokAcpEvent } from "./grok-stream.js";
 import type { SessionEvent } from "./session-event.js";
 
 export type ChatTransport = "stdio-jsonl" | "jsonrpc-stdio" | "http-sse";
@@ -80,9 +81,13 @@ const grokChat: ChatAdapter = {
   //   그 세션은 빈 화면이 된다 — 그래서 translate 는 null 이고, chat 모드도 막힌다.
   transport: "jsonrpc-stdio",
   argv: () => ["grok", "agent", "stdio"],
-  translate: null,
-  note: "ACP 표면 확인(grok agent stdio). session/update 실측이 남았다 — 그전엔 chat 모드를 열지 않는다.",
+  //  facts 축만 실측으로 옮겼다(핸드셰이크는 로그인 없이 왕복한다). 턴 이벤트·승인은 로그인이 있어야
+  //  페이로드를 볼 수 있어 **아직 안 채운다** — 못 본 형식으로 번역기를 쓰면 그 세션은 빈 화면이 된다.
+  translate: grokAcpEvent,
+  //  ⚠ ACP 는 JSON-RPC 라 «사람 말 한 줄» 인코딩이 stdio-jsonl 과 다르다(session/prompt 요청을 만들어야 한다).
+  //   그 왕복을 실측하기 전엔 null — 그래서 canOpenChatRuntime 이 아직 grok 을 안 연다.
   encode: null,
+  note: "ACP 핸드셰이크 실측(1.0.13): initialize 로 모델·MCP·인증필요를 얻는다. session/prompt 왕복과 승인 페이로드는 로그인 뒤 실측이 남았다.",
 };
 
 const antigravityChat: ChatAdapter = {
