@@ -53,7 +53,8 @@ import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
 import { cleanLastPrompt } from "./last-prompt.js";
-import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
+import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";
+import { sessionRuntimeMode } from "./session-runtime-mode.js";   // #2439 — 세션 런타임 모드(terminal|chat)                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
@@ -704,6 +705,44 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     req.on("close", () => { off(); clearInterval(beat); });
   }));
 
+  // ── 세션 상태 통로(#2439) — 하네스 **무관**. 작업(백그라운드 셸·서브에이전트)·승인·슬래시·사용량이 여기로 온다.
+  //  왜 codex 것(위)과 따로 두나: 저건 codex app-server 의 낱말(approval·delta)을 그대로 나르는 전용 통로이고,
+  //   이건 [[harness-io/session-event.ts]] 의 **우리 어휘**를 나른다. codex 는 프로덕션에서 도는 중이라
+  //   지금 이리로 옮기지 않는다 — 도는 것을 리팩터와 함께 흔들지 않는다(이관은 별도).
+  //  ⚠ 대화 파일에는 이 정보가 **아예 없다**(실측: transcript 26줄에 task 이벤트 0건). 폴링으로 대체할 수 없다.
+  app.get("/api/ui/terminal/sessions/:id/events", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
+    const { onSessionEvent, pendingAsks } = await import("./harness-io/runtime-bus.js");
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",              // 프록시 버퍼링 금지 — 조각이 뭉쳐 오면 스트리밍이 아니다
+    });
+    const send = (e: unknown): void => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* 이미 닫힘 */ } };
+    //  붙자마자 **걸려 있는 물음**을 다시 준다 — 새로고침에 승인 카드가 사라지면 그 턴은 TTL 까지 선다.
+    for (const a of pendingAsks(req.params.id)) send({ t: "permission.asked", ask: a.ask });
+    const off = onSessionEvent(req.params.id, send);
+    const beat = setInterval(() => { try { res.write(": beat\n\n"); } catch { /* */ } }, 25_000);
+    req.on("close", () => { off(); clearInterval(beat); });
+  }));
+
+  // 세션 상태 통로의 승인 답하기(#2439) — 화면이 카드에서 고른 값을 그대로 돌려준다.
+  //  ⚠ 값을 해석하지 않는다: 무엇이 유효한지는 **런타임이** 안다(하네스마다 다르다). 여기서는 «답이 왔다» 만 전한다.
+  app.post("/api/ui/terminal/sessions/:id/events/answer", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const id = String(b.id ?? "");
+    if (!id) throw new HttpError(400, "요청 id 가 필요합니다");
+    const { answer } = await import("./harness-io/runtime-bus.js");
+    const ok = answer(req.params.id, id, b.value);
+    res.setHeader("Cache-Control", "no-store");
+    //  없는 id = 이미 처리됐거나 만료. 실패로 던지지 않고 사실대로 알린다(화면이 카드를 접으면 된다).
+    res.json({ ok, stale: !ok });
+  }));
+
   // 승인 답하기 — 화면의 [허용]·[이번만]·[거부] 가 부른다.
   app.post("/api/ui/terminal/sessions/:id/codex-chat/approve", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
@@ -950,9 +989,16 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // #2055 — 세션 행의 «대화» 두 값을 **한 곳에서** 만든다. 목록과 생성 응답이 갈리면 방금 만든 세션만
   //  화면이 잘못 열린다(실측 2026-08-28 신고: codex 를 열면 터미널이 먼저 뜨고 몇 초 뒤 대화창으로 넘어갔다 —
   //  생성 응답에 chatMode 가 없어 화면이 «모르면 터미널» 로 추정했다가, 목록 갱신이 오면 되돌린 것이다).
-  const chatFieldsOf = (harness: string): { chat: ReturnType<typeof chatIoCaps>; chatMode: ReturnType<typeof codexChatMode> } => ({
+  const chatFieldsOf = (harness: string): {
+    chat: ReturnType<typeof chatIoCaps>;
+    chatMode: ReturnType<typeof codexChatMode>;
+    runtimeMode: ReturnType<typeof sessionRuntimeMode>;
+  } => ({
     chat: chatIoCaps(harness),                       // #1746 하네스별 대화창 능력(읽기·승인)
     chatMode: codexChatMode({ harness }),            // 이 세션의 대화가 어디서 도나 — app-server 면 pane 이 셸이다
+    //  #2439 — 하네스 **무관**한 런타임 모드. chat 이면 작업·승인·슬래시가 이벤트로 오므로 화면이
+    //   상태 통로(SSE)를 연다. terminal 이면 열지 않는다 — 올 것이 없는 연결을 세션마다 만들지 않는다.
+    runtimeMode: sessionRuntimeMode({ harness }),
   });
   const withChatFields = <T extends { harness?: string }>(s: T): T => Object.assign(s, chatFieldsOf(String(s.harness || "")));
 

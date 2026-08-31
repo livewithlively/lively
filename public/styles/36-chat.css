@@ -417,3 +417,18 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .livc-wrap .cxl-ask-title { font-size: calc(13px * var(--livc-fs)); }
 .livc-wrap .cxl-ask-body { font-size: calc(11.5px * var(--livc-fs)); }
 @media (max-width: 760px) { .livc-desktop .dt-bubble { font-size: calc(15px * var(--livc-fs)); } }
+
+/* ── 세션 작업 도크(#2439 ③) — 백그라운드 셸·서브에이전트가 한 자리에 ────────────────
+   도는 작업이 없으면 통째로 숨긴다(빈 상자를 늘 띄우면 대화가 그만큼 밀린다 — JS 가 hidden 을 건다).
+   승인 도크(.cxl-dock)와 같은 자리에 나란히 서므로 시각 언어를 맞춘다. */
+.stk-dock { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 6px 0; background: var(--surface-2, transparent); }
+.stk-head { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.stk-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; min-width: 0; }
+.stk-ic { width: 1.1em; text-align: center; opacity: .8; flex: 0 0 auto; }
+/* 제목은 길다 — 줄바꿈 대신 한 줄로 줄이고 나머지 칩·상태가 오른쪽 끝을 지킨다. */
+.stk-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stk-chip { flex: 0 0 auto; font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.stk-state { flex: 0 0 auto; font-size: 12px; color: var(--muted); }
+.stk-time { flex: 0 0 auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stk-completed .stk-state { color: var(--ok, var(--muted)); }
+.stk-failed .stk-state, .stk-killed .stk-state { color: var(--danger, var(--muted)); }
