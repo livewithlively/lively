@@ -689,7 +689,7 @@ function appListKids(shown: SideInstance[], q: string, o: RowOpts = {}, empty?: 
 function paintAppList(): void {
   if (!appListEl || !hooks.instances) return;
   const q = sideFilter.trim().toLowerCase();
-  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.ask, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = hooks.instances().filter(instMatch(sideFilter));
   appListEl.replaceChildren(...appListKids(shown, q));
   appListEl.scrollTop = 0;   // 거르고 나면 맨 위가 첫 결과다
 }
@@ -735,6 +735,58 @@ function secHead(title: string, count: number | null, ...acts: Array<HTMLElement
 
 /** 켜져 있는 필터 수 — 0이면 요약 줄을 그리지 않는다. */
 function fltCount(): number { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0); }
+
+// ── 찾기의 잣대 — **구역이 달라도 하나다**(원준 2026-08-31: "검색 아이콘 쪽 검색 품질이 너무 안 좋다") ──────
+//  종전엔 구역마다 `haystack.toLowerCase().includes(q)` 한 줄이었다. 붙어 있는 부분문자열 하나만 보므로
+//  한국어에서는 사람이 실제로 치는 세 가지가 전부 0건이 됐다:
+//   ⓐ **띄어쓰기** — 「새세션」으로 치면 '새 세션'이 안 나온다(사람은 띄어쓰기를 기억하지 않는다).
+//   ⓑ **낱말 순서** — 기억나는 두 낱말을 「검색 사이드바」처럼 순서 없이 치면 0건.
+//   ⓒ **초성** — 「ㅍㄹㅈㅌ」로 '프로젝트'를 찾는 건 한국어 앱의 기본 손짓인데 아예 없었다.
+//     한글은 조합 중에도 이 상태를 지난다(ㅍ → 프 → 프ㄹ …) — 그래서 이건 '기능'이기 전에
+//     **치는 도중 화면이 죽지 않게 하는 것**이다.
+//  잣대를 하나로 두는 이유는 이 파일의 다른 규율과 같다: 구역마다 새 방식을 만들지 않는다.
+const CHO = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
+/** 한글 음절은 초성 한 자로, 나머지 글자(영문·숫자·호환자모)는 그대로. '프로젝트 762' → 'ㅍㄹㅈㅌ 762' */
+function chosung(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const c = ch.codePointAt(0) || 0;
+    out += c >= 0xac00 && c <= 0xd7a3 ? CHO[Math.floor((c - 0xac00) / 588)] : ch;
+  }
+  return out;
+}
+//  칸 사이 경계는 남기고(줄바꿈) 칸 **안의** 띄어쓰기만 지운다 — 다 지우면 '…프로젝트' + '세션…' 이
+//  한 낱말로 붙어 엉뚱한 것이 걸린다(제목 끝과 다음 칸 머리를 잇는 질의가 통과한다).
+const deSpace = (s: string): string => s.replace(/[ \t\u00a0]+/g, '');
+/** 질의에 자모가 섞여 있나 — 초성 축은 이때만 본다. 늘 보면 '세션'(→ㅅㅅ)이 온 목록을 통과시킨다. */
+const HAS_JAMO = /[ㄱ-ㅎ]/;
+/**
+ * 사이드바 찾기 판정기. 빈 질의는 늘 참(거르지 않는다).
+ *  · 공백으로 끊은 **낱말 전부**가 들어 있어야 한다(AND) — 순서는 안 본다.
+ *  · 각 낱말은 띄어쓰기를 지운 축에서 찾는다 — 「새세션」 ↔ '새 세션'.
+ *  · 자모가 섞인 낱말은 **초성 축**에서도 찾는다 — 「ㅍㄹㅈㅌ」·조합 중인 「프로젝ㅌ」.
+ */
+function findMatcher(raw: string): (...parts: Array<string | null | undefined>) => boolean {
+  const q = String(raw || '').trim().toLowerCase();
+  if (!q) return () => true;
+  const toks = q.split(/\s+/).filter(Boolean);
+  return (...parts): boolean => {
+    const hay = parts.filter(Boolean).join('\n').toLowerCase();
+    const flat = deSpace(hay);
+    let cho = '';
+    return toks.every((t) => {
+      if (flat.includes(deSpace(t))) return true;
+      if (!HAS_JAMO.test(t)) return false;
+      if (!cho) cho = deSpace(chosung(hay));
+      return cho.includes(deSpace(chosung(t)));
+    });
+  };
+}
+/** 홈·[AI 세션] 목록의 행 하나 — **화면에 보이는 것**(제목·부제·내 마지막 말·프로젝트 이름)을 그대로 찾는 대상으로 삼는다. */
+function instMatch(raw: string): (i: SideInstance) => boolean {
+  const m = findMatcher(raw);
+  return (i) => m(i.title, i.meta, i.ask, i.project?.name);
+}
 
 /** 찾기 칸 — 구역마다 찾는 대상이 달라 안내 문구만 갈린다(입력 상태 `sideFilter` 는 하나다).
  *  ⚠ 한글 조합 보호는 홈 목록과 같은 규율이다(#1958): 조합 중엔 전면 재렌더를 멈추고, Esc 는 조합 취소를 먼저 존중한다. */
@@ -820,7 +872,7 @@ function renderHomeApps(): void {
   const { host } = last;
   const instances = hooks.instances!();
   const q = sideFilter.trim().toLowerCase();
-  const shown = instances.filter((i) => !q || [i.title, i.meta, i.ask, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = instances.filter(instMatch(sideFilter));
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
@@ -928,14 +980,15 @@ function renderSessions(): void {
   const counts = new Map<string, number>();
   for (const s of live) counts.set(s.stateKey, (counts.get(s.stateKey) || 0) + 1);
   const q = sideFilter.trim().toLowerCase();
+  const hit = findMatcher(sideFilter);
   const match = (s: Sess): boolean => {
     if (stateFilter && s.stateKey !== stateFilter) return false;
     if (!q) return true;
     const p = s.projectId ? data.projects.find((x) => x.id === s.projectId) : null;
-    return [s.label, p?.name].filter(Boolean).join(' ').toLowerCase().includes(q);
+    return hit(s.label, p?.name);
   };
   const liveShown = live.filter(match);
-  const pastShown = past.filter((s) => (stateFilter ? false : true) && (!q || s.label.toLowerCase().includes(q)));
+  const pastShown = past.filter((s) => (stateFilter ? false : true) && hit(s.label));
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   //  ★ 홈과 **같은 붓**을 쓴다(#2033) — 행 문법도 묶는 축 토글도 여기서 새로 만들지 않는다.
@@ -1168,7 +1221,8 @@ function renderProjTree(): void {
   for (const f of folders) if (f.settings && f.settings.kind === 'archive') markArchive(f);
   const listsIn = (folderId: number | null): TreeList[] => lists.filter((l) => (l.folder_id ?? null) === folderId);
   const q = sideFilter.trim().toLowerCase();
-  const hit = (name: string): boolean => !q || name.toLowerCase().includes(q);
+  const match = findMatcher(sideFilter);
+  const hit = (name: string): boolean => match(name);
   const sel = projScopeKey();
   const countUnder = (f: TreeFolder): number => listsIn(f.id).reduce((n, l) => n + (openByList.get(l.id) || 0), 0)
     + (kids.get(f.id) || []).filter((c) => !archived.has(c.id)).reduce((n, c) => n + countUnder(c), 0);
@@ -1350,8 +1404,8 @@ function renderWiki(): void {
     const c = all.find((x) => x.id === activeCat);
     if (c && wikiClosed.has(c.space)) { wikiClosed.delete(c.space); saveWikiClosed(); }
   }
-  const hit = (c: WikiCat) => !q || c.name.toLowerCase().includes(q)
-    || String(c.description || '').toLowerCase().includes(q) || String(c.key || '').toLowerCase().includes(q);
+  const match = findMatcher(sideFilter);
+  const hit = (c: WikiCat) => match(c.name, c.description, c.key);
   // 순서 = 우리 팀이 맡은 것 먼저 → 문서 많은 것 먼저.
   const rank = (a: WikiCat, b: WikiCat): number =>
     (Number(own.has(b.id)) - Number(own.has(a.id))) || ((Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0));
@@ -1980,7 +2034,8 @@ function renderTree(rowsIn?: Row[]): void {
     if (r && (r.live.length || r.past.length)) { openSet.add(selectedPk); saveSet(OPEN_KEY, openSet); }
   }
   const q = sideFilter.trim().toLowerCase();
-  const hit = (r: Row) => !q || (r.proj ? (r.proj.name.toLowerCase().includes(q) || String(r.proj.id) === q) : '프로젝트 없는 세션'.includes(q));
+  const match = findMatcher(sideFilter);
+  const hit = (r: Row) => (r.proj ? (match(r.proj.name) || String(r.proj.id) === q) : match('프로젝트 없는 세션'));
   const stateOf = (r: Row) => (stateFilter ? r.live.filter((s) => s.stateKey === stateFilter) : r.live);
   const pastOf = (r: Row) => (stateFilter ? r.past.filter((s) => s.stateKey === stateFilter) : r.past);
   let hiddenDone = 0;
