@@ -24,14 +24,12 @@ t("[2] 배포가 켜면 chat — 대소문자·공백은 관대하게", () => {
 });
 
 t("[3] ★ 아직 못 여는 하네스는 켜도 terminal — 빈 화면을 만들지 않는다", () => {
-  for (const h of ["opencode", "antigravity", "grok", "codex", "shell", "", "wat"]) {
+  for (const h of ["opencode", "antigravity", "grok", "shell", "", "wat"]) {
     assert.equal(sessionRuntimeMode({ harness: h }, CHAT), "terminal", h);
   }
   assert.equal(harnessSupportsChat("claude"), true);
-  //  ⚠ codex 는 «감당 못 한다» 가 아니라 «우리가 아직 기동을 안 쥔다» — app-server 런타임은 기존
-  //   codex-chat-runtime 소유이고, 그걸 이 모드 축으로 옮기는 일이 남았다(chat-adapters note 참조).
-  //   판정을 표에서 파생하므로 그 이관이 끝나는 순간 이 값이 저절로 true 가 된다.
-  assert.equal(harnessSupportsChat("codex"), false);
+  //  codex 는 전용 런타임(codex-chat-runtime)이 기동을 쥐고 버스로 흘린다 — 표의 runsVia 가 그 사실이다.
+  assert.equal(harnessSupportsChat("codex"), true);
   assert.equal(harnessSupportsChat("grok"), false, "ACP 표면은 있으나 payload 실측이 없다 — 있는 척하지 않는다");
 });
 

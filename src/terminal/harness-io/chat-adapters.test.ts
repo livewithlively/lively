@@ -28,14 +28,17 @@ t("[2] 모든 하네스가 모든 축을 **명시**한다 — 미실측은 null 
       assert.equal(a.argv, null, `${a.key}: 전송이 없는데 argv 가 있다`);
       assert.equal(a.translate, null, `${a.key}: 전송이 없는데 translate 가 있다`);
     }
+    //  ★ 전용 런타임이 쥔 하네스는 argv 를 갖지 않는다 — 두 자리가 같은 프로세스를 띄우면 대화가 둘로 갈린다.
+    if (a.runsVia) assert.equal(a.argv, null, `${a.key}: ${a.runsVia} 가 쥐는데 표에도 argv 가 있다`);
   }
 });
 
 t("[3] ★ 번역기 없는 하네스는 chat 모드가 **안 열린다** — 빈 화면을 만들지 않는다", () => {
   for (const a of CHAT_ADAPTERS) {
     const open = canOpenChatRuntime(a.key);
-    if (open) assert.ok(a.translate && a.argv && a.encode, `${a.key}: 연다면 셋 다 있어야 한다`);
-    else assert.ok(!a.translate || !a.argv || !a.encode || a.transport !== "stdio-jsonl", `${a.key}: 못 여는 이유가 있다`);
+    //  여는 길은 둘이다: 이 표가 직접 띄우거나(stdio-jsonl+argv+encode), 전용 런타임이 쥐거나(runsVia).
+    if (open) assert.ok(a.translate && (a.runsVia || (a.argv && a.encode)), `${a.key}: 연다면 번역 + (런타임|argv) 가 있어야 한다`);
+    else assert.ok(!a.translate, `${a.key}: 못 여는 이유는 번역기 부재다`);
   }
 });
 
@@ -46,12 +49,12 @@ t("[4] ★ 모드 판정이 이 표에서 **파생**된다 — 두 곳에 적으
   assert.equal(harnessSupportsChat("모르는하네스"), false, "모르는 key 는 claude 로 추측하지 않는다");
 });
 
-t("[5] 지금 실제로 열리는 것 — claude 하나(나머지는 왜 아닌지 note 가 말한다)", () => {
+t("[5] 지금 실제로 열리는 것 — claude·codex(나머지는 왜 아닌지 note 가 말한다)", () => {
   const open = CHAT_ADAPTERS.filter((a) => canOpenChatRuntime(a.key)).map((a) => a.key);
-  assert.deepEqual(open, ["claude"]);
+  assert.deepEqual(open, ["claude", "codex"]);
   //  ⚠ 이 단언은 **진도를 재는 자리**다. codex·grok·opencode 가 열리면 여기서 빨간불이 나고,
   //   그때 이 목록을 늘리면서 «무엇이 실측됐나» 를 함께 갱신하게 된다.
-  assert.equal(chatAdapter("codex")!.transport, "jsonrpc-stdio", "codex 는 번역만 준비됨(기동은 기존 런타임)");
+  assert.equal(chatAdapter("codex")!.runsVia, "codex-chat-runtime", "codex 기동은 전용 런타임이 쥔다");
   assert.equal(chatAdapter("grok")!.transport, "jsonrpc-stdio", "grok 은 ACP 표면 확인됨(payload 실측 남음)");
   assert.equal(chatAdapter("opencode")!.transport, "http-sse", "opencode 는 serve 경로");
   assert.equal(chatAdapter("antigravity")!.transport, null, "antigravity 는 전송 자체가 미확정 + 승인 벤더 미지원");
