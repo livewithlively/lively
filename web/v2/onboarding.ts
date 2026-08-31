@@ -2284,6 +2284,21 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return '';
   }
 
+  //  올렸는데 **자료로 안 들어간** 파일을 사실대로 말한다(#1631). 종전엔 화면에서 조용히 사라져서,
+  //   8개를 올린 사람이 5건만 정리된 것을 모른 채 넘어갔다. 사유는 서버가 준 것만 옮긴다 — 지어내지 않는다.
+  //  ⚠ startReading 안이 아니라 **바깥**에 둔다 — enterChat 이 대화창을 비운 뒤 다시 불러야 하고,
+  //   읽기가 이미 끝나 있으면 startReading 은 첫 줄에서 return 해 아무 말도 안 하기 때문이다.
+  function sayFail() {
+    const fails = (S.upFail || []).filter(Boolean);
+    if (!fails.length || S._saidFail) return;
+    S._saidFail = true;
+    const names = fails.slice(0, 3).map((f) => esc(typeof f === 'string' ? f : f.n)).join(', ');
+    const more = fails.length > 3 ? ` 외 ${fails.length - 3}건` : '';
+    const why = failWhy(fails);
+    msgLiv(`파일 <b>${fails.length}건</b>(${names}${more})은 자료로 넣지 못했어요${why}.`
+      + ` 나머지로 진행할게요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+  }
+
   function startReading() {
     if (S.read.finished) return;
     clearInterval(readTimer);
@@ -2301,18 +2316,6 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       S.read.finished = true; S.read.done = target(); save();
       clearInterval(readTimer); readTimer = null; paint(); renderSB();
       document.dispatchEvent(new Event('read-done'));
-    };
-    //  올렸는데 **자료로 안 들어간** 파일을 사실대로 말한다(#1631). 종전엔 화면에서 조용히 사라져서,
-    //   8개를 올린 사람이 5건만 정리된 것을 모른 채 넘어갔다. 사유는 서버가 준 것만 옮긴다 — 지어내지 않는다.
-    const sayFail = () => {
-      const fails = (S.upFail || []).filter(Boolean);
-      if (!fails.length || S._saidFail) return;
-      S._saidFail = true;
-      const names = fails.slice(0, 3).map((f) => esc(typeof f === 'string' ? f : f.n)).join(', ');
-      const more = fails.length > 3 ? ` 외 ${fails.length - 3}건` : '';
-      const why = failWhy(fails);
-      msgLiv(`파일 <b>${fails.length}건</b>(${names}${more})은 자료로 넣지 못했어요${why}.`
-        + ` 나머지로 진행할게요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
     };
     if (!target()) { finish(); sayFail(); return; }      // 등록된 자료 0건 — 기다릴 것이 없다(올린 게 있었다면 사유를 말한다)
     //  ⚠ **상한을 둔다.** 종전엔 완료 조건에서만 멈춰서, 등록이 하나라도 빠지면 영원히 돌았다(실측 11/13).
@@ -2821,7 +2824,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   /* 채팅 시작(read 장면) — 노션 p5의 첫 인사에 대응 */
   async function enterChat(token) {
     setStage('stage-chat');
+    //  ⚠ 여기서 대화창을 **비운다.** 그러니 그 전에 한 말은 사라진다 — «N건은 못 넣었어요» 도 함께(실측 2026-08-31).
+    //   앞 장면에서 이미 말했다고 표시(_saidFail)를 남겨 두면, 사람은 그 말을 **영영 못 본 채** 지나간다.
+    //   지운 것은 다시 말해야 한다 — 여기가 사람에게 남는 대화창의 시작이다.
     $('#thread').innerHTML = '';
+    S._saidFail = false;
     await loadWelcome();
     S.read.total = ingestedN();
     startReading();
@@ -2830,6 +2837,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     msgLiv(`${nick() ? esc(nick()) + '님, ' : ''}연결까지 끝났어요.`
       + (n ? `<p style="margin-top:6px">지금 자료 <b>${n}건</b>을 읽고 있어요. 읽는 동안 몇 가지만 확인할게요.</p>`
            : `<p style="margin-top:6px">몇 가지만 확인하고 바로 시작할게요.</p>`));
+    sayFail();   // 읽기가 이미 끝나 있으면 startReading 이 안 부른다 — 여기서 직접 말한다(_saidFail 이 중복을 막는다)
     chatStep('b1', token);
   }
 
