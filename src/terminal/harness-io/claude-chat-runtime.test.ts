@@ -85,7 +85,7 @@ await t("[4] 대화 id 를 첫 줄에서 잡는다(재개·대화 파일 찾기�
   ensureClaudeChat(opts(S, child) as any);
   child.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "conv-9", model: "m" }) + "\n");
   await new Promise((r) => setImmediate(r));
-  const { convId } = sendClaudeChat({ ...opts(S, child), text: "hi" } as any);
+  const { convId } = await sendClaudeChat({ ...opts(S, child), text: "hi" } as any);
   assert.equal(convId, "conv-9");
   stopClaudeChat(S, "테스트 정리");
 });
@@ -93,7 +93,7 @@ await t("[4] 대화 id 를 첫 줄에서 잡는다(재개·대화 파일 찾기�
 await t("[5] 말을 걸면 stream-json 한 줄이 stdin 으로 나간다", async () => {
   const S = "r5"; resetSessionBus(S);
   const child = fakeChild();
-  sendClaudeChat({ ...opts(S, child), text: "안녕" } as any);
+  await sendClaudeChat({ ...opts(S, child), text: "안녕", startupMs: 0 } as any);
   assert.equal(child.written.length, 1);
   const sent = JSON.parse(child.written[0]);
   assert.equal(sent.type, "user");
@@ -102,9 +102,9 @@ await t("[5] 말을 걸면 stream-json 한 줄이 stdin 으로 나간다", async
   stopClaudeChat(S, "테스트 정리");
 });
 
-await t("[6] 빈 말은 거부 — 런타임을 띄우지도 않는다", () => {
+await t("[6] 빈 말은 거부 — 런타임을 띄우지도 않는다", async () => {
   const S = "r6"; resetSessionBus(S);
-  assert.throws(() => sendClaudeChat({ ...opts(S, fakeChild()), text: "   " } as any), ClaudeChatUnavailable);
+  await assert.rejects(() => sendClaudeChat({ ...opts(S, fakeChild()), text: "   " } as any), ClaudeChatUnavailable);
   assert.equal(isClaudeChatLive(S), false);
 });
 
@@ -163,16 +163,53 @@ await t("[10] ★ 하네스 무관 — 같은 런타임이 antigravity 를 연�
   stopClaudeChat(S, "테스트 정리");
 });
 
-await t("[11] ★ 인코딩을 모르는 하네스엔 말을 못 건다 — 있는 척하지 않는다", () => {
+await t("[11] ★ 인코딩을 모르는 하네스엔 말을 못 건다 — 있는 척하지 않는다", async () => {
   const S = "r11"; resetSessionBus(S);
   //  grok·opencode·antigravity 는 translate 는 있는데 encode 가 없다(보내는 쪽 왕복 미실측).
   //  그 상태에서 보내기가 «성공» 하면 사람은 답을 영영 기다린다.
   for (const h of ["grok", "opencode", "antigravity"]) {
-    assert.throws(
+    await assert.rejects(
       () => sendClaudeChat({ sessionId: S, harness: h, cwd: "/tmp", osUser: null, text: "안녕", spawnFn: () => fakeChild() } as any),
       ClaudeChatUnavailable, `${h}: 인코딩이 없으면 거부한다`,
     );
   }
+});
+
+await t("[12] ★★ 바로 죽는 프로세스는 «전달됨» 이 아니다 — 폴백이 걸려야 한다", async () => {
+  //  ⚠ 이 구멍이 실제로 있었다(2026-09-01). `spawn` 은 비동기라 인자를 모르는 빌드는 즉시 죽지만
+  //   그 exit 은 **다음 틱**에 온다 — 그 사이 `send()` 는 멀쩡한 파이프에 써서 true 를 준다.
+  //   그러면 deliverPrompt 가 «전달됨» 을 반환해 **폴백이 안 걸리고**, 사람은 보낸 줄 알고
+  //   답을 영영 기다린다. 코드 어디에도 오류가 안 나므로 눈으로는 못 잡는다.
+  const S = "r12"; resetSessionBus(S);
+  const child = fakeChild();
+  const p = sendClaudeChat({ ...opts(S, child), text: "안녕", startupMs: 3000 } as any);
+  //  한 줄도 못 내고 죽는다 — 인자를 모르는 빌드의 모양 그대로.
+  setTimeout(() => child.emit("exit", 1), 20);
+  await assert.rejects(() => p, ClaudeChatUnavailable, "기동 실패를 알린다(조용히 성공하지 않는다)");
+  assert.equal(isClaudeChatLive(S), false, "죽은 런타임을 남겨 두지 않는다(다음 턴이 재시도한다)");
+});
+
+await t("[13] 한 줄이라도 냈으면 산 것이다 — 느린 기동을 죽음으로 오인하지 않는다", async () => {
+  const S = "r13"; resetSessionBus(S);
+  const child = fakeChild();
+  const p = sendClaudeChat({ ...opts(S, child), text: "안녕", startupMs: 3000 } as any);
+  setTimeout(() => child.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "c1" }) + "\n"), 20);
+  const r = await p;
+  assert.equal(r.convId, "c1");
+  stopClaudeChat(S, "테스트 정리");
+});
+
+await t("[14] 이미 살아 있던 세션은 기동 확인을 **다시 하지 않는다**(둘째 턴부터 비용 0)", async () => {
+  const S = "r14"; resetSessionBus(S);
+  const child = fakeChild();
+  ensureClaudeChat(opts(S, child) as any);
+  child.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "c2" }) + "\n");
+  await new Promise((r) => setImmediate(r));
+  const t0 = Date.now();
+  //  startupMs 를 크게 줘도 기다리지 않는다 — 이미 있던 세션이라 그 문을 안 탄다.
+  await sendClaudeChat({ ...opts(S, child), text: "둘째", startupMs: 5000 } as any);
+  assert.ok(Date.now() - t0 < 400, `기다리지 않는다(${Date.now() - t0}ms)`);
+  stopClaudeChat(S, "테스트 정리");
 });
 
 console.log(`\n${pass}건 통과`);
