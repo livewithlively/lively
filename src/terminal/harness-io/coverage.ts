@@ -41,16 +41,25 @@ export interface HarnessCoverage {
 export const COVERAGE: readonly HarnessCoverage[] = [
   {
     harness: "claude",
-    axes: { read: "ok", send: "ok", tasks: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
+    axes: { read: "ok", send: "ok", tasks: "ok", approve: "terminal", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
-      //  ⚠ approve 를 "ok" 로 적은 근거를 남긴다 — 이 축만 라이브 물음을 재현하지 못했다.
-      //   ① 바이너리가 직접 말한다: --permission-prompt-tool 은 "permission prompts reach the host
-      //     over stdio" — 그래서 argv 에 `stdio` 를 명시했고, 그 플래그로 프로세스가 정상 기동한다(실측).
-      //   ② control_response 봉투가 CLI 에 받아들여진다: initialize 제어요청을 보내니 **같은 봉투로**
-      //     request_id 를 짝맞춰 응답이 왔다(실측 2026-09-01).
-      //   ③ 다만 이 맥에서는 환경이 도구를 자동 허용해(init.permissionMode 가 계속 default) can_use_tool
-      //     자체는 못 봤다. 물음이 뜨는 환경에서 한 번 더 확인할 것.
-      approve: "왕복 배선·봉투는 확인, 물음 자체는 미재현(이 환경이 자동 허용) — 위 주석 참조.",
+      //  ⚠ 한때 "ok" 로 적었다가 **되돌린 자리**다(2026-09-01). 상민님이 "왜 대화창에 선택지 안뜨냐" 고
+      //   신고했고, 다시 재 보니 나는 그 물음을 **한 번도 재현한 적이 없었다**. 짐작을 표에 적은 것이다.
+      //
+      //   시도한 것(전부 실패 — 다음 사람이 같은 길을 다시 걷지 않게 적는다):
+      //    · `--permission-mode manual` — init 이 계속 `default` 로 온다(플래그가 안 먹는다).
+      //    · `--permission-prompt-tool stdio` — tools 가 438→441 로 늘어 플래그는 먹지만 물음은 0건.
+      //      그 값의 근거였던 "permission prompts reach the host over stdio" 문구는 다시 보니
+      //      **클라우드 세션용 옵션 검증표**에 있는 것이라 로컬 -p 모드의 계약이 아닐 수 있다.
+      //    · `--settings '{"permissions":{"defaultMode":"manual","allow":[]}}'` — init 은 여전히 default.
+      //    · `--settings '{"hooks":{}}'` — 훅은 여전히 4건 뜬다(설정이 병합이라 못 지운다).
+      //    · Agent SDK 식 `control_request{subtype:"initialize"}` 핸드셰이크 — CLI 가 같은 봉투로
+      //      request_id 를 짝맞춰 응답한다(우리 응답 **모양**은 맞다는 증거). 그래도 물음은 0건.
+      //
+      //   확인된 것: 우리 쪽 왕복 배선과 control_response 봉투는 맞다(permission-roundtrip.test).
+      //   모르는 것: **claude 가 -p/stream-json 에서 can_use_tool 을 내는 조건**. 그걸 모르는 채로
+      //   "ok" 를 적으면 사람은 웹에서 승인을 찾다가 못 찾는다 — 그게 신고된 그 증상이다.
+      approve: "claude 가 -p/stream-json 에서 승인을 묻게 하는 조건을 못 찾았다(5가지 시도 전부 0건 — 위 주석). 우리 왕복은 준비돼 있으나 물음이 안 와서 «된다» 고 적지 않는다.",
     },
   },
   {
