@@ -2040,23 +2040,82 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   하네스의 폴백으로만 남긴다.
         const h = c.harness || aiHarness();
         const g = AI_GUIDE[h];
-        const li = (t) => `<li>${t}</li>`;
-        const steps = (g ? g.steps : (c.steps && c.steps.length ? c.steps : [`터미널에  ${c.bin || 'claude'}  를 입력해 안내대로 로그인합니다`]).map((t) => esc(t)))
-          .map(li).join('');
-        //  안 1(#2232) — 3걸음 뒤에 «그 사이 물음은 Enter» 한 줄 + 그 자리 펼침. 펼침은 팝오버·모달이 아니라 인라인(원준님 규칙).
-        const hasDetail = !!(g && g.detail && g.detail.length);
-        const more = hasDetail ? `<button type="button" class="ob-more" id="cMore" data-label="${esc(g.more || '화면마다 자세히 보기')}" aria-expanded="false" aria-controls="cDetail">${esc(g.more || '화면마다 자세히 보기')} ▾</button>` : '';
-        return qHead('claude', lead, `${picked} 계정을 연결해 주세요.`,
-          (g && g.help) || '아래 버튼으로 로그인 창을 열고 순서대로 하시면 됩니다. 쳐야 할 글자는 누르면 복사돼요.')
-          + `<div class="ob-tok">
-              <button class="ob-btn ob-btn-sub ob-btn-inline" id="cTerm">${LOGIN_INLINE[h] ? `${picked} 로그인 시작` : `${picked} 로그인 창 열기 ↗`}</button>
-              <div class="ob-login-card" id="cCard" hidden></div>
-              <ol>${steps}</ol>
-              ${g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
-              ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map(li).join('')}</ol></div>` : ''}
-              ${g && g.note ? `<p class="ob-note ob-fine2">${g.note}</p>` : ''}
-              ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${picked} 로그인 여부를 서버가 확인하지 못해요. 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
+        //  ★ 안 1 확정(#2232, 아티팩트 «AI 로그인 스테퍼») — 걸음 세 칸이 한 장에 서고 지금 할 칸만 켜진다.
+        //   화면(카드)을 통째로 갈아치우던 구조를 걷었다: 탈출로는 하단 상시, 받은 주소·치던 코드는 어떤 경우에도 보존.
+        const step = (n, cls, title, doneLine, body) => `<div class="ob-lg-step ${cls}" id="lg${n}">
+            <span class="ob-lg-n">${n}</span><div class="ob-lg-body"><b>${title}</b>
+            <div class="ob-lg-done">✓ ${doneLine}</div><div class="ob-lg-in">${body}</div></div></div>`;
+        const fbLine = `<div class="ob-lg-fb">여기서 잘 안 되면 <button type="button" id="lgFb">창으로 열어서 로그인 ↗</button><span id="lgFbNote"></span></div>`;
+        const okBar = `<div class="ob-lg-ok" id="lgOk" hidden>✓ 로그인이 끝났어요<button class="ob-btn ob-btn-pri ob-btn-inline" id="lgOkGo" style="margin-left:auto">계속</button></div>`;
+        let stepper = '';
+        if (h === 'claude') {
+          stepper = step(1, 'now', `${esc(picked)} 주소 열기`, '열었어요',
+              `<div class="ob-lg-addr"><code id="lgAddr">주소를 받는 중이에요…</code><a class="ob-btn ob-btn-pri ob-btn-inline" id="lgOpen" target="_blank" rel="noopener" hidden>열기 ↗</a></div>`)
+            + step(2, 'idle', '로그인하고 Authorize → 코드 복사', '코드를 받았어요',
+              `<div class="ob-lg-d">허용하면 브라우저에 아래처럼 생긴 코드가 나와요. 통째로 복사하세요.</div>
+               <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">claude.com/oauth/…</span></div>
+               <div class="bd"><div class="t">Paste this code back into Claude Code</div><span class="ob-bchip">ac_k92rXq4LmB…#pQ7w</span><div class="ob-bcap">← 이렇게 생긴 게 코드예요</div></div></div>`)
+            + step(3, 'idle', '받은 코드를 여기에', '넣었어요',
+              `<div class="ob-lg-row"><input id="lgIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ac_ 로 시작하는 코드 붙여넣기"><button class="ob-btn ob-btn-pri ob-btn-inline" id="lgPut">넣기</button></div>`);
+        } else if (h === 'codex') {
+          stepper = step(1, 'now', '주소 열고, 이 코드 복사해 두기', '열었어요',
+              `<div class="ob-lg-addr"><code id="lgAddr">주소와 코드를 받는 중이에요…</code><a class="ob-btn ob-btn-pri ob-btn-inline" id="lgOpen" target="_blank" rel="noopener" hidden>열기 ↗</a></div>
+               <div style="margin-top:9px"><button type="button" class="ob-copychip" id="lgCodeChip" hidden><span id="lgCode"></span><small>누르면 복사</small></button></div>`)
+            + step(2, 'idle', '브라우저에 코드 넣고, ChatGPT 로그인 → 허용', '허용했어요',
+              `<div class="ob-lg-d">열린 화면의 입력칸에 위 코드를 넣으면 됩니다.</div>
+               <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">auth.openai.com/device</span></div>
+               <div class="bd"><div class="t">Enter the code displayed on your device</div><span class="ob-bchip" id="lgCodeEcho">····-····</span><div class="ob-bcap">← 아까 그 코드를 여기에</div></div></div>
+               <details class="ob-stuck"><summary>빨간 글로 «장치 코드 인증을 활성화하세요» 가 떴다면</summary><div class="in">
+                 막힌 게 아니에요. <a href="https://chatgpt.com/#settings" target="_blank" rel="noopener"><b>ChatGPT 설정 ▸ 보안</b></a>에서 <b>Codex용 장치 코드 인증</b>을 켜고, <button type="button" class="ob-linkbtn" id="lgRetry" style="display:inline">다시 시도</button>를 누르세요 — 새 주소와 새 코드가 나옵니다(아까 코드는 이미 죽었어요).</div></details>`)
+            + step(3, 'idle', '끝나기를 기다리면 됩니다', '끝났어요',
+              `<div class="ob-lg-wait" id="lgWait" hidden><span class="ob-lg-pulse"></span>브라우저에서 허용을 기다리는 중…</div>`);
+        } else if (h === 'antigravity') {
+          stepper = step(1, 'now', '터미널 창 열기', '열었어요 — 로그인 방법은 Enter 로 넘겼어요',
+              `<div class="ob-lg-d">새 탭에 글자만 있는 창이 열리고, 먼저 이렇게 물어요. <b>1번에 이미 커서(&gt;)가 있으니 그대로 Enter.</b></div>
+               <div class="ob-tmock"><span class="dim">Select login method:</span><br><span class="sel"><span class="okx">&gt;</span> 1. Google OAuth</span><br><span class="dim">&nbsp;&nbsp;2. Use a Google Cloud project</span></div>
+               <div style="margin-top:9px"><button class="ob-btn ob-btn-pri ob-btn-inline" id="cTerm">${esc(picked)} 로그인 창 열기 ↗</button></div>`)
+            + step(2, 'idle', '구글 로그인 → 코드를 창에 붙여넣기', '코드를 넣었어요',
+              `<div class="ob-lg-d">창의 파란 줄(<b>Click here to authenticate</b>)을 누르면 구글 로그인이 열려요. 로그인하면 <b>복사할 코드</b>가 나오고, 그걸 창의 <b>authorization code…</b> 칸에 붙여넣고 Enter.</div>
+               <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="url">accounts.google.com</span></div>
+               <div class="bd"><div class="t">Google 로그인 → 허용을 누르면</div><span class="ob-bchip">4/0AeaYSHB…kQx7</span><div class="ob-bcap">← 이 코드를 복사해 창에 붙여넣으세요</div></div></div>`)
+            + step(3, '', '창이 세 번 더 물어요 — 전부 Enter 면 됩니다', '',
+              `<details class="ob-peek"><summary>창이 묻는 세 화면 미리 보기 (색 테마 · 데이터 동의 · 폴더 신뢰)</summary><div class="in">
+                 <div class="pk">① Choose your color scheme — <span class="ans">아무거나 골라도 돼요. 그대로 Enter</span></div>
+                 <div class="ob-tmock"><span class="dim">Choose your color scheme:</span><br><span class="sel"><span class="okx">&gt;</span> terminal</span><br><span class="dim">&nbsp;&nbsp;light · dark · tokyo night …</span></div>
+                 <div class="pk">② Terms of Service &amp; Data Use — <span class="ans">동의 상태로 Enter 하면 지나가요</span> · 사용 정보를 보내고 싶지 않으면 그 줄에서 Enter 로 체크를 빼고 [Done]</div>
+                 <div class="ob-tmock"><span class="sel"><span class="okx">&gt;</span> [x] Yes, I agree to help improve Antigravity CLI…</span><br><span class="dim">&nbsp;&nbsp;&nbsp;&nbsp;(나중에 설정에서 언제든 끌 수 있어요)</span></div>
+                 <div class="pk">③ Do you trust the contents of this project? — <span class="ans">라이블리가 만든 작업 폴더예요. Yes 에서 Enter</span></div>
+                 <div class="ob-tmock"><span class="dim">/work/shared/project/…</span><br><span class="sel"><span class="okx">&gt;</span> Yes, I trust this folder</span><br><span class="dim">&nbsp;&nbsp;No, exit</span></div>
+               </div></details>
+               <div class="ob-lg-d" style="margin-top:8px">다 지나가면 창에 입력칸(<b>&gt;</b> 와 오른쪽 아래 <b>Gemini …</b>)이 떠요. 그럼 여기로 돌아와 아래 <span class="ob-kbd">로그인했어요</span>.</div>`);
+        } else {
+          // grok — 명령 한 줄(catalog 에 비대화형 로그인이 없는 하네스의 대표). 그 밖 미지의 하네스도 이 모양이 안전하다.
+          const cmd = 'grok login --device-auth';
+          stepper = step(1, 'now', '터미널 창 열고, 이 한 줄 붙여넣기', '명령을 넣었어요',
+              `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+                 <button class="ob-btn ob-btn-pri ob-btn-inline" id="cTerm">${esc(picked)} 로그인 창 열기 ↗</button>
+                 <button type="button" class="ob-copychip" data-copy="${esc(cmd)}" style="letter-spacing:0; font-size:12px"><span>${esc(cmd)}</span><small>누르면 복사</small></button></div>
+               <div class="ob-lg-d" style="margin-top:7px">창을 한 번 누른 뒤 붙여넣고(⌘V) Enter.</div>`)
+            + step(2, 'idle', '창에 뜬 주소 열고, 코드 넣어 X 로그인', '로그인했어요',
+              `<div class="ob-tmock"><span class="dim">$</span> grok login --device-auth<br><span class="dim">Visit:</span> accounts.x.ai/device<br><span class="dim">Code:</span> <span class="okx">HJ4K-Q2WM</span></div>
+               <div class="ob-lg-d" style="margin-top:8px">브라우저에서 그 코드를 넣고 X(xAI) 계정으로 로그인하세요.</div>`)
+            + step(3, '', '창에 «Login successful» 이 보이면', '',
+              `<div class="ob-tmock"><span class="okx">✓ Login successful.</span></div>
+               <div class="ob-lg-d" style="margin-top:8px">여기로 돌아와 아래 <span class="ob-kbd">로그인했어요</span>.</div>`);
+        }
+        //  «그 사이 물음»(between/펼침)은 스테퍼 밖 잔글씨로 유지 — antigravity 는 걸음 ③이 그 역할이라 뺀다.
+        const hasDetail = h !== 'antigravity' && !!(g && g.detail && g.detail.length);
+        const more = hasDetail ? `<button type="button" class="ob-more" id="cMore" data-label="${esc((g && g.more) || '자세히 보기')}" aria-expanded="false" aria-controls="cDetail">${esc((g && g.more) || '자세히 보기')} ▾</button>` : '';
+        return qHead('claude', lead, `${esc(picked)} 계정을 연결해 주세요.`,
+          (g && g.help) || '아래 걸음대로 하시면 됩니다.')
+          + `<div class="ob-tok ob-lgs">
+              ${stepper}
+              ${okBar}
+              ${h !== 'antigravity' && g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
+              ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map((t) => `<li>${t}</li>`).join('')}</ol></div>` : ''}
+              ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${esc(picked)} 로그인 여부를 서버가 확인하지 못해요. 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
               <p class="ob-err" id="cErr"></p>
+              ${LOGIN_INLINE[h] ? fbLine : ''}
               ${otherNote}
             </div>`
           + `<button class="ob-btn ob-btn-pri" id="cGo">로그인했어요</button>`
@@ -2064,6 +2123,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       },
       bind: (el) => {
         const err = $('#cErr', el), go = $('#cGo', el);
+        /** 걸음 상태 — 칸을 지우지 않고 클래스만 바꾼다(안 1 의 핵심). */
+        const lgMark = (n, cls) => { const st = $('#lg' + n, el); if (!st) return;
+          st.classList.remove('now', 'idle', 'done'); if (cls) st.classList.add(cls);
+          const sn = st.querySelector('.ob-lg-n'); if (sn && cls === 'done') sn.textContent = '✓'; else if (sn) sn.textContent = String(n); };
+        // 복사 칩(그록 명령 등) — data-copy 를 그대로 쓴다.
+        $$('.ob-copychip[data-copy]', el).forEach((b) => b.onclick = async () => {
+          try { await navigator.clipboard.writeText(b.dataset.copy || ''); } catch (_) { toast(b.dataset.copy || ''); }
+          const sm = b.querySelector('small'); if (sm) { const o = sm.textContent; sm.textContent = '복사했어요 ✓'; setTimeout(() => { sm.textContent = o; }, 1600); }
+          lgMark(1, 'done'); lgMark(2, 'now'); lgMark(3, '');
+        });
         // 안 1(#2232) — «화면마다 자세히 보기» 는 그 자리에서 펼치고 접는다(팝오버·모달 금지). 상태는 화면에만(저장 안 함).
         const more = $('#cMore', el), det = $('#cDetail', el);
         if (more && det) more.onclick = () => {
@@ -2080,8 +2149,17 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // 로그인 창 열기 — 그 AI 를 내 격리 홈에서 띄운 터미널 한 장(사이드바 없는 페이지). me-ai.ts [내 계정 로그인]과 같은 규약.
         //  ⚠ 종전엔 #/terminal(AI 세션 목록, 셸 통째)을 열었다 — 온보딩도 안 끝난 사람에게 사이드바·세션 목록이 통째로
         //   보였고, 거기서 또 [내 계정 로그인]을 찾아 눌러야 했다(원준님 2026-08-28).
+        //  인라인 하네스(claude·codex)는 시작 버튼 없이 **자동으로** 절차를 띄운다 — 걸음 1 에 주소가 바로 온다.
+        //   (restart:false 라 이미 돌던 절차가 있으면 그걸 이어받는다 — 장면을 들락거려도 상태가 안 죽는다.)
+        {
+          const h0 = (AIC && AIC.harness) || aiHarness();
+          if (LOGIN_INLINE[h0] && AIC && !AIC.error && AIC.installed !== false && !aiOn(AIC.harness)) {
+            void startInlineLogin(el, h0, AI_LABEL[h0] || S.ai || h0);
+          }
+        }
         const term = $('#cTerm', el);
         if (term) term.onclick = async () => {
+          lgMark(1, 'done'); lgMark(2, 'now'); lgMark(3, '');
           const h = (AIC && AIC.harness) || aiHarness();
           const label = AI_LABEL[h] || S.ai || h;
           // ★ 터미널 없이 여기서 끝내는 하네스(#2055 후속) — 새 탭·새 창을 열지 않는다.
@@ -2692,108 +2770,85 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      ⚠ 완료 판정은 서버의 **자격 확인**이 한다(프로세스가 끝난 것과 로그인 성공은 다르다). */
   let inlineStop = false;
   async function startInlineLogin(el, h, label, restart) {
-    const card = $('#cCard', el); if (!card) return;
+    //  안 1(#2232) — 이 함수는 이제 **스테퍼를 채우기만** 한다. 종전엔 카드(replaceChildren)를 통째로 갈아치웠고,
+    //   상태 조회가 30초 끊기면 «주소가 오지 않았어요» 탈출로가 화면을 덮어 **받은 주소·치던 코드까지 지웠다**
+    //   (원준님 실측 2026-08-31: 앤트로픽에서 돌아오니 다 사라짐 — 그날 게이트웨이 출렁임이 그 30초를 만들었다).
+    //   이제 지우는 코드 경로가 없다: 주소·코드는 도착하면 채워질 뿐이고, 실패·정체는 **잔글씨 한 줄**로만 말한다.
     inlineStop = false;
-    card.hidden = false;
-    //  #2232 원준님 2026-08-30 — 시작 버튼은 **누른 순간 사라진다.** 종전엔 로그인이 끝난 뒤에도
-    //   «Claude 로그인 시작» 이 위에 남아 있어 «끝났는데 왜 시작 버튼이?» 가 됐다. 이 아래 카드가 그 자리를 대신한다.
-    //   (탈출로가 필요하면 escape() 가 자기 버튼을 따로 그린다.)
-    const startBtn = $('#cTerm', el); if (startBtn) startBtn.hidden = true;
-    /** 로그인이 끝나면 «하는 방법» 은 더 이상 할 일이 아니다 — 걸음표·펼침·조작법을 걷는다. */
-    const hideHowto = () => {
-      for (const sel of ['#cTerm', '.ob-tok > ol', '.ob-between', '#cDetail', '.ob-fine2']) {
-        const n = $(sel, el); if (n) n.hidden = true;
-      }
+    const addr = $('#lgAddr', el), open = $('#lgOpen', el);
+    if (!addr) return;                                  // 스테퍼가 없는 화면(연결됨 등) — 할 일 없음
+    const codeChip = $('#lgCodeChip', el), codeEl = $('#lgCode', el), codeEcho = $('#lgCodeEcho', el);
+    const inp = $('#lgIn', el), put = $('#lgPut', el), wait = $('#lgWait', el);
+    const ok = $('#lgOk', el), fbBtn = $('#lgFb', el), fbNote = $('#lgFbNote', el);
+    const lgMark = (n, cls) => { const st = $('#lg' + n, el); if (!st) return;
+      st.classList.remove('now', 'idle', 'done'); if (cls) st.classList.add(cls);
+      const sn = st.querySelector('.ob-lg-n'); if (sn) sn.textContent = cls === 'done' ? '✓' : String(n); };
+    const note = (t) => { if (fbNote) fbNote.textContent = t ? ` — ${t}` : ''; };
+    if (fbBtn) fbBtn.onclick = () => { void openLoginWindow(h, label); note('창을 열었어요. 이 화면은 그대로예요.'); };
+    // 열기를 누르면 걸음이 전진한다(사람의 진행 감각 — 서버는 브라우저 안 일을 모른다).
+    if (open) open.onclick = () => { lgMark(1, 'done'); lgMark(2, 'now'); lgMark(3, ''); if (inp) setTimeout(() => inp.focus(), 100); if (wait) wait.hidden = false; };
+    if (codeChip && codeEl) codeChip.onclick = async () => {
+      try { await navigator.clipboard.writeText(codeEl.textContent || ''); } catch (_) { toast(codeEl.textContent || ''); }
+      const sm = codeChip.querySelector('small'); if (sm) { sm.textContent = '복사했어요 ✓'; setTimeout(() => { sm.textContent = '누르면 복사'; }, 1600); }
     };
-    const say = (...nodes) => { card.replaceChildren(...nodes); };
-    const line = (cls, text) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; };
-    const copyRow = (k, v, href) => {
-      const row = document.createElement('div'); row.className = 'ob-login-row';
-      const key = document.createElement('span'); key.className = 'ob-login-k'; key.textContent = k;
-      const val = document.createElement('code'); val.className = 'ob-login-v'; val.textContent = v; val.title = '눌러서 복사';
-      val.onclick = async () => { try { await navigator.clipboard.writeText(v); toast('복사했어요'); } catch (_) { toast(v); } };
-      row.append(key, val);
-      if (href) { const a = document.createElement('a'); a.className = 'ob-btn ob-btn-sub ob-btn-inline'; a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = '열기'; row.append(a); }
-      return row;
-    };
-    //  ⚠ 창을 **자동으로** 열지 않는다. `await` 뒤의 window.open 은 사람이 누른 순간과 끊겨 있어 브라우저가
-    //   조용히 막는다(팝업 차단 — 오류도 안 난다). 그러면 화면엔 작은 글 한 줄뿐이라 «눌러도 반응이 없다» 가 된다.
-    //   그래서 탈출로는 **사람이 누르는 버튼**으로 준다 — 그 클릭이 곧 창을 열 자격이다.
-    const escape = (why) => {
-      const b = document.createElement('button');
-      b.className = 'ob-btn ob-btn-sub ob-btn-inline'; b.textContent = `${label} 로그인 창 열기 ↗`;
-      b.onclick = () => { void openLoginWindow(h, label); };
-      say(line('ob-note', why), b);
-    };
-    say(line('ob-fine2', '로그인 절차를 시작하는 중이에요…'));
-    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h, restart: restart === true }) }); }
-    catch (e) {
-      // 여기서 못 하면 사람을 세우지 않는다 — 종전 경로로 내려간다(원준님이 지적한 «막다른 안내» 금지).
-      escape(`여기서 바로 로그인할 수 없어요 — ${(e && e.message) || e}`);
-      return;
-    }
     let pasted = false;
-    let lastSig = '';   // 지금 카드에 그려진 상태의 지문 — 같은 내용을 다시 그리지 않기 위해(입력 중인 글자를 지우지 않는다)
-    //  주소가 안 오는 채로 버티지 않는다 — codex 는 실측 1초 안에 찍는다. 상한을 넘기면 탈출로를 준다.
+    if (inp && put) {
+      const submit = async () => {
+        const v = inp.value.trim(); if (!v) { inp.focus(); return; }
+        put.disabled = true; put.textContent = '넣는 중…';
+        try {
+          await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness: h, code: v }) });
+          pasted = true; put.textContent = '넣었어요'; lgMark(3, 'done'); note('');
+          toast('코드를 넣었어요 — 확인하는 중이에요');
+        } catch (e) { put.disabled = false; put.textContent = '넣기'; if (err0()) err0().textContent = `코드를 넣지 못했어요 — ${(e && e.message) || e}`; }
+      };
+      put.onclick = submit;
+      inp.onkeydown = (ev) => { if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); submit(); } };
+    }
+    const err0 = () => $('#cErr', el);
+    const retry = $('#lgRetry', el);
+    if (retry) retry.onclick = () => { if (codeEl) codeEl.textContent = ''; if (addr) addr.textContent = '새 주소와 코드를 받는 중이에요…'; if (open) open.hidden = true; if (codeChip) codeChip.hidden = true; lgMark(1, 'now'); lgMark(2, 'idle'); lgMark(3, 'idle'); void startInlineLogin(el, h, label, true); };
+    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h, restart: restart === true }) }); }
+    catch (e) { note(`여기서 바로 시작하지 못했어요(${(e && e.message) || e}) — 위 걸음은 그대로 두고, 창으로 여셔도 됩니다.`); }
     const STALL_MS = 30000;
     const startedAt = Date.now();
+    let gotUrl = false, stalledSaid = false, doneSaid = false;
     const tick = async () => {
-      if (inlineStop || !document.body.contains(card)) return;
+      if (inlineStop || !document.body.contains(addr)) return;
       let st = null;
-      try { st = await api(`/api/ui/me/ai-login/state?harness=${encodeURIComponent(h)}`); } catch (_) { /* 다음 틱에 */ }
-      if (!(st && st.url) && !(st && st.loggedIn === true) && !(st && st.step === 'failed') && Date.now() - startedAt > STALL_MS) {
-        inlineStop = true;
-        escape('로그인 주소가 오지 않았어요. 창으로 열어 주세요.');
-        return;
-      }
+      try { st = await api(`/api/ui/me/ai-login/state?harness=${encodeURIComponent(h)}`); } catch (_) { /* 다음 틱 */ }
       if (st && st.loggedIn === true) {
-        inlineStop = true;
-        hideHowto();
-        say(line('ob-ok', `${label} 로그인이 끝났어요. 아래 «로그인했어요» 를 누르시면 됩니다.`));
-        try { await api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness: h }) }); } catch (_) { /* noop */ }
-        const go = $('#cGo', el); if (go) go.focus();
+        if (!doneSaid) {
+          doneSaid = true; inlineStop = true;
+          [1, 2, 3].forEach((n) => lgMark(n, 'done'));
+          if (wait) wait.hidden = true;
+          if (ok) { ok.hidden = false; const g2 = $('#lgOkGo', el); const go2 = $('#cGo', el); if (g2 && go2) g2.onclick = () => go2.click(); }
+          note('');
+          try { await api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness: h }) }); } catch (_) { /* noop */ }
+        }
         return;
       }
       if (st && st.step === 'failed') {
-        const again = document.createElement('button'); again.className = 'ob-btn ob-btn-sub ob-btn-inline'; again.textContent = '다시 시도';
-        //  ⚠ 반드시 **새로** 띄운다 — 옛 프로세스가 살아 있으면 죽은 코드를 그대로 다시 보여 준다(위 restart 머리말).
-        again.onclick = () => { void startInlineLogin(el, h, label, true); };
-        say(line('ob-note', String((st && st.error) || '로그인이 실패했어요.')), again);
-        return;
+        //  실패도 화면을 안 지운다 — 오류 줄 + 탈출로 안내만. 다시 시도는 서버 절차를 새로 띄운다.
+        note(String((st && st.error) || '로그인이 실패했어요') + ' — 창으로 여시거나, 잠시 뒤 다시 해 보세요.');
+        setTimeout(tick, 4000); return;
       }
       if (st && st.url) {
-        //  ★ 같은 내용이면 **다시 그리지 않는다**(원준님 2026-08-30: "코드를 붙여넣고 조금 있으면 코드가 사라진다").
-        //   종전엔 2초 폴링이 매번 card.replaceChildren 을 불러 **사람이 입력 중이던 칸을 통째로 갈아치웠다** —
-        //   붙여넣고 2초 안에 [넣기]를 눌러야 하는 화면이 됐다. 상태가 실제로 바뀔 때만 그린다.
-        const sig = `${st.url}|${st.code || ''}|${st.needsPaste && !pasted ? 'p' : ''}`;
-        if (sig === lastSig) { setTimeout(tick, 2000); return; }
-        //  그려야 한다면 **치던 글자는 살려서** 옮긴다(코드가 늦게 도착해 한 번 더 그리는 경우).
-        const keep = (($('.ob-login-in', card) as HTMLInputElement | null) || { value: '' }).value;
-        lastSig = sig;
-        const rows = [copyRow('주소', st.url, st.url)];
-        if (st.code) rows.push(copyRow('일회용 코드', st.code));
-        rows.push(line('ob-fine2', st.code
-          ? '주소를 열고 위 코드를 넣어 주세요. 끝나면 이 자리에 «끝났어요» 가 뜹니다.'
-          : '주소를 열고 로그인해 주세요. 끝나면 이 자리에 «끝났어요» 가 뜹니다.'));
-        if (st.needsPaste && !pasted) {
-          const row = document.createElement('div'); row.className = 'ob-login-row';
-          const inp = document.createElement('input'); inp.className = 'ob-input ob-login-in'; inp.type = 'text'; inp.placeholder = '브라우저에서 받은 코드';
-          inp.value = keep;
-          //  Enter 로도 넣는다 — 붙여넣고 바로 확정하는 것이 사람의 손버릇이다.
-          inp.onkeydown = (ev) => { if ((ev as KeyboardEvent).key === 'Enter') { ev.preventDefault(); ok.click(); } };
-          const ok = document.createElement('button'); ok.className = 'ob-btn ob-btn-sub ob-btn-inline'; ok.textContent = '넣기';
-          ok.onclick = async () => {
-            const v = inp.value.trim(); if (!v) return; ok.disabled = true;
-            try {
-              await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness: h, code: v }) });
-              pasted = true; lastSig = '';   // 다음 틱은 «코드 칸 없는» 화면으로 한 번 다시 그린다
-              ok.textContent = '넣었어요'; toast('코드를 넣었어요 — 확인하는 중이에요');
-            }
-            catch (e) { toast(`코드를 넣지 못했어요 — ${(e && e.message) || e}`); ok.disabled = false; }
-          };
-          row.append(inp, ok); rows.push(row);
+        if (!gotUrl || addr.dataset.url !== st.url) {
+          gotUrl = true; addr.dataset.url = st.url;
+          addr.textContent = st.url.replace(/^https?:\/\//, '');
+          if (open) { open.href = st.url; open.hidden = false; }
         }
-        say(...rows);
+        if (st.code && codeEl && codeEl.textContent !== st.code) {
+          codeEl.textContent = st.code; if (codeChip) codeChip.hidden = false;
+          if (codeEcho) codeEcho.textContent = st.code;
+        }
+        note('');
+      } else if (!gotUrl && !stalledSaid && Date.now() - startedAt > STALL_MS) {
+        //  ⚠ 종전의 그 30초 — 이제 화면을 덮지 않는다. 잔글씨로 사실만 말하고 **계속 기다린다**(조회가 끊겼다
+        //   돌아오면 주소는 그때 채워진다). 급한 사람에겐 상시 탈출로가 이미 아래 있다.
+        stalledSaid = true;
+        note('주소가 늦네요 — 조금 더 기다리거나, 창으로 여셔도 됩니다.');
       }
       setTimeout(tick, 2000);
     };

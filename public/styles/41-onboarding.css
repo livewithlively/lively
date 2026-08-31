@@ -307,6 +307,61 @@
 .ob-opt-card .ob-oc-one{display:flex; align-items:center; gap:6px; min-width:0; white-space:nowrap}
 .ob-opt-card .ob-oc-one .ob-oc-t{overflow:hidden; text-overflow:ellipsis}
 .ob-soon-tag{flex:none; padding:1px 6px 2px; border-radius:999px; background:var(--ob-amber-soft); color:var(--ob-amber); font-size:10px; font-weight:700; line-height:1.4}
+
+/* ── AI 로그인 스테퍼(#2232, 안 1 확정 — 아티팩트 «AI 로그인 스테퍼» 그대로) ──────────────────────
+   원칙: 지금 할 칸만 켜지고 끝난 칸은 ✓ 로 접힘 · 화면(카드)을 통째로 갈아치우지 않음 ·
+   탈출로는 하단 상시 · 색은 전부 토큰(다크는 90-dark 재정의가 입힌다). */
+.ob-lgs{display:flex; flex-direction:column}
+.ob-lg-step{display:flex; gap:12px; padding:13px 0; border-top:1px solid var(--line-row); transition:opacity .25s}
+.ob-lg-step:first-child{border-top:0; padding-top:2px}
+.ob-lg-n{flex:none; width:23px; height:23px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:800; background:var(--bg-tint-2); color:var(--blue); transition:all .25s}
+.ob-lg-step.done .ob-lg-n{background:var(--mint-fill); color:#fff}
+.ob-lg-step.now .ob-lg-n{background:var(--blue-fill); color:var(--ob-on-fill); box-shadow:0 0 0 4px var(--bg-tint-2)}
+.ob-lg-body{flex:1; min-width:0}
+.ob-lg-body>b{font-size:13.5px; display:block}
+.ob-lg-d{font-size:12.5px; color:var(--muted); margin-top:2px; line-height:1.6}
+.ob-lg-step.idle{opacity:.42}
+.ob-lg-step.idle .ob-btn, .ob-lg-step.idle input, .ob-lg-step.idle .ob-copychip{pointer-events:none}
+.ob-lg-step.done .ob-lg-in{display:none}
+.ob-lg-done{display:none; font-size:12px; color:var(--mint-deep); font-weight:600}
+.ob-lg-step.done .ob-lg-done{display:block}
+.ob-lg-in{margin-top:8px}
+.ob-lg-addr{display:flex; gap:8px; align-items:center; min-width:0}
+.ob-lg-addr code{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:var(--line-row); border-radius:8px; padding:9px 11px; font-size:11.5px; color:var(--ink-sub); font-family:ui-monospace,Menlo,monospace}
+.ob-lg-row{display:flex; gap:8px; margin-top:8px}
+.ob-lg-row input{flex:1; min-width:0; border:1.5px solid var(--line); border-radius:10px; padding:11px 13px; font-size:14.5px; font-family:ui-monospace,Menlo,monospace; letter-spacing:.5px; background:var(--card); color:var(--ink); outline:none}
+.ob-lg-row input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
+.ob-copychip{display:inline-flex; align-items:center; gap:7px; background:var(--ink); color:var(--bg); border-radius:9px; padding:8px 14px; font-family:ui-monospace,monospace; font-size:13.5px; font-weight:800; letter-spacing:1.2px; cursor:pointer; border:0}
+.ob-copychip small{font-size:9.5px; font-weight:600; opacity:.6; letter-spacing:0}
+.ob-bmock{border:1px solid var(--line); border-radius:11px; overflow:hidden; font-size:11px; margin-top:10px}
+.ob-bmock .bar{display:flex; gap:5px; align-items:center; background:var(--line-row); padding:6px 10px}
+.ob-bmock .dot{width:7px; height:7px; border-radius:50%; background:var(--muted-3-line)}
+.ob-bmock .url{flex:1; background:var(--card); border-radius:5px; padding:3px 9px; font-family:ui-monospace,monospace; font-size:10px; color:var(--muted)}
+.ob-bmock .bd{padding:13px 12px; text-align:center; background:var(--card)}
+.ob-bmock .t{font-size:11px; color:var(--muted); margin-bottom:7px}
+.ob-bchip{display:inline-block; background:var(--ink); color:var(--mint-bright); border-radius:8px; padding:8px 16px; font-family:ui-monospace,monospace; font-size:12.5px; font-weight:700; letter-spacing:.5px}
+.ob-bcap{margin-top:6px; font-size:10.5px; color:var(--ob-amber); font-weight:700}
+.ob-tmock{background:var(--ink); border-radius:11px; padding:11px 14px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--bg-tint); line-height:1.75; margin-top:10px; overflow-x:auto}
+.ob-tmock .dim{opacity:.55}
+.ob-tmock .okx{color:var(--mint-bright); font-weight:700}
+.ob-tmock .sel{background:rgba(127,177,255,.16); border-radius:4px; padding:0 4px}
+.ob-lg-wait{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--blue); font-weight:700; margin-top:9px}
+.ob-lg-pulse{width:8px; height:8px; border-radius:50%; background:var(--blue); animation:oblgpu 1.5s infinite}
+@keyframes oblgpu{0%,100%{opacity:1}50%{opacity:.25}}
+.ob-lg-ok{display:flex; align-items:center; gap:9px; background:var(--bg-success); border:1px solid var(--ob-mint-ring); border-radius:11px; padding:12px 14px; font-size:13.5px; font-weight:700; color:var(--ob-mint-ic); margin-top:10px}
+.ob-lg-fb{margin-top:12px; padding-top:11px; border-top:1px dashed var(--line); font-size:11.5px; color:var(--muted)}
+.ob-lg-fb button{background:none; border:0; padding:0; color:var(--blue); font-weight:700; cursor:pointer; font-size:11.5px}
+.ob-peek{margin-top:9px; border:1px solid var(--line); border-radius:10px; background:var(--bg-tint)}
+.ob-peek summary{cursor:pointer; padding:8px 13px; font-size:12px; font-weight:700; color:var(--blue); list-style:none}
+.ob-peek summary::before{content:"▸ "} .ob-peek[open] summary::before{content:"▾ "}
+.ob-peek .in{padding:0 13px 12px}
+.ob-peek .pk{font-size:11.5px; font-weight:700; color:var(--ink-sub); margin:10px 0 4px}
+.ob-peek .pk .ans{color:var(--mint-deep)}
+.ob-peek .ob-tmock{margin-top:0}
+.ob-stuck{margin-top:10px; border:1px solid var(--line); border-radius:10px; background:var(--ob-amber-soft)}
+.ob-stuck summary{cursor:pointer; padding:8px 13px; font-size:12px; font-weight:700; color:var(--ob-amber); list-style:none}
+.ob-stuck summary::before{content:"⚠ "}
+.ob-stuck .in{padding:2px 13px 12px; font-size:12px; color:var(--ink-sub); line-height:1.7}
 .ob-opt-card.ob-soon .ob-blogo{filter:grayscale(1)}
 .ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:var(--muted-3-line); box-shadow:var(--shadow)}
 /* 펼쳐 둔 카드 — 아래 패널과 한 덩어리로 읽히게 아랫모서리를 편다. */
