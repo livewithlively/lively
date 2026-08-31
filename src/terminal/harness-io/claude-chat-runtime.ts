@@ -24,7 +24,8 @@ import { logger } from "../../log.js";
 import { sessionSpawnArgv } from "../session-exec.js";
 import { memberSpawnArgv } from "../terminal-member-fs.js";
 import { chatAdapter } from "./chat-adapters.js";
-import { stdioTransport, type ChatTransportConn } from "./chat-transport.js";
+import { grokPromptLine } from "./grok-stream.js";
+import { perTurnTransport, stdioTransport, type ChatTransportConn } from "./chat-transport.js";
 import { clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
 import type { SessionEvent } from "./session-event.js";
 
@@ -124,6 +125,106 @@ export async function ensureOpencodeChat(o: ClaudeChatOpts): Promise<Entry> {
   });
   logger.info({ sessionId: o.sessionId, port: served.port, convId }, "opencode 대화 런타임 시작");
   return e;
+}
+
+/**
+ * antigravity 를 연다 (#2439) — **턴마다 프로세스**가 나고 죽는다(perTurnTransport 머리말).
+ *  다른 하네스는 파이프 하나가 계속 사는데 여기는 `--conversation=<id>` 로 잇는다.
+ */
+export function ensureAntigravityChat(o: ClaudeChatOpts): Entry {
+  const found = live.get(o.sessionId);
+  if (found) return found;
+
+  const e: Entry = {
+    conn: null as unknown as ChatTransportConn, harness: "antigravity",
+    sessionId: o.sessionId, convId: String(o.convId || ""), startedAt: Date.now(), closing: false,
+  };
+  const conn = perTurnTransport({
+    cwd: o.cwd,
+    //  ⚠ 실행 경계는 **다른 하네스와 같은 사다리**를 탄다 — 여기만 빠뜨리면 게이트웨이 권한으로 돈다.
+    argvFor: (text, convId) => {
+      const inner = ["agy", `--print=${text}`, "--output-format=stream-json"];
+      if (convId) inner.push(`--conversation=${convId}`);
+      const bySession = sessionSpawnArgv(o.sessionId, inner);
+      return bySession.length ? bySession : (o.osUser ? memberSpawnArgv(o.osUser, inner) : inner);
+    },
+    //  대화 id 를 잃으면 다음 턴이 **새 대화**를 연다(사람은 기억을 잃은 것처럼 본다).
+    onConvId: (id) => { e.convId = id; },
+  });
+  if (e.convId) conn.setConvId(e.convId);
+  e.conn = conn;
+  live.set(o.sessionId, e);
+  conn.onLine((line) => {
+    try { feedLine(e, line); }
+    catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
+  });
+  logger.info({ sessionId: o.sessionId, resumed: !!e.convId }, "antigravity 대화 런타임 시작(턴마다 프로세스)");
+  return e;
+}
+
+/**
+ * grok 을 연다 (#2439) — ACP 는 **핸드셰이크가 먼저**다(initialize → session/new → 그 id 로 prompt).
+ *  claude 처럼 «띄우면 곧 말할 수 있다» 가 아니라서 전용 문이 필요하다.
+ *
+ *  ⚠ 세션 id 를 못 받으면 **열지 않는다** — 그 상태로 말을 걸면 `-32602 unknown session id` 가
+ *   돌아오고 사람은 답을 영영 기다린다(실측으로 확인한 바로 그 오류다).
+ */
+export async function ensureGrokChat(o: ClaudeChatOpts): Promise<Entry> {
+  const found = live.get(o.sessionId);
+  if (found) return found;
+
+  const inner = ["grok", "agent", "stdio"];
+  const bySession = sessionSpawnArgv(o.sessionId, inner);
+  const argv = bySession.length ? bySession : (o.osUser ? memberSpawnArgv(o.osUser, inner) : inner);
+
+  const conn = stdioTransport(argv, o.cwd, {
+    spawnFn: o.spawnFn,
+    onStderr: (text) => logger.warn({ sessionId: o.sessionId, stderr: text.slice(0, 500) }, "grok stderr"),
+  });
+  const e: Entry = { conn, harness: "grok", sessionId: o.sessionId, convId: String(o.convId || ""), startedAt: Date.now(), closing: false };
+
+  //  ★ ACP 응답은 **id 로 짝짓는다**(알림과 응답이 같은 스트림에 섞인다).
+  const waitFor = (id: number, ms: number): Promise<Record<string, unknown> | null> => new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    pendingRpc.set(id, (msg) => { clearTimeout(timer); resolve(msg); });
+  });
+  const pendingRpc = new Map<number, (m: Record<string, unknown>) => void>();
+
+  conn.onLine((line) => {
+    if (line[0] !== "{") return;
+    let msg: Record<string, unknown>;
+    try { msg = JSON.parse(line) as Record<string, unknown>; } catch { return; }
+    const id = typeof msg.id === "number" ? msg.id : null;
+    if (id !== null && pendingRpc.has(id)) { pendingRpc.get(id)!(msg); pendingRpc.delete(id); return; }
+    try { feedLine(e, line); }
+    catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
+  });
+
+  conn.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize",
+    params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } } }));
+  const init = await waitFor(1, 15_000);
+  if (!init) { conn.close(); throw new ClaudeChatUnavailable("grok 핸드셰이크가 응답하지 않습니다"); }
+
+  //  대화를 이어 열 수 있으면 그렇게(session/load), 아니면 새로.
+  conn.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/new",
+    params: { cwd: o.cwd, mcpServers: [] } }));
+  const created = await waitFor(2, 30_000);
+  const sid = (created?.result as { sessionId?: unknown } | undefined)?.sessionId;
+  if (typeof sid !== "string" || !sid) {
+    conn.close();
+    //  인증 전이면 `-32000 Authentication required` 가 온다 — 그 사실을 그대로 말한다(빈 화면 금지).
+    const err = (created?.error as { message?: unknown } | undefined)?.message;
+    throw new ClaudeChatUnavailable(`grok 세션을 열지 못했습니다${err ? ` — ${String(err)}` : ""}`);
+  }
+  e.convId = sid;
+  live.set(o.sessionId, e);
+  logger.info({ sessionId: o.sessionId, convId: sid }, "grok 대화 런타임 시작(ACP)");
+  return e;
+}
+
+/** grok 에 말을 건다 — ACP `session/prompt`(봉투는 grok-stream 이 만든다). */
+export function sendGrokChat(e: Entry, text: string, id = Date.now() % 100000): boolean {
+  return e.conn.send(grokPromptLine(e.convId, text, id).trimEnd());
 }
 
 /** 이 세션의 런타임이 지금 떠 있나. */

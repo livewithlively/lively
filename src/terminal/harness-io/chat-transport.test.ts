@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { lineSplitter, sseTransport, stdioTransport } from "./chat-transport.js";
+import { lineSplitter, perTurnTransport, sseTransport, stdioTransport } from "./chat-transport.js";
 
 let pass = 0;
 const t = (name: string, fn: () => Promise<void> | void): Promise<void> =>
@@ -103,6 +103,51 @@ await t("[6] SSE — close 뒤에는 쓰지 않는다", () => {
   assert.equal(conn.send("x"), false);
   assert.equal(calls, 0);
   assert.equal(conn.alive(), false);
+});
+
+await t("[7] ★ 턴마다 프로세스 — 대화 id 를 잡아 다음 턴에 잇는다(잃으면 새 대화가 열린다)", async () => {
+  const argvSeen: string[][] = [];
+  let child: any;
+  const conn = perTurnTransport({
+    cwd: "/tmp",
+    argvFor: (text, convId) => {
+      const a = ["agy", `--print=${text}`, "--output-format=stream-json"];
+      if (convId) a.push(`--conversation=${convId}`);
+      argvSeen.push(a);
+      return a;
+    },
+    spawnFn: () => {
+      child = new EventEmitter() as any;
+      child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      return child;
+    },
+  });
+  const got: string[] = [];
+  conn.onLine((l) => got.push(l));
+
+  conn.send("say A");
+  child.stdout.write(JSON.stringify({ event: "init", conversation_id: "c-77", init: {} }) + "\n");
+  await new Promise((r) => setImmediate(r));
+  //  첫 턴엔 --conversation 이 없다(대화가 아직 없다).
+  assert.ok(!argvSeen[0].some((x) => x.startsWith("--conversation")));
+
+  conn.send("say B");
+  //  ★ 둘째 턴은 잡아 둔 id 로 잇는다.
+  assert.ok(argvSeen[1].includes("--conversation=c-77"), "대화를 이어 붙인다");
+  assert.equal(got.length, 1, "줄은 그대로 흐른다");
+});
+
+await t("[8] ★ 턴 사이에 프로세스가 없어도 alive=true — 아니면 매 턴 뒤 «죽었다» 로 승인이 마감된다", () => {
+  const conn = perTurnTransport({ cwd: "/tmp", argvFor: () => ["x"], spawnFn: () => {
+    const c = new EventEmitter() as any; c.stdout = new PassThrough(); c.stderr = new PassThrough(); return c;
+  } });
+  conn.onLine(() => {});
+  assert.equal(conn.alive(), true, "아직 아무 턴도 안 돌았는데 살아 있다");
+  conn.send("한 턴");
+  assert.equal(conn.alive(), true, "턴이 끝나도 살아 있다(프로세스 없음이 정상 상태)");
+  conn.close();
+  assert.equal(conn.alive(), false);
+  assert.equal(conn.send("닫힌 뒤"), false);
 });
 
 console.log(`\n${pass}건 통과`);

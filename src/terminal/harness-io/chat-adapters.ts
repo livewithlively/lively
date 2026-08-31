@@ -82,7 +82,9 @@ const grokChat: ChatAdapter = {
   //  ⚠ 그러나 **session/update 페이로드를 아직 못 쟀다**(로그인 필요). 형식을 모르는 채 번역기를 쓰면
   //   그 세션은 빈 화면이 된다 — 그래서 translate 는 null 이고, chat 모드도 막힌다.
   transport: "jsonrpc-stdio",
-  argv: () => ["grok", "agent", "stdio"],
+  //  ⚠ 기동은 `ensureGrokChat` 이 쥔다(ACP 는 핸드셰이크가 먼저다 — initialize→session/new).
+  //   여기 argv 를 두면 두 자리가 같은 프로세스를 띄우려 들고, 그러면 대화가 둘로 갈린다.
+  argv: null,
   //  facts 축만 실측으로 옮겼다(핸드셰이크는 로그인 없이 왕복한다). 턴 이벤트·승인은 로그인이 있어야
   //  페이로드를 볼 수 있어 **아직 안 채운다** — 못 본 형식으로 번역기를 쓰면 그 세션은 빈 화면이 된다.
   translate: grokAcpEvent,
@@ -92,7 +94,8 @@ const grokChat: ChatAdapter = {
   //   여는 단계(session/new — 인증 필요)를 갖추면 grokPromptLine(sessionId, text) 로 잇는다.
   //   ★ 봉투 자체는 실측으로 검증됐다(형식이 틀렸다면 다른 오류가 났다) — 남은 것은 id 한 개다.
   encode: null,
-  note: "ACP 실측(1.0.13): initialize→모델·MCP·인증필요 / session/prompt 봉투 검증됨(-32602 unknown session id = 형식은 맞다). 남은 것은 session/new(인증)로 id 를 받는 단계.",
+  runsVia: "grok-acp",
+  note: "ACP 실측 완료(1.0.13·2026-09-01 로그인 후): initialize→session/new→session/prompt 왕복 성공(stopReason:end_turn). tool_call{_meta.kind:execute}·available_commands_update 수신. 승인은 always-approve 라 이번에 안 떠 미실측(raw 로 관측).",
 };
 
 const antigravityChat: ChatAdapter = {
@@ -104,12 +107,15 @@ const antigravityChat: ChatAdapter = {
   //   `--print=<프롬프트>` 인데 `--print "<프롬프트>"` 로 불러 플래그가 프롬프트로 해석됐다.
   //   1.1.22 로 다시 재니 stream-json 이 정상 동작한다(init·step_update·result).
   transport: "stdio-jsonl",
-  //  ⚠ 그러나 **한 번에 한 프롬프트**다(`--print=` 로 주고 끝난다) — claude 처럼 stdin 을 열어 두고
-  //   여러 턴을 이어가는 형태가 아니다. 그 왕복을 실측하기 전엔 argv·encode 를 채우지 않는다.
+  //  ⚠ **턴마다 프로세스**다 — `--input-format stream-json` 은 광고돼 있으나 실제로는 아직 안 된다
+  //   (바이너리 문자열 실측: `stream input message event %q is not supported yet`).
+  //   대신 `--conversation=<id>` 로 잇는다(실측: 턴2 가 num_turns=2 이고 앞 질문을 기억한다).
+  //   그 세 단계는 `ensureAntigravityChat` 이 쥔다 — argv 하나로 표현되지 않는다(대화 id 가 인자에 낀다).
   argv: null,
+  runsVia: "antigravity-per-turn",
   translate: antigravityEvent,
   encode: null,
-  note: "stream-json 실측(1.1.22): init{cwd,tools,permission_mode}·step_update{state,step_type,usage}·result. 다중 턴 왕복(대화 유지)과 승인 step 형식은 미실측 — 그전엔 열지 않는다.",
+  note: "실측(1.1.22·2026-09-01): init·step_update·result 수신 / stdin 스트림은 벤더 미구현(\"not supported yet\") → --conversation=<id> 로 다중 턴 확인(num_turns=2, 앞 질문 기억).",
 };
 
 const opencodeChat: ChatAdapter = {
@@ -148,10 +154,12 @@ export function chatAdapter(key: string | null | undefined): ChatAdapter | null 
 export function canOpenChatRuntime(key: string | null | undefined): boolean {
   const a = chatAdapter(key);
   if (!a || !a.translate) return false;                 // 번역기가 없으면 대화창이 빈 화면이 된다
-  //  ① 이 표가 직접 띄우는 하네스(stdio-jsonl) — argv·encode 가 다 있어야 한다.
-  if (a.transport === "stdio-jsonl") return !!(a.argv && a.encode);
-  //  ② 전용 기동 문이 있는 하네스(codex · opencode) — 그쪽이 띄우고 버스로 흘린다. 번역만 있으면 열린다.
-  //   ⚠ 여기서 encode 를 요구하지 않는 이유: 그 하네스들은 «줄을 쓰는» 모양이 아니다(codex 는 JSON-RPC
-  //    요청, opencode 는 REST). 보내는 길은 그 전용 문이 안다.
-  return !!a.runsVia;
+  //  ① **전용 기동 문**이 먼저다(codex · opencode · antigravity). 그쪽이 띄우고 버스로 흘린다.
+  //   ⚠ 순서가 중요하다: antigravity 는 transport 가 stdio-jsonl 인데 기동은 전용 문이 쥔다
+  //    (턴마다 프로세스 + --conversation). transport 로 먼저 가르면 그 하네스가 영영 안 열린다.
+  //   ⚠ encode 를 요구하지 않는 이유: 그 하네스들은 «줄을 쓰는» 모양이 아니다(codex 는 JSON-RPC
+  //    요청, opencode 는 REST, antigravity 는 대화 id 가 인자에 낀다). 보내는 길은 전용 문이 안다.
+  if (a.runsVia) return true;
+  //  ② 이 표가 직접 띄우는 하네스(stdio-jsonl) — argv·encode 가 다 있어야 한다.
+  return a.transport === "stdio-jsonl" && !!(a.argv && a.encode);
 }

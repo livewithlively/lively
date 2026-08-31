@@ -82,6 +82,71 @@ export function stdioTransport(argv: string[], cwd: string, opts?: {
 }
 
 /**
+ * **턴마다 프로세스** 전송 (antigravity `agy`).
+ *
+ *  ── 왜 이런 게 필요한가 (실측 2026-09-01, agy 1.1.22) ────────────────────────
+ *  agy 는 `--input-format stream-json` 을 광고하지만 실제로는 **아직 안 된다** — 바이너리 문자열이
+ *  그 사실을 말한다: `stream input message event %q is not supported yet`. 어떤 이름을 넣어도
+ *  «ignoring unsupported stream input message event» 로 무시된다(user_input·user_message·user_turn 전부).
+ *
+ *  대신 **대화를 잇는 길이 따로 있다**: `--conversation=<id>`. 실측으로 확인했다 —
+ *  턴1 `--print="say A"` → conversation_id 획득 → 턴2 `--conversation=<id> --print="what did I ask?"`
+ *  → `num_turns=2` 이고 앞 질문을 기억한다.
+ *
+ *  즉 이 하네스는 «파이프 하나가 계속 산다» 가 아니라 **«턴마다 프로세스가 나고 죽는다»** 다.
+ *  그 차이를 런타임이 알 필요는 없다 — 전송이 흡수한다(그게 이 층의 존재 이유다).
+ *
+ *  ⚠ 그래서 `alive()` 는 **늘 true** 다: 프로세스가 없는 게 정상 상태이지 죽은 게 아니다.
+ *   여기서 false 를 내면 런타임이 매 턴 뒤 «죽었다» 며 승인을 마감하고 작업 목록을 비운다.
+ */
+export function perTurnTransport(o: {
+  /** 이 프롬프트로 한 턴을 돌릴 argv 를 만든다(대화 id 를 아는 것은 호출자다). */
+  argvFor: (text: string, convId: string) => string[];
+  cwd: string;
+  /** 하네스가 준 대화 id 를 기억한다 — 다음 턴이 그걸로 이어 붙는다(잃으면 새 대화가 열린다). */
+  onConvId?: (id: string) => void;
+  spawnFn?: (argv: string[], cwd: string) => ChildProcess;
+}): ChatTransportConn & { setConvId(id: string): void } {
+  let convId = "";
+  let closed = false;
+  let lineCb: ((line: string) => void) | null = null;
+
+  return {
+    onLine(fn) { lineCb = fn; },
+    setConvId(id) { convId = id; },
+    send(text) {
+      if (closed) return false;
+      const argv = o.argvFor(text, convId);
+      if (!argv.length) return false;
+      try {
+        const child = o.spawnFn
+          ? o.spawnFn(argv, o.cwd)
+          : spawn(argv[0], argv.slice(1), { cwd: o.cwd, stdio: ["ignore", "pipe", "pipe"] });
+        const feed = lineSplitter((line) => {
+          //  첫 줄(init)이 대화 id 를 준다 — 다음 턴이 그걸로 이어 붙는다.
+          if (!convId && line.includes('"conversation_id"')) {
+            try {
+              const id = (JSON.parse(line) as { conversation_id?: unknown }).conversation_id;
+              if (typeof id === "string" && id) { convId = id; o.onConvId?.(id); }
+            } catch { /* 그 줄만 넘긴다 */ }
+          }
+          lineCb?.(line);
+        });
+        child.stdout?.setEncoding("utf8");
+        child.stdout?.on("data", (c: string) => { try { feed(c); } catch { /* 그 줄만 버린다 */ } });
+        child.stderr?.setEncoding("utf8");
+        child.stderr?.on("data", () => { /* 진단은 호출자 몫 — 이벤트로 올리지 않는다 */ });
+        return true;
+      } catch { return false; }
+    },
+    //  ★ 프로세스가 없는 게 **정상**이다(턴 사이). 여기서 false 를 내면 런타임이 매 턴 뒤
+    //   «죽었다» 며 승인을 마감하고 작업 목록을 비운다.
+    alive: () => !closed,
+    close() { closed = true; },
+  };
+}
+
+/**
  * HTTP + SSE 전송 (opencode `serve`).
  *
  *  ⚠ **읽기와 쓰기의 주소가 다르다** — 읽기는 `GET /event`(SSE 스트림), 쓰기는 `POST` 로 각각의
