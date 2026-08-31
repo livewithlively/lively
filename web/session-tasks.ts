@@ -28,7 +28,7 @@ import { splitSse } from './sse-frames.js';
 //  그 규칙을 값으로 지킬 수 없다. 그래서 갈라 둔다(sess-face 와 같은 규율).
 import { dockHead, elapsed, visibleTasks, type TaskInfo } from './session-tasks-view.js';
 import {
-  applySlash, askChoices, askDetail, askHeadline, askIsRisky, askKind, factChips,
+  applySlash, askChoices, askDetail, askHeadline, askIsRisky, askKind, askWhy, factChips,
   slashMatches, slashQuery, terminalOnlyNote, usageLine, usageTight,
   type AskInfo, type FactsInfo, type UsageInfo,
 } from './session-surface-view.js';
@@ -152,7 +152,7 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
       //  ⚠ 위험 경고는 **본문 위**에 둔다 — 명령을 읽고 나서 보면 이미 눌렀을 수 있다.
       risky ? el('div', { class: 'stk-warn', text: '⚠ 되돌리기 어려운 작업이에요. 명령을 꼭 읽어 보세요.' }) : null,
       el('pre', { class: 'cxl-ask-body' }, el('code', { text: askDetail(ask) })),
-      ask.description ? el('div', { class: 'stk-askwhy', text: ask.description }) : null,
+      (() => { const w = askWhy(ask); return w ? el('div', { class: 'stk-askwhy', text: w }) : null; })(),
       el('div', { class: 'cxl-ask-acts' },
         //  ★ 위험한 요청에는 **아무 버튼도 파랗게 세우지 않는다.** `rm -rf` 옆의 큰 파란 [허용] 은
         //   «여길 누르세요» 로 읽힌다 — 되돌릴 수 없는 일에는 손이 먼저 가게 두면 안 된다.

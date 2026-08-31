@@ -25,6 +25,18 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   ok(V.askDetail({ id: "1", toolName: "Bash", input: { command: ["ls", "-la"] } }) === "ls -la",
     "③ 본문은 원문 그대로 — 요약하면 무엇을 허용하는지 모른다");
 
+  //  ★ 실측 카드를 그려 보고 잡은 것(2026-09-01): 경로가 제목·본문·설명에 **세 번** 나오고
+  //   정작 «무엇을 쓸 것인가»(content)는 JSON 안에 escape 된 채 묻혔다.
+  //   제목이 «어디에» 를 말하므로 본문은 «무엇을» 이어야 한다.
+  ok(V.askDetail({ id: "1", toolName: "Write", input: { file_path: "/a/b.ts", content: "hello()" } }) === "hello()",
+    "③-b 파일에 쓰는 도구는 **쓸 내용**이 본문이다(JSON 껍데기가 아니라)");
+  ok(V.askDetail({ id: "1", toolName: "Edit", input: { file_path: "/a/b.ts", old_string: "x", new_string: "y" } }) === "y",
+    "③-c 고치는 도구는 **바뀔 결과**를 보여 준다");
+  ok(V.askWhy({ id: "1", toolName: "Write", title: "/a/b/session-tasks.ts", description: "session-tasks.ts" }) === null,
+    "③-d ★ 제목에 이미 담긴 설명은 안 그린다 — 같은 말이 두 줄로 서면 정보가 0이다");
+  ok(V.askWhy({ id: "1", toolName: "Bash", title: "npm test", description: "테스트를 돌립니다" }) === "테스트를 돌립니다",
+    "③-e 새 정보를 주는 설명은 그린다");
+
   ok(V.askIsRisky({ id: "1", toolName: "Bash", input: { command: "rm -rf build" } }) === true,
     "④ 되돌리기 어려운 것은 경고한다");
   ok(V.askIsRisky({ id: "1", toolName: "Bash", input: { command: "npm test" } }) === false,

@@ -59,7 +59,14 @@ export function askKind(ask: AskInfo): string {
   return "권한";
 }
 
-/** 카드 본문 — **원문 그대로** 보여 준다(요약하면 사람이 무엇을 허용하는지 모른다). */
+/**
+ * 카드 본문 — 사람이 **무엇을 허용하는지** 읽을 수 있는 원문.
+ *
+ *  ⚠ JSON 껍데기를 그대로 뿌리지 않는다. 실측 카드(Write)를 그려 보니 경로가 제목·본문·설명에
+ *   **세 번** 나오고, 정작 «무엇을 쓸 것인가»(content)는 escape 된 채 그 안에 묻혔다.
+ *   제목이 이미 «어디에» 를 말하므로 본문은 «무엇을» 이어야 한다.
+ *  ⚠ 그렇다고 요약하지는 않는다 — 원문을 보여 주되 **읽을 수 있는 조각**을 고를 뿐이다.
+ */
 export function askDetail(ask: AskInfo): string {
   const i = ask.input;
   if (typeof i === "string") return i;
@@ -68,9 +75,27 @@ export function askDetail(ask: AskInfo): string {
     const cmd = o.command;
     if (typeof cmd === "string") return cmd;
     if (Array.isArray(cmd)) return cmd.map(String).join(" ");
+    //  파일에 쓰는 도구 — 쓸 내용이 본문이다(경로는 제목에 이미 있다).
+    if (typeof o.content === "string") return o.content;
+    //  고치는 도구 — 바뀔 결과를 보여 준다(무엇으로 바뀌는지가 판단거리다).
+    if (typeof o.new_string === "string") return o.new_string;
+    if (typeof o.prompt === "string") return o.prompt;
     try { return JSON.stringify(o, null, 2); } catch { /* 순환 참조 */ }
   }
   return ask.description || askHeadline(ask);
+}
+
+/**
+ * 카드의 «왜» 줄 — 하네스가 준 설명. **제목에 이미 담긴 말이면 안 그린다.**
+ *
+ *  ⚠ claude 의 Write 는 description 이 파일 이름이다 — 제목(전체 경로)의 부분문자열이라
+ *   그대로 그리면 같은 말이 두 줄로 서고 정보는 0이다(실측 카드에서 보였다).
+ */
+export function askWhy(ask: AskInfo): string | null {
+  const d = (ask.description ?? "").trim();
+  if (!d) return null;
+  const t = askHeadline(ask);
+  return t.includes(d) || d === ask.toolName ? null : d;
 }
 
 //  ⚠ **되돌릴 수 없는 것**만 고른다. 여기에 흔한 명령을 넣으면 경고가 늘 떠서 아무도 안 읽는다
