@@ -25,6 +25,12 @@ const { installPlanFor, HARNESS_IDS } =
 const plan = (id, platform, extra = {}) =>
   installPlanFor(id, { platform, homeDir: "/h", env: { LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local", ...extra } });
 
+// 경로 단언은 **구분자를 정규화해서** 비교한다 — 표는 «실행 중인 호스트»의 구분자로 잇는다(레지스트리 SEP).
+//  맥에서 win32 계획을 뽑으면 `/` 가, 윈도우 CI 에서 darwin 계획을 뽑으면 `\` 가 섞인다. 검증하려는 건
+//  구분자가 아니라 **경로 구성**이다. (harness-registry.test.mjs 가 #1510 를 근거로 못박은 같은 규약 —
+//  안 지키면 «윈도우에서만 전부 빨간불» 이 되고, 그 플랫폼 실패가 가장 늦게 발견된다.)
+const norm = (p) => String(p).replace(/\\/g, "/");
+
 // ── A. 무엇을 깔지 고르는 규칙 (E1~E7) — 구멍 ② 의 자리 ────────────────────
 test("E1 안 골랐고 하네스가 있으면 아무것도 묻지 않는다", () => {
   assert.equal(installTarget("", ["claude"]), "");
@@ -79,12 +85,9 @@ test("E12 윈도우 opencode 는 npm 이 선행조건이다", () => {
 test("E13 POSIX opencode 는 선행조건 없이 자기 스크립트로 깐다", () => {
   const p = plan("opencode", "darwin");
   assert.equal(p.requires, null);
-  assert.equal(p.binDir, "/h/.opencode/bin");
+  assert.equal(norm(p.binDir), "/h/.opencode/bin");
 });
 test("E14 윈도우 antigravity 자리는 LOCALAPPDATA 기준이다", () => {
-  //  ⚠ 표는 **실행 중인 호스트**의 구분자로 잇는다(레지스트리 SEP) — 맥에서 win32 계획을 뽑으면 `/` 가 섞인다.
-  //   검증하려는 건 구분자가 아니라 **경로 구성**이라 정규화해서 본다(harness-registry.test.mjs 와 같은 규약).
-  const norm = (p) => String(p).replace(/\\/g, "/");
   assert.equal(norm(plan("antigravity", "win32").binDir), "C:/Users/u/AppData/Local/agy/bin");
   assert.equal(norm(plan("antigravity", "darwin").binDir), "/h/.local/bin");
   // LOCALAPPDATA 가 없는 환경(원격 셸 등)이면 홈 기준으로 접는다 — 조용히 undefined 를 잇지 않는다.
