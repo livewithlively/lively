@@ -36,7 +36,7 @@ jobs:
         run: |
           tar -czf lively.tgz \
             dist public kit deploy docker-compose.yml package.json package-lock.json README.md \
-            LICENSE LICENSING.md NOTICE build-info.json \
+            LICENSE LICENSING.md NOTICE build-info.json apps/builtin \
             scripts/backfill-embeddings.mjs scripts/normalize-shared-filenames.mjs
           ls -la lively.tgz
       - name: GitHub Release 발행 + 에셋 업로드
