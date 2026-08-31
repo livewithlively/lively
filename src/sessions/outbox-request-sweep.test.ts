@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { withTenant } from "../org/tenant-context.js";
 import { outboxRequestSweepMiddleware, resetSweepDebounce, shouldSweep, jobIntervalMs, sweptKeys, sweptAt,
-  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, type SweepJob } from "./outbox-request-sweep.js";
+  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS,
+  type SweepJob } from "./outbox-request-sweep.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -187,6 +188,71 @@ t("[F14] 정비 결과를 로그에 펼쳐 찍는다 — «돌았다»만 찍으
   assert.match(body, /\.then\(\(r\) =>/, "결과를 받아야 한다 — 인자 없는 then 은 버리는 것이다");
   assert.match(body, /\.\.\.\(r && typeof r === "object" \? r : \{\}\)/,
     "객체면 펼쳐 찍어야 한다(observed·awaiting·notified…). void 인 정비도 있으므로 조건부다");
+});
+
+// ── G1~G7 · 남은 정비를 표에 올린 뒤 (#2246) ────────────────────────────────
+t("[G1] 표에 여덟 정비가 있고 첫 목격에 전부 발사한다", () => {
+  resetSweepDebounce();
+  assert.equal(SWEEP_JOBS.length, 8, "여덟 — background-sweeps 가 묶고 있던 수(파괴적인 하나는 제외)");
+  asManaged(() => { run(); });
+  assert.deepEqual(sweptKeys().sort(), SWEEP_JOBS.map((j) => `${j.key}:${TENANT.id}`).sort());
+});
+t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — 새 정책을 만들지 않았다", () => {
+  const want: Record<string, number> = {
+    "outbox": SWEEP_MIN_INTERVAL_MS,                 // 종전 회수 스윕 5분
+    "awaiting-notify": AWAITING_SWEEP_INTERVAL_MS,   // 종전 알림 30초
+    "embedding-backfill": TEN_MIN_MS,                // 종전 600_000
+    "device-auth-reap": TEN_MIN_MS,
+    "oauth-reap": TEN_MIN_MS,
+    "session-log-reap": SIX_HOURS_MS,                // 종전 6h
+    "session-title-backfill": SIX_HOURS_MS,          // 원래는 부팅 1회 — 멱등이라 긴 주기가 같은 뜻
+    "session-state-backfill": SWEEP_MIN_INTERVAL_MS, // 종전 5분
+  };
+  for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
+  assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
+});
+t("[G3] 설정이 필요한 정비가 터져도 나머지는 돈다 — 새 의존이 표 전체를 막으면 안 된다", () => {
+  //  ⚠ `session-log-reap` 만 런타임 설정(retention_days)을 읽는다. 그 조회가 실패해도
+  //   **그 정비만** 죽어야 한다 — 표의 run 은 각자 발사되고 각자 catch 되므로 구조적으로 그렇다.
+  //   여기서는 그 구조를 못 박는다: run 은 서로를 await 하지 않는다.
+  const src = readFileSync(SRC, "utf8");
+  const loop = src.slice(src.indexOf("for (const job of SWEEP_JOBS)"));
+  const body = loop.slice(0, loop.indexOf("\n  }"));
+  assert.match(body, /void job\.run\(\)/, "각 정비는 void 로 던져야 한다 — await 하면 앞선 실패가 뒤를 막는다");
+  assert.match(body, /\.catch\(/, "각 정비가 자기 catch 를 가져야 한다");
+  //  설정을 읽는 정비가 **하나뿐**인지도 못 박는다 — 늘어나면 이 격리를 다시 생각해야 한다.
+  const table = src.slice(src.indexOf("export const SWEEP_JOBS"), src.indexOf("const lastSweep"));
+  assert.equal((table.match(/getRuntimeConfig\(\)/g) ?? []).length, 1,
+    "런타임 설정을 읽는 정비는 session-log-reap 하나다");
+});
+t("[G4] 파괴적 정비(reapIdleSessions)는 표에 없다 — tmux 를 죽이는 판단은 #2148 의 몫", () => {
+  const src = readFileSync(SRC, "utf8");
+  const table = src.slice(src.indexOf("export const SWEEP_JOBS"), src.indexOf("const lastSweep"));
+  assert.doesNotMatch(table, /reapIdleSessions\(\)/, "표에서 부르면 안 된다(주석으로 언급하는 것은 무방)");
+  assert.ok(!SWEEP_JOBS.some((j) => j.key.includes("reap-idle") || j.key.includes("idle-reap")));
+  //  ⚠ 그 짝인 백필은 **있어야** 한다 — 없으면 그 세션들이 회수 면역이면서 복원도 안 된다.
+  assert.ok(SWEEP_JOBS.some((j) => j.key === "session-state-backfill"), "회수 전 백필은 올려야 한다");
+});
+t("[G5] 정비 키가 겹치지 않는다 — 겹치면 디바운스가 공유돼 하나가 굶는다", () => {
+  const keys = SWEEP_JOBS.map((j) => j.key);
+  assert.equal(new Set(keys).size, keys.length, `키 중복: ${keys.join(",")}`);
+});
+t("[G6] 모든 정비가 원래 함수를 부른다 — 여기서 새로 정의하지 않는다", () => {
+  const src = readFileSync(SRC, "utf8");
+  const table = src.slice(src.indexOf("export const SWEEP_JOBS"), src.indexOf("const lastSweep"));
+  //  run 마다 `import(...)` 이 있어야 한다 = 원래 모듈을 부른다는 뜻.
+  assert.equal((table.match(/run: \(\) => import\(/g) ?? []).length, SWEEP_JOBS.length,
+    "정비 수만큼 import 가 있어야 한다 — 하나라도 여기서 직접 구현하면 원본과 갈라진다");
+  assert.doesNotMatch(src, /DELETE FROM|UPDATE org_|INSERT INTO/, "SQL 을 여기에 쓰면 복제다");
+});
+t("[G7] 주기 오버라이드 env 이름이 정비마다 유일하다 — 겹치면 같이 움직인다", () => {
+  const names = SWEEP_JOBS.map((j) => `LIVELY_SWEEP_MS_${j.key.replace(/-/g, "_").toUpperCase()}`);
+  assert.equal(new Set(names).size, names.length, `env 이름 중복: ${names.join(",")}`);
+  // 하나만 바꿔도 나머지는 그대로여야 한다.
+  const [a, b] = SWEEP_JOBS;
+  const env = { [`LIVELY_SWEEP_MS_${a!.key.replace(/-/g, "_").toUpperCase()}`]: "1234" } as NodeJS.ProcessEnv;
+  assert.equal(jobIntervalMs(a!, env), 1234);
+  assert.equal(jobIntervalMs(b!, env), b!.intervalMs);
 });
 
 console.log(`outbox-request-sweep: ${pass} passed`);
