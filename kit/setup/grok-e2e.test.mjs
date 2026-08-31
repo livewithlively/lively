@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 // ── grok 존재 판정(skip 게이트) ──
 function grokBin() {
@@ -165,7 +166,6 @@ process.stdin.on("data", (c) => {
   for (const f of ["run-custom.mjs", "work-flag.mjs", "session-preload.mjs", "sync-harness-assets.mjs", "stop-writeback-gate.mjs"]) {
     writeFileSync(join(HOME, ".lively", "hooks", f), `#!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
-import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 let stdin = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => { stdin += c; });
