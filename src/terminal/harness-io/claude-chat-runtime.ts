@@ -55,7 +55,7 @@ export interface ClaudeChatOpts {
   spawnFn?: (argv: string[], cwd: string) => ChildProcess;
 }
 
-interface Entry {
+export interface Entry {
   conn: ChatTransportConn;
   /** 이 세션이 어느 하네스로 도나 — 번역기·인코딩을 그 표에서 꺼낸다. */
   harness: string;
@@ -86,6 +86,44 @@ export function claudeChatSpawnArgv(sessionId: string, osUser: string | null, ar
   if (bySession.length) return bySession;
   if (osUser) return memberSpawnArgv(osUser, argv);
   return argv;
+}
+
+/**
+ * opencode 를 연다 (#2439) — **비동기 준비**가 필요한 유일한 하네스다.
+ *  서버 기동 → 세션 생성 → SSE 전송. 다른 하네스는 spawn 한 번이면 파이프가 열리지만
+ *  여기는 세 단계라 `ensureClaudeChat`(동기)에 못 넣는다. 그래서 별도 문으로 둔다.
+ *
+ *  ⚠ 실패는 **null 이 아니라 throw** 다 — 호출자(deliverPrompt)가 이미 ClaudeChatUnavailable 을
+ *   잡아 종전 경로로 폴백한다. 여기서 null 을 주면 그 폴백을 못 탄다.
+ */
+export async function ensureOpencodeChat(o: ClaudeChatOpts): Promise<Entry> {
+  const found = live.get(o.sessionId);
+  if (found) return found;
+
+  const { ensureOpencodeServe, opencodeNewSession, opencodePost, opencodeUrls } = await import("./opencode-serve.js");
+  const served = await ensureOpencodeServe({ sessionId: o.sessionId, cwd: o.cwd, osUser: o.osUser });
+  if (!served) throw new ClaudeChatUnavailable("opencode 서버를 띄우지 못했습니다");
+  const { base, event } = opencodeUrls(served.port);
+
+  //  opencode 쪽 세션 id 는 **우리 것과 다르다** — 잃으면 새 대화가 열린다(대화를 잇는 단서).
+  const convId = String(o.convId || "") || (await opencodeNewSession({ base, cwd: o.cwd }) ?? "");
+  if (!convId) throw new ClaudeChatUnavailable("opencode 세션을 만들지 못했습니다");
+
+  const { sseTransport } = await import("./chat-transport.js");
+  const conn = sseTransport({
+    eventUrl: event,
+    //  ⚠ 쓰기는 «줄» 이 아니라 REST 호출이다(읽기와 주소가 다르다 — chat-transport 머리말).
+    postLine: (line) => opencodePost({ base, opencodeSessionId: convId, text: line }),
+  });
+
+  const e: Entry = { conn, harness: "opencode", sessionId: o.sessionId, convId, startedAt: Date.now(), closing: false };
+  live.set(o.sessionId, e);
+  conn.onLine((line) => {
+    try { feedLine(e, line); }
+    catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
+  });
+  logger.info({ sessionId: o.sessionId, port: served.port, convId }, "opencode 대화 런타임 시작");
+  return e;
 }
 
 /** 이 세션의 런타임이 지금 떠 있나. */

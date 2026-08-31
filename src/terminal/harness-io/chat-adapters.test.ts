@@ -51,9 +51,9 @@ t("[4] ★ 모드 판정이 이 표에서 **파생**된다 — 두 곳에 적으
   assert.equal(harnessSupportsChat("모르는하네스"), false, "모르는 key 는 claude 로 추측하지 않는다");
 });
 
-t("[5] 지금 실제로 열리는 것 — claude·codex(나머지는 왜 아닌지 note 가 말한다)", () => {
+t("[5] 지금 실제로 열리는 것 — claude·codex·opencode(나머지는 왜 아닌지 note 가 말한다)", () => {
   const open = CHAT_ADAPTERS.filter((a) => canOpenChatRuntime(a.key)).map((a) => a.key);
-  assert.deepEqual(open, ["claude", "codex"]);
+  assert.deepEqual(open, ["claude", "codex", "opencode"]);
   //  ⚠ 이 단언은 **진도를 재는 자리**다. codex·grok·opencode 가 열리면 여기서 빨간불이 나고,
   //   그때 이 목록을 늘리면서 «무엇이 실측됐나» 를 함께 갱신하게 된다.
   assert.equal(chatAdapter("codex")!.runsVia, "codex-chat-runtime", "codex 기동은 전용 런타임이 쥔다");
@@ -68,6 +68,7 @@ t("[5] 지금 실제로 열리는 것 — claude·codex(나머지는 왜 아닌�
   //  ⭐ opencode 만은 서버화가 **기능을 새로 연다** — 지금까지 대화 읽기가 구조적으로 없었다(#1884 §2 #35).
   assert.ok(chatAdapter("opencode")!.translate, "opencode 승인·명령 축은 OpenAPI 실측으로 채워졌다");
   assert.equal(chatAdapter("opencode")!.argv, null, "서버를 띄우고 포트로 붙는 방식이라 argv 축이 다르다");
+  assert.equal(chatAdapter("opencode")!.runsVia, "opencode-serve", "기동 3단계는 전용 문이 쥔다");
   //  ⚠ 「전송 미확정」은 **내 호출 형식 실수**였다(--print "x" 가 아니라 --print=x). 1.1.22 로 재측정해 정정.
   assert.equal(chatAdapter("antigravity")!.transport, "stdio-jsonl", "agy stream-json 은 실제로 동작한다");
   assert.ok(chatAdapter("antigravity")!.translate, "init·step_update·result 를 옮긴다");

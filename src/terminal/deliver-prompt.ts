@@ -46,7 +46,18 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: { ow
       const st = await getSessionState(sessionId);
       //  ⚠ 하네스를 **넘긴다** — 런타임은 하네스 무관이고 표에서 argv·번역·인코딩을 꺼낸다.
       //   안 넘기면 claude 로 폴백해 «codex 세션에 claude 를 띄우는» 사고가 난다.
-      const r = sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
+      //  ⚠ opencode 는 **비동기 준비**가 필요한 유일한 하네스다(서버 기동 → 세션 생성 → SSE).
+      //   그래서 문이 따로다 — 여기서 갈라야 그 세 단계가 실제로 돈다.
+      let r: { convId: string };
+      if (harnessKey === "opencode") {
+        const { ensureOpencodeChat } = await import("./harness-io/claude-chat-runtime.js");
+        const e = await ensureOpencodeChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: st?.claude_session_id || null });
+        //  전송이 «줄» 을 REST 로 옮긴다(opencode 는 쓰기 주소가 따로다 — chat-transport 머리말).
+        if (!e.conn.send(text)) throw new ClaudeChatUnavailable("opencode 에 말을 걸지 못했습니다");
+        r = { convId: e.convId };
+      } else {
+        r = sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
+      }
       return { ok: true, delivered: true, transport: "chat-runtime", thread_id: r.convId, steered: false };
     } catch (e) {
       if (!(e instanceof ClaudeChatUnavailable)) throw e;

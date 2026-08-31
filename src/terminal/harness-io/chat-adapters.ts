@@ -118,14 +118,17 @@ const opencodeChat: ChatAdapter = {
   //  ⭐ 이 하네스만은 서버화가 **기능을 새로 연다**: 지금은 대화 읽기(parse)조차 구조적으로 없다
   //   (단일 대화 파일을 안 쓴다 — #1884 §2 #35). serve 로 가면 read 와 approve 가 동시에 열린다.
   transport: "http-sse",
-  //  ⚠ argv 축이 다르다 — 서버를 띄우고 **포트를 잡아** 붙는 방식이다(`opencode serve --port N`).
-  //   지금 런타임은 stdio 만 다루므로 여기 argv 를 넣으면 «띄우면 되는 줄» 알고 호출된다. 그래서 null.
+  //  ⚠ argv 축이 다르다 — 서버를 띄우고 **포트를 잡아** 붙는 방식이라 argv 하나로 표현되지 않는다.
+  //   그 세 단계(기동→세션 생성→SSE)는 `ensureOpencodeChat` 이 쥔다(runsVia).
   argv: null,
+  runsVia: "opencode-serve",
   //  OpenAPI 실측(1.18.25)으로 승인·명령 축을 옮겼다. 실제 SSE 프레임은 로그인 없이 못 받아
   //  필드값의 형태를 다 확정하진 못했다 — 모르는 것은 raw 로 관측한다.
   translate: opencodeEvent,
+  //  쓰기는 «줄» 이 아니라 REST 다(POST /session/{id}/prompt_async) — encode(text) 로 표현되지 않는다.
+  //  그래서 null 이고, 전송(sseTransport.postLine)이 그 자리를 대신한다.
   encode: null,
-  note: "serve 실측(1.18.25): /event SSE · /permission/{id}/reply · session/{id}/shell·children. 승인·명령 축 번역 완료. http-sse 전송을 런타임이 지원해야 열린다.",
+  note: "serve 실측(1.18.25·2026-09-01 실기동): /event SSE 로 server.connected 수신 · POST /session 이 인증 없이 ses_ id 발급 · /permission/{id}/reply. 기동 3단계는 ensureOpencodeChat 이 쥔다.",
 };
 
 export const CHAT_ADAPTERS: readonly ChatAdapter[] = [claudeChat, codexChat, grokChat, antigravityChat, opencodeChat];
@@ -147,6 +150,8 @@ export function canOpenChatRuntime(key: string | null | undefined): boolean {
   if (!a || !a.translate) return false;                 // 번역기가 없으면 대화창이 빈 화면이 된다
   //  ① 이 표가 직접 띄우는 하네스(stdio-jsonl) — argv·encode 가 다 있어야 한다.
   if (a.transport === "stdio-jsonl") return !!(a.argv && a.encode);
-  //  ② 전용 런타임이 쥔 하네스(codex) — 그쪽이 띄우고 버스로 흘린다. 번역만 있으면 열린다.
+  //  ② 전용 기동 문이 있는 하네스(codex · opencode) — 그쪽이 띄우고 버스로 흘린다. 번역만 있으면 열린다.
+  //   ⚠ 여기서 encode 를 요구하지 않는 이유: 그 하네스들은 «줄을 쓰는» 모양이 아니다(codex 는 JSON-RPC
+  //    요청, opencode 는 REST). 보내는 길은 그 전용 문이 안다.
   return !!a.runsVia;
 }
