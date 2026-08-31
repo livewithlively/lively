@@ -28,7 +28,11 @@ import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
-import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
+import { memberMkdir, memberWriteFile, memberShOut } from "./terminal-member-fs.js";
+import os from "node:os";
+import path from "node:path";
+import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
+import { ensureFolderTrusted, type TrustIo } from "./claude-trust.js";   // #1631 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB 를 타는 자격 주입은 게이트웨이 능력이다
@@ -619,6 +623,34 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
   await tmuxQuiet(["set-option", "-g", "default-terminal", "xterm-256color"]);
+  // ── 첫 실행 «이 폴더를 신뢰합니까?» 를 미리 지운다(#1631) ──────────────────────────────
+  //  그 물음은 stdin 으로 밀어 넣은 **첫 지시를 삼키고** 사람이 Enter 를 칠 때까지 기다리다 CLI 를 끝낸다.
+  //  실측 2026-08-31(dev): 온보딩 킥오프 세션이 그렇게 즉사해 대화 id 가 없었고(트랜스크립트 404),
+  //   그래서 리브가 서랍마다 만들어 둔 증류기가 **꺼진 채로 남아** 온보딩을 완주한 사람이 지식을 0건 얻었다.
+  //   헤드리스(`claude -p`)엔 이 물음이 없어 서랍 분석만 성공하는 «절반» 이 됐다 — API 층에선 안 보인다.
+  //  ⚠ 신뢰하는 것은 **우리가 방금 만든 작업 폴더(target)** 하나뿐이다(위 mkdir 참조). 사람이 고른 임의
+  //   경로를 대신 신뢰해 주지 않는다 — 그건 보안 결정을 사람 대신 내리는 것이다.
+  //  ⚠ 로그인 상태는 쓰지 않는다(#2232 에서 보류된 판단 그대로).
+  //  비치명 — 못 심어도 세션은 뜬다(종전대로 프롬프트가 뜰 뿐). 같은 부류의 선례: ensureGitSafeDirectory(#522).
+  if (harness.key === "claude") {
+    //  설정 파일은 그 세션이 **실제로 쓸** 자리다: 격리면 멤버 홈, 아니면 주입한 CLAUDE_CONFIG_DIR,
+    //  그것도 없으면(hostProfile·MULTIPROFILE=0) 이 호스트의 홈.
+    const claudeHome = osUser
+      ? `${MEMBER_HOME_BASE}/${osUser}`
+      : (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile
+        ? profileConfigDir(user)
+        : (process.env.HOME || os.homedir()));
+    const io: TrustIo = osUser
+      ? {
+        read: (p) => memberShOut(osUser, `cat '${p.replace(/'/g, "'\\''")}' 2>/dev/null || true`).then((s) => s || null),
+        write: (p, t) => memberWriteFile(osUser, p, t, 0o600),
+      }
+      : {
+        read: (p) => fsp.readFile(p, "utf8").then((s) => s as string | null).catch(() => null),
+        write: (p, t) => fsp.writeFile(p, t, { mode: 0o600 }),
+      };
+    await ensureFolderTrusted(io, path.join(claudeHome, ".claude.json"), target);
+  }
   await tmux(args);
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
   //  화면은 그때 pane 제목·중앙 기록 첫 지시로 이름 자리를 채우고, 대화가 시작되면 session-autoname 이 진짜 이름을 박는다).

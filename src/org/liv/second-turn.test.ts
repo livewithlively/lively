@@ -27,8 +27,19 @@ test("② 이미 쐈으면 skip", () => {
 test("③ 포기했으면 skip", () => {
   assert.deepEqual(decideSecondTurn(st({ welcome: { ...st().welcome!, distill_gave_up_at: "2026-08-29T07:00:00Z" } })), { action: "skip", reason: "gave-up" });
 });
-test("④ 세션이 박스에 없으면 giveup", () => {
-  assert.deepEqual(decideSecondTurn(st({ session: null })), { action: "giveup", reason: "session-gone" });
+//  ★ 정책이 바뀌었다(#1631, 2026-08-31): 세션이 박스에 없으면 종전엔 그 자리에서 **영구 포기**였다.
+//   그런데 실측에서 1턴을 성공으로 끝낸 리브 세션이 수집 대기 20분 사이에 사라졌고(게이트웨이에 종료 사유 기록 없음),
+//   그 포기 때문에 그 사람의 증류기 15개가 영원히 꺼진 채 남았다 — 온보딩을 완주하고 지식을 하나도 못 얻었다.
+//   사슬의 목적은 **일**이지 그 세션이 아니므로 이제 한 번은 다시 연다. «없으면 포기» 는 그 뒤에도 없을 때만 참이다.
+test("④ 세션이 박스에 없으면 — 한 번은 다시 열고, 그 뒤에도 없으면 그때 포기한다", () => {
+  assert.deepEqual(decideSecondTurn(st({ session: null })), { action: "reopen", reason: "session-gone" });
+  assert.deepEqual(
+    decideSecondTurn(st({
+      session: null,
+      welcome: { done_at: new Date(DONE).toISOString(), session_id: "box-a-1", distill_reopened_at: new Date(DONE).toISOString() },
+    })),
+    { action: "giveup", reason: "session-gone-again" },
+  );
 });
 test("⑤ 1턴 미배달(아웃박스 대기) — 기다린다", () => {
   assert.deepEqual(decideSecondTurn(st({ outboxPending: 1 })), { action: "wait", reason: "turn1-undelivered" });
@@ -109,4 +120,48 @@ test("offline 이 TTL(2시간)을 넘기면 포기하고 사유를 남긴다", (
 
 test("세션이 살아 있으면(offline 아님) 종전대로 fire 한다 — 무회귀", () => {
   assert.equal(decideSecondTurn(st({ session: { working: false, agentState: "idle" }, collectors: [] })).action, "fire");
+});
+
+// ── 세션이 사라졌으면 **다시 연다**(#1631, 2026-08-31 실측) ─────────────────────────────
+//  실측: 1턴을 성공으로 끝낸 리브 세션이 수집 대기 20분 사이에 사라졌고(게이트웨이 기록에 종료 사유 없음),
+//   종전 코드는 그 자리에서 영구 포기해 그 사람의 증류기 15개가 영원히 꺼진 채 남았다 — 온보딩 완주, 지식 0건.
+const GONE = { session: null } as Partial<SecondTurnState>;
+
+test("⑮ 세션이 사라졌고 아직 다시 연 적 없으면 — 포기가 아니라 **reopen**", () => {
+  const d = decideSecondTurn(st({ ...GONE, now: DONE + 20 * 60_000 }));
+  assert.deepEqual(d, { action: "reopen", reason: "session-gone" });
+});
+
+test("⑯ 이미 한 번 다시 열었는데 또 사라졌으면 그때는 포기한다 — 무한 재생성 금지", () => {
+  const d = decideSecondTurn(st({
+    ...GONE,
+    welcome: { done_at: new Date(DONE).toISOString(), session_id: "box-a-2", distill_reopened_at: new Date(DONE + 60_000).toISOString() },
+  }));
+  assert.deepEqual(d, { action: "giveup", reason: "session-gone-again" });
+});
+
+test("⑰ 1턴 배달 상한(2시간)을 넘겼으면 다시 열지 않는다 — 한참 뒤에 창이 불쑥 뜨는 게 더 나쁘다", () => {
+  const d = decideSecondTurn(st({ ...GONE, now: DONE + TURN1_DELIVERY_TTL_MS + 1_000 }));
+  assert.deepEqual(d, { action: "giveup", reason: "session-gone" });
+});
+
+test("⑱ 세션이 살아 있으면 다시연 표식이 있어도 종전 경로 그대로 — 무회귀", () => {
+  const d = decideSecondTurn(st({
+    welcome: { done_at: new Date(DONE).toISOString(), session_id: "box-a-1", distill_reopened_at: new Date(DONE).toISOString() },
+    session: { working: false, agentState: "idle" }, collectors: [],
+  }));
+  assert.equal(d.action, "fire");
+});
+
+test("⑲ 이미 쐈다·이미 포기했다·킥오프 없음이 reopen 보다 앞선다", () => {
+  const base = { done_at: new Date(DONE).toISOString(), session_id: "box-a-1" };
+  assert.deepEqual(decideSecondTurn(st({ ...GONE, welcome: { ...base, distill_at: "2026-08-30T00:00:00Z" } })),
+    { action: "skip", reason: "already-fired" });
+  assert.deepEqual(decideSecondTurn(st({ ...GONE, welcome: { ...base, distill_gave_up_at: "2026-08-30T00:00:00Z" } })),
+    { action: "skip", reason: "gave-up" });
+  assert.deepEqual(decideSecondTurn(st({ ...GONE, welcome: null })), { action: "skip", reason: "no-kickoff" });
+});
+
+test("⑳ 세션이 없으면 경과 0분이어도 reopen — 기다린다고 없던 세션이 생기지 않는다", () => {
+  assert.deepEqual(decideSecondTurn(st({ ...GONE, now: DONE })), { action: "reopen", reason: "session-gone" });
 });

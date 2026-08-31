@@ -19,6 +19,9 @@ const srcOf = (rel: string): string =>
   readFileSync(new URL(rel, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const PROFILES = srcOf("./profiles.ts");
 const ROUTES = srcOf("./routes.ts");
+//  #1631 — «폴링은 싸게, 결정 지점은 정확하게» 를 지키려면 그 두 자리가 있는 파일도 봐야 한다.
+const WELCOME = readFileSync(
+  new URL("../capabilities/delivery/welcome.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 // 웹은 dist 로 안 간다 — src/terminal 기준 상대경로로 레포 루트를 거슬러 올라간다.
 const ONBOARDING = readFileSync(
   new URL("../../web/v2/onboarding.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
@@ -80,11 +83,35 @@ t("⑤ 없는 명령을 안내하지 않는다 — agy 에는 login 서브커맨
 // ── 판정이 도는 자리 ────────────────────────────────────────────────────────
 
 t("⑥ 프로브는 **뜨거운 경로에 없다** — /welcome 폴링이 매번 4.3초를 물면 안 된다", () => {
-  const hot = PROFILES.slice(PROFILES.indexOf("export async function memberLoggedInHarnessesAny"));
-  assert.doesNotMatch(hot.slice(0, 600), /HARNESS_PROBE/,
+  //  ⚠ 함수 **본문**으로 자른다(600자 어림이 아니라). #1631 로 바로 아래에 프로브를 쓰는 형제 함수
+  //   (memberUsableHarnesses)가 생겼는데, 어림 창은 그것까지 삼켜 «폴링에 프로브가 섞였다» 고 잘못 짚었다.
+  //   지켜야 할 사실은 «폴링이 부르는 그 함수의 몸통에 프로브가 없다» 이지 «근처에 없다» 가 아니다.
+  const from = PROFILES.indexOf("export async function memberLoggedInHarnessesAny");
+  assert.notEqual(from, -1, "폴링이 부르는 함수가 사라졌다");
+  const nextExport = PROFILES.indexOf("\nexport ", from + 10);
+  const body = PROFILES.slice(from, nextExport === -1 ? undefined : nextExport);
+  assert.doesNotMatch(body, /HARNESS_PROBE|aiLoginCheck|runAtMemberSeat/,
     "폴링이 읽는 판정에 프로브가 섞였다 — 온보딩 조회마다 네트워크 왕복이 붙는다");
+  //  그리고 **폴링 자리 자신**도 싼 쪽을 불러야 한다 — 함수가 싸도 호출자가 비싼 형제를 부르면 같은 사고다.
+  //  ⚠ **주석은 빼고** 본다 — 이 자리엔 «왜 싼 쪽을 쓰는가» 를 설명하려고 비싼 쪽 이름이 글로 등장한다.
+  //   글자를 세면 그 설명 자체가 위반으로 잡혀, 결국 사람이 주석을 지우게 만든다(가드가 문서를 이긴다).
+  const snap = WELCOME.slice(WELCOME.indexOf("export async function welcomeSnapshot"),
+    WELCOME.indexOf("export async function kickoffLivAfterWelcome"))
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.match(snap, /memberLoggedInHarnessesAny\(userId\)/, "폴링 스냅샷이 싼 판정을 안 쓴다");
+  assert.doesNotMatch(snap, /memberUsableHarnesses/,
+    "폴링 스냅샷이 프로브 판정을 쓴다 — 조회마다 최대 25초가 붙는다(#1631)");
   assert.match(ROUTES, /app\.post\("\/api\/ui\/me\/ai-accounts\/check"/,
     "프로브를 돌리는 자리가 POST 가 아니다 — 부수효과 있는 조회를 GET 계약에 얹으면 캐시·프리페치가 붙는다");
+});
+
+t("⑥b 결정 지점(리브 킥오프)은 **정확한** 사실을 쓴다 — 제미나이만 이은 사람이 막히면 안 된다(#1631)", () => {
+  //  자격 파일이 없는 하네스(antigravity)는 파일 표에 구조적으로 못 든다. 게이트가 그 목록을 그대로 쓰면
+  //   화면이 «Gemini 로그인이 확인됐어요» 라고 확정해 준 사람에게 리브를 열어 주지 않는다.
+  const kick = WELCOME.slice(WELCOME.indexOf("export async function kickoffLivAfterWelcome"));
+  assert.match(kick, /memberUsableHarnesses/, "킥오프 게이트가 프로브까지 본 사실을 쓰지 않는다");
+  assert.match(kick, /planLivKickoff\(o\.priorSession, usable\)/, "게이트에 넘기는 값이 그 사실이 아니다");
+  assert.match(kick, /aiHarnesses: usable/, "1턴 프롬프트가 게이트와 다른 사실을 본다");
 });
 
 t("⑦b ★설치는 **게이트웨이 자신**에서 잰다 — 멤버 자리(tmux 컨테이너)는 이미지가 다를 수 있다", () => {

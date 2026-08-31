@@ -91,3 +91,30 @@ export async function applyLaneSkeleton(o: { drawers: SkeletonDrawer[]; cadence?
   const skipped = o.drawers.map((d) => laneKeyFor(d.key)).filter((k) => existing.includes(k));
   return { created, skipped };
 }
+
+/**
+ * 서랍 레인의 **목적지를 잃지 않게** 되살린다(#1631) — 키가 곧 목적지인 레인이라 빈 목적지는 정의상 고장이다.
+ *
+ *  ── 실측 (2026-08-31 dev, 감사 기록) ──
+ *    17:22:52 insert (welcome)  (null) → d-21c2235a7d   enabled=false   ← 뼈대가 목적지를 넣었다
+ *    17:42:36 update (web)      d-21c2235a7d → (null)   enabled=true    ← 리브가 **켜면서 지웠다**
+ *   레인은 켜졌는데 목적지가 없다 = 그 레인이 만든 지식이 그 서랍에 안 들어간다. 사람이 온보딩에서 승인한
+ *   «이 서랍으로 모아 주세요» 가 조용히 사라지는 것이다. (같은 턴의 다른 레인들은 목적지를 지켰다 — 그래서
+ *   부분 갱신 계약의 문제가 아니라 **한 호출이 빈 값을 실어 보낸** 문제다. 사람도 도구도 그럴 수 있다.)
+ *
+ *  ⚠ 되살리는 것은 **비었을 때뿐**이다. 다른 서랍을 명시적으로 가리키면 그 뜻을 존중한다(레인을 옮기는 것은
+ *   정당한 조작이다). 안전망(liv-catch-all)은 스코프도 목적지도 비우는 것이 설계라 건드리지 않는다.
+ *
+ * @param key   증류기 key
+ * @param given 이번 저장에서 정해진 목적지(빈 값이면 되살린다)
+ * @returns 저장할 목적지
+ */
+export function keepDrawerTarget(key: string | null | undefined, given: string | null | undefined): string | null {
+  const k = String(key ?? "").trim();
+  const g = String(given ?? "").trim();
+  if (g) return g;                              // 명시된 목적지는 그대로 — 옮기는 것은 정당하다
+  if (!k.startsWith("liv-")) return null;        // 서랍 레인이 아니면 관여하지 않는다
+  if (k === CATCH_ALL_KEY) return null;          // 안전망은 목적지가 없는 것이 설계다
+  const drawer = k.slice("liv-".length).trim();
+  return drawer || null;
+}
