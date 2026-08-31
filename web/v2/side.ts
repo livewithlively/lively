@@ -296,7 +296,7 @@ export interface SideInstance {
   id: string;
   title: string;
   active: boolean;
-  icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'app';
+  icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'src' | 'app';
   state?: string;
   meta?: string;
   /** 소속 프로젝트 — 이름 하나만. 스페이스 › 리스트 계층은 좁은 줄에서 읽히지 않아 걷었다(#1954). self=이 화면이 그 프로젝트다. */
@@ -467,7 +467,7 @@ function instanceIcon(inst: SideInstance): SVGElement {
   if (inst.icon === 'link') return glyph('link', cls);
   if (inst.icon === 'archive' || inst.icon === 'trash') return glyph(inst.icon, cls);
   const k = inst.icon === 'app' ? 'proj' : inst.icon;
-  return appIcon(k as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web', cls);
+  return appIcon(k as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src', cls);
 }
 
 
