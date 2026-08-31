@@ -93,14 +93,23 @@ export function claudeStreamEvent(line: unknown): SessionEvent | null {
     const id = str(o.request_id);
     if (!id) return { t: "raw", source: "claude", payload: o };
     if (sub === "can_use_tool") {
+      //  실측 봉투(2.1.251, 2026-09-01 — Write 한 번을 실제로 받아 뜬 것):
+      //   {"type":"control_request","request_id":"<uuid>","request":{"subtype":"can_use_tool",
+      //     "tool_name":"Write","display_name":"Write","input":{...},"description":"ours2.txt",
+      //     "permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}],
+      //     "tool_use_id":"toolu_…"}}
       return { t: "permission.asked", ask: {
         id,
         toolName: str(r.tool_name) ?? "도구",
         input: r.input,
         //  제목은 «무엇을 하려는가» 다 — 명령이면 명령줄, 아니면 도구 이름이 곧 제목이다.
         title: askTitle(str(r.tool_name), r.input),
-        description: str(r.reason) ?? str(rec(r.permission_suggestions)?.reason),
+        displayName: str(r.display_name),
+        //  ⚠ 필드 이름은 `description` 이다(`reason` 이 아니다 — 실측으로 확인). 종전엔 reason 만 읽어
+        //   카드에 «왜» 가 늘 비어 있었다.
+        description: str(r.description) ?? str(r.reason),
         //  «항상 허용» 감은 하네스가 준다(claude: permission_suggestions) — 우리가 지어내지 않는다.
+        //  응답에서 이 배열을 `updatedPermissions` 로 그대로 돌려준다(SDK 타입 PermissionResult 와 같은 자리).
         suggestions: Array.isArray(r.permission_suggestions) ? r.permission_suggestions : undefined,
       } };
     }

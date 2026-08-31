@@ -41,25 +41,18 @@ export interface HarnessCoverage {
 export const COVERAGE: readonly HarnessCoverage[] = [
   {
     harness: "claude",
-    axes: { read: "ok", send: "ok", tasks: "ok", approve: "terminal", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
+    axes: { read: "ok", send: "ok", tasks: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
-      //  ⚠ 한때 "ok" 로 적었다가 **되돌린 자리**다(2026-09-01). 상민님이 "왜 대화창에 선택지 안뜨냐" 고
-      //   신고했고, 다시 재 보니 나는 그 물음을 **한 번도 재현한 적이 없었다**. 짐작을 표에 적은 것이다.
+      //  ★ 이 축은 표에서 두 번 뒤집혔다. 그 자취를 남긴다 — 다음 사람이 같은 함정을 밟지 않게.
+      //   ① "ok" 로 적었다(근거 없이 — 배선이 준비된 것을 «된다» 로 옮겨 적었다).
+      //   ② "terminal" 로 되돌렸다(5가지를 시도했는데 물음이 0건이었다).
+      //   ③ 다시 "ok" — **실제로 받아서 답하고 턴이 끝나는 것까지 확인했다**(2026-09-01).
       //
-      //   시도한 것(전부 실패 — 다음 사람이 같은 길을 다시 걷지 않게 적는다):
-      //    · `--permission-mode manual` — init 이 계속 `default` 로 온다(플래그가 안 먹는다).
-      //    · `--permission-prompt-tool stdio` — tools 가 438→441 로 늘어 플래그는 먹지만 물음은 0건.
-      //      그 값의 근거였던 "permission prompts reach the host over stdio" 문구는 다시 보니
-      //      **클라우드 세션용 옵션 검증표**에 있는 것이라 로컬 -p 모드의 계약이 아닐 수 있다.
-      //    · `--settings '{"permissions":{"defaultMode":"manual","allow":[]}}'` — init 은 여전히 default.
-      //    · `--settings '{"hooks":{}}'` — 훅은 여전히 4건 뜬다(설정이 병합이라 못 지운다).
-      //    · Agent SDK 식 `control_request{subtype:"initialize"}` 핸드셰이크 — CLI 가 같은 봉투로
-      //      request_id 를 짝맞춰 응답한다(우리 응답 **모양**은 맞다는 증거). 그래도 물음은 0건.
-      //
-      //   확인된 것: 우리 쪽 왕복 배선과 control_response 봉투는 맞다(permission-roundtrip.test).
-      //   모르는 것: **claude 가 -p/stream-json 에서 can_use_tool 을 내는 조건**. 그걸 모르는 채로
-      //   "ok" 를 적으면 사람은 웹에서 승인을 찾다가 못 찾는다 — 그게 신고된 그 증상이다.
-      approve: "claude 가 -p/stream-json 에서 승인을 묻게 하는 조건을 못 찾았다(5가지 시도 전부 0건 — 위 주석). 우리 왕복은 준비돼 있으나 물음이 안 와서 «된다» 고 적지 않는다.",
+      //  ⚠ ②에서 헛짚은 진짜 이유: **`echo` 로 시험했다.** claude 는 안전한 명령을 default 모드에서
+      //   자동 허용한다 — 그래서 물음이 안 온 것이지 기능이 없는 게 아니었다. 공식 Agent SDK 의
+      //   canUseTool 도 **같은 환경에서 똑같이 0건**이었고(오라클로 확인), 프롬프트를 «파일 쓰기» 로
+      //   바꾸자 SDK 도 우리 런타임도 **한 번에 물었다.**
+      //   → 승인을 시험할 땐 반드시 **권한이 필요한 동작**(Write·rm·네트워크)을 시킨다.
     },
   },
   {
