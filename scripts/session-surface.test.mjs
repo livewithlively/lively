@@ -104,6 +104,17 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   ok(/terminalOnly/.test(chat), "㉑ 서버가 준 «못 하는 축» 을 화면에 넘긴다");
   ok(/events\/interrupt/.test(chat), "㉒ 멈춤이 하네스 무관 통로를 탄다");
 
+  //  ★ 2026-09-01 신고: 대화 런타임을 켰는데도 claude 세션이 **터미널로 열렸다.**
+  //   원인은 `chatFirst()` 가 두 뜻을 겸한 것 — «codex app-server 인가»(층을 붙일 근거)와
+  //   «대화창이 본자리인가»(어느 탭으로 열지)를 한 함수가 답하고 있었다. chatMode 가 'tmux' 인
+  //   claude 는 첫 뜻으로 거짓이라, 둘째 뜻까지 거짓이 되어 터미널이 기본이 됐다.
+  ok(/const chatHome = \(\): boolean => chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
+    "㉚ ★ «대화창이 본자리인가» 가 «codex 인가» 와 갈려 있다");
+  ok(/setMode\(chatHome\(\) \? 'chat' : 'term'\)/.test(chat),
+    "㉛ ★ 첫 화면을 그 축으로 정한다 — chatFirst() 로 정하면 claude 가 터미널로 열린다");
+  ok(/!modeChosen && mode === 'chat' && !chatHome\(\)/.test(chat),
+    "㉜ tmux 라고 되돌리는 분기가 대화 런타임 세션을 되돌리지 않는다(두 줄이 서로 밀치면 화면이 깜빡인다)");
+
   const css = read("public/styles/36-chat.css");
   ok(/\.stk-warn/.test(css) && /\.stk-slash/.test(css), "㉓ 경고·자동완성에 스타일이 있다(없으면 안 보인다)");
   ok(/\.cxl-ask\.is-risky/.test(css), "㉖ 위험 카드가 카드째로 티가 난다");
