@@ -5,14 +5,13 @@
 //   문서(#/k)·드래프트는 wiki-doc. 옛 홈(오로라 카드 격자 — wiki-home)은 이 경로에서 더 쓰지 않는다.
 //  URL 계약(구 딥링크 호환): #/knowledge?cats=1&category=N&folder=&type=&q=&indexed=1&all=1&peek=<name>
 //  (?tab= 은 #657 대문/문서 탭의 잔재 — 파싱 시 무시한다. 탭이라는 모드 자체를 폐지했다.)
-import { api, busy, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
+import { api, busy, el, errorNote, relTime, state, toast } from './core.js';
 import { skeleton, skeletonRows } from './learn.js';
-import { KN_TYPE_LABEL, KN_UNCAT, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
-import { pjvTbIcon } from './projects/icons.js';
+import { KN_TYPE_LABEL, KN_UNCAT, isCategoryHomeDoc, knInvalidateTreeCaches } from './wiki-data.js';
 import { KN_INDEXED } from './wiki-side.js';
 import { knFindCatIn, knLoadCats, renderCatsSurface, renderRecentSurface } from './wiki-front.js';   // #1841 안 4 — 첫 화면 = 최근(시간순) + 조건부 [검토할 것] / 카테고리는 탭 하나
 import { wkDayLabel, wkEmpty } from './wiki-ui.js';
-import { wkBoardHeader, wkDocCols, wkSurfaceTabs, wkTableGroup, wkTableRow, wkTbPill, wkTbPrimary, wkTbSearch } from './wiki-table.js';   // #1841 프로젝트 표 문법
+import { wkBoardHeader, wkDocCols, wkSurfaceTabs, wkTableGroup, wkTbPill, wkTbPrimary, wkTbSearch } from './wiki-table.js';   // #1841 프로젝트 표 문법
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
 import { renderCategorySurface } from './wiki-category.js';
 import { reviewQueuePanel } from './review.js';   // #837 검토 큐 — 관리탭에서 이관(지식의 대기열이니 집은 WIKI)
@@ -239,85 +238,16 @@ async function renderWikiTrash(view) {
 //  ?q=<검색어>&src=<id> — 통합검색(web/v2/omni.ts)이 자료 결과를 여는 자리. 자료엔 단독 주소가 없어(상세는 오버레이)
 //  '그 검색어로 연 목록 + 그 자료를 펴 둔 상태'가 곧 자료 하나의 딥링크다. 사람이 뒤로 가면 목록이 그대로 남는다.
 async function renderSources(view, params?: URLSearchParams) {
-  const seedQ = (params && params.get('q')) || '';
-  const seedSrc = (params && params.get('src')) || '';
-  const kindSel = selectFilter([['', '전체 종류'], ...Object.entries(SOURCE_KIND_LABEL)], '');
-  kindSel.setAttribute('aria-label', '종류');
-  const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');
-  provSel.setAttribute('aria-label', '출처');
-  const qIn = el('input', { type: 'text', class: 'pjv-tb-search-input', placeholder: '제목·본문 검색…', 'aria-label': '검색', value: seedQ });
-  const listBox = el('div', { class: 'wk-board-body' });
-  const moreBox = el('div', { class: 'wk-src-more' });
-  // #1841 머리 3층 — 툴바 좌: 종류·출처 셀렉트 / 우: 검색(펼침). 자료는 지식이 아니라 '만들기'가 없다.
-  const qBox = el('div', { class: 'pjv-tb-search' + (seedQ ? ' open' : '') });
-  const qBtn = el('button', { class: 'pjv-tb-btn pjv-search-btn' + (seedQ ? ' active' : ''), type: 'button', title: '검색 — 제목·본문으로 좁혀 보기', 'aria-label': '검색' }, pjvTbIcon('search'));
-  qBtn.onclick = () => { qBox.classList.toggle('open'); if (qBox.classList.contains('open')) qIn.focus(); else if ((qIn as any).value) { (qIn as any).value = ''; loadPage(true); } };
-  qBox.append(qBtn, qIn);
-  const header = wkBoardHeader({ crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: '자료' }], sub: '아직 정리하기 전의 원본 — 여기서 다듬으면 지식이 됩니다', tabs: wkSurfaceTabs('sources'), left: [kindSel, provSel], right: [qBox] });
-  view.replaceChildren(el('div', { class: 'wk-plainpad wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, listBox, moreBox)));
-  const srcCols = [
-    { key: 'kind', label: '종류', width: '96px', render: (x) => el('span', { class: 'pjv-fval', text: SOURCE_KIND_LABEL[x.kind] || x.kind }) },
-    { key: 'chan', label: '채널', width: '140px', align: 'left' as const, render: (x) => el('span', { class: 'pjv-fval wk-src-chan', text: (x.fields && x.fields.container_name) ? '#' + x.fields.container_name : '' }) },
-    { key: 'who', label: '작성자', width: '110px', render: (x) => el('span', { class: 'pjv-fval', text: (x.fields && x.fields.author_name) ? '@' + x.fields.author_name : '' }) },
-    { key: 'at', label: '시각', width: '92px', render: (x) => el('span', { class: 'pjv-fval', text: relTime(x.occurred_at || x.updated_at) }) },
-  ];
-  let tableBody: HTMLElement | null = null;   // 그룹 하나에 행을 이어 붙인다([더 보기]가 같은 표에 덧붙이게)
-
-  const PAGE = 100;
-  let offset = 0, loading = false;
-
-  // 행 렌더 — 채널명(container_name)·작성자(author_name)는 커넥터-불가지 구조화 메타(source.fields)에서 표시(#735).
-  //  slack=채널, 다른 커넥터도 각자 container/author 를 fields 에 담으면 동일하게 노출된다.
-  function rowOf(s: any) {
-    return wkTableRow({ ...s, name: 'src:' + s.id, title: s.title || ('자료 #' + s.id) }, { cols: srcCols, open: () => openSourceDetail(s.id), menu: () => [] });
-  }
-
-  // 페이지네이션 — 서버 기본 100건 cap + has_more 를 [더 보기]로 이어붙인다(#735: 예전엔 limit/offset 미전송으로
-  //  100건에서 잘려 나머지가 안 보였다). 필터 변경/검색은 reset(offset=0), 더보기는 append.
-  async function loadPage(reset: boolean) {
-    if (loading) return;
-    loading = true;
-    if (reset) { offset = 0; busy(listBox, skeletonRows(4)); moreBox.replaceChildren(); }
-    try {
-      const p = new URLSearchParams();
-      if ((kindSel as any).value) p.set('kind', (kindSel as any).value);
-      if ((provSel as any).value) p.set('provenance', (provSel as any).value);
-      if ((qIn as any).value.trim()) p.set('q', (qIn as any).value.trim());
-      p.set('limit', String(PAGE));
-      p.set('offset', String(offset));
-      const r = await api('/api/ui/sources?' + p.toString());
-      const entries = (r && r.entries) || [];
-      if (reset) { listBox.replaceChildren(); tableBody = null; }
-      if (offset === 0 && !entries.length) {
-        listBox.replaceChildren(wkEmpty('자료가 없습니다. 커넥터(이메일·슬랙)나 회의록이 여기로 들어옵니다.'));
-        moreBox.replaceChildren();
-        return;
-      }
-      if (!tableBody) { const g = wkTableGroup(null, [], { cols: srcCols }); tableBody = g.querySelector('.wk-tbody') as HTMLElement; listBox.append(g); }
-      for (const s of entries) tableBody.append(rowOf(s));
-      offset += entries.length;
-      const total = (r && typeof r.total === 'number') ? r.total : offset;
-      if (r && r.has_more) {
-        const btn = el('button', { class: 'wk-more-btn', text: `더 보기 (${offset}/${total})` });
-        btn.addEventListener('click', () => loadPage(false));
-        moreBox.replaceChildren(btn);
-      } else {
-        moreBox.replaceChildren(el('div', { class: 'wk-src-count', text: `전체 ${offset}건` }));
-      }
-    } catch (e) {
-      if (reset) listBox.replaceChildren(errorNote(e, '자료를 불러오지 못했습니다'));
-    } finally {
-      loading = false;
-    }
-  }
-  let t: any = null;
-  qIn.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => loadPage(true), 250); });
-  kindSel.addEventListener('change', () => loadPage(true));
-  provSel.addEventListener('change', () => loadPage(true));
-  loadPage(true);
-  // 통합검색이 자료 하나를 지목해 왔으면 그 상세를 바로 편다 — 목록에서 다시 찾게 만들지 않는다.
-  //  목록 로딩과 독립이다(상세는 자기 API 로 읽는다) — 그래서 기다리지 않고 곧바로 연다.
-  if (seedSrc) openSourceDetail(seedSrc);
+  // #2423 — 자료는 이제 독립 앱(#/sources)이다. 이 주소는 북마크·화면 안 링크로 계속 들어오므로 넘겨준다.
+  //  ⚠ 이 화면은 새 셸 안에서 iframe(?embed=1)으로 실릴 수 있다 — 프레임 안 주소만 바꾸면 액자만 비고
+  //   사람은 빈 화면을 본다. 그래서 **맨 위 창**을 움직인다(admin-shell 의 #/connect 이관과 같은 규율).
+  const p = new URLSearchParams();
+  const q = params && params.get('q'); if (q) p.set('q', q);
+  const src = params && params.get('src');
+  const hash = src ? '#/sources/' + encodeURIComponent(src) : '#/sources' + (p.toString() ? '?' + p.toString() : '');
+  try { (window.top || window).location.hash = hash; } catch (_) { location.hash = hash; }
+  view.replaceChildren(el('div', { class: 'wk-plainpad' },
+    el('p', { class: 'empty', text: '자료는 「자료」 앱으로 옮겼습니다. 그리로 보내 드릴게요.' })));
 }
 
 export { renderWiki, renderWikiTrash };

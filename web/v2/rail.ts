@@ -58,6 +58,9 @@ const SECTIONS: SecDef[] = [
 interface LinkDef { key: string; label: string; route: string; tab: string | null; icon: string }
 const LINKS: LinkDef[] = [
   { key: 'liv', label: '리브', route: '#/liv', tab: 'liv', icon: 'liv' },
+  //  자료(#2423) — 구역(SECTIONS)이 아니라 '갈 곳'이다. 구역은 왼쪽 목록의 내용을 통째로 바꾸는 자리이고,
+  //   자료는 자기 안에 출처 나무를 이미 갖고 있어 사이드바를 또 점유할 이유가 없다(구역 여섯째를 만들지 않는다).
+  { key: 'sources', label: '자료', route: '#/sources', tab: null, icon: 'src' },
 ];
 export function railSections(): SecDef[] { return SECTIONS.filter((s) => !s.tab || navOn(s.tab)); }
 export function sectionDef(sec: RailSection): SecDef { return SECTIONS.find((s) => s.key === sec) || SECTIONS[0]; }

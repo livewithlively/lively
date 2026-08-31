@@ -1,0 +1,19 @@
+{
+  "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
+  "id": "sources",
+  "title": "자료",
+  "version": "0.1.0",
+  "publisher": { "name": "Lively" },
+  "instances": {
+    "project": "global",
+    "multiplicity": "single"
+  },
+  "system": {
+    "renderer": "sources",
+    "route": "#/sources"
+  },
+  "permissions": {
+    "scopes": [],
+    "tools": ["source_tree", "source_list", "source_get"]
+  }
+}

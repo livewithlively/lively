@@ -2656,7 +2656,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "c2170041611d6a82"
+  "input_hash": "b723a4155f341b58"
  },
  {
   "name": "source_undistilled",
@@ -2667,6 +2667,16 @@
    "GET /api/ui/sources/undistilled"
   ],
   "input_hash": "88f2284243fe50f5"
+ },
+ {
+  "name": "source_tree",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/sources/tree"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "source_get",
