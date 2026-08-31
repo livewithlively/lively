@@ -1574,6 +1574,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       sessionId: target.id, input: view.input,
       //  서버가 «이 하네스는 웹에서 이건 못 한다» 를 실어 준다(coverage 표) — 화면이 그걸 그대로 말한다.
       terminalOnly: (target.raw as any)?.terminalOnly ?? [],
+      //  ★ **승인은 한 층만 그린다.** codex 는 자기 실시간 층(mountCodexLive)이 이미 승인 카드를
+      //   그리고, codex 런타임은 같은 사건을 일반 버스로도 흘린다(#2439). 둘 다 그리면 한 번의
+      //   승인에 **카드가 두 장** 뜨고, 하나를 누르면 남은 하나가 답할 수 없는 유령으로 남는다.
+      //   ⚠ 언젠가 codex 도 이 표면으로 옮겨야 한다 — 그때 이 줄을 지운다(그전엔 도는 것을 흔들지 않는다).
+      drawAsks: !chatFirst(),
     });
   }
 

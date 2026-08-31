@@ -43,6 +43,12 @@ export interface SessionTasksOpts {
    */
   terminalOnly?: readonly string[];
   /**
+   * 승인 카드를 **이 표면이 그리나**. 기본 true.
+   *  ⚠ false 는 «승인이 없다» 가 아니라 «다른 층이 이미 그린다» 는 뜻이다(codex 의 실시간 층).
+   *   두 층이 함께 그리면 한 번의 승인에 카드가 두 장 뜨고, 하나를 누르면 남은 하나가 유령이 된다.
+   */
+  drawAsks?: boolean;
+  /**
    * 슬래시 자동완성을 붙일 입력칸. 없으면 그 축은 안 그린다.
    *  ⚠ 터미널에선 `/` 를 치면 목록이 뜬다 — 웹에 그게 없으면 그건 **기능 없음**이지 «디자인 차이» 가 아니다.
    */
@@ -248,7 +254,7 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
     const e = ev as { t?: string; tasks?: TaskInfo[]; ask?: AskInfo; id?: string; facts?: FactsInfo; usage?: UsageInfo };
     //  ★ 서버가 접어서 스냅샷으로 준다 — 화면은 접지 않는다.
     if (e?.t === 'tasks.snapshot' && Array.isArray(e.tasks)) { tasks = e.tasks; paint(); return; }
-    if (e?.t === 'permission.asked' && e.ask?.id) { drawAsk(e.ask); return; }
+    if (e?.t === 'permission.asked' && e.ask?.id) { if (o.drawAsks !== false) drawAsk(e.ask); return; }
     //  다른 창에서 답했거나 시간이 지나 닫혔다 — 이 화면의 카드도 함께 접는다(죽은 버튼을 남기지 않는다).
     if (e?.t === 'permission.resolved' && e.id) { settleAsk(e.id, '닫힘'); return; }
     if (e?.t === 'facts' && e.facts) {
