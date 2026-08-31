@@ -128,6 +128,18 @@ export async function initV6UiVis(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
   `);
 
+  // ── 새 셸(v2) 개인화(#2460) — 고정·치운 행·묶는 축·접힘/펼침·레일 순서·최근 앱을 멤버별 서버 저장.
+  //  기존엔 localStorage(기기별)라 브라우저를 바꾸거나 앱↔브라우저를 오가면 정리가 따라오지 않았고,
+  //  핀은 브라우저에만 있어 세션 복원으로 박스 id 가 바뀌면 풀린 것처럼 보였다(#2402 가 프론트에서 우회).
+  //  구 셸 사이드바(member_side_pref)·대시보드(member_dash_pref)와 같은 개인 UI 상태(감사 대상 아님).
+  //  prefs=JSON 한 덩어리(멤버당 1행, upsert) — 무엇을 담는지는 v6/shell-pref-store.ts SHELL_PREF_STORES.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS member_shell_pref(
+      member_id TEXT PRIMARY KEY,
+      prefs JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+
   // ── 알림 설정(#1842) — 어떤 순간에 OS 배너를 받을지. **사람 단위**(기기 단위가 아니다).
   //  기기별로 두면 사무실 맥에서 끈 것이 노트북에선 그대로 떠 "껐는데 뜬다"가 된다. 끄고 켜는 자리도
   //  [내 정보 ▸ 알림] 한 곳이라, 데스크톱 앱은 이 값을 읽기만 한다(자기 파일에 따로 두지 않는다).

@@ -4,7 +4,8 @@
 //  중앙에 띄운다 — 클래식 코드를 한 줄도 옮기지 않고 새 셸 안에서 그대로 쓴다. 나중에 화면이 새 셸로 이식되면
 //  이 표의 항목이 `native` 로 바뀌거나 빠진다(표가 곧 '아직 안 옮긴 것' 목록이다).
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
-import { el, navOn, sv, wsKey } from '../core.js';
+import { el, navOn, sv } from '../core.js';
+import { shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 최근 줄의 정본은 서버
 import { ICONS } from './icons.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
@@ -62,12 +63,14 @@ export const CLASSIC_PAGES: Record<string, string> = {
 
 export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.hidden && (!a.tab || navOn(a.tab))); }
 
-// ── 최근 쓴 앱(#1954) — 홈 한 줄이 읽는 기억. 이 기기의 내 습관이라 브라우저에 둔다(서버 저장 아님). ──
+// ── 최근 쓴 앱(#1954) — 홈 한 줄이 읽는 기억. ──
+//  #2460 — **계정에 둔다**(종전엔 이 기기의 습관이라 브라우저에만 뒀다): 사무실 데스크톱에서 연 앱이
+//   노트북 홈의 최근 줄에도 서야 «내가 요즘 쓰는 것»이 된다. 브라우저는 첫 페인트용 캐시로 남는다.
 //  ⚠ 이름을 `*_KEY` 로 두지 않는다 — gitleaks 의 generic-api-key 룰이 브라우저 저장소 이름을 시크릿으로 오인해
 //   CI 시크릿 스캔이 떨어진다(#1954 실측). 값은 localStorage 칸 이름일 뿐이다.
 // #1875 — 워크스페이스별. **여기가 이 키의 유일한 자리**다(레일도 이 값을 import 해서 읽는다 — 사본을 두면
 //  한쪽에만 접미사가 붙어 레일만 남의 워크스페이스 기록을 본다).
-export const RECENT_STORE_KEY = wsKey('lively_v2_recent_apps');
+export const RECENT_STORE_KEY = shellPrefStore('lively_v2_recent_apps', 'list');
 const RECENT_STORE = RECENT_STORE_KEY;
 const RECENT_MAX = 12;
 function readRecent(): string[] {
@@ -80,6 +83,7 @@ export function noteAppUse(key: string): void {
   if (!a || a.hidden) return;   // 문이 없는 앱은 '최근'에도 안 선다 — 서면 최근 줄이 문 없는 앱을 만든다
   const next = [key, ...readRecent().filter((k) => k !== key)].slice(0, RECENT_MAX);
   try { localStorage.setItem(RECENT_STORE, JSON.stringify(next)); } catch { /* 못 남겨도 이번 화면은 된다 */ }
+  shellPrefsPush();   // #2460 — 최근 줄은 계정의 것이다(다른 기기에서도 같은 줄이 뜬다)
 }
 /**
  * 최근 쓴 앱 n개. 기록이 모자라면 **표 순서로 채운다** — 처음 온 사람에게 빈 줄을 보이지 않기 위해서다

@@ -96,15 +96,32 @@ const SCOPED: Array<[string, string]> = [
   ["web/dash/prefs.ts", "dash_ov_pinned_v1"],
 ];
 
+// #2460 — v2 셸의 저장소는 wsKey 를 **직접** 부르지 않고 shell-prefs.ts 의 두 선언을 지난다.
+//  shellPrefStore = 서버가 정본(사람이 고른 것) · deviceStore = 이 기기가 정본(그 창의 사실).
+//  둘 다 안에서 wsKey 를 부르므로 워크스페이스 격리는 그대로다 — 그 사실을 아래에서 못박는다.
+const SCOPE_FN = /(wsKey|shellPrefStore|deviceStore)\(/;
+
 test("★ E6 워크스페이스의 내용을 담는 저장소 키는 전부 wsKey 를 지난다", () => {
   const bad: string[] = [];
   for (const [rel, key] of SCOPED) {
     const src = readSrc(rel);
     const line = src.split("\n").find((l) => l.includes(`'${key}'`) && /=|getItem|setItem/.test(l));
     if (!line) { bad.push(`${rel}: '${key}' 선언을 찾지 못했다(이름이 바뀌었으면 이 표도 함께 고쳐라)`); continue; }
-    if (!/wsKey\(/.test(line)) bad.push(`${rel}: ${line.trim()}`);
+    if (!SCOPE_FN.test(line)) bad.push(`${rel}: ${line.trim()}`);
   }
   assert.deepEqual(bad, [], "워크스페이스 내용을 담는데 wsKey 를 안 지나는 저장소가 있다 — 그 자리가 새 워크스페이스로 새어 나온다");
+});
+
+test("★ E6b shell-prefs 의 두 선언은 **반드시** wsKey 를 지난다(E6 의 우회로가 되지 않게)", () => {
+  const src = readSrc("web/v2/shell-prefs.ts");
+  const m = /function register\(base: string, kind: ShellPrefKind, sync: boolean\): string \{([\s\S]*?)\n\}/.exec(src);
+  assert.ok(m, "shell-prefs.ts 에서 register 를 찾지 못했다 — 키를 만드는 단일 자리가 없다");
+  assert.match(m![1], /wsKey\(base\)/,
+    "shellPrefStore·deviceStore 가 wsKey 를 안 지난다 — v2 셸 저장소 전부가 워크스페이스를 안 가른다");
+  for (const fn of ["shellPrefStore", "deviceStore"]) {
+    const f = new RegExp(`export function ${fn}\\(base: string[^)]*\\): string \\{[^}]*register\\(`);
+    assert.match(src, f, `${fn} 이 register 를 안 지난다 — 한쪽만 접미사가 붙는 사고가 난다`);
+  }
 });
 
 test("★ E7 스코프 대상 키를 두 파일이 각자 적지 않는다(한쪽만 접미사가 붙는 사고 방지)", () => {
