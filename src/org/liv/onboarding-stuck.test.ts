@@ -24,8 +24,23 @@ test("① 업로드 응답의 source_id 를 버리지 않는다 — 등록 여�
 });
 
 test("② 읽기 목표가 **등록된 수**다(올라간 수가 아니다)", () => {
-  assert.match(READ, /const target = \(\) => Math\.max\(S\.upIn \|\| 0,/,
-    "목표가 upIn 이 아니다 — 등록이 하나라도 빠지면 영영 안 끝난다");
+  assert.match(READ, /const target = \(\) => Math\.max\(ingestedN\(\), S\.read\.total \|\| 0\)/,
+    "목표가 등록 축이 아니다 — 등록이 하나라도 빠지면 영영 안 끝난다");
+  assert.match(SRC, /function ingestedN\(\) \{ return S\.upIn == null \? \(S\.upN \|\| 0\) : S\.upIn; \}/,
+    "축 helper 가 없거나 0 을 폴백한다 — upIn 이 «없는 것»과 «0인 것»은 다르다");
+});
+
+//  ★ 이 판(2026-08-31 2차)의 본체다. 1차 수정은 target() 만 고쳤는데, **업로드 루프가 매 파일마다
+//   S.read.total = S.upN 을 박고 있어서** target 의 read.total 항으로 올라간 수가 되살아났다.
+//   실측(자료 0건 워크스페이스, 8개 중 5개만 등록): 5/8 에서 60초 상한이 물 때까지 멈춰 있었다.
+//   상한이 사람을 구했을 뿐 «멈춤» 자체는 그대로였다.
+test("②' read.total 을 쓰는 모든 자리가 같은 축이다 — 한 곳만 올라간 수를 박아도 되살아난다", () => {
+  const writes = [...SRC.matchAll(/S\.read\.total = ([^;]+);/g)].map((m) => m[1].trim());
+  assert.ok(writes.length >= 2, `read.total 대입을 못 찾았다(${writes.length}) — 검사가 헛돈다`);
+  for (const w of writes) {
+    assert.doesNotMatch(w, /\bS\.upN\b/,
+      `read.total 에 올라간 수를 박는다: «${w}» — 이 한 줄이 target() 의 read.total 항으로 되살아난다`);
+  }
 });
 
 test("③ 폴러에 상한이 있다 — 없으면 무한히 돈다(이 신고의 본체)", () => {
@@ -39,6 +54,27 @@ test("④ 상한을 넘기면 **사실대로 말한다** — 조용히 넘어가
   assert.match(READ, /const left = Math\.max\(0, target\(\) - S\.read\.done\)/, "빠진 수를 세지 않는다");
 });
 
+//  ★ 상한에 안 걸리고 **정상 완료**하는 길이 훨씬 흔하다(등록 축을 고쳤으니 이제 그쪽이 기본이다).
+//   그 길에서 아무 말도 안 하면, 8개를 올린 사람이 5건만 들어간 것을 모르고 넘어간다.
+test("④' 정상 완료·0건 완료에서도 등록 못 한 파일을 말한다", () => {
+  assert.match(READ, /function sayFail\(\)|const sayFail = /, "실패를 말하는 자리가 없다");
+  const calls = (READ.match(/sayFail\(\)/g) || []).length;
+  assert.ok(calls >= 3, `sayFail 이 ${calls}군데서만 불린다 — 정상완료·상한·0건 세 자리에서 불려야 한다`);
+  assert.match(READ, /if \(S\.read\.done >= target\(\)\) \{ finish\(\); sayFail\(\); return; \}/,
+    "정상 완료 때 말하지 않는다");
+});
+
+//  사유는 **서버가 준 것만** 옮긴다. 지어내면 «압축이라 안 됩니다» 를 텍스트 파일에도 말하게 된다.
+test("⑤' 등록 실패 사유를 서버에서 받아 옮긴다 — 화면이 추측하지 않는다", () => {
+  const srv = readFileSync(
+    new URL("../../terminal/terminal-files.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  assert.match(srv, /skipped: ing\.reason/, "서버가 등록 실패 사유를 안 내려준다");
+  assert.match(SRC, /why: \(up && up\.skipped\) \|\| null/, "화면이 그 사유를 안 받는다");
+  assert.match(SRC, /function failWhy\(fails\)/, "사유를 사람 말로 옮기는 자리가 없다");
+  assert.doesNotMatch(SRC, /failWhy[\s\S]{0,600}return ' — 압축[^']*';\s*\}/,
+    "사유가 없을 때도 형식을 단정한다 — 서버가 말 안 한 것을 지어내면 안 된다");
+});
+
 test("⑤ 리브가 안 열렸으면 **왜** 안 열렸는지 말한다", () => {
   assert.match(SRC, /applied\.liv\.reason === 'ai-not-connected'/,
     "서버가 준 사유를 안 쓴다 — 시킨 걸 다 한 사람이 «리브는 어디 갔지» 로 남는다");
@@ -46,5 +82,6 @@ test("⑤ 리브가 안 열렸으면 **왜** 안 열렸는지 말한다", () => 
 });
 
 test("⑥ 올린 게 0건이면 기다리지 않는다(무회귀)", () => {
-  assert.match(READ, /if \(!target\(\)\) \{ finish\(\); return; \}/, "0건일 때 즉시 끝내는 길이 사라졌다");
+  assert.match(READ, /if \(!target\(\)\) \{ finish\(\); sayFail\(\); return; \}/,
+    "0건일 때 즉시 끝내는 길이 사라졌다");
 });

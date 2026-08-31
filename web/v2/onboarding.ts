@@ -809,7 +809,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     //   (terminal-files.ts). 둘을 같은 것으로 보면 «읽는 중» 이 영영 안 끝난다 — 실측 2026-08-31: 13개를 올렸는데
     //   11개만 등록돼 진행률이 11/13 에서 멈췄고, 폴러엔 상한이 없어 무한히 돌았다.
     upIn: 0,                // 자료로 **등록된** 수 — 읽기 진행률의 목표는 이 수다
-    upFail: [],             // 올라갔지만 등록 안 된 파일 이름 — 사람에게 사실대로 말하려고 든다
+    upFail: [],             // 올라갔지만 등록 안 된 것 — {n: 파일명, why: 서버가 준 사유|null}. 사람에게 사실대로 말하려고 든다
+                            //  (옛 진행에는 문자열만 들어 있다 — 읽는 쪽이 둘 다 받는다)
     upFiles: [],            // #2232 받은 파일 목록 [{n,r,s,st}] — 화면에 보이는 근거(상한 UP_KEEP)
     aiDone: [],             // #2232 이 온보딩에서 로그인을 확인한 AI 하네스 키들 — «다른 AI 도?» 화면의 체크 근거
     b2: null, b3: null, nowline: null, firstOrder: null, decisions: [], notes: [],
@@ -1456,13 +1457,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
               //  응답에 source_id 가 있으면 **자료로 등록까지** 된 것이다. 없으면 파일만 올라갔다 —
               //   그 차이를 여기서 안 세면 뒤(읽기 진행률)에서 «오지 않는 것» 을 기다리게 된다.
-              if (up && up.source_id) { S.upIn++; } else { S.upFail.push(it.file.name); if (row) row.st = 'part'; }
+              //  등록이 안 됐으면 **사유까지** 받아 둔다(서버가 skipped 로 준다) — 사람에게 «왜 안 들어갔는지» 를
+              //   추측이 아니라 사실로 말하기 위해서다.
+              if (up && up.source_id) { S.upIn++; }
+              else { S.upFail.push({ n: it.file.name, why: (up && up.skipped) || null }); if (row) row.st = 'part'; }
               // ⚠ 종전엔 응답의 source_id 가 있을 때만 셌다. 그런데 그 필드는 **자료 등록까지 성공했을 때만** 실린다
               //  (terminal-files.ts: `...(ing?.ingested ? { source_id } : {})`) — 등록이 조용히 실패하면 파일은 올라갔는데
               //  화면은 0개로 남아 «계속» 이 영영 안 켜졌다(실측 2026-08-26 원준님 신고). 올라간 건 올라간 것으로 센다.
               S.upN++; if (row) row.st = 'ok';
             } catch (e) { if (row) row.st = 'err'; toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
-            S.upBusy--; S.read.total = S.upN; save(); paintZone();
+            //  ⚠ 읽기 진행률의 목표는 **등록된 수**다(올라간 수가 아니다). 종전엔 여기서 S.upN 을 박아
+            //   뒤(startReading)에서 오지 않는 것을 기다렸다 — 실측 5/8·11/13 에서 60초를 세워 뒀다.
+            S.upBusy--; S.read.total = ingestedN(); save(); paintZone();
           }
           renderSB();
         };
@@ -2253,12 +2259,33 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  지금은 올린 자료를 서버가 몇 건 받았는지 폴링하고, 다 받았으면 끝난 것으로 본다.
    *  올린 게 하나도 없으면 읽을 것도 없다 — 기다리게 하지 않고 곧바로 끝낸다.
    */
+  //  ── 읽기 진행률의 축 ────────────────────────────────────────────────────────────────
+  //  서버가 세는 것은 **자료로 등록된 수**(countSources)다. 그러니 화면의 목표도 같은 축이어야 한다.
+  //  올라간 수(upN)와는 다른 수다 — 압축·동영상·사진 원본처럼 본문을 못 읽는 형식과 «.» 으로 시작하는 파일은
+  //  올라가되 등록되지 않는다(ingest/local-file-core.ts 의 SKIP_EXT·dotfile). 둘을 같은 것으로 보면
+  //  «오지 않는 것» 을 기다린다 — 실측 11/13(원준님 2026-08-31)·5/8(재현).
+  //  ⚠ upIn 이 **없는 것**(그 필드가 생기기 전의 옛 진행)과 **0 인 것**(하나도 등록 안 됨)은 다르다.
+  //   0 을 폴백하면 다시 오지 않는 것을 기다리게 되므로, null/undefined 일 때만 upN 으로 떨어진다.
+  function ingestedN() { return S.upIn == null ? (S.upN || 0) : S.upIn; }
+  //  등록 실패 사유를 사람 말로. 서버가 준 것(skipped)만 옮기고, 모르면 아무 말도 하지 않는다.
+  function failWhy(fails) {
+    const ws = fails.map((f) => (typeof f === 'string' ? null : f && f.why)).filter(Boolean);
+    if (!ws.length) return '';
+    const has = (re) => ws.some((w) => re.test(String(w)));
+    if (has(/^ext:/) && !has(/dotfile/)) return ' — 압축·동영상·사진 원본처럼 본문을 읽을 수 없는 형식이에요';
+    if (has(/dotfile/) && !has(/^ext:/)) return ' — «.» 으로 시작하는 숨김 파일이에요(맥에서 폴더를 끌어다 놓으면 .DS_Store 가 함께 옵니다)';
+    if (has(/^ext:/) || has(/dotfile/)) return ' — 본문을 읽을 수 없는 형식이거나 «.» 으로 시작하는 숨김 파일이에요';
+    if (has(/repo/)) return ' — 코드 저장소 안의 파일이에요';
+    return '';
+  }
+
   function startReading() {
     if (S.read.finished) return;
     clearInterval(readTimer);
-    //  목표는 **자료로 등록된 수**다(올라간 수가 아니다) — 서버가 세는 축과 같아야 만난다.
-    //  옛 진행(upIn 이 없던 판)에서 이어 들어온 경우엔 upN 으로 떨어진다.
-    const target = () => Math.max(S.upIn || 0, (S.upIn ? 0 : (S.upN || 0)), S.read.total || 0);
+    //  목표는 **자료로 등록된 수**(ingestedN)다 — 서버가 세는 축과 같아야 만난다.
+    //  read.total 도 같은 축에서 쓰지만(업로드 루프·enterChat), 장면 건너뛰기(?scene=)로 들어온 경우엔
+    //  거기서 실측/연출 수가 들어오므로 그 값도 함께 본다.
+    const target = () => Math.max(ingestedN(), S.read.total || 0);
     const paint = () => {
       const tot = Math.max(1, target());
       const p = Math.min(1, S.read.done / tot);
@@ -2270,7 +2297,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       clearInterval(readTimer); readTimer = null; paint(); renderSB();
       document.dispatchEvent(new Event('read-done'));
     };
-    if (!target()) { finish(); return; }                 // 올린 자료 0건 — 기다릴 것이 없다
+    //  올렸는데 **자료로 안 들어간** 파일을 사실대로 말한다(#1631). 종전엔 화면에서 조용히 사라져서,
+    //   8개를 올린 사람이 5건만 정리된 것을 모른 채 넘어갔다. 사유는 서버가 준 것만 옮긴다 — 지어내지 않는다.
+    const sayFail = () => {
+      const fails = (S.upFail || []).filter(Boolean);
+      if (!fails.length || S._saidFail) return;
+      S._saidFail = true;
+      const names = fails.slice(0, 3).map((f) => esc(typeof f === 'string' ? f : f.n)).join(', ');
+      const more = fails.length > 3 ? ` 외 ${fails.length - 3}건` : '';
+      const why = failWhy(fails);
+      msgLiv(`파일 <b>${fails.length}건</b>(${names}${more})은 자료로 넣지 못했어요${why}.`
+        + ` 나머지로 진행할게요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+    };
+    if (!target()) { finish(); sayFail(); return; }      // 등록된 자료 0건 — 기다릴 것이 없다(올린 게 있었다면 사유를 말한다)
     //  ⚠ **상한을 둔다.** 종전엔 완료 조건에서만 멈춰서, 등록이 하나라도 빠지면 영원히 돌았다(실측 11/13).
     //   바로 옆 분석 단계엔 상한이 있는데(ANALYZE_TIMEOUT_MS) 여기만 없었다. 넘기면 **사실대로 말하고** 넘어간다 —
     //   온보딩 한복판에서 사람을 무한정 세워 두지 않는다.
@@ -2285,10 +2324,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
       const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
       paint(); save();
-      if (S.read.done >= target()) { finish(); return; }
+      if (S.read.done >= target()) { finish(); sayFail(); return; }
       if (Date.now() - readStarted > READ_MAX_MS) {
         const left = Math.max(0, target() - S.read.done);
-        finish();
+        finish(); sayFail();
         if (left) msgLiv(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요. 나머지로 먼저 진행할게요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
       }
     }, 1500);
@@ -2778,7 +2817,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     setStage('stage-chat');
     $('#thread').innerHTML = '';
     await loadWelcome();
-    S.read.total = Math.max(S.upIn || S.upN || 0, 0);
+    S.read.total = ingestedN();
     startReading();
     await sleep(300);
     const n = S.read.total;
