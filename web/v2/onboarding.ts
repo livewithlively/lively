@@ -2768,26 +2768,30 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         `<b>Do you trust the contents of this project?</b>(이 폴더를 믿나요) — <b>Yes, I trust this folder</b> 앞에 «&gt;» 가 있는 채로 Enter. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
       ],
       note: CLI_NOTE },
+    //  grok 도 이 자리에서 끝난다(#2477, 2026-08-31). 실측으로 codex 와 **출력 모양이 같다** —
+    //   `grok login --device-auth` 가 주소(accounts.x.ai)와 `CWWP-W2NG` 꼴 코드를 찍고 기다린다.
+    //   그래서 종전처럼 창을 열어 명령을 붙여넣게 할 이유가 없어졌다.
     grok: {
-      help: '로그인 창에서 직접 하실 일은 세 가지뿐이에요. 쳐야 할 글자는 누르면 복사돼요.',
+      help: '직접 하실 일은 세 가지뿐이에요. 코드는 눌러서 복사돼요.',
       steps: [
-        `위의 ${kbd('Grok 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열려요. 그 창을 한 번 누른 뒤 ${cp('grok login --device-auth')} 를 붙여넣고 Enter.`,
-        `창에 뜬 <b>주소</b>를 열고 <b>짧은 코드</b>를 입력한 뒤 X(xAI) 계정으로 로그인하세요.`,
-        `창에 로그인이 끝났다고 나오면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}.`,
+        `위의 ${kbd('Grok 로그인 시작')}을 누르면 이 자리에 <b>주소</b>와 <b>짧은 코드</b>가 나와요.`,
+        `주소를 열고 그 코드를 입력한 뒤, X(xAI) 계정으로 로그인하세요.`,
+        `이 자리에 «로그인이 끝났어요» 가 뜨면 아래 ${kbd('로그인했어요')}.`,
       ],
       between: '', more: '왜 주소와 코드냐면', detail: [DEVICE_NOTE],
-      note: CLI_NOTE },
+      note: '' },
   };
   const LOGIN_SESSION = { claude: { harness: 'claude' }, codex: { harness: 'shell', loginFor: 'codex' }, antigravity: { harness: 'antigravity' }, grok: { harness: 'shell', loginFor: 'grok' } };
   /* 화면에서 바로 로그인이 되는 하네스(#2055 후속, 2026-08-28) — 서버가 로그인 명령을 대신 돌리고 주소·코드만 준다.
      · codex  `codex login --device-auth` → 주소 + 일회용 코드. 되돌려 줄 입력이 없다.
      · claude `claude auth login`        → 주소를 주고 **코드를 되받는다**(브라우저의 «Paste this code back…»).
+     · grok   `grok login --device-auth`  → codex 와 같은 모양(주소 + 코드). 실측 2026-08-31, #2477.
      그 밖(agy·grok)은 비대화형 한 줄이 아예 없어(catalog.harnessLoginArgv 머리말) 종전 «로그인 창» 그대로다.
      ⚠ claude 는 로그인과 별개로 **첫 실행 설정**(글자 스타일·보안 안내·폴더 신뢰)을 TUI 에서 묻는다. 로그인만
      이 자리로 빼면 그 물음은 없어지는 게 아니라 **첫 세션으로 미뤄진다** — 그래서 안내 마지막 줄에 그대로 적는다.
      대신 답해 두지 않는 이유는 «이 폴더를 믿나요» 가 사람이 할 보안 판단이라서다(미리 눌러 주면 그 판단을 뺏는다).
      판정·파싱의 정본은 서버 ai-login-flow.ts 다 — 여기서 형식을 다시 짐작하지 않는다. */
-  const LOGIN_INLINE = { codex: true, claude: true };
+  const LOGIN_INLINE = { codex: true, claude: true, grok: true };
 
   /* 터미널 없이 로그인 — 서버가 명령을 멤버 자리에서 돌리고, 여기서는 주소·코드만 보여 준다(#2055 후속).
      ⚠ «막다른 카드» 를 만들지 않는다: 시작조차 못 하면 종전 «로그인 창» 경로로 정직하게 내려간다.

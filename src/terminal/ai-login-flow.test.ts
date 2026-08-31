@@ -6,7 +6,7 @@
 //  그대로 두고(일회용 코드·PKCE 값만 치환) 그것으로 잠근다. 판올림으로 문구가 바뀌면 이 픽스처를 다시 딴다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { aiLoginStep, isAiLoginHarness, parseAiLogin, stripAnsi, EXIT_MARK } from "./ai-login-flow.js";
+import { aiLoginArgv, aiLoginStep, isAiLoginHarness, parseAiLogin, stripAnsi, EXIT_MARK } from "./ai-login-flow.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -16,6 +16,7 @@ const fx = (n: string): string =>
 t("배선 · 픽스처를 실제로 읽었다(vacuous 방지)", () => {
   assert.ok(fx("codex-device-auth.txt").length > 200);
   assert.ok(fx("claude-auth-login.txt").length > 400);
+  assert.ok(fx("grok-device-auth.txt").length > 200);
 });
 
 t("★ C1 codex — 주소와 일회용 코드를 뽑는다(이 둘이면 터미널이 필요 없다)", () => {
@@ -64,8 +65,10 @@ t("★ C6 실패를 삼키지 않는다", () => {
 });
 
 t("C7 이 통로가 다루는 하네스만 받는다 — 나머지는 종전 안내로", () => {
-  assert.ok(isAiLoginHarness("codex") && isAiLoginHarness("claude"));
-  for (const k of ["agy", "grok", "opencode", "shell", ""]) assert.ok(!isAiLoginHarness(k), k);
+  assert.ok(isAiLoginHarness("codex") && isAiLoginHarness("claude") && isAiLoginHarness("grok"));
+  //  agy 는 **로그인 서브커맨드 자체가 없다**(실측 2026-08-31: `agy login --help` 가 일반 usage 를 찍는다).
+  //   하네스를 켜야 로그인 화면이 뜨고 자격도 파일로 안 남아(키링) 이 통로의 전제를 못 채운다 — 지어내지 않는다.
+  for (const k of ["agy", "opencode", "shell", ""]) assert.ok(!isAiLoginHarness(k), k);
 });
 
 t("★ C8 문구가 아니라 **모양**으로 읽는다 — 판올림으로 안내문이 바뀌어도 안 깨진다", () => {
@@ -73,6 +76,21 @@ t("★ C8 문구가 아니라 **모양**으로 읽는다 — 판올림으로 안
   const st = parseAiLogin("codex", future);
   assert.equal(st.url, "https://auth.openai.com/codex/device");
   assert.equal(st.code, "WXYZ-98765");
+});
+
+t("★ grok 도 codex 와 같은 모양이다 — 주소와 코드를 **보여 준다**(실측 2026-08-31)", () => {
+  // 하네스가 늘 때 이 검사가 없으면 «주소는 뜨는데 코드가 없는» 반쪽 화면을 배포하고도 모른다.
+  const st = parseAiLogin("grok", fx("grok-device-auth.txt"));
+  assert.equal(st.url, "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234");
+  assert.equal(st.code, "ABCD-1234");
+  assert.equal(st.needsPaste, undefined, "grok 은 코드를 되받지 않는다");
+  assert.equal(st.error, undefined);
+  assert.equal(aiLoginStep(st, false), "open-url");
+});
+
+t("★ grok 은 이 통로의 대상이다 — 표에서 빠지면 화면이 종전 창으로 되돌아간다", () => {
+  assert.ok(isAiLoginHarness("grok"));
+  assert.deepEqual(aiLoginArgv("grok"), ["grok", "login", "--device-auth"]);
 });
 
 console.log(`\n${pass} passed`);
