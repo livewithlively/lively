@@ -166,8 +166,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   }
   /** 지금 아는 **진짜** 갈래 집계. 서버를 아직 못 읽었으면 빈 배열(연출 숫자를 만들지 않는다). */
   const realKinds = () => (WS && WS.uploads && Array.isArray(WS.uploads.kinds)) ? WS.uploads.kinds : [];
-  /** 올린 자료 총수 — 업로드 카운터와 서버 총계 중 큰 쪽(막 올린 건 서버가 아직 모를 수 있다). */
-  const realTotal = () => Math.max(S.upN || 0, (WS && WS.uploads && WS.uploads.total) || 0);
+  /** 올린 **자료** 총수 — 등록 카운터와 서버 총계 중 큰 쪽(막 올린 건 서버가 아직 모를 수 있다).
+   *  ⚠ 바닥은 «올라간 수»가 아니라 «등록된 수»(ingestedN)다(#1631). 올라갔지만 등록 안 된 파일까지 세면
+   *   «자료 8건을 다 읽었어요» 처럼 **읽지 않은 것을 읽었다고** 말하게 된다(실측 8 올림 / 5 등록). */
+  const realTotal = () => Math.max(ingestedN(), (WS && WS.uploads && WS.uploads.total) || 0);
   /* ── #2232 올린 파일 목록 ─────────────────────────────────────────────────────
    *  S.upFiles = [{ n: 이름, r: 상대경로, s: 바이트, st: 'up'|'ok'|'err' }] — 진행 저장에 함께 실려 새로고침·재입장에도 남는다.
    *  그림 미리보기는 이 탭의 메모리(objectURL)에만 있다 — 다시 들어오면 종류 배지로 돌아간다(서버에 다시 묻지 않는다).
@@ -1602,7 +1604,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   그때 사람은 서비스가 고장 났다고 읽는다.
         const soonCard = (label, icon) => `<button class="ob-opt-card ob-locked ob-soon" aria-disabled="true" disabled title="아직 준비 중이에요"><span class="ob-oc-ic">${icon}</span><span><span class="ob-oc-t">${esc(label)}</span><span class="ob-oc-d">준비 중</span></span></button>`;
         return qHead('sources',
-          S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 이어서 한 가지만 더요.` : '알겠습니다. 이어서 한 가지만 더요.',
+          //  ⚠ «받은 수»와 «읽는 수»는 다르다(#1631) — 등록 안 된 파일은 읽지 않는다.
+          //   받은 수로 «읽는 중» 을 말하면, 바로 앞에서 «3건은 못 넣었어요» 라고 해 놓고 8개를 읽는다고 하게 된다.
+          ingestedN() ? `자료 <b>${ingestedN()}건</b>을 읽는 중입니다. 이어서 한 가지만 더요.` : '알겠습니다. 이어서 한 가지만 더요.',
           '그동안 쌓아 두신 자료를 가져올 외부 서비스를 연결할게요.',
           '고르신 곳에 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요.')
           + (already.length ? `<p class="ob-q-fine" style="text-align:left;margin:0 0 14px">이미 연결된 곳이 있어요 — ${esc(already.map((it) => it.label).join(' · '))}. 다시 하실 필요 없습니다.</p>` : '')
@@ -1673,7 +1677,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //  아직 서버에 못 물었으면 그렇다고 말한다 — '연결 안 됨'으로 뭉개면 이미 이은 사람이 또 잇는다.
         const unknown = !CONN;
         return qHead('connect',
-          reading ? `읽는 중이에요. <b>${S.read.done} / ${S.read.total}</b>` : (S.upN ? `파일 ${S.upN}개는 다 읽었어요.` : '거의 다 왔어요.'),
+          //  같은 이유로 «다 읽었어요» 도 등록된 수로 말한다 — 안 들어간 것을 읽었다고 하지 않는다.
+          reading ? `읽는 중이에요. <b>${S.read.done} / ${S.read.total}</b>` : (ingestedN() ? `자료 ${ingestedN()}건은 다 읽었어요.` : '거의 다 왔어요.'),
           done.length ? `${done.length}곳을 연결했어요.` : '고르신 곳을 하나씩 연결해 주세요.',
           unknown ? '연결 상태를 불러오는 중이에요…' : '아래에서 하나씩 눌러 주세요. 한 번에 하나면 됩니다.')
           + `<div class="ob-opt-cards">${picked.map((id) => {
@@ -2804,7 +2809,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       //   부르는 셈이라, 첫 대면에서 제품이 사실이 아닌 말을 한다.
       //  → 이번에 올린 수(S.upN)를 아는 화면이므로 **말을 가른다**: 그 수만 «올려 주신» 이라 부르고, 나머지는
       //   «이 워크스페이스에 쌓여 있는» 이라고 정직하게 말한다. 세는 대상은 그대로다(갈래는 전체를 보고 잡는 게 맞다).
-      const mine = S.upN || 0;
+      //  «올려 주신 N건» 도 등록된 수다 — 올리기만 하고 안 들어간 것을 «올려 주신 자료» 로 세면 총계와 어긋난다.
+      const mine = ingestedN();
       const lead = mine > 0 && total > mine
         ? `${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 <b>${mine}건</b>을 포함해, 이 워크스페이스에 쌓여 있는 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`
         : mine > 0
