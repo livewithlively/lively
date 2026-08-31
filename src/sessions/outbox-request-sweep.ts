@@ -32,6 +32,10 @@ export interface SweepJob {
   readonly run: () => Promise<unknown>;
 }
 
+/** 원래 하우스키핑이 쓰던 주기 그대로 — 새 정책을 만들지 않는다(`background-sweeps` 의 setInterval 값). */
+export const TEN_MIN_MS = 10 * 60_000;
+export const SIX_HOURS_MS = 6 * 60 * 60_000;
+
 export const SWEEP_JOBS: readonly SweepJob[] = [
   // 아웃박스 — 좀비 회수 + 끝난 행 청소 + 대기 세션 재-kick. RLS 가 이 테넌트로 스코프한다.
   { key: "outbox", intervalMs: SWEEP_MIN_INTERVAL_MS,
@@ -45,6 +49,35 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //   **지우지 않는다**(`new Map(previous)` + 추가만). 그래서 테넌트끼리 서로의 상태를 밀어내지 않는다.
   { key: "awaiting-notify", intervalMs: AWAITING_SWEEP_INTERVAL_MS,
     run: () => import("./awaiting-notifier.js").then((m) => m.sweepAwaitingNotifications()) },
+  // 임베딩 백필(#669) — 실측: 지식 1472건 중 **15건이 미임베딩**이라 의미검색에 안 잡혔다.
+  //  provider off 면 설정 조회 후 no-op 이라 켜 두어도 비용이 없다.
+  { key: "embedding-backfill", intervalMs: TEN_MIN_MS,
+    run: () => import("../v6/embedding-backfill.js").then((m) => m.runAutoBackfillSweep()) },
+  // device-auth 리퍼(#880) — 만료 1h 지난 pending 정리(user_code 회수). 실측 2건 잔존.
+  { key: "device-auth-reap", intervalMs: TEN_MIN_MS,
+    run: () => import("../org/auth/device-auth.js").then((m) => m.reapDeviceAuth()) },
+  // OAuth 리퍼(#1473 T2) — 만료된 인가요청·인가코드. 지금은 0건이지만 쌓이는 성질이라 올린다
+  //  (리프레시는 회전 사슬이라 더 오래 두는 것이 원래 설계 — 그 판단은 그 함수 안에 있다).
+  { key: "oauth-reap", intervalMs: TEN_MIN_MS,
+    run: () => import("../org/store/oauth.js").then((m) => m.reapOAuth()) },
+  // 세션이력 retention(#905 C1) — 보존기간 지난 로그·청크 정리. `retention_days=0` 이면 그 함수가 no-op.
+  //  ⚠ 설정을 못 읽으면 **이 정비만** 실패한다 — 표의 다른 정비를 막지 않는다(각자 catch 된다).
+  { key: "session-log-reap", intervalMs: SIX_HOURS_MS,
+    run: () => import("../org/store.js")
+      .then((c) => c.getRuntimeConfig())
+      .then((cfg) => import("../v6/session-log-store.js")
+        .then((m) => m.reapSessionLogs(cfg.session_share.retention_days))) },
+  // 세션 제목 소급 채움(#905 C1) — 멱등이고 다 채우면 no-op. 원래는 부팅 35초 후 1회였는데,
+  //  요청에 얹는 세계에는 '부팅 1회'가 없다 — 긴 주기로 두면 같은 뜻이 된다(다 채우면 아무것도 안 한다).
+  { key: "session-title-backfill", intervalMs: SIX_HOURS_MS,
+    run: () => import("../v6/session-log-store.js").then((m) => m.backfillSessionTitles()) },
+  // desired-state 백필(#1059 F 후속) — 레코드 없는 라이브 세션에 미러를 만든다.
+  //  ⚠ 이게 없으면 그 세션들은 **회수 면역이면서 죽으면 복원도 안 된다**(고객사 A 실측: 38건 중 19건).
+  { key: "session-state-backfill", intervalMs: SWEEP_MIN_INTERVAL_MS,
+    run: () => import("./session-state-backfill.js").then((m) => m.backfillSessionStates()) },
+  //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
+  //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
+  //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.
 ];
 
 //  ⚠ 인메모리다. 게이트웨이가 재기동하면 비는데, **그게 맞다**: 재기동이야말로 배달 루프를 죽여
