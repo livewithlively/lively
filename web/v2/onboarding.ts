@@ -800,6 +800,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
+    aiHarness: '',          // #2255 고른 AI 의 **하네스 id** — `lively install` 이 이 값을 읽어 그것만 깐다(라벨은 못 읽는다)
     local: null,            // #1879 내 컴퓨터 설치 — 'done'|'getting'|'later'
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
@@ -1915,7 +1916,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
-          S.ai = c.dataset.opt; AIC = null; save(); renderSB(); await sleep(200);
+          setAi(c.dataset.opt); AIC = null; save(); renderSB(); await sleep(200);
           goScene(S.ai === '아직 없어요' ? 'sources' : 'claude');
         });
         $('[data-skip]', el).onclick = () => goScene('sources');
@@ -1983,10 +1984,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // ── CLI 가 이 자리에 없다. 로그인 절차를 보여 줘도 첫 줄에서 command not found 가 난다 —
         //    그러니 로그인을 시키지 않고 **없다는 사실**을 말한다(사람이 해야 할 일이 아예 다르다).
         if (c.installed === false) {
+          //  #2255 — 종전엔 여기서 «라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요» 로 **중앙 박스만**
+          //   가리켰다. 로컬로 쓰려는 사람에겐 답이 아니다(고르게는 해 놓고 이을 길이 없는 자리 — #1879 가
+          //   그록·제미나이에서 고친 것과 같은 모양의 잔재였다). 이제 진짜 답을 말한다: **다음 화면에서
+          //   이 컴퓨터를 이으면 그 AI 를 설치까지 해 준다**(`lively install` 이 고른 값을 서버에서 읽어 온다).
           return qHead('claude', lead, `이 자리엔 ${picked}${josa(S.ai, 0)} 아직 없어요.`,
             `${picked}${josa(S.ai, 1)} 쓰려면 그 CLI(<code>${bin}</code>)가 먼저 깔려 있어야 합니다.`)
             + `<div class="ob-tok">
-                <p class="ob-note">라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요. ${picked}${josa(S.ai, 2)} 그 CLI 가 깔린 내 컴퓨터를 연결해 두시면 그대로 쓸 수 있습니다(다음 화면).</p>
+                <p class="ob-note">여기(라이블리 서버)에는 Claude 와 ChatGPT 가 준비돼 있어요. <b>${picked}</b>${josa(S.ai, 2)} <b>내 컴퓨터</b>에서 씁니다 — 다음 화면에서 이 컴퓨터를 이어 두시면 <b>${picked}${josa(S.ai, 0)} 없을 때 설치까지 같이 해 드립니다</b>(무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요).</p>
                 ${otherNote}
               </div>`
             + (keepBtn ? keepBtn.replace('ob-btn-sub', 'ob-btn-pri') : '')
@@ -2089,7 +2094,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           }
         };
         // 다른 AI 도 연결하기 — 고른 것을 바꿔 같은 장면을 다시 연다(판정은 새로 묻는다).
-        $$('[data-more]', el).forEach((b) => b.onclick = () => { S.ai = b.dataset.more; AIC = null; save(); renderSB(); renderScene('claude', false); });
+        $$('[data-more]', el).forEach((b) => b.onclick = () => { setAi(b.dataset.more); AIC = null; save(); renderSB(); renderScene('claude', false); });
         // 다른 AI 가 이미 연결돼 있을 때의 문 — 고른 것을 못 연결했다고 사람을 가두지 않는다.
         //  (분석은 서버가 resolveHeadlessHarness 로 고른 **실제 로그인된** 하네스로 돈다.)
         const keep = $('#cKeep', el);
@@ -2167,6 +2172,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //  #2232 — [응용 프로그램]·[승인] 같은 대괄호 표기는 화면에서 못생겼다(원준님 2026-08-28) → 누를 것은 키캡(ob-kbd)으로,
         //   «앱 받기» 는 글 안에서도 **진짜 버튼**으로(눌러도 받아진다). 문장 사이 하이픈(—)도 걷었다.
         const getBtn = '<button type="button" class="ob-btn ob-btn-sub ob-btn-inline ob-btn-mini" data-get>앱 받기</button>';
+        //  #2255 — 고른 AI 가 이 컴퓨터에 없으면 **설치까지** 여기서 끝난다. 그 사실을 이름을 불러 말한다.
+        //   («어떤 AI 를 쓰세요» 에 답한 사람에게 그 답이 어디로 갔는지 보여 주는 자리이기도 하다.)
+        //   값이 없거나 '아직 없어요' 를 고른 사람에겐 아무 말도 하지 않는다 — 안 깔아도 될 것을 예고하지 않는다.
+        const aiNote = S.aiHarness
+          ? `<p class="ob-ins-n">이 컴퓨터에 <b>${esc(S.ai)}</b>${josa(S.ai, 0)} 없으면 <b>같이 깔아 드립니다</b>. 무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요. 나중에 <code>lively uninstall</code> 로 라이블리를 지워도 ${esc(S.ai)}${josa(S.ai, 2)} 그대로 남습니다.</p>`
+          : '';
         const step1 = win
           ? `아래 ${getBtn} 를 누르면 <b>Lively-Setup.exe</b> 가 내려받아져요. 내려받은 파일을 두 번 눌러 설치하세요.`
           : os === 'mac'
@@ -2184,6 +2195,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               <div class="ob-ins" data-n="2">
                 <b class="ob-ins-t">앱이 물어보는 대로 ${kbd('승인')} 한 번</b>
                 <p class="ob-ins-p">앱을 열면 설치 도우미가 뜹니다. 브라우저에 <b>라이블리 승인</b> 창이 열리면 ${kbd('승인')}을 누르세요. 그게 전부예요.</p>
+                ${aiNote}
               </div>
               <div class="ob-ins" data-n="3">
                 <b class="ob-ins-t">끝나면 이 한 마디만</b>
@@ -2473,6 +2485,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const AI_JOSA = { Claude: ['가', '를', '는'], ChatGPT: ['가', '를', '는'], Gemini: ['가', '를', '는'], Grok: ['이', '을', '은'] };
   const josa = (word, i) => (AI_JOSA[word] || ['이(가)', '을(를)', '은(는)'])[i];
   const aiHarness = () => AI_HARNESS[S.ai] || 'claude';
+  /** 고른 AI 를 상태에 남긴다 — 라벨(S.ai)과 **하네스 id**(S.aiHarness)를 함께.
+   *  ⚠ id 를 따로 남기는 이유(#2255): 이 값을 읽는 쪽이 `lively install`(터미널)이라 라벨을 못 읽는다.
+   *   라벨→id 표(AI_HARNESS)를 CLI 에도 두면 사본이 둘이 되고, 어긋나는 순간 «제미나이를 골랐는데
+   *   claude 가 깔리는» 상태가 된다. 표는 여기 하나만 두고 **결과만** 실어 보낸다.
+   *  ⚠ '아직 없어요' 는 고른 게 아니다 — aiHarness() 의 claude 폴백을 여기 쓰면 안 깔아도 될 것을 깐다. */
+  const setAi = (label: string) => { S.ai = label; S.aiHarness = AI_HARNESS[label] || ''; };
   /** 고른 AI 하나에 대한 마지막 판정(POST /api/ui/me/ai-accounts/check).
    *  null = 아직 안 물어봤다 — 화면은 «확인 중» 으로 살고, 없는 답을 지어내지 않는다. */
   let AIC = null;

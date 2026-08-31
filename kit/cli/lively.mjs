@@ -940,77 +940,247 @@ function registerClaudeMcp() {
 //  Windows 는 대상이 아니다 — 거기선 애초에 우리가 claude 를 깔지 않는다(설치 안내만 한다).
 export const LOCAL_BIN_BEGIN = "# >>> lively-managed (PATH: local-bin) >>>";
 export const LOCAL_BIN_END = "# <<< lively-managed (PATH: local-bin) <<<";
+// #2255 — 하네스마다 bin 자리가 다르다(~/.local/bin · ~/.grok/bin · ~/.opencode/bin …). 그래서 태그를 뗐다.
+//  ⚠ 기본 태그는 `local-bin` 그대로다 — user-uninstall.mjs 가 그 **리터럴**을 알고 보존하기 때문이다.
+//   다른 태그의 블록도 자동으로 보존된다(제거기는 `PATH: node`·`PATH: cli` 만 걷어낸다) — 의도한 대칭이다:
+//   하네스는 라이블리를 지워도 남아야 하는 **사용자 소유물**이다.
+export const pathBlockBegin = (tag = "local-bin") => `# >>> lively-managed (PATH: ${tag}) >>>`;
+export const pathBlockEnd = (tag = "local-bin") => `# <<< lively-managed (PATH: ${tag}) <<<`;
 
 /**
  * (순수) rc 에 이어붙일 블록. 이미 있으면 **null** — 호출부가 그걸 '건드리지 않는다'로 읽는다.
  *  블록 안의 `case` 문은 rc 를 두 번 source 해도 PATH 가 안 자라게 한다(bootstrap.sh 의 cli 블록과 같은 모양).
+ *  dir 은 **rc 에 그대로 적히는 문자열**이라 절대경로 대신 `$HOME/…` 형태를 받는다(홈이 옮겨져도 살아 있게).
  */
-export function localBinRcBlock(currentRc) {
+export function localBinRcBlock(currentRc, { dir = "$HOME/.local/bin", tag = "local-bin" } = {}) {
   const cur = String(currentRc || "");
-  if (cur.includes(LOCAL_BIN_BEGIN)) return null;               // 멱등
+  const BEGIN = pathBlockBegin(tag), END = pathBlockEnd(tag);
+  if (cur.includes(BEGIN)) return null;                         // 멱등
   const lines = [
-    LOCAL_BIN_BEGIN,
+    BEGIN,
     "# Claude Code 등 사용자 도구가 깔리는 자리를 PATH 에 추가(라이블리를 지워도 이 블록은 남습니다).",
-    'if [ -d "$HOME/.local/bin" ]; then case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac; fi',
-    LOCAL_BIN_END,
+    `if [ -d "${dir}" ]; then case ":$PATH:" in *":${dir}:"*) ;; *) export PATH="${dir}:$PATH" ;; esac; fi`,
+    END,
     "",
   ];
   const lead = cur ? (cur.endsWith("\n") ? "\n" : "\n\n") : "";
   return lead + lines.join("\n");
 }
 
-function wireLocalBinPath() {
-  if (WIN) return;                                              // 윈도우는 우리가 claude 를 안 깐다 → 남의 PATH 를 안 건드린다
+// 절대 bin 경로 → rc 에 적을 `$HOME/…` 형태 + 그 블록의 태그. 홈 밖 경로는 절대경로 그대로 둔다.
+export function rcPathSpec(binDir, HOME_ = "") {
+  const abs = String(binDir || "");
+  const home = String(HOME_ || "");
+  const rel = home && abs.startsWith(home + "/") ? abs.slice(home.length + 1) : "";
+  return {
+    dir: rel ? `$HOME/${rel}` : abs,
+    // 태그는 자리마다 하나 — `.local/bin` 만 종전 리터럴(`local-bin`)을 지킨다(제거기와의 약속).
+    tag: rel === ".local/bin" ? "local-bin" : (rel || abs).replace(/^[.\/]+/, "").replace(/[^A-Za-z0-9]+/g, "-").toLowerCase(),
+  };
+}
+
+// 우리가 깔아 준 하네스의 bin 자리를 셸 rc 에 영속화한다. **설치기가 스스로 안 심는 경우에만** 부른다
+//  (표의 install.<os>.wiresPath 가 그 판정 — 남이 이미 한 일을 또 하면 rc 에 중복 블록이 쌓인다).
+function wireLocalBinPath(binDir = join(HOME, ".local", "bin")) {
+  if (WIN) return;                                              // 윈도우는 rc 가 아니라 User PATH 다(설치기들이 직접 잡는다)
+  const { dir, tag } = rcPathSpec(binDir, HOME);
   const rcs = [".zshrc", ".bashrc", ".bash_profile", ".profile"]
     .map((f) => join(HOME, f)).filter((f) => existsSync(f));
   if (!rcs.length) { const z = join(HOME, ".zshrc"); try { writeFileSync(z, ""); rcs.push(z); } catch { return; } }
   for (const rc of rcs) {
     let cur = "";
     try { cur = readFileSync(rc, "utf8"); } catch { continue; }
-    const block = localBinRcBlock(cur);
+    const block = localBinRcBlock(cur, { dir, tag });
     if (block === null) continue;
     try {
-      const bak = join(HOME, ".lively", "backups", `${rc.split(sep).pop()}.path-local-bin.bak`);
+      const bak = join(HOME, ".lively", "backups", `${rc.split(sep).pop()}.path-${tag}.bak`);
       mkdirSync(join(HOME, ".lively", "backups"), { recursive: true });
       if (!existsSync(bak)) writeFileSync(bak, cur);             // pristine 스냅샷 1회만 — 덮으면 복구가 죽는다
       writeFileSync(rc, cur + block);                            // append-only(비파괴)
-      info(`${rc.replace(HOME, "~")} 에 PATH 블록 추가 — 새 터미널에서도 claude 가 잡힙니다.`);
+      info(`${rc.replace(HOME, "~")} 에 PATH 블록 추가 — 새 터미널에서도 잡힙니다.`);
     } catch { /* rc 를 못 쓰면 이 프로세스 PATH 만으로 진행(종전과 동일) */ }
   }
 }
 
+// ── 7.5 하네스 자동 설치 (#2255) ────────────────────────────────────────────
+// 종전엔 하네스가 없으면 **claude 하나만**, **POSIX 에서만** 깔아 줬다. 윈도우 사람은 링크만 받아
+//  브라우저에 나갔다 돌아와 `lively install` 을 **한 번 더** 쳐야 했고("Windows 엔 sh 가 없다"가 근거였는데
+//  정작 필요한 건 sh 가 아니라 PowerShell 이었다 — 5종 중 4종이 공식 .ps1 설치기를 갖고 있다),
+//  codex·opencode·antigravity·grok 을 쓰려는 사람에겐 자동 설치 경로가 아예 없었다.
+//
+// 설치 계약은 **표**(kit/hooks/harness-registry.mjs 의 `install` 축)가 답한다. 여기 박지 않는 이유 둘:
+//  ① 새 하네스는 표에 한 줄이면 끝이어야 한다(이 파일의 존재 이유와 같은 규율).
+//  ② **번들의** 표를 읽으므로 구버전 CLI 로도 새 하네스를 깔 수 있다 — augmentHarnessesFromBundle 이
+//    #1689 에서 배운 것과 같은 교훈이다(그때는 "update 를 두 번 돌려야 했다"로 나타났다).
+
+// 표 로드 — 번들 우선(항상 최신), 없으면 **설치된 형제 사본**. 사본을 새로 만들지 않는다(드리프트 0).
+//  두 자리의 상대경로가 같은 건 우연이 아니다: 설치 레이아웃 `~/.lively/lib/lively.mjs` ↔ `~/.lively/hooks/…`
+//  와 소스 `kit/cli/` ↔ `kit/hooks/` 가 둘 다 `../hooks/harness-registry.mjs` 로 닿는다.
+async function loadHarnessRegistry(bundleRoot) {
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  const cands = [
+    bundleRoot ? join(bundleRoot, ".claude", "hooks", "harness-registry.mjs") : "",
+    join(here, "..", "hooks", "harness-registry.mjs"),
+  ].filter(Boolean);
+  for (const f of cands) {
+    try {
+      const m = await import(pathToFileURL(f).href);          // ⚠ pathToFileURL — 윈도우 드라이브문자
+      if (typeof m?.installPlanFor === "function") return m;  // 구 번들엔 이 축이 없다 → 다음 후보
+    } catch { /* 다음 후보 */ }
+  }
+  return null;
+}
+
+// ── 카드형 출력 — 남의 기계에 소프트웨어를 까는 화면이라 «무엇을·어디서·되돌리기»를 한 눈에 둔다.
+//  오른쪽 테두리는 두지 않는다: ANSI + CJK 폭 계산이 한 칸이라도 틀리면 표가 어긋나 오히려 지저분해진다.
+const padTo = (s, n) => String(s) + " ".repeat(Math.max(0, n - cols(s)));
+const cardRow = (k, v) => say("  " + dim("│  ") + dim(padTo(k, 11)) + v);
+const tilde = (p) => String(p || "").replace(HOME, "~");
+
+// 공급사 설치기의 출력을 우리 출력과 섞이지 않게 감싼다(스트리밍이라 접두어를 못 붙인다 → 구분선으로).
+const vendorRule = (label) => say(dim("  " + "─".repeat(3) + " " + label + " " + "─".repeat(Math.max(3, 52 - cols(label)))));
+
+// 설치기를 실제로 돌린다. POSIX 는 sh, 윈도우는 PowerShell **자식 프로세스**.
+//  ⚠ `irm … | iex` 를 자식으로 돌리는 건 [[delivery-install-invariants]] ⑥ 의 "exit 금지" 와 충돌하지 않는다 —
+//   그 규칙은 우리 부트스트랩이 **사용자 세션 안에서** 평가될 때의 이야기고(거기선 exit 이 사람 창을 닫는다),
+//   여기선 우리가 띄운 별도 프로세스라 공급사 스크립트의 exit 이 우리를 넘어오지 않는다. 되돌리지 말 것.
+function runInstaller(plan) {
+  const env = plan.env || undefined;
+  if (plan.shell === "powershell") {
+    // pwsh(7+) 가 있으면 그걸, 없으면 Windows 기본 powershell.exe. -NoProfile 은 남의 프로필을 안 태우기 위해서다.
+    const exe = has("pwsh") ? "pwsh" : "powershell";
+    return run(exe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", plan.cmd], { allowFail: true, env });
+  }
+  return run("sh", ["-c", plan.cmd], { allowFail: true, env });
+}
+
+// 설치 직후 **부작용으로** 판정한다 — 종료코드가 아니라 "그 이름으로 실제 버전이 나오나".
+//  (공급사 설치기가 0 으로 끝나고도 PATH 밖에 놓는 경우가 실제로 있다 — 그때 '성공' 이라고 말하면 안 된다.)
+function probeHarness(bin) {
+  if (!has(bin)) return null;
+  try {
+    const r = run(bin, ["--version"], { quiet: true, allowFail: true, timeout: 20000 });
+    return String(r.out || r.err || "").trim().split("\n")[0] || "(버전 불명)";
+  } catch { return "(버전 불명)"; }
+}
+
+/**
+ * 하네스가 없으면 **깔아 준다**. 반환 = 갱신된 하네스 목록(설치를 안 했으면 받은 그대로).
+ *  want = 사람이 «이걸 쓰겠다» 고 고른 하네스(온보딩·`--harness`). 비면 종전 규약(아무것도 없을 때만 claude).
+ */
+// 온보딩에서 고른 AI 를 **서버에 묻는다** (#2255 구멍 ③).
+//  왜 CLI 가 묻나 — 입구가 셋이다(데스크톱 앱 · 터미널 한 줄 · 손으로 lively install). 앱이 묻고 앱이 넘기게 하면
+//   나머지 둘은 영영 못 받고, 무엇보다 **웹 UI 에는 CLI 를 돌리는 IPC 가 없다**(desktop/main/ipc-contract.mjs
+//   머리말의 보안 경계 — 원격 페이지의 XSS 한 방이 이 PC 의 임의 실행으로 승격되면 안 된다). 그래서 값은
+//   서버에 있고, 그걸 읽는 자리는 **설치를 실제로 하는 쪽** 한 곳이면 된다.
+//  값은 온보딩 화면이 진행 저장(POST /api/ui/me/welcome/progress)에 실어 둔 `state.aiHarness` — **라벨이 아니라 id** 다
+//   (라벨→id 표를 여기 또 두면 사본이 둘이 되고, 그 순간 «Gemini 를 골랐는데 claude 가 깔리는» 상태가 생긴다).
+//  실패는 전부 무해: 구 게이트웨이·네트워크·이미 온보딩을 끝낸 사람(progress 가 null) → "" 로 떨어져 종전 규약.
+async function onboardingHarness() {
+  const gw = gateway(), tok = token();
+  if (!gw || !tok) return "";
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 5000);   // 설치 흐름을 네트워크가 붙잡지 못하게 — 이건 편의값이다
+  try {
+    const res = await fetch(gw + "/api/ui/me/welcome", { signal: ctl.signal, headers: { authorization: `Bearer ${tok}` } });
+    if (!res.ok) return "";
+    const j = await res.json();
+    const id = String(j?.progress?.state?.aiHarness || "").trim().toLowerCase();
+    return /^[a-z][a-z0-9-]{0,31}$/.test(id) ? id : "";   // 서버 값이라도 그대로 안 믿는다(표가 다시 거른다)
+  } catch { return ""; } finally { clearTimeout(timer); }
+}
+
+/**
+ * (순수) 무엇을 깔지 고른다 — **이 한 줄이 구멍 ②의 자리다.**
+ *  종전 조건은 `if (!harnesses.length)` 였다: 「하나도 없을 때만」 묻는다. 그래서 codex 만 깔린 사람이
+ *  claude 를 쓰겠다고 해도 아무도 안 물었고, 그 사람은 스스로 찾아 깔아야 했다.
+ *  규칙: 고른 게 있으면 **그것**을(다른 하네스가 있어도) · 안 골랐으면 종전대로 하나도 없을 때만 claude.
+ *  반환 "" = 물을 것 없음.
+ */
+export function installTarget(want, harnesses = []) {
+  const t = String(want || "").trim().toLowerCase() || (harnesses.length ? "" : "claude");
+  return !t || harnesses.includes(t) ? "" : t;
+}
+
+async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = null }) {
+  //  우선순위: 명시(`--harness`·LIVELY_INSTALL_HARNESS) > 온보딩에서 고른 것 > 종전 규약(아무것도 없으면 claude).
+  //  명시가 있으면 서버에 묻지 않는다 — 사람이 방금 말한 것보다 저장된 값을 앞세울 이유가 없다.
+  const pick = String(want || "").trim().toLowerCase() || await onboardingHarness();
+  const target = installTarget(pick, harnesses);
+  if (!target) return harnesses;
+
+  const reg = await loadHarnessRegistry(bundleRoot);
+  if (!reg) { warn(`하네스 설치 표를 못 읽었습니다 — ${target} 은 직접 설치해 주세요.`); return harnesses; }
+
+  const plan = reg.installPlanFor(target, { homeDir: HOME, env: process.env });
+  if (!plan) {
+    // 오타를 조용히 삼키지 않는다 — 표 조회는 모르는 id 를 claude 로 폴백하는데, 설치에서 그러면
+    //  «엉뚱한 소프트웨어를 깔았다» 가 된다(installPlanFor 가 여기만 null 을 돌려주는 이유).
+    warn(`모르는 하네스: ${target}  ${dim("(" + (reg.HARNESS_IDS || []).join(" · ") + " 중 하나)")}`);
+    return harnesses;
+  }
+
+  // 이 OS 에 공급사 무인 경로가 없거나 선행 도구가 없으면 — 침묵이 아니라 **안내**로 떨어진다.
+  const blocked = !plan.cmd ? `${plan.label} 는 이 OS 용 무인 설치 경로를 공급사가 제공하지 않습니다.`
+    : (plan.requires && !has(plan.requires)) ? `${plan.label} 설치엔 ${plan.requires} 가 필요한데 찾지 못했습니다.`
+      : "";
+  if (blocked) {
+    warn(blocked);
+    if (plan.docs) info(`설치 안내: ${plan.docs}  ${dim("→ 설치 후 `lively install` 재실행")}`);
+    return harnesses;
+  }
+
+  // ── 동의 화면 ──
+  say("");
+  say("  " + dim("╭─ ") + bold(`${plan.label} 가 이 컴퓨터에 없습니다`));
+  say("  " + dim("│"));
+  cardRow("받는 곳", plan.cmd);
+  if (plan.binDir) cardRow("놓일 자리", tilde(plan.binDir) + sep + plan.bin);
+  cardRow("무결성", plan.integrity
+    ? `공급사 설치기가 ${plan.integrity.toUpperCase()} 체크섬을 검증합니다`
+    : yellow("공급사 설치기가 무결성 검증을 하지 않습니다"));
+  cardRow("되돌리기", `${bold("lively uninstall")} 은 이걸 지우지 않습니다 ${dim("— 설치 후엔 당신의 프로그램입니다")}`);
+  say("  " + dim("│"));
+  say("  " + dim("╰─ ") + dim(`직접 깔고 싶으면 아니오를 누르세요 — ${plan.docs || "공급사 안내"}`));
+  say("");
+  if (!await askYesNo(`  ${bold(plan.label)} 를 지금 설치할까요?`, true)) {
+    // 조사를 붙이지 않는다 — 하네스 id 마다 받침이 달라(claude/grok) 「로/으로」가 갈린다.
+    info(`건너뜁니다 — 나중에 다시: ${bold("lively install --harness " + plan.id)}`);
+    return harnesses;
+  }
+
+  // ── 실행 ──
+  say("");
+  vendorRule(`${plan.label} 설치기`);
+  const r = runInstaller(plan);
+  vendorRule("");
+  say("");
+
+  // 이 프로세스에서 바로 보이게(아래 재감지) + 새 터미널에서도 잡히게(rc 영속화 — 설치기가 안 심는 경우만).
+  if (plan.binDir) process.env.PATH = `${plan.binDir}${delimiter}${process.env.PATH || ""}`;
+  if (!plan.wiresPath && plan.binDir) wireLocalBinPath(plan.binDir);
+
+  const ver = probeHarness(plan.bin);
+  if (!ver) {
+    // 설치기가 0 으로 끝나도 여기 오면 실패다 — «반쪽 설치» 를 성공이라고 말하지 않는다.
+    fail(`${plan.label} 를 설치했지만 ${bold(plan.bin)} 을 찾지 못했습니다${r.code ? ` (설치기 exit ${r.code})` : ""}.`);
+    if (plan.docs) info(`직접 설치: ${plan.docs}  ${dim("→ 설치 후 `lively install` 재실행")}`);
+    return harnesses;
+  }
+  ok(`${plan.label} 설치 완료  ${dim(ver)}`);
+  //  ⚠ detectHarnesses() 로 **갈아치우지** 않고 합친다 — 그러면 방금 augmentHarnessesFromBundle 이
+  //   번들 표에서 알아낸 하네스(이 CLI 는 모르는 것)가 지워져 그 배선만 조용히 빠진다(#1689 의 그 결함).
+  return [...new Set([...harnesses, ...detectHarnesses(), plan.id])];
+}
+
 // ── 8. 설치/업데이트의 단일 코드 경로 ───────────────────────────────────────
 //  install 과 update 는 같은 일을 한다(멱등). 다른 건 문구와, install 이 claude 부재 시 설치를 제안한다는 것뿐.
-async function syncKit({ label, offerHarness }) {
+async function syncKit({ label, offerHarness, want = "" }) {
   if (!gateway()) die("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
   if (!token()) die("로그인이 필요합니다 — 먼저 `lively login` 을 실행하세요.");
 
   let harnesses = detectHarnesses();
-  if (!harnesses.length && offerHarness) {
-    warn("Claude Code · Codex 가 둘 다 안 보입니다.");
-    if (WIN) {
-      // Windows 엔 sh 가 없다 — 공식 설치 안내만 하고 진행한다(있지도 않은 셸을 부르고 조용히 실패하지 않는다).
-      info("Claude Code 를 먼저 설치하세요: https://code.claude.com/docs/setup  → 설치 후 `lively install` 재실행");
-    } else if (await askYesNo("  Claude Code 를 지금 설치할까요?", true)) {
-      run("sh", ["-c", "curl -fsSL https://claude.ai/install.sh | bash"], { allowFail: true });
-      // 이 프로세스에서 바로 쓰이도록(아래 detectHarnesses) + **새 터미널에서도 잡히도록**(rc 영속화).
-      //  ⚠ 종전엔 앞줄만 있고 "PATH 영속화는 사용자 몫" 이라 적혀 있었다. 그러면 우리가 깔아준 claude 가
-      //   **그 창에서만** 보이고 새 터미널에선 `command not found` 다 — 깔아 준 의미가 없다. claude 설치기가
-      //   그 일을 사용자에게 떠넘기므로(경고만 출력) 우리가 대신 심는다. #355 의 setup-mac.sh 가 하던 일인데
-      //   CLI(#864)로 오면서 빠졌고, uninstall 쪽엔 "local-bin 블록은 claude 소유라 보존한다"는 주석만 유물로
-      //   남아 있었다(쓰는 쪽이 없어 그 보존 규칙이 죽은 문장이었다).
-      process.env.PATH = `${join(HOME, ".local", "bin")}:${process.env.PATH || ""}`;
-      wireLocalBinPath();
-      harnesses = detectHarnesses();
-    }
-  }
-  if (!harnesses.length) {
-    warn("하네스 없이 진행합니다 — 맥락·훅은 설치되지만 켤 AI 가 없습니다.");
-    info("Claude Code 설치 후 `lively install` 을 다시 실행하면 배선이 완료됩니다.");
-    harnesses = ["claude"];   // 자산은 깔아 둔다 — 나중에 claude 를 깔면 바로 작동.
-  }
-
-  say(`\n${bold(label)}  ${dim("하네스: " + harnesses.join(", "))}`);
+  say(`\n${bold(label)}`);
   // 진행 신호(#1541 T1) — GUI 가 진행률을 그린다. 사람용 `[1/3]` 문구는 그대로 두고 **덧붙이기만** 한다.
   const step = (id, lbl, status, i, extra) => { if (EV) EV.step(id, lbl, status, { i, n: 3, harnesses, ...(extra || {}) }); };
   say(dim("  [1/3] 키트 내려받는 중…"));
@@ -1023,6 +1193,16 @@ async function syncKit({ label, offerHarness }) {
     const late = await augmentHarnessesFromBundle(root, harnesses);
     if (late.length) say(dim(`  (이 번들이 새로 지원하는 하네스 감지: ${late.join(", ")} — 함께 배선합니다)`));
     step("kit-download", "키트 내려받는 중", "done", 1);
+
+    // 하네스 자동 설치(#2255) — **번들을 받은 뒤**에 한다. 설치 계약이 번들의 표에 있기 때문이고,
+    //  그래야 구버전 CLI 로도 이번 번들이 새로 지원하는 하네스를 깔 수 있다(위 augment 와 같은 이유).
+    if (offerHarness) harnesses = await offerHarnessInstall({ want, harnesses, bundleRoot: root });
+    if (!harnesses.length) {
+      warn("하네스 없이 진행합니다 — 맥락·훅은 설치되지만 켤 AI 가 없습니다.");
+      info("AI 를 설치한 뒤 `lively install` 을 다시 실행하면 배선이 완료됩니다.");
+      harnesses = ["claude"];   // 자산은 깔아 둔다 — 나중에 claude 를 깔면 바로 작동.
+    }
+    say(dim(`  하네스: ${harnesses.join(", ")}`));
 
     say(dim("  [2/3] 설치 중…"));
     step("kit-install", "설치 중", "start", 2);
@@ -1452,7 +1632,15 @@ async function cmdWorkspace(rest) {
   say(dim(`\n  다른 워크스페이스로: ${bold("lively workspace switch")}`));
 }
 
-const cmdInstall = () => syncKit({ label: "라이블리 설치", offerHarness: true });
+// `--harness <id>` = 「내가 쓸 AI」. 온보딩이 고른 값을 앱·웹이 그대로 실어 보내는 자리다(#2255).
+//  없으면 종전 규약: 하네스가 하나도 없을 때만 claude 를 제안한다.
+//  LIVELY_INSTALL_HARNESS 는 **부트스트랩 한 줄**이 값을 실어 보내는 통로다(`curl … | LIVELY_INSTALL_HARNESS=grok sh`).
+//   기존 LIVELY_HARNESS 를 재사용하지 않는 이유: 그건 「지금 도는 하네스가 누구냐」(resolveHarness)라 뜻이 다르고,
+//   설치기 자식들이 그걸 자기 신원으로 읽는다 — 두 뜻을 한 이름에 얹으면 조용히 엉킨다.
+const cmdInstall = (o = {}) => syncKit({
+  label: "라이블리 설치", offerHarness: true,
+  want: o.harness || process.env.LIVELY_INSTALL_HARNESS || "",
+});
 
 async function cmdUpdate(opts) {
   if (opts.check) {
@@ -2401,7 +2589,7 @@ async function cmdSetup(opts = {}) {
   //   아직 안 골랐고, 옛 토큰이 먹힌다는 이유로 그 선택을 건너뛰면 엉뚱한 워크스페이스에 설치된다.
   if (opts.cloud) {
     await cmdLogin({ cloud: opts.cloud });
-    await cmdInstall();
+    await cmdInstall(opts);
     say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
     return;
   }
@@ -2415,7 +2603,7 @@ async function cmdSetup(opts = {}) {
   if (accepted === true) info("이미 로그인돼 있습니다 — 설치만 진행합니다.");
   else if (accepted === null) info("로그인 상태를 확인하지 못했습니다(네트워크?) — 그대로 설치를 시도합니다.");
   else await cmdLogin({});
-  await cmdInstall();
+  await cmdInstall(opts);
   // 설치 완료 → 온보딩 안내(정적 문구만 · #1024). 자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.
   say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
 }
@@ -2427,13 +2615,15 @@ ${bold("사용법")}
   lively <명령> [옵션]
 
 ${bold("시작하기")}
-  setup                  로그인 + 설치를 한 번에 (처음 설치할 때) ${dim("--gateway <url>")}
+  setup                  로그인 + 설치를 한 번에 (처음 설치할 때) ${dim("--gateway <url>  --harness <name>")}
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
   onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
 
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
+      --harness <name>   ${dim("내가 쓸 AI — 이 컴퓨터에 없으면 동의를 받고 깔아 줍니다")}
+                         ${dim("claude · codex · opencode · antigravity · grok  (생략하면: 하나도 없을 때만 claude 를 제안)")}
   update                 지금 최신으로 맞춤 ${dim("(MCP 재등록 포함 — 자동 업데이트가 못 하는 축)")}
       --check            확인만 하고 설치하지 않음
   uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|all")}
@@ -2591,7 +2781,7 @@ async function dispatch(cmd, o, argv) {
     case "logout": return cmdLogout();
     // onboarding — 온보딩 스킬을 이 PC 에서 바로 실행(설치 직후 제안·수동 재실행 공용). 나머지 인자=초기 프롬프트.
     case "onboarding": return cmdOnboarding(argv.slice(argv.indexOf("onboarding") + 1));
-    case "install": { await cmdInstall(); return; }
+    case "install": { await cmdInstall(o); return; }
     case "update": case "upgrade": return cmdUpdate(o);
     case "uninstall": case "remove": return cmdUninstall(o);
     case "init": return cmdInit(argv.slice(argv.indexOf("init") + 1));

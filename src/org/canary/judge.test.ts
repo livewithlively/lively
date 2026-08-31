@@ -9,7 +9,9 @@
 import assert from "node:assert/strict";
 import { judgeProbe, evaluateStreak, alertTransition, pluck, isUnconfigured } from "./judge.js";
 import { googleToolAuthHint } from "../credentials/google-oauth.js";
-import { assertProbeCoverage, CANARY_PROBES, DENIAL_MARKERS, type CanaryProbe } from "./probes.js";
+import { assertProbeCoverage, CANARY_PROBES, DENIAL_MARKERS, HARNESS_INSTALLERS, SCRIPT_ROT_MARKERS, type CanaryProbe } from "./probes.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -225,6 +227,61 @@ t("★ googleToolAuthHint 의 모든 출력이 '미설정'으로 분류된다 �
     assert.ok(c, "안내 문구가 비었다");
     assert.equal(isUnconfigured(`상류가 실패를 반환했다: ${c}`), true, `'미설정'으로 안 잡힌다: ${c}`);
   }
+});
+
+// ── T. 하네스 설치기 프로브 (#2255) — **표가 아직 참인가**를 보는 눈 ──
+//  이 프로브들이 지키는 것은 우리 코드가 아니라 **우리가 표에 적어 둔 상류 사실**이다. 그래서 여기서 볼 것은
+//  «프로브가 표를 빠짐없이 덮는가» 다 — 6번째 하네스를 표에만 추가하고 프로브를 안 만들면 그 칸은 영영 안 보인다.
+const ta = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+
+t("T1 http_direct 는 url 이 필수이고 https 만 받는다", () => {
+  const d = (over: Partial<CanaryProbe>): CanaryProbe => ({
+    key: "k", label: "l", adapter: "http_direct", tier: "plain",
+    target: { url: "https://example.test/x" }, args: {}, expect: { contains: ["x"] }, why: "w", ...over,
+  } as CanaryProbe);
+  assert.throws(() => assertProbeCoverage([d({ target: {} })]), /url 이 필요/);
+  // 평문 http 로 받아 오는 스크립트는 중간자가 갈아끼울 수 있다 — 그 길을 «정상» 이라 판정할 수는 없다.
+  assert.throws(() => assertProbeCoverage([d({ target: { url: "http://example.test/x" } })]), /https 만/);
+  assert.throws(() => assertProbeCoverage([d({ target: { url: "https://e.test/x", tool: "t" } })]), /의미가 없습니다/);
+});
+
+t("T2 ★ BOM 을 실패로 잡는다 — #1087 은 1번 문자 하나가 윈도우 신규 설치를 전면 차단했다", () => {
+  const expect = { contains: ["x.ai/cli"], notContains: SCRIPT_ROT_MARKERS };
+  assert.equal(judgeProbe({ isError: false, text: "#!/bin/bash\n# x.ai/cli" }, expect).ok, true);
+  assert.equal(judgeProbe({ isError: false, text: "\uFEFF#!/bin/bash\n# x.ai/cli" }, expect).ok, false,
+    "BOM 이 붙어도 초록이면 그 감시는 «하고 있다고 믿게만» 한다");
+  // 404 안내 페이지가 200 으로 오는 형태 — 마커가 없어서도, HTML 이라서도 잡혀야 한다.
+  assert.equal(judgeProbe({ isError: false, text: "<!DOCTYPE html><html>Not Found</html>" }, expect).ok, false);
+});
+
+await ta("T3 ★ 표(harness-registry)의 URL 설치 칸을 프로브가 빠짐없이 덮는다", async () => {
+  //  ⚠ 정적 import 를 못 쓴다 — kit/ 은 tsconfig 의 rootDir(src) 밖이다. 런타임 동적 import 로 읽는다
+  //   (src/v6/project-name.test.ts · src/bootstrap-asset.test.ts 와 같은 패턴).
+  const kit = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "kit", "hooks", "harness-registry.mjs");
+  const { HARNESS_IDS, installPlanFor } = await import(pathToFileURL(kit).href) as {
+    HARNESS_IDS: string[]; installPlanFor: (id: string, o: Record<string, unknown>) => { cmd: string | null } | null;
+  };
+
+  for (const s of HARNESS_INSTALLERS) {
+    assert.ok(HARNESS_IDS.includes(s.id), `표에 없는 하네스에 프로브가 있다: ${s.id}`);
+  }
+  const covered = new Set(HARNESS_INSTALLERS.map((s) => s.url));
+  const holes: string[] = [];
+  for (const id of HARNESS_IDS) {
+    for (const [os, platform] of [["posix", "darwin"], ["win", "win32"]] as const) {
+      const plan = installPlanFor(id, { platform, homeDir: "/h", env: {} });
+      const url = plan?.cmd?.match(/https:\/\/[^\s|"']+/)?.[0];
+      // URL 이 없는 칸은 정상이다 — 윈도우 opencode 는 `npm install -g` 라 찌를 상류가 없다.
+      if (url && !covered.has(url)) holes.push(`${id}/${os} → ${url}`);
+    }
+  }
+  assert.deepEqual(holes, [], `표에는 있는데 카나리가 안 보는 설치 경로가 있다:\n  ${holes.join("\n  ")}`);
+});
+
+t("T4 codex 칸은 무인화 env 를 지문으로 쓴다 — 이게 사라지면 설치가 프롬프트에서 멈춘다", () => {
+  const codex = HARNESS_INSTALLERS.filter((s) => s.id === "codex");
+  assert.equal(codex.length, 2, "codex 는 두 OS 다 스크립트 설치기가 있다");
+  for (const c of codex) assert.equal(c.marker, "CODEX_NON_INTERACTIVE", `${c.os}: 지문이 계약과 무관하다`);
 });
 
 console.log(`\ncanary judge: ${pass} passed`);
