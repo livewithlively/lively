@@ -98,6 +98,14 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //   request 모드를 지원한다) — 게이트가 막아 한 번도 안 돈 것뿐이다.
   { key: "task-dispatch", intervalMs: TASK_TICK_MS, scope: "global",
     run: () => import("../node/task-scheduler.js").then((m) => m.tickTasksAllTenants()) },
+  // 빌트인 앱 시딩(#1780) — 부팅 스텝 `seed-builtin-apps` 는 중앙 게이트웨이 모드에서
+  //  테넌트를 만나지 못한다: 게이트웨이가 **한 번** 뜨고 요청마다 테넌트를 바꿔 단다.
+  //  ⚠ 실측(2026-08-31): 테넌트 8개 중 **7개가 `org_app=0`** 이었고, 그래서 위 awaiting 알림이
+  //   전이를 제대로 감지하고도 `notify-app-inactive` 로 **전부 거절**됐다(20분 denied 6 / notified 0).
+  //   알림 로직은 멀쩡했고 **앱이 안 심겨 있었던 것**이다 — 고쳐야 할 곳이 한 칸 아래였다.
+  //  ⚠ 반드시 **테넌트 스코프**다 — 전역으로 달면 딱 한 테넌트만 앱을 받는다.
+  { key: "builtin-app-seed", intervalMs: SIX_HOURS_MS,
+    run: () => import("../apps/seed.js").then((m) => m.seedBuiltinApps()) },
   //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
   //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
   //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.
