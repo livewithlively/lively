@@ -338,9 +338,10 @@ export interface SessionInfo {
   //  미보고면 없다(추측하지 않는다 — sessions.ts restore 의 picker 원칙과 같다).
   claudeSessionId?: string;
   // #1746 세션 대화창의 하네스 능력 요약(harness-io/adapter.ts chatIoCaps) — read=대화 파일을 화면으로 읽을 수 있나(파서 있음) ·
-  //  answer=승인·거부·중단을 화면에서 대신 누를 수 있나(승인 키 실측 있음). 화면이 이걸로 버튼·안내를 **정직하게** 그린다(없는 능력의
-  //  버튼을 두지 않는다 — 막다른 컨트롤 금지). 없으면(구 서버) 화면은 둘 다 있는 것으로 본다(종전 동작).
-  chat?: { read: boolean; answer: boolean };
+  //  answer=승인·거부·중단을 화면에서 대신 누를 수 있나(승인 키 실측 있음) · **chatFirst=대화창을 기본 화면으로 삼나**(#2439).
+  //  화면이 이걸로 버튼·안내를 **정직하게** 그린다(없는 능력의 버튼을 두지 않는다 — 막다른 컨트롤 금지).
+  //  없으면(구 서버) 화면은 read·answer 를 있는 것으로 보고, chatFirst 는 **종전 휴리스틱으로 폴백**한다(session-chat.ts chatFirst).
+  chat?: { read: boolean; answer: boolean; chatFirst?: boolean };
   /** #2055 — 대화 런타임: "tmux"(pane 의 TUI) · "app-server"(pane 은 셸, 대화는 JSON-RPC). 화면의 기본 보기가 이걸 따른다. */
   chatMode?: string;
   // #1791 — 이 세션이 도는 노드(라이브 노드 스냅샷 행은 node/registry 가 채우고, **복원 가능 노드 세션 행**은
