@@ -1231,7 +1231,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   — `cur` 이 없기 때문이다. 그래서 즉사한 세션의 화면이 404 를 초당 1.4회로 **영원히** 되물었다
     //   (8초에 11회·콘솔 에러 200+ 누적). 살아 있지 않으면 촘촘할 이유가 없다.
     const ms = src.kind === 'log' ? (running && !dead() ? POLL_LOG_LIVE_MS : POLL_LOG_MS) : (running && !dead()) ? POLL_RUN_MS : POLL_IDLE_MS;
-    if (dead() && src.kind === 'log' && !running) return;   // 죽은 세션의 중앙 기록은 더 안 는다
+    //  죽은 세션에는 **애초에 물을 것이 없다.** 중앙 기록은 더 안 늘고(옛 조건), 박스 파일은 대화가
+    //   한 번도 없었으면(loadedTo === 0) 그 파일이 **생길 일 자체가 없다** — 세션이 죽었으니까.
+    //   그런데도 3초마다 물어서 404 를 영원히 하나씩 뱉었다(#1631, 2026-08-31 실측: 즉사한 리브 세션 화면).
+    //   ⚠ catch 의 notYet 이 `st === 404 && src.kind === 'box'` 를 **조건 없이** '아직 없음' 으로 봐 실패
+    //    카운터를 리셋한다 — 그래서 기존 실패 경로로는 절대 멈추지 않는다. 여기서 끊어야 한다.
+    //   ⚠ 영구 정지가 아니다: 죽었다는 판정은 **틀릴 수 있다**(3초 스냅샷 지연을 죽음으로 읽은 #2108).
+    //    되살아나면 update() 가 다시 켠다(아래 wasDead 전이).
+    if (dead() && !running && (src.kind === 'log' || loadedTo === 0)) return;
     pollTimer = window.setTimeout(() => { void poll(); }, ms);
   }
   /** 지금 읽어 오라 — 실시간 층(#2055)이 '완성본이 파일에 떨어졌다'고 알려 줄 때. 몰아치면 한 번으로 합친다. */
@@ -1590,6 +1597,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
       paintState();
       if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
+      //  ↔ 반대 방향(#1631) — 죽은 줄 알았는데 살아 있었다(#2108: 3초 스냅샷 지연을 죽음으로 읽는다).
+      //   schedule() 이 죽은 세션에서 멈추므로 **여기서** 다시 켜 준다. 이 한 줄이 없으면 그 화면은 영영
+      //   멈춘 채로 남는다 — 404 를 줄이려다 화면을 얼리는 것은 더 나쁜 교환이다.
+      if (wasDead && !dead() && !pollTimer && src) schedule();
       // #2055 — 열 때는 없던 chatMode 가 지금 왔을 수 있다(방금 만든 세션). 실시간 층을 그때 붙이고,
       //  사람이 아직 보기를 직접 고르지 않았다면 기본 화면도 그때 대화로 바꾼다(고른 뒤엔 건드리지 않는다).
       const hadLive = !!live;
