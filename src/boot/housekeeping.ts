@@ -31,6 +31,7 @@ import { setupPreviewWsUpgrade } from "../preview/ws-proxy.js";
 import { startTaskScheduler } from "../node/task-scheduler.js";
 import { backfillMarkerSync, backfillSharedGroupWrite } from "../project/project-fs.js";
 import { startScheduler } from "../scheduler/index.js";
+import { forEachTenant } from "../scheduler/tenant-fanout.js";   // #2479 — 주기 정비의 워크스페이스 순회(#2418 기계 재사용)
 import { ensureStateDirs, stateRoot } from "../ops/state-dir.js";
 import { roots, sharedRoot } from "../terminal/terminal-sessions.js";
 import { startLogJanitor } from "../ops/log-janitor.js";
@@ -302,20 +303,42 @@ function startBoxWatchStep(): void {
   });
 }
 
+/**
+ * 이 정비를 **워크스페이스마다** 돌린다 (#2479) — 단일 테넌트 배포에서는 종전 그대로 1회.
+ *
+ *  ⚠ 왜 스윕마다 이걸 통과시키나: 이 타이머들은 테넌트 컨텍스트 **밖**에서 돌아 리졸버가 primary 로
+ *   떨어뜨린다. registry 모드(#1750)에서는 하우스키핑이 *돌지만* 그래서 **primary 만** 정비된다
+ *   (실측 2026-09-01 dev: 아웃박스 청소 잔존이 비-primary 81곳에 245건 · primary 는 0건).
+ *   매니지드는 요청 정비표가 대신하지만 그 표는 registry 에서 무동작이라 여기가 유일한 길이다.
+ *
+ *  실패는 삼킨다 — 주기 스윕은 다음 tick 이 재시도한다(종전 각 스윕의 catch 와 같은 시맨틱).
+ */
+const perTenant = (job: string, fn: () => Promise<unknown>): Promise<void> =>
+  forEachTenant(job, fn).catch((err) => logger.warn({ err, job }, "정비 스윕 실패(비치명 — 다음 tick 재시도)"));
+
 function startBackgroundSweeps(): void {
-  setTimeout(() => { void runAutoBackfillSweep(); }, 30_000).unref();
-  setInterval(() => { void runAutoBackfillSweep(); }, 600_000).unref();
+  setTimeout(() => { void perTenant("embedding-backfill", () => runAutoBackfillSweep()); }, 30_000).unref();
+  setInterval(() => { void perTenant("embedding-backfill", () => runAutoBackfillSweep()); }, 600_000).unref();
   // #880 device-auth reaper — 만료 1h 경과 pending 행 정리(user_code 회수). start/poll 이 lazy 백업도 함.
-  setInterval(() => { void reapDeviceAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
+  setInterval(() => { void perTenant("device-auth-reap", () => reapDeviceAuth()); }, 600_000).unref();
   // #1473 T2 OAuth reaper — 만료된 인가요청·인가코드 정리. 리프레시는 회전 사슬(도난 탐지 근거)이라 더 오래 둔다.
-  setInterval(() => { void reapOAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
+  setInterval(() => { void perTenant("oauth-reap", () => reapOAuth()); }, 600_000).unref();
   // #905 C1 — 세션이력 retention reap: session_share.retention_days 지나도록 손대지 않은 로그·청크 정리
   //  (session 레코드는 불멸). retention_days=0 이면 no-op. 일 단위 보존이라 6h 주기로 충분.
+  //  ⚠ 설정도 **그 워크스페이스 안에서** 읽어야 한다 — 보존기간은 워크스페이스마다 다르다.
   setInterval(() => {
-    void getRuntimeConfig().then((c) => reapSessionLogs(c.session_share.retention_days)).catch(() => { /* best-effort */ });
+    void perTenant("session-log-reap", () => getRuntimeConfig().then((c) => reapSessionLogs(c.session_share.retention_days)));
   }, 6 * 60 * 60_000).unref();
   // #905 C1 — 제목 컬럼 도입(슬⑤b) 전 캡처/백필된 세션의 title 소급 채움(부팅 35초 후 1회, 멱등). 다 채우면 no-op.
-  setTimeout(() => { void backfillSessionTitles().catch(() => { /* best-effort */ }); }, 35_000).unref();
+  setTimeout(() => { void perTenant("session-title-backfill", () => backfillSessionTitles()); }, 35_000).unref();
+  // 빌트인 앱 시딩(#2479) — 부팅 스텝 `seed-builtin-apps` 는 컨텍스트 밖이라 primary 만 심는다.
+  //  ⚠ registry 프로비저닝도 `seedDefaultContent()` 만 불렀다 → **신규 워크스페이스는 앱을 영영 못 받았다**
+  //   (실측 2026-09-01 dev: 활성 비-primary **84곳 전부 `org_app=0`** · primary 만 5개).
+  //   그 결과가 #2246 이 매니지드에서 찾은 것과 같다: `getApp("ai-session")` 이 null 이라 「답을 기다려요」
+  //   알림이 전이를 맞게 감지하고도 `notify-app-inactive` 로 거절된다. 프로비저닝 고침은 **신규**를,
+  //   이 주기 스윕은 **이미 만들어진 84곳**을 덮는다(멱등 — 다 심기면 no-op). 매니지드의 `builtin-app-seed`
+  //   정비와 같은 주기(6h)를 쓴다 — 새 정책을 만들지 않는다.
+  setInterval(() => { void perTenant("builtin-app-seed", () => seedBuiltinApps()); }, 6 * 60 * 60_000).unref();
   // #1059 F — idle 세션 자동 회수(reaper). 정책(session_reclaim_policy) 0=끔이 기본이라 켜기 전엔 no-op.
   //  5분 주기(회수는 tmux kill 로 싸다). 켜지면 오래 idle 인 세션을 desired-state 보존하며 회수 → restorable(E lazy resume).
   //  ⚠ 부팅 직후 즉시 돌리지 않는다 — 재부팅 복원(E)과 겹쳐 갓 뜬 세션을 오판하지 않게 첫 tick 은 주기 뒤.
@@ -323,12 +346,13 @@ function startBackgroundSweeps(): void {
   //   백필이 먼저 돌면 그 세션들이 '회수해도 복원 가능한' 상태가 되어 F 가 실제로 작동한다(고객사 A 실측:
   //   라이브 38건 중 19건이 레코드 없음 = 회수 면역). 판정 시각은 tmux 메타(작업·열람)를 그대로 쓰므로
   //   갓 백필한 세션이 곧바로 회수되지는 않는다(활동이 최근이면 보존).
+  //  ⚠⚠ **회수(`reapIdleSessions`)만 순회에서 뺀다** — 그것은 tmux 세션을 **죽인다.** 순회를 붙이는
+  //   순간 그 파괴가 *남의* 워크스페이스에서 일어나고, 정책이 켜진 박스(dev 실측 `idle_ttl_minutes=120`)
+  //   에서는 실제로 죽는다. 매니지드 정비표(SWEEP_JOBS)가 같은 이유로 이것만 뺐고, 그 판단은 **#2148** 의 몫이다.
+  //   짝인 백필은 순회한다 — 위 주석대로 백필이 **먼저** 돌아야 회수가 애초에 작동하기 때문이다.
   setInterval(() => {
-    void import("../sessions/session-outbox.js")
-      .then(({ resumeOutbox }) => resumeOutbox())
-      .catch((err) => logger.warn({ err }, "outbox 재개 실패(비치명 — 다음 enqueue 가 kick)"));
-    void backfillSessionStates()
-      .catch((err) => logger.warn({ err }, "session-state 백필 tick 실패"))
+    void perTenant("outbox", () => import("../sessions/session-outbox.js").then(({ resumeOutbox }) => resumeOutbox()));
+    void perTenant("session-state-backfill", () => backfillSessionStates())
       .then(() => reapIdleSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
@@ -336,12 +360,14 @@ function startBackgroundSweeps(): void {
   //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
   //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.
   setInterval(() => {
-    void sweepAwaitingNotifications()
-      .catch((err) => logger.warn({ err }, "awaiting 알림 스윕 실패(비치명 — 다음 tick 재시도)"));
+    void perTenant("awaiting-notify", () => sweepAwaitingNotifications());
   }, 30_000).unref();
   // #1631 — 리브 2턴: 처음 설정 직후 열린 리브 세션에, 첫 수집 배치가 돈 뒤 증류 지시를 넣는다.
   //  판정은 순수 함수(decideSecondTurn)·멱등(distill_at) — 1분 주기로 돌아도 같은 세션에 두 번 넣지 않는다.
   //  부팅 직후엔 돌리지 않는다(세션 목록·아웃박스 재개가 먼저).
+  //  ⚠ **순회하지 않는다** — 이 스윕은 워크스페이스를 **스스로** 해석한다(후보마다 `workspaceForSession`
+  //   으로 그 세션의 테넌트를 찾아 `withTenant` 로 감싼다). 여기서 또 감싸면 같은 전량 스윕이
+  //   워크스페이스 수만큼 돈다.
   setInterval(() => {
     void import("../org/liv/second-turn-sweep.js")
       .then(({ sweepLivSecondTurn }) => sweepLivSecondTurn())
@@ -350,11 +376,11 @@ function startBackgroundSweeps(): void {
 
   // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
   //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.
-  setTimeout(() => { void sweepGhostSessionInstances().catch((err) => logger.warn({ err }, "유령 인스턴스 스윕(부팅) 실패")); }, 90_000).unref();
-  setInterval(() => { void sweepGhostSessionInstances().catch((err) => logger.warn({ err }, "유령 인스턴스 스윕 실패")); }, 6 * 60 * 60_000).unref();
+  setTimeout(() => { void perTenant("ghost-instance-sweep", () => sweepGhostSessionInstances()); }, 90_000).unref();
+  setInterval(() => { void perTenant("ghost-instance-sweep", () => sweepGhostSessionInstances()); }, 6 * 60 * 60_000).unref();
 
   // 부팅 직후 1회 백필(회수는 하지 않는다 — 재부팅 복원과 겹쳐 갓 뜬 세션을 오판하지 않게). 40초 뒤: 스키마·tmux 안정 후.
-  setTimeout(() => { void backfillSessionStates().catch((err) => logger.warn({ err }, "session-state 백필(부팅) 실패")); }, 40_000).unref();
+  setTimeout(() => { void perTenant("session-state-backfill", () => backfillSessionStates()); }, 40_000).unref();
 }
 
 // listen 콜백에서 호출 — LISTEN_STEPS 를 동기 배선한 뒤 DB 부팅 직렬 체인을 비동기로 돌린다.
