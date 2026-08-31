@@ -960,7 +960,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const COLLECT_ON_DESC = {
     notion: '노션에서 고른 페이지를 팀 자료함에 모으고 있어요.', slack: '공개 채널 대화를 팀 자료함에 모으고 있어요.',
     figma: '고른 피그마 파일의 코멘트를 팀 자료함에 모으고 있어요.', clickup: 'ClickUp 작업·댓글을 프로젝트 탭으로 가져오고 있어요.',
-    github: '고른 저장소의 이슈·PR 대화를 팀 자료함에 모으고 있어요.', gitlab: '고른 프로젝트의 이슈·MR 대화를 팀 자료함에 모으고 있어요.',
+    github: '저장소의 이슈·PR 대화를 팀 자료함에 모으고 있어요.', gitlab: '프로젝트의 이슈·MR 대화를 팀 자료함에 모으고 있어요.',
     linear: 'Linear 이슈·댓글·문서를 팀 자료함에 모으고 있어요.',
   };
   /** 토큰형 앱의 자격이 이미 금고에 있나(개인 축 실측). */
@@ -1251,8 +1251,14 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       unlinkAsk = null; redraw();
     });
   }
-  /** 지금 «글자 받아 오기»가 펼쳐진 앱. 한 번에 하나만 편다 — 한 번에 한 걸음이 이 화면의 규칙이다. */
+  /** 연결 모달이 열린 앱(한 번에 하나) + 지금 걸음. 원준님(2026-08-31): «드롭다운 말고 모달로, 한 걸음씩» —
+   *  connect(토큰 걸음 또는 허용 버튼) → team(피그마만 — API 가 팀 목록을 안 줘서 주소 한 번은 필수) → scope(기본 전부·좁히기는 옵션). */
   let tokOpen = null;
+  let tokStep = 'connect';
+  /** 피그마 — team 걸음에서 받아 둔 팀 id(파일 고르기 미리보기에 쓴다). */
+  let scTeamId = '';
+  /** 범위 고르기 상태 — 열었을 때만 산다. { loading, freeform, note, key, unit, options:[{id,label,hint}], chosen:Set } */
+  let scopePick = null;
   /** 그 카드 아래에서 펼쳐지는 세 걸음. 발급처 주소·값의 생김새는 CRED_KINDS 에서 읽는다.
    *  안내가 없는 앱(표에 help 가 없는 것)은 지어내지 않고 붙여넣는 칸만 연다 — 틀린 길을 알려 주느니 없는 게 낫다. */
   function tokPanel(id) {
@@ -1266,31 +1272,92 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
       ${tokenSaved(id) ? '<p class="ob-note">토큰은 이미 저장돼 있어요 — 바꿀 때만 다시 붙여넣으세요.</p>' : ''}
       <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
-      ${collectMode(id) && id === 'figma' ? `<p class="ob-note"><b>어느 팀을 모을지</b>만 알려 주시면 됩니다 — 그 안의 파일은 제가 알아서 훑어요.</p>
-      <a class="ob-btn ob-btn-sub ob-btn-inline" href="https://www.figma.com/files" target="_blank" rel="noopener noreferrer">Figma 파일 화면 열기 ↗</a>
-      <ol>
-        <li>새 탭에 Figma 파일 화면이 열려요. <b>왼쪽 목록</b>에서 모을 <b>팀 이름</b>을 누르세요(팀이 하나면 그게 그 팀이에요).</li>
-        <li>그 상태로 브라우저 <b>주소창</b>을 통째로 복사하세요 — <b>figma.com/files/team/…</b> 처럼 생긴 주소예요.</li>
-        <li>복사한 주소를 <b>아래 칸</b>에 붙여넣으세요(⌘V).</li>
-      </ol>
-      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…">
-      <p class="ob-note ob-fine2">팀 전체가 아니라 <b>파일 몇 개만</b> 모으고 싶으시면, 그 파일을 연 뒤 주소창을 복사해 넣으셔도 돼요(여러 개면 공백으로 띄우기).</p>` : ''}
-      ${collectMode(id) && id === 'gitlab' ? `<p class="ob-note">회사 GitLab 을 쓰면 아래에 그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
-      <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com">
-      <p class="ob-note">모을 <b>프로젝트</b>를 알려 주세요.</p>
-      <ol>
-        <li>GitLab 에서 모을 <b>프로젝트를 여세요</b>.</li>
-        <li>브라우저 <b>주소창</b>을 통째로 복사해 아래 칸에 붙여넣으세요 — <b>gitlab.com/그룹/프로젝트</b> 처럼 생겼어요. 여러 개면 공백으로 띄우세요.</li>
-      </ol>
-      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://gitlab.com/그룹/프로젝트">
-      <p class="ob-note ob-fine2">위 걸음대로 <b>read_api</b> 를 켜서 만든 토큰이어야 해요. <span class="ob-kbd">계정으로 연결</span> 로 받은 토큰으로는 GitLab 이 자료 읽기를 막습니다.</p>` : ''}
+      ${id === 'gitlab' ? `<p class="ob-note">회사 GitLab 을 쓰면 아래에 그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
+      <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com">` : ''}
       <p class="ob-err" id="tokErr"></p>
       ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
       <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
       <button class="ob-btn ob-btn-pri ob-btn-inline" id="tokGo">이걸로 연결하기</button>
     </div>`;
   }
-
+  /** 피그마 «어느 팀?» 걸음 — API 가 팀 목록을 안 줘서(포럼 수년치 요청·미해결) 주소 한 번은 사람이 준다. */
+  function teamPanel() {
+    return `<div class="ob-tok ob-tok-in">
+      <p class="ob-note"><b>어느 팀을 모을지</b>만 알려 주시면 됩니다 — 그 안의 파일은 제가 알아서 훑어요.</p>
+      <a class="ob-btn ob-btn-sub ob-btn-inline" href="https://www.figma.com/files" target="_blank" rel="noopener noreferrer">Figma 파일 화면 열기 ↗</a>
+      <ol>
+        <li>새 탭에 Figma 파일 화면이 열려요. <b>왼쪽 목록</b>에서 모을 <b>팀 이름</b>을 누르세요(팀이 하나면 그게 그 팀이에요).</li>
+        <li>그 상태로 브라우저 <b>주소창</b>을 통째로 복사하세요 — <b>figma.com/files/team/…</b> 처럼 생긴 주소예요.</li>
+        <li>복사한 주소를 <b>아래 칸</b>에 붙여넣으세요(⌘V).</li>
+      </ol>
+      <input id="teamIn" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…">
+      <p class="ob-err" id="teamErr"></p>
+      <button class="ob-btn ob-btn-pri ob-btn-inline" id="teamAll">이 팀 전체 가져오기</button>
+      <button class="ob-btn ob-btn-sub ob-btn-inline" id="teamPick">일부 파일만 고를게요</button>
+    </div>`;
+  }
+  /** 계정 로그인(허용 한 번) 걸음 — 카드를 눌렀다고 곧장 새 탭을 던지지 않는다: 무엇이 열리는지 먼저 말한다. */
+  function oauthPanel(id) {
+    const label = srcLabel(id);
+    const line = id === 'notion' ? '노션 화면에서 모을 페이지를 고르고 «액세스 허용»을 누르면 됩니다.'
+      : id === 'linear' ? 'Linear 화면에서 «허용»을 한 번 누르면 연결과 가져오기가 함께 켜져요.'
+      : id === 'github' ? 'GitHub 화면에서 «허용»을 한 번 누르면 됩니다.'
+      : `${label} 화면에서 «허용»을 한 번 누르면 됩니다.`;
+    return `<div class="ob-tok ob-tok-in">
+      <p class="ob-note">${esc(line)}</p>
+      <button class="ob-btn ob-btn-pri ob-btn-inline" id="oaGo">${esc(label)} 화면 열기 ↗</button>
+      <p class="ob-note ob-fine2" id="oaWait" hidden>새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…</p>
+      <p class="ob-err" id="oaErr"></p>
+    </div>`;
+  }
+  /** 범위 걸음 — 기본은 «전부»(#2232 결정), 좁히기는 원하는 사람만 연다. 목록은 그 사람 연결로 서버가 나열한다. */
+  const SCOPE_UNIT = { github: '저장소', gitlab: '프로젝트', clickup: '리스트', linear: '팀', figma: '파일' };
+  function scopePanel(id) {
+    const unit = SCOPE_UNIT[id] || '항목';
+    const priv = id === 'github' || id === 'gitlab' ? ' 비공개도 포함돼요.' : '';
+    const p = scopePick;
+    if (!p) {
+      return `<div class="ob-tok ob-tok-in">
+        <p class="ob-note">어디까지 가져올까요? 기본은 <b>전부</b>예요 — 이 연결이 볼 수 있는 ${unit}를 모두 가져옵니다.${priv}</p>
+        <button class="ob-btn ob-btn-pri ob-btn-inline" id="scAll">전부 가져오기</button>
+        <button class="ob-btn ob-btn-sub ob-btn-inline" id="scPick">일부만 고를게요</button>
+        <p class="ob-err" id="scErr"></p>
+        <p class="ob-note ob-fine2">나중에 «외부 앱 연결»에서 언제든 바꿀 수 있어요.</p>
+      </div>`;
+    }
+    if (p.loading) return `<div class="ob-tok ob-tok-in"><p class="ob-note">고를 수 있는 ${unit} 목록을 불러오는 중…</p></div>`;
+    if (p.freeform || !(p.options && p.options.length)) {
+      return `<div class="ob-tok ob-tok-in">
+        <p class="ob-note">${esc(p.note || `목록을 불러오지 못했어요 — 가져올 ${unit} 주소를 직접 붙여넣으세요(여러 개면 공백으로 띄우기).`)}</p>
+        <input id="scIn" type="text" autocomplete="off" spellcheck="false" placeholder="${esc(id === 'gitlab' ? 'https://gitlab.com/그룹/프로젝트' : id === 'github' ? 'owner/repo' : '')}">
+        <p class="ob-err" id="scErr"></p>
+        <button class="ob-btn ob-btn-pri ob-btn-inline" id="scGo">이 범위로 가져오기</button>
+      </div>`;
+    }
+    return `<div class="ob-tok ob-tok-in">
+      <p class="ob-note">가져올 ${unit}만 체크하세요.</p>
+      ${p.options.length > 8 ? `<input id="scQ" type="search" autocomplete="off" placeholder="${unit} 이름으로 찾기">` : ''}
+      <div class="ob-pick" id="scList">${p.options.map((o) => `<label><input type="checkbox" data-sc="${esc(o.id)}"${p.chosen.has(o.id) ? ' checked' : ''}><span class="t">${esc(o.label)}</span>${o.hint ? `<span class="h">${esc(o.hint)}</span>` : ''}</label>`).join('')}</div>
+      <p class="ob-note ob-fine2" id="scN"></p>
+      <p class="ob-err" id="scErr"></p>
+      <button class="ob-btn ob-btn-pri ob-btn-inline" id="scGo">고른 것만 가져오기</button>
+    </div>`;
+  }
+  /** 모달 껍데기 — 닫기(×·바탕 누르기·Esc)는 «나중에 할게요»다: 아무것도 저장하지 않고 카드로 돌아간다.
+   *  ⚠ «모달 금지» 규칙(원준님 2026-08-27)은 **파일 고르기**(OS 창을 바로 열라) 이야기다 — 이 연결 모달은
+   *  같은 분이 2026-08-31 «드롭다운 말고 모달로, 한 걸음씩» 이라고 직접 시킨 것이니 되돌리지 말 것. */
+  function modalHtml(id) {
+    const it = (DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id)) || { label: id, logo: id };
+    const icon = BRAND[it.logo] || GLYPH[it.id] || '';
+    const label = it.label || id;
+    const title = tokStep === 'scope' ? `${label} — 가져올 범위` : tokStep === 'team' ? `${label} — 어느 팀을 모을까요?` : `${label} 연결`;
+    const useToken = (id === 'figma' || id === 'clickup' || id === 'gitlab') || connHow(id) === 'token';
+    const body = tokStep === 'scope' ? scopePanel(id) : tokStep === 'team' ? teamPanel() : (useToken ? tokPanel(id) : oauthPanel(id));
+    return `<div class="ob-veil" id="obVeil"><div class="ob-modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="ob-modal-hd"><span class="ob-oc-ic">${icon}</span><b>${esc(title)}</b><button type="button" class="ob-modal-x" id="obX" aria-label="닫기">×</button></div>
+      <div class="ob-modal-bd">${body}</div>
+    </div></div>`;
+  }
 
   let pendingChips = null;   // 지금 답을 기다리는 칩들 — 입력창 해석이 본다
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
@@ -1586,28 +1653,22 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           done.length ? `${done.length}곳을 연결했어요.` : '고르신 곳을 하나씩 연결해 주세요.',
           unknown ? '연결 상태를 불러오는 중이에요…' : '아래에서 하나씩 눌러 주세요. 한 번에 하나면 됩니다.')
           + `<div class="ob-opt-cards">${picked.map((id) => {
-              const it = all.find((s) => s.id === id) || { label: id };
+              const it = all.find((sv) => sv.id === id) || { label: id };
               const st = connState(id);
-              const how = connHow(id);
-              const open = tokOpen === id;
-              const scopeOnly = collectMode(id) && (id === 'figma' || id === 'gitlab') && tokenSaved(id);
-              const tokOnly = collectMode(id) && (id === 'clickup' || id === 'github') && tokenSaved(id);
+              const saved = collectMode(id) && tokenSaved(id);
               const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
-                : scopeOnly ? (id === 'gitlab' ? (open ? '모을 프로젝트 주소를 넣어 주세요.' : '토큰은 받았어요. 눌러서 모을 프로젝트 주소를 넣어 주세요.') : (open ? '모을 팀 주소를 넣어 주세요.' : '토큰은 받았어요. 눌러서 모을 팀 주소를 넣어 주세요.'))
-                : tokOnly ? (id === 'github' ? '계정은 이어져 있어요. 누르면 고른 저장소의 이슈·PR 모으기가 켜져요.' : '토큰은 받았어요. 누르면 바로 가져오기가 켜져요.')
-                : (collectMode(id) && id === 'gitlab') ? (open ? '아래 걸음을 따라 주세요.' : '눌러 주세요. 걸음대로 따라 하시면 됩니다.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
-                : how === 'token' ? (open ? '아래 걸음을 따라 주세요.' : '눌러 주세요. 글자 한 줄을 받아 오면 됩니다.')
-                : (collectMode(id) && id === 'notion' ? '눌러 주세요. 노션 화면에서 모을 페이지를 고르고 «액세스 허용»을 누르면 됩니다.' : '눌러 주세요. 새 탭에서 «허용»만 누르면 됩니다.');
+                : saved ? '거의 다 됐어요. 눌러서 가져오기를 시작하세요.'
+                : (id === 'figma' || id === 'clickup' || id === 'gitlab' || connHow(id) === 'token') ? '눌러 주세요. 글자 한 줄을 받아 오면 됩니다.'
+                : (id === 'notion' ? '눌러 주세요. 노션 화면에서 모을 페이지를 고르면 됩니다.' : '눌러 주세요. 새 탭에서 «허용»만 누르면 됩니다.');
               if (st === 'on') return doneCardHtml(id, it.label, BRAND[it.logo] || GLYPH[it.id] || '', desc);
-              return `<button class="ob-opt-card${open ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
+              return `<button class="ob-opt-card${tokOpen === id ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
                 <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${esc(desc)}</span></span>
-                <span class="ob-oc-st"></span></button>`
-                + (open ? tokPanel(id) : ''); }).join('')}</div>
+                <span class="ob-oc-st"></span></button>`; }).join('')}</div>
           <button class="ob-btn ob-btn-pri" id="upGo" ${done.length ? '' : 'disabled'}>${left > 0 && done.length ? `${left}곳은 나중에, 계속` : '다 연결했어요, 계속'}</button>
           <button class="ob-q-skip" data-skip>나중에 가져올게요. 지금은 넘어갈게요</button>
-          <p class="ob-q-fine">지금 연결하지 못하셔도 괜찮아요 — <a href="#/connect" class="ob-link">외부 앱 연결</a>에서 언제든 다시 하실 수 있습니다.</p>`;
+          <p class="ob-q-fine">지금 연결하지 못하셔도 괜찮아요 — <a href="#/connect" class="ob-link">외부 앱 연결</a>에서 언제든 다시 하실 수 있습니다.</p>${tokOpen ? modalHtml(tokOpen) : ''}`;
       },
       bind: (el) => {
         //  들어올 때마다 서버에 묻는다 — 앞 장면에서 뒤로 왔을 수도, 다른 탭에서 이었을 수도 있다.
@@ -1645,70 +1706,79 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             return !(r && r.needs_connect === true);
           } catch (_) { return false; }
         }
-        /** #2243 수집기 축 연결 — 노션은 공개 통합 동의(페이지 고르기), 슬랙은 계정 로그인 뒤 수집기 켜기. */
-        async function collectConnect(id, c) {
-          const d = c.querySelector('.ob-oc-d');
-          const fin = (err) => {
-            if (err) { toast(err); if (S.scene === 'connect') redraw(); return; }
-            if (connState(id) === 'on') markConnected(id);
-            if (S.scene === 'connect') redraw();
+        /** 앱별 «허용 한 번» 흐름 — 모달의 [화면 열기] 버튼이 부른다(#2243·#2247 갈래 그대로, 자리만 모달로). */
+        async function startOAuthFlow(id, ui) {
+          const waiting = () => { if (ui.wait) ui.wait.hidden = false; };
+          const fin = async (err) => {
+            if (err) { if (ui.err && tokOpen === id) ui.err.textContent = err; else toast(err); return; }
+            //  Linear — 동의가 끝나도 토글은 아직 꺼져 있다(needs_connect 로 멈췄던 자리): 한 번 더 켠다.
+            if (id === 'linear' && connState(id) !== 'on') { await startMemberCollect(id, ''); await loadConn(); }
+            if (connState(id) !== 'on') return;
+            afterConnected(id);
           };
           if (id === 'notion') {
             try {
               //  켜기를 먼저 시도한다 — 이미 연결된 워크스페이스가 있으면 그 자리에서 켜지고, 없으면 노션 동의 주소가 온다.
-              const r: any = await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: true }) });
-              if (r && r.ok) { await loadConn(); fin(); return; }
+              const r = await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: true }) });
+              if (r && r.ok) { await loadConn(); void fin(); return; }
               const url = r && r.authorization_url;
-              if (!url) { fin('노션 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
-              if (d) d.textContent = '노션 화면에서 모을 페이지를 고르고 «액세스 허용»을 누르면 여기가 저절로 바뀌어요…';
-              window.open(url, '_blank', 'noopener');
-              watchConnect(id, fin);
-            } catch (e) { fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
+              if (!url) { void fin('노션 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+              waiting(); window.open(url, '_blank', 'noopener'); watchConnect(id, fin);
+            } catch (e) { void fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
             return;
           }
-          //  #2247 Linear — 토글이 곧 연결(노션과 같은 모양): 켜기를 먼저 시도하고, 자격이 없으면 서버가 준 라이블리 앱 동의 URL 을 연다.
           if (id === 'linear') {
-            const r: any = await startMemberCollect(id, '');
-            if (r && r.ok) { await loadConn(); fin(); return; }
+            const r = await startMemberCollect(id, '');
+            if (r && r.ok) { await loadConn(); void fin(); return; }
             const url = r && r.needs_connect && r.authorization_url;
-            if (!url) { fin((r && r.message) || 'Linear 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
-            if (d) d.textContent = 'Linear 화면에서 «허용»을 누르면 여기가 저절로 바뀌어요…';
-            window.open(url, '_blank', 'noopener');
-            watchConnect(id, fin);
+            if (!url) { void fin((r && r.message) || 'Linear 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+            waiting(); window.open(url, '_blank', 'noopener'); watchConnect(id, fin);
             return;
           }
-          //  #2247 GitHub — 계정 연결(저장소 고르기)이 곧 범위. 연결돼 있으면 바로 켠다(서버가 고른 저장소를 기본 범위로 채운다).
-          if (id === 'github' && tokenSaved(id)) {
-            const r: any = await startMemberCollect(id, '');
-            await loadConn();
-            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요 — [외부 앱 연결 ▸ GitHub]에서 저장소를 넣고 켜 주세요.'));
+          //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다(⚠ id 를 반드시 본다 — 2026-08-30 슬랙 오토스트 사고).
+          if (id === 'slack' && CONN && CONN.connected.some((sv) => sv.key === 'slack')) {
+            const on = await startCollect(id); await loadConn();
+            void fin(on ? null : `${srcLabel(id)} 자료 모으기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.`);
             return;
           }
-          //  #2247 피그마·ClickUp — 토큰이 없으면 토큰 폼(피그마는 범위 칸 포함), 있으면 바로 켠다. 범위가 없다면(피그마) 폼을 연다.
-          if (id === 'figma' || id === 'clickup' || id === 'gitlab') {
-            if (!tokenSaved(id)) { tokOpen = id; redraw(); return; }
-            const r: any = await startMemberCollect(id, '');
-            if (r && r.needs_scope) { tokOpen = id; redraw(); return; }
-            await loadConn();
-            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.'));
-            return;
+          waiting();
+          await svcOAuth(id, (err) => { void fin(err); });
+        }
+        /** 연결이 성사된 다음 — 범위를 고를 수 있는 앱이면 «범위» 걸음으로, 아니면 마치고 닫는다. */
+        function afterConnected(id) {
+          if (SCOPE_UNIT[id]) { if (tokOpen === id) { tokStep = 'scope'; scopePick = null; redraw(); } return; }
+          markConnected(id); if (tokOpen === id) tokOpen = null;
+          if (S.scene === 'connect') redraw();
+        }
+        /** 켜기 — 범위를 실어 보낼 수 있는 한 자리. 서버가 켜졌다고 할 때만 초록불(저장 성공 ≠ 되는 값, #2232). */
+        async function enableCollect(id, scope) {
+          const body = { enabled: true };
+          if (scope) body.scope = scope;
+          try { return await api(`/api/ui/org/${COLLECT_FIRST[id] || id}/collect`, { method: 'POST', body: JSON.stringify(body) }); }
+          catch (e) { return { ok: false, message: (e && e.message) || '' }; }
+        }
+        async function finishEnable(id, scope, errEl, btn) {
+          if (btn) { btn.disabled = true; btn.textContent = '가져오기를 켜는 중…'; }
+          const r = await enableCollect(id, scope);
+          if (!r || r.ok === false) {
+            if (btn) { btn.disabled = false; btn.textContent = '다시 시도'; }
+            if (errEl) errEl.textContent = (r && r.message) || '가져오기를 켜지 못했어요. 잠시 뒤 다시 눌러 주세요.';
+            await loadConn(); return;
           }
-          //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다.
-          //  ⚠ **`id` 를 반드시 본다.** 종전엔 «슬랙이 이미 이어져 있으면» 만 봐서, 아직 토큰이 없는 GitHub 를 누른
-          //   사람이 이 분기로 흘러들었다 — 그리고 startCollect('github') 는 COLLECT_OF 축에 없어 곧바로 false 라
-          //   «슬랙 자료 모으기를 켜지 못했어요» 가 떴다(원준님 실측 2026-08-30: GitHub 를 눌렀는데 슬랙 실패 토스트).
-          //   라벨도 하드코딩하지 않는다 — 이 분기에 다른 앱이 흘러들어도 **누른 앱 이름**이 나와야 원인이 보인다.
-          if (id === 'slack' && CONN && CONN.connected.some((s) => s.key === 'slack')) {
-            const on = await startCollect(id);
-            await loadConn();
-            fin(on ? null : `${srcLabel(id)} 자료 모으기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.`);
-            return;
-          }
-          if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
-          await svcOAuth(id, fin);
+          await loadConn();
+          if (connState(id) === 'on') markConnected(id);
+          tokOpen = null; scopePick = null; redraw();
+        }
+        /** 카드 → 모달. 어느 걸음에서 시작하는가는 «이미 어디까지 왔는가»가 정한다(두 번 온 사람을 처음으로 돌리지 않는다). */
+        function openModal(id) {
+          scopePick = null; scTeamId = '';
+          if (id === 'figma') tokStep = tokenSaved(id) ? 'team' : 'connect';
+          else if ((id === 'clickup' || id === 'github' || id === 'gitlab') && tokenSaved(id)) tokStep = 'scope';
+          else tokStep = 'connect';
+          tokOpen = id; redraw();
         }
         wireUnlink(el, redraw);
-        $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
+        $$('[data-conn]', el).forEach((c) => c.onclick = () => {
           const id = c.dataset.conn;
           if (connState(id) === 'on') return;                       // 이미 이어졌다 — 더 시킬 일이 없다
           if (connState(id) === 'blocked') {
@@ -1721,62 +1791,107 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                 : '이 앱은 아직 준비 중이에요. 열리면 «외부 앱 연결»에서 바로 연결하실 수 있어요.');
             return;
           }
-          //  ⚠ 아직 서버를 못 읽었으면 **어느 길로 이을지 고를 수 없다**: Slack·GitLab 은 계정 로그인과 글자 받아
-          //   오기가 둘 다 있어서, 모르는 채로 정하면 회사가 이미 열어 둔 쉬운 길을 두고 어려운 길로 보내게 된다.
+          //  ⚠ 아직 서버를 못 읽었으면 어느 길로 이을지(계정 로그인 vs 글자)도, 어느 걸음에서 시작할지도 못 정한다.
           if (!CONN) { toast('연결 상태를 아직 확인하는 중이에요 — 잠시 뒤 다시 눌러 주세요.'); if (!connTried) void loadConn().then(redraw); return; }
-          if (collectMode(id)) { await collectConnect(id, c); return; }
-          if (connHow(id) === 'token') { tokOpen = tokOpen === id ? null : id; redraw(); return; }
-          const d = c.querySelector('.ob-oc-d'); if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
-          await svcOAuth(id, (err) => {
-            //  #2232 — 감시자(watchConnect)가 한참 뒤에 부를 수 있다. 그때 다른 장면에 가 있으면 화면은 건드리지 않는다(기록만).
-            if (err) { toast(err); if (S.scene === 'connect') redraw(); return; }
-            if (connState(id) === 'on') markConnected(id);
-            if (S.scene === 'connect') redraw();
-          });
+          openModal(id);
         });
-        // ── 펼쳐진 «글자 받아 오기» 폼 배선 ──
-        const tokIn = $('#tokIn', el), tokGo = $('#tokGo', el), tokErr = $('#tokErr', el);
-        if (tokIn && tokGo) {
-          const submit = async () => {
-            const id = tokOpen, v = (tokIn.value || '').trim();
-            if (!id) return;
-            if (!v && !tokenSaved(id)) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
-            tokGo.disabled = true; tokGo.textContent = '연결하는 중…'; if (tokErr) tokErr.textContent = '';
-            let verdict = null;
-            try {
-              const hostIn = $('#tokHost', el);
-              if (v) verdict = await svcToken(id, v, id === 'gitlab' ? ((hostIn && hostIn.value.trim()) || 'gitlab.com') : undefined);
-            } catch (e) {
-              tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
-              if (tokErr) tokErr.textContent = (e && e.message) || '연결하지 못했어요. 글자를 다시 확인해 주세요.';
-              return;
-            }
-            //  저장은 됐다. 그래도 **서버가 이어졌다고 할 때만** 초록불을 켠다(값이 틀려도 저장은 되기 때문).
-            //  #2232 — 서버가 «그 값으로 실제 붙어 봤다» 고 답했으면 그 답이 먼저다(저장 성공 ≠ 되는 값).
-            if (verdict && verdict.ok === false) {
-              tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
-              if (tokErr) tokErr.textContent = verdict.message || '그 글자로는 아직 연결되지 않았어요. 값을 다시 확인해 주세요.';
-              return;
-            }
-            //  #2247 수집기 축 — 토큰이 저장됐으면 그 토큰으로 수집기를 켠다(피그마는 범위 칸의 링크와 함께).
-            if (collectMode(id)) {
-              const sc = $('#tokScope', el);
-              const r: any = await startMemberCollect(id, sc ? sc.value : '');
-              if (!r || !r.ok) {
+        // ── 모달 배선 — 닫기(×·바탕·Esc)는 «나중에 할게요»다: 아무것도 저장하지 않는다. ──
+        const veil = $('#obVeil', el);
+        if (veil) {
+          const id = tokOpen;
+          const close = () => { tokOpen = null; scopePick = null; redraw(); };
+          veil.onclick = (e) => { if (e.target === veil) close(); };
+          const x = $('#obX', el); if (x) x.onclick = close;
+          veil.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+          const oaGo = $('#oaGo', el);
+          if (oaGo) oaGo.onclick = () => { oaGo.disabled = true; void startOAuthFlow(id, { wait: $('#oaWait', el), err: $('#oaErr', el) }).finally(() => { oaGo.disabled = false; }); };
+          // 토큰 걸음
+          const tokIn = $('#tokIn', el), tokGo = $('#tokGo', el), tokErr = $('#tokErr', el);
+          if (tokIn && tokGo) {
+            const submit = async () => {
+              const v = (tokIn.value || '').trim();
+              if (!v && !tokenSaved(id)) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
+              tokGo.disabled = true; tokGo.textContent = '확인하는 중…'; if (tokErr) tokErr.textContent = '';
+              let verdict = null;
+              try {
+                const hostIn = $('#tokHost', el);
+                if (v) verdict = await svcToken(id, v, id === 'gitlab' ? ((hostIn && hostIn.value.trim()) || 'gitlab.com') : undefined);
+              } catch (e) {
                 tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
-                if (tokErr) tokErr.textContent = (r && r.message) || '모으기를 켜지 못했어요. 잠시 뒤 다시 눌러 주세요.';
-                if (r && r.needs_scope && sc) sc.focus();
-                await loadConn(); return;
+                if (tokErr) tokErr.textContent = (e && e.message) || '연결하지 못했어요. 글자를 다시 확인해 주세요.';
+                return;
+              }
+              //  저장은 됐다. 그래도 서버가 «그 값으로 실제 붙어 봤다»고 한 답이 먼저다(저장 성공 ≠ 되는 값).
+              if (verdict && verdict.ok === false) {
+                tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
+                if (tokErr) tokErr.textContent = verdict.message || '그 글자로는 아직 연결되지 않았어요. 값을 다시 확인해 주세요.';
+                return;
               }
               await loadConn();
-            }
-            if (connState(id) === 'on') { markConnected(id); tokOpen = null; redraw(); return; }
-            tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
-            if (tokErr) tokErr.textContent = '글자는 받았는데 아직 연결되지 않았어요. 복사할 때 앞뒤가 잘리지 않았는지 보고 다시 넣어 주세요.';
+              //  토큰은 됐다 — 수집형은 다음 걸음으로(피그마 = 어느 팀, 나머지 = 범위). 그 밖은 여기서 끝.
+              if (collectMode(id)) { tokStep = id === 'figma' ? 'team' : 'scope'; scopePick = null; redraw(); return; }
+              if (connState(id) === 'on') { markConnected(id); tokOpen = null; redraw(); return; }
+              tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
+              if (tokErr) tokErr.textContent = '글자는 받았는데 아직 연결되지 않았어요. 복사할 때 앞뒤가 잘리지 않았는지 보고 다시 넣어 주세요.';
+            };
+            tokGo.onclick = submit;
+            tokIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) submit(); });
+            tokIn.focus();
+          }
+          // 피그마 «어느 팀?» 걸음
+          const teamIn = $('#teamIn', el), teamErr = $('#teamErr', el);
+          const teamIdOf = (t) => { const m = String(t || '').match(/(?:^|\/)team\/(\d{5,})/); return m ? m[1] : (/^\d{5,}$/.test(String(t || '').trim()) ? String(t).trim() : ''); };
+          const teamAll = $('#teamAll', el);
+          if (teamAll && teamIn) teamAll.onclick = () => {
+            const tid = teamIdOf(teamIn.value);
+            if (!tid) { if (teamErr) teamErr.textContent = '팀 주소가 아니에요 — figma.com/files/team/… 처럼 생긴 주소를 통째로 붙여넣어 주세요.'; teamIn.focus(); return; }
+            void finishEnable('figma', { team_ids: tid, file_keys: '' }, teamErr, teamAll);
           };
-          tokGo.onclick = submit;
-          tokIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) submit(); });
-          tokIn.focus();
+          const teamPick = $('#teamPick', el);
+          if (teamPick && teamIn) teamPick.onclick = () => {
+            const tid = teamIdOf(teamIn.value);
+            if (!tid) { if (teamErr) teamErr.textContent = '먼저 팀 주소를 붙여넣어 주세요 — 그 팀의 파일 목록을 불러와서 보여 드려요.'; teamIn.focus(); return; }
+            scTeamId = tid; tokStep = 'scope'; scopePick = { loading: true, chosen: new Set() }; redraw();
+            void loadScopeOptions(id, tid);
+          };
+          // 범위 걸음 — 목록은 그 사람 연결로 서버가 나열한다(외부 앱에 들어가지 않는다).
+          async function loadScopeOptions(app, teamId) {
+            let o = null;
+            try { o = await api(`/api/ui/org/${app}/collect/options${teamId ? `?team_id=${encodeURIComponent(teamId)}` : ''}`); } catch (_) { o = null; }
+            if (tokOpen !== app || tokStep !== 'scope') return;      // 그새 닫았거나 다른 걸음 — 화면을 덮지 않는다
+            scopePick = o
+              ? { loading: false, freeform: !!o.freeform, note: o.note || '', key: o.key || '', unit: o.unit || '', options: Array.isArray(o.options) ? o.options : [], chosen: new Set() }
+              : { loading: false, freeform: true, note: '', key: '', unit: '', options: [], chosen: new Set() };
+            redraw();
+          }
+          const scErr = $('#scErr', el);
+          const scAll = $('#scAll', el);
+          if (scAll) scAll.onclick = () => void finishEnable(id, id === 'figma' ? { team_ids: scTeamId, file_keys: '' } : null, scErr, scAll);
+          const scPick = $('#scPick', el);
+          if (scPick) scPick.onclick = () => { scopePick = { loading: true, chosen: new Set() }; redraw(); void loadScopeOptions(id, id === 'figma' ? scTeamId : ''); };
+          const scList = $('#scList', el);
+          if (scList && scopePick && !scopePick.loading) {
+            const scN = $('#scN', el);
+            const sum = () => { const n = scopePick.chosen.size; if (scN) scN.textContent = n ? `${n}개 골랐어요.` : ''; };
+            $$('input[data-sc]', scList).forEach((b) => b.onchange = () => { const k = b.dataset.sc; if (b.checked) scopePick.chosen.add(k); else scopePick.chosen.delete(k); sum(); });
+            const q = $('#scQ', el);
+            if (q) q.oninput = () => { const t = q.value.trim().toLowerCase(); $$('label', scList).forEach((row) => { row.style.display = !t || row.textContent.toLowerCase().includes(t) ? '' : 'none'; }); };
+            sum();
+          }
+          const scGo = $('#scGo', el);
+          if (scGo) scGo.onclick = () => {
+            const sp = scopePick || {};
+            const scIn = $('#scIn', el);
+            const vals = sp.freeform || !(sp.options && sp.options.length)
+              ? (scIn ? scIn.value.trim() : '')
+              : [...(sp.chosen || [])].join(' ');
+            if (!vals) { if (scErr) scErr.textContent = '하나는 골라 주세요 — 아니면 «전부 가져오기»로 하셔도 돼요.'; return; }
+            //  피그마 — 파일만 고른 것: 팀 축은 비운다(안 비우면 팀 전체가 그대로 훑린다).
+            const scope = id === 'figma'
+              ? { file_keys: vals, team_ids: '' }
+              : { [sp.key || (id === 'github' ? 'repos' : id === 'gitlab' ? 'projects' : id === 'clickup' ? 'include_list_ids' : 'teams')]: vals };
+            void finishEnable(id, scope, scErr, scGo);
+          };
         }
         //  남겨 두고 가는 사람에게는 **어디로 돌아오면 되는지**를 말한다 — 안 그러면 '나중에'가 갈 곳 없는 말이 된다.
         $('#upGo', el).onclick = () => { if (pickedIds().some((id) => connState(id) !== 'on')) toast('남은 곳은 왼쪽 «외부 앱 연결»에서 언제든 연결하실 수 있어요.'); goScene('terminal'); };
@@ -2815,6 +2930,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   }
   addEventListener('popstate', onPop);
   function goScene(key, opts) {
+    tokOpen = null; scopePick = null;   // 장면을 떠나면 연결 모달도 닫는다(유령 모달 방지, #2232)
     if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) {
       S.trail.push(S.scene);
       // 브라우저·셸의 «뒤로» 도 이 안에서 한 걸음 물러나게 한다(원준님 2026-08-26: "뒤로가기 누르니까 그냥 메인홈으로 가지네").

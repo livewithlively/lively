@@ -203,7 +203,19 @@ export const githubConnector: Connector = {
     const base = apiBaseOf(host);
     const repos = parseRepoList(cfg.repos);
     if (repos.length === 0) {
-      throw new Error("수집할 저장소가 없습니다 — '저장소'에 owner/repo 를 넣거나 [GitHub 연결] 화면에서 저장소를 고르세요.");
+      // #2232 — 범위가 비면 «전체»다(비공개 포함): 이 토큰이 볼 수 있는 저장소를 전부 훑는다.
+      //  종전엔 여기서 죽었는데, 그 게이트는 «고르라»는 걸음을 모두에게 강요했다. 결정(원준님 2026-08-31):
+      //  기본은 전부, 고르기는 옵션. 가시성의 울타리는 토큰 자체다 — 이 토큰이 못 보는 저장소는 목록에 안 나온다.
+      for await (const page of pages<{ full_name?: string }>(
+        token, `${base}/user/repos?per_page=${PAGE_SIZE}&affiliation=owner,collaborator,organization_member&sort=pushed`, "저장소 전체 열거")) {
+        for (const r of page) {
+          const seg = String(r.full_name ?? "").split("/");
+          if (seg.length === 2 && seg[0] && seg[1]) repos.push({ owner: seg[0], repo: seg[1], full: String(r.full_name) });
+        }
+      }
+      if (repos.length === 0) {
+        throw new Error("이 토큰으로 볼 수 있는 저장소가 하나도 없습니다 — 토큰 허용범위(repo)를 확인하거나 '저장소'에 owner/repo 를 넣으세요.");
+      }
     }
     const includePrs = on(cfg.include_prs, true);
     const includeReleases = on(cfg.include_releases, true);
