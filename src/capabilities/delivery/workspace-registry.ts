@@ -34,6 +34,7 @@ import { getMember, listMembers } from "../../org/store.js";
 import { updateOrgProfile } from "../../org/store/profile.js";
 import { updateRuntimeConfig } from "../../org/store/runtime-config.js";
 import { seedDefaultContent } from "../../org/delivery/seed-content.js";
+import { seedBuiltinApps } from "../../apps/seed.js";   // #2479 — 신규 워크스페이스도 빌트인 앱을 받아야 알림이 산다
 import { logger } from "../../log.js";
 // #2188 — 매니지드에서 워크스페이스의 권위는 CP(app.lvly.io)다. 여기서는 **묻고 전달만** 한다.
 import { resolveCpTarget, callCp, hubOrigin, type CpWorkspace } from "./managed-cp.js";
@@ -251,6 +252,14 @@ export const workspaceRegistryCapabilities: Capability[] = [
         await updateOrgProfile({ name }, actorOf(user), "workspace_create");
         await updateRuntimeConfig({ workspace_kind: kind }, actorOf(user), "workspace_create");
         await seedDefaultContent().catch((err) => logger.warn({ err, slug }, "새 워크스페이스 시딩 실패(비치명 — 다음 부팅 시딩이 보충하지 않으므로 수동 확인)"));
+        // 빌트인 앱(#2479) — ⚠ 여기 없으면 **이 워크스페이스는 앱을 영영 못 받는다.** 부팅 스텝
+        //  `seed-builtin-apps` 는 테넌트 컨텍스트 밖이라 primary 만 심고, 재부팅해도 보충되지 않는다
+        //  (바로 위 주석이 시딩 일반에 대해 말하는 그 성질이다).
+        //  실측 2026-09-01 dev: 활성 비-primary **84곳 전부 `org_app=0`** → `getApp("ai-session")` 이 null →
+        //  「AI 가 답을 기다려요」 알림(#1891)이 전이를 맞게 감지하고도 `notify-app-inactive` 로 전량 거절.
+        //  매니지드에서 같은 증상을 #2246 이 이미 겪었다. 여기가 **신규**를, 주기 정비(`builtin-app-seed`)가
+        //  **이미 만들어진 것**을 덮는다. 멱등이라 둘이 겹쳐도 안전하다.
+        await seedBuiltinApps().catch((err) => logger.warn({ err, slug }, "새 워크스페이스 빌트인 앱 시딩 실패(비치명 — 주기 정비가 보충한다)"));
       });
       return { workspace: wsView({ ...ws, role: "owner" }), header: { "x-lively-workspace": slug } };
     }, {
