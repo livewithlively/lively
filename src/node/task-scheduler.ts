@@ -335,7 +335,12 @@ async function assignQueued(): Promise<void> {
 
 // 워크스페이스 순회 (#2418) — org_task 도 테넌트별로 갈리는 표라, 컨텍스트 밖에서 읽으면 primary 것만 보인다.
 //  ⚠ 용량(counts)만은 **전 워크스페이스 합**이어야 한다 → 먼저 한 바퀴 돌아 합산하고, 그 맵을 순회 전체가 공유한다.
-async function tickTasksAllTenants(): Promise<void> {
+/** 한 번의 배차 tick — 대상 테넌트를 스스로 열거해 각각을 `withTenant` 로 감싼다.
+ *  ⚠ **테넌트 단위로 쪼갤 수 없다**: 노드 용량을 테넌트 가로질러 집계한 뒤 배차하므로,
+ *   한 테넌트만 보고 배정하면 남의 부하를 못 봐 노드를 초과 배정한다.
+ *  ⓘ 밖으로 연 이유(#2246): 매니지드에서는 `startTaskScheduler` 가 `gate:"scheduler"` 에 막혀 안 돈다.
+ *   요청에 얹은 정비가 이 tick 을 **전역 스코프**로 부른다 — 대상 열거는 여기가 하므로 안전하다. */
+export async function tickTasksAllTenants(): Promise<void> {
   const targets = await schedulerTargets();
   if (targets === null) {   // 단일 테넌트 배포 — 종전 경로
     await watchRunning(); await assignQueued(); await reapFailedSessions();

@@ -13,6 +13,11 @@ export const SWEEP_MIN_INTERVAL_MS = 5 * 60_000;
  *  *"알림은 5분 뒤에 오면 알림이 아니다."* 원래 스윕도 30초였다. */
 export const AWAITING_SWEEP_INTERVAL_MS = 30_000;
 
+/** 위탁 배차 주기. 원래 `task-scheduler` 의 `TICK_MS` 와 **같은 값**이다.
+ *  ⓘ 요청에 얹으면 **원래보다 잦을 수 없다** — 요청이 와야 돌고 이 값이 상한이다.
+ *   그래서 그대로 써도 부하가 종전 설계를 넘지 않는다(새 정책을 만들지 않는다). */
+export const TASK_TICK_MS = 5_000;
+
 /**
  * 요청에 얹어 돌릴 정비들.
  *
@@ -28,6 +33,17 @@ export interface SweepJob {
   readonly key: string;
   /** 이 정비를 다시 돌리기까지의 최소 간격. */
   readonly intervalMs: number;
+  /**
+   * 이 정비가 **누구의 것인가**. 기본은 `"tenant"` — 요청이 가리킨 그 테넌트만 손보고,
+   * 디바운스도 테넌트마다 따로다.
+   *
+   * `"global"` 은 **테넌트로 쪼갤 수 없는** 정비다(예: 위탁 배차는 노드 용량을 테넌트 가로질러
+   * 집계한 뒤 배정하므로, 한 테넌트만 보면 남의 부하를 못 봐 노드를 초과 배정한다).
+   * ⚠ 그래서 디바운스가 **테넌트를 안 탄다** — 안 그러면 테넌트 수만큼 같은 전량 작업이 중복된다.
+   * ⓘ 그래도 «임의로 한 테넌트를 골라 돌린다»가 아니다: 대상 열거는 그 함수가 자기 안에서
+   *  `schedulerTargets()` 로 하고 각각을 `withTenant` 로 감싼다(`scheduler/tenant-fanout.ts`).
+   */
+  readonly scope?: "tenant" | "global";
   /** 실제 정비. **여기서 새로 정의하지 않고** 원래 함수를 그대로 부른다(복제하면 한쪽만 고쳐진다). */
   readonly run: () => Promise<unknown>;
 }
@@ -75,6 +91,13 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 이게 없으면 그 세션들은 **회수 면역이면서 죽으면 복원도 안 된다**(고객사 A 실측: 38건 중 19건).
   { key: "session-state-backfill", intervalMs: SWEEP_MIN_INTERVAL_MS,
     run: () => import("./session-state-backfill.js").then((m) => m.backfillSessionStates()) },
+  // 위탁 배차(#869 P2) — **전역**이다. 실측(2026-08-31): `org_task` 3건이 queued·attempt=0·node_id 없이
+  //  **3~4일** 방치돼 있었다. 크론은 도는데(CP 가 굴린다) 배차가 한 번도 안 됐다 — 그중 둘이
+  //  «미분류 지식 12건 분류»·«자료 증류» 로 **맥락 파이프라인의 본체**다.
+  //  ⓘ `tickTasksAllTenants` 는 매니지드에서 돌도록 이미 설계돼 있었다(`scheduler/tenant-fanout.ts` 가
+  //   request 모드를 지원한다) — 게이트가 막아 한 번도 안 돈 것뿐이다.
+  { key: "task-dispatch", intervalMs: TASK_TICK_MS, scope: "global",
+    run: () => import("../node/task-scheduler.js").then((m) => m.tickTasksAllTenants()) },
   //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
   //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
   //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.
@@ -94,14 +117,17 @@ export function sweptKeys(): string[] { return [...lastSweep.keys()]; }
 
 /** 관측용(읽기 전용) — 그 슬롯을 **언제** 가져갔나. 키 목록만으로는 "다시 돌았다"를 볼 수 없어,
  *  미들웨어가 정비별 주기를 실제로 쓰는지 검증할 수 없다(실측: 그 구멍이 변이를 통과시켰다). */
-export function sweptAt(jobKey: string, tenantId: string): number | undefined {
-  return lastSweep.get(`${jobKey}:${tenantId}`);
+export function sweptAt(jobKey: string, tenantId: string, scope: "tenant" | "global" = "tenant"): number | undefined {
+  return lastSweep.get(scope === "global" ? `${jobKey}:*` : `${jobKey}:${tenantId}`);
 }
 
 /** 이 (정비, 테넌트) 를 지금 돌려야 하나(그렇다면 시각을 찍는다). 순수하지 않지만 판정과 기록이
  *  원자적이어야 동시 요청 둘이 같은 정비를 두 번 돌리지 않는다(node 는 단일 스레드라 안 쪼개진다). */
-export function shouldSweep(jobKey: string, tenantId: string, now: number, intervalMs: number): boolean {
-  const k = `${jobKey}:${tenantId}`;
+export function shouldSweep(jobKey: string, tenantId: string, now: number, intervalMs: number,
+                            scope: "tenant" | "global" = "tenant"): boolean {
+  //  ⚠ 전역 정비는 **테넌트를 안 탄다** — 어느 테넌트의 요청이 깨우든 주기당 한 번만 돌아야 한다.
+  //   테넌트를 키에 넣으면 테넌트 수만큼 같은 전량 작업이 중복된다.
+  const k = scope === "global" ? `${jobKey}:*` : `${jobKey}:${tenantId}`;
   const prev = lastSweep.get(k);
   if (prev !== undefined && now - prev < intervalMs) return false;
   lastSweep.set(k, now);
@@ -142,7 +168,7 @@ function maybeSweep(env: NodeJS.ProcessEnv): void {
   if (!t) return; // 컨텍스트 없음(테넌트 무관 경로) — 쓸 대상이 특정되지 않는다.
   const now = Date.now();
   for (const job of SWEEP_JOBS) {
-    if (!shouldSweep(job.key, String(t.id), now, jobIntervalMs(job, env))) continue;
+    if (!shouldSweep(job.key, String(t.id), now, jobIntervalMs(job, env), job.scope ?? "tenant")) continue;
     //  컨텍스트 **안**에서 부른다 — 여기서 등록한 then 체인은 AsyncLocalStorage 저장소를 그대로
     //  물려받는다(enqueue→deliverLoop 가 이미 같은 원리로 돈다).
     void job.run()
@@ -150,7 +176,7 @@ function maybeSweep(env: NodeJS.ProcessEnv): void {
       //   «돌았지만 볼 게 없었다» 가 로그에서 같아 보인다 — 그 구별이 없어서 이 스윕이 죽어 있던 걸
       //   이틀 몰랐다. 결과가 객체면 그대로 펼쳐 찍고, void 면(예: resumeOutbox) 그냥 돌았다고만 찍는다.
       .then((r) => logger.info(
-        { tenant: t.slug, job: job.key, ...(r && typeof r === "object" ? r : {}) },
+        { tenant: t.slug, job: job.key, scope: job.scope ?? "tenant", ...(r && typeof r === "object" ? r : {}) },
         "정비: 요청에 얹은 테넌트 스윕"))
       .catch((err) => logger.warn({ err, tenant: t.slug, job: job.key },
         "정비: 테넌트 스윕 실패(비치명 — 다음 요청이 다시 시도)"));
