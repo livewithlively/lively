@@ -189,3 +189,20 @@ test("[R4] 순회 목록과 제외 목록이 겹치지 않는다 — 두 표가 
   for (const fn of Object.keys(MUST_NOT_FANOUT))
     assert.ok(!MUST_FANOUT.includes(fn), `'${fn}' 이 두 표에 다 있다 — 어느 쪽이 사실인가`);
 });
+
+/**
+ * **밀린 것을 채우는** 정비 — `setInterval` 만 두면 첫 판이 주기 뒤다(빌트인 앱은 6시간).
+ *  이건 정기 점검이 아니라 백필이라 **배포 직후 첫 판이 가장 중요하다**: 그 순간 이미 비어 있다.
+ *  매니지드의 요청 정비표는 디바운스가 비어 있어 첫 요청에 곧바로 도는데, 타이머 쪽만 6시간을
+ *  기다리면 같은 표를 쓰고도 두 배포의 동작이 갈린다.
+ */
+const NEEDS_BOOT_ONESHOT = [
+  "embedding-backfill", "session-title-backfill", "session-state-backfill", "builtin-app-seed",
+];
+
+test("[R6] 백필 성격의 정비는 **부팅 1회**를 갖는다 — interval 만 있으면 배포 직후가 빈다", () => {
+  const src = readFileSync(SRC, "utf8");
+  for (const job of NEEDS_BOOT_ONESHOT)
+    assert.ok(new RegExp(`setTimeout\\([^\\n]*perTenant\\("${job}"`).test(src),
+      `'${job}' 이 interval 만 있다 — 배포 직후 밀린 분량이 다음 주기까지 그대로 남는다.`);
+});
