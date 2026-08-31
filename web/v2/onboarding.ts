@@ -2047,6 +2047,26 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             <span class="ob-lg-n">${n}</span><div class="ob-lg-body"><b>${title}</b>
             <div class="ob-lg-done">✓ ${doneLine}</div><div class="ob-lg-in">${body}</div></div></div>`;
         const fbLine = `<div class="ob-lg-fb">여기서 잘 안 되면 <button type="button" id="lgFb">창으로 열어서 로그인 ↗</button><span id="lgFbNote"></span></div>`;
+        /*  ★ 인라인 터미널(#2477) — 로그인 «창» 을 새 탭이 아니라 **이 자리에** 띄운다.
+         *
+         *   왜 필요한가: 인라인 카드(주소·코드)는 그 하네스가 «비대화형 한 줄» 을 줄 때만 된다. agy 는 그게 없다 —
+         *   로그인 서브커맨드가 없고, 인증을 띄우는 `agy -p` 는 이 러너가 주는 **파이프 stdin 을 거절**하며
+         *   pty 를 줘도 대기가 **60초 하드 타임아웃**이다(실측 2026-09-01, agy 1.1.22). 하네스마다 통로를 하나씩
+         *   뚫는 방식은 그런 자리에서 늘 막히고, 새 하네스가 올 때마다 같은 벽을 다시 만난다.
+         *   터미널을 통째로 이 자리에 얹으면 **하네스가 무엇을 요구하든 그 자리에서 보인다.**
+         *
+         *   공짜다시피 한 이유: 세션 터미널 페이지는 이미 `?embed=1` 로 프레임에 실리게 돼 있다(#1744 —
+         *   세션 화면이 그렇게 쓴다). 상단바·파일 탐색기가 빠진 «터미널만» 판이라 카드 안에 그대로 맞는다.
+         *
+         *   ⚠ 액자는 **걸음(step) 밖**에 붙인다. `.ob-lg-step.done .ob-lg-in{display:none}` 이라 걸음 안에 두면
+         *    [로그인 시작] 이 걸음 1 을 done 으로 바꾸는 순간 방금 띄운 터미널이 통째로 숨는다(실측).
+         */
+        const termBox = `<div class="ob-lg-term" id="lgTermBox" hidden>
+            <div class="ob-lg-term-bar"><span id="lgTermSt">터미널을 여는 중이에요…</span>
+              <a class="ob-lg-term-out" id="lgTermOut" target="_blank" rel="noopener" hidden>새 탭에서 크게 보기 ↗</a></div>
+            <iframe class="ob-lg-term-f" id="lgTermF" title="로그인 터미널"></iframe>
+            <div class="ob-lg-d">창 안을 한 번 누르면 글자를 칠 수 있어요. 붙여넣기는 ⌘V(윈도우 Ctrl+V).</div>
+          </div>`;
         const okBar = `<div class="ob-lg-ok" id="lgOk" hidden>✓ 로그인이 끝났어요<button class="ob-btn ob-btn-pri ob-btn-inline" id="lgOkGo" style="margin-left:auto">계속</button></div>`;
         let stepper = '';
         if (h === 'claude') {
@@ -2070,11 +2090,25 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                  막힌 게 아니에요. <a href="https://chatgpt.com/#settings" target="_blank" rel="noopener"><b>ChatGPT 설정 ▸ 보안</b></a>에서 <b>Codex용 장치 코드 인증</b>을 켜고, <button type="button" class="ob-linkbtn" id="lgRetry" style="display:inline">다시 시도</button>를 누르세요 — 새 주소와 새 코드가 나옵니다(아까 코드는 이미 죽었어요).</div></details>`)
             + step(3, 'idle', '끝나기를 기다리면 됩니다', '끝났어요',
               `<div class="ob-lg-wait" id="lgWait" hidden><span class="ob-lg-pulse"></span>브라우저에서 허용을 기다리는 중…</div>`);
+        } else if (h === 'grok') {
+          //  ⚠ 이 걸음 칸이 **없어서 grok 로그인이 죽어 있었다**(#2477 실측): LOGIN_INLINE 에 grok 을 켜 놓고
+          //   스테퍼는 옛 «명령 붙여넣기» 판이라 주소가 뜰 `#lgAddr` 가 없었고, startInlineLogin 은
+          //   `if (!addr) return` 으로 즉시 빠져나갔다 — 버튼을 눌러도 **아무 일도 안 일어난다**(오류도 없다).
+          //   출력 모양이 codex 와 같으므로 걸음 구성도 codex 와 같다.
+          stepper = step(1, 'now', '주소 열고, 이 코드 복사해 두기', '열었어요',
+              `<div class="ob-lg-addr"><code id="lgAddr">주소와 코드를 받는 중이에요…</code><a class="ob-btn ob-btn-pri ob-btn-inline" id="lgOpen" target="_blank" rel="noopener" hidden>열기 ↗</a></div>
+               <div style="margin-top:9px"><button type="button" class="ob-copychip" id="lgCodeChip" hidden><span id="lgCode"></span><small>누르면 복사</small></button></div>`)
+            + step(2, 'idle', '브라우저에 코드 넣고, X(xAI) 로그인 → 허용', '허용했어요',
+              `<div class="ob-lg-d">열린 화면의 입력칸에 위 코드를 넣으면 됩니다.</div>
+               <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">accounts.x.ai/oauth2/device</span></div>
+               <div class="bd"><div class="t">Confirm the code shown on your device</div><span class="ob-bchip" id="lgCodeEcho">····-····</span><div class="ob-bcap">← 아까 그 코드를 여기에</div></div></div>`)
+            + step(3, 'idle', '끝나기를 기다리면 됩니다', '끝났어요',
+              `<div class="ob-lg-wait" id="lgWait" hidden><span class="ob-lg-pulse"></span>브라우저에서 허용을 기다리는 중…</div>`);
         } else if (h === 'antigravity') {
-          stepper = step(1, 'now', '터미널 창 열기', '열었어요 — 로그인 방법은 Enter 로 넘겼어요',
-              `<div class="ob-lg-d">새 탭에 글자만 있는 창이 열리고, 먼저 이렇게 물어요. <b>1번에 이미 커서(&gt;)가 있으니 그대로 Enter.</b></div>
+          stepper = step(1, 'now', '터미널 열기', '열었어요 — 로그인 방법은 Enter 로 넘겼어요',
+              `<div class="ob-lg-d">이 자리에 글자만 있는 터미널이 뜨고, 먼저 이렇게 물어요. <b>1번에 이미 커서(&gt;)가 있으니 그대로 Enter.</b></div>
                <div class="ob-tmock"><span class="dim">Select login method:</span><br><span class="sel"><span class="okx">&gt;</span> 1. Google OAuth</span><br><span class="dim">&nbsp;&nbsp;2. Use a Google Cloud project</span></div>
-               <div style="margin-top:9px"><button class="ob-btn ob-btn-pri ob-btn-inline" id="cTerm">${esc(picked)} 로그인 창 열기 ↗</button></div>`)
+               <div style="margin-top:9px"><button class="ob-btn ob-btn-pri ob-btn-inline" id="cTerm">${esc(picked)} 로그인 시작</button></div>`)
             + step(2, 'idle', '구글 로그인 → 코드를 창에 붙여넣기', '코드를 넣었어요',
               `<div class="ob-lg-d">창의 파란 줄(<b>Click here to authenticate</b>)을 누르면 구글 로그인이 열려요. 로그인하면 <b>복사할 코드</b>가 나오고, 그걸 창의 <b>authorization code…</b> 칸에 붙여넣고 Enter.</div>
                <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="url">accounts.google.com</span></div>
@@ -2088,15 +2122,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                  <div class="pk">③ Do you trust the contents of this project? — <span class="ans">라이블리가 만든 작업 폴더예요. Yes 에서 Enter</span></div>
                  <div class="ob-tmock"><span class="dim">/work/shared/project/…</span><br><span class="sel"><span class="okx">&gt;</span> Yes, I trust this folder</span><br><span class="dim">&nbsp;&nbsp;No, exit</span></div>
                </div></details>
-               <div class="ob-lg-d" style="margin-top:8px">다 지나가면 창에 입력칸(<b>&gt;</b> 와 오른쪽 아래 <b>Gemini …</b>)이 떠요. 그럼 여기로 돌아와 아래 <span class="ob-kbd">로그인했어요</span>.</div>`);
+               <div class="ob-lg-d" style="margin-top:8px">다 지나가면 그 터미널에 입력칸(<b>&gt;</b> 와 오른쪽 아래 <b>Gemini …</b>)이 떠요. 그럼 바로 아래 <span class="ob-kbd">로그인했어요</span>.</div>`);
         } else {
-          // grok — 명령 한 줄(catalog 에 비대화형 로그인이 없는 하네스의 대표). 그 밖 미지의 하네스도 이 모양이 안전하다.
+          // 인라인 대상이 아닌 미지의 하네스 폴백 — 이 자리에 터미널을 띄우고 명령 한 줄을 붙여넣게 한다.
           const cmd = 'grok login --device-auth';
-          stepper = step(1, 'now', '터미널 창 열고, 이 한 줄 붙여넣기', '명령을 넣었어요',
+          stepper = step(1, 'now', '터미널 열고, 이 한 줄 붙여넣기', '명령을 넣었어요',
               `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
-                 <button class="ob-btn ob-btn-pri ob-btn-inline" id="cTerm">${esc(picked)} 로그인 창 열기 ↗</button>
+                 <button class="ob-btn ob-btn-pri ob-btn-inline" id="cTerm">${esc(picked)} 로그인 시작</button>
                  <button type="button" class="ob-copychip" data-copy="${esc(cmd)}" style="letter-spacing:0; font-size:12px"><span>${esc(cmd)}</span><small>누르면 복사</small></button></div>
-               <div class="ob-lg-d" style="margin-top:7px">창을 한 번 누른 뒤 붙여넣고(⌘V) Enter.</div>`)
+               <div class="ob-lg-d" style="margin-top:7px">이 자리에 터미널이 떠요. 한 번 누른 뒤 위 글자를 붙여넣고(⌘V) Enter.</div>`)
             + step(2, 'idle', '창에 뜬 주소 열고, 코드 넣어 X 로그인', '로그인했어요',
               `<div class="ob-tmock"><span class="dim">$</span> grok login --device-auth<br><span class="dim">Visit:</span> accounts.x.ai/device<br><span class="dim">Code:</span> <span class="okx">HJ4K-Q2WM</span></div>
                <div class="ob-lg-d" style="margin-top:8px">브라우저에서 그 코드를 넣고 X(xAI) 계정으로 로그인하세요.</div>`)
@@ -2111,12 +2145,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           (g && g.help) || '아래 걸음대로 하시면 됩니다.')
           + `<div class="ob-tok ob-lgs">
               ${stepper}
+              ${LOGIN_INLINE[h] ? '' : termBox}
               ${okBar}
               ${h !== 'antigravity' && g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
               ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map((t) => `<li>${t}</li>`).join('')}</ol></div>` : ''}
               ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${esc(picked)} 로그인 여부를 서버가 확인하지 못해요. 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
               <p class="ob-err" id="cErr"></p>
-              ${LOGIN_INLINE[h] ? fbLine : ''}
+              ${fbLine}
               ${otherNote}
             </div>`
           + `<button class="ob-btn ob-btn-pri" id="cGo">로그인했어요</button>`
@@ -2158,28 +2193,31 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             void startInlineLogin(el, h0, AI_LABEL[h0] || S.ai || h0);
           }
         }
+        //  상시 탈출로 — 인라인 카드 쪽은 startInlineLogin 이 자기 자리에서 배선한다(그 함수가 h·label 을 쥔다).
+        //   여기서는 **인라인 터미널** 쪽을 맡는다: 이미 만든 로그인 세션이 있으면 **그 세션**을 크게 연다.
+        //   ⚠ 새 세션을 또 만들면 사람이 두 자리에서 로그인하게 된다 — 어느 쪽이 진짜인지 알 수 없어진다.
+        {
+          const h0 = (AIC && AIC.harness) || aiHarness();
+          const fb = $('#lgFb', el);
+          if (fb && !LOGIN_INLINE[h0]) fb.onclick = () => {
+            const label = AI_LABEL[h0] || S.ai || h0;
+            if (loginTermSession) {
+              window.open(sessionTermUrl(loginTermSession.id, { label: loginTermSession.label }), '_blank');
+              toast('같은 로그인 창을 새 탭에서 열었어요.');
+              return;
+            }
+            void openLoginWindow(h0, label).catch((e) => toast(`로그인 창을 열지 못했어요 — ${(e && e.message) || e}`));
+          };
+        }
         const term = $('#cTerm', el);
         if (term) term.onclick = async () => {
           lgMark(1, 'done'); lgMark(2, 'now'); lgMark(3, '');
           const h = (AIC && AIC.harness) || aiHarness();
           const label = AI_LABEL[h] || S.ai || h;
-          // ★ 터미널 없이 여기서 끝내는 하네스(#2055 후속) — 새 탭·새 창을 열지 않는다.
-          //  사람이 할 일은 «주소를 열고 코드를 넣는 것» 뿐인데 종전엔 그걸 하려고 검은 창을 통째로 봤다.
-          //  대상이 아닌 하네스(agy·grok)는 아래 종전 경로 그대로다 — 그쪽은 비대화형 한 줄이 없다.
+          // ★ 터미널 없이 여기서 끝내는 하네스(#2055·#2477) — 주소·코드 두 값이면 되므로 터미널조차 안 보여 준다.
           if (LOGIN_INLINE[h]) { await startInlineLogin(el, h, label); return; }
-          term.disabled = true; const was = term.textContent; term.textContent = '여는 중…';
-          try {
-            const out: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-              label: `내 계정 로그인 (${label})`, rootKey: 'personal', subpath: '', flags: {}, autoApprove: false, loginProfile: true,
-              ...(LOGIN_SESSION[h] || { harness: h }) }) });
-            const id = out && out.session && out.session.id;
-            if (!id) throw new Error('세션을 받지 못했어요');
-            window.open(sessionTermUrl(id, { label: (out.session && out.session.label) || label }), '_blank');
-            toast('새 탭에 로그인 창을 열었어요. 거기서 로그인을 마치고 돌아오세요.');
-          } catch (e) {
-            toast(`로그인 창을 열지 못했어요 — ${(e && e.message) || e}`);
-            try { window.open(location.pathname + '?solo=1#/terminal', '_blank', 'noopener'); } catch (_) { /* noop */ }
-          } finally { term.disabled = false; term.textContent = was; }
+          // ★ 그 밖(agy·미지의 하네스) — 터미널이 필요하지만 **새 탭이 아니라 이 자리에** 띄운다(#2477).
+          await startInlineTerminal(el, h, label, term);
         };
         // 장면에 들어오자마자 **한 번** 묻는다 — 사람이 버튼을 누르기 전에 '없는 CLI 를 치라는 안내'를 보지 않게.
         //  판정은 그때그때 다시 재므로 캐시를 믿지 않는다(AIC 는 그림용 최신값일 뿐이다).
@@ -2699,10 +2737,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  ⚠ 여기 적은 화면 문구(«Login successful» 등)는 그 회사가 바꿀 수 있다 — 그래서 «같은 말» 로 느슨하게 적었다. */
   const DEVICE_NOTE = '왜 주소와 코드냐면: 그 창은 우리 서버에서 돌아서 로그인 페이지를 스스로 못 열어요. 그래서 주소는 사람이 열고, 코드를 넣어 «이 창이 내 것» 이라고 알려 주는 방식이에요.';
   //  #2232 원준님 실측 — 창은 검지 않을 수도 있고(밝은 테마), 사람은 CLI 조작법(↑↓·Enter)을 모를 수 있다. «터미널 창» 으로 부르고 조작법을 한 줄 준다.
-  const CLI_NOTE = '터미널 창 조작: 글자만 있는 창이에요. 고르는 화면에선 <b>↑ ↓</b> 로 옮기고 <b>Enter</b> 로 확정, 붙여넣기는 <b>⌘V</b>(윈도우 Ctrl+V), 창 안 글자는 마우스로 끌어 복사할 수 있어요.';
+  const CLI_NOTE = '터미널 조작: 글자만 있는 칸이에요(이 화면 안에 떠요). 고르는 화면에선 <b>↑ ↓</b> 로 옮기고 <b>Enter</b> 로 확정, 붙여넣기는 <b>⌘V</b>(윈도우 Ctrl+V), 그 안 글자는 마우스로 끌어 복사할 수 있어요.';
   //  claude 는 codex 와 달리 **코드를 되받는다** — 왜 입력칸이 있는지 한 줄로 말해 준다.
   const PASTE_NOTE = '왜 코드를 다시 넣냐면: 로그인은 브라우저에서 끝나고, 그 결과를 우리 서버에서 도는 Claude 에게 전해 줘야 하기 때문이에요. 브라우저가 준 코드가 그 전달표입니다.';
-  const cp = (t) => `<code class="ob-copy" data-copy="${esc(t)}" title="누르면 복사돼요">${esc(t)}</code>`;
   //  버튼은 이 글 **위**에 있다(qHead 다음 줄) — «아래» 라고 쓰면 사람이 아래를 뒤진다(원준님 실측 2026-08-28).
   //  #2232 원준님(2026-08-28, 안 1) — 기본 노출은 **사람이 손을 대는 3걸음**만. Enter 로 넘기기만 하는 화면(글자 스타일·로그인 방법·
   //   보안 안내·폴더 신뢰…)은 `between` 한 문장으로 «정상이니 넘기세요» 만 말하고, 궁금한 사람만 그 자리에서 펼친다(`detail`,
@@ -2752,11 +2789,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ],
       note: '' },
     antigravity: {
-      help: '로그인 창에서 직접 하실 일은 세 가지뿐이에요.',
+      help: '이 자리에 뜨는 터미널에서 직접 하실 일은 세 가지뿐이에요.',
       steps: [
-        `위의 ${kbd('Gemini 로그인 창 열기')}를 누르면 새 탭에 <b>Antigravity</b>(Gemini 를 쓰는 CLI)가 켜진 터미널 창이 열려요.`,
-        `창의 <b>→ Click here to authenticate</b> 를 누르면(안 눌리면 그 줄의 주소를 복사해 브라우저에 붙여 여세요) Google 로그인 화면이 떠요 — Google 계정으로 로그인하고 허용을 누르세요. 코드를 물으면 브라우저에 나온 코드를 창에 붙여넣고 Enter.`,
-        `창에 글을 치는 입력칸(<b>&gt;</b> 표시, 오른쪽 아래에 <b>Gemini …</b> 모델 이름)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}.`,
+        `위의 ${kbd('Gemini 로그인 시작')}을 누르면 <b>이 자리에</b> <b>Antigravity</b>(Gemini 를 쓰는 CLI)가 켜진 터미널이 떠요 — 이 화면을 벗어나지 않아요.`,
+        `그 터미널의 <b>→ Click here to authenticate</b> 를 누르면(안 눌리면 그 줄의 주소를 복사해 브라우저에 붙여 여세요) Google 로그인 화면이 떠요 — Google 계정으로 로그인하고 허용을 누르세요. 코드를 물으면 브라우저에 나온 코드를 그 터미널에 붙여넣고 Enter.`,
+        `그 터미널에 글을 치는 입력칸(<b>&gt;</b> 표시, 오른쪽 아래에 <b>Gemini …</b> 모델 이름)이 뜨면 바로 아래 ${kbd('로그인했어요')}.`,
       ],
       //  #2232 원준님 실측 — 로그인 방법 → (인증) → 색 테마 → 사용 정보 동의 → 폴더 신뢰. 여기까지 지나야 입력칸이 나온다.
       between: `그 사이에 <b>로그인 방법 · 색 테마 · 사용 정보 동의 · 폴더 신뢰</b>를 묻는 화면이 나와요. 기본값 그대로 <b>Enter</b> 로 넘기면 됩니다(동의는 선택이에요 — 끄고 싶으면 펼쳐 보세요).`,
@@ -2882,7 +2919,53 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     };
     void tick();
   }
-  /* 종전 «로그인 창»(새 탭) — 인라인 대상이 아닌 하네스와, 인라인이 시작조차 못 했을 때의 탈출로. */
+  /* ★ 인라인 터미널(#2477) — 로그인 «창» 을 **이 자리에** 띄운다.
+   *
+   *   왜 새 탭이 아닌가: 온보딩도 안 끝난 사람에게 탭을 하나 더 주면 «어디로 돌아오지» 가 생긴다. 데스크톱
+   *   앱에서는 아예 **새 창**이라 더 심하다(#2055 가 codex·claude 에서 걷어낸 것과 같은 문제). 다만 그 둘은
+   *   주소·코드 두 값이면 끝나 터미널이 아예 필요 없었고, agy 는 아니다 — 그래서 «터미널을 없애는» 대신
+   *   **터미널을 이 자리로 가져온다**. 하네스가 무엇을 요구하든(TUI 든 붙여넣기든) 그 자리에서 보인다.
+   *
+   *   ⚠ 세션은 **한 번만** 만든다. 다시 누르면 이미 만든 세션의 액자를 그대로 쓴다 — 누를 때마다 새로 만들면
+   *    로그인 세션이 쌓이고, 사람은 «어느 창에서 로그인한 게 맞나» 를 알 수 없게 된다.
+   *   ⚠ 액자가 안 뜨거나 좁을 때의 탈출로는 **같은 세션**을 새 탭으로 여는 길이다(새 세션이 아니다).
+   */
+  let loginTermSession = null;   // { id, label } — 이 장면에서 만든 로그인 세션(한 번만)
+  async function startInlineTerminal(el, h, label, btn) {
+    const box = $('#lgTermBox', el), frame = $('#lgTermF', el);
+    const st = $('#lgTermSt', el), out = $('#lgTermOut', el);
+    //  ⚠ 여기서 openLoginWindow 를 부르지 않는다 — 그건 `await api(...)` 뒤에 window.open 을 하므로
+    //   사람이 누른 순간과 끊겨 **팝업차단에 조용히 막힌다**(#2055 에서 실제로 밟은 결함). 대신 사실만
+    //   말하고, 나가는 길은 하단의 **사람이 누르는** 상시 탈출로가 맡는다.
+    if (!box || !frame) { toast('이 자리에 터미널을 못 띄웠어요 — 아래 [창으로 열어서 로그인] 을 눌러 주세요.'); return; }
+    box.hidden = false;
+    const was = btn && btn.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
+    try {
+      if (!loginTermSession) {
+        const r: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
+          label: `내 계정 로그인 (${label})`, rootKey: 'personal', subpath: '', flags: {}, autoApprove: false, loginProfile: true,
+          ...(LOGIN_SESSION[h] || { harness: h }) }) });
+        const id = r && r.session && r.session.id;
+        if (!id) throw new Error('세션을 받지 못했어요');
+        loginTermSession = { id, label: (r.session && r.session.label) || label };
+      }
+      //  embed=1 — 상단바·파일 탐색기가 빠진 «터미널만» 판(#1744). 카드 안에 그대로 맞는다.
+      const src = sessionTermUrl(loginTermSession.id, { label: loginTermSession.label, embed: true });
+      if (frame.getAttribute('src') !== src) frame.setAttribute('src', src);
+      if (st) st.textContent = `${label} 로그인 창 — 이 자리에서 하시면 됩니다.`;
+      //  탈출로는 **같은 세션**을 크게 여는 것뿐이다(새 세션 금지 — 두 자리에서 로그인하게 된다).
+      if (out) { out.href = sessionTermUrl(loginTermSession.id, { label: loginTermSession.label }); out.hidden = false; }
+      if (btn) { btn.textContent = '터미널이 아래에 있어요'; }
+    } catch (e) {
+      //  막다른 액자를 만들지 않는다 — 세션을 못 만들었으면 그렇게 말하고 나갈 길을 남긴다.
+      if (st) st.textContent = `이 자리에 못 띄웠어요 — ${(e && e.message) || e}`;
+      if (out) { out.href = location.pathname + '?solo=1#/terminal'; out.hidden = false; out.textContent = 'AI 세션 목록에서 열기 ↗'; }
+      if (btn) { btn.disabled = false; btn.textContent = was; }
+    }
+  }
+
+  /* 종전 «로그인 창»(새 탭) — 인라인 카드·인라인 터미널이 시작조차 못 했을 때의 마지막 탈출로. */
   async function openLoginWindow(h, label) {
     const out: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
       label: `내 계정 로그인 (${label})`, rootKey: 'personal', subpath: '', flags: {}, autoApprove: false, loginProfile: true,
