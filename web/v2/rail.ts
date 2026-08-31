@@ -17,7 +17,8 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { el, navOn, personName, profileAvatar, state, toast, wsKey } from '../core.js';
+import { el, navOn, personName, profileAvatar, state, toast } from '../core.js';
+import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
 import { APPS, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
@@ -68,9 +69,11 @@ export function sectionDef(sec: RailSection): SecDef { return SECTIONS.find((s) 
 
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 const SEC_STORE = 'lively_v2_rail_sec';
-const HIDE_STORE = wsKey('lively_v2_rail_hidden');   // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
-const MAIN_STORE = wsKey('lively_v2_rail_main');     // 메인 그룹 순서 — 구역 · 리브 · 독에 고정한 앱을 **한 줄**로(사람이 정한 순서, 5차). 이 기기에 둔다.
-const PIN_STORE = wsKey('lively_v2_rail_pins');      // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
+const HIDE_STORE = deviceStore('lively_v2_rail_hidden');   // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
+//  메인 그룹 순서 — 구역 · 리브 · 독에 고정한 앱을 **한 줄**로(사람이 정한 순서, 5차).
+//  #2460 — **계정에 둔다**: 끌어서 정한 자리는 이 창의 사실이 아니라 그 사람의 결정이다.
+const MAIN_STORE = shellPrefStore('lively_v2_rail_main', 'list');
+const PIN_STORE = deviceStore('lively_v2_rail_pins');      // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
 const RECENT_N = 4;
 const NARROW_MQ = '(max-width: 900px)';   // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 
@@ -101,6 +104,20 @@ function init(): void {
     localStorage.removeItem('lively_v2_rail_open');   // 232px 펼침 모드(2차)의 기억 — 이제 뜻이 없다
   } catch (_) { /* 못 읽어도 홈·보임으로 선다 */ }
   void listWorkspaces().then((rows) => { if (rows.length) { spaces = rows; drawRail(); } });
+}
+
+/**
+ * 서버 정본이 캐시를 덮었다 — 레일 순서를 그 값으로 갈아끼운다 (#2460).
+ *  order 는 init 에서 한 번 읽어 모듈이 들고 도는 값이라, 다시 읽지 않으면 다른 기기에서 정한 자리가
+ *  이 창에 반영되지 않는다. 구역(SEC_STORE)·접힘(HIDE_STORE)은 이 기기의 것이라 건드리지 않는다.
+ */
+export function reloadRailPrefs(): void {
+  if (!inited) return;
+  try {
+    const raw = localStorage.getItem(MAIN_STORE);
+    order = raw ? normalizeOrder(JSON.parse(raw)) : defaultOrder();
+  } catch (_) { return; }   // 못 읽으면 들고 있던 순서 그대로
+  drawRail();
 }
 
 //  ⚠ init() 을 먼저 부른다 — 이 게터는 레일이 그려지기 **전에도** 불린다(부팅 때 탭이 되살아나는 순간 등).
@@ -551,6 +568,7 @@ function normalizeOrder(list: unknown): string[] {
 function saveOrder(next: string[]): void {
   order = normalizeOrder(next);
   try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
+  shellPrefsPush();   // #2460 — 사람이 끌어 정한 자리는 계정의 것이다
 }
 type MainEntry = { key: string } & ({ kind: 'sec'; sec: SecDef } | { kind: 'link'; link: LinkDef } | { kind: 'app'; app: AppDef });
 /** 메인 그룹 — 저장된 순서대로, 지금 켜진 것만. */

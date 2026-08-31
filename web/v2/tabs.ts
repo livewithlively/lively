@@ -17,7 +17,8 @@
 //    자리를 먹고, 그 탭만 규칙이 달라(못 닫힘·못 끌림) 줄 전체가 두 문법이 된다. 홈은 사이드바 [새 작업]이
 //    **새 탭으로** 여는 여느 화면이고, 그 탭에서 세션을 열면 그 자리가 곧 그 세션이 된다(브라우저 새 탭 문법).
 //  · **탭 끌어 순서 바꾸기** — 모든 탭이 같은 자격이라 어느 것이든 끌어 옮긴다.
-import { anchoredPopover, el, sv, wsKey } from '../core.js';
+import { anchoredPopover, el, sv } from '../core.js';
+import { deviceStore } from './shell-prefs.js';   // #2460 — 열린 창은 이 기기의 사실
 import { EMBEDDED } from './embed.js';
 
 export interface ShellTab {
@@ -55,7 +56,9 @@ export interface TabsHooks {
   onRename?(tab: ShellTab, name: string): Promise<void>;
 }
 
-const STORE_KEY = wsKey('lively_v2_tabs');   // #1875 — 열린 창은 **그 워크스페이스의 것**이다(net.ts wsKey 머리말)
+//  ⚠ 서버로 올리지 않는다(#2460) — 열린 창은 **그 기기의 사실**이다. 노트북에서 연 탭이 사무실
+//   데스크톱에서 되살아나면 그게 더 이상하다. 사람이 바뀌면 지워진다(lib/local-owner.ts).
+const STORE_KEY = deviceStore('lively_v2_tabs');   // #1875 — 열린 창은 **그 워크스페이스의 것**이다(net.ts wsKey 머리말)
 
 //  ⚠ 끼워 넣은 판(미리보기 프레임 안)은 **탭을 기억하지도 기억되지도 않는다** — 미리보기도 주소가 같은
 //   사이트라 저장소를 바깥과 공유한다. 복원하면 바깥이 보던 탭이 프레임 안에 통째로 되살아나 정작 보려던
