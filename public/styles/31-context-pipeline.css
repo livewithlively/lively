@@ -264,7 +264,7 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .ctx-finding { margin-top: 0; }
 .ctx-sev-high { border-left: 3px solid var(--coral); }
 .ctx-sev-warn { border-left: 3px solid var(--node-blue-soft); }
-.ctx-sev-note { border-left: 3px solid var(--muted-3); }
+.ctx-sev-note { border-left: 3px solid var(--muted-3-line); }
 .ctx-finding-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ctx-sev { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
 .ctx-sev-high .ctx-sev { color: var(--coral-text); }

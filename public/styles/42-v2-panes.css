@@ -163,7 +163,7 @@
 .pn-pop-x { flex: none; width: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted-3); cursor: pointer; }
 .pn-pop-x:hover { background: var(--bg-punch); color: var(--coral-text); }
 .pn-pop-foot { margin-top: 6px; padding-top: 7px; border-top: 1px solid var(--line-row); display: flex; justify-content: flex-end; gap: 14px; }
-.pn-check { width: 15px; height: 15px; margin-top: 1px; border: 1.5px solid var(--muted-3); border-radius: 4px; flex: none; }
+.pn-check { width: 15px; height: 15px; margin-top: 1px; border: 1.5px solid var(--muted-3-line); border-radius: 4px; flex: none; }
 .pn-check.on { border-color: var(--blue); background: var(--blue-fill); position: relative; }
 .pn-check.on::after { content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(42deg); }
 
@@ -212,7 +212,7 @@
 .pn-new-in:focus { outline: none; }
 .pn-new-send { flex: none; width: 30px; height: 30px; border: 0; border-radius: 9px; background: var(--blue-fill); color: var(--on-fill); display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .pn-new-send:hover { background: var(--blue-fill-deep); }
-.pn-new-send:disabled { background: var(--muted-3); cursor: default; }
+.pn-new-send:disabled { background: var(--muted-3-line); cursor: default; }
 /* 새 세션 창에 붙여넣은 첨부 — 보낼 것이 무엇인지 보내기 전에 보인다. */
 .pn-att { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 2px 7px; }
 .pn-att[hidden] { display: none; }
@@ -329,7 +329,7 @@
 .pn-trow { display: flex; align-items: flex-start; gap: 9px; padding: 7px 9px; border-radius: 8px; font-size: 12.5px; }
 .pn-trow:hover { background: var(--bg-punch); }
 .pn-trow.done .n { color: var(--muted); text-decoration: line-through; }
-.pn-tcheck { flex: none; width: 16px; height: 16px; margin-top: 1px; border: 1.5px solid var(--muted-3); border-radius: 5px; background: none; cursor: pointer; position: relative; }
+.pn-tcheck { flex: none; width: 16px; height: 16px; margin-top: 1px; border: 1.5px solid var(--muted-3-line); border-radius: 5px; background: none; cursor: pointer; position: relative; }
 .pn-tcheck:hover { border-color: var(--blue); }
 .pn-tcheck.on { border-color: var(--mint-deep); background: var(--mint-deep); }
 .pn-tcheck.on::after { content: ''; position: absolute; left: 4.5px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(42deg); }
@@ -519,7 +519,7 @@ webview.pn-webframe { display: flex; }
 .pn-prev-row:hover{background:var(--bg-punch);border-color:var(--line)}
 .pn-prev-row:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
 .pn-prev-row.is-on{background:var(--bg-punch);border-color:var(--blue)}
-.pn-prev-dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px;background:var(--muted-3)}
+.pn-prev-dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px;background:var(--muted-3-line)}
 .pn-prev-dot--on{background:#0e9f87}
 .pn-prev-dot--busy{background:#a9660c}
 .pn-prev-dot--bad{background:#b3261e}

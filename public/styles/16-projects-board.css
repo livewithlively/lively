@@ -51,7 +51,7 @@
 
 /* ════ 클릭업식 행 호버 컨트롤 + 다중선택 하단 바 ════ */
 /* 좌측 체크박스 — 평소 숨김(자리 유지, 헤더엔 동폭 spacer 로 정렬), 행 호버/선택 시 표시. */
-.pjv-row-check { position: relative; flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1.6px solid var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--on-fill); font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s ease, background-color .12s ease, border-color .12s ease; }
+.pjv-row-check { position: relative; flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1.6px solid var(--muted-3-line); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--on-fill); font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s ease, background-color .12s ease, border-color .12s ease; }
 /* 클릭 판정 확대(#366) — 16px 박스는 너무 예민하니 주변 셀까지 히트영역을 넓힌다(보이는 크기는 그대로). */
 .pjv-row-check::before { content: ''; position: absolute; top: -9px; bottom: -9px; left: -8px; right: -6px; }
 .pjv-row-check-spacer { flex: none; width: 16px; }
@@ -173,7 +173,7 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .pjv-proj-faces .project-face { width: 24px; height: 24px; font-size: 10px; }
 .pjv-proj-empty { padding: 12px 8px; color: var(--muted-2); font-size: 13px; }
 /* 선택(일괄삭제) 모드 체크박스 — 상태 동그라미 자리 */
-.pjv-proj-check { flex: none; width: 18px; height: 18px; border-radius: 6px; border: 1.6px solid var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--on-fill); font-size: 11px; line-height: 1; }
+.pjv-proj-check { flex: none; width: 18px; height: 18px; border-radius: 6px; border: 1.6px solid var(--muted-3-line); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--on-fill); font-size: 11px; line-height: 1; }
 .pjv-proj-check:hover { border-color: var(--blue); }
 .pjv-proj-check.on { background: var(--blue-fill); border-color: var(--blue); }
 .pjv-proj-check.disabled { cursor: default; opacity: .4; }
@@ -370,7 +370,7 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-side-head-add { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 1px; height: 26px; padding: 0 4px 0 6px; margin-left: 3px;
   border: 1px solid var(--line); border-radius: 9px; background: var(--bg); cursor: pointer; color: var(--ink);
   box-shadow: 0 1px 2px rgba(20, 35, 59, .07); transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
-.pjv-side-head-add:hover { background: var(--bg-tint); border-color: var(--muted-3); box-shadow: 0 1px 3px rgba(20, 35, 59, .12); }
+.pjv-side-head-add:hover { background: var(--bg-tint); border-color: var(--muted-3-line); box-shadow: 0 1px 3px rgba(20, 35, 59, .12); }
 .pjv-side-head-add:active { background: var(--bg-tint-2); box-shadow: none; }
 .pjv-side-head-add svg:last-child { color: var(--muted-2); }
 .pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 10px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--ink-sub); }
@@ -398,7 +398,7 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-side-navitem.active .pjv-side-navcount { color: var(--ink-sub); }
 .pjv-side-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
 .pjv-side-dot.all { background: linear-gradient(135deg, var(--blue), var(--purple)); }
-.pjv-side-dot.none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-3); }
+.pjv-side-dot.none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-3-line); }
 /* 묶음 폴더 아이콘 — 동그란 점 대신 '색을 채운 폴더'로 상위 분류 느낌(#356). */
 .pjv-bundle-ic { flex: none; width: 18px; height: 18px; display: block; }
 .pjv-side-navitem.active .pjv-bundle-ic.none path { stroke: var(--blue); }

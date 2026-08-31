@@ -91,7 +91,7 @@
 .pjv-gt-caret { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 10px;
   padding: 2px; line-height: 1; transition: transform .12s; }
 .pjv-gt-caret.off { transform: rotate(-90deg); }
-.pjv-gt-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-3); flex: 0 0 auto; }
+.pjv-gt-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-3-line); flex: 0 0 auto; }
 .pjv-gt-name { font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjv-gt-name.group { font-weight: 700; color: var(--ink); }
 .pjv-gt-count { font-size: 11px; color: var(--muted-2); flex: 0 0 auto; }
@@ -115,13 +115,13 @@
 
 /* 롤업 바 — 리스트 단위. 완료 비율만큼 채운다(ClickUp: 완료 태스크 ÷ 전체). 태스크 바보다 얇아 위계가 보인다. */
 .pjv-gt-roll { position: absolute; top: 14px; height: 8px; border-radius: 4px; overflow: hidden;
-  background: color-mix(in srgb, var(--muted-3) 45%, var(--bg)); }
+  background: color-mix(in srgb, var(--muted-3-line) 45%, var(--bg)); }
 .pjv-gt-roll-fill { height: 100%; background: color-mix(in srgb, var(--mint) 55%, var(--bg)); }
 
 /* 의존선 — 직각 elbow + 화살촉. 데이터가 있을 때만 그린다. */
 .pjv-gt-links { position: absolute; top: 44px; pointer-events: none; z-index: 1; }
-.pjv-gt-link { fill: none; stroke: var(--muted-3); stroke-width: 1; }
-.pjv-gt-arrow { fill: var(--muted-3); }
+.pjv-gt-link { fill: none; stroke: var(--muted-3-line); stroke-width: 1; }
+.pjv-gt-arrow { fill: var(--muted-3-line); }
 
 /* 오늘 — 세로선 + 배지. 좌측 시트(z-index 3)보다 아래로 깔려 시트를 뚫지 않는다. */
 .pjv-gt-todayline { position: absolute; top: 44px; bottom: 0; width: 1px; background: var(--blue-fill); opacity: .5; z-index: 2; }
@@ -158,7 +158,7 @@
 
 /* 실적 띠 — 계획 뒤에 흐리게. 계획 대비 실제를 대조하는 참고선이지 주인공이 아니다. */
 .pjv-gt-actual { position: absolute; top: 13px; height: 10px; border-radius: 3px;
-  background: color-mix(in srgb, var(--muted-2) 18%, var(--bg)); border: 1px dashed var(--muted-3); }
+  background: color-mix(in srgb, var(--muted-2) 18%, var(--bg)); border: 1px dashed var(--muted-3-line); }
 
 /* 일정 없는 행의 트랙 — 클릭하면 그 날짜로 일정이 잡힌다. 호버로 '여기 놓을 수 있다'를 알린다. */
 .pjv-gt-track.schedulable { cursor: copy; }

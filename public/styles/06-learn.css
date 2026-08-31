@@ -246,7 +246,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 토글 칩(git 인증 팝업 SSH/HTTPS 등) — 무스타일(브라우저 기본) 교체(#762). */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink-sub); cursor: pointer; transition: border-color .12s, color .12s, background .12s; }
-.chip:hover { border-color: var(--muted-3); color: var(--ink); }
+.chip:hover { border-color: var(--muted-3-line); color: var(--ink); }
 .chip.on { background: var(--blue-fill); border-color: var(--blue); color: var(--on-fill); }
 /* 서비스 로그인 아이템 행(등록 자격·OAuth 커넥터 공통) — 카드 안 목록을 균일한 보더 행으로(#762). */
 .svc-list { display: flex; flex-direction: column; gap: 8px; }
@@ -280,7 +280,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .hgroup-more { padding: 2px 0 10px; }
 /* 켬/끔 스위치 — 현재 상태는 형태로(파랑·오른쪽=켜짐), 기본값·내 변경 여부는 옆 글이 말한다(#1085). */
 .sw { position: relative; flex: none; width: 40px; height: 23px; padding: 0; border: 0; border-radius: 999px;
-  background: var(--muted-3); cursor: pointer; transition: background .15s ease; }
+  background: var(--muted-3-line); cursor: pointer; transition: background .15s ease; }
 .sw.on { background: var(--blue-fill); }
 .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%;
   background: var(--surface); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .25); transition: transform .15s ease; }

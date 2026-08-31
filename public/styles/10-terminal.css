@@ -196,7 +196,7 @@
 .tsess-sect-chev.off { transform: rotate(-90deg); }
 .tsess-sect-n { font-weight: 600; color: var(--ink-note); font-variant-numeric: tabular-nums; }
 /* 카드 = 좌측 상태색 바 + 정보(2행) + 우측 액션. 오프라인은 옅게(흰 배경). 접속중은 민트 인셋. */
-.tsess-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--muted-3); border-radius: 12px; background: var(--bg-tint); }
+.tsess-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--muted-3-line); border-radius: 12px; background: var(--bg-tint); }
 .tsess-card.tsess-busy { border-left-color: var(--warn); }
 .tsess-card.tsess-waiting { border-left-color: var(--coral); }
 .tsess-card.tsess-idle { border-left-color: var(--mint-deep); }

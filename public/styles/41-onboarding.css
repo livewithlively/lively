@@ -6,11 +6,11 @@
    (base 는 90-dark.css 가 두 갈래로 덮는다), base 에 대응이 없는 것만 아래 다크 블록에서 값을 바꾼다.
    ⚠ 새 색을 넣을 땐 **하드코딩 대신 여기 토큰을 늘린다** — 이 화면은 셸 밖(민낯)에서도 뜨므로 스스로 성립해야 한다. */
 .ob-root{
-  --ghost:var(--muted-3); --blue-soft:var(--bg-tint-2); --hover:var(--bg-tint); --card:var(--surface);
+  --ghost:var(--muted-3-line); --blue-soft:var(--bg-tint-2); --hover:var(--bg-tint); --card:var(--surface);
   --ob-sub:var(--line-row); --ob-sub-hover:var(--line);
   --ob-on-fill:#fff;         /* 채운 파랑(--blue-fill, 두 테마 같은 값) 위의 글자 */
   --ob-on-ink:var(--bg);     /* --ink 로 채운 자리(토스트·걸음 번호·보내기) 위의 글자 — 테마를 따라 뒤집힌다 */
-  --ob-mint-ring:#CDEFE3; --ob-amber:#A9750F; --ob-amber-soft:#FFF4D6;
+  --ob-mint-ring:#CDEFE3; --ob-mint-ic:#0C8265;   /* 민트 틴트 위 4.54 — --mint-deep(3.04)은 배경으로 27곳 쓰여 토큰째 못 내린다 */ --ob-amber:#A9750F; --ob-amber-soft:#FFF4D6;
   /* 파일 종류 색 — 흰 글자를 얹는 **채움**이라 두 테마에서 대체로 같다. 다크에서 점으로 보기 어두운 둘만 아래에서 밝힌다. */
   --ob-f-doc:#2f6bff; --ob-f-sheet:#1a9c5b; --ob-f-slide:#e0741a; --ob-f-img:#8b5cf6;
   --ob-f-code:#0f766e; --ob-f-zip:#a16207; --ob-f-etc:#6b7280;
@@ -19,12 +19,12 @@
 /*  다크 — base 에 대응 토큰이 없는 것만. **두 선택자를 다 쓴다**: 명시 선택(data-theme=dark)과
     «시스템 설정»(스탬프 없음 → prefers-color-scheme). 하나만 쓰면 그 갈래에서 조용히 밝은 값이 남는다. */
 :root[data-theme="dark"] .ob-root{
-  --ob-mint-ring:rgba(61,189,151,.38); --ob-amber:#F0A32B; --ob-amber-soft:#33280F;
+  --ob-mint-ring:rgba(61,189,151,.38); --ob-mint-ic:var(--mint-deep); --ob-amber:#F0A32B; --ob-amber-soft:#33280F;
   --ob-f-code:#17A392; --ob-f-zip:#C98A16;
   --shadow:0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.45) }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]) .ob-root{
-    --ob-mint-ring:rgba(61,189,151,.38); --ob-amber:#F0A32B; --ob-amber-soft:#33280F;
+    --ob-mint-ring:rgba(61,189,151,.38); --ob-mint-ic:var(--mint-deep); --ob-amber:#F0A32B; --ob-amber-soft:#33280F;
     --ob-f-code:#17A392; --ob-f-zip:#C98A16;
     --shadow:0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.45) } }
 .ob-root *{box-sizing:border-box}
@@ -51,14 +51,14 @@
     빈 자리 뒤에서 멈춘다(줄 가운데에 뜬다). 줄 높이는 .ob-crumb 의 min-height 가 지킨다. */
 .ob-root.ob-stage-name .ob-crumb>*:not(.ob-q-exit){display:none}
 .ob-crumb .ob-lm{width:18px;height:18px;font-size:9px}
-.ob-crumb .ob-sep{color:var(--ghost)}
+.ob-crumb .ob-sep{color:var(--muted-3)}   /* 선 토큰(--ghost)이 아니라 글자 사다리의 맨 아래 칸 — 1.62 였다(#2232) */
 
 /* 막1·막2 — 가운데 질문 기둥 (노션 p1~p4 참조) */
 .ob-qwrap{flex:1; overflow-y:auto; display:flex; justify-content:center}
 .ob-qcol{width:min(560px, 92%); padding:8vh 0 60px; animation:rise .45s ease-out}
 .ob-qcol.ob-wide{width:min(820px, 94%)}
 @keyframes rise{from{opacity:0; transform:translateY(10px)}to{opacity:1; transform:none}}
-.ob-q-ic{width:40px; height:40px; border-radius:50%; background:var(--bg-success); border:1px solid var(--ob-mint-ring); display:grid; place-items:center; color:var(--mint-deep); font-size:15px; font-weight:800; margin-bottom:14px}
+.ob-q-ic{width:40px; height:40px; border-radius:50%; background:var(--bg-success); border:1px solid var(--ob-mint-ring); display:grid; place-items:center; color:var(--ob-mint-ic); font-size:15px; font-weight:800; margin-bottom:14px}
 .ob-q-prog{display:flex; gap:4px; margin:0 0 22px; width:96px}
 .ob-q-prog i{flex:1; height:3px; border-radius:2px; background:var(--ghost)}
 .ob-q-prog i.ob-on,.ob-q-prog button.ob-on{background:var(--ink)}
@@ -68,7 +68,7 @@
 /* 노션식 선택 카드 */
 .ob-opt-cards{display:flex; flex-direction:column; gap:10px}
 .ob-opt-card{display:flex; align-items:center; gap:12px; text-align:left; border:1px solid var(--line); border-radius:10px; padding:13px 15px; background:var(--card); transition:border-color .12s, box-shadow .12s}
-.ob-opt-card:hover{border-color:var(--muted-3); box-shadow:var(--shadow)}
+.ob-opt-card:hover{border-color:var(--muted-3-line); box-shadow:var(--shadow)}
 .ob-opt-card.ob-on{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
 .ob-opt-card .ob-oc-ic{width:22px; display:grid; place-items:center; flex:0 0 22px}
 .ob-blogo{width:17px; height:17px; flex:none; display:block}
@@ -76,8 +76,10 @@
 .ob-oc-st{margin-left:auto; display:grid; place-items:center; width:16px; flex:0 0 16px}
 .ob-opt-card .ob-oc-t{font-weight:600; font-size:14.5px}
 .ob-opt-card .ob-oc-d{display:block; font-size:12.5px; color:var(--muted); margin-top:1px}
-.ob-opt-card .ob-oc-chk{margin-left:auto; width:16px; height:16px; border-radius:4px; border:1.5px solid var(--ghost); flex:0 0 16px; display:grid; place-items:center; color:var(--ob-on-fill); font-size:10px}
-.ob-opt-card.ob-on .ob-oc-chk{background:var(--blue-fill); border-color:var(--blue-fill)}
+.ob-opt-card .ob-oc-chk{margin-left:auto; width:16px; height:16px; border-radius:4px; border:1.5px solid var(--ghost); flex:0 0 16px; display:grid; place-items:center; color:transparent; font-size:10px}
+/*  ↑ 안 고른 상태의 체크는 **안 보이는 게 맞다**. 예전엔 흰 글자(--ob-on-fill)로 숨겼는데, 그건 «흰 판 위 흰 글자»와
+    글자 그대로 같은 코드라 대비 감사가 매번 19건씩 울렸다. 뜻대로 transparent 로 적고, 고른 순간 색을 준다. */
+.ob-opt-card.ob-on .ob-oc-chk{background:var(--blue-fill); border-color:var(--blue-fill); color:var(--ob-on-fill)}
 .ob-opt-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px; margin-bottom:10px}
 .ob-opt-grid .ob-opt-card{padding:9px 11px; gap:9px}
 .ob-opt-grid .ob-opt-card .ob-oc-t{font-size:13.5px}
@@ -103,7 +105,7 @@
 .ob-chat{flex:1; overflow-y:auto; display:flex; justify-content:center}
 .ob-thread{width:min(680px,94%); padding:26px 0 20px; display:flex; flex-direction:column; gap:14px}
 .ob-msg{display:flex; gap:10px; animation:rise .35s ease-out}
-.ob-msg .ob-ava{width:26px; height:26px; border-radius:50%; background:var(--bg-success); border:1px solid var(--ob-mint-ring); flex:0 0 26px; display:grid; place-items:center; color:var(--mint-deep); font-size:11px; font-weight:800; margin-top:2px}
+.ob-msg .ob-ava{width:26px; height:26px; border-radius:50%; background:var(--bg-success); border:1px solid var(--ob-mint-ring); flex:0 0 26px; display:grid; place-items:center; color:var(--ob-mint-ic); font-size:11px; font-weight:800; margin-top:2px}
 .ob-msg .ob-body{max-width:86%; font-size:14.5px; line-height:1.65}
 .ob-msg .ob-body p{margin-bottom:6px}
 .ob-msg .ob-body p:last-child{margin-bottom:0}
@@ -111,7 +113,7 @@
 .ob-msg.ob-user .ob-body{background:var(--ob-sub); border-radius:14px; padding:8px 14px; font-size:14px}
 .ob-chips{display:flex; flex-wrap:wrap; gap:8px; padding-left:36px; animation:rise .35s ease-out}
 .ob-chip{border:1px solid var(--line); border-radius:100px; padding:7px 14px; font-size:13.5px; font-weight:500; background:var(--card)}
-.ob-chip:hover{background:var(--hover); border-color:var(--muted-3)}
+.ob-chip:hover{background:var(--hover); border-color:var(--muted-3-line)}
 .ob-chip.ob-cta{background:var(--blue-soft); color:var(--blue); border-color:transparent; font-weight:600}
 .ob-chip.ob-cta:hover{background:var(--bg-note)}
 .ob-chip.ob-ghost{color:var(--ink-sub)}
@@ -119,7 +121,7 @@
 .ob-tag{border:1px solid var(--line); border-radius:6px; padding:3px 9px; font-size:12.5px; color:var(--ink-sub); background:var(--canvas)}
 .ob-tag b{color:var(--ink); font-variant-numeric:tabular-nums}
 .ob-excard{border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin:8px 0 0; cursor:pointer; transition:border-color .12s, box-shadow .12s; background:var(--card)}
-.ob-excard:hover{border-color:var(--muted-3); box-shadow:var(--shadow)}
+.ob-excard:hover{border-color:var(--muted-3-line); box-shadow:var(--shadow)}
 .ob-excard .ob-xt{font-size:14px; font-weight:600; margin-bottom:5px}
 .ob-excard .ob-xd{font-size:12.5px; color:var(--muted)}
 .ob-excard .ob-xd b{color:var(--ob-amber); font-weight:600}
@@ -235,7 +237,7 @@
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
 .ob-cmd-copy{flex:none; border:1px solid var(--line); border-radius:7px; background:var(--card);
   padding:5px 11px; font-size:12.5px; font-weight:600; color:var(--ink-sub)}
-.ob-cmd-copy:hover{border-color:var(--muted-3); color:var(--ink)}
+.ob-cmd-copy:hover{border-color:var(--muted-3-line); color:var(--ink)}
 .ob-cmd-copy.ob-on{border-color:var(--blue); color:var(--blue)}
 
 .ob-kbd{display:inline-block; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px;
@@ -271,7 +273,7 @@
 .ob-opt-card.ob-soon:hover{border-color:var(--line); box-shadow:none}
 .ob-opt-card.ob-soon .ob-oc-d{color:var(--ob-amber); font-weight:600}
 .ob-opt-card.ob-soon .ob-blogo{filter:grayscale(1)}
-.ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:var(--muted-3); box-shadow:var(--shadow)}
+.ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:var(--muted-3-line); box-shadow:var(--shadow)}
 /* 펼쳐 둔 카드 — 아래 패널과 한 덩어리로 읽히게 아랫모서리를 편다. */
 .ob-opt-card.ob-open{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue);
   border-bottom-left-radius:0; border-bottom-right-radius:0}

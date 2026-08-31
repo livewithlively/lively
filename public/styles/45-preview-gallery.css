@@ -23,7 +23,7 @@
 /* 창 타이틀바 — 신호등은 무채(컬러 예산 §P1: 카드마다 원색 점 셋을 깔지 않는다). 상태만 색을 갖는다(아래 pvg-dot). */
 .pvg-bar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; background: var(--bg-tint); border-bottom: 1px solid var(--line); }
 .pvg-lights { display: inline-flex; gap: 4px; flex: none; }
-.pvg-lights i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-3); }
+.pvg-lights i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-3-line); }
 .pvg-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; color: var(--ink); }
 
 /* 화면 골격 — 추상 페이지 미니어처(스크린샷이 없으니 내용을 아는 척하지 않는다). */

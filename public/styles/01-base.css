@@ -13,7 +13,7 @@
   --canvas:        #E6EBF3;
 
   /* 브랜드 */
-  --blue:          #2D6BF0;
+  --blue:          #2263EF;   /* 5.12 — 글자·라인용. 채움은 --blue-fill(#2D6BF0) 이 따로 유지한다 */
   --blue-deep:     #1E54CC;
   --mint:          #16C79A;
   --mint-deep:     #0FA37E;
@@ -24,14 +24,20 @@
 
   /* 텍스트 */
   --ink:           #15233B;
-  --ink-sub:       #5A6B85;
-  --ink-note:      #2D4A7A;
-  --muted:         #8A99B5;
-  --muted-2:       #A6B2C8;
-  --muted-3:       #C2CCDD;
-  --muted-head:    #7A88A3;
+  /* ── 글자 사다리(라이트) — 흰 배경 대비를 괄호에 적는다. 아래로 내려갈수록 옅어지되 **전부 WCAG AA(4.5) 이상**.
+     #2232(원준님 2026-08-31 "light 대비도 고쳐줘") 전에는 muted 2.87 · muted-2 2.14 · muted-3 1.62 로 본문이 AA 미달이었다.
+     ⚠ 이 계열을 더 옅게 만들지 말 것 — 옅게 쓰고 싶으면 글자 크기를 키우지 말고 --muted-3 까지만 내려간다.
+     실선·면에 쓰던 옅은 값은 --muted-3-line 으로 갈라 두었다(아래). ── */
+  --ink-sub:       #49566B;   /* 7.43 */
+  --ink-note:      #2D4A7A;   /* 8.85 */
+  --muted-head:    #535F78;   /* 6.41 — 섹션 머리 라벨 */
+  --muted:         #576889;   /* 5.61 — 보조 본문(가장 많이 쓰는 흐린 글자) */
+  --muted-2:       #5D7197;   /* 4.91 — 3차 글자·자리표시자 */
+  --muted-3:       #5D77A5;   /* 4.52 — 가장 옅은 글자(메타·크기·출처) */
 
   /* 라인/보더 */
+  --muted-3-line:  #C2CCDD;   /* 옛 --muted-3 값 그대로 — 실선·작은 면 전용(글자 아님). 갈라 두지 않으면
+                                 글자를 AA 로 올릴 때 머리카락 선까지 같이 굵어 보인다. */
   --line:          #E6ECF5;
   --line-row:      #EDF1F8;
   --line-net:      #DCE6F5;
@@ -54,7 +60,7 @@
   --ok-fill:       #16A37F;   /* (theme-invariant) */
   --danger-fill:   #E5484D;   /* (theme-invariant) */
   --coral-fill:    #E4756B;   /* (theme-invariant) 파괴 버튼 채움 */
-  --accent:        #5B6CFF;   /* 신형 화면 인디고 액센트(구 유령 --accent 정규화 — A1) */
+  --accent:        #4558FF;   /* 5.13 — 신형 화면 인디고 액센트(구 유령 --accent 정규화 — A1) */
   --danger:        #E5484D;
   --danger-deep:   #D6453C;
   --danger-bg:     #FDECEC;
@@ -146,7 +152,7 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { width: 0; height: 0; display:
 /* 오버레이 스크롤바 — 우측 끝에 겹쳐 뜨는 얇은 막대. 스크롤 가능할 때만(.on) 은은히, 스크롤 중·호버 시(.act) 진하게. */
 .page-scroll { position: fixed; right: 2px; width: 12px; z-index: 60; pointer-events: none; }
 .page-scroll-thumb { position: absolute; right: 2px; top: 0; width: 6px; border-radius: 999px;
-  background: var(--muted-3); opacity: 0; pointer-events: auto; cursor: default;
+  background: var(--muted-3-line); opacity: 0; pointer-events: auto; cursor: default;
   transition: opacity .35s ease, width .12s ease, background .12s ease; }
 .page-scroll.on .page-scroll-thumb { opacity: .26; }
 .page-scroll.on.act .page-scroll-thumb { opacity: .82; }

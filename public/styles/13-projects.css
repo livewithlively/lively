@@ -66,7 +66,7 @@
 .pjv-trow-subs[hidden] { display: none; }
 
 /* 상태 점 — 빈 원(할 일)·반채움(진행)·체크(완료) */
-.pjv-status-dot { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px dashed var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--on-fill); font-size: 10px; line-height: 1; transition: border-color .13s ease, background-color .13s ease; }
+.pjv-status-dot { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px dashed var(--muted-3-line); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--on-fill); font-size: 10px; line-height: 1; transition: border-color .13s ease, background-color .13s ease; }
 .pjv-status-dot:hover { border-color: var(--blue); }
 .pjv-status-dot.sm { width: 15px; height: 15px; font-size: 9px; cursor: default; }
 /* 할 일 = 점선 원(클릭업식). 진행 중·완료는 실선으로 되돌린다. */
@@ -130,7 +130,7 @@
 .pjv-closed-ic { width: 13px; height: 13px; flex: none; }
 .pjv-closed-pop { min-width: 172px; padding: 4px; }
 .pjv-closed-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 9px; font-size: 13px; color: var(--ink); }
-.pjv-switch { position: relative; flex: none; width: 34px; height: 20px; border: none; border-radius: 999px; background: var(--muted-3); cursor: pointer; padding: 0; transition: background .15s ease; }
+.pjv-switch { position: relative; flex: none; width: 34px; height: 20px; border: none; border-radius: 999px; background: var(--muted-3-line); cursor: pointer; padding: 0; transition: background .15s ease; }
 .pjv-switch.on { background: var(--blue-fill); }
 .pjv-switch-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); transition: transform .15s ease; }
 .pjv-switch.on .pjv-switch-knob { transform: translateX(14px); }
