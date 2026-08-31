@@ -170,8 +170,34 @@ export async function sweepWikiLinks(): Promise<{ docs: number; scanned: number;
   return { docs, scanned: all.length, edges: froms.length, dangling };
 }
 
+/**
+ * 이 자료에서 **이미 파생된** 지식 목록(#1631) — 중복 증류 판정의 재료. 실패는 빈 배열(모름은 경고 없음).
+ */
+export async function derivedPeersOf(sourceId: number): Promise<Array<{ name: string; relation: string }>> {
+  try {
+    const r = await itemsPool.query(
+      `SELECT ks.name, ks.relation FROM knowledge_source ks
+        JOIN knowledge k ON k.name = ks.name AND k.lifecycle = 'active'
+       WHERE ks.source_id = $1`, [sourceId]);
+    return r.rows.map((x) => ({ name: String(x.name), relation: String(x.relation) }));
+  } catch { return []; }
+}
+
 // 지식→자료 인용(knowledge_source). relation=derived_from(증류)|cites(참조).
-export async function linkKnowledgeSource(name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx): Promise<InheritResult | null> {
+export async function linkKnowledgeSource(name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx): Promise<(InheritResult & { dupNote?: string | null }) | { dupNote: string | null } | null> {
+  //  ⚠ 알림은 **반환값**으로 준다 — 모듈 전역에 담으면 동시 호출(배치 병렬)에서 남의 알림을 집어 온다.
+  let dupNote: string | null = null;
+  //  #1631 — 이 자료에서 파생된 지식이 이미 있으면 **막지 않고 알린다**(증류 세션이 그 자리에서 합칠 수 있게).
+  //   실측: 같은 파일이 3초 간격으로 지식 2건이 됐다(슬러그만 다름). 중복 방지가 전적으로 모델 자율이라
+  //   건너뛰면 그대로 통과한다. 한 자료에서 여러 지식이 나오는 정당한 경우가 있어 **거절은 하지 않는다.**
+  if (relation === "derived_from") {
+    const { checkDerivedDup } = await import("../org/distill/derived-dup.js");
+    const notice = checkDerivedDup(await derivedPeersOf(sourceId), name);
+    if (notice.duplicate) {
+      logger.warn({ name, sourceId, siblings: notice.siblings }, "[distill] 한 자료에서 지식이 여러 개 파생됐다 — 중복일 수 있다(#1631)");
+      dupNote = notice.note;
+    }
+  }
   await itemsPool.query(
     `INSERT INTO knowledge_source(name, source_id, relation, created_at)
      VALUES($1,$2,$3,now()) ON CONFLICT (name, source_id, relation) DO NOTHING`,
@@ -182,7 +208,7 @@ export async function linkKnowledgeSource(name: string, sourceId: number, relati
   if (relation !== "derived_from") return null;
   const inherited = await inheritSourceVisibility(name, sourceId, ctx)
     .catch((e) => { logger.warn({ name, sourceId, err: (e as Error)?.message }, "[source-vis] 상속 실패"); return null; });
-  return inherited;
+  return inherited ? { ...inherited, dupNote } : { dupNote };
 }
 export async function unlinkKnowledgeSource(name: string, sourceId: number, relation: string, ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(`DELETE FROM knowledge_source WHERE name=$1 AND source_id=$2 AND relation=$3`, [name, sourceId, relation]);

@@ -167,8 +167,11 @@ const sourceLinkKnowledge: Capability = {
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     if (input.unlink) { await unlinkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx); return { unlinked: true }; }
-    await linkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx);
-    return { linked: true };
+    const r = await linkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx);
+    //  #1631 — 이 자료에서 파생된 지식이 이미 있으면 그 사실을 **응답에 실어** 알린다(막지는 않는다).
+    //   증류 세션이 그 자리에서 «합칠까 그대로 둘까» 를 정할 수 있어야 중복이 조용히 쌓이지 않는다.
+    const dupNote = (r as { dupNote?: string | null } | null)?.dupNote ?? null;
+    return dupNote ? { linked: true, warning: dupNote } : { linked: true };
   },
 };
 
