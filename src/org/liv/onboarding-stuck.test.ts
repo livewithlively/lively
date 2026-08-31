@@ -57,11 +57,25 @@ test("④ 상한을 넘기면 **사실대로 말한다** — 조용히 넘어가
 //  ★ 상한에 안 걸리고 **정상 완료**하는 길이 훨씬 흔하다(등록 축을 고쳤으니 이제 그쪽이 기본이다).
 //   그 길에서 아무 말도 안 하면, 8개를 올린 사람이 5건만 들어간 것을 모르고 넘어간다.
 test("④' 정상 완료·0건 완료에서도 등록 못 한 파일을 말한다", () => {
-  assert.match(READ, /function sayFail\(\)|const sayFail = /, "실패를 말하는 자리가 없다");
+  assert.match(SRC, /function sayFail\(\)/, "실패를 말하는 자리가 없다");
   const calls = (READ.match(/sayFail\(\)/g) || []).length;
-  assert.ok(calls >= 3, `sayFail 이 ${calls}군데서만 불린다 — 정상완료·상한·0건 세 자리에서 불려야 한다`);
+  assert.ok(calls >= 3, `startReading 안에서 sayFail 이 ${calls}군데서만 불린다 — 정상완료·상한·0건 세 자리다`);
   assert.match(READ, /if \(S\.read\.done >= target\(\)\) \{ finish\(\); sayFail\(\); return; \}/,
     "정상 완료 때 말하지 않는다");
+});
+
+//  ★ 실측(2026-08-31): 안내는 **떴다가 지워졌다.** enterChat 이 대화창을 비우기 때문이다.
+//   말했다는 표시(_saidFail)만 남아서, 사람은 «3건은 못 넣었어요» 를 **영영 못 본 채** 지나갔다.
+//   지운 쪽이 다시 말할 책임을 진다.
+test("④'' 대화창을 비운 뒤 다시 말한다 — 띄웠다 지우면 말 안 한 것과 같다", () => {
+  const chat = SRC.slice(SRC.indexOf("async function enterChat("));
+  const body = chat.slice(0, chat.indexOf("chatStep('b1'"));
+  assert.match(body, /\$\('#thread'\)\.innerHTML = '';\s*\n\s*S\._saidFail = false;/,
+    "대화창을 비우면서 «말했다» 표시를 안 지운다 — 안내가 지워진 채 다시 안 나온다");
+  assert.match(body, /\n\s*sayFail\(\);/, "비운 뒤 다시 말하지 않는다");
+  //  sayFail 은 startReading 바깥에 있어야 enterChat 이 부를 수 있다(읽기가 이미 끝났으면 startReading 은 즉시 return 한다).
+  assert.doesNotMatch(READ, /function sayFail\(\)/,
+    "sayFail 이 startReading 안에 갇혀 있다 — enterChat 이 못 부른다");
 });
 
 //  사유는 **서버가 준 것만** 옮긴다. 지어내면 «압축이라 안 됩니다» 를 텍스트 파일에도 말하게 된다.
