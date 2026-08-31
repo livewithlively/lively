@@ -103,9 +103,6 @@ t("[5] answer 선언 하네스는 모든 행동에 키를 답하고, caps.read/a
     if (a.answer) for (const act of CHAT_ACTIONS) assert.ok(a.answer(act), `${a.key}.answer(${act})`);
     assert.equal(chatIoCaps(a.key).answer, !!a.answer, `${a.key} caps.answer`);
     assert.equal(chatIoCaps(a.key).read, !!a.parse, `${a.key} caps.read`);
-    //  #2439 — chatFirst(정책)는 read(능력)에서 파생된다. 대화를 못 읽는 하네스를 대화창 기본으로 두면
-    //   그 세션은 **빈 화면으로 열린다**(opencode 가 정확히 그 경우다). 값이 갈리는 날이 오면 여기서 터진다.
-    assert.equal(chatIoCaps(a.key).chatFirst, !!a.parse, `${a.key} caps.chatFirst`);
   }
 });
 
