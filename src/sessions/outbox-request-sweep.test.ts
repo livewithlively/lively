@@ -179,4 +179,14 @@ t("[F13] 정비 내용을 새로 정의하지 않는다 — 있던 함수를 그
     "여기에 SQL 을 쓰면 원본과 갈라진다 — 스윕은 '어디서 부르나'의 문제지 '무엇을 하나'가 아니다");
 });
 
+// ── F14 · 정비가 돌려준 것을 로그가 버리지 않는다 (#2246 후속) ─────────────────
+t("[F14] 정비 결과를 로그에 펼쳐 찍는다 — «돌았다»만 찍으면 0건의 뜻이 안 갈린다", () => {
+  const src = readFileSync(SRC, "utf8");
+  const body = src.slice(src.indexOf("function maybeSweep"));
+  //  결과를 받아서(then((r) => …)) 객체면 펼쳐 넣어야 한다. `.then(() => …)` 이면 버리는 것이다.
+  assert.match(body, /\.then\(\(r\) =>/, "결과를 받아야 한다 — 인자 없는 then 은 버리는 것이다");
+  assert.match(body, /\.\.\.\(r && typeof r === "object" \? r : \{\}\)/,
+    "객체면 펼쳐 찍어야 한다(observed·awaiting·notified…). void 인 정비도 있으므로 조건부다");
+});
+
 console.log(`outbox-request-sweep: ${pass} passed`);

@@ -113,7 +113,12 @@ function maybeSweep(env: NodeJS.ProcessEnv): void {
     //  컨텍스트 **안**에서 부른다 — 여기서 등록한 then 체인은 AsyncLocalStorage 저장소를 그대로
     //  물려받는다(enqueue→deliverLoop 가 이미 같은 원리로 돈다).
     void job.run()
-      .then(() => logger.info({ tenant: t.slug, job: job.key }, "정비: 요청에 얹은 테넌트 스윕"))
+      //  ⚠ **정비가 돌려준 것을 함께 찍는다.** "돌았다"만 찍으면 «돌았는데 아무것도 안 했다» 와
+      //   «돌았지만 볼 게 없었다» 가 로그에서 같아 보인다 — 그 구별이 없어서 이 스윕이 죽어 있던 걸
+      //   이틀 몰랐다. 결과가 객체면 그대로 펼쳐 찍고, void 면(예: resumeOutbox) 그냥 돌았다고만 찍는다.
+      .then((r) => logger.info(
+        { tenant: t.slug, job: job.key, ...(r && typeof r === "object" ? r : {}) },
+        "정비: 요청에 얹은 테넌트 스윕"))
       .catch((err) => logger.warn({ err, tenant: t.slug, job: job.key },
         "정비: 테넌트 스윕 실패(비치명 — 다음 요청이 다시 시도)"));
   }
