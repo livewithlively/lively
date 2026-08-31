@@ -804,7 +804,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
     drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
-    upN: 0, upBusy: 0,      // #1881 실업로드 — 자료로 등록된 파일 수 / 올리는 중 수(연출 아님)
+    upN: 0, upBusy: 0,      // #1881 실업로드 — **올라간** 파일 수 / 올리는 중 수(연출 아님)
+    //  ⚠ upN(올라감)과 upIn(자료로 등록됨)은 **다른 수**다. 서버는 등록까지 됐을 때만 응답에 source_id 를 싣는다
+    //   (terminal-files.ts). 둘을 같은 것으로 보면 «읽는 중» 이 영영 안 끝난다 — 실측 2026-08-31: 13개를 올렸는데
+    //   11개만 등록돼 진행률이 11/13 에서 멈췄고, 폴러엔 상한이 없어 무한히 돌았다.
+    upIn: 0,                // 자료로 **등록된** 수 — 읽기 진행률의 목표는 이 수다
+    upFail: [],             // 올라갔지만 등록 안 된 파일 이름 — 사람에게 사실대로 말하려고 든다
     upFiles: [],            // #2232 받은 파일 목록 [{n,r,s,st}] — 화면에 보이는 근거(상한 UP_KEEP)
     aiDone: [],             // #2232 이 온보딩에서 로그인을 확인한 AI 하네스 키들 — «다른 AI 도?» 화면의 체크 근거
     b2: null, b3: null, nowline: null, firstOrder: null, decisions: [], notes: [],
@@ -1448,7 +1453,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             const it = items[i], row = rows[i];
             const rel = 'uploads/' + String(it.rel || it.file.name).replace(/^\/+/, '');
             try {
-              await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              //  응답에 source_id 가 있으면 **자료로 등록까지** 된 것이다. 없으면 파일만 올라갔다 —
+              //   그 차이를 여기서 안 세면 뒤(읽기 진행률)에서 «오지 않는 것» 을 기다리게 된다.
+              if (up && up.source_id) { S.upIn++; } else { S.upFail.push(it.file.name); if (row) row.st = 'part'; }
               // ⚠ 종전엔 응답의 source_id 가 있을 때만 셌다. 그런데 그 필드는 **자료 등록까지 성공했을 때만** 실린다
               //  (terminal-files.ts: `...(ing?.ingested ? { source_id } : {})`) — 등록이 조용히 실패하면 파일은 올라갔는데
               //  화면은 0개로 남아 «계속» 이 영영 안 켜졌다(실측 2026-08-26 원준님 신고). 올라간 건 올라간 것으로 센다.
@@ -2248,7 +2256,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function startReading() {
     if (S.read.finished) return;
     clearInterval(readTimer);
-    const target = () => Math.max(S.upN || 0, S.read.total || 0);
+    //  목표는 **자료로 등록된 수**다(올라간 수가 아니다) — 서버가 세는 축과 같아야 만난다.
+    //  옛 진행(upIn 이 없던 판)에서 이어 들어온 경우엔 upN 으로 떨어진다.
+    const target = () => Math.max(S.upIn || 0, (S.upIn ? 0 : (S.upN || 0)), S.read.total || 0);
     const paint = () => {
       const tot = Math.max(1, target());
       const p = Math.min(1, S.read.done / tot);
@@ -2261,6 +2271,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       document.dispatchEvent(new Event('read-done'));
     };
     if (!target()) { finish(); return; }                 // 올린 자료 0건 — 기다릴 것이 없다
+    //  ⚠ **상한을 둔다.** 종전엔 완료 조건에서만 멈춰서, 등록이 하나라도 빠지면 영원히 돌았다(실측 11/13).
+    //   바로 옆 분석 단계엔 상한이 있는데(ANALYZE_TIMEOUT_MS) 여기만 없었다. 넘기면 **사실대로 말하고** 넘어간다 —
+    //   온보딩 한복판에서 사람을 무한정 세워 두지 않는다.
+    const READ_MAX_MS = 60000;
+    const readStarted = Date.now();
     readTimer = setInterval(async () => {
       const w = await loadWelcome();
       const got = (w && w.uploads && w.uploads.total) || 0;
@@ -2270,7 +2285,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
       const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
       paint(); save();
-      if (S.read.done >= target()) finish();
+      if (S.read.done >= target()) { finish(); return; }
+      if (Date.now() - readStarted > READ_MAX_MS) {
+        const left = Math.max(0, target() - S.read.done);
+        finish();
+        if (left) msgLiv(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요. 나머지로 먼저 진행할게요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+      }
     }, 1500);
   }
 
@@ -2727,7 +2747,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다 — 리브가 1턴에서 현황을 읽어 주고 있다.
         //  못 열었으면(AI 미로그인 등) 종전처럼 홈으로. 사유는 응답(liv.error)에 있지만 여기서 사람을 붙들지 않는다.
         const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
-        const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.' : '워크스페이스로 모시겠습니다.';
+        //  ⚠ 리브가 안 열렸으면 **왜 안 열렸는지 말한다**(#1631). 서버는 사유를 준다(liv.reason='ai-not-connected' —
+        //   AI 가 없으면 답 못 하는 창을 열지 않는 것이 맞다). 그런데 종전엔 그 값을 안 쓰고 «워크스페이스로 모시겠습니다»
+        //   로만 끝냈다 — 시킨 것을 다 한 사람이 «리브는 어디 갔지» 로 남는다(실측 2026-08-31 원준님 신고).
+        const noAi = !livHref && applied && applied.liv && applied.liv.reason === 'ai-not-connected';
+        const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.'
+          : noAi ? 'AI 를 아직 연결하지 않으셔서 리브는 지금 열지 않았어요 — 답을 못 하는 창이 되니까요. 왼쪽 [외부 앱 연결]에서 AI 를 이으면 리브가 이어서 정리해 드립니다. 워크스페이스로 모시겠습니다.'
+          : '워크스페이스로 모시겠습니다.';
         m.querySelector('.ob-body').innerHTML = made.length
           ? `정리했어요. 자료함에 <b>${made.map((x) => esc(x)).join(' · ')}</b> 서랍을 만들어 뒀습니다. ${where}`
           : `정리했어요. ${where}`;
@@ -2752,7 +2778,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     setStage('stage-chat');
     $('#thread').innerHTML = '';
     await loadWelcome();
-    S.read.total = Math.max(S.upN || 0, 0);
+    S.read.total = Math.max(S.upIn || S.upN || 0, 0);
     startReading();
     await sleep(300);
     const n = S.read.total;
