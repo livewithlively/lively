@@ -247,10 +247,14 @@ export const HARNESSES: Harness[] = [
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "grok-4.6"], default: "grok-4.6" },
       { name: "--effort", label: "추론강도(effort)", desc: "모델이 지원하는 단계만 적용됩니다", type: "select", choices: ["", "low", "medium", "high", "xhigh"] },
     ],
-    failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-code"],
+    failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-auth"],
     // 실측(grok 1.0.5 `grok login --help`): `--oauth`(브라우저) 와 `--device-auth`(별칭 --device-code, 헤드리스) 둘.
-    loginSteps: ["터미널에  grok login  을 입력합니다", "열리는 창에서 X(xAI) 계정으로 로그인합니다",
-      "창이 안 열리면  grok login --device-auth  로 주소와 일회용 코드를 받습니다"],
+    //  ⚠ 이 loginSteps 는 **화면에서 끝내는 통로가 실패했을 때** 그 자리에 뿌려진다(#2477 — 대화창 관문·온보딩).
+    //   그러니 여기서 «화면에서 하세요» 라고 하면 순환 안내가 된다 — 오직 터미널 절차만 적는다.
+    //   원격(웹터미널)에서는 브라우저 콜백이 서버의 localhost 로 가서 안 닿으므로 device-auth 를 먼저 적는다.
+    loginSteps: ["터미널에  grok login --device-auth  를 입력해 주소와 일회용 코드를 받습니다",
+      "그 주소를 브라우저에서 열고 코드를 넣습니다",
+      "X(xAI) 계정으로 로그인하면 끝납니다"],
     // 실측(grok 바이너리 도움말 문자열): `/model <모델id>  # Switch model` · `/effort <level>` 둘 다 인자를 받는다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
     // 실측(#1701): `-r <id>` 는 세션 id(UUID) 재개, id 없으면 `-c` = 이 폴더의 최근 세션. 어댑터가 sessionId 를
@@ -595,27 +599,41 @@ export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: s
 //    생겼다. 즉 #1516 이 codex 에만 준 '로그인 전용 세션'을 claude 에도 줄 수 있고, 그러면 '자격이 만료돼 세션이
 //    즉사해 로그인 화면조차 못 보는' 데드락이 claude 에서도 풀린다. 온보딩 안내는 이미 그 한 줄로 바꿨고
 //    (loginSteps·failHint), 이 자리(관리탭 [연결된 AI 계정]의 [로그인])는 #1516 표면이라 별도로 손댄다.
-//  ⚠ 나머지 하네스도 **지금은 전부 null 이 정답**이다(#1695 실측). 여기 채우려면 '무인으로 한 줄' 이어야 하는데:
-//   · antigravity(agy): 로그인 서브커맨드 자체가 없다(agy 1.1.13 --help — install·update·plugin·models·agent·changelog뿐).
-//     인증은 하네스를 켜면 하네스가 띄운다(원격이면 주소+코드). 그래서 '로그인 전용 세션'을 만들 대상이 아니고,
-//     대신 하네스가 죽었을 때의 안내(failHint)로 그 절차를 알려 준다.
+//  grok: #2477 로 **인라인 카드**가 열렸지만(주소·코드를 화면이 보여 준다) 이 자리도 함께 열어 둔다 —
+//   인라인이 시작조차 못 했을 때 화면이 내려보내는 폴백 창이 바로 이것이고, 여기가 null 이면 그 사람은
+//   **아무 안내도 없는 맨 셸**에 떨어진다. `grok login --device-auth` 는 codex 와 같은 모양이고
+//   `grok logout`(Sign out and clear cached credentials)도 있어 같은 흐름이 그대로 성립한다(실측 2026-09-01, 1.0.13).
+//  ⚠ 나머지 하네스는 **지금도 null 이 정답**이다(#1695 실측 + 2026-09-01 재실측). '무인으로 한 줄' 이어야 하는데:
+//   · antigravity(agy): 로그인 서브커맨드가 여전히 없다(agy 1.1.22 --help 재확인 — install·update·plugin·mcp·
+//     mic-serve·models·agent·changelog뿐). 인증은 하네스를 켜면 하네스가 띄운다(원격이면 주소+코드).
+//     `agy -p` 가 인증을 띄우긴 하지만 **파이프 stdin 을 거절**하고(주소도 없이 즉시 실패) 대기가 60초
+//     하드 타임아웃이라 무인 한 줄로 못 쓴다 — 그래서 agy 는 **인라인 터미널**로 간다(#2477, web/v2/onboarding.ts).
 //   · opencode: `opencode auth login` 이 있으나 **제공자를 고르는 대화형 TUI** 라 codex 의 device-auth 처럼
 //     비대화형 한 줄이 아니다(실측). 셸에서 그대로 치는 게 나아 failHint 로 안내한다.
+//
+//  ⚠ 바이너리는 `"$3"` 로 **인자로** 넘긴다 — 스크립트 본문에 이어붙이면 하네스가 늘 때마다 사본이 는다.
+//   값은 아래 표의 리터럴에서만 오므로 사용자 입력이 셸에 닿지 않는다.
 const LOGIN_SH = [
   'printf \'\\n%s\\n\\n\' "$1"',
-  'codex logout >/dev/null 2>&1 || true',
-  'codex login --device-auth || true',
+  '"$3" logout >/dev/null 2>&1 || true',
+  '"$3" login --device-auth || true',
   'printf \'\\n%s\\n\' "$2"',
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
+/** 로그인 전용 세션을 만들 수 있는 하네스 → (실행파일, 사람에게 보일 이름, 확인 명령). 표에 없으면 null. */
+const LOGIN_CLI: Record<string, { bin: string; label: string; status: string }> = {
+  codex: { bin: "codex", label: "Codex", status: "codex login status" },
+  grok: { bin: "grok", label: "Grok", status: "grok models" },
+};
 export function harnessLoginArgv(harnessKey: string): string[] | null {
-  if (harnessKey !== "codex") return null;
+  const c = LOGIN_CLI[harnessKey];
+  if (!c) return null;
   const line = "─".repeat(60);
-  const intro = [line, "Codex 로그인을 시작합니다.",
+  const intro = [line, `${c.label} 로그인을 시작합니다.`,
     "잠시 뒤 나오는 주소를 브라우저에서 열고, 함께 표시되는 일회용 코드를 입력하세요.", line].join("\n");
-  const done = [line, "로그인 절차가 끝났습니다. 확인하려면  codex login status  를 입력해 보세요.",
-    "이 세션에서 바로 쓰려면  codex  를 입력하세요.", line].join("\n");
-  return ["sh", "-c", LOGIN_SH, "lively-login", intro, done];
+  const done = [line, `로그인 절차가 끝났습니다. 확인하려면  ${c.status}  를 입력해 보세요.`,
+    `이 세션에서 바로 쓰려면  ${c.bin}  을 입력하세요.`, line].join("\n");
+  return ["sh", "-c", LOGIN_SH, "lively-login", intro, done, c.bin];
 }
 
 // codex app-server 모드의 pane (#2055) — TUI 대신 **셸**을 띄우고, 왜 그런지 한 화면으로 알려 준다.

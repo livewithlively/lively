@@ -75,7 +75,7 @@ export function loginStartSh(o: { home: string; slotName: string; argv: string[]
     // ⚠ 하네스 홈을 **먼저 보장한다**. codex 는 CODEX_HOME 이 없으면 설정을 못 읽고 즉사한다(실측:
     //  `Error loading configuration: CODEX_HOME points to … but that path does not exist`).
     //  갓 만든 멤버 홈에는 그 폴더가 아직 없다 — app-server 기동에서 밟은 것과 같은 함정이다.
-    `mkdir -p ${q(`${o.home}/.cache`)} ${q(`${o.home}/.codex`)} ${q(`${o.home}/.claude`)} 2>/dev/null || true`,
+    `mkdir -p ${q(`${o.home}/.cache`)} ${q(`${o.home}/.codex`)} ${q(`${o.home}/.claude`)} ${q(`${o.home}/.grok`)} 2>/dev/null || true`,
     // 이미 도는 중이면 그대로 둔다(로그도 지우지 않는다 — 그 화면이 이미 사람에게 주소를 보여 주고 있다).
     //  ⚠ pgrep 을 쓰지 않는다 — 이 스크립트를 도는 셸의 명령줄에 슬롯 이름이 있어 **자기를 잡는다**(pidOf 머리말).
     `if [ -f ${q(pid)} ] && kill -0 "$(cat ${q(pid)} 2>/dev/null)" 2>/dev/null; then echo running; exit 0; fi`,

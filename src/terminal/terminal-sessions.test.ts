@@ -2,7 +2,7 @@
 // 실행: npm run build && node dist/terminal/terminal-sessions.test.js
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, harnessLiveThemeSteps, harnessLiveThemeSupported, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
@@ -625,20 +625,32 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   }
 
   // ── 로그인 세션 — 만료 자격으로는 하네스가 즉사해 로그인 화면조차 못 뜨던 데드락을 끊는다 ──
-  {
-    const argv = harnessLoginArgv("codex");
-    ok2(!!argv && argv[0] === "sh", "E8a codex 로그인은 셸에서 명령을 돌린다(하네스 TUI 아님)");
-    ok2(!!argv && argv.join(" ").includes("codex logout"), "E8b 만료 자격을 먼저 지운다");
-    ok2(!!argv && argv.join(" ").includes("codex login --device-auth"), "E8c 원격에서도 되는 주소+코드 방식으로 로그인한다");
-    // L3 — 로그인이 끝나면 셸로 남는다(codex 를 스텁으로 가려 실제 로그인 없이 흐름만 관측).
+  //  ⚠ 단언을 **부작용(스텁이 기록한 호출 argv)** 으로 한다. 종전 판은 `argv.join(" ").includes("codex logout")`
+  //   처럼 **구현 문자열을 그대로** 요구했는데, 그건 계약이 아니라 구현의 사본이다 — 「바이너리를 인자로 넘긴다」
+  //   같은 무해한 리팩터에 거짓 실패하면서, 정작 «그 명령이 실제로 불렸나» 는 하나도 보증하지 않았다.
+  //   (같은 교훈: ai-login-run 의 D3 단언이 pgrep 이라는 구현 문자열을 요구해 결함을 계약으로 고정했다.)
+  for (const [key, bin] of [["codex", "codex"], ["grok", "grok"]] as const) {
+    const argv = harnessLoginArgv(key);
+    ok2(!!argv && argv[0] === "sh", `E8a ${key} 로그인은 셸에서 명령을 돌린다(하네스 TUI 아님)`);
+    //  ⚠ 여기서 멈추지 않으면 아래가 null 을 건드려 **파일 전체가 중단**되고, 그러면 뒤에 있는 테스트들이
+    //   «돌지도 않았는데 조용한» 상태가 된다(실패가 실패를 가린다). 그 행만 실패로 남기고 넘어간다.
+    if (!argv) continue;
+    // 그 하네스 바이너리를 스텁으로 가려 **실제 로그인 없이** 무엇이 어떤 인자로 불렸는지 관측한다.
     const stub = mkdtempSync(join(tmpdir(), "lively-1516-"));
-    writeFileSync(join(stub, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const r = spawnSync(argv![0], argv!.slice(1), {
+    const callLog = join(stub, "calls.txt");
+    writeFileSync(join(stub, bin), `#!/bin/sh\necho "$@" >> ${JSON.stringify(callLog)}\nexit 0\n`, { mode: 0o755 });
+    const r = spawnSync(argv[0], argv.slice(1), {
       input: ALIVE, encoding: "utf8",
       env: { ...process.env, SHELL: "/bin/sh", ENV: "", PATH: `${stub}:${process.env.PATH ?? ""}` },
     });
+    const calls = existsSync(callLog) ? readFileSync(callLog, "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
     rmSync(stub, { recursive: true, force: true });
-    ok2(/SHELL_ALIVE/.test((r.stdout || "") + (r.stderr || "")), "E8d 로그인 절차가 끝나면 셸로 남아 그 자리에서 바로 쓸 수 있다");
+    //  ⓪ 배선 — 스텁이 실제로 불렸나. 이게 없으면 아래 단언들은 «아무것도 안 불렸다» 를 통과시킨다(vacuous).
+    ok2(calls.length === 2, `E8w ${key} — 스텁이 실제로 두 번 불렸다(관측 장치가 살아 있다, 실제 ${calls.length}회)`);
+    ok2(calls[0] === "logout", `E8b ${key} 는 만료 자격을 먼저 지운다(실제 호출: ${calls[0] ?? "없음"})`);
+    ok2(calls[1] === "login --device-auth",
+      `E8c ${key} 는 원격에서도 되는 주소+코드 방식으로 로그인한다(실제 호출: ${calls[1] ?? "없음"})`);
+    ok2(/SHELL_ALIVE/.test((r.stdout || "") + (r.stderr || "")), `E8d ${key} — 로그인 절차가 끝나면 셸로 남아 그 자리에서 바로 쓸 수 있다`);
   }
   ok2(harnessLoginArgv("claude") === null, "E9 claude 는 /login 이 TUI 안이라 자동화 불가 → 종전 경로 유지");
   ok2(harnessLoginArgv("nope") === null, "E10 모르는 하네스는 로그인 명령을 만들지 않는다");
