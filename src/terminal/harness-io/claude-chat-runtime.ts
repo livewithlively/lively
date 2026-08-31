@@ -1,4 +1,8 @@
-// claude 대화 런타임 (#2439 ②) — 세션 하나당 `claude --input-format stream-json` 프로세스 하나를 쥐고 산다.
+// 대화 런타임 (#2439) — 세션 하나당 하네스 프로세스/연결 하나를 쥐고 산다. **하네스 무관**.
+//
+//  ⚠ 이름이 `claude-*` 인 것은 처음 claude 로 세운 자취다. 지금은 전송(chat-transport)과 어댑터 표
+//   (chat-adapters)를 받아 **어느 하네스든** 연다 — 그래서 두 번째 런타임을 만들 이유가 없다.
+//   두 벌이 되면 「모든 요청은 반드시 한 번 답한다」 같은 불변식이 갈리고, 반드시 한쪽이 빠진다.
 //
 //  ── 무엇을 대체하나 ──────────────────────────────────────────────────────────────
 //  terminal 모드에서 쓰기 축은 tmux send-keys(아웃박스 경유)였고, 읽기 축은 대화 파일 tail 이었다.
@@ -15,12 +19,15 @@
 //  ── 왜 stdin 을 열어 두나 ────────────────────────────────────────────────────────
 //  `--input-format stream-json` 은 stdin 이 닫히면 프로세스가 끝난다. 세션이 사는 동안 계속 말을 걸어야
 //  하므로 파이프를 잡고 있는다. 그래서 **종료 경로가 중요하다** — 안 닫으면 컨테이너에 프로세스가 쌓인다.
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { logger } from "../../log.js";
 import { sessionSpawnArgv } from "../session-exec.js";
 import { memberSpawnArgv } from "../terminal-member-fs.js";
-import { claudeStreamEvent } from "./claude-stream.js";
-import { clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
+import { chatAdapter } from "./chat-adapters.js";
+import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
+import { grokPromptLine } from "./grok-stream.js";
+import { perTurnTransport, stdioTransport, type ChatTransportConn } from "./chat-transport.js";
+import { ask, clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
 import type { SessionEvent } from "./session-event.js";
 
 /** 이 세션에서는 대화 런타임을 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
@@ -37,6 +44,8 @@ export class ClaudeChatUnavailable extends Error {
 
 export interface ClaudeChatOpts {
   sessionId: string;
+  /** 어느 하네스인가. 없으면 claude(이 파일이 claude 로 시작한 자취 — 호출부가 점차 명시로 옮긴다). */
+  harness?: string;
   /** 턴이 도는 작업 폴더. */
   cwd: string;
   /** 격리 멤버 OS 계정. null 이면 비격리 배포 — 게이트웨이 uid 로 띄운다. */
@@ -48,35 +57,38 @@ export interface ClaudeChatOpts {
   spawnFn?: (argv: string[], cwd: string) => ChildProcess;
 }
 
-interface Entry {
-  child: ChildProcess;
+export interface Entry {
+  conn: ChatTransportConn;
+  /** 이 세션이 어느 하네스로 도나 — 번역기·인코딩을 그 표에서 꺼낸다. */
+  harness: string;
   sessionId: string;
   /** 하네스가 알려준 이 대화의 id(init 에서 온다) — 재개·대화 파일 찾기의 단서. */
   convId: string;
-  /** 줄 경계가 안 맞는 꼬리(청크가 줄 가운데서 끊긴다). */
-  carry: string;
   startedAt: number;
   closing: boolean;
+  /**
+   * 승인 답을 **하네스에 돌려보내는 길**. 기본은 표의 `respond` → 파이프로 한 줄.
+   *  ⚠ opencode 는 REST 라 줄이 아니다 — 그 ensure* 가 여기에 HTTP 호출을 꽂는다.
+   *   이 훅이 비어 있으면 카드는 떠도 답이 안 가고, 그 턴은 TTL 까지 선다.
+   */
+  respond?: (ask: PermissionAsk, value: PermissionAnswer) => void;
+  /**
+   * 도는 턴을 멈추는 길. 표의 `interrupt`(한 줄) 로 표현 안 되는 하네스가 여기에 자기 길을 꽂는다
+   *  — opencode 는 REST(POST /session/{id}/abort), antigravity 는 **프로세스 kill**(턴마다 프로세스라
+   *  보낼 파이프가 없다). 없으면 «못 멈춘다» 로 사실대로 답한다(멈춘 척하지 않는다).
+   */
+  interrupt?: () => boolean;
 }
 
 const live = new Map<string, Entry>();
 
-/** (순수 — 테스트 seam) 이 세션의 claude 를 대화 런타임으로 띄울 argv. */
-export function claudeChatArgv(o: { convId?: string | null; model?: string | null }): string[] {
-  const argv = [
-    "claude", "--print",
-    "--input-format", "stream-json",
-    "--output-format", "stream-json",
-    "--verbose",
-    //  우리가 보낸 말을 되돌려 받아 **배달 확인**에 쓴다(에코를 화면에서 찾지 않아도 된다).
-    "--replay-user-messages",
-    //  서브에이전트 발화를 parent_tool_use_id 를 달아 흘려 준다 — 작업 표면이 그걸로 귀속한다.
-    "--forward-subagent-text",
-  ];
-  if (o.model) argv.push("--model", String(o.model));
-  //  ⚠ 대화 이어받기는 **있을 때만**. 없는 id 로 --resume 하면 프로세스가 즉시 죽는다.
-  if (o.convId) argv.push("--resume", String(o.convId));
-  return argv;
+/**
+ * (순수 — 테스트 seam) 이 하네스를 대화 런타임으로 띄울 argv. **표가 정본**이다(chat-adapters).
+ *  여기 손으로 적으면 표와 갈리고, 갈리는 순간 «표엔 열린다는데 실제로는 다른 명령» 이 된다.
+ */
+export function claudeChatArgv(o: { harness?: string; convId?: string | null; model?: string | null }): string[] {
+  const a = chatAdapter(o.harness ?? "claude");
+  return a?.argv ? a.argv(o) : [];
 }
 
 /**
@@ -88,6 +100,155 @@ export function claudeChatSpawnArgv(sessionId: string, osUser: string | null, ar
   if (bySession.length) return bySession;
   if (osUser) return memberSpawnArgv(osUser, argv);
   return argv;
+}
+
+/**
+ * opencode 를 연다 (#2439) — **비동기 준비**가 필요한 유일한 하네스다.
+ *  서버 기동 → 세션 생성 → SSE 전송. 다른 하네스는 spawn 한 번이면 파이프가 열리지만
+ *  여기는 세 단계라 `ensureClaudeChat`(동기)에 못 넣는다. 그래서 별도 문으로 둔다.
+ *
+ *  ⚠ 실패는 **null 이 아니라 throw** 다 — 호출자(deliverPrompt)가 이미 ClaudeChatUnavailable 을
+ *   잡아 종전 경로로 폴백한다. 여기서 null 을 주면 그 폴백을 못 탄다.
+ */
+export async function ensureOpencodeChat(o: ClaudeChatOpts): Promise<Entry> {
+  const found = live.get(o.sessionId);
+  if (found) return found;
+
+  const { ensureOpencodeServe, opencodeNewSession, opencodePost, opencodeUrls } = await import("./opencode-serve.js");
+  const served = await ensureOpencodeServe({ sessionId: o.sessionId, cwd: o.cwd, osUser: o.osUser });
+  if (!served) throw new ClaudeChatUnavailable("opencode 서버를 띄우지 못했습니다");
+  const { base, event } = opencodeUrls(served.port);
+
+  //  opencode 쪽 세션 id 는 **우리 것과 다르다** — 잃으면 새 대화가 열린다(대화를 잇는 단서).
+  const convId = String(o.convId || "") || (await opencodeNewSession({ base, cwd: o.cwd }) ?? "");
+  if (!convId) throw new ClaudeChatUnavailable("opencode 세션을 만들지 못했습니다");
+
+  const { sseTransport } = await import("./chat-transport.js");
+  const conn = sseTransport({
+    eventUrl: event,
+    //  ⚠ 쓰기는 «줄» 이 아니라 REST 호출이다(읽기와 주소가 다르다 — chat-transport 머리말).
+    postLine: (line) => opencodePost({ base, opencodeSessionId: convId, text: line }),
+  });
+
+  const e: Entry = { conn, harness: "opencode", sessionId: o.sessionId, convId, startedAt: Date.now(), closing: false };
+  //  ★ opencode 의 승인 응답은 **줄이 아니라 REST** 다(POST /permission/{id}/reply) — 읽기와 쓰기의
+  //   주소가 다른 하네스이므로 표의 `respond`(한 줄) 로는 표현되지 않는다. 그 지식을 여기 꽂는다.
+  const { opencodeReplyPermission, opencodeAbort } = await import("./opencode-serve.js");
+  e.respond = (askInfo, value) => {
+    void opencodeReplyPermission({ base, requestId: askInfo.id, allow: value.allow, always: value.scope === "always" })
+      .catch((err) => logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "opencode 승인 응답 실패"));
+  };
+  //  멈춤도 REST 다(읽기 SSE·쓰기 POST 인 하네스라 파이프로 보낼 줄이 없다).
+  e.interrupt = () => { void opencodeAbort({ base, opencodeSessionId: convId }); return true; };
+  live.set(o.sessionId, e);
+  conn.onLine((line) => {
+    try { feedLine(e, line); }
+    catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
+  });
+  logger.info({ sessionId: o.sessionId, port: served.port, convId }, "opencode 대화 런타임 시작");
+  return e;
+}
+
+/**
+ * antigravity 를 연다 (#2439) — **턴마다 프로세스**가 나고 죽는다(perTurnTransport 머리말).
+ *  다른 하네스는 파이프 하나가 계속 사는데 여기는 `--conversation=<id>` 로 잇는다.
+ */
+export function ensureAntigravityChat(o: ClaudeChatOpts): Entry {
+  const found = live.get(o.sessionId);
+  if (found) return found;
+
+  const e: Entry = {
+    conn: null as unknown as ChatTransportConn, harness: "antigravity",
+    sessionId: o.sessionId, convId: String(o.convId || ""), startedAt: Date.now(), closing: false,
+  };
+  const conn = perTurnTransport({
+    cwd: o.cwd,
+    //  ⚠ 실행 경계는 **다른 하네스와 같은 사다리**를 탄다 — 여기만 빠뜨리면 게이트웨이 권한으로 돈다.
+    argvFor: (text, convId) => {
+      const inner = ["agy", `--print=${text}`, "--output-format=stream-json"];
+      if (convId) inner.push(`--conversation=${convId}`);
+      const bySession = sessionSpawnArgv(o.sessionId, inner);
+      return bySession.length ? bySession : (o.osUser ? memberSpawnArgv(o.osUser, inner) : inner);
+    },
+    //  대화 id 를 잃으면 다음 턴이 **새 대화**를 연다(사람은 기억을 잃은 것처럼 본다).
+    onConvId: (id) => { e.convId = id; },
+  });
+  if (e.convId) conn.setConvId(e.convId);
+  e.conn = conn;
+  //  멈춤은 **프로세스 kill** 이다 — 이 하네스는 stdin 스트림이 벤더 미구현이라 보낼 줄이 없다.
+  e.interrupt = () => conn.abort();
+  live.set(o.sessionId, e);
+  conn.onLine((line) => {
+    try { feedLine(e, line); }
+    catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
+  });
+  logger.info({ sessionId: o.sessionId, resumed: !!e.convId }, "antigravity 대화 런타임 시작(턴마다 프로세스)");
+  return e;
+}
+
+/**
+ * grok 을 연다 (#2439) — ACP 는 **핸드셰이크가 먼저**다(initialize → session/new → 그 id 로 prompt).
+ *  claude 처럼 «띄우면 곧 말할 수 있다» 가 아니라서 전용 문이 필요하다.
+ *
+ *  ⚠ 세션 id 를 못 받으면 **열지 않는다** — 그 상태로 말을 걸면 `-32602 unknown session id` 가
+ *   돌아오고 사람은 답을 영영 기다린다(실측으로 확인한 바로 그 오류다).
+ */
+export async function ensureGrokChat(o: ClaudeChatOpts): Promise<Entry> {
+  const found = live.get(o.sessionId);
+  if (found) return found;
+
+  const inner = ["grok", "agent", "stdio"];
+  const bySession = sessionSpawnArgv(o.sessionId, inner);
+  const argv = bySession.length ? bySession : (o.osUser ? memberSpawnArgv(o.osUser, inner) : inner);
+
+  const conn = stdioTransport(argv, o.cwd, {
+    spawnFn: o.spawnFn,
+    onStderr: (text) => logger.warn({ sessionId: o.sessionId, stderr: text.slice(0, 500) }, "grok stderr"),
+  });
+  const e: Entry = { conn, harness: "grok", sessionId: o.sessionId, convId: String(o.convId || ""), startedAt: Date.now(), closing: false };
+
+  //  ★ ACP 응답은 **id 로 짝짓는다**(알림과 응답이 같은 스트림에 섞인다).
+  const waitFor = (id: number, ms: number): Promise<Record<string, unknown> | null> => new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    pendingRpc.set(id, (msg) => { clearTimeout(timer); resolve(msg); });
+  });
+  const pendingRpc = new Map<number, (m: Record<string, unknown>) => void>();
+
+  conn.onLine((line) => {
+    if (line[0] !== "{") return;
+    let msg: Record<string, unknown>;
+    try { msg = JSON.parse(line) as Record<string, unknown>; } catch { return; }
+    const id = typeof msg.id === "number" ? msg.id : null;
+    if (id !== null && pendingRpc.has(id)) { pendingRpc.get(id)!(msg); pendingRpc.delete(id); return; }
+    try { feedLine(e, line); }
+    catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
+  });
+
+  conn.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize",
+    params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } } }));
+  const init = await waitFor(1, 15_000);
+  if (!init) { conn.close(); throw new ClaudeChatUnavailable("grok 핸드셰이크가 응답하지 않습니다"); }
+
+  //  대화를 이어 열 수 있으면 그렇게(session/load), 아니면 새로.
+  conn.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/new",
+    params: { cwd: o.cwd, mcpServers: [] } }));
+  const created = await waitFor(2, 30_000);
+  const sid = (created?.result as { sessionId?: unknown } | undefined)?.sessionId;
+  if (typeof sid !== "string" || !sid) {
+    conn.close();
+    //  인증 전이면 `-32000 Authentication required` 가 온다 — 그 사실을 그대로 말한다(빈 화면 금지).
+    const err = (created?.error as { message?: unknown } | undefined)?.message;
+    throw new ClaudeChatUnavailable(`grok 세션을 열지 못했습니다${err ? ` — ${String(err)}` : ""}`);
+  }
+  e.convId = sid;
+  live.set(o.sessionId, e);
+  logger.info({ sessionId: o.sessionId, convId: sid }, "grok 대화 런타임 시작(ACP)");
+  return e;
+}
+
+/** grok 에 말을 건다 — ACP `session/prompt`(봉투는 grok-stream 이 만든다). */
+export function sendGrokChat(e: Entry, text: string, id = Date.now() % 100000): boolean {
+  return e.conn.send(grokPromptLine(e.convId, text, id).trimEnd());
 }
 
 /** 이 세션의 런타임이 지금 떠 있나. */
@@ -106,29 +267,63 @@ export function stopClaudeChat(sessionId: string, reason: string): boolean {
   live.delete(sessionId);
   settleAll(sessionId, reason);
   clearSessionTasks(sessionId);   // 죽은 세션의 «도는 중» 이 화면에 남지 않게
-  try { e.child.stdin?.end(); } catch { /* 이미 닫혔다 */ }
-  try { e.child.kill("SIGTERM"); } catch { /* 이미 죽었다 */ }
+  e.conn.close();
   logger.info({ sessionId, reason, aliveMs: Date.now() - e.startedAt }, "claude 대화 런타임 종료");
   return true;
 }
 
-/** 줄 단위로 잘라 번역기에 먹인다 — 청크는 줄 가운데서 끊긴다(carry). */
-function feed(e: Entry, chunk: string): void {
-  const text = e.carry + chunk;
-  const lines = text.split("\n");
-  e.carry = lines.pop() ?? "";
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || line[0] !== "{") continue;
-    let parsed: unknown;
-    try { parsed = JSON.parse(line); }
-    catch { continue; }   // 사람이 읽을 로그가 섞여 나올 수 있다 — 조용히 건너뛴다
-    //  대화 id 는 첫 init 에서 온다. 재개·대화 파일 찾기의 단서라 잡아 둔다.
-    const sid = (parsed as { session_id?: unknown })?.session_id;
-    if (!e.convId && typeof sid === "string" && sid) e.convId = sid;
-    const ev: SessionEvent | null = claudeStreamEvent(parsed);
-    if (ev) emitSessionEvent(e.sessionId, ev);
+/** 한 줄 → 번역기 → 버스. 줄 자르기는 전송이 이미 했다(chat-transport.lineSplitter). */
+function feedLine(e: Entry, line: string): void {
+  if (line[0] !== "{") return;                 // 사람이 읽을 로그가 섞여 나온다 — 조용히 건너뛴다
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return; }
+  //  대화 id 는 첫 init 에서 온다. 재개·대화 파일 찾기의 단서라 잡아 둔다.
+  const sid = (parsed as { session_id?: unknown })?.session_id;
+  if (!e.convId && typeof sid === "string" && sid) e.convId = sid;
+  const translate = chatAdapter(e.harness)?.translate;
+  const ev: SessionEvent | null = translate ? translate(parsed) : null;
+  if (!ev) return;
+
+  //  ★ 승인은 **그냥 흘리지 않는다.** 이건 알림이 아니라 «답을 기다리는 물음» 이다 —
+  //   버스의 ask() 에 걸어 두고(화면이 카드를 그린다), 사람이 답하면 하네스로 돌려보낸다.
+  //   ⚠ 그냥 emit 만 하면 화면엔 카드가 뜨는데 눌러도 아무 데도 안 가고 그 턴은 영영 선다.
+  //    이 프로젝트가 «반쪽 UX» 라 불린 상태가 정확히 그 모양이었다.
+  if (ev.t === "permission.asked") {
+    const askInfo = ev.ask;
+    void ask<PermissionAnswer>(e.sessionId, askInfo.id, askInfo, DENY).then((value) => {
+      try { respondTo(e, askInfo, value); }
+      catch (err) { logger.warn({ sessionId: e.sessionId, id: askInfo.id, err: (err as Error)?.message }, "승인 응답 전송 실패"); }
+    });
+    return;
   }
+  emitSessionEvent(e.sessionId, ev);
+}
+
+/** 답을 못 받았을 때의 기본값 — **거부**다(모르면 넓게 열지 않는다). */
+const DENY: PermissionAnswer = { allow: false, scope: "once" };
+
+/** 승인 답을 하네스로 돌려보낸다 — Entry 의 훅이 있으면 그것, 없으면 표의 `respond` 로 한 줄. */
+function respondTo(e: Entry, askInfo: PermissionAsk, value: PermissionAnswer): void {
+  if (e.respond) { e.respond(askInfo, value); return; }
+  const respond = chatAdapter(e.harness)?.respond;
+  const line = respond ? respond({ ask: askInfo, value, convId: e.convId }) : null;
+  //  ⚠ 답할 길이 없으면 **로그로 남긴다** — 조용히 삼키면 «왜 안 되지» 를 아무도 못 찾는다.
+  if (!line) { logger.warn({ sessionId: e.sessionId, harness: e.harness }, "이 하네스는 승인 응답 경로가 없다 — 턴이 설 수 있다"); return; }
+  e.conn.send(line.trimEnd());
+}
+
+/**
+ * 도는 턴을 멈춘다 — 터미널의 Esc 한 번에 해당한다.
+ *  ⚠ 못 멈추는 하네스는 **false 를 준다**(있는 척하지 않는다). 화면이 그 사실로 안내를 가른다.
+ */
+export function interruptChat(sessionId: string): boolean {
+  const e = live.get(sessionId);
+  if (!e) return false;
+  if (e.interrupt) return e.interrupt();
+  const make = chatAdapter(e.harness)?.interrupt;
+  const line = make ? make({ convId: e.convId }) : null;
+  if (!line) return false;
+  return e.conn.send(line.trimEnd());
 }
 
 /**
@@ -139,39 +334,43 @@ export function ensureClaudeChat(o: ClaudeChatOpts): Entry {
   const found = live.get(o.sessionId);
   if (found) return found;
 
-  const argv = claudeChatSpawnArgv(o.sessionId, o.osUser, claudeChatArgv(o));
-  if (!argv.length) throw new ClaudeChatUnavailable("실행 경계를 만들지 못했습니다");
+  const harness = o.harness ?? "claude";
+  const argv = claudeChatSpawnArgv(o.sessionId, o.osUser, claudeChatArgv({ ...o, harness }));
+  if (!argv.length) throw new ClaudeChatUnavailable(`이 하네스는 대화 런타임을 못 엽니다(${harness})`);
 
-  let child: ChildProcess;
+  let conn: ChatTransportConn;
   try {
-    child = o.spawnFn
-      ? o.spawnFn(argv, o.cwd)
-      : spawn(argv[0], argv.slice(1), { cwd: o.cwd, stdio: ["pipe", "pipe", "pipe"] });
+    //  ⚠ 지금은 stdio 만 연다. http-sse(opencode)는 «서버를 띄우고 포트를 잡는» 선행 단계가 있어
+    //   여기서 바로 못 만든다 — 그 단계가 생기면 sseTransport 로 갈아 끼우면 되고, 아래는 안 바뀐다.
+    conn = stdioTransport(argv, o.cwd, {
+      spawnFn: o.spawnFn,
+      onStderr: (text) => logger.warn({ sessionId: o.sessionId, harness, stderr: text.slice(0, 500) }, "대화 런타임 stderr"),
+    });
   } catch (err) {
     throw new ClaudeChatUnavailable("대화 런타임을 띄우지 못했습니다", err);
   }
 
-  const e: Entry = { child, sessionId: o.sessionId, convId: String(o.convId || ""), carry: "", startedAt: Date.now(), closing: false };
+  const e: Entry = { conn, harness, sessionId: o.sessionId, convId: String(o.convId || ""), startedAt: Date.now(), closing: false };
   live.set(o.sessionId, e);
 
-  child.stdout?.setEncoding("utf8");
-  child.stdout?.on("data", (c: string) => { try { feed(e, c); } catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); } });
-  //  stderr 는 사람이 읽을 진단이다. 이벤트로 올리지 않되 버리지도 않는다.
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (c: string) => { const s = String(c).trim(); if (s) logger.warn({ sessionId: o.sessionId, stderr: s.slice(0, 500) }, "claude 대화 런타임 stderr"); });
+  conn.onLine((line) => {
+    try { feedLine(e, line); }
+    catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
+  });
 
   //  ★ 죽으면 **반드시** 마감한다 — 걸려 있던 승인이 있으면 그 턴은 영영 안 끝난다.
-  const onGone = (why: string) => () => {
-    if (e.closing) return;
-    live.delete(o.sessionId);
-    settleAll(o.sessionId, why);
+  //   전송이 alive=false 가 되는 순간을 폴링으로 잡는다(전송마다 종료 이벤트 모양이 다르므로 한 규약으로).
+  const watch = setInterval(() => {
+    if (e.closing || conn.alive()) return;
+    clearInterval(watch);
+    if (live.get(o.sessionId) === e) live.delete(o.sessionId);
+    settleAll(o.sessionId, "런타임 종료");
     clearSessionTasks(o.sessionId);
-    logger.warn({ sessionId: o.sessionId, why, aliveMs: Date.now() - e.startedAt }, "claude 대화 런타임이 끝났다");
-  };
-  child.on("exit", onGone("exit"));
-  child.on("error", onGone("error"));
+    logger.warn({ sessionId: o.sessionId, harness, aliveMs: Date.now() - e.startedAt }, "대화 런타임이 끝났다");
+  }, 1000);
+  if (typeof watch.unref === "function") watch.unref();   // 이 감시가 프로세스를 붙잡지 않게
 
-  logger.info({ sessionId: o.sessionId, resumed: !!o.convId }, "claude 대화 런타임 시작");
+  logger.info({ sessionId: o.sessionId, harness, resumed: !!o.convId }, "대화 런타임 시작");
   return e;
 }
 
@@ -183,16 +382,14 @@ export function ensureClaudeChat(o: ClaudeChatOpts): Entry {
 export function sendClaudeChat(o: ClaudeChatOpts & { text: string }): { convId: string } {
   const text = String(o.text || "");
   if (!text.trim()) throw new ClaudeChatUnavailable("보낼 내용이 없습니다");
-  const e = ensureClaudeChat(o);
-  const line = JSON.stringify({
-    type: "user",
-    message: { role: "user", content: [{ type: "text", text }] },
-  }) + "\n";
-  const ok = e.child.stdin?.write(line);
-  if (ok === false) logger.warn({ sessionId: o.sessionId }, "대화 런타임 stdin 이 밀렸다 — 버퍼가 비면 나간다");
-  if (!e.child.stdin || e.child.stdin.destroyed) {
-    stopClaudeChat(o.sessionId, "stdin 닫힘");
-    throw new ClaudeChatUnavailable("대화 런타임에 말을 걸 수 없습니다(stdin 닫힘)");
+  const harness = o.harness ?? "claude";
+  const encode = chatAdapter(harness)?.encode;
+  //  인코딩을 모르면 **말을 걸 수 없다** — 표가 그 사실을 안다(있는 척하지 않는다).
+  if (!encode) throw new ClaudeChatUnavailable(`이 하네스는 아직 말을 걸 수 없습니다(${harness})`);
+  const e = ensureClaudeChat({ ...o, harness });
+  if (!e.conn.send(encode(text))) {
+    stopClaudeChat(o.sessionId, "전송 실패");
+    throw new ClaudeChatUnavailable("대화 런타임에 말을 걸 수 없습니다");
   }
   return { convId: e.convId };
 }

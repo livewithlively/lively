@@ -14,13 +14,38 @@
 //
 //  ── ★ 무엇을 옮기고 무엇을 안 옮기나 ───────────────────────────────────────────
 //  **옮긴다**: `initialize` 응답의 모델·MCP 목록 → `facts`. 이건 실측했다.
-//  **안 옮긴다**: 턴 이벤트(`session/update` 의 ContentChunk·ToolCallUpdate)와 승인
-//   (`session/request_permission`). **로그인이 있어야 그 페이로드를 볼 수 있고, 못 본 형식으로
-//   번역기를 쓰면 그 세션은 빈 화면이 된다.** 그래서 스펙을 보고 짐작해 채우지 않는다 —
-//   ACP 스펙에 이름은 있지만 «grok 이 실제로 그 모양으로 보내는가» 는 다른 질문이다.
-//   그 대신 **`raw` 로 올려 관측한다**(session-event.ts ★2): 로그인한 세션이 한 번 돌면
-//   그 raw 가 우리에게 형식을 알려주고, 그때 이 파일을 채운다.
-import type { SessionEvent, SessionFacts } from "./session-event.js";
+//  **옮긴다(2026-09-01 로그인 후 실측 완료)**: 슬래시 목록·작업(툴 호출).
+//   턴을 실제로 돌려 받은 이벤트: available_commands_update · tool_call · tool_call_update ·
+//   agent_message_chunk · agent_thought_chunk · user_message_chunk · session_info_update.
+//
+//    tool_call        {toolCallId, title:"run_terminal_command", rawInput:{command,description},
+//                      _meta["x.ai/tool"]:{kind:"execute", label:"Run Command", read_only:false}}
+//    tool_call_update {toolCallId, kind:"execute", title:"Execute `echo hi`", content[],
+//                      rawInput:{variant:"Bash", command, is_background}}
+//
+//  **아직 안 옮긴다**: 승인(`session/request_permission`). 이번 턴은 `always-approve` 상태라
+//   승인 프롬프트가 안 떴다 — **안 본 것을 짐작해 채우지 않는다**(raw 로 관측).
+import type { SessionEvent, SessionFacts, TaskInfo } from "./session-event.js";
+
+/**
+ * 사람 말 → ACP `session/prompt` 요청 한 줄 (#2439).
+ *
+ *  ── 근거 (실측, grok 1.0.13 · 2026-09-01) ────────────────────────────────────
+ *  이 모양으로 보냈더니 서버가 **`-32602 "unknown session id"`** 를 냈다. 그건 «요청 형식은 맞고
+ *  세션 id 만 없다» 는 뜻이다 — 형식이 틀렸다면 파라미터 자체를 다르게 나무랐을 것이다.
+ *  즉 **봉투는 검증됐고 남은 것은 실 세션 id 하나**다.
+ *
+ *  ⚠ 그래서 `sessionId` 를 **인자로 받는다.** ACP 는 `session/new` 로 id 를 먼저 받아야 하는데
+ *   그건 인증이 필요하다(실측: `-32000 Authentication required`). 런타임이 그 id 를 쥐고 넘긴다.
+ *   여기서 «없으면 빈 문자열» 같은 기본값을 두지 않는다 — 그러면 이 오류가 조용히 반복된다.
+ */
+export function grokPromptLine(sessionId: string, text: string, id = 1): string {
+  return JSON.stringify({
+    jsonrpc: "2.0", id,
+    method: "session/prompt",
+    params: { sessionId, prompt: [{ type: "text", text }] },
+  }) + "\n";
+}
 
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -44,6 +69,30 @@ export function grokAcpEvent(line: unknown): SessionEvent | null {
     return { t: "facts", facts };
   }
 
+  //  ── 승인 — ACP 는 **서버→클라이언트 요청**으로 묻는다(`session/request_permission`). ──
+  //   params: { sessionId, toolCall:{title,kind,rawInput,…}, options:[{optionId,name,kind}] }
+  //   ⚠ 이 줄에는 **`id` 가 있다**(알림이 아니라 요청이다). 답하지 않으면 그 턴이 선다 —
+  //    그래서 우리 어휘의 승인으로 올리고 런타임이 반드시 한 번 응답한다(runtime-bus 불변식).
+  //   ⚠ 선택지를 **우리가 지어내지 않는다**: 무엇을 고를 수 있는지는 에이전트가 `options` 로 준다.
+  //    (실측 노트: 이번 로그인 계정은 always-approve 라 이 줄이 안 떴다. 형식은 ACP 규약을 따른다.)
+  if (String(o.method ?? "") === "session/request_permission") {
+    const p = rec(o.params) ?? {};
+    const call = rec(p.toolCall) ?? {};
+    const id = o.id !== undefined && o.id !== null ? String(o.id) : "";
+    if (!id) return { t: "raw", source: "grok", payload: o };
+    const options = (Array.isArray(p.options) ? p.options : [])
+      .map((x) => rec(x))
+      .filter((x): x is Record<string, unknown> => !!x && typeof x.optionId === "string");
+    return { t: "permission.asked", ask: {
+      id,
+      toolName: str(call.kind) ?? str(call.title) ?? "도구",
+      title: str(call.title),
+      input: call.rawInput ?? call,
+      //  ACP 의 선택지를 **그대로** 나른다 — 화면이 이름을 그리고, 고른 optionId 를 되돌려준다.
+      suggestions: options.length ? options : undefined,
+    } };
+  }
+
   //  ── MCP 서버 목록(x.ai 확장) ──
   if (String(o.method ?? "") === "_x.ai/mcp/servers_updated") {
     const p = rec(o.params) ?? {};
@@ -59,6 +108,53 @@ export function grokAcpEvent(line: unknown): SessionEvent | null {
     return { t: "facts", facts: { permissionMode: "needs-auth" } };
   }
 
-  //  ★ 턴 이벤트·승인은 **아직 안 옮긴다**(머리말). raw 로 올려 형식을 관측한다.
+  //  ── session/update — 턴 이벤트. **실측(2026-09-01, 로그인 후)으로 형식을 확정했다.** ──
+  if (String(o.method ?? "") === "session/update") {
+    const p = rec(o.params) ?? {};
+    const u = rec(p.update) ?? {};
+    const kind = String(u.sessionUpdate ?? "");
+
+    //  슬래시 목록 — ACP 표준 이름 그대로다(AvailableCommandsUpdate).
+    if (kind === "available_commands_update") {
+      const cmds = Array.isArray(u.availableCommands) ? u.availableCommands : [];
+      return { t: "facts", facts: {
+        commands: cmds.map((c) => {
+          const r = rec(c) ?? {};
+          return { name: String(r.name ?? ""), description: str(r.description), argumentHint: str(rec(r.input)?.hint) };
+        }).filter((c) => c.name),
+      } };
+    }
+
+    //  ── 작업 — grok 은 «툴 호출» 로 표현한다(claude 의 task, codex 의 item 에 해당). ──
+    //   실측: tool_call{toolCallId,title,rawInput,_meta["x.ai/tool"]{kind,label,read_only}}
+    //        tool_call_update{toolCallId,kind,title,content[],rawInput{is_background,…}}
+    if (kind === "tool_call" || kind === "tool_call_update") {
+      const id = str(u.toolCallId);
+      if (!id) return { t: "raw", source: "grok", payload: o };
+      const meta = rec(rec(u._meta)?.["x.ai/tool"]) ?? {};
+      const raw = rec(u.rawInput) ?? {};
+      //  ⚠ **명령 실행만** 작업으로 옮긴다 — 파일 읽기·검색까지 도크에 세우면 사람이 못 읽는다.
+      //   판정은 `_meta` 의 kind(execute)로 한다(툴 이름 문자열 매칭보다 안정적이다).
+      const toolKind = String(meta.kind ?? u.kind ?? "");
+      if (toolKind !== "execute") return null;
+      const title = str(raw.command) ?? str(u.title) ?? str(meta.label) ?? "명령";
+      const task: TaskInfo = {
+        id, kind: "shell",
+        title: title.length > 120 ? title.slice(0, 117) + "…" : title,
+        //  ⚠ 완료 신호가 따로 없다 — tool_call_update 는 진행 중에도 온다. 턴 마감이 접는다.
+        status: "running",
+        toolUseId: id,
+      };
+      return kind === "tool_call"
+        ? { t: "task.started", task }
+        : { t: "task.updated", id, patch: { title: task.title } };
+    }
+
+    //  대화 본문·추론은 ChatLine 축이다(agent_message_chunk · agent_thought_chunk · user_message_chunk).
+    if (kind.endsWith("_chunk")) return null;
+    return { t: "raw", source: "grok", payload: o };
+  }
+
+  //  ★ 그 밖은 버리지 않는다 — grok 이 새 이벤트를 내면 여기로 관측된다.
   return o.method || o.result || o.error ? { t: "raw", source: "grok", payload: o } : null;
 }

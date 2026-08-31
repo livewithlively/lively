@@ -1355,6 +1355,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  그 세션의 pane 은 셸이라 Esc 를 받을 곳이 없다(키를 보내면 셸이 먹고 턴은 계속 돈다).
    *  런타임이 없다고 하면(이미 넘겼거나 게이트웨이가 재기동됐다) 종전 키 경로로 내려간다. */
   async function stopTurn(): Promise<void> {
+    //  #2439 — 대화 런타임 세션(claude·grok…)은 **하네스 무관 통로**로 멈춘다.
+    //  ⚠ interrupted:false 면 그냥 넘어간다 — 멈춘 척하지 않는다. 아래 키 경로가 이어받고,
+    //   그것도 안 되면 «멈출 턴이 없어요» 로 사실을 말한다(죽은 버튼보다 낫다).
+    if (String(target.raw?.runtimeMode || '') === 'chat') {
+      try {
+        const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/events/interrupt`, { method: 'POST', body: '{}' }) as { interrupted?: boolean };
+        if (r?.interrupted) { view.setNote('멈춤을 보냈어요.'); window.setTimeout(() => { if (!destroyed) view.setNote(''); }, 2500); return; }
+      } catch { /* 아래 경로로 */ }
+    }
     if (chatFirst()) {
       try {
         const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/codex-chat/interrupt`, { method: 'POST', body: '{}' }) as { interrupted?: boolean };
@@ -1560,7 +1569,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function ensureTasksDock(): void {
     if (tasksDock || destroyed) return;
     if (String(target.raw?.runtimeMode || '') !== 'chat') return;
-    tasksDock = mountSessionTasks(liveDock, { sessionId: target.id });
+    //  ★ 입력칸을 함께 넘긴다 — 슬래시 자동완성이 붙을 자리다(터미널의 `/` 목록에 해당).
+    tasksDock = mountSessionTasks(liveDock, {
+      sessionId: target.id, input: view.input,
+      //  서버가 «이 하네스는 웹에서 이건 못 한다» 를 실어 준다(coverage 표) — 화면이 그걸 그대로 말한다.
+      terminalOnly: (target.raw as any)?.terminalOnly ?? [],
+    });
   }
 
   function ensureLive(): void {

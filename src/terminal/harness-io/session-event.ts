@@ -62,6 +62,22 @@ export interface PermissionAsk {
   suggestions?: unknown[];
 }
 
+/**
+ * 사람이 승인 카드에서 고른 답 — **우리 낱말**이다(★3 을 답변 방향에도 적용한다).
+ *
+ *  ⚠ 화면은 `behavior:"allow"`(claude)도 `optionId`(ACP)도 `"once"`(opencode)도 몰라야 한다.
+ *   그 번역은 어댑터의 `respond` 가 한다. 화면이 하네스 낱말을 알면 하네스마다 화면이 갈리고,
+ *   그 갈라짐이 바로 «반쪽 UX» 의 정체다.
+ */
+export interface PermissionAnswer {
+  /** 허용인가 거부인가. */
+  allow: boolean;
+  /** 이번만인가 앞으로도인가. 모르면 **이번만**으로 친다(넓게 여는 쪽을 기본값으로 두지 않는다). */
+  scope?: "once" | "always";
+  /** 하네스가 **선택지를 준 경우**(ACP options 등) 사람이 고른 그것. 없으면 allow/scope 로 정한다. */
+  optionId?: string;
+}
+
 /** 슬래시 명령 한 개. */
 export interface SlashCommandInfo { name: string; description?: string; argumentHint?: string }
 
