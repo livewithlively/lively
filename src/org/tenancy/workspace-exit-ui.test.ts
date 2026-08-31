@@ -88,14 +88,17 @@ test("★★ E8 떠나는 문은 한 곳이다 — 옛 문이 남아 있지 않�
     "★ 팝오버의 옛 「워크스페이스 나가기」 줄이 남아 있다 — 문이 셋이 된다");
 });
 
-test("E9 설정 부제가 판 안의 사실과 맞는다(보관·나가기를 더는 약속하지 않는다)", () => {
-  //  ⚠ 주석 뺀 CODE 로 본다 — 왜 걷었는지는 주석에 '보관/나가기' 라는 낱말로 남아 있어야 하고,
-  //   그것까지 금지하면 «이유를 지워야 통과하는» 테스트가 된다.
-  const at = CODE.indexOf("function settingsSub(");
-  assert.ok(at > 0, "settingsSub 가 없다");
-  const body = CODE.slice(at, CODE.indexOf("\n}", at));
-  assert.doesNotMatch(body, /보관|나가기/,
-    "★ 부제가 아직 '보관/나가기' 를 말한다 — 열면 없다(규칙을 바꾸면 그 규칙을 설명하던 문장도 늙는다)");
+test("E9 설정 입구가 떠나는 문을 약속하지 않는다(#2188 모달로 이관 뒤에도)", () => {
+  //  종전엔 설정 판 부제(settingsSub)가 '보관/나가기' 를 말하는지 봤다. #2188 에서 판이 설정 **모달**
+  //   (ws-settings.ts)로 통째로 옮겨 갔다 — 자리는 바뀌어도 명제는 같다: 떠나는 문은 행의 ✕ 하나이고,
+  //   설정 입구·모달이 그 문을 다시 열면(문이 둘이면) 어느 것이 진짜인지 사라진다.
+  const at = CODE.indexOf("'워크스페이스 설정'");
+  assert.ok(at > 0, "설정 입구가 없다 — 모달로 들어갈 문이 사라졌다");
+  assert.doesNotMatch(CODE.slice(at, at + 240), /보관|나가기/,
+    "★설정 입구 부제가 '보관/나가기' 를 약속한다 — 그 문은 행의 ✕ 다");
+  const MODAL = read("web/v2/ws-settings.ts").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.doesNotMatch(MODAL, /archiveWorkspace|leaveWorkspace/,
+    "★설정 모달이 떠나는 문(보관·나가기)을 다시 열었다 — #1875 D5″ 의 «문은 하나» 가 깨진다");
 });
 
 test("E10/E11 0개 상태를 말하고, 나간 뒤 목록을 다시 읽는다", () => {

@@ -2026,7 +2026,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/update"
   ],
-  "input_hash": "f62e557908759772"
+  "input_hash": "d1c5cdfe116c8160"
  },
  {
   "name": "workspace_delete",

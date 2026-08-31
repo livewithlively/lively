@@ -165,6 +165,24 @@ test("★★ E12 매니지드에서도 ✕ 가 돈다 — 삭제·나가기가 C
     "★ 매니지드 명부가 is_me 를 안 흘린다 — 넘길 후보에 내가 남는다(고르면 400)");
 });
 
+test("★★ E13 이름·아바타(workspace_update)도 매니지드에서 CP 로 간다 (#2188 설정 모달)", () => {
+  //  ★실측: 종전엔 이 분기가 없어서 **매니지드에서 이름 바꾸기가 이미 죽어 있었다** — 화면(설정)은
+  //   폼을 그리는데 누르면 requireRegistry 400("다중 워크스페이스가 아직 활성화되지 않았습니다").
+  //   화면이 문을 그렸으면 그 문은 열려야 한다.
+  const body = capBody("workspace_update");
+  assert.match(body, /if \(managedMode\(\)\) \{[\s\S]{0,900}"\/api\/tenant\/workspace-update"/,
+    "★매니지드에서 CP 창구를 부르지 않는다 — 설정 모달의 저장이 매니지드에서 400 난다");
+  const m = body.indexOf("managedMode()"), r = body.indexOf("requireRegistry()");
+  assert.ok(r === -1 || m < r, "매니지드 분기가 requireRegistry 보다 뒤다 — 그 자리에서 400 이다");
+  //  ★입력 검증은 분기보다 앞 — 같은 값이 셀프호스트에선 400 인데 매니지드에선 CP 로 흘러가면 규칙이 두 벌.
+  assert.ok(body.indexOf("normalizeWorkspaceFace") < m,
+    "★face 검증이 매니지드 분기 뒤다 — 걸러지지 않은 값이 CP 로 흘러간다");
+  //  얼굴 필드는 양쪽 목록에 **같은 이름**으로 실려야 한다(cpWsView 머리말의 규칙).
+  const face = /face: w\.face && Object\.keys\(w\.face\)\.length \? w\.face : null/g;
+  assert.equal((REG.match(face) || []).length, 2,
+    "★face 가 wsView·cpWsView 중 한쪽에만 있다 — 셀프호스트와 매니지드 화면이 갈린다");
+});
+
 test("E11 초대는 '보냈다'고 말하지 않는다 — 링크를 준다(계정 서버가 메일을 안 보낸다)", () => {
   const people = read("web/v2/ws-people.ts");
   assert.match(people, /invite\?\.url/, "초대 응답의 링크를 읽지 않는다 — 사람에게 줄 것이 없다");
