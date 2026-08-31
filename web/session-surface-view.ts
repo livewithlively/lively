@@ -173,6 +173,15 @@ export function usageLine(u: UsageInfo, now = Date.now()): string | null {
   return `사용량 ${pct}%${when}`;
 }
 
+/**
+ * 사용량이 **곧 막힐 만큼** 찬 상태인가 — 화면이 그 칩을 눈에 띄게 세울지 정한다.
+ *  ⚠ 92% 를 회색으로 적으면 사람은 «그냥 숫자» 로 읽고 지나간다. 곧 못 쓰게 되는 일은
+ *   숫자가 아니라 **색**으로 먼저 와야 한다.
+ */
+export function usageTight(u: UsageInfo): boolean {
+  return Object.values(u.utilization ?? {}).some((v) => typeof v === "number" && v >= 0.9);
+}
+
 /** 남은 시간을 사람 말로. */
 export function untilText(ms: number): string {
   const m = Math.round(ms / 60000);
@@ -219,5 +228,6 @@ const AXIS_KO: Record<string, string> = {
 export function terminalOnlyNote(axes: readonly string[]): string | null {
   const ko = axes.map((a) => AXIS_KO[a]).filter(Boolean);
   if (!ko.length) return null;
-  return `${ko.join(" · ")}\u2014 이 AI 는 터미널 탭에서만 됩니다`;
+  //  ⚠ 문장을 «무엇이 · 어디서» 순으로 짧게. 긴 안내는 칩 한 줄을 넘겨 읽히지 않는다.
+  return `터미널 탭에서만 돼요 — ${ko.join(" · ")}`;
 }

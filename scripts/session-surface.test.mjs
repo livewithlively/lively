@@ -89,6 +89,16 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   ok(/cxl-ask/.test(surface),
     "⑲ ★ 승인 카드는 codex 와 **같은 클래스** — 하네스마다 화면이 갈리면 그게 반쪽 UX 다");
 
+  //  ★ 2026-09-01 화면 확인에서 잡은 진짜 버그: 카드에 «null» 이 글자로 찍혀 있었다.
+  //   `el()` 은 null 자식을 거르지만 DOM 의 append()/replaceChildren() 은 **"null" 문자열로 넣는다.**
+  //   눈으로 안 봤으면 못 잡았을 종류라, 다시 들어오지 못하게 못 박는다.
+  ok(/card\.append\(\.\.\.\[[\s\S]*?\]\.filter\(Boolean\)\)/.test(surface),
+    "㉔ ★ 승인 카드가 null 자식을 거른다 — 안 거르면 화면에 «null» 이 찍힌다");
+  ok(/replaceChildren\(\.\.\.\[[\s\S]*?\]\.filter\(Boolean\)\)/.test(surface),
+    "㉔-b 사실 칩 줄도 마찬가지");
+  ok(/c\.primary && !risky/.test(surface),
+    "㉕ ★ 위험한 요청엔 아무 버튼도 파랗게 안 세운다 — `rm -rf` 옆의 큰 파란 [허용] 은 «여길 누르세요» 로 읽힌다");
+
   const chat = read("web/session-chat.ts");
   ok(/input: view\.input/.test(chat), "⑳ 입력칸을 넘긴다 — 안 넘기면 슬래시 자동완성이 붙을 자리가 없다");
   ok(/terminalOnly/.test(chat), "㉑ 서버가 준 «못 하는 축» 을 화면에 넘긴다");
@@ -96,6 +106,28 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
 
   const css = read("public/styles/36-chat.css");
   ok(/\.stk-warn/.test(css) && /\.stk-slash/.test(css), "㉓ 경고·자동완성에 스타일이 있다(없으면 안 보인다)");
+  ok(/\.cxl-ask\.is-risky/.test(css), "㉖ 위험 카드가 카드째로 티가 난다");
+
+  //  ★ 2026-09-01 다크 모드 확인에서 잡은 함정: `--surface-1`·`--surface-2` 는 **이 레포에 정의된 적이
+  //   없는 토큰**이다(쓰이기만 한다). 폴백 `#fff` 를 달아 두면 다크에서 **흰 배경 + 밝은 글자**가 되어
+  //   슬래시 메뉴가 통째로 안 읽힌다. 그래서 이 파일이 쓰는 토큰은 **양쪽 테마에 실재해야** 한다.
+  //  ⚠ 토큰이 01-base 에만 있는 것은 아니다 — `--livc-mono` 는 35-liv.css 가 :root 에 얹는다.
+  //   여기서 01-base 만 보면 «미정의» 라는 거짓 실패가 난다(그러면 다음 사람이 테스트를 지운다).
+  const base = read("public/styles/01-base.css") + read("public/styles/35-liv.css");
+  const dark = read("public/styles/90-dark.css");
+  const mine = css.slice(css.indexOf(".stk-dock"));
+  const used = [...new Set([...mine.matchAll(/var\(--([a-z0-9-]+)/g)].map((m) => m[1]))];
+  //  ⚠ 줄 앞 앵커(^)로 찾으면 안 된다 — `:root { --livc-mono: … }` 처럼 **한 줄에 몰아 쓴** 정의를
+  //   놓치고 «미정의» 라는 거짓 실패가 난다(그러면 다음 사람이 이 테스트를 지운다).
+  const defined = (src, t) => new RegExp(`[{;\\s]--${t}\\s*:`).test(src);
+  const undef = used.filter((t) => !defined(base, t));
+  ok(undef.length === 0, `㉗ ★ 쓰는 토큰이 라이트 테마에 전부 정의돼 있다 (미정의: ${undef.join(", ") || "없음"})`);
+  //  on-fill(칠한 위의 글자색)·livc-mono(글꼴)는 테마와 무관해 다크에서 다시 정의하지 않는다.
+  const noDark = used.filter((t) => defined(base, t) && !defined(dark, t)
+    && t !== "on-fill" && t !== "livc-mono");
+  ok(noDark.length === 0, `㉘ ★ 다크 테마에도 정의돼 있다 (미정의: ${noDark.join(", ") || "없음"})`);
+  ok(!/surface-1|surface-2/.test(mine),
+    "㉙ ★ 정의된 적 없는 --surface-* 토큰을 안 쓴다 — #fff 폴백이 다크에서 흰 배경을 만든다");
 }
 
 console.log(`\n${pass}건 통과`);

@@ -29,7 +29,7 @@ import { splitSse } from './sse-frames.js';
 import { dockHead, elapsed, visibleTasks, type TaskInfo } from './session-tasks-view.js';
 import {
   applySlash, askChoices, askDetail, askHeadline, askIsRisky, askKind, factChips,
-  slashMatches, slashQuery, terminalOnlyNote, usageLine,
+  slashMatches, slashQuery, terminalOnlyNote, usageLine, usageTight,
   type AskInfo, type FactsInfo, type UsageInfo,
 } from './session-surface-view.js';
 
@@ -131,24 +131,30 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
 
   function drawAsk(ask: AskInfo): void {
     if (askCards.has(ask.id)) return;                 // 재접속 replay — 카드를 두 장 만들지 않는다
-    const card = el('div', { class: 'cxl-ask', role: 'group', 'aria-label': askHeadline(ask) });
     const choices = askChoices(ask);
-    card.append(
+    const risky = askIsRisky(ask);
+    //  ⚠ 위험은 **카드째로** 티가 나야 한다. 안쪽 경고 상자만으로는 훑을 때 옆 카드와 구분이 안 되고,
+    //   승인 카드가 여러 장 쌓이면 «어느 게 위험한 거였지» 가 된다.
+    const card = el('div', { class: 'cxl-ask' + (risky ? ' is-risky' : ''), role: 'group', 'aria-label': askHeadline(ask) });
+    //  ⚠ **`.filter(Boolean)` 이 없으면 안 된다.** `el()` 은 null 자식을 거르지만 DOM 의 `append()` 는
+    //   null 을 **"null" 이라는 글자로** 넣는다 — 실제로 카드에 «null» 이 찍혀 있었다(2026-09-01 화면 확인).
+    //   같은 이유로 아래 replaceChildren 도 걸러서 넘긴다.
+    card.append(...[
       el('div', { class: 'cxl-ask-head' },
         el('span', { class: 'cxl-ask-kind', text: askKind(ask) }),
         el('span', { class: 'cxl-ask-title', text: askHeadline(ask) })),
       //  ⚠ 위험 경고는 **본문 위**에 둔다 — 명령을 읽고 나서 보면 이미 눌렀을 수 있다.
-      askIsRisky(ask)
-        ? el('div', { class: 'stk-warn', text: '⚠ 되돌리기 어려운 작업이에요. 명령을 꼭 읽어 보세요.' })
-        : null,
+      risky ? el('div', { class: 'stk-warn', text: '⚠ 되돌리기 어려운 작업이에요. 명령을 꼭 읽어 보세요.' }) : null,
       el('pre', { class: 'cxl-ask-body' }, el('code', { text: askDetail(ask) })),
       ask.description ? el('div', { class: 'stk-askwhy', text: ask.description }) : null,
       el('div', { class: 'cxl-ask-acts' },
+        //  ★ 위험한 요청에는 **아무 버튼도 파랗게 세우지 않는다.** `rm -rf` 옆의 큰 파란 [허용] 은
+        //   «여길 누르세요» 로 읽힌다 — 되돌릴 수 없는 일에는 손이 먼저 가게 두면 안 된다.
         ...choices.map((c) => el('button', {
-          class: 'cxl-ask-btn' + (c.primary ? ' is-go' : ''), type: 'button', title: c.hint, text: c.label,
+          class: 'cxl-ask-btn' + (c.primary && !risky ? ' is-go' : ''), type: 'button', title: c.hint, text: c.label,
           onclick: () => { void answerAsk(ask, c, card); },
         }))),
-    );
+    ].filter(Boolean));
     askCards.set(ask.id, card);
     asksWrap.append(card);
   }
@@ -167,16 +173,18 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
   // ── 사실·사용량 ────────────────────────────────────────────────────────────────
   //  ⚠ **말할 것이 없으면 통째로 숨긴다.** 늘 떠 있는 줄은 대화를 그만큼 밀어낸다.
   let usageText = '';
+  let usageHot = false;
   const onlyNote = terminalOnlyNote(o.terminalOnly ?? []);
   function paintInfo(): void {
     const chips = factChips(facts);
-    const parts = [...chips, ...(usageText ? [usageText] : [])];
-    info.hidden = parts.length === 0 && !onlyNote;
-    info.replaceChildren(
-      ...parts.map((t) => el('span', { class: 'stk-fact', text: t })),
+    info.hidden = chips.length === 0 && !usageText && !onlyNote;
+    info.replaceChildren(...[
+      ...chips.map((t) => el('span', { class: 'stk-fact', text: t })),
+      //  ⚠ 곧 막힐 사용량은 **색으로 먼저** 온다 — 회색 92% 는 그냥 숫자로 읽히고 지나간다.
+      usageText ? el('span', { class: 'stk-fact' + (usageHot ? ' stk-hot' : ''), text: usageText }) : null,
       //  ⚠ 안내는 칩이 없어도 뜬다 — «못 하는 것» 을 아는 게 «무슨 모델인지» 아는 것보다 급하다.
       onlyNote ? el('span', { class: 'stk-fact stk-only', text: onlyNote }) : null,
-    );
+    ].filter(Boolean));
   }
   paintInfo();
 
@@ -250,7 +258,13 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
       paintInfo(); paintMenu();
       return;
     }
-    if (e?.t === 'usage' && e.usage) { usageText = usageLine(e.usage) ?? usageText; paintInfo(); return; }
+    if (e?.t === 'usage' && e.usage) {
+      const line = usageLine(e.usage);
+      //  ⚠ 값이 없는 usage(턴 끝 신호 등)에 **앞의 숫자를 지우지 않는다** — 지우면 한도가 깜빡인다.
+      if (line) { usageText = line; usageHot = usageTight(e.usage); }
+      paintInfo();
+      return;
+    }
     //  ★ 모르는 이벤트는 조용히 건너뛴다(새 표면이 생겨도 화면이 안 깨진다).
   }
 

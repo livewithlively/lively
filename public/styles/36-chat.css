@@ -421,7 +421,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 /* ── 세션 작업 도크(#2439 ③) — 백그라운드 셸·서브에이전트가 한 자리에 ────────────────
    도는 작업이 없으면 통째로 숨긴다(빈 상자를 늘 띄우면 대화가 그만큼 밀린다 — JS 가 hidden 을 건다).
    승인 도크(.cxl-dock)와 같은 자리에 나란히 서므로 시각 언어를 맞춘다. */
-.stk-dock { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 6px 0; background: var(--surface-2, transparent); }
+.stk-dock { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 6px 0; background: var(--bg-tint); }
 .stk-head { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .stk-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; min-width: 0; }
 .stk-ic { width: 1.1em; text-align: center; opacity: .8; flex: 0 0 auto; }
@@ -442,7 +442,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 
 /* 슬래시 자동완성 — 입력칸 바로 위에 뜬다(터미널의 `/` 목록에 해당). */
 .stk-slash { position: relative; margin: 0 0 6px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
-  background: var(--surface-1, var(--surface-2, #fff)); box-shadow: 0 6px 20px rgba(0,0,0,.10); max-height: 42vh; overflow-y: auto; }
+  background: var(--bg); color: var(--ink); box-shadow: 0 6px 20px rgba(0,0,0,.18); max-height: 42vh; overflow-y: auto; }
 .stk-slash-row { display: flex; align-items: baseline; gap: 10px; padding: 7px 11px; cursor: pointer; font-size: 13px; }
 .stk-slash-row + .stk-slash-row { border-top: 1px solid var(--line); }
 .stk-slash-row.is-sel { background: var(--blue-fill, #2563eb); color: var(--on-fill, #fff); }
@@ -452,3 +452,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 
 .stk-failed .stk-state, .stk-killed .stk-state { color: var(--danger, var(--muted)); }
 .stk-only { border-style: dashed; }
+/* 위험한 승인은 **카드째로** 티가 난다 — 안쪽 경고만으로는 훑을 때 옆 카드와 구분이 안 된다. */
+.cxl-ask.is-risky { border-left-color: var(--danger, #d9534f); }
+/* 곧 막힐 사용량은 색으로 먼저 온다(회색 92% 는 그냥 숫자로 읽힌다). */
+.stk-hot { border-color: var(--danger, #d9534f); color: var(--danger, #d9534f); }
