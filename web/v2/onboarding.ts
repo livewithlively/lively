@@ -9,6 +9,8 @@ import { authUploadProgress, upDropZone, upFromInput } from '../projects/files-u
 import { sessionTermUrl } from '../lib/session-open.js';   // #2232 — AI 로그인 창(터미널 한 장) 주소는 한 곳에서만 만든다   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
+import { managedWorkspaces } from './switcher.js';   // #2476 — 워크스페이스마다 AI 로그인이 따로인 것은 **매니지드만**이다
+import { aiLoginScopeNote } from './ai-login-scope.js';   // #2476 — 그 안내의 정본(만들기 패널과 같은 자리)
 //  #1879 — 외부 앱을 **실제로** 잇는다. 잇는 길은 새로 만들지 않고 이미 깎아 둔 한 곳을 그대로 쓴다:
 //   서비스 표·연결 판정은 me-logins.ts(=[외부 앱 연결] 화면 v2/connect.ts 와 같은 정본), 토큰 발급처·생김새는
 //   admin-credentials.ts 의 CRED_KINDS. **표가 두 벌이 되면 조용히 어긋난다** — 여기서 다시 만들지 않는다.
@@ -2104,12 +2106,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               `<div class="ob-tmock"><span class="okx">✓ Login successful.</span></div>
                <div class="ob-lg-d" style="margin-top:8px">여기로 돌아와 아래 <span class="ob-kbd">로그인했어요</span>.</div>`);
         }
+        //  #2476 — «방금 로그인했는데 왜 또?» 에 **묻기 전에** 답한다. 새 워크스페이스는 새 테넌트라 AI 자격이
+        //   사는 멤버 홈이 새로 생기고, 저기서 이은 로그인은 여기로 따라올 길이 없다(실측 2026-08-28).
+        //   말할지 말지와 문구는 ai-login-scope 가 정한다 — 만들기 패널과 **같은 자리**에서 온다(둘이 어긋나면
+        //   만들 땐 말해 놓고 들어가선 안 말하는 상태가 조용히 생긴다). 셀프호스트에선 빈 문자열이다.
+        const wsNote = aiLoginScopeNote(managedWorkspaces());
         //  «그 사이 물음»(between/펼침)은 스테퍼 밖 잔글씨로 유지 — antigravity 는 걸음 ③이 그 역할이라 뺀다.
         const hasDetail = h !== 'antigravity' && !!(g && g.detail && g.detail.length);
         const more = hasDetail ? `<button type="button" class="ob-more" id="cMore" data-label="${esc((g && g.more) || '자세히 보기')}" aria-expanded="false" aria-controls="cDetail">${esc((g && g.more) || '자세히 보기')} ▾</button>` : '';
         return qHead('claude', lead, `${esc(picked)} 계정을 연결해 주세요.`,
           (g && g.help) || '아래 걸음대로 하시면 됩니다.')
           + `<div class="ob-tok ob-lgs">
+              ${wsNote}
               ${stepper}
               ${okBar}
               ${h !== 'antigravity' && g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
