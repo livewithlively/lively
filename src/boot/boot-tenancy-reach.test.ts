@@ -191,16 +191,24 @@ test("[R4] 순회 목록과 제외 목록이 겹치지 않는다 — 두 표가 
 });
 
 /**
- * **밀린 것을 채우는** 정비 — `setInterval` 만 두면 첫 판이 주기 뒤다(빌트인 앱은 6시간).
- *  이건 정기 점검이 아니라 백필이라 **배포 직후 첫 판이 가장 중요하다**: 그 순간 이미 비어 있다.
- *  매니지드의 요청 정비표는 디바운스가 비어 있어 첫 요청에 곧바로 도는데, 타이머 쪽만 6시간을
- *  기다리면 같은 표를 쓰고도 두 배포의 동작이 갈린다.
+ * **부팅 직후가 가장 중요한** 정비 — `setInterval` 만 두면 첫 판이 주기 뒤다. 이유는 둘이다.
+ *
+ *  ① *밀린 것을 채우는* 백필: 배포 시점에 **이미** 비어 있다(빌트인 앱은 84곳이 그랬다).
+ *  ② *재기동이 곧 피해인* 정비: 아웃박스가 그렇다 — 재기동이 배달 루프를 죽여 좀비를 만든다(#2244).
+ *
+ *  ⚠ 이 표는 관념이 아니라 실측에서 나왔다(2026-09-01 dev): stage 푸시마다 게이트웨이가 재시작하는데
+ *   그 간격이 **2~4분**이었다(최근 1시간 9커밋). **5분 인터벌은 한 번도 발화하지 못했다** —
+ *   같은 배포에서 45초 one-shot 은 매번 돌았는데. 「주기를 걸어 뒀다」는 「돈다」가 아니다:
+ *   주기가 재기동 간격보다 길면 그 정비는 **영영 안 돈다.**
+ *
+ *  매니지드의 요청 정비표는 디바운스가 비어 있어 재기동 직후 **첫 요청에** 돈다. 같은 표를 쓰면서
+ *  타이머 쪽만 주기를 기다리면 두 배포의 동작이 갈린다.
  */
 const NEEDS_BOOT_ONESHOT = [
-  "embedding-backfill", "session-title-backfill", "session-state-backfill", "builtin-app-seed",
+  "embedding-backfill", "session-title-backfill", "session-state-backfill", "builtin-app-seed", "outbox",
 ];
 
-test("[R6] 백필 성격의 정비는 **부팅 1회**를 갖는다 — interval 만 있으면 배포 직후가 빈다", () => {
+test("[R6] 부팅 직후가 중요한 정비는 **부팅 1회**를 갖는다 — 주기가 재기동보다 길면 영영 안 돈다", () => {
   const src = readFileSync(SRC, "utf8");
   for (const job of NEEDS_BOOT_ONESHOT)
     assert.ok(new RegExp(`setTimeout\\([^\\n]*perTenant\\("${job}"`).test(src),
