@@ -57,7 +57,8 @@ test("★ 받은 주소·치던 코드를 지우는 경로가 없다 — replace
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
   //  2026-08-31 실측: 상태 조회가 30초 끊기자 «주소가 오지 않았어요» 탈출로가 카드를 통째로 덮어
   //  받은 주소와 입력 중이던 코드까지 지웠다. 이제 그 함수 안에 카드를 갈아치우는 호출이 있어선 안 된다.
-  assert.ok(!/replaceChildren/.test(fn), "startInlineLogin 이 화면을 통째로 갈아치운다");
+  const code = fn.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.ok(!/replaceChildren/.test(code), "startInlineLogin 이 화면을 통째로 갈아치운다");
   assert.ok(!fn.includes("로그인 주소가 오지 않았어요"), "옛 «주소 미도착» 대체 화면이 되살아났다");
   assert.match(fn, /주소가 늦네요/, "정체는 잔글씨 한 줄로 말한다(기다림 유지)");
 });
@@ -83,14 +84,15 @@ test("★ 주소가 안 오면 «시작하는 중» 으로 버티지 않는다 �
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
   assert.match(fn, /STALL_MS/, "상한이 있다");
   assert.match(fn, /Date\.now\(\) - startedAt > STALL_MS/, "상한을 실제로 잰다");
-  assert.match(fn, /escape\(/, "상한을 넘기면 탈출로를 준다");
+  //  #2232 안 1 — 상한을 넘기면 화면을 대체하는 게 아니라 잔글씨로 알린다(탈출로는 하단에 상시).
+  assert.match(fn, /stalledSaid[^]{0,200}note\(/, "상한을 넘기면 잔글씨로 알린다(화면 유지)");
 });
 
 test("★ 탈출로는 사람이 누르는 버튼이다 — await 뒤의 window.open 은 팝업차단으로 조용히 막힌다", () => {
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
   // 카드 경로에 자동 창열기가 없어야 한다. openLoginWindow 는 **버튼 onclick 안에서만** 불린다.
   assert.ok(!/await openLoginWindow\(/.test(fn), "자동으로 창을 열지 않는다");
-  assert.match(fn, /b\.onclick = \(\) => \{ void openLoginWindow\(h, label\); \}/);
+  assert.match(fn, /fbBtn\.onclick = \(\) => \{ void openLoginWindow\(h, label\);/, "탈출로는 버튼 onclick 안에서만 연다");
 });
 
 test("★ 다시 시도는 **새로** 띄운다 — 안 그러면 죽은 코드를 다시 보여 준다", () => {
@@ -99,7 +101,7 @@ test("★ 다시 시도는 **새로** 띄운다 — 안 그러면 죽은 코드�
   //  **같은 죽은 코드**를 돌려줬다. 몇 번을 눌러도 같은 벽이다.
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
   assert.match(fn, /restart: restart === true/, "start 에 restart 를 실어 보낸다");
-  assert.match(fn, /again\.onclick = \(\) => \{ void startInlineLogin\(el, h, label, true\); \}/, "다시 시도가 restart 로 부른다");
+  assert.match(fn, /retry\.onclick[^]{0,400}startInlineLogin\(el, h, label, true\)/, "다시 시도가 restart 로 부른다");
 });
 
 test("★ 막히는 갈래에 누를 수 있는 출구가 있다 — 터미널 명령을 시키지 않는다", () => {
