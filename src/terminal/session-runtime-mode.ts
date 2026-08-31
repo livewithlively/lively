@@ -44,12 +44,22 @@ export function harnessSupportsChat(harness: string): boolean {
 /**
  * 배포 기본값 — `LIVELY_SESSION_RUNTIME=chat|terminal`.
  *
- *  지금은 **terminal 이 기본**이다. 대화창이 작업·승인·슬래시를 아직 안 그리기 때문이고, 그 커버리지가
- *  차기 전에 기본을 옮기면 «덜 익은 화면이 남의 기본 화면이 되는» 사고가 난다(2026-08-31 실측 사고).
- *  ③④(작업 표면·승인/슬래시)가 붙고 프리뷰 실측을 통과하면 이 한 줄을 뒤집는다.
+ *  ── 왜 이제 **chat 이 기본**인가 (2026-09-01) ──────────────────────────────────
+ *  종전엔 terminal 이 기본이었다. 이유는 «대화창이 작업·승인·슬래시를 아직 안 그린다» 였고,
+ *  그 상태에서 기본을 옮겼다가 **덜 익은 화면이 남의 기본 화면이 되는** 사고를 냈다(8/31, 되돌림).
+ *  그때 여기 «③④가 붙고 화면 실측을 통과하면 뒤집는다» 고 적어 뒀다. 그 조건이 찼다:
+ *   · ③ 작업 표면(백그라운드 셸·서브에이전트) · ④ 승인 카드·슬래시 자동완성·사용량·멈춤 — 붙었다.
+ *   · 커버리지를 **값으로** 잰다([[harness-io/coverage.ts]]) — claude 는 8축 전부 ok,
+ *     나머지는 벤더가 프로토콜로 안 여는 축만 남았고 그 사실을 화면이 말한다(막다른 길 없음).
+ *   · 라이트·다크 두 테마를 실제 산출물로 띄워 봤고, 거기서 잡힌 셋(«null» 이 찍히던 것,
+ *     다크에서 안 읽히던 메뉴, `rm -rf` 옆의 파란 [허용])을 고쳤다.
+ *
+ *  ⚠ 되돌리는 길은 **한 줄이 아니라 env 하나**다: `LIVELY_SESSION_RUNTIME=terminal`.
+ *   배포에서 문제가 보이면 코드를 고치지 말고 그 값을 세워 즉시 되돌린다.
+ *  ⚠ 이 값이 chat 이어도 **감당 못 하는 하네스·로그인 세션은 여전히 terminal 이다**(sessionRuntimeMode).
  */
 export function sessionRuntimeDefault(env: NodeJS.ProcessEnv = process.env): SessionRuntimeMode {
-  return String(env.LIVELY_SESSION_RUNTIME || "").trim().toLowerCase() === "chat" ? "chat" : "terminal";
+  return String(env.LIVELY_SESSION_RUNTIME || "").trim().toLowerCase() === "terminal" ? "terminal" : "chat";
 }
 
 /**
