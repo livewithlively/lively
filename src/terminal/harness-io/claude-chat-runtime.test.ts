@@ -70,10 +70,12 @@ await t("[3] stdout 이벤트가 버스로 흐른다 · ★줄 가운데서 끊�
   child.stdout.write(evt.slice(20) + "\n");
   await new Promise((r) => setImmediate(r));
 
-  const started = got.find((e) => e.t === "task.started");
-  assert.ok(started, "task.started 가 왔다");
-  assert.equal((started as any).task.kind, "shell");
-  assert.equal((started as any).task.title, "빌드");
+  //  ⚠ 화면이 보는 것은 **접힌 스냅샷**이다 — 버스가 델타를 접어 내보낸다(runtime-bus.emitSessionEvent).
+  //   접는 규칙이 서버·화면 두 벌이 되지 않게 한 결정이라, 여기서도 그 계약을 확인한다.
+  const snap = got.find((e) => e.t === "tasks.snapshot");
+  assert.ok(snap, "tasks.snapshot 이 왔다");
+  assert.equal((snap as any).tasks[0].kind, "shell");
+  assert.equal((snap as any).tasks[0].title, "빌드");
   stopClaudeChat(S, "테스트 정리");
 });
 

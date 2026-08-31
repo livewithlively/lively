@@ -20,7 +20,7 @@ import { logger } from "../../log.js";
 import { sessionSpawnArgv } from "../session-exec.js";
 import { memberSpawnArgv } from "../terminal-member-fs.js";
 import { claudeStreamEvent } from "./claude-stream.js";
-import { emitSessionEvent, settleAll } from "./runtime-bus.js";
+import { clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
 import type { SessionEvent } from "./session-event.js";
 
 /** 이 세션에서는 대화 런타임을 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
@@ -105,6 +105,7 @@ export function stopClaudeChat(sessionId: string, reason: string): boolean {
   e.closing = true;
   live.delete(sessionId);
   settleAll(sessionId, reason);
+  clearSessionTasks(sessionId);   // 죽은 세션의 «도는 중» 이 화면에 남지 않게
   try { e.child.stdin?.end(); } catch { /* 이미 닫혔다 */ }
   try { e.child.kill("SIGTERM"); } catch { /* 이미 죽었다 */ }
   logger.info({ sessionId, reason, aliveMs: Date.now() - e.startedAt }, "claude 대화 런타임 종료");
@@ -164,6 +165,7 @@ export function ensureClaudeChat(o: ClaudeChatOpts): Entry {
     if (e.closing) return;
     live.delete(o.sessionId);
     settleAll(o.sessionId, why);
+    clearSessionTasks(o.sessionId);
     logger.warn({ sessionId: o.sessionId, why, aliveMs: Date.now() - e.startedAt }, "claude 대화 런타임이 끝났다");
   };
   child.on("exit", onGone("exit"));

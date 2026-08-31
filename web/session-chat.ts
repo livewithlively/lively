@@ -27,6 +27,7 @@ import { confirmSessionPurge, purgeSessionRecord, purgedToast } from './session-
 import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
 import { sessionHandoffContext } from './session-handoff-context.js';
 import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
+import { mountSessionTasks, type SessionTasksHandle } from './session-tasks.js';   // #2439 ③ 작업 표면(백그라운드 셸·서브에이전트)
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 import { rememberCreated } from './v2/created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 
@@ -329,6 +330,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // codex 실시간 층(#2055)의 승인·사용량이 앉는 자리 — 대화 목록과 달리 **스크롤에 안 떠내려간다**(입력칸 바로 위).
   //  승인은 답해야 턴이 진행되는 요청이라, 읽던 자리를 위로 올렸다고 사라지면 그 턴이 통째로 선다.
   const liveDock = el('div', { class: 'cxl-dock' });
+  //  #2439 ③ — 작업(백그라운드 셸·서브에이전트)도 같은 자리에 선다. 승인과 같은 이유로 스크롤에 안 떠내려간다:
+  //   «지금 무엇이 도는가» 는 읽던 자리를 위로 올렸다고 사라지면 안 되는 사실이다.
+  let tasksDock: SessionTasksHandle | null = null;
   let fontStep = parseFontStep(localStorage.getItem(CHAT_FONT_KEY));   // 글자 크기(#2055) — 지난번에 고른 값
 
   /** 이 세션은 대화창이 기본인가 — codex app-server 세션(pane 이 셸이라 터미널엔 말 걸 곳이 없다). */
@@ -1546,6 +1550,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
 
   let live: CodexLive | null = null;
+  /**
+   * #2439 ③ — 작업 도크를 붙인다(백그라운드 셸·서브에이전트).
+   *
+   *  ⚠ **chat 런타임 세션에서만** 연다. terminal 모드 세션은 그 이벤트가 애초에 안 온다(대화 파일에
+   *   없고 TUI 는 밖으로 안 낸다) — 올 것이 없는 SSE 를 세션마다 여는 것은 서버·브라우저 양쪽 낭비다.
+   *  구 서버 행엔 runtimeMode 가 없다 → terminal 로 본다(무회귀).
+   */
+  function ensureTasksDock(): void {
+    if (tasksDock || destroyed) return;
+    if (String(target.raw?.runtimeMode || '') !== 'chat') return;
+    tasksDock = mountSessionTasks(liveDock, { sessionId: target.id });
+  }
+
   function ensureLive(): void {
     // ⚠ 열 때 세션 행에 chatMode 가 아직 없을 수 있다(방금 만든 세션 — 목록 갱신이 나중에 실어 준다).
     //  그때 한 번만 보고 말면 그 세션은 **영원히 승인을 못 받는다**. 그래서 update() 도 이 문을 두드린다.
@@ -1576,6 +1593,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     });
   }
   ensureLive();
+  ensureTasksDock();
 
   // 기본 화면(#2055) — **codex app-server 세션은 대화가 기본**이다. 그 세션의 pane 은 셸이라(대화는 대화창이
   //  전담한다) 터미널로 열면 사람이 **말 걸 곳이 없는 화면**을 먼저 본다 — 실제로 그렇게 헤맸다.
@@ -1605,6 +1623,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  사람이 아직 보기를 직접 고르지 않았다면 기본 화면도 그때 대화로 바꾼다(고른 뒤엔 건드리지 않는다).
       const hadLive = !!live;
       ensureLive();
+      ensureTasksDock();   // 열 때는 행이 얇아 runtimeMode 를 몰랐을 수 있다(방금 만든 세션)
       if (!hadLive && live && !modeChosen && mode === 'term') setMode('chat');
       // 반대 방향도 마감한다 — 위 추정(모르면 codex=대화)이 틀린 배포(tmux 로 끈 곳)에서는 행이 오는 즉시 터미널로.
       if (!modeChosen && mode === 'chat' && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
@@ -1616,6 +1635,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); live?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }

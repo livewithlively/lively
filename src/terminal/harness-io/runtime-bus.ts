@@ -21,7 +21,7 @@
 //  codex 런타임(codex-chat-runtime.ts)은 매니지드 프로덕션에서 돌고 있다. 새 코드를 먼저 이 위에서
 //  세우고, codex 이관은 그 뒤에 별도로 한다 — 도는 것을 리팩터와 함께 흔들지 않는다.
 import { logger } from "../../log.js";
-import type { SessionEvent } from "./session-event.js";
+import { applyTaskEvent, type SessionEvent, type TaskInfo } from "./session-event.js";
 
 type Listener = (e: SessionEvent) => void;
 
@@ -41,6 +41,13 @@ export const ASK_TTL_MS = 10 * 60_000;
 
 const listeners = new Map<string, Set<Listener>>();
 const pending = new Map<string, Map<string, Pending<unknown>>>();
+/** 세션별 작업 목록 — **접기는 서버에서 한 벌만** 한다(아래 emitSessionEvent 주석). */
+const tasks = new Map<string, TaskInfo[]>();
+
+/** 지금 이 세션에서 도는(또는 방금 끝난) 작업들 — 화면이 새로 붙었을 때 되그리는 재료. */
+export function sessionTasks(sessionId: string): TaskInfo[] {
+  return [...(tasks.get(sessionId) ?? [])];
+}
 
 /** 세션의 이벤트를 구독한다. 반환값을 부르면 해지. */
 export function onSessionEvent(sessionId: string, fn: Listener): () => void {
@@ -60,11 +67,22 @@ export function onSessionEvent(sessionId: string, fn: Listener): () => void {
  *  다른 화면(같은 세션을 보는 다른 탭)을 멈추게 하지 않는다.
  */
 export function emitSessionEvent(sessionId: string, e: SessionEvent): void {
+  //  ★ 작업 이벤트는 **여기서 접어 스냅샷으로 바꿔** 내보낸다(#2439).
+  //   왜: 델타를 그대로 흘리면 접는 규칙이 서버·화면 두 벌이 되고, 두 벌은 반드시 갈린다. 그리고 화면이
+  //   재접속하면 중간 델타를 놓쳐 목록이 영영 어긋난다(스냅샷이면 다음 한 장으로 정합해진다).
+  //   작업은 세션당 몇 개라 매번 전량을 보내도 싸다 — **정합성이 대역폭보다 중요하다.**
+  //   상태를 여기서 들기 때문에 새로 붙은 화면에 «지금 목록» 을 곧바로 줄 수도 있다(sessionTasks).
+  let out = e;
+  if (e.t === "task.started" || e.t === "task.updated" || e.t === "tasks.snapshot") {
+    const next = applyTaskEvent(tasks.get(sessionId) ?? [], e);
+    tasks.set(sessionId, next);
+    out = { t: "tasks.snapshot", tasks: next };
+  }
   const set = listeners.get(sessionId);
   if (!set) return;
   for (const fn of [...set]) {
-    try { fn(e); }
-    catch (err) { logger.warn({ sessionId, t: e.t, err: (err as Error)?.message }, "세션 이벤트 구독자가 던졌다 — 나머지는 계속 간다"); }
+    try { fn(out); }
+    catch (err) { logger.warn({ sessionId, t: out.t, err: (err as Error)?.message }, "세션 이벤트 구독자가 던졌다 — 나머지는 계속 간다"); }
   }
 }
 
@@ -140,4 +158,10 @@ export function settleAll(sessionId: string, reason: string): number {
 export function resetSessionBus(sessionId: string): void {
   settleAll(sessionId, "reset");
   listeners.delete(sessionId);
+  tasks.delete(sessionId);
+}
+
+/** 런타임이 끝났다 — 작업 목록도 비운다(죽은 세션의 «도는 중» 이 화면에 남지 않게). */
+export function clearSessionTasks(sessionId: string): void {
+  tasks.delete(sessionId);
 }

@@ -3,7 +3,7 @@
 //  이 표가 없으면 어댑터마다 각자 규칙을 지켜야 하고, 하나가 빠지면 그 세션의 턴이 **영구 정지**한다
 //  (claude: "permission prompts have no park deadline" · codex #2055 §11 함정1 — 둘이 같은 성질이다).
 import assert from "node:assert/strict";
-import { ask, answer, emitSessionEvent, onSessionEvent, pendingAsks, resetSessionBus, settleAll } from "./runtime-bus.js";
+import { ask, answer, clearSessionTasks, emitSessionEvent, onSessionEvent, pendingAsks, resetSessionBus, sessionTasks, settleAll } from "./runtime-bus.js";
 import type { SessionEvent } from "./session-event.js";
 
 let pass = 0;
@@ -81,6 +81,36 @@ await t("[8] 세션끼리 새지 않는다 — 남의 세션 물음에 답할 �
   assert.equal(pendingAsks("y").length, 0);
   assert.equal(pendingAsks("x").length, 1);
   settleAll("x", "정리"); await p;
+});
+
+await t("[9] ★ 작업 이벤트는 접혀서 스냅샷으로 나간다 — 접는 규칙이 두 벌이 되지 않게", () => {
+  const S = "s9"; resetSessionBus(S);
+  const got: SessionEvent[] = [];
+  onSessionEvent(S, (e) => got.push(e));
+  emitSessionEvent(S, { t: "task.started", task: { id: "T1", kind: "shell", title: "빌드", status: "running" } });
+  emitSessionEvent(S, { t: "task.updated", id: "T1", patch: { status: "completed" } });
+  //  화면이 보는 것은 언제나 스냅샷 한 장이다(델타를 화면이 다시 접지 않는다).
+  assert.deepEqual(got.map((e) => e.t), ["tasks.snapshot", "tasks.snapshot"]);
+  assert.equal((got[1] as any).tasks[0].status, "completed");
+  //  서버도 같은 목록을 들고 있어 **새로 붙은 화면**에 곧바로 줄 수 있다.
+  assert.equal(sessionTasks(S)[0].status, "completed");
+});
+
+await t("[10] 작업 아닌 이벤트는 그대로 흐른다(접기가 남의 이벤트를 삼키지 않는다)", () => {
+  const S = "s10"; resetSessionBus(S);
+  const got: SessionEvent[] = [];
+  onSessionEvent(S, (e) => got.push(e));
+  emitSessionEvent(S, { t: "usage", usage: { costUsd: 1 } });
+  emitSessionEvent(S, { t: "facts", facts: { model: "m" } });
+  assert.deepEqual(got.map((e) => e.t), ["usage", "facts"]);
+});
+
+await t("[11] 런타임이 끝나면 작업 목록도 비운다 — 죽은 세션의 «도는 중» 이 남지 않게", () => {
+  const S = "s11"; resetSessionBus(S);
+  emitSessionEvent(S, { t: "task.started", task: { id: "T1", kind: "agent", title: "리뷰", status: "running" } });
+  assert.equal(sessionTasks(S).length, 1);
+  clearSessionTasks(S);
+  assert.equal(sessionTasks(S).length, 0);
 });
 
 console.log(`\n${pass}건 통과`);

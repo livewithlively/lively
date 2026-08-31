@@ -9,6 +9,7 @@
 import { HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { codexChatMode } from "./codex-chat-mode.js";
+import { sessionRuntimeMode } from "./session-runtime-mode.js";   // #2439 — chat 런타임 세션 분기
 import { rememberCodexThread } from "./codex-chat-thread.js";
 import { sessionDir, sessionGone, sessionOsUser } from "./terminal-sessions.js";
 import { getSessionState } from "../sessions/session-state.js";
@@ -20,7 +21,7 @@ export async function sessionHarnessKey(id: string): Promise<string> {
 }
 
 export type DeliverResult =
-  | { ok: true; delivered: true; transport: "app-server"; thread_id: string; steered: boolean }
+  | { ok: true; delivered: true; transport: "app-server" | "chat-runtime"; thread_id: string; steered: boolean }
   | { ok: true; queued: true; outbox_id: number; seq: number; transport?: "outbox"; fallback?: string }
   | { ok: true };
 
@@ -30,6 +31,28 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: { ow
   const nodeId = opts?.nodeId !== undefined
     ? (opts.nodeId || "")
     : await import("../node/registry.js").then(({ nodeOfSession }) => nodeOfSession(sessionId) || "");
+  // ── claude 대화 런타임(#2439) — chat 모드 세션은 stream-json 프로세스가 대화를 쥔다. ──
+  //  왜 codex 분기보다 먼저 보나: 두 분기는 배타적이고(하네스가 다르다) 순서에 의미는 없지만,
+  //  **판정 조건이 같은 모양**(모드 + 살아있음)이라 나란히 두면 다음 하네스를 얹을 자리가 분명해진다.
+  //  ⚠ codex 와 같은 이유로 «이 박스의 tmux 에 그 세션이 실제로 있나» 로 가른다 — 노드 등록 여부로
+  //   가르면 게이트웨이 박스가 노드로도 등록된 배포에서 이 분기가 통째로 무시된다(#2055 실측 함정).
+  if (sessionRuntimeMode({ harness: await sessionHarnessKey(sessionId) }) === "chat"
+      && !(await sessionGone(sessionId))) {
+    const { sendClaudeChat, ClaudeChatUnavailable } = await import("./harness-io/claude-chat-runtime.js");
+    try {
+      const dir = await sessionDir(sessionId);
+      const osUser = await sessionOsUser(sessionId);
+      const st = await getSessionState(sessionId);
+      const r = sendClaudeChat({ sessionId, text, cwd: dir, osUser, convId: st?.claude_session_id || null });
+      return { ok: true, delivered: true, transport: "chat-runtime", thread_id: r.convId, steered: false };
+    } catch (e) {
+      if (!(e instanceof ClaudeChatUnavailable)) throw e;
+      //  ★ 실패하면 **반드시 종전 경로로 폴백**한다(codex 와 같은 규약). 대화 런타임은 새 경로라
+      //   폴백이 없으면 그 자체가 장애가 된다. 폴백했다는 사실은 응답에 실어 화면이 이유를 말하게 한다.
+      logger.warn({ id: sessionId, err: (e as Error).message }, "claude 대화 런타임 전송 실패 — 종전 경로로 폴백");
+    }
+  }
+
   // ── codex app-server 모드(#2055) — 글자를 화면에 '넣는' 대신 **프로토콜로 보낸다**. ──
   //  ⚠ **노드 판정보다 먼저** 본다(실측 2026-08-26, dev): 게이트웨이 박스가 노드로도 등록돼 있으면
   //   그 박스의 **로컬 세션까지 노드 스냅샷에 잡혀**(applyLiveTheme 주석과 같은 함정) 아래 노드 릴레이로
