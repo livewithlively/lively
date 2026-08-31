@@ -112,6 +112,8 @@ export interface CpWorkspace {
   role: string; member_count: number; pending_invites: number;
   /** #1875 D5″ — 어드민 수. 화면의 ✕ 가 «그냥 나가기» 와 «넘기고 나가기» 를 이 값으로 가른다. */
   owner_count: number;
+  /** #2188 — 사람이 정한 얼굴(색·글자). CP workspaces.face. 없으면 화면이 파생한다. */
+  face?: { color?: string; char?: string } | null;
   tenant_state: string | null;
   /** 이 워크스페이스로 들어가는 주소. **매니지드에서 전환은 헤더가 아니라 이동이다** — 워크스페이스마다
    *  테넌트가 다르고 주소도 다르다(1:1). CP 가 SSO 를 태워 그 게이트웨이로 보낸다. */

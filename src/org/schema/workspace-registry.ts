@@ -34,6 +34,8 @@ export async function initWorkspaceRegistry(pool: Pool): Promise<void> {
       state TEXT NOT NULL DEFAULT 'active',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    -- #2188 설정 모달 — 사람이 정한 얼굴(색·글자). 기존 박스는 ALTER 로 따라온다(전부 IF NOT EXISTS, 재실행 안전).
+    ALTER TABLE gw_workspace ADD COLUMN IF NOT EXISTS face JSONB NOT NULL DEFAULT '{}'::jsonb;
     ${ensureCheck("gw_workspace", {
       gw_workspace_kind_chk: "kind IN ('personal','team')",
       gw_workspace_state_chk: "state IN ('active','archived')",
