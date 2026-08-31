@@ -46,11 +46,20 @@ test("★ 대상이 아닌 하네스는 종전 «로그인 창» 그대로다 �
   assert.match(win, /window\.open\(sessionTermUrl/);
 });
 
-test("★ 시작조차 못 하면 창으로 내려간다 — 막다른 카드 금지", () => {
+test("★ 막다른 카드 금지 — 탈출로는 상시, 실패해도 화면을 지우지 않는다", () => {
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
-  // 탈출로는 «자동으로 연다» 가 아니라 «누를 것을 준다» 로 바뀌었다(팝업차단) — 계약은 그대로 «막다른 카드 금지».
-  assert.match(fn, /catch \(e\) \{[^]{0,400}escape\(/, "시작 실패에 탈출로를 준다");
-  assert.match(fn, /openLoginWindow\(h, label\)/, "그 탈출로가 종전 창 경로로 간다");
+  //  #2232 안 1 — 탈출로가 «실패 시 화면 대체»에서 «하단 상시 버튼»으로 바뀌었다. 계약은 그대로: 막다른 카드 금지.
+  assert.match(fn, /fbBtn\.onclick[^]{0,160}openLoginWindow\(h, label\)/, "상시 탈출로가 종전 창 경로로 간다");
+  assert.match(fn, /catch \(e\) \{[^]{0,300}note\(/, "시작 실패는 잔글씨로만 말한다(화면 유지)");
+});
+
+test("★ 받은 주소·치던 코드를 지우는 경로가 없다 — replaceChildren 철거(코드 증발 사고의 뿌리)", () => {
+  const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
+  //  2026-08-31 실측: 상태 조회가 30초 끊기자 «주소가 오지 않았어요» 탈출로가 카드를 통째로 덮어
+  //  받은 주소와 입력 중이던 코드까지 지웠다. 이제 그 함수 안에 카드를 갈아치우는 호출이 있어선 안 된다.
+  assert.ok(!/replaceChildren/.test(fn), "startInlineLogin 이 화면을 통째로 갈아치운다");
+  assert.ok(!fn.includes("로그인 주소가 오지 않았어요"), "옛 «주소 미도착» 대체 화면이 되살아났다");
+  assert.match(fn, /주소가 늦네요/, "정체는 잔글씨 한 줄로 말한다(기다림 유지)");
 });
 
 test("★ 문구가 동작과 어긋나지 않는다 — codex·claude 안내에 «검은 창»·«새 탭» 이 없다", () => {

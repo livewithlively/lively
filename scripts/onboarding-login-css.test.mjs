@@ -14,13 +14,14 @@ test("배선 · 두 파일을 실제로 읽었다(vacuous 방지)", () => {
   assert.ok(SRC.length > 10000 && CSS.length > 1000);
 });
 
-test("★ 카드가 쓰는 ob-login-* 클래스가 스타일시트에 전부 있다", () => {
+test("★ 스테퍼가 쓰는 ob-lg-*·목업 클래스가 스타일시트에 전부 있다", () => {
+  //  #2232 안 1 — 카드(ob-login-*)가 스테퍼(ob-lg-*)로 바뀌었다. 계약은 같다: 화면에 나가는 클래스는
+  //  스타일시트에 규칙이 있어야 한다(없으면 배포 뒤에야 민낯으로 드러난다).
   const used = new Set();
-  // 화면에 나가는 자리에서만 모은다 — 주석에 적힌 이름은 계약이 아니다.
   for (const line of SRC.split("\n")) {
     if (line.trim().startsWith("//")) continue;
-    for (const m of line.matchAll(/["'=](ob-login-[a-z-]+)["' ]/g)) used.add(m[1]);
+    for (const m of line.matchAll(/["'=\s](ob-(?:lg-[a-z-]+|copychip|bmock|tmock|peek|stuck|bchip|bcap))["'\s]/g)) used.add(m[1]);
   }
-  assert.ok(used.size >= 4, `카드 클래스를 못 찾았다 — 모은 것: ${[...used].join(", ")}`);
+  assert.ok(used.size >= 8, `스테퍼 클래스를 못 찾았다 — 모은 것: ${[...used].join(", ")}`);
   for (const cls of used) assert.match(CSS, new RegExp(`\\.${cls}\\b`), `${cls} 규칙이 스타일시트에 없다`);
 });
