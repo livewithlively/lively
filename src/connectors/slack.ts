@@ -242,6 +242,24 @@ async function sleep(ms: number): Promise<void> {
 
 // Slack Web API 호출 — GET. 429 Retry-After 존중(재시도), ok:false 는 에러 throw.
 // 파라미터는 querystring 으로 전달(GET 방식 권장 메서드들에 충분).
+/**
+ * 권한 부족일 때 «무엇이 없고 어디서 고치는지» 를 덧붙인다(#1631).
+ *  ⚠ 아는 것만 말한다 — 표에 없는 메서드면 아무 말도 안 붙인다(지어낸 스코프를 켜게 하면 더 나쁘다).
+ */
+const SCOPE_BY_METHOD: Record<string, string> = {
+  "search.messages": "search:read (유저 토큰 전용 — 봇 토큰은 이 메서드를 거부합니다)",
+  "conversations.history": "channels:history · groups:history",
+  "conversations.list": "channels:read · groups:read",
+  "conversations.replies": "channels:history · groups:history",
+  "users.list": "users:read · users:read.email",
+};
+function scopeHint(method: string, err: unknown): string {
+  if (!/missing_scope|not_allowed_token_type|invalid_scope/i.test(String(err ?? ""))) return "";
+  const need = SCOPE_BY_METHOD[method];
+  const what = need ? ` 이 수집에는 ${need} 권한이 필요합니다.` : "";
+  return `${what} [외부 앱 연결 ▸ Slack]에서 다시 연결하면 권한을 새로 받습니다 — 권한이 그대로면 다음 실행도 같은 자리에서 멈춥니다.`;
+}
+
 async function slackCall<T extends SlackEnvelope>(
   method: string,
   token: string,
@@ -290,7 +308,11 @@ async function slackCall<T extends SlackEnvelope>(
         await sleep(waitSec * 1000);
         continue;
       }
-      throw new Error(`slack ${method} error: ${json.error ?? "unknown"}`);
+      //  ★ 권한 부족은 «고장» 이 아니라 **사람이 할 일이 남은 것**이다(#1631, 원준님 2026-08-31).
+      //   종전엔 `slack search.messages error: missing_scope` 만 남아서, 화면엔 «실패» 라고만 뜨고
+      //   무엇이 없는지도, 어디서 고치는지도 없었다(실측: 슬랙 공개채널 수집이 매 주기 같은 자리에서 실패).
+      //   메서드마다 필요한 스코프가 다르므로 **그 메서드의 것**을 말한다 — 뭉뚱그리면 엉뚱한 걸 켜게 한다.
+      throw new Error(`slack ${method} error: ${json.error ?? "unknown"}` + scopeHint(method, json.error));
     }
     return json;
   }
