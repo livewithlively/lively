@@ -120,7 +120,18 @@ export function taskKindOf(harnessTaskType: string | undefined | null): TaskInfo
  *  (재접속·경합), 그때 버리면 그 작업은 영영 화면에 안 뜬다.
  */
 export function applyTaskEvent(tasks: readonly TaskInfo[], ev: SessionEvent): TaskInfo[] {
-  if (ev.t === "tasks.snapshot") return [...ev.tasks];
+  if (ev.t === "tasks.snapshot") {
+    //  ★ 스냅샷을 **통째로 교체하지 않는다**(2026-08-31 실측으로 잡은 버그).
+    //   하네스가 주는 목록은 «지금 **도는** 것» 이다 — 끝난 작업은 빠진다(claude: background_tasks_changed).
+    //   그대로 갈아치우면 ⓐ 방금 끝난 작업의 제목·종류를 잃고 ⓑ 뒤이어 오는 완료 델타(task_updated·
+    //   task_notification)가 «모르는 id» 로 도착해 **제목 없는 유령 행**을 만든다. 실측에서 화면에
+    //   `kind:"other", title:""` 카드가 그렇게 떴다.
+    //   그래서 **머지한다**: 스냅샷에 있는 것은 갱신·추가하고, 없는 것은 지우지 않는다(완료 델타가
+    //   그 상태를 알려준다). 목록이 무한히 자라는 것은 화면이 «끝난 지 오래된 것» 을 접어 막는다.
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    for (const t of ev.tasks) byId.set(t.id, { ...byId.get(t.id), ...t });
+    return [...byId.values()];
+  }
   if (ev.t === "task.started") {
     const rest = tasks.filter((x) => x.id !== ev.task.id);
     return [...rest, ev.task];

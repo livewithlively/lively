@@ -137,6 +137,25 @@ t("[11] 대화 줄(assistant·user)과 훅 소음은 null — 그건 ChatLine �
   assert.equal(claudeStreamEvent("not an object"), null);
 });
 
+t("[11-b] ★ 실측 시나리오 — 도는 목록이 비어도 앞서 안 작업을 잃지 않는다", () => {
+  //  claude 실제 순서(2026-08-31 실측): started → background_tasks_changed[…] → **[]**(끝나서 빠짐)
+  //   → task_updated(completed) → task_notification(output_file). 여기서 []를 전량 교체로 다루면
+  //   그 뒤 델타가 «모르는 id» 로 와서 제목 없는 유령 행이 생긴다(화면에 실제로 그렇게 떴다).
+  let ts: TaskInfo[] = [];
+  const step = (line: unknown): void => { const e = claudeStreamEvent(line); if (e) ts = applyTaskEvent(ts, e); };
+  step({ type: "system", subtype: "task_started", task_id: "B1", task_type: "local_bash", description: "빌드", tool_use_id: "tu" });
+  step({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "B1", task_type: "local_bash", description: "빌드" }] });
+  step({ type: "system", subtype: "background_tasks_changed", tasks: [] });          // 끝나서 도는 목록에서 빠졌다
+  step({ type: "system", subtype: "task_updated", task_id: "B1", patch: { status: "completed", end_time: 9 } });
+  step({ type: "system", subtype: "task_notification", task_id: "B1", status: "completed", output_file: "/o", summary: "끝" });
+  assert.equal(ts.length, 1, "유령 행이 생기지 않는다");
+  assert.equal(ts[0].id, "B1");
+  assert.equal(ts[0].kind, "shell", "종류를 잃지 않는다");
+  assert.equal(ts[0].title, "빌드", "제목을 잃지 않는다");
+  assert.equal(ts[0].status, "completed");
+  assert.equal(ts[0].outputRef, "/o");
+});
+
 t("[12] taskKindOf — 하네스 낱말을 우리 낱말로, 모르면 other(던지지 않는다)", () => {
   assert.equal(taskKindOf("local_bash"), "shell");
   assert.equal(taskKindOf("local_agent"), "agent");
@@ -159,9 +178,16 @@ t("[13] applyTaskEvent — 스냅샷·시작·델타를 같은 규칙으로 접�
   ts = applyTaskEvent(ts, { t: "task.updated", id: "ghost", patch: { title: "늦게 온 것" } });
   assert.equal(ts.length, 2);
   assert.equal(ts[1].id, "ghost");
-  //  스냅샷은 통째로 교체한다(서버가 정본).
+  //  ★ 빈 스냅샷은 **아무것도 지우지 않는다**(계약이 뒤집힌 자리 — [11-b] 참조).
+  //   하네스가 주는 목록은 «지금 도는 것» 이라 끝난 작업은 빠진다. 그걸 «전량» 으로 읽어 갈아치우면
+  //   방금 끝난 작업의 제목·종류를 잃고 뒤이은 델타가 유령 행을 만든다(실측).
   ts = applyTaskEvent(ts, { t: "tasks.snapshot", tasks: [] });
-  assert.equal(ts.length, 0);
+  assert.equal(ts.length, 2, "빈 스냅샷이 목록을 비우지 않는다");
+  //  같은 id 가 스냅샷에 다시 오면 그 값으로 갱신되되, 앞서 안 필드는 남는다(머지).
+  ts = applyTaskEvent(ts, { t: "tasks.snapshot", tasks: [{ id: "a", kind: "shell", title: "A2", status: "running" }] });
+  const a = ts.find((x) => x.id === "a")!;
+  assert.equal(a.title, "A2");
+  assert.equal(ts.length, 2, "머지지 교체가 아니다");
 });
 
 console.log(`\n${pass}건 통과`);
