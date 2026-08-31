@@ -1,5 +1,7 @@
 // 세션 폴더 사전 신뢰 (#1631) — 엣지 표 행마다 한 검사.
 //  사양: 우리가 만든 폴더만 · 멱등(이미 true 면 안 씀) · 비파괴(다른 키 보존) · 못 읽으면 새로 만든다.
+//  ⑭⑮ 는 «우리가 만든 폴더만» 을 **인자로** 받게 한 뒤의 계약이다(#2478) — 그전엔 이 축이 주석에만 있었고
+//   호출부가 그 보증 없이 불러 화면 수락층의 가드가 우회됐다.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { planTrustPatch, ensureFolderTrusted, TRUST_KEY, type TrustIo } from "./claude-trust.js";
@@ -77,7 +79,7 @@ test("⑩ 경로가 비면 아무것도 하지 않는다", () => {
 test("⑪ 쓰기가 실제로 그 파일로 나간다", async () => {
   const wrote: Array<[string, string]> = [];
   const io: TrustIo = { read: async () => null, write: async (p, t) => { wrote.push([p, t]); } };
-  assert.equal(await ensureFolderTrusted(io, "/cfg/.claude.json", DIR), true);
+  assert.equal(await ensureFolderTrusted(io, "/cfg/.claude.json", DIR, true), true);
   assert.equal(wrote.length, 1);
   assert.equal(wrote[0][0], "/cfg/.claude.json");
   assert.equal(JSON.parse(wrote[0][1]).projects[DIR][TRUST_KEY], true);
@@ -89,13 +91,32 @@ test("⑫ 이미 신뢰돼 있으면 write 를 **한 번도** 부르지 않는�
     read: async () => JSON.stringify({ projects: { [DIR]: { [TRUST_KEY]: true } } }),
     write: async () => { calls++; },
   };
-  assert.equal(await ensureFolderTrusted(io, "/cfg/.claude.json", DIR), false);
+  assert.equal(await ensureFolderTrusted(io, "/cfg/.claude.json", DIR, true), false);
   assert.equal(calls, 0);
 });
 
 test("⑬ 읽기·쓰기가 던져도 세션을 막지 않는다(false 를 돌려줄 뿐)", async () => {
   const readThrows: TrustIo = { read: async () => { throw new Error("EACCES"); }, write: async () => {} };
-  assert.equal(await ensureFolderTrusted(readThrows, "/cfg/.claude.json", DIR), false);
+  assert.equal(await ensureFolderTrusted(readThrows, "/cfg/.claude.json", DIR, true), false);
   const writeThrows: TrustIo = { read: async () => null, write: async () => { throw new Error("EROFS"); } };
-  assert.equal(await ensureFolderTrusted(writeThrows, "/cfg/.claude.json", DIR), false);
+  assert.equal(await ensureFolderTrusted(writeThrows, "/cfg/.claude.json", DIR, true), false);
+});
+
+// ── «우리가 만든 폴더만» — 판정이 거짓이면 파일에 손대지 않는다(#2478) ──
+//  왜 read 까지 세나: 사양이 «읽지도 쓰지도 않는다» 다. 쓰기만 막으면 나중에 누가 '읽어서 판단' 을 넣을 때
+//  이 테스트가 통과해 버린다 — 사람의 폴더는 판정 대상 자체가 아니다.
+test("⑭ allowed=false 면 읽지도 쓰지도 않는다", async () => {
+  let reads = 0, writes = 0;
+  const io: TrustIo = { read: async () => { reads++; return null; }, write: async () => { writes++; } };
+  assert.equal(await ensureFolderTrusted(io, "/cfg/.claude.json", DIR, false), false);
+  assert.equal(reads, 0, "사람의 폴더는 읽지도 않는다");
+  assert.equal(writes, 0, "사람의 폴더를 대신 신뢰했다");
+});
+
+test("⑮ allowed=false 는 이미 있는 설정을 건드리지 않는다", async () => {
+  const cur = JSON.stringify({ projects: { "/other": { [TRUST_KEY]: true } } });
+  let wrote: string | null = null;
+  const io: TrustIo = { read: async () => cur, write: async (_p, t) => { wrote = t; } };
+  assert.equal(await ensureFolderTrusted(io, "/cfg/.claude.json", DIR, false), false);
+  assert.equal(wrote, null);
 });

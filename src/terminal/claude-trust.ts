@@ -11,8 +11,14 @@
 //   API 층 점검으로는 영원히 안 보였다(터미널 pane 안의 일이라).
 //
 //  ── 경계 ──
-//  ⚠ **우리가 만든 폴더만** 신뢰한다. 호출자가 «이 경로는 라이블리가 방금 만든 세션 작업 폴더다» 라고
-//   보증할 때만 부른다 — 사람이 고른 임의 경로를 대신 신뢰해 주면 그건 보안 결정을 사람 대신 내리는 것이다.
+//  ⚠ **우리가 만든 폴더만** 신뢰한다 — 사람이 고른 임의 경로를 대신 신뢰해 주면 그건 보안 결정을 사람 대신
+//   내리는 것이다. 그 판정(`autoTrustWorkspace`)은 이 모듈이 하지 않고 **호출자가 넘긴다**(`allowed`).
+//  ⚠ 그 보증을 **주석이 아니라 인자로** 받는 이유(#2478): 처음엔 «호출자가 보증할 때만 부른다» 를 머리말에만
+//   적었는데, 호출부(sessions.ts)가 그 보증 없이 불러 **먼저 있던 가드가 우회됐다**. 첫 지시의 화면 수락층은
+//   `autoTrustWorkspace` 로 «사람이 고른 폴더는 대신 안 누른다» 고 판정하는데, 이 층이 그 폴더를 파일에 미리
+//   신뢰로 박아 **대화상자 자체가 안 뜨게** 만들었다 — 층1이 지키던 것을 층2가 조용히 없앤 모양.
+//   같은 레포가 이미 배운 것이다: 원칙을 주석에 적는 것으로는 안 지켜진다(#1471 `memberFileExists` 의 catch 갈래).
+//   그래서 `allowed` 를 **필수 인자**로 둔다 — 판정을 안 거치면 컴파일이 안 된다.
 //  ⚠ 로그인 상태는 **쓰지 않는다**(#2232 에서 보류된 판단 그대로 — 미리 쓰면 로그인 흐름 없이
 //   «Not logged in» 입력칸에 떨어진다). 여기서 없애는 물음은 «폴더 신뢰» 하나뿐이다.
 //  비치명이어야 한다 — 실패해도 세션은 떠야 한다(같은 부류의 선례: ensureGitSafeDirectory(#522)).
@@ -74,9 +80,15 @@ export interface TrustIo {
 
 /**
  * 세션이 실제로 쓸 설정 파일에 신뢰를 심는다. **비치명** — 던지지 않는다(호출자가 세션을 막으면 안 된다).
+ *
+ * @param allowed 이 경로를 대신 신뢰해도 되는가 — **라이블리가 만들고 소유하는 폴더인가**(`autoTrustWorkspace`).
+ *   거짓이면 파일을 **읽지도 쓰지도 않는다**: 사람이 고른 폴더는 그 사람이 대화상자에서 직접 답해야 한다.
+ *   판정을 여기서 하지 않는 이유는 이 파일이 노드 번들에도 실리는 순수 모듈이라서다 — 판정의 파생지는
+ *   `session-create-guards.autoTrustWorkspace` 하나이고, 화면 수락층도 같은 값을 쓴다.
  * @returns 실제로 썼으면 true
  */
-export async function ensureFolderTrusted(io: TrustIo, configFile: string, dir: string): Promise<boolean> {
+export async function ensureFolderTrusted(io: TrustIo, configFile: string, dir: string, allowed: boolean): Promise<boolean> {
+  if (!allowed) return false;   // 사람의 폴더 — 대신 누르지 않는다(종전대로 대화상자가 뜬다)
   try {
     const patch = planTrustPatch(await io.read(configFile), dir);
     if (!patch.write) return false;
