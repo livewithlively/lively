@@ -195,12 +195,12 @@ t("[F14] 정비 결과를 로그에 펼쳐 찍는다 — «돌았다»만 찍으
 });
 
 // ── G1~G7 · 남은 정비를 표에 올린 뒤 (#2246) ────────────────────────────────
-t("[G1] 표에 여덟 정비가 있고 첫 목격에 전부 발사한다", () => {
+t("[G1] 표에 아홉 정비가 있고 첫 목격에 전부 발사한다", () => {
   resetSweepDebounce();
   //  일곱 = background-sweeps 여덟 중 파괴적인 reapIdleSessions 를 뺀 수 · 하나 = 위탁 배차(별도 스텝).
   const perTenant = SWEEP_JOBS.filter((j) => (j.scope ?? "tenant") === "tenant");
-  assert.equal(perTenant.length, 8, "테넌트 정비 여덟(background-sweeps 일곱 + 아웃박스)");
-  assert.equal(SWEEP_JOBS.length, 9, "전역 하나(task-dispatch)가 더 있다");
+  assert.equal(perTenant.length, 9, "테넌트 정비 아홉(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩)");
+  assert.equal(SWEEP_JOBS.length, 10, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -217,6 +217,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "session-title-backfill": SIX_HOURS_MS,          // 원래는 부팅 1회 — 멱등이라 긴 주기가 같은 뜻
     "session-state-backfill": SWEEP_MIN_INTERVAL_MS, // 종전 5분
     "task-dispatch": TASK_TICK_MS,                   // 종전 task-scheduler 의 TICK_MS(5초)
+    "builtin-app-seed": SIX_HOURS_MS,                // 코드 소유 앱은 롤 때만 바뀐다
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
@@ -321,3 +322,38 @@ t("[H7] 전역 정비는 있던 tickTasksAllTenants 를 부른다 — 여기서 
 });
 
 console.log(`outbox-request-sweep: ${pass} passed`);
+
+// ── I: 빌트인 앱 시딩 (#2246 후속) ───────────────────────────────────────────
+//  실측: 테넌트 8개 중 7개가 org_app=0 → ai-session 알림이 전이를 감지하고도 전부 거절됐다.
+//  ⚠ I2·I5 는 이번에 새로 만든 `scope` 필드가 낳은 엣지다 — **기본값이라 조용히 틀릴 수 있다.**
+
+t("[I1] 표에 빌트인 앱 시딩이 등록돼 있다", () => {
+  const j = SWEEP_JOBS.find((x) => x.key === "builtin-app-seed");
+  assert.ok(j, "builtin-app-seed 정비가 표에 없다 — 신규 테넌트는 앱을 영영 못 받는다");
+});
+
+t("[I2] 빌트인 앱 시딩은 **테넌트 스코프**다 — 전역이면 딱 한 테넌트만 앱을 받는다", () => {
+  const j = SWEEP_JOBS.find((x) => x.key === "builtin-app-seed")!;
+  assert.notEqual(j.scope, "global", "전역으로 달면 첫 테넌트가 슬롯을 가져가 나머지는 굶는다");
+  assert.equal(j.scope ?? "tenant", "tenant");
+});
+
+t("[I3] 주기는 6시간 — 코드 소유 앱은 롤 때만 바뀐다", () => {
+  const j = SWEEP_JOBS.find((x) => x.key === "builtin-app-seed")!;
+  assert.equal(j.intervalMs, SIX_HOURS_MS);
+});
+
+t("[I4] 시딩 내용을 복제하지 않는다 — apps/seed.js 의 seedBuiltinApps 를 부른다", () => {
+  const src = readFileSync(SRC, "utf8");
+  const line = src.split("\n").find((l) => l.includes("seedBuiltinApps"));
+  assert.ok(line, "seedBuiltinApps 를 부르는 줄이 없다");
+  assert.match(line!, /apps\/seed\.js/, "원래 시더 모듈을 그대로 불러야 한다");
+});
+
+t("[I5] 테넌트가 둘이면 **각각** 시드된다 — 전역 디바운스에 먹히지 않는다", () => {
+  resetSweepDebounce();
+  const now = Date.now();
+  assert.equal(shouldSweep("builtin-app-seed", "tenant-A", now, SIX_HOURS_MS), true);
+  assert.equal(shouldSweep("builtin-app-seed", "tenant-B", now, SIX_HOURS_MS), true,
+    "다른 테넌트인데 첫 시딩이 막혔다 — 그 테넌트는 앱을 못 받는다");
+});
