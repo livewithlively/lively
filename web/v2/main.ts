@@ -18,6 +18,7 @@ import { dotCls, isMineSess, isTrashedSess, mergeSessions, projName, renderHome,
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
+import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 출처별 원본 탐색기(목록·상세)
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
@@ -817,6 +818,8 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   //  돌아보기는 불러오는 것 — 프로젝트 화면은 문패 [타임라인](알림 센터)이 그 자리를 맡는다.
   if (!p || p === 'dashboard') return { title: '홈', noAside: true };
   if (p === 'inbox') return { title: '확인할 것', noAside: true };
+  //  #2423 자료 앱 — 목록은 «자료», 자료 하나는 그 제목이 정본이라 데이터가 오면 힌트로 따라잡는다.
+  if (p === 'sources') return { title: segs[1] ? (routeTitleHint.get(key) || '자료') : '자료', noAside: true };
   if (p === 'archive') return { title: '아카이브', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
   if (p === 'trash') return { title: '휴지통', noAside: false };
   if (p === 'connect') return { title: segs[1] ? '앱 연결' : '외부 앱 연결', noAside: true };
@@ -997,6 +1000,16 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       //  인스턴스는 **뒤에서** 멱등 확보한다(세션의 #/s/ 와 같은 규칙, v2.2 §7).
       //  ⚠ 실패해도 화면은 그대로 산다 — 인스턴스는 정체성·귀속을 주는 것이지 화면을 그리는 조건이 아니다.
       void ensureSingletonAppInstance('inbox', '확인할 것')
+        .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
+        .catch(() => { /* 앱이 아직 안 깔린 게이트웨이 — 무회귀 */ });
+    } else if (page === 'sources') {
+      // #2423 자료 앱 — builtin(project=global·single). 주소가 정본이고 인스턴스는 뒤에서 멱등 확보(inbox 와 같은 규칙).
+      //  `#/sources` = 목록(선택은 query 로 담아 채널 하나를 링크로 줄 수 있다), `#/sources/<id>` = 자료 하나.
+      markActive('sources');
+      tab.aside.replaceChildren();
+      if (segs[1]) renderSourceDetail(tab.center, Number(decodeURIComponent(segs[1])));
+      else renderSourcesApp(tab.center, params);
+      void ensureSingletonAppInstance('sources', '자료')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이 — 무회귀 */ });
     } else if (page === 'archive' || page === 'trash') {
@@ -1201,7 +1214,7 @@ function activeKey(): string {
   // 부작용 없는 조회 — 부팅 중(활성 탭 확정 전)의 drawSide 가 탭을 만들어 버리면 딥링크가 죽는다(실측).
   const t = tabsApi ? tabsApi.current() : null;
   const cur = parseRoute(t ? t.route : location.hash);
-  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
+  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
 // ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
 //  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고
@@ -1278,6 +1291,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
     if (page === 's') { const s = findSess(decodeURIComponent(segs[1] || '')); if (s) ask = lastAsk(s); }
   }
   else if (page === 'inbox') { icon = 'inbox'; meta = '답과 확인을 기다리는 작업'; }
+  else if (page === 'sources') { icon = 'src'; meta = '모아 둔 원본 자료'; }
   else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
   //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
   else if (page === 'archive') { icon = 'archive'; meta = '보관해 둔 프로젝트'; }

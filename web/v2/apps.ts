@@ -16,7 +16,7 @@ export interface AppDef {
   desc: string;       // 한 줄
   route: string;      // 클래식 해시(#/ 뒤) — iframe 에 실릴 경로
   tab: string | null; // navOn 게이팅에 쓸 클래식 탭 키(없으면 항상 노출)
-  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web';
+  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src';
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
@@ -119,7 +119,7 @@ export function soloSessionUrl(id: string): string {
 const ICON_PATHS: Record<AppDef['icon'], string> = {
   //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 홈(클래식)은 옛 대시보드라 위젯 판 넷, 설정은 이빨 있는 톱니.
   home: ICONS.dashboard, term: ICONS.term, chat: ICONS.chat, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
-  sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web,
+  sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web, src: ICONS.src,
 };
 export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
   const svgNs = 'http://www.w3.org/2000/svg';
@@ -194,6 +194,14 @@ const GLASS_ART: Record<string, GlassArt> = {
     color: '<path d="M24.5 36.5l7.5 7.5L58 13.5" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
     frost: '<rect x="5" y="10" width="39" height="44" rx="5.5"/>',
     punch: '<rect x="13" y="21" width="21" height="3.6" rx="1.8"/><rect x="13" y="31" width="15" height="3.6" rx="1.8"/>',
+  },
+  // 자료 — 아카이브 상자. 색 몸통 위에 서리 뚜껑이 얹혀 겹치고(층이 여기서 난다), 몸통이 뚜껑 아래로
+  //  삐져나온다. 손잡이 슬롯 하나만 뚫는다 — 종이·문서 모양은 위키(펼친 책)와 겹쳐서 쓰지 않는다.
+  src: {
+    span: [9, 22, 55, 56],
+    color: '<path d="M9 22h46v29a5 5 0 0 1-5 5H14a5 5 0 0 1-5-5z"/>',
+    frost: '<rect x="5" y="12" width="54" height="18" rx="5"/>',
+    punch: '<rect x="23" y="39" width="18" height="3.8" rx="1.9"/>',
   },
   // 펼친 책 — 오른쪽 면이 색, 왼쪽 면이 서리. 두 면의 재질이 달라 펼쳐진 게 읽힌다.
   wiki: {
@@ -316,6 +324,10 @@ export function appGlassIcon(icon: AppDef['icon'], cls?: string): SVGElement {
 //   · 화면 앱(APPS 표) 클릭 = #/app/<key> 로 이동(가운데 iframe).
 //   · 설치된 세션 앱(org_app, #1780) 클릭 = openAppSession → 앱 세션을 열고 그 대화 화면으로. 동의(grant)가 없으면
 //     그때 동의 창이 뜬다. 세션 앱은 비동기로 불러와(listSessionApps) 도착하면 격자에 덧그린다(없으면 화면앱만 보인다).
+//  설치된 앱(org_app) 중 **우리가 만든 빌트인**은 제 아이콘을 갖는다 — 남의 앱만 종류(앱/세션 앱)로 뭉뚱그린다.
+//   이 표가 없으면 자료·확인할 것이 런치패드에서 전부 같은 그림으로 서서 어느 것이 무엇인지 못 고른다.
+const BUILTIN_ICON: Record<string, AppDef['icon']> = { sources: 'src', browser: 'web' };
+
 let padEl: HTMLElement | null = null;
 export function openLaunchpad(): void {
   closeLaunchpad();
@@ -340,7 +352,7 @@ export function openLaunchpad(): void {
       return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
         title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
         onclick: () => { closeLaunchpad(); if (hasUi || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title }); } },
-        el('span', { class: 'v2-pad-ico' }, appGlassIcon(hasUi ? 'liv' : 'term')),
+        el('span', { class: 'v2-pad-ico' }, appGlassIcon(BUILTIN_ICON[a.id] || (hasUi ? 'liv' : 'term'))),
         el('b', { text: a.title }),
         el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
     });
