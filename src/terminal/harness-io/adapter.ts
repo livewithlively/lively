@@ -84,26 +84,11 @@ export function harnessIo(key: string | null | undefined): HarnessSessionAdapter
   return HARNESS_IO.find((a) => a.key === k) ?? null;
 }
 
-/**
- * 화면이 버튼·안내를 정직하게 그리기 위한 능력 요약 — 세션 행(SessionInfo.chat)에 실린다.
- *
- *  · read      대화 파일을 화면으로 읽을 수 있나(파서 있음)
- *  · answer    승인·중단을 화면에서 대신 눌러줄 수 있나(키 매핑 있음)
- *  · chatFirst **대화창을 그 세션의 기본 화면으로 삼아도 되나** (#2439 P0)
- *
- *  ★ chatFirst 는 지금 read 와 같은 값이지만 **일부러 따로 둔다.** read 는 «할 수 있나»(능력)이고
- *   chatFirst 는 «기본으로 삼나»(정책)다. 종전엔 그 정책이 화면에 하드코딩돼 있었고(web/session-chat.ts
- *   `harness === 'codex'`), 그래서 **살아 있는 claude 세션은 터미널이 기본, 멈춘 claude 세션은 대화창**이
- *   되어 같은 세션인데 상태에 따라 화면이 갈렸다(#2439 — "읽을 때 UX 와 세션 시작됐을 때 UX 가 너무 다르다").
- *   정책을 서버 한 곳으로 올리면 화면은 하네스를 몰라도 되고, 나중에 «읽을 수는 있지만 터미널이 기본»인
- *   하네스가 생겨도 여기 한 줄만 바뀐다.
- */
-export interface ChatIoCaps { read: boolean; answer: boolean; chatFirst: boolean }
+/** 화면이 버튼·안내를 정직하게 그리기 위한 능력 요약 — 세션 행(SessionInfo.chat)에 실린다. */
+export interface ChatIoCaps { read: boolean; answer: boolean }
 export function chatIoCaps(harnessKey: string | null | undefined): ChatIoCaps {
   const a = harnessIo(harnessKey);
-  const read = !!a?.parse;
-  //  대화를 읽을 수 있으면 대화창이 기본이다. 못 읽으면(opencode·shell) 대화창은 빈 화면이 되므로 터미널이 기본.
-  return { read, answer: !!a?.answer, chatFirst: read };
+  return { read: !!a?.parse, answer: !!a?.answer };
 }
 
 /** 세션 기록(중앙 캡처)을 화면으로 **읽을 수 있는** 하네스 — session-share 의 선택지가 여기서 파생된다(#1695 §3 '못 지킬 켜기 금지'). */

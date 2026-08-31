@@ -9,16 +9,6 @@ import { rememberCreated } from './created-cache.js';
 
 /** 이 화면이 만든 세션의 첫 지시 — 세션 화면이 마운트될 때 꺼내 낙관적으로 그린다(서버가 실제 주입). */
 const firstPrompts = new Map<string, string>();
-/**
- * 이 세션의 첫 지시를 등록한다 — 화면이 그 세션으로 옮겨 갔을 때 낙관적으로 먼저 그린다.
- *  홈 입력창(openQuickSession)이 쓰던 자리인데, **멈춘 세션을 말로 되살리는 경로**(#2439 session-chat
- *  reviveWithPrompt)도 같은 것을 필요로 한다 — 되살린 새 세션으로 옮겨 가는 순간 방금 친 말이 화면에서
- *  사라지면 사람은 그 말이 갔는지 알 수 없다. 저장처를 둘로 두면 반드시 한쪽이 갈리므로 여기 하나만 둔다.
- */
-export function rememberFirstPrompt(sessionId: string, text: string): void {
-  const t = String(text || '').trim();
-  if (sessionId && t) firstPrompts.set(sessionId, t);
-}
 export function takeFirstPrompt(sessionId: string): string | null {
   const t = firstPrompts.get(sessionId) ?? null;
   firstPrompts.delete(sessionId);
