@@ -143,9 +143,15 @@ function installedHarnesses() {
   const XDGBASE = process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config"));
   try { if (existsSync(join(XDGBASE, "opencode", "plugin", "lively.js"))) out.push("opencode"); } catch { /* 미배선 */ }
   try { if (existsSync(join(HOME, ".gemini", "config", "plugins", "lively"))) out.push("antigravity"); } catch { /* 미배선 */ }
+  // grok(#1701): 배선 신호는 **우리 소유 훅 파일**(hook-file 배선 — 파일이 통째로 우리 것이라 신호가 강하다).
+  //  홈 계산은 설치기·제거기·레지스트리와 **같은 계약**: GROK_HOME > ~/.grok, 단 LIVELY_HOME(샌드박스 격리)이면 GROK_HOME 무시.
+  //  ⚠ 이 줄이 없어서 **grok 만 쓰는 머신은 자동 업데이트가 영영 안 돌았다**(#1884 §1-2 가 «후속» 으로 적어 둔 갭).
+  //   #2255 로 grok 을 우리가 깔아 주게 되면서 «깔아는 주는데 갱신은 안 되는» 조합이 실제로 생겨 여기서 닫는다.
+  const GROK_DIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
+  try { if (existsSync(join(GROK_DIR, "hooks", "lively-grok.json"))) out.push("grok"); } catch { /* 미배선 */ }
   if (!out.length) {
     const h = (argOf("--harness") || process.env.LIVELY_HARNESS || "").toLowerCase();
-    if (["claude", "codex", "opencode", "antigravity"].includes(h)) out.push(h); // 배선을 못 읽었지만 그 하네스 세션에서 불려왔다
+    if (["claude", "codex", "opencode", "antigravity", "grok"].includes(h)) out.push(h); // 배선을 못 읽었지만 그 하네스 세션에서 불려왔다
   }
   return out;
 }

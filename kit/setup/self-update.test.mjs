@@ -498,6 +498,24 @@ try {
     const bare = freshHome(null);
     await runUpdater(bare);
     (!existsSync(join(bare, ".claude.json"))) ? ok("⑮c .claude.json 없으면 미생성(무접촉)") : bad("⑮c 무접촉", ".claude.json 이 생성됨");
+
+    // ⑯ #2255 — **grok 만 배선된 머신**도 자동 업데이트가 그 하네스로 돈다.
+    //  종전엔 installedHarnesses() 가 claude·codex·opencode·antigravity 넷만 봐서, grok 단독 머신은 목록이
+    //  비었고 `--harness ""` 로 설치기가 돌았다 → 설치기의 기본값(claude)이 잡혀 **grok 배선은 영영 갱신되지 않았다**
+    //  (#1884 §1-2 가 «후속» 으로 적어 둔 갭). #2255 로 grok 을 우리가 깔아 주게 되면서
+    //  «깔아는 주는데 갱신은 안 되는» 조합이 실제로 생겼다.
+    {
+      const hg = freshHome(null);
+      rmSync(join(hg, ".claude", "settings.json"), { force: true });   // claude 배선을 지운다 — grok 만 남는 머신
+      mkdirSync(join(hg, ".grok", "hooks"), { recursive: true });
+      // 배선 신호 = 우리 소유 훅 파일(hook-file 배선). 설치기·제거기·레지스트리와 같은 홈 계약.
+      writeFileSync(join(hg, ".grok", "hooks", "lively-grok.json"), JSON.stringify({ hooks: {} }, null, 2) + "\n");
+      await runUpdater(hg);
+      const conf = readIf(join(hg, ".grok", "config.toml")) || "";
+      conf.includes("lively")
+        ? ok("⑯ grok 단독 머신도 grok 으로 배선 갱신된다 (#2255)")
+        : bad("⑯ grok 감지", `~/.grok/config.toml 이 갱신되지 않았다 — 목록이 비어 설치기가 기본값(claude)으로 돌았다는 뜻. conf=${JSON.stringify(conf.slice(0, 120))}`);
+    }
   }
 } finally {
   server.close();
