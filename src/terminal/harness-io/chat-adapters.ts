@@ -18,6 +18,8 @@
 import { claudeStreamEvent } from "./claude-stream.js";
 import { codexAppServerEvent } from "./codex-stream.js";
 import { grokAcpEvent } from "./grok-stream.js";
+import { antigravityEvent } from "./antigravity-stream.js";
+import { opencodeEvent } from "./opencode-stream.js";
 import type { SessionEvent } from "./session-event.js";
 
 export type ChatTransport = "stdio-jsonl" | "jsonrpc-stdio" | "http-sse";
@@ -95,11 +97,16 @@ const antigravityChat: ChatAdapter = {
   //  `agy --print --output-format stream-json` 이 있으나 2026-08-31 실측에서 그 플래그가 먹지 않고
   //  프롬프트로 해석됐다(모델이 «어떤 도구의 옵션인가요» 라고 되물었다). 인자 형식을 다시 재야 한다.
   //  별도로 벤더가 headless `control_request` 를 지원하지 않아 **승인은 구조적으로 불가**하다.
-  transport: null,
+  //  ⚠ 앞서 «전송 자체가 미확정» 이라고 적었던 것은 **내 호출 형식 실수**였다 — agy 는 Go 플래그라
+  //   `--print=<프롬프트>` 인데 `--print "<프롬프트>"` 로 불러 플래그가 프롬프트로 해석됐다.
+  //   1.1.22 로 다시 재니 stream-json 이 정상 동작한다(init·step_update·result).
+  transport: "stdio-jsonl",
+  //  ⚠ 그러나 **한 번에 한 프롬프트**다(`--print=` 로 주고 끝난다) — claude 처럼 stdin 을 열어 두고
+  //   여러 턴을 이어가는 형태가 아니다. 그 왕복을 실측하기 전엔 argv·encode 를 채우지 않는다.
   argv: null,
-  translate: null,
+  translate: antigravityEvent,
   encode: null,
-  note: "stream-json 인자 형식 미확정(실측에서 플래그가 프롬프트로 해석됨) + 승인은 벤더 미지원(headless control_request 없음).",
+  note: "stream-json 실측(1.1.22): init{cwd,tools,permission_mode}·step_update{state,step_type,usage}·result. 다중 턴 왕복(대화 유지)과 승인 step 형식은 미실측 — 그전엔 열지 않는다.",
 };
 
 const opencodeChat: ChatAdapter = {
@@ -108,10 +115,14 @@ const opencodeChat: ChatAdapter = {
   //  ⭐ 이 하네스만은 서버화가 **기능을 새로 연다**: 지금은 대화 읽기(parse)조차 구조적으로 없다
   //   (단일 대화 파일을 안 쓴다 — #1884 §2 #35). serve 로 가면 read 와 approve 가 동시에 열린다.
   transport: "http-sse",
-  argv: null,          // 서버를 띄우는 방식이라 argv 축이 다르다(포트·수명) — 런타임이 http 를 지원할 때 채운다
-  translate: null,
+  //  ⚠ argv 축이 다르다 — 서버를 띄우고 **포트를 잡아** 붙는 방식이다(`opencode serve --port N`).
+  //   지금 런타임은 stdio 만 다루므로 여기 argv 를 넣으면 «띄우면 되는 줄» 알고 호출된다. 그래서 null.
+  argv: null,
+  //  OpenAPI 실측(1.18.25)으로 승인·명령 축을 옮겼다. 실제 SSE 프레임은 로그인 없이 못 받아
+  //  필드값의 형태를 다 확정하진 못했다 — 모르는 것은 raw 로 관측한다.
+  translate: opencodeEvent,
   encode: null,
-  note: "opencode serve(HTTP+SSE) 경로 확인. 런타임이 http-sse 전송을 지원하고 /event 형식을 실측해야 열린다.",
+  note: "serve 실측(1.18.25): /event SSE · /permission/{id}/reply · session/{id}/shell·children. 승인·명령 축 번역 완료. http-sse 전송을 런타임이 지원해야 열린다.",
 };
 
 export const CHAT_ADAPTERS: readonly ChatAdapter[] = [claudeChat, codexChat, grokChat, antigravityChat, opencodeChat];

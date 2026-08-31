@@ -62,7 +62,13 @@ t("[5] 지금 실제로 열리는 것 — claude·codex(나머지는 왜 아닌�
   assert.ok(chatAdapter("grok")!.translate, "grok facts 축은 실측으로 채워졌다");
   assert.equal(chatAdapter("grok")!.encode, null, "grok 은 보내는 쪽 왕복이 아직 미실측");
   assert.equal(chatAdapter("opencode")!.transport, "http-sse", "opencode 는 serve 경로");
-  assert.equal(chatAdapter("antigravity")!.transport, null, "antigravity 는 전송 자체가 미확정 + 승인 벤더 미지원");
+  //  ⭐ opencode 만은 서버화가 **기능을 새로 연다** — 지금까지 대화 읽기가 구조적으로 없었다(#1884 §2 #35).
+  assert.ok(chatAdapter("opencode")!.translate, "opencode 승인·명령 축은 OpenAPI 실측으로 채워졌다");
+  assert.equal(chatAdapter("opencode")!.argv, null, "서버를 띄우고 포트로 붙는 방식이라 argv 축이 다르다");
+  //  ⚠ 「전송 미확정」은 **내 호출 형식 실수**였다(--print "x" 가 아니라 --print=x). 1.1.22 로 재측정해 정정.
+  assert.equal(chatAdapter("antigravity")!.transport, "stdio-jsonl", "agy stream-json 은 실제로 동작한다");
+  assert.ok(chatAdapter("antigravity")!.translate, "init·step_update·result 를 옮긴다");
+  assert.equal(chatAdapter("antigravity")!.encode, null, "다중 턴 왕복 미실측 — 한 번에 한 프롬프트 형태다");
 });
 
 t("[6b] grok 번역기 — 핸드셰이크 실측분을 옮긴다(못 잰 것은 raw 로 관측한다)", () => {
@@ -87,6 +93,47 @@ t("[6b] grok 번역기 — 핸드셰이크 실측분을 옮긴다(못 잰 것은
   assert.equal((err as any).facts.permissionMode, "needs-auth");
   //  ★ 못 잰 것(턴 이벤트)은 raw 로 올려 관측한다 — 짐작해서 채우지 않는다.
   assert.equal(tr({ jsonrpc: "2.0", method: "session/update", params: { x: 1 } })?.t, "raw");
+});
+
+t("[6d] antigravity 번역기 — 재측정으로 정정한 축(내 호출 형식이 틀렸었다)", () => {
+  const tr = chatAdapter("antigravity")!.translate!;
+  //  실측 원문(agy 1.1.22, --print=… --output-format=stream-json)
+  const init = tr({ event: "init", conversation_id: "c1", init: { cwd: "/x", tools: ["ask_permission", "bash"], permission_mode: "default" } });
+  assert.equal(init?.t, "facts");
+  assert.equal((init as any).facts.permissionMode, "default");
+  //  tools 는 57개까지 온다 — 여기서 자르면 «몇 개인지» 를 잃는다. 접는 일은 화면 몫.
+  assert.equal((init as any).facts.skills.length, 2);
+  //  사용량이 실린 step 은 usage 로
+  const u = tr({ event: "step_update", step_update: { step_index: 1, state: "DONE", step_type: "agent_response", usage: { input_tokens: 36985, output_tokens: 13 } } });
+  assert.equal(u?.t, "usage");
+  assert.equal((u as any).usage.inputTokens, 36985);
+  //  대화 본문은 ChatLine 축
+  assert.equal(tr({ event: "step_update", step_update: { step_type: "agent_response", text_delta: "OK" } }), null);
+  //  ★ 미실측 step_type(툴 실행·승인)은 짐작해 작업으로 만들지 않고 raw 로 관측한다
+  assert.equal(tr({ event: "step_update", step_update: { step_type: "tool_call" } })?.t, "raw");
+  assert.equal(tr({ event: "result", result: { status: "SUCCESS", usage: { input_tokens: 1, output_tokens: 2 } } })?.t, "usage");
+});
+
+t("[6c] opencode 번역기 — OpenAPI 실측분(승인·명령)을 옮긴다", () => {
+  const tr = chatAdapter("opencode")!.translate!;
+  //  실측 스키마(1.18.25): EventPermissionAsked{ id, type, properties:{id,sessionID,permission,patterns,metadata,always} }
+  const ask = tr({ type: "permission.asked", properties: {
+    id: "p1", sessionID: "s1", permission: { type: "bash", title: "rm -rf x" }, patterns: ["rm *"],
+  } });
+  assert.equal(ask?.t, "permission.asked");
+  assert.equal((ask as any).ask.id, "p1");
+  assert.equal((ask as any).ask.toolName, "bash");
+  //  «항상 허용» 재료를 그대로 싣는다(내용을 해석하지 않는다).
+  assert.deepEqual((ask as any).ask.suggestions, ["rm *"]);
+  assert.equal(tr({ type: "permission.replied", properties: { id: "p1" } })?.t, "permission.resolved");
+  //  실측 스키마: EventCommandExecuted{ properties:{name,sessionID,arguments,messageID} }
+  const cmd = tr({ type: "command.executed", properties: { name: "npm", arguments: ["test"], messageID: "m1" } });
+  assert.equal(cmd?.t, "task.started");
+  assert.equal((cmd as any).task.kind, "shell");
+  assert.equal((cmd as any).task.title, "npm test");
+  //  대화 본문은 ChatLine 축 · 모르는 것은 raw
+  assert.equal(tr({ type: "message.part.updated", properties: {} }), null);
+  assert.equal(tr({ type: "future.thing", properties: {} })?.t, "raw");
 });
 
 t("[6] codex 번역기는 실제로 무언가를 옮긴다(표에 달아 놓고 빈 함수를 두지 않는다)", () => {
