@@ -17,19 +17,9 @@
 //  · 모르는 이벤트에 던지지 않는다. 새 표면이 생겨도 화면은 조용히 건너뛴다(session-event.ts ★2).
 import { apiUrl, el, TOKEN_KEY } from './core.js';
 import { splitSse } from './sse-frames.js';
-
-/** 서버 어휘(harness-io/session-event.ts)의 화면 쪽 그림자 — **필드를 늘릴 때 서버와 함께 늘린다.** */
-interface TaskInfo {
-  id: string;
-  kind: 'shell' | 'agent' | 'other';
-  title: string;
-  status: 'running' | 'completed' | 'failed' | 'killed';
-  agentType?: string;
-  depth?: number;
-  summary?: string;
-  startedAt?: number;
-  endedAt?: number;
-}
+//  판단(무엇을 접고 무엇을 남기나)은 의존 없는 모듈에 둔다 — 화면 코드는 node 에서 로드조차 안 되므로
+//  그 규칙을 값으로 지킬 수 없다. 그래서 갈라 둔다(sess-face 와 같은 규율).
+import { dockHead, elapsed, visibleTasks, type TaskInfo } from './session-tasks-view.js';
 
 export interface SessionTasksHandle { destroy(): void }
 
@@ -43,17 +33,6 @@ const KIND_ICON: Record<string, string> = { shell: '⌘', agent: '◆', other: '
 const STATUS_LABEL: Record<string, string> = {
   running: '도는 중', completed: '끝남', failed: '실패', killed: '중단됨',
 };
-
-/** 경과 시간 — 도는 중이면 지금까지, 끝났으면 걸린 시간. */
-function elapsed(t: TaskInfo, now: number): string {
-  const from = t.startedAt;
-  if (!from) return '';
-  const to = t.endedAt || now;
-  const s = Math.max(0, Math.round((to - from) / 1000));
-  if (s < 60) return `${s}초`;
-  const m = Math.floor(s / 60);
-  return m < 60 ? `${m}분 ${s % 60}초` : `${Math.floor(m / 60)}시간 ${m % 60}분`;
-}
 
 /**
  * 작업 도크를 붙인다. 세션 상태 통로(SSE)를 구독해 목록을 그린다.
@@ -72,13 +51,12 @@ export function mountSessionTasks(host: HTMLElement, o: { sessionId: string }): 
   function paint(): void {
     const now = Date.now();
     //  끝난 작업은 잠깐만 남긴다 — 결과를 볼 틈은 주되 목록이 무한히 자라지 않게.
-    const show = tasks.filter((t) => t.status === 'running' || !t.endedAt || now - t.endedAt < 60_000);
+    const show = visibleTasks(tasks, now);
     wrap.hidden = show.length === 0;
     if (!show.length) { wrap.replaceChildren(); return; }
 
-    const running = show.filter((t) => t.status === 'running').length;
     wrap.replaceChildren(
-      el('div', { class: 'stk-head', text: running ? `작업 ${running}개 도는 중` : '방금 끝난 작업' }),
+      el('div', { class: 'stk-head', text: dockHead(show) }),
       ...show.map((t) => el('div', { class: `stk-row stk-${t.status}` },
         el('span', { class: 'stk-ic', text: KIND_ICON[t.kind] ?? '•' }),
         el('span', { class: 'stk-title', text: t.title || (t.kind === 'agent' ? '서브에이전트' : '명령') }),
