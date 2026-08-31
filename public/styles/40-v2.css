@@ -742,6 +742,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .cn-card.soon .cn-card-bl, .cn-card.soon .cn-card-st { color: var(--muted-2); }
 .cn-card.soon .svc-tile { opacity: .55; }
 .cn-card.soon:hover .svc-tile.off svg { filter: grayscale(1); opacity: .5; }
+/*  준비 중인데 이미 연결해 둔 것 — 회색으로 죽이되 «살아 있다»는 신호(민트 점)는 남긴다. 완전히 꺼진 것처럼
+    보이면 사용자가 «내 구글이 끊겼나» 하고 오해한다. 실제로는 그대로 돌고 있다. */
+.cn-card.soon-on .svc-tile { opacity: .8; }
+.cn-card.soon-on .cn-card-nm { color: var(--ink-sub); }
+.cn-card.soon-on .cn-card-h { color: var(--mint-deep); font-weight: 600; }
 .cn-pill-soon { flex: none; display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; line-height: 1.6; color: var(--muted-head); background: var(--bg-tint-2); border: 1px dashed var(--line-net-2); white-space: nowrap; }
 .cn-sum-i.soon b { color: var(--muted-head); }
 .cn-soon-note { font-size: 13px; color: var(--ink-sub); line-height: 1.6; max-width: 60ch; }

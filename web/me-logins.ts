@@ -55,6 +55,7 @@ interface SvcView {
   available: any[];       // 내가 지금 바로 켤 수 있는 서비스
   blockedOAuth: any[];    // 관리자가 조직에 등록해야만 켤 수 있는 서비스(내 힘으로 안 되는 것) — 새 셸 목록은 이걸 «준비 중»으로 보여 준다(#2243)
   soon: any[];            // 카탈로그가 «준비 중»이라고 말한 서비스(LOGIN_SERVICES.soon) — 켤 길이 있어도 내밀지 않는다
+  soonConnected: Set<string>;  // 그중 **이미 연결해 둔** 것의 key — 준비 중이라고 해서 쓰던 연결을 없는 척하지 않는다
   all: any[];             // 위 셋 전부 — 상세 화면(#/connect/<key>)이 키로 되찾을 때 쓴다
   /** #1675 ③ 헤드리스 자격의 마지막 실패(있으면). `{ at, label, task_id }`. */
   authFailure?: { at: string | null; label: string; task_id: number } | null;
@@ -84,8 +85,12 @@ function partition(oauth: any, creds: any): SvcView {
   const selfServe = (s: any) => !!((s.oauth && oauthMap.has(s.oauth)) || s.token || s.appConnect);
   const connected: any[] = [], available: any[] = [], blockedOAuth: any[] = [], soon: any[] = [];
   for (const s of LOGIN_SERVICES) {
-    if (oauthOn(s) || tokenOn(s)) connected.push(s);
-    else if (s.soon) soon.push(s);   // #2243 카탈로그가 준비 중이라 한 앱 — 이미 연결된 건 위에서 잡히니 여기선 미연결만
+    //  #2243 — 준비 중은 **연결 여부보다 앞선다**. 목록의 뜻이 «라이블리가 이걸 내밀고 있나» 이기 때문이다.
+    //   종전엔 connected 가 먼저라, 이미 연결해 둔 사람에겐 준비 중 표시가 영영 안 보였다(구글 실측 2026-08-31).
+    //   ⚠ 그렇다고 «연결 안 됨»이 되는 건 아니다 — 카드가 연결 사실을 그대로 말하고(아래 soonConnected),
+    //   상세의 판정(stateOf)은 목록 배치가 아니라 **자격 원본**을 보므로 켜져 있으면 켜진 화면 그대로다.
+    if (s.soon) soon.push(s);
+    else if (oauthOn(s) || tokenOn(s)) connected.push(s);
     else if (selfServe(s)) available.push(s);
     else blockedOAuth.push(s);   // OAuth 전용인데 조직 미등록 → 카드로 내밀면 눌러도 안 되는 버튼이 된다
   }
@@ -101,7 +106,9 @@ function partition(oauth: any, creds: any): SvcView {
   }
   // #1675 ③ — 헤드리스 자격이 마지막으로 **실패**한 기록(서버가 org_task 에서 뽑아 준다). 없으면 null.
   const authFailure = creds.headless_auth_failure ?? null;
-  return { oauthMap, credMap, connected, available, blockedOAuth, soon, authFailure, all: [...connected, ...available, ...soon, ...blockedOAuth] };
+  //  준비 중인데 **이미 연결해 둔** 앱 — 화면이 «쓰던 것은 그대로 돕니다»를 말할 근거(뺏지 않는다).
+  const soonConnected = new Set(soon.filter((s) => oauthOn(s) || tokenOn(s)).map((s) => s.key));
+  return { oauthMap, credMap, connected, available, blockedOAuth, soon, soonConnected, authFailure, all: [...connected, ...available, ...soon, ...blockedOAuth] };
 }
 
 // ── 화면 그리기 ──
