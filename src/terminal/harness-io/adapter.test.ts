@@ -30,16 +30,16 @@ t("[A3] 모든 어댑터가 모든 축을 답한다(null 도 답이다 — undef
 });
 t("[A4] 실측된 파서 — claude·antigravity·codex·grok 은 읽고, opencode·shell 은 아직 못 읽는다(있는 척 안 한다)", () => {
   assert.deepEqual([...READABLE_HARNESSES].sort(), ["antigravity", "claude", "codex", "grok"]);
-  assert.deepEqual(chatIoCaps("claude"), { read: true, answer: true, chatFirst: true });
-  assert.deepEqual(chatIoCaps("grok"), { read: true, answer: false, chatFirst: true });      // 승인 UI 미실측 → 화면이 버튼을 안 그린다
-  assert.deepEqual(chatIoCaps("antigravity"), { read: true, answer: false, chatFirst: true });
-  assert.deepEqual(chatIoCaps("codex"), { read: true, answer: false, chatFirst: true });   // rollout 파서 실측(#1759) · 승인 UI 미실측
-  assert.deepEqual(chatIoCaps("opencode"), { read: false, answer: false, chatFirst: false });
-  assert.deepEqual(chatIoCaps("shell"), { read: false, answer: false, chatFirst: false });
+  assert.deepEqual(chatIoCaps("claude"), { read: true, answer: true });
+  assert.deepEqual(chatIoCaps("grok"), { read: true, answer: false });      // 승인 UI 미실측 → 화면이 버튼을 안 그린다
+  assert.deepEqual(chatIoCaps("antigravity"), { read: true, answer: false });
+  assert.deepEqual(chatIoCaps("codex"), { read: true, answer: false });   // rollout 파서 실측(#1759) · 승인 UI 미실측
+  assert.deepEqual(chatIoCaps("opencode"), { read: false, answer: false });
+  assert.deepEqual(chatIoCaps("shell"), { read: false, answer: false });
 });
 t("[A5] 모르는 하네스는 claude 로 추측하지 않는다 — read/answer 둘 다 false, 어댑터 null", () => {
-  assert.deepEqual(chatIoCaps(undefined), { read: false, answer: false, chatFirst: false });
-  assert.deepEqual(chatIoCaps("nope"), { read: false, answer: false, chatFirst: false });
+  assert.deepEqual(chatIoCaps(undefined), { read: false, answer: false });
+  assert.deepEqual(chatIoCaps("nope"), { read: false, answer: false });
   assert.equal(harnessIo("nope"), null); assert.equal(harnessIo(""), null);
   assert.ok(harnessIo("CLAUDE"), "대소문자는 무시(키는 소문자 규약)");
 });
