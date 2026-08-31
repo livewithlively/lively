@@ -1970,24 +1970,32 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const otherNote = others.length
           ? `<p class="ob-note">지금은 ${esc(others.join(' · '))}${josa(others[others.length - 1], 0)} 연결돼 있어요. ${picked}${josa(S.ai, 1)} 연결하지 않으셔도 제 분석은 그걸로 돌아갑니다.</p>`
           : '';
-        const goOther = `<button class="ob-btn ob-btn-sub" data-other>다른 AI 고르기</button>`;
-        //  #2232 — [이대로 계속]과 [나중에 할게요]는 결국 같은 곳으로 간다(원준님). 다른 AI 가 이미 연결돼 있으면 «이대로 계속» 하나만,
-        //   아무것도 없으면 «나중에 할게요» 하나만 보인다.
-        const keepBtn = (others.length || S.aiConnected) ? `<button class="ob-btn ob-btn-sub" id="cKeep">이대로 계속</button>` : '';
-        const skip = keepBtn ? '' : `<button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`;
+        //  #2232 — [이대로 계속]과 [나중에 할게요]는 결국 같은 곳으로 간다(원준님).
+        //  ★ 2026-08-31(원준님) — 그 아래에 버튼이 셋이나 섰다: [로그인했어요][이대로 계속][다른 AI 고르기].
+        //   *«로그인했어요 누르면 확인되고 바로 연결된 표시 띄워서 목록 화면으로 보내면 되는 거 아닌가»*.
+        //   맞다. 그 흐름은 **이미 있다** — cGo 가 성공하면 pass() 가 이 장면을 다시 그려 «연결됐어요 + AI 4장(연결된 건 체크)»
+        //   화면이 나온다. 문제는 성공 경로가 아니라 **그 아래에 선 곁다리 버튼들**이었다. 그래서 둘을 걷어낸다:
+        //     · [다른 AI 고르기] → 머리말의 [← 이전]과 **같은 곳**(고르는 화면)으로 간다. 중복이라 지운다.
+        //       (돌아가서 다른 AI 를 고르면 setAi 가 AIC 를 비우므로 판정은 새로 묻는다 — 낡은 답이 남지 않는다.)
+        //     · [이대로 계속]·[나중에 할게요] → 같은 곳(sources)으로 가는 **한 문**인데 이름만 둘이었다.
+        //       하나로 합치고, 버튼이 아니라 **조용한 링크**(ob-q-skip)로 내린다.
+        //   ⚠ 문을 **없애지는** 않는다. 이 화면에서 로그인이 안 되는 사람을 가두면 안 된다(이 장면 머리말의 원칙).
+        //   ⚠ 머리말 [나중에 할게요]는 **홈으로** 가고 이건 **다음 걸음으로** 간다 — 하는 일이 다르므로 이름도 다르게 둔다
+        //    (같은 이름 두 개가 다른 일을 하던 것이 종전 상태였다).
+        const laterLink = `<button class="ob-q-skip" data-skip>${(others.length || S.aiConnected) ? '이대로 계속할게요' : '지금은 건너뛸게요'}</button>`;
         //  #2232 — 이름을 아직 안 주신 분에게 «당신님» 이라고 부르던 자리(실측). 이름이 없으면 부르지 않는다.
         const lead = `연결해 두시면 제(리브)가 일할 때도 ${nick() ? `${esc(nick())}님의` : '쓰시던'} 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
 
         // ── 아직 안 물어봤다 — 없는 답을 지어내지 않고 묻는 중이라고 말한다(bind 가 곧 채운다).
         if (!AIC) {
           return qHead('claude', lead, `${picked} 계정을 연결해 주세요.`, '')
-            + `<div class="ob-tok"><p class="ob-note">${picked} 가 연결돼 있는지 확인하고 있어요…</p></div>` + skip;
+            + `<div class="ob-tok"><p class="ob-note">${picked} 가 연결돼 있는지 확인하고 있어요…</p></div>` + laterLink;
         }
         // ── 물어봤는데 서버가 답을 못 줬다.
         if (c.error) {
           return qHead('claude', lead, `${picked} 계정을 연결해 주세요.`, '')
             + `<div class="ob-tok"><p class="ob-err">확인하지 못했어요 — ${esc(c.error)}</p>${otherNote}</div>`
-            + `<button class="ob-btn ob-btn-pri" id="cGo">다시 확인</button>` + goOther + skip;
+            + `<button class="ob-btn ob-btn-pri" id="cGo">다시 확인</button>` + laterLink;
         }
         // ── 됐다 — **다른 AI 도 연결할지** 여기서 묻는다(#2232). 종전엔 고르는 화면에 «여러 개» 카드가 따로 있었는데,
         //    그걸 고르면 무엇을 어떻게 연결하라는 건지 알 수 없는 막다른 카드였다(원준님 2026-08-28). 이제 하나를 연결한
@@ -2016,8 +2024,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                 <p class="ob-note">여기(라이블리 서버)에는 Claude 와 ChatGPT 가 준비돼 있어요. <b>${picked}</b>${josa(S.ai, 2)} <b>내 컴퓨터</b>에서 씁니다 — 다음 화면에서 이 컴퓨터를 이어 두시면 <b>${picked}${josa(S.ai, 0)} 없을 때 설치까지 같이 해 드립니다</b>(무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요).</p>
                 ${otherNote}
               </div>`
-            + (keepBtn ? keepBtn.replace('ob-btn-sub', 'ob-btn-pri') : '')
-            + goOther + skip;
+            //  ⚠ 이 갈래는 **로그인 화면과 다르다.** 고른 AI 가 이 자리에 아예 없으니 [로그인했어요]가 없고,
+            //   [다른 AI 고르기]도 «머리말 뒤로가기의 중복» 이 아니라 **실질적인 다음 행동**이다(여기서 쓸 수 있는
+            //   AI 로 갈아타는 길 — #1879 가 막은 «고르게는 해 놓고 이을 수는 없는 자리»가 바로 이것이다).
+            //   그래서 여기만 둘을 둔다: 주 버튼 [다음으로](= 옛 [이대로 계속] 뜻까지 흡수) + 조용한 [다른 AI 고르기].
+            //   종전엔 이어진 AI 가 없으면 주 버튼이 **아예 없고** 곁다리만 셋이었다.
+            + `<button class="ob-btn ob-btn-pri" data-skip>다음으로</button>`
+            + `<button class="ob-q-skip" data-other>다른 AI 고르기</button>`;
         }
         // ── 있는데 아직 로그인 전(또는 판정 불가).
         //  #2232 — «터미널을 열고 명령을 치세요» 는 컴맹에게 벽이었다(원준님 2026-08-28): 하네스·원격·device-auth 같은 말,
@@ -2047,7 +2060,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               ${otherNote}
             </div>`
           + `<button class="ob-btn ob-btn-pri" id="cGo">로그인했어요</button>`
-          + keepBtn + goOther + skip;
+          + laterLink;
       },
       bind: (el) => {
         const err = $('#cErr', el), go = $('#cGo', el);
@@ -2117,16 +2130,21 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         };
         // 다른 AI 도 연결하기 — 고른 것을 바꿔 같은 장면을 다시 연다(판정은 새로 묻는다).
         $$('[data-more]', el).forEach((b) => b.onclick = () => { setAi(b.dataset.more); AIC = null; save(); renderSB(); renderScene('claude', false); });
-        // 다른 AI 가 이미 연결돼 있을 때의 문 — 고른 것을 못 연결했다고 사람을 가두지 않는다.
-        //  (분석은 서버가 resolveHeadlessHarness 로 고른 **실제 로그인된** 하네스로 돈다.)
-        const keep = $('#cKeep', el);
-        if (keep) keep.onclick = () => { const o = (AIC && AIC.others || [])[0]; if (!S.aiConnected && o) mark(AI_LABEL[o] || o, o); goScene('sources'); };
+        // 고른 것을 못 연결했다고 사람을 가두지 않는 **하나의 문**(옛 [이대로 계속]+[나중에 할게요]를 합쳤다).
+        //  이미 이어진 AI 가 있으면 그것으로 이어 간다 — 분석은 서버가 resolveHeadlessHarness 로 고른
+        //  **실제 로그인된** 하네스로 도므로, 여기서 그걸 표시해 두는 것이 사실과 맞는다.
+        // ⚠ 갈래마다 버튼 구성이 다르다 — «연결됐어요» 화면엔 이 문이 없다. 무조건 잡으면 bind 가 그 자리에서
+        //  throw 하고, 그 뒤에 배선이 더 붙는 날 그것들이 통째로 조용히 안 걸린다.
+        const skip = $('[data-skip]', el);
+        if (skip) skip.onclick = () => {
+          const o = (AIC && AIC.others || [])[0];
+          if (!S.aiConnected && o) mark(AI_LABEL[o] || o, o);
+          goScene('sources');
+        };
+        //  «이 자리에 그 AI 가 없다» 갈래에만 뜬다 — 여기서 쓸 수 있는 AI 로 갈아타는 길.
+        //   AIC 를 비워 두면 고르는 화면에서 무엇을 고르든 판정을 새로 묻는다(낡은 답이 안 남는다).
         const other = $('[data-other]', el);
         if (other) other.onclick = () => { AIC = null; goScene('ai'); };
-        // ⚠ 갈래마다 버튼 구성이 다르다 — «연결됐어요» 화면엔 [나중에]가 없다. 무조건 잡으면 bind 가 그 자리에서
-        //  throw 하고, 그 뒤에 배선이 더 붙는 날 그것들이 통째로 조용히 안 걸린다(지금은 마지막 줄이라 안 드러났다).
-        const skip = $('[data-skip]', el);
-        if (skip) skip.onclick = () => goScene('sources');
       },
     },
     /* 노션 p4(데스크톱 앱 유도)와 같은 자리 — 우리는 터미널 질문 */
