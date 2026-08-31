@@ -41,7 +41,7 @@ export const APPS: AppDef[] = [
   //   ⚠ 레일에 못 박지 않는다(원준 2026-08-31): "맥락관리·사용가이드 저 위계로 앱에서만 보이고, 눌러서 최근에
   //   나오다가, 원하면 독에 고정". 그래서 문은 런치패드 하나이고, 열면 ② 최근 연 앱에 서고, 거기서 고정한다.
   { key: 'sources', title: '자료', desc: '출처별 원본 — 대화 · 파일 · 이슈 · 적어 둔 것', route: 'sources', tab: null, icon: 'src', kind: 'native' },
-  { key: 'context', title: '맥락 관리', desc: '수집(연결) · 증류 · 분류 · 자동 관리 파이프라인', route: 'context', tab: 'context', icon: 'ctx' },
+  { key: 'context', title: '맥락 관리', desc: '우리 AI 가 아는 것과 그것을 만드는 기계들 — 수집기 · 증류기 · 카테고리 · 점검 · AI 전달', route: 'context', tab: 'context', icon: 'ctx' },
   { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
   // 설정 — 앱 목록에서 **뺐다**(#2199, 원준 2026-08-27 "앱에 설정을 없애고 … 모달 사이드바에 고급설정 하나 만들어서").
   //  설정은 할 일이 있는 화면이 아니라 환경을 손보는 자리라, 문은 [나] 창 ▸ [고급 설정] 하나다(같은 문이 둘이면 어느 쪽이
