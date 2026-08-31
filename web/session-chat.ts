@@ -138,7 +138,20 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const isBox = first.live;                     // 라이브 행(박스) — 죽었어도(restorable) 박스다
   const dead = (): boolean => !target.live || !target.alive || !!target.raw?.restorable;
   const canType = (): boolean => !dead();
-  const caps = (): { read: boolean; answer: boolean } => (target.raw?.chat && typeof target.raw.chat === 'object') ? { read: target.raw.chat.read !== false, answer: target.raw.chat.answer !== false } : { read: true, answer: true };   // 서버 harness-io 능력(행의 chat) — 없으면(구 서버) 둘 다 있는 것으로
+  /** 구 서버 폴백 — 행에 chatFirst 축이 없을 때의 종전 판정. */
+  const legacyChatFirst = (): boolean => {
+    const m = String(target.raw?.chatMode || '');
+    if (m) return m === 'app-server';
+    return String(target.raw?.harness || '') === 'codex';
+  };
+  const caps = (): { read: boolean; answer: boolean; chatFirst: boolean } => {   // 서버 harness-io 능력(행의 chat) — 없으면(구 서버) 읽기·승인은 있는 것으로
+    const c = target.raw?.chat;
+    if (c && typeof c === 'object') {
+      // chatFirst 는 신설 축(#2439)이라 구 서버 행엔 없다 — 그때만 종전 휴리스틱으로 내려간다(무회귀).
+      return { read: c.read !== false, answer: c.answer !== false, chatFirst: typeof c.chatFirst === 'boolean' ? c.chatFirst : legacyChatFirst() };
+    }
+    return { read: true, answer: true, chatFirst: legacyChatFirst() };
+  };
   const canKeys = (): boolean => canType() && !target.node && caps().answer;
 
   // 헤더 — 이 세션의 **한 줄 신원**(지금 하는 일 · 상태 · 프로젝트 · 하네스)과 **이 세션에 하는 모든 일**이 여기 모인다.
@@ -331,19 +344,27 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const liveDock = el('div', { class: 'cxl-dock' });
   let fontStep = parseFontStep(localStorage.getItem(CHAT_FONT_KEY));   // 글자 크기(#2055) — 지난번에 고른 값
 
-  /** 이 세션은 대화창이 기본인가 — codex app-server 세션(pane 이 셸이라 터미널엔 말 걸 곳이 없다). */
-  // #2055 — 이 세션의 대화가 app-server 에서 도나(= 대화창이 본자리, pane 은 셸).
-  //  ⚠ **모를 때 터미널로 추정하지 않는다.** 서버가 chatMode 를 실어 주지만 직접 주소(#/s/<id>)로 연 첫 순간처럼
-  //   아직 행이 얇을 수 있다. 종전엔 그때 터미널로 열었다가 목록 갱신이 오면 대화로 되돌려서, 사람 눈에는
-  //   «터미널이 몇 초 뜨다가 대화창으로 넘어가는» 화면이 됐다(2026-08-28 상민님 신고).
-  //   codex 는 이 배포의 기본이 app-server 이므로(codex-chat-mode.ts), 모르면 codex 를 대화로 본다 —
-  //   틀렸다면(tmux 로 끈 배포) 행이 오는 즉시 아래 update() 가 터미널로 돌린다. 어느 쪽으로 틀려도 한 번만 바뀌는데,
-  //   **빈 셸을 먼저 보여주는 쪽이 사람에게 더 나쁘다**(말 걸 곳이 없는 화면이다).
-  const chatFirst = (): boolean => {
-    const m = String(target.raw?.chatMode || '');
-    if (m) return m === 'app-server';
-    return String(target.raw?.harness || '') === 'codex';
-  };
+  //  ⚠ **모를 때 터미널로 추정하지 않는다.** 직접 주소(#/s/<id>)로 연 첫 순간처럼 행이 아직 얇을 수 있다.
+  //   종전엔 그때 터미널로 열었다가 목록 갱신이 오면 대화로 되돌려서, 사람 눈에는 «터미널이 몇 초 뜨다가
+  //   대화창으로 넘어가는» 화면이 됐다(2026-08-28 상민님 신고). **빈 셸을 먼저 보여주는 쪽이 더 나쁘다.**
+  //   #2439 이후로는 되돌림 자체가 없다 — 기본은 하네스 능력에서 나오고 행이 와도 뒤집히지 않는다.
+  /**
+   * 대화창을 **기본 화면**으로 삼나 — 정본은 서버 capability(행의 `chat.chatFirst`, harness-io/adapter.ts).
+   *
+   * ★ #2439 — 종전엔 여기서 `harness === 'codex'` 를 하드코딩했다. 그래서 **살아 있는 claude 세션은 터미널이
+   *  기본, 멈춘 claude 세션은 대화창**이 되어 같은 세션인데 상태에 따라 화면이 갈렸다("읽을 때 UX 와 세션
+   *  시작됐을 때 UX 가 너무 다르다" — 윤상민). 이제 대화를 읽을 수 있는 하네스는 전부 대화창이 기본이고,
+   *  못 읽는 하네스(opencode·shell)만 터미널이 기본이다(대화창을 열면 빈 화면이므로).
+   */
+  const chatFirst = (): boolean => caps().chatFirst;
+  /**
+   * 이 세션의 pane 이 **셸**인가(#2055 codex app-server) — 터미널이 '대화하는 곳'이 아니라 '셸 쓰러 가는 곳'이다.
+   *
+   * ⚠ chatFirst 와 **다른 축이다.** 종전엔 codex 만 chatFirst 였기에 한 함수가 두 뜻을 겸했는데, claude 가
+   *  대화창 기본이 되면서 갈렸다 — claude 는 대화창이 기본이어도 pane 은 여전히 **진짜 TUI** 라 승인 대화상자·
+   *  로그인이 거기서 뜬다. 그걸 '셸'이라고 말하면 거짓 안내가 되고, 터미널로 가는 길을 지우면 막다른 길이 된다.
+   */
+  const paneIsShell = (): boolean => String(target.raw?.chatMode || '') === 'app-server';
 
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
@@ -704,15 +725,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         el('span', { class: 'n', text: label }), el('span', { class: 'm', text: desc }));
     rows.push(el('div', { class: 'sc-more-sec', text: '보기' }));
     if (opts.terminalSrc && isBox) {
-      // 상민님 지시(2026-08-18): 대화 인터페이스가 아직 미완성이라 **터미널이 기본**, 대화는 '베타'를 달고 뒤에 둔다.
-      //  ⚠ codex app-server 세션(#2055)만 예외다 — 거기서는 대화창이 **유일한 말 거는 자리**이고(pane 은 셸),
-      //   터미널은 셸을 쓰러 가는 곳이다. 같은 항목에 다른 뜻을 담으면서 같은 문구를 쓰면 사람이 헤맨다.
+      // 2026-08-18 상민님 지시는 «대화는 아직 미완성이니 터미널이 기본, 대화는 베타» 였다. #2439 에서 뒤집혔다 —
+      //  대화를 읽을 수 있는 하네스는 **전부 대화창이 기본**이고 '베타' 딱지도 뗀다(멈춘 세션과 도는 세션의
+      //  화면이 갈리던 원인이 그 이분법이었다). 터미널은 사라지지 않고 **토글로 남는다** — 승인 대화상자·로그인은
+      //  거기서 뜨고, 사용자가 하네스에 직접 로그인할 길을 막지 않는 것은 라이선스 조건이기도 하다.
+      //  ⚠ 문구는 chatFirst 가 아니라 **paneIsShell** 로 가른다: codex(app-server)의 pane 은 셸이지만
+      //   claude 의 pane 은 진짜 TUI 다. 같은 항목에 다른 뜻을 담으면서 같은 문구를 쓰면 사람이 헤맨다.
       rows.push(mode === 'term'
-        ? row(chatFirst() ? '대화로 보기' : '대화로 보기 (베타)',
-          chatFirst() ? '이 세션은 대화창이 본자리예요 — Codex 와 여기서 주고받습니다' : '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요',
+        ? row('대화로 보기',
+          paneIsShell() ? '이 세션은 대화창이 본자리예요 — 여기서 주고받습니다' : '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요',
           () => { modeChosen = true; setMode('chat'); })
         : row('터미널로 보기',
-          chatFirst() ? '같은 작업 폴더의 셸이에요 — 대화는 여기서 말고 대화창에서 합니다' : '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요',
+          paneIsShell() ? '같은 작업 폴더의 셸이에요 — 대화는 여기서 말고 대화창에서 합니다' : '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요',
           () => { modeChosen = true; setMode('term'); }));
     }
     rows.push(row('목차', '이 세션에 보낸 질문 목록 — 누르면 그 자리로', () => openIndex()));
@@ -1085,7 +1109,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   세션에만 버튼을 뒀는데, 정작 그 안내가 필요한 것은 **죽은 세션**이다(래퍼가 사유를 pane 에 적어 두고
       //   세션은 살려 둔다 — catalog.ts). 말만 하고 길이 없으면 막다른 길이다.
       view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }),
-        opts.terminalSrc && isBox && !chatFirst() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: canType() ? '터미널로 보기' : '터미널에서 이유 보기', onclick: () => setMode('term') }) : null));
+        opts.terminalSrc && isBox && !paneIsShell() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: canType() ? '터미널로 보기' : '터미널에서 이유 보기', onclick: () => setMode('term') }) : null));
       paintState();
       // 라이브면 기록이 생기는 순간을 잡는다 — 박스는 파일, 노드는 중앙 기록(uuid 를 알 때만). 못 읽는 하네스면 기다려도 안 온다(폴링 X).
       if (canType() && !unreadable) { src = watch(); if (src) schedule(); }
@@ -1606,8 +1630,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const hadLive = !!live;
       ensureLive();
       if (!hadLive && live && !modeChosen && mode === 'term') setMode('chat');
-      // 반대 방향도 마감한다 — 위 추정(모르면 codex=대화)이 틀린 배포(tmux 로 끈 곳)에서는 행이 오는 즉시 터미널로.
-      if (!modeChosen && mode === 'chat' && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
+      // ⚠ #2439 — 종전엔 여기서 «chatMode 가 tmux 면 터미널로 되돌린다» 를 했다. chatFirst 가 하네스 **능력**
+      //  기반이 된 지금 그 되돌림은 화면 통일을 깬다(claude 는 tmux 인데 대화창이 기본이다). 되돌림은 지운다 —
+      //  대화를 못 읽는 하네스는 애초에 chatFirst 가 false 라 여기 오지 않는다.
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
