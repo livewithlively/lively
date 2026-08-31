@@ -352,8 +352,11 @@ export function openLaunchpad(): void {
       .filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
       const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
+      //  정본 주소를 갖는 빌트인(확인할 것·자료)은 **화면 앱**이다 — UI 페이지가 없다고 «세션 앱» 이라 부르면
+      //   배지가 거짓말을 한다(그 앱을 열어도 AI 세션은 안 뜬다). 셋을 가르는 축은 pages 가 아니라 '무엇으로 뜨나'다.
+      const isScreen = !!a.system?.route || hasUi;
       return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
-        title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
+        title: isScreen ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
         onclick: () => {
           closeLaunchpad();
           //  정본 주소가 있는 앱(확인할 것·자료)은 **그 주소로** 간다 — 그 화면이 인스턴스를 뒤에서 멱등 확보한다.
@@ -363,7 +366,7 @@ export function openLaunchpad(): void {
         } },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(BUILTIN_ICON[a.id] || (hasUi ? 'liv' : 'term'))),
         el('b', { text: a.title }),
-        el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
+        el('span', { class: 'v2-pad-badge', text: isScreen ? '앱' : '세션 앱' }));
     });
     grid.replaceChildren(...screen, ...session);
     grid.classList.toggle('v2-pad-grid--q', !!q);   // 검색 중이면 첫 칸이 Enter 로 열릴 자리 — 그걸 보인다.
