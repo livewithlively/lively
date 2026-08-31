@@ -220,6 +220,15 @@
 .ob-pick .t{min-width:0; overflow-wrap:anywhere}
 .ob-pick .h{margin-left:auto; flex:none; color:var(--muted); font-size:12px}
 #scQ{border:1px solid var(--line); border-radius:9px; padding:9px 12px; font-size:13.5px; background:var(--card); color:var(--ink)}
+/* 토큰 만드는 걸음(아직 없다면) — 입력 아래 단으로 접어 내린 안내(#2232 이탈 점검) */
+.ob-howto{border-top:1px solid var(--line-row); margin-top:6px; padding-top:12px; display:flex; flex-direction:column; gap:9px}
+.ob-howto-t{margin:0; font-size:13px; font-weight:700; color:var(--ink-sub)}
+.ob-linkbtn{background:none; border:0; padding:0; text-align:left; font-size:13px; color:var(--blue); cursor:pointer; align-self:flex-start}
+.ob-linkbtn:hover{text-decoration:underline}
+/* 주소 생김새 보여 주기 — 진짜 주소창이 아니라는 뜻으로 잠금 아이콘·회색 바탕 */
+.ob-urlmock{display:flex; align-items:center; gap:2px; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; color:var(--ink-sub); background:var(--line-row); border:1px solid var(--ob-sub); border-radius:9px; padding:9px 12px; overflow-x:auto; white-space:nowrap}
+.ob-urlmock b{color:var(--blue); font-weight:700}
+.ob-urlmock .ob-um-lock{flex:none; margin-right:5px; font-size:11px; opacity:.7}
 #scQ:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); outline:none}
 .ob-tok ol{margin:0; padding-left:19px; font-size:13.5px; color:var(--ink-sub); line-height:1.85}
 .ob-tok code{background:var(--line-row); border-radius:5px; padding:2px 7px; font-size:12.5px;

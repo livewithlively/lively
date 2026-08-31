@@ -1271,18 +1271,24 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const it = (DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id)) || { label: id };
     const ph = (spec && spec.secretPh) || '받아 오신 글자를 붙여넣으세요';
     const doc = (spec && spec.docUrl) || '';
+    //  입력이 먼저다(#2232 이탈 점검) — 토큰을 이미 받아 둔 사람은 한 글자도 안 읽고 붙여넣고 끝난다.
+    //  만드는 네 걸음은 «아직 없다면» 아래 단으로: 새로 온 사람은 자연히 아래로 읽는다.
     return `<div class="ob-tok ob-tok-in">
       <p class="ob-note">${h ? h.why : `${esc(it.label)} 에서 받은 글자를 아래에 붙여넣으면 연결됩니다.`}</p>
-      ${doc ? `<a class="ob-btn ob-btn-sub ob-btn-inline" href="${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(h ? h.go : it.label + ' 열기')} ↗</a>` : ''}
-      ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
       ${tokenSaved(id) ? '<p class="ob-note">토큰은 이미 저장돼 있어요 — 바꿀 때만 다시 붙여넣으세요.</p>' : ''}
       <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
-      ${id === 'gitlab' ? `<p class="ob-note">회사 GitLab 을 쓰면 아래에 그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
-      <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com">` : ''}
+      ${id === 'gitlab' ? `<button type="button" class="ob-linkbtn" id="hostTgl">회사 GitLab 을 쓰시나요?</button>
+      <div id="hostBox" hidden><p class="ob-note">그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
+      <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com"></div>` : ''}
       <p class="ob-err" id="tokErr"></p>
-      ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
-      <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
       <button class="ob-btn ob-btn-pri ob-btn-inline" id="tokGo">이걸로 연결하기</button>
+      <div class="ob-howto">
+        <p class="ob-howto-t">아직 토큰이 없다면 이렇게 만들어요</p>
+        ${doc ? `<a class="ob-btn ob-btn-sub ob-btn-inline" href="${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(h ? h.go : it.label + ' 열기')} ↗</a>` : ''}
+        ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
+        ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
+        <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
+      </div>
     </div>`;
   }
   /** 피그마 «어느 팀?» 걸음 — API 가 팀 목록을 안 줘서(포럼 수년치 요청·미해결) 주소 한 번은 사람이 준다. */
@@ -1295,10 +1301,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         <li>그 상태로 브라우저 <b>주소창</b>을 통째로 복사하세요 — <b>figma.com/files/team/…</b> 처럼 생긴 주소예요.</li>
         <li>복사한 주소를 <b>아래 칸</b>에 붙여넣으세요(⌘V).</li>
       </ol>
+      <div class="ob-urlmock" aria-hidden="true"><span class="ob-um-lock">🔒</span><span>www.figma.com/files/team/</span><b>1204512345678</b><span>/우리-팀</span></div>
+      <p class="ob-note ob-fine2">이렇게 생긴 주소예요. 통째로 붙여넣으시면 팀 번호는 제가 알아서 찾아요.</p>
       <input id="teamIn" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…">
       <p class="ob-err" id="teamErr"></p>
       <button class="ob-btn ob-btn-pri ob-btn-inline" id="teamAll">이 팀 전체 가져오기</button>
       <button class="ob-btn ob-btn-sub ob-btn-inline" id="teamPick">일부 파일만 고를게요</button>
+      <p class="ob-note ob-fine2">여기로 들어오는 건 파일에 달린 <b>코멘트</b>예요. 파일 내용은 필요할 때 제가 직접 읽습니다.</p>
     </div>`;
   }
   /** 계정 로그인(허용 한 번) 걸음 — 카드를 눌렀다고 곧장 새 탭을 던지지 않는다: 무엇이 열리는지 먼저 말한다. */
@@ -1814,6 +1823,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           const oaGo = $('#oaGo', el);
           if (oaGo) oaGo.onclick = () => { oaGo.disabled = true; void startOAuthFlow(id, { wait: $('#oaWait', el), err: $('#oaErr', el) }).finally(() => { oaGo.disabled = false; }); };
           // 토큰 걸음
+          const hostTgl = $('#hostTgl', el), hostBox = $('#hostBox', el);
+          if (hostTgl && hostBox) hostTgl.onclick = () => { hostBox.hidden = !hostBox.hidden; };
           const tokIn = $('#tokIn', el), tokGo = $('#tokGo', el), tokErr = $('#tokErr', el);
           if (tokIn && tokGo) {
             const submit = async () => {
