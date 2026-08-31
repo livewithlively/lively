@@ -628,10 +628,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  실측 2026-08-31(dev): 온보딩 킥오프 세션이 그렇게 즉사해 대화 id 가 없었고(트랜스크립트 404),
   //   그래서 리브가 서랍마다 만들어 둔 증류기가 **꺼진 채로 남아** 온보딩을 완주한 사람이 지식을 0건 얻었다.
   //   헤드리스(`claude -p`)엔 이 물음이 없어 서랍 분석만 성공하는 «절반» 이 됐다 — API 층에선 안 보인다.
-  //  ⚠ 신뢰하는 것은 **우리가 방금 만든 작업 폴더(target)** 하나뿐이다(위 mkdir 참조). 사람이 고른 임의
-  //   경로를 대신 신뢰해 주지 않는다 — 그건 보안 결정을 사람 대신 내리는 것이다.
+  //  ⚠ 신뢰하는 것은 **라이블리가 만들고 소유하는 폴더**뿐이다 — 사람이 고른 임의 경로를 대신 신뢰해 주지
+  //   않는다(그건 보안 결정을 사람 대신 내리는 것이다). 판정은 `autoTrustWorkspace` 하나이고 **아래 첫 지시의
+  //   화면 수락층과 같은 값을 쓴다**(그래서 여기서 한 번 내고 내려보낸다).
+  //  ⚠ 이 가드가 없으면 어떻게 되나(#2478 — 실제로 그랬다): 위 `mkdir` 은 `recursive:true` 라 **이미 있는
+  //   폴더면 아무것도 안 만든다** — 즉 「우리가 방금 만든 폴더」를 보증하지 않는다. `target` 은 사람이 고른
+  //   subpath(`resolveRootPath`, `..` 탈출만 거부)도 되므로, 가드 없이 부르면 화면 수락층이 «사람이 답해야
+  //   한다» 고 판정한 폴더를 이 층이 파일에 미리 신뢰로 박아 **대화상자 자체가 안 뜬다**(가드 우회).
   //  ⚠ 로그인 상태는 쓰지 않는다(#2232 에서 보류된 판단 그대로).
   //  비치명 — 못 심어도 세션은 뜬다(종전대로 프롬프트가 뜰 뿐). 같은 부류의 선례: ensureGitSafeDirectory(#522).
+  //  신뢰 자동화의 판정은 **한 자리에서만** 낸다(#1867) — 루트 그 자체이거나 그 프로젝트의 canonical 폴더.
+  const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
   if (harness.key === "claude") {
     //  설정 파일은 그 세션이 **실제로 쓸** 자리다: 격리면 멤버 홈, 아니면 주입한 CLAUDE_CONFIG_DIR,
     //  그것도 없으면(hostProfile·MULTIPROFILE=0) 이 호스트의 홈.
@@ -649,7 +656,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         read: (p) => fsp.readFile(p, "utf8").then((s) => s as string | null).catch(() => null),
         write: (p, t) => fsp.writeFile(p, t, { mode: 0o600 }),
       };
-    await ensureFolderTrusted(io, path.join(claudeHome, ".claude.json"), target);
+    await ensureFolderTrusted(io, path.join(claudeHome, ".claude.json"), target, trustOk);
   }
   await tmux(args);
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
@@ -756,7 +763,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  로 남아 화면이 재시도를 준다. 동적 import — 정적이면 순환(check-imports).
     //  신뢰 대화상자 자동 수락은 **라이블리가 만든 자리에서만**(#1867) — 루트 그 자체이거나 그 프로젝트의 canonical 폴더.
     //   사람이 고른 임의 폴더면 사람이 답한다(autoTrustWorkspace). 이 판정을 빼면 프로젝트 세션의 첫 지시가 대화상자에 막힌다(실측).
-    const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
+    //   ⚠ 값은 위 신뢰 블록에서 **이미 냈다**(`trustOk`) — 여기서 다시 계산하면 파생지가 둘이 되어 한쪽만 고쳐지는
+    //    어긋남이 난다(#2478 이 정확히 그 모양이었다: 이 층은 가드가 있고 파일 시딩 층은 없었다).
     const onNode = !!process.env.LIVELY_NODE_TOKEN;   // 노드 에이전트 프로세스에만 있는 값(게이트웨이엔 없다 — 안전한 판별자)
     if (chatMode === "app-server") {
       // ★ app-server 세션의 pane 은 **셸**이다. 그런데 아웃박스 배달자는 "입력창이 뜨면 send-keys" 로 넣는다 —
