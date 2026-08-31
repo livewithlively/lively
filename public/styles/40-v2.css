@@ -836,7 +836,12 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-inbox-empty .h { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
 .v2-inbox-empty .sub { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
 .v2-find { padding: 4px var(--side-x, 8px) 2px; }
-.v2-find-in { width: 100%; height: var(--row-h, 34px); border: 1px solid var(--line); border-radius: 9px; padding: 0 11px; font: inherit; font-size: 13px; background: var(--bg); }
+/*  치수는 **맨 윗줄 통합검색칸(.v2-omnib)과 같다**(원준 2026-08-31: "타이핑하는 텍스트박스가 엄청 크다 —
+    최상단 검색창이랑 같게"). 사이드바 행 격자(--row-h 34px)를 따르던 값이었는데, 이 칸은 목록의 행이 아니라
+    **검색칸**이라 닮아야 할 짝이 위의 그 칸이다: 28px · 반경 8 · 12.5px · 옅은 테두리(--line-net).
+    ⚠ 손가락 화면(≤900px)에서는 아래 미디어쿼리가 40px 로 되돌린다 — 그건 격자가 아니라 터치 표적 규칙이다. */
+.v2-find-in { width: 100%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 12.5px; background: var(--bg); }
+.v2-find-in::placeholder { color: var(--muted); }
 .v2-find-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
 .v2-sugs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 12px; }
 .v2-sugs .chip { font-size: 13px; padding: 6px 12px; border-radius: 999px; }
