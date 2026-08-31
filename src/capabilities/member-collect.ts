@@ -50,8 +50,8 @@ export interface MemberCollectSpec {
   scopeHint?: string;
   /**
    * #2243 3차 — 범위가 아니라 «어떻게 모을지»인 config 키(무엇을 include_prs · 언제부터 backfill_since).
-   * scopeKeys 와 나눠 두는 이유: scopeSatisfied 는 scopeKeys 만 본다. 여기 값이 찼다고 «범위를 골랐다»가 되면
-   * 저장소를 하나도 안 고른 채로 수집기가 켜진다(github·figma 는 그러면 전량을 훑는다).
+   * scopeKeys 와 나눠 두는 이유: scopeSatisfied 는 scopeKeys 만 본다(requireScope 인 앱 — 지금은 피그마뿐).
+   * #2232 — github·gitlab 은 «비면 전체»가 기본이 됐다(커넥터가 열거). 피그마만 API 가 팀 목록을 안 줘 범위가 필수다.
    */
   optionKeys?: string[];
   /** 켜진 뒤 한 번 더 할 일(예 피그마 증류기 준비). best-effort — 실패가 토글을 되돌리면 안 된다. */

@@ -199,6 +199,28 @@
 
 /* AI 잇기 — setup-token 붙여넣기 (#1813). 토큰은 화면에 남기지 않는다(type=password). */
 .ob-tok{display:flex; flex-direction:column; gap:9px; margin:2px 0 16px}
+
+/* ── 연결 모달(#2232, 원준님 2026-08-31: «드롭다운 말고 모달로, 한 걸음씩») ─────────────────────────
+   ⚠ «모달 금지» 규칙(2026-08-27)은 파일 고르기(OS 창을 바로 열라) 이야기다 — 이 모달은 그 규칙과 별개.
+   색은 전부 토큰 — 다크는 90-dark.css 의 토큰 재정의가 그대로 입힌다(#2232 다크 사고 재발 방지). */
+.ob-veil{position:fixed; inset:0; background:rgba(9,14,24,.52); display:grid; place-items:center; z-index:90; padding:22px}
+.ob-modal{width:min(560px,94vw); max-height:min(86vh,760px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--ob-sub); border-radius:14px; box-shadow:var(--shadow)}
+.ob-modal-hd{display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--ob-sub); flex:none}
+.ob-modal-hd b{font-size:15px; color:var(--ink)}
+.ob-modal-hd .ob-oc-ic{width:22px; height:22px; flex:none; display:grid; place-items:center}
+.ob-modal-x{margin-left:auto; border:0; background:none; font-size:21px; line-height:1; color:var(--muted); cursor:pointer; padding:3px 9px; border-radius:8px}
+.ob-modal-x:hover{background:var(--hover); color:var(--ink)}
+.ob-modal-bd{padding:12px 16px 16px; overflow:auto}
+.ob-modal-bd .ob-tok{margin:0}
+.ob-modal-bd .ob-tok-in{margin:0; padding:0; background:none; border:0; box-shadow:none}   /* 옛 인라인 패널의 테두리 상자 — 모달 안에서는 겹상자가 된다 */
+.ob-pick{display:flex; flex-direction:column; gap:1px; max-height:280px; overflow:auto; border:1px solid var(--ob-sub); border-radius:10px; padding:5px; margin:2px 0}
+.ob-pick label{display:flex; gap:9px; align-items:baseline; padding:6px 9px; border-radius:8px; cursor:pointer; font-size:13.5px; color:var(--ink)}
+.ob-pick label:hover{background:var(--hover)}
+.ob-pick input[type=checkbox]{flex:none; transform:translateY(1px)}
+.ob-pick .t{min-width:0; overflow-wrap:anywhere}
+.ob-pick .h{margin-left:auto; flex:none; color:var(--muted); font-size:12px}
+#scQ{border:1px solid var(--line); border-radius:9px; padding:9px 12px; font-size:13.5px; background:var(--card); color:var(--ink)}
+#scQ:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); outline:none}
 .ob-tok ol{margin:0; padding-left:19px; font-size:13.5px; color:var(--ink-sub); line-height:1.85}
 .ob-tok code{background:var(--line-row); border-radius:5px; padding:2px 7px; font-size:12.5px;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
