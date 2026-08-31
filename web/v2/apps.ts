@@ -21,7 +21,10 @@ export interface AppDef {
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
-  kind?: 'classic' | 'browser';
+  //  'native' = 새 셸이 **직접 그리는** 화면(iframe 이 아니다). route 가 셸 해시의 첫 세그먼트다(`#/<route>`).
+  //   문을 여기 두는 이유: 런치패드·최근 연 앱·독 고정은 전부 이 표를 읽는다. 표 밖에 있으면 그 셋 중
+  //   어느 것도 못 한다 — 레일에 못 박아 두는 길밖에 남지 않는다(자료가 그랬다, #2423).
+  kind?: 'classic' | 'browser' | 'native';
   home?: string;      // kind='browser' 의 첫 주소
   // #2199 — 런치패드·최근 앱·독·통합검색에 **안 나온다**. 주소(#/system/… · #/app/system)로는 그대로 열린다 —
   //  문이 다른 곳에 있는 앱이다(설정 = [나] 창 ▸ [고급 설정], v2/me-modal.ts). 표에서 지우지 않는 이유: 라우터·탭 제목·
@@ -35,6 +38,10 @@ export const APPS: AppDef[] = [
   { key: 'terminal', title: 'AI 세션', desc: '박스에서 도는 AI 세션 전체 · 새 세션 만들기', route: 'terminal', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26 "터미널 아이콘 말고 말풍선으로 통일")
   { key: 'projects2', title: '프로젝트', desc: '보드 · 리스트 · 타임라인 · 태스크', route: 'projects2', tab: 'projects2', icon: 'proj' },
   { key: 'knowledge', title: 'WIKI', desc: '지식 트리 · 문서 · 검토 큐', route: 'knowledge', tab: 'knowledge', icon: 'wiki' },
+  //  자료(#2423) — 새 셸이 직접 그리는 첫 native 앱. 위키 옆에 둔다(지식의 원본이 자료다).
+  //   ⚠ 레일에 못 박지 않는다(원준 2026-08-31): "맥락관리·사용가이드 저 위계로 앱에서만 보이고, 눌러서 최근에
+  //   나오다가, 원하면 독에 고정". 그래서 문은 런치패드 하나이고, 열면 ② 최근 연 앱에 서고, 거기서 고정한다.
+  { key: 'sources', title: '자료', desc: '출처별 원본 — 대화 · 파일 · 이슈 · 적어 둔 것', route: 'sources', tab: null, icon: 'src', kind: 'native' },
   { key: 'context', title: '맥락 관리', desc: '우리 AI 가 아는 것과 그것을 만드는 기계들 — 수집기 · 증류기 · 카테고리 · 점검 · AI 전달', route: 'context', tab: 'context', icon: 'ctx' },
   { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
   // 설정 — 앱 목록에서 **뺐다**(#2199, 원준 2026-08-27 "앱에 설정을 없애고 … 모달 사이드바에 고급설정 하나 만들어서").
@@ -91,6 +98,10 @@ export function recentApps(n: number): AppDef[] {
   return out;
 }
 export function appByKey(key: string): AppDef | null { return APPS.find((a) => a.key === key) || null; }
+/** 이 앱을 여는 주소 — native 는 셸이 직접 그리는 제 주소(`#/sources`), 나머지는 액자(`#/app/<key>`). */
+export function appHref(a: AppDef): string { return a.kind === 'native' ? '#/' + a.route : '#/app/' + a.key; }
+/** 주소 첫 세그먼트로 native 앱을 되찾는다 — '지금 이 앱이 떠 있나'(레일 실행 중 점)를 판정하는 자리에서 쓴다. */
+export function nativeAppByRoute(seg: string): AppDef | null { return APPS.find((a) => a.kind === 'native' && a.route === seg) || null; }
 
 // 임베드 URL — **같은 문서**를 ?embed=1 로. location.pathname 은 이미 프리뷰 프리픽스(/preview/<id>/ui/)를 포함하므로
 //  appUrl 을 거치지 않는다(거치면 프리픽스가 두 번 붙는다). 같은 경로 = 같은 API 베이스 = 같은 인증.
@@ -332,8 +343,9 @@ export function appGlassIcon(icon: AppDef['icon'], cls?: string): SVGElement {
 //   · 설치된 세션 앱(org_app, #1780) 클릭 = openAppSession → 앱 세션을 열고 그 대화 화면으로. 동의(grant)가 없으면
 //     그때 동의 창이 뜬다. 세션 앱은 비동기로 불러와(listSessionApps) 도착하면 격자에 덧그린다(없으면 화면앱만 보인다).
 //  설치된 앱(org_app) 중 **우리가 만든 빌트인**은 제 아이콘을 갖는다 — 남의 앱만 종류(앱/세션 앱)로 뭉뚱그린다.
-//   이 표가 없으면 자료·확인할 것이 런치패드에서 전부 같은 그림으로 서서 어느 것이 무엇인지 못 고른다.
-const BUILTIN_ICON: Record<string, AppDef['icon']> = { sources: 'src', browser: 'web' };
+//   이 표가 없으면 빌트인들이 런치패드에서 전부 같은 그림으로 서서 어느 것이 무엇인지 못 고른다.
+//   (자료는 이제 APPS 표의 native 앱이라 이 길로 오지 않는다 — 위 session 필터가 뺀다.)
+const BUILTIN_ICON: Record<string, AppDef['icon']> = { browser: 'web' };
 
 let padEl: HTMLElement | null = null;
 export function openLaunchpad(): void {
@@ -349,10 +361,12 @@ export function openLaunchpad(): void {
     const rank = (t: string) => { const i = t.toLowerCase().indexOf(q); return i === 0 ? 0 : i > 0 ? 1 : 2; };
     const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) =>
-      el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, title: a.desc, onclick: () => closeLaunchpad() },
+      el('a', { class: 'v2-pad-item', role: 'listitem', href: appHref(a), title: a.desc, onclick: () => closeLaunchpad() },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)),
         el('b', { text: a.title })));
-    const session = sApps.filter((a) => a.id !== 'ai-session')
+    //  ⚠ 화면 앱 표(APPS)에 이미 있는 빌트인은 여기서 뺀다 — 안 그러면 같은 앱이 격자에 두 번 선다(자료, #2423).
+    //   표 쪽이 이긴다: 아이콘·설명·최근·독 고정이 전부 그 줄에 달려 있다.
+    const session = sApps.filter((a) => a.id !== 'ai-session' && !APPS.some((x) => x.kind === 'native' && x.key === a.id))
       .filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
       const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.

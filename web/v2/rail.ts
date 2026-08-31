@@ -17,9 +17,9 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { el, navOn, personName, profileAvatar, state, toast } from '../core.js';
+import { el, navOn, personName, profileAvatar, state, toast, wsKey } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
-import { APPS, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
+import { APPS, appHref, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
@@ -60,9 +60,10 @@ const SECTIONS: SecDef[] = [
 interface LinkDef { key: string; label: string; route: string; tab: string | null; icon: string }
 const LINKS: LinkDef[] = [
   { key: 'liv', label: '리브', route: '#/liv', tab: 'liv', icon: 'liv' },
-  //  자료(#2423) — 구역(SECTIONS)이 아니라 '갈 곳'이다. 구역은 왼쪽 목록의 내용을 통째로 바꾸는 자리이고,
-  //   자료는 자기 안에 출처 나무를 이미 갖고 있어 사이드바를 또 점유할 이유가 없다(구역 여섯째를 만들지 않는다).
-  { key: 'sources', label: '자료', route: '#/sources', tab: null, icon: 'src' },
+  //  ⚠ 자료(#2423)는 여기 없다 — 한때 있었고 걷었다(원준 2026-08-31): "고정해서 보이지 않고 맥락관리·사용가이드
+  //   저 위계정도로 앱에서만 보이고, 눌러서 최근에 나오다가, 원하면 독에 고정하고 싶으면 하는 방식".
+  //   즉 **레일에 줄을 얻는 것은 사람이 정한다.** 새 앱을 이 표에 더하면 그 결정을 우리가 대신 내리는 것이다 —
+  //   구역만큼 늘 필요한 것이 아니라면 APPS 표(native)에 두고 런치패드·최근·독 고정에 맡겨라.
 ];
 export function railSections(): SecDef[] { return SECTIONS.filter((s) => !s.tab || navOn(s.tab)); }
 export function sectionDef(sec: RailSection): SecDef { return SECTIONS.find((s) => s.key === sec) || SECTIONS[0]; }
@@ -74,6 +75,9 @@ const HIDE_STORE = deviceStore('lively_v2_rail_hidden');   // ⚠ 이름에 `_KE
 //  #2460 — **계정에 둔다**: 끌어서 정한 자리는 이 창의 사실이 아니라 그 사람의 결정이다.
 const MAIN_STORE = shellPrefStore('lively_v2_rail_main', 'list');
 const PIN_STORE = deviceStore('lively_v2_rail_pins');      // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
+//  자료를 독에서 한 번 내렸다는 표식(#2423) — 아래 init() 주석. 한 번만 하고, 그 뒤엔 사람의 결정이 이긴다.
+//  ⚠ 1회성 이관 표식이라 계정으로 올리지 않는다(#2460) — 기기마다 한 번씩 도는 것이 맞다.
+const SRC_UNPIN_STORE = wsKey('lively_v2_rail_src_unpinned');
 const RECENT_N = 4;
 const NARROW_MQ = '(max-width: 900px)';   // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 
@@ -100,6 +104,13 @@ function init(): void {
       order = normalizeOrder([...defaultOrder(), ...(Array.isArray(p) ? p : [])]);
       localStorage.removeItem(PIN_STORE);
       if (Array.isArray(p) && p.length) localStorage.setItem(MAIN_STORE, JSON.stringify(order));   // 옮긴 것을 바로 적는다 — 안 적으면 다음 로드에 사라진다
+    }
+    //  자료를 독에서 **한 번만** 내린다(#2423). 종전 기본 순서(defaultOrder)가 자료를 못 박아 갖고 있었으므로,
+    //   저장된 순서에 남아 있는 'sources' 는 사람이 고정한 것이 아니라 **옛 기본값의 흔적**이다. 표식을 남겨
+    //   두 번 내리지 않는다 — 사람이 다시 고정하면 그 결정이 그대로 산다.
+    if (!localStorage.getItem(SRC_UNPIN_STORE)) {
+      localStorage.setItem(SRC_UNPIN_STORE, '1');
+      if (order.includes('sources')) { order = order.filter((k) => k !== 'sources'); localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
     }
     localStorage.removeItem('lively_v2_rail_open');   // 232px 펼침 모드(2차)의 기억 — 이제 뜻이 없다
   } catch (_) { /* 못 읽어도 홈·보임으로 선다 */ }
@@ -539,7 +550,7 @@ export function openSectionMenu(anchor: HTMLElement): void {
       }
       if (m.kind === 'link') { const l = m.link; return row(l.key, l.label, l.icon, !!linkOn && linkOn.key === l.key, null, () => { location.hash = l.route; }); }
       const a = m.app;   // 독에 고정한 앱 — 레일이 숨어도 여기서 간다
-      return row(a.key, a.title, a.icon, false, null, () => { location.hash = '#/app/' + a.key; });
+      return row(a.key, a.title, a.icon, ak === a.key || ak === 'app:' + a.key, null, () => { location.hash = appHref(a); });
     }),
     el('div', { class: 'v2-wspop-hr', role: 'separator' }),
     row('rail', '레일 펼치기', 'panel', false, el('kbd', { class: 'v2-wspop-k', text: '⌘⇧S' }), () => toggleRail())) as HTMLElement;
@@ -593,7 +604,7 @@ function pinApp(key: string, idx = order.length): void {
 function unpinApp(key: string): void { saveOrder(order.filter((k) => k !== key)); drawRail(); }
 function dockMenu(x: number, y: number, a: AppDef, pinned: boolean): void {
   ctxMenu(x, y, [
-    { label: '열기', run: () => { location.hash = '#/app/' + a.key; } },
+    { label: '열기', run: () => { location.hash = appHref(a); } },
     { sep: true, label: '' },
     pinned ? { label: '독에서 빼기', run: () => unpinApp(a.key) } : { label: '독에 고정', run: () => pinApp(a.key) },
   ]);
@@ -838,9 +849,12 @@ export function drawRail(): void {
       onclick: (e: Event) => { if (!href) e.preventDefault(); onclick(); },
     }, icon(ic, 'v2-rail-ic'), el('span', { class: 'v2-rail-t', text: label }), extra);
   const appItem = (a: AppDef, kind: 'pin' | 'recent'): HTMLElement => {
-    const it = item(a.key, a.title, a.icon, false,
+    //  독에 고정한 앱도 **지금 그 화면이면 켜져 보인다** — 구역·리브와 같은 규칙(activeKey).
+    //   안 그러면 자료를 고정해 놓고 그 안에 들어가 있어도 레일만 아무 데도 안 가리킨다.
+    const on = ak === a.key || ak === 'app:' + a.key;
+    const it = item(a.key, a.title, a.icon, on,
       running.has(a.key) ? el('span', { class: 'v2-rail-run', role: 'img', 'aria-label': '실행 중' }) : null,
-      () => { /* href 가 간다 */ }, '#/app/' + a.key);
+      () => { /* href 가 간다 */ }, appHref(a));
     it.classList.add(kind === 'pin' ? 'pinned' : 'recent');
     it.dataset.app = a.key; it.dataset.kind = kind;
     it.title = a.title + (kind === 'pin' ? ' — 독에 고정됨 · 꾹 눌러 끌면 순서, 레일 밖으로 끌어내면 빼기' : ' — 최근에 연 앱 · 꾹 눌러 위로 끌어 올리면 고정');
