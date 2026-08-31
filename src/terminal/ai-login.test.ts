@@ -177,8 +177,17 @@ t("⑩ 화면은 고른 AI **하나**를 묻는다 — «아무거나 하나» �
 t("⑪ 막다른 길이 없다 — CLI 가 없어도 계속할 문이 있다", () => {
   const scene = ONBOARDING.slice(ONBOARDING.indexOf("    claude: {"), ONBOARDING.indexOf("    terminal: {"));
   assert.match(scene, /c\.installed === false/, "미설치 갈래가 없다 — 그 사람은 없는 명령을 치라는 안내를 받는다");
-  assert.match(scene, /data-other/, "다른 AI 를 고를 문이 없다");
-  assert.match(scene, /id="cKeep"/, "이미 이어진 다른 AI 로 계속할 문이 없다");
+  //  «그 AI 가 이 자리에 없다» 갈래에는 **두 길이 다 있어야** 한다: 다른 AI 로 갈아타거나, 그대로 다음으로.
+  //   그 갈래만 잘라서 본다 — 로그인 갈래는 버튼을 줄인 자리라(원준님 2026-08-31) 함께 재면 옳은 축소가 위반이 된다.
+  const missing = scene.slice(scene.indexOf("if (c.installed === false)"), scene.indexOf("// ── 있는데 아직 로그인 전"));
+  assert.match(missing, /data-other/, "다른 AI 를 고를 문이 없다");
+  assert.match(missing, /data-skip/, "그대로 다음으로 갈 문이 없다");
+  //  ⚠ 종전엔 `id="cKeep"` 를 못 박았다. 그건 **컨트롤 이름**이지 뜻이 아니다 — 지켜야 할 것은
+  //   «이미 이어진 AI 가 있으면 그것을 잃지 않고 계속한다» 이고, 그 책임은 지금 data-skip 핸들러가 진다.
+  //   이름을 박아 두면 컨트롤을 합치는 옳은 변경이 위반으로 잡힌다(실측 2026-08-31).
+  const bind = ONBOARDING.slice(ONBOARDING.indexOf("const skip = $('[data-skip]', el);"));
+  assert.match(bind.slice(0, 300), /if \(!S\.aiConnected && o\) mark\(AI_LABEL\[o\] \|\| o, o\);/,
+    "이미 이어진 다른 AI 로 계속할 때 그 사실을 잃는다");
 });
 
 t("⑬ ★화면이 «이어졌다» 를 지어내지 않는다 — 참으로 만드는 자리는 서버 확인 뒤 한 곳뿐", () => {
