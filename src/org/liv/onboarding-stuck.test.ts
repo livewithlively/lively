@@ -85,3 +85,25 @@ test("⑥ 올린 게 0건이면 기다리지 않는다(무회귀)", () => {
   assert.match(READ, /if \(!target\(\)\) \{ finish\(\); sayFail\(\); return; \}/,
     "0건일 때 즉시 끝내는 길이 사라졌다");
 });
+
+//  ★ 축을 가른 뒤 남는 어긋남: 화면 문구가 «받은 수»로 «읽었다»를 말하는 것.
+//   실측(2026-08-31): 방금 «3건은 못 넣었어요» 라고 해 놓고 바로 다음 장면이 «파일 8개를 받아서 읽는 중입니다»
+//   라고 했다. 사람이 보기엔 제품이 앞뒤로 다른 말을 한다.
+//   규칙: «받았다/올렸다»는 upN, «읽는다/읽었다/자료 N건»은 등록 축(ingestedN·realTotal).
+test("⑦ «읽었다»를 올라간 수로 말하지 않는다 — 받은 수와 읽은 수는 다르다", () => {
+  const lines = SRC.split("\n");
+  const bad: string[] = [];
+  lines.forEach((ln, i) => {
+    if (/^\s*(\/\/|\*|\/\*)/.test(ln)) return;              // 주석은 규칙을 설명하는 자리다
+    if (!/S\.upN/.test(ln)) return;
+    if (/읽는|읽었|자료 <b>|자료 \$\{/.test(ln)) bad.push(`${i + 1}: ${ln.trim().slice(0, 110)}`);
+  });
+  assert.deepEqual(bad, [], `«읽었다»를 S.upN 으로 말하는 줄이 있다:\n${bad.join("\n")}`);
+});
+
+//  realTotal 은 «자료 N건» 을 말하는 모든 자리(첫 대면 · 다 읽었어요 · 이어 열기)의 바닥이다.
+//   여기 upN 이 들어가면 세 자리가 한꺼번에 틀린다.
+test("⑧ realTotal 의 바닥이 등록 축이다", () => {
+  assert.match(SRC, /const realTotal = \(\) => Math\.max\(ingestedN\(\),/,
+    "realTotal 이 올라간 수를 바닥으로 쓴다 — 읽지 않은 것을 읽었다고 말하게 된다");
+});
