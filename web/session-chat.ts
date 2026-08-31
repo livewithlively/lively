@@ -379,6 +379,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     opening: null,
   });
 
+  /**
+   * **대화창이 이 세션의 본자리인가** — 어느 탭으로 열지를 정한다.
+   *
+   *  ⚠ `chatFirst()` 와 **다른 질문**이다. 그건 «codex app-server 세션인가» 이고(실시간 층·승인 층을
+   *   붙일지의 근거), 이건 «사람이 처음 볼 화면이 어디인가» 다. 한 함수가 둘을 겸하다가 실제로 사고가 났다:
+   *   대화 런타임(#2439)을 켜서 작업·승인·슬래시가 다 오는데도 **claude 세션은 터미널로 열렸다**
+   *   — chatMode 가 'tmux' 라 chatFirst() 가 거짓이었기 때문이다(2026-09-01 상민님 신고).
+   *
+   *  판정: codex app-server 이거나, **서버가 이 세션을 chat 런타임으로 연다**(runtimeMode).
+   *  ⚠ 구 서버 행엔 runtimeMode 가 없다 → 종전 판정만 남는다(무회귀).
+   */
+  const chatHome = (): boolean => chatFirst() || String(target.raw?.runtimeMode || '') === 'chat';
+
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
   // 런타임 명령이 확인된 축은 POST …/runtime, 나머지는 POST …/handoff 로 같은 작업 자리의 새 프로세스를 연다.
   let hcat: RunHarness | null = null;          // 이 세션의 하네스 카탈로그 행(제공자 이름 · 선택지 · 바꿀 수 있나)
@@ -1684,7 +1697,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  전담한다) 터미널로 열면 사람이 **말 걸 곳이 없는 화면**을 먼저 본다 — 실제로 그렇게 헤맸다.
   //  나머지는 종전 그대로 터미널이 기본이다(2026-08-18 지시: 대화창이 미완성인 동안은 터미널이 정답).
   //  판정 근거는 세션 행의 chatMode — 서버가 '이 세션의 대화는 app-server 가 돈다'고 알려 주는 값이다.
-  setMode(chatFirst() ? 'chat' : 'term');
+  setMode(chatHome() ? 'chat' : 'term');
 
   void open();
 
@@ -1710,8 +1723,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       ensureLive();
       ensureTasksDock();   // 열 때는 행이 얇아 runtimeMode 를 몰랐을 수 있다(방금 만든 세션)
       if (!hadLive && live && !modeChosen && mode === 'term') setMode('chat');
+      //  ★ #2439 — 열 때는 행이 얇아 runtimeMode 를 몰랐을 수 있다(방금 만든 세션). 그 값이 지금 왔고
+      //   대화가 본자리라면 그때 대화로 옮긴다(사람이 직접 고른 뒤에는 건드리지 않는다).
+      if (!modeChosen && mode === 'term' && chatHome()) setMode('chat');
       // 반대 방향도 마감한다 — 위 추정(모르면 codex=대화)이 틀린 배포(tmux 로 끈 곳)에서는 행이 오는 즉시 터미널로.
-      if (!modeChosen && mode === 'chat' && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
+      //  ⚠ 단 **대화 런타임 세션은 예외**다. chatMode 는 'tmux' 여도 대화는 stream-json 이 쥔다 —
+      //   여기서 되돌리면 위 줄과 서로 밀치며 화면이 깜빡인다.
+      if (!modeChosen && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && opts.terminalSrc && isBox) setMode('term');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
