@@ -24,7 +24,13 @@ t("★ D1 `node -e` 의 인자 밀림을 지킨다 — 슬롯 이름표가 첫 �
 });
 
 t("★ D2 하네스 홈을 먼저 보장한다 — 없으면 codex 가 설정을 못 읽고 즉사한다", () => {
-  assert.match(SH, /mkdir -p '\/home\/box_x\/\.cache' '\/home\/box_x\/\.codex' '\/home\/box_x\/\.claude'/);
+  //  ⚠ 하네스가 늘 때 **여기에 한 줄 더하는 것을 잊으면 그 하네스에서만 조용히 깨진다.** 그래서 순서를 고정한
+  //   한 줄이 아니라 «이 통로가 다루는 하네스의 홈이 전부 있나» 로 본다 — 목록이 늘면 이 단언이 먼저 깨진다.
+  const m = SH.match(/mkdir -p ([^\n]*)/);
+  assert.ok(m, "홈 보장 줄이 있다");
+  for (const d of [".cache", ".codex", ".claude", ".grok"]) {
+    assert.ok(m![1].includes(`'/home/box_x/${d}'`), `${d} 홈을 보장한다`);
+  }
 });
 
 t("★ D3 이미 돌고 있으면 다시 안 띄운다 — 둘이 같은 자격 파일을 노리면 서로를 덮는다", () => {
@@ -50,6 +56,12 @@ t("D6 바이너리가 없으면 그렇게 말한다(127)", () => {
 
 t("D7 detached 로 띄운다 — 게이트웨이가 재기동돼도 로그인이 이어진다", () => {
   assert.match(SH, /nohup node -e .* >\/dev\/null 2>&1 &/);
+});
+
+t("★ D9 grok 도 이 러너로 띄운다 — device-auth 한 줄(재실측 2026-09-01, grok 1.0.13)", () => {
+  const sh = loginStartSh({ home: "/h", slotName: "s", argv: aiLoginArgv("grok") });
+  assert.match(sh, /grok' 'login' '--device-auth'/);
+  assert.match(sh, /command -v 'grok'[^\n]*exit 127/, "바이너리가 없으면 그렇게 말한다");
 });
 
 t("★ D8 claude 는 stdin 을 되받는다 — 입력 파일을 폴링해 자식에게 넘긴다", () => {
