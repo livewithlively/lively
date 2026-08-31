@@ -302,7 +302,11 @@
    설명 줄은 대기 색(앰버)으로 둔다. 체크 자리는 아예 비운다(고를 수 없으므로). */
 .ob-opt-card.ob-soon{opacity:.58; background:var(--bg); border-style:dashed}
 .ob-opt-card.ob-soon:hover{border-color:var(--line); box-shadow:none}
-.ob-opt-card.ob-soon .ob-oc-d{color:var(--ob-amber); font-weight:600}
+/* «준비 중»은 둘째 줄이 아니라 이름 옆 미니 배지 — 둘째 줄은 카드를 키워 그리드 행 높이를 흩뜨린다(#2232, 2026-08-31).
+   이름이 길어도 배지째 다음 줄로 떨어지지 않게 한 몸(nowrap)으로 묶고, 넘치면 이름 쪽을 말줄임한다. */
+.ob-opt-card .ob-oc-one{display:flex; align-items:center; gap:6px; min-width:0; white-space:nowrap}
+.ob-opt-card .ob-oc-one .ob-oc-t{overflow:hidden; text-overflow:ellipsis}
+.ob-soon-tag{flex:none; padding:1px 6px 2px; border-radius:999px; background:var(--ob-amber-soft); color:var(--ob-amber); font-size:10px; font-weight:700; line-height:1.4}
 .ob-opt-card.ob-soon .ob-blogo{filter:grayscale(1)}
 .ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:var(--muted-3-line); box-shadow:var(--shadow)}
 /* 펼쳐 둔 카드 — 아래 패널과 한 덩어리로 읽히게 아랫모서리를 편다. */

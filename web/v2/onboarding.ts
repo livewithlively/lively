@@ -1602,7 +1602,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const doneCard = (id, label, icon) => doneCardHtml(id, label, icon, '연결돼 있어요');
         //  아직 안 되는 곳 — **고를 수 없게 잠그고 그 사실을 적는다.** 고를 수 있게 두면 골랐는데 아무 일도 안 일어나고,
         //   그때 사람은 서비스가 고장 났다고 읽는다.
-        const soonCard = (label, icon) => `<button class="ob-opt-card ob-locked ob-soon" aria-disabled="true" disabled title="아직 준비 중이에요"><span class="ob-oc-ic">${icon}</span><span><span class="ob-oc-t">${esc(label)}</span><span class="ob-oc-d">준비 중</span></span></button>`;
+        const soonCard = (label, icon) => `<button class="ob-opt-card ob-locked ob-soon" aria-disabled="true" disabled title="아직 준비 중이에요"><span class="ob-oc-ic">${icon}</span><span class="ob-oc-one"><span class="ob-oc-t">${esc(label)}</span><span class="ob-soon-tag">준비 중</span></span></button>`;
         return qHead('sources',
           //  ⚠ «받은 수»와 «읽는 수»는 다르다(#1631) — 등록 안 된 파일은 읽지 않는다.
           //   받은 수로 «읽는 중» 을 말하면, 바로 앞에서 «3건은 못 넣었어요» 라고 해 놓고 8개를 읽는다고 하게 된다.
