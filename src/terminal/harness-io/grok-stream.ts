@@ -22,6 +22,26 @@
 //   그 raw 가 우리에게 형식을 알려주고, 그때 이 파일을 채운다.
 import type { SessionEvent, SessionFacts } from "./session-event.js";
 
+/**
+ * 사람 말 → ACP `session/prompt` 요청 한 줄 (#2439).
+ *
+ *  ── 근거 (실측, grok 1.0.13 · 2026-09-01) ────────────────────────────────────
+ *  이 모양으로 보냈더니 서버가 **`-32602 "unknown session id"`** 를 냈다. 그건 «요청 형식은 맞고
+ *  세션 id 만 없다» 는 뜻이다 — 형식이 틀렸다면 파라미터 자체를 다르게 나무랐을 것이다.
+ *  즉 **봉투는 검증됐고 남은 것은 실 세션 id 하나**다.
+ *
+ *  ⚠ 그래서 `sessionId` 를 **인자로 받는다.** ACP 는 `session/new` 로 id 를 먼저 받아야 하는데
+ *   그건 인증이 필요하다(실측: `-32000 Authentication required`). 런타임이 그 id 를 쥐고 넘긴다.
+ *   여기서 «없으면 빈 문자열» 같은 기본값을 두지 않는다 — 그러면 이 오류가 조용히 반복된다.
+ */
+export function grokPromptLine(sessionId: string, text: string, id = 1): string {
+  return JSON.stringify({
+    jsonrpc: "2.0", id,
+    method: "session/prompt",
+    params: { sessionId, prompt: [{ type: "text", text }] },
+  }) + "\n";
+}
+
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);

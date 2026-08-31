@@ -86,10 +86,13 @@ const grokChat: ChatAdapter = {
   //  facts 축만 실측으로 옮겼다(핸드셰이크는 로그인 없이 왕복한다). 턴 이벤트·승인은 로그인이 있어야
   //  페이로드를 볼 수 있어 **아직 안 채운다** — 못 본 형식으로 번역기를 쓰면 그 세션은 빈 화면이 된다.
   translate: grokAcpEvent,
-  //  ⚠ ACP 는 JSON-RPC 라 «사람 말 한 줄» 인코딩이 stdio-jsonl 과 다르다(session/prompt 요청을 만들어야 한다).
-  //   그 왕복을 실측하기 전엔 null — 그래서 canOpenChatRuntime 이 아직 grok 을 안 연다.
+  //  ⚠ ACP 는 JSON-RPC 라 «사람 말 한 줄» 인코딩이 stdio-jsonl 과 다르다 — `session/prompt` 요청을
+  //   만들어야 하고, 그 요청은 **세션 id 를 요구한다**(실측: 없으면 -32602 "unknown session id").
+  //   `encode(text)` 시그니처로는 그 id 를 받을 수 없으므로 여기서는 null 이고, 런타임이 ACP 세션을
+  //   여는 단계(session/new — 인증 필요)를 갖추면 grokPromptLine(sessionId, text) 로 잇는다.
+  //   ★ 봉투 자체는 실측으로 검증됐다(형식이 틀렸다면 다른 오류가 났다) — 남은 것은 id 한 개다.
   encode: null,
-  note: "ACP 핸드셰이크 실측(1.0.13): initialize 로 모델·MCP·인증필요를 얻는다. session/prompt 왕복과 승인 페이로드는 로그인 뒤 실측이 남았다.",
+  note: "ACP 실측(1.0.13): initialize→모델·MCP·인증필요 / session/prompt 봉투 검증됨(-32602 unknown session id = 형식은 맞다). 남은 것은 session/new(인증)로 id 를 받는 단계.",
 };
 
 const antigravityChat: ChatAdapter = {

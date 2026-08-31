@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { CHAT_ADAPTERS, canOpenChatRuntime, chatAdapter } from "./chat-adapters.js";
 import { HARNESS_IO } from "./adapter.js";
+import { grokPromptLine } from "./grok-stream.js";
 import { harnessSupportsChat } from "../session-runtime-mode.js";
 
 let pass = 0;
@@ -60,7 +61,9 @@ t("[5] 지금 실제로 열리는 것 — claude·codex(나머지는 왜 아닌�
   //  ★ grok 은 **번역기가 있는데도 안 열린다** — encode(사람 말 → session/prompt 왕복)가 미실측이라서다.
   //   «번역만 있으면 열린다» 로 뭉뚱그리면 말을 걸 수 없는 세션이 열린다.
   assert.ok(chatAdapter("grok")!.translate, "grok facts 축은 실측으로 채워졌다");
-  assert.equal(chatAdapter("grok")!.encode, null, "grok 은 보내는 쪽 왕복이 아직 미실측");
+  //  ⚠ grok 의 encode 가 null 인 이유는 «미실측» 이 아니라 **시그니처가 부족해서**다 —
+  //   session/prompt 는 세션 id 를 요구하는데 encode(text) 로는 못 받는다(봉투는 실측으로 검증됨).
+  assert.equal(chatAdapter("grok")!.encode, null, "grok 은 세션 id 가 필요해 encode(text) 로 못 만든다");
   assert.equal(chatAdapter("opencode")!.transport, "http-sse", "opencode 는 serve 경로");
   //  ⭐ opencode 만은 서버화가 **기능을 새로 연다** — 지금까지 대화 읽기가 구조적으로 없었다(#1884 §2 #35).
   assert.ok(chatAdapter("opencode")!.translate, "opencode 승인·명령 축은 OpenAPI 실측으로 채워졌다");
@@ -93,6 +96,11 @@ t("[6b] grok 번역기 — 핸드셰이크 실측분을 옮긴다(못 잰 것은
   assert.equal((err as any).facts.permissionMode, "needs-auth");
   //  ★ 못 잰 것(턴 이벤트)은 raw 로 올려 관측한다 — 짐작해서 채우지 않는다.
   assert.equal(tr({ jsonrpc: "2.0", method: "session/update", params: { x: 1 } })?.t, "raw");
+  //  실측으로 검증된 요청 봉투 — 서버가 «형식은 맞고 id 만 없다»(-32602)고 답한 그 모양.
+  const line = JSON.parse(grokPromptLine("sess-1", "안녕"));
+  assert.equal(line.method, "session/prompt");
+  assert.equal(line.params.sessionId, "sess-1");
+  assert.deepEqual(line.params.prompt, [{ type: "text", text: "안녕" }]);
 });
 
 t("[6d] antigravity 번역기 — 재측정으로 정정한 축(내 호출 형식이 틀렸었다)", () => {
