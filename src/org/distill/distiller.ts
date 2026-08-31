@@ -13,7 +13,7 @@
 //  이건 '무엇을 집어 무슨 기준·형식으로 증류하나'(생산 라인). 증류기 산출도 그 밸브를 그대로 탄다.
 import { itemsPool, q } from "../../db/client.js";
 import { normList, normText, sanitizePromptSections } from "../store/ingest.js";   // 저장 경로와 **같은** 입력 정규화(#1557)
-import { sourceVisSql, resolveSourceViewer } from "../../v6/source-store.js";
+import { sourceVisSql, resolveSourceViewer, S_LIST_SEL } from "../../v6/source-store.js";
 import { PUBLIC_VIEWER } from "../../v6/visibility.js";
 
 export interface DistillerRow {
@@ -308,6 +308,58 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
 }
 
 // 이 증류기가 이번 배치에서 다룰 자료 목록 — **스레드 batch_size 개**의 미판정 자료(스레드째, 시간순).
+// ── 아무도 안 집는 자료(#1631, 원준님 2026-08-31) ─────────────────────────────────
+//
+//  실측: 증류기 7개 중 2개만 켜진 상태에서 자료 12건이 **영영 방치**됐다. 그런데 증류 잡은 매번
+//   `status: "ok" · "미증류 자료 없음"` 으로 찍혔다 — 초록불이 거짓을 말한 것이다.
+//   그 문장이 아는 것은 «켜진 레인들의 인박스가 비었다» 뿐인데, «세상에 미증류 자료가 없다» 로 말했다.
+//
+//  ⚠ 더 나쁜 구조: pickDistillerBatch 의 폴백은 **켜진 증류기가 하나도 없을 때만** 돈다.
+//   그래서 0개 켜면 전부 증류되고, 2/7 개 켜면 나머지 5개 몫이 통째로 굶는다 —
+//   **반만 설정한 상태가 아예 안 한 상태보다 나쁘다.** 온보딩이 새 사용자를 정확히 그 자리에 놓는다.
+//
+//  여기서 «아무도 안 집는다» 를 정확히 센다: 켜진 어느 증류기의 **스코프에도** 안 드는 미증류 자료.
+//  ⚠ 인박스가 비었다는 것과 스코프에 없다는 것은 다르다. 인박스는 이미 판정(seen)한 것을 빼므로,
+//   «처리 중» 인 자료까지 방치로 세면 **같은 자료를 두 번 증류**하게 된다. 스코프로 재야 그 실수가 없다.
+export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | null, limit: number): { sql: string; values: unknown[] } {
+  const p = new Params();
+  let visWhere = "TRUE";
+  if (viewer != null) { p.add(viewer); visWhere = sourceVisSql(p.values.length); }
+  //  켜진 레인 각각의 스코프 — 하나라도 참이면 그 레인이 언젠가 가져간다(방치가 아니다).
+  const claimed = enabled.map((d) => `COALESCE((${distillerScopeSql(d, p)}), false)`);
+  const notClaimed = claimed.length ? `NOT (${claimed.join(" OR ")})` : "TRUE";
+  const lim = p.add(Math.min(limit, 500));
+  return {
+    sql: `SELECT ${S_LIST_SEL} FROM source s
+     WHERE s.lifecycle='active'
+       AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id AND ks.created_at >= s.updated_at)
+       AND ${visWhere}
+       AND ${notClaimed}
+     ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${lim}`,
+    values: p.values,
+  };
+}
+
+/** 아무 켜진 증류기도 안 가져가는 미증류 자료. 켜진 게 없으면 전부(= 종전 폴백과 같은 집합). */
+export async function listStrandedSources(enabled: DistillerRow[], limit = 50, requester?: string | null): Promise<Record<string, unknown>[]> {
+  const viewer = await resolveSourceViewer(requester || PUBLIC_VIEWER);
+  const { sql, values } = buildStrandedQuery(enabled, viewer, limit);
+  return q(itemsPool, sql, values);
+}
+
+/** 지금 이 워크스페이스에 남아 있는 미증류 자료 수 — «없다» 고 말하기 전에 실제로 세려고 쓴다. */
+export async function countUndistilled(requester?: string | null): Promise<number> {
+  const viewer = await resolveSourceViewer(requester || PUBLIC_VIEWER);
+  const p = new Params();
+  let visWhere = "TRUE";
+  if (viewer != null) { p.add(viewer); visWhere = sourceVisSql(p.values.length); }
+  const r = await q(itemsPool, `SELECT count(*)::int AS n FROM source s
+     WHERE s.lifecycle='active'
+       AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id AND ks.created_at >= s.updated_at)
+       AND ${visWhere}`, p.values);
+  return Number((r[0] as Record<string, unknown>)?.n ?? 0);
+}
+
 export async function listDistillerInbox(d: DistillerRow, all: DistillerRow[], limitThreads?: number): Promise<Record<string, unknown>[]> {
   //  요청자 신원으로 필터한다 — 판정(축·긴급열람)은 async 라 여기서 하고, 빌더는 순수하게 둔다.
   const viewer = await resolveSourceViewer(d.requester || PUBLIC_VIEWER);
