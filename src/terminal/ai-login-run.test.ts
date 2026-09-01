@@ -5,6 +5,7 @@
 //   ② 갓 만든 멤버 홈엔 `~/.codex` 가 없어 codex 가 «CODEX_HOME points to … does not exist» 로 즉사했다.
 //  둘 다 «띄웠다» 는 신호는 정상이었다. 그래서 그 두 자리를 계약으로 못박는다.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { loginStartSh } from "./ai-login-run.js";
 import { aiLoginArgv, EXIT_MARK } from "./ai-login-flow.js";
 
@@ -56,6 +57,25 @@ t("D6 바이너리가 없으면 그렇게 말한다(127)", () => {
 
 t("D7 detached 로 띄운다 — 게이트웨이가 재기동돼도 로그인이 이어진다", () => {
   assert.match(SH, /nohup node -e .* >\/dev\/null 2>&1 &/);
+});
+
+// ── 어느 자리에서 띄우나 (실측 2026-09-01, 매니지드 프로덕션) ─────────────────────────────────
+//  종전엔 무조건 멤버 중계로 띄웠다. 매니지드에서 그건 **tmux 컨테이너**인데, #2454(이미지 역할 분할)가
+//  거기서 하네스 4종을 걷어냈다 — 화면이 «grok 없음» 만 뱉었고, 그게 인라인 카드 통로 전체를 죽였다
+//  (grok 만이 아니라 codex·claude 도). 하네스는 **세션 컨테이너**에만 있다.
+//  그래서 «띄우는 것» 만 세션 경계로 보내고, 읽기·붙여넣기·정리는 멤버 경계로 남긴다(홈 볼륨 공유).
+t("★ D10 띄우는 자리와 읽는 자리를 가른다 — 하네스는 세션 컨테이너에만 있다", () => {
+  const src = readFileSync(new URL("./ai-login-run.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  const code = src.split("\n").filter((l: string) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
+  //  띄우기는 세션 경계를 **탄다**.
+  assert.match(code, /sessionSpawnArgv\(sid, \["sh", "-c", script\]\)/, "띄우기는 세션 컨테이너에서 돈다");
+  assert.match(code, /kind: "login"/, "사람 세션으로 새지 않는다(#2162 종류 축)");
+  assert.match(code, /harness: "shell"/, "하네스 TUI 를 띄우지 않는다 — 필요한 건 바이너리가 있는 자리뿐이다");
+  //  읽기·붙여넣기는 **멤버 경계 그대로**여야 한다(파일만 만지고, 홈은 두 컨테이너가 같은 볼륨으로 본다).
+  const read = code.slice(code.indexOf("export async function readAiLogin"), code.indexOf("export async function pasteAiLogin"));
+  assert.ok(!/sessionSpawnArgv/.test(read), "읽기는 세션 컨테이너를 만들지 않는다(파일만 본다)");
+  //  중계가 없는 배포(셀프호스트)는 종전 자리로 접힌다 — fail-open.
+  assert.match(code, /if \(!user \|\| !sessionExecConfigured\(\)\) return sh\(osUser, script\)/, "세션 경계가 없으면 종전 자리");
 });
 
 t("★ D9 grok 도 이 러너로 띄운다 — device-auth 한 줄(재실측 2026-09-01, grok 1.0.13)", () => {

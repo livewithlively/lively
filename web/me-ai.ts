@@ -61,6 +61,7 @@ function aiAccountRow(a, mySessions, reload) {
   const panel = el('div', { class: 'aiacct-login', hidden: true });
   let handle: InlineLoginHandle | null = null;
   let term: LoginTerminal | null = null;
+  let fellBack = false;   // 카드가 못 떠서 터미널로 옮겼나(한 번만)
   let noteEl: HTMLElement | null = null;
   const note = (t: string) => { if (noteEl) noteEl.textContent = t || ''; };
 
@@ -127,7 +128,20 @@ function aiAccountRow(a, mySessions, reload) {
       code: (c) => { code.textContent = c; code.hidden = false; },
       needsPaste: () => { pasteRow.hidden = false; setTimeout(() => inp.focus(), 100); },
       done: () => { note(''); panel.replaceChildren(el('div', { class: 'aiacct-ok', text: '✓ 로그인이 끝났어요' })); setTimeout(() => void reload(), 800); },
-      failed: (m) => note(m + ' — 창으로 여시거나 [다시 시도] 를 눌러 보세요.'),
+      //  ⚠ **시작 자체가 실패하면 터미널로 떨어진다**(막다른 카드 금지의 실물).
+      //   매니지드에서 이 카드는 멤버 중계 = **tmux 컨테이너**에서 로그인 명령을 돌리는데, #2454(이미지
+      //   역할 분할)가 거기서 하네스 4종을 걷어냈다 — 그래서 «grok 없음» 이 난다(실측 2026-09-01).
+      //   반면 터미널 경로는 **세션 컨테이너**를 만들고 그쪽엔 하네스가 있다. 그러니 사람을 막다른 곳에
+      //   세우지 말고 되는 길로 옮긴다. (근본 수정은 카드도 세션 경계에서 돌리는 것 — 별건.)
+      failed: (m) => {
+        if (/없음|not found|127/.test(String(m)) && !fellBack) {
+          fellBack = true; handle?.stop();
+          note('');
+          void paintTerminal();
+          return;
+        }
+        note(m + ' — 창으로 여시거나 [다시 시도] 를 눌러 보세요.');
+      },
       stalled: () => note('주소가 늦네요 — 조금 더 기다리거나 창으로 여셔도 됩니다.'),
     };
   };
