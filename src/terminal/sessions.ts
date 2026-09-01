@@ -205,7 +205,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, managedRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, managedRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, runtimeRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -246,6 +246,8 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
         owner: owner || "",
         label: labelParts.join("\t") || null,
         harness: harness || "shell",
+        //  #2439 — 이 세션이 어느 모드로 떴나. 화면과 배달이 **같은 값**을 봐야 갈리지 않는다.
+        runtimeChoice: runtimeRaw === "chat" ? "chat" : runtimeRaw === "terminal" ? "terminal" : undefined,
         dir: dir || null,
         autoApprove: auto === "1",
         // 적용 플래그 메타 — 신=base64 · 구=평문 JSON, 못 읽으면 빈 객체(구버전 세션) (#1541)

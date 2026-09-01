@@ -495,7 +495,11 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
     } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
-    for (const s of [...local, ...localRestorable, ...remote]) Object.assign(s, chatFieldsOf(s.harness, !!(s as { node?: unknown }).node));
+    for (const s of [...local, ...localRestorable, ...remote]) {
+      const rc = (s as { runtimeChoice?: unknown }).runtimeChoice;
+      Object.assign(s, chatFieldsOf(s.harness, !!(s as { node?: unknown }).node,
+        rc === "chat" ? "chat" : rc === "terminal" ? "terminal" : undefined));
+    }
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
@@ -1055,7 +1059,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   //   다시 물으면 목록 한 번에 세션 수만큼 왕복한다. 지금은 배포 기본 + 하네스·자리로만 판정하고,
   //   세션 단위 값은 배달(deliver-prompt)이 본다. 둘이 갈리면 화면이 «대화창» 이라 하고 배달은
   //   터미널로 가므로, 그 갈림이 없도록 기본이 chat 일 때만 세션 단위로 끌 수 있게 뒀다.
-  const chatFieldsOf = (harness: string, onNode = false): {
+  const chatFieldsOf = (harness: string, onNode = false, choice?: "chat" | "terminal"): {
     chat: ReturnType<typeof chatIoCaps>;
     chatMode: ReturnType<typeof codexChatMode>;
     runtimeMode: ReturnType<typeof sessionRuntimeMode>;
@@ -1065,7 +1069,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     chatMode: codexChatMode({ harness }),            // 이 세션의 대화가 어디서 도나 — app-server 면 pane 이 셸이다
     //  #2439 — 하네스 **무관**한 런타임 모드. chat 이면 작업·승인·슬래시가 이벤트로 오므로 화면이
     //   상태 통로(SSE)를 연다. terminal 이면 열지 않는다 — 올 것이 없는 연결을 세션마다 만들지 않는다.
-    runtimeMode: sessionRuntimeMode({ harness }),
+    runtimeMode: sessionRuntimeMode({ harness, onNode, choice }),
     //  ★ #2439 — **이 하네스가 웹에서 못 하는 것들.** 화면이 그 자리에서 «터미널에서 하세요» 를
     //   정확히 말하기 위한 재료다. 이걸 안 주면 사람은 없는 기능을 찾아 헤매다 포기한다(막다른 길).
     //   빈 배열 = 이 하네스는 웹만으로 전부 된다.
@@ -1073,8 +1077,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   그 사실을 안 실으면 화면이 «웹에서 다 됩니다» 라고 거짓말한다.
     terminalOnly: sessionTerminalOnlyAxes(harness, onNode),
   });
-  const withChatFields = <T extends { harness?: string; node?: unknown }>(s: T): T =>
-    Object.assign(s, chatFieldsOf(String(s.harness || ""), !!s.node));
+  const withChatFields = <T extends { harness?: string; node?: unknown; runtimeChoice?: unknown }>(s: T): T =>
+    Object.assign(s, chatFieldsOf(String(s.harness || ""), !!s.node,
+      s.runtimeChoice === "chat" ? "chat" : s.runtimeChoice === "terminal" ? "terminal" : undefined));
 
   app.post("/api/ui/terminal/sessions/:id/handoff", auth, wrap(async (req, res) => {
     const id = String(req.params.id || "");
