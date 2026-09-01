@@ -67,17 +67,29 @@ export function sessionRuntimeDefault(env: NodeJS.ProcessEnv = process.env): Ses
  * 이 세션이 어느 모드로 도나.
  *
  *  우선순위: ① 감당 못 하는 하네스 → terminal  ② 로그인 전용 세션 → terminal
- *           ③ 사람이 고른 값     ④ 배포 기본
+ *           ③ **노드 세션 → terminal**(런타임이 거기서 안 돈다)  ④ 사람이 고른 값  ⑤ 배포 기본
  *
  *  ②의 이유: 로그인 세션의 일은 대화가 아니라 `claude /login`·`codex login` 이다. 그 화면을 셸로 바꾸면
  *   정작 로그인할 자리가 사라진다(codex 가 같은 예외를 둔다).
  */
 export function sessionRuntimeMode(
-  o: { harness: string; loginFor?: string | null; choice?: SessionRuntimeChoice },
+  o: { harness: string; loginFor?: string | null; choice?: SessionRuntimeChoice; onNode?: boolean },
   env: NodeJS.ProcessEnv = process.env,
 ): SessionRuntimeMode {
   if (!harnessSupportsChat(o.harness)) return "terminal";
   if (o.loginFor) return "terminal";
+  //  ★★ **노드 세션은 chat 을 못 한다** — 대화 런타임은 게이트웨이가 프로세스를 띄울 수 있는
+  //   세션에서만 돈다(deliver-prompt 의 분기 조건이 «이 박스의 tmux 에 그 세션이 있나» 다).
+  //   그 tmux 는 노드에 있으니 배달은 노드 릴레이로 가고, 대화 런타임은 **한 번도 안 돈다.**
+  //
+  //  ⚠ 이 줄이 없어서 사고가 났다(2026-09-01, 상민님 실측): 세션 **생성**은 노드에서 돌며
+  //   chat 이라고 보고 pane 을 셸로 열었는데, **배달**은 게이트웨이에서 돌며 chat 분기를
+  //   건너뛰었다. 그래서 TUI 도 없고 대화창도 죽은 세션이 됐고, 터미널에 친 말은 zsh 가 받아
+  //   `command not found` 가 됐다. 같은 술어인데 **살아있음을 재는 자리가 달랐다.**
+  //  ⚠ 사람이 명시로 골라도 막는다 — 못 하는 것을 골랐다고 되게 할 수는 없다.
+  //  ⚠ `env.LIVELY_NODE_ID` 는 **노드 에이전트 프로세스**의 표식이다(그 안에서 createSession 이 돈다).
+  //   호출부가 아는 경우엔 onNode 로 명시하는 쪽이 낫다(게이트웨이에서 노드 세션을 판정할 때).
+  if (o.onNode || !!String(env.LIVELY_NODE_ID || "").trim()) return "terminal";
   if (o.choice === "chat" || o.choice === "terminal") return o.choice;
   return sessionRuntimeDefault(env);
 }
