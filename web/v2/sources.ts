@@ -24,6 +24,8 @@ export interface SrcRow {
   has_knowledge?: boolean;
   visibility?: string;
   parent_external_id?: string | null;
+  reply_n?: number;     // fold 목록 전용 — 이 대화에 이어진 답글 수
+  body_len?: number;    // fold 목록 전용 — 잡음(한 줄짜리) 판정용 본문 길이
 }
 export interface SrcTreeNode { system: string; container: string | null; n: number; linked: number; newest: string | null }
 
@@ -117,7 +119,21 @@ function myUploadName(): string | null {
 //  그래서 주소 변화를 이 앱이 직접 듣고, 같은 자리 안의 이동(읽는 자료만 바뀜)은 **원문 칸만** 다시 그린다.
 const PAGE = 60;
 
-interface View { key: string; listBox: HTMLElement; readHost: HTMLElement; moreBox: HTMLElement; selId: number | null; sel: SrcSel }
+interface View {
+  key: string; listBox: HTMLElement; readHost: HTMLElement; moreBox: HTMLElement; selId: number | null; sel: SrcSel;
+  noiseN: number; noiseOpen: boolean; noiseBtn: HTMLElement | null;
+}
+
+/** 잡음(#2423 v3.1) — 기본으로 접어 두는 행. 지우는 게 아니라 뒤로 미는 것: 「사소한 것 n건」 줄로 접히고 누르면 펼친다.
+ *  판정은 기계적으로 둘뿐이다 — ① 봇이 쓴 것(어느 출처든: 모니터링 알림이 목록을 덮던 실측 814건이 근거)
+ *  ② 대화·주석 출처의 독립 한 줄(답글도 안 달린 20자 미만 — 「ㅇㅋ」가 스레드 밖에 홀로 선 경우).
+ *  문서·파일·기록계(전사록·local_file·깃허브·리니어)는 짧아도 잡음이 아니다 — 제목이 곧 내용인 것들이 아니다. */
+const NOISE_SYS = new Set(['slack', 'discord', 'figma']);
+function isNoise(r: SrcRow): boolean {
+  if (isBot(r)) return true;
+  if (!NOISE_SYS.has(r.external_system || '')) return false;
+  return (r.reply_n || 0) === 0 && (r.body_len ?? 999) < 20;
+}
 let mounted: HTMLElement | null = null;   // 본창 그릇(셸 tab.center 안)
 let view: View | null = null;             // 지금 서 있는 열람실(목록 한 벌)
 let sideBox: HTMLElement | null = null;   // 셸 사이드바 안 우리 그릇
@@ -149,7 +165,7 @@ function drawFor(host: HTMLElement, hash: string): void {
   const readHost = el('div', { class: 'v2-srd' });
   const listPane = el('div', { class: 'v2-srl' }, listHead(at.sel), listBox, moreBox);
   host.replaceChildren(el('div', { class: 'v2-src' }, listPane, readHost));
-  view = { key: selKey(at.sel), listBox, readHost, moreBox, selId: at.id, sel: at.sel };
+  view = { key: selKey(at.sel), listBox, readHost, moreBox, selId: at.id, sel: at.sel, noiseN: 0, noiseOpen: false, noiseBtn: null };
   void loadList(view, true);
   if (at.id) paintRead(readHost, at.id, at.sel);
   else readHost.replaceChildren(el('div', { class: 'v2-srd-none', text: '왼쪽에서 자료를 고르세요.' }));
@@ -168,7 +184,7 @@ window.addEventListener('keydown', (e) => {
   if (!mounted || !view || !document.contains(mounted)) return;
   const t = e.target as HTMLElement | null;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-  const rows = [...view.listBox.querySelectorAll<HTMLAnchorElement>('.v2-srl-row')];
+  const rows = [...view.listBox.querySelectorAll<HTMLAnchorElement>('.v2-srl-row')].filter((r) => !r.hidden);
   if (!rows.length) return;
   const cur = rows.findIndex((r) => Number(r.dataset.id) === view!.selId);
   const next = rows[Math.max(0, Math.min(rows.length - 1, cur + (e.key === 'ArrowDown' ? 1 : -1)))];
@@ -423,7 +439,7 @@ function crumbParts(sel: SrcSel): Node[] {
 async function loadList(v: View, reset: boolean, offset = 0): Promise<void> {
   if (reset) { busy(v.listBox, el('div', { class: 'v2-src-skel' })); v.moreBox.replaceChildren(); }
   try {
-    const qs = selQuery(v.sel, { limit: String(PAGE), offset: String(offset) });
+    const qs = selQuery(v.sel, { limit: String(PAGE), offset: String(offset), fold: 'true' });
     const r: any = await api('/api/ui/sources?' + qs);
     if (view !== v) return;                                // 그 사이 다른 자리로 갔다
     const entries: SrcRow[] = (r && r.entries) || [];
@@ -436,7 +452,12 @@ async function loadList(v: View, reset: boolean, offset = 0): Promise<void> {
         return;
       }
     }
-    for (const s of entries) v.listBox.append(rowOf(s, v.sel));
+    for (const s of entries) {
+      const row = rowOf(s, v.sel);
+      if (isNoise(s)) { row.classList.add('noise'); row.hidden = !v.noiseOpen; v.noiseN++; }
+      v.listBox.append(row);
+    }
+    paintNoiseLine(v);
     const shown = offset + entries.length;
     if (r && r.has_more) {
       const btn = el('button', { class: 'btn btn-sm', type: 'button', text: `더 보기 (${shown}/${total})` });
@@ -447,11 +468,27 @@ async function loadList(v: View, reset: boolean, offset = 0): Promise<void> {
     }
     if (reset) {
       if (v.selId) setSelected(v.selId);
-      else if (entries.length) autoSelect(entries[0].id);
+      else {
+        const first = entries.find((e) => !isNoise(e)) || entries[0];   // 열람실 첫 장이 봇 알림이면 방이 잘못 읽힌다
+        if (first) autoSelect(first.id);
+      }
     }
   } catch (e: any) {
     if (view === v && reset) v.listBox.replaceChildren(errorNote(e, '자료를 불러오지 못했습니다'));
   }
+}
+
+/** 「사소한 것 n건」 줄 — 접힌 잡음의 유일한 손잡이. 더 불러올 때마다 수만 다시 쓴다. */
+function paintNoiseLine(v: View): void {
+  if (!v.noiseN) { v.noiseBtn?.remove(); v.noiseBtn = null; return; }
+  const btn = v.noiseBtn || el('button', { class: 'v2-srl-noiseln', type: 'button', onclick: () => {
+    v.noiseOpen = !v.noiseOpen;
+    for (const r of v.listBox.querySelectorAll<HTMLElement>('.v2-srl-row.noise')) r.hidden = !v.noiseOpen;
+    paintNoiseLine(v);
+  } });
+  v.noiseBtn = btn;
+  btn.textContent = v.noiseOpen ? `사소한 것 ${v.noiseN}건을 함께 보는 중 — 접기` : `사소한 것 ${v.noiseN}건 — 봇 알림·한 줄짜리`;
+  v.listBox.append(btn);   // 늘 목록 맨 끝(새 행이 뒤에 붙어도 줄이 그 아래로 내려온다)
 }
 
 function emptyText(sel: SrcSel): string {
@@ -476,7 +513,8 @@ function metaOf(sel: SrcSel, r: SrcRow): string {
     return [f.number ? '#' + f.number : '', st, who, when].filter(Boolean).join(' · ');
   }
   if (sys === 'slack' || sys === 'discord') {
-    return [(!sel.container && containerOf(r)) ? '#' + containerOf(r) : '', who, when].filter(Boolean).join(' · ');
+    return [(!sel.container && containerOf(r)) ? '#' + containerOf(r) : '', who,
+      r.reply_n ? `답글 ${r.reply_n}` : '', when].filter(Boolean).join(' · ');
   }
   if (sys === 'authored') return [kindLabel(r.kind), when].filter(Boolean).join(' · ');
   return [sysLabel(sys) + (containerOf(r) ? ' · ' + containerOf(r) : ''), who, when].filter(Boolean).join(' · ');

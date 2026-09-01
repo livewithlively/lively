@@ -123,3 +123,9 @@
   .v2-src { flex-direction: column; }
   .v2-srl { width: auto; max-height: 44%; border-right: 0; border-bottom: 1px solid var(--line-row); }
 }
+
+/* ── 사소한 것 접기(#2423 v3.1) — 봇 알림·독립 한 줄짜리는 기본으로 접힌다 ── */
+.v2-srl-noiseln { display: block; width: 100%; padding: 10px 18px; border: 0; background: none; text-align: left; font: inherit; font-size: 12px; color: var(--muted-2); cursor: pointer; }
+.v2-srl-noiseln:hover { color: var(--ink-sub); background: var(--bg-tint); }
+.v2-srl-row.noise .t1, .v2-srl-row.noise .t2 { color: var(--muted-2); }
+.v2-srl-row.noise .t1 { font-weight: 500; }
