@@ -117,7 +117,11 @@ const MUST_FANOUT = [
 /** 순회하면 **안 되는** 것 — 이유가 각자 다르다. 하나로 뭉뚱그리면 다음 사람이 잘못 푼다. */
 const MUST_NOT_FANOUT: Record<string, string> = {
   reapIdleSessions:
-    "tmux 세션을 **죽인다.** 순회를 붙이면 그 파괴가 남의 워크스페이스에서 일어난다(#2148 의 몫)",
+    "**전역 트리거와 테넌트 동작이 한 함수에 용접돼 있다** — 압박 축(pressure_used_pct·pressure_swap_pct)은 "
+    + "박스의 성질(/proc 물리·스왑)인데 회수 대상은 워크스페이스다. 순회하면 스왑 임계 하나에 "
+    + "워크스페이스 수만큼의 tick 이 일제히 완화 TTL 로 회수한다(전역 신호를 테넌트마다 곱한다). "
+    + "두 축을 가르기 전엔 얹지 않는다 — #2509. "
+    + "⚠ 「남의 세션이 죽는다」는 이유가 아니다: 비-primary 는 정책이 전부 기본값이라 오늘은 no-op 이다",
   sweepLivSecondTurn:
     "워크스페이스를 **스스로** 해석한다(workspaceForSession→withTenant). 또 감싸면 전량 스윕이 N번 돈다",
 };
