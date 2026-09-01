@@ -469,6 +469,20 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
       logger.warn({ err, node: c.node.id }, "원격 worker 상태 저장 실패(다음 push/조회에서 재시도)"));
     return;
   }
+  //  ★ #2439 — 노드에서 도는 대화 런타임의 사건을 **게이트웨이 버스에 그대로 흘린다.**
+  //   실린 것은 이미 우리 어휘(harness-io/session-event.ts)라 번역이 필요 없고, 화면·SSE 는
+  //   한 줄도 안 바뀐다. 그래서 노드 세션도 게이트웨이 세션과 **같은 화면**을 얻는다.
+  //  ⚠ 세션 id 는 노드가 보낸 것을 쓰되 **형식을 확인한다** — 남의 세션 버스에 사건을 흘리지 않게.
+  //   (그 노드가 그 세션의 주인인지는 registry 가 이미 붙일 때 검증한다.)
+  if (m.t === "chatEvent") {
+    const sid = String(m.session ?? "");
+    if (/^[A-Za-z0-9._-]{1,128}$/.test(sid) && m.ev && typeof m.ev === "object") {
+      void import("../terminal/harness-io/runtime-bus.js")
+        .then(({ emitSessionEvent }) => emitSessionEvent(sid, m.ev as never))
+        .catch((err) => logger.warn({ err, node: c.node.id }, "노드 대화 사건을 버스에 못 흘렸다"));
+    }
+    return;
+  }
   if (m.t === "opened") {
     const pair = c.chans.get(m.chan);
     if (pair) pair.opened = true;
