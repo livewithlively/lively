@@ -139,8 +139,10 @@ export interface TrustIo {
  * @returns 실제로 썼으면 true
  */
 export async function ensureFolderTrusted(io: TrustIo, configFile: string, dir: string, allowed: boolean, harness: string): Promise<boolean> {
+  // GUARD: harness-trust.test — 사람이 고른 폴더를 대신 신뢰하지 않는다(판정은 autoTrustWorkspace)
   if (!allowed) return false;   // 사람의 폴더 — 대신 누르지 않는다(종전대로 대화상자가 뜬다)
   const plan = TRUST_PLANS[harness];
+  // GUARD: harness-trust.test — 표식 자리를 모르는 하네스엔 짐작해 쓰지 않는다
   if (!plan) return false;      // 표식 자리를 모르는 하네스 — 짐작해 쓰지 않는다
   try {
     const patch = plan(await io.read(configFile), dir);
