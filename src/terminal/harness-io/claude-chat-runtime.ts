@@ -29,6 +29,7 @@ import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
 import { grokPromptLine } from "./grok-stream.js";
 import { perTurnTransport, stdioTransport, type ChatTransportConn } from "./chat-transport.js";
 import { ask, clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
+import { askBridgeEnv } from "./ask-bridge.js";   // #2439 — 훅이 사람에게 되물어 오는 문
 import type { SessionEvent } from "./session-event.js";
 
 /** 이 세션에서는 대화 런타임을 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
@@ -220,6 +221,9 @@ export function ensureAntigravityChat(o: ClaudeChatOpts): Entry {
   };
   const conn = perTurnTransport({
     cwd: o.cwd,
+    //  ★ 훅이 사람에게 되물어 올 주소(#2439). 이 env 가 있는 자식만 대화창에 승인·선택지를 띄운다 —
+    //   터미널에서 사람이 직접 띄운 agy 에는 없으니 종전 동작 그대로다(전역 훅 파일을 안 건드리는 이유).
+    env: askBridgeEnv(o.sessionId),
     //  ⚠ 실행 경계는 **다른 하네스와 같은 사다리**를 탄다 — 여기만 빠뜨리면 게이트웨이 권한으로 돈다.
     argvFor: (text, convId) => {
       const inner = ["agy", `--print=${text}`, "--output-format=stream-json"];
