@@ -20,7 +20,8 @@ test("★ 스테퍼가 쓰는 ob-lg-*·목업 클래스가 스타일시트에 �
   const used = new Set();
   for (const line of SRC.split("\n")) {
     if (line.trim().startsWith("//")) continue;
-    for (const m of line.matchAll(/["'=\s](ob-(?:lg-[a-z-]+|copychip|bmock|tmock|peek|stuck|bchip|bcap))["'\s]/g)) used.add(m[1]);
+    //  #2232 — 외부 앱 연결 스테퍼의 부품(ob-bbtn·ob-wsrow·ob-consent·ob-linkline·ob-modal-tr)도 같은 계약이다.
+    for (const m of line.matchAll(/["'=\s](ob-(?:lg-[a-z-]+|copychip|bmock|tmock|peek|stuck|bchip|bcap|bbtn|bb-[a-z]+|wsrow|consent|linkline|modal-tr|urlmock|pick))["'\s]/g)) used.add(m[1]);
   }
   assert.ok(used.size >= 8, `스테퍼 클래스를 못 찾았다 — 모은 것: ${[...used].join(", ")}`);
   for (const cls of used) assert.match(CSS, new RegExp(`\\.${cls}\\b`), `${cls} 규칙이 스타일시트에 없다`);
