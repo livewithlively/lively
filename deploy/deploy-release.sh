@@ -21,7 +21,7 @@ set -euo pipefail
 #         (2) blue-green 레이아웃이 이미 존재한다($LIVELY_ROOT/releases·shared + active-color 상태파일).
 #            ⚠ 최초 레이아웃 생성·구 단일설치 흡수는 이 스크립트가 하지 않는다 — 별도 1회성 `deploy/migrate-to-bluegreen.sh`
 #              가 담당한다(흡수 경로의 데이터파괴 클래스를 배포 스크립트에서 통째로 분리). active-color 가 없으면 die.
-#         (3) ALB 타깃 그룹(--tg-arn)이 이 인스턴스의 **현재 active color 포트**를 이미 등록하고 서빙 중이다
+#         (3) ALB 타깃 그룹(--tg-arn) **전부**가 이 인스턴스의 **현재 active color 포트**를 이미 등록하고 서빙 중이다
 #            (최초 컷오버 = ALB 타깃을 이 인스턴스로 지정하는 것 — deploy/migrate-to-bluegreen.sh 런북 참조).
 #            이 스크립트는 TG 를 만들지도, 리스너를 붙이지도 않는다 — ALB·TG·리스너 프로비저닝은 이 리포 밖 인프라 책임.
 #         (4) 박스 instance role 에 elbv2 권한(해당 TG 한정): RegisterTargets · DeregisterTargets ·
@@ -45,7 +45,10 @@ set -euo pipefail
 #
 # 사용:  bash deploy/deploy-release.sh --release <dir> --tg-arn <arn> [옵션]
 #   --release <dir>          (필수) 배포할 준비된 릴리스 디렉토리(dist/index.js 포함).
-#   --tg-arn <arn>           (필수, env LIVELY_TG_ARN 폴백) flip 할 ALB 타깃 그룹 ARN.
+#   --tg-arn <arn>           (필수, env LIVELY_TG_ARN 폴백) flip 할 ALB 타깃 그룹 ARN. **반복 지정·콤마 구분으로
+#                            여러 개**를 줄 수 있다 — ALB TG 는 로드밸런서 1대에만 붙는 하드 리밋이 있어(TG 공유 불가)
+#                            ALB 가 여럿이면 TG 도 여럿이고, flip 은 그 전부에 반영돼야 한다. register 는 전부 성공해야
+#                            진행하고(부분 등록은 되돌린다), healthy 는 전부 충족해야 하며, 구 포트 제거도 전부에 적용된다.
 #   --instance-id <id>       ALB 에 등록할 인스턴스 ID(기본: IMDSv2 로 자동 해석).
 #   --alb-health-timeout <n> ALB 타깃 healthy 폴링 타임아웃 초(기본 180 — HC interval 30s·threshold 2 이면 ≈60s).
 #   --lively-root <dir>      배포 루트(기본 $LIVELY_ROOT 또는 /opt/lively).
@@ -99,20 +102,78 @@ imds_get() {
   curl -fsS -H "X-aws-ec2-metadata-token: $tok" "http://169.254.169.254/latest/$path" 2>/dev/null || true
 }
 
-# ── ALB 타깃 healthy 폴링 — describe-target-health 로 (instance,port) 타깃이 State=healthy 될 때까지. ──
+# ── TG 리스트 분해 — --tg-arn 은 콤마 구분 다중 지정을 허용한다(ALB TG 는 로드밸런서 1대 전용이라, ALB 가
+#  여럿이면 TG 도 여럿이고 flip 은 그 전부에 반영돼야 한다). glob 확장을 끄고 나눈다(arn 에 메타문자는 없지만
+#  IFS 분해에 딸려오는 pathname expansion 을 원천 차단).
+tg_split() {
+  local IFS=, item; set -f
+  for item in $1; do [ -n "$item" ] && printf '%s\n' "$item"; done
+  set +f
+}
+
+# ── ALB 타깃 healthy 폴링 — describe-target-health 로 (instance,port) 타깃이 **모든 TG 에서** State=healthy 될 때까지. ──
 #  ALB HC=traffic-port(각 타깃 자기 포트로 HC)·interval 30s·healthy threshold 2 → 최초 healthy 까지 ≈60s.
 #  5s 간격 폴링. healthy 면 rc 0, 타임아웃까지 미달이면 rc 1(호출부가 등록 취소·롤백). aws 실패는 query-failed 로 계속 대기.
+#  ⚠ TG 별로 순차 대기하지 않고 **라운드로빈**으로 아직 미달인 TG 만 다시 본다 — 순차면 타임아웃이 TG 수만큼
+#   곱해져(2개면 최대 360s) 배포 창이 늘어난다. HC 는 TG 마다 독립이므로 동시에 익어간다.
 alb_wait_healthy() {
-  local tg="$1" iid="$2" port="$3" timeout="$4" waited=0 state=""
+  local csv="$1" iid="$2" port="$3" timeout="$4" waited=0 state="" tg
+  local -a pending=() still=()
+  while IFS= read -r tg; do pending+=("$tg"); done <<EOF
+$(tg_split "$csv")
+EOF
   while [ "$waited" -lt "$timeout" ]; do
-    state="$(aws elbv2 describe-target-health --target-group-arn "$tg" \
-      --targets Id="$iid",Port="$port" \
-      --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text 2>/dev/null || echo query-failed)"
-    log "  ALB target :$port state=$state (${waited}s/${timeout}s)"
-    [ "$state" = healthy ] && return 0
+    still=()
+    for tg in "${pending[@]}"; do
+      state="$(aws elbv2 describe-target-health --target-group-arn "$tg" \
+        --targets Id="$iid",Port="$port" \
+        --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text 2>/dev/null || echo query-failed)"
+      log "  ALB target :$port state=$state (${waited}s/${timeout}s) TG=${tg##*/}"
+      [ "$state" = healthy ] || still+=("$tg")
+    done
+    [ "${#still[@]}" -eq 0 ] && return 0
+    pending=("${still[@]}")
     sleep 5; waited=$((waited+5))
   done
   return 1
+}
+
+# ── ALB register — 모든 TG 에 idle 포트를 등록한다. 하나라도 실패하면 **이 실행에서 등록한 것들을 되돌리고** rc 1.
+#  되돌리는 이유: 등록만으론 트래픽이 가지 않지만(새 타깃은 initial 상태로, HC 통과 전엔 라우팅되지 않는다 —
+#  전 타깃 unhealthy 시 fail-open 예외만) **남겨두면 나중에 healthy 가 된 뒤** die 경로가 그 유닛을 끄므로
+#  죽은 등록 타깃이 된다. 불변식 "healthy 확인 전에는 아무 ALB 도 idle 로 보내지 않는다" 를 그래서 지킨다.
+alb_register_targets() {
+  local csv="$1" iid="$2" port="$3" tg d
+  local -a done_tgs=()
+  while IFS= read -r tg; do
+    log "ALB register-targets: TG=${tg##*/} Id=$iid Port=$port"
+    if aws elbv2 register-targets --target-group-arn "$tg" --targets Id="$iid",Port="$port"; then
+      done_tgs+=("$tg")
+    else
+      warn "register-targets 실패(TG=${tg##*/}) — 이 실행에서 등록한 ${#done_tgs[@]}건을 되돌린다(healthy 미확인 타깃에 트래픽 금지)"
+      for d in ${done_tgs[@]+"${done_tgs[@]}"}; do
+        aws elbv2 deregister-targets --target-group-arn "$d" --targets Id="$iid",Port="$port" \
+          || warn "롤백 등록해제 실패(TG=${d##*/} :$port) — 수동 확인: aws elbv2 describe-target-health --target-group-arn $d"
+      done
+      return 1
+    fi
+  done <<EOF
+$(tg_split "$csv")
+EOF
+  return 0
+}
+
+# ── ALB deregister — 모든 TG 에서 해당 포트를 뺀다. 하나라도 실패하면 rc 1(호출부가 판단: 구 포트 제거 실패는
+#  둘 다 등록된 무중단 상태이므로 die, idle 롤백 실패는 warn).
+alb_deregister_targets() {
+  local csv="$1" iid="$2" port="$3" tg rc=0
+  while IFS= read -r tg; do
+    aws elbv2 deregister-targets --target-group-arn "$tg" --targets Id="$iid",Port="$port" \
+      || { warn "deregister-targets 실패(TG=${tg##*/} :$port)"; rc=1; }
+  done <<EOF
+$(tg_split "$csv")
+EOF
+  return "$rc"
 }
 
 # ── TG 헬스체크 포트 preflight(flip 진입 전 — 이 스킴의 유일한 silent-outage 모드 차단) ──────────
@@ -121,11 +182,15 @@ alb_wait_healthy() {
 #  healthy 오판 → flip 후 구 포트 stop 시 모든 타깃이 죽은 포트로 판정받아 **전면 outage**(무증상, 롤백만이 유일 신호).
 #  register 전에 HC 포트가 traffic-port 임을 단언해 포트별 판정이 성립함을 보장한다. describe 실패도 die(fail-safe).
 assert_tg_hc_traffic_port() {
-  local tg="$1" hc_port
-  hc_port="$(aws elbv2 describe-target-groups --target-group-arn "$tg" \
-    --query 'TargetGroups[0].HealthCheckPort' --output text 2>/dev/null || echo query-failed)"
-  [ "$hc_port" = traffic-port ] \
-    || die "TG HC 가 traffic-port 아님(HealthCheckPort=$hc_port) — blue-green 포트별 판정 불가(idle 을 구 포트로 HC 해 healthy 오판 → flip 후 전면 outage). traffic-port 로 되돌린 뒤 재실행: aws elbv2 modify-target-group --target-group-arn $tg --health-check-port traffic-port"
+  local csv="$1" tg hc_port
+  while IFS= read -r tg; do
+    hc_port="$(aws elbv2 describe-target-groups --target-group-arn "$tg" \
+      --query 'TargetGroups[0].HealthCheckPort' --output text 2>/dev/null || echo query-failed)"
+    [ "$hc_port" = traffic-port ] \
+      || die "TG HC 가 traffic-port 아님(TG=${tg##*/} HealthCheckPort=$hc_port) — blue-green 포트별 판정 불가(idle 을 구 포트로 HC 해 healthy 오판 → flip 후 전면 outage). traffic-port 로 되돌린 뒤 재실행: aws elbv2 modify-target-group --target-group-arn $tg --health-check-port traffic-port"
+  done <<EOF
+$(tg_split "$csv")
+EOF
 }
 
 # ── idle 포트 선점 검사(방어심층) ────────────────────────────────────────────
@@ -277,27 +342,31 @@ main() {
   # 불변식: register(+healthy 확인) → deregister(구 포트) → active-color 커밋 → old 유닛 stop(맨 끝). ALB 가 스위치다.
   #  idle 포트를 TG 에 넣고 ALB HC(traffic-port ≈60s)로 healthy 확인된 뒤에만 구 포트를 뺀다 → 두 포트가 겹치는
   #  구간이 있어 무중단(구 포트는 dereg delay 300s 동안 connection draining).
-  log "ALB register-targets: Id=$INSTANCE_ID Port=$idle_port (idle=$idle)"
-  if ! aws elbv2 register-targets --target-group-arn "$TG_ARN" --targets Id="$INSTANCE_ID",Port="$idle_port"; then
+  if ! alb_register_targets "$TG_ARN" "$INSTANCE_ID" "$idle_port"; then
     sudo systemctl stop "lively-gateway@$idle" 2>/dev/null || true
     sudo systemctl disable "lively-gateway@$idle" 2>/dev/null || true # phase 2 enable 원복 — 재부팅 시 양 color 동시기동(OOM) 방지
-    die "ALB register-targets 실패(idle :$idle_port) — idle 정리. old($active:$active_port) 그대로 서빙(무중단). ALB 미변경."
+    die "ALB register-targets 실패(idle :$idle_port) — idle 정리. old($active:$active_port) 그대로 서빙(무중단). ALB 는 원복됨(부분 등록이 있었다면 위 warn 참조 — 원복까지 실패했으면 수동 확인)."
   fi
   log "ALB health poll — idle :$idle_port 가 healthy 될 때까지(최대 ${ALB_HEALTH_TIMEOUT}s)"
   if ! alb_wait_healthy "$TG_ARN" "$INSTANCE_ID" "$idle_port" "$ALB_HEALTH_TIMEOUT"; then
     # idle 이 ALB 에서 timeout 까지 healthy 안 됨 → 등록 취소(원복)·idle 정지·구 유닛 유지·die(무중단).
     warn "idle :$idle_port 가 ${ALB_HEALTH_TIMEOUT}s 내 ALB healthy 미달 — 등록 취소·롤백(old 계속 서빙)."
-    aws elbv2 deregister-targets --target-group-arn "$TG_ARN" --targets Id="$INSTANCE_ID",Port="$idle_port" \
-      || warn "idle 등록 취소 실패 — 수동 확인: aws elbv2 describe-target-health --target-group-arn $TG_ARN"
+    alb_deregister_targets "$TG_ARN" "$INSTANCE_ID" "$idle_port" \
+      || warn "idle 등록 취소 실패 — 수동 확인: aws elbv2 describe-target-health --target-group-arn <TG> (TG=$TG_ARN)"
+    # ⚠ 다중 TG 고유 edge: TG 가 여럿이면 **먼저 healthy 가 된 ALB** 는 타임아웃까지 idle 로 신규 트래픽을
+    #  보내고 있었을 수 있다(단일 TG 시절엔 '라우팅 중인 idle 을 끄는' 경로가 아예 없었다). 방금 등록을
+    #  취소했으니 유닛을 끄기 전에 phase 4 의 old stop 과 같은 drain 유예를 준다 — 없으면 그 ALB 의
+    #  in-flight 커넥션이 유예 없이 절단된다.
+    sleep "$DRAIN_SECONDS"
     sudo systemctl stop "lively-gateway@$idle" 2>/dev/null || true
     sudo systemctl disable "lively-gateway@$idle" 2>/dev/null || true # phase 2 enable 원복 — 재부팅 시 양 color 동시기동(OOM) 방지
     die "배포 중단 — idle($idle) 이 ALB 에서 healthy 되지 못했습니다(HC=traffic-port :$idle_port). old($active) 그대로 서빙(자동 롤백). 로그: $root/logs/gateway-$idle.log"
   fi
   ok "ALB idle($idle:$idle_port) healthy — 구 포트($active:$active_port) 등록 해제"
-  if ! aws elbv2 deregister-targets --target-group-arn "$TG_ARN" --targets Id="$INSTANCE_ID",Port="$active_port"; then
+  if ! alb_deregister_targets "$TG_ARN" "$INSTANCE_ID" "$active_port"; then
     # deregister 실패: idle 은 healthy·등록됨(트래픽 받는 중), 구 포트도 아직 등록됨 → 둘 다 서빙(무중단).
     #  active-color 미커밋 → 재실행하면 register(멱등)·healthy·deregister 재시도로 flip 완결 가능. idle 은 안 끈다(서빙 중).
-    die "ALB deregister-targets(구 포트 :$active_port) 실패 — idle·old 둘 다 등록된 상태(무중단). active-color 미커밋. 재실행하거나 수동 등록해제 후 재개."
+    die "ALB deregister-targets(구 포트 :$active_port) 실패 — 무중단(dereg 성공한 TG 는 idle 만, 실패한 TG 는 둘 다 등록). active-color 미커밋. ⚠ TG 가 여럿이면 **수동 등록해제 후 재개**가 더 안전하다 — 재실행은 phase 2 가 이미 서빙 중인 idle 을 restart 해, old 가 빠진 TG 에서 유일 타깃이 수 초 내려간다."
   fi
   # current/previous 편의 심볼릭 + active 상태 커밋 — deregister 성공 **뒤**에만(불변식).
   [ -n "$active" ] && sudo ln -sfn "$(readlink -f "$root/$active" 2>/dev/null || true)" "$root/previous" 2>/dev/null || true
@@ -354,6 +423,28 @@ main() {
       sudo systemctl disable "$old_unit" 2>/dev/null || true
     fi
     ok "old($active) 정지 — drain 완료"
+  fi
+
+  # ── 격리 인프라·멤버 키트 리프레시(best-effort) ──────────────────────────────
+  #  왜 여기인가: `update.sh`(구 단일설치 경로)는 배포마다 install-isolation + refresh-member-kits 를 돌리는데,
+  #  blue-green 경로(이 스크립트)엔 그게 **빠져 있었다**. 그래서 격리 관련 변경(libexec 의 box-spawn·
+  #  provision-member·install-*-user 헬퍼, 멤버 홈의 훅 러너)이 이 경로로 배포해도 **박스에 반영되지 않았다** —
+  #  릴리스 코드만 새것이고 libexec·멤버 홈은 옛것으로 남는 조용한 갭이다(2026-08-27 발견: 멤버 codex 헬퍼를
+  #  추가했는데 배포만으로는 효력이 없었다).
+  #  flip **뒤**에 두는 이유: 리프레시는 새 릴리스의 코드를 기준으로 심어야 하고(활성 릴리스 = 방금 flip 한 것),
+  #  실패해도 무중단 flip 을 되돌릴 이유는 없다 → warn 만 남기고 배포는 성공으로 둔다(멱등이라 다음 배포가 재시도).
+  if [ -x /opt/lively/libexec/box-spawn ]; then
+    log "격리 인프라 리프레시(install-isolation.sh — 멱등)"
+    # ⚠ GATEWAY_USER 를 **명시 전달**한다. install-isolation 은 게이트웨이 유저(sudoers 주체)를 스스로
+    #  `systemctl show -p User --value lively-gateway`(비인스턴스)로 찾는데, blue-green 은 템플릿 유닛
+    #  lively-gateway@<color> 라 그 조회가 빈값 → SUDO_USER(=root, SSM/배포 컨텍스트)로 폴백해 **sudoers 주체를
+    #  root 로 오기록**한다(box-spawn NOPASSWD 가 게이트웨이 유저에 안 맞아 격리 세션 재-spawn 불가).
+    #  SERVICE_USER 는 활성 템플릿유닛(lively-gateway@$active)의 User 로 이미 SoT 다(위 §0) → 그걸 넘겨 고정.
+    sudo GATEWAY_USER="$SERVICE_USER" bash "$RELEASE_DIR/deploy/linux/install-isolation.sh" >/dev/null 2>&1 \
+      || warn "격리 인프라 리프레시 경고 — 수동: sudo GATEWAY_USER=$SERVICE_USER bash $RELEASE_DIR/deploy/linux/install-isolation.sh"
+    log "격리 멤버 키트 리프레시(refresh-member-kits.sh — 멱등)"
+    sudo bash "$RELEASE_DIR/deploy/refresh-member-kits.sh" 2>&1 | sed 's/^/  /' \
+      || warn "멤버 키트 리프레시 경고 — 수동: sudo bash $RELEASE_DIR/deploy/refresh-member-kits.sh"
   fi
 
   phase "완료"
