@@ -90,7 +90,20 @@ const claudeChat: ChatAdapter = {
     response: {
       subtype: "success",
       request_id: ask.id,
-      response: value.allow
+      //  ★ **질문에는 «허용» 이 아니라 «고른 값» 으로 답한다**(공식 문서 규약):
+      //   updatedInput = { questions: <원본 그대로>, answers: { "<질문 전문>": "<고른 label>" } }
+      //   ⚠ questions 를 안 실으면 툴이 처리하지 못한다(문서: "required for tool processing").
+      //   ⚠ 그냥 allow 만 하면 답이 빈 채로 실행돼 "The user did not answer the questions" 로 끝난다
+      //    — 실측으로 확인했고, 화면은 영원히 도는 것처럼 보인다.
+      response: ask.questions?.length
+        ? (value.allow
+          ? { behavior: "allow", updatedInput: {
+              questions: ask.questions,
+              answers: value.answers ?? {},
+            } }
+          //  질문을 닫는 것(«답 안 함»)은 거부로 보낸다 — 에이전트가 그 사실을 알고 다음 수를 정한다.
+          : { behavior: "deny", message: "사용자가 답하지 않고 질문을 닫았습니다" })
+        : value.allow
         ? { behavior: "allow", updatedInput: (ask.input ?? {}) as Record<string, unknown>,
             //  «앞으로도» 는 하네스가 준 제안을 **그대로** 돌려줄 때만 성립한다(우리가 규칙을 짓지 않는다).
             ...(value.scope === "always" && Array.isArray(ask.suggestions) && ask.suggestions.length

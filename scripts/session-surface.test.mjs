@@ -82,6 +82,18 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
 
 // ── 막다른 길 금지 ───────────────────────────────────────────────────────────────
 {
+  //  선택지 순수 로직
+  const QS = [{ question: "Q1", options: [{ label: "A" }, { label: "B" }] },
+              { question: "Q2", multiSelect: true, options: [{ label: "X" }, { label: "Y" }] }];
+  ok(V.isQuestion({ id: "1", toolName: "AskUserQuestion", questions: QS }) === true, "⑫-q 질문을 알아본다");
+  ok(V.isQuestion({ id: "1", toolName: "Bash" }) === false, "⑫-q2 승인은 질문이 아니다");
+  ok(V.answersReady(QS, [["A"], []]) === false, "⑫-q3 덜 고르면 못 보낸다");
+  ok(V.answersReady(QS, [["A"], ["X"]]) === true, "⑫-q4 다 고르면 보낼 수 있다");
+  const built = V.buildAnswers(QS, [["A"], ["X", "Y"]]);
+  ok(built["Q1"] === "A", "⑬-q 하나 고르는 질문은 문자열");
+  ok(Array.isArray(built["Q2"]) && built["Q2"].length === 2,
+    "⑬-q2 ★ 여러 개는 **배열** — 문자열로 이으면 ', ' 가 든 label 과 구별이 안 된다");
+
   ok(V.terminalOnlyNote([]) === null, "⑫ 전부 되면 조용하다");
   const n = V.terminalOnlyNote(["approve", "slash"]);
   ok(n.includes("승인") && n.includes("슬래시 명령") && n.includes("터미널"),
@@ -138,9 +150,19 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   ok(/r\.convId !== st\?\.claude_session_id/.test(deliver),
     "㉝-b 같은 값이면 다시 쓰지 않는다(매 프롬프트마다 DB 를 두드리지 않게)");
 
+  //  ★ 선택지 카드(#2439) — 상민님이 계속 신고한 그것.
+  ok(/function drawQuestion/.test(surface) && /isQuestion\(ask\)/.test(surface),
+    "㉞ ★ 질문은 승인과 **다른 카드**로 그린다(허용/거부가 아니라 선택지 버튼)");
+  ok(/buildAnswers\(qs, picked\)/.test(surface),
+    "㉞-b 고른 값을 answers 로 만들어 보낸다(키=질문 전문)");
+  ok(/answersReady\(qs, picked\)/.test(surface),
+    "㉞-c 다 안 고르면 [보내기] 를 못 누른다 — 빈 답을 보내면 턴이 헛돈다");
+
   const css = read("public/styles/36-chat.css");
   ok(/\.stk-warn/.test(css) && /\.stk-slash/.test(css), "㉓ 경고·자동완성에 스타일이 있다(없으면 안 보인다)");
   ok(/\.cxl-ask\.is-risky/.test(css), "㉖ 위험 카드가 카드째로 티가 난다");
+  ok(/\.stk-q-opt/.test(css) && /\.stk-q-opt\.is-on/.test(css),
+    "㉞-d 선택지 버튼과 «고른 상태» 스타일이 있다(없으면 뭘 골랐는지 안 보인다)");
 
   //  ★ 2026-09-01 다크 모드 확인에서 잡은 함정: `--surface-1`·`--surface-2` 는 **이 레포에 정의된 적이
   //   없는 토큰**이다(쓰이기만 한다). 폴백 `#fff` 를 달아 두면 다크에서 **흰 배경 + 밝은 글자**가 되어

@@ -28,7 +28,8 @@ import { splitSse } from './sse-frames.js';
 //  그 규칙을 값으로 지킬 수 없다. 그래서 갈라 둔다(sess-face 와 같은 규율).
 import { dockHead, elapsed, visibleTasks, type TaskInfo } from './session-tasks-view.js';
 import {
-  applySlash, askChoices, askDetail, askHeadline, askIsRisky, askKind, askWhy, factChips,
+  answersReady, applySlash, askChoices, askDetail, askHeadline, askIsRisky, askKind, askWhy,
+  buildAnswers, factChips, isQuestion,
   slashMatches, slashQuery, terminalOnlyNote, usageLine, usageTight,
   type AskInfo, type FactsInfo, type UsageInfo,
 } from './session-surface-view.js';
@@ -118,7 +119,7 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
   //   · 입력칸 바로 위에 선다(스크롤을 올려도 안 사라진다 — 사라지면 그 턴이 통째로 선다).
   //   · 무엇을 하려는지 **원문 그대로** 보여 준다(요약하면 무엇을 허용하는지 모른다).
   //   · 되돌리기 어려운 것은 **경고 줄**을 세운다(모르고 누르지 않게 — 대신 결정하지는 않는다).
-  async function answerAsk(ask: AskInfo, choice: ReturnType<typeof askChoices>[number], card: HTMLElement): Promise<void> {
+  async function answerAsk(ask: AskInfo, choice: { label: string; hint: string; primary?: boolean; value: { allow: boolean; scope?: 'once' | 'always'; optionId?: string; answers?: Record<string, string | string[]> } }, card: HTMLElement): Promise<void> {
     card.classList.add('is-busy');
     try {
       const res = await fetch(apiUrl(`/api/ui/terminal/sessions/${encodeURIComponent(o.sessionId)}/events/answer`), {
@@ -135,8 +136,65 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
     }
   }
 
+  /**
+   * **질문 카드** — 에이전트가 준 선택지 중에서 고른다 (#2439).
+   *
+   *  ⚠ 승인 카드와 **다른 그림**이다: [허용]/[거부] 가 아니라 **선택지 버튼**이고, 답은
+   *   `answers`(키=질문 전문, 값=고른 label)로 간다. 승인으로 그리면 [허용] 을 눌러도 답이 안 채워져
+   *   툴이 "The user did not answer the questions" 로 끝난다(실측) — 화면은 영원히 도는 것처럼 보인다.
+   */
+  function drawQuestion(ask: AskInfo): void {
+    const qs = ask.questions ?? [];
+    const card = el('div', { class: 'cxl-ask stk-q', role: 'group', 'aria-label': qs[0]?.question ?? '질문' });
+    //  고른 것 — 질문마다 label 묶음(여러 개 고르는 질문이 있어 배열이다).
+    const picked: string[][] = qs.map(() => []);
+    const send = el('button', { class: 'cxl-ask-btn is-go', type: 'button', text: '보내기', disabled: '' }) as HTMLButtonElement;
+
+    function repaintSend(): void { send.disabled = !answersReady(qs, picked); }
+
+    card.append(
+      el('div', { class: 'cxl-ask-head' },
+        el('span', { class: 'cxl-ask-kind', text: '질문' }),
+        el('span', { class: 'cxl-ask-title', text: qs.length > 1 ? `${qs.length}가지를 물어봐요` : (qs[0]?.header || '골라 주세요') })),
+      ...qs.map((q, qi) => el('div', { class: 'stk-q-item' },
+        el('div', { class: 'stk-q-text', text: q.question }),
+        q.multiSelect ? el('div', { class: 'stk-q-hint', text: '여러 개 고를 수 있어요' }) : null,
+        el('div', { class: 'stk-q-opts' }, ...q.options.map((o) => {
+          const b = el('button', { class: 'stk-q-opt', type: 'button' },
+            el('span', { class: 'stk-q-label', text: o.label }),
+            o.description ? el('span', { class: 'stk-q-desc', text: o.description }) : null,
+          ) as HTMLButtonElement;
+          b.addEventListener('click', () => {
+            if (q.multiSelect) {
+              const i = picked[qi].indexOf(o.label);
+              if (i >= 0) picked[qi].splice(i, 1); else picked[qi].push(o.label);
+              b.classList.toggle('is-on', picked[qi].includes(o.label));
+            } else {
+              picked[qi] = [o.label];
+              //  하나만 고르는 질문은 형제 버튼의 표시를 끈다.
+              b.parentElement?.querySelectorAll('.stk-q-opt').forEach((x) => x.classList.remove('is-on'));
+              b.classList.add('is-on');
+            }
+            repaintSend();
+          });
+          return b;
+        })),
+      )),
+      el('div', { class: 'cxl-ask-acts' }, send,
+        el('button', { class: 'cxl-ask-btn', type: 'button', title: '답하지 않고 닫습니다 — 에이전트가 그 사실을 알고 이어갑니다',
+          text: '건너뛰기', onclick: () => { void answerAsk(ask, { label: '건너뜀', value: { allow: false, scope: 'once' }, hint: '' }, card); } })),
+    );
+    send.addEventListener('click', () => {
+      void answerAsk(ask, { label: '보냄', value: { allow: true, scope: 'once', answers: buildAnswers(qs, picked) }, hint: '' }, card);
+    });
+    askCards.set(ask.id, card);
+    asksWrap.append(card);
+  }
+
   function drawAsk(ask: AskInfo): void {
     if (askCards.has(ask.id)) return;                 // 재접속 replay — 카드를 두 장 만들지 않는다
+    //  ★ 질문과 승인은 **다른 그림**이다(위 머리말).
+    if (isQuestion(ask)) { drawQuestion(ask); return; }
     const choices = askChoices(ask);
     const risky = askIsRisky(ask);
     //  ⚠ 위험은 **카드째로** 티가 나야 한다. 안쪽 경고 상자만으로는 훑을 때 옆 카드와 구분이 안 되고,

@@ -47,7 +47,7 @@ t("[5] 지금 상태 — 어디에 구멍이 있나(이 수가 줄어드는 것�
   //  ⚠ 이 단언은 **래칫**이다: 구멍이 늘면 빨간불이 난다. 줄이면 이 수를 낮춘다(그게 진척의 기록).
   //  ⚠ 2026-09-01 에 «선택지(ask)» 축을 새로 세우며 이 수가 8 → 13 으로 **늘었다.** 기능이 나빠진 게
   //   아니라 **안 보이던 구멍이 보이게 된 것**이다. 축을 안 만들었던 탓에 «100%» 라고 보고했었다.
-  assert.ok(total <= 13, `구멍이 늘었다(${total}) — 줄이는 방향이어야 한다`);
+  assert.ok(total <= 12, `구멍이 늘었다(${total}) — 줄이는 방향이어야 한다`);
 });
 
 t("[6] isFullyCovered 는 «n/a» 를 구멍으로 세지 않는다 — 벤더가 안 주는 것은 우리 탓이 아니다", () => {
@@ -63,8 +63,8 @@ t("[7] ★ 노드 세션은 **자리 때문에** 못 하는 축이 더 있다 �
   //   그런데 화면엔 terminalOnly=[] 가 실려 «웹에서 다 됩니다» 라고 말하고 있었다.
   const box = sessionTerminalOnlyAxes("claude", false);
   const node = sessionTerminalOnlyAxes("claude", true);
-  //  ⚠ 한때 여기가 `[]` 였다 — «선택지(ask)» 축을 안 만들었기 때문이다. 축을 세우자 드러났다.
-  assert.deepEqual(box, ["ask"], "게이트웨이 세션의 claude 도 선택지는 아직 웹에서 못 고른다");
+  //  ⚠ 이 줄은 두 번 바뀌었다: `[]`(축이 없어 안 보임) → `["ask"]`(축을 세우자 드러남) → `[]`(되게 만듦).
+  assert.deepEqual(box, [], "대화 런타임이 도는 claude 세션은 선택지까지 웹에서 된다");
   for (const a of NODE_BLOCKED_AXES) assert.ok(node.includes(a), `노드 세션은 ${a} 를 웹에서 못 한다`);
   //  ⚠ interrupt·model 은 노드에서도 된다(키 주입·슬래시 릴레이) — 안 되는 것만 센다.
   assert.ok(!node.includes("interrupt"), "멈춤은 노드에서도 된다(키 주입)");

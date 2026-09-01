@@ -197,4 +197,46 @@ t("[10] ★ claude argv 에 --permission-prompt-tool stdio 가 있다 — 없으
   assert.equal(argv[i + 1], "stdio", "값은 stdio — MCP 도구 이름을 주면 CLI 가 거부한다");
 });
 
+t("[11] ★★ 선택지(AskUserQuestion) — 질문으로 알아보고 **고른 값**으로 답한다", () => {
+  //  ⚠ 이것이 상민님이 계속 신고한 그 «선택지» 다. 도구 승인이 아니라 **질문**인데, claude 는 둘 다
+  //   can_use_tool 로 보낸다(공식 문서 "Handle approvals and user input"). 승인으로 그리면
+  //   [허용] 을 눌러도 답이 안 채워져 툴이 "The user did not answer the questions" 로 끝난다.
+  const ask = askOf(claudeStreamEvent({
+    type: "control_request", request_id: "q-1",
+    request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [
+      { question: "딸기랑 사과 중에 뭐가 더 좋으세요?", header: "과일 선택", multiSelect: false,
+        options: [{ label: "딸기", description: "달고 향이 강합니다" }, { label: "사과", description: "아삭합니다" }] },
+    ] } },
+  }));
+  assert.equal(ask.toolName, "AskUserQuestion");
+  assert.ok(ask.questions && ask.questions.length === 1, "질문으로 알아본다");
+  assert.equal(ask.questions![0].options.length, 2);
+  assert.equal(ask.title, "딸기랑 사과 중에 뭐가 더 좋으세요?");
+
+  //  ★ 답은 «허용» 이 아니라 answers 다 — 키는 **질문 전문**, 값은 고른 label(문서 규약).
+  const line = chatAdapter("claude")!.respond!({
+    ask, convId: "c",
+    value: { allow: true, scope: "once", answers: { "딸기랑 사과 중에 뭐가 더 좋으세요?": "사과" } },
+  })!;
+  const out = JSON.parse(line) as any;
+  assert.equal(out.response.request_id, "q-1");
+  assert.equal(out.response.response.behavior, "allow");
+  //  ⚠ questions 를 안 실으면 툴이 처리하지 못한다(문서: "required for tool processing").
+  assert.deepEqual(out.response.response.updatedInput.questions, ask.questions);
+  assert.deepEqual(out.response.response.updatedInput.answers, { "딸기랑 사과 중에 뭐가 더 좋으세요?": "사과" });
+
+  //  건너뛰기 = 거부로 보낸다 — 에이전트가 «답 안 함» 을 알고 다음 수를 정한다.
+  const skip = JSON.parse(chatAdapter("claude")!.respond!({ ask, value: { allow: false }, convId: "c" })!) as any;
+  assert.equal(skip.response.response.behavior, "deny");
+});
+
+t("[12] 옵션 없는 질문은 **질문으로 안 본다** — 고를 것이 없는 카드는 막다른 길이다", () => {
+  const ev = claudeStreamEvent({
+    type: "control_request", request_id: "q-2",
+    request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [{ question: "음?", options: [] }] } },
+  });
+  const ask = askOf(ev);
+  assert.equal(ask.questions, undefined, "평범한 승인으로 되돌아간다(있는 척하지 않는다)");
+});
+
 console.log(`\n${pass}건 통과`);

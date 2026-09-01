@@ -14,6 +14,7 @@
 //  «기록» 과 «상태» 가 섞인다(session-event.ts 머리말).
 import {
   taskKindOf,
+  type QuestionItem, type QuestionOption,
   type SessionEvent, type SessionFacts, type SlashCommandInfo, type TaskInfo, type UsageInfo,
 } from "./session-event.js";
 
@@ -56,6 +57,28 @@ function commandsOf(v: unknown): SlashCommandInfo[] | undefined {
 }
 
 /**
+ * AskUserQuestion 입력의 questions 를 우리 낱말로 (#2439).
+ *  ⚠ **모양이 안 맞으면 빈 배열** — 호출부가 평범한 승인으로 되돌아간다(있는 척 금지).
+ *  ⚠ 옵션이 없는 질문은 버린다: 고를 것이 없는 «선택지» 는 막다른 카드다.
+ */
+function questionsOf(v: unknown): QuestionItem[] {
+  if (!Array.isArray(v)) return [];
+  const out: QuestionItem[] = [];
+  for (const raw of v) {
+    const q = rec(raw);
+    const text = str(q?.question);
+    if (!q || !text) continue;
+    const opts: QuestionOption[] = (Array.isArray(q.options) ? q.options : [])
+      .map((o) => rec(o))
+      .filter((o): o is Record<string, unknown> => !!o && typeof o.label === "string")
+      .map((o) => ({ label: String(o.label), description: str(o.description) }));
+    if (!opts.length) continue;
+    out.push({ question: text, header: str(q.header), options: opts, multiSelect: q.multiSelect === true });
+  }
+  return out;
+}
+
+/**
  * 승인 카드의 한 줄 제목 — «무엇을 하려는가».
  *  ⚠ 도구 이름만 적으면 사람이 판단할 수 없다("Bash 를 허용할까요?" 는 아무 정보가 아니다).
  *   명령·경로처럼 **사람이 읽고 결정할 수 있는 것**을 앞세운다.
@@ -93,6 +116,21 @@ export function claudeStreamEvent(line: unknown): SessionEvent | null {
     const id = str(o.request_id);
     if (!id) return { t: "raw", source: "claude", payload: o };
     if (sub === "can_use_tool") {
+      //  ★ **질문은 승인이 아니다.** claude 는 둘 다 can_use_tool 로 보내는데, 도구 이름이
+      //   `AskUserQuestion` 이면 «어느 쪽이 좋나» 를 묻는 것이다(공식 문서 "Handle approvals and
+      //   user input"). 화면은 «허용/거부» 대신 **선택지 버튼**을 그려야 하고, 답은 권한이 아니라
+      //   `updatedInput.answers` 에 담긴 **고른 값**이다.
+      //   ⚠ 이걸 승인으로 그리면 [허용] 을 눌러도 답이 안 채워져 툴이
+      //    "The user did not answer the questions" 로 끝난다(실측 2026-09-01) — 화면은 영원히 돈다.
+      if (str(r.tool_name) === "AskUserQuestion") {
+        const qs = questionsOf(rec(r.input)?.questions);
+        if (qs.length) {
+          return { t: "permission.asked", ask: {
+            id, toolName: "AskUserQuestion", input: r.input,
+            title: qs[0].question, questions: qs,
+          } };
+        }
+      }
       //  실측 봉투(2.1.251, 2026-09-01 — Write 한 번을 실제로 받아 뜬 것):
       //   {"type":"control_request","request_id":"<uuid>","request":{"subtype":"can_use_tool",
       //     "tool_name":"Write","display_name":"Write","input":{...},"description":"ours2.txt",

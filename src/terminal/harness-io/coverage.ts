@@ -47,9 +47,14 @@ export interface HarnessCoverage {
 export const COVERAGE: readonly HarnessCoverage[] = [
   {
     harness: "claude",
-    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
-      ask: "AskUserQuestion 툴이 질문·선택지를 다 실어 오는데(실측 2026-09-01 매니지드 화면) 대화창에 **고르는 UI 가 없다**. 답 통로인 POST …/keys 도 approve|deny|interrupt 세 가지뿐이고 노드 세션은 409 로 거부한다.",
+      //  ★ 2026-09-01 되게 만들었다. 공식 문서 "Handle approvals and user input" 이 규약을 다 적어 뒀다:
+      //   AskUserQuestion 은 canUseTool 로 오고, 답은 updatedInput={questions, answers} 로 돌려준다
+      //   (키=질문 전문, 값=고른 label). 승인으로 답하면 툴이 "The user did not answer the questions"
+      //   로 끝난다 — 그게 «시간만 올라가던» 그 화면이었다.
+      //  ⚠ 이건 **대화 런타임이 도는 세션**의 이야기다. pane 에 TUI 가 도는 terminal 모드에서는
+      //   TUI 가 그 카드를 쥐므로 여전히 터미널에서 고른다(sessionTerminalOnlyAxes 가 그 사실을 싣는다).
       //  ★ 이 축은 표에서 두 번 뒤집혔다. 그 자취를 남긴다 — 다음 사람이 같은 함정을 밟지 않게.
       //   ① "ok" 로 적었다(근거 없이 — 배선이 준비된 것을 «된다» 로 옮겨 적었다).
       //   ② "terminal" 로 되돌렸다(5가지를 시도했는데 물음이 0건이었다).
