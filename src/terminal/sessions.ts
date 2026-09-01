@@ -811,7 +811,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   }
   //  ⚠ 앱 인스턴스 등록은 여기가 아니라 **게이트웨이 라우트**가 한다(routes.ts afterSessionCreated).
   //   이 파일은 노드 에이전트 번들에 실리고 노드엔 DB 가 없다('DB 없음' 계약, scripts/build-node-agent.mjs 화이트리스트).
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
+  //  ⚠ #2439 — **방금 정한 모드를 함께 돌려준다.** 이 객체는 collectSessions 가 아니라 여기서
+  //   만들어지므로, 안 실으면 «만들 때는 chat 인데 응답은 terminal» 이 되어 화면이 곧바로 갈린다.
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags,
+    ...(chatRuntime ? { runtimeChoice: "chat" as const } : {}) };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
