@@ -72,7 +72,20 @@ export interface SourceFilter {
   author?: string;      // 작성자·올린 사람(fields->>'author_name')
   root?: string;        // 올린 자리(fields->>'root') — 'personal' 개인 폴더 · 'project' 프로젝트 폴더 (#2423)
   linked?: boolean;     // true=지식이 붙은 것만 / false=아직 안 붙은 것만
+  fold?: boolean;       // 답글 접기(#2423 v3.1) — 부모가 수집돼 있는 답글을 목록에서 뺀다(자료의 단위 = 대화)
 }
+
+// ── 자료의 단위(#2423 v3.1) — 대화 출처는 낱메시지가 아니라 **대화**가 한 건이다 ──
+//  「ㅇㅋㅇㅋ」가 목록에 1급 행으로 서던 원인은 내용이 아니라 단위였다(실측: 슬랙·디스코드 20자 미만 47건 중
+//  27건이 스레드 답글, 그중 37건엔 지식도 붙어 있었다 — 맥락 안에선 승인의 증거다). 그래서 지우지 않고 **접는다**:
+//  ⚠ 부모가 실제로 수집돼 있는 답글만 접는다 — 부모 없는 답글을 접으면 그 자료는 영영 안 보인다(fail-open).
+const FOLD_REPLY = `NOT (s.parent_external_id IS NOT NULL AND EXISTS (
+  SELECT 1 FROM source p WHERE p.external_id = s.parent_external_id
+    AND p.external_system IS NOT DISTINCT FROM s.external_system AND p.lifecycle='active'))`;
+//  접힌 뒤의 «지식이 붙었나»는 스레드 단위다 — 답글에 붙은 지식이 머리 행의 민트 점으로 올라와야 접기가 정보를 안 잃는다.
+const THREAD_KN = `EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id
+  OR ks.source_id IN (SELECT r.id FROM source r WHERE r.parent_external_id = s.external_id
+    AND r.external_system IS NOT DISTINCT FROM s.external_system AND r.lifecycle='active'))`;
 
 // listSources / countSources 공유 필터 — WHERE·params 를 한 곳에서(목록·총계가 항상 같은 조건).
 function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] } {
@@ -89,8 +102,10 @@ function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] }
   //  올린 자리(#2423 열람실) — 'personal'(개인 폴더) / 'project'(프로젝트 폴더). ingest/local-file 이 fields.root 에 적는다.
   if (f.root) { params.push(f.root); wh.push(`s.fields->>'root'=$${params.length}`); }
   if (f.author) { params.push(f.author); wh.push(`s.fields->>'author_name'=$${params.length}`); }
+  if (f.fold) wh.push(FOLD_REPLY);
   if (f.linked !== undefined) {
-    wh.push(`${f.linked ? "" : "NOT "}EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id=s.id)`);
+    const kn = f.fold ? `(${THREAD_KN})` : `EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id=s.id)`;
+    wh.push(`${f.linked ? "" : "NOT "}${kn}`);
   }
   return { where: wh.join(" AND "), params };
 }
@@ -103,8 +118,15 @@ export async function listSources(f: SourceFilter = {}, viewer?: Viewer): Promis
   const offset = Math.min(Math.max(Number(f.offset) || 0, 0), 1_000_000);
   params.push(limit); const limP = `$${params.length}`;
   params.push(offset); const offP = `$${params.length}`;
+  //  fold 목록엔 화면이 접기 판정에 쓰는 두 값을 더 싣는다: reply_n(행에 «답글 n») · body_len(한 줄짜리 잡음 판정 —
+  //   목록은 본문을 안 싣는 규약이라 길이만 보낸다). 페이지당 60행이라 상관 서브쿼리 비용은 무시할 수준이다.
+  const sel = !f.fold ? S_LIST_SEL
+    : `${S_LIST_SEL.replace("EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)", `(${THREAD_KN.replace(/\n/g, " ")})`)},
+       length(coalesce(s.body_md,''))::int AS body_len,
+       (SELECT count(*)::int FROM source r WHERE r.parent_external_id = s.external_id
+         AND r.external_system IS NOT DISTINCT FROM s.external_system AND r.lifecycle='active') AS reply_n`;
   return q(itemsPool,
-    `SELECT ${S_LIST_SEL} FROM source s WHERE ${where} AND ${vis}
+    `SELECT ${sel} FROM source s WHERE ${where} AND ${vis}
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${limP} OFFSET ${offP}`, params);
 }
 
@@ -131,13 +153,15 @@ export async function listSourceTree(viewer?: Viewer): Promise<SourceTreeNode[]>
   const params: unknown[] = [];
   const vis = await sourceVisWhere(viewer, params);
   const rows = await q(itemsPool,
+    //  나무도 **대화 단위**로 센다(#2423 v3.1) — 목록이 fold 로 접는데 나무만 낱메시지로 세면 «슬랙 68»을 눌렀는데
+    //   35건이 나온다(같은 화면의 두 숫자가 서로 거짓말). linked 도 스레드 단위로 올린다.
     `SELECT COALESCE(s.external_system, 'authored') AS system,
             COALESCE(s.fields->>'container_name', CASE WHEN s.external_system IS NULL THEN s.kind ELSE NULL END) AS container,
             count(*)::int AS n,
-            count(*) FILTER (WHERE EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id))::int AS linked,
+            count(*) FILTER (WHERE ${THREAD_KN})::int AS linked,
             max(COALESCE(s.occurred_at, s.updated_at)) AS newest
        FROM source s
-      WHERE s.lifecycle='active' AND ${vis}
+      WHERE s.lifecycle='active' AND ${FOLD_REPLY} AND ${vis}
       GROUP BY 1, 2
       ORDER BY 3 DESC`, params);
   return rows as unknown as SourceTreeNode[];

@@ -28,6 +28,7 @@ const sourceListInput = {
   container: z.string().optional().describe("그 출처 안의 자리 — 슬랙 채널·깃허브 저장소·내 컴퓨터 최상위 폴더(fields.container_name)"),
   author: z.string().optional().describe("쓴 사람·올린 사람(fields.author_name)"),
   root: z.enum(["personal", "project"]).optional().describe("올린 자리(fields.root) — personal=개인 폴더 · project=프로젝트 폴더 (#2423)"),
+  fold: z.boolean().optional().describe("답글 접기(#2423 v3.1) — 부모가 수집돼 있는 답글을 목록에서 접는다(자료의 단위=대화). 접힌 목록 행엔 reply_n(답글 수)·body_len 이 실리고, 민트 점(has_knowledge)·linked 필터·나무 건수는 스레드 단위로 오른다."),
   linked: z.boolean().optional().describe("true=지식이 붙은 자료만 / false=아직 안 붙은 것만"),
   limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(1~500, 기본 100) — 구 100 하드캡 해제(#709)"),
   offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 상한 너머 전량 순회(#709)"),
@@ -53,6 +54,7 @@ const sourceList: Capability = {
           container: query.container ? String(query.container) : undefined,
           author: query.author ? String(query.author) : undefined,
           root: query.root === "personal" || query.root === "project" ? String(query.root) : undefined,
+          fold: query.fold === undefined ? undefined : String(query.fold) === "true",
           //  linked 는 3상태다(붙은 것만·안 붙은 것만·안 가림) — 문자열 'true'/'false' 만 뜻을 갖고 나머지는 미지정.
           linked: query.linked === undefined ? undefined : String(query.linked) === "true",
           limit: query.limit ? Number(query.limit) : undefined,

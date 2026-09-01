@@ -33,6 +33,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
+import { sourcesFindInput, sourcesFindShown, sourcesSideBody, sourcesSideCount, sourcesUploadPick, toggleSourcesFind } from './sources.js';   // #2423 자료 앱 사이드바 내용
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
@@ -736,6 +737,11 @@ function render(): void {
   //   나머지 셋은 그 구역의 렌즈다: AI 세션 = 세션 전체, 프로젝트 = 프로젝트 트리, 위키 = 분류.
   //   ⚠ 구역은 주소를 따라 저절로 바뀌지 않는다(rail.ts 머리말) — 목록에서 뭔가를 여는 순간
   //    사이드바가 갈아엎이면 방금 보던 목록이 사라진다.
+  //  #2423 — 자료 앱이 활성인 동안 사이드바 칸은 자료의 것이다(앱 소유 사이드바). 구역이 아니라 주소로
+  //   판정한다(자료는 레일의 '갈 곳'이 아니라 앱이다) — 구역 기억(section)은 건드리지 않아서, 자료를 떠나면
+  //   보던 구역이 그대로 돌아온다. 조립은 아래 renderSourcesSection — 구역들과 같은 틀(topBits·secHead·secFoot)이라
+  //   레일을 숨겨도 문패·구역 이동·발치 도크가 똑같이 선다.
+  if (last.activeKey() === 'sources') { sideRoot?.setAttribute('data-sec', 'sources'); renderSourcesSection(); return; }
   const sec: RailSection = hooks.section?.() || 'home';
   sideRoot?.setAttribute('data-sec', sec);
   if (sec === 'inbox') { renderInboxSide(); return; }
@@ -833,7 +839,8 @@ function findInput(ph: string): HTMLInputElement {
 function wsHead(): HTMLElement {
   const sec = hooks.section?.() || 'home';
   const ak = last ? last.activeKey() : '';
-  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : sectionDef(sec);
+  //  구역 아닌 화면의 특례 — 리브('갈 곳')와 자료(앱, #2423). 여기 있는데 머리가 «홈»이면 거짓말이다.
+  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : sectionDef(sec);
   const inboxN = last ? last.data.sessions.filter((s) => isLive(s) && isMine(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length : 0;
   return el('div', { class: 'v2-side-wshd' },
     stackTile({ small: true, label: true }),
@@ -888,6 +895,35 @@ function footLink(href: string, icon: Parameters<typeof glyph>[0], text: string,
   return el('a', { class: 'v2-nav v2-foot-link', href, title: text },
     glyph(icon, 'v2-nav-ic'), el('span', { class: 'n', text }),
     n != null ? el('span', { class: 'v2-cnt', text: String(n) }) : null);
+}
+
+// ══ [자료] 앱 사이드바 (#2423) — 구역 사이드바와 같은 틀, 내용만 자료 앱(sources.ts)의 것 ══════════════
+function renderSourcesSection(): void {
+  if (!last) return;
+  const { host } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+  const findOn = sourcesFindShown();
+  const findBtnEl = el('span', { class: 'v2-findbtn-wrap' },
+    el('button', {
+      class: 'v2-findbtn' + (findOn ? ' on' : ''), type: 'button',
+      'aria-label': findOn ? '자료에서 찾기 닫기' : '자료에서 찾기', 'aria-expanded': String(findOn),
+      title: findOn ? '닫기 (Esc)' : '자료에서 찾기 — 제목·원문을 검색합니다',
+      onclick: () => { toggleSourcesFind(); redraw(); } },
+      sv('svg', { viewBox: '0 0 24 24', class: 'v2-findbtn-ic', 'aria-hidden': 'true' },
+        sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' }))));
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': '자료' },
+      secHead('자료', sourcesSideCount(),
+        el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '파일 올리기',
+          title: '파일 올리기 — 올린 순간부터 AI 가 읽을 수 있어요', onclick: () => sourcesUploadPick() },
+          sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
+        findBtnEl),
+      ...(findOn ? [el('div', { class: 'v2-find v2-find--apps' }, sourcesFindInput(() => redraw()))] : []),
+      sourcesSideBody(() => redraw())),
+    secFoot());
 }
 
 function renderHomeApps(): void {

@@ -2,34 +2,18 @@
    본창 = 목록(왼 칸, 촘촘한 두 줄 행) + 원문(오른 칸, 항상 열림). 사이드바(.v2-ss)는 셸의 .v2-side 칸에 선다.
    값은 전부 01-base.css 토큰 — 다크는 90-dark.css 의 토큰 갈아끼움으로 따라온다. */
 
-/* ── 앱 소유 사이드바 ─────────────────────────────────────────────────────── */
-.v2-ss { display: flex; flex-direction: column; min-height: 0; height: 100%; }
-.v2-ss-hd { display: flex; align-items: center; gap: 9px; padding: 12px 14px 4px; }
-.v2-ss-hd .gi { width: 26px; height: 26px; flex: none; display: grid; place-items: center; }
-.v2-ss-hd .gi svg { width: 26px; height: 26px; }
-.v2-ss-hd b { font-size: 15px; font-weight: 800; letter-spacing: -.01em; color: var(--ink); }
-.v2-ss-hd .n { margin-left: auto; font-size: 11.5px; color: var(--muted-3); font-variant-numeric: tabular-nums; }
-.v2-ss-rail { display: grid; place-items: center; width: 26px; height: 26px; margin-right: -2px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted-head); cursor: pointer; }
-.v2-ss-rail:hover { background: var(--bg); }
-.v2-ss-q { display: flex; align-items: center; gap: 7px; margin: 8px 12px; height: 32px; padding: 0 10px; background: var(--surface); border: 1px solid var(--line-net); border-radius: 8px; color: var(--muted-2); flex: none; }
-.v2-ss-q svg { flex: none; }
-.v2-ss-qin { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); outline: none; }
-.v2-ss-qin::placeholder { color: var(--muted-2); }
-.v2-ss-body { flex: 1; min-height: 0; overflow: hidden auto; padding-bottom: 8px; }
-.v2-ss-sec { padding: 12px 8px 3px 16px; font-size: 11px; font-weight: 700; color: var(--muted-head); }
-.v2-ss-row { display: flex; align-items: center; gap: 8px; min-height: 34px; margin: 0 8px; padding: 0 8px; border-radius: 8px; font-size: 13px; color: var(--ink); text-decoration: none; }
+/* ── 앱 소유 사이드바(#2423) — 조립은 side.ts(구역 틀: .v2-app-space·secHead·secFoot), 여기는 나무 행뿐 ── */
+/*  .v2-ss 는 .v2-app-list(구역 목록과 같은 스크롤 그릇)에 얹히는 부가 클래스다 — 배경·패딩·스크롤은 그릇 소관. */
+.v2-ss-sec { padding: 12px 0 3px 8px; font-size: 11px; font-weight: 700; color: var(--muted-head); }
+.v2-ss .v2-ss-sec:first-child { padding-top: 4px; }
+.v2-ss-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 8px; font-size: 13px; color: var(--ink); text-decoration: none; }
 .v2-ss-row:hover { background: var(--bg); }
 .v2-ss-row .ic { display: grid; place-items: center; width: 16px; color: var(--muted-head); flex: none; }
 .v2-ss-row .nm { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v2-ss-row .n { margin-left: auto; font-size: 11.5px; color: var(--muted-3); font-variant-numeric: tabular-nums; flex: none; }
 .v2-ss-row.on { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-net); font-weight: 600; }
 .v2-ss-row.on .ic { color: var(--blue); }
-.v2-ss-row.child { min-height: 28px; margin-left: 30px; font-size: 12.5px; color: var(--ink-sub); }
-.v2-ss-ft { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
-.v2-ss-up { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; height: 34px; border: 0; border-radius: 8px; background: var(--blue-fill); color: var(--on-fill); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
-.v2-ss-up:hover { background: var(--blue-fill-deep); }
-.v2-ss-up svg { width: 15px; height: 15px; }
-.v2-ss-skel { height: 120px; margin: 12px; border-radius: 10px; background: var(--bg); opacity: .6; }
+.v2-ss-row.child { min-height: 28px; margin-left: 24px; font-size: 12.5px; color: var(--ink-sub); }
 
 /* ── 본창: 열람실 두 칸 ───────────────────────────────────────────────────── */
 .v2-src { display: flex; height: 100%; min-height: 0; background: var(--bg); }
@@ -123,3 +107,9 @@
   .v2-src { flex-direction: column; }
   .v2-srl { width: auto; max-height: 44%; border-right: 0; border-bottom: 1px solid var(--line-row); }
 }
+
+/* ── 사소한 것 접기(#2423 v3.1) — 봇 알림·독립 한 줄짜리는 기본으로 접힌다 ── */
+.v2-srl-noiseln { display: block; width: 100%; padding: 10px 18px; border: 0; background: none; text-align: left; font: inherit; font-size: 12px; color: var(--muted-2); cursor: pointer; }
+.v2-srl-noiseln:hover { color: var(--ink-sub); background: var(--bg-tint); }
+.v2-srl-row.noise .t1, .v2-srl-row.noise .t2 { color: var(--muted-2); }
+.v2-srl-row.noise .t1 { font-weight: 500; }

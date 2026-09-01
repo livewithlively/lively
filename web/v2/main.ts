@@ -19,7 +19,7 @@ import { dotCls, isMineSess, isTrashedSess, mergeSessions, projName, renderHome,
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
-import { renderSourcesApp, renderSourceDetail, renderSourcesSide } from './sources.js';   // #2423 자료 앱 — 열람실(앱 소유 사이드바 + 목록·원문)
+import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
 import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
@@ -1751,14 +1751,7 @@ function syncRailBtn(): void {
 function drawSide(): void {
   drawRail();
   if (!sideEl) return;
-  //  #2423 — **앱 소유 사이드바**: 자료 앱이 활성인 동안 사이드바 칸은 자료의 것(내 자료·수집함 나무)이다.
-  //   구역 목록(홈·AI 세션…)을 자료 옆에 그대로 두면 앱마다 제 사이드바를 갖는다는 문법이 깨진다(원준 2026-09-01 반려).
-  //   구역으로 돌아가면(레일 클릭·다른 탭 활성) 아래 sideTreeHost 가 비어 있어 구역 나무가 새로 선다.
-  if (activeKey() === 'sources') {
-    sideTreeHost = null;
-    renderSourcesSide(sideEl, { railHidden: railIsHidden, onToggleRail: () => { toggleRail(); syncRailBtn(); } });
-    return;
-  }
+  //  #2423 앱 소유 사이드바 — 자료 갈래는 side.ts render() 가 activeKey 로 직접 판정한다(구역들과 같은 틀).
   if (!sideTreeHost || !sideEl.contains(sideTreeHost)) {
     sideTreeHost = el('div', { class: 'stu-panel-tree' }) as HTMLElement;
     sideEl.replaceChildren(el('div', { class: 'stu-panel' }, sideTreeHost));

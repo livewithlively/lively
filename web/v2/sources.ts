@@ -13,7 +13,6 @@
 import { TOKEN_KEY, api, apiUrl, busy, el, errorNote, relTime, renderMarkdown, safeHref, state, toast } from '../core.js';
 import { buildFilePreview } from '../lib/file-preview.js';   // 미리보기 판정·렌더의 단일 소유(#/f·홈 모달과 같은 코드)
 import { authDownload, authUploadProgress } from '../projects/files-upload.js';
-import { appGlassIcon } from './apps.js';
 
 // ── 자료 한 건(목록용 얕은 행) ─────────────────────────────────────────────
 export interface SrcRow {
@@ -24,6 +23,8 @@ export interface SrcRow {
   has_knowledge?: boolean;
   visibility?: string;
   parent_external_id?: string | null;
+  reply_n?: number;     // fold 목록 전용 — 이 대화에 이어진 답글 수
+  body_len?: number;    // fold 목록 전용 — 잡음(한 줄짜리) 판정용 본문 길이
 }
 export interface SrcTreeNode { system: string; container: string | null; n: number; linked: number; newest: string | null }
 
@@ -117,10 +118,23 @@ function myUploadName(): string | null {
 //  그래서 주소 변화를 이 앱이 직접 듣고, 같은 자리 안의 이동(읽는 자료만 바뀜)은 **원문 칸만** 다시 그린다.
 const PAGE = 60;
 
-interface View { key: string; listBox: HTMLElement; readHost: HTMLElement; moreBox: HTMLElement; selId: number | null; sel: SrcSel }
+interface View {
+  key: string; listBox: HTMLElement; readHost: HTMLElement; moreBox: HTMLElement; selId: number | null; sel: SrcSel;
+  noiseN: number; noiseOpen: boolean; noiseBtn: HTMLElement | null;
+}
+
+/** 잡음(#2423 v3.1) — 기본으로 접어 두는 행. 지우는 게 아니라 뒤로 미는 것: 「사소한 것 n건」 줄로 접히고 누르면 펼친다.
+ *  판정은 기계적으로 둘뿐이다 — ① 봇이 쓴 것(어느 출처든: 모니터링 알림이 목록을 덮던 실측 814건이 근거)
+ *  ② 대화·주석 출처의 독립 한 줄(답글도 안 달린 20자 미만 — 「ㅇㅋ」가 스레드 밖에 홀로 선 경우).
+ *  문서·파일·기록계(전사록·local_file·깃허브·리니어)는 짧아도 잡음이 아니다 — 제목이 곧 내용인 것들이 아니다. */
+const NOISE_SYS = new Set(['slack', 'discord', 'figma']);
+function isNoise(r: SrcRow): boolean {
+  if (isBot(r)) return true;
+  if (!NOISE_SYS.has(r.external_system || '')) return false;
+  return (r.reply_n || 0) === 0 && (r.body_len ?? 999) < 20;
+}
 let mounted: HTMLElement | null = null;   // 본창 그릇(셸 tab.center 안)
 let view: View | null = null;             // 지금 서 있는 열람실(목록 한 벌)
-let sideBox: HTMLElement | null = null;   // 셸 사이드바 안 우리 그릇
 let lastDrawn = '';
 
 function parseHash(hash: string): { sel: SrcSel; id: number | null } | null {
@@ -149,7 +163,7 @@ function drawFor(host: HTMLElement, hash: string): void {
   const readHost = el('div', { class: 'v2-srd' });
   const listPane = el('div', { class: 'v2-srl' }, listHead(at.sel), listBox, moreBox);
   host.replaceChildren(el('div', { class: 'v2-src' }, listPane, readHost));
-  view = { key: selKey(at.sel), listBox, readHost, moreBox, selId: at.id, sel: at.sel };
+  view = { key: selKey(at.sel), listBox, readHost, moreBox, selId: at.id, sel: at.sel, noiseN: 0, noiseOpen: false, noiseBtn: null };
   void loadList(view, true);
   if (at.id) paintRead(readHost, at.id, at.sel);
   else readHost.replaceChildren(el('div', { class: 'v2-srd-none', text: '왼쪽에서 자료를 고르세요.' }));
@@ -168,7 +182,7 @@ window.addEventListener('keydown', (e) => {
   if (!mounted || !view || !document.contains(mounted)) return;
   const t = e.target as HTMLElement | null;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-  const rows = [...view.listBox.querySelectorAll<HTMLAnchorElement>('.v2-srl-row')];
+  const rows = [...view.listBox.querySelectorAll<HTMLAnchorElement>('.v2-srl-row')].filter((r) => !r.hidden);
   if (!rows.length) return;
   const cur = rows.findIndex((r) => Number(r.dataset.id) === view!.selId);
   const next = rows[Math.max(0, Math.min(rows.length - 1, cur + (e.key === 'ArrowDown' ? 1 : -1)))];
@@ -209,17 +223,73 @@ function autoSelect(id: number): void {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// 앱 소유 사이드바 — 셸(main.ts drawSide)이 자료가 활성인 동안 이걸 그린다
+// 앱 소유 사이드바(#2423) — **조립은 side.ts 가 한다**(구역 사이드바와 같은 틀: topBits·secHead·secFoot).
+//  여기는 내용만 내놓는다: 나무 몸통 · 총계 · 찾기 입력 · 올리기. v3 첫 판은 셸 규약을 우회하고 맨몸으로
+//  섰다가 반려됐다(원준 2026-09-01: "이것저것 다 깨져있고 잘려있고") — 패널 배경이 없고, 검색 입력이 그릇을
+//  넘치고, 레일을 숨긴 사람은 구역 이동 문이 통째로 사라졌다. 같은 틀을 쓰면 그 셋이 전부 공짜로 맞는다.
 // ════════════════════════════════════════════════════════════════════════
-interface SideHooks { railHidden?: () => boolean; onToggleRail?: () => void }
 let treeCache: { nodes: SrcTreeNode[]; at: number } | null = null;
 let sideCounts: { mine?: number; proj?: number } = {};
+let sideBodyEl: HTMLElement | null = null;
+let srcFindOpen = false;
 
-export function renderSourcesSide(host: HTMLElement, hooks?: SideHooks): void {
-  const box = el('div', { class: 'v2-ss' });
-  sideBox = box;
-  host.replaceChildren(box);
-  void paintSide(hooks);
+/** 머리 숫자(자료 n건) — 나무 캐시에서. 아직 안 왔으면 null(secHead 가 숫자를 생략한다). */
+export function sourcesSideCount(): number | null {
+  if (!treeCache) return null;
+  return treeCache.nodes.reduce((a, n) => a + n.n, 0);
+}
+export function sourcesFindShown(): boolean { return srcFindOpen || !!(parseHash(location.hash)?.sel.q); }
+export function toggleSourcesFind(): void { srcFindOpen = !srcFindOpen; }
+
+/** 찾기 입력 — 구역 사이드바의 .v2-find-in 과 같은 붓. 값은 주소의 q 로 간다(목록·원문이 그 말로 좁혀진다). */
+export function sourcesFindInput(onClose: () => void): HTMLInputElement {
+  const at = parseHash(location.hash);
+  const input = el('input', { class: 'v2-find-in', type: 'search', 'data-src-q': '1',
+    placeholder: '자료에서 찾기', 'aria-label': '자료에서 찾기', value: (at && at.sel.q) || '' }) as HTMLInputElement;
+  let t: any = null;
+  input.addEventListener('input', () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      const base = (parseHash(location.hash) || { sel: {} as SrcSel }).sel;
+      const q = input.value.trim() || undefined;
+      if (q !== base.q) location.hash = sourcesHref({ ...base, q });
+    }, 300);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || (e as KeyboardEvent).isComposing) return;
+    e.stopPropagation();
+    const base = (parseHash(location.hash) || { sel: {} as SrcSel }).sel;
+    if (base.q) location.hash = sourcesHref({ ...base, q: undefined });
+    srcFindOpen = false;
+    onClose();
+  });
+  return input;
+}
+
+/** 올리기 — 파일을 고르면 개인 폴더 uploads/ 로. PUT 한 번이면 자료로도 등록된다(#1881). */
+export function sourcesUploadPick(): void {
+  const fileIn = el('input', { type: 'file', multiple: true, hidden: true }) as HTMLInputElement;
+  fileIn.addEventListener('change', () => { void uploadFiles([...(fileIn.files || [])]); fileIn.remove(); });
+  document.body.append(fileIn);
+  fileIn.click();
+}
+
+/** 나무 몸통 — .v2-app-list(구역 목록과 같은 스크롤 그릇) 안에 내 자료·수집함이 선다.
+ *  onCount: 총계가 **처음** 도착했을 때 한 번 — side.ts 가 머리 숫자를 다시 그린다(캐시 히트면 안 부른다). */
+export function sourcesSideBody(onCount: () => void): HTMLElement {
+  const box = el('div', { class: 'v2-app-list v2-ss', role: 'list', 'aria-label': '자료 출처' });
+  sideBodyEl = box;
+  const fresh = !treeCache;
+  void (async () => {
+    if (!treeCache) busy(box, el('div', { class: 'v2-src-skel' }));
+    let nodes: SrcTreeNode[] = [];
+    try { nodes = await fetchTree(); }
+    catch (e: any) { box.replaceChildren(errorNote(e, '출처를 불러오지 못했습니다')); return; }
+    if (!document.contains(box)) return;                  // 그 사이 다른 구역으로 갔다
+    fillSideBody(box, nodes);
+    if (fresh) onCount();
+  })();
+  return box;
 }
 
 async function fetchTree(): Promise<SrcTreeNode[]> {
@@ -229,54 +299,23 @@ async function fetchTree(): Promise<SrcTreeNode[]> {
   return treeCache.nodes;
 }
 
-async function paintSide(hooks?: SideHooks): Promise<void> {
-  const box = sideBox;
-  if (!box) return;
-  busy(box, el('div', { class: 'v2-ss-skel' }));
-  let nodes: SrcTreeNode[] = [];
-  try { nodes = await fetchTree(); }
-  catch (e: any) { box.replaceChildren(errorNote(e, '출처를 불러오지 못했습니다')); return; }
-  if (!document.contains(box)) return;                    // 그 사이 다른 구역으로 갔다
-
+function fillSideBody(box: HTMLElement, nodes: SrcTreeNode[]): void {
   const at = parseHash(location.hash);
   const cur = at ? selKey(at.sel) : '';
-  const total = nodes.reduce((a, n) => a + n.n, 0);
   const linked = nodes.reduce((a, n) => a + n.linked, 0);
   const localN = nodes.filter((n) => n.system === 'local').reduce((a, n) => a + n.n, 0);
   const mine = myUploadName();
 
-  const row = (o: { label: string; sel: SrcSel; n?: number | string; icon?: string; child?: boolean; cls?: string }): HTMLElement => {
+  const row = (o: { label: string; sel: SrcSel; n?: number | string; icon?: string; child?: boolean }): HTMLElement => {
     const on = cur === selKey(o.sel);
     return el('a', {
-      class: 'v2-ss-row' + (o.child ? ' child' : '') + (on ? ' on' : '') + (o.cls ? ' ' + o.cls : ''),
+      class: 'v2-ss-row' + (o.child ? ' child' : '') + (on ? ' on' : ''),
       href: sourcesHref(o.sel), 'aria-current': on ? 'page' : null, 'data-sel': selKey(o.sel),
     },
       o.child || !o.icon ? null : el('span', { class: 'ic' }, treeIcon(o.icon)),
       el('span', { class: 'nm', text: o.label, title: o.label }),
       o.n === undefined ? null : el('span', { class: 'n', text: String(o.n) }));
   };
-
-  // 머리 — 유리 아이콘 문패. 레일이 숨어 있으면 되살리는 문을 함께 둔다(이 사이드바가 구역 머리를 대신 서 있으니).
-  const head = el('div', { class: 'v2-ss-hd' },
-    hooks && hooks.railHidden && hooks.railHidden()
-      ? el('button', { class: 'v2-ss-rail', type: 'button', title: '레일 펼치기', 'aria-label': '레일 펼치기',
-          onclick: () => hooks.onToggleRail && hooks.onToggleRail() }, treeIcon('panel'))
-      : null,
-    el('span', { class: 'gi' }, appGlassIcon('src')),
-    el('b', { text: '자료' }),
-    el('span', { class: 'n', text: total ? total + '건' : '' }));
-
-  // 찾기 — 값은 주소의 q 로 간다(목록이 그 말로 좁혀진다).
-  const qIn = el('input', { class: 'v2-ss-qin', type: 'search', value: (at && at.sel.q) || '',
-    placeholder: '자료에서 찾기', 'aria-label': '자료에서 찾기' }) as HTMLInputElement;
-  let t: any = null;
-  qIn.addEventListener('input', () => {
-    clearTimeout(t);
-    t = setTimeout(() => {
-      const base = (parseHash(location.hash) || { sel: {} as SrcSel }).sel;
-      location.hash = sourcesHref({ ...base, q: qIn.value.trim() || undefined });
-    }, 300);
-  });
 
   const rows: (HTMLElement | null)[] = [];
   rows.push(el('div', { class: 'v2-ss-sec', text: '내 자료' }));
@@ -306,21 +345,12 @@ async function paintSide(hooks?: SideHooks): Promise<void> {
       rows.push(row({ label: k.container, sel: { system: sys, container: k.container }, n: k.n, child: true }));
     }
   }
-
-  // 발치 — 올리기. PUT 한 번이면 자료로도 등록된다(#1881 browse/file 이 source 를 만든다).
-  const fileIn = el('input', { type: 'file', multiple: true, hidden: true }) as HTMLInputElement;
-  fileIn.addEventListener('change', () => { void uploadFiles([...(fileIn.files || [])]); fileIn.value = ''; });
-  const upBtn = el('button', { class: 'v2-ss-up', type: 'button', onclick: () => fileIn.click() },
-    treeIcon('plus'), el('span', { text: '올리기' }));
-
-  box.replaceChildren(head, el('div', { class: 'v2-ss-q' }, treeIcon('search'), qIn),
-    el('div', { class: 'v2-ss-body' }, ...rows.filter(Boolean) as HTMLElement[]),
-    el('div', { class: 'v2-ss-ft' }, upBtn, fileIn));
+  box.replaceChildren(...rows.filter(Boolean) as HTMLElement[]);
 
   //  건수는 늦게 와도 된다 — 나무 집계는 출처 × 자리라 사람·root 축이 없어 이 두 줄만 따로 센다(total 만 쓰므로 limit=1).
   const late = (r0: HTMLElement | null, sel: SrcSel, keep: (n: number) => void): void => {
     if (!r0 || r0.querySelector('.n')) return;
-    void api('/api/ui/sources?' + selQuery(sel, { limit: '1' }))
+    void api('/api/ui/sources?' + selQuery(sel, { limit: '1', fold: 'true' }))
       .then((r: any) => { const n = Number(r && r.total); if (Number.isFinite(n)) { keep(n); if (document.contains(r0)) r0.append(el('span', { class: 'n', text: String(n) })); } })
       .catch(() => { /* 못 세도 줄은 선다 */ });
   };
@@ -330,15 +360,15 @@ async function paintSide(hooks?: SideHooks): Promise<void> {
 
 /** 주소만 바뀌었을 때 — 사이드바를 다시 만들지 않고 켜진 줄만 옮긴다. */
 function paintSideActive(): void {
-  if (!sideBox || !document.contains(sideBox)) return;
+  if (!sideBodyEl || !document.contains(sideBodyEl)) return;
   const at = parseHash(location.hash);
   const cur = at ? selKey(at.sel) : '';
-  for (const r of sideBox.querySelectorAll<HTMLElement>('.v2-ss-row')) {
+  for (const r of sideBodyEl.querySelectorAll<HTMLElement>('.v2-ss-row')) {
     const on = r.dataset.sel === cur;
     r.classList.toggle('on', on);
     if (on) r.setAttribute('aria-current', 'page'); else r.removeAttribute('aria-current');
   }
-  const q = sideBox.querySelector<HTMLInputElement>('.v2-ss-qin');
+  const q = document.querySelector<HTMLInputElement>('input[data-src-q]');
   if (q && document.activeElement !== q) q.value = (at && at.sel.q) || '';
 }
 
@@ -355,7 +385,10 @@ async function uploadFiles(files: File[]): Promise<void> {
   if (!ok) return;
   toast(`${ok}개를 올렸습니다 — 올린 순간부터 AI 가 읽을 수 있어요.`);
   treeCache = null; sideCounts = {};
-  void paintSide();
+  if (sideBodyEl && document.contains(sideBodyEl)) {
+    const box = sideBodyEl;
+    void fetchTree().then((nodes) => { if (document.contains(box)) fillSideBody(box, nodes); }).catch(() => { /* 다음 그리기에 온다 */ });
+  }
   if (view && mounted && document.contains(mounted)) { const k = view.key; view = null; drawFor(mounted, location.hash || '#/sources' + (k ? '?' + k : '')); }
 }
 
@@ -423,7 +456,7 @@ function crumbParts(sel: SrcSel): Node[] {
 async function loadList(v: View, reset: boolean, offset = 0): Promise<void> {
   if (reset) { busy(v.listBox, el('div', { class: 'v2-src-skel' })); v.moreBox.replaceChildren(); }
   try {
-    const qs = selQuery(v.sel, { limit: String(PAGE), offset: String(offset) });
+    const qs = selQuery(v.sel, { limit: String(PAGE), offset: String(offset), fold: 'true' });
     const r: any = await api('/api/ui/sources?' + qs);
     if (view !== v) return;                                // 그 사이 다른 자리로 갔다
     const entries: SrcRow[] = (r && r.entries) || [];
@@ -436,7 +469,12 @@ async function loadList(v: View, reset: boolean, offset = 0): Promise<void> {
         return;
       }
     }
-    for (const s of entries) v.listBox.append(rowOf(s, v.sel));
+    for (const s of entries) {
+      const row = rowOf(s, v.sel);
+      if (isNoise(s)) { row.classList.add('noise'); row.hidden = !v.noiseOpen; v.noiseN++; }
+      v.listBox.append(row);
+    }
+    paintNoiseLine(v);
     const shown = offset + entries.length;
     if (r && r.has_more) {
       const btn = el('button', { class: 'btn btn-sm', type: 'button', text: `더 보기 (${shown}/${total})` });
@@ -447,11 +485,27 @@ async function loadList(v: View, reset: boolean, offset = 0): Promise<void> {
     }
     if (reset) {
       if (v.selId) setSelected(v.selId);
-      else if (entries.length) autoSelect(entries[0].id);
+      else {
+        const first = entries.find((e) => !isNoise(e)) || entries[0];   // 열람실 첫 장이 봇 알림이면 방이 잘못 읽힌다
+        if (first) autoSelect(first.id);
+      }
     }
   } catch (e: any) {
     if (view === v && reset) v.listBox.replaceChildren(errorNote(e, '자료를 불러오지 못했습니다'));
   }
+}
+
+/** 「사소한 것 n건」 줄 — 접힌 잡음의 유일한 손잡이. 더 불러올 때마다 수만 다시 쓴다. */
+function paintNoiseLine(v: View): void {
+  if (!v.noiseN) { v.noiseBtn?.remove(); v.noiseBtn = null; return; }
+  const btn = v.noiseBtn || el('button', { class: 'v2-srl-noiseln', type: 'button', onclick: () => {
+    v.noiseOpen = !v.noiseOpen;
+    for (const r of v.listBox.querySelectorAll<HTMLElement>('.v2-srl-row.noise')) r.hidden = !v.noiseOpen;
+    paintNoiseLine(v);
+  } });
+  v.noiseBtn = btn;
+  btn.textContent = v.noiseOpen ? `사소한 것 ${v.noiseN}건을 함께 보는 중 — 접기` : `사소한 것 ${v.noiseN}건 — 봇 알림·한 줄짜리`;
+  v.listBox.append(btn);   // 늘 목록 맨 끝(새 행이 뒤에 붙어도 줄이 그 아래로 내려온다)
 }
 
 function emptyText(sel: SrcSel): string {
@@ -476,7 +530,8 @@ function metaOf(sel: SrcSel, r: SrcRow): string {
     return [f.number ? '#' + f.number : '', st, who, when].filter(Boolean).join(' · ');
   }
   if (sys === 'slack' || sys === 'discord') {
-    return [(!sel.container && containerOf(r)) ? '#' + containerOf(r) : '', who, when].filter(Boolean).join(' · ');
+    return [(!sel.container && containerOf(r)) ? '#' + containerOf(r) : '', who,
+      r.reply_n ? `답글 ${r.reply_n}` : '', when].filter(Boolean).join(' · ');
   }
   if (sys === 'authored') return [kindLabel(r.kind), when].filter(Boolean).join(' · ');
   return [sysLabel(sys) + (containerOf(r) ? ' · ' + containerOf(r) : ''), who, when].filter(Boolean).join(' · ');
