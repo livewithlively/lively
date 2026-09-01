@@ -40,7 +40,8 @@ import { effectiveStoragePolicy } from "../org/policies/storage-policy.js";
 import { loadStoragePolicy, loadCallLogPolicy } from "../org/policies/runtime-loaders.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { reapSessionLogs, backfillSessionTitles } from "../v6/session-log-store.js";
-import { reapIdleSessions } from "../sessions/session-reaper.js"; // #1059 F — idle 세션 자동 회수(정책 0=끔 기본)
+// #1059 F 유휴 회수(테넌트 · 순회 대상) + #1220 압박 회수(박스 전역 · 스스로 순회). 정책 0=끔 기본.
+import { reapIdleSessions, reapPressureSessions } from "../sessions/session-reaper.js";
 import { sweepAwaitingNotifications } from "../sessions/awaiting-notifier.js"; // #1891 — 세션이 답을 기다리게 되면 알림
 import { backfillSessionStates } from "../sessions/session-state-backfill.js"; // #1059 F 후속 — 레코드 없는 라이브 세션에 desired-state 미러
 import { ensureSharedCache } from "../ops/build-cache.js";
@@ -351,18 +352,19 @@ function startBackgroundSweeps(): void {
   //   백필이 먼저 돌면 그 세션들이 '회수해도 복원 가능한' 상태가 되어 F 가 실제로 작동한다(고객사 A 실측:
   //   라이브 38건 중 19건이 레코드 없음 = 회수 면역). 판정 시각은 tmux 메타(작업·열람)를 그대로 쓰므로
   //   갓 백필한 세션이 곧바로 회수되지는 않는다(활동이 최근이면 보존).
-  //  ⚠⚠ **회수(`reapIdleSessions`)만 순회에서 뺀다.** 이유는 "남의 세션이 죽어서"가 **아니다** —
-  //   비-primary 는 정책이 전부 기본값(`idle_ttl=0`·`pressure_*=0`)이라 오늘은 조기 반환하는 no-op 이다
-  //   (실측 2026-09-01 dev: `org_runtime_config.session_reclaim_policy` 가 95곳 전부 `{}`).
+  //  ⚠⚠ **두 축은 스코프가 달라서 배선이 갈린다**(#2509 — 종전엔 한 함수라 통째로 순회에서 빠져 있었다).
+  //    · 유휴 축(`reapIdleSessions` · `idle_ttl_minutes`) — 워크스페이스의 성질이다 → **순회한다.**
+  //    · 압박 축(`reapPressureSessions` · `pressure_*`) — **박스의 성질**이다(`/proc` 의 물리·스왑)
+  //      → **순회에 얹지 않는다.** 이 함수가 스스로 워크스페이스를 돈다. 감싸면 스왑이 임계를 넘는 순간
+  //      워크스페이스 수만큼의 tick 이 같은 전역 신호를 읽고 일제히 완화 TTL 로 회수한다 —
+  //      어느 회수도 압박을 덜기 전에. **전역 트리거를 테넌트마다 곱하는 꼴**이다.
+  //      (primary 실측 2026-09-01: `pressure_swap_pct=90` 으로 **켜져 있다** — 가상의 위험이 아니다.)
+  //   `SweepJob.scope: "tenant" | "global"` 이 이미 쓰던 어휘 그대로다 — 새 개념을 만들지 않았다.
   //
-  //   진짜 이유는 **축이 섞여 있다**는 것이다. 이 함수는 트리거 둘을 한 몸에 용접해 놨다:
-  //    · 유휴 축(`idle_ttl_minutes`) — 워크스페이스의 성질이다. 순회가 맞다.
-  //    · **압박 축**(`pressure_used_pct`·`pressure_swap_pct`) — **박스의 성질**이다(`/proc` 의 물리·스왑).
-  //   순회를 붙이면 스왑이 임계를 넘는 순간 **워크스페이스 수만큼의 tick 이 같은 전역 신호를 읽고**
-  //   일제히 완화 TTL(primary 는 15분)로 회수한다 — 어느 회수도 압박을 덜기 전에. 전역 트리거를
-  //   테넌트마다 곱하는 꼴이다(primary 실측: `pressure_swap_pct=90` 으로 **켜져 있다**).
-  //   `SweepJob.scope: "tenant" | "global"` 이 이미 가진 구분이 여기선 함수 **안**에 갇혀 있다.
-  //   → 순회하려면 먼저 두 축을 갈라야 한다. 그건 한 줄 배선이 아니라 설계 변경이다(#2509).
+  //  ⓘ 압박 회수는 **여러 자리에서 불린다**(여기 5분 타이머 · 매니지드는 CP 의 테넌트별 틱). 호출 수만큼
+  //   전역 스윕이 돌면 이름만 바꿔 같은 곱셈이 되므로, 그 함수가 **시간으로 스스로 잠근다**
+  //   (`PRESSURE_SWEEP_MIN_INTERVAL_MS`). 여기 주기는 종전 그대로 5분이다 — 압박 임계 상한 90 의 근거가
+  //   "5분 tick 동안 4%p 를 더 먹으면 earlyoom 이 이긴다"라, 주기를 바꾸면 그 계산이 흔들린다.
   //
   //   짝인 백필은 순회한다 — 위 주석대로 백필이 **먼저** 돌아야 회수가 애초에 작동하기 때문이다.
   //  ⚠ 아웃박스에도 **부팅 1회**를 둔다(50초). 5분 인터벌만으로는 부족하다 — **재기동이야말로 배달 루프를
@@ -374,7 +376,9 @@ function startBackgroundSweeps(): void {
   setInterval(() => {
     void perTenant("outbox", () => import("../sessions/session-outbox.js").then(({ resumeOutbox }) => resumeOutbox()));
     void perTenant("session-state-backfill", () => backfillSessionStates())
-      .then(() => reapIdleSessions())
+      .then(() => perTenant("idle-reap", () => reapIdleSessions()))
+      //  ⚠ 압박 축은 순회 **밖**이다(위 머리말) — 스스로 워크스페이스를 돈다.
+      .then(() => reapPressureSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
   // #1891 — "하네스가 작업을 마치고 유저의 액션을 필요로 하는 상태가 되면 알림".
