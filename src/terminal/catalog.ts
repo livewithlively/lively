@@ -265,6 +265,12 @@ export const HARNESSES: Harness[] = [
 ];
 
 export interface SessionInfo {
+  /**
+   * 이 세션이 **어느 모드로 떴나**(#2439) — 없으면 배포 기본을 따른다.
+   *  ⚠ 화면(runtimeMode)과 배달(deliver-prompt)이 **같은 값**을 봐야 한다. 갈리면 pane 은 셸인데
+   *   대화는 아무도 안 받는 세션이 된다(2026-09-01 실측).
+   */
+  runtimeChoice?: "chat" | "terminal";
   id: string; label: string; harness: string; dir: string; autoApprove: boolean;
   owner: string; owned: boolean; created: number; attached: boolean;
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
