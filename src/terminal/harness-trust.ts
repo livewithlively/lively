@@ -1,4 +1,10 @@
-// 우리가 만든 세션 폴더를 **미리 신뢰해 둔다**(#1631) — 첫 실행 프롬프트가 첫 지시를 삼키던 것.
+// 우리가 만든 세션 폴더를 **미리 신뢰해 둔다**(#1631·#2478) — 첫 실행 프롬프트가 첫 지시를 삼키던 것.
+//
+//  ⚠ 하네스마다 **자리도 형식도 다르다**(#2478 — 그래서 «같은 규칙» 이 저절로 따라오지 않는다):
+//   · claude      — `<CLAUDE_CONFIG_DIR|홈>/.claude.json` 의 `projects[<경로>].hasTrustDialogAccepted = true` (맵)
+//   · antigravity — `<홈>/.gemini/antigravity-cli/settings.json` 의 `trustedWorkspaces[]` 에 경로 추가 (배열)
+//   antigravity 는 설정 자리를 바꾸는 **환경변수가 없다**(#1689 실측) — 늘 그 홈의 `.gemini` 다.
+//   claude 는 `CLAUDE_CONFIG_DIR` 로 옮겨지므로 파일 경로는 **호출자가 계산해 넘긴다**(여기서 짐작하지 않는다).
 //
 //  ── 무엇이 죽었나 (실측 2026-08-31, dev) ──
 //  대화형 세션은 라이블리가 **방금 만든** 빈 폴더에서 `claude` 를 띄운다. 그러면 Claude Code 의 첫 실행
@@ -23,8 +29,11 @@
 //   «Not logged in» 입력칸에 떨어진다). 여기서 없애는 물음은 «폴더 신뢰» 하나뿐이다.
 //  비치명이어야 한다 — 실패해도 세션은 떠야 한다(같은 부류의 선례: ensureGitSafeDirectory(#522)).
 
-/** 신뢰 표식 키 — Claude Code 가 `~/.claude.json`(또는 CLAUDE_CONFIG_DIR/.claude.json)에 쓰는 이름. */
+/** claude 의 신뢰 표식 키 — Claude Code 가 `~/.claude.json`(또는 CLAUDE_CONFIG_DIR/.claude.json)에 쓰는 이름. */
 export const TRUST_KEY = "hasTrustDialogAccepted";
+
+/** antigravity 의 신뢰 목록 키 — `~/.gemini/antigravity-cli/settings.json` 의 절대경로 배열(실측 agy 1.1.x). */
+export const AGY_TRUST_KEY = "trustedWorkspaces";
 
 /** 판정 결과. `write:false` = 이미 신뢰돼 있거나 할 일이 없다(파일을 건드리지 않는다). */
 export type TrustPatch = { write: false } | { write: true; text: string };
@@ -40,7 +49,7 @@ export type TrustPatch = { write: false } | { write: true; text: string };
  *  · 다른 프로젝트 항목·같은 항목의 다른 키·최상위 다른 키는 **그대로 보존**한다.
  *  · 읽을 수 없는 내용(깨진 JSON·배열·문자열)이면 새로 만든다 — 그 파일은 claude 도 못 읽으므로 잃을 것이 없다.
  */
-export function planTrustPatch(current: string | null, dir: string): TrustPatch {
+export function planTrustPatch(current: string | null, dir: string): TrustPatch {   // = claude
   const target = String(dir ?? "").trim();
   if (!target) return { write: false };   // 경로가 없으면 할 일이 없다
 
@@ -72,6 +81,47 @@ export function planTrustPatch(current: string | null, dir: string): TrustPatch 
   return { write: true, text: `${JSON.stringify({ ...root, projects }, null, 2)}\n` };
 }
 
+/**
+ * antigravity 의 신뢰 목록에 경로를 넣은 새 파일 내용을 만든다(**순수** — 파일시스템 무접촉).
+ *
+ * claude 와 형식이 다르다: 맵이 아니라 **절대경로 배열**(`trustedWorkspaces`). 실측한 파일에는
+ *  `model`·`permissions` 같은 **사람의 설정이 함께 산다** — 그래서 그 키들을 반드시 보존한다.
+ *
+ * 규칙(claude 판과 대칭):
+ *  · 이미 목록에 있으면 `{write:false}` — 멱등.
+ *  · 목록이 배열이 아니면(없음·깨짐) 새 배열로 시작하되, **다른 최상위 키는 그대로 둔다.**
+ *  · 배열 안의 문자열 아닌 항목은 버린다(그 CLI 도 못 읽는 값이고, 남기면 우리가 쓴 파일이 더 깨진다).
+ *  · 읽을 수 없는 최상위(깨진 JSON·배열·문자열)면 새로 만든다 — 그 파일은 agy 도 못 읽으므로 잃을 것이 없다.
+ */
+export function planAgyTrustPatch(current: string | null, dir: string): TrustPatch {
+  const target = String(dir ?? "").trim();
+  if (!target) return { write: false };
+
+  let root: Record<string, unknown> = {};
+  if (current != null && current.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(current);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) root = parsed as Record<string, unknown>;
+    } catch { /* 깨졌다 — 아래에서 새로 만든다 */ }
+  }
+
+  const raw = root[AGY_TRUST_KEY];
+  const list: string[] = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : [];
+  if (list.includes(target)) return { write: false };   // 이미 신뢰됨 — 쓰지 않는다
+
+  return { write: true, text: `${JSON.stringify({ ...root, [AGY_TRUST_KEY]: [...list, target] }, null, 2)}\n` };
+}
+
+/**
+ * 하네스별 «그 파일을 어떻게 고치는가». 자리(파일 경로)는 하네스마다 기준이 달라 **호출자가 계산한다**
+ *  (claude 는 CLAUDE_CONFIG_DIR 로 옮겨지고, antigravity 는 늘 그 홈의 `.gemini` 다).
+ *  여기 없는 하네스는 **아무것도 하지 않는다** — 표식 자리를 모르는 하네스에 대고 짐작해 쓰지 않는다.
+ */
+export const TRUST_PLANS: Readonly<Record<string, (current: string | null, dir: string) => TrustPatch>> = {
+  claude: planTrustPatch,
+  antigravity: planAgyTrustPatch,
+};
+
 /** 파일 접근 seam — 비격리는 직접 fs, 격리·중계(매니지드)는 멤버 uid 로 도는 구현을 넘긴다. */
 export interface TrustIo {
   read(path: string): Promise<string | null>;
@@ -85,12 +135,15 @@ export interface TrustIo {
  *   거짓이면 파일을 **읽지도 쓰지도 않는다**: 사람이 고른 폴더는 그 사람이 대화상자에서 직접 답해야 한다.
  *   판정을 여기서 하지 않는 이유는 이 파일이 노드 번들에도 실리는 순수 모듈이라서다 — 판정의 파생지는
  *   `session-create-guards.autoTrustWorkspace` 하나이고, 화면 수락층도 같은 값을 쓴다.
+ * @param harness 하네스 키 — `TRUST_PLANS` 에 없으면 **아무것도 하지 않는다**(표식 자리를 모르는 하네스).
  * @returns 실제로 썼으면 true
  */
-export async function ensureFolderTrusted(io: TrustIo, configFile: string, dir: string, allowed: boolean): Promise<boolean> {
+export async function ensureFolderTrusted(io: TrustIo, configFile: string, dir: string, allowed: boolean, harness: string): Promise<boolean> {
   if (!allowed) return false;   // 사람의 폴더 — 대신 누르지 않는다(종전대로 대화상자가 뜬다)
+  const plan = TRUST_PLANS[harness];
+  if (!plan) return false;      // 표식 자리를 모르는 하네스 — 짐작해 쓰지 않는다
   try {
-    const patch = planTrustPatch(await io.read(configFile), dir);
+    const patch = plan(await io.read(configFile), dir);
     if (!patch.write) return false;
     await io.write(configFile, patch.text);
     return true;

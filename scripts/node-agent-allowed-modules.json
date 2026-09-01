@@ -55,7 +55,7 @@
   "dist/sessions/session-state.js",
   "dist/sessions/transcript-range.js",
   "dist/terminal/catalog.js",
-  "dist/terminal/claude-trust.js",
+  "dist/terminal/harness-trust.js",
   "dist/terminal/codex-chat-mode.js",
   "dist/terminal/codex-chat-thread.js",
   "dist/terminal/harness-io/adapter.js",
