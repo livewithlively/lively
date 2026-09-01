@@ -45,26 +45,22 @@ export function harnessSupportsChat(harness: string): boolean {
 /**
  * 배포 기본값 — `LIVELY_SESSION_RUNTIME=chat|terminal`.
  *
- *  ── 기본은 **chat** 이다 — 전제를 채운 뒤에 뒤집었다 (2026-09-01) ─────────────
- *  이 한 줄은 하루에 **세 번** 바뀌었다. 그 자취를 남긴다 — 순서를 틀리면 같은 사고가 난다.
- *   ① terminal(원래) → ② chat 으로 뒤집음 → ③ **되돌림** → ④ 전제를 채우고 다시 chat.
+ *  ── ★★ 기본은 **terminal** 이다 — 두 번 뒤집었고 두 번 다 사고였다 (2026-09-01) ──
+ *  자취: terminal → chat(사고) → terminal → chat(사고) → **terminal**.
  *
- *  ②가 왜 사고였나: chat 모드는 «pane 이 셸» 이 전제인데(paneIsShell), 세션 생성이 그대로
- *  하네스 TUI 를 띄우고 있었다. 그래서 **한 대화에 하네스가 둘** 붙었다 — pane 의 TUI 와, 웹
- *  프롬프트가 깨우는 헤드리스 런타임. 사람 눈에는 «선택지가 대화창에 안 뜨고(TUI 가 쥔다)
- *  시간만 올라가는» 화면이 됐다(실측 box-yoon-a7da7c38).
+ *  두 번째 사고(상민님 실측 신고): pane 을 셸로 여는 전제는 채웠는데, **대화창이 그 세션의 말을
+ *  못 받았다.** 그래서 사람은 TUI 도 없고 대화창도 죽은 화면을 봤고, 터미널에 친 말은 zsh 가 받아
+ *  `command not found: 안녕` 이 됐다. 이 파일이 경고하던 바로 그 조합이다 —
+ *  «pane 은 셸인데 대화창은 아무것도 못 받는 빈 화면(가장 나쁜 조합)».
  *
- *  ④에서 채운 전제:
- *   · 세션 생성이 chat 모드면 pane 을 **셸로** 연다(catalog.chatRuntimePaneArgv · sessions.ts).
- *   · 선택지(AskUserQuestion)가 대화창에서 **고를 수 있게** 됐다 — 그게 TUI 가 쥐던 마지막 자리였다.
- *   · 커버리지가 값으로 지켜진다(harness-io/coverage.ts) — 못 하는 축은 화면이 말한다.
+ *  ⚠ **내가 화면으로 확인하지 않고 뒤집었다.** 값 테스트 487건이 초록이어도 그건 «그 경로를
+ *   돌려 봤다» 가 아니다. 다시 뒤집으려면 **실제 세션을 만들어 말을 걸어 답이 오는 것까지**
+ *   눈으로 본 뒤에 한다. 그 전에는 이 줄을 건드리지 않는다.
  *
- *  ⚠ 되돌리는 길은 **env 하나**다: `LIVELY_SESSION_RUNTIME=terminal`. 배포에서 문제가 보이면
- *   코드를 고치지 말고 그 값을 세운다.
- *  ⚠ 이 값이 chat 이어도 **감당 못 하는 하네스·로그인 세션은 여전히 terminal** 이다.
+ *  ⚠ codex 는 이 값과 **무관**하다 — codexChatMode 라는 자기 축으로 app-server 를 쓴다.
  */
 export function sessionRuntimeDefault(env: NodeJS.ProcessEnv = process.env): SessionRuntimeMode {
-  return String(env.LIVELY_SESSION_RUNTIME || "").trim().toLowerCase() === "terminal" ? "terminal" : "chat";
+  return String(env.LIVELY_SESSION_RUNTIME || "").trim().toLowerCase() === "chat" ? "chat" : "terminal";
 }
 
 /**
