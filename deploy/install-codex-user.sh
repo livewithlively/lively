@@ -12,7 +12,7 @@ set -euo pipefail
 #
 #  그래서 두 가지를 한다:
 #   ① `~/.npmrc` 의 prefix 를 `$HOME/.npm-global` 로 — codex 의 자동 업데이트가 **자기 홈**에 쓰므로 성공한다.
-#      이 경로는 box-spawn 이 PATH 에 이미 넣어둔 자리다(box-spawn 머리주석 "~/.npm-global/bin — 멤버 npm 전역").
+#      이 경로는 세션 env 정본(deploy/linux/session-env.sh ②)이 PATH 에 이미 넣어둔 자리다.
 #      자리는 예약돼 있었는데 prefix 를 그 값으로 설정하는 코드가 없어 npm prefix 가 /usr 로 남아 있었다.
 #   ② 그 prefix 로 codex 를 1회 설치 — 이후는 codex 가 스스로 최신화한다(claude 와 같은 그림).
 #

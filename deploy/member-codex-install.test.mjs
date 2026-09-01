@@ -15,7 +15,9 @@ const helper = read("install-codex-user.sh");
 const provision = read("provision-member.sh");
 const refresh = read("refresh-member-kits.sh");
 const isolation = read("linux", "install-isolation.sh");
-const boxSpawn = read("linux", "box-spawn");
+//  PATH 정본은 session-env.sh 다 — #2258 이동 2(a08cb18f)로 box-spawn 이 손으로 적던 신원·PATH·로케일이
+//   이 한 벌로 모였다. 여기를 봐야 세 표면(box-spawn·매니지드·노드)이 실제로 쓰는 순서를 잠근다.
+const sessionEnv = read("linux", "session-env.sh");
 
 // 주석이 아닌 실제 명령 라인만 — 설명 주석의 명령어 언급에 오탐되지 않게(provision-member-order 와 같은 규약).
 const codeLines = (src) => src.split(/\r?\n/).filter((l) => !l.trimStart().startsWith("#"));
@@ -49,12 +51,16 @@ assert.ok(inCode(helper, /runuser -u "\$U"/), "설치 쓰기는 멤버 uid 로 �
 
 // ── ② PATH: 멤버 소유 bin 이 시스템보다 먼저여야 홈 codex 가 실제로 쓰인다 ────────
 //  이 순서가 뒤집히면 홈에 깔아도 /usr/bin/codex(스테일·자동업뎃 실패)가 계속 실행된다.
-const pathLine = codeLines(boxSpawn).find((l) => /export PATH=/.test(l));
-assert.ok(pathLine, "box-spawn 에 PATH export 존재");
-const iNpmGlobal = pathLine.indexOf("$HOME/.npm-global/bin");
-const iUsrBin = pathLine.indexOf("/usr/bin");
-assert.ok(iNpmGlobal >= 0, "box-spawn PATH 에 ~/.npm-global/bin 이 있어야 한다(멤버 npm 전역 자리)");
-assert.ok(iNpmGlobal < iUsrBin, "~/.npm-global/bin 은 /usr/bin 보다 앞이어야 한다(스테일 시스템 codex 를 가린다)");
+//  ⚠ export PATH 라인이 **둘**이다(상속 PATH 를 이어받는 경로와 아닌 경로) — 하나만 보면 나머지 경로에서
+//   순서가 뒤집혀도 초록이다. 전부 단언한다.
+const pathLines = codeLines(sessionEnv).filter((l) => /export PATH=/.test(l));
+assert.ok(pathLines.length > 0, "session-env.sh 에 PATH export 존재");
+for (const pathLine of pathLines) {
+  const iNpmGlobal = pathLine.indexOf(".npm-global/bin");
+  const iUsrBin = pathLine.indexOf("/usr/bin");
+  assert.ok(iNpmGlobal >= 0, `session-env.sh PATH 에 ~/.npm-global/bin 이 있어야 한다(멤버 npm 전역 자리): ${pathLine.trim()}`);
+  assert.ok(iNpmGlobal < iUsrBin, `~/.npm-global/bin 은 /usr/bin 보다 앞이어야 한다(스테일 시스템 codex 를 가린다): ${pathLine.trim()}`);
+}
 
 // ── ③ libexec 설치 · ④ 프로비저닝 호출 · ⑤ 기존 멤버 백필 ────────────────────────
 assert.ok(inCode(isolation, /install-codex-user\.sh".*libexec\/install-codex-user/),
