@@ -11,7 +11,7 @@
 //  전 세션의 대화 파일을 훑어 늘 제일 늦게 오는데, 그거 하나 때문에 지식·프로젝트 결과가 1초씩 멈춰 서면 못 쓴다.
 //  · 지식      GET /api/ui/knowledge/semantic  (임베딩 off 면 서버가 grep 으로 폴백)
 //  · 프로젝트  GET /api/ui/v6/projects/semantic (같은 규약)
-//  · 자료      GET /api/ui/sources?q=
+//  · 자료      GET /api/ui/sources?q=  → 결과는 자료 앱 상세(#/sources/<id>)로 연다
 //  · 세션이력  GET /api/ui/terminal/prompts/search  (내가 접근 가능한 세션의 '내가 시킨 말')
 //  · 세션·화면 셸이 이미 쥐고 있는 목록에서 즉시(네트워크 0) — 첫 글자에 바로 뭔가 보이는 건 이 둘이다.
 //  공개범위는 **전부 서버가 시행한다**(#1291) — 여기서 거르지 않는다.
@@ -564,7 +564,7 @@ export function omniOpen(seed?: string): void {
         kind: 'src' as const, key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),
         sub: [s.kind, (s.fields && s.fields.container_name) ? '#' + s.fields.container_name : ''].filter(Boolean).join(' · '),
         // 자료엔 단독 주소가 없다 — 자료 목록을 그 검색어로 연 뒤 그 자료를 펴 준다(web/wiki.ts renderSources).
-        href: '#/knowledge/sources?q=' + qs + '&src=' + s.id,
+        href: '#/sources/' + s.id,   // #2423 — 자료 상세는 제 주소를 갖는다(옛 '목록+오버레이' 조합을 대체)
       })), my), () => put('src', [], my));
     });
     // 세션 이력 = 그 세션에 **내가 시킨 말**. 전 세션의 대화 파일을 훑으므로 늘 제일 늦게 온다(그래서 따로 그린다).

@@ -19,16 +19,42 @@ const RECENT_WINDOW = 10;
 
 export interface ProbeRun { key: string; ok: boolean; configured: boolean; reason: string | null; durationMs: number }
 
+/** http_direct 상한 — 상류 스크립트는 수십 KB 다. 넘치면 앞부분만 본다(지문은 늘 앞에 있다). */
+const DIRECT_TIMEOUT_MS = 15_000;
+const DIRECT_BODY_CAP = 200_000;
+
+/**
+ * 프록시 없는 상류를 **그대로** 받아 본다 — 자격도 우리 계층도 없다(회원 기계의 `curl`/`irm` 과 같은 길).
+ *
+ * ⚠ **BOM 을 지우지 않는다.** `res.text()` 는 규격상 UTF-8 디코드를 하며 **선행 BOM 을 삼킨다** — 그대로 쓰면
+ *  BOM 단언(SCRIPT_ROT_MARKERS)이 영영 초록이 되어, #1087(윈도우 신규 설치 전면 차단)과 **같은 고장에
+ *  눈이 먼 채 «감시하고 있다»고 믿게 된다.** 그래서 바이트를 받아 `ignoreBOM: true` 로 직접 디코드한다.
+ */
+async function fetchDirect(url: string): Promise<{ isError: boolean; text: string }> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), DIRECT_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ctl.signal, redirect: "follow" });
+    const buf = await res.arrayBuffer();
+    const text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(buf.slice(0, DIRECT_BODY_CAP));
+    if (!res.ok) return { isError: true, text: `HTTP ${res.status} ${res.url}: ${text.slice(0, 300)}` };
+    return { isError: false, text };
+  } finally { clearTimeout(timer); }
+}
+
 /** 프로브 1개 실행 — 어댑터 경로를 그대로 태워 {isError, text} 로 정규화한 뒤 판정에 넘긴다. */
 export async function runProbe(probe: CanaryProbe, callerId: string): Promise<ProbeRun> {
   const started = Date.now();
   let raw: { isError: boolean; text: string };
   try {
     if (probe.adapter === "mcp_proxy") {
-      const r = await callProxyTool(probe.target.server as string, probe.target.tool, probe.args, callerId);
+      const r = await callProxyTool(probe.target.server as string, probe.target.tool as string, probe.args, callerId);
       raw = { isError: r.isError, text: textOf(r.content) };
+    } else if (probe.adapter === "http_direct") {
+      // 프록시 경로가 **없는** 상류(하네스 설치기 #2255) — 그쪽은 회원의 curl 이 직접 친다. probes.ts 머리말 참조.
+      raw = await fetchDirect(probe.target.url as string);
     } else {
-      const tool = await getTool(probe.target.tool);
+      const tool = await getTool(probe.target.tool as string);
       if (!tool) raw = { isError: true, text: `org_tool '${probe.target.tool}' 이 없습니다(프리셋 미적용?)` };
       else if (!tool.enabled) raw = { isError: true, text: `org_tool '${probe.target.tool}' 이 꺼져 있습니다` };
       else {

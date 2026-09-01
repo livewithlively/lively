@@ -469,6 +469,20 @@ export function liveAttachCount(): number {
 const ATTACH_SIG = /tmux\b.*\battach\b.*\s-t\s+box-[a-z0-9-]+/;
 
 /**
+ * 하네스가 세션마다 띄우는 stdio MCP 서버의 시그니처 (#2213).
+ *
+ * 왜 여기서 같이 세나: 이 파일은 이미 `ps` 를 한 번 돌린다 — 축을 하나 얹는 비용이 0 이다.
+ * 왜 세야 하나(2026-08-28 dev 맥미니 실측): 하네스가 죽어도 이 자식들이 안 죽어 **고아 19개가
+ * CPU 1,540%(코어 9.4개)** 를 태우고 있었고, 최장 1일 11시간이었다. 그런데 **어떤 화면에도 안 떴다** —
+ * 세션 회수(리퍼)는 tmux 세션만 세므로 그 바깥의 프로세스는 원리적으로 안 잡힌다.
+ * 프로세스 자체의 자기종료가 1차 방어이고(kit/cli/lively-mcp-gateway.mjs §피어), 이 축은 그게
+ * 새는지 보는 눈이다.
+ *
+ * ⚠ ATTACH_SIG 와 같은 규약 — 나중에 자동 회수를 붙이면 **반드시 이 상수를 그대로** 써야 한다.
+ */
+export const ORPHAN_MCP_SIG = /(?:lively\.mjs\s+mcp(?:-local)?\b|lively-mcp-(?:gateway|local)\.mjs\b)/;
+
+/**
  * ps `etime`("[[dd-]hh:]mm:ss") → 초. 파싱 불가면 null.
  *
  * 리눅스 procps 의 `etimes`(초 단위)가 편하지만 **macOS ps 엔 없다** — 두 플랫폼 공통인 `etime` 을 파싱한다.
@@ -487,6 +501,10 @@ export interface AttachProcs {
   orphans: number;
   /** 자식 중 **가장 오래된** attach 의 나이(초). 하나도 없거나 못 재면 null. */
   oldestChildSec: number | null;
+  /** 부모를 잃은(PPID=1) stdio MCP 서버 수 (#2213). 0 이 아니면 그 자체로 릭이다 — 아무도 말을 걸 수 없는 프로세스다. */
+  orphanMcp: number;
+  /** 그 고아 MCP 중 가장 오래된 것의 나이(초). 나이가 길수록 «오래 안 보였다»는 뜻이라 경보 판정의 핵심. */
+  oldestOrphanMcpSec: number | null;
 }
 
 /**
@@ -503,15 +521,23 @@ export interface AttachProcs {
  * ps 가 `etime` 컬럼을 안 주는 환경도 견딘다 — 3번째 토큰이 etime 으로 안 읽히면 거기부터 args 로 본다.
  */
 export function summarizeAttachProcs(stdout: string, selfPid: number): AttachProcs {
-  let children = 0, orphans = 0;
+  let children = 0, orphans = 0, orphanMcp = 0;
   let oldestChildSec: number | null = null;
+  let oldestOrphanMcpSec: number | null = null;
   for (const line of stdout.split("\n")) {
     const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/);
     if (!m) continue;
     const pid = Number(m[1]), ppid = Number(m[2]);
     const ageSec = parseEtimeSec(m[3]);
     const cmd = ageSec === null ? `${m[3]} ${m[4]}` : m[4]; // etime 없는 ps → 3번째 토큰이 이미 args 의 첫 조각
-    if (pid === selfPid || !ATTACH_SIG.test(cmd)) continue;
+    if (pid === selfPid) continue;
+    // 고아 MCP 축 (#2213) — attach 와 **독립**이다(같은 ps 를 두 눈으로 본다).
+    //  ppid===1 만 센다: 부모가 살아 있는 것은 지금 그 세션이 쓰는 중이라 정상이다.
+    if (ppid === 1 && ORPHAN_MCP_SIG.test(cmd)) {
+      orphanMcp++;
+      if (ageSec !== null && (oldestOrphanMcpSec === null || ageSec > oldestOrphanMcpSec)) oldestOrphanMcpSec = ageSec;
+    }
+    if (!ATTACH_SIG.test(cmd)) continue;
     if (ppid === selfPid) {
       children++;
       if (ageSec !== null && (oldestChildSec === null || ageSec > oldestChildSec)) oldestChildSec = ageSec;
@@ -519,7 +545,7 @@ export function summarizeAttachProcs(stdout: string, selfPid: number): AttachPro
       orphans++;
     }
   }
-  return { children, orphans, oldestChildSec };
+  return { children, orphans, oldestChildSec, orphanMcp, oldestOrphanMcpSec };
 }
 
 /** 위 요약의 실측 판(ps 1회). 잴 수 없으면 null — 못 잰다고 경보하지 않는다(디스크·PTY 와 같은 규약). */

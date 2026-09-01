@@ -109,7 +109,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ws-person-face { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center;
   background: var(--bg-tint-2); color: var(--ink-sub); font-size: 10px; font-weight: 800; }
 /* 대기 중인 사람은 얼굴이 아직 없다 — 점선 테두리가 '아직 사람이 아니다'를 말한다(빈 원은 오류로 읽힌다). */
-.v2-ws-person-face.waiting { background: none; border: 1px dashed var(--muted-3); color: var(--muted-2); font-weight: 400; }
+.v2-ws-person-face.waiting { background: none; border: 1px dashed var(--muted-3-line); color: var(--muted-2); font-weight: 400; }
 .v2-ws-person-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 .v2-ws-person-tt b { font-size: 12.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-ws-person-tt span { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -233,10 +233,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 
 /* 스크롤 막대 — 기본 막대는 이 연한 캔버스 위에서 굵고 어둡게 튄다. 얇은 알약으로 바꾸고 **자리를 늘 차지하게**
    둔다(나타났다 사라지면 그때마다 목록 전체가 좌우로 흔들린다). 투명 테두리로 안쪽 여백을 만든다. */
-.v2-tree { flex: 1; min-height: 0; overflow-y: scroll; overflow-x: hidden; padding: 2px 10px 14px var(--side-x, 8px); scrollbar-width: thin; scrollbar-color: var(--muted-3) transparent; }
+.v2-tree { flex: 1; min-height: 0; overflow-y: scroll; overflow-x: hidden; padding: 2px 10px 14px var(--side-x, 8px); scrollbar-width: thin; scrollbar-color: var(--muted-3-line) transparent; }
 .v2-tree::-webkit-scrollbar { width: 10px; }
 .v2-tree::-webkit-scrollbar-track { background: transparent; }
-.v2-tree::-webkit-scrollbar-thumb { background: var(--muted-3); border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; }
+.v2-tree::-webkit-scrollbar-thumb { background: var(--muted-3-line); border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; }
 .v2-tree:hover::-webkit-scrollbar-thumb { background: var(--muted-2); background-clip: padding-box; }
 .v2-pj + .v2-pj { margin-top: 2px; }
 /* 카드(펼친 프로젝트)는 앞뒤로 더 띄운다 — 상자끼리 붙으면 한 덩어리로 뭉개진다. */
@@ -397,6 +397,18 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 1px 2px 12px; scrollbar-width: thin; scrollbar-color: transparent transparent; }
 .v2-app-list:hover { scrollbar-color: var(--line-strong) transparent; }
 /*  홈 — 시키는 칸 아래 최근에 연 앱 한 줄(#1954). 전체는 [모든 앱]이 런치패드로 연다. */
+/* 처음 설정 이어서 하기(#2171) — 시키는 칸 바로 아래 한 줄. 배너가 아니라 «있는지 없는지» 정도의 존재감:
+   홈의 첫 문장은 «무엇을 할까요?» 이고, 이 줄은 그 다음이어야 한다(끌고 가지 않기로 한 것의 짝). */
+.v2-home-resume { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 11px 13px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--bg-tint); text-decoration: none; color: inherit; }
+.v2-home-resume:hover { border-color: var(--blue); }
+.v2-home-resume-l { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 7px; background: var(--blue); color: #fff;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+.v2-home-resume-t { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.v2-home-resume-t b { font-size: 13px; font-weight: 650; }
+.v2-home-resume-t span { font-size: 12px; color: var(--muted); }
+.v2-home-resume-go { margin-left: auto; flex: 0 0 auto; font-size: 12.5px; font-weight: 650; color: var(--blue); }
+
 .v2-home-apps { margin-top: 26px; }
 .v2-home-apps-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .v2-home-apps-k { font-size: 12px; font-weight: 700; color: var(--muted); }
@@ -434,6 +446,13 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-app-inst-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 650; line-height: 1.4; }
 .v2-app-inst-ic { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .v2-app-inst:hover .v2-app-inst-ic, .v2-app-inst.on .v2-app-inst-ic { stroke: var(--ink-sub); }
+/* 지난 세션(#2208) — 오늘 쓰고 이미 끝난 행. **영역을 나누지 않고** 행이 스스로 말한다(원준 지시 2026-08-27):
+   묶음은 「오늘」 그대로 두고 아이콘·제목만 한 단계 낮춘 톤으로. ⚠ opacity 로 흐리지 않는다 — 그건 '꺼짐'이라
+   눌러도 안 열릴 것처럼 보이고, 지난 세션은 **이어서 할 수 있는 것**이다. 호버·선택 때는 제 색을 되찾는다. */
+.v2-app-inst--past .v2-app-inst-ic { stroke: var(--muted-2); }
+.v2-app-inst--past .v2-app-inst-title { font-weight: 600; color: var(--ink-sub); }
+.v2-app-inst--past:hover .v2-app-inst-title, .v2-app-inst--past.on .v2-app-inst-title { color: var(--ink); }
+.v2-app-inst--past:hover .v2-app-inst-ic, .v2-app-inst--past.on .v2-app-inst-ic { stroke: var(--muted); }
 /*  압정·닫기 — 첫 줄 오른쪽에 겹쳐 뜬다. 안 보일 땐 display:none 이라 **자리도 안 먹는다**(#1954 3차).
     호버·포커스나 이미 고정된 행에서만 보인다 — 늘 보이면 행마다 단추 둘이 늘어서 목록이 도구모음이 된다. */
 .v2-app-inst-close, .v2-app-inst-pin { position: absolute; top: 7px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;
@@ -693,6 +712,97 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .cn-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
 .cn-dot.on { background: var(--mint-deep); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
 .cn-extra { margin-top: 4px; padding-top: 18px; border-top: 1px solid var(--line-net); }
+/* ── #2243 안 2 «진열대» — 목록은 카드. 회색 로고 = 준비 중뿐, 켤 수 있는 앱은 제 색 + [연결] 버튼 ──
+   한글 소제목은 .v2-k(영문 대문자+자간) 대신 굵은 잉크 + 개수 + 힌트(#2202 C1 — 한글엔 uppercase 가 안 먹고 자모만 벌어진다). */
+.cn-gh { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.cn-gh b { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+.cn-gh .n { font-size: 12.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cn-gh .h { font-size: 12.5px; color: var(--muted); }
+.cn-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.cn-card { display: flex; flex-direction: column; gap: 10px; min-height: 150px; padding: 16px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); color: inherit; text-decoration: none; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease; }
+.cn-card:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.cn-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.cn-card-hd { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.cn-card-tt { min-width: 0; }
+.cn-card-nm { display: flex; align-items: center; gap: 7px; font-size: 14.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-card-st { font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-card-bl { margin: 0; flex: 1; font-size: 13px; color: var(--ink-sub); line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cn-card-ft { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cn-card-h { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-card-go { flex: none; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+.cn-card:hover .cn-card-go { color: var(--blue); }
+/*  준비 중 — «지금은 못 켠다»가 한눈에 보여야 한다(원준 2026-08-31). 점선·틴트만으로는 본문이 그대로 진해
+    다른 카드와 구별이 약했다. 이름·설명을 함께 죽이고 커서도 손모양을 주지 않는다(누를 것이 없다는 뜻).
+    ⚠ 로고는 이미 회색(.svc-tile.off — svcTile 이 st!=='soon' 으로 넘긴다)이고 hover 로도 살아나지 않게 막는다.
+    다만 카드 자체는 여전히 눌러서 상세로 갈 수 있다 — «왜 준비 중인지»를 거기서 읽는다. 그래서 완전 차단이 아니라
+    «지금은 켤 수 없다»만 말하는 정도로 둔다. */
+.cn-card.soon { background: var(--bg-tint); border: 1px dashed var(--line-net-2); cursor: default; }
+.cn-card.soon:hover { background: var(--bg-tint-2); border-color: var(--line-net-2); }
+.cn-card.soon .cn-card-nm { color: var(--muted-head); }
+.cn-card.soon .cn-card-bl, .cn-card.soon .cn-card-st { color: var(--muted-2); }
+.cn-card.soon .svc-tile { opacity: .55; }
+.cn-card.soon:hover .svc-tile.off svg { filter: grayscale(1); opacity: .5; }
+/*  준비 중인데 이미 연결해 둔 것 — 회색으로 죽이되 «살아 있다»는 신호(민트 점)는 남긴다. 완전히 꺼진 것처럼
+    보이면 사용자가 «내 구글이 끊겼나» 하고 오해한다. 실제로는 그대로 돌고 있다. */
+.cn-card.soon-on .svc-tile { opacity: .8; }
+.cn-card.soon-on .cn-card-nm { color: var(--ink-sub); }
+.cn-card.soon-on .cn-card-h { color: var(--mint-deep); font-weight: 600; }
+.cn-pill-soon { flex: none; display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; line-height: 1.6; color: var(--muted-head); background: var(--bg-tint-2); border: 1px dashed var(--line-net-2); white-space: nowrap; }
+.cn-sum-i.soon b { color: var(--muted-head); }
+.cn-soon-note { font-size: 13px; color: var(--ink-sub); line-height: 1.6; max-width: 60ch; }
+/* ── #2243 안 B «설정 패널» — 앱 상세: 왼쪽 목차 + 오른쪽 패널 셋. 모든 앱이 같은 틀 ── */
+.cn-settings { display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 28px; margin-top: 18px; align-items: start; }
+.cn-snav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
+.cn-snav-app { display: flex; align-items: center; gap: 10px; padding: 6px 8px 14px; margin-bottom: 6px; border-bottom: 1px solid var(--line-row); min-width: 0; }
+.cn-snav-app b { display: block; font-size: 15px; font-weight: 800; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cn-snav-app .s { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; line-height: 1.45; }
+.cn-sn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); text-align: left; cursor: pointer; }
+.cn-sn:hover { background: var(--bg-tint); }
+.cn-sn .v2-ic { width: 15px; height: 15px; color: var(--muted); }
+.cn-sn.on { background: var(--bg-punch); color: var(--blue); }
+.cn-sn.on .v2-ic { color: var(--blue); }
+.cn-sn .cn-dot { margin-left: auto; }
+.cn-sn.danger { color: var(--coral-text); margin-top: 10px; }
+.cn-panels { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.cn-panel { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; }
+.cn-ph { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line-row); }
+.cn-panel > .cn-ph:last-child { border-bottom: 0; }
+.cn-ph .tt { flex: 1; min-width: 0; }
+.cn-ph .t { font-size: 15px; font-weight: 800; color: var(--ink); }
+.cn-ph .s { font-size: 12.5px; color: var(--ink-sub); margin-top: 1px; line-height: 1.55; }
+.cn-fi { width: 36px; height: 36px; border-radius: 10px; background: var(--bg-punch); color: var(--blue); display: inline-grid; place-items: center; flex: none; }
+.cn-fi .v2-ic { width: 18px; height: 18px; }
+.cn-swwrap { display: inline-flex; align-items: center; gap: 10px; flex: none; }
+.cn-swl { font-size: 12.5px; color: var(--muted); }
+.cn-sw { appearance: none; -webkit-appearance: none; width: 40px; height: 23px; margin: 0; border: 0; border-radius: 999px; background: var(--muted-3-line); position: relative; cursor: pointer; flex: none; transition: background-color 150ms ease; }
+.cn-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 19px; height: 19px; border-radius: 50%; background: var(--on-fill); transition: left 150ms ease; }
+.cn-sw:checked { background: var(--blue-fill); }
+.cn-sw:checked::after { left: 19px; }
+.cn-sw:disabled { opacity: .55; cursor: not-allowed; }
+.cn-sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.cn-prows { display: contents; }
+.cn-srow { display: flex; align-items: center; gap: 14px; padding: 11px 18px; border-top: 1px solid var(--line-row); font-size: 13.5px; }
+.cn-panel > .cn-srow:first-of-type, .cn-prows > .cn-srow:first-child { border-top: 0; }
+.cn-srow .k { width: 120px; flex: none; color: var(--muted-head); font-weight: 600; font-size: 12.5px; }
+.cn-srow .k:empty { display: none; }
+.cn-srow .v { flex: 1; min-width: 0; color: var(--ink); line-height: 1.55; }
+.cn-srow .v .h { color: var(--muted); font-size: 12.5px; margin-left: 6px; }
+.cn-srow.note .v { color: var(--ink-sub); }
+.cn-srow.stack { flex-direction: column; align-items: stretch; gap: 8px; }
+.cn-srow.stack .cn-sec-form { margin-top: 0; }
+.cn-panel .cn-toggle { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink); }
+.cn-expand { padding: 6px 18px 14px; border-top: 1px solid var(--line-row); background: var(--bg-tint); }
+.cn-expand:empty { display: none; }
+.cn-dz-btn { color: var(--coral-text); }
+@media (max-width: 900px) {
+  .cn-settings { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .cn-snav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .cn-snav-app { width: 100%; border-bottom: 0; padding-bottom: 6px; }
+  .cn-sn { width: auto; }
+  .cn-sn.danger { margin-top: 0; }
+  .cn-srow { flex-wrap: wrap; }
+  .cn-srow .k { width: 100%; }
+}
 .cn-git-ic { width: 40px; height: 40px; flex: none; border-radius: 12px; background: var(--bg-tint-2); color: var(--muted); display: inline-grid; place-items: center; font-family: var(--mono, ui-monospace, monospace); font-size: 14px; font-weight: 700; }
 /* 상세 */
 .cn-back { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); text-decoration: none; }
@@ -739,8 +849,16 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-inbox-empty .h { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
 .v2-inbox-empty .sub { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
 .v2-find { padding: 4px var(--side-x, 8px) 2px; }
-.v2-find-in { width: 100%; height: var(--row-h, 34px); border: 1px solid var(--line); border-radius: 9px; padding: 0 11px; font: inherit; font-size: 13px; background: var(--bg); }
-.v2-find-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
+/*  치수는 **맨 윗줄 통합검색칸(.v2-omnib)과 같다**(원준 2026-08-31: "타이핑하는 텍스트박스가 엄청 크다 —
+    최상단 검색창이랑 같게"). 사이드바 행 격자(--row-h 34px)를 따르던 값이었는데, 이 칸은 목록의 행이 아니라
+    **검색칸**이라 닮아야 할 짝이 위의 그 칸이다: 28px · 반경 8 · 12.5px · 옅은 테두리(--line-net).
+    ⚠ 손가락 화면(≤900px)에서는 아래 미디어쿼리가 40px 로 되돌린다 — 그건 격자가 아니라 터치 표적 규칙이다. */
+/*  ⚠ `input.` 을 붙여야 먹는다 — 03-components 의 `input[type="search"]`(테두리·반경 9·14px)와 특이도를
+    맞춰야 뒤 파일인 여기가 이긴다. 클래스만 쓰면 글자·반경·테두리가 조용히 그 기본값으로 되돌아간다
+    (실측: 종전 `font-size: 13px` 도 이미 죽어 14px 로 그려지고 있었다). */
+input.v2-find-in { width: 100%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 12.5px; background: var(--bg); }
+input.v2-find-in::placeholder { color: var(--muted); }
+input.v2-find-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
 .v2-sugs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 12px; }
 .v2-sugs .chip { font-size: 13px; padding: 6px 12px; border-radius: 999px; }
 .v2-chat { flex: 1; min-height: 260px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
@@ -1040,7 +1158,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-card.tlk-activity::before { background: var(--blue-fill); }
 .tl-card.tlk-cmd::before { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--muted-2), 0 0 0 3px var(--bg); }
 .tl-card.tlk-project::before { background: var(--blue-fill-deep); }
-.tl-card.tlk-say::before, .tl-card.tlk-meta::before { background: var(--muted-3); }
+.tl-card.tlk-say::before, .tl-card.tlk-meta::before { background: var(--muted-3-line); }
 /* ⚠ 아래 12줄은 main(#1756 이전 카드 디자인)에서 딸려온 죽은 규칙 — 지금 렌더러가 이 클래스를 붙이지 않는다.
    지우면 css-drops 게이트가 회귀로 잡으므로 다음 PR 에서 HEAD 정리와 함께 걷는다. */
 .tl-verb { flex: none; font-size: 11.5px; font-weight: 700; color: var(--muted); }
@@ -1182,7 +1300,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-tl-btn { position: absolute; top: 7px; right: 8px; z-index: 30; display: inline-flex; align-items: center; gap: 6px; height: 27px; padding: 0 10px;
     border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--muted);
     font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
-  .v2-tl-btn:hover { color: var(--ink); border-color: var(--muted-3); }
+  .v2-tl-btn:hover { color: var(--ink); border-color: var(--muted-3-line); }
   .v2-tl-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
   #v2-root:not(.no-aside) .v2-tl-btn, #v2-root.no-tl .v2-tl-btn { display: none; }
   #v2-root.no-aside:not(.no-tl) .v2-tabs { padding-right: 112px; }   /* 탭도 [모든 탭] 끝막이도 서랍 버튼 밑으로 안 숨게 */
@@ -1309,7 +1427,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-side-top { padding: 12px 12px 6px; }
   .v2-liv-btn { padding: 11px 12px; font-size: 15px; }
   .v2-side-sec { padding: 12px 14px 6px 18px; }
-  .v2-find-in { height: 40px; }
+  input.v2-find-in { height: 40px; }
   .v2-pj-row { padding: 11px 10px 11px 6px; font-size: 15px; }
   .v2-pj.open > .v2-pj-row { padding: 11px 12px 8px 8px; }
   .v2-car { width: 30px; height: 30px; font-size: 17px; }
@@ -1371,7 +1489,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 }
 /* 터치 기기(폭 무관) — 입력칸 글자 16px: iOS 사파리는 16px 미만 입력칸에 포커스가 가면 화면을 확대한다(돌아오지 않는다). */
 @media (pointer: coarse) {
-  .v2-find-in, .v2-launch-in, input.v2-pad-search, .v2-pjpick-in, .v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
+  /*  ⚠ 여기도 `input.` 이 필요하다 — 03-components 의 `input[type=...]` 기본값(14px)이 클래스보다 특이도가
+      높아, 종전엔 이 줄이 **아무 칸에도 안 먹고 있었다**(그래서 iOS 에서 포커스마다 화면이 확대됐다).
+      textarea 인 .v2-launch-in 은 그 기본 규칙에 안 걸리므로 클래스 그대로 둔다. */
+  input.v2-find-in, .v2-launch-in, input.v2-pad-search, input.v2-pjpick-in, input.v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
 }
 
 /* 팝아웃 창(#1744)은 서랍 크롬(☰·타임라인 버튼)이 없다 — 좁은 화면에선 가운데 한 칸만 남긴다.
@@ -1744,3 +1865,151 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-side-detail .li .v.keep { color: var(--mint-deep); max-width: 46%; white-space: normal; text-align: right; line-height: 1.4; }
 .v2-bin-side-detail .fp h5:first-child { margin-top: 12px; }
 .v2-bin-side-detail .act, .v2-bin-side-sum .act { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ══ #2232 OAuth 릴레이 복귀 탭 — 셸 없이 결과 한 장(코어 /oauth/callback 페이지와 같은 생김새) ══ */
+/* ⚠ #v2-root 는 id 선택자로 grid(왼쪽 316px 열)를 깐다 — 클래스만으로는 못 이겨 안내가 첫 열에 갇혔다(원준님 실측 2026-08-28). id 로 덮는다. */
+#v2-root.v2-relay-landing, .v2-relay-landing{display:block; grid-template-columns:none; height:auto; min-height:100vh; background:var(--bg); color:var(--ink)}
+.v2-relay-page{font-family:system-ui,-apple-system,"Apple SD Gothic Neo",sans-serif; max-width:34rem; margin:4rem auto; padding:0 1rem; line-height:1.6}
+.v2-relay-page h2{font-size:1.5em; margin:0 0 .6em}
+.v2-relay-page p{margin:0 0 1em}
+.v2-relay-sub{color:var(--ink-sub, #555)}
+
+/* ── #2247 모아 두기 범위 칸(피그마 파일 링크) ── */
+.cn-scope-row { display: flex; align-items: center; gap: 8px; width: 100%; }
+.cn-scope-row .k { flex: 0 0 auto; color: var(--muted-head); font-weight: 600; font-size: 12.5px; min-width: 40px; }
+.cn-scope-row .cn-scope-in { flex: 1 1 auto; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
+.cn-scope-row .btn { flex: 0 0 auto; }
+@media (max-width: 900px) { .cn-scope-row { flex-wrap: wrap; } .cn-scope-row .cn-scope-in { flex-basis: 100%; } }
+
+/* ── #2243 범위 고르기 — 외부 앱에 들어가지 않고 목록에서 토글로 고른다 ── */
+.cn-pick { display: flex; flex-direction: column; width: 100%; gap: 8px; }
+.cn-pick-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cn-pick-hd .k { color: var(--muted-head); font-weight: 600; font-size: 12.5px; min-width: 40px; }
+.cn-pick-n { color: var(--muted-2); font-size: 12.5px; margin-left: auto; }
+.cn-pick-q { flex: 1 1 160px; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; }
+.cn-pick-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.cn-pick-row { display: flex; align-items: center; gap: 9px; padding: 7px 11px; cursor: pointer; font-size: 13px; }
+.cn-pick-row + .cn-pick-row { border-top: 1px solid var(--line-row); }
+.cn-pick-row:hover { background: var(--bg-tint-2); }
+.cn-pick-row .t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-pick-row .h { flex: none; color: var(--muted-2); font-size: 11.5px; }
+.cn-pick-ft { display: flex; justify-content: flex-end; }
+
+/* ── #2243 3차 «다듬은 안 B» — 앱 상세를 «AI가 하는 일 한 목록 + 개인화 설정»으로 ──────────────
+   종전 두 패널(바로 쓰기 / 모아 두기)은 같은 카드·같은 표·같은 스위치라 차이를 배울 단서가 없었다(원준 실측:
+   «뭔소린지 하나도 모르겠어»). 이제 화면은 세 부분이다 — ① AI가 하는 일(읽기·쓰기·모아 두기 세 줄)
+   ② 자료함에 모아 두는 것(무엇을·얼마나 자주·언제부터·어디서) ③ 보는 사람. 제목은 질문이 아니라 서술문. */
+.cn-sect { margin-top: 26px; }
+.cn-sect-h { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.cn-sect-n { width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 800; display: grid; place-items: center; flex: none; }
+/*  ★ h3 는 브라우저 기본 마진(1em)이 살아 있다 — flex 안에선 병합도 안 돼 머리가 64px 로 부푼다(실측). */
+.cn-sect-t { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.35px; color: var(--ink); }
+.cn-sect-s { font-size: 12.5px; color: var(--muted); }
+.cn-sect-a { margin-left: auto; display: flex; gap: 12px; }
+
+/* «하는 일» 한 줄 — 읽기 / 쓰기 / 모아 두기. 줄마다 따로 끄고 켠다.
+   ★ 간격은 목록(.cn-actlist)의 gap 이 준다 — 종전 `.cn-act + .cn-act { margin-top }` 은 쓰기·모아 두기가
+     각자 <div> 래퍼(비동기로 다시 그려지는 자리) 안에 있어 **인접 선택자가 아예 안 걸렸다**. 그래서 세 카드가
+     0px 로 붙어 한 덩어리로 보였다(원준 실측 2026-08-30). 래퍼는 display:contents 로 레이아웃에서 지운다. */
+.cn-actlist { display: flex; flex-direction: column; gap: 9px; }
+.cn-actlist > div:not(.cn-act) { display: contents; }
+.cn-act { display: flex; align-items: flex-start; gap: 14px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.cn-act.on { border-color: var(--line-net-2); background: var(--bg-tint); }
+/* ★쓰기만 색이 다르다 — «내 이름으로 남는다»는 이 화면에서 유일하게 되돌릴 수 없는 것이다. */
+/*  쓰기 — 연결 «안»의 상자다(세 번째 연결이 아니다, 원준 2026-08-30). 이 화면에서 유일하게 되돌릴 수 없는 것이라
+    색이 다르다. 꺼져 있으면 점선 + 채도를 뺀다 — «지금은 아무것도 안 남는다»가 한눈에 보이게. */
+.cn-write { border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: 11px; padding: 11px 13px; }
+.cn-write.off { border-style: dashed; background: var(--bg-tint); }
+.cn-write-t { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; color: var(--warn-text); }
+.cn-write.off .cn-write-t { color: var(--muted-head); }
+.cn-write-t .v2-ic { width: 15px; height: 15px; }
+.cn-write-m { display: block; margin-top: 5px; font-size: 12.5px; line-height: 1.6; color: var(--warn-text); }
+.cn-write.off .cn-write-m { color: var(--ink-sub); }
+.cn-write-m b { font-weight: 800; }
+.cn-write-ft { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.cn-write-n { font-size: 12px; font-weight: 700; color: var(--warn-text); }
+.cn-write.off .cn-write-n { color: var(--muted-head); }
+.cn-write-ok { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--warn-text); }
+.cn-write-ok .v2-ic { width: 14px; height: 14px; }
+.cn-write-ft .btn { margin-left: auto; }
+.cn-act-ic { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; flex: none; margin-top: 1px; background: var(--bg-tint-2); color: var(--muted); }
+.cn-act.on .cn-act-ic { background: var(--bg-punch); color: var(--blue); }
+.cn-act.collect .cn-act-ic { background: color-mix(in srgb, var(--mint-deep) 13%, transparent); color: var(--mint-deep); }
+.cn-act-tx { flex: 1; min-width: 0; }
+.cn-act-v { display: block; font-size: 15px; font-weight: 800; color: var(--ink); line-height: 1.5; }
+.cn-act-m { display: block; font-size: 13px; color: var(--ink-sub); margin-top: 3px; line-height: 1.6; }
+.cn-act-m b { color: var(--ink); font-weight: 700; }
+/*  줄에 딸린 것(연결 방식 버튼 · 쓰기 확인 · 관리자 안내)은 **그 카드 안에** 둔다 — 카드 밖에 두면
+    어디에도 안 붙은 채 떠서 카드 리듬(9px)까지 깨진다(GitHub 만 43px 였던 것, 원준 실측 2026-08-30). */
+.cn-act-more { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-row); }
+.cn-act-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.cn-act-sub { display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 600; color: var(--warn-text); cursor: pointer; }
+.cn-act-sub .h { margin-left: auto; font-weight: 600; color: var(--muted-head); }
+.cn-act-note { font-size: 12px; line-height: 1.55; color: var(--muted-head); }
+.cn-act-rt { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; flex: none; padding-top: 2px; }
+.cn-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.cn-pill .v2-ic { width: 13px; height: 13px; }
+.cn-pill-me { color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); }
+.cn-pill-team { color: var(--on-fill); background: var(--mint-deep); }
+.cn-pill-write { color: var(--warn-text); background: color-mix(in srgb, var(--warn) 13%, transparent); border: 1px solid var(--warn-line); }
+.cn-pill-off { color: var(--muted-head); background: var(--bg-tint); border: 1px solid var(--line-net); }
+
+/* 개인화 설정 — 무엇을 · 얼마나 자주 · 언제부터 · 어디서 */
+.cn-set { display: flex; align-items: flex-start; gap: 16px; padding: 14px 0; border-top: 1px solid var(--line-row); }
+.cn-set:first-child { border-top: 0; padding-top: 4px; }
+.cn-set-lb { width: 128px; flex: none; padding-top: 6px; }
+.cn-set-lb b { display: block; font-size: 13.5px; font-weight: 800; color: var(--ink); }
+.cn-set-lb i { display: block; font-style: normal; font-size: 11.5px; color: var(--muted-2); margin-top: 3px; line-height: 1.5; }
+.cn-set-bd { flex: 1; min-width: 0; }
+.cn-set-hint { display: block; font-size: 12px; color: var(--muted); margin-top: 7px; line-height: 1.6; }
+.cn-seg { display: inline-flex; border: 1px solid var(--line-net); border-radius: 10px; overflow: hidden; background: var(--surface); max-width: 100%; flex-wrap: wrap; }
+.cn-seg button { padding: 7px 14px; border: 0; border-right: 1px solid var(--line-net); background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
+.cn-seg button:last-child { border-right: 0; }
+.cn-seg button:hover { background: var(--bg-tint); }
+.cn-seg button.on { background: var(--bg-punch); color: var(--blue); font-weight: 800; }
+.cn-seg button:disabled { opacity: .5; cursor: not-allowed; }
+.cn-chips { display: flex; gap: 7px; flex-wrap: wrap; }
+.cn-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 10px; border: 1px solid var(--line-net); background: var(--surface); font-size: 13px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
+.cn-chip:hover { border-color: var(--line-note); }
+.cn-chip.on { background: var(--bg-punch); border-color: var(--line-note); color: var(--ink-note); font-weight: 700; }
+.cn-chip input { margin: 0; }
+
+/* «아직 저장 안 함» — 체크만 하고 나가면 반영이 안 되던 것(#2243 진단 5) */
+.cn-savebar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-top: 14px; border-radius: 12px; background: var(--warn-bg); border: 1px solid var(--warn-line); flex-wrap: wrap; }
+.cn-savebar .m { flex: 1; min-width: 160px; font-size: 13px; color: var(--warn-text); font-weight: 600; line-height: 1.5; }
+
+/* 보는 사람 — 두 얼굴의 진짜 차이라 표의 한 줄이 아니라 비교 카드다(#2243 진단 6) */
+.cn-whos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cn-who { border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; }
+.cn-who.team { background: var(--bg-tint); border-color: var(--line-net-2); }
+.cn-who-t { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; color: var(--ink); }
+.cn-who-t .v2-ic { width: 16px; height: 16px; color: var(--muted-head); }
+.cn-who.team .cn-who-t .v2-ic { color: var(--mint-deep); }
+.cn-who-s { display: block; font-size: 12.5px; color: var(--ink-sub); line-height: 1.6; margin-top: 7px; }
+.cn-faces { display: flex; margin-top: 11px; }
+.cn-face { width: 27px; height: 27px; border-radius: 50%; display: grid; place-items: center; font-size: 11.5px; font-weight: 800; color: var(--on-fill); border: 2px solid var(--bg); background: var(--muted-2); }
+.cn-face + .cn-face { margin-left: -8px; }
+.cn-who.team .cn-face { border-color: var(--bg-tint); }
+
+.cn-gone { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+.cn-gone .v2-ic { width: 14px; height: 14px; color: var(--muted-2); }
+.cn-gone .m { flex: 1; min-width: 200px; line-height: 1.6; }
+@media (max-width: 760px) {
+  .cn-whos { grid-template-columns: minmax(0, 1fr); }
+  .cn-set { flex-direction: column; gap: 8px; }
+  .cn-set-lb { width: 100%; padding-top: 0; }
+  .cn-act { flex-wrap: wrap; }
+  .cn-act-rt { flex-direction: row; align-items: center; width: 100%; justify-content: flex-end; }
+}
+
+/* ── #2243 4차 — ② «가져올 자료 정하기» 는 어떤 앱에서도 같은 카드다 ────────────────
+   종전엔 노션·구글이 라벨 없이 체크박스만 떨구고, 아직 못 켠 앱은 안내문 두 줄만이라
+   ①·③ 은 카드인데 ② 만 맨 텍스트로 떠 보였다(원준 실측 2026-08-30 — «상세페이지가 깨져 있다»). */
+.cn-setlist { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); padding: 4px 18px 14px; }
+.cn-setlist.off { background: var(--bg-tint); border-style: dashed; }
+.cn-setlist.off .cn-set-lb b { color: var(--muted-head); }
+.cn-set-why { display: flex; align-items: flex-start; gap: 9px; padding: 13px 0 4px; font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
+.cn-set-why .v2-ic { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--muted-2); }
+.cn-setlist .cn-set:first-child { border-top: 0; }
+.cn-set-why + .cn-set { border-top: 1px solid var(--line-row); }

@@ -162,7 +162,7 @@ test("LIST_FMT 필드 순서 — collectSessions 구조분해와 1:1", () => {
     "#{@box_owner}", "#{@box_harness}", "#{@box_dir}", "#{@box_auto}",
     "#{@box_flags}", "#{@box_invites}", "#{@box_project}", "#{@box_app}", "#{@box_managed}",
     "#{pane_current_command}", "#{session_last_attached}", "#{@box_last_busy}",
-    "#{@box_state}", "#{@box_last_seen}", "#{pane_title}", "#{@box_label}",
+    "#{@box_state}", "#{@box_last_seen}", "#{pane_title}", "#{@box_runtime}", "#{@box_label}",
   ], "LIST_FMT 를 바꿨다 — sessions.ts collectSessions 의 구조분해 순서도 같이 고쳤는지 확인하라");
   // @box_label 은 값에 탭이 들어올 수 있어 ...rest 로 받는다 → **반드시 마지막**이어야 한다.
   assert.equal(LIST_FMT.split("\t").at(-1), "#{@box_label}", "라벨이 마지막이 아니면 뒤 필드를 삼킨다");

@@ -72,6 +72,28 @@ const VERIFIERS: Record<string, Verifier> = {
   },
 };
 
+/** ClickUp 응답 → 사람 말. 실측(2026-08-28): 틀린 토큰은 401 {"err":"Token invalid","ECODE":"OAUTH_0xx"}. */
+export function diagnoseClickup(status: number, text: string): string {
+  if (status === 401 || /token invalid|OAUTH_0/i.test(text)) {
+    return "토큰이 거부됐어요 — 앞뒤가 잘렸거나 다시 만든 토큰입니다. ClickUp ▸ Settings ▸ Apps 에서 API Token 을 복사해 다시 붙여넣어 주세요.";
+  }
+  if (status === 429) return "ClickUp 이 잠시 요청을 제한하고 있어요 — 잠깐 뒤 다시 시도해 주세요.";
+  return `ClickUp 이 응답을 거부했어요(${status}). 토큰을 다시 확인해 주세요.`;
+}
+VERIFIERS.clickup_token = {
+  label: "ClickUp",
+  url: "https://api.clickup.com/api/v2/user",   // 토큰의 주인 — 읽기 전용·부작용 없음
+  headers: (t) => ({ Authorization: t }),         // ClickUp 개인 토큰은 Bearer 접두 없이 그대로
+  who: (b) => {
+    const u = ((b ?? {}) as { user?: { username?: unknown; email?: unknown } }).user ?? {};
+    const name = typeof u.username === "string" && u.username ? u.username : null;
+    const email = typeof u.email === "string" && u.email ? u.email : null;
+    if (name && email) return `${name} (${email})`;
+    return name ?? email;
+  },
+  diagnose: diagnoseClickup,
+};
+
 export function verifierExists(kind: string): boolean {
   return Object.prototype.hasOwnProperty.call(VERIFIERS, String(kind ?? "").toLowerCase());
 }

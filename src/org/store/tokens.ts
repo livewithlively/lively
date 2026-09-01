@@ -23,6 +23,10 @@ export async function mintToken(input: {
   resource?: string | null;
   expiresInSec?: number | null;
   appId?: string | null;   // 앱 세션 토큰(#1780) — 이 값이 있으면 requireAppTool 이 도구를 그 앱 grant 로 축소.
+  // 멤버 추종(#2174) — scope 를 박제하지 않고 멤버 라이브 scope 를 그대로 유효권한으로 쓴다. **우리가 굽는
+  //  세션·박스 토큰에만** 켠다(computeEffectiveScopes 주석). scopes 인자는 그래도 넘겨 둔다 — 감사/토큰탭이
+  //  '발급 당시 무엇이었나'를 읽고, 이 플래그를 끄면 그 값이 그대로 상한으로 돌아온다.
+  followMemberScopes?: boolean;
 }, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string; expiresAt: Date | null }> {
   const exec = client ?? itemsPool;
   const token = "lvk_" + crypto.randomBytes(24).toString("base64url");
@@ -32,17 +36,19 @@ export async function mintToken(input: {
   // 만료는 DB now() 기준으로 계산한다 — 검증(verifyDbToken)도 DB now() 라 시계가 하나로 유지된다.
   const r = await exec.query(
     `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by,
-                            client_id, resource, app_id, expires_at)
+                            client_id, resource, app_id, expires_at, follow_member_scopes)
        VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$11,
-              now() + ($10::int * interval '1 second'))
+              now() + ($10::int * interval '1 second'), $12)
      RETURNING expires_at`,
     [tokenHash, input.userId, JSON.stringify(input.scopes),
      JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null,
-     input.clientId ?? null, input.resource ?? null, ttl == null ? null : String(ttl), input.appId ?? null],
+     input.clientId ?? null, input.resource ?? null, ttl == null ? null : String(ttl), input.appId ?? null,
+     input.followMemberScopes === true],
   );
   await audit("auth_token", input.userId, "mint",
     null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId,
-            clientId: input.clientId ?? null, resource: input.resource ?? null }, actor, source, client);
+            clientId: input.clientId ?? null, resource: input.resource ?? null,
+            followMemberScopes: input.followMemberScopes === true }, actor, source, client);
   const expiresAt = (r.rows[0] as { expires_at: string | null } | undefined)?.expires_at ?? null;
   return { token, tokenHash, expiresAt: expiresAt ? new Date(expiresAt) : null };
 }
@@ -92,6 +98,7 @@ export function computeEffectiveScopes(opts: {
   memberScopes: string[];
   appId?: string | null;
   appLive?: boolean | null;   // 앱 enabled ∧ status='active'. null = 앱 행 없음/조회 불가(거부).
+  followMemberScopes?: boolean;   // 세션·박스 토큰(우리가 굽는 것) — scope 를 박제하지 않고 멤버를 따른다.
 }): string[] | null {
   // B4: 허용 scope 만(JSONB 손상·마이그레이션·위조로 admin/runtime 섞여 들어와도 여기서 떨군다).
   const tokenScopes = opts.tokenScopes.filter(isScope);
@@ -100,8 +107,18 @@ export function computeEffectiveScopes(opts: {
     return tokenScopes;
   }
   if (opts.memberState !== "active") return null;
-  const memberScopes = new Set(opts.memberScopes.filter(isScope));
-  return tokenScopes.filter((s) => memberScopes.has(s));
+  const memberScopes = opts.memberScopes.filter(isScope);
+  // 추종 토큰 — 발급 시점 박제 없이 **멤버 라이브 scope 그대로**. 멤버가 상한이라는 규칙은 그대로고(여기서도
+  //  멤버에 없는 scope 는 나올 수 없다), 달라지는 건 '승격이 반영되는가' 하나다.
+  //  왜 필요한가: 종전엔 강등만 즉시 반영되고 **승격은 토큰 재발급을 요구**하는 비대칭이었다. 그런데 세션이
+  //   쓰는 토큰은 사람이 직접 들고 다니는 것이 아니라 **박스 홈(~/.lively/token)에 심긴 것**이라, 관리자가
+  //   권한을 올려도 그 파일이 다시 심길 때까지 세션은 옛 권한이었다. 재프로비저닝이 그 파일까지 닿지 못하면
+  //   (2026-08-28 실측 — 격리 박스에서 토큰만 안 갱신됨) 올린 권한이 영영 도달하지 않는다.
+  //  적용 범위는 발급부가 정한다 — 우리가 굽는 세션·박스 토큰만. OAuth·device-auth 발급분은 **켜지 않는다**:
+  //   그건 사람이 동의 화면에서 본 범위가 계약이라, 나중에 조용히 넓어지면 그 동의가 거짓이 된다.
+  if (opts.followMemberScopes) return memberScopes;
+  const allowed = new Set(memberScopes);
+  return tokenScopes.filter((s) => allowed.has(s));
 }
 
 // verifyDbToken 이 돌려주는 토큰 신원 — LivelyUser 원재료 + OAuth 발급분의 바인딩 3종(#1473 T2).
@@ -131,6 +148,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       //  거부(보수적). 행 0 → NULL → 거부.
       `SELECT t.user_id, t.member_id, m.email AS email, m.state AS member_state,
               t.scopes AS token_scopes, m.scopes AS member_scopes, t.projects,
+              t.follow_member_scopes AS follow_member_scopes,
               t.client_id, t.resource, t.app_id, EXTRACT(EPOCH FROM t.expires_at) AS expires_epoch,
               (SELECT bool_and(a.enabled AND a.status = 'active') FROM org_app a WHERE a.id = t.app_id) AS app_live
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
@@ -141,6 +159,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const row = r.rows[0] as {
       user_id: string; member_id: string | null; email: string | null;
       member_state: string | null; token_scopes: unknown; member_scopes: unknown; projects: unknown;
+      follow_member_scopes: boolean | null;
       client_id: string | null; resource: string | null; app_id: string | null; expires_epoch: string | null;
       app_live: boolean | null;
     } | undefined;
@@ -157,6 +176,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       memberScopes: strArr(row.member_scopes, []),
       appId: row.app_id,
       appLive: row.app_live,
+      followMemberScopes: row.follow_member_scopes === true,
     });
     if (scopes === null) return null; // 멤버 비활성/삭제 → 토큰 무효(→ 401)
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).

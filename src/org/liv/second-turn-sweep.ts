@@ -1,0 +1,151 @@
+// 리브 2턴 스윕(#1631) — 자체호스팅은 하우스키핑이 1분마다, **매니지드는 CP 가 테넌트마다 두드리는
+//  하우스키핑 틱**(/api/ops/housekeeping/tick)이 부른다. 판정(decideSecondTurn)이 fire 면 그 세션에 증류 지시를 넣는다.
+//
+//  · 후보 = org_member.liv_profile.welcome 에 session_id 는 있고 distill_at·distill_gave_up_at 이 없는 사람(신원 전역 표).
+//  · 그 세션의 워크스페이스는 gw_session_map(workspaceForSession)이 정본이다 — liv_profile 엔 워크스페이스 축이 없다(#2265).
+//    수집기·잡 조회는 그 테넌트 컨텍스트 안에서 한다. 매핑이 없으면 primary(단일 테넌트) 로 본다.
+//  · 배달은 라우트와 같은 함수(deliverPrompt) — 박스면 아웃박스(입력창 확인·에코), codex app-server 면 프로토콜, 노드면 릴레이.
+//  · 실패는 삼키지 않는다: 쏘지 못한 이유는 로그에, 포기는 distill_gave_up_at + distill_note 로 프로필에 남는다.
+import { logger } from "../../log.js";
+import { buildSecondTurnPrompt, decideSecondTurn } from "./second-turn.js";
+import { onceAtATime } from "../../util/once-at-a-time.js";
+
+// 동시 호출 가드(#1631) — 매니지드는 **테넌트마다** 틱이 들어오는데 후보 목록은 신원 전역(org_member)이라
+//  같은 후보를 여러 틱이 동시에 본다. `distill_at` 은 배달 **뒤에** 찍히므로 그 사이가 겹치면 같은 세션에
+//  2턴이 두 번 들어간다. 근거·한계는 util/once-at-a-time.ts 머리말.
+export const sweepLivSecondTurn = onceAtATime(
+  () => runSweep(),
+  () => ({ fired: 0, waited: 0, gaveUp: 0, failed: 0 }),
+);
+
+async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: number; failed: number }> {
+  const { listLivSecondTurnCandidates, appendLivProfile, getLivProfile, listCollectors } = await import("../store.js");
+  const { listSessionsRaw } = await import("../../terminal/terminal-sessions.js");
+  const { listOutbox } = await import("../../sessions/session-outbox.js");
+  const { workspaceForSession, PRIMARY_TENANT_ID, PRIMARY_SLUG } = await import("../tenancy/registry.js");
+  const { withTenant } = await import("../tenant-context.js");
+  const { listCronJobs } = await import("../cron-store.js");
+  const { collectorJobId } = await import("../store/collectors.js");
+  const { deliverPrompt } = await import("../../terminal/deliver-prompt.js");
+
+  const { sessionGone } = await import("../../terminal/tmux-exec.js");
+
+  const out = { fired: 0, waited: 0, gaveUp: 0, failed: 0 };
+  const candidates = await listLivSecondTurnCandidates();
+  if (!candidates.length) return out;
+  const now = Date.now();
+  // ★ 세션 목록은 **워크스페이스 컨텍스트로 걸러진다**(실측 2026-08-29 dev: 같은 세션이 그 워크스페이스 헤더로는 보이고
+  //  primary 로는 안 보였다 → 컨텍스트 없이 읽은 첫 판은 살아 있는 세션을 'session-gone' 으로 포기했다).
+  //  그래서 목록은 그 세션의 테넌트 안에서 읽는다(테넌트별 1회 캐시). 그래도 없으면 tmux 에 직접 묻는다 —
+  //  **없다고 확인된 것만 포기**한다(모르는 상태를 '없음'으로 읽어 파괴적 결정을 내리지 않는다, #1675 규율).
+  const listCache = new Map<string, Map<string, { working?: boolean; agentState?: string | null }>>();
+  const sessionIn = async (tenant: { id: string; slug: string }, sid: string) => {
+    let m = listCache.get(tenant.id);
+    if (!m) {
+      const rows = await withTenant(tenant, () => listSessionsRaw()).catch(() => [] as Array<{ id: string; working?: boolean; agentState?: string | null }>);
+      m = new Map(rows.map((s) => [s.id, { working: s.working, agentState: s.agentState ?? null }]));
+      listCache.set(tenant.id, m);
+    }
+    const hit = m.get(sid);
+    if (hit) return hit;
+    // 목록엔 없지만 tmux 엔 있다(노드 세션·목록 필터 밖) → 상태를 모르는 채로 살아 있음. 없다고 확인되면 null.
+    const gone = await sessionGone(sid).catch(() => false);
+    return gone ? null : { working: false, agentState: "unknown" };
+  };
+
+  for (const c of candidates) {
+    const sid = String(c.welcome.session_id);
+    const ws = await workspaceForSession(sid).catch(() => null);
+    const tenant = ws ? { id: ws.id, slug: ws.slug } : { id: PRIMARY_TENANT_ID, slug: PRIMARY_SLUG };
+    const s = await sessionIn(tenant, sid);
+    // 수집기와 그 잡의 마지막 실행 — 그 워크스페이스 안에서 읽는다.
+    const collectors = await withTenant(tenant, async () => {
+      const cols = await listCollectors().catch(() => []);
+      const jobs = await listCronJobs().catch(() => [] as Array<Record<string, unknown>>);
+      const lastRun = new Map(jobs.map((j) => [String(j.id), (j.last_run_at as string | null) ?? null]));
+      return cols.map((col) => ({ label: col.label, preset_key: col.preset_key, enabled: col.enabled, lastRunAt: lastRun.get(collectorJobId(col.id)) ?? null }));
+    }).catch((err) => { logger.warn({ err, member: c.id, ws: tenant.slug }, "리브 2턴 — 수집기 조회 실패(다음 tick 재시도)"); return null; });
+    if (!collectors) { out.failed++; continue; }
+    const outboxPending = s ? (await listOutbox(sid).catch(() => [])).length : 0;
+
+    const d = decideSecondTurn({
+      welcome: c.welcome,
+      session: s ? { working: !!s.working, agentState: s.agentState ?? null } : null,
+      outboxPending, now,
+      collectors: collectors.map((x) => ({ enabled: x.enabled, lastRunAt: x.lastRunAt })),
+    });
+    if (d.action === "skip") continue;
+    if (d.action === "wait") { out.waited++; continue; }
+    if (d.action === "giveup") {
+      //  포기 표식도 그 워크스페이스 칸에 찍는다(#2265) — 밖에서 쓰면 후보에서 안 빠져 매 tick 다시 판정된다.
+      await withTenant(tenant, () => appendLivProfile(c.id, { welcome: { ...c.welcome, distill_gave_up_at: new Date(now).toISOString(), distill_note: d.reason } }))
+        .catch((err) => logger.warn({ err, member: c.id }, "리브 2턴 — 포기 기록 실패"));
+      logger.info({ member: c.id, session: sid, reason: d.reason }, "리브 2턴 — 포기");
+      out.gaveUp++; continue;
+    }
+    //  ★ reopen(#1631) — 세션이 사라졌지만 **일은 남아 있다.** 새 창구를 열고 2턴 지시를 그 첫 지시로 넣는다.
+    //   실측 2026-08-31(dev): 1턴을 성공으로 끝낸 리브 세션이 수집 대기 20분 사이에 사라졌고, 종전 코드는 그 자리에서
+    //   영구 포기해 그 사람의 증류기 15개가 영원히 꺼진 채 남았다(온보딩 완주 → 지식 0건).
+    //   ⚠ 딱 한 번이다 — `distill_reopened_at` 을 **먼저** 찍고 연다. 세션 생성이 실패해도 다시 시도하지 않는다
+    //    (실패를 재시도하면 유령 세션이 쌓인다). 실패는 포기 표식으로 남아 화면이 «왜 안 왔나»에 답할 수 있다.
+    if (d.action === "reopen") {
+      const done0 = Date.parse(String(c.welcome.done_at));
+      const prompt0 = buildSecondTurnPrompt({
+        displayName: c.display_name,
+        drawers: c.welcome.drawers ?? [],
+        firstOrder: c.welcome.first_order ?? null,
+        collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) > done0 })),
+        partial: true, waitedMin: Math.max(0, Math.round((now - done0) / 60_000)),
+      });
+      const stampedAt = new Date(now).toISOString();
+      try {
+        await withTenant(tenant, async () => {
+          const cur = await getLivProfile(c.id).catch(() => null);
+          await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt } });
+        });
+        const { livKickoff } = await import("./kickoff.js");
+        const made = await withTenant(tenant, () => livKickoff({ userId: c.id, email: "", scopes: [], projects: [] } as never, { prompt: prompt0 }));
+        await withTenant(tenant, async () => {
+          const cur = await getLivProfile(c.id).catch(() => null);
+          await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt,
+            session_id: made.session_id, distill_at: stampedAt, distill_note: "reopened" } });
+        });
+        logger.info({ member: c.id, gone: sid, session: made.session_id }, "리브 2턴 — 세션이 사라져 새로 열고 배달");
+        out.fired++;
+      } catch (err) {
+        await withTenant(tenant, async () => {
+          const cur = await getLivProfile(c.id).catch(() => null);
+          await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt,
+            distill_gave_up_at: stampedAt, distill_note: "reopen-failed" } });
+        }).catch(() => { /* 비치명 */ });
+        out.gaveUp++;
+        logger.warn({ err, member: c.id, gone: sid }, "리브 2턴 — 다시 열기 실패(재시도하지 않는다)");
+      }
+      continue;
+    }
+    // fire — 프롬프트를 조립해 그 세션에 넣는다. 배달 성공(큐 등록 포함)이면 distill_at 을 찍는다(멱등: 다음 tick 엔 후보에서 빠진다).
+    const done = Date.parse(String(c.welcome.done_at));
+    const prompt = buildSecondTurnPrompt({
+      displayName: c.display_name,
+      drawers: c.welcome.drawers ?? [],
+      firstOrder: c.welcome.first_order ?? null,
+      collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) >= done })),
+      partial: d.partial, waitedMin: d.waitedMin,
+    });
+    try {
+      await withTenant(tenant, () => deliverPrompt(sid, prompt, { owner: c.id }));
+      // ⚠ 표식은 **그 워크스페이스 컨텍스트 안에서** 찍는다(#2265) — welcome 은 워크스페이스 칸에 살아서,
+      //  컨텍스트 밖에서 쓰면 옛 최상위 자리에 남아 후보에서 안 빠진다(= 2턴이 매 tick 반복 발사된다).
+      await withTenant(tenant, async () => {
+        const cur = await getLivProfile(c.id).catch(() => null);
+        await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_at: new Date(now).toISOString(), distill_note: d.partial ? "partial" : null } });
+      });
+      logger.info({ member: c.id, session: sid, partial: d.partial, waitedMin: d.waitedMin }, "리브 2턴 — 증류 지시 주입");
+      out.fired++;
+    } catch (err) {
+      out.failed++;
+      logger.warn({ err, member: c.id, session: sid }, "리브 2턴 — 주입 실패(다음 tick 재시도)");
+    }
+  }
+  return out;
+}

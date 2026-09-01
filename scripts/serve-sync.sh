@@ -68,6 +68,11 @@ done
 #  그 클론엔 프로토타입 파일(public/onboarding-proto/*.html 등)이 늘 하나씩 놓여 있어서,
 #  untracked 까지 세면 그 파일 하나 때문에 동기화가 **영영** 멈춘다(첫 판에 실제로 그랬다).
 #  untracked 가 들어올 커밋과 부딪히면 아래 `merge --ff-only` 가 스스로 거부하므로 안전은 git 이 지킨다.
+# ⚠ **stat 만 어긋난 «가짜 dirty» 를 먼저 턴다** — 내용은 같은데 파일이 touch 되면(빌드·rsync·에디터 저장)
+#  git 이 그 파일을 M 으로 보고, 이 잡은 «남의 WIP» 로 읽어 영영 건너뛴다. 2026-08-31 실측: 그 상태로
+#  22분간 dev 가 옛 화면을 서빙했고 세 세션의 커밋이 함께 막혔다(내용 차이는 0이었다).
+#  refresh 는 **내용이 같은 항목만** 인덱스에 다시 도장 찍는다 — 진짜 변경은 그대로 남아 아래 판정에 걸린다.
+git -C "$CLONE" update-index -q --refresh >/dev/null 2>&1 || true
 dirty=$(git -C "$CLONE" status --porcelain --untracked-files=no 2>/dev/null)
 [ -n "$dirty" ] && skip dirty "추적 파일에 변경이 있다(남의 WIP 일 수 있다):
 $(printf '%s\n' "$dirty" | head -10 | sed 's/^/    /')"

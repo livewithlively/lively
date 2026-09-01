@@ -113,6 +113,52 @@ function decisionOf(out) {
   } catch { return null; }
 }
 
+// ── 사람에게 되묻는 길 (#2439) ────────────────────────────────────────────────
+//  antigravity 는 헤드리스에서 승인을 **못 묻는다** — 물음이 스트림으로 안 오고 auto-deny 된다.
+//  오래 «벤더가 막았다» 고 적어 뒀지만 그건 금지가 아니라 «아무도 안 물었을 때의 기본값» 이다.
+//  벤더 문서가 길을 다 적어 뒀다: 훅 stdin 에 toolCall{name,args} 가 통째로 오고, 출력이 decision 이며,
+//  "Hooks run synchronously and block the agent loop" 다 — 붙잡아 두는 동안 사람에게 물을 수 있다.
+//
+//  ⚠ **env 가 있을 때만** 묻는다. 훅 설정은 전역 한 벌이라(~/.gemini/config/hooks.json — 워크스페이스
+//   .agents/hooks.json 은 안 뜬다, 실측) 세션마다 파일을 갈아 끼울 수 없다. 그래서 «이 세션이 대화창에서
+//   도는가» 는 게이트웨이가 자식 env 로 전한다. 터미널에서 사람이 직접 띄운 agy 엔 이 값이 없으니
+//   **종전 동작 그대로**다(중립값 ask).
+const ASK_URL = process.env.LIVELY_ASK_URL || "";
+const ASK_TOKEN = process.env.LIVELY_ASK_TOKEN || "";
+const ASK_SESSION = process.env.LIVELY_ASK_SESSION || "";
+const chatty = () => !!(ASK_URL && ASK_TOKEN && ASK_SESSION);
+
+// antigravity 의 ask_question 인자에서 «질문+선택지» 를 꺼낸다.
+//  ⚠ 인자 낱말이 아직 **미실측**이다(스트림은 내용을 비워서 준다 — 그래서 훅으로 오는 이 값이 유일한 출처).
+//   그래서 여러 표기를 받아 보고, **못 알아보면 null** 을 준다 → 호출부가 평범한 승인 카드로 접는다
+//   (모르는 모양을 억지로 그리면 사람이 헛것을 보게 된다 — 안 그리는 쪽이 정직하다).
+function questionsFrom(args) {
+  const a = (args && typeof args === "object") ? args : {};
+  const q = a.Question ?? a.question ?? a.Prompt ?? a.prompt;
+  const rawOpts = a.Options ?? a.options ?? a.Choices ?? a.choices;
+  if (typeof q !== "string" || !q.trim() || !Array.isArray(rawOpts)) return null;
+  const options = rawOpts
+    .map((o) => (typeof o === "string" ? { label: o } : (o && typeof o === "object" && typeof o.label === "string") ? { label: o.label, description: typeof o.description === "string" ? o.description : undefined } : null))
+    .filter(Boolean);
+  if (!options.length) return null;
+  return [{ question: q.trim(), options, multiSelect: a.Multiple === true || a.multiple === true }];
+}
+
+// 게이트웨이의 문에 묻고 답을 기다린다. 어떤 실패도 null(= 못 물었다) — 호출부가 중립값으로 접는다.
+async function askHuman(body, deadlineMs) {
+  try {
+    const res = await fetch(ASK_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-lively-ask": ASK_TOKEN },
+      body: JSON.stringify({ ...body, session: ASK_SESSION }),
+      signal: AbortSignal.timeout(deadlineMs),
+    });
+    if (!res || !res.ok) return null;
+    const v = await res.json();
+    return (v && typeof v === "object") ? v : null;
+  } catch { return null; }
+}
+
 // 이벤트별 처리 → antigravity 가 요구하는 출력 객체를 반환한다(stdout 쓰기는 main 이 한 번만).
 function handle(input) {
   if (EVENT === "PreInvocation") {
@@ -140,6 +186,9 @@ function handle(input) {
     if (d?.permissionDecision === "deny") {
       return { decision: "deny", reason: `Lively 정책으로 차단됨: ${d.permissionDecisionReason || "관리자 훅이 이 도구 호출을 거부했습니다."}` };
     }
+    //  ★ 조직 훅이 «막지 않았다» 는 것과 «사람이 허락했다» 는 것은 다르다 — 후자는 여기서 묻는다.
+    //   대화창에서 도는 세션에서만(env 가 그 표식이다). 아니면 종전대로 중립값 ask.
+    if (chatty()) return { __ask: { tool_name, tool_input } };
     return { decision: "ask" };
   }
 
@@ -169,18 +218,65 @@ function handle(input) {
   return {};
 }
 
+// stdout 은 **정확히 한 번**. 이 불변식이 깨지면(무출력·중복·비JSON) 그 세션의 모든 툴이 fail-closed deny 된다.
+let wrote = false;
+function emitOnce(obj) {
+  if (wrote) return;
+  wrote = true;
+  try { process.stdout.write(JSON.stringify(obj) + "\n"); } catch { /* 파이프가 이미 닫혔다 */ }
+}
+
+// 우리 스스로의 마감시각 — 하네스 timeout 에 기대지 않는다.
+//  ⚠ 대화창 세션은 사람을 기다리므로 길고(9분), **그 외에는 종전 그대로 짧다**(20초).
+//   훅 timeout 을 전역으로 늘려 두더라도, 안 묻는 세션이 그 상한까지 매달리는 일은 이 값이 막는다.
+const DEADLINE_MS = chatty() ? 9 * 60 * 1000 : 20 * 1000;
+
 async function main() {
-  let out = EVENT === "PreToolUse" ? { decision: "ask" } : {};   // 실패 시에도 이 값이 나간다(fail-open)
+  const fallback = EVENT === "PreToolUse" ? { decision: "ask" } : {};   // 실패 시에도 이 값이 나간다(fail-open)
+  const watchdog = setTimeout(() => { emitOnce(fallback); process.exit(0); }, DEADLINE_MS);
+  if (typeof watchdog.unref === "function") watchdog.unref();
+  let out = fallback;
   try {
     let input = {};
     try { input = JSON.parse((await readStdin()) || "{}"); } catch { /* 비JSON — 빈 입력으로 진행 */ }
     out = handle(input) || out;
+    //  ★ handle 이 «사람에게 물어라» 를 남겼으면 여기서 묻는다(handle 은 동기라 그 자리에선 못 기다린다).
+    if (out && out.__ask) out = await askAndDecide(out.__ask, input);
   } catch { /* 어떤 실패도 아래 유효 출력 한 번으로 수렴 */ }
-  process.stdout.write(JSON.stringify(out) + "\n");
+  clearTimeout(watchdog);
+  emitOnce(out && !out.__ask ? out : fallback);
+}
+
+/** 사람에게 묻고 그 답을 antigravity 의 decision 으로 옮긴다. 못 물었으면 중립값(ask). */
+async function askAndDecide({ tool_name, tool_input }, input) {
+  const questions = tool_name === "ask_question" ? questionsFrom(input?.toolCall?.args) : null;
+  const v = await askHuman({
+    id: `agy-${String(input?.conversationId || "")}-${String(input?.stepIdx ?? "")}-${tool_name}`,
+    toolName: tool_name,
+    title: questions ? questions[0].question : tool_name,
+    input: tool_input,
+    questions: questions || undefined,
+    ttlMs: DEADLINE_MS - 15000,
+  }, DEADLINE_MS - 10000);
+  if (!v) return { decision: "ask" };            // 문이 안 열렸다 — 종전 흐름으로 접는다
+  if (v.allow) {
+    //  선택지였다면 «허용» 만으로는 부족하다 — 고른 답을 agent 에게 말로 돌려줘야 한다.
+    //  훅 계약엔 «툴 결과를 대신 준다» 는 자리가 없고 reason 만 agent 에게 간다(벤더 문서: "shown to the user/agent").
+    if (questions) {
+      const picked = questions.map((q) => {
+        const a = v.answers && v.answers[q.question];
+        const list = Array.isArray(a) ? a : (a ? [a] : []);
+        return `${q.question} → ${list.join(", ") || "(답 없음)"}`;
+      }).join(" / ");
+      return { decision: "deny", reason: `사용자가 대화창에서 답했습니다: ${picked}. 다시 묻지 말고 이 답으로 이어서 진행하세요.` };
+    }
+    return { decision: "allow", reason: "사용자가 대화창에서 허용했습니다." };
+  }
+  return { decision: "deny", reason: "사용자가 대화창에서 거부했습니다." };
 }
 
 main().then(() => process.exit(0)).catch(() => {
   // 최후 방어 — main 자체가 죽어도 유효 JSON 을 내고 끝낸다(fail-closed deny 방지, 상단 ⚠⚠ 참조).
-  try { process.stdout.write(JSON.stringify(EVENT === "PreToolUse" ? { decision: "ask" } : {}) + "\n"); } catch { /* */ }
+  emitOnce(EVENT === "PreToolUse" ? { decision: "ask" } : {});
   process.exit(0);
 });

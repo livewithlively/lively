@@ -17,7 +17,7 @@ let creatingPreset: string | null = null;   // 프리셋을 고른 뒤 생성 �
 let choosingPreset = false;
 
 export async function renderCollectors(host: HTMLElement): Promise<void> {
-  busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '수집기를 불러오는 중…' })));
+  busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '가져오기를 불러오는 중…' })));
   let d: any;
   try { d = await api('/api/ui/org/collectors'); }
   catch (e) {
@@ -35,7 +35,7 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
   const body = el('div', {});
 
   body.append(el('p', { class: 'admin-hint' },
-    ...uiText('슬랙·노션 같은 외부 도구의 내용을 주기적으로 가져옵니다. 같은 종류로 여러 개를 만들 수 있습니다 — 워크스페이스가 둘이거나, 채널 그룹마다 주기·산출 방식을 다르게 하고 싶을 때 나눠서 만드세요.')));
+    ...uiText('슬랙·노션 같은 외부 도구의 내용을 주기적으로 자료함으로 가져옵니다. 같은 종류로 여러 개를 만들 수 있습니다 — 워크스페이스가 둘이거나, 채널 그룹마다 주기·산출 방식을 다르게 하고 싶을 때 나눠서 만드세요.')));
 
   // 권한 안내는 **모두에게** 보인다(관리자에게도). 관리자만 보이는 안내는 정작 막힌 사람에게 안 닿고,
   //  비-admin 에게만 보이면 관리자는 자기 화면과 남의 화면이 다르다는 걸 모른 채 "그냥 만드세요"라고 말한다.
@@ -43,7 +43,7 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
   body.append(el('p', { class: 'admin-hint ctx-perm-line' },
     canEdit ? null : el('span', { class: 'pill', text: '읽기 전용' }),
     el('span', { class: 'admin-only-badge', text: '관리자' }),
-    ' 수집기를 만들고 고치고 삭제하는 일과 [지금 수집]은 관리자 전용입니다 — 외부 서비스의 접속 토큰을 다루기 때문입니다. ',
+    ' 가져오기를 만들고 고치고 삭제하는 일과 [지금 가져오기]는 관리자 전용입니다 — 외부 서비스의 접속 토큰을 다루기 때문입니다. ',
     canEdit ? '무엇이 언제 수집되는지는 모든 구성원이 볼 수 있습니다.'
             : '무엇이 언제 수집되는지는 아래에서 그대로 보실 수 있습니다.'));
 
@@ -53,7 +53,7 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
 
   if (!collectors.length && !creatingPreset && !choosingPreset) {
     body.append(el('div', { class: 'card ctx-empty' },
-      el('p', { class: 'ctx-empty-t', text: '아직 수집기가 없습니다' }),
+      el('p', { class: 'ctx-empty-t', text: '아직 가져오기가 없습니다' }),
       el('p', { class: 'admin-hint', text: canEdit
         ? '외부 도구를 연결하면 그 내용이 자료로 쌓이고, 다음 단계(증류)가 그중 남길 가치가 있는 것을 지식으로 만듭니다.'
         : '외부 도구가 아직 연결되지 않았습니다. 연결은 관리자가 합니다 — 필요한 도구가 있으면 관리자에게 요청하세요.' })));
@@ -74,7 +74,7 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
     const p = presets.find((x) => x.key === creatingPreset);
     body.append(p ? collectorEditor(null, presets, reload, p) : el('div', {}));
   } else {
-    const add = el('button', { class: 'btn btn-primary', text: '+ 수집기 만들기' });
+    const add = el('button', { class: 'btn btn-primary', text: '+ 가져오기 만들기' });
     add.addEventListener('click', () => { choosingPreset = true; editingId = null; reload(); });
     body.append(el('div', { class: 'ctx-actions' }, add));
   }
@@ -93,8 +93,8 @@ export async function renderCollectors(host: HTMLElement): Promise<void> {
     //  전력으로 비활성해 둔 것이다(#1534). 실제로 이 필터 없이 짰더니 화면이 정확히 그걸 집었다.
     matchId: (id) => id.startsWith('collector-'),
     readOnly: true,   // 잡의 주인은 수집기(enabled → syncCollectorJob). 여기서 켜고 끄면 주인과 어긋난다.
-    missingLine: '자동 수집이 아직 없습니다 — 켜진 수집기가 없기 때문입니다.',
-    managedElsewhere: '수집은 잡을 따로 만들지 않습니다. 위에서 수집기를 켜면 그 수집기의 자동 싱크가 함께 등록되고, 끄면 같이 멈춥니다.',
+    missingLine: '자동 가져오기가 아직 없습니다 — 켜진 가져오기가 없기 때문입니다.',
+    managedElsewhere: '가져오기는 잡을 따로 만들지 않습니다. 위에서 가져오기를 켜면 그 자동 싱크가 함께 등록되고, 끄면 같이 멈춥니다.',
   }, reload));
 }
 
@@ -104,7 +104,7 @@ async function localTile() {
   const card = el('div', { class: 'card ctx-row' });
   card.append(el('div', { class: 'ctx-row-head' },
     el('span', { class: 'ctx-row-title', text: '내 컴퓨터' }),
-    el('span', { class: 'ctx-tag', text: '올리는 순간 수집' })));
+    el('span', { class: 'ctx-tag', text: '올리는 순간 가져오기' })));
   let meta = '파일이나 폴더를 자료 칸·세션 입력창에 끌어다 놓으면 그대로 자료가 됩니다.';
   let folders = '';
   try {
@@ -177,7 +177,7 @@ function collectorSummary(c: any, reload: () => void, canEdit = true) {
   const del = el('button', { class: 'btn-text btn-text-danger', text: '삭제' });
   del.addEventListener('click', async () => {
     const ok = await confirmDialog({
-      title: `‘${c.label || c.key}’ 수집기를 삭제할까요?`,
+      title: `‘${c.label || c.key}’ 가져오기를 삭제할까요?`,
       lines: ['이미 수집된 자료와 지식은 그대로 남습니다.',
         '같은 이름으로 다시 만들면 중단된 지점부터 이어서 수집합니다.'],
       confirmText: '삭제', danger: true,

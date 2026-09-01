@@ -8,7 +8,8 @@
 //   ① GET  /api/ui/me/welcome          — 실측 조회(내가 올린 자료·종류별 집계·지금 갈래·끝냈는지)
 //   ② POST /api/ui/me/welcome/analyze  — 올린 자료를 **LLM 에게 실제로 보여** 갈래를 제안받는다
 //      GET  /api/ui/me/welcome/analyze/:id — 그 판정을 읽는다(끝났으면 파싱된 갈래 목록)
-//   ③ POST /api/ui/me/welcome          — 사람이 승인한 것을 **진짜로 반영**(갈래 생성·프로필·완료)
+//   ③ POST /api/ui/me/welcome/progress — **하다 만 자리**를 남긴다(#2207 — 창을 닫아도 그 장면부터 잇게)
+//   ④ POST /api/ui/me/welcome          — 사람이 승인한 것을 **진짜로 반영**(갈래 생성·프로필·완료)
 //
 //  ⚠ LLM 은 이 제품에서 **사람의 AI 구독으로 헤드리스 세션을 띄우는 것**이 유일한 길이다
 //   (박스에 API 키가 없다 — 그게 설계다). 그래서 ②는 리브 턴과 같은 spawnTaskSession 을 쓰고,
@@ -53,6 +54,31 @@ export function drawerKey(name: string): string {
   const ascii = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
   if (ascii) return ascii;
   return `d-${crypto.createHash("sha1").update(name.trim()).digest("hex").slice(0, 10)}`;
+}
+
+/** 하다 만 자리를 저장할 때의 크기 상한(#2207). 화면 상태는 답 몇 줄이라 이 값을 넘을 이유가 없다.
+ *  ⚠ 넘으면 **거절한다**(조용히 자르지 않는다) — 잘린 JSON 은 다음에 이어 열 때 그냥 깨진 상태다. */
+export const PROGRESS_MAX_BYTES = 32 * 1024;
+/** 장면 key — 어떤 장면이 있는지는 화면이 정한다. 서버는 목록을 모르고 **모양만** 본다. */
+const SCENE_RE = /^[A-Za-z0-9_-]{1,40}$/;
+
+/**
+ * 화면이 보낸 «하다 만 자리»를 저장할 모양으로 다듬는다(순수) (#2207).
+ *
+ * 서버는 `state` 를 **해석하지 않는다** — 장면이 늘고 줄 때마다 서버 스키마를 따라 고치게 만들면
+ *  그 순간부터 두 벌이 어긋난다(같은 이유로 리브 프로필도 대화 본문을 복제하지 않는다).
+ *  대신 지키는 것 셋: 장면 key 의 모양 · 전체 크기 · JSON 으로 다시 읽히는가.
+ */
+export function normalizeProgress(input: Record<string, unknown>, now: string): { at: string; scene: string; state: Record<string, unknown> } {
+  const scene = String(input.scene ?? "").trim();
+  if (!SCENE_RE.test(scene)) throw new HttpError(400, "scene 이 올바르지 않습니다");
+  const raw = input.state;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "state 는 객체여야 합니다");
+  let json: string;
+  try { json = JSON.stringify(raw); } catch { throw new HttpError(400, "state 를 저장할 수 없습니다"); }
+  if (!json || json === "{}") throw new HttpError(400, "저장할 진행이 없습니다");
+  if (Buffer.byteLength(json, "utf8") > PROGRESS_MAX_BYTES) throw new HttpError(413, "진행 상태가 너무 큽니다");
+  return { at: now, scene, state: JSON.parse(json) as Record<string, unknown> };
 }
 
 /**
@@ -233,53 +259,7 @@ export const welcomeCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { getMember, getLivProfile } = await import("../../org/store.js");
-      const { listSources, countSources } = await import("../../v6/source-store.js");
-      const { listCategories } = await import("../../v6/category-store.js");
-
-      // AI 가 이어져 있나 — **분석을 누르기 전에** 알아야 한다. 안 그러면 사람이 «읽어 주세요» 를 누르고
-      //  나서야 거절을 본다.
-      //  ⚠ 판정 기준은 **그 사람이 로그인한 하네스**다(setup-token 이 아니다). 매니지드에서 사람은 웹 터미널에서
-      //   `claude` 를 한 번 띄워 로그인하고, 그 자격은 자기 프로필(~/.claude/.credentials.json)에 남는다.
-      //   헤드리스 실행은 그 프로필로 폴백한다(tasks.ts: "리스가 없으면 노드 로컬 프로필/자격 폴백").
-      //   setup-token 리스는 **그 프로필이 없는 자리**(남의 노드 위탁)에서 쓰는 보조 수단이라, 그걸로 판정하면
-      //   웹 터미널에서 이미 로그인한 사람을 «AI 안 이었음» 으로 잘못 막는다.
-      const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
-      const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
-
-      const [member, liv, entries, total, cats, loggedIn] = await Promise.all([
-        getMember(userId),
-        getLivProfile(userId),
-        listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>),
-        countSources({}, null).catch(() => 0),
-        listCategories(undefined, null).catch(() => [] as Array<Record<string, unknown>>),
-        memberLoggedInHarnessesAny(userId).catch(() => [] as string[]),
-      ]);
-      // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
-      const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
-      const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
-      return {
-        done: !!(liv.welcome?.done_at || liv.onboarded_at),   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
-        done_at: liv.welcome?.done_at ?? null,
-        // 이 사람의 AI 가 이어졌나(분석이 실제로 돌 수 있나) + 무엇으로 도는가. 자격 값은 절대 싣지 않는다.
-        ai_ready: aiHarnesses.length > 0,
-        ai_harnesses: aiHarnesses,
-        profile: {
-          display_name: member?.display_name ?? null,
-          nickname: member?.nickname ?? null,
-          work: liv.work ?? null,
-        },
-        uploads: {
-          total,
-          sampled: rows.length,
-          kinds: tallySources(rows),
-          names: rows.map((r) => String(r.title ?? "")).filter(Boolean).slice(0, SAMPLE_CAP),
-          // '주기적으로 만드는 문서' 를 말할 근거 — 실제 파일 이름에서 본 것만 담는다.
-          forms: repeatedForms(rows.map((r) => String(r.title ?? "")).filter(Boolean)).slice(0, 5),
-        },
-        categories: (cats as Array<{ key?: string; name?: string; space?: string }>)
-          .map((c) => ({ key: String(c.key ?? ""), name: String(c.name ?? ""), space: String(c.space ?? "") })),
-      };
+      return welcomeSnapshot(userId);
     }),
 
   // ── ② LLM 분석 ───────────────────────────────────────────────────────────
@@ -395,7 +375,41 @@ export const welcomeCapabilities: Capability[] = [
       from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
     }),
 
-  // ── ③ 반영 ───────────────────────────────────────────────────────────────
+  // ── ③ 하다 만 자리 저장(#2207) ─────────────────────────────────────────────
+  //  왜 필요한가: 진행 상태가 브라우저 sessionStorage 하나였다. 탭을 닫으면 사라지므로, 온보딩을 하다
+  //   나간 사람은 app.lvly.io 로 다시 들어와도 **이름부터** 다시 물었다. 답을 받아 놓고 잃는 것은
+  //   이름·업무를 그 자리에서 남기기로 한 결정(#1813)과 같은 결함이다 — 자리표까지 서버가 든다.
+  //  ⚠ 자동 저장이라 자주 불린다. 그래서 하는 일은 **한 줄 쓰기**뿐이다(집계·LLM·외부 호출 없음).
+  restRead("me_welcome_progress", "처음 설정 진행 저장",
+    "처음 설정(#/welcome)에서 **지금 어디까지 왔는지**를 서버에 남긴다. 중간에 창을 닫아도 다음에 " +
+    "들어오면 그 장면부터 이어 간다. state 는 화면이 쥔 상태 그대로이고 서버는 해석하지 않는다. " +
+    "끝나면(POST /api/ui/me/welcome) 저절로 지워진다.",
+    [{ method: "POST", paths: ["/api/ui/me/welcome/progress"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile, setLivWelcomeProgress } = await import("../../org/store.js");
+      const { assertNoHardSecrets } = await import("../../org/ingest/redact.js");
+
+      // 지우기 — 처음부터 다시 하기로 했을 때. 저장과 같은 문으로 받는다(문을 두 개 내지 않는다).
+      if (input.clear === true) { await setLivWelcomeProgress(userId, null); return { ok: true, cleared: true }; }
+
+      // 이미 끝낸 사람의 진행은 받지 않는다 — 받으면 그 값이 다음 로그인에 «아직 하는 중» 으로 읽힌다.
+      const liv = await getLivProfile(userId);
+      if (liv.welcome?.done_at || liv.onboarded_at) return { ok: true, skipped: "done" };
+
+      const progress = normalizeProgress(input, new Date().toISOString());
+      //  온보딩 답이 멤버 레코드에 남는다 — 사람이 입력창에 토큰을 붙여 넣었으면 여기서 막는다(welcome 반영과 같은 규율).
+      assertNoHardSecrets(JSON.stringify(progress.state), "welcome-progress");
+      await setLivWelcomeProgress(userId, progress);
+      return { ok: true, at: progress.at, scene: progress.scene };
+    }, false, {
+      scene: z.string().optional().describe("멈춘 장면 key — 다음에 이 장면부터 연다"),
+      state: z.record(z.unknown()).optional().describe("화면이 쥔 진행 상태 그대로(서버는 해석하지 않는다)"),
+      clear: z.boolean().optional().describe("true 면 저장된 진행을 지운다(처음부터 다시)"),
+    }),
+
+  // ── ④ 반영 ───────────────────────────────────────────────────────────────
   restRead("me_welcome_apply", "처음 설정 결과 반영",
     "처음 설정에서 사람이 정한 것을 **실제로 반영한다** — 부를 이름, 자료함 갈래 생성, 업무 방식과 결정 기록, " +
     "그리고 처음 설정 완료 표식. 갈래 생성은 이미 있는 key 를 건너뛰므로 다시 눌러도 안전하다.",
@@ -427,6 +441,16 @@ export const welcomeCapabilities: Capability[] = [
         //  (personName 단일 판정). 여기서 nickname 까지 덮으면 그 사람이 정해 둔 닉네임이 날아간다.
         await upsertMember({ id: userId, display_name: nickname }, { actor: userId, source: "welcome" } as never)
           .catch(() => { /* 이름은 못 바꿔도 온보딩을 막지 않는다 */ });
+        // #2188 ① — 매니지드면 **계정 서버에도 알린다.** 워크스페이스는 이 화면보다 **먼저** 만들어지므로
+        //  이름이 자리표시자("내 워크스페이스")로 굳는다. 신고(장원준 2026-08-27):
+        //  *"처음에 입력한 이름이 워크스페이스에 반영되지 않았어 — ~~의 워크스페이스로 되어 있어야 하는데."*
+        //  구글 SSO 경로는 계정 이름을 알아서 처음부터 «<이름>의 워크스페이스» 로 짓는다(CP ensurePersonalWorkspace) —
+        //  이메일+비밀번호 경로만 그 이름을 알 자리가 없었고, 그 자리가 바로 여기다.
+        //  ⚠ **부수효과다** — 계정 서버가 죽어도 온보딩은 그대로 진행된다(이름은 이미 이 워크스페이스에 저장됐다).
+        //  CP 는 비어 있는 값만 채운다(사람이 고쳐 둔 이름은 안 덮는다 — tenant-workspace-routes.ts B3).
+        const { resolveCpTarget, callCpBestEffort } = await import("./managed-cp.js");
+        await callCpBestEffort(await resolveCpTarget(user, { optional: true }).catch(() => null),
+          "/api/tenant/account-name", { name: nickname });
       }
 
       // ── 자료함 갈래 ── 사람이 승인한 것만 만든다. 이미 있으면 건너뛴다(다시 눌러도 안전).
@@ -460,6 +484,18 @@ export const welcomeCapabilities: Capability[] = [
           await ensureLocalFilesDistiller({ enable: true, actor: userId, requester: userId, source: "welcome" });
         } catch (e) { console.warn(`[welcome] 로컬 증류기를 켜지 못했습니다: ${(e as Error)?.message ?? e}`); }
       }
+      // ── 레인 뼈대(#1631) ── 서랍(만든 것 + 이미 있던 것)마다 꺼진 증류기 초안 + catch-all. 리브(2턴)가 표본을 읽고
+      //  이 초안을 채운다 — 서버는 답만으로 정해지는 뼈대를 즉시 만들어 AI 없이도 "정리 자리"가 보이게 한다. 멱등·비치명.
+      const skeletonDrawers = wanted
+        .map((d) => s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60))
+        .filter((n): n is string => !!n)
+        .map((n) => ({ key: drawerKey(n), name: n }));
+      if (skeletonDrawers.length) {
+        try {
+          const { applyLaneSkeleton } = await import("../../org/liv/lane-skeleton.js");
+          await applyLaneSkeleton({ drawers: skeletonDrawers, cadence: s(input.cadence, 20), actor: userId });
+        } catch (e) { console.warn(`[welcome] 레인 뼈대를 만들지 못했습니다: ${(e as Error)?.message ?? e}`); }
+      }
 
       // ── 업무 방식과 결정 ── 리브의 기억이 사는 자리에 남긴다(다음 세션의 리브가 이걸 읽는다).
       const job = s(input.job, 200);
@@ -487,11 +523,23 @@ export const welcomeCapabilities: Capability[] = [
       // ── 완료 표식 ── 서버가 안다. 기기를 바꿔도 온보딩이 다시 뜨지 않는다.
       //  main(#2039)은 같은 사실을 `onboarded_at` 으로 보고 부팅 판정(me.first_run)을 한다 — 두 표식을 **한 번에** 찍는다.
       //   welcome 만 찍으면 다음 부팅에 first_run 이 여전히 true 라 처음 설정이 또 뜬다.
+      //  (#1631) 이미 열린 리브 세션이 있으면 그 좌표를 지킨다 — welcome 은 통째로 덮이는 필드라 여기서 안 실으면 사라진다.
+      const { getLivProfile: readLiv } = await import("../../org/store.js");
+      const priorSession = (await readLiv(userId).catch(() => null))?.welcome?.session_id ?? null;
       const profile = await appendLivProfile(userId, {
-        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder },
+        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession },
         onboarded: true,
       });
-      return { ok: true, created, skipped, welcome: profile.welcome ?? null };
+      //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
+      //  ⚠ 비치명: 못 지워도 끝난 것은 끝난 것이다(GET 이 done 일 때 progress 를 내주지 않는다).
+      const { setLivWelcomeProgress } = await import("../../org/store.js");
+      await setLivWelcomeProgress(userId, null).catch(() => { /* 비치명 */ });
+      // ── 리브 킥오프(#1631) ── 처음 설정이 끝났으니 리브 세션을 열고 1턴(현황 보고)을 넣는다. 화면은 응답의 liv.href 로 간다.
+      //  ⚠ 비치명: 리브가 못 떠도(AI 미로그인·세션 한도 등) 처음 설정은 끝난 것이다 — 사람이 답한 것은 이미 반영됐다.
+      //   사유는 liv.error 로 싣는다(감추지 않는다). 다시 눌러도 세션을 또 열지 않는다(priorSession 재사용).
+      const liv = await kickoffLivAfterWelcome(user, { priorSession, drawers: created, firstOrder, decisions, work: profile.work ?? null });
+      const welcome = profile.welcome ? { ...profile.welcome, session_id: liv.session_id ?? profile.welcome.session_id ?? null } : null;
+      return { ok: true, created, skipped, welcome, liv };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
       stage: z.string().optional().describe("company|solo|academy|student"),
@@ -512,3 +560,135 @@ const STAGE_LABEL: Record<string, string> = {
 const SHARE_LABEL: Record<string, string> = {
   me: "나만 본다", team: "우리 팀이 같이 본다", dept: "여러 부서와 나눈다", ext: "고객·외부에 낸다",
 };
+
+/**
+ * (#1631) 처음 설정 현황 **실측** — GET /api/ui/me/welcome 의 본문이자 리브 1턴 프롬프트의 재료.
+ *  한 함수라야 화면과 리브가 **같은 숫자**를 본다(따로 조립하면 둘이 어긋난 채로 각자 옳다고 말한다).
+ *  테넌트 축은 호출 컨텍스트(요청의 워크스페이스)가 정한다 — 여기서 고르지 않는다.
+ */
+export async function welcomeSnapshot(userId: string) {
+  const { getMember, getLivProfile } = await import("../../org/store.js");
+  const { listSources, countSources } = await import("../../v6/source-store.js");
+  const { listCategories } = await import("../../v6/category-store.js");
+
+  // AI 가 이어져 있나 — **분석을 누르기 전에** 알아야 한다. 안 그러면 사람이 «읽어 주세요» 를 누르고
+  //  나서야 거절을 본다.
+  //  ⚠ 판정 기준은 **그 사람이 로그인한 하네스**다(setup-token 이 아니다). 매니지드에서 사람은 웹 터미널에서
+  //   `claude` 를 한 번 띄워 로그인하고, 그 자격은 자기 프로필(~/.claude/.credentials.json)에 남는다.
+  //   헤드리스 실행은 그 프로필로 폴백한다(tasks.ts: "리스가 없으면 노드 로컬 프로필/자격 폴백").
+  //   setup-token 리스는 **그 프로필이 없는 자리**(남의 노드 위탁)에서 쓰는 보조 수단이라, 그걸로 판정하면
+  //   웹 터미널에서 이미 로그인한 사람을 «AI 안 이었음» 으로 잘못 막는다.
+  //  ⚠ 여기는 **폴링 자리**다(화면이 온보딩 내내 되묻는다) — 로그인 프로브(실측 4.3초·상한 25초)를 붙이면
+  //   조회마다 네트워크 왕복이 붙는다. 그래서 싼 판정(자격 파일)만 쓴다. 자격 파일이 없는 하네스를 구하는
+  //   일은 **결정 지점**에서 한 번만 한다 — 아래 kickoffLivAfterWelcome 참조(#1631). ai-login.test ⑥ 이 지킨다.
+  const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
+  const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
+
+  const [member, liv, entries, total, cats, loggedIn] = await Promise.all([
+    getMember(userId),
+    getLivProfile(userId),
+    listSources({ limit: SAMPLE_CAP, offset: 0 }, null).catch(() => [] as Array<Record<string, unknown>>),
+    countSources({}, null).catch(() => 0),
+    listCategories(undefined, null).catch(() => [] as Array<Record<string, unknown>>),
+    memberLoggedInHarnessesAny(userId).catch(() => [] as string[]),
+  ]);
+  // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
+  const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
+  const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
+  const done = !!(liv.welcome?.done_at || liv.onboarded_at);
+  return {
+    done,   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
+    done_at: liv.welcome?.done_at ?? null,
+    // #2171 — **보여준 적 있나**(끝냈나와 별개). 자동 진입은 이 표식으로 평생 한 번만 한다.
+    shown_at: liv.welcome_shown_at ?? null,
+    //  하다 만 자리(#2207) — 이 값이 있으면 화면은 **이름부터가 아니라 그 장면부터** 다시 연다.
+    //  ⚠ 끝낸 사람에게는 내주지 않는다. 남아 있는 옛 진행이 «이어서 하기» 로 되살아나면
+    //   이미 끝낸 설정을 다시 하게 된다(끝냈다는 사실이 진행보다 세다).
+    progress: done ? null : (liv.welcome_progress ?? null),
+    // 이 사람의 AI 가 이어졌나(분석이 실제로 돌 수 있나) + 무엇으로 도는가. 자격 값은 절대 싣지 않는다.
+    ai_ready: aiHarnesses.length > 0,
+    ai_harnesses: aiHarnesses,
+    profile: {
+      display_name: member?.display_name ?? null,
+      nickname: member?.nickname ?? null,
+      work: liv.work ?? null,
+    },
+    uploads: {
+      total,
+      sampled: rows.length,
+      kinds: tallySources(rows),
+      names: rows.map((r) => String(r.title ?? "")).filter(Boolean).slice(0, SAMPLE_CAP),
+      // '주기적으로 만드는 문서' 를 말할 근거 — 실제 파일 이름에서 본 것만 담는다.
+      forms: repeatedForms(rows.map((r) => String(r.title ?? "")).filter(Boolean)).slice(0, 5),
+    },
+    categories: (cats as Array<{ key?: string; name?: string; space?: string }>)
+      .map((c) => ({ key: String(c.key ?? ""), name: String(c.name ?? ""), space: String(c.space ?? "") })),
+  };
+}
+export type WelcomeSnapshot = Awaited<ReturnType<typeof welcomeSnapshot>>;
+
+/**
+ * (#1631) 처음 설정 직후 리브 세션을 연다 — me_welcome_apply 의 마지막 걸음.
+ *  · 이미 열린 세션(priorSession)이 있으면 **다시 열지 않고** 그 좌표를 돌려준다(다시 눌러도 안전).
+ *  · 1턴 프롬프트는 welcomeSnapshot(화면과 같은 실측) + 이 반영이 남긴 결정 + 이 워크스페이스의 수집기 목록으로 조립한다.
+ *  · 어떤 실패도 던지지 않는다 — { error } 로 돌려주고 온보딩은 성공으로 끝난다(사람이 답한 것은 이미 반영됐다).
+ */
+export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
+  priorSession: string | null;
+  drawers: string[];
+  firstOrder: string | null;
+  decisions: Array<{ what: string; why?: string }>;
+  work: { asis?: string; tobe?: string } | null;
+}): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string; reason?: string }> {
+  const userId = user?.userId;
+  if (!userId) return { session_id: null, href: null, error: "인증된 사용자가 아닙니다" };
+  try {
+    const { listCollectors, appendLivProfile } = await import("../../org/store.js");
+    const { buildFirstTurnPrompt } = await import("../../org/liv/first-turn.js");
+    const { livKickoff } = await import("../../org/liv/kickoff.js");
+    const { planLivKickoff } = await import("../../org/liv/kickoff-plan.js");
+    const [snap, collectors] = await Promise.all([
+      welcomeSnapshot(userId),
+      listCollectors().catch(() => [] as Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>),
+    ]);
+    //  #1631 — 화면·게이트·1턴 프롬프트가 **같은 사실**을 봐야 한다. `snap.ai_harnesses` 는 폴링용이라 자격
+    //   **파일**이 있는 하네스만 센다 — 제미나이(antigravity)는 자격 파일이 없어 구조적으로 빠진다. 그대로
+    //   쓰면, 화면이 «Gemini 로그인이 확인됐어요» 라고 확정해 준 사람에게 리브를 **안 열어 준다**(planLivKickoff
+    //   가 skip). 여기는 온보딩당 한 번뿐이라 정확한 쪽을 쓴다 — 파일 표가 빌 때만 프로브가 돌고, 하나라도
+    //   있으면 프로브 0회다(무회귀).
+    const { memberUsableHarnesses } = await import("../../terminal/profiles.js");
+    const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
+    const usable = (await memberUsableHarnesses(userId).catch(() => snap.ai_harnesses))
+      .filter((k) => HEADLESS_KEYS.includes(k));
+    const prompt = buildFirstTurnPrompt({
+      displayName: snap.profile.display_name,
+      work: o.work,
+      drawers: o.drawers,
+      firstOrder: o.firstOrder,
+      decisions: o.decisions,
+      uploads: snap.uploads,
+      categories: snap.categories.map((c) => ({ name: c.name, space: c.space })),
+      collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled, sync_interval_sec: c.sync_interval_sec })),
+      aiHarnesses: usable,
+      harness: usable[0] ?? "claude",
+    });
+    //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다.
+    const plan = planLivKickoff(o.priorSession, usable);
+    if (plan.action === "reuse") return { session_id: plan.sessionId, href: `#/s/${encodeURIComponent(plan.sessionId)}`, reused: true };
+    if (plan.action === "skip") {
+      // AI 가 안 이어져 있으면 **세션을 열지 않는다.** 열어 봐야 답을 못 해 '조용히 멈춘 창'이 된다.
+      //  처음 설정은 끝난 것으로 두고(사람이 답한 건 이미 반영됐다) 사유만 돌려준다 — 화면이 «AI 연결» 로 안내한다.
+      console.info(`[welcome] 리브 킥오프 보류(${userId}) — AI 미연결`);
+      return { session_id: null, href: null, reason: plan.reason, error: "AI 를 아직 연결하지 않아 리브 세션을 열지 않았습니다" };
+    }
+    const made = await livKickoff(user, { prompt, harness: plan.harness });
+    //  세션 좌표를 welcome 에 남긴다 — 다음 반영이 이걸 보고 재사용하고, 2턴(증류 트리거)이 이 세션을 찾는다.
+    const cur = await import("../../org/store.js").then((m) => m.getLivProfile(userId)).catch(() => null);
+    if (cur?.welcome) await appendLivProfile(userId, { welcome: { ...cur.welcome, session_id: made.session_id } }).catch(() => { /* 비치명 */ });
+    return { session_id: made.session_id, href: made.href, harness: made.harness };
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    console.warn(`[welcome] 리브 킥오프 실패(${userId}) — 처음 설정은 끝난 것으로 둔다:`, msg);
+    return { session_id: null, href: null, error: msg };
+  }
+}

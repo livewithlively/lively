@@ -11,7 +11,7 @@
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 //  ④ **화면은 웹 UI 그대로다**(web-shell.mjs) — 설치·로그인·키트가 갖춰지면 창에 게이트웨이의 /ui/ 를 싣는다.
 //     앱에 화면 코드를 한 벌 더 두지 않는다(웹이 곧 앱). 마법사(renderer/)는 갖춰지기 전과 노드·점검 설정에만 쓴다.
-import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session, clipboard, Notification } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session, clipboard, Notification, autoUpdater as nativeAutoUpdater } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -24,11 +24,11 @@ import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
-import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
+import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
@@ -53,7 +53,9 @@ let startedHidden = false;          // 로그인 때 자동으로(숨겨) 떴나
 let running = null;                 // { kind, handle } — 지금 도는 CLI(동시 1개)
 let lastRun = null;                 // 마지막으로 시도한 { kind, opts } — '다시 시도' 가 이걸 그대로 다시 돈다
 let updateNote = null;              // 업데이트 확인 결과 한 줄(사람용)
-let updateReady = null;             // 받아 둔 새 버전(문자열) — 있으면 '적용(다시 시작)' 이 뜬다
+let updateReady = null;             // **지금 누르면 재시작되는** 새 버전 — 있을 때만 배너·트레이 항목이 뜬다
+let updateDownloaded = null;        // 우리가 zip 을 받아 둔 버전. mac 은 여기서 updateReady 까지 한 단계 더 간다(#2203)
+let squirrelReady = process.platform !== "darwin";  // mac 설치기가 그 파일을 넘겨받았나(win·linux 엔 그 단계가 없다)
 let updater = null;                 // electron-updater 인스턴스 — **한 번만** 만들고 리스너도 한 번만 건다(재확인마다 걸면 누적된다)
 let autoApplyTimer = null;          // 창이 안 보일 때 자동 적용 예약
 let progressNoteAt = 0;             // 진행률 문구를 마지막으로 그린 시각(스로틀)
@@ -74,11 +76,16 @@ const pendingPrompts = new Map();   // prompt id → resolve (렌더러의 답�
 // 파일 존재는 **싸고 즉시** 알 수 있는 축이라 먼저 채운다(창을 여는 판단이 여기 달렸다).
 //  노드의 실행 여부는 프로세스를 재야 알 수 있어 `lively status --json` 으로 따로 가져온다(#1541 T4).
 //  ⚠ 못 잰 축은 null 로 남긴다 — 모르는 걸 false 로 눕히면 화면이 "정지됨" 이라고 거짓말한다.
+// 워크스페이스 어긋남을 이미 물어본 곳(#2215) — 선언이 refreshState 보다 앞이어야 한다(그 함수가 clear 한다).
+const driftAsked = new Set();
 async function refreshState({ deep = false } = {}) {
   const wasReady = appReady(state);
   const cliPath = locateCli(existsSync);
   const next = { ...state, cliPath, cliFound: !!cliPath };
   next.gatewayUrl = readTrim(join(LIVELY_DIR, "gateway-url"));
+  // 매인 곳이 바뀌었으면(워크스페이스 이동) '이미 물어봤다' 기록을 버린다(#2215) — 안 그러면 되돌아왔을 때
+  //  다시 어긋나 있는데도 영영 안 묻는다. 기록의 뜻이 "그 주소를 그때 물었다"가 아니라 "지금 기준에서 물었다"이므로.
+  if (next.gatewayUrl !== state.gatewayUrl) driftAsked.clear();
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
   // 토큰이 **있다**와 **먹힌다**는 다르다 — 게이트웨이가 401 로 거부한 그 토큰이 그대로면 로그인이 필요한 상태다.
   //  파일의 토큰이 바뀌면(다시 로그인) 저절로 풀린다 — 따로 초기화할 자리가 없어 빠뜨릴 일이 없다.
@@ -100,6 +107,7 @@ async function refreshState({ deep = false } = {}) {
   next.logViews = LOG_VIEWS.map((v) => ({ id: v.id, label: v.label }));
   // '다 갖춰졌다' 는 **한 자리**(web-shell.appReady)에서만 판정한다 — 트레이·마법사·창 선택이 전부 이 값을 본다.
   next.ready = appReady(next);
+  next.nodeState = nodeStateOf(next);   // #2215 — patchState 를 안 거치는 경로라 여기서도 채운다(빠뜨리면 옛 판정이 남는다)
   state = next;
   renderTray(); send(IPC.STATE, state); pushWebUpdate();
   if (deep && cliPath && !running) await refreshNodeStatus(cliPath);
@@ -146,8 +154,12 @@ async function refreshNodeStatus(cli) {
     nodeSleepNote: (n.sleep && typeof n.sleep.note === "string" && n.sleep.note) ? n.sleep.note : null });
   renderTray(); send(IPC.STATE, state);
 }
-/** 상태 일부를 바꾸면 `ready` 도 같이 다시 잰다 — 이걸 빼먹은 자리가 하나라도 있으면 트레이·창이 옛 판정으로 움직인다. */
-function patchState(patch) { state = { ...state, ...patch }; state.ready = appReady(state); }
+/** 상태 일부를 바꾸면 `ready`·`nodeState` 도 같이 다시 잰다 — 이걸 빼먹은 자리가 하나라도 있으면 트레이·창이 옛 판정으로 움직인다. */
+function patchState(patch) {
+  state = { ...state, ...patch };
+  state.ready = appReady(state);
+  state.nodeState = nodeStateOf(state);   // #2215 — 배지·상세·트레이가 각자 식을 적지 않게 여기서 한 번
+}
 function readTrim(p) { try { return readFileSync(p, "utf8").trim() || null; } catch { return null; } }
 /** CLI 를 '어떻게' 띄울지 — Windows 의 `.cmd` EINVAL 을 피하는 유일한 자리(cli-locate 주석 참조). */
 function launchSpecFor(cli, args) {
@@ -271,7 +283,9 @@ function setAppAutoLaunch(on) {
 //  앱 재시작까지 업데이트를 영구 정지시키면 보안 픽스도 막히므로 5→15→60분으로 백오프해 다시 확인한다.
 async function checkUpdates() {
   // 받아 둔 버전이 있으면 적용만 남았다. 5분마다 같은 릴리스 메타데이터를 다시 읽을 이유가 없다.
-  if (updateReady) return null;
+  //  ⚠ 기준은 updateReady 가 아니라 **updateDownloaded** 다 — mac 은 받은 뒤에도 설치기 인계가 남아
+  //   updateReady 가 몇 분 늦게 선다. updateReady 로 재면 그 사이 확인이 또 돌아 프록시 서버를 겹쳐 만든다(#2203).
+  if (updateDownloaded) return null;
   const verdict = shouldCheckForUpdates({
     packaged: app.isPackaged, platform: process.platform,
     // 빌드에 배포처가 **실제로** 박혔나. ⚠ 상수 true 로 두면 안 된다 — 설치기 없이 만든 빌드(`--dir`,
@@ -344,21 +358,51 @@ async function getUpdater() {
     void refreshState();
   });
   autoUpdater.on("update-downloaded", (i) => {
-    updateReady = String(i?.version || "") || "새 버전";
-    updateNote = updateReadyNote(i?.version);
-    send(IPC.LOG, { stream: "raw", line: updateNote });
-    void refreshState();
-    scheduleAutoApply();
+    // ⚠ 이건 '우리가 zip 을 받았다' 까지다 — mac 은 아직 누를 수 있는 상태가 아니다(update-policy 의 #2203 절).
+    updateDownloaded = String(i?.version || "") || "새 버전";
+    settleUpdateReady();
   });
+  // mac 2단계: 애플 설치기가 그 zip 을 넘겨받으면 native autoUpdater 가 자기 update-downloaded 를 낸다.
+  //  **그 순간이 곧 '누르면 재시작되는' 순간**이다(MacUpdater 는 이걸로 squirrelDownloadedUpdate 를 세운다).
+  //  electron-updater 는 이 사실을 밖으로 안 알려 주므로 같은 이벤트를 우리도 듣는다.
+  if (process.platform === "darwin") {
+    try {
+      nativeAutoUpdater.on("update-downloaded", () => { squirrelReady = true; settleUpdateReady(); });
+    } catch (e) { send(IPC.LOG, { stream: "raw", line: `설치기 준비 신호를 못 듣습니다: ${String(e?.message || e).slice(0, 120)}` }); }
+  }
   updater = autoUpdater;
   return updater;
+}
+/**
+ * '받았다' 를 '누르면 된다' 로 승격할 수 있으면 승격한다 — 판정은 순수함수(updateApplyReady).
+ *  아직이면 배너를 띄우지 않고(사람이 할 일이 없다) 트레이·마법사에만 '설치 준비 중' 을 적는다.
+ */
+function settleUpdateReady() {
+  const ready = updateApplyReady({ downloadedVersion: updateDownloaded, squirrelReady, platform: process.platform });
+  if (!ready) {
+    updateNote = updateStagingNote(updateDownloaded);
+    send(IPC.LOG, { stream: "raw", line: updateNote });
+    void refreshState();
+    return;
+  }
+  if (updateReady === updateDownloaded) return;   // 같은 사실을 두 번 알리지 않는다(두 이벤트가 겹쳐 올 수 있다)
+  updateReady = updateDownloaded;
+  updateNote = updateReadyNote(updateReady);
+  send(IPC.LOG, { stream: "raw", line: updateNote });
+  void refreshState();
+  scheduleAutoApply();
 }
 /**
  * 받아 둔 업데이트를 지금 적용 — 설치기가 앱을 닫고·설치하고·**다시 띄운다**(isSilent + isForceRunAfter).
  *  종전 "앱을 다시 켜면 적용" 안내는 사람과 설치기를 경쟁시켰다(update-policy 머리말). 이제 사람은 아무것도 안 켠다.
  */
 async function applyUpdate() {
-  if (!updateReady) return { ok: false, error: "받아 둔 업데이트가 없습니다." };
+  // ⚠ mac: 받아 두기만 하고 설치기 인계가 안 끝났으면 quitAndInstall 은 **조용히 아무것도 안 한다**(#2203).
+  //  그 상태를 성공으로 답하면 화면이 '다시 시작하는 중' 으로 굳고 사람은 계속 누른다 — '아직' 이라고 말한다.
+  if (!updateReady) {
+    if (updateDownloaded) return { ok: false, error: updateNotStagedNote(updateDownloaded) };
+    return { ok: false, error: "받아 둔 업데이트가 없습니다." };
+  }
   if (running) return { ok: false, error: "작업이 끝난 뒤에 적용합니다." };
   try {
     const u = await getUpdater();
@@ -371,6 +415,10 @@ async function applyUpdate() {
     quitting = true;                                   // 창 close 핸들러가 숨기기 대신 닫게
     send(IPC.LOG, { stream: "raw", line: `업데이트 적용 — 앱을 다시 시작합니다 (${updateReady})…` });
     u.quitAndInstall(true, true);                      // Windows: 설치기 /S --force-run · Linux AppImage: 교체 후 재실행
+    // 안전망 — 여기까지 왔는데도 앱이 안 닫히면 `quitting` 을 되돌린다. 켜 둔 채로 두면 그 뒤 사람이 창을 닫을 때
+    //  트레이로 숨는 대신 창이 **진짜 닫혀** 자동 적용 예약(창 hide 에 달려 있다)까지 함께 사라진다(#2203).
+    const guard = setTimeout(() => { quitting = false; }, 20_000);
+    if (guard.unref) guard.unref();
     return { ok: true };
   } catch (e) {
     quitting = false;
@@ -726,6 +774,12 @@ function showApp() {
       showWindow(); void refreshState();
     });
     appWin.webContents.on("did-finish-load", () => { if (webError) { webError = null; void refreshState(); } });
+    // 사람이 웹에서 **다른 워크스페이스로 옮겨 갔나**(#2215) — 웹뷰만 옮겨가고 이 PC 의 로컬(토큰·노드·MCP)은
+    //  그대로라 조용히 어긋난다. 해시 라우팅이라 in-page 도 함께 듣는다(둘 다 같은 자리로 보낸다).
+    appWin.webContents.on("did-navigate", (_e, navUrl) => void offerWorkspaceRebind(navUrl));
+    appWin.webContents.on("did-navigate-in-page", (_e, navUrl, isMainFrame) => {
+      if (isMainFrame) void offerWorkspaceRebind(navUrl);
+    });
   }
   // 주소나 토큰이 바뀌었으면(다른 게이트웨이·다시 로그인) 다시 싣는다 — preload 가 문서 시작 때 새 토큰을 넣는다.
   //  ⚠ loadURL 의 거절을 받아 둔다 — 안 받으면 게이트웨이가 꺼져 있을 때 unhandled rejection 이 uncaughtException 으로 올라가
@@ -1051,6 +1105,35 @@ app.on("web-contents-created", (_e, wc) => {
 });
 
 // ── CLI 구동 ────────────────────────────────────────────────────────────────
+// ── 워크스페이스 어긋남 제안(#2215) ─────────────────────────────────────────────
+//  계정 1 : 워크스페이스 N 인데 이 PC 의 로컬 상태는 **한 벌**이다(`~/.lively/{gateway-url,token}` +
+//  `node-agent.env` + 하네스 MCP). 사람이 웹에서 워크스페이스를 옮기면 웹뷰만 따라가고 로컬은 그대로라,
+//  새 워크스페이스에선 이 PC 로 세션을 못 열고 **옛 워크스페이스에는 노드가 계속 붙어 있다.**
+//  그 어긋남이 조용하면 아무도 모르므로 여기서 알아채고 묻는다.
+//
+//  ⚠ 판정은 web-shell.workspaceDriftFrom 한 벌이다(테스트가 표로 못박는다) — 여기선 **묻는 정책**만 정한다:
+//   · 같은 곳을 두 번 묻지 않는다(세션 동안 기억) — 해시 라우팅이라 did-navigate-in-page 가 자주 온다.
+//   · 작업 중이면 묻지 않는다(설치·로그인 도중에 또 로그인을 걸면 서로 밟는다).
+//   · 수락 = `setup --cloud` 재실행. 승인 화면에서 그 워크스페이스를 고르면 CLI 의 afterLogin 이
+//     노드·MCP 를 그리로 따라오게 한다(kit/cli/lively.mjs). 앱이 따로 노드를 만지지 않는다 — 정본은 CLI 다.
+async function offerWorkspaceRebind(navUrl) {
+  if (running) return;
+  const drift = workspaceDriftFrom(navUrl, state.gatewayUrl);
+  if (!drift || driftAsked.has(drift.to)) return;
+  driftAsked.add(drift.to);
+  const { response } = await dialog.showMessageBox(appWin && !appWin.isDestroyed() ? appWin : undefined, {
+    type: "question",
+    buttons: ["이 워크스페이스로 옮기기", "나중에"],
+    defaultId: 0,
+    cancelId: 1,
+    message: "다른 워크스페이스를 보고 계십니다.",
+    detail: `이 PC 의 연결(노드·MCP)은 아직 ${drift.from} 에 매여 있습니다.\n`
+      + `${drift.to} 로 옮기면 이 PC 에서 그 워크스페이스의 세션을 열 수 있고, 옛 워크스페이스와의 연결은 끊깁니다.\n\n`
+      + "옮기려면 승인 화면에서 이 워크스페이스를 고르세요.",
+  });
+  if (response === 0) await start("setup-cloud", {});
+}
+
 async function start(kind, opts) {
   if (running) return { ok: false, error: "이미 실행 중인 작업이 있습니다." };
   if (!RUN_KINDS.includes(kind)) return { ok: false, error: `알 수 없는 작업: ${kind}` };

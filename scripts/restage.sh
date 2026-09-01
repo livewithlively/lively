@@ -103,28 +103,65 @@ DIRECT="$(git rev-list --first-parent --no-merges "${BASE_SHA}..${REMOTE}/${STAG
 # (위 안내대로 cherry-pick 해서 브랜치로 옮기면 SHA 는 달라지지만 패치는 같다. SHA 로만 보면
 #  옮긴 뒤에도 계속 막혀서, 안내를 따라도 빠져나갈 수 없는 검사가 된다.)
 # `git cherry <브랜치> <C> <C^>` 가 딱 그 판정을 한다: 패치가 동등한 커밋이 그 브랜치에 있으면 '-'.
+#
+# ⚠ 속도 (2026-09-01, #2457) — 종전은 **직접커밋 × 후보브랜치** 로 `git cherry` 를 돌렸다. 그게 이 검사를
+#  사실상 못 끝나게 만들었다: 실측 stage 직접커밋 109 × 후보 620 ≈ **6만7천 회**, 각 호출이 그 브랜치의
+#  히스토리를 훑어 patch-id 를 새로 계산한다. 2026-08-25 에 이미 «restage 가 끝나지 않는다»로 기록됐고
+#  (150×309≈4.6만, "날 단위"), 그 문서가 처방까지 적어 뒀다 — **patch-id 를 한 번만 계산해 대조하라.**
+#  여기서 그렇게 바꾼다: 후보 커밋 전체(실측 948건)의 patch-id 집합을 **1회** 만들고 대조한다 → N×M → N+M.
+#  판정 자체는 종전과 같다(patch 동등성). '어느 브랜치에 있나'는 매칭된 소수에만 물어본다.
 ORPHANS=""
 RESCUED=""
 if [[ -n "$DIRECT" ]]; then
-  # 후보는 '아직 main 에 안 들어간 origin 브랜치'뿐 — 전수 순회를 피한다.
+  # 후보는 '아직 main 에 안 들어간 origin 브랜치'뿐. `--no-merged` 가 그 판정을 ref 순회 1회로 한다
+  #  (종전엔 브랜치마다 merge-base 를 불러 620회였다).
+  #  ⚠ macOS 기본 bash 는 3.2 라 `mapfile` 이 없다(bash 4+). while-read 로 담는다.
   CAND=()
-  while read -r b; do
-    [[ -n "$b" && "$b" != "HEAD" && "$b" != "$STAGE" && "$b" != "$BASE" ]] || continue
-    git merge-base --is-ancestor "${REMOTE}/${b}" "$BASE_SHA" 2>/dev/null && continue
-    CAND+=("$b")
-  done < <(git for-each-ref --format='%(refname:strip=3)' "refs/remotes/${REMOTE}")
+  while IFS= read -r b; do
+    [[ -n "$b" ]] && CAND+=("$b")
+  done < <(git for-each-ref --format='%(refname:strip=3)' --no-merged "$BASE_SHA" "refs/remotes/${REMOTE}" \
+             | grep -vxE "HEAD|${STAGE}|${BASE}" || true)
+  # 후보에서 patch-id 집합을 한 번에 만든다. `git log -p` 의 커밋 헤더 덕에 patch-id 가
+  #  "<patch-id> <커밋sha>" 짝을 뱉는다(= git cherry 가 내부에서 하는 것과 같은 판정).
+  #
+  # ⚠ **범위에 main 을 반드시 포함한다.** `git cherry <브랜치> <C> <C^>` 는 그 브랜치의 **전체 히스토리**를
+  #  보므로 main 에 이미 들어간 쌍둥이도 잡는다. 여기서 main 을 빼면 **바로 그 쌍둥이를 놓쳐** 멀쩡한 커밋이
+  #  고아로 뒤집힌다 — 실측(2026-09-01): 그렇게 해서 고아가 14건 → 106건으로 부풀었다
+  #  (예: `6d486354` 는 main 과 project/2439-all-harness 양쪽에 patch 가 있는데 KNOWN 에서 빠졌다).
+  # 하한은 **공통 조상**이면 충분하다 — stage 직접커밋은 그 뒤에 생겼으니 쌍둥이도 그 뒤다.
+  #  전체 히스토리를 뜨면 수만 커밋의 diff 를 계산하게 되어, 고치려던 그 느림으로 되돌아간다.
+  KNOWN="$(mktemp)"; MINE="$(mktemp)"
+  #  main 은 위 ①이 `git cherry` 로 정확히 보므로 여기선 뺀다 — 집합은 '나머지 후보 브랜치' 몫이다.
+  if [[ ${#CAND[@]} -gt 0 ]]; then
+    git log -p --no-merges "${CAND[@]/#/${REMOTE}/}" --not "$BASE_SHA" 2>/dev/null \
+      | git patch-id --stable > "$KNOWN" || true
+  fi
+  for c in $DIRECT; do git show "$c" 2>/dev/null; done | git patch-id --stable > "$MINE" || true
+
   for c in $DIRECT; do
-    saved=""
-    for b in ${CAND[@]+"${CAND[@]}"}; do
-      if git cherry "${REMOTE}/${b}" "$c" "${c}^" 2>/dev/null | grep -q '^-'; then saved="$b"; break; fi
-    done
     line="$(git log -1 --format='%h  %an  %s' "$c")"
-    if [[ -n "$saved" ]]; then
-      RESCUED+="${line}   → ${saved} 에 있음"$'\n'
+    # ① main 을 먼저, `git cherry` 로 본다 — 압도적으로 흔한 출처이고(실측 108건 중 **98건**),
+    #    전체 히스토리를 보므로 공통 조상보다 앞서 머지된 쌍둥이도 정확히 잡는다. 108건에 4초.
+    #    (집합 스캔의 하한을 공통 조상에 두면 그 옛 쌍둥이를 놓쳐 멀쩡한 커밋이 고아로 뒤집힌다 —
+    #     실측 2026-09-01: `cdfbfa96` 가 그렇게 거짓 고아가 됐다.)
+    if git cherry "${REMOTE}/${BASE}" "$c" "${c}^" 2>/dev/null | grep -q '^-'; then
+      RESCUED+="${line}   → ${BASE} 에 있음"$'\n'
+      continue
+    fi
+    # ② 남은 소수만 후보 브랜치 patch-id 집합과 대조한다.
+    pid="$(awk -v c="$c" '$2 ~ "^"c {print $1; exit}' "$MINE")"
+    twin=""
+    [[ -n "$pid" ]] && twin="$(awk -v p="$pid" '$1==p {print $2; exit}' "$KNOWN")"
+    if [[ -n "$twin" ]]; then
+      # 매칭은 소수라 여기서만 브랜치 이름을 묻는다(비싼 호출을 전수로 돌리지 않는다).
+      saved="$(git for-each-ref --format='%(refname:strip=3)' --contains "$twin" "refs/remotes/${REMOTE}" 2>/dev/null \
+                 | grep -vxE "HEAD|${STAGE}" | head -1)"
+      RESCUED+="${line}   → ${saved:-작업 브랜치} 에 있음"$'\n'
     else
       ORPHANS+="${line}"$'\n'
     fi
   done
+  rm -f "$KNOWN" "$MINE"
 fi
 
 if [[ -n "$RESCUED" ]]; then

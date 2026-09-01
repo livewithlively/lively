@@ -14,6 +14,8 @@ import { decodeTokenBlob, encodeTokenBlob, tokenMeta, CLIENT_SCOPE, gatewaySsrfF
 import { getMemberSecret, setMemberSecret, resolveMemberSecret, type MemberSecretResolved, type ResolveOpts } from "./member-secret-store.js";
 import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
 import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
+import { LINEAR_APP_KIND, LINEAR_TOKEN_URL } from "./linear-oauth.js";
+import { GITHUB_APP_KIND, GITHUB_TOKEN_URL } from "./github-app.js";
 import { logger } from "../../log.js";
 
 /** 만료 여유(초) — 호출이 나가는 동안 만료돼 상류가 401 을 주는 것까지 막는다. */
@@ -49,7 +51,13 @@ export function mergeRefreshedTokens(prev: OAuthTokens, next: Partial<OAuthToken
  *  인증 앵커만 Developer Preview 엔드포인트에 남아 있어 MCP 행 의존을 끊었기 때문이다.
  *  (슬랙 `slack_oauth`·노션 `notion_public` 은 이 경로를 안 탄다 — 슬랙은 토큰 회전 off 라 만료가 없고, 노션 갱신은 CP 프록시.)
  */
-const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_TOKEN_URL };
+/** [GitHub 연결]이 남기는 사용자 토큰 묶음의 슬롯 kind — 8시간 만료·refresh 회전(github-app.ts). 갱신 발급처와 client 는 GitHub App 의 것. */
+export const GITHUB_USER_TOKEN_KIND = "github_pat";
+const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_TOKEN_URL, [LINEAR_APP_KIND]: LINEAR_TOKEN_URL, [GITHUB_USER_TOKEN_KIND]: GITHUB_TOKEN_URL };
+/** 갱신에 쓸 OAuth 클라이언트가 **다른 kind 의 슬롯**에 사는 경우 — github_pat 묶음은 GitHub App(github_app/oauth:client)이 발급한 것이라 그 client 로 갱신한다.
+ *  ⚠ 이 표가 없으면 [GitHub 연결] 8시간 뒤 도구·수집기가 전부 «발급처를 모릅니다» 로 죽는다(2026-08-28 dev 실측, #2247 GitHub 수집기 첫 run). */
+export const CLIENT_KIND_FOR: Record<string, string> = { [GITHUB_USER_TOKEN_KIND]: GITHUB_APP_KIND };
+export function clientKindFor(authKind: string): string { return CLIENT_KIND_FOR[authKind] ?? authKind; }
 
 export function oauthTokenUrlFor(authKind: string | null | undefined): string | undefined {
   if (!authKind) return undefined;
@@ -105,7 +113,7 @@ export interface ProxyAuthDeps {
 }
 
 async function defaultLoadClient(authKind: string): Promise<OAuthClientInfo | null> {
-  const r = await getMemberSecret("gateway", authKind, CLIENT_SCOPE);
+  const r = await getMemberSecret("gateway", clientKindFor(authKind), CLIENT_SCOPE);
   if (!r?.secret) return null;
   try {
     const ci = JSON.parse(r.secret) as OAuthClientInfo;

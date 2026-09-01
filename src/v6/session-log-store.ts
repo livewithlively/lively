@@ -12,6 +12,7 @@
 //  ⚠ **키는 (node_id, session_id) 복합.** 스칼라면 같은 session_id 를 쓰는 두 머신 로그가 한 줄로 병합되고
 //   CAS 가 서로를 못 본다(설계 §5 ①). node_id='' = 게이트웨이 로컬(박스).
 import { itemsPool, withTx } from "../db/client.js";
+import { sessionNameFromPrompt } from "../terminal/session-name.js";
 import { SINGLE_TENANT_ID } from "../db/tenant-column.js";   // #1875 — 세션 목록 워크스페이스 필터의 primary 귀속값
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
@@ -51,6 +52,24 @@ export interface AppendResult {
 export async function sessionOwner(nodeId: string, sessionId: string): Promise<string | null> {
   const r = await itemsPool.query(`SELECT owner FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
   return (r.rows[0]?.owner as string | null) ?? null;
+}
+
+/**
+ * **세션 레지스트리**가 아는 주인(#1631) — 기록(session.owner)과 다른 축이다.
+ *
+ *  왜 필요한가: 위 `sessionOwner` 는 «첫 append 한 멤버» 라 대화가 한 줄도 없으면 null 이다. 그런데 열람
+ *   게이트가 그 값만 보면, 자기가 방금 연 세션을 여는 사람에게 «이 세션 로그를 볼 권한이 없습니다»(403)가
+ *   나간다 — 온보딩 직후 착지하는 화면이 정확히 그랬다(실측 2026-08-31). 정직한 답은 «아직 기록이 없습니다» 다.
+ *
+ *  ⚠ 이건 **보조 축**이다: 기록 축이 답을 가지고 있으면 그쪽이 정본이다(checkViewGate 참조).
+ *   여기서 덮으면 남의 기록을 자기 세션 id 로 여는 길이 생긴다.
+ *  ⚠ 조회 실패는 null(모름) — 인가에서 모름은 허용이 아니다. 게이트가 그대로 막는다.
+ */
+export async function sessionRegistryOwner(sessionId: string): Promise<string | null> {
+  try {
+    const r = await itemsPool.query(`SELECT owner FROM org_session_state WHERE id=$1`, [sessionId]);
+    return (r.rows[0]?.owner as string | null) ?? null;
+  } catch { return null; }
 }
 
 // 이 기록을 남긴 하네스(캡처 훅이 보고, #1746) — 읽을 때 어느 어댑터 파서로 공통 ChatLine 을 만들지 정한다. 미보고(구 행)면 null.
@@ -220,6 +239,12 @@ export async function readSessionLog(nodeId: string, sessionId: string, from = 0
 //  회수 표면의 목록면: 어느 환경에서 만들었든 내 세션을 한 곳에서 본다. reap 된 세션도 남(bytes=0, session 불멸).
 export interface SessionListRow {
   node_id: string; session_id: string; harness: string | null; title: string | null;
+  //  ★ title 과 name 은 다르다(#2234). title 은 **대화 제목**(첫 사람 발화 120자, firstUserPromptTitle) —
+  //   이력 화면에서 "그 대화가 무엇이었나"를 읽으라고 길게 남긴 값이다. name 은 **목록에 걸 이름**으로,
+  //   세션 이름을 짓는 그 규칙(terminal/session-name.ts)을 통과시킨 값이다. 둘을 한 값으로 쓰면
+  //   목록이 첫 지시 원문을 이름 자리에 건다 — 실측 2026-08-27(jang): 좌측 사이드바에
+  //   「업데이트 준비가 완료되었습니다. 새 버전 0.1.358 다시 시작하여 반영하기 이거 사이드바 아래에서 …」(121자).
+  name: string | null;
   owner: string | null; owner_name: string | null; first_seen: string; last_seen: string; bytes: number;
   project_id?: number | null; project_name?: string | null;   // 최근 바인딩 프로젝트(내 세션 목록에서만 채움, #905 C1)
 }
@@ -227,7 +252,11 @@ const SESSION_LIST_COLS = `s.node_id, s.session_id, s.harness, s.title, s.owner,
   s.first_seen, s.last_seen, COALESCE(l.bytes, 0)::bigint AS bytes`;
 const mapSessionRow = (x: Record<string, unknown>): SessionListRow => ({
   node_id: x.node_id as string, session_id: x.session_id as string, harness: (x.harness as string) ?? null,
-  title: (x.title as string) ?? null, owner: (x.owner as string) ?? null, owner_name: (x.owner_name as string) ?? null,
+  title: (x.title as string) ?? null,
+  //  이름은 **짓는 규칙 한 곳**을 그대로 탄다 — 살아 있는 박스가 자동 이름을 받는 그 규칙이다(#1808 · #2116).
+  //   그래야 박스가 죽어 기록만 남아도 같은 세션이 같은 이름으로 서 있다(종전엔 죽는 순간 121자로 늘어났다).
+  name: sessionNameFromPrompt(String(x.title ?? "")) || null,
+  owner: (x.owner as string) ?? null, owner_name: (x.owner_name as string) ?? null,
   first_seen: x.first_seen as string, last_seen: x.last_seen as string, bytes: Number(x.bytes),
   project_id: x.project_id != null ? Number(x.project_id) : null, project_name: (x.project_name as string) ?? null,
 });
@@ -284,13 +313,51 @@ export async function listSessionsForOwner(owner: string, limit = 200, workspace
       ORDER BY s.last_seen DESC
       LIMIT $2`,
     params);
-  return r.rows.map(mapSessionRow);
+  return withNamedLabels(r.rows.map(mapSessionRow), owner);
+}
+
+// ── 사람·에이전트가 **지은** 이름을 기록 행에도(#2251) ──────────────────────────
+//  `name` 의 기본값은 대화 제목에서 유도한 자동 이름이다(mapSessionRow) — 그건 '아직 아무도 안 지었을 때'의 값이다.
+//  누가 실제로 이름을 지었으면(label_source 가 human·agent) 그게 정본이고, 목록도 그걸 걸어야 한다.
+//  안 그러면 박스가 정리돼 기록만 남는 순간 사람이 고쳐 둔 이름이 **첫 지시 자동 이름으로 되돌아간다**
+//  (원준 신고 2026-08-28: "이름을 수도 없이 고쳤는데 계속 되돌아간다" 의 나머지 절반 — 앞 절반은 노드 rename 이
+//   게이트웨이 DB 에 안 닿던 것, terminal/routes.ts).
+//  ⚠ 왕복을 행 수에 비례시키지 않는다 — 대화 uuid 배열 하나로 한 번만 묻는다(#2234 의 교훈).
+//  ⚠ **owner 로 잠근다** — 목록과 같은 소유자의 행만 본다(대화 uuid 가 겹쳐도 남의 이름이 실리지 않게).
+//  ⚠ rule·id 출처는 일부러 무시한다 — 그건 이 목록이 title 에서 이미 같은 규칙으로 만들어 내는 값이다.
+async function withNamedLabels(rows: SessionListRow[], owner: string): Promise<SessionListRow[]> {
+  const ids = [...new Set(rows.map((r) => r.session_id).filter(Boolean))];
+  if (!ids.length) return rows;
+  try {
+    const r = await itemsPool.query(
+      `SELECT claude_session_id, label FROM org_session_state
+        WHERE owner = $1 AND claude_session_id = ANY($2::text[])
+          AND label_source IN ('human','agent') AND label IS NOT NULL AND btrim(label) <> ''`,
+      [owner, ids]);
+    if (!r.rows.length) return rows;
+    const named = new Map<string, string>(r.rows.map((x) => [String(x.claude_session_id), String(x.label).trim()]));
+    return rows.map((row) => { const n = named.get(row.session_id); return n ? { ...row, name: n } : row; });
+  } catch (e) {
+    //  이름 하나 때문에 목록을 못 주지는 않는다 — 못 읽으면 종전대로 자동 이름이 선다.
+    console.warn("[v6] 세션 목록 지어진 이름 조회 실패(비치명):", (e as Error)?.message ?? e);
+    return rows;
+  }
 }
 
 // 프로젝트 세션 목록(#905 C1 슬⑤b) — 이 프로젝트에 **한 번이라도** 바인딩된 세션(시간구간 전체). 프로젝트 상세 탭용.
 //  인가는 라우트에서(프로젝트 멤버). (node,session) 중복 제거 후 마지막활동 순.
-export async function listSessionsForProject(projectId: number, limit = 200): Promise<SessionListRow[]> {
-  if (!projectId) return [];
+/**
+ * 이 프로젝트에 바인딩된 중앙 기록 세션 — **내가 볼 수 있는 것만**(#1876 S2).
+ *
+ * ⚠ 종전엔 «프로젝트 멤버면 그 프로젝트의 세션 기록 목록 전부» 였다. 라우트 게이트(isProjectMember)를
+ *  통과한 사람에게 남의 세션 제목·시각이 통째로 나갔다 — 세션이 프라이빗이면 그 **존재와 제목**도
+ *  프라이빗이어야 한다(D1). 그래서 술어를 목록·입장과 같은 축(소유자 + 명시 초대)으로 좁힌다.
+ *
+ * 초대는 박스 세션 축(`org_session_state.invites`)에 있고 이 표의 키는 대화 uuid 라, `org_session_conv`
+ *  로 잇는다(양쪽 키 모두 대조 — 노드 세션·구 경로는 대화 uuid 가 곧 박스 id 인 경우가 있다).
+ */
+export async function listSessionsForProject(projectId: number, viewer: string, limit = 200): Promise<SessionListRow[]> {
+  if (!projectId || !viewer) return [];
   const r = await itemsPool.query(
     `SELECT * FROM (
        SELECT DISTINCT ON (s.node_id, s.session_id) ${SESSION_LIST_COLS}
@@ -299,9 +366,14 @@ export async function listSessionsForProject(projectId: number, limit = 200): Pr
          JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
          LEFT JOIN org_member m ON m.id = s.owner
         WHERE l.bytes > 0 AND s.parent_session_id IS NULL
+          AND (s.owner = $3 OR EXISTS(
+                SELECT 1 FROM org_session_state st
+                 WHERE (st.id = s.session_id
+                        OR st.id IN (SELECT box_id FROM org_session_conv WHERE conv_uuid = s.session_id))
+                   AND st.invites @> to_jsonb(ARRAY[$3::text])))
         ORDER BY s.node_id, s.session_id
      ) t ORDER BY t.last_seen DESC LIMIT $2`,
-    [projectId, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
+    [projectId, Math.min(Math.max(Number(limit) || 200, 1), 500), viewer]);
   return r.rows.map(mapSessionRow);
 }
 
@@ -396,6 +468,9 @@ export async function purgeSessionLog(nodeId: string, sessionId: string, purgedB
       `DELETE FROM session_project sp
         WHERE sp.session_id = ANY($1)
           AND NOT EXISTS (SELECT 1 FROM session s WHERE s.session_id = sp.session_id)`, [ids]);
+    // #2233 — 대화 사슬(어느 박스가 이 대화를 돌렸나)도 함께 지운다. 남겨 두면 완전 삭제한 대화가 다른 세션
+    //  화면의 사슬에 이름으로 남는다(내용은 이미 없지만, '있었다'는 사실 자체가 지우기로 한 것이다).
+    await client.query(`DELETE FROM org_session_conv WHERE conv_uuid = ANY($1)`, [ids]);
     // 묘비 — 이 좌표는 다시 받지 않는다. 없으면 워터마크가 0으로 돌아간 자리에 캡처 훅이 전문을 다시 올려
     //  지운 것이 부활한다(세션이 아직 살아 있을 때 특히). 서브에이전트 좌표도 각각 세운다(각자 append 대상이다).
     for (const id of ids) {

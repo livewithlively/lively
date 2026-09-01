@@ -285,3 +285,52 @@ test("★ 카탈로그 조회가 정책 이름과 FORCE 를 실제로 읽는다 
   assert.match(SQL_IDENTITY_GLOBAL, /'tenant_isolation'/);
   assert.match(SQL_IDENTITY_GLOBAL, /relforcerowsecurity/);
 });
+
+// ── ★★ 신원을 **판정하는** 읽기는 지금 맥락으로 못박는다 (#1879 후속) ──────────
+// 접기(pinIdentityGlobalTenant)는 짝이 있는 행을 **일부러 남기고**, 정책이 걸린 배포에서는 아예
+//  손대지 않는다. 그래서 "갈라진 행이 0" 은 보장이 아니고, 남은 짝 위에서도 읽기가 옳아야 한다.
+//
+// 실 Postgres 로 재현(2026-08-27):
+//   primary : __probe  state=inactive   ← 비활성화한 계정
+//   짝      : __probe  state=active
+//   SELECT id FROM org_member WHERE lower(email)=$1 AND state='active' LIMIT 1  →  1행
+//  즉 **비활성화된 계정이 로그인된다.** ORDER BY 도 없어 어느 행이 뽑힐지 비결정적이다.
+//
+// ★★ 다만 **상수(primary)로 못박으면 안 된다.** 매니지드는 이 표에 RLS 를 걸고 요청마다
+//  app.tenant_id 를 그 테넌트로 세우므로, primary 를 요구하면 정책이 걸러 **0행**이 된다(실측:
+//  매니지드 맥락에서 상수 못박기 0행 / 맥락식 1행). 그러면 로그인·getMember 가 통째로 죽는다 —
+//  이 파일이 이미 한 번 밟은 사고와 **같은 모양**이다(코어 전제를 배포 사실로 착각).
+//  TENANT_DEFAULT_EXPR 은 두 배포를 한 식으로 덮는다: GUC 가 없으면 primary, 있으면 그 테넌트.
+const IDENTITY_READS: Array<[string, RegExp]> = [
+  ["src/auth/local-accounts.ts", /FROM org_member[^`]*/],
+  ["src/ee/auth/oidc-login.ts", /FROM org_member[^`]*/],
+  ["src/org/store/members.ts", /FROM org_member WHERE id=\$1[^`]*/],
+  ["src/org/store/audit.ts", /FROM org_member m WHERE[^)]*/],
+];
+
+test("★★ 신원 판정 조회가 테넌트로 좁혀져 있다 — 남은 짝으로 로그인되지 않게", async () => {
+  const { readFileSync } = await import("node:fs");
+  const bad: string[] = [];
+  for (const [f, re] of IDENTITY_READS) {
+    const m = re.exec(readFileSync(f, "utf8"));
+    if (!m) { bad.push(`${f}: 쿼리를 못 찾았다 — 이 가드를 따라 옮길 것`); continue; }
+    if (!/tenant_id\s*=/.test(m[0])) bad.push(`${f}: ${m[0].replace(/\s+/g, " ").slice(0, 70)}`);
+  }
+  assert.deepEqual(bad, [], `테넌트로 좁혀지지 않은 신원 판정 조회:\n  ${bad.join("\n  ")}`);
+});
+
+test("★★ 그 못박기는 **상수가 아니라 맥락식**이다 — 상수면 매니지드에서 0행이 된다", async () => {
+  const { readFileSync } = await import("node:fs");
+  const bad: string[] = [];
+  for (const [f, re] of IDENTITY_READS) {
+    const m = re.exec(readFileSync(f, "utf8"));
+    if (!m) continue;
+    if (m[0].includes(SINGLE_TENANT_ID) || /SINGLE_TENANT_ID/.test(m[0])) {
+      bad.push(`${f}: 상수로 못박혀 있다 — 매니지드(RLS)에서 정책이 걸러 0행이 된다`);
+    }
+    if (!/TENANT_DEFAULT_EXPR/.test(m[0])) {
+      bad.push(`${f}: TENANT_DEFAULT_EXPR 이 아니다 — 두 배포를 한 식으로 덮어야 한다`);
+    }
+  }
+  assert.deepEqual(bad, [], bad.join("\n  "));
+});

@@ -27,6 +27,7 @@ import { appToolCallCapabilities } from "./app-tool-call.js";
 import { appStoreCapabilities } from "./app-store.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
+import { shellPrefsCapabilities } from "./shell-prefs.js";
 import { folderV6Capabilities } from "./folders-v6.js";
 import { sharedFolderCapabilities } from "./shared-folder.js";
 import { viewV6Capabilities } from "./views-v6.js";
@@ -56,6 +57,8 @@ import { slackConnectCapabilities } from "./slack-connect.js";
 import { notionConnectCapabilities } from "./notion-connect.js";
 import { githubConnectCapabilities } from "./github-connect.js";
 import { googleConnectCapabilities } from "./google-connect.js";
+import { memberCollectAppCapabilities } from "./member-collect-apps.js";
+import { orgAppTools, orgAppToolsSetWrite } from "./app-tools.js";
 import { appInstanceCapabilities } from "./app-instances.js";
 import { appNotificationCapabilities } from "./app-notifications.js";
 import { channelPolicyCapabilities } from "./channel-policy.js";
@@ -87,6 +90,7 @@ const all: Capability[] = [
   ...favoritesCapabilities, // #670: 멤버별 즐겨찾기(리스트·카테고리 사이드바 핀) — scope=null(인증만), REST 전용(/api/ui/v6/favorites GET·POST).
   ...dashPrefsCapabilities, // #1129: 멤버별 대시보드 '내 프로젝트' 위젯 개인화(개요 리스트 순서·숨김·핀) — scope=null(인증만), REST 전용(/api/ui/v6/dash-prefs GET·POST). 기존 localStorage(기기별) 대체.
   ...sidePrefsCapabilities, // #1227: 멤버별 프로젝트 사이드바 개인화(폴더 접힘/펼침) — scope=null(인증만), REST 전용(/api/ui/v6/side-prefs GET·POST). 기존 인메모리 Map(새로고침 초기화) 대체.
+  ...shellPrefsCapabilities, // #2460: 멤버별 새 셸(v2) 개인화(고정·치운 행·묶는 축·접힘/펼침·레일 순서·최근 앱) — scope=null(인증만), REST 전용(/api/ui/v6/shell-prefs GET·POST). 기존 localStorage(기기별) 대체.
   ...folderV6Capabilities, // v6(#475): 폴더(=클릭업 Folder층) CRUD + 리스트 소속 — scope=memory(/api/ui/v6/project-folders + /project-lists/:id/folder). 폴더는 정리용(멤버·권한 없음). 전부 expose.mcp:true+REST.
   ...sharedFolderCapabilities, // #1291 v2: 공유폴더 경로 공개범위(shared_folder_acl_get/_set — /api/ui/terminal/browse/acl). scope=memory, MCP+REST. 집행은 terminal-files.ts 가, 술어는 v6/shared-folder-store.ts 가.
   ...viewV6Capabilities, // v6(#541): 저장 뷰 조회(ClickUp 이관 뷰 — /api/ui/v6/project-views). 보드 '뷰' 피커 소비.
@@ -128,6 +132,8 @@ const all: Capability[] = [
   ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
   ...notionConnectCapabilities,
   ...githubConnectCapabilities, // #1881: 노션 "팀 자료로 모으기" — org_notion_collect(상태)/set(토글=동의 시작)/connect(페이지 더 고르기)/oauth_complete(CP 릴레이). 동의 화면의 페이지 선택이 곧 수집 범위, 수집기는 token_source=org 로 조직 슬롯을 가리킨다. 토큰 복사 0.
+  orgAppTools, orgAppToolsSetWrite, // #2243 3차: 앱 상세가 «AI가 내 계정으로 하는 일»을 읽기/쓰기 동사로 보여 주는 창구(org_tool.level=L2 가 쓰기).
+  ...memberCollectAppCapabilities, // #2247: 피그마·ClickUp "모아 두기" — org_{figma,clickup}_collect(상태)/set(admin 토글). 켠 사람의 금고 토큰(figma_token·clickup_token)을 token_source=member:<나> 로 가리키는 수집기 인스턴스(lively-member). 피그마는 범위(파일 링크/팀 id) 없이는 needs_scope 로 켜지 않는다.
   ...googleConnectCapabilities, // #1881 G5: 구글 "팀 자료로 모으기" — org_google_collect(상태)/set(토글=동의 시작)/connect(범위 넓히기)/oauth_complete(CP 릴레이). 수집기는 token_source=member:<켠 관리자> 로 그 사람의 연결을 가리킨다(구글엔 봇 개념이 없어 조직 토큰이라는 게 없다). ★Gmail 은 제한범위라 명시적으로 골라야 켜진다 — 안 쓰는 서비스를 끼우면 미검증 100명 한도를 되돌릴 수 없게 태운다.
   ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
   ...appNotificationCapabilities, // #1891: 앱이 쏘는 알림(권한 fail-closed) + 내 알림 이력·읽음. inbox 앱이 소비한다.

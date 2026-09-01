@@ -11,6 +11,7 @@ import { itemsPool } from "./db/client.js";
 import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { installTenantBinding } from "./db/tenant-binding-boot.js";
 import { tenantContextMiddleware } from "./org/tenant-middleware.js";
+import { outboxRequestSweepMiddleware } from "./sessions/outbox-request-sweep.js";
 import { lookupWorkspace, workspaceForSession } from "./org/tenancy/registry.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
@@ -104,6 +105,14 @@ const app = express();
 //  해석기는 여기서 주입한다(미들웨어 모듈이 스토어를 직접 물면 계층이 꼬인다).
 app.use(tenantContextMiddleware(process.env, lookupWorkspace, workspaceForSession));
 
+// 아웃박스 정비를 **요청에 얹는다**(#2246) — 요청별 테넌시에서는 하우스키핑의 스케줄러 스텝이 안 돌아
+//  회수·청소·재-kick 이 통째로 없다(#2244 실측). 컨텍스트가 열린 **직후**에 둔다: RLS 가 그 테넌트로
+//  스코프하려면 컨텍스트가 있어야 하고, 인증보다 앞이어도 새는 것이 없다 — 이 미들웨어는 응답에
+//  아무것도 싣지 않고 **그 테넌트 자신의** 대기분만 밀어준다(테넌트는 서명 헤더/등록부가 정한 값이다).
+//  ⚠ 요청을 늦추지 않는다(동기 코드는 Map 조회 하나, DB 작업은 기다리지 않는다) · 테넌트당 5분 디바운스
+//   · 하우스키핑이 도는 배포(자가호스팅·registry)에선 **무동작** — 이중 실행을 막는다.
+app.use(outboxRequestSweepMiddleware());
+
 // domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.
 // bearer 인증 밖(구 :7700 과 동일 — HMAC 자체가 fail-closed 인증). raw 파싱은 라우터 내부 소유.
@@ -190,8 +199,10 @@ app.get("/install", auth, async (_req, res) => {
 
 // OAuth 콜백(#746 T2) — 인가서버가 code+state 로 리다이렉트하는 착지점. 브라우저-facing 이라 bearer 인증 밖:
 //  보안은 서명된 state(HMAC·만료·멤버 귀속)가 담보한다 — 위조 불가 → 타인 vault 에 토큰 주입 불가. finishConsent 가 검증·교환·저장.
-const oauthPage = (msg: string): string =>
-  `<!doctype html><meta charset="utf-8"><title>Lively 커넥터</title><body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem;line-height:1.6"><h2>Lively 커넥터</h2><p>${String(msg).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string))}</p></body>`;
+//  #2232 — 성공 페이지는 **원래 탭이 곧바로 알게** 신호를 쏜다(BroadcastChannel 'lively-connect', 같은 출처의 온보딩·외부 앱 연결
+//   화면이 듣는다). 이 창은 [허용]을 누르느라 열린 새 탭이라 «이제 뭘 하지?» 가 되기 쉽다 — 돌아가라고 글로 말한다.
+const oauthPage = (msg: string, ok = false): string =>
+  `<!doctype html><meta charset="utf-8"><title>Lively 커넥터</title><body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem;line-height:1.6"><h2>Lively 커넥터</h2><p>${String(msg).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string))}</p>${ok ? '<p style="color:#666">처음 설정이나 [외부 앱 연결] 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.</p><script>try{var b=new BroadcastChannel("lively-connect");b.postMessage({ok:true});b.close()}catch(e){}</script>' : ''}</body>`;
 app.get("/oauth/callback", async (req, res) => {
   const q = req.query as Record<string, string | undefined>;
   if (q.error) {
@@ -203,7 +214,7 @@ app.get("/oauth/callback", async (req, res) => {
     //  GitHub App 은 설치 직후 installation_id 를 함께 보낸다(#1881 G5) — 숫자만 통과시킨다(그 값이 API 경로에 들어간다).
     const r = await finishConsent(String(q.state), String(q.code), undefined,
       { installationId: parseInstallCallback(q).installationId });
-    res.send(oauthPage(`연결이 완료되었습니다 — ${r.serverName}. 이 창을 닫아도 됩니다.`));
+    res.send(oauthPage(`연결이 완료되었습니다 — ${r.serverName}. 이 창을 닫아도 됩니다.`, true));
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "oauth 콜백 실패");
     res.status(400).send(oauthPage(`연결에 실패했습니다: ${(err as Error).message}`));

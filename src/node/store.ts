@@ -11,6 +11,7 @@ import type { KeepAwakeStatus } from "./keep-awake.js";
 import { LINK_LOG_KEEP } from "../org/schema/node-link-log.js";   // #1849 — 노드당 보관 이벤트 상한(단일 출처)
 import { WINDOW_MS, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 진단 창(같은 값으로 읽는다)
 import type { NodeAuthDenial, NodeAuthOutcome } from "./auth-denial.js";   // #2161 — 거부 사유(조용한 null 제거)
+import { nodeTokenIssuedByRegistration } from "./auth-denial.js";          // #2215 — 노드 토큰 불변식(label·scope)
 
 const sha256 = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
 
@@ -95,6 +96,25 @@ export async function rotateNodeToken(id: string, actor?: string): Promise<{ nod
   });
 }
 
+/**
+ * 노드 토큰만 회수한다 — **등록 행(org_node)은 남긴다**(#2215).
+ *
+ * 로그아웃이 부르는 자리다. 종전엔 `lively logout` 이 `~/.lively/token` 파일 하나만 지워서,
+ *  그 PC 의 노드는 **옛 테넌트에 계속 붙어 세션을 서빙했다**(노드 토큰은 로그인 토큰과 별개라 무관하게 유효).
+ *  기기 회수·퇴사·워크스페이스 이동에서 그건 그대로 구멍이다.
+ *
+ * 왜 노드 행을 안 지우나: 그 노드에 묶인 세션 이력·설정(enabled·shared·keep_awake)을 함께 잃지 않기 위해서다.
+ *  토큰만 죽으면 그 기계는 즉시 끊기고(다음 인증이 `revoked`), 다시 로그인해 `lively node` 를 돌리면
+ *  같은 id 로 회전 등록돼 이력이 이어진다.
+ */
+export async function revokeNodeToken(id: string, actor?: string): Promise<{ revoked: boolean; node: string }> {
+  const node = await getNode(id);
+  if (!node) throw new HttpError(404, `노드 없음: ${id}`);
+  if (!node.token_hash) return { revoked: false, node: id };
+  await revokeToken(node.token_hash, actor, "node-store");
+  return { revoked: true, node: id };
+}
+
 export async function setNodeEnabled(id: string, enabled: boolean): Promise<void> {
   await itemsPool.query(`UPDATE org_node SET enabled=$2, updated_at=now() WHERE id=$1`, [id, enabled]);
 }
@@ -153,15 +173,29 @@ export async function authNodeTokenDetailed(token: string): Promise<NodeAuthOutc
   const fingerprint = hash.slice(0, 12);
   if (!process.env.ITEMS_DATABASE_URL) return { ok: false, fingerprint, reason: "no-db" };
   try {
+    // 토큰의 label·scopes 를 **함께** 읽어 온다(#2215) — 조인만으로는 "그 자리에 앉은 토큰이 노드 발급물인가"를
+    //  묻지 않아서, 로그인 토큰이 org_node.token_hash 에 들어가 있어도 조용히 통과했다(실측: admin 전체 scope).
+    //  ⚠ 판정을 SQL 조건으로 내리지 않는다 — 규칙이 여기와 아래 진단 경로 둘로 갈리면 드리프트한다.
+    //   규칙은 nodeTokenIssuedByRegistration 한 벌이고, SQL 은 재료만 나른다.
     const r = await itemsPool.query(
-      `SELECT n.* FROM org_node n
+      `SELECT n.*, t.label AS tok_label, t.scopes AS tok_scopes FROM org_node n
          JOIN auth_token t ON t.token_hash = n.token_hash
          JOIN org_member m ON m.id = n.owner_member
         WHERE n.token_hash = $1 AND t.revoked_at IS NULL AND n.enabled AND m.state = 'active'`,
       [hash],
     );
-    const node = r.rows[0] as OrgNode | undefined;
-    if (node) return { ok: true, node };
+    const row = r.rows[0] as (OrgNode & { tok_label: string | null; tok_scopes: unknown }) | undefined;
+    if (row) {
+      const { tok_label: label, tok_scopes: scopes, ...node } = row;
+      if (!nodeTokenIssuedByRegistration({ nodeId: node.id, label, scopes })) {
+        return {
+          ok: false, fingerprint, reason: "token-not-node-issued",
+          node: node.id, label,
+          scopes: Array.isArray(scopes) ? scopes.map((s) => String(s)) : [],
+        };
+      }
+      return { ok: true, node: node as OrgNode };
+    }
   } catch (e) {
     // DB 불가 = fail-closed(연결 거부)는 종전과 같다. 달라진 것은 **그 사실을 말한다**는 점뿐이다.
     return { ok: false, fingerprint, reason: "db-error", detail: e instanceof Error ? e.message : String(e) };
@@ -170,7 +204,7 @@ export async function authNodeTokenDetailed(token: string): Promise<NodeAuthOutc
   //  거부는 드물어야 하고, 드물지 않다면 그 사실 자체가 우리가 알아야 할 정보다.
   try {
     const d = await itemsPool.query(
-      `SELECT t.label, t.member_id, t.revoked_at,
+      `SELECT t.label, t.member_id, t.revoked_at, t.scopes,
               n.id AS node_id, n.enabled, n.owner_member, m.state AS owner_state
          FROM auth_token t
          LEFT JOIN org_node n ON n.token_hash = t.token_hash
@@ -179,7 +213,7 @@ export async function authNodeTokenDetailed(token: string): Promise<NodeAuthOutc
       [hash],
     );
     const row = d.rows[0] as {
-      label: string | null; member_id: string | null; revoked_at: string | null;
+      label: string | null; member_id: string | null; revoked_at: string | null; scopes: unknown;
       node_id: string | null; enabled: boolean | null; owner_member: string | null; owner_state: string | null;
     } | undefined;
     // 이 테넌트에 그 토큰 자체가 없다. 다른 게이트웨이의 토큰을 들고 온 경우가 여기로 온다
@@ -190,6 +224,14 @@ export async function authNodeTokenDetailed(token: string): Promise<NodeAuthOutc
     if (!row.enabled) return { ok: false, fingerprint, reason: "node-disabled", node: row.node_id };
     if (row.owner_state !== "active") {
       return { ok: false, fingerprint, reason: "owner-inactive", node: row.node_id, owner: row.owner_member ?? "(없음)", state: row.owner_state };
+    }
+    // 노드·소유자는 멀쩡한데 그 자리의 토큰이 노드 발급물이 아니다(#2215) — 본 쿼리가 빈 이유가 여기다.
+    if (!nodeTokenIssuedByRegistration({ nodeId: row.node_id, label: row.label, scopes: row.scopes })) {
+      return {
+        ok: false, fingerprint, reason: "token-not-node-issued",
+        node: row.node_id, label: row.label,
+        scopes: Array.isArray(row.scopes) ? row.scopes.map((s) => String(s)) : [],
+      };
     }
     // 위를 다 통과했는데 본 쿼리가 비었다 = 그 사이에 바뀌었다(경합). 재연결하면 풀린다.
     return { ok: false, fingerprint, reason: "unknown-token" };

@@ -22,9 +22,11 @@ import { isSlackOAuthKind, buildSlackAuthorizeUrl, exchangeSlackCode, slackInsta
 import { isNotionPublicServer, buildNotionAuthorizeUrl, exchangeNotionCode, parseNotionTokenResponse, refreshNotionToken, notionInstallToSlot, NOTION_PUBLIC_KIND, NOTION_PUBLIC_SERVER, type NotionInstall } from "./notion-oauth.js";
 import {
   isGithubAppServer, buildGithubAuthorizeUrl, githubInstallUrl, exchangeGithubCode,
+  parseGithubTokenResponse,
   GITHUB_APP_KIND, GITHUB_APP_KEY_SCOPE, GITHUB_APP_SERVER, GITHUB_INSTALL_KIND, type GithubUserTokens,
 } from "./github-app.js";
 import { resolveGoogleOAuthClient, googleVaultReader } from "./google-token-source.js";
+import { isLinearAppServer, buildLinearAuthorizeUrl, exchangeLinearCode, parseLinearTokenResponse, LINEAR_APP_KIND, LINEAR_APP_SERVER } from "./linear-oauth.js";
 import { isGoogleServer, buildGoogleAuthorizeUrl, exchangeGoogleCode, parseGoogleTokenResponse, refreshGoogleToken, mergeGoogleTokens, googleInstallToSlot, googleInstallFromBlob, googleTokenExpired, googleScopeString, GOOGLE_KIND, GOOGLE_SERVER, GOOGLE_DEFAULT_SERVICES, type GoogleInstall, type GoogleService } from "./google-oauth.js";
 
 const STATE_KEY_ENV = "CONNECTOR_SECRET_KEY"; // 상태 서명키는 봉투암호화 키와 같은 마스터에서 도메인 분리 파생(신규 env 불요).
@@ -568,6 +570,76 @@ export async function ensureGoogleAccessToken(memberId: string, actor?: string):
   return merged.access_token;
 }
 
+// ── Linear 직결(#2247) — 라이블리 소유 Linear OAuth 앱. org_mcp_server 행 'linear'(MCP·DCR)와 **다른 슬롯**(linear_app).
+//  client 는 gateway 슬롯(linear_app/oauth:client), 매니지드는 LINEAR_OAUTH_RELAY_URL 로 CP 가 대신 교환한다(슬랙 T5 규약).
+export async function linearAppReady(): Promise<boolean> {
+  if (process.env.LINEAR_OAUTH_RELAY_URL?.trim()) return true;
+  return !!(await loadOAuthClient(LINEAR_APP_KIND))?.client_secret;
+}
+export async function startLinearAppConsent(memberId: string): Promise<ConsentStart> {
+  const nonce = crypto.randomBytes(16).toString(B64);
+  const state = signState({ m: memberId, s: LINEAR_APP_SERVER, k: "", n: nonce });
+  const relay = process.env.LINEAR_OAUTH_RELAY_URL?.trim();
+  if (relay) {
+    const gatewayUrl = (await getOrgProfile()).gateway_url ?? "";
+    return { authorized: false, state, authorizationUrl: relayStartUrl(relay, state, gatewayUrl) };
+  }
+  const client = await loadOAuthClient(LINEAR_APP_KIND);
+  if (!client?.client_id || !client.client_secret) {
+    throw new Error("Linear 앱이 아직 등록되지 않았습니다 — 관리자가 Linear OAuth 앱의 Client ID/Secret 을 조직 자격(kind linear_app, scope_key oauth:client)에 넣어야 구성원이 연결할 수 있습니다.");
+  }
+  return { authorized: false, state, authorizationUrl: buildLinearAuthorizeUrl({ clientId: client.client_id, redirectUri: await callbackUrl(), state }) };
+}
+async function saveLinearAppInstall(memberId: string, tokens: OAuthTokens, actor?: string): Promise<void> {
+  await setMemberSecret(memberOwner(memberId), LINEAR_APP_KIND, "", { secret: encodeTokenBlob(tokens), meta: tokenMeta(tokens) }, actor ?? "oauth");
+}
+async function finishLinearAppConsent(p: StatePayload, code: string, actor?: string): Promise<void> {
+  const client = await loadOAuthClient(LINEAR_APP_KIND);
+  if (!client?.client_id || !client.client_secret) throw new Error("Linear OAuth 클라이언트가 없어 토큰을 교환할 수 없습니다(연결 도중 설정이 지워졌습니다).");
+  const tokens = await exchangeLinearCode({ clientId: client.client_id, clientSecret: client.client_secret, code, redirectUri: await callbackUrl(), fetchFn: await gatewaySsrfFetch() });
+  await saveLinearAppInstall(p.m, tokens, actor);
+}
+/**
+ * 릴레이 완료(#2243 G) — CP 가 GitHub 과 교환한 토큰 응답 원문 + 설치 id. state 검증·귀속은 여기서.
+ *
+ *  ⚠ 슬랙·노션·Linear 와 다른 점: GitHub 은 **토큰과 설치가 서로 다른 것**이다.
+ *   · 토큰(user token) → 그 사람 금고(github_pat). 도구 호출·자료 가져오기가 이걸 쓴다.
+ *   · 설치(installation_id) → 조직 슬롯. «어느 저장소가 열렸나»가 여기서 나온다(clone·기본 범위).
+ *  둘 중 하나만 와도 온 것만 저장한다 — 사람이 설치만 하고 인가를 건너뛰거나 그 반대일 수 있다.
+ *  파싱·판정은 직결 경로와 **같은 함수**(parseGithubTokenResponse)를 쓴다. 두 경로가 갈리면 조용히 어긋난다.
+ */
+export async function completeGithubAppInstall(
+  stateToken: string, tokenResponse: unknown, installationId: string | null, actor?: string,
+): Promise<{ ok: true; memberId: string; saved: { token: boolean; installation: boolean } }> {
+  const p = verifyState(stateToken);
+  if (!isGithubAppServer(p.s)) throw new Error("이 state 는 GitHub 연결이 아닙니다");
+  let token = false;
+  if (tokenResponse && typeof tokenResponse === "object") {
+    const t = parseGithubTokenResponse(tokenResponse);   // 실패(HTTP 200 + {error})는 여기서 던진다
+    const bundle: OAuthTokens = {
+      access_token: t.access_token, token_type: t.token_type,
+      ...(t.expires_in !== undefined ? { expires_in: t.expires_in } : {}),
+      ...(t.refresh_token ? { refresh_token: t.refresh_token } : {}),
+      ...(t.scope !== undefined ? { scope: t.scope } : {}),
+    };
+    await setMemberSecret(memberOwner(p.m), "github_pat", "",
+      { secret: encodeTokenBlob(bundle), meta: tokenMeta(bundle) }, actor ?? "cp-relay");
+    token = true;
+  }
+  const inst = String(installationId ?? "").trim();
+  if (inst) await saveGithubInstallation(inst, p.m, actor ?? "cp-relay");
+  if (!token && !inst) throw new Error("토큰도 설치 id 도 없습니다 — 저장할 것이 없습니다");
+  return { ok: true, memberId: p.m, saved: { token, installation: !!inst } };
+}
+
+/** 릴레이 완료(#2247) — CP 가 Linear 와 교환한 토큰 응답 원문. state 검증·귀속은 여기서. */
+export async function completeLinearAppInstall(stateToken: string, tokenResponse: unknown, actor?: string): Promise<{ ok: true; memberId: string }> {
+  const p = verifyState(stateToken);
+  if (!isLinearAppServer(p.s)) throw new Error("이 state 는 Linear 연결이 아닙니다");
+  await saveLinearAppInstall(p.m, parseLinearTokenResponse(tokenResponse), actor);
+  return { ok: true, memberId: p.m };
+}
+
 /**
  * 릴레이 완료(#1881 T5) — CP 가 슬랙과 교환한 `oauth.v2.access` 응답 원문을 들고 온다. state 는 이 게이트웨이가 서명한 것이라
  *  위조·만료·멤버 귀속을 여기서 검증한다(CP 는 통과만 시킨다). 슬랙 직결 서버가 아니면 거부.
@@ -610,6 +682,10 @@ export async function finishConsent(
     await finishNotionPublicConsent(p, code, actor);
     return { ok: true, memberId: p.m, serverName: p.s };
   }
+  if (isLinearAppServer(p.s)) { // #2247 Linear 직결(라이블리 앱) — MCP 서버 행 없음, form 교환, PKCE 없음
+    await finishLinearAppConsent(p, code, actor);
+    return { ok: true, memberId: p.m, serverName: p.s };
+  }
   if (isGoogleServer(p.s)) { // #1881 G2 구글 직결 — MCP 서버 행 없음, form 교환 + PKCE
     try {
       await finishGoogleConsent(p, code, actor);
@@ -640,7 +716,7 @@ export async function finishConsent(
 export async function abandonConsent(stateToken: string): Promise<void> {
   let p: StatePayload;
   try { p = verifyState(stateToken); } catch { return; }
-  if (isNotionPublicServer(p.s)) return; // #1881 노션 공개 통합 — PKCE 슬롯이 없어 정리할 것도 없다
+  if (isNotionPublicServer(p.s) || isLinearAppServer(p.s)) return; // 노션 공개 통합·Linear 앱 — PKCE 슬롯이 없어 정리할 것도 없다
   if (isGoogleServer(p.s)) { // #1881 G2 구글 직결 — PKCE 를 쓰므로 취소 경로에서도 verifier 를 지운다
     await deleteMemberSecret(memberOwner(p.m), GOOGLE_KIND, PKCE_SCOPE).catch(() => { /* best-effort */ });
     return;

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv } from "./catalog.js";
+import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 
 test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그가 보존한다", () => {
   const c = HARNESSES.find((h) => h.key === "codex")!;
@@ -155,4 +155,21 @@ test("harnessSettingsArgv: 사람 세션(managed 아님)엔 statusLine 안 새�
 
 test("harnessSettingsArgv: 비claude(codex)는 statusLine 무시하고 theme argv 로 위임(무회귀)", () => {
   assert.deepEqual(harnessSettingsArgv("codex", { theme: "dark", managed: true }), harnessThemeArgv("codex", "dark"));
+});
+
+// ── 대화 런타임 세션의 pane (#2439, 2026-09-01) ────────────────────────────────────
+//  ⚠ 이 계약이 없어서 사고가 났다: 기본을 chat 으로 뒤집었는데 pane 은 그대로 TUI 를 띄워
+//   **한 대화에 하네스가 둘** 붙었다(실측 box-yoon-a7da7c38). 사람 눈엔 «선택지가 대화창에
+//   안 뜨고 시간만 올라가는» 화면이 된다.
+test("[#2439] 대화 런타임 세션의 pane 은 셸이고, 안내가 하네스마다 맞다", () => {
+  const argv = chatRuntimePaneArgv({ label: "Claude Code", bin: "claude" });
+  assert.equal(argv[0], "sh", "셸을 띄운다(하네스 TUI 가 아니라)");
+  const intro = argv.at(-1) ?? "";
+  assert.match(intro, /대화창/, "무엇이 어디에 있는지 첫 화면에 적는다");
+  assert.match(intro, /claude/, "그 하네스 명령을 여기서 치면 다른 대화가 열린다고 알린다");
+  assert.ok(!/Codex/.test(intro), "★ codex 문구가 다른 하네스에 새지 않는다");
+  //  codex 는 종전 문구를 그대로 유지한다(도는 것을 흔들지 않는다).
+  const cx = codexAppServerPaneArgv().at(-1) ?? "";
+  assert.match(cx, /Codex/);
+  assert.match(cx, /App Server/);
 });

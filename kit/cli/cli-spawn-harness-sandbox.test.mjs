@@ -16,6 +16,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 let pass = 0, fail = 0;
@@ -67,9 +68,9 @@ spawners.length >= 3
 // ── ③ 자기검증 — 규칙이 '무력화'되지 않았음을 known-bad / known-good 샘플로 증명 ──
 const BAD = [
   // 실제로 있었던 형태 — env 를 주지만 PATH 는 안 건드린다(주변 PATH 의 실제 claude 가 잡힌다).
-  'const c = spawn(process.execPath, [CLI, "resume", sid], { cwd, env: { ...process.env, LIVELY_HOME: home } });',
+  'const c = spawn(process.execPath, [CLI, "resume", sid], { cwd, env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: home } });',
   // 여러 줄에 걸친 호출(실제 코드 스타일)
-  'await pExecFile(process.execPath, [CLI, "status", "--json"], {\n  cwd, env: { ...process.env, LIVELY_HOME: HOME },\n});',
+  'await pExecFile(process.execPath, [CLI, "status", "--json"], {\n  cwd, env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME },\n});',
 ];
 for (const s of BAD) {
   violation(s) ? ok(`③ known-bad 를 잡는다: ${s.split("\n")[0].slice(0, 60)}…`)
@@ -77,7 +78,7 @@ for (const s of BAD) {
 }
 const GOOD = [
   // 스텁 bin 을 앞에 둔 형태(관례)
-  'spawn(process.execPath, [CLI, "share"], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });',
+  'spawn(process.execPath, [CLI, "share"], { env: { ...process.env, ...offlineLivelyEnv(), PATH: `${bin}:${process.env.PATH}` } });',
   // 닫힌 PATH(실제 하네스가 아예 없다)
   'spawnSync(process.execPath, [CLI, "status"], { env: { PATH: `${bin}:/usr/bin:/bin` } });',
   // CLI 를 안 띄우는 파일 — 문자열로만 언급(정적 분석 테스트). 대상이 아니다.

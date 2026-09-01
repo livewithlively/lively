@@ -5,7 +5,7 @@ import { z } from "zod";
 import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
-import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources, canSeeSource } from "../v6/source-store.js";
+import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources, listSourceTree, canSeeSource } from "../v6/source-store.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 import { canSeeKnowledge, type Viewer } from "../v6/visibility.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 원문(body_md) 전체를 튕기지 않게 한다.
@@ -18,12 +18,16 @@ async function assertSourceVisible(id: unknown, viewer: Viewer): Promise<void> {
   if (!(await canSeeSource(Number(id), viewer))) throw new HttpError(404, `자료 #${Number(id)} 없음`);
 }
 
-export const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "discord", "notion_doc", "clickup_doc", "drive_file", "local_file", "figma_comment", "other"] as const;
+export const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "discord", "notion_doc", "clickup_doc", "drive_file", "local_file", "figma_comment", "github_issue", "gitlab_issue", "linear_issue", "other"] as const;
 
 const sourceListInput = {
   kind: z.enum(SOURCE_KINDS).optional(),
   provenance: z.enum(["authored", "observed"]).optional(),
   q: z.string().optional(),
+  system: z.string().optional().describe("출처(#2423) — external_system('slack'·'github'·'local'·'discord'·'linear'·'figma'…) 또는 'authored'(사람이 직접 적어 둔 것)"),
+  container: z.string().optional().describe("그 출처 안의 자리 — 슬랙 채널·깃허브 저장소·내 컴퓨터 최상위 폴더(fields.container_name)"),
+  author: z.string().optional().describe("쓴 사람·올린 사람(fields.author_name)"),
+  linked: z.boolean().optional().describe("true=지식이 붙은 자료만 / false=아직 안 붙은 것만"),
   limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(1~500, 기본 100) — 구 100 하드캡 해제(#709)"),
   offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 상한 너머 전량 순회(#709)"),
 };
@@ -44,6 +48,11 @@ const sourceList: Capability = {
           kind: query.kind ? String(query.kind) : undefined,
           provenance: query.provenance ? String(query.provenance) : undefined,
           q: query.q ? String(query.q) : undefined,
+          system: query.system ? String(query.system) : undefined,
+          container: query.container ? String(query.container) : undefined,
+          author: query.author ? String(query.author) : undefined,
+          //  linked 는 3상태다(붙은 것만·안 붙은 것만·안 가림) — 문자열 'true'/'false' 만 뜻을 갖고 나머지는 미지정.
+          linked: query.linked === undefined ? undefined : String(query.linked) === "true",
           limit: query.limit ? Number(query.limit) : undefined,
           offset: query.offset ? Number(query.offset) : undefined,
         };
@@ -167,8 +176,11 @@ const sourceLinkKnowledge: Capability = {
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     if (input.unlink) { await unlinkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx); return { unlinked: true }; }
-    await linkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx);
-    return { linked: true };
+    const r = await linkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx);
+    //  #1631 — 이 자료에서 파생된 지식이 이미 있으면 그 사실을 **응답에 실어** 알린다(막지는 않는다).
+    //   증류 세션이 그 자리에서 «합칠까 그대로 둘까» 를 정할 수 있어야 중복이 조용히 쌓이지 않는다.
+    const dupNote = (r as { dupNote?: string | null } | null)?.dupNote ?? null;
+    return dupNote ? { linked: true, warning: dupNote } : { linked: true };
   },
 };
 
@@ -238,9 +250,26 @@ const sourceArtifact: Capability = {
   },
 };
 
-// ⚠ REST 순서: sourceUndistilled(/sources/undistilled, GET) 은 sourceGet(/sources/:id) 보다 **먼저** 마운트되어야
-//  'undistilled' 가 :id 로 먹히지 않는다(구체 경로 우선). sourceGet(/sources/:id)·sourceList(/sources) 는 세그먼트 수로 구분.
-//  POST 들(/sources, /sources/:id/knowledge, /sources/:id/delete)도 상호 구분.
+// 출처 나무(#2423) — 자료 앱 왼쪽 나무 한 벌. 가지 = 출처 × 그 안의 자리(채널·폴더·저장소).
+const sourceTree: Capability = {
+  name: "source_tree",
+  mutates: false,
+  title: "자료 출처 나무",
+  description:
+    "자료를 «어디서 왔나» 로 접은 집계 — 출처(external_system, 'authored'=사람이 적어 둔 것) × 그 안의 자리(채널·폴더·저장소)마다 " +
+    "자료 수·지식이 붙은 수·마지막으로 들어온 때. 자료 앱의 왼쪽 나무가 이 한 번의 조회로 선다. 공개범위가 걸린 자료는 건수에도 안 잡힌다.",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/sources/tree"], parse: () => ({}) }],
+  },
+  handler: async (_input: unknown, _user: LivelyUser, ctx?: CapabilityCtx) => ({ nodes: await listSourceTree(ctx?.viewer ?? null) }),
+};
+
+// ⚠ REST 순서: sourceUndistilled(/sources/undistilled)·sourceTree(/sources/tree) 는 sourceGet(/sources/:id) 보다
+//  **먼저** 마운트되어야 그 이름이 :id 로 먹히지 않는다(구체 경로 우선). sourceGet(/sources/:id)·sourceList(/sources) 는
+//  세그먼트 수로 구분. POST 들(/sources, /sources/:id/knowledge, /sources/:id/delete)도 상호 구분.
 export const sourceCapabilities: Capability[] = [
-  sourceList, sourceUndistilled, sourceGet, sourceSave, sourceLinkKnowledge, sourceDelete, sourceArtifact,
+  sourceList, sourceUndistilled, sourceTree, sourceGet, sourceSave, sourceLinkKnowledge, sourceDelete, sourceArtifact,
 ];

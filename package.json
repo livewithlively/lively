@@ -19,6 +19,7 @@
     "typecheck:standalone": "tsc -p web/standalone/tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs --build",
     "test:itest": "node scripts/run-tests.mjs --build --itest",
+    "test:ci": "node scripts/run-tests.mjs --build -j 4 --budget=45",
     "dm": "node --env-file-if-exists=.env dist/domainmap/cli.js",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
   },

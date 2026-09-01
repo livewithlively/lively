@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const HOOK = path.join(fileURLToPath(import.meta.url), "..", "examples", "project-push.org-hook.mjs");
 const PROJECT_ID = 905;
@@ -83,7 +84,7 @@ async function runHook(dir, hookTimeoutMs = null) {
   const c = spawn(process.execPath, [HOOK], {
     cwd: dir,
     env: {
-      ...process.env, LIVELY_TOKEN: "t", LIVELY_GATEWAY_URL: BASE, LIVELY_HOME: dir,
+      ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "t", LIVELY_GATEWAY_URL: BASE, LIVELY_HOME: dir,
       ...(hookTimeoutMs ? { LIVELY_HOOK_TIMEOUT_MS: String(hookTimeoutMs) } : {}),
     },
     stdio: ["pipe", "pipe", "pipe"],

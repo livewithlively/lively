@@ -24,19 +24,27 @@ import { svcTile } from './svc-icons.js';
 //  appConnect — MCP 서버 행이 아니라 **전용 연결 창구**를 쓰는 앱(#1881 G5 GitHub). oauth 필드를 쓸 수 없는 이유:
 //   svc.oauth 는 org_mcp_server 이름을 가리키는데 GitHub 은 그 행이 없다(도구 면을 REST 로 내렸다). 그래서
 //   selfServe 판정도 oauthMap 으로는 못 하고, 연결 시작도 /api/ui/me/oauth/connect 가 아니라 전용 op 를 부른다.
-const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: string; token?: string; appConnect?: string; blurb: string }> = [
-  { key: 'notion', label: 'Notion', icon: '📔', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
-  { key: 'linear', label: 'Linear', icon: '📐', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
-  { key: 'slack', label: 'Slack', icon: '💬', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
+//  short — 목록 카드에 싣는 «무엇을 해 주는지» 한 줄(#2243). blurb 는 상세용이라 길고, 대괄호 버튼 표기까지 들어 있어 카드엔 못 싣는다.
+//  soon — 카탈로그가 «아직 준비 중»이라고 말하는 앱(이유 한 줄). 켤 길이 있어도 목록은 준비 중으로 내민다. 지금은 비어 있고,
+//   환경이 아직 못 연 OAuth 앱(종전 blockedOAuth)이 사용자 눈엔 같은 «준비 중»이라 목록(#/connect)이 둘을 한 묶음으로 보여 준다.
+const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: string; token?: string; appConnect?: string; blurb: string; short?: string; soon?: string }> = [
+  { key: 'notion', label: 'Notion', icon: '📔', short: '문서를 읽고 작성합니다.', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
+  { key: 'linear', label: 'Linear', icon: '📐', short: '이슈를 보고 만듭니다.', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
+  { key: 'slack', label: 'Slack', icon: '💬', short: '메시지를 검색하고 보냅니다.', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
   // #1881 G2 — 드라이브·Gmail·캘린더 세 줄이던 것을 **한 줄**로. 구글은 한 동의 화면에서 여러 API 범위를 함께
   //  받으므로 나눌 이유가 없었다(세 줄은 곧 [연결] 3번이었다). 서버가 내려주는 커넥터도 server='google' 한 줄이다.
-  { key: 'google', label: 'Google', icon: '🔷', oauth: 'google', blurb: 'AI가 내 Google 계정에 로그인해서 직접 Drive 파일과 캘린더 일정을 읽을 수 있습니다. (Gmail 은 구글 심사 범위라 준비 중입니다.)' },
-  { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', appConnect: 'github', blurb: 'AI가 내 GitHub 계정으로 이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다. [계정으로 연결]하면 그 화면에서 고른 저장소는 코드까지 가져올 수 있어요 — 토큰을 따로 만들 필요가 없습니다.' },
-  { key: 'gitlab', label: 'GitLab', icon: '🦊', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
-  { key: 'clickup', label: 'ClickUp', icon: '🗂️', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
-  { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 내 Figma 계정으로 디자인 파일과 코멘트를 직접 읽을 수 있습니다 — 디자인 결정·피드백은 대개 코멘트에 쌓입니다.' },
-  { key: 'prometheus', label: 'Prometheus', icon: '📊', token: 'prometheus_bearer', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
-  { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', token: 'claude_setup_token', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
+  //  #2243 — 구글은 «준비 중»으로 내린다(원준 2026-08-31). 매니지드에는 CP 릴레이가 없어 고객이 켤 수 없고,
+  //   dev·셀프호스팅에서만 켜지는 반쪽이었다. 이미 연결해 둔 사람은 partition 이 connected 로 먼저 잡으므로
+  //   «연결됨» 그대로 보인다 — 쓰던 것을 뺏지 않으면서 새로 권하지도 않는 자리다.
+  { key: 'google', label: 'Google', icon: '🔷', short: 'Drive 파일과 캘린더 일정을 읽습니다.', oauth: 'google',
+    soon: 'Drive·캘린더는 구글 심사가 끝나면 열려요 — 준비를 마치면 여기서 바로 켤 수 있습니다.',
+    blurb: 'AI가 내 Google 계정에 로그인해서 직접 Drive 파일과 캘린더 일정을 읽을 수 있습니다. (Gmail 은 구글 심사 범위라 준비 중입니다.)' },
+  { key: 'github', label: 'GitHub', icon: '🐙', short: '이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다.', token: 'github_pat', appConnect: 'github', blurb: 'AI가 내 GitHub 계정으로 이슈·PR·커밋을 읽고, 이슈를 만들거나 댓글을 답니다. [계정으로 연결]하면 그 화면에서 고른 저장소는 코드까지 가져올 수 있어요 — 토큰을 따로 만들 필요가 없습니다.' },
+  { key: 'gitlab', label: 'GitLab', icon: '🦊', short: '이슈·MR·파이프라인·위키를 다룹니다.', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
+  { key: 'clickup', label: 'ClickUp', icon: '🗂️', short: '작업을 확인합니다.', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
+  { key: 'figma', label: 'Figma', icon: '🎨', short: '디자인 파일과 코멘트를 읽습니다.', token: 'figma_token', blurb: 'AI가 내 Figma 계정으로 디자인 파일과 코멘트를 직접 읽을 수 있습니다 — 디자인 결정·피드백은 대개 코멘트에 쌓입니다.' },
+  { key: 'prometheus', label: 'Prometheus', icon: '📊', short: '지표를 조회합니다.', token: 'prometheus_bearer', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
+  { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', short: '헤드리스 분류·크론이 내 Claude 계정으로 실행됩니다.', token: 'claude_setup_token', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
 ];
 
 // ── 화면 상태 — 한 번 불러서 두 구역(연결됨/연결 가능)이 같은 사실을 본다 ──
@@ -45,7 +53,9 @@ interface SvcView {
   credMap: Map<string, any>;
   connected: any[];       // 지금 AI 가 쓸 수 있는 서비스
   available: any[];       // 내가 지금 바로 켤 수 있는 서비스
-  blockedOAuth: any[];    // 관리자가 조직에 등록해야만 켤 수 있는 서비스(내 힘으로 안 되는 것)
+  blockedOAuth: any[];    // 관리자가 조직에 등록해야만 켤 수 있는 서비스(내 힘으로 안 되는 것) — 새 셸 목록은 이걸 «준비 중»으로 보여 준다(#2243)
+  soon: any[];            // 카탈로그가 «준비 중»이라고 말한 서비스(LOGIN_SERVICES.soon) — 켤 길이 있어도 내밀지 않는다
+  soonConnected: Set<string>;  // 그중 **이미 연결해 둔** 것의 key — 준비 중이라고 해서 쓰던 연결을 없는 척하지 않는다
   all: any[];             // 위 셋 전부 — 상세 화면(#/connect/<key>)이 키로 되찾을 때 쓴다
   /** #1675 ③ 헤드리스 자격의 마지막 실패(있으면). `{ at, label, task_id }`. */
   authFailure?: { at: string | null; label: string; task_id: number } | null;
@@ -73,9 +83,14 @@ function partition(oauth: any, creds: any): SvcView {
   //  appConnect 는 조직 등록(oauthMap)이 아니라 앱 자격 유무가 관문이라 여기서는 '켤 수 있음'으로 둔다 —
   //   실제로 못 켜면 연결 시작이 409 와 함께 관리자가 할 일을 알려 준다(막다른 버튼으로 두지 않는다).
   const selfServe = (s: any) => !!((s.oauth && oauthMap.has(s.oauth)) || s.token || s.appConnect);
-  const connected: any[] = [], available: any[] = [], blockedOAuth: any[] = [];
+  const connected: any[] = [], available: any[] = [], blockedOAuth: any[] = [], soon: any[] = [];
   for (const s of LOGIN_SERVICES) {
-    if (oauthOn(s) || tokenOn(s)) connected.push(s);
+    //  #2243 — 준비 중은 **연결 여부보다 앞선다**. 목록의 뜻이 «라이블리가 이걸 내밀고 있나» 이기 때문이다.
+    //   종전엔 connected 가 먼저라, 이미 연결해 둔 사람에겐 준비 중 표시가 영영 안 보였다(구글 실측 2026-08-31).
+    //   ⚠ 그렇다고 «연결 안 됨»이 되는 건 아니다 — 카드가 연결 사실을 그대로 말하고(아래 soonConnected),
+    //   상세의 판정(stateOf)은 목록 배치가 아니라 **자격 원본**을 보므로 켜져 있으면 켜진 화면 그대로다.
+    if (s.soon) soon.push(s);
+    else if (oauthOn(s) || tokenOn(s)) connected.push(s);
     else if (selfServe(s)) available.push(s);
     else blockedOAuth.push(s);   // OAuth 전용인데 조직 미등록 → 카드로 내밀면 눌러도 안 되는 버튼이 된다
   }
@@ -91,7 +106,9 @@ function partition(oauth: any, creds: any): SvcView {
   }
   // #1675 ③ — 헤드리스 자격이 마지막으로 **실패**한 기록(서버가 org_task 에서 뽑아 준다). 없으면 null.
   const authFailure = creds.headless_auth_failure ?? null;
-  return { oauthMap, credMap, connected, available, blockedOAuth, authFailure, all: [...connected, ...available, ...blockedOAuth] };
+  //  준비 중인데 **이미 연결해 둔** 앱 — 화면이 «쓰던 것은 그대로 돕니다»를 말할 근거(뺏지 않는다).
+  const soonConnected = new Set(soon.filter((s) => oauthOn(s) || tokenOn(s)).map((s) => s.key));
+  return { oauthMap, credMap, connected, available, blockedOAuth, soon, soonConnected, authFailure, all: [...connected, ...available, ...soon, ...blockedOAuth] };
 }
 
 // ── 화면 그리기 ──
@@ -399,7 +416,7 @@ async function myLoginsSection(detail) {
     el('div', { class: 'admin-actions' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
   detail.replaceChildren(
-    sectionHead('외부 서비스 관리', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 여기 설정은 나에게만 적용되고 팀에는 공유되지 않습니다.'),
+    sectionHead('외부 서비스 관리', 'AI가 내 계정으로 외부 서비스를 직접 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 여기 설정은 나에게만 적용됩니다. 자료를 워크스페이스가 함께 보는 자료함으로 가져오는 것은 «외부 앱 연결»의 «자료 가져오기»가 따로 합니다.'),
     el('div', { class: 'admin-stack' }, svcHost, gitCard));
   await renderServices(svcHost);
 }

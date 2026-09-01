@@ -6,11 +6,11 @@
 /* 자리(thin 게터)는 항상 확보하고 '색'만 투명 → 호버 시 색이 들어오므로 내용이 밀리는 레이아웃 점프가 없다.
    (scrollbar-width:none ↔ thin 으로 토글하면 호버마다 8px 씩 밀림) */
 .kn-side, .pjv-side-nav-inner, .admin-side { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-.kn-side:hover, .pjv-side-nav-inner:hover, .admin-side:hover { scrollbar-color: var(--muted-3) transparent; }
+.kn-side:hover, .pjv-side-nav-inner:hover, .admin-side:hover { scrollbar-color: var(--muted-3-line) transparent; }
 .kn-side::-webkit-scrollbar, .pjv-side-nav-inner::-webkit-scrollbar, .admin-side::-webkit-scrollbar { width: 8px; }
 .kn-side::-webkit-scrollbar-track, .pjv-side-nav-inner::-webkit-scrollbar-track, .admin-side::-webkit-scrollbar-track { background: transparent; }
 .kn-side::-webkit-scrollbar-thumb, .pjv-side-nav-inner::-webkit-scrollbar-thumb, .admin-side::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
-.kn-side:hover::-webkit-scrollbar-thumb, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb, .admin-side:hover::-webkit-scrollbar-thumb { background: var(--muted-3); }
+.kn-side:hover::-webkit-scrollbar-thumb, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb, .admin-side:hover::-webkit-scrollbar-thumb { background: var(--muted-3-line); }
 .kn-side:hover::-webkit-scrollbar-thumb:hover, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb:hover, .admin-side:hover::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
 
 /* ── 저장소 · 로그 (#813) ─────────────────────────────────────────────

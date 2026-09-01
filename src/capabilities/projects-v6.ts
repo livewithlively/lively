@@ -493,7 +493,7 @@ async function myProjectSessionIds(user: LivelyUser, me: string, projectId: numb
   const restorable = await listRestorableSessions(user, new Set(live.map((s) => s.id))).catch(() => []);
   const pastMine = restorable.filter((s) => Number(s.projectId) === projectId && s.owned);
   // 기록만 남은 세션(중앙 기록, 박스 없음) — 이 프로젝트에 바인딩된 내 것. 박스 id 와 겹치면 표식이 두 이름에 다 붙을 뿐 무해.
-  const logs = await listSessionsForProject(projectId).catch(() => []);
+  const logs = await listSessionsForProject(projectId, me).catch(() => []);
   // ⚠ 이 목록은 **이력** 조인이라 '지금은 다른 프로젝트로 옮긴 세션'까지 포함한다(시간구간 모델 — 목록으로는 그게 맞다).
   //  휴지통은 다르다: 옮긴 세션까지 버리면 **살아서 다른 일을 하고 있는 세션이 사라진다**(2026-08-26 실측 — 소속을
   //  #1867 로 옮긴 뒤 옛 껍데기 #2015 를 버리자 그 세션 카드가 함께 쓸려갔다). 과거 구간은 그대로 두고, 세션은 지금 주인을 따른다.
@@ -788,9 +788,14 @@ const projectSetCategoriesV6: Capability = {
   handler: async (input: ProjectSetCategoriesV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    const categoryIds = await setProjectCategories(input.id, input.categoryIds, writeCtx);
+    const r = await setProjectCategories(input.id, input.categoryIds, writeCtx);
     await regenAgentsForList(await listIdOfProject(input.id)); // 형제 전부 상속 반영(F4)
-    return { categoryIds };
+    // 반영이 안 됐으면 **그 이유와 다음 행동**을 함께 돌려준다(#2474) — 종전엔 빈 배열만 나가서
+    //  호출자가 "툴이 고장났다"로 읽었다(실측: 2026-09-01, AI 가 사용자에게 오보까지 했다).
+    return r.applied ? r : {
+      ...r,
+      note: "이 프로젝트는 리스트에 속해 있지 않아 카테고리를 정할 자리가 없습니다 — project_set_list_v6 로 먼저 리스트에 넣으세요(카테고리는 리스트가 소유하고 소속 프로젝트가 상속합니다).",
+    };
   },
 };
 

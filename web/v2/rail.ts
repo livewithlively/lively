@@ -18,15 +18,18 @@
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
 import { el, navOn, personName, profileAvatar, state, toast } from '../core.js';
-import { APPS, openLaunchpad, type AppDef } from './apps.js';
+import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
+import { APPS, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { openMeModal } from './me-modal.js';
 import { ctxMenu } from './panes-kit.js';   // 우클릭 메뉴 — 곁칸·프로젝트 행과 같은 부품
 import {
-  activeWorkspaceSlug, listWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
-  archiveWorkspace, createWorkspace, linkTeam, linkedTeams, pendingPromotions, renameWorkspace, resolvePromotion, setAutoPromote, unlinkTeam,
+  activeWorkspaceSlug, listWorkspaces, managedWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
+  archiveWorkspace, createWorkspace, leaveWorkspace, workspaceMembers,
 } from './switcher.js';
+import { aiLoginScopeHint } from './ai-login-scope.js';   // #2476 — «AI 로그인은 워크스페이스마다 따로» 를 말할지·무슨 말로 할지의 정본
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
+import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
 
 export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
 
@@ -58,15 +61,20 @@ const SECTIONS: SecDef[] = [
 interface LinkDef { key: string; label: string; route: string; tab: string | null; icon: string }
 const LINKS: LinkDef[] = [
   { key: 'liv', label: '리브', route: '#/liv', tab: 'liv', icon: 'liv' },
+  //  자료(#2423) — 구역(SECTIONS)이 아니라 '갈 곳'이다. 구역은 왼쪽 목록의 내용을 통째로 바꾸는 자리이고,
+  //   자료는 자기 안에 출처 나무를 이미 갖고 있어 사이드바를 또 점유할 이유가 없다(구역 여섯째를 만들지 않는다).
+  { key: 'sources', label: '자료', route: '#/sources', tab: null, icon: 'src' },
 ];
 export function railSections(): SecDef[] { return SECTIONS.filter((s) => !s.tab || navOn(s.tab)); }
 export function sectionDef(sec: RailSection): SecDef { return SECTIONS.find((s) => s.key === sec) || SECTIONS[0]; }
 
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 const SEC_STORE = 'lively_v2_rail_sec';
-const HIDE_STORE = 'lively_v2_rail_hidden';   // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
-const MAIN_STORE = 'lively_v2_rail_main';     // 메인 그룹 순서 — 구역 · 리브 · 독에 고정한 앱을 **한 줄**로(사람이 정한 순서, 5차). 이 기기에 둔다.
-const PIN_STORE = 'lively_v2_rail_pins';      // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
+const HIDE_STORE = deviceStore('lively_v2_rail_hidden');   // ⚠ 이름에 `_KEY` 를 쓰지 않는다 — gitleaks 가 시크릿으로 오인한다(#1954)
+//  메인 그룹 순서 — 구역 · 리브 · 독에 고정한 앱을 **한 줄**로(사람이 정한 순서, 5차).
+//  #2460 — **계정에 둔다**: 끌어서 정한 자리는 이 창의 사실이 아니라 그 사람의 결정이다.
+const MAIN_STORE = shellPrefStore('lively_v2_rail_main', 'list');
+const PIN_STORE = deviceStore('lively_v2_rail_pins');      // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
 const RECENT_N = 4;
 const NARROW_MQ = '(max-width: 900px)';   // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 
@@ -99,6 +107,20 @@ function init(): void {
   void listWorkspaces().then((rows) => { if (rows.length) { spaces = rows; drawRail(); } });
 }
 
+/**
+ * 서버 정본이 캐시를 덮었다 — 레일 순서를 그 값으로 갈아끼운다 (#2460).
+ *  order 는 init 에서 한 번 읽어 모듈이 들고 도는 값이라, 다시 읽지 않으면 다른 기기에서 정한 자리가
+ *  이 창에 반영되지 않는다. 구역(SEC_STORE)·접힘(HIDE_STORE)은 이 기기의 것이라 건드리지 않는다.
+ */
+export function reloadRailPrefs(): void {
+  if (!inited) return;
+  try {
+    const raw = localStorage.getItem(MAIN_STORE);
+    order = raw ? normalizeOrder(JSON.parse(raw)) : defaultOrder();
+  } catch (_) { return; }   // 못 읽으면 들고 있던 순서 그대로
+  drawRail();
+}
+
 //  ⚠ init() 을 먼저 부른다 — 이 게터는 레일이 그려지기 **전에도** 불린다(부팅 때 탭이 되살아나는 순간 등).
 //   그때 기본값 'home' 을 돌려주면 부른 쪽은 '사람이 홈을 골랐다'로 읽는다. 실측(#2061): 위키에서 새로고침했는데
 //   되살아난 탭이 홈 자리로 기록돼 [홈] 이 기억하던 세션을 잃었다.
@@ -115,6 +137,23 @@ export function setRailSection(sec: RailSection, opts?: { navigate?: boolean }):
   hooks.onSection?.(sec, { navigate: changed || !!(opts && opts.navigate) });
 }
 
+/**
+ * 구역을 **조용히** 되돌린다 — 이동도 없고 훅에도 알리지 않는다 (#2230).
+ *
+ * 워크스페이스 전환 부팅에서 셸(main.ts)이 부른다. 전환의 도착지는 홈인데(#2171) 구역은 **이 기기의
+ *  기억**이라 옮겨 가도 [위키]·[프로젝트]에 그대로 머물렀다 — 본문은 홈인데 레일만 딴 곳을 가리키는 어긋남.
+ *
+ * ⚠ 여기서 setRailSection 을 쓰면 안 된다 — 그건 `hooks.onSection` 으로 **주소까지 옮긴다**(그러면
+ *  홈 구역의 '두고 간 자리'로 다시 끌려가, 전환의 도착지를 홈으로 되돌리려는 이 부름이 자기를 무효로 만든다).
+ */
+export function resetRailSection(sec: RailSection): void {
+  if (!SECTIONS.some((s) => s.key === sec)) return;
+  init();
+  section = sec;
+  try { localStorage.setItem(SEC_STORE, sec); } catch (_) { /* 이번 화면은 된다 */ }
+  drawRail();   // 아직 마운트 전이면 아무 일도 안 한다(host 가드) — 곧 mountRail 이 이 값으로 그린다
+}
+
 export function toggleRail(): void {
   hidden = !hidden;
   try { localStorage.setItem(HIDE_STORE, hidden ? '1' : '0'); } catch (_) { /* 이번 화면은 된다 */ }
@@ -127,11 +166,13 @@ export function toggleRail(): void {
 const SEC_APP_KEYS = new Set(['terminal', 'projects2', 'knowledge']);
 function recentForRail(n: number): AppDef[] {
   let keys: string[] = [];
-  try { const v = JSON.parse(localStorage.getItem('lively_v2_recent_apps') || '[]'); if (Array.isArray(v)) keys = v.filter((x) => typeof x === 'string'); }
+  //  ⚠ 키를 여기서 다시 적지 않는다 — apps.ts 가 내보내는 RECENT_STORE_KEY 와 **같은 자리**를
+  //   읽어야 한다. 사본을 두면 워크스페이스 접미사가 한쪽에만 붙어 레일만 남의 워크스페이스 기록을 본다(#1875).
+  try { const v = JSON.parse(localStorage.getItem(RECENT_STORE_KEY) || '[]'); if (Array.isArray(v)) keys = v.filter((x) => typeof x === 'string'); }
   catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
   const pick: AppDef[] = [];
   const take = (a: AppDef | undefined): void => {
-    if (!a || SEC_APP_KEYS.has(a.key) || order.includes(a.key) || pick.some((p) => p.key === a.key)) return;
+    if (!a || a.hidden || SEC_APP_KEYS.has(a.key) || order.includes(a.key) || pick.some((p) => p.key === a.key)) return;   // hidden(#2199): 문이 다른 곳에 있는 앱
     if (a.tab && !navOn(a.tab)) return;
     pick.push(a);
   };
@@ -199,12 +240,24 @@ function openPopover(anchor: HTMLElement): void {
   closePopover();
   const cur = workspaceInfo();
   const curSlug = activeWorkspaceSlug();
-  const rows: Array<{ slug: string; name: string; kind: string; active: boolean }> = spaces.length
+  const rows: Array<WsRow & { kind: string; active: boolean; enter_url?: string; tenant_state?: string | null }> = spaces.length
     //  ★ 종류는 저장된 kind 가 아니라 **지금 명부에 몇 명인가**에서 나온다(#1875 kind_effective).
-    ? spaces.map((w) => ({ slug: String(w.slug), name: String(w.name || w.slug), kind: String(w.kind_effective || w.kind || 'team'), active: w.slug === curSlug || (!!w.is_primary && curSlug === 'primary') }))
-    : [{ slug: 'primary', name: cur.name, kind: cur.kind, active: true }];
-  const me = spaces.find((w) => w.slug === curSlug || (!!w.is_primary && curSlug === 'primary'));
-  const isOwner = !!me && me.role === 'owner' && curSlug !== 'primary';
+    //  '지금 여기'의 판정 — 셀프호스트는 브라우저가 고른 slug 로, **매니지드는 서버가 준 is_current 로**.
+    //   매니지드에선 워크스페이스마다 게이트웨이가 달라 브라우저에 고른 값이 없다(주소 자체가 답이다).
+    ? spaces.map((w) => ({ slug: String(w.slug), name: String(w.name || w.slug), kind: String(w.kind_effective || w.kind || 'team'),
+        active: typeof (w as any).is_current === 'boolean'
+          ? !!(w as any).is_current
+          : (w.slug === curSlug || (!!w.is_primary && curSlug === 'primary')),
+        enter_url: (w as any).enter_url, tenant_state: (w as any).tenant_state,
+        //  #1875 D5″ — ✕ 가 어느 문을 여는지는 이 셋이 정한다(인원 · 어드민 수 · 내 역할).
+        //   행마다 다르므로 «지금 워크스페이스»의 값이 아니라 그 행의 값을 그대로 들고 다닌다.
+        is_primary: !!w.is_primary || String(w.slug) === 'primary',
+        role: (w as any).role ?? null,
+        member_count: typeof w.member_count === 'number' ? w.member_count : null,
+        owner_count: typeof (w as any).owner_count === 'number' ? (w as any).owner_count : null,
+        //  #2188 — 사람이 정한 얼굴. 타일(workspaceFace)과 설정 모달이 이 값으로 그린다.
+        face: (w as any).face ?? null }))
+    : [{ slug: 'primary', name: cur.name, kind: cur.kind, active: true, is_primary: true, role: null, member_count: null, owner_count: null, face: null }];
 
   //  #1875 — 나에게 온 초대는 **맨 위**. 내가 결정해 줘야 저쪽이 기다림을 멈추고, '내가 갈 수 있는 곳'이라
   //   워크스페이스 목록과 같은 질문에 답한다.
@@ -222,16 +275,28 @@ function openPopover(anchor: HTMLElement): void {
     ...rows.map((w) => el('div', { class: 'v2-wspop-row' + (w.active ? ' cur' : '') },
       el('button', { class: 'v2-wspop-switch', type: 'button', role: 'menuitemradio', 'aria-checked': String(w.active),
         title: w.active ? '지금 이 워크스페이스예요' : `${w.name} 워크스페이스로 전환`,
-        onclick: () => { closePopover(); if (!w.active) switchWorkspace(w.slug); } },
+        onclick: () => { closePopover(); if (!w.active) switchWorkspace(w.slug, (w as any).enter_url); } },
         wsTile(w, 'v2-wscard-big'),
-        tt(w.name, w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스')),
-      addPeopleBtn(w))),
+        //  #2188 — 매니지드에서 갓 만든 워크스페이스는 뜨는 데 시간이 걸린다(테넌트 프로비저닝).
+        //   목록에는 **바로** 세우되 상태를 사실대로 말한다 — 안 그러면 눌렀을 때 빈 화면을 만난다.
+        tt(w.name, (w as any).tenant_state && (w as any).tenant_state !== 'running'
+          ? '준비 중이에요 — 곧 열립니다'
+          : w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스')),
+      addPeopleBtn(w), exitBtn(w))),
+    //  #1875 D5″ — 워크스페이스가 하나도 없을 때(매니지드에서 마지막 것을 지운 직후). 다른 줄을 그리면
+    //   **누를 수 없는 것을 그리는 것**이라 거짓이다 — 할 일이 하나뿐이니 그 하나만 남긴다.
+    rows.length ? null : hint('워크스페이스가 하나도 없어요. 하나 만들면 거기서 다시 시작합니다.'),
     hr(),
     //  설정 — 이름 · 연결한 팀 · 보관. 만든 사람(owner)만. 종전엔 목록 행 옆 ✎ ✕ 였다(무엇인지 읽히지 않았다).
-    isOwner ? row('gear', '워크스페이스 설정', settingsSub(), () => openSettingsPanel(anchor, curSlug)) : null,
-    isOwner ? hr() : null,
+    //  #1875 D5″ — 종전엔 여기에 「워크스페이스 나가기」 줄이, 설정 판 안엔 「보관/나가기」가 따로 있었다.
+    //   둘 다 **지금 워크스페이스**만 다뤘고, 이제 행마다 ✕ 가 그 일을 한다(어느 워크스페이스인지가
+    //   행에서 이미 보인다). 같은 일을 하는 문을 셋 두면 어느 것이 진짜인지가 사라진다 — 걷었다.
     //  추가 — 누르면 **바로 만드는 판**이 뜬다(종전엔 옛 메뉴 전체가 떴다 — "저 드롭다운으로 보내는 이유를 모르겠음").
     row('plus', '워크스페이스 추가', registryActive() ? '혼자 시작합니다 — 사람을 부르면 팀이 됩니다' : '지금은 만들 수 없어요', () => openCreatePanel(anchor)),
+    //  #2188 설정(2026-08-31 장원준: "여기 밑에 설정 버튼 하나, 누르면 모달") — **모두에게** 보인다.
+    //   종전 설정 판은 owner 에게만 열려 구성원·비admin 은 구성원 목록조차 볼 문이 없었다. 모달 안에서
+    //   저마다 할 수 있는 만큼만 열린다(이름·아바타는 owner, 나머지는 열람).
+    row('gear', '워크스페이스 설정', '아바타 · 이름 · 구성원 · 기능 설정', () => openCurrentWsSettings(rows as never)),
     //  「레일 숨기기」 행은 뺐다(원준 2026-08-26 "여기 있어야 할 이유가 없음") — 레일 여닫기는 창 맨 윗줄
     //   패널 단추와 ⌘⇧S 의 일이지 워크스페이스 메뉴의 일이 아니다.
     ) as HTMLElement;
@@ -255,7 +320,6 @@ function field(ph: string, opts?: { type?: string; value?: string; autocomplete?
   return el('input', { class: 'v2-wspop-in', type: opts?.type || 'text', placeholder: ph, 'aria-label': ph, value: opts?.value || '', autocomplete: opts?.autocomplete || 'off' }) as HTMLInputElement;
 }
 const hint = (t: string): HTMLElement => el('p', { class: 'v2-wspop-hint', text: t });
-const sub = (t: string): HTMLElement => el('div', { class: 'v2-wspop-sub', text: t });
 
 /** 초대 축(#1875 서버)이 이 게이트웨이에 있는가 — 목록 응답에 member_count 가 실리면 있다(같은 커밋에서 생겼다).
  *  없는 게이트웨이(서버 반영 전 dev)에서 구성원 행을 그리면 눌렀을 때 404 만 난다 — 그리지 않는다. */
@@ -273,8 +337,138 @@ function addPeopleBtn(w: { slug: string; name: string; kind: string; is_primary?
     icon('adduser')) as HTMLElement;
 }
 
-function settingsSub(): string { return promoN ? `이름 · 연결한 팀 · 보관 · 승인 대기 ${promoN}` : '이름 · 연결한 팀 · 보관'; }
-let promoN = 0;   // 승인 대기 승격 수 — 설정 행 부제에 싣는다(판 안에 숨기면 아무도 못 본다)
+// ── ✕ — 이 워크스페이스를 «치우는» 문 (#1875 D5″, 2026-08-28 장원준) ────────
+//
+// 원준 지시: 「구성원 추가 옆에 X 아이콘 하나 추가로 만들어서」. 그래서 사람+ 와 **같은 자리·같은 규격**이다.
+//
+// ★ 누르면 다른 판으로 보내지 않고 **그 행 아래가 그 자리에서 열린다**(안 A, 2026-08-28 선택).
+//  목록을 안 떠나므로 «어느 워크스페이스 얘기인지»가 눈에서 안 사라진다 — 확인창이 가장 자주 틀리는 자리다.
+//
+// 갈래는 서버와 **같은 규칙**이다(registry.planWorkspaceLeave): 어드민 수가 문을 정한다.
+//   · 혼자                     → 삭제 (되돌릴 수 없다고 말한다)
+//   · 팀 · 어드민 아님/여럿     → 그냥 나가기
+//   · 팀 · 어드민이 나뿐        → 넘길 사람을 고르고 나가기
+//  화면이 여기서 더 좁게/넓게 세면 «눌렀더니 안 되더라» 가 된다. 그래도 서버가 정본이라 틀리면 서버가 막는다.
+//
+// primary 에는 안 그린다 — 박스 그 자체라 나갈 수도 지울 수도 없다(명부가 없다 = 로그인이 곧 접근).
+type WsRow = { slug: string; name: string; is_primary?: boolean; role?: string | null; member_count?: number | null; owner_count?: number | null; face?: { color?: string; char?: string } | null };
+
+function exitBtn(w: WsRow): HTMLElement | null {
+  if (w.is_primary || w.slug === 'primary') return null;
+  if (!inviteAxisOn()) return null;   // 서버가 아직 이 축을 모르는 게이트웨이 — 그리면 404 만 난다
+  const alone = (w.member_count ?? 1) < 2;
+  return el('button', { class: 'v2-wspop-x', type: 'button',
+    title: alone ? `${w.name} 삭제` : `${w.name} 에서 나가기`,
+    'aria-label': alone ? `${w.name} 삭제` : `${w.name} 에서 나가기`,
+    onclick: (e: Event) => { e.stopPropagation(); openExitInline(e.currentTarget as HTMLElement, w); } },
+    icon('x')) as HTMLElement;
+}
+
+/** 열려 있는 확인은 언제나 하나다 — 둘이 열리면 어느 것에 답하는 중인지가 사라진다. */
+function closeExitInline(): void { popEl?.querySelectorAll('.v2-wspop-exit').forEach((n) => n.remove()); }
+
+function openExitInline(btn: HTMLElement, w: WsRow): void {
+  const row = btn.closest('.v2-wspop-row') as HTMLElement | null;
+  if (!row) return;
+  const already = row.nextElementSibling?.classList.contains('v2-wspop-exit');
+  closeExitInline();
+  if (already) return;   // 같은 ✕ 를 다시 누르면 닫힌다(토글)
+
+  const box = el('div', { class: 'v2-wspop-exit', role: 'group', 'aria-label': `${w.name} 정리` }) as HTMLElement;
+  row.after(box);
+  const alone = (w.member_count ?? 1) < 2;
+  const iAmAdmin = w.role === 'owner';
+  const soleAdmin = iAmAdmin && (w.owner_count ?? 1) < 2;
+
+  if (alone) paintDelete(box, w);
+  else if (soleAdmin) paintTransfer(box, w);
+  else paintLeave(box, w);
+  (box.querySelector('button, select') as HTMLElement | null)?.focus();
+}
+
+/** 확인 한 벌 — 문장 + [취소][실행]. 세 갈래가 같은 모양이어야 «무엇이 다른지»가 문장에서만 읽힌다. */
+function exitForm(box: HTMLElement, opts: { lines: string[]; extra?: HTMLElement | null; go: string; danger?: boolean; run: () => Promise<void> }): void {
+  const note = el('span', { class: 'v2-wspop-note' });
+  //  버튼 규격은 이 팝오버가 이미 쓰는 공용 btn 을 그대로 쓴다 — 여기만 새 클래스를 만들면
+  //   같은 메뉴 안에서 «만들기» 와 «나가기» 가 서로 다른 시대의 버튼이 된다.
+  const go = el('button', { class: 'btn btn-sm ' + (opts.danger ? 'btn-danger' : 'btn-primary'), type: 'button', text: opts.go,
+    onclick: async () => {
+      (go as HTMLButtonElement).disabled = true; note.textContent = '';
+      try { await opts.run(); }
+      catch (e: any) { (go as HTMLButtonElement).disabled = false; note.textContent = String(e?.message || e); }
+    } });
+  box.append(
+    ...opts.lines.map((t) => el('p', { class: 'v2-wspop-exit-l', text: t })),
+    ...(opts.extra ? [opts.extra] : []),
+    el('div', { class: 'v2-wspop-actions' },
+      el('button', { class: 'btn btn-sm', type: 'button', text: '취소', onclick: () => closeExitInline() }),
+      go, note));
+}
+
+function paintDelete(box: HTMLElement, w: WsRow): void {
+  exitForm(box, {
+    lines: [`'${w.name}' 을(를) 삭제할까요?`, '혼자 쓰는 워크스페이스라 나만 잃습니다. 되돌릴 수 없어요.'],
+    go: '삭제', danger: true,
+    run: async () => {
+      await archiveWorkspace(w.slug);
+      closePopover(); toast(`'${w.name}' 을(를) 삭제했어요.`);
+      await afterExit(w.slug);
+    },
+  });
+}
+
+function paintLeave(box: HTMLElement, w: WsRow): void {
+  const others = Math.max(0, (w.member_count ?? 2) - 1);
+  exitForm(box, {
+    lines: [`'${w.name}' 에서 나갈까요?`,
+      `나만 빠집니다 — 함께 쓰는 분 ${others}명과 올린 지식·프로젝트는 그대로 남아요.`,
+      '다시 들어오려면 초대를 받아야 해요.'],
+    go: '나가기', danger: true,
+    run: async () => {
+      await leaveWorkspace(w.slug);
+      closePopover(); toast(`'${w.name}' 에서 나왔어요.`);
+      await afterExit(w.slug);
+    },
+  });
+}
+
+/**
+ * 어드민이 나뿐일 때 — **넘길 사람을 고르고서야** 나간다(#1875 D5″).
+ *  8/27 엔 여기서 막고 "준비 중"이라 말했다. 막힌 문을 그리는 대신 답할 수 있는 컨트롤을 준다는 것이
+ *  이번 변경의 핵심이다([[ui-question-needs-answerable-control]]).
+ */
+function paintTransfer(box: HTMLElement, w: WsRow): void {
+  const pick = el('select', { class: 'v2-wspop-in', 'aria-label': '주인을 넘길 사람' }) as HTMLSelectElement;
+  pick.append(el('option', { value: '', text: '불러오는 중…' }));
+  exitForm(box, {
+    lines: [`'${w.name}' 의 관리자가 나 하나예요.`,
+      '나가려면 관리자를 넘겨야 해요 — 넘기지 않으면 아무도 이 워크스페이스를 관리할 수 없게 되거든요.'],
+    extra: pick, go: '넘기고 나가기', danger: true,
+    run: async () => {
+      const to = pick.value;
+      if (!to) throw new Error('넘길 분을 골라 주세요');
+      await leaveWorkspace(w.slug, to);
+      closePopover(); toast(`'${w.name}' 의 관리자를 넘기고 나왔어요.`);
+      await afterExit(w.slug);
+    },
+  });
+  void workspaceMembers(w.slug).then((ms) => {
+    //  ⚠ «나» 를 가리키는 키가 배포마다 다르다 — 셀프호스트는 core member_id, 매니지드는 CP 계정 이메일.
+    //   그래서 서버가 실어 주는 is_me 를 먼저 믿고, 없을 때만(옛 게이트웨이) member_id 로 떨어진다.
+    const me = state.me && (state.me as { userId?: string }).userId;
+    const cand = ms.filter((m) => (typeof m.is_me === 'boolean' ? !m.is_me : m.member_id !== me));
+    pick.replaceChildren(...(cand.length
+      ? cand.map((m) => el('option', { value: m.member_id, text: personName(m as never) || m.display_name || m.email || m.member_id }))
+      : [el('option', { value: '', text: '넘길 분이 없어요 — 먼저 초대하세요' })]));
+  }).catch(() => pick.replaceChildren(el('option', { value: '', text: '구성원을 불러오지 못했어요' })));
+}
+
+/** 나가거나 지운 뒤 — 지금 보고 있던 곳이면 옮겨 가야 하고, 아니면 목록만 새로 그리면 된다. */
+async function afterExit(slug: string): Promise<void> {
+  await refreshSpaces();
+  if (slug === activeWorkspaceSlug()) switchWorkspace('primary');
+}
+
 
 /** primary(박스의 팀) 구성원 모달 — 박스 계정 전원이다(명부가 따로 없다). 관리자면 「사람 추가」가 설정 ▸ 구성원으로
  *  간다(계정 만들기 = 여기 들어오기). 다른 워크스페이스의 이메일 초대와 같은 자리(문패 오른쪽 아이콘)에서 열린다. */
@@ -282,12 +476,12 @@ let promoN = 0;   // 승인 대기 승격 수 — 설정 행 부제에 싣는다
  *  혼자면 개인, 사람을 부르면 그 순간 팀. 그래서 종류 선택 칸을 두지 않는다 — 있으면 '지금 정해야 하는 것'으로 읽힌다. */
 function openCreatePanel(anchor: HTMLElement): void {
   closePopover();
-  const info = workspaceInfo();
   const pop = el('div', { class: 'v2-wspop v2-wspop--panel', role: 'dialog', 'aria-label': '새 워크스페이스' }, panelHead('새 워크스페이스', anchor)) as HTMLElement;
   if (!registryActive()) {
-    //  만들 수 없는 상태를 **조용히 숨기지 않는다** — 매니지드면 허브가 답이고, 셀프호스트면 자동 활성화 대기다.
-    pop.append(hint(info.hub ? '이 워크스페이스는 app.lvly.io 가 관리해요. 새 워크스페이스도 거기서 만듭니다.' : '다중 워크스페이스 준비 중이에요(부팅 자동 활성화). 계속 안 되면 관리자 로그를 확인하세요.'));
-    if (info.hub) pop.append(el('a', { class: 'v2-wspop-row', href: info.hub, target: '_blank', rel: 'noopener' }, el('span', { class: 'v2-wspop-ic' }, icon('web')), tt('app.lvly.io 에서 만들기', '새 탭으로 열립니다')));
+    //  #2188 — 매니지드는 이제 **여기서 만든다**(계정 서버가 실행만 대신한다). 그래서 이 갈래에 남는 것은
+    //   셀프호스트 자동 활성화 대기뿐이다. 종전엔 여기서 «app.lvly.io 에서 만들기 · 새 탭으로 열립니다» 로
+    //   사람을 내보냈고, 원준 신고가 정확히 그 화면이었다 — *"????? 이건 왜..? 앱에서처럼 해줘."*
+    pop.append(hint('다중 워크스페이스 준비 중이에요(부팅 자동 활성화). 계속 안 되면 관리자 로그를 확인하세요.'));
     place(pop, anchor, !!anchor.closest('.v2-side')); return;
   }
   const name = field('워크스페이스 이름');
@@ -300,98 +494,29 @@ function openCreatePanel(anchor: HTMLElement): void {
     try {
       const w = await createWorkspace(v, 'personal');
       toast(`'${w.name}' 워크스페이스를 만들었어요.`);
-      closePopover(); switchWorkspace(w.slug);   // 만들자마자 그리로 — 빈 목록 앞에서 헤매지 않게
+      closePopover();
+      //  만들자마자 그리로 — 빈 목록 앞에서 헤매지 않게. 매니지드는 **새 테넌트**라 주소가 다르므로
+      //  계정 서버가 준 enter_url 로 이동한다(그 주소가 로그인까지 태워 준다).
+      switchWorkspace(w.slug, w.enter_url);
     } catch (e: any) { note.textContent = e?.message || String(e); go.disabled = false; }
   };
   go.onclick = () => void submit();
   name.onkeydown = (e) => { if (e.key === 'Enter' && !(e as any).isComposing) { e.preventDefault(); void submit(); } };
+  //  #2476 — **만들기 전에** 말한다. 새 워크스페이스는 새 테넌트라 AI 자격이 사는 멤버 홈도 새로 생긴다 —
+  //   여기서 이은 로그인은 저기로 따라가지 않는다(실측 2026-08-28: «방금 로그인했는데 왜 또?»).
+  //   말할지 말지와 문구는 ai-login-scope 가 정한다(셀프호스트에선 빈 문자열 = 줄을 안 그린다).
+  const wsHint = aiLoginScopeHint(managedWorkspaces());
   pop.append(el('div', { class: 'v2-wspop-form' }, name, el('div', { class: 'v2-wspop-actions' }, go, note),
-    hint('혼자 시작합니다. 관리자를 포함해 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다.')));
+    hint(managedWorkspaces()
+      ? '혼자 시작합니다. 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다. 만들면 준비되는 데 잠깐 걸려요.'
+      : '혼자 시작합니다. 관리자를 포함해 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다.'),
+    ...(wsHint ? [hint(wsHint)] : [])));
   place(pop, anchor, !!anchor.closest('.v2-side'));
   window.setTimeout(() => name.focus(), 0);
 }
 
-/** 워크스페이스 설정(만든 사람만) — 이름 · 연결한 팀(승격 경로, #1750) · 보관. 종전 옛 메뉴의 ✎ ✕ 와 '개인의 것을 올릴 팀'이 여기로 왔다. */
-function openSettingsPanel(anchor: HTMLElement, slug: string): void {
-  closePopover();
-  const w = spaces.find((x) => x.slug === slug);
-  const wsName = String(w?.name || slug);
-  const pop = el('div', { class: 'v2-wspop v2-wspop--panel', role: 'dialog', 'aria-label': '워크스페이스 설정' }, panelHead('워크스페이스 설정', anchor)) as HTMLElement;
-
-  // 이름
-  const name = field('워크스페이스 이름', { value: wsName });
-  const nNote = el('span', { class: 'v2-wspop-note' });
-  const save = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '이름 바꾸기', onclick: async () => {
-    const v = name.value.trim();
-    if (!v || v === wsName) { nNote.textContent = v ? '지금 이름과 같아요.' : '이름을 입력하세요.'; return; }
-    try { await renameWorkspace(slug, v); toast(`'${v}' 로 바꿨어요.`); await refreshSpaces(); closePopover(); location.reload(); }
-    catch (e: any) { nNote.textContent = e?.message || String(e); }
-  } });
-  pop.append(sub('이름'), el('div', { class: 'v2-wspop-form' }, name, el('div', { class: 'v2-wspop-actions' }, save, nNote)));
-
-  // 연결한 팀(다른 게이트웨이) — 개인 워크스페이스의 축이다. 팀에서는 이미 연결한 것이 있을 때만 관리용으로 보인다.
-  const teamWrap = el('div', { class: 'v2-wspop-teams' });
-  const linkForm = el('div', { class: 'v2-wspop-form', hidden: true }) as HTMLElement;
-  const url = field('팀 워크스페이스 주소 (https://…)', { type: 'url' });
-  const tok = field('그 워크스페이스에서 발급한 내 토큰 (lvk_…)');
-  const lNote = el('span', { class: 'v2-wspop-note' });
-  const link = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '연결', onclick: async () => {
-    if (!url.value.trim() || !tok.value.trim()) { lNote.textContent = '주소와 토큰을 모두 입력하세요.'; return; }
-    link.setAttribute('disabled', ''); lNote.textContent = '연결 확인 중…';
-    try { const r = await linkTeam(url.value.trim(), tok.value.trim()); toast(`'${r.name}' 에 연결했어요.`); url.value = ''; tok.value = ''; linkForm.hidden = true; await paintTeams(); }
-    catch (e: any) { lNote.textContent = e?.message || String(e); }
-    finally { link.removeAttribute('disabled'); }
-  } }) as HTMLButtonElement;
-  linkForm.append(url, tok, el('div', { class: 'v2-wspop-actions' }, link, lNote),
-    hint('팀 워크스페이스에서 [내 토큰 발급](memory·context)으로 만든 토큰을 붙여넣으세요. 여기서 만든 지식·프로젝트를 그 팀에 올릴 때 그 토큰으로만 올립니다.'));
-  const teamSec = el('div', { hidden: true }, sub('연결한 팀'), teamWrap,
-    el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { linkForm.hidden = !linkForm.hidden; if (!linkForm.hidden) url.focus(); } },
-      el('span', { class: 'v2-wspop-ic' }, icon('plus')), tt('팀 워크스페이스 연결', '주소와 토큰으로 — 여기 것을 그 팀에 올립니다')),
-    linkForm) as HTMLElement;
-  const promoWrap = el('div', { class: 'v2-wspop-teams' });
-  pop.append(teamSec, promoWrap);
-
-  const paintTeams = async (): Promise<void> => {
-    const links = await linkedTeams();
-    const isPersonal = (w?.kind_effective || w?.kind) === 'personal';
-    teamSec.hidden = !(isPersonal || links.length > 0);
-    teamWrap.replaceChildren(...(links.length ? links.map((l) => el('div', { class: 'v2-wspop-team' },
-      el('a', { class: 'v2-wspop-team-open', href: l.base_url, target: '_blank', rel: 'noopener', title: '새 탭으로 엽니다' },
-        el('b', { text: String(l.name || l.scope_key) }),
-        l.state === 'error' ? el('span', { class: 'v2-wspop-err', title: l.last_error || '연결 오류', text: '연결 오류' }) : null),
-      el('button', { class: 'v2-wspop-act' + (l.auto_promote ? ' on' : ''), type: 'button',
-        title: l.auto_promote ? '자동 올리기 켜짐 — AI 승격을 바로 반영합니다(눌러서 끔)' : '자동 올리기 꺼짐 — AI 승격은 승인 대기(눌러서 켬)',
-        text: l.auto_promote ? '자동 ✓' : '자동',
-        onclick: async () => { try { await setAutoPromote(l.base_url, !l.auto_promote); await paintTeams(); } catch (e: any) { toast('바꾸지 못했어요 — ' + (e?.message || e), true); } } }),
-      el('button', { class: 'v2-wspop-act', type: 'button', title: '연결 해제', text: '해제',
-        onclick: async () => { try { await unlinkTeam(String(l.scope_key)); await paintTeams(); } catch (e: any) { toast('해제하지 못했어요 — ' + (e?.message || e), true); } } })))
-      : [hint('아직 연결한 팀이 없어요.')]));
-    // 승인 대기 승격 — 사람이 결정할 것이라 여기 보인다.
-    const ps = await pendingPromotions();
-    promoN = ps.length;
-    promoWrap.replaceChildren(...(ps.length ? [sub(`팀으로 올릴 것 · 승인 대기 ${ps.length}`), ...ps.map((p) => {
-      const go = async (decision: 'approve' | 'reject'): Promise<void> => {
-        try { const r = await resolvePromotion(p.id, decision);
-          toast(decision === 'reject' ? '올리기를 취소했어요.' : r.state === 'done' ? '팀 워크스페이스에 올렸어요.' : r.state === 'failed' ? ('올리지 못했어요 — ' + (r.error || '')) : '처리했어요.', r.state === 'failed');
-          await paintTeams(); }
-        catch (e: any) { toast('처리하지 못했어요 — ' + (e?.message || e), true); }
-      };
-      return el('div', { class: 'v2-wspop-team' },
-        el('span', { class: 'v2-wspop-team-open' }, el('b', { text: String(p.title || p.target_ref) }), el('span', { class: 'v2-wspop-kind', text: p.kind === 'knowledge' ? '지식' : '프로젝트' })),
-        el('button', { class: 'btn btn-primary btn-xs', type: 'button', text: '올리기', onclick: () => void go('approve') }),
-        el('button', { class: 'btn btn-ghost btn-xs', type: 'button', text: '취소', onclick: () => void go('reject') }));
-    })] : []));
-  };
-  void paintTeams();
-
-  // 보관 — 되돌릴 수 있는 치우기(데이터는 남는다). 위험 톤은 이 한 줄에만.
-  pop.append(hr(), el('button', { class: 'v2-wspop-row danger', type: 'button', onclick: async () => {
-    if (!confirm(`'${wsName}' 워크스페이스를 보관할까요?\n목록에서 사라지지만 데이터는 지워지지 않아요.`)) return;
-    try { await archiveWorkspace(slug); closePopover(); toast(`'${wsName}' 을 보관했어요.`); switchWorkspace('primary'); }
-    catch (e: any) { toast('보관하지 못했어요 — ' + (e?.message || e), true); }
-  } }, el('span', { class: 'v2-wspop-ic' }, icon('archive')), tt('보관하기', '목록에서 숨깁니다 · 데이터는 남습니다')));
-  place(pop, anchor, !!anchor.closest('.v2-side'));
-}
+//  #2188 — 종전의 「워크스페이스 설정」 판(이름·연결한 팀·승격 승인)은 설정 **모달**(ws-settings.ts)로
+//   통째로 옮겨 갔다 — 원준님 지시: "누르면 모달이 뜨고 거기에서 아바타·이름·초대·기능 설정까지".
 
 /** 목록·인원을 다시 받아 레일을 고쳐 그린다 — 구성원이 바뀌면 문패 부제(팀 · N명)가 따라와야 한다. */
 async function refreshSpaces(): Promise<void> {
@@ -438,7 +563,7 @@ const motion = (): boolean => !window.matchMedia('(prefers-reduced-motion: reduc
 
 function defaultOrder(): string[] { return [...SECTIONS.map((s) => s.key), ...LINKS.map((l) => l.key)]; }
 function isSecKey(k: string): boolean { return SECTIONS.some((s) => s.key === k) || LINKS.some((l) => l.key === k); }
-function canPin(k: string): boolean { return !isSecKey(k) && !SEC_APP_KEYS.has(k) && APPS.some((a) => a.key === k); }
+function canPin(k: string): boolean { return !isSecKey(k) && !SEC_APP_KEYS.has(k) && APPS.some((a) => a.key === k && !a.hidden); }   // hidden 은 저장된 순서에서도 떨어진다(normalizeOrder)
 /** 저장된 순서에서 믿을 수 있는 것만 남기고, 표에 새로 생긴 구역은 뒤에 잇는다. */
 function normalizeOrder(list: unknown): string[] {
   const seen = new Set<string>(); const out: string[] = [];
@@ -449,6 +574,7 @@ function normalizeOrder(list: unknown): string[] {
 function saveOrder(next: string[]): void {
   order = normalizeOrder(next);
   try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
+  shellPrefsPush();   // #2460 — 사람이 끌어 정한 자리는 계정의 것이다
 }
 type MainEntry = { key: string } & ({ kind: 'sec'; sec: SecDef } | { kind: 'link'; link: LinkDef } | { kind: 'app'; app: AppDef });
 /** 메인 그룹 — 저장된 순서대로, 지금 켜진 것만. */
@@ -460,7 +586,7 @@ function mainEntries(): MainEntry[] {
     const l = LINKS.find((x) => x.key === key);
     if (l) { if (!l.tab || navOn(l.tab) !== false) out.push({ key, kind: 'link', link: l }); continue; }
     const a = APPS.find((x) => x.key === key);
-    if (a && (!a.tab || navOn(a.tab))) out.push({ key, kind: 'app', app: a });
+    if (a && !a.hidden && (!a.tab || navOn(a.tab))) out.push({ key, kind: 'app', app: a });
   }
   return out;
 }

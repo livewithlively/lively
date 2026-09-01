@@ -89,7 +89,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-dot.tn-mint { background: var(--mint-deep); } .dash-dot.tn-coral { background: var(--coral); }
 .dash-dot.tn-blue { background: var(--blue-fill); } .dash-dot.tn-teal { background: var(--teal); }
 .dash-dot.tn-violet { background: var(--purple); } .dash-dot.tn-amber { background: var(--warn-2); }
-.dash-dot.tn-mut { background: var(--muted-3); }
+.dash-dot.tn-mut { background: var(--muted-3-line); }
 .dash-nm { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-nm-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-sub { display: block; font-weight: 500; font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -223,7 +223,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* 유형 색 어휘 한 벌 — 점(dash-dot-s)·구성 바(dash-lvl-comp i)가 같은 클래스를 본다. violet/amber 리터럴은 tn-* 과 동일 값 */
 .dash-lvl .k-read { background: var(--blue-fill); } .dash-lvl .k-write { background: var(--mint-deep); }
 .dash-lvl .k-work { background: var(--purple); } .dash-lvl .k-db { background: var(--coral); }
-.dash-lvl .k-etc { background: var(--muted-3); }
+.dash-lvl .k-etc { background: var(--muted-3-line); }
 .dash-dot-s { width: 7px; height: 7px; border-radius: 50%; flex: none; display: inline-block; }
 .dash-dot-s.fail { outline: 2px solid var(--coral); outline-offset: 1px; }
 .dash-lvl-why { padding: 14px 10px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
@@ -561,7 +561,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-ntf-tile.tn-mint { --tc: var(--mint-deep); } .dash-ntf-tile.tn-coral { --tc: var(--coral); }
 .dash-ntf-tile.tn-blue { --tc: var(--blue); } .dash-ntf-tile.tn-teal { --tc: var(--teal); }
 .dash-ntf-tile.tn-violet { --tc: var(--purple); } .dash-ntf-tile.tn-amber { --tc: var(--warn-deep); }
-.dash-ntf-tile.tn-mut { --tc: var(--muted-3); }
+.dash-ntf-tile.tn-mut { --tc: var(--muted-3-line); }
 /* 본문 — 1행: 누가+동사(왼) · 시간(오). 2행: 프로젝트·스니펫. */
 .dash-ntf-main { flex: 1; min-width: 0; }
 .dash-ntf-line { display: flex; align-items: baseline; gap: 8px; }
@@ -627,11 +627,11 @@ a.dash-ntf:hover { background: var(--bg-tint); }
    ⚠ 스크롤바는 '항상 숨김'(#670): 호버로 나타나면 세로 공간을 먹어 박스 높이가 출렁였음. 스크롤은 트랙패드·휠, 전체는 '전체 보기' 팝업으로. */
 /* #req 가로 스크롤바 — 평소 숨김, hover 시 얇게 노출. (mask 는 크롬에서 스크롤바를 가려 제거.) */
 .dash-fold-grid { padding: 4px 2px; overflow-x: auto; scrollbar-width: none; scrollbar-color: transparent transparent; }
-.dash-fold-grid:hover { scrollbar-width: thin; scrollbar-color: var(--muted-3) transparent; }
+.dash-fold-grid:hover { scrollbar-width: thin; scrollbar-color: var(--muted-3-line) transparent; }
 .dash-fold-grid::-webkit-scrollbar { height: 8px; }
 .dash-fold-grid::-webkit-scrollbar-track { background: transparent; }
 .dash-fold-grid::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
-.dash-fold-grid:hover::-webkit-scrollbar-thumb { background: var(--muted-3); }
+.dash-fold-grid:hover::-webkit-scrollbar-thumb { background: var(--muted-3-line); }
 .dash-fold-grid:hover::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
 .dash-fold-grid .proj-file-card { padding: 6px 6px 4px; gap: 4px; cursor: default; }
 .dash-fold-grid .proj-file-card:hover { background: transparent; }

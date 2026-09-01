@@ -1,7 +1,33 @@
 /* 41-onboarding.css — 처음 설정(#/welcome) 화면. 프로토타입 public/onboarding-proto/v2.html 을 v2 셸 안으로 옮긴 것(#1813).
    토큰은 01-base 것만 쓴다. 클래스는 전부 ob- 접두 — 전역 .chip/.btn/.card 와 겹치지 않게. 사이드바는 실제 것(40-v2.css). */
-.ob-root{ --ghost:#D5DCE8; --blue-soft:#EEF5FF; --hover:#F6FAFF; --card:#FFFFFF; --shadow:0 1px 2px rgba(21,35,59,.05), 0 4px 14px rgba(21,35,59,.07);
+/* ★ 색은 **전부 토큰으로** 나간다 (2026-08-30).
+   종전엔 이 줄에서 `--card:#FFFFFF` 처럼 밝은 값을 못박아 두었다. 그래서 다크에서 **흰 판 위에 흰 글자**가 얹혀
+   무대 카드 제목·파일 목록이 통째로 안 보였다(원준님 실측). 지역 토큰은 01-base 것을 가리키고
+   (base 는 90-dark.css 가 두 갈래로 덮는다), base 에 대응이 없는 것만 아래 다크 블록에서 값을 바꾼다.
+   ⚠ 새 색을 넣을 땐 **하드코딩 대신 여기 토큰을 늘린다** — 이 화면은 셸 밖(민낯)에서도 뜨므로 스스로 성립해야 한다. */
+.ob-root{
+  --ghost:var(--muted-3-line); --blue-soft:var(--bg-tint-2); --hover:var(--bg-tint); --card:var(--surface);
+  --ob-sub:var(--line-row); --ob-sub-hover:var(--line);
+  --ob-on-fill:#fff;         /* 채운 파랑(--blue-fill, 두 테마 같은 값) 위의 글자 */
+  --ob-on-ink:var(--bg);     /* --ink 로 채운 자리(토스트·걸음 번호·보내기) 위의 글자 — 테마를 따라 뒤집힌다 */
+  --ob-mint-ring:#CDEFE3; --ob-mint-ic:#0C8265;   /* 민트 틴트 위 4.54 — --mint-deep(3.04)은 배경으로 27곳 쓰여 토큰째 못 내린다 */ --ob-amber:#A9750F; --ob-amber-soft:#FFF4D6;
+  --ob-amber-ink:#8F6309;    /* 흰 카드 위 «글로 읽는» 앰버(5.31) — --ob-amber(4.01)는 앰버판 위 배지용이라 카드 위 본문엔 모자란다 */
+  /* 파일 종류 색 — 흰 글자를 얹는 **채움**이라 두 테마에서 대체로 같다. 다크에서 점으로 보기 어두운 둘만 아래에서 밝힌다. */
+  --ob-f-doc:#2f6bff; --ob-f-sheet:#1a9c5b; --ob-f-slide:#e0741a; --ob-f-img:#8b5cf6;
+  --ob-f-code:#0f766e; --ob-f-zip:#a16207; --ob-f-etc:#6b7280;
+  --shadow:0 1px 2px rgba(21,35,59,.05), 0 4px 14px rgba(21,35,59,.07);
   display:flex; flex-direction:column; flex:1; min-height:0; height:100%; background:var(--bg); color:var(--ink); font-size:14px; line-height:1.5; position:relative }
+/*  다크 — base 에 대응 토큰이 없는 것만. **두 선택자를 다 쓴다**: 명시 선택(data-theme=dark)과
+    «시스템 설정»(스탬프 없음 → prefers-color-scheme). 하나만 쓰면 그 갈래에서 조용히 밝은 값이 남는다. */
+:root[data-theme="dark"] .ob-root{
+  --ob-mint-ring:rgba(61,189,151,.38); --ob-mint-ic:var(--mint-deep); --ob-amber:#F0A32B; --ob-amber-soft:#33280F; --ob-amber-ink:var(--ob-amber);
+  --ob-f-code:#17A392; --ob-f-zip:#C98A16;
+  --shadow:0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.45) }
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .ob-root{
+    --ob-mint-ring:rgba(61,189,151,.38); --ob-mint-ic:var(--mint-deep); --ob-amber:#F0A32B; --ob-amber-soft:#33280F; --ob-amber-ink:var(--ob-amber);
+    --ob-f-code:#17A392; --ob-f-zip:#C98A16;
+    --shadow:0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.45) } }
 .ob-root *{box-sizing:border-box}
 /* 버튼 리셋 — **명시도를 0 으로 눕힌다**(`:where()`).
    ⚠ 이식(3ad440e7) 때 프로토의 `button{…}`(0,0,1)을 `.ob-root button`(0,1,1)로 감쌌는데, 그 순간
@@ -20,16 +46,20 @@
 /* ── 오른쪽 본문 ─────────────────────────────────────────────── */
 .ob-main{flex:1; display:flex; flex-direction:column; min-width:0; position:relative}
 .ob-crumb{display:flex; align-items:center; gap:6px; padding:10px 16px; font-size:13px; color:var(--ink-sub); border-bottom:1px solid transparent; min-height:41px}
-.ob-root.ob-stage-name .ob-crumb{visibility:hidden}
+/* 막1(이름)은 민낯이라 빵부스러기를 숨긴다 — 다만 **나가는 문은 남긴다**(#2171).
+   종전엔 줄 전체를 숨겨서, 첫 화면에 떨어진 사람은 스스로 나갈 길이 아예 없었다. */
+/*  ⚠ visibility 가 아니라 display 로 걷는다 — visibility 는 자리를 남겨서, 나가는 문의 margin-left:auto 가
+    빈 자리 뒤에서 멈춘다(줄 가운데에 뜬다). 줄 높이는 .ob-crumb 의 min-height 가 지킨다. */
+.ob-root.ob-stage-name .ob-crumb>*:not(.ob-q-exit){display:none}
 .ob-crumb .ob-lm{width:18px;height:18px;font-size:9px}
-.ob-crumb .ob-sep{color:var(--ghost)}
+.ob-crumb .ob-sep{color:var(--muted-3)}   /* 선 토큰(--ghost)이 아니라 글자 사다리의 맨 아래 칸 — 1.62 였다(#2232) */
 
 /* 막1·막2 — 가운데 질문 기둥 (노션 p1~p4 참조) */
 .ob-qwrap{flex:1; overflow-y:auto; display:flex; justify-content:center}
 .ob-qcol{width:min(560px, 92%); padding:8vh 0 60px; animation:rise .45s ease-out}
 .ob-qcol.ob-wide{width:min(820px, 94%)}
 @keyframes rise{from{opacity:0; transform:translateY(10px)}to{opacity:1; transform:none}}
-.ob-q-ic{width:40px; height:40px; border-radius:50%; background:var(--bg-success); border:1px solid #CDEFE3; display:grid; place-items:center; color:var(--mint-deep); font-size:15px; font-weight:800; margin-bottom:14px}
+.ob-q-ic{width:40px; height:40px; border-radius:50%; background:var(--bg-success); border:1px solid var(--ob-mint-ring); display:grid; place-items:center; color:var(--ob-mint-ic); font-size:15px; font-weight:800; margin-bottom:14px}
 .ob-q-prog{display:flex; gap:4px; margin:0 0 22px; width:96px}
 .ob-q-prog i{flex:1; height:3px; border-radius:2px; background:var(--ghost)}
 .ob-q-prog i.ob-on,.ob-q-prog button.ob-on{background:var(--ink)}
@@ -39,7 +69,7 @@
 /* 노션식 선택 카드 */
 .ob-opt-cards{display:flex; flex-direction:column; gap:10px}
 .ob-opt-card{display:flex; align-items:center; gap:12px; text-align:left; border:1px solid var(--line); border-radius:10px; padding:13px 15px; background:var(--card); transition:border-color .12s, box-shadow .12s}
-.ob-opt-card:hover{border-color:#cfcecb; box-shadow:var(--shadow)}
+.ob-opt-card:hover{border-color:var(--muted-3-line); box-shadow:var(--shadow)}
 .ob-opt-card.ob-on{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
 .ob-opt-card .ob-oc-ic{width:22px; display:grid; place-items:center; flex:0 0 22px}
 .ob-blogo{width:17px; height:17px; flex:none; display:block}
@@ -47,8 +77,10 @@
 .ob-oc-st{margin-left:auto; display:grid; place-items:center; width:16px; flex:0 0 16px}
 .ob-opt-card .ob-oc-t{font-weight:600; font-size:14.5px}
 .ob-opt-card .ob-oc-d{display:block; font-size:12.5px; color:var(--muted); margin-top:1px}
-.ob-opt-card .ob-oc-chk{margin-left:auto; width:16px; height:16px; border-radius:4px; border:1.5px solid var(--ghost); flex:0 0 16px; display:grid; place-items:center; color:#fff; font-size:10px}
-.ob-opt-card.ob-on .ob-oc-chk{background:var(--blue); border-color:var(--blue)}
+.ob-opt-card .ob-oc-chk{margin-left:auto; width:16px; height:16px; border-radius:4px; border:1.5px solid var(--ghost); flex:0 0 16px; display:grid; place-items:center; color:transparent; font-size:10px}
+/*  ↑ 안 고른 상태의 체크는 **안 보이는 게 맞다**. 예전엔 흰 글자(--ob-on-fill)로 숨겼는데, 그건 «흰 판 위 흰 글자»와
+    글자 그대로 같은 코드라 대비 감사가 매번 19건씩 울렸다. 뜻대로 transparent 로 적고, 고른 순간 색을 준다. */
+.ob-opt-card.ob-on .ob-oc-chk{background:var(--blue-fill); border-color:var(--blue-fill); color:var(--ob-on-fill)}
 .ob-opt-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px; margin-bottom:10px}
 .ob-opt-grid .ob-opt-card{padding:9px 11px; gap:9px}
 .ob-opt-grid .ob-opt-card .ob-oc-t{font-size:13.5px}
@@ -57,11 +89,11 @@
 .ob-q-write input{flex:1; border:1px solid var(--line); border-radius:8px; padding:9px 12px; outline:none}
 .ob-q-write input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
 .ob-btn{display:block; width:100%; text-align:center; border-radius:8px; padding:10px 14px; font-weight:600; font-size:14px; margin-top:18px}
-.ob-btn-pri{background:var(--blue); color:#fff}
-.ob-btn-pri:hover{background:#1b74cc}
-.ob-btn-pri:disabled{background:var(--blue-soft); color:#9cc7ec; cursor:default}
-.ob-btn-sub{background:#f1f1ef; color:var(--ink-sub); margin-top:8px}
-.ob-btn-sub:hover{background:#e9e9e6}
+.ob-btn-pri{background:var(--blue-fill); color:var(--ob-on-fill)}
+.ob-btn-pri:hover{background:var(--blue-fill-deep)}
+.ob-btn-pri:disabled{background:var(--line-row); color:var(--muted-2); cursor:default}
+.ob-btn-sub{background:var(--ob-sub); color:var(--ink-sub); margin-top:8px}
+.ob-btn-sub:hover{background:var(--ob-sub-hover)}
 .ob-btn-inline{width:auto; display:inline-block; padding:8px 14px}
 .ob-q-skip{display:block; margin:16px auto 0; font-size:13px; color:var(--muted)}
 .ob-q-skip:hover{color:var(--ink-sub); text-decoration:underline}
@@ -74,26 +106,26 @@
 .ob-chat{flex:1; overflow-y:auto; display:flex; justify-content:center}
 .ob-thread{width:min(680px,94%); padding:26px 0 20px; display:flex; flex-direction:column; gap:14px}
 .ob-msg{display:flex; gap:10px; animation:rise .35s ease-out}
-.ob-msg .ob-ava{width:26px; height:26px; border-radius:50%; background:var(--bg-success); border:1px solid #CDEFE3; flex:0 0 26px; display:grid; place-items:center; color:var(--mint-deep); font-size:11px; font-weight:800; margin-top:2px}
+.ob-msg .ob-ava{width:26px; height:26px; border-radius:50%; background:var(--bg-success); border:1px solid var(--ob-mint-ring); flex:0 0 26px; display:grid; place-items:center; color:var(--ob-mint-ic); font-size:11px; font-weight:800; margin-top:2px}
 .ob-msg .ob-body{max-width:86%; font-size:14.5px; line-height:1.65}
 .ob-msg .ob-body p{margin-bottom:6px}
 .ob-msg .ob-body p:last-child{margin-bottom:0}
 .ob-msg.ob-user{justify-content:flex-end}
-.ob-msg.ob-user .ob-body{background:#f1f1ef; border-radius:14px; padding:8px 14px; font-size:14px}
+.ob-msg.ob-user .ob-body{background:var(--ob-sub); border-radius:14px; padding:8px 14px; font-size:14px}
 .ob-chips{display:flex; flex-wrap:wrap; gap:8px; padding-left:36px; animation:rise .35s ease-out}
 .ob-chip{border:1px solid var(--line); border-radius:100px; padding:7px 14px; font-size:13.5px; font-weight:500; background:var(--card)}
-.ob-chip:hover{background:var(--hover); border-color:#cfcecb}
+.ob-chip:hover{background:var(--hover); border-color:var(--muted-3-line)}
 .ob-chip.ob-cta{background:var(--blue-soft); color:var(--blue); border-color:transparent; font-weight:600}
-.ob-chip.ob-cta:hover{background:#d8ebfb}
+.ob-chip.ob-cta:hover{background:var(--bg-note)}
 .ob-chip.ob-ghost{color:var(--ink-sub)}
 .ob-tags{display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 2px}
 .ob-tag{border:1px solid var(--line); border-radius:6px; padding:3px 9px; font-size:12.5px; color:var(--ink-sub); background:var(--canvas)}
 .ob-tag b{color:var(--ink); font-variant-numeric:tabular-nums}
 .ob-excard{border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin:8px 0 0; cursor:pointer; transition:border-color .12s, box-shadow .12s; background:var(--card)}
-.ob-excard:hover{border-color:#cfcecb; box-shadow:var(--shadow)}
+.ob-excard:hover{border-color:var(--muted-3-line); box-shadow:var(--shadow)}
 .ob-excard .ob-xt{font-size:14px; font-weight:600; margin-bottom:5px}
 .ob-excard .ob-xd{font-size:12.5px; color:var(--muted)}
-.ob-excard .ob-xd b{color:var(--amber); font-weight:600}
+.ob-excard .ob-xd b{color:var(--ob-amber); font-weight:600}
 .ob-fine{font-size:12.5px; color:var(--muted); padding-left:36px}
 .ob-readline{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink-sub)}
 .ob-readbar{flex:0 0 120px; height:4px; border-radius:2px; background:var(--line-net); overflow:hidden}
@@ -104,14 +136,14 @@
 .ob-composer-in{width:min(680px,94%); border:1.5px solid var(--blue); border-radius:14px; padding:10px 14px 8px; box-shadow:0 4px 18px rgba(35,131,226,.08)}
 .ob-composer-in input{width:100%; border:0; outline:none; font-size:14.5px; padding:2px 0 8px; background:none}
 .ob-composer-row{display:flex; align-items:center; gap:10px; color:var(--muted); font-size:12px}
-.ob-composer-row .ob-send{margin-left:auto; width:26px; height:26px; border-radius:50%; background:var(--ink); color:#fff; display:grid; place-items:center; font-size:12px}
+.ob-composer-row .ob-send{margin-left:auto; width:26px; height:26px; border-radius:50%; background:var(--ink); color:var(--ob-on-ink); display:grid; place-items:center; font-size:12px}
 .ob-composer-row .ob-send:disabled{background:var(--ghost); cursor:default}
 .ob-root:not(.ob-stage-chat) .ob-composer{display:none}
 .ob-chat, .ob-composer{background:var(--bg)}
 .ob-root:not(.ob-stage-chat) .ob-chat{display:none}
 .ob-root.ob-stage-chat .ob-qwrap{display:none}
 
-.ob-toast{position:fixed; left:50%; bottom:70px; transform:translateX(-50%); background:var(--ink); color:#fff; border-radius:100px; padding:8px 18px; font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; z-index:60}
+.ob-toast{position:fixed; left:50%; bottom:70px; transform:translateX(-50%); background:var(--ink); color:var(--ob-on-ink); border-radius:100px; padding:8px 18px; font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; z-index:60}
 .ob-toast.ob-on{opacity:1}
 
 /* 막1(이름) — 노션 p1 처럼 아무것도 없는 가운데 카드. 셸(사이드바·손잡이·탭 줄)을 잠깐 숨긴다. */
@@ -139,10 +171,23 @@
 #v2-root.ob-bare.has-topbar > .v2-topbar, #v2-root.ob-bare > .v2-topbar { display: none; }
 /* (좁은 화면에서 레일이 fixed 로 서며 붙는 padding-left 도 위 규칙이 함께 걷는다.) */
 
+/* 막2·3(질문·채팅) = 유령 셸(#2232, 노션 p2~4 «사이드바가 유령으로 서 있다가 실체화»).
+   사이드바·레일·맨윗줄·손잡이는 자리는 지키되(본문 폭이 안 흔들린다) **흐리고 만질 수 없다** — 온보딩 중에
+   사이드바를 누르면 처음 설정에서 빠져나가 버렸다(원준님 실측 2026-08-28). 눌림 차단의 본체는 main.ts 의 `inert`
+   (키보드 포커스까지) 이고, 여기 pointer-events 는 inert 를 모르는 옛 브라우저용 이중 잠금이다.
+   ⚠ filter 는 그 요소를 fixed 자손의 컨테이닝 블록으로 만든다 — 사이드바 안 팝오버가 있어도 inert 라 열리지 않으니 무관. */
+#v2-root.ob-ghost .v2-side, #v2-root.ob-ghost > .v2-rail, #v2-root.ob-ghost > .v2-topbar, #v2-root.ob-ghost > .v2-split-x {
+  filter: blur(2.5px); opacity: .45; pointer-events: none; user-select: none; -webkit-user-select: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .v2-side, #v2-root > .v2-rail, #v2-root > .v2-topbar { transition: filter .28s ease, opacity .28s ease; } }
+
 /* 되돌아가기 + 파일 받는 자리 (2026-08-25 플로우 재배치 — 로컬 업로드를 앞으로, 앱 연결을 뒤로) */
 .ob-q-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
 .ob-q-back{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--muted);padding:4px 9px;border-radius:8px;border:1px solid transparent;background:none;cursor:pointer}
 .ob-q-back[hidden]{display:none}
+/* 나가는 문(#2171) — 줄의 오른쪽 끝. [← 이전] 이 함께 보일 때만 그 뒤에 붙는다(그때는 [← 이전] 이 밀린다). */
+.ob-q-exit{margin-left:auto}
+.ob-q-back:not([hidden])~.ob-q-exit{margin-left:8px}
 .ob-q-back:hover{color:var(--ink);background:var(--bg-tint);border-color:var(--line)}
 .ob-q-prog{gap:5px;width:118px}
 .ob-q-prog button.ob-go{cursor:pointer}
@@ -155,14 +200,46 @@
 
 /* AI 잇기 — setup-token 붙여넣기 (#1813). 토큰은 화면에 남기지 않는다(type=password). */
 .ob-tok{display:flex; flex-direction:column; gap:9px; margin:2px 0 16px}
+
+/* ── 연결 모달(#2232, 원준님 2026-08-31: «드롭다운 말고 모달로, 한 걸음씩») ─────────────────────────
+   ⚠ «모달 금지» 규칙(2026-08-27)은 파일 고르기(OS 창을 바로 열라) 이야기다 — 이 모달은 그 규칙과 별개.
+   색은 전부 토큰 — 다크는 90-dark.css 의 토큰 재정의가 그대로 입힌다(#2232 다크 사고 재발 방지). */
+.ob-veil{position:fixed; inset:0; background:rgba(9,14,24,.52); display:grid; place-items:center; z-index:90; padding:22px}
+.ob-modal{width:min(560px,94vw); max-height:min(86vh,760px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--ob-sub); border-radius:14px; box-shadow:var(--shadow)}
+.ob-modal-hd{display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--ob-sub); flex:none}
+.ob-modal-hd b{font-size:15px; color:var(--ink)}
+.ob-modal-hd .ob-oc-ic{width:22px; height:22px; flex:none; display:grid; place-items:center}
+.ob-modal-x{margin-left:auto; border:0; background:none; font-size:21px; line-height:1; color:var(--muted); cursor:pointer; padding:3px 9px; border-radius:8px}
+.ob-modal-x:hover{background:var(--hover); color:var(--ink)}
+.ob-modal:focus{outline:none}   /* Esc 청취용 프로그램 포커스(tabindex=-1) — 마우스 사용자에게 링을 그리지 않는다 */
+.ob-modal-bd{padding:12px 16px 16px; overflow:auto}
+.ob-modal-bd .ob-tok{margin:0}
+.ob-modal-bd .ob-tok-in{margin:0; padding:0; background:none; border:0; box-shadow:none}   /* 옛 인라인 패널의 테두리 상자 — 모달 안에서는 겹상자가 된다 */
+.ob-pick{display:flex; flex-direction:column; gap:1px; max-height:280px; overflow:auto; border:1px solid var(--ob-sub); border-radius:10px; padding:5px; margin:2px 0}
+.ob-pick label{display:flex; gap:9px; align-items:baseline; padding:6px 9px; border-radius:8px; cursor:pointer; font-size:13.5px; color:var(--ink)}
+.ob-pick label:hover{background:var(--hover)}
+.ob-pick input[type=checkbox]{flex:none; transform:translateY(1px)}
+.ob-pick .t{min-width:0; overflow-wrap:anywhere}
+.ob-pick .h{margin-left:auto; flex:none; color:var(--muted); font-size:12px}
+#scQ{border:1px solid var(--line); border-radius:9px; padding:9px 12px; font-size:13.5px; background:var(--card); color:var(--ink)}
+/* 토큰 만드는 걸음(아직 없다면) — 입력 아래 단으로 접어 내린 안내(#2232 이탈 점검) */
+.ob-howto{border-top:1px solid var(--line-row); margin-top:6px; padding-top:12px; display:flex; flex-direction:column; gap:9px}
+.ob-howto-t{margin:0; font-size:13px; font-weight:700; color:var(--ink-sub)}
+.ob-linkbtn{background:none; border:0; padding:0; text-align:left; font-size:13px; color:var(--blue); cursor:pointer; align-self:flex-start}
+.ob-linkbtn:hover{text-decoration:underline}
+/* 주소 생김새 보여 주기 — 진짜 주소창이 아니라는 뜻으로 잠금 아이콘·회색 바탕 */
+.ob-urlmock{display:flex; align-items:center; gap:2px; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; color:var(--ink-sub); background:var(--line-row); border:1px solid var(--ob-sub); border-radius:9px; padding:9px 12px; overflow-x:auto; white-space:nowrap}
+.ob-urlmock b{color:var(--blue); font-weight:700}
+.ob-urlmock .ob-um-lock{flex:none; margin-right:5px; font-size:11px; opacity:.7}
+#scQ:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); outline:none}
 .ob-tok ol{margin:0; padding-left:19px; font-size:13.5px; color:var(--ink-sub); line-height:1.85}
 .ob-tok code{background:var(--line-row); border-radius:5px; padding:2px 7px; font-size:12.5px;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
 .ob-tok input{border:1px solid var(--line); border-radius:9px; padding:11px 13px; outline:none;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px}
 .ob-tok input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
-.ob-tok .ob-err{font-size:13px; color:#C0392B; min-height:1px}
-.ob-tok .ob-ok{font-size:13px; color:var(--mint-text)}
+.ob-tok .ob-err{font-size:13px; color:var(--danger); min-height:1px}
+.ob-tok .ob-ok{font-size:13px; color:var(--mint-deep)}
 /* #1879 — 사실을 덧붙이는 줄(다른 AI 가 이미 이어져 있음·판정 불가 등). 오류(빨강)도 성공(민트)도 아닌
    '그냥 알려 드리는 것' 이라 본문과 같은 톤으로 낮춰 둔다. */
 .ob-tok .ob-note{font-size:13px; color:var(--ink-sub); line-height:1.7}
@@ -175,7 +252,7 @@
 .ob-ins-list{display:flex; flex-direction:column; gap:22px; margin:0 0 22px}
 .ob-ins{position:relative; padding-left:34px}
 .ob-ins::before{content:attr(data-n); position:absolute; left:0; top:0; width:23px; height:23px;
-  border-radius:50%; background:var(--ink); color:#fff; font-size:12.5px; font-weight:700;
+  border-radius:50%; background:var(--ink); color:var(--ob-on-ink); font-size:12.5px; font-weight:700;
   display:grid; place-items:center; font-variant-numeric:tabular-nums}
 .ob-ins-t{display:block; font-size:15px; font-weight:700; margin:1px 0 7px; line-height:1.45}
 .ob-ins-p{font-size:13.5px; color:var(--ink-sub); line-height:1.8; margin:0 0 8px}
@@ -193,7 +270,7 @@
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink)}
 .ob-cmd-copy{flex:none; border:1px solid var(--line); border-radius:7px; background:var(--card);
   padding:5px 11px; font-size:12.5px; font-weight:600; color:var(--ink-sub)}
-.ob-cmd-copy:hover{border-color:#cfcecb; color:var(--ink)}
+.ob-cmd-copy:hover{border-color:var(--muted-3-line); color:var(--ink)}
 .ob-cmd-copy.ob-on{border-color:var(--blue); color:var(--blue)}
 
 .ob-kbd{display:inline-block; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px;
@@ -201,8 +278,15 @@
   font-family:inherit; line-height:1.6; white-space:nowrap}
 
 .ob-tok .ob-fine2{font-size:12.5px; color:var(--muted)}
+/* 안 1(#2232, 2026-08-28) — 로그인 안내는 사람이 손대는 3걸음만 기본 노출, 나머지 화면은 한 줄(.ob-between) + 그 자리 펼침(.ob-detail).
+   펼침은 인라인이다 — 팝오버·모달은 원준님 규칙으로 금지. 열림 상태는 저장하지 않는다(매번 접힌 채). */
+.ob-tok .ob-more{display:inline-block; margin-left:6px; padding:0; background:none; border:0; font:inherit; font-size:13px; font-weight:600; color:var(--blue); cursor:pointer}
+.ob-tok .ob-more:hover{text-decoration:underline}
+.ob-tok .ob-detail{margin:-3px 0 0; padding:6px 0 6px 12px; border-left:2px solid var(--line)}
+.ob-tok .ob-detail ol{font-size:12.5px; color:var(--muted); line-height:1.75}
+.ob-tok .ob-detail[hidden]{display:none}
 /* 터미널 갈래 접힘 — 주된 길(앱) 아래에 조용히. 여는 사람만 본다. */
-.ob-ins-alt{margin-top:22px; border-top:1px solid var(--line); padding-top:14px}
+.ob-ins-alt{margin-top:22px; border-top:1px solid var(--line); padding-top:14px; margin-bottom:40px}   /* 아래 여백 — 펼치면 화면 끝에 붙어 잘려 보였다(#2232) */
 .ob-ins-alt>summary{font-size:13px; color:var(--muted); cursor:pointer; list-style:none}
 .ob-ins-alt>summary::-webkit-details-marker{display:none}
 .ob-ins-alt>summary::before{content:'＋ '; color:var(--ghost)}
@@ -220,9 +304,96 @@
    설명 줄은 대기 색(앰버)으로 둔다. 체크 자리는 아예 비운다(고를 수 없으므로). */
 .ob-opt-card.ob-soon{opacity:.58; background:var(--bg); border-style:dashed}
 .ob-opt-card.ob-soon:hover{border-color:var(--line); box-shadow:none}
-.ob-opt-card.ob-soon .ob-oc-d{color:var(--amber, #C98A16); font-weight:600}
+/* «준비 중»은 둘째 줄이 아니라 이름 옆 미니 배지 — 둘째 줄은 카드를 키워 그리드 행 높이를 흩뜨린다(#2232, 2026-08-31).
+   이름이 길어도 배지째 다음 줄로 떨어지지 않게 한 몸(nowrap)으로 묶고, 넘치면 이름 쪽을 말줄임한다. */
+.ob-opt-card .ob-oc-one{display:flex; align-items:center; gap:6px; min-width:0; white-space:nowrap}
+.ob-opt-card .ob-oc-one .ob-oc-t{overflow:hidden; text-overflow:ellipsis}
+.ob-soon-tag{flex:none; padding:1px 6px 2px; border-radius:999px; background:var(--ob-amber-soft); color:var(--ob-amber); font-size:10px; font-weight:700; line-height:1.4}
+
+/* ── AI 로그인 스테퍼(#2232, 안 1 확정 — 아티팩트 «AI 로그인 스테퍼» 그대로) ──────────────────────
+   원칙: 지금 할 칸만 켜지고 끝난 칸은 ✓ 로 접힘 · 화면(카드)을 통째로 갈아치우지 않음 ·
+   탈출로는 하단 상시 · 색은 전부 토큰(다크는 90-dark 재정의가 입힌다). */
+.ob-lgs{display:flex; flex-direction:column}
+.ob-lg-step{display:flex; gap:12px; padding:13px 0; border-top:1px solid var(--line-row); transition:opacity .25s}
+.ob-lg-step:first-child{border-top:0; padding-top:2px}
+.ob-lg-n{flex:none; width:23px; height:23px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:800; background:var(--bg-tint-2); color:var(--blue); transition:all .25s}
+.ob-lg-step.done .ob-lg-n{background:var(--mint-fill); color:#fff}
+.ob-lg-step.now .ob-lg-n{background:var(--blue-fill); color:var(--ob-on-fill); box-shadow:0 0 0 4px var(--bg-tint-2)}
+.ob-lg-body{flex:1; min-width:0}
+.ob-lg-body>b{font-size:13.5px; display:block}
+.ob-lg-d{font-size:12.5px; color:var(--muted); margin-top:2px; line-height:1.6}
+.ob-lg-step.idle{opacity:.42}
+.ob-lg-step.idle .ob-btn, .ob-lg-step.idle input, .ob-lg-step.idle .ob-copychip{pointer-events:none}
+.ob-lg-step.done .ob-lg-in{display:none}
+.ob-lg-done{display:none; font-size:12px; color:var(--ob-mint-ic); font-weight:600}   /* mint-deep 은 흰 카드 위 3.2 — 읽는 글자는 잉크판(#2232 라이트 대비) */
+.ob-lg-step.done .ob-lg-done{display:block}
+.ob-lg-in{margin-top:8px}
+.ob-lg-addr{display:flex; gap:8px; align-items:center; min-width:0}
+.ob-lg-addr code{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:var(--line-row); border-radius:8px; padding:9px 11px; font-size:11.5px; color:var(--ink-sub); font-family:ui-monospace,Menlo,monospace}
+.ob-lg-row{display:flex; gap:8px; margin-top:8px}
+.ob-lg-row input{flex:1; min-width:0; border:1.5px solid var(--line); border-radius:10px; padding:11px 13px; font-size:14.5px; font-family:ui-monospace,Menlo,monospace; letter-spacing:.5px; background:var(--card); color:var(--ink); outline:none}
+.ob-lg-row input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
+.ob-copychip{display:inline-flex; align-items:center; gap:7px; background:var(--ink); color:var(--bg); border-radius:9px; padding:8px 14px; font-family:ui-monospace,monospace; font-size:13.5px; font-weight:800; letter-spacing:1.2px; cursor:pointer; border:0}
+.ob-copychip small{font-size:9.5px; font-weight:600; opacity:.6; letter-spacing:0}
+.ob-bmock{border:1px solid var(--line); border-radius:11px; overflow:hidden; font-size:11px; margin-top:10px}
+.ob-bmock .bar{display:flex; gap:5px; align-items:center; background:var(--line-row); padding:6px 10px}
+.ob-bmock .dot{width:7px; height:7px; border-radius:50%; background:var(--muted-3-line)}
+.ob-bmock .url{flex:1; background:var(--card); border-radius:5px; padding:3px 9px; font-family:ui-monospace,monospace; font-size:10px; color:var(--muted)}
+.ob-bmock .bd{padding:13px 12px; text-align:center; background:var(--card)}
+.ob-bmock .t{font-size:11px; color:var(--muted); margin-bottom:7px}
+.ob-bchip{display:inline-block; background:var(--ink); color:var(--mint-bright); border-radius:8px; padding:8px 16px; font-family:ui-monospace,monospace; font-size:12.5px; font-weight:700; letter-spacing:.5px}
+.ob-bcap{margin-top:6px; font-size:10.5px; color:var(--ob-amber); font-weight:700}
+.ob-tmock{background:var(--ink); border-radius:11px; padding:11px 14px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--bg-tint); line-height:1.75; margin-top:10px; overflow-x:auto}
+.ob-tmock .dim{opacity:.55}
+.ob-tmock .okx{color:var(--mint-bright); font-weight:700}
+.ob-tmock .sel{background:rgba(127,177,255,.16); border-radius:4px; padding:0 4px}
+.ob-lg-wait{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--blue); font-weight:700; margin-top:9px}
+.ob-lg-pulse{width:8px; height:8px; border-radius:50%; background:var(--blue); animation:oblgpu 1.5s infinite}
+@keyframes oblgpu{0%,100%{opacity:1}50%{opacity:.25}}
+.ob-lg-ok{display:flex; align-items:center; gap:9px; background:var(--bg-success); border:1px solid var(--ob-mint-ring); border-radius:11px; padding:12px 14px; font-size:13.5px; font-weight:700; color:var(--ob-mint-ic); margin-top:10px}
+/* ★ 인라인 터미널(#2477) — 로그인 «창» 을 이 카드 안에 띄운다(새 탭 금지).
+   높이: agy 의 첫 화면은 «로그인 방법 → 인증 → 색 테마 → 동의 → 폴더 신뢰» 가 차례로 뜬다. 너무 낮으면
+   사람이 액자 안에서 스크롤을 찾게 되므로 24행이 들어갈 만큼 준다(vh 로 잡아 작은 화면에서도 안 넘친다). */
+.ob-lg-term{margin-top:10px; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--ink)}
+.ob-lg-term-bar{display:flex; align-items:center; gap:9px; padding:8px 12px; background:var(--bg-tint); border-bottom:1px solid var(--line); font-size:11.5px; color:var(--muted)}
+.ob-lg-term-out{margin-left:auto; color:var(--blue); font-weight:700; text-decoration:none; white-space:nowrap}
+.ob-lg-term-f{display:block; width:100%; height:min(420px, 52vh); border:0; background:var(--ink)}
+.ob-lg-term .ob-lg-d{padding:8px 12px; margin-top:0; background:var(--bg-tint); border-top:1px solid var(--line)}
+.ob-lg-fb{margin-top:12px; padding-top:11px; border-top:1px dashed var(--line); font-size:11.5px; color:var(--muted)}
+.ob-lg-fb button{background:none; border:0; padding:0; color:var(--blue); font-weight:700; cursor:pointer; font-size:11.5px}
+.ob-peek{margin-top:9px; border:1px solid var(--line); border-radius:10px; background:var(--bg-tint)}
+.ob-peek summary{cursor:pointer; padding:8px 13px; font-size:12px; font-weight:700; color:var(--blue); list-style:none}
+.ob-peek summary::before{content:"▸ "} .ob-peek[open] summary::before{content:"▾ "}
+.ob-peek .in{padding:0 13px 12px}
+.ob-peek .pk{font-size:11.5px; font-weight:700; color:var(--ink-sub); margin:10px 0 4px}
+.ob-peek .pk .ans{color:var(--mint-deep)}
+.ob-peek .ob-tmock{margin-top:0}
+.ob-stuck{margin-top:10px; border:1px solid var(--line); border-radius:10px; background:var(--ob-amber-soft)}
+.ob-stuck summary{cursor:pointer; padding:8px 13px; font-size:12px; font-weight:700; color:var(--ob-amber); list-style:none}
+.ob-stuck summary::before{content:"⚠ "}
+.ob-stuck .in{padding:2px 13px 12px; font-size:12px; color:var(--ink-sub); line-height:1.7}
+
+/* ══ #2232 외부 앱 연결 스테퍼 — 목업 속 그림 부품(누르는 물건이 아니다)·완료 띠·좁히기 링크 ══ */
+.ob-bmock .cap{margin-top:6px; font-size:10.5px; color:var(--ob-amber-ink); font-weight:700}
+.ob-bmock .ntc{font-size:11px; color:var(--muted); margin-top:6px}
+.ob-bmock .chip{display:inline-block; background:var(--ink); color:var(--bg); border-radius:8px; padding:8px 16px; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; font-weight:700; letter-spacing:.5px}
+.ob-bbtn{display:inline-block; margin-top:9px; background:var(--blue-fill); color:var(--ob-on-fill); border-radius:8px; padding:7px 18px; font-size:12px; font-weight:700}
+.ob-bb-slack{background:#611F69; color:#fff}   /* 슬랙 실제 로그인 버튼 색(오버진) — 두 테마 같은 값, 흰 글자 10.9:1 */
+.ob-bb-dark{background:var(--ink); color:var(--bg)}
+.ob-bb-linear{background:#4E59BD; color:#fff}
+.ob-wsrow{display:flex; align-items:center; gap:4px; justify-content:center; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; margin-top:4px; color:var(--muted)}
+.ob-wsrow .in{border:1.5px solid var(--blue); border-radius:8px; padding:6px 10px; color:var(--ink); background:var(--card)}
+.ob-consent{display:flex; flex-direction:column; gap:5px; text-align:left; width:max-content; margin:8px auto 0; font-size:11.5px; color:var(--ink-sub)}
+.ob-linkline{margin-top:10px; font-size:12.5px}
+.ob-linkline a{color:var(--blue); font-weight:700; cursor:pointer}
+.ob-linkline .ob-fine{color:var(--muted); font-size:11.5px}
+.ob-lg-ok{flex-wrap:wrap}
+.ob-lg-ok .ob-btn{margin:0 0 0 auto; flex:none}
+.ob-modal-tr{flex:none; font-size:12px; color:var(--muted); background:var(--bg-tint); padding:10px 16px; border-top:1px solid var(--ob-sub); line-height:1.65; border-radius:0 0 13px 13px}
+.ob-modal-bd .ob-peek ol{margin:8px 0 0; padding-left:20px; font-size:12.5px; color:var(--ink-sub); line-height:1.7}
+.ob-modal-bd .ob-peek ol li{margin:4px 0}
 .ob-opt-card.ob-soon .ob-blogo{filter:grayscale(1)}
-.ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:#cfcecb; box-shadow:var(--shadow)}
+.ob-opt-card.ob-locked[data-ask]:hover{opacity:1; border-color:var(--muted-3-line); box-shadow:var(--shadow)}
 /* 펼쳐 둔 카드 — 아래 패널과 한 덩어리로 읽히게 아랫모서리를 편다. */
 .ob-opt-card.ob-open{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue);
   border-bottom-left-radius:0; border-bottom-right-radius:0}
@@ -233,8 +404,59 @@
 .ob-tok-in .ob-btn-inline{align-self:flex-start}
 .ob-tok-in .ob-err:empty{display:none}
 .ob-root a.ob-btn{text-decoration:none}
+/* #2232 — 본문 안에서 실제로 갈 수 있는 자리로 보내는 링크(«외부 앱 연결» 등). 문구로만 이름을 부르면 사람이 못 찾는다. */
+.ob-link{color:var(--accent); text-underline-offset:2px}
+.ob-link:hover{text-decoration:underline}
 
 /* 자료 올리기 — 고르기 버튼 둘을 드롭존 안에 나란히(팝오버 메뉴 폐기, #1813).
    폴더 올리기가 메뉴 안에 숨어 있어 사람이 못 찾았다 — 고를 것이 둘뿐이면 숨기지 않는다. */
 .ob-drop-pick{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:12px}
 .ob-drop-pick .ob-btn{margin-top:0}
+
+/* ══ #2232 받은 파일 목록 — 요약 칩 한 줄 + 여섯 줄 높이에서 멈추는 촘촘한 목록(안에서 스크롤). 타일 격자는 8개만 돼도 화면을 다 먹었다. ══ */
+.ob-files{display:flex; flex-direction:column; gap:8px; margin:12px 0 2px}
+.ob-files-sum{display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:12.5px; color:var(--muted)}
+.ob-files-n{font-weight:700; color:var(--ink); font-size:13px; margin-right:4px}
+.ob-fchip{display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border:1px solid var(--line); border-radius:999px; background:var(--card)}
+.ob-fchip b{color:var(--ink); font-weight:600}
+.ob-fchip i{width:7px; height:7px; border-radius:50%; background:var(--ob-f-etc); display:inline-block}
+.ob-fchip.ob-fi-doc i{background:var(--ob-f-doc)} .ob-fchip.ob-fi-sheet i{background:var(--ob-f-sheet)} .ob-fchip.ob-fi-slide i{background:var(--ob-f-slide)} .ob-fchip.ob-fi-img i{background:var(--ob-f-img)} .ob-fchip.ob-fi-code i{background:var(--ob-f-code)} .ob-fchip.ob-fi-zip i{background:var(--ob-f-zip)} .ob-fchip.ob-fi-dir i{background:var(--ob-amber)}
+.ob-files-list{border:1px solid var(--line); border-radius:11px; background:var(--card); max-height:228px; overflow-y:auto; overscroll-behavior:contain}
+.ob-file{display:flex; align-items:center; gap:10px; padding:7px 12px; border-bottom:1px solid var(--line-row); min-width:0}
+.ob-file:last-child{border-bottom:0}
+.ob-fi{position:relative; width:22px; height:26px; flex:0 0 22px; border-radius:5px; background:var(--line-row); display:grid; place-items:center; overflow:hidden; color:var(--ob-amber)}
+.ob-fi img{width:100%; height:100%; object-fit:cover; display:block}
+.ob-fi i{font-style:normal; font-size:7.5px; font-weight:800; letter-spacing:.02em; color:var(--ob-on-fill); padding:1px 3px; border-radius:3px; background:var(--ob-f-etc); max-width:22px; overflow:hidden}
+.ob-fi-doc i{background:var(--ob-f-doc)} .ob-fi-sheet i{background:var(--ob-f-sheet)} .ob-fi-slide i{background:var(--ob-f-slide)} .ob-fi-img i{background:var(--ob-f-img)} .ob-fi-code i{background:var(--ob-f-code)} .ob-fi-zip i{background:var(--ob-f-zip)}
+.ob-fi-dir{background:var(--ob-amber-soft)} .ob-fi-dir .ob-blogo{width:15px; height:15px}
+.ob-file-n{flex:1; min-width:0; font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.ob-file-m{flex:none; font-size:11.5px; color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums}
+.ob-file.ob-up .ob-file-m{color:var(--blue)}
+.ob-file.ob-err .ob-file-m{color:var(--danger)}
+.ob-files-more{font-size:12px; color:var(--muted); text-align:center}
+/* ══ #2232 AI 로그인 안내 — 누르면 복사되는 글자 · 글 안의 작은 버튼 ══ */
+.ob-tok code.ob-copy{cursor:pointer; border:1px dashed var(--line); user-select:all}
+.ob-tok code.ob-copy:hover{border-color:var(--blue); color:var(--blue)}
+.ob-tok code.ob-copy::after{content:' ⧉'; font-size:11px; opacity:.6}
+.ob-tok ol .ob-kbd{font-size:12px}
+.ob-btn.ob-btn-mini{padding:2px 9px; font-size:12.5px; margin:0 1px; vertical-align:baseline; line-height:1.5; border-radius:7px; min-height:0}
+
+/* ══ #2232 연결된 앱 카드의 «연결 해제» — 잠긴 카드지만 되돌릴 문은 열려 있다(인라인 확인 한 번) ══ */
+.ob-opt-card.ob-done{cursor:default}
+.ob-oc-act{margin-left:auto; display:flex; align-items:center; gap:10px; flex:none}
+.ob-oc-unlink{font:inherit; font-size:12px; color:var(--muted); background:none; border:0; padding:2px 4px; cursor:pointer; text-decoration:underline; text-underline-offset:2px; white-space:nowrap}
+.ob-oc-unlink:hover{color:var(--ink)}
+.ob-oc-unlink.ob-danger{color:var(--danger); font-weight:700}
+.ob-oc-unlink:disabled{opacity:.6; cursor:default}
+
+/* 로그인 카드(#2055 후속) — 주소·코드를 이 자리에서 준다. 종전 «새 탭 검은 창» 을 대신한다. */
+.ob-login-card { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ob-login-card:empty { display: none; }
+.ob-login-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ob-login-k { color: var(--muted); font-size: 12px; min-width: 74px; }
+.ob-login-v {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--line-row);
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; cursor: pointer;
+  overflow-wrap: anywhere; max-width: 100%;
+}
+.ob-login-v:hover { border-color: var(--blue); }

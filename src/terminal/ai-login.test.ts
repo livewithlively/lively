@@ -19,6 +19,9 @@ const srcOf = (rel: string): string =>
   readFileSync(new URL(rel, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const PROFILES = srcOf("./profiles.ts");
 const ROUTES = srcOf("./routes.ts");
+//  #1631 — «폴링은 싸게, 결정 지점은 정확하게» 를 지키려면 그 두 자리가 있는 파일도 봐야 한다.
+const WELCOME = readFileSync(
+  new URL("../capabilities/delivery/welcome.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 // 웹은 dist 로 안 간다 — src/terminal 기준 상대경로로 레포 루트를 거슬러 올라간다.
 const ONBOARDING = readFileSync(
   new URL("../../web/v2/onboarding.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
@@ -80,11 +83,35 @@ t("⑤ 없는 명령을 안내하지 않는다 — agy 에는 login 서브커맨
 // ── 판정이 도는 자리 ────────────────────────────────────────────────────────
 
 t("⑥ 프로브는 **뜨거운 경로에 없다** — /welcome 폴링이 매번 4.3초를 물면 안 된다", () => {
-  const hot = PROFILES.slice(PROFILES.indexOf("export async function memberLoggedInHarnessesAny"));
-  assert.doesNotMatch(hot.slice(0, 600), /HARNESS_PROBE/,
+  //  ⚠ 함수 **본문**으로 자른다(600자 어림이 아니라). #1631 로 바로 아래에 프로브를 쓰는 형제 함수
+  //   (memberUsableHarnesses)가 생겼는데, 어림 창은 그것까지 삼켜 «폴링에 프로브가 섞였다» 고 잘못 짚었다.
+  //   지켜야 할 사실은 «폴링이 부르는 그 함수의 몸통에 프로브가 없다» 이지 «근처에 없다» 가 아니다.
+  const from = PROFILES.indexOf("export async function memberLoggedInHarnessesAny");
+  assert.notEqual(from, -1, "폴링이 부르는 함수가 사라졌다");
+  const nextExport = PROFILES.indexOf("\nexport ", from + 10);
+  const body = PROFILES.slice(from, nextExport === -1 ? undefined : nextExport);
+  assert.doesNotMatch(body, /HARNESS_PROBE|aiLoginCheck|runAtMemberSeat/,
     "폴링이 읽는 판정에 프로브가 섞였다 — 온보딩 조회마다 네트워크 왕복이 붙는다");
+  //  그리고 **폴링 자리 자신**도 싼 쪽을 불러야 한다 — 함수가 싸도 호출자가 비싼 형제를 부르면 같은 사고다.
+  //  ⚠ **주석은 빼고** 본다 — 이 자리엔 «왜 싼 쪽을 쓰는가» 를 설명하려고 비싼 쪽 이름이 글로 등장한다.
+  //   글자를 세면 그 설명 자체가 위반으로 잡혀, 결국 사람이 주석을 지우게 만든다(가드가 문서를 이긴다).
+  const snap = WELCOME.slice(WELCOME.indexOf("export async function welcomeSnapshot"),
+    WELCOME.indexOf("export async function kickoffLivAfterWelcome"))
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.match(snap, /memberLoggedInHarnessesAny\(userId\)/, "폴링 스냅샷이 싼 판정을 안 쓴다");
+  assert.doesNotMatch(snap, /memberUsableHarnesses/,
+    "폴링 스냅샷이 프로브 판정을 쓴다 — 조회마다 최대 25초가 붙는다(#1631)");
   assert.match(ROUTES, /app\.post\("\/api\/ui\/me\/ai-accounts\/check"/,
     "프로브를 돌리는 자리가 POST 가 아니다 — 부수효과 있는 조회를 GET 계약에 얹으면 캐시·프리페치가 붙는다");
+});
+
+t("⑥b 결정 지점(리브 킥오프)은 **정확한** 사실을 쓴다 — 제미나이만 이은 사람이 막히면 안 된다(#1631)", () => {
+  //  자격 파일이 없는 하네스(antigravity)는 파일 표에 구조적으로 못 든다. 게이트가 그 목록을 그대로 쓰면
+  //   화면이 «Gemini 로그인이 확인됐어요» 라고 확정해 준 사람에게 리브를 열어 주지 않는다.
+  const kick = WELCOME.slice(WELCOME.indexOf("export async function kickoffLivAfterWelcome"));
+  assert.match(kick, /memberUsableHarnesses/, "킥오프 게이트가 프로브까지 본 사실을 쓰지 않는다");
+  assert.match(kick, /planLivKickoff\(o\.priorSession, usable\)/, "게이트에 넘기는 값이 그 사실이 아니다");
+  assert.match(kick, /aiHarnesses: usable/, "1턴 프롬프트가 게이트와 다른 사실을 본다");
 });
 
 t("⑦b ★설치는 **게이트웨이 자신**에서 잰다 — 멤버 자리(tmux 컨테이너)는 이미지가 다를 수 있다", () => {
@@ -96,6 +123,13 @@ t("⑦b ★설치는 **게이트웨이 자신**에서 잰다 — 멤버 자리(t
     "설치를 멤버 자리에서 재고 있다 — tmux 컨테이너가 스테일하면 거짓 '미설치' 가 된다");
   // 반대로 자격은 멤버 자리가 맞다(홈이 볼륨) — 그쪽까지 게이트웨이로 옮기면 남의 자격을 보게 된다.
   assert.match(fn, /aiAccountStatus\(user, osSt\)/, "자격 판정이 멤버 축(aiAccountStatus)을 안 쓴다");
+});
+
+t("★ 매니지드 중계 배포(LIVELY_MEMBER_EXEC)에서도 자격 판정은 멤버 홈이다 — 게이트웨이 자기 홈을 보면 늘 «미로그인» (#2232)", () => {
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiAccountStatus"), PROFILES.indexOf("export async function memberLoggedInHarnessesAny"));
+  assert.match(fn, /const relayed = !isolated && memberExecConfigured\(\)/, "중계 배포 분기가 없다");
+  assert.match(fn, /if \(isolated \|\| relayed\)/, "중계 배포가 격리와 같은 축(osSt.loggedInHarnesses)을 안 탄다");
+
 });
 
 t("⑦c 프로브를 못 돌리는 자리면 '미로그인' 이 아니라 '모름' 이다", () => {
@@ -143,8 +177,17 @@ t("⑩ 화면은 고른 AI **하나**를 묻는다 — «아무거나 하나» �
 t("⑪ 막다른 길이 없다 — CLI 가 없어도 계속할 문이 있다", () => {
   const scene = ONBOARDING.slice(ONBOARDING.indexOf("    claude: {"), ONBOARDING.indexOf("    terminal: {"));
   assert.match(scene, /c\.installed === false/, "미설치 갈래가 없다 — 그 사람은 없는 명령을 치라는 안내를 받는다");
-  assert.match(scene, /data-other/, "다른 AI 를 고를 문이 없다");
-  assert.match(scene, /id="cKeep"/, "이미 이어진 다른 AI 로 계속할 문이 없다");
+  //  «그 AI 가 이 자리에 없다» 갈래에는 **두 길이 다 있어야** 한다: 다른 AI 로 갈아타거나, 그대로 다음으로.
+  //   그 갈래만 잘라서 본다 — 로그인 갈래는 버튼을 줄인 자리라(원준님 2026-08-31) 함께 재면 옳은 축소가 위반이 된다.
+  const missing = scene.slice(scene.indexOf("if (c.installed === false)"), scene.indexOf("// ── 있는데 아직 로그인 전"));
+  assert.match(missing, /data-other/, "다른 AI 를 고를 문이 없다");
+  assert.match(missing, /data-skip/, "그대로 다음으로 갈 문이 없다");
+  //  ⚠ 종전엔 `id="cKeep"` 를 못 박았다. 그건 **컨트롤 이름**이지 뜻이 아니다 — 지켜야 할 것은
+  //   «이미 이어진 AI 가 있으면 그것을 잃지 않고 계속한다» 이고, 그 책임은 지금 data-skip 핸들러가 진다.
+  //   이름을 박아 두면 컨트롤을 합치는 옳은 변경이 위반으로 잡힌다(실측 2026-08-31).
+  const bind = ONBOARDING.slice(ONBOARDING.indexOf("const skip = $('[data-skip]', el);"));
+  assert.match(bind.slice(0, 300), /if \(!S\.aiConnected && o\) mark\(AI_LABEL\[o\] \|\| o, o\);/,
+    "이미 이어진 다른 AI 로 계속할 때 그 사실을 잃는다");
 });
 
 t("⑬ ★화면이 «이어졌다» 를 지어내지 않는다 — 참으로 만드는 자리는 서버 확인 뒤 한 곳뿐", () => {
@@ -164,6 +207,11 @@ t("⑫ 화면이 CLI 이름을 박아 두지 않는다 — 하네스 표가 바�
   const map = ONBOARDING.match(/const AI_HARNESS = \{([^}]*)\}/)![1];
   assert.doesNotMatch(map, /'agy'/, "고르기 표에 실행 파일 이름(agy)이 박혀 있다 — 여긴 하네스 key 자리다");
   assert.match(ONBOARDING, /c\.bin/, "실행 파일 이름을 서버 답에서 읽지 않는다");
+});
+
+t("★ 프로브형(antigravity)도 중계 배포에선 멤버 자리에서 돈다 — 게이트웨이 자리에서 돌면 늘 «미로그인» (#2232)", () => {
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"), PROFILES.indexOf("async function memberFileExists"));
+  assert.match(fn, /const osUser = \(osSt\.ready && osSt\.provisioned\) \|\| memberExecConfigured\(\) \? osSt\.osUser : null/, "중계 배포에서 프로브 자리가 게이트웨이다");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

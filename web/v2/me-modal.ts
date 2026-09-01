@@ -5,7 +5,7 @@
 //   프로필/환경설정을 오버레이로 두는 이유가 이것이고, 우리 발치의 [나] 행도 같은 문법을 따른다.
 //
 //  구조(슬랙 환경설정 문법): [좌 목록 | 우 내용] 2단. 왼쪽은 **주제**(프로필 · AI 개인 규칙 · 내 AI 계정 ·
-//   외부 서비스 · 화면 · 계정)이고, 오른쪽만 갈아 끼운다. 발치에는 로그아웃 — 슬랙과 같은 자리다
+//   외부 서비스 · 화면 · 계정 · 고급 설정)이고, 오른쪽만 갈아 끼운다. 발치에는 로그아웃 — 슬랙과 같은 자리다
 //   (계정을 떠나는 일은 목록 맨 아래).
 //
 //  ── #1898 — 내보내던 링크를 창 안으로 ────────────────────────────────────────────────
@@ -14,6 +14,11 @@
 //   이 창으로 들였다. **새로 만들지 않는다**: 관리탭이 쓰던 바로 그 부품(myAiAccountsCard · renderServices)을
 //   그대로 부른다. 부품 소유는 저쪽에 두고 여기선 자리만 내준다 — 두 벌이 되면 한쪽만 고쳐진다.
 //   관리탭 쪽 입구는 새 셸에서 감춘다(admin-shell sectionHidden) — 클래식엔 이 창이 없어 그쪽엔 남긴다.
+//
+//  ── #2199 — 설정 화면의 문이 이 창으로 ────────────────────────────────────────────
+//  런치패드의 [설정] 앱을 뺐다(apps.ts hidden). 조직 · AI 능력 · 데이터 연결 · 운영 화면으로 가는 문은 이제 이 창의
+//   맨 끝 [고급 설정] 하나다 — 목차는 설정 화면의 정보구조(admin-shell adminDirectory)를 그대로 읽고, 고르면 창이
+//   닫히며 그 화면이 가운데 액자로 뜬다. [계정 · 보안]에 있던 [내 스킬 · 훅] 링크도 그 목차로 옮겼다(문은 하나).
 //
 //  ⚠ 저장 규약: 서버(POST /api/ui/me/profile)는 **미전송 필드를 보존**하는 patch 다. 그래서 [프로필]은
 //   body_md 를 안 보내고 [AI 개인 규칙]은 이름·아바타를 안 보낸다 — 한 창에 둘이 같이 있어도 서로를 지우지 않는다.
@@ -32,6 +37,9 @@ import { myAiAccountsCard } from '../me-ai.js';
 import { autoPane } from './me-auto.js';   // #1898 [자동으로 하는 일] — 세션 주입 화면과 같은 행을 본다(사본 없음)
 import { renderServices } from '../me-logins.js';
 import { openGitCredentialManager } from '../admin-credentials.js';
+//  #2199 — [고급 설정]은 설정 화면의 정보구조(그룹 · 섹션 · 권한 숨김)를 **그쪽 표 그대로** 읽는다(사본 없음).
+import { adminDirectory, type AdminDirGroup } from '../admin-shell.js';
+import { loadAdmin } from '../admin-rerender.js';
 
 export interface MeModalOpts {
   /** 저장으로 이름·프사가 바뀌었다 — 사이드바(와 부른 쪽)가 다시 그리도록. */
@@ -40,12 +48,12 @@ export interface MeModalOpts {
   tab?: SecKey;
 }
 
-type SecKey = 'profile' | 'ai' | 'auto' | 'aiacct' | 'svc' | 'notify' | 'look' | 'account';
+type SecKey = 'profile' | 'ai' | 'auto' | 'aiacct' | 'svc' | 'notify' | 'look' | 'account' | 'advanced';
 interface Sec { key: SecKey; label: string; icon: string[] }
 
 // 좌 목록 — 순서가 곧 위계다. 나를 가리키는 것(프로필) → 내 AI 가 나를 대하는 법(규칙) → 매 대화에
 //  자동으로 들어가는 것(주입문) → 내 AI 가 무엇으로 도나(계정) → 무엇에 닿나(외부 서비스) →
-//  나를 부르는 법(알림) → 내가 보는 화면 → 내가 들어오는 법(계정 · 보안).
+//  나를 부르는 법(알림) → 내가 보는 화면 → 내가 들어오는 법(계정 · 보안) → 그 너머로 가는 문(고급 설정).
 //  ⚠ 알림은 'AI 를 어떻게 세팅하나'가 아니라 **내가 무엇을 언제 받나**다. 그래서 AI 묶음(규칙·주입문·
 //   계정·외부 서비스) 뒤, 화면 바로 앞에 둔다(원준 2026-08-26) — 앞에 끼면 AI 설정이 갈라져 읽힌다.
 const SECS: Sec[] = [
@@ -61,6 +69,9 @@ const SECS: Sec[] = [
   { key: 'notify', label: '알림', icon: ['M12 4.2a5 5 0 0 0-5 5v3.1l-1.5 2.7h13L17 12.3V9.2a5 5 0 0 0-5-5z', 'M10.1 18a1.95 1.95 0 0 0 3.8 0'] },
   { key: 'look', label: '화면', icon: ['M4 5.5h16v10H4z', 'M9 19.5h6', 'M12 15.5v4'] },
   { key: 'account', label: '계정 · 보안', icon: ['M12 3.4 19 6v5.6c0 4.2-2.9 7.4-7 9-4.1-1.6-7-4.8-7-9V6z', 'M9.3 12.1l1.9 1.9 3.5-3.6'] },
+  // 슬라이더 — 여기서 고치는 게 아니라 **더 깊은 자리로 가는 문**(#2199). 톱니는 [나] 행이 이미 쓰는 표식이라 겹치지 않게.
+  //  맨 끝인 이유: 위 여덟은 '나'의 것이고 이건 그 너머(조직 · AI 능력 · 데이터 · 운영)다 — 슬랙 환경설정의 [고급] 자리.
+  { key: 'advanced', label: '고급 설정', icon: ['M20.5 5h-6', 'M10.5 5h-7', 'M20.5 12h-8', 'M8.5 12h-5', 'M20.5 19h-4', 'M12.5 19h-9', 'M14.5 3v4', 'M8.5 10v4', 'M16.5 17v4'] },
 ];
 
 let openBack: HTMLElement | null = null;   // 열려 있는 창 — 두 번 눌러 두 장이 겹치지 않게
@@ -168,6 +179,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
     panes.set('notify', notifyPane());
     panes.set('look', lookPane(close));
     panes.set('account', accountPane(data, logins));
+    const adv = advancedPane(close); panes.set('advanced', adv.node); lazy.set('advanced', adv.init);   // #2199 — 권한 데이터를 더 부르므로 처음 펼 때
     contEl.replaceChildren(...panes.values());
     show(cur);
   })();
@@ -183,6 +195,16 @@ function pane(title: string, hint: string, ...kids: any[]): HTMLElement {
 function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
   return el('div', { class: 'v2me-save' }, btn, status);
 }
+// 이 창에서 관리탭 안쪽 화면으로 건너가는 줄 — 여기서 다 하지 않고 **어디로 가면 되는지**만 말한다.
+function moreLink(href: string, label: string, desc: string, close: () => void, opts?: { gated?: boolean }): HTMLElement {
+  return el('a', { class: 'v2me-more', href, onclick: () => close() },
+    el('span', { class: 'v2me-more-t', text: label }),
+    // 권한 배지(#2199) — 설정 화면 사이드바의 '관리자' 배지와 같은 판정 · 같은 문구(admin-shell navPermBadge). 내부 scope 이름은 안 쓴다.
+    opts && opts.gated ? el('span', { class: 'v2me-more-badge', text: '관리자', title: '관리 권한이 있어야 보고 편집할 수 있는 항목입니다.' }) : null,
+    el('span', { class: 'v2me-more-d', text: desc }),
+    ic(['M9 6l6 6-6 6'], 'v2me-more-ic'));
+}
+
 // ── ① 프로필 — 얼굴·이름. 팀 화면 어디에서나 나를 가리키는 것. ──
 function profilePane(data: any, onSaved: () => void): HTMLElement {
   const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '이름 (비우면 이메일·아이디로 표시됩니다)' });
@@ -353,7 +375,7 @@ function servicesPane(): { node: HTMLElement; init: () => void } {
   //  git 자격은 서비스 연결과 성격이 다르다(AI 가 남의 계정을 쓰는 게 아니라 **코드를 받아오는** 열쇠) —
   //  카드로 세우지 않고 발치 한 줄로 둔다. 여는 창(openGitCredentialManager)은 자격 금고 소유 그대로.
   const node = pane('외부 서비스',
-    'AI 가 내 계정으로 외부 서비스를 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.',
+    'AI 가 내 계정으로 외부 서비스를 직접 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 나에게만 적용됩니다. 자료를 워크스페이스가 함께 보는 자료함으로 가져오는 것은 «외부 앱 연결»의 «자료 가져오기»가 따로 합니다.',
     host,
     el('div', { class: 'v2me-k', style: 'margin-top:20px', text: '코드 저장소' }),
     field('리포지토리 접근 (개발자용)', el('div', {},
@@ -436,6 +458,7 @@ function accountPane(data: any, logins: any): HTMLElement {
   //  [내 AI 계정]·[외부 서비스]는 이 창의 화면이 됐다(#1898) — 더는 밖으로 내보내지 않는다.
   //  [내 스킬 · 훅]으로 건너가던 '더 자세한 설정' 줄도 뺐다(원준 지시 2026-08-27): 이 칸은
   //  '어떻게 들어오는가'인데 그 줄만 축이 달랐고, 관리탭에 같은 자리가 이미 있다.
+  //  남아 있던 [내 스킬 · 훅] 링크는 [고급 설정] ▸ 내 설정으로 옮겼다(#2199) — 설정 화면으로 가는 문은 그 탭 하나다.
 
   // ── 회원 탈퇴(#1876) — **이 창 안에서 끝난다.**
   //  종전엔 app.lvly.io 로 새 탭을 띄웠는데, 로그인해서 쓰고 있는 사람이 탈퇴하려면 밖에서 다시
@@ -510,6 +533,73 @@ function notifyPane(): HTMLElement {
     .then((r: any) => paint((r && r.prefs) || {}))
     .catch((e) => list.replaceChildren(errorNote(e, '알림 설정을 불러오지 못했습니다')));
   return body;
+}
+
+// ── ⑨ 고급 설정(#2199) — 조직 전체에 걸친 설정·운영 화면으로 가는 **문**. ──
+//  종전엔 런치패드의 [설정] 앱이 이 문이었다(원준 2026-08-27: "앱에 설정을 없애고 그 설정 창이 뜨는 걸 … 모달 사이드바에
+//   고급설정 하나 만들어서 그걸 통해서 들어가는 과정"). 설정은 앱(할 일이 있는 화면)이 아니라 **환경을 손보는 자리**다 —
+//   나에 관한 것은 이 창의 다른 탭이 맡고, 그 너머(조직 · AI 능력 · 데이터 연결 · 운영)는 이 탭이 가리킨다. 슬랙도
+//   환경설정 창 맨 끝 [고급]에서 워크스페이스 설정으로 건너간다. 앱 목록에 [설정]이 남아 있으면 같은 문이 둘이라
+//   어느 쪽이 진짜인지 화면이 말하지 못한다(apps.ts `hidden`).
+//  목차는 **설정 화면의 정보구조 그대로**(admin-shell adminDirectory) — 그룹 · 순서 · 권한 숨김 · '관리자' 배지가 저쪽
+//   사이드바와 같은 표 · 같은 판정에서 나온다. 여기서 목록을 따로 적으면 저쪽에 화면이 늘거나 권한이 바뀔 때 한쪽만
+//   고쳐진다. 이 파일이 갖는 건 **한 줄 설명**뿐이다(저쪽 사이드바는 설명을 안 그린다). 표에 없는 키는 이름만 선다.
+//  항목을 고르면 이 창이 닫히고 그 설정 화면이 가운데 액자로 뜬다(#/system/<key> — main.ts 클래식 분기, #1843 이
+//   [내 스킬 · 훅] 링크로 이미 쓰던 길). 이 창은 '잠깐 들르는 창'이라 설정 화면을 여기 안 그린다 — 그 화면은 자기
+//   사이드바가 있는 전폭 화면이다(880×620 안에 액자로 넣으면 두 사이드바가 겹친다).
+//  권한 데이터(GET /api/ui/org)를 더 부르므로 **처음 펼 때** 그린다(머리말 ⚠ 규칙). 관리탭을 다녀왔으면 캐시를 쓴다.
+const ADV_DESC: Record<string, string> = {
+  'me-assets': '내 AI 가 쓰는 스킬과 훅을 켜고 끕니다.',
+  'me-nodes': '내 노트북이나 서버를 라이블리에 연결해 거기서 AI 세션을 엽니다.',
+  'profile': '조직 이름과 게이트웨이 주소 같은 기본 정보를 봅니다.',
+  'ui': '조직이 기본으로 보는 화면(새 화면 · 클래식)을 정합니다.',
+  'members': '이 조직에 누가 있는지 보고 고치며, 팀으로 묶습니다.',
+  'member-add': '새 팀원을 조직에 등록합니다.',
+  'member-access': '구성원이 무엇으로 접속하고, 그 사람의 AI 가 어느 계정으로 실행되는지 관리합니다.',
+  'login-idp': '구성원이 회사 구글 · SSO 계정으로 로그인하게 합니다.',
+  'tools': 'AI 가 호출할 수 있는 도구를 관리합니다 — 사내 API · 기본 제공 · 외부 도구 서버(MCP).',
+  'credentials': 'AI 가 외부 서비스를 조직 공용 계정으로 쓰도록 미리 로그인해 둡니다.',
+  'agent-assets': '구성원의 AI 에 배포할 스킬 · 서브에이전트 · 커맨드와 자동 실행 훅을 관리합니다.',
+  'automation': '정해진 시각에 사람 없이 도는 작업과 상시 에이전트를 관리합니다.',
+  'preview-envs': '아직 반영하지 않은 작업 화면을 운영 화면과 따로 띄워 확인합니다.',
+  'session-share': '구성원의 AI 대화 기록을 중앙에 모아 이어보게 할지 정합니다.',
+  'feed-targets': '위키 지식을 노션 같은 외부 도구로 내보냅니다.',
+  'project-outbound': '프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.',
+  'db-sources': 'AI 가 조회할 데이터베이스를 등록하고 어느 테이블까지 보여줄지 정합니다.',
+  'repos': '코드 레포(git)를 등록합니다 — 도메인맵과 코드 작업의 출처입니다.',
+  'audit': '누가 언제 무엇을 했는지 봅니다 — 관리 변경 · DB 조회 · AI 도구 호출.',
+  'storage': '메모리 · PTY · 디스크 사용량을 보고, 바닥나기 전에 알림 임계를 정합니다.',
+  'logs': '게이트웨이 로그가 무한히 자라지 않도록 보관 상한을 정합니다.',
+  'sessions': '이 박스에서 도는 모든 AI 세션을 보고 오래 쉬는 세션을 회수합니다.',
+  'nodes': '조직이 함께 쓰는 컴퓨터 전체와 공유 지정을 관리합니다.',
+};
+function advancedPane(close: () => void): { node: HTMLElement; init: () => void } {
+  const host = el('div', { class: 'v2me-dir' }, skeleton('설정 목록을 불러오는 중'));
+  const node = pane('고급 설정',
+    '조직 전체에 걸친 설정과 운영 화면입니다. 항목을 고르면 이 창이 닫히고 그 설정 화면이 열립니다.',
+    host);
+  node.classList.add('v2me-pane-wide');   // 행이 [이름 · 배지 · 설명 · ›] 한 줄이라 520px 에선 설명이 다 잘린다
+  const paint = (groups: AdminDirGroup[]): void => {
+    if (!groups.length) { host.replaceChildren(el('p', { class: 'prof-hint', text: '지금 권한으로 열 수 있는 설정 화면이 없습니다.' })); return; }
+    const kids: HTMLElement[] = [];
+    let anyGated = false;
+    for (const g of groups) {
+      kids.push(el('div', { class: 'v2me-more-k', text: g.label }));
+      for (const s of g.items) {
+        if (s.gated) anyGated = true;
+        kids.push(moreLink('#/system/' + s.key, s.label, ADV_DESC[s.key] || '', close, { gated: s.gated }));
+      }
+    }
+    // 배지 설명은 배지가 하나라도 있을 때만 — 없는 것을 설명하지 않는다.
+    if (anyGated) kids.push(el('p', { class: 'prof-hint', style: 'margin-top:14px' }, ...uiText('「관리자」가 붙은 항목은 관리 권한이 있는 사람에게만 보입니다.')));
+    host.replaceChildren(...kids);
+  };
+  const init = (): void => {
+    void loadAdmin()
+      .then((data: any) => paint(adminDirectory(data)))
+      .catch((e: any) => host.replaceChildren(errorNote(e, '설정 목록을 불러오지 못했습니다')));
+  };
+  return { node, init };
 }
 
 // ── 회원 탈퇴(#1876) — 이 창 안에서 끝난다 ──────────────────────────────────────

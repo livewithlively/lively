@@ -78,6 +78,15 @@ export interface OpenFailMsg { t: "openfail"; chan: number; code: number; reason
 // 위탁 태스크 종결 보고(P2) — 노드가 exit 파일 감지·결과 수집 후 1회 push. summary 는 상한 잘라 전송.
 export interface TaskDoneMsg { t: "taskdone"; taskId: number; ok: boolean; exit: number | null; summary?: string; error?: string }
 export interface WorkerStateMsg { t: "workerState"; snapshot: WorkerRunSnapshot }
+/**
+ * 노드에서 도는 **대화 런타임의 사건**을 게이트웨이로 올린다 (#2439).
+ *
+ *  ⚠ 요청/응답(ResMsg)이 아니라 **단방향 push** 다 — 사건은 턴 도중 아무 때나 나고, 그때마다
+ *   게이트웨이가 물어볼 수는 없다(작업 시작·승인 물음·사용량이 그 모양이다).
+ *  ⚠ 실린 것은 **우리 어휘**(harness-io/session-event.ts)다 — 하네스 낱말이 아니다. 그래서
+ *   게이트웨이는 그대로 버스에 흘리면 되고, 화면·SSE 는 한 줄도 안 바뀐다(★1·★3).
+ */
+export interface ChatEventMsg { t: "chatEvent"; session: string; ev: unknown }
 // 게이트웨이 → 노드
 export interface ReqMsg { t: "req"; id: number; op: NodeOp; args?: Record<string, unknown> }
 export interface OpenMsg { t: "open"; chan: number; session: string }
@@ -117,7 +126,13 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //  markSeen = 사람이 **그 세션 화면을 보고 있다**는 도장(#1954 3차, @box_last_seen). markActive 와 같은 이유로 릴레이가
 //   필요하다 — 노드 세션의 tmux 는 그 PC 에 있어 게이트웨이가 직접 못 쓴다. 이 op 를 모르는 구 노드에서는
 //   그 세션만 종전 동작(attach 시각만으로 판정)으로 남는다 — 안 보내면 그만이라 무회귀다.
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt"] as const;
+//  chatSend = 그 세션의 **대화 런타임**에 말을 건다(#2439). 여태 대화 런타임은 게이트웨이가
+//   프로세스를 띄울 수 있는 세션에서만 돌았다 — 노드 세션의 tmux 는 그 PC 에 있어 배달이
+//   노드 릴레이로 갔고, 그래서 승인·선택지·작업 목록이 **웹에 올 길이 없었다**(실측 2026-09-01).
+//   이 op 로 노드가 자기 자리에서 런타임을 돌리고, 그 사건을 chatEvent 로 게이트웨이에 올린다.
+//  chatAnswer = 그 런타임에 걸린 물음(승인·선택지)에 사람의 답을 돌려준다. chatSend 의 짝이다.
+//   ⚠ 둘이 갈리면 «카드는 뜨는데 눌러도 아무 데도 안 가는» 상태가 된다 — 같이 선언한다.
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt", "chatSend", "chatAnswer"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;
@@ -157,7 +172,7 @@ export function agentIsLatest(nodeVer: string | null | undefined, servedVer: str
   return nodeVer === servedVer;
 }
 
-export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg | WorkerStateMsg;
+export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg | WorkerStateMsg | ChatEventMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg | HelloOkMsg;
 
 export function parseMsg<T>(raw: unknown): T | null {

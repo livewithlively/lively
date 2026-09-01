@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 import { itemsPool } from "../db/client.js";
+import { TENANT_DEFAULT_EXPR } from "../db/tenant-column.js";
 
 const scryptAsync = promisify(crypto.scrypt) as (
   password: crypto.BinaryLike, salt: crypto.BinaryLike, keylen: number, options: crypto.ScryptOptions,
@@ -88,8 +89,14 @@ export type LoginResult =
 export async function verifyLogin(email: string, plain: string): Promise<LoginResult> {
   const e = (email ?? "").trim().toLowerCase();
   if (!e || !plain) { await burn(plain || "x"); return { ok: false, reason: "invalid" }; }
+//  ★ 테넌트 못박기(#1879) — 계정행이 워크스페이스마다 갈라질 수 있고, 이 조회는 **신원을 판정**한다.
+//   못박지 않으면 남은 짝을 통해 primary 에서 **비활성화한 계정이 로그인된다**(실 PG 재현).
+//   `LIMIT 1` 에 ORDER BY 도 없어 어느 행이 뽑힐지도 비결정적이다.
+//   ⚠ 상수(primary)가 아니라 **지금 맥락**으로 못박는다 — 셀프호스트는 GUC 가 없어 primary 로 떨어지고,
+//    매니지드는 그 테넌트로 떨어진다. 상수로 박으면 매니지드에서 RLS 가 걸러 **0행**이 된다(실측).
   const mr = await itemsPool.query(
-    `SELECT id FROM org_member WHERE lower(email)=$1 AND state='active' LIMIT 1`, [e]);
+    `SELECT id FROM org_member WHERE lower(email)=$1 AND state='active'
+       AND tenant_id = ${TENANT_DEFAULT_EXPR} LIMIT 1`, [e]);
   const member = mr.rows[0] as { id: string } | undefined;
   if (!member) { await burn(plain); return { ok: false, reason: "no_account" }; }
   const cr = await itemsPool.query(

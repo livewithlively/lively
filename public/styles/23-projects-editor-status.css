@@ -71,7 +71,7 @@ select.aud-sel {
   min-width:112px; max-width:208px; text-overflow:ellipsis;
 }
 .aud-inp { min-width:112px; max-width:156px; }
-.aud-sel:hover, .aud-inp:hover { border-color:var(--muted-3); }
+.aud-sel:hover, .aud-inp:hover { border-color:var(--muted-3-line); }
 .aud-sel:focus, .aud-inp:focus { outline:none; border-color:var(--blue); }
 .aud-filters .btn { height:34px; border-radius:9px; }
 /* 오른쪽으로 미는 그룹(위변조 검증 등) — 필터가 줄바꿈되면 auto 여백이 죽으므로 flex-wrap 안에서만 쓴다. */

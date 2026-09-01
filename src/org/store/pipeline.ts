@@ -9,6 +9,7 @@ import { itemsPool, q } from "../../db/client.js";
 import { listCollectors } from "./collectors.js";
 import { classifierCoverage, listClassifiers } from "./classifiers.js";
 import { managerOverview } from "./managers.js";
+import { PLACEHOLDER_MARK } from "../liv/lane-skeleton.js";
 
 /** 한 숫자를 세는 작은 헬퍼 — 테이블이 없는 배포(구 스키마)에서도 0 으로 떨어진다. */
 async function count(sql: string, params: unknown[] = []): Promise<number> {
@@ -23,7 +24,7 @@ export interface PipelineJob {
 export interface PipelineOverview {
   stages: {
     collect: { configured: number; enabled: number; output: number; recent_24h: number; job: PipelineJob | null };
-    distill: { configured: number; enabled: number; output: number; backlog: number; job: PipelineJob | null };
+    distill: { configured: number; draft: number; total: number; enabled: number; output: number; backlog: number; job: PipelineJob | null };
     classify: { configured: number; enabled: number; categories: number; no_definition: number;
       backlog: number; uncovered: number; pending_review: number; job: PipelineJob | null };
     manage: { configured: number; enabled: number; open: any; by_kind: any; job: PipelineJob | null };
@@ -49,8 +50,13 @@ export async function computePipelineOverview(): Promise<PipelineOverview> {
       const undistilled = await count(
         `SELECT count(*)::int AS n FROM source s
           WHERE NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)`);
-      const distillers = await q(itemsPool, `SELECT id, key, label, enabled FROM org_distiller ORDER BY priority DESC, id`)
+      //  ⚠ criteria_md 도 읽는다 — 처음 설정이 만든 **뼈대**는 기준이 자리표뿐이라 켜도 쓸 수 없다.
+      //   그걸 «설정됨» 으로 세면 화면이 «7개 다 있고 2개만 꺼둠» 으로 보이는데, 실제로는 5개가 미완성이다
+      //   (실측 2026-08-31: 자료 12건이 그 5개 몫이라 아무도 안 집었다). 세는 축을 갈라 사실대로 말한다.
+      const distillers = await q(itemsPool, `SELECT id, key, label, enabled, criteria_md FROM org_distiller ORDER BY priority DESC, id`)
         .catch(() => [] as Array<Record<string, unknown>>);
+      const isDraft = (d: Record<string, unknown>): boolean => String(d.criteria_md ?? "").includes(PLACEHOLDER_MARK);
+      const draftCount = distillers.filter(isDraft).length;
 
       // ── ③ 분류 ──
       const classifiers = await listClassifiers().catch(() => []);
@@ -97,7 +103,11 @@ export async function computePipelineOverview(): Promise<PipelineOverview> {
             job: jobFor(["connector_sync"]),
           },
           distill: {
-            configured: distillers.length,
+            //  configured 는 «쓸 수 있는 것» 만 센다 — 기준이 자리표뿐인 뼈대는 켜도 증류를 못 한다.
+            //  draft 를 따로 내보내 화면이 «미완성 N» 을 말할 수 있게 한다(#1631).
+            configured: distillers.length - draftCount,
+            draft: draftCount,
+            total: distillers.length,
             enabled: distillers.filter((d) => d.enabled === true).length,
             output: knowledgeTotal,
             backlog: undistilled,

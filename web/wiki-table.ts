@@ -204,7 +204,6 @@ export function wkSurfaceTabs(active: 'recent' | 'cats' | 'docs' | 'sources' | '
   return [
     { key: 'recent', label: '최근', icon: 'list' as const, href: '#/knowledge', active: cur === 'recent' },
     { key: 'cats', label: '카테고리', iconNode: pjvTbIcon('group', 'pjv-vtab-ic wk-vtab-ic'), href: '#/knowledge?cats=1', active: cur === 'cats' },
-    { key: 'sources', label: '자료', icon: 'table' as const, href: '#/knowledge/sources', active: cur === 'sources' },
     { key: 'review', label: reviewCount ? '검토 대기 ' + reviewCount : '검토 대기', iconNode: pjvTbIcon('check', 'pjv-vtab-ic wk-vtab-ic'), href: '#/knowledge/review', active: cur === 'review' },
     { key: 'trash', label: '휴지통', iconNode: pjvTbIcon('trash', 'pjv-vtab-ic wk-vtab-ic'), href: '#/trash', active: cur === 'trash' },
   ];

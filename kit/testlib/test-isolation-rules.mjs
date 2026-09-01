@@ -66,8 +66,28 @@ export function violatesR5(src) {
   return !wired;
 }
 
+/**
+ * R6 — 자식에 `...process.env` 를 넘기면서 **라이블리 신원 env 를 비우지 않으면**, 그 기계의
+ *  게이트웨이 주소·토큰·세션 종류가 그대로 상속된다. 그러면 테스트는 스텁이 아니라 **실 게이트웨이**를
+ *  상대하고, 판정이 '그 셸에 무엇이 export 돼 있나'의 함수가 된다.
+ *
+ *  실측(2026-08-31, #2457): 라이블리 세션 안에서 `npm test` 를 돌리면 맥에서만 6건이 빨간불이었다.
+ *   · LIVELY_GATEWAY_URL 상속 → sync-harness-assets 4종이 스텁 대신 dev 게이트웨이를 불러 자산 0건
+ *   · LIVELY_SESSION_KIND=human 상속 → 훅의 사람/기계 판정이 뒤집혀 «위탁 세션» 시나리오가 불성립
+ *  CI 는 그 값들이 없어 전부 초록이라, **이 축은 CI 만 보면 영원히 안 잡힌다.**
+ *  더 나쁜 축도 있다 — 값이 진짜면 테스트가 실 환경을 **쓴다**(offlineLivelyEnv 머리말의 세션 3개 사고).
+ *
+ *  정본은 kit/testlib/os-sandbox.mjs 의 offlineLivelyEnv()(신원만) / sandboxEnv({home,tmp})(홈까지).
+ *  스텁 게이트웨이가 필요하면 그 조각 **뒤에** 자기 값을 세우면 된다(뒤 키가 이긴다).
+ */
+export function violatesR6(src) {
+  const code = String(src).replace(/^\s*\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  return /\.\.\.process\.env/.test(code) && !/offlineLivelyEnv|sandboxEnv/.test(code);
+}
+
 export const RULES = [
   { id: "R1", violates: violatesR1, title: "자식 env 의 HOME 은 USERPROFILE 과 함께 준다(윈도우 격리 무효 방지)", fix: "sandboxEnv({home,tmp}) 를 쓰세요 — kit/testlib/os-sandbox.mjs" },
   { id: "R2", violates: violatesR2, title: "실 claude 를 부르는 테스트는 CLAUDE_CONFIG_DIR 를 명시한다(실 프로필 오염 방지)", fix: '샌드박스 안 값 또는 "" 로 덮으세요' },
   { id: "R3", violates: violatesR3, title: "일반 테스트는 영속 호스트 효과 capability를 올리지 않는다", fix: "fake executor를 쓰거나 *.itest.mjs + disposable Windows CI로 옮기세요" },
+  { id: "R6", violates: violatesR6, title: "자식에 process.env 를 넘기면 라이블리 신원 env 를 함께 비운다(실 게이트웨이 접촉·환경 의존 판정 방지)", fix: "offlineLivelyEnv() 또는 sandboxEnv({home,tmp}) 를 spread 뒤에 얹으세요 — kit/testlib/os-sandbox.mjs" },
 ];

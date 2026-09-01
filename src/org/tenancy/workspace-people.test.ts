@@ -145,3 +145,55 @@ test("★ E18 개인 워크스페이스를 막던 벽이 없다 — 그 벽이 �
     "종전의 차단이 남아 있다 — 사람이 들어오는 것이 곧 전환이므로 이 벽은 없어야 한다");
   assert.match(src, /workspace_invite_resolve/, "초대 처리(accept/decline/revoke) capability 가 없다");
 });
+
+// ── E. #1875 D5' (2026-08-27 장원준) — 「팀원이 있으면 삭제(보관) 금지, 나가기만」 ────
+//
+//  「팀원들이 있는 경우에는 워크스페이스를 내가 삭제하는건 안 되고, 마지막 남아있는(=나 혼자인) 때만
+//   가능하게. 팀 스페이스에서는 나가는 것밖에 안 되게.」
+//
+//  코어의 «삭제»는 보관(archive)이지만 등록부 state 를 내리는 것이라 **모두의 접근이 끊긴다** —
+//  «되돌릴 수 있으니 괜찮다»가 이 결정을 비껴가지 못하는 이유다. 아래 잠금이 빠지면 owner 한 명이
+//  남의 자료를 남의 동의 없이 닫을 수 있는 상태로 조용히 되돌아간다.
+
+test("E30 보관은 인원수 게이트를 지난다 — 판정 기준은 2명, 역할·kind 컬럼이 아니다", () => {
+  const src = readSrc("src/capabilities/delivery/workspace-registry.ts");
+  const at = src.indexOf('restWork("workspace_delete"');
+  assert.ok(at > 0, "workspace_delete 가 없다");
+  const body = src.slice(at, src.indexOf('restWork("workspace_member_add"', at));
+  const gate = body.indexOf("countWorkspaceMembers(ws.id)");
+  const act = body.indexOf("archiveWorkspace(ws.id)");
+  assert.ok(gate > 0, "인원을 세지 않는다 — owner 가 팀 워크스페이스를 통째로 닫을 수 있다");
+  assert.ok(act > gate, "보관이 인원수 게이트보다 앞이다");
+  assert.match(body.slice(gate, act), /n\s*>=\s*2/, "판정 임계가 2명이 아니다");
+});
+
+test("E31 나가기가 있다 — 삭제를 막았으면 나갈 문이 있어야 한다(없으면 갇힘이다)", () => {
+  const src = readSrc("src/capabilities/delivery/workspace-registry.ts");
+  const at = src.indexOf('restWork("workspace_leave"');
+  assert.ok(at > 0, "workspace_leave 가 없다 — 팀에서 나갈 문이 없으면 보관 금지는 갇힘이 된다");
+  const body = src.slice(at, src.indexOf('restRead("workspace_people"', at));
+  assert.match(body, /"\/api\/ui\/me\/workspaces\/leave"/, "REST 경로가 없다");
+  //  #1875 D5″ — 갈래(혼자냐 · 어드민이 나뿐이냐 · 아니냐)는 이제 핸들러가 세지 않고
+  //   registry.planWorkspaceLeave **한 벌**이 정한다. 규칙 자체의 엣지는 그쪽 테스트가 잡는다
+  //   (workspace-leave-transfer.test.ts E1~E12). 여기서는 **핸들러가 그 한 벌을 따르는지**만 본다 —
+  //   핸들러가 자기 판정을 되살리면 화면·서버·MCP 가 서로 다른 말을 하기 시작한다.
+  assert.match(body, /const plan = planWorkspaceLeave\(\{[\s\S]{0,400}ownerMember: ws\.owner_member/,
+    "★ 나가기 갈래를 한 벌(planWorkspaceLeave)로 안 정한다 — 핸들러가 규칙을 따로 세면 갈린다");
+  assert.match(body, /if \(!plan\.ok\) throw leaveRefusal\(/, "거절을 사람 말로 옮기는 자리가 없다");
+  assert.ok(body.indexOf("transferWorkspaceOwner") < body.indexOf("removeWorkspaceMember(ws.id, id)"),
+    "★ 주인을 넘기기 전에 먼저 나가진다 — 넘기기가 실패하면 주인 없는 팀이 남는다");
+  assert.match(body, /removeWorkspaceMember\(ws\.id, id\)/, "명부에서 안 빠진다");
+  assert.ok(!body.includes("requireOwner"), "구성원이 자기 발로 나갈 수 없다 — 나가기는 owner 전용이 아니다");
+});
+
+test("E32 화면도 같은 규칙을 쓴다 — 갈래를 인원·어드민 수로 가른다", () => {
+  //  #1875 D5″ — 떠나는 문이 «설정 판의 한 줄»(exitRow)에서 «목록 행의 ✕»로 옮겨 갔다.
+  //   화면 구조의 엣지는 workspace-exit-ui.test.ts 가 전담한다(E1~E11 + 돌연변이 확인).
+  //   여기서는 그 한 가지만 본다 — **화면의 임계가 서버와 같은 축인가.** 축이 갈리면 눌러도 400 만 난다.
+  const rail = readSrc("web/v2/rail.ts");
+  const at = rail.indexOf("function openExitInline(");
+  assert.ok(at > 0, "떠나는 문을 고르는 자리가 없다 — 화면과 서버가 갈리면 눌러도 400 만 난다");
+  const body = rail.slice(at, at + 1400);
+  assert.match(body, /\(w\.member_count \?\? 1\) < 2/, "화면의 '혼자' 임계가 서버(2명)와 다르다");
+  assert.match(body, /\(w\.owner_count \?\? 1\) < 2/, "화면이 어드민 수를 안 본다 — 서버는 그걸로 갈린다");
+});

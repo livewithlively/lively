@@ -8,7 +8,7 @@
 import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
-import { githubAppReady, startGithubAppConsent, saveGithubAppCredentials } from "../org/credentials/oauth-broker.js";
+import { githubAppReady, startGithubAppConsent, saveGithubAppCredentials, completeGithubAppInstall } from "../org/credentials/oauth-broker.js";
 import { listSecretsByKindPublic } from "../org/credentials/member-secret-store.js";
 import { GITHUB_INSTALL_KIND } from "../org/credentials/github-app.js";
 import { listInstallationRepos } from "../org/credentials/github-app-git.js";
@@ -116,4 +116,31 @@ const orgGithubAppRegister: Capability = {
   },
 };
 
-export const githubConnectCapabilities: Capability[] = [orgGithubConnectStatus, orgGithubConnect, orgGithubAppRegister];
+/**
+ * 릴레이 완료(#2243 G) — 라이블리 컨트롤플레인 전용. CP 가 GitHub 과 교환한 토큰 응답과 설치 id 를 들고 온다.
+ *  ⚠ 사람이 부를 일이 없다(mcp:false). state 는 이 게이트웨이가 서명한 것이라 남의 CP 가 위조할 수 없다.
+ */
+const orgGithubOauthComplete: Capability = {
+  name: "org_github_oauth_complete", title: "GitHub OAuth 릴레이 완료(CP 전용)",
+  description:
+    "라이블리 컨트롤플레인이 GitHub 과 교환한 토큰 응답(+설치 id)을 이 게이트웨이의 서명 state 와 함께 넣는다. " +
+    "토큰은 연결자의 금고(github_pat), 설치 id 는 조직 슬롯에 저장한다. 사람이 직접 부를 일은 없다.",
+  scope: "admin",
+  input: {
+    state: z.string().describe("이 게이트웨이가 발급한 서명 state"),
+    token: z.record(z.unknown()).optional().describe("GitHub 토큰 엔드포인트 응답 JSON 원문(인가를 건너뛴 설치-only 면 생략)"),
+    installation_id: z.string().optional().describe("설치 id(인가만 하고 설치를 안 했으면 생략)"),
+  },
+  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/github/oauth-complete"], parse: (req) => req.body ?? {} }] },
+  handler: async (input, user) => {
+    const i = (input ?? {}) as { state?: unknown; token?: unknown; installation_id?: unknown };
+    if (typeof i.state !== "string" || !i.state) throw new HttpError(400, "state 는 필수입니다");
+    const inst = typeof i.installation_id === "string" ? i.installation_id : null;
+    const tok = i.token && typeof i.token === "object" ? i.token : null;
+    if (!tok && !inst) throw new HttpError(400, "token 이나 installation_id 중 하나는 있어야 합니다");
+    try { return await completeGithubAppInstall(i.state, tok, inst, user?.userId ?? "cp-relay"); }
+    catch (err) { throw new HttpError(400, (err as Error).message); }
+  },
+};
+
+export const githubConnectCapabilities: Capability[] = [orgGithubConnectStatus, orgGithubConnect, orgGithubAppRegister, orgGithubOauthComplete];

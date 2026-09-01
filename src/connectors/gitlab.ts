@@ -1,0 +1,230 @@
+// GitLab 커넥터 (#2247) — 프로젝트의 **이슈·MR 대화**(본문 + 노트)와 **릴리스 노트**를 canonical RawItem 으로.
+//  GitHub 커넥터(github.ts)와 같은 축·같은 착지(source). 다른 점:
+//   · 인증은 개인 액세스 토큰(read_api)만 — [계정 로그인] 토큰(DCR, scope=mcp)은 REST 를 못 부른다.
+//   · 호스트 축 — 회사 GitLab(self-managed)이 있어 `host` 를 갖는다(기본 gitlab.com).
+//   · 노트(댓글)는 저장소 전체 엔드포인트가 없다 → 이번 창에서 갱신된 이슈·MR 에 대해서만 노트를 받는다
+//     (노트가 달리면 이슈 updated_at 이 오르므로 증분에 잡힌다). 시스템 노트(라벨 변경 등)는 뺀다.
+//   · 페이지네이션은 `x-next-page` 헤더.
+import type { Connector, RawItem, BackfillOpts } from "./types.js";
+import { resolveConnectorConfig } from "./config.js";
+import { sinceFloor } from "./sync-cursor.js";
+
+const PAGE_SIZE = 100;
+export const MAX_PAGES = 30;
+/** 진행 로그 최소 간격. 러너의 정체 감지(무출력 15분)보다 훨씬 짧게 둬서, 큰 저장소를 훑는 동안에도 살아있음이 드러나게 한다. */
+export const PROGRESS_LOG_INTERVAL_MS = 15_000;
+
+/**
+ * 마지막 출력 이후 간격이 지났을 때만 찍는 진행 로그.
+ * 큰 저장소는 이슈·MR 마다 노트 페이지를 또 돌아 줄 수가 수천으로 불어난다 — 매 페이지 찍으면 로그가 못 쓰게 되고,
+ * 안 찍으면 러너가 정체로 보고 죽인다(초기 백필이 15분마다 강제 종료돼 커서가 영영 안 올랐다).
+ * 그래서 '건수'가 아니라 '시간'으로 조인다.
+ */
+export function makeProgressLogger(
+  intervalMs: number = PROGRESS_LOG_INTERVAL_MS,
+  // 벽시계(Date.now)는 NTP step 으로 뒤로 갈 수 있고, 그러면 역행 폭만큼 로그가 통째로 억제된다 — 정체 오판이 다시 열린다.
+  // 단조 증가하는 시계를 쓰면 그 경우가 설계상 존재하지 않는다.
+  now: () => number = () => performance.now(),
+  emit: (msg: string) => void = (m) => console.log(m),
+): (msg: string, force?: boolean) => void {
+  let last: number | null = null;
+  /** force 는 간격을 무시하고 찍되 **타이머도 갱신한다** — 경계 로그 직후의 잔줄까지 쏟아지지 않게. */
+  return (msg, force = false) => {
+    const t = now();
+    if (!force && last !== null && t - last < intervalMs) return;
+    last = t;
+    emit(msg);
+  };
+}
+
+/** `projects` 설정 → 프로젝트 경로(group/sub/project) 목록. 주소를 그대로 붙여넣어도 된다. */
+export function parseProjectList(v: string | undefined, host?: string): string[] {
+  const out = new Map<string, string>();
+  const h = String(host ?? "").trim().toLowerCase();
+  for (const tok of String(v ?? "").split(/[\s,]+/)) {
+    const s = tok.trim();
+    if (!s) continue;
+    let path = s;
+    if (/^https?:\/\//i.test(s)) {
+      try { const u = new URL(s); path = u.pathname; } catch { continue; }
+    } else if (h && s.toLowerCase().startsWith(h + "/")) {
+      path = s.slice(h.length);
+    }
+    path = path.replace(/^\/+|\/+$/g, "").replace(/\/-\/.*$/, "").replace(/\.git$/, "");
+    // 세그먼트마다 글자·숫자가 하나는 있어야 한다 — '..' 같은 경로 조각은 프로젝트가 아니다.
+    if (!/^[\w.-]+(\/[\w.-]+)+$/.test(path) || path.split("/").some((seg) => !/[A-Za-z0-9_]/.test(seg))) continue;
+    if (!out.has(path.toLowerCase())) out.set(path.toLowerCase(), path);
+  }
+  return [...out.values()];
+}
+
+interface GlUser { id?: number; username?: string; name?: string; bot?: boolean }
+export interface GlIssue {
+  id?: number; iid: number; title?: string; description?: string | null; state?: string; web_url?: string;
+  author?: GlUser | null; labels?: string[]; assignees?: GlUser[]; milestone?: { title?: string } | null;
+  user_notes_count?: number; created_at?: string; updated_at?: string; closed_at?: string | null;
+  merged_at?: string | null; draft?: boolean; source_branch?: string; target_branch?: string;
+}
+export interface GlNote { id: number; body?: string | null; author?: GlUser | null; system?: boolean; created_at?: string; updated_at?: string }
+export interface GlRelease { tag_name: string; name?: string | null; description?: string | null; released_at?: string | null; created_at?: string; author?: GlUser | null; _links?: { self?: string } }
+
+const actorOf = (u: GlUser | null | undefined): RawItem["actor"] =>
+  u && (u.id != null || u.username) ? { external_id: u.id != null ? String(u.id) : undefined, display_name: u.username ?? u.name, is_bot: !!u.bot } : undefined;
+
+export function issueItem(project: string, host: string, i: GlIssue, mr: boolean): RawItem {
+  const mark = mr ? "!" : "#";
+  const kind = mr ? "MR" : "이슈";
+  const merged = mr && (i.state === "merged" || !!i.merged_at);
+  const body = `${kind} ${mark}${i.iid} ${i.title ?? ""}`.trim() + (i.description ? `\n\n${i.description}` : "");
+  return {
+    type: "message",
+    provenance: { category: "vcs", system: "gitlab", instance: host, external_id: `${project}${mark}${i.iid}`, external_url: i.web_url },
+    actor: actorOf(i.author),
+    container_ref: project, container_name: project,
+    title: i.title ?? undefined, body,
+    occurred_at: i.created_at, updated_at: i.updated_at ?? i.created_at,
+    fields: {
+      kind: mr ? "mr" : "issue", number: i.iid, state: i.state ?? null, draft: !!i.draft,
+      labels: i.labels ?? [], assignees: (i.assignees ?? []).map((a) => a.username).filter(Boolean),
+      milestone: i.milestone?.title ?? null, comments: i.user_notes_count ?? 0,
+      closed_at: i.closed_at ?? null, merged_at: merged ? (i.merged_at ?? null) : null,
+      source_branch: i.source_branch ?? null, target_branch: i.target_branch ?? null, project, host,
+    },
+    raw: i,
+  };
+}
+
+export function noteItem(project: string, host: string, parentIid: number, mr: boolean, n: GlNote): RawItem | null {
+  if (n.system) return null; // 라벨 변경·담당자 변경 같은 시스템 노트 — 사람의 말이 아니다
+  const mark = mr ? "!" : "#";
+  return {
+    type: "message",
+    provenance: { category: "vcs", system: "gitlab", instance: host, external_id: `${project}${mark}${parentIid}:n${n.id}` },
+    actor: actorOf(n.author),
+    container_ref: project, container_name: project,
+    parent_external_id: `${project}${mark}${parentIid}`,
+    body: n.body ?? "",
+    occurred_at: n.created_at, updated_at: n.updated_at ?? n.created_at,
+    fields: { kind: mr ? "mr_note" : "note", number: parentIid, note_id: n.id, project, host },
+    raw: n,
+  };
+}
+
+export function releaseItem(project: string, host: string, r: GlRelease): RawItem {
+  const title = `릴리스 ${r.tag_name}${r.name && r.name !== r.tag_name ? ` — ${r.name}` : ""}`.trim();
+  return {
+    type: "note",
+    provenance: { category: "vcs", system: "gitlab", instance: host, external_id: `${project}:release:${r.tag_name}`, external_url: r._links?.self },
+    actor: actorOf(r.author),
+    container_ref: project, container_name: project,
+    title, body: title + (r.description ? `\n\n${r.description}` : ""),
+    occurred_at: r.released_at ?? r.created_at, updated_at: r.released_at ?? r.created_at,
+    fields: { kind: "release", tag: r.tag_name, project, host },
+    raw: r,
+  };
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+async function glGet<T>(token: string, url: string): Promise<{ data: T; nextPage: string | null }> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(url, { headers: { "PRIVATE-TOKEN": token } });
+    if (res.status === 429 && attempt < 3) {
+      const wait = Math.min(Number(res.headers.get("retry-after") ?? 5) * 1000, 90_000);
+      // 이 대기는 최대 90초 × 3회다. 조용히 자면 정체 감지가 노리는 무출력 창이 그대로 남으므로 대기 사실을 남긴다.
+      console.warn(`gitlab: 속도 제한 — ${Math.round((wait > 0 ? wait : 5000) / 1000)}초 대기 (${attempt + 1}/4)`);
+      await res.text().catch(() => ""); await sleep(wait > 0 ? wait : 5000); continue;
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      const err = new Error(`GitLab ${res.status} ${url.replace(/^https?:\/\/[^/]+/, "")}${text ? ` — ${text.slice(0, 200)}` : ""}`);
+      (err as Error & { status?: number }).status = res.status;
+      throw err;
+    }
+    const nextPage = res.headers.get("x-next-page");
+    return { data: (await res.json()) as T, nextPage: nextPage && nextPage.trim() ? nextPage.trim() : null };
+  }
+  throw new Error(`GitLab 속도 제한이 풀리지 않습니다 — ${url}`);
+}
+
+export async function* pages<T>(token: string, base: string, label: string, onPage?: (label: string, n: number, got: number) => void): AsyncGenerator<T[]> {
+  let page: string | null = "1";
+  for (let n = 0; page && n < MAX_PAGES; n++) {
+    const r: { data: T[]; nextPage: string | null } = await glGet<T[]>(token, `${base}&page=${page}`);
+    const data = Array.isArray(r.data) ? r.data : [];
+    onPage?.(label, n + 1, data.length);
+    yield data;
+    page = r.nextPage;
+    if (page && n === MAX_PAGES - 1) console.warn(`gitlab: ${label} — 페이지 상한(${MAX_PAGES}) 도달, 나머지는 다음 run 이 이어갑니다`);
+  }
+}
+
+const statusOf = (e: unknown): number | undefined => (e as { status?: number })?.status;
+const on = (v: string | undefined, dflt: boolean): boolean => { const s = String(v ?? "").trim().toLowerCase(); return s ? !["off", "false", "0", "no"].includes(s) : dflt; };
+
+export const gitlabConnector: Connector = {
+  name: "gitlab",
+
+  async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
+    const cfg = await resolveConnectorConfig("gitlab");
+    const token = cfg.token;
+    if (!token) {
+      throw new Error("GitLab 토큰이 없습니다 — '토큰 출처'를 member:<구성원 id> 로 지정하거나(그 사람의 개인 액세스 토큰 read_api) 토큰 칸에 저장하세요.");
+    }
+    const host = String(cfg.host ?? "").trim().toLowerCase() || "gitlab.com";
+    const api = `https://${host}/api/v4`;
+    const projects = parseProjectList(cfg.projects, host);
+    if (projects.length === 0) {
+      // #2232 — 범위가 비면 «전체»(비공개 포함): 이 토큰의 계정이 구성원인 프로젝트를 전부 훑는다(github.ts 와 같은 결정).
+      for await (const page of pages<{ path_with_namespace?: string }>(
+        token, `${api}/projects?membership=true&simple=true&order_by=last_activity_at&per_page=${PAGE_SIZE}`, "프로젝트 전체 열거")) {
+        for (const pr of page) { const path = String(pr.path_with_namespace ?? "").trim(); if (path) projects.push(path); }
+      }
+      if (projects.length === 0) {
+        throw new Error("이 토큰으로 볼 수 있는 프로젝트가 하나도 없습니다 — 토큰 허용범위(read_api)를 확인하거나 '프로젝트'에 group/project 를 넣으세요.");
+      }
+    }
+    const includeMrs = on(cfg.include_mrs, true);
+    const includeReleases = on(cfg.include_releases, true);
+    const sinceIso = sinceFloor(opts?.since, cfg.backfill_since);
+    const since = sinceIso ? `&updated_after=${encodeURIComponent(sinceIso)}` : "";
+    const sinceMs = sinceIso ? Date.parse(sinceIso) : NaN;
+
+    const progress = makeProgressLogger();
+    const onPage = (label: string, n: number, got: number) => progress(`gitlab: ${label} — ${n}페이지 ${got}건`);
+    let started = 0;
+    for (const project of projects) {
+      const pp = `${api}/projects/${encodeURIComponent(project)}`;
+      progress(`gitlab: [${++started}/${projects.length}] ${project} 시작`, true);
+      try {
+        const kinds: Array<{ mr: boolean; path: string }> = [{ mr: false, path: "issues" }, ...(includeMrs ? [{ mr: true, path: "merge_requests" }] : [])];
+        for (const k of kinds) {
+          for await (const page of pages<GlIssue>(token, `${pp}/${k.path}?scope=all&order_by=updated_at&sort=asc&per_page=${PAGE_SIZE}${since}`, `${project} ${k.path}`, onPage)) {
+            for (const i of page) {
+              yield issueItem(project, host, i, k.mr);
+              if ((i.user_notes_count ?? 0) > 0) {
+                for await (const notes of pages<GlNote>(token, `${pp}/${k.path}/${i.iid}/notes?order_by=updated_at&sort=asc&per_page=${PAGE_SIZE}`, `${project} ${k.path}/${i.iid} notes`, onPage)) {
+                  for (const n of notes) { const it = noteItem(project, host, i.iid, k.mr, n); if (it) yield it; }
+                }
+              }
+            }
+          }
+        }
+        if (includeReleases) {
+          progress(`gitlab: ${project} releases 조회`);
+          const r = await glGet<GlRelease[]>(token, `${pp}/releases?per_page=${PAGE_SIZE}`);
+          for (const rel of Array.isArray(r.data) ? r.data : []) {
+            const t = Date.parse(rel.released_at ?? rel.created_at ?? "");
+            if (Number.isFinite(sinceMs) && Number.isFinite(t) && t < sinceMs) continue;
+            yield releaseItem(project, host, rel);
+          }
+        }
+      } catch (e) {
+        const st = statusOf(e);
+        if (st === 401) throw e;
+        if (st === 404 || st === 403) { console.warn(`gitlab: ${project} 건너뜀 — ${(e as Error).message}`); continue; }
+        throw e;
+      }
+    }
+  },
+};

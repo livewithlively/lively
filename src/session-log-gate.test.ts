@@ -64,7 +64,9 @@ const base = { enabled: true, harnesses: ["claude"], requester: "alice", harness
 }
 
 // ── 웹뷰 열람 게이트(checkViewGate) — 트랜스크립트 전문 열람 인가(프라이버시). ──
-const v = { requester: "alice", owner: null as string | null, viewPolicy: "attach", isProjectMember: false };
+//  #1876 S2 — attach 의 허용 대상이 «프로젝트 멤버» 에서 «그 세션에 초대된 사람» 으로 바뀌었다.
+//   명제는 그대로다(소유자 통과 · owner 정책은 비소유자 거부 · attach 는 허용 대상만) — 축만 초대로 옮긴다.
+const v = { requester: "alice", owner: null as string | null, viewPolicy: "attach", invited: false };
 {
   // 소유자는 정책 무관 항상 통과.
   assert.equal(checkViewGate({ ...v, owner: "alice", viewPolicy: "owner" }), null, "소유자는 owner 정책서도 통과");
@@ -72,28 +74,28 @@ const v = { requester: "alice", owner: null as string | null, viewPolicy: "attac
   ok("열람 — 소유자는 언제나 자기 로그 통과");
 }
 {
-  // 🔴 owner 정책 + 비소유자 → 403(프로젝트 멤버여도 막힌다 — owner 정책은 소유자 전용).
-  assert.equal(checkViewGate({ ...v, owner: "bob", viewPolicy: "owner", isProjectMember: true })?.status, 403,
-    "owner 정책은 멤버여도 비소유자 거부");
-  ok("🔴 열람 — owner 정책 + 비소유자(멤버여도) → 403");
+  // 🔴 owner 정책 + 비소유자 → 403(초대받았어도 막힌다 — owner 정책은 소유자 전용).
+  assert.equal(checkViewGate({ ...v, owner: "bob", viewPolicy: "owner", invited: true })?.status, 403,
+    "owner 정책은 초대받았어도 비소유자 거부");
+  ok("🔴 열람 — owner 정책 + 비소유자(초대받았어도) → 403");
 }
 {
-  // attach 정책: 비소유자라도 프로젝트 멤버면 통과, 아니면 403.
-  assert.equal(checkViewGate({ ...v, owner: "bob", viewPolicy: "attach", isProjectMember: true }), null,
-    "attach + 프로젝트 멤버 → 통과");
-  assert.equal(checkViewGate({ ...v, owner: "bob", viewPolicy: "attach", isProjectMember: false })?.status, 403,
-    "🔴 attach 라도 비멤버 → 403");
-  ok("열람 — attach: 멤버 통과 · 비멤버 403");
+  // attach 정책: 비소유자라도 **초대받았으면** 통과, 아니면 403.
+  assert.equal(checkViewGate({ ...v, owner: "bob", viewPolicy: "attach", invited: true }), null,
+    "attach + 초대받음 → 통과");
+  assert.equal(checkViewGate({ ...v, owner: "bob", viewPolicy: "attach", invited: false })?.status, 403,
+    "🔴 attach 라도 초대 없으면 → 403");
+  ok("열람 — attach: 초대받은 사람 통과 · 그 외 403");
 }
 {
-  // 로그 소유자 미정(owner=null, 아직 아무도 안 씀): owner 정책이면 403, attach+멤버면 빈 로그 열람 허용.
+  // 로그 소유자 미정(owner=null, 아직 아무도 안 씀): owner 정책이면 403, attach+초대면 빈 로그 열람 허용.
   assert.equal(checkViewGate({ ...v, owner: null, viewPolicy: "owner" })?.status, 403, "owner 미정+owner정책 → 403");
-  assert.equal(checkViewGate({ ...v, owner: null, viewPolicy: "attach", isProjectMember: true }), null, "owner 미정+attach멤버 → 통과");
-  ok("열람 — 소유자 미정 시 owner정책 403 · attach멤버 통과");
+  assert.equal(checkViewGate({ ...v, owner: null, viewPolicy: "attach", invited: true }), null, "owner 미정+attach초대 → 통과");
+  ok("열람 — 소유자 미정 시 owner정책 403 · attach초대 통과");
 }
 {
   // 🔴 신원 부재 → 403(최우선).
-  assert.equal(checkViewGate({ ...v, requester: "", owner: "", viewPolicy: "attach", isProjectMember: true })?.status, 403,
+  assert.equal(checkViewGate({ ...v, requester: "", owner: "", viewPolicy: "attach", invited: true })?.status, 403,
     "requester 빈 문자열 → 403");
   ok("🔴 열람 — 신원 부재 → 403");
 }

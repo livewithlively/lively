@@ -12,9 +12,7 @@ export async function runDistillInject(params: Record<string, unknown>): Promise
   // #1289 증류기 해소. 세션은 한 번에 한 작업이라 **매 틱 하나만** 주입한다(N개 동시 주입은 세션에 쌓이기만 한다).
   const pick = await pickDistillerBatch(params, { one: true });
   if (pick.error) return { status: "error", summary: { error: pick.error } };
-  if (!pick.batches.length) {
-    return { status: "ok", summary: { skipped: "미증류 자료 없음", undistilled: 0, session: sessionRef, distillers: pick.considered } };
-  }
+  if (!pick.batches.length) return idleSummary(pick.considered, { session: sessionRef });
   const b = pick.batches[0];
 
   let tmuxSession: string;
@@ -40,9 +38,7 @@ export async function runDistillInject(params: Record<string, unknown>): Promise
 export async function runDistillHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
   const pick = await pickDistillerBatch(params, { one: false });
   if (pick.error) return { status: "error", summary: { error: pick.error } };
-  if (!pick.batches.length) {
-    return { status: "ok", summary: { skipped: "미증류 자료 없음", undistilled: 0, distillers: pick.considered } };
-  }
+  if (!pick.batches.length) return idleSummary(pick.considered, {});
   const out: unknown[] = [];
   for (const b of pick.batches) {
     // 의뢰자 우선순위: 잡 params > 증류기 설정 > 잡 created_by.
@@ -87,7 +83,7 @@ async function applyPromptOverride(params: Record<string, unknown>, b: DistillBa
 //  · 증류기가 하나도 등록 안 됐으면 **구 전역 동작으로 폴백**(기존 잡 무중단 + 증류기 설정 전에도 바로 쓸 수 있게).
 async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: boolean }):
   Promise<{ batches: DistillBatch[]; considered: number; error?: string }> {
-  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge } = await import("../../org/distill/distiller.js");
+  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources } = await import("../../org/distill/distiller.js");
   const policySummary = await buildDistillPolicySummary();
 
   let all: Awaited<ReturnType<typeof listDistillers>>;
@@ -142,7 +138,44 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
     });
     if (opt.one) break;   // 세션 주입판 — 매 틱 하나만.
   }
+
+  //  ── 아무도 안 집는 자료를 폴백이 받는다(#1631, 원준님 2026-08-31) ──
+  //   종전엔 위 폴백이 «켜진 증류기가 하나도 없을 때» 만 돌았다. 그래서 0개 켜면 전부 증류되고,
+  //   2/7 개 켜면 나머지 5개 몫이 통째로 굶었다 — **반만 설정한 상태가 아예 안 한 상태보다 나빴다.**
+  //   실측: 자료 12건이 방치된 채 잡은 매번 «정상» 이었다(원준님 매니지드 워크스페이스).
+  //  ⚠ «인박스가 비었다» 가 아니라 «어느 켜진 레인의 **스코프에도** 안 든다» 로 재야 한다.
+  //   인박스는 이미 판정(seen)한 것을 빼므로, 처리 중인 자료까지 방치로 세면 **두 번 증류**하게 된다.
+  if (!batches.length || !opt.one) {
+    const stranded = await listStrandedSources(enabled, 50, null).catch(() => [] as Record<string, unknown>[]);
+    if (stranded.length) {
+      batches.push({
+        distillerId: null, key: null, ids: stranded.map((s2) => Number(s2.id)), backlog: stranded.length,
+        prompt: buildDistillPrompt(stranded.length, policySummary), targeting: null,
+        requester: null, model: null, effort: null,
+      });
+    }
+  }
   return { batches, considered: enabled.length };
+}
+
+//  «할 일 없음» 을 말하기 전에 **실제로 센다**(#1631, 원준님 2026-08-31).
+//   종전엔 배치가 안 잡히면 무조건 `ok · "미증류 자료 없음"` 이었다. 그 문장이 아는 것은
+//   «켜진 레인들의 인박스가 비었다» 뿐인데 «세상에 미증류 자료가 없다» 로 말했다 —
+//   자료 12건이 방치된 채 초록불이 켜져 있었다(실측). 0 이 «없다» 인지 «못 봤다» 인지 구분되지 않으면
+//   그건 상태 표시가 아니다.
+async function idleSummary(considered: number, extra: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
+  let undistilled = 0;
+  try { const { countUndistilled } = await import("../../org/distill/distiller.js"); undistilled = await countUndistilled(null); }
+  catch { /* 못 세면 아래에서 -1 로 «못 셌다» 를 말한다 */ undistilled = -1; }
+  if (undistilled === 0) return { status: "ok", summary: { skipped: "미증류 자료 없음", undistilled: 0, distillers: considered, ...extra } };
+  if (undistilled < 0) {
+    return { status: "error", summary: { error: "미증류 자료 수를 세지 못했습니다 — «없음» 인지 «못 봄» 인지 구분할 수 없어 정상으로 보고하지 않습니다.", distillers: considered, ...extra } };
+  }
+  //  남아 있는데 배치가 안 나왔다 = 켜진 레인들이 이미 판정했고 처리 중이라는 뜻이다(방치는 위에서 폴백이 가져간다).
+  //  «없음» 이라고 말하지 않는다 — 몇 건이 어디에 있는지 그대로 적는다.
+  return { status: "ok", summary: {
+    skipped: "켜진 증류기가 이미 판정함(처리 중) — 새로 낼 배치 없음",
+    undistilled, stranded: 0, distillers: considered, ...extra } };
 }
 
 // 판정 기록 — 실패해도 배치를 깨지 않는다(다음 배치가 그 자료를 다시 볼 뿐, 지금까지의 동작으로 되돌아간다).

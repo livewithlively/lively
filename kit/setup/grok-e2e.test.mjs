@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 // ── grok 존재 판정(skip 게이트) ──
 function grokBin() {
@@ -159,7 +160,7 @@ process.stdin.on("data", (c) => {
 });
 `);
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "grok", "--clone-root", BUNDLE],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`설치기 exit=${r.status}\n${r.stderr || r.stdout}`);
   // 러너 5종을 캡처 스텁으로 치환(관측 장치) — 어댑터·harness-registry 는 진짜 그대로 둔다.
   for (const f of ["run-custom.mjs", "work-flag.mjs", "session-preload.mjs", "sync-harness-assets.mjs", "stop-writeback-gate.mjs"]) {

@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { PassThrough } from "node:stream";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
+import { fileURLToPath } from "node:url";   // E24 가 하위프로세스로 진짜 stdio 를 띄우는 데 쓴다
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -81,6 +83,21 @@ function startProxy(serveMcpGateway) {
   return { send, sendRaw, waitFor, waitNotify, msgs, end: () => { input.end(); return done; } };
 }
 
+// real 상류(툴이 있는)에서 tools/list 가 non-empty 를 낼 때까지 새 id 로 짧게 재시도한다.
+//  왜: 게이트웨이는 상류 fetch 가 일시 실패하면 [] 로 폴백하고 복구는 list_changed 로 민다(최종일관성).
+//  Windows loopback 은 mock 서버 accept 직후 첫 연결이 간헐 reset 돼 그 폴백을 밟는데(E14 실측 flaky),
+//  단발 assert 는 이 최종일관성에 취약하다. non-empty 를 기다려 흡수한다(정상 경로는 첫 시도에 바로 반환).
+//  ⚠ 상류 미도달(빈 목록이 정답)인 케이스엔 쓰지 않는다 — real 상류 + tools 존재 케이스 전용.
+async function listUntilTools(p, startId, tries = 10) {
+  let last;
+  for (let k = 0; k < tries; k++) {
+    p.send({ jsonrpc: "2.0", id: startId + k, method: "tools/list" });
+    last = await p.waitFor(startId + k);
+    if ((last?.result?.tools || []).length > 0) return last;
+  }
+  return last;
+}
+
 const HOME = mkdtempSync(join(tmpdir(), "mcpgw-"));
 const LIVELY = join(HOME, ".lively");
 mkdirSync(LIVELY, { recursive: true });
@@ -99,6 +116,11 @@ process.env.LIVELY_MCP_LIST_TIMEOUT_MS = "1500";
 process.env.LIVELY_MCP_CALL_TIMEOUT_MS = "1500";
 delete process.env.LIVELY_GATEWAY_URL;
 delete process.env.LIVELY_TOKEN;
+//  ⚠ 세션 자격도 반드시 지운다(#2251) — 라이블리 세션 **안에서** 테스트를 돌리면 게이트웨이가 그 pane 에
+//   심어 준 LIVELY_MCP_TOKEN 이 상속돼, 토큰 우선순위를 재는 E11·E12 가 진짜 토큰을 집는다.
+//   실측 2026-08-28: E11 이 `Bearer lvk_…`(실 토큰)로 실패했다. CI 는 깨끗한 env 라 안 잡혔다 —
+//   env 를 읽는 테스트는 **자기가 읽는 변수를 전부** 스크럽해야 한다.
+delete process.env.LIVELY_MCP_TOKEN;
 
 const { serveMcpGateway, callTimeoutFor } = await import("./lively-mcp-gateway.mjs");
 
@@ -125,8 +147,7 @@ try {
     setGw(up.url);
     process.env.LIVELY_TOKEN = "tok-env-stale";        // 스테일 env 를 일부러 심는다(#916)
     const p = startProxy(serveMcpGateway);
-    p.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    const r = await p.waitFor(2);
+    const r = await listUntilTools(p, 2);
     const got = (r?.result?.tools || []).map((t) => t.name);
     let cached = null; try { cached = JSON.parse(readFileSync(CACHE, "utf8")); } catch { /* */ }
     const h = up.seen[0]?.headers || {};
@@ -145,8 +166,7 @@ try {
     const up = await startUpstream({ tools: T(["j1"]), sse: false });
     setGw(up.url);
     const p = startProxy(serveMcpGateway);
-    p.send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
-    const r = await p.waitFor(3);
+    const r = await listUntilTools(p, 3);
     check("E14 tools/list — JSON 응답 해석", (r?.result?.tools || []).map((t) => t.name).join() === "j1", `r=${JSON.stringify(r?.result)}`);
     await p.end(); await up.close();
   }
@@ -283,6 +303,36 @@ try {
     await p.end(); await up.close();
   }
 
+  // E24 — #2234 세션 MCP 토큰이 **파일을 이긴다**(홈이 공유인 박스에서 남의 신원으로 나가던 것).
+  //  E11 과 짝이다: 셸 rc 가 만든 LIVELY_TOKEN 은 파일의 스냅샷이라 파일이 이기고(E11), 게이트웨이가
+  //  pane 에 심은 LIVELY_MCP_TOKEN 은 그 세션 주인 앞으로 발급된 정본이라 파일을 이긴다.
+  {
+    const up = await startUpstream({ tools: T(["s1"]) });
+    setGw(up.url); setTok("tok-file");
+    process.env.LIVELY_TOKEN = "tok-env-stale";              // 스테일 셸 export 가 함께 있어도
+    process.env.LIVELY_MCP_TOKEN = "tok-session-owner";      // 세션 자격이 최우선이어야 한다
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 17, method: "tools/list" });
+    await p.waitFor(17);
+    check("E24 #2234 — 세션 MCP 토큰이 파일·스테일 env 를 모두 이긴다",
+      up.seen[0]?.headers?.authorization === "Bearer tok-session-owner", `auth=${up.seen[0]?.headers?.authorization}`);
+    delete process.env.LIVELY_MCP_TOKEN; delete process.env.LIVELY_TOKEN;
+    await p.end(); await up.close();
+  }
+
+  // E25 — 세션 토큰이 없으면 종전과 **글자 그대로 같다**(구 게이트웨이·격리 박스·개인 노트북 무회귀).
+  {
+    const up = await startUpstream({ tools: T(["s2"]) });
+    setGw(up.url); setTok("tok-file");
+    delete process.env.LIVELY_MCP_TOKEN;
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 18, method: "tools/list" });
+    await p.waitFor(18);
+    check("E25 세션 토큰 부재 → 종전대로 파일 토큰",
+      up.seen[0]?.headers?.authorization === "Bearer tok-file", `auth=${up.seen[0]?.headers?.authorization}`);
+    await p.end(); await up.close();
+  }
+
   // E12 — 토큰 파일이 없으면 env 로 떨어진다(프로비저닝·컨테이너 경로 보존).
   {
     const up = await startUpstream({ tools: T(["x"]) });
@@ -358,6 +408,41 @@ try {
       call("delegate_run", { wait_sec: 600 }) === 600_000 + slack, `got=${call("delegate_run", { wait_sec: 600 })}`);
     check("E23 delegate_run(wait=false, 즉시접수) → 기본 CALL 타임아웃(길게 줄 이유 없음)",
       call("delegate_run", { wait: false, wait_sec: 600 }) === base, `got=${call("delegate_run", { wait: false, wait_sec: 600 })}`);
+  }
+  // ── E24 피어(하네스) 소멸 = 이 프로세스가 죽어야 하는 유일한 경우 (#2213 릭 회귀) ──────────
+  //  왜 하위프로세스로 재는가: 이 방어는 **진짜 stdio 로 서빙할 때만** 무장한다(가짜 스트림으로 무장하면
+  //  테스트 러너가 exit(0) 으로 끝나 실패가 성공으로 둔갑한다). 그래서 이 한 건만 실제로 띄워서 잰다.
+  //  실측 배경(2026-08-28): 이 방어가 없어 고아 19개가 CPU 1,540%(코어 9.4개)를 태웠다 — 최장 1일 11시간.
+  //  기전은 재귀였다 — stdout 이 깨진 뒤 write 가 비동기 EPIPE → 리스너 없음 → uncaughtException →
+  //  그 핸들러의 log() 가 **역시 깨진 stderr** 로 쓰며 또 EPIPE → 무한 고리.
+  {
+    const { spawn } = await import("node:child_process");
+    const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+    const entry = fileURLToPath(new URL("./lively-mcp-gateway.mjs", import.meta.url));
+    const child = spawn(process.execPath, [entry], {
+      stdio: ["pipe", "pipe", "pipe"],
+      // 부모 감시는 끈다 — 여기서 재는 것은 «깨진 파이프» 축 하나다(부모는 살아 있다).
+      env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, LIVELY_MCP_PARENT_WATCH_MS: "0" },
+    });
+    child.stdout.on("data", () => {});
+    child.stderr.on("data", () => {});
+    // ⚠ exit 리스너는 **spawn 직후** 단다. 아래 write 들 사이에 이미 죽으면 그 이벤트는 한 번 나고 끝이라,
+    //  나중에 달면 영영 못 받는다(그 실수로 통과해야 할 테스트가 FAIL 로 나왔다).
+    let exitedFlag = false;
+    const exitOnce = new Promise((r) => child.on("exit", () => { exitedFlag = true; r(true); }));
+    await nap(1500);
+    try { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) + "\n"); } catch { /* */ }
+    await nap(1000);
+    // 하네스가 죽은 상황 그대로: 읽는 쪽이 사라진다(stdin 은 형제가 물고 있어 EOF 가 안 온다).
+    child.stdout.destroy();
+    child.stderr.destroy();
+    for (let i = 0; i < 3; i++) {
+      try { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2 + i, method: "ping" }) + "\n"); } catch { /* */ }
+      await nap(150);
+    }
+    const exited = exitedFlag || await Promise.race([exitOnce, nap(8000).then(() => false)]);
+    check("E26 피어가 사라지면 스스로 종료한다(고아 스핀 회귀 #2213)", exited === true, "8초 안에 종료 안 됨 = 릭 재발");
+    if (!exited) { try { child.kill("SIGKILL"); } catch { /* */ } }
   }
 } finally {
   try { rmSync(HOME, { recursive: true, force: true }); } catch { /* */ }

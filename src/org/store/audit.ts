@@ -4,7 +4,7 @@
 import crypto from "node:crypto";
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
-import { SINGLE_TENANT_ID } from "../../db/tenant-column.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { redactDeep } from "../ingest/redact.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
@@ -56,7 +56,7 @@ export async function audit(
      VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,
        CASE WHEN $6::text IS NULL THEN NULL
             ELSE COALESCE((SELECT CASE m.kind WHEN 'agent' THEN 'ai' WHEN 'system' THEN 'system' WHEN 'human' THEN 'human' ELSE 'unknown' END
-                             FROM org_member m WHERE m.id = $6 AND m.tenant_id = '${SINGLE_TENANT_ID}'::uuid), 'unknown') END,
+                             FROM org_member m WHERE m.id = $6 AND m.tenant_id = ${TENANT_DEFAULT_EXPR}), 'unknown') END,
        $10)`,
     [entity, key, op, b, a, actor ?? null, source ?? null,
      m?.tokenHashPrefix ?? null, m?.ip ?? null, sourceToChannel(source)],

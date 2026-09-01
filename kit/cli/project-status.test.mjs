@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import { pathWith, writeNoopBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 const pExecFile = promisify(execFile);
@@ -65,7 +66,7 @@ const STUB_BIN = join(BOX, "stub-bin");
 mkdirSync(STUB_BIN, { recursive: true });
 writeNoopBin(STUB_BIN, "claude");
 const CHILD_ENV = {
-  ...process.env,
+  ...process.env, ...offlineLivelyEnv(),
   PATH: pathWith(STUB_BIN),
   LIVELY_HOME: HOME,
   // ⚠ 셸에 CLAUDE_CONFIG_DIR 이 있으면 CLI 가 **실제** 프로필 설정(.claude.json)을 읽는다 — 명시적으로 샌드박스로 덮는다.

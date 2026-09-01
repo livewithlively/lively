@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { HARNESS, mcpMatcher, toolMatcher } from "./harness-registry.mjs";
 import { HOOK_SCRIPTS } from "../setup/kit-manifest.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ADAPTER = join(HOOKS_DIR, "antigravity-adapter.mjs");
@@ -85,7 +86,7 @@ process.stdin.on("end", () => {
 
 const runAdapter = (event, payload) => spawnSync(process.execPath, [ADAPTER, event], {
   input: typeof payload === "string" ? payload : JSON.stringify(payload), encoding: "utf8", timeout: 30000,
-  env: { ...process.env, LIVELY_HOME: SB },
+  env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: SB },
 });
 const outOf = (r) => { try { return JSON.parse(String(r.stdout || "").trim()); } catch { return { __invalid: String(r.stdout).slice(0, 120) }; } };
 const capOf = (name) => {
@@ -186,6 +187,75 @@ try {
   {
     const r = runAdapter("PreToolUse", { ...BASE, toolCall: { name: "run_command", args: {} } });
     eq("R17[S17] stdout 은 JSON 한 줄", String(r.stdout).trim().split("\n").filter(Boolean).length, 1);
+  }
+
+  // ── 사람에게 되묻는 길 (#2439) ────────────────────────────────────────────────
+  //  antigravity 헤드리스는 승인을 못 묻는다 — 그래서 훅이 게이트웨이의 문에 물어 **사람의 답**을 가져온다.
+  //  ⚠ 켜는 축은 파일이 아니라 **자식 env** 다(훅 설정은 전역 한 벌이라 세션마다 못 바꾼다).
+  {
+    const { createServer } = await import("node:http");
+    const seen = [];
+    let reply = { ok: true, allow: true, scope: "once" };
+    const srv = createServer((req, res) => {
+      let b = ""; req.setEncoding("utf8");
+      req.on("data", (c) => { b += c; });
+      req.on("end", () => {
+        seen.push({ auth: req.headers["x-lively-ask"], body: (() => { try { return JSON.parse(b); } catch { return null; } })() });
+        const t = JSON.stringify(reply);
+        res.writeHead(200, { "content-type": "application/json" }); res.end(t);
+      });
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${srv.address().port}/ask`;
+    const askEnv = { LIVELY_ASK_URL: url, LIVELY_ASK_TOKEN: "tok-123", LIVELY_ASK_SESSION: "box-x" };
+    //  ⚠ 여기서만 **비동기로** 띄운다 — spawnSync 는 부모의 이벤트루프를 막아 버려서, 부모가 들고 있는
+    //   이 스텁 서버가 요청을 영영 못 받는다(실측: 요청이 도착조차 안 하고 훅이 timeout 에 죽는다).
+    //   실제 배치에서는 훅을 **agy(별개 프로세스)** 가 띄우고 문은 게이트웨이에 있으므로 이 교착이 없다.
+    //   즉 이건 하네스 사정이지 어댑터 계약이 아니다 — 그래서 계약을 바꾸지 않고 실행 방식만 바꾼다.
+    const { spawn } = await import("node:child_process");
+    const runAsk = (payload, extra = {}) => new Promise((resolve) => {
+      const ch = spawn(process.execPath, [ADAPTER, "PreToolUse"], {
+        env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: SB, ...askEnv, ...extra },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = "";
+      ch.stdout.setEncoding("utf8");
+      ch.stdout.on("data", (c) => { out += c; });
+      const done = setTimeout(() => { try { ch.kill("SIGKILL"); } catch { /* 이미 죽었다 */ } }, 30000);
+      ch.on("close", () => { clearTimeout(done); resolve({ stdout: out }); });
+      ch.stdin.end(JSON.stringify(payload));
+    });
+
+    // ★ env 가 없으면 **종전 그대로** — 터미널에서 사람이 직접 띄운 agy 를 건드리지 않는다.
+    eq("R18 env 없으면 묻지 않는다(중립 ask)",
+      outOf(runAdapter("PreToolUse", { ...BASE, toolCall: { name: "run_command", args: { CommandLine: "ls" } } })).decision, "ask");
+    eq("R18b 그때 문을 두드리지도 않는다", seen.length, 0);
+
+    reply = { ok: true, allow: true, scope: "once" };
+    eq("R19 사람이 허용 → decision:allow (헤드리스 auto-deny 를 사람의 답이 대체한다)",
+      outOf(await runAsk({ ...BASE, stepIdx: 3, toolCall: { name: "run_command", args: { CommandLine: "ls" } } })).decision, "allow");
+    eq("R19b 토큰을 헤더로 보낸다(URL 에 실으면 ps·로그에 남는다)", seen.at(-1)?.auth, "tok-123");
+    eq("R19c 세션과 툴을 실어 보낸다", [seen.at(-1)?.body?.session, seen.at(-1)?.body?.toolName], ["box-x", "run_command"]);
+
+    reply = { ok: true, allow: false, scope: "once" };
+    eq("R20 사람이 거부 → decision:deny",
+      outOf(await runAsk({ ...BASE, stepIdx: 4, toolCall: { name: "run_command", args: { CommandLine: "rm -rf /" } } })).decision, "deny");
+
+    // 선택지 — 스트림이 비워서 주는 내용이 **훅에는** 온다. 그걸 질문으로 올린다.
+    reply = { ok: true, allow: true, scope: "once", answers: { "딸기? 사과?": ["딸기"] } };
+    const q = await runAsk({ ...BASE, stepIdx: 5, toolCall: { name: "ask_question", args: { Question: "딸기? 사과?", Options: ["딸기", "사과"] } } });
+    eq("R21 ask_question 은 **질문**으로 올라간다(선택지 포함)",
+      [seen.at(-1)?.body?.questions?.length, seen.at(-1)?.body?.questions?.[0]?.options?.length], [1, 2]);
+    eq("R21b 고른 답이 agent 에게 말로 돌아간다", String(outOf(q).reason || "").includes("딸기"), true);
+
+    // 모르는 인자 모양이면 **억지로 그리지 않는다** — 평범한 승인으로 접는다(헛것을 보여주지 않는다).
+    reply = { ok: true, allow: true, scope: "once" };
+    await runAsk({ ...BASE, stepIdx: 6, toolCall: { name: "ask_question", args: { Weird: 1 } } });
+    eq("R22 인자 모양을 모르면 질문을 지어내지 않는다", seen.at(-1)?.body?.questions, undefined);
+
+    // ★ 문이 죽어 있어도 **유효한 답 한 줄**(fail-closed deny 를 부르지 않는다).
+    await new Promise((r) => srv.close(r));
+    eq("R23 문이 닫혀 있어도 유효 decision", outOf(await runAsk({ ...BASE, stepIdx: 7, toolCall: { name: "run_command", args: {} } })).decision, "ask");
   }
 
   // 배선 단언(⓪) — 관측 장치 자체가 살아 있었나: 위 케이스들에서 스텁 캡처가 실제로 쌓였다(R3b·R9b 가 그 증거).

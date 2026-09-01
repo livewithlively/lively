@@ -231,7 +231,51 @@ t("attach 요약 — 내 자식만 children, 고아는 별도 축, 남의 자식
 
 t("attach 요약 — 하나도 없으면 0/0 이고 최고령은 null(0 이 아니다)", () => {
   const s = summarizeAttachProcs("  1     0 21:06:27 /sbin/init\n", 4242);
-  assert.deepEqual(s, { children: 0, orphans: 0, oldestChildSec: null });
+  assert.deepEqual(s, { children: 0, orphans: 0, oldestChildSec: null, orphanMcp: 0, oldestOrphanMcpSec: null });
+});
+
+// ── 고아 MCP 축 (#2213) ──────────────────────────────────────────────────────
+//  사양: 부모를 잃은(ppid=1) stdio MCP 서버를 센다. 부모가 살아 있으면 그 세션이 **쓰는 중**이라 정상이다.
+//  왜 필요한가(2026-08-28 dev 맥미니 실측): 하네스가 죽어도 이 자식들이 안 죽어 고아 19개가
+//  CPU 1,540%(코어 9.4개)를 태웠는데 **어떤 화면에도 안 떴다** — 리퍼는 tmux 세션만 세므로
+//  그 바깥의 프로세스는 원리적으로 안 잡힌다.
+t("고아 MCP — ppid=1 인 세 형태를 세고, 부모 살아있는 것·MCP 아닌 것은 안 센다", () => {
+  const out = [
+    "  200     1 07:25:46 /opt/homebrew/opt/node@22/bin/node /Users/x/.lively/lib/lively.mjs mcp",       // ① 고아 gateway 프록시
+    "  201     1 03:00:00 /usr/bin/node /Users/x/.lively/lib/lively.mjs mcp-local",                       // ② 고아 local
+    "  202     1 02:00:00 /usr/bin/node /Users/x/.lively/lib/lively-mcp-gateway.mjs",                     // ③ 고아 직접실행형
+    "  203  9001 05:00:00 /usr/bin/node /Users/x/.lively/lib/lively.mjs mcp",                             // ④ 부모 살아있음 → 정상(안 센다)
+    "  204     1 09:00:00 /usr/bin/node /Users/x/.lively/lib/lively.mjs status",                          // ⑤ MCP 아님
+    "  205     1 04:00:00 /usr/bin/tmux -u -CC attach -t box-test-zzzz",                                  // ⑥ attach 축(다른 축)
+    " 4242     1 21:06:27 /usr/bin/node /Users/x/.lively/lib/lively.mjs mcp",                             // ⑨ 나 자신 → 제외
+  ].join("\n");
+  const s = summarizeAttachProcs(out, 4242);
+  assert.equal(s.orphanMcp, 3, "①②③ 만 — 부모가 살아 있거나(④) MCP 가 아니면(⑤) 세지 않는다");
+  assert.equal(s.orphans, 1, "⑥ attach 축은 그대로 — 두 축이 서로 오염되지 않는다");
+});
+
+t("고아 MCP — 최고령은 최댓값이고, 하루 넘는 나이도 정확히 읽는다", () => {
+  // ⑩ 나이가 길수록 «오래 안 보였다»는 뜻이라 경보 판정의 핵심 값이다. 실측 최고령이 1일 11시간이었다.
+  const out = [
+    "  200     1 07:25:46 /usr/bin/node /Users/x/.lively/lib/lively.mjs mcp",
+    "  201     1 1-11:19:25 /usr/bin/node /Users/x/.lively/lib/lively.mjs mcp",   // 최고령
+    "  202     1 00:30:00 /usr/bin/node /Users/x/.lively/lib/lively.mjs mcp",
+  ].join("\n");
+  const s = summarizeAttachProcs(out, 4242);
+  assert.equal(s.orphanMcp, 3);
+  assert.equal(s.oldestOrphanMcpSec, 127165, "1-11:19:25 = ((1*24+11)*60+19)*60+25");
+});
+
+t("고아 MCP — etime 컬럼이 없는 ps 여도 개수는 세고 나이만 모른다", () => {
+  // ⑧ 이번에 새로 얹은 축이 **부재 입력**을 만나는 행. 개수까지 0 으로 떨어지면 릭을 통째로 놓친다.
+  //  (그 환경에선 3번째 토큰이 이미 args 의 첫 조각이라 cmd 재조립 경로를 탄다.)
+  const out = [
+    "  200     1 /usr/bin/node /Users/x/.lively/lib/lively.mjs mcp",
+    "  201  9001 /usr/bin/node /Users/x/.lively/lib/lively.mjs mcp",   // 부모 살아있음 → 여전히 안 센다
+  ].join("\n");
+  const s = summarizeAttachProcs(out, 4242);
+  assert.equal(s.orphanMcp, 1, "나이를 못 읽어도 고아 판정(ppid)은 그대로 선다");
+  assert.equal(s.oldestOrphanMcpSec, null, "못 읽은 나이는 null — 0 으로 눕히면 ‘방금 떴다’로 오독된다");
 });
 
 t("attach 요약 — etime 컬럼이 없는 ps 여도 개수는 센다(나이만 모름)", () => {

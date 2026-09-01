@@ -16,6 +16,10 @@ import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js"
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
 import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
+import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
+import { resolveGithubTokenSource, githubVaultDeps } from "../org/credentials/github-token-source.js";
+import { resolveGitlabTokenSource, gitlabVaultDeps } from "../org/credentials/gitlab-token-source.js";
+import { resolveLinearTokenSource, linearVaultDeps } from "../org/credentials/linear-token-source.js";
 import { resolveGoogleTokenSource, googleVaultReader, isGoogleCollectorSystem } from "../org/credentials/google-token-source.js";
 
 /** 커넥터 설정 필드 1개의 메타데이터. 관리탭 폼·해소·(미래)암호화의 공용 기술. */
@@ -57,7 +61,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "slack",
     label: "Slack",
     guide: {
-      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Slack] 에서 계정을 연결한 뒤 '팀 자료로 모으기'를 켜면 이 수집기가 자동으로 만들어집니다(토큰 칸 비움, '토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우입니다. 토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Slack] 에서 계정을 연결한 뒤 '자료 가져오기'를 켜면 이 수집기가 자동으로 만들어집니다(토큰 칸 비움, '토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우입니다. 토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
       steps: [
         "api.slack.com/apps ▸ 앱 선택(없으면 [Create New App] ▸ From scratch — 워크스페이스 선택)",
         "[공개채널 전체를 훑을 때] OAuth & Permissions ▸ 'User Token Scopes': search:read, channels:read, users:read, users:read.email → [Install to Workspace] → 'User OAuth Token'(xoxp-…) 을 아래 User Token 에 저장. 채널 초대 불필요.",
@@ -74,7 +78,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "bot_token", env: "SLACK_BOT_TOKEN", secret: true, label: "Bot Token", hint: "xoxb-... — 봇이 초대된 채널만 수집(**비공개 채널 포함**). User Token 을 함께 넣으면 그쪽이 우선합니다" },
       // #1881 — 붙여넣기 대신 금고에서: [Slack 연결]로 저장된 토큰을 그대로 쓴다. 값이 있으면 위 두 칸·env 를 덮어쓴다.
       { key: "token_source", env: "SLACK_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Slack 연결]로 저장한 계정(공개채널 검색 수집) · bot = Lively 봇(초대된 채널·비공개 포함, 워크스페이스가 둘이면 bot:<team_id>) · 비우면 위 토큰 칸을 씁니다" },
-      { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "봇 모드 전용 — 채널명·id 를 공백·쉼표로 구분(비우면 봇이 초대된 전체). 예: hai솔루션_front hai솔루션_closing" },
+      { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "모을 채널 — 채널명·id 를 공백·쉼표로 구분(비우면 전체). 검색 모드(개인 연결)·봇 모드 **둘 다** 적용됩니다(#2243)" },
       { key: "noise_exclude", env: "SLACK_NOISE_EXCLUDE", secret: false, label: "제외 채널", hint: "수집에서 제외할 채널명을 공백·쉼표로 구분해 입력 (예: alerts monitoring) — 모니터링·알람 등 메시지가 많은 봇 채널에 사용합니다." },
       { key: "backfill_since", env: "SLACK_BACKFILL_SINCE", secret: false, label: "최초 수집 시작일", hint: "이 날짜 이후의 자료만 수집합니다 (YYYY-MM-DD, 비우면 활동이 있는 과거 전체를 자동 수집)" },
     ],
@@ -99,7 +103,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "notion",
     label: "Notion",
     guide: {
-      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Notion] 에서 '팀 자료로 모으기'를 켜면 노션이 여는 화면에서 모을 페이지만 고르면 됩니다 — 이 수집기가 자동으로 만들어지고 토큰 칸은 비워 둡니다('토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우(셀프호스팅 등)입니다. 노션은 '내부(Internal) 통합'의 시크릿 토큰으로 읽습니다. 통합 생성은 워크스페이스 오너만 가능합니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Notion] 에서 '자료 가져오기'를 켜면 노션이 여는 화면에서 모을 페이지만 고르면 됩니다 — 이 수집기가 자동으로 만들어지고 토큰 칸은 비워 둡니다('토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우(셀프호스팅 등)입니다. 노션은 '내부(Internal) 통합'의 시크릿 토큰으로 읽습니다. 통합 생성은 워크스페이스 오너만 가능합니다.",
       steps: [
         "notion.so/profile/integrations → [+ 새 통합] — 이름 자유, 연결된 워크스페이스 = 싱크할 워크스페이스, 종류 = 내부(Internal). (Internal 이 안 보이면 그 워크스페이스 오너가 아닌 것 — 오너에게 생성을 요청하세요)",
         "통합 ▸ 기능(Capabilities): '콘텐츠 읽기' 필수 + '댓글 읽기'·'사용자 정보(이메일 포함) 읽기' 권장",
@@ -112,8 +116,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     fields: [
       { key: "token", env: "NOTION_TOKEN", secret: true, required: true, label: "Integration Token", hint: "secret_..." },
       { key: "instance", env: "NOTION_INSTANCE", secret: false, label: "Instance", hint: "워크스페이스 식별자 (기본 default)" },
-      // #1881 — 붙여넣기 대신 금고에서: [팀 자료로 모으기]로 저장된 Lively 연결을 그대로 쓴다. 값이 있으면 위 토큰 칸·env 를 덮어쓴다.
-      { key: "token_source", env: "NOTION_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = [팀 자료로 모으기]로 저장된 Lively 연결(워크스페이스가 둘이면 org:<workspace_id>) · 비우면 위 Integration Token 칸을 씁니다" },
+      // #1881 — 붙여넣기 대신 금고에서: [자료 가져오기]로 저장된 Lively 연결을 그대로 쓴다. 값이 있으면 위 토큰 칸·env 를 덮어쓴다.
+      { key: "token_source", env: "NOTION_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = [자료 가져오기]로 저장된 Lively 연결(워크스페이스가 둘이면 org:<workspace_id>) · 비우면 위 Integration Token 칸을 씁니다" },
       // #551 무손실 싱크 옵션
       { key: "root_pages", env: "NOTION_ROOT_PAGES", secret: false, label: "루트 페이지", picker: "notion_pages", hint: "페이지 URL·슬러그·id 아무 형태나 쉼표구분 — 지정 시 그 서브트리만 싱크(비우면 통합에 공유된 전체). 공유 직후엔 search 인덱싱 지연이 있어 루트 지정이 즉시 반영에 유리" },
       { key: "exclude_pages", env: "NOTION_EXCLUDE_PAGES", secret: false, label: "제외 페이지", picker: "notion_pages", hint: "여기 지정한 페이지·DB 와 그 하위 전체를 싱크에서 제외(쉼표구분). 루트 안의 특정 서브트리를 빼거나 전체 공유 중 일부만 뺄 때. 이미 싱크된 항목은 다음 전체 싱크에서 자동 보관 처리(제외 해제 시 복원)" },
@@ -133,10 +137,84 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       url: "https://app.clickup.com/settings/apps",
     },
     fields: [
-      { key: "api_token", env: "CLICKUP_API_TOKEN", secret: true, required: true, label: "API Token", hint: "personal token (pk_...)" },
+      { key: "api_token", env: "CLICKUP_API_TOKEN", secret: true, label: "API Token", hint: "personal token (pk_...) — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "CLICKUP_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = 관리탭 자격 금고의 조직 공용 clickup_token · member:<구성원 id> = 그 사람이 [외부 앱 연결 ▸ ClickUp]에 저장한 토큰 · 비우면 위 API Token 칸을 씁니다" },
       { key: "include_list_ids", env: "CLICKUP_INCLUDE_LIST_IDS", secret: false, label: "포함 리스트", picker: "clickup_lists", hint: "설정 시 이 리스트만 싱크 (쉼표구분)" },
       { key: "exclude_list_ids", env: "CLICKUP_EXCLUDE_LIST_IDS", secret: false, label: "제외 리스트", picker: "clickup_lists", hint: "노이즈/샘플 리스트 (쉼표구분)" },
       { key: "container_list_id", env: "CLICKUP_CONTAINER_LIST_ID", secret: false, label: "컨테이너 리스트", picker: "clickup_lists", hint: "아웃바운드 create 대상 List" },
+    ],
+  },
+  // GitHub 커넥터(#2247) — 이슈·PR 대화·릴리스. 토큰은 금고(github_pat: PAT 또는 [GitHub 연결] 묶음)를 token_source 로 가리킨다.
+  github: {
+    system: "github",
+    label: "GitHub",
+    guide: {
+      intro: "고른 저장소의 이슈·PR 본문과 댓글, 릴리스 노트를 자료로 모읍니다. 토큰은 [외부 앱 연결 ▸ GitHub]에서 계정을 연결하면 그걸 그대로 씁니다(토큰 출처 member:<내 구성원 id>).",
+      steps: [
+        "[외부 앱 연결 ▸ GitHub]에서 [계정으로 연결](저장소 고르기)하거나 PAT 를 저장합니다",
+        "'토큰 출처'에 member:<내 구성원 id> 를 적습니다(토큰 칸은 비워 둡니다)",
+        "'저장소'에 owner/repo 를 넣습니다(공백·줄바꿈으로 여러 개, 주소를 그대로 붙여넣어도 됩니다) — 비우면 연결 화면에서 고른 저장소가 기본값입니다",
+      ],
+      url: "https://github.com/settings/tokens",
+    },
+    fields: [
+      { key: "token", env: "GITHUB_TOKEN", secret: true, label: "토큰", hint: "ghp_… / github_pat_… — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "GITHUB_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = 관리탭 자격 금고의 조직 공용 github_pat · member:<구성원 id> = 그 사람의 [GitHub 연결]/PAT · 비우면 위 토큰 칸을 씁니다" },
+      { key: "host", env: "GITHUB_HOST", secret: false, label: "호스트", hint: "기본 github.com — GitHub Enterprise 면 그 호스트" },
+      { key: "repos", env: "GITHUB_REPOS", secret: false, label: "저장소", hint: "owner/repo — 공백·줄바꿈으로 여러 개. GitHub 주소를 그대로 붙여넣어도 됩니다" },
+      { key: "include_prs", env: "GITHUB_INCLUDE_PRS", secret: false, label: "PR 포함", hint: "on(기본) | off — PR 본문·리뷰 댓글" },
+      { key: "include_releases", env: "GITHUB_INCLUDE_RELEASES", secret: false, label: "릴리스 포함", hint: "on(기본) | off — 릴리스 노트" },
+      //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
+      //   과거를 더 읽으려면 전량 다시 읽기가 필요하다(화면이 그 말을 한다).
+      { key: "backfill_since", env: "GITHUB_BACKFILL_SINCE", secret: false, label: "언제부터", hint: "YYYY-MM-DD — 비우면 볼 수 있는 과거 전체" },
+    ],
+  },
+  // GitLab 커넥터(#2247) — 이슈·MR 대화·릴리스. 개인 액세스 토큰(read_api)만 — [계정 로그인] 토큰(DCR)은 REST 불가.
+  gitlab: {
+    system: "gitlab",
+    label: "GitLab",
+    guide: {
+      intro: "고른 프로젝트의 이슈·MR 본문과 노트, 릴리스 노트를 자료로 모읍니다. 토큰은 [외부 앱 연결 ▸ GitLab]에 저장한 개인 액세스 토큰(read_api)을 그대로 씁니다 — 계정 로그인으로 받은 토큰으로는 GitLab 이 자료 읽기를 막습니다.",
+      steps: [
+        "GitLab ▸ 프로필 ▸ Preferences ▸ Access Tokens 에서 read_api 범위의 토큰을 만들어 [외부 앱 연결 ▸ GitLab]에 저장합니다(회사 GitLab 이면 호스트도 함께)",
+        "'토큰 출처'에 member:<내 구성원 id> 를 적습니다(토큰 칸은 비워 둡니다) — 호스트는 그 토큰의 호스트를 따라갑니다",
+        "'프로젝트'에 group/project 경로를 넣습니다(공백·줄바꿈으로 여러 개, 주소를 그대로 붙여넣어도 됩니다)",
+      ],
+      url: "https://gitlab.com/-/user_settings/personal_access_tokens",
+    },
+    fields: [
+      { key: "token", env: "GITLAB_TOKEN", secret: true, label: "토큰", hint: "glpat-… (read_api) — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "GITLAB_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "org = 관리탭 자격 금고의 조직 공용 gitlab_pat · member:<구성원 id> = 그 사람이 저장한 개인 토큰 · 비우면 위 토큰 칸을 씁니다" },
+      { key: "host", env: "GITLAB_HOST", secret: false, label: "호스트", hint: "기본 gitlab.com — 회사 GitLab 이면 그 호스트. 토큰 출처를 쓰면 그 토큰의 호스트가 기본값" },
+      { key: "projects", env: "GITLAB_PROJECTS", secret: false, label: "프로젝트", hint: "group/project — 공백·줄바꿈으로 여러 개. 주소를 그대로 붙여넣어도 됩니다" },
+      { key: "include_mrs", env: "GITLAB_INCLUDE_MRS", secret: false, label: "MR 포함", hint: "on(기본) | off" },
+      { key: "include_releases", env: "GITLAB_INCLUDE_RELEASES", secret: false, label: "릴리스 포함", hint: "on(기본) | off" },
+      //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
+      //   과거를 더 읽으려면 전량 다시 읽기가 필요하다(화면이 그 말을 한다).
+      { key: "backfill_since", env: "GITLAB_BACKFILL_SINCE", secret: false, label: "언제부터", hint: "YYYY-MM-DD — 비우면 볼 수 있는 과거 전체" },
+    ],
+  },
+  // Linear 커넥터(#2247) — 이슈·댓글·문서(GraphQL). 토큰은 라이블리 Linear 앱(linear_app)을 token_source 로 가리킨다.
+  linear: {
+    system: "linear",
+    label: "Linear",
+    guide: {
+      intro: "워크스페이스의 이슈·댓글과 문서를 자료로 모읍니다. [외부 앱 연결 ▸ Linear ▸ 자료 가져오기]를 켜면 Linear 화면에서 [허용] 한 번으로 연결됩니다(토큰 출처 member:<내 구성원 id>).",
+      steps: [
+        "[외부 앱 연결 ▸ Linear]에서 자료 가져오기를 켜면 Linear 동의 화면이 열립니다 — [허용]",
+        "'토큰 출처'에 member:<내 구성원 id> 를 적습니다(토큰 칸은 비워 둡니다)",
+        "팀을 좁히려면 '팀'에 팀 키(예 ENG PRD)를 넣습니다 — 비우면 워크스페이스 전체",
+      ],
+      url: "https://linear.app/settings/api",
+    },
+    fields: [
+      { key: "token", env: "LINEAR_TOKEN", secret: true, label: "토큰", hint: "lin_api_… 개인 API 키도 됩니다 — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "LINEAR_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [자료 가져오기]에서 연결한 라이블리 Linear 앱 토큰 · 비우면 위 토큰 칸을 씁니다" },
+      { key: "teams", env: "LINEAR_TEAMS", secret: false, label: "팀", hint: "팀 키(예 ENG PRD) — 공백·쉼표로 여러 개. 비우면 워크스페이스 전체" },
+      { key: "include_documents", env: "LINEAR_INCLUDE_DOCUMENTS", secret: false, label: "문서 포함", hint: "on(기본) | off — Linear Documents" },
+      //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
+      //   과거를 더 읽으려면 전량 다시 읽기가 필요하다(화면이 그 말을 한다).
+      { key: "backfill_since", env: "LINEAR_BACKFILL_SINCE", secret: false, label: "언제부터", hint: "YYYY-MM-DD — 비우면 볼 수 있는 과거 전체" },
     ],
   },
   // Google 커넥터 — OAuth2 refresh-token(google-auth.ts). client_id 는 공개 식별자(secret 아님), client_secret·refresh_token 은 시크릿.
@@ -145,7 +223,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     label: "Gmail",
     guide: {
       intro:
-        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 에서 [팀 자료로 모으기]를 켜면 " +
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 에서 [자료 가져오기]를 켜면 " +
         "그 연결로 수집이 돌고(token_source=member:<켠 사람>), 토큰을 복사할 일이 없습니다(#1881 G3). " +
         "아래 3칸은 **셀프호스팅·기존 배포용 수동 경로**입니다.",
       steps: [
@@ -169,7 +247,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     label: "Google Drive",
     guide: {
       intro:
-        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 의 [팀 자료로 모으기] 토글이 " +
+        "★ 보통은 이 칸을 채울 일이 없습니다 — [외부 앱 연결 ▸ Google] 의 [자료 가져오기] 토글이 " +
         "연결 하나로 드라이브·Gmail 을 함께 켭니다(#1881 G3). 아래는 셀프호스팅·기존 배포용 수동 경로입니다.",
       steps: [
         "Gmail 가이드와 같은 OAuth 클라이언트를 쓰면 됩니다(1개 토큰이 Drive·Gmail 공용)",
@@ -405,6 +483,39 @@ async function loadConnectorConfig(
     const r = await resolveFigmaTokenSource(out.token_source, figmaVaultReader);
     if (r) {
       if (r.warning) console.warn(`figma token_source: ${r.warning}`);
+      out.token = r.token;
+    }
+  }
+  // ── ClickUp 토큰 출처(#2247) — 같은 규약(출처를 명시했으면 그 출처만). 개인 API 토큰(pk_…) 평문.
+  if (system === "clickup" && out.token_source) {
+    const r = await resolvePlainTokenSource(out.token_source, plainVaultReader(CLICKUP_TOKEN_KIND), CLICKUP_TOKEN_SPEC);
+    if (r) {
+      if (r.warning) console.warn(`clickup token_source: ${r.warning}`);
+      out.api_token = r.token;
+    }
+  }
+  // ── GitHub 토큰 출처(#2247) — 같은 규약. 묶음/정적·만료 갱신은 http_proxy 와 같은 부품(github-token-source.ts).
+  if (system === "github" && out.token_source) {
+    const r = await resolveGithubTokenSource(out.token_source, out.host ?? "github.com", githubVaultDeps);
+    if (r) {
+      if (r.warning) console.warn(`github token_source: ${r.warning}`);
+      out.token = r.token;
+    }
+  }
+  // ── GitLab 토큰 출처(#2247) — 같은 규약 + host 가 비면 토큰 슬롯의 호스트를 쓴다.
+  if (system === "gitlab" && out.token_source) {
+    const r = await resolveGitlabTokenSource(out.token_source, out.host, gitlabVaultDeps);
+    if (r) {
+      if (r.warning) console.warn(`gitlab token_source: ${r.warning}`);
+      out.token = r.token;
+      if (r.host && !out.host) out.host = r.host;
+    }
+  }
+  // ── Linear 토큰 출처(#2247) — 같은 규약(라이블리 앱 토큰 묶음, 만료 갱신은 http_proxy 부품).
+  if (system === "linear" && out.token_source) {
+    const r = await resolveLinearTokenSource(out.token_source, linearVaultDeps);
+    if (r) {
+      if (r.warning) console.warn(`linear token_source: ${r.warning}`);
       out.token = r.token;
     }
   }

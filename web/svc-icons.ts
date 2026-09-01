@@ -41,6 +41,7 @@ function svcTile(key: string, label: string, on: boolean) {
   const brand = SVC_BRAND[key];
   return el('span', {
     class: 'svc-tile' + (on ? '' : ' off'),
+    'data-svc': key,   // #2247 — 다크모드에서 단색-검정 마크(GitHub·Linear)를 밝은 잉크로 되칠하는 CSS 훅
     style: brand ? '--svc-brand:' + brand : null,
   }, svcLogo(key) || fallbackMark(label));
 }

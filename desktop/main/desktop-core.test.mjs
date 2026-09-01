@@ -16,7 +16,7 @@ import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote } from "./update-policy.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
@@ -338,6 +338,32 @@ t("E1 작업 종류별 argv 는 여기서만 만든다", () => {
   assert.deepEqual(argvFor("login", {}), ["login"]);
 });
 
+t("E6 하네스 인자(#2255) — 온보딩이 고른 AI 를 실어 보낸다", () => {
+  assert.deepEqual(argvFor("install", { harness: "grok" }), ["install", "--harness", "grok"]);
+  assert.deepEqual(argvFor("setup", { harness: "codex" }), ["setup", "--harness", "codex"]);
+  assert.deepEqual(argvFor("setup", { gateway: "https://dev.lvly.io", harness: "antigravity" }),
+    ["setup", "--gateway", "https://dev.lvly.io", "--harness", "antigravity"]);
+  assert.deepEqual(argvFor("setup-cloud", { harness: "claude" }), ["setup", "--cloud", "--harness", "claude"]);
+  // 값이 없으면 **안 붙인다** — 그때는 CLI 가 게이트웨이에서 온보딩 선택을 직접 읽는다(정본은 CLI 다).
+  for (const empty of [{}, { harness: "" }, { harness: "   " }]) assert.deepEqual(argvFor("install", empty), ["install"]);
+  assert.deepEqual(argvFor("install", { harness: " GROK " }), ["install", "--harness", "grok"]);
+});
+
+t("E7 ★ 하네스는 허용목록만 — 아니면 argv 를 안 만든다", () => {
+  // gateway(E2)와 같은 이유다: 이 값도 렌더러가 준다. 자유문자열이면 그게 곧 인자 주입면이다.
+  for (const bad of ["claude --gateway http://evil", "--token", "../../x", "claud", "all", "shell", "claude;rm -rf /"]) {
+    assert.throws(() => argvFor("install", { harness: bad }), /알 수 없는 AI/, `통과해버림: ${JSON.stringify(bad)}`);
+  }
+});
+
+ta("E8 ★ 앱의 하네스 목록이 키트의 표와 같다", async () => {
+  // 앱은 패키징 경계가 달라 harness-registry.mjs 를 import 하지 못해 **사본**을 든다.
+  //  사본이 어긋나면 «웹에선 고를 수 있는데 앱으로 설치하면 거절되는» 상태가 조용히 생긴다.
+  const { HARNESS_IDS: appIds } = await import("./ipc-contract.mjs");
+  const { HARNESS_IDS: kitIds } = await import("../../kit/hooks/harness-registry.mjs");
+  assert.deepEqual([...appIds].sort(), [...kitIds].sort());
+});
+
 t("E2 ★ 게이트웨이 주소는 http(s) 만 — 아니면 argv 를 안 만든다", () => {
   // 여기서 안 막으면 렌더러(웹 컨텐츠) 한 방이 임의 인자 주입으로 승격된다.
   //  ⚠ 플래그처럼 생긴 값(`--token`)이 특히 위험하다 — `--gateway --token` 이 되면 다음 인자가 토큰으로 먹힌다.
@@ -418,7 +444,14 @@ t("F6 상태 문구는 가장 급한 것부터(CLI→로그인→키트→노드
   assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: false }), "키트 설치 필요");
   assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true, nodeDaemon: true }), "노드 실행 중 (자동 시작 켜짐)");
   assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true }), "노드 실행 중 (이 세션만)");
-  assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true }), "노드 정지됨");
+  // #2215 — 실행 여부를 **모를 때**(nodeRunning 미측정)는 «정지됨» 이라 말하지 않는다. 종전엔 이 줄이
+  //  "노드 정지됨" 을 계약으로 박고 있었고, 그게 곧 화면의 거짓말이었다(실측: 게이트웨이엔 붙어 있는데 «정지됨»).
+  assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true }), "노드 상태 확인 중");
+  assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: false }), "노드 정지됨",
+    "0 개라는 확답일 때만 «정지됨»");
+  // ★ 프로브가 «없다» 해도 게이트웨이가 «연결됨» 이면 실행 중이다 — 그쪽이 더 강한 증거다.
+  assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: false, nodeConnected: true }),
+    "노드 실행 중 (이 세션만)");
   assert.equal(statusLabel({ cliFound: true, loggedIn: true, kitInstalled: true }), "노드 미등록");
 });
 
@@ -695,7 +728,8 @@ t('U15 ★ 배선 — 웹 창이 상태를 받고(밀기+물어보기) 그 자�
   // 웹: 다리의 유무로만 능력을 판정하고, **받아 둔 게 있을 때만** 그린다
   const ui = readFileSync(fileURLToPath(new URL('../../web/desktop-update.ts', import.meta.url)), 'utf8');
   assert.match(ui, /livelyDesktop/, '웹이 데스크톱 다리를 안 본다');
-  assert.match(ui, /if \(!cur\.ready\)/, '받아 두지 않았는데도 무언가 그린다');
+  // 조건이 늘어날 수 있으므로(#2203 의 '나중에 하기') **'받아 둔 게 없으면 접는다' 라는 항만** 본다.
+  assert.match(ui, /if \(!cur\.ready(\s*\|\||\))/, '받아 두지 않았는데도 무언가 그린다');
   assert.match(ui, /다시 시작하여 반영하기/, '사람이 누를 문구가 없다');
   assert.ok(!/다시 켜|직접 켜/.test(ui), '사람에게 앱을 켜라고 말하면 종전 경쟁(U10 머리말)이 재현된다');
   // 두 셸 모두 그 자리를 가진다 — v2 가 제품 기본이고(web/lib/state.ts uiMode) 거기선 사이드바 발치,
@@ -707,6 +741,91 @@ t('U15 ★ 배선 — 웹 창이 상태를 받고(밀기+물어보기) 그 자�
   const html = readFileSync(fileURLToPath(new URL('../../public/index.html', import.meta.url)), 'utf8');
   assert.match(html, /id="desktop-update" hidden/, '클래식 셸의 자리가 문서에 없다(기본은 접힘)');
   assert.match(html, /44-desktop-update\.css/, '스타일이 문서에 안 걸렸다');
+});
+
+// ── U16. 배너가 뜨는 순간 = 눌러서 되는 순간 이어야 한다 (#2203) ────────────────────────────────
+// 실측(2026-08-27 원준): "다시 시작하여 반영하기를 수십 번 눌렀는데 사라지질 않는다." 릴리스도 게이트웨이도 정상이었다.
+//  맥의 업데이트가 **두 단계**인데(① 우리가 zip 을 받는다 → ② 애플 설치기가 그 zip 을 다시 넘겨받는다, 수 분)
+//  ①에서 배너를 띄웠다. ② 전에 부른 quitAndInstall 은 MacUpdater 가 조용히 무시한다 — 예외도 오류 이벤트도 없다.
+//  재현 시간축: 배너 → 클릭 → **6분 무반응** → ②완료 → 그제서야 앱이 닫히고 설치·재시작.
+//  win·linux 에는 ② 단계가 없다(받으면 곧바로 적용 가능) — 그쪽에 이 조건을 걸면 배너가 영영 안 뜬다.
+t('U16 적용 가능 판정 — 맥만 설치기 인계를 기다린다', () => {
+  const V = '0.1.358';
+  // 표 1·2 — 이번 사고의 그 자리. 인계 전/후가 갈려야 한다.
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'darwin', squirrelReady: false }), false,
+    '맥에서 인계 전인데 준비됨 — 배너가 앞서 뜨고 사람은 죽은 버튼을 누른다(#2203)');
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'darwin', squirrelReady: true }), true,
+    '인계가 끝났는데 안 뜬다 — 업데이트가 영영 앉아 있는다');
+  // 표 3·4·8 — 맥 조건이 다른 플랫폼으로 새면 그쪽 배너가 영영 안 뜬다(그 신호 자체가 없으므로)
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'win32', squirrelReady: false }), true,
+    'win 에 ② 단계를 요구했다 — 그 신호는 win 에서 오지 않는다');
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'linux', squirrelReady: false }), true,
+    'linux(AppImage)에 ② 단계를 요구했다');
+  assert.equal(updateApplyReady({ downloadedVersion: V, platform: 'win32', squirrelReady: true }), true);
+  // 표 5·6·7 — 이번에 새로 도입한 값이 **비었거나 부재**인 경우(인계 신호만으로 준비됨이 되면 안 된다)
+  assert.equal(updateApplyReady({ downloadedVersion: null, platform: 'darwin', squirrelReady: true }), false,
+    '받아 둔 게 없는데 인계 신호만으로 준비됨이 됐다');
+  assert.equal(updateApplyReady({ downloadedVersion: '   ', platform: 'win32', squirrelReady: true }), false,
+    '빈 버전 문자열을 받아 둔 것으로 셌다');
+  assert.equal(updateApplyReady(undefined), false, '인자 부재에서 터지거나 참이 된다');
+  assert.equal(updateApplyReady({}), false);
+});
+
+t('U16 문구 — 아직 못 누르는 구간을 "실패" 가 아니라 "아직" 으로 말한다', () => {
+  // 실패로 읽히면 사람은 다시 누르거나 앱을 손으로 껐다 켠다 — 그게 U10 머리말에서 이미 고친 함정이다.
+  const staging = updateStagingNote('0.1.358');
+  assert.match(staging, /0\.1\.358/, '어느 버전을 준비 중인지 안 말한다');
+  assert.ok(!/실패|오류|없습니다/.test(staging), '준비 중을 실패로 말한다 — 사람이 손으로 개입하게 만든다');
+  const notStaged = updateNotStagedNote('0.1.358');
+  assert.match(notStaged, /아직/, "'아직' 이 없으면 사람은 다시 누른다(눌러도 소용없는 구간이다)");
+  assert.ok(!/실패|오류/.test(notStaged), '아직을 실패로 말한다');
+  // 버전이 없어도 문장이 깨지지 않는다(update-policy 의 다른 문구들과 같은 규약 — 버전 뒤에 조사를 안 붙인다)
+  assert.equal(typeof updateStagingNote(null), 'string');
+  assert.equal(typeof updateNotStagedNote(undefined), 'string');
+});
+
+t('U17 나중에 하기 — 닫는 길이 있고, 닫아도 다음 버전은 다시 뜬다 (#2203)', () => {
+  // 실측(원준): "저거에 X버튼 없는 상황도 이해가 안 가네." 종전엔 이 띠를 접는 길이 **재시작뿐**이었다.
+  //  지금 재시작할 수 없는 사정(작업 중·회의 중)은 늘 있는데 화면이 그걸 인정하지 않았다.
+  const ui = readFileSync(fileURLToPath(new URL('../../web/desktop-update.ts', import.meta.url)), 'utf8');
+  assert.match(ui, /class: 'deskup-x'/, '닫기 컨트롤이 없다 — 재시작 말고는 이 띠를 접을 길이 없다');
+  // 아이콘 하나만 두는 자리라 **이름**이 반드시 있어야 한다(스크린리더·툴팁 모두 '×' 만 읽으면 뜻이 없다)
+  assert.match(ui, /'aria-label': '나중에 하기'/, '닫기 버튼에 이름이 없다');
+  // ⚠ 닫기가 자동 업데이트를 영구히 꺼 버리면 보안 픽스까지 막힌다 — **그 버전에 한해서만** 접혀야 한다
+  assert.match(ui, /dismissed === dismissKey\(cur\)/, '닫힘 판정이 버전 단위가 아니다 — 다음 버전이 와도 안 뜬다');
+  assert.match(ui, /s\.version \|\| 'unknown'/, '버전을 못 받은 판에서 닫기가 동작하지 않는다');
+  // 저장이 막힌 환경(프라이빗 창·사이트 데이터 차단)에서 터지면 배너 전체가 안 그려진다
+  const dz = ui.slice(ui.indexOf('function readDismissed'), ui.indexOf('export function mountDesktopUpdate'));
+  assert.equal((dz.match(/catch/g) || []).length, 2, 'localStorage 읽기·쓰기 양쪽을 감싸지 않았다 — 저장이 막힌 창에서 터진다');
+  // 스타일: 아이콘만 있는 컨트롤이라 누를 면적을 글자보다 크게 잡아야 한다
+  const css = readFileSync(fileURLToPath(new URL('../../public/styles/44-desktop-update.css', import.meta.url)), 'utf8');
+  assert.match(css, /\.deskup-x\s*\{/, '닫기 버튼 스타일이 없다');
+  assert.match(css, /\.deskup-x:focus-visible/, '키보드로 왔을 때 어디 있는지 안 보인다');
+});
+
+t('U16 ★ 배선 — 인계 신호를 직접 듣고, 아직인 요청에 성공으로 답하지 않는다', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  // W1 — 파일을 받은 사실만으로 '준비됨' 을 세우지 않는다(그게 이번 결함의 뿌리다)
+  const dl = main.slice(main.indexOf('autoUpdater.on("update-downloaded"'), main.indexOf('function settleUpdateReady'));
+  assert.ok(dl.length > 0, 'update-downloaded 핸들러나 승격 함수가 사라졌다');
+  assert.ok(!/\bupdateReady\s*=/.test(dl), 'zip 을 받자마자 준비됨으로 세운다 — 맥에서 배너가 앞서 뜬다(#2203)');
+  // W2 — 인계 신호를 직접 듣는다. electron-updater 는 이 사실을 밖으로 알려 주지 않는다.
+  //  그리고 그 구독은 **맥에서만** 걸어야 한다(다른 OS 에선 native autoUpdater 를 건드릴 이유가 없다).
+  assert.match(main, /autoUpdater as nativeAutoUpdater/, 'native autoUpdater 를 안 들여왔다 — 인계 시점을 알 길이 없다');
+  const nat = main.indexOf('nativeAutoUpdater.on(');
+  assert.ok(nat > 0, '인계 신호를 안 듣는다 — 맥 배너가 영영 안 뜬다');
+  assert.match(main.slice(Math.max(0, nat - 400), nat), /platform === "darwin"/, '맥 밖에서도 native autoUpdater 를 건드린다');
+  assert.match(main, /squirrelReady = true/, '인계 신호를 듣고도 상태를 안 바꾼다');
+  // W3 — 아직인 상태의 적용 요청에 성공으로 답하지 않는다(성공으로 답하면 화면이 '다시 시작하는 중' 으로 굳는다)
+  const ap = main.slice(main.indexOf('async function applyUpdate'), main.indexOf('function scheduleAutoApply'));
+  assert.ok(ap.length > 0, 'applyUpdate 를 못 찾았다');
+  assert.match(ap, /ok: false, error: updateNotStagedNote/, '아직인 요청을 성공으로 답한다 — 버튼이 굳는 그 경로(#2203)');
+  // W4 — 재시작이 실제로 안 일어났을 때 '종료해도 된다' 표시를 되돌린다
+  //  안 되돌리면 그 뒤 사람이 창을 닫을 때 트레이로 숨는 대신 창이 진짜 닫히고, 창 숨김에 달린 자동 적용까지 사라진다.
+  assert.match(ap, /quitting = false/, 'quitting 안전망이 없다 — 실패 뒤 창 닫기가 트레이 상주를 깬다');
+  // W5 — 재확인 억제 기준은 '준비됨' 이 아니라 '받았음' 이다(인계를 기다리는 몇 분 사이 확인이 또 돌면 프록시가 겹친다)
+  const ck = main.slice(main.indexOf('async function checkUpdates'), main.indexOf('async function checkUpdates') + 900);
+  assert.match(ck, /if \(updateDownloaded\) return null;/, '재확인 억제 기준이 준비됨이다 — 인계 대기 중 확인이 또 돈다');
 });
 
 // ── S. Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs) ────────────────────
@@ -836,7 +955,9 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
   assert.match(main, /nodeConnected: typeof n\.connected === "boolean" \? n\.connected : null/, 'connected 를 boolean 일 때만 옮기지 않는다');
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
-  assert.match(js, /nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
+  // #2215 — 판정이 web-shell.nodeStateOf 한 자리로 옮겨갔다(종전엔 렌더러가 `nodeConnected === false` 식을
+  //  직접 적었다). 계약의 대상은 «렌더러가 좀비를 구분하는가» 이지 그 식의 모양이 아니다.
+  assert.match(js, /nodeState === "zombie"|nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
   assert.match(js, /nodeSleepNote/, '렌더러가 잠자기 원인 문구를 띄우지 않는다(#1849)');
   assert.match(main, /nodeSleepNote:/, 'main 이 status 의 sleep.note 를 앱 상태로 옮기지 않는다(#1849)');
   assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
@@ -846,11 +967,17 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
 t('U14 업데이트 적용 재시작 후 창 복원 — 창에서 눌렀을 때만 마커, 시작 때 마커 소비 후 창 (#1541 실측: 트레이에만 떠 손으로 열었다)', () => {
   const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
   // applyUpdate: 창이 보일 때만 마커 — 자동 적용(창 숨김)이 마커를 남기면 안 보는 사람 앞에 창이 튀어나온다
-  const ap = main.slice(main.indexOf('async function applyUpdate'), main.indexOf('async function applyUpdate') + 1600);
+  // ⚠ 슬라이스는 **함수 경계**로 자른다 — 고정 길이(+1600자)로 자르면 주석 한 줄만 늘어도 quitAndInstall 이
+  //  범위 밖으로 밀려 '못 찾음' 이 조용히 통과로 둔갑한다(#2203 에서 실제로 이 자리가 빨간불이 됐다).
+  const ap = main.slice(main.indexOf('async function applyUpdate'), main.indexOf('function scheduleAutoApply'));
+  //  ⚠ 찾는 건 **실제 호출**(`u.quitAndInstall(`)이다 — 맨 이름으로 찾으면 머리말 주석의 언급이 먼저 걸려
+  //   순서 단언이 엉뚱한 자리를 재게 된다(#2203 에서 실제로 그랬다).
+  const qi = ap.indexOf('u.quitAndInstall(');
+  assert.ok(qi > 0, 'applyUpdate 슬라이스가 quitAndInstall 호출을 못 담았다 — 아래 순서 단언이 무의미해진다');
   const mk = ap.indexOf('desktop-reopen');
   assert.ok(mk >= 0, 'applyUpdate 가 재열기 마커를 안 남긴다');
   assert.match(ap.slice(Math.max(0, mk - 200), mk), /win\.isVisible\(\)/, '창 표시 여부 확인 없이 마커를 남긴다');
-  assert.ok(ap.indexOf('desktop-reopen') < ap.indexOf('quitAndInstall'), '마커는 quitAndInstall 전에 남겨야 한다(후엔 프로세스가 죽는다)');
+  assert.ok(mk < qi, '마커는 quitAndInstall 전에 남겨야 한다(후엔 프로세스가 죽는다)');
   // 시작: 마커가 있으면 지우고 창을 연다(지우지 않으면 다음 시작마다 창이 뜬다)
   const boot = main.slice(main.indexOf('app.whenReady'), main.indexOf('app.whenReady') + 2000);
   const bm = boot.indexOf('desktop-reopen');
@@ -1315,7 +1442,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
 
 // ── H. 웹 UI 셸 (#1541 · web-shell.mjs) — 앱 창에 게이트웨이의 /ui/ 를 그대로 싣는다(화면 코드 두 벌 금지) ─────────
 {
-  const { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } = await import("./web-shell.mjs");
+  const { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } = await import("./web-shell.mjs");
   const { IPC_WEB } = await import("./ipc-contract.mjs");
   const GW = "https://dev.lvly.io";
   const okState = { cliFound: true, cliOutdated: false, cliBroken: null, loggedIn: true, kitInstalled: true };
@@ -1329,13 +1456,66 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(appReady(null), false); assert.equal(appReady({}), false);
     // ★ 세 곳(메인·트레이·렌더러)이 각자 식을 적지 않는다 — 트레이는 appReady 를 import 하고, 렌더러는 state.ready 를 받는다
     const tray = readFileSync(fileURLToPath(new URL("./tray-menu.mjs", import.meta.url)), "utf8");
-    assert.match(tray, /import \{ appReady \} from "\.\/web-shell\.mjs"/, "트레이가 appReady 를 안 쓴다");
+    // import 목록은 늘어난다(#2215 에 nodeStateOf 가 붙었다) — 계약은 «appReady 를 web-shell 에서 가져오는가» 다.
+    assert.match(tray, /import \{[^}]*\bappReady\b[^}]*\} from "\.\/web-shell\.mjs"/, "트레이가 appReady 를 안 쓴다");
     assert.ok(!/!s\.cliFound \|\| s\.cliOutdated \|\| s\.cliBroken \|\| !s\.loggedIn \|\| !s\.kitInstalled/.test(tray), "트레이에 준비 식이 따로 남아 있다");
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     assert.match(main, /next\.ready = appReady\(next\)/, "메인이 state.ready 를 안 채운다");
     assert.ok(!/if \(!state\.cliFound \|\| state\.cliOutdated \|\| state\.cliBroken \|\| !state\.loggedIn \|\| !state\.kitInstalled\) showWindow\(\)/.test(main), "메인 시작 경로에 옛 준비 식이 남아 있다");
     const js = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
     assert.match(js, /const ready = !!s\?\.ready;/, "렌더러가 state.ready 대신 자기 식을 쓴다");
+  });
+
+  // ── 노드 상태 판정 한 자리(#2215) ─────────────────────────────────────────
+  //  사양: 두 축(도는가 running · 붙어 있는가 connected)을 섞지 않는다. 못 잰 것을 «정지됨» 이라
+  //   말하지 않고, 게이트웨이가 «연결됨» 이라 보면 로컬 프로브가 못 봐도 «실행 중» 이다.
+  //  엣지 표 B1~B7 전수.
+  t("H1-n1 B1 등록 전이면 unregistered — 다른 축을 보기 전에 갈린다", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: false, nodeRunning: true, nodeConnected: true }), "unregistered");
+    assert.equal(nodeStateOf({}), "unregistered");
+    assert.equal(nodeStateOf(null), "unregistered");
+  });
+
+  t("H1-n2 B2 돌고 붙어 있으면 running", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: true, nodeConnected: true }), "running");
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: true, nodeConnected: null }), "running");
+  });
+
+  t("H1-n3 B3 도는데 게이트웨이엔 안 붙어 있으면 zombie(#1541 절전 좀비)", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: true, nodeConnected: false }), "zombie");
+  });
+
+  t("H1-n4 ★ B4 프로브가 «없다» 해도 게이트웨이가 «연결됨» 이면 running — 그쪽이 더 강한 증거다", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: false, nodeConnected: true }), "running");
+  });
+
+  t("H1-n5 ★ B5 프로브를 못 쟀고 게이트웨이가 «연결됨» 이면 running (이번 신고 그 모양)", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: null, nodeConnected: true }), "running");
+  });
+
+  t("H1-n6 ★ B6 못 쟀고 연결도 모르면 unknown — «정지됨» 이라 말하지 않는다", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: null, nodeConnected: null }), "unknown");
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: null, nodeConnected: false }), "unknown");
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeConnected: null }), "unknown", "running 이 아예 없으면(undefined) 모름이다");
+  });
+
+  t("H1-n7 B7 «정지됨» 은 프로브가 0 을 확답하고 연결도 아닐 때만", () => {
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: false, nodeConnected: false }), "stopped");
+    assert.equal(nodeStateOf({ nodeRegistered: true, nodeRunning: false, nodeConnected: null }), "stopped");
+  });
+
+  t("H1-n8 ★ 판정은 한 자리 — 배지·상세·트레이가 각자 식을 적지 않는다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.match(main, /nodeState = nodeStateOf\(/, "메인이 state.nodeState 를 안 채운다");
+    // patchState 와 refreshState 두 경로가 **둘 다** 채워야 한다(하나만 채우면 옛 판정이 남는다).
+    assert.ok((main.match(/nodeStateOf\(/g) || []).length >= 2, "state 를 쓰는 두 경로 중 하나가 빠졌다");
+    const tray = readFileSync(fileURLToPath(new URL("./tray-menu.mjs", import.meta.url)), "utf8");
+    assert.match(tray, /s\.nodeState === "running"/, "트레이가 nodeState 를 안 쓴다");
+    assert.ok(!/if \(s\.nodeRunning\) return s\.nodeDaemon/.test(tray), "트레이에 옛 판정 식이 남아 있다");
+    const js = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+    assert.match(js, /s\.nodeState === "running"/, "렌더러 배지가 nodeState 를 안 쓴다");
+    assert.ok(!/s\.nodeRunning \? "노드 실행 중" : s\.nodeRegistered \? "노드 정지됨"/.test(js),
+      "렌더러 배지에 옛 식이 남아 있다 — 못 잰 것을 «정지됨» 으로 그린다");
   });
 
   t("H2 웹 UI 주소·출처 — 뒤 슬래시 정리·경로 접두 보존·형식 아니면 null", () => {
@@ -1347,6 +1527,56 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(webOrigin("https://dev.lvly.io/lively/"), "https://dev.lvly.io");
     assert.equal(webOrigin("http://localhost:8080"), "http://localhost:8080");
     assert.equal(webOrigin("nope"), null);
+  });
+
+  // ── 워크스페이스 어긋남 감지(#2215) ───────────────────────────────────────
+  //  사양: 계정 1 : 워크스페이스 N 인데 로컬 상태는 한 벌이다. 사람이 웹에서 워크스페이스를 바꾸면
+  //   웹뷰만 옮겨가고 로컬(토큰·노드·MCP)은 그대로라 조용히 어긋난다 — 앱이 그걸 알아채는 자리.
+  //  엣지 표: ①같은 곳(=null) ②다른 워크스페이스 /ui ③CP 홈·로그인(=워크스페이스 아님) ④경로 접두 게이트웨이
+  //   ⑤스킴/포트만 다른 곳 ⑥http(s) 아님 ⑦로컬 주소를 모를 때 ⑧'/ui' 로 시작하는 남의 경로(/uifoo)
+  t("H3-a 같은 워크스페이스면 아무 일도 없다(기준선 — 여기서 물으면 매번 묻는다)", () => {
+    assert.equal(workspaceDriftFrom("https://dev.lvly.io/ui/#/s/box-1", GW), null);
+    assert.equal(workspaceDriftFrom("https://dev.lvly.io/ui/", GW), null);
+  });
+
+  t("H3-b ★ 다른 워크스페이스의 웹 UI 로 가면 두 출처를 돌려준다", () => {
+    assert.deepEqual(
+      workspaceDriftFrom("https://lively-46e3.app.lvly.io/ui/#/home", GW),
+      { from: "https://dev.lvly.io", to: "https://lively-46e3.app.lvly.io" },
+    );
+  });
+
+  t("H3-c ★ CP 홈·승인 화면은 워크스페이스가 아니다 — 로그인 흐름 중에 묻지 않는다", () => {
+    assert.equal(workspaceDriftFrom("https://app.lvly.io/home", GW), null);
+    assert.equal(workspaceDriftFrom("https://app.lvly.io/cli/device", GW), null);
+    assert.equal(workspaceDriftFrom("https://accounts.google.com/o/oauth2", GW), null);
+  });
+
+  t("H3-d 경로 접두가 있는 게이트웨이도 출처로 가른다(경로가 아니라 출처가 워크스페이스다)", () => {
+    assert.equal(workspaceDriftFrom("https://corp.example.com/lively/ui/", "https://corp.example.com/lively"), null);
+  });
+
+  t("H3-e 스킴·포트만 달라도 다른 워크스페이스다", () => {
+    assert.deepEqual(workspaceDriftFrom("http://dev.lvly.io/ui/", GW), { from: GW, to: "http://dev.lvly.io" });
+    assert.deepEqual(workspaceDriftFrom("https://dev.lvly.io:444/ui/", GW), { from: GW, to: "https://dev.lvly.io:444" });
+  });
+
+  t("H3-f http(s) 가 아니거나 주소가 아니면 묻지 않는다", () => {
+    for (const bad of ["", null, "nope", "file:///etc/passwd", "javascript:alert(1)", "data:text/html,x"]) {
+      assert.equal(workspaceDriftFrom(bad, GW), null, String(bad));
+    }
+  });
+
+  t("H3-g 로컬이 어디에 매였는지 모르면 묻지 않는다 — 비교 기준이 없다", () => {
+    assert.equal(workspaceDriftFrom("https://lively-46e3.app.lvly.io/ui/", null), null);
+    assert.equal(workspaceDriftFrom("https://lively-46e3.app.lvly.io/ui/", "nope"), null);
+  });
+
+  t("H3-h ★ '/ui' 로 시작하기만 하는 남의 경로는 게이트웨이 UI 가 아니다(세그먼트 경계)", () => {
+    assert.equal(workspaceDriftFrom("https://other.example.com/uifoo", GW), null);
+    // 반대로 '/ui' 딱 그것과 '/ui/...' 는 게이트웨이 UI 다.
+    assert.ok(workspaceDriftFrom("https://other.example.com/ui", GW));
+    assert.ok(workspaceDriftFrom("https://other.example.com/ui/x", GW));
   });
 
   t("H3 ★ 창 열기 규칙 — 같은 출처는 앱 안 새 창, 다른 출처는 브라우저, http(s) 아니면 거부", () => {

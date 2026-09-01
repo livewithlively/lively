@@ -9,6 +9,7 @@ import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
 import { codexChatMode } from "./codex-chat-mode.js";
+import { sessionRuntimeMode } from "./session-runtime-mode.js";   // #2439 — 대화 런타임 세션은 pane 이 셸이다
 import { rememberCodexThread } from "./codex-chat-thread.js";   // #2055 — 첫 지시도 대화 좌표를 남겨야 화면이 읽는다
 import { HttpError } from "../http-error.js";
 import { dirToProjectFolder } from "../project/project-fs.js";
@@ -28,7 +29,11 @@ import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
-import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
+import { memberMkdir, memberWriteFile, memberShOut } from "./terminal-member-fs.js";
+import os from "node:os";
+import path from "node:path";
+import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
+import { ensureFolderTrusted, TRUST_PLANS, type TrustIo } from "./harness-trust.js";   // #1631·#2478 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB 를 타는 자격 주입은 게이트웨이 능력이다
@@ -37,14 +42,14 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
 } from "./phase.js";
-import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, revokeSessionHookToken } from "./profiles.js";
+import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
@@ -200,7 +205,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, managedRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, managedRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, runtimeRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -237,6 +242,10 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       // #1954 3차 — 화면이 직접 찍은 열람 시각(@box_last_seen). attach 이벤트와 **다른 축**이라 max 로 합치지 않고
       //  그대로 올린다 — 합치는 자리는 프론트 판정 한 곳(web/session-status.ts isUnreadDone)이다.
       lastViewed: Number(lastSeenRaw) || 0,
+      //  #2439 — 이 세션이 **어느 모드로 떴나**(@box_runtime). 화면(runtimeMode)과 배달이 같은 값을
+      //   봐야 갈리지 않는다. ⚠ 행 **최상위**에 둔다 — tmuxDesired 안에 넣었더니 응답에 안 실려
+      //   384행 중 0행만 값을 갖는 상태가 됐다(실측 2026-09-01).
+      runtimeChoice: runtimeRaw === "chat" ? "chat" as const : runtimeRaw === "terminal" ? "terminal" as const : undefined,
       tmuxDesired: {
         owner: owner || "",
         label: labelParts.join("\t") || null,
@@ -268,6 +277,9 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
       offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
       reportedFresh: p.reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
+      //  #2439 — 이 세션이 어느 모드로 떴나. ⚠ 이 push 는 필드를 **하나씩 골라** 담는다 —
+      //   위에서 만들어 둔 값이라도 여기 안 적으면 조용히 사라진다(실측: 386행 중 0행만 값을 가졌다).
+      runtimeChoice: p.runtimeChoice,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
       flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
       managed: p.managed as string | null,
@@ -488,11 +500,19 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  · codex app-server 모드(#2055) — pane 은 **셸**이다. 대화는 대화창(app-server)이 전담하고, TUI 를 띄우면
   //    스레드 writer 가 둘이 돼 대화가 갈린다(codex 는 스레드당 writer 를 하나만 허용한다 — 실측).
   const chatMode = codexChatMode({ harness: harness.key, loginFor: input.loginFor });
+  //  ★ #2439 — **대화 런타임 세션도 pane 은 셸이다.** 대화를 런타임이 쥐는데 TUI 까지 띄우면 한 대화에
+  //   하네스가 둘 붙는다(실측 2026-09-01: 웹은 chat-runtime 으로 가는데 기록엔 TUI 줄이 함께 있었다).
+  //   그때 사람이 보는 것은 «선택지가 대화창에 안 뜨고 시간만 올라가는» 화면이다.
+  //  ⚠ 이 판정은 codexChatMode 와 **따로** 둔다: 저건 codex 전용 축이고 이건 하네스 무관이다.
+  //   둘을 한 값으로 접으면 codex 의 안내 문구가 다른 하네스에도 나간다.
+  const chatRuntime = !input.loginFor && sessionRuntimeMode({ harness: harness.key, loginFor: input.loginFor, choice: input.runtime }) === "chat";
   const launch = input.loginFor
     ? (harnessLoginArgv(input.loginFor) ?? cmd)
     : chatMode === "app-server"
       ? codexAppServerPaneArgv()
-      : harnessLaunchArgv(harness.key, cmd);
+      : chatRuntime
+        ? chatRuntimePaneArgv({ label: harness.label, bin: harness.bin || harness.key })
+        : harnessLaunchArgv(harness.key, cmd);
 
   const invites = await validInvites(input.invites, ownerId(user));
   const args = ["new-session", "-d", "-s", id];
@@ -609,11 +629,62 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  best-effort — 못 구우면 종전대로 공유 토큰으로 떨어진다(무회귀).
     const hookToken = await mintSessionHookToken(ownerId(user), id).catch(() => null);
     if (hookToken) args.push("-e", `LIVELY_TOKEN=${hookToken}`);
+    // MCP 신원(#2234) — 훅과 **같은 이유, 다른 채널**이다. MCP 는 stdio 프록시로 붙고 그 프록시는 매 호출
+    //  공유 `~/.lively/token`(= 키트를 깐 사람) 을 읽으므로, 이 pane 의 MCP 가 전부 남의 신원으로 나갔다.
+    //  실측 2026-08-27: box-jang-* 세션의 whoami 가 yoon 으로 오고 session_rename 이 "내 세션만…" 으로 거절 →
+    //  #1979 세션 자동 이름짓기가 이 박스에서 구조적으로 불가능했다.
+    //  ⚠ 훅 토큰과 **따로** 싣는다 — 권한 폭이 다르다(훅=세션 최소권한, MCP=그 멤버가 가진 만큼).
+    //  ⚠ 값이 없으면(멤버 미상·scope 0) 아무것도 안 실어 종전 경로(공유 파일)로 떨어진다 — 무회귀.
+    const mcpToken = await mintSessionMcpToken(ownerId(user), id).catch(() => null);
+    if (mcpToken) args.push("-e", `LIVELY_MCP_TOKEN=${mcpToken}`);
     if (launch.length) args.push(...launch);
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
   await tmuxQuiet(["set-option", "-g", "default-terminal", "xterm-256color"]);
+  // ── 첫 실행 «이 폴더를 신뢰합니까?» 를 미리 지운다(#1631) ──────────────────────────────
+  //  그 물음은 stdin 으로 밀어 넣은 **첫 지시를 삼키고** 사람이 Enter 를 칠 때까지 기다리다 CLI 를 끝낸다.
+  //  실측 2026-08-31(dev): 온보딩 킥오프 세션이 그렇게 즉사해 대화 id 가 없었고(트랜스크립트 404),
+  //   그래서 리브가 서랍마다 만들어 둔 증류기가 **꺼진 채로 남아** 온보딩을 완주한 사람이 지식을 0건 얻었다.
+  //   헤드리스(`claude -p`)엔 이 물음이 없어 서랍 분석만 성공하는 «절반» 이 됐다 — API 층에선 안 보인다.
+  //  ⚠ 신뢰하는 것은 **라이블리가 만들고 소유하는 폴더**뿐이다 — 사람이 고른 임의 경로를 대신 신뢰해 주지
+  //   않는다(그건 보안 결정을 사람 대신 내리는 것이다). 판정은 `autoTrustWorkspace` 하나이고 **아래 첫 지시의
+  //   화면 수락층과 같은 값을 쓴다**(그래서 여기서 한 번 내고 내려보낸다).
+  //  ⚠ 이 가드가 없으면 어떻게 되나(#2478 — 실제로 그랬다): 위 `mkdir` 은 `recursive:true` 라 **이미 있는
+  //   폴더면 아무것도 안 만든다** — 즉 「우리가 방금 만든 폴더」를 보증하지 않는다. `target` 은 사람이 고른
+  //   subpath(`resolveRootPath`, `..` 탈출만 거부)도 되므로, 가드 없이 부르면 화면 수락층이 «사람이 답해야
+  //   한다» 고 판정한 폴더를 이 층이 파일에 미리 신뢰로 박아 **대화상자 자체가 안 뜬다**(가드 우회).
+  //  ⚠ 로그인 상태는 쓰지 않는다(#2232 에서 보류된 판단 그대로).
+  //  비치명 — 못 심어도 세션은 뜬다(종전대로 프롬프트가 뜰 뿐). 같은 부류의 선례: ensureGitSafeDirectory(#522).
+  //  신뢰 자동화의 판정은 **한 자리에서만** 낸다(#1867) — 루트 그 자체이거나 그 프로젝트의 canonical 폴더.
+  const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
+  //  ⚠ 하네스마다 **자리도 형식도 다르다**(#2478) — 표에 있는 하네스만 다룬다(모르는 하네스엔 짐작해 쓰지 않는다).
+  if (TRUST_PLANS[harness.key]) {
+    //  설정 파일은 그 세션이 **실제로 쓸** 자리다.
+    //   · claude — 격리면 멤버 홈, 아니면 **위에서 주입한 그 CLAUDE_CONFIG_DIR**(어긋나면 엉뚱한 파일에 쓴다),
+    //     그것도 없으면(hostProfile·MULTIPROFILE=0) 이 호스트의 홈.
+    //   · antigravity — 설정 자리를 바꾸는 환경변수가 **없다**(#1689 실측). 늘 그 홈의 `.gemini` 다.
+    const home = osUser ? `${MEMBER_HOME_BASE}/${osUser}` : (process.env.HOME || os.homedir());
+    const configFile = harness.key === "claude"
+      ? path.join(
+        osUser
+          ? home
+          : (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile ? profileConfigDir(user) : home),
+        ".claude.json")
+      : path.join(home, ".gemini", "antigravity-cli", "settings.json");
+    //  ⚠ 부모 디렉터리를 먼저 만든다 — agy 를 한 번도 안 켠 홈엔 `.gemini/antigravity-cli/` 가 아예 없다.
+    //   (claude 쪽은 이미 있는 자리라 no-op. 없으면 쓰기가 ENOENT 로 조용히 실패해 신뢰가 안 심긴다.)
+    const io: TrustIo = osUser
+      ? {
+        read: (p) => memberShOut(osUser, `cat '${p.replace(/'/g, "'\\''")}' 2>/dev/null || true`).then((s) => s || null),
+        write: async (p, t) => { await memberMkdir(osUser, path.dirname(p)); await memberWriteFile(osUser, p, t, 0o600); },
+      }
+      : {
+        read: (p) => fsp.readFile(p, "utf8").then((s) => s as string | null).catch(() => null),
+        write: async (p, t) => { await fsp.mkdir(path.dirname(p), { recursive: true, mode: 0o700 }); await fsp.writeFile(p, t, { mode: 0o600 }); },
+      };
+    await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);
+  }
   await tmux(args);
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
   //  화면은 그때 pane 제목·중앙 기록 첫 지시로 이름 자리를 채우고, 대화가 시작되면 session-autoname 이 진짜 이름을 박는다).
@@ -627,6 +698,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
+  //  ★ #2439 — 이 세션이 **어느 모드로 떴나**. 배달·화면이 같은 값을 봐야 판정이 갈리지 않는다
+  //   (갈렸을 때 pane 은 셸인데 대화창은 죽은 세션이 됐다 — 2026-09-01 실측).
+  if (chatRuntime) await tmux(["set-option", "-t", id, "@box_runtime", "chat"]);
   await tmux(["set-option", "-t", id, "@box_kind", input.kind]);   // #2162 — 종류(@box_* 와 같은 자리·같은 규약)
   await tmux(["set-option", "-t", id, "@box_dir", target]);
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
@@ -719,7 +793,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  로 남아 화면이 재시도를 준다. 동적 import — 정적이면 순환(check-imports).
     //  신뢰 대화상자 자동 수락은 **라이블리가 만든 자리에서만**(#1867) — 루트 그 자체이거나 그 프로젝트의 canonical 폴더.
     //   사람이 고른 임의 폴더면 사람이 답한다(autoTrustWorkspace). 이 판정을 빼면 프로젝트 세션의 첫 지시가 대화상자에 막힌다(실측).
-    const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
+    //   ⚠ 값은 위 신뢰 블록에서 **이미 냈다**(`trustOk`) — 여기서 다시 계산하면 파생지가 둘이 되어 한쪽만 고쳐지는
+    //    어긋남이 난다(#2478 이 정확히 그 모양이었다: 이 층은 가드가 있고 파일 시딩 층은 없었다).
     const onNode = !!process.env.LIVELY_NODE_TOKEN;   // 노드 에이전트 프로세스에만 있는 값(게이트웨이엔 없다 — 안전한 판별자)
     if (chatMode === "app-server") {
       // ★ app-server 세션의 pane 은 **셸**이다. 그런데 아웃박스 배달자는 "입력창이 뜨면 send-keys" 로 넣는다 —
@@ -752,7 +827,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   }
   //  ⚠ 앱 인스턴스 등록은 여기가 아니라 **게이트웨이 라우트**가 한다(routes.ts afterSessionCreated).
   //   이 파일은 노드 에이전트 번들에 실리고 노드엔 DB 가 없다('DB 없음' 계약, scripts/build-node-agent.mjs 화이트리스트).
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
+  //  ⚠ #2439 — **방금 정한 모드를 함께 돌려준다.** 이 객체는 collectSessions 가 아니라 여기서
+  //   만들어지므로, 안 실으면 «만들 때는 chat 인데 응답은 terminal» 이 되어 화면이 곧바로 갈린다.
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags,
+    ...(chatRuntime ? { runtimeChoice: "chat" as const } : {}) };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
@@ -766,23 +844,28 @@ async function ownerMeta(id: string): Promise<OwnerMeta | null> {
   if (!owner) return null; // box 세션이지만 메타 없음(우리 것 아님) → 거부
   return { owner, invites: parseInvites(await getOpt(id, "@box_invites")) };
 }
-// attach·파일접근 = 소유자 OR 초대된 멤버. 프로젝트 폴더 세션은 로그인한 누구나(어사이니 무관, #452). kill/edit = 소유자만.
+/**
+ * attach·파일접근·프롬프트 = **소유자 OR 초대된 멤버.** kill/edit 은 소유자만(assertManage).
+ *
+ * ★ #1876 S1 — 목록(`canSeeSession`)과 **같은 술어**(`sessionVisible`)를 쓴다. 종전엔 두 곳이 각자
+ *  구현해 놓고 둘 다 «프로젝트 폴더면 전원» 분기를 갖고 있었다. 그 예외는 폐기됐다(장원준 2026-08-25 D1).
+ *  두 벌로 갈리면 "목록엔 없는데 링크로는 들어가지는" 상태가 생긴다 — 그게 이 기능의 원래 신고였다.
+ *  구조 테스트가 두 자리가 같은 함수를 부르는지 잠근다(session-privacy-invite-only.test.ts).
+ */
 export async function canAttach(id: string, userId: string): Promise<boolean> {
   const m = await ownerMeta(id);
   if (!m) return false;
-  // 프로젝트 폴더 세션은 '공동 세션' — 어사이니/멤버십과 무관하게 로그인한 누구나 입장·조작·파일접근 가능(#452).
-  //  단 공개범위가 걸린 프로젝트라면 그 대상만(#1291) — 입장하면 그 프로젝트의 파일·대화를 그대로 보게 되므로
-  //  목록에서만 감추는 건 의미가 없다. 판정 불가(DB 다운)면 거부한다 — 여기서 열어주면 잠금이 뚫린다.
+  if (m.owner === userId) return true;                        // 소유자 — 폴더를 볼 것도 없다
+  if (!m.invites.includes(userId)) return false;              // ★ 초대받지 않았으면 끝(프로젝트 예외 없음)
+  //  초대자에게만 #1291 추가 제약을 건다 — 입장하면 그 프로젝트의 파일·대화가 그대로 흐르므로
+  //  메타만 잠그고 세션을 열어두면 잠금이 무의미하다. 판정 불가(DB 다운)면 거부한다.
   const folder = dirToProjectFolder(await resolveSessionDir(id, () => sessionDir(id)));
-  if (folder) {
-    try {
-      const hidden = await hiddenProjects(userId);
-      const pid = Number(await getOpt(id, "@box_project")) || 0;
-      return !(hidden.ids.has(pid) || hidden.folders.has(folder));
-    } catch { return false; }
-  }
-  // 개인(비프로젝트) 세션: 소유자 또는 초대된 멤버만.
-  return m.owner === userId || m.invites.includes(userId);
+  if (!folder) return true;
+  try {
+    const hidden = await hiddenProjects(userId);
+    const pid = Number(await getOpt(id, "@box_project")) || 0;
+    return !(hidden.ids.has(pid) || hidden.folders.has(folder));
+  } catch { return false; }
 }
 async function assertManage(user: LivelyUser, id: string): Promise<void> {
   const m = await ownerMeta(id);

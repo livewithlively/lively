@@ -172,6 +172,25 @@ export async function initOrgCore(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS auth_token_member_idx ON auth_token(member_id);
     -- email 은 토큰에 저장하지 않는다(귀속 표시용 → member_id 로 파생). 기존 DB 의 중복 컬럼 제거(멱등).
     ALTER TABLE auth_token DROP COLUMN IF EXISTS email;
+    -- #2174 멤버 추종 — 이 토큰의 유효권한을 발급 시점에 박제하지 않고 **멤버 라이브 scope 를 그대로** 쓴다.
+    --  우리가 굽는 세션·박스 토큰에만 켠다(무엇에 켤지는 발급부가 정한다). 규칙 본문은 store/tokens.ts
+    --  computeEffectiveScopes — 멤버가 상한이라는 규칙은 그대로고, 달라지는 건 '승격이 반영되는가' 하나다.
+    --  ⚠ 백필은 **컬럼을 새로 만드는 그 순간에만** 한다 — 매 부팅 UPDATE 로 두면 관리자가 일부러 끈 토큰을
+    --   다음 재시작이 도로 켜 버린다(사람이 내린 설정을 서버가 되돌리는 건 그 자체로 사고다). DO 블록이 그 1회성을 준다.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_schema = current_schema() AND table_name = 'auth_token'
+                        AND column_name = 'follow_member_scopes') THEN
+        ALTER TABLE auth_token ADD COLUMN follow_member_scopes BOOLEAN NOT NULL DEFAULT false;
+        -- 이미 발급돼 박스 홈·세션에 심겨 있는 토큰들. 이 백필이 없으면 정책만 바뀌고 **현장은 그대로**다
+        --  (재발급이 닿지 않아 옛 권한에 묶여 있던 그 토큰들이야말로 이 변경을 하게 만든 당사자다).
+        --  session-hooks: 는 뺀다 — 훅은 사람이 시킨 행위가 아니라 자동 보고라 최소권한이 맞다(profiles.ts).
+        UPDATE auth_token SET follow_member_scopes = true
+         WHERE member_id IS NOT NULL AND revoked_at IS NULL
+           AND (label LIKE 'central-box:%' OR label LIKE 'session-mcp:%');
+      END IF;
+    END $$;
   `);
 }
 

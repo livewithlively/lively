@@ -91,6 +91,19 @@ function linksArray(t: Traversal, links: Map<string, string>): Array<{ target_ex
     });
 }
 
+// 채널(container_name) = **상위 페이지/DB 이름** (#2416).
+//  왜: 증류기 레인의 입구는 **자료 종류 + 채널** 둘로만 좁힐 수 있는데, 노션은 부모 id(container_ref)만 넣고
+//   이름을 안 넣어 왔다. id 로는 사람이 레인 스코프를 못 쓴다(관리탭·리브가 보는 것은 이름이다).
+//   그 결과 노션만 쓰는 사람은 레인을 '종류'로밖에 못 가르고, 그건 설계가 금지하는 축이다.
+//  ⚠ 페이지 자신의 제목을 넣으면 안 된다 — 자료마다 값이 달라 '묶음'이 아니게 된다.
+//  ⚠ 추가 API 호출을 하지 않는다 — 트래버스가 이미 들고 있는 노드 맵에서만 찾고, 없으면 비운다.
+function containerNameOf(t: Traversal, parentExtId: string | undefined): string | undefined {
+  const id = String(parentExtId ?? "").trim();
+  if (!id) return undefined;
+  const name = titleOfPage(t.pages.get(id)?.page ?? null) || titleOfDb(t.dbs.get(id)?.db ?? null);
+  return name.trim() || undefined;
+}
+
 export function emitPage(t: Traversal, node: PageNode, parentExtId: string | undefined): RawItem {
   const page = node.page!;
   const links = new Map<string, string>();
@@ -131,6 +144,7 @@ export function emitPage(t: Traversal, node: PageNode, parentExtId: string | und
       is_bot: actorUser?.type === "bot",
     } : undefined,
     container_ref: parentExtId,
+    container_name: containerNameOf(t, parentExtId),   // 채널(#2416) — 상위 페이지/DB 이름
     parent_external_id: parentExtId,
     sort: node.sort ?? undefined,
     title: titleOfPage(page) || "(제목 없음)",
@@ -203,6 +217,7 @@ export function emitDb(t: Traversal, node: DbNode, parentExtId: string | undefin
     },
     actor: db.created_by?.id ? { external_id: db.created_by.id, display_name: t.users.get(db.created_by.id)?.name } : undefined,
     container_ref: parentExtId,
+    container_name: containerNameOf(t, parentExtId),   // 채널(#2416) — 상위 페이지/DB 이름
     parent_external_id: parentExtId,
     sort: node.sort ?? undefined,
     title: titleOfDb(db) || "(제목 없는 데이터베이스)",

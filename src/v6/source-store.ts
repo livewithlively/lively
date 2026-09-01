@@ -47,10 +47,13 @@ export async function canSeeSource(id: number, viewer: Viewer): Promise<boolean>
 
 const S_COLS =
   `id, name, kind, title, body_md, provenance, external_system, external_instance, external_id, external_url,
-   occurred_at, last_synced_at, author, lifecycle, created_at, updated_at, updated_by, fields, parent_external_id`;
+   occurred_at, last_synced_at, author, lifecycle, created_at, updated_at, updated_by, fields, parent_external_id, visibility`;
 const S_SEL = S_COLS.split(",").map((c) => "s." + c.trim()).join(", ");
 // 목록/그래프용 얕은 컬럼(본문 제외 — 자료는 28k+ 전사록이라 목록에 전문 싣지 않는다). parent_external_id=스레드/계층 관계(#735).
-const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id`;
+//  has_knowledge(#2423): 이 자료로 지식이 만들어졌나 — 목록의 민트 점 하나가 읽는 값. 건수가 아니라 유무다
+//  (목록에서 필요한 건 «됐나/안 됐나» 뿐이고, 몇 건인지는 상세가 말한다).
+export const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.visibility,
+   EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge`;
 
 export interface SourceRow {
   id: number; name: string | null; kind: string; title: string | null; body_md: string;
@@ -61,7 +64,14 @@ export interface SourceRow {
 const auditSource = (key: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("source", key, op, before, after, ctx);
 
-export interface SourceFilter { kind?: string; provenance?: string; q?: string; limit?: number; offset?: number }
+export interface SourceFilter {
+  kind?: string; provenance?: string; q?: string; limit?: number; offset?: number;
+  /** 출처 축(#2423 자료 앱) — 자료 목록을 «어디서 왔나» 로 좁힌다. */
+  system?: string;      // external_system('slack'·'github'·'local'…). 'authored'=사람이 직접 적어 둔 것(external_system IS NULL)
+  container?: string;   // 채널·폴더·저장소(fields->>'container_name') — 표현식 인덱스가 이미 있다
+  author?: string;      // 작성자·올린 사람(fields->>'author_name')
+  linked?: boolean;     // true=지식이 붙은 것만 / false=아직 안 붙은 것만
+}
 
 // listSources / countSources 공유 필터 — WHERE·params 를 한 곳에서(목록·총계가 항상 같은 조건).
 function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] } {
@@ -70,6 +80,15 @@ function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] }
   if (f.kind) { params.push(f.kind); wh.push(`s.kind=$${params.length}`); }
   if (f.provenance) { params.push(f.provenance); wh.push(`s.provenance=$${params.length}`); }
   if (f.q) { params.push(`%${f.q}%`); wh.push(`(s.title ILIKE $${params.length} OR s.body_md ILIKE $${params.length})`); }
+  //  '적어 둔 것'(전사록·회의록)은 커넥터가 아니라 사람·세션이 넣은 것이라 external_system 이 비어 있다.
+  //   그 갈래도 나무의 한 가지이므로 예약어 하나로 고른다(빈 문자열은 필터 없음과 구분되지 않아 쓰지 않는다).
+  if (f.system === "authored") wh.push(`s.external_system IS NULL`);
+  else if (f.system) { params.push(f.system); wh.push(`s.external_system=$${params.length}`); }
+  if (f.container) { params.push(f.container); wh.push(`s.fields->>'container_name'=$${params.length}`); }
+  if (f.author) { params.push(f.author); wh.push(`s.fields->>'author_name'=$${params.length}`); }
+  if (f.linked !== undefined) {
+    wh.push(`${f.linked ? "" : "NOT "}EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id=s.id)`);
+  }
   return { where: wh.join(" AND "), params };
 }
 
@@ -92,6 +111,33 @@ export async function countSources(f: SourceFilter = {}, viewer?: Viewer): Promi
   const vis = await sourceVisWhere(viewer, params);
   const row = await one(itemsPool, `SELECT count(*)::int AS n FROM source s WHERE ${where} AND ${vis}`, params);
   return Number((row as { n?: number } | undefined)?.n ?? 0);
+}
+
+// ── 출처 나무(#2423 자료 앱) — «어디서 왔나» 로 자료를 접는 집계. 화면 왼쪽 나무가 이 한 번의 조회로 선다. ──
+//  가지 = (external_system, container_name) 한 쌍. 슬랙이면 채널, 깃허브면 저장소, 내 컴퓨터면 최상위 폴더,
+//  '적어 둔 것'(external_system NULL)이면 종류(전사록·회의록)를 채널 자리에 놓는다 — 그래야 그 갈래도 가지를 갖는다.
+//  뷰어 술어를 그대로 태우므로 **안 보이는 자료는 건수에도 안 잡힌다**(나무가 남의 개인 폴더 이름을 말하지 않는다).
+export interface SourceTreeNode {
+  system: string;            // 'slack'·'github'·'local'… 또는 'authored'
+  container: string | null;  // 채널·폴더·저장소 이름(없을 수 있다)
+  n: number;                 // 자료 수
+  linked: number;            // 그중 지식이 붙은 것
+  newest: string | null;     // 마지막으로 들어온 때
+}
+export async function listSourceTree(viewer?: Viewer): Promise<SourceTreeNode[]> {
+  const params: unknown[] = [];
+  const vis = await sourceVisWhere(viewer, params);
+  const rows = await q(itemsPool,
+    `SELECT COALESCE(s.external_system, 'authored') AS system,
+            COALESCE(s.fields->>'container_name', CASE WHEN s.external_system IS NULL THEN s.kind ELSE NULL END) AS container,
+            count(*)::int AS n,
+            count(*) FILTER (WHERE EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id))::int AS linked,
+            max(COALESCE(s.occurred_at, s.updated_at)) AS newest
+       FROM source s
+      WHERE s.lifecycle='active' AND ${vis}
+      GROUP BY 1, 2
+      ORDER BY 3 DESC`, params);
+  return rows as unknown as SourceTreeNode[];
 }
 
 // distill 대상 — 아직 지식으로 증류되지 않은 자료(knowledge_source 링크가 하나도 없는 active source). 최근 발생순.

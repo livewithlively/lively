@@ -6,6 +6,7 @@
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
 import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, personName, profileAvatar, showGate, state } from './core.js';
+import { claimLocalOwner } from './lib/local-owner.js';   // #2460 — 이 브라우저의 기억은 누구 것인가(사람 축)
 import { watchStaleShell } from './gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
@@ -284,6 +285,11 @@ async function boot() {
     return;
   }
   if (!state.me || !state.me.userId) { showGate(); return; }
+  //  ★ #2460 — 이 브라우저에 남은 기억이 **누구 것인가**. 로그아웃은 토큰만 지우므로(core.ts logout),
+  //   같은 브라우저에서 계정이 바뀌면 앞사람의 열린 창·세션 이름 캐시가 그대로 사이드바에 섰다.
+  //   주인이 바뀌었으면 겉모습(테마·글꼴·폭)만 남기고 비운 뒤 **새로고침**한다 — 워크스페이스별 키는
+  //   모듈이 실릴 때 한 번 계산되므로(net.ts wsKey), 지우기만 하고 그대로 가면 옛 키로 이번 판을 마저 돈다.
+  if (claimLocalOwner(String(state.me.userId))) { location.reload(); return; }
   hideGate();
   // ── 화면 셸 선택(#1719) ──
   //  ?embed=1 : 새 셸이 클래식 페이지를 iframe 에 '앱'으로 실을 때. 클래식 셸을 그대로 쓰되 크롬(상단바·탭·배너·푸터)만
@@ -295,8 +301,16 @@ async function boot() {
   //             조직이 ui_mode 를 classic 으로 두었더라도 이 주소는 새 셸이어야 한다(그 화면을 가리키는 링크이므로).
   const embedded = new URLSearchParams(location.search).get('embed') === '1';
   const solo = new URLSearchParams(location.search).get('solo') === '1';
+  //  ★ 셸을 정하는 것은 **shell** 이다(#2208). embed 는 '끼워 넣은 판'이라는 표지일 뿐 — 저장소 격리와
+  //   크롬 걷기가 그 뜻이고(embed.ts), 셸 선택과는 상관이 없다. 종전엔 둘이 한 플래그에 얹혀 있어서,
+  //   embed 를 붙이는 **다른 자리**까지 클래식으로 끌려갔다: 곁칸 웹 칸은 우리 오리진 주소에 embed=1 을
+  //   자동으로 붙이는데(web-url.ts — 안 붙이면 안쪽 라이블리가 바깥 저장값을 복제한다), 그 탓에 칸에
+  //   라이블리 주소를 넣으면 **언제나 클래식 홈**이 떴다(상민님 2026-08-27: "다른 브라우저에서는 안 그런데
+  //   앱의 우측 웹 위젯에서만 그럼" — 해시가 없으니 클래식 기본 라우트 #/dashboard 로 떨어진다).
+  //  런치패드가 클래식 페이지를 실을 때만 shell=classic 을 명시한다(apps.ts embedUrl) — 그쪽은 종전 그대로다.
+  const classicShell = new URLSearchParams(location.search).get('shell') === 'classic';
   if (embedded) document.body.classList.add('embed');
-  else if (solo || uiMode() === 'v2') {
+  if (!classicShell && (solo || uiMode() === 'v2')) {
     uiV2Active = true;
     document.body.dataset.ui = 'v2';
     await bootV2();

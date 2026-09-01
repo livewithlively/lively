@@ -69,11 +69,81 @@ const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$
 //  조용히 붙는다(둘 다 유효하니 401 도 안 난다 = 조용한 파손). 파일이 없을 때만 env 로 떨어진다
 //  (프로비저닝·컨테이너처럼 파일 없이 env 로만 주는 경로 보존).
 const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GATEWAY_URL);
-const token = () => (readLively("token") || process.env.LIVELY_TOKEN || "").trim();
+// ★ **세션 토큰이 있으면 그게 이긴다(#2234)** — 위 '파일이 env 를 이긴다' 규칙의 유일한 예외이자, 그 규칙이
+//  지키려던 것을 오히려 지키는 자리다. 두 값의 성격이 다르다:
+//   · LIVELY_TOKEN — 설치기가 셸 rc 에 심은 `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 의 결과일 수 있다.
+//     그건 **파일의 스냅샷**이라 재로그인 뒤 늙는다 → 파일이 이겨야 한다(#916). 종전 규칙 그대로 둔다.
+//   · LIVELY_MCP_TOKEN — 게이트웨이가 이 pane 을 띄우며 **그 세션 주인 앞으로 발급해 심은** 세션 스코프
+//     자격이다(src/terminal/profiles.ts mintSessionMcpToken). 셸이 만든 값이 아니라 늙지 않고, 세션이 죽으면
+//     회수된다. 이건 캐시가 아니라 **정본**이다.
+//  왜 필요한가: 홈이 공유인 박스(맥 단일유저·중앙박스)는 `~/.lively/token` 이 **키트를 깐 사람 것 하나뿐**이라,
+//   다른 멤버의 세션이 MCP 로 하는 모든 일이 남의 신원으로 나갔다. 실측 2026-08-27(laibeulliui-Macmini):
+//   `whoami` → member_id=yoon + session_id=box-jang-…, `session_rename` → "내 세션만 이름을 바꿀 수 있습니다"
+//   → #1979 세션 자동 이름짓기가 그 박스에서 구조적으로 불가능했다(그날 17건 중 12건이 첫 지시 원문 그대로).
+//   종전 http 직결 등록은 멤버 토큰을 프로필 .claude.json 에 구워 이 문제가 없었다 — #1079 의 프록시 전환이
+//   #346/#916 이 세운 프로필 격리를 MCP 에서 조용히 되돌린 것이라, 여기서 되돌린다.
+//  ⚠ 없으면 종전과 **글자 그대로 같다**(구 게이트웨이·격리 박스·개인 노트북) — 무회귀.
+const token = () => (
+  (process.env.LIVELY_MCP_TOKEN || "").trim()
+  || readLively("token")
+  || (process.env.LIVELY_TOKEN || "").trim()
+).trim();
+
+// ── stdio 피어(하네스)가 사라진 경우 — 이 프로세스가 «죽어야 하는» 유일한 경우 ─────────
+//  머리말의 "죽으면 안 된다"는 **상류(게이트웨이)** 오류에 대한 규칙이다. 반대쪽, 즉 우리를 spawn 한
+//  하네스가 사라지면 말을 걸 상대도 답을 받을 상대도 없다 — 그때 살아 있는 것은 순수 낭비다.
+//
+//  ⚠ 왜 이 자리가 필요한가(2026-08-28 dev 맥미니 실측): 이게 없어서 고아 19개가 코어 9.4개(CPU 1,540%)를
+//   태우고 있었다. 가장 오래된 것은 1일 11시간째였다. 기전은 **재귀**다 —
+//     ① 하네스가 죽어 stdout 읽는 쪽이 사라진다
+//     ② send() 의 output.write() 가 **비동기** EPIPE 를 낸다(try/catch 로는 안 잡힌다)
+//     ③ error 리스너가 없어 uncaughtException 으로 올라온다
+//     ④ 그 핸들러가 log() 를 부르는데 **stderr 도 같이 깨져 있어** 또 EPIPE
+//     ⑤ ③으로 돌아간다 — 무한 고리, 100% CPU
+//   재현: stdout 읽기단만 끊으면 100.4%, 계속 읽어주면 0.5%(대조군).
+const PEER_GONE_CODES = new Set(["EPIPE", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END", "EBADF"]);
+const isPeerGone = (e) => !!e && PEER_GONE_CODES.has(e.code);
+let peerExiting = false;
+/** 피어가 사라졌다 → 조용히 정상 종료. ⚠ 여기서 로그를 남기지 마라 — 그 쓰기가 위 고리의 ④다. */
+function peerGone() {
+  if (peerExiting) return;
+  peerExiting = true;
+  process.exit(0);
+}
+
+// ⚠ 무장은 **진짜 stdio 로 서빙할 때만** 한다 — 모듈을 import 하는 것만으로 걸리면 안 된다.
+//  테스트는 `serveMcpGateway({ input, output })` 에 가짜 스트림을 넘긴다(lively-mcp-gateway.test.mjs:61).
+//  거기서 process.exit(0) 이 나가면 러너가 그 자리에서 끝나고 **실패가 성공(exit 0)으로 둔갑**한다.
+let peerGuardsArmed = false;
+function armPeerGuards() {
+  if (peerGuardsArmed) return;
+  peerGuardsArmed = true;
+  // 스트림에 error 리스너를 달아 EPIPE 가 uncaughtException 으로 올라가지 않게 한다(고리의 ③ 차단).
+  for (const s of [process.stdout, process.stderr]) {
+    try { s.on("error", (e) => { if (isPeerGone(e)) peerGone(); }); } catch { /* 스트림 없음 */ }
+  }
+  // 부모 감시 — 아래 §부모 감시 주석 참조.
+  const ms = Number(process.env.LIVELY_MCP_PARENT_WATCH_MS || 30_000);
+  if (ms > 0) {
+    const initialPpid = process.ppid;
+    const pw = setInterval(() => { if (process.ppid !== initialPpid) peerGone(); }, ms);
+    if (typeof pw.unref === "function") pw.unref();   // 이 타이머가 종료를 막지 않게
+  }
+}
 
 // stdout 은 JSON-RPC 전용 — 실수로 샌 console.log 가 프로토콜을 깨지 않게 stderr 로 묶는다.
-console.log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
-const log = (m) => process.stderr.write("[lively-mcp] " + m + "\n");
+//  ⚠ 두 함수 모두 **절대 던지지 않는다**: 로그가 실패해서 예외가 나면 그 예외를 로그하려다 고리가 된다.
+const writeErr = (s) => { try { process.stderr.write(s); } catch { /* stderr 끊김 — 보고를 포기한다 */ } };
+console.log = (...a) => writeErr(a.map(String).join(" ") + "\n");
+const log = (m) => writeErr("[lively-mcp] " + m + "\n");
+
+// ── 부모 감시 (armPeerGuards 안에서 켠다) ───────────────────────────────────
+//  EPIPE 를 못 보는 경우가 있다: 형제 프로세스가 파이프의 반대편을 물고 있으면 우리 쪽 쓰기는
+//  안 깨지고 stdin 에도 EOF 가 안 온다(실측: 그 상태로 유휴 생존 = 메모리만 축낸다).
+//  그때 남는 유일한 신호가 «부모가 바뀌었다» 다.
+//  ⚠ `ppid === 1` 이 아니라 **기동 시점의 ppid 와 달라졌는지**를 본다 — 리눅스 subreaper·
+//   컨테이너 `--init`(PID 1 = docker-init) 에서는 고아가 1 이 아닌 다른 PID 로 재부모화되고,
+//   반대로 init 이 직접 띄운 경우엔 처음부터 1 이라 «1이면 고아»가 오판이 된다.
 
 // ── 툴 스냅샷 캐시 ─────────────────────────────────────────────────────────
 //  게이트웨이가 안 닿을 때 이 목록으로 툴 표면을 세운다. 게이트웨이 주소를 함께 저장해
@@ -187,7 +257,16 @@ const toolKey = (tools) => tools.map((t) => t && t.name).sort().join(" ");
 //  런타임 — MCP stdio(JSON-RPC 2.0, newline-delimited)
 // ═══════════════════════════════════════════════════════════════════════════
 export function serveMcpGateway({ input = process.stdin, output = process.stdout } = {}) {
-  const send = (m) => { try { output.write(JSON.stringify(m) + "\n"); } catch { /* stdout 닫힘 */ } };
+  // 진짜 stdio 로 서빙할 때만 피어 감시를 켠다(테스트의 가짜 스트림에는 안 건다 — §피어 주석).
+  const realStdio = input === process.stdin && output === process.stdout;
+  if (realStdio) armPeerGuards();
+  //  ⚠ try/catch 만으로는 **모자란다**: 깨진 파이프에 쓰면 예외가 동기로 나지 않고 비동기 error 로 온다.
+  //   그래서 write 콜백으로도 받는다. 가짜 스트림(테스트)일 때는 종료하지 않는다.
+  const send = (m) => {
+    const onWritten = realStdio ? (err) => { if (isPeerGone(err)) peerGone(); } : undefined;
+    try { output.write(JSON.stringify(m) + "\n", onWritten); }
+    catch (e) { if (realStdio && isPeerGone(e)) peerGone(); /* 그 외엔 무시 — 보고 실패가 서빙을 멈추진 않는다 */ }
+  };
   const okr = (id, result) => send({ jsonrpc: "2.0", id, result });
 
   let lastTools = null;      // 하네스에 마지막으로 보여준 툴 목록(= list_changed 판정 기준)
@@ -219,6 +298,10 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
   }
 
   const rl = createInterface({ input });
+  //  ⚠ readline 은 input 의 error 를 자기에게 **재방출**하는데 여기 리스너가 0개면 EventEmitter 규칙상
+  //   throw → uncaughtException 으로 올라간다. 그러면 위 §피어 고리의 또 다른 입구가 된다(pane pty 가
+  //   사라진 뒤 stdin read 가 EIO 를 내는 경로). 입력이 깨진 것도 «피어가 사라졌다» 로 읽는다.
+  rl.on("error", () => { if (realStdio) peerGone(); });
   rl.on("line", async (line) => {
     line = line.trim();
     if (!line) return;
@@ -296,8 +379,14 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
 }
 
 // 최상위 안전망 — 어떤 예외도 이 프로세스를 죽이지 못하게(stdio MCP 는 재시작이 없다).
-process.on("uncaughtException", (e) => log(`uncaughtException(무시): ${(e && e.stack) || e}`));
-process.on("unhandledRejection", (e) => log(`unhandledRejection(무시): ${(e && e.stack) || e}`));
+//  ⚠ 단 하나의 예외가 «피어가 사라졌다» 다. 그건 버그가 아니라 **끝났다는 신호**이므로 살려두면 안 된다.
+//   여기서 무시하면 위 §피어 주석의 고리가 그대로 돈다(실측 100% CPU · 최장 1일 11시간).
+const onFatal = (kind) => (e) => {
+  if (isPeerGone(e)) return peerGone();
+  log(`${kind}(무시): ${(e && e.stack) || e}`);
+};
+process.on("uncaughtException", onFatal("uncaughtException"));
+process.on("unhandledRejection", onFatal("unhandledRejection"));
 
 // direct run — `node lively-mcp-gateway.mjs` (테스트/디버그) 일 때만. lively.mjs 가 import 하면 안 돈다.
 const DIRECT_RUN = (() => {

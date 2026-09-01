@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "examples", "session-name-ask.org-hook.mjs");
 let pass = 0;
@@ -33,7 +34,7 @@ async function run(prompt, env = {}) {
   const child = spawn(process.execPath, [HOOK], {
     // ⚠ 억제 env 를 전부 ""로 지운다 — 이 테스트를 돌리는 셸이 LIVELY_OFF 등을 들고 있으면
     //  훅이 통째로 침묵해 **모든 단언이 vacuous** 해진다(아래 대조군 행이 그걸 잡는다).
-    env: { ...process.env, LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: "", LIVELY_TASK_WS: "",
+    env: { ...process.env, ...offlineLivelyEnv(), LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: "", LIVELY_TASK_WS: "",
            LIVELY_HARNESS: "claude", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "",
            LIVELY_SESSION_ID: sid, ...env },
     stdio: ["pipe", "pipe", "pipe"],

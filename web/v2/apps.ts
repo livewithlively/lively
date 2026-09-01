@@ -5,6 +5,7 @@
 //  이 표의 항목이 `native` 로 바뀌거나 빠진다(표가 곧 '아직 안 옮긴 것' 목록이다).
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
 import { el, navOn, sv } from '../core.js';
+import { shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 최근 줄의 정본은 서버
 import { ICONS } from './icons.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
@@ -16,12 +17,16 @@ export interface AppDef {
   desc: string;       // 한 줄
   route: string;      // 클래식 해시(#/ 뒤) — iframe 에 실릴 경로
   tab: string | null; // navOn 게이팅에 쓸 클래식 탭 키(없으면 항상 노출)
-  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web';
+  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src';
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
   kind?: 'classic' | 'browser';
   home?: string;      // kind='browser' 의 첫 주소
+  // #2199 — 런치패드·최근 앱·독·통합검색에 **안 나온다**. 주소(#/system/… · #/app/system)로는 그대로 열린다 —
+  //  문이 다른 곳에 있는 앱이다(설정 = [나] 창 ▸ [고급 설정], v2/me-modal.ts). 표에서 지우지 않는 이유: 라우터·탭 제목·
+  //  액자 판정(appByKey)이 이 줄을 읽고, shell-surfaces CLASSIC_BACKLOG(앱화 대장)와 같은 집합이어야 한다.
+  hidden?: boolean;
 }
 
 // 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(홈·AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
@@ -30,9 +35,12 @@ export const APPS: AppDef[] = [
   { key: 'terminal', title: 'AI 세션', desc: '박스에서 도는 AI 세션 전체 · 새 세션 만들기', route: 'terminal', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26 "터미널 아이콘 말고 말풍선으로 통일")
   { key: 'projects2', title: '프로젝트', desc: '보드 · 리스트 · 타임라인 · 태스크', route: 'projects2', tab: 'projects2', icon: 'proj' },
   { key: 'knowledge', title: 'WIKI', desc: '지식 트리 · 문서 · 검토 큐', route: 'knowledge', tab: 'knowledge', icon: 'wiki' },
-  { key: 'context', title: '맥락 관리', desc: '수집(연결) · 증류 · 분류 · 자동 관리 파이프라인', route: 'context', tab: 'context', icon: 'ctx' },
+  { key: 'context', title: '맥락 관리', desc: '우리 AI 가 아는 것과 그것을 만드는 기계들 — 수집기 · 증류기 · 카테고리 · 점검 · AI 전달', route: 'context', tab: 'context', icon: 'ctx' },
   { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
-  { key: 'system', title: '설정', desc: '내 설정 · 조직 · 구성원 · 운영', route: 'system', tab: 'system', icon: 'sys' },
+  // 설정 — 앱 목록에서 **뺐다**(#2199, 원준 2026-08-27 "앱에 설정을 없애고 … 모달 사이드바에 고급설정 하나 만들어서").
+  //  설정은 할 일이 있는 화면이 아니라 환경을 손보는 자리라, 문은 [나] 창 ▸ [고급 설정] 하나다(같은 문이 둘이면 어느 쪽이
+  //  진짜인지 화면이 말하지 못한다). 줄은 남긴다 — 위 hidden 주석.
+  { key: 'system', title: '설정', desc: '조직 · 구성원 · AI 능력 · 데이터 연결 · 운영', route: 'system', tab: 'system', icon: 'sys', hidden: true },
   { key: 'learn', title: '사용 가이드', desc: '둘러보기 · 문서 · 시작하기', route: 'learn', tab: null, icon: 'learn' },
 ];
 
@@ -46,12 +54,17 @@ export const CLASSIC_PAGES: Record<string, string> = {
   sessions: 'sessions', activate: 'system', f: 'knowledge',
 };
 
-export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.tab || navOn(a.tab)); }
+export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.hidden && (!a.tab || navOn(a.tab))); }
 
-// ── 최근 쓴 앱(#1954) — 홈 한 줄이 읽는 기억. 이 기기의 내 습관이라 브라우저에 둔다(서버 저장 아님). ──
+// ── 최근 쓴 앱(#1954) — 홈 한 줄이 읽는 기억. ──
+//  #2460 — **계정에 둔다**(종전엔 이 기기의 습관이라 브라우저에만 뒀다): 사무실 데스크톱에서 연 앱이
+//   노트북 홈의 최근 줄에도 서야 «내가 요즘 쓰는 것»이 된다. 브라우저는 첫 페인트용 캐시로 남는다.
 //  ⚠ 이름을 `*_KEY` 로 두지 않는다 — gitleaks 의 generic-api-key 룰이 브라우저 저장소 이름을 시크릿으로 오인해
 //   CI 시크릿 스캔이 떨어진다(#1954 실측). 값은 localStorage 칸 이름일 뿐이다.
-const RECENT_STORE = 'lively_v2_recent_apps';
+// #1875 — 워크스페이스별. **여기가 이 키의 유일한 자리**다(레일도 이 값을 import 해서 읽는다 — 사본을 두면
+//  한쪽에만 접미사가 붙어 레일만 남의 워크스페이스 기록을 본다).
+export const RECENT_STORE_KEY = shellPrefStore('lively_v2_recent_apps', 'list');
+const RECENT_STORE = RECENT_STORE_KEY;
 const RECENT_MAX = 12;
 function readRecent(): string[] {
   try { const v = JSON.parse(localStorage.getItem(RECENT_STORE) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; }
@@ -59,9 +72,11 @@ function readRecent(): string[] {
 }
 /** 앱을 열었다 — 맨 앞으로. 같은 앱을 되풀이 열어도 줄이 늘지 않는다. */
 export function noteAppUse(key: string): void {
-  if (!key || !appByKey(key)) return;
+  const a = key ? appByKey(key) : null;
+  if (!a || a.hidden) return;   // 문이 없는 앱은 '최근'에도 안 선다 — 서면 최근 줄이 문 없는 앱을 만든다
   const next = [key, ...readRecent().filter((k) => k !== key)].slice(0, RECENT_MAX);
   try { localStorage.setItem(RECENT_STORE, JSON.stringify(next)); } catch { /* 못 남겨도 이번 화면은 된다 */ }
+  shellPrefsPush();   // #2460 — 최근 줄은 계정의 것이다(다른 기기에서도 같은 줄이 뜬다)
 }
 /**
  * 최근 쓴 앱 n개. 기록이 모자라면 **표 순서로 채운다** — 처음 온 사람에게 빈 줄을 보이지 않기 위해서다
@@ -81,7 +96,10 @@ export function appByKey(key: string): AppDef | null { return APPS.find((a) => a
 //  appUrl 을 거치지 않는다(거치면 프리픽스가 두 번 붙는다). 같은 경로 = 같은 API 베이스 = 같은 인증.
 export function embedUrl(hash: string): string {
   const h = hash.replace(/^#\/?/, '');
-  return location.pathname + '?embed=1#/' + h;
+  //  shell=classic — **이 앱은 클래식 페이지다**를 명시한다(#2208). 종전엔 embed=1 하나가 '끼워 넣은 판'과
+  //   '클래식 셸을 써라' 두 뜻을 겸했는데, 그러면 embed 를 붙이는 **다른 자리**(곁칸 웹 칸 — web-url.ts 가
+  //   우리 오리진에 자동으로 붙인다)까지 클래식으로 끌려간다. 뜻이 둘이면 플래그도 둘이어야 한다.
+  return location.pathname + '?embed=1&shell=classic#/' + h;
 }
 export function classicUrl(hash: string): string {
   const h = hash.replace(/^#\/?/, '');
@@ -105,7 +123,7 @@ export function soloSessionUrl(id: string): string {
 const ICON_PATHS: Record<AppDef['icon'], string> = {
   //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 홈(클래식)은 옛 대시보드라 위젯 판 넷, 설정은 이빨 있는 톱니.
   home: ICONS.dashboard, term: ICONS.term, chat: ICONS.chat, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
-  sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web,
+  sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web, src: ICONS.src,
 };
 export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
   const svgNs = 'http://www.w3.org/2000/svg';
@@ -180,6 +198,17 @@ const GLASS_ART: Record<string, GlassArt> = {
     color: '<path d="M24.5 36.5l7.5 7.5L58 13.5" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
     frost: '<rect x="5" y="10" width="39" height="44" rx="5.5"/>',
     punch: '<rect x="13" y="21" width="21" height="3.6" rx="1.8"/><rect x="13" y="31" width="15" height="3.6" rx="1.8"/>',
+  },
+  // 자료 — **어긋나게 포갠 낱장 둘**. 뒤 장(색)이 기울어 있고 앞 장(서리)이 정면으로 겹친다.
+  //  겹친 자리가 유리이고, 뒤 장이 왼쪽·아래로 삐져나오는 자리가 층을 만든다.
+  //  ⚠ 상자로 그리지 마라 — 사이드바 발치의 「아카이브」와 같은 형태가 된다(첫 판이 그랬다, 원준 지적).
+  //   책(위키)·카드+체크(프로젝트)·판 셋(홈)과도 갈린다: 자료는 **제본되지 않은 낱장이 여러 장**이다.
+  //   접힌 모서리는 흰색으로 뚫어(punch) 서리 위에서도 읽히게 한다.
+  src: {
+    span: [7, 10, 41, 58],
+    color: '<rect x="7" y="10" width="34" height="48" rx="5" transform="rotate(-13 24 34)"/>',
+    frost: '<path d="M30 11h13l9 9v33a4 4 0 0 1-4 4H30a4 4 0 0 1-4-4V15a4 4 0 0 1 4-4z"/>',
+    punch: '<path d="M43 11v9h9z"/>',
   },
   // 펼친 책 — 오른쪽 면이 색, 왼쪽 면이 서리. 두 면의 재질이 달라 펼쳐진 게 읽힌다.
   wiki: {
@@ -302,6 +331,10 @@ export function appGlassIcon(icon: AppDef['icon'], cls?: string): SVGElement {
 //   · 화면 앱(APPS 표) 클릭 = #/app/<key> 로 이동(가운데 iframe).
 //   · 설치된 세션 앱(org_app, #1780) 클릭 = openAppSession → 앱 세션을 열고 그 대화 화면으로. 동의(grant)가 없으면
 //     그때 동의 창이 뜬다. 세션 앱은 비동기로 불러와(listSessionApps) 도착하면 격자에 덧그린다(없으면 화면앱만 보인다).
+//  설치된 앱(org_app) 중 **우리가 만든 빌트인**은 제 아이콘을 갖는다 — 남의 앱만 종류(앱/세션 앱)로 뭉뚱그린다.
+//   이 표가 없으면 자료·확인할 것이 런치패드에서 전부 같은 그림으로 서서 어느 것이 무엇인지 못 고른다.
+const BUILTIN_ICON: Record<string, AppDef['icon']> = { sources: 'src', browser: 'web' };
+
 let padEl: HTMLElement | null = null;
 export function openLaunchpad(): void {
   closeLaunchpad();
@@ -323,12 +356,21 @@ export function openLaunchpad(): void {
       .filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
       const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
+      //  정본 주소를 갖는 빌트인(확인할 것·자료)은 **화면 앱**이다 — UI 페이지가 없다고 «세션 앱» 이라 부르면
+      //   배지가 거짓말을 한다(그 앱을 열어도 AI 세션은 안 뜬다). 셋을 가르는 축은 pages 가 아니라 '무엇으로 뜨나'다.
+      const isScreen = !!a.system?.route || hasUi;
       return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
-        title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
-        onclick: () => { closeLaunchpad(); if (hasUi || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title }); } },
-        el('span', { class: 'v2-pad-ico' }, appGlassIcon(hasUi ? 'liv' : 'term')),
+        title: isScreen ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
+        onclick: () => {
+          closeLaunchpad();
+          //  정본 주소가 있는 앱(확인할 것·자료)은 **그 주소로** 간다 — 그 화면이 인스턴스를 뒤에서 멱등 확보한다.
+          //   여기서 openInstalledApp 을 부르면 #/i/<id> 로 가는데, 그 앱들은 UI 페이지가 없어 그 자리에서 죽는다(#2423).
+          if (a.system?.route) { location.hash = a.system.route; return; }
+          if (hasUi || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title });
+        } },
+        el('span', { class: 'v2-pad-ico' }, appGlassIcon(BUILTIN_ICON[a.id] || (hasUi ? 'liv' : 'term'))),
         el('b', { text: a.title }),
-        el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
+        el('span', { class: 'v2-pad-badge', text: isScreen ? '앱' : '세션 앱' }));
     });
     grid.replaceChildren(...screen, ...session);
     grid.classList.toggle('v2-pad-grid--q', !!q);   // 검색 중이면 첫 칸이 Enter 로 열릴 자리 — 그걸 보인다.

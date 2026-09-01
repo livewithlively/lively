@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(here, "examples", "project-auto-bind.org-hook.mjs");
@@ -66,7 +67,7 @@ async function startGateway() {
 async function runHook(cwd, base, env, prompt = "이 작업을 실제 코드로 구현하고 테스트까지 완료해줘", input = {}) {
   const child = spawn(process.execPath, [HOOK], {
     cwd,
-    env: { ...process.env, LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: base, LIVELY_HOME: cwd,
+    env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: base, LIVELY_HOME: cwd,
       LIVELY_SESSION_ID: "", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "", ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });

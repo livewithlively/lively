@@ -16,7 +16,7 @@ const ORG_AUDIT_PERIOD_DAYS: Record<string, number> = { all: 0, '1d': 1, '7d': 7
 
 const OA_ENTITY_LABELS: any = {
   org_member: '구성원', auth_token: '토큰', org_profile: '조직 프로필', org_section: '주입 섹션',
-  org_runtime_config: '런타임 설정', org_connector: '외부 자료 수집(레거시)', org_collector: '수집기', org_mcp_server: '외부 도구 서버(MCP)',
+  org_runtime_config: '런타임 설정', org_connector: '자료 가져오기(레거시)', org_collector: '수집기', org_mcp_server: '외부 도구 서버(MCP)',
   org_hook: '커스텀 훅', org_tool: 'AI 도구', org_harness_asset: '스킬·에이전트·커맨드', org_db_source: 'DB 소스',
   org_db_table_policy: '테이블 정책', org_db_column_mask: '컬럼 마스킹',
 };
@@ -173,7 +173,7 @@ async function orgAuditPanel(detail) {
     : '';
 
   const card = el('div', { class: 'card' },
-    cardHead('관리 변경 이력', '구성원·접속 토큰·런타임·외부 자료 수집·DB 소스·훅·도구 등 관리 항목이 언제 누구에 의해 어떤 경로로 바뀌었는지 기록합니다. 각 줄을 펼치면 바뀐 필드의 이전과 이후를 볼 수 있습니다. 시크릿 값은 마스킹해 보관합니다. AI에게 물어보거나 MCP 도구 org_audit_list 로도 조회할 수 있습니다.'),
+    cardHead('관리 변경 이력', '구성원·접속 토큰·런타임·자료 가져오기·DB 소스·훅·도구 등 관리 항목이 언제 누구에 의해 어떤 경로로 바뀌었는지 기록합니다. 각 줄을 펼치면 바뀐 필드의 이전과 이후를 볼 수 있습니다. 시크릿 값은 마스킹해 보관합니다. AI에게 물어보거나 MCP 도구 org_audit_list 로도 조회할 수 있습니다.'),
     controls,
     shown ? el('div', { class: 'aud-count', text: shown }) : null,
     list, pagerBox);
