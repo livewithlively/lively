@@ -166,3 +166,51 @@ export async function opencodeAbort(o: {
     return res.ok;
   } catch { return false; }
 }
+
+/**
+ * 대기 중인 **선택지**를 읽는다 — opencode 는 «질문이 왔다» 는 이벤트를 안 준다(실측 1.18.25:
+ *  이벤트에 question.replied·question.rejected 만 있고 asked 가 없다). 대신 `GET /question` 이
+ *  대기 목록을 준다 — 우리 `pendingAsks` 와 같은 모양이라 그걸 주기적으로 읽는다.
+ *
+ *  실측 스키마: QuestionRequest {id:"que…", sessionID:"ses…",
+ *    questions:[{question, header, options:[{label,description}], multiple?, custom?}], tool?}
+ */
+export async function opencodePendingQuestions(o: { base: string; fetchFn?: typeof fetch }): Promise<Array<Record<string, unknown>>> {
+  const doFetch = o.fetchFn ?? fetch;
+  try {
+    const res = await doFetch(`${o.base}/question`);
+    if (!res.ok) return [];
+    const j = await res.json() as unknown;
+    return Array.isArray(j) ? j.filter((x): x is Record<string, unknown> => !!x && typeof x === "object") : [];
+  } catch { return []; }
+}
+
+/**
+ * 선택지에 답한다 — `POST /question/{id}/reply {answers: string[][]}`.
+ *  ⚠ 답은 **질문 순서대로**의 배열이다(스키마: "User answers in order of questions"). 키가 아니라
+ *   **위치**로 짝짓는다 — claude(질문 전문)·codex(질문 id)와 또 다르다. 순서를 흐트러뜨리면
+ *   엉뚱한 질문에 답한 것이 된다.
+ */
+export async function opencodeReplyQuestion(o: {
+  base: string; requestId: string; answers: string[][]; fetchFn?: typeof fetch;
+}): Promise<boolean> {
+  const doFetch = o.fetchFn ?? fetch;
+  try {
+    const res = await doFetch(`${o.base}/question/${encodeURIComponent(o.requestId)}/reply`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answers: o.answers }),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
+/** 선택지를 물린다(«답 안 함») — 에이전트가 그 사실을 알고 이어간다. */
+export async function opencodeRejectQuestion(o: {
+  base: string; requestId: string; fetchFn?: typeof fetch;
+}): Promise<boolean> {
+  const doFetch = o.fetchFn ?? fetch;
+  try {
+    const res = await doFetch(`${o.base}/question/${encodeURIComponent(o.requestId)}/reject`, { method: "POST" });
+    return res.ok;
+  } catch { return false; }
+}

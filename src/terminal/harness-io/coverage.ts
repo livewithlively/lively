@@ -69,9 +69,12 @@ export const COVERAGE: readonly HarnessCoverage[] = [
   },
   {
     harness: "codex",
-    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "ok", slash: "n/a", usage: "ok", interrupt: "ok", model: "terminal" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "n/a", usage: "ok", interrupt: "ok", model: "terminal" },
     notes: {
-      ask: "선택지 툴을 이 축으로 실측하지 않았다 — 있는지부터 재야 한다.",
+      //  ★ 실측 2026-09-01(0.152.0, 자기 JSON 스키마 근거): `item/tool/requestUserInput`
+      //   요청 {isBlocking,itemId,threadId,turnId,questions:[{id,header,question,options,isOther,isSecret}]}
+      //   응답 {answers:{"<질문 id>":{answers:["<label>",…]}}} — **질문 id 로** 키잡는다.
+      //   ⚠ isSecret 질문은 웹에서 안 받는다(자격증명 자리) — 그 묶음은 raw 로 흘린다.
       slash: "codex 는 슬래시가 TUI 전용이다 — app-server 프로토콜로 목록이 노출되지 않는다(벤더 미제공).",
       model: "thread/start 에서만 정해진다 — 도는 중 전환하는 RPC 가 app-server 스키마에 없고, 카탈로그에도 runtimeCmd 가 없다.",
     },
@@ -89,9 +92,12 @@ export const COVERAGE: readonly HarnessCoverage[] = [
   },
   {
     harness: "opencode",
-    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "ok", slash: "terminal", usage: "terminal", interrupt: "ok", model: "terminal" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "terminal", usage: "terminal", interrupt: "ok", model: "terminal" },
     notes: {
-      ask: "선택지 요청 이벤트를 못 봤다(미실측).",
+      //  ★ 실측 2026-09-01(1.18.25, OpenAPI 근거): `GET /question` 대기 목록 ·
+      //   `POST /question/{id}/reply {answers:string[][]}` · `reject`.
+      //   ⚠ «질문이 왔다» 이벤트가 **없다**(question.replied·rejected 만 있다) — 그래서 목록을 읽는다.
+      //   ⚠ 답이 **질문 순서대로의 배열**이다(키가 아니라 위치). 낱말도 multiple(≠multiSelect)이다.
       slash: "OpenAPI 에 /session/{id}/command 는 있으나 **쓸 수 있는 명령 목록**을 주는 이벤트를 못 찾았다.",
       usage: "이벤트 스트림에서 사용량·한도 축을 못 봤다(session.idle 만 온다).",
       model: "카탈로그에 runtimeCmd 가 없다(도는 중 모델을 바꾸는 슬래시가 확인 안 됨) — /runtime 이 409 로 «터미널에서» 라고 사실대로 답한다.",
