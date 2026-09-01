@@ -41,10 +41,10 @@ export interface ChatAssistantLine {
 }
 export interface ChatSystemLine {
   type: "system";
-  subtype: "turn_duration" | "interrupted" | "compact" | "stop_hook_summary";
+  subtype: "turn_duration" | "interrupted" | "compact" | "stop_hook_summary" | "error";
   timestamp: string;
   durationMs?: number;              // turn_duration — 이 턴에 걸린 시간
-  text?: string;                    // compact — 요약 본문(있으면 구분선을 펼쳐 보여준다)
+  text?: string;                    // compact — 요약 본문 · error — 사람이 다음에 할 일을 아는 한 문장
 }
 export type ChatLine = ChatUserLine | ChatAssistantLine | ChatSystemLine;
 
@@ -113,7 +113,13 @@ export function thinLine(line: ChatLine): ChatLine | null {
   const o = line as any;
   if (!o || typeof o !== "object") return null;
   if (o.type === "system") {
-    return { type: "system", subtype: o.subtype, timestamp: o.timestamp ?? "", ...(o.durationMs !== undefined ? { durationMs: o.durationMs } : {}) } as ChatLine;
+    // ⚠ error 는 **본문이 곧 내용**이라 얇은 줄에서도 text 를 남긴다 — 지우면 화면에 «오류» 라는 말만 남고
+    //  이유가 사라진다(그 이유가 «로그인이 필요합니다» 라 더 그렇다).
+    return {
+      type: "system", subtype: o.subtype, timestamp: o.timestamp ?? "",
+      ...(o.durationMs !== undefined ? { durationMs: o.durationMs } : {}),
+      ...(o.subtype === "error" && typeof o.text === "string" ? { text: o.text } : {}),
+    } as ChatLine;
   }
   if (o.type === "user") {
     const c = o.message?.content;
@@ -162,3 +168,7 @@ export function toThinNdjson(lines: ChatLine[]): string {
 
 /** 얇은 판이 한 번에 훑는 상한 — 이보다 큰 파일은 **꼬리부터** 이만큼만 본다(화면이 X-Log-From 으로 알아챈다). */
 export const THIN_MAX_BYTES = 64 * 1024 * 1024;
+/** 사슬(#2233 — 한 박스가 갈아탄 대화들) **전체**가 훑는 상한 — 지금 대화까지 포함한 총량이다.
+ *  한 파일 상한과 같은 값으로 둔다: 사슬이 생겼다고 게이트웨이가 한 번에 파싱하는 양의 천장이 올라가면 안 된다
+ *  (실측 참고: 대화 5개짜리 실제 박스가 36MB — 이 천장 안에 통째로 들어온다). 넘치면 최신 대화부터 담고 끊는다. */
+export const THIN_CHAIN_MAX_BYTES = THIN_MAX_BYTES;

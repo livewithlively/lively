@@ -17,9 +17,22 @@
 
 export type CodexChatMode = "tmux" | "app-server";
 
-/** 이 배포의 기본 모드. 값이 정확히 app-server 일 때만 켠다(오타는 종전 동작으로 접는다 — 조용한 전환 금지). */
+/**
+ * 이 배포의 기본 모드 — **codex 는 대화 UI(app-server)가 기본이다.**
+ *
+ *  ── 왜 기본을 뒤집었나 (2026-08-27, 상민님 지시) ──
+ *  처음엔 opt-in 이었다. App Server 가 공식 문서상 experimental 인데다, 켜는 순간 pane 이 TUI 대신 셸로
+ *  바뀌는 눈에 띄는 변화라 «조용한 전환» 을 피하고 싶었다. 그 판단을 뒤집은 근거는 둘이다:
+ *   ① **실측이 쌓였다** — 매니지드 프로덕션에서 로컬·원격 노드 양쪽 배치로 왕복이 확인됐다(e2e 상시 검사).
+ *   ② **경계가 배포마다 실제로 서게 됐다** — 마지막까지 비어 있던 자리가 격리 리눅스였는데, 거기서도
+ *      포트를 버리고 0600 유닉스 소켓으로 바꿔 닫았다(codex-as-supervisor.ts). 그전까지는 «켤 때 동의를
+ *      받는 노브» 로 막고 있었고, 그건 결함을 노브로 덮은 것이지 고친 게 아니었다.
+ *
+ *  끄는 길은 남긴다: `LIVELY_CODEX_CHAT=tmux`. experimental 표면이라 언제든 되돌릴 수 있어야 한다는
+ *  처음의 판단은 그대로 유효하다 — 바뀐 것은 **어느 쪽이 기본이냐** 뿐이다.
+ */
 export function codexChatModeDefault(env: NodeJS.ProcessEnv = process.env): CodexChatMode {
-  return String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() === "app-server" ? "app-server" : "tmux";
+  return String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase() === "tmux" ? "tmux" : "app-server";
 }
 
 /**

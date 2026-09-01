@@ -28,29 +28,28 @@ async function profilesEditor(detail) {
       : os.provisioned ? '🔒 격리됨: ' + (os.osUser || '') + ' ✓ · 세션 자동 격리'
         : '⏳ 첫 세션에 자동 격리 (' + (os.osUser || 'box_…') + ')';
     kids.push(el('div', {}, el('strong', { text: p.name }), el('span', { class: 'caption', text: '  ' + p.id + ' · ' + stateText })));
-    // #549: 이 멤버가 admin/runtime scope 를 가지면, 프로비저닝 토큰에 그 관리 권한을 실을지 admin 이 선택(기본 off).
-    //  멤버 scope 가 상한이라 이 체크박스는 admin/runtime 보유 멤버에만 뜬다. 체크 시 이 계정 세션이 관리 MCP(org_*)를 직접 쓴다.
+    // #2174: 종전엔 '관리 권한 포함' 체크박스로 프로비저닝 토큰에 admin/runtime 을 실을지 골랐다(#549). 그 방식은
+    //  **켠 뒤에도 반영이 안 되는** 문제가 있었다 — 토큰은 발급 시점 scope 로 박제되는데 그 토큰은 박스 홈에 심긴
+    //  것이라, 재프로비저닝이 그 파일까지 닿지 못하면 올린 권한이 영영 도달하지 않았다(2026-08-28 실측).
+    //  이제 세션 토큰은 멤버 scope 를 그대로 따르므로 고를 것이 없다 — 여기서는 그 사실만 알린다.
     const hasCtrl = (p.scopes || []).some((s) => s === 'admin' || s === 'runtime');
-    let cpChk: any = null;
     if (hasCtrl) {
-      cpChk = el('input', { type: 'checkbox', style: 'margin-right:6px;vertical-align:middle' });
-      kids.push(el('label', { class: 'caption', style: 'display:block;margin:3px 0 7px;cursor:pointer' },
-        cpChk, el('span', { text: '관리 권한(admin/runtime) 포함 — 이 계정으로 실행된 세션이 관리 탭 기능(구성원·토큰·훅·DB소스)을 MCP로 직접 다룰 수 있습니다. 변경 내역은 감사 로그에 AI 작업으로 기록됩니다.' })));
+      kids.push(el('p', { class: 'caption', style: 'margin:3px 0 7px' },
+        el('span', { text: '이 구성원은 관리 권한(admin/runtime)이 있으므로, 이 계정으로 실행된 세션도 관리 탭 기능(구성원·토큰·훅·DB소스)을 MCP로 직접 다룹니다. 권한을 조정하면 실행 중인 세션에도 곧바로 반영되고, 변경 내역은 감사 로그에 AI 작업으로 기록됩니다.' })));
     }
-    const cp = () => !!(cpChk && cpChk.checked);
     if (!os.ready) {
       // fix#59: 카드마다 반복되던 install-isolation.sh 캡션 제거 — 섹션 상단 안내에 이미 1회 서술됨.
     } else if (!os.provisioned) {
       // 자동이지만, 첫 세션 지연(수십초) 없이 미리 깔고 싶으면.
       kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '지금 미리 만들기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '생성 중… (수십초)';
-        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id, includeControlPlane: cp() }) }); toast('OS 격리 유저 생성됨 — 이 멤버 세션이 본인 계정으로 격리됩니다' + (cp() ? ' (관리 권한 포함)' : '')); reload(); }
+        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('OS 격리 유저를 만들었습니다 — 이 멤버 세션이 본인 계정으로 격리됩니다.'); reload(); }
         catch (e) { btn.disabled = false; btn.textContent = '지금 미리 만들기'; toast('실패 — ' + e.message, true); }
       } }));
     } else {
       kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '재프로비저닝(격리·토큰 갱신)', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '갱신 중…';
-        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id, includeControlPlane: cp() }) }); toast('재프로비저닝됨 — 로그인·실행중 세션 유지, 새 세션부터 새 토큰' + (cp() ? ' (관리 권한 포함)' : '')); reload(); }
+        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('재프로비저닝했습니다 — 로그인과 실행 중 세션은 그대로 유지됩니다.'); reload(); }
         catch (e) { btn.disabled = false; btn.textContent = '재프로비저닝(격리·토큰 갱신)'; toast('실패 — ' + e.message, true); }
       } }));
     }
@@ -204,7 +203,7 @@ function idnSummary(identities) {
     }
   }
   wrap.append(el('div', { class: 'admin-actions' },
-    el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/connectors', text: '외부 자료 수집에서 매핑 →' }),
+    el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/connectors', text: '[맥락 관리 ▸ 가져오는 곳]에서 매핑 →' }),
     el('span', { class: 'admin-hint', style: 'margin:0',
       text: '커넥터별 사용자 목록에서 골라 연결합니다 — 외부 ID를 직접 찾을 필요가 없어요.' })));
   return wrap;

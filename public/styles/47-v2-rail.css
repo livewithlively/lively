@@ -3,7 +3,9 @@
 
    레일은 사이드바보다 한 층 위다: **어느 워크스페이스의 · 어느 구역에 있는가**를 말한다.
    슬랙 데스크톱 좌측 탭 레일을 우리 토큰으로 옮겼다(헬프센터 스크린샷 2장 + 원준님 스크린샷 대조) —
-    · 접힘(68px) = 아이콘 **위**, 이름 **아래**(10.5px). 접혀도 이름이 남는 게 이 안의 요지.
+    · 접힘(76px) = 아이콘 **위**(24px), 이름 **아래**(11.5px). 접혀도 이름이 남는 게 이 안의 요지.
+      (#2016 은 68·20·10.5 였다 — #2061 원준님 "전체적으로 레일 사이즈가 너무 작다 · 폭 넓혀줘"로 한 단계 키웠다.
+       슬랙 탭 레일이 ≈70·20·10.5 라 폭은 같은 급이었지만, 선 가늘고 글자가 흐려 작아 보였다.)
     · 펼침(232px) = 워크스페이스 문패 카드 + 가로 행(아이콘 · 이름 · 개수/배지).
     · 워크스페이스는 평상시 **타일 한 장 + 뒤에 겹친 타일(스택)**, 누르면 슬랙과 같은 흰 팝오버.
     · 톤 3단 — 레일 `--canvas` › 사이드바 › 본문. 새 색은 없다(전부 01-base 토큰).
@@ -14,7 +16,7 @@
 
 /* ── 그리드 — 열 정의는 40-v2.css 에 일곱 벌 있고 실제로 서는 건 `.rail-mode` 다(bootV2 가 늘 켠다).
       같은 명시도라 이 파일이 뒤에 오는 것으로 이긴다. 팝아웃 창(`.solo`)엔 레일이 없다. */
-#v2-root { --v2-rail-w: 68px; }
+#v2-root { --v2-rail-w: 76px; }
 #v2-root.rail-open { --v2-rail-w: 232px; }
 #v2-root.rail-mode { grid-template-columns: var(--v2-rail-w) var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); }
 #v2-root.rail-mode.no-aside { grid-template-columns: var(--v2-rail-w) var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
@@ -28,7 +30,7 @@
 .v2-rail-mid::-webkit-scrollbar { width: 0; height: 0; }
 .v2-rail-foot { flex: none; padding: 6px 0 8px; border-top: 1px solid var(--line-net); }
 .v2-rail-hr { height: 1px; background: var(--line-net); margin: 8px 14px; }
-.v2-rail.closed .v2-rail-hr { width: 28px; margin: 8px auto; }
+.v2-rail.closed .v2-rail-hr { width: 32px; margin: 8px auto; }
 .v2-rail-k { padding: 10px 14px 3px; font-size: 11px; font-weight: 700; color: var(--muted); }
 
 /* ── ⓪ 워크스페이스 ─────────────────────────────────────────────────────────
@@ -56,6 +58,167 @@
 .v2-wspop-row:hover { background: var(--bg-tint); }
 .v2-wspop-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 .v2-wspop-row .v2-wscard-big { width: 40px; height: 40px; border-radius: 11px; font-size: 17px; }
+
+/* #1875 — 워크스페이스 행 = 전환 버튼 + 오른쪽 「사람 추가」 아이콘. 행은 div, 안에 버튼 둘(버튼 안 버튼 회피). */
+.v2-wspop-row { padding: 0; gap: 0; }
+.v2-wspop-switch { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px; border: 0; border-radius: 10px; background: none; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.v2-wspop-switch:hover { background: var(--bg-tint); }
+.v2-wspop-switch:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-add { flex: none; width: 34px; height: 34px; margin: 0 4px 0 2px; display: inline-grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+.v2-wspop-add:hover { background: var(--bg-punch); color: var(--blue); }
+.v2-wspop-add:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-add .v2-ic { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* 부제 행(구성원·설정·추가)은 여전히 button.v2-wspop-row 를 쓰는 곳(row())이 있으므로 그 규격은 그대로 둔다. */
+button.v2-wspop-row { padding: 8px; gap: 12px; }
+
+/* ── #1875 구성원 모달 — [나] 창(46-v2-me.css)과 같은 문법: 머리(얼굴·제목·부제·✕) + 스크롤 몸통. 슬랙 「사람 초대」 참고.
+   한 창에서 부르기(이메일 칩) · 명부(⋯ 메뉴) · 수락 대기 · 방금 만든 계정 카드까지. 색·간격은 전부 토큰. ── */
+.v2mem-back { position: fixed; inset: 0; z-index: 70; background: rgba(var(--shadow-ink), .38); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.v2mem { display: flex; flex-direction: column; width: min(540px, 100%); max-height: min(720px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 18px 48px rgba(var(--shadow-ink), .22); }
+.v2mem-h { flex: none; display: flex; align-items: center; gap: 12px; padding: 16px 16px 14px 20px; border-bottom: 1px solid var(--line); }
+.v2mem-h-facewrap { flex: none; display: inline-flex; }
+.v2mem-h-txt { flex: 1; min-width: 0; }
+.v2mem-h-title { margin: 0; font-size: 16px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-h-sub { font-size: 12.5px; color: var(--muted-head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-x { flex: none; width: 30px; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--muted); display: inline-grid; place-items: center; cursor: pointer; }
+.v2mem-x:hover { background: var(--bg-punch); color: var(--ink); }
+.v2mem-x-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.v2mem-b { flex: 1; min-height: 0; overflow: auto; padding: 14px 20px 18px; display: flex; flex-direction: column; gap: 2px; }
+.v2mem-err { margin: 0; font-size: 13px; color: var(--coral-text); }
+.v2mem-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+/* 부르기 — 이메일 칩 입력(Enter·쉼표·붙여넣기로 여러 명) + 권한 + [초대하기] 하나. */
+.v2mem-invite { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 14px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.v2mem-label { font-size: 13px; font-weight: 700; color: var(--ink); }
+.v2mem-chips { display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 6px; min-height: 72px; padding: 8px 10px; border: 1px solid var(--line-net-2); border-radius: 10px; background: var(--bg); cursor: text; }
+.v2mem-chips:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
+.v2mem-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 4px 3px 9px; border-radius: 999px; background: var(--bg-tint); border: 1px solid var(--line); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.v2mem-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-chip.bad { border-color: var(--coral); color: var(--coral-text); background: var(--danger-bg); }
+.v2mem-chip-x { width: 18px; height: 18px; border: 0; border-radius: 50%; background: none; color: var(--muted); display: inline-grid; place-items: center; cursor: pointer; }
+.v2mem-chip-x:hover { background: var(--bg-punch); color: var(--ink); }
+.v2mem-chip-x-ic { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* 안쪽 입력칸 — 전역 input[type=text] 규격(테두리·높이·그림자)을 이긴다(특이도 0,2,1). 칩 상자가 곧 테두리다. */
+.v2mem-chips input.v2mem-chip-in { flex: 1; min-width: 160px; width: auto; min-height: 0; height: auto; margin: 0; border: 0; border-radius: 0; box-shadow: none; outline: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); padding: 4px 2px; }
+.v2mem-chips input.v2mem-chip-in:focus { border: 0; box-shadow: none; outline: 0; }
+/* datalist 가 붙은 입력칸에 크롬이 그리는 ▼ — 제안은 타이핑하면 뜬다, 화살표는 칩 상자 안에서 이물이다. */
+.v2mem-chips input.v2mem-chip-in::-webkit-calendar-picker-indicator { display: none !important; }
+.v2mem-help { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.v2mem-invrow { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.v2mem-sel { font: inherit; font-size: 12.5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink-sub); }
+.v2mem-invnote { flex: 1; min-width: 0; margin: 0; font-size: 12px; color: var(--coral-text); line-height: 1.4; }
+.v2mem-invrow .btn { margin-left: auto; }
+/* 방금 만든 계정 — 임시 비밀번호는 지금만 보인다. */
+.v2mem-cred { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; margin-bottom: 10px; border-radius: 12px; background: var(--bg-success); border: 1px solid var(--ok-line-2); }
+.v2mem-cred-h { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink); }
+.v2mem-cred-ic { width: 18px; height: 18px; fill: none; stroke: var(--mint-deep); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.v2mem-cred-row { display: flex; gap: 10px; font-size: 12.5px; line-height: 1.5; }
+.v2mem-cred-k { flex: none; width: 88px; color: var(--muted); }
+.v2mem-cred-v { flex: 1; min-width: 0; color: var(--ink); overflow-wrap: anywhere; user-select: all; }
+.v2mem-cred-v.mono { font-family: var(--mono, ui-monospace, monospace); font-weight: 700; letter-spacing: .02em; }
+.v2mem-cred-f { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 2px; }
+/* 절 머리 · 사람 줄 — 얼굴 32 · 이름 · 권한 라벨 · ⋯ */
+.v2mem-sec { display: flex; align-items: baseline; gap: 6px; padding: 10px 2px 4px; }
+.v2mem-sec b { font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.v2mem-sec span { font-size: 12px; color: var(--muted-2); }
+.v2mem-row { display: flex; align-items: center; gap: 11px; padding: 7px 8px; margin: 0 -8px; border-radius: 10px; }
+.v2mem-row:hover { background: var(--bg-tint); }
+.v2mem-face { flex: none; width: 32px; height: 32px; border-radius: 50%; font-size: 13px; display: inline-grid; place-items: center; }
+.v2mem-face.waiting { background: none; border: 1px dashed var(--muted-3-line); color: var(--muted-2); font-weight: 400; }
+.v2mem-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.v2mem-tt b { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-tt span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2mem-row.pending .v2mem-tt b { font-weight: 500; color: var(--ink-sub); }
+.v2mem-role { flex: none; font-size: 11.5px; color: var(--muted); }
+.v2mem-role.lead { color: var(--ink-sub); font-weight: 700; }
+.v2mem-more { flex: none; width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted); display: inline-grid; place-items: center; cursor: pointer; }
+.v2mem-more:hover { background: var(--bg-punch); color: var(--ink); }
+.v2mem-more-ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
+.v2mem-cancel { flex: none; font-size: 12px; color: var(--coral-text); }
+.v2mem-x:focus-visible, .v2mem-more:focus-visible, .v2mem-chip-x:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+@media (max-width: 520px) {
+  .v2mem-back { padding: 0; align-items: stretch; }
+  .v2mem { width: 100%; max-height: 100%; border-radius: 0; border: 0; }
+  .v2mem-invrow { flex-wrap: wrap; }
+  .v2mem-cred-k { width: 76px; }
+}
+
+/* ── #1875 워크스페이스 메뉴의 하위 판 — 구성원 · 설정 · 추가. 같은 판(v2-wspop) 위에 같은 부품으로 그린다.
+   옛 스위처 메뉴(40-v2.css .v2-ws-menu)와 이 팝오버가 함께 살아 두 시대의 생김새가 한 화면에 섞였다 —
+   그 기능들을 이 문법으로 옮겼으므로 여기 규격이 곧 '워크스페이스 메뉴'의 전부다. */
+.v2-wspop--panel { width: 316px; max-height: min(76vh, 600px); overflow: hidden auto; padding: 6px 8px 8px; }
+.v2-wspop-head { display: flex; align-items: center; gap: 6px; padding: 4px 4px 8px; }
+.v2-wspop-head b { font-size: 14px; font-weight: 800; color: var(--ink); }
+.v2-wspop-back { width: 26px; height: 26px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; }
+.v2-wspop-back:hover { background: var(--bg-tint); color: var(--ink); }
+.v2-wspop-back:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-sub { padding: 10px 6px 4px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.v2-wspop-form { display: flex; flex-direction: column; gap: 6px; padding: 2px 4px 6px; }
+.v2-wspop-in { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
+.v2-wspop-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
+.v2-wspop-actions { display: flex; align-items: center; gap: 8px; }
+.v2-wspop-note { flex: 1; min-width: 0; font-size: 11.5px; color: var(--coral-text); line-height: 1.4; }
+.v2-wspop-hint { margin: 2px 0 0; padding: 0 2px; font-size: 11.5px; line-height: 1.55; color: var(--muted); }
+/* ✕ — 워크스페이스를 «치우는» 문(#1875 D5″). 사람+(.v2-wspop-add)와 **같은 규격**이라야 한 쌍으로 읽힌다:
+   같은 크기·같은 자리·같은 평소 색. 다른 것은 hover 때 드러나는 색 하나뿐이다(치우는 일이라 coral). */
+/* ── 워크스페이스 설정 모달(#2188) — 아바타·이름·구성원·연결·기능 설정이 한 창에 ─────────
+   프레임 규격은 구성원 모달(v2mem)과 같은 결(같은 z, 같은 그림자·모서리) — 두 창이 형제로 읽히게. */
+.v2wss-back { position: fixed; inset: 0; z-index: 70; background: rgba(var(--shadow-ink), .38); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.v2wss { display: flex; flex-direction: column; width: min(560px, 100%); max-height: min(760px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 18px 48px rgba(var(--shadow-ink), .22); }
+.v2wss-h { display: flex; align-items: center; gap: 12px; padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+.v2wss-h-face .v2-wscard-big { width: 40px; height: 40px; border-radius: 11px; font-size: 17px; }
+.v2wss-h-txt { flex: 1; min-width: 0; }
+.v2wss-h-title { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+.v2wss-h-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2wss-b { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 18px 18px; display: flex; flex-direction: column; gap: 4px; }
+.v2wss-sec { padding: 12px 0; }
+.v2wss-sec + .v2wss-sec { border-top: 1px solid var(--line); }
+.v2wss-sec-t { margin: 0 0 10px; font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .02em; }
+/* 프로필 — 왼쪽 큰 미리보기, 오른쪽 폼. 미리보기가 입력을 실시간으로 따라간다. */
+.v2wss-profile { display: flex; gap: 16px; align-items: flex-start; }
+.v2wss-preview .v2-wscard-big { width: 64px; height: 64px; border-radius: 16px; font-size: 26px; }
+.v2wss-profile-f { flex: 1; min-width: 0; display: grid; grid-template-columns: 76px 1fr; gap: 8px 10px; align-items: center; }
+.v2wss-lb { font-size: 12px; color: var(--muted); }
+.v2wss-char { width: 72px; }
+/* 색 팔레트 — 고른 것에 링. «기본» 은 ✕ 아이콘(지움 = 자동으로 복귀). */
+.v2wss-swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.v2wss-swatch { width: 26px; height: 26px; border: 0; border-radius: 8px; padding: 0; cursor: pointer; }
+.v2wss-swatch.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
+.v2wss-swatch:disabled { opacity: .45; cursor: default; }
+.v2wss-swatch--none { display: inline-grid; place-items: center; background: var(--bg-punch); color: var(--muted); }
+.v2wss-swatch--none .v2-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.v2wss-swatch--pick { background: none; border: 1px dashed var(--line); border-radius: 8px; inline-size: 26px; block-size: 26px; padding: 1px; }
+/* 사람이 정한 얼굴 타일 — 색은 인라인(style)로, 글자는 여기 규격으로. round 아바타와 달리 각(워크스페이스)이다. */
+.v2-wsface-set { display: inline-grid; place-items: center; font-weight: 700; }
+
+.v2-wspop-x { flex: none; width: 34px; height: 34px; margin: 0 6px 0 0; display: inline-grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+.v2-wspop-x:hover { background: var(--danger-bg); color: var(--coral-text); }
+.v2-wspop-x:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.v2-wspop-x .v2-ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+/* 확인은 **그 행 아래에서** 열린다(안 A) — 목록을 안 떠나므로 어느 워크스페이스 얘기인지가 눈에서 안 사라진다.
+   왼쪽 띠는 «이 행에 딸린 것»이라는 표시다(형제 div 라 들여쓰기만으로는 소속이 안 읽힌다). */
+.v2-wspop-exit { margin: 2px 4px 6px 12px; padding: 10px 12px; border-left: 2px solid var(--coral-fill); border-radius: 0 10px 10px 0; background: var(--bg-tint); display: flex; flex-direction: column; gap: 7px; }
+.v2-wspop-exit-l { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink); }
+.v2-wspop-exit-l:not(:first-child) { font-size: 11.5px; color: var(--muted); }
+.v2-wspop-exit .v2-wspop-in { font-size: 12.5px; }
+.v2-wspop-row.danger .v2-wspop-ic { color: var(--coral-text); }
+.v2-wspop-row.danger .v2-wspop-tt b { color: var(--coral-text); }
+/* 연결한 팀 · 승인 대기 — 행 하나에 이름 + 작은 조작 둘. 타일 행보다 촘촘하다(목록이 아니라 관리다). */
+.v2-wspop-teams { display: flex; flex-direction: column; gap: 1px; }
+.v2-wspop-team { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 8px; border-radius: 8px; }
+.v2-wspop-team:hover { background: var(--bg-tint); }
+.v2-wspop-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font-size: 12.5px; }
+.v2-wspop-team-open b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.v2-wspop-kind, .v2-wspop-err { flex: none; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); }
+.v2-wspop-err { color: var(--coral-text); border-color: var(--coral-text); }
+.v2-wspop-act { flex: none; font: inherit; font-size: 11px; font-weight: 700; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.v2-wspop-act:hover { color: var(--ink); border-color: var(--line-net-2); }
+.v2-wspop-act.on { color: var(--mint-deep); border-color: var(--ok-line-2); background: var(--bg-success); }
+/* ws-people.ts 부품이 이 판 안에 앉을 때 — 행 규격이 촘촘해 여백만 맞춘다. */
+.v2-wspop--panel .v2-ws-sec { padding: 6px 6px 3px; }
+.v2-wspop--panel .v2-ws-invite { padding: 6px 4px 2px; }
+/* 나에게 온 초대 — 메뉴 맨 위. 타일 목록과 규격이 달라 좌우 여백만 맞춘다. */
+.v2-wspop .v2-ws-inbox { gap: 2px; }
+.v2-wspop .v2-ws-invite-row { margin: 0 0 2px; padding: 8px; border-radius: 10px; }
 .v2-wspop-row.cur .v2-wscard-big { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
 .v2-wspop-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 .v2-wspop-tt b { font-size: 14px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -82,20 +245,23 @@
 .v2-rail-run { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--muted-head); }
 
 .v2-rail.closed .v2-rail-it { flex-direction: column; gap: 3px; width: calc(100% - 12px); margin: 2px 6px; padding: 6px 2px 5px; }
-.v2-rail.closed .v2-rail-t { width: 100%; flex: none; font-size: 10.5px; font-weight: 700; color: var(--ink-sub); text-align: center; }
+.v2-rail.closed .v2-rail-t { width: 100%; flex: none; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); text-align: center; }
 .v2-rail.closed .v2-rail-it.on .v2-rail-t { color: var(--ink); }
-.v2-rail.closed .v2-rail-ic { width: 20px; height: 20px; }
+.v2-rail.closed .v2-rail-ic { width: 24px; height: 24px; }
 .v2-rail.closed .v2-rail-m { display: none; }
 .v2-rail.closed .v2-rail-it.on::before { display: none; }
 .v2-rail.closed .v2-rail-run { position: absolute; left: 50%; bottom: 2px; margin-left: -2.5px; }
 /* 접혀도 배지는 남는다 — 아이콘 오른쪽 위 귀퉁이(슬랙의 종 위 숫자). */
-.v2-rail.closed .v2-rail-bd { position: absolute; top: 3px; right: 9px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; box-shadow: 0 0 0 2px var(--canvas); }
+.v2-rail.closed .v2-rail-bd { position: absolute; top: 3px; right: 11px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; box-shadow: 0 0 0 2px var(--canvas); }
 .v2-rail.closed .v2-rail-it.on .v2-rail-bd { box-shadow: 0 0 0 2px var(--bg); }
 
 .v2-rail-me .v2-ava { position: relative; width: 24px; height: 24px; font-size: 10px; flex: none; }
-.v2-rail-me .v2-ava::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mint); border: 2px solid var(--canvas); }
+/*  접속 점은 얼굴을 감싼 껍질(.v2-rail-avaw)에 단다 — 얼굴 자신은 overflow:hidden(원형 클립)이라 그 안의 ::after 는 원 밖 반쪽이
+    잘려 초승달이 됐다(#2061 실측). 껍질은 클립이 없으니 점이 원 테두리 위에 온전히 선다. */
+.v2-rail-avaw { position: relative; display: inline-flex; flex: none; line-height: 0; }
+.v2-rail-avaw::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mint); border: 2px solid var(--canvas); }
 .v2-rail-me .v2-rail-t { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
-.v2-rail.closed .v2-rail-me .v2-ava { width: 30px; height: 30px; font-size: 12px; }
+.v2-rail.closed .v2-rail-me .v2-ava { width: 32px; height: 32px; font-size: 13px; }
 .v2-rail.closed .v2-rail-me .v2-rail-t { display: none; }
 .v2-rail.closed .v2-rail-me { padding: 6px 2px; }
 
@@ -156,7 +322,7 @@
 
 /* ── 레일 숨김(#2016 3차, 안 B '머리글 드롭다운') — 레일이 들고 있던 것이 사이드바로 들어온다 ─────
       ⚠ 숨김은 **열 폭 0** 이다. display:none 으로 빼면 그리드 열이 한 칸씩 밀려 사이드바가 0px 열에 앉는다(목업 실측).
-      레일 폭은 68 고정(232 펼침 모드 폐기 — `.rail-open` 규칙은 죽은 자리, 가드 때문에 남긴다). */
+      레일 폭은 76 고정(232 펼침 모드 폐기 — `.rail-open` 규칙은 죽은 자리, 가드 때문에 남긴다). */
 #v2-root.rail-hidden { --v2-rail-w: 0px; }
 #v2-root.rail-hidden > .v2-rail { visibility: hidden; border-right: 0; }
 /* 머리 한 줄 — [스택 타일 + 이름 ▾] … [지금 구역 ▾] */

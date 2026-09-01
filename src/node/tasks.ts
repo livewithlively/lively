@@ -4,6 +4,7 @@
 //  - 세션은 완료 후에도 셸로 남아(웹터미널로 사후 검시 가능) — 성공 수집 후 스케줄러가 종료, 실패는 보존.
 //  - 완료 감지 = exit 파일 등장(폴링) — 화면 파싱보다 견고(F5).
 //  - v1 제약: 워크스페이스는 공유 루트(rootKey=shared)만 — 격리(700) 개인 홈엔 게이트웨이/에이전트가 파일을 못 쓴다.
+import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fsp from "node:fs/promises";
@@ -118,6 +119,31 @@ export interface RunTaskResult { sessionId: string; taskDir: string; workspace: 
 //  다른 하네스의 유효한 값이 거부되거나 그 하네스에 없는 플래그가 통과할 수 있었다.
 const flagWhitelist = (key: string): Map<string, { name: string; type: string; choices?: string[]; label: string }> =>
   new Map((HARNESSES.find((h) => h.key === key)?.flags ?? []).map((f) => [f.name, f]));
+
+/** 플래그 맵(--model/--effort) → 그 하네스의 argv 조각. 순수 함수 — 엣지 표로 검증한다(task-flags.test).
+ *
+ *  ⚠ **하네스마다 argv 문법이 다르다.** codex 는 추론강도를 일반 플래그로 받지 않는다 — 실측
+ *   (`codex exec --help`, CLI 0.149.1): `-m/--model <MODEL>` 은 있고 `--effort` 는 **없다**. 대신
+ *   `-c/--config key=value` 로 `model_reasoning_effort` 를 준다. 세션 경로는 이 번역을 이미 하고 있었는데
+ *   (terminal/sessions.ts — "Codex는 추론강도를 일반 CLI 플래그로 받지 않는다") **위탁 경로에만 빠져 있었다.**
+ *   그래서 codex 로 뜬 위탁은 `codex exec --json --effort high` 로 실행돼 `unexpected argument '--effort'`
+ *   로 즉사한다 — 그것도 고약한 방식으로: 하네스가 실행조차 안 되니 stream.jsonl 이 0줄이고, 배치 seen
+ *   롤백 때문에 같은 프롬프트가 영원히 재시도된다(#1289 와 같은 실패 모양). 증류기·분류기에 effort 를
+ *   박은 뒤부터는 codex 로그인 의뢰자의 배치가 전부 이 자리에서 죽는다.
+ *   저장 상태(org_task.flags)는 다른 하네스와 같은 `--effort` 키를 유지한다 — 번역은 여기 한 곳에서만 한다.
+ */
+export function harnessFlagArgs(harnessKey: string, flags?: Record<string, string>): string[] {
+  const whitelist = flagWhitelist(harnessKey);
+  const out: string[] = [];
+  for (const [name, raw] of Object.entries(flags ?? {})) {
+    const def = whitelist.get(name);
+    const v = String(raw ?? "");
+    if (!def || !v || (def.choices && !def.choices.includes(v))) continue;
+    if (harnessKey === "codex" && name === "--effort") out.push("--config", `model_reasoning_effort=${v}`);
+    else out.push(name, v);
+  }
+  return out;
+}
 
 // ── 위탁 헤드리스 규약(#1710) ────────────────────────────────────────────────────────
 // 위탁은 대화형 세션이 아니라 **한 번의 헤드리스 실행**이라, 세션 카탈로그(catalog.ts)의 축과 다른 것이 필요하다:
@@ -309,15 +335,9 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   }
   const taskDir = await prepareTaskDir(baseWs, sharedBase, input.taskId, input.prompt);
 
-  // 플래그 화이트리스트(--model/--effort, 카탈로그 choices 만) — createSession 과 동일 원칙. **그 하네스의 표**로 검사한다(#1710).
-  const whitelist = flagWhitelist(harness.key);
-  const flags: string[] = [];
-  for (const [name, raw] of Object.entries(input.flags ?? {})) {
-    const def = whitelist.get(name);
-    const v = String(raw ?? "");
-    if (!def || !v || (def.choices && !def.choices.includes(v))) continue;
-    flags.push(name, v);
-  }
+  // 플래그 화이트리스트(--model/--effort, 카탈로그 choices 만) — createSession 과 동일 원칙. **그 하네스의 표**로
+  //  검사하고(#1710), 그 하네스의 argv 문법으로 옮긴다(codex 의 --effort → --config, harnessFlagArgs 주석 참조).
+  const flags = harnessFlagArgs(harness.key, input.flags);
   // 화이트리스트 밖 인자(리브 전용). ⚠ 리브의 거부 목록은 **가변인자**(<tools...>)라 뒤에 오는 첫 `--플래그`
   //  에서 끊긴다 — 목록이 배열 끝에 오면 taskScript 가 뒤에 붙이는 --output-format 까지 도구 이름으로 먹혀
   //  **안전선이 조용히 반쪽이 된다**(그래도 실행은 되고 답도 나온다 = 무증상). 그래서 livTurnArgs 가 거부 목록
@@ -341,6 +361,9 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   const args = ["new-session", "-d", "-s", id];
   args.push("-e", `LANG=${PANE_LOCALE}`, "-e", `LC_CTYPE=${PANE_LOCALE}`, "-e", `LC_ALL=${PANE_LOCALE}`);
   args.push("-e", `LIVELY_TASK_WS=${workspace}`, "-e", `LIVELY_TASK_ID=${input.taskId}`);
+  // #2162 — 위탁 워커는 `createSession` 을 안 타는 **두 번째 문**이라, 종류를 여기서 직접 싣는다.
+  //  이 한 줄이 없으면 훅이 다시 `LIVELY_TASK_WS`(작업 폴더라는 제 뜻이 따로 있는 값)를 스니핑해야 한다.
+  args.push("-e", `${SESSION_KIND_ENV}=task`);
   // #1291 v2 — 위탁 세션도 세션 신원과 기록 범위를 갖는다. 지금까지 LIVELY_SESSION_ID 조차 안 실어
   //  이 경로의 AI 는 **항상 전체 공개로** 기록했다(잠긴 프로젝트를 위탁해도 마찬가지였다).
   //  세션 id 를 실어야 게이트웨이가 캡을 조회할 수 있고, 캡은 tmux 옵션(아래)이 권위다.
@@ -373,6 +396,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   await tmux(args);
   const ownerId = user.userId || user.email || "";
   await tmux(["set-option", "-t", id, "@box_owner", ownerId]);
+  await tmux(["set-option", "-t", id, "@box_kind", "task"]);   // #2162 — 세션 목록·화면이 «배치»를 알아본다
   await tmux(["set-option", "-t", id, "@box_label", input.label?.trim() || `위탁 #${input.taskId}`]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
   await tmux(["set-option", "-t", id, "@box_dir", workspace]);

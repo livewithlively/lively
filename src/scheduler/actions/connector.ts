@@ -58,7 +58,28 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
   // #669 sync 완료 후 임베딩 잔량 스윕(백그라운드·중복 자체 거부) — 미러가 남긴 pending(신규·제목/본문 변경 리셋)을
   //  10분 주기 스윕을 기다리지 않고 곧바로 흡수. 실패는 삼킨다(다음 주기/다음 sync 가 또 돈다).
   void import("../../v6/embedding-backfill.js").then((m) => m.runAutoBackfillSweep()).catch(() => {});
+  //  ★ 수집이 끝났으면 **증류도 지금** 민다(#1631, 원준님 2026-08-31).
+  //   종전엔 둘을 잇는 것이 없어서, 자료가 들어와도 증류는 자기 주기(30분)를 기다렸다. 사람에겐
+  //   «수집은 됐는데 지식이 안 는다» 로 보이고, 그 사이를 설명할 방법이 없다(실측: 자료 12건이 그대로).
+  //   비용은 안 든다 — 미증류가 0이면 증류 잡은 배치를 아예 안 만들고 DB 질의 한 번으로 끝난다.
+  void nudgeDistillNow();
   return { status: "ok", summary: { systems: out } };
+}
+
+/**
+ * 증류 잡을 지금 한 번 돌린다 — 수집 직후의 «이어달리기».
+ *  fire-and-forget: 수집 잡의 성패에 영향을 주지 않는다(증류가 실패해도 수집은 성공이다).
+ *  중복 방지는 스케줄러가 이미 한다(engine 의 running 집합) — 여기서 또 잠그지 않는다.
+ */
+async function nudgeDistillNow(): Promise<void> {
+  try {
+    const { q, itemsPool } = await import("../../db/client.js");
+    const rows = await q(itemsPool,
+      `SELECT id FROM org_cron WHERE enabled=true AND action IN ('distill_sources_headless','distill_sources')`);
+    if (!rows.length) return;
+    const { runCronById } = await import("../engine.js");
+    for (const r of rows) { try { await runCronById(String((r as Record<string, unknown>).id)); } catch { /* 한 잡의 실패가 나머지를 막지 않는다 */ } }
+  } catch { /* 비치명 — 증류는 자기 주기에 또 돈다 */ }
 }
 
 export async function runConnectorPush(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {

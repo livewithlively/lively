@@ -54,7 +54,7 @@ function profileNoteEl(cfg) {
   if (p.active) return el('div', { class: 'caption', text: '🔐 이 AI 세션은 내 Claude 계정(프로필 로그인됨)으로 실행됩니다.' });
   // '내 프로필'이라 부르면 우상단 [내 프로필](표시이름·아바타 편집)과 겹쳐 엉뚱한 데를 누르게 된다 —
   //  여기서 말하는 건 AI 가 돌아가는 격리 계정(관리탭 [구성원 ▸ AI 실행 계정])이다. 그 이름으로 부른다(#837).
-  if (p.provisioned) return el('div', { class: 'caption', text: '⚠ 내 AI 실행 계정이 아직 로그인 안 돼 공유 계정으로 실행됩니다 — 상단 [내 계정 로그인] 버튼으로 한 번 로그인하세요.' });
+  if (p.provisioned) return el('div', { class: 'caption', text: '⚠ 내 AI 실행 계정이 아직 로그인 안 돼 공유 계정으로 실행됩니다. 상단 «내 계정 로그인» 버튼으로 한 번 로그인하세요.' });
   return el('div', { class: 'caption', text: '⚠ 공유 계정으로 실행됩니다(구성원 격리 미설치). 박스에서 deploy/linux/install-isolation.sh 실행 시 구성원별 격리가 켜집니다.' });
 }
 
@@ -142,8 +142,11 @@ function fieldInfo(label, tip, control) {
 //
 // opts.project = { id, name, base } — 프로젝트에서 열었으면 그 맥락(#1145). 주면 폼이 이렇게 바뀐다:
 //   · 폴더를 묻지 않는다 — 그 프로젝트 폴더에서 열린다(고를 여지가 없으므로 카드로 사실만 보여준다).
-//   · 초대를 묻지 않는다 — 프로젝트 세션의 가시성은 **리스트 공개범위**가 정하고 invites 는 보지도 않는다
-//     (canSeeSession, terminal/write-cap.ts). 효과 없는 칸을 활성으로 두면 '초대한 사람만 본다'고 오해한다.
+//   · 초대를 묻지 않는다 — **만들 때는 언제나 나만 보는 세션**이고(#1876 D1), 함께 볼 사람은 만든 뒤
+//     세션 문패의 [공유](web/v2/share-session.ts)로 고른다. 초대 자리를 두 군데 두면 어느 쪽이 정본인지
+//     흐려진다. ⚠ 2026-08-28 이전 주석은 "프로젝트 세션의 가시성은 리스트 공개범위가 정하고 invites 는
+//     보지도 않는다"였는데, 그건 프로젝트 세션이 전원 공개이던 시절의 사실이고 지금은 거짓이다 —
+//     이제 invites 가 그 세션을 여는 **유일한 열쇠**다(canSeeSession·canAttach·checkViewGate 셋 다).
 //   · 생성은 POST <base><id>/sessions 로 간다(자유 세션은 /api/ui/terminal/sessions).
 // 이 모달 하나가 '웹/내 PC'와 '프로젝트/자유'를 모두 받는다 — 종전엔 경로마다 다른 모달이 떴다(#1145 안 1).
 function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any; name?: string; base?: string } }) {

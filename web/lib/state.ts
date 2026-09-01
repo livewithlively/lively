@@ -56,11 +56,32 @@ function navOn(tab: string): boolean {
 //  우선순위: ① URL ?ui=classic|v2 (이번 로드에만 — 링크로 상대 화면을 보여줄 때)
 //           ② 브라우저 로컬 오버라이드 localStorage[lively_ui_mode] (관리탭 [화면] 의 '이 브라우저에서만' 버튼)
 //           ③ 조직 기본 me.ui_mode (org_runtime_config.ui_mode — 관리자가 정함, 매니지드는 컨트롤플레인이 push)
-//           ④ 'classic' (제품 기본 — 대표 결정 2026-08-20: v2 는 베타라 완성 전까지 opt-in. 서버가 값을 못 줘도 종전 화면)
-//  새 화면(베타)을 쓰려면 ③ 을 v2 로 올리거나(조직), 관리탭 [화면] 의 '이 브라우저에서만'으로 개인만 켠다.
+//           ④ 'v2' (제품 기본 — 대표 결정 2026-08-27: **클래식이 기본이 되는 상황을 하나도 두지 않는다.**
+//              서버가 값을 못 줘도 새 화면이다. 클래식은 ①~③ 에서 누군가 **고른** 값일 때만 나온다.)
+//  클래식으로 보려면 ③ 을 classic 으로 내리거나(조직), 관리탭 [화면]·내 정보의 '클래식 화면으로 바꾸기'로 이 브라우저만 바꾼다.
 const UI_MODE_KEY = 'lively_ui_mode';
+//  클래식 시대 닫기(#2208) — 이 브라우저에서 옛 classic 을 **딱 한 번** 걷었다는 도장.
+//   #2200 이 서버 행에 한 것(컬럼 기본값이 아직 classic 인 부팅을 걸쇠로 1회 UPDATE)의 브라우저 판이다.
+//   그때 브라우저는 일부러 안 건드렸는데, 2026-08-20~27 '클래식이 조직 기본'이던 시대를 지나온 브라우저에는
+//   아무도 고르지 않은 classic 이 그대로 굳어 있었다 — 서버가 v2 를 줘도 ②에서 걸려 ③·④ 까지 못 간다
+//   (실측 2026-08-27, 상민님: dev 서버는 v2 인데 화면은 레일도 사이드바도 없는 완전한 클래식).
+const SWEPT_KEY = 'lively_ui_mode_swept';
 type UiMode = 'v2' | 'classic';
+/**
+ * 옛 classic 오버라이드 1회 정리(#2208). **도장이 없을 때만** 돈다.
+ *  ⚠ 도장은 지우기보다 **먼저** 찍는다 — 아래가 실패해도 두 번 돌지 않게. 그리고 setUiModeOverride 도 같은 도장을
+ *   찍으므로, 사람이 **고른** 클래식은 이 정리를 타지 않는다. 그 순서가 없으면 [클래식 화면으로 바꾸기] 가
+ *   눌러도 reload 때 곧바로 되돌려져 **버튼이 아예 작동하지 않는다**.
+ */
+function sweepLegacyClassic(): void {
+  try {
+    if (localStorage.getItem(SWEPT_KEY)) return;
+    localStorage.setItem(SWEPT_KEY, '1');
+    if (localStorage.getItem(UI_MODE_KEY) === 'classic') localStorage.removeItem(UI_MODE_KEY);
+  } catch (_) { /* localStorage 접근 불가(프라이버시 모드 등) → 어차피 ②를 못 읽으니 조직 기본으로 간다 */ }
+}
 function uiMode(): UiMode {
+  sweepLegacyClassic();   // ★ ② 를 읽기 전에 — 옛 시대의 잔재는 '고른 값'이 아니다(#2208)
   try {
     const q = new URLSearchParams(location.search).get('ui');
     if (q === 'classic' || q === 'v2') return q;
@@ -68,11 +89,15 @@ function uiMode(): UiMode {
     if (o === 'classic' || o === 'v2') return o;
   } catch (_) { /* localStorage 접근 불가(프라이버시 모드 등) → 조직 기본으로 */ }
   const m = state.me && (state.me as any).ui_mode;
-  return m === 'v2' ? 'v2' : 'classic';
+  return m === 'classic' ? 'classic' : 'v2';   // 값 부재·구 서버·잡값 → 새 화면(클래식은 고른 값일 때만)
 }
 // 로컬 오버라이드 쓰기 — null 이면 해제(조직 기본으로 복귀). 관리탭 [화면] 과 새 셸의 '클래식으로' 링크가 쓴다.
+//  ⚠ 함께 도장을 찍는다 — 이 순간부터 그 값은 **사람이 고른 것**이라 #2208 정리의 대상이 아니다.
 function setUiModeOverride(m: UiMode | null): void {
-  try { if (m) localStorage.setItem(UI_MODE_KEY, m); else localStorage.removeItem(UI_MODE_KEY); } catch (_) { /* noop */ }
+  try {
+    localStorage.setItem(SWEPT_KEY, '1');
+    if (m) localStorage.setItem(UI_MODE_KEY, m); else localStorage.removeItem(UI_MODE_KEY);
+  } catch (_) { /* noop */ }
 }
 function uiModeOverride(): UiMode | null {
   try { const o = localStorage.getItem(UI_MODE_KEY); return o === 'classic' || o === 'v2' ? o : null; } catch (_) { return null; }

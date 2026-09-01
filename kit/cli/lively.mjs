@@ -46,11 +46,17 @@ const HOST_EFFECTS_MODE = process.env.LIVELY_HOST_EFFECTS !== "deny"
 const SANDBOX_EXEC_ALLOW = new Set(["where", "command", "hostname", "whoami"]);
 const inlineUnquote = (value) => String(value || "").replace(/^"|"$/g, "");
 const inlineCommandName = (command) => inlineUnquote(command).replace(/^.*[\\/]/, "").replace(/\.exe$/i, "").toLowerCase();
+// ★ 심링크를 푼 형태도 함께 본다 — 공용 포트(kit/setup/host-effects.mjs inside)와 **같은 계약**이다.
+//  안 그러면 macOS 에서 모든 임시경로가 '샌드박스 밖' 으로 판정된다: tmpdir()=/var/folders/… 인데 그 안
+//  폴더의 realpath 는 /private/var/folders/… 이고, resolve() 는 심링크를 안 푼다 → git 이 막힌다.
+//  리눅스 CI(/tmp)에서는 안 나서 **CI 초록·맥 빨강**이 됐다. 자세한 실측은 공용 포트 주석 참조.
+const inlineRealish = (p) => { try { return realpathSync(p); } catch { return p; } };
+const inlinePathForms = (p) => { const r = resolve(p); const real = inlineRealish(r); return real === r ? [r] : [r, real]; };
 const inlineInside = (file, root) => {
   if (!file || !root) return false;
-  const norm = (p) => process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p);
-  const f = norm(file), r = norm(root);
-  return f === r || f.startsWith(r.endsWith(sep) ? r : r + sep);
+  const key = (p) => process.platform === "win32" ? String(p).toLowerCase() : String(p);
+  const fs_ = inlinePathForms(file).map(key), rs = inlinePathForms(root).map(key);
+  return fs_.some((f) => rs.some((r) => f === r || f.startsWith(r.endsWith(sep) ? r : r + sep)));
 };
 const inlineResolvedCommand = (command) => {
   const raw = inlineUnquote(command);
@@ -589,6 +595,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const cliCtx = () => ({
   say, ok, info, warn, fail, die, bold, dim, red, green, yellow,
   run, has, api, sleep, gateway, token, readLively, writeLively, hostEffects,
+  // normGw 를 실어 보낸다(#2161) — 형제 모듈이 게이트웨이 주소를 **비교**해야 하는데(노드 토큰은 그
+  //  게이트웨이에 매인다), 정규화를 각자 재구현하면 '/mcp'·끝슬래시 차이로 판정이 갈린다. 단일 출처.
+  normGw,
 });
 
 // ── 위탁(delegate, #869 §11) — 세션이 무거운 1회성 작업을 워커/중앙에 위탁하는 클라이언트 프로세스. ──
@@ -924,32 +933,254 @@ function registerClaudeMcp() {
   return { registered, failed };
 }
 
+// ── claude 설치기가 쓰는 ~/.local/bin 을 셸 rc 에 영속화 (#2172) ────────────
+//  센티넬 리터럴은 **user-uninstall.mjs 와 공유하는 약속**이다 — 거기서 "local-bin 블록은 claude 소유라
+//  의도적으로 보존한다" 고 적고 있다(라이블리를 지워도 claude 는 사용자 것이라 계속 필요하므로).
+//  bootstrap.sh 의 `PATH: cli` 블록과 **같은 규약**: 비파괴·멱등·pristine 백업 1회·이미 있으면 건너뜀.
+//  Windows 는 대상이 아니다 — 거기선 애초에 우리가 claude 를 깔지 않는다(설치 안내만 한다).
+export const LOCAL_BIN_BEGIN = "# >>> lively-managed (PATH: local-bin) >>>";
+export const LOCAL_BIN_END = "# <<< lively-managed (PATH: local-bin) <<<";
+// #2255 — 하네스마다 bin 자리가 다르다(~/.local/bin · ~/.grok/bin · ~/.opencode/bin …). 그래서 태그를 뗐다.
+//  ⚠ 기본 태그는 `local-bin` 그대로다 — user-uninstall.mjs 가 그 **리터럴**을 알고 보존하기 때문이다.
+//   다른 태그의 블록도 자동으로 보존된다(제거기는 `PATH: node`·`PATH: cli` 만 걷어낸다) — 의도한 대칭이다:
+//   하네스는 라이블리를 지워도 남아야 하는 **사용자 소유물**이다.
+export const pathBlockBegin = (tag = "local-bin") => `# >>> lively-managed (PATH: ${tag}) >>>`;
+export const pathBlockEnd = (tag = "local-bin") => `# <<< lively-managed (PATH: ${tag}) <<<`;
+
+/**
+ * (순수) rc 에 이어붙일 블록. 이미 있으면 **null** — 호출부가 그걸 '건드리지 않는다'로 읽는다.
+ *  블록 안의 `case` 문은 rc 를 두 번 source 해도 PATH 가 안 자라게 한다(bootstrap.sh 의 cli 블록과 같은 모양).
+ *  dir 은 **rc 에 그대로 적히는 문자열**이라 절대경로 대신 `$HOME/…` 형태를 받는다(홈이 옮겨져도 살아 있게).
+ */
+export function localBinRcBlock(currentRc, { dir = "$HOME/.local/bin", tag = "local-bin" } = {}) {
+  const cur = String(currentRc || "");
+  const BEGIN = pathBlockBegin(tag), END = pathBlockEnd(tag);
+  if (cur.includes(BEGIN)) return null;                         // 멱등
+  const lines = [
+    BEGIN,
+    "# Claude Code 등 사용자 도구가 깔리는 자리를 PATH 에 추가(라이블리를 지워도 이 블록은 남습니다).",
+    `if [ -d "${dir}" ]; then case ":$PATH:" in *":${dir}:"*) ;; *) export PATH="${dir}:$PATH" ;; esac; fi`,
+    END,
+    "",
+  ];
+  const lead = cur ? (cur.endsWith("\n") ? "\n" : "\n\n") : "";
+  return lead + lines.join("\n");
+}
+
+// 절대 bin 경로 → rc 에 적을 `$HOME/…` 형태 + 그 블록의 태그. 홈 밖 경로는 절대경로 그대로 둔다.
+export function rcPathSpec(binDir, HOME_ = "") {
+  const abs = String(binDir || "");
+  const home = String(HOME_ || "");
+  const rel = home && abs.startsWith(home + "/") ? abs.slice(home.length + 1) : "";
+  return {
+    dir: rel ? `$HOME/${rel}` : abs,
+    // 태그는 자리마다 하나 — `.local/bin` 만 종전 리터럴(`local-bin`)을 지킨다(제거기와의 약속).
+    tag: rel === ".local/bin" ? "local-bin" : (rel || abs).replace(/^[.\/]+/, "").replace(/[^A-Za-z0-9]+/g, "-").toLowerCase(),
+  };
+}
+
+// 우리가 깔아 준 하네스의 bin 자리를 셸 rc 에 영속화한다. **설치기가 스스로 안 심는 경우에만** 부른다
+//  (표의 install.<os>.wiresPath 가 그 판정 — 남이 이미 한 일을 또 하면 rc 에 중복 블록이 쌓인다).
+function wireLocalBinPath(binDir = join(HOME, ".local", "bin")) {
+  if (WIN) return;                                              // 윈도우는 rc 가 아니라 User PATH 다(설치기들이 직접 잡는다)
+  const { dir, tag } = rcPathSpec(binDir, HOME);
+  const rcs = [".zshrc", ".bashrc", ".bash_profile", ".profile"]
+    .map((f) => join(HOME, f)).filter((f) => existsSync(f));
+  if (!rcs.length) { const z = join(HOME, ".zshrc"); try { writeFileSync(z, ""); rcs.push(z); } catch { return; } }
+  for (const rc of rcs) {
+    let cur = "";
+    try { cur = readFileSync(rc, "utf8"); } catch { continue; }
+    const block = localBinRcBlock(cur, { dir, tag });
+    if (block === null) continue;
+    try {
+      const bak = join(HOME, ".lively", "backups", `${rc.split(sep).pop()}.path-${tag}.bak`);
+      mkdirSync(join(HOME, ".lively", "backups"), { recursive: true });
+      if (!existsSync(bak)) writeFileSync(bak, cur);             // pristine 스냅샷 1회만 — 덮으면 복구가 죽는다
+      writeFileSync(rc, cur + block);                            // append-only(비파괴)
+      info(`${rc.replace(HOME, "~")} 에 PATH 블록 추가 — 새 터미널에서도 잡힙니다.`);
+    } catch { /* rc 를 못 쓰면 이 프로세스 PATH 만으로 진행(종전과 동일) */ }
+  }
+}
+
+// ── 7.5 하네스 자동 설치 (#2255) ────────────────────────────────────────────
+// 종전엔 하네스가 없으면 **claude 하나만**, **POSIX 에서만** 깔아 줬다. 윈도우 사람은 링크만 받아
+//  브라우저에 나갔다 돌아와 `lively install` 을 **한 번 더** 쳐야 했고("Windows 엔 sh 가 없다"가 근거였는데
+//  정작 필요한 건 sh 가 아니라 PowerShell 이었다 — 5종 중 4종이 공식 .ps1 설치기를 갖고 있다),
+//  codex·opencode·antigravity·grok 을 쓰려는 사람에겐 자동 설치 경로가 아예 없었다.
+//
+// 설치 계약은 **표**(kit/hooks/harness-registry.mjs 의 `install` 축)가 답한다. 여기 박지 않는 이유 둘:
+//  ① 새 하네스는 표에 한 줄이면 끝이어야 한다(이 파일의 존재 이유와 같은 규율).
+//  ② **번들의** 표를 읽으므로 구버전 CLI 로도 새 하네스를 깔 수 있다 — augmentHarnessesFromBundle 이
+//    #1689 에서 배운 것과 같은 교훈이다(그때는 "update 를 두 번 돌려야 했다"로 나타났다).
+
+// 표 로드 — 번들 우선(항상 최신), 없으면 **설치된 형제 사본**. 사본을 새로 만들지 않는다(드리프트 0).
+//  두 자리의 상대경로가 같은 건 우연이 아니다: 설치 레이아웃 `~/.lively/lib/lively.mjs` ↔ `~/.lively/hooks/…`
+//  와 소스 `kit/cli/` ↔ `kit/hooks/` 가 둘 다 `../hooks/harness-registry.mjs` 로 닿는다.
+async function loadHarnessRegistry(bundleRoot) {
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  const cands = [
+    bundleRoot ? join(bundleRoot, ".claude", "hooks", "harness-registry.mjs") : "",
+    join(here, "..", "hooks", "harness-registry.mjs"),
+  ].filter(Boolean);
+  for (const f of cands) {
+    try {
+      const m = await import(pathToFileURL(f).href);          // ⚠ pathToFileURL — 윈도우 드라이브문자
+      if (typeof m?.installPlanFor === "function") return m;  // 구 번들엔 이 축이 없다 → 다음 후보
+    } catch { /* 다음 후보 */ }
+  }
+  return null;
+}
+
+// ── 카드형 출력 — 남의 기계에 소프트웨어를 까는 화면이라 «무엇을·어디서·되돌리기»를 한 눈에 둔다.
+//  오른쪽 테두리는 두지 않는다: ANSI + CJK 폭 계산이 한 칸이라도 틀리면 표가 어긋나 오히려 지저분해진다.
+const padTo = (s, n) => String(s) + " ".repeat(Math.max(0, n - cols(s)));
+const cardRow = (k, v) => say("  " + dim("│  ") + dim(padTo(k, 11)) + v);
+const tilde = (p) => String(p || "").replace(HOME, "~");
+
+// 공급사 설치기의 출력을 우리 출력과 섞이지 않게 감싼다(스트리밍이라 접두어를 못 붙인다 → 구분선으로).
+const vendorRule = (label) => say(dim("  " + "─".repeat(3) + " " + label + " " + "─".repeat(Math.max(3, 52 - cols(label)))));
+
+// 설치기를 실제로 돌린다. POSIX 는 sh, 윈도우는 PowerShell **자식 프로세스**.
+//  ⚠ `irm … | iex` 를 자식으로 돌리는 건 [[delivery-install-invariants]] ⑥ 의 "exit 금지" 와 충돌하지 않는다 —
+//   그 규칙은 우리 부트스트랩이 **사용자 세션 안에서** 평가될 때의 이야기고(거기선 exit 이 사람 창을 닫는다),
+//   여기선 우리가 띄운 별도 프로세스라 공급사 스크립트의 exit 이 우리를 넘어오지 않는다. 되돌리지 말 것.
+function runInstaller(plan) {
+  const env = plan.env || undefined;
+  if (plan.shell === "powershell") {
+    // pwsh(7+) 가 있으면 그걸, 없으면 Windows 기본 powershell.exe. -NoProfile 은 남의 프로필을 안 태우기 위해서다.
+    const exe = has("pwsh") ? "pwsh" : "powershell";
+    return run(exe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", plan.cmd], { allowFail: true, env });
+  }
+  return run("sh", ["-c", plan.cmd], { allowFail: true, env });
+}
+
+// 설치 직후 **부작용으로** 판정한다 — 종료코드가 아니라 "그 이름으로 실제 버전이 나오나".
+//  (공급사 설치기가 0 으로 끝나고도 PATH 밖에 놓는 경우가 실제로 있다 — 그때 '성공' 이라고 말하면 안 된다.)
+function probeHarness(bin) {
+  if (!has(bin)) return null;
+  try {
+    const r = run(bin, ["--version"], { quiet: true, allowFail: true, timeout: 20000 });
+    return String(r.out || r.err || "").trim().split("\n")[0] || "(버전 불명)";
+  } catch { return "(버전 불명)"; }
+}
+
+/**
+ * 하네스가 없으면 **깔아 준다**. 반환 = 갱신된 하네스 목록(설치를 안 했으면 받은 그대로).
+ *  want = 사람이 «이걸 쓰겠다» 고 고른 하네스(온보딩·`--harness`). 비면 종전 규약(아무것도 없을 때만 claude).
+ */
+// 온보딩에서 고른 AI 를 **서버에 묻는다** (#2255 구멍 ③).
+//  왜 CLI 가 묻나 — 입구가 셋이다(데스크톱 앱 · 터미널 한 줄 · 손으로 lively install). 앱이 묻고 앱이 넘기게 하면
+//   나머지 둘은 영영 못 받고, 무엇보다 **웹 UI 에는 CLI 를 돌리는 IPC 가 없다**(desktop/main/ipc-contract.mjs
+//   머리말의 보안 경계 — 원격 페이지의 XSS 한 방이 이 PC 의 임의 실행으로 승격되면 안 된다). 그래서 값은
+//   서버에 있고, 그걸 읽는 자리는 **설치를 실제로 하는 쪽** 한 곳이면 된다.
+//  값은 온보딩 화면이 진행 저장(POST /api/ui/me/welcome/progress)에 실어 둔 `state.aiHarness` — **라벨이 아니라 id** 다
+//   (라벨→id 표를 여기 또 두면 사본이 둘이 되고, 그 순간 «Gemini 를 골랐는데 claude 가 깔리는» 상태가 생긴다).
+//  실패는 전부 무해: 구 게이트웨이·네트워크·이미 온보딩을 끝낸 사람(progress 가 null) → "" 로 떨어져 종전 규약.
+async function onboardingHarness() {
+  const gw = gateway(), tok = token();
+  if (!gw || !tok) return "";
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 5000);   // 설치 흐름을 네트워크가 붙잡지 못하게 — 이건 편의값이다
+  try {
+    const res = await fetch(gw + "/api/ui/me/welcome", { signal: ctl.signal, headers: { authorization: `Bearer ${tok}` } });
+    if (!res.ok) return "";
+    const j = await res.json();
+    const id = String(j?.progress?.state?.aiHarness || "").trim().toLowerCase();
+    return /^[a-z][a-z0-9-]{0,31}$/.test(id) ? id : "";   // 서버 값이라도 그대로 안 믿는다(표가 다시 거른다)
+  } catch { return ""; } finally { clearTimeout(timer); }
+}
+
+/**
+ * (순수) 무엇을 깔지 고른다 — **이 한 줄이 구멍 ②의 자리다.**
+ *  종전 조건은 `if (!harnesses.length)` 였다: 「하나도 없을 때만」 묻는다. 그래서 codex 만 깔린 사람이
+ *  claude 를 쓰겠다고 해도 아무도 안 물었고, 그 사람은 스스로 찾아 깔아야 했다.
+ *  규칙: 고른 게 있으면 **그것**을(다른 하네스가 있어도) · 안 골랐으면 종전대로 하나도 없을 때만 claude.
+ *  반환 "" = 물을 것 없음.
+ */
+export function installTarget(want, harnesses = []) {
+  const t = String(want || "").trim().toLowerCase() || (harnesses.length ? "" : "claude");
+  return !t || harnesses.includes(t) ? "" : t;
+}
+
+async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = null }) {
+  //  우선순위: 명시(`--harness`·LIVELY_INSTALL_HARNESS) > 온보딩에서 고른 것 > 종전 규약(아무것도 없으면 claude).
+  //  명시가 있으면 서버에 묻지 않는다 — 사람이 방금 말한 것보다 저장된 값을 앞세울 이유가 없다.
+  const pick = String(want || "").trim().toLowerCase() || await onboardingHarness();
+  const target = installTarget(pick, harnesses);
+  if (!target) return harnesses;
+
+  const reg = await loadHarnessRegistry(bundleRoot);
+  if (!reg) { warn(`하네스 설치 표를 못 읽었습니다 — ${target} 은 직접 설치해 주세요.`); return harnesses; }
+
+  const plan = reg.installPlanFor(target, { homeDir: HOME, env: process.env });
+  if (!plan) {
+    // 오타를 조용히 삼키지 않는다 — 표 조회는 모르는 id 를 claude 로 폴백하는데, 설치에서 그러면
+    //  «엉뚱한 소프트웨어를 깔았다» 가 된다(installPlanFor 가 여기만 null 을 돌려주는 이유).
+    warn(`모르는 하네스: ${target}  ${dim("(" + (reg.HARNESS_IDS || []).join(" · ") + " 중 하나)")}`);
+    return harnesses;
+  }
+
+  // 이 OS 에 공급사 무인 경로가 없거나 선행 도구가 없으면 — 침묵이 아니라 **안내**로 떨어진다.
+  const blocked = !plan.cmd ? `${plan.label} 는 이 OS 용 무인 설치 경로를 공급사가 제공하지 않습니다.`
+    : (plan.requires && !has(plan.requires)) ? `${plan.label} 설치엔 ${plan.requires} 가 필요한데 찾지 못했습니다.`
+      : "";
+  if (blocked) {
+    warn(blocked);
+    if (plan.docs) info(`설치 안내: ${plan.docs}  ${dim("→ 설치 후 `lively install` 재실행")}`);
+    return harnesses;
+  }
+
+  // ── 동의 화면 ──
+  say("");
+  say("  " + dim("╭─ ") + bold(`${plan.label} 가 이 컴퓨터에 없습니다`));
+  say("  " + dim("│"));
+  cardRow("받는 곳", plan.cmd);
+  if (plan.binDir) cardRow("놓일 자리", tilde(plan.binDir) + sep + plan.bin);
+  cardRow("무결성", plan.integrity
+    ? `공급사 설치기가 ${plan.integrity.toUpperCase()} 체크섬을 검증합니다`
+    : yellow("공급사 설치기가 무결성 검증을 하지 않습니다"));
+  cardRow("되돌리기", `${bold("lively uninstall")} 은 이걸 지우지 않습니다 ${dim("— 설치 후엔 당신의 프로그램입니다")}`);
+  say("  " + dim("│"));
+  say("  " + dim("╰─ ") + dim(`직접 깔고 싶으면 아니오를 누르세요 — ${plan.docs || "공급사 안내"}`));
+  say("");
+  if (!await askYesNo(`  ${bold(plan.label)} 를 지금 설치할까요?`, true)) {
+    // 조사를 붙이지 않는다 — 하네스 id 마다 받침이 달라(claude/grok) 「로/으로」가 갈린다.
+    info(`건너뜁니다 — 나중에 다시: ${bold("lively install --harness " + plan.id)}`);
+    return harnesses;
+  }
+
+  // ── 실행 ──
+  say("");
+  vendorRule(`${plan.label} 설치기`);
+  const r = runInstaller(plan);
+  vendorRule("");
+  say("");
+
+  // 이 프로세스에서 바로 보이게(아래 재감지) + 새 터미널에서도 잡히게(rc 영속화 — 설치기가 안 심는 경우만).
+  if (plan.binDir) process.env.PATH = `${plan.binDir}${delimiter}${process.env.PATH || ""}`;
+  if (!plan.wiresPath && plan.binDir) wireLocalBinPath(plan.binDir);
+
+  const ver = probeHarness(plan.bin);
+  if (!ver) {
+    // 설치기가 0 으로 끝나도 여기 오면 실패다 — «반쪽 설치» 를 성공이라고 말하지 않는다.
+    fail(`${plan.label} 를 설치했지만 ${bold(plan.bin)} 을 찾지 못했습니다${r.code ? ` (설치기 exit ${r.code})` : ""}.`);
+    if (plan.docs) info(`직접 설치: ${plan.docs}  ${dim("→ 설치 후 `lively install` 재실행")}`);
+    return harnesses;
+  }
+  ok(`${plan.label} 설치 완료  ${dim(ver)}`);
+  //  ⚠ detectHarnesses() 로 **갈아치우지** 않고 합친다 — 그러면 방금 augmentHarnessesFromBundle 이
+  //   번들 표에서 알아낸 하네스(이 CLI 는 모르는 것)가 지워져 그 배선만 조용히 빠진다(#1689 의 그 결함).
+  return [...new Set([...harnesses, ...detectHarnesses(), plan.id])];
+}
+
 // ── 8. 설치/업데이트의 단일 코드 경로 ───────────────────────────────────────
 //  install 과 update 는 같은 일을 한다(멱등). 다른 건 문구와, install 이 claude 부재 시 설치를 제안한다는 것뿐.
-async function syncKit({ label, offerHarness }) {
+async function syncKit({ label, offerHarness, want = "" }) {
   if (!gateway()) die("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
   if (!token()) die("로그인이 필요합니다 — 먼저 `lively login` 을 실행하세요.");
 
   let harnesses = detectHarnesses();
-  if (!harnesses.length && offerHarness) {
-    warn("Claude Code · Codex 가 둘 다 안 보입니다.");
-    if (WIN) {
-      // Windows 엔 sh 가 없다 — 공식 설치 안내만 하고 진행한다(있지도 않은 셸을 부르고 조용히 실패하지 않는다).
-      info("Claude Code 를 먼저 설치하세요: https://code.claude.com/docs/setup  → 설치 후 `lively install` 재실행");
-    } else if (await askYesNo("  Claude Code 를 지금 설치할까요?", true)) {
-      run("sh", ["-c", "curl -fsSL https://claude.ai/install.sh | bash"], { allowFail: true });
-      // claude 설치기는 ~/.local/bin 에 넣고 PATH 영속화는 사용자 몫으로 남긴다 — 이 프로세스에서만 보이게 해 둔다.
-      process.env.PATH = `${join(HOME, ".local", "bin")}:${process.env.PATH || ""}`;
-      harnesses = detectHarnesses();
-    }
-  }
-  if (!harnesses.length) {
-    warn("하네스 없이 진행합니다 — 맥락·훅은 설치되지만 켤 AI 가 없습니다.");
-    info("Claude Code 설치 후 `lively install` 을 다시 실행하면 배선이 완료됩니다.");
-    harnesses = ["claude"];   // 자산은 깔아 둔다 — 나중에 claude 를 깔면 바로 작동.
-  }
-
-  say(`\n${bold(label)}  ${dim("하네스: " + harnesses.join(", "))}`);
+  say(`\n${bold(label)}`);
   // 진행 신호(#1541 T1) — GUI 가 진행률을 그린다. 사람용 `[1/3]` 문구는 그대로 두고 **덧붙이기만** 한다.
   const step = (id, lbl, status, i, extra) => { if (EV) EV.step(id, lbl, status, { i, n: 3, harnesses, ...(extra || {}) }); };
   say(dim("  [1/3] 키트 내려받는 중…"));
@@ -962,6 +1193,16 @@ async function syncKit({ label, offerHarness }) {
     const late = await augmentHarnessesFromBundle(root, harnesses);
     if (late.length) say(dim(`  (이 번들이 새로 지원하는 하네스 감지: ${late.join(", ")} — 함께 배선합니다)`));
     step("kit-download", "키트 내려받는 중", "done", 1);
+
+    // 하네스 자동 설치(#2255) — **번들을 받은 뒤**에 한다. 설치 계약이 번들의 표에 있기 때문이고,
+    //  그래야 구버전 CLI 로도 이번 번들이 새로 지원하는 하네스를 깔 수 있다(위 augment 와 같은 이유).
+    if (offerHarness) harnesses = await offerHarnessInstall({ want, harnesses, bundleRoot: root });
+    if (!harnesses.length) {
+      warn("하네스 없이 진행합니다 — 맥락·훅은 설치되지만 켤 AI 가 없습니다.");
+      info("AI 를 설치한 뒤 `lively install` 을 다시 실행하면 배선이 완료됩니다.");
+      harnesses = ["claude"];   // 자산은 깔아 둔다 — 나중에 claude 를 깔면 바로 작동.
+    }
+    say(dim(`  하네스: ${harnesses.join(", ")}`));
 
     say(dim("  [2/3] 설치 중…"));
     step("kit-install", "설치 중", "start", 2);
@@ -1055,7 +1296,7 @@ async function loginWithPastedToken(gw) {
   const tok = String(await askHidden("  접속 토큰을 붙여넣으세요 (화면에 안 보입니다): ") || "").trim();
   if (!tok) die("토큰이 비어 있습니다.");
   const me = await validateAndStore(gw, tok);
-  afterLogin(gw, tok);
+  await afterLogin(gw, tok);
   return me;
 }
 
@@ -1251,7 +1492,7 @@ const loginEscapeToken = ({ flagToken = "", envToken = "", fileToken = "", isInt
 //   헤더로 **멤버 개인 게이트웨이 토큰**을 구울 수 있다(auth_env 는 org MCP 서버 경로에서 화이트리스트
 //   강제가 없다 — allowed_auth_envs 는 org_tool 전용, dynamic-tools.ts:115). 필요 없기도 하다: token() 이
 //   파일 우선이고 로그인이 방금 파일을 썼으므로 같은 프로세스의 후속 호출은 이미 새 토큰을 본다.
-function afterLogin(gw, tok) {
+async function afterLogin(gw, tok) {
   // .claude.json 의 lively 항목은 **토큰의 사본**이고 방금 로그인이 그걸 무효화했다 → 여기서 다시 굽는다.
   //  없으면: 사용자가 로그인만 하고 멈췄을 때(bootstrap.sh·웹 안내가 그렇게 시킨다) MCP 는 옛 신원으로 남는다.
   registerClaudeMcp(); // claude 미설치 판정·안내 포함. (#247 — 구명 registerLivelyMcp 잔재 호출이 여기서 크래시했다)
@@ -1259,6 +1500,16 @@ function afterLogin(gw, tok) {
   //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
   if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
     warn(`이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — ${RELOAD_SHELL_HINT} 뒤에 codex 를 쓰세요.`);
+  }
+  // ★ 노드도 지금 로그인한 곳으로 따라오게 한다(#2215). 종전엔 MCP 만 다시 굽고 노드는 그대로 뒀다 —
+  //  그래서 워크스페이스를 옮겨도 그 PC 는 여전히 **이전 테넌트의 노드**였다(새 곳에선 세션이 안 열리고,
+  //  옛 곳에는 계속 붙어 있는 조합). 게이트웨이가 그대로면 아무 일도 하지 않는다.
+  try {
+    const { nodeCommands } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    await nodeCommands(cliCtx()).nodeRebindForGateway(gw);
+  } catch (e) {
+    warn(`노드를 새 게이트웨이로 옮기지 못했습니다 — ${e.message}`);
+    info("그 PC 에서 `lively node --daemon` 을 다시 실행하면 지금 로그인한 곳으로 등록됩니다.");
   }
 }
 
@@ -1268,7 +1519,7 @@ async function cmdLogin(opts) {
     const r = await cloudLogin(opts.cloud);
     const me = await validateAndStore(r.gateway, r.token);
     say(dim(`  워크스페이스: ${bold(r.workspace || r.gateway)}`));
-    afterLogin(r.gateway, r.token);
+    await afterLogin(r.gateway, r.token);
     return me;
   }
   if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
@@ -1280,7 +1531,7 @@ async function cmdLogin(opts) {
   const escape = loginEscapeToken({
     flagToken: opts.token, envToken: process.env.LIVELY_TOKEN, fileToken: readLively("token"), isInteractive,
   });
-  if (escape) { const me = await validateAndStore(gw, escape); afterLogin(gw, escape); return me; }
+  if (escape) { const me = await validateAndStore(gw, escape); await afterLogin(gw, escape); return me; }
 
   // ② 비대화형(TTY 없음)인데 토큰도 없음 → 명확 안내.
   if (!isInteractive) die("비대화형 환경입니다 — `lively login --token <토큰>` 또는 LIVELY_TOKEN 환경변수를 쓰세요.");
@@ -1306,13 +1557,23 @@ async function cmdLogin(opts) {
   writeLively("token", dev.token);
   writeLively("gateway-url", gw);
   ok(`${bold(who)} 님으로 로그인됐습니다. (토큰 저장: ~/.lively/token)`);
-  afterLogin(gw, dev.token);
+  await afterLogin(gw, dev.token);
   return me;
 }
 
-function cmdLogout() {
+async function cmdLogout() {
   const p = join(LIVELY, "token");
   if (!existsSync(p)) { info("이미 로그아웃 상태입니다(저장된 토큰 없음)."); return; }
+  // ★ 노드부터 끊는다(#2215) — **토큰을 지우기 전에.** 서버에 토큰 회수를 치려면 그 토큰이 아직 있어야 한다.
+  //  종전엔 이 함수가 파일 하나만 지웠고, 그래서 로그아웃한 PC 가 **옛 테넌트에 계속 붙어 세션을 서빙했다**
+  //  (노드 토큰은 로그인 토큰과 별개라 무관하게 유효하다). 네트워크가 없어도 로그아웃은 끝난다 — nodeUnbind 머리말.
+  try {
+    const { nodeCommands } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    await nodeCommands(cliCtx()).nodeUnbind();
+  } catch (e) {
+    warn(`노드 정리 중 문제가 있었습니다 — ${e.message}`);
+    info("로그아웃은 계속합니다. 그 PC 의 노드는 `lively node stop` 으로 멈출 수 있습니다.");
+  }
   rmSync(p, { force: true });
   ok("토큰을 지웠습니다 (~/.lively/token).");
   // 파일만 지울 수 있다 — 이 셸의 env 는 자식이 못 고친다. 남아 있으면 token() 이 env 로 폴백해
@@ -1322,7 +1583,64 @@ function cmdLogout() {
   info("claude 에 등록된 MCP 항목은 남아 있습니다 — 지우려면 `claude mcp remove lively`.");
 }
 
-const cmdInstall = () => syncKit({ label: "라이블리 설치", offerHarness: true });
+/**
+ * `lively workspace` — 지금 이 PC 가 **어느 워크스페이스에 매여 있나**, 그리고 전환(#2215).
+ *
+ * 왜 이 명령이 필요한가: 계정 하나가 여러 워크스페이스에 속하는데(1:N), 이 PC 의 로컬 상태는 **한 벌**이다
+ *  (`~/.lively/{gateway-url,token}` + `node-agent.env` + 하네스 MCP 등록). 그 셋이 서로 다른 곳을 가리켜도
+ *  종전엔 아무도 그걸 말해 주지 않았다 — 웹에서 워크스페이스를 바꿔도 로컬은 따라가지 않으므로
+ *  "새 워크스페이스에선 세션이 안 열리고 옛 워크스페이스에는 계속 붙어 있는" 상태가 조용히 생긴다.
+ *  그래서 이 화면의 요지는 목록이 아니라 **어긋남을 보이는 것**이다.
+ *
+ * 전환은 새 API 를 만들지 않는다 — 클라우드 로그인을 다시 타면 CP 승인 화면이 워크스페이스를 고르게 하고,
+ *  `afterLogin` 이 노드·MCP 를 그 워크스페이스로 따라오게 한다. 즉 **전환 = 다시 로그인**이 정본 경로다.
+ */
+async function cmdWorkspace(rest) {
+  const sub = String(rest[0] || "").trim();
+  if (sub === "switch") {
+    say(dim("· 워크스페이스 전환 = 다시 로그인입니다 — 승인 화면에서 옮겨 갈 워크스페이스를 고르세요."));
+    say(dim("  (이 PC 의 노드·MCP 도 고른 워크스페이스로 따라갑니다.)\n"));
+    return cmdLogin({ cloud: true });
+  }
+  if (sub && sub !== "status") die(`알 수 없는 하위 명령입니다: ${sub} — \`lively workspace\` 또는 \`lively workspace switch\``, 2);
+
+  const gw = gateway();
+  if (!gw) { info("로그인돼 있지 않습니다 — `lively login --cloud` 로 시작하세요."); return; }
+  say(`\n${bold("이 PC 가 매여 있는 곳")}`);
+
+  // 워크스페이스 이름은 게이트웨이가 안다(org 프로필). 못 읽어도 주소는 보여준다 — 조회 실패로 화면을 비우지 않는다.
+  let orgName = null;
+  try { orgName = (await api("/api/ui/me/whoami"))?.org?.name ?? null; } catch { /* 주소만으로도 쓸모 있다 */ }
+  say(`  워크스페이스  ${bold(orgName || "(이름을 못 읽음)")}  ${dim(normGw(gw))}`);
+
+  // 노드·MCP 가 **같은 곳을 보고 있나** — 이 명령의 존재 이유.
+  const { nodeStatus } = await import(new URL("./cmd-node.mjs", import.meta.url));
+  const st = nodeStatus();
+  const nodeGw = st.registered ? normGw(st.gateway || "") : null;
+  const nodeState = !st.registered ? dim("등록 없음")
+    : st.running === true ? green("실행 중") : st.running === false ? yellow("멈춤") : dim("상태 모름");
+  say(`  이 PC 노드    ${st.registered ? bold(st.id || "(이름 없음)") : dim("(없음)")}  ${nodeState}${nodeGw ? `  ${dim(nodeGw)}` : ""}`);
+
+  const mismatch = nodeGw && nodeGw !== normGw(gw);
+  if (mismatch) {
+    warn("노드가 지금 로그인한 워크스페이스와 다른 곳에 매여 있습니다.");
+    say(dim("   그 상태에서는 이 워크스페이스에서 그 PC 로 세션을 열 수 없고, 옛 워크스페이스에는 계속 붙어 있습니다."));
+    say(`   ${bold("lively node --daemon")} ${dim("을 실행하면 지금 로그인한 곳으로 다시 등록됩니다.")}`);
+  } else if (st.registered) {
+    ok("노드가 이 워크스페이스에 매여 있습니다.");
+  }
+  say(dim(`\n  다른 워크스페이스로: ${bold("lively workspace switch")}`));
+}
+
+// `--harness <id>` = 「내가 쓸 AI」. 온보딩이 고른 값을 앱·웹이 그대로 실어 보내는 자리다(#2255).
+//  없으면 종전 규약: 하네스가 하나도 없을 때만 claude 를 제안한다.
+//  LIVELY_INSTALL_HARNESS 는 **부트스트랩 한 줄**이 값을 실어 보내는 통로다(`curl … | LIVELY_INSTALL_HARNESS=grok sh`).
+//   기존 LIVELY_HARNESS 를 재사용하지 않는 이유: 그건 「지금 도는 하네스가 누구냐」(resolveHarness)라 뜻이 다르고,
+//   설치기 자식들이 그걸 자기 신원으로 읽는다 — 두 뜻을 한 이름에 얹으면 조용히 엉킨다.
+const cmdInstall = (o = {}) => syncKit({
+  label: "라이블리 설치", offerHarness: true,
+  want: o.harness || process.env.LIVELY_INSTALL_HARNESS || "",
+});
 
 async function cmdUpdate(opts) {
   if (opts.check) {
@@ -2112,9 +2430,14 @@ async function cmdMode(rest) {
 
 // `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
 //  서버 본체·툴 레지스트리는 lib/lively-mcp-local.mjs 에 있다 — 새 로컬 툴은 거기 TOOLS 배열에 추가한다(여긴 위임만).
+// ⚠ 서빙이 끝나면(= 하네스가 stdin 을 닫았다) **명시적으로 종료한다.**
+//  안 그러면 "이벤트 루프가 빌 때"만 죽는데, 상류 fetch 가 남긴 undici 소켓처럼 핸들이 하나만 남아도
+//  영영 안 죽는다. `DIRECT_RUN` 쪽 exit(파일 하단)은 `lively mcp` 로 뜰 때 argv[1] 이 lively.mjs 라
+//  **발동하지 않는다** — 그래서 종료 책임이 여기 있다.
 async function cmdMcpLocal() {
   const { serveMcpLocal } = await import(new URL("./lively-mcp-local.mjs", import.meta.url));
   await serveMcpLocal();
+  process.exit(0);
 }
 
 // `lively mcp` — 게이트웨이 MCP 의 로컬 stdio 프록시(#1079). 하네스가 매 세션 spawn 한다.
@@ -2124,6 +2447,7 @@ async function cmdMcpLocal() {
 async function cmdMcpGateway() {
   const { serveMcpGateway } = await import(new URL("./lively-mcp-gateway.mjs", import.meta.url));
   await serveMcpGateway();
+  process.exit(0);            // ↑ cmdMcpLocal 의 주석과 같은 이유 — 남은 소켓이 종료를 막지 못하게.
 }
 
 // `lively init` — 이 폴더를 라이블리 프로젝트로(사람 표면). MCP 툴 lively_local_project_init 과 **같은 코어**를 쓴다
@@ -2265,7 +2589,7 @@ async function cmdSetup(opts = {}) {
   //   아직 안 골랐고, 옛 토큰이 먹힌다는 이유로 그 선택을 건너뛰면 엉뚱한 워크스페이스에 설치된다.
   if (opts.cloud) {
     await cmdLogin({ cloud: opts.cloud });
-    await cmdInstall();
+    await cmdInstall(opts);
     say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
     return;
   }
@@ -2279,7 +2603,7 @@ async function cmdSetup(opts = {}) {
   if (accepted === true) info("이미 로그인돼 있습니다 — 설치만 진행합니다.");
   else if (accepted === null) info("로그인 상태를 확인하지 못했습니다(네트워크?) — 그대로 설치를 시도합니다.");
   else await cmdLogin({});
-  await cmdInstall();
+  await cmdInstall(opts);
   // 설치 완료 → 온보딩 안내(정적 문구만 · #1024). 자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.
   say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
 }
@@ -2291,13 +2615,15 @@ ${bold("사용법")}
   lively <명령> [옵션]
 
 ${bold("시작하기")}
-  setup                  로그인 + 설치를 한 번에 (처음 설치할 때) ${dim("--gateway <url>")}
+  setup                  로그인 + 설치를 한 번에 (처음 설치할 때) ${dim("--gateway <url>  --harness <name>")}
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
   onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
 
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
+      --harness <name>   ${dim("내가 쓸 AI — 이 컴퓨터에 없으면 동의를 받고 깔아 줍니다")}
+                         ${dim("claude · codex · opencode · antigravity · grok  (생략하면: 하나도 없을 때만 claude 를 제안)")}
   update                 지금 최신으로 맞춤 ${dim("(MCP 재등록 포함 — 자동 업데이트가 못 하는 축)")}
       --check            확인만 하고 설치하지 않음
   uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|all")}
@@ -2318,6 +2644,8 @@ ${bold("작업")}
       ${dim("레포를 못 가져와도(자격·네트워크 등) 세션은 그대로 시작하고, 무엇이 왜 실패했는지 사람·AI 에게 함께 알립니다.")}
       --require-repo     ${dim("반대로 레포 준비 실패 시 실행을 중단(자동화·프로비저닝 스크립트용)")}
   mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
+  workspace              지금 매여 있는 워크스페이스 + 이 PC 노드가 같은 곳을 보고 있는지
+      switch             다른 워크스페이스로 옮기기 ${dim("(다시 로그인 — 노드·MCP 도 함께 따라갑니다)")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
   backfill                이 PC 의 기존 claude 대화 기록을 중앙에 소급 업로드(웹뷰에 과거 세션도) ${dim("--dry-run")}
   share [<세션id>]         이 세션(진행 중 포함)을 팀원과 공유 — 최신 내용 올리고 열람 링크 출력 ${dim("--node <id>  --json")}
@@ -2453,7 +2781,7 @@ async function dispatch(cmd, o, argv) {
     case "logout": return cmdLogout();
     // onboarding — 온보딩 스킬을 이 PC 에서 바로 실행(설치 직후 제안·수동 재실행 공용). 나머지 인자=초기 프롬프트.
     case "onboarding": return cmdOnboarding(argv.slice(argv.indexOf("onboarding") + 1));
-    case "install": { await cmdInstall(); return; }
+    case "install": { await cmdInstall(o); return; }
     case "update": case "upgrade": return cmdUpdate(o);
     case "uninstall": case "remove": return cmdUninstall(o);
     case "init": return cmdInit(argv.slice(argv.indexOf("init") + 1));
@@ -2464,6 +2792,8 @@ async function dispatch(cmd, o, argv) {
     case "run": return cmdRun(argv.slice(argv.indexOf("run") + 1));
     // mode — 디폴트 실행 모드(normal|readonly|incognito) 조회/설정(#1007+). lively run 이 이걸 읽는다.
     case "mode": return cmdMode(argv.slice(argv.indexOf("mode") + 1));
+    // workspace — 지금 어느 워크스페이스에 매여 있나 + 전환(#2215). 계정 하나가 여러 워크스페이스에 속한다.
+    case "workspace": return cmdWorkspace(argv.slice(argv.indexOf("workspace") + 1));
     // delegate 도 나머지 인자 원형 보존(--ram 등 delegate 전용 옵션이 CLI 공통 파서에 안 먹히게).
     case "delegate": return cmdDelegate(argv.slice(argv.indexOf("delegate") + 1));
     // node — 이 PC 를 라이블리 노드로 연결(데몬 없이 foreground). 나머지 인자 원형 보존.

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { installTenantSlugResolver } from "./catalog.js";
 import path from "node:path";
-import { tmux, tmuxExecArgv } from "./tmux-exec.js";
+import { tmux, tmuxExecArgv, LIST_FMT } from "./tmux-exec.js";
 
 afterEach(() => { delete process.env.LIVELY_TMUX_EXEC; });
 
@@ -149,4 +149,21 @@ test("★ 형식이 안 맞는 슬러그도 던진다(컨테이너 이름에 들
     installTenantSlugResolver(() => null);
     delete process.env.LIVELY_TMUX_EXEC;
   }
+});
+
+// ── LIST_FMT 는 **위치 계약**이다 (#2170 에서 필드를 하나 끼워 넣으며 추가) ─────────────────────
+//  sessions.collectSessions 는 이 한 줄을 탭으로 쪼개 **순서대로** 구조분해한다. 그래서 필드를 끼워 넣거나
+//  순서를 바꾸면 그쪽 destructuring 도 같이 고쳐야 하는데, 지금까지 그 대응을 지키는 장치가 없었다 —
+//  어긋나면 예외가 나는 게 아니라 **하네스 자리에 작업폴더가 들어가는 식으로 조용히 밀린다**(전 세션 메타 오염).
+//  ⚠ 이 표를 고쳤으면 sessions.ts 의 `const [name, created, …] = line.split("\t")` 도 같이 고쳤는지 확인할 것.
+test("LIST_FMT 필드 순서 — collectSessions 구조분해와 1:1", () => {
+  assert.deepEqual(LIST_FMT.split("\t"), [
+    "#{session_name}", "#{session_created}", "#{session_attached}",
+    "#{@box_owner}", "#{@box_harness}", "#{@box_dir}", "#{@box_auto}",
+    "#{@box_flags}", "#{@box_invites}", "#{@box_project}", "#{@box_app}", "#{@box_managed}",
+    "#{pane_current_command}", "#{session_last_attached}", "#{@box_last_busy}",
+    "#{@box_state}", "#{@box_last_seen}", "#{pane_title}", "#{@box_runtime}", "#{@box_label}",
+  ], "LIST_FMT 를 바꿨다 — sessions.ts collectSessions 의 구조분해 순서도 같이 고쳤는지 확인하라");
+  // @box_label 은 값에 탭이 들어올 수 있어 ...rest 로 받는다 → **반드시 마지막**이어야 한다.
+  assert.equal(LIST_FMT.split("\t").at(-1), "#{@box_label}", "라벨이 마지막이 아니면 뒤 필드를 삼킨다");
 });

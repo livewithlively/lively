@@ -476,6 +476,26 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "me_account_delete_plan",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/account-delete-plan"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_account_delete",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/account-delete"
+  ],
+  "input_hash": "035c54739fe48f44"
+ },
+ {
   "name": "device_lookup",
   "scope": null,
   "mcp": false,
@@ -763,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "47c527e846de89ca"
+  "input_hash": "89fa51208712902d"
  },
  {
   "name": "org_alert_status",
@@ -1365,7 +1385,7 @@
   "rest": [
    "POST /api/ui/me/liv-profile"
   ],
-  "input_hash": "39b76aa327ee5637"
+  "input_hash": "d83f9aee899c74cc"
  },
  {
   "name": "me_liv_profile_get",
@@ -1536,6 +1556,16 @@
    "GET /api/ui/me/welcome/analyze/:id"
   ],
   "input_hash": "1aa36e96f800bcb3"
+ },
+ {
+  "name": "me_welcome_progress",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/welcome/progress"
+  ],
+  "input_hash": "82cdcf2e0e6c5a23"
  },
  {
   "name": "me_welcome_apply",
@@ -1996,7 +2026,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/update"
   ],
-  "input_hash": "f62e557908759772"
+  "input_hash": "d1c5cdfe116c8160"
  },
  {
   "name": "workspace_delete",
@@ -2027,6 +2057,46 @@
    "POST /api/ui/me/workspaces/members/remove"
   ],
   "input_hash": "de9c8a98f1ec1cd9"
+ },
+ {
+  "name": "workspace_leave",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/leave"
+  ],
+  "input_hash": "051dd9c005c2c3ca"
+ },
+ {
+  "name": "workspace_people",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/workspaces/people"
+  ],
+  "input_hash": "26e5e45fafefad0f"
+ },
+ {
+  "name": "workspace_invite",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/invite"
+  ],
+  "input_hash": "e29202b6f5da6c16"
+ },
+ {
+  "name": "workspace_invite_resolve",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/invite/resolve"
+  ],
+  "input_hash": "ccd385ac11288e7c"
  },
  {
   "name": "activity_log",
@@ -2586,7 +2656,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "c5af77aec9a1cc7f"
+  "input_hash": "b723a4155f341b58"
  },
  {
   "name": "source_undistilled",
@@ -2597,6 +2667,16 @@
    "GET /api/ui/sources/undistilled"
   ],
   "input_hash": "88f2284243fe50f5"
+ },
+ {
+  "name": "source_tree",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/sources/tree"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "source_get",
@@ -2616,7 +2696,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "792ed81e3324e631"
+  "input_hash": "f077d64e6b609430"
  },
  {
   "name": "source_link_knowledge",
@@ -3195,6 +3275,26 @@
    "POST /api/ui/v6/side-prefs"
   ],
   "input_hash": "5cdd6ee705f0914b"
+ },
+ {
+  "name": "shell_prefs_index",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/shell-prefs"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "shell_prefs_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/shell-prefs"
+  ],
+  "input_hash": "cece975d859e2a3e"
  },
  {
   "name": "project_folder_index_v6",
@@ -3814,7 +3914,7 @@
   "rest": [
    "POST /api/ui/stack-profiles"
   ],
-  "input_hash": "db31880d68201eb9"
+  "input_hash": "93aa29d534559c54"
  },
  {
   "name": "stack_profile_delete",
@@ -3927,6 +4027,16 @@
   "input_hash": "fa5bf8dd3c9d34f1"
  },
  {
+  "name": "me_credential_verify",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/credential/verify"
+  ],
+  "input_hash": "8210f8cb9a2d130f"
+ },
+ {
   "name": "me_credential_delete",
   "scope": null,
   "mcp": true,
@@ -4024,7 +4134,7 @@
   "rest": [
    "POST /api/ui/org/slack/collect"
   ],
-  "input_hash": "6115cebec72e3d5d"
+  "input_hash": "0a4c61f36e8ea201"
  },
  {
   "name": "org_slack_app_manifest",
@@ -4115,6 +4225,206 @@
    "POST /api/ui/org/github/app"
   ],
   "input_hash": "3341637643557f3f"
+ },
+ {
+  "name": "org_github_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/github/oauth-complete"
+  ],
+  "input_hash": "91c13448f6294c13"
+ },
+ {
+  "name": "org_app_tools",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/:system/tools"
+  ],
+  "input_hash": "c3c5f68ce3ee9ea2"
+ },
+ {
+  "name": "org_app_tools_set_write",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/:system/tools/write"
+  ],
+  "input_hash": "86e96ecaa6655fcd"
+ },
+ {
+  "name": "org_figma_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/figma/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_figma_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/figma/collect"
+  ],
+  "input_hash": "26e355332def616d"
+ },
+ {
+  "name": "org_clickup_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/clickup/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_clickup_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/clickup/collect"
+  ],
+  "input_hash": "7be457c555b3532c"
+ },
+ {
+  "name": "org_github_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/github/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_github_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/github/collect"
+  ],
+  "input_hash": "d32f2391669423cb"
+ },
+ {
+  "name": "org_gitlab_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/gitlab/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_gitlab_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/gitlab/collect"
+  ],
+  "input_hash": "7fbb18feb3d790a5"
+ },
+ {
+  "name": "org_linear_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/linear/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_linear_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/collect"
+  ],
+  "input_hash": "50798dbce4c3f367"
+ },
+ {
+  "name": "org_linear_collect_connect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/collect/connect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_linear_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/linear/oauth-complete"
+  ],
+  "input_hash": "90172574917c2fd4"
+ },
+ {
+  "name": "org_collect_scope_options",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/:system/collect/options"
+  ],
+  "input_hash": "80d71c4c25c45131"
+ },
+ {
+  "name": "org_google_collect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/google/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_google_collect_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/google/collect"
+  ],
+  "input_hash": "097ef7fc3e9be22a"
+ },
+ {
+  "name": "org_google_collect_connect",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/google/collect/connect"
+  ],
+  "input_hash": "009656a758678a46"
+ },
+ {
+  "name": "org_google_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/google/oauth-complete"
+  ],
+  "input_hash": "8779c8483d0fd640"
  },
  {
   "name": "app_instance_list",

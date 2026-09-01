@@ -181,6 +181,22 @@ export async function workerRunForInstance(instanceId: string): Promise<runs.App
   return (await observeActiveWorkerRun(instanceId)) ?? await runs.latestWorkerRun(instanceId);
 }
 
+/** 목록용 — 여러 인스턴스의 '보여줄 실행'을 **왕복 두 번**으로(#2234).
+ *  건별 workerRunForInstance 와 값이 같아야 한다: 살아 있는 실행이 있으면 그걸 호스트에 한 번 확인해서(observe),
+ *  없으면 마지막 실행을 그대로. 다른 점은 **묻는 횟수**뿐이다 — 살아 있는 실행이 있는 인스턴스만 호스트에 묻는다
+ *  (통상 0건이다. 종전엔 실행이 하나도 없는 인스턴스에도 인스턴스당 조회 두 번이 나갔다). */
+export async function workerRunsForInstances(instanceIds: string[]): Promise<Map<string, runs.AppWorkerRunRow | null>> {
+  const out = new Map<string, runs.AppWorkerRunRow | null>();
+  const ids = [...new Set(instanceIds.filter(Boolean))];
+  if (!ids.length) return out;
+  const [active, latest] = await Promise.all([runs.activeWorkerRuns(ids), runs.latestWorkerRuns(ids)]);
+  //  살아 있는 실행이 있는 것만 호스트 확인 — 그 안에서 스냅샷을 접거나(applyWorkerSnapshot) 유실을 표시한다.
+  const observed = await Promise.all([...active.keys()].map(async (id) => [id, await observeActiveWorkerRun(id)] as const));
+  const seen = new Map(observed);
+  for (const id of ids) out.set(id, seen.get(id) ?? latest.get(id) ?? null);
+  return out;
+}
+
 export async function stopWorkerForInstance(instanceId: string, reason: WorkerStopReason = "explicit"): Promise<void> {
   const run = await runs.activeWorkerRun(instanceId);
   if (!run) return;

@@ -102,3 +102,41 @@ test("중복 억제된 발송은 실패가 아니라 suppressed 로 센다", asy
   assert.equal(r.suppressed, 1);
   assert.equal(r.denied, 0, "억제는 거부가 아니다");
 });
+
+// ── observed 를 함께 돌려주는 이유(#2246 실측) ────────────────────────────────
+//  매니지드에서 이 스윕이 죽어 있던 걸 **이틀** 몰랐다. 셋(notified·suppressed·denied)만으로는
+//  «봤는데 전이가 없어 0» 과 «볼 게 아예 0» 이 똑같이 0,0,0 이라 로그로 갈리지 않았기 때문이다.
+test("아무것도 안 보낸 두 경우가 반환값에서 갈린다 — 봤는데 전이 없음 vs 볼 게 없음", async () => {
+  resetAwaitingState();
+  const { notify } = recorder();
+  const 봤지만_전이없음 = await sweepAwaitingNotifications({
+    list: sessions([{ id: "box-a", owner: "yoon", awaiting: false }, { id: "box-b", owner: "jang", awaiting: false }]),
+    notify,
+  });
+  resetAwaitingState();
+  const 볼게_없음 = await sweepAwaitingNotifications({ list: sessions([]), notify });
+
+  // 셋만 보면 구별이 안 된다 — 그게 문제였다.
+  for (const r of [봤지만_전이없음, 볼게_없음]) assert.deepEqual([r.notified, r.suppressed, r.denied], [0, 0, 0]);
+  // observed 가 그 둘을 가른다.
+  assert.equal(봤지만_전이없음.observed, 2, "세션 둘을 봤다");
+  assert.equal(볼게_없음.observed, 0, "볼 세션이 없었다 — 중계가 끊겼거나 컨텍스트가 틀렸다는 신호");
+});
+
+test("awaiting 은 '지금 대기 중인 수'다 — 알림 0건이어도 대기가 있었는지 말해 준다", async () => {
+  resetAwaitingState();
+  const { notify } = recorder();
+  // 첫 스윕에서 전이로 잡혀 알림이 나간다.
+  const 첫판 = await sweepAwaitingNotifications({
+    list: sessions([{ id: "box-a", owner: "yoon", awaiting: true }, { id: "box-b", owner: "yoon", awaiting: false }]),
+    notify,
+  });
+  assert.deepEqual([첫판.observed, 첫판.awaiting, 첫판.notified], [2, 1, 1]);
+  // 같은 상태로 다시 쓸면 전이가 아니라 알림은 0 — 그래도 대기가 하나 있다는 건 보여야 한다.
+  const 둘째판 = await sweepAwaitingNotifications({
+    list: sessions([{ id: "box-a", owner: "yoon", awaiting: true }, { id: "box-b", owner: "yoon", awaiting: false }]),
+    notify,
+  });
+  assert.equal(둘째판.notified, 0, "같은 대기로 다시 울리지 않는다");
+  assert.equal(둘째판.awaiting, 1, "그래도 대기가 하나 있다는 사실은 남는다");
+});

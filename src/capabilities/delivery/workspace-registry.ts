@@ -20,14 +20,24 @@ import {
   PRIMARY_SLUG, PRIMARY_TENANT_ID, normalizeWorkspaceSlug, listWorkspacesForMember, getWorkspaceBySlug,
   insertWorkspace, updateWorkspaceName, archiveWorkspace, addWorkspaceMember, removeWorkspaceMember,
   getWorkspaceMemberRole, listWorkspaceMembers, type RegistryWorkspace,
+  // #1875 — 개인/팀 파생 + 구성원 초대
+  kindEffective, countWorkspaceMembers, memberCounts, normalizeInviteEmail, createInvite,
+  listWorkspaceInvites, listInvitesForEmail, getInvite, resolveInvite, revokeInvitesForWorkspace,
+  inviteResolvable, inviteDecisionActor, inviteNextState, inviteRecipientMatches, type InviteDecision,
+  // #1875 D5″ — 나가기의 세 갈래(어드민 수) + 주인 넘기기
+  planWorkspaceLeave, transferWorkspaceOwner, ownerCounts, type LeavePlan,
+  normalizeWorkspaceFace, updateWorkspaceFace,
 } from "../../org/tenancy/registry.js";
 import { currentTenant, withTenant } from "../../org/tenant-context.js";
 import { itemsPool } from "../../db/client.js";
-import { getMember } from "../../org/store.js";
+import { getMember, listMembers } from "../../org/store.js";
 import { updateOrgProfile } from "../../org/store/profile.js";
 import { updateRuntimeConfig } from "../../org/store/runtime-config.js";
 import { seedDefaultContent } from "../../org/delivery/seed-content.js";
+import { seedBuiltinApps } from "../../apps/seed.js";   // #2479 — 신규 워크스페이스도 빌트인 앱을 받아야 알림이 산다
 import { logger } from "../../log.js";
+// #2188 — 매니지드에서 워크스페이스의 권위는 CP(app.lvly.io)다. 여기서는 **묻고 전달만** 한다.
+import { resolveCpTarget, callCp, hubOrigin, type CpWorkspace } from "./managed-cp.js";
 
 const requireMember = (user: LivelyUser): string => {
   const id = user?.userId;
@@ -35,10 +45,31 @@ const requireMember = (user: LivelyUser): string => {
   return id;
 };
 
-const wsView = (w: RegistryWorkspace & { role?: string }) => ({
-  slug: w.slug, name: w.name, kind: w.kind, state: w.state, role: w.role ?? null,
-  is_primary: w.id === PRIMARY_TENANT_ID, created_at: w.created_at,
-});
+// #1875 — 화면이 쓰는 것은 `kind_effective`(인원 수 파생)다. `kind` 컬럼도 계속 실어 보내되 그건
+//  "만들 때의 의도"이지 지금의 사실이 아니다 — 사람이 들고 나면 조용히 거짓이 된다.
+//  primary 는 명부를 쓰지 않으므로(박스 로그인 = 접근) 언제나 팀으로 본다.
+const wsView = (w: RegistryWorkspace & { role?: string }, memberCount?: number, pending = 0, ownerCount?: number) => {
+  const isPrimary = w.id === PRIMARY_TENANT_ID;
+  const n = memberCount ?? 0;
+  return {
+    slug: w.slug, name: w.name, kind: w.kind, state: w.state, role: w.role ?? null,
+    is_primary: isPrimary, created_at: w.created_at,
+    //  #2188 — 사람이 정한 얼굴. 비면({}) 화면이 파생한다. null 로 눕혀 «없음»을 한 모양으로.
+    face: w.face && Object.keys(w.face).length ? w.face : null,
+    member_count: isPrimary ? null : n,
+    // #1875 D5″ — 나가기의 갈래를 정하는 값. 화면이 이걸로 «그냥 나가기»와 «넘기고 나가기»를 갈라 그린다.
+    //  primary 는 명부가 없어 셀 것도 없다(박스 로그인 = 접근).
+    owner_count: isPrimary ? null : (ownerCount ?? null),
+    pending_invites: pending,
+    kind_effective: isPrimary ? "team" : kindEffective(n),
+  };
+};
+
+/** 초대 대상 후보 — 이 박스의 사람들. 이메일이 없는 멤버(AI 등)는 부를 수 없다. */
+const invitableMembers = async (): Promise<Array<{ id: string; email: string; display_name: string | null }>> =>
+  (await listMembers())
+    .filter((m) => m.kind === "human" && m.state === "active" && !!(m.email || "").trim())
+    .map((m) => ({ id: m.id, email: String(m.email).toLowerCase(), display_name: m.display_name ?? null }));
 
 /** slug 미지정 시 자동 생성 — 이름이 한글이면 슬러그화가 불가능하므로 무작위가 정직하다(추측하지 않는다). */
 const autoSlug = (): string => `ws-${crypto.randomBytes(4).toString("hex")}`;
@@ -48,6 +79,30 @@ async function requireOwner(ws: RegistryWorkspace, memberId: string): Promise<vo
   if (ws.owner_member === memberId) return;
   if ((await getWorkspaceMemberRole(ws.id, memberId)) === "owner") return;
   throw new HttpError(403, "이 워크스페이스의 owner 만 할 수 있습니다");
+}
+
+/**
+ * 나가기 거절을 사람 말로 옮긴다(#1875 D5\u2033). ★ `needs-transfer` 는 **후보 명단을 함께 싣는다** —
+ *  화면이 "넘길 사람을 고르세요" 드롭다운을 그 자리에서 그릴 수 있어야 하고, 아니면 사람은
+ *  «안 된다»만 듣고 다음에 뭘 해야 하는지 모른 채 멈춘다([[ui-question-needs-answerable-control]]).
+ */
+function leaveRefusal(plan: Exclude<LeavePlan, { ok: true }>, wsName: string): HttpError {
+  switch (plan.reason) {
+    case "primary":
+      return new HttpError(400, "primary 는 명부가 없습니다 — 박스 멤버 전원이 접근합니다");
+    case "not-member":
+      return new HttpError(403, "이 워크스페이스의 구성원이 아닙니다");
+    case "alone":
+      return new HttpError(400, "혼자 쓰는 워크스페이스입니다 — 나가기 대신 보관(workspace_delete)하세요");
+    case "bad-transfer":
+      return new HttpError(400, "주인을 넘길 사람이 이 워크스페이스의 구성원이 아닙니다(자기 자신에게는 넘길 수 없습니다)");
+    case "needs-transfer": {
+      const err = new HttpError(400,
+        `'${wsName}' 의 관리자가 나 하나뿐이라 그냥 나갈 수 없습니다 — transfer_to 로 넘길 분을 정해 주세요.`);
+      (err as HttpError & { candidates?: string[] }).candidates = plan.candidates;
+      return err;
+    }
+  }
 }
 
 async function findWs(slugRaw: unknown): Promise<RegistryWorkspace> {
@@ -69,6 +124,28 @@ const requireRegistry = (): void => {
   }
 };
 
+/**
+ * 이 게이트웨이가 **매니지드**인가(#2188). CP 서명 헤더 모드 = CP 가 워크스페이스 축의 권위.
+ *  registry(셀프호스트 다중)와 **배타**다 — 둘 다 켜지는 배포는 없다(tenant-middleware 머리말).
+ */
+const managedMode = (): boolean => !!(process.env.LIVELY_TENANT_HEADER_SECRET || "").trim();
+
+/**
+ * CP 의 워크스페이스 한 줄 → 화면이 이미 아는 모양(wsView)으로. **필드 이름을 새로 만들지 않는다** —
+ *  스위처·문패·구성원 창이 registry 판과 매니지드 판에서 같은 코드로 그려야 한다(두 벌이 되면 한쪽만 낡는다).
+ *  다른 점은 딱 하나, `enter_url` 이다: 매니지드는 워크스페이스마다 테넌트·주소가 달라서(1:1)
+ *  전환이 헤더가 아니라 **이동**이다.
+ */
+const cpWsView = (w: CpWorkspace) => ({
+  slug: w.slug, name: w.name, kind: w.kind, state: "active", role: w.role,
+  is_primary: false, created_at: null,
+  member_count: w.member_count, owner_count: w.owner_count, pending_invites: w.pending_invites,
+  face: w.face && Object.keys(w.face).length ? w.face : null,
+  kind_effective: w.kind,
+  // 매니지드 전용 — 화면이 이 값이 있으면 '전환'이 아니라 '이동'으로 다룬다.
+  enter_url: w.enter_url, id: w.id, tenant_state: w.tenant_state, is_current: w.is_current,
+});
+
 export const workspaceRegistryCapabilities: Capability[] = [
   restRead("workspace_registry_status", "워크스페이스 목록·상태",
     "이 게이트웨이의 다중 워크스페이스 상태와 **내가 속한 워크스페이스 목록**(좌상단 스위처 재료). " +
@@ -76,19 +153,51 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "GET", paths: ["/api/ui/me/workspaces"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       const id = requireMember(user);
-      const managed = !!(process.env.LIVELY_TENANT_HEADER_SECRET || "").trim();
+      const managed = managedMode();
       const mode = managed ? "managed" : registryModeActive() ? "registry" : "single";
       const current = currentTenant()?.slug ?? PRIMARY_SLUG;
+      if (managed) {
+        // #2188 ★ 종전엔 여기서 **무조건 빈 배열**을 돌려줬다. 그래서 app.lvly.io 에서 워크스페이스를
+        //  만들고 활성화까지 끝나도 게이트웨이 스위처엔 영영 안 나타났다(원준 실측 신고).
+        //  목록의 권위는 CP 지만, **묻지 않으면 없는 것과 같다.**
+        const t = await resolveCpTarget(user, { optional: true });
+        if (!t) return { mode, current, workspaces: [], can_create: false, hub: await hubOrigin().catch(() => null) };
+        const r = await callCp<{ workspaces: CpWorkspace[] }>(t, "/api/tenant/workspaces");
+        return {
+          mode, current, hub: t.base,
+          // 매니지드에서도 **여기서 만들 수 있다**(#2188 ②) — 실행만 CP 가 한다.
+          can_create: true,
+          workspaces: (r.workspaces ?? []).map(cpWsView),
+          invites_for_me: [],
+        };
+      }
       if (mode !== "registry") {
         // single = 자동 활성화가 아직/실패 — 실패 사유는 admin 에게만(오류 문구에 DSN 호스트 등이 실릴 수 있다).
         const err = (user.scopes || []).includes("admin") ? lastActivationError() : null;
-        return { mode, current, workspaces: [], ...(err ? { activation_error: err } : {}) };
+        return { mode, current, workspaces: [], can_create: false, ...(err ? { activation_error: err } : {}) };
       }
       const mine = await listWorkspacesForMember(id);
       // primary 는 명부 없이도 모두의 것 — 명부에 없어도 목록 맨 앞에 세운다(박스 로그인 = primary 접근).
       const rows = mine.some((w) => w.id === PRIMARY_TENANT_ID) ? mine
         : [...((await getWorkspaceBySlug(PRIMARY_SLUG).then((p) => p ? [{ ...p, role: "member" }] : [])) as Array<RegistryWorkspace & { role: string }>), ...mine];
-      return { mode, current, workspaces: rows.map(wsView) };
+      // #1875 — 인원 수를 한 번에 세어 함께 보낸다. 스위처 배지가 이 값에서 나오므로(파생 kind),
+      //  목록과 배지가 서로 다른 시점의 사실을 말하는 일이 없다.
+      const counts = await memberCounts(rows.map((w) => w.id));
+      // #1875 D5″ — 어드민 수도 함께. 화면이 ✕ 를 그리기 전에 «그냥 나가지나, 넘겨야 하나»를 알아야
+      //  «눌렀더니 안 되더라» 가 안 된다. 인원 수와 같은 배치 조회라 n+1 이 늘지 않는다.
+      const owners = await ownerCounts(rows.map((w) => w.id));
+      // 나에게 온 보류 초대 — **내 이메일** 기준이라 지금 어느 워크스페이스에 있든 보인다.
+      //  이게 없으면 초대받은 사람이 자기 화면에서 초대를 볼 방법이 없다(종전: 링크를 따로 받아야 했다).
+      const me = await getMember(id);
+      const inbox = me?.email ? await listInvitesForEmail(String(me.email).toLowerCase()) : [];
+      return {
+        mode, current,
+        workspaces: rows.map((w) => wsView(w, counts.get(w.id) ?? 0, 0, owners.get(w.id) ?? 0)),
+        invites_for_me: inbox.map((i) => ({
+          id: i.id, workspace_slug: i.workspace_slug, workspace_name: i.workspace_name,
+          role: i.role, invited_by: i.invited_by, created_at: i.created_at,
+        })),
+      };
     }, true),
 
   restOnly("workspace_activate", "다중 워크스페이스 활성화(수동 — 보통 불필요)",
@@ -117,8 +226,18 @@ export const workspaceRegistryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/me/workspaces"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      const nameIn = String(input.name ?? "").replace(/\s+/g, " ").trim();
+      if (managedMode()) {
+        // #2188 ② — 사람을 app.lvly.io 로 내보내지 않는다. 캡·슬러그·프로비저닝 판정은 그대로 CP 가 한다.
+        if (!nameIn) throw new HttpError(400, "워크스페이스 이름을 입력하세요");
+        const t = await resolveCpTarget(user);
+        const r = await callCp<{ workspace: CpWorkspace }>(t!, "/api/tenant/workspace-create", { name: nameIn });
+        //  ⚠ 새 워크스페이스는 **새 테넌트**라 주소가 다르다 — 헤더로 전환할 수 없다.
+        //   그래서 header 대신 enter_url 을 준다(화면이 그리로 이동한다).
+        return { workspace: cpWsView(r.workspace) };
+      }
       requireRegistry();
-      const name = String(input.name ?? "").trim();
+      const name = nameIn;
       if (!name) throw new HttpError(400, "name 이 필요합니다");
       const kind = input.kind === "team" ? "team" as const : "personal" as const;
       const slug = input.slug ? normalizeWorkspaceSlug(input.slug) : autoSlug();
@@ -133,6 +252,14 @@ export const workspaceRegistryCapabilities: Capability[] = [
         await updateOrgProfile({ name }, actorOf(user), "workspace_create");
         await updateRuntimeConfig({ workspace_kind: kind }, actorOf(user), "workspace_create");
         await seedDefaultContent().catch((err) => logger.warn({ err, slug }, "새 워크스페이스 시딩 실패(비치명 — 다음 부팅 시딩이 보충하지 않으므로 수동 확인)"));
+        // 빌트인 앱(#2479) — ⚠ 여기 없으면 **이 워크스페이스는 앱을 영영 못 받는다.** 부팅 스텝
+        //  `seed-builtin-apps` 는 테넌트 컨텍스트 밖이라 primary 만 심고, 재부팅해도 보충되지 않는다
+        //  (바로 위 주석이 시딩 일반에 대해 말하는 그 성질이다).
+        //  실측 2026-09-01 dev: 활성 비-primary **84곳 전부 `org_app=0`** → `getApp("ai-session")` 이 null →
+        //  「AI 가 답을 기다려요」 알림(#1891)이 전이를 맞게 감지하고도 `notify-app-inactive` 로 전량 거절.
+        //  매니지드에서 같은 증상을 #2246 이 이미 겪었다. 여기가 **신규**를, 주기 정비(`builtin-app-seed`)가
+        //  **이미 만들어진 것**을 덮는다. 멱등이라 둘이 겹쳐도 안전하다.
+        await seedBuiltinApps().catch((err) => logger.warn({ err, slug }, "새 워크스페이스 빌트인 앱 시딩 실패(비치명 — 주기 정비가 보충한다)"));
       });
       return { workspace: wsView({ ...ws, role: "owner" }), header: { "x-lively-workspace": slug } };
     }, {
@@ -141,42 +268,94 @@ export const workspaceRegistryCapabilities: Capability[] = [
       slug: z.string().optional().describe("주소용 짧은 이름(소문자·숫자·하이픈 3~40자). 미지정이면 자동"),
     }),
 
-  restWork("workspace_update", "워크스페이스 이름 변경",
-    "워크스페이스 표시 이름을 바꾼다(owner 전용). 등록부와 그 워크스페이스 안의 조직 프로필을 함께 바꾼다.",
+  restWork("workspace_update", "워크스페이스 이름·아바타 변경",
+    "워크스페이스 표시 이름과 얼굴(face: 색·글자)을 바꾼다(#2188 설정 모달). 이름은 owner 전용 — 등록부와 그 워크스페이스 안의 " +
+    "조직 프로필을 함께 바꾼다. **primary 는 이름은 여기서 못 바꾸지만(조직 이름 = org_update_profile) 얼굴은 관리자가 바꿀 수 있다.** " +
+    "face 는 {color:'#rrggbb', char:'1~2자'} — 비우면({}) 파생값(개인=내 아바타, 팀=첫 글자)으로 돌아간다. " +
+    "매니지드에서는 CP(app.lvly.io)가 정본이라 묻고 전달만 한다.",
     [{ method: "POST", paths: ["/api/ui/me/workspaces/update"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
-      requireRegistry();
+      //  입력 검증은 분기보다 먼저 — 같은 값이 셀프호스트에선 400 인데 매니지드에선 CP 로 흘러가면 규칙이 두 벌이 된다.
+      const face = normalizeWorkspaceFace(input.face);
       const name = String(input.name ?? "").trim();
-      if (!name) throw new HttpError(400, "name 이 필요합니다");
+      if (!name && face === null) throw new HttpError(400, "바꿀 것(name 또는 face)이 없습니다");
+      if (managedMode()) {
+        //  #2188 — 종전엔 이 분기가 없어 매니지드에서 이름 바꾸기가 requireRegistry 400 으로 죽어 있었다
+        //   (화면은 폼을 그리는데 누르면 "다중 워크스페이스가 아직 활성화되지 않았습니다"). 워크스페이스 축의
+        //   권위는 CP 이므로 묻고 전달만 한다 — owner 판정·이름 규칙은 CP 의 renameWorkspace 가 그대로 한다.
+        const t = await resolveCpTarget(user);
+        const body: Record<string, unknown> = { workspace_id: String(input.slug ?? "") };
+        if (name) body.name = name;
+        if (face !== null) body.face = face;
+        await callCp(t!, "/api/tenant/workspace-update", body);
+        return { workspace: { slug: String(input.slug ?? ""), name: name || null, face } };
+      }
+      requireRegistry();
       const ws = await findWs(input.slug);
-      if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary 이름은 조직 프로필(org_update_profile)에서 바꿉니다");
+      if (ws.id === PRIMARY_TENANT_ID) {
+        //  primary 의 «이름»은 조직 이름 그 자체라 여기서 안 받는다(org_update_profile, admin scope).
+        //  «얼굴»은 등록부 행의 표시값일 뿐이라 받되, primary 엔 owner 개념이 없으므로(명부 없음 — 박스
+        //  로그인 = 접근) 관리자(scopes 에 admin)로 게이트한다.
+        if (name) throw new HttpError(400, "primary 이름은 조직 프로필(org_update_profile)에서 바꿉니다");
+        if (!(user?.scopes ?? []).includes("admin")) throw new HttpError(403, "primary 의 아바타는 관리자만 바꿀 수 있습니다");
+        await updateWorkspaceFace(ws.id, face!);
+        return { workspace: wsView((await getWorkspaceBySlug(ws.slug))!) };
+      }
       await requireOwner(ws, id);
-      await updateWorkspaceName(ws.id, name);
-      await withTenant({ id: ws.id, slug: ws.slug }, () => updateOrgProfile({ name }, actorOf(user), "workspace_update"));
+      if (name) {
+        await updateWorkspaceName(ws.id, name);
+        await withTenant({ id: ws.id, slug: ws.slug }, () => updateOrgProfile({ name }, actorOf(user), "workspace_update"));
+      }
+      if (face !== null) await updateWorkspaceFace(ws.id, face);
       return { workspace: wsView({ ...(await getWorkspaceBySlug(ws.slug))!, role: "owner" }) };
     }, {
       slug: z.string().describe("대상 워크스페이스 slug"),
-      name: z.string().describe("새 이름"),
+      name: z.string().optional().describe("새 이름(비우면 이름은 그대로)"),
+      face: z.object({ color: z.string().optional(), char: z.string().optional() }).nullable().optional()
+        .describe("얼굴 — {color:'#rrggbb', char:'1~2자'}. {} 를 주면 지우고 파생값으로 돌아간다. 생략하면 그대로"),
     }),
 
   restWork("workspace_delete", "워크스페이스 보관(삭제)",
-    "워크스페이스를 보관(archive)한다(owner 전용) — 스위처·접근에서 사라지지만 **데이터는 지우지 않는다**" +
-    "(복구는 관리자가 등록부 state 를 되돌리면 된다. 물리 삭제는 v1 범위 밖 — 파괴 반경이 워크스페이스 전체라 사람 손으로만). primary 는 보관할 수 없다.",
+    "워크스페이스를 보관(archive)한다 — 스위처·접근에서 사라지지만 **데이터는 지우지 않는다**" +
+    "(복구는 관리자가 등록부 state 를 되돌리면 된다. 물리 삭제는 v1 범위 밖 — 파괴 반경이 워크스페이스 전체라 사람 손으로만). " +
+    "**나 혼자 있는 워크스페이스만 보관할 수 있다**(owner 전용, #1875 D5'): 함께 쓰는 사람이 있으면 보관은 막히고 " +
+    "`workspace_leave`(나가기)만 열린다 — 보관은 남은 사람들의 접근까지 함께 끊기 때문이다. primary 는 보관할 수 없다.",
     [{ method: "POST", paths: ["/api/ui/me/workspaces/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
+      if (managedMode()) {
+        //  #1875 D5″ — 매니지드에선 삭제도 CP 가 판정한다(소유자·인원수·프로비저닝 해제).
+        //   ⚠ **requireRegistry() 앞**이어야 한다 — 뒤면 매니지드는 그 자리에서 400 으로 끊긴다(#2188 E2).
+        //   대상은 slug 가 아니라 workspace_id 다(CP 의 키) — 화면이 목록에서 받은 값을 그대로 준다.
+        const t = await resolveCpTarget(user);
+        await callCp(t!, "/api/tenant/workspace-delete", { workspace_id: String(input.slug ?? "") });
+        return { archived: String(input.slug ?? "") };
+      }
       requireRegistry();
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary(기존 박스 워크스페이스)는 보관할 수 없습니다");
       await requireOwner(ws, id);
+      // #1875 D5' (2026-08-27, 장원준) — **함께 쓰는 사람이 있으면 치우는 조작은 없다. 나가기만 있다.**
+      //  보관은 «내 목록에서 숨기기»가 아니라 등록부 state 를 내리는 것이라 **모두의 접근이 끊긴다**.
+      //  owner 라는 자격이 남의 자료를 남의 동의 없이 닫을 권한까지 주지는 않는다는 것이 이 결정이다.
+      //  판정은 역할이나 저장된 kind 가 아니라 **지금 인원수**다(#1875 D1 과 같은 축).
+      const n = await countWorkspaceMembers(ws.id);
+      if (n >= 2) {
+        throw new HttpError(400,
+          `함께 쓰는 분이 ${n - 1}명 있어 이 워크스페이스는 보관할 수 없습니다 — ` +
+          "나만 빠지려면 workspace_leave(나가기)를 쓰고, 치우려면 구성원이 모두 나간 뒤에 하세요.");
+      }
       await archiveWorkspace(ws.id);
-      return { archived: ws.slug };
+      // 보관된 워크스페이스로 가는 초대는 갈 곳이 없다 — 함께 거둬야 받는 사람 화면에 유령이 남지 않는다.
+      const revoked = await revokeInvitesForWorkspace(ws.id, actorOf(user));
+      return { archived: ws.slug, revoked_invites: revoked };
     }, { slug: z.string().describe("보관할 워크스페이스 slug") }),
 
   restWork("workspace_member_add", "워크스페이스 멤버 추가",
-    "팀 워크스페이스 명부에 이 박스의 멤버를 넣는다(owner 전용). role=owner 로 넣으면 공동 owner. " +
-    "개인(personal) 워크스페이스에는 넣을 수 없다 — 사람이 필요하면 팀으로 만든다.",
+    "워크스페이스 명부에 이 박스의 멤버를 **바로** 넣는다(owner 전용 — 상대의 수락 없이). role=owner 면 공동 owner. " +
+    "사람을 불러서 본인이 수락하게 하려면 workspace_invite 를 쓴다(그쪽이 사람 대상 기본 경로다). " +
+    "개인 워크스페이스에도 넣을 수 있고, 두 번째 사람이 들어온 순간 그 워크스페이스는 팀이 된다(#1875).",
     [{ method: "POST", paths: ["/api/ui/me/workspaces/members/add"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
@@ -184,12 +363,15 @@ export const workspaceRegistryCapabilities: Capability[] = [
       const ws = await findWs(input.slug);
       if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary 는 명부가 없습니다 — 박스 멤버 전원이 접근합니다");
       await requireOwner(ws, id);
-      if (ws.kind === "personal") throw new HttpError(400, "개인 워크스페이스에는 멤버를 넣을 수 없습니다");
+      // #1875 — 종전엔 여기서 "개인 워크스페이스에는 멤버를 넣을 수 없습니다"로 막았다. 그 벽이
+      //  개인→팀 경로를 통째로 막고 있었다(사람을 부르려면 워크스페이스를 새로 만들어 옮겨야 했다).
+      //  이제 사람이 들어오면 그 워크스페이스가 팀이 된다 — 그게 전환이다(kindEffective).
       const memberId = String(input.member_id ?? "").trim();
       if (!memberId) throw new HttpError(400, "member_id 가 필요합니다");
       if (!(await getMember(memberId))) throw new HttpError(404, `멤버 '${memberId}' 가 없습니다(org_members 로 확인)`);
       await addWorkspaceMember(ws.id, memberId, input.role === "owner" ? "owner" : "member");
-      return { workspace: ws.slug, members: await listWorkspaceMembers(ws.id) };
+      const n = await countWorkspaceMembers(ws.id);
+      return { workspace: ws.slug, members: await listWorkspaceMembers(ws.id), member_count: n, kind_effective: kindEffective(n) };
     }, {
       slug: z.string().describe("팀 워크스페이스 slug"),
       member_id: z.string().describe("넣을 멤버 id(org_members 의 id)"),
@@ -207,11 +389,247 @@ export const workspaceRegistryCapabilities: Capability[] = [
       await requireOwner(ws, id);
       const memberId = String(input.member_id ?? "").trim();
       if (!memberId) throw new HttpError(400, "member_id 가 필요합니다");
-      if (memberId === ws.owner_member) throw new HttpError(400, "만든 사람(owner)은 뺄 수 없습니다 — 워크스페이스를 보관하세요");
+      // #1875 D5' — 종전 안내("워크스페이스를 보관하세요")는 이제 거짓이다: 팀은 보관 자체가 막힌다.
+      if (memberId === ws.owner_member) throw new HttpError(400,
+        "만든 사람(owner)은 뺄 수 없습니다 — 구성원이 모두 나간 뒤에 보관할 수 있습니다");
       await removeWorkspaceMember(ws.id, memberId);
-      return { workspace: ws.slug, members: await listWorkspaceMembers(ws.id) };
+      const n = await countWorkspaceMembers(ws.id);
+      return { workspace: ws.slug, members: await listWorkspaceMembers(ws.id), member_count: n, kind_effective: kindEffective(n) };
     }, {
       slug: z.string().describe("팀 워크스페이스 slug"),
       member_id: z.string().describe("뺄 멤버 id"),
+    }),
+
+  restWork("workspace_leave", "워크스페이스 나가기",
+    "함께 쓰는 워크스페이스에서 **나 하나만** 빠진다(#1875 D5') — 워크스페이스와 그 안의 지식·프로젝트는 그대로 남는다. " +
+    "보관(workspace_delete)과 **서로 배타**다: 인원이 2명 이상이면 보관이 막히고 이것만 열리며, 혼자면 반대다. " +
+    "갈래는 **어드민 수**가 정한다(#1875 D5\u2033, planWorkspaceLeave): 어드민이 아니거나 여럿이면 그냥 나가고, " +
+    "**어드민이 나뿐이면 `transfer_to` 로 넘길 사람을 지정해야** 나간다(안 주면 400 과 함께 후보 명단을 돌려준다). " +
+    "내가 «만든 사람»인데 공동 어드민이 있으면 그 자리는 자동 승계된다. 다시 들어오려면 owner 의 초대를 받아야 한다.",
+    [{ method: "POST", paths: ["/api/ui/me/workspaces/leave"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = requireMember(user);
+      if (managedMode()) {
+        //  #1875 D5″ — 갈래 판정(어드민 수·이양)은 CP 의 leaveWorkspace 가 한다. 코어는 묻고 전달만 한다.
+        const t = await resolveCpTarget(user);
+        await callCp(t!, "/api/tenant/workspace-leave", {
+          workspace_id: String(input.slug ?? ""),
+          transfer_to: typeof input.transfer_to === "string" ? input.transfer_to : "",
+        });
+        return { left: String(input.slug ?? ""), transferred_to: input.transfer_to ?? null };
+      }
+      requireRegistry();
+      const ws = await findWs(input.slug);
+      const members = await listWorkspaceMembers(ws.id);
+      // 갈래 판정은 **한 벌**이다(registry.planWorkspaceLeave) — 여기서 다시 세면 화면과 서버가 갈린다.
+      const plan = planWorkspaceLeave({
+        me: id, ownerMember: ws.owner_member, isPrimary: ws.id === PRIMARY_TENANT_ID,
+        members, transferTo: typeof input.transfer_to === "string" ? input.transfer_to : null,
+      });
+      if (!plan.ok) throw leaveRefusal(plan, ws.name);
+      // 넘길 사람이 정해졌으면 **먼저** 넘긴다 — 순서를 뒤집으면 넘기기가 실패했을 때 주인 없는 팀이 남는다.
+      if (plan.transferTo) await transferWorkspaceOwner(ws.id, plan.transferTo);
+      await removeWorkspaceMember(ws.id, id);
+      const left = await countWorkspaceMembers(ws.id);
+      return { left: ws.slug, transferred_to: plan.transferTo, member_count: left, kind_effective: kindEffective(left) };
+    }, {
+      slug: z.string().describe("나갈 워크스페이스 slug"),
+      transfer_to: z.string().optional().describe("주인을 넘길 구성원 member_id — 어드민이 나뿐일 때만 필요하고, 그때는 필수다"),
+    }),
+
+  // ── #1875 구성원 초대 ─────────────────────────────────────────────────────
+  //  종전에 사람을 부르는 화면은 매니지드 관리페이지(app.lvly.io)에만 있었고, 게이트웨이에는
+  //  "이미 아는 member_id 를 명부에 꽂는" 조작만 있었다. 아래 넷이 그 축을 앱 안으로 들여온다.
+
+  restRead("workspace_people", "구성원 · 초대 현황",
+    "이 워크스페이스의 명부(사람·역할)와 **보류 중인 초대**, 그리고 부를 수 있는 사람 후보를 함께 준다. " +
+    "member_count 로 개인/팀이 갈린다(kind_effective) — 저장된 kind 가 아니라 지금 몇 명인가가 정본이다.",
+    [{ method: "GET", paths: ["/api/ui/me/workspaces/people"], parse: (req) => ({ slug: req.query?.slug, workspace_id: req.query?.workspace_id }) }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = requireMember(user);
+      if (managedMode()) {
+        // #2188 — 매니지드 명부의 축은 CP 계정(이메일)이다. 화면은 같은 창을 쓰고 재료만 CP 에서 온다.
+        //  대상은 slug 가 아니라 workspace_id 로 지목한다(CP 의 키). 화면이 목록에서 받은 값을 그대로 준다.
+        const t = await resolveCpTarget(user);
+        const r = await callCp<{
+          workspace: { id: string; name: string; kind: "personal" | "team" };
+          my_role: string;
+          members: Array<{ email: string; name: string | null; role: string; is_me: boolean }>;
+          pending: Array<{ email: string | null; expires_at: string }>;
+        }>(t!, "/api/tenant/workspace-people", { workspace_id: input.workspace_id ?? input.slug });
+        const isOwner = r.my_role === "owner";
+        return {
+          workspace: { slug: r.workspace.id, name: r.workspace.name, kind: r.workspace.kind, state: "active",
+            role: r.my_role, is_primary: false, created_at: null,
+            member_count: r.members.length, pending_invites: r.pending.length, kind_effective: r.workspace.kind },
+          member_count: r.members.length,
+          kind_effective: r.workspace.kind,
+          can_invite: isOwner,
+          //  ⚠ 매니지드의 사람 축은 **이메일**이다(CP 계정). member_id 자리에 이메일이 들어가는 이유다.
+          //   #1875 D5″ — is_me 를 그대로 흘린다: 화면이 «넘길 사람» 후보에서 나를 뺄 때, 셀프호스트의
+          //   member_id 비교는 여기서 통하지 않는다(내 core member_id ≠ 내 이메일).
+          members: r.members.map((m) => ({ member_id: m.email, role: m.role, email: m.email,
+            display_name: m.name, is_creator: m.role === "owner", is_me: m.is_me })),
+          pending: isOwner ? r.pending.map((pi) => ({ id: pi.email ?? "", email: pi.email, role: "member",
+            invited_by: null, created_at: pi.expires_at })) : [],
+          // 매니지드는 '이 박스의 사람' 이라는 후보 개념이 없다 — 초대는 **이메일로** 부른다.
+          candidates: [],
+        };
+      }
+      requireRegistry();
+      const ws = await findWs(input.slug);
+      if (ws.id === PRIMARY_TENANT_ID)
+        throw new HttpError(400, "primary 는 명부가 없습니다 — 이 박스의 구성원 전원이 접근합니다(설정 ▸ 구성원)");
+      // 명부 안의 사람만 본다. 남의 개인 워크스페이스 명부가 admin 에게도 보이면 안 된다(#1750 의 규율).
+      const role = await getWorkspaceMemberRole(ws.id, id);
+      if (!role && ws.owner_member !== id) throw new HttpError(403, "이 워크스페이스의 구성원만 볼 수 있습니다");
+      const isOwner = role === "owner" || ws.owner_member === id;
+      const [members, pending, people] = await Promise.all([
+        listWorkspaceMembers(ws.id), listWorkspaceInvites(ws.id), invitableMembers(),
+      ]);
+      const byId = new Map(people.map((p) => [p.id, p]));
+      const memberIds = new Set(members.map((m) => m.member_id));
+      const pendingEmails = new Set(pending.map((i) => i.email));
+      const n = members.length;
+      return {
+        workspace: wsView({ ...ws, role: role ?? "owner" }, n, pending.length),
+        member_count: n,
+        kind_effective: kindEffective(n),
+        can_invite: isOwner,
+        members: members.map((m) => ({
+          member_id: m.member_id, role: m.role,
+          email: byId.get(m.member_id)?.email ?? null,
+          display_name: byId.get(m.member_id)?.display_name ?? null,
+          is_creator: m.member_id === ws.owner_member,
+        })),
+        // 보류 초대는 owner 에게만 — 누가 아직 안 받았는지는 명부 관리 정보다.
+        pending: isOwner ? pending.map((i) => ({ id: i.id, email: i.email, role: i.role, invited_by: i.invited_by, created_at: i.created_at })) : [],
+        // 이미 들어와 있거나 이미 부른 사람은 후보에서 뺀다(같은 사람을 두 번 부르는 화면을 만들지 않는다).
+        candidates: isOwner ? people.filter((p) => !memberIds.has(p.id) && !pendingEmails.has(p.email)) : [],
+      };
+    }, true, {
+      slug: z.string().optional().describe("대상 워크스페이스 slug(셀프호스트 등록부의 키)"),
+      // #2188 매니지드 — CP 의 키는 uuid 다. 화면은 목록에서 받은 값을 그대로 넘기고, CP 는 uuid·slug 둘 다 받는다.
+      workspace_id: z.string().optional().describe("대상 워크스페이스 id(매니지드 — 계정 서버의 키). slug 대신 쓸 수 있다"),
+    }),
+
+  restWork("workspace_invite", "구성원 초대(이메일)",
+    "이 워크스페이스로 사람을 부른다(owner 전용). 초대는 **보류**로 만들어지고, 받는 사람이 수락해야 명부에 들어온다 — " +
+    "보내는 것만으로는 아무것도 바뀌지 않는다. **개인 워크스페이스에도 걸 수 있다**: 수락되는 순간 두 번째 사람이 " +
+    "생기므로 그 워크스페이스는 팀이 된다(개인→팀 경로). 이미 이 박스에 없는 이메일도 받아 둔다 — 그 사람이 " +
+    "합류하는 순간 자기 화면에서 이 초대를 보게 된다.",
+    [{ method: "POST", paths: ["/api/ui/me/workspaces/invite"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = requireMember(user);
+      if (managedMode()) {
+        // #2188 — 초대도 여기서. owner 게이트·인원 캡·중복은 CP 의 inviteMember 가 그대로 판정한다.
+        //  ⚠ CP 는 **메일을 보내지 않는다** — 초대 링크를 돌려주고 사람이 전달한다. 화면도 그대로 말해야 한다.
+        const t = await resolveCpTarget(user);
+        const r = await callCp<{ ok: boolean; existing_account: boolean; invite_url: string; becomes_team: boolean }>(
+          t!, "/api/tenant/workspace-invite",
+          { workspace_id: input.workspace_id ?? input.slug, email: input.email });
+        return { invite: { email: String(input.email ?? "").trim().toLowerCase(), url: r.invite_url,
+          existing_account: r.existing_account, becomes_team: r.becomes_team, delivery: "link" as const } };
+      }
+      requireRegistry();
+      const ws = await findWs(input.slug);
+      if (ws.id === PRIMARY_TENANT_ID)
+        throw new HttpError(400, "primary 에는 초대가 없습니다 — 이 박스의 구성원 전원이 이미 접근합니다");
+      await requireOwner(ws, id);
+      let email: string;
+      try { email = normalizeInviteEmail(input.email); }
+      catch (e) { throw new HttpError(400, e instanceof Error ? e.message : String(e)); }
+
+      const me = await getMember(id);
+      if (me?.email && String(me.email).toLowerCase() === email)
+        throw new HttpError(400, "이미 이 워크스페이스에 있는 본인입니다");
+      // 이미 명부에 있는 사람인지 — 이메일로 되짚는다(초대는 이메일 축, 명부는 member_id 축이라 여기서 만난다).
+      const people = await invitableMembers();
+      const already = people.find((p) => p.email === email);
+      if (already && (await getWorkspaceMemberRole(ws.id, already.id))) {
+        throw new HttpError(409, `${email} 님은 이미 이 워크스페이스의 구성원입니다`);
+      }
+      const role = input.role === "owner" ? "owner" as const : "member" as const;
+      try {
+        const inv = await createInvite({ id: crypto.randomUUID(), workspaceId: ws.id, email, role, invitedBy: id });
+        const n = await countWorkspaceMembers(ws.id);
+        return {
+          invite: { id: inv.id, email: inv.email, role: inv.role, state: inv.state, created_at: inv.created_at },
+          workspace: ws.slug,
+          // 화면이 "수락하면 팀이 된다"를 말할 수 있게, 지금 상태를 함께 준다.
+          member_count: n, kind_effective: kindEffective(n),
+          becomes_team: kindEffective(n) === "personal",
+          known_member: !!already,
+        };
+      } catch (e) {
+        // 부분 유니크(workspace_id, email) WHERE pending — 같은 사람을 두 번 부른 경우.
+        if (String((e as { code?: string })?.code) === "23505")
+          throw new HttpError(409, `${email} 님에게 보낸 초대가 이미 수락을 기다리고 있습니다`);
+        throw e;
+      }
+    }, {
+      slug: z.string().optional().describe("초대할 워크스페이스 slug(셀프호스트 등록부의 키)"),
+      // #2188 매니지드 — 위 workspace_people 과 같은 이유. 둘 중 하나면 된다.
+      workspace_id: z.string().optional().describe("초대할 워크스페이스 id(매니지드 — 계정 서버의 키)"),
+      email: z.string().describe("부를 사람의 이메일"),
+      role: z.enum(["owner", "member"]).optional().describe("기본 member. owner 면 공동 owner"),
+    }),
+
+  restWork("workspace_invite_resolve", "초대 수락 · 거절 · 취소",
+    "보류 중인 초대를 처리한다. decision=accept|decline 은 **받는 사람**이(초대의 이메일과 로그인한 사람의 이메일이 " +
+    "같아야 한다), revoke 는 **보낸 쪽 owner** 가 한다. accept 면 그 자리에서 명부에 들어가고, 그게 두 번째 사람이면 " +
+    "그 워크스페이스는 팀이 된다.",
+    [{ method: "POST", paths: ["/api/ui/me/workspaces/invite/resolve"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = requireMember(user);
+      requireRegistry();
+      const inviteId = String(input.invite_id ?? "").trim();
+      if (!inviteId) throw new HttpError(400, "invite_id 가 필요합니다");
+      const decision = String(input.decision ?? "") as InviteDecision;
+      if (!["accept", "decline", "revoke"].includes(decision))
+        throw new HttpError(400, "decision 은 accept | decline | revoke 입니다");
+
+      const inv = await getInvite(inviteId);
+      if (!inv) throw new HttpError(404, "그런 초대가 없습니다");
+      const ws = (await itemsPool.query(`SELECT id, slug, name, kind, owner_member, state, created_at FROM gw_workspace WHERE id=$1`, [inv.workspace_id]))
+        .rows[0] as RegistryWorkspace | undefined;
+      if (!ws || ws.state !== "active") throw new HttpError(400, "이 워크스페이스는 더 이상 참여할 수 없습니다");
+
+      // 이미 끝난 초대는 여기서 걸러 사람에게 사유를 말한다(아래 UPDATE 도 같은 조건으로 한 번 더 막는다 —
+      //  이쪽은 문구를 위해, 저쪽은 경합을 위해. 둘 다 있어야 한다).
+      if (!inviteResolvable(inv.state)) throw new HttpError(409, "이 초대는 이미 처리되었습니다");
+
+      if (inviteDecisionActor(decision) === "owner") {
+        await requireOwner(ws, id);
+      } else {
+        // 받는 사람 확인 — 초대 id 가 남에게 새도 남의 초대를 대신 수락할 수 없다.
+        const me = await getMember(id);
+        if (!inviteRecipientMatches(inv.email, me?.email))
+          throw new HttpError(403, `이 초대는 ${inv.email} 님 앞으로 온 것입니다`);
+      }
+
+      // 상태 전이는 보류일 때만 통과한다 — 경합에서 두 번 들어가지 않는다.
+      const moved = await resolveInvite(inviteId, inviteNextState(decision), id);
+      if (!moved) throw new HttpError(409, "이 초대는 이미 처리되었습니다");
+
+      if (decision !== "accept") {
+        const n = await countWorkspaceMembers(ws.id);
+        return { invite: { id: inviteId, state: inviteNextState(decision) }, workspace: ws.slug, member_count: n, kind_effective: kindEffective(n) };
+      }
+
+      const before = await countWorkspaceMembers(ws.id);
+      await addWorkspaceMember(ws.id, id, inv.role);
+      const after = await countWorkspaceMembers(ws.id);
+      return {
+        invite: { id: inviteId, state: "accepted" },
+        workspace: ws.slug, workspace_name: ws.name,
+        member_count: after, kind_effective: kindEffective(after),
+        // 화면이 "팀이 되었습니다"를 말할 자격 — 이번 수락이 전환을 일으켰는가.
+        became_team: kindEffective(after) === "team" && kindEffective(before) === "personal",
+        header: { "x-lively-workspace": ws.slug },
+      };
+    }, {
+      invite_id: z.string().describe("초대 id"),
+      decision: z.enum(["accept", "decline", "revoke"]).describe("accept·decline=받는 사람 / revoke=보낸 owner"),
     }),
 ];

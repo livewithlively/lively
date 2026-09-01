@@ -8,19 +8,14 @@
 //  클라가 임의 tmux 명령(kill-server 등)을 주입하지 못하게 명령 구성을 서버에 가둔다.
 // TERMINAL_LEGACY_ATTACH=1 이면 옛 방식(plain `tmux attach`, tmux 가 화면 painting + copy-mode 스크롤)으로 폴백.
 // ws 종료 = attach 클라만 종료(tmux 세션은 영속). 셸 미경유(argv).
-import { WebSocketServer, type WebSocket } from "ws";
 import { spawn as ptySpawn } from "node-pty";
 import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";   // psmux 파이프 attach 백엔드 + CLI 입력(#1541)
 import { promisify } from "node:util";
-import type { Server, IncomingMessage } from "node:http";
-import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
 import os from "node:os";
-import { TMUX_BIN, canAttach, ensureSessionOpts, sessionGone } from "./terminal-sessions.js";
+import { TMUX_BIN } from "./terminal-sessions.js";
 import { isPsmuxBin } from "./catalog.js";   // #1791 — 정의가 catalog(leaf)로 내려갔다(위 재수출과 짝)
 import { tmuxExecArgv } from "./tmux-exec.js";
-import { resolveTenantFromHeaders, withTenant } from "../org/tenant-context.js";
-import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
 
 // attach 가 실제로 쓰는 소켓 표면 — 게이트웨이 로컬은 실 WebSocket, 노드 에이전트(#869)는 게이트웨이행
 //  단일 WSS 위의 '채널 어댑터'가 이 인터페이스를 구현해 같은 attach 로직(tmux -CC · 큐잉 · 정리)을 재사용한다.
@@ -34,7 +29,6 @@ export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 
 const CONTROL_MODE = process.env.TERMINAL_LEGACY_ATTACH !== "1"; // 기본 control mode, =1 이면 plain attach 폴백
 const execFileP = promisify(cpExecFile);
-const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
 // ── attach PTY 수명 관리(#687 PTY 누수) ──
 // 배경: attach 는 브라우저 WS 하나당 node-pty(`tmux -CC attach`) 1개 = **PTY 1개**를 뜬다. 이건 term.kill() 로만
@@ -54,7 +48,6 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 //      462 → kern.tty.ptmx_max 511 소진 → ssh 조차 PTY 할당 실패). 자식은 정상 종료하므로 고아 프로세스가 0이라
 //      ⓒ 에 안 걸리고, JS 로는 회수도 불가하다(kill·destroy 모두 무효 — 잔류 fd 2개 동일 실측). upstream 이
 //      close(slave) + low_fds 정리 off-by-one 을 고친 **1.2.0-beta.10+** 로 올려 해결한다(package.json).
-const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
 // ── attach 백엔드 (#1541) ─────────────────────────────────────────────────────
 // tmux 는 `attach` 에 tty 를 요구하므로 node-pty 로 띄운다. 그런데 **Windows 노드의 멀티플렉서(psmux)는
 //  정반대**다 — PTY 위에서 control mode 가 **아무것도 내보내지 않는다**(실측: 같은 node-pty 로 cmd.exe·
@@ -102,90 +95,54 @@ function spawnAttachTerm(bin: string, args: string[], env: Record<string, string
 }
 
 const liveTerms = new Set<AttachTerm>();  // 이 인스턴스가 띄운 살아있는 attach 클라 — 종료 훅이 일괄 kill 한다.
+
+// ── 유령 attach 정리(#2148) ────────────────────────────────────────────────
+// **원격 tmux(매니지드)에서는 `term.kill()` 이 attach 클라이언트를 죽이지 못한다.**
+//  중계(LIVELY_TMUX_EXEC)는 `docker exec` 로 tmux 컨테이너 **안에** attach 를 띄운다. WS 가 닫혀
+//  중계 프로세스를 SIGTERM 하면 죽는 건 **중계뿐**이고, 컨테이너 안 `tmux -CC attach` 는 그대로 산다
+//  (도커는 exec 클라이언트가 끊겨도 exec 을 죽이지 않고, control-mode 클라는 SIGHUP 을 무시한다 — 위 (3)).
+//  그래서 탭이 재연결할 때마다 클라이언트가 하나씩 쌓인다.
+//
+//  실측(2026-08-27 app.lvly.io): 세션 하나에 `tmux -CC attach` 가 6~7개(경과 07:46~08:54로 흩어짐).
+//  `session_attached` 가 영구히 >0 이 되어 **코어 리퍼의 불변식 ②(attached 면 제외)가 영원히 발동**했다 —
+//  유휴 6~8시간 세션이 어느 회수 경로로도 안 걷혔다. #1445 의 'attach 방치'보다 나쁘다: 사람이 탭을
+//  닫아도 안 풀린다.
+//
+//  고치는 자리는 여기다 — **그 세션의 마지막 WS 가 닫힐 때** 남은 클라이언트를 끊는다.
+//  · 마지막일 때만 하는 이유: 세션 공유(session-share)로 두 사람이 같은 판을 볼 수 있다.
+//    WS 가 하나라도 남아 있으면 그 클라이언트는 유령이 아니다.
+//  · `detach-client -s <세션>` 은 그 세션의 **모든** 클라이언트를 끊는다 — WS 가 0인 시점이라 정확히 유령만 남는다.
+//  · 로컬 tmux(셀프호스트)에서도 무해하다: term.kill 로 이미 클라가 사라졌으므로 끊을 대상이 없다(no-op).
+const attachRefs = new Map<string, number>();
+
+/** attach 시작 — 이 세션의 살아있는 WS 수를 1 늘린다. (테스트가 상태를 만들 수 있게 export) */
+export function acquireAttachRef(id: string): void {
+  attachRefs.set(id, (attachRefs.get(id) ?? 0) + 1);
+}
+/** attach 종료 — 1 줄이고, **이 세션의 마지막이었나**를 답한다(순수 카운팅, 테스트 대상). */
+export function releaseAttachRef(id: string): boolean {
+  const n = (attachRefs.get(id) ?? 1) - 1;
+  if (n > 0) { attachRefs.set(id, n); return false; }
+  attachRefs.delete(id);
+  return true;
+}
+/** 테스트·진단용 — 지금 이 세션에 잡혀 있는 WS 수. */
+export function attachRefCount(id: string): number { return attachRefs.get(id) ?? 0; }
+
+/**
+ * 남은 attach 클라이언트를 끊는다. **비치명**(실패해도 회수는 리퍼의 attach TTL 안전망이 받는다).
+ * argv 는 attach 를 띄울 때 쓴 것을 **그대로 재사용**한다 — 중계 argv 는 요청 컨텍스트(테넌트 슬러그)를
+ *  읽어 만들어지는데, ws 'close' 콜백은 그 컨텍스트 밖이라 여기서 다시 만들면 던진다.
+ */
+function detachGhostClients(bin: string, prefix: string[], id: string, env: Record<string, string>): void {
+  void execFileP(bin, [...prefix, "detach-client", "-s", id], { timeout: 5000, env, windowsHide: true })
+    .catch(() => { /* 세션이 이미 없거나 tmux 무응답 — 비치명 */ });
+}
 // 스폰 실패 폭주 차단(#869) — node-pty spawn 이 반복 실패하면(예: 노드에서 fd 고갈 EMFILE) 매 실패가 pty fd 를 새게 해
 //  가속 붕괴한다(실측: 노드 에이전트 fd 1543개, 10K 실패). 세션별 최근 연속 실패를 세어 임계 초과 시 **스폰 자체를 건너뛰고**
 //  즉시 닫는다 — 할당을 안 하니 누수 원천 차단(정상 스폰 1회로 스트릭 리셋). 브라우저 재연결은 하되 pty 는 안 뜬다.
 const spawnFailStreak = new Map<string, { n: number; at: number }>();
 const SPAWN_FAIL_WINDOW_MS = 60_000, SPAWN_FAIL_MAX = 8, SPAWN_COOLDOWN_MS = 30_000;
-type LiveWS = WebSocket & { isAlive?: boolean };
-let heartbeat: NodeJS.Timeout | null = null;
-
-export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): void {
-  startHeartbeat();                     // 죽은 attach 소켓 주기 회수(#687)
-  void reapOrphanAttachClients();       // 이전 인스턴스가 남긴 고아 attach 회수(#687) — best-effort·비동기
-  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    let url: URL;
-    try { url = new URL(req.url || "", "http://localhost"); } catch { return; }
-    if (url.pathname !== "/terminal/ws") return; // 다른 업그레이드(있다면)는 미관여
-    // ★★ 업그레이드는 Express 미들웨어를 **안 탄다** — 테넌트 컨텍스트(tenant-middleware)가 여기엔 없다.
-    //  요청별 테넌시 배포에서 컨텍스트 없이 canAttach 를 부르면 tmux 중계·DB 조회가 "컨텍스트 밖"으로
-    //  죽고, 그 실패가 4403 으로 접혀 **소유자 본인이 무한 '연결 확인중'** 이 된다(실측 2026-08-18).
-    //  같은 헤더·같은 비밀로 여기서 직접 연다. 거절 사유면 소켓을 닫는다(비밀 불일치 = 배선 문제).
-    const tr = resolveTenantFromHeaders(req.headers as Record<string, string | string[] | undefined>, process.env);
-    if (!tr.ok && tr.reason !== "disabled") { socket.destroy(); return; }
-    // registry(#1750 후속) — 셀프호스트 다중 워크스페이스. 브라우저 WS URL 은 커스텀 헤더를 못 실으므로
-    //  **세션 정본(gw_session_map)** 으로 소속을 되찾는다: 맵에 있으면 그 워크스페이스, 없으면 primary(종전).
-    //  이게 없으면 secondary 세션 attach 가 primary 컨텍스트로 돌아 기본 tmux 소켓을 뒤지고 4410(가짜
-    //  '세션 없음')이 된다 — 세션은 lvly-<slug> 소켓에 살아 있는데.
-    const registrySessionCtx = async (): Promise<{ id: string; slug: string } | null> => {
-      if (tr.ok || (process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() !== "registry") return null;
-      const sid = url.searchParams.get("session") || "";
-      if (!sid) return null;
-      const { workspaceForSession } = await import("../org/tenancy/registry.js");
-      const w = await workspaceForSession(sid).catch(() => null);
-      return w ? { id: w.id, slug: w.slug } : null;
-    };
-    void (async () => {
-      const regCtx = await registrySessionCtx();
-      const inTenant = <T>(fn: () => T): T => (tr.ok ? withTenant(tr.tenant, fn) : regCtx ? withTenant(regCtx, fn) : fn());
-      return inTenant(() => (async () => {
-      const tk = lookupTicket(req.headers.cookie);
-      if (!tk) { socket.destroy(); return; }
-      const id = url.searchParams.get("session") || "";
-      // 노드 세션(#869) — ?node=<id> 면 그 노드의 아웃바운드 채널로 릴레이한다. 정책(가시성)은 여기(게이트웨이)서
-      //  판정하고 노드는 기계적으로 attach 만 실행(F7). 거부 사유는 로컬과 같은 코드 체계(4410/4403)+4462(노드 오프라인).
-      const nodeId = url.searchParams.get("node") || "";
-      if (nodeId) {
-        const verdict = await nodeCanAttach(nodeId, id, tk.userId);
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          if (!verdict.ok) {
-            logger.info({ nodeId, id, userId: tk.userId, code: verdict.code }, "ws 노드 attach 거부");
-            try { ws.close(verdict.code, verdict.reason); } catch { /* noop */ }
-            return;
-          }
-          nodeRelayAttach(nodeId, id, ws);
-        });
-        return;
-      }
-      const ok = await canAttach(id, tk.userId).catch(() => false);
-      // ⚠ 권한이 있어도 **세션이 살아 있는지 따로 봐야 한다**(2026-08-26 실측 신고).
-      //  canAttach → ownerMeta 는 **DB desired-state 우선**이라(sessions.ts) tmux 에서 이미 죽은 세션도
-      //  권한을 통과시킨다. 그래서 종전엔 `!ok` 일 때만 생사를 확인했고, 죽은 세션에 붙으러 온 클라는
-      //  **종료 확답을 못 받았다** — attach 를 시도하다 tmux 의 "can't find session" 한 줄이 화면에
-      //  찍히고, 클라는 이유를 모른 채 **영원히 재연결**했다(새로고침해야 '열기=복원' 경로 #1820 으로 살아났다).
-      //  4410 을 주면 클라가 그 자리에서 복원으로 넘어간다(onSessionGone) — 그게 의도한 경험이다.
-      //  비용은 attach 당 has-session 1회다. 살아 있는 세션엔 즉답이고, 죽은 세션엔 재연결 폭풍을 멈추므로
-      //  오히려 왕복이 준다. 판정 불가(#835)는 여전히 false — 모르면 살아있다고 보고 종전 경로로 간다.
-      const gone = await sessionGone(id).catch(() => false);
-      const close = attachClose(ok, gone);
-      if (close) {
-        // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 '이유가 담긴 코드'로
-        //  닫아 terminal.js 가 사용자에게 정확한 문구를 띄우게 한다. 이유는 둘이고 클라 동작이 갈린다(#835):
-        //   4410 session-gone — tmux 가 '그런 세션 없다'고 확답 → 세션이 진짜 끝남 → 클라는 재연결을 멈추고 '종료됨'을 명시.
-        //   4403 no-access    — 권한 없음, 또는 판정 불가(tmux 과부하·타임아웃 = #687 의 '가짜 4403') → 클라는 몇 번 더 재시도.
-        //  판정 불가를 gone 으로 넘기지 않는 게 핵심 — 살아있는 세션을 '종료됨'으로 오인하는 건 재연결 반복보다 나쁘다.
-        logger.info({ id, userId: tk.userId, ok, gone }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          try { ws.close(close.code, close.reason); } catch { /* noop */ }
-        });
-        return;
-      }
-      await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
-      wss.handleUpgrade(req, socket, head, (ws) => inTenant(() => attach(ws, id)));
-      })());
-    })();
-  });
-}
 
 // 컨트롤 명령 전송 함수 타입. 시작 레이스(아래) 때문에 'term 직접 쓰기'가 아니라 attach 가 주는 버퍼링 send 를 쓴다.
 type SendCmd = (line: string) => void;
@@ -399,10 +356,6 @@ function handleLegacyMsg(term: AttachTerm, msg: { t?: string; d?: unknown; c?: u
   }
 }
 
-function attach(ws: WebSocket, id: string): void {
-  attachSession(ws as unknown as AttachSocket, id);
-}
-
 // attach 본체 — 게이트웨이 로컬(WebSocket)과 노드 에이전트(채널 어댑터 #869)가 공유한다.
 export function attachSession(ws: AttachSocket, id: string): void {
   // 스폰 실패 폭주 차단(#869) — 이 세션 attach 가 최근 연속 실패했으면(예: node-pty 가 이 OS 에서 spawn 불가 = spawn-helper
@@ -445,6 +398,7 @@ export function attachSession(ws: AttachSocket, id: string): void {
       const [abin, ...aprefix] = relay.length ? relay : [TMUX_BIN];
       term = spawnAttachTerm(abin!, [...aprefix, ...args], env);
       liveTerms.add(term); // 종료 훅이 회수할 수 있게 추적(#687 고아 방지)
+      acquireAttachRef(id);  // #2148 — 마지막 WS 가 닫힐 때 유령 클라이언트를 끊기 위한 참조수
       spawnFailStreak.delete(id); // 정상 스폰 → 실패 스트릭 리셋(#869)
       // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
       //  그 에코가 control 도입자(\x1bP1000p)보다 먼저 도착해 클라가 raw 로 오인 → 명령 텍스트가 화면에 뜬다.
@@ -474,10 +428,17 @@ export function attachSession(ws: AttachSocket, id: string): void {
       });
       // 회수는 **SIGTERM 명시** — 기본 SIGHUP 은 tmux -CC 클라가 무시해 좀비로 남는다(위 (3)). 여기가 연결 단위
       //  회수의 유일한 관문이라(탭 종료·heartbeat terminate·에러 전부 이 경로) 시그널 하나가 곧 누수 여부다.
+      // ⚠ 'close' 와 'error' 에 **둘 다** 걸리므로 두 번 불릴 수 있다 — 참조수를 두 번 빼면
+      //  아직 보고 있는 다른 탭의 클라이언트까지 끊는다. 한 번만 풀리게 잠근다.
+      let released = false;
       const cleanup = () => {
         pump?.close();                        // 대기 입력 폐기 + 타이머 해제(#1541 — 닫힌 세션에 유령 입력·타이머 잔류 금지)
         if (term) liveTerms.delete(term);
         try { term?.kill("SIGTERM"); } catch { /* already gone */ }
+        if (released) return;
+        released = true;
+        // #2148 — 이 세션의 마지막 WS 였다면 컨테이너 안에 남은 유령 클라이언트를 끊는다(위 머리말).
+        if (releaseAttachRef(id)) detachGhostClients(abin!, aprefix, id, env);
       };
       ws.on("close", cleanup);
       ws.on("error", cleanup);
@@ -490,21 +451,6 @@ export function attachSession(ws: AttachSocket, id: string): void {
       logger.warn({ err, id, fails: spawnFailStreak.get(id)?.n }, "pty attach 실패");
       try { ws.close(); } catch { /* noop */ }
     });
-}
-
-// WS liveness heartbeat(#687) — 반쯤 끊긴 attach 소켓을 주기적으로 걸러 terminate 한다. terminate 는 'close' 를
-//  발생시켜 기존 cleanup(term.kill)이 돌게 하므로 PTY 가 정상 회수된다(=탭 정상 종료와 동일 경로). 게이트웨이가
-//  프로세스 정상 종료하는 걸 막지 않도록 unref. 멱등(중복 호출 무시).
-function startHeartbeat(): void {
-  if (heartbeat) return;
-  heartbeat = setInterval(() => {
-    for (const ws of wss.clients as Set<LiveWS>) {
-      if (ws.isAlive === false) { try { ws.terminate(); } catch { /* noop */ } continue; } // 직전 주기에 pong 없음 = 죽음
-      ws.isAlive = false;
-      try { ws.ping(); } catch { /* noop */ }
-    }
-  }, HEARTBEAT_MS);
-  if (heartbeat.unref) heartbeat.unref();
 }
 
 // 게이트웨이 종료(SIGTERM 재배포·SIGINT·크래시) 시 이 인스턴스의 attach node-pty 를 전부 kill 한다(#687). 안 죽이면
@@ -521,6 +467,20 @@ export function liveAttachCount(): number {
 // 우리 웹터미널 attach 클라이언트의 프로세스 시그니처 — 스캔하는 쪽(관측)과 죽이는 쪽(회수)이 **같은 판정**을
 //  써야 한다. 어긋나면 "안 세는 걸 0 으로 보여주거나(관측 사각지대)", "안 죽일 걸 죽인다(오탐 kill)".
 const ATTACH_SIG = /tmux\b.*\battach\b.*\s-t\s+box-[a-z0-9-]+/;
+
+/**
+ * 하네스가 세션마다 띄우는 stdio MCP 서버의 시그니처 (#2213).
+ *
+ * 왜 여기서 같이 세나: 이 파일은 이미 `ps` 를 한 번 돌린다 — 축을 하나 얹는 비용이 0 이다.
+ * 왜 세야 하나(2026-08-28 dev 맥미니 실측): 하네스가 죽어도 이 자식들이 안 죽어 **고아 19개가
+ * CPU 1,540%(코어 9.4개)** 를 태우고 있었고, 최장 1일 11시간이었다. 그런데 **어떤 화면에도 안 떴다** —
+ * 세션 회수(리퍼)는 tmux 세션만 세므로 그 바깥의 프로세스는 원리적으로 안 잡힌다.
+ * 프로세스 자체의 자기종료가 1차 방어이고(kit/cli/lively-mcp-gateway.mjs §피어), 이 축은 그게
+ * 새는지 보는 눈이다.
+ *
+ * ⚠ ATTACH_SIG 와 같은 규약 — 나중에 자동 회수를 붙이면 **반드시 이 상수를 그대로** 써야 한다.
+ */
+export const ORPHAN_MCP_SIG = /(?:lively\.mjs\s+mcp(?:-local)?\b|lively-mcp-(?:gateway|local)\.mjs\b)/;
 
 /**
  * ps `etime`("[[dd-]hh:]mm:ss") → 초. 파싱 불가면 null.
@@ -541,6 +501,10 @@ export interface AttachProcs {
   orphans: number;
   /** 자식 중 **가장 오래된** attach 의 나이(초). 하나도 없거나 못 재면 null. */
   oldestChildSec: number | null;
+  /** 부모를 잃은(PPID=1) stdio MCP 서버 수 (#2213). 0 이 아니면 그 자체로 릭이다 — 아무도 말을 걸 수 없는 프로세스다. */
+  orphanMcp: number;
+  /** 그 고아 MCP 중 가장 오래된 것의 나이(초). 나이가 길수록 «오래 안 보였다»는 뜻이라 경보 판정의 핵심. */
+  oldestOrphanMcpSec: number | null;
 }
 
 /**
@@ -557,15 +521,23 @@ export interface AttachProcs {
  * ps 가 `etime` 컬럼을 안 주는 환경도 견딘다 — 3번째 토큰이 etime 으로 안 읽히면 거기부터 args 로 본다.
  */
 export function summarizeAttachProcs(stdout: string, selfPid: number): AttachProcs {
-  let children = 0, orphans = 0;
+  let children = 0, orphans = 0, orphanMcp = 0;
   let oldestChildSec: number | null = null;
+  let oldestOrphanMcpSec: number | null = null;
   for (const line of stdout.split("\n")) {
     const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/);
     if (!m) continue;
     const pid = Number(m[1]), ppid = Number(m[2]);
     const ageSec = parseEtimeSec(m[3]);
     const cmd = ageSec === null ? `${m[3]} ${m[4]}` : m[4]; // etime 없는 ps → 3번째 토큰이 이미 args 의 첫 조각
-    if (pid === selfPid || !ATTACH_SIG.test(cmd)) continue;
+    if (pid === selfPid) continue;
+    // 고아 MCP 축 (#2213) — attach 와 **독립**이다(같은 ps 를 두 눈으로 본다).
+    //  ppid===1 만 센다: 부모가 살아 있는 것은 지금 그 세션이 쓰는 중이라 정상이다.
+    if (ppid === 1 && ORPHAN_MCP_SIG.test(cmd)) {
+      orphanMcp++;
+      if (ageSec !== null && (oldestOrphanMcpSec === null || ageSec > oldestOrphanMcpSec)) oldestOrphanMcpSec = ageSec;
+    }
+    if (!ATTACH_SIG.test(cmd)) continue;
     if (ppid === selfPid) {
       children++;
       if (ageSec !== null && (oldestChildSec === null || ageSec > oldestChildSec)) oldestChildSec = ageSec;
@@ -573,7 +545,7 @@ export function summarizeAttachProcs(stdout: string, selfPid: number): AttachPro
       orphans++;
     }
   }
-  return { children, orphans, oldestChildSec };
+  return { children, orphans, oldestChildSec, orphanMcp, oldestOrphanMcpSec };
 }
 
 /** 위 요약의 실측 판(ps 1회). 잴 수 없으면 null — 못 잰다고 경보하지 않는다(디스크·PTY 와 같은 규약). */
@@ -604,7 +576,7 @@ export function killAttachedPtys(): void {
 //  대상 판정(3중 게이트, 오탐 0 지향): (1) PPID===1(원부모 사망=고아 — 살아있는 부모 있는 건 절대 안 건드림. 현재
 //  인스턴스가 방금 띄운 attach 는 우리 자식이라 PPID≠1 → 매칭 안 됨), (2) 우리 웹터미널 attach 시그니처(tmux …
 //  attach … -t box-…), (3) 우리 uid 소유일 때만 kill 성공(타 uid 는 EPERM 로 skip). ps 는 리눅스·macOS 공통 포맷.
-async function reapOrphanAttachClients(): Promise<void> {
+export async function reapOrphanAttachClients(): Promise<void> {   // #2165 — 〃
   try {
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");

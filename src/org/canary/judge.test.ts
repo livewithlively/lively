@@ -8,7 +8,10 @@
 //  회귀 대상 ③: **단언 없는 프로브는 프로브가 아니다**(R2) — 호출 성공만 보면 정확히 이번처럼 눈이 먼다.
 import assert from "node:assert/strict";
 import { judgeProbe, evaluateStreak, alertTransition, pluck, isUnconfigured } from "./judge.js";
-import { assertProbeCoverage, CANARY_PROBES, DENIAL_MARKERS, type CanaryProbe } from "./probes.js";
+import { googleToolAuthHint } from "../credentials/google-oauth.js";
+import { assertProbeCoverage, CANARY_PROBES, DENIAL_MARKERS, HARNESS_INSTALLERS, SCRIPT_ROT_MARKERS, type CanaryProbe } from "./probes.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -182,6 +185,103 @@ t("R4 key 중복·어댑터별 target 형태를 거부", () => {
 t("R5 A·B 두 어댑터를 모두 덮는다 — 어느 쪽이 깨졌는지 가르려면 대조군이 필요하다", () => {
   const adapters = new Set(CANARY_PROBES.map((p) => p.adapter));
   assert.ok(adapters.has("http_proxy") && adapters.has("mcp_proxy"), `한쪽만 본다: ${[...adapters]}`);
+});
+
+// ★ #1994 T11 — "구글은 2개인데 슬랙은 0개" 였다. 상류가 하나도 안 덮이면 그 상류의 회귀는 **아무도 못 본다.**
+//  프로브 유무가 아니라 **덮이는 상류의 집합**을 잠근다: 새 상류를 붙이면서 눈을 안 달면 여기서 red 가 난다.
+t("★ R6 계약을 파는 상류마다 프로브가 있다 — 눈 없는 상류를 만들지 않는다", () => {
+  const systems = new Map<string, number>();
+  for (const p of CANARY_PROBES) {
+    const sys = p.key.split(".")[1] ?? "?";           // b.slack.search → slack
+    systems.set(sys, (systems.get(sys) ?? 0) + 1);
+  }
+  for (const want of ["slack", "notion"]) {
+    assert.ok((systems.get(want) ?? 0) > 0, `${want} 프로브가 0개 — 그 상류의 회귀는 아무도 못 본다`);
+  }
+  assert.ok((systems.get("google_drive") ?? 0) > 0);
+});
+
+t("★ R7 슬랙 검색 프로브는 **현행 표면의 지문**을 단언한다 — legacy 로 되돌아가면 잡힌다", () => {
+  const p = CANARY_PROBES.find((x) => x.key === "b.slack.search");
+  assert.ok(p, "슬랙 검색 프로브가 없다");
+  // legacy(search.messages) 응답은 messages.matches — results.messages 를 요구해야 그 회귀가 빨간불이 된다.
+  assert.ok(p!.expect.paths?.includes("results.messages"), `현행 표면 지문이 없다: ${JSON.stringify(p!.expect.paths)}`);
+  // 슬랙은 거부를 200 봉투로 준다 — 호출 성공만 보면 못 잡는다.
+  assert.ok(p!.expect.notContains?.includes("missing_scope"), "200 위장 거부를 안 본다");
+});
+
+
+// ★ 구글 안내 문구가 '미설정' 판정을 비켜 가지 않는가 — 리터럴이 아니라 **실제 출력**을 통과시킨다.
+//  #1881 G2 에서 "자격 없음 — me_credential_set 에 등록하세요" 를 "다음에 누를 버튼"으로 바꿨는데,
+//  그때 이 목록을 같이 안 고쳐서 **구글을 안 쓰는 조직이 전부 '상류 회귀'로 잡힐 뻔했다**(가짜 경보가
+//  진짜 경보를 묻는 경로). 문구를 또 바꾸면 여기서 red 가 난다.
+t("★ googleToolAuthHint 의 모든 출력이 '미설정'으로 분류된다 — 상류 회귀로 오인하면 가짜 경보가 쌓인다", () => {
+  const DRIVE = "https://www.googleapis.com/auth/drive.readonly";
+  const cases = [
+    googleToolAuthHint("google_calendar_oauth", null),   // 슬롯 자체가 없다
+    googleToolAuthHint("google_oauth", null),            // 통합 kind 도 같다
+    googleToolAuthHint("google_calendar_oauth", DRIVE),  // 연결은 있는데 캘린더 범위가 없다
+    googleToolAuthHint("google_gmail_oauth", DRIVE),     // 런칭에서 뺀 서비스
+  ];
+  for (const c of cases) {
+    assert.ok(c, "안내 문구가 비었다");
+    assert.equal(isUnconfigured(`상류가 실패를 반환했다: ${c}`), true, `'미설정'으로 안 잡힌다: ${c}`);
+  }
+});
+
+// ── T. 하네스 설치기 프로브 (#2255) — **표가 아직 참인가**를 보는 눈 ──
+//  이 프로브들이 지키는 것은 우리 코드가 아니라 **우리가 표에 적어 둔 상류 사실**이다. 그래서 여기서 볼 것은
+//  «프로브가 표를 빠짐없이 덮는가» 다 — 6번째 하네스를 표에만 추가하고 프로브를 안 만들면 그 칸은 영영 안 보인다.
+const ta = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+
+t("T1 http_direct 는 url 이 필수이고 https 만 받는다", () => {
+  const d = (over: Partial<CanaryProbe>): CanaryProbe => ({
+    key: "k", label: "l", adapter: "http_direct", tier: "plain",
+    target: { url: "https://example.test/x" }, args: {}, expect: { contains: ["x"] }, why: "w", ...over,
+  } as CanaryProbe);
+  assert.throws(() => assertProbeCoverage([d({ target: {} })]), /url 이 필요/);
+  // 평문 http 로 받아 오는 스크립트는 중간자가 갈아끼울 수 있다 — 그 길을 «정상» 이라 판정할 수는 없다.
+  assert.throws(() => assertProbeCoverage([d({ target: { url: "http://example.test/x" } })]), /https 만/);
+  assert.throws(() => assertProbeCoverage([d({ target: { url: "https://e.test/x", tool: "t" } })]), /의미가 없습니다/);
+});
+
+t("T2 ★ BOM 을 실패로 잡는다 — #1087 은 1번 문자 하나가 윈도우 신규 설치를 전면 차단했다", () => {
+  const expect = { contains: ["x.ai/cli"], notContains: SCRIPT_ROT_MARKERS };
+  assert.equal(judgeProbe({ isError: false, text: "#!/bin/bash\n# x.ai/cli" }, expect).ok, true);
+  assert.equal(judgeProbe({ isError: false, text: "\uFEFF#!/bin/bash\n# x.ai/cli" }, expect).ok, false,
+    "BOM 이 붙어도 초록이면 그 감시는 «하고 있다고 믿게만» 한다");
+  // 404 안내 페이지가 200 으로 오는 형태 — 마커가 없어서도, HTML 이라서도 잡혀야 한다.
+  assert.equal(judgeProbe({ isError: false, text: "<!DOCTYPE html><html>Not Found</html>" }, expect).ok, false);
+});
+
+await ta("T3 ★ 표(harness-registry)의 URL 설치 칸을 프로브가 빠짐없이 덮는다", async () => {
+  //  ⚠ 정적 import 를 못 쓴다 — kit/ 은 tsconfig 의 rootDir(src) 밖이다. 런타임 동적 import 로 읽는다
+  //   (src/v6/project-name.test.ts · src/bootstrap-asset.test.ts 와 같은 패턴).
+  const kit = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "kit", "hooks", "harness-registry.mjs");
+  const { HARNESS_IDS, installPlanFor } = await import(pathToFileURL(kit).href) as {
+    HARNESS_IDS: string[]; installPlanFor: (id: string, o: Record<string, unknown>) => { cmd: string | null } | null;
+  };
+
+  for (const s of HARNESS_INSTALLERS) {
+    assert.ok(HARNESS_IDS.includes(s.id), `표에 없는 하네스에 프로브가 있다: ${s.id}`);
+  }
+  const covered = new Set(HARNESS_INSTALLERS.map((s) => s.url));
+  const holes: string[] = [];
+  for (const id of HARNESS_IDS) {
+    for (const [os, platform] of [["posix", "darwin"], ["win", "win32"]] as const) {
+      const plan = installPlanFor(id, { platform, homeDir: "/h", env: {} });
+      const url = plan?.cmd?.match(/https:\/\/[^\s|"']+/)?.[0];
+      // URL 이 없는 칸은 정상이다 — 윈도우 opencode 는 `npm install -g` 라 찌를 상류가 없다.
+      if (url && !covered.has(url)) holes.push(`${id}/${os} → ${url}`);
+    }
+  }
+  assert.deepEqual(holes, [], `표에는 있는데 카나리가 안 보는 설치 경로가 있다:\n  ${holes.join("\n  ")}`);
+});
+
+t("T4 codex 칸은 무인화 env 를 지문으로 쓴다 — 이게 사라지면 설치가 프롬프트에서 멈춘다", () => {
+  const codex = HARNESS_INSTALLERS.filter((s) => s.id === "codex");
+  assert.equal(codex.length, 2, "codex 는 두 OS 다 스크립트 설치기가 있다");
+  for (const c of codex) assert.equal(c.marker, "CODEX_NON_INTERACTIVE", `${c.os}: 지문이 계약과 무관하다`);
 });
 
 console.log(`\ncanary judge: ${pass} passed`);

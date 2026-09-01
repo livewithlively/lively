@@ -26,6 +26,10 @@ const ON_NODE = !!process.env.LIVELY_NODE_TOKEN;
 export interface SessionState {
   id: string;                 // 세션 id(box-<slug>-<hex>) = tmux 세션명 = claude --resume 인자(#905 C1)
   owner: string;              // @box_owner
+  // #2162 — **이 세션을 누가·무엇을 위해 열었나**(human|task|managed|app|login). 종류 판정의 정본.
+  //  종전엔 이 축이 없어 서버(managed·loginFor·appId)와 훅(env) 신호가 갈라져 있었고, 새 기계 세션
+  //  경로가 말없이 '사람 세션'이 됐다(#1979 에서 두 번). NULL = 이 컬럼 이전 행 → `human` 으로 읽는다.
+  kind?: string | null;
   label: string | null;
   // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 낮은 쪽이 높은 쪽을 못 덮는 걸쇠의 근거
   //  (표는 session-label-source.ts). 입력에선 선택 — 안 실어 보내면 이전 값 보존(upsert COALESCE).
@@ -63,6 +67,10 @@ export interface SessionState {
   // #1791 — 이 세션이 도는 노드 id(org_node.id). null = 게이트웨이 박스(중앙 tmux). 복원은 이 노드에 create 를 릴레이하고,
   //  목록은 이 값으로 '그 노드의 세션'임을 표시한다. 조회 결과엔 항상 있고, 입력에선 선택(없으면 박스).
   node_id?: string | null;
+  // #2231 — 이 세션이 **이어진 새 세션의 id**(복원 성공 시 기록). null = 아직 이어지지 않음(= 되살릴 수 있는 행).
+  //  옛 id 를 가리키던 화면·링크가 막다른 길이 되지 않게 하는 이정표다 — 목록에는 안 나오고(listAllSessionStates),
+  //  옛 id 로 오는 복원·메타 조회만 이 값을 따라 새 세션으로 안내한다(terminal/routes.ts · session-meta.ts).
+  superseded_by?: string | null;
 }
 
 // createSession 이 넘기는 desired-state(생성/재생성 시 upsert). last_seen 은 서버가 now(), claude_session_id·exited_at·
@@ -72,7 +80,7 @@ export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session
 // export: session-desired.ts 가 자기 쿼리 결과를 같은 규칙으로 해석해야 한다(파싱이 두 벌이 되면 갈린다).
 export function rowToState(r: Record<string, any>): SessionState {
   return {
-    id: r.id, owner: r.owner, label: r.label ?? null, label_source: (r.label_source as string | null) ?? null, harness: r.harness || "claude",
+    id: r.id, owner: r.owner, kind: (r.kind as string | null) ?? null, label: r.label ?? null, label_source: (r.label_source as string | null) ?? null, harness: r.harness || "claude",
     dir: r.dir ?? null, root_key: r.root_key ?? null, subpath: r.subpath ?? null,
     flags: (r.flags && typeof r.flags === "object" && !Array.isArray(r.flags)) ? r.flags : {},
     auto_approve: !!r.auto_approve,
@@ -92,6 +100,7 @@ export function rowToState(r: Record<string, any>): SessionState {
     exit_reason: r.exit_reason ?? null,
     node_id: (r.node_id as string | null) ?? null,
     discovered: !!r.discovered,   // #2022 — 노드 스냅샷에서 발견한 행(좌표 미상)
+    superseded_by: (r.superseded_by as string | null) ?? null,   // #2231 — 이어진 새 세션 id(이정표)
   };
 }
 
@@ -106,7 +115,10 @@ export async function setClaudeSessionId(id: string, claudeUuid: string, owner: 
     "UPDATE org_session_state SET claude_session_id=$2, transcript_path=COALESCE($4, transcript_path), updated_at=now() WHERE id=$1 AND owner=$3",
     [id, claudeUuid, owner, transcriptPath ?? null],
   );
-  return (r.rowCount ?? 0) > 0;
+  const ok = (r.rowCount ?? 0) > 0;
+  // #2233 — 덮어쓴 옛 uuid 를 잃지 않게 사슬에도 쌓는다. 갱신된 행(= 소유자 확인됨)일 때만.
+  if (ok) await recordSessionConv(id, claudeUuid, owner, transcriptPath ?? null).catch(() => false);
+  return ok;
 }
 
 // ── #1752 갭2 — **노드 세션**의 box-id ↔ 대화 uuid 매핑(org_node_session_map). ──
@@ -128,7 +140,9 @@ export async function setNodeSessionMap(
      WHERE org_node_session_map.owner = EXCLUDED.owner`,
     [boxId, nodeId, convUuid, transcriptPath ?? null, owner],
   );
-  return (r.rowCount ?? 0) > 0;
+  const ok = (r.rowCount ?? 0) > 0;
+  if (ok) await recordSessionConv(boxId, convUuid, owner, transcriptPath ?? null, nodeId).catch(() => false);   // #2233 사슬
+  return ok;
 }
 
 // 목록 보강용 일괄 조회 — box_id → {node_id, conv_uuid}. claudeSessionIdsFor(박스 세션)와 짝(노드 세션판).
@@ -140,6 +154,110 @@ export async function nodeSessionMapFor(ids: string[]): Promise<Map<string, { no
     [ids],
   );
   for (const row of r.rows) out.set(String(row.box_id), { node_id: String(row.node_id), conv_uuid: String(row.conv_uuid) });
+  return out;
+}
+
+// ── #2233 — 한 박스가 **살면서 돌린 대화 전부**(org_session_conv). 위 두 표는 last-write-wins 라 갈아탄 옛 대화가 증발한다. ──
+//  왜 필요한가: /clear·resume·포크·압축 롤오버로 대화 uuid 가 바뀌면 그 전에 사람이 던진 질문이 세션 화면에서 사라졌다
+//  (실측 2026-08-27 box-jang-ebdb3a82: 파일 5개·질문 43개인데 타임라인엔 1개). 보고를 덮지 않고 **쌓아** 그 사슬을 남긴다.
+//  owner 가드는 setClaudeSessionId 와 같은 이유(남의 box_id 를 가로채 남의 대화를 매다는 오염 차단).
+//  best-effort — 실패해도 호출부는 종전대로 간다(사슬이 한 칸 짧아질 뿐, 지금 대화는 늘 보인다).
+//  ⚠ ON CONFLICT 에 **대상을 적지 않는다** — PK 는 테넌트화(db/tenant-column.ts)가 (tenant_id, …) 로 다시 쓰므로
+//   배포 시점에 따라 모양이 다르다. 대상 없는 DO NOTHING 은 어느 모양에서도 서고, 소유자 가드는 뒤이은 UPDATE 가 쥔다.
+//  훅은 툴을 쓸 때마다 보고하므로(60초 스로틀) 프로세스 안에서 같은 쌍은 잠깐 기억해 두고 건너뛴다 — 사슬을 만드는 데
+//   필요한 것은 '그 쌍이 있었다'는 사실 하나이고, last_seen 의 분 단위 신선도는 아무도 안 본다.
+const convMemo = new Map<string, number>();
+const CONV_MEMO_MS = 10 * 60_000;
+export async function recordSessionConv(
+  boxId: string, convUuid: string, owner: string, transcriptPath?: string | null, nodeId?: string | null,
+): Promise<boolean> {
+  if (!boxId || !convUuid || !owner) return false;
+  const memoKey = `${boxId}|${convUuid}|${owner}`;
+  const seen = convMemo.get(memoKey);
+  if (seen && Date.now() - seen < CONV_MEMO_MS) return true;
+  await itemsPool.query(
+    `INSERT INTO org_session_conv(box_id, conv_uuid, transcript_path, owner, node_id)
+     VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+    [boxId, convUuid, transcriptPath ?? null, owner, nodeId ?? null],
+  );
+  const r = await itemsPool.query(
+    `UPDATE org_session_conv SET last_seen=now(),
+       transcript_path=COALESCE($3, transcript_path), node_id=COALESCE($5, node_id)
+     WHERE box_id=$1 AND conv_uuid=$2 AND owner=$4`,
+    [boxId, convUuid, transcriptPath ?? null, owner, nodeId ?? null],
+  );
+  const ok = (r.rowCount ?? 0) > 0;
+  if (ok) { convMemo.set(memoKey, Date.now()); if (convMemo.size > 4000) convMemo.clear(); }
+  return ok;
+}
+
+export interface SessionConv { conv_uuid: string; transcript_path: string | null; first_seen: string }
+/** 이 박스가 돌린 대화들 — 오래된 순. 지금 붙어 있는 대화도 포함된다(보고 때 함께 쌓이므로). */
+export async function sessionConvsFor(boxId: string): Promise<SessionConv[]> {
+  if (!boxId) return [];
+  const r = await itemsPool.query(
+    "SELECT conv_uuid, transcript_path, first_seen FROM org_session_conv WHERE box_id=$1 ORDER BY first_seen ASC LIMIT 64",
+    [boxId],
+  );
+  return r.rows.map((row) => ({
+    conv_uuid: String(row.conv_uuid),
+    transcript_path: (row.transcript_path as string | null) ?? null,
+    first_seen: row.first_seen ? new Date(row.first_seen).toISOString() : "",
+  }));
+}
+
+/**
+ * 이 실행 폴더를 **다른 박스도** 쓰고 있나(#2233).
+ *
+ * 폴더 안의 대화 파일 전부를 이 세션의 것으로 볼 수 있는지를 가르는 유일한 기준이다. 박스 세션의 폴더
+ *  (`~/box/<나>/sessions/<box-id>`)는 박스마다 따로라 늘 단독이고, 프로젝트 폴더는 한 프로젝트에 세션을
+ *  여러 개 띄우면 공유된다(실측: project/1719 에 박스 11개). 공유 폴더에서 폴더째 합치면 **남의 질문이
+ *  내 타임라인에 뜬다** — 없는 것보다 나쁘다. 그래서 공유면 기록된 사슬만 쓴다.
+ * 조회 실패는 '공유'로 본다 — 모를 때는 섞지 않는 쪽이 안전하다.
+ */
+export async function dirSharedWithOtherSession(id: string, dir: string): Promise<boolean> {
+  if (!id || !dir) return true;
+  try {
+    const r = await itemsPool.query("SELECT 1 FROM org_session_state WHERE dir=$1 AND id<>$2 LIMIT 1", [dir, id]);
+    return (r.rowCount ?? 0) > 0;
+  } catch { return true; }
+}
+
+/** 이 대화들을 **다른 박스가** 자기 것으로 갖고 있나 — 그런 대화는 어떤 경우에도 이 세션에 섞지 않는다. */
+export async function convsTakenByOtherSession(id: string, convUuids: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!id || !convUuids.length) return out;
+  try {
+    const r = await itemsPool.query(
+      `SELECT conv_uuid FROM org_session_conv WHERE box_id<>$1 AND conv_uuid = ANY($2::text[])
+       UNION SELECT claude_session_id AS conv_uuid FROM org_session_state WHERE id<>$1 AND claude_session_id = ANY($2::text[])
+       UNION SELECT conv_uuid FROM org_node_session_map WHERE box_id<>$1 AND conv_uuid = ANY($2::text[])`,
+      [id, convUuids],
+    );
+    for (const row of r.rows) if (row.conv_uuid) out.add(String(row.conv_uuid));
+  } catch { /* 못 물어봤으면 아무것도 배제하지 않는다 — 폴더 단독 판정이 이미 앞을 막았다 */ }
+  return out;
+}
+
+// ── #2197 — 사람이 **마지막으로 시킨 말**(org_session_state.last_prompt). work-flag 훅이 UserPromptSubmit 순간 보고한다. ──
+//  사이드바 세션 행 둘째 줄의 정본. owner-gate 는 setClaudeSessionId 와 같은 이유(남의 세션 오염 차단). last-write-wins.
+//  박스·노드 세션 모두 같은 행(#1791) — 노드로 릴레이하지 않는다(소비자가 중앙 목록뿐이라 중앙이 정본).
+export async function setLastPrompt(id: string, prompt: string, owner: string): Promise<boolean> {
+  const r = await itemsPool.query(
+    "UPDATE org_session_state SET last_prompt=$2, last_prompt_at=now(), updated_at=now() WHERE id=$1 AND owner=$3",
+    [id, prompt, owner],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+/** 목록 보강용 일괄 조회 — id → last_prompt(있는 것만). claudeSessionIdsFor 와 짝. */
+export async function lastPromptsFor(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  const r = await itemsPool.query(
+    "SELECT id, last_prompt FROM org_session_state WHERE id = ANY($1::text[]) AND last_prompt IS NOT NULL AND last_prompt <> ''",
+    [ids],
+  );
+  for (const row of r.rows) out.set(String(row.id), String(row.last_prompt));
   return out;
 }
 
@@ -236,13 +354,16 @@ export async function getSessionStates(ids: string[]): Promise<Map<string, Sessi
 }
 
 // 한 소유자의 desired-state 전부(복원 목록의 원천 — 호출자가 tmux 라이브와 병합해 offline 만 남긴다).
+//  ⚠ #2231 — **이어진 행(superseded_by)은 뺀다.** 이 목록의 뜻은 "지금 되살릴 수 있는 세션"이고, 이어진 행은
+//   되살릴 대상이 아니라 **새 id 로 가는 이정표**다(옛 id 로 오는 조회만 getSessionState 로 그 값을 읽는다).
+//   종전 DELETE 와 같은 가시성이라 목록·회수·정리 쪽 호출자는 동작이 그대로다.
 export async function listSessionStatesForOwner(owner: string): Promise<SessionState[]> {
-  const r = await itemsPool.query("SELECT * FROM org_session_state WHERE owner=$1 ORDER BY COALESCE(last_busy, created, 0) DESC", [owner]);
+  const r = await itemsPool.query("SELECT * FROM org_session_state WHERE owner=$1 AND superseded_by IS NULL ORDER BY COALESCE(last_busy, created, 0) DESC", [owner]);
   return r.rows.map(rowToState);
 }
 
 export async function listAllSessionStates(): Promise<SessionState[]> {
-  const r = await itemsPool.query("SELECT * FROM org_session_state ORDER BY COALESCE(last_busy, created, 0) DESC");
+  const r = await itemsPool.query("SELECT * FROM org_session_state WHERE superseded_by IS NULL ORDER BY COALESCE(last_busy, created, 0) DESC");
   return r.rows.map(rowToState);
 }
 
@@ -251,8 +372,8 @@ export async function listAllSessionStates(): Promise<SessionState[]> {
 export async function upsertSessionState(s: SessionStateInput): Promise<void> {
   if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다. 노드 세션의 행은 게이트웨이가 릴레이 직후 쓴다(헤더).
   await itemsPool.query(
-    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, label_source, last_seen, updated_at)
-     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,$21,now(),now())
+    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, label_source, kind, last_seen, updated_at)
+     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,$21,COALESCE($22,'human'),now(),now())
      ON CONFLICT (tenant_id, id) DO UPDATE SET
        owner=EXCLUDED.owner, label=EXCLUDED.label, harness=EXCLUDED.harness, dir=EXCLUDED.dir,
        root_key=EXCLUDED.root_key, subpath=EXCLUDED.subpath, flags=EXCLUDED.flags, auto_approve=EXCLUDED.auto_approve,
@@ -266,6 +387,8 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
        --  (routes.ts 의 label: st.label || id) — 출처 계산만 보면 그건 '사람이 준 이름'이라 human 으로 승격되고,
        --  반대로 이름 없이 복원되면 rule 로 내려앉는다. 어느 쪽이든 **복원 한 번에 걸쇠가 풀린다.**
        --  이름의 출처가 바뀌는 자리는 개명(claimSessionLabel·updateSessionStateMeta) 하나뿐이다.
+       -- #2162 kind 도 **이 경로로 안 바뀐다**(INSERT 때만). 세션의 종류는 태어날 때 정해지고 변하지 않는다 —
+       --  복원이 원래 종류를 되살려 보내지만(routes.ts), 만에 하나 그게 비면 기존 값이 살아남아야 한다.
        restrict_read=EXCLUDED.restrict_read,
        created=EXCLUDED.created,
        -- node_id 는 세션 정체성의 일부다(같은 id 가 다른 노드로 옮겨 가는 일은 없다) — 그래도 EXCLUDED 로 그대로 쓴다:
@@ -276,7 +399,7 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
     [s.id, s.owner, s.label, s.harness, s.dir, s.root_key, s.subpath, JSON.stringify(s.flags || {}),
      s.auto_approve, JSON.stringify(s.invites || []), s.project_id, s.project_src, s.read_only, s.incognito,
      s.write_vis ?? null, s.restrict_read ?? false,
-     s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null, s.label_source ?? null],
+     s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null, s.label_source ?? null, s.kind ?? null],
   );
 }
 
@@ -321,6 +444,86 @@ export async function claimSessionLabel(id: string, label: string, source: Label
 export async function touchSessionBusy(id: string, lastBusy: number): Promise<void> {
   if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다(노드 세션의 last_busy 는 상태 push 로 게이트웨이가 알고 있다)
   await itemsPool.query("UPDATE org_session_state SET last_busy=$2, last_seen=now(), updated_at=now() WHERE id=$1", [id, lastBusy]);
+}
+
+// #2231 — 복원이 성공했다: 옛 행을 **지우는 대신** 새 id 로 가는 이정표로 바꾼다.
+//  종전(deleteSessionState)엔 옛 id 가 서버에서 통째로 사라져, 그 id 를 들고 있던 화면·탭·링크가 전부
+//  `복원할 세션 상태가 없습니다`(404) 막다른 길이 됐다 — 대화는 새 id 로 멀쩡히 도는데 갈 길이 없었다.
+//  이정표가 남으면 그 옛 주소들이 **영구히** 새 세션으로 이어진다(만료 없음 — 옛 링크는 나중에 눌릴수록 값지다).
+//  ⚠ 목록에서 빠지는 건 종전과 같다(listAllSessionStates 가 superseded_by IS NULL 로 거른다).
+export async function markSessionSuperseded(id: string, newId: string): Promise<boolean> {
+  if (ON_NODE) return false;   // #1791 — 노드엔 DB 가 없다(복원은 게이트웨이가 하므로 노드에선 안 불린다)
+  if (!id || !newId || id === newId) return false;   // 자기 자신을 가리키면 이정표가 아니라 무한고리다
+  const r = await itemsPool.query("UPDATE org_session_state SET superseded_by=$2, updated_at=now() WHERE id=$1", [id, newId]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * #2231 — 옛 세션 id 가 **결국 어디로 이어졌나**(이정표 사슬의 끝).
+ *
+ *  한 세션이 여러 번 복원되면 사슬이 길어진다(A→B→C…). 옛 화면은 사슬 어디를 가리키고 있을지 모르므로
+ *  **끝까지** 따라가 지금 살아 있는 id 를 준다. 사슬 중간이 사람 손으로 완전 삭제됐으면(행 없음) 거기서 멈춘다 —
+ *  그 id 가 마지막으로 알려진 자리이고, 그 화면이 자기 사정을 다시 말해 준다(추측해서 더 가지 않는다).
+ *
+ *  ⚠ 고리 방어 — 이론상 A→B→A 가 생기면 영원히 돈다. 본 적 있는 id 를 만나면 멈춘다(hop 상한도 함께).
+ */
+export async function resolveSessionSuccessor(id: string, maxHops = 16): Promise<string | null> {
+  if (ON_NODE) return null;
+  const seen = new Set<string>([id]);
+  let cur = id;
+  let last: string | null = null;
+  for (let i = 0; i < maxHops; i++) {
+    const r = await itemsPool.query("SELECT superseded_by FROM org_session_state WHERE id=$1", [cur]);
+    const next = (r.rows[0]?.superseded_by as string | null) ?? null;
+    if (!next || seen.has(next)) break;
+    seen.add(next);
+    last = next;
+    cur = next;
+  }
+  // 이정표가 없으면 **대화로 찾는다**(아래). 사슬 끝이 또 이정표 없는 죽은 자리일 수도 있으니 그 끝에서 이어 본다.
+  return last ?? await successorByConversation(id);
+}
+
+/**
+ * #2231 — 이정표가 **없는** 옛 id 를 대화로 되찾는다. 이 스킬의 핵심 안전망이다.
+ *
+ *  이정표(superseded_by)는 이 변경 이후의 복원에만 생긴다. 그런데 옛 행이 사라지는 길은 복원 말고도 있다 —
+ *  사람이 완전 삭제, 휴지통 비우기, 워크스페이스 회수, 이 변경 이전에 이미 복원된 세션. 그 전부에서 화면은
+ *  똑같이 막다른 길이 됐다. 그래서 **행이 없어도** 답할 수 있는 축이 필요하다: **대화 id**.
+ *
+ *  `org_node_session_map` 은 세션 수명과 무관하게 남는 표다(#1752) — box_id ↔ conv_uuid. 그래서 행이 지워진
+ *  옛 세션도 "그 세션이 무슨 대화였는지"는 남아 있고, **같은 대화를 들고 있는 최신 세션**이 곧 갈 곳이다.
+ *  (2026-08-27 실측: `box-jang-b830d01a` 는 행이 없지만 이 표에 대화가 남아 있어 `box-jang-fa34ad1e` 로 이어진다.)
+ *
+ *  ⚠ 소유자 스코프 — 남의 세션으로 보내지 않는다. 대화 id 는 세션 사이를 승계하지만 소유자는 승계되지 않는다.
+ *  ⚠ 이어받기로 대화가 갈라져 후보가 여럿이면 **가장 최근**을 준다(사람이 마지막으로 쓰던 자리).
+ */
+async function successorByConversation(id: string): Promise<string | null> {
+  const cur = await itemsPool.query(
+    `SELECT COALESCE(s.claude_session_id, m.conv_uuid) AS conv, COALESCE(s.owner, m.owner) AS owner
+       FROM (SELECT $1::text AS id) AS q
+       LEFT JOIN org_session_state AS s ON s.id = q.id
+       LEFT JOIN org_node_session_map AS m ON m.box_id = q.id`,
+    [id],
+  );
+  const conv = (cur.rows[0]?.conv as string | null) ?? null;
+  const owner = (cur.rows[0]?.owner as string | null) ?? null;
+  if (!conv || !owner) return null;
+  // 같은 대화를 들고 있는 다른 세션 — desired-state 행(살아있거나 되살릴 수 있는 것)을 먼저, 없으면 매핑 표에서.
+  const byState = await itemsPool.query(
+    `SELECT id FROM org_session_state
+      WHERE claude_session_id=$1 AND owner=$2 AND id<>$3 AND superseded_by IS NULL
+      ORDER BY COALESCE(last_busy, created, 0) DESC, created_at DESC LIMIT 1`,
+    [conv, owner, id],
+  );
+  if (byState.rows[0]?.id) return String(byState.rows[0].id);
+  const byMap = await itemsPool.query(
+    `SELECT m.box_id FROM org_node_session_map AS m
+      WHERE m.conv_uuid=$1 AND m.owner=$2 AND m.box_id<>$3
+      ORDER BY m.updated_at DESC LIMIT 1`,
+    [conv, owner, id],
+  );
+  return byMap.rows[0]?.box_id ? String(byMap.rows[0].box_id) : null;
 }
 
 // desired-state 삭제 — 사용자가 **명시적으로 kill** 한 세션만(복원 안 함). reaper 회수는 보존(restorable) 하므로 호출 안 함.

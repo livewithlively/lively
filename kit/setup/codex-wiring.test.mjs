@@ -17,6 +17,7 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SANDBOX = mkdtempSync(join(tmpdir(), "codex-wiring-test-"));
@@ -40,13 +41,16 @@ const REAL_BEFORE = digest(REAL_CODEX_CFG);
 //  ⚠ pathToFileURL 필수 — ESM 의 dynamic import 는 인자를 **URL 로** 해석해서, 윈도우 절대경로(`C:\…`)는
 //   드라이브문자가 스킴으로 오해돼 ERR_UNSUPPORTED_ESM_URL_SCHEME 로 죽는다(mac/linux 에선 우연히 통과한다).
 const { HOOK_SCRIPTS: HOOKS } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")).href);
+// 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
+//  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
+const { SETUP_FILES } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
 function makeBundle({ withCli = true, mcpServers = [], autoApprove = ["mcp__lively__whoami"] } = {}) {
   rmSync(BUNDLE, { recursive: true, force: true });
   mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
   mkdirSync(join(BUNDLE, "setup"), { recursive: true });
   for (const h of HOOKS) cpSync(join(KIT, "hooks", h), join(BUNDLE, ".claude", "hooks", h));
-  for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) {
+  for (const f of SETUP_FILES) {
     cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
   }
   if (withCli) { // stdio 프록시 판정에 필요한 둘(+CLI 본체). 없으면 http 폴백 경로가 된다 = 엣지 ②
@@ -70,7 +74,7 @@ function freshHome({ userConfig = null, transport = null } = {}) {
 }
 function runInstall() {
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "codex", "--clone-root", BUNDLE],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`설치기 exit=${r.status}\n${r.stderr || r.stdout}`);
   if (!existsSync(CODEX_CFG)) throw new Error("설치기가 샌드박스에 config.toml 을 안 만들었다(샌드박스 계약 파손)");
   return readFileSync(CODEX_CFG, "utf8");
@@ -244,7 +248,7 @@ toml = runInstall(); toml = runInstall();
 // ── ⑫ 제거 라운드트립 ──────────────────────────────────────────────────────
 {
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-uninstall.mjs"), "--harness", "codex", "--yes"],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   const after = existsSync(CODEX_CFG) ? readFileSync(CODEX_CFG, "utf8") : "";
   const clean = !/lively-managed/.test(after) && !/mcp_servers\.lively/.test(after);
   const keeps = /model = "gpt-5\.5"/.test(after) && /command = "echo mine"/.test(after);
@@ -257,7 +261,7 @@ toml = runInstall(); toml = runInstall();
 makeBundle({ mcpServers: [{ name: "lively-local", transport: "stdio", command: "lively mcp-local", enabled: true }] });
 install({ userConfig: USER_CFG });
 {
-  const probe = spawnSync("codex", ["mcp", "list"], { env: { ...process.env, CODEX_HOME: join(HOME, ".codex") }, encoding: "utf8" });
+  const probe = spawnSync("codex", ["mcp", "list"], { env: { ...process.env, ...offlineLivelyEnv(), CODEX_HOME: join(HOME, ".codex") }, encoding: "utf8" });
   if (probe.error) {
     console.log("skip ⑮ codex 미설치 — 실파싱 검증 생략(정적 단언만)");
   } else {

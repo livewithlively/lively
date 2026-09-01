@@ -20,6 +20,7 @@
 //   이메일 표기만 다른 사람(a.b@ vs ab@)에게 조용히 빈 계정을 하나 더 만들어 주는 게 이 흐름의
 //   가장 흔한 사고였다. 본인은 자기 데이터가 없는 화면을 보고, 관리자는 중복 구성원을 나중에 발견한다.
 import { itemsPool } from "../../db/client.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { getMember, upsertMember, memberIdByEmail, type MemberIdentity } from "../../org/store/members.js";
 import { hasCredential } from "../../auth/local-accounts.js";
 import { logger } from "../../log.js";
@@ -40,8 +41,14 @@ export type OidcLoginResult =
 
 // sub → 구성원. identities 는 jsonb 배열이라 containment(@>)로 찾는다(구성원 수는 조직 규모라 인덱스 불요).
 export async function memberByOidcSub(sub: string): Promise<{ id: string; state: string } | null> {
+//  ★ 테넌트 못박기(#1879) — 계정행이 워크스페이스마다 갈라질 수 있고, 이 조회는 **신원을 판정**한다.
+//   못박지 않으면 남은 짝을 통해 primary 에서 **비활성화한 계정이 로그인된다**(실 PG 재현).
+//   `LIMIT 1` 에 ORDER BY 도 없어 어느 행이 뽑힐지도 비결정적이다.
+//   ⚠ 상수(primary)가 아니라 **지금 맥락**으로 못박는다 — 셀프호스트는 GUC 가 없어 primary 로 떨어지고,
+//    매니지드는 그 테넌트로 떨어진다. 상수로 박으면 매니지드에서 RLS 가 걸러 **0행**이 된다(실측).
   const r = await itemsPool.query(
-    `SELECT id, state FROM org_member WHERE identities @> $1::jsonb LIMIT 1`,
+    `SELECT id, state FROM org_member WHERE identities @> $1::jsonb
+       AND tenant_id = ${TENANT_DEFAULT_EXPR} LIMIT 1`,
     [JSON.stringify([{ system: OIDC_IDENTITY_SYSTEM, external_id: sub }])],
   );
   return (r.rows[0] as { id: string; state: string } | undefined) ?? null;

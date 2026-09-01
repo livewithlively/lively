@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { redactDeep } from "../ingest/redact.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
@@ -45,12 +46,17 @@ export async function audit(
   //  org_member.kind(신원)지 채널이 아니다(yoon 이 mcp 로 써도 human) → actor(=member id)로 조인 파생(agent→ai).
   //  actor 지정됐는데 멤버 아님=unknown, 미지정=NULL. channel(어떤 경로)은 source 에서 정규화. 에이전트가 MCP 로
   //  관리기능을 만지게 열렸으므로(#549) 이 두 컬럼이 'AI 가 관리탭을 바꿨다'를 감사에 드러낸다.
+  //  ⚠ 이 서브쿼리는 **스칼라**다 — 2행이 오면 그 자리에서 오류이고, 그 오류는 위 INSERT 뒤에 나므로
+  //   엔티티 쓰기는 이미 커밋된 채 응답만 500 이 된다. org_member 는 신원 전역 표라 tenant 조건이
+  //   없었는데, 계정행이 워크스페이스마다 갈라지면(#1879) 정확히 그 조합이 났다. 갈라짐 자체는
+  //   db/tenant-column.ts 의 pinIdentityGlobalTenant 가 막지만, **읽는 쪽도 못박아 둔다** —
+  //   접지 못하고 남은 옛 행 하나가 감사 걸린 모든 org 쓰기를 다시 500 으로 만들지 않도록.
   await exec.query(
     `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, token_hash_prefix, req_ip, actor_kind, channel)
      VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,
        CASE WHEN $6::text IS NULL THEN NULL
             ELSE COALESCE((SELECT CASE m.kind WHEN 'agent' THEN 'ai' WHEN 'system' THEN 'system' WHEN 'human' THEN 'human' ELSE 'unknown' END
-                             FROM org_member m WHERE m.id = $6), 'unknown') END,
+                             FROM org_member m WHERE m.id = $6 AND m.tenant_id = ${TENANT_DEFAULT_EXPR}), 'unknown') END,
        $10)`,
     [entity, key, op, b, a, actor ?? null, source ?? null,
      m?.tokenHashPrefix ?? null, m?.ip ?? null, sourceToChannel(source)],

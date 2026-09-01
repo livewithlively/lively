@@ -9,6 +9,9 @@ import { gdriveConnector } from "./gdrive.js";
 import { domainWikiConnector } from "./domain-wiki.js";
 import { localConnector } from "./local.js";
 import { figmaConnector } from "./figma.js";
+import { githubConnector } from "./github.js";
+import { gitlabConnector } from "./gitlab.js";
+import { linearConnector } from "./linear.js";
 
 export const connectors: Record<string, Connector> = {
   slack: slackConnector,
@@ -20,4 +23,7 @@ export const connectors: Record<string, Connector> = {
   "domain-wiki": domainWikiConnector, // 로컬 git md 미러 → knowledge, 링크 #/k/ 정규화 (#696)
   local: localConnector,     // 내 컴퓨터 업로드 → source (#1881) — 싱크 없음, fetchArtifact 만(업로드 라우트가 자료를 민다)
   figma: figmaConnector,     // 디자인 파일 코멘트 → source (#1881) — 범위 선언은 링크·팀 id(피그마엔 채널 열거가 없다)
+  github: githubConnector,   // 이슈·PR 대화·릴리스 → source (#2247) — 범위는 저장소 목록([GitHub 연결]에서 고른 것이 기본)
+  gitlab: gitlabConnector,   // 이슈·MR 대화·릴리스 → source (#2247) — 개인 토큰(read_api)만, 호스트 축(self-managed)
+  linear: linearConnector,   // 이슈·댓글·문서 → source (#2247) — 라이블리 Linear 앱 토큰(linear_app), GraphQL
 };

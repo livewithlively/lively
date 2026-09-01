@@ -17,6 +17,8 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { HOOK_SCRIPTS, SETUP_FILES } from "../setup/kit-manifest.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import {
   HARNESS, HARNESS_IDS, resolveHarness, isKnownHarness,
   harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher, allToolNames, mcpToolName,
@@ -36,18 +38,20 @@ const slash = (v) => JSON.parse(JSON.stringify(v ?? null).replace(/\\\\/g, "/"))
 const eqPath = (n, got, want) => eq(n, slash(got), want);
 
 // ── A. 배선 보장(S1) — 엣지 E1·E2 ────────────────────────────────────────────────
-// 복사 목록이 두 벌인 건 설치 경로가 둘이기 때문이다(발행물 생성 = build-context, 설치 = user-install).
-// 한쪽만 고치면 "발행은 됐는데 설치가 안 되는" 또는 그 반대가 된다.
+// 종전엔 복사 목록이 **두 벌**이었다(발행물 생성 = build-context, 설치 = user-install). 한쪽만 고치면
+//  "발행은 됐는데 설치가 안 되는" 또는 그 반대가 됐고, 실제로 셋째 사본(deploy/refresh-member-kits.sh 의
+//  `kit/hooks/*.mjs` 글롭)과 드리프트해 2026-08-27 «멤버 훅 전멸» 을 냈다. 그래서 목록은
+//  kit/setup/kit-manifest.mjs 단일 출처로 합쳤다 — 이제 A1 이 볼 것은 «두 목록이 같은가» 가 아니라
+//  «소비자가 지역 사본을 되살리지 않았는가» 다.
 {
-  const listOf = (file, name) => {
-    const m = new RegExp(`const ${name}\\s*=\\s*\\[([^\\]]*)\\]`).exec(readFileSync(file, "utf8"));
-    return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : null;
-  };
-  const install = listOf(join(KIT, "setup", "user-install.mjs"), "HOOK_SCRIPTS");
-  const build = listOf(join(KIT, "generator", "build-context.mjs"), "HOOK_SCRIPTS");
-  if (!install || !build) bad("A0 두 목록 파싱", "HOOK_SCRIPTS 를 못 찾음(형태가 바뀌었으면 이 테스트를 고칠 것)");
-  else {
-    eq("A1[E2] 두 HOOK_SCRIPTS 목록이 동일", install, build);
+  const install = HOOK_SCRIPTS;
+  const revived = ["setup/user-install.mjs", "generator/build-context.mjs"]
+    .filter((rel) => /const HOOK_SCRIPTS\s*=\s*\[/.test(readFileSync(join(KIT, rel), "utf8")));
+  {
+    revived.length === 0
+      ? ok("A1[E2] 소비자가 목록 사본을 두지 않음(매니페스트 단일 출처)")
+      : bad("A1[E2] 소비자가 목록 사본을 두지 않음(매니페스트 단일 출처)",
+          `${revived.join(", ")} 가 지역 리터럴을 되살렸다 — 매니페스트와 조용히 어긋난다`);
     // 배포되는 훅들이 import 하는 상대 모듈을 모아, 전부 목록에 있는지 본다(정적 검사).
     const missing = [];
     for (const f of readdirSync(HOOKS_DIR).filter((x) => x.endsWith(".mjs") && !x.endsWith(".test.mjs"))) {
@@ -65,7 +69,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
 
 // ── B. 표 완전성(S2) — 엣지 E5·E6 ────────────────────────────────────────────────
 {
-  const REQUIRED = ["id", "label", "bin", "home", "configFile", "configFormat", "wiring", "assets", "tools", "mcp", "autoApprove", "contextEnvelope", "reloadAssets", "events"];
+  const REQUIRED = ["id", "label", "bin", "home", "configFile", "configFormat", "wiring", "assets", "tools", "mcp", "autoApprove", "contextEnvelope", "reloadAssets", "events", "install"];
   const KINDS = ["skill", "subagent", "command"];
   const TOOL_GROUPS = ["edit", "shell", "read", "skill", "mcp", "mcpMatcher"];
   const holes = [];
@@ -79,6 +83,22 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
       for (const k of ["root", "dir", "ext", "compose"]) if (s[k] === undefined) holes.push(`${id}.assets.${kind}.${k}`);
     }
     for (const g of TOOL_GROUPS) if (h.tools?.[g] === undefined) holes.push(`${id}.tools.${g}`);
+    // 설치 축(#2255) — **두 OS 가 다 답해야** 한다. 「윈도우 칸을 안 적었다」가 곧 「윈도우 사람은 손으로 깔아라」였고
+    //  그게 이 축을 만든 이유다. 못 하면 못 한다고 적어야(cmd:null) '안 적음'과 구분된다.
+    if (h.install === undefined) holes.push(`${id}.install`);
+    else {
+      if (!h.install.docs) holes.push(`${id}.install.docs`);
+      for (const os of ["posix", "win"]) {
+        const spec = h.install[os];
+        if (spec === undefined) { holes.push(`${id}.install.${os}`); continue; }
+        if (spec === null) continue;                        // 명시적 "이 OS 엔 없다"
+        if (!spec.cmd) { holes.push(`${id}.install.${os}.cmd`); continue; }
+        if (!spec.shell) holes.push(`${id}.install.${os}.shell`);
+        if (spec.wiresPath === undefined) holes.push(`${id}.install.${os}.wiresPath`);
+        if (spec.integrity === undefined) holes.push(`${id}.install.${os}.integrity`);
+        if (spec.binDir === undefined) holes.push(`${id}.install.${os}.binDir`);
+      }
+    }
     if (h.id !== id) holes.push(`${id}.id 불일치(${h.id})`);
   }
   holes.length ? bad("B1[E5·E6] 모든 하네스가 필수 축을 채움", `빠짐: ${holes.join(", ")}`)
@@ -166,7 +186,9 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
     mkdirSync(join(BUNDLE, "setup"), { recursive: true });
     for (const f of scripts) cpSync(join(HOOKS_DIR, f), join(BUNDLE, ".claude", "hooks", f));
-    for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
+    // 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
+    //  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
+    for (const f of SETUP_FILES) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
     writeFileSync(join(BUNDLE, ".lively-org-name"), "테스트조직\n");
     writeFileSync(join(BUNDLE, ".lively", "auto-approve.json"), JSON.stringify({ allow: [] }));
     writeFileSync(join(BUNDLE, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));
@@ -183,7 +205,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     writeFileSync(join(DECOY, "settings.json"), DECOY_BEFORE);
 
     const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", BUNDLE],
-      { env: { ...process.env, LIVELY_HOME: HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8" });
+      { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8" });
     r.status === 0 ? ok("D1[E4] 설치기 성공") : bad("D1[E4] 설치기 성공", `exit=${r.status} ${r.stderr || r.stdout}`);
 
     // D4 — 미끼(실 프로필)는 바이트 하나 안 바뀌어야 한다. D5 — 대신 샌드박스 <HOME>/.claude/settings.json 에 배선된다.
@@ -202,7 +224,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     // ★ 핵심 — 설치된 자리에서 훅을 실제로 실행한다. import 가 안 풀리면 ERR_MODULE_NOT_FOUND 로 죽는다.
     //  토큰이 없으므로 훅은 즉시 exit 0(fail-open) 이어야 한다 — 그게 정상 동작이다.
     const h = spawnSync(process.execPath, [join(HOME, ".lively", "hooks", "sync-harness-assets.mjs")],
-      { env: { ...process.env, LIVELY_HOME: HOME, HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8", timeout: 20000 });
+      { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8", timeout: 20000 });
     if (h.status !== 0) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `exit=${h.status} ${String(h.stderr).slice(0, 300)}`);
     else if (/ERR_MODULE_NOT_FOUND|Cannot find module/.test(String(h.stderr))) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `모듈 해석 실패: ${String(h.stderr).slice(0, 300)}`);
     else ok("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨");

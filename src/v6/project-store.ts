@@ -972,12 +972,28 @@ export async function setProjectRepos(projectId: number, repos: string[], ctx?: 
 
 // ── 카테고리 설정 — 이제 **소속 리스트의 카테고리**를 정한다(#541 후속). 카테고리는 리스트 소유·프로젝트 상속(단일). ──
 //  하위호환: categoryIds 배열을 받지만 첫 항목만 사용(리스트는 0~1개 카테고리). 빈 배열=해제. 반환=적용된 카테고리 배열(0~1).
-export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<number[]> {
+// 반영 결과 — **왜 안 됐는지까지** 돌려준다(#2474).
+//  종전엔 `number[]` 만 돌려줬다. 그러면 두 경우가 **똑같이 `[]`** 로 보인다:
+//    ① 리스트가 없어 반영 못 함(실패)   ② 리스트는 있고 카테고리를 해제함(성공)
+//  호출자는 그 둘을 구분할 수 없어 «툴이 고장났나» 로 읽는다 — 실제로 2026-09-01 에 그렇게 오진했고
+//  사용자에게 오보까지 나갔다. 빈 배열로 성공을 가장하지 않는 것은 옳았으나, **말하지 않는 no-op** 이었다.
+export type SetProjectCategoriesResult = {
+  categoryIds: number[];
+  applied: boolean;              // 반영할 자리가 있었나(= 소속 리스트가 있나)
+  listId: number | null;
+  reason: "no_list" | null;      // applied=false 의 사유. 지금은 한 가지뿐이지만 자리를 열어 둔다
+};
+export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<SetProjectCategoriesResult> {
   const clean = [...new Set((categoryIds || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))];
   const catId = clean.length ? clean[0] : null;
   const res = await setListCategoryForProject(projectId, catId, ctx);
   // 리스트 없는(미분류) 프로젝트엔 반영 못 함 → 빈 배열로 정직하게 응답(catId 를 되돌려 성공을 가장하지 않음).
-  return res.applied && catId != null ? [catId] : [];
+  return {
+    categoryIds: res.applied && catId != null ? [catId] : [],
+    applied: res.applied,
+    listId: res.listId,
+    reason: res.applied ? null : "no_list",
+  };
 }
 
 export async function unlinkProjectKnowledge(projectId: number, name: string, relation: string, ctx?: WriteCtx): Promise<void> {

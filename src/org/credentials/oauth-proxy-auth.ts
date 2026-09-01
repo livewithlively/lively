@@ -11,8 +11,11 @@
 //  설계 원칙: 정적 토큰 경로는 한 글자도 바뀌지 않는다. 묶음으로 해석되지 않으면 그대로 통과시킨다(무회귀).
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { decodeTokenBlob, encodeTokenBlob, tokenMeta, CLIENT_SCOPE, gatewaySsrfFetch } from "./oauth-broker.js";
-import { getMemberSecret, setMemberSecret, type MemberSecretResolved } from "./member-secret-store.js";
+import { getMemberSecret, setMemberSecret, resolveMemberSecret, type MemberSecretResolved, type ResolveOpts } from "./member-secret-store.js";
 import { presetOAuthTokenUrl } from "../delivery/mcp-server-presets.js";
+import { GOOGLE_KIND, GOOGLE_LEGACY_KINDS, GOOGLE_TOKEN_URL, googleUnifiedKindFor } from "./google-oauth.js";
+import { LINEAR_APP_KIND, LINEAR_TOKEN_URL } from "./linear-oauth.js";
+import { GITHUB_APP_KIND, GITHUB_TOKEN_URL } from "./github-app.js";
 import { logger } from "../../log.js";
 
 /** 만료 여유(초) — 호출이 나가는 동안 만료돼 상류가 401 을 주는 것까지 막는다. */
@@ -42,6 +45,62 @@ export function mergeRefreshedTokens(prev: OAuthTokens, next: Partial<OAuthToken
   } as OAuthTokens;
 }
 
+/**
+ * 토큰 발급처 해소 — 먼저 MCP 서버 프리셋(auth_kind 축의 SoT), 없으면 **직결 kind** 표(#1881).
+ *  직결 kind 는 org_mcp_server 행이 없어 프리셋에서 못 찾는다. 구글 G2 가 첫 사례다: 도구 면은 이미 클래식 REST 인데
+ *  인증 앵커만 Developer Preview 엔드포인트에 남아 있어 MCP 행 의존을 끊었기 때문이다.
+ *  (슬랙 `slack_oauth`·노션 `notion_public` 은 이 경로를 안 탄다 — 슬랙은 토큰 회전 off 라 만료가 없고, 노션 갱신은 CP 프록시.)
+ */
+/** [GitHub 연결]이 남기는 사용자 토큰 묶음의 슬롯 kind — 8시간 만료·refresh 회전(github-app.ts). 갱신 발급처와 client 는 GitHub App 의 것. */
+export const GITHUB_USER_TOKEN_KIND = "github_pat";
+const DIRECT_OAUTH_TOKEN_URLS: Record<string, string> = { [GOOGLE_KIND]: GOOGLE_TOKEN_URL, [LINEAR_APP_KIND]: LINEAR_TOKEN_URL, [GITHUB_USER_TOKEN_KIND]: GITHUB_TOKEN_URL };
+/** 갱신에 쓸 OAuth 클라이언트가 **다른 kind 의 슬롯**에 사는 경우 — github_pat 묶음은 GitHub App(github_app/oauth:client)이 발급한 것이라 그 client 로 갱신한다.
+ *  ⚠ 이 표가 없으면 [GitHub 연결] 8시간 뒤 도구·수집기가 전부 «발급처를 모릅니다» 로 죽는다(2026-08-28 dev 실측, #2247 GitHub 수집기 첫 run). */
+export const CLIENT_KIND_FOR: Record<string, string> = { [GITHUB_USER_TOKEN_KIND]: GITHUB_APP_KIND };
+export function clientKindFor(authKind: string): string { return CLIENT_KIND_FOR[authKind] ?? authKind; }
+
+export function oauthTokenUrlFor(authKind: string | null | undefined): string | undefined {
+  if (!authKind) return undefined;
+  return presetOAuthTokenUrl(authKind) ?? DIRECT_OAUTH_TOKEN_URLS[authKind];
+}
+
+
+/**
+ * ★ 구글은 **구 kind 끼리도 서로 폴백한다**(2026-08-27 dev 실측이 만든 확장).
+ *  종전엔 [자기 kind → 통합] 뿐이라, `google_drive_oauth` 로 붙어 있는 사람이 캘린더 도구를 부르면
+ *  "자격 없음"이 났다 — 슬롯은 있는데 **다른 구 kind** 라서. "[Google 연결] 한 번으로 셋"이라는 약속이
+ *  정작 기존 사용자에게만 성립하지 않던 자리다.
+ *  구글이 아닌 kind 는 **추가 조회를 하지 않는다** — 엉뚱한 kind 를 뒤지면 자격 혼선이 난다.
+ */
+function googleAliasChain(authKind: string): string[] {
+  const k = String(authKind ?? "").toLowerCase();
+  const isGoogle = k === GOOGLE_KIND || !!googleUnifiedKindFor(k);
+  if (!isGoogle) return [];
+  return [GOOGLE_KIND, ...GOOGLE_LEGACY_KINDS].filter((x) => x !== k);
+}
+
+/**
+ * OAuth 자격 해소 + 별칭 폴백. `resolveMemberSecret` 의 얇은 래퍼라 폴백 정책(allowFallback)은 그대로 따른다.
+ *  ⚠ 반환된 `resolved.kind` 는 **실제로 잡힌 슬롯의 kind** 다 — 호출자는 갱신·클라이언트 조회에
+ *   `tool.auth_kind` 가 아니라 이 값을 넘겨야 한다(안 그러면 구 클라이언트로 새 토큰을 갱신하려 든다).
+ */
+export type SecretResolver = (
+  memberId: string | null | undefined, kind: string, opts: ResolveOpts,
+) => Promise<MemberSecretResolved | null>;
+
+export async function resolveOAuthMemberSecret(
+  memberId: string | null | undefined, authKind: string, opts: ResolveOpts = {},
+  resolve: SecretResolver = resolveMemberSecret,
+): Promise<MemberSecretResolved | null> {
+  const direct = await resolve(memberId, authKind, opts);
+  if (direct?.secret) return direct;
+  for (const kind of googleAliasChain(authKind)) {
+    const via = await resolve(memberId, kind, { ...opts, scopeKey: "" });
+    if (via?.secret) return via;
+  }
+  return direct;
+}
+
 export interface OAuthClientInfo { client_id: string; client_secret?: string }
 
 /** 갱신 경로의 부수효과 — 테스트가 갈아끼운다(네트워크·DB 없이 J 표를 전수 검증하려고). */
@@ -54,7 +113,7 @@ export interface ProxyAuthDeps {
 }
 
 async function defaultLoadClient(authKind: string): Promise<OAuthClientInfo | null> {
-  const r = await getMemberSecret("gateway", authKind, CLIENT_SCOPE);
+  const r = await getMemberSecret("gateway", clientKindFor(authKind), CLIENT_SCOPE);
   if (!r?.secret) return null;
   try {
     const ci = JSON.parse(r.secret) as OAuthClientInfo;
@@ -88,7 +147,7 @@ async function refreshBlob(
     // access_type=offline 픽스(#746, 2026-07-22) 이전 연결분 — 갱신 토큰 자체가 없다. 이미 죽은 연결이다.
     throw new Error(`자격이 만료됐고 갱신 토큰이 없습니다 — ${reconnect}`);
   }
-  const tokenUrl = (deps.tokenUrlOf ?? presetOAuthTokenUrl)(authKind);
+  const tokenUrl = (deps.tokenUrlOf ?? oauthTokenUrlFor)(authKind);
   if (!tokenUrl) throw new Error(`자격이 만료됐는데 '${authKind}' 의 토큰 발급처를 모릅니다 — 관리자에게 프리셋 설정을 요청하세요.`);
   const client = await (deps.loadClient ?? defaultLoadClient)(authKind);
   if (!client) throw new Error(`자격이 만료됐는데 '${authKind}' 의 OAuth 클라이언트 정보가 없습니다 — 관리자에게 등록을 요청하세요.`);

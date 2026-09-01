@@ -35,7 +35,7 @@
   border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; }
 .project-main { min-width: 0; flex: 1; }
 .project-name { font-size: 15px; font-weight: 700; color: var(--ink); word-break: break-word; }
-.project-name.done { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--muted-3); }
+.project-name.done { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--muted-3-line); }
 .project-desc { margin-top: 4px; font-size: 13.5px; line-height: 1.5; color: var(--ink-sub); word-break: break-word; white-space: pre-wrap; }
 .project-meta { margin-top: 7px; font-size: 12px; font-weight: 600; color: var(--muted-2); }
 .project-acts { flex: none; }

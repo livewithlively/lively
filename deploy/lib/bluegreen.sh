@@ -79,6 +79,7 @@ bg_flip_decision() {
 bg_parse_args() {
   local release="" lively_root="${LIVELY_ROOT:-/opt/lively}" health_path="/readyz" health_retries=60 drain=5 keep_old=0
   local tg_arn="${LIVELY_TG_ARN:-}" instance_id="" alb_health_timeout=180
+  local tg_from_args=0   # 첫 --tg-arn 은 env LIVELY_TG_ARN 을 **대체**한다(종전 계약: 인자 우선). 그 뒤 반복은 누적.
   while [ $# -gt 0 ]; do
     case "$1" in
       --release)            release="${2:?--release 값 필요}"; shift 2 ;;
@@ -87,7 +88,12 @@ bg_parse_args() {
       --health-retries)     health_retries="${2:?--health-retries 값 필요}"; shift 2 ;;
       --drain-seconds)      drain="${2:?--drain-seconds 값 필요}"; shift 2 ;;
       --keep-old)           keep_old=1; shift ;;
-      --tg-arn)             tg_arn="${2:?--tg-arn 값 필요}"; shift 2 ;;
+      # 반복 지정 가능 — 여러 ALB 가 각자 전용 TG 로 같은 박스를 가리킬 때 flip 이 전부에 반영돼야 한다
+      #  (ALB TG 는 로드밸런서 1대에만 붙는 하드 리밋이라 TG 공유로는 해결 불가). 콤마 구분 1회 지정도 같다.
+      --tg-arn)
+        if [ "$tg_from_args" = 1 ]; then tg_arn="$tg_arn,${2:?--tg-arn 값 필요}"
+        else tg_arn="${2:?--tg-arn 값 필요}"; tg_from_args=1; fi
+        shift 2 ;;
       --instance-id)        instance_id="${2:?--instance-id 값 필요}"; shift 2 ;;
       --alb-health-timeout) alb_health_timeout="${2:?--alb-health-timeout 값 필요}"; shift 2 ;;
       *) printf 'bg_parse_args: 알 수 없는 인자: %s\n' "$1" >&2; return 2 ;;
@@ -96,6 +102,22 @@ bg_parse_args() {
   [ -n "$release" ] || { printf 'bg_parse_args: --release 는 필수입니다\n' >&2; return 2; }
   # flip 대상 TG 는 필수 — ALB 타깃 포트 스왑이 flip primitive 이므로 arn 없이는 전환할 수 없다. env 폴백 허용.
   [ -n "$tg_arn" ] || { printf 'bg_parse_args: --tg-arn 은 필수입니다(또는 env LIVELY_TG_ARN) — ALB 타깃그룹 flip 대상\n' >&2; return 2; }
+  # 빈 항목(",,"·후행 콤마)은 소비처 루프가 조용히 건너뛰어 **일부 ALB 가 flip 안 된 채 성공 보고**될 수 있으므로
+  #  파싱에서 끊는다. 중복도 끊는다 — 같은 TG 를 두 번 deregister 하면 두 번째가 실패해 flip 이 die 로 멈춘다.
+  #  빈 항목은 패턴으로 끊는다 — `tr ',' '\n'` 로 나눠 읽으면 **후행 콤마가 사라져** 검출되지 않는다(실측).
+  case "$tg_arn" in
+    *,,* | ,* | *,) printf 'bg_parse_args: --tg-arn 에 빈 항목이 있습니다(콤마 오타?): %s\n' "$tg_arn" >&2; return 2 ;;
+  esac
+  local seen="" one
+  while IFS= read -r one; do
+    #  공백 패딩("a, b")은 다운스트림 aws 가 invalid ARN 으로 실패해 원복·die 로 이어지지만(silent 부분 flip 은
+    #   아니다), ARN 에 공백이 있을 수 없으니 여기서 끊어 에러를 더 이르고 정확하게 만든다.
+    case "$one" in *[[:space:]]*) printf 'bg_parse_args: --tg-arn 항목에 공백이 있습니다: %s\n' "$one" >&2; return 2 ;; esac
+    case ",$seen," in *",$one,"*) printf 'bg_parse_args: --tg-arn 중복: %s\n' "$one" >&2; return 2 ;; esac
+    seen="${seen:+$seen,}$one"
+  done <<EOF
+$(printf '%s' "$tg_arn" | tr ',' '\n')
+EOF
   printf '%s\n' "$health_retries" | grep -qE '^[0-9]+$' || { printf 'bg_parse_args: --health-retries 는 정수여야 합니다: %s\n' "$health_retries" >&2; return 2; }
   printf '%s\n' "$drain" | grep -qE '^[0-9]+$' || { printf 'bg_parse_args: --drain-seconds 는 정수여야 합니다: %s\n' "$drain" >&2; return 2; }
   printf '%s\n' "$alb_health_timeout" | grep -qE '^[0-9]+$' || { printf 'bg_parse_args: --alb-health-timeout 은 정수여야 합니다: %s\n' "$alb_health_timeout" >&2; return 2; }

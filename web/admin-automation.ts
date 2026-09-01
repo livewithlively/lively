@@ -86,7 +86,7 @@ async function cronPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload, tz) }));
   const card = el('div', { class: 'card' },
-    cardHead('정기 실행 잡', '게이트웨이가 정해진 주기마다 실행하는 잡입니다. 실제 코드 의존(is) 최신화(refresh), 미매핑 코드 유닛 LLM 분류(map_unmapped — 타깃 상시 에이전트에 주입, 팀플랜 과금), 외부 자료 수집 싱크 등이 있습니다. 주기는 초 단위 간격 또는 cron식으로 지정합니다. cron식의 시각은 '),
+    cardHead('정기 실행 잡', '게이트웨이가 정해진 주기마다 실행하는 잡입니다. 실제 코드 의존(is) 최신화(refresh), 미매핑 코드 유닛 LLM 분류(map_unmapped — 타깃 상시 에이전트에 주입, 팀플랜 과금), 자료 가져오기 싱크 등이 있습니다. 주기는 초 단위 간격 또는 cron식으로 지정합니다. cron식의 시각은 '),
     // 두 종류가 한 표에 섞여 있다는 사실을 표보다 먼저 말한다(#1618 후속) — 행마다 붙는 링크만으로는
     //  "왜 어떤 줄에만 있지?"가 되고, 없는 줄이 '누락'인지 '원래 없는 것'인지 구분이 안 된다.
     el('p', { class: 'admin-hint', style: 'margin:0 0 10px' },
@@ -229,7 +229,7 @@ async function cronToggle(job, reload) {
 //  그 사이엔 "커넥터는 켜져 있는데 싱크는 안 도는" 상태가 된다. 그러니 지우지 말고 커넥터를 끄라고 말해 준다.
 async function cronDelete(id, reload, autoSys?) {
   const warn = autoSys
-    ? '⚠ 이 잡은 [외부 자료 수집 ▸ ' + autoSys + ']이(가) 자동으로 만든 것입니다.\n\n지워도 그 커넥터를 다시 켜면 되살아나고, '
+    ? '⚠ 이 잡은 [맥락 관리 ▸ 가져오는 곳 ▸ ' + autoSys + ']이(가) 자동으로 만든 것입니다.\n\n지워도 그 커넥터를 다시 켜면 되살아나고, '
       + '그때까지는 커넥터만 켜져 있고 싱크는 안 도는 상태가 됩니다.\n싱크를 멈추려면 이 잡이 아니라 **커넥터를 끄세요**.\n\n그래도 삭제할까요?'
     : '스케줄 잡 ‘' + id + '’을(를) 삭제할까요?';
   if (!confirm(warn)) return;
@@ -274,7 +274,16 @@ async function managedSessionsPanel(detail, data) {
             + (m.enabled
               ? '다음 점검(2분 이내)에서 자동으로 정리되고, 가장 오래된 하나만 남습니다.'
               : '이 에이전트가 꺼져 있어 자동 정리는 돌지 않습니다 — 켜면 다음 점검에서 정리되고, 그럴 생각이 없다면 터미널에서 직접 종료하세요.'))
-          : null));
+          : null),
+      // #2170 — 같은 작업 폴더에 떠 있지만 **이 에이전트가 만든 게 아닌** 세션. 자동 정리 대상이 아니다.
+      //  판정이 '경로가 겹친다'에서 '내가 만들었다'로 좁아지면서 여기 걸리는 세션이 생겼다 — 안 걷는다고
+      //  침묵하면 #1675 의 실패(30개가 떠 있는데 어느 화면에도 안 보였다)를 그대로 반복한다.
+      (Number(m.unmarked_count) > 0
+        ? withTip(el('span', { class: 'pill', text: '외부 세션 ' + m.unmarked_count + '개' }),
+          '같은 작업 폴더에 이 에이전트가 만들지 않은 세션이 ' + m.unmarked_count + '개 떠 있습니다. '
+          + '사람이 연 세션이거나 이 표식이 생기기 전에 만들어진 세션입니다 — 자동으로 정리하지 않습니다. '
+          + '정리하려면 터미널에서 직접 확인하고 종료하세요.')
+        : null));
     const acts = el('div', { class: 'wikicat-row-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', text: '시작/재생성', onclick: () => managedEnsure(m.id, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: m.enabled ? '끄기' : '켜기', onclick: () => managedToggle(m, reload) }),
@@ -343,7 +352,10 @@ function openManagedSessionForm(m, reload) {
     psBlock('세션 id', isNew ? '소문자 슬러그(a-z0-9_-). 고유 키.' : 'id 는 변경 불가.', idInp),
     psBlock('이름', '관리 목록·세션 탭에 보일 이름.', labelInp),
     psBlock('라이블리 계정/프로필', '이 세션을 띄울 클로드 로그인(프로필=구성원). 목록에서 고르거나 입력. 각 프로필은 provision + 웹터미널 /login 후 사용.', account.el),
-    psBlock('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp),
+    psBlock('격리 워크스페이스(하위경로)',
+      '공유폴더 아래 이 세션 전용 작업폴더입니다. 비우면 managed/<id> 를 씁니다. '
+      + '프로젝트 폴더(project/… · legacy-project/…)는 쓸 수 없습니다 — 프로젝트 폴더 세션은 팀 전원이 함께 쓰는 자리라 '
+      + '무인 상시세션의 자동 정리·공개범위 규칙과 맞지 않습니다.', wsInp),
     psBlock('하네스', '', harnessSel),
     flagsWrap,
     psBlock('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, autoFlagText)),

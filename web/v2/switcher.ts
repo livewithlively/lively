@@ -5,21 +5,44 @@
 //  워크스페이스 1개 = 게이트웨이 1개라, '전환'은 그 게이트웨이 주소를 새 탭으로 여는 것이다(개인↔팀은 서로 다른 게이트웨이).
 //  메뉴는 body 에 떠서(fixed) 사이드바 20초 재렌더에 지워지지 않는다. 데이터(연결·승격)는 **열 때** 한 번만 당긴다.
 import { api, currentWorkspace, el, personFace, profileAvatar, setCurrentWorkspace, state, toast } from '../core.js';
+import { inboxSection, peopleSection, type InviteForMe } from './ws-people.js';   // #1875 구성원·초대
 
 let openPanel: HTMLElement | null = null;
 function closeMenu(): void { if (openPanel) { openPanel.remove(); openPanel = null; document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); } }
 function onDoc(e: MouseEvent): void { if (openPanel && !openPanel.contains(e.target as Node) && !(e.target as HTMLElement).closest('.v2-ws')) closeMenu(); }
 function onKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeMenu(); }
 
-function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string } {
+// #1875 — 인원 수가 최근에 확인된 값. status 를 부를 때마다 갱신하고, 문패는 이 값으로 배지를 그린다.
+//  ⚠ 서버(kindEffective)와 **같은 식**이어야 한다 — 두 곳이 다르면 화면과 게이트가 다른 말을 한다.
+let liveCount: number | null = null;
+export function kindFromCount(n: number): 'personal' | 'team' { return n >= 2 ? 'team' : 'personal'; }
+
+function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string; count: number | null; slug: string } {
   const m: any = (state && state.me) || {};
   const w = m.workspace || {};
-  // registry(다중 워크스페이스)가 켜져 있으면 **등록부의 이름·종류가 정답**이다 — org_name 을 쓰면
+  // registry(다중 워크스페이스)가 켜져 있으면 **등록부의 이름이 정답**이다 — org_name 을 쓰면
   //  버튼("Lively")과 메뉴 목록("라이블리")이 같은 워크스페이스를 두 이름으로 부른다(2026-08-19 실측 신고).
   const reg: any = m.workspace_registry || {};
-  const name = (reg.active && reg.name) ? String(reg.name) : String(m.org_name || m.email || '내 워크스페이스');
-  const kind = (reg.active && reg.kind) ? (reg.kind === 'personal' ? 'personal' : 'team') : (w.kind === 'personal' ? 'personal' : 'team');
-  return { kind, hub: w.hub_url || null, name };
+  // 이름의 출처: registry(다중 ws) 활성 → 등록부 이름 / 아니면 **org_profile 이름**(모두가 같은 값을 본다).
+  //  ⚠ org_name 이 비었을 때 **m.email 로 폴백하지 않는다**(#1875, 2026-08-27 원준 신고) — 이메일은 '지금 보는
+  //   사람'의 것이라, 같은 팀 워크스페이스가 사람마다 다른 이름(각자 자기 이메일)으로 보였다. 워크스페이스 이름은
+  //   워크스페이스의 것이지 개인의 것이 아니다. 공유 이름이 없으면 중립 라벨로 떨어진다(매니지드 프로비저닝·
+  //   이름 동기가 org_name 을 채우면 이 폴백은 안 닿는다). 종류(personal/team)는 아래에서 정해지므로 여기선 못 쓴다.
+  const name = (reg.active && reg.name) ? String(reg.name) : String(m.org_name || '워크스페이스');
+  // ★ 종류는 **저장된 값이 아니라 지금 몇 명인가**에서 나온다(#1875). 컬럼(reg.kind)은 만들 때의 의도라
+  //  사람이 들고 나면 조용히 거짓이 된다 — 혼자 남은 '팀', 둘이 쓰는 '개인'이 거기서 생긴다.
+  //  인원을 아직 못 받았을 때만(첫 그리기) 컬럼으로 임시 표시하고, status 가 오면 바로 정정된다.
+  const n = liveCount ?? (typeof reg.member_count === 'number' ? reg.member_count : null);
+  const kind = n !== null ? kindFromCount(n)
+    : (reg.active && reg.kind) ? (reg.kind === 'personal' ? 'personal' : 'team')
+    : (w.kind === 'personal' ? 'personal' : 'team');
+  //  slug — 문패(workspaceFace)가 저장된 얼굴을 faceBySlug 에서 찾을 열쇠(#2188).
+  return { kind, hub: w.hub_url || null, name, count: n, slug: activeWorkspaceSlug() };
+}
+
+/** 문패를 다시 그리게 만드는 신호 — 인원이 바뀌면(초대 수락·구성원 제거) 배지가 즉시 따라와야 한다. */
+function repaintCard(): void {
+  document.dispatchEvent(new CustomEvent('lively:ws-people-changed'));
 }
 
 // 상단 노드 — **워크스페이스 문패 카드**(2026-08-20 원준, 사이드바 개편 안3의 문패 채택).
@@ -36,12 +59,13 @@ export function switcherTop(opts?: { people?: Record<string, any>; faces?: strin
   const kindText = w.kind === 'personal' ? '개인' : '팀';
   const people = (opts && opts.people) || {};
   const ids = Object.keys(people);
+  // 부제도 같은 값에서 — 명부 인원(count)이 있으면 그걸 쓰고, 아직 없으면 얼굴 수로 폴백한다.
+  //  두 숫자가 다르면 명부가 정답이다(얼굴은 '세션을 가진 사람'이라 명부의 부분집합).
+  const shown = w.count ?? (ids.length || null);
   const sub = w.kind === 'personal' ? '개인 워크스페이스 · 나만'
-    : `팀 워크스페이스${ids.length ? ' · ' + ids.length + '명' : ''}`;
+    : `팀 워크스페이스${shown ? ' · ' + shown + '명' : ''}`;
   // 아바타 — 개인은 내 얼굴(계정 아바타 그대로), 팀은 조직 이니셜 타일. 팀 로고 이미지는 아직 없다(있으면 여기).
-  const face = w.kind === 'personal'
-    ? profileAvatar(me.avatar, w.name, me.userId, 'v2-wscard-big round', { char: me.avatar_char, color: me.avatar_color })
-    : el('span', { class: 'v2-wscard-big', text: (w.name || '?').trim().slice(0, 1) });
+  const face = workspaceFace(w, 'v2-wscard-big');
   // 팀 얼굴 스택 — **세션을 가진 사람들**(호출자가 추린 실재 협업자, 나 먼저) 최대 3명 + 나머지는 숫자.
   //  멤버 명부를 그대로 쓰면 더미·테스트 계정이 먼저 잡힌다(dev 실측) — 얼굴은 '지금 여기서 일하는 사람'이어야 맞다.
   const pool = (opts && opts.faces && opts.faces.length ? opts.faces : ids);
@@ -54,7 +78,7 @@ export function switcherTop(opts?: { people?: Record<string, any>; faces?: strin
       ...faceIds.map((id) => personFace(id, 'v2-wscard-face', String(people[id]?.display_name || id))),
       more ? el('i', { class: 'v2-wscard-more', text: '+' + more }) : null) : null,
     el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })) as HTMLButtonElement;
-  btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } openMenu(btn); };
+  btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
   return el('div', { class: 'v2-side-top' }, btn);
 }
 
@@ -89,6 +113,7 @@ async function openMenu(anchor: HTMLElement): Promise<void> {
       el('div', { class: 'v2-ws-cur' },
         el('span', { class: 'v2-ws-badge ' + w.kind, text: w.kind === 'personal' ? '개인' : '팀' }),
         el('span', { class: 'v2-ws-name', text: w.name }),
+        // (registry 비활성 — 명부 축이 없으므로 인원을 적지 않는다)
         el('span', { class: 'v2-ws-check', 'aria-hidden': 'true', text: '✓ 지금 여기' })));
     // 비활성(= 부팅 자동 활성화 대기/실패 또는 매니지드) — **조용히 숨기지 않는다.** 만들기 섹션이
     //  없는 이유를 화면이 답하지 못하면 "기능이 없다"로 읽힌다. 매니지드(mode=managed)는 허브 링크가
@@ -121,6 +146,17 @@ async function openMenu(anchor: HTMLElement): Promise<void> {
 
   if (w.hub) panel.append(el('a', { class: 'v2-ws-item', href: w.hub, target: '_blank', rel: 'noopener', text: '다른 워크스페이스 · 새로 만들기 →' }));
 
+  // #1875 — 나에게 온 초대. 제일 위에 온다: 내가 결정해 줘야 다른 사람이 기다림을 멈춘다.
+  const inboxWrap = el('div', { class: 'v2-ws-inbox-slot' });
+  panel.prepend(inboxWrap);
+  void refreshInbox(inboxWrap);
+
+  // #1875 — 이 워크스페이스의 구성원 · 초대. primary 는 명부가 없어 서버가 400 을 주므로 아예 걸지 않는다.
+  const curSlug = currentWorkspace() || 'primary';
+  if (curSlug !== 'primary') {
+    panel.append(peopleSection(curSlug, () => { void refreshStatusCount(); repaintCard(); }));
+  }
+
   const promoWrap = el('div', { class: 'v2-ws-promos' });
   panel.append(promoWrap);
 
@@ -138,6 +174,32 @@ async function openMenu(anchor: HTMLElement): Promise<void> {
   void refreshPromos(promoWrap);
 }
 
+// ── #1875 인원 수 · 나에게 온 초대 ─────────────────────────────────────────
+
+/** 지금 워크스페이스의 명부 인원을 받아 문패 배지를 정정한다. 메뉴를 열지 않아도 부팅 때 한 번 돈다. */
+export async function refreshStatusCount(): Promise<void> {
+  try {
+    const d: any = await api('/api/ui/me/workspaces');
+    const cur = currentWorkspace() || 'primary';
+    const row = (d?.workspaces || []).find((w: any) => w.slug === cur || (w.is_primary && cur === 'primary'));
+    // primary 는 명부를 쓰지 않는다(박스 로그인 = 접근) — 서버가 member_count:null 을 준다. 배지는 종전대로.
+    if (row && typeof row.member_count === 'number') { liveCount = row.member_count; repaintCard(); }
+  } catch (_) { /* 배지 정정 실패는 침묵 — 종전 표시가 남는다 */ }
+}
+
+async function refreshInbox(wrap: HTMLElement): Promise<void> {
+  try {
+    const d: any = await api('/api/ui/me/workspaces');
+    const list: InviteForMe[] = (d && d.invites_for_me) || [];
+    const sec = inboxSection(list, (accepted) => {
+      if (!accepted) { void refreshInbox(wrap); return; }
+      // 수락했으면 그 워크스페이스로 간다 — 들어왔다고 말해 놓고 원래 자리에 두면 사람이 길을 잃는다.
+      switchTo(accepted.slug);
+    });
+    wrap.replaceChildren(...(sec ? [sec] : []));
+  } catch (_) { wrap.replaceChildren(); }
+}
+
 // ── 내 워크스페이스(registry) — 전환·이름변경·보관 ──────────────────────────
 async function refreshMine(wrap: HTMLElement): Promise<void> {
   try {
@@ -152,6 +214,41 @@ async function refreshMine(wrap: HTMLElement): Promise<void> {
   }
 }
 
+// ── 워크스페이스 얼굴 — **단 하나의 출처**(#1875, 원준 2026-08-26 "왜 서로 다른 색이 있지 … 같은 데에서 갖다써야 되는데"). ──
+//  종전엔 이 얼굴을 네 자리(문패 카드·타일·레일 스택·팝오버 행)에서 제각각 그렸다: 개인이면서 '지금 것'일 때만
+//  내 아바타(내 색)를 쓰고, 그 밖엔 **색 없는 검은 사각**(CSS var(--ink))으로 떨어졌다. 그래서 같은 개인
+//  워크스페이스가 지금 것일 땐 하늘색, 목록의 한 줄일 땐 검정 — 두 색으로 보였다.
+//  ★ 개인 워크스페이스는 **소유자만 본다**(#1750) — 내 목록에 있는 개인 ws 는 전부 내 것이라 늘 내 얼굴·내 색이다.
+//   팀·primary 는 이니셜 타일(어두운 문패). 색은 CSS(.v2-wscard-big)가 준다.
+export interface WsFace { color?: string; char?: string }
+
+//  #2188 — 목록 응답이 실어 온 얼굴을 slug 로 기억한다. 문패(stackTile)는 행 객체가 아니라 workspaceInfo()
+//   를 그리는데, 거기엔 face 가 없다 — 목록을 한 번이라도 받았으면 여기서 찾는다.
+const faceBySlug = new Map<string, WsFace>();
+
+/** 저장된 색을 style 로 꽂기 전 마지막 문 — 서버(normalizeWorkspaceFace)가 걸렀지만, 화면은 화면대로 지킨다. */
+const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+/** 밝은 색 위 흰 글자는 안 보인다 — 상대 휘도로 잉크색을 고른다(#2188 아바타는 사람이 아무 색이나 고른다). */
+function inkFor(hex: string): string {
+  const h = hex.length === 4 ? '#' + [...hex.slice(1)].map((c) => c + c).join('') : hex;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.6 ? '#1b2733' : '#ffffff';
+}
+
+export function workspaceFace(w: { name: string; kind: string; slug?: string; face?: WsFace | null }, cls: string): HTMLElement {
+  //  #2188 — 사람이 정한 얼굴이 있으면 그것이 먼저다. 없을 때만 종전 파생(개인=내 아바타, 팀=첫 글자).
+  const f = w.face || (w.slug ? faceBySlug.get(w.slug) : undefined) || null;
+  if (f && (f.color || f.char)) {
+    const color = f.color && HEX_RE.test(f.color) ? f.color : null;
+    return el('span', { class: cls + ' v2-wsface-set',
+      ...(color ? { style: `background:${color};color:${inkFor(color)}` } : {}),
+      text: f.char || (w.name || '?').trim().slice(0, 1) });
+  }
+  const me: any = (state && state.me) || {};
+  if (w.kind === 'personal') return profileAvatar(me.avatar, w.name, me.userId, cls + ' round', { char: me.avatar_char, color: me.avatar_color });
+  return el('span', { class: cls, text: (w.name || '?').trim().slice(0, 1) });
+}
+
 // ── 레일(#2016)에서 쓰는 출구 셋 ────────────────────────────────────────────
 //  좌측 레일이 접혀 있을 때 문패는 **타일 하나**로 서고, 워크스페이스가 여럿이면 그 타일이 세로로 쌓인다.
 //  그 셋 다 이 모듈이 이미 갖고 있던 것(메뉴·전환·목록)을 밖으로 여는 것뿐이다 — 전환 규약을 두 벌로 두지 않는다.
@@ -159,14 +256,11 @@ async function refreshMine(wrap: HTMLElement): Promise<void> {
 /** 접힌 레일의 문패 = 조직 이니셜(팀) 또는 내 얼굴(개인) 타일. 누르면 종전 전환 메뉴가 그대로 뜬다. */
 export function switcherTile(): HTMLElement {
   const w = ws();
-  const me: any = (state && state.me) || {};
   const kindText = w.kind === 'personal' ? '개인' : '팀';
-  const face = w.kind === 'personal'
-    ? profileAvatar(me.avatar, w.name, me.userId, 'v2-wscard-big round', { char: me.avatar_char, color: me.avatar_color })
-    : el('span', { class: 'v2-wscard-big', text: (w.name || '?').trim().slice(0, 1) });
+  const face = workspaceFace(w, 'v2-wscard-big');
   const btn = el('button', { class: 'v2-ws v2-rail-tile', type: 'button', 'aria-haspopup': 'menu',
     title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` }, face) as HTMLButtonElement;
-  btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } void openMenu(btn); };
+  btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
   return btn;
 }
 
@@ -179,43 +273,105 @@ export function switcherName(): HTMLElement {
     title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` },
     el('span', { class: 'v2-side-wsn-t', text: w.name }),
     el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })) as HTMLButtonElement;
-  btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } void openMenu(btn); };
+  btn.onclick = (e) => { e.preventDefault(); openWorkspaceMenu(btn); };
   return btn;
 }
 
 /** 이 게이트웨이의 워크스페이스 목록. registry 가 꺼져 있으면 빈 배열(전환할 목록 자체가 없다). */
-export async function listWorkspaces(): Promise<Array<{ slug: string; name: string; kind: string; is_primary?: boolean }>> {
-  const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
-  if (!reg.active) return [];
+export async function listWorkspaces(): Promise<Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string; enter_url?: string; id?: string; tenant_state?: string | null; is_current?: boolean }>> {
+  if (!registryActive()) return [];
   try {
     const d: any = await api('/api/ui/me/workspaces');
-    return ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean }>;
+    //  #1875 — 같은 응답이 「나에게 온 초대」도 싣고 온다. 그 하나를 위해 같은 주소를 두 번 부르지 않는다.
+    lastInvites = ((d && d.invites_for_me) || []) as InviteForMe[];
+    const rows = ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string; enter_url?: string; id?: string; tenant_state?: string | null; is_current?: boolean; face?: WsFace | null }>;
+    //  #2188 — 얼굴을 slug 지도에 남긴다(문패처럼 행 객체 없이 그리는 자리가 찾는다).
+    faceBySlug.clear();
+    for (const r of rows) if (r.face && (r.face.color || r.face.char)) faceBySlug.set(String(r.slug), r.face);
+    return rows;
   } catch (_) { return []; }
 }
+
+// #1875 — 마지막으로 받아 둔 「나에게 온 초대」. 목록을 그리는 쪽(레일 팝오버)이 같은 조회를 또 하지 않게
+//  여기 남긴다. **비어 있음이 곧 '없음'은 아니다** — 아직 한 번도 안 불렀을 수 있으므로, 부르는 쪽이
+//  listWorkspaces() 를 먼저 await 한 뒤 읽는다.
+let lastInvites: InviteForMe[] = [];
+export function myInvites(): InviteForMe[] { return lastInvites; }
 
 /** 지금 워크스페이스의 slug('primary' 폴백) — 레일 타일 스택의 활성 표시가 이걸로 판정한다. */
 export function activeWorkspaceSlug(): string { return currentWorkspace() || 'primary'; }
 
 /** 그 워크스페이스로 전환(헤더 선택 + 리로드). 메뉴 안의 전환과 **같은 경로**다. */
-export function switchWorkspace(slug: string): void { switchTo(slug); }
+/**
+ * 그 워크스페이스로 간다.
+ *
+ * ★ 매니지드에서는 **헤더 전환이 성립하지 않는다** — 워크스페이스 1개 = 테넌트 1개 = 주소 1개라(1:1),
+ *  같은 게이트웨이에 헤더만 바꿔 봐야 그 워크스페이스가 거기 없다. 그래서 계정 서버가 준 `enter_url` 로
+ *  **이동**한다(그 주소가 로그인까지 태워 준다). 셀프호스트(registry)는 종전대로 헤더+새로고침.
+ */
+export function switchWorkspace(slug: string, enterUrl?: string | null): void {
+  if (enterUrl) { window.location.assign(enterUrl); return; }
+  switchTo(slug);
+}
 
 /** 지금 워크스페이스의 이름·종류 — 레일의 스택 타일·팝오버가 쓴다. */
 export function workspaceInfo(): { kind: 'personal' | 'team'; hub: string | null; name: string } { return ws(); }
 
 /** 종전 전환·만들기·연결 메뉴를 그대로 연다 — 레일 팝오버의 [＋ 워크스페이스 추가]가 여기로 온다(폼을 두 벌 만들지 않는다). */
-export function openWorkspaceMenu(anchor: HTMLElement): void { if (openPanel) { closeMenu(); return; } void openMenu(anchor); }
+// ── 워크스페이스 메뉴는 **하나**다(#1875, 원준 2026-08-26 "고르는 칸이 두 번 존재해야 할 이유가 있을까").
+//  레일(rail.ts)이 있으면 그쪽 팝오버가 유일한 메뉴이고, 아래 openMenu 는 레일이 없는 임베더용 폴백일 뿐이다.
+//  레일이 마운트될 때 자기 팝오버를 여기 등록하고, 문패·사이드바 머리·타일이 무엇을 눌러도 같은 것이 뜬다.
+let menuOpener: ((anchor: HTMLElement) => void) | null = null;
+export function registerWorkspaceMenu(fn: (anchor: HTMLElement) => void): void { menuOpener = fn; }
+export function openWorkspaceMenu(anchor: HTMLElement): void {
+  if (menuOpener) { menuOpener(anchor); return; }
+  if (openPanel) { closeMenu(); return; }
+  void openMenu(anchor);
+}
 
-function switchTo(slug: string): void {
+/**
+ * 이 리로드가 «워크스페이스 전환»이라고 부팅부에 알리는 표식(#2171).
+ *
+ * 전환은 `location.reload()` 를 거치므로(아래 switchTo) **부팅 판정을 처음부터 다시 탄다.** 그런데
+ *  옮겨 간 워크스페이스에는 그 사람의 흔적이 0이라(거기서 MCP 를 부른 적도, 세션을 연 적도 없다)
+ *  코어의 «흔적 없으면 처음 오는 사람» 판정이 참이 되어 **전환할 때마다 처음 설정이 떴다**
+ *  (원준님 신고 2026-08-27, 데스크톱 앱에서 워크스페이스 전환 중).
+ *
+ * 전환은 «처음 오는 것»이 아니라 «있던 곳으로 가는 것»이다 — 그 자리는 언제나 홈이어야 한다.
+ *  처음 설정이 필요한 사람에게는 홈의 «처음 설정 이어서 하기»(me.welcome_pending)가 남는다.
+ *
+ * sessionStorage 인 이유: 이 표식은 **딱 다음 부팅 한 번**만 살아야 한다. localStorage 에 두면 지우기
+ *  전까지 자동 진입이 영영 죽고, 그러면 새로 온 사람이 처음 설정을 못 본다.
+ *
+ * ★ #2230 — 표식을 읽는 자리가 하나 더 늘었다. 아래 `location.hash = '#/'` 만으로는 «도착지는 홈»이
+ *  성립하지 않았다: 셸은 `#/` 를 딥링크로 치지 않아서, 그 워크스페이스에 저장된 **열린 탭**이 복원되며
+ *  마지막에 보던 세션이 그대로 다시 떴다(원준님 신고 2026-08-27 "전환하면 맨 위 세션이 떠 있다").
+ *  그래서 셸(main.ts bootV2)이 이 표식을 보고 착지 탭과 레일 구역까지 홈으로 되돌린다.
+ */
+export const WS_SWITCH_KEY = 'lively_ws_switching';
+
+/**
+ * @param landing 도착해서 열 화면. 기본은 홈이다 — **전환의 도착지는 언제나 홈**(위 ★).
+ *   방금 **만든** 워크스페이스로 갈 때만 처음 설정(`#/welcome?resume=1`)을 명시적으로 준다:
+ *   그 한 번이 «워크스페이스 만드는 과정의 마지막» 이고, 그건 휴리스틱이 아니라 **만든 쪽이 가리켜야** 한다
+ *   (매니지드 CP 가 첫 입장에 `?to=#/welcome` 을 싣는 것과 같은 규칙 — lvly-cloud workspaces.ts).
+ */
+function switchTo(slug: string, landing?: string): void {
   setCurrentWorkspace(slug === 'primary' ? '' : slug);
-  location.hash = '#/';
+  try { sessionStorage.setItem(WS_SWITCH_KEY, '1'); } catch (_) { /* 프라이빗 모드 — 표식이 없으면 종전 동작 */ }
+  location.hash = landing || '#/';
   location.reload(); // 화면 전체가 그 워크스페이스의 데이터로 다시 선다 — 부분 갱신은 반쪽 상태를 만든다
 }
 
 function mineRow(w: any, active: boolean, wrap: HTMLElement): HTMLElement {
   const open = el('button', { class: 'v2-ws-team-open', type: 'button', title: active ? '지금 이 워크스페이스예요' : '이 워크스페이스로 전환',
     onclick: () => { if (!active) switchTo(String(w.slug)); } },
-    el('span', { class: 'v2-ws-badge ' + (w.kind === 'personal' ? 'personal' : 'team'), text: w.kind === 'personal' ? '개인' : '팀' }),
+    // #1875 — 서버가 준 파생값(kind_effective)을 그대로 쓴다. 목록과 문패가 같은 규칙을 지나가야
+    //  "여기선 팀인데 저기선 개인"이 생기지 않는다. 인원도 함께 적어 판정 근거를 감추지 않는다.
+    el('span', { class: 'v2-ws-badge ' + (w.kind_effective === 'team' ? 'team' : 'personal'),
+      text: w.kind_effective === 'team' ? (typeof w.member_count === 'number' ? '팀 ' + w.member_count : '팀') : '개인' }),
     el('span', { class: 'v2-ws-name', text: String(w.name || w.slug) }),
+    w.pending_invites ? el('span', { class: 'v2-ws-pend', title: `수락 대기 ${w.pending_invites}명`, text: '대기 ' + w.pending_invites }) : null,
     active ? el('span', { class: 'v2-ws-check', 'aria-hidden': 'true', text: '✓ 지금 여기' }) : null) as HTMLButtonElement;
   const acts: HTMLElement[] = [];
   if (w.role === 'owner' && !w.is_primary) {
@@ -246,11 +402,14 @@ function buildCreateForm(form: HTMLElement): void {
     try {
       const d: any = await api('/api/ui/me/workspaces', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), kind: kind.value }) });
       toast(`'${d?.workspace?.name || name.value.trim()}' 워크스페이스를 만들었어요.`);
-      switchTo(String(d?.workspace?.slug || '')); // 만들자마자 그 워크스페이스로 — 빈 목록 앞에서 헤매지 않게
+      // 만들자마자 그 워크스페이스로 — 빈 목록 앞에서 헤매지 않게.
+      //  ★ 여기가 «워크스페이스 만드는 과정의 마지막»이라 처음 설정으로 **명시적으로** 보낸다(#2171).
+      //   코어의 자동 진입은 전환 부팅에서 꺼지므로(main.ts wsSwitched), 안 가리키면 아무도 못 본다.
+      switchTo(String(d?.workspace?.slug || ''), '#/welcome?resume=1');
     } catch (e: any) { note.textContent = e?.message || String(e); go.removeAttribute('disabled'); }
   } });
   form.replaceChildren(name, kind, el('div', { class: 'v2-ws-formrow' }, go, note),
-    el('p', { class: 'v2-ws-hint', text: '개인 워크스페이스는 관리자를 포함해 다른 사람에게 보이지 않아요. 팀은 만든 뒤 멤버를 초대할 수 있어요.' }));
+    el('p', { class: 'v2-ws-hint', text: '개인 워크스페이스는 관리자를 포함해 다른 사람에게 보이지 않아요. 나중에 사람을 부르면 그때 팀이 됩니다 — 지금 고르는 건 시작 모습일 뿐이에요.' }));
 }
 
 async function refreshTeam(wrap: HTMLElement): Promise<number> {
@@ -321,4 +480,76 @@ function promoRow(p: any, wrap: HTMLElement): HTMLElement {
     el('div', { class: 'v2-ws-promo-acts' },
       el('button', { class: 'btn btn-primary btn-xs', type: 'button', text: '올리기', onclick: () => resolve('approve') }),
       el('button', { class: 'btn btn-ghost btn-xs', type: 'button', text: '취소', onclick: () => resolve('reject') })));
+}
+
+
+// ── #1875 — 레일 팝오버(rail.ts)가 쓰는 워크스페이스 조작. 옛 메뉴(openMenu)의 인라인 fetch 를 꺼낸 것이다.
+//  화면은 rail.ts 가 새 문법으로 그리고, 서버와 말하는 법은 여기 한 곳에 둔다(주소·본문이 두 벌로 갈리지 않게).
+export async function createWorkspace(name: string, kind: 'personal' | 'team'): Promise<{ slug: string; name: string; enter_url?: string }> {
+  const d: any = await api('/api/ui/me/workspaces', { method: 'POST', body: JSON.stringify({ name, kind }) });
+  //  enter_url 은 매니지드에서만 온다(새 워크스페이스 = 새 테넌트 = 새 주소). 셀프호스트는 undefined 라
+  //  호출부가 종전대로 헤더 전환을 탄다 — 한 함수가 두 배포를 덮는다.
+  return { slug: String(d?.workspace?.slug || ''), name: String(d?.workspace?.name || name), enter_url: d?.workspace?.enter_url || undefined };
+}
+export async function renameWorkspace(slug: string, name: string): Promise<void> {
+  await api('/api/ui/me/workspaces/update', { method: 'POST', body: JSON.stringify({ slug, name }) });
+}
+/** #2188 설정 모달 — 이름·얼굴을 한 번에. face:{} 는 지움(파생값 복귀), 생략은 그대로. */
+export async function saveWorkspaceSettings(slug: string, patch: { name?: string; face?: WsFace }): Promise<void> {
+  await api('/api/ui/me/workspaces/update', { method: 'POST', body: JSON.stringify({ slug, ...patch }) });
+}
+export async function archiveWorkspace(slug: string): Promise<void> {
+  await api('/api/ui/me/workspaces/delete', { method: 'POST', body: JSON.stringify({ slug }) });
+}
+/**
+ * 나가기(#1875 D5') — 나 하나만 빠진다. 보관과 **서로 배타**다(인원 2명 이상이면 보관이 막히고 이것만 열린다).
+ * #1875 D5″ — 어드민이 나뿐이면 `transferTo` 로 넘길 사람을 정해야 나간다(안 주면 서버가 400 과 후보를 준다).
+ */
+export async function leaveWorkspace(slug: string, transferTo?: string | null): Promise<void> {
+  await api('/api/ui/me/workspaces/leave', { method: 'POST', body: JSON.stringify(transferTo ? { slug, transfer_to: transferTo } : { slug }) });
+}
+
+/** 그 워크스페이스의 구성원 — 주인을 넘길 사람을 고르는 드롭다운이 이걸 먹는다. */
+export async function workspaceMembers(slug: string): Promise<Array<{ member_id: string; role: string; display_name: string | null; email: string | null; is_me?: boolean }>> {
+  const d: any = await api('/api/ui/me/workspaces/people?slug=' + encodeURIComponent(slug));
+  return ((d && d.members) || []) as Array<{ member_id: string; role: string; display_name: string | null; email: string | null; is_me?: boolean }>;
+}
+/** 연결한 팀(다른 게이트웨이, 승격 경로 #1750). */
+export async function linkedTeams(): Promise<any[]> {
+  try { const d: any = await api('/api/ui/me/linked-workspaces'); return (d && d.links) || []; } catch (_) { return []; }
+}
+export async function linkTeam(url: string, token: string): Promise<{ name: string }> {
+  const d: any = await api('/api/ui/me/linked-workspaces', { method: 'POST', body: JSON.stringify({ url, token }) });
+  return { name: String(d?.link?.name || '팀 워크스페이스') };
+}
+export async function setAutoPromote(url: string, on: boolean): Promise<void> {
+  await api('/api/ui/me/linked-workspaces', { method: 'POST', body: JSON.stringify({ url, auto_promote: on }) });
+}
+export async function unlinkTeam(scopeKey: string): Promise<void> {
+  await api('/api/ui/me/linked-workspaces/remove', { method: 'POST', body: JSON.stringify({ scope_key: scopeKey }) });
+}
+export async function pendingPromotions(): Promise<any[]> {
+  try { const d: any = await api('/api/ui/me/promotions?state=pending'); return (d && d.promotions) || []; } catch (_) { return []; }
+}
+/** 승격 처리 — 결과 상태(done·failed·…)와 오류를 그대로 돌려준다(문구는 화면이 정한다). */
+export async function resolvePromotion(id: string | number, decision: 'approve' | 'reject'): Promise<{ state: string; error?: string }> {
+  const d: any = await api('/api/ui/me/promotions/' + id + '/resolve', { method: 'POST', body: JSON.stringify({ decision }) });
+  return { state: String(d?.promotion?.state || ''), error: d?.promotion?.error };
+}
+/**
+ * 여기서 워크스페이스를 **만들고 고를 수 있는가**.
+ *
+ * 축이 둘이다(#2188) — `active` 는 이 박스의 등록부가 도는 것(셀프호스트 다중), `managed` 는 계정 서버
+ *  (app.lvly.io)가 대신 해 주는 것(매니지드). 화면 입장에서는 **둘 다 "여기서 된다"** 이므로 하나로 본다.
+ *  종전엔 `active` 만 봐서 매니지드가 전부 꺼진 것으로 읽혔고, 그래서 목록도 만들기도 없이
+ *  "그건 app.lvly.io 에서 하세요" 링크만 남았다 — 원준 신고 *"????? 이건 왜..?"*.
+ */
+export function registryActive(): boolean {
+  const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
+  return !!reg.active || !!reg.managed;
+}
+/** 매니지드인가 — 전환이 **헤더가 아니라 이동**이라는 뜻이다(워크스페이스마다 주소가 다르다). */
+export function managedWorkspaces(): boolean {
+  const reg: any = ((state.me as any) && (state.me as any).workspace_registry) || {};
+  return !!reg.managed;
 }

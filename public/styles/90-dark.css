@@ -41,6 +41,7 @@
   --muted: #9AA9C4;
   --muted-2: #8492B0;
   --muted-3: #74839F;
+  --muted-3-line: #74839F;   /* 다크의 옛 --muted-3 그대로 — 실선·작은 면 전용(라이트에서 글자용을 AA 로 내리며 갈랐다) */
   --muted-head: #97A6C2;
 
   /* 라인/보더 */
@@ -159,6 +160,7 @@
   --muted: #9AA9C4;
   --muted-2: #8492B0;
   --muted-3: #74839F;
+  --muted-3-line: #74839F;   /* 다크의 옛 --muted-3 그대로 — 실선·작은 면 전용(라이트에서 글자용을 AA 로 내리며 갈랐다) */
   --muted-head: #97A6C2;
 
   /* 라인/보더 */
@@ -258,4 +260,14 @@
   :root:not([data-theme="light"]) .wk-aurora::after { content: ''; position: absolute; inset: 0; z-index: 0;
     background: color-mix(in srgb, var(--canvas) 76%, transparent); pointer-events: none; }
   :root:not([data-theme="light"]) .wk-aurora-wm { z-index: 1; }
+}
+
+/* ── #2247 — GitHub·Linear 는 **단색-검정** 공식 마크(github #161614 · linear #222326)라 다크 타일에서 사라진다.
+   다른 로고는 제 색(멀티컬러)이라 그대로 두고, 이 둘만 전경 잉크로 되칠한다. .off(grayscale)도 밝은 회색이 돼 보인다.
+   DS-EXCEPTION: 외부 브랜드 자산(서비스 로고)의 다크 대비 보정 — svc-logos 예외와 같은 근거. ── */
+:root[data-theme="dark"] .svc-tile[data-svc="github"] svg path,
+:root[data-theme="dark"] .svc-tile[data-svc="linear"] svg path { fill: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .svc-tile[data-svc="github"] svg path,
+  :root:not([data-theme="light"]) .svc-tile[data-svc="linear"] svg path { fill: var(--ink); }
 }

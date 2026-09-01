@@ -22,6 +22,32 @@ export function appReady(s) {
   return !!(st.cliFound && !st.cliOutdated && !st.cliBroken && st.loggedIn && st.kitInstalled && !st.tokenRejected);
 }
 
+/**
+ * 노드 상태 판정 — **한 자리**(#2215). 배지·상세 문구·트레이가 전부 이걸 본다.
+ *
+ * 왜 한 자리인가: 종전엔 세 곳이 각자 식을 적었고 **실제로 어긋나 있었다** — `renderer/app.js` 의 배지는
+ *  `running === null`(못 쟀다)을 «노드 정지됨» 으로 떨어뜨렸는데, 같은 파일의 상세 문구는 «확인하지
+ *  못했습니다» 로 그렸다. `appReady` 가 같은 이유로 이미 한 자리에 모여 있다.
+ *
+ * ★ 두 축을 섞지 않는다:
+ *  · `running`   — 이 PC 의 프로세스 실측(true/false/**null=못 쟀다**)
+ *  · `connected` — 게이트웨이가 보는 사실(true/false/null=모름)
+ *
+ * ★ `connected === true` 면 «정지됨» 이라 말하지 않는다. 게이트웨이가 붙어 있다고 보는 것은 그 프로세스가
+ *  산다는 강한 증거다 — 로컬 프로브가 못 봐도 그쪽이 이긴다. 실측(2026-08-28, hammurabi): 윈도우 제한
+ *  계정에서 프로브가 실패해 `running=false` 가 됐는데 노드는 멀쩡히 붙어 있었고, 화면만 «정지됨» 이었다.
+ *
+ * @returns {"unregistered"|"running"|"zombie"|"unknown"|"stopped"}
+ */
+export function nodeStateOf(s) {
+  const st = s || {};
+  if (!st.nodeRegistered) return "unregistered";
+  if (st.nodeConnected === true) return "running";       // 붙어 있다 = 돈다(프로브보다 강한 증거)
+  if (st.nodeRunning === true) return st.nodeConnected === false ? "zombie" : "running";
+  if (st.nodeRunning === null || st.nodeRunning === undefined) return "unknown";  // 모름 — 정지됐다고 말하지 않는다
+  return "stopped";
+}
+
 /** 게이트웨이 주소 → 웹 UI 주소. 뒤 슬래시를 정리하고 `/ui/` 를 붙인다(경로 접두가 있는 게이트웨이도 그대로 살린다). 형식이 아니면 null. */
 export function webUiUrl(gatewayUrl) {
   const gw = String(gatewayUrl || "").trim().replace(/\/+$/, "");
@@ -32,6 +58,29 @@ export function webUiUrl(gatewayUrl) {
 /** 게이트웨이의 **출처**(scheme://host[:port]) — 토큰을 주입할 자리·같은-출처 판정의 기준. 형식이 아니면 null. */
 export function webOrigin(gatewayUrl) {
   try { return new URL(String(gatewayUrl || "")).origin; } catch { return null; }
+}
+
+/**
+ * 앱 창이 다다른 곳이 **이 PC 가 매인 워크스페이스와 다른 워크스페이스**인가(순수, #2215).
+ *
+ * 왜: 계정 하나가 여러 워크스페이스에 속하는데(1:N) 이 PC 의 로컬 상태는 한 벌이다
+ *  (`~/.lively/{gateway-url,token}` + `node-agent.env` + 하네스 MCP). 사람이 웹에서 워크스페이스를 바꾸면
+ *  **웹뷰만 옮겨가고 로컬은 그대로**라, 새 워크스페이스에선 이 PC 로 세션을 못 열고 옛 워크스페이스에는
+ *  노드가 계속 붙어 있다. 그 어긋남이 조용하면 아무도 모른다 — 그래서 앱이 알아채고 묻는다.
+ *
+ * 판정은 **게이트웨이 웹 UI(`/ui`)로 간 것만** 센다. CP 홈(`/home`)·로그인·승인 화면은 워크스페이스가
+ *  아니라 그 앞단이라, 거기까지 세면 로그인 흐름 도중에 매번 물어보게 된다.
+ *
+ * @returns {{from: string, to: string} | null} 옮겨갈 곳이 있으면 두 출처, 아니면 null.
+ */
+export function workspaceDriftFrom(navigatedUrl, gatewayUrl) {
+  let u;
+  try { u = new URL(String(navigatedUrl || "")); } catch { return null; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  if (!/^\/ui(\/|$)/.test(u.pathname)) return null;
+  const from = webOrigin(gatewayUrl);
+  if (!from || u.origin === from) return null;
+  return { from, to: u.origin };
 }
 
 /**

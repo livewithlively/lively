@@ -66,7 +66,7 @@ function tuPretty(v) {
     if (keys) parts.push('전달한 항목: ' + (keys.length ? keys.join(', ') : '없음'));
     else if (typeof v.items === 'number') parts.push('전달한 항목: ' + v.items + '개');
     if (typeof v.bytes === 'number') parts.push('크기: ' + v.bytes.toLocaleString() + ' bytes');
-    parts.push('내용이 필요하면 그 서비스(슬랙·노션 등)에서 확인하세요. 이 서버의 인자 기록은 「연결·데이터」 탭에서 켤 수 있습니다.');
+    parts.push('내용이 필요하면 그 서비스(슬랙·노션 등)에서 확인하세요. 이 서버의 인자 기록은 [AI 도구 ▸ 외부 도구 서버]에서 그 서버를 열어 켤 수 있습니다.');
     return parts.join('\n');
   }
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
@@ -264,7 +264,7 @@ async function toolUsagePanel(detail) {
     ? `${total.toLocaleString()}건 중 ${((Math.min(page, totalPages) - 1) * PAGE_SIZE + 1).toLocaleString()}–${((Math.min(page, totalPages) - 1) * PAGE_SIZE + recent.length).toLocaleString()}번째`
     : '';
   const card = el('div', { class: 'card' },
-    cardHead('AI 도구 호출 기록', 'Claude·Codex 같은 하네스가 어떤 MCP 도구를 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며 시크릿 값은 마스킹하고 큰 값은 잘라 보관합니다. AI에게 물어보거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다. 슬랙·메일·노션처럼 외부 서비스로 나가는 도구는 보낸 내용을 남기지 않고 호출 사실만 기록합니다. 이 기록은 서버마다 「연결·데이터」 탭에서 켤 수 있습니다.'),
+    cardHead('AI 도구 호출 기록', 'Claude·Codex 같은 하네스가 어떤 MCP 도구를 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며 시크릿 값은 마스킹하고 큰 값은 잘라 보관합니다. AI에게 물어보거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다. 슬랙·메일·노션처럼 외부 서비스로 나가는 도구는 보낸 내용을 남기지 않고 호출 사실만 기록합니다. 이 기록은 [AI 도구 ▸ 외부 도구 서버]에서 서버마다 켤 수 있습니다.'),
     controls,
     stats,
     daysEl,

@@ -10,6 +10,8 @@
 //     ⚠ 종전 규칙은 `리스 있으면 아무 노드나` 였다 — 리스 하나로 남의 노트북이 열렸다(#1540 이 닫은 구멍).
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
 import { logger } from "../log.js";
+import { withTenant } from "../org/tenant-context.js";
+import { schedulerTargets } from "../scheduler/tenant-fanout.js";
 import { sharedRoot } from "../terminal/terminal-sessions.js";
 import { effectiveDelegatePolicy, type DelegatePolicy } from "../org/policies/delegate-policy.js";
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
@@ -302,12 +304,15 @@ export async function tryAssignNow(t: DelegateTask): Promise<AssignResult> {
   catch (err) { return { assigned: false, reason: `배치 오류: ${(err as Error)?.message ?? err}` }; }
 }
 
-async function assignQueued(): Promise<void> {
+/**
+ * 큐 배정. `counts`(노드별 실행 중 수)·`extra`(이번 tick 배정 가산)를 **밖에서 받는다** — 워크스페이스를
+ *  순회할 때 이 둘은 **전역**이어야 하기 때문이다(#2418). 테넌트마다 새로 세면 각 워크스페이스가
+ *  "노드가 비어 있다"고 판단해 같은 노드에 몰아넣는다.
+ */
+async function assignQueuedWith(counts: Map<string, number>, extra: Map<string, number>): Promise<void> {
   const queued = await queuedTasks();
   if (!queued.length) return;
   const now = Date.now();
-  const counts = await runningCountByNode();
-  const extra = new Map<string, number>(); // 이번 tick 내 배정 가산(동일 노드 과배정 방지)
   for (const t of queued) {
     try {
       // 큐 대기 상한(⑤) — 적합 노드를 QUEUE_MAX 안에 못 얻으면 무한 대기 대신 no_capacity 실패.
@@ -320,6 +325,44 @@ async function assignQueued(): Promise<void> {
     } catch (err) {
       logger.warn({ err: (err as Error)?.message, task: t.id }, "위탁 배정 실패 — 다음 tick 재시도");
     }
+  }
+}
+
+/** 단일 테넌트 경로(종전) — 용량 맵을 스스로 만든다. */
+async function assignQueued(): Promise<void> {
+  await assignQueuedWith(await runningCountByNode(), new Map());
+}
+
+// 워크스페이스 순회 (#2418) — org_task 도 테넌트별로 갈리는 표라, 컨텍스트 밖에서 읽으면 primary 것만 보인다.
+//  ⚠ 용량(counts)만은 **전 워크스페이스 합**이어야 한다 → 먼저 한 바퀴 돌아 합산하고, 그 맵을 순회 전체가 공유한다.
+/** 한 번의 배차 tick — 대상 테넌트를 스스로 열거해 각각을 `withTenant` 로 감싼다.
+ *  ⚠ **테넌트 단위로 쪼갤 수 없다**: 노드 용량을 테넌트 가로질러 집계한 뒤 배차하므로,
+ *   한 테넌트만 보고 배정하면 남의 부하를 못 봐 노드를 초과 배정한다.
+ *  ⓘ 밖으로 연 이유(#2246): 매니지드에서는 `startTaskScheduler` 가 `gate:"scheduler"` 에 막혀 안 돈다.
+ *   요청에 얹은 정비가 이 tick 을 **전역 스코프**로 부른다 — 대상 열거는 여기가 하므로 안전하다. */
+export async function tickTasksAllTenants(): Promise<void> {
+  const targets = await schedulerTargets();
+  if (targets === null) {   // 단일 테넌트 배포 — 종전 경로
+    await watchRunning(); await assignQueued(); await reapFailedSessions();
+    return;
+  }
+  const counts = new Map<string, number>();
+  for (const t of targets) {
+    try {
+      for (const [node, n] of await withTenant(t, () => runningCountByNode())) {
+        counts.set(node, (counts.get(node) ?? 0) + n);
+      }
+    } catch (err) { logger.warn({ err, workspace: t.slug }, "위탁 용량 집계 실패(그 워크스페이스만 건너뜀)"); }
+  }
+  const extra = new Map<string, number>();
+  for (const t of targets) {
+    try {
+      await withTenant(t, async () => {
+        await watchRunning();
+        await assignQueuedWith(counts, extra);
+        await reapFailedSessions();
+      });
+    } catch (err) { logger.warn({ err, workspace: t.slug }, "위탁 스케줄러 tick 오류(워크스페이스)"); }
   }
 }
 
@@ -401,7 +444,7 @@ export function startTaskScheduler(): void {
     void (async () => {
       // 회수는 tick 에도 둔다(#1675 ①) — finish 훅만으로는 **TTL 이 영원히 안 걸린다**: 실패가 멎으면
       //  훅이 안 불리고, 마지막 남은 세션들이 TTL 을 한참 넘겨도 아무도 안 걷는다.
-      try { await watchRunning(); await assignQueued(); await reapFailedSessions(); }
+      try { await tickTasksAllTenants(); }
       catch (err) { logger.warn({ err }, "위탁 스케줄러 tick 오류"); }
       finally { ticking = false; }
     })();

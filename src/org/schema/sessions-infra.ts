@@ -32,6 +32,15 @@ export const CRON_ACTION_ALLOWLIST = [
   "run_canary",            // #1657 — 상류 회귀 자동탐지(카나리)
 ] as const;
 
+/**
+ * 정적(shared-proxy) 프리뷰가 화면을 갖추기 위해 돌려야 하는 빌드 — **두 단계 다**여야 한다.
+ *
+ * `build:web` 은 SPA(`public/app/**`)만 만들고, `build-standalone.mjs` 가 `public/page-scrollbar.js`
+ *  등 단독 페이지 번들을 만든다. index.html 은 그 둘을 모두 로드하는데, #2054 로 **양쪽 다 git 밖**이
+ *  됐다. 그래서 `build:web` 하나만 돌리면 진입 모듈 하나가 빈 채로 서빙된다(#2143 실측).
+ */
+const WEB_BUILD_CMD = "npm run build:web && node scripts/build-standalone.mjs";
+
 export async function initSessionsInfra(pool: Pool): Promise<void> {
   // ── org_cron — 서버사이드 스케줄 잡(웹 관리). is 신선화·커넥터 sync 등을 게이트웨이 프로세스가 주기 실행. ──
   //  트리거 표준화: git push 웹훅(도달성+repo당 등록 필요)을 대체 — 게이트웨이가 바깥으로 fetch 하므로 직원 0·repo셋업 0.
@@ -195,6 +204,11 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  ⚠ 소비자는 이 컬럼을 보고 갈라야 한다 — 복원 목록은 그 노드의 것으로 표시하고, reaper·백필(중앙 tmux 만 훑는다)은
   //   라이브 목록에 없는 id 라 원래 건드리지 않는다. 종전 node-session-map.ts 헤더의 "INSERT 기각" 근거가 이 컬럼으로 해소된다.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS node_id TEXT;`);
+  // #2197 — 사람이 **마지막으로 시킨 말**(work-flag 훅이 UserPromptSubmit 순간 보고, 서버가 300자로 다듬음). 사이드바 세션 행
+  //  둘째 줄의 정본 — 종전엔 화면이 대화 꼬리를 세션마다 받아 찾았고(비용), 노드 세션은 기록이 턴 끝에만 올라와 실시간이 아니었다.
+  //  last_prompt_at = 그 보고 시각(진단·정렬용). 박스·노드 세션 공통(#1791 행) — 노드로 릴레이하지 않는다.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS last_prompt TEXT;`);
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS last_prompt_at TIMESTAMPTZ;`);
   // #1291 v2 — 세션 **기록 범위**(write cap)와 read 축소의 desired-state 미러.
   //  tmux user-option 이 권위지만 tmux 가 죽으면(재부팅·회수) 그 값이 사라진다 → 복원 때 캡이 넓어지지 않게 여기 남긴다.
   //  write_vis: 'open'|'audience'|'private' (NULL=미설정 → 실행 폴더에서 재파생). restrict: read 축소(owner∪invites) 여부.
@@ -203,6 +217,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // #1979 — 이 이름을 **누가 지었나**(id|rule|agent|human). 세션 이름이 한 번만 지어지고 그대로 가게 하는 걸쇠다:
   //  낮은 쪽이 높은 쪽을 못 덮는다(session-label-source.ts 의 표가 정본). NULL = 이 컬럼 이전 행 → `rule` 로 읽는다.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS label_source TEXT;`);
+  // #2162 — 세션의 종류(human|task|managed|app|login). 종전엔 이 축이 없어 서버와 훅의 종류 신호가
+  //  갈라져 있었고 새 기계 세션 경로가 말없이 '사람 세션'이 됐다. NULL = 이 컬럼 이전 행 → `human`.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS kind TEXT;`);
   // #2022 — 이 행을 **어떻게 알게 됐나**. false(기본) = 게이트웨이가 만들거나 create 를 릴레이하며 쓴 행(좌표를 안다).
   //  true = 게이트웨이가 **노드 스냅샷에서 발견해** 적은 행 — 그 컴퓨터에서 직접 띄운 세션이라 게이트웨이는
   //  그 세션의 workspace 좌표(root_key·subpath)를 모른다. 노드는 dir(제 파일시스템의 절대경로)만 보고하고,
@@ -210,6 +227,15 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  ⚠ 그래서 이 행은 '보이게' 하되 '되살릴 수 있다'고 말하지 않는다 — 복원이 좌표를 추측하면(root_key||'shared')
   //   그 세션이 **엉뚱한 폴더에서** 되살아난다. 복원 경로가 이 표식을 보고 거절한다(terminal/routes.ts).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS discovered BOOLEAN NOT NULL DEFAULT false;`);
+  // #2231 — **이 세션은 어느 새 세션으로 이어졌나**(복원 성공 시 새 id). NULL = 아직 이어지지 않은 살아있는 desired-state.
+  //  왜: 종전엔 복원이 성공하면 옛 행을 **지웠다**. 그러면 그 옛 id 는 서버에서 통째로 모르는 값이 되어, 이미 열려 있던
+  //   화면·탭·북마크·다른 칸이 그 id 를 계속 가리킨 채 "중단된 세션이에요 — 이어받을 수 있어요"를 띄우고, 누르면
+  //   `복원할 세션 상태가 없습니다`(404) 로 끝났다 — 정작 그 대화는 새 id 로 멀쩡히 돌고 있는데 갈 길이 없었다
+  //   (실측 2026-08-27 장원준 신고: box-jang-b830d01a → box-jang-fa34ad1e 로 이어진 뒤 옛 화면이 막다른 길).
+  //  그래서 지우는 대신 **이어진 곳을 적어 남긴다**: 목록에서는 빠지고(listAllSessionStates 가 거른다 — 종전 DELETE 와 같은
+  //   가시성), 옛 id 로 오는 복원·메타 조회는 이 값을 따라가 새 세션으로 **안내**한다. 행 하나는 수백 바이트라 남겨 두는
+  //   비용보다 '옛 링크가 영원히 산다'는 값이 크다(그래서 만료 삭제도 두지 않는다).
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS superseded_by TEXT;`);
 
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)
@@ -325,15 +351,23 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'npm run build:web','PORT','{}'::jsonb,'/',
        '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. 별도 프로세스·포트 없음(가장 싸고 안전).'),
       ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','npm run build','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
-       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
+       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).'),
+      ('lively-frontend','lively 프론트 (정적·shared-proxy)','lively',true,NULL,$1,'PORT','{}'::jsonb,'/',
+       '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. repo 이름이 lively 로 바뀐 뒤 자동매칭이 co-frontend(옛 이름 context-ontology)에 안 걸려, 빌드가 통째로 생략되고 화면이 하얗게 뜨던 것을 메운다(#2143).')
     ON CONFLICT DO NOTHING;
-  `);
+  `, [WEB_BUILD_CMD]);
   // 기존 프리셋 보정 — 위 INSERT 는 ON CONFLICT DO NOTHING 이라 이미 있던 행엔 build_cmd 가 안 들어간다.
   //  운영자가 직접 채운 값은 건드리지 않는다(IS NULL 조건).
   await pool.query(`
     UPDATE org_stack_profile SET build_cmd='npm run build:web' WHERE id='co-frontend' AND build_cmd IS NULL;
     UPDATE org_stack_profile SET build_cmd='npm run build'     WHERE id='co-fullstack' AND build_cmd IS NULL;
   `);
+  // 정적 프리셋의 빌드는 **단독 페이지 번들까지** 돌아야 한다 — #2054 로 public/app 뿐 아니라
+  //  public/page-scrollbar.js 도 git 밖으로 나갔고, index.html 은 그 둘을 다 로드한다. build:web 만으로는
+  //  진입 모듈 하나가 빈 채 서빙된다. 종전 기본값 그대로인 행만 올린다(운영자가 고친 값은 그대로 둔다).
+  await pool.query(
+    `UPDATE org_stack_profile SET build_cmd=$1 WHERE id='co-frontend' AND build_cmd='npm run build:web';`,
+    [WEB_BUILD_CMD]);
 
   // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──
   //  연결은 항상 노드→게이트웨이 아웃바운드 WSS(/node/ws) — 노드는 포트를 열지 않는다(단일 정문 유지).

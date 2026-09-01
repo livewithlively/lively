@@ -28,6 +28,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WORK_ROOTS_HEADER } from "./work-roots-header.mjs";
 import { addWindowsUserPath, entrypointHostEffects, hostEffectsAllowed } from "./host-effects.mjs";
+import { HOOK_SCRIPTS, LIB_FILES } from "./kit-manifest.mjs";
 
 const hostEffects = entrypointHostEffects();
 const spawnSync = (...args) => hostEffects.spawnSync(...args);
@@ -60,11 +61,10 @@ function claudeConfigDir(home, env = process.env) {
 const CLAUDE_DIR = claudeConfigDir(HOME);
 // self-update.mjs(#858)는 settings 에 **배선하지 않는다** — 훅이 아니라 session-preload 가 detached 로 띄우는
 //  백그라운드 업데이터다(세션 시작마다 프로세스를 하나 더 띄우지 않기 위함). 파일만 ~/.lively/hooks 에 놓는다.
-// ⚠ harness-registry.mjs 는 실행되는 훅이 아니라 **훅들이 import 하는 모듈**이다. 훅은 이 디렉터리로 평평하게
-//  복사되므로 같은 목록에 있어야 하고, 빠지면 sync-harness-assets 가 ERR_MODULE_NOT_FOUND 로 **통째로 죽는다**
-//  (그러면 조직 자산이 한 개도 안 깔린다 — 게다가 자산 sync 는 조용히 실패하는 게 설계라 아무 신호가 없다).
-//  이 등재 누락은 kit/hooks/harness-registry.test.mjs 가 잡는다.
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "host-effects-port.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
+// ⚠ 목록 자체는 여기 두지 않는다 — kit/setup/kit-manifest.mjs 가 단일 출처다(HOOK_SCRIPTS·LIB_FILES).
+//  발행번들 조립(kit/generator/build-context.mjs)과 배포 후 리프레시(deploy/refresh-member-kits.sh)가
+//  같은 목록을 읽어 가야 하는데, 셸인 리프레시가 예전엔 `kit/hooks/*.mjs` 글롭으로 자체 판단하다가
+//  hooks/ 밖의 공유 모듈을 못 날라 **설치 멤버 전원의 훅을 전멸**시켰다(2026-08-27).
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -889,7 +889,11 @@ function agyHooksJson() {
     lively: {
       // SessionStart 등가 — 매 모델 호출마다 발화하므로 어댑터가 invocationNum==0 만 부수효과를 건다.
       PreInvocation: [{ type: "command", command: agyHookCmd("PreInvocation"), timeout: 75 }],
-      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: agyHookCmd("PreToolUse"), timeout: 25 }] }],
+      //  ⚠ PreToolUse 만 **넉넉히**(#2439) — 대화창 세션에서는 이 훅이 «사람의 답» 을 기다린다
+      //   (헤드리스 agy 는 스스로 못 묻는다 → 우리가 대신 묻고 그 답을 decision 으로 준다).
+      //   ★ 이 값은 **상한**이지 비용이 아니다: 어댑터가 스스로 마감시각을 들고 있어(DEADLINE_MS)
+      //    묻지 않는 세션은 종전대로 20초 안에 끝난다. 그래서 TUI 사용자에겐 아무 변화가 없다.
+      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: agyHookCmd("PreToolUse"), timeout: 600 }] }],
       PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: agyHookCmd("PostToolUse"), timeout: 25 }] }],
       Stop: [{ type: "command", command: agyHookCmd("Stop"), timeout: 40 }],
     },
@@ -1193,10 +1197,13 @@ async function installShared(workRoots) {
   else console.log(`  · ~/.lively/context.md 시드 보류(오프라인/게이트웨이 미응답) — 첫 세션 훅이 채움 · org-name=${orgName}`);
 
   const hooksDir = join(LIVELY, "hooks");
-  const sharedHostEffects = cloneAbs(join("setup", "host-effects.mjs"));
-  if (existsSync(sharedHostEffects)) {
-    mkdirSync(join(LIVELY, "lib"), { recursive: true });
-    copyFileSync(sharedHostEffects, join(LIVELY, "lib", "host-effects.mjs"));
+  // 훅이 hooks/ **밖에서** 끌어 쓰는 공유 모듈 — 훅보다 **먼저** 놓는다(훅만 있고 이게 없으면 전부
+  //  ERR_MODULE_NOT_FOUND 로 죽는다). 목록은 매니페스트 단일 출처(LIB_FILES).
+  for (const f of LIB_FILES) {
+    const src = cloneAbs(join("setup", f.src));
+    if (!existsSync(src)) continue;                       // 구버전 번들 — 훅 설치는 계속한다
+    mkdirSync(join(LIVELY, dirname(f.dest)), { recursive: true });
+    copyFileSync(src, join(LIVELY, f.dest));
   }
   mkdirSync(hooksDir, { recursive: true });
   let missing = 0;

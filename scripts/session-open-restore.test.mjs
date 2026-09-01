@@ -56,19 +56,44 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "②-f 열 때(maybeRestoreOnOpen)와 보다가 죽을 때(onSessionGone) 둘 다 셸에 넘긴다");
 }
 
-// ── ③ 세션 화면(v2) — 멈춘 내 세션은 열자마자 되살린다 ──────────────────────────────
+// ── ③ 세션 화면(v2) — **보기만 해서는 안 되살린다**(#2439) ──────────────────────────
+//  ⚠ 종전 규칙은 «열자마자 되살린다»(#1820)였다. 그 전제는 «이 화면에 온 것 자체가 쓰겠다는 뜻» 인데,
+//   그건 읽는 화면과 일하는 화면이 **갈려 있을 때**만 참이었다. 이제 한 화면이라 «읽으러 왔다» 와
+//   «일하러 왔다» 가 겉으로 구분되지 않는다 — 그러면 읽기만 해도 컨테이너가 뜬다.
+//   그게 이 프로젝트의 첫 요구사항이 지목한 오버헤드다(상민님: "실제 뜨는 시점은 프롬프트를 보낸 시점").
+//  → 되살릴 수 있으면(canRevive) **기다린다.** 말을 걸거나 터미널을 열면 그때 되살아난다.
+//  → 되살릴 수 **없는** 세션은 종전대로 자동 경로를 탄다(기다릴 이유가 없다).
 {
   const views = read("web/v2/views.ts");
   ok(/autoResume:\s*shouldRestoreOnOpen\(/.test(views),
     "③-a renderSession 이 autoResume 판정을 넘긴다");
   const chat = read("web/session-chat.ts");
-  ok(/opts\.autoResume\s*&&\s*!resumeAuto/.test(chat),
-    "③-b 대화창이 autoResume 을 받아 (한 번만) 되살린다");
+  ok(/opts\.autoResume\s*&&\s*!canRevive\(\)\s*&&\s*!resumeAuto/.test(chat),
+    "③-b ★ 되살릴 수 있는 세션은 **열었다고 되살리지 않는다** — 말을 걸 때까지 기다린다");
+  ok(/m\.canRestore\s*&&\s*!canRevive\(\)/.test(chat),
+    "③-b2 프레임이 «박스 없음» 을 알려 온 자리도 같은 규칙(판정이 두 벌이면 한쪽이 먼저 되살린다)");
+  ok(/if \(m === 'term' && canRevive\(\)/.test(chat),
+    "③-b3 ★ 터미널을 여는 것은 «쓰겠다» 다 — 그때는 되살린다(안 그러면 붙을 tmux 가 없는 빈 터미널이 뜬다)");
   ok(/lively-term-gone/.test(chat),
     "③-c 프레임이 보낸 '박스 없음' 신호를 셸이 받아 라우팅까지 쥔다");
   const status = read("web/session-status.ts");
   ok(/export function shouldRestoreOnOpen/.test(status),
     "③-d 판정은 공용 모듈에 있다(화면마다 다른 술어를 쓰지 않게)");
+  // ── #2439 ②③ — 멈춘 세션에 **말을 거는 것만으로** 되살아난다 ──────────────────────
+  //  자동 복원(③-b)이 있어도 이 경로가 필요하다: 자동은 실패하거나(노드 오프라인·좌표 없음), 보이지 않는
+  //  탭이거나, 연쇄 상한에 걸리면 돌지 않는다(#1834). 그때 입력창이 덮여 있으면 그 화면은 **막다른 길**이다.
+  ok(/const canRevive = \(\): boolean =>/.test(chat),
+    "③-g «말을 걸면 되살아날 수 있나» 축이 있다");
+  ok(/if \(canRevive\(\)\) \{\s*\n\s*view\.setFooter\(null\);/.test(chat),
+    "③-h 되살릴 수 있는 세션은 footer 로 입력창을 덮지 않는다(setFooter 는 폼을 숨긴다)");
+  ok(/if \(!canType\(\) && canRevive\(\)\) \{ await reviveWithPrompt\(text\); return; \}/.test(chat),
+    "③-i 멈춘 세션에 보내면 되살리기 경로로 간다");
+  //  ⚠ 순서가 계약이다 — 되살리기 → **말 전달** → 라우팅. 옮겨 간 뒤에 보내면 이 컴포넌트는 destroy 된
+  //   뒤라 실패해도 아무도 모른다. beforeRoute 훅이 그 순서를 강제한다.
+  ok(/if \(beforeRoute\) await beforeRoute\(nextId\);[\s\S]{0,200}?opts\.onResumed\(nextId\)/.test(chat),
+    "③-j 되살린 세션에 말을 넣는 일이 화면 이동보다 먼저다");
+  ok(/rememberFirstPrompt\(newId, text\)/.test(chat) && /export function rememberFirstPrompt/.test(read("web/v2/quick-session.ts")),
+    "③-k 방금 친 말이 옮겨 간 화면에서도 보이게 첫 지시로 등록된다");
   // #1851 — 휴지통에 있는 세션은 열어도 되살리지 않는다(판정표 한 줄). 화면(views.ts)이 trashed 를 판정표에 넘겨야
   //  이 규칙이 실제로 작동한다 — 판정표만 고치고 호출처가 안 넘기면 조용히 무효가 된다.
   ok(/trashed\?:\s*boolean/.test(status) && /!s\.trashed/.test(status),
@@ -78,8 +103,19 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   // 2026-08-26 — 프레임이 "되살릴 수 있다"고 말했으면 **그 말을 이어받기 분기까지 들고 간다**. 목록 행의
   //  restorable 만 보면, 목록이 좌표를 접느라 그 값을 못 받은 세션이 대화록 기반 이어받기로 흘러 빈 새 세션이 된다
   //  (실측: 프로젝트 하나에 「새 세션(원본 기반)」 4개). 신호를 만들어 놓고 안 넘기면 조용히 무효가 되는 자리다.
-  ok(/lively-term-gone[\s\S]{0,400}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
+  //  ⚠ 창을 900자로 잡는다 — 같은 핸들러 안에 #2231(이미 이어진 세션이면 그리로 옮긴다)이 **먼저** 서 있다.
+  //   그 분기가 앞서는 건 의도다(되살리면 같은 대화가 둘이 된다). 창이 좁으면 배선이 멀쩡한데 테스트만 빨개진다.
+  ok(/lively-term-gone[\s\S]{0,900}resumeSession\(\s*null\s*,\s*\{[^}]*canRestore:\s*true/.test(chat),
     "③-g 프레임이 말한 canRestore 를 resumeSession 에 넘긴다");
+  // ★ #2231 — 그 핸들러에서 **이정표(movedTo)가 canRestore 보다 앞**이어야 한다. 순서가 뒤집히면 이미 이어진
+  //  세션을 한 번 더 되살려 같은 대화가 둘로 갈라진다(그리고 옛 화면은 계속 막다른 길에 남는다).
+  {
+    const h = chat.slice(chat.indexOf("lively-term-gone"));
+    const iMoved = h.indexOf("m.movedTo");
+    const iRestore = h.indexOf("m.canRestore");
+    ok(iMoved > 0 && iRestore > 0 && iMoved < iRestore,
+      "③-i 이미 이어진 세션이면 되살리기 전에 그리로 옮긴다(movedTo 가 canRestore 보다 먼저)");
+  }
   ok(/if\s*\(isBox\s*&&\s*\(target\.raw\?\.restorable\s*\|\|\s*hint\?\.canRestore\)\)/.test(chat),
     "③-h 복원 분기가 목록의 restorable **또는** 프레임이 말한 canRestore 를 본다(둘 중 하나면 /restore)");
 }
@@ -112,7 +148,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
 {
   const chat = read("web/session-chat.ts");
   const i = chat.indexOf("async function resumeSession(");
-  const blk = chat.slice(i, i + 1600);
+  const blk = chat.slice(i, i + 2200);   // #2231 로 이 함수에 이정표(movedTo) 처리가 들어와 길어졌다 — 창을 넓힌다
   ok((blk.match(/rememberCreated\(/g) || []).length >= 2,
     "⑤복원·이어받기 둘 다 생성 응답을 created-cache 에 남긴다(새 id 로 옮긴 직후의 '세션을 찾을 수 없어요' 방지)");
 }

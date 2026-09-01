@@ -16,14 +16,14 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync
 import { homedir, hostname } from "node:os";
 import { join, dirname, win32 as pwin, posix as pposix } from "node:path";
 import { createHash } from "node:crypto";
-import { createHostEffects, entrypointHostEffects } from "./host-effects.mjs";
+import { createHostEffects, entrypointHostEffects, mergeWindowsRegistryPath } from "./host-effects.mjs";
 
 // lively.mjs 와 같은 계약(LIVELY_HOME 은 HOME 리다이렉트 — 샌드박스/테스트).
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 
 // ctx 주입 슬롯 — 아래 함수 본문은 lively.mjs 원문 그대로다(이름·들여쓰기 무변경).
-let say, dim, green, yellow, die, has, api, gateway, token, writeLively;
+let say, dim, green, yellow, die, has, api, gateway, token, writeLively, normGw;
 let hostEffects = createHostEffects();
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawnSync = (...args) => hostEffects.spawnSync(...args);
@@ -31,9 +31,11 @@ const spawn = (...args) => hostEffects.spawn(...args);
 const fetch = (...args) => hostEffects.fetch(...args);
 
 export function nodeCommands(ctx) {
-  ({ say, dim, green, yellow, die, has, api, gateway, token, writeLively } = ctx);
+  ({ say, dim, green, yellow, die, has, api, gateway, token, writeLively, normGw } = ctx);
   hostEffects = ctx.hostEffects || entrypointHostEffects();
-  return { cmdNode };
+  //  nodeUnbind·nodeRebindForGateway(#2215)는 로그아웃·로그인이 부른다 — 노드를 '로그인한 테넌트'에 맞춰
+  //  따라가게 하는 두 자리다(종전엔 어느 쪽도 노드를 건드리지 않았다).
+  return { cmdNode, nodeUnbind, nodeRebindForGateway };
 }
 
 // ── 노드(#869) — 이 PC 를 라이블리 노드로 연결(로컬 터미널 원격 관리 + 위탁 워커). ──
@@ -356,7 +358,11 @@ function tmuxHelp() {
 // ── PATH 굽기 (#1541) — env 파일의 PATH 는 pane 안 하네스(claude 등)의 명령 해석 전부를 정한다. ──
 //  로그인 셸의 PATH 를 물어 현재 PATH 와 **합집합**으로 굽는다(순서: 로그인 셸 먼저 — 사용자가 rc 에서 정한
 //  우선순위 보존). 로그인 셸이 실패하면(비대화 환경·이상한 rc) 현재 PATH 그대로 — 종전보다 나빠지지 않는다.
-//  Windows 는 GUI 도 레지스트리(머신+사용자) PATH 를 받으므로 손대지 않는다.
+//  ⚠ Windows 도 **다시 읽는다**(#2172). 종전엔 "GUI 도 레지스트리(머신+사용자) PATH 를 받으므로 손대지 않는다"
+//   였는데, 그 전제는 **기동 시점에만** 참이다 — 프로세스는 그때의 환경 블록을 스냅샷으로 받고, 그 뒤 PATH 가
+//   바뀌어도(하네스를 나중에 깔거나, 오염된 PATH 를 정리하거나) `WM_SETTINGCHANGE` 를 처리하지 않는 Node 는
+//   영원히 모른다. 실측(2026-08-28 hammurabi): 사용자 PATH 를 고쳤는데도 상시구동 중이던 에이전트는 계속 옛
+//   PATH 로 하네스를 못 찾아 `["shell"]` 만 보고했다(런처가 옛 환경을 물려주면 재시작해도 같다).
 /** (순수 — 테스트 seam) 로그인 셸 PATH ∪ 현재 PATH ∪ 필수 항목. 빈 조각·중복 제거, 순서 보존. */
 export function mergePathDirs(loginPath, currentPath, extras, sep) {
   const out = [];
@@ -384,10 +390,54 @@ function loginShellPath() {
   }
   return paths.join(":");
 }
+/** 윈도우 레지스트리 PATH(HKCU·HKLM) — 못 읽으면 null. `reg.exe` 는 System32 동봉이라 빈약한 PATH 에서도 절대경로로 잡힌다. */
+function winRegistryPath(hive, key) {
+  try {
+    const reg = join(process.env.SystemRoot || "C:\\Windows", "System32", "reg.exe");
+    const out = execFileSync(reg, ["query", hive, "/v", key], { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] });
+    // `    Path    REG_EXPAND_SZ    C:\a;C:\b` — 값 이름·타입 뒤의 나머지가 전부 값이다(값에 공백이 흔하다).
+    const m = new RegExp(`^\\s*${key}\\s+REG_(?:EXPAND_)?SZ\\s+(.*)$`, "mi").exec(out);
+    if (!m) return null;
+    // %USERPROFILE% 같은 확장 토큰을 편다 — 안 펴면 그 항목이 통째로 죽는다.
+    return m[1].trim().replace(/%([^%]+)%/g, (whole, name) => process.env[name] ?? whole);
+  } catch { return null; }
+}
 function bakedNodePath() {
-  if (process.platform === "win32") return process.env.PATH || "";
+  if (process.platform === "win32") {
+    // 레지스트리를 다시 읽어 지금 프로세스 PATH 와 합집합(머리말 참조). 둘 다 못 읽으면 종전 그대로.
+    const machine = winRegistryPath("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "Path");
+    const user = winRegistryPath("HKCU\\Environment", "Path");
+    return mergeWindowsRegistryPath(machine, user, process.env.PATH || "");
+  }
   // ~/.lively/bin 은 항상 넣는다 — pane 안에서 `lively` 자신이 잡혀야 안내 문구("lively node …")가 실행 가능하다.
   return mergePathDirs(loginShellPath(), process.env.PATH || "", [join(HOME, ".lively", "bin")], ":");
+}
+
+/**
+ * 저장된 노드 토큰을 **지금 로그인한 게이트웨이에서** 재사용해도 되는가(#2161).
+ *  순수 함수다 — 파일·네트워크를 안 만진다(전 플랫폼에서 도는 테스트 대상: node-token-reuse.test.mjs).
+ *
+ * 왜 이 판정이 따로 필요한가: 노드 토큰은 **그 게이트웨이(테넌트)의 `org_node.token_hash` 와 직접 매칭**돼야
+ *  통과한다(src/node/store.ts authNodeToken). 다른 게이트웨이에는 그 행이 아예 없어 조인이 영원히 비고,
+ *  노드는 /node/ws 에서 말없이 끊긴다 — 실측 2026-08-27, 502 무한 재시도.
+ *  종전 판정은 "파일에 값이 있나" 하나뿐이라 로그아웃 → 다른 게이트웨이 로그인 뒤에도 옛 토큰을 그대로 썼다.
+ *
+ * @param {{token?: string|null, prevGw?: string|null, prevId?: string|null, gw: string, nodeId: string}} inp
+ * @param {(u: string|null|undefined) => string} [norm] 게이트웨이 주소 정규화(기본: 공백만 제거).
+ *   ⚠ 실사용에선 반드시 CLI 의 normGw 를 넘긴다 — 끝슬래시·'/mcp' 차이로 판정이 갈리면 안 된다(단일 출처).
+ * @returns {{reuse: true} | {reuse: false, why: string}}
+ */
+export function nodeTokenReuse(inp, norm) {
+  const n = norm || ((u) => String(u || "").trim());
+  if (!inp.token) return { reuse: false, why: "저장된 노드 토큰이 없습니다" };
+  const prevGw = n(inp.prevGw), gw = n(inp.gw);
+  // 기록이 없으면(구 install.sh 로 깔린 파일 등) 어느 게이트웨이 것인지 알 수 없다 → 모르면 다시 등록한다.
+  //  잘못 재사용하면 '스스로 낫지 않는 502' 가 되고, 다시 등록하면 최악이 왕복 한 번이다. 비대칭이 분명하다.
+  if (prevGw !== gw) return { reuse: false, why: `게이트웨이가 바뀌었습니다(${prevGw || "(기록 없음)"} → ${gw})` };
+  const prevId = String(inp.prevId || "").trim();
+  // 노드 id 기록이 없는 건 구 파일일 뿐이라 그것만으로 버리지 않는다(게이트웨이가 같으면 토큰은 유효하다).
+  if (prevId && prevId !== inp.nodeId) return { reuse: false, why: `노드 id 가 바뀌었습니다(${prevId} → ${inp.nodeId})` };
+  return { reuse: true };
 }
 
 async function cmdNode(rest) {
@@ -403,14 +453,40 @@ async function cmdNode(rest) {
   const tmuxPath = await ensureTmux();
 
   // 1) 노드 토큰 — 로컬에 있으면 재사용, 없으면 등록(중복이면 회전).
+  //  ★ 재사용은 **같은 게이트웨이·같은 노드 id 일 때만** 성립한다(#2161).
+  //   노드 토큰은 그 게이트웨이의 `org_node.token_hash` 와 직접 매칭돼야 통과한다(src/node/store.ts authNodeToken)
+  //   — 다른 게이트웨이(=다른 테넌트)에는 그 행이 아예 없으므로 조인이 영원히 비고, 노드는 /node/ws 에서
+  //   말없이 끊긴다(실측 2026-08-27: 502 무한 재시도).
+  //   종전 판정은 **'파일에 값이 있나' 하나뿐**이라 로그아웃하고 다른 게이트웨이로 로그인해도 옛 토큰을
+  //   그대로 재사용했다(등록을 통째로 건너뛴다). 게다가 바로 아래에서 LIVELY_GATEWAY_URL 만 새 주소로
+  //   덮어써, 파일이 **'새 게이트웨이 + 옛 테넌트 토큰'이라는 스스로 모순된 상태**로 굳었다.
+  //   노드 id 가 바뀐 경우도 같다 — 그 토큰은 다른 노드의 것이다.
   let nodeTok = readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_TOKEN");
+  {
+    const verdict = nodeTokenReuse({
+      token: nodeTok,
+      prevGw: readEnvFile(NODE_ENV_FILE, "LIVELY_GATEWAY_URL"),
+      prevId: readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_ID"),
+      gw, nodeId,
+    }, normGw);
+    if (nodeTok && !verdict.reuse) {
+      say(dim(`· ${verdict.why} — 옛 토큰은 여기서 쓸 수 없어 다시 등록합니다.`));
+      nodeTok = "";
+    }
+  }
   if (!nodeTok) {
     say(dim(`· 노드 등록: ${nodeId}`));
     let r = await api("/api/ui/nodes", { method: "POST", body: { id: nodeId, name: hostname() } }).catch((e) => ({ __err: e }));
     if (r.__err) { // 이미 존재 → 토큰 회전으로 새 토큰 확보(본인 노드여야 통과)
-      r = await api(`/api/ui/nodes/${encodeURIComponent(nodeId)}/rotate`, { method: "POST", body: {} }).catch((e2) => die(`노드 등록/회전 실패 — ${e2.message}`, 1));
+      const e1 = r.__err;
+      r = await api(`/api/ui/nodes/${encodeURIComponent(nodeId)}/rotate`, { method: "POST", body: {} })
+        // 두 오류를 **다 보여준다** — 회전 실패만 보이면 '왜 등록이 먼저 실패했는지'가 사라져, 진짜 원인(권한·주소·테넌트)을 못 짚는다.
+        .catch((e2) => die(`노드 등록/회전 실패 — 등록: ${e1.message} · 회전: ${e2.message}`, 1));
     }
     nodeTok = r.token;
+    // 응답에 토큰이 없으면 여기서 멈춘다 — 종전엔 `LIVELY_NODE_TOKEN=undefined` 가 0600 파일에 굳어,
+    //  그 뒤 모든 재실행이 "토큰이 있다"고 판단해 등록을 건너뛰었다(스스로 낫지 않는 상태).
+    if (!nodeTok || !String(nodeTok).startsWith("lvk_")) die(`노드 등록 응답에 토큰이 없습니다 — 게이트웨이(${normGw(gw)}) 응답을 확인하세요.`, 1);
     say(green(`✓ 노드 '${nodeId}' 등록됨`));
   }
   // 접속정보 env 파일(0600) — foreground 는 spawn env, 데몬은 이 파일을 읽는다.
@@ -959,13 +1035,32 @@ export function nodeProcProbe(platform = process.platform) {
   return { cmd: "pgrep", args: ["-f", "node-agent/agent.mjs"] };
 }
 
-/** 프로브 출력 → 실행 중 개수(순수). pgrep 은 pid 줄, PowerShell 은 숫자 한 줄. */
+/**
+ * 프로브 출력 → 실행 중 개수(순수). pgrep 은 pid 줄, PowerShell 은 숫자 한 줄.
+ *  **읽지 못했으면 `null`(모름)** — 0 이 아니다.
+ *
+ * 왜 null 이 필요한가(#2215 실측 2026-08-28): 종전 계약은 "쓰레기 출력을 0 으로" 였다. 의도는
+ *  «있다» 로 잘못 읽지 않으려는 것이었는데, 그 대가로 «없다» 라고 **확답**해 버렸다. 실제로 윈도우
+ *  제한 계정에서 PowerShell 이 떠도 명령이 실패해 stdout 이 비면(권한·정책) 그게 `0` 이 됐고,
+ *  화면은 게이트웨이가 «연결됨» 이라 보는 노드를 «노드 정지됨» 으로 그렸다.
+ *  세 번째 값이 이미 시스템에 있다(`nodeStatus().running` 은 null 을 낸다) — 파서가 그걸 표현하면 된다.
+ *
+ * 유일한 예외: `pgrep` 의 **exit≠0 + 빈 출력**은 미검출의 확답이라 `0`. (찾았는데 못 셌으면 pid 가 나온다.)
+ *
+ * @returns {number|null} 개수, 또는 못 읽었으면 null
+ */
 export function parseProcCount(platform, stdout, status) {
   const s = String(stdout || "").trim();
-  if (platform === "win32") { const n = Number(s.split(/\r?\n/).filter(Boolean).pop()); return Number.isFinite(n) ? n : 0; }
-  // pgrep 은 못 찾으면 exit 1 + 빈 출력 — 그걸 '모름' 이 아니라 0 으로 읽는다(찾았는데 못 셌으면 pid 가 나온다).
-  if (status !== 0 && !s) return 0;
-  return s.split(/\r?\n/).filter((l) => /^\d+$/.test(l.trim())).length;
+  if (platform === "win32") {
+    const last = s.split(/\r?\n/).filter(Boolean).pop();
+    if (last === undefined) return null;                 // 빈 출력 = 명령이 아무것도 못 냈다
+    const n = Number(last);
+    return Number.isFinite(n) ? n : null;                // 숫자가 아니면 못 읽은 것
+  }
+  if (status !== 0 && !s) return 0;                      // pgrep 미검출의 확답
+  if (!s) return null;                                   // exit 0 인데 빈 출력 = 이상
+  const pids = s.split(/\r?\n/).filter((l) => /^\d+$/.test(l.trim()));
+  return pids.length ? pids.length : null;               // pid 줄이 하나도 없다 = 못 읽은 것
 }
 
 /** 노드 상태 실측 — 앱·`status --json` 이 쓰는 단일 통로. 못 재는 축은 null(모르는 걸 false 로 눕히지 않는다). */
@@ -1020,7 +1115,9 @@ export function nodeStatus() {
     const probe = nodeProcProbe();
     const r = spawnSync(probe.cmd, probe.args, { encoding: "utf8", timeout: 8000 });
     // 프로브 자체를 못 돌렸으면(명령 없음 등) **모름(null)** 이다 — 0 으로 적으면 "정지됨" 이라고 거짓말한다.
-    out.running = r.error ? null : parseProcCount(process.platform, r.stdout, r.status) > 0;
+    //  파서도 같은 규율을 지킨다(#2215): 출력을 못 읽으면 null 을 내므로 그대로 실어 보낸다.
+    const cnt = r.error ? null : parseProcCount(process.platform, r.stdout, r.status);
+    out.running = cnt === null ? null : cnt > 0;
   } catch { out.running = null; }
   return out;
 }
@@ -1029,7 +1126,77 @@ function winTaskExists() {
   catch { return false; }
 }
 
-function nodeStop() {
+/**
+ * 로그아웃이 부르는 노드 정리(#2215) — **서버 토큰 회수 + 로컬 접속정보 삭제 + 데몬 중지.**
+ *
+ * 왜: 종전 `lively logout` 은 `~/.lively/token` 파일 하나만 지웠다. 노드 토큰은 그와 **별개 토큰**이라
+ *  로그아웃과 무관하게 유효했고, 그래서 로그아웃한 PC 가 **옛 테넌트에 계속 붙어 세션을 서빙했다.**
+ *  기기 회수·퇴사·워크스페이스 이동에서 그건 그대로 구멍이다.
+ *
+ * 순서가 곧 안전성이다:
+ *  ① 서버 회수를 **로컬 토큰이 아직 살아 있을 때** 한다(이 호출에 그 토큰이 필요하다).
+ *  ② 로컬 접속정보를 지운다 — 데몬 중지보다 **먼저**. 중지가 실패해도 그 기계는 다음 시작에서
+ *     반드시 재등록을 타고, 살아 있는 에이전트는 토큰이 죽어 어차피 붙지 못한다.
+ *  ③ 데몬 중지(soft — 여기서 죽으면 로그아웃이 안 끝난다).
+ *
+ * 네트워크가 없어도 로그아웃은 끝난다 — ① 이 실패하면 **경고만** 하고 ②③ 을 계속한다.
+ */
+async function nodeUnbind() {
+  const st = nodeStatus();
+  if (!st.registered) return { unbound: false, why: "등록된 노드 없음" };
+  const id = st.id || "";
+  let revoked = false;
+  if (id && gateway() && token()) {
+    try {
+      await api(`/api/ui/nodes/${encodeURIComponent(id)}/revoke-token`, { method: "POST", body: {} });
+      revoked = true;
+    } catch (e) {
+      say(yellow(`⚠ 서버에서 노드 토큰을 회수하지 못했습니다 — ${e.message}`));
+      say(dim("   그 토큰은 아직 서버에서 유효합니다. 관리탭 ▸ 노드에서 회전하거나 노드를 삭제해 정리하세요."));
+    }
+  }
+  rmSync(NODE_ENV_FILE, { force: true });
+  if (st.daemon || st.running) nodeStop({ soft: true });
+  say(green(`✅ 노드 '${id || "(이름 없음)"}' 연결 해제${revoked ? " — 서버 토큰도 회수했습니다" : ""}`));
+  return { unbound: true, revoked, id };
+}
+
+/**
+ * 로그인 뒤 노드를 **지금 로그인한 게이트웨이로 다시 맨다**(#2215).
+ *
+ * 왜: 종전 `afterLogin` 은 MCP 만 다시 구웠다(`registerClaudeMcp`). 노드는 옛 게이트웨이·옛 토큰 그대로라,
+ *  워크스페이스를 옮겨도 그 PC 는 여전히 **이전 테넌트의 노드**였다 — 새 워크스페이스에서는 세션을 못 열고,
+ *  옛 워크스페이스에는 계속 붙어 있는 최악의 조합이다.
+ *
+ * ⚠ 옛 게이트웨이의 토큰은 여기서 **회수하지 못한다** — 그 서버에 칠 자격이 이미 없기 때문이다(방금 새 곳에
+ *  로그인했다). 회수는 로그아웃 경로(nodeUnbind)의 몫이고, 여기서는 로컬 접속정보를 버려 **다음 시작이
+ *  반드시 재등록을 타게** 한다. 그래서 로그아웃 → 로그인 순서가 가장 깨끗하다.
+ *
+ * 돌고 있던 노드만 다시 세운다 — 로그인 한 번이 꺼져 있던 노드를 켜지는 않는다.
+ */
+async function nodeRebindForGateway(newGw) {
+  const st = nodeStatus();
+  if (!st.registered) return { rebound: false, why: "등록된 노드 없음" };
+  const prev = normGw(st.gateway || ""), next = normGw(newGw || "");
+  if (prev && prev === next) return { rebound: false, why: "같은 게이트웨이" };
+  const wasUp = !!(st.daemon || st.running);
+  say(dim(`· 이 PC 의 노드가 이전 게이트웨이(${prev || "(기록 없음)"})에 매여 있습니다 — 지금 로그인한 곳으로 옮깁니다.`));
+  if (wasUp) nodeStop({ soft: true });
+  rmSync(NODE_ENV_FILE, { force: true });
+  if (!wasUp) {
+    say(dim("   노드가 돌고 있지 않아 접속정보만 정리했습니다 — `lively node --daemon` 으로 켜면 여기로 등록됩니다."));
+    return { rebound: false, cleared: true };
+  }
+  await cmdNode(["--daemon"]);
+  return { rebound: true, id: st.id };
+}
+
+/**
+ * 데몬 해제. `soft` 면 잔여 프로세스를 못 죽여도 **die 하지 않는다**(#2215).
+ *  왜 필요한가: 로그아웃·재바인딩이 이 함수를 부르는데, 거기서 die(=프로세스 종료)가 나면
+ *  **그 뒤에 와야 할 정리(토큰 파일 삭제)가 통째로 안 돈다.** 로그아웃은 어떤 상태에서도 끝나야 한다.
+ */
+function nodeStop(o = {}) {
   if (process.platform === "darwin") {
     spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, PLIST_PATH], { stdio: "ignore" });
     rmSync(PLIST_PATH, { force: true });
@@ -1058,7 +1225,10 @@ function nodeStop() {
     winKillAgentProcs();
     // ★ 죽였는지 **다시 센다** — 못 죽였는데 ✅ 를 찍으면 앱은 계속 "실행 중" 인데 사람은 뭘 해야 할지 모른다(실측).
     const residual = winResidualAgentProcs();
-    if (residual.pids.length) die(stopResidualNote(residual), 3);
+    if (residual.pids.length) {
+      if (!o.soft) die(stopResidualNote(residual), 3);
+      say(yellow(stopResidualNote(residual)));
+    }
     say(green(`✅ 노드 데몬 해제(${hadTask ? "작업 스케줄러" : hadVbs ? "시작프로그램" : "등록 없음 — 잔여 프로세스만 회수"})`));
   } else { die(`미지원 OS: ${process.platform}`, 1); }
   say(dim("   (노드 등록·번들은 남습니다 — 완전 제거는 웹/REST 로 노드 삭제)"));

@@ -20,12 +20,29 @@ import path from "node:path";
 import { CodexAppServer, type AppServerTransport, type ApprovalDecision, type ApprovalRequest } from "./codex-app-server.js";
 import { detachedStartSh, portAlive, sessionPort, spawnDetachedLocal, waitPort, wsTransport } from "./codex-app-server-daemon.js";
 import { spawn } from "node:child_process";
-import { memberSh, memberSpawnArgv } from "../terminal-member-fs.js";
+import { memberShOut, memberSpawnArgv, memberWriteFile } from "../terminal-member-fs.js";   // 파일 op·멤버 자리 실행
+import { MEMBER_HOME_BASE } from "../terminal-transcript.js";
+import { SUPERVISOR_JS, sessionSockName, supervisorStartSh } from "./codex-as-supervisor.js";
+import { sessionExecConfigured, sessionSpawnArgv } from "../session-exec.js";   // 프로세스는 세션 경계
 import type { ChatLine } from "./chat-line.js";
+import { logger } from "../../log.js";
+import { codexAppServerEvent } from "./codex-stream.js";              // #2439 — 하네스 무관 어휘로도 흘린다
+import { emitSessionEvent, settleAll as settleBusAsks } from "./runtime-bus.js";
 
 /** 이 세션에서는 app-server 경로를 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
 export class CodexChatUnavailable extends Error {
-  constructor(message: string, readonly cause?: unknown) { super(message); this.name = "CodexChatUnavailable"; }
+  /**
+   * **한 글자도 안 갔나**(#2169). 기본 true — 이 오류는 대부분 서버를 못 띄운 자리에서 난다.
+   *
+   *  왜 이 구분이 필요한가: 호출자가 큐(아웃박스)라면 "되돌려도 되는 실패"와 "이미 갔을 수 있는 실패"의
+   *  결말이 정반대다. 앞의 것은 다시 보내야 지시가 안 사라지고, 뒤의 것은 다시 보내면 같은 말이 두 번 간다.
+   *  종전엔 둘이 한 타입이라 호출자가 구별할 길이 없었다 — #2154 의 `SendKeysNotStarted` 와 같은 축이다.
+   *  `startTurn` 이 던진 경우만 false 다(요청이 서버에 닿은 뒤 응답이 실패했을 수 있다).
+   */
+  readonly notStarted: boolean;
+  constructor(message: string, readonly cause?: unknown, notStarted = true) {
+    super(message); this.name = "CodexChatUnavailable"; this.notStarted = notStarted;
+  }
 }
 
 export interface CodexChatOpts {
@@ -91,6 +108,15 @@ function emit(sessionId: string, e: ChatEvent): void {
 }
 
 /** 아직 답을 기다리는 승인들(화면이 새로 붙었을 때 되살린다 — 새로고침에 승인이 사라지면 턴이 영영 선다). */
+/**
+ * #2439 — 이 세션의 codex 런타임이 끝났다: **새 버스의 대기도 함께 마감**한다.
+ *  기존 승인(pendings)은 이 파일이 TTL 로 닫지만, 버스 쪽 대기는 그 규율 밖이다.
+ *  통로가 둘이어도 «답 없이 매달린 요청은 없다» 는 불변식은 하나여야 한다.
+ */
+export function settleCodexBusAsks(sessionId: string, reason: string): number {
+  return settleBusAsks(sessionId, reason);
+}
+
 export function pendingApprovals(sessionId: string): Array<{ id: string; title: string; detail: string; kindHint: string }> {
   return [...(pendings.get(sessionId)?.values() ?? [])].map((p) => ({ id: p.id, title: p.title, detail: p.detail, kindHint: p.kindHint }));
 }
@@ -160,6 +186,21 @@ function pretty(v: unknown): string {
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 
+/**
+ * 이 resume 실패가 **'지킬 대화가 없음'** 인가(=새로 시작해도 잃을 것이 없다).
+ *  두 갈래를 반드시 갈라야 한다:
+ *   · 남이 쥐고 있다(`active writer`·`conflict`) → 그 대화는 **살아 있다**. 새로 파면 사람이 보던 것과
+ *     다른 대화가 열린다 — 절대 안 된다.
+ *   · 파일이 비었다·없다·못 읽는다 → 이어 붙일 대화가 애초에 없다. 여기서 막으면 그 세션은 영영
+ *     아웃박스로만 돌고 사람은 되돌릴 방법이 없다.
+ *  ⚠ 좁게 잡는다 — 모르는 실패는 **보수적으로**(덮지 않는다) 다룬다.
+ */
+function isGoneThread(e: unknown): boolean {
+  const m = msg(e);
+  if (/active writer|conflict/i.test(m)) return false;        // 살아 있는 대화 — 손대지 않는다
+  return /is empty|not found|no such file|failed to read (session metadata|thread)/i.test(m);
+}
+
 const sessions = new Map<string, Entry>();
 /** 같은 세션에 대한 ensure 가 겹쳐도 서버를 두 개 띄우지 않는다(둘째가 첫째의 writer 락에 걸린다). */
 const starting = new Map<string, Promise<Entry>>();
@@ -190,16 +231,42 @@ export async function ensureCodexChat(o: CodexChatOpts): Promise<{ threadId: str
  */
 async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
   const port = sessionPort(o.sessionId);
-  if (o.osUser) {
-    // ── 격리·매니지드: 서버는 **그 멤버의 실행 환경(세션 컨테이너)** 안에서 detached 로 돈다. ──
-    //  게이트웨이는 그 컨테이너의 loopback 에 직접 못 닿으므로, 중계로 stdio 다리를 하나 놓아 붙는다.
-    //  다리는 게이트웨이가 죽으면 같이 죽지만 **서버는 남는다** — 그게 이 구조의 요점이다.
+  // ── 매니지드: 서버는 **그 세션의 컨테이너** 안에서 detached 로 돈다(#2055 P3). ──
+  //  ★ 멤버 경계(memberSpawnArgv)가 아니라 **세션 경계**다. 전자는 tmux 컨테이너로 들어가는데
+  //   거기는 테넌트의 모든 멤버가 공유하고 `HOME=/` 이라 codex 가 자격을 못 찾는다(실측, session-exec.ts 머리말).
+  //  게이트웨이는 그 컨테이너의 loopback 에 직접 못 닿으므로, 중계로 stdio 다리를 하나 놓아 붙는다.
+  //  다리는 게이트웨이가 죽으면 같이 죽지만 **서버는 남는다** — 그게 이 구조의 요점이다.
+  if (sessionExecConfigured()) {
     const log = `$HOME/.codex/lively-app-server-${o.sessionId}.log`;
-    const out = await memberSh(o.osUser, detachedStartSh(port, log, sessionEnv(o.sessionId))).catch((e: unknown) => {
+    const out = await sessionSh(o.sessionId, detachedStartSh(port, log, sessionEnv(o.sessionId))).catch((e: unknown) => {
       throw new CodexChatUnavailable(`세션 컨테이너에서 codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
     });
     if (!/started|already/.test(String(out ?? ""))) throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
-    return bridgeTransport(o.osUser, port);
+    return bridgeTransport(o.sessionId, port);
+  }
+  // ── 격리 리눅스 박스(#524): 멤버 uid 로 띄우고 **유닉스 소켓(0600)** 으로만 잇는다. ──
+  //  포트를 쓰지 않는 이유와 codex 의 daemon/proxy 를 못 쓰는 이유는 codex-as-supervisor.ts 머리말이 정본이다.
+  //  요점만: loopback 포트는 uid 를 안 가려서 **같은 박스의 다른 멤버가 남의 대화에 붙을 수 있다**.
+  //  0600 소켓이면 그 자체로 경계가 서므로, «켤 때 동의를 받는 노브» 없이 대화 UI 를 기본으로 둘 수 있다.
+  //  게이트웨이는 소켓을 직접 열지 않는다(다른 uid 라 못 연다) — 멤버 자리에서 도는 `connect` 자식의
+  //  stdio 로만 말한다. 매니지드가 컨테이너 중계로 하는 것과 같은 모양이다.
+  if (o.osUser) {
+    const home = `${MEMBER_HOME_BASE}/${o.osUser}`;
+    const script = `${home}/.codex/lively-as-supervisor.cjs`;
+    const sock = `${home}/.codex/${sessionSockName(o.sessionId)}`;
+    const log = `${home}/.codex/lively-app-server-${o.sessionId}.log`;
+    // 감독자 원문을 멤버 소유로 심는다(멱등). 0700 — 남이 읽고 흉내 낼 이유가 없다.
+    await memberWriteFile(o.osUser, script, SUPERVISOR_JS, 0o700).catch((e: unknown) => {
+      throw new CodexChatUnavailable(`멤버 자리(${o.osUser})에 app-server 감독자를 심지 못했습니다 — ${msg(e)}`, e);
+    });
+    const out = await memberShOut(o.osUser, supervisorStartSh({ script, sock, log, env: sessionEnv(o.sessionId) }))
+      .catch((e: unknown) => {
+        throw new CodexChatUnavailable(`멤버 자리(${o.osUser})에서 codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
+      });
+    if (!/started|already/.test(String(out ?? ""))) {
+      throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
+    }
+    return childStdioTransport(memberSpawnArgv(o.osUser, ["node", script, "connect", sock]));
   }
   // ── 로컬(비격리·dev): detached + 로그파일. 이미 그 포트에 살아 있으면 그대로 붙는다. ──
   if (!(await portAlive(port))) {
@@ -218,12 +285,40 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
   return wsTransport(`ws://127.0.0.1:${port}`);
 }
 
-/** 컨테이너 안 ws 포트에 붙는 stdio 다리 — 중계(docker exec) 한 겹 위에 줄 단위 전송을 얹는다. */
-function bridgeTransport(osUser: string, port: number): AppServerTransport {
-  const BRIDGE = `const n=require("net");const s=n.connect(${port},"127.0.0.1");` +
-    `s.on("error",e=>{process.stderr.write(String(e.message));process.exit(1)});` +
-    `process.stdin.pipe(s);s.pipe(process.stdout);s.on("close",()=>process.exit(0));`;
-  const argv = memberSpawnArgv(osUser, ["node", "-e", BRIDGE]);
+/**
+ * 세션 컨테이너 안 ws 포트에 붙는 stdio 다리 — 중계(docker exec hijack) 한 겹 위에 줄 단위 전송을 얹는다.
+ *
+ *  ★ **WebSocket 클라이언트여야 한다.** `codex app-server --listen ws://…` 는 이름 그대로 WebSocket 을
+ *   말한다 — 생 TCP 로 붙으면 서버가 `HTTP/1.1 400 Bad Request` 를 돌려주고 끝난다(실측 2026-08-26,
+ *   매니지드 실박스에서 **롤 전에** 잡았다). 셀프호스트 경로는 처음부터 wsTransport(진짜 ws 클라이언트)라
+ *   멀쩡했고 이 다리만 생 net.connect 였다 — 매니지드를 켠 적이 없어 아무도 안 밟았을 뿐이다.
+ *
+ *  왜 굳이 포트를 거치나(그냥 `codex app-server` 를 stdio 로 돌리면 다리도 포트도 필요 없다):
+ *   그러면 서버가 이 exec 의 **자식**이라 게이트웨이가 재기동되면 같이 죽는다 — 돌던 턴이 통째로
+ *   유실되는 그 회귀다(#2055 실측). 포트에 띄워 두면 다리만 끊기고 서버는 남아 턴을 마치고 답을 쓴다.
+ *
+ *  ⚠ 노드 22 의 전역 WebSocket 을 쓴다(테넌트 이미지 node v22.23.2 — 실측 확인).
+ *   메시지는 JSONL 이라 개행을 보장해 내보낸다(받는 쪽이 줄 단위로 자른다).
+ */
+function bridgeTransport(sessionId: string, port: number): AppServerTransport {
+  const BRIDGE = [
+    `const ws=new WebSocket("ws://127.0.0.1:${port}");`,
+    `let q=[],open=false;`,
+    `ws.onopen=()=>{open=true;for(const m of q.splice(0))ws.send(m);};`,
+    `ws.onmessage=e=>{const d=String(e.data);process.stdout.write(d.endsWith("\\n")?d:d+"\\n");};`,
+    `ws.onerror=()=>{};`,
+    `ws.onclose=()=>process.exit(0);`,
+    `let buf="";process.stdin.on("data",c=>{buf+=c;let i;while((i=buf.indexOf("\\n"))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;if(open)ws.send(l);else q.push(l);}});`,
+  ].join("");
+  return childStdioTransport(sessionSpawnArgv(sessionId, ["node", "-e", BRIDGE]));
+}
+
+/**
+ * 자식 프로세스의 stdio 에 줄 단위 전송을 얹는다 — **다리의 공통 몸통**.
+ *  매니지드(세션 컨테이너 안 ws 다리)와 격리(멤버 자리 유닉스 소켓 다리)가 같은 몸통을 쓴다:
+ *  둘 다 «서버는 남고 다리만 끊긴다» 가 핵심이라 수명·종료 처리가 같아야 한다.
+ */
+function childStdioTransport(argv: string[]): AppServerTransport {
   const p = spawn(argv[0], argv.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
   let buf = "";
   let onLineCb: ((l: string) => void) | null = null;
@@ -245,6 +340,23 @@ function bridgeTransport(osUser: string, port: number): AppServerTransport {
   };
 }
 
+/**
+ * 세션 컨테이너 안에서 셸 한 줄을 돌리고 stdout 을 돌려준다(짧은 명령용 — 기동 신호를 읽는다).
+ *  ⚠ stdin 을 **닫는다**: 이건 요청-응답이다. 장수 양방향은 bridgeTransport 가 따로 한다.
+ */
+function sessionSh(sessionId: string, script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const argv = sessionSpawnArgv(sessionId, ["sh", "-c", script]);
+    if (!argv.length) return reject(new Error("세션 경계 중계가 설정되지 않았습니다"));
+    const p = spawn(argv[0], argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+    let out = ""; let err = "";
+    p.stdout?.on("data", (c: Buffer) => { out += c.toString("utf8"); });
+    p.stderr?.on("data", (c: Buffer) => { err = (err + c.toString("utf8")).slice(-500); });
+    p.on("error", reject);
+    p.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.trim() || `세션 exec 종료코드 ${code}`))));
+  });
+}
+
 async function start(o: CodexChatOpts): Promise<Entry> {
   let server: CodexAppServer;
   try {
@@ -256,6 +368,22 @@ async function start(o: CodexChatOpts): Promise<Entry> {
       // 승인은 **사람에게 물어본다**. 정책을 명시로 준 호출자(리브 같은 자동 경로)는 그쪽이 이긴다.
       onApproval: o.onApproval ?? ((req) => askHuman(o.sessionId, req)),
       onNotify: (method, params) => {
+        //  #2439 — **같은 원문을 새 어휘로도 흘린다**(작업 도크·상태 통로가 그걸 그린다).
+        //   기존 emit 은 한 줄도 안 바꾼다: 저건 codex 낱말을 그대로 나르는 화면(session-codex-live)의
+        //   계약이고, 이건 하네스 무관 어휘다. 하나로 합치려면 그 화면까지 같이 옮겨야 하는데,
+        //   **매니지드 프로덕션에서 도는 것을 리팩터와 함께 흔들지 않는다.** 두 통로는 나중에 합친다.
+        //   ⚠ 번역이 던져도 여기서 삼킨다 — 새 어휘의 버그가 도는 codex 세션을 멈추게 하면 안 된다.
+        //  ⚠ 이 파일은 **노드 에이전트 번들에 들어간다** — 그래서 새로 무는 모듈은 허용 목록에 올려야 한다
+        //   (`scripts/node-agent-allowed-modules.json`, #2165 의 경계 가드가 실제로 이걸 잡았다).
+        //   셋 다 순수 모듈이라(프로세스·자격·DB 무의존) 그 번들에 실려도 안전하다 —
+        //   ⚠ 지연 import 로 피하려 해 봤지만 **안 된다**: esbuild 는 outfile 하나면 동적 import 도 인라인한다
+        //   (그 테스트 머리말이 실측으로 못박아 둔 사실이다). 유일한 길은 «모듈을 가르거나 목록에 올리거나» 다.
+        try {
+          const ev = codexAppServerEvent({ method, params });
+          if (ev) emitSessionEvent(o.sessionId, ev);
+        } catch (err) {
+          logger.warn({ sessionId: o.sessionId, method, err: (err as Error)?.message }, "codex → SessionEvent 번역 실패(무시)");
+        }
         if (method === "turn/started") { mark(o.sessionId, true); emit(o.sessionId, { kind: "status", running: true }); }
         else if (method === "turn/completed") { mark(o.sessionId, false); emit(o.sessionId, { kind: "status", running: false }); }
         else if (method === "thread/tokenUsage/updated") {
@@ -274,11 +402,25 @@ async function start(o: CodexChatOpts): Promise<Entry> {
 
   let threadId = "";
   try {
-    // 이어 열기를 먼저 시도한다. 실패해도 **새 스레드로 폴백하지 않는다** — 그 실패의 대부분은
+    // 이어 열기를 먼저 시도한다. 실패해도 **함부로 새 스레드로 덮지 않는다** — 그 실패의 대부분은
     //  'TUI 가 그 스레드를 쥐고 있다'이고, 그때 새 스레드를 파면 사람이 보던 대화와 다른 대화가 열린다.
-    threadId = o.threadId
-      ? (await server.resumeThread(o.threadId)).threadId
-      : (await server.startThread({ cwd: o.cwd, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox })).threadId;
+    //  ★ 단, **읽을 대화가 아예 없는** 실패는 다르다(아래 isGoneThread) — 지킬 것이 없는데도 막으면
+    //   그 세션은 영영 아웃박스로만 돌게 된다(회복 불가). 실측 2026-08-26 매니지드 e2e:
+    //     `rollout at …/rollout-….jsonl is empty` → 대화가 영영 안 열림.
+    //   프로덕션에도 같은 길이 있다: 대화 파일이 지워지거나 잘리면 그 세션이 그대로 막힌다.
+    const startNew = (): Promise<{ threadId: string }> =>
+      server.startThread({ cwd: o.cwd, approvalPolicy: o.approvalPolicy, sandbox: o.sandbox });
+    if (!o.threadId) {
+      threadId = (await startNew()).threadId;
+    } else {
+      try {
+        threadId = (await server.resumeThread(o.threadId)).threadId;
+      } catch (e) {
+        if (!isGoneThread(e)) throw e;                // 남이 쥔 대화 — 덮지 않는다(그쪽이 정본이다)
+        console.warn(`[codex-chat] 이어 열 대화가 비었거나 없다(${o.threadId}) — 새 대화로 시작한다: ${msg(e)}`);
+        threadId = (await startNew()).threadId;
+      }
+    }
     if (!threadId) throw new Error("thread id 를 받지 못했습니다");
   } catch (e) {
     server.close();
@@ -321,8 +463,10 @@ export async function sendCodexChat(o: CodexChatOpts & { text: string }): Promis
     return { threadId: e.threadId };
   } catch (err) {
     // 보내기가 실패하면 그 서버는 못 믿는다 — 지우고 폴백시킨다(다음 호출이 새로 띄운다).
+    //  ⚠ notStarted=false — 요청이 서버에 닿은 **뒤** 응답이 실패했을 수 있다. 큐가 이걸 되돌리면
+    //   같은 말이 두 번 갈 수 있으므로, 여기서만 '되돌리면 안 된다'고 말한다(#2169).
     dropSession(o.sessionId);
-    throw new CodexChatUnavailable(`codex 에 말을 전하지 못했습니다 — ${msg(err)}`, err);
+    throw new CodexChatUnavailable(`codex 에 말을 전하지 못했습니다 — ${msg(err)}`, err, false);
   }
 }
 
@@ -346,16 +490,19 @@ export function releaseCodexChat(sessionId: string): { threadId: string } | null
   try { e.server.close(); } catch { /* 이미 닫혔다 */ }
   // ★ 서버 **프로세스**까지 내린다 — 연결만 끊으면 writer 락이 안 풀려 TUI 가 그 대화를 못 연다(실측).
   //  이제 서버는 게이트웨이 자식이 아니라 별도 프로세스라, 종료를 명시적으로 시켜야 한다.
-  void stopServer(sessionId, e.osUser);
+  void stopServer(sessionId);
   return { threadId: e.threadId };
 }
 
-/** 그 세션의 app-server 프로세스를 내린다(터미널 인계용). 실패는 삼킨다 — 인계 안내는 이미 나갔다. */
-async function stopServer(sessionId: string, osUser: string | null): Promise<void> {
+/**
+ * 그 세션의 app-server 프로세스를 내린다(터미널 인계용). 실패는 삼킨다 — 인계 안내는 이미 나갔다.
+ *  ⚠ **세션 경계**로 죽인다 — 그 프로세스는 세션 컨테이너 안에 있다(멤버 경계는 tmux 컨테이너라 거기 없다).
+ */
+async function stopServer(sessionId: string): Promise<void> {
   const port = sessionPort(sessionId);
   const sh = `pids=$(pgrep -f "app-server --listen ws://127.0.0.1:${port}" 2>/dev/null || true); [ -n "$pids" ] && kill $pids 2>/dev/null; echo stopped`;
   try {
-    if (osUser) await memberSh(osUser, sh);
+    if (sessionExecConfigured()) await sessionSh(sessionId, sh);
     else await new Promise<void>((resolve) => {
       const p = spawn("sh", ["-c", sh], { stdio: "ignore" });
       p.on("exit", () => resolve()); p.on("error", () => resolve());
@@ -444,7 +591,9 @@ export async function rolloutPath(osUser: string | null, threadId: string): Prom
   if (!/^[A-Za-z0-9-]{8,64}$/.test(threadId)) return "";
   const sh = findRolloutSh(threadId);
   try {
-    if (osUser) return String(await memberSh(osUser, sh) ?? "").trim().split("\n")[0] ?? "";
+    // ⚠ memberSh 가 아니라 memberShOut 이다 — memberSh 는 stdout 을 버리고 void 를 돌려줘서, 여기서 쓰면
+    //  **항상 빈 경로**가 나온다(실측 2026-08-27: 격리·매니지드에서 화면이 답 파일을 못 찾던 원인).
+    if (osUser) return String(await memberShOut(osUser, sh)).trim().split("\n")[0] ?? "";
     return await new Promise<string>((resolve) => {
       const p = spawn("sh", ["-c", sh], { stdio: ["ignore", "pipe", "ignore"] });
       let out = "";

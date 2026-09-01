@@ -13,9 +13,10 @@ import {
   NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
-import { authNodeToken, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
+import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
+import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
-import { sharesGatewayTmux } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate } from "./self-node.js";
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
 
@@ -41,6 +42,9 @@ interface NodeConn {
   nextChan: number;
   chans: Map<number, { browser: WebSocket; opened: boolean }>;
   lastTouch: number;
+  // 이 연결이 **언제 붙었나**(#2172) — '가장 최근에 켠 내 컴퓨터'를 새 세션의 기본 실행 노드로 고르기 위한 근거.
+  //  last_seen(60s 스로틀)·상태 push(3s)는 온라인인 동안 계속 갱신돼 노드끼리 구분이 안 된다 — 필요한 건 '언제부터' 다.
+  connectedAt: number;
   hasDocker: boolean;
   // 이 노드가 실제로 할 수 있는 op(#905 C4). hello 전에는 **기준선으로 시작한다** — hello 는 연결 직후 오지만
   //  그 사이 도착한 req 를 "미지원"으로 오판해 떨구면 안 되기 때문(구 노드도 기준선은 전부 한다).
@@ -102,11 +106,15 @@ export async function hydrateNodeStates(): Promise<number> {
     n++;
   }
   logger.info({ nodes: n, sessions: rows.reduce((a, r) => a + r.sessions.length, 0) }, "노드 세션 스냅샷 복구(정본 org_node_state)");
+  // 복구한 스냅샷으로 **그 자리에서** 자기노드를 판정한다(#2172). 종전엔 판정이 노드의 라이브 push 에만
+  //  달려 있어서, 부팅~첫 push 사이에 게이트웨이 자신이 세션 생성 목록에 노출됐다. 그 근거(세션 목록)는
+  //  방금 정본에서 읽어 왔으니 기다릴 이유가 없다. 비치명 — 못 해도 다음 push 가 다시 본다.
+  await probeSelfNodes();
   return n;
 }
 let heartbeat: NodeJS.Timeout | null = null;
 
-export interface NodePublic { id: string; name: string; kind: string; owner: string; online: boolean; lastStateTs: number | null; sessions: number }
+export interface NodePublic { id: string; name: string; kind: string; owner: string; online: boolean; lastStateTs: number | null; sessions: number; connectedAt: number | null }
 
 // 관리/생성폼용 노드 현황(연결 관점) — DB 목록과 조인은 라우트가(여긴 라이브 연결만 안다).
 export function liveNodes(): NodePublic[] {
@@ -114,12 +122,12 @@ export function liveNodes(): NodePublic[] {
   const seen = new Set<string>();
   for (const [id, c] of inScope(conns)) {
     const st = states.get(keyOf(id));
-    out.push({ id, name: c.node.name, kind: c.node.kind, owner: c.node.owner_member, online: true, lastStateTs: st?.ts ?? null, sessions: st?.sessions.length ?? 0 });
+    out.push({ id, name: c.node.name, kind: c.node.kind, owner: c.node.owner_member, online: true, lastStateTs: st?.ts ?? null, sessions: st?.sessions.length ?? 0, connectedAt: c.connectedAt });
     seen.add(id);
   }
   for (const [id, st] of inScope(states)) {
     if (seen.has(id)) continue;
-    out.push({ id, name: st.name, kind: st.kind, owner: st.owner, online: false, lastStateTs: st.ts, sessions: st.sessions.length });
+    out.push({ id, name: st.name, kind: st.kind, owner: st.owner, online: false, lastStateTs: st.ts, sessions: st.sessions.length, connectedAt: null });
   }
   return out;
 }
@@ -148,8 +156,18 @@ const selfNodes = new Set<string>();          // states 와 같은 스코프 키
 const SELF_PROBE_MS = 30_000;
 let selfProbeAt = 0;
 let selfProbing = false;
+/** 지금 states 에 있는 것들을 판정 후보 형태로 — 순수 판정(hasSelfProbeCandidate)이 쓸 최소 형태만 넘긴다. */
+function* selfProbeCandidates(): Generator<{ key: string; sessionCount: number }> {
+  for (const [k, st] of states) yield { key: k, sessionCount: st.sessions.length };
+}
 async function probeSelfNodes(): Promise<void> {
-  if (selfProbing || Date.now() - selfProbeAt < SELF_PROBE_MS) return;
+  if (selfProbing) return;
+  // ⚠ 순서가 중요하다 — **스로틀보다 먼저** 본다. 판정할 후보가 없으면 tmux 를 묻지도, 백오프를 쓰지도 않고
+  //  물러난다. 부팅 직후가 정확히 그 상태이고(노드 WS 가 DB hydrate 보다 먼저 열린다), 종전엔 그 헛시도가
+  //  30초를 먹어 그 동안 게이트웨이 자신이 목록에 남았다(#2172 실측 — 자기노드가 '내 노드' + 가장 최근
+  //  연결이라 새 세션의 기본 실행 노드로까지 뽑혔다).
+  if (!hasSelfProbeCandidate(selfProbeCandidates(), selfNodes)) return;
+  if (Date.now() - selfProbeAt < SELF_PROBE_MS) return;
   selfProbing = true;
   selfProbeAt = Date.now();                   // 실패도 백오프시킨다(tmux 불통일 때 3초마다 재시도하지 않게)
   try {
@@ -451,6 +469,20 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
       logger.warn({ err, node: c.node.id }, "원격 worker 상태 저장 실패(다음 push/조회에서 재시도)"));
     return;
   }
+  //  ★ #2439 — 노드에서 도는 대화 런타임의 사건을 **게이트웨이 버스에 그대로 흘린다.**
+  //   실린 것은 이미 우리 어휘(harness-io/session-event.ts)라 번역이 필요 없고, 화면·SSE 는
+  //   한 줄도 안 바뀐다. 그래서 노드 세션도 게이트웨이 세션과 **같은 화면**을 얻는다.
+  //  ⚠ 세션 id 는 노드가 보낸 것을 쓰되 **형식을 확인한다** — 남의 세션 버스에 사건을 흘리지 않게.
+  //   (그 노드가 그 세션의 주인인지는 registry 가 이미 붙일 때 검증한다.)
+  if (m.t === "chatEvent") {
+    const sid = String(m.session ?? "");
+    if (/^[A-Za-z0-9._-]{1,128}$/.test(sid) && m.ev && typeof m.ev === "object") {
+      void import("../terminal/harness-io/runtime-bus.js")
+        .then(({ emitSessionEvent }) => emitSessionEvent(sid, m.ev as never))
+        .catch((err) => logger.warn({ err, node: c.node.id }, "노드 대화 사건을 버스에 못 흘렸다"));
+    }
+    return;
+  }
   if (m.t === "opened") {
     const pair = c.chans.get(m.chan);
     if (pair) pair.opened = true;
@@ -490,6 +522,20 @@ function onNodeDisconnected(c: NodeConn): void {
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
+// 인증 거부 로그(#2161) — 같은 토큰의 같은 사유는 쿨다운으로 접는다(노드는 거부돼도 백오프로 계속
+//  재접속하므로, 매 시도를 다 찍으면 진짜 신호가 묻힌다). 첫 건은 반드시 남긴다.
+//  ⚠ 평문 토큰은 절대 싣지 않는다 — 지문(해시 앞 12자)과 사유만.
+const denialLoggedAt = new Map<string, number>();
+export function resetNodeAuthDenialLog(): void { denialLoggedAt.clear(); }   // 테스트용
+export function logNodeAuthDenial(outcome: Extract<NodeAuthOutcome<OrgNode>, { ok: false }>, tenant: string | null): void {
+  const key = denialKey(outcome.fingerprint, outcome.reason);
+  const now = Date.now();
+  if (!shouldLogDenial(denialLoggedAt.get(key), now)) return;
+  denialLoggedAt.set(key, now);
+  logger.warn({ reason: outcome.reason, token: outcome.fingerprint, tenant },
+    `노드 연결 거부 — ${denialMessage(outcome)}`);
+}
+
 // /node/ws 업그레이드 — Authorization: Bearer <노드토큰> 을 org_node 매칭으로 검증(스코프 불요·표면 최소).
 //  같은 노드가 재연결하면 구 연결을 교체한다(반쯤 열린 구 소켓이 새 연결을 가리지 않게).
 export function setupNodeUpgrade(server: Server): void {
@@ -513,8 +559,15 @@ export function setupNodeUpgrade(server: Server): void {
     void open(async () => {
       const auth = String(req.headers.authorization || "");
       const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-      const node = await authNodeToken(token);
-      if (!node) { socket.destroy(); return; }
+      const outcome = await authNodeTokenDetailed(token);
+      if (!outcome.ok) {
+        // ★ 종전엔 여기서 **말없이** socket.destroy() 만 했다(#2161) — 사람에게 남는 것은 caddy 의 502 뿐이라,
+        //  원인을 짚는 데 패킷캡처와 DB 대조까지 갔다. 거부는 조용해도 되지만 **기록까지 조용하면 안 된다**.
+        logNodeAuthDenial(outcome, tenant?.slug ?? null);
+        socket.destroy();
+        return;
+      }
+      const node = outcome.node;
       wss.handleUpgrade(req, socket, head, (ws) => {
         const k = keyOf(node.id, tenant);
         const prev = conns.get(k);
@@ -523,7 +576,7 @@ export function setupNodeUpgrade(server: Server): void {
         //  hello 를 받으면 그 노드가 선언한 실제 목록으로 교체된다.
         const c: NodeConn = {
           node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(),
-          lastTouch: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS), harnesses: [...NODE_BASELINE_HARNESSES],
+          lastTouch: Date.now(), connectedAt: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS), harnesses: [...NODE_BASELINE_HARNESSES],
           tenant,
         };
         conns.set(k, c);

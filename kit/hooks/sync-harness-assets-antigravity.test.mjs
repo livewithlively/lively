@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), "sync-harness-assets.mjs");
 const SANDBOX = mkdtempSync(join(tmpdir(), "sync-agy-test-"));
@@ -61,7 +62,7 @@ function freshHome() {
 function sync(env = {}) {
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [RUNNER, "--harness", "antigravity"],
-      { env: { ...process.env, LIVELY_HOME: HOME, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+      { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, ...env }, stdio: ["ignore", "pipe", "pipe"] });
     let err = "";
     p.stderr.on("data", (d) => { err += d; });
     p.on("close", (status) => resolve({ status, stderr: err }));

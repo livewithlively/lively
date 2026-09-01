@@ -3,6 +3,7 @@
 import { itemsPool } from "../../db/client.js";
 import { invalidateIngestPolicyCache } from "../ingest/ingest-policy-load.js";   // #783 정책 쓰기 → 캐시 즉시 무효화(스위치가 곧바로 먹게)
 import { audit } from "./audit.js";
+import { keepDrawerTarget } from "../liv/lane-skeleton.js";   // #1631 — 서랍 레인의 목적지를 잃지 않는다
 
 // ════════ 자동 인입 허용선 정책 — org_ingest_policy (프로젝트 #638) ════════
 //  distill/mirror 가 지식을 auto(즉시 active)|confirm(pending 격리→검토 큐)|drop(미적재) 중 어디로 보낼지 오너가 조절.
@@ -197,6 +198,21 @@ export function pickDistillerField<T>(
   return given || !before ? computed : (before[key] as T);
 }
 
+// #2415 — 켜진 채로 저장된 증류기는 **그것을 돌릴 잡**이 있어야 한다. 없으면 마련한다(정책은 distill/ensure-job.ts).
+//  실패는 삼킨다: 증류기 저장은 이미 끝났고, 잡 정비 실패가 그것을 되돌릴 이유는 아니다.
+async function ensureJobForEnabled(row: Record<string, unknown>, actor?: string): Promise<void> {
+  if (!row?.enabled) return;
+  const key = String(row.key ?? "").trim();
+  if (!key) return;
+  try {
+    const { ensureDistillJob } = await import("../distill/ensure-job.js");
+    const plan = await ensureDistillJob(key, actor ?? null);
+    if (plan.action !== "none") console.info(`[distill] 증류기 '${key}' 를 켜며 잡 정비: ${plan.action} — ${plan.reason}`);
+  } catch (e) {
+    console.warn(`[distill] 증류기 '${key}' 잡 정비 실패: ${(e as Error)?.message ?? e}`);
+  }
+}
+
 export async function upsertDistiller(input: DistillerUpsertInput, actor?: string, source?: string): Promise<Record<string, unknown>> {
   // 대상 행 — id 우선, 없으면 key(멱등 upsert: 같은 key 로 다시 저장하면 갱신).
   let targetId = input.id ?? null;
@@ -250,7 +266,11 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
     lookback_days: lookback,
     criteria_md: pick("criteria_md", normText(input.criteria_md)),
     format_md: pick("format_md", normText(input.format_md)),
-    target_category: pick("target_category", normText(input.target_category)),
+    //  #1631 — 서랍 레인(liv-<서랍key>)은 **키가 곧 목적지**다. 빈 목적지로 저장되면 그 레인이 만든 지식이
+    //   사람이 승인한 서랍에 안 들어간다(실측 2026-08-31: 리브가 레인을 켜면서 d-21c2235a7d → null 로 지웠다).
+    //   비었을 때만 키에서 되살린다 — 다른 서랍을 명시하면 그 뜻을 존중하고, 안전망은 비우는 것이 설계다.
+    target_category: keepDrawerTarget(key || (before0?.key as string | undefined) || null,
+      pick("target_category", normText(input.target_category))),
     default_type: pick("default_type", normText(input.default_type)),
     name_prefix: pick("name_prefix", normText(input.name_prefix)),
     thread_aware: pick("thread_aware", input.thread_aware ?? true),
@@ -287,6 +307,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
        vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null]);
     await audit("org_distiller", String(targetId), "update", before, r.rows[0], actor, source);
+    await ensureJobForEnabled(r.rows[0], actor);
     return r.rows[0];
   }
 
@@ -307,6 +328,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
      vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
      vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null]);
   await audit("org_distiller", String(r.rows[0].id), "insert", null, r.rows[0], actor, source);
+  await ensureJobForEnabled(r.rows[0], actor);
   return r.rows[0];
 }
 

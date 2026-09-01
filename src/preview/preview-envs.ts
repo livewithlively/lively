@@ -7,8 +7,11 @@
 import path from "node:path";
 import { statSync } from "node:fs";
 import { itemsPool } from "../db/client.js";
+import { currentTenant, withTenant } from "../org/tenant-context.js";   // #1875 — 라우팅 조회의 primary 폴백
+import { SINGLE_TENANT_ID } from "../db/tenant-column.js";
+import { PRIMARY_SLUG } from "../org/tenancy/registry.js";
 import { ensureStageWorktree } from "./preview-stage.js";
-import { ensureProjectWorktree, runBuild, buildFailureHint } from "./preview-prepare.js";
+import { ensureProjectWorktree, ensureDeps, runBuild, buildFailureHint, installFailureHint, missingEntryAssets } from "./preview-prepare.js";
 // 공유 워크스페이스 루트 = project-fs 의 단일 정의(TERMINAL_ROOT_SHARED). 여기서 따로 계산하면 설치에 따라
 //  provision 이 만든 작업 폴더와 다른 자리를 가리켜 '방금 만든 워크트리를 못 찾는' 오진이 난다.
 import { PROJECT_SHARED_BASE as SHARED_BASE } from "../project/project-fs.js";
@@ -91,6 +94,26 @@ export async function getPreviewEnv(id: string): Promise<PreviewEnv | undefined>
   return (await itemsPool.query("SELECT * FROM org_preview_env WHERE id=$1", [id])).rows[0];
 }
 
+/**
+ * 라우팅용 조회 — **지금 워크스페이스에서 못 찾으면 primary 에서 한 번 더 본다**(#1875 실측).
+ *
+ * 프리뷰 환경 표는 테넌트 축 위에 있는데, 프리뷰는 워크스페이스 데이터가 아니라 **박스 단위 개발 도구**다.
+ *  그래서 개인 워크스페이스에 서 있는 사람이 프리뷰 링크를 열면, 그 워크스페이스의 표에서 못 찾고
+ *  `프리뷰 환경 없음` 404 가 나갔다 — **로그인 요청까지** 포함해 그 주소의 모든 API 가 죽는다
+ *  (클라이언트가 /api/ 전부에 lvly_ws 를 붙이므로 예외가 없다). 사람 눈엔 "계정을 제대로 넣었는데
+ *  로그인이 안 된다"로만 보인다.
+ *
+ * 지금 스코프를 **먼저** 보는 이유: 개인 워크스페이스 안에서 만든 프리뷰도 그 자리에서 계속 열려야 한다.
+ *  못 찾을 때만 primary 로 한 번 더 — 넓히는 방향이라 종전에 열리던 것이 닫히지 않는다.
+ */
+export async function getPreviewEnvForRoute(id: string): Promise<PreviewEnv | undefined> {
+  const here = await getPreviewEnv(id);
+  if (here) return here;
+  const t = currentTenant();
+  if (!t || t.id === SINGLE_TENANT_ID) return undefined;   // 이미 primary 였다 — 두 번 볼 이유가 없다
+  return withTenant({ id: SINGLE_TENANT_ID, slug: PRIMARY_SLUG }, () => getPreviewEnv(id));
+}
+
 const slug = (s: unknown): string =>
   String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 
@@ -161,6 +184,20 @@ const previewPath = (id: string): string => "/preview/" + id + "/ui/";
 const previewUrl = (id: string): Promise<string> => absoluteUrl(previewPath(id));
 const hasDir = (dir: string): boolean => { try { return statSync(dir).isDirectory(); } catch { return false; } };
 
+// 준비가 '멈춘' 것으로 볼 시간 — 첫 준비는 의존성 설치(최대 10분) + 빌드(최대 15분)라 그 합보다 넉넉해야 한다.
+//  짧으면 정상 진행 중인 준비 위에 두 번째 준비가 겹쳐 **같은 워크트리에서 npm 이 두 개** 돌게 된다.
+const PREPARE_STUCK_MS = 30 * 60_000;
+const stuckSince = (p: PreviewEnv): number =>
+  p.last_active_at ? Date.now() - new Date(p.last_active_at).getTime() : Infinity;
+
+// 화면 파일이 준비됐나 — 폴더 존재 + **진입 자산까지**. 폴더만 보면 빌드 산출물이 통째로 없어도 통과한다(#2143).
+const staticReady = (workdir: string): { ok: boolean; missing: string[] } => {
+  const pub = path.join(workdir, "public");
+  if (!hasDir(pub)) return { ok: false, missing: [] };
+  const missing = missingEntryAssets(pub);
+  return { ok: missing.length === 0, missing };
+};
+
 // 미리보기 띄우기 — 준비할 게 없으면 바로 '실행 중', 있으면 '준비 중'을 돌려주고 뒤에서 진행한다.
 export async function ensurePreviewEnv(p: PreviewEnv): Promise<{ id: string; status: string; url?: string; action: string; error?: string; port?: number }> {
   if (!p.enabled) return { id: p.id, status: "stopped", action: "disabled" };
@@ -186,19 +223,29 @@ export async function ensurePreviewEnv(p: PreviewEnv): Promise<{ id: string; sta
     return setStatus(p.id, "error", "이 방식은 ‘어떻게 띄울지’(스택 프로필)를 골라야 합니다");
   }
 
-  // 준비가 필요한가 — 작업 폴더가 없거나, 빌드가 걸려 있거나, 전용 서버/합치기가 필요한 경우.
+  // 이미 준비 중이면 겹쳐 시작하지 않는다 — 같은 워크트리에서 설치·빌드가 두 벌 돌면 서로를 깨뜨린다.
+  //  (사람이 [띄우기]를 두 번 누르거나, 아래 reconcile 과 겹치는 자리다. 멈춘 지 오래면 그때만 다시 건다.)
+  if (p.status === "preparing" && stuckSince(p) < PREPARE_STUCK_MS) {
+    return { id: p.id, status: "preparing", url, action: "preparing" };
+  }
+
+  // 준비가 필요한가 — 작업 폴더가 없거나, 화면 파일(진입 자산)이 아직 없거나, 빌드가 걸려 있거나,
+  //  전용 서버/합치기가 필요한 경우.
   const wt = p.worktree_path || canonicalWorktree(p.project_id, p.repo);
   const needsPrepare = p.kind === "stage"
     || p.backing_mode === "throwaway"
     || !!profile?.build_cmd
-    || !wt || !hasDir(path.join(wt, "public"));
+    || !wt || !staticReady(wt).ok;
   if (!needsPrepare) {
     await itemsPool.query(
       "UPDATE org_preview_env SET status='running', last_error=NULL, worktree_path=$2, last_active_at=now(), updated_at=now() WHERE id=$1", [p.id, wt]);
     return { id: p.id, status: "running", url, action: "ready" };
   }
 
-  await itemsPool.query("UPDATE org_preview_env SET status='preparing', last_error=NULL, updated_at=now() WHERE id=$1", [p.id]);
+  // last_active_at 도 함께 찍는다 — '준비가 멈췄나'를 재는 시계가 이 값이다. 안 찍으면 직전 사용 시각이
+  //  그대로 남아, 시작하자마자 '15분 넘게 멈춤'으로 판정돼 reconcile 이 두 번째 준비를 건다.
+  await itemsPool.query(
+    "UPDATE org_preview_env SET status='preparing', last_error=NULL, last_active_at=now(), updated_at=now() WHERE id=$1", [p.id]);
   void preparePreviewEnv(p.id).catch((e) => logger.warn({ err: e, id: p.id }, "미리보기 준비 실패(백그라운드)"));
   return { id: p.id, status: "preparing", url, action: "preparing" };
 }
@@ -225,8 +272,12 @@ export async function preparePreviewEnv(id: string): Promise<void> {
     }
     await itemsPool.query("UPDATE org_preview_env SET worktree_path=$2 WHERE id=$1", [p.id, workdir]);
 
-    // 2) 빌드(프로필에 걸려 있으면) — 화면이 항상 최신이도록.
+    // 2) 의존성 → 빌드. 설치는 실행할 명령이 걸린 프로필일 때만 한다(명령이 없으면 node_modules 도 쓸 데가 없다).
     const profile = await resolveProfile(p);
+    if (profile?.build_cmd || profile?.start_cmd) {
+      const dep = await ensureDeps(workdir);
+      if (!dep.ok) { await setStatus(p.id, "error", installFailureHint(dep.out)); return; }
+    }
     if (profile?.build_cmd) {
       const b = await runBuild(workdir, profile.build_cmd);
       if (!b.ok) { await setStatus(p.id, "error", buildFailureHint(b.out)); return; }
@@ -242,8 +293,16 @@ export async function preparePreviewEnv(id: string): Promise<void> {
         [p.id, r.port, r.healthy ? null : "서버는 떴지만 응답 확인에 실패했습니다 — 잠시 뒤 새로고침해 보세요", r.pid]);
       return;
     }
-    if (!hasDir(path.join(workdir, "public"))) {
-      await setStatus(p.id, "error", "미리볼 화면 파일을 찾지 못했습니다 — 이 프로젝트가 빌드가 필요한 종류라면 스택 프로필에 빌드 명령을 넣어 주세요");
+    // 화면 파일 확인은 **폴더가 아니라 진입 자산까지** 본다 — 여기서 통과시키면 그 다음은 하얀 화면이고,
+    //  그때는 상태가 'running' 이라 무엇이 잘못됐는지 아무 데도 안 남는다(#2143).
+    const ready = staticReady(workdir);
+    if (!ready.ok) {
+      await setStatus(p.id, "error", ready.missing.length
+        ? `화면 파일이 준비되지 않았습니다 — ${ready.missing.slice(0, 3).join(", ")} 가 없습니다.`
+          + (profile?.build_cmd
+            ? " 빌드는 끝났는데 이 파일이 생기지 않았습니다 — 스택 프로필의 빌드 명령을 확인해 주세요."
+            : " 이 레포는 빌드가 필요합니다 — 스택 프로필에 빌드 명령을 넣어 주세요.")
+        : "미리볼 화면 파일을 찾지 못했습니다 — 이 프로젝트가 빌드가 필요한 종류라면 스택 프로필에 빌드 명령을 넣어 주세요");
       return;
     }
     await itemsPool.query(
@@ -268,9 +327,8 @@ export async function reconcilePreviewEnvs(): Promise<Array<{ id: string; status
   const rows = await listPreviewEnvs();
   const out: Array<{ id: string; status?: string; action?: string; error?: string }> = [];
   for (const p of rows) {
-    if (p.status === "preparing") { // 준비 중인 채 15분 넘게 멈춰 있으면(프로세스 재시작 등) 되살린다
-      const since = p.last_active_at ? Date.now() - new Date(p.last_active_at).getTime() : Infinity;
-      if (since > 15 * 60_000) { void preparePreviewEnv(p.id); out.push({ id: p.id, action: "re-preparing" }); }
+    if (p.status === "preparing") { // 준비 중인 채 오래 멈춰 있으면(프로세스 재시작 등) 되살린다
+      if (stuckSince(p) > PREPARE_STUCK_MS) { void preparePreviewEnv(p.id); out.push({ id: p.id, action: "re-preparing" }); }
       continue;
     }
     if (p.ttl_idle_sec > 0 && p.status === "running" && p.last_active_at) {

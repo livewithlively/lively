@@ -104,6 +104,47 @@ export function updateReadyNote(version) {
   return `새 버전 ${v ? v + " " : ""}준비됨 — 다시 시작하면 적용됩니다.`;
 }
 
+// ── ⚠ mac: '파일을 받았다' 와 '지금 누르면 재시작된다' 는 다른 시점이다 (#2203) ──────────────
+// ★ 실측(2026-08-27 원준): "다시 시작하여 반영하기를 사이드바 아래에서 수십 번 눌렀는데 사라지질 않는다."
+//  서버도 릴리스도 정상이었다. 맥의 업데이트가 **두 단계**인데 우리가 한 단계로 다뤘던 것이다:
+//   ① 우리(electron-updater)가 GitHub 에서 zip 을 받는다 → 여기서 `update-downloaded` 가 온다.
+//   ② 애플 설치기(Squirrel.Mac)가 그 zip 을 로컬 프록시로 **다시 통째로 가져간다**(217MB · 수 분).
+//  재시작은 ②가 끝나야 된다. 그전에 quitAndInstall 을 부르면 electron-updater(MacUpdater)는
+//  `squirrelDownloadedUpdate` 가 false 라 **리스너만 걸고 조용히 리턴한다** — 예외도, 오류 이벤트도 없다.
+//  그런데 우리는 ①에서 '준비 완료' 배너를 띄웠으니, 사람은 아무 일도 일어나지 않는 버튼을 몇 분간 계속 누른다.
+//  실측 시간축: 배너 노출 → 클릭 → **6분 무반응** → ②완료 → 그제서야 앱이 닫히고 설치·재시작.
+//  → 배너는 ②까지 끝난 뒤에 띄운다. 그래야 "뜬 순간 = 누르면 되는 순간" 이 된다.
+//  (win·linux 는 ②가 없다 — 받으면 곧바로 적용 가능하다.)
+
+/**
+ * 지금 '다시 시작하여 반영' 을 눌러도 되나 — 순수.
+ * @param {object} o
+ * @param {string|null} o.downloadedVersion 우리가 받아 둔 버전(없으면 아직 받는 중이거나 없음)
+ * @param {boolean} o.squirrelReady        mac 설치기가 그 파일을 넘겨받았나(mac 외에는 무의미)
+ * @param {string}  o.platform
+ */
+export function updateApplyReady(o) {
+  const s = o || {};
+  if (!String(s.downloadedVersion || "").trim()) return false;
+  if (s.platform === "darwin") return !!s.squirrelReady;
+  return true;
+}
+
+/**
+ * ①은 끝났고 ②가 도는 동안의 문구 — **사람이 할 일이 없는 구간**이라 배너는 안 띄우지만,
+ *  트레이·마법사는 "받다 만 게 아니라 마무리 중" 임을 말해야 한다(침묵하면 그게 곧 고장으로 읽힌다).
+ */
+export function updateStagingNote(version) {
+  const v = String(version || "").trim();
+  return `새 버전 ${v ? v + " " : ""}설치 준비 중… (맥은 설치기가 파일을 넘겨받는 데 몇 분 걸립니다.)`;
+}
+
+/** ②가 끝나기 전에 누른 사람에게 — '실패' 가 아니라 '아직' 이라고 말한다(다시 눌러도 소용없다는 뜻까지). */
+export function updateNotStagedNote(version) {
+  const v = String(version || "").trim();
+  return `새 버전 ${v ? v + " " : ""}설치 준비가 아직 끝나지 않았습니다. 끝나면 이 자리에서 바로 반영할 수 있습니다.`;
+}
+
 /** 자동 적용까지 기다리는 시간 — 방금 창을 닫은 사람이 곧바로 다시 여는 경우를 흡수한다. */
 export const AUTO_APPLY_DELAY_MS = 5_000;
 

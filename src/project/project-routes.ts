@@ -393,6 +393,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     else if (want) throw new HttpError(400, "세션 작업 경로가 프로젝트 폴더 밖입니다");
     // rootKey="shared" 는 노드·게이트웨이 모두 PROJECT_SHARED_BASE 로 해소된다 — 그래서 로컬·노드 분기가 같은 입력을 쓴다.
     const input: CreateInput = {
+      kind: "human",   // #2162 — 프로젝트 화면에서 사람이 여는 작업 세션
       label: String(b.label ?? ""), rootKey: "shared", subpath,
       harness: String(b.harness ?? "shell"),
       flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},

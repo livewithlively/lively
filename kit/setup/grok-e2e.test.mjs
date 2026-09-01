@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 // ── grok 존재 판정(skip 게이트) ──
 function grokBin() {
@@ -105,6 +106,9 @@ const PORT = await new Promise((resolve, reject) => {
 
 // ── 샌드박스 구성: 발행 번들 재현 → user-install --harness grok → 러너를 캡처 스텁으로 치환 ──
 const { HOOK_SCRIPTS } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")).href);
+// 번들 setup/ 목록은 매니페스트 단일 출처를 따른다 — 사본을 두면 파일이 하나 늘 때 여기만 빠져
+//  "설치기가 번들 안에서 import 크래시" 로 죽는다(kit-manifest.SETUP_FILES 주석 참조).
+const { SETUP_FILES } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
 function setup() {
   mkdirSync(join(PROJ), { recursive: true });
   mkdirSync(CAP, { recursive: true }); mkdirSync(REQLOG, { recursive: true });
@@ -116,7 +120,7 @@ function setup() {
   mkdirSync(join(BUNDLE, "setup"), { recursive: true });
   mkdirSync(join(BUNDLE, "cli"), { recursive: true });
   for (const h of HOOK_SCRIPTS) cpSync(join(KIT, "hooks", h), join(BUNDLE, ".claude", "hooks", h));
-  for (const f of ["user-install.mjs", "user-uninstall.mjs", "host-effects.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
+  for (const f of SETUP_FILES) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
   for (const f of ["lively.mjs", "lively-mcp-gateway.mjs"]) cpSync(join(KIT, "cli", f), join(BUNDLE, "cli", f));
   writeFileSync(join(BUNDLE, ".lively-org-name"), "테스트조직\n");
   writeFileSync(join(BUNDLE, ".lively", "auto-approve.json"), JSON.stringify({ allow: ["mcp__lively__whoami"] }));
@@ -156,7 +160,7 @@ process.stdin.on("data", (c) => {
 });
 `);
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "grok", "--clone-root", BUNDLE],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`설치기 exit=${r.status}\n${r.stderr || r.stdout}`);
   // 러너 5종을 캡처 스텁으로 치환(관측 장치) — 어댑터·harness-registry 는 진짜 그대로 둔다.
   for (const f of ["run-custom.mjs", "work-flag.mjs", "session-preload.mjs", "sync-harness-assets.mjs", "stop-writeback-gate.mjs"]) {

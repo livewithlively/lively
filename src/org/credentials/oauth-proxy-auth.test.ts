@@ -12,10 +12,11 @@
 import assert from "node:assert/strict";
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
-  isTokenExpired, mergeRefreshedTokens, resolveProxyBearer, EXPIRY_SKEW_SEC,
-  type ProxyAuthDeps, type OAuthClientInfo,
+  isTokenExpired, mergeRefreshedTokens, resolveProxyBearer, resolveOAuthMemberSecret,
+  oauthTokenUrlFor, EXPIRY_SKEW_SEC,
+  type ProxyAuthDeps, type OAuthClientInfo, type SecretResolver,
 } from "./oauth-proxy-auth.js";
-import type { MemberSecretResolved } from "./member-secret-store.js";
+import type { MemberSecretResolved, ResolveOpts } from "./member-secret-store.js";
 
 let pass = 0;
 const ta = async (name: string, fn: () => Promise<void>): Promise<void> => {
@@ -196,4 +197,100 @@ t("K2 병합 — 상류가 새 갱신 토큰을 주면 그것으로 교체(회�
   assert.equal(mergeRefreshedTokens(prev, { access_token: "NEW", refresh_token: "RT-NEW" }).refresh_token, "RT-NEW");
 });
 
+// ── L. 통합 kind 별칭(#1881 G2 전환기) — 기존 연결자를 깨뜨리지 않고 [Google 연결] 하나로 넘어간다. ──
+//  #1652 에서 kind 를 바꿔 토큰이 미아가 된 사고(어니스트 5인)가 이 표의 존재 이유다.
+//  관측 장치 = lookups: **어느 (kind, scope_key) 를 실제로 뒤졌는가**. 안 뒤져야 할 행에서 이게 유일한 증거다.
+function resolverSpy(slots: Record<string, MemberSecretResolved | null>): {
+  fn: SecretResolver; lookups: Array<{ kind: string; scopeKey: string | undefined }>;
+} {
+  const lookups: Array<{ kind: string; scopeKey: string | undefined }> = [];
+  const fn: SecretResolver = async (_m: string | null | undefined, kind: string, opts: ResolveOpts) => {
+    lookups.push({ kind, scopeKey: opts.scopeKey });
+    return slots[kind] ?? null;
+  };
+  return { fn, lookups };
+}
+const slot = (kind: string, scopeKey = "", secret: string | null = "TOK"): MemberSecretResolved =>
+  ({ owner: "member:sh-lee", kind, scope_key: scopeKey, secret, meta: {} });
+
+await ta("L1 구 슬롯이 있으면 그게 이긴다 — 통합 슬롯을 뒤지지도 않는다(무회귀)", async () => {
+  const r = resolverSpy({ google_drive_oauth: slot("google_drive_oauth"), google_oauth: slot("google_oauth") });
+  const got = await resolveOAuthMemberSecret("sh-lee", "google_drive_oauth", { scopeKey: "" }, r.fn);
+  assert.equal(got?.kind, "google_drive_oauth", "예전에 붙인 사람의 슬롯이 밀렸다");
+  assert.equal(r.lookups.length, 1, "구 슬롯이 있는데 통합 슬롯까지 뒤졌다(불필요한 왕복)");
+});
+
+await ta("L2 구 슬롯이 없으면 통합 슬롯으로 폴백 — 새로 붙인 사람은 연결 1회로 세 서비스", async () => {
+  const r = resolverSpy({ google_oauth: slot("google_oauth") });
+  const got = await resolveOAuthMemberSecret("sh-lee", "google_gmail_oauth", { scopeKey: "" }, r.fn);
+  assert.equal(got?.kind, "google_oauth");
+  assert.deepEqual(r.lookups.map((l) => l.kind), ["google_gmail_oauth", "google_oauth"]);
+});
+
+await ta("★ L3 별칭 조회는 통합 슬롯의 scope_key('')를 쓴다 — 도구의 scope_key 를 물려주지 않는다", async () => {
+  const r = resolverSpy({ google_oauth: slot("google_oauth") });
+  await resolveOAuthMemberSecret("sh-lee", "google_drive_oauth", { scopeKey: "some-drive-scope" }, r.fn);
+  assert.equal(r.lookups[0].scopeKey, "some-drive-scope", "구 kind 조회는 도구 scope_key 그대로");
+  // 물려주면 통합 슬롯이 있는데도 못 찾아 '자격 없음' 이 된다 — 조용히 연결이 끊긴 것처럼 보인다
+  assert.equal(r.lookups[1].scopeKey, "", "별칭 조회가 엉뚱한 칸을 뒤졌다");
+});
+
+await ta("★ L4 별칭이 없는 kind 는 추가 조회를 하지 않는다 — 엉뚱한 kind 의 자격을 끌어오면 안 된다", async () => {
+  const r = resolverSpy({ google_oauth: slot("google_oauth"), slack_oauth: null });
+  const got = await resolveOAuthMemberSecret("sh-lee", "slack_oauth", { scopeKey: "" }, r.fn);
+  assert.equal(got, null);
+  assert.deepEqual(r.lookups.map((l) => l.kind), ["slack_oauth"], "구글 슬롯을 슬랙 도구에 물려줬다");
+});
+
+await ta("L5 둘 다 없으면 null — 호출자가 '자격 없음'으로 명확히 실패한다", async () => {
+  const r = resolverSpy({});
+  assert.equal(await resolveOAuthMemberSecret("sh-lee", "google_calendar_oauth", { scopeKey: "" }, r.fn), null);
+  // 2 → 4: 구 kind 끼리도 폴백하게 되면서 훑는 범위가 넓어졌다(불변식은 그대로 — 없으면 null).
+  assert.equal(r.lookups.length, 4);
+});
+
+await ta("L6 구 슬롯 행은 있는데 secret 이 비었으면(meta만) 통합으로 폴백한다", async () => {
+  const r = resolverSpy({ google_drive_oauth: slot("google_drive_oauth", "", null), google_oauth: slot("google_oauth") });
+  const got = await resolveOAuthMemberSecret("sh-lee", "google_drive_oauth", { scopeKey: "" }, r.fn);
+  assert.equal(got?.kind, "google_oauth");
+});
+
+t("L7 통합 kind 도 토큰 발급처를 안다 — MCP 서버 행이 없어 프리셋엔 없는 kind다", () => {
+  assert.equal(oauthTokenUrlFor("google_oauth"), "https://oauth2.googleapis.com/token");
+  assert.equal(oauthTokenUrlFor("google_drive_oauth"), "https://oauth2.googleapis.com/token"); // 구 경로 무회귀
+  assert.equal(oauthTokenUrlFor("nope_kind"), undefined);
+});
+
+// ── 구 kind 끼리의 폴백 (2026-08-27 dev 실측) ─────────────────────────────────
+//  실측: 슬롯이 google_drive_oauth 뿐인데 캘린더 도구를 부르면 "자격 없음" 이 났다.
+//  [자기 → 통합] 만 있고 [구 → 다른 구] 가 없어서다. "연결 한 번으로 셋"이 기존 사용자에게만 깨져 있었다.
+await ta("★ L9 구 kind 슬롯 하나가 다른 구글 도구도 먹인다 — 드라이브로 붙은 사람의 캘린더 도구", async () => {
+  const r = resolverSpy({ google_drive_oauth: slot("google_drive_oauth") });
+  const got = await resolveOAuthMemberSecret("sh-lee", "google_calendar_oauth", { scopeKey: "" }, r.fn);
+  assert.equal(got?.kind, "google_drive_oauth", "슬롯이 있는데 '자격 없음' 이 나면 사람은 이유를 못 찾는다");
+  assert.deepEqual(r.lookups.map((l) => l.kind),
+    ["google_calendar_oauth", "google_oauth", "google_drive_oauth"], "통합이 구 kind 보다 먼저여야 한다");
+});
+
+await ta("L10 통합 kind 로 부를 때도 구 슬롯으로 내려간다(프리셋이 통합으로 바뀌어도 무회귀)", async () => {
+  const r = resolverSpy({ google_gmail_oauth: slot("google_gmail_oauth") });
+  const got = await resolveOAuthMemberSecret("sh-lee", "google_oauth", { scopeKey: "" }, r.fn);
+  assert.equal(got?.kind, "google_gmail_oauth");
+});
+
+await ta("L11 아무 구글 슬롯도 없으면 null — 여기서 '있는 척' 하면 빈 토큰으로 상류를 때린다", async () => {
+  const r = resolverSpy({});
+  assert.equal(await resolveOAuthMemberSecret("sh-lee", "google_calendar_oauth", { scopeKey: "" }, r.fn), null);
+  assert.equal(r.lookups.length, 4, "구글 4 kind 를 다 훑어야 한다");
+});
+
 console.log(`\n${pass} passed`);
+
+// #2247 — GitHub 사용자 토큰 묶음(github_pat)도 갱신 발급처·client 가 있어야 한다(없으면 8시간 뒤 도구·수집기 전부 죽는다).
+{
+  const { oauthTokenUrlFor, clientKindFor } = await import("./oauth-proxy-auth.js");
+  assert.equal(oauthTokenUrlFor("github_pat"), "https://github.com/login/oauth/access_token");
+  assert.equal(clientKindFor("github_pat"), "github_app");
+  assert.equal(clientKindFor("linear_app"), "linear_app");
+  console.log("ok  github_pat 갱신 발급처·client kind 매핑");
+}

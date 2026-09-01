@@ -14,7 +14,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { violatesR1, violatesR2, violatesR3, violatesR4, violatesR5, RULES } from "./test-isolation-rules.mjs";
+import { violatesR1, violatesR2, violatesR3, violatesR4, violatesR5, violatesR6, RULES } from "./test-isolation-rules.mjs";
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 이 두 파일은 스캔 대상에서 뺀다 — 규칙 문자열(픽스처)이 본문에 있어 자기 자신을 위반으로 읽는다.
@@ -70,6 +70,19 @@ const R5_CASES = [
   ["#23 빈 소스", '', false],
 ];
 for (const [name, src, want] of R5_CASES) eq(`R5 ${name}`, violatesR5(src), want);
+
+// R6 — 신원 env 상속. #4·#5 가 오탐 경계(spread 가 없거나 정본 헬퍼를 쓴 경우)다.
+const R6_CASES = [
+  ["#1 spread 만(헬퍼 없음)", 'env: { ...process.env, LIVELY_HOME: h }', true],
+  ["#2 offlineLivelyEnv 사용", 'env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: h }', false],
+  ["#3 sandboxEnv 사용", 'env: { ...process.env, ...sandboxEnv({ home, tmp }) }', false],
+  ["#4 spread 없음(오탐 금지)", 'env: { HOME: h, LIVELY_HOME: h }', false],
+  ["#5 상수 객체 형태도 잡는다", 'const ENV = { ...process.env, LIVELY_HOME: h };', true],
+  ["#6 주석 안의 spread 는 코드가 아니다", '// env: { ...process.env }\nconst ENV = { HOME: h };', false],
+  ["#7 빈 소스", "", false],
+];
+for (const [name, src, want] of R6_CASES) eq(`R6 ${name}`, violatesR6(src), want);
+
 
 // ── ② 실제 kit 트리 ────────────────────────────────────────────────────────────
 const files = readdirSync(KIT, { recursive: true })

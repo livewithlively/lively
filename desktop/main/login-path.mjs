@@ -4,7 +4,11 @@
 //  PATH 를 그대로 쓴다. 그래서 앱이 시작할 때 한 번 로그인 셸 PATH 를 합쳐 process.env.PATH 에 심는다(fix-path 패턴)
 //  — 이후 모든 자식 spawn 이 물려받아, 앱이 모는 CLI 가 터미널에서 몰 때와 같은 세상을 본다.
 //
-// Windows 는 손대지 않는다 — GUI 도 레지스트리(머신+사용자) PATH 를 받아 이 문제가 구조적으로 없다.
+// Windows 도 같은 문제를 갖는다(#2172) — 다만 원인이 다르다. GUI 는 레지스트리 PATH 를 받지만 그건 **기동
+//  시점 스냅샷**이라, 그 뒤 PATH 가 바뀌어도(하네스를 나중에 깔거나, 오염된 PATH 를 정리하거나)
+//  `WM_SETTINGCHANGE` 를 처리하지 않는 Electron 은 영원히 모른다. 그래서 윈도우에서는 로그인 셸이 아니라
+//  **레지스트리를 다시 읽어** 합친다(실측 2026-08-28: 사용자 PATH 를 고쳤는데도 트레이에서 뜬 프로세스는
+//  옛 PATH 로 claude 를 못 찾았다).
 // 실패는 무해하다 — 못 물으면 현재 PATH 그대로(종전과 동일).
 //
 // 두 번 묻는다(-lc 와 -ilc): zsh 의 비대화 로그인 셸(-l)은 .zprofile 까지만 읽고 **.zshrc 는 읽지 않는다** —
@@ -42,7 +46,7 @@ export function loginShellCmds(env, platform) {
  * @returns 갱신됐으면 새 PATH, 아니면 null(윈도우·질의 실패·변화 없음).
  */
 export function enrichPathFromLoginShell(env, platform, exec) {
-  if (platform === "win32") return null;
+  if (platform === "win32") return enrichPathFromWindowsRegistry(env, exec);
   // 프로브별 격리 — -ilc 가 이상한 rc 로 죽거나 매달려도(-> timeout throw) -lc 결과는 살린다.
   const found = [];
   for (const [sh, argv] of loginShellCmds(env, platform)) {
@@ -53,6 +57,47 @@ export function enrichPathFromLoginShell(env, platform, exec) {
   }
   if (!found.length) return null;
   const merged = mergePath(found.join(":"), env.PATH || "", ":");
+  if (!merged || merged === env.PATH) return null;
+  env.PATH = merged;
+  return merged;
+}
+
+/** (순수) `reg.exe query` 출력에서 Path 값 추출 — 값에 공백이 흔해 '이름+타입 뒤 전부'를 값으로 본다. 없으면 null. */
+export function extractRegPath(out) {
+  const m = /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/mi.exec(String(out || ""));
+  return m ? m[1].trim() : null;
+}
+
+/** (순수) 합집합 — machine → user → current 순, 중복(대소문자·후행 슬래시 무시) 제거. 둘 다 null 이면 손대지 않는다. */
+export function mergeWindowsPath(machinePath, userPath, currentPath) {
+  if (machinePath == null && userPath == null) return null;
+  const seen = new Set(); const out = [];
+  for (const chunk of [machinePath, userPath, currentPath]) {
+    for (const raw of String(chunk || "").split(";")) {
+      const e = String(raw || "").trim();
+      if (!e) continue;
+      const k = e.replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k); out.push(e);
+    }
+  }
+  return out.join(";");
+}
+
+/**
+ * Windows — 레지스트리 PATH(HKLM 머신 + HKCU 사용자)를 다시 읽어 현재 PATH 와 합집합(#2172).
+ *  exec 는 주입(테스트 seam). 실호출은 login-path 를 부르는 쪽이 execFileSync 를 준다.
+ * @returns 갱신됐으면 새 PATH, 아니면 null(못 읽음·변화 없음).
+ */
+export function enrichPathFromWindowsRegistry(env, exec) {
+  const reg = (env.SystemRoot || "C:\\Windows") + "\\System32\\reg.exe";
+  const read = (hive) => {
+    try { return extractRegPath(exec(reg, ["query", hive, "/v", "Path"])); } catch { return null; }
+  };
+  const expand = (v) => (v == null ? null : v.replace(/%([^%]+)%/g, (whole, name) => env[name] ?? whole));
+  const machine = expand(read("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"));
+  const user = expand(read("HKCU\\Environment"));
+  const merged = mergeWindowsPath(machine, user, env.PATH || "");
   if (!merged || merged === env.PATH) return null;
   env.PATH = merged;
   return merged;

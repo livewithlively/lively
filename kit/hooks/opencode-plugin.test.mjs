@@ -11,13 +11,13 @@
 //  P2 work-flag 대상 툴 패턴이 표의 opencode 툴 이름과 일치(MCP 접두어 + 편집 툴)
 //  P3 그 패턴이 claude/codex 이름에는 걸리지 않는다(대소문자·형태가 다르므로 — 오탐 방지)
 //  P4 하네스 stamp 가 "opencode" (프록시·게이트웨이 집계 축 — 틀리면 세션이 남의 하네스로 집계된다)
-//  P5 배포 목록(HOOK_SCRIPTS)에 등재 — 안 그러면 설치기가 복사할 소스가 없다
+//  P5 설치 매니페스트(HOOK_SCRIPTS)에 등재 + 소비자들이 목록 사본을 되살리지 않음
 //  P6 유일한 throw 는 deny 경로 하나뿐(fail-open 불변식)
 //  P7 **어댑터를 직접 실행**해 deny→차단 / 결정없음→통과 / 러너부재→통과(fail-open) 확인
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { HARNESS } from "./harness-registry.mjs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -63,15 +63,21 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 }
 
 // ── P5 배포 목록 등재 ────────────────────────────────────────────────────────
+//  종전엔 user-install.mjs·build-context.mjs 두 곳의 리터럴을 각각 정규식으로 확인했다. 그 이중 목록이
+//  실제로 드리프트해 사고를 냈으므로(2026-08-27, deploy/refresh-member-kits.sh 의 글롭까지 셋째 사본이었다)
+//  목록은 kit/setup/kit-manifest.mjs 단일 출처로 합쳤다. 그래서 여기서 볼 것도 둘이 됐다 —
+//  ① 매니페스트에 등재됐는가 ② 소비자가 지역 사본을 **되살리지 않았는가**(되살아나면 다시 드리프트한다).
 {
-  const listOf = (f) => {
-    const m = /const HOOK_SCRIPTS\s*=\s*\[([^\]]*)\]/.exec(readFileSync(f, "utf8"));
-    return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
-  };
-  const inInstall = listOf(join(KIT, "setup", "user-install.mjs")).includes("opencode-plugin.js");
-  const inBuild = listOf(join(KIT, "generator", "build-context.mjs")).includes("opencode-plugin.js");
-  (inInstall && inBuild) ? ok("P5 어댑터가 두 배포 목록에 등재됨")
-    : bad("P5 어댑터가 두 배포 목록에 등재됨", `install=${inInstall} build=${inBuild} — 빠지면 설치기가 복사할 소스가 없다`);
+  const { HOOK_SCRIPTS } = await import(pathToFileURL(join(KIT, "setup", "kit-manifest.mjs")).href);
+  HOOK_SCRIPTS.includes("opencode-plugin.js")
+    ? ok("P5 어댑터가 설치 매니페스트에 등재됨")
+    : bad("P5 어댑터가 설치 매니페스트에 등재됨", "빠지면 설치기·번들 조립이 복사할 소스가 없다");
+
+  const revived = ["setup/user-install.mjs", "generator/build-context.mjs"]
+    .filter((rel) => /const HOOK_SCRIPTS\s*=\s*\[/.test(readFileSync(join(KIT, rel), "utf8")));
+  revived.length === 0
+    ? ok("P5 소비자가 목록 사본을 두지 않음(단일 출처 유지)")
+    : bad("P5 소비자가 목록 사본을 두지 않음(단일 출처 유지)", `${revived.join(", ")} 가 지역 리터럴을 되살렸다 — 매니페스트와 조용히 어긋난다`);
 }
 
 // ── P6 fail-open — throw 는 deny 경로 하나뿐 ─────────────────────────────────

@@ -53,6 +53,23 @@ t("S3 codex 가 없으면 기동을 시도하지 않고 사유를 남긴다(조�
   assert.match(sh, /exit 127/);
 });
 
+t("★ S5 로그 폴더를 보장한다 — 없으면 리다이렉트가 실패해 **서버가 아예 안 뜬다**", () => {
+  const sh = detachedStartSh(39123, "$HOME/.codex/x.log");
+  assert.match(sh, /mkdir -p "\$\(dirname /, "`~/.codex` 는 codex 를 한 번이라도 쓴 홈에만 있다");
+  const mk = sh.indexOf("mkdir -p");
+  const run = sh.indexOf("nohup");
+  assert.ok(mk >= 0 && mk < run, "폴더 보장이 기동보다 먼저여야 한다");
+});
+
+t("★ S6 기동을 **확인해서** 말한다 — `&` 는 즉시 0 이라 그것만으론 아무것도 안 본 것이다", () => {
+  const sh = detachedStartSh(39123, "/tmp/x.log");
+  const started = sh.lastIndexOf("echo started");
+  const probe = sh.lastIndexOf("s.on(\"connect\"");
+  assert.ok(probe >= 0 && probe < started, "포트가 열린 것을 보고 started 를 말한다");
+  assert.match(sh, /tail -n 5/, "실패하면 로그 꼬리를 진단으로 돌려준다");
+  assert.match(sh, /exit 1/, "실패는 비-0 으로 나간다(호출자가 폴백할 수 있게)");
+});
+
 t("S4 로그를 남긴다 — 떼어 놓은 프로세스는 사후 진단이 유일한 창이다", () => {
   assert.match(detachedStartSh(39123, "$HOME/.codex/lively-app-server-s1.log"), /lively-app-server-s1\.log/);
 });

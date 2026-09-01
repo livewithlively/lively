@@ -52,3 +52,20 @@ export function planCursorWrite(inp: CursorPlanInput): CursorPlan {
     },
   };
 }
+
+/**
+ * #2243 3차 — 앱 상세의 «언제부터»(config.backfill_since)를 증분 since 의 **하한**으로 쓴다.
+ *  · 첫 수집(커서 없음): backfill_since 가 곧 since — 그 날짜 이후만 읽는다.
+ *  · 증분: 커서가 더 최신이므로 커서가 이긴다(과거로 되돌아가 다시 읽지 않는다).
+ *  날짜가 아니면(오타·빈 값) 무시한다 — 설정 한 칸 때문에 수집이 멈추면 안 된다.
+ */
+export function sinceFloor(since: string | undefined, backfillSince: unknown): string | undefined {
+  const b = typeof backfillSince === "string" ? backfillSince.trim() : "";
+  const bMs = b ? Date.parse(b.length === 10 ? b + "T00:00:00Z" : b) : NaN;
+  if (!Number.isFinite(bMs)) return since;
+  const bIso = new Date(bMs).toISOString();
+  if (!since) return bIso;
+  const sMs = Date.parse(since);
+  if (!Number.isFinite(sMs)) return bIso;
+  return sMs >= bMs ? since : bIso;
+}

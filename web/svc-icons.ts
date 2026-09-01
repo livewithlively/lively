@@ -16,6 +16,7 @@ const SVC_BRAND: Record<string, string> = {
   notion: '#191919',
   linear: '#5E6AD2',
   slack: '#4A154B',
+  google: '#4285F4', // #1881 G5 — 접힌 구글 타일. 아래 구 키 3개는 기존 화면 호환으로 남긴다.
   'google-gmail': '#EA4335',
   'google-drive': '#0F9D58',
   'google-calendar': '#4285F4',
@@ -40,6 +41,7 @@ function svcTile(key: string, label: string, on: boolean) {
   const brand = SVC_BRAND[key];
   return el('span', {
     class: 'svc-tile' + (on ? '' : ' off'),
+    'data-svc': key,   // #2247 — 다크모드에서 단색-검정 마크(GitHub·Linear)를 밝은 잉크로 되칠하는 CSS 훅
     style: brand ? '--svc-brand:' + brand : null,
   }, svcLogo(key) || fallbackMark(label));
 }

@@ -36,6 +36,7 @@ import {
 } from "node:fs";
 import { join, dirname, resolve, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HOOK_SCRIPTS, SETUP_FILES } from "../setup/kit-manifest.mjs";
 
 // ── 두 루트 ──────────────────────────────────────────────────────
 // KIT_ROOT = 제품 루트. 기본은 이 스크립트의 ../ (sibling 레이아웃). 게이트웨이가
@@ -215,9 +216,9 @@ function copyPs1WithHeader(srcAbs, destAbs, srcLabel, orgLabel) {
 //  sync-harness-assets.mjs = 하네스 자산(스킬·서브에이전트·커맨드) materializer(SessionStart → 게이트웨이 fetch → 디스크 동기화).
 //  self-update.mjs(#858) = 키트 자가 업데이터. **배선되는 훅이 아니다** — session-preload 가 kit_version 불일치를
 //   보면 detached 로 띄우는 백그라운드 프로세스다. 번들·설치 대상엔 들어가되 settings 훅 목록엔 안 들어간다.
-// ⚠ harness-registry.mjs 는 훅이 아니라 훅들이 import 하는 모듈이다 — 발행물에 동봉되지 않으면 설치된 훅이
-//  ERR_MODULE_NOT_FOUND 로 죽는다(user-install.HOOK_SCRIPTS 와 **같은 목록**이어야 한다).
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "host-effects-port.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
+// ⚠ harness-registry.mjs · host-effects-port.mjs 는 훅이 아니라 훅들이 import 하는 모듈이다 — 발행물에
+//  동봉되지 않으면 설치된 훅이 ERR_MODULE_NOT_FOUND 로 죽는다. 목록을 여기 복제하지 않고 매니페스트
+//  단일 출처(kit/setup/kit-manifest.mjs)를 따른다 — 종전엔 user-install 과 **손으로** 맞추는 목록이었다.
 
 function emitHooks(targetDir, orgLabel) {
   const hooksDir = join(targetDir, ".claude", "hooks");
@@ -299,45 +300,12 @@ function emitClaudeArtifact({ target, orgLabel, copied }) {
   copied.push(".claude/settings.json", ...HOOK_SCRIPTS.map((f) => `.claude/hooks/${f}`));
   // user-level 설치기 vendoring (D2/D3 헤드라인): kit 없이 '번들 → setup → 어디서든' 을 완성.
   //  발행물 .claude/hooks/*.mjs + AGENTS.md + .lively-org-name 만으로 ~/.lively + ~/.claude 머지.
-  copyMjsWithHeader(
-    kitAbs("setup/user-install.mjs"),
-    join(target, "setup", "user-install.mjs"),
-    "workflow-std/setup/user-install.mjs",
-    orgLabel,
-  );
-  copied.push("setup/user-install.mjs");
-  // 설치·제거의 영속 호스트 효과 capability/Windows User PATH 어댑터 — 엔진과 반드시 같은 번들에 둔다.
-  copyMjsWithHeader(
-    kitAbs("setup/host-effects.mjs"),
-    join(target, "setup", "host-effects.mjs"),
-    "workflow-std/setup/host-effects.mjs",
-    orgLabel,
-  );
-  copied.push("setup/host-effects.mjs");
-  // user-install 이 import 하는 공유 상수(work-roots 헤더 단일 출처, #270) — 번들 동봉 필수(누락 시 import 크래시).
-  copyMjsWithHeader(
-    kitAbs("setup/work-roots-header.mjs"),
-    join(target, "setup", "work-roots-header.mjs"),
-    "workflow-std/setup/work-roots-header.mjs",
-    orgLabel,
-  );
-  copied.push("setup/work-roots-header.mjs");
-  // user-level 제거기 vendoring (install/uninstall 대칭) — self-contained, kit 미의존. uninstall-mac.sh 가 이걸 부른다.
-  copyMjsWithHeader(
-    kitAbs("setup/user-uninstall.mjs"),
-    join(target, "setup", "user-uninstall.mjs"),
-    "workflow-std/setup/user-uninstall.mjs",
-    orgLabel,
-  );
-  copied.push("setup/user-uninstall.mjs");
-  // '내 컴퓨터에서 작업' 부트스트랩(사용자 호출 도구 — 훅 아님). user-install 이 ~/.lively/work.mjs 로 복사한다.
-  copyMjsWithHeader(
-    kitAbs("setup/work.mjs"),
-    join(target, "setup", "work.mjs"),
-    "workflow-std/setup/work.mjs",
-    orgLabel,
-  );
-  copied.push("setup/work.mjs");
+  //  ⚠ 목록은 매니페스트 단일 출처(SETUP_FILES) — 하나라도 빠지면 설치기가 번들 안에서 import 크래시로
+  //   죽는다. 종전엔 여기와 e2e·wiring 테스트 6곳이 각자 사본을 들고 손으로 맞췄다.
+  for (const f of SETUP_FILES) {
+    copyMjsWithHeader(kitAbs(`setup/${f}`), join(target, "setup", f), `workflow-std/setup/${f}`, orgLabel);
+    copied.push(`setup/${f}`);
+  }
 }
 
 // Codex(R2): user-level 전달.

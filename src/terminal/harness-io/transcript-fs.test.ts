@@ -8,7 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { installTenantSlugResolver } from "../catalog.js";
 import { memberReadRange } from "../terminal-member-fs.js";
-import { localTranscriptFs, memberTranscriptFs, transcriptFsFor } from "./transcript-fs.js";
+import { RELAY_UNAVAILABLE, localTranscriptFs, memberTranscriptFs, transcriptFsFor } from "./transcript-fs.js";
+import { HttpError } from "../../http-error.js";
 import { readAlignedWindow } from "./window.js";
 
 let pass = 0;
@@ -79,6 +80,22 @@ await t("[F3] prevTranscript — 압축 파일의 형제에서 부모 uuid 를 �
   assert.equal(await m.prevTranscript(cur), parent);
   assert.equal(relayCalls().length, before, "캐시 — 같은 파일은 다시 중계하지 않는다");
 });
+await t("[F4] listDir — 멤버 구현이 로컬과 같은 이름·순서무관 집합을 준다(#2154 에코의 폴백 훑기) · 폴더 없음/파일은 []", async () => {
+  const dir = path.join(tmp, "grown"); fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, "a.jsonl"), "a\n");
+  fs.writeFileSync(path.join(dir, "b.jsonl"), "bb\n");
+  fs.mkdirSync(path.join(dir, "sub"));
+  const m = memberTranscriptFs(OS);
+  const names = (rows: Array<{ name: string }>): string[] => rows.map((r) => r.name).sort();
+  assert.deepEqual(names(await m.listDir(dir)), ["a.jsonl", "b.jsonl"], "하위 폴더는 빠진다(파일만)");
+  assert.deepEqual(names(await localTranscriptFs.listDir(dir)), ["a.jsonl", "b.jsonl"], "로컬 구현과 같은 답");
+  // mtime 이 실제 값이어야 '보낸 뒤 자란 파일' 판정이 선다 — 0 이면 그 필터가 전부 통과해 버린다.
+  const rows = await m.listDir(dir);
+  const wantM = fs.statSync(path.join(dir, "a.jsonl")).mtimeMs;
+  assert.ok(Math.abs(rows.find((r) => r.name === "a.jsonl")!.mtimeMs - wantM) <= 1000, "mtime 이 실측값");
+  assert.deepEqual(await m.listDir(path.join(tmp, "no-such-dir")), [], "없는 폴더는 빈 배열(던지지 않는다)");
+  assert.deepEqual(await localTranscriptFs.listDir(hello), [], "파일을 폴더로 물어도 빈 배열");
+});
 await t("[S1] transcriptFsFor — 중계 X 면 osUser 가 있어도 로컬 · 중계 O + osUser null 은 로컬 · 둘 다 있을 때만 멤버", () => {
   const saved = process.env.LIVELY_MEMBER_EXEC;
   delete process.env.LIVELY_MEMBER_EXEC;
@@ -100,6 +117,45 @@ await t("[W1] 배선 — 가짜 중계가 실제로 불렸다: <osUser> -- <argv
   assert.ok(range, "구간 읽기 호출이 있다");
   assert.equal(range.argv[range.argv.length - 1], hello);
   assert.ok(!range.argv[2].includes(hello), "경로가 스크립트 본문에 섞이지 않았다");
+});
+
+// ── 중계 실패는 «없음»이 아니다 (#2257 후속) ─────────────────────────────────
+//  2026-08-30 나이틀리 e2e 는 `transcript HTTP 500: {"error":"internal_error"}` 로 죽었고, 08-28 은 **같은 자리**에서
+//  `증분 폴링(from=워터마크) got '404'` 로 죽었다. 원인은 하나 — 허브 홉이 중계 상한(member-exec-relay `timeout: 20_000`)을
+//  넘긴 것. 그런데 stat 은 그 실패를 삼켜 null(=없음 → 404), read 는 안 잡아 raw throw(=500) 로 흘려 **한 원인이 두 얼굴**이었다.
+//  둘 다 «중계가 잠깐 안 됐다»는 말을 못 했다.
+const badRelay = path.join(tmp, "bad-relay.mjs");
+fs.writeFileSync(badRelay, "process.stderr.write('허브 응답 없음'); process.exit(1);\n");
+const withBadRelay = async (fn: () => Promise<void>): Promise<void> => {
+  const saved = process.env.LIVELY_MEMBER_EXEC;
+  process.env.LIVELY_MEMBER_EXEC = `${process.execPath} ${badRelay}`;
+  try { await fn(); } finally { process.env.LIVELY_MEMBER_EXEC = saved; }
+};
+
+await t("[E1] ★ 중계가 죽으면 stat 은 null 이 아니라 503 을 던진다 — «파일 없음»으로 둔갑하면 화면이 «기록 없음» 이라 거짓말한다", async () => {
+  await withBadRelay(async () => {
+    const e: unknown = await memberTranscriptFs(OS).stat(hello).then(() => null, (x: unknown) => x);
+    assert.ok(e instanceof HttpError, `던진 것이 HttpError 가 아니다: ${String(e)}`);
+    assert.equal(e.status, 503, "중계 실패는 404(없음)도 500(내부오류)도 아니다");
+    assert.equal(e.message, RELAY_UNAVAILABLE);
+    assert.ok((e as { cause?: unknown }).cause, "원인을 함께 실어야 wrap 이 로그에 남긴다(#1278)");
+  });
+});
+
+await t("[E2] ★ 중계가 죽으면 read 도 **같은** 503 — 종전엔 catch 가 없어 internal_error(500) 로 나갔다", async () => {
+  await withBadRelay(async () => {
+    const e: unknown = await memberTranscriptFs(OS).read(hello, 12, (r) => r.read(0, 12)).then(() => null, (x: unknown) => x);
+    assert.ok(e instanceof HttpError, `던진 것이 HttpError 가 아니다: ${String(e)}`);
+    assert.equal(e.status, 503, "stat 과 read 가 같은 원인에 다른 답을 내면 안 된다");
+    assert.equal(e.message, RELAY_UNAVAILABLE);
+  });
+});
+
+await t("[E3] 정상 중계에서 **없는 파일**은 여전히 null — 이 구별이 이 변경의 전부다(없음 ≠ 못 읽음)", async () => {
+  const m = memberTranscriptFs(OS);
+  assert.equal(await m.stat(path.join(tmp, "no-such-file.jsonl")), null, "없는 파일은 던지지 않는다(진짜 404 다)");
+  assert.equal(await m.stat(tmp), null, "폴더도 null(파일 아님)");
+  assert.equal(await m.stat(hello), 12, "있는 파일은 크기 그대로");
 });
 
 installTenantSlugResolver(() => null);

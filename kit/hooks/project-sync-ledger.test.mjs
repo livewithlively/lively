@@ -19,6 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const HOOKS = {
@@ -69,7 +70,7 @@ async function mkProj(marker, files = {}, ledger = null) {
 }
 async function runHook(hookPath, dir) {
   const c = spawn(process.execPath, [hookPath], {
-    cwd: dir, env: { ...process.env, LIVELY_TOKEN: "t", LIVELY_GATEWAY_URL: BASE, LIVELY_HOME: dir }, stdio: ["pipe", "pipe", "pipe"],
+    cwd: dir, env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "t", LIVELY_GATEWAY_URL: BASE, LIVELY_HOME: dir }, stdio: ["pipe", "pipe", "pipe"],
   });
   c.stdin.end(JSON.stringify({ cwd: dir }));
   const code = await new Promise((r) => c.on("exit", r));

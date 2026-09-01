@@ -233,6 +233,9 @@ function storageEditor(detail, data) {
     // ── ② 정책 — idle 세션 자동 회수(#1059 F) ── 그 시간 넘게 idle 인 세션을 회수(desired-state 보존→복원 가능). 0=끔(무회귀).
     const srp = st.session_reclaim_policy || {};
     const idleTtlIn = numIn(srp.idle_ttl_minutes ?? 0, 0, 43200);
+    // #2148 attach 전용 TTL — attached 를 무기한 존중하면 '탭이 붙어 있다'는 신호가 거짓일 때 회수가 영영 멈춘다
+    //  (원격 tmux 재연결 잔재가 그 신호를 영구 참으로 만든 실측이 있다). 테넌트 축엔 이미 같은 노브가 있다(#1445).
+    const attachIdleIn = numIn(srp.attach_idle_minutes ?? 0, 0, 43200);
     // #1220 압박 회수 — 사용률이 임계를 넘으면 평시 TTL 을 안 기다리고 걷는다(earlyoom 이 예고 없이 죽이기 전에).
     //  ⚠ 상한 90 은 서버 정책(RECLAIM_PRESSURE_PCT_MAX)과 같은 값이다 — earlyoom(94%)보다 늦은 값을
     //   **애초에 고를 수 없게** 한다(#1675 ⑤: 어니스트는 95 로 켜 두고 한 번도 발동하지 못했다).
@@ -241,11 +244,19 @@ function storageEditor(detail, data) {
     // #1675 ⑤ 스왑 축 — 물리 메모리가 여유로워 보여도 스왑이 바닥이면 이미 벼랑이다. earlyoom 은 스왑을
     //  보지 않으므로(-s 100) 이 축은 경합 없이 언제나 우리가 먼저다.
     const pressureSwapIn = numIn(srp.pressure_swap_pct ?? 0, 0, 99);
+    // #2509 압박 축은 **박스 전역**이 됐다(신호를 한 번 읽고 워크스페이스를 스스로 돈다). 그래서 «누구부터
+    //  걷나»가 새 질문이고, 답을 코드에 박지 않고 이 세 칸으로 뺐다. 상한은 서버 상수와 같은 값이다.
+    const pressurePriorityIn = numIn(srp.pressure_priority ?? 100, 0, 1000);
+    const pressureMaxReapIn = numIn(srp.pressure_max_reap ?? 0, 0, 1000);
+    const pressureMarginIn = numIn(srp.pressure_release_margin_pct ?? 0, 0, 50);
     const reclaimBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'idle 회수 정책 저장' }); reclaimBtn.disabled = !canEdit;
     reclaimBtn.addEventListener('click', async () => {
       reclaimBtn.disabled = true;
       try {
-        await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_reclaim_policy: { idle_ttl_minutes: Number(idleTtlIn.value) } }) });
+        await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_reclaim_policy: {
+          idle_ttl_minutes: Number(idleTtlIn.value),
+          attach_idle_minutes: Number(attachIdleIn.value),
+        } }) });
         toast('저장됨 — 다음 회수 주기(5분)부터 적용됩니다.'); load();
       } catch (e: any) { toast(e.message, true); reclaimBtn.disabled = false; }
     });
@@ -258,6 +269,9 @@ function storageEditor(detail, data) {
           pressure_used_pct: Number(pressurePctIn.value),
           pressure_idle_minutes: Number(pressureIdleIn.value),
           pressure_swap_pct: Number(pressureSwapIn.value),
+          pressure_priority: Number(pressurePriorityIn.value),
+          pressure_max_reap: Number(pressureMaxReapIn.value),
+          pressure_release_margin_pct: Number(pressureMarginIn.value),
         } }) });
         toast('저장됨 — 다음 회수 주기(5분)부터 적용됩니다.'); load();
       } catch (e: any) { toast(e.message, true); pressureBtn.disabled = false; }
@@ -365,9 +379,11 @@ function storageEditor(detail, data) {
         el('strong', { text: 'idle 세션 자동 회수' }),
         ...(srcHint(st.session_reclaim_policy_source) ? [srcHint(st.session_reclaim_policy_source)] : []),
         el('div', { class: 'storage-fields' },
-          el('label', {}, el('span', { text: 'idle 임계(분, 0=끔)' }), idleTtlIn)),
+          el('label', {}, el('span', { text: 'idle 임계(분, 0=끔)' }), idleTtlIn),
+          el('label', {}, el('span', { text: '접속 중 임계(분, 0=끔)' }), attachIdleIn)),
         el('p', { class: 'storage-calc', text: '이 시간 넘게 idle 인 세션을 5분 주기로 회수합니다. 작업내용(대화·설정)은 보존돼 목록에 “복원 가능”으로 남고, 열면 이어집니다(admission control 대신 채택).' }),
-        el('p', { class: 'admin-hint' }, ...uiText('0=끔(무회귀, 기본). 상시(managed)·접속 중·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.')),
+        el('p', { class: 'admin-hint' }, ...uiText('0=끔(무회귀, 기본). 상시(managed)·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.')),
+        el('p', { class: 'admin-hint' }, ...uiText('“접속 중 임계”는 탭이 열려 있어도 그 시간 넘게 입출력이 없으면 회수합니다(0=탭이 열려 있으면 무기한 보존). idle 임계보다 길게 잡으세요 — 탭이 열려 있다는 건 그래도 사람이 보고 있었다는 신호입니다.')),
         el('div', { class: 'storage-actions' }, reclaimBtn)),
       el('div', { class: 'storage-block' },
         el('strong', { text: '메모리 압박 회수' }),
@@ -378,6 +394,16 @@ function storageEditor(detail, data) {
         el('p', { class: 'storage-calc', text: '메모리 또는 스왑 사용률이 임계를 넘으면 위 idle 임계를 기다리지 않고, 실제 점유(RSS)가 큰 세션부터 걷어 임계 밑으로 내려가면 멈춥니다 — 필요한 만큼만 회수합니다.' }),
         el('p', { class: 'admin-hint' }, ...uiText('왜 필요한가: 이 자리를 종전엔 earlyoom 이 맡았는데, 그건 예고도 복원 신호도 없는 강제 종료라 사용자 눈엔 세션이 그냥 사라집니다. 게이트웨이가 먼저 개입하면 같은 메모리를 “복원 가능”한 방식으로 확보합니다. 0=끔(기본). 평시 회수를 꺼 둔 채(위 0) 이것만 켜도 됩니다. 제안: 메모리 85~90 · 스왑 90 · 압박 하한 60분.')),
         el('p', { class: 'admin-hint' }, ...uiText('**스왑 임계를 함께 켜세요.** 메모리 임계는 최대 90까지만 고를 수 있습니다 — earlyoom 이 94%에서 먼저 개입하므로 그보다 늦은 값은 영영 발동하지 못합니다(실제로 95로 켜 두고 한 번도 안 돈 박스가 있었습니다). 그리고 물리 메모리가 여유로워 보여도 스왑이 차 있으면 그 박스는 이미 벼랑입니다 — 전면 장애 시점의 실측이 물리 82% · **스왑 99.9%** 였습니다. earlyoom 은 스왑을 보지 않으므로 이 축은 언제나 게이트웨이가 먼저 잡습니다.')),
+        el('p', { class: 'admin-hint' }, ...uiText('**위 두 임계는 이 워크스페이스의 동의서이기도 합니다.** 메모리·스왑은 박스 하나의 값이라, 압박 회수는 워크스페이스마다가 아니라 **박스 단위로 한 번** 돕니다. 그때 임계를 안 켠 워크스페이스의 세션은 점유가 아무리 커도 걷지 않습니다 — 0=끔이 곧 “우리 세션은 건드리지 마세요”입니다.')),
+        // #2509 — 전역이 되면서 새로 생긴 조절 축 셋. 위 임계와 성격이 달라(언제 → 누구를·얼마나) 줄을 나눈다.
+        el('div', { class: 'storage-fields' },
+          el('label', {}, el('span', { text: '회수 순번(낮을수록 먼저)' }), pressurePriorityIn),
+          el('label', {}, el('span', { text: '한 번에 걷을 최대 세션 수(0=무제한)' }), pressureMaxReapIn),
+          el('label', {}, el('span', { text: '정지 여유(%p, 0=임계에서 정지)' }), pressureMarginIn)),
+        el('p', { class: 'storage-calc', text: '박스에 워크스페이스가 여럿이면 “누구부터 걷나”를 순번이 정합니다. 참가한 워크스페이스의 후보를 한 줄로 세워 순번이 낮은 쪽부터, 같은 순번 안에서는 점유(RSS)가 큰 것부터 걷습니다.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('**순번**은 기본 100입니다 — 전부 같으면 워크스페이스를 가로질러 점유 큰 순으로만 걷습니다(종전 동작). 실서비스를 200, 개발·데모용을 50으로 두면 압박 때 개발용이 먼저 걷힙니다.')),
+        el('p', { class: 'admin-hint' }, ...uiText('**최대 세션 수**는 한 번의 회수에서 이 워크스페이스가 잃을 수 있는 상한입니다(0=무제한). 회수는 되돌릴 수 없고, 세션 점유를 못 재는 박스에서는 “충분히 걷었다”는 판정이 서지 않아 후보를 끝까지 걷습니다 — 그때 한 워크스페이스가 통째로 비지 않게 막는 안전장치입니다.')),
+        el('p', { class: 'admin-hint' }, ...uiText('**정지 여유**는 임계보다 몇 %p 더 내려갈 때까지 걷을지입니다(0=종전). 임계 바로 밑에서 멈추면 다음 주기에 또 임계를 넘어 회수가 계속 반복됩니다 — 임계 90에 여유 5를 주면 90%에서 발동해 85% 밑으로 내려갈 때까지 걷고 한동안 조용해집니다. 발동 기준은 그대로 90이라 평시에 더 자주 켜지지는 않습니다.')),
         el('div', { class: 'storage-actions' }, pressureBtn)),
 
       // ── 위탁 작업 무응답 상한(#1101) — 세션 회수와 같은 결(언제 끊을지)이라 같은 섹션에 둔다. ──

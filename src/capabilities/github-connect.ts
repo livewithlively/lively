@@ -8,9 +8,10 @@
 import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
-import { githubAppReady, startGithubAppConsent, saveGithubAppCredentials } from "../org/credentials/oauth-broker.js";
+import { githubAppReady, startGithubAppConsent, saveGithubAppCredentials, completeGithubAppInstall } from "../org/credentials/oauth-broker.js";
 import { listSecretsByKindPublic } from "../org/credentials/member-secret-store.js";
 import { GITHUB_INSTALL_KIND } from "../org/credentials/github-app.js";
+import { listInstallationRepos } from "../org/credentials/github-app-git.js";
 import { GATEWAY_OWNER, memberOwner } from "../org/credentials/git-credential-store.js";
 
 /** 이 조직·이 사람의 GitHub 연결 상태 — 화면이 [연결]을 그릴지 [연결됨]을 그릴지 정하는 값. */
@@ -25,6 +26,8 @@ async function githubConnectState(memberId: string): Promise<Record<string, unkn
   ]);
   const mine = pats.find((s) => s.owner === memberOwner(memberId));
   const installs = installsAll.filter((s) => s.owner === GATEWAY_OWNER);
+  //  설치가 있을 때만 상류에 묻는다(없으면 왕복 낭비). 실패는 null 로 삼킨다 — 상태 조회가 이것 때문에 죽으면 안 된다.
+  const openRepos = installs.length ? await listInstallationRepos().catch(() => null) : null;
   return {
     //  관리자가 앱 자격을 넣어 뒀는가 — 이게 false 면 구성원이 [연결]을 눌러도 시작조차 못 한다.
     //  ⚠ client 묶음 행(scope_key=oauth:client)은 HIDDEN_SCOPE_KEYS 라 목록 조회에 **일부러** 안 보인다.
@@ -34,6 +37,10 @@ async function githubConnectState(memberId: string): Promise<Record<string, unkn
     // 붙여넣기 PAT 인지 OAuth 연결인지 — 같은 슬롯을 쓰므로 meta 로만 구분된다(둘 다 도구는 정상 동작).
     connected_via: mine?.has_secret ? (mine.meta && Object.keys(mine.meta).some((k) => k === "expires_at" || k === "token_type") ? "oauth" : "token") : null,
     installations: installs.map((s) => ({ installation_id: s.scope_key, connected_by: (s.meta as Record<string, unknown> | undefined)?.connected_by ?? null })),
+    //  ★ 앱에 실제로 열린 저장소(#1881 G10) — 목록 드롭다운(user token, "내가 볼 수 있는 전부")과 **범위가 다르다**.
+    //   clone 은 이 목록 안에서만 된다. 화면이 이 차이를 보여 주지 않으면 사용자는 안 열린 레포를 고르고
+    //   등록까지 성공한 뒤 clone 에서 실패한다. null = 알 수 없음(막지 않는다).
+    open_repositories: openRepos,
   };
 }
 
@@ -109,4 +116,31 @@ const orgGithubAppRegister: Capability = {
   },
 };
 
-export const githubConnectCapabilities: Capability[] = [orgGithubConnectStatus, orgGithubConnect, orgGithubAppRegister];
+/**
+ * 릴레이 완료(#2243 G) — 라이블리 컨트롤플레인 전용. CP 가 GitHub 과 교환한 토큰 응답과 설치 id 를 들고 온다.
+ *  ⚠ 사람이 부를 일이 없다(mcp:false). state 는 이 게이트웨이가 서명한 것이라 남의 CP 가 위조할 수 없다.
+ */
+const orgGithubOauthComplete: Capability = {
+  name: "org_github_oauth_complete", title: "GitHub OAuth 릴레이 완료(CP 전용)",
+  description:
+    "라이블리 컨트롤플레인이 GitHub 과 교환한 토큰 응답(+설치 id)을 이 게이트웨이의 서명 state 와 함께 넣는다. " +
+    "토큰은 연결자의 금고(github_pat), 설치 id 는 조직 슬롯에 저장한다. 사람이 직접 부를 일은 없다.",
+  scope: "admin",
+  input: {
+    state: z.string().describe("이 게이트웨이가 발급한 서명 state"),
+    token: z.record(z.unknown()).optional().describe("GitHub 토큰 엔드포인트 응답 JSON 원문(인가를 건너뛴 설치-only 면 생략)"),
+    installation_id: z.string().optional().describe("설치 id(인가만 하고 설치를 안 했으면 생략)"),
+  },
+  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/github/oauth-complete"], parse: (req) => req.body ?? {} }] },
+  handler: async (input, user) => {
+    const i = (input ?? {}) as { state?: unknown; token?: unknown; installation_id?: unknown };
+    if (typeof i.state !== "string" || !i.state) throw new HttpError(400, "state 는 필수입니다");
+    const inst = typeof i.installation_id === "string" ? i.installation_id : null;
+    const tok = i.token && typeof i.token === "object" ? i.token : null;
+    if (!tok && !inst) throw new HttpError(400, "token 이나 installation_id 중 하나는 있어야 합니다");
+    try { return await completeGithubAppInstall(i.state, tok, inst, user?.userId ?? "cp-relay"); }
+    catch (err) { throw new HttpError(400, (err as Error).message); }
+  },
+};
+
+export const githubConnectCapabilities: Capability[] = [orgGithubConnectStatus, orgGithubConnect, orgGithubAppRegister, orgGithubOauthComplete];

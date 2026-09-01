@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { applySandboxEnv } from "../testlib/os-sandbox.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "codex-aa-test-"));
 const REAL_HOME = homedir();
@@ -118,7 +119,7 @@ writeCfg([]);
 {
   writeCfg([]);
   reconcileCodexAutoApprove([full("whoami"), full("knowledge_save")]);
-  const probe = spawnSync("codex", ["mcp", "list"], { env: { ...process.env, CODEX_HOME: CODEX }, encoding: "utf8" });
+  const probe = spawnSync("codex", ["mcp", "list"], { env: { ...process.env, ...offlineLivelyEnv(), CODEX_HOME: CODEX }, encoding: "utf8" });
   if (probe.error) console.log("skip B8 codex 미설치 — 실파싱 검증 생략");
   else {
     const out = `${probe.stdout || ""}${probe.stderr || ""}`;

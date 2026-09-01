@@ -2,6 +2,7 @@
 //  여기서 잡는 것: 세션당 1개 · 겹친 ensure 가 서버를 두 개 안 띄운다 · 멤버 경계 argv · 실패는 값으로(폴백 신호) ·
 //  resume 실패를 새 스레드로 덮지 않는다 · release 는 프로세스를 내린다(락 반납).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   answerApproval, askApproval, CodexChatUnavailable, codexChatStatus, dropAllCodexChats, dropSession,
   ensureCodexChat, interruptCodexChat, onChatEvent, pendingApprovals, releaseCodexChat, sendCodexChat,
@@ -16,7 +17,7 @@ const t = async (name: string, fn: () => Promise<void> | void): Promise<void> =>
 
 /** 서버 흉내 — initialize·thread/*·turn/* 에 즉답한다. 특정 메서드를 실패시킬 수 있다.
  *  turn/start 뒤에는 실제 서버처럼 **turn/started 알림**을 흘린다(런타임이 '도는 중'을 그걸로 안다). */
-function fakeServer(o: { failOn?: string; closeOnSend?: boolean; noTurnNotify?: boolean } = {}) {
+function fakeServer(o: { failOn?: string; failMessage?: string; closeOnSend?: boolean; noTurnNotify?: boolean } = {}) {
   const argvSeen: string[][] = [];
   const sentMethods: string[] = [];
   let closed = 0;
@@ -31,7 +32,7 @@ function fakeServer(o: { failOn?: string; closeOnSend?: boolean; noTurnNotify?: 
         sentMethods.push(m.method);
         if (m.id === undefined) return;                       // 알림엔 답이 없다
         if (o.failOn && m.method === o.failOn) {
-          setImmediate(() => onLine?.(JSON.stringify({ jsonrpc: "2.0", id: m.id, error: { code: -32600, message: `${m.method} 거부` } })));
+          setImmediate(() => onLine?.(JSON.stringify({ jsonrpc: "2.0", id: m.id, error: { code: -32600, message: o.failMessage ?? `${m.method} 거부` } })));
           return;
         }
         if (o.closeOnSend && m.method === "turn/start") { setImmediate(() => onClose?.("서버가 죽었다")); return; }
@@ -104,6 +105,31 @@ await t("★ N3 resume 이 거부되면(=TUI 가 쥐고 있다) 새 스레드로
   assert.ok(!f.sentMethods.includes("thread/start"), "새 대화를 몰래 파면 사람이 보던 대화와 달라진다");
   assert.equal(f.closedCount(), 1, "실패한 서버는 내린다(고아 프로세스 금지)");
   assert.equal(codexChatStatus("s1"), null);
+});
+
+// ── 이어 열기 실패의 두 갈래 (#2055 P3, 실측 2026-08-26 매니지드 e2e) ─────────────────────
+//  같은 "resume 실패"라도 뜻이 정반대다:
+//   · 남이 쥐고 있다 → 그 대화는 **살아 있다**. 새로 파면 사람이 보던 것과 다른 대화가 열린다.
+//   · 파일이 비었다·없다 → 이어 붙일 대화가 애초에 없다. 여기서 막으면 그 세션은 **영영 아웃박스로만**
+//     돌고 사람은 되돌릴 방법이 없다(실측: `rollout at …jsonl is empty` → 대화가 영영 안 열림).
+//  이 갈림을 잘못 잡으면 한쪽은 대화 분열, 다른 쪽은 회복 불가다. 그래서 표로 못박는다.
+await t("★ N4 대화 파일이 비었으면 새 대화로 시작한다 — 지킬 것이 없는데 막으면 회복이 안 된다", async () => {
+  const f = fakeServer({ failOn: "thread/resume", failMessage: "rollout at /home/x/.codex/sessions/a.jsonl is empty" });
+  const r = await ensureCodexChat(base({ threadId: "T-빈파일", transportFactory: f.factory }));
+  assert.ok(f.sentMethods.includes("thread/start"), "새 대화를 연다");
+  assert.equal(r.threadId, "T-new");
+});
+
+await t("★ N5 남이 쥐고 있으면 **여전히** 덮지 않는다 — 그 대화는 살아 있다", async () => {
+  const f = fakeServer({ failOn: "thread/resume", failMessage: "thread-store conflict: T-old already has an active writer" });
+  await assert.rejects(ensureCodexChat(base({ threadId: "T-old", transportFactory: f.factory })), CodexChatUnavailable);
+  assert.ok(!f.sentMethods.includes("thread/start"), "새 대화를 몰래 파면 사람이 보던 대화와 달라진다");
+});
+
+await t("N6 모르는 실패는 보수적으로 — 덮지 않는다(좁게 잡는다)", async () => {
+  const f = fakeServer({ failOn: "thread/resume", failMessage: "웬일인지 모르겠다" });
+  await assert.rejects(ensureCodexChat(base({ threadId: "T-old", transportFactory: f.factory })), CodexChatUnavailable);
+  assert.ok(!f.sentMethods.includes("thread/start"));
 });
 
 await t("O1 send 는 준비를 겸한다 — ensure 를 따로 안 불러도 된다", async () => {
@@ -263,6 +289,44 @@ await t("★ V3 답을 안 하면 그 승인은 계속 서 있다 — 화면이 
   assert.ok(answerApproval("s1", waiting[0].id, "decline"));
   assert.equal(pendingApprovals("s1").length, 0);
   assert.equal(answerApproval("s1", waiting[0].id, "accept"), false, "같은 승인에 두 번 답해도 안 터진다");
+});
+
+/** 제품 소스 원문 — 이 저장소 관례대로 dist 경로를 src 로 되돌려 읽는다(ai-login.test.ts 와 같은 방식). */
+const SRC = (): string => {
+  const src = readFileSync(new URL("./codex-chat-runtime.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  assert.ok(src.length > 2000, "제품 소스를 실제로 읽었다(vacuous test 방지)");
+  return src;
+};
+
+// ── 격리 리눅스 배포(#524)의 실행 자리 — 소스 계약으로 잡는다 ────────────────────────────
+//  왜 소스인가: 이 분기는 box_ OS 유저·sudoers·box-spawn 이 깔린 리눅스 박스에서만 실제로 돈다.
+//   맥·CI 에서는 재현할 수 없는데, **틀렸을 때 증상이 조용하다** — 대화창이 비고(다른 홈의 rollout 을
+//   찾는다) 격리가 뚫린다(에이전트가 게이트웨이 권한으로 돈다). 그래서 «어느 자리에서 띄우는가» 를
+//   본문 계약으로 못박는다. lvly-cloud 의 중계 계약 테스트와 같은 처방이다.
+await t("★ 격리 배포는 **TCP 를 안 쓴다** — loopback 포트는 uid 를 안 가려 같은 박스의 남이 붙을 수 있다", async () => {
+  const src = SRC();
+  const connect = src.slice(src.indexOf("async function connect("), src.indexOf("로컬(비격리·dev)"));
+  const iso = connect.slice(connect.indexOf("if (o.osUser)"));
+  assert.ok(iso.length > 200, "격리 분기를 못 잘랐다");
+  assert.ok(!/127\.0\.0\.1|sessionPort|ws:\/\//.test(iso), "격리 분기에 포트·loopback 이 없다");
+  assert.ok(iso.includes("sessionSockName"), "유닉스 소켓 경로를 쓴다");
+});
+
+await t("★ 격리 배포는 감독자·다리를 **멤버 자리에서** 돌린다 — 게이트웨이 uid 로 돌면 격리가 뚫린다", async () => {
+  const src = SRC();
+  const connect = src.slice(src.indexOf("async function connect("), src.indexOf("로컬(비격리·dev)"));
+  const iso = connect.slice(connect.indexOf("if (o.osUser)"));
+  assert.ok(iso.includes("memberWriteFile(o.osUser"), "감독자를 멤버 소유로 심는다");
+  assert.ok(iso.includes("memberShOut(o.osUser"), "멤버 자리에서 띄운다");
+  assert.ok(iso.includes("memberSpawnArgv(o.osUser"), "다리도 멤버 자리에서 돈다");
+  assert.ok(!iso.includes("spawnDetachedLocal"), "게이트웨이 로컬 spawn 으로 새지 않는다");
+});
+
+await t("★ rolloutPath 는 stdout 을 받는 통로를 쓴다 — memberSh 는 void 라 **항상 빈 경로**가 된다", async () => {
+  const src = SRC();
+  const fn = src.slice(src.indexOf("export async function rolloutPath"));
+  assert.ok(fn.includes("memberShOut(osUser"), "memberShOut 으로 읽는다");
+  assert.ok(!/\bmemberSh\(/.test(fn), "memberSh( 를 쓰지 않는다(출력을 버리는 통로다)");
 });
 
 dropAllCodexChats();

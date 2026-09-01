@@ -107,14 +107,34 @@ function openGitCredentialManager(scope: 'me' | 'gateway') {
 // ── 자격(커넥터 로그인) vault UI(#746 P1) — 능동 커넥터가 쓰는 per-user 토큰. 텍스트 최소화·드롭다운 위주. ──
 //  kind 는 드롭다운(친숙한 라벨), kind 별 필요한 필드만 노출, 헤더 형식은 프리셋(고급 토글 없이 숨김). '내 자격'은 전원,
 //  '통합 자격'·AWS 역할은 admin. secret 은 password 입력이고 목록엔 등록됨(✓)만 보인다(값 비노출).
-const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secretPh?: string; scope?: string; scopePh?: string; meta?: Record<string, string>; help?: string; docUrl?: string; memberOnly?: boolean }> = [
-  { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.example.com', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요. 레포(git) 관리의 [목록에서 선택] 드롭다운도 이 토큰으로 조회합니다 — git 전송을 SSH 로 하더라도 이 토큰만 있으면 목록을 불러올 수 있습니다.' },
+//  #1881 F9 — steps·scopes 축: 한 문단짜리 help 는 컴맹이 눈으로 따라가지 못한다(발급 화면을 옮겨다니며 읽어야 한다).
+//   steps 가 있으면 번호 카드로 그리고, scopes 가 있으면 **켜야 할 항목을 칩 목록 + 한 번에 복사**로 낸다.
+//   토큰 발급 화면에서 체크박스를 하나 빠뜨리는 것이 이 경로의 대표 실패였다(2026-08-26 실측: 팀 열거 403).
+const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secretPh?: string; scope?: string; scopePh?: string; meta?: Record<string, string>; help?: string; docUrl?: string; memberOnly?: boolean;
+  steps?: string[]; scopes?: Array<{ name: string; why: string }> }> = [
+  { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.example.com', docUrl: 'https://gitlab.com/-/user_settings/personal_access_tokens', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요. 레포(git) 관리의 [목록에서 선택] 드롭다운도 이 토큰으로 조회합니다 — git 전송을 SSH 로 하더라도 이 토큰만 있으면 목록을 불러올 수 있습니다.' },
   { kind: 'github_pat', label: 'GitHub 토큰(PAT)', secretLabel: 'GitHub 토큰', secretPh: 'ghp_… / github_pat_…', scope: 'GitHub 호스트', scopePh: 'github.com', docUrl: 'https://github.com/settings/tokens', meta: { auth_header: 'Authorization', token_prefix: 'Bearer ' }, help: 'GitHub ▸ Settings ▸ Developer settings ▸ Personal access tokens 에서 발급(classic=repo / fine-grained=Metadata read). 레포(git) 관리의 [목록에서 선택] 드롭다운이 이 토큰으로 조회합니다 — git 전송을 SSH(deploy key)로 하더라도 이 토큰만 있으면 목록을 불러올 수 있습니다.' },
   { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.', docUrl: 'https://api.slack.com/apps' },
   // notion_token·google_oauth_refresh 제거(#746) — 이 서비스는 OAuth 커넥터(관리탭 MCP 서버)로 연결. 정적 토큰 슬롯은 중복·미사용(죽은 옵션)이었음.
   { kind: 'clickup_token', label: 'ClickUp 토큰', secretLabel: 'ClickUp 토큰', secretPh: 'pk_…', meta: { token_prefix: '' }, help: 'ClickUp ▸ Settings ▸ Apps 에서 개인 API 토큰(pk_…) 발급.', docUrl: 'https://app.clickup.com/settings/apps' },
   { kind: 'prometheus_bearer', label: 'Prometheus Bearer 토큰', secretLabel: 'Bearer 토큰' },
-  { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' }, help: 'Figma ▸ Settings ▸ Security ▸ Personal access tokens 에서 발급(figd_…). 허용범위는 file_comments:read · file_content:read · file_metadata:read · folders:read · current_user:read 를 켜세요 — 코멘트 읽기와 팀·파일 목록에 필요합니다.', docUrl: 'https://www.figma.com/settings' },
+  { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' },
+    help: '디자인 파일의 코멘트를 읽습니다 — 결정·피드백이 대개 거기 쌓입니다. 아래 순서대로 하시면 2분입니다.',
+    docUrl: 'https://www.figma.com/settings',
+    steps: [
+      'Figma 를 열고 오른쪽 위 **내 프로필 ▸ Settings**',
+      '왼쪽 메뉴에서 **Security** 탭',
+      '**Personal access tokens** 에서 [Generate new token]',
+      '**허용범위(scopes)를 아래 목록대로 켭니다** — 이 단계를 빠뜨리면 저장은 되는데 나중에 수집이 실패합니다',
+      '만들어진 `figd_…` 를 복사해 아래 칸에 붙여넣고 [저장] — 저장하면 바로 연결을 확인해 드립니다',
+    ],
+    scopes: [
+      { name: 'file_comments:read', why: '코멘트 읽기 — 이게 핵심입니다' },
+      { name: 'file_content:read', why: '코멘트가 가리키는 화면' },
+      { name: 'file_metadata:read', why: '파일 이름(어느 화면 이야기인지)' },
+      { name: 'current_user:read', why: '연결된 계정 확인' },
+      { name: 'folders:read', why: '팀 전체를 한 번에 모을 때 — 파일 링크만 넣을 거면 없어도 됩니다' },
+    ] },
   // #1101(b)/#1299 — 헤드리스 claude -p(위탁) 실행 인증. task-scheduler 가 requester 의 member_secret(kind=claude_setup_token)을 CLAUDE_CODE_OAUTH_TOKEN 으로 리스한다. member 전용(격리 박스엔 공유 폴백 없음 — #1014) → 조직 자격 폼에선 숨긴다(memberOnly).
   //  ⚠ kind 는 member-secret-store 의 KIND_RE(소문자·숫자·_)를 지켜야 한다 — 하이픈이면 저장 단계에서 거부된다(#1299 초판 결함).
   { kind: 'claude_setup_token', label: 'Claude 헤드리스 토큰(setup-token)', secretLabel: 'setup-token', help: '터미널에서 `claude setup-token` 을 실행해 나온 토큰을 붙여넣으세요(클로드에 로그인된 상태에서 발급). 헤드리스 분류·에이전트 크론(claude -p)이 이 토큰으로 내 Claude 계정으로 인증·실행됩니다(구독 크레딧 과금). 내 세션·에이전트 실행에만 쓰이고 타 구성원에게 노출되지 않습니다.', memberOnly: true },
@@ -124,7 +144,7 @@ const AWS_REGIONS = ['ap-northeast-2', 'ap-northeast-1', 'us-east-1', 'us-west-2
 // 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
 function catalogStatusCard(catalog: any[], servers: any[]) {
   const byName = new Map((servers || []).map((s: any) => [s.name, s]));
-  const rows: any[] = [cardHead('기본 제공 도구 서버 상태', '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다 — 외부 자료 수집(미러)과는 별개 항목입니다. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서 하고, 구성원은 각자 [연결]에서 자기 계정을 연결합니다.')];
+  const rows: any[] = [cardHead('기본 제공 도구 서버 상태', '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다 — [맥락 관리 ▸ 가져오는 곳](자료 가져오기)과는 별개 항목입니다. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서 하고, 구성원은 각자 [연결]에서 자기 계정을 연결합니다.')];
   for (const c of (catalog || [])) {
     const s = byName.get(c.name);
     let chip: any; let hint = '';
@@ -181,21 +201,73 @@ function svcTokenForm(kind: string, reload: () => void) {
   const secretIn = secretInput({ placeholder: spec.secretPh || '토큰 값 붙여넣기' });   // 계정 비번 아님 — #1250
   const submit = el('button', { class: 'btn btn-primary btn-sm', text: '저장' });
   const status = el('span', { class: 'admin-status' });
+  // 저장 직후 연결 확인 결과가 앉는 자리 — 성공/실패를 **문장으로** 말한다(#1881 F9).
+  const verdict = el('div', { style: 'display:none;margin-top:10px;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.5' });
+  const showVerdict = (ok: boolean | null, msg: string) => {
+    verdict.style.display = 'block';
+    // 색은 의미만 싣는다 — 성공(초록)·실패(빨강)·건너뜀(중립). 토큰 자체는 절대 표시하지 않는다.
+    const tone = ok === true ? ['#0f5132', '#d1e7dd'] : ok === false ? ['#842029', '#f8d7da'] : ['#41464b', '#e9ecef'];
+    verdict.style.color = tone[0]; verdict.style.background = tone[1];
+    verdict.replaceChildren(el('span', { text: (ok === true ? '✓ ' : ok === false ? '✕ ' : 'ⓘ ') }), ...uiText(msg));
+  };
+
   submit.addEventListener('click', async () => {
     if (!secretIn.value.trim()) { toast('토큰을 입력하세요', true); return; }
     const payload: any = { kind: spec.kind, secret: secretIn.value };
     if (spec.scope && scopeIn.value.trim()) payload.scope_key = scopeIn.value.trim();
     if (spec.meta) payload.meta = spec.meta;
-    (submit as any).disabled = true; status.textContent = '저장 중…';
-    try { await api('/api/ui/me/credential', { method: 'POST', body: JSON.stringify(payload) }); toast('저장됨'); reload(); }
+    (submit as any).disabled = true; status.textContent = '저장 중…'; verdict.style.display = 'none';
+    try {
+      await api('/api/ui/me/credential', { method: 'POST', body: JSON.stringify(payload) });
+      toast('저장됨');
+      // 저장은 끝났다 — 확인은 덤이다. 확인이 실패해도 저장을 되돌리지 않는다(사용자가 다시 시도할 수 있어야 한다).
+      status.textContent = '연결 확인 중…';
+      try {
+        const r: any = await api('/api/ui/me/credential/verify', {
+          method: 'POST',
+          body: JSON.stringify({ kind: spec.kind, scope_key: (spec.scope && scopeIn.value.trim()) || '' }),
+        });
+        if (r && r.supported !== false) showVerdict(r.ok, String(r.message || ''));
+      } catch (_) { /* 확인 경로가 없는 배포(구 이미지)면 조용히 넘어간다 — 저장은 이미 성공했다 */ }
+      status.textContent = '';
+      reload();
+    }
     catch (e: any) { status.textContent = ''; (submit as any).disabled = false; toast((e && e.message) || '저장 실패', true); }
   });
+
+  // ── 발급 절차 — 번호 카드. 한 문단으로 적으면 화면을 옮겨다니며 읽어야 해서 따라가지지 않는다. ──
+  const stepsBlock = spec.steps && spec.steps.length
+    ? el('ol', { style: 'margin:8px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:13px;line-height:1.55' },
+        ...spec.steps.map((stx) => el('li', {}, ...uiText(stx))))
+    : null;
+
+  // ── 켜야 할 허용범위 — 칩 + 한 번에 복사. 체크박스 하나 빠뜨리는 것이 이 경로의 대표 실패다. ──
+  let scopesBlock: any = null;
+  if (spec.scopes && spec.scopes.length) {
+    const all = spec.scopes.map((x) => x.name).join(' ');
+    const copyBtn = el('button', { class: 'btn btn-sm', type: 'button', text: '허용범위 전체 복사' });
+    copyBtn.addEventListener('click', () => {
+      void navigator.clipboard?.writeText(all).then(() => toast('복사했어요 — Figma 발급 화면에서 하나씩 켜 주세요'), () => toast('복사하지 못했습니다', true));
+    });
+    scopesBlock = el('div', { style: 'margin-top:10px;padding:10px 12px;border:1px solid var(--line,#e3e5e8);border-radius:8px' },
+      el('div', { style: 'font-weight:600;font-size:13px;margin-bottom:6px', text: '켜야 할 허용범위' }),
+      el('ul', { style: 'margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:5px;font-size:12.5px' },
+        ...spec.scopes.map((sc) => el('li', { style: 'display:flex;gap:8px;align-items:baseline;flex-wrap:wrap' },
+          el('code', { style: 'font-size:12px;padding:1px 6px;border-radius:4px;background:var(--chip,#f1f3f5)', text: sc.name }),
+          el('span', { class: 'admin-hint', style: 'margin:0', text: sc.why })))),
+      el('div', { style: 'margin-top:8px' }, copyBtn));
+  }
+
   return el('div', { class: 'card', style: 'padding:14px' },
-    spec.scope ? field(spec.scope + '(선택)', scopeIn) : null,
-    field(spec.secretLabel, secretRow(secretIn)),
-    spec.help ? el('p', { class: 'admin-hint', style: 'margin:2px 0 0' }, ...uiText(spec.help)) : null,
-    spec.docUrl ? el('a', { class: 'admin-hint', href: spec.docUrl, target: '_blank', rel: 'noopener', style: 'display:inline-block; margin:6px 0 0', text: '토큰 발급 페이지 열기 ↗' }) : null,
-    el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status));
+    spec.help ? el('p', { class: 'admin-hint', style: 'margin:0 0 2px' }, ...uiText(spec.help)) : null,
+    stepsBlock,
+    spec.docUrl ? el('a', { class: 'btn btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener', style: 'display:inline-block;margin:10px 0 0', text: (spec.label || '토큰') + ' 발급 페이지 열기 ↗' }) : null,
+    scopesBlock,
+    el('div', { style: 'margin-top:12px' },
+      spec.scope ? field(spec.scope + '(선택)', scopeIn) : null,
+      field(spec.secretLabel, secretRow(secretIn))),
+    el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status),
+    verdict);
 }
 
 // 자격 목록 + 추가 폼 카드(me 또는 org). aws_role_arn 은 별도(awsRoleCard).

@@ -9,7 +9,7 @@ import {
   type GitCredentialPublic
 } from "../../org/credentials/git-credential-store.js";
 // #1077 등록 직후 홈 즉시 반영 — materialize(홈 쓰기) + 그 멤버의 격리 계정 해소(ready·provisioned·osUser).
-import { materializeMemberGit } from "../../org/credentials/git-credential-materialize.js";
+import { materializeMemberGit } from "../../org/credentials/git-credential-materialize-gateway.js";   // #2165 — DB 를 타는 조각은 게이트웨이 모듈에
 import { secretsEnabled } from "../../org/credentials/secret-box.js";
 import { actorOf, restOnly, restRead, str } from "./shared.js";
 

@@ -1,0 +1,215 @@
+// claude 대화 런타임 계약 (#2439 ②) — 가짜 프로세스(spawnFn seam)로 **실제 spawn 없이** 검증한다.
+//
+//  지키는 것 셋:
+//   ① argv 가 필요한 플래그를 다 갖는다(하나라도 빠지면 그 표면이 통째로 안 온다).
+//   ② stdout 청크가 줄 가운데서 끊겨도 이벤트를 잃지 않는다.
+//   ③ ★ 런타임이 죽으면 걸려 있던 승인이 **반드시 마감**된다 — 안 하면 그 턴은 영영 안 끝난다.
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import {
+  ClaudeChatUnavailable, claudeChatArgv, claudeChatSpawnArgv,
+  ensureClaudeChat, isClaudeChatLive, sendClaudeChat, stopClaudeChat,
+} from "./claude-chat-runtime.js";
+import { ask, onSessionEvent, pendingAsks, resetSessionBus } from "./runtime-bus.js";
+import type { SessionEvent } from "./session-event.js";
+
+let pass = 0;
+const t = (name: string, fn: () => Promise<void> | void): Promise<void> =>
+  Promise.resolve(fn()).then(() => { pass++; console.log(`ok  ${name}`); });
+
+/** 가짜 자식 프로세스 — stdout 을 우리가 밀어 넣고, exit 를 우리가 낸다. */
+function fakeChild() {
+  const child = new EventEmitter() as any;
+  child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const written: string[] = [];
+  child.stdin = { write: (s: string) => { written.push(s); return true; }, end: () => {}, destroyed: false };
+  child.kill = () => {};
+  child.written = written;
+  return child;
+}
+const opts = (sessionId: string, child: any) => ({
+  sessionId, cwd: "/tmp", osUser: null, spawnFn: () => child,
+});
+
+await t("[1] argv — 필요한 플래그가 다 있다(하나 빠지면 그 표면이 통째로 안 온다)", () => {
+  const a = claudeChatArgv({});
+  for (const f of ["--print", "--input-format", "stream-json", "--output-format", "--verbose",
+                   "--replay-user-messages", "--forward-subagent-text"]) {
+    assert.ok(a.includes(f), `${f} 가 있다`);
+  }
+  //  ⚠ 없는 대화 id 로 --resume 하면 프로세스가 즉시 죽는다 — 있을 때만 붙인다.
+  assert.ok(!a.includes("--resume"), "convId 가 없으면 --resume 을 안 붙인다");
+  assert.ok(claudeChatArgv({ convId: "abc" }).includes("--resume"));
+  assert.ok(claudeChatArgv({ model: "claude-haiku-4-5" }).includes("--model"));
+});
+
+await t("[2] 실행 경계 사다리 — 세션 → 멤버 → 로컬 (경계 계산을 두 벌로 두지 않는다)", () => {
+  const argv = ["claude", "--print"];
+  //  중계 env 가 없으면 로컬(비격리) — osUser 도 없으면 argv 그대로.
+  assert.deepEqual(claudeChatSpawnArgv("s1", null, argv), argv);
+  //  osUser 가 있으면 멤버 경계로 감싼다(sudo→box-spawn). 원 argv 가 꼬리에 그대로 남는다.
+  const wrapped = claudeChatSpawnArgv("s1", "box_yoon", argv);
+  assert.ok(wrapped.length > argv.length, "감쌌다");
+  assert.deepEqual(wrapped.slice(-argv.length), argv, "원 명령이 꼬리에 그대로 있다");
+});
+
+await t("[3] stdout 이벤트가 버스로 흐른다 · ★줄 가운데서 끊겨도 잃지 않는다", async () => {
+  const S = "r3"; resetSessionBus(S);
+  const got: SessionEvent[] = [];
+  onSessionEvent(S, (e) => got.push(e));
+  const child = fakeChild();
+  ensureClaudeChat(opts(S, child) as any);
+
+  const evt = JSON.stringify({
+    type: "system", subtype: "task_started", task_id: "T1", task_type: "local_bash",
+    description: "빌드", tool_use_id: "tu1",
+  });
+  //  ⚠ 청크를 **줄 가운데서** 자른다 — 실제 파이프가 그렇게 온다.
+  child.stdout.write(evt.slice(0, 20));
+  child.stdout.write(evt.slice(20) + "\n");
+  await new Promise((r) => setImmediate(r));
+
+  //  ⚠ 화면이 보는 것은 **접힌 스냅샷**이다 — 버스가 델타를 접어 내보낸다(runtime-bus.emitSessionEvent).
+  //   접는 규칙이 서버·화면 두 벌이 되지 않게 한 결정이라, 여기서도 그 계약을 확인한다.
+  const snap = got.find((e) => e.t === "tasks.snapshot");
+  assert.ok(snap, "tasks.snapshot 이 왔다");
+  assert.equal((snap as any).tasks[0].kind, "shell");
+  assert.equal((snap as any).tasks[0].title, "빌드");
+  stopClaudeChat(S, "테스트 정리");
+});
+
+await t("[4] 대화 id 를 첫 줄에서 잡는다(재개·대화 파일 찾기의 단서)", async () => {
+  const S = "r4"; resetSessionBus(S);
+  const child = fakeChild();
+  ensureClaudeChat(opts(S, child) as any);
+  child.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "conv-9", model: "m" }) + "\n");
+  await new Promise((r) => setImmediate(r));
+  const { convId } = await sendClaudeChat({ ...opts(S, child), text: "hi" } as any);
+  assert.equal(convId, "conv-9");
+  stopClaudeChat(S, "테스트 정리");
+});
+
+await t("[5] 말을 걸면 stream-json 한 줄이 stdin 으로 나간다", async () => {
+  const S = "r5"; resetSessionBus(S);
+  const child = fakeChild();
+  await sendClaudeChat({ ...opts(S, child), text: "안녕", startupMs: 0 } as any);
+  assert.equal(child.written.length, 1);
+  const sent = JSON.parse(child.written[0]);
+  assert.equal(sent.type, "user");
+  assert.equal(sent.message.content[0].text, "안녕");
+  assert.ok(child.written[0].endsWith("\n"), "줄바꿈으로 끝난다(JSONL)");
+  stopClaudeChat(S, "테스트 정리");
+});
+
+await t("[6] 빈 말은 거부 — 런타임을 띄우지도 않는다", async () => {
+  const S = "r6"; resetSessionBus(S);
+  await assert.rejects(() => sendClaudeChat({ ...opts(S, fakeChild()), text: "   " } as any), ClaudeChatUnavailable);
+  assert.equal(isClaudeChatLive(S), false);
+});
+
+await t("[7] ★★ 프로세스가 죽으면 걸려 있던 승인이 마감된다 — 안 하면 그 턴은 영영 안 끝난다", async () => {
+  const S = "r7"; resetSessionBus(S);
+  const child = fakeChild();
+  ensureClaudeChat(opts(S, child) as any);
+  const p = ask<string>(S, "a1", { toolName: "Bash" }, "deny");
+  assert.equal(pendingAsks(S).length, 1);
+  child.emit("exit", 1, null);                       // 런타임 사망
+  assert.equal(await p, "deny", "기본값(거부)으로 마감됐다");
+  assert.equal(pendingAsks(S).length, 0);
+  assert.equal(isClaudeChatLive(S), false);
+});
+
+await t("[8] stop 은 멱등 · 죽은 뒤에도 남은 승인을 마감한다", async () => {
+  const S = "r8"; resetSessionBus(S);
+  const child = fakeChild();
+  ensureClaudeChat(opts(S, child) as any);
+  assert.equal(stopClaudeChat(S, "1차"), true);
+  assert.equal(stopClaudeChat(S, "2차"), false, "두 번 불러도 안전하다");
+  //  런타임이 없어도 남은 승인은 마감한다(경합으로 순서가 뒤집힐 수 있다).
+  const p = ask<string>(S, "a1", {}, "deny");
+  stopClaudeChat(S, "3차");
+  assert.equal(await p, "deny");
+});
+
+await t("[9] 같은 세션에 두 번 ensure 하면 프로세스는 하나다", () => {
+  const S = "r9"; resetSessionBus(S);
+  let spawned = 0;
+  const child = fakeChild();
+  const o = { sessionId: S, cwd: "/tmp", osUser: null, spawnFn: () => { spawned++; return child; } };
+  ensureClaudeChat(o as any); ensureClaudeChat(o as any);
+  assert.equal(spawned, 1);
+  stopClaudeChat(S, "테스트 정리");
+});
+
+await t("[10] ★ 하네스 무관 — 같은 런타임이 antigravity 를 연다(두 번째 런타임을 만들지 않는다)", async () => {
+  const S = "r10"; resetSessionBus(S);
+  const got: SessionEvent[] = [];
+  onSessionEvent(S, (e) => got.push(e));
+  const child = fakeChild();
+  //  ⚠ argv 는 **표가 정본**이다 — 여기서 손으로 적지 않는다. antigravity 는 argv 가 null 이라
+  //   (다중 턴 왕복 미실측) 런타임이 «못 연다» 고 말해야 한다. 있는 척하면 빈 세션이 열린다.
+  assert.throws(
+    () => ensureClaudeChat({ sessionId: S, harness: "antigravity", cwd: "/tmp", osUser: null, spawnFn: () => child } as any),
+    ClaudeChatUnavailable,
+    "표에 argv 가 없으면 런타임이 거부한다",
+  );
+  //  claude 는 표에 argv 가 있으니 열린다 — **같은 함수**로.
+  ensureClaudeChat(opts(S, child) as any);
+  child.stdout.write(JSON.stringify({ type: "system", subtype: "task_started", task_id: "T", task_type: "local_agent", description: "리뷰", subagent_type: "x", spawn_depth: 1 }) + "\n");
+  await new Promise((r) => setImmediate(r));
+  const snap = got.find((e) => e.t === "tasks.snapshot");
+  assert.equal((snap as any).tasks[0].kind, "agent");
+  stopClaudeChat(S, "테스트 정리");
+});
+
+await t("[11] ★ 인코딩을 모르는 하네스엔 말을 못 건다 — 있는 척하지 않는다", async () => {
+  const S = "r11"; resetSessionBus(S);
+  //  grok·opencode·antigravity 는 translate 는 있는데 encode 가 없다(보내는 쪽 왕복 미실측).
+  //  그 상태에서 보내기가 «성공» 하면 사람은 답을 영영 기다린다.
+  for (const h of ["grok", "opencode", "antigravity"]) {
+    await assert.rejects(
+      () => sendClaudeChat({ sessionId: S, harness: h, cwd: "/tmp", osUser: null, text: "안녕", spawnFn: () => fakeChild() } as any),
+      ClaudeChatUnavailable, `${h}: 인코딩이 없으면 거부한다`,
+    );
+  }
+});
+
+await t("[12] ★★ 바로 죽는 프로세스는 «전달됨» 이 아니다 — 폴백이 걸려야 한다", async () => {
+  //  ⚠ 이 구멍이 실제로 있었다(2026-09-01). `spawn` 은 비동기라 인자를 모르는 빌드는 즉시 죽지만
+  //   그 exit 은 **다음 틱**에 온다 — 그 사이 `send()` 는 멀쩡한 파이프에 써서 true 를 준다.
+  //   그러면 deliverPrompt 가 «전달됨» 을 반환해 **폴백이 안 걸리고**, 사람은 보낸 줄 알고
+  //   답을 영영 기다린다. 코드 어디에도 오류가 안 나므로 눈으로는 못 잡는다.
+  const S = "r12"; resetSessionBus(S);
+  const child = fakeChild();
+  const p = sendClaudeChat({ ...opts(S, child), text: "안녕", startupMs: 3000 } as any);
+  //  한 줄도 못 내고 죽는다 — 인자를 모르는 빌드의 모양 그대로.
+  setTimeout(() => child.emit("exit", 1), 20);
+  await assert.rejects(() => p, ClaudeChatUnavailable, "기동 실패를 알린다(조용히 성공하지 않는다)");
+  assert.equal(isClaudeChatLive(S), false, "죽은 런타임을 남겨 두지 않는다(다음 턴이 재시도한다)");
+});
+
+await t("[13] 한 줄이라도 냈으면 산 것이다 — 느린 기동을 죽음으로 오인하지 않는다", async () => {
+  const S = "r13"; resetSessionBus(S);
+  const child = fakeChild();
+  const p = sendClaudeChat({ ...opts(S, child), text: "안녕", startupMs: 3000 } as any);
+  setTimeout(() => child.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "c1" }) + "\n"), 20);
+  const r = await p;
+  assert.equal(r.convId, "c1");
+  stopClaudeChat(S, "테스트 정리");
+});
+
+await t("[14] 이미 살아 있던 세션은 기동 확인을 **다시 하지 않는다**(둘째 턴부터 비용 0)", async () => {
+  const S = "r14"; resetSessionBus(S);
+  const child = fakeChild();
+  ensureClaudeChat(opts(S, child) as any);
+  child.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "c2" }) + "\n");
+  await new Promise((r) => setImmediate(r));
+  const t0 = Date.now();
+  //  startupMs 를 크게 줘도 기다리지 않는다 — 이미 있던 세션이라 그 문을 안 탄다.
+  await sendClaudeChat({ ...opts(S, child), text: "둘째", startupMs: 5000 } as any);
+  assert.ok(Date.now() - t0 < 400, `기다리지 않는다(${Date.now() - t0}ms)`);
+  stopClaudeChat(S, "테스트 정리");
+});
+
+console.log(`\n${pass}건 통과`);

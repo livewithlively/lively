@@ -7,8 +7,9 @@ import { HttpError } from "./rest-util.js";
 import { secretsEnabled } from "../org/credentials/secret-box.js";
 import {
   GATEWAY_OWNER, memberOwner, listMemberSecretsPublic, listSecretsByKindPublic,
-  setMemberSecret, deleteMemberSecret,
+  setMemberSecret, deleteMemberSecret, getMemberSecret,
 } from "../org/credentials/member-secret-store.js";
+import { verifyCredential, verifierExists } from "../org/credentials/credential-verify.js";
 import { lastAuthFailureFor } from "../node/auth-failure-response.js"; // #1675 ③ 자격 건강 상태
 
 // 알려진 kind — 표면 문서/검증용(스토어는 형식만 검증하므로 신규 커넥터가 kind 를 늘려도 되지만, 오타 방지 힌트).
@@ -82,6 +83,34 @@ const meCredentialSet: Capability = {
     return { credential: cred };
   },
 };
+// #1881 F9 — 붙여넣은 토큰이 **실제로 되는지** 저장 직후 한 번 물어본다.
+//  왜: 토큰은 형식 검사도 없이 저장되고, 오타·만료·허용범위 누락은 한참 뒤 수집이 조용히 실패할 때야 드러난다.
+//  상류는 대개 무엇이 잘못됐는지 정확히 말해 주므로(피그마는 빠진 스코프 이름을 본문에 적어 준다),
+//  그 문장을 사람 말로 옮겨 그 자리에서 보여주면 사용자가 혼자 고친다.
+const meCredentialVerify: Capability = {
+  name: "me_credential_verify", title: "내 자격 연결 확인",
+  description:
+    "저장해 둔 내 자격으로 상류에 **읽기 전용 호출을 한 번** 해서 실제로 통하는지 확인한다(부작용 없음). " +
+    "성공하면 연결된 계정을, 실패하면 무엇을 어떻게 고쳐야 하는지 사람 말로 돌려준다(예: 빠진 허용범위 이름). " +
+    "확인 경로가 없는 종류는 ok=null 로 건너뛴다 — 저장은 정상이다.",
+  scope: null,
+  input: {
+    kind: z.string().describe(KIND_DESC),
+    scope_key: z.string().optional().describe("같은 종류를 여러 개 쓸 때의 구분값(예: GitLab 호스트). 기본은 빈 문자열."),
+  },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/me/credential/verify"], parse: (req) => req.body ?? {} }] },
+  handler: async (input, user) => {
+    if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+    const i = (input ?? {}) as Record<string, unknown>;
+    const kind = s(i.kind);
+    if (!kind) throw new HttpError(400, "kind 는 필수입니다");
+    if (!verifierExists(kind)) return { ok: null, supported: false, message: "이 종류는 자동 확인을 지원하지 않아요 — 저장은 정상입니다." };
+    const cred = await getMemberSecret(memberOwner(user.userId), kind, s(i.scope_key) || "");
+    if (!cred?.secret) return { ok: false, supported: true, message: "저장된 토큰이 없어요 — 먼저 토큰을 저장해 주세요." };
+    const r = await verifyCredential(kind, cred.secret);
+    return { ...r, supported: true };
+  },
+};
 const meCredentialDelete: Capability = {
   name: "me_credential_delete", title: "내 백엔드 자격 삭제",
   description: "본인 백엔드 자격을 삭제한다(kind·scope_key 지정).",
@@ -142,6 +171,6 @@ const orgCredentialDelete: Capability = {
 };
 
 export const memberSecretCapabilities: Capability[] = [
-  meCredentials, meCredentialSet, meCredentialDelete,
+  meCredentials, meCredentialSet, meCredentialVerify, meCredentialDelete,
   orgCredentials, orgCredentialSet, orgCredentialDelete,
 ];

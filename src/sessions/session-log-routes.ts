@@ -18,13 +18,16 @@ import { auditOrgContent } from "../v6/content-audit.js";
 import { sessionFootprint, purgeFootprint, type PurgeSelection } from "../v6/session-footprint-store.js";
 import { projectDirOnThisHost } from "../terminal/session-project.js";   // #1850 — 완전 삭제한 프로젝트의 폴더(첨부·자료 파일)
 import { rm as fsRm } from "node:fs/promises";   // #1850 P2 — 이 세션이 남긴 것   // #1850 — 삭제 '사실'만 남긴다(내용 없이)
-import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
+import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionRegistryOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwnerPage, listSessionsForProject, listSubagentsForSession, purgeSessionLog, isSessionPurged, type SessionListRow } from "../v6/session-log-store.js";
 import { trashMapFor } from "./session-trash.js";   // #1851 — 내 세션 목록에 휴지통 표식
+import { sessionConvsFor, convsTakenByOtherSession } from "./session-state.js";   // #2233 — 한 박스가 갈아탄 대화 사슬
+import { currentTenant } from "../org/tenant-context.js";   // #1875 — 세션 목록 워크스페이스 격리
+import { PRIMARY_TENANT_ID } from "../org/tenancy/registry.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import { parseWindow } from "../terminal/harness-io/parse-cache.js";
 import { toNdjson, toThinNdjson, THIN_MAX_BYTES } from "../terminal/harness-io/chat-line.js";
-import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
+import { sessionInvitesMember, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { executionSessionProject } from "../v6/execution-session-store.js";
 
 /** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
@@ -68,17 +71,33 @@ export function checkAppendGate(g: AppendGateInput): { status: number; message: 
   return null;
 }
 
-// 웹뷰 열람 인가 판정(순수, #905 C1 슬2d) — 트랜스크립트 **전문**이 나가므로 프라이버시 게이트. ok면 null.
-//  · 신원부재 → 403. · 소유자면 항상 허용(view_policy 무관 — 자기 로그). · view_policy="attach" 면 프로젝트 멤버도 허용.
-//  · 그 외(owner 정책의 비소유자 등) → 403. 열람은 resume 보다 넓다(canViewLog ≠ canResumeAsOrigin, 설계 §5).
-//    isProjectMember 는 라우트가 DB 로 채운다(attach 이고 비소유자일 때만 필요 — 소유자면 조회조차 안 함).
+/**
+ * 웹뷰 열람 인가 판정(순수, #905 C1 슬2d) — 트랜스크립트 **전문**이 나가므로 프라이버시 게이트. ok면 null.
+ *
+ * ★ #1876 S2 — `attach` 분기가 «프로젝트 멤버» 에서 **«그 세션에 초대된 사람»** 으로 바뀌었다.
+ *  목록·입장과 같은 축이다(소유자 + 명시 초대). 노브 `view_policy` 는 이름을 그대로 두고 뜻만 정확해졌다 —
+ *  attach = "그 세션에 들어갈 수 있는 사람", 그리고 이제 그 말이 실제로 참이다(관리탭 문구 "세션 입장 가능자").
+ *
+ *  · 신원부재 → 403(라우트가 404 로 옮긴다 — S3). · 소유자면 항상 허용(view_policy 무관 — 자기 로그).
+ *  · invited 는 라우트가 DB 로 채운다(attach 이고 비소유자일 때만 필요 — 소유자면 조회조차 안 함).
+ */
 export interface ViewGateInput {
-  requester: string; owner: string | null; viewPolicy: string; isProjectMember: boolean;
+  requester: string; owner: string | null; viewPolicy: string; invited: boolean;
+  /**
+   * 레지스트리가 아는 이 세션의 주인(#1631). `owner` 는 **첫 append 한 멤버**라 기록이 한 줄도 없으면 null 인데,
+   *  그러면 소유자 검사가 통째로 건너뛰어져 **자기 세션을 연 사람에게 «권한이 없습니다»** 가 나갔다
+   *  (실측 2026-08-31: 온보딩 직후 착지하는 그 화면이 정확히 이 모양이었다). 호출자가 알면 넘긴다 — 모르면 생략.
+   */
+  registryOwner?: string | null;
 }
 export function checkViewGate(g: ViewGateInput): { status: number; message: string } | null {
   if (!g.requester) return { status: 403, message: "사용자 신원이 없습니다" };
   if (g.owner && g.owner === g.requester) return null;                    // 소유자는 언제나 자기 로그를 본다
-  if (g.viewPolicy === "attach" && g.isProjectMember) return null;        // 프로젝트 멤버 열람(DB 기반, 죽은 세션도)
+  //  ★ 기록이 아직 없는 자기 세션(#1631) — 「기록이 없다」와 「볼 권한이 없다」는 다른 사실이다.
+  //   기록 축(owner)이 비었을 때만 레지스트리 축을 본다. 기록이 있는데 주인이 다르면 그 답이 정본이다
+  //   (레지스트리로 덮으면 남의 기록을 자기 세션 id 로 열 수 있다).
+  if (!g.owner && g.registryOwner && g.registryOwner === g.requester) return null;
+  if (g.viewPolicy === "attach" && g.invited) return null;                // 초대된 사람(미러 기반 — 죽은 세션도)
   return { status: 403, message: "이 세션 로그를 볼 권한이 없습니다" };
 }
 // 완전 삭제 인가 판정(순수, #1850) — 개인정보 삭제요구권의 이행 경로라 게이트를 좁게 잡는다. ok면 null.
@@ -132,7 +151,10 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // #1851 휴지통 — 내 표식: 휴지통이면 trashed_at, 완전 삭제(purged)면 행을 뺀다(terminal/sessions 와 같은 규칙).
     //  #2022 후속 — 깊이를 호출자가 정한다(기본 200 = 종전). 화면은 매 틱 얕게, 이따금 깊게 부른다.
     //   상한(SESSION_LIST_MAX)은 스토어가 쥔다 — 여기서 두 번 정의하지 않는다.
-    const page = await listSessionsForOwnerPage(requester, Number(req.query.limit ?? 200));
+    // #1875 — 세션 목록은 **지금 보고 있는 워크스페이스**의 것만. gw_session_map 부재 = primary(PRIMARY_TENANT_ID).
+    //  이 필터가 없으면 owner(전역 신원)로만 걸러 개인 워크스페이스 사이드바에 박스 전체 세션 제목이 샜다(실측 신고).
+    const wsId = currentTenant()?.id ?? PRIMARY_TENANT_ID;
+    const page = await listSessionsForOwnerPage(requester, Number(req.query.limit ?? 200), wsId);
     let rows = page.rows;
     try {
       const marks = await trashMapFor(requester);
@@ -151,7 +173,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     res.json({ sessions: rows, truncated: page.truncated });
   }));
 
-  // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함). 인가: 프로젝트 멤버.
+  // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함).
+  //  인가는 **두 겹**이다(#1876 S2): 프로젝트 멤버여야 이 창구를 열 수 있고(종전), 그 안에서 보이는 것은
+  //  **내가 소유·초대받은 세션뿐**이다(신설). 종전엔 둘째가 없어 프로젝트 멤버가 남의 세션 제목·시각을 다 봤다.
   //  ⚠ 경로가 `/sessions` 가 아니라 `/session-logs` — `/projects/:id/sessions`(project-routes.ts)는 **살아있는
   //    tmux 세션**을 돌려주는 별개 엔드포인트라 충돌한다. 여기는 중앙 로그 이력(죽은 세션 포함)이라 개념도 다르다.
   app.get("/api/ui/v6/projects/:id/session-logs", auth, wrap(async (req, res) => {
@@ -161,7 +185,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!Number.isInteger(projectId) || projectId <= 0) throw new HttpError(400, "프로젝트 id 형식 오류");
     if (!(await isProjectMember(projectId, requester))) throw new HttpError(403, "이 프로젝트의 멤버가 아닙니다");
     res.setHeader("Cache-Control", "no-store");
-    res.json({ sessions: await listSessionsForProject(projectId) });
+    res.json({ sessions: await listSessionsForProject(projectId, requester) });
   }));
 
   // 델타 append — offset-CAS. at=현재 보낸 쪽 오프셋, node=실행 노드('' 기본). 응답 {ok, verdict, bytes} 로 오프셋 정정.
@@ -266,14 +290,19 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
     const from = req.query.from !== undefined ? Number(req.query.from) : 0;
     if (!Number.isFinite(from) || from < 0 || Math.floor(from) !== from) throw new HttpError(400, "from(오프셋)은 0 이상 정수여야 합니다");
+    // #2233 — 이 대화가 딸린 **박스** id(선택). 있으면 얇은 판이 그 박스가 갈아탄 대화들까지 이어 붙인다.
+    const boxId = String(req.query.box ?? "").trim();
+    if (boxId && !SID_RE.test(boxId)) throw new HttpError(400, "box 형식 오류");
 
     // 열람 게이트(순수 checkViewGate) — owner·view_policy·멤버십. attach 이고 비소유자일 때만 멤버십 DB 조회.
     const cfg = (await getRuntimeConfig()).session_share;
     const owner = await sessionOwner(nodeId, sessionId);
-    const isOwner = !!owner && owner === requester;
-    const isProjectMember = !isOwner && cfg.view_policy === "attach"
-      ? await sessionBoundToMemberProject(sessionId, requester) : false;
-    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, isProjectMember });
+    //  기록이 아직 없으면(첫 대화 전) owner 는 null 이다 — 그때만 레지스트리 축을 보조로 본다(#1631).
+    const registryOwner = owner ? null : await sessionRegistryOwner(sessionId);
+    const isOwner = (!!owner && owner === requester) || (!owner && !!registryOwner && registryOwner === requester);
+    const invited = !isOwner && cfg.view_policy === "attach"
+      ? await sessionInvitesMember(sessionId, requester) : false;
+    const denied = checkViewGate({ requester, owner, registryOwner, viewPolicy: cfg.view_policy, invited });
     if (denied) throw new HttpError(denied.status, denied.message);
 
     // #1719 세션 대화창 — to/tail 이 오면 창(window)으로 읽는다(꼬리부터, 상한 4MB — transcript-range.ts).
@@ -297,10 +326,37 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
         ? { start: Math.max(0, total - THIN_MAX_BYTES), end: total }
         : transcriptRange(total, { from: req.query.from, to: req.query.to, tail: req.query.tail });
       if (io?.parse) {
+        const readThin = async (conv: string): Promise<string> => {
+          const t = await sessionLogWatermark(nodeId, conv);
+          if (!t) return "";
+          const rd = { read: (s: number, e: number) => readSessionLog(nodeId, conv, s, e).then((r) => r.data) };
+          const s0 = Math.max(0, t - THIN_MAX_BYTES);
+          const w = await readAlignedWindow(rd, t, s0, t, false);
+          return w.data.length ? toThinNdjson(parseWindow(io.parse!, `log|${nodeId}|${conv}`, w.from, w.to, w.data.toString("utf8"))) : "";
+        };
         const reader = { read: (s: number, e: number) => readSessionLog(nodeId, sessionId, s, e).then((r) => r.data) };
         const win = rng.end > rng.start ? await readAlignedWindow(reader, total, rng.start, rng.end, !thin && req.query.to !== undefined) : { from: rng.start, to: rng.start, data: Buffer.alloc(0) };
         const lines = win.data.length ? parseWindow(io.parse, `log|${nodeId}|${sessionId}`, win.from, win.to, win.data.toString("utf8")) : [];
         ndjson = thin ? toThinNdjson(lines) : toNdjson(lines);
+        // ★ #2233 — 얇은 판은 **이 박스가 돌린 대화 전부**다. 박스가 /clear·resume·포크로 대화를 갈아타면 그 전 질문이
+        //  통째로 안 보였다(박스 세션과 같은 결함, 같은 처방). box= 는 화면이 알려 주는 이 세션의 박스 id 이고,
+        //  사슬은 기록(org_session_conv)에서만 온다 — 노드에는 폴더가 없으니 추측할 여지 자체가 없다.
+        //  열람 게이트는 대화마다 다시 건다(같은 소유자·같은 정책일 때만 붙인다).
+        if (thin && boxId) {
+          const known = (await sessionConvsFor(boxId).catch(() => [])).filter((c) => c.conv_uuid && c.conv_uuid !== sessionId);
+          const taken = await convsTakenByOtherSession(boxId, known.map((c) => c.conv_uuid));
+          const heads: string[] = [];
+          for (const c of known.slice(-11)) {
+            if (taken.has(c.conv_uuid)) continue;
+            const o = await sessionOwner(nodeId, c.conv_uuid);
+            if (!o) continue;
+            const mine = o === requester;
+            const inv = !mine && cfg.view_policy === "attach" ? await sessionInvitesMember(c.conv_uuid, requester) : false;
+            if (checkViewGate({ requester, owner: o, viewPolicy: cfg.view_policy, invited: inv })) continue;
+            heads.push(await readThin(c.conv_uuid).catch(() => ""));
+          }
+          ndjson = heads.filter(Boolean).join("") + (ndjson ?? "");
+        }
         log = { from: win.from, bytes: total, data: win.data }; winEnd = win.to;
       } else {
         log = await readSessionLog(nodeId, sessionId, rng.start, rng.end);
@@ -340,9 +396,11 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
     const cfg = (await getRuntimeConfig()).session_share;
     const owner = await sessionOwner(nodeId, sessionId);
-    const isOwner = !!owner && owner === requester;
-    const isMember = !isOwner && cfg.view_policy === "attach" ? await sessionBoundToMemberProject(sessionId, requester) : false;
-    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, isProjectMember: isMember });
+    //  기록이 아직 없으면(첫 대화 전) owner 는 null 이다 — 그때만 레지스트리 축을 보조로 본다(#1631).
+    const registryOwner = owner ? null : await sessionRegistryOwner(sessionId);
+    const isOwner = (!!owner && owner === requester) || (!owner && !!registryOwner && registryOwner === requester);
+    const invited = !isOwner && cfg.view_policy === "attach" ? await sessionInvitesMember(sessionId, requester) : false;
+    const denied = checkViewGate({ requester, owner, registryOwner, viewPolicy: cfg.view_policy, invited });
     if (denied) throw new HttpError(denied.status, denied.message);
     res.setHeader("Cache-Control", "no-store");
     res.json({ subagents: await listSubagentsForSession(nodeId, sessionId) });
@@ -379,6 +437,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       //  좁혀둔 기록 범위도 풀린다. '이어보기'는 그 세션을 잇는 것이지 새로 여는 게 아니다.
       const prev = await getSessionState(sessionId).catch(() => undefined);
       const session = await createSession(user, {
+        kind: "human",   // #2162 — 사람이 기록을 이어 여는 세션
         label: `이어보기 · ${sessionId.slice(0, 8)}`, rootKey: "shared", subpath: path.relative(sharedBase, cwd),
         // #1711 — 원본 세션의 하네스로 연다. 종전엔 "claude" 고정이라, codex 로 만든 세션의 기록을 이어보면
         //  **다른 하네스로** 열리면서 resume id 도 그 하네스에서 무의미해졌다(모드·기록범위는 이미 승계 중이었다).
@@ -395,6 +454,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (proj?.folder) {
       const prevF = await getSessionState(sessionId).catch(() => undefined);
       const session = await createSession(user, {
+        kind: "human",   // #2162 — 사람이 원본을 바탕으로 새로 여는 세션
         label: `새 세션(원본 기반) · ${sessionId.slice(0, 8)}`, rootKey: "shared", subpath: proj.folder,
         harness: prevF?.harness || "claude", flags: {}, autoApprove: false, projectId: proj.id, projectSrc: "v6",   // #1711 — 원본 하네스 승계
         readOnly: !!prevF?.read_only, incognito: !!prevF?.incognito,
@@ -420,7 +480,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const denied = checkPurgeGate({ requester, owner });
     if (denied) throw new HttpError(denied.status, denied.message);
     res.setHeader("Cache-Control", "no-store");
-    res.json(await sessionFootprint(nodeId, sessionId));
+    res.json(await sessionFootprint(nodeId, sessionId, owner));
   }));
 
   // 고른 범위까지 함께 지운다(#1850 P2) — 대화 기록 + 이 세션이 만든 지식·프로젝트·작업 기록,
@@ -445,16 +505,25 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     //  지우는 통로가 된다(자기 세션 하나만 있으면 남의 지식 이름을 실어 보낼 수 있다).
     //  규칙 B(원준 2026-08-24) 도 여기서 **서버가** 지킨다 — 그 뒤에 남이 손댄 지식·프로젝트, 다른 세션이 붙은 프로젝트는
     //  화면이 못 고르게 하지만, 화면을 믿지 않고 한 번 더 거른다. 세션 하나를 버리며 남의 작업을 날릴 수는 없다.
-    const fp = await sessionFootprint(nodeId, sessionId);
-    const okCreated = new Set(fp.knowledge_created.filter((k) => !k.touched_after).map((k) => k.name));
-    const okEdited = new Set(fp.knowledge_edited.filter((k) => !k.touched_after).map((k) => k.name));
+    const fp = await sessionFootprint(nodeId, sessionId, owner);
+    //  '만든 것'은 첫 감사 행의 actor 가 주인인 것만 온다(sessionFootprint) — 남의 문서는 애초에 이 집합에 없다(#1850 P4).
+    //  others_during(창 안에 다른 사람 손이 닿은 것)은 규칙 B 의 반쪽 — 되돌리기·삭제 어느 쪽도 하지 않는다.
+    const okCreated = new Set(fp.knowledge_created.filter((k) => !k.touched_after && !k.others_during).map((k) => k.name));
+    const okEdited = new Set(fp.knowledge_edited.filter((k) => !k.touched_after && !k.others_during).map((k) => k.name));
     const okProjects = new Set(fp.projects.filter((p) => p.created_here && !p.touched_after && p.other_sessions === 0).map((p) => p.id));
-    const okSources = new Set(fp.sources.map((x) => x.id));
+    const knowledge = strArr(b.knowledge).filter((n) => okCreated.has(n));
+    //  자료는 지식에 묶인다 — 지식에 붙은 자료(linked)는 **그 지식을 실제로 지울 때만** 함께 지운다. 종전엔 "만든 지식 지우기"를
+    //  풀어도 자료가 지워져 인용은 남고 근거가 사라졌다. 안 붙은 자료(linked=false)는 그 자체로 대상.
+    const okSources = new Set(fp.sources.filter((x) => !x.linked || knowledge.length > 0).map((x) => x.id));
+    const okTasks = new Set(fp.tasks.map((t) => t.id));
+    const okCategories = new Set(fp.categories.map((c) => c.id));
     const sel: PurgeSelection = {
-      knowledge: strArr(b.knowledge).filter((n) => okCreated.has(n)),
+      knowledge,
       revert: strArr(b.revert).filter((n) => okEdited.has(n)),
       projects: numArr(b.projects).filter((i) => okProjects.has(i)),
       sources: numArr(b.sources).filter((i) => okSources.has(i)),
+      tasks: numArr(b.tasks).filter((i) => okTasks.has(i)),
+      categories: numArr(b.categories).filter((i) => okCategories.has(i)),
       activities: b.activities === true,
     };
 

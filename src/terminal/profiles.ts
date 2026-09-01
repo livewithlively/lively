@@ -8,11 +8,13 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
-import { getMember, mintToken, listTokens, revokeToken } from "../org/store.js";
+import { getMember } from "../org/store/members.js";
+import { mintToken, listTokens, revokeToken } from "../org/store/tokens.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug } from "./terminal-isolation.js";
-import { memberSh } from "./terminal-member-fs.js";
+import { memberSh, memberShOut } from "./terminal-member-fs.js";
+import { memberExecConfigured } from "./terminal-isolation.js";   // #2148 — 중계 배포에는 멤버 OS 계정이 없다(아래 memberOsStatus)
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
 import { loadDesiredOne } from "../sessions/session-desired.js";
@@ -141,27 +143,34 @@ export function profileStatusFor(memberId: string): ReturnType<typeof profileSta
 //  ⭐ per-member lively 신원: 프로필 .claude.json 의 lively MCP 를 '공용 agent' 가 아니라 '이 멤버' 토큰으로 굽는다.
 //   → 그 프로필로 뜬 세션의 MCP 쓰기(knowledge_save 등)가 멤버로 귀속(updated_by=멤버)·토큰탭 표시·회수가능.
 //   멤버 DB 토큰(lvk_)을 발급 → LIVELY_TOKEN 으로 넘김(register-clients 가 프로필 .claude.json 에 구움).
-//   유효권한 = verifyDbToken 이 '라이브 멤버 스코프'와 매 호출 교집합(퇴사·강등 즉시 무효). admin/runtime 은 기본 제외(세션 최소권한) — 관리탭에서 admin 이 명시 opt-in(includeControlPlane) 시에만 포함(#549 후속).
+//   유효권한 = **그때그때의 멤버 scope**(#2174 멤버 추종) — 퇴사·강등이 즉시 무효인 건 종전 그대로고, 승격도
+//   재발급 없이 닿는다. 세션 권한 = 멤버 권한이 정책이라 '관리 권한 포함' opt-in(#549)은 없어졌다.
 //   ⚠ KIT_PROFILE_ONLY=1 — install-kit 이 공유 ~/.lively/token(훅 fetch·전 세션 공유)을 멤버 토큰으로 덮지 않게(프로필 .claude.json 만).
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");   // dist/terminal/ → 리포 루트
 
 // 중앙박스 프로필/OS 유저 토큰 발급 — 기존 central-box 토큰 회수 후 새로 굽는다(평문은 못 되찾으니 매번 새로).
-//  기본은 admin/runtime 제외(세션 최소권한). includeControlPlane=true(관리탭에서 admin 이 '관리 권한 포함'을 명시
-//  opt-in)면 멤버 scope 의 admin/runtime 도 싣는다 — 에이전트가 관리 기능(MCP org_*)을 세션에서 쓰게(#549 후속).
-//  멤버 scope 가 상한이라 멤버에 admin 없으면 자연히 안 실리고, 멤버 scope 하향 시 매 호출 intersection 으로 즉시
-//  무효(회수의 진짜 지점 = 멤버 scope지 발급 경로가 아니다). 발급은 org_content_audit 에 남는다(누가 어느 에이전트에 관리권한 실었나).
-export async function mintCentralBoxToken(memberId: string, memberScopes: string[], slug: string, includeControlPlane: boolean): Promise<string> {
+//  #2174 — **멤버 추종**(followMemberScopes)으로 굽는다: 이 토큰의 유효권한은 발급 시점 값이 아니라 **그때그때의
+//  멤버 scope** 다. 멤버가 상한이라는 규칙은 그대로고(멤버에 admin 이 없으면 여전히 안 실린다), 달라지는 건
+//  승격이 재발급 없이 닿는다는 것 하나다.
+//  왜 바꿨나(2026-08-28 실측) — 이 토큰은 사람이 들고 다니는 게 아니라 **박스 홈(~/.lively/token)에 심긴 것**이라,
+//   관리자가 권한을 올려도 그 파일이 다시 심겨야 반영됐다. 그런데 격리 박스에서 재프로비저닝이 그 파일까지
+//   닿지 못하는 일이 실제로 났고(다른 키트 파일은 갱신되는데 토큰만 옛것), 그러면 올린 권한이 영영 도달하지 않는다.
+//   종전 설계는 강등만 즉시 반영하고 승격은 재발급을 요구하는 비대칭이었는데, 그 '재발급'이 사람 눈에 안 보이는
+//   경로라 실패해도 아무도 모른다 — 그래서 비대칭을 없앴다.
+//  ⚠ 그래서 includeControlPlane opt-in 은 사라졌다. 세션 권한 = 멤버 권한이 정책이다(관리 행위는 감사 로그에 남는다).
+//  발급은 org_content_audit 에 남는다(누가 어느 에이전트에 이 토큰을 실었나).
+export async function mintCentralBoxToken(memberId: string, memberScopes: string[], slug: string): Promise<string> {
   // 재프로비저닝 누적 방지 — 이 멤버의 기존 central-box 토큰 회수(평문은 못 되찾으니 매번 새로 굽는다).
   for (const t of await listTokens()) {
     if (t.member_id === memberId && !t.revoked_at && (t.label || "").startsWith("central-box:")) {
       await revokeToken(t.token_hash, "provisionCentralBox", "terminal-sessions");
     }
   }
-  const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
-  // 기본: admin/runtime 제외. opt-in: 멤버 scope 그대로(admin/runtime 포함 — 멤버가 그 권한을 가질 때만 실제로 실림).
-  const scopes = (memberScopes || []).filter((s) => isScope(s) && (includeControlPlane || !dangerous.has(s)));
+  // scopes 는 '발급 당시 스냅샷'으로 남긴다 — 유효권한은 추종 플래그가 정하지만, 토큰탭·감사가 그때 무엇이었는지
+  //  읽을 수 있어야 하고 추종을 끄면 이 값이 그대로 상한으로 돌아온다.
+  const scopes = (memberScopes || []).filter((s) => isScope(s));
   const { token } = await mintToken(
-    { userId: memberId, memberId, scopes, label: `central-box:${slug}${includeControlPlane ? " +admin" : ""}` },
+    { userId: memberId, memberId, scopes, label: `central-box:${slug}`, followMemberScopes: true },
     "provisionCentralBox", "terminal-sessions",
   );
   return token;
@@ -179,16 +188,24 @@ export async function mintCentralBoxToken(memberId: string, memberScopes: string
 //   scope null(인증된 멤버면 OK)이고, 오히려 per-member 타깃팅이 그 세션 주인 기준으로 맞아진다.
 //  세션 스코프 자격이라 세션이 죽으면 회수한다(killSession). 같은 id 로 다시 뜨면 옛 것을 회수하고 새로 굽는다.
 const SESSION_TOKEN_LABEL = "session-hooks:";
-export async function revokeSessionHookToken(boxId: string): Promise<void> {
-  const label = `${SESSION_TOKEN_LABEL}${boxId}`;
+// #2234 — MCP 신원도 **그 세션 주인**이어야 한다. 훅 토큰과 **따로** 굽는 이유는 권한 폭이 다르기 때문이다:
+//  훅은 세션 최소권한(admin/runtime 제외)이 맞고, MCP 는 사람이 세션에서 실제로 쓰는 표면이라 그 멤버가
+//  가진 만큼을 그대로 들어야 한다(오늘도 공유 파일 토큰으로 그만큼 쓰고 있다 — 다만 **남의 것**으로).
+const SESSION_MCP_TOKEN_LABEL = "session-mcp:";
+/** 라벨 하나에 걸린 살아있는 자격을 전부 회수 — 재생성 때 옛 것을 즉시 죽인다. */
+async function revokeSessionTokensLabeled(labels: Set<string>, why: string): Promise<void> {
   for (const t of await listTokens()) {
-    if (!t.revoked_at && t.label === label) await revokeToken(t.token_hash, "killSession", "terminal-sessions");
+    if (!t.revoked_at && t.label && labels.has(t.label)) await revokeToken(t.token_hash, why, "terminal-sessions");
   }
+}
+/** 세션이 죽을 때 — 그 세션에 실어 준 자격(훅·MCP)을 **둘 다** 회수한다. */
+export async function revokeSessionHookToken(boxId: string): Promise<void> {
+  await revokeSessionTokensLabeled(new Set([`${SESSION_TOKEN_LABEL}${boxId}`, `${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "killSession");
 }
 export async function mintSessionHookToken(memberId: string, boxId: string): Promise<string | null> {
   const member = await getMember(memberId);
   if (!member) return null;                       // 멤버 디렉터리에 없는 소유자 — 종전대로 공유 토큰(무회귀)
-  await revokeSessionHookToken(boxId);            // 같은 box id 재생성 — 옛 자격은 즉시 죽인다
+  await revokeSessionTokensLabeled(new Set([`${SESSION_TOKEN_LABEL}${boxId}`]), "createSession");   // 같은 box id 재생성 — 옛 자격은 즉시 죽인다
   const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
   const scopes = (member.scopes || []).filter((s) => isScope(s) && !dangerous.has(s));   // 세션 최소권한(admin/runtime 제외)
   const { token } = await mintToken(
@@ -198,12 +215,44 @@ export async function mintSessionHookToken(memberId: string, boxId: string): Pro
   return token;
 }
 
-export async function provisionProfile(memberId: string, opts?: { includeControlPlane?: boolean }): Promise<{ slug: string; dir: string }> {
+// 세션 MCP 신원(#2234) — 비격리(공유 홈) 박스의 pane 에 실어 주는 '그 세션 소유자' MCP 토큰.
+//
+//  왜 필요한가: MCP 는 #1079 부터 **로컬 stdio 프록시**로 붙고, 프록시는 매 호출 `~/.lively/token` 을 읽는다
+//   (kit/cli/lively-mcp-gateway.mjs). 그 파일은 홈이 공유인 박스에서 **키트를 깐 사람 것 하나뿐**이다
+//   (deploy/install-kit.sh: 프로필 모드는 공유 토큰을 일부러 보존한다). 그래서 다른 멤버의 세션이 MCP 로 하는
+//   모든 일이 **남의 신원**으로 나간다. 종전 http 직결 등록은 멤버 토큰을 프로필 .claude.json 에 구워
+//   이 문제가 없었다 — 즉 #1079 가 #346/#916 이 세운 프로필 격리를 MCP 에서 조용히 되돌린 것이다.
+//
+//  실측(laibeulliui-Macmini, 2026-08-27): `~/.lively/token`=yoon 인데 pane 은 box-jang-*.
+//   `whoami` → member_id=yoon + session_id=box-jang-4e2de346, `session_rename` → "내 세션만 이름을 바꿀 수
+//   있습니다". 그래서 #1979 의 세션 자동 이름짓기가 이 박스에선 **구조적으로 불가능**했다 —
+//   jang 계정 그날 세션 17건 중 12건이 첫 지시 원문(rule 이름) 그대로였다.
+//
+//  ⚠ 이건 격리가 아니라 **귀속**이다(훅 토큰 주석과 같다) — 같은 박스에서 서로 읽을 수 있다는 사실은 그대로다.
+//  ⚠ 권한은 **그 멤버 것으로 캡**된다. 오늘 세션이 쓰는 권한은 '박스를 깐 사람'의 것이라, 관리자가 깐 박스에서는
+//   비관리자 세션도 관리 표면을 들고 있었다(교차 상승). 이 토큰은 그 상승을 닫으면서, 각자 자기 권한은 그대로 쓴다.
+//  세션 스코프 자격이라 세션이 죽으면 회수한다(revokeSessionHookToken 이 둘 다 회수).
+export async function mintSessionMcpToken(memberId: string, boxId: string): Promise<string | null> {
+  const member = await getMember(memberId);
+  if (!member) return null;                       // 멤버 디렉터리에 없는 소유자 — 종전대로 공유 토큰(무회귀)
+  await revokeSessionTokensLabeled(new Set([`${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "createSession");
+  const scopes = (member.scopes || []).filter((s) => isScope(s));
+  if (!scopes.length) return null;                // 실어 봐야 아무것도 못 한다 — 종전 경로를 막지 않는다
+  // #2174 — 추종으로 굽는다. 이 토큰은 세션 수명 내내 살아 있어서, 그 사이 멤버 권한이 바뀌면 세션만 옛 권한에
+  //  묶인다(세션을 껐다 켜야 반영되는 건 사람이 알 길이 없다). 추종이면 다음 호출부터 바로 맞는다.
+  const { token } = await mintToken(
+    { userId: memberId, memberId, scopes, label: `${SESSION_MCP_TOKEN_LABEL}${boxId}`, followMemberScopes: true },
+    "createSession", "terminal-sessions",
+  );
+  return token;
+}
+
+export async function provisionProfile(memberId: string): Promise<{ slug: string; dir: string }> {
   const u = { userId: memberId } as LivelyUser;
   const member = await getMember(memberId);
   if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
   const slug = userSlug(u);
-  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug, !!opts?.includeControlPlane);
+  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug);
 
   const script = path.join(REPO_ROOT, "deploy", "provision-profile.sh");
   // 게이트웨이 env 상속 + 멤버 토큰(프로필 .claude.json 에 구움) + KIT_PROFILE_ONLY(공유 ~/.lively 보존). 최대 3분(키트 다운로드+등록).
@@ -221,12 +270,12 @@ export async function provisionProfile(memberId: string, opts?: { includeControl
 //  반드시 /opt/lively/libexec 의 root 소유본을 쓴다. 멤버 토큰은 provisionProfile 과 동일하게 민팅해 넘긴다
 //  (sudoers env_keep=LIVELY_TOKEN/MEMBER_NAME/MEMBER_EMAIL 로 통과 — PATH 는 미보존이라 secure_path). admin 게이트는 라우트가.
 const PROVISION_BIN = process.env.LIVELY_PROVISION_BIN || "/opt/lively/libexec/provision-member";
-export async function provisionMemberOs(memberId: string, opts?: { includeControlPlane?: boolean }): Promise<{ slug: string; osUser: string }> {
+export async function provisionMemberOs(memberId: string): Promise<{ slug: string; osUser: string }> {
   const u = { userId: memberId } as LivelyUser;
   const member = await getMember(memberId);
   if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
   const slug = userSlug(u);
-  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug, !!opts?.includeControlPlane);
+  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug);
   await execFileAsync("sudo", ["-n", PROVISION_BIN, memberId], {
     timeout: 180_000,
     env: { ...process.env, LIVELY_TOKEN: token, MEMBER_NAME: member.display_name || slug, MEMBER_EMAIL: member.email || "" },
@@ -249,6 +298,21 @@ const HARNESS_CRED: Record<string, string> = {
   grok: ".grok/auth.json",
 };
 
+// 자격 **파일이 없는** 하네스의 로그인 판정(#1879) — 위 표가 못 답하는 자리를 프로브로 답한다.
+//  ⚠ 위 HARNESS_CRED 머리말은 "자격 위치를 실측하면 그때 연다" 고 했다. antigravity 는 자격이 파일로 안 남아
+//   (~/.gemini 트리 전체에 자격 파일 0건 — 2026-08-26 재실측) 그 문은 영영 안 열린다. 대신 **CLI 에게 직접 묻는다**:
+//     실측(agy 1.1.x): `agy models` → 로그인 exit 0(모델 목록) · 미로그인 exit 1
+//                      ("Error: Please sign in to view available models."). HOME 을 비우면 재현된다.
+//  이 표가 없으면 온보딩에서 제미나이를 고른 사람은 로그인을 마쳐도 영원히 «아직 로그인이 안 보여요» 를 본다
+//  (고르게는 해 놓고 이을 수는 없는 막다른 길이었다).
+//
+// ⚠ **뜨거운 경로에 올리지 마라.** 프로브는 네트워크를 타서 실측 4.3초다. memberLoggedInHarnessesAny 는
+//  /api/ui/me/welcome 이 폴링하는 자리라 파일 표만 쓰고, 프로브는 사람이 «로그인했어요» 를 누른 그 순간에만 돈다.
+const HARNESS_PROBE: Record<string, string[]> = {
+  antigravity: ["models"],
+};
+const PROBE_TIMEOUT_MS = 25_000;   // 네트워크 왕복(실측 4.3초)의 여유배 — 넘으면 '미로그인'이 아니라 **모름**이다
+
 // #1884 — 이 하네스에 '로그인'이라는 개념이 있나(= 위 표에 자격 위치가 실측돼 있나). 세션 폼의 [내 계정 로그인]이
 //  어느 AI 를 고르게 할지 이걸로 정한다. 표에 없는 하네스(opencode·antigravity)는 로그인 여부를 정직하게 말할 수
 //  없으므로 고르게 하지 않는다 — 위 ⚠ 주석과 같은 이유다.
@@ -256,32 +320,146 @@ export function harnessHasCredential(key: string): boolean {
   return Object.prototype.hasOwnProperty.call(HARNESS_CRED, key);
 }
 
-// box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
-//  '존재'만 확인(내용은 안 봄). exit0=있음. 미프로비저닝/에러=false.
-//  memberSh(=memberSpawn seam)를 탄다 — 원격 중계 배포(LIVELY_MEMBER_EXEC)에서도 이 판정이 실행 노드에서
-//  돌아야 한다(로그인 판정이 게이트웨이 로컬 fs 를 보면 항상 false = #1471 부류의 거짓 '미로그인').
-//  경로는 $HOME 이 아니라 명시 /home/<osUser> — 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르다.
-async function memberFileExists(osUser: string, rel: string): Promise<boolean> {
-  try {
-    await memberSh(osUser, `test -f "/home/${osUser}/${rel}"`);
-    return true;
-  } catch { return false; }
+/** 이 하네스는 **프로브로** 로그인을 잴 수 있나(#1879) — 자격 파일이 없는 하네스의 유일한 판정 수단.
+ *  harnessHasCredential 과 짝이다: 둘 다 false 면 그 하네스는 «이어졌나» 를 정직하게 답할 수 없다.
+ *  ⚠ 온보딩이 **고르게 하는** AI 는 반드시 둘 중 하나를 만족해야 한다 — 아니면 로그인을 마쳐도 화면이
+ *   영영 «아직 로그인이 안 보여요» 를 반복하는 막다른 길이 된다(제미나이가 정확히 그랬다). */
+export function harnessLoginProbe(key: string): readonly string[] | null {
+  return HARNESS_PROBE[key] ?? null;
 }
+
+/** 온보딩 «AI 잇기»(#1879)가 **고른 AI 하나**에 대해 묻는 것 — 셋을 따로 답한다.
+ *  종전 판정(ai_ready)은 «아무 하네스나 하나라도» 였다. 그래서 그록을 고른 사람에게 claude 로그인을 근거로
+ *  «이어졌어요» 라고 했고, 제미나이를 고른 사람에겐 설치가 없다는 사실을 «로그인이 안 보여요» 로 잘못 옮겼다.
+ *  설치와 로그인은 사람이 할 일이 완전히 다른 두 사건이라 화면이 갈라 말해야 한다. */
+export interface AiLoginCheck {
+  harness: string;
+  label: string;
+  bin: string;
+  /** 이 자리에서 그 CLI 를 실행할 수 있나. null = 확인 못 함(win32 게이트웨이·중계 오류). */
+  installed: boolean | null;
+  /** 로그인돼 있나. null = **모름**(프로브 시간초과·맥 키체인 접근 불가 등) — 모르는 것을 false 로 접지 않는다
+   *  (aiAccountStatus 와 같은 교리: 모르면서 «미로그인» 이라고 하면 로그인한 사람을 막는다). */
+  loggedIn: boolean | null;
+  /** 무엇으로 쟀나 — file=자격 파일 존재 · probe=`<bin> <args>` exit 0 · none=잴 방법이 없다 */
+  how: "file" | "probe" | "none";
+  /** 사람이 밟을 로그인 절차(catalog.loginSteps — 실측된 것만). */
+  steps: string[];
+}
+
+// `sh -c` 한 줄을 이 사람의 실행 자리에서 돌린다. 격리면 box_ 로 drop-priv(중계 배포면 그 노드), 아니면 게이트웨이 로컬.
+//  ⚠ 격리에서 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberLoggedInHarnesses
+//   머리말과 같은 함정), agy 는 자격을 HOME 기준으로 찾으므로 그 한 글자에 판정이 통째로 뒤집힌다.
+//  반환: true=exit 0 · false=exit≠0 · null=상한 초과/실행 자체 실패(=모름).
+//  ⚠ **stdin 을 반드시 닫는다**(`< /dev/null`). execFile 은 자식에게 stdin 파이프를 주고 **EOF 를 안 보내는데**,
+//   agy 는 그 자리에서 영원히 멈춘다 — 실측(2026-08-26, 프리뷰 라이브): 파이프면 25초 상한까지 매달렸고
+//   `< /dev/null` 이면 3.1초에 exit 0 이었다. 이 함정은 특히 고약하다: 셸에서 손으로 치면 TTY 라 잘 되고
+//   **서버에서만** 조용히 '모름' 이 된다 → 제미나이 사용자 전원이 «확인하지 못했어요» 를 본다(고친 것을
+//   다시 반쯤 고장 낸 셈이 된다). 로그인 프로브는 사람 입력을 받을 일이 없으므로 닫는 것이 늘 옳다.
+async function runAtMemberSeat(osUser: string | null, line: string): Promise<boolean | null> {
+  const cmd = `${line} < /dev/null`;
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timer = new Promise<null>((r) => { t = setTimeout(() => r(null), PROBE_TIMEOUT_MS); });
+  const run = (async (): Promise<boolean | null> => {
+    try {
+      if (osUser) {
+        await memberSh(osUser, `HOME="${MEMBER_HOME_BASE}/${osUser}" ${cmd}`);
+        return true;
+      }
+      if (process.platform === "win32") return null;   // 게이트웨이가 윈도우면 `sh -c` 가 없다 — 지어내지 않고 '모름'
+      await execFileAsync("sh", ["-c", cmd], { timeout: PROBE_TIMEOUT_MS });
+      return true;
+    } catch { return false; }
+  })();
+  try { return await Promise.race([run, timer]); } finally { clearTimeout(t); }
+}
+
+/** 고른 AI 하나를 판정한다. 뜨거운 경로가 아니다 — 사람이 «로그인했어요» 를 누른 그 순간에만 부른다. */
+export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLoginCheck> {
+  const h = HARNESSES.find((x) => x.key === key);
+  if (!h || !h.bin) throw new HttpError(404, `모르는 AI: ${key}`);
+  const osSt = await memberOsStatus(ownerId(user));
+  //  #2232 — 매니지드 중계 배포(LIVELY_MEMBER_EXEC)에선 게이트웨이에 멤버 OS 유저가 없어 provisioned=false 지만, 프로브(agy 등)는
+  //   **그 사람 자리(멤버 홈)** 에서 돌아야 한다. null 로 접으면 게이트웨이 자기 자리에서 돌아 늘 «미로그인» — 원준님 실측(2026-08-28):
+  //   Antigravity 로그인을 끝내고 입력칸까지 봤는데 «아직 로그인이 안 보여요». aiAccountStatus 의 relayed 분기와 같은 사고.
+  const osUser = (osSt.ready && osSt.provisioned) || memberExecConfigured() ? osSt.osUser : null;
+  const out: AiLoginCheck = {
+    harness: h.key, label: h.label, bin: h.bin,
+    installed: null, loggedIn: null, how: "none", steps: h.loginSteps ?? [],
+  };
+
+  // ① 설치 — **게이트웨이 자신의 파일시스템**에서 본다(osUser 를 넘기지 않는다). bin 은 우리 상수표에서만
+  //  오므로 셸 문자열에 사용자 입력이 없다.
+  //  ⚠ 여기서 **멤버 자리(memberSh)를 보면 틀린다**(2026-08-27 라이브 실측). 중계는 늘 테넌트의 **tmux 컨테이너**로
+  //   exec 하는데(member-exec-relay.cjs — `/containers/lvly-s-<slug>-tmux/exec`), 하네스가 실제로 도는 곳은
+  //   **멤버 세션 컨테이너**(`lvly-s-<slug>-box-<member>-<id>`)다. 둘은 이미지가 다를 수 있다 — tmux 는 한 번
+  //   만들어지면 정지될 때까지 그대로인 반면(sessionbroker ensureTmuxContainer: 실행 중이면 스테일해도 유지),
+  //   세션 컨테이너는 **세션마다** 현재 이미지로 새로 뜬다.
+  //   실측: 같은 테넌트에서 tmux=c36(agy 없음) / 방금 뜬 세션 컨테이너=c48(agy 있음) → 화면이 «이 자리엔
+  //   Gemini 가 없어요» 라고 거짓말했다. 실제로는 새 세션에 있었다.
+  //  게이트웨이 자신은 롤마다 재생성돼 **현재 테넌트 이미지와 같은 태그**로 뜨고(roll-tenant-image 가 gw.image 와
+  //  tenant.image 를 같은 축으로 맞춘다), 새 세션도 그 이미지로 뜬다 — 그래서 «새 세션이 무엇을 갖게 되나» 의
+  //  정직한 대리값이다. 자격(loggedIn)은 반대로 **멤버 자리**가 맞다: 홈이 볼륨이라 tmux 에서 봐도 같은 파일이다.
+  out.installed = await runAtMemberSeat(null, `command -v "${h.bin}" >/dev/null 2>&1`);
+  if (out.installed !== true) return out;   // 없는 CLI 에 로그인을 물어봐야 답은 늘 '미로그인' 이다 — 묻지 않는다
+
+  // ② 로그인 — 자격 파일이 있는 하네스는 **aiAccountStatus 를 그대로 쓴다**(맥 키체인·멀티프로필·격리 분기가
+  //  전부 그 안에 있고, 여기서 다시 짜면 그중 하나를 빠뜨려도 아무 오류가 안 난다).
+  if (harnessHasCredential(h.key)) {
+    out.how = "file";
+    out.loggedIn = (await aiAccountStatus(user, osSt)).find((a) => a.key === h.key)?.loggedIn ?? null;
+    return out;
+  }
+  // 자격 파일이 없는 하네스(antigravity)는 CLI 에게 직접 묻는다.
+  const probe = HARNESS_PROBE[h.key];
+  if (!probe) return out;   // 잴 방법이 없으면 정직하게 침묵한다(how="none") — 화면이 지어내지 않는다
+  out.how = "probe";
+  // ⚠ 프로브는 **멤버 자리에서** 돌아야 한다 — 그 사람의 자격(HOME)을 봐야 하기 때문이다. 그런데 그 자리(tmux
+  //  컨테이너)에 바이너리가 없을 수 있다(위 ① 머리말의 이미지 어긋남). 그러면 프로브의 실패는 «미로그인» 이
+  //  아니라 «잴 수 없음» 이다 — 그걸 false 로 접으면 로그인한 사람에게 «아직 로그인이 안 보여요» 라고 한다.
+  if (await runAtMemberSeat(osUser, `command -v "${h.bin}" >/dev/null 2>&1`) !== true) {
+    out.loggedIn = null;   // 모름 — 화면은 절차를 보여 주고 «확인하지 못했어요» 를 덧붙인다
+    return out;
+  }
+  out.loggedIn = await runAtMemberSeat(osUser, `${h.bin} ${probe.join(" ")} >/dev/null 2>&1`);
+  return out;
+}
+
 // box_ 홈의 파일 삭제(로그아웃) — 같은 drop-priv 경계. rm -f 라 없는 파일에도 성공(멱등).
 async function memberFileRemove(osUser: string, rel: string): Promise<void> {
   await memberSh(osUser, `rm -f "/home/${osUser}/${rel}"`);
 }
 // box_ 홈에 자격 파일이 있는 하네스들(#1884) — 종전 `memberClaudeLoggedIn` 은 claude 파일만 봐서, codex 로만 로그인한
 //  멤버는 memberOsStatus.loggedIn=false → 컨트롤플레인 T9 관문(자율 파이프라인 가동)이 영영 안 열렸다. 표(HARNESS_CRED)의
-//  하네스를 전부 본다(drop-priv 존재확인 n회 — 세션 생성 경로가 아니라 상태 조회라 비용은 무시할 만하다).
-async function memberLoggedInHarnesses(osUser: string): Promise<string[]> {
-  const out: string[] = [];
-  for (const [key, rel] of Object.entries(HARNESS_CRED)) if (await memberFileExists(osUser, rel)) out.push(key);
-  return out;
+//  하네스를 전부 본다.
+//
+//  ⚠ **한 번의 왕복으로 전부 본다.** 종전 판은 하네스마다 `await memberFileExists` 를 순차로 걸었다. 로컬 격리에서는
+//   drop-priv 한 번이라 싸지만, **중계 배포(매니지드)에서는 한 번이 게이트웨이 → 허브 → 노드 → docker exec 이다.**
+//   실측 2026-08-28(프로덕션): 그래서 온보딩의 «ChatGPT 가 연결돼 있는지 확인하고 있어요…» 와 [로그인했어요] 가
+//   **10초 넘게** 걸렸다 — 사람은 그 사이 로그인이 안 된 줄 안다. 표가 늘어날수록 더 느려지는 모양이라 접는다.
+//   (키·경로는 우리 표의 리터럴이고 osUser 는 슬러그라 셸 주입 여지가 없다.)
+//  ⚠ 왜 게이트웨이 로컬 fs 를 안 보나: 게이트웨이는 멤버 700 홈을 '읽지' 못하고(격리의 본질), 중계 배포에서는
+//   그 홈이 **게이트웨이가 아니라 실행 노드**에 있다. 로컬에서 보면 늘 false = #1471 부류의 거짓 '미로그인'이다.
+//   경로도 $HOME 이 아니라 명시 /home/<osUser> 다 — 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르다.
+//  반환 null = **확인 자체를 못 했다**(중계 실패). 빈 배열(= 확인했고 하나도 없다)과 다르다 — 아래 judgeMemberOs
+//   가 그 둘을 «미로그인» 과 «모름» 으로 갈라 읽는다.
+async function memberLoggedInHarnesses(osUser: string): Promise<string[] | null> {
+  const entries = Object.entries(HARNESS_CRED);
+  //  마지막 `true` 가 없으면 아무 파일도 없을 때 스크립트가 1 로 끝나 «중계 실패» 와 구분되지 않는다.
+  const script = entries.map(([key, rel]) => `[ -f "/home/${osUser}/${rel}" ] && echo ${key}`).join("\n") + "\ntrue";
+  try {
+    const seen = new Set((await memberShOut(osUser, script)).split(/\s+/).filter(Boolean));
+    return entries.map(([key]) => key).filter((key) => seen.has(key));
+  } catch { return null; }   // 중계가 안 되면 «없다» 가 아니라 **판정 불가** — 상위가 그 뜻으로 읽는다
 }
 // box_ 홈 dir 존재 — **OS 유저와 별개**로 본다. 홈 부모(/home)는 755 라 게이트웨이가 stat 할 수 있고
 //  (내용은 700 이라 여전히 못 읽는다), 이 한 비트가 아래 '고아 홈' 판정의 유일한 근거다.
 async function memberHomeExists(osUser: string): Promise<boolean> {
+  // 중계 배포(매니지드)는 홈이 **게이트웨이가 아니라 실행 노드**에 있다 — 로컬 stat 은 늘 false 다
+  //  (memberLoggedInHarnesses 머리말과 같은 함정). 자격 확인과 같은 자리에서 본다.
+  if (memberExecConfigured()) {
+    try { await memberSh(osUser, `test -d "/home/${osUser}"`); return true; } catch { return false; }
+  }
   try { return (await fsp.stat(path.join(MEMBER_HOME_BASE, osUser))).isDirectory(); }
   catch { return false; }
 }
@@ -312,8 +490,27 @@ export interface MemberOsStatus {
  *   실측(#1471): 매니지드 테넌트에서 이 거짓 false 때문에 컨트롤플레인이 자율 파이프라인을 영영 안 켰다.
  *   드롭-프리브할 유저가 없어 **확인할 방법 자체가 없으므로** 답은 false 가 아니라 null(모름)이다.
  */
-export function judgeMemberOs(i: { ready: boolean; provisioned: boolean; homeExists: boolean; credExists: boolean }): { loggedIn: boolean | null; orphanHome: boolean } {
-  if (i.provisioned) return { loggedIn: i.credExists, orphanHome: false };   // drop-priv 로 실제 확인함
+export function judgeMemberOs(i: {
+  ready: boolean; provisioned: boolean; homeExists: boolean; credExists: boolean;
+  /**
+   * 자격 확인을 **실제로 돌렸나**(#2148). 로컬 확인은 drop-priv 가 필요해 passwd 항목(provisioned)이 전제지만,
+   * 중계 확인은 경로만 있으면 된다 — 그래서 provisioned 가 false 여도 답을 얻을 수 있다.
+   */
+  credChecked?: boolean;
+  /**
+   * 확인을 **시도했는데 중계가 실패**했나(#2055 후속). true 면 답은 false 가 아니라 null(모름)이다.
+   *  ⚠ 실측 2026-08-28 프로덕션: 컨트롤플레인이 두 프로세스로 떠(reusePort) 노드 채널이 한쪽에만 붙는 바람에
+   *   멤버 중계 호출의 **절반이 503** 이었다. 그 실패를 «파일 없음» 으로 삼키던 종전 코드는, codex 로그인을
+   *   막 마친 사람에게 «아직 로그인이 안 보여요» 를 반복해서 보여 줬다. 인프라 장애가 사람에게 거짓말이 된다.
+   */
+  credScanFailed?: boolean;
+}): { loggedIn: boolean | null; orphanHome: boolean } {
+  // 시도했으나 확인하지 못했다 = 모름. 이 파일의 나머지 판정과 같은 원칙이다(머리말: "미탐이 아니라 '모름'").
+  if (i.credScanFailed) return { loggedIn: null, orphanHome: false };
+  // 확인을 실제로 돌렸으면 **그 답이 권위다.** passwd 항목 유무는 그 답을 뒤집을 근거가 아니다 — 매니지드에서는
+  //  멤버 OS 계정이 아예 없는 것이 정상이고(uid 는 테넌트, member-exec-relay 머리말), 그걸 '미로그인'으로 읽으면
+  //  자율 파이프라인이 영영 안 켜진다(2026-08-27 실측: 가동 성공 누적 0건).
+  if (i.provisioned || i.credChecked) return { loggedIn: i.credExists, orphanHome: false };
   const orphanHome = i.ready && i.homeExists;                                 // 홈만 남음 → 확인 불가
   return { loggedIn: orphanHome ? null : false, orphanHome };                 // 홈도 없으면 확실히 미로그인
 }
@@ -322,10 +519,19 @@ export async function memberOsStatus(memberId: string): Promise<MemberOsStatus> 
   const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
   const ready = isolationInfraReady();
   const provisioned = await osUserExists(osUser);
-  const loggedInHarnesses = provisioned ? await memberLoggedInHarnesses(osUser) : [];
+  // ★ 중계 배포(매니지드)에는 **멤버 OS 계정이 아예 없다** — 중계는 테넌트 tmux 컨테이너로 나가고 그 안의 uid 는
+  //  테넌트다(member-exec-relay 머리말: "컨테이너 안엔 멤버 계정이 없어 uid 는 테넌트다"). 즉 provisioned 는
+  //  구조적으로 영원히 false 인데, 종전엔 그걸 자격 확인의 **전제**로 삼아 로그인이 영영 안 보였다.
+  //  자격 확인 자체는 경로만 있으면 되므로(자격 확인은 중계를 탄다) 중계가 있으면 그냥 돌린다.
+  const credChecked = provisioned || memberExecConfigured();
+  const scan = credChecked ? await memberLoggedInHarnesses(osUser) : null;
+  const loggedInHarnesses = scan ?? [];
   const credExists = loggedInHarnesses.length > 0;
   const homeExists = provisioned ? true : await memberHomeExists(osUser);
-  return { ready, provisioned, osUser, loggedInHarnesses, ...judgeMemberOs({ ready, provisioned, homeExists, credExists }) };
+  return {
+    ready, provisioned, osUser, loggedInHarnesses,
+    ...judgeMemberOs({ ready, provisioned, homeExists, credExists, credChecked, credScanFailed: credChecked && scan === null }),
+  };
 }
 
 // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 계정] 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
@@ -342,6 +548,14 @@ export interface AiAccountStatus {
   loggedIn: boolean | null;   // null = **알 수 없음**(아래 키체인 한계). false 는 '확실히 미로그인'일 때만.
   canLogout: boolean;
   where: string;   // 자격증명이 사는 자리(사람이 읽는 설명)
+  /**
+   * 무엇으로 쟀나 — `file`=자격 파일/키체인 · `probe`=CLI 에게 직접 물어야 안다(agy).
+   *
+   *  ⚠ probe 인 행은 이 목록에서 **재지 않는다**(loggedIn=null 로 나간다). 프로브는 네트워크를 타서
+   *   실측 4.3초인데 이 목록은 여러 화면이 부르기 때문이다. 화면이 필요할 때
+   *   `POST /api/ui/me/ai-accounts/check` 로 그 행만 따로 묻는다.
+   */
+  how: "file" | "probe";
 }
 // macOS 키체인의 Claude 자격 존재 확인 — Claude Code 는 **맥에서 자격을 파일이 아니라 키체인**
 //  ("Claude Code-credentials")에 넣는다. 그래서 `.credentials.json` 부재를 '미로그인'으로 읽으면 거짓말이 된다
@@ -360,16 +574,38 @@ async function macClaudeKeychainHas(): Promise<boolean> {
 export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): Promise<AiAccountStatus[]> {
   osSt ??= await memberOsStatus(ownerId(user));
   const isolated = osSt.ready && osSt.provisioned;
+  //  #2232 — 매니지드(중앙 게이트웨이 + 노드의 세션 컨테이너, LIVELY_MEMBER_EXEC 중계)에선 게이트웨이에 멤버 OS 유저가 없어
+  //   provisioned=false 다. 그런데 자격 판정은 memberOsStatus 가 이미 **중계로 멤버 홈(/home/box_*)을 봤다**(credChecked).
+  //   그걸 안 쓰고 아래 프로필/공유 분기로 떨어지면 게이트웨이 **자기 홈**(/root)을 보고 «미로그인» 이 된다 —
+  //   실측 2026-08-28(원준님): 로그인 창에서 /login 을 끝냈는데도 «아직 로그인이 안 보여요». 자격 파일은
+  //   homes/box_<id>/.claude/.credentials.json 에 멀쩡히 있었다. 중계 배포도 멤버 축으로 본다.
+  const relayed = !isolated && memberExecConfigured();
   const darwin = process.platform === "darwin";
   const out: AiAccountStatus[] = [];
   for (const h of HARNESSES) {
     const rel = HARNESS_CRED[h.key];
-    if (!rel) continue;   // 셸 등 — 로그인 개념이 없는 하네스
+    if (!rel) {
+      //  ★ #2477 — 자격이 **파일로 안 남는** 하네스(agy)도 목록에 낸다. 종전엔 여기서 그냥 건너뛰어
+      //   [내 AI 계정]에 **아예 안 보였고**, 그래서 온보딩을 끝낸 사람에게는 agy 를 잇는 자리가
+      //   화면 어디에도 없었다(상민님 2026-09-01 지적으로 드러났다).
+      //   ⚠ 그렇다고 여기서 프로브를 돌리지 않는다 — 4.3초·네트워크인데 이 목록은 여러 화면이 부른다.
+      //    «모름(null)» 으로 내보내고, 그 행이 궁금한 화면이 check 로 따로 묻는다. 모르는 것을 false 로
+      //    접지 않는 것이 이 파일의 교리다(모르면서 «미로그인» 이라 하면 로그인한 사람을 막는다).
+      if (!h.bin || !harnessLoginProbe(h.key)) continue;   // 셸 등 — 로그인 개념도 잴 방법도 없다
+      out.push({
+        key: h.key, label: h.label,
+        scope: isolated || relayed ? "isolated" : "shared",
+        where: isolated || relayed ? `내 세션 홈(${osSt.osUser}) — 자격이 파일로 남지 않아 CLI 에게 물어 확인합니다`
+          : "이 서버의 그 CLI — 자격이 파일로 남지 않아 CLI 에게 물어 확인합니다",
+        loggedIn: null, canLogout: false, how: "probe",
+      });
+      continue;
+    }
     let scope: AiAccountStatus["scope"]; let where: string;
     let loggedIn: boolean | null;
-    if (isolated) {
-      scope = "isolated"; where = `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
-      loggedIn = osSt.loggedInHarnesses.includes(h.key);   // memberOsStatus 가 같은 표(HARNESS_CRED)로 이미 drop-priv 확인했다
+    if (isolated || relayed) {
+      scope = "isolated"; where = relayed ? `내 세션 홈(${osSt.osUser})의 ${rel}` : `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
+      loggedIn = osSt.loggedInHarnesses.includes(h.key);   // memberOsStatus 가 같은 표(HARNESS_CRED)로 이미 drop-priv/중계 확인했다
     } else if (h.key === "claude" && darwin) {
       // 맥 = 키체인(OS 유저 단위) → 멤버별로 갈릴 수 없다. 공용으로 **정직하게** 표시한다.
       scope = "shared"; where = "이 서버 macOS 키체인(Claude Code-credentials)";
@@ -384,7 +620,7 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
       loggedIn = await fsp.access(file).then(() => true, () => false);
     }
     // 지울 수 있을 때만 로그아웃을 연다 — 공용 계정(남의 세션까지 끊김)·미로그인·탐지불가는 잠근다.
-    out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared" });
+    out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared", how: "file" });
   }
   return out;
 }
@@ -398,6 +634,34 @@ export async function memberLoggedInHarnessesAny(memberId: string): Promise<stri
   const osSt = await memberOsStatus(memberId);
   const accts = await aiAccountStatus(user, osSt);
   return [...new Set([...osSt.loggedInHarnesses, ...accts.filter((a) => a.loggedIn === true).map((a) => a.key)])];
+}
+
+/** 자격 **파일이 없는** 하네스(antigravity) — 로그인 여부를 프로브로만 잴 수 있는 것들. */
+export function probeOnlyHarnessKeys(): string[] {
+  return Object.keys(HARNESS_PROBE).filter((k) => !harnessHasCredential(k));
+}
+
+/**
+ * 이 멤버가 **실제로 돌릴 수 있는** 하네스(#1631). 위 함수는 자격 **파일**만 보므로 자격 파일이 없는
+ *  하네스(antigravity=제미나이)를 구조적으로 못 본다 — 그래서 제미나이만 이은 사람은
+ *  `welcome.ai_harnesses` 가 비어 리브가 안 열리고(planLivKickoff skip), 헤드리스 잡은 기본값 `claude` 로
+ *  떨어져 무출력 hang 이 됐다. 화면은 그 사람에게 «Gemini 로그인이 확인됐어요» 라고 확정해 준 뒤였다.
+ *
+ * ⚠ 프로브는 비싸다(실측 4.3초·상한 25초). 그래서 **파일 표가 빈 경우에만** 돌린다 — 그 순간이 곧
+ *  «AI 안 이었음» 이라 말하려는 순간이라, 비용은 어차피 막힐 사람에게만 들고 나머지는 프로브 0회다.
+ *  판정 자체는 순수 함수로 갈라 뒀다(harness-login-probe.ts) — 표로 테스트한다.
+ */
+export async function memberUsableHarnesses(memberId: string): Promise<string[]> {
+  const { planLoginProbe, mergeProbeResults } = await import("./harness-login-probe.js");
+  const fileList = await memberLoggedInHarnessesAny(memberId).catch(() => [] as string[]);
+  const todo = planLoginProbe(fileList, probeOnlyHarnessKeys());
+  if (!todo.length) return fileList;
+  const user = { userId: memberId, email: "", scopes: [], projects: [] } as LivelyUser;
+  const probed = await Promise.all(todo.map(async (key) => ({
+    key,
+    loggedIn: await aiLoginCheck(user, key).then((c) => c.loggedIn).catch(() => null),
+  })));
+  return mergeProbeResults(fileList, probed);
 }
 
 // 로그아웃 = 자격증명 파일 삭제(재로그인으로 되돌릴 수 있다). **본인 것만** — 호출자(라우트)가 principal 을 넘긴다.

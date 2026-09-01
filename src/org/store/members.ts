@@ -1,6 +1,7 @@
 // org_member — 구성원 CRUD + jsonb 부속(온보딩 보고·하네스 관측 스냅샷·머신 별명·로컬 토글 지시)
 //  + person/person_identity 동기화. (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { logger } from "../../log.js";
 
@@ -36,6 +37,7 @@ export interface OrgMember {
   kind: "human" | "agent" | "system";
   display_name: string | null;
   nickname: string | null; // 표시 이름과 별개의 닉네임(#762). 활동 로그 등 캐주얼 표기용. null/''=display_name 폴백.
+  use_nickname: boolean;     // 「이 닉네임을 내 이름으로 사용」(#1813) — 켜면 이름을 보이는 자리 전부에서 nickname 이 이긴다.
   email: string | null;
   identities: MemberIdentity[];
   body_md: string;
@@ -57,6 +59,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
     kind: row.kind as OrgMember["kind"],
     display_name: (row.display_name as string) ?? null,
     nickname: (row.nickname as string) ?? null,
+    use_nickname: row.use_nickname === true,
     email: (row.email as string) ?? null,
     identities: (row.identities as MemberIdentity[]) ?? [],
     body_md: (row.body_md as string) ?? "",
@@ -72,7 +75,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
   };
 }
 
-const MEMBER_COLS = "id, kind, display_name, nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by";
+const MEMBER_COLS = "id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by";
 
 export async function listMembers(): Promise<OrgMember[]> {
   const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member ORDER BY sort, id`);
@@ -80,7 +83,10 @@ export async function listMembers(): Promise<OrgMember[]> {
 }
 
 export async function getMember(id: string): Promise<OrgMember | null> {
-  const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1`, [id]);
+  //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
+  //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.
+  const r = await itemsPool.query(
+    `SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1 AND tenant_id = ${TENANT_DEFAULT_EXPR}`, [id]);
   return r.rows[0] ? mapMember(r.rows[0]) : null;
 }
 
@@ -119,7 +125,64 @@ export async function setMemberOnboardingStep(
 //  계산되므로 여기 복제하면 두 개의 진실이 생긴다(#850 이 온보딩에서 이미 내린 결론).
 export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
 /** 처음 설정의 결과. 무엇을 만들었는지까지 남긴다 — "왜 이 서랍이 있죠?" 에 답할 유일한 근거다. */
-export interface LivWelcome { done_at: string; drawers?: string[]; first_order?: string | null }
+//  session_id(#1631) — 처음 설정 직후 열린 **리브 세션**. 다시 반영해도 세션을 또 열지 않는 근거(멱등)이자 화면이 그리로 보내는 좌표.
+//  distill_at / distill_gave_up_at / distill_note — 2턴(증류 지시)을 그 세션에 넣었나·포기했나·왜(second-turn-sweep). 둘 다 없으면 대기 중.
+export interface LivWelcome {
+  done_at: string; drawers?: string[]; first_order?: string | null; session_id?: string | null;
+  distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
+  /** 세션이 사라져 **다시 연** 시각(#1631). 딱 한 번만 다시 연다 — 이 값이 있으면 다음엔 포기한다. */
+  distill_reopened_at?: string | null;
+}
+
+/**
+ * (#1631) 2턴 대기 중인 사람 — 리브 세션은 열렸는데 증류 지시를 아직 안 넣었고 포기도 안 한 구성원.
+ *  신원 전역 표라 테넌트 컨텍스트 없이 **모든 워크스페이스를 한 번에** 훑는다(스윕이 워크스페이스마다 돌지 않는다).
+ *
+ * ⚠ welcome 은 #2265 이후 **워크스페이스 칸**(by_workspace)에 산다. 옛 최상위 자리도 아직 남아 있을 수
+ *  있으므로(승계 전) 둘을 합쳐 본다 — 한쪽만 보면 그 사람들에게 2턴이 영영 안 간다.
+ *  돌려주는 `workspace_id` 는 호출부가 **그 테넌트 컨텍스트 안에서** 표식을 찍는 데 쓴다(안 그러면 멱등이 깨져 반복 발사).
+ */
+export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string; display_name: string | null; welcome: LivWelcome; workspace_id: string | null }>> {
+  const r = await itemsPool.query(
+    `WITH cand AS (
+       SELECT id, display_name, NULL::text AS ws, liv_profile->'welcome' AS welcome
+         FROM org_member WHERE state='active' AND kind='human' AND liv_profile ? 'welcome'
+       UNION ALL
+       SELECT m.id, m.display_name, e.key AS ws, e.value->'welcome' AS welcome
+         FROM org_member m,
+              LATERAL jsonb_each(COALESCE(m.liv_profile->'by_workspace', '{}'::jsonb)) e
+        WHERE m.state='active' AND m.kind='human' AND e.value ? 'welcome'
+     )
+     SELECT id, display_name, ws, welcome FROM cand
+      WHERE welcome->>'session_id' IS NOT NULL
+        AND welcome->>'distill_at' IS NULL
+        AND welcome->>'distill_gave_up_at' IS NULL
+      ORDER BY welcome->>'done_at' ASC LIMIT 200`);
+  return r.rows.map((x) => ({
+    id: String(x.id), display_name: (x.display_name as string | null) ?? null,
+    welcome: x.welcome as LivWelcome, workspace_id: (x.ws as string | null) ?? null,
+  }));
+}
+/**
+ * 처음 설정을 **하다 만 자리**(#2207). 끝난 결과(LivWelcome)와 별개다 — 이건 아직 안 끝난 사람의 자리표다.
+ *
+ * 왜 서버에 두나: 종전엔 진행 상태가 브라우저 sessionStorage(`lively-ob-v2`) 하나였다. sessionStorage 는
+ *  **탭을 닫으면 사라진다** — 온보딩을 하다 창을 닫고 app.lvly.io 로 다시 들어오면 이름부터 다시 물었고,
+ *  거기까지 답한 것(무대·직무·고른 AI·자료함 갈래)은 아무 데도 안 남았다. 답을 받아 놓고 잃는 것은
+ *  이름·업무를 그 자리에서 저장하기로 한 결정(#1813)과 같은 이유로 고쳐야 하는 결함이다.
+ *
+ * `state` 는 **화면이 쥔 상태 그대로**(불투명)다. 서버는 해석하지 않는다 — 장면이 늘고 줄 때마다
+ *  서버 스키마를 따라 고치게 만들면 그 순간부터 두 벌이 어긋난다. 서버가 아는 것은 두 가지뿐:
+ *  «어느 장면에서 멈췄나»(scene — 되돌아갈 자리)와 «언제»(at). 나머지는 화면이 읽고 화면이 쓴다.
+ */
+export interface LivWelcomeProgress {
+  /** 마지막으로 저장된 시각(ISO). */
+  at: string;
+  /** 멈춘 장면 key(화면의 SCENES/CHAT_STEPS key). 되돌아갈 자리. */
+  scene: string;
+  /** 화면이 쥔 진행 상태 그대로 — 서버는 해석하지 않는다. */
+  state: Record<string, unknown>;
+}
 export interface LivDecision { at: string; what: string; why?: string; by?: string }
 /** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
 export interface LivDeclined { at: string; key: string; why?: string }
@@ -228,8 +291,22 @@ export interface LivProfile {
   work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[];
   /** 처음 설정(#/welcome)을 끝낸 시각. 종전엔 브라우저 localStorage 표식이라 기기를 바꾸면 온보딩이 다시 떴다(#1813). */
   welcome?: LivWelcome | null;
+  /** 처음 설정을 **하다 만 자리**(#2207). 끝나면 지운다(끝난 사실은 위 welcome·onboarded_at 이 말한다). */
+  welcome_progress?: LivWelcomeProgress | null;
   /** 처음 설정(#/welcome)을 끝낸 시각(#2039). **브라우저가 아니라 여기가 정본** — 기기를 바꿔도 다시 안 뜬다. */
   onboarded_at?: string | null;
+  /**
+   * 처음 설정으로 **자동으로 보낸** 시각(#2171). onboarded_at 과 다른 사실이다 —
+   *  저건 «끝냈다», 이건 «보여는 줬다». 자동 진입은 이 표식으로 **평생 한 번**만 한다.
+   *  종전엔 완주(onboarded_at)만이 유일한 탈출구라, 중간에 나간 사람은 앱을 열 때마다 다시 끌려갔다.
+   */
+  welcome_shown_at?: string | null;
+  /**
+   * 사람이 스스로 [나중에 할게요] 로 처음 설정을 **미룬** 시각(#2232). 있으면 하다 만 자리가 있어도 자동으로
+   *  끌고 가지 않는다(홈 + «이어서 하기»). 다시 이어서 답을 하나라도 더 하면(진행 저장) 지운다 — 미룸은
+   *  '지금은 말고'지 '영영 말고'가 아니다.
+   */
+  welcome_deferred_at?: string | null;
   /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
@@ -244,10 +321,7 @@ const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터
 export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, secret_ask: ask };
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 /** 이어갈 대화를 정한다(null = 다음 턴이 첫 턴). 대화 **본문은 저장하지 않는다** — 이어받을 열쇠만.
@@ -260,19 +334,30 @@ export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Pro
   if (!chat) return cur;                       // 대화가 없으면 이을 곳도 없다
   const turns = [...(chat.turns ?? []), turn].slice(-cap);
   const next: LivProfile = { ...cur, chat: { ...chat, turns } };
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
+}
+
+/**
+ * 처음 설정을 하다 만 자리를 남긴다(null = 지운다 — 끝났거나 처음부터 다시 하기로 했을 때) (#2207).
+ *
+ * ⚠ 읽고-쓰기라 같은 사람이 두 탭에서 온보딩을 하면 뒤가 앞을 덮는다. 그게 맞다 — **마지막으로 만진
+ *  화면이 그 사람의 지금**이고, 두 진행을 합칠 방법도 뜻도 없다(반쯤 A, 반쯤 B 인 답은 답이 아니다).
+ */
+export async function setLivWelcomeProgress(id: string, progress: LivWelcomeProgress | null): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur, welcome_progress: progress };
+  //  ⚠ #2232 — 여기서 미룸(welcome_deferred_at)을 지우면 안 된다(한 번 그렇게 썼다가 실측으로 잡았다).
+  //   [나중에 할게요] 는 «미룸 표식 POST» 와 «나가면서 밀리는 진행 flush» 를 거의 동시에 보내는데, 순서가
+  //   뒤집히면 방금 찍은 미룸이 그 자리에서 지워져 다음 입장에 또 끌려간다. 미룸을 푸는 자리는 **사람이
+  //   처음 설정 화면을 다시 연 순간**이다(web/v2/onboarding.ts clearWelcomeDeferred) — 그건 나가기보다
+  //   한참 앞서 일어나므로 경합이 없다.
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 export async function setLivChat(id: string, chat: LivChat | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, chat };
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 /**
@@ -285,10 +370,7 @@ export async function appendLivAnswer(id: string, answer: LivAnswer): Promise<Li
   const cur = await getLivProfile(id);
   const { mergeAnswer } = await import("../delivery/liv-secret.js");
   const next: LivProfile = { ...cur, answers: mergeAnswer(cur.answers ?? [], answer, LIV_LIST_CAP) as LivAnswer[], secret_ask: null };
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 /**
@@ -307,10 +389,118 @@ export async function livAnswerStats(): Promise<Array<{
   return foldAnswerStats(r.rows.map((row) => row.liv_profile?.answers ?? []));
 }
 
+// ── 리브 프로필의 층 가르기(#2265) — 계정 축과 워크스페이스 축을 한 컬럼 안에서 나눈다.
+//  ⚠ **별도 모듈로 빼지 않는다.** members.ts 는 노드 에이전트 번들에 이미 실려 있어서, 여기서 새 파일을
+//   import 하면 그 잎이 번들에 따라 들어가 경계 부채가 늘어난다(scripts/node-agent-bundle-boundary.test.mjs
+//   가 상한으로 막는다). 순수 함수라 여기 있어도 테스트에 지장이 없다.
+//
+//  ── 문제 ──
+//  `org_member` 는 IDENTITY_GLOBAL 표라(db/tenant-column.ts) `liv_profile` 이 **계정당 한 벌**이다.
+//  그런데 그 안의 상당수는 워크스페이스마다 달라야 하는 사실이다(서랍·첫 지시·리브 세션 좌표·설정 결정).
+//  그래서 워크스페이스 두 곳에서 온보딩하면 **뒤가 앞을 덮는다**
+//  (실측: 한 계정으로 여러 워크스페이스를 시딩했더니 그 계정의 결정 이력 27건이 사라졌다).
+//
+//  ── 왜 새 표를 안 만드나 ──
+//  같은 컬럼 안에서 층만 가르면 마이그레이션이 필요 없고 되돌리기도 쉽다. RLS·백업·복구 표면도 안 늘어난다.
+//  옛 데이터는 **옮기지 않는다** — 읽을 때 워크스페이스 자리가 비어 있으면 옛 최상위 값으로 폴백하므로,
+//  기존 사용자는 자기 첫 워크스페이스에서 종전과 똑같이 보인다. 쓸 때부터 새 자리에 넣는다.
+
+/** 워크스페이스마다 달라야 하는 키 — 이 표가 이 변경의 전부다. */
+export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions"] as const;
+export type WorkspaceScopedKey = (typeof WORKSPACE_SCOPED_KEYS)[number];
+
+/** 워크스페이스 층이 사는 자리. */
+export const BY_WORKSPACE = "by_workspace";
+
+type Rec = Record<string, unknown>;
+const isRec = (v: unknown): v is Rec => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * 저장된 프로필에서 **이 워크스페이스가 보는 한 벌**을 만든다(순수).
+ *
+ * 계정 층은 그대로 얹고, 워크스페이스 층은 `by_workspace[wsId]` 에서 가져온다.
+ * 그 자리가 없으면 **옛 최상위 값으로 폴백**한다(하위호환) — 단, 워크스페이스 id 가 없을 때(단일 테넌트)도 같다.
+ *
+ * ⚠ 폴백은 **옛 최상위**만 본다. 다른 워크스페이스의 값을 빌려 오지 않는다 — 그게 이 결함의 본체다.
+ */
+export function viewForWorkspace(profile: Rec | null | undefined, workspaceId: string | null | undefined): Rec {
+  const p = isRec(profile) ? profile : {};
+  const ws = String(workspaceId ?? "").trim();
+  const out: Rec = {};
+  // ① 계정 층 — by_workspace 와 워크스페이스 전용 키를 뺀 나머지 전부.
+  for (const [k, v] of Object.entries(p)) {
+    if (k === BY_WORKSPACE) continue;
+    if ((WORKSPACE_SCOPED_KEYS as readonly string[]).includes(k)) continue;
+    out[k] = v;
+  }
+  // ② 워크스페이스 층 — 새 자리가 있으면 그것, 없으면 옛 최상위(폴백).
+  const box = isRec(p[BY_WORKSPACE]) ? (p[BY_WORKSPACE] as Rec) : {};
+  const mine = ws && isRec(box[ws]) ? (box[ws] as Rec) : null;
+  for (const k of WORKSPACE_SCOPED_KEYS) {
+    if (mine && k in mine) out[k] = mine[k];
+    else if (!mine && k in p) out[k] = p[k];    // 새 자리가 아예 없을 때만 옛 값을 쓴다
+  }
+  return out;
+}
+
+/**
+ * 갱신할 조각을 층에 맞게 **꽂아 넣은 새 프로필**을 만든다(순수 — 원본을 안 바꾼다).
+ *
+ * 워크스페이스 전용 키는 `by_workspace[wsId]` 로, 나머지는 최상위로 간다.
+ * 워크스페이스 id 가 없으면(단일 테넌트·컨텍스트 밖) 종전처럼 최상위에 쓴다 — 무회귀.
+ */
+export function mergeForWorkspace(profile: Rec | null | undefined, patch: Rec, workspaceId: string | null | undefined): Rec {
+  const p: Rec = { ...(isRec(profile) ? profile : {}) };
+  const ws = String(workspaceId ?? "").trim();
+  if (!ws) return { ...p, ...patch };
+
+  const box: Rec = isRec(p[BY_WORKSPACE]) ? { ...(p[BY_WORKSPACE] as Rec) } : {};
+  const mine: Rec = isRec(box[ws]) ? { ...(box[ws] as Rec) } : {};
+  //  새 자리를 처음 만들 때는 **옛 최상위 값을 밑에 깔아** 시작한다(그 워크스페이스가 첫 워크스페이스였을 수 있다).
+  //  안 깔면 기존 사용자가 한 번 쓰는 순간 종전 값이 사라진 것처럼 보인다.
+  const seeded = isRec(box[ws]) ? mine : Object.fromEntries(
+    WORKSPACE_SCOPED_KEYS.filter((k) => k in p).map((k) => [k, p[k]]));
+
+  const nextMine: Rec = { ...seeded };
+  for (const [k, v] of Object.entries(patch)) {
+    if ((WORKSPACE_SCOPED_KEYS as readonly string[]).includes(k)) nextMine[k] = v;
+    else p[k] = v;
+  }
+  box[ws] = nextMine;
+  p[BY_WORKSPACE] = box;
+  //  승계가 끝났으면 **옛 최상위 자리를 비운다.** 남겨 두면 아직 칸이 없는 *다른* 워크스페이스가
+  //  그 값을 폴백으로 상속해 «이미 온보딩했고 리브 세션도 있다»고 오인한다(그러면 2턴이 안 간다).
+  //  폴백은 '아무 워크스페이스도 아직 쓴 적 없을 때' 한 번만 쓰이는 다리여야 한다.
+  for (const k of WORKSPACE_SCOPED_KEYS) delete p[k];
+  return p;
+}
+
+// ── 워크스페이스 층(#2265) ──────────────────────────────────────────────────
+//  org_member 는 IDENTITY_GLOBAL 표라 liv_profile 이 계정당 한 벌인데, 그 안의 서랍·첫 지시·리브 세션
+//  좌표·설정 결정은 **워크스페이스마다 달라야 한다**. 그래서 같은 컬럼 안에서 층을 가른다
+//  (형태·폴백 규율은 org/liv/profile-scope.ts 머리말).
+//
+//  ⚠ **쓰기는 반드시 이 창구를 지난다.** 읽어 온 프로필은 '이 워크스페이스가 보는 뷰'라,
+//   그걸 `{...cur}` 로 통째로 되쓰면 **다른 워크스페이스 칸이 통째로 날아간다.**
+async function writeLivProfile(id: string, patch: Record<string, unknown>): Promise<LivProfile> {
+  const { currentTenant } = await import("../tenant-context.js");
+  const ws = currentTenant()?.id ?? null;
+  const raw = await itemsPool.query(`SELECT liv_profile FROM org_member WHERE id=$1`, [id]);
+  if (!raw.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  const cur = (raw.rows[0].liv_profile ?? {}) as Record<string, unknown>;
+  const next = mergeForWorkspace(cur, patch, ws);
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return viewForWorkspace((r.rows[0].liv_profile ?? {}) as Record<string, unknown>, ws) as LivProfile;
+}
+
 export async function getLivProfile(id: string): Promise<LivProfile> {
+  const { currentTenant } = await import("../tenant-context.js");
   const r = await itemsPool.query(`SELECT liv_profile FROM org_member WHERE id=$1`, [id]);
   const v = r.rows[0]?.liv_profile as unknown;
-  return (v && typeof v === "object" && !Array.isArray(v)) ? v as LivProfile : {};
+  const raw = (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, unknown> : {};
+  return viewForWorkspace(raw, currentTenant()?.id ?? null) as LivProfile;
 }
 
 /**
@@ -321,7 +511,7 @@ export async function getLivProfile(id: string): Promise<LivProfile> {
  *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
  */
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
@@ -329,15 +519,18 @@ export async function appendLivProfile(
   if (patch.welcome) next.welcome = patch.welcome;
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
+  // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).
+  //  처음 찍힌 시각을 지킨다 — 이 값이 곧 '자동 진입은 평생 한 번' 의 근거라 뒤로 밀리면 안 된다.
+  if (patch.welcomeSeen && !cur.welcome_shown_at) next.welcome_shown_at = new Date().toISOString();
+  // #2232 — [나중에 할게요]. true=미룸(매번 갱신 — 마지막으로 미룬 시각이 뜻이 있다) · false=미룸 해제(다시 열었다).
+  if (patch.welcomeDeferred === true) next.welcome_deferred_at = new Date().toISOString();
+  else if (patch.welcomeDeferred === false) delete next.welcome_deferred_at;
   if (patch.decision) next.decisions = [...(cur.decisions ?? []), patch.decision].slice(-LIV_LIST_CAP);
   if (patch.declined) {
     const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);
     next.declined = [...rest, patch.declined].slice(-LIV_LIST_CAP);
   }
-  const r = await itemsPool.query(
-    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
-  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 
 // ── 로컬 하네스 관측 스냅샷(#891 온보딩 C) — 세션훅이 push, 웹이 라이블리 자산과 대조 ──
@@ -481,6 +674,7 @@ export interface MemberInput {
   kind?: "human" | "agent" | "system";
   display_name?: string | null;
   nickname?: string | null; // undefined=보존, null/''=닉네임 지움(→display_name 폴백).
+  use_nickname?: boolean;   // undefined=보존. 「이 닉네임을 내 이름으로 사용」(#1813).
   email?: string | null;
   identities?: MemberIdentity[];
   body_md?: string;
@@ -505,15 +699,17 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
     : (/^#[0-9a-fA-F]{6}$/.test((m.avatar_color || "").trim()) ? (m.avatar_color as string).trim() : null);
   // nickname — undefined=보존, 그 외=trim 후 빈값이면 null(→ display_name 폴백).
   const nickname = m.nickname === undefined ? (before?.nickname ?? null) : ((m.nickname || "").trim() || null);
+  // use_nickname — undefined=보존. 닉네임이 비면 **끈다**: 켜 둔 채 닉네임만 지우면 이름이 사라진 것처럼 보인다(#1813).
+  const useNick = nickname ? (m.use_nickname === undefined ? (before?.use_nickname ?? false) : !!m.use_nickname) : false;
   await itemsPool.query(
-    `INSERT INTO org_member(id, kind, display_name, nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13,1,now(),$14)
+    `INSERT INTO org_member(id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13::jsonb,$14,1,now(),$15)
      ON CONFLICT (tenant_id, id) DO UPDATE SET
-       kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, nickname=EXCLUDED.nickname, email=EXCLUDED.email,
+       kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, nickname=EXCLUDED.nickname, use_nickname=EXCLUDED.use_nickname, email=EXCLUDED.email,
        identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, avatar=EXCLUDED.avatar,
        avatar_char=EXCLUDED.avatar_char, avatar_color=EXCLUDED.avatar_color, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
        version=org_member.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [m.id, kind, m.display_name ?? before?.display_name ?? null, nickname, m.email ?? before?.email ?? null,
+    [m.id, kind, m.display_name ?? before?.display_name ?? null, nickname, useNick, m.email ?? before?.email ?? null,
      JSON.stringify(identities), m.body_md ?? before?.body_md ?? "", avatar, avatarChar, avatarColor,
      m.state ?? before?.state ?? "active", JSON.stringify(scopes), m.sort ?? before?.sort ?? 0, actor ?? null],
   );

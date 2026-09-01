@@ -16,6 +16,17 @@ const MAX_BODY = 3500;
 const FETCH_MS = 5000;
 const AUTO_MARK = "<!-- lively:auto-created-from-first-prompt -->";
 
+// #2162 — **사람의 작업 세션인가.** 서버가 pane 에 실어 준 종류(LIVELY_SESSION_KIND)를 본다.
+//  종전엔 훅마다 `LIVELY_TASK_WS`(위탁 워커의 작업 폴더 — 종류를 말하라고 있는 값이 아니다)를 스니핑했고,
+//  그래서 새 기계 세션 경로가 생길 때마다 가드를 잊었다(#1979 에서 두 번). 이제 축이 하나다.
+//  ⚠ 폴백 — kind 가 없는 세션(이 축 이전에 뜬 것)은 `LIVELY_TASK_WS` 로 한 번 더 본다. 그것도 없으면
+//   **사람 세션으로 본다**: 기계로 오인하면 사람의 세션이 조용히 기능을 잃는다(훨씬 나쁘다).
+function isWorkSessionEnv(env) {
+  const kind = String(env.LIVELY_SESSION_KIND || "").trim().toLowerCase();
+  if (kind) return kind === "human";
+  return !String(env.LIVELY_TASK_WS || "").trim();   // 구 세션 폴백
+}
+
 const readStdin = () => new Promise((resolve) => {
   let d = "", done = false; const fin = () => { if (!done) { done = true; resolve(d); } };
   try {
@@ -67,6 +78,20 @@ async function request(base, token, executionId, url, method = "GET", body) {
 (async () => {
   if (process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1") return;
   if (String(process.env.LIVELY_MODE || "").trim().toLowerCase() === "readonly") return;
+  // ⚠ **위탁(task) 세션은 제외한다**(#1979 항목4 · 프로덕션 실측 2026-08-25~27).
+  //  위탁 워커(spawnTaskSession)는 자기 LIVELY_SESSION_ID 를 제대로 실어 **정상 세션으로** 뜬다 — env 상속
+  //  문제가 아니다. 문제는 그 세션의 **첫 프롬프트가 서버가 조립한 시스템 프롬프트**라는 것이고, 이 훅은 그걸
+  //  사람의 첫 지시와 구별할 수 없다. 그래서 배치 1회에 프로젝트 1개가 생겼다:
+  //    #2019 «이 사람이 방금 라이블리에 올린 파일 목록입니다…»(welcome.ts analyzePrompt)
+  //    #2123 «도메인맵 미분류 매핑» · #2152 «내 컴퓨터 자료 증류 배치»(distill·map 크론)
+  //  10분 주기 증류 크론만으로도 하루 100건대가 쌓인다.
+  //  ⚠ 이 가드가 **의도된 바인딩을 깨지 않는 이유**: 프로젝트에 명시 바인딩된 위탁(delegate_run 등)은 아래
+  //   project-context 조회에서 `found && project_id>0` 으로 이미 조기 return 한다. 즉 가드가 막는 것은
+  //   **소속 없는 위탁이 새 프로젝트를 만드는 것** 하나뿐이다.
+  //  ⚠ **판정 축은 kind 하나다**(#2162). 종전엔 `LIVELY_TASK_WS`(위탁 워커의 **작업 폴더** — 종류를 말하라고
+  //   있는 값이 아니다)를 스니핑했는데, 그러면 새 기계 세션 경로가 생길 때마다 여기 조건을 더하는 걸 잊어도
+  //   아무 신호가 없다. 실제로 #1979 에서 두 번 잊었다. 이제 서버가 pane 에 실어 준 종류만 본다.
+  if (!isWorkSessionEnv(process.env)) return;
   const stdinData = await readStdin();
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { return; }
   const executionId = executionSessionId(input);

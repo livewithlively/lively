@@ -109,8 +109,11 @@ const activityLog: Capability = {
     //  ⚠ 다만 author_agent 와 달리 **위조가 무해하지 않다** — session_id 는 프로젝트 타임라인의 세션 추론
     //   (org/store.ts: session_project 조인)을 타고 '이 작업이 어느 프로젝트 것인가'를 바꾼다. 헤더는 클라이언트
     //   자기주장이므로, **그 세션에 들어갈 수 있는 사람인지**(canAttach)를 확인하고서야 기록한다.
-    //   canAttach = 소유자·초대된 멤버, 그리고 프로젝트 폴더 세션이면 로그인한 누구나(#452 공동 세션).
-    //   자격이 없거나 이미 끝난 세션이면 조용히 미기록(null) — 기록 자체를 막지는 않는다(작업 기록이 더 중요).
+    //   canAttach = **소유자·초대된 멤버만**(#1876 D1 — 2026-08-28 프로젝트 폴더 전원공개(#452) 폐기).
+    //   자격이 없거나 이미 끝난 세션이면 조용히 미기록(null) — **기록 자체를 막지는 않는다.**
+    //   ★ 그래서 세션이 프라이빗이어도 **산출물은 그대로 공개다**(#1876 D2): 작업기록·지식·자료·프로젝트는
+    //    만들어지고 모두가 본다. 떨어지는 것은 '어느 세션에서 나왔나' 라는 좌표 하나뿐이고, 그건 세션이
+    //    사적이라는 사실 자체가 사적이기 때문이다. 세션의 사적임이 산출물로 번지지 않는다.
     const claimedSession = ctx?.session ?? input.session_id ?? null;
     const sessionAllowed = claimedSession && authorPerson
       ? (await canAttach(String(claimedSession), authorPerson)

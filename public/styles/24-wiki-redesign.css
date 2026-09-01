@@ -18,7 +18,7 @@
 /* ── 민트 틱 — 10px 고정폭(표식 유무와 무관한 제목 정렬) ── */
 .wk-tick { flex: none; width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; }
 .wk-tick.human::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); }
-.wk-tick.mirror::before { content: ''; width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid var(--muted-3); box-sizing: border-box; }
+.wk-tick.mirror::before { content: ''; width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid var(--muted-3-line); box-sizing: border-box; }
 
 /* ── 목록 행 — 노션 플랫(경계선 없음, 호버 워시). 제목이 위계의 주인공. ── */
 .wk-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; margin: 0 -10px; border-radius: 8px;
@@ -211,7 +211,7 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-prop-it { border: none; background: none; padding: 2px 0; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
 .wk-prop-it.clickable { cursor: pointer; }
 .wk-prop-it.clickable:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 4px;
-  text-decoration-color: var(--muted-3); }
+  text-decoration-color: var(--muted-3-line); }
 .wk-prop-it.human { color: var(--mint-deep); }
 .wk-prop-it.time { font-family: var(--wkm); font-weight: 400; font-size: 11.5px; color: var(--muted); }
 .wk-prop-it.dim { color: var(--muted-2); font-weight: 500; }
@@ -221,7 +221,7 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-prop-it.need { color: var(--blue); }
 /* 배너(미러/항상주입) — 상태를 문장 한 줄로 */
 .wk-banner { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 9px 14px;
-  border: 1px solid var(--line-row); border-left: 3px solid var(--muted-3); border-radius: 9px;
+  border: 1px solid var(--line-row); border-left: 3px solid var(--muted-3-line); border-radius: 9px;
   background: var(--bg-tint); font-size: 12.5px; }
 .wk-banner.always { border-left-color: var(--blue); background: var(--bg-note); border-color: var(--line-note); }
 .wk-banner-txt { color: var(--ink-sub); font-weight: 500; flex: 1; min-width: 0; }

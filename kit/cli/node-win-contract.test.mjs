@@ -243,14 +243,26 @@ t('N2 ★ 프로세스 프로브가 남의 Node 를 세지 않는다(커맨드�
   assert.deepEqual(nodeProcProbe('linux'), { cmd: 'pgrep', args: ['-f', 'node-agent/agent.mjs'] });
 });
 
+// 사양(#2215): 개수를 **읽었으면** 그 수, **못 읽었으면 null**(모름). 0 은 «0 개» 라는 확답이다.
+//  종전 계약은 쓰레기 출력을 0 으로 읽었는데, 그건 «있다» 로 잘못 읽는 것만 막고 «없다» 라고 **확답**해
+//  버렸다 — 윈도우 제한 계정에서 PowerShell 이 빈 출력을 내자 화면이 «노드 정지됨» 이라 거짓말했다.
 t('N3 프로브 출력 해석 — pgrep 은 pid 줄, PowerShell 은 개수', () => {
   assert.equal(parseProcCount('linux', '1234\n5678\n', 0), 2);
   assert.equal(parseProcCount('linux', '', 1), 0, 'pgrep 미검출(exit 1)은 0 이다');
   assert.equal(parseProcCount('win32', '\r\n2\r\n', 0), 2);
-  assert.equal(parseProcCount('win32', '0', 0), 0);
-  // 쓰레기 출력을 '있다' 로 읽지 않는다.
-  assert.equal(parseProcCount('win32', '무슨 오류', 0), 0);
-  assert.equal(parseProcCount('linux', '무슨 오류', 0), 0);
+  assert.equal(parseProcCount('win32', '0', 0), 0, '«0 개» 는 확답이다(모름과 다르다)');
+});
+
+t('N3-b ★ 못 읽은 출력은 0 이 아니라 null — «정지됨» 이라 확답하지 않는다 (#2215)', () => {
+  assert.equal(parseProcCount('win32', '무슨 오류', 0), null, '숫자가 아니면 못 읽은 것');
+  assert.equal(parseProcCount('win32', '', 0), null, '빈 출력 = 명령이 아무것도 못 냈다(권한·정책)');
+  assert.equal(parseProcCount('win32', '', 1), null, '실패 + 빈 출력');
+  assert.equal(parseProcCount('linux', '', 0), null, 'exit 0 인데 빈 출력 = 이상');
+  assert.equal(parseProcCount('linux', '무슨 오류', 0), null, 'pid 줄이 하나도 없다');
+  // ★ 그래도 «있다» 로 읽지는 않는다 — 종전 계약이 지키려던 것은 그대로다.
+  for (const [p, out] of [['win32', '무슨 오류'], ['linux', '무슨 오류'], ['win32', '']]) {
+    assert.notEqual(parseProcCount(p, out, 0), 1, `${p}/${out} 를 '있다' 로 읽었다`);
+  }
 });
 
 // ── E. 폴백 상시화(시작프로그램) — 작업 스케줄러를 못 쓰는 계정 (#1541 실측) ──────────────
@@ -373,11 +385,20 @@ t("K2 ★ 남아 있으면 문구가 '살아 있다·관리자 PowerShell 에서
   assert.equal(stopResidualNote(undefined), ""); assert.equal(stopResidualNote({ pids: [] }), "");
   // 배선: nodeStop(WIN) 이 죽인 뒤 다시 세고, 남으면 die(비-0) — 앱이 실패로 받아 문구를 보여준다
   const src = readFileSync(new URL("./cmd-node.mjs", import.meta.url), "utf8");
-  const stopFn = src.slice(src.indexOf("function nodeStop()"), src.indexOf("function nodeStop()") + 3000);
+  //  ⚠ 시그니처로 찾지 않는다 — `nodeStop(o = {})`(#2215 soft) 처럼 인자가 늘면 계약이 거짓으로 깨진다.
+  //   계약의 대상은 **순서**이지 인자 모양이 아니다.
+  const at = src.indexOf("function nodeStop(");
+  assert.ok(at >= 0, "nodeStop 을 못 찾았다 — 이름이 바뀌었으면 이 계약도 함께 옮겨야 한다");
+  const stopFn = src.slice(at, at + 3000);
   const stopSeg = stopFn.slice(stopFn.indexOf("else if (WIN)"));   // Windows 분기만 — darwin/linux 의 ✅ 는 다른 자리다
   const i = stopSeg.indexOf("winKillAgentProcs();"), j = stopSeg.indexOf("winResidualAgentProcs()"), k = stopSeg.indexOf("die(stopResidualNote");
   assert.ok(i >= 0 && j > i && k > j, "정지 경로: 죽이기 → 다시 세기 → 남으면 die 순서가 아니다");
   assert.ok(stopSeg.indexOf("✅ 노드 데몬 해제") > k, "✅ 가 검증보다 앞에 찍힌다 — 못 죽여도 성공이라 말하게 된다");
+  // #2215 — soft(로그아웃·재바인딩)에서는 **die 하지 않는다.** 여기서 프로세스가 죽으면 그 뒤의 정리
+  //  (토큰 파일 삭제)가 통째로 안 돌아 "로그아웃했는데 토큰이 남는" 최악이 된다. 다만 사실은 말해야 하므로
+  //  잔여 문구 자체는 그대로 나간다 — 즉 die 는 soft 가 아닐 때만.
+  assert.match(stopSeg.slice(k - 40, k + 40), /!o\.soft/, "soft 인데도 die 한다 — 로그아웃이 중간에 끊긴다");
+  assert.ok(stopSeg.indexOf("say(yellow(stopResidualNote") > k, "soft 경로가 잔여 사실을 침묵한다");
 });
 
 // ── M. 네이티브 출력 디코드 — cp949 를 utf8 로 읽어 깨진 글자를 사람에게 보여주지 않는다 (#1541) ──────

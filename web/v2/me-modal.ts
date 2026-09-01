@@ -5,7 +5,7 @@
 //   프로필/환경설정을 오버레이로 두는 이유가 이것이고, 우리 발치의 [나] 행도 같은 문법을 따른다.
 //
 //  구조(슬랙 환경설정 문법): [좌 목록 | 우 내용] 2단. 왼쪽은 **주제**(프로필 · AI 개인 규칙 · 내 AI 계정 ·
-//   외부 서비스 · 화면 · 계정)이고, 오른쪽만 갈아 끼운다. 발치에는 로그아웃 — 슬랙과 같은 자리다
+//   외부 서비스 · 화면 · 계정 · 고급 설정)이고, 오른쪽만 갈아 끼운다. 발치에는 로그아웃 — 슬랙과 같은 자리다
 //   (계정을 떠나는 일은 목록 맨 아래).
 //
 //  ── #1898 — 내보내던 링크를 창 안으로 ────────────────────────────────────────────────
@@ -15,13 +15,18 @@
 //   그대로 부른다. 부품 소유는 저쪽에 두고 여기선 자리만 내준다 — 두 벌이 되면 한쪽만 고쳐진다.
 //   관리탭 쪽 입구는 새 셸에서 감춘다(admin-shell sectionHidden) — 클래식엔 이 창이 없어 그쪽엔 남긴다.
 //
+//  ── #2199 — 설정 화면의 문이 이 창으로 ────────────────────────────────────────────
+//  런치패드의 [설정] 앱을 뺐다(apps.ts hidden). 조직 · AI 능력 · 데이터 연결 · 운영 화면으로 가는 문은 이제 이 창의
+//   맨 끝 [고급 설정] 하나다 — 목차는 설정 화면의 정보구조(admin-shell adminDirectory)를 그대로 읽고, 고르면 창이
+//   닫히며 그 화면이 가운데 액자로 뜬다. [계정 · 보안]에 있던 [내 스킬 · 훅] 링크도 그 목차로 옮겼다(문은 하나).
+//
 //  ⚠ 저장 규약: 서버(POST /api/ui/me/profile)는 **미전송 필드를 보존**하는 patch 다. 그래서 [프로필]은
 //   body_md 를 안 보내고 [AI 개인 규칙]은 이름·아바타를 안 보낸다 — 한 창에 둘이 같이 있어도 서로를 지우지 않는다.
 //  ⚠ 칸에 적던 것이 탭을 옮기면 사라지면 안 된다 → 화면을 **한 번 만들어 두고 보이기만 토글**한다(다시 짓지 않는다).
 //  ⚠ 단 서버를 더 부르는 두 화면([내 AI 계정]·[외부 서비스])은 **처음 펼 때** 그린다 — 열 때마다 넷을 더
 //   부르면(ai-accounts · sessions · credentials · oauth) 안 볼 수도 있는 화면 때문에 창이 늦게 뜨고,
 //   그러면 '잠깐 들르는 창'이 아니게 된다.
-import { api, el, errorNote, logout, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
+import { api, el, errorNote, logout, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
 import { field, skeleton } from '../ui-primitives.js';
 import {
   PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips,
@@ -32,6 +37,9 @@ import { myAiAccountsCard } from '../me-ai.js';
 import { autoPane } from './me-auto.js';   // #1898 [자동으로 하는 일] — 세션 주입 화면과 같은 행을 본다(사본 없음)
 import { renderServices } from '../me-logins.js';
 import { openGitCredentialManager } from '../admin-credentials.js';
+//  #2199 — [고급 설정]은 설정 화면의 정보구조(그룹 · 섹션 · 권한 숨김)를 **그쪽 표 그대로** 읽는다(사본 없음).
+import { adminDirectory, type AdminDirGroup } from '../admin-shell.js';
+import { loadAdmin } from '../admin-rerender.js';
 
 export interface MeModalOpts {
   /** 저장으로 이름·프사가 바뀌었다 — 사이드바(와 부른 쪽)가 다시 그리도록. */
@@ -40,12 +48,12 @@ export interface MeModalOpts {
   tab?: SecKey;
 }
 
-type SecKey = 'profile' | 'ai' | 'auto' | 'aiacct' | 'svc' | 'notify' | 'look' | 'account';
+type SecKey = 'profile' | 'ai' | 'auto' | 'aiacct' | 'svc' | 'notify' | 'look' | 'account' | 'advanced';
 interface Sec { key: SecKey; label: string; icon: string[] }
 
 // 좌 목록 — 순서가 곧 위계다. 나를 가리키는 것(프로필) → 내 AI 가 나를 대하는 법(규칙) → 매 대화에
 //  자동으로 들어가는 것(주입문) → 내 AI 가 무엇으로 도나(계정) → 무엇에 닿나(외부 서비스) →
-//  나를 부르는 법(알림) → 내가 보는 화면 → 내가 들어오는 법(계정 · 보안).
+//  나를 부르는 법(알림) → 내가 보는 화면 → 내가 들어오는 법(계정 · 보안) → 그 너머로 가는 문(고급 설정).
 //  ⚠ 알림은 'AI 를 어떻게 세팅하나'가 아니라 **내가 무엇을 언제 받나**다. 그래서 AI 묶음(규칙·주입문·
 //   계정·외부 서비스) 뒤, 화면 바로 앞에 둔다(원준 2026-08-26) — 앞에 끼면 AI 설정이 갈라져 읽힌다.
 const SECS: Sec[] = [
@@ -61,6 +69,9 @@ const SECS: Sec[] = [
   { key: 'notify', label: '알림', icon: ['M12 4.2a5 5 0 0 0-5 5v3.1l-1.5 2.7h13L17 12.3V9.2a5 5 0 0 0-5-5z', 'M10.1 18a1.95 1.95 0 0 0 3.8 0'] },
   { key: 'look', label: '화면', icon: ['M4 5.5h16v10H4z', 'M9 19.5h6', 'M12 15.5v4'] },
   { key: 'account', label: '계정 · 보안', icon: ['M12 3.4 19 6v5.6c0 4.2-2.9 7.4-7 9-4.1-1.6-7-4.8-7-9V6z', 'M9.3 12.1l1.9 1.9 3.5-3.6'] },
+  // 슬라이더 — 여기서 고치는 게 아니라 **더 깊은 자리로 가는 문**(#2199). 톱니는 [나] 행이 이미 쓰는 표식이라 겹치지 않게.
+  //  맨 끝인 이유: 위 여덟은 '나'의 것이고 이건 그 너머(조직 · AI 능력 · 데이터 · 운영)다 — 슬랙 환경설정의 [고급] 자리.
+  { key: 'advanced', label: '고급 설정', icon: ['M20.5 5h-6', 'M10.5 5h-7', 'M20.5 12h-8', 'M8.5 12h-5', 'M20.5 19h-4', 'M12.5 19h-9', 'M14.5 3v4', 'M8.5 10v4', 'M16.5 17v4'] },
 ];
 
 let openBack: HTMLElement | null = null;   // 열려 있는 창 — 두 번 눌러 두 장이 겹치지 않게
@@ -102,7 +113,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
   const headSub = el('div', { class: 'v2me-h-sub' });
   const paintHead = (): void => {
     const m: any = state.me || {};
-    const nm = String(m.display_name || m.email || m.userId || '');
+    const nm = personName(m);   // 이름 판정은 한 곳(#1813)
     headAva.replaceChildren(profileAvatar(m.avatar || null, nm, m.userId, 'v2me-ava', { char: m.avatar_char, color: m.avatar_color }));
     headName.textContent = nm;
     headSub.textContent = String(m.email || m.userId || '');
@@ -167,7 +178,8 @@ export function openMeModal(opts: MeModalOpts = {}): void {
     const svc = servicesPane();    panes.set('svc', svc.node);     lazy.set('svc', svc.init);
     panes.set('notify', notifyPane());
     panes.set('look', lookPane(close));
-    panes.set('account', accountPane(data, logins, close));
+    panes.set('account', accountPane(data, logins));
+    const adv = advancedPane(close); panes.set('advanced', adv.node); lazy.set('advanced', adv.init);   // #2199 — 권한 데이터를 더 부르므로 처음 펼 때
     contEl.replaceChildren(...panes.values());
     show(cur);
   })();
@@ -183,19 +195,12 @@ function pane(title: string, hint: string, ...kids: any[]): HTMLElement {
 function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
   return el('div', { class: 'v2me-save' }, btn, status);
 }
-// 다른 도메인(매니지드 계정 화면)으로 나가는 줄 — 같은 모양이되 **새 탭**으로 연다.
-//  이 창을 닫지 않는 이유: 돌아올 자리가 여기이고, 탈퇴를 그만두는 것도 흔한 결말이다.
-function moreLinkExternal(href: string, label: string, desc: string): HTMLElement {
-  return el('a', { class: 'v2me-more', href, target: '_blank', rel: 'noopener' },
-    el('span', { class: 'v2me-more-t', text: label }),
-    el('span', { class: 'v2me-more-d', text: desc }),
-    ic(['M9 6l6 6-6 6'], 'v2me-more-ic'));
-}
-
 // 이 창에서 관리탭 안쪽 화면으로 건너가는 줄 — 여기서 다 하지 않고 **어디로 가면 되는지**만 말한다.
-function moreLink(href: string, label: string, desc: string, close: () => void): HTMLElement {
+function moreLink(href: string, label: string, desc: string, close: () => void, opts?: { gated?: boolean }): HTMLElement {
   return el('a', { class: 'v2me-more', href, onclick: () => close() },
     el('span', { class: 'v2me-more-t', text: label }),
+    // 권한 배지(#2199) — 설정 화면 사이드바의 '관리자' 배지와 같은 판정 · 같은 문구(admin-shell navPermBadge). 내부 scope 이름은 안 쓴다.
+    opts && opts.gated ? el('span', { class: 'v2me-more-badge', text: '관리자', title: '관리 권한이 있어야 보고 편집할 수 있는 항목입니다.' }) : null,
     el('span', { class: 'v2me-more-d', text: desc }),
     ic(['M9 6l6 6-6 6'], 'v2me-more-ic'));
 }
@@ -203,17 +208,35 @@ function moreLink(href: string, label: string, desc: string, close: () => void):
 // ── ① 프로필 — 얼굴·이름. 팀 화면 어디에서나 나를 가리키는 것. ──
 function profilePane(data: any, onSaved: () => void): HTMLElement {
   const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '이름 (비우면 이메일·아이디로 표시됩니다)' });
-  const nickIn = el('input', { type: 'text', value: data.nickname || '', placeholder: '닉네임 (비우면 이름으로 표시됩니다)' });
+  const nickIn = el('input', { type: 'text', value: data.nickname || '', placeholder: '닉네임 (예: 원준)' });
+  // 「이 닉네임을 내 이름으로 사용」(#1813) — 켜면 사람 이름을 보이는 자리 **전부**에서 닉네임이 이름을 대체한다.
+  //  닉네임이 비어 있으면 켤 수 없다(켜 둔 채 닉네임을 지우면 이름이 사라진 것처럼 보인다 — 서버도 같은 규칙으로 끈다).
+  const useNick = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  useNick.checked = data.use_nickname === true;
+  const useNickRow = el('label', { class: 'v2me-check' }, useNick,
+    el('span', { text: '이 닉네임을 내 이름으로 사용' }),
+    el('span', { class: 'v2me-check-d', text: '켜면 사이드바·작업 기록 등 이름이 나오는 곳에 닉네임이 표시됩니다.' }));
+  const syncUseNick = () => {
+    const has = !!String((nickIn as any).value || '').trim();
+    useNick.disabled = !has;
+    if (!has) useNick.checked = false;
+    useNickRow.classList.toggle('off', !has);
+  };
+  nickIn.addEventListener('input', syncUseNick);
+  syncUseNick();
   const ava = avatarEditor(data, nameIn);
   const status = el('span', { class: 'v2me-status' });
   const btn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   btn.addEventListener('click', async () => {
     (btn as any).disabled = true;
     // body_md 는 안 보낸다 — 서버가 보존하므로 [AI 개인 규칙]이 지워지지 않는다.
-    const payload = { display_name: (nameIn as any).value.trim(), nickname: (nickIn as any).value.trim(), ...ava.payload() };
+    const payload = { display_name: (nameIn as any).value.trim(), nickname: (nickIn as any).value.trim(),
+      use_nickname: useNick.checked, ...ava.payload() };
     try {
       const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
       applyMyProfileSaved(res, data.id);
+      // 이름이 바뀌면 부른 쪽이 자기 화면을 다시 그린다 — 레일은 drawRail, 사이드바는 redraw 를 이미 넘긴다.
+      //  ⚠ 여기서 rail.js 를 직접 부르면 import 순환이 된다(rail → me-modal → rail). 방향은 한쪽으로만.
       onSaved();
       toast('저장했습니다.'); status.textContent = '저장했습니다.';
     } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다.', true); }
@@ -222,7 +245,8 @@ function profilePane(data: any, onSaved: () => void): HTMLElement {
   return pane('프로필', '이름과 사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴입니다.',
     field('프로필 사진', ava.node),
     field('이름', nameIn),
-    field('닉네임 (활동 기록 등에 표시됩니다)', nickIn),
+    field('닉네임', nickIn),
+    useNickRow,
     data.email ? field('이메일 (로그인 아이디 · 변경은 관리자가 합니다)', el('div', { class: 'admin-ro', text: data.email })) : null,
     saveRow(btn, status));
 }
@@ -351,7 +375,7 @@ function servicesPane(): { node: HTMLElement; init: () => void } {
   //  git 자격은 서비스 연결과 성격이 다르다(AI 가 남의 계정을 쓰는 게 아니라 **코드를 받아오는** 열쇠) —
   //  카드로 세우지 않고 발치 한 줄로 둔다. 여는 창(openGitCredentialManager)은 자격 금고 소유 그대로.
   const node = pane('외부 서비스',
-    'AI 가 내 계정으로 외부 서비스를 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.',
+    'AI 가 내 계정으로 외부 서비스를 직접 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 나에게만 적용됩니다. 자료를 워크스페이스가 함께 보는 자료함으로 가져오는 것은 «외부 앱 연결»의 «자료 가져오기»가 따로 합니다.',
     host,
     el('div', { class: 'v2me-k', style: 'margin-top:20px', text: '코드 저장소' }),
     field('리포지토리 접근 (개발자용)', el('div', {},
@@ -423,7 +447,7 @@ function lookPane(close: () => void): HTMLElement {
 }
 
 // ── ⑥ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
-function accountPane(data: any, logins: any, close: () => void): HTMLElement {
+function accountPane(data: any, logins: any): HTMLElement {
   const kids: any[] = [];
   if (data.email) {
     kids.push(field('비밀번호', el('div', { class: 'v2me-inline' },
@@ -432,22 +456,27 @@ function accountPane(data: any, logins: any, close: () => void): HTMLElement {
   }
   if (logins && logins.oidcAvailable) kids.push(field('회사 계정 로그인', companyLoginRow(logins)));
   //  [내 AI 계정]·[외부 서비스]는 이 창의 화면이 됐다(#1898) — 더는 밖으로 내보내지 않는다.
-  //  남은 한 줄([내 스킬 · 훅])은 목록·편집기가 큰 화면이라 이 창에 들이지 않았다.
-  kids.push(el('div', { class: 'v2me-more-k', text: '더 자세한 설정' }),
-    moreLink('#/system/me-assets', '내 스킬 · 훅', '내 AI 가 쓰는 스킬과 훅을 켜고 끕니다.', close));
+  //  [내 스킬 · 훅]으로 건너가던 '더 자세한 설정' 줄도 뺐다(원준 지시 2026-08-27): 이 칸은
+  //  '어떻게 들어오는가'인데 그 줄만 축이 달랐고, 관리탭에 같은 자리가 이미 있다.
+  //  남아 있던 [내 스킬 · 훅] 링크는 [고급 설정] ▸ 내 설정으로 옮겼다(#2199) — 설정 화면으로 가는 문은 그 탭 하나다.
 
-  // ── 회원 탈퇴(#1876) — 계정은 이 워크스페이스가 아니라 **매니지드(app.lvly.io)** 가 갖고 있다.
-  //  그래서 여기서 지우지 않고 그 화면으로 건너간다(코어는 컨트롤플레인을 부를 자격이 없다 — 쿠키 세션 전용).
-  //  hub_url 이 없으면(셀프호스트 박스) 이 항목을 **아예 그리지 않는다**: 그 배포엔 '회원'이라는 단위가 없고
-  //  구성원 제거는 관리자의 일이라, 눌러도 갈 곳이 없는 버튼이 된다.
-  const hubUrl = String(((state as any) && (state as any).me && (state as any).me.workspace && (state as any).me.workspace.hub_url) || '');
-  let accountUrl = '';
-  if (hubUrl) { try { accountUrl = new URL(hubUrl).origin + '/account'; } catch (_) { accountUrl = ''; } }
-  if (accountUrl) {
-    kids.push(el('div', { class: 'v2me-more-k', text: '계정 정리' }),
-      moreLinkExternal(accountUrl, '회원 탈퇴',
-        '계정과 혼자 쓰는 워크스페이스가 지워집니다. 팀에 올린 자료와 지식은 남습니다.'));
-  }
+  // ── 회원 탈퇴(#1876) — **이 창 안에서 끝난다.**
+  //  종전엔 app.lvly.io 로 새 탭을 띄웠는데, 로그인해서 쓰고 있는 사람이 탈퇴하려면 밖에서 다시
+  //  로그인해야 하는 화면이 됐다 — 기능이 없는 것과 같다. 실행만 서버가 위임한다.
+  //
+  //  ⚠ 종전엔 `hub_url`(매니지드 표식)이 없으면 이 줄을 **아예 그리지 않았다.** 그건 틀렸다 —
+  //   셀프호스트에도 탈퇴는 있어야 하고(거기선 '이 워크스페이스에서 내려오는 것'을 뜻한다),
+  //   실측에서 "계정·보안에 탈퇴가 없는데?"로 그대로 드러났다. 무엇을 뜻하는지는 서버가 판정해
+  //   미리보기(plan.mode)로 알려 주므로, 화면은 **항상 문을 연다**. 자기가 어떤 배포인지 화면이
+  //   먼저 알아맞히려 들면 그 판단이 서버와 갈리는 순간 사람이 빈손이 된다.
+  kids.push(el('div', { class: 'v2me-more-k', text: '계정 정리' }),
+    el('button', {
+      type: 'button', class: 'v2me-more', style: 'width:100%;text-align:left;background:none;border:0;cursor:pointer',
+      onclick: () => accountDeleteModal(),
+    },
+      el('span', { class: 'v2me-more-t', text: '회원 탈퇴' }),
+      el('span', { class: 'v2me-more-d', text: '더 이상 이곳에 들어오지 않습니다. 무엇이 지워지고 무엇이 남는지 먼저 보여 드립니다.' }),
+      ic(['M9 6l6 6-6 6'], 'v2me-more-ic')));
   return pane('계정 · 보안', '내가 이 워크스페이스에 어떻게 들어오는지 정합니다.', ...kids);
 }
 
@@ -506,3 +535,174 @@ function notifyPane(): HTMLElement {
   return body;
 }
 
+// ── ⑨ 고급 설정(#2199) — 조직 전체에 걸친 설정·운영 화면으로 가는 **문**. ──
+//  종전엔 런치패드의 [설정] 앱이 이 문이었다(원준 2026-08-27: "앱에 설정을 없애고 그 설정 창이 뜨는 걸 … 모달 사이드바에
+//   고급설정 하나 만들어서 그걸 통해서 들어가는 과정"). 설정은 앱(할 일이 있는 화면)이 아니라 **환경을 손보는 자리**다 —
+//   나에 관한 것은 이 창의 다른 탭이 맡고, 그 너머(조직 · AI 능력 · 데이터 연결 · 운영)는 이 탭이 가리킨다. 슬랙도
+//   환경설정 창 맨 끝 [고급]에서 워크스페이스 설정으로 건너간다. 앱 목록에 [설정]이 남아 있으면 같은 문이 둘이라
+//   어느 쪽이 진짜인지 화면이 말하지 못한다(apps.ts `hidden`).
+//  목차는 **설정 화면의 정보구조 그대로**(admin-shell adminDirectory) — 그룹 · 순서 · 권한 숨김 · '관리자' 배지가 저쪽
+//   사이드바와 같은 표 · 같은 판정에서 나온다. 여기서 목록을 따로 적으면 저쪽에 화면이 늘거나 권한이 바뀔 때 한쪽만
+//   고쳐진다. 이 파일이 갖는 건 **한 줄 설명**뿐이다(저쪽 사이드바는 설명을 안 그린다). 표에 없는 키는 이름만 선다.
+//  항목을 고르면 이 창이 닫히고 그 설정 화면이 가운데 액자로 뜬다(#/system/<key> — main.ts 클래식 분기, #1843 이
+//   [내 스킬 · 훅] 링크로 이미 쓰던 길). 이 창은 '잠깐 들르는 창'이라 설정 화면을 여기 안 그린다 — 그 화면은 자기
+//   사이드바가 있는 전폭 화면이다(880×620 안에 액자로 넣으면 두 사이드바가 겹친다).
+//  권한 데이터(GET /api/ui/org)를 더 부르므로 **처음 펼 때** 그린다(머리말 ⚠ 규칙). 관리탭을 다녀왔으면 캐시를 쓴다.
+const ADV_DESC: Record<string, string> = {
+  'me-assets': '내 AI 가 쓰는 스킬과 훅을 켜고 끕니다.',
+  'me-nodes': '내 노트북이나 서버를 라이블리에 연결해 거기서 AI 세션을 엽니다.',
+  'profile': '조직 이름과 게이트웨이 주소 같은 기본 정보를 봅니다.',
+  'ui': '조직이 기본으로 보는 화면(새 화면 · 클래식)을 정합니다.',
+  'members': '이 조직에 누가 있는지 보고 고치며, 팀으로 묶습니다.',
+  'member-add': '새 팀원을 조직에 등록합니다.',
+  'member-access': '구성원이 무엇으로 접속하고, 그 사람의 AI 가 어느 계정으로 실행되는지 관리합니다.',
+  'login-idp': '구성원이 회사 구글 · SSO 계정으로 로그인하게 합니다.',
+  'tools': 'AI 가 호출할 수 있는 도구를 관리합니다 — 사내 API · 기본 제공 · 외부 도구 서버(MCP).',
+  'credentials': 'AI 가 외부 서비스를 조직 공용 계정으로 쓰도록 미리 로그인해 둡니다.',
+  'agent-assets': '구성원의 AI 에 배포할 스킬 · 서브에이전트 · 커맨드와 자동 실행 훅을 관리합니다.',
+  'automation': '정해진 시각에 사람 없이 도는 작업과 상시 에이전트를 관리합니다.',
+  'preview-envs': '아직 반영하지 않은 작업 화면을 운영 화면과 따로 띄워 확인합니다.',
+  'session-share': '구성원의 AI 대화 기록을 중앙에 모아 이어보게 할지 정합니다.',
+  'feed-targets': '위키 지식을 노션 같은 외부 도구로 내보냅니다.',
+  'project-outbound': '프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.',
+  'db-sources': 'AI 가 조회할 데이터베이스를 등록하고 어느 테이블까지 보여줄지 정합니다.',
+  'repos': '코드 레포(git)를 등록합니다 — 도메인맵과 코드 작업의 출처입니다.',
+  'audit': '누가 언제 무엇을 했는지 봅니다 — 관리 변경 · DB 조회 · AI 도구 호출.',
+  'storage': '메모리 · PTY · 디스크 사용량을 보고, 바닥나기 전에 알림 임계를 정합니다.',
+  'logs': '게이트웨이 로그가 무한히 자라지 않도록 보관 상한을 정합니다.',
+  'sessions': '이 박스에서 도는 모든 AI 세션을 보고 오래 쉬는 세션을 회수합니다.',
+  'nodes': '조직이 함께 쓰는 컴퓨터 전체와 공유 지정을 관리합니다.',
+};
+function advancedPane(close: () => void): { node: HTMLElement; init: () => void } {
+  const host = el('div', { class: 'v2me-dir' }, skeleton('설정 목록을 불러오는 중'));
+  const node = pane('고급 설정',
+    '조직 전체에 걸친 설정과 운영 화면입니다. 항목을 고르면 이 창이 닫히고 그 설정 화면이 열립니다.',
+    host);
+  node.classList.add('v2me-pane-wide');   // 행이 [이름 · 배지 · 설명 · ›] 한 줄이라 520px 에선 설명이 다 잘린다
+  const paint = (groups: AdminDirGroup[]): void => {
+    if (!groups.length) { host.replaceChildren(el('p', { class: 'prof-hint', text: '지금 권한으로 열 수 있는 설정 화면이 없습니다.' })); return; }
+    const kids: HTMLElement[] = [];
+    let anyGated = false;
+    for (const g of groups) {
+      kids.push(el('div', { class: 'v2me-more-k', text: g.label }));
+      for (const s of g.items) {
+        if (s.gated) anyGated = true;
+        kids.push(moreLink('#/system/' + s.key, s.label, ADV_DESC[s.key] || '', close, { gated: s.gated }));
+      }
+    }
+    // 배지 설명은 배지가 하나라도 있을 때만 — 없는 것을 설명하지 않는다.
+    if (anyGated) kids.push(el('p', { class: 'prof-hint', style: 'margin-top:14px' }, ...uiText('「관리자」가 붙은 항목은 관리 권한이 있는 사람에게만 보입니다.')));
+    host.replaceChildren(...kids);
+  };
+  const init = (): void => {
+    void loadAdmin()
+      .then((data: any) => paint(adminDirectory(data)))
+      .catch((e: any) => host.replaceChildren(errorNote(e, '설정 목록을 불러오지 못했습니다')));
+  };
+  return { node, init };
+}
+
+// ── 회원 탈퇴(#1876) — 이 창 안에서 끝난다 ──────────────────────────────────────
+//  화면이 "무엇이 지워지고 무엇이 남는지" 를 **서버 판정 그대로** 먼저 말한다(실행과 같은 함수를 쓴다).
+//  확인은 이메일 타이핑 — 되돌릴 수 없는 일의 방어는 버튼 한 번이 아니다.
+function accountDeleteModal(): void {
+  const head = el('div', { class: 'ov-head' }, el('h3', { text: '회원 탈퇴' }));
+  const box = el('div', { class: 'ov-box', style: 'max-width:520px' }, head);
+  const back = el('div', { class: 'ov-back' }, box);
+  const close = () => back.remove();
+  head.append(el('button', { class: 'btn btn-ghost btn-sm', text: '닫기', onclick: close }));
+  back.addEventListener('click', (e: any) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', function esc(ev: any) { if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+
+  const bodyEl = el('div', { style: 'margin-top:4px' }, el('p', { class: 'admin-hint', text: '확인하는 중입니다…' }));
+  box.append(bodyEl);
+  document.body.append(back);
+
+  const listOf = (title: string, names: string[], tone: string) => el('div', { style: 'margin:10px 0' },
+    el('p', { class: 'admin-hint', style: tone, text: title }),
+    el('ul', { style: 'margin:4px 0 0; padding-left:18px; font-size:13.5px' },
+      ...names.map((n) => el('li', { text: n }))));
+
+  void (async () => {
+    let plan: any;
+    try { plan = await api('/api/ui/me/account-delete-plan'); }
+    catch (e: any) {
+      bodyEl.replaceChildren(el('p', { class: 'gate-error', text: (e && e.message) || '탈퇴 정보를 불러오지 못했습니다.' }));
+      return;
+    }
+    // 막는 화면은 두 배포가 이유만 다르다 — 둘 다 '주인 없는 것을 남기지 않는다'가 근거다.
+    const blocked = (title: string, names: string[], why: string) => {
+      bodyEl.replaceChildren(
+        names.length
+          ? listOf(title, names, 'color:var(--danger-text,#b42318)')
+          : el('p', { class: 'admin-hint', style: 'color:var(--danger-text,#b42318)', text: title }),
+        el('p', { class: 'admin-hint' }, ...uiText(why)),
+        el('div', { style: 'display:flex;justify-content:flex-end;margin-top:14px' },
+          el('button', { type: 'button', class: 'btn btn-ghost', text: '닫기', onclick: close })));
+    };
+
+    const rows: any[] = [];
+
+    if (plan.mode === 'selfhost') {
+      // 셀프호스트 — '계정'이라는 상위 단위가 없다. 탈퇴 = 이 워크스페이스에서 내려오는 것.
+      //  ⚠ 여기서 지워진다고 말하지 않는다. 실제로 지워지는 건 **들어올 수 있는 자격**이고,
+      //   올린 자료·지식은 그대로 남는다. 화면이 과장하면 그것도 거짓말이다.
+      if (plan.last_admin) {
+        blocked('이 워크스페이스의 마지막 관리자라 지금은 탈퇴할 수 없습니다.', [],
+          '다른 분에게 관리자 권한을 넘긴 뒤에 다시 시도해 주세요. 관리자가 아무도 없이 남으면 구성원을 들이거나 설정을 바꿀 수 있는 사람이 없어집니다.');
+        return;
+      }
+      rows.push(el('p', { class: 'admin-hint' },
+        ...uiText('«' + (plan.workspace || '이 워크스페이스') + '» 에서 내려옵니다. 지금 열려 있는 화면과 CLI 로그인이 즉시 끊기고, 비밀번호·구글·기기 승인 어느 쪽으로도 다시 들어오실 수 없습니다.')));
+      rows.push(el('p', { class: 'admin-hint' },
+        ...uiText('올리신 자료와 지식, 만드신 프로젝트는 팀의 것이라 그대로 남습니다. 그것까지 지우셔야 하면 관리자에게 요청해 주세요.')));
+      rows.push(el('p', { class: 'admin-hint' },
+        ...uiText('다시 들어오시려면 관리자가 계정을 되살려 드려야 합니다.')));
+    } else {
+      const blocking: string[] = plan.blocking_teams || [];
+      const solo: string[] = plan.solo_workspaces || [];
+      const left: string[] = plan.memberships || [];
+
+      // 팀의 주인이면 막는다 — 주인 없는 팀을 남기지 않기 위해서다(넘기기는 아직 없다).
+      if (blocking.length) {
+        blocked('함께 쓰는 워크스페이스의 주인이라 지금은 탈퇴할 수 없습니다.', blocking,
+          '이 워크스페이스를 다른 분에게 넘기거나 지운 뒤에 다시 시도해 주세요. 주인이 사라진 채로 남으면 남은 분들이 아무것도 할 수 없게 됩니다.');
+        return;
+      }
+      rows.push(solo.length
+        ? listOf('아래 워크스페이스가 함께 지워집니다 — 그 안의 자료와 대화도 사라집니다.', solo, 'color:var(--danger-text,#b42318)')
+        : el('p', { class: 'admin-hint', text: '지워질 워크스페이스는 없습니다.' }));
+      if (left.length) rows.push(listOf('아래 워크스페이스에서는 나가기만 합니다 — 거기에 올리신 자료와 지식은 그대로 남습니다.', left, ''));
+      rows.push(el('p', { class: 'admin-hint' }, ...uiText('지운 워크스페이스의 파일은 복구를 위해 30일간 보관된 뒤 삭제됩니다. 더 빨리 파기해야 하면 운영팀에 요청해 주세요.')));
+    }
+
+    const input = el('input', { type: 'text', autocomplete: 'off', style: 'width:100%;margin-top:6px',
+      placeholder: '탈퇴하려면 이메일을 그대로 입력: ' + (plan.email || '') });
+    const err = el('p', { class: 'gate-error', hidden: true, style: 'margin:8px 0 0' });
+    const go = el('button', { class: 'btn btn-danger', type: 'submit', text: '탈퇴하기' });
+    const form = el('form', { style: 'margin:0' }, ...rows, input, err,
+      el('p', { class: 'admin-hint', style: 'margin-top:8px' }, ...uiText(plan.mode === 'selfhost'
+        ? '탈퇴하면 스스로 되돌릴 수 없습니다.'
+        : '탈퇴하면 되돌릴 수 없습니다. 같은 이메일로 다시 가입하실 수는 있고, 그때는 빈 계정으로 시작합니다.')),
+      el('div', { style: 'display:flex;gap:8px;justify-content:flex-end;margin-top:16px' },
+        el('button', { type: 'button', class: 'btn btn-ghost', text: '취소', onclick: close }), go));
+
+    form.addEventListener('submit', async (ev: any) => {
+      ev.preventDefault();
+      (err as any).hidden = true;
+      (go as any).disabled = true;
+      try {
+        await api('/api/ui/me/account-delete', { method: 'POST', body: JSON.stringify({ confirm: input.value }) });
+      } catch (e: any) {
+        (go as any).disabled = false;
+        err.textContent = (e && e.message) || '탈퇴에 실패했습니다.';
+        (err as any).hidden = false;
+        return;
+      }
+      // 계정이 사라졌으므로 이 화면에 더 머물 이유가 없다 — 곧바로 내보낸다.
+      bodyEl.replaceChildren(el('p', { class: 'admin-hint', text: '탈퇴가 완료되었습니다. 로그아웃합니다…' }));
+      setTimeout(() => logout(), 1200);
+    });
+    bodyEl.replaceChildren(form);
+  })();
+}

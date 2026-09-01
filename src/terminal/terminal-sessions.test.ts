@@ -2,7 +2,7 @@
 // 실행: npm run build && node dist/terminal/terminal-sessions.test.js
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, harnessLiveThemeSteps, harnessLiveThemeSupported, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
@@ -225,7 +225,17 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   //  — 경로를 하드코딩하면 박스마다 base 가 달라(고객사 A=/srv/lively/shared, dev=~/.openclaw/...) 헛통과한다.
   const proj = path.join(PROJECT_SHARED_BASE, "project", "714", "repo");
   const priv = path.join(os.homedir(), "box", "work");
-  ok2(canSeeSession({ dir: proj, owner: "mike", invites: [] }, "haru"), "프로젝트 폴더 세션은 남이어도 보인다(#452)");
+  //  ★ 2026-08-28 뒤집힘(#1876 D1, 장원준) — 종전 단언은 "프로젝트 폴더 세션은 남이어도 보인다(#452)" 였다.
+  //   그 예외가 폐기됐다: 세션은 **소유자 + 명시 초대만**. 초대 창구는 세션 문패의 「공유」(#2116)다.
+  ok2(!canSeeSession({ dir: proj, owner: "mike", invites: [] }, "haru"), "★프로젝트 폴더 세션도 초대 없으면 안 보인다(#1876 D1)");
+  //  ⚠ 프로젝트 세션의 **초대자**는 #1291 공개범위까지 통과해야 한다 — 그래서 판정 재료(hidden)가 필요하고,
+  //   없으면 닫는다(fail-closed). 운영 호출부는 언제나 넘긴다(sessions.ts:107·266). 소유자는 이 제약을 안 탄다.
+  const noneHidden = { ids: new Set<number>(), folders: new Set<string>() };
+  ok2(canSeeSession({ dir: proj, owner: "mike", invites: ["haru"] }, "haru", noneHidden), "프로젝트 세션도 초대하면 보인다");
+  ok2(!canSeeSession({ dir: proj, owner: "mike", invites: ["haru"] }, "haru"), "★판정 재료가 없으면 초대자도 닫는다(fail-closed)");
+  ok2(!canSeeSession({ dir: proj, owner: "mike", invites: ["haru"], projectId: 714 }, "haru",
+    { ids: new Set([714]), folders: new Set<string>() }), "★감춰진 프로젝트면 초대받았어도 안 보인다(#1291)");
+  ok2(canSeeSession({ dir: proj, owner: "mike", invites: [] }, "mike"), "프로젝트 세션은 소유자에게 보인다");
   ok2(!canSeeSession({ dir: priv, owner: "mike", invites: [] }, "haru"), "개인 세션은 남에게 안 보인다");
   ok2(canSeeSession({ dir: priv, owner: "mike", invites: [] }, "mike"), "개인 세션은 소유자에게 보인다");
   ok2(canSeeSession({ dir: priv, owner: "mike", invites: ["haru"] }, "haru"), "초대된 사람에게 보인다");
@@ -309,9 +319,35 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     //  그러면 이 시나리오는 통과하면서 아무것도 안 보는 vacuous 테스트가 된다(mutation 으로 실제 확인함).
     //  빈 문자열은 어느 셸에서도 유지되고 `${SHELL:-…}` 폴백을 실제로 발동시킨다(dash 처럼 안 채워주는 셸의 대역).
     const env: Record<string, string | undefined> = { ...process.env, SHELL: opts.noShell ? "" : "/bin/sh", ENV: "" };
-    const r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    // ★ **포크 실패는 런처 결함이 아니다.** 이 헬퍼는 진짜 프로세스를 띄우는데, CI 러너가 붐비면
+    //  `spawnSync` 가 EAGAIN/ENOMEM 으로 **포크 자체를 못 한다**. 그걸 그대로 아래 [배선] 단언에 흘리면
+    //  멀쩡한 런처가 "실행 안 됐다"로 빨간불이 된다 — 실측 2026-08-26: 같은 커밋이 두 번 실패하고
+    //  세 번째에 통과했다(러너 queued 12 → 0). 원인은 제품이 아니라 그 순간의 자원이었다.
+    //  그래서 **일시적 포크 실패만** 짧게 물러났다 다시 시도한다. 다른 실패(ENOENT 등)는 그대로 올린다 —
+    //  그건 진짜 결함이고, 여기서 삼키면 이 파일이 무엇도 안 보는 테스트가 된다.
+    const TRANSIENT = new Set(["EAGAIN", "ENOMEM"]);
+    let r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    for (let i = 0; i < 4 && r.error && TRANSIENT.has(String((r.error as NodeJS.ErrnoException).code ?? "")); i++) {
+      // 동기 백오프 — 이 테스트는 동기 흐름이라 await 를 못 쓴다. **바쁜 대기는 쓰지 않는다**:
+      //  CPU 가 모자라 포크가 실패한 그 순간에 CPU 를 태우면 상황을 더 나쁘게 만든다.
+      //  Atomics.wait 는 스레드를 실제로 재운다 — 러너가 숨 돌릴 틈을 준다.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150 * (i + 1));
+      r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    }
     // [배선] 관측 장치가 죽어 있으면 아래 단언은 통과하면서 아무것도 안 본다(vacuous).
-    ok2(!r.error && r.status !== null, "[배선] 런처가 실제로 실행됐다");
+    //  ⚠ 실패 문구에 **이유**를 싣는다. 종전엔 "런처가 실제로 실행됐다"만 남아서, 포크가 안 된 것인지
+    //   런처가 깨진 것인지 로그만 보고는 구분할 수 없었다(그 구분이 없어 플레이크를 제품 결함으로 쫓았다).
+    const code = r.error ? String((r.error as NodeJS.ErrnoException).code ?? "") : "";
+    const why = r.error
+      // 두 갈래를 **문구에서** 가른다: 재시도까지 했는데 못 띄운 자원 문제 vs 진짜 실행 실패(없는 파일 등).
+      //  이 구분이 없으면 로그만 보고는 플레이크인지 결함인지 알 수 없고, 그러면 결국 제품을 뒤지게 된다.
+      ? TRANSIENT.has(code)
+        ? `재시도했는데도 프로세스를 못 띄웠다(${code}) — 러너 자원 문제다`
+        : `런처를 실행하지 못했다(${code || r.error.message})`
+      : r.status === null
+        ? `신호로 죽었다(${r.signal ?? "?"})`
+        : "";
+    ok2(!why, `[배선] 런처가 실제로 실행됐다${why ? ` — ${why}` : ""}`);
     return (r.stdout || "") + (r.stderr || "");
   };
   const ALIVE = "echo SHELL_ALIVE\n";   // 폴백 셸이 살아 있을 때만 실행된다
@@ -426,7 +462,10 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   }
   // E11 — 모르는 하네스도 빈 안내를 주지 않는다(장래에 하네스가 늘어도 사용자는 조치를 안다).
   ok2(harnessFailNotice("codex").includes("device-auth"), "E11a codex 안내는 device-auth 를 지목한다");
-  ok2(harnessFailNotice("claude").includes("/login"), "E11b claude 안내는 TUI 안 /login 을 지목한다");
+  // E11b — 재실측(2026-08-26, claude 2.1.246 `claude auth --help`): login·logout·status 가 **셸 서브커맨드로** 생겼다.
+  //  종전 안내(TUI 를 띄운 뒤 슬래시 `/login`)는 #1516 당시엔 사실이었지만 지금은 한 단계가 공짜로 붙는 낡은 길이다.
+  //  안내가 주는 것은 «사람이 그대로 치는 한 줄» 이어야 한다(E11d 와 같은 교리).
+  ok2(harnessFailNotice("claude").includes("claude auth login"), "E11b claude 안내는 셸 한 줄(claude auth login)을 준다");
   ok2(harnessFailNotice("gemini").includes("gemini"), "E11c 모르는 하네스도 그 이름으로 재실행 안내를 준다");
   // E11d~ (#1695) — 안내에 적히는 명령은 **사용자가 그대로 치는 문자열**이다. 라벨도 내부 식별자도 아닌
   //  실행 파일이어야 한다: antigravity 의 명령은 `agy` 라, 종전 폴백('그 이름으로 재실행')을 그대로 두면
@@ -586,21 +625,49 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   }
 
   // ── 로그인 세션 — 만료 자격으로는 하네스가 즉사해 로그인 화면조차 못 뜨던 데드락을 끊는다 ──
-  {
-    const argv = harnessLoginArgv("codex");
-    ok2(!!argv && argv[0] === "sh", "E8a codex 로그인은 셸에서 명령을 돌린다(하네스 TUI 아님)");
-    ok2(!!argv && argv.join(" ").includes("codex logout"), "E8b 만료 자격을 먼저 지운다");
-    ok2(!!argv && argv.join(" ").includes("codex login --device-auth"), "E8c 원격에서도 되는 주소+코드 방식으로 로그인한다");
-    // L3 — 로그인이 끝나면 셸로 남는다(codex 를 스텁으로 가려 실제 로그인 없이 흐름만 관측).
+  //  ⚠ 단언을 **부작용(스텁이 기록한 호출 argv)** 으로 한다. 종전 판은 `argv.join(" ").includes("codex logout")`
+  //   처럼 **구현 문자열을 그대로** 요구했는데, 그건 계약이 아니라 구현의 사본이다 — 「바이너리를 인자로 넘긴다」
+  //   같은 무해한 리팩터에 거짓 실패하면서, 정작 «그 명령이 실제로 불렸나» 는 하나도 보증하지 않았다.
+  //   (같은 교훈: ai-login-run 의 D3 단언이 pgrep 이라는 구현 문자열을 요구해 결함을 계약으로 고정했다.)
+  for (const [key, bin] of [["codex", "codex"], ["grok", "grok"]] as const) {
+    const argv = harnessLoginArgv(key);
+    ok2(!!argv && argv[0] === "sh", `E8a ${key} 로그인은 셸에서 명령을 돌린다(하네스 TUI 아님)`);
+    //  ⚠ 여기서 멈추지 않으면 아래가 null 을 건드려 **파일 전체가 중단**되고, 그러면 뒤에 있는 테스트들이
+    //   «돌지도 않았는데 조용한» 상태가 된다(실패가 실패를 가린다). 그 행만 실패로 남기고 넘어간다.
+    if (!argv) continue;
+    // 그 하네스 바이너리를 스텁으로 가려 **실제 로그인 없이** 무엇이 어떤 인자로 불렸는지 관측한다.
     const stub = mkdtempSync(join(tmpdir(), "lively-1516-"));
-    writeFileSync(join(stub, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const r = spawnSync(argv![0], argv!.slice(1), {
+    const callLog = join(stub, "calls.txt");
+    writeFileSync(join(stub, bin), `#!/bin/sh\necho "$@" >> ${JSON.stringify(callLog)}\nexit 0\n`, { mode: 0o755 });
+    const r = spawnSync(argv[0], argv.slice(1), {
       input: ALIVE, encoding: "utf8",
       env: { ...process.env, SHELL: "/bin/sh", ENV: "", PATH: `${stub}:${process.env.PATH ?? ""}` },
     });
+    const calls = existsSync(callLog) ? readFileSync(callLog, "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
     rmSync(stub, { recursive: true, force: true });
-    ok2(/SHELL_ALIVE/.test((r.stdout || "") + (r.stderr || "")), "E8d 로그인 절차가 끝나면 셸로 남아 그 자리에서 바로 쓸 수 있다");
+    //  ⓪ 배선 — 스텁이 실제로 불렸나. 이게 없으면 아래 단언들은 «아무것도 안 불렸다» 를 통과시킨다(vacuous).
+    ok2(calls.length === 2, `E8w ${key} — 스텁이 실제로 두 번 불렸다(관측 장치가 살아 있다, 실제 ${calls.length}회)`);
+    ok2(calls[0] === "logout", `E8b ${key} 는 만료 자격을 먼저 지운다(실제 호출: ${calls[0] ?? "없음"})`);
+    ok2(calls[1] === "login --device-auth",
+      `E8c ${key} 는 원격에서도 되는 주소+코드 방식으로 로그인한다(실제 호출: ${calls[1] ?? "없음"})`);
+    ok2(/SHELL_ALIVE/.test((r.stdout || "") + (r.stderr || "")), `E8d ${key} — 로그인 절차가 끝나면 셸로 남아 그 자리에서 바로 쓸 수 있다`);
   }
   ok2(harnessLoginArgv("claude") === null, "E9 claude 는 /login 이 TUI 안이라 자동화 불가 → 종전 경로 유지");
   ok2(harnessLoginArgv("nope") === null, "E10 모르는 하네스는 로그인 명령을 만들지 않는다");
 }
+
+// ── 행이 세션 모드를 **끝까지** 나른다 (#2439, 2026-09-01) ────────────────────────
+//  ⚠ 이 값을 두 번이나 엉뚱한 자리에 놓아 응답에서 사라졌다: ① tmuxDesired 안 ② 중간 객체.
+//   collectSessions 의 `rows.push` 는 필드를 **하나씩 골라** 담으므로, 위에서 만들어 둔 값이라도
+//   거기 안 적으면 조용히 없어진다(실측: 386행 중 0행만 값을 가졌고 화면은 계속 터미널로 열렸다).
+//   그래서 «tmux 옵션 → LIST_FMT → 구조분해 → 중간 객체 → rows.push» 다섯 자리를 한 줄로 묶어 둔다.
+t("[#2439] runtimeChoice 가 tmux 옵션에서 rows.push 까지 이어진다", () => {
+  const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
+  const src = readFileSync(join(here, "sessions.ts"), "utf8");
+  const fmt = readFileSync(join(here, "tmux-exec.ts"), "utf8");
+  assert.match(fmt, /#\{@box_runtime\}/, "LIST_FMT 가 그 옵션을 읽는다");
+  assert.match(src, /runtimeRaw, \.\.\.labelParts/, "구조분해가 라벨 앞에서 받는다");
+  assert.match(src, /runtimeChoice: runtimeRaw === "chat"/, "중간 객체가 우리 낱말로 옮긴다");
+  assert.match(src, /runtimeChoice: p\.runtimeChoice/, "★ rows.push 가 그것을 실제로 담는다");
+  assert.match(src, /"@box_runtime"/, "생성이 그 옵션을 남긴다");
+});
