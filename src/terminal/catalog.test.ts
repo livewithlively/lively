@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { HARNESSES, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 
 test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그가 보존한다", () => {
   const c = HARNESSES.find((h) => h.key === "codex")!;
@@ -120,6 +120,41 @@ test("app-server 모드 pane 안내는 '그냥 codex 를 치라'고 말하지 �
   const intro = codexAppServerPaneArgv().at(-1) ?? "";
   assert.match(intro, /대화창/, "대화가 어디서 도는지 알려 준다");
   assert.match(intro, /resume|넘기기/, "이어가는 법(인계)을 알려 준다");
+});
+
+// harnessSettingsArgv — claude 스폰의 --settings(theme+statusLine) 병합 seam. 이 함수가 회귀하면 statusLine 이
+//  사람 세션에 새거나(managed 게이트 붕괴) 같은 플래그 2회로 theme·statusLine 이 서로 덮을 수 있다(미검증 동작).
+test("harnessSettingsArgv: claude theme-only 는 기존 theme argv 와 동일(무회귀)", () => {
+  assert.deepEqual(harnessSettingsArgv("claude", { theme: "dark" }), harnessThemeArgv("claude", "dark"));
+});
+
+test("harnessSettingsArgv: claude managed-only → statusLine 만 든 단일 --settings", () => {
+  const argv = harnessSettingsArgv("claude", { managed: true });
+  assert.equal(argv[0], "--settings");
+  const s = JSON.parse(argv[1]);
+  assert.equal(s.statusLine.type, "command");
+  assert.equal("theme" in s, false);
+});
+
+test("harnessSettingsArgv: claude theme+managed → 한 --settings 에 두 키(플래그 1회)", () => {
+  const argv = harnessSettingsArgv("claude", { theme: "dark", managed: true });
+  assert.equal(argv.filter((a) => a === "--settings").length, 1);
+  const s = JSON.parse(argv[1]);
+  assert.equal(s.theme, "dark");
+  assert.equal(s.statusLine.type, "command");
+});
+
+test("harnessSettingsArgv: claude 둘 다 없으면 빈 argv", () => {
+  assert.deepEqual(harnessSettingsArgv("claude", {}), []);
+});
+
+test("harnessSettingsArgv: 사람 세션(managed 아님)엔 statusLine 안 새어나간다", () => {
+  const s = JSON.parse(harnessSettingsArgv("claude", { theme: "dark", managed: false })[1]);
+  assert.equal("statusLine" in s, false);
+});
+
+test("harnessSettingsArgv: 비claude(codex)는 statusLine 무시하고 theme argv 로 위임(무회귀)", () => {
+  assert.deepEqual(harnessSettingsArgv("codex", { theme: "dark", managed: true }), harnessThemeArgv("codex", "dark"));
 });
 
 // ── 대화 런타임 세션의 pane (#2439, 2026-09-01) ────────────────────────────────────

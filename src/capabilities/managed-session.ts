@@ -21,6 +21,13 @@ const list: Capability = {
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/managed-sessions"], parse: () => ({}) }] },
   handler: async () => {
     const sessions = await listManagedSessions();
+    // 각 상시세션 계정의 최신 rate-limit 소진율(5시간·7일) — statusLine 훅이 계정 단위로 보고한 라이브 값(usage-store).
+    //  계정 quota 라 세션이 아니라 account 로 조회한다. 미보고/TTL경과면 null(모름) — 프론트가 '없음'과 구분해 그린다.
+    const { getUsage } = await import("../terminal/usage-store.js");
+    const { managedAccount } = await import("../sessions/managed-sessions.js");
+    // ⚠ 스폰 주체와 **같은 실효 계정**으로 조회한다 — 스폰은 asUser(managedAccount(m)) 로 그 계정 토큰을 굽고
+    //  훅은 그 계정으로 보고하므로, raw m.account(=null 가능)로 조회하면 값이 있어도 '미보고'가 된다(silent miss).
+    const withUsage = <T extends { account: string | null }>(m: T) => ({ ...m, usage: getUsage(managedAccount(m)) });
     // #1675 ⑥ — 각 상시세션의 워크스페이스에 실제로 몇 개가 떠 있는지. 레지스트리는 1건인데 tmux 에 30개가
     //  떠 있던 실측이 있었고(claude 프로세스 29개 = 5.7GB), 그 사실이 **어느 화면에도 보이지 않았다**.
     //  keepalive 가 자동으로 정리하지만, 정리가 도는지·무엇을 걷었는지는 사람이 볼 수 있어야 한다.
@@ -37,11 +44,11 @@ const list: Capability = {
           // unmarked_count(#2170) = 같은 워크스페이스에 떠 있지만 **정리기가 만든 게 아닌** 세션 수.
           //  자동 정리에서 뺀 것을 침묵으로 처리하지 않는다 — #1675 의 교훈이 "30개가 떠 있는데 어느 화면에도
           //  안 보였다" 였으므로, 안 걷는 쪽으로 판정이 좁아진 만큼 그 잔여가 사람 눈에 보여야 한다.
-          return { ...m, orphan_count: c.orphans.length, unmarked_count: c.unmarked.length };
+          return { ...withUsage(m), orphan_count: c.orphans.length, unmarked_count: c.unmarked.length };
         }),
       };
     } catch {
-      return { sessions: sessions.map((m) => ({ ...m, orphan_count: null, unmarked_count: null })) };
+      return { sessions: sessions.map((m) => ({ ...withUsage(m), orphan_count: null, unmarked_count: null })) };
     }
   },
 };
