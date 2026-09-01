@@ -655,3 +655,19 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   ok2(harnessLoginArgv("claude") === null, "E9 claude 는 /login 이 TUI 안이라 자동화 불가 → 종전 경로 유지");
   ok2(harnessLoginArgv("nope") === null, "E10 모르는 하네스는 로그인 명령을 만들지 않는다");
 }
+
+// ── 행이 세션 모드를 **끝까지** 나른다 (#2439, 2026-09-01) ────────────────────────
+//  ⚠ 이 값을 두 번이나 엉뚱한 자리에 놓아 응답에서 사라졌다: ① tmuxDesired 안 ② 중간 객체.
+//   collectSessions 의 `rows.push` 는 필드를 **하나씩 골라** 담으므로, 위에서 만들어 둔 값이라도
+//   거기 안 적으면 조용히 없어진다(실측: 386행 중 0행만 값을 가졌고 화면은 계속 터미널로 열렸다).
+//   그래서 «tmux 옵션 → LIST_FMT → 구조분해 → 중간 객체 → rows.push» 다섯 자리를 한 줄로 묶어 둔다.
+t("[#2439] runtimeChoice 가 tmux 옵션에서 rows.push 까지 이어진다", () => {
+  const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
+  const src = readFileSync(join(here, "sessions.ts"), "utf8");
+  const fmt = readFileSync(join(here, "tmux-exec.ts"), "utf8");
+  assert.match(fmt, /#\{@box_runtime\}/, "LIST_FMT 가 그 옵션을 읽는다");
+  assert.match(src, /runtimeRaw, \.\.\.labelParts/, "구조분해가 라벨 앞에서 받는다");
+  assert.match(src, /runtimeChoice: runtimeRaw === "chat"/, "중간 객체가 우리 낱말로 옮긴다");
+  assert.match(src, /runtimeChoice: p\.runtimeChoice/, "★ rows.push 가 그것을 실제로 담는다");
+  assert.match(src, /"@box_runtime"/, "생성이 그 옵션을 남긴다");
+});

@@ -277,6 +277,9 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
       offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
       reportedFresh: p.reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
+      //  #2439 — 이 세션이 어느 모드로 떴나. ⚠ 이 push 는 필드를 **하나씩 골라** 담는다 —
+      //   위에서 만들어 둔 값이라도 여기 안 적으면 조용히 사라진다(실측: 386행 중 0행만 값을 가졌다).
+      runtimeChoice: p.runtimeChoice,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
       flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
       managed: p.managed as string | null,
