@@ -121,7 +121,11 @@ const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — �
 // @box_managed = 이 세션을 만든 **상시세션 id**(#2170). 상시세션은 desired-state DB 미러가 없어(#1059 E) tmux 가
 //  유일한 자리다. 정리기가 "내가 만든 세션인가"를 여기서 읽는다 — 세션 수만큼 getOpt 를 치면 2분마다 O(N) tmux
 //  호출이 되므로, 어차피 도는 이 한 줄에 실어 조회 비용을 0 으로 둔다(@box_last_busy 와 같은 이유).
-export const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_app}\t#{@box_managed}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{@box_state}\t#{@box_last_seen}\t#{pane_title}\t#{@box_label}";
+//  ⚠ `@box_label` 은 **맨 뒤**여야 한다 — 라벨에 탭이 들어갈 수 있어 나머지를 다 먹는 자리다
+//   (아래 파싱이 `...labelParts` 로 받는다). 새 칸은 반드시 그 **앞에** 넣는다.
+//  #2439 — `@box_runtime`: 이 세션이 어느 모드로 떴나(chat|없음). 목록 스캔에 한 칸을 더하는 것은
+//   공짜지만, 여기 없으면 화면이 «대화창» 이라 하고 배달은 터미널로 가는 갈림이 생긴다.
+export const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_app}\t#{@box_managed}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{@box_state}\t#{@box_last_seen}\t#{pane_title}\t#{@box_runtime}\t#{@box_label}";
 
 // ── 뮤터블 관측 상태(프로세스 로컬) — Map 은 은닉하고 최소 접근 함수만 노출한다(#1313 R15) ──
 // 세션별 마지막 'busy(작업중)' 관측 시각(epoch초). 폴링 관측 기반 — '최근 작업순' 정렬용. 서버 재기동 시 리셋(도그푸드 OK).
