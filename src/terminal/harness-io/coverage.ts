@@ -69,43 +69,50 @@ export const COVERAGE: readonly HarnessCoverage[] = [
   },
   {
     harness: "codex",
-    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "n/a", usage: "ok", interrupt: "ok", model: "terminal" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "n/a", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
       //  ★ 실측 2026-09-01(0.152.0, 자기 JSON 스키마 근거): `item/tool/requestUserInput`
       //   요청 {isBlocking,itemId,threadId,turnId,questions:[{id,header,question,options,isOther,isSecret}]}
       //   응답 {answers:{"<질문 id>":{answers:["<label>",…]}}} — **질문 id 로** 키잡는다.
       //   ⚠ isSecret 질문은 웹에서 안 받는다(자격증명 자리) — 그 묶음은 raw 로 흘린다.
       slash: "codex 는 슬래시가 TUI 전용이다 — app-server 프로토콜로 목록이 노출되지 않는다(벤더 미제공).",
-      model: "thread/start 에서만 정해진다 — 도는 중 전환하는 RPC 가 app-server 스키마에 없고, 카탈로그에도 runtimeCmd 가 없다.",
+      //  ★ 실측 2026-09-01: **웹에서 된다.** 화면(session-chat.ts switchAxis)이 두 길을 쓴다 —
+      //   runtimeCmd 가 있으면 그 자리에서 슬래시로, 없으면 **같은 폴더의 새 세션으로 이어 연다**
+      //   (핸드오프, POST …/handoff — 맥락을 넘긴다). 어느 쪽이든 사람은 드롭다운에서 고르고
+      //   곧바로 이어 말한다. 「터미널에서만」이라고 적었던 것은 틀렸다 — 터미널도 in-place 로는 못 한다.
     },
   },
   {
     harness: "grok",
-    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "ok", usage: "terminal", interrupt: "ok", model: "ok" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
       //  ★ 실측 2026-09-01(1.0.13) — 실제로 답해 turn 이 이어지는 것까지 확인했다(tool completed).
       //   요청 `_x.ai/ask_user_question` · 응답 {outcome:"accepted", answers:{"<질문>":"<label>"}}.
       //   outcome 은 **문자열 variant** 다(map 이면 튕긴다). 유효값: accepted·chat_about_this·
       //   skip_interview·cancelled — 오류 메시지가 열거해 줬다.
-      usage: "토큰 사용량을 주는 알림을 이번 실측 턴에서 못 봤다 — 안 본 것을 짐작해 «된다» 로 적지 않는다.",
+      //  ★ 실측 2026-09-01: 턴 응답의 `_meta` 에 토큰이 실려 온다(totalTokens·inputTokens·
+      //   outputTokens·cachedReadTokens). 한도는 **오류로** 온다(-32003, "tokens (actual/limit)").
     },
   },
   {
     harness: "opencode",
-    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "terminal", usage: "terminal", interrupt: "ok", model: "terminal" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
       //  ★ 실측 2026-09-01(1.18.25, OpenAPI 근거): `GET /question` 대기 목록 ·
       //   `POST /question/{id}/reply {answers:string[][]}` · `reject`.
       //   ⚠ «질문이 왔다» 이벤트가 **없다**(question.replied·rejected 만 있다) — 그래서 목록을 읽는다.
       //   ⚠ 답이 **질문 순서대로의 배열**이다(키가 아니라 위치). 낱말도 multiple(≠multiSelect)이다.
-      slash: "OpenAPI 에 /session/{id}/command 는 있으나 **쓸 수 있는 명령 목록**을 주는 이벤트를 못 찾았다.",
-      usage: "이벤트 스트림에서 사용량·한도 축을 못 봤다(session.idle 만 온다).",
-      model: "카탈로그에 runtimeCmd 가 없다(도는 중 모델을 바꾸는 슬래시가 확인 안 됨) — /runtime 이 409 로 «터미널에서» 라고 사실대로 답한다.",
+      //  ★ 실측 2026-09-01(1.18.25): `GET /command` 가 슬래시 목록을 준다(이벤트로는 안 온다 —
+      //   한 번 읽어 facts 로 올린다). 사용량은 AssistantMessage 의 tokens{input,output,…}·cost 에 실린다.
+      //  ★ 실측 2026-09-01: **웹에서 된다.** 화면(session-chat.ts switchAxis)이 두 길을 쓴다 —
+      //   runtimeCmd 가 있으면 그 자리에서 슬래시로, 없으면 **같은 폴더의 새 세션으로 이어 연다**
+      //   (핸드오프, POST …/handoff — 맥락을 넘긴다). 어느 쪽이든 사람은 드롭다운에서 고르고
+      //   곧바로 이어 말한다. 「터미널에서만」이라고 적었던 것은 틀렸다 — 터미널도 in-place 로는 못 한다.
     },
   },
   {
     harness: "antigravity",
-    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "terminal", slash: "terminal", usage: "ok", interrupt: "ok", model: "terminal" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "terminal", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
       //  ⚠ 실측 2026-09-01(1.1.22): ask_question 은 `step_type:"unknown"` 으로 오고 **내용이 없다**
       //   ({step_index,state:"DONE",duration_seconds} 뿐 — 질문도 선택지도 안 온다). 0.34초에 자동
@@ -113,8 +120,13 @@ export const COVERAGE: readonly HarnessCoverage[] = [
       ask: "ask_question 이 내용 없는 step_type:\"unknown\" 으로 와 자동 스킵된다(실측 1.1.22) — 그릴 재료가 없다.",
       //  ⚠ 이건 «우리가 안 했다» 가 아니라 **벤더가 헤드리스에서 막았다** 는 실측이다.
       approve: "헤드리스에서 승인을 **못 묻는다**(실측 2026-09-01, agy 1.1.22): \"a tool required the command permission that headless mode cannot prompt for, so it was auto-denied\". 즉 물음 자체가 우리에게 안 온다 — 터미널 TUI 에서만 뜬다.",
-      slash: "슬래시 목록을 주는 이벤트를 못 봤다(init 은 tools 만 준다).",
-      model: "--model 은 기동 인자다 — 턴마다 프로세스라 «도는 중 전환» 이라는 개념이 없다(카탈로그에 runtimeCmd 없음).",
+      //  ★ 실측 2026-09-01: init 엔 목록이 없지만 `--disable-slash-commands` 플래그가 있다는 건
+      //   print 모드에서 슬래시가 **동작한다**는 뜻이고, `agy --print=/help` 가 목록 전체를
+      //   탭 구분으로 돌려준다(모델 호출 없이 즉답). 그걸 한 번 읽어 facts 로 올린다.
+      //  ★ 실측 2026-09-01: **웹에서 된다.** 화면(session-chat.ts switchAxis)이 두 길을 쓴다 —
+      //   runtimeCmd 가 있으면 그 자리에서 슬래시로, 없으면 **같은 폴더의 새 세션으로 이어 연다**
+      //   (핸드오프, POST …/handoff — 맥락을 넘긴다). 어느 쪽이든 사람은 드롭다운에서 고르고
+      //   곧바로 이어 말한다. 「터미널에서만」이라고 적었던 것은 틀렸다 — 터미널도 in-place 로는 못 한다.
     },
   },
 ];

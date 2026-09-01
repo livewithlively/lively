@@ -10,7 +10,7 @@ import { chatAdapter } from "./chat-adapters.js";
 import { claudeStreamEvent } from "./claude-stream.js";
 import { grokAcpEvent } from "./grok-stream.js";
 import { opencodeEvent } from "./opencode-stream.js";
-import { antigravityEvent } from "./antigravity-stream.js";
+import { antigravityCommandsFromHelp, antigravityEvent } from "./antigravity-stream.js";
 import type { PermissionAnswer, PermissionAsk, SessionEvent } from "./session-event.js";
 
 let pass = 0;
@@ -281,6 +281,47 @@ t("[14] ★ id 0 이 문자열로 새지 않는다 — grok 의 첫 요청 id �
   const uuid: PermissionAsk = { ...ask, id: "a5386ace-0145" };
   const out2 = JSON.parse(chatAdapter("grok")!.respond!({ ask: uuid, value: { allow: true }, convId: "s" })!) as any;
   assert.strictEqual(out2.id, "a5386ace-0145");
+});
+
+t("[15] grok 사용량 — 턴 응답의 _meta 와 한도 오류(실측 1.0.13)", () => {
+  const u = grokAcpEvent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn",
+    _meta: { sessionId: "s", modelId: "grok-4.6", totalTokens: 24730, inputTokens: 24488, outputTokens: 242 } } });
+  assert.ok(u && u.t === "usage", `사용량이어야 한다 (${u?.t})`);
+  const usage = (u as Extract<SessionEvent, { t: "usage" }>).usage;
+  assert.equal(usage.inputTokens, 24488);
+  assert.equal(usage.outputTokens, 242);
+
+  //  ⚠ 한도는 **오류로** 온다 — 버리면 화면이 «왜 답이 안 오나» 를 영영 못 말한다.
+  const lim = grokAcpEvent({ jsonrpc: "2.0", id: 3, error: { code: -32003, message: "Rate limited",
+    data: { message: "subscription:free-usage-exhausted: … tokens (actual/limit): 502001/500000. Upgrade" } } });
+  assert.ok(lim && lim.t === "usage", `한도도 사용량 축이다 (${lim?.t})`);
+  const util = (lim as Extract<SessionEvent, { t: "usage" }>).usage.utilization ?? {};
+  assert.ok((util.limit ?? 0) > 1, "다 썼다는 사실이 값으로 온다");
+
+  //  ★ 초기화 응답이 사용량으로 **잘못 읽히지 않는다**(같은 result 자리라 순서가 중요하다).
+  const init = grokAcpEvent({ jsonrpc: "2.0", id: 1, result: { agentCapabilities: {}, authMethods: [],
+    _meta: { modelState: { currentModelId: "grok-4.6" } } } });
+  assert.ok(init && init.t === "facts", `초기화는 facts 다 (${init?.t})`);
+});
+
+t("[16] antigravity 슬래시 목록 — /help 출력 그대로 파싱(실측 1.1.22)", () => {
+  //  실측 원문(탭 구분):
+  const help = [
+    "/agents\tList available custom agents",
+    "/changelog\tShow release notes and changes",
+    "/config (settings)\tOpen settings panel",
+    "/credits\tShow remaining G1 credits and purchase link",
+    "/model\tSet a model",
+  ].join("\n");
+  const cs = antigravityCommandsFromHelp(help);
+  assert.equal(cs.length, 5);
+  assert.deepEqual(cs.map((c) => c.name), ["agents", "changelog", "config", "credits", "model"]);
+  assert.equal(cs[4].description, "Set a model");
+  //  ⚠ 별칭 괄호가 이름에 섞이지 않는다("/config (settings)" → "config").
+  assert.equal(cs[2].name, "config");
+  //  형식이 바뀌면 **빈 배열** — 있는 척하지 않는다(화면은 목록 없이 그대로 산다).
+  assert.deepEqual(antigravityCommandsFromHelp("도움말을 찾을 수 없습니다"), []);
+  assert.deepEqual(antigravityCommandsFromHelp(""), []);
 });
 
 console.log(`\n${pass}건 통과`);

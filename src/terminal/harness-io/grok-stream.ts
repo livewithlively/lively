@@ -50,6 +50,7 @@ export function grokPromptLine(sessionId: string, text: string, id = 1): string 
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 /** ACP 한 줄(JSON-RPC) → 세션 이벤트. 모르는 것은 `raw`(버리지 않는다). */
 /**
@@ -113,6 +114,26 @@ export function grokAcpEvent(line: unknown): SessionEvent | null {
       //  ACP 의 선택지를 **그대로** 나른다 — 화면이 이름을 그리고, 고른 optionId 를 되돌려준다.
       suggestions: options.length ? options : undefined,
     } };
+  }
+
+  //  ── 사용량 — grok 은 **턴 응답의 `_meta`** 에 토큰을 싣는다(실측 2026-09-01) ─────────────
+  //   {"id":3,"result":{"stopReason":"end_turn","_meta":{totalTokens,inputTokens,outputTokens,
+  //     cachedReadTokens,modelId,sessionId}}}
+  //   ⚠ 초기화 응답(agentCapabilities)과 **같은 `result` 자리**라 위 분기보다 뒤에 둔다 — 순서가
+  //    바뀌면 초기화가 사용량으로 잘못 읽힌다.
+  if (result && rec(result._meta) && num(rec(result._meta)?.totalTokens) !== undefined) {
+    const m = rec(result._meta) ?? {};
+    return { t: "usage", usage: { inputTokens: num(m.inputTokens), outputTokens: num(m.outputTokens) } };
+  }
+  //  ── 한도 — 다 쓰면 **오류로** 온다(실측: -32003 Rate limited, "tokens (actual/limit): 502001/500000") ──
+  //   ⚠ 사람에게 «왜 답이 안 오나» 를 말해 줄 유일한 신호다. 오류라고 버리면 화면이 조용히 멈춘다.
+  const rateErr = rec(o.error);
+  if (rateErr && num(rateErr.code) === -32003) {
+    const msg = str(rec(rateErr.data)?.message) ?? str(rateErr.message) ?? "";
+    const m = /tokens \(actual\/limit\): (\d+)\/(\d+)/.exec(msg);
+    const used = m ? Number(m[1]) : undefined;
+    const cap = m ? Number(m[2]) : undefined;
+    return { t: "usage", usage: (used !== undefined && cap) ? { utilization: { limit: used / cap } } : {} };
   }
 
   //  ── 선택지 — grok 도 **사람에게 묻는다**(x.ai 확장, 실측 2026-09-01) ──────────────
