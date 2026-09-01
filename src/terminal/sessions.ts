@@ -33,7 +33,7 @@ import { memberMkdir, memberWriteFile, memberShOut } from "./terminal-member-fs.
 import os from "node:os";
 import path from "node:path";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
-import { ensureFolderTrusted, type TrustIo } from "./claude-trust.js";   // #1631 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
+import { ensureFolderTrusted, TRUST_PLANS, type TrustIo } from "./harness-trust.js";   // #1631·#2478 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB 를 타는 자격 주입은 게이트웨이 능력이다
@@ -648,24 +648,32 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  비치명 — 못 심어도 세션은 뜬다(종전대로 프롬프트가 뜰 뿐). 같은 부류의 선례: ensureGitSafeDirectory(#522).
   //  신뢰 자동화의 판정은 **한 자리에서만** 낸다(#1867) — 루트 그 자체이거나 그 프로젝트의 canonical 폴더.
   const trustOk = autoTrustWorkspace({ projectId: input.projectId, subpath: subpathUsed });
-  if (harness.key === "claude") {
-    //  설정 파일은 그 세션이 **실제로 쓸** 자리다: 격리면 멤버 홈, 아니면 주입한 CLAUDE_CONFIG_DIR,
-    //  그것도 없으면(hostProfile·MULTIPROFILE=0) 이 호스트의 홈.
-    const claudeHome = osUser
-      ? `${MEMBER_HOME_BASE}/${osUser}`
-      : (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile
-        ? profileConfigDir(user)
-        : (process.env.HOME || os.homedir()));
+  //  ⚠ 하네스마다 **자리도 형식도 다르다**(#2478) — 표에 있는 하네스만 다룬다(모르는 하네스엔 짐작해 쓰지 않는다).
+  if (TRUST_PLANS[harness.key]) {
+    //  설정 파일은 그 세션이 **실제로 쓸** 자리다.
+    //   · claude — 격리면 멤버 홈, 아니면 **위에서 주입한 그 CLAUDE_CONFIG_DIR**(어긋나면 엉뚱한 파일에 쓴다),
+    //     그것도 없으면(hostProfile·MULTIPROFILE=0) 이 호스트의 홈.
+    //   · antigravity — 설정 자리를 바꾸는 환경변수가 **없다**(#1689 실측). 늘 그 홈의 `.gemini` 다.
+    const home = osUser ? `${MEMBER_HOME_BASE}/${osUser}` : (process.env.HOME || os.homedir());
+    const configFile = harness.key === "claude"
+      ? path.join(
+        osUser
+          ? home
+          : (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile ? profileConfigDir(user) : home),
+        ".claude.json")
+      : path.join(home, ".gemini", "antigravity-cli", "settings.json");
+    //  ⚠ 부모 디렉터리를 먼저 만든다 — agy 를 한 번도 안 켠 홈엔 `.gemini/antigravity-cli/` 가 아예 없다.
+    //   (claude 쪽은 이미 있는 자리라 no-op. 없으면 쓰기가 ENOENT 로 조용히 실패해 신뢰가 안 심긴다.)
     const io: TrustIo = osUser
       ? {
         read: (p) => memberShOut(osUser, `cat '${p.replace(/'/g, "'\\''")}' 2>/dev/null || true`).then((s) => s || null),
-        write: (p, t) => memberWriteFile(osUser, p, t, 0o600),
+        write: async (p, t) => { await memberMkdir(osUser, path.dirname(p)); await memberWriteFile(osUser, p, t, 0o600); },
       }
       : {
         read: (p) => fsp.readFile(p, "utf8").then((s) => s as string | null).catch(() => null),
-        write: (p, t) => fsp.writeFile(p, t, { mode: 0o600 }),
+        write: async (p, t) => { await fsp.mkdir(path.dirname(p), { recursive: true, mode: 0o700 }); await fsp.writeFile(p, t, { mode: 0o600 }); },
       };
-    await ensureFolderTrusted(io, path.join(claudeHome, ".claude.json"), target, trustOk);
+    await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);
   }
   await tmux(args);
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
