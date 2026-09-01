@@ -757,6 +757,21 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       ...(typeof raw.optionId === "string" && raw.optionId ? { optionId: raw.optionId } : {}),
       ...(Object.keys(answers).length ? { answers } : {}),
     };
+    //  ★ #2439 — **노드 세션의 물음은 그 노드의 버스에 걸려 있다.** 게이트웨이 버스에 답하면
+    //   아무 데도 안 간다(카드는 접히는데 그 턴은 계속 선다). 노드로 릴레이한다.
+    //   ⚠ 구 노드는 `node-unsupported-op:` 로 던진다 → stale 로 답해 화면이 사실대로 말한다.
+    const nid = nodeOfSession(req.params.id);
+    if (nid) {
+      let relayed = false;
+      try {
+        const { nodeRpc } = await import("../node/registry.js");
+        const r = await nodeRpc<{ ok?: boolean }>(nid, "chatAnswer", { id: req.params.id, askId: id, value });
+        relayed = !!r?.ok;
+      } catch { /* 오프라인·구버전 — 아래에서 사실대로 답한다 */ }
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ ok: relayed, stale: !relayed });
+      return;
+    }
     const { answer } = await import("./harness-io/runtime-bus.js");
     const ok = answer(req.params.id, id, value);
     res.setHeader("Cache-Control", "no-store");

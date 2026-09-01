@@ -9,7 +9,19 @@
 import { HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { codexChatMode } from "./codex-chat-mode.js";
-import { sessionRuntimeMode } from "./session-runtime-mode.js";   // #2439 — chat 런타임 세션 분기
+import { sessionRuntimeMode } from "./session-runtime-mode.js";
+
+/**
+ * 노드 세션의 대화 런타임을 **켜나** — `LIVELY_NODE_CHAT=1` (#2439).
+ *
+ *  ⚠ 기본은 **꺼짐**이다. 두 번이나 «화면으로 확인 안 하고 기본을 바꿔» 세션을 죽였다
+ *   (2026-09-01). 이 경로는 노드에서 프로세스를 띄우는 새 길이라, 실제 세션에 말을 걸어
+ *   답이 오는 것까지 눈으로 본 뒤에 기본으로 만든다.
+ *  ⚠ 켜도 **실패하면 종전 릴레이로 내려간다** — 폴백이 없으면 새 경로가 곧 장애다.
+ */
+function chatOnNodeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return String(env.LIVELY_NODE_CHAT || "").trim() === "1";
+}   // #2439 — chat 런타임 세션 분기
 import { rememberCodexThread } from "./codex-chat-thread.js";
 import { sessionDir, sessionGone, sessionOsUser } from "./terminal-sessions.js";
 import { getSessionState } from "../sessions/session-state.js";
@@ -130,6 +142,26 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: { ow
     const q = await enqueuePrompt(sessionId, text);
     return { ok: true, queued: true, outbox_id: q.id, seq: q.seq };
   }
+  //  ★ #2439 — 노드 세션도 **대화 런타임**을 탄다. 그 세션의 tmux 가 그 PC 에 있으니 런타임도
+  //   거기서 돌아야 승인·선택지·작업 목록이 생긴다. 노드가 사건을 chatEvent 로 올리고 게이트웨이가
+  //   자기 버스에 흘리므로, 화면은 게이트웨이 세션과 **같은 것**을 본다.
+  //  ⚠ 실패하면 **반드시 종전 릴레이로 내려간다**(아래) — 새 경로라 폴백이 없으면 그 자체가 장애다.
+  //  ⚠ 이 op 를 모르는 구 노드는 nodeRpc 가 `node-unsupported-op:` 로 던진다 → 그대로 종전 경로.
+  //  ⚠ 판정은 **이 스위치 하나**다. sessionRuntimeMode 는 노드를 늘 terminal 로 접으므로(그 가드가
+  //   생긴 이유는 판정이 두 자리에서 갈려 세션이 죽어서다) 여기서 그걸 다시 물으면 죽은 코드가 된다.
+  if (chatOnNodeEnabled()) {
+    try {
+      const { nodeRpc } = await import("../node/registry.js");
+      const r = await nodeRpc<{ ok?: boolean; convId?: string; error?: string }>(nodeId, "chatSend",
+        { id: sessionId, text, harness: harnessKey });
+      if (r?.ok) return { ok: true, delivered: true, transport: "chat-runtime", thread_id: r.convId ?? "", steered: false };
+      logger.warn({ id: sessionId, err: r?.error }, "노드 대화 런타임이 못 받았다 — 종전 릴레이로");
+    } catch (e) {
+      //  노드 오프라인·구버전·시간초과 — 전부 종전 경로로 내려간다(사람 말은 아래에서 옮긴다).
+      logger.warn({ id: sessionId, err: (e as Error)?.message }, "노드 대화 런타임 호출 실패 — 종전 릴레이로");
+    }
+  }
+
   // 노드(멤버 PC) 세션 — 파일·tmux 가 그 컴퓨터에 있어 아웃박스 배달자가 닿지 않는다. 종전 릴레이 그대로(후속 #1753 P2).
   const { injectPrompt } = await import("../node/session-inject.js");
   try { await injectPrompt(sessionId, text); }
