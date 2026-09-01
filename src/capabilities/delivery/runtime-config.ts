@@ -10,7 +10,9 @@ import {
   normalizeSessionMemoryPolicy, SESSION_MEM_MB_MIN, SESSION_MEM_MB_MAX, type SessionMemoryPolicyPatch
 } from "../../sessions/session-memory-policy.js"; // #1059 D
 import {
-  RECLAIM_TTL_MIN_MIN, RECLAIM_TTL_MIN_MAX, RECLAIM_PRESSURE_PCT_MIN, RECLAIM_PRESSURE_PCT_MAX, RECLAIM_SWAP_PCT_MAX, type SessionReclaimPolicyPatch
+  RECLAIM_TTL_MIN_MIN, RECLAIM_TTL_MIN_MAX, RECLAIM_PRESSURE_PCT_MIN, RECLAIM_PRESSURE_PCT_MAX, RECLAIM_SWAP_PCT_MAX,
+  RECLAIM_PRIORITY_MIN, RECLAIM_PRIORITY_MAX, RECLAIM_MAX_REAP_MIN, RECLAIM_MAX_REAP_MAX,
+  RECLAIM_RELEASE_MARGIN_MIN, RECLAIM_RELEASE_MARGIN_MAX, type SessionReclaimPolicyPatch
 } from "../../sessions/session-reclaim-policy.js"; // #1059 F · #1220 압박 회수
 import {
   STALL_MS_MIN, STALL_MS_MAX, KEEP_FAILED_MIN, KEEP_FAILED_MAX, FAILED_TTL_MIN_MIN, FAILED_TTL_MIN_MAX,
@@ -255,6 +257,24 @@ export const runtimeConfigCapabilities: Capability[] = [
           const n = Number(s.attach_idle_minutes);
           if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.attach_idle_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=attach 를 무기한 존중)`);
           patchIn.attach_idle_minutes = Math.floor(n);
+        }
+        // #2509 전역 압박 회수 — 순번·상한·여유. 압박 축은 박스 전역이라 «누구부터 걷나»가 새로 생긴 질문이고,
+        //  그 답을 코드에 박지 않고 여기로 뺐다(운영 대시보드에서 워크스페이스마다 조절).
+        //  ⚠ 위 두 축과 같은 함정: 이 블록과 아래 zod **둘 다**에 있어야 값이 살아남는다.
+        if (s.pressure_priority !== undefined) {
+          const n = Number(s.pressure_priority);
+          if (!Number.isFinite(n) || n < RECLAIM_PRIORITY_MIN || n > RECLAIM_PRIORITY_MAX) throw new HttpError(400, `session_reclaim_policy.pressure_priority 는 ${RECLAIM_PRIORITY_MIN}~${RECLAIM_PRIORITY_MAX} 정수여야 합니다 (낮을수록 먼저 걷힘 · 기본 100)`);
+          patchIn.pressure_priority = Math.floor(n);
+        }
+        if (s.pressure_max_reap !== undefined) {
+          const n = Number(s.pressure_max_reap);
+          if (!Number.isFinite(n) || n < RECLAIM_MAX_REAP_MIN || n > RECLAIM_MAX_REAP_MAX) throw new HttpError(400, `session_reclaim_policy.pressure_max_reap 는 ${RECLAIM_MAX_REAP_MIN}~${RECLAIM_MAX_REAP_MAX} 정수여야 합니다 (0=무제한)`);
+          patchIn.pressure_max_reap = Math.floor(n);
+        }
+        if (s.pressure_release_margin_pct !== undefined) {
+          const n = Number(s.pressure_release_margin_pct);
+          if (!Number.isFinite(n) || n < RECLAIM_RELEASE_MARGIN_MIN || n > RECLAIM_RELEASE_MARGIN_MAX) throw new HttpError(400, `session_reclaim_policy.pressure_release_margin_pct 는 ${RECLAIM_RELEASE_MARGIN_MIN}~${RECLAIM_RELEASE_MARGIN_MAX} 정수(%p)여야 합니다 (0=임계 바로 밑에서 정지)`);
+          patchIn.pressure_release_margin_pct = Math.floor(n);
         }
         patch.session_reclaim_policy = patchIn;
       }
@@ -636,7 +656,10 @@ export const runtimeConfigCapabilities: Capability[] = [
         pressure_idle_minutes: z.number().int().min(0).max(43_200).optional().describe("압박 회수가 쓰는 완화 idle 기준(분) — 압박이어도 이보다 최근에 쓴 세션은 안 건드린다. 평시 TTL 보다 짧게(예: 평시 1440·압박 60)"),
         pressure_swap_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_SWAP_PCT_MAX).optional().describe("스왑 사용률이 이 %를 넘으면 압박으로 보고 회수(#1675 ⑤). 0=끔. 물리 메모리가 여유로워 보여도 스왑이 차 있으면 그 박스는 이미 벼랑이다 — 전면장애 실측이 물리 82%·스왑 99.9% 였다. earlyoom 은 -s 100 으로 스왑을 안 보므로 이 축은 경합 없이 게이트웨이가 먼저 잡는다"),
         attach_idle_minutes: z.number().int().min(0).max(43_200).optional().describe("탭이 붙어 있어도(attached>0) 이 분을 넘게 입출력이 없으면 회수(#2148). 0=끔(attach 를 무기한 존중, 종전 동작). idle_ttl_minutes 보다 길게 잡아라. 원격 tmux 에서 재연결 잔재가 attached 를 영구 참으로 만들면 회수가 영영 멈추는데, 그 안전망이다"),
-      }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택)"),
+        pressure_priority: z.number().int().min(RECLAIM_PRIORITY_MIN).max(RECLAIM_PRIORITY_MAX).optional().describe("전역 압박 회수에서 이 워크스페이스의 순번 — 낮을수록 먼저 걷힌다(#2509). 기본 100. 압박 축은 박스 전역이라(물리·스왑은 워크스페이스마다 다르지 않다) 임계를 넘으면 회수가 박스 단위로 한 번 돈다 — 그때 «어느 워크스페이스부터»를 정하는 값이다. 실서비스 200 · 개발용 50 처럼 두면 개발용이 먼저 걷힌다. ⚠ 참가 여부가 아니다(그건 pressure_used_pct/pressure_swap_pct 가 정한다). 전부 같으면 순수 RSS 내림차순"),
+        pressure_max_reap: z.number().int().min(RECLAIM_MAX_REAP_MIN).max(RECLAIM_MAX_REAP_MAX).optional().describe("한 tick 에 이 워크스페이스에서 걷을 최대 세션 수(#2509). 0=무제한(기본). 회수는 되돌릴 수 없어 폭발반경 상한이 필요하다 — RSS 측정 실패로 목표 판정이 영영 안 서는 경우가 실제로 있는데, 그때 한 워크스페이스를 통째로 비우지 않게 막는다"),
+        pressure_release_margin_pct: z.number().int().min(RECLAIM_RELEASE_MARGIN_MIN).max(RECLAIM_RELEASE_MARGIN_MAX).optional().describe("압박 회수의 정지 여유(%p) — 임계보다 이만큼 더 내려갈 때까지 걷는다(#2509). 0=종전(임계 바로 밑에서 정지). 정지선이 임계에 붙어 있으면 회수 직후 다음 tick 이 또 발동해 세션이 계속 걷힌다 — 히스테리시스다. ⚠ 임계를 낮추는 것과 다르다: 발동은 원래 임계로 하고 정지만 더 내려간다"),
+      }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택). ⚠ 두 축은 스코프가 다르다(#2509): 유휴는 워크스페이스별로, 압박은 박스 전역으로 한 번 돈다 — pressure_* 를 켠다는 것은 «박스가 벼랑에 서면 이 워크스페이스 세션도 걷어도 좋다»는 동의다"),
       delegate_policy: z.object({
         stall_ms: z.number().int().min(STALL_MS_MIN).max(STALL_MS_MAX).optional().describe("위탁 워커가 시작 후 한 바이트도 못 낸 채 이 ms 를 넘기면 조기 종결(#1101). 0=가드 끔. 0 초과인데 60000 미만이면 60000 으로 올린다 — 너무 짧으면 멀쩡한 작업을 죽인다"),
         keep_failed_sessions: z.number().int().min(KEEP_FAILED_MIN).max(KEEP_FAILED_MAX).optional().describe("실패로 끝난 위탁의 워커 세션을 몇 건까지 검시용으로 남길지(#1675 ①). 0=즉시 전량 회수. 종전엔 무제한이라 하루에 2,300개가 쌓여 스왑을 고갈시켰다 — 원문(stream.jsonl·stderr.log)은 세션과 무관하게 작업 폴더에 남는다"),

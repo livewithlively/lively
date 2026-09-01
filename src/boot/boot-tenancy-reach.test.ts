@@ -112,16 +112,18 @@ const MUST_FANOUT = [
   "outbox", "awaiting-notify", "builtin-app-seed", "embedding-backfill",
   "device-auth-reap", "oauth-reap", "session-log-reap", "session-title-backfill",
   "session-state-backfill", "ghost-instance-sweep",
+  //  #2509 — 유휴 회수는 **가른 뒤** 순회 대상이 됐다. 이 축은 워크스페이스의 성질(그 세션의 마지막 활동)이라
+  //   primary 만 돌면 비-primary 세션은 TTL 을 켜 놔도 영영 안 걷힌다.
+  "idle-reap",
 ];
 
 /** 순회하면 **안 되는** 것 — 이유가 각자 다르다. 하나로 뭉뚱그리면 다음 사람이 잘못 푼다. */
 const MUST_NOT_FANOUT: Record<string, string> = {
-  reapIdleSessions:
-    "**전역 트리거와 테넌트 동작이 한 함수에 용접돼 있다** — 압박 축(pressure_used_pct·pressure_swap_pct)은 "
-    + "박스의 성질(/proc 물리·스왑)인데 회수 대상은 워크스페이스다. 순회하면 스왑 임계 하나에 "
-    + "워크스페이스 수만큼의 tick 이 일제히 완화 TTL 로 회수한다(전역 신호를 테넌트마다 곱한다). "
-    + "두 축을 가르기 전엔 얹지 않는다 — #2509. "
-    + "⚠ 「남의 세션이 죽는다」는 이유가 아니다: 비-primary 는 정책이 전부 기본값이라 오늘은 no-op 이다",
+  reapPressureSessions:
+    "**압박 축은 박스 전역이다**(/proc 물리·스왑) — 신호가 워크스페이스마다 다르지 않다. 순회하면 스왑 임계 "
+    + "하나에 워크스페이스 수만큼의 tick 이 같은 전역 신호를 읽고 일제히 완화 TTL 로 회수한다(전역 트리거를 "
+    + "테넌트마다 곱한다). 이 함수는 **스스로** 워크스페이스를 돌아 후보를 한 통에 모으고 전역 순서로 걷는다 — #2509. "
+    + "⚠ 「남의 세션이 죽는다」는 이유가 아니다: 참가는 그 워크스페이스의 pressure_* 임계가 정한다(0이면 불참)",
   sweepLivSecondTurn:
     "워크스페이스를 **스스로** 해석한다(workspaceForSession→withTenant). 또 감싸면 전량 스윕이 N번 돈다",
 };
