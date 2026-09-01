@@ -12,7 +12,7 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { codexChatMode } from "./codex-chat-mode.js";   // #2055 codex 대화 런타임 선택
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
-import { cancelAiLogin, pasteAiLogin, readAiLogin, startAiLogin } from "./ai-login-run.js";
+import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin } from "./ai-login-run.js";
 import { logger } from "../log.js";
 import { closeSessionAppInstances, createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
@@ -305,8 +305,14 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     //   계정에 «Codex용 장치 코드 인증» 이 꺼져 있으면 그 코드가 거기서 죽는다(#2232 원준님 실측). 그런데 우리
     //   쪽 프로세스는 15분을 더 기다리므로, 사람이 설정을 켜고 [다시 시도] 를 눌러도 start 는 «이미 돌고 있다» 며
     //   **죽은 코드를 그대로 다시 보여 준다.** 그러면 몇 번을 눌러도 같은 벽이다. 다시 시도는 새로 띄워야 한다.
-    if (((req.body ?? {}) as Record<string, unknown>).restart === true) await cancelAiLogin(seat, h);
-    await startAiLogin(seat, h);
+    if (((req.body ?? {}) as Record<string, unknown>).restart === true) {
+      await cancelAiLogin(seat, h);
+      //  자리도 함께 버린다 — 다시 시도는 **새 컨테이너**에서 시작해야 지난 프로세스가 안 남는다.
+      await dropLoginSession(userOf(req), h);
+    }
+    //  ⚠ user 를 넘긴다 — 매니지드에서 로그인 명령은 **세션 컨테이너**에서 돌아야 한다(하네스가 거기에만 있다).
+    //   안 넘기면 종전처럼 tmux 컨테이너에서 돌아 «<하네스> 없음» 이 난다(#2454 이미지 분할 이후).
+    await startAiLogin(seat, h, userOf(req));
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true });
   }));
@@ -330,7 +336,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.json({ ok: true });
   }));
   app.post("/api/ui/me/ai-login/cancel", auth, wrap(async (req, res) => {
-    await cancelAiLogin(await loginSeat(req), loginHarnessOf(req));
+    const h = loginHarnessOf(req);
+    await cancelAiLogin(await loginSeat(req), h);
+    //  로그인 자리(세션 컨테이너)도 치운다 — 안 치우면 로그인마다 컨테이너가 쌓인다.
+    await dropLoginSession(userOf(req), h);
     res.json({ ok: true });
   }));
 
