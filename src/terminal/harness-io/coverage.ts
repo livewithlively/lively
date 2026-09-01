@@ -119,6 +119,20 @@ export const COVERAGE: readonly HarnessCoverage[] = [
       //   스킵되고 에이전트는 «스킵하셨네요» 라고 말한다. 벤더가 헤드리스에 그 내용을 안 준다.
       ask: "ask_question 이 내용 없는 step_type:\"unknown\" 으로 와 자동 스킵된다(실측 1.1.22) — 그릴 재료가 없다.",
       //  ⚠ 이건 «우리가 안 했다» 가 아니라 **벤더가 헤드리스에서 막았다** 는 실측이다.
+      //  ⚠⚠ 위 문장을 **정정한다**(실측 2026-09-01, agy 1.1.22 바이너리 내장 문서 «Lifecycle Hooks (hooks.json)»).
+      //   벤더가 막은 것이 아니라 **우리가 안 한 것**이다. 근거 셋:
+      //    ① PreToolUse 훅이 헤드리스(-p)에서도 뜬다 — 우리 어댑터(~/.lively/hooks/antigravity-adapter.mjs)가
+      //      이미 그렇게 돌고 있다(#1689 이 그 계약을 실측해 적어 뒀다).
+      //    ② 훅 stdin 에 `toolCall{name,args}` 가 **통째로** 온다 — 스트림이 안 주는 내용이 훅에는 온다.
+      //    ③ 출력 계약이 `{"decision":"allow"|"deny"|"ask"|"force_ask","reason":…}` 이고,
+      //      벤더 문서가 «Hooks run synchronously and **block the agent loop**» 라고 못 박는다.
+      //   즉 **벤더가 못 묻는 것을 우리가 대신 물으면 된다** — 훅이 우리 대화창에 permission.asked 를 올리고
+      //   사람이 고를 때까지 붙잡았다가 그 답을 decision 으로 돌려주면 축이 열린다. 헤드리스 auto-deny 는
+      //   «아무도 안 물었을 때» 의 기본값이지 금지가 아니다.
+      //   ⚠ 아직 **화면으로 못 재서** ok 로 올리지 않았다 — 재고 나서 올린다(짐작으로 표를 칠하지 않는다).
+      //   ⚠ 훅은 **전역 `~/.gemini/config/hooks.json`** 만 읽는다(실측: 워크스페이스 `.agents/hooks.json` 은
+      //    안 뜬다. 1.1.x 변경기록도 «shared ~/.gemini/config/hooks.json» 이라고 적는다) — 세션마다 파일을
+      //    갈아 끼울 수 없으니, 켜고 끄는 축은 파일이 아니라 **자식 프로세스 env** 여야 한다.
       approve: "헤드리스에서 승인을 **못 묻는다**(실측 2026-09-01, agy 1.1.22): \"a tool required the command permission that headless mode cannot prompt for, so it was auto-denied\". 즉 물음 자체가 우리에게 안 온다 — 터미널 TUI 에서만 뜬다.",
       //  ★ 실측 2026-09-01: init 엔 목록이 없지만 `--disable-slash-commands` 플래그가 있다는 건
       //   print 모드에서 슬래시가 **동작한다**는 뜻이고, `agy --print=/help` 가 목록 전체를
