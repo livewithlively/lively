@@ -208,7 +208,11 @@ function aiAccountRow(a, mySessions, reload) {
         } }) : null,
       el('button', { type: 'button', class: a.loggedIn === true ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
         text: a.loggedIn === true ? '다시 로그인' : '로그인', onclick: openLogin }),
-      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null));
+      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null),
+    //  ⚠ **행에 붙인다.** 이걸 빠뜨리면 `panel.hidden=false` 가 아무 데도 안 보이고,
+    //   `alive: () => document.body.contains(panel)` 이 늘 false 라 폴링도 즉시 죽는다 — 눌러도
+    //   **아무 일도 안 일어난다**(오류도 없다). 실측(2026-09-01, 상민님 신고)으로 밟았다.
+    panel);
 }
 function myAiAccountsCard() {
   const body = el('div');
