@@ -68,8 +68,12 @@ test("★ «이미 로그인돼 있다» 를 «이번에 끝났다» 로 읽지 
   //   start→state→cancel 로 끝난다 — 정작 다시 로그인해야 하는 그 상황에서 아무것도 안 한다.
   //   «이번 시도의 결과» 로만 인정해야 한다: 주소를 봤거나 · 프로세스가 끝났거나.
   const c = code(SRC);
-  assert.match(c, /loggedIn === true && \(lastUrl \|\| st\.exited === true\)/,
-    "완료는 «주소를 봤다» 또는 «프로세스가 끝났다» 를 함께 요구한다");
+  //  ⚠ «주소를 봤나» 로 재면 안 된다 — 이미 로그인된 하네스도 주소를 정상적으로 찍으므로(실측:
+  //   grok 은 자격이 있어도 device-auth 주소를 찍고 기다린다) 주소가 뜨는 순간 완료가 돼 버린다.
+  //   기준은 «이번 시도 중에 **바뀌었나**» 다 — 첫 조회를 기준선으로 잡는다.
+  assert.match(c, /wasLoggedIn === null\) wasLoggedIn = st\.loggedIn === true/, "첫 조회를 기준선으로 잡는다");
+  assert.match(c, /loggedIn === true && \(wasLoggedIn === false \|\| st\.exited === true\)/,
+    "완료는 «처음엔 아니었다» 또는 «프로세스가 끝났다» 를 요구한다");
 });
 
 test("★ 주소가 늦어도 화면을 덮지 않는다 — 상한은 «말하기» 용이지 «포기» 가 아니다", () => {
