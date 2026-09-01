@@ -22,6 +22,11 @@ async function requireToken(): Promise<string> {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// 요청 카운터 — sync 진행 티커(생존 신호)가 읽는다. rate-limit sleep 으로 느린 진행과 진짜 행(무진전)을
+//  구분해, run-tracker(15분 무출력=킬)가 느린 full 전건 수집을 오살하는 것을 막는다(notion/index.ts 티커 패턴).
+let reqCount = 0;
+export const clickupReqCount = (): number => reqCount;
+
 // rate limit 을 존중하는 fetch. 429 면 retry-after 만큼 대기 후 재시도(최대 5회).
 // 남은 토큰(X-RateLimit-Remaining)이 0 이면 reset 까지 선제 대기해 429 를 줄인다.
 // 에러 메시지에 토큰을 절대 싣지 않는다(헤더 미포함 + 본문 슬라이스만).
@@ -31,15 +36,27 @@ export async function clickupFetch<T>(path: string, init?: RequestInit): Promise
   const maxRetries = 5;
 
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url, {
-      ...init,
-      headers: {
-        Authorization: token,
-        accept: "application/json",
-        ...(init?.body ? { "content-type": "application/json" } : {}),
-        ...(init?.headers ?? {}),
-      },
-    });
+    reqCount++;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        headers: {
+          Authorization: token,
+          accept: "application/json",
+          ...(init?.body ? { "content-type": "application/json" } : {}),
+          ...(init?.headers ?? {}),
+        },
+        // 요청당 하드 타임아웃 — 응답 없는 fetch 가 무한 대기하면 워커가 침묵 정지(행)해 정체 감지 킬로 귀결된다
+        //  (notion/client.ts 와 같은 방어). 60s 에 끊고 재시도 → 소진 시 throw(커서 동결로 다음 run 재수집).
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (err) {
+      // 멱등(GET) 요청만 재시도 — POST/PUT(createTask·createTaskComment·updateTask 등)은 타임아웃 시점에
+      //  서버가 이미 처리했을 수 있어 맹목 재시도가 중복 생성을 부른다. 쓰기는 즉시 throw(호출자/커서 동결 처리).
+      if (attempt < maxRetries && (init?.method ?? "GET") === "GET") { await sleep(Math.ceil(1000 * (attempt + 2))); continue; }
+      throw new Error(`ClickUp 네트워크/타임아웃 실패(재시도 소진) ${path}: ${(err as Error)?.message ?? err}`);
+    }
 
     if (res.status === 429) {
       let retryAfterSec = 2;
