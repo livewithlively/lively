@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseProjectList, issueItem, noteItem, releaseItem } from "./gitlab.js";
+import { parseProjectList, issueItem, noteItem, releaseItem, makeProgressLogger, pages } from "./gitlab.js";
 import { routeIngestV6 } from "../org/ingest/ingest-classify.js";
 import { sourceKindOf } from "../v6/mirror/mirror-source.js";
 import { SOURCE_KINDS } from "../capabilities/source.js";
@@ -29,4 +29,41 @@ t("릴리스 → note/source · kind gitlab_issue 등록", () => {
   assert.equal(r.type, "note"); assert.equal(routeIngestV6("note", "gitlab"), "source"); assert.equal(r.provenance.external_id, "grp/proj:release:v2.0");
   assert.equal(sourceKindOf("gitlab"), "gitlab_issue"); assert.ok((SOURCE_KINDS as readonly string[]).includes("gitlab_issue"));
 });
+t("진행 로그 — 첫 줄은 바로, 간격 안은 삼키고, 간격 지나면 다시(러너 정체 오판 방지)", () => {
+  let clock = 1_000;
+  const out: string[] = [];
+  const log = makeProgressLogger(15_000, () => clock, (m) => out.push(m));
+
+  log("a");                          // 첫 줄은 항상 나간다 — 시작했음을 알려야 한다
+  log("b");                          // 같은 시각 → 삼킨다
+  clock += 14_999; log("c");         // 아직 간격 미달 → 삼킨다
+  clock += 1; log("d");              // 15초 경과 → 나간다
+  assert.deepEqual(out, ["a", "d"]);
+
+  clock += 1; log("e", true);        // force 는 간격을 무시한다(프로젝트 경계는 항상 남긴다)
+  clock += 1; log("f");              // force 도 타이머를 갱신하므로 직후는 삼킨다
+  assert.deepEqual(out, ["a", "d", "e"]);
+});
+const origFetch = globalThis.fetch;
+try {
+  // 페이지 2장을 흘리는 GitLab 응답 스텁 — 진행 로그 '배선'이 끊기면(onPage 인자 누락) 여기서 잡힌다.
+  let n = 0;
+  globalThis.fetch = (async () => {
+    n++;
+    return {
+      ok: true, status: 200,
+      headers: { get: (k: string) => (k === "x-next-page" ? (n < 2 ? String(n + 1) : "") : null) },
+      json: async () => [{ iid: n }, { iid: n * 10 }],
+      text: async () => "",
+    };
+  }) as unknown as typeof fetch;
+
+  const seen: Array<[string, number, number]> = [];
+  for await (const _page of pages<{ iid: number }>("tok", "https://x/api/v4/projects/p/issues?a=1", "p issues",
+    (label, page, got) => seen.push([label, page, got]))) { /* consume */ }
+  assert.deepEqual(seen, [["p issues", 1, 2], ["p issues", 2, 2]]);
+  pass++; console.log("ok  pages() 가 페이지마다 onPage 를 부른다 — 배선 누락이면 실패");
+} finally {
+  globalThis.fetch = origFetch;
+}
 console.log(`\n${pass} passed`);
