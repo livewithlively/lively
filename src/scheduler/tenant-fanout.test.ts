@@ -60,3 +60,48 @@ test("⑧ 세 갈래가 모두 실제로 나온다(vacuous 방지)", () => {
   assert.deepEqual(planSchedulerTargets([ws("a")], () => false, REG), []);
   assert.equal(planSchedulerTargets([ws("a")], all, REG)?.length, 1);
 });
+
+// ── 순회 실행 `forEachTenant` (#2479) ──────────────────────────────────────────
+//  사양 엣지 표 — 행마다 검사 하나.
+//   L1 대상 null(단일 테넌트)  → fn 1회, **컨텍스트 없이**(종전 경로 무회귀)
+//   L2 대상 []  (담당 없음)    → fn 0회 (남의 것을 대신 돌리지 않는다)
+//   L3 대상 3개                → fn 3회, **각각 그 테넌트 컨텍스트 안에서**
+//   L4 한 곳이 throw           → 나머지는 계속 돈다(전량이 한 실패에 인질이 되지 않는다)
+//   L5 L4 에서 호출자에게      → reject 하지 않는다(주기 타이머가 죽으면 안 된다)
+import { forEachTenant } from "./tenant-fanout.js";
+import { currentTenant } from "../org/tenant-context.js";
+
+const targets = (...slugs: string[]) => async () => slugs.map((s) => ({ id: `id-${s}`, slug: s }));
+
+test("[L1] 대상이 null 이면 1회만, 테넌트 컨텍스트 없이 — 단일 테넌트 배포 무회귀", async () => {
+  const seen: (string | null)[] = [];
+  await forEachTenant("j", async () => { seen.push(currentTenant()?.slug ?? null); }, async () => null);
+  assert.deepEqual(seen, [null]);
+});
+
+test("[L2] 담당 테넌트가 없으면(빈 배열) 한 번도 안 돈다", async () => {
+  let calls = 0;
+  await forEachTenant("j", async () => { calls++; }, async () => []);
+  assert.equal(calls, 0);
+});
+
+test("[L3] 대상마다 **그 테넌트 컨텍스트 안에서** 돈다", async () => {
+  const seen: (string | null)[] = [];
+  await forEachTenant("j", async () => { seen.push(currentTenant()?.slug ?? null); }, targets("a", "b", "c"));
+  assert.deepEqual(seen, ["a", "b", "c"]);
+});
+
+test("[L4] 한 워크스페이스가 실패해도 나머지는 계속 돈다", async () => {
+  const seen: string[] = [];
+  await forEachTenant("j", async () => {
+    const slug = currentTenant()?.slug ?? "";
+    seen.push(slug);
+    if (slug === "b") throw new Error("boom");
+  }, targets("a", "b", "c"));
+  assert.deepEqual(seen, ["a", "b", "c"]);   // b 가 던져도 c 가 돈다
+});
+
+test("[L5] 워크스페이스 실패가 호출자에게 새어 나가지 않는다 — 주기 타이머가 죽으면 안 된다", async () => {
+  await forEachTenant("j", async () => { throw new Error("boom"); }, targets("a"));
+  // reject 했으면 이 줄에 도달하지 못한다.
+});

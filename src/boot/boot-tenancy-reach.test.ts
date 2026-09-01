@@ -92,3 +92,125 @@ test("[K7] 실측 근거가 파일에 남아 있다 — 왜 이 축을 만들었
   const src = readFileSync(SRC, "utf8");
   assert.match(src, /org_app=0/, "seed-builtin-apps 사고의 실측 수치가 사라지면 다음 사람이 이 축을 지운다");
 });
+
+// ── registry 축 (#2479) ───────────────────────────────────────────────────────
+//
+//  ★ 위 표는 **매니지드(중앙 모드)** 만 본다. 그래서 registry(#1750 셀프호스트 다중 워크스페이스)가
+//   통째로 빠져 있었다 — 세 «닿는 길»이 registry 에선 전부 안 닿는다:
+//    ① 요청 정비표 → `requestScopedTenancy()` 가 `&& !registryModeActive()` 라 무동작
+//    ② CP 틱      → 셀프호스트엔 CP 자체가 없다
+//    ③ 프로비저닝  → `seedBuiltinApps()` 를 안 불렀다(그게 아래 R3 이 막는 것)
+//   registry 에서 하우스키핑은 **돌지만** 타이머가 컨텍스트 밖이라 primary 로만 떨어진다.
+//   그래서 여기가 registry 의 유일한 길이다: 주기 정비를 `perTenant(...)` 로 순회시킨다.
+//
+//  ⚠ 실측 2026-09-01 dev.lvly.io(워크스페이스 약 90개): 아웃박스 청소 잔존이 비-primary 81곳에
+//   **245건**(최고 12일)인데 **primary 는 0건** · 활성 비-primary **84곳 전부 `org_app=0`**(primary 만 5개).
+//   primary 의 0/5 가 대조군이다 — 로직은 멀쩡하고 그 워크스페이스에 **안 온 것**이다.
+
+/** 순회해야 하는 주기 정비 — 테넌트 스코프 데이터를 만지므로 primary 만 돌면 나머지가 방치된다. */
+const MUST_FANOUT = [
+  "outbox", "awaiting-notify", "builtin-app-seed", "embedding-backfill",
+  "device-auth-reap", "oauth-reap", "session-log-reap", "session-title-backfill",
+  "session-state-backfill", "ghost-instance-sweep",
+];
+
+/** 순회하면 **안 되는** 것 — 이유가 각자 다르다. 하나로 뭉뚱그리면 다음 사람이 잘못 푼다. */
+const MUST_NOT_FANOUT: Record<string, string> = {
+  reapIdleSessions:
+    "tmux 세션을 **죽인다.** 순회를 붙이면 그 파괴가 남의 워크스페이스에서 일어난다(#2148 의 몫)",
+  sweepLivSecondTurn:
+    "워크스페이스를 **스스로** 해석한다(workspaceForSession→withTenant). 또 감싸면 전량 스윕이 N번 돈다",
+};
+
+test("[R1] 테넌트 스코프 주기 정비는 전부 순회에 실려 있다 — primary 만 돌면 나머지는 방치된다", () => {
+  const src = readFileSync(SRC, "utf8");
+  for (const job of MUST_FANOUT)
+    assert.ok(src.includes(`perTenant("${job}"`),
+      `'${job}' 이 순회에 없다 — registry 에서 이 정비는 primary 에만 온다(비-primary 는 영영 방치).`);
+});
+
+/**
+ * `perTenant( … )` 호출들의 본문 — **괄호 균형을 세어** 잘라낸다.
+ *
+ *  ⚠ 처음엔 `/perTenant\([^)]*<이름>/` 로 짰고 **변이가 그대로 통과했다**:
+ *   `[^)]*` 는 `perTenant("idle-reap", () => …` 의 **`()` 첫 닫는 괄호**에서 멈춰 인자 안쪽에
+ *   영영 못 닿는다. 줄 단위 검사도 같은 이유로 약하다(호출이 두 줄로 갈리면 놓친다).
+ *   균형 세기만이 실제로 잰다 — 그리고 아래 R5 가 그 성질을 직접 못 박는다.
+ */
+export function perTenantCalls(src: string): string[] {
+  const out: string[] = [];
+  const needle = "perTenant(";
+  for (let i = src.indexOf(needle); i >= 0; i = src.indexOf(needle, i + 1)) {
+    let depth = 0;
+    for (let j = i + needle.length - 1; j < src.length; j++) {
+      if (src[j] === "(") depth++;
+      else if (src[j] === ")" && --depth === 0) { out.push(src.slice(i, j + 1)); break; }
+    }
+  }
+  return out;
+}
+
+test("[R2] 파괴적이거나 스스로 순회하는 정비는 **순회에 얹지 않는다**", () => {
+  const calls = perTenantCalls(readFileSync(SRC, "utf8"));
+  //  ⚠ 배선 단언 — 파서가 헛돌면 아래 루프는 «0건 발견»으로 **통과하면서 아무것도 안 본다**.
+  assert.ok(calls.length >= MUST_FANOUT.length,
+    `perTenant 호출을 ${calls.length}개밖에 못 찾았다(순회 대상은 ${MUST_FANOUT.length}개) — 파서가 죽었다`);
+  for (const [fn, why] of Object.entries(MUST_NOT_FANOUT)) {
+    const bad = calls.filter((c) => c.includes(fn));
+    assert.equal(bad.length, 0, `'${fn}' 이 순회에 실렸다 — ${why}\n  ${bad.join("\n  ")}`);
+  }
+});
+
+// 파서 자체의 엣지 표 — R2 는 이 파서에 전부를 건다. 파서가 조용히 틀리면 R2 는 장식이 된다.
+//  P1 인자 속 중첩 괄호(`() => f()`)  → 본문 **전체**를 잡는다 ← 정규식판이 죽은 바로 그 자리
+//  P2 여러 호출                        → 각각 따로
+//  P3 호출이 두 줄에 걸침              → 줄바꿈에 안 속는다
+//  P4 호출 없음                        → 빈 배열(거짓 양성 금지)
+test("[R5] 순회 탐지 파서가 중첩 괄호·줄바꿈을 뚫는다", () => {
+  const [p1] = perTenantCalls(`void perTenant("idle-reap", () => reapIdleSessions());`);
+  assert.ok(p1?.includes("reapIdleSessions"), "P1 — 중첩 괄호 안쪽까지 못 보면 R2 가 vacuous 해진다");
+
+  assert.equal(perTenantCalls(`perTenant("a", () => x()); perTenant("b", () => y());`).length, 2, "P2");
+
+  const [p3] = perTenantCalls(`void perTenant("idle-reap",\n  () => reapIdleSessions());`);
+  assert.ok(p3?.includes("reapIdleSessions"), "P3 — 두 줄로 갈린 호출");
+
+  assert.deepEqual(perTenantCalls(`void reapIdleSessions();`), [], "P4");
+});
+
+test("[R3] registry 프로비저닝이 빌트인 앱을 심는다 — 신규 워크스페이스가 앱 없이 태어나지 않게", () => {
+  const src = readFileSync("src/capabilities/delivery/workspace-registry.ts", "utf8");
+  assert.match(src, /seedBuiltinApps\(\)/,
+    "새 워크스페이스에 빌트인 앱이 안 심기면 getApp('ai-session') 이 null 이라 "
+    + "「답을 기다려요」 알림이 notify-app-inactive 로 전량 거절된다(#2246 이 매니지드에서 겪은 그 회귀).");
+});
+
+test("[R4] 순회 목록과 제외 목록이 겹치지 않는다 — 두 표가 서로를 부정하면 어느 쪽도 사실이 아니다", () => {
+  for (const fn of Object.keys(MUST_NOT_FANOUT))
+    assert.ok(!MUST_FANOUT.includes(fn), `'${fn}' 이 두 표에 다 있다 — 어느 쪽이 사실인가`);
+});
+
+/**
+ * **부팅 직후가 가장 중요한** 정비 — `setInterval` 만 두면 첫 판이 주기 뒤다. 이유는 둘이다.
+ *
+ *  ① *밀린 것을 채우는* 백필: 배포 시점에 **이미** 비어 있다(빌트인 앱은 84곳이 그랬다).
+ *  ② *재기동이 곧 피해인* 정비: 아웃박스가 그렇다 — 재기동이 배달 루프를 죽여 좀비를 만든다(#2244).
+ *
+ *  ⚠ 이 표는 관념이 아니라 실측에서 나왔다(2026-09-01 dev): stage 푸시마다 게이트웨이가 재시작하는데
+ *   그 간격이 **2~4분**이었다(최근 1시간 9커밋). **5분 인터벌은 한 번도 발화하지 못했다** —
+ *   같은 배포에서 45초 one-shot 은 매번 돌았는데. 「주기를 걸어 뒀다」는 「돈다」가 아니다:
+ *   주기가 재기동 간격보다 길면 그 정비는 **영영 안 돈다.**
+ *
+ *  매니지드의 요청 정비표는 디바운스가 비어 있어 재기동 직후 **첫 요청에** 돈다. 같은 표를 쓰면서
+ *  타이머 쪽만 주기를 기다리면 두 배포의 동작이 갈린다.
+ */
+const NEEDS_BOOT_ONESHOT = [
+  "embedding-backfill", "session-title-backfill", "session-state-backfill", "builtin-app-seed", "outbox",
+];
+
+test("[R6] 부팅 직후가 중요한 정비는 **부팅 1회**를 갖는다 — 주기가 재기동보다 길면 영영 안 돈다", () => {
+  const src = readFileSync(SRC, "utf8");
+  for (const job of NEEDS_BOOT_ONESHOT)
+    assert.ok(new RegExp(`setTimeout\\([^\\n]*perTenant\\("${job}"`).test(src),
+      `'${job}' 이 interval 만 있다 — 배포 직후 밀린 분량이 다음 주기까지 그대로 남는다.`);
+});
