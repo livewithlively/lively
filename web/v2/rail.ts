@@ -27,6 +27,7 @@ import {
   activeWorkspaceSlug, listWorkspaces, managedWorkspaces, myInvites, registerWorkspaceMenu, registryActive, switchWorkspace, workspaceFace, workspaceInfo,
   archiveWorkspace, createWorkspace, leaveWorkspace, workspaceMembers,
 } from './switcher.js';
+import { aiLoginScopeHint } from './ai-login-scope.js';   // #2476 — «AI 로그인은 워크스페이스마다 따로» 를 말할지·무슨 말로 할지의 정본
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
 
@@ -501,10 +502,15 @@ function openCreatePanel(anchor: HTMLElement): void {
   };
   go.onclick = () => void submit();
   name.onkeydown = (e) => { if (e.key === 'Enter' && !(e as any).isComposing) { e.preventDefault(); void submit(); } };
+  //  #2476 — **만들기 전에** 말한다. 새 워크스페이스는 새 테넌트라 AI 자격이 사는 멤버 홈도 새로 생긴다 —
+  //   여기서 이은 로그인은 저기로 따라가지 않는다(실측 2026-08-28: «방금 로그인했는데 왜 또?»).
+  //   말할지 말지와 문구는 ai-login-scope 가 정한다(셀프호스트에선 빈 문자열 = 줄을 안 그린다).
+  const wsHint = aiLoginScopeHint(managedWorkspaces());
   pop.append(el('div', { class: 'v2-wspop-form' }, name, el('div', { class: 'v2-wspop-actions' }, go, note),
     hint(managedWorkspaces()
       ? '혼자 시작합니다. 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다. 만들면 준비되는 데 잠깐 걸려요.'
-      : '혼자 시작합니다. 관리자를 포함해 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다.')));
+      : '혼자 시작합니다. 관리자를 포함해 다른 사람에게 보이지 않고, 사람을 부르면 그때 팀이 됩니다.'),
+    ...(wsHint ? [hint(wsHint)] : [])));
   place(pop, anchor, !!anchor.closest('.v2-side'));
   window.setTimeout(() => name.focus(), 0);
 }
