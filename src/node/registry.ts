@@ -10,7 +10,7 @@ import { logger } from "../log.js";
 import { servedAgentVersion } from "./agent-bundle.js";   // #1713 — 노드에게 알려줄 서빙 번들 지문(단일 출처)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import {
-  NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
+  NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, projectNodeSession, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
@@ -202,7 +202,8 @@ export async function nodeAgentStale(id: string): Promise<boolean> {
 }
 
 // 뷰어에게 보이는 노드 세션들(개인 세션 규칙: 소유자 또는 초대 — 프로젝트 전체공개 규칙은 원격에 미적용, D2).
-//  오프라인 노드 세션은 마지막 스냅샷으로 보여주되 agentState 를 offline 으로 강제(라이브 오해 방지).
+//  오프라인 노드 세션은 마지막 스냅샷으로 보여주되 라이브 신호(agentState·attached·working·awaiting)를 접는다
+//  (projectNodeSession — 왜 넷 다인지의 사연은 그 함수 머리말, #2533).
 export interface NodeSessionInfo extends SessionInfo { node: { id: string; name: string; online: boolean } }
 export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
   const out: NodeSessionInfo[] = [];
@@ -210,13 +211,7 @@ export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
     const online = conns.has(keyOf(id));
     for (const s of st.sessions) {
       if (!nodeSessionVisible(s, viewer)) continue;
-      out.push({
-        ...s,
-        owned: s.owner === viewer,
-        agentState: online ? s.agentState : "offline",
-        attached: online ? s.attached : false,
-        node: { id, name: st.name, online },
-      });
+      out.push({ ...projectNodeSession(s, online, viewer), node: { id, name: st.name, online } });
     }
   }
   return out;
