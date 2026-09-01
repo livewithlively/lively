@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import { pathWith, writeNoopBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 import { encodeCwd } from "./cmd-session.mjs";   // 트랜스크립트 폴더 인코딩 — 제품 정본을 그대로 쓴다(두 벌이면 어긋난다)
 
@@ -72,7 +73,7 @@ function mkFixture({ sid, body, projectId, mtimeBump }) {
 function runShare(home, cwd, extra = []) {
   return new Promise((resolve) => {
     const c = spawn(process.execPath, [CLI, "share", ...extra], {
-      cwd, env: { ...process.env, PATH: pathWith(STUB_BIN), LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
+      cwd, env: { ...process.env, ...offlineLivelyEnv(), PATH: pathWith(STUB_BIN), LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "", err = ""; c.stdout.on("data", (d) => (out += d)); c.stderr.on("data", (d) => (err += d));

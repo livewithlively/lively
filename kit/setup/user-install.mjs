@@ -889,7 +889,11 @@ function agyHooksJson() {
     lively: {
       // SessionStart 등가 — 매 모델 호출마다 발화하므로 어댑터가 invocationNum==0 만 부수효과를 건다.
       PreInvocation: [{ type: "command", command: agyHookCmd("PreInvocation"), timeout: 75 }],
-      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: agyHookCmd("PreToolUse"), timeout: 25 }] }],
+      //  ⚠ PreToolUse 만 **넉넉히**(#2439) — 대화창 세션에서는 이 훅이 «사람의 답» 을 기다린다
+      //   (헤드리스 agy 는 스스로 못 묻는다 → 우리가 대신 묻고 그 답을 decision 으로 준다).
+      //   ★ 이 값은 **상한**이지 비용이 아니다: 어댑터가 스스로 마감시각을 들고 있어(DEADLINE_MS)
+      //    묻지 않는 세션은 종전대로 20초 안에 끝난다. 그래서 TUI 사용자에겐 아무 변화가 없다.
+      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: agyHookCmd("PreToolUse"), timeout: 600 }] }],
       PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: agyHookCmd("PostToolUse"), timeout: 25 }] }],
       Stop: [{ type: "command", command: agyHookCmd("Stop"), timeout: 40 }],
     },

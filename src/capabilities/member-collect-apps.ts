@@ -6,7 +6,6 @@ import { FIGMA_TOKEN_KIND } from "../org/credentials/figma-token-source.js";
 import { CLICKUP_TOKEN_KIND } from "../org/credentials/plain-token-source.js";
 import { GITHUB_TOKEN_KIND } from "../org/credentials/github-token-source.js";
 import { ensureGithubIssuesDistiller } from "../org/distill/github-preset.js";
-import { listInstallationRepos } from "../org/credentials/github-app-git.js";
 import { GITLAB_TOKEN_KIND, pickGitlabSlot } from "../org/credentials/gitlab-token-source.js";
 import { listMemberSecretsPublic, memberOwner } from "../org/credentials/member-secret-store.js";
 import { z } from "zod";
@@ -43,27 +42,29 @@ export const clickupCollectCapabilities = makeMemberTokenCollect({
 
 export const githubCollectCapabilities = makeMemberTokenCollect({
   system: "github", preset: "github", instance: MEMBER_INSTANCE, credKind: GITHUB_TOKEN_KIND, credAnyScope: true, appLabel: "GitHub",
-  label: "GitHub — 고른 저장소의 이슈·PR",
+  label: "GitHub — 내 저장소의 이슈·PR",
   note: "[GitHub 자료 가져오기] 토글로 만들어진 가져오기 — 켠 사람의 GitHub 연결로 고른 저장소의 이슈·PR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ GitHub]에서 계정을 연결하거나 토큰을 저장하세요",
-  scopeKeys: ["repos"], requireScope: true,
+  //  #2232 — requireScope 를 걷었다: 범위가 비면 커넥터가 «이 토큰이 보는 전부»를 열거한다(비공개 포함).
+  //  고르기는 옵션이다 — 화면은 org_collect_scope_options 목록으로 좁히기를 «원하는 사람에게만» 보여 준다.
+  scopeKeys: ["repos"],
   //  #2243 3차 — 사람이 정하는 «무엇을·언제부터». 범위(repos)와 달리 비어 있어도 켜진다(커넥터 기본값 = 전부 켬).
   optionKeys: ["include_prs", "include_releases", "backfill_since"],
-  scopeHint: "모을 저장소(owner/repo)를 하나는 넣어 주세요 — [GitHub 연결] 화면에서 저장소를 골랐다면 그게 기본값이 됩니다.",
-  // [GitHub 연결]의 저장소 고르기가 곧 범위 — 설치에 열린 저장소를 기본값으로(그 화면이 없는 PAT 연결은 손으로 넣는다).
-  defaultScope: async (): Promise<Record<string, string>> => { const open = await listInstallationRepos(); return open?.length ? { repos: open.join(" ") } : {}; },
+  scopeHint: "비워 두면 이 연결이 볼 수 있는 저장소 전부를 가져옵니다 — 좁히려면 owner/repo 를 넣으세요.",
+  //  #2232 — defaultScope(설치에 열린 저장소로 자동 채움)를 걷었다: «비면 전체»가 기본이 된 뒤로 이 자동 채움은
+  //  오히려 범위를 몰래 좁히는 손이 된다(조직 설치의 선택이 개인 PAT 수집을 제한할 이유가 없다). 좁히기는 사람이 목록에서 한다.
   outcome: "이슈·PR 본문과 댓글, 릴리스 노트가 자료함에 들어오고, 이슈·PR 증류기가 꺼진 채로 함께 준비된다.",
   onEnabled: async ({ actor, source }) => { await ensureGithubIssuesDistiller({ actor, source: `collect-toggle:${source}` }); },
 });
 
 export const gitlabCollectCapabilities = makeMemberTokenCollect({
   system: "gitlab", preset: "gitlab", instance: MEMBER_INSTANCE, credKind: GITLAB_TOKEN_KIND, credAnyScope: true, appLabel: "GitLab",
-  label: "GitLab — 고른 프로젝트의 이슈·MR",
+  label: "GitLab — 내 프로젝트의 이슈·MR",
   note: "[GitLab 자료 가져오기] 토글로 만들어진 가져오기 — 켠 사람의 개인 토큰(read_api)으로 고른 프로젝트의 이슈·MR 대화와 릴리스를 모읍니다(#2247). 토큰 칸은 비워 두세요.",
   connectHint: "[외부 앱 연결 ▸ GitLab]에서 개인 액세스 토큰(read_api)을 저장하세요 — 계정 로그인 토큰으로는 GitLab 이 자료 읽기를 막습니다",
-  scopeKeys: ["projects"], requireScope: true,
+  scopeKeys: ["projects"],   // #2232 — github 와 같은 결정: 비면 전체(membership=true 열거)
   optionKeys: ["include_mrs", "include_releases", "backfill_since"],
-  scopeHint: "모을 프로젝트 경로(group/project)를 하나는 넣어 주세요 — GitLab 주소를 그대로 붙여넣어도 됩니다.",
+  scopeHint: "비워 두면 내 계정이 구성원인 프로젝트 전부를 가져옵니다 — 좁히려면 group/project 를 넣으세요(주소 그대로도 됩니다).",
   // 호스트는 그 사람 토큰의 scope_key(회사 GitLab)를 따른다 — 두 번 적게 하지 않는다.
   extraConfig: async (actor): Promise<Record<string, string>> => {
     const rows = await listMemberSecretsPublic(memberOwner(actor)).catch(() => []);
@@ -127,13 +128,21 @@ const orgCollectScopeOptions: Capability = {
     "읽기 전용이고 권한을 넓히지 않는다. 목록을 못 만들면 에러가 아니라 freeform=true + note 로 답한다(화면은 텍스트 입력으로 떨어진다).",
   scope: "admin",
   //  #923 — REST 는 :system 경로 파라미터로 싣지만, 스키마에 안 적으면 zod 가 strip 해 MCP 로는 부를 수 없다.
-  input: { system: z.enum(["github", "gitlab", "linear", "figma", "clickup", "slack"]).describe("어느 앱의 «고를 수 있는 것»을 볼지") },
-  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/:system/collect/options"], parse: (req) => ({ system: String((req.params as Record<string, string>)?.system ?? "") }) }] },
+  input: {
+    system: z.enum(["github", "gitlab", "linear", "figma", "clickup", "slack"]).describe("어느 앱의 «고를 수 있는 것»을 볼지"),
+    //  #2232 — 피그마 전용: 팀 주소를 저장하기 «전에» 그 팀의 파일 목록을 미리 보려면 팀 id 를 실어 보낸다.
+    team_id: z.string().optional().describe("figma 전용 — 이 팀의 파일을 나열(저장 전 미리보기)"),
+  },
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/:system/collect/options"], parse: (req) => ({
+    system: String((req.params as Record<string, string>)?.system ?? ""),
+    team_id: String((req.query as Record<string, unknown>)?.team_id ?? "") || undefined,
+  }) }] },
   handler: async (input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
-    const system = String((input as { system?: unknown })?.system ?? "").toLowerCase();
+    const i = input as { system?: unknown; team_id?: unknown };
+    const system = String(i?.system ?? "").toLowerCase();
     if (!scopeOptionsSupported(system)) throw new HttpError(404, `'${system}' 은 범위 목록 조회를 지원하지 않습니다`);
-    return collectScopeOptions(system, user.userId);
+    return collectScopeOptions(system, user.userId, typeof i?.team_id === "string" ? i.team_id : undefined);
   },
 };
 

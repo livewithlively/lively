@@ -17,7 +17,7 @@ function onKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeMenu(); }
 let liveCount: number | null = null;
 export function kindFromCount(n: number): 'personal' | 'team' { return n >= 2 ? 'team' : 'personal'; }
 
-function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string; count: number | null } {
+function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string; count: number | null; slug: string } {
   const m: any = (state && state.me) || {};
   const w = m.workspace || {};
   // registry(다중 워크스페이스)가 켜져 있으면 **등록부의 이름이 정답**이다 — org_name 을 쓰면
@@ -36,7 +36,8 @@ function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string; co
   const kind = n !== null ? kindFromCount(n)
     : (reg.active && reg.kind) ? (reg.kind === 'personal' ? 'personal' : 'team')
     : (w.kind === 'personal' ? 'personal' : 'team');
-  return { kind, hub: w.hub_url || null, name, count: n };
+  //  slug — 문패(workspaceFace)가 저장된 얼굴을 faceBySlug 에서 찾을 열쇠(#2188).
+  return { kind, hub: w.hub_url || null, name, count: n, slug: activeWorkspaceSlug() };
 }
 
 /** 문패를 다시 그리게 만드는 신호 — 인원이 바뀌면(초대 수락·구성원 제거) 배지가 즉시 따라와야 한다. */
@@ -219,7 +220,30 @@ async function refreshMine(wrap: HTMLElement): Promise<void> {
 //  워크스페이스가 지금 것일 땐 하늘색, 목록의 한 줄일 땐 검정 — 두 색으로 보였다.
 //  ★ 개인 워크스페이스는 **소유자만 본다**(#1750) — 내 목록에 있는 개인 ws 는 전부 내 것이라 늘 내 얼굴·내 색이다.
 //   팀·primary 는 이니셜 타일(어두운 문패). 색은 CSS(.v2-wscard-big)가 준다.
-export function workspaceFace(w: { name: string; kind: string }, cls: string): HTMLElement {
+export interface WsFace { color?: string; char?: string }
+
+//  #2188 — 목록 응답이 실어 온 얼굴을 slug 로 기억한다. 문패(stackTile)는 행 객체가 아니라 workspaceInfo()
+//   를 그리는데, 거기엔 face 가 없다 — 목록을 한 번이라도 받았으면 여기서 찾는다.
+const faceBySlug = new Map<string, WsFace>();
+
+/** 저장된 색을 style 로 꽂기 전 마지막 문 — 서버(normalizeWorkspaceFace)가 걸렀지만, 화면은 화면대로 지킨다. */
+const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+/** 밝은 색 위 흰 글자는 안 보인다 — 상대 휘도로 잉크색을 고른다(#2188 아바타는 사람이 아무 색이나 고른다). */
+function inkFor(hex: string): string {
+  const h = hex.length === 4 ? '#' + [...hex.slice(1)].map((c) => c + c).join('') : hex;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.6 ? '#1b2733' : '#ffffff';
+}
+
+export function workspaceFace(w: { name: string; kind: string; slug?: string; face?: WsFace | null }, cls: string): HTMLElement {
+  //  #2188 — 사람이 정한 얼굴이 있으면 그것이 먼저다. 없을 때만 종전 파생(개인=내 아바타, 팀=첫 글자).
+  const f = w.face || (w.slug ? faceBySlug.get(w.slug) : undefined) || null;
+  if (f && (f.color || f.char)) {
+    const color = f.color && HEX_RE.test(f.color) ? f.color : null;
+    return el('span', { class: cls + ' v2-wsface-set',
+      ...(color ? { style: `background:${color};color:${inkFor(color)}` } : {}),
+      text: f.char || (w.name || '?').trim().slice(0, 1) });
+  }
   const me: any = (state && state.me) || {};
   if (w.kind === 'personal') return profileAvatar(me.avatar, w.name, me.userId, cls + ' round', { char: me.avatar_char, color: me.avatar_color });
   return el('span', { class: cls, text: (w.name || '?').trim().slice(0, 1) });
@@ -260,7 +284,11 @@ export async function listWorkspaces(): Promise<Array<{ slug: string; name: stri
     const d: any = await api('/api/ui/me/workspaces');
     //  #1875 — 같은 응답이 「나에게 온 초대」도 싣고 온다. 그 하나를 위해 같은 주소를 두 번 부르지 않는다.
     lastInvites = ((d && d.invites_for_me) || []) as InviteForMe[];
-    return ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string; enter_url?: string; id?: string; tenant_state?: string | null; is_current?: boolean }>;
+    const rows = ((d && d.workspaces) || []) as Array<{ slug: string; name: string; kind: string; is_primary?: boolean; member_count?: number | null; kind_effective?: string; enter_url?: string; id?: string; tenant_state?: string | null; is_current?: boolean; face?: WsFace | null }>;
+    //  #2188 — 얼굴을 slug 지도에 남긴다(문패처럼 행 객체 없이 그리는 자리가 찾는다).
+    faceBySlug.clear();
+    for (const r of rows) if (r.face && (r.face.color || r.face.char)) faceBySlug.set(String(r.slug), r.face);
+    return rows;
   } catch (_) { return []; }
 }
 
@@ -465,6 +493,10 @@ export async function createWorkspace(name: string, kind: 'personal' | 'team'): 
 }
 export async function renameWorkspace(slug: string, name: string): Promise<void> {
   await api('/api/ui/me/workspaces/update', { method: 'POST', body: JSON.stringify({ slug, name }) });
+}
+/** #2188 설정 모달 — 이름·얼굴을 한 번에. face:{} 는 지움(파생값 복귀), 생략은 그대로. */
+export async function saveWorkspaceSettings(slug: string, patch: { name?: string; face?: WsFace }): Promise<void> {
+  await api('/api/ui/me/workspaces/update', { method: 'POST', body: JSON.stringify({ slug, ...patch }) });
 }
 export async function archiveWorkspace(slug: string): Promise<void> {
   await api('/api/ui/me/workspaces/delete', { method: 'POST', body: JSON.stringify({ slug }) });

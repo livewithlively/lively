@@ -788,9 +788,14 @@ const projectSetCategoriesV6: Capability = {
   handler: async (input: ProjectSetCategoriesV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    const categoryIds = await setProjectCategories(input.id, input.categoryIds, writeCtx);
+    const r = await setProjectCategories(input.id, input.categoryIds, writeCtx);
     await regenAgentsForList(await listIdOfProject(input.id)); // 형제 전부 상속 반영(F4)
-    return { categoryIds };
+    // 반영이 안 됐으면 **그 이유와 다음 행동**을 함께 돌려준다(#2474) — 종전엔 빈 배열만 나가서
+    //  호출자가 "툴이 고장났다"로 읽었다(실측: 2026-09-01, AI 가 사용자에게 오보까지 했다).
+    return r.applied ? r : {
+      ...r,
+      note: "이 프로젝트는 리스트에 속해 있지 않아 카테고리를 정할 자리가 없습니다 — project_set_list_v6 로 먼저 리스트에 넣으세요(카테고리는 리스트가 소유하고 소속 프로젝트가 상속합니다).",
+    };
   },
 };
 

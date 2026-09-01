@@ -6,9 +6,16 @@
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
 import { authUploadProgress, upDropZone, upFromInput } from '../projects/files-upload.js';
-import { sessionTermUrl } from '../lib/session-open.js';   // #2232 — AI 로그인 창(터미널 한 장) 주소는 한 곳에서만 만든다   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
+import { sessionTermUrl } from '../lib/session-open.js';
+//  ★ #2477 — «화면에서 끝나는 로그인» 의 프로토콜은 한 벌이다([내 설정 ▸ 내 AI 계정]과 공유). 여기선 그리기만 한다.
+import {
+  AI_LOGIN_INLINE, startInlineAiLogin, ensureLoginTerminal, loginTerminalSrc, loginTerminalPopoutUrl,
+  type InlineLoginHandle, type LoginTerminal,
+} from '../lib/ai-login-inline.js';   // #2232 — AI 로그인 창(터미널 한 장) 주소는 한 곳에서만 만든다   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
+import { managedWorkspaces } from './switcher.js';   // #2476 — 워크스페이스마다 AI 로그인이 따로인 것은 **매니지드만**이다
+import { aiLoginScopeNote } from './ai-login-scope.js';   // #2476 — 그 안내의 정본(만들기 패널과 같은 자리)
 //  #1879 — 외부 앱을 **실제로** 잇는다. 잇는 길은 새로 만들지 않고 이미 깎아 둔 한 곳을 그대로 쓴다:
 //   서비스 표·연결 판정은 me-logins.ts(=[외부 앱 연결] 화면 v2/connect.ts 와 같은 정본), 토큰 발급처·생김새는
 //   admin-credentials.ts 의 CRED_KINDS. **표가 두 벌이 되면 조용히 어긋난다** — 여기서 다시 만들지 않는다.
@@ -166,8 +173,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   }
   /** 지금 아는 **진짜** 갈래 집계. 서버를 아직 못 읽었으면 빈 배열(연출 숫자를 만들지 않는다). */
   const realKinds = () => (WS && WS.uploads && Array.isArray(WS.uploads.kinds)) ? WS.uploads.kinds : [];
-  /** 올린 자료 총수 — 업로드 카운터와 서버 총계 중 큰 쪽(막 올린 건 서버가 아직 모를 수 있다). */
-  const realTotal = () => Math.max(S.upN || 0, (WS && WS.uploads && WS.uploads.total) || 0);
+  /** 올린 **자료** 총수 — 등록 카운터와 서버 총계 중 큰 쪽(막 올린 건 서버가 아직 모를 수 있다).
+   *  ⚠ 바닥은 «올라간 수»가 아니라 «등록된 수»(ingestedN)다(#1631). 올라갔지만 등록 안 된 파일까지 세면
+   *   «자료 8건을 다 읽었어요» 처럼 **읽지 않은 것을 읽었다고** 말하게 된다(실측 8 올림 / 5 등록). */
+  const realTotal = () => Math.max(ingestedN(), (WS && WS.uploads && WS.uploads.total) || 0);
   /* ── #2232 올린 파일 목록 ─────────────────────────────────────────────────────
    *  S.upFiles = [{ n: 이름, r: 상대경로, s: 바이트, st: 'up'|'ok'|'err' }] — 진행 저장에 함께 실려 새로고침·재입장에도 남는다.
    *  그림 미리보기는 이 탭의 메모리(objectURL)에만 있다 — 다시 들어오면 종류 배지로 돌아간다(서버에 다시 묻지 않는다).
@@ -800,11 +809,18 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const fresh = () => ({
     scene: 'name', name: '', nameSet: false, stage: null, job: null,
     sources: [], connected: [], ai: null, aiConnected: false, aiName: null, terminal: null, app: null,
+    aiHarness: '',          // #2255 고른 AI 의 **하네스 id** — `lively install` 이 이 값을 읽어 그것만 깐다(라벨은 못 읽는다)
     local: null,            // #1879 내 컴퓨터 설치 — 'done'|'getting'|'later'
     trail: [],              // 지나온 장면 — 뒤로가기가 조건부 경로를 그대로 되짚게 한다
     read: { total: 0, done: 0, finished: false }, drawersOn: false,
     drawers: [],            // 승인한 자료함 갈래 — 마무리에서 **진짜 카테고리**로 만들어진다(#1813)
-    upN: 0, upBusy: 0,      // #1881 실업로드 — 자료로 등록된 파일 수 / 올리는 중 수(연출 아님)
+    upN: 0, upBusy: 0,      // #1881 실업로드 — **올라간** 파일 수 / 올리는 중 수(연출 아님)
+    //  ⚠ upN(올라감)과 upIn(자료로 등록됨)은 **다른 수**다. 서버는 등록까지 됐을 때만 응답에 source_id 를 싣는다
+    //   (terminal-files.ts). 둘을 같은 것으로 보면 «읽는 중» 이 영영 안 끝난다 — 실측 2026-08-31: 13개를 올렸는데
+    //   11개만 등록돼 진행률이 11/13 에서 멈췄고, 폴러엔 상한이 없어 무한히 돌았다.
+    upIn: 0,                // 자료로 **등록된** 수 — 읽기 진행률의 목표는 이 수다
+    upFail: [],             // 올라갔지만 등록 안 된 것 — {n: 파일명, why: 서버가 준 사유|null}. 사람에게 사실대로 말하려고 든다
+                            //  (옛 진행에는 문자열만 들어 있다 — 읽는 쪽이 둘 다 받는다)
     upFiles: [],            // #2232 받은 파일 목록 [{n,r,s,st}] — 화면에 보이는 근거(상한 UP_KEEP)
     aiDone: [],             // #2232 이 온보딩에서 로그인을 확인한 AI 하네스 키들 — «다른 AI 도?» 화면의 체크 근거
     b2: null, b3: null, nowline: null, firstOrder: null, decisions: [], notes: [],
@@ -960,7 +976,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const COLLECT_ON_DESC = {
     notion: '노션에서 고른 페이지를 팀 자료함에 모으고 있어요.', slack: '공개 채널 대화를 팀 자료함에 모으고 있어요.',
     figma: '고른 피그마 파일의 코멘트를 팀 자료함에 모으고 있어요.', clickup: 'ClickUp 작업·댓글을 프로젝트 탭으로 가져오고 있어요.',
-    github: '고른 저장소의 이슈·PR 대화를 팀 자료함에 모으고 있어요.', gitlab: '고른 프로젝트의 이슈·MR 대화를 팀 자료함에 모으고 있어요.',
+    github: '저장소의 이슈·PR 대화를 팀 자료함에 모으고 있어요.', gitlab: '프로젝트의 이슈·MR 대화를 팀 자료함에 모으고 있어요.',
     linear: 'Linear 이슈·댓글·문서를 팀 자료함에 모으고 있어요.',
   };
   /** 토큰형 앱의 자격이 이미 금고에 있나(개인 축 실측). */
@@ -1251,55 +1267,175 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       unlinkAsk = null; redraw();
     });
   }
-  /** 지금 «글자 받아 오기»가 펼쳐진 앱. 한 번에 하나만 편다 — 한 번에 한 걸음이 이 화면의 규칙이다. */
-  let tokOpen = null;
+  /** ── 연결 모달 = 스테퍼(#2232, 2026-09-01 원준님 «외부 앱도 AI 로그인 수준의 완성도로») ──────────
+   *  걸음을 갈아끼우지 않는다(AI 로그인과 같은 문법): 지나온 걸음은 ✓ 로 접히고, 지금 걸음만 켜지고,
+   *  다음 걸음은 흐리게 미리 보인다. 외부 사이트가 물을 낯선 화면(슬랙의 워크스페이스 주소, 깃허브의
+   *  저장소 접근…)은 걸음 안에 **그 화면 그대로** 목업으로 그려 둔다 — 처음 보는 화면에 당황하지 않게.
+   *  «전부 vs 일부» 는 시작 전에 묻지 않는다(원준님 2026-08-31: «일부만 고를게요» 버튼의 존재 의미를
+   *  모르겠다) — 가져오기 시작이 기본이고, 좁히기는 **완료 띠 아래 링크**다: 누르면 그 자리에서 체크로
+   *  고르고, 나중에 «외부 앱 연결»에서도 언제든 바꾼다. */
+  let tokOpen = null;          // 열린 앱(한 번에 하나)
+  let cnStep = 1;              // 지금 걸음(1부터) — 여는 순간 «이미 어디까지 왔는가»로 정해진다
+  let cnWaiting = false;       // 새 탭의 «허용» 을 기다리는 중(감시자가 돌고 있다)
+  let cnOk = false;            // 가져오기(연결)가 켜졌다 — 완료 띠 + 좁히기 링크를 그린다
+  let cnErr = '';              // 흐름을 끊은 오류 — 모달을 다시 그려도 남아야 해서 상태로 든다
+  /** 피그마 — 팀 걸음에서 받아 둔 팀 id(좁히기 목록 조회에 쓴다). */
+  let scTeamId = '';
+  /** 좁히기 목록 — 완료 띠 아래 링크를 연 동안만 산다. { loading, freeform, note, key, unit, options:[{id,label,hint}], chosen:Set } */
+  let scopePick = null;
   /** 그 카드 아래에서 펼쳐지는 세 걸음. 발급처 주소·값의 생김새는 CRED_KINDS 에서 읽는다.
    *  안내가 없는 앱(표에 help 가 없는 것)은 지어내지 않고 붙여넣는 칸만 연다 — 틀린 길을 알려 주느니 없는 게 낫다. */
-  function tokPanel(id) {
-    const svc = svcOf(id), spec = credSpec(svc), h = tokenHowto(id);
-    const it = (DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id)) || { label: id };
+  /** 좁히기 단위 — 완료 뒤 «N 몇 개만 모을까요?» 링크가 이 이름을 쓴다. 노션은 없다(동의 화면의 고르기가 곧 범위). */
+  const SCOPE_UNIT = { github: '저장소', gitlab: '프로젝트', clickup: '리스트', linear: '팀', figma: '파일', slack: '채널' };
+  /* 목업 부품 — 외부 사이트 화면의 «그림»이다. 누르는 물건이 아니라서 버튼도 입력도 아니다(aria-hidden). */
+  const cnMock = (url, inner) => `<div class="ob-bmock" aria-hidden="true"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="url">${url}</span></div><div class="bd">${inner}</div></div>`;
+  const cnMockBtn = (txt, cls) => `<span class="ob-bbtn${cls ? ` ${cls}` : ''}">${txt}</span>`;
+  const cnWaitLine = () => `<div class="ob-lg-wait"${cnWaiting && !cnOk ? '' : ' hidden'}><span class="ob-lg-pulse"></span>허용을 기다리는 중… 새 탭에서 마치면 여기가 저절로 바뀌어요.</div>`;
+  /** 토큰 걸음(공용) — 입력이 먼저다(#2232 이탈 점검): 이미 받아 둔 사람은 한 글자도 안 읽고 붙여넣고 끝난다.
+   *  만드는 법은 «아직 없다면» 접힘으로 — 필요한 사람만 편다. 발급처 주소·값의 생김새는 CRED_KINDS 에서 읽는다. */
+  function cnTokBody(id) {
+    const spec = credSpec(svcOf(id)), h = tokenHowto(id);
     const ph = (spec && spec.secretPh) || '받아 오신 글자를 붙여넣으세요';
     const doc = (spec && spec.docUrl) || '';
-    return `<div class="ob-tok ob-tok-in">
-      <p class="ob-note">${h ? h.why : `${esc(it.label)} 에서 받은 글자를 아래에 붙여넣으면 연결됩니다.`}</p>
-      ${doc ? `<a class="ob-btn ob-btn-sub ob-btn-inline" href="${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(h ? h.go : it.label + ' 열기')} ↗</a>` : ''}
-      ${h ? `<ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>` : ''}
-      ${tokenSaved(id) ? '<p class="ob-note">토큰은 이미 저장돼 있어요 — 바꿀 때만 다시 붙여넣으세요.</p>' : ''}
-      <input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}">
-      ${collectMode(id) && id === 'figma' ? `<p class="ob-note"><b>어느 팀을 모을지</b>만 알려 주시면 됩니다 — 그 안의 파일은 제가 알아서 훑어요.</p>
-      <a class="ob-btn ob-btn-sub ob-btn-inline" href="https://www.figma.com/files" target="_blank" rel="noopener noreferrer">Figma 파일 화면 열기 ↗</a>
-      <ol>
-        <li>새 탭에 Figma 파일 화면이 열려요. <b>왼쪽 목록</b>에서 모을 <b>팀 이름</b>을 누르세요(팀이 하나면 그게 그 팀이에요).</li>
-        <li>그 상태로 브라우저 <b>주소창</b>을 통째로 복사하세요 — <b>figma.com/files/team/…</b> 처럼 생긴 주소예요.</li>
-        <li>복사한 주소를 <b>아래 칸</b>에 붙여넣으세요(⌘V).</li>
-      </ol>
-      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…">
-      <p class="ob-note ob-fine2">팀 전체가 아니라 <b>파일 몇 개만</b> 모으고 싶으시면, 그 파일을 연 뒤 주소창을 복사해 넣으셔도 돼요(여러 개면 공백으로 띄우기).</p>` : ''}
-      ${collectMode(id) && id === 'gitlab' ? `<p class="ob-note">회사 GitLab 을 쓰면 아래에 그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
-      <input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com">
-      <p class="ob-note">모을 <b>프로젝트</b>를 알려 주세요.</p>
-      <ol>
-        <li>GitLab 에서 모을 <b>프로젝트를 여세요</b>.</li>
-        <li>브라우저 <b>주소창</b>을 통째로 복사해 아래 칸에 붙여넣으세요 — <b>gitlab.com/그룹/프로젝트</b> 처럼 생겼어요. 여러 개면 공백으로 띄우세요.</li>
-      </ol>
-      <input id="tokScope" type="text" autocomplete="off" spellcheck="false" placeholder="https://gitlab.com/그룹/프로젝트">
-      <p class="ob-note ob-fine2">위 걸음대로 <b>read_api</b> 를 켜서 만든 토큰이어야 해요. <span class="ob-kbd">계정으로 연결</span> 로 받은 토큰으로는 GitLab 이 자료 읽기를 막습니다.</p>` : ''}
+    return `${tokenSaved(id) ? '<p class="ob-lg-d">토큰은 이미 저장돼 있어요 — 그대로 쓰려면 비워 두고 <b>연결</b>만 누르세요.</p>' : ''}
+      <div class="ob-lg-row"><input id="tokIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(tokenSaved(id) ? '(저장된 토큰을 그대로 씁니다)' : ph)}"><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="tokGo">연결</button></div>
+      ${id === 'gitlab' ? `<div class="ob-linkline"><a id="hostTgl">회사 GitLab 을 쓰시나요?</a></div>
+      <div id="hostBox" hidden><p class="ob-lg-d">그 주소(호스트)를 적어 주세요. gitlab.com 이면 그대로 두면 돼요.</p>
+      <div class="ob-lg-row"><input id="tokHost" type="text" autocomplete="off" spellcheck="false" placeholder="gitlab.com" value="gitlab.com"></div></div>` : ''}
       <p class="ob-err" id="tokErr"></p>
-      ${h ? `<p class="ob-note ob-fine2">${h.last}</p>` : ''}
-      <p class="ob-note ob-fine2">화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다. 어려우면 지금은 건너뛰고 나중에 하셔도 됩니다.</p>
-      <button class="ob-btn ob-btn-pri ob-btn-inline" id="tokGo">이걸로 연결하기</button>
-    </div>`;
+      ${h ? `<details class="ob-peek"><summary>아직 토큰이 없다면 이렇게 만들어요</summary><div class="in">
+        ${doc ? `<p style="margin:10px 0 2px"><a class="ob-btn ob-btn-sub ob-btn-inline" style="margin-top:0" href="${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(h.go)} ↗</a></p>` : ''}
+        <ol>${h.steps.map((t) => `<li>${t}</li>`).join('')}</ol>
+        ${id === 'clickup' ? cnMock('app.clickup.com/settings/apps', `<div class="t">API Token</div><span class="chip">pk_4823…VXQ2</span><div class="cap">← Generate 하면 이렇게 나와요</div>`) : ''}
+        <p class="ob-lg-d" style="margin:8px 0 0">${h.last} 화면이 조금 달라 보이면 비슷한 이름을 찾아 주세요 — 그 회사가 화면을 바꾸기도 합니다.</p>
+      </div></details>` : (doc ? `<p class="ob-lg-d"><a class="ob-link" href="${esc(doc)}" target="_blank" rel="noopener noreferrer">발급 화면 열기 ↗</a></p>` : '')}`;
   }
-
+  /** 앱별 걸음 정의 — [{ t(제목), done(접힌 한 줄), body }]. 계정 로그인형은 마지막 걸음에 기다림 줄이 든다. */
+  function cnSteps(id) {
+    const label = srcLabel(id);
+    const useTok = (id === 'figma' || id === 'clickup' || id === 'gitlab') || connHow(id) === 'token';
+    if (!useTok && id === 'slack') return [
+      { t: 'Slack 화면 열기', done: '열었어요', body: `<p class="ob-lg-d">새 탭에 슬랙 로그인이 열려요. 이미 브라우저에서 슬랙을 쓰고 있다면 다음 걸음들은 그냥 지나갑니다.</p><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="oaGo">Slack 화면 열기 ↗</button>` },
+      //  원준님이 실제로 밟다 당황한 화면(2026-08-31) — 슬랙은 로그인 전에 워크스페이스 주소부터 묻는다. 그 화면을 그대로 미리 그린다.
+      { t: '워크스페이스 주소 넣고 로그인', done: '로그인했어요', body: `<p class="ob-lg-d">슬랙이 먼저 <b>어느 워크스페이스인지</b> 물어요 — 회사 슬랙 주소의 <b>맨 앞부분</b>만 넣으면 됩니다.</p>${cnMock('slack.com/signin', `<div class="t">워크스페이스의 Slack URL을 입력하세요</div><div class="ob-wsrow"><span class="in">our-team</span><b>.slack.com</b></div><div class="cap">예: lively.slack.com 이면 «lively»</div><div class="ntc">주소를 모르면 그 화면의 «워크스페이스 찾기»가 회사 메일로 찾아 줘요.</div>${cnMockBtn('계속', 'ob-bb-slack')}`)}` },
+      { t: '«허용» 누르면 끝', done: '허용했어요', body: `${cnMock('…slack.com/oauth', `<div class="t">Lively 가 요청한 권한 — 채널·대화 읽기</div>${cnMockBtn('허용', 'ob-bb-slack')}`)}${cnWaitLine()}` },
+    ];
+    if (!useTok && id === 'notion') return [
+      { t: '노션 화면 열기', done: '열었어요', body: `<p class="ob-lg-d">모을 페이지를 고르는 건 <b>노션 화면 자체</b>예요 — 우리가 따로 물을 게 없습니다.</p><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="oaGo">Notion 화면 열기 ↗</button>` },
+      { t: '모을 페이지 고르고 «액세스 허용»', done: '골랐어요', body: `${cnMock('notion.so', `<div class="t">Lively 가 접근할 페이지를 선택하세요</div><div class="ob-consent"><span>☑ 회사 위키</span><span>☑ 제품 문서</span><span>☐ 개인 메모</span></div>${cnMockBtn('액세스 허용', 'ob-bb-dark')}`)}<p class="ob-lg-d" style="margin-top:6px">여기서 체크한 페이지(와 그 하위)만 들어와요 — 지금이 곧 범위 고르기입니다.</p>` },
+      { t: '끝나기를 기다리면 됩니다', done: '', body: cnWaitLine() },
+    ];
+    if (!useTok && id === 'github') return [
+      { t: 'GitHub 화면 열기', done: '열었어요', body: `<button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="oaGo">GitHub 화면 열기 ↗</button>` },
+      { t: '저장소 접근을 허용', done: '허용했어요', body: `<p class="ob-lg-d">GitHub 이 어떤 저장소를 열어 줄지 물어요 — <b>All repositories</b> 가 기본이고, 여기서 고른 만큼만 우리가 볼 수 있어요.</p>${cnMock('github.com/apps/lively', `<div class="t">Repository access</div><div class="ob-consent"><span>◉ All repositories</span><span>○ Only select repositories</span></div>${cnMockBtn('Install & Authorize', 'ob-bb-dark')}`)}` },
+      { t: '끝나기를 기다리면 됩니다', done: '', body: cnWaitLine() },
+    ];
+    if (!useTok && id === 'linear') return [
+      { t: 'Linear 화면 열기', done: '열었어요', body: `<p class="ob-lg-d">허용 한 번이 연결과 가져오기를 함께 켜요 — 따로 정할 건 없습니다.</p><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="oaGo">Linear 화면 열기 ↗</button>` },
+      { t: '«Authorize» 한 번', done: '허용했어요', body: cnMock('linear.app/oauth', `<div class="t">Lively 가 요청한 권한 — 이슈·문서 읽기</div>${cnMockBtn('Authorize', 'ob-bb-linear')}`) },
+      { t: '끝나기를 기다리면 됩니다', done: '', body: cnWaitLine() },
+    ];
+    //  피그마 — 토큰 다음에 «어느 팀?» 이 한 걸음 더 있다(API 가 팀 목록을 안 줘서 주소 한 번은 사람이 준다).
+    //   수집을 못 켜는 사람(비관리자)에겐 팀 걸음이 거짓이라 토큰 한 걸음만 남긴다.
+    if (id === 'figma' && collectMode('figma')) return [
+      { t: 'Figma 토큰 붙여넣기', done: '토큰을 받았어요', body: cnTokBody('figma') },
+      { t: '어느 팀을 모을까요?', done: '팀을 받았어요', body: `<p class="ob-lg-d">Figma 파일 화면 <b>왼쪽 목록</b>에서 모을 <b>팀 이름</b>을 누르고, 브라우저 <b>주소창을 통째로</b> 복사해 오세요.</p>
+        <div class="ob-urlmock" aria-hidden="true"><span class="ob-um-lock">🔒</span><span>www.figma.com/files/team/</span><b>1204512345678</b><span>/우리-팀</span></div>
+        <div class="ob-lg-row"><input id="teamIn" type="text" autocomplete="off" spellcheck="false" placeholder="https://www.figma.com/files/team/…"><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="teamAll">이 팀 가져오기</button></div>
+        <p class="ob-err" id="teamErr"></p>
+        <p class="ob-lg-d"><a class="ob-link" href="https://www.figma.com/files" target="_blank" rel="noopener noreferrer">Figma 파일 화면 열기 ↗</a></p>` },
+    ];
+    if (useTok) return [{ t: `${label} 토큰 붙여넣기`, done: '토큰을 받았어요', body: cnTokBody(id) }];
+    return [
+      { t: `${label} 화면 열기`, done: '열었어요', body: `<p class="ob-lg-d">새 탭이 열리면 그 화면에서 «허용» 을 한 번 누르면 됩니다.</p><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="oaGo">${esc(label)} 화면 열기 ↗</button>` },
+      { t: '«허용» 한 번', done: '허용했어요', body: cnWaitLine() },
+    ];
+  }
+  /** 완료 문구·«기본으로 안 하는 것»·신뢰 밑줄 — 앱마다 무엇이 들어오는지(그리고 무엇이 안 들어오는지)를 그 자리에서 말한다. */
+  const CN_OK = {
+    slack: '연결됐어요 — 공개 채널부터 모으기 시작합니다',
+    notion: '연결됐어요 — 고른 페이지를 읽기 시작합니다',
+    figma: '팀 전체를 가져오기 시작했어요 — 파일 코멘트가 자료함에 들어옵니다',
+    clickup: '연결됐어요 — 작업·댓글이 프로젝트 탭으로 들어옵니다',
+    github: '연결됐어요 — 이슈·PR 대화를 모으기 시작합니다(비공개 포함)',
+    gitlab: '연결됐어요 — 이슈·MR 대화를 모으기 시작합니다(비공개 포함)',
+    linear: '연결됐어요 — 이슈·댓글·문서를 모으기 시작합니다',
+  };
+  const CN_FB = {
+    slack: '비공개 채널·DM 은 기본으로 <b>안</b> 가져와요.',
+    figma: '파일 내용은 필요할 때 제가 직접 읽어요 — 모아 두는 건 코멘트입니다.',
+    github: '코드는 안 가져가요 — 이슈·PR 에 오간 <b>대화</b>를 모읍니다.',
+  };
+  const CN_TRUST = {
+    slack: '로그인은 슬랙 화면에서만 해요 — 라이블리는 비밀번호를 받지 않습니다.',
+    notion: '나중에 페이지를 더 열고 싶으면 노션의 연결 관리에서 추가하면 돼요.',
+    figma: '팀 주소 한 번은 피그마가 팀 목록을 안 알려줘서예요 — 어느 도구든 이 한 걸음은 같습니다.',
+    clickup: '작업·댓글은 자료함이 아니라 프로젝트 탭의 미러로 들어와요.',
+    github: '허용 화면에서 고른 저장소만 우리가 볼 수 있어요 — 나중에 GitHub 에서 언제든 바꿉니다.',
+    gitlab: 'read_api 없는 토큰(계정 로그인용)으로는 GitLab 이 읽기를 막아요 — 그래서 걸음에 강조돼 있습니다.',
+    linear: '허용을 누르는 순간 연결과 가져오기가 함께 켜져요 — 되돌리기는 «외부 앱 연결»에서.',
+  };
+  /** 완료 띠 + 좁히기 링크 — «일부만» 은 시작 전의 물음이 아니라 시작한 뒤의 링크다(#2232 결정). */
+  function cnOkHtml(id) {
+    const ok = (collectMode(id) && CN_OK[id]) || (collectMode(id) ? '연결됐어요 — 그동안 쌓인 자료를 가져오기 시작합니다'
+      : `연결됐어요 — 이제 제가 ${esc(srcLabel(id))} 을 직접 쓸 수 있어요`);
+    const unit = SCOPE_UNIT[id];
+    const narrow = !!unit && collectMode(id);
+    return `<div class="ob-lg-ok">✓ ${ok}<button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="cnDone">계속</button></div>
+      ${narrow ? `<div class="ob-linkline"><a id="cnNarrow">${esc(unit)} 몇 개만 모을까요?</a> <span class="ob-fine">— 나중에 «외부 앱 연결»에서도 언제든 바꿀 수 있어요.</span></div>${cnNarrowHtml(id)}` : ''}`;
+  }
+  /** 좁히기 목록 — 서버가 그 사람 연결로 나열한다(외부 앱에 들어가지 않는다). 목록이 없으면 직접 적는 칸으로. */
+  function cnNarrowHtml(id) {
+    const p = scopePick; if (!p) return '';
+    const unit = p.unit || SCOPE_UNIT[id] || '항목';
+    if (p.loading) return `<p class="ob-lg-d">고를 수 있는 ${esc(unit)} 목록을 불러오는 중…</p>`;
+    if (p.freeform || !(p.options && p.options.length)) {
+      return `<p class="ob-lg-d">${esc(p.note || `목록을 불러오지 못했어요 — 모을 ${unit}를 직접 적어 주세요(여러 개면 공백으로 띄우기).`)}</p>
+        <div class="ob-lg-row"><input id="scIn" type="text" autocomplete="off" spellcheck="false" placeholder="${esc(id === 'gitlab' ? 'https://gitlab.com/그룹/프로젝트' : id === 'github' ? 'owner/repo' : '')}"><button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="scGo">이만큼만 모으기</button></div>
+        <p class="ob-err" id="scErr"></p>`;
+    }
+    return `${p.options.length > 8 ? `<div class="ob-lg-row"><input id="scQ" type="search" autocomplete="off" placeholder="${esc(unit)} 이름으로 찾기"></div>` : ''}
+      <div class="ob-pick" id="scList">${p.options.map((o) => `<label><input type="checkbox" data-sc="${esc(o.id)}"${p.chosen.has(o.id) ? ' checked' : ''}><span class="t">${esc(o.label)}</span>${o.hint ? `<span class="h">${esc(o.hint)}</span>` : ''}</label>`).join('')}</div>
+      <p class="ob-lg-d" id="scN"></p><p class="ob-err" id="scErr"></p>
+      <button type="button" class="ob-btn ob-btn-pri ob-btn-inline" id="scGo" style="margin-top:6px">고른 것만 모으기</button>`;
+  }
+  /** 걸음 하나 — 상태는 cnStep·cnOk 에서 계산한다. 마지막(계정 로그인형) 걸음은 기다리는 동안 흐리지 않는다(맥박이 보여야 한다). */
+  const cnStepHtml = (n, s, last) => {
+    const cls = cnOk ? 'done' : n < cnStep ? 'done' : n === cnStep ? 'now' : (last && cnWaiting ? '' : 'idle');
+    return `<div class="ob-lg-step${cls ? ` ${cls}` : ''}"><span class="ob-lg-n">${cls === 'done' ? '✓' : n}</span>
+      <div class="ob-lg-body"><b>${s.t}</b><span class="ob-lg-done">✓ ${s.done || ''}</span><div class="ob-lg-in">${s.body}</div></div></div>`;
+  };
+  /** 모달 껍데기 — 닫기(×·바탕 누르기·Esc)는 «나중에 할게요»다: 아무것도 저장하지 않고 카드로 돌아간다.
+   *  ⚠ «모달 금지» 규칙(원준님 2026-08-27)은 **파일 고르기**(OS 창을 바로 열라) 이야기다 — 이 연결 모달은
+   *  같은 분이 2026-08-31 «드롭다운 말고 모달로, 한 걸음씩» 이라고 직접 시킨 것이니 되돌리지 말 것. */
+  function modalHtml(id) {
+    const it = (DATA.SOURCE_ROWS.flatMap((r) => r.items).find((x) => x.id === id)) || { label: srcLabel(id), logo: id };
+    const icon = BRAND[it.logo] || GLYPH[it.id] || esc((it.label || '?').slice(0, 1));
+    const label = it.label || srcLabel(id);
+    const steps = cnSteps(id);
+    const fb = collectMode(id) ? CN_FB[id] : '';
+    //  피그마·클릭업의 신뢰 밑줄은 수집(팀 걸음·프로젝트 탭) 이야기다 — 수집을 못 켜는 사람에겐 거짓이 된다.
+    const trust = (!collectMode(id) && (id === 'figma' || id === 'clickup')) ? '' : CN_TRUST[id];
+    return `<div class="ob-veil" id="obVeil"><div class="ob-modal" role="dialog" aria-modal="true" aria-label="${esc(label)} 연결">
+      <div class="ob-modal-hd"><span class="ob-oc-ic">${icon}</span><b>${esc(label)} 연결</b><button type="button" class="ob-modal-x" id="obX" aria-label="닫기">×</button></div>
+      <div class="ob-modal-bd">${steps.map((s, i) => cnStepHtml(i + 1, s, i === steps.length - 1)).join('')}
+        ${cnErr ? `<p class="ob-err">${esc(cnErr)}</p>` : ''}
+        ${cnOk ? cnOkHtml(id) : ''}
+        ${fb ? `<div class="ob-lg-fb">${fb}</div>` : ''}
+      </div>
+      ${trust ? `<div class="ob-modal-tr">${trust}</div>` : ''}
+    </div></div>`;
+  }
 
   let pendingChips = null;   // 지금 답을 기다리는 칩들 — 입력창 해석이 본다
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
 
   /* ══════════════ 장면 차례 ══════════════ */
   //  #2232 — 순서: 파일 → **AI 고르기·연결** → 외부 앱 → 내 컴퓨터(원준님 2026-08-28: "AI 골라서 연결하는 플로우가 먼저, 그 다음 외부 앱, 로컬은 그 다음").
-  const ORDER = ['name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app', 'read', 'b1', 'b2', 'b3', 'nowline', 'can'];
+  //  ★ 2026-08-31(원준님) — 'read'·b1~can(리브와의 챗봇 문답)을 걷어냈다. [앱] 다음은 곧장 마무리다.
+  const ORDER = ['name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
   const STEP_OF = Object.fromEntries(ORDER.map((k, i) => [k, i]));
-  const CHAT_FROM = STEP_OF.read;          // 여기부터 막3(채팅)
+
   const QPROG = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
@@ -1448,13 +1584,21 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             const it = items[i], row = rows[i];
             const rel = 'uploads/' + String(it.rel || it.file.name).replace(/^\/+/, '');
             try {
-              await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              const up = await authUploadProgress(apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent(rel)), it.file, () => {}, undefined);
+              //  응답에 source_id 가 있으면 **자료로 등록까지** 된 것이다. 없으면 파일만 올라갔다 —
+              //   그 차이를 여기서 안 세면 뒤(읽기 진행률)에서 «오지 않는 것» 을 기다리게 된다.
+              //  등록이 안 됐으면 **사유까지** 받아 둔다(서버가 skipped 로 준다) — 사람에게 «왜 안 들어갔는지» 를
+              //   추측이 아니라 사실로 말하기 위해서다.
+              if (up && up.source_id) { S.upIn++; }
+              else { S.upFail.push({ n: it.file.name, why: (up && up.skipped) || null }); if (row) row.st = 'part'; }
               // ⚠ 종전엔 응답의 source_id 가 있을 때만 셌다. 그런데 그 필드는 **자료 등록까지 성공했을 때만** 실린다
               //  (terminal-files.ts: `...(ing?.ingested ? { source_id } : {})`) — 등록이 조용히 실패하면 파일은 올라갔는데
               //  화면은 0개로 남아 «계속» 이 영영 안 켜졌다(실측 2026-08-26 원준님 신고). 올라간 건 올라간 것으로 센다.
               S.upN++; if (row) row.st = 'ok';
             } catch (e) { if (row) row.st = 'err'; toast(`${it.file.name} 을 올리지 못했어요 — ${e && e.message ? e.message : e}`); }
-            S.upBusy--; S.read.total = S.upN; save(); paintZone();
+            //  ⚠ 읽기 진행률의 목표는 **등록된 수**다(올라간 수가 아니다). 종전엔 여기서 S.upN 을 박아
+            //   뒤(startReading)에서 오지 않는 것을 기다렸다 — 실측 5/8·11/13 에서 60초를 세워 뒀다.
+            S.upBusy--; S.read.total = ingestedN(); save(); paintZone();
           }
           renderSB();
         };
@@ -1509,9 +1653,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const doneCard = (id, label, icon) => doneCardHtml(id, label, icon, '연결돼 있어요');
         //  아직 안 되는 곳 — **고를 수 없게 잠그고 그 사실을 적는다.** 고를 수 있게 두면 골랐는데 아무 일도 안 일어나고,
         //   그때 사람은 서비스가 고장 났다고 읽는다.
-        const soonCard = (label, icon) => `<button class="ob-opt-card ob-locked ob-soon" aria-disabled="true" disabled title="아직 준비 중이에요"><span class="ob-oc-ic">${icon}</span><span><span class="ob-oc-t">${esc(label)}</span><span class="ob-oc-d">준비 중</span></span></button>`;
+        const soonCard = (label, icon) => `<button class="ob-opt-card ob-locked ob-soon" aria-disabled="true" disabled title="아직 준비 중이에요"><span class="ob-oc-ic">${icon}</span><span class="ob-oc-one"><span class="ob-oc-t">${esc(label)}</span><span class="ob-soon-tag">준비 중</span></span></button>`;
         return qHead('sources',
-          S.upN ? `파일 <b>${S.upN}개</b>를 받아서 읽는 중입니다. 이어서 한 가지만 더요.` : '알겠습니다. 이어서 한 가지만 더요.',
+          //  ⚠ «받은 수»와 «읽는 수»는 다르다(#1631) — 등록 안 된 파일은 읽지 않는다.
+          //   받은 수로 «읽는 중» 을 말하면, 바로 앞에서 «3건은 못 넣었어요» 라고 해 놓고 8개를 읽는다고 하게 된다.
+          ingestedN() ? `자료 <b>${ingestedN()}건</b>을 읽는 중입니다. 이어서 한 가지만 더요.` : '알겠습니다. 이어서 한 가지만 더요.',
           '그동안 쌓아 두신 자료를 가져올 외부 서비스를 연결할게요.',
           '고르신 곳에 쌓여 있던 지난 자료부터 읽어서 자료함에 정리합니다. 파일로 일일이 옮기실 필요가 없어요.')
           + (already.length ? `<p class="ob-q-fine" style="text-align:left;margin:0 0 14px">이미 연결된 곳이 있어요 — ${esc(already.map((it) => it.label).join(' · '))}. 다시 하실 필요 없습니다.</p>` : '')
@@ -1582,32 +1728,27 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //  아직 서버에 못 물었으면 그렇다고 말한다 — '연결 안 됨'으로 뭉개면 이미 이은 사람이 또 잇는다.
         const unknown = !CONN;
         return qHead('connect',
-          reading ? `읽는 중이에요. <b>${S.read.done} / ${S.read.total}</b>` : (S.upN ? `파일 ${S.upN}개는 다 읽었어요.` : '거의 다 왔어요.'),
+          //  같은 이유로 «다 읽었어요» 도 등록된 수로 말한다 — 안 들어간 것을 읽었다고 하지 않는다.
+          reading ? `읽는 중이에요. <b>${S.read.done} / ${S.read.total}</b>` : (ingestedN() ? `자료 ${ingestedN()}건은 다 읽었어요.` : '거의 다 왔어요.'),
           done.length ? `${done.length}곳을 연결했어요.` : '고르신 곳을 하나씩 연결해 주세요.',
           unknown ? '연결 상태를 불러오는 중이에요…' : '아래에서 하나씩 눌러 주세요. 한 번에 하나면 됩니다.')
           + `<div class="ob-opt-cards">${picked.map((id) => {
-              const it = all.find((s) => s.id === id) || { label: id };
+              const it = all.find((sv) => sv.id === id) || { label: id };
               const st = connState(id);
-              const how = connHow(id);
-              const open = tokOpen === id;
-              const scopeOnly = collectMode(id) && (id === 'figma' || id === 'gitlab') && tokenSaved(id);
-              const tokOnly = collectMode(id) && (id === 'clickup' || id === 'github') && tokenSaved(id);
+              const saved = collectMode(id) && tokenSaved(id);
               const desc = st === 'on' ? (collectMode(id) ? (COLLECT_ON_DESC[id] || '모으고 있어요.') : '연결됐어요.')
-                : scopeOnly ? (id === 'gitlab' ? (open ? '모을 프로젝트 주소를 넣어 주세요.' : '토큰은 받았어요. 눌러서 모을 프로젝트 주소를 넣어 주세요.') : (open ? '모을 팀 주소를 넣어 주세요.' : '토큰은 받았어요. 눌러서 모을 팀 주소를 넣어 주세요.'))
-                : tokOnly ? (id === 'github' ? '계정은 이어져 있어요. 누르면 고른 저장소의 이슈·PR 모으기가 켜져요.' : '토큰은 받았어요. 누르면 바로 가져오기가 켜져요.')
-                : (collectMode(id) && id === 'gitlab') ? (open ? '아래 걸음을 따라 주세요.' : '눌러 주세요. 걸음대로 따라 하시면 됩니다.')
                 : st === 'blocked' ? '아직 준비 중이에요.'
                 : unknown ? '연결 상태를 확인하고 있어요.'
-                : how === 'token' ? (open ? '아래 걸음을 따라 주세요.' : '눌러 주세요. 글자 한 줄을 받아 오면 됩니다.')
-                : (collectMode(id) && id === 'notion' ? '눌러 주세요. 노션 화면에서 모을 페이지를 고르고 «액세스 허용»을 누르면 됩니다.' : '눌러 주세요. 새 탭에서 «허용»만 누르면 됩니다.');
+                : saved ? '거의 다 됐어요. 눌러서 가져오기를 시작하세요.'
+                : (id === 'figma' || id === 'clickup' || id === 'gitlab' || connHow(id) === 'token') ? '눌러 주세요. 글자 한 줄을 받아 오면 됩니다.'
+                : (id === 'notion' ? '눌러 주세요. 노션 화면에서 모을 페이지를 고르면 됩니다.' : '눌러 주세요. 새 탭에서 «허용»만 누르면 됩니다.');
               if (st === 'on') return doneCardHtml(id, it.label, BRAND[it.logo] || GLYPH[it.id] || '', desc);
-              return `<button class="ob-opt-card${open ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
+              return `<button class="ob-opt-card${tokOpen === id ? ' ob-open' : ''}" data-conn="${esc(id)}"><span class="ob-oc-ic">${BRAND[it.logo] || GLYPH[it.id] || ''}</span>
                 <span><span class="ob-oc-t">${esc(it.label)}</span><span class="ob-oc-d">${esc(desc)}</span></span>
-                <span class="ob-oc-st"></span></button>`
-                + (open ? tokPanel(id) : ''); }).join('')}</div>
+                <span class="ob-oc-st"></span></button>`; }).join('')}</div>
           <button class="ob-btn ob-btn-pri" id="upGo" ${done.length ? '' : 'disabled'}>${left > 0 && done.length ? `${left}곳은 나중에, 계속` : '다 연결했어요, 계속'}</button>
           <button class="ob-q-skip" data-skip>나중에 가져올게요. 지금은 넘어갈게요</button>
-          <p class="ob-q-fine">지금 연결하지 못하셔도 괜찮아요 — <a href="#/connect" class="ob-link">외부 앱 연결</a>에서 언제든 다시 하실 수 있습니다.</p>`;
+          <p class="ob-q-fine">지금 연결하지 못하셔도 괜찮아요 — <a href="#/connect" class="ob-link">외부 앱 연결</a>에서 언제든 다시 하실 수 있습니다.</p>${tokOpen ? modalHtml(tokOpen) : ''}`;
       },
       bind: (el) => {
         //  들어올 때마다 서버에 묻는다 — 앞 장면에서 뒤로 왔을 수도, 다른 탭에서 이었을 수도 있다.
@@ -1645,70 +1786,85 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             return !(r && r.needs_connect === true);
           } catch (_) { return false; }
         }
-        /** #2243 수집기 축 연결 — 노션은 공개 통합 동의(페이지 고르기), 슬랙은 계정 로그인 뒤 수집기 켜기. */
-        async function collectConnect(id, c) {
-          const d = c.querySelector('.ob-oc-d');
-          const fin = (err) => {
-            if (err) { toast(err); if (S.scene === 'connect') redraw(); return; }
-            if (connState(id) === 'on') markConnected(id);
-            if (S.scene === 'connect') redraw();
+        /** 앱별 «허용 한 번» 흐름 — 모달의 [화면 열기] 버튼이 부른다(#2243·#2247 갈래 그대로, 자리만 스테퍼로).
+         *  진행·오류는 모듈 상태(cnStep·cnWaiting·cnErr)로 남긴다 — 다시 그려도 이어지고, 모달이 닫혔으면 토스트로 말한다. */
+        async function startOAuthFlow(id) {
+          const opened = () => { if (tokOpen === id) { cnWaiting = true; cnErr = ''; if (cnStep < 2) cnStep = 2; redraw(); } };
+          const fin = async (err) => {
+            if (err) { cnWaiting = false; cnStep = 1; if (tokOpen === id) { cnErr = err; redraw(); } else toast(err); return; }
+            //  Linear — 동의가 끝나도 토글은 아직 꺼져 있다(needs_connect 로 멈췄던 자리): 한 번 더 켠다.
+            if (id === 'linear' && connState(id) !== 'on') { await startMemberCollect(id, ''); await loadConn(); }
+            //  4분 감시가 그냥 끝났다(허용 안 함·탭 닫힘) — 열기부터 다시 할 수 있게 되돌린다. 오류는 아니다.
+            if (connState(id) !== 'on') { cnWaiting = false; cnStep = 1; if (tokOpen === id) redraw(); return; }
+            afterConnected(id);
           };
           if (id === 'notion') {
             try {
               //  켜기를 먼저 시도한다 — 이미 연결된 워크스페이스가 있으면 그 자리에서 켜지고, 없으면 노션 동의 주소가 온다.
-              const r: any = await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: true }) });
-              if (r && r.ok) { await loadConn(); fin(); return; }
+              const r = await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: true }) });
+              if (r && r.ok) { await loadConn(); void fin(); return; }
               const url = r && r.authorization_url;
-              if (!url) { fin('노션 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
-              if (d) d.textContent = '노션 화면에서 모을 페이지를 고르고 «액세스 허용»을 누르면 여기가 저절로 바뀌어요…';
-              window.open(url, '_blank', 'noopener');
-              watchConnect(id, fin);
-            } catch (e) { fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
+              if (!url) { void fin('노션 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+              opened(); window.open(url, '_blank', 'noopener'); watchConnect(id, fin);
+            } catch (e) { void fin((e && e.message) || '노션 연결을 시작하지 못했어요.'); }
             return;
           }
-          //  #2247 Linear — 토글이 곧 연결(노션과 같은 모양): 켜기를 먼저 시도하고, 자격이 없으면 서버가 준 라이블리 앱 동의 URL 을 연다.
           if (id === 'linear') {
-            const r: any = await startMemberCollect(id, '');
-            if (r && r.ok) { await loadConn(); fin(); return; }
+            const r = await startMemberCollect(id, '');
+            if (r && r.ok) { await loadConn(); void fin(); return; }
             const url = r && r.needs_connect && r.authorization_url;
-            if (!url) { fin((r && r.message) || 'Linear 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
-            if (d) d.textContent = 'Linear 화면에서 «허용»을 누르면 여기가 저절로 바뀌어요…';
-            window.open(url, '_blank', 'noopener');
-            watchConnect(id, fin);
+            if (!url) { void fin((r && r.message) || 'Linear 화면을 열지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+            opened(); window.open(url, '_blank', 'noopener'); watchConnect(id, fin);
             return;
           }
-          //  #2247 GitHub — 계정 연결(저장소 고르기)이 곧 범위. 연결돼 있으면 바로 켠다(서버가 고른 저장소를 기본 범위로 채운다).
-          if (id === 'github' && tokenSaved(id)) {
-            const r: any = await startMemberCollect(id, '');
-            await loadConn();
-            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요 — [외부 앱 연결 ▸ GitHub]에서 저장소를 넣고 켜 주세요.'));
+          //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다(⚠ id 를 반드시 본다 — 2026-08-30 슬랙 오토스트 사고).
+          if (id === 'slack' && CONN && CONN.connected.some((sv) => sv.key === 'slack')) {
+            const on = await startCollect(id); await loadConn();
+            void fin(on ? null : `${srcLabel(id)} 자료 모으기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.`);
             return;
           }
-          //  #2247 피그마·ClickUp — 토큰이 없으면 토큰 폼(피그마는 범위 칸 포함), 있으면 바로 켠다. 범위가 없다면(피그마) 폼을 연다.
-          if (id === 'figma' || id === 'clickup' || id === 'gitlab') {
-            if (!tokenSaved(id)) { tokOpen = id; redraw(); return; }
-            const r: any = await startMemberCollect(id, '');
-            if (r && r.needs_scope) { tokOpen = id; redraw(); return; }
-            await loadConn();
-            fin(r && r.ok ? null : ((r && r.message) || '모으기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.'));
-            return;
+          opened();
+          await svcOAuth(id, (err) => { void fin(err); });
+        }
+        /** 연결이 성사된 다음 — 모달을 닫지 않는다: 완료 띠(+ 좁히기 링크)가 그 자리에서 말한다. */
+        function afterConnected(id) {
+          markConnected(id);
+          cnWaiting = false; cnErr = '';
+          if (tokOpen === id) { cnOk = true; cnStep = 99; scopePick = null; redraw(); return; }
+          if (S.scene === 'connect') redraw();
+        }
+        /** 켜기 — 범위를 실어 보낼 수 있는 한 자리. 서버가 켜졌다고 할 때만 초록불(저장 성공 ≠ 되는 값, #2232). */
+        async function enableCollect(id, scope) {
+          const body: any = { enabled: true };
+          //  슬랙 수집기는 scope 그릇이 아니라 최상위 channels 를 받는다(slack-connect.ts) — 그릇째 보내면 조용히 무시된다.
+          if (scope) { if (id === 'slack') Object.assign(body, scope); else body.scope = scope; }
+          try { return await api(`/api/ui/org/${COLLECT_FIRST[id] || id}/collect`, { method: 'POST', body: JSON.stringify(body) }); }
+          catch (e) { return { ok: false, message: (e && e.message) || '' }; }
+        }
+        /** 켜고(또는 좁히고) 완료 띠로 — 모달은 닫지 않는다: «무엇이 들어오기 시작했는지»를 그 자리에서 말한다. */
+        async function finishEnable(id, scope, errEl, btn) {
+          if (btn) { btn.disabled = true; btn.textContent = '가져오기를 켜는 중…'; }
+          const r = await enableCollect(id, scope);
+          if (!r || r.ok === false) {
+            if (btn) { btn.disabled = false; btn.textContent = '다시 시도'; }
+            if (errEl) errEl.textContent = (r && r.message) || '가져오기를 켜지 못했어요. 잠시 뒤 다시 눌러 주세요.';
+            await loadConn(); return;
           }
-          //  슬랙 — 내 토큰이 이미 있으면 로그인 없이 수집기만 켠다.
-          //  ⚠ **`id` 를 반드시 본다.** 종전엔 «슬랙이 이미 이어져 있으면» 만 봐서, 아직 토큰이 없는 GitHub 를 누른
-          //   사람이 이 분기로 흘러들었다 — 그리고 startCollect('github') 는 COLLECT_OF 축에 없어 곧바로 false 라
-          //   «슬랙 자료 모으기를 켜지 못했어요» 가 떴다(원준님 실측 2026-08-30: GitHub 를 눌렀는데 슬랙 실패 토스트).
-          //   라벨도 하드코딩하지 않는다 — 이 분기에 다른 앱이 흘러들어도 **누른 앱 이름**이 나와야 원인이 보인다.
-          if (id === 'slack' && CONN && CONN.connected.some((s) => s.key === 'slack')) {
-            const on = await startCollect(id);
-            await loadConn();
-            fin(on ? null : `${srcLabel(id)} 자료 모으기를 켜지 못했어요. «외부 앱 연결»에서 다시 시도해 주세요.`);
-            return;
-          }
-          if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
-          await svcOAuth(id, fin);
+          await loadConn();
+          const narrowed = cnOk;                              // 완료 띠가 이미 떠 있었다 = 시작한 뒤의 좁히기 호출
+          cnOk = true; cnStep = 99; cnWaiting = false; cnErr = ''; scopePick = null;
+          if (connState(id) === 'on') markConnected(id);
+          if (narrowed) toast('좁혔어요 — 고른 것만 모읍니다.');
+          redraw();
+        }
+        /** 카드 → 모달. 어느 걸음에서 시작하는가는 «이미 어디까지 왔는가»가 정한다(두 번 온 사람을 처음으로 돌리지 않는다). */
+        function openModal(id) {
+          scopePick = null; scTeamId = ''; cnErr = ''; cnWaiting = false; cnOk = false;
+          cnStep = id === 'figma' && collectMode('figma') && tokenSaved('figma') ? 2 : 1;
+          tokOpen = id; redraw();
         }
         wireUnlink(el, redraw);
-        $$('[data-conn]', el).forEach((c) => c.onclick = async () => {
+        $$('[data-conn]', el).forEach((c) => c.onclick = () => {
           const id = c.dataset.conn;
           if (connState(id) === 'on') return;                       // 이미 이어졌다 — 더 시킬 일이 없다
           if (connState(id) === 'blocked') {
@@ -1721,62 +1877,118 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
                 : '이 앱은 아직 준비 중이에요. 열리면 «외부 앱 연결»에서 바로 연결하실 수 있어요.');
             return;
           }
-          //  ⚠ 아직 서버를 못 읽었으면 **어느 길로 이을지 고를 수 없다**: Slack·GitLab 은 계정 로그인과 글자 받아
-          //   오기가 둘 다 있어서, 모르는 채로 정하면 회사가 이미 열어 둔 쉬운 길을 두고 어려운 길로 보내게 된다.
+          //  ⚠ 아직 서버를 못 읽었으면 어느 길로 이을지(계정 로그인 vs 글자)도, 어느 걸음에서 시작할지도 못 정한다.
           if (!CONN) { toast('연결 상태를 아직 확인하는 중이에요 — 잠시 뒤 다시 눌러 주세요.'); if (!connTried) void loadConn().then(redraw); return; }
-          if (collectMode(id)) { await collectConnect(id, c); return; }
-          if (connHow(id) === 'token') { tokOpen = tokOpen === id ? null : id; redraw(); return; }
-          const d = c.querySelector('.ob-oc-d'); if (d) d.textContent = '새 탭에서 허용을 누르면 여기가 저절로 바뀌어요…';
-          await svcOAuth(id, (err) => {
-            //  #2232 — 감시자(watchConnect)가 한참 뒤에 부를 수 있다. 그때 다른 장면에 가 있으면 화면은 건드리지 않는다(기록만).
-            if (err) { toast(err); if (S.scene === 'connect') redraw(); return; }
-            if (connState(id) === 'on') markConnected(id);
-            if (S.scene === 'connect') redraw();
-          });
+          openModal(id);
         });
-        // ── 펼쳐진 «글자 받아 오기» 폼 배선 ──
-        const tokIn = $('#tokIn', el), tokGo = $('#tokGo', el), tokErr = $('#tokErr', el);
-        if (tokIn && tokGo) {
-          const submit = async () => {
-            const id = tokOpen, v = (tokIn.value || '').trim();
-            if (!id) return;
-            if (!v && !tokenSaved(id)) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
-            tokGo.disabled = true; tokGo.textContent = '연결하는 중…'; if (tokErr) tokErr.textContent = '';
-            let verdict = null;
-            try {
-              const hostIn = $('#tokHost', el);
-              if (v) verdict = await svcToken(id, v, id === 'gitlab' ? ((hostIn && hostIn.value.trim()) || 'gitlab.com') : undefined);
-            } catch (e) {
-              tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
-              if (tokErr) tokErr.textContent = (e && e.message) || '연결하지 못했어요. 글자를 다시 확인해 주세요.';
-              return;
-            }
-            //  저장은 됐다. 그래도 **서버가 이어졌다고 할 때만** 초록불을 켠다(값이 틀려도 저장은 되기 때문).
-            //  #2232 — 서버가 «그 값으로 실제 붙어 봤다» 고 답했으면 그 답이 먼저다(저장 성공 ≠ 되는 값).
-            if (verdict && verdict.ok === false) {
-              tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
-              if (tokErr) tokErr.textContent = verdict.message || '그 글자로는 아직 연결되지 않았어요. 값을 다시 확인해 주세요.';
-              return;
-            }
-            //  #2247 수집기 축 — 토큰이 저장됐으면 그 토큰으로 수집기를 켠다(피그마는 범위 칸의 링크와 함께).
-            if (collectMode(id)) {
-              const sc = $('#tokScope', el);
-              const r: any = await startMemberCollect(id, sc ? sc.value : '');
-              if (!r || !r.ok) {
-                tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
-                if (tokErr) tokErr.textContent = (r && r.message) || '모으기를 켜지 못했어요. 잠시 뒤 다시 눌러 주세요.';
-                if (r && r.needs_scope && sc) sc.focus();
-                await loadConn(); return;
+        // ── 모달 배선 — 닫기(×·바탕·Esc)는 «나중에 할게요»다: 아무것도 저장하지 않는다. ──
+        const veil = $('#obVeil', el);
+        if (veil) {
+          const id = tokOpen;
+          const close = () => { tokOpen = null; scopePick = null; cnOk = false; cnErr = ''; cnWaiting = false; redraw(); };
+          veil.onclick = (e) => { if (e.target === veil) close(); };
+          const x = $('#obX', el); if (x) x.onclick = close;
+          veil.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+          const dn = $('#cnDone', el); if (dn) dn.onclick = close;   // 완료 띠의 [계속] — 이제 남은 일이 없다
+          const oaGo = $('#oaGo', el);
+          if (oaGo) oaGo.onclick = () => { oaGo.disabled = true; void startOAuthFlow(id).finally(() => { oaGo.disabled = false; }); };
+          // 토큰 걸음
+          const hostTgl = $('#hostTgl', el), hostBox = $('#hostBox', el);
+          if (hostTgl && hostBox) hostTgl.onclick = () => { hostBox.hidden = !hostBox.hidden; };
+          const tokIn = $('#tokIn', el), tokGo = $('#tokGo', el), tokErr = $('#tokErr', el);
+          if (tokIn && tokGo) {
+            const submit = async () => {
+              const v = (tokIn.value || '').trim();
+              if (!v && !tokenSaved(id)) { if (tokErr) tokErr.textContent = '받아 오신 글자를 붙여넣어 주세요.'; tokIn.focus(); return; }
+              tokGo.disabled = true; tokGo.textContent = '확인하는 중…'; if (tokErr) tokErr.textContent = '';
+              let verdict = null;
+              try {
+                const hostIn = $('#tokHost', el);
+                if (v) verdict = await svcToken(id, v, id === 'gitlab' ? ((hostIn && hostIn.value.trim()) || 'gitlab.com') : undefined);
+              } catch (e) {
+                tokGo.disabled = false; tokGo.textContent = '연결';
+                if (tokErr) tokErr.textContent = (e && e.message) || '연결하지 못했어요. 글자를 다시 확인해 주세요.';
+                return;
+              }
+              //  저장은 됐다. 그래도 서버가 «그 값으로 실제 붙어 봤다»고 한 답이 먼저다(저장 성공 ≠ 되는 값).
+              if (verdict && verdict.ok === false) {
+                tokGo.disabled = false; tokGo.textContent = '연결';
+                if (tokErr) tokErr.textContent = verdict.message || '그 글자로는 아직 연결되지 않았어요. 값을 다시 확인해 주세요.';
+                return;
               }
               await loadConn();
-            }
-            if (connState(id) === 'on') { markConnected(id); tokOpen = null; redraw(); return; }
-            tokGo.disabled = false; tokGo.textContent = '이걸로 연결하기';
-            if (tokErr) tokErr.textContent = '글자는 받았는데 아직 연결되지 않았어요. 복사할 때 앞뒤가 잘리지 않았는지 보고 다시 넣어 주세요.';
+              //  토큰은 됐다 — 피그마는 «어느 팀?» 걸음으로, 나머지 수집형은 곧장 «전부» 로 켠다(#2232 결정: 시작이 기본).
+              if (collectMode(id)) {
+                if (id === 'figma') { cnStep = 2; redraw(); return; }
+                tokGo.textContent = '가져오기를 켜는 중…';
+                void finishEnable(id, null, tokErr, tokGo); return;
+              }
+              if (connState(id) === 'on') { markConnected(id); cnOk = true; cnStep = 99; redraw(); return; }
+              tokGo.disabled = false; tokGo.textContent = '연결';
+              if (tokErr) tokErr.textContent = '글자는 받았는데 아직 연결되지 않았어요. 복사할 때 앞뒤가 잘리지 않았는지 보고 다시 넣어 주세요.';
+            };
+            tokGo.onclick = submit;
+            tokIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) submit(); });
+          }
+          // 피그마 «어느 팀?» 걸음 — [이 팀 가져오기] 가 곧 켜기다(전부가 기본, 좁히기는 완료 뒤 링크).
+          const teamIn = $('#teamIn', el), teamErr = $('#teamErr', el), teamAll = $('#teamAll', el);
+          const teamIdOf = (t) => { const m = String(t || '').match(/(?:^|\/)team\/(\d{5,})/); return m ? m[1] : (/^\d{5,}$/.test(String(t || '').trim()) ? String(t).trim() : ''); };
+          if (teamAll && teamIn) {
+            const goTeam = () => {
+              const tid = teamIdOf(teamIn.value);
+              if (!tid) { if (teamErr) teamErr.textContent = '팀 주소가 아니에요 — figma.com/files/team/… 처럼 생긴 주소를 통째로 붙여넣어 주세요.'; teamIn.focus(); return; }
+              scTeamId = tid;
+              void finishEnable('figma', { team_ids: tid, file_keys: '' }, teamErr, teamAll);
+            };
+            teamAll.onclick = goTeam;
+            teamIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) goTeam(); });
+          }
+          // 좁히기(완료 띠 아래) — 목록은 그 사람 연결로 서버가 나열한다(외부 앱에 들어가지 않는다).
+          async function loadScopeOptions(app, teamId) {
+            let o = null;
+            try { o = await api(`/api/ui/org/${app}/collect/options${teamId ? `?team_id=${encodeURIComponent(teamId)}` : ''}`); } catch (_) { o = null; }
+            if (tokOpen !== app || !scopePick) return;      // 그새 닫았거나 접었다 — 화면을 덮지 않는다
+            scopePick = o
+              ? { loading: false, freeform: !!o.freeform, note: o.note || '', key: o.key || '', unit: o.unit || '', options: Array.isArray(o.options) ? o.options : [], chosen: new Set() }
+              : { loading: false, freeform: true, note: '', key: '', unit: '', options: [], chosen: new Set() };
+            redraw();
+          }
+          const nlA = $('#cnNarrow', el);
+          if (nlA) nlA.onclick = () => {
+            if (scopePick) { scopePick = null; redraw(); return; }   // 다시 누르면 접는다
+            scopePick = { loading: true, chosen: new Set() }; redraw();
+            void loadScopeOptions(id, id === 'figma' ? scTeamId : '');
           };
-          tokGo.onclick = submit;
-          tokIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) submit(); });
-          tokIn.focus();
+          const scErr = $('#scErr', el);
+          const scList = $('#scList', el);
+          if (scList && scopePick && !scopePick.loading) {
+            const scN = $('#scN', el);
+            const sum = () => { const n = scopePick.chosen.size; if (scN) scN.textContent = n ? `${n}개 골랐어요.` : ''; };
+            $$('input[data-sc]', scList).forEach((b) => b.onchange = () => { const k = b.dataset.sc; if (b.checked) scopePick.chosen.add(k); else scopePick.chosen.delete(k); sum(); });
+            const q = $('#scQ', el);
+            if (q) q.oninput = () => { const t = q.value.trim().toLowerCase(); $$('label', scList).forEach((row) => { row.style.display = !t || row.textContent.toLowerCase().includes(t) ? '' : 'none'; }); };
+            sum();
+          }
+          const scGo = $('#scGo', el);
+          if (scGo) scGo.onclick = () => {
+            const sp = scopePick || {};
+            const scIn = $('#scIn', el);
+            const vals = sp.freeform || !(sp.options && sp.options.length)
+              ? (scIn ? scIn.value.trim() : '')
+              : [...(sp.chosen || [])].join(' ');
+            if (!vals) { if (scErr) scErr.textContent = '하나는 골라 주세요 — 그냥 두면 지금처럼 전부 모읍니다.'; return; }
+            //  피그마 — 파일만 고른 것: 팀 축은 비운다(안 비우면 팀 전체가 그대로 훑린다).
+            const scope = id === 'figma'
+              ? { file_keys: vals, team_ids: '' }
+              : { [sp.key || (id === 'github' ? 'repos' : id === 'gitlab' ? 'projects' : id === 'clickup' ? 'include_list_ids' : id === 'slack' ? 'channels' : 'teams')]: vals };
+            void finishEnable(id, scope, scErr, scGo);
+          };
+          //  Esc 는 포커스가 모달 안에 있어야 듣는다(veil.onkeydown) — 걸음이 바뀔 때마다 지금 누를 것에
+          //   포커스를 옮겨 둔다(완료 띠가 뜨면 [계속] — 포커스가 완료 띠를 화면 안으로 끌고 온다).
+          const box = veil.querySelector('.ob-modal');
+          if (box) box.setAttribute('tabindex', '-1');
+          const focal = cnOk ? dn : (tokIn && cnStep === 1) ? tokIn : (teamIn && cnStep === 2) ? teamIn : box;
+          if (focal) setTimeout(() => { try { focal.focus(); } catch (_) { /* noop */ } }, 0);
         }
         //  남겨 두고 가는 사람에게는 **어디로 돌아오면 되는지**를 말한다 — 안 그러면 '나중에'가 갈 곳 없는 말이 된다.
         $('#upGo', el).onclick = () => { if (pickedIds().some((id) => connState(id) !== 'on')) toast('남은 곳은 왼쪽 «외부 앱 연결»에서 언제든 연결하실 수 있어요.'); goScene('terminal'); };
@@ -1792,7 +2004,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       bind: (el) => {
         $$('.ob-opt-card', el).forEach((c) => c.onclick = async () => {
           $$('.ob-opt-card', el).forEach((x) => x.classList.remove('ob-on')); c.classList.add('ob-on');
-          S.ai = c.dataset.opt; AIC = null; save(); renderSB(); await sleep(200);
+          setAi(c.dataset.opt); AIC = null; save(); renderSB(); await sleep(200);
           goScene(S.ai === '아직 없어요' ? 'sources' : 'claude');
         });
         $('[data-skip]', el).onclick = () => goScene('sources');
@@ -1824,24 +2036,32 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const otherNote = others.length
           ? `<p class="ob-note">지금은 ${esc(others.join(' · '))}${josa(others[others.length - 1], 0)} 연결돼 있어요. ${picked}${josa(S.ai, 1)} 연결하지 않으셔도 제 분석은 그걸로 돌아갑니다.</p>`
           : '';
-        const goOther = `<button class="ob-btn ob-btn-sub" data-other>다른 AI 고르기</button>`;
-        //  #2232 — [이대로 계속]과 [나중에 할게요]는 결국 같은 곳으로 간다(원준님). 다른 AI 가 이미 연결돼 있으면 «이대로 계속» 하나만,
-        //   아무것도 없으면 «나중에 할게요» 하나만 보인다.
-        const keepBtn = (others.length || S.aiConnected) ? `<button class="ob-btn ob-btn-sub" id="cKeep">이대로 계속</button>` : '';
-        const skip = keepBtn ? '' : `<button class="ob-btn ob-btn-sub" data-skip>나중에 할게요</button>`;
+        //  #2232 — [이대로 계속]과 [나중에 할게요]는 결국 같은 곳으로 간다(원준님).
+        //  ★ 2026-08-31(원준님) — 그 아래에 버튼이 셋이나 섰다: [로그인했어요][이대로 계속][다른 AI 고르기].
+        //   *«로그인했어요 누르면 확인되고 바로 연결된 표시 띄워서 목록 화면으로 보내면 되는 거 아닌가»*.
+        //   맞다. 그 흐름은 **이미 있다** — cGo 가 성공하면 pass() 가 이 장면을 다시 그려 «연결됐어요 + AI 4장(연결된 건 체크)»
+        //   화면이 나온다. 문제는 성공 경로가 아니라 **그 아래에 선 곁다리 버튼들**이었다. 그래서 둘을 걷어낸다:
+        //     · [다른 AI 고르기] → 머리말의 [← 이전]과 **같은 곳**(고르는 화면)으로 간다. 중복이라 지운다.
+        //       (돌아가서 다른 AI 를 고르면 setAi 가 AIC 를 비우므로 판정은 새로 묻는다 — 낡은 답이 남지 않는다.)
+        //     · [이대로 계속]·[나중에 할게요] → 같은 곳(sources)으로 가는 **한 문**인데 이름만 둘이었다.
+        //       하나로 합치고, 버튼이 아니라 **조용한 링크**(ob-q-skip)로 내린다.
+        //   ⚠ 문을 **없애지는** 않는다. 이 화면에서 로그인이 안 되는 사람을 가두면 안 된다(이 장면 머리말의 원칙).
+        //   ⚠ 머리말 [나중에 할게요]는 **홈으로** 가고 이건 **다음 걸음으로** 간다 — 하는 일이 다르므로 이름도 다르게 둔다
+        //    (같은 이름 두 개가 다른 일을 하던 것이 종전 상태였다).
+        const laterLink = `<button class="ob-q-skip" data-skip>${(others.length || S.aiConnected) ? '이대로 계속할게요' : '지금은 건너뛸게요'}</button>`;
         //  #2232 — 이름을 아직 안 주신 분에게 «당신님» 이라고 부르던 자리(실측). 이름이 없으면 부르지 않는다.
         const lead = `연결해 두시면 제(리브)가 일할 때도 ${nick() ? `${esc(nick())}님의` : '쓰시던'} 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
 
         // ── 아직 안 물어봤다 — 없는 답을 지어내지 않고 묻는 중이라고 말한다(bind 가 곧 채운다).
         if (!AIC) {
           return qHead('claude', lead, `${picked} 계정을 연결해 주세요.`, '')
-            + `<div class="ob-tok"><p class="ob-note">${picked} 가 연결돼 있는지 확인하고 있어요…</p></div>` + skip;
+            + `<div class="ob-tok"><p class="ob-note">${picked} 가 연결돼 있는지 확인하고 있어요…</p></div>` + laterLink;
         }
         // ── 물어봤는데 서버가 답을 못 줬다.
         if (c.error) {
           return qHead('claude', lead, `${picked} 계정을 연결해 주세요.`, '')
             + `<div class="ob-tok"><p class="ob-err">확인하지 못했어요 — ${esc(c.error)}</p>${otherNote}</div>`
-            + `<button class="ob-btn ob-btn-pri" id="cGo">다시 확인</button>` + goOther + skip;
+            + `<button class="ob-btn ob-btn-pri" id="cGo">다시 확인</button>` + laterLink;
         }
         // ── 됐다 — **다른 AI 도 연결할지** 여기서 묻는다(#2232). 종전엔 고르는 화면에 «여러 개» 카드가 따로 있었는데,
         //    그걸 고르면 무엇을 어떻게 연결하라는 건지 알 수 없는 막다른 카드였다(원준님 2026-08-28). 이제 하나를 연결한
@@ -1860,14 +2080,23 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // ── CLI 가 이 자리에 없다. 로그인 절차를 보여 줘도 첫 줄에서 command not found 가 난다 —
         //    그러니 로그인을 시키지 않고 **없다는 사실**을 말한다(사람이 해야 할 일이 아예 다르다).
         if (c.installed === false) {
+          //  #2255 — 종전엔 여기서 «라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요» 로 **중앙 박스만**
+          //   가리켰다. 로컬로 쓰려는 사람에겐 답이 아니다(고르게는 해 놓고 이을 길이 없는 자리 — #1879 가
+          //   그록·제미나이에서 고친 것과 같은 모양의 잔재였다). 이제 진짜 답을 말한다: **다음 화면에서
+          //   이 컴퓨터를 이으면 그 AI 를 설치까지 해 준다**(`lively install` 이 고른 값을 서버에서 읽어 온다).
           return qHead('claude', lead, `이 자리엔 ${picked}${josa(S.ai, 0)} 아직 없어요.`,
             `${picked}${josa(S.ai, 1)} 쓰려면 그 CLI(<code>${bin}</code>)가 먼저 깔려 있어야 합니다.`)
             + `<div class="ob-tok">
-                <p class="ob-note">라이블리 안 터미널에는 Claude 와 ChatGPT 가 준비돼 있어요. ${picked}${josa(S.ai, 2)} 그 CLI 가 깔린 내 컴퓨터를 연결해 두시면 그대로 쓸 수 있습니다(다음 화면).</p>
+                <p class="ob-note">여기(라이블리 서버)에는 Claude 와 ChatGPT 가 준비돼 있어요. <b>${picked}</b>${josa(S.ai, 2)} <b>내 컴퓨터</b>에서 씁니다 — 다음 화면에서 이 컴퓨터를 이어 두시면 <b>${picked}${josa(S.ai, 0)} 없을 때 설치까지 같이 해 드립니다</b>(무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요).</p>
                 ${otherNote}
               </div>`
-            + (keepBtn ? keepBtn.replace('ob-btn-sub', 'ob-btn-pri') : '')
-            + goOther + skip;
+            //  ⚠ 이 갈래는 **로그인 화면과 다르다.** 고른 AI 가 이 자리에 아예 없으니 [로그인했어요]가 없고,
+            //   [다른 AI 고르기]도 «머리말 뒤로가기의 중복» 이 아니라 **실질적인 다음 행동**이다(여기서 쓸 수 있는
+            //   AI 로 갈아타는 길 — #1879 가 막은 «고르게는 해 놓고 이을 수는 없는 자리»가 바로 이것이다).
+            //   그래서 여기만 둘을 둔다: 주 버튼 [다음으로](= 옛 [이대로 계속] 뜻까지 흡수) + 조용한 [다른 AI 고르기].
+            //   종전엔 이어진 AI 가 없으면 주 버튼이 **아예 없고** 곁다리만 셋이었다.
+            + `<button class="ob-btn ob-btn-pri" data-skip>다음으로</button>`
+            + `<button class="ob-q-skip" data-other>다른 AI 고르기</button>`;
         }
         // ── 있는데 아직 로그인 전(또는 판정 불가).
         //  #2232 — «터미널을 열고 명령을 치세요» 는 컴맹에게 벽이었다(원준님 2026-08-28): 하네스·원격·device-auth 같은 말,
@@ -1877,30 +2106,140 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //   하네스의 폴백으로만 남긴다.
         const h = c.harness || aiHarness();
         const g = AI_GUIDE[h];
-        const li = (t) => `<li>${t}</li>`;
-        const steps = (g ? g.steps : (c.steps && c.steps.length ? c.steps : [`터미널에  ${c.bin || 'claude'}  를 입력해 안내대로 로그인합니다`]).map((t) => esc(t)))
-          .map(li).join('');
-        //  안 1(#2232) — 3걸음 뒤에 «그 사이 물음은 Enter» 한 줄 + 그 자리 펼침. 펼침은 팝오버·모달이 아니라 인라인(원준님 규칙).
-        const hasDetail = !!(g && g.detail && g.detail.length);
-        const more = hasDetail ? `<button type="button" class="ob-more" id="cMore" data-label="${esc(g.more || '화면마다 자세히 보기')}" aria-expanded="false" aria-controls="cDetail">${esc(g.more || '화면마다 자세히 보기')} ▾</button>` : '';
-        return qHead('claude', lead, `${picked} 계정을 연결해 주세요.`,
-          (g && g.help) || '아래 버튼으로 로그인 창을 열고 순서대로 하시면 됩니다. 쳐야 할 글자는 누르면 복사돼요.')
-          + `<div class="ob-tok">
-              <button class="ob-btn ob-btn-sub ob-btn-inline" id="cTerm">${LOGIN_INLINE[h] ? `${picked} 로그인 시작` : `${picked} 로그인 창 열기 ↗`}</button>
-              <div class="ob-login-card" id="cCard" hidden></div>
-              <ol>${steps}</ol>
-              ${g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
-              ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map(li).join('')}</ol></div>` : ''}
-              ${g && g.note ? `<p class="ob-note ob-fine2">${g.note}</p>` : ''}
-              ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${picked} 로그인 여부를 서버가 확인하지 못해요. 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
+        //  ★ 안 1 확정(#2232, 아티팩트 «AI 로그인 스테퍼») — 걸음 세 칸이 한 장에 서고 지금 할 칸만 켜진다.
+        //   화면(카드)을 통째로 갈아치우던 구조를 걷었다: 탈출로는 하단 상시, 받은 주소·치던 코드는 어떤 경우에도 보존.
+        const step = (n, cls, title, doneLine, body) => `<div class="ob-lg-step ${cls}" id="lg${n}">
+            <span class="ob-lg-n">${n}</span><div class="ob-lg-body"><b>${title}</b>
+            <div class="ob-lg-done">✓ ${doneLine}</div><div class="ob-lg-in">${body}</div></div></div>`;
+        const fbLine = `<div class="ob-lg-fb">여기서 잘 안 되면 <button type="button" id="lgFb">창으로 열어서 로그인 ↗</button><span id="lgFbNote"></span></div>`;
+        /*  ★ 인라인 터미널(#2477) — 로그인 «창» 을 새 탭이 아니라 **이 자리에** 띄운다.
+         *
+         *   왜 필요한가: 인라인 카드(주소·코드)는 그 하네스가 «비대화형 한 줄» 을 줄 때만 된다. agy 는 그게 없다 —
+         *   로그인 서브커맨드가 없고, 인증을 띄우는 `agy -p` 는 이 러너가 주는 **파이프 stdin 을 거절**하며
+         *   pty 를 줘도 대기가 **60초 하드 타임아웃**이다(실측 2026-09-01, agy 1.1.22). 하네스마다 통로를 하나씩
+         *   뚫는 방식은 그런 자리에서 늘 막히고, 새 하네스가 올 때마다 같은 벽을 다시 만난다.
+         *   터미널을 통째로 이 자리에 얹으면 **하네스가 무엇을 요구하든 그 자리에서 보인다.**
+         *
+         *   공짜다시피 한 이유: 세션 터미널 페이지는 이미 `?embed=1` 로 프레임에 실리게 돼 있다(#1744 —
+         *   세션 화면이 그렇게 쓴다). 상단바·파일 탐색기가 빠진 «터미널만» 판이라 카드 안에 그대로 맞는다.
+         *
+         *   ⚠ 액자는 **걸음(step) 밖**에 붙인다. `.ob-lg-step.done .ob-lg-in{display:none}` 이라 걸음 안에 두면
+         *    [로그인 시작] 이 걸음 1 을 done 으로 바꾸는 순간 방금 띄운 터미널이 통째로 숨는다(실측).
+         */
+        const termBox = `<div class="ob-lg-term" id="lgTermBox" hidden>
+            <div class="ob-lg-term-bar"><span id="lgTermSt">터미널을 여는 중이에요…</span>
+              <a class="ob-lg-term-out" id="lgTermOut" target="_blank" rel="noopener" hidden>새 탭에서 크게 보기 ↗</a></div>
+            <iframe class="ob-lg-term-f" id="lgTermF" title="로그인 터미널"></iframe>
+            <div class="ob-lg-d">창 안을 한 번 누르면 글자를 칠 수 있어요. 붙여넣기는 ⌘V(윈도우 Ctrl+V).</div>
+          </div>`;
+        const okBar = `<div class="ob-lg-ok" id="lgOk" hidden>✓ 로그인이 끝났어요<button class="ob-btn ob-btn-pri ob-btn-inline" id="lgOkGo" style="margin-left:auto">계속</button></div>`;
+        let stepper = '';
+        if (h === 'claude') {
+          stepper = step(1, 'now', `${esc(picked)} 주소 열기`, '열었어요',
+              `<div class="ob-lg-addr"><code id="lgAddr">주소를 받는 중이에요…</code><a class="ob-btn ob-btn-pri ob-btn-inline" id="lgOpen" target="_blank" rel="noopener" hidden>열기 ↗</a></div>`)
+            + step(2, 'idle', '로그인하고 Authorize → 코드 복사', '코드를 받았어요',
+              `<div class="ob-lg-d">허용하면 브라우저에 아래처럼 생긴 코드가 나와요. 통째로 복사하세요.</div>
+               <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">claude.com/oauth/…</span></div>
+               <div class="bd"><div class="t">Paste this code back into Claude Code</div><span class="ob-bchip">ac_k92rXq4LmB…#pQ7w</span><div class="ob-bcap">← 이렇게 생긴 게 코드예요</div></div></div>`)
+            + step(3, 'idle', '받은 코드를 여기에', '넣었어요',
+              `<div class="ob-lg-row"><input id="lgIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ac_ 로 시작하는 코드 붙여넣기"><button class="ob-btn ob-btn-pri ob-btn-inline" id="lgPut">넣기</button></div>`);
+        } else if (h === 'codex') {
+          stepper = step(1, 'now', '주소 열고, 이 코드 복사해 두기', '열었어요',
+              `<div class="ob-lg-addr"><code id="lgAddr">주소와 코드를 받는 중이에요…</code><a class="ob-btn ob-btn-pri ob-btn-inline" id="lgOpen" target="_blank" rel="noopener" hidden>열기 ↗</a></div>
+               <div style="margin-top:9px"><button type="button" class="ob-copychip" id="lgCodeChip" hidden><span id="lgCode"></span><small>누르면 복사</small></button></div>`)
+            + step(2, 'idle', '브라우저에 코드 넣고, ChatGPT 로그인 → 허용', '허용했어요',
+              `<div class="ob-lg-d">열린 화면의 입력칸에 위 코드를 넣으면 됩니다.</div>
+               <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">auth.openai.com/device</span></div>
+               <div class="bd"><div class="t">Enter the code displayed on your device</div><span class="ob-bchip" id="lgCodeEcho">····-····</span><div class="ob-bcap">← 아까 그 코드를 여기에</div></div></div>
+               <details class="ob-stuck"><summary>빨간 글로 «장치 코드 인증을 활성화하세요» 가 떴다면</summary><div class="in">
+                 막힌 게 아니에요. <a href="https://chatgpt.com/#settings" target="_blank" rel="noopener"><b>ChatGPT 설정 ▸ 보안</b></a>에서 <b>Codex용 장치 코드 인증</b>을 켜고, <button type="button" class="ob-linkbtn" id="lgRetry" style="display:inline">다시 시도</button>를 누르세요 — 새 주소와 새 코드가 나옵니다(아까 코드는 이미 죽었어요).</div></details>`)
+            + step(3, 'idle', '끝나기를 기다리면 됩니다', '끝났어요',
+              `<div class="ob-lg-wait" id="lgWait" hidden><span class="ob-lg-pulse"></span>브라우저에서 허용을 기다리는 중…</div>`);
+        } else if (h === 'grok') {
+          //  ⚠ 이 걸음 칸이 **없어서 grok 로그인이 죽어 있었다**(#2477 실측): LOGIN_INLINE 에 grok 을 켜 놓고
+          //   스테퍼는 옛 «명령 붙여넣기» 판이라 주소가 뜰 `#lgAddr` 가 없었고, startInlineLogin 은
+          //   `if (!addr) return` 으로 즉시 빠져나갔다 — 버튼을 눌러도 **아무 일도 안 일어난다**(오류도 없다).
+          //   출력 모양이 codex 와 같으므로 걸음 구성도 codex 와 같다.
+          stepper = step(1, 'now', '주소 열고, 이 코드 복사해 두기', '열었어요',
+              `<div class="ob-lg-addr"><code id="lgAddr">주소와 코드를 받는 중이에요…</code><a class="ob-btn ob-btn-pri ob-btn-inline" id="lgOpen" target="_blank" rel="noopener" hidden>열기 ↗</a></div>
+               <div style="margin-top:9px"><button type="button" class="ob-copychip" id="lgCodeChip" hidden><span id="lgCode"></span><small>누르면 복사</small></button></div>`)
+            + step(2, 'idle', '브라우저에 코드 넣고, X(xAI) 로그인 → 허용', '허용했어요',
+              `<div class="ob-lg-d">열린 화면의 입력칸에 위 코드를 넣으면 됩니다.</div>
+               <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">accounts.x.ai/oauth2/device</span></div>
+               <div class="bd"><div class="t">Confirm the code shown on your device</div><span class="ob-bchip" id="lgCodeEcho">····-····</span><div class="ob-bcap">← 아까 그 코드를 여기에</div></div></div>`)
+            + step(3, 'idle', '끝나기를 기다리면 됩니다', '끝났어요',
+              `<div class="ob-lg-wait" id="lgWait" hidden><span class="ob-lg-pulse"></span>브라우저에서 허용을 기다리는 중…</div>`);
+        } else if (h === 'antigravity') {
+          stepper = step(1, 'now', '터미널 열기', '열었어요 — 로그인 방법은 Enter 로 넘겼어요',
+              `<div class="ob-lg-d">이 자리에 글자만 있는 터미널이 뜨고, 먼저 이렇게 물어요. <b>1번에 이미 커서(&gt;)가 있으니 그대로 Enter.</b></div>
+               <div class="ob-tmock"><span class="dim">Select login method:</span><br><span class="sel"><span class="okx">&gt;</span> 1. Google OAuth</span><br><span class="dim">&nbsp;&nbsp;2. Use a Google Cloud project</span></div>
+               <div style="margin-top:9px"><button class="ob-btn ob-btn-pri ob-btn-inline" id="cTerm">${esc(picked)} 로그인 시작</button></div>`)
+            + step(2, 'idle', '구글 로그인 → 코드를 창에 붙여넣기', '코드를 넣었어요',
+              `<div class="ob-lg-d">창의 파란 줄(<b>Click here to authenticate</b>)을 누르면 구글 로그인이 열려요. 로그인하면 <b>복사할 코드</b>가 나오고, 그걸 창의 <b>authorization code…</b> 칸에 붙여넣고 Enter.</div>
+               <div class="ob-bmock"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="url">accounts.google.com</span></div>
+               <div class="bd"><div class="t">Google 로그인 → 허용을 누르면</div><span class="ob-bchip">4/0AeaYSHB…kQx7</span><div class="ob-bcap">← 이 코드를 복사해 창에 붙여넣으세요</div></div></div>`)
+            + step(3, '', '창이 세 번 더 물어요 — 전부 Enter 면 됩니다', '',
+              `<details class="ob-peek"><summary>창이 묻는 세 화면 미리 보기 (색 테마 · 데이터 동의 · 폴더 신뢰)</summary><div class="in">
+                 <div class="pk">① Choose your color scheme — <span class="ans">아무거나 골라도 돼요. 그대로 Enter</span></div>
+                 <div class="ob-tmock"><span class="dim">Choose your color scheme:</span><br><span class="sel"><span class="okx">&gt;</span> terminal</span><br><span class="dim">&nbsp;&nbsp;light · dark · tokyo night …</span></div>
+                 <div class="pk">② Terms of Service &amp; Data Use — <span class="ans">동의 상태로 Enter 하면 지나가요</span> · 사용 정보를 보내고 싶지 않으면 그 줄에서 Enter 로 체크를 빼고 [Done]</div>
+                 <div class="ob-tmock"><span class="sel"><span class="okx">&gt;</span> [x] Yes, I agree to help improve Antigravity CLI…</span><br><span class="dim">&nbsp;&nbsp;&nbsp;&nbsp;(나중에 설정에서 언제든 끌 수 있어요)</span></div>
+                 <div class="pk">③ Do you trust the contents of this project? — <span class="ans">라이블리가 만든 작업 폴더예요. Yes 에서 Enter</span></div>
+                 <div class="ob-tmock"><span class="dim">/work/shared/project/…</span><br><span class="sel"><span class="okx">&gt;</span> Yes, I trust this folder</span><br><span class="dim">&nbsp;&nbsp;No, exit</span></div>
+               </div></details>
+               <div class="ob-lg-d" style="margin-top:8px">다 지나가면 그 터미널에 입력칸(<b>&gt;</b> 와 오른쪽 아래 <b>Gemini …</b>)이 떠요. 그럼 바로 아래 <span class="ob-kbd">로그인했어요</span>.</div>`);
+        } else {
+          // 인라인 대상이 아닌 미지의 하네스 폴백 — 이 자리에 터미널을 띄우고 명령 한 줄을 붙여넣게 한다.
+          const cmd = 'grok login --device-auth';
+          stepper = step(1, 'now', '터미널 열고, 이 한 줄 붙여넣기', '명령을 넣었어요',
+              `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+                 <button class="ob-btn ob-btn-pri ob-btn-inline" id="cTerm">${esc(picked)} 로그인 시작</button>
+                 <button type="button" class="ob-copychip" data-copy="${esc(cmd)}" style="letter-spacing:0; font-size:12px"><span>${esc(cmd)}</span><small>누르면 복사</small></button></div>
+               <div class="ob-lg-d" style="margin-top:7px">이 자리에 터미널이 떠요. 한 번 누른 뒤 위 글자를 붙여넣고(⌘V) Enter.</div>`)
+            + step(2, 'idle', '창에 뜬 주소 열고, 코드 넣어 X 로그인', '로그인했어요',
+              `<div class="ob-tmock"><span class="dim">$</span> grok login --device-auth<br><span class="dim">Visit:</span> accounts.x.ai/device<br><span class="dim">Code:</span> <span class="okx">HJ4K-Q2WM</span></div>
+               <div class="ob-lg-d" style="margin-top:8px">브라우저에서 그 코드를 넣고 X(xAI) 계정으로 로그인하세요.</div>`)
+            + step(3, '', '창에 «Login successful» 이 보이면', '',
+              `<div class="ob-tmock"><span class="okx">✓ Login successful.</span></div>
+               <div class="ob-lg-d" style="margin-top:8px">여기로 돌아와 아래 <span class="ob-kbd">로그인했어요</span>.</div>`);
+        }
+        //  #2476 — «방금 로그인했는데 왜 또?» 에 **묻기 전에** 답한다. 새 워크스페이스는 새 테넌트라 AI 자격이
+        //   사는 멤버 홈이 새로 생기고, 저기서 이은 로그인은 여기로 따라올 길이 없다(실측 2026-08-28).
+        //   말할지 말지와 문구는 ai-login-scope 가 정한다 — 만들기 패널과 **같은 자리**에서 온다(둘이 어긋나면
+        //   만들 땐 말해 놓고 들어가선 안 말하는 상태가 조용히 생긴다). 셀프호스트에선 빈 문자열이다.
+        const wsNote = aiLoginScopeNote(managedWorkspaces());
+        //  «그 사이 물음»(between/펼침)은 스테퍼 밖 잔글씨로 유지 — antigravity 는 걸음 ③이 그 역할이라 뺀다.
+        const hasDetail = h !== 'antigravity' && !!(g && g.detail && g.detail.length);
+        const more = hasDetail ? `<button type="button" class="ob-more" id="cMore" data-label="${esc((g && g.more) || '자세히 보기')}" aria-expanded="false" aria-controls="cDetail">${esc((g && g.more) || '자세히 보기')} ▾</button>` : '';
+        return qHead('claude', lead, `${esc(picked)} 계정을 연결해 주세요.`,
+          (g && g.help) || '아래 걸음대로 하시면 됩니다.')
+          + `<div class="ob-tok ob-lgs">
+              ${wsNote}
+              ${stepper}
+              ${LOGIN_INLINE[h] ? '' : termBox}
+              ${okBar}
+              ${h !== 'antigravity' && g && (g.between || more) ? `<p class="ob-note ob-between">${g.between || ''}${more}</p>` : ''}
+              ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map((t) => `<li>${t}</li>`).join('')}</ol></div>` : ''}
+              ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${esc(picked)} 로그인 여부를 서버가 확인하지 못해요. 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
               <p class="ob-err" id="cErr"></p>
+              ${fbLine}
               ${otherNote}
             </div>`
           + `<button class="ob-btn ob-btn-pri" id="cGo">로그인했어요</button>`
-          + keepBtn + goOther + skip;
+          + laterLink;
       },
       bind: (el) => {
         const err = $('#cErr', el), go = $('#cGo', el);
+        /** 걸음 상태 — 칸을 지우지 않고 클래스만 바꾼다(안 1 의 핵심). */
+        const lgMark = (n, cls) => { const st = $('#lg' + n, el); if (!st) return;
+          st.classList.remove('now', 'idle', 'done'); if (cls) st.classList.add(cls);
+          const sn = st.querySelector('.ob-lg-n'); if (sn && cls === 'done') sn.textContent = '✓'; else if (sn) sn.textContent = String(n); };
+        // 복사 칩(그록 명령 등) — data-copy 를 그대로 쓴다.
+        $$('.ob-copychip[data-copy]', el).forEach((b) => b.onclick = async () => {
+          try { await navigator.clipboard.writeText(b.dataset.copy || ''); } catch (_) { toast(b.dataset.copy || ''); }
+          const sm = b.querySelector('small'); if (sm) { const o = sm.textContent; sm.textContent = '복사했어요 ✓'; setTimeout(() => { sm.textContent = o; }, 1600); }
+          lgMark(1, 'done'); lgMark(2, 'now'); lgMark(3, '');
+        });
         // 안 1(#2232) — «화면마다 자세히 보기» 는 그 자리에서 펼치고 접는다(팝오버·모달 금지). 상태는 화면에만(저장 안 함).
         const more = $('#cMore', el), det = $('#cDetail', el);
         if (more && det) more.onclick = () => {
@@ -1917,27 +2256,39 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // 로그인 창 열기 — 그 AI 를 내 격리 홈에서 띄운 터미널 한 장(사이드바 없는 페이지). me-ai.ts [내 계정 로그인]과 같은 규약.
         //  ⚠ 종전엔 #/terminal(AI 세션 목록, 셸 통째)을 열었다 — 온보딩도 안 끝난 사람에게 사이드바·세션 목록이 통째로
         //   보였고, 거기서 또 [내 계정 로그인]을 찾아 눌러야 했다(원준님 2026-08-28).
+        //  인라인 하네스(claude·codex)는 시작 버튼 없이 **자동으로** 절차를 띄운다 — 걸음 1 에 주소가 바로 온다.
+        //   (restart:false 라 이미 돌던 절차가 있으면 그걸 이어받는다 — 장면을 들락거려도 상태가 안 죽는다.)
+        {
+          const h0 = (AIC && AIC.harness) || aiHarness();
+          if (LOGIN_INLINE[h0] && AIC && !AIC.error && AIC.installed !== false && !aiOn(AIC.harness)) {
+            void startInlineLogin(el, h0, AI_LABEL[h0] || S.ai || h0);
+          }
+        }
+        //  상시 탈출로 — 인라인 카드 쪽은 startInlineLogin 이 자기 자리에서 배선한다(그 함수가 h·label 을 쥔다).
+        //   여기서는 **인라인 터미널** 쪽을 맡는다: 이미 만든 로그인 세션이 있으면 **그 세션**을 크게 연다.
+        //   ⚠ 새 세션을 또 만들면 사람이 두 자리에서 로그인하게 된다 — 어느 쪽이 진짜인지 알 수 없어진다.
+        {
+          const h0 = (AIC && AIC.harness) || aiHarness();
+          const fb = $('#lgFb', el);
+          if (fb && !LOGIN_INLINE[h0]) fb.onclick = () => {
+            const label = AI_LABEL[h0] || S.ai || h0;
+            if (loginTermSession) {
+              window.open(loginTerminalPopoutUrl(loginTermSession), '_blank');
+              toast('같은 로그인 창을 새 탭에서 열었어요.');
+              return;
+            }
+            void openLoginWindow(h0, label).catch((e) => toast(`로그인 창을 열지 못했어요 — ${(e && e.message) || e}`));
+          };
+        }
         const term = $('#cTerm', el);
         if (term) term.onclick = async () => {
+          lgMark(1, 'done'); lgMark(2, 'now'); lgMark(3, '');
           const h = (AIC && AIC.harness) || aiHarness();
           const label = AI_LABEL[h] || S.ai || h;
-          // ★ 터미널 없이 여기서 끝내는 하네스(#2055 후속) — 새 탭·새 창을 열지 않는다.
-          //  사람이 할 일은 «주소를 열고 코드를 넣는 것» 뿐인데 종전엔 그걸 하려고 검은 창을 통째로 봤다.
-          //  대상이 아닌 하네스(agy·grok)는 아래 종전 경로 그대로다 — 그쪽은 비대화형 한 줄이 없다.
+          // ★ 터미널 없이 여기서 끝내는 하네스(#2055·#2477) — 주소·코드 두 값이면 되므로 터미널조차 안 보여 준다.
           if (LOGIN_INLINE[h]) { await startInlineLogin(el, h, label); return; }
-          term.disabled = true; const was = term.textContent; term.textContent = '여는 중…';
-          try {
-            const out: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-              label: `내 계정 로그인 (${label})`, rootKey: 'personal', subpath: '', flags: {}, autoApprove: false, loginProfile: true,
-              ...(LOGIN_SESSION[h] || { harness: h }) }) });
-            const id = out && out.session && out.session.id;
-            if (!id) throw new Error('세션을 받지 못했어요');
-            window.open(sessionTermUrl(id, { label: (out.session && out.session.label) || label }), '_blank');
-            toast('새 탭에 로그인 창을 열었어요. 거기서 로그인을 마치고 돌아오세요.');
-          } catch (e) {
-            toast(`로그인 창을 열지 못했어요 — ${(e && e.message) || e}`);
-            try { window.open(location.pathname + '?solo=1#/terminal', '_blank', 'noopener'); } catch (_) { /* noop */ }
-          } finally { term.disabled = false; term.textContent = was; }
+          // ★ 그 밖(agy·미지의 하네스) — 터미널이 필요하지만 **새 탭이 아니라 이 자리에** 띄운다(#2477).
+          await startInlineTerminal(el, h, label, term);
         };
         // 장면에 들어오자마자 **한 번** 묻는다 — 사람이 버튼을 누르기 전에 '없는 CLI 를 치라는 안내'를 보지 않게.
         //  판정은 그때그때 다시 재므로 캐시를 믿지 않는다(AIC 는 그림용 최신값일 뿐이다).
@@ -1966,17 +2317,22 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           }
         };
         // 다른 AI 도 연결하기 — 고른 것을 바꿔 같은 장면을 다시 연다(판정은 새로 묻는다).
-        $$('[data-more]', el).forEach((b) => b.onclick = () => { S.ai = b.dataset.more; AIC = null; save(); renderSB(); renderScene('claude', false); });
-        // 다른 AI 가 이미 연결돼 있을 때의 문 — 고른 것을 못 연결했다고 사람을 가두지 않는다.
-        //  (분석은 서버가 resolveHeadlessHarness 로 고른 **실제 로그인된** 하네스로 돈다.)
-        const keep = $('#cKeep', el);
-        if (keep) keep.onclick = () => { const o = (AIC && AIC.others || [])[0]; if (!S.aiConnected && o) mark(AI_LABEL[o] || o, o); goScene('sources'); };
+        $$('[data-more]', el).forEach((b) => b.onclick = () => { setAi(b.dataset.more); AIC = null; save(); renderSB(); renderScene('claude', false); });
+        // 고른 것을 못 연결했다고 사람을 가두지 않는 **하나의 문**(옛 [이대로 계속]+[나중에 할게요]를 합쳤다).
+        //  이미 이어진 AI 가 있으면 그것으로 이어 간다 — 분석은 서버가 resolveHeadlessHarness 로 고른
+        //  **실제 로그인된** 하네스로 도므로, 여기서 그걸 표시해 두는 것이 사실과 맞는다.
+        // ⚠ 갈래마다 버튼 구성이 다르다 — «연결됐어요» 화면엔 이 문이 없다. 무조건 잡으면 bind 가 그 자리에서
+        //  throw 하고, 그 뒤에 배선이 더 붙는 날 그것들이 통째로 조용히 안 걸린다.
+        const skip = $('[data-skip]', el);
+        if (skip) skip.onclick = () => {
+          const o = (AIC && AIC.others || [])[0];
+          if (!S.aiConnected && o) mark(AI_LABEL[o] || o, o);
+          goScene('sources');
+        };
+        //  «이 자리에 그 AI 가 없다» 갈래에만 뜬다 — 여기서 쓸 수 있는 AI 로 갈아타는 길.
+        //   AIC 를 비워 두면 고르는 화면에서 무엇을 고르든 판정을 새로 묻는다(낡은 답이 안 남는다).
         const other = $('[data-other]', el);
         if (other) other.onclick = () => { AIC = null; goScene('ai'); };
-        // ⚠ 갈래마다 버튼 구성이 다르다 — «연결됐어요» 화면엔 [나중에]가 없다. 무조건 잡으면 bind 가 그 자리에서
-        //  throw 하고, 그 뒤에 배선이 더 붙는 날 그것들이 통째로 조용히 안 걸린다(지금은 마지막 줄이라 안 드러났다).
-        const skip = $('[data-skip]', el);
-        if (skip) skip.onclick = () => goScene('sources');
       },
     },
     /* 노션 p4(데스크톱 앱 유도)와 같은 자리 — 우리는 터미널 질문 */
@@ -2044,6 +2400,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //  #2232 — [응용 프로그램]·[승인] 같은 대괄호 표기는 화면에서 못생겼다(원준님 2026-08-28) → 누를 것은 키캡(ob-kbd)으로,
         //   «앱 받기» 는 글 안에서도 **진짜 버튼**으로(눌러도 받아진다). 문장 사이 하이픈(—)도 걷었다.
         const getBtn = '<button type="button" class="ob-btn ob-btn-sub ob-btn-inline ob-btn-mini" data-get>앱 받기</button>';
+        //  #2255 — 고른 AI 가 이 컴퓨터에 없으면 **설치까지** 여기서 끝난다. 그 사실을 이름을 불러 말한다.
+        //   («어떤 AI 를 쓰세요» 에 답한 사람에게 그 답이 어디로 갔는지 보여 주는 자리이기도 하다.)
+        //   값이 없거나 '아직 없어요' 를 고른 사람에겐 아무 말도 하지 않는다 — 안 깔아도 될 것을 예고하지 않는다.
+        const aiNote = S.aiHarness
+          ? `<p class="ob-ins-n">이 컴퓨터에 <b>${esc(S.ai)}</b>${josa(S.ai, 0)} 없으면 <b>같이 깔아 드립니다</b>. 무엇을 어디서 받는지 보여 드리고 동의를 먼저 받아요. 나중에 <code>lively uninstall</code> 로 라이블리를 지워도 ${esc(S.ai)}${josa(S.ai, 2)} 그대로 남습니다.</p>`
+          : '';
         const step1 = win
           ? `아래 ${getBtn} 를 누르면 <b>Lively-Setup.exe</b> 가 내려받아져요. 내려받은 파일을 두 번 눌러 설치하세요.`
           : os === 'mac'
@@ -2061,6 +2423,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               <div class="ob-ins" data-n="2">
                 <b class="ob-ins-t">앱이 물어보는 대로 ${kbd('승인')} 한 번</b>
                 <p class="ob-ins-p">앱을 열면 설치 도우미가 뜹니다. 브라우저에 <b>라이블리 승인</b> 창이 열리면 ${kbd('승인')}을 누르세요. 그게 전부예요.</p>
+                ${aiNote}
               </div>
               <div class="ob-ins" data-n="3">
                 <b class="ob-ins-t">끝나면 이 한 마디만</b>
@@ -2132,7 +2495,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             toast('받는 곳을 새 창으로 열었어요.');
           }
           get.textContent = '계속';
-          get.onclick = () => goScene('read');   // 앱을 받았으면 «앱 받기» 장면은 건너뛴다 — 같은 걸 두 번 권하지 않는다
+          get.onclick = () => void finishOnboarding();   // 앱을 받았으면 «앱 받기» 장면은 건너뛴다 — 바로 마무리(#1631 챗 제거)
         };
         get.onclick = doGet;
         $$('[data-get]', el).forEach((b) => b.onclick = (e) => { e.preventDefault(); doGet(); });
@@ -2169,10 +2532,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
             toast('받는 곳을 새 창으로 열었어요.');
           }
           //  #2232 — 받기를 눌렀다고 곧장 다음으로 넘기지 않는다(원준님 2026-08-28). 받았으면 [계속]을 눌러 넘어간다.
-          get.textContent = '계속'; get.onclick = () => goScene('read');
+          get.textContent = '계속'; get.onclick = () => void finishOnboarding();
           if (sk) sk.hidden = true;
         };
-        sk.onclick = () => { S.app = 'web'; save(); goScene('read'); };
+        sk.onclick = () => { S.app = 'web'; save(); void finishOnboarding(); };
       },
     },
   };
@@ -2181,6 +2544,64 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   let seqToken = 0;
   function msgLiv(html) { const el = document.createElement('div'); el.className = 'ob-msg'; el.innerHTML = `<span class="ob-ava">L</span><div class="ob-body">${html}</div>`; $('#thread').appendChild(el); keepChipsLast(); scrollChat(); return el; }
   function msgUser(text) { const el = document.createElement('div'); el.className = 'ob-msg ob-user'; el.innerHTML = `<div class="ob-body">${esc(text)}</div>`; $('#thread').appendChild(el); keepChipsLast(); scrollChat(); return el; }
+  /**
+   * 온보딩 마무리 — **여기가 실제로 워크스페이스를 바꾸는 자리다**(종전엔 localStorage 표식 하나가 전부였다).
+   *
+   *  ★ 2026-08-31(원준님) — 종전엔 이 자리에 닿으려면 리브와 챗봇처럼 다섯 문답(서랍 승인 · 주기 문서 ·
+   *   팀 공유 · 시간 쓰는 일 · 예시)을 거쳐야 했다. *"쓸데없이 … 거기 없애버려줘."* 그래서 [앱] 장면이
+   *   여기로 바로 온다. 문답에서만 나오던 값(cadence·share·nowline·first_order)은 **없는 채로 보낸다** —
+   *   지어내지 않는다. 서랍도 보내지 않는다: 승인받은 적 없는 분류를 조용히 만들면 «물어보지도 않고
+   *   나눠 놨다» 가 되고, 그건 문답을 없앤 이유와 정확히 반대다.
+   *  ⚠ 서랍이 없어도 자료는 안 굶는다 — 어느 레인에도 안 걸리는 자료는 폴백이 받는다(#632).
+   */
+  async function finishOnboarding() {
+    S.scene = 'done'; save(); renderSB();
+    //  ⚠ 챗을 걷어냈으므로 `#thread` 가 없다 — msgLiv 를 쓰면 그 자리에서 죽는다.
+    //   지금 서 있는 장면(#qcol)에 그대로 말한다. 그 칸도 없으면 토스트로 떨어진다(사람을 말없이 두지 않는다).
+    const col = $('#qcol');
+    const say = (html) => {
+      if (col) col.innerHTML = `<div class="ob-q"><div class="ob-ava">L</div><p class="ob-q-sub">${html}</p></div>`;
+      else toast(String(html).replace(/<[^>]+>/g, ''));
+    };
+    say('정리하고 있어요.');
+    let applied = null;
+    try {
+      applied = await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({
+        name: S.nameSet ? S.name : null,
+        stage: S.stage || null,
+        job: S.job || null,
+        drawers: [],
+        cadence: null,
+        share: null,
+        nowline: null,
+        first_order: null,
+      }) });
+    } catch (e) {
+      // 반영이 실패했으면 **끝났다고 말하지 않는다** — 다음에 다시 물을 수 있게 표식도 남기지 않는다.
+      say(`정리하다 막혔어요 — ${esc(e && e.message ? e.message : '알 수 없는 오류')}<p style="margin-top:6px">홈에서 이어서 하실 수 있습니다.</p>`);
+      await sleep(1200); location.hash = '#/'; return;
+    }
+    try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
+    try { if (state.me) (state.me as { welcome_pending?: boolean }).welcome_pending = false; } catch (_) {}   // 홈의 «이어서 하기» 줄을 내린다(#2232)
+    ctx.onGhost && ctx.onGhost(false);   // 끝났다 — 셸을 돌려준다
+    //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 늦게 도착한 push 하나가 자리표를 되살리면 다음 로그인이 다시 온보딩으로 간다.
+    pushOff = true; clearTimeout(pushT); pushT = null;
+    ctx.onDone && ctx.onDone();
+    // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다. 못 열었으면 사유를 말하고 홈으로.
+    const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
+    const noAi = !livHref && applied && applied.liv && applied.liv.reason === 'ai-not-connected';
+    const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.'
+      : noAi ? 'AI 를 아직 연결하지 않으셔서 리브는 지금 열지 않았어요 — 답을 못 하는 창이 되니까요. 왼쪽 [외부 앱 연결]에서 AI 를 이으면 리브가 이어서 정리해 드립니다. 워크스페이스로 모시겠습니다.'
+      : '워크스페이스로 모시겠습니다.';
+    //  읽는 동안 쌓인 사실(등록 못 한 파일 등)을 **여기서** 말한다 — 챗을 걷어내면서 말할 자리가
+    //   여기 하나 남았다. 조용히 삼키면 8개 올린 사람이 5건만 들어간 걸 모른 채 끝난다.
+    const notes = (S.notes || []).filter(Boolean);
+    say(`정리했어요. ${where}`
+      + (notes.length ? `<p style="margin-top:10px">${notes.join('<br>')}</p>` : ''));
+    await sleep(notes.length ? 3200 : 1400);
+    location.hash = livHref || '#/';
+  }
+
   function chipsRow(items) {
     const el = document.createElement('div'); el.className = 'ob-chips';
     const list = items.map(({ label, cta, ghost, cb }) => {
@@ -2245,10 +2666,50 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  지금은 올린 자료를 서버가 몇 건 받았는지 폴링하고, 다 받았으면 끝난 것으로 본다.
    *  올린 게 하나도 없으면 읽을 것도 없다 — 기다리게 하지 않고 곧바로 끝낸다.
    */
+  //  ── 읽기 진행률의 축 ────────────────────────────────────────────────────────────────
+  //  서버가 세는 것은 **자료로 등록된 수**(countSources)다. 그러니 화면의 목표도 같은 축이어야 한다.
+  //  올라간 수(upN)와는 다른 수다 — 압축·동영상·사진 원본처럼 본문을 못 읽는 형식과 «.» 으로 시작하는 파일은
+  //  올라가되 등록되지 않는다(ingest/local-file-core.ts 의 SKIP_EXT·dotfile). 둘을 같은 것으로 보면
+  //  «오지 않는 것» 을 기다린다 — 실측 11/13(원준님 2026-08-31)·5/8(재현).
+  //  ⚠ upIn 이 **없는 것**(그 필드가 생기기 전의 옛 진행)과 **0 인 것**(하나도 등록 안 됨)은 다르다.
+  //   0 을 폴백하면 다시 오지 않는 것을 기다리게 되므로, null/undefined 일 때만 upN 으로 떨어진다.
+  function ingestedN() { return S.upIn == null ? (S.upN || 0) : S.upIn; }
+  //  등록 실패 사유를 사람 말로. 서버가 준 것(skipped)만 옮기고, 모르면 아무 말도 하지 않는다.
+  function failWhy(fails) {
+    const ws = fails.map((f) => (typeof f === 'string' ? null : f && f.why)).filter(Boolean);
+    if (!ws.length) return '';
+    const has = (re) => ws.some((w) => re.test(String(w)));
+    if (has(/^ext:/) && !has(/dotfile/)) return ' — 압축·동영상·사진 원본처럼 본문을 읽을 수 없는 형식이에요';
+    if (has(/dotfile/) && !has(/^ext:/)) return ' — «.» 으로 시작하는 숨김 파일이에요(맥에서 폴더를 끌어다 놓으면 .DS_Store 가 함께 옵니다)';
+    if (has(/^ext:/) || has(/dotfile/)) return ' — 본문을 읽을 수 없는 형식이거나 «.» 으로 시작하는 숨김 파일이에요';
+    if (has(/repo/)) return ' — 코드 저장소 안의 파일이에요';
+    return '';
+  }
+
+  //  올렸는데 **자료로 안 들어간** 파일을 사실대로 말한다(#1631). 종전엔 화면에서 조용히 사라져서,
+  //   8개를 올린 사람이 5건만 정리된 것을 모른 채 넘어갔다. 사유는 서버가 준 것만 옮긴다 — 지어내지 않는다.
+  //  ★ 2026-08-31 챗을 걷어내면서 **말할 자리를 옮겼다.** 종전엔 msgLiv 로 대화창(#thread)에 썼는데,
+  //   그 칸은 챗 단계에서만 보인다 — 챗이 없어진 지금 거기 쓰면 **아무도 못 보는 글**이 된다.
+  //   그래서 S.notes 에 담아 두고 **마무리 화면**이 말한다(사람이 실제로 읽는 마지막 자리).
+  function noteFail() {
+    const fails = (S.upFail || []).filter(Boolean);
+    if (!fails.length || S._saidFail) return;
+    S._saidFail = true;
+    const names = fails.slice(0, 3).map((f) => esc(typeof f === 'string' ? f : f.n)).join(', ');
+    const more = fails.length > 3 ? ` 외 ${fails.length - 3}건` : '';
+    const why = failWhy(fails);
+    S.notes.push(`파일 <b>${fails.length}건</b>(${names}${more})은 자료로 넣지 못했어요${why}.`
+      + ` 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`);
+    save();
+  }
+
   function startReading() {
     if (S.read.finished) return;
     clearInterval(readTimer);
-    const target = () => Math.max(S.upN || 0, S.read.total || 0);
+    //  목표는 **자료로 등록된 수**(ingestedN)다 — 서버가 세는 축과 같아야 만난다.
+    //  read.total 도 같은 축에서 쓰지만(업로드 루프·enterChat), 장면 건너뛰기(?scene=)로 들어온 경우엔
+    //  거기서 실측/연출 수가 들어오므로 그 값도 함께 본다.
+    const target = () => Math.max(ingestedN(), S.read.total || 0);
     const paint = () => {
       const tot = Math.max(1, target());
       const p = Math.min(1, S.read.done / tot);
@@ -2260,7 +2721,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       clearInterval(readTimer); readTimer = null; paint(); renderSB();
       document.dispatchEvent(new Event('read-done'));
     };
-    if (!target()) { finish(); return; }                 // 올린 자료 0건 — 기다릴 것이 없다
+    if (!target()) { finish(); noteFail(); return; }      // 등록된 자료 0건 — 기다릴 것이 없다(올린 게 있었다면 사유를 말한다)
+    //  ⚠ **상한을 둔다.** 종전엔 완료 조건에서만 멈춰서, 등록이 하나라도 빠지면 영원히 돌았다(실측 11/13).
+    //   바로 옆 분석 단계엔 상한이 있는데(ANALYZE_TIMEOUT_MS) 여기만 없었다. 넘기면 **사실대로 말하고** 넘어간다 —
+    //   온보딩 한복판에서 사람을 무한정 세워 두지 않는다.
+    const READ_MAX_MS = 60000;
+    const readStarted = Date.now();
     readTimer = setInterval(async () => {
       const w = await loadWelcome();
       const got = (w && w.uploads && w.uploads.total) || 0;
@@ -2270,52 +2736,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
       const sub = $('#sb .v2-ss .sub'); if (sub && /^자료 읽는 중/.test(sub.textContent)) sub.textContent = `자료 읽는 중 ${S.read.done}/${S.read.total}`;
       paint(); save();
-      if (S.read.done >= target()) finish();
+      if (S.read.done >= target()) { finish(); noteFail(); return; }
+      if (Date.now() - readStarted > READ_MAX_MS) {
+        const left = Math.max(0, target() - S.read.done);
+        finish(); noteFail();
+        if (left) { S.notes.push(`자료 <b>${left}건</b>은 아직 정리에 안 들어왔어요 — 그 파일들은 [맥락 관리]에서 다시 올리시면 됩니다.`); save(); }
+      }
     }, 1500);
   }
 
-  /**
-   * 올린 자료를 **실제로 AI 에게 보여** 갈래를 받아 온다(#1813).
-   *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 헤드리스 세션이 도는 것이 유일한 길이라,
-   *  AI 를 아직 안 이었으면 여기서 실패한다 — **감추지 않고 이유를 돌려준다**(화면은 실제 집계로 내려앉는다).
-   *  기다림에 상한을 둔다: 온보딩 한복판에서 사람을 무한정 세워 둘 수는 없다.
+  /*  올린 자료를 AI 에게 보여 갈래(서랍)를 받아 오던 analyzeUploads 는 2026-08-31 제거했다(#1631).
+   *  그 결과를 쓰던 곳이 챗 문답(b1 «자료함을 이렇게 나눠 둘까요?») 하나뿐이었는데 그 문답을 없앴다.
+   *  남겨 두면 아무도 안 보는 결과를 위해 **그 사람 AI 구독으로 헤드리스 세션이 매번 돌아** 비용만 나간다.
    */
-  const ANALYZE_TIMEOUT_MS = 75000;
-  async function analyzeUploads(token) {
-    // AI 가 안 이어졌으면 **묻지도 않는다.** 서버도 402 로 막지만, 여기서 먼저 접으면 헛왕복이 없고
-    //  사람이 기다리는 시간도 없다. 판정은 서버가 준 값이다(ai_ready — 실제로 리스가 붙는지로 잰 것).
-    if (WS && WS.ai_ready === false) {
-      return { drawers: null, why: 'AI 를 아직 연결하지 않으셔서, 파일 종류로 나눈 결과예요.' };
-    }
-    let started;
-    try {
-      started = await api('/api/ui/me/welcome/analyze', { method: 'POST', body: JSON.stringify({ job: S.job || null }) });
-    } catch (e) {
-      const m = e && e.message ? String(e.message) : '';
-      return { drawers: null, why: /402|50[0-9]|잇지 않으|연결하지 않으|시작하지 못/.test(m) ? 'AI 를 아직 연결하지 않으셔서, 파일 종류로 나눈 결과예요.' : '' };
-    }
-    const id = started && started.turn_id;
-    if (!id) return { drawers: null, why: '' };
-    const until = Date.now() + ANALYZE_TIMEOUT_MS;
-    let from = 0;
-    while (Date.now() < until) {
-      if (token !== seqToken) return { drawers: null, why: '' };
-      await sleep(2000);
-      let r;
-      try { r = await api(`/api/ui/me/welcome/analyze/${encodeURIComponent(id)}?from=${from}`); } catch (_) { continue; }
-      if (typeof r.next === 'number') from = r.next;
-      if (!r.done) continue;
-      if (r.drawers && r.drawers.length) return { drawers: r.drawers, why: '' };
-      return { drawers: null, why: 'AI 판정을 읽지 못해서, 파일 종류로 나눈 결과예요.' };
-    }
-    return { drawers: null, why: 'AI 가 아직 답하지 않아서, 파일 종류로 나눈 결과를 먼저 보여 드려요.' };
-  }
 
-  /* 하는 일(무대·직무)을 **고른 즉시** 남긴다 (#1813).
-   *  이 값은 매 세션 개인 층으로 주입된다(publish.ts renderLivOnboarding → 「### 온보딩에서 알려주신 것」).
-   *  ⚠ 종전엔 마무리(POST /api/ui/me/welcome)에서만 저장돼서, 중간에 나간 사람은 답을 해 놓고도
-   *   AI 가 그걸 모른 채 일했다 — 이름과 같은 구조의 결함이었다(원준님 실측 2026-08-26).
-   *  실패해도 진행은 막지 않는다(마무리에서 한 번 더 보낸다). */
   const STAGE_TEXT = { company: '회사·조직에서 팀과 함께 일한다', solo: '1인·프리랜서로 여러 일을 한다',
     academy: '학교·연구실에서 연구한다', student: '학생으로 수업·시험·진로를 준비한다' };
   function saveWork() {
@@ -2338,6 +2772,12 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   const AI_JOSA = { Claude: ['가', '를', '는'], ChatGPT: ['가', '를', '는'], Gemini: ['가', '를', '는'], Grok: ['이', '을', '은'] };
   const josa = (word, i) => (AI_JOSA[word] || ['이(가)', '을(를)', '은(는)'])[i];
   const aiHarness = () => AI_HARNESS[S.ai] || 'claude';
+  /** 고른 AI 를 상태에 남긴다 — 라벨(S.ai)과 **하네스 id**(S.aiHarness)를 함께.
+   *  ⚠ id 를 따로 남기는 이유(#2255): 이 값을 읽는 쪽이 `lively install`(터미널)이라 라벨을 못 읽는다.
+   *   라벨→id 표(AI_HARNESS)를 CLI 에도 두면 사본이 둘이 되고, 어긋나는 순간 «제미나이를 골랐는데
+   *   claude 가 깔리는» 상태가 된다. 표는 여기 하나만 두고 **결과만** 실어 보낸다.
+   *  ⚠ '아직 없어요' 는 고른 게 아니다 — aiHarness() 의 claude 폴백을 여기 쓰면 안 깔아도 될 것을 깐다. */
+  const setAi = (label: string) => { S.ai = label; S.aiHarness = AI_HARNESS[label] || ''; };
   /** 고른 AI 하나에 대한 마지막 판정(POST /api/ui/me/ai-accounts/check).
    *  null = 아직 안 물어봤다 — 화면은 «확인 중» 으로 살고, 없는 답을 지어내지 않는다. */
   let AIC = null;
@@ -2368,10 +2808,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *  ⚠ 여기 적은 화면 문구(«Login successful» 등)는 그 회사가 바꿀 수 있다 — 그래서 «같은 말» 로 느슨하게 적었다. */
   const DEVICE_NOTE = '왜 주소와 코드냐면: 그 창은 우리 서버에서 돌아서 로그인 페이지를 스스로 못 열어요. 그래서 주소는 사람이 열고, 코드를 넣어 «이 창이 내 것» 이라고 알려 주는 방식이에요.';
   //  #2232 원준님 실측 — 창은 검지 않을 수도 있고(밝은 테마), 사람은 CLI 조작법(↑↓·Enter)을 모를 수 있다. «터미널 창» 으로 부르고 조작법을 한 줄 준다.
-  const CLI_NOTE = '터미널 창 조작: 글자만 있는 창이에요. 고르는 화면에선 <b>↑ ↓</b> 로 옮기고 <b>Enter</b> 로 확정, 붙여넣기는 <b>⌘V</b>(윈도우 Ctrl+V), 창 안 글자는 마우스로 끌어 복사할 수 있어요.';
+  const CLI_NOTE = '터미널 조작: 글자만 있는 칸이에요(이 화면 안에 떠요). 고르는 화면에선 <b>↑ ↓</b> 로 옮기고 <b>Enter</b> 로 확정, 붙여넣기는 <b>⌘V</b>(윈도우 Ctrl+V), 그 안 글자는 마우스로 끌어 복사할 수 있어요.';
   //  claude 는 codex 와 달리 **코드를 되받는다** — 왜 입력칸이 있는지 한 줄로 말해 준다.
   const PASTE_NOTE = '왜 코드를 다시 넣냐면: 로그인은 브라우저에서 끝나고, 그 결과를 우리 서버에서 도는 Claude 에게 전해 줘야 하기 때문이에요. 브라우저가 준 코드가 그 전달표입니다.';
-  const cp = (t) => `<code class="ob-copy" data-copy="${esc(t)}" title="누르면 복사돼요">${esc(t)}</code>`;
   //  버튼은 이 글 **위**에 있다(qHead 다음 줄) — «아래» 라고 쓰면 사람이 아래를 뒤진다(원준님 실측 2026-08-28).
   //  #2232 원준님(2026-08-28, 안 1) — 기본 노출은 **사람이 손을 대는 3걸음**만. Enter 로 넘기기만 하는 화면(글자 스타일·로그인 방법·
   //   보안 안내·폴더 신뢰…)은 `between` 한 문장으로 «정상이니 넘기세요» 만 말하고, 궁금한 사람만 그 자리에서 펼친다(`detail`,
@@ -2421,11 +2860,11 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
       ],
       note: '' },
     antigravity: {
-      help: '로그인 창에서 직접 하실 일은 세 가지뿐이에요.',
+      help: '이 자리에 뜨는 터미널에서 직접 하실 일은 세 가지뿐이에요.',
       steps: [
-        `위의 ${kbd('Gemini 로그인 창 열기')}를 누르면 새 탭에 <b>Antigravity</b>(Gemini 를 쓰는 CLI)가 켜진 터미널 창이 열려요.`,
-        `창의 <b>→ Click here to authenticate</b> 를 누르면(안 눌리면 그 줄의 주소를 복사해 브라우저에 붙여 여세요) Google 로그인 화면이 떠요 — Google 계정으로 로그인하고 허용을 누르세요. 코드를 물으면 브라우저에 나온 코드를 창에 붙여넣고 Enter.`,
-        `창에 글을 치는 입력칸(<b>&gt;</b> 표시, 오른쪽 아래에 <b>Gemini …</b> 모델 이름)이 뜨면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}.`,
+        `위의 ${kbd('Gemini 로그인 시작')}을 누르면 <b>이 자리에</b> <b>Antigravity</b>(Gemini 를 쓰는 CLI)가 켜진 터미널이 떠요 — 이 화면을 벗어나지 않아요.`,
+        `그 터미널의 <b>→ Click here to authenticate</b> 를 누르면(안 눌리면 그 줄의 주소를 복사해 브라우저에 붙여 여세요) Google 로그인 화면이 떠요 — Google 계정으로 로그인하고 허용을 누르세요. 코드를 물으면 브라우저에 나온 코드를 그 터미널에 붙여넣고 Enter.`,
+        `그 터미널에 글을 치는 입력칸(<b>&gt;</b> 표시, 오른쪽 아래에 <b>Gemini …</b> 모델 이름)이 뜨면 바로 아래 ${kbd('로그인했어요')}.`,
       ],
       //  #2232 원준님 실측 — 로그인 방법 → (인증) → 색 테마 → 사용 정보 동의 → 폴더 신뢰. 여기까지 지나야 입력칸이 나온다.
       between: `그 사이에 <b>로그인 방법 · 색 테마 · 사용 정보 동의 · 폴더 신뢰</b>를 묻는 화면이 나와요. 기본값 그대로 <b>Enter</b> 로 넘기면 됩니다(동의는 선택이에요 — 끄고 싶으면 펼쳐 보세요).`,
@@ -2437,140 +2876,146 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         `<b>Do you trust the contents of this project?</b>(이 폴더를 믿나요) — <b>Yes, I trust this folder</b> 앞에 «&gt;» 가 있는 채로 Enter. 라이블리가 만든 작업 폴더라 괜찮습니다.`,
       ],
       note: CLI_NOTE },
+    //  grok 도 이 자리에서 끝난다(#2477, 2026-08-31). 실측으로 codex 와 **출력 모양이 같다** —
+    //   `grok login --device-auth` 가 주소(accounts.x.ai)와 `CWWP-W2NG` 꼴 코드를 찍고 기다린다.
+    //   그래서 종전처럼 창을 열어 명령을 붙여넣게 할 이유가 없어졌다.
     grok: {
-      help: '로그인 창에서 직접 하실 일은 세 가지뿐이에요. 쳐야 할 글자는 누르면 복사돼요.',
+      help: '직접 하실 일은 세 가지뿐이에요. 코드는 눌러서 복사돼요.',
       steps: [
-        `위의 ${kbd('Grok 로그인 창 열기')}를 누르면 새 탭에 터미널 창이 열려요. 그 창을 한 번 누른 뒤 ${cp('grok login --device-auth')} 를 붙여넣고 Enter.`,
-        `창에 뜬 <b>주소</b>를 열고 <b>짧은 코드</b>를 입력한 뒤 X(xAI) 계정으로 로그인하세요.`,
-        `창에 로그인이 끝났다고 나오면 이 화면으로 돌아와 아래 ${kbd('로그인했어요')}.`,
+        `위의 ${kbd('Grok 로그인 시작')}을 누르면 이 자리에 <b>주소</b>와 <b>짧은 코드</b>가 나와요.`,
+        `주소를 열고 그 코드를 입력한 뒤, X(xAI) 계정으로 로그인하세요.`,
+        `이 자리에 «로그인이 끝났어요» 가 뜨면 아래 ${kbd('로그인했어요')}.`,
       ],
       between: '', more: '왜 주소와 코드냐면', detail: [DEVICE_NOTE],
-      note: CLI_NOTE },
+      note: '' },
   };
   const LOGIN_SESSION = { claude: { harness: 'claude' }, codex: { harness: 'shell', loginFor: 'codex' }, antigravity: { harness: 'antigravity' }, grok: { harness: 'shell', loginFor: 'grok' } };
   /* 화면에서 바로 로그인이 되는 하네스(#2055 후속, 2026-08-28) — 서버가 로그인 명령을 대신 돌리고 주소·코드만 준다.
      · codex  `codex login --device-auth` → 주소 + 일회용 코드. 되돌려 줄 입력이 없다.
      · claude `claude auth login`        → 주소를 주고 **코드를 되받는다**(브라우저의 «Paste this code back…»).
+     · grok   `grok login --device-auth`  → codex 와 같은 모양(주소 + 코드). 실측 2026-08-31, #2477.
      그 밖(agy·grok)은 비대화형 한 줄이 아예 없어(catalog.harnessLoginArgv 머리말) 종전 «로그인 창» 그대로다.
      ⚠ claude 는 로그인과 별개로 **첫 실행 설정**(글자 스타일·보안 안내·폴더 신뢰)을 TUI 에서 묻는다. 로그인만
      이 자리로 빼면 그 물음은 없어지는 게 아니라 **첫 세션으로 미뤄진다** — 그래서 안내 마지막 줄에 그대로 적는다.
      대신 답해 두지 않는 이유는 «이 폴더를 믿나요» 가 사람이 할 보안 판단이라서다(미리 눌러 주면 그 판단을 뺏는다).
      판정·파싱의 정본은 서버 ai-login-flow.ts 다 — 여기서 형식을 다시 짐작하지 않는다. */
-  const LOGIN_INLINE = { codex: true, claude: true };
+  //  ⚠ 목록은 **공용 한 벌**을 그대로 쓴다(lib/ai-login-inline). 여기 사본을 두면 [내 AI 계정]과 갈린다.
+  const LOGIN_INLINE = AI_LOGIN_INLINE;
 
   /* 터미널 없이 로그인 — 서버가 명령을 멤버 자리에서 돌리고, 여기서는 주소·코드만 보여 준다(#2055 후속).
      ⚠ «막다른 카드» 를 만들지 않는다: 시작조차 못 하면 종전 «로그인 창» 경로로 정직하게 내려간다.
      ⚠ 완료 판정은 서버의 **자격 확인**이 한다(프로세스가 끝난 것과 로그인 성공은 다르다). */
-  let inlineStop = false;
+  let inlineHandle: InlineLoginHandle | null = null;
   async function startInlineLogin(el, h, label, restart) {
-    const card = $('#cCard', el); if (!card) return;
-    inlineStop = false;
-    card.hidden = false;
-    //  #2232 원준님 2026-08-30 — 시작 버튼은 **누른 순간 사라진다.** 종전엔 로그인이 끝난 뒤에도
-    //   «Claude 로그인 시작» 이 위에 남아 있어 «끝났는데 왜 시작 버튼이?» 가 됐다. 이 아래 카드가 그 자리를 대신한다.
-    //   (탈출로가 필요하면 escape() 가 자기 버튼을 따로 그린다.)
-    const startBtn = $('#cTerm', el); if (startBtn) startBtn.hidden = true;
-    /** 로그인이 끝나면 «하는 방법» 은 더 이상 할 일이 아니다 — 걸음표·펼침·조작법을 걷는다. */
-    const hideHowto = () => {
-      for (const sel of ['#cTerm', '.ob-tok > ol', '.ob-between', '#cDetail', '.ob-fine2']) {
-        const n = $(sel, el); if (n) n.hidden = true;
-      }
+    //  안 1(#2232) — 이 함수는 이제 **스테퍼를 채우기만** 한다. 종전엔 카드(replaceChildren)를 통째로 갈아치웠고,
+    //   상태 조회가 30초 끊기면 «주소가 오지 않았어요» 탈출로가 화면을 덮어 **받은 주소·치던 코드까지 지웠다**
+    //   (원준님 실측 2026-08-31: 앤트로픽에서 돌아오니 다 사라짐 — 그날 게이트웨이 출렁임이 그 30초를 만들었다).
+    //   이제 지우는 코드 경로가 없다: 주소·코드는 도착하면 채워질 뿐이고, 실패·정체는 **잔글씨 한 줄**로만 말한다.
+    inlineHandle?.stop();
+    const addr = $('#lgAddr', el), open = $('#lgOpen', el);
+    if (!addr) return;                                  // 스테퍼가 없는 화면(연결됨 등) — 할 일 없음
+    const codeChip = $('#lgCodeChip', el), codeEl = $('#lgCode', el), codeEcho = $('#lgCodeEcho', el);
+    const inp = $('#lgIn', el), put = $('#lgPut', el), wait = $('#lgWait', el);
+    const ok = $('#lgOk', el), fbBtn = $('#lgFb', el), fbNote = $('#lgFbNote', el);
+    const lgMark = (n, cls) => { const st = $('#lg' + n, el); if (!st) return;
+      st.classList.remove('now', 'idle', 'done'); if (cls) st.classList.add(cls);
+      const sn = st.querySelector('.ob-lg-n'); if (sn) sn.textContent = cls === 'done' ? '✓' : String(n); };
+    const note = (t) => { if (fbNote) fbNote.textContent = t ? ` — ${t}` : ''; };
+    if (fbBtn) fbBtn.onclick = () => { void openLoginWindow(h, label); note('창을 열었어요. 이 화면은 그대로예요.'); };
+    // 열기를 누르면 걸음이 전진한다(사람의 진행 감각 — 서버는 브라우저 안 일을 모른다).
+    if (open) open.onclick = () => { lgMark(1, 'done'); lgMark(2, 'now'); lgMark(3, ''); if (inp) setTimeout(() => inp.focus(), 100); if (wait) wait.hidden = false; };
+    if (codeChip && codeEl) codeChip.onclick = async () => {
+      try { await navigator.clipboard.writeText(codeEl.textContent || ''); } catch (_) { toast(codeEl.textContent || ''); }
+      const sm = codeChip.querySelector('small'); if (sm) { sm.textContent = '복사했어요 ✓'; setTimeout(() => { sm.textContent = '누르면 복사'; }, 1600); }
     };
-    const say = (...nodes) => { card.replaceChildren(...nodes); };
-    const line = (cls, text) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; };
-    const copyRow = (k, v, href) => {
-      const row = document.createElement('div'); row.className = 'ob-login-row';
-      const key = document.createElement('span'); key.className = 'ob-login-k'; key.textContent = k;
-      const val = document.createElement('code'); val.className = 'ob-login-v'; val.textContent = v; val.title = '눌러서 복사';
-      val.onclick = async () => { try { await navigator.clipboard.writeText(v); toast('복사했어요'); } catch (_) { toast(v); } };
-      row.append(key, val);
-      if (href) { const a = document.createElement('a'); a.className = 'ob-btn ob-btn-sub ob-btn-inline'; a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = '열기'; row.append(a); }
-      return row;
-    };
-    //  ⚠ 창을 **자동으로** 열지 않는다. `await` 뒤의 window.open 은 사람이 누른 순간과 끊겨 있어 브라우저가
-    //   조용히 막는다(팝업 차단 — 오류도 안 난다). 그러면 화면엔 작은 글 한 줄뿐이라 «눌러도 반응이 없다» 가 된다.
-    //   그래서 탈출로는 **사람이 누르는 버튼**으로 준다 — 그 클릭이 곧 창을 열 자격이다.
-    const escape = (why) => {
-      const b = document.createElement('button');
-      b.className = 'ob-btn ob-btn-sub ob-btn-inline'; b.textContent = `${label} 로그인 창 열기 ↗`;
-      b.onclick = () => { void openLoginWindow(h, label); };
-      say(line('ob-note', why), b);
-    };
-    say(line('ob-fine2', '로그인 절차를 시작하는 중이에요…'));
-    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h, restart: restart === true }) }); }
-    catch (e) {
-      // 여기서 못 하면 사람을 세우지 않는다 — 종전 경로로 내려간다(원준님이 지적한 «막다른 안내» 금지).
-      escape(`여기서 바로 로그인할 수 없어요 — ${(e && e.message) || e}`);
-      return;
-    }
     let pasted = false;
-    let lastSig = '';   // 지금 카드에 그려진 상태의 지문 — 같은 내용을 다시 그리지 않기 위해(입력 중인 글자를 지우지 않는다)
-    //  주소가 안 오는 채로 버티지 않는다 — codex 는 실측 1초 안에 찍는다. 상한을 넘기면 탈출로를 준다.
-    const STALL_MS = 30000;
-    const startedAt = Date.now();
-    const tick = async () => {
-      if (inlineStop || !document.body.contains(card)) return;
-      let st = null;
-      try { st = await api(`/api/ui/me/ai-login/state?harness=${encodeURIComponent(h)}`); } catch (_) { /* 다음 틱에 */ }
-      if (!(st && st.url) && !(st && st.loggedIn === true) && !(st && st.step === 'failed') && Date.now() - startedAt > STALL_MS) {
-        inlineStop = true;
-        escape('로그인 주소가 오지 않았어요. 창으로 열어 주세요.');
-        return;
-      }
-      if (st && st.loggedIn === true) {
-        inlineStop = true;
-        hideHowto();
-        say(line('ob-ok', `${label} 로그인이 끝났어요. 아래 «로그인했어요» 를 누르시면 됩니다.`));
-        try { await api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness: h }) }); } catch (_) { /* noop */ }
-        const go = $('#cGo', el); if (go) go.focus();
-        return;
-      }
-      if (st && st.step === 'failed') {
-        const again = document.createElement('button'); again.className = 'ob-btn ob-btn-sub ob-btn-inline'; again.textContent = '다시 시도';
-        //  ⚠ 반드시 **새로** 띄운다 — 옛 프로세스가 살아 있으면 죽은 코드를 그대로 다시 보여 준다(위 restart 머리말).
-        again.onclick = () => { void startInlineLogin(el, h, label, true); };
-        say(line('ob-note', String((st && st.error) || '로그인이 실패했어요.')), again);
-        return;
-      }
-      if (st && st.url) {
-        //  ★ 같은 내용이면 **다시 그리지 않는다**(원준님 2026-08-30: "코드를 붙여넣고 조금 있으면 코드가 사라진다").
-        //   종전엔 2초 폴링이 매번 card.replaceChildren 을 불러 **사람이 입력 중이던 칸을 통째로 갈아치웠다** —
-        //   붙여넣고 2초 안에 [넣기]를 눌러야 하는 화면이 됐다. 상태가 실제로 바뀔 때만 그린다.
-        const sig = `${st.url}|${st.code || ''}|${st.needsPaste && !pasted ? 'p' : ''}`;
-        if (sig === lastSig) { setTimeout(tick, 2000); return; }
-        //  그려야 한다면 **치던 글자는 살려서** 옮긴다(코드가 늦게 도착해 한 번 더 그리는 경우).
-        const keep = (($('.ob-login-in', card) as HTMLInputElement | null) || { value: '' }).value;
-        lastSig = sig;
-        const rows = [copyRow('주소', st.url, st.url)];
-        if (st.code) rows.push(copyRow('일회용 코드', st.code));
-        rows.push(line('ob-fine2', st.code
-          ? '주소를 열고 위 코드를 넣어 주세요. 끝나면 이 자리에 «끝났어요» 가 뜹니다.'
-          : '주소를 열고 로그인해 주세요. 끝나면 이 자리에 «끝났어요» 가 뜹니다.'));
-        if (st.needsPaste && !pasted) {
-          const row = document.createElement('div'); row.className = 'ob-login-row';
-          const inp = document.createElement('input'); inp.className = 'ob-input ob-login-in'; inp.type = 'text'; inp.placeholder = '브라우저에서 받은 코드';
-          inp.value = keep;
-          //  Enter 로도 넣는다 — 붙여넣고 바로 확정하는 것이 사람의 손버릇이다.
-          inp.onkeydown = (ev) => { if ((ev as KeyboardEvent).key === 'Enter') { ev.preventDefault(); ok.click(); } };
-          const ok = document.createElement('button'); ok.className = 'ob-btn ob-btn-sub ob-btn-inline'; ok.textContent = '넣기';
-          ok.onclick = async () => {
-            const v = inp.value.trim(); if (!v) return; ok.disabled = true;
-            try {
-              await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness: h, code: v }) });
-              pasted = true; lastSig = '';   // 다음 틱은 «코드 칸 없는» 화면으로 한 번 다시 그린다
-              ok.textContent = '넣었어요'; toast('코드를 넣었어요 — 확인하는 중이에요');
-            }
-            catch (e) { toast(`코드를 넣지 못했어요 — ${(e && e.message) || e}`); ok.disabled = false; }
-          };
-          row.append(inp, ok); rows.push(row);
-        }
-        say(...rows);
-      }
-      setTimeout(tick, 2000);
-    };
-    void tick();
+    if (inp && put) {
+      const submit = async () => {
+        const v = inp.value.trim(); if (!v) { inp.focus(); return; }
+        put.disabled = true; put.textContent = '넣는 중…';
+        try {
+          if (!inlineHandle) throw new Error('아직 시작 전이에요');
+          await inlineHandle.paste(v);
+          pasted = true; put.textContent = '넣었어요'; lgMark(3, 'done'); note('');
+          toast('코드를 넣었어요 — 확인하는 중이에요');
+        } catch (e) { put.disabled = false; put.textContent = '넣기'; if (err0()) err0().textContent = `코드를 넣지 못했어요 — ${(e && e.message) || e}`; }
+      };
+      put.onclick = submit;
+      inp.onkeydown = (ev) => { if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); submit(); } };
+    }
+    const err0 = () => $('#cErr', el);
+    const retry = $('#lgRetry', el);
+    if (retry) retry.onclick = () => { if (codeEl) codeEl.textContent = ''; if (addr) addr.textContent = '새 주소와 코드를 받는 중이에요…'; if (open) open.hidden = true; if (codeChip) codeChip.hidden = true; lgMark(1, 'now'); lgMark(2, 'idle'); lgMark(3, 'idle'); void startInlineLogin(el, h, label, true); };
+    //  ★ #2477 — 주고받는 일(시작·폴링·붙여넣기·정리)은 **공용 한 벌**(lib/ai-login-inline)이 한다.
+    //   여기 남는 것은 «그 사실을 이 스테퍼에 어떻게 그리나» 뿐이다. 두 화면([내 AI 계정]도 같은 통로를
+    //   쓴다)이 각자 루프를 갖고 있으면 실측으로 얻은 처방(30초 상한·restart·완료 시 정리)이 갈린다.
+    inlineHandle = startInlineAiLogin(h, {
+      url: (u) => {
+        if (addr.dataset.url === u) return;
+        addr.dataset.url = u;
+        addr.textContent = u.replace(/^https?:\/\//, '');
+        if (open) { open.href = u; open.hidden = false; }
+        note('');
+      },
+      code: (c) => {
+        if (codeEl && codeEl.textContent !== c) { codeEl.textContent = c; if (codeChip) codeChip.hidden = false; }
+        if (codeEcho) codeEcho.textContent = c;
+      },
+      needsPaste: () => { if (inp) setTimeout(() => inp.focus(), 100); },
+      done: () => {
+        [1, 2, 3].forEach((n) => lgMark(n, 'done'));
+        if (wait) wait.hidden = true;
+        if (ok) { ok.hidden = false; const g2 = $('#lgOkGo', el); const go2 = $('#cGo', el); if (g2 && go2) g2.onclick = () => go2.click(); }
+        note('');
+      },
+      //  실패도 화면을 안 지운다 — 잔글씨 한 줄 + 상시 탈출로만.
+      failed: (m) => note(String(m) + ' — 창으로 여시거나, 잠시 뒤 다시 해 보세요.'),
+      //  ⚠ 종전의 그 30초 — 화면을 덮지 않는다. 사실만 말하고 **계속 기다린다**.
+      stalled: () => note('주소가 늦네요 — 조금 더 기다리거나, 창으로 여셔도 됩니다.'),
+    }, { restart: restart === true, alive: () => document.body.contains(addr) });
   }
-  /* 종전 «로그인 창»(새 탭) — 인라인 대상이 아닌 하네스와, 인라인이 시작조차 못 했을 때의 탈출로. */
+  /* ★ 인라인 터미널(#2477) — 로그인 «창» 을 **이 자리에** 띄운다.
+   *
+   *   왜 새 탭이 아닌가: 온보딩도 안 끝난 사람에게 탭을 하나 더 주면 «어디로 돌아오지» 가 생긴다. 데스크톱
+   *   앱에서는 아예 **새 창**이라 더 심하다(#2055 가 codex·claude 에서 걷어낸 것과 같은 문제). 다만 그 둘은
+   *   주소·코드 두 값이면 끝나 터미널이 아예 필요 없었고, agy 는 아니다 — 그래서 «터미널을 없애는» 대신
+   *   **터미널을 이 자리로 가져온다**. 하네스가 무엇을 요구하든(TUI 든 붙여넣기든) 그 자리에서 보인다.
+   *
+   *   ⚠ 세션은 **한 번만** 만든다. 다시 누르면 이미 만든 세션의 액자를 그대로 쓴다 — 누를 때마다 새로 만들면
+   *    로그인 세션이 쌓이고, 사람은 «어느 창에서 로그인한 게 맞나» 를 알 수 없게 된다.
+   *   ⚠ 액자가 안 뜨거나 좁을 때의 탈출로는 **같은 세션**을 새 탭으로 여는 길이다(새 세션이 아니다).
+   */
+  let loginTermSession: LoginTerminal | null = null;   // 이 장면에서 만든 로그인 세션(한 번만)
+  async function startInlineTerminal(el, h, label, btn) {
+    const box = $('#lgTermBox', el), frame = $('#lgTermF', el);
+    const st = $('#lgTermSt', el), out = $('#lgTermOut', el);
+    //  ⚠ 여기서 openLoginWindow 를 부르지 않는다 — 그건 `await api(...)` 뒤에 window.open 을 하므로
+    //   사람이 누른 순간과 끊겨 **팝업차단에 조용히 막힌다**(#2055 에서 실제로 밟은 결함). 대신 사실만
+    //   말하고, 나가는 길은 하단의 **사람이 누르는** 상시 탈출로가 맡는다.
+    if (!box || !frame) { toast('이 자리에 터미널을 못 띄웠어요 — 아래 [창으로 열어서 로그인] 을 눌러 주세요.'); return; }
+    box.hidden = false;
+    const was = btn && btn.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
+    try {
+      //  ⚠ 세션은 **한 번만** 만든다(공용 함수가 그 규약을 진다) — 누를 때마다 만들면 로그인 세션이 쌓이고,
+      //   사람은 «어느 창에서 로그인한 게 맞나» 를 알 수 없게 된다.
+      loginTermSession = await ensureLoginTerminal(h, label, loginTermSession, LOGIN_SESSION[h] || { harness: h });
+      //  embed=1 — 상단바·파일 탐색기가 빠진 «터미널만» 판(#1744). 카드 안에 그대로 맞는다.
+      const src = loginTerminalSrc(loginTermSession);
+      if (frame.getAttribute('src') !== src) frame.setAttribute('src', src);
+      if (st) st.textContent = `${label} 로그인 창 — 이 자리에서 하시면 됩니다.`;
+      //  탈출로는 **같은 세션**을 크게 여는 것뿐이다(새 세션 금지 — 두 자리에서 로그인하게 된다).
+      if (out) { out.href = loginTerminalPopoutUrl(loginTermSession); out.hidden = false; }
+      if (btn) { btn.textContent = '터미널이 아래에 있어요'; }
+    } catch (e) {
+      //  막다른 액자를 만들지 않는다 — 세션을 못 만들었으면 그렇게 말하고 나갈 길을 남긴다.
+      if (st) st.textContent = `이 자리에 못 띄웠어요 — ${(e && e.message) || e}`;
+      if (out) { out.href = location.pathname + '?solo=1#/terminal'; out.hidden = false; out.textContent = 'AI 세션 목록에서 열기 ↗'; }
+      if (btn) { btn.disabled = false; btn.textContent = was; }
+    }
+  }
+
+  /* 종전 «로그인 창»(새 탭) — 인라인 카드·인라인 터미널이 시작조차 못 했을 때의 마지막 탈출로. */
   async function openLoginWindow(h, label) {
     const out: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
       label: `내 계정 로그인 (${label})`, rootKey: 'personal', subpath: '', flags: {}, autoApprove: false, loginProfile: true,
@@ -2581,188 +3026,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     toast('새 탭에 로그인 창을 열었어요. 거기서 로그인을 마치고 돌아오세요.');
   }
 
-  const CHAT_STEPS = ['b1', 'b2', 'b3', 'nowline', 'can'];
-  async function chatStep(step, token) {
-    if (token !== seqToken) return;
-    const doneStep = (s) => { if (!S.chatDone.includes(s)) S.chatDone.push(s); save(); renderSB(); };
-    if (step === 'b1') {
-      await sleep(400);
-      await loadWelcome();
-      const total = realTotal();
-      if (!total) {
-        // 올린 자료가 없으면 셀 것도 없다. 없는 숫자를 지어내지 않는다.
-        msgLiv(`올려 주신 자료가 아직 없어서 자료함은 나중에 나누겠습니다. 홈에서 파일을 올리시면 그때 제가 갈래를 잡아 드릴게요.`);
-        await sleep(200); doneStep('b1'); chatStep('b2', token); return;
-      }
-      // ① 먼저 **실제로 센 것**을 보여 준다. AI 가 없어도 이 숫자는 진짜다.
-      //  ⚠ 총계(realTotal)는 **이 워크스페이스 전체**다 — 자료에 사람 축이 없어서(source 는 author='connector:local'
-      //   까지만 안다) «누가 올렸나» 로 못 가른다. 그래서 팀 워크스페이스에 새로 들어온 사람에게 «○○님이 올려 주신
-      //   자료 2,274건» 이라고 말했다(실제로 올린 건 5건 — 실측 2026-08-31). 남이 모아 둔 것을 그 사람 것이라고
-      //   부르는 셈이라, 첫 대면에서 제품이 사실이 아닌 말을 한다.
-      //  → 이번에 올린 수(S.upN)를 아는 화면이므로 **말을 가른다**: 그 수만 «올려 주신» 이라 부르고, 나머지는
-      //   «이 워크스페이스에 쌓여 있는» 이라고 정직하게 말한다. 세는 대상은 그대로다(갈래는 전체를 보고 잡는 게 맞다).
-      const mine = S.upN || 0;
-      const lead = mine > 0 && total > mine
-        ? `${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 <b>${mine}건</b>을 포함해, 이 워크스페이스에 쌓여 있는 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`
-        : mine > 0
-          ? `${esc(nick() || '')}${nick() ? '님이 ' : ''}올려 주신 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`
-          : `이 워크스페이스에 쌓여 있는 자료 <b>${total}건</b>을 종류별로 세어 봤어요.`;
-      const bubble = msgLiv(`${lead}
-        <div class="ob-tags" data-tags>${realKinds().map((k) => `<span class="ob-tag">${esc(k.name)} <b>${k.n}</b></span>`).join('')}</div>
-        <p style="margin-top:8px" data-note>AI 가 파일을 훑어보고 더 나은 갈래를 제안하는 중이에요.</p>`);
-      // ② 그 위에 **진짜 LLM 판정**을 얹는다. 실패하면 ①이 그대로 답이 된다(감추지 않고 이유를 적는다).
-      let drawers = realKinds().map((k) => ({ name: k.name, n: k.n }));
-      const llm = await analyzeUploads(token);
-      if (token !== seqToken) return;
-      const note = $('[data-note]', bubble);
-      if (llm.drawers && llm.drawers.length) {
-        drawers = llm.drawers;
-        $('[data-tags]', bubble).innerHTML = drawers.map((d) => `<span class="ob-tag">${esc(d.name)}</span>`).join('');
-        note.innerHTML = `<b>자료함을 이렇게 나눠 둘까요?</b> 파일을 훑어보고 정한 갈래예요. 이대로 서랍을 만들어 두면 다음부터 새 자료가 알아서 제자리로 들어갑니다.`;
-      } else {
-        note.innerHTML = `<b>자료함을 이렇게 나눠 둘까요?</b> 옆의 숫자는 그 종류로 본 자료 수예요.`
-          + (llm.why ? `<br><span style="color:var(--muted)">${esc(llm.why)}</span>` : '');
-      }
-      S.drawers = drawers;
-      await sleep(200);
-      const approve = (l) => { msgUser(l); S.drawersOn = true; S.decisions.push(`자료함 ${S.drawers.length}갈래로 나눔`); doneStep('b1'); renderSB(); enableLocalDistiller(); chatStep('b2', token); };
-      chipsRow([
-        { label: '네, 이대로 나눠 주세요', cta: true, cb: approve },
-        { label: '빠진 종류가 있어요', cb: (l) => { msgUser(l);
-            msgLiv('어떤 종류인가요? 아래 입력창에 적어 주세요. 서랍을 하나 더 만들어 둘게요.');
-            armCompose('예: 고객 인터뷰', (v) => { S.drawers = [...(S.drawers || []), { name: v }]; S.drawersOn = true;
-              S.decisions.push(`갈래 추가: ${v}`); doneStep('b1'); renderSB(); enableLocalDistiller();
-              msgLiv(`<b>${esc(v)}</b> 서랍을 더해 뒀어요.`); chatStep('b2', token); }); } },
-      ]);
-    }
-    if (step === 'b2') {
-      await sleep(600);
-      // 관찰은 **실제 파일 이름에서 본 것만** 말한다. 못 봤으면 관찰을 지어내지 않고 그냥 묻는다.
-      const forms = (WS && WS.uploads && WS.uploads.forms) || [];   // 서버가 실제 파일 이름에서 본 것
-      const seen = forms.length
-        ? `같은 꼴 이름이 여러 개 보여요. ${forms.slice(0, 2).map((g) => `<b>${esc(g.names[0])}</b> 같은 것 ${g.names.length}개`).join(', ')}요.`
-        : '';
-      msgLiv(`${seen}<p style="margin-top:${seen ? '6px' : '0'}"><b>정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?</b> 주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.</p>`);
-      await sleep(300);
-      const pickB2 = (id, label) => { msgUser(label); S.b2 = id; if (id !== 'no') S.decisions.push(id === 'month' ? '매달 반복 작업으로 봄' : '매주 반복 작업으로 봄'); doneStep('b2'); chatStep('b3', token); };
-      chipsRow([
-        { label: '네, 매달', cb: () => pickB2('month', '네, 매달') },
-        { label: '네, 매주', cb: () => pickB2('week', '네, 매주') },
-        { label: '아니요', ghost: true, cb: () => pickB2('no', '아니요') },
-      ]);
-    }
-    if (step === 'b3') {
-      await sleep(600);
-      // 종전엔 "문서에 같은 이름이 반복해서 나와요"라고 했는데, 우리는 문서 **안**을 아직 안 읽었다.
-      //  근거 없는 관찰을 앞세우지 않고 묻기만 한다.
-      msgLiv(`<b>이 자료를 같이 보는 팀이 있나요?</b><p style="margin-top:6px">있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.</p>`);
-      await sleep(300);
-      const pickB3 = (id, label, dec) => { msgUser(label); S.b3 = id; S.decisions.push(dec); doneStep('b3'); renderSB(); chatStep('nowline', token); };
-      chipsRow([
-        { label: '나만 봐요', cb: () => pickB3('me', '나만 봐요', '나만 보는 자료로 봄') },
-        { label: '우리 팀이 같이 봐요', cb: () => pickB3('team', '우리 팀이 같이 봐요', '팀과 함께 보는 자료로 봄') },
-        { label: '회사의 여러 부서와 나눠요', cb: () => pickB3('dept', '회사의 여러 부서와 나눠요', '여러 부서와 나누는 자료로 봄') },
-        { label: '고객·외부에 냅니다', cb: () => pickB3('ext', '고객·외부에 냅니다', '고객·외부로 나가는 자료로 봄') },
-      ]);
-    }
-    if (step === 'nowline') {
-      await sleep(600);
-      msgLiv(`마지막 하나예요.<p style="margin-top:6px"><b>평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?</b> 한 주를 놓고 볼 때 제일 자주, 제일 오래 붙잡고 계신 일이요. 여기부터 제가 손을 보탭니다.</p>`);
-      await sleep(300);
-      const pickNow = (label) => { msgUser(label); S.nowline = label; S.decisions.push(`시간을 가장 많이 쓰는 일: ${label}`); doneStep('nowline'); waitRead(token); };
-      chipsRow(DATA.NOW_KINDS.map((t) => ({ label: t, cb: () => pickNow(t) }))
-        .concat([{ label: '직접 적을게요', ghost: true, cb: () => {
-          msgUser('직접 적을게요');
-          msgLiv('아래 입력창에 한 줄로 적어 주세요.'); /* [새문구] */
-          armCompose('예: 매주 실적 자료 만드는 일', (v) => { S.nowline = v; S.decisions.push(`시간을 가장 많이 쓰는 일: ${v}`); doneStep('nowline'); waitRead(token); });
-        } }, { label: '지금은 건너뛰기', ghost: true, cb: () => { msgUser('지금은 건너뛰기'); doneStep('nowline'); waitRead(token); } }]));
-    }
-    if (step === 'can') {
-      await sleep(500);
-      const C = canOf();
-      const readN = realTotal();
-      msgLiv(`${readN ? `자료 <b>${readN}건</b>을 다 읽었어요.` : '준비됐어요.'}${S.nowline ? ` <b>${esc(S.nowline)}</b>에 시간을 제일 많이 쓰신다고 하셨죠.` : (nick() ? ` ${esc(nick())}님이 하시는 일이라면,` : '')}
-        <p style="margin-top:6px"><b>이런 것까지 저한테 맡기실 수 있어요.</b> 보통은 몇 번씩 왔다 갔다 해야 하는 일이에요. 여기서는 한 문장이면 됩니다.</p>
-        <div class="ob-excard" data-ex="0"><div class="ob-xt">“${esc(C[0][0])}”</div><div class="ob-xd"><b>보통은</b> ${esc(C[0][1])}</div></div>
-        <div class="ob-excard" data-ex="1"><div class="ob-xt">“${esc(C[1][1])}”</div><div class="ob-xd"><b>${esc(C[1][0])} 쪽도</b> 이런 것까지 이어서 물으실 수 있어요.</div></div>`);
-      $$('.ob-excard').forEach((c) => c.onclick = () => {
-        if (c.dataset.taken) return; c.dataset.taken = '1';
-        const t = $('.ob-xt', c).textContent.replace(/^“|”$/g, '');
-        msgUser(t);
-        S.firstOrder = t; S.decisions.push(`첫 지시: ${t.slice(0, 40)}…`); save(); renderSB();
-        // ⚠ 종전엔 "세션을 하나 열어 뒀어요. 왼쪽에 보이죠?" 라고 했는데 **세션을 만들지 않았다**.
-        //  적어 두는 것은 실제로 한다(마무리에서 프로필의 결정으로 남는다) — 그 사실만 말한다.
-        msgLiv('적어 뒀어요. 정리가 끝나면 홈에서 이 문장으로 바로 시작하실 수 있어요. 다 됐으면 아래 <b>준비 끝, 정리해 주세요</b>를 눌러 주세요.');
-      });
-      await sleep(400);
-      chipsRow([{ label: '준비 끝, 정리해 주세요', cta: true, cb: async (l) => {
-        msgUser(l); doneStep('can'); S.scene = 'done'; save(); renderSB();
-        // ★ 여기가 온보딩이 **실제로 워크스페이스를 바꾸는** 자리다. 종전엔 localStorage 표식 하나가 전부였다.
-        const m = msgLiv('정리하고 있어요.');
-        let applied = null;
-        try {
-          applied = await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({
-            name: S.nameSet ? S.name : null,
-            stage: S.stage || null,
-            job: S.job || null,
-            drawers: (S.drawers || []).map((d) => ({ name: d.name, why: d.why || null })),
-            cadence: S.b2 || null,
-            share: S.b3 || null,
-            nowline: S.nowline || null,
-            first_order: S.firstOrder || null,
-          }) });
-        } catch (e) {
-          // 반영이 실패했으면 **끝났다고 말하지 않는다** — 다음에 다시 물을 수 있게 표식도 남기지 않는다.
-          m.querySelector('.ob-body').innerHTML = `정리하다 막혔어요 — ${esc(e && e.message ? e.message : '알 수 없는 오류')}<p style="margin-top:6px">홈에서 이어서 하실 수 있습니다.</p>`;
-          await sleep(1200); location.hash = '#/'; return;
-        }
-        try { localStorage.setItem(DONE_KEY, '1'); } catch (e) {}
-        try { if (state.me) (state.me as { welcome_pending?: boolean }).welcome_pending = false; } catch (_) {}   // 홈의 «이어서 하기» 줄을 내린다(#2232)
-        ctx.onGhost && ctx.onGhost(false);   // 끝났다 — 셸을 돌려준다(막3 → 워크스페이스)
-        //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 서버 쪽 자리표는 반영이 지웠다 —
-        //   여기서 늦게 도착한 push 하나가 그걸 되살리면 다음 로그인이 다시 온보딩으로 간다.
-        pushOff = true; clearTimeout(pushT); pushT = null;
-        ctx.onDone && ctx.onDone();
-        const made = (applied && applied.created) || [];
-        // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다 — 리브가 1턴에서 현황을 읽어 주고 있다.
-        //  못 열었으면(AI 미로그인 등) 종전처럼 홈으로. 사유는 응답(liv.error)에 있지만 여기서 사람을 붙들지 않는다.
-        const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
-        const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.' : '워크스페이스로 모시겠습니다.';
-        m.querySelector('.ob-body').innerHTML = made.length
-          ? `정리했어요. 자료함에 <b>${made.map((x) => esc(x)).join(' · ')}</b> 서랍을 만들어 뒀습니다. ${where}`
-          : `정리했어요. ${where}`;
-        scrollChat();
-        await sleep(1100);
-        location.hash = livHref || '#/';
-      } }]);
-      fineRow('지금 시키지 않으셔도 됩니다. 홈에서 언제든 그대로 말씀하시면 돼요.');
-    }
-  }
+  /* ── 리브와의 챗봇 문답(막3) — 2026-08-31 제거 ──────────────────────────────────
+   *  원준님: *"쓸데없이 중간에 연결 끝나고 앱 나온 다음에 리브랑 챗봇처럼 대화하는 부분 …
+   *   리브가 막 자료 분류해놓고, 매주 하는거 있냐고 물어보고 그러는 부분. 거기 없애버려줘."*
+   *  걷어낸 것: CHAT_STEPS(b1 서랍승인 · b2 주기문서 · b3 팀공유 · nowline · can 예시) ·
+   *   chatStep · waitRead · enterChat · replayChatTo. [앱] 다음은 finishOnboarding() 으로 곧장 간다.
+   *  ⚠ 서랍(자료 분류)도 함께 사라졌다 — 승인받은 적 없는 분류를 조용히 만들면 문답을 없앤 이유와
+   *   정확히 반대가 된다. 자료는 안 굶는다: 어느 레인에도 안 걸리면 폴백이 받는다(#632).
+   */
 
-  function waitRead(token) {
-    if (S.read.finished) { chatStep('can', token); return; }
-    const m = msgLiv(`<div class="ob-readline"><span>자료를 읽고 있어요.</span><span class="ob-readbar"><i></i></span><span id="readN">${S.read.done} / ${S.read.total}</span></div>`); /* [새문구] 읽기+사이드바 연결 */
-    readBarEl = $('.ob-readbar i', m); readNEl = $('#readN', m);
-    readBarEl.style.width = Math.round(100 * S.read.done / Math.max(1, S.read.total)) + '%';
-    document.addEventListener('read-done', () => { setTimeout(() => chatStep('can', token), 400); }, { once: true });
-  }
-
-  /* 채팅 시작(read 장면) — 노션 p5의 첫 인사에 대응 */
-  async function enterChat(token) {
-    setStage('stage-chat');
-    $('#thread').innerHTML = '';
-    await loadWelcome();
-    S.read.total = Math.max(S.upN || 0, 0);
-    startReading();
-    await sleep(300);
-    const n = S.read.total;
-    msgLiv(`${nick() ? esc(nick()) + '님, ' : ''}연결까지 끝났어요.`
-      + (n ? `<p style="margin-top:6px">지금 자료 <b>${n}건</b>을 읽고 있어요. 읽는 동안 몇 가지만 확인할게요.</p>`
-           : `<p style="margin-top:6px">몇 가지만 확인하고 바로 시작할게요.</p>`));
-    chatStep('b1', token);
-  }
-
-  /* ══════════════ 장면 전환 ══════════════ */
   function renderScene(key, animate) {
     const sc = SCENES[key];
     if (!sc) return;
@@ -2815,6 +3087,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   }
   addEventListener('popstate', onPop);
   function goScene(key, opts) {
+    tokOpen = null; scopePick = null; cnOk = false; cnErr = ''; cnWaiting = false;   // 장면을 떠나면 연결 모달도 닫는다(유령 모달 방지, #2232)
     if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) {
       S.trail.push(S.scene);
       // 브라우저·셸의 «뒤로» 도 이 안에서 한 걸음 물러나게 한다(원준님 2026-08-26: "뒤로가기 누르니까 그냥 메인홈으로 가지네").
@@ -2825,56 +3098,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     }
     S.scene = key; save(); renderSB();
     seqToken++;
-    if (STEP_OF[key] >= CHAT_FROM) {
-      S.trail = []; save();
-      replayChatTo(key, seqToken);
-    } else {
-      renderScene(key, true);
-    }
+    renderScene(key, true);   // 챗 단계가 없어졌다(#1631) — 모든 장면이 같은 길로 그려진다
     syncBack();
-  }
-
-  /* 채팅 단계로 점프·복원 — 앞 단계 문답을 압축해 깔아 놓고 그 단계부터 산다 */
-  function replayChatTo(key, token) {
-    setStage('stage-chat');
-    $('#thread').innerHTML = '';
-    // 막2 답이 비어 있으면 기본값으로 채움 (장면 점프용)
-    //  ⚠ **검토용 점프(?scene=)에서만 지어낸다**(#2207). 실제로 이어 여는 사람에게 쓰면, 이름을 건너뛴
-    //   사람이 갑자기 '원준' 으로 불리고 고른 적 없는 앱이 골라진 것으로 뜬다 — 그 사람의 답이 아니다.
-    //   중립 폴백(`||`)은 둘 다 쓴다: 없는 것을 주장하지 않고 화면이 깨지지만 않게 하는 값이라서다.
-    if (demoJump && !S.nameSet) { S.name = '원준'; S.nameSet = true; }
-    S.stage = S.stage || 'company'; S.job = S.job || stageOf().opts[1][0];
-    if (demoJump && !S.sources.length) S.sources = ['gdrive', 'notion'];
-    if (!S.connected.length) S.connected = S.sources.filter((x) => x !== 'none');
-    // ⚠ 여기서 **S.aiConnected 를 지어내지 않는다**(#1879). 종전엔 `S.ai !== '아직 없어요'` 로 무조건
-    //  덮어썼는데, 그건 `||` 폴백이 아니라 **대입**이라 AI 잇기를 건너뛴 사람도 채팅 단계에 닿는 순간
-    //  참이 됐다. 그 뒤 AI 화면으로 돌아가면 «이어졌어요 · 로그인이 확인됐어요» 라고 말한다 — 서버는
-    //  그런 적이 없다. #1813 이 걷어낸 «900ms 뒤 무조건 연결됐어요» 와 같은 모양의 잔재였다.
-    //  이음 여부는 서버가 답한다(ai-accounts/check) — 화면이 채워 넣을 값이 아니다.
-    //  나머지 둘은 사람의 '답'이라 점프용 기본값이 성립한다(중립값으로 채운다 — 없는 연결을 주장하지 않는다).
-    S.ai = S.ai || 'Claude';
-    S.terminal = S.terminal || 'no'; S.app = S.app || 'web';
-    //  읽고 있는 자료 수 — 이어 여는 사람에게는 **실측**을 쓴다(41 은 검토용 연출 숫자다).
-    if (!S.read.total) S.read.total = demoJump ? 41 : realTotal();
-    const past = [];
-    const target = key === 'read' ? 'b1' : key;
-    const upto = CHAT_STEPS.indexOf(target);
-    if (key !== 'read' && upto > 0) {
-      // 지나간 단계들을 요약 문답으로 재생
-      if (upto > CHAT_STEPS.indexOf('b1')) { past.push([`자료함을 이렇게 나눠 둘까요?`, '네, 이대로 나눠 주세요']); S.drawersOn = true; }
-      if (upto > CHAT_STEPS.indexOf('b2')) past.push([`정해진 주기로 만드시거나 만들고 싶으신 문서가 있나요?`, S.b2 === 'week' ? '네, 매주' : S.b2 === 'no' ? '아니요' : '네, 매달']);
-      if (upto > CHAT_STEPS.indexOf('b3')) past.push([`같이 보는 팀이 있나요?`, S.b3 === 'me' ? '나만 봐요' : '우리 팀이 같이 봐요']), S.b3 = S.b3 || 'team';
-      if (upto > CHAT_STEPS.indexOf('nowline')) { S.nowline = S.nowline || DATA.NOW_KINDS[2]; past.push([`평소에 시간을 가장 많이 쓰시는 일은 무엇인가요?`, S.nowline]); }
-      Object.assign(S.read, { done: S.read.total, finished: true });
-      // 장면 건너뛰기(?scene=)로 중간에 들어온 경우에도 사이드바 숫자는 **실측**을 쓴다 —
-      //  여기만 상수 목표치를 쓰면 같은 화면이 두 가지 숫자를 말한다.
-      S._counts = {}; realKinds().forEach((k) => { S._counts[k.name] = k.n || ''; });
-    }
-    save(); renderSB();
-    if (key === 'read') { enterChat(token); return; }
-    past.forEach(([q, a]) => { msgLiv(`<b>${esc(q)}</b>`); msgUser(a); });
-    if (!S.read.finished) startReading();
-    chatStep(target, token);
   }
 
   /* ── 이어서 열기 (#2207) ───────────────────────────────────────────────────
@@ -2885,8 +3110,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     if (!p || !p.state || typeof p.state !== 'object') return null;
     if (STEP_OF[p.scene] != null) return p.scene;
     //  'done' 은 차례표에 없다 — 마무리(반영)를 누른 뒤 그게 실패했거나 끊긴 자리다. 답은 다 받아 놨으니
-    //   맨 앞이 아니라 **마지막 채팅 단계**로 되돌려 «준비 끝, 정리해 주세요» 를 다시 누르게 한다.
-    if (Array.isArray(p.state.chatDone) && p.state.chatDone.length) return 'can';
+    //   맨 앞이 아니라 **마지막 장면**으로 되돌려 마무리를 다시 누르게 한다.
+    //   ⚠ 종전엔 'can'(챗 마지막 문답)이었다 — 그 장면은 없어졌다(#1631, 챗 제거).
+    if (p.scene === 'done') return 'app';
     return null;
   }
   /** 서버에 남은 자리로 화면을 연다. 못 물으면 처음부터 — 온보딩이 **안 열리는** 것보다 낫다. */

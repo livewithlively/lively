@@ -22,6 +22,7 @@ import { isSlackOAuthKind, buildSlackAuthorizeUrl, exchangeSlackCode, slackInsta
 import { isNotionPublicServer, buildNotionAuthorizeUrl, exchangeNotionCode, parseNotionTokenResponse, refreshNotionToken, notionInstallToSlot, NOTION_PUBLIC_KIND, NOTION_PUBLIC_SERVER, type NotionInstall } from "./notion-oauth.js";
 import {
   isGithubAppServer, buildGithubAuthorizeUrl, githubInstallUrl, exchangeGithubCode,
+  parseGithubTokenResponse,
   GITHUB_APP_KIND, GITHUB_APP_KEY_SCOPE, GITHUB_APP_SERVER, GITHUB_INSTALL_KIND, type GithubUserTokens,
 } from "./github-app.js";
 import { resolveGoogleOAuthClient, googleVaultReader } from "./google-token-source.js";
@@ -598,6 +599,39 @@ async function finishLinearAppConsent(p: StatePayload, code: string, actor?: str
   const tokens = await exchangeLinearCode({ clientId: client.client_id, clientSecret: client.client_secret, code, redirectUri: await callbackUrl(), fetchFn: await gatewaySsrfFetch() });
   await saveLinearAppInstall(p.m, tokens, actor);
 }
+/**
+ * 릴레이 완료(#2243 G) — CP 가 GitHub 과 교환한 토큰 응답 원문 + 설치 id. state 검증·귀속은 여기서.
+ *
+ *  ⚠ 슬랙·노션·Linear 와 다른 점: GitHub 은 **토큰과 설치가 서로 다른 것**이다.
+ *   · 토큰(user token) → 그 사람 금고(github_pat). 도구 호출·자료 가져오기가 이걸 쓴다.
+ *   · 설치(installation_id) → 조직 슬롯. «어느 저장소가 열렸나»가 여기서 나온다(clone·기본 범위).
+ *  둘 중 하나만 와도 온 것만 저장한다 — 사람이 설치만 하고 인가를 건너뛰거나 그 반대일 수 있다.
+ *  파싱·판정은 직결 경로와 **같은 함수**(parseGithubTokenResponse)를 쓴다. 두 경로가 갈리면 조용히 어긋난다.
+ */
+export async function completeGithubAppInstall(
+  stateToken: string, tokenResponse: unknown, installationId: string | null, actor?: string,
+): Promise<{ ok: true; memberId: string; saved: { token: boolean; installation: boolean } }> {
+  const p = verifyState(stateToken);
+  if (!isGithubAppServer(p.s)) throw new Error("이 state 는 GitHub 연결이 아닙니다");
+  let token = false;
+  if (tokenResponse && typeof tokenResponse === "object") {
+    const t = parseGithubTokenResponse(tokenResponse);   // 실패(HTTP 200 + {error})는 여기서 던진다
+    const bundle: OAuthTokens = {
+      access_token: t.access_token, token_type: t.token_type,
+      ...(t.expires_in !== undefined ? { expires_in: t.expires_in } : {}),
+      ...(t.refresh_token ? { refresh_token: t.refresh_token } : {}),
+      ...(t.scope !== undefined ? { scope: t.scope } : {}),
+    };
+    await setMemberSecret(memberOwner(p.m), "github_pat", "",
+      { secret: encodeTokenBlob(bundle), meta: tokenMeta(bundle) }, actor ?? "cp-relay");
+    token = true;
+  }
+  const inst = String(installationId ?? "").trim();
+  if (inst) await saveGithubInstallation(inst, p.m, actor ?? "cp-relay");
+  if (!token && !inst) throw new Error("토큰도 설치 id 도 없습니다 — 저장할 것이 없습니다");
+  return { ok: true, memberId: p.m, saved: { token, installation: !!inst } };
+}
+
 /** 릴레이 완료(#2247) — CP 가 Linear 와 교환한 토큰 응답 원문. state 검증·귀속은 여기서. */
 export async function completeLinearAppInstall(stateToken: string, tokenResponse: unknown, actor?: string): Promise<{ ok: true; memberId: string }> {
   const p = verifyState(stateToken);

@@ -18,6 +18,7 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { HOOK_SCRIPTS, SETUP_FILES } from "../setup/kit-manifest.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import {
   HARNESS, HARNESS_IDS, resolveHarness, isKnownHarness,
   harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher, allToolNames, mcpToolName,
@@ -68,7 +69,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
 
 // ── B. 표 완전성(S2) — 엣지 E5·E6 ────────────────────────────────────────────────
 {
-  const REQUIRED = ["id", "label", "bin", "home", "configFile", "configFormat", "wiring", "assets", "tools", "mcp", "autoApprove", "contextEnvelope", "reloadAssets", "events"];
+  const REQUIRED = ["id", "label", "bin", "home", "configFile", "configFormat", "wiring", "assets", "tools", "mcp", "autoApprove", "contextEnvelope", "reloadAssets", "events", "install"];
   const KINDS = ["skill", "subagent", "command"];
   const TOOL_GROUPS = ["edit", "shell", "read", "skill", "mcp", "mcpMatcher"];
   const holes = [];
@@ -82,6 +83,22 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
       for (const k of ["root", "dir", "ext", "compose"]) if (s[k] === undefined) holes.push(`${id}.assets.${kind}.${k}`);
     }
     for (const g of TOOL_GROUPS) if (h.tools?.[g] === undefined) holes.push(`${id}.tools.${g}`);
+    // 설치 축(#2255) — **두 OS 가 다 답해야** 한다. 「윈도우 칸을 안 적었다」가 곧 「윈도우 사람은 손으로 깔아라」였고
+    //  그게 이 축을 만든 이유다. 못 하면 못 한다고 적어야(cmd:null) '안 적음'과 구분된다.
+    if (h.install === undefined) holes.push(`${id}.install`);
+    else {
+      if (!h.install.docs) holes.push(`${id}.install.docs`);
+      for (const os of ["posix", "win"]) {
+        const spec = h.install[os];
+        if (spec === undefined) { holes.push(`${id}.install.${os}`); continue; }
+        if (spec === null) continue;                        // 명시적 "이 OS 엔 없다"
+        if (!spec.cmd) { holes.push(`${id}.install.${os}.cmd`); continue; }
+        if (!spec.shell) holes.push(`${id}.install.${os}.shell`);
+        if (spec.wiresPath === undefined) holes.push(`${id}.install.${os}.wiresPath`);
+        if (spec.integrity === undefined) holes.push(`${id}.install.${os}.integrity`);
+        if (spec.binDir === undefined) holes.push(`${id}.install.${os}.binDir`);
+      }
+    }
     if (h.id !== id) holes.push(`${id}.id 불일치(${h.id})`);
   }
   holes.length ? bad("B1[E5·E6] 모든 하네스가 필수 축을 채움", `빠짐: ${holes.join(", ")}`)
@@ -188,7 +205,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     writeFileSync(join(DECOY, "settings.json"), DECOY_BEFORE);
 
     const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", BUNDLE],
-      { env: { ...process.env, LIVELY_HOME: HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8" });
+      { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8" });
     r.status === 0 ? ok("D1[E4] 설치기 성공") : bad("D1[E4] 설치기 성공", `exit=${r.status} ${r.stderr || r.stdout}`);
 
     // D4 — 미끼(실 프로필)는 바이트 하나 안 바뀌어야 한다. D5 — 대신 샌드박스 <HOME>/.claude/settings.json 에 배선된다.
@@ -207,7 +224,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     // ★ 핵심 — 설치된 자리에서 훅을 실제로 실행한다. import 가 안 풀리면 ERR_MODULE_NOT_FOUND 로 죽는다.
     //  토큰이 없으므로 훅은 즉시 exit 0(fail-open) 이어야 한다 — 그게 정상 동작이다.
     const h = spawnSync(process.execPath, [join(HOME, ".lively", "hooks", "sync-harness-assets.mjs")],
-      { env: { ...process.env, LIVELY_HOME: HOME, HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8", timeout: 20000 });
+      { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8", timeout: 20000 });
     if (h.status !== 0) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `exit=${h.status} ${String(h.stderr).slice(0, 300)}`);
     else if (/ERR_MODULE_NOT_FOUND|Cannot find module/.test(String(h.stderr))) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `모듈 해석 실패: ${String(h.stderr).slice(0, 300)}`);
     else ok("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨");

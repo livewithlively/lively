@@ -86,15 +86,40 @@ export function claudeConfigDir(HOME, env = process.env) {
 //  contextEnvelope      컨텍스트 주입 봉투: "raw" | "json" | "file"
 //  reloadAssets         자산 변경이 같은 세션에 반영되나
 //  events               우리 8이벤트 중 이 하네스가 지원하는 것(러너 배선 대상)
+//  install              이 하네스를 **우리가 대신 깔 때** 필요한 사실(#2255) — 아래 설치 축 주석 참조
 //
 // ※ claude·codex 값은 **현재 동작을 그대로 옮긴 것**이다(테이블화는 동작 무변경). opencode 값은 #1519 실측
 //   ([[opencode-harness-spec-1519]])에서 왔고, 아직 배선에 쓰이지 않는다(데이터만 먼저 둔다).
 
+// ── 설치 축(install) 계약 (#2255) ─────────────────────────────────────────
+// 하네스가 하나도 없는 사람에게 `lively install` 이 **대신 깔아 주기** 위한 사실. 전제는 **무인(비대화)** 이다 —
+//  사람이 [y/N] 앞에서 멈추는 경로는 자동화가 아니라 반쪽이다(그게 이 프로젝트의 출발점이었다).
+//  각 칸은 2026-08-28 에 **공급사 설치 스크립트 본문을 내려받아 읽고** 확정했다(문서가 아니라 스크립트가 근거 —
+//  실제로 antigravity 문서가 광고하는 `--skip-path`·`--skip-aliases` 는 스크립트에 없었다).
+//
+//   docs                자동 설치가 불가능한 칸의 사람용 안내 URL(폴백은 안내지 침묵이 아니다)
+//   posix / win         OS 별 한 벌. **null 이면 그 OS 엔 공급사 무인 설치 경로가 없다**(안내로 떨어진다)
+//     .cmd              인터프리터에 넘길 한 줄
+//     .shell            "sh" | "powershell" — cmd 를 어디에 넘기나
+//     .env              무인화에 필요한 환경변수(프롬프트 억제). 없으면 생략
+//     .binDir           설치 결과가 놓이는 자리 — **설치 직후 이 프로세스 PATH 에 얹어 재감지**하는 데 쓴다
+//     .wiresPath        설치기가 스스로 영속 PATH(셸 rc · Windows User PATH)에 심는가.
+//                        false 면 **우리가 심어야 한다** — 안 그러면 깔아 준 것이 그 창에서만 보인다(#2172 ④).
+//     .integrity        설치기 자신의 무결성 검증 — "sha256"|"sha512"|null. 동의 화면이 이걸 정직하게 말한다.
+//                        ⚠ null 은 결함이 아니라 **공급사의 선택**이고, 우리가 대신 검증할 방법이 없다는 뜻이다.
+//     .requires         이 경로가 먼저 있어야 하는 다른 바이너리(예: npm). 없으면 생략
 export const HARNESS = {
   claude: {
     id: "claude",
     label: "Claude Code",
     bin: "claude",
+    // 설치(#2255) — 공식 네이티브 설치기. POSIX 는 rc 를 **안 건드린다**(claude 설치기가 사용자에게 떠넘긴다)
+    //  → wiresPath:false 라 우리가 심는다(#2172 ④ `PATH: local-bin` 블록). Windows 는 `claude install` 이 User PATH 를 잡는다.
+    install: {
+      docs: "https://code.claude.com/docs/setup",
+      posix: { cmd: "curl -fsSL https://claude.ai/install.sh | bash", shell: "sh", binDir: (HOME) => j(HOME, ".local", "bin"), wiresPath: false, integrity: "sha256" },
+      win: { cmd: "irm https://claude.ai/install.ps1 | iex", shell: "powershell", binDir: (HOME) => j(HOME, ".local", "bin"), wiresPath: true, integrity: "sha256" },
+    },
     // CLAUDE_CONFIG_DIR = 프로필별 계정 격리(#346). 없으면 <HOME>/.claude. LIVELY_HOME 샌드박스 밖의 값은 무시(claudeConfigDir 참조).
     home: (HOME, env = process.env) => claudeConfigDir(HOME, env),
     configFile: (home) => j(home, "settings.json"),
@@ -126,6 +151,14 @@ export const HARNESS = {
     id: "codex",
     label: "Codex",
     bin: "codex",
+    // 설치(#2255) — ⚠ **이 표에서 유일하게 프롬프트가 있는 설치기다**: 끝에서 `Start Codex now?` 를,
+    //  brew/npm 판이 이미 있으면 `Uninstall the existing …?` 를 묻는다(/dev/tty 우선). CODEX_NON_INTERACTIVE=1
+    //  이 그걸 끈다 — 이 env 없이 부르면 무인 설치가 아니다. 윈도우 자리는 %LOCALAPPDATA%\\Programs\\OpenAI\\Codex\\bin.
+    install: {
+      docs: "https://developers.openai.com/codex/cli/",
+      posix: { cmd: "curl -fsSL https://chatgpt.com/codex/install.sh | sh", shell: "sh", env: { CODEX_NON_INTERACTIVE: "1" }, binDir: (HOME) => j(HOME, ".local", "bin"), wiresPath: true, integrity: "sha256" },
+      win: { cmd: "irm https://chatgpt.com/codex/install.ps1 | iex", shell: "powershell", env: { CODEX_NON_INTERACTIVE: "1" }, binDir: (HOME, env = process.env) => j(env.LOCALAPPDATA || j(HOME, "AppData", "Local"), "Programs", "OpenAI", "Codex", "bin"), wiresPath: true, integrity: "sha256" },
+    },
     home: (HOME) => j(HOME, ".codex"),
     configFile: (home) => j(home, "config.toml"),
     configFormat: "toml",
@@ -164,6 +197,14 @@ export const HARNESS = {
     id: "opencode",
     label: "OpenCode",
     bin: "opencode",
+    // 설치(#2255) — ⚠ **윈도우 공식 셸 설치기가 없다**(opencode.ai/install.ps1·.cmd 둘 다 404 실측).
+    //  공급사가 제시하는 윈도우 경로는 npm·choco·scoop 뿐이고, 그중 우리가 전제할 수 있는 건 npm 하나다
+    //  (부트스트랩이 Node 를 확보하므로 — #355). 그래서 윈도우만 형태가 다르다. 무결성 검증은 양쪽 다 없다.
+    install: {
+      docs: "https://opencode.ai/docs/",
+      posix: { cmd: "curl -fsSL https://opencode.ai/install | bash", shell: "sh", binDir: (HOME) => j(HOME, ".opencode", "bin"), wiresPath: true, integrity: null },
+      win: { cmd: "npm install -g opencode-ai", shell: "powershell", requires: "npm", binDir: null, wiresPath: true, integrity: null },
+    },
     // ⚠ `~/.opencode/` 가 아니다 — XDG 규약. 실측(번들 소스): `XDG_CONFIG_HOME || homedir()/.config` + 앱이름,
     //  그리고 이 계산은 **플랫폼 무관**이다(Windows 에서도 APPDATA 가 아니라 `%USERPROFILE%\.config\opencode`).
     //  ⚠ XDG_CONFIG_HOME 을 설정한 사용자에게 이걸 무시하면 우리는 `~/.config/opencode` 에 쓰고 opencode 는
@@ -223,6 +264,14 @@ export const HARNESS = {
     id: "antigravity",
     label: "Antigravity CLI",
     bin: "agy",
+    // 설치(#2255) — Go 단일 바이너리(Node 불요). 이미 있으면 설치기가 **exit 0 으로 비켜선다**(자가 업데이트에 위임)
+    //  → 재호출이 안전하다. 셸 환경 구성은 내려받은 바이너리의 `agy install` 이 이어받는다.
+    //  ⚠ 공식 문서가 말하는 `--skip-path`·`--skip-aliases` 는 **실제 스크립트에 없다**(-d/--dir·-h 뿐, 실측).
+    install: {
+      docs: "https://antigravity.google/docs/cli/install/",
+      posix: { cmd: "curl -fsSL https://antigravity.google/cli/install.sh | bash", shell: "sh", binDir: (HOME) => j(HOME, ".local", "bin"), wiresPath: true, integrity: "sha512" },
+      win: { cmd: "irm https://antigravity.google/cli/install.ps1 | iex", shell: "powershell", binDir: (HOME, env = process.env) => j(env.LOCALAPPDATA || j(HOME, "AppData", "Local"), "agy", "bin"), wiresPath: true, integrity: "sha512" },
+    },
     // `~/.gemini` — env 경로 오버라이드 **없음**(agy 1.1.13 실측: $HOME 만 본다. XDG 무관 — opencode 와 다르다).
     //  글로벌 커스터마이제이션 루트는 <home>/config (skills/·agents/·workflows/·plugins/·hooks.json·mcp_config.json).
     home: (HOME) => j(HOME, ".gemini"),
@@ -282,6 +331,13 @@ export const HARNESS = {
     id: "grok",
     label: "Grok Build",
     bin: "grok",
+    // 설치(#2255) — 양쪽 다 공식 설치기가 있고 PATH 도 스스로 심는다(POSIX rc · Windows User PATH).
+    //  ⚠ 무결성 검증이 없다(sh·ps1 양쪽 모두 — 실측). 동의 화면이 이 사실을 숨기지 않는다.
+    install: {
+      docs: "https://docs.x.ai/build/overview",
+      posix: { cmd: "curl -fsSL https://x.ai/cli/install.sh | bash", shell: "sh", binDir: (HOME) => j(HOME, ".grok", "bin"), wiresPath: true, integrity: null },
+      win: { cmd: "irm https://x.ai/cli/install.ps1 | iex", shell: "powershell", binDir: (HOME) => j(HOME, ".grok", "bin"), wiresPath: true, integrity: null },
+    },
     // `$GROK_HOME` > `~/.grok` — XDG 무관(1.0.3 소스 전수 grep 0건, [[grok-harness-spec-1701]] §2-1).
     //  ⚠ grok 쪽은 OnceLock 메모이즈라 프로세스 시작 전에 env 가 놓여 있어야 한다(런타임 변경 무효).
     //  ⚠ LIVELY_HOME(샌드박스 격리)이 설정되면 GROK_HOME 을 따르지 않는다 — opencode 의 XDG 와 같은 계약:
@@ -340,6 +396,33 @@ export const HARNESS = {
 
 export function harness(id) {
   return HARNESS[HARNESS_IDS.includes(id) ? id : "claude"];
+}
+
+// 설치 계획(#2255) — "이 하네스를 이 OS 에서 어떻게 깔까" 를 표에서 한 덩이로 뽑아 준다.
+//  ⚠ **harness() 를 쓰지 않는다.** 그쪽은 모르는 id 를 claude 로 폴백하는데(표 조회의 종전 규약),
+//   설치에서 그러면 오타 하나가 «남의 기계에 엉뚱한 소프트웨어를 깐다» 가 된다. 여기선 모르면 null 이다.
+//  반환: null(모르는 하네스) · { cmd: null, docs } (그 OS 엔 공급사 무인 경로 없음 → 호출부는 안내로) ·
+//        { cmd, shell, env, binDir, wiresPath, integrity, requires, … } (실행 가능)
+//  ⚠ 옵션 키는 `homeDir` 이다(`HOME` 이 아니다) — 이건 **인자**이지 자식 프로세스 env 가 아닌데,
+//   `HOME:` 리터럴은 테스트 격리 린트 R1(윈도우 격리 무효 탐지)의 신호라 오탐을 부른다. 이름으로 가른다.
+export function installPlanFor(id, { platform = process.platform, homeDir = "", env = process.env } = {}) {
+  const h = HARNESS_IDS.includes(id) ? HARNESS[id] : null;
+  if (!h) return null;
+  const base = { id: h.id, label: h.label, bin: h.bin, docs: h.install?.docs || "" };
+  const spec = h.install?.[platform === "win32" ? "win" : "posix"];
+  if (!spec || !spec.cmd) return { ...base, cmd: null };
+  return {
+    ...base,
+    cmd: spec.cmd,
+    shell: spec.shell,
+    env: spec.env || null,
+    // binDir 은 «설치 직후 이 프로세스 PATH 에 얹을 자리». null 인 칸이 정상적으로 존재한다
+    //  (윈도우 opencode = npm 전역이라 자리가 npm prefix 에 달렸다 — 우리가 단정하면 틀린다).
+    binDir: typeof spec.binDir === "function" ? spec.binDir(homeDir, env) : null,
+    wiresPath: !!spec.wiresPath,
+    integrity: spec.integrity ?? null,
+    requires: spec.requires || null,
+  };
 }
 
 // 자산 배치 — sync-harness-assets.placement() 가 쓰던 분기를 대체한다.

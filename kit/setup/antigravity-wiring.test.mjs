@@ -12,6 +12,7 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SANDBOX = mkdtempSync(join(tmpdir(), "agy-wiring-test-"));
@@ -75,7 +76,7 @@ function freshHome({ settings = null, userPlugin = null } = {}) {
 }
 function install() {
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "antigravity", "--clone-root", BUNDLE],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`설치기 exit=${r.status}\n${r.stderr || r.stdout}`);
   return `${r.stdout}${r.stderr}`;
 }
@@ -84,7 +85,7 @@ function uninstall({ dry = false, member = false } = {}) {
     ? [join(KIT, "setup", "user-uninstall.mjs"), "--harness", "antigravity", "--yes"]
     : [join(KIT, "adapters", "antigravity", "uninstall.mjs")];
   if (dry) args.push("--dry-run");
-  const r = spawnSync(process.execPath, args, { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+  const r = spawnSync(process.execPath, args, { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   return `${r.stdout}${r.stderr}`;
 }
 
@@ -228,7 +229,7 @@ install();
   makeBundle({ withAdapter: false });
   freshHome();
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "antigravity", "--clone-root", BUNDLE],
-    { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME }, encoding: "utf8" });
   const out = `${r.stdout}${r.stderr}`;
   (r.status !== 0 && /훅 스크립트 .*누락/.test(out) && !existsSync(PLUGIN))
     ? ok("AW10 훅 파일이 빠진 번들은 설치를 중단한다(부분 설치 금지)")

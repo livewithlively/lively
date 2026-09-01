@@ -6,6 +6,7 @@
 // 캐시 규약: 30초 TTL + 쓰기 시 즉시 무효화. 미들웨어는 핫패스라 DB 왕복을 요청마다 하지 않는다.
 //  낡음의 최악 = 방금 만든 워크스페이스가 30초(실제로는 쓰기 무효화로 0초) 안 보이는 것 — 유출이 아니라
 //  지연이다. 반대 방향(archived 가 30초 더 사는 것)도 접근 게이트가 membership 을 다시 보므로 무해.
+import { HttpError } from "../../http-error.js";
 import { itemsPool, withTx } from "../../db/client.js";
 import { SINGLE_TENANT_ID } from "../../db/tenant-column.js";
 
@@ -21,9 +22,13 @@ export interface RegistryWorkspace {
   owner_member: string;
   state: "active" | "archived";
   created_at: string;
+  /** #2188 설정 모달 — 사람이 정한 얼굴(색·글자). 비면 화면이 종전대로 파생한다(개인=내 아바타, 팀=첫 글자). */
+  face: WorkspaceFace;
 }
 
-const COLS = "id, slug, name, kind, owner_member, state, created_at";
+export interface WorkspaceFace { color?: string; char?: string }
+
+const COLS = "id, slug, name, kind, owner_member, state, created_at, face";
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
 
 export function normalizeWorkspaceSlug(raw: unknown): string {
@@ -100,6 +105,36 @@ export async function insertWorkspace(w: { id: string; slug: string; name: strin
     [w.id, w.owner]);
   invalidateRegistryCache();
   return r.rows[0] as RegistryWorkspace;
+}
+
+/**
+ * 워크스페이스 얼굴 입력 규칙(#2188) — **한 벌이다.** face 는 모든 구성원의 화면에 style 로 꽂히는 값이라,
+ *  검증이 문마다 흩어지면 느슨한 문 하나가 style 주입 통로가 된다. 색은 hex(#rgb/#rrggbb)만, 글자는
+ *  2자(코드포인트 기준 — 이모지가 안 깨지게)까지, 모르는 키는 버린다.
+ *  · undefined/null → null («바꾸지 마라» — 지우는 것과 다르다)
+ *  · {}             → {}  («지워라» — 화면이 파생값으로 돌아간다)
+ */
+export function normalizeWorkspaceFace(raw: unknown): WorkspaceFace | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "아바타 값의 모양이 올바르지 않습니다");
+  const face: WorkspaceFace = {};
+  const color = (raw as { color?: unknown }).color;
+  if (color !== undefined && color !== null && String(color).trim() !== "") {
+    const c = String(color).trim().toLowerCase();
+    if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(c)) throw new HttpError(400, "아바타 색은 #rgb 또는 #rrggbb 형식이어야 합니다");
+    face.color = c;
+  }
+  const char = (raw as { char?: unknown }).char;
+  if (char !== undefined && char !== null) {
+    const t = Array.from(String(char).trim()).slice(0, 2).join("");
+    if (t) face.char = t;
+  }
+  return face;
+}
+
+export async function updateWorkspaceFace(id: string, face: WorkspaceFace): Promise<void> {
+  await itemsPool.query(`UPDATE gw_workspace SET face=$2::jsonb, updated_at=now() WHERE id=$1`, [id, JSON.stringify(face)]);
+  invalidateRegistryCache();
 }
 
 export async function updateWorkspaceName(id: string, name: string): Promise<void> {

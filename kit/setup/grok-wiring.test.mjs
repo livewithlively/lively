@@ -12,6 +12,7 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SANDBOX = mkdtempSync(join(tmpdir(), "grok-wiring-test-"));
@@ -69,7 +70,7 @@ function freshHome({ userConfig = null, userHook = null } = {}) {
 const DECOY = join(SANDBOX, "decoy-grok-home");
 function install({ expectFail = false } = {}) {
   const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "grok", "--clone-root", BUNDLE],
-    { env: { ...process.env, LIVELY_HOME: HOME, GROK_HOME: DECOY }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, GROK_HOME: DECOY }, encoding: "utf8" });
   if (!expectFail && r.status !== 0) throw new Error(`설치기 exit=${r.status}\n${r.stderr || r.stdout}`);
   return `${r.stdout}${r.stderr}`;
 }
@@ -78,7 +79,7 @@ function uninstall({ dry = false, member = false } = {}) {
     ? [join(KIT, "setup", "user-uninstall.mjs"), "--harness", "grok", "--yes"]
     : [join(KIT, "adapters", "grok", "uninstall.mjs")];
   if (dry) args.push("--dry-run");
-  const r = spawnSync(process.execPath, args, { env: { ...process.env, LIVELY_HOME: HOME, GROK_HOME: DECOY }, encoding: "utf8" });
+  const r = spawnSync(process.execPath, args, { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, GROK_HOME: DECOY }, encoding: "utf8" });
   return `${r.stdout}${r.stderr}`;
 }
 
@@ -225,7 +226,7 @@ const USER_CFG = '[ui]\npermission_mode = "auto"\n\n[mcp_servers.mine]\ncommand 
   freshHome();
   install();
   const r = spawnSync(process.execPath, [join(KIT, "setup", "uninstall.mjs"), "--dry-run", "--harness", "grok"],
-    { env: { ...process.env, LIVELY_HOME: HOME, GROK_HOME: DECOY }, encoding: "utf8" });
+    { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, GROK_HOME: DECOY }, encoding: "utf8" });
   const out = `${r.stdout}${r.stderr}`;
   (r.status === 0 && /grok/i.test(out) && /lively-grok\.json/.test(out))
     ? ok("GW10 kit 오케스트레이터가 grok 을 감지·제거 계획에 포함(dry-run)")

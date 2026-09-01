@@ -58,6 +58,10 @@ export const SETUP_FILES = [
   "work-roots-header.mjs",  // user-install 이 import 하는 공유 상수(#270)
   "work.mjs",               // '내 컴퓨터에서 작업' 부트스트랩 — 설치기가 ~/.lively/work.mjs 로 복사
   "kit-manifest.mjs",       // 이 파일 — 설치 목록 단일 출처(user-install 이 import)
+  //  MCP 등록기(#2476) — register-clients.sh 가 부른다. 빠지면 그 셸이 «없는 파일» 을 불러 시딩이 죽는다.
+  //  ⚠ 이게 .mjs 인 이유: 종전엔 셸이 `claude mcp add` 를 불렀는데, 매니지드 중계가 나가는 컨테이너에
+  //   하네스 바이너리가 있으리라는 보장이 없어 통째로 깨졌다(2026-08-31 실측). 파일 쓰기로 내렸다.
+  "mcp-register.mjs",
 ];
 
 // kit 트리(<repo>/kit 또는 릴리스 <release>/kit)에서 읽어 갈 실제 경로 + 설치 위치 쌍.

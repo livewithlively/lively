@@ -13,6 +13,7 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isForeignGrokInvocation } from "./harness-registry.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -56,7 +57,7 @@ const runRunner = (script, extraEnv, payload) => spawnSync(process.execPath, [jo
   //  process.env 의 박스 id 를 물려받고, work-flag 는 토큰을 실 홈(~/.lively/token — LIVELY_HOME 아님)에서 읽어 **실 게이트웨이에**
   //  `session_id: "ggsid-open"` 을 그 박스의 대화 UUID 로 보고한다(2026-08-18 실측: dev 박스 3개의 claude_session_id 가 ggsid-open 으로
   //  덮여 정밀 복원·세션 대화창(#1719)이 기록을 못 찾았다). 박스 밖(CI)에서는 원래 없던 값이라 무해하다.
-  env: { ...process.env, LIVELY_HOME: HOME, TMPDIR: TMP, TEMP: TMP, TMP: TMP, GROK_HOOK_EVENT: "stop", LIVELY_HARNESS: "", LIVELY_SESSION_ID: "", LIVELY_TOKEN: "", ...extraEnv },
+  env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: HOME, TMPDIR: TMP, TEMP: TMP, TMP: TMP, GROK_HOOK_EVENT: "stop", LIVELY_HARNESS: "", LIVELY_SESSION_ID: "", LIVELY_TOKEN: "", ...extraEnv },
 });
 
 // [GG6] 가드 발동 — 러너 5종: exit0 + stdout 빈 + 샌드박스( .lively + tmp ) 무변화.

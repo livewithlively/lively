@@ -14,7 +14,7 @@ import { flushProjectEmbeds, healPmMirror } from "../../v6/connector-mirror.js";
 import { logger } from "../../log.js";
 import { CURSOR_EPSILON_MS } from "../sync-cursor.js";
 import { boundCollector } from "../config.js";
-import { getTeam, getIncludedListIds } from "./api.js";
+import { getTeam, getIncludedListIds, clickupReqCount } from "./api.js";
 import { losslessStream } from "./stream.js";
 
 export async function runClickupSync(opts: { fullFlag: boolean }): Promise<boolean> {
@@ -67,6 +67,17 @@ export async function runClickupSync(opts: { fullFlag: boolean }): Promise<boole
     batch = [];
   };
 
+  // 생존 티커(notion/index.ts 패턴) — 120초마다, 요청 카운터가 실제 늘었을 때만 로그. full 전건 hydration 이
+  //  rate limit sleep 으로 느려도 진행 신호를 남겨 run-tracker(15분 무출력=킬)의 오살을 막는다. 무진전(진짜
+  //  행)이면 침묵을 유지해 tracker 가 잡게 한다.
+  let lastTickReq = -1;
+  const ticker = setInterval(() => {
+    const rc = clickupReqCount();
+    if (rc === lastTickReq) return;
+    lastTickReq = rc;
+    logger.info({ requests: rc, ingested, counts }, "clickup 싱크 진행중");
+  }, 120_000);
+
   const stats = { fetchFailures: 0 }; // 수집(fetch) 실패 — 커서 동결 근거(스트림이 부분 수집을 계속해도 성공 위장 금지)
   try {
     for await (const item of losslessStream({ sinceMs, stats })) {
@@ -83,6 +94,8 @@ export async function runClickupSync(opts: { fullFlag: boolean }): Promise<boole
   } catch (err) {
     logger.error({ err: (err as Error)?.message ?? String(err) }, "clickup 싱크 실패 — 커서 동결(다음 run 재수집)");
     failed = true;
+  } finally {
+    clearInterval(ticker);
   }
 
   // 힐 패스 — 부모/리스트 좌표 백스톱(raw/fields) 기반 일괄 수렴(멱등).

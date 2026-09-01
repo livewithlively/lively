@@ -26,6 +26,7 @@ import {
   inviteResolvable, inviteDecisionActor, inviteNextState, inviteRecipientMatches, type InviteDecision,
   // #1875 D5″ — 나가기의 세 갈래(어드민 수) + 주인 넘기기
   planWorkspaceLeave, transferWorkspaceOwner, ownerCounts, type LeavePlan,
+  normalizeWorkspaceFace, updateWorkspaceFace,
 } from "../../org/tenancy/registry.js";
 import { currentTenant, withTenant } from "../../org/tenant-context.js";
 import { itemsPool } from "../../db/client.js";
@@ -33,6 +34,7 @@ import { getMember, listMembers } from "../../org/store.js";
 import { updateOrgProfile } from "../../org/store/profile.js";
 import { updateRuntimeConfig } from "../../org/store/runtime-config.js";
 import { seedDefaultContent } from "../../org/delivery/seed-content.js";
+import { seedBuiltinApps } from "../../apps/seed.js";   // #2479 — 신규 워크스페이스도 빌트인 앱을 받아야 알림이 산다
 import { logger } from "../../log.js";
 // #2188 — 매니지드에서 워크스페이스의 권위는 CP(app.lvly.io)다. 여기서는 **묻고 전달만** 한다.
 import { resolveCpTarget, callCp, hubOrigin, type CpWorkspace } from "./managed-cp.js";
@@ -52,6 +54,8 @@ const wsView = (w: RegistryWorkspace & { role?: string }, memberCount?: number, 
   return {
     slug: w.slug, name: w.name, kind: w.kind, state: w.state, role: w.role ?? null,
     is_primary: isPrimary, created_at: w.created_at,
+    //  #2188 — 사람이 정한 얼굴. 비면({}) 화면이 파생한다. null 로 눕혀 «없음»을 한 모양으로.
+    face: w.face && Object.keys(w.face).length ? w.face : null,
     member_count: isPrimary ? null : n,
     // #1875 D5″ — 나가기의 갈래를 정하는 값. 화면이 이걸로 «그냥 나가기»와 «넘기고 나가기»를 갈라 그린다.
     //  primary 는 명부가 없어 셀 것도 없다(박스 로그인 = 접근).
@@ -136,6 +140,7 @@ const cpWsView = (w: CpWorkspace) => ({
   slug: w.slug, name: w.name, kind: w.kind, state: "active", role: w.role,
   is_primary: false, created_at: null,
   member_count: w.member_count, owner_count: w.owner_count, pending_invites: w.pending_invites,
+  face: w.face && Object.keys(w.face).length ? w.face : null,
   kind_effective: w.kind,
   // 매니지드 전용 — 화면이 이 값이 있으면 '전환'이 아니라 '이동'으로 다룬다.
   enter_url: w.enter_url, id: w.id, tenant_state: w.tenant_state, is_current: w.is_current,
@@ -247,6 +252,14 @@ export const workspaceRegistryCapabilities: Capability[] = [
         await updateOrgProfile({ name }, actorOf(user), "workspace_create");
         await updateRuntimeConfig({ workspace_kind: kind }, actorOf(user), "workspace_create");
         await seedDefaultContent().catch((err) => logger.warn({ err, slug }, "새 워크스페이스 시딩 실패(비치명 — 다음 부팅 시딩이 보충하지 않으므로 수동 확인)"));
+        // 빌트인 앱(#2479) — ⚠ 여기 없으면 **이 워크스페이스는 앱을 영영 못 받는다.** 부팅 스텝
+        //  `seed-builtin-apps` 는 테넌트 컨텍스트 밖이라 primary 만 심고, 재부팅해도 보충되지 않는다
+        //  (바로 위 주석이 시딩 일반에 대해 말하는 그 성질이다).
+        //  실측 2026-09-01 dev: 활성 비-primary **84곳 전부 `org_app=0`** → `getApp("ai-session")` 이 null →
+        //  「AI 가 답을 기다려요」 알림(#1891)이 전이를 맞게 감지하고도 `notify-app-inactive` 로 전량 거절.
+        //  매니지드에서 같은 증상을 #2246 이 이미 겪었다. 여기가 **신규**를, 주기 정비(`builtin-app-seed`)가
+        //  **이미 만들어진 것**을 덮는다. 멱등이라 둘이 겹쳐도 안전하다.
+        await seedBuiltinApps().catch((err) => logger.warn({ err, slug }, "새 워크스페이스 빌트인 앱 시딩 실패(비치명 — 주기 정비가 보충한다)"));
       });
       return { workspace: wsView({ ...ws, role: "owner" }), header: { "x-lively-workspace": slug } };
     }, {
@@ -255,23 +268,52 @@ export const workspaceRegistryCapabilities: Capability[] = [
       slug: z.string().optional().describe("주소용 짧은 이름(소문자·숫자·하이픈 3~40자). 미지정이면 자동"),
     }),
 
-  restWork("workspace_update", "워크스페이스 이름 변경",
-    "워크스페이스 표시 이름을 바꾼다(owner 전용). 등록부와 그 워크스페이스 안의 조직 프로필을 함께 바꾼다.",
+  restWork("workspace_update", "워크스페이스 이름·아바타 변경",
+    "워크스페이스 표시 이름과 얼굴(face: 색·글자)을 바꾼다(#2188 설정 모달). 이름은 owner 전용 — 등록부와 그 워크스페이스 안의 " +
+    "조직 프로필을 함께 바꾼다. **primary 는 이름은 여기서 못 바꾸지만(조직 이름 = org_update_profile) 얼굴은 관리자가 바꿀 수 있다.** " +
+    "face 는 {color:'#rrggbb', char:'1~2자'} — 비우면({}) 파생값(개인=내 아바타, 팀=첫 글자)으로 돌아간다. " +
+    "매니지드에서는 CP(app.lvly.io)가 정본이라 묻고 전달만 한다.",
     [{ method: "POST", paths: ["/api/ui/me/workspaces/update"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
-      requireRegistry();
+      //  입력 검증은 분기보다 먼저 — 같은 값이 셀프호스트에선 400 인데 매니지드에선 CP 로 흘러가면 규칙이 두 벌이 된다.
+      const face = normalizeWorkspaceFace(input.face);
       const name = String(input.name ?? "").trim();
-      if (!name) throw new HttpError(400, "name 이 필요합니다");
+      if (!name && face === null) throw new HttpError(400, "바꿀 것(name 또는 face)이 없습니다");
+      if (managedMode()) {
+        //  #2188 — 종전엔 이 분기가 없어 매니지드에서 이름 바꾸기가 requireRegistry 400 으로 죽어 있었다
+        //   (화면은 폼을 그리는데 누르면 "다중 워크스페이스가 아직 활성화되지 않았습니다"). 워크스페이스 축의
+        //   권위는 CP 이므로 묻고 전달만 한다 — owner 판정·이름 규칙은 CP 의 renameWorkspace 가 그대로 한다.
+        const t = await resolveCpTarget(user);
+        const body: Record<string, unknown> = { workspace_id: String(input.slug ?? "") };
+        if (name) body.name = name;
+        if (face !== null) body.face = face;
+        await callCp(t!, "/api/tenant/workspace-update", body);
+        return { workspace: { slug: String(input.slug ?? ""), name: name || null, face } };
+      }
+      requireRegistry();
       const ws = await findWs(input.slug);
-      if (ws.id === PRIMARY_TENANT_ID) throw new HttpError(400, "primary 이름은 조직 프로필(org_update_profile)에서 바꿉니다");
+      if (ws.id === PRIMARY_TENANT_ID) {
+        //  primary 의 «이름»은 조직 이름 그 자체라 여기서 안 받는다(org_update_profile, admin scope).
+        //  «얼굴»은 등록부 행의 표시값일 뿐이라 받되, primary 엔 owner 개념이 없으므로(명부 없음 — 박스
+        //  로그인 = 접근) 관리자(scopes 에 admin)로 게이트한다.
+        if (name) throw new HttpError(400, "primary 이름은 조직 프로필(org_update_profile)에서 바꿉니다");
+        if (!(user?.scopes ?? []).includes("admin")) throw new HttpError(403, "primary 의 아바타는 관리자만 바꿀 수 있습니다");
+        await updateWorkspaceFace(ws.id, face!);
+        return { workspace: wsView((await getWorkspaceBySlug(ws.slug))!) };
+      }
       await requireOwner(ws, id);
-      await updateWorkspaceName(ws.id, name);
-      await withTenant({ id: ws.id, slug: ws.slug }, () => updateOrgProfile({ name }, actorOf(user), "workspace_update"));
+      if (name) {
+        await updateWorkspaceName(ws.id, name);
+        await withTenant({ id: ws.id, slug: ws.slug }, () => updateOrgProfile({ name }, actorOf(user), "workspace_update"));
+      }
+      if (face !== null) await updateWorkspaceFace(ws.id, face);
       return { workspace: wsView({ ...(await getWorkspaceBySlug(ws.slug))!, role: "owner" }) };
     }, {
       slug: z.string().describe("대상 워크스페이스 slug"),
-      name: z.string().describe("새 이름"),
+      name: z.string().optional().describe("새 이름(비우면 이름은 그대로)"),
+      face: z.object({ color: z.string().optional(), char: z.string().optional() }).nullable().optional()
+        .describe("얼굴 — {color:'#rrggbb', char:'1~2자'}. {} 를 주면 지우고 파생값으로 돌아간다. 생략하면 그대로"),
     }),
 
   restWork("workspace_delete", "워크스페이스 보관(삭제)",

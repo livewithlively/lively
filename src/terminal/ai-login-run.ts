@@ -18,6 +18,8 @@ import { createHash } from "node:crypto";
 import { memberShOut } from "./terminal-member-fs.js";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
 import { aiLoginArgv, EXIT_MARK, type AiLoginHarness } from "./ai-login-flow.js";
+import { sessionExecConfigured, sessionSpawnArgv } from "./session-exec.js";
+import type { LivelyUser } from "../context.js";
 
 /** 한 사람 · 한 하네스의 로그인 자리. 이름이 짧아야 경로가 길어지지 않는다. */
 function slot(osUser: string | null, h: AiLoginHarness): string {
@@ -75,7 +77,7 @@ export function loginStartSh(o: { home: string; slotName: string; argv: string[]
     // ⚠ 하네스 홈을 **먼저 보장한다**. codex 는 CODEX_HOME 이 없으면 설정을 못 읽고 즉사한다(실측:
     //  `Error loading configuration: CODEX_HOME points to … but that path does not exist`).
     //  갓 만든 멤버 홈에는 그 폴더가 아직 없다 — app-server 기동에서 밟은 것과 같은 함정이다.
-    `mkdir -p ${q(`${o.home}/.cache`)} ${q(`${o.home}/.codex`)} ${q(`${o.home}/.claude`)} 2>/dev/null || true`,
+    `mkdir -p ${q(`${o.home}/.cache`)} ${q(`${o.home}/.codex`)} ${q(`${o.home}/.claude`)} ${q(`${o.home}/.grok`)} 2>/dev/null || true`,
     // 이미 도는 중이면 그대로 둔다(로그도 지우지 않는다 — 그 화면이 이미 사람에게 주소를 보여 주고 있다).
     //  ⚠ pgrep 을 쓰지 않는다 — 이 스크립트를 도는 셸의 명령줄에 슬롯 이름이 있어 **자기를 잡는다**(pidOf 머리말).
     `if [ -f ${q(pid)} ] && kill -0 "$(cat ${q(pid)} 2>/dev/null)" 2>/dev/null; then echo running; exit 0; fi`,
@@ -106,11 +108,80 @@ async function sh(osUser: string | null, script: string): Promise<string> {
   });
 }
 
+/**
+ * 로그인 프로세스를 **띄울 자리**를 정한다.
+ *
+ *  ⚠ 이게 이 파일에서 가장 조용히 틀렸던 자리다(실측 2026-09-01, 매니지드 프로덕션).
+ *   종전엔 무조건 멤버 중계(`memberShOut`)로 띄웠는데, 매니지드에서 그 중계는 **tmux 컨테이너**로 들어간다
+ *   (`member-exec-relay.cjs` → `/containers/lvly-s-<slug>-tmux/exec`). 그런데 #2454(이미지 역할 분할)가
+ *   **그 컨테이너에서 하네스 4종(1,033MB)을 걷어냈다** — 보안·용량 면에서 옳은 결정이었지만, 이 통로가
+ *   거기서 `grok login` 을 부른다는 걸 아무도 안 봤다. 결과: 화면이 «grok 없음» 만 뱉었다.
+ *   하네스는 **세션 컨테이너**(`session` 타깃)에만 있다.
+ *
+ *  그래서 «띄우는 것» 만 세션 경계로 보낸다. 읽기·붙여넣기·정리는 그대로 멤버 경계다 —
+ *  그 셋은 **파일만** 만지고, 멤버 홈은 두 컨테이너가 같은 볼륨으로 본다(profiles.ts 머리말과 같은 사실).
+ *  즉 «세션 컨테이너가 쓰고, tmux 컨테이너가 읽는다» 가 성립한다.
+ *
+ *  ⚠ 세션 경계 중계가 없는 배포(셀프호스트)는 종전 그대로다 — 거기선 한 자리에 다 있다.
+ */
+async function spawnAt(user: LivelyUser | null, osUser: string | null, h: AiLoginHarness, script: string): Promise<string> {
+  if (!user || !sessionExecConfigured()) return sh(osUser, script);
+  const sid = await ensureLoginSession(user, h);
+  const argv = sessionSpawnArgv(sid, ["sh", "-c", script]);
+  if (!argv.length) return sh(osUser, script);   // 중계가 갑자기 빠졌다 — 종전 자리로 접는다
+  return new Promise((resolve, reject) => {
+    const p = spawn(argv[0], argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+    let out = ""; let err = "";
+    p.stdout?.on("data", (c: Buffer) => { out += c.toString("utf8"); });
+    p.stderr?.on("data", (c: Buffer) => { err = (err + c.toString("utf8")).slice(-400); });
+    p.on("error", reject);
+    p.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.trim() || `session sh exit ${code}`))));
+  });
+}
+
+/** 이 사람·이 하네스의 로그인 자리(세션 컨테이너). 한 번 만들고 재사용한다. */
+const loginSessions = new Map<string, string>();
+
+/**
+ * 로그인 러너를 띄울 **세션 컨테이너**를 확보한다.
+ *
+ *  ⚠ 하네스 TUI 를 띄우지 않는다(`harness: "shell"`) — 우리에게 필요한 건 «바이너리가 있는 자리» 뿐이고,
+ *   TUI 를 띄우면 그 pane 이 자격 파일을 같이 노려 서로를 덮는다.
+ *  ⚠ `kind: "login"` — 이 종류가 이미 있다(#2162). 사람 세션으로 새면 목록·집계가 오염된다.
+ */
+async function ensureLoginSession(user: LivelyUser, h: AiLoginHarness): Promise<string> {
+  const key = `${ownerKey(user)}:${h}`;
+  const had = loginSessions.get(key);
+  if (had) return had;
+  const { createSession } = await import("./sessions.js");
+  const s = await createSession(user, {
+    kind: "login", label: `AI 로그인 (${h})`, rootKey: "personal", subpath: "",
+    harness: "shell", flags: {}, autoApprove: false, loginProfile: true,
+  });
+  loginSessions.set(key, s.id);
+  return s.id;
+}
+
+function ownerKey(user: LivelyUser): string { return String(user.userId || user.email || "solo"); }
+
 /** 로그인을 시작한다(멱등 — 이미 돌고 있으면 그대로). */
-export async function startAiLogin(osUser: string | null, h: AiLoginHarness): Promise<void> {
+export async function startAiLogin(osUser: string | null, h: AiLoginHarness, user?: LivelyUser | null): Promise<void> {
   const home = homeOf(osUser);
-  const out = await sh(osUser, loginStartSh({ home, slotName: slot(osUser, h), argv: aiLoginArgv(h) }));
+  const out = await spawnAt(user ?? null, osUser, h, loginStartSh({ home, slotName: slot(osUser, h), argv: aiLoginArgv(h) }));
   if (!/started|running/.test(out)) throw new Error(`로그인 명령을 띄우지 못했습니다 — ${out.slice(0, 160)}`);
+}
+
+/** 그 사람의 로그인 자리를 치운다(세션 컨테이너까지) — cancel 이 함께 부른다. */
+export async function dropLoginSession(user: LivelyUser | null, h: AiLoginHarness): Promise<void> {
+  if (!user) return;
+  const key = `${ownerKey(user)}:${h}`;
+  const sid = loginSessions.get(key);
+  if (!sid) return;
+  loginSessions.delete(key);
+  try {
+    const { killSession } = await import("./sessions.js");
+    await killSession(user, sid, { admin: true });
+  } catch (_) { /* 이미 없거나 못 죽였다 — 자리 표만 지우면 다음에 새로 만든다 */ }
 }
 
 /** 지금까지의 출력 원문. 아직 없으면 빈 문자열(=시작 중). */

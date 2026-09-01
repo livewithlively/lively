@@ -338,6 +338,32 @@ t("E1 작업 종류별 argv 는 여기서만 만든다", () => {
   assert.deepEqual(argvFor("login", {}), ["login"]);
 });
 
+t("E6 하네스 인자(#2255) — 온보딩이 고른 AI 를 실어 보낸다", () => {
+  assert.deepEqual(argvFor("install", { harness: "grok" }), ["install", "--harness", "grok"]);
+  assert.deepEqual(argvFor("setup", { harness: "codex" }), ["setup", "--harness", "codex"]);
+  assert.deepEqual(argvFor("setup", { gateway: "https://dev.lvly.io", harness: "antigravity" }),
+    ["setup", "--gateway", "https://dev.lvly.io", "--harness", "antigravity"]);
+  assert.deepEqual(argvFor("setup-cloud", { harness: "claude" }), ["setup", "--cloud", "--harness", "claude"]);
+  // 값이 없으면 **안 붙인다** — 그때는 CLI 가 게이트웨이에서 온보딩 선택을 직접 읽는다(정본은 CLI 다).
+  for (const empty of [{}, { harness: "" }, { harness: "   " }]) assert.deepEqual(argvFor("install", empty), ["install"]);
+  assert.deepEqual(argvFor("install", { harness: " GROK " }), ["install", "--harness", "grok"]);
+});
+
+t("E7 ★ 하네스는 허용목록만 — 아니면 argv 를 안 만든다", () => {
+  // gateway(E2)와 같은 이유다: 이 값도 렌더러가 준다. 자유문자열이면 그게 곧 인자 주입면이다.
+  for (const bad of ["claude --gateway http://evil", "--token", "../../x", "claud", "all", "shell", "claude;rm -rf /"]) {
+    assert.throws(() => argvFor("install", { harness: bad }), /알 수 없는 AI/, `통과해버림: ${JSON.stringify(bad)}`);
+  }
+});
+
+ta("E8 ★ 앱의 하네스 목록이 키트의 표와 같다", async () => {
+  // 앱은 패키징 경계가 달라 harness-registry.mjs 를 import 하지 못해 **사본**을 든다.
+  //  사본이 어긋나면 «웹에선 고를 수 있는데 앱으로 설치하면 거절되는» 상태가 조용히 생긴다.
+  const { HARNESS_IDS: appIds } = await import("./ipc-contract.mjs");
+  const { HARNESS_IDS: kitIds } = await import("../../kit/hooks/harness-registry.mjs");
+  assert.deepEqual([...appIds].sort(), [...kitIds].sort());
+});
+
 t("E2 ★ 게이트웨이 주소는 http(s) 만 — 아니면 argv 를 안 만든다", () => {
   // 여기서 안 막으면 렌더러(웹 컨텐츠) 한 방이 임의 인자 주입으로 승격된다.
   //  ⚠ 플래그처럼 생긴 값(`--token`)이 특히 위험하다 — `--gateway --token` 이 되면 다음 인자가 토큰으로 먹힌다.

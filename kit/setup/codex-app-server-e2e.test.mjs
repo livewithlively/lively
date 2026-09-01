@@ -21,6 +21,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const has = (bin) => spawnSync(bin, ["--version"], { encoding: "utf8" }).status === 0;
 if (!has("codex")) { console.log("skip  codex 없음 — App Server E2E 건너뜀"); process.exit(0); }
@@ -73,7 +74,7 @@ writeFileSync(join(CODEXHOME, "config.toml"), [
   // 폴더 신뢰 — 안 해 두면 첫 턴에서 신뢰 질문에 걸린다(TUI 의 "Do you trust this directory?" 와 같은 관문).
   `[projects."${PROJ}"]`, 'trust_level = "trusted"', "",
 ].join("\n"));
-const ENV = { ...process.env, CODEX_HOME: CODEXHOME, STUB_API_KEY: "x" };
+const ENV = { ...process.env, ...offlineLivelyEnv(), CODEX_HOME: CODEXHOME, STUB_API_KEY: "x" };
 
 // ── 최소 JSON-RPC 클라이언트(제품 코드를 쓰지 않는다 — 프로토콜 자체를 본다) ──
 function open() {

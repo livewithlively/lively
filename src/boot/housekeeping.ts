@@ -31,6 +31,7 @@ import { setupPreviewWsUpgrade } from "../preview/ws-proxy.js";
 import { startTaskScheduler } from "../node/task-scheduler.js";
 import { backfillMarkerSync, backfillSharedGroupWrite } from "../project/project-fs.js";
 import { startScheduler } from "../scheduler/index.js";
+import { forEachTenant } from "../scheduler/tenant-fanout.js";   // #2479 — 주기 정비의 워크스페이스 순회(#2418 기계 재사용)
 import { ensureStateDirs, stateRoot } from "../ops/state-dir.js";
 import { roots, sharedRoot } from "../terminal/terminal-sessions.js";
 import { startLogJanitor } from "../ops/log-janitor.js";
@@ -39,7 +40,8 @@ import { effectiveStoragePolicy } from "../org/policies/storage-policy.js";
 import { loadStoragePolicy, loadCallLogPolicy } from "../org/policies/runtime-loaders.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { reapSessionLogs, backfillSessionTitles } from "../v6/session-log-store.js";
-import { reapIdleSessions } from "../sessions/session-reaper.js"; // #1059 F — idle 세션 자동 회수(정책 0=끔 기본)
+// #1059 F 유휴 회수(테넌트 · 순회 대상) + #1220 압박 회수(박스 전역 · 스스로 순회). 정책 0=끔 기본.
+import { reapIdleSessions, reapPressureSessions } from "../sessions/session-reaper.js";
 import { sweepAwaitingNotifications } from "../sessions/awaiting-notifier.js"; // #1891 — 세션이 답을 기다리게 되면 알림
 import { backfillSessionStates } from "../sessions/session-state-backfill.js"; // #1059 F 후속 — 레코드 없는 라이브 세션에 desired-state 미러
 import { ensureSharedCache } from "../ops/build-cache.js";
@@ -111,9 +113,31 @@ export interface BootContext {
   server: Server;
   verifier: BearerVerifier;
 }
+/**
+ * 이 스텝이 **테넌트별로** 의미가 있는가(#2452).
+ *
+ * ★ 왜 `gate` 만으로는 부족한가. `gate` 는 «스케줄러가 도는 배포인가»를 묻고, 이건 «테넌트마다
+ *  한 번씩 필요한가»를 묻는다. 자가호스팅에서는 둘이 같은 말이었다 — 프로세스 하나가 테넌트
+ *  하나였으니 «부팅 때 한 번»이 곧 «테넌트당 한 번»이었다.
+ *  **중앙 게이트웨이 모드에서 그 둘은 갈라진다**: 프로세스가 한 번 뜨고 요청마다 테넌트를 바꿔 단다.
+ *  그래서 `gate:"always"` 인 스텝조차 신규 테넌트를 **영영 못 만난다.**
+ *
+ * ⚠ 실측(2026-08-31): `seed-builtin-apps` 가 정확히 그랬다. `gate:"always"` 인데도 한 번도 안 돌아
+ *  라이브 테넌트 8개 중 7개가 `org_app=0` 이었고, ai-session 알림이 전이를 감지하고도 전량 거절됐다.
+ *  **`gate` 를 봐서는 안 보였다** — 게이트가 아니라 «부팅»이라는 단어가 문제였다.
+ *
+ * · `"global"`     — 테넌트 없이 의미가 선다(파일시스템·express 배선·공유 스키마·인메모리 arming).
+ * · `"per-tenant"` — 테넌트 스코프 데이터를 만들거나 고친다. **매니지드에서 도달 경로가 따로 있어야 한다**
+ *                    (요청 정비표 `SWEEP_JOBS` · CP 하우스키핑 틱 · 프로비저닝 중 하나).
+ *                    그 경로가 없으면 `housekeeping-tenancy.test.ts` 가 막는다.
+ */
+export type BootTenancy = "global" | "per-tenant";
+
 export interface BootStep {
   name: string;
   gate: BootGate;
+  /** 미지정은 `"global"` 로 본다 — 새 스텝을 추가할 때 **테넌트별이면 반드시 명시**한다. */
+  tenancy?: BootTenancy;
   run: (ctx: BootContext) => void | Promise<unknown>;
 }
 
@@ -148,7 +172,7 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  하는 자리**다: 종전엔 이 캐시가 유일한 저장소라 재배포마다 노드 세션이 통째로 사라졌고, 노드가 다시 붙을
   //  때까지(최악 33초) 살아 있는 세션이 화면에서 빠졌다. 스키마 체인 **직후**여야 표가 있고, 세션 목록 API 가
   //  처음 불리기 전에 끝나도록 시딩·스케줄러보다 앞에 둔다. 비치명 — 실패해도 노드가 붙으면 3초 뒤 채워진다.
-  { name: "node-state-hydrate", gate: "always", run: () => hydrateNodeStates().catch((err) => logger.warn({ err }, "노드 스냅샷 복구 실패(비치명 — 노드 재연결 시 채워짐)")) },
+  { name: "node-state-hydrate", gate: "always", tenancy: "per-tenant", run: () => hydrateNodeStates().catch((err) => logger.warn({ err }, "노드 스냅샷 복구 실패(비치명 — 노드 재연결 시 채워짐)")) },
   // ── 다중 워크스페이스 자동 활성화(#1750 후속) — **사람 손 0.** 단일 모드 부팅이 여기서 스스로 활성화하고
   //  1회 재기동한다(앱 role 재배선은 첫 import 시점이라 살아 있는 프로세스에선 불가). 신규 설치는 첫 부팅에,
   //  기존 박스는 다음 업데이트에 자동으로 넘어온다 — 설치·업데이트 스크립트는 이 존재를 몰라도 된다.
@@ -166,16 +190,16 @@ export const DB_BOOT_STEPS: BootStep[] = [
   // 프로비저닝 디폴트 콘텐츠 시딩(#713) — 코드가 이름으로 전제하는 지식·훅·스킬(예: 모든 프로젝트 AGENTS.md 가
   //  가리키는 project-closeout 스킬(#878), 도메인맵 is-부트스트랩 런북 2개, 커스텀훅·스킬)을 신규 게이트웨이에
   //  idempotent 주입한다(없을 때만 — 운영자 토글·편집 보존). org(훅·스킬)+v6(지식) 스키마가 모두 준비된 뒤. 비치명.
-  { name: "seed-default-content", gate: "always", run: () => seedDefaultContent().catch((err) => logger.warn({ err }, "디폴트 콘텐츠 시딩 실패(비치명)")) },
+  { name: "seed-default-content", gate: "always", tenancy: "per-tenant", run: () => seedDefaultContent().catch((err) => logger.warn({ err }, "디폴트 콘텐츠 시딩 실패(비치명)")) },
   // 빌트인 앱 시딩(#1780) — 코드 소유(apps/builtin/<id>) 앱을 게이트웨이에 idempotent 설치/갱신한다(content_hash 변경 시만).
   //  seed-default-content 의 형제 best-effort 스텝: 앱 레지스트리(org_app)+전개 대상(org_harness_asset·org_cron 등)
   //  스키마가 준비된 뒤(스키마 체인 완료 후 이 자리). 실패는 부팅을 막지 않는다(비치명 — 다음 부팅 시딩이 재시도).
-  { name: "seed-builtin-apps", gate: "always", run: () => seedBuiltinApps()
+  { name: "seed-builtin-apps", gate: "always", tenancy: "per-tenant", run: () => seedBuiltinApps()
       .then((r) => { if (r.seeded.length || r.updated.length) logger.info(r, "빌트인 앱 시딩"); })
       .catch((err) => logger.warn({ err }, "빌트인 앱 시딩 실패(비치명)")) },
   // AppInstance worker 부팅복구(#1780 Stage B) — 시딩 뒤 최신 package hash가 확정된 다음 중앙 run을 되살리고,
   // 이미 연결됐거나 이후 연결되는 최신 RemoteNode의 fail-closed 종료 run도 같은 계약으로 재시작한다.
-  { name: "app-worker-recovery", gate: "always", run: () => armWorkerRecovery()
+  { name: "app-worker-recovery", gate: "always", tenancy: "per-tenant", run: () => armWorkerRecovery()
       .then((r) => { if (r.central.restarted || r.central.failed || r.remote.some((x) => x.restarted || x.failed)) logger.info(r, "앱 worker 복구"); })
       .catch((err) => logger.warn({ err }, "앱 worker 복구 실패(비치명 — 인스턴스 조회/노드 재연결이 재시도)")) },
   // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
@@ -196,12 +220,12 @@ export const DB_BOOT_STEPS: BootStep[] = [
   { name: "shared-group-write-backfill", gate: "always", run: () => { try { if (backfillSharedGroupWrite()) logger.info("공유폴더 그룹권한 소급 보정 시작(백그라운드 find)"); } catch (err) { logger.warn({ err }, "공유폴더 그룹권한 소급 보정 실패(비치명)"); } } },
   // 부팅 스윕(#586) — 재시작으로 추적이 끊긴 connector_run 잔재 정리(유령 running 이 새 싱크를 막지 않게).
   //  스케줄러 기동 **전**에 — 크론 첫 tick 이 유령 행에 막히지 않도록.
-  { name: "orphan-connector-run-sweep", gate: "always", run: () => recoverOrphanConnectorRuns().catch((err) => logger.warn({ err }, "부팅 스윕 실패(비치명) — 유령 run 은 하트비트 정리로 수렴")) },
+  { name: "orphan-connector-run-sweep", gate: "always", tenancy: "per-tenant", run: () => recoverOrphanConnectorRuns().catch((err) => logger.warn({ err }, "부팅 스윕 실패(비치명) — 유령 run 은 하트비트 정리로 수렴")) },
   // 수집기 마이그레이션(#1419 T1) — 레거시 org_connector 1행/시스템을 org_collector 기본 인스턴스로 승격.
   //  멱등(이미 있으면 no-op)이라 매 부팅 돌아도 안전하고, 원본 행은 지우지 않아 롤백 가능하다.
   //  ⚠ **스케줄러 기동 전**에 — 크론 첫 tick 이 구 잡(sync-<system>)과 새 잡(collector-<id>)을 동시에 보면
   //   같은 소스를 두 번 긁는다. 마이그레이션이 구 잡을 끄고 나서 스케줄러가 떠야 그 창이 없다.
-  { name: "collector-migration", gate: "always", run: () => migrateConnectorsToCollectors()
+  { name: "collector-migration", gate: "always", tenancy: "per-tenant", run: () => migrateConnectorsToCollectors()
       .then((r) => { if (r.migrated.length) logger.info({ migrated: r.migrated }, "레거시 커넥터 → 수집기 마이그레이션 완료"); })
       .catch((err) => logger.warn({ err }, "수집기 마이그레이션 실패(비치명) — 레거시 커넥터 경로로 계속 동작")) },
   // 스키마 직렬 체인 완료 후 인프로세스 스케줄러 기동(org_cron 테이블 보장됨) — 서버사이드 cron 트리거.
@@ -280,20 +304,47 @@ function startBoxWatchStep(): void {
   });
 }
 
+/**
+ * 이 정비를 **워크스페이스마다** 돌린다 (#2479) — 단일 테넌트 배포에서는 종전 그대로 1회.
+ *
+ *  ⚠ 왜 스윕마다 이걸 통과시키나: 이 타이머들은 테넌트 컨텍스트 **밖**에서 돌아 리졸버가 primary 로
+ *   떨어뜨린다. registry 모드(#1750)에서는 하우스키핑이 *돌지만* 그래서 **primary 만** 정비된다
+ *   (실측 2026-09-01 dev: 아웃박스 청소 잔존이 비-primary 81곳에 245건 · primary 는 0건).
+ *   매니지드는 요청 정비표가 대신하지만 그 표는 registry 에서 무동작이라 여기가 유일한 길이다.
+ *
+ *  실패는 삼킨다 — 주기 스윕은 다음 tick 이 재시도한다(종전 각 스윕의 catch 와 같은 시맨틱).
+ */
+const perTenant = (job: string, fn: () => Promise<unknown>): Promise<void> =>
+  forEachTenant(job, fn).catch((err) => logger.warn({ err, job }, "정비 스윕 실패(비치명 — 다음 tick 재시도)"));
+
 function startBackgroundSweeps(): void {
-  setTimeout(() => { void runAutoBackfillSweep(); }, 30_000).unref();
-  setInterval(() => { void runAutoBackfillSweep(); }, 600_000).unref();
+  setTimeout(() => { void perTenant("embedding-backfill", () => runAutoBackfillSweep()); }, 30_000).unref();
+  setInterval(() => { void perTenant("embedding-backfill", () => runAutoBackfillSweep()); }, 600_000).unref();
   // #880 device-auth reaper — 만료 1h 경과 pending 행 정리(user_code 회수). start/poll 이 lazy 백업도 함.
-  setInterval(() => { void reapDeviceAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
+  setInterval(() => { void perTenant("device-auth-reap", () => reapDeviceAuth()); }, 600_000).unref();
   // #1473 T2 OAuth reaper — 만료된 인가요청·인가코드 정리. 리프레시는 회전 사슬(도난 탐지 근거)이라 더 오래 둔다.
-  setInterval(() => { void reapOAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
+  setInterval(() => { void perTenant("oauth-reap", () => reapOAuth()); }, 600_000).unref();
   // #905 C1 — 세션이력 retention reap: session_share.retention_days 지나도록 손대지 않은 로그·청크 정리
   //  (session 레코드는 불멸). retention_days=0 이면 no-op. 일 단위 보존이라 6h 주기로 충분.
+  //  ⚠ 설정도 **그 워크스페이스 안에서** 읽어야 한다 — 보존기간은 워크스페이스마다 다르다.
   setInterval(() => {
-    void getRuntimeConfig().then((c) => reapSessionLogs(c.session_share.retention_days)).catch(() => { /* best-effort */ });
+    void perTenant("session-log-reap", () => getRuntimeConfig().then((c) => reapSessionLogs(c.session_share.retention_days)));
   }, 6 * 60 * 60_000).unref();
   // #905 C1 — 제목 컬럼 도입(슬⑤b) 전 캡처/백필된 세션의 title 소급 채움(부팅 35초 후 1회, 멱등). 다 채우면 no-op.
-  setTimeout(() => { void backfillSessionTitles().catch(() => { /* best-effort */ }); }, 35_000).unref();
+  setTimeout(() => { void perTenant("session-title-backfill", () => backfillSessionTitles()); }, 35_000).unref();
+  // 빌트인 앱 시딩(#2479) — 부팅 스텝 `seed-builtin-apps` 는 컨텍스트 밖이라 primary 만 심는다.
+  //  ⚠ registry 프로비저닝도 `seedDefaultContent()` 만 불렀다 → **신규 워크스페이스는 앱을 영영 못 받았다**
+  //   (실측 2026-09-01 dev: 활성 비-primary **84곳 전부 `org_app=0`** · primary 만 5개).
+  //   그 결과가 #2246 이 매니지드에서 찾은 것과 같다: `getApp("ai-session")` 이 null 이라 「답을 기다려요」
+  //   알림이 전이를 맞게 감지하고도 `notify-app-inactive` 로 거절된다. 프로비저닝 고침은 **신규**를,
+  //   이 주기 스윕은 **이미 만들어진 84곳**을 덮는다(멱등 — 다 심기면 no-op). 매니지드의 `builtin-app-seed`
+  //   정비와 같은 주기(6h)를 쓴다 — 새 정책을 만들지 않는다.
+  //  ⚠ 부팅 45초 뒤 **1회를 따로 둔다** — interval 만 두면 첫 실행이 6시간 뒤다. 이건 정기 점검이
+  //   아니라 **밀린 백필**이라(배포 시점에 이미 84곳이 비어 있다) 첫 판이 가장 중요하다.
+  //   매니지드의 요청 정비표는 디바운스가 비어 있어 **첫 요청에 곧바로** 돈다 — 그쪽과 같은 뜻이 되게 맞춘다.
+  //   (45초 = 스키마·시딩 뒤. `session-state-backfill` 40초 · `ghost-instance-sweep` 90초와 같은 관례.)
+  setTimeout(() => { void perTenant("builtin-app-seed", () => seedBuiltinApps()); }, 45_000).unref();
+  setInterval(() => { void perTenant("builtin-app-seed", () => seedBuiltinApps()); }, 6 * 60 * 60_000).unref();
   // #1059 F — idle 세션 자동 회수(reaper). 정책(session_reclaim_policy) 0=끔이 기본이라 켜기 전엔 no-op.
   //  5분 주기(회수는 tmux kill 로 싸다). 켜지면 오래 idle 인 세션을 desired-state 보존하며 회수 → restorable(E lazy resume).
   //  ⚠ 부팅 직후 즉시 돌리지 않는다 — 재부팅 복원(E)과 겹쳐 갓 뜬 세션을 오판하지 않게 첫 tick 은 주기 뒤.
@@ -301,25 +352,47 @@ function startBackgroundSweeps(): void {
   //   백필이 먼저 돌면 그 세션들이 '회수해도 복원 가능한' 상태가 되어 F 가 실제로 작동한다(고객사 A 실측:
   //   라이브 38건 중 19건이 레코드 없음 = 회수 면역). 판정 시각은 tmux 메타(작업·열람)를 그대로 쓰므로
   //   갓 백필한 세션이 곧바로 회수되지는 않는다(활동이 최근이면 보존).
+  //  ⚠⚠ **두 축은 스코프가 달라서 배선이 갈린다**(#2509 — 종전엔 한 함수라 통째로 순회에서 빠져 있었다).
+  //    · 유휴 축(`reapIdleSessions` · `idle_ttl_minutes`) — 워크스페이스의 성질이다 → **순회한다.**
+  //    · 압박 축(`reapPressureSessions` · `pressure_*`) — **박스의 성질**이다(`/proc` 의 물리·스왑)
+  //      → **순회에 얹지 않는다.** 이 함수가 스스로 워크스페이스를 돈다. 감싸면 스왑이 임계를 넘는 순간
+  //      워크스페이스 수만큼의 tick 이 같은 전역 신호를 읽고 일제히 완화 TTL 로 회수한다 —
+  //      어느 회수도 압박을 덜기 전에. **전역 트리거를 테넌트마다 곱하는 꼴**이다.
+  //      (primary 실측 2026-09-01: `pressure_swap_pct=90` 으로 **켜져 있다** — 가상의 위험이 아니다.)
+  //   `SweepJob.scope: "tenant" | "global"` 이 이미 쓰던 어휘 그대로다 — 새 개념을 만들지 않았다.
+  //
+  //  ⓘ 압박 회수는 **여러 자리에서 불린다**(여기 5분 타이머 · 매니지드는 CP 의 테넌트별 틱). 호출 수만큼
+  //   전역 스윕이 돌면 이름만 바꿔 같은 곱셈이 되므로, 그 함수가 **시간으로 스스로 잠근다**
+  //   (`PRESSURE_SWEEP_MIN_INTERVAL_MS`). 여기 주기는 종전 그대로 5분이다 — 압박 임계 상한 90 의 근거가
+  //   "5분 tick 동안 4%p 를 더 먹으면 earlyoom 이 이긴다"라, 주기를 바꾸면 그 계산이 흔들린다.
+  //
+  //   짝인 백필은 순회한다 — 위 주석대로 백필이 **먼저** 돌아야 회수가 애초에 작동하기 때문이다.
+  //  ⚠ 아웃박스에도 **부팅 1회**를 둔다(50초). 5분 인터벌만으로는 부족하다 — **재기동이야말로 배달 루프를
+  //   죽여 좀비를 만드는 사건**이라(#2244) 그 직후가 가장 쓸어야 할 때인데, 첫 tick 이 5분 뒤다.
+  //   실측 2026-09-01: dev 는 stage 푸시마다 재시작하고 그 간격이 **2~4분**이었다(최근 1시간 9커밋).
+  //   그래서 5분 인터벌이 **한 번도 발화하지 못했다** — 45초 one-shot 은 매번 돌았는데.
+  //   매니지드 요청 정비표는 디바운스가 비어 있어 재기동 직후 **첫 요청에** 돈다. 여기도 같은 뜻이 되게 맞춘다.
+  setTimeout(() => { void perTenant("outbox", () => import("../sessions/session-outbox.js").then(({ resumeOutbox }) => resumeOutbox())); }, 50_000).unref();
   setInterval(() => {
-    void import("../sessions/session-outbox.js")
-      .then(({ resumeOutbox }) => resumeOutbox())
-      .catch((err) => logger.warn({ err }, "outbox 재개 실패(비치명 — 다음 enqueue 가 kick)"));
-    void backfillSessionStates()
-      .catch((err) => logger.warn({ err }, "session-state 백필 tick 실패"))
-      .then(() => reapIdleSessions())
+    void perTenant("outbox", () => import("../sessions/session-outbox.js").then(({ resumeOutbox }) => resumeOutbox()));
+    void perTenant("session-state-backfill", () => backfillSessionStates())
+      .then(() => perTenant("idle-reap", () => reapIdleSessions()))
+      //  ⚠ 압박 축은 순회 **밖**이다(위 머리말) — 스스로 워크스페이스를 돈다.
+      .then(() => reapPressureSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
   // #1891 — "하네스가 작업을 마치고 유저의 액션을 필요로 하는 상태가 되면 알림".
   //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
   //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.
   setInterval(() => {
-    void sweepAwaitingNotifications()
-      .catch((err) => logger.warn({ err }, "awaiting 알림 스윕 실패(비치명 — 다음 tick 재시도)"));
+    void perTenant("awaiting-notify", () => sweepAwaitingNotifications());
   }, 30_000).unref();
   // #1631 — 리브 2턴: 처음 설정 직후 열린 리브 세션에, 첫 수집 배치가 돈 뒤 증류 지시를 넣는다.
   //  판정은 순수 함수(decideSecondTurn)·멱등(distill_at) — 1분 주기로 돌아도 같은 세션에 두 번 넣지 않는다.
   //  부팅 직후엔 돌리지 않는다(세션 목록·아웃박스 재개가 먼저).
+  //  ⚠ **순회하지 않는다** — 이 스윕은 워크스페이스를 **스스로** 해석한다(후보마다 `workspaceForSession`
+  //   으로 그 세션의 테넌트를 찾아 `withTenant` 로 감싼다). 여기서 또 감싸면 같은 전량 스윕이
+  //   워크스페이스 수만큼 돈다.
   setInterval(() => {
     void import("../org/liv/second-turn-sweep.js")
       .then(({ sweepLivSecondTurn }) => sweepLivSecondTurn())
@@ -328,11 +401,11 @@ function startBackgroundSweeps(): void {
 
   // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
   //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.
-  setTimeout(() => { void sweepGhostSessionInstances().catch((err) => logger.warn({ err }, "유령 인스턴스 스윕(부팅) 실패")); }, 90_000).unref();
-  setInterval(() => { void sweepGhostSessionInstances().catch((err) => logger.warn({ err }, "유령 인스턴스 스윕 실패")); }, 6 * 60 * 60_000).unref();
+  setTimeout(() => { void perTenant("ghost-instance-sweep", () => sweepGhostSessionInstances()); }, 90_000).unref();
+  setInterval(() => { void perTenant("ghost-instance-sweep", () => sweepGhostSessionInstances()); }, 6 * 60 * 60_000).unref();
 
   // 부팅 직후 1회 백필(회수는 하지 않는다 — 재부팅 복원과 겹쳐 갓 뜬 세션을 오판하지 않게). 40초 뒤: 스키마·tmux 안정 후.
-  setTimeout(() => { void backfillSessionStates().catch((err) => logger.warn({ err }, "session-state 백필(부팅) 실패")); }, 40_000).unref();
+  setTimeout(() => { void perTenant("session-state-backfill", () => backfillSessionStates()); }, 40_000).unref();
 }
 
 // listen 콜백에서 호출 — LISTEN_STEPS 를 동기 배선한 뒤 DB 부팅 직렬 체인을 비동기로 돌린다.

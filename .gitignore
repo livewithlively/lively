@@ -57,3 +57,6 @@ desktop/build/
 /public/terminal.js
 /public/md.js
 /public/page-scrollbar.js
+
+# 가드 mutation 게이트의 임시 dist 사본(#2518) — 게이트가 스스로 지운다
+.guard-mutation/

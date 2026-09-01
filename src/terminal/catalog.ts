@@ -247,10 +247,14 @@ export const HARNESSES: Harness[] = [
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "grok-4.6"], default: "grok-4.6" },
       { name: "--effort", label: "추론강도(effort)", desc: "모델이 지원하는 단계만 적용됩니다", type: "select", choices: ["", "low", "medium", "high", "xhigh"] },
     ],
-    failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-code"],
+    failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-auth"],
     // 실측(grok 1.0.5 `grok login --help`): `--oauth`(브라우저) 와 `--device-auth`(별칭 --device-code, 헤드리스) 둘.
-    loginSteps: ["터미널에  grok login  을 입력합니다", "열리는 창에서 X(xAI) 계정으로 로그인합니다",
-      "창이 안 열리면  grok login --device-auth  로 주소와 일회용 코드를 받습니다"],
+    //  ⚠ 이 loginSteps 는 **화면에서 끝내는 통로가 실패했을 때** 그 자리에 뿌려진다(#2477 — 대화창 관문·온보딩).
+    //   그러니 여기서 «화면에서 하세요» 라고 하면 순환 안내가 된다 — 오직 터미널 절차만 적는다.
+    //   원격(웹터미널)에서는 브라우저 콜백이 서버의 localhost 로 가서 안 닿으므로 device-auth 를 먼저 적는다.
+    loginSteps: ["터미널에  grok login --device-auth  를 입력해 주소와 일회용 코드를 받습니다",
+      "그 주소를 브라우저에서 열고 코드를 넣습니다",
+      "X(xAI) 계정으로 로그인하면 끝납니다"],
     // 실측(grok 바이너리 도움말 문자열): `/model <모델id>  # Switch model` · `/effort <level>` 둘 다 인자를 받는다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
     // 실측(#1701): `-r <id>` 는 세션 id(UUID) 재개, id 없으면 `-c` = 이 폴더의 최근 세션. 어댑터가 sessionId 를
@@ -261,6 +265,12 @@ export const HARNESSES: Harness[] = [
 ];
 
 export interface SessionInfo {
+  /**
+   * 이 세션이 **어느 모드로 떴나**(#2439) — 없으면 배포 기본을 따른다.
+   *  ⚠ 화면(runtimeMode)과 배달(deliver-prompt)이 **같은 값**을 봐야 한다. 갈리면 pane 은 셸인데
+   *   대화는 아무도 안 받는 세션이 된다(2026-09-01 실측).
+   */
+  runtimeChoice?: "chat" | "terminal";
   id: string; label: string; harness: string; dir: string; autoApprove: boolean;
   owner: string; owned: boolean; created: number; attached: boolean;
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
@@ -341,6 +351,9 @@ export interface SessionInfo {
   //  answer=승인·거부·중단을 화면에서 대신 누를 수 있나(승인 키 실측 있음). 화면이 이걸로 버튼·안내를 **정직하게** 그린다(없는 능력의
   //  버튼을 두지 않는다 — 막다른 컨트롤 금지). 없으면(구 서버) 화면은 둘 다 있는 것으로 본다(종전 동작).
   chat?: { read: boolean; answer: boolean };
+  /** #2439 — 이 세션의 런타임 모드. "chat" 이면 작업·승인·슬래시가 이벤트로 오고 pane 은 셸이다.
+   *  없으면(구 서버) 화면은 "terminal" 로 본다 — 없는 통로를 열지 않는다(무회귀). */
+  runtimeMode?: string;
   /** #2055 — 대화 런타임: "tmux"(pane 의 TUI) · "app-server"(pane 은 셸, 대화는 JSON-RPC). 화면의 기본 보기가 이걸 따른다. */
   chatMode?: string;
   // #1791 — 이 세션이 도는 노드(라이브 노드 스냅샷 행은 node/registry 가 채우고, **복원 가능 노드 세션 행**은
@@ -362,6 +375,13 @@ export interface CreateInput {
   //  실행 모드(readOnly·incognito)는 **직교 축**이니 여기 흡수하지 마라(읽기전용 위탁이 표현 불가해진다).
   kind: SessionKind;
   label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
+  /**
+   * 이 세션의 **대화 런타임 모드** — "chat" 이면 pane 이 셸이고 대화는 런타임이 쥔다 (#2439).
+   *  ⚠ 이 축이 없어서 «한 세션만 켜 보기» 가 불가능했고, 확인하려면 **남의 기본까지** 바꿔야 했다.
+   *   그래서 두 번이나 배포 기본을 뒤집었다가 세션을 죽였다(2026-09-01). 세션 단위로 고를 수 있으면
+   *   그 사고 없이 확인하고, 확인한 뒤에 기본을 옮길 수 있다.
+   */
+  runtime?: "chat" | "terminal";
   // #1291 v2 — 기록 범위(write cap)와 read 축소. 미지정이면 실행 폴더에서 파생한다(신규·복원이 같은 규칙).
   //  writeVis: 'open'|'audience'|'private' — 이 세션이 **사용자 승인 없이** 만들 수 있는 맥락의 최대 가시성.
   //  restrictRead: 프로젝트 세션을 owner∪invites 로 더 좁힌다(프로젝트 대상 안에서만 축소 가능).
@@ -592,27 +612,41 @@ export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: s
 //    생겼다. 즉 #1516 이 codex 에만 준 '로그인 전용 세션'을 claude 에도 줄 수 있고, 그러면 '자격이 만료돼 세션이
 //    즉사해 로그인 화면조차 못 보는' 데드락이 claude 에서도 풀린다. 온보딩 안내는 이미 그 한 줄로 바꿨고
 //    (loginSteps·failHint), 이 자리(관리탭 [연결된 AI 계정]의 [로그인])는 #1516 표면이라 별도로 손댄다.
-//  ⚠ 나머지 하네스도 **지금은 전부 null 이 정답**이다(#1695 실측). 여기 채우려면 '무인으로 한 줄' 이어야 하는데:
-//   · antigravity(agy): 로그인 서브커맨드 자체가 없다(agy 1.1.13 --help — install·update·plugin·models·agent·changelog뿐).
-//     인증은 하네스를 켜면 하네스가 띄운다(원격이면 주소+코드). 그래서 '로그인 전용 세션'을 만들 대상이 아니고,
-//     대신 하네스가 죽었을 때의 안내(failHint)로 그 절차를 알려 준다.
+//  grok: #2477 로 **인라인 카드**가 열렸지만(주소·코드를 화면이 보여 준다) 이 자리도 함께 열어 둔다 —
+//   인라인이 시작조차 못 했을 때 화면이 내려보내는 폴백 창이 바로 이것이고, 여기가 null 이면 그 사람은
+//   **아무 안내도 없는 맨 셸**에 떨어진다. `grok login --device-auth` 는 codex 와 같은 모양이고
+//   `grok logout`(Sign out and clear cached credentials)도 있어 같은 흐름이 그대로 성립한다(실측 2026-09-01, 1.0.13).
+//  ⚠ 나머지 하네스는 **지금도 null 이 정답**이다(#1695 실측 + 2026-09-01 재실측). '무인으로 한 줄' 이어야 하는데:
+//   · antigravity(agy): 로그인 서브커맨드가 여전히 없다(agy 1.1.22 --help 재확인 — install·update·plugin·mcp·
+//     mic-serve·models·agent·changelog뿐). 인증은 하네스를 켜면 하네스가 띄운다(원격이면 주소+코드).
+//     `agy -p` 가 인증을 띄우긴 하지만 **파이프 stdin 을 거절**하고(주소도 없이 즉시 실패) 대기가 60초
+//     하드 타임아웃이라 무인 한 줄로 못 쓴다 — 그래서 agy 는 **인라인 터미널**로 간다(#2477, web/v2/onboarding.ts).
 //   · opencode: `opencode auth login` 이 있으나 **제공자를 고르는 대화형 TUI** 라 codex 의 device-auth 처럼
 //     비대화형 한 줄이 아니다(실측). 셸에서 그대로 치는 게 나아 failHint 로 안내한다.
+//
+//  ⚠ 바이너리는 `"$3"` 로 **인자로** 넘긴다 — 스크립트 본문에 이어붙이면 하네스가 늘 때마다 사본이 는다.
+//   값은 아래 표의 리터럴에서만 오므로 사용자 입력이 셸에 닿지 않는다.
 const LOGIN_SH = [
   'printf \'\\n%s\\n\\n\' "$1"',
-  'codex logout >/dev/null 2>&1 || true',
-  'codex login --device-auth || true',
+  '"$3" logout >/dev/null 2>&1 || true',
+  '"$3" login --device-auth || true',
   'printf \'\\n%s\\n\' "$2"',
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
+/** 로그인 전용 세션을 만들 수 있는 하네스 → (실행파일, 사람에게 보일 이름, 확인 명령). 표에 없으면 null. */
+const LOGIN_CLI: Record<string, { bin: string; label: string; status: string }> = {
+  codex: { bin: "codex", label: "Codex", status: "codex login status" },
+  grok: { bin: "grok", label: "Grok", status: "grok models" },
+};
 export function harnessLoginArgv(harnessKey: string): string[] | null {
-  if (harnessKey !== "codex") return null;
+  const c = LOGIN_CLI[harnessKey];
+  if (!c) return null;
   const line = "─".repeat(60);
-  const intro = [line, "Codex 로그인을 시작합니다.",
+  const intro = [line, `${c.label} 로그인을 시작합니다.`,
     "잠시 뒤 나오는 주소를 브라우저에서 열고, 함께 표시되는 일회용 코드를 입력하세요.", line].join("\n");
-  const done = [line, "로그인 절차가 끝났습니다. 확인하려면  codex login status  를 입력해 보세요.",
-    "이 세션에서 바로 쓰려면  codex  를 입력하세요.", line].join("\n");
-  return ["sh", "-c", LOGIN_SH, "lively-login", intro, done];
+  const done = [line, `로그인 절차가 끝났습니다. 확인하려면  ${c.status}  를 입력해 보세요.`,
+    `이 세션에서 바로 쓰려면  ${c.bin}  을 입력하세요.`, line].join("\n");
+  return ["sh", "-c", LOGIN_SH, "lively-login", intro, done, c.bin];
 }
 
 // codex app-server 모드의 pane (#2055) — TUI 대신 **셸**을 띄우고, 왜 그런지 한 화면으로 알려 준다.
@@ -626,14 +660,31 @@ const APP_SERVER_SH = [
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
 export function codexAppServerPaneArgv(): string[] {
+  return chatRuntimePaneArgv({ label: "Codex", bin: "codex", mode: "App Server" });
+}
+
+/**
+ * 대화 런타임 세션의 **pane argv** — 하네스 TUI 대신 셸을 띄운다 (#2439).
+ *
+ *  ── 왜 셸인가 ───────────────────────────────────────────────────────────────────
+ *  대화를 런타임이 쥐는데 pane 에 TUI 까지 띄우면 **한 대화에 하네스가 둘** 붙는다.
+ *  실측(2026-09-01, box-yoon-a7da7c38): 웹 프롬프트는 `transport:"chat-runtime"` 으로 갔는데 같은
+ *  세션 기록에 TUI 가 쓰는 줄(mode·permission-mode·atis-latch)이 함께 있었다. 사람 눈에는
+ *  «선택지가 대화창에 안 뜨고(TUI 가 쥔다) 시간만 올라가는» 화면이 된다.
+ *
+ *  ⚠ 이 안내는 **사람이 읽고 헤매지 않게** 하는 자리다. 셸만 띄우고 아무 말도 안 하면
+ *   «AI 가 안 뜬다» 고 오해한다 — 그래서 무엇이 어디에 있는지 첫 화면에 적는다.
+ *  ⚠ 그 하네스 명령을 여기서 그냥 치라고 쓰지 않는다 — 그건 **새 대화**를 연다.
+ */
+export function chatRuntimePaneArgv(o: { label: string; bin: string; mode?: string }): string[] {
   const line = "─".repeat(60);
   const intro = [line,
-    "이 세션의 Codex 대화는 **대화창**이 맡습니다(App Server).",
+    `이 세션의 ${o.label} 대화는 **대화창**이 맡습니다${o.mode ? `(${o.mode})` : ""}.`,
     "이 터미널은 명령을 직접 치는 자리입니다 — 파일·빌드·git 을 그대로 쓰세요.",
-    "여기서  codex  를 실행하면 대화창과 **다른 대화**가 열립니다(같은 대화는 한 곳만 쥘 수 있습니다).",
+    `여기서  ${o.bin}  을 실행하면 대화창과 **다른 대화**가 열립니다(같은 대화는 한 곳만 쥘 수 있습니다).`,
     "대화를 이 터미널로 옮기려면 대화창에서 [터미널로 넘기기] 를 누르세요.",
     line].join("\n");
-  return ["sh", "-c", APP_SERVER_SH, "lively-codex-chat", intro];
+  return ["sh", "-c", APP_SERVER_SH, "lively-chat-pane", intro];
 }
 
 // 실행 모드(#1007+) → 격리 pane 에 실을 `-e` env 인자. 순수 함수라 단위테스트로 계약을 못박는다(terminal-sessions.test.ts).

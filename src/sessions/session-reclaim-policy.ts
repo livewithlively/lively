@@ -76,6 +76,40 @@ export interface SessionReclaimPolicy {
    *  값이 그보다 짧으면 attach 가 오히려 빨리 걷히는 역전이 생긴다.
    */
   attach_idle_minutes: number;
+  /**
+   * #2509 **전역 압박 회수에서 이 워크스페이스의 순번** — 낮을수록 먼저 걷힌다. 기본 100.
+   *
+   * 왜 필요한가: 압박 축은 **박스 전역**이라(물리·스왑은 워크스페이스마다 다르지 않다) 임계를 넘으면 회수가
+   *  박스 단위로 한 번 돈다. 그때 «어느 워크스페이스 세션부터 걷나»라는 질문이 새로 생기는데, 종전 코드엔
+   *  그 축이 아예 없었다(테넌트 안에서 오래된 순뿐). 답을 코드에 박지 않고 여기로 뺀다 — 실서비스 워크스페이스는
+   *  200, 데모·개발용은 50 처럼 두면 압박 때 개발용이 먼저 걷힌다.
+   *
+   * ⚠ 이건 **참가 여부가 아니다.** 참가는 `pressure_used_pct`/`pressure_swap_pct` 가 정한다(둘 다 0 이면
+   *  그 워크스페이스 세션은 후보에 아예 안 들어온다). 순번은 참가한 것들 사이의 순서일 뿐이다.
+   *
+   * 전부 같은 값(기본)이면 순수 RSS 내림차순 = #1220 교리 그대로다(무회귀).
+   */
+  pressure_priority: number;
+  /**
+   * #2509 **한 tick 에 이 워크스페이스에서 걷을 최대 세션 수**. 0 = 무제한(기본, 무회귀).
+   *
+   * 압박 회수는 되돌릴 수 없는 동작이라 폭발반경 상한이 있어야 한다. 임계·RSS 판정이 어떤 이유로든
+   *  빗나가도(측정 실패로 목표 판정이 영영 안 서는 경우가 실제로 있다 — `rssMeasured=false`) 한 번에
+   *  한 워크스페이스를 통째로 비우지는 않게 한다.
+   * ⚠ 상한에 걸려 남긴 후보는 `skipReasons.cap` 으로 센다 — `target`(필요 없어서 남김)과 뜻이 정반대라
+   *  같은 칸에 넣으면 «방어가 충분했다»와 «방어가 상한에 막혔다»가 로그에서 구분되지 않는다.
+   */
+  pressure_max_reap: number;
+  /**
+   * #2509 **임계보다 이만큼(%p) 더 내려갈 때까지 걷는다**(정지 조건의 여유). 0 = 종전 동작(기본, 무회귀).
+   *
+   * 왜 필요한가: 정지 조건이 «임계 바로 밑»이면 회수 직후 사용률이 임계에 붙어 있어 **다음 tick 이 또 발동한다.**
+   *  그러면 세션이 몇 분 간격으로 계속 걷히는데 운영자 눈엔 '회수가 폭주한다'로 보인다. 히스테리시스를 준다.
+   *
+   * ⚠ 임계를 낮추는 것과 **다르다** — 발동은 원래 임계로 하고 정지만 더 내려간다. 그래서 평시 오발동은 안 는다.
+   *  (임계 90·여유 5 → 90% 에서 발동해 85% 밑으로 내려갈 때까지 걷는다.)
+   */
+  pressure_release_margin_pct: number;
 }
 
 export type SessionReclaimPolicyPatch = Partial<SessionReclaimPolicy>;
@@ -87,6 +121,12 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   pressure_idle_minutes: 60, // 켰을 때의 기본 하한 — '한 시간 넘게 손 안 댄 세션'
   pressure_swap_pct: 0,      // #1675 ⑤ — 0 = 끔(무회귀). 켜는 값은 90 안팎을 권한다(그 아래는 평시에도 닿는 박스가 있다)
   attach_idle_minutes: 0,    // #2148 — 0 = 끔(무회귀). 셀프호스트 동작은 종전 그대로다.
+  // #2509 전역 압박 회수의 순서·상한·여유. 기본값은 **전부 «종전과 똑같이 동작»** 으로 잡는다:
+  //  순번이 전부 같으면 순수 RSS 순(#1220 교리), 상한 0 = 무제한, 여유 0 = 임계 바로 밑에서 정지.
+  //  운영자가 박스 사정에 맞춰 관리탭에서 조절한다.
+  pressure_priority: 100,
+  pressure_max_reap: 0,
+  pressure_release_margin_pct: 0,
 };
 
 // 관리탭·검증 노출 상수 — 0(끔) ~ 43200분(30일; 그 이상은 사실상 안 켠 것).
@@ -128,6 +168,27 @@ export const RECLAIM_PRESSURE_PCT_MAX = EARLYOOM_TRIGGER_USED_PCT - 4;
  */
 export const RECLAIM_SWAP_PCT_MAX = 99;
 
+/**
+ * #2509 전역 압박 회수 순번 범위 — 낮을수록 먼저 걷힌다. 기본 100 을 가운데 두어 **양쪽으로** 조절할 수 있게
+ *  0~1000 을 연다(더 먼저 걷힐 것 · 더 나중에 걷힐 것 둘 다 표현돼야 순번이 쓸모가 있다).
+ */
+export const RECLAIM_PRIORITY_MIN = 0;
+export const RECLAIM_PRIORITY_MAX = 1_000;
+
+/** #2509 워크스페이스당 tick 회수 상한 — 0=무제한. 상한 1000 은 사실상 무제한과 같다(그 위는 값의 의미가 없다). */
+export const RECLAIM_MAX_REAP_MIN = 0;
+export const RECLAIM_MAX_REAP_MAX = 1_000;
+
+/**
+ * #2509 정지 여유(%p) 상한 — 임계에서 이만큼을 뺀 값이 실제 정지선이다.
+ *
+ * ⚠ 상한이 **50** 인 이유: 여유가 임계보다 커지면 정지선이 음수가 되어 «후보를 전부 걷을 때까지 안 멈춘다»가
+ *  된다. 권장 임계대(물리 85~90 · 스왑 90 안팎)에서 50 이면 정지선이 35~40% — 그보다 더 걷게 두는 설정은
+ *  압박 회수가 아니라 그냥 전량 회수라, 실수로 그렇게 되지 않게 여기서 막는다(코드도 정지선을 1% 로 하한한다).
+ */
+export const RECLAIM_RELEASE_MARGIN_MIN = 0;
+export const RECLAIM_RELEASE_MARGIN_MAX = 50;
+
 // 노브 선언(#1313 R47) — 범위·env 시드는 이 표가 전부. 클램프/시드/우선순위 골격은 knob.ts 가 맡는다.
 //  loose: R47 이전 이 모듈의 숫자 해석(Number(v) 직행)을 그대로 보존(byte-compat). 새 정책은 쓰지 마라 — knob.ts 참조.
 const policy = definePolicy<SessionReclaimPolicy>({
@@ -141,6 +202,12 @@ const policy = definePolicy<SessionReclaimPolicy>({
     pressure_swap_pct: { env: "LIVELY_SESSION_PRESSURE_SWAP_PCT", min: RECLAIM_PRESSURE_PCT_MIN, max: RECLAIM_SWAP_PCT_MAX },
     // #2148 — 신규 노브라 loose 를 쓰지 않는다(0='끔'이 의미 있는 선택이므로 null/"" 이 0 으로 뒤집히면 안 된다).
     attach_idle_minutes: { env: "LIVELY_SESSION_ATTACH_IDLE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
+    // #2509 — 전역 압박 회수의 순서·상한·여유. env 시드는 **박스 전체 기본값**의 자리다: 이 파일의 시드는
+    //  프로세스 전역이라 모든 워크스페이스의 base 가 되고, 관리탭 저장이 그 위를 워크스페이스별로 덮는다.
+    //  (95곳짜리 박스에서 «전부 이렇게, 몇 곳만 다르게»를 표현하는 유일한 방법이 이 층이다.)
+    pressure_priority: { env: "LIVELY_SESSION_PRESSURE_PRIORITY", min: RECLAIM_PRIORITY_MIN, max: RECLAIM_PRIORITY_MAX },
+    pressure_max_reap: { env: "LIVELY_SESSION_PRESSURE_MAX_REAP", min: RECLAIM_MAX_REAP_MIN, max: RECLAIM_MAX_REAP_MAX },
+    pressure_release_margin_pct: { env: "LIVELY_SESSION_PRESSURE_RELEASE_MARGIN_PCT", min: RECLAIM_RELEASE_MARGIN_MIN, max: RECLAIM_RELEASE_MARGIN_MAX },
   },
 });
 

@@ -731,9 +731,22 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .cn-card-h { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn-card-go { flex: none; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 .cn-card:hover .cn-card-go { color: var(--blue); }
-.cn-card.soon { background: var(--bg-tint); border: 1px dashed var(--line-net-2); }
+/*  준비 중 — «지금은 못 켠다»가 한눈에 보여야 한다(원준 2026-08-31). 점선·틴트만으로는 본문이 그대로 진해
+    다른 카드와 구별이 약했다. 이름·설명을 함께 죽이고 커서도 손모양을 주지 않는다(누를 것이 없다는 뜻).
+    ⚠ 로고는 이미 회색(.svc-tile.off — svcTile 이 st!=='soon' 으로 넘긴다)이고 hover 로도 살아나지 않게 막는다.
+    다만 카드 자체는 여전히 눌러서 상세로 갈 수 있다 — «왜 준비 중인지»를 거기서 읽는다. 그래서 완전 차단이 아니라
+    «지금은 켤 수 없다»만 말하는 정도로 둔다. */
+.cn-card.soon { background: var(--bg-tint); border: 1px dashed var(--line-net-2); cursor: default; }
 .cn-card.soon:hover { background: var(--bg-tint-2); border-color: var(--line-net-2); }
-.cn-card.soon .cn-card-nm { color: var(--ink-sub); }
+.cn-card.soon .cn-card-nm { color: var(--muted-head); }
+.cn-card.soon .cn-card-bl, .cn-card.soon .cn-card-st { color: var(--muted-2); }
+.cn-card.soon .svc-tile { opacity: .55; }
+.cn-card.soon:hover .svc-tile.off svg { filter: grayscale(1); opacity: .5; }
+/*  준비 중인데 이미 연결해 둔 것 — 회색으로 죽이되 «살아 있다»는 신호(민트 점)는 남긴다. 완전히 꺼진 것처럼
+    보이면 사용자가 «내 구글이 끊겼나» 하고 오해한다. 실제로는 그대로 돌고 있다. */
+.cn-card.soon-on .svc-tile { opacity: .8; }
+.cn-card.soon-on .cn-card-nm { color: var(--ink-sub); }
+.cn-card.soon-on .cn-card-h { color: var(--mint-deep); font-weight: 600; }
 .cn-pill-soon { flex: none; display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; line-height: 1.6; color: var(--muted-head); background: var(--bg-tint-2); border: 1px dashed var(--line-net-2); white-space: nowrap; }
 .cn-sum-i.soon b { color: var(--muted-head); }
 .cn-soon-note { font-size: 13px; color: var(--ink-sub); line-height: 1.6; max-width: 60ch; }
@@ -836,8 +849,16 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-inbox-empty .h { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
 .v2-inbox-empty .sub { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
 .v2-find { padding: 4px var(--side-x, 8px) 2px; }
-.v2-find-in { width: 100%; height: var(--row-h, 34px); border: 1px solid var(--line); border-radius: 9px; padding: 0 11px; font: inherit; font-size: 13px; background: var(--bg); }
-.v2-find-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
+/*  치수는 **맨 윗줄 통합검색칸(.v2-omnib)과 같다**(원준 2026-08-31: "타이핑하는 텍스트박스가 엄청 크다 —
+    최상단 검색창이랑 같게"). 사이드바 행 격자(--row-h 34px)를 따르던 값이었는데, 이 칸은 목록의 행이 아니라
+    **검색칸**이라 닮아야 할 짝이 위의 그 칸이다: 28px · 반경 8 · 12.5px · 옅은 테두리(--line-net).
+    ⚠ 손가락 화면(≤900px)에서는 아래 미디어쿼리가 40px 로 되돌린다 — 그건 격자가 아니라 터치 표적 규칙이다. */
+/*  ⚠ `input.` 을 붙여야 먹는다 — 03-components 의 `input[type="search"]`(테두리·반경 9·14px)와 특이도를
+    맞춰야 뒤 파일인 여기가 이긴다. 클래스만 쓰면 글자·반경·테두리가 조용히 그 기본값으로 되돌아간다
+    (실측: 종전 `font-size: 13px` 도 이미 죽어 14px 로 그려지고 있었다). */
+input.v2-find-in { width: 100%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 12.5px; background: var(--bg); }
+input.v2-find-in::placeholder { color: var(--muted); }
+input.v2-find-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
 .v2-sugs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 12px; }
 .v2-sugs .chip { font-size: 13px; padding: 6px 12px; border-radius: 999px; }
 .v2-chat { flex: 1; min-height: 260px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
@@ -1406,7 +1427,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-side-top { padding: 12px 12px 6px; }
   .v2-liv-btn { padding: 11px 12px; font-size: 15px; }
   .v2-side-sec { padding: 12px 14px 6px 18px; }
-  .v2-find-in { height: 40px; }
+  input.v2-find-in { height: 40px; }
   .v2-pj-row { padding: 11px 10px 11px 6px; font-size: 15px; }
   .v2-pj.open > .v2-pj-row { padding: 11px 12px 8px 8px; }
   .v2-car { width: 30px; height: 30px; font-size: 17px; }
@@ -1468,7 +1489,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 }
 /* 터치 기기(폭 무관) — 입력칸 글자 16px: iOS 사파리는 16px 미만 입력칸에 포커스가 가면 화면을 확대한다(돌아오지 않는다). */
 @media (pointer: coarse) {
-  .v2-find-in, .v2-launch-in, input.v2-pad-search, .v2-pjpick-in, .v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
+  /*  ⚠ 여기도 `input.` 이 필요하다 — 03-components 의 `input[type=...]` 기본값(14px)이 클래스보다 특이도가
+      높아, 종전엔 이 줄이 **아무 칸에도 안 먹고 있었다**(그래서 iOS 에서 포커스마다 화면이 확대됐다).
+      textarea 인 .v2-launch-in 은 그 기본 규칙에 안 걸리므로 클래스 그대로 둔다. */
+  input.v2-find-in, .v2-launch-in, input.v2-pad-search, input.v2-pjpick-in, input.v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
 }
 
 /* 팝아웃 창(#1744)은 서랍 크롬(☰·타임라인 버튼)이 없다 — 좁은 화면에선 가운데 한 칸만 남긴다.

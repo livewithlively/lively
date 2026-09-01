@@ -92,7 +92,9 @@ t("★ B1 생성 응답도 목록과 **같은 곳**에서 대화 필드를 만�
   const src = readSrc("src/terminal/routes.ts");
   assert.match(src, /const chatFieldsOf =/, "공용 헬퍼가 있다");
   assert.match(src, /res\.json\(\{ session: withChatFields\(session\) \}\)/, "로컬 생성 응답이 대화 필드를 싣는다");
-  assert.match(src, /withChatFields\(session\), node:/, "노드 생성 응답도 싣는다");
+  //  ⚠ 노드 갈래는 **onNode=true 를 함께 넘긴다**(#2439) — 그 세션은 다른 기계에 살아
+  //   대화 런타임이 거기서 돌지 않는다. 안 넘기면 화면이 «대화창» 이라 하고 배달은 릴레이로 간다.
+  assert.match(src, /withChatFields\(session, true\), node:/, "노드 생성 응답도 싣되 노드임을 알린다");
   assert.ok(!/s\.chatMode = codexChatMode/.test(src), "목록이 헬퍼를 안 쓰고 따로 만들지 않는다");
 });
 

@@ -24,8 +24,11 @@
 //       ③ 도구·나 — 앱 · 계정
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
-//  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast, wsKey } from '../core.js';
+//  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다.
+//  ⚠ #2460 — 그중 **사람이 고른 것**(고정·접힘·묶는 축)은 서버가 정본이고 브라우저는 첫 페인트용
+//   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
+import { api, el, keepSideScroll, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
+import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
@@ -43,7 +46,7 @@ import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
-const OPEN_KEY = wsKey('lively_v2_opened');
+const OPEN_KEY = shellPrefStore('lively_v2_opened', 'list');
 const DONE_KEY = 'lively_v2_side_done';   // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
 // ⚠ 「지난 세션」 펼침은 **기억하지 않는다**(원준 2026-08-24 — "난 연 적이 없는데 지멋대로 펼쳐져 있어").
@@ -52,13 +55,13 @@ const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
 //  지난 세션은 배경이지 본문이 아니다 — 기본은 늘 접힘이고, 편 것은 그 페이지 동안만 산다.
 //  「전체 프로젝트」가 같은 이유로 같은 처방을 받았다(2026-08-23).
 const PAST_KEY_LEGACY = 'lively_v2_side_past';
-const SELCLOSED_KEY = wsKey('lively_v2_side_selclosed');   // 선택된 프로젝트인데도 **일부러 접어 둔** 것
+const SELCLOSED_KEY = shellPrefStore('lively_v2_side_selclosed', 'list');   // 선택된 프로젝트인데도 **일부러 접어 둔** 것
 // ⚠ 「전체 프로젝트」 펼침은 **기억하지 않는다**(원준 2026-08-23 — "사용자가 변경하기 전에는 디폴트로 접힌 상태").
 //  종전엔 lively_v2_side_all 로 브라우저에 남겨, 한 번 편 사람은 그 뒤로 늘 수백 행이 펼쳐진 채 열렸다. 이제 페이지 수명만.
 const ALL_KEY_LEGACY = 'lively_v2_side_all';
-const PIN_KEY = wsKey('lively_v2_side_pin');     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
+const PIN_KEY = shellPrefStore('lively_v2_side_pin', 'list');     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
 //  앱 인스턴스 핀(#1954)은 키 공간이 달라(sess:/inst:/route:) 따로 둔다 — 한 통에 섞으면 트리를 걷어낼 때 같이 사라진다.
-const APP_PIN_STORE = wsKey('lively_v2_app_pin');
+const APP_PIN_STORE = shellPrefStore('lively_v2_app_pin', 'list');
 const BINS_KEY = 'lively_v2_side_bins';   // '1' = 아카이브·휴지통 두 행을 **발치에 고정**(목록을 내려도 늘 보인다, #1851)
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 
@@ -66,9 +69,9 @@ const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보�
 //  집합은 그대로 두고 묶는 축만 바꾼다. 행 문법(×·압정·상태 점)도, 목록에 무엇이 있는지도 그대로다.
 //  움직임의 원칙 한 줄: **위로 올라가고 펴지는 쪽은 즉시, 아래로 내려가고 접히는 쪽은 안 볼 때.**
 //   올라오는 움직임은 정보고(나를 기다리는 게 생겼다), 내려가는 움직임은 소음이다(처리한 것의 뒷정리).
-const GROUP_STORE = wsKey('lively_v2_side_group');        // 'proj' = 프로젝트로 묶기 · 없으면 종전 시간·상태 축
-const GRPCLOSED_STORE = wsKey('lively_v2_side_grpclosed');   // 사람이 **접어 둔** 프로젝트 그룹
-const GRPOPENED_STORE = wsKey('lively_v2_side_grpopened');   // 사람이 **펴 둔** 프로젝트 그룹
+const GROUP_STORE = shellPrefStore('lively_v2_side_group', 'str');        // 'proj' = 프로젝트로 묶기 · 없으면 종전 시간·상태 축
+const GRPCLOSED_STORE = shellPrefStore('lively_v2_side_grpclosed', 'list');   // 사람이 **접어 둔** 프로젝트 그룹
+const GRPOPENED_STORE = shellPrefStore('lively_v2_side_grpopened', 'list');   // 사람이 **펴 둔** 프로젝트 그룹
 let groupProj = false;
 let grpClosed = new Set<string>();
 let grpOpened = new Set<string>();
@@ -103,11 +106,32 @@ let inited = false;
 let last: { host: HTMLElement; data: V2Data; activeKey: () => string } | null = null;
 
 function loadSet(k: string): Set<string> { try { const a = JSON.parse(localStorage.getItem(k) || '[]'); return new Set<string>(Array.isArray(a) ? a : []); } catch (_) { return new Set<string>(); } }
-function saveSet(k: string, s: Set<string>): void { try { if (s.size) localStorage.setItem(k, JSON.stringify([...s])); else localStorage.removeItem(k); } catch (_) { /* noop */ } }
+//  캐시는 즉시, 서버는 디바운스 — 서버 정본인 저장소일 때만 올라간다(shellPrefsTouch, #2460).
+//  호출부(핀·펼침·접힘 8군데)를 각각 고치지 않고 여기 한 자리가 덮는다.
+function saveSet(k: string, s: Set<string>): void { try { if (s.size) localStorage.setItem(k, JSON.stringify([...s])); else localStorage.removeItem(k); } catch (_) { /* noop */ } shellPrefsTouch(k); }
 function saveFlag(k: string, v: boolean): void { try { if (v) localStorage.setItem(k, '1'); else localStorage.removeItem(k); } catch (_) { /* noop */ } }
 function init(): void {
   if (inited) return;
   inited = true;
+  readStores();
+  void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
+}
+
+/**
+ * 서버 정본이 캐시를 덮었다 — 그 값으로 갈아끼운다 (#2460).
+ *
+ * 이 모듈은 저장소를 **모듈 상태(Set·플래그)로 한 번 읽어** 들고 돈다. 부팅 뒤에 서버 정본이 도착해
+ *  캐시가 바뀌어도, 다시 읽지 않으면 화면은 이 브라우저의 옛 값으로 계속 그려진다 — 그러면 서버를
+ *  정본으로 올린 뜻이 없다. 사람 아바타는 다시 당기지 않는다(이미 들고 있다).
+ */
+export function reloadSidePrefs(): void {
+  if (!inited) return;
+  readStores();
+  if (last) redraw();
+}
+
+/** 저장소 → 모듈 상태. init 과 reloadSidePrefs 가 **같은 자를 쓰도록** 한 곳에 둔다. */
+function readStores(): void {
   openSet = loadSet(OPEN_KEY);
   try { localStorage.removeItem(PAST_KEY_LEGACY); } catch (_) { /* noop */ }   // 예전에 남긴 펼침 기록을 치운다
   closedSelected = loadSet(SELCLOSED_KEY);
@@ -121,7 +145,6 @@ function init(): void {
   try { projLens = localStorage.getItem(LENS_STORE) === 'active' ? 'active' : 'tree'; } catch (_) { /* 기본 렌즈(폴더 · 리스트)로 */ }
   initWikiClosed();
   foldClosed = loadSet(FOLD_CLOSED_STORE);
-  void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
 }
 
 /** 도는 세션 = tmux 에 살아 있는 박스. / 지난 세션 = 되살릴 수 있는 것 전부(중단됨·종료됨·메모리 부족·기록만). views.ts 가 정의한다. */
@@ -335,7 +358,7 @@ export interface SideInstance {
 //  · 폴더 · 리스트 렌즈는 **리스트까지만**(프로젝트 행 없음) — 리스트를 누르면 가운데 보드가 그 리스트로 간다(#/projects2/l/<id>).
 //  · 끌어다 놓기·리스트 ⋯ 메뉴는 1차에서 뺐다 — 리스트 설정·즐겨찾기 토글은 보드 머리줄의 ⌄ · ☆ 가 한다(#1067).
 const LENS_STORE = 'lively_v2_proj_lens';               // 'active' | 'tree'
-const FOLD_CLOSED_STORE = wsKey('lively_v2_proj_fold_closed'); // 접어 둔 폴더 id
+const FOLD_CLOSED_STORE = shellPrefStore('lively_v2_proj_fold_closed', 'list'); // 접어 둔 폴더 id
 type ProjLens = 'active' | 'tree';
 let projLens: ProjLens = 'tree';
 let foldClosed = new Set<string>();
@@ -689,7 +712,7 @@ function appListKids(shown: SideInstance[], q: string, o: RowOpts = {}, empty?: 
 function paintAppList(): void {
   if (!appListEl || !hooks.instances) return;
   const q = sideFilter.trim().toLowerCase();
-  const shown = hooks.instances().filter((i) => !q || [i.title, i.meta, i.ask, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = hooks.instances().filter(instMatch(sideFilter));
   appListEl.replaceChildren(...appListKids(shown, q));
   appListEl.scrollTop = 0;   // 거르고 나면 맨 위가 첫 결과다
 }
@@ -735,6 +758,58 @@ function secHead(title: string, count: number | null, ...acts: Array<HTMLElement
 
 /** 켜져 있는 필터 수 — 0이면 요약 줄을 그리지 않는다. */
 function fltCount(): number { return (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0); }
+
+// ── 찾기의 잣대 — **구역이 달라도 하나다**(원준 2026-08-31: "검색 아이콘 쪽 검색 품질이 너무 안 좋다") ──────
+//  종전엔 구역마다 `haystack.toLowerCase().includes(q)` 한 줄이었다. 붙어 있는 부분문자열 하나만 보므로
+//  한국어에서는 사람이 실제로 치는 세 가지가 전부 0건이 됐다:
+//   ⓐ **띄어쓰기** — 「새세션」으로 치면 '새 세션'이 안 나온다(사람은 띄어쓰기를 기억하지 않는다).
+//   ⓑ **낱말 순서** — 기억나는 두 낱말을 「검색 사이드바」처럼 순서 없이 치면 0건.
+//   ⓒ **초성** — 「ㅍㄹㅈㅌ」로 '프로젝트'를 찾는 건 한국어 앱의 기본 손짓인데 아예 없었다.
+//     한글은 조합 중에도 이 상태를 지난다(ㅍ → 프 → 프ㄹ …) — 그래서 이건 '기능'이기 전에
+//     **치는 도중 화면이 죽지 않게 하는 것**이다.
+//  잣대를 하나로 두는 이유는 이 파일의 다른 규율과 같다: 구역마다 새 방식을 만들지 않는다.
+const CHO = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
+/** 한글 음절은 초성 한 자로, 나머지 글자(영문·숫자·호환자모)는 그대로. '프로젝트 762' → 'ㅍㄹㅈㅌ 762' */
+function chosung(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const c = ch.codePointAt(0) || 0;
+    out += c >= 0xac00 && c <= 0xd7a3 ? CHO[Math.floor((c - 0xac00) / 588)] : ch;
+  }
+  return out;
+}
+//  칸 사이 경계는 남기고(줄바꿈) 칸 **안의** 띄어쓰기만 지운다 — 다 지우면 '…프로젝트' + '세션…' 이
+//  한 낱말로 붙어 엉뚱한 것이 걸린다(제목 끝과 다음 칸 머리를 잇는 질의가 통과한다).
+const deSpace = (s: string): string => s.replace(/[ \t\u00a0]+/g, '');
+/** 질의에 자모가 섞여 있나 — 초성 축은 이때만 본다. 늘 보면 '세션'(→ㅅㅅ)이 온 목록을 통과시킨다. */
+const HAS_JAMO = /[ㄱ-ㅎ]/;
+/**
+ * 사이드바 찾기 판정기. 빈 질의는 늘 참(거르지 않는다).
+ *  · 공백으로 끊은 **낱말 전부**가 들어 있어야 한다(AND) — 순서는 안 본다.
+ *  · 각 낱말은 띄어쓰기를 지운 축에서 찾는다 — 「새세션」 ↔ '새 세션'.
+ *  · 자모가 섞인 낱말은 **초성 축**에서도 찾는다 — 「ㅍㄹㅈㅌ」·조합 중인 「프로젝ㅌ」.
+ */
+function findMatcher(raw: string): (...parts: Array<string | null | undefined>) => boolean {
+  const q = String(raw || '').trim().toLowerCase();
+  if (!q) return () => true;
+  const toks = q.split(/\s+/).filter(Boolean);
+  return (...parts): boolean => {
+    const hay = parts.filter(Boolean).join('\n').toLowerCase();
+    const flat = deSpace(hay);
+    let cho = '';
+    return toks.every((t) => {
+      if (flat.includes(deSpace(t))) return true;
+      if (!HAS_JAMO.test(t)) return false;
+      if (!cho) cho = deSpace(chosung(hay));
+      return cho.includes(deSpace(chosung(t)));
+    });
+  };
+}
+/** 홈·[AI 세션] 목록의 행 하나 — **화면에 보이는 것**(제목·부제·내 마지막 말·프로젝트 이름)을 그대로 찾는 대상으로 삼는다. */
+function instMatch(raw: string): (i: SideInstance) => boolean {
+  const m = findMatcher(raw);
+  return (i) => m(i.title, i.meta, i.ask, i.project?.name);
+}
 
 /** 찾기 칸 — 구역마다 찾는 대상이 달라 안내 문구만 갈린다(입력 상태 `sideFilter` 는 하나다).
  *  ⚠ 한글 조합 보호는 홈 목록과 같은 규율이다(#1958): 조합 중엔 전면 재렌더를 멈추고, Esc 는 조합 취소를 먼저 존중한다. */
@@ -820,7 +895,7 @@ function renderHomeApps(): void {
   const { host } = last;
   const instances = hooks.instances!();
   const q = sideFilter.trim().toLowerCase();
-  const shown = instances.filter((i) => !q || [i.title, i.meta, i.ask, i.project?.name].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const shown = instances.filter(instMatch(sideFilter));
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   const findHad = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('v2-find-in') ? document.activeElement : null;
@@ -928,14 +1003,15 @@ function renderSessions(): void {
   const counts = new Map<string, number>();
   for (const s of live) counts.set(s.stateKey, (counts.get(s.stateKey) || 0) + 1);
   const q = sideFilter.trim().toLowerCase();
+  const hit = findMatcher(sideFilter);
   const match = (s: Sess): boolean => {
     if (stateFilter && s.stateKey !== stateFilter) return false;
     if (!q) return true;
     const p = s.projectId ? data.projects.find((x) => x.id === s.projectId) : null;
-    return [s.label, p?.name].filter(Boolean).join(' ').toLowerCase().includes(q);
+    return hit(s.label, p?.name);
   };
   const liveShown = live.filter(match);
-  const pastShown = past.filter((s) => (stateFilter ? false : true) && (!q || s.label.toLowerCase().includes(q)));
+  const pastShown = past.filter((s) => (stateFilter ? false : true) && hit(s.label));
 
   const prevScroll = appListEl ? appListEl.scrollTop : 0;
   //  ★ 홈과 **같은 붓**을 쓴다(#2033) — 행 문법도 묶는 축 토글도 여기서 새로 만들지 않는다.
@@ -1063,7 +1139,7 @@ export function loadFavLists(): void {
 //  구역에 들어갔을 때 나오던 것은 **전체 프로젝트 보드**였다. 액자 안 클래식 보드에도 같은 규칙(#1114)이 있지만
 //  그건 클래식 패널(renderArea)이 설 때만 도는데, 새 셸에서는 그 패널을 접으므로(#2043) 영영 안 돌았다.
 //  그래서 규칙을 **셸의 착지 주소**로 올린다 — 주소가 리스트를 가리켜야 이 사이드바의 그 줄도 눌린 것으로 선다(projScopeKey).
-const FAV_TOP_STORE = wsKey('lively_v2_proj_fav_top');
+const FAV_TOP_STORE = deviceStore('lively_v2_proj_fav_top');
 
 /** 즐겨찾기 맨 위 리스트 id — 사이드바 즐겨찾기 구역과 **같은 식**(같은 순서)을 쓴다. 모르면 0. */
 function favTopListId(): number {
@@ -1168,7 +1244,8 @@ function renderProjTree(): void {
   for (const f of folders) if (f.settings && f.settings.kind === 'archive') markArchive(f);
   const listsIn = (folderId: number | null): TreeList[] => lists.filter((l) => (l.folder_id ?? null) === folderId);
   const q = sideFilter.trim().toLowerCase();
-  const hit = (name: string): boolean => !q || name.toLowerCase().includes(q);
+  const match = findMatcher(sideFilter);
+  const hit = (name: string): boolean => match(name);
   const sel = projScopeKey();
   const countUnder = (f: TreeFolder): number => listsIn(f.id).reduce((n, l) => n + (openByList.get(l.id) || 0), 0)
     + (kids.get(f.id) || []).filter((c) => !archived.has(c.id)).reduce((n, c) => n + countUnder(c), 0);
@@ -1266,7 +1343,7 @@ let wikiCats: WikiCat[] | null = null;
 let wikiLoading = false;
 let wikiPins: number | null = null;      // WIKI 인덱스(핀) 건수 — 뷰 줄의 알약
 let wikiPinsLoading = false;
-const WIKI_CLOSED_STORE = wsKey('lively_v2_wiki_closed');   // 접어 둔 스페이스(브라우저 기억)
+const WIKI_CLOSED_STORE = shellPrefStore('lively_v2_wiki_closed', 'list');   // 접어 둔 스페이스
 let wikiClosed = new Set<string>();
 const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 스페이스 — 페이지 수명(새로 열면 다시 접힌다)
 const WIKI_CARD_MAX = 6;                 // 카드 하나에 바로 보이는 분류 수. 넘으면 더 보기로 접는다
@@ -1281,7 +1358,7 @@ function initWikiClosed(): void {
     wikiClosed = raw == null ? new Set(['business', 'system']) : new Set<string>(JSON.parse(raw) || []);
   } catch (_) { wikiClosed = new Set(['business', 'system']); }
 }
-function saveWikiClosed(): void { try { localStorage.setItem(WIKI_CLOSED_STORE, JSON.stringify([...wikiClosed])); } catch (_) { /* 못 남겨도 이번 화면은 된다 */ } }
+function saveWikiClosed(): void { try { localStorage.setItem(WIKI_CLOSED_STORE, JSON.stringify([...wikiClosed])); } catch (_) { /* 못 남겨도 이번 화면은 된다 */ } shellPrefsPush(); }
 
 /** 우리 팀이 맡은 분류 id — `/api/ui/me` 가 이미 싣고 있다(team_owner_category_ids). 없으면 빈 집합(표식만 안 붙는다). */
 function ownerCatIds(): Set<number> {
@@ -1350,8 +1427,8 @@ function renderWiki(): void {
     const c = all.find((x) => x.id === activeCat);
     if (c && wikiClosed.has(c.space)) { wikiClosed.delete(c.space); saveWikiClosed(); }
   }
-  const hit = (c: WikiCat) => !q || c.name.toLowerCase().includes(q)
-    || String(c.description || '').toLowerCase().includes(q) || String(c.key || '').toLowerCase().includes(q);
+  const match = findMatcher(sideFilter);
+  const hit = (c: WikiCat) => match(c.name, c.description, c.key);
   // 순서 = 우리 팀이 맡은 것 먼저 → 문서 많은 것 먼저.
   const rank = (a: WikiCat, b: WikiCat): number =>
     (Number(own.has(b.id)) - Number(own.has(a.id))) || ((Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0));
@@ -1871,7 +1948,7 @@ function axisBtn(): HTMLElement {
     title: groupProj ? '지금은 프로젝트로 묶는 중 — 눌러서 세션으로 풀기' : '프로젝트로 묶기 — 같은 목록을 프로젝트별로 접어 봅니다',
     onclick: () => {
       groupProj = !groupProj;
-      try { if (groupProj) localStorage.setItem(GROUP_STORE, 'proj'); else localStorage.removeItem(GROUP_STORE); }
+      try { if (groupProj) localStorage.setItem(GROUP_STORE, 'proj'); else localStorage.removeItem(GROUP_STORE); shellPrefsPush(); }
       catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
       redraw();
     } },
@@ -1980,7 +2057,8 @@ function renderTree(rowsIn?: Row[]): void {
     if (r && (r.live.length || r.past.length)) { openSet.add(selectedPk); saveSet(OPEN_KEY, openSet); }
   }
   const q = sideFilter.trim().toLowerCase();
-  const hit = (r: Row) => !q || (r.proj ? (r.proj.name.toLowerCase().includes(q) || String(r.proj.id) === q) : '프로젝트 없는 세션'.includes(q));
+  const match = findMatcher(sideFilter);
+  const hit = (r: Row) => (r.proj ? (match(r.proj.name) || String(r.proj.id) === q) : match('프로젝트 없는 세션'));
   const stateOf = (r: Row) => (stateFilter ? r.live.filter((s) => s.stateKey === stateFilter) : r.live);
   const pastOf = (r: Row) => (stateFilter ? r.past.filter((s) => s.stateKey === stateFilter) : r.past);
   let hiddenDone = 0;

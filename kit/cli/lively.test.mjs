@@ -16,6 +16,7 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 import { WIN } from "../testlib/os-sandbox.mjs";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 // CLI 런처 심의 파일명 — 윈도우는 `.cmd` 배치다(user-install.mjs 의 CLI_SHIM_CMD). 이름을 가정하면 윈도우에서 어긋난다(#1510).
 const SHIM = WIN ? "lively.cmd" : "lively";
 
@@ -162,7 +163,7 @@ async function lively(h, args, { env = {}, expectFail = false } = {}) {
   try {
     const r = await pExecFile(process.execPath, [CLI, ...args], {
       env: {
-        ...process.env,
+        ...process.env, ...offlineLivelyEnv(),
         HOME: h.home,
         LIVELY_HOME: h.home,
         CLAUDE_CONFIG_DIR: join(h.home, ".claude"),
@@ -238,12 +239,27 @@ try {
     // (b) register-clients.sh parity — fresh 설치·멤버 온보딩의 주 경로다(deploy/install-kit.sh·provision-member.sh 가
     //  직접 호출). 여기가 CLI 와 다른 transport 로 등록하면 **그 경로로 깐 첫 세션은 여전히 http** 라 #1079 가 그대로 남는다.
     //  두 트윈(scripts/ 소스 · kit/setup/) 모두 본다 — 한쪽만 고치는 드리프트가 실제로 있었다.
+    //
+    //  ⚠ 종전엔 셸에서 `--transport stdio` **문자열**을 찾았다. 그런데 #2476 에서 등록을 셸의 `claude mcp add`
+    //   에서 **파일 쓰기**(setup/mcp-register.mjs)로 내렸다 — 매니지드 중계가 나가는 컨테이너에 하네스
+    //   바이너리가 있으리라는 보장이 없어서다. 구현 문자열을 요구하던 이 단언은 그 순간 거짓 실패를 냈다.
+    //   그래서 **위임을 따라가 산출을 검사한다**: 셸이 등록기에 위임하는지 + 그 등록기가 CLI 와 같은 모양을
+    //   내는지. 문자열이 아니라 성질이라 다음 구현 변경에도 안 깨지고, 진짜 드리프트는 여전히 잡는다.
     for (const rel of [["scripts", "register-clients.sh"], ["kit", "setup", "register-clients.sh"]]) {
-      const p = join(REPO, ...rel);
-      const sh = readFileSync(p, "utf8");
-      check(`④ ${rel.join("/")} 가 CLI 와 같은 transport 로 lively 등록(parity)`,
-        /--transport +stdio +--scope +user +"?\$\{?MCP_LABEL/.test(sh) || /lively["']? +mcp\b/.test(sh),
-        `${rel.join("/")} 가 아직 http 직결로 lively 를 등록한다 — 이 경로로 깐 첫 세션은 #1079 를 그대로 겪는다(CLI·self-update 와 drift)`);
+      const sh = readFileSync(join(REPO, ...rel), "utf8");
+      const code = sh.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+      check(`④ ${rel.join("/")} 가 등록기에 위임한다(하네스 바이너리를 부르지 않는다)`,
+        /mcp-register\.mjs/.test(code) && !/(^|[;&|(]\s*)claude\s/m.test(code),
+        `${rel.join("/")} 가 claude 를 직접 부르거나 등록기를 안 부른다 — 그 자리에 바이너리가 없으면 시딩이 통째로 죽는다(#2476)`);
+    }
+    {
+      const { planServers } = await import(pathToFileURL(join(REPO, "kit", "setup", "mcp-register.mjs")).href);
+      const [lively] = planServers({ shim: shimPath, shimUsable: true, storeUrl: "http://x/mcp", token: "T", env: {} });
+      check("④ 등록기가 CLI 와 같은 모양을 낸다(parity — stdio 프록시 · args:[mcp])",
+        lively.type === "stdio" && lively.command === shimPath && JSON.stringify(lively.args) === '["mcp"]',
+        `got=${JSON.stringify(lively)}`);
+      check("④ 등록기 stdio 경로에 평문 토큰이 없다(#1079)",
+        !JSON.stringify(lively).includes("Bearer"), `got=${JSON.stringify(lively)}`);
     }
     // (c) self-update.mjs — 기존 멤버를 재설치 없이 옮기는 4번째 동기화 지점. stdio 마이그레이션과,
     //  롤백 시 살아나는 종전 헤더 계약을 **둘 다** 알고 있어야 한다.
@@ -423,7 +439,7 @@ try {
     // 게이트웨이가 서빙하듯 주소를 굽는다(src/web.ts 의 serveBootstrap 과 동일 치환).
     writeFileSync(boot, readFileSync(join(HERE, "bootstrap.sh"), "utf8").replaceAll("__LIVELY_GATEWAY__", GW));
     const r = await pExecFile("sh", [boot], {
-      env: { ...process.env, HOME: h.home, LIVELY_HOME: h.home, PATH: pathWith(h.bin) },
+      env: { ...process.env, ...offlineLivelyEnv(), HOME: h.home, LIVELY_HOME: h.home, PATH: pathWith(h.bin) },
       timeout: 60000,
     }).catch((e) => ({ stdout: e.stdout ?? "", stderr: e.stderr ?? String(e.message), failed: true }));
 
@@ -527,7 +543,7 @@ try {
       `backupUserMcp("linear");`,                                                             // 재호출 — 최초1회면 유저 원본 유지
     ].join("\n"));
     // ⚠ CLAUDE_CONFIG_DIR 를 명시적으로 비운다 — 안 그러면 개발자 셸의 값이 새어들어 엉뚱한 파일을 보게 된다.
-    execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box, CLAUDE_CONFIG_DIR: "" }, stdio: "ignore" });
+    execFileSync(process.execPath, [probe], { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: box, CLAUDE_CONFIG_DIR: "" }, stdio: "ignore" });
     let bak = {}; try { bak = JSON.parse(readFileSync(join(box, ".lively", "mcp-user-backup.json"), "utf8")); } catch { /* */ }
     check("⑰ backupUserMcp — 유저 원본 스냅샷 + 부재는 null + 최초1회(재설치 오염 방지)",
       !!(bak.linear && bak.linear.url === "https://user.example/mcp") && bak.notion === null, JSON.stringify(bak));
@@ -552,7 +568,7 @@ try {
       `import { backupUserMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,   // 절대경로 그대로면 윈도우에서 죽는다(#1510)
       `backupUserMcp("linear");`,
     ].join("\n"));
-    execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box, CLAUDE_CONFIG_DIR: prof }, stdio: "ignore" });
+    execFileSync(process.execPath, [probe], { env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: box, CLAUDE_CONFIG_DIR: prof }, stdio: "ignore" });
     let bak = {}; try { bak = JSON.parse(readFileSync(join(box, ".lively", "mcp-user-backup.json"), "utf8")); } catch { /* */ }
     check("⑰-b backupUserMcp — 프로필 격리(#346)에서 CLAUDE_CONFIG_DIR 의 .claude.json 을 본다",
       !!(bak.linear && bak.linear.url === "https://user-profile.example/mcp"), JSON.stringify(bak));
@@ -576,7 +592,7 @@ try {
     ].join("\n"));
     execFileSync(process.execPath, [probe], {
       env: {
-        ...process.env, HOME: h.home, USERPROFILE: h.home, LIVELY_HOME: h.home,
+        ...process.env, ...offlineLivelyEnv(), HOME: h.home, USERPROFILE: h.home, LIVELY_HOME: h.home,
         PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
         CLAUDE_CONFIG_DIR: "",   // 지목 없음 — 빈 문자열을 '지목' 으로 읽으면 프로필이 통째로 빠진다
       },
@@ -612,7 +628,7 @@ try {
     execFileSync(process.execPath, [probe], {
       // HOME=가짜 실홈 · LIVELY_HOME=샌드박스 — 어긋난 상태를 그대로 재현한다.
       env: {
-        ...process.env,
+        ...process.env, ...offlineLivelyEnv(),
         HOME: live, USERPROFILE: live,          // 윈도우는 os.homedir() 가 USERPROFILE 을 본다(#1510)
         LIVELY_HOME: h.home, CLAUDE_CONFIG_DIR: "",
         PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",

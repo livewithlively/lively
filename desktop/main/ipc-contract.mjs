@@ -90,23 +90,40 @@ function gateway(o) {
   return gw;
 }
 
+/**
+ * 설치할 AI 하네스 (#2255) — 온보딩에서 고른 것을 `setup`/`install` 에 실어 보낸다.
+ *
+ * ⚠ **허용목록으로만 통과시킨다.** 이 값은 렌더러가 준다. 자유문자열이면 그게 곧 인자 주입면이고
+ *  (`--harness "x --gateway http://evil"`), 위 머리말의 «렌더러가 argv 를 만들지 않는다» 가 무너진다.
+ * ⚠ 목록이 kit/hooks/harness-registry.mjs 의 HARNESS_IDS 와 **같아야** 한다. 앱은 그 파일을 import 할 수
+ *  없으므로(패키징 경계가 다르다) 여기 사본을 두고 desktop-core.test.mjs 가 두 목록의 일치를 못박는다.
+ * ⚠ 값이 없으면 인자를 **안 붙인다** — 그러면 CLI 가 게이트웨이에서 온보딩 선택을 직접 읽는다(정본은 CLI 다).
+ */
+export const HARNESS_IDS = ["claude", "codex", "opencode", "antigravity", "grok"];
+function harnessArgs(o) {
+  const h = String(o.harness || "").trim().toLowerCase();
+  if (!h) return [];
+  if (!HARNESS_IDS.includes(h)) throw new Error(`알 수 없는 AI: ${o.harness}`);
+  return ["--harness", h];
+}
+
 export function argvFor(kind, opts) {
   const o = opts || {};
   switch (kind) {
     // setup = 로그인 + 키트 설치(순서·조건의 정본은 CLI 다 — 앱이 다시 판단하지 않는다).
-    case "setup": { const gw = gateway(o); return gw ? ["setup", "--gateway", gw] : ["setup"]; }
+    case "setup": { const gw = gateway(o); return [...(gw ? ["setup", "--gateway", gw] : ["setup"]), ...harnessArgs(o)]; }
     // 클라우드 설치(#2044) — 주소를 **안 받는다**. CLI 가 라이블리 클라우드에 붙어 워크스페이스를 알아 온다.
     //  값을 인자로 노출하지 않는 이유: 이 경로의 요지가 "사람도 앱도 주소를 모른다" 이고, 렌더러가 임의
     //  클라우드 주소를 넣을 수 있으면 그건 다시 주소 입력이다(개발용 덮어쓰기는 env LIVELY_CLOUD_URL).
     case "setup-cloud": {
       const c = String(process.env.LIVELY_CLOUD_URL || "").trim();
       if (c && !/^https?:\/\/[^\s"'`;|&$()<>\\]+$/i.test(c)) throw new Error("LIVELY_CLOUD_URL 형식이 올바르지 않습니다.");
-      return c ? ["setup", "--cloud", c] : ["setup", "--cloud"];
+      return [...(c ? ["setup", "--cloud", c] : ["setup", "--cloud"]), ...harnessArgs(o)];
     }
     case "login": { const gw = gateway(o); return gw ? ["login", "--gateway", gw] : ["login"]; }
     // 로그아웃은 게이트웨이 인자를 받지 않는다 — 지금 로그인된 곳에서 나가는 것이지 '어디서' 를 고르는 게 아니다.
     case "logout": return ["logout"];
-    case "install": return ["install"];
+    case "install": return ["install", ...harnessArgs(o)];
     // 키트 갱신 — **앱 자신의 자동 업데이트와 다른 축**이다(그건 electron-updater 가 앱 바이너리를 바꾼다).
     case "update": return ["update"];
     case "node-start": return ["node", "--daemon"];

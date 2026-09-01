@@ -22,7 +22,7 @@ export function resetAwaitingState(): void { lastSeen = new Map(); }
 export async function sweepAwaitingNotifications(deps?: {
   list?: typeof listSessionsRaw;
   notify?: typeof notifyMember;
-}): Promise<{ notified: number; suppressed: number; denied: number }> {
+}): Promise<{ observed: number; awaiting: number; notified: number; suppressed: number; denied: number }> {
   const list = deps?.list ?? listSessionsRaw;
   const notify = deps?.notify ?? notifyMember;
 
@@ -58,6 +58,10 @@ export async function sweepAwaitingNotifications(deps?: {
     notified++;
   }
 
-  if (notified) logger.info({ notified, suppressed, denied }, "awaiting 알림 발송");
-  return { notified, suppressed, denied };
+  //  ⚠ **observed 를 함께 돌려준다.** 셋(notified·suppressed·denied)만으로는 «0건» 의 뜻이 갈리지 않는다 —
+  //   세션 20개를 봤는데 전이가 없어 0인 것과, 볼 세션이 **아예 0개**인 것(중계가 끊겼다·컨텍스트가 틀렸다)이
+  //   똑같이 0,0,0 이다. 그 둘을 구별 못 해서 매니지드에서 이 스윕이 죽어 있던 걸 이틀이나 몰랐다(#2246).
+  const awaiting = observed.filter((o) => o.awaiting).length;
+  if (notified) logger.info({ observed: observed.length, awaiting, notified, suppressed, denied }, "awaiting 알림 발송");
+  return { observed: observed.length, awaiting, notified, suppressed, denied };
 }

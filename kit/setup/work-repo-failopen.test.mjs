@@ -19,6 +19,7 @@ import { join, dirname } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 import { WIN, pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 let pass = 0, fail = 0;
@@ -72,7 +73,7 @@ const failedOf = (home) => ((markerOf(home) || {}).repos_failed) || [];
 // 준비에 성공할 수 있는 진짜 레포. commits=true 면 커밋 1개(worktree 를 만들려면 HEAD 가 필요).
 function initRepo(dir, commits = false) {
   mkdirSync(dir, { recursive: true });
-  const g = (...a) => execFileSync("git", a, { cwd: dir, stdio: "ignore", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
+  const g = (...a) => execFileSync("git", a, { cwd: dir, stdio: "ignore", env: { ...process.env, ...offlineLivelyEnv(), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@example.com");
   g("config", "user.name", "t");

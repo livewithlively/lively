@@ -783,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "b93f3158814a097b"
+  "input_hash": "89fa51208712902d"
  },
  {
   "name": "org_alert_status",
@@ -2026,7 +2026,7 @@
   "rest": [
    "POST /api/ui/me/workspaces/update"
   ],
-  "input_hash": "f62e557908759772"
+  "input_hash": "d1c5cdfe116c8160"
  },
  {
   "name": "workspace_delete",
@@ -3277,6 +3277,26 @@
   "input_hash": "5cdd6ee705f0914b"
  },
  {
+  "name": "shell_prefs_index",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/shell-prefs"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "shell_prefs_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/shell-prefs"
+  ],
+  "input_hash": "cece975d859e2a3e"
+ },
+ {
   "name": "project_folder_index_v6",
   "scope": "memory",
   "mcp": true,
@@ -4207,6 +4227,16 @@
   "input_hash": "3341637643557f3f"
  },
  {
+  "name": "org_github_oauth_complete",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/github/oauth-complete"
+  ],
+  "input_hash": "91c13448f6294c13"
+ },
+ {
   "name": "org_app_tools",
   "scope": "admin",
   "mcp": true,
@@ -4354,7 +4384,7 @@
   "rest": [
    "GET /api/ui/org/:system/collect/options"
   ],
-  "input_hash": "6206790908a5980c"
+  "input_hash": "80d71c4c25c45131"
  },
  {
   "name": "org_google_collect",

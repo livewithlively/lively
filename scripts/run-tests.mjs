@@ -35,6 +35,9 @@
 //       node scripts/run-tests.mjs --fail-fast        첫 실패에서 중단(종전 기본)
 //       node scripts/run-tests.mjs --verbose          통과한 파일의 출력도 전부 표시(병렬 모드)
 //       node scripts/run-tests.mjs --slowest[=N]      끝에 느린 파일 N건 표시(기본 10 · 병렬화 상한 진단용)
+//       node scripts/run-tests.mjs --scope=kit,desktop 지정 디렉터리의 *.test.mjs 만 수집(src→dist 매핑 생략)
+//                                                     — 빌드 산출물이 없는 면(윈도우 CI)이 이 러너를 그대로 쓰게 한다
+//       node scripts/run-tests.mjs --budget=45         유닛 파일당 상한(초). 넘으면 통과해도 실패로 본다(#2457)
 import { readdirSync, existsSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
@@ -50,7 +53,9 @@ const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
 const DEFAULT_JOBS = Math.min(availableParallelism(), 8);
 const TEST_ENV = testChildEnv();
 
-const opts = { list: false, itest: false, build: false, failFast: false, verbose: false, slowest: 0, jobs: null };
+const opts = { list: false, itest: false, build: false, failFast: false, verbose: false, slowest: 0, jobs: null, scope: [], budget: 0 };
+// --scope 가 고를 수 있는 면 — 여기 없는 이름은 오타로 보고 죽인다(0건 매치 = 거짓 green 방지, --list 와 같은 원칙).
+const MJS_DIRS = ["kit", "scripts", "deploy", "desktop"];
 const filters = [];
 const argv = process.argv.slice(2);
 const die = (msg) => {
@@ -74,6 +79,13 @@ for (let i = 0; i < argv.length; i++) {
   else if (key === "--verbose") opts.verbose = true;
   else if (key === "--slowest") opts.slowest = val === null ? 10 : num(val, "--slowest");
   else if (key === "--jobs" || key === "-j") opts.jobs = num(val ?? argv[++i], "--jobs");
+  else if (key === "--budget") opts.budget = num(val ?? argv[++i], "--budget");
+  else if (key === "--scope") {
+    opts.scope = String(val ?? argv[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    if (!opts.scope.length) die("--scope 에 디렉터리를 지정하세요 (예: --scope=kit,desktop)");
+    const unknown = opts.scope.filter((d) => !MJS_DIRS.includes(d));
+    if (unknown.length) die(`--scope 에 알 수 없는 면: ${unknown.join(", ")}\n(가능: ${MJS_DIRS.join(", ")})`);
+  }
   else if (/^-j\d+$/.test(a)) opts.jobs = num(a.slice(2), "--jobs");
   // 알 수 없는 옵션을 부분문자열 필터로 삼으면 0 건 매치 → "✓ 0 test files passed" 로 **거짓 green** 이 된다.
   else if (a.startsWith("-")) die(`알 수 없는 옵션: ${a}\n(사용법은 ${path.relative(ROOT, fileURLToPath(import.meta.url))} 머리 주석)`);
@@ -117,11 +129,17 @@ if (opts.itest) {
     .filter((p) => /\.itest\.mjs$/.test(p))
     .map((p) => path.join("scripts", p))
     .sort();
+} else if (opts.scope.length) {
+  // ③계층(면 한정) — src→dist 매핑을 건너뛴다. 윈도우 CI 는 `npm ci`·빌드를 하지 않으므로(kit/desktop 은
+  //  node 내장 + 자기 모듈뿐) dist 를 수집하면 전부 '빌드 산출물 없음' 이 된다. 종전엔 그래서 러너를 아예
+  //  안 쓰고 PowerShell foreach 로 직렬 순회했고, 그 바람에 **러너가 심는 가드(실 홈 오염·격리 preflight)가
+  //  윈도우에서 하나도 안 돌았다**(#2457).
+  files = opts.scope.flatMap((d) => collect(d, /\.test\.mjs$/));
 } else {
   const srcTests = collect("src", /\.test\.ts$/).map((p) =>
     path.join("dist", path.relative("src", p).replace(/\.ts$/, ".js")),
   );
-  const mjsTests = ["kit", "scripts", "deploy", "desktop"].flatMap((d) => collect(d, /\.test\.mjs$/));
+  const mjsTests = MJS_DIRS.flatMap((d) => collect(d, /\.test\.mjs$/));
   files = [...srcTests, ...mjsTests];
 }
 if (filters.length) files = files.filter((f) => filters.some((s) => f.includes(s)));
@@ -278,6 +296,17 @@ const notRun = files.length - ran.length;
 //  상세 출력·원복은 exit 핸들러가 한다(여기선 판정만 — 두 번 찍지 않도록).
 const homeDirty = checkRealHome();
 
+// ── 파일당 시간 예산 (#2457) ─────────────────────────────────────────────────
+//  유닛 파일 하나가 상한을 넘으면 **통과해도 실패**로 본다. 넘는다는 건 그 파일이 유닛이 아니라
+//  통합이거나(계층을 옮겨라), 뭔가를 기다리고 있다는 뜻이다 — 후자가 이번 사고였다. 실측: DB 주소가
+//  없는데도 pg 기본값(localhost:5432)으로 붙어 6개 파일이 CI 에서 60초씩 대기했고, 그게 **넉 달간**
+//  아무도 눈치채지 못한 채 매 PR 의 CPU 를 태웠다. 예산이 있었다면 첫날 잡혔다.
+//  ⚠ 기본은 끔(0) — 면마다 정상 속도가 다르다(윈도우는 프로세스 기동이 훨씬 비싸다). CI 리눅스 잡이
+//   명시적으로 켠다(.github/workflows/test.yml).
+const overBudget = opts.budget
+  ? ran.filter((r) => !r.missing && r.status === 0 && r.ms > opts.budget * 1000).sort((a, b) => b.ms - a.ms)
+  : [];
+
 if (opts.slowest) {
   const top = ran.filter((r) => !r.missing).sort((a, b) => b.ms - a.ms).slice(0, opts.slowest);
   const sum = ran.reduce((s, r) => s + r.ms, 0) || 1;
@@ -286,12 +315,13 @@ if (opts.slowest) {
 }
 
 const suffix = `${wall}${jobs > 1 ? `, -j ${jobs}` : ", 직렬"}`;
-if (!fails.length && !buildFailed && !interrupted && !homeDirty.length) {
+if (!fails.length && !buildFailed && !interrupted && !homeDirty.length && !overBudget.length) {
   console.log(`\n✓ ${ran.length} test files passed (${suffix})`);
   process.exitCode = 0;
 } else {
   // 테스트는 다 통과했는데 빌드만 깨졌거나 중간에 중단된 경우가 있다 — 그때 "0/N 실패"는 오독을 부른다.
-  const onlyCause = buildFailed ? "빌드 실패" : interrupted ? "중단" : "실 홈 오염(테스트 격리 실패)";
+  const onlyCause = buildFailed ? "빌드 실패" : interrupted ? "중단"
+    : overBudget.length ? `시간 예산 초과(${opts.budget}s)` : "실 홈 오염(테스트 격리 실패)";
   console.error(
     fails.length
       ? `\n✗ ${fails.length}/${files.length} 실패 (${suffix})`
@@ -299,6 +329,11 @@ if (!fails.length && !buildFailed && !interrupted && !homeDirty.length) {
   );
   for (const r of fails) console.error(`   ${r.f} — ${label(r)}`);
   if (buildFailed) console.error(`   [빌드] npm run build — ${buildFailed}`);
+  if (overBudget.length) {
+    console.error(`\n   ⏱ 파일당 예산 ${opts.budget}s 초과 ${overBudget.length}건 — 통과했지만 너무 느리다:`);
+    for (const r of overBudget) console.error(`      ${(r.ms / 1000).toFixed(1)}s  ${r.f}`);
+    console.error("   → 무언가를 기다리는 중이거나(그게 결함이다) 유닛이 아니라 통합이다(*.itest.mjs 로).");
+  }
   if (notRun) console.error(`   … ${notRun}건 미실행 (${interrupted ? "중단" : "--fail-fast"})`);
   if (fails.length) console.error(`\n   실패분만 재실행: node scripts/run-tests.mjs ${fails.map((r) => r.f).join(" ")}`);
   // 종료코드: 종전과 같이 **첫 실패의 exit code** 를 전파(빌드 실패뿐이면 1, 중단은 130).

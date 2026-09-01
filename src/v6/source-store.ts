@@ -52,7 +52,7 @@ const S_SEL = S_COLS.split(",").map((c) => "s." + c.trim()).join(", ");
 // 목록/그래프용 얕은 컬럼(본문 제외 — 자료는 28k+ 전사록이라 목록에 전문 싣지 않는다). parent_external_id=스레드/계층 관계(#735).
 //  has_knowledge(#2423): 이 자료로 지식이 만들어졌나 — 목록의 민트 점 하나가 읽는 값. 건수가 아니라 유무다
 //  (목록에서 필요한 건 «됐나/안 됐나» 뿐이고, 몇 건인지는 상세가 말한다).
-const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.visibility,
+export const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.visibility,
    EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge`;
 
 export interface SourceRow {

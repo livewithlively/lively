@@ -40,10 +40,28 @@ const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
 const TOKEN = process.env.LIVELY_NODE_TOKEN || "";
 const NODE_ID = process.env.LIVELY_NODE_ID || ""; // 표시용 — 신원은 서버가 토큰으로 특정한다
 let workerStateSocket: WebSocket | null = null;
+const chatSubscribed = new Set<string>();   // #2439 — 세션마다 한 번만 구독한다(두 번이면 사건이 두 번 올라간다)
 const nodeWorkerHost = new WorkerHost({ onSnapshot: (snapshot) => {
   const ws = workerStateSocket;
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "workerState", snapshot } satisfies NodeToGwMsg));
 } });
+
+/**
+ * 노드에서 도는 **대화 런타임의 사건**을 게이트웨이로 올린다 (#2439).
+ *
+ *  ⚠ 소켓이 없거나 끊겼으면 **조용히 버린다.** 사건은 흐르는 것이고, 붙어 있지 않은 동안의 것을
+ *   쌓아 두면 재접속 때 옛 «도는 중» 이 한꺼번에 쏟아진다. 재접속하면 런타임이 스냅샷을 다시 준다.
+ *  ⚠ 그렇다고 **승인·선택지까지 버리는 것은 아니다** — 그건 노드의 버스가 쥐고 있고,
+ *   게이트웨이가 다시 붙으면 pendingAsks 로 되그린다(runtime-bus 의 그 규약이 여기서도 산다).
+ */
+let chatEventSocket: WebSocket | null = null;
+function pushChatEvent(session: string, ev: unknown): void {
+  const ws = chatEventSocket;
+  if (ws?.readyState === WebSocket.OPEN) {
+    try { ws.send(JSON.stringify({ t: "chatEvent", session, ev } satisfies NodeToGwMsg)); }
+    catch { /* 끊겼다 — 다음 사건은 재접속 뒤에 간다 */ }
+  }
+}
 
 // 도는 번들 자신의 지문(#905 C4) — 키트 kit-version 과 같은 모델: **실행 중인 바이트가 곧 버전**이라
 //  사람이 숫자를 올릴 필요도, 빠뜨릴 일도 없다. 게이트웨이가 서빙본 지문과 비교해 이 노드가 최신인지 안다.
@@ -286,6 +304,28 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       const b = args.bind as { projectId: number; folder: string; name?: string | null; src?: "v6" | "org" } | null | undefined;
       return applySessionProject(user, String(args.id), b && Number(b.projectId) > 0 ? b : null);
     }
+    //  ★ #2439 — **노드에서 대화 런타임을 돌린다.** 그 세션의 tmux 가 여기 있으니 런타임도 여기서
+    //   돌아야 승인·선택지·작업 목록이 생긴다. 사건은 chatEvent 로 게이트웨이에 올라가고,
+    //   게이트웨이는 그것을 자기 버스에 흘린다 — 화면·SSE 는 한 줄도 안 바뀐다.
+    case "chatSend": {
+      const id = String(args.id ?? "");
+      const text = String(args.text ?? "");
+      if (!id || !text.trim()) return { ok: false, error: "세션 id 와 보낼 내용이 필요합니다" };
+      const { onSessionEvent } = await import("../terminal/harness-io/runtime-bus.js");
+      //  구독은 **세션마다 한 번**만 건다(같은 세션에 두 번 걸면 사건이 두 번 올라간다).
+      if (!chatSubscribed.has(id)) {
+        chatSubscribed.add(id);
+        onSessionEvent(id, (ev) => pushChatEvent(id, ev));
+      }
+      const { deliverChatOnNode } = await import("./chat-on-node.js");
+      return await deliverChatOnNode(id, text, String(args.harness || ""));
+    }
+    //  ★ 그 런타임에 걸린 물음에 답한다 — chatSend 의 짝. 갈리면 «카드는 뜨는데 눌러도 안 가는» 상태가 된다.
+    case "chatAnswer": {
+      const { answer } = await import("../terminal/harness-io/runtime-bus.js");
+      const ok = answer(String(args.id ?? ""), String(args.askId ?? ""), args.value);
+      return { ok, stale: !ok };
+    }
     case "injectFirstPrompt": {
       const id = String(args.id);
       const harness = String(args.harness || "claude");
@@ -405,6 +445,7 @@ function connect(): void {
   ws.on("open", () => {
     attempt = 0;
     workerStateSocket = ws;
+    chatEventSocket = ws;   // #2439 — 대화 런타임 사건이 올라갈 통로
     lastBeat = Date.now();
     // 소켓 keepalive — 절전이 아니라 NAT 만료 같은 조용한 단절도 OS 가 알아채게(belt and braces).
     try { (ws as unknown as { _socket?: { setKeepAlive?: (on: boolean, ms: number) => void } })._socket?.setKeepAlive?.(true, 15_000); } catch { /* noop */ }
@@ -464,6 +505,7 @@ function connect(): void {
 
   const teardown = (): void => {
     if (workerStateSocket === ws) workerStateSocket = null;
+    if (chatEventSocket === ws) chatEventSocket = null;
     if (pusher) { clearInterval(pusher); pusher = null; }
     if (watch) { clearInterval(watch); watch = null; }
     for (const sock of chans.values()) sock.feedClose(); // attach pty 정리(#687 — 고아 방지)
