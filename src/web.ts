@@ -12,7 +12,7 @@ import { requireAppTool } from "./apps/principal.js";
 import { pruneCallLog } from "./org/policies/call-log-prune.js";
 import { getRuntimeConfig } from "./org/store/runtime-config.js";
 import { backfillSessionStates } from "./sessions/session-state-backfill.js";
-import { reapIdleSessions } from "./sessions/session-reaper.js";
+import { reapIdleSessions, reapPressureSessions } from "./sessions/session-reaper.js";
 import path from "node:path";
 import { readFileSync, statSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -131,6 +131,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     //  돌아가므로, "ok" 만 보내면 **한 번도 안 돈 것과 돌았지만 걷을 게 없던 것이 구분되지 않는다**
     //  (#2148 실측: 매니지드에서 이 리퍼가 도는지조차 아무도 몰랐다).
     await step("session-reaper", () => reapIdleSessions());
+    // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
+    //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.
+    //  그 함수가 시간으로 스스로 잠그니(PRESSURE_SWEEP_MIN_INTERVAL_MS) 몇 번을 불려도 간격당 한 번만 실제로 돈다 —
+    //  결과의 `throttled` 가 "이번 호출은 남이 이미 돌렸다"를 말한다(안 돈 것과 구분돼야 한다).
+    await step("session-pressure-reaper", () => reapPressureSessions());
     res.json({ ok: true, steps: out });
   }));
 
