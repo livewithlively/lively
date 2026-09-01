@@ -51,6 +51,11 @@ echo "공유 워크스페이스 → $SHARED_DIR (root:lively-shared 2775 setgid)
 
 # ② box-spawn wrapper (root:root 0755) — 코드(terminal-isolation.ts BOX_SPAWN)와 경로 일치
 install -d -m 0755 /opt/lively/libexec
+#  ★ env 계약 정본을 **먼저** 놓는다 — box-spawn 이 이걸 source 한다(#2258 이동 2).
+#   순서가 뒤면 새 box-spawn 이 옛 박스에서 «session-env.sh 없음» 으로 죽는다.
+#   실행 파일이 아니라 라이브러리라 0644(멤버가 못 고치게 root 소유는 동일).
+install -m 0644 -o root -g root "$DIR/session-env.sh" /opt/lively/libexec/session-env.sh
+echo "session-env.sh → /opt/lively/libexec/session-env.sh (root:root 0644)"
 install -m 0755 -o root -g root "$DIR/box-spawn" /opt/lively/libexec/box-spawn
 echo "box-spawn → /opt/lively/libexec/box-spawn (root:root 0755)"
 # ②-cg box-cgspawn wrapper(#1059 D — per-session cgroup 메모리 격리, root:root 0755) — 코드(terminal-isolation.ts

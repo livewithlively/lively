@@ -14,7 +14,16 @@ import { readFileSync } from "node:fs";
 
 const LEASE = "CLAUDE_CODE_OAUTH_TOKEN";
 const sudoers = readFileSync(new URL("./linux/sudoers-lively", import.meta.url), "utf8");
-const spawn = readFileSync(new URL("./linux/box-spawn", import.meta.url), "utf8");
+const spawnSrc = readFileSync(new URL("./linux/box-spawn", import.meta.url), "utf8");
+//  ★ env 계약은 2026-09-01 에 **정본 한 벌**(linux/session-env.sh)로 옮겼다(#2258 이동 2) — 세 표면이
+//   같은 파일을 소비한다. 그래서 «box-spawn 실행 경로에 계약이 있는가» 를 두 파일을 이어 본다.
+//   ⚠ 배선 단언이 먼저다: box-spawn 이 그 라이브러리를 정말 source 하지 않으면 이어 보는 것 자체가 공허하다.
+const envLib = readFileSync(new URL("./linux/session-env.sh", import.meta.url), "utf8");
+assert.match(spawnSrc, /\.\s+"\$_envlib"/,
+  "box-spawn 이 session-env.sh 를 source 하지 않는다 — 계약이 실행 경로 밖에 있다");
+assert.match(spawnSrc, /lvly_session_env\s/,
+  "box-spawn 이 lvly_session_env 를 부르지 않는다 — source 만 하고 적용을 안 한다");
+const spawn = `${spawnSrc}\n${envLib}`;
 
 // 보존 목록 추출 — Cmnd 별 env_keep 한 줄씩.
 const keeps = new Map();
