@@ -25,6 +25,7 @@ import type { SessionEvent, TaskInfo } from "./session-event.js";
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 /** 명령·인자를 사람이 읽을 한 줄로(카드 한 줄이다). */
 function titleOf(name: unknown, args: unknown): string {
@@ -73,6 +74,19 @@ export function opencodeEvent(line: unknown): SessionEvent | null {
 
   //  ── 턴이 끝났다 — 도는 작업을 «끝남» 으로 접을 근거다(opencode 는 개별 완료 이벤트가 없다). ──
   //   ⚠ 여기서 작업을 지우지 않는다: 지우면 방금 끝난 것의 제목을 잃는다(claude 에서 밟은 그 버그).
+  //  ── 사용량 — AssistantMessage 에 토큰이 실린다(실측 1.18.25 OpenAPI:
+  //   tokens{total,input,output,reasoning,cache{read,write}} · cost). ──
+  //   ⚠ 이벤트 이름이 판마다 다를 수 있어 **모양으로** 찾는다(properties 안 어디에 있든).
+  if (type.startsWith("message.")) {
+    const info = rec(p.info) ?? rec(p.message) ?? p;
+    const tk = rec(info.tokens);
+    if (tk) {
+      return { t: "usage", usage: {
+        inputTokens: num(tk.input), outputTokens: num(tk.output),
+        ...(num(info.cost) !== undefined ? { costUsd: num(info.cost) } : {}),
+      } };
+    }
+  }
   if (type === "session.idle") return { t: "usage", usage: {} };
 
   //  대화 본문은 ChatLine 축이다.

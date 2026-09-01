@@ -214,3 +214,22 @@ export async function opencodeRejectQuestion(o: {
     return res.ok;
   } catch { return false; }
 }
+
+/**
+ * 이 세션에서 쓸 수 있는 **슬래시 명령** — `GET /command`(실측 1.18.25).
+ *  ⚠ 이벤트로는 안 온다(하네스마다 다르다: claude 는 init 에, grok 은 available_commands_update 로).
+ *   그래서 한 번 읽어 화면에 준다. 자동완성의 재료다.
+ */
+export async function opencodeCommands(o: { base: string; fetchFn?: typeof fetch }): Promise<Array<{ name: string; description?: string }>> {
+  const doFetch = o.fetchFn ?? fetch;
+  try {
+    const res = await doFetch(`${o.base}/command`);
+    if (!res.ok) return [];
+    const j = await res.json() as unknown;
+    if (!Array.isArray(j)) return [];
+    return j
+      .map((x) => (x && typeof x === "object" ? x as Record<string, unknown> : null))
+      .filter((x): x is Record<string, unknown> => !!x && typeof x.name === "string")
+      .map((x) => ({ name: String(x.name), description: typeof x.description === "string" ? x.description : undefined }));
+  } catch { return []; }
+}

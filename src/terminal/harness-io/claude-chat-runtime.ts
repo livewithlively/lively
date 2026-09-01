@@ -24,6 +24,7 @@ import { logger } from "../../log.js";
 import { sessionSpawnArgv } from "../session-exec.js";
 import { memberSpawnArgv } from "../terminal-member-fs.js";
 import { chatAdapter } from "./chat-adapters.js";
+import { antigravityCommandsFromHelp } from "./antigravity-stream.js";   // #2439 — agy 는 목록을 /help 로만 준다
 import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
 import { grokPromptLine } from "./grok-stream.js";
 import { perTurnTransport, stdioTransport, type ChatTransportConn } from "./chat-transport.js";
@@ -153,7 +154,11 @@ export async function ensureOpencodeChat(o: ClaudeChatOpts): Promise<Entry> {
   //  ★ 선택지 — opencode 는 «질문이 왔다» 를 **이벤트로 안 준다**(실측 1.18.25). `GET /question` 이
   //   대기 목록을 주므로 그걸 주기적으로 읽어 버스에 올린다.
   //   ⚠ 답은 **질문 순서대로의 배열**이다(키가 아니라 위치) — 그 짝을 여기서 만든다.
-  const { opencodePendingQuestions, opencodeReplyQuestion, opencodeRejectQuestion } = await import("./opencode-serve.js");
+  const { opencodePendingQuestions, opencodeReplyQuestion, opencodeRejectQuestion, opencodeCommands } = await import("./opencode-serve.js");
+  //  ★ 슬래시 목록은 **이벤트로 안 온다** — 한 번 읽어 화면에 준다(자동완성의 재료).
+  void opencodeCommands({ base }).then((commands) => {
+    if (commands.length) emitSessionEvent(o.sessionId, { t: "facts", facts: { commands } });
+  });
   const seenQ = new Set<string>();
   const qTimer = setInterval(() => {
     if (e.closing || !conn.alive()) { clearInterval(qTimer); return; }
@@ -234,6 +239,33 @@ export function ensureAntigravityChat(o: ClaudeChatOpts): Entry {
     try { feedLine(e, line); }
     catch (err) { logger.warn({ sessionId: o.sessionId, err: (err as Error)?.message }, "대화 이벤트 처리 실패 — 그 줄만 버린다"); }
   });
+  //  ★ 슬래시 목록은 init 에 없다 — `/help` 가 준다(실측: 모델 호출 없이 즉답).
+  //   ⚠ **대화 id 를 안 붙인다.** 붙이면 이 질문이 사람의 대화에 한 턴으로 남는다.
+  void (async () => {
+    try {
+      const inner = ["agy", "--print=/help", "--output-format=stream-json"];
+      const bySession = sessionSpawnArgv(o.sessionId, inner);
+      const argv = bySession.length ? bySession : (o.osUser ? memberSpawnArgv(o.osUser, inner) : inner);
+      const { spawn } = await import("node:child_process");
+      const ch = spawn(argv[0], argv.slice(1), { cwd: o.cwd, stdio: ["ignore", "pipe", "ignore"] });
+      let buf = "";
+      ch.stdout?.setEncoding("utf8");
+      ch.stdout?.on("data", (c: string) => { buf += c; });
+      ch.on("exit", () => {
+        for (const line of buf.split("\n")) {
+          const t = line.trim();
+          if (!t || t[0] !== "{") continue;
+          try {
+            const j = JSON.parse(t) as { event?: string; result?: { response?: unknown } };
+            if (j.event !== "result") continue;
+            const commands = antigravityCommandsFromHelp(String(j.result?.response ?? ""));
+            if (commands.length) emitSessionEvent(o.sessionId, { t: "facts", facts: { commands } });
+          } catch { /* 그 줄만 넘긴다 */ }
+        }
+      });
+    } catch { /* 목록이 없으면 자동완성만 없다 — 세션은 그대로 산다 */ }
+  })();
+
   logger.info({ sessionId: o.sessionId, resumed: !!e.convId }, "antigravity 대화 런타임 시작(턴마다 프로세스)");
   return e;
 }
