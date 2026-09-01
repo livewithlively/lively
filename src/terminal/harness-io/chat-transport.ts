@@ -105,6 +105,11 @@ export function perTurnTransport(o: {
   cwd: string;
   /** 하네스가 준 대화 id 를 기억한다 — 다음 턴이 그걸로 이어 붙는다(잃으면 새 대화가 열린다). */
   onConvId?: (id: string) => void;
+  /**
+   * 이 턴의 자식에게 **덧붙일** env(#2439). 훅이 되돌아올 주소를 여기로 싣는다 —
+   *  antigravity 훅 설정은 전역 한 벌이라 «이 세션이 대화창에서 도는가» 를 파일로는 못 전한다.
+   */
+  env?: Record<string, string>;
   spawnFn?: (argv: string[], cwd: string) => ChildProcess;
 }): ChatTransportConn & { setConvId(id: string): void; abort(): boolean } {
   let convId = "";
@@ -124,7 +129,11 @@ export function perTurnTransport(o: {
       try {
         const child = o.spawnFn
           ? o.spawnFn(argv, o.cwd)
-          : spawn(argv[0], argv.slice(1), { cwd: o.cwd, stdio: ["ignore", "pipe", "pipe"] });
+          : spawn(argv[0], argv.slice(1), {
+            cwd: o.cwd,
+            stdio: ["ignore", "pipe", "pipe"],
+            ...(o.env ? { env: { ...process.env, ...o.env } } : {}),
+          });
         running = child;
         //  턴이 끝나면 놓는다 — 안 놓으면 다음 «멈춤» 이 이미 죽은 프로세스를 겨눈다(멈춘 척이 된다).
         const release = (): void => { if (running === child) running = null; };
