@@ -86,7 +86,12 @@ export function startInlineAiLogin(
     catch (_) { /* 잠깐 못 물었다 — 다음 틱에. 조회 실패로 화면을 지우지 않는다 */ }
     if (!alive()) return;
 
-    if (st && st.loggedIn === true) {
+    //  ⚠ **이미 로그인돼 있다고 «끝났다» 로 읽으면 안 된다.** 자격 판정은 «파일이 있나» 라서 만료된 자격도
+    //   true 다(#1516) — [다시 로그인] 은 바로 그 상황을 위해 있는 버튼인데, 첫 조회의 true 를 완료로 읽으면
+    //   눌러도 «✓ 끝났어요» 만 깜빡이고 아무것도 안 한다(실측 2026-09-01, 상민님 신고).
+    //   그래서 «이번 시도의 결과» 로만 인정한다: 주소를 한 번 봤거나(사람이 브라우저에서 끝냈다),
+    //   프로세스가 끝났거나(CLI 가 «이미 로그인됨» 이라며 스스로 종료했다).
+    if (st && st.loggedIn === true && (lastUrl || st.exited === true)) {
       if (!saidDone) {
         saidDone = true; stopped = true;
         view.done();

@@ -26,7 +26,7 @@ test("★ 로그인이 이 자리에서 끝난다 — 버튼이 새 탭을 여�
   assert.ok(fn.length > 100, "openLogin 을 못 찾았다");
   const c = code(fn);
   assert.ok(!/window\.open/.test(c), "누르는 순간 새 탭을 열지 않는다");
-  assert.match(c, /\brun\(\)/, "그 자리에서 로그인 절차를 편다");
+  assert.match(c, /\brun\(/, "그 자리에서 로그인 절차를 편다");
 });
 
 test("★ 로그인 패널을 **행에 붙인다** — 만들어 놓고 안 붙이면 눌러도 아무 일이 안 일어난다", () => {
@@ -38,6 +38,11 @@ test("★ 로그인 패널을 **행에 붙인다** — 만들어 놓고 안 붙�
   const ret = c.slice(c.indexOf("return el('div', { class: 'aiacct' }"), c.indexOf("function myAiAccountsCard"));
   assert.ok(ret.length > 100, "행 반환문을 못 찾았다");
   assert.match(ret, /\bpanel\)/, "반환 트리에 panel 이 들어 있다");
+});
+
+test("★ 사람이 누른 로그인은 **새로** 띄운다 — 지난 시도의 만료된 코드를 보여 주지 않는다", () => {
+  const fn = SRC.slice(SRC.indexOf("const openLogin ="), SRC.indexOf("const logout ="));
+  assert.match(code(fn), /run\(true\)/, "명시적 클릭은 restart 로 부른다");
 });
 
 test("★ 두 갈래를 **하네스로** 가른다 — 주소·코드로 끝나면 카드, 아니면 터미널", () => {
