@@ -9,6 +9,7 @@ import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
 import { codexChatMode } from "./codex-chat-mode.js";
+import { sessionRuntimeMode } from "./session-runtime-mode.js";   // #2439 — 대화 런타임 세션은 pane 이 셸이다
 import { rememberCodexThread } from "./codex-chat-thread.js";   // #2055 — 첫 지시도 대화 좌표를 남겨야 화면이 읽는다
 import { HttpError } from "../http-error.js";
 import { dirToProjectFolder } from "../project/project-fs.js";
@@ -41,7 +42,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
 import {
@@ -204,7 +205,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, managedRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, appRaw, managedRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, lastSeenRaw, paneTitleRaw, runtimeRaw, ...labelParts] = line.split("\t");
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -241,6 +242,10 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       // #1954 3차 — 화면이 직접 찍은 열람 시각(@box_last_seen). attach 이벤트와 **다른 축**이라 max 로 합치지 않고
       //  그대로 올린다 — 합치는 자리는 프론트 판정 한 곳(web/session-status.ts isUnreadDone)이다.
       lastViewed: Number(lastSeenRaw) || 0,
+      //  #2439 — 이 세션이 **어느 모드로 떴나**(@box_runtime). 화면(runtimeMode)과 배달이 같은 값을
+      //   봐야 갈리지 않는다. ⚠ 행 **최상위**에 둔다 — tmuxDesired 안에 넣었더니 응답에 안 실려
+      //   384행 중 0행만 값을 갖는 상태가 됐다(실측 2026-09-01).
+      runtimeChoice: runtimeRaw === "chat" ? "chat" as const : runtimeRaw === "terminal" ? "terminal" as const : undefined,
       tmuxDesired: {
         owner: owner || "",
         label: labelParts.join("\t") || null,
@@ -272,6 +277,9 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
       offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
       reportedFresh: p.reportedFresh, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
+      //  #2439 — 이 세션이 어느 모드로 떴나. ⚠ 이 push 는 필드를 **하나씩 골라** 담는다 —
+      //   위에서 만들어 둔 값이라도 여기 안 적으면 조용히 사라진다(실측: 386행 중 0행만 값을 가졌다).
+      runtimeChoice: p.runtimeChoice,
       owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
       flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, appId: d.appId || undefined, label: d.label,
       managed: p.managed as string | null,
@@ -489,11 +497,19 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  · codex app-server 모드(#2055) — pane 은 **셸**이다. 대화는 대화창(app-server)이 전담하고, TUI 를 띄우면
   //    스레드 writer 가 둘이 돼 대화가 갈린다(codex 는 스레드당 writer 를 하나만 허용한다 — 실측).
   const chatMode = codexChatMode({ harness: harness.key, loginFor: input.loginFor });
+  //  ★ #2439 — **대화 런타임 세션도 pane 은 셸이다.** 대화를 런타임이 쥐는데 TUI 까지 띄우면 한 대화에
+  //   하네스가 둘 붙는다(실측 2026-09-01: 웹은 chat-runtime 으로 가는데 기록엔 TUI 줄이 함께 있었다).
+  //   그때 사람이 보는 것은 «선택지가 대화창에 안 뜨고 시간만 올라가는» 화면이다.
+  //  ⚠ 이 판정은 codexChatMode 와 **따로** 둔다: 저건 codex 전용 축이고 이건 하네스 무관이다.
+  //   둘을 한 값으로 접으면 codex 의 안내 문구가 다른 하네스에도 나간다.
+  const chatRuntime = !input.loginFor && sessionRuntimeMode({ harness: harness.key, loginFor: input.loginFor, choice: input.runtime }) === "chat";
   const launch = input.loginFor
     ? (harnessLoginArgv(input.loginFor) ?? cmd)
     : chatMode === "app-server"
       ? codexAppServerPaneArgv()
-      : harnessLaunchArgv(harness.key, cmd);
+      : chatRuntime
+        ? chatRuntimePaneArgv({ label: harness.label, bin: harness.bin || harness.key })
+        : harnessLaunchArgv(harness.key, cmd);
 
   const invites = await validInvites(input.invites, ownerId(user));
   const args = ["new-session", "-d", "-s", id];
@@ -679,6 +695,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
+  //  ★ #2439 — 이 세션이 **어느 모드로 떴나**. 배달·화면이 같은 값을 봐야 판정이 갈리지 않는다
+  //   (갈렸을 때 pane 은 셸인데 대화창은 죽은 세션이 됐다 — 2026-09-01 실측).
+  if (chatRuntime) await tmux(["set-option", "-t", id, "@box_runtime", "chat"]);
   await tmux(["set-option", "-t", id, "@box_kind", input.kind]);   // #2162 — 종류(@box_* 와 같은 자리·같은 규약)
   await tmux(["set-option", "-t", id, "@box_dir", target]);
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
@@ -805,7 +824,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   }
   //  ⚠ 앱 인스턴스 등록은 여기가 아니라 **게이트웨이 라우트**가 한다(routes.ts afterSessionCreated).
   //   이 파일은 노드 에이전트 번들에 실리고 노드엔 DB 가 없다('DB 없음' 계약, scripts/build-node-agent.mjs 화이트리스트).
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
+  //  ⚠ #2439 — **방금 정한 모드를 함께 돌려준다.** 이 객체는 collectSessions 가 아니라 여기서
+  //   만들어지므로, 안 실으면 «만들 때는 chat 인데 응답은 terminal» 이 되어 화면이 곧바로 갈린다.
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags,
+    ...(chatRuntime ? { runtimeChoice: "chat" as const } : {}) };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }

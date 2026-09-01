@@ -456,3 +456,22 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .cxl-ask.is-risky { border-left-color: var(--danger, #d9534f); }
 /* 곧 막힐 사용량은 색으로 먼저 온다(회색 92% 는 그냥 숫자로 읽힌다). */
 .stk-hot { border-color: var(--danger, #d9534f); color: var(--danger, #d9534f); }
+
+/* 선택지 카드(#2439) — 승인과 **다른 그림**이다: 허용/거부가 아니라 고르는 자리. */
+.stk-q .cxl-ask-kind { color: var(--blue-fill); }
+.stk-q-item + .stk-q-item { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.stk-q-item { margin-top: 10px; }
+.stk-q-text { font-size: 13.5px; line-height: 1.5; color: var(--ink); }
+.stk-q-hint { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+.stk-q-opts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+/* 선택지는 **누를 수 있게 커야** 한다 — 설명까지 담아 한 장으로 읽힌다. */
+.stk-q-opt { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; text-align: left;
+  flex: 1 1 210px; min-width: 0; font: inherit; padding: 10px 12px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+.stk-q-opt:hover { border-color: var(--blue-fill); }
+.stk-q-opt:focus-visible { outline: 2px solid var(--blue-fill); outline-offset: 1px; }
+.stk-q-opt.is-on { border-color: var(--blue-fill); background: var(--blue-fill); color: var(--on-fill); }
+.stk-q-label { font-weight: 600; font-size: 13px; }
+.stk-q-desc { font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.stk-q-opt.is-on .stk-q-desc { color: inherit; opacity: .9; }
+.cxl-ask-btn:disabled { opacity: .45; cursor: default; }

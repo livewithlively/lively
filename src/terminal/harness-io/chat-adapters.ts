@@ -90,7 +90,20 @@ const claudeChat: ChatAdapter = {
     response: {
       subtype: "success",
       request_id: ask.id,
-      response: value.allow
+      //  ★ **질문에는 «허용» 이 아니라 «고른 값» 으로 답한다**(공식 문서 규약):
+      //   updatedInput = { questions: <원본 그대로>, answers: { "<질문 전문>": "<고른 label>" } }
+      //   ⚠ questions 를 안 실으면 툴이 처리하지 못한다(문서: "required for tool processing").
+      //   ⚠ 그냥 allow 만 하면 답이 빈 채로 실행돼 "The user did not answer the questions" 로 끝난다
+      //    — 실측으로 확인했고, 화면은 영원히 도는 것처럼 보인다.
+      response: ask.questions?.length
+        ? (value.allow
+          ? { behavior: "allow", updatedInput: {
+              questions: ask.questions,
+              answers: value.answers ?? {},
+            } }
+          //  질문을 닫는 것(«답 안 함»)은 거부로 보낸다 — 에이전트가 그 사실을 알고 다음 수를 정한다.
+          : { behavior: "deny", message: "사용자가 답하지 않고 질문을 닫았습니다" })
+        : value.allow
         ? { behavior: "allow", updatedInput: (ask.input ?? {}) as Record<string, unknown>,
             //  «앞으로도» 는 하네스가 준 제안을 **그대로** 돌려줄 때만 성립한다(우리가 규칙을 짓지 않는다).
             ...(value.scope === "always" && Array.isArray(ask.suggestions) && ask.suggestions.length
@@ -122,6 +135,16 @@ const codexChat: ChatAdapter = {
   note: "번역·기동 모두 준비됨. 기동은 기존 codex-chat-runtime 소유이고 그 런타임이 onNotify 에서 버스로도 흘린다(#2439).",
 };
 
+/**
+ * JSON-RPC 응답의 id — **숫자면 숫자로** 돌려준다.
+ *  ⚠ `Number(x) || x` 로 쓰면 **id 0 이 문자열로 샌다**(0 은 falsy). grok 의 첫 요청 id 가 실제로
+ *   0 이었다(실측 2026-09-01) — 그러면 짝이 안 맞아 그 요청은 영영 답을 못 받는다.
+ */
+function rpcId(id: string): number | string {
+  const n = Number(id);
+  return Number.isFinite(n) && String(n) === id ? n : id;
+}
+
 const grokChat: ChatAdapter = {
   key: "grok", label: "Grok Build",
   //  `grok agent stdio` 가 ACP(JSON-RPC over stdio)를 말한다 — 실측으로 서브커맨드 존재 확인(2026-08-31).
@@ -144,6 +167,17 @@ const grokChat: ChatAdapter = {
   //   ⚠ 선택지를 에이전트가 줬으면 **그중 하나의 optionId** 를 돌려줘야 한다 — 우리가 지어낸 값은
   //    `-32602 invalid params` 로 튕기고 그 턴이 선다. 그래서 고른 것이 없으면 kind 로 고른다.
   respond: ({ ask, value }) => {
+    //  ★ **선택지는 승인과 다른 봉투다**(실측 2026-09-01, grok 1.0.13):
+    //   {"outcome":"accepted","answers":{"<질문 전문>":"<고른 label>"}}
+    //   ⚠ outcome 은 **문자열 variant** 다 — map 을 주면 "expected variant identifier" 로 튕긴다.
+    //    유효값(오류가 열거해 줬다): accepted · chat_about_this · skip_interview · cancelled.
+    //   ⚠ 성공하면 grok 이 UserAnswered 로 받아 턴을 이어간다(실측: tool completed).
+    if (ask.questions?.length) {
+      const body = value.allow
+        ? { outcome: "accepted", answers: value.answers ?? {} }
+        : { outcome: "skip_interview" };
+      return JSON.stringify({ jsonrpc: "2.0", id: rpcId(ask.id), result: body }) + "\n";
+    }
     const opts = (Array.isArray(ask.suggestions) ? ask.suggestions : []) as Array<Record<string, unknown>>;
     const pick = (want: string[]): string | undefined => {
       for (const w of want) {
@@ -158,7 +192,7 @@ const grokChat: ChatAdapter = {
         : pick(["reject_once", "reject_always"]));
     //  고를 것이 없으면 **취소**로 답한다 — 답을 안 하는 것보다 낫다(턴이 서지 않는다).
     const outcome = optionId ? { outcome: "selected", optionId } : { outcome: "cancelled" };
-    return JSON.stringify({ jsonrpc: "2.0", id: Number(ask.id) || ask.id, result: { outcome } }) + "\n";
+    return JSON.stringify({ jsonrpc: "2.0", id: rpcId(ask.id), result: { outcome } }) + "\n";
   },
   //  ★ 멈춤 — ACP `session/cancel` 은 **알림**이다(id 없음: 답을 안 준다).
   interrupt: ({ convId }) => convId

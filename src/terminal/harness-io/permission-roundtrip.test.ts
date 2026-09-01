@@ -10,7 +10,7 @@ import { chatAdapter } from "./chat-adapters.js";
 import { claudeStreamEvent } from "./claude-stream.js";
 import { grokAcpEvent } from "./grok-stream.js";
 import { opencodeEvent } from "./opencode-stream.js";
-import { antigravityEvent } from "./antigravity-stream.js";
+import { antigravityCommandsFromHelp, antigravityEvent } from "./antigravity-stream.js";
 import type { PermissionAnswer, PermissionAsk, SessionEvent } from "./session-event.js";
 
 let pass = 0;
@@ -195,6 +195,133 @@ t("[10] ★ claude argv 에 --permission-prompt-tool stdio 가 있다 — 없으
   const i = argv.indexOf("--permission-prompt-tool");
   assert.ok(i >= 0, "플래그가 있다");
   assert.equal(argv[i + 1], "stdio", "값은 stdio — MCP 도구 이름을 주면 CLI 가 거부한다");
+});
+
+t("[11] ★★ 선택지(AskUserQuestion) — 질문으로 알아보고 **고른 값**으로 답한다", () => {
+  //  ⚠ 이것이 상민님이 계속 신고한 그 «선택지» 다. 도구 승인이 아니라 **질문**인데, claude 는 둘 다
+  //   can_use_tool 로 보낸다(공식 문서 "Handle approvals and user input"). 승인으로 그리면
+  //   [허용] 을 눌러도 답이 안 채워져 툴이 "The user did not answer the questions" 로 끝난다.
+  const ask = askOf(claudeStreamEvent({
+    type: "control_request", request_id: "q-1",
+    request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [
+      { question: "딸기랑 사과 중에 뭐가 더 좋으세요?", header: "과일 선택", multiSelect: false,
+        options: [{ label: "딸기", description: "달고 향이 강합니다" }, { label: "사과", description: "아삭합니다" }] },
+    ] } },
+  }));
+  assert.equal(ask.toolName, "AskUserQuestion");
+  assert.ok(ask.questions && ask.questions.length === 1, "질문으로 알아본다");
+  assert.equal(ask.questions![0].options.length, 2);
+  assert.equal(ask.title, "딸기랑 사과 중에 뭐가 더 좋으세요?");
+
+  //  ★ 답은 «허용» 이 아니라 answers 다 — 키는 **질문 전문**, 값은 고른 label(문서 규약).
+  const line = chatAdapter("claude")!.respond!({
+    ask, convId: "c",
+    value: { allow: true, scope: "once", answers: { "딸기랑 사과 중에 뭐가 더 좋으세요?": "사과" } },
+  })!;
+  const out = JSON.parse(line) as any;
+  assert.equal(out.response.request_id, "q-1");
+  assert.equal(out.response.response.behavior, "allow");
+  //  ⚠ questions 를 안 실으면 툴이 처리하지 못한다(문서: "required for tool processing").
+  assert.deepEqual(out.response.response.updatedInput.questions, ask.questions);
+  assert.deepEqual(out.response.response.updatedInput.answers, { "딸기랑 사과 중에 뭐가 더 좋으세요?": "사과" });
+
+  //  건너뛰기 = 거부로 보낸다 — 에이전트가 «답 안 함» 을 알고 다음 수를 정한다.
+  const skip = JSON.parse(chatAdapter("claude")!.respond!({ ask, value: { allow: false }, convId: "c" })!) as any;
+  assert.equal(skip.response.response.behavior, "deny");
+});
+
+t("[12] 옵션 없는 질문은 **질문으로 안 본다** — 고를 것이 없는 카드는 막다른 길이다", () => {
+  const ev = claudeStreamEvent({
+    type: "control_request", request_id: "q-2",
+    request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [{ question: "음?", options: [] }] } },
+  });
+  const ask = askOf(ev);
+  assert.equal(ask.questions, undefined, "평범한 승인으로 되돌아간다(있는 척하지 않는다)");
+});
+
+t("[13] ★★ grok 선택지 — 실측 봉투 그대로(1.0.13, 2026-09-01 실제로 답해 성공)", () => {
+  //  요청 원문:
+  //   {"jsonrpc":"2.0","id":0,"method":"_x.ai/ask_user_question","params":{sessionId,toolCallId,
+  //     questions:[{question,options:[{label,description}],multiSelect:null}],mode:"default"}}
+  const ask = askOf(grokAcpEvent({
+    jsonrpc: "2.0", id: 0, method: "_x.ai/ask_user_question",
+    params: { sessionId: "s1", toolCallId: "call-1", mode: "default", questions: [
+      { question: "딸기와 사과 중 어느 것이 더 좋습니까?", multiSelect: null,
+        options: [{ label: "딸기", description: "딸기가 더 좋다고 선택합니다." },
+                  { label: "사과", description: "사과가 더 좋다고 선택합니다." }] },
+    ] },
+  }));
+  assert.equal(ask.id, "0");
+  assert.ok(ask.questions && ask.questions.length === 1, "선택지로 알아본다");
+  assert.equal(ask.questions![0].options.length, 2);
+  //  ⚠ grok 은 multiSelect 를 **null** 로 보낸다 — 참으로 접으면 안 된다.
+  assert.equal(ask.questions![0].multiSelect, false);
+
+  const out = JSON.parse(chatAdapter("grok")!.respond!({
+    ask, convId: "s1",
+    value: { allow: true, answers: { "딸기와 사과 중 어느 것이 더 좋습니까?": "사과" } },
+  })!) as any;
+  assert.equal(out.id, 0, "JSON-RPC 는 숫자 id 로 짝짓는다");
+  //  ⚠ outcome 은 **문자열** 이어야 한다 — map 이면 "expected variant identifier" 로 튕긴다(실측).
+  assert.equal(out.result.outcome, "accepted");
+  assert.deepEqual(out.result.answers, { "딸기와 사과 중 어느 것이 더 좋습니까?": "사과" });
+
+  const skip = JSON.parse(chatAdapter("grok")!.respond!({ ask, value: { allow: false }, convId: "s1" })!) as any;
+  assert.equal(skip.result.outcome, "skip_interview", "건너뛰기는 그 하네스의 낱말로");
+});
+
+t("[14] ★ id 0 이 문자열로 새지 않는다 — grok 의 첫 요청 id 가 실제로 0 이었다", () => {
+  //  ⚠ `Number(x) || x` 로 쓰면 0 이 falsy 라 문자열로 샌다. 그러면 짝이 안 맞아 그 요청은
+  //   영영 답을 못 받고, 사람은 «선택지를 눌렀는데 아무 일도 안 난다» 를 겪는다.
+  const ask: PermissionAsk = { id: "0", toolName: "AskUserQuestion",
+    questions: [{ question: "Q", options: [{ label: "A" }] }] };
+  const out = JSON.parse(chatAdapter("grok")!.respond!({ ask, value: { allow: true, answers: { Q: "A" } }, convId: "s" })!) as any;
+  assert.strictEqual(out.id, 0, "숫자 0 그대로");
+  //  숫자가 아닌 id 는 문자열 그대로 둔다(하네스가 uuid 를 쓸 수도 있다).
+  const uuid: PermissionAsk = { ...ask, id: "a5386ace-0145" };
+  const out2 = JSON.parse(chatAdapter("grok")!.respond!({ ask: uuid, value: { allow: true }, convId: "s" })!) as any;
+  assert.strictEqual(out2.id, "a5386ace-0145");
+});
+
+t("[15] grok 사용량 — 턴 응답의 _meta 와 한도 오류(실측 1.0.13)", () => {
+  const u = grokAcpEvent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn",
+    _meta: { sessionId: "s", modelId: "grok-4.6", totalTokens: 24730, inputTokens: 24488, outputTokens: 242 } } });
+  assert.ok(u && u.t === "usage", `사용량이어야 한다 (${u?.t})`);
+  const usage = (u as Extract<SessionEvent, { t: "usage" }>).usage;
+  assert.equal(usage.inputTokens, 24488);
+  assert.equal(usage.outputTokens, 242);
+
+  //  ⚠ 한도는 **오류로** 온다 — 버리면 화면이 «왜 답이 안 오나» 를 영영 못 말한다.
+  const lim = grokAcpEvent({ jsonrpc: "2.0", id: 3, error: { code: -32003, message: "Rate limited",
+    data: { message: "subscription:free-usage-exhausted: … tokens (actual/limit): 502001/500000. Upgrade" } } });
+  assert.ok(lim && lim.t === "usage", `한도도 사용량 축이다 (${lim?.t})`);
+  const util = (lim as Extract<SessionEvent, { t: "usage" }>).usage.utilization ?? {};
+  assert.ok((util.limit ?? 0) > 1, "다 썼다는 사실이 값으로 온다");
+
+  //  ★ 초기화 응답이 사용량으로 **잘못 읽히지 않는다**(같은 result 자리라 순서가 중요하다).
+  const init = grokAcpEvent({ jsonrpc: "2.0", id: 1, result: { agentCapabilities: {}, authMethods: [],
+    _meta: { modelState: { currentModelId: "grok-4.6" } } } });
+  assert.ok(init && init.t === "facts", `초기화는 facts 다 (${init?.t})`);
+});
+
+t("[16] antigravity 슬래시 목록 — /help 출력 그대로 파싱(실측 1.1.22)", () => {
+  //  실측 원문(탭 구분):
+  const help = [
+    "/agents\tList available custom agents",
+    "/changelog\tShow release notes and changes",
+    "/config (settings)\tOpen settings panel",
+    "/credits\tShow remaining G1 credits and purchase link",
+    "/model\tSet a model",
+  ].join("\n");
+  const cs = antigravityCommandsFromHelp(help);
+  assert.equal(cs.length, 5);
+  assert.deepEqual(cs.map((c) => c.name), ["agents", "changelog", "config", "credits", "model"]);
+  assert.equal(cs[4].description, "Set a model");
+  //  ⚠ 별칭 괄호가 이름에 섞이지 않는다("/config (settings)" → "config").
+  assert.equal(cs[2].name, "config");
+  //  형식이 바뀌면 **빈 배열** — 있는 척하지 않는다(화면은 목록 없이 그대로 산다).
+  assert.deepEqual(antigravityCommandsFromHelp("도움말을 찾을 수 없습니다"), []);
+  assert.deepEqual(antigravityCommandsFromHelp(""), []);
 });
 
 console.log(`\n${pass}건 통과`);

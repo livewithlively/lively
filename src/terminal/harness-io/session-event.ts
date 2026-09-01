@@ -49,6 +49,33 @@ export interface TaskInfo {
   endedAt?: number;
 }
 
+/**
+ * 에이전트가 **사람에게 묻는 것** — 선택지 한 묶음 (#2439, 2026-09-01).
+ *
+ *  ⚠ 도구 승인(«이거 써도 되나»)과 **다른 축**이다. 이건 «어느 쪽이 좋나» 이고, 답은 권한이 아니라
+ *   **고른 값**이다. 그런데 claude 는 둘 다 같은 봉투(can_use_tool)로 보낸다 — 도구 이름이
+ *   `AskUserQuestion` 이면 질문이다(공식 문서 "Handle approvals and user input").
+ *
+ *  ⚠ 이 축을 표에 안 만들어서 구멍이 안 보였고, 화면엔 질문과 선택지가 다 와 있는데 **고를 수가
+ *   없어** 사람이 터미널을 열어야 했다(상민님 신고 2026-09-01).
+ */
+export interface QuestionOption { label: string; description?: string }
+export interface QuestionItem {
+  /**
+   * 이 질문의 **하네스 쪽 열쇠** — 있으면 답을 이걸로 키잡는다(codex 는 id 로 받는다).
+   *  ⚠ 하네스마다 다르다: claude·grok 은 **질문 전문**이 키이고, codex 는 **id** 다.
+   *   그래서 어휘는 둘 다 들고, 어느 것으로 키잡을지는 어댑터의 respond 가 정한다(★3).
+   */
+  id?: string;
+  /** 사람에게 보일 질문 전문 — claude·grok 은 **이 문자열이 답의 키**다. */
+  question: string;
+  /** 짧은 딱지(12자 내외). */
+  header?: string;
+  options: QuestionOption[];
+  /** 여러 개 고를 수 있나. 참이면 답은 label 배열(또는 ", " 로 이은 문자열). */
+  multiSelect?: boolean;
+}
+
 /** 승인 요청 — 답하지 않으면 턴이 **영구 정지**한다(claude SDK: "permission prompts have no park deadline"). */
 export interface PermissionAsk {
   id: string;
@@ -60,6 +87,12 @@ export interface PermissionAsk {
   description?: string;
   /** «항상 허용» 을 그릴 재료. 화면이 그대로 되돌려준다(내용을 해석하지 않는다). */
   suggestions?: unknown[];
+  /**
+   * ★ 이게 있으면 **승인이 아니라 질문**이다 — 화면은 «허용/거부» 대신 **선택지 버튼**을 그린다.
+   *  같은 봉투를 쓰는 이유는 claude 가 그렇게 보내기 때문이고(can_use_tool + AskUserQuestion),
+   *  버스·SSE·답하기 통로를 그대로 재사용할 수 있어서다.
+   */
+  questions?: QuestionItem[];
 }
 
 /**
@@ -76,6 +109,11 @@ export interface PermissionAnswer {
   scope?: "once" | "always";
   /** 하네스가 **선택지를 준 경우**(ACP options 등) 사람이 고른 그것. 없으면 allow/scope 로 정한다. */
   optionId?: string;
+  /**
+   * ★ 질문(questions)에 대한 답 — **키는 질문 전문, 값은 고른 label**(문서 규약).
+   *  여러 개 고른 질문은 label 배열이다. 자유 입력이면 그 텍스트를 값으로 둔다.
+   */
+  answers?: Record<string, string | string[]>;
 }
 
 /** 슬래시 명령 한 개. */

@@ -30,6 +30,22 @@ if (!CODEX_BIN) {
   console.log("· codex 바이너리 없음 — 실기기 E2E skip (설치: npm i -g @openai/codex)");
   process.exit(0);
 }
+//  ⚠ **바이너리가 있다 ≠ 쓸 수 있다.** 방금 설치했는데 로그인이 없으면 이 스위트의 모든 세션이
+//   조용히 timeout 한다(실측 2026-09-01: exit=null · stdout 빈 문자열 · 17건 실패). 그건 회귀가
+//   아니라 «전제가 안 갖춰진 것» 인데, 그 둘을 같은 빨간불로 내면 다음 사람이 엉뚱한 데를 판다.
+//   그래서 **자격까지** 확인하고서 돈다(#2439 실측).
+{
+  const authed = (() => {
+    try {
+      const out = execFileSync(CODEX_BIN, ["login", "status"], { stdio: "pipe", timeout: 20000, encoding: "utf8" });
+      return !/not\s+logged\s*in|logged\s*out|no\s+credentials/i.test(String(out));
+    } catch { return false; }
+  })();
+  if (!authed) {
+    console.log("· codex 미로그인 — 실기기 E2E skip (로그인: codex login)");
+    process.exit(0);
+  }
+}
 // 심링크(~/.local/bin/codex → releases/…/bin/codex)를 풀어 PATH 에 실제 디렉터리를 넣는다.
 const CODEX_REAL = (() => { try { return realpathSync(CODEX_BIN); } catch { return CODEX_BIN; } })();
 

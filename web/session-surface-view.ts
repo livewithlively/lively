@@ -12,9 +12,14 @@
 //  이 규칙들이 틀리면 화면은 떠 있는데 사람이 못 쓴다 — 그게 가장 비싼 실패다.
 
 /** 서버 어휘(harness-io/session-event.ts)의 화면 쪽 그림자 — **필드를 늘릴 때 서버와 함께 늘린다.** */
+export interface QuestionOption { label: string; description?: string }
+export interface QuestionItem { question: string; header?: string; options: QuestionOption[]; multiSelect?: boolean }
+
 export interface AskInfo {
   id: string;
   toolName: string;
+  /** ★ 있으면 «승인» 이 아니라 **질문**이다 — 허용/거부 대신 선택지를 그린다. */
+  questions?: QuestionItem[];
   input?: unknown;
   title?: string;
   displayName?: string;
@@ -255,4 +260,35 @@ export function terminalOnlyNote(axes: readonly string[]): string | null {
   if (!ko.length) return null;
   //  ⚠ 문장을 «무엇이 · 어디서» 순으로 짧게. 긴 안내는 칩 한 줄을 넘겨 읽히지 않는다.
   return `터미널 탭에서만 돼요 — ${ko.join(" · ")}`;
+}
+
+/** 이 카드는 **질문**인가(승인이 아니라) — 화면이 무엇을 그릴지 가르는 한 축. */
+export function isQuestion(ask: AskInfo): boolean {
+  return Array.isArray(ask.questions) && ask.questions.length > 0;
+}
+
+/**
+ * 고른 것을 **답 묶음**으로 (#2439).
+ *  키는 **질문 전문**, 값은 고른 label — 하네스 규약이 그렇다(공식 문서).
+ *  ⚠ 여러 개 고르는 질문은 **배열**로 둔다. 문자열로 이어 붙이면 값에 ", " 가 든 label 과 구별되지 않는다.
+ */
+export function buildAnswers(
+  questions: readonly QuestionItem[],
+  picked: ReadonlyArray<readonly string[]>,
+): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  questions.forEach((q, i) => {
+    const p = picked[i] ?? [];
+    if (!p.length) return;
+    out[q.question] = q.multiSelect ? [...p] : p[0];
+  });
+  return out;
+}
+
+/** 아직 안 고른 질문이 있나 — 있으면 «보내기» 를 못 누르게 한다(빈 답을 보내면 턴이 헛돈다). */
+export function answersReady(
+  questions: readonly QuestionItem[],
+  picked: ReadonlyArray<readonly string[]>,
+): boolean {
+  return questions.every((_, i) => (picked[i]?.length ?? 0) > 0);
 }

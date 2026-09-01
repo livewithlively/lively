@@ -12,19 +12,20 @@ const CHAT = { LIVELY_SESSION_RUNTIME: "chat" } as NodeJS.ProcessEnv;
 const TERM = { LIVELY_SESSION_RUNTIME: "terminal" } as NodeJS.ProcessEnv;
 const NONE = {} as NodeJS.ProcessEnv;
 
-t("[1] 기본은 chat — 커버리지가 찼고 화면을 실측으로 확인했다(2026-09-01)", () => {
-  assert.equal(sessionRuntimeDefault(NONE), "chat");
-  assert.equal(sessionRuntimeMode({ harness: "claude" }, NONE), "chat");
+t("[1] ★★ 기본은 terminal — 두 번 뒤집었고 두 번 다 사고였다", () => {
+  //  ⚠ 두 번째 사고: pane 은 셸로 열었는데 **대화창이 말을 못 받았다** — 사람은 TUI 도 대화창도
+  //   없는 화면을 봤고, 터미널에 친 말은 zsh 가 받아 `command not found` 가 됐다.
+  //   다시 뒤집으려면 실제 세션에 말을 걸어 답이 오는 것까지 **화면으로** 본 뒤에 한다.
+  assert.equal(sessionRuntimeDefault(NONE), "terminal");
+  assert.equal(sessionRuntimeMode({ harness: "claude" }, NONE), "terminal");
+  //  값이 이상해도 terminal 로 접는다(오타가 조용히 chat 을 켜지 않는다).
+  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: "CHATT" } as NodeJS.ProcessEnv), "terminal");
 });
 
-t("[2] ★ 되돌리는 길은 env 하나 — 배포에서 문제가 보이면 코드를 안 고치고 끈다", () => {
-  assert.equal(sessionRuntimeDefault(TERM), "terminal");
-  assert.equal(sessionRuntimeMode({ harness: "claude" }, TERM), "terminal");
-  //  대소문자·공백은 관대하게 — 끄려던 사람이 오타 하나로 못 끄면 안 된다.
-  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: " Terminal " } as NodeJS.ProcessEnv), "terminal");
-  //  ⚠ 다만 **모르는 값은 chat 이다**(기본으로 접는다) — 끄기는 명시적이어야 한다.
-  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: "TERMINALL" } as NodeJS.ProcessEnv), "chat");
+t("[2] 배포가 **명시로** 켜면 chat — 켜기가 명시적이어야 한다(오타가 조용히 켜지 않게)", () => {
   assert.equal(sessionRuntimeMode({ harness: "claude" }, CHAT), "chat");
+  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: " Chat " } as NodeJS.ProcessEnv), "chat");
+  assert.equal(sessionRuntimeDefault(TERM), "terminal");
 });
 
 t("[3] ★ 아직 못 여는 하네스는 켜도 terminal — 빈 화면을 만들지 않는다", () => {
@@ -66,15 +67,36 @@ t("[6] paneIsShell 은 모드와 **다른 질문**이다 — 한 함수가 두 �
 
 t("[7] env 를 안 주면 process.env — 호출부가 매번 넘기지 않아도 된다", () => {
   const saved = process.env.LIVELY_SESSION_RUNTIME;
+  //  ⚠ **주변 환경을 지운다.** 이 테스트를 노드 에이전트 안(LIVELY_NODE_ID 가 있는 셸)에서 돌리면
+  //   [8]의 노드 가드가 먼저 걸려 늘 terminal 이 된다 — 실제로 그렇게 빨간불이 났다(2026-09-01).
+  //   테스트가 «어디서 돌리느냐» 에 따라 답이 달라지면 그건 계약이 아니다.
+  const savedNode = process.env.LIVELY_NODE_ID;
   try {
-    process.env.LIVELY_SESSION_RUNTIME = "terminal";
-    assert.equal(sessionRuntimeMode({ harness: "claude" }), "terminal");
+    delete process.env.LIVELY_NODE_ID;
+    process.env.LIVELY_SESSION_RUNTIME = "chat";
+    assert.equal(sessionRuntimeMode({ harness: "claude" }), "chat");
     delete process.env.LIVELY_SESSION_RUNTIME;
-    assert.equal(sessionRuntimeMode({ harness: "claude" }), "chat");   // 안 세우면 기본(chat)
+    assert.equal(sessionRuntimeMode({ harness: "claude" }), "terminal");   // 안 세우면 기본(terminal)
   } finally {
     if (saved === undefined) delete process.env.LIVELY_SESSION_RUNTIME;
     else process.env.LIVELY_SESSION_RUNTIME = saved;
+    if (savedNode === undefined) delete process.env.LIVELY_NODE_ID;
+    else process.env.LIVELY_NODE_ID = savedNode;
   }
+});
+
+t("[8] ★★ 노드 세션은 chat 이 될 수 없다 — 런타임이 거기서 안 돈다", () => {
+  //  ⚠ 이 줄이 없어서 세션이 죽었다(2026-09-01 실측): 생성은 노드에서 돌며 chat 이라 pane 을 셸로
+  //   열었는데, 배달은 게이트웨이에서 돌며 chat 분기를 건너뛰었다 — TUI 도 대화창도 없는 화면.
+  //   같은 술어인데 **살아있음을 재는 자리가 달랐다.**
+  assert.equal(sessionRuntimeMode({ harness: "claude", onNode: true }, CHAT), "terminal");
+  //  사람이 명시로 골라도 막는다 — 못 하는 것을 골랐다고 되게 할 수는 없다.
+  assert.equal(sessionRuntimeMode({ harness: "claude", onNode: true, choice: "chat" }, CHAT), "terminal");
+  //  노드 에이전트 **프로세스 안**에서는 onNode 를 안 줘도 막힌다(그 안에서 createSession 이 돈다).
+  assert.equal(sessionRuntimeMode({ harness: "claude" },
+    { LIVELY_SESSION_RUNTIME: "chat", LIVELY_NODE_ID: "some-node" } as NodeJS.ProcessEnv), "terminal");
+  //  게이트웨이 세션은 영향 없다.
+  assert.equal(sessionRuntimeMode({ harness: "claude", onNode: false }, CHAT), "chat");
 });
 
 console.log(`\n${pass}건 통과`);

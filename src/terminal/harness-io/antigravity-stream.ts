@@ -104,3 +104,30 @@ export function antigravityEvent(line: unknown): SessionEvent | null {
 
   return event ? { t: "raw", source: "antigravity", payload: o } : null;
 }
+
+/**
+ * `/help` 결과 → 슬래시 명령 목록 (#2439, 실측 2026-09-01).
+ *
+ *  ── 왜 이 길인가 ───────────────────────────────────────────────────────────────
+ *  antigravity 의 `init` 은 cwd·tools·permission_mode 만 준다 — **명령 목록이 없다.**
+ *  그런데 `--disable-slash-commands` 플래그가 있다는 건 print 모드에서 슬래시가 **동작한다**는 뜻이고,
+ *  실제로 `agy --print=/help` 가 목록을 돌려준다(모델 호출 없이 즉답):
+ *      "/agents\tList available custom agents\n/model\tSet a model\n…"
+ *  그래서 한 번 물어 화면에 준다 — 자동완성의 재료다.
+ *
+ *  ⚠ 형식이 바뀌면 **빈 배열**을 준다(있는 척하지 않는다). 그러면 화면은 목록 없이 그대로 산다.
+ */
+export function antigravityCommandsFromHelp(text: string): Array<{ name: string; description?: string }> {
+  const out: Array<{ name: string; description?: string }> = [];
+  for (const raw of String(text || "").split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("/")) continue;
+    //  `\t` 로 갈린다. 이름에 괄호 별칭이 붙기도 한다: "/config (settings)".
+    const [head, ...rest] = line.split("\t");
+    const name = head.trim().replace(/^\//, "").split(/\s+/)[0];
+    if (!name || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(name)) continue;
+    const desc = rest.join(" ").trim();
+    out.push({ name, description: desc || undefined });
+  }
+  return out;
+}
