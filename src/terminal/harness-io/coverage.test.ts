@@ -3,7 +3,7 @@
 //  이 표가 없어서 실제로 난 일: 대화창이 터미널의 무엇을 덮는지 목록도 없이 기본 화면을 바꿨고,
 //  백그라운드 셸·서브에이전트·아티팩트가 통째로 빠진 화면이 남의 기본이 됐다(2026-08-31 사고).
 import assert from "node:assert/strict";
-import { COVERAGE, COVERAGE_AXES, coverageOf, isFullyCovered, terminalOnlyAxes } from "./coverage.js";
+import { COVERAGE, COVERAGE_AXES, NODE_BLOCKED_AXES, coverageOf, isFullyCovered, sessionTerminalOnlyAxes, terminalOnlyAxes } from "./coverage.js";
 import { CHAT_ADAPTERS } from "./chat-adapters.js";
 
 let pass = 0;
@@ -53,6 +53,23 @@ t("[6] isFullyCovered 는 «n/a» 를 구멍으로 세지 않는다 — 벤더�
   assert.equal(coverageOf("codex")!.axes.slash, "n/a");
   assert.ok(!terminalOnlyAxes("codex").includes("slash"));
   assert.equal(isFullyCovered("모르는하네스"), true, "표에 없으면 셀 구멍도 없다(호출부가 coverageOf 로 판정한다)");
+});
+
+t("[7] ★ 노드 세션은 **자리 때문에** 못 하는 축이 더 있다 — 안 세면 화면이 거짓말한다", () => {
+  //  ⚠ 2026-09-01 신고: "새 세션 만들었는데도 아직도 선택지 안떠". 원인은 하네스가 아니라 **자리** 였다 —
+  //   노드 세션은 tmux 가 다른 기계에 있어 대화 런타임 분기(sessionGone)가 통째로 건너뛰어진다.
+  //   그런데 화면엔 terminalOnly=[] 가 실려 «웹에서 다 됩니다» 라고 말하고 있었다.
+  const box = sessionTerminalOnlyAxes("claude", false);
+  const node = sessionTerminalOnlyAxes("claude", true);
+  assert.deepEqual(box, [], "게이트웨이 세션의 claude 는 여전히 100%");
+  for (const a of NODE_BLOCKED_AXES) assert.ok(node.includes(a), `노드 세션은 ${a} 를 웹에서 못 한다`);
+  //  ⚠ interrupt·model 은 노드에서도 된다(키 주입·슬래시 릴레이) — 안 되는 것만 센다.
+  assert.ok(!node.includes("interrupt"), "멈춤은 노드에서도 된다(키 주입)");
+  assert.ok(!node.includes("model"), "모델 바꾸기는 노드에서도 된다(슬래시 릴레이)");
+  //  하네스 축과 **겹치지 않게** 합친다(같은 말이 두 번 뜨면 안내가 지저분해진다).
+  const grok = sessionTerminalOnlyAxes("grok", true);
+  assert.equal(new Set(grok).size, grok.length, "중복이 없다");
+  assert.ok(grok.includes("usage"), "하네스 축도 그대로 남는다");
 });
 
 console.log(`\n${pass}건 통과`);
