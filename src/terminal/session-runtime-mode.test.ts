@@ -12,20 +12,22 @@ const CHAT = { LIVELY_SESSION_RUNTIME: "chat" } as NodeJS.ProcessEnv;
 const TERM = { LIVELY_SESSION_RUNTIME: "terminal" } as NodeJS.ProcessEnv;
 const NONE = {} as NodeJS.ProcessEnv;
 
-t("[1] ★ 기본은 terminal — chat 은 «pane 이 셸» 이 전제인데 세션 생성이 아직 TUI 를 띄운다", () => {
-  //  ⚠ 2026-09-01 에 한 번 chat 으로 뒤집었다가 같은 날 되돌렸다. 전제를 안 지켜서
-  //   **한 대화에 claude 가 둘**(pane 의 TUI + 웹이 깨우는 헤드리스) 붙었다 — 실측 box-yoon-a7da7c38.
-  //   세션 생성이 chat 모드에서 pane 을 셸로 열게 된 뒤에 다시 뒤집는다.
-  assert.equal(sessionRuntimeDefault(NONE), "terminal");
-  assert.equal(sessionRuntimeMode({ harness: "claude" }, NONE), "terminal");
-  //  값이 이상해도 terminal 로 접는다(오타가 조용히 chat 을 켜지 않는다).
-  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: "CHATT" } as NodeJS.ProcessEnv), "terminal");
+t("[1] 기본은 chat — 전제(pane 이 셸)를 채운 뒤에 뒤집었다(2026-09-01 ④)", () => {
+  //  ⚠ 이 값은 하루에 세 번 바뀌었다: terminal → chat(사고) → terminal(되돌림) → chat(전제 채움).
+  //   ②가 사고였던 이유는 세션 생성이 그대로 TUI 를 띄워 **한 대화에 하네스가 둘** 붙었기 때문이다.
+  //   지금은 catalog.chatRuntimePaneArgv 가 pane 을 셸로 연다(catalog.test 가 그 계약을 지킨다).
+  assert.equal(sessionRuntimeDefault(NONE), "chat");
+  assert.equal(sessionRuntimeMode({ harness: "claude" }, NONE), "chat");
 });
 
-t("[2] 배포가 명시로 켜면 chat — 대소문자·공백은 관대하게", () => {
-  assert.equal(sessionRuntimeMode({ harness: "claude" }, CHAT), "chat");
-  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: " Chat " } as NodeJS.ProcessEnv), "chat");
+t("[2] ★ 되돌리는 길은 env 하나 — 배포에서 문제가 보이면 코드를 안 고치고 끈다", () => {
   assert.equal(sessionRuntimeDefault(TERM), "terminal");
+  assert.equal(sessionRuntimeMode({ harness: "claude" }, TERM), "terminal");
+  //  대소문자·공백은 관대하게 — 끄려던 사람이 오타 하나로 못 끄면 안 된다.
+  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: " Terminal " } as NodeJS.ProcessEnv), "terminal");
+  //  ⚠ 모르는 값은 chat 이다(기본으로 접는다) — **끄기는 명시적이어야** 한다.
+  assert.equal(sessionRuntimeDefault({ LIVELY_SESSION_RUNTIME: "TERMINALL" } as NodeJS.ProcessEnv), "chat");
+  assert.equal(sessionRuntimeMode({ harness: "claude" }, CHAT), "chat");
 });
 
 t("[3] ★ 아직 못 여는 하네스는 켜도 terminal — 빈 화면을 만들지 않는다", () => {
@@ -68,10 +70,10 @@ t("[6] paneIsShell 은 모드와 **다른 질문**이다 — 한 함수가 두 �
 t("[7] env 를 안 주면 process.env — 호출부가 매번 넘기지 않아도 된다", () => {
   const saved = process.env.LIVELY_SESSION_RUNTIME;
   try {
-    process.env.LIVELY_SESSION_RUNTIME = "chat";
-    assert.equal(sessionRuntimeMode({ harness: "claude" }), "chat");
+    process.env.LIVELY_SESSION_RUNTIME = "terminal";
+    assert.equal(sessionRuntimeMode({ harness: "claude" }), "terminal");
     delete process.env.LIVELY_SESSION_RUNTIME;
-    assert.equal(sessionRuntimeMode({ harness: "claude" }), "terminal");   // 안 세우면 기본(terminal)
+    assert.equal(sessionRuntimeMode({ harness: "claude" }), "chat");   // 안 세우면 기본(chat)
   } finally {
     if (saved === undefined) delete process.env.LIVELY_SESSION_RUNTIME;
     else process.env.LIVELY_SESSION_RUNTIME = saved;

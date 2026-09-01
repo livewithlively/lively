@@ -189,3 +189,19 @@ t("[6] codex 번역기는 실제로 무언가를 옮긴다(표에 달아 놓고 
 });
 
 console.log(`\n${pass}건 통과`);
+
+// ── 가벼운 키 목록과 표가 **갈리지 않는다** (#2439) ────────────────────────────────
+//  ⚠ 사실(키)과 행동(함수)을 갈라 둔 이유는 노드 에이전트 번들에 번역기가 딸려 오지 않게 하려는
+//   것이다(경계 가드가 잡았다). 두 벌이 된 순간 «표엔 없는데 모드는 열리는» 세션이 생기고,
+//   그 세션은 pane 이 셸인데 대화창이 아무것도 못 받는 빈 화면이 된다.
+{
+  const { CHAT_RUNTIME_KEYS, harnessOpensChatRuntime } = await import("./chat-runtime-keys.js");
+  for (const a of CHAT_ADAPTERS) {
+    assert.equal(harnessOpensChatRuntime(a.key), canOpenChatRuntime(a.key), `${a.key}: 두 답이 같다`);
+  }
+  assert.equal(CHAT_RUNTIME_KEYS.length, CHAT_ADAPTERS.length, "유령 키가 없다");
+  for (const bad of ["shell", "", "wat"]) {
+    assert.equal(harnessOpensChatRuntime(bad), canOpenChatRuntime(bad), `${bad}: 모르는 키도 같다`);
+  }
+  console.log("ok  [#2439] 가벼운 키 목록이 표와 갈리지 않는다");
+}
