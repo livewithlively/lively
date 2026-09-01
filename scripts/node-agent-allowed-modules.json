@@ -62,6 +62,7 @@
   "dist/terminal/harness-io/adapter.js",
   "dist/terminal/harness-io/antigravity-stream.js",
   "dist/terminal/harness-io/antigravity.js",
+  "dist/terminal/harness-io/ask-bridge.js",
   "dist/terminal/harness-io/chat-adapters.js",
   "dist/terminal/harness-io/chat-line.js",
   "dist/terminal/harness-io/chat-runtime-keys.js",
