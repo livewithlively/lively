@@ -22,7 +22,13 @@ export const COVERAGE_AXES = [
   "read",          // 대화를 읽는다
   "send",          // 말을 건다
   "tasks",         // 백그라운드 셸·서브에이전트가 지금 무엇을 하는지 본다
-  "approve",       // 승인 요청에 답한다
+  "approve",       // 도구 승인 요청에 답한다(can_use_tool — 하네스가 «이 도구 써도 되나» 를 묻는다)
+  //  ★ approve 와 **다른 축**이다(2026-09-01 신고로 알았다). 이건 에이전트가 **사람에게 묻는 것**이고
+  //   (claude 의 AskUserQuestion 툴) 답은 «권한» 이 아니라 **고른 선택지**다. 하네스 TUI 는 이걸
+  //   번호 목록으로 그리고 사람이 고르면 그 값을 툴 결과로 채운다.
+  //   ⚠ 나는 이 축을 표에 만들지 않아 구멍이 안 보였고 «100%» 라고 보고했다. 대화창엔 질문과
+  //    선택지가 다 와 있는데 **고를 수가 없어** 사람이 터미널을 열어야 했다.
+  "ask",           // 에이전트가 준 선택지 중에서 고른다
   "slash",         // 슬래시 명령을 쓴다
   "usage",         // 사용량·한도를 본다
   "interrupt",     // 도는 턴을 멈춘다
@@ -41,8 +47,9 @@ export interface HarnessCoverage {
 export const COVERAGE: readonly HarnessCoverage[] = [
   {
     harness: "claude",
-    axes: { read: "ok", send: "ok", tasks: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {
+      ask: "AskUserQuestion 툴이 질문·선택지를 다 실어 오는데(실측 2026-09-01 매니지드 화면) 대화창에 **고르는 UI 가 없다**. 답 통로인 POST …/keys 도 approve|deny|interrupt 세 가지뿐이고 노드 세션은 409 로 거부한다.",
       //  ★ 이 축은 표에서 두 번 뒤집혔다. 그 자취를 남긴다 — 다음 사람이 같은 함정을 밟지 않게.
       //   ① "ok" 로 적었다(근거 없이 — 배선이 준비된 것을 «된다» 로 옮겨 적었다).
       //   ② "terminal" 로 되돌렸다(5가지를 시도했는데 물음이 0건이었다).
@@ -57,23 +64,26 @@ export const COVERAGE: readonly HarnessCoverage[] = [
   },
   {
     harness: "codex",
-    axes: { read: "ok", send: "ok", tasks: "ok", approve: "ok", slash: "n/a", usage: "ok", interrupt: "ok", model: "terminal" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "ok", slash: "n/a", usage: "ok", interrupt: "ok", model: "terminal" },
     notes: {
+      ask: "선택지 툴을 이 축으로 실측하지 않았다 — 있는지부터 재야 한다.",
       slash: "codex 는 슬래시가 TUI 전용이다 — app-server 프로토콜로 목록이 노출되지 않는다(벤더 미제공).",
       model: "thread/start 에서만 정해진다 — 도는 중 전환하는 RPC 가 app-server 스키마에 없고, 카탈로그에도 runtimeCmd 가 없다.",
     },
   },
   {
     harness: "grok",
-    axes: { read: "ok", send: "ok", tasks: "ok", approve: "ok", slash: "ok", usage: "terminal", interrupt: "ok", model: "ok" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "ok", slash: "ok", usage: "terminal", interrupt: "ok", model: "ok" },
     notes: {
+      ask: "ACP 에 선택지 요청이 있는지 미실측.",
       usage: "토큰 사용량을 주는 알림을 이번 실측 턴에서 못 봤다 — 안 본 것을 짐작해 «된다» 로 적지 않는다.",
     },
   },
   {
     harness: "opencode",
-    axes: { read: "ok", send: "ok", tasks: "ok", approve: "ok", slash: "terminal", usage: "terminal", interrupt: "ok", model: "terminal" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "ok", slash: "terminal", usage: "terminal", interrupt: "ok", model: "terminal" },
     notes: {
+      ask: "선택지 요청 이벤트를 못 봤다(미실측).",
       slash: "OpenAPI 에 /session/{id}/command 는 있으나 **쓸 수 있는 명령 목록**을 주는 이벤트를 못 찾았다.",
       usage: "이벤트 스트림에서 사용량·한도 축을 못 봤다(session.idle 만 온다).",
       model: "카탈로그에 runtimeCmd 가 없다(도는 중 모델을 바꾸는 슬래시가 확인 안 됨) — /runtime 이 409 로 «터미널에서» 라고 사실대로 답한다.",
@@ -81,8 +91,9 @@ export const COVERAGE: readonly HarnessCoverage[] = [
   },
   {
     harness: "antigravity",
-    axes: { read: "ok", send: "ok", tasks: "ok", approve: "terminal", slash: "terminal", usage: "ok", interrupt: "ok", model: "terminal" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "terminal", slash: "terminal", usage: "ok", interrupt: "ok", model: "terminal" },
     notes: {
+      ask: "init.tools 에 ask_question 이 있으나 헤드리스에서 그 step 형식 미실측.",
       //  ⚠ 이건 «우리가 안 했다» 가 아니라 **벤더가 헤드리스에서 막았다** 는 실측이다.
       approve: "헤드리스에서 승인을 **못 묻는다**(실측 2026-09-01, agy 1.1.22): \"a tool required the command permission that headless mode cannot prompt for, so it was auto-denied\". 즉 물음 자체가 우리에게 안 온다 — 터미널 TUI 에서만 뜬다.",
       slash: "슬래시 목록을 주는 이벤트를 못 봤다(init 은 tools 만 준다).",
