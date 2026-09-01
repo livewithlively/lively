@@ -242,12 +242,14 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       // #1954 3차 — 화면이 직접 찍은 열람 시각(@box_last_seen). attach 이벤트와 **다른 축**이라 max 로 합치지 않고
       //  그대로 올린다 — 합치는 자리는 프론트 판정 한 곳(web/session-status.ts isUnreadDone)이다.
       lastViewed: Number(lastSeenRaw) || 0,
+      //  #2439 — 이 세션이 **어느 모드로 떴나**(@box_runtime). 화면(runtimeMode)과 배달이 같은 값을
+      //   봐야 갈리지 않는다. ⚠ 행 **최상위**에 둔다 — tmuxDesired 안에 넣었더니 응답에 안 실려
+      //   384행 중 0행만 값을 갖는 상태가 됐다(실측 2026-09-01).
+      runtimeChoice: runtimeRaw === "chat" ? "chat" as const : runtimeRaw === "terminal" ? "terminal" as const : undefined,
       tmuxDesired: {
         owner: owner || "",
         label: labelParts.join("\t") || null,
         harness: harness || "shell",
-        //  #2439 — 이 세션이 어느 모드로 떴나. 화면과 배달이 **같은 값**을 봐야 갈리지 않는다.
-        runtimeChoice: runtimeRaw === "chat" ? "chat" : runtimeRaw === "terminal" ? "terminal" : undefined,
         dir: dir || null,
         autoApprove: auto === "1",
         // 적용 플래그 메타 — 신=base64 · 구=평문 JSON, 못 읽으면 빈 객체(구버전 세션) (#1541)
