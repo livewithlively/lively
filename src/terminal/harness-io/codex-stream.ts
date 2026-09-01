@@ -63,6 +63,36 @@ export function codexAppServerEvent(line: unknown): SessionEvent | null {
     } };
   }
 
+  //  ── 선택지 — codex 도 **사람에게 묻는다**(`item/tool/requestUserInput`, 스키마 근거) ────────
+  //   요청: {isBlocking, itemId, threadId, turnId, questions:[{id, header, question,
+  //          options:[{label,description}]|null, isOther, isSecret}]}
+  //   응답: {answers:{"<질문 id>":{answers:["<label>",…]}}}
+  //   ★ codex 는 **질문 id 로** 키잡는다(claude·grok 은 질문 전문) — 어휘의 QuestionItem.id 가 그 자리다.
+  //   ⚠ `isSecret` 질문은 **웹에서 안 받는다.** 그건 자격증명 입력이고, 우리 화면은 비밀을 받는
+  //    자리가 아니다(터미널에서 직접 친다). 하나라도 섞이면 이 묶음 전체를 raw 로 흘린다 —
+  //    반쪽만 답하면 그 턴이 더 이상하게 막힌다.
+  if (method === "item/tool/requestUserInput") {
+    const id = str(o.id !== undefined && o.id !== null ? String(o.id) : undefined) ?? str(p.itemId) ?? "";
+    const raw = Array.isArray(p.questions) ? p.questions : [];
+    if (!id || !raw.length) return { t: "raw", source: "codex", payload: o };
+    if (raw.some((q) => rec(q)?.isSecret === true)) return { t: "raw", source: "codex", payload: o };
+    const qs = raw.map((x) => rec(x)).filter((q): q is Record<string, unknown> => !!q && typeof q.question === "string")
+      .map((q) => ({
+        id: str(q.id),
+        question: String(q.question),
+        header: str(q.header),
+        options: (Array.isArray(q.options) ? q.options : []).map((x) => rec(x))
+          .filter((x): x is Record<string, unknown> => !!x && typeof x.label === "string")
+          .map((x) => ({ label: String(x.label), description: str(x.description) })),
+        //  ⚠ codex 스키마에 multiSelect 축이 없다 — 답이 **배열**이라 여러 개가 가능하지만
+        //   «여러 개 고르라» 는 신호는 안 준다. 지어내지 않고 단일 선택으로 둔다.
+        multiSelect: false,
+      }))
+      .filter((q) => q.options.length > 0);
+    if (!qs.length) return { t: "raw", source: "codex", payload: o };
+    return { t: "permission.asked", ask: { id, toolName: "requestUserInput", title: qs[0].question, questions: qs, input: p } };
+  }
+
   //  ── 아이템 — codex 에는 «작업» 이 없고 아이템이 있다. 명령 실행만 작업으로 옮긴다. ──
   if (method === "item/started" || method === "item/completed" || method === "item/updated") {
     const item = rec(p.item) ?? {};

@@ -61,7 +61,13 @@ export interface TaskInfo {
  */
 export interface QuestionOption { label: string; description?: string }
 export interface QuestionItem {
-  /** 사람에게 보일 질문 전문 — **답을 돌려줄 때 이 문자열이 키다**(문서 규약). */
+  /**
+   * 이 질문의 **하네스 쪽 열쇠** — 있으면 답을 이걸로 키잡는다(codex 는 id 로 받는다).
+   *  ⚠ 하네스마다 다르다: claude·grok 은 **질문 전문**이 키이고, codex 는 **id** 다.
+   *   그래서 어휘는 둘 다 들고, 어느 것으로 키잡을지는 어댑터의 respond 가 정한다(★3).
+   */
+  id?: string;
+  /** 사람에게 보일 질문 전문 — claude·grok 은 **이 문자열이 답의 키**다. */
   question: string;
   /** 짧은 딱지(12자 내외). */
   header?: string;
