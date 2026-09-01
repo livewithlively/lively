@@ -839,7 +839,8 @@ function findInput(ph: string): HTMLInputElement {
 function wsHead(): HTMLElement {
   const sec = hooks.section?.() || 'home';
   const ak = last ? last.activeKey() : '';
-  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : sectionDef(sec);
+  //  구역 아닌 화면의 특례 — 리브('갈 곳')와 자료(앱, #2423). 여기 있는데 머리가 «홈»이면 거짓말이다.
+  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : sectionDef(sec);
   const inboxN = last ? last.data.sessions.filter((s) => isLive(s) && isMine(s) && (s.stateKey === 'waiting' || s.stateKey === 'done')).length : 0;
   return el('div', { class: 'v2-side-wshd' },
     stackTile({ small: true, label: true }),
