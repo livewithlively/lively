@@ -106,3 +106,32 @@ export function terminalOnlyAxes(harness: string): CoverageAxis[] {
 export function isFullyCovered(harness: string): boolean {
   return terminalOnlyAxes(harness).length === 0;
 }
+
+/**
+ * **그 세션이 도는 자리** 때문에 웹에서 못 하는 축들 (#2439, 2026-09-01).
+ *
+ *  ── 왜 하네스 축만으론 부족한가 ────────────────────────────────────────────────
+ *  위 표는 «이 하네스가 프로토콜로 무엇을 주나» 를 잰다. 그런데 그 프로토콜을 **누가 듣고 있나**
+ *  는 다른 질문이다: 대화 런타임은 **게이트웨이가 프로세스를 띄울 수 있는 세션**에서만 돈다
+ *  (deliver-prompt 의 분기 조건이 «이 박스의 tmux 에 그 세션이 있나» 다).
+ *
+ *  ⚠ **노드 세션**(사람 노트북에서 도는 세션)은 그 tmux 가 다른 기계에 있어 분기가 통째로
+ *   건너뛰어진다 — 프롬프트는 노드 릴레이로 그 기계의 TUI 에 들어간다. 그래서 승인 물음도,
+ *   작업 이벤트도 **서버에 올 길이 없다.** 기록은 훅이 **턴이 끝날 때** 중앙에 올린다.
+ *
+ *  ⚠ 이걸 안 세면 화면이 «웹에서 다 됩니다» 라고 **거짓말**을 한다 — 실제로 그랬고
+ *   (2026-09-01 상민님 신고: "새 세션 만들었는데도 아직도 선택지 안떠"), 이 표를 만든 이유가
+ *   정확히 그 «막다른 길» 을 막는 것이었다.
+ */
+export const NODE_BLOCKED_AXES: readonly CoverageAxis[] = ["tasks", "approve", "slash", "usage"];
+
+/**
+ * 이 **세션**이 웹에서 못 하는 축 — 하네스 축 ∪ 자리 축.
+ *  ⚠ interrupt·model 은 노드에서도 된다(키 주입·슬래시 릴레이) — 안 되는 것만 센다.
+ */
+export function sessionTerminalOnlyAxes(harness: string, onNode: boolean): CoverageAxis[] {
+  const base = terminalOnlyAxes(harness);
+  if (!onNode) return base;
+  const seen = new Set(base);
+  return [...base, ...NODE_BLOCKED_AXES.filter((a) => !seen.has(a))];
+}

@@ -55,7 +55,7 @@ import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPromp
 import { cleanLastPrompt } from "./last-prompt.js";
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";
 import { sessionRuntimeMode } from "./session-runtime-mode.js";   // #2439 — 세션 런타임 모드(terminal|chat)                 // #1746 — 행에 대화창 능력(읽기·승인)
-import { terminalOnlyAxes } from "./harness-io/coverage.js";        // #2439 — 웹에서 못 하는 축(화면이 «터미널에서» 를 정확히 말한다)
+import { sessionTerminalOnlyAxes } from "./harness-io/coverage.js";        // #2439 — 웹에서 못 하는 축(화면이 «터미널에서» 를 정확히 말한다)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
@@ -495,7 +495,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
     } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
-    for (const s of [...local, ...localRestorable, ...remote]) Object.assign(s, chatFieldsOf(s.harness));
+    for (const s of [...local, ...localRestorable, ...remote]) Object.assign(s, chatFieldsOf(s.harness, !!(s as { node?: unknown }).node));
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
@@ -1022,7 +1022,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // #2055 — 세션 행의 «대화» 두 값을 **한 곳에서** 만든다. 목록과 생성 응답이 갈리면 방금 만든 세션만
   //  화면이 잘못 열린다(실측 2026-08-28 신고: codex 를 열면 터미널이 먼저 뜨고 몇 초 뒤 대화창으로 넘어갔다 —
   //  생성 응답에 chatMode 가 없어 화면이 «모르면 터미널» 로 추정했다가, 목록 갱신이 오면 되돌린 것이다).
-  const chatFieldsOf = (harness: string): {
+  const chatFieldsOf = (harness: string, onNode = false): {
     chat: ReturnType<typeof chatIoCaps>;
     chatMode: ReturnType<typeof codexChatMode>;
     runtimeMode: ReturnType<typeof sessionRuntimeMode>;
@@ -1036,9 +1036,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  ★ #2439 — **이 하네스가 웹에서 못 하는 것들.** 화면이 그 자리에서 «터미널에서 하세요» 를
     //   정확히 말하기 위한 재료다. 이걸 안 주면 사람은 없는 기능을 찾아 헤매다 포기한다(막다른 길).
     //   빈 배열 = 이 하네스는 웹만으로 전부 된다.
-    terminalOnly: terminalOnlyAxes(harness),
+    //  ⚠ 하네스 축만으로는 부족하다 — **노드 세션**은 대화 런타임이 아예 안 돈다(coverage 머리말).
+    //   그 사실을 안 실으면 화면이 «웹에서 다 됩니다» 라고 거짓말한다.
+    terminalOnly: sessionTerminalOnlyAxes(harness, onNode),
   });
-  const withChatFields = <T extends { harness?: string }>(s: T): T => Object.assign(s, chatFieldsOf(String(s.harness || "")));
+  const withChatFields = <T extends { harness?: string; node?: unknown }>(s: T): T =>
+    Object.assign(s, chatFieldsOf(String(s.harness || ""), !!s.node));
 
   app.post("/api/ui/terminal/sessions/:id/handoff", auth, wrap(async (req, res) => {
     const id = String(req.params.id || "");
