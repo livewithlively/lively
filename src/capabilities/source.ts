@@ -27,6 +27,7 @@ const sourceListInput = {
   system: z.string().optional().describe("출처(#2423) — external_system('slack'·'github'·'local'·'discord'·'linear'·'figma'…) 또는 'authored'(사람이 직접 적어 둔 것)"),
   container: z.string().optional().describe("그 출처 안의 자리 — 슬랙 채널·깃허브 저장소·내 컴퓨터 최상위 폴더(fields.container_name)"),
   author: z.string().optional().describe("쓴 사람·올린 사람(fields.author_name)"),
+  root: z.enum(["personal", "project"]).optional().describe("올린 자리(fields.root) — personal=개인 폴더 · project=프로젝트 폴더 (#2423)"),
   linked: z.boolean().optional().describe("true=지식이 붙은 자료만 / false=아직 안 붙은 것만"),
   limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(1~500, 기본 100) — 구 100 하드캡 해제(#709)"),
   offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 상한 너머 전량 순회(#709)"),
@@ -51,6 +52,7 @@ const sourceList: Capability = {
           system: query.system ? String(query.system) : undefined,
           container: query.container ? String(query.container) : undefined,
           author: query.author ? String(query.author) : undefined,
+          root: query.root === "personal" || query.root === "project" ? String(query.root) : undefined,
           //  linked 는 3상태다(붙은 것만·안 붙은 것만·안 가림) — 문자열 'true'/'false' 만 뜻을 갖고 나머지는 미지정.
           linked: query.linked === undefined ? undefined : String(query.linked) === "true",
           limit: query.limit ? Number(query.limit) : undefined,
