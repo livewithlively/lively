@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { offlineLivelyEnv, sandboxEnv } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 import { mergeMcpServers, planServers } from "./mcp-register.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -104,7 +105,8 @@ t("★ 실제로 파일에 쓴다 — 임시 홈에서 끝까지 돌려 결과�
   fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { lively: { type: "http", url: "예전것" } }, theme: "dark" }));
 
   execFileSync(process.execPath, [path.join(HERE, "mcp-register.mjs")], {
-    env: { ...process.env, HOME: home, LIVELY_TOKEN: "T", STORE_URL: "http://x/mcp", MCP_SERVERS_FILE: "" },
+    //  ⚠ HOME 만 바꾸면 윈도우에서 격리가 안 되고 **실제 홈**에 쓴다(#1510). 샌드박스 조각은 spread 뒤에.
+    env: { ...process.env, ...offlineLivelyEnv(), ...sandboxEnv({ home }), LIVELY_TOKEN: "T", STORE_URL: "http://x/mcp", MCP_SERVERS_FILE: "" },
     stdio: "pipe",
   });
 
@@ -121,7 +123,7 @@ t("★ 실제로 파일에 쓴다 — 임시 홈에서 끝까지 돌려 결과�
 t("★ 토큰이 없으면 조용히 건너뛴다 — 등록 실패가 키트 설치 전체를 죽이지 않는다", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "mcpreg2-"));
   const out = execFileSync(process.execPath, [path.join(HERE, "mcp-register.mjs")], {
-    env: { ...process.env, HOME: home, LIVELY_TOKEN: "" }, stdio: "pipe",
+    env: { ...process.env, ...offlineLivelyEnv(), ...sandboxEnv({ home }), LIVELY_TOKEN: "" }, stdio: "pipe",
   });
   assert.equal(String(out).includes("✓"), false);
   assert.equal(fs.existsSync(path.join(home, ".claude.json")), false, "빈 설정을 만들어 놓았다");
