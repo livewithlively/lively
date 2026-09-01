@@ -60,10 +60,10 @@ async function startGateway() {
 }
 
 // 훅을 진짜 프로세스로 실행(stdin 에 이벤트 JSON). 훅 불변식상 항상 exit 0.
-async function runHook(hookPath, cwd, base) {
+async function runHook(hookPath, cwd, base, extraEnv = {}) {
   const child = spawn(process.execPath, [hookPath], {
     cwd,
-    env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: base, LIVELY_HOME: cwd },
+    env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: base, LIVELY_HOME: cwd, ...extraEnv },
     stdio: ["pipe", "pipe", "pipe"],
   });
   child.stdin.end(JSON.stringify({ cwd }));
@@ -203,6 +203,30 @@ async function main() {
         await runHook(hookPath, sess, base);
         assert.equal(readOrNull(path.join(proj, "AGENTS.md")), null, `[${id}] 세션 마커가 세션 마커를 가리키는데 받았다`);
         ok(`[${id}] 갈아탄 마커도 kind:"session" → no-op`);
+      }
+
+      // ── 저장 지역성 게이트(#2258) — 세션과 게이트웨이가 **같은 바이트**면 받을 게 없다 ──
+      //  ★ 여기서 «pull 이 안 된다» 는 정상이다. 매니지드에서 세션의 /work/shared/project/<id> 와
+      //   게이트웨이가 파일 op 를 보내는 자리는 같은 호스트 경로다(실측 2026-09-01).
+      //   그래서 매 세션·매 턴 왕복이 순수 낭비였다.
+      {
+        const dir = await mkProjectDir(root, `${id}/colo/home/lively/projects/${PROJECT_ID}`, { project_id: PROJECT_ID });
+        await runHook(hookPath, dir, base, { LVLY_STORAGE_LOCALITY: "colocated" });
+        assert.equal(readOrNull(path.join(dir, "AGENTS.md")), null, `[${id}] colocated 인데 받았다 — 낭비가 그대로다`);
+        const marker = JSON.parse(readOrNull(path.join(dir, ".lively", "project.json")));
+        assert.ok(!marker.last_pull, `[${id}] 안 받았는데 last_pull 을 올렸다`);
+        ok(`[${id}] colocated → 아무것도 안 받는다(같은 저장소라 받을 게 없다)`);
+      }
+
+      // ── 🔴 그 반대편: 명시적으로 colocated 일 때만 건너뛴다 ──
+      //  잘못 건너뛰면 **파일이 영영 안 오고**(조용한 데이터 부재), 잘못 받으면 낭비일 뿐이다.
+      //  그래서 미설정·빈값·오타·대소문자 변형은 전부 종전대로 받아야 한다.
+      for (const [n, v] of Object.entries({ 미설정: undefined, 빈값: "", 오타: "colocate", 딴값: "detached" })) {
+        const dir = await mkProjectDir(root, `${id}/nocolo-${n}/home/lively/projects/${PROJECT_ID}`, { project_id: PROJECT_ID });
+        await runHook(hookPath, dir, base, v === undefined ? {} : { LVLY_STORAGE_LOCALITY: v });
+        assert.equal(readOrNull(path.join(dir, "AGENTS.md")), SERVER_FILES["AGENTS.md"],
+          `[${id}] ${n}(${JSON.stringify(v)}) 인데 안 받았다 — 파일이 영영 안 오는 쪽으로 틀렸다`);
+        ok(`[${id}] 지역성 ${n} → 종전대로 받는다(fail-safe)`);
       }
 
       // ── 알 수 없는 sync 값은 폴백 규칙으로 — 오타가 fail-open 되면 안 된다 ──
