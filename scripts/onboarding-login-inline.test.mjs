@@ -25,10 +25,12 @@ function guideOf(key) {
   return guide.slice(i, next === undefined ? guide.length : next)
     .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 }
-/** LOGIN_INLINE 표에 켜진 하네스 키들. */
+/** 인라인 카드로 끝나는 하네스 — **정본은 공용 모듈**이다(온보딩엔 사본이 없다, #2477).
+ *  ⚠ 손으로 쓴 목록을 두지 않는다. 정본이 바뀌면 아래 «걸음 칸» 계약이 그 즉시 새 하네스를 검사해야 한다. */
 function inlineKeys() {
-  const m = SRC.match(/const LOGIN_INLINE = \{([^}]*)\}/);
-  assert.ok(m, "LOGIN_INLINE 표를 못 찾았다");
+  const mod = readFileSync(new URL("../web/lib/ai-login-inline.ts", import.meta.url), "utf8");
+  const m = mod.match(/AI_LOGIN_INLINE[^=]*=\s*Object\.freeze\(\{([^}]*)\}/);
+  assert.ok(m, "공용 모듈에서 AI_LOGIN_INLINE 표를 못 찾았다");
   return [...m[1].matchAll(/(\w+)\s*:\s*true/g)].map((x) => x[1]).sort();
 }
 /** 스테퍼 분기 하나 — `h === '<key>'` 부터 다음 `} else` 까지. */
@@ -51,8 +53,9 @@ test("★ codex·claude·grok 은 이 자리에서 로그인한다 — 새 탭�
   // 주석은 계약이 아니다 — «window.open 은 팝업차단으로 막힌다» 라고 **설명한** 줄에 걸리면 검열이다.
   const code = fn.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   assert.ok(!/window\.open/.test(code), "카드 경로에 새 탭이 없다");
-  assert.match(fn, /ai-login\/start/);
-  assert.match(fn, /ai-login\/state/);
+  //  주고받는 일은 공용 모듈이 한다(#2477) — 여기선 «그 한 벌을 부르는가» 만 본다.
+  //  프로토콜 자체(상한·restart·정리)의 계약은 scripts/ai-login-inline.test.mjs 가 진다.
+  assert.match(fn, /startInlineAiLogin\(h, \{/, "공용 통로로 시작한다");
 });
 
 test("★ 인라인 하네스는 걸음 칸에 **주소 자리**가 있다 — 없으면 버튼이 조용히 죽는다", () => {
@@ -91,8 +94,8 @@ test("★ 인라인 카드를 못 쓰는 하네스도 새 탭으로 안 내보�
   assert.ok(fn.length > 500, "인라인 터미널 함수를 못 찾았다");
   const code = fn.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
   assert.ok(!/window\.open/.test(code), "이 경로가 스스로 새 탭을 열지 않는다");
-  //  터미널 페이지는 `?embed=1`(상단바·파일 탐색기 없는 «터미널만» 판, #1744)로 실어야 카드 안에 맞는다.
-  assert.match(code, /sessionTermUrl\([^)]*embed: true/, "프레임에는 embed 판을 싣는다");
+  assert.match(code, /ensureLoginTerminal\(/, "세션 확보는 공용 함수가 한다(한 번만 만든다는 규약이 거기 있다)");
+  assert.match(code, /loginTerminalSrc\(/, "액자에는 공용 함수가 만든 embed 주소를 싣는다");
 });
 
 test("★ 터미널 액자는 걸음(step) **밖**에 있다 — 안에 두면 걸음이 끝나는 순간 사라진다", () => {
@@ -108,11 +111,12 @@ test("★ 터미널 액자는 걸음(step) **밖**에 있다 — 안에 두면 �
   assert.ok(!/\$\{termBox\}/.test(steppers), "걸음 본문 안에 액자를 두지 않는다");
 });
 
-test("★ 로그인 세션을 두 번 만들지 않는다 — 두 자리에서 로그인하게 되면 그 자체가 사고다", () => {
+test("★ 탈출로는 **같은 세션**을 연다 — 새 세션을 또 만들면 두 자리에서 로그인하게 된다", () => {
   const fn = SRC.slice(SRC.indexOf("async function startInlineTerminal"), SRC.indexOf("async function openLoginWindow"));
-  assert.match(fn, /if \(!loginTermSession\)/, "이미 만든 세션이 있으면 다시 만들지 않는다");
-  //  탈출로도 **같은 세션**을 열어야 한다 — 새 세션을 또 만들면 사람이 어느 창에서 로그인한 건지 모른다.
-  assert.match(fn, /out\.href = sessionTermUrl\(loginTermSession\.id/, "크게 보기는 같은 세션을 연다");
+  assert.match(fn, /out\.href = loginTerminalPopoutUrl\(loginTermSession\)/, "크게 보기는 같은 세션을 연다");
+  //  하단 상시 탈출로도 마찬가지다(이미 만든 세션이 있으면 그것을 연다).
+  assert.match(SRC, /if \(loginTermSession\) \{[^]{0,160}loginTerminalPopoutUrl\(loginTermSession\)/,
+    "상시 탈출로도 같은 세션을 연다");
 });
 
 test("★ 막다른 액자 금지 — 액자가 안 뜨면 갈 곳을 준다", () => {
@@ -129,7 +133,8 @@ test("★ 막다른 카드 금지 — 탈출로는 상시, 실패해도 화면�
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
   //  #2232 안 1 — 탈출로가 «실패 시 화면 대체»에서 «하단 상시 버튼»으로 바뀌었다. 계약은 그대로: 막다른 카드 금지.
   assert.match(fn, /fbBtn\.onclick[^]{0,160}openLoginWindow\(h, label\)/, "상시 탈출로가 종전 창 경로로 간다");
-  assert.match(fn, /catch \(e\) \{[^]{0,300}note\(/, "시작 실패는 잔글씨로만 말한다(화면 유지)");
+  //  시작 실패를 «잔글씨로만» 말하는 계약은 공용 모듈(view.failed)로 옮겼다 — 여기선 그 자리를 잇는지만 본다.
+  assert.match(fn, /failed: \(m\) => note\(/, "실패는 잔글씨 한 줄로만 말한다(화면 유지)");
 });
 
 test("★ 받은 주소·치던 코드를 지우는 경로가 없다 — replaceChildren 철거(코드 증발 사고의 뿌리)", () => {
@@ -161,13 +166,12 @@ test("★ 문구가 동작과 어긋나지 않는다 — 어느 안내도 사람
 });
 
 test("★ 주소가 안 오면 «시작하는 중» 으로 버티지 않는다 — 무반응으로 보인다", () => {
-  // 실측(2026-08-28 프로덕션, dabetai-68ca): 이 상한이 없어서 카드가 «로그인 절차를 시작하는 중이에요…» 를
-  //  영원히 띄웠다. 사람에게 그건 «눌러도 반응이 없다» 다. 상한과 탈출로가 반드시 있어야 한다.
+  // 실측(2026-08-28 프로덕션, dabetai-68ca): 상한이 없어서 카드가 «로그인 절차를 시작하는 중이에요…» 를
+  //  영원히 띄웠다. 사람에게 그건 «눌러도 반응이 없다» 다.
+  //  상한을 **재는** 계약은 공용 모듈이 진다(scripts/ai-login-inline.test.mjs) — 여기선 그 알림을
+  //  화면이 **잔글씨로만** 받는지 본다(#2232 안 1: 화면을 대체하지 않는다).
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
-  assert.match(fn, /STALL_MS/, "상한이 있다");
-  assert.match(fn, /Date\.now\(\) - startedAt > STALL_MS/, "상한을 실제로 잰다");
-  //  #2232 안 1 — 상한을 넘기면 화면을 대체하는 게 아니라 잔글씨로 알린다(탈출로는 하단에 상시).
-  assert.match(fn, /stalledSaid[^]{0,200}note\(/, "상한을 넘기면 잔글씨로 알린다(화면 유지)");
+  assert.match(fn, /stalled: \(\) => note\(/, "상한 알림을 잔글씨로 받는다(화면 유지)");
 });
 
 test("★ 탈출로는 사람이 누르는 버튼이다 — await 뒤의 window.open 은 팝업차단으로 조용히 막힌다", () => {
@@ -182,7 +186,7 @@ test("★ 다시 시도는 **새로** 띄운다 — 안 그러면 죽은 코드�
   //  그런데 우리 쪽 프로세스는 15분을 더 기다리므로, 설정을 켜고 다시 눌러도 start 가 «이미 돌고 있다» 며
   //  **같은 죽은 코드**를 돌려줬다. 몇 번을 눌러도 같은 벽이다.
   const fn = SRC.slice(SRC.indexOf("async function startInlineLogin"), SRC.indexOf("async function openLoginWindow"));
-  assert.match(fn, /restart: restart === true/, "start 에 restart 를 실어 보낸다");
+  assert.match(fn, /restart: restart === true/, "화면이 restart 를 공용 통로로 넘긴다");
   assert.match(fn, /retry\.onclick[^]{0,400}startInlineLogin\(el, h, label, true\)/, "다시 시도가 restart 로 부른다");
 });
 
