@@ -70,6 +70,7 @@ export interface SourceFilter {
   system?: string;      // external_system('slack'·'github'·'local'…). 'authored'=사람이 직접 적어 둔 것(external_system IS NULL)
   container?: string;   // 채널·폴더·저장소(fields->>'container_name') — 표현식 인덱스가 이미 있다
   author?: string;      // 작성자·올린 사람(fields->>'author_name')
+  root?: string;        // 올린 자리(fields->>'root') — 'personal' 개인 폴더 · 'project' 프로젝트 폴더 (#2423)
   linked?: boolean;     // true=지식이 붙은 것만 / false=아직 안 붙은 것만
 }
 
@@ -85,6 +86,8 @@ function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] }
   if (f.system === "authored") wh.push(`s.external_system IS NULL`);
   else if (f.system) { params.push(f.system); wh.push(`s.external_system=$${params.length}`); }
   if (f.container) { params.push(f.container); wh.push(`s.fields->>'container_name'=$${params.length}`); }
+  //  올린 자리(#2423 열람실) — 'personal'(개인 폴더) / 'project'(프로젝트 폴더). ingest/local-file 이 fields.root 에 적는다.
+  if (f.root) { params.push(f.root); wh.push(`s.fields->>'root'=$${params.length}`); }
   if (f.author) { params.push(f.author); wh.push(`s.fields->>'author_name'=$${params.length}`); }
   if (f.linked !== undefined) {
     wh.push(`${f.linked ? "" : "NOT "}EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id=s.id)`);
