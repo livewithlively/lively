@@ -980,6 +980,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       kind: sessionKindFromRequest(b),
       autoApprove: !!b.autoApprove, invites: b.invites, loginProfile: !!b.loginProfile,
       readOnly: !!b.readOnly, // #1007 — 이 세션만 읽기전용(컨텍스트 스토어 쓰기 소거). 노드 세션도 아래 relay 가 input 스프레드로 전파.
+      //  #2439 — 이 세션만 대화 런타임으로 열기(모르는 값은 무시 → 배포 기본을 따른다).
+      runtime: b.runtime === "chat" ? "chat" : b.runtime === "terminal" ? "terminal" : undefined,
       incognito: !!b.incognito, // #1007+ — 이 세션만 인코그니토(lively 전체 차단 + 훅 off). readOnly 보다 우선.
       // #1291 v2 — 새 세션 폼의 '기록 범위'. 안 읽으면 폼이 조용히 무시되고 사용자는 고른 대로 됐다고 믿는다.
       //  normalizeCap 이 모르는 값을 null 로 접어 미지정(폴더 파생)으로 되돌린다.
@@ -1049,6 +1051,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // #2055 — 세션 행의 «대화» 두 값을 **한 곳에서** 만든다. 목록과 생성 응답이 갈리면 방금 만든 세션만
   //  화면이 잘못 열린다(실측 2026-08-28 신고: codex 를 열면 터미널이 먼저 뜨고 몇 초 뒤 대화창으로 넘어갔다 —
   //  생성 응답에 chatMode 가 없어 화면이 «모르면 터미널» 로 추정했다가, 목록 갱신이 오면 되돌린 것이다).
+  //  ⚠ 세션 단위 모드(@box_runtime)는 **행을 만들 때 이미 읽혀** 있어야 한다 — 여기서 tmux 를
+  //   다시 물으면 목록 한 번에 세션 수만큼 왕복한다. 지금은 배포 기본 + 하네스·자리로만 판정하고,
+  //   세션 단위 값은 배달(deliver-prompt)이 본다. 둘이 갈리면 화면이 «대화창» 이라 하고 배달은
+  //   터미널로 가므로, 그 갈림이 없도록 기본이 chat 일 때만 세션 단위로 끌 수 있게 뒀다.
   const chatFieldsOf = (harness: string, onNode = false): {
     chat: ReturnType<typeof chatIoCaps>;
     chatMode: ReturnType<typeof codexChatMode>;
