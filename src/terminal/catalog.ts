@@ -369,6 +369,13 @@ export interface CreateInput {
   //  실행 모드(readOnly·incognito)는 **직교 축**이니 여기 흡수하지 마라(읽기전용 위탁이 표현 불가해진다).
   kind: SessionKind;
   label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
+  /**
+   * 이 세션의 **대화 런타임 모드** — "chat" 이면 pane 이 셸이고 대화는 런타임이 쥔다 (#2439).
+   *  ⚠ 이 축이 없어서 «한 세션만 켜 보기» 가 불가능했고, 확인하려면 **남의 기본까지** 바꿔야 했다.
+   *   그래서 두 번이나 배포 기본을 뒤집었다가 세션을 죽였다(2026-09-01). 세션 단위로 고를 수 있으면
+   *   그 사고 없이 확인하고, 확인한 뒤에 기본을 옮길 수 있다.
+   */
+  runtime?: "chat" | "terminal";
   // #1291 v2 — 기록 범위(write cap)와 read 축소. 미지정이면 실행 폴더에서 파생한다(신규·복원이 같은 규칙).
   //  writeVis: 'open'|'audience'|'private' — 이 세션이 **사용자 승인 없이** 만들 수 있는 맥락의 최대 가시성.
   //  restrictRead: 프로젝트 세션을 owner∪invites 로 더 좁힌다(프로젝트 대상 안에서만 축소 가능).

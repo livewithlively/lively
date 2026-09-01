@@ -495,7 +495,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //   그때 사람이 보는 것은 «선택지가 대화창에 안 뜨고 시간만 올라가는» 화면이다.
   //  ⚠ 이 판정은 codexChatMode 와 **따로** 둔다: 저건 codex 전용 축이고 이건 하네스 무관이다.
   //   둘을 한 값으로 접으면 codex 의 안내 문구가 다른 하네스에도 나간다.
-  const chatRuntime = !input.loginFor && sessionRuntimeMode({ harness: harness.key, loginFor: input.loginFor }) === "chat";
+  const chatRuntime = !input.loginFor && sessionRuntimeMode({ harness: harness.key, loginFor: input.loginFor, choice: input.runtime }) === "chat";
   const launch = input.loginFor
     ? (harnessLoginArgv(input.loginFor) ?? cmd)
     : chatMode === "app-server"
@@ -688,6 +688,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
+  //  ★ #2439 — 이 세션이 **어느 모드로 떴나**. 배달·화면이 같은 값을 봐야 판정이 갈리지 않는다
+  //   (갈렸을 때 pane 은 셸인데 대화창은 죽은 세션이 됐다 — 2026-09-01 실측).
+  if (chatRuntime) await tmux(["set-option", "-t", id, "@box_runtime", "chat"]);
   await tmux(["set-option", "-t", id, "@box_kind", input.kind]);   // #2162 — 종류(@box_* 와 같은 자리·같은 규약)
   await tmux(["set-option", "-t", id, "@box_dir", target]);
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);

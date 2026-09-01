@@ -26,6 +26,19 @@ import { rememberCodexThread } from "./codex-chat-thread.js";
 import { sessionDir, sessionGone, sessionOsUser } from "./terminal-sessions.js";
 import { getSessionState } from "../sessions/session-state.js";
 
+/**
+ * 그 세션이 **어느 모드로 떴나**(tmux 옵션 `@box_runtime`) — #2439.
+ *  ⚠ 모르면 undefined 다(«terminal» 이 아니다). 그래야 배포 기본이 그대로 적용된다 —
+ *   여기서 임의로 접으면 기본을 켜 둔 배포에서 그 세션만 조용히 다르게 돈다.
+ */
+async function sessionRuntimeChoice(id: string): Promise<"chat" | "terminal" | undefined> {
+  try {
+    const { getOpt } = await import("./tmux-exec.js");
+    const v = String((await getOpt(id, "@box_runtime")) || "").trim();
+    return v === "chat" ? "chat" : v === "terminal" ? "terminal" : undefined;
+  } catch { return undefined; }
+}
+
 /** #1683 후속2 — 그 세션이 어느 하네스로 떴나(tmux 세션 옵션 @box_harness). 모르면 빈 문자열. */
 export async function sessionHarnessKey(id: string): Promise<string> {
   try { const { getOpt } = await import("./tmux-exec.js"); return String((await getOpt(id, "@box_harness")) || ""); }
@@ -49,7 +62,10 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: { ow
   //  ⚠ codex 와 같은 이유로 «이 박스의 tmux 에 그 세션이 실제로 있나» 로 가른다 — 노드 등록 여부로
   //   가르면 게이트웨이 박스가 노드로도 등록된 배포에서 이 분기가 통째로 무시된다(#2055 실측 함정).
   const harnessKey = await sessionHarnessKey(sessionId);
-  if (sessionRuntimeMode({ harness: harnessKey }) === "chat"
+  //  ★ #2439 — 그 세션이 **어느 모드로 떴는지**를 본다(@box_runtime). 배포 기본만 보면 생성 당시의
+  //   결정과 갈리고, 갈리면 pane 은 셸인데 대화는 아무도 안 받는 세션이 된다(2026-09-01 실측).
+  const runtimeChoice = await sessionRuntimeChoice(sessionId);
+  if (sessionRuntimeMode({ harness: harnessKey, choice: runtimeChoice }) === "chat"
       && !(await sessionGone(sessionId))) {
     const { sendClaudeChat, ClaudeChatUnavailable } = await import("./harness-io/claude-chat-runtime.js");
     try {
