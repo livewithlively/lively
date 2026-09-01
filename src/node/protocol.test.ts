@@ -1,7 +1,7 @@
 // 노드 프로토콜(#869) 단위 테스트 — 채널 프레임 인코딩/디코딩 왕복 + 제어 파싱 + 가시성 판정.
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
-import { encodeChanFrame, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, agentIsLatest, nodeHarnesses, NODE_BASELINE_HARNESSES, nodeWsUrl, NODE_OPS, NODE_BASELINE_OPS, FRAME_PTY } from "./protocol.js";
+import { encodeChanFrame, decodeChanFrame, parseMsg, nodeSessionVisible, projectNodeSession, nodeCaps, agentIsLatest, nodeHarnesses, NODE_BASELINE_HARNESSES, nodeWsUrl, NODE_OPS, NODE_BASELINE_OPS, FRAME_PTY } from "./protocol.js";
 
 // 프레임 왕복 — 멀티바이트(UTF-8 쪼개짐 경계 포함)도 바이트 그대로 보존돼야 한다(무디코드 릴레이 불변식).
 {
@@ -123,6 +123,317 @@ assert.equal(nodeSessionVisible({ owner: "yoon", invites: [] }, "jang"), false);
   assert.equal(nodeWsUrl("https://dev.lvly.io/preview/p1541-lively/"), "wss://dev.lvly.io/preview/p1541-lively/node/ws");
   // 쿼리·프래그먼트는 붙이지 않는다(업그레이드 요청에 의미 없고, 토큰이 실릴 여지를 남기지 않는다).
   assert.equal(nodeWsUrl("https://dev.lvly.io/preview/x?a=1#f"), "wss://dev.lvly.io/preview/x/node/ws");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// projectNodeSession — 노드 세션 스냅샷의 목록 행 투영 규칙
+// ─────────────────────────────────────────────────────────────────────────────
+
+// [규칙 1] owned 는 s.owner === viewer 로 계산 — 스냅샷에 박힌 owned 값보다 이긴다
+{
+  const stale = {
+    id: "s-owned-1",
+    owner: "alice",
+    invites: [],
+    owned: true, // 스냅샷에 남아 있는 남의 기준 값 — bob 이 보면 거짓이어야 한다
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(stale, true, "bob") as unknown as Record<string, unknown>;
+  assert.equal(
+    row.owned,
+    false,
+    "🔴 스냅샷에 owned=true 가 박혀 있어도 owner!==viewer 면 owned=false 로 재계산돼야 한다"
+  );
+
+  const mine = {
+    id: "s-owned-2",
+    owner: "bob",
+    invites: [],
+    owned: false, // 반대 방향: 스냅샷 owned=false 도 뷰어 기준 계산이 이긴다
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row2 = projectNodeSession(mine, true, "bob") as unknown as Record<string, unknown>;
+  assert.equal(
+    row2.owned,
+    true,
+    "🔴 owner===viewer 면 스냅샷에 owned=false 가 있어도 owned=true 로 재계산돼야 한다"
+  );
+}
+
+// [규칙 2] 온라인이면 라이브 신호 넷(agentState·attached·working·awaiting)을 스냅샷 값 그대로 싣는다
+{
+  const s = {
+    id: "s-live",
+    owner: "alice",
+    invites: [],
+    agentState: "busy",
+    attached: true,
+    working: true,
+    awaiting: true,
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(s, true, "alice") as unknown as Record<string, unknown>;
+  assert.equal(row.agentState, "busy", "온라인 노드의 agentState 는 스냅샷 값 그대로여야 한다");
+  assert.equal(row.attached, true, "온라인 노드의 attached 는 스냅샷 값 그대로여야 한다");
+  assert.equal(row.working, true, "온라인 노드의 working 은 스냅샷 값 그대로여야 한다");
+  assert.equal(
+    row.awaiting,
+    true,
+    "🔴 온라인 노드의 awaiting=true 를 접으면 진짜 '확인 필요' 세션이 숨는다 — 그대로 실려야 한다"
+  );
+
+  // 온라인 + 거짓/한산한 값도 발명 없이 그대로
+  const idle = {
+    id: "s-live-idle",
+    owner: "alice",
+    invites: [],
+    agentState: "idle",
+    attached: false,
+    working: false,
+    awaiting: false,
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const idleRow = projectNodeSession(idle, true, "alice") as unknown as Record<string, unknown>;
+  assert.equal(idleRow.agentState, "idle", "온라인이면 agentState 를 다른 값으로 바꾸면 안 된다");
+  assert.equal(idleRow.attached, false, "온라인 attached=false 도 그대로여야 한다");
+  assert.equal(idleRow.working, false, "온라인 working=false 도 그대로여야 한다");
+  assert.equal(idleRow.awaiting, false, "온라인 awaiting=false 도 그대로여야 한다");
+}
+
+// [규칙 3] 오프라인이면 라이브 신호 넷을 전부 접는다 — 하나라도 살아남으면 사고 재발
+{
+  const frozen = {
+    id: "s-frozen",
+    owner: "alice",
+    invites: [],
+    agentState: "busy",
+    attached: true,
+    working: true,
+    awaiting: true,
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(frozen, false, "alice") as unknown as Record<string, unknown>;
+  assert.equal(
+    row.agentState,
+    "offline",
+    '🔴 오프라인이면 agentState 는 원래 값이 무엇이었든 "offline" 로 강제돼야 한다'
+  );
+  assert.equal(row.attached, false, "🔴 오프라인이면 attached 는 false 로 접혀야 한다");
+  assert.equal(row.working, false, "🔴 오프라인이면 working 은 false 로 접혀야 한다");
+  assert.equal(
+    row.awaiting,
+    false,
+    "🔴 오프라인이면 awaiting 은 false 로 접혀야 한다 — 얼어붙은 awaiting 이 '지금 볼 것'에 영구 고정되면 안 된다"
+  );
+}
+
+// [규칙 4] 라이브 신호 넷과 owned 를 제외한 모든 필드는 온라인/오프라인 무관 무변 통과
+{
+  const base = {
+    id: "s-pass",
+    owner: "alice",
+    invites: ["bob", "carol"],
+    label: "야간 배치 세션",
+    harness: "claude-code",
+    lastActive: 1725100000000,
+    cwd: "/home/alice/work", // 사양에 열거되지 않은 임의 통과 필드
+    agentState: "waiting",
+    attached: false,
+    working: false,
+    awaiting: false,
+  };
+  for (const online of [true, false]) {
+    const s = { ...base, invites: [...base.invites] } as unknown as Parameters<
+      typeof projectNodeSession
+    >[0];
+    const row = projectNodeSession(s, online, "bob") as unknown as Record<string, unknown>;
+    assert.equal(row.id, "s-pass", `id 는 무변 통과여야 한다 (online=${online})`);
+    assert.equal(row.label, "야간 배치 세션", `label 은 무변 통과여야 한다 (online=${online})`);
+    assert.equal(row.harness, "claude-code", `harness 는 무변 통과여야 한다 (online=${online})`);
+    assert.equal(
+      row.lastActive,
+      1725100000000,
+      `🔴 lastActive 는 무변 통과여야 한다 — 오프라인 접기가 다른 필드까지 갈아엎으면 안 된다 (online=${online})`
+    );
+    assert.equal(
+      row.cwd,
+      "/home/alice/work",
+      `사양에 없는 임의 필드(cwd)도 무변 통과여야 한다 (online=${online})`
+    );
+    assert.equal(row.owner, "alice", `owner 는 무변 통과여야 한다 (online=${online})`);
+    assert.deepEqual(
+      row.invites,
+      ["bob", "carol"],
+      `invites 는 무변 통과여야 한다 (online=${online})`
+    );
+  }
+}
+
+// [규칙 5] 입력 불변 — s 를 제자리 변형하지 않고 새 객체를 돌려준다 (스냅샷은 게이트웨이 공유 상태)
+{
+  // (a) 오프라인 접기가 일어나는 경우: 접힌 값이 입력으로 역류하면 다른 소비자가 오염된다
+  const s = {
+    id: "s-shared",
+    owner: "alice",
+    invites: ["bob"],
+    agentState: "busy",
+    attached: true,
+    working: true,
+    awaiting: true,
+    label: "공유 스냅샷",
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const before = JSON.parse(JSON.stringify(s));
+  const row = projectNodeSession(s, false, "bob");
+  assert.notEqual(
+    row as unknown,
+    s as unknown,
+    "🔴 반환 행은 입력과 다른 새 객체여야 한다 — 공유 스냅샷 제자리 변형 금지"
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(s)),
+    before,
+    "🔴 호출 후에도 입력 스냅샷 s 는 한 필드도 바뀌지 않아야 한다"
+  );
+  const sAny = s as unknown as Record<string, unknown>;
+  assert.equal(
+    sAny.awaiting,
+    true,
+    "🔴 입력 s.awaiting 은 여전히 true 여야 한다 — 접기는 반환 행에서만 일어난다"
+  );
+  assert.equal(sAny.agentState, "busy", '입력 s.agentState 는 여전히 "busy" 여야 한다');
+  assert.equal(sAny.attached, true, "입력 s.attached 는 여전히 true 여야 한다");
+  assert.equal(sAny.working, true, "입력 s.working 은 여전히 true 여야 한다");
+
+  // (b) 온라인 + 스냅샷에 owned 없음: owned 계산 결과를 입력에 써넣으면 안 된다
+  const noOwned = {
+    id: "s-no-owned",
+    owner: "bob",
+    invites: [],
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row2 = projectNodeSession(noOwned, true, "bob") as unknown as Record<string, unknown>;
+  assert.equal(row2.owned, true, "반환 행에는 계산된 owned 가 실려야 한다");
+  assert.ok(
+    !("owned" in (noOwned as unknown as Record<string, unknown>)),
+    "🔴 owned 계산 결과가 입력 스냅샷 객체에 써넣어지면 안 된다(입력 불변)"
+  );
+}
+
+// [엣지 1] 오프라인 + awaiting=true — 실증 사고의 핵심 케이스: 반드시 false 로 접힌다
+{
+  const s = {
+    id: "s-accident",
+    owner: "alice",
+    invites: [],
+    awaiting: true,
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(s, false, "alice") as unknown as Record<string, unknown>;
+  assert.equal(
+    row.awaiting,
+    false,
+    "🔴 잠든 노드의 얼어붙은 awaiting=true 가 살아남으면 아무도 답할 수 없는 세션이 '확인 필요'로 「지금 볼 것」에 영구 고정된다"
+  );
+}
+
+// [엣지 2] 오프라인 + working=true → working=false
+{
+  const s = {
+    id: "s-working",
+    owner: "alice",
+    invites: [],
+    working: true,
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(s, false, "alice") as unknown as Record<string, unknown>;
+  assert.equal(
+    row.working,
+    false,
+    "🔴 잠든 노드의 얼어붙은 working=true 가 살아남으면 죽은 세션이 '작업 중'으로 잘못 분류된다"
+  );
+}
+
+// [엣지 3] 오프라인인데 스냅샷 agentState 가 이미 "offline" → 그대로 "offline" (무해·멱등)
+{
+  const s = {
+    id: "s-already-off",
+    owner: "alice",
+    invites: [],
+    agentState: "offline",
+    attached: false,
+    working: false,
+    awaiting: false,
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(s, false, "alice") as unknown as Record<string, unknown>;
+  assert.equal(
+    row.agentState,
+    "offline",
+    'agentState 가 이미 "offline" 인 스냅샷은 그대로 "offline" 이어야 한다(무해)'
+  );
+  assert.equal(row.attached, false, "이미 접힌 attached=false 도 false 유지");
+  assert.equal(row.working, false, "이미 접힌 working=false 도 false 유지");
+  assert.equal(row.awaiting, false, "이미 접힌 awaiting=false 도 false 유지");
+}
+
+// [엣지 4] viewer 가 owner 도 초대자도 아님 — 함수는 가리지 않는다(가시성 필터는 호출자 소관), owned=false 로만 표시
+{
+  const s = {
+    id: "s-visible",
+    owner: "alice",
+    invites: ["bob"],
+    label: "남의 세션",
+    agentState: "busy",
+    working: true,
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(s, true, "mallory") as unknown as Record<string, unknown>;
+  assert.ok(
+    row !== null && row !== undefined && typeof row === "object",
+    "🔴 뷰어가 owner 도 초대자도 아니어도 함수는 행을 그대로 돌려줘야 한다 — 가시성 필터는 호출자 소관"
+  );
+  assert.equal(row.id, "s-visible", "행 내용은 가시성과 무관하게 그대로 투영돼야 한다");
+  assert.equal(row.owned, false, "owner 가 아니므로 owned=false 로만 표시된다");
+  assert.equal(row.agentState, "busy", "가시성과 무관하게 온라인 라이브 신호는 그대로 실린다");
+  assert.equal(row.working, true, "가시성과 무관하게 온라인 working 도 그대로 실린다");
+}
+
+// [엣지 5a] 라이브 신호 필드가 스냅샷에 아예 없음 + 온라인 — undefined 유지 허용:
+// 참(true)으로 발명하거나 "offline" 로 접으면 안 된다
+{
+  const s = {
+    id: "s-undef-on",
+    owner: "alice",
+    invites: [],
+    // agentState / attached / working / awaiting 전부 없음
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(s, true, "alice") as unknown as Record<string, unknown>;
+  assert.notEqual(
+    row.agentState,
+    "offline",
+    '🔴 온라인인데 agentState 없음을 "offline" 로 접으면 살아있는 세션이 죽은 것처럼 보인다'
+  );
+  assert.ok(
+    row.attached !== true,
+    "온라인 + 스냅샷에 attached 없음 → attached 를 true 로 발명하면 안 된다(undefined 유지 허용)"
+  );
+  assert.ok(
+    row.working !== true,
+    "온라인 + 스냅샷에 working 없음 → working 을 true 로 발명하면 안 된다(undefined 유지 허용)"
+  );
+  assert.ok(
+    row.awaiting !== true,
+    "🔴 온라인 + 스냅샷에 awaiting 없음 → awaiting 을 true 로 발명하면 가짜 '확인 필요'가 생긴다"
+  );
+}
+
+// [엣지 5b] 라이브 신호 필드가 스냅샷에 아예 없음 + 오프라인 — 규칙 3 의 강제값(false/"offline")으로 채운다
+{
+  const s = {
+    id: "s-undef-off",
+    owner: "alice",
+    invites: [],
+    // agentState / attached / working / awaiting 전부 없음
+  } as unknown as Parameters<typeof projectNodeSession>[0];
+  const row = projectNodeSession(s, false, "alice") as unknown as Record<string, unknown>;
+  assert.equal(
+    row.agentState,
+    "offline",
+    '🔴 오프라인 + agentState 없음 → undefined 로 두지 말고 "offline" 로 채워져야 한다'
+  );
+  assert.equal(row.attached, false, "오프라인 + attached 없음 → false 로 강제돼야 한다");
+  assert.equal(row.working, false, "오프라인 + working 없음 → false 로 강제돼야 한다");
+  assert.equal(row.awaiting, false, "🔴 오프라인 + awaiting 없음 → false 로 강제돼야 한다");
 }
 
 console.log("node/protocol.test OK");

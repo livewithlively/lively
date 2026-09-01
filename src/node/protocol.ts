@@ -189,3 +189,20 @@ export function parseMsg<T>(raw: unknown): T | null {
 export function nodeSessionVisible(s: Pick<SessionInfo, "owner" | "invites">, viewer: string): boolean {
   return s.owner === viewer || (s.invites || []).includes(viewer);
 }
+
+// 스냅샷 세션 → 목록 행 투영(#2533). 오프라인 노드의 세션은 마지막 스냅샷으로 계속 보여주되(#1834),
+//  **라이브 신호는 전부 접는다** — agentState·attached 만이 아니라 working·awaiting 도.
+//  working/awaiting 은 화면에서 접속 기반 판정을 이기는 신호인데(#1819·#1221, web/session-status.ts), 그 특권은
+//  노드가 붙어 3초 push 로 신선할 때의 것이다. 끊긴 노드의 값은 얼어붙은 과거라, awaiting=true 를 그대로 실으면
+//  **아무도 답할 수 없는 세션이 '확인 필요'로 «지금 볼 것» 에 영구 고정**된다(#2533 실측: 절전 노드의 세션이
+//  이틀 전 값으로 그랬다 — 누르면 4462 재연결만 반복). 노드가 다시 붙으면 다음 push 가 실제 값을 되살린다.
+export function projectNodeSession(s: SessionInfo, online: boolean, viewer: string): SessionInfo {
+  return {
+    ...s,
+    owned: s.owner === viewer,
+    agentState: online ? s.agentState : "offline",
+    attached: online ? s.attached : false,
+    working: online ? s.working : false,
+    awaiting: online ? s.awaiting : false,
+  };
+}
