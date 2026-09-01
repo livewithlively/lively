@@ -78,6 +78,17 @@ export function startInlineAiLogin(
   let lastUrl = ''; let lastCode = ''; let saidPaste = false;
   let saidStall = false; let saidDone = false;
   const startedAt = Date.now();
+  /**
+   * 시작 시점에 **이미** 로그인돼 있었나(첫 조회로 정한다).
+   *
+   *  ⚠ 이 값이 없으면 [다시 로그인] 이 깨진다. 자격 판정은 «파일이 있나» 라 만료된 자격도 true 이고(#1516),
+   *   그 true 를 완료로 읽으면 누른 순간 «✓ 끝났어요» 만 깜빡인다. 실측(2026-09-01)에서 두 번 틀렸다:
+   *    ① `loggedIn === true` 만 봤다 → start·state·cancel 로 끝
+   *    ② `loggedIn && (주소를 봤다)` 로 고쳤다 → **주소가 뜨는 순간** 완료가 됐다(이미 true 였으니까)
+   *   완료는 «이번 시도 중에 **바뀌었나**» 다: 처음에 아니었는데 지금 맞거나, 이미 맞았다면 **프로세스가
+   *   끝났을 때**(CLI 가 새 자격을 쓰고 종료했다)만 인정한다.
+   */
+  let wasLoggedIn: boolean | null = null;
 
   const tick = async (): Promise<void> => {
     if (!alive()) return;
@@ -86,7 +97,13 @@ export function startInlineAiLogin(
     catch (_) { /* 잠깐 못 물었다 — 다음 틱에. 조회 실패로 화면을 지우지 않는다 */ }
     if (!alive()) return;
 
-    if (st && st.loggedIn === true) {
+    //  ⚠ **이미 로그인돼 있다고 «끝났다» 로 읽으면 안 된다.** 자격 판정은 «파일이 있나» 라서 만료된 자격도
+    //   true 다(#1516) — [다시 로그인] 은 바로 그 상황을 위해 있는 버튼인데, 첫 조회의 true 를 완료로 읽으면
+    //   눌러도 «✓ 끝났어요» 만 깜빡이고 아무것도 안 한다(실측 2026-09-01, 상민님 신고).
+    //   그래서 «이번 시도의 결과» 로만 인정한다: 주소를 한 번 봤거나(사람이 브라우저에서 끝냈다),
+    //   프로세스가 끝났거나(CLI 가 «이미 로그인됨» 이라며 스스로 종료했다).
+    if (st && wasLoggedIn === null) wasLoggedIn = st.loggedIn === true;   // 첫 조회가 기준선이다
+    if (st && st.loggedIn === true && (wasLoggedIn === false || st.exited === true)) {
       if (!saidDone) {
         saidDone = true; stopped = true;
         view.done();

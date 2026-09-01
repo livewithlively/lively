@@ -167,7 +167,9 @@ function aiAccountRow(a, mySessions, reload) {
     // 공용 계정에서의 로그인은 **남의 것까지 바꾼다** — 이 서버의 그 AI 계정이 통째로 바뀌므로 먼저 알린다.
     if (shared && !confirm(a.label + ' 에 로그인할까요?\n\n이 서버는 구성원별 계정 격리가 없어, 여기서 로그인하면 이 서버의 ' + a.label + ' 계정이 통째로 바뀝니다 — 다른 구성원의 세션도 그 계정을 쓰게 됩니다.')) return;
     const btn = ev.currentTarget; btn.disabled = true;
-    run();
+    //  ⚠ 사람이 [로그인]/[다시 로그인] 을 **명시적으로** 눌렀다 = «지금 새로 하고 싶다» 다.
+    //   restart 없이 부르면 서버가 «이미 돌고 있다» 며 지난 시도의 **만료된 코드**를 그대로 보여 준다(#2232 실측).
+    run(true);
     btn.disabled = false;
   };
   const logout = async (ev) => {
@@ -208,7 +210,11 @@ function aiAccountRow(a, mySessions, reload) {
         } }) : null,
       el('button', { type: 'button', class: a.loggedIn === true ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
         text: a.loggedIn === true ? '다시 로그인' : '로그인', onclick: openLogin }),
-      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null));
+      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null),
+    //  ⚠ **행에 붙인다.** 이걸 빠뜨리면 `panel.hidden=false` 가 아무 데도 안 보이고,
+    //   `alive: () => document.body.contains(panel)` 이 늘 false 라 폴링도 즉시 죽는다 — 눌러도
+    //   **아무 일도 안 일어난다**(오류도 없다). 실측(2026-09-01, 상민님 신고)으로 밟았다.
+    panel);
 }
 function myAiAccountsCard() {
   const body = el('div');

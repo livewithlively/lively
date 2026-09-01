@@ -26,7 +26,23 @@ test("★ 로그인이 이 자리에서 끝난다 — 버튼이 새 탭을 여�
   assert.ok(fn.length > 100, "openLogin 을 못 찾았다");
   const c = code(fn);
   assert.ok(!/window\.open/.test(c), "누르는 순간 새 탭을 열지 않는다");
-  assert.match(c, /\brun\(\)/, "그 자리에서 로그인 절차를 편다");
+  assert.match(c, /\brun\(/, "그 자리에서 로그인 절차를 편다");
+});
+
+test("★ 로그인 패널을 **행에 붙인다** — 만들어 놓고 안 붙이면 눌러도 아무 일이 안 일어난다", () => {
+  //  ⚠ 실측(2026-09-01, 상민님 신고): `panel` 을 만들고 `panel.hidden = false` 까지 했는데 **반환 트리에
+  //   안 넣었다.** 그래서 눌러도 화면엔 아무것도 안 뜨고, `alive: () => document.body.contains(panel)` 이
+  //   늘 false 라 폴링도 즉시 죽었다 — 오류도 토스트도 없다.
+  //   «만든다» 와 «붙인다» 는 다른 사건이고, 그 사이가 끊기면 조용하다(#2477 의 grok 죽은 버튼과 같은 부류).
+  const c = code(SRC);
+  const ret = c.slice(c.indexOf("return el('div', { class: 'aiacct' }"), c.indexOf("function myAiAccountsCard"));
+  assert.ok(ret.length > 100, "행 반환문을 못 찾았다");
+  assert.match(ret, /\bpanel\)/, "반환 트리에 panel 이 들어 있다");
+});
+
+test("★ 사람이 누른 로그인은 **새로** 띄운다 — 지난 시도의 만료된 코드를 보여 주지 않는다", () => {
+  const fn = SRC.slice(SRC.indexOf("const openLogin ="), SRC.indexOf("const logout ="));
+  assert.match(code(fn), /run\(true\)/, "명시적 클릭은 restart 로 부른다");
 });
 
 test("★ 두 갈래를 **하네스로** 가른다 — 주소·코드로 끝나면 카드, 아니면 터미널", () => {
