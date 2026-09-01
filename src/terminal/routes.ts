@@ -500,16 +500,21 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   이미 두 자리에서 그 교훈을 적어 뒀다). 그걸로 가르면 **여기서 잘 도는 대화 런타임 세션이
     //   화면에서 terminal 로 보이고**, 그러면 도크도 안 뜨고 선택지 카드도 안 그려진다(실측 2026-09-01).
     //   바구니가 답이다: local·localRestorable 은 이 박스, remote 만 다른 기계다.
-    const tagChat = (rows: typeof local, onNode: boolean): void => {
+    const tagChat = (rows: typeof local, _unused: boolean, localSet: Set<string>): void => {
       for (const s of rows) {
         const rc = (s as { runtimeChoice?: unknown }).runtimeChoice;
+        //  이 박스에 그 tmux 가 있으면 런타임도 여기서 돈다 — 노드 좌표가 붙어 있어도 그렇다.
+        const onNode = !localSet.has(s.id);
         Object.assign(s, chatFieldsOf(s.harness, onNode,
           rc === "chat" ? "chat" : rc === "terminal" ? "terminal" : undefined));
       }
     };
-    tagChat(local, false);
-    tagChat(localRestorable, false);
-    tagChat(remote, true);
+    //  ⚠ **병합 뒤에** 붙인다. 게이트웨이와 노드 에이전트가 같은 박스에서 돌면 같은 세션이
+    //   local 과 remote **양쪽에** 잡히는데(바로 아래 주석의 그 실측), 병합 전에 붙이면
+    //   remote 쪽 태그가 남아 **여기서 잘 도는 대화 런타임 세션이 화면에서 terminal 로 보인다**
+    //   (실측 2026-09-01: runtimeMode=terminal 이라 도크도 선택지 카드도 안 떴다).
+    //   판정의 근거는 «이 박스의 tmux 에 그 id 가 있나» 다 — 그게 곧 런타임이 여기서 도느냐다.
+    const localIds = new Set([...local, ...localRestorable].map((s) => s.id));
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
@@ -517,6 +522,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  완전 삭제(purged)면 행 자체를 뺀다. 박스 id 와 대화 uuid 어느 이름으로든 표식이 있으면 그 세션의 것이다.
     //  DB 가 죽어도 목록은 나간다(best-effort — 표식 없이).
     let merged = mergeSessionViews(local, remote, localRestorable);
+    tagChat(merged, false, localIds);
     try {
       const marks = await trashMapFor(idOf(userOf(req)));
       if (marks.size) {
