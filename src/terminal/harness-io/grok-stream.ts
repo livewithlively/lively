@@ -25,7 +25,7 @@
 //
 //  **아직 안 옮긴다**: 승인(`session/request_permission`). 이번 턴은 `always-approve` 상태라
 //   승인 프롬프트가 안 떴다 — **안 본 것을 짐작해 채우지 않는다**(raw 로 관측).
-import type { SessionEvent, SessionFacts, TaskInfo } from "./session-event.js";
+import type { QuestionItem, QuestionOption, SessionEvent, SessionFacts, TaskInfo } from "./session-event.js";
 
 /**
  * 사람 말 → ACP `session/prompt` 요청 한 줄 (#2439).
@@ -52,6 +52,28 @@ const rec = (v: unknown): Record<string, unknown> | null =>
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
 
 /** ACP 한 줄(JSON-RPC) → 세션 이벤트. 모르는 것은 `raw`(버리지 않는다). */
+/**
+ * grok 의 questions 를 우리 낱말로 (#2439). claude 와 **같은 모양**이라 규칙도 같다.
+ *  ⚠ 옵션이 없는 질문은 버린다 — 고를 것이 없는 «선택지» 는 막다른 카드다.
+ */
+function questionsOf(v: unknown): QuestionItem[] {
+  if (!Array.isArray(v)) return [];
+  const out: QuestionItem[] = [];
+  for (const raw of v) {
+    const q = rec(raw);
+    const text = str(q?.question);
+    if (!q || !text) continue;
+    const opts: QuestionOption[] = (Array.isArray(q.options) ? q.options : [])
+      .map((x) => rec(x))
+      .filter((x): x is Record<string, unknown> => !!x && typeof x.label === "string")
+      .map((x) => ({ label: String(x.label), description: str(x.description) }));
+    if (!opts.length) continue;
+    //  ⚠ grok 은 multiSelect 를 **null** 로도 보낸다 — true 일 때만 참으로 본다.
+    out.push({ question: text, header: str(q.header), options: opts, multiSelect: q.multiSelect === true });
+  }
+  return out;
+}
+
 export function grokAcpEvent(line: unknown): SessionEvent | null {
   const o = rec(line);
   if (!o) return null;
@@ -90,6 +112,23 @@ export function grokAcpEvent(line: unknown): SessionEvent | null {
       input: call.rawInput ?? call,
       //  ACP 의 선택지를 **그대로** 나른다 — 화면이 이름을 그리고, 고른 optionId 를 되돌려준다.
       suggestions: options.length ? options : undefined,
+    } };
+  }
+
+  //  ── 선택지 — grok 도 **사람에게 묻는다**(x.ai 확장, 실측 2026-09-01) ──────────────
+  //   요청: {"jsonrpc":"2.0","id":N,"method":"_x.ai/ask_user_question","params":{
+  //           sessionId, toolCallId, questions:[{question, options:[{label,description}], multiSelect}], mode}}
+  //   응답: {"outcome":"accepted","answers":{"<질문 전문>":"<고른 label>"}}
+  //   ★ questions·options 필드 이름이 **claude 와 같다** — 우리 어휘로 그대로 옮겨진다.
+  //   ⚠ outcome 은 **문자열 variant** 다(map 을 주면 "expected variant identifier" 로 튕긴다).
+  //    유효값은 오류가 열거해 줬다: accepted · chat_about_this · skip_interview · cancelled.
+  if (String(o.method ?? "") === "_x.ai/ask_user_question") {
+    const p = rec(o.params) ?? {};
+    const id = o.id !== undefined && o.id !== null ? String(o.id) : "";
+    const qs = questionsOf(p.questions);
+    if (!id || !qs.length) return { t: "raw", source: "grok", payload: o };
+    return { t: "permission.asked", ask: {
+      id, toolName: "AskUserQuestion", title: qs[0].question, questions: qs, input: p,
     } };
   }
 

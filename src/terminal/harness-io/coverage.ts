@@ -78,9 +78,12 @@ export const COVERAGE: readonly HarnessCoverage[] = [
   },
   {
     harness: "grok",
-    axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "ok", slash: "ok", usage: "terminal", interrupt: "ok", model: "ok" },
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "ok", usage: "terminal", interrupt: "ok", model: "ok" },
     notes: {
-      ask: "ACP 에 선택지 요청이 있는지 미실측.",
+      //  ★ 실측 2026-09-01(1.0.13) — 실제로 답해 turn 이 이어지는 것까지 확인했다(tool completed).
+      //   요청 `_x.ai/ask_user_question` · 응답 {outcome:"accepted", answers:{"<질문>":"<label>"}}.
+      //   outcome 은 **문자열 variant** 다(map 이면 튕긴다). 유효값: accepted·chat_about_this·
+      //   skip_interview·cancelled — 오류 메시지가 열거해 줬다.
       usage: "토큰 사용량을 주는 알림을 이번 실측 턴에서 못 봤다 — 안 본 것을 짐작해 «된다» 로 적지 않는다.",
     },
   },
@@ -98,7 +101,10 @@ export const COVERAGE: readonly HarnessCoverage[] = [
     harness: "antigravity",
     axes: { read: "ok", send: "ok", tasks: "ok", ask: "terminal", approve: "terminal", slash: "terminal", usage: "ok", interrupt: "ok", model: "terminal" },
     notes: {
-      ask: "init.tools 에 ask_question 이 있으나 헤드리스에서 그 step 형식 미실측.",
+      //  ⚠ 실측 2026-09-01(1.1.22): ask_question 은 `step_type:"unknown"` 으로 오고 **내용이 없다**
+      //   ({step_index,state:"DONE",duration_seconds} 뿐 — 질문도 선택지도 안 온다). 0.34초에 자동
+      //   스킵되고 에이전트는 «스킵하셨네요» 라고 말한다. 벤더가 헤드리스에 그 내용을 안 준다.
+      ask: "ask_question 이 내용 없는 step_type:\"unknown\" 으로 와 자동 스킵된다(실측 1.1.22) — 그릴 재료가 없다.",
       //  ⚠ 이건 «우리가 안 했다» 가 아니라 **벤더가 헤드리스에서 막았다** 는 실측이다.
       approve: "헤드리스에서 승인을 **못 묻는다**(실측 2026-09-01, agy 1.1.22): \"a tool required the command permission that headless mode cannot prompt for, so it was auto-denied\". 즉 물음 자체가 우리에게 안 온다 — 터미널 TUI 에서만 뜬다.",
       slash: "슬래시 목록을 주는 이벤트를 못 봤다(init 은 tools 만 준다).",
