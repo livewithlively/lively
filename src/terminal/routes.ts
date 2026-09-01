@@ -740,10 +740,22 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const id = String(b.id ?? "");
     if (!id) throw new HttpError(400, "요청 id 가 필요합니다");
     const raw = (b.value ?? {}) as Record<string, unknown>;
+    //  ⚠ answers 는 **키가 질문 전문**이라 길다 — 모양만 좁히고 내용은 해석하지 않는다(번역은 어댑터 몫).
+    const rawAnswers = (raw.answers && typeof raw.answers === "object" && !Array.isArray(raw.answers))
+      ? raw.answers as Record<string, unknown> : null;
+    const answers: Record<string, string | string[]> = {};
+    if (rawAnswers) {
+      for (const [k, v] of Object.entries(rawAnswers).slice(0, 8)) {
+        if (typeof k !== "string" || !k || k.length > 2000) continue;
+        if (typeof v === "string") answers[k] = v.slice(0, 2000);
+        else if (Array.isArray(v)) answers[k] = v.filter((x) => typeof x === "string").slice(0, 16).map((x) => String(x).slice(0, 2000));
+      }
+    }
     const value = {
       allow: raw.allow === true,
       scope: raw.scope === "always" ? "always" as const : "once" as const,
       ...(typeof raw.optionId === "string" && raw.optionId ? { optionId: raw.optionId } : {}),
+      ...(Object.keys(answers).length ? { answers } : {}),
     };
     const { answer } = await import("./harness-io/runtime-bus.js");
     const ok = answer(req.params.id, id, value);
