@@ -63,6 +63,12 @@ for u in $members; do
   if [ -f "$DIR/install-claude-user.sh" ]; then
     OFFLINE="${OFFLINE:-0}" bash "$DIR/install-claude-user.sh" "$u" || true
   fi
+  # 멤버 codex 백필 — 같은 이유의 codex 판. 시스템 전역 codex 는 자동 업데이트(`npm install -g`)가
+  #  EACCES 로 죽어 **codex 세션이 즉시 종료**되므로, 이미 프로비저닝된 멤버도 홈 설치로 전환해야 한다.
+  #  claude 와 마찬가지로 kit 미설치 멤버도 대상(하네스는 세션 진입 수단이라 미리 깔아둔다).
+  if [ -f "$DIR/install-codex-user.sh" ]; then
+    OFFLINE="${OFFLINE:-0}" bash "$DIR/install-codex-user.sh" "$u" || true
+  fi
   # 이하 훅 러너 리프레시는 kit 설치 멤버(~/.lively/hooks 존재)만 — 첫 세션 프로비저닝이 설치한다.
   [ -d "$h/.lively/hooks" ] || continue
 

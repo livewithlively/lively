@@ -78,6 +78,11 @@ echo "provision-member → /opt/lively/libexec/provision-member (root:root 0755)
 #     self-update claude(~/.local/bin) 를 깔 때 호출(root 전역 스테일 claude no_permissions 근절).
 install -m 0755 -o root -g root "$DIR/../install-claude-user.sh" /opt/lively/libexec/install-claude-user
 echo "install-claude-user → /opt/lively/libexec/install-claude-user (root:root 0755)"
+# ②-d install-codex-user(멤버 홈 codex + npm prefix 헬퍼) — claude 와 같은 이유의 codex 판.
+#     codex 는 시작 시 `npm install -g @openai/codex` 로 자기를 올리는데, root 전역 설치면 멤버가 못 써서
+#     EACCES 로 **즉시 종료**된다(끄는 플래그 없음). prefix 를 멤버 홈으로 돌려 자기 홈에 쓰게 한다.
+install -m 0755 -o root -g root "$DIR/../install-codex-user.sh" /opt/lively/libexec/install-codex-user
+echo "install-codex-user → /opt/lively/libexec/install-codex-user (root:root 0755)"
 
 # ③ 잠긴 sudoers — 템플릿의 'lively' 주체를 실제 게이트웨이 유저로 치환, visudo 검증 후 설치
 TMPS="$(mktemp)"
