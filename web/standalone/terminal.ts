@@ -265,6 +265,7 @@ let term, fit, ws, statusEl, explorerEl, tabbarEl, panesEl, termPane, titleEl, p
 //  브라우저 실행 경로는 종전과 동일하게 boot()/connectNow() 가 채운다(여기서 값을 만들지 않는다).
 export function __injectRefsForTest(refs: Record<string, any>): void {
   if ('term' in refs) term = refs.term;
+  if ('fit' in refs) fit = refs.fit;
   if ('ws' in refs) ws = refs.ws;
   if ('statusEl' in refs) statusEl = refs.statusEl;
   if ('panesEl' in refs) panesEl = refs.panesEl;
@@ -516,6 +517,8 @@ function doNudge() {
   if (++nudgeTries > MAX_NUDGES) return;
   // ⚠ 넛지 직전에 fit 을 확정한다 — 폰트 정착 전 크기로 넛지하면 앱이 **다른 크기로** 전체를 그려
   //  클라 화면과 어긋난다(실측: 상단 일부가 화면 위로 벗어남). 넛지는 '지금 확정된 크기'를 기준으로만 의미가 있다.
+  //  못 재는 프레임(안 보임)이면 넛지 자체가 무의미하고, 보내면 80x24 로 남의 창을 줄인다 — canReportSize 주석.
+  if (!canReportSize()) return;
   try { if (fit) fit.fit(); } catch (_) { /* noop */ }
   const msgs = nudgeSizes(term && term.cols, term && term.rows);
   if (!msgs || !ws || ws.readyState !== 1) return;
@@ -670,10 +673,33 @@ function requestMouseReset() {
   lastMouseResetAt = now; mouseResetTries++;
   if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'mr' })); } catch (_) { /* noop */ } }
 }
+/** FitAddon 이 **실제 레이아웃을 재서** 낸 값인가 — 순수(전역 의존 없음). d = proposeDimensions() 반환값.
+ *  숨은 프레임에선 fit 이 성립하지 않는다: 부모(#term-host)가 display:none 이면 getComputedStyle().height 가
+ *  'auto' 라 FitAddon 의 availableWidth/Height 가 NaN 이 되고(실측 xterm 5.5.0 · addon-fit 0.10.0), fit() 은
+ *  NaN 가드에 걸려 **조용히 아무것도 안 하고** 돌아간다 → 터미널은 xterm 생성 기본값 **80x24 그대로** 남는다. */
+export function fitMeasured(d) {
+  return !!d && Number.isFinite(d.cols) && Number.isFinite(d.rows) && d.cols > 0 && d.rows > 0;
+}
+/** 지금 이 프레임이 서버에 창 크기를 통지해도 되나 — fit 이 성립할 때만 참.
+ *
+ *  ⚠ 못 잰 크기를 보내면 **남의 화면을 깬다**(2026-09-01 상민님 신고 · 브라우저·tmux 실측). 세션 화면은 탭마다 하나씩 살아 있고
+ *   비활성 탭은 display:none 이라(web/v2/tabs.ts), 그 안에서 뜬 터미널 프레임은 fit 이 성립하지 않아 80x24 에
+ *   머문다. 그 기본값을 그대로 통지하면 서버가 `refresh-client -C 80x24` 로 옮기고, window-size latest 인 tmux 는
+ *   **그 세션의 창 전체를** 80x24 로 줄인다 — 같은 세션을 보고 있는 창에는 좌상단 80x24 만 그려지고 나머지가 빈다.
+ *  ⚠⚠ 그리고 되돌릴 수 없다: control-mode 클라의 `refresh-client -C` 는 client_activity 를 갱신하지 않아
+ *   **'최근 활동' 클라가 되지 못한다**(실측 tmux 3.3a — 입력조차 send-keys 명령이라 활동으로 안 잡힌다).
+ *   즉 tmux-exec.ts ensureSessionOpts 가 기대하던 '포커스·화면 복구 때 다시 보내면 내 크기로 맞춰진다' 는
+ *   **클라가 둘 이상이면 성립하지 않는다**(줄인 클라가 떨어져 나가야 원래 크기로 돌아온다).
+ *  → 그래서 '보낼 수 없으면 보내지 않는다'가 유일하게 안전한 규약이다. 안 보내도 손해가 없다: 이 프레임이
+ *    보이게 되는 순간 #term-host 의 ResizeObserver 가 발화해(0 → 실제 크기) 그때 제대로 재서 보낸다. */
+function canReportSize() {
+  try { return fitMeasured(fit && fit.proposeDimensions()); } catch (_) { return false; }
+}
 // fit 후 '크기가 실제로 바뀐 경우에만' pty resize 전송 — 불필요한 SIGWINCH(→ 쉘 프롬프트 재출력이
 //  tmux 히스토리에 중복으로 쌓이는 원인) 제거.
-function applyFit() {
+export function applyFit() {
   if (!fit || !term) return;
+  if (!canReportSize()) return;   // 못 잰다 = 이 프레임은 안 보인다 — 기본값 80x24 를 통지하지 않는다(위 주석)
   try { fit.fit(); } catch (_) { /* noop */ }
   if (ws && ws.readyState === 1 && (term.cols !== lastCols || term.rows !== lastRows)) {
     lastCols = term.cols; lastRows = term.rows;
@@ -688,6 +714,10 @@ function doResize() { clearTimeout(resizeTimer); resizeTimer = setTimeout(applyF
 //   중복이 안 풀린다. capture-pane 백필은 clear + 현재 화면 재수신이라 그 상태를 실제로 복원한다.)
 function forceRedraw() {
   if (!fit || !term) return;
+  // 안 보이는 프레임에선 아무것도 하지 않는다 — 여기서 크기는 **무조건** 재전송되므로(아래) 못 잰 80x24 가
+  //  그대로 나간다. visibilitychange 는 display:none 인 iframe 에도 똑같이 뜨므로(문서 가시성은 최상위 탭의
+  //  것이다) 창을 한 번 다녀오면 숨은 세션 프레임까지 전부 이 경로를 탄다 — canReportSize 주석의 사고 경로.
+  if (!canReportSize()) return;
   try { fit.fit(); } catch (_) { /* noop */ }
   if (ws && ws.readyState === 1) {
     lastCols = term.cols; lastRows = term.rows;

@@ -245,10 +245,17 @@ export async function getSessionProject(id: string): Promise<number> {
 //  자기보다 큰 pane 을 받는 좁은 클라는 출력이 깨진다(254폭 내용이 83폭 xterm 에 들어가 줄이 어긋남).
 //  - largest(옛 설정): 가장 큰 클라에 고정 → 좁은 탭이 영구히 깨지고 '화면 복구'(refresh-client 재전송)도
 //    창을 못 줄여 무효였다(#252). 잔존하던 큰 연결 하나가 현재 탭을 계속 깨뜨림 → 새 세션만 정상이던 증상.
-//  - latest: 지금 보는 탭이 connect/포커스/'화면 복구' 때 refresh-client 를 보내면 그 순간 '최근 활동'이
-//    되어 pane 이 그 탭 크기로 맞춰진다 → 곧바로 정상 렌더(잔존·백그라운드 클라는 활동이 없어 크기를 못 끈다).
+//  - latest: **마지막으로 `refresh-client -C` 를 보낸 클라**의 크기로 창이 맞춰진다.
 //    실측(tmux 3.6a, 격리소켓): largest 는 작은 클라 refresh 후에도 창 유지, latest 는 마지막 refresh 한
 //    클라 크기로 전환됨을 확인. aggressive-resize 는 다중 '세션' 공유용이라 무관(끔 유지).
+//  ⚠ 정정(2026-09-01 실측 tmux 3.3a, 격리소켓): 종전 주석은 "지금 보는 탭이 포커스·'화면 복구' 때
+//   refresh-client 를 보내면 그 순간 '최근 활동'이 되어 pane 이 그 탭 크기로 맞춰진다"고 적었는데 **틀렸다**.
+//   `refresh-client -C` 는 client_activity 를 갱신하지 않고, control-mode 클라는 사용자 입력조차 `send-keys`
+//   **명령**으로 보내므로 활동이 영영 안 잡힌다 → 붙은 뒤로는 '최근 활동' 클라가 될 수 없다. 즉 클라가 둘 이상이면
+//   **먼저 줄인 쪽이 이기고, 큰 쪽은 다시 보내도 못 되돌린다**(줄인 클라가 detach 하면 그때 남은 클라 크기로 복귀).
+//   그래서 '못 잰 크기는 아예 보내지 않는다'를 클라가 지켜야 한다 — web/standalone/terminal.ts canReportSize.
+//   (되돌리는 명령은 `resize-window -x/-y` 뿐인데, 그건 window-size 를 manual 로 굳혀 이후 refresh-client 를
+//    통째로 무력화한다 — 실 터미널 attach 의 자동 크기맞춤까지 죽으므로 쓰지 않는다. 실측으로 확인.)
 export async function ensureSessionOpts(id: string): Promise<void> {
   if (!ID_RE.test(id)) return;
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
