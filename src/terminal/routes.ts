@@ -764,7 +764,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  ★ #2439 — **노드 세션의 물음은 그 노드의 버스에 걸려 있다.** 게이트웨이 버스에 답하면
     //   아무 데도 안 간다(카드는 접히는데 그 턴은 계속 선다). 노드로 릴레이한다.
     //   ⚠ 구 노드는 `node-unsupported-op:` 로 던진다 → stale 로 답해 화면이 사실대로 말한다.
-    const nid = nodeOfSession(req.params.id);
+    //  ⚠ **노드 등록 여부로 가르면 안 된다.** 게이트웨이 박스가 노드로도 등록된 배포에서는 그 박스의
+    //   로컬 세션까지 노드로 잡혀(#2055 실측 함정), 게이트웨이에서 돌던 런타임의 물음을 노드로
+    //   보내게 된다 — 그 노드 버스엔 그런 물음이 없으니 stale 로 끝나고 카드는 죽는다(실측 2026-09-01).
+    //   배달과 **같은 기준**을 쓴다: «이 박스의 tmux 에 그 세션이 있나». 있으면 런타임도 여기 있다.
+    const { sessionGone } = await import("./tmux-exec.js");
+    const nid = (await sessionGone(req.params.id)) ? nodeOfSession(req.params.id) : "";
     if (nid) {
       let relayed = false;
       try {
