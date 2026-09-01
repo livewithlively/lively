@@ -239,4 +239,48 @@ t("[12] 옵션 없는 질문은 **질문으로 안 본다** — 고를 것이 �
   assert.equal(ask.questions, undefined, "평범한 승인으로 되돌아간다(있는 척하지 않는다)");
 });
 
+t("[13] ★★ grok 선택지 — 실측 봉투 그대로(1.0.13, 2026-09-01 실제로 답해 성공)", () => {
+  //  요청 원문:
+  //   {"jsonrpc":"2.0","id":0,"method":"_x.ai/ask_user_question","params":{sessionId,toolCallId,
+  //     questions:[{question,options:[{label,description}],multiSelect:null}],mode:"default"}}
+  const ask = askOf(grokAcpEvent({
+    jsonrpc: "2.0", id: 0, method: "_x.ai/ask_user_question",
+    params: { sessionId: "s1", toolCallId: "call-1", mode: "default", questions: [
+      { question: "딸기와 사과 중 어느 것이 더 좋습니까?", multiSelect: null,
+        options: [{ label: "딸기", description: "딸기가 더 좋다고 선택합니다." },
+                  { label: "사과", description: "사과가 더 좋다고 선택합니다." }] },
+    ] },
+  }));
+  assert.equal(ask.id, "0");
+  assert.ok(ask.questions && ask.questions.length === 1, "선택지로 알아본다");
+  assert.equal(ask.questions![0].options.length, 2);
+  //  ⚠ grok 은 multiSelect 를 **null** 로 보낸다 — 참으로 접으면 안 된다.
+  assert.equal(ask.questions![0].multiSelect, false);
+
+  const out = JSON.parse(chatAdapter("grok")!.respond!({
+    ask, convId: "s1",
+    value: { allow: true, answers: { "딸기와 사과 중 어느 것이 더 좋습니까?": "사과" } },
+  })!) as any;
+  assert.equal(out.id, 0, "JSON-RPC 는 숫자 id 로 짝짓는다");
+  //  ⚠ outcome 은 **문자열** 이어야 한다 — map 이면 "expected variant identifier" 로 튕긴다(실측).
+  assert.equal(out.result.outcome, "accepted");
+  assert.deepEqual(out.result.answers, { "딸기와 사과 중 어느 것이 더 좋습니까?": "사과" });
+
+  const skip = JSON.parse(chatAdapter("grok")!.respond!({ ask, value: { allow: false }, convId: "s1" })!) as any;
+  assert.equal(skip.result.outcome, "skip_interview", "건너뛰기는 그 하네스의 낱말로");
+});
+
+t("[14] ★ id 0 이 문자열로 새지 않는다 — grok 의 첫 요청 id 가 실제로 0 이었다", () => {
+  //  ⚠ `Number(x) || x` 로 쓰면 0 이 falsy 라 문자열로 샌다. 그러면 짝이 안 맞아 그 요청은
+  //   영영 답을 못 받고, 사람은 «선택지를 눌렀는데 아무 일도 안 난다» 를 겪는다.
+  const ask: PermissionAsk = { id: "0", toolName: "AskUserQuestion",
+    questions: [{ question: "Q", options: [{ label: "A" }] }] };
+  const out = JSON.parse(chatAdapter("grok")!.respond!({ ask, value: { allow: true, answers: { Q: "A" } }, convId: "s" })!) as any;
+  assert.strictEqual(out.id, 0, "숫자 0 그대로");
+  //  숫자가 아닌 id 는 문자열 그대로 둔다(하네스가 uuid 를 쓸 수도 있다).
+  const uuid: PermissionAsk = { ...ask, id: "a5386ace-0145" };
+  const out2 = JSON.parse(chatAdapter("grok")!.respond!({ ask: uuid, value: { allow: true }, convId: "s" })!) as any;
+  assert.strictEqual(out2.id, "a5386ace-0145");
+});
+
 console.log(`\n${pass}건 통과`);
