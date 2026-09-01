@@ -44,22 +44,24 @@ export function harnessSupportsChat(harness: string): boolean {
 /**
  * 배포 기본값 — `LIVELY_SESSION_RUNTIME=chat|terminal`.
  *
- *  ── 왜 이제 **chat 이 기본**인가 (2026-09-01) ──────────────────────────────────
- *  종전엔 terminal 이 기본이었다. 이유는 «대화창이 작업·승인·슬래시를 아직 안 그린다» 였고,
- *  그 상태에서 기본을 옮겼다가 **덜 익은 화면이 남의 기본 화면이 되는** 사고를 냈다(8/31, 되돌림).
- *  그때 여기 «③④가 붙고 화면 실측을 통과하면 뒤집는다» 고 적어 뒀다. 그 조건이 찼다:
- *   · ③ 작업 표면(백그라운드 셸·서브에이전트) · ④ 승인 카드·슬래시 자동완성·사용량·멈춤 — 붙었다.
- *   · 커버리지를 **값으로** 잰다([[harness-io/coverage.ts]]) — claude 는 8축 전부 ok,
- *     나머지는 벤더가 프로토콜로 안 여는 축만 남았고 그 사실을 화면이 말한다(막다른 길 없음).
- *   · 라이트·다크 두 테마를 실제 산출물로 띄워 봤고, 거기서 잡힌 셋(«null» 이 찍히던 것,
- *     다크에서 안 읽히던 메뉴, `rm -rf` 옆의 파란 [허용])을 고쳤다.
+ *  ── ★ 되돌림 (2026-09-01) — 기본은 다시 **terminal** 이다 ────────────────────
+ *  한 번 chat 으로 뒤집었다가 **같은 날 되돌렸다.** 커버리지·화면은 실제로 준비돼 있었는데,
+ *  내가 **전제 하나를 안 지켰다**: chat 모드는 «pane 이 셸» 이어야 성립한다(paneIsShell).
+ *  그런데 세션 생성 경로는 그대로 **claude TUI** 를 pane 에 띄운다. 그래서 기본을 뒤집자
+ *  한 대화에 **claude 가 둘** 붙었다 — pane 의 TUI 와, 웹 프롬프트가 깨우는 헤드리스 런타임.
  *
- *  ⚠ 되돌리는 길은 **한 줄이 아니라 env 하나**다: `LIVELY_SESSION_RUNTIME=terminal`.
- *   배포에서 문제가 보이면 코드를 고치지 말고 그 값을 세워 즉시 되돌린다.
- *  ⚠ 이 값이 chat 이어도 **감당 못 하는 하네스·로그인 세션은 여전히 terminal 이다**(sessionRuntimeMode).
+ *  실측(2026-09-01, box-yoon-a7da7c38): 웹 프롬프트는 `transport:"chat-runtime"` 으로 갔는데
+ *  그 세션 기록엔 TUI 가 쓰는 줄(mode·permission-mode·atis-latch)이 함께 있었다. 사람 눈에는
+ *  «선택지가 대화창에 안 뜨고(선택지는 TUI 가 쥔다) 시간만 올라가는» 화면이 된다.
+ *
+ *  ⚠ 이 파일의 머리말이 그 위험을 이미 적어 두고 있었다("chat 모드에서 pane 에 TUI 를 함께
+ *   띄우면 대화가 둘로 갈린다"). 표를 채우고 화면을 고치는 데 매달려 **그 전제를 확인하지 않았다.**
+ *
+ *  다시 뒤집으려면 **먼저** 세션 생성이 chat 모드에서 pane 을 셸로 열게 해야 한다(codex 가
+ *  이미 그렇게 한다). 그 전에는 이 한 줄을 건드리지 않는다.
  */
 export function sessionRuntimeDefault(env: NodeJS.ProcessEnv = process.env): SessionRuntimeMode {
-  return String(env.LIVELY_SESSION_RUNTIME || "").trim().toLowerCase() === "terminal" ? "terminal" : "chat";
+  return String(env.LIVELY_SESSION_RUNTIME || "").trim().toLowerCase() === "chat" ? "chat" : "terminal";
 }
 
 /**
