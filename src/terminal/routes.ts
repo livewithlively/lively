@@ -495,11 +495,21 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
     } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
-    for (const s of [...local, ...localRestorable, ...remote]) {
-      const rc = (s as { runtimeChoice?: unknown }).runtimeChoice;
-      Object.assign(s, chatFieldsOf(s.harness, !!(s as { node?: unknown }).node,
-        rc === "chat" ? "chat" : rc === "terminal" ? "terminal" : undefined));
-    }
+    //  ⚠ **«node 필드가 있다» 를 «다른 기계에 있다» 로 읽으면 안 된다.** 게이트웨이 박스가 노드로도
+    //   등록된 배포에서는 이 박스의 로컬 세션에도 노드 좌표가 붙는다(#2055 실측 함정 — 이 파일이
+    //   이미 두 자리에서 그 교훈을 적어 뒀다). 그걸로 가르면 **여기서 잘 도는 대화 런타임 세션이
+    //   화면에서 terminal 로 보이고**, 그러면 도크도 안 뜨고 선택지 카드도 안 그려진다(실측 2026-09-01).
+    //   바구니가 답이다: local·localRestorable 은 이 박스, remote 만 다른 기계다.
+    const tagChat = (rows: typeof local, onNode: boolean): void => {
+      for (const s of rows) {
+        const rc = (s as { runtimeChoice?: unknown }).runtimeChoice;
+        Object.assign(s, chatFieldsOf(s.harness, onNode,
+          rc === "chat" ? "chat" : rc === "terminal" ? "terminal" : undefined));
+      }
+    };
+    tagChat(local, false);
+    tagChat(localRestorable, false);
+    tagChat(remote, true);
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
@@ -1044,7 +1054,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           trustOk: autoTrustWorkspace({ projectId: input.projectId, subpath: input.subpath }),
         });
       }
-      res.json({ session: { ...withChatFields(session), node: { id: nodeId, online: true } } });
+      //  ★ 이 갈래는 **노드에 만든 세션**이다 — 그 기계에 산다(onNode=true).
+      res.json({ session: { ...withChatFields(session, true), node: { id: nodeId, online: true } } });
       return;
     }
     const session = await createSession(userOf(req), input);
@@ -1082,8 +1093,11 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   그 사실을 안 실으면 화면이 «웹에서 다 됩니다» 라고 거짓말한다.
     terminalOnly: sessionTerminalOnlyAxes(harness, onNode),
   });
-  const withChatFields = <T extends { harness?: string; node?: unknown; runtimeChoice?: unknown }>(s: T): T =>
-    Object.assign(s, chatFieldsOf(String(s.harness || ""), !!s.node,
+  //  ⚠ 단건 경로(생성·조회)는 **이 박스에서 만든 세션**이다 — 노드 세션은 릴레이가 따로 답한다.
+  //   그래서 onNode=false 다. «node 필드가 있으면 노드» 로 읽으면 게이트웨이 박스가 노드로도
+  //   등록된 배포에서 여기서 잘 도는 세션이 화면에서 terminal 로 보인다(위 tagChat 주석).
+  const withChatFields = <T extends { harness?: string; runtimeChoice?: unknown }>(s: T, onNode = false): T =>
+    Object.assign(s, chatFieldsOf(String(s.harness || ""), onNode,
       s.runtimeChoice === "chat" ? "chat" : s.runtimeChoice === "terminal" ? "terminal" : undefined));
 
   app.post("/api/ui/terminal/sessions/:id/handoff", auth, wrap(async (req, res) => {
