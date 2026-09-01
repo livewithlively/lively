@@ -6,7 +6,12 @@
 //  ⚠ 프로토타입에서 그대로 옮긴 코드라 타입을 붙이지 않았다(// @ts-nocheck) — 기능 배선(답 저장·실제 분류)을 붙일 때 정리한다.
 // @ts-nocheck
 import { authUploadProgress, upDropZone, upFromInput } from '../projects/files-upload.js';
-import { sessionTermUrl } from '../lib/session-open.js';   // #2232 — AI 로그인 창(터미널 한 장) 주소는 한 곳에서만 만든다   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
+import { sessionTermUrl } from '../lib/session-open.js';
+//  ★ #2477 — «화면에서 끝나는 로그인» 의 프로토콜은 한 벌이다([내 설정 ▸ 내 AI 계정]과 공유). 여기선 그리기만 한다.
+import {
+  AI_LOGIN_INLINE, startInlineAiLogin, ensureLoginTerminal, loginTerminalSrc, loginTerminalPopoutUrl,
+  type InlineLoginHandle, type LoginTerminal,
+} from '../lib/ai-login-inline.js';   // #2232 — AI 로그인 창(터미널 한 장) 주소는 한 곳에서만 만든다   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
 import { managedWorkspaces } from './switcher.js';   // #2476 — 워크스페이스마다 AI 로그인이 따로인 것은 **매니지드만**이다
@@ -2210,7 +2215,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           if (fb && !LOGIN_INLINE[h0]) fb.onclick = () => {
             const label = AI_LABEL[h0] || S.ai || h0;
             if (loginTermSession) {
-              window.open(sessionTermUrl(loginTermSession.id, { label: loginTermSession.label }), '_blank');
+              window.open(loginTerminalPopoutUrl(loginTermSession), '_blank');
               toast('같은 로그인 창을 새 탭에서 열었어요.');
               return;
             }
@@ -2836,18 +2841,19 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      이 자리로 빼면 그 물음은 없어지는 게 아니라 **첫 세션으로 미뤄진다** — 그래서 안내 마지막 줄에 그대로 적는다.
      대신 답해 두지 않는 이유는 «이 폴더를 믿나요» 가 사람이 할 보안 판단이라서다(미리 눌러 주면 그 판단을 뺏는다).
      판정·파싱의 정본은 서버 ai-login-flow.ts 다 — 여기서 형식을 다시 짐작하지 않는다. */
-  const LOGIN_INLINE = { codex: true, claude: true, grok: true };
+  //  ⚠ 목록은 **공용 한 벌**을 그대로 쓴다(lib/ai-login-inline). 여기 사본을 두면 [내 AI 계정]과 갈린다.
+  const LOGIN_INLINE = AI_LOGIN_INLINE;
 
   /* 터미널 없이 로그인 — 서버가 명령을 멤버 자리에서 돌리고, 여기서는 주소·코드만 보여 준다(#2055 후속).
      ⚠ «막다른 카드» 를 만들지 않는다: 시작조차 못 하면 종전 «로그인 창» 경로로 정직하게 내려간다.
      ⚠ 완료 판정은 서버의 **자격 확인**이 한다(프로세스가 끝난 것과 로그인 성공은 다르다). */
-  let inlineStop = false;
+  let inlineHandle: InlineLoginHandle | null = null;
   async function startInlineLogin(el, h, label, restart) {
     //  안 1(#2232) — 이 함수는 이제 **스테퍼를 채우기만** 한다. 종전엔 카드(replaceChildren)를 통째로 갈아치웠고,
     //   상태 조회가 30초 끊기면 «주소가 오지 않았어요» 탈출로가 화면을 덮어 **받은 주소·치던 코드까지 지웠다**
     //   (원준님 실측 2026-08-31: 앤트로픽에서 돌아오니 다 사라짐 — 그날 게이트웨이 출렁임이 그 30초를 만들었다).
     //   이제 지우는 코드 경로가 없다: 주소·코드는 도착하면 채워질 뿐이고, 실패·정체는 **잔글씨 한 줄**로만 말한다.
-    inlineStop = false;
+    inlineHandle?.stop();
     const addr = $('#lgAddr', el), open = $('#lgOpen', el);
     if (!addr) return;                                  // 스테퍼가 없는 화면(연결됨 등) — 할 일 없음
     const codeChip = $('#lgCodeChip', el), codeEl = $('#lgCode', el), codeEcho = $('#lgCodeEcho', el);
@@ -2870,7 +2876,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const v = inp.value.trim(); if (!v) { inp.focus(); return; }
         put.disabled = true; put.textContent = '넣는 중…';
         try {
-          await api('/api/ui/me/ai-login/paste', { method: 'POST', body: JSON.stringify({ harness: h, code: v }) });
+          if (!inlineHandle) throw new Error('아직 시작 전이에요');
+          await inlineHandle.paste(v);
           pasted = true; put.textContent = '넣었어요'; lgMark(3, 'done'); note('');
           toast('코드를 넣었어요 — 확인하는 중이에요');
         } catch (e) { put.disabled = false; put.textContent = '넣기'; if (err0()) err0().textContent = `코드를 넣지 못했어요 — ${(e && e.message) || e}`; }
@@ -2881,51 +2888,33 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const err0 = () => $('#cErr', el);
     const retry = $('#lgRetry', el);
     if (retry) retry.onclick = () => { if (codeEl) codeEl.textContent = ''; if (addr) addr.textContent = '새 주소와 코드를 받는 중이에요…'; if (open) open.hidden = true; if (codeChip) codeChip.hidden = true; lgMark(1, 'now'); lgMark(2, 'idle'); lgMark(3, 'idle'); void startInlineLogin(el, h, label, true); };
-    try { await api('/api/ui/me/ai-login/start', { method: 'POST', body: JSON.stringify({ harness: h, restart: restart === true }) }); }
-    catch (e) { note(`여기서 바로 시작하지 못했어요(${(e && e.message) || e}) — 위 걸음은 그대로 두고, 창으로 여셔도 됩니다.`); }
-    const STALL_MS = 30000;
-    const startedAt = Date.now();
-    let gotUrl = false, stalledSaid = false, doneSaid = false;
-    const tick = async () => {
-      if (inlineStop || !document.body.contains(addr)) return;
-      let st = null;
-      try { st = await api(`/api/ui/me/ai-login/state?harness=${encodeURIComponent(h)}`); } catch (_) { /* 다음 틱 */ }
-      if (st && st.loggedIn === true) {
-        if (!doneSaid) {
-          doneSaid = true; inlineStop = true;
-          [1, 2, 3].forEach((n) => lgMark(n, 'done'));
-          if (wait) wait.hidden = true;
-          if (ok) { ok.hidden = false; const g2 = $('#lgOkGo', el); const go2 = $('#cGo', el); if (g2 && go2) g2.onclick = () => go2.click(); }
-          note('');
-          try { await api('/api/ui/me/ai-login/cancel', { method: 'POST', body: JSON.stringify({ harness: h }) }); } catch (_) { /* noop */ }
-        }
-        return;
-      }
-      if (st && st.step === 'failed') {
-        //  실패도 화면을 안 지운다 — 오류 줄 + 탈출로 안내만. 다시 시도는 서버 절차를 새로 띄운다.
-        note(String((st && st.error) || '로그인이 실패했어요') + ' — 창으로 여시거나, 잠시 뒤 다시 해 보세요.');
-        setTimeout(tick, 4000); return;
-      }
-      if (st && st.url) {
-        if (!gotUrl || addr.dataset.url !== st.url) {
-          gotUrl = true; addr.dataset.url = st.url;
-          addr.textContent = st.url.replace(/^https?:\/\//, '');
-          if (open) { open.href = st.url; open.hidden = false; }
-        }
-        if (st.code && codeEl && codeEl.textContent !== st.code) {
-          codeEl.textContent = st.code; if (codeChip) codeChip.hidden = false;
-          if (codeEcho) codeEcho.textContent = st.code;
-        }
+    //  ★ #2477 — 주고받는 일(시작·폴링·붙여넣기·정리)은 **공용 한 벌**(lib/ai-login-inline)이 한다.
+    //   여기 남는 것은 «그 사실을 이 스테퍼에 어떻게 그리나» 뿐이다. 두 화면([내 AI 계정]도 같은 통로를
+    //   쓴다)이 각자 루프를 갖고 있으면 실측으로 얻은 처방(30초 상한·restart·완료 시 정리)이 갈린다.
+    inlineHandle = startInlineAiLogin(h, {
+      url: (u) => {
+        if (addr.dataset.url === u) return;
+        addr.dataset.url = u;
+        addr.textContent = u.replace(/^https?:\/\//, '');
+        if (open) { open.href = u; open.hidden = false; }
         note('');
-      } else if (!gotUrl && !stalledSaid && Date.now() - startedAt > STALL_MS) {
-        //  ⚠ 종전의 그 30초 — 이제 화면을 덮지 않는다. 잔글씨로 사실만 말하고 **계속 기다린다**(조회가 끊겼다
-        //   돌아오면 주소는 그때 채워진다). 급한 사람에겐 상시 탈출로가 이미 아래 있다.
-        stalledSaid = true;
-        note('주소가 늦네요 — 조금 더 기다리거나, 창으로 여셔도 됩니다.');
-      }
-      setTimeout(tick, 2000);
-    };
-    void tick();
+      },
+      code: (c) => {
+        if (codeEl && codeEl.textContent !== c) { codeEl.textContent = c; if (codeChip) codeChip.hidden = false; }
+        if (codeEcho) codeEcho.textContent = c;
+      },
+      needsPaste: () => { if (inp) setTimeout(() => inp.focus(), 100); },
+      done: () => {
+        [1, 2, 3].forEach((n) => lgMark(n, 'done'));
+        if (wait) wait.hidden = true;
+        if (ok) { ok.hidden = false; const g2 = $('#lgOkGo', el); const go2 = $('#cGo', el); if (g2 && go2) g2.onclick = () => go2.click(); }
+        note('');
+      },
+      //  실패도 화면을 안 지운다 — 잔글씨 한 줄 + 상시 탈출로만.
+      failed: (m) => note(String(m) + ' — 창으로 여시거나, 잠시 뒤 다시 해 보세요.'),
+      //  ⚠ 종전의 그 30초 — 화면을 덮지 않는다. 사실만 말하고 **계속 기다린다**.
+      stalled: () => note('주소가 늦네요 — 조금 더 기다리거나, 창으로 여셔도 됩니다.'),
+    }, { restart: restart === true, alive: () => document.body.contains(addr) });
   }
   /* ★ 인라인 터미널(#2477) — 로그인 «창» 을 **이 자리에** 띄운다.
    *
@@ -2938,7 +2927,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
    *    로그인 세션이 쌓이고, 사람은 «어느 창에서 로그인한 게 맞나» 를 알 수 없게 된다.
    *   ⚠ 액자가 안 뜨거나 좁을 때의 탈출로는 **같은 세션**을 새 탭으로 여는 길이다(새 세션이 아니다).
    */
-  let loginTermSession = null;   // { id, label } — 이 장면에서 만든 로그인 세션(한 번만)
+  let loginTermSession: LoginTerminal | null = null;   // 이 장면에서 만든 로그인 세션(한 번만)
   async function startInlineTerminal(el, h, label, btn) {
     const box = $('#lgTermBox', el), frame = $('#lgTermF', el);
     const st = $('#lgTermSt', el), out = $('#lgTermOut', el);
@@ -2950,20 +2939,15 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const was = btn && btn.textContent;
     if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
-      if (!loginTermSession) {
-        const r: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-          label: `내 계정 로그인 (${label})`, rootKey: 'personal', subpath: '', flags: {}, autoApprove: false, loginProfile: true,
-          ...(LOGIN_SESSION[h] || { harness: h }) }) });
-        const id = r && r.session && r.session.id;
-        if (!id) throw new Error('세션을 받지 못했어요');
-        loginTermSession = { id, label: (r.session && r.session.label) || label };
-      }
+      //  ⚠ 세션은 **한 번만** 만든다(공용 함수가 그 규약을 진다) — 누를 때마다 만들면 로그인 세션이 쌓이고,
+      //   사람은 «어느 창에서 로그인한 게 맞나» 를 알 수 없게 된다.
+      loginTermSession = await ensureLoginTerminal(h, label, loginTermSession, LOGIN_SESSION[h] || { harness: h });
       //  embed=1 — 상단바·파일 탐색기가 빠진 «터미널만» 판(#1744). 카드 안에 그대로 맞는다.
-      const src = sessionTermUrl(loginTermSession.id, { label: loginTermSession.label, embed: true });
+      const src = loginTerminalSrc(loginTermSession);
       if (frame.getAttribute('src') !== src) frame.setAttribute('src', src);
       if (st) st.textContent = `${label} 로그인 창 — 이 자리에서 하시면 됩니다.`;
       //  탈출로는 **같은 세션**을 크게 여는 것뿐이다(새 세션 금지 — 두 자리에서 로그인하게 된다).
-      if (out) { out.href = sessionTermUrl(loginTermSession.id, { label: loginTermSession.label }); out.hidden = false; }
+      if (out) { out.href = loginTerminalPopoutUrl(loginTermSession); out.hidden = false; }
       if (btn) { btn.textContent = '터미널이 아래에 있어요'; }
     } catch (e) {
       //  막다른 액자를 만들지 않는다 — 세션을 못 만들었으면 그렇게 말하고 나갈 길을 남긴다.

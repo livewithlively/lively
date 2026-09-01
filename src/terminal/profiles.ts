@@ -548,6 +548,14 @@ export interface AiAccountStatus {
   loggedIn: boolean | null;   // null = **알 수 없음**(아래 키체인 한계). false 는 '확실히 미로그인'일 때만.
   canLogout: boolean;
   where: string;   // 자격증명이 사는 자리(사람이 읽는 설명)
+  /**
+   * 무엇으로 쟀나 — `file`=자격 파일/키체인 · `probe`=CLI 에게 직접 물어야 안다(agy).
+   *
+   *  ⚠ probe 인 행은 이 목록에서 **재지 않는다**(loggedIn=null 로 나간다). 프로브는 네트워크를 타서
+   *   실측 4.3초인데 이 목록은 여러 화면이 부르기 때문이다. 화면이 필요할 때
+   *   `POST /api/ui/me/ai-accounts/check` 로 그 행만 따로 묻는다.
+   */
+  how: "file" | "probe";
 }
 // macOS 키체인의 Claude 자격 존재 확인 — Claude Code 는 **맥에서 자격을 파일이 아니라 키체인**
 //  ("Claude Code-credentials")에 넣는다. 그래서 `.credentials.json` 부재를 '미로그인'으로 읽으면 거짓말이 된다
@@ -576,7 +584,23 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
   const out: AiAccountStatus[] = [];
   for (const h of HARNESSES) {
     const rel = HARNESS_CRED[h.key];
-    if (!rel) continue;   // 셸 등 — 로그인 개념이 없는 하네스
+    if (!rel) {
+      //  ★ #2477 — 자격이 **파일로 안 남는** 하네스(agy)도 목록에 낸다. 종전엔 여기서 그냥 건너뛰어
+      //   [내 AI 계정]에 **아예 안 보였고**, 그래서 온보딩을 끝낸 사람에게는 agy 를 잇는 자리가
+      //   화면 어디에도 없었다(상민님 2026-09-01 지적으로 드러났다).
+      //   ⚠ 그렇다고 여기서 프로브를 돌리지 않는다 — 4.3초·네트워크인데 이 목록은 여러 화면이 부른다.
+      //    «모름(null)» 으로 내보내고, 그 행이 궁금한 화면이 check 로 따로 묻는다. 모르는 것을 false 로
+      //    접지 않는 것이 이 파일의 교리다(모르면서 «미로그인» 이라 하면 로그인한 사람을 막는다).
+      if (!h.bin || !harnessLoginProbe(h.key)) continue;   // 셸 등 — 로그인 개념도 잴 방법도 없다
+      out.push({
+        key: h.key, label: h.label,
+        scope: isolated || relayed ? "isolated" : "shared",
+        where: isolated || relayed ? `내 세션 홈(${osSt.osUser}) — 자격이 파일로 남지 않아 CLI 에게 물어 확인합니다`
+          : "이 서버의 그 CLI — 자격이 파일로 남지 않아 CLI 에게 물어 확인합니다",
+        loggedIn: null, canLogout: false, how: "probe",
+      });
+      continue;
+    }
     let scope: AiAccountStatus["scope"]; let where: string;
     let loggedIn: boolean | null;
     if (isolated || relayed) {
@@ -596,7 +620,7 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
       loggedIn = await fsp.access(file).then(() => true, () => false);
     }
     // 지울 수 있을 때만 로그아웃을 연다 — 공용 계정(남의 세션까지 끊김)·미로그인·탐지불가는 잠근다.
-    out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared" });
+    out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared", how: "file" });
   }
   return out;
 }

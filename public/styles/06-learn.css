@@ -336,7 +336,22 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .admin-body .card > .field + .admin-actions { margin-top: 20px; }
 /* 내 AI 계정(#1085) — AI 한 줄 = [이름 · 상태 배지] + [한 줄 부제] | 오른쪽 [동작].
    제약(공용 계정·맥 키체인)은 길어서 본문에 풀면 회색 문단이 카드를 덮는다 → 배지 툴팁으로 접는다. */
-.aiacct { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid var(--line); }
+/* ★ #2477 — 로그인이 이 행 아래에서 끝난다(새 탭 금지). 행이 세로로 늘어나므로 .aiacct 를 감싸는 자리로 쓴다. */
+.aiacct { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.aiacct-login { flex: 0 0 100%; margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg-tint); }
+.aiacct-addrrow { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 11px 12px; }
+.aiacct-addr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--line-row); border-radius: 8px; padding: 9px 11px; font-size: 11.5px; color: var(--ink-sub); font-family: ui-monospace, Menlo, monospace; }
+.aiacct-code { display: block; margin: 0 12px 11px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); font-family: ui-monospace, Menlo, monospace; font-size: 16px; font-weight: 700; letter-spacing: 2px; color: var(--ink); cursor: pointer; }
+.aiacct-paste { display: flex; gap: 8px; margin: 0 12px 11px; }
+.aiacct-paste .input { flex: 1; min-width: 0; }
+.aiacct-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+.aiacct-note { color: var(--muted); font-size: 11.5px; }
+.aiacct-ok { padding: 13px; font-weight: 700; color: var(--ob-mint-ic, var(--mint-deep)); }
+/*  액자 높이: agy 는 «로그인 방법 → 인증 → 색 테마 → 동의 → 폴더 신뢰» 가 차례로 뜬다. 낮으면 사람이
+    액자 안에서 스크롤을 찾게 되므로 24행이 들어갈 만큼 주되, vh 로 잡아 작은 화면에서도 안 넘치게. */
+.aiacct-termbar { display: flex; align-items: center; gap: 9px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.aiacct-pop { margin-left: auto; color: var(--blue); font-weight: 700; text-decoration: none; white-space: nowrap; font-size: 11.5px; }
+.aiacct-term { display: block; width: 100%; height: min(420px, 52vh); border: 0; background: var(--ink); }
 .aiacct:first-child { border-top: 0; padding-top: 14px; }   /* 설명(.caption) 과 첫 행 사이 숨 — 제목 여백을 줄인 만큼 여기서 준다 */
 .aiacct:last-child { padding-bottom: 0; }
 .aiacct-txt { flex: 1; min-width: 0; }
