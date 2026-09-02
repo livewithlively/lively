@@ -39,6 +39,7 @@ import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
 import { loadEnterprise } from "./enterprise/load.js";
 import { logger } from "./log.js";
 import { shutdownGatewayWorkers } from "./apps/worker-service.js";
+import { shutdownAttachWorkers } from "./terminal/attach-worker-host.js"; // #2228 C안 — attach 워커 일괄 회수
 
 const PORT = Number(process.env.PORT ?? 8080);
 // 바인드 주소(#250) — 기본은 종전과 동일한 전 인터페이스(회귀 없음). SG 같은 방화벽 계층이 없는 호스트
@@ -52,7 +53,7 @@ process.on("unhandledRejection", (reason) => logger.error({ reason }, "unhandled
 process.on("uncaughtException", (err) => {
   logger.error({ err }, "uncaughtException — 종료 후 재기동");
   try { killAttachedPtys(); } catch { /* noop */ }
-  void shutdownGatewayWorkers().finally(() => process.exit(1));
+  void Promise.allSettled([shutdownGatewayWorkers(), shutdownAttachWorkers()]).finally(() => process.exit(1));
   setTimeout(() => process.exit(1), 1_500).unref();
 });
 // 정상 종료(재배포 SIGTERM·Ctrl+C SIGINT) 시 attach node-pty 를 전부 kill 하고 나간다(#687). 안 하면 자식이 init 로
@@ -61,7 +62,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.once(sig, () => {
     logger.info({ sig }, "shutdown — attach PTY·앱 worker 정리 후 종료");
     try { killAttachedPtys(); } catch { /* noop */ }
-    void shutdownGatewayWorkers().finally(() => process.exit(0));
+    void Promise.allSettled([shutdownGatewayWorkers(), shutdownAttachWorkers()]).finally(() => process.exit(0));
     setTimeout(() => process.exit(0), 1_500).unref();
   });
 }
