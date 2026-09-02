@@ -4,7 +4,7 @@
 //  ⚠ 게이트웨이 git 자격 오버레이(openGitCredentialManager)는 R38 의 admin-credentials 가 소유한다 — 여기선 받아 쓴다.
 import { api, busy, el, errorNote, state, toast, uiText } from './core.js';
 import { overlay, overlayBox, skeleton } from './ui-primitives.js';
-import { psBlock, psInputStyle, sectionHead } from './admin-widgets.js';
+import { embeddedHost, psBlock, psInputStyle, sectionHead } from './admin-widgets.js';
 import { openGitCredentialManager } from './admin-credentials.js';
 
 // ── 레포(git) 관리 — repo 테이블(=실제 git 레포)을 등록·git 연결·폐기·삭제. ──
@@ -48,12 +48,16 @@ async function reposPanel(detail, data) {
 
   // fix#92: 카드 제목 바로 아래에서 '레포/git/숫자'를 반복하던 그룹 헤더 제거 — 카운트는 제목에, 추가 버튼은 카드 헤더로.
   // null 을 replaceChildren 에 직접 넘기면 DOM 이 "null" 텍스트로 렌더한다 → filter(Boolean) 로 차단(#req).
+  //  #2556 — 새 셸 [외부 앱 연결] 아래 [코드 저장소] 화면이 이 패널을 자기 칸으로 흡수했다. 그 칸이 이미
+  //   제목을 갖고 있으므로 그 자리에서만 머리를 접는다(같은 목록·같은 저장경로 — 사본 없음).
   detail.replaceChildren(...[
-    sectionHead('레포(git) · ' + repos.length + '개', '우리 코드 레포를 등록합니다. 여기 등록한 레포로 도메인맵을 만들고, 프로젝트에서 코드 작업을 할 때 내려받습니다.'),
+    embeddedHost(detail) ? null : sectionHead('레포(git) · ' + repos.length + '개', '우리 코드 레포를 등록합니다. 여기 등록한 레포로 도메인맵을 만들고, 프로젝트에서 코드 작업을 할 때 내려받습니다.'),
     canEdit ? null : el('p', { class: 'admin-sub', style: 'margin:-4px 0 12px' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요'),
-    (canEdit || state.admin.canEdit) ? el('div', { class: 'admin-actions', style: 'margin:0 0 14px' },
+    //  ⚠ [게이트웨이 git 계정 관리]는 흡수된 자리(#2556 [코드 저장소])에서는 그리지 않는다 — 그 화면은 열쇠를
+    //   [git 인증] 칸에 모아 두고 있어서, 여기서도 그리면 같은 열쇠 창을 여는 버튼이 한 화면에 둘이 된다.
+    (canEdit || (state.admin.canEdit && !embeddedHost(detail))) ? el('div', { class: 'admin-actions', style: 'margin:0 0 14px' },
       canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '+ 레포 추가', onclick: () => openRepoForm(null, reload) }) : null,
-      state.admin.canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정 관리', onclick: () => openGitCredentialManager('gateway') }) : null) : null,
+      (state.admin.canEdit && !embeddedHost(detail)) ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정 관리', onclick: () => openGitCredentialManager('gateway') }) : null) : null,
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, rows)),
   ].filter(Boolean));
 }

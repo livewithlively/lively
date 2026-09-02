@@ -315,6 +315,14 @@ const PERSONAL_HIDDEN = [
   'logs',              // 로그
   'sessions',          // 세션(회수)
 ];
+// 새 셸에서 자리를 옮긴 화면 → 그 새 자리(#2556). **숨김 판정과 옛 URL 리다이렉트가 같은 표를 본다** —
+//  둘이 갈리면 '사이드바엔 없는데 주소로는 열리는' 유령 화면이 생긴다. 클래식에서는 이 표를 보지 않는다.
+const V2_MOVED: Record<string, string> = {
+  'feed-targets': '#/connect/notion',      // 위키 아웃바운드 → 노션 앱 상세 ▸ 내보내기
+  'project-outbound': '#/connect/clickup', // 프로젝트 아웃바운드 → 클릭업 앱 상세 ▸ 내보내기
+  'db-sources': '#/connect/_db',           // DB 데이터소스 → 코드와 데이터 ▸ 데이터베이스
+  'repos': '#/connect/_git',               // 레포(git) → 코드와 데이터 ▸ 코드 저장소(git 인증과 한 화면)
+};
 // ui_profile 판정 — me 응답(#1454 S2~S5 동승) 한 곳만 본다. 값을 못 받았으면(구 서버) 'full'(현행) 취급.
 const uiProfilePersonal = () => !!(state.me && state.me.ui_profile === 'personal');
 function sectionHidden(key, data) {
@@ -328,6 +336,12 @@ function sectionHidden(key, data) {
   //  ⚠ 그렇다고 지우지는 않는다 — 클래식 화면에는 사이드바가 없어서, 지우면 그쪽 사람은 갈 곳이 사라진다.
   //   그래서 '새 셸에서만 감춘다'. 옛 링크로 들어오면 아래 registerPanel 이 새 자리를 가리킨다.
   if (key === 'me-logins' && uiMode() === 'v2') return true;
+  // [데이터 연결] 네 화면 — 새 셸에서는 **사이드바 [외부 앱 연결]** 이 그 자리다(#2556, 원준 2026-09-03).
+  //  위키·프로젝트 아웃바운드는 각각 노션·클릭업 **앱 상세의 [내보내기] 칸**으로, 레포·DB 는 그 목록 아래
+  //  [코드와 데이터] 묶음의 두 화면으로 갔다. 같은 패널을 그대로 부르므로 어느 쪽에서 고쳐도 같은 행이 바뀐다.
+  //  ⚠ 여기서도 지우지 않는다(위 두 줄과 같은 이유) — 클래식 화면에는 사이드바가 없어 갈 곳이 사라진다.
+  //   넷이 다 감춰지면 [데이터 연결] 그룹은 항목 0 이 되어 저절로 사라진다(adminDirectory 가 그렇게 센다).
+  if (V2_MOVED[key] && uiMode() === 'v2') return true;
   if (uiProfilePersonal() && PERSONAL_HIDDEN.includes(key)) return true; // #1454 S4 — 심플 어드민
   if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
   if (RUNTIME_ONLY.includes(key) && !data.canRuntime) return true;
@@ -384,6 +398,11 @@ async function renderAdmin(view, sub) {
   //   바꾸면 프레임만 이동해 빈 화면이 된다.
   if (sel === 'me-logins' && uiMode() === 'v2') {
     try { (window.top || window).location.hash = '#/connect'; } catch (_) { location.hash = '#/connect'; }
+    return;
+  }
+  if (sel && V2_MOVED[sel] && uiMode() === 'v2') {   // #2556 [데이터 연결] 넷 — 같은 이유로 조건부(클래식엔 제 자리가 있다)
+    const to = V2_MOVED[sel];
+    try { (window.top || window).location.hash = to; } catch (_) { location.hash = to; }
     return;
   }
   if (sel && SECTION_EXIT[sel]) { location.replace(SECTION_EXIT[sel]); return; }
