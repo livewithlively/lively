@@ -466,7 +466,11 @@ export const welcomeCapabilities: Capability[] = [
         try {
           await createCategory({
             space: "business", key, name,
-            should: s((d as Record<string, unknown>)?.why, 400) ?? `처음 설정에서 만든 갈래입니다. ${name} 에 해당하는 자료가 여기로 모입니다.`,
+            //  정의는 필수다(category_create 가 40자 하한으로 막는다). 사람이 «왜 이 갈래인지»를 적었으면
+            //   그것을 쓰고, 안 적었으면 최소한 «무엇이 들어오는 자리인지» 를 문장으로 남긴다 — 빈 정의로 만들면
+            //   나중에 분류가 이름의 어감으로만 판정한다(#1631 실측: 정의 0자 워크스페이스가 실제로 나왔다).
+            should: s((d as Record<string, unknown>)?.why, 400)
+              ?? `처음 설정에서 만든 갈래입니다. ${name}에 해당하는 자료가 여기로 모이고, 다른 갈래에 더 맞는 자료는 그쪽으로 보냅니다. 쓰면서 범위가 또렷해지면 이 정의를 고쳐 주세요.`,
           } as never, { actor: userId, source: "welcome" } as never);
           created.push(name); existing.add(key);
         } catch { skipped.push(name); }   // 권한이 없거나 경합 — 온보딩을 멈추지 않는다
