@@ -460,8 +460,20 @@ export function attachSession(ws: AttachSocket, id: string): void {
  * 이 인스턴스가 **지금 붙들고 있는** attach PTY 수. PTY 경보(box-watch)가 '시스템 PTY 사용량 vs 우리 몫'의
  * 갭을 보여줄 때 쓴다 — 갭이 크면 누수, 작으면 실사용이라 받는 사람이 조치를 바로 고를 수 있다.
  */
+// ── attach 워커(#2228 C안) 누수-지표 합산 훅 ────────────────────────────────
+// C안이 켜지면 attach 는 이 프로세스가 아니라 **워커**가 소유한다 — 그래서 게이트웨이의 liveTerms 는 비고,
+//  ps 스캔의 attach 자식은 게이트웨이가 아니라 워커의 자식이 된다. 그대로 두면 PTY 누수 경보(#687)가
+//  «장부 0·자식 0» 으로 보여 눈이 먼다. host(attach-worker-host)가 아래 provider 를 꽂아, liveAttachCount 는
+//  워커 보고분을 더하고, ps 요약은 워커 pid 를 «우리 자식»으로 센다. 비활성(워커 0)이면 []·0 이라 오늘과 동일.
+let workerTallyProvider: (() => number) | null = null;
+let ownedPidsProvider: (() => number[]) | null = null;
+/** host 가 꽂는다 — 워커들이 보고한 liveAttachCount 합. */
+export function installAttachWorkerTally(fn: (() => number) | null): void { workerTallyProvider = fn; }
+/** host 가 꽂는다 — attach 자식의 부모로 인정할 pid 집합(게이트웨이 + 살아있는 워커들). */
+export function installAttachOwnedPids(fn: (() => number[]) | null): void { ownedPidsProvider = fn; }
+
 export function liveAttachCount(): number {
-  return liveTerms.size;
+  return liveTerms.size + (workerTallyProvider ? workerTallyProvider() : 0);
 }
 
 // 우리 웹터미널 attach 클라이언트의 프로세스 시그니처 — 스캔하는 쪽(관측)과 죽이는 쪽(회수)이 **같은 판정**을
@@ -520,7 +532,9 @@ export interface AttachProcs {
  *
  * ps 가 `etime` 컬럼을 안 주는 환경도 견딘다 — 3번째 토큰이 etime 으로 안 읽히면 거기부터 args 로 본다.
  */
-export function summarizeAttachProcs(stdout: string, selfPid: number): AttachProcs {
+export function summarizeAttachProcs(stdout: string, selfPid: number, ownedPids: readonly number[] = []): AttachProcs {
+  // ownedPids = attach 자식의 부모로 인정할 pid(게이트웨이 자신 + attach 워커들, #2228 C안). 비면 종전과 동일.
+  const owned = new Set<number>(ownedPids);
   let children = 0, orphans = 0, orphanMcp = 0;
   let oldestChildSec: number | null = null;
   let oldestOrphanMcpSec: number | null = null;
@@ -538,11 +552,11 @@ export function summarizeAttachProcs(stdout: string, selfPid: number): AttachPro
       if (ageSec !== null && (oldestOrphanMcpSec === null || ageSec > oldestOrphanMcpSec)) oldestOrphanMcpSec = ageSec;
     }
     if (!ATTACH_SIG.test(cmd)) continue;
-    if (ppid === selfPid) {
-      children++;
+    if (ppid === selfPid || owned.has(ppid)) {
+      children++; // 게이트웨이의 자식 또는 attach 워커의 자식 — 둘 다 «우리 것»(누수 아님)
       if (ageSec !== null && (oldestChildSec === null || ageSec > oldestChildSec)) oldestChildSec = ageSec;
     } else if (ppid === 1) {
-      orphans++;
+      orphans++; // 부모를 잃음 = 이전 게이트웨이/워커 세대의 잔재(#687 버그B)
     }
   }
   return { children, orphans, oldestChildSec, orphanMcp, oldestOrphanMcpSec };
@@ -555,7 +569,7 @@ export async function scanAttachProcs(): Promise<AttachProcs | null> {
     const { promisify } = await import("node:util");
     const execFileP = promisify(execFile);
     const { stdout } = await execFileP("ps", ["-eo", "pid=,ppid=,etime=,args="], { timeout: 10_000, maxBuffer: 16 * 1024 * 1024 });
-    return summarizeAttachProcs(stdout, process.pid);
+    return summarizeAttachProcs(stdout, process.pid, ownedPidsProvider ? ownedPidsProvider() : []);
   } catch {
     return null;
   }

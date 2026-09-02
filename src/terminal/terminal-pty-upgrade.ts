@@ -12,7 +12,8 @@ import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import { logger } from "../log.js";
-import { resolveTenantFromHeaders, withTenant } from "../org/tenant-context.js";
+import { resolveTenantFromHeaders, withTenant, type TenantContext } from "../org/tenant-context.js";
+import { attachWorkerHost } from "./attach-worker-host.js";
 import { canAttach, sessionGone, ensureSessionOpts } from "./terminal-sessions.js";
 import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
 import { attachSession, reapOrphanAttachClients, attachClose,
@@ -116,6 +117,16 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         return;
       }
       await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
+      // ── C안(#2228): 인증·canAttach 가 끝난 여기서 소켓 fd 를 attach 워커로 넘긴다. 넘어가면 바이트가
+      //  게이트웨이 이벤트루프를 아예 안 지난다. 워커가 판정(테넌시)을 다시 하지 않도록 여기서 정한 테넌트
+      //  컨텍스트를 실어 보낸다(워커의 tmuxExecArgv 가 그 컨텍스트로 로컬 tmux/registry/-L/매니지드 중계를 고른다).
+      //  ★ fail-open: handoff 가 false(비활성·상한·포크/핸드오프 실패)면 아래 게이트웨이 내부 attach 로 폴백 —
+      //   최악의 경우라도 «오늘 동작»이지 attach 가 깨지지 않는다(매니지드 공유 게이트웨이 blast radius 대응).
+      const tenantForWorker: TenantContext | null = tr.ok ? tr.tenant : (regCtx ?? null);
+      if (attachWorkerHost.enabled()) {
+        const handed = await attachWorkerHost.handoff({ req, socket, head, id, tenant: tenantForWorker });
+        if (handed) return; // 워커가 소켓을 소유 — 게이트웨이는 이 연결에서 손을 뗀다
+      }
       wss.handleUpgrade(req, socket, head, (ws) => inTenant(() => attach(ws, id)));
       })());
     })();
