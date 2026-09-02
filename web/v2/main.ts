@@ -1356,7 +1356,6 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
 
 //  행 키 → 그 행을 여는 route · 그 행이 쥔 AppInstance. 활성화·닫기가 이 두 표로 되돌아간다.
 const sideRowRoute = new Map<string, string>();
-const lastSideRows = new Map<string, SideInstance>();   // 방금 그린 행 — 활성 자리 유지(activeHold)가 '누르기 직전 어디였나'를 읽는다
 const sideRowInstance = new Map<string, string>();
 const dismissBasis = new Map<string, string>();         // 행 키 → 치움 판정의 기준값(dismissKey) — × 와 put 이 같은 자를 쓴다
 
@@ -1455,14 +1454,25 @@ function markViewedSessionSeen(): void {
 }
 
 /**
- * 보고 있는 행의 **자리**만 붙든다 (#1954 2차 상민님: "누르고 보고 있는 동안엔 위치 유지").
+ * 한 번 「지금 볼 것」에 선 행의 **자리**를 붙든다 (#1954 2차 · #2534).
+ *
+ * ★ **올라가는 움직임은 즉시, 내려가는 움직임은 그 행이 목록을 떠날 때.**
+ *  side.ts 축 머리말이 *"위로 올라가고 펴지는 쪽은 즉시, 아래로 내려가고 접히는 쪽은 안 볼 때"* 라고 적어 둔
+ *  그 원칙인데, 종전엔 **자물쇠가 하나뿐**이라(활성 행 하나) 실현된 적이 없었다: 활성이 옮겨 가는 순간 직전
+ *  행이 자리를 놓았다. 시간축에서는 그 행 하나가 내려갈 뿐이라 눈에 덜 띄었는데, 프로젝트 축(#2033)에서는
+ *  그 행이 **카드의 자리를 정하는 첫 행**이라 딸린 세션 전부를 데리고 카드가 통째로 이사했다
+ *  (원준 2026-09-02 *"세션에 물어본 질문이 끝나서 그런지 중간중간 튄다"* — 그 직감이 맞았다).
+ *
+ *  그래서 자물쇠를 **행마다** 준다. 놓는 때는 하나뿐이다: **그 행이 목록에서 빠질 때**(× 로 치웠거나, 끝나서
+ *  오늘 목록을 떠났거나, 새로 고쳤을 때). 그 전까지는 「지금 볼 것」에 머문다 — 점은 지금 사실대로 꺼지고
+ *  자리만 남으므로, 「무엇이 나를 기다리나」는 점이 계속 정확히 답한다.
+ *
  *  ⚠ 점(상태)까지 얼리면 안 된다 — 초록점은 누르는 즉시 꺼져야 한다. 그게 '봤다'의 뜻이고, 사람이 클릭으로
- *   기대하는 유일한 반응이다. 그래서 **점은 지금 사실대로, 묶음·순위만 활성이 되던 순간의 것**으로 그린다.
- *   (종전 코드는 `!sk` 일 때만 직전 상태를 썼는데 세션 행의 stateKey 는 늘 채워져 와서 한 번도 안 걸렸다 —
- *    자리 유지가 코드로는 실현된 적이 없었다.)
- *  활성이 다른 행으로 옮겨 가면 자물쇠를 놓는다 — 그때는 제 자리를 찾아가도 사람이 안 놓친다.
+ *   기대하는 유일한 반응이다. 얼리는 것은 **묶음·순위**뿐이다.
  */
-let activeHold: { key: string; group: string; rank: number } | null = null;
+const holds = new Map<string, { group: string; rank: number }>();
+/** 묶음의 층 — 낮을수록 위. 이 숫자가 **한 방향**(작아지는 쪽으로만)을 정의한다. */
+const groupTier = (g: string): number => (g === PINNED_GROUP ? 0 : g === PRIORITY_GROUP ? 1 : 2);
 
 const orderPin = new Map<string, { group: string; at: number }>();
 function pinnedAt(key: string, group: string, at: number): number {
@@ -1509,15 +1519,8 @@ function sideInstances(): SideInstance[] {
   const activeTab = tabsApi ? tabsApi.current() : null;
   const activeKey = activeTab ? sideRowKey(activeTab.route) : '';
   const now = Date.now();
-  //  활성이 옮겨 갔으면 새 행이 **직전에 서 있던 자리**를 붙든다(activeHold). 씨앗을 여기서 뜨는 이유:
-  //   초록점 행을 누른 그 순간의 렌더에서는 이미 점이 꺼져(위 put) 우선 묶음 근거가 사라지므로,
-  //   '누르기 직전에 어디 있었나'는 지난 렌더(lastSideRows)에만 남아 있다.
-  if (!activeHold || activeHold.key !== activeKey) {
-    const was = activeKey ? lastSideRows.get(activeKey) : null;
-    activeHold = was && was.group === PRIORITY_GROUP && !was.pinned
-      ? { key: activeKey, group: PRIORITY_GROUP, rank: PRIORITY_ST[was.status?.key || '']?.rank ?? 9 }
-      : null;
-  }
+  //  ⚠ 자물쇠 씨앗을 여기서 뜨지 않는다 — 자물쇠가 **행마다**라 이미 지난 판에 걸려 있다(holds 머리말).
+  //   종전엔 자리가 하나뿐이라 '누르기 직전 어디였나'를 lastSideRows 에서 되찾아야 했다.
   sideRowRoute.clear(); sideRowInstance.clear(); dismissBasis.clear();
   interface Row extends SideInstance { at: number; rank: number }
   const rows = new Map<string, Row>();
@@ -1542,10 +1545,14 @@ function sideInstances(): SideInstance[] {
     const pin = isAppPinned(key);
     let group = pin ? PINNED_GROUP : st ? PRIORITY_GROUP : dayGroup(rawAt, now);
     let rank = st ? st.rank : 9;
-    //  보고 있는 행은 자리를 지킨다(activeHold 주석) — 점이 꺼져도, 상태가 가라앉아도 나갈 때까지 그 묶음에 머문다.
-    if (key === activeKey && !pin) {
-      if (st) activeHold = { key, group: PRIORITY_GROUP, rank: st.rank };
-      else if (activeHold && activeHold.key === key) { group = activeHold.group; rank = activeHold.rank; }
+    //  ★ 한 방향 — 위로는 즉시, 아래로는 안 간다(holds 머리말). 점이 꺼져도, 상태가 가라앉아도,
+    //   다른 행을 눌러도, **그 행이 목록에서 빠질 때까지** 서 있던 묶음에 머문다.
+    if (pin) holds.delete(key);            // 고정은 제 층(0)이 있다 — 풀렸을 때 낡은 자물쇠가 남지 않게
+    else {
+      const h = holds.get(key);
+      if (h && groupTier(h.group) < groupTier(group)) { group = h.group; rank = h.rank; }
+      else if (h && h.group === group && h.rank < rank) rank = h.rank;   // 같은 묶음 안에서도 안 가라앉는다
+      if (groupTier(group) === 1) holds.set(key, { group, rank });       // 「지금 볼 것」에 선 사실을 붙든다
     }
     rows.set(key, { ...sideRowFace(route, draft), id: key, active: key === activeKey, pinned: pin,
       status: st ? { key: sk!, label: st.label } : null,
@@ -1611,7 +1618,9 @@ function sideInstances(): SideInstance[] {
   }
 
   // 살아 있는 행만 자물쇠에 남긴다 — 안 그러면 닫힌 세션의 옛 자리가 영영 쌓인다.
+  //  ★ 이 한 줄이 「내려가는 움직임」의 **유일한 때**다(holds 머리말): 목록을 떠나면 놓고, 다시 오면 새로 잡는다.
   for (const k of [...orderPin.keys()]) if (!rows.has(k)) orderPin.delete(k);
+  for (const k of [...holds.keys()]) if (!rows.has(k)) holds.delete(k);
 
   const all = [...rows.values()];
   const dayOf = new Map<string, number>();   // 묶음 이름 → 그 묶음의 최신 시각(묶음끼리의 순서)
@@ -1628,8 +1637,6 @@ function sideInstances(): SideInstance[] {
   //  ⚠ at 은 벗기지 않는다(#2033) — 프로젝트 축이 **그룹의 순서**를 이 얼린 값으로 잰다.
   //   rank 는 status.key 로 되살릴 수 있어 안 내보낸다.
   }).map(({ rank: _rank, ...row }) => row);
-  lastSideRows.clear();
-  for (const r of out) lastSideRows.set(r.id, r);
   return out;
 }
 
