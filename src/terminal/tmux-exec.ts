@@ -198,6 +198,17 @@ export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, relayMa
   if (isPsmuxBin(bin) && e.code === 1 && String(e.stderr ?? "").trim() === "") return true;
   return false;
 }
+/**
+ * tmux 실패가 **'서버가 없다'(정상 — 세션 0개)** 인가, **'못 봤다'(장애)** 인가.
+ *  이 구분이 곧 "없다"와 "모른다"의 구분이다. 섞으면 모르는 상태를 '없음'으로 단정해 파괴적 결정을 내린다
+ *  (#1675 ⑥ 실측: 상시세션 ensure 가 조회 실패를 '세션 없음'으로 읽고 2분마다 새 세션을 만들어 30개까지 쌓였다).
+ *  #2544 — sessions.ts 에서 여기(최하층)로 내렸다: 목록 폴백(session-unobserved)도 같은 자로 재야 하고, 그 모듈이
+ *  sessions.ts 를 import 하면 순환이 된다. sessions.ts 는 그대로 재수출한다(호출부 무변경).
+ */
+export function isNoTmuxServer(e: unknown): boolean {
+  const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
+  return /no server running|error connecting/i.test(stderr);
+}
 export async function sessionGone(id: string): Promise<boolean> {
   if (!ID_RE.test(id)) return false; // 형식 자체가 틀림 = '종료'가 아니라 잘못된 요청
   try { await tmux(["has-session", "-t", id]); return false; } // 살아있음
