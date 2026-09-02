@@ -1,7 +1,7 @@
 // 세션 컨테이너 안 tmux (#2545 · #2258 이동 2 의 3단계) — 코어 쪽 조각의 사양.
 //
-//  ① 스위치: `LIVELY_TMUX_IN_SESSION`(슬러그 글롭 목록) 과 ensure 훅(`LIVELY_SESSION_ENSURE`)이 **둘 다** 있고 이 테넌트가
-//     목록에 맞을 때만 새 경로다. 셀프호스트(둘 다 없음)·목록 밖 테넌트는 종전 그대로(순수 추가).
+//  ① 스위치(#2546 4단계 — 옛 경로 폐지): ensure 훅(`LIVELY_SESSION_ENSURE`) 이 있고 테넌트 슬러그가 있으면 **항상** 새 경로다.
+//     LIVELY_TMUX_IN_SESSION 글롭 게이트는 폐지(무시). 셀프호스트(훅 없음)·슬러그 없음만 옛 경로(wrapAsMember=box-spawn).
 //  ② 판 명령: 컨테이너 안 tmux 가 **멤버 uid** 로 돌므로 sudo 도 spawn 훅도 없다 — box-spawn 이 env 계약(session-env.sh)·cwd·exec 만 한다.
 //  ③ ensure 훅: 표준입력 JSON → 표준출력 JSON({container}). 실패(비-0·비JSON·타임아웃)는 던진다 — 조용한 폴백 금지(격리가 꺼진 채 도는 것이 최악).
 import { strict as assert } from "node:assert";
@@ -14,17 +14,18 @@ import { ensureSessionContainerViaRelay, sessionEnsureArgv, sessionEnsureConfigu
 
 const ENV_ON = { LIVELY_SESSION_ENSURE: "node /opt/lively/libexec/session-ensure-relay.cjs {slug}" };
 
-test("① 스위치 — 글롭 목록 · 훅 유무 · 슬러그 유무", () => {
-  assert.equal(tmuxInSessionContainer("e2e-b-20260902-2555", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "e2e-b-*" }), true);
-  assert.equal(tmuxInSessionContainer("lively-46e3", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "e2e-b-*" }), false, "목록 밖 테넌트는 옛 경로");
-  assert.equal(tmuxInSessionContainer("lively-46e3", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "*" }), true, "* 는 전부");
-  assert.equal(tmuxInSessionContainer("lively-46e3", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "e2e-b-*, lively-46e3" }), true, "쉼표·공백 목록");
-  assert.equal(tmuxInSessionContainer("lively-46e3x", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "lively-46e3" }), false, "정확 일치 — 접두 우연은 아니다");
-  assert.equal(tmuxInSessionContainer("e2e-b-x", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "" }), false, "비면 꺼짐");
-  assert.equal(tmuxInSessionContainer("e2e-b-x", { LIVELY_TMUX_IN_SESSION: "*" }), false, "ensure 훅이 없으면 컨테이너를 먼저 만들 길이 없다 — 꺼짐");
-  assert.equal(tmuxInSessionContainer(null, { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "*" }), false, "테넌트 컨텍스트가 없으면 옛 경로(셀프호스트 단일 테넌트)");
-  assert.equal(tmuxInSessionContainer("a.b", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "a.b" }), true);
-  assert.equal(tmuxInSessionContainer("axb", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "a.b" }), false, "글롭의 . 은 정규식이 아니다");
+test("① 스위치(#2546 4단계) — ensure 훅 + 슬러그면 항상 새 경로, 글롭은 무시", () => {
+  //  ensure 훅이 있으면(=매니지드) 어느 테넌트든 새 경로다.
+  assert.equal(tmuxInSessionContainer("e2e-b-20260902-2555", ENV_ON), true);
+  assert.equal(tmuxInSessionContainer("lively-46e3", ENV_ON), true, "훅만 있으면 모든 테넌트 새 경로");
+  //  ★ fail-first 행 — 3단계 코드에선 글롭 밖 테넌트가 false 였다. 4단계는 글롭을 무시하고 true.
+  assert.equal(tmuxInSessionContainer("lively-46e3", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "e2e-b-*" }), true, "글롭 목록 밖이어도 새 경로(게이트 폐지)");
+  assert.equal(tmuxInSessionContainer("lively-46e3", { ...ENV_ON, LIVELY_TMUX_IN_SESSION: "" }), true, "글롭이 비어도 새 경로");
+  //  훅이 없으면(=셀프호스트) 옛 경로. 컨테이너를 먼저 만들 길이 없다.
+  assert.equal(tmuxInSessionContainer("e2e-b-x", { LIVELY_TMUX_IN_SESSION: "*" }), false, "ensure 훅이 없으면 옛 경로(글롭 * 여도)");
+  assert.equal(tmuxInSessionContainer("e2e-b-x", {}), false, "훅 없음 = 옛 경로");
+  //  슬러그가 없으면(단일 테넌트 셀프호스트) 훅이 있어도 옛 경로 — 훅에 테넌트 컨텍스트를 줄 수 없다.
+  assert.equal(tmuxInSessionContainer(null, ENV_ON), false, "테넌트 컨텍스트가 없으면 옛 경로");
 });
 
 test("① ensure 훅 argv — {slug} 치환, 없으면 빈 배열, 컨텍스트 없으면 던진다(남의 테넌트로 폴백 금지)", () => {
