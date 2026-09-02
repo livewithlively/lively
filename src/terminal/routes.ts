@@ -45,7 +45,7 @@ import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순
 import { getNode, listNodes } from "../node/store.js";
 import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
 import { restoreProjectRef } from "./restore-project.js";
-import { getProject } from "../v6/project-store.js";   // #2549 — 삭제된 프로젝트의 세션도 되살린다
+import { getProjectRow } from "../v6/project-store.js";   // #2549 — 삭제된 프로젝트의 세션도 되살린다(행 유무만 묻는 가벼운 조회)
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
@@ -1322,6 +1322,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const u = userOf(req);
     const me = idOf(u);
     if (st.owner !== me && !u.scopes?.includes("admin")) throw new HttpError(403, "이 세션을 복원할 수 없습니다(소유자만 가능).");
+    // #2549 — 그 세션이 속했던 프로젝트가 **완전 삭제**됐으면 프로젝트 없이 되살린다(노드·박스 두 갈래 공통 — 한 곳에서 판정).
+    //  그대로 넘기면 createSession 의 DB current 기록이 FK 위반으로 죽어 «프로젝트 소속을 기록하지 못해 세션 생성을
+    //  취소했습니다»(503) — 대화가 막다른 길이 된다(실측 2026-09-02 매니지드, 박스 세션).
+    //  존재 확인은 getProjectRow(가벼운 행 조회, viewer 없음) — 묻는 것은 «행이 있나»(FK 가 보는 사실)이지 «이 사람에게
+    //  보이나» 가 아니다. 휴지통(trashed_at)에 있는 프로젝트는 행이 있으니 그대로 귀속을 유지한다(FK 통과·되살리면 보인다).
+    const projRef = await restoreProjectRef(st, async (pid) => !!(await getProjectRow(pid)));
+    if (projRef.dropped) logger.warn({ id, projectId: st.project_id }, "restore: 세션이 속했던 프로젝트가 더 이상 없다 — 프로젝트 없이 되살린다(#2549)");
     // #1791 — **노드 세션**의 복원: 그 노드에 create 를 다시 릴레이한다(좌표·하네스·모드·초대는 desired-state 그대로).
     //  박스 복원과 같은 원칙(원 소유자 신원·새 id·옛 행 삭제·대화 id 승계). 다른 점 둘 — ① 라이브 경합은 게이트웨이 tmux 가
     //  아니라 노드 스냅샷으로 본다 ② 이어받을 대화 파일이 노드에 있어 여기서 존재 확인(transcriptExists)을 못 한다: 훅이
@@ -1353,10 +1360,6 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  ③ 저장된 대화 파일 경로에서 재독(convIdFromTranscriptPath). ②③ 은 ①이 비었을 때만 본다(=null 전파 자가치유).
       const durableMap = st.claude_session_id ? null : (await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null;
       const resumeId = st.claude_session_id || durableMap?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path);
-      // #2549 — 그 세션이 속했던 프로젝트가 **완전 삭제**됐으면 프로젝트 없이 되살린다. 그대로 넘기면 createSession 의
-      //  DB current 기록이 FK 위반으로 죽어 «프로젝트 소속을 기록하지 못해 세션 생성을 취소했습니다»(503) — 대화가 막다른 길.
-      const projRef = await restoreProjectRef(st, async (pid) => !!(await getProject(pid)));
-      if (projRef.dropped) logger.warn({ id, projectId: st.project_id }, "restore: 세션이 속했던 프로젝트가 더 이상 없다 — 프로젝트 없이 되살린다(#2549)");
       const input: CreateInput = {
         // #2162 — 복원은 **원래 종류를 되살린다**. human 으로 굳히면 앱 세션이 복원될 때 종류를 잃는다.
         kind: normalizeSessionKind(st.kind),
@@ -1426,8 +1429,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       kind: normalizeSessionKind(st.kind),   // #2162 — 복원은 원래 종류를 되살린다
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
       harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
-      invites: st.invites, projectId: st.project_id || undefined,
-      projectSrc: st.project_src === "org" ? "org" : "v6",
+      invites: st.invites, projectId: projRef.projectId,   // #2549 — 삭제된 프로젝트면 undefined(위 판정)
+      projectSrc: projRef.projectSrc,
       readOnly: st.read_only, incognito: st.incognito,
       // #1780 D3-4 — 앱 세션 복원은 **D4 전체를 재실행**한다: appId 를 넘기면 createSession 이 grant 재검사·앱 토큰
       //  재발급·앱 홈/자산 재물질화를 다시 돈다(reaper 가 보존한 옛 토큰은 죽은 토큰이라 새 id 로 새로 굽는다).
@@ -1463,7 +1466,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       if (moved) logger.info({ id, newId: session.id, moved }, "restore: 미배달 지시 승계");
     } catch (e) { logger.warn({ err: e, id, newId: session.id }, "restore: 미배달 지시 승계 실패(비치명 — 옛 행은 남는다)"); }
     //  복원도 세션 생성이다 — 새 id 로 인스턴스를 세운다(옛 세션의 인스턴스는 아래 옛 행 정리와 함께 닫힌다).
-    await registerSessionInstance(session.id, st.owner, { appId: st.app_id, projectId: st.project_id, title: st.label || session.label });
+    await registerSessionInstance(session.id, st.owner, { appId: st.app_id, projectId: projRef.projectId ?? null, title: st.label || session.label });
     await closeSessionAppInstances(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 앱 인스턴스 닫기 실패(비치명)"));
     //  ⚠ #2122 — 옛 행은 **승계가 확인됐을 때만** 지운다(위). 남겨두면 복원 목록에 옛 카드가 한 장 남지만(눈에
     //   보이고 사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
