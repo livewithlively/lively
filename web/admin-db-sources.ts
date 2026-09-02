@@ -8,7 +8,7 @@
 import { api, busy, cardHead, el, errorNote, memberCombo, relTime, selectFilter, state, toast, uiText } from './core.js';
 import { field } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
-import { allowlistCard, sectionHead, sectionTitle } from './admin-widgets.js';
+import { allowlistCard, embeddedHost, sectionHead, sectionTitle } from './admin-widgets.js';
 
 function dbSourceEditor(detail, data) {
   const sources = data.dbSources || [];
@@ -61,11 +61,13 @@ function dbSourceEditor(detail, data) {
         hint: 'auth_ref 가 참조할 수 있는 비밀번호 환경변수 이름입니다. 값이 아니라 이름만 적으며, 실제 값은 게이트웨이 프로세스 환경변수에 있어야 합니다.' },
     ]);
   // 메인 카드와 안전범위 카드가 detail 직속으로 붙어 여백 0 이었다 → admin-stack(gap:14px)으로 감싼다(#req).
-  detail.replaceChildren(
-    sectionHead('DB 데이터소스', 'AI가 조회할 수 있는 데이터베이스를 등록하고, 어느 테이블까지 어떻게 보여줄지 정합니다.', data.meaning['db-source']),
+  //  #2556 — 새 셸 [외부 앱 연결] 아래 [데이터베이스] 화면이 이 패널을 자기 칸으로 흡수했다(머리만 접는다).
+  detail.replaceChildren(...[
+    embeddedHost(detail) ? null : sectionHead('DB 데이터소스', 'AI가 조회할 수 있는 데이터베이스를 등록하고, 어느 테이블까지 어떻게 보여줄지 정합니다.', data.meaning['db-source']),
     el('div', { class: 'admin-stack' },
       el('div', { class: 'card' }, cardHead('등록된 DB 소스'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
-      dbSafety));
+      dbSafety),
+  ].filter(Boolean));
 }
 
 function dbSourceForm(root, s, data, detail, isNew) {

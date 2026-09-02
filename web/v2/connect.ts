@@ -13,11 +13,19 @@
 // 구조: 목록(#/connect) → 앱 상세(#/connect/<key>). 한 화면에 다 펼치지 않는 이유 — 앱마다 설정이 다르고
 //  (슬랙은 대화별 허용, 토큰형은 발급 안내) 그걸 목록에 다 펴면 12개가 스크롤 3배가 된다. 상세는 그 앱에
 //  대한 **모든 것이 있는 한 자리**다: 지금 상태 · 무엇을 허용하는지 · 설정 · 연결/해제.
-import { api, el, errorNote, hasScope, relTime, sv, toast, uiText } from '../core.js';
+import { api, el, errorNote, hasScope, relTime, state, sv, toast, uiText } from '../core.js';
 import { confirmDialog, skeleton } from '../ui-primitives.js';
 import { svcTile } from '../svc-icons.js';
 import { CRED_KINDS, openGitCredentialManager, svcTokenForm } from '../admin-credentials.js';
 import { LOGIN_SERVICES, partition, slackChannelPolicyCard, type SvcView } from '../me-logins.js';
+//  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
+//   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
+//   그 패널들은 host 에 붙은 표식(markEmbedded)을 보고 자기 제목만 접는다 — 저장 경로·조회 경로는 한 벌.
+import { loadAdmin } from '../admin-rerender.js';
+import { markEmbedded } from '../admin-widgets.js';
+import { reposPanel } from '../admin-repos.js';
+import { dbSourceEditor } from '../admin-db-sources.js';
+import { feedTargetsEditor, projectOutboundEditor } from '../admin-outbound.js';
 //  #2243 — 조직 층(connect-admin.ts 의 «조직에 열기» 카드)은 이 화면에서 뺐다. 셀프서브 앱에서 «조직이 열었나»는 사용자의
 //   세계관이 아니고(원준 2026-08-28), 관리자의 도구 발행·닫기는 관리 ▸ AI 능력 ▸ AI 도구에 그대로 있다.
 import { overlay } from '../ui-primitives.js';
@@ -150,15 +158,86 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
     el('p', { class: 'v2-desc', text: '앱마다 연결이 두 가지예요 — AI가 내 계정으로 직접 쓰는 것(나만 봐요)과, 자료를 미리 가져와 자료함에 두는 것(워크스페이스가 함께 봐요). 앱을 눌러 각각 켭니다.' }),
     el('div', { class: 'cn-top' }, sum, search),
     listHost,
-    // 레포 접근 — 같은 '외부 연결'인데 종전엔 관리탭에만 있었다. 개발 안 하면 안 건드려도 되는 것이라 맨 아래.
+    //  앱이 아니라 **우리 자산**을 잇는 자리(#2556) — 코드 저장소와 데이터베이스. 종전엔 관리탭 [데이터 연결]에
+    //   있었는데, 같은 '바깥과 잇기'를 두 군데서 하면 어디를 봐야 하는지 아무도 모른다. 앱 목록과 섞지 않고
+    //   그 아래 별도 묶음으로 둔다 — 성격이 다르다(앱은 남의 서비스, 이쪽은 우리 것).
     el('section', { class: 'cn-group cn-extra' },
-      groupHead('코드 저장소 접근', null, '개발자용 — 클론·푸시에 쓰는 SSH 키·토큰'),
-      el('button', { class: 'cn-row cn-row-btn', type: 'button', onclick: () => openGitCredentialManager('me') },
-        el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: '{ }' }),
-        el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: 'git 인증' }),
-          el('div', { class: 'm', text: 'GitHub·GitLab 저장소에서 코드를 받아오고 올릴 때 씁니다' })),
-        el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' })))));
+      groupHead('코드와 데이터', null, '앱이 아니라 우리 코드 저장소와 데이터베이스를 잇습니다'),
+      dataRow('_git', '{ }', '코드 저장소', '우리 저장소를 등록하고, 코드를 받아오고 올릴 때 쓰는 열쇠를 둡니다'),
+      ...(hasScope('admin') ? [dataRow('_db', 'DB', '데이터베이스', 'AI가 조회할 수 있는 데이터베이스를 등록하고 어디까지 보여줄지 정합니다')] : []))));
   window.setTimeout(() => search.focus(), 30);
+}
+
+/** [코드와 데이터] 묶음의 한 줄 — 앱 카드와 달리 로고가 없으므로 글자 아이콘을 쓴다(git 자격 행과 같은 모양). */
+function dataRow(page: string, ic: string, title: string, note: string): HTMLElement {
+  return el('a', { class: 'cn-row', href: '#/connect/' + page },
+    el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: ic }),
+    el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: title }), el('div', { class: 'm', text: note })),
+    el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
+}
+
+// ══ 코드와 데이터 (#/connect/_git · #/connect/_db) — #2556 ══════════════════════
+//  관리탭 [데이터 연결] 묶음이 없어지고 그 넷이 흩어진 자리다: 아웃바운드 둘은 노션·클릭업 **앱 상세**로,
+//  레포·DB 는 여기로. 앱이 아니므로 앱 목록에 섞지 않고 그 아래 별도 묶음에서 들어온다.
+//  ⚠ 화면만 옮겼다 — 목록·폼·저장은 관리탭이 쓰던 패널(reposPanel · dbSourceEditor) **그대로**다. 두 자리에서
+//   같은 행을 고치므로 어느 쪽에서 고쳐도 반영된다(관리탭 쪽은 클래식 화면에 남아 있다).
+//  ⚠ 주소에 밑줄을 붙인 이유 — 이 자리는 `#/connect/<앱키>`(앱 상세)와 같은 깊이다. 언젠가 'git' 이라는
+//   커넥터가 생겨도 이 화면을 가리지 않게 앱 키가 될 수 없는 모양으로 둔다.
+
+/** 관리 데이터 1회 조회 + 패널이 보는 권한 상태 준비 — 관리탭을 한 번도 안 거쳐도 버튼이 살아 있게(renderAdmin 과 같은 값). */
+async function adminData(): Promise<any> {
+  const data = await loadAdmin();
+  state.admin.canEdit = !!data.canEdit;
+  state.admin.canRuntime = !!data.canRuntime;
+  state.admin.canContext = hasScope('context');
+  return data;
+}
+
+/** 이 묶음 안의 소제목 — 앱 상세의 번호 매긴 머리(sectHead)와 달리 순서가 아니라 그냥 칸이다. */
+function dataSect(title: string, note: string, body: Node): HTMLElement {
+  return el('section', { class: 'cn-sect' },
+    el('div', { class: 'cn-gh' }, el('b', { text: title }), el('span', { class: 'h', text: note })), body);
+}
+
+export async function renderConnectData(host: HTMLElement, page: string): Promise<void> {
+  const git = page === '_git';
+  const body = el('div', {});
+  host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
+    backLink(),
+    el('div', { class: 'cn-head' },
+      el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: git ? '{ }' : 'DB' }),
+      el('div', { class: 'cn-head-tt' },
+        el('h1', { class: 'v2-title', text: git ? '코드 저장소' : '데이터베이스' }),
+        el('p', { class: 'v2-desc', style: 'margin-top:4px', text: git
+          ? '우리 코드 저장소를 등록하고, 코드를 받아오고 올릴 때 쓰는 열쇠를 여기 둡니다.'
+          : 'AI가 조회할 수 있는 데이터베이스를 등록하고, 어느 테이블까지 어떻게 보여줄지 정합니다.' }))),
+    body));
+
+  const panel = el('div', {});
+  if (git) {
+    //  목록과 열쇠는 한 일의 두 반쪽이다 — 저장소를 등록해도 열쇠가 없으면 못 받아오고, 열쇠만 있으면 받아올
+    //   것이 없다. 종전엔 목록은 관리탭, 열쇠는 이 앱 목록 발치에 있어 그 둘을 잇는 사람이 아무도 없었다.
+    body.replaceChildren(
+      dataSect('등록된 저장소', '여기 등록한 저장소로 도메인맵을 만들고, 프로젝트에서 코드 작업을 할 때 내려받습니다', panel),
+      dataSect('내 git 인증', '저장소에서 코드를 받아오고 올릴 때 내 이름으로 쓰는 열쇠입니다',
+        el('button', { class: 'cn-row cn-row-btn', type: 'button', onclick: () => openGitCredentialManager('me') },
+          el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: '{ }' }),
+          el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: 'git 인증' }),
+            el('div', { class: 'm', text: 'GitHub·GitLab 저장소에서 코드를 받아오고 올릴 때 씁니다' })),
+          el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }))));
+  } else {
+    body.replaceChildren(dataSect('등록된 데이터베이스', '여기 등록한 데이터베이스만 AI가 조회할 수 있습니다', panel));
+    if (!hasScope('admin')) {
+      panel.replaceChildren(el('p', { class: 'v2-empty', text: '워크스페이스 관리자만 데이터베이스를 등록하고 고칠 수 있어요.' }));
+      return;
+    }
+  }
+  panel.replaceChildren(skeleton(git ? '저장소를 불러오는 중' : '데이터베이스를 불러오는 중'));
+  let data: any;
+  try { data = await adminData(); }
+  catch (e) { panel.replaceChildren(errorNote(e, git ? '저장소를 불러오지 못했습니다' : '데이터베이스 목록을 불러오지 못했습니다')); return; }
+  markEmbedded(panel);
+  if (git) void reposPanel(panel, data); else dbSourceEditor(panel, data);
 }
 
 /** 연결된 앱의 한 줄 메타 — 토큰형만 시각이 남는다(OAuth 커넥터 목록은 연결 여부만 알려준다). */
@@ -522,6 +601,20 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
       el('div', { class: 'cn-who-t' }, icon('team'), el('span', { text: '가져온 자료 — 워크스페이스 함께' })),
       el('span', { class: 'cn-who-s', text: '자료함에 쌓인 것은 이 워크스페이스 사람들의 AI가 함께 찾아봅니다. 그래서 «무엇을 가져올지»를 위에서 고릅니다.' })));
 
+  // ── 내보내기(#2556) — 이 앱 **으로** 우리 것을 보내는 자리 ──
+  //  종전엔 관리탭 [데이터 연결]에 «위키 아웃바운드»·«프로젝트 아웃바운드»라는 별개 화면으로 있었다. 그런데 그 둘은
+  //  각각 «노션 이야기»·«클릭업 이야기»다 — 같은 앱을 두 화면에서 설명하면 노션을 보러 온 사람이 자기 노션 설정의
+  //  절반을 못 찾는다. 그래서 그 앱 상세의 칸 하나로 들어왔다. 앞의 두 연결과 **반대 방향**이고, 켜고 끄는 것이
+  //  워크스페이스 전체에 걸리므로 관리자에게만 보인다(관리탭에서도 admin 전용이었다).
+  const outbound = isAdmin && (svc.key === 'notion' || svc.key === 'clickup') ? el('div', {}) : null;
+  if (outbound) {
+    outbound.replaceChildren(skeleton('내보내기 설정을 불러오는 중'));
+    void adminData().then((data) => {
+      markEmbedded(outbound);
+      if (svc.key === 'notion') void feedTargetsEditor(outbound, data); else void projectOutboundEditor(outbound, data);
+    }).catch((e) => outbound.replaceChildren(errorNote(e, '내보내기 설정을 불러오지 못했습니다')));
+  }
+
   // ── 연결 지우기 — 잃는 것만 말한다(#1582) ──
   const gone = st === 'on' ? el('div', { class: 'cn-gone' }, icon('x'),
     el('span', { class: 'm', text: '연결을 지우면 직접 사용도 자료 가져오기도 함께 멈추고, 이미 가져온 자료는 자료함에 남습니다.' }),
@@ -540,8 +633,11 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     el('section', { class: 'cn-sect', id: 'cn-collect-sect' },
       sectHead('2', '가져올 자료 정하기', '내 쓰임에 맞게 정합니다'),
       collect.box),
+    ...(outbound ? [el('section', { class: 'cn-sect', id: 'cn-out' },
+      sectHead('3', '내보내기', svc.key === 'notion' ? '우리 위키의 지식을 노션으로 보냅니다' : '우리 프로젝트와 과업의 변경을 ClickUp으로 보냅니다'),
+      outbound)] : []),
     el('section', { class: 'cn-sect', id: 'cn-who' },
-      sectHead('3', '보는 사람', '직접 사용은 나만, 가져온 자료는 워크스페이스가 함께'),
+      sectHead(outbound ? '4' : '3', '보는 사람', '직접 사용은 나만, 가져온 자료는 워크스페이스가 함께'),
       whos),
     ...(gone ? [gone] : [])));
 }
