@@ -325,7 +325,7 @@ const SCENES: any[] = [
     build(ctx: any) {
       const steps: any[] = [];
       if (q('.kn-side')) steps.push({ target: '.kn-side', placement: 'right', title: 'AI가 읽는 회사 지식',
-        body: '회사의 규칙·결정·자료가 사업·제품·시스템으로 분류돼 쌓여요. 📌 인덱스에 핀된 지식은 매 대화 첫머리에 항상 깔려요.' });
+        body: '회사의 규칙·결정·자료가 우리 분류축으로 갈라져 쌓여요. 📌 인덱스에 핀된 지식은 매 대화 첫머리에 항상 깔려요.' });
       // 검색 — 사이드바 분류·지식 검색(전문 의미검색은 ⌘K).
       if (q('.kn-side .pjv-side-search')) steps.push({
         target: '.kn-side .pjv-side-search', title: '검색 — AI도 이렇게 찾아요',

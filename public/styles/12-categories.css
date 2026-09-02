@@ -1,5 +1,5 @@
 /* ════════ 카테고리(#/categories) — 분류축 트리 CRUD. dm-* / card 시각 언어 재사용, 차분한 톤. ════════ */
-/* 카테고리 카드 목록(사업·제품·시스템 공통) */
+/* 카테고리 카드 목록 */
 .cat-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
 .cat-card { border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; background: var(--bg); }
 .cat-card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }

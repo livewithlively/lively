@@ -98,7 +98,7 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       ('map-unmapped-domains','미매핑 코드유닛 LLM 분류 (상시 세션 주입)','map_unmapped',1800,false,
        '상시 LLM 세션(라이블리 시드, 팀플랜 과금)에 분류 태스크를 tmux send-keys 로 주입 → 세션이 도메인 should+DDD 로 분류(propose+근거→audit). 활성화 전 params.session 에 타깃 세션 id 설정 필요 → 기본 enabled=false.'),
       ('classify-unmapped-knowledge','미분류 지식 LLM 분류 (상시 세션 주입, #982)','classify_knowledge',3600,false,
-       'map_unmapped 의 지식판 — 카테고리 0건 지식(노션 미러 등 인입분)을 상시 세션에 주입해 카테고리(사업·제품·시스템 전체)로 분류(propose+근거→proposed). 미분류=recall INNER JOIN 에서 소환 불가라 편입의 핵심. 활성화 전 params.session 설정 필요 → 기본 enabled=false.'),
+       'map_unmapped 의 지식판 — 카테고리 0건 지식(노션 미러 등 인입분)을 상시 세션에 주입해 카테고리 전체에서 골라 분류(propose+근거→proposed). 미분류=recall INNER JOIN 에서 소환 불가라 편입의 핵심. 활성화 전 params.session 설정 필요 → 기본 enabled=false.'),
       ('keepalive-managed-sessions','상시 세션 keep-alive','ensure_managed_sessions',120,true,
        'enabled 상시 세션(org_managed_session)의 tmux 세션을 보장 — 죽었으면 격리 워크스페이스에 재생성. 등록된 상시 세션 없으면 no-op.')
     ON CONFLICT DO NOTHING;
