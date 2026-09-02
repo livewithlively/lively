@@ -4,16 +4,17 @@
 //  실행(await) 순서는 v6/schema.ts 오케스트레이터가 소유한다(분할 전 시퀀스 그대로 — SCHEMA_SQL_LOG
 //  스냅샷 diff 0 이 계약, scripts/schema-init.itest.mjs 헤더 참조). 블록을 옮기려면 그 증명을 다시 떠라.
 import type { Pool } from "pg";
-import { ensureCheck } from "../../org/schema/ddl-util.js";
+import { ensureCheck, softUniqueIndex } from "../../org/schema/ddl-util.js";
 
 export async function initV6CategoryTeam(pool: Pool): Promise<void> {
-  // ── 1) category — 구 domain 일반화. space 3값(business/product/system), repo_id 없음(도메인=멀티레포). ──
-  //  도메인 = space='product' 부분집합(is/debt/엣지 보유 — 쓰기경로가 product 를 강제). should=정의·범위·규칙(전 space).
-  //  유니크 (space,key) 부분(merged 제외) — 구 domain_space_key_uq 와 동형(domainmap/core/schema.ts:93).
+  // ── 1) category — 구 domain 일반화. repo_id 없음(도메인=멀티레포). key 유니크(merged 제외 — team_key_uq 와 동형). ──
+  //  should=정의·범위·규칙. 코드 앵커(mapping/debt/엣지)는 **있으면 붙는 것**이지 별도 부류가 아니다.
+  //  ⚠ 2026-09-02(#1631) space 폐기 — 분류축 위에 business/product/system 이라는 **고정 서랍장**이 하나 더 있었다.
+  //   그건 소프트웨어 회사의 분류지 쓰는 사람의 분류가 아니다(학생·양조장 대표에게 「제품/시스템」은 고를 이유가 없는 칸이다).
+  //   실측: 온보딩이 만든 「팀 운영」이 이름만 보고 system 으로 갔다. 고르게 두면 틀리는 게 아니라, 고를 게 아니었다.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS category(
       id SERIAL PRIMARY KEY,
-      space TEXT NOT NULL,
       key TEXT NOT NULL,
       name TEXT,
       description TEXT,
@@ -25,14 +26,52 @@ export async function initV6CategoryTeam(pool: Pool): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now());
     ${ensureCheck("category", {
-      category_space_chk: "space IN ('business','product','system')",
       category_state_chk: "state IN ('active','merged','deprecated')",
     })}
-    CREATE UNIQUE INDEX IF NOT EXISTS category_space_key_uq ON category(space, key) WHERE state <> 'merged';
-    CREATE INDEX IF NOT EXISTS category_space_idx ON category(space);
     ALTER TABLE category ADD COLUMN IF NOT EXISTS layout_x REAL;
     ALTER TABLE category ADD COLUMN IF NOT EXISTS layout_y REAL;
   `);
+
+  // ── 1-a) space 걷어내기(#1631) — **컬럼을 지우기 전에** key 충돌을 먼저 가른다. ──
+  //  (space,key) 유니크였으므로 옛 DB 엔 같은 key 가 space 만 다르게 둘 이상 있을 수 있다. 그대로 컬럼만 지우면
+  //  유일 인덱스가 안 걸리고(softUniqueIndex 가 보류) 두 축이 같은 이름으로 공존한다 — getCategoryByKey 가 아무거나 준다.
+  //  가르는 규칙: id 가 작은 쪽이 원래 key 를 지키고 뒤엣것은 `<key>-<옛 space>`, 그마저 쓰였으면 `<key>-<id>`.
+  //  ⚠ **id 는 안 바꾼다** — knowledge_category·team_category·mapping·debt_finding 이 전부 id 로 매달려 있다(매핑 무손실).
+  //  컬럼이 이미 없으면(신규 DB) DO 블록이 통째로 건너뛴다 — 멱등.
+  //  ⚠ 이 UPDATE 는 DDL 경로라 RLS 를 안 탄다 — **테넌트 안에서만** 비교해야 한다(두 워크스페이스가 같은 key 를
+  //   갖는 건 정상이다). tenant_id 는 이 조각이 아니라 뒤따르는 tenant-column 단계가 붙이므로 있을 수도 없을 수도
+  //   있다 → 컬럼 존재를 보고 술어를 만들어 EXECUTE 한다(없는 컬럼을 참조하면 plpgsql 이 그 자리에서 죽는다).
+  await pool.query(`
+    DO $$
+    DECLARE scope text := '';
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_name='category' AND column_name='space') THEN
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='category' AND column_name='tenant_id') THEN
+          scope := ' AND o.tenant_id = c.tenant_id';
+        END IF;
+        EXECUTE
+          'UPDATE category c SET key = CASE' ||
+          '   WHEN NOT EXISTS (SELECT 1 FROM category o WHERE o.state<>''merged''' ||
+          '                      AND o.key = c.key || ''-'' || c.space' || scope || ')' ||
+          '     THEN c.key || ''-'' || c.space' ||
+          '   ELSE c.key || ''-'' || c.id::text END,' ||
+          ' updated_at = now()' ||
+          ' WHERE c.state <> ''merged''' ||
+          '   AND EXISTS (SELECT 1 FROM category o WHERE o.state<>''merged''' ||
+          '                 AND o.key = c.key AND o.id < c.id' || scope || ')';
+      END IF;
+    END $$;
+    DROP INDEX IF EXISTS category_space_key_uq;
+    DROP INDEX IF EXISTS category_space_idx;
+    ALTER TABLE category DROP CONSTRAINT IF EXISTS category_space_chk;
+    ALTER TABLE category DROP COLUMN IF EXISTS space;
+  `);
+  //  유일 인덱스는 보류형 — 위 가르기가 못 푼 중복(merged 경계 등)이 남아도 부팅을 죽이지 않는다.
+  await softUniqueIndex(pool,
+    `CREATE UNIQUE INDEX IF NOT EXISTS category_key_uq ON category(key) WHERE state <> 'merged'`,
+    "category_key_uq 보류(분류축 key 중복)");
 
   // ── 2) category_edge — 도메인間 관계. axis='should'(의도, 수동 저작) | 'is'(코드 import 의존, 스캔 도출). ──
   //  should↔is 갭 = 아키텍처 부채 신호(후속). 한 (from,to,axis) 당 1엣지: is 는 스캔 upsert, should 는 수동.

@@ -57,7 +57,6 @@ function wkRouteCleanup() {
 }
 
 // ── 라벨 사전(지식 공용) — knowledge.ts 에서 이관(#592). ──
-const SPACE_LABEL = { business: '사업', product: '제품', system: '시스템' };
 // injection(주입축) 한글 라벨 — 칩 표기는 짧게(항상 주입 / 검색). 힌트는 비개발자 친화 한 줄 설명.
 const KN_INJECTION_LABEL = { always: '항상 주입', recalled: '검색' };
 const KN_INJECTION_HINT = {
@@ -270,7 +269,7 @@ function knPropValue(k, key) {
       const cats = (Array.isArray(k.categories) ? k.categories : []).filter((c) => c.state !== 'rejected');
       if (!cats.length) return null;
       return { node: el('span', { class: 'kn-cat-list kn-cat-inmeta' }, ...cats.map((c) => el('span', { class: 'kn-chip kn-cat-chip',
-        title: (SPACE_LABEL[c.space] || c.space || '') + ' · ' + (c.key || ''), text: c.name || c.key }))) };
+        title: c.key || '', text: c.name || c.key }))) };
     }
     case 'type': return k.type ? { node: KN_TYPE_LABEL[k.type] || k.type } : null;
     case 'confidence':
@@ -418,13 +417,8 @@ function openKnMetaPicker(anchor: HTMLElement, field: string, k: any, save: (f: 
     api('/api/ui/categories').then((d) => {
       const cats = (d && d.categories) || [];
       const cur = new Set((Array.isArray(k.categories) ? k.categories : []).filter((c) => c.state !== 'rejected').map((c) => c.key));
-      const parts: any[] = [];
-      for (const sp of ['business', 'product', 'system']) {
-        const inSp = cats.filter((c) => c.space === sp);
-        if (!inSp.length) continue;
-        parts.push(el('div', { class: 'kn-metapop-head', text: SPACE_LABEL[sp] }));
-        for (const c of inSp) parts.push(opt(c.name || c.key, c.key, cur.has(c.key)));
-      }
+      //  #1631: 종전엔 space(사업/제품/시스템) 소제목으로 갈라 담았다. 그 축이 없어져 평면 목록이다.
+      const parts: any[] = cats.map((c) => opt(c.name || c.key, c.key, cur.has(c.key)));
       pop.replaceChildren(...parts);
     }).catch(() => pop.replaceChildren(el('div', { class: 'kn-metapop-note', text: '목록을 불러오지 못했습니다' })));
   }
@@ -962,7 +956,6 @@ function knPageIcon(e) {
 export {
   HOME_EMPTY,
   KN_UNCAT,
-  SPACE_LABEL,
   KN_INJECTION_LABEL,
   KN_INJECTION_HINT,
   KN_PROVENANCE_LABEL,

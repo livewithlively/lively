@@ -19,9 +19,9 @@ const shapeOf = (name: string): z.ZodRawShape => {
 
 const create = z.object(shapeOf("category_create"));
 const update = z.object(shapeOf("category_update"));
-//  ⚠ space 는 아직 필수 입력이라 함께 준다 — 이 축을 걷어내는 작업이 끝나면 이 줄에서 빼면 된다.
-//   (fail-first 에서 이걸 빠뜨려 «모든 파싱이 실패»해 거절 단언이 거저 통과한 적이 있다. 그게 vacuous test 다.)
-const base = { space: "business", key: "brewing", name: "양조·생산" };
+//  ⚠ 여기 필수 입력이 늘면 반드시 함께 채워라 — 빠뜨리면 «모든 파싱이 실패»해 거절 단언이 거저 통과한다.
+//   (실제로 fail-first 에서 한 번 그랬다. 그게 vacuous test 다. 배선 단언이 그걸 잡는다.)
+const base = { key: "brewing", name: "양조·생산" };
 const mk = (should: unknown) => create.safeParse({ ...base, should });
 
 // 배선 단언 — 관측 장치가 살아 있나. 이게 없으면 아래가 통째로 vacuous 일 수 있다.

@@ -201,7 +201,6 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
       --  target: unmapped=미분류만(기본) · low_confidence=제안 신뢰도 낮은 것 재분류 · both
       target TEXT NOT NULL DEFAULT 'unmapped',
       confidence_below REAL,
-      match_spaces      TEXT[],
       match_types       TEXT[],
       match_provenance  TEXT,
       match_systems     TEXT[],
@@ -234,6 +233,8 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
     })}
     CREATE UNIQUE INDEX IF NOT EXISTS org_classifier_key_uq ON org_classifier(key);
     CREATE INDEX IF NOT EXISTS org_classifier_enabled_idx ON org_classifier(enabled, priority DESC, id);
+    -- #1631: 분류축의 space 를 걷어냈으므로 '그 space 로 좁히기'도 걷는다. 좁히려면 candidate_categories 를 쓴다.
+    ALTER TABLE org_classifier DROP COLUMN IF EXISTS match_spaces;
   `);
 
   // ── org_classifier_seen — 분류기가 **이미 판정한** 지식(#1419 T4). org_distiller_seen 과 같은 이유로 존재한다. ──
@@ -282,7 +283,6 @@ export async function initManagerRegistry(pool: Pool): Promise<void> {
       enabled  BOOLEAN NOT NULL DEFAULT false,
       priority INT NOT NULL DEFAULT 0,
       -- ① 스코프: 무엇을 검사하나
-      match_spaces     TEXT[],
       match_categories TEXT[],
       match_types      TEXT[],
       match_provenance TEXT,
@@ -314,6 +314,8 @@ export async function initManagerRegistry(pool: Pool): Promise<void> {
     })}
     CREATE UNIQUE INDEX IF NOT EXISTS org_manager_key_uq ON org_manager(key);
     CREATE INDEX IF NOT EXISTS org_manager_enabled_idx ON org_manager(enabled, priority DESC, id);
+    -- #1631: 위와 같은 이유. 좁히려면 match_categories 를 쓴다(이미 있다).
+    ALTER TABLE org_manager DROP COLUMN IF EXISTS match_spaces;
   `);
 
   // ── org_manager_finding — 관리기가 낸 **발견**. 사람이 처리하는 일감 큐. ──

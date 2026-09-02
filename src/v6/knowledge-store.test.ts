@@ -223,12 +223,8 @@ t("#1091 ②: 미분류 + 카테고리 → 카테고리가 이긴다(겹쳐 걸�
   assert.match(r.join, catJoin);
   assert.deepEqual(r.params, [22]);
 });
-t("#1091 ③: 미분류 + 스페이스 → 스페이스 조인이 통째로 빠지고 그 파라미터도 안 남는다", () => {
-  const r = knowledgeListFilter({ uncategorized: true, space: "product" });
-  assert.match(r.where, uncatWhere);
-  assert.doesNotMatch(r.join, catJoin, "스페이스 조인이 남으면 '카테고리 있는 지식'만 남아 항상 0건");
-  assert.deepEqual(r.params, [], "조인만 빼고 파라미터를 남기면 이후 $n 자리번호가 밀려 엉뚱한 값에 바인딩된다");
-});
+// ③·⑥(스페이스 축) 은 #1631 에서 사라졌다 — 분류축 위의 고정 서랍장(business/product/system)을 걷어내
+//  '어느 카테고리냐' 하나만 남았다. 두 시나리오는 존재하지 않는 입력을 시험하던 것이라 지운다(번호는 안 당긴다).
 t("#1091 ④: 축 미지정 → 미분류 술어 없음(전체 조회가 미분류로 좁혀지면 안 된다)", () => {
   assert.doesNotMatch(knowledgeListFilter({}).where, uncatWhere);
 });
@@ -237,12 +233,6 @@ t("#1091 ⑤: 카테고리만 → 종전 그대로(미분류 술어 없음)", ()
   assert.doesNotMatch(r.where, uncatWhere);
   assert.match(r.join, catJoin);
   assert.deepEqual(r.params, [22]);
-});
-t("#1091 ⑥: 스페이스만 → 종전 그대로(스페이스 조인 유지)", () => {
-  const r = knowledgeListFilter({ space: "product" });
-  assert.doesNotMatch(r.where, uncatWhere);
-  assert.match(r.join, /JOIN category c ON c\.id=kc\.category_id AND c\.space=\$1/);
-  assert.deepEqual(r.params, ["product"]);
 });
 t("#1091 ⑦: 미분류 + 다른 조건 → 둘 다 걸리고, 미분류 술어는 파라미터를 안 먹는다($1 유지)", () => {
   const r = knowledgeListFilter({ uncategorized: true, injection: "recalled" });

@@ -70,11 +70,11 @@ class FakeDb {
     if (sql.startsWith("UPDATE scan_run SET finished_at=")) { this.finished = true; return { rows: [] }; }
 
     // category (도메인) — upsertCategory(SELECT *)와 매핑 폴백(SELECT id) 둘 다.
-    if (/^SELECT (\*|id) FROM category WHERE space='product' AND key=/.test(sql)) {
+    if (/^SELECT (\*|id) FROM category WHERE key=/.test(sql)) {
       return { rows: this.categories.filter((c) => c.key === p[0] && c.state !== "merged") };
     }
     if (sql.startsWith("INSERT INTO category(")) {
-      const r = { id: this.nid(), space: "product", key: p[0], name: p[1], description: p[2], state: p[3], cross_cutting: p[4], origin: p[5], status: "confirmed" };
+      const r = { id: this.nid(), key: p[0], name: p[1], description: p[2], state: p[3], cross_cutting: p[4], origin: p[5], status: "confirmed" };
       this.categories.push(r); return { rows: [{ id: r.id }] };
     }
     if (sql.startsWith("UPDATE category SET name=")) {

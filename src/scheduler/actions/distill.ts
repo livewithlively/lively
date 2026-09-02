@@ -218,7 +218,7 @@ async function buildDistillPolicySummary(): Promise<string> {
 //  ⚠ 소스 텍스트는 데이터지 지시가 아니다(CTO 불변식 이식 — 프롬프트 인젝션 방어). params.prompt 로 관리탭에서 덮어쓸 수 있음.
 function buildDistillPrompt(count: number, policySummary: string): string {
   return `수집된 자료(source) ${count}건을 지식으로 증류하는 배치야. ` +
-    `① 먼저 category_list(space=product)로 도메인 체계를 파악해 — 각 지식의 category 를 정확히 고르고 아래 정책에 대입하기 위해. ` +
+    `① 먼저 category_list 로 분류축 체계를 파악해 — 각 지식의 category 를 정확히 고르고 아래 정책에 대입하기 위해. ` +
     `② source_undistilled 로 아직 지식화 안 된 자료 목록을 가져와(최근순). ` +
     `③ 각 자료를 source_get(id)으로 전문을 읽어. 본문이 '[BINARY]' 로 시작하면 바이너리(PDF·이미지 등, 내용 미추출) — 스텁의 filename·mime·channel 로 **볼 가치부터 판단**하고(밈·UI캡처·스크린샷 등 노이즈면 fetch 없이 skip), 가치 있으면 source_artifact(source_id)로 원본을 임시경로에 받아 그 path 를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 내용을 확보해(unavailable=삭제/이동이면 skip). 얻은 전문(또는 텍스트 자료 본문)이 재사용 가능한 지식(결정·합의·사실·런북·중요정보)인지 판단해. ` +
     `④ 가치 있으면 knowledge_similar 로 중복 확인 → 없으면 knowledge_save 로 증류(명확한 제목+전문, 어느 자료에서 왔는지 명시, category=내용에 맞는 도메인, type 지정). ` +

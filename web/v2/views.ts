@@ -23,7 +23,7 @@ export interface Proj {
   // #1851 휴지통 — 통째로 버린 시각. 있으면 어디에도 안 보이고 「휴지통」 화면(#/trash)의 '프로젝트' 묶음에만(그 아래 내 세션과 함께).
   trashed_at?: string | null;
 }
-export interface ProjList { id: number; name: string; folder_id?: number | null; category?: { space?: string | null; name?: string | null } | null; }
+export interface ProjList { id: number; name: string; folder_id?: number | null; category?: { name?: string | null } | null; }
 export interface ProjFolder { id: number; name: string; parent_id?: number | null; settings?: Record<string, unknown> | null; external_id?: string | null; }
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;

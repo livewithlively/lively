@@ -34,7 +34,7 @@ type KnowledgeClassificationsInput = z.infer<z.ZodObject<typeof knowledgeClassif
 export const knowledgeClassifications: Capability = {
   name: "knowledge_classifications",
   title: "proposed 분류 검토 인박스",
-  description: "분류기(knowledge_propose_category)가 제안한 mapped_by='llm'·state='proposed' 카테고리 분류 목록(confidence 낮은 순 — 가장 검토 필요한 것 먼저, NULL 최우선). 각 항목에 제안 카테고리(space·key·이름)·confidence·evidence 포함(본문 미포함, 포인터). 사람이 한 화면에서 확정(knowledge_link_category state=confirmed)·재분류(다른 카테고리)·반려(unlink→미분류 복귀)하는 검토 큐. 미분류 인박스(knowledge_unmapped)의 다음 단계.",
+  description: "분류기(knowledge_propose_category)가 제안한 mapped_by='llm'·state='proposed' 카테고리 분류 목록(confidence 낮은 순 — 가장 검토 필요한 것 먼저, NULL 최우선). 각 항목에 제안 카테고리(key·이름)·confidence·evidence 포함(본문 미포함, 포인터). 사람이 한 화면에서 확정(knowledge_link_category state=confirmed)·재분류(다른 카테고리)·반려(unlink→미분류 복귀)하는 검토 큐. 미분류 인박스(knowledge_unmapped)의 다음 단계.",
   scope: "memory",
   input: knowledgeClassificationsInput,
   expose: {

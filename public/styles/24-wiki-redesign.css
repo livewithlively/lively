@@ -363,39 +363,39 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-aurora { position: relative; overflow: hidden; width: 100%; height: 100%; }
 .wk-aurora-wm { position: absolute; right: 8px; bottom: -12px; font-size: 56px; font-weight: 800; line-height: 1;
   color: var(--ink); opacity: .14; pointer-events: none; user-select: none; letter-spacing: -2px; }
-.wk-aur-product-1 { background:
+.wk-aur-1 { background:
   radial-gradient(90% 130% at 12% -15%, rgba(45,107,240,.30), transparent 55%),
   radial-gradient(110% 140% at 92% 118%, rgba(22,199,154,.28), transparent 52%),
   linear-gradient(135deg, #E9F1FF 0%, #DEF6EE 100%); }
-.wk-aur-product-2 { background:
+.wk-aur-2 { background:
   radial-gradient(85% 120% at 85% -20%, rgba(27,174,176,.30), transparent 55%),
   radial-gradient(100% 130% at 6% 125%, rgba(45,107,240,.22), transparent 52%),
   linear-gradient(150deg, #E4EEFF 0%, #E7FAF4 100%); }
-.wk-aur-product-3 { background:
+.wk-aur-3 { background:
   radial-gradient(80% 110% at 50% -25%, rgba(54,224,168,.26), transparent 55%),
   radial-gradient(90% 120% at 100% 100%, rgba(30,84,204,.16), transparent 52%),
   linear-gradient(118deg, var(--bg-punch) 0%, #E1F4FA 100%); }
-.wk-aur-business-1 { background:
+.wk-aur-4 { background:
   radial-gradient(90% 130% at 14% -15%, rgba(245,158,11,.28), transparent 55%),
   radial-gradient(100% 130% at 92% 115%, rgba(45,107,240,.10), transparent 52%),
   linear-gradient(135deg, #FFF4E1 0%, #FFEBD2 100%); }
-.wk-aur-business-2 { background:
+.wk-aur-5 { background:
   radial-gradient(85% 120% at 86% -18%, rgba(255,171,64,.30), transparent 55%),
   radial-gradient(90% 120% at 8% 120%, rgba(228,117,107,.12), transparent 52%),
   linear-gradient(150deg, #FFF7E9 0%, #FDEBD3 100%); }
-.wk-aur-business-3 { background:
+.wk-aur-6 { background:
   radial-gradient(80% 110% at 45% -22%, rgba(245,158,11,.24), transparent 55%),
   radial-gradient(90% 130% at 98% 105%, rgba(22,199,154,.10), transparent 52%),
   linear-gradient(120deg, #FFF3DE 0%, #FFF0E4 100%); }
-.wk-aur-system-1 { background:
+.wk-aur-7 { background:
   radial-gradient(90% 130% at 12% -15%, rgba(139,92,246,.26), transparent 55%),
   radial-gradient(100% 130% at 92% 115%, rgba(45,107,240,.14), transparent 52%),
   linear-gradient(135deg, #F1EEFF 0%, #E8F2FF 100%); }
-.wk-aur-system-2 { background:
+.wk-aur-8 { background:
   radial-gradient(85% 120% at 85% -20%, rgba(124,77,255,.24), transparent 55%),
   radial-gradient(95% 120% at 6% 120%, rgba(27,174,176,.14), transparent 52%),
   linear-gradient(150deg, #F3F0FF 0%, #EAF6FF 100%); }
-.wk-aur-system-3 { background:
+.wk-aur-9 { background:
   radial-gradient(80% 115% at 50% -20%, rgba(139,92,246,.22), transparent 55%),
   radial-gradient(90% 125% at 100% 105%, rgba(54,224,168,.12), transparent 52%),
   linear-gradient(120deg, #EFECFF 0%, #EDF3FF 100%); }

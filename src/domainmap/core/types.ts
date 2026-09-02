@@ -83,8 +83,6 @@ export interface DomainListItem {
   id: number; key: string; name: string; description: string | null;
   should: string | null; // P5: 의도(당위) 스펙 — is(units)와 별 축. 괴리=domain-debt(should_no_is).
   state: string | null; cross_cutting: boolean; origin: string | null; status: string;
-  // V4-P1 area 2단(B): space — 'product'(코드앵커 도메인) | 'business'(vocab-only 비즈니스 기능). 항상 방출(?? 'product').
-  space: string;
   units: number; entities: number; debts: number; proposed: number;
 }
 
