@@ -226,7 +226,9 @@ export async function renderConnectData(host: HTMLElement, page: string): Promis
             el('div', { class: 'm', text: 'GitHub·GitLab 저장소에서 코드를 받아오고 올릴 때 씁니다' })),
           el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }))));
   } else {
-    body.replaceChildren(dataSect('등록된 데이터베이스', '여기 등록한 데이터베이스만 AI가 조회할 수 있습니다', panel));
+    //  DB 쪽은 칸 제목을 덧대지 않는다 — 패널이 이미 «등록된 DB 소스»·«DB 접속 안전범위» 두 카드로 나뉘어 있어,
+    //   그 위에 또 소제목을 얹으면 같은 말이 두 줄 겹친다(실측 2026-09-03).
+    body.replaceChildren(panel);
     if (!hasScope('admin')) {
       panel.replaceChildren(el('p', { class: 'v2-empty', text: '워크스페이스 관리자만 데이터베이스를 등록하고 고칠 수 있어요.' }));
       return;
