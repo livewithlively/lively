@@ -27,6 +27,13 @@ test("R2 프로젝트가 있으면 id 유지", async () => {
   assert.equal(r.dropped, false);
 });
 
+test("R2b 휴지통에 있는 프로젝트는 행이 있으니(FK 통과) 귀속을 유지한다 — 되살리면 보인다", async () => {
+  //  exists 는 «행이 있나» 만 답한다(호출자가 getProjectRow 로 묻는다). trashed_at 이 있어도 행은 있다.
+  const r = await restoreProjectRef({ project_id: 42, project_src: "v6" }, async () => true);
+  assert.equal(r.projectId, 42);
+  assert.equal(r.dropped, false);
+});
+
 test("R3 프로젝트가 없으면 id 를 떼고 dropped 로 알린다 ★ 이 프로젝트의 존재 이유", async () => {
   const r = await restoreProjectRef({ project_id: 42, project_src: "v6" }, async () => false);
   assert.equal(r.projectId, undefined, "🔴 없는 프로젝트 id 를 그대로 넘기면 FK 위반으로 복원이 503 에서 죽는다");
