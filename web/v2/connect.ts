@@ -193,6 +193,14 @@ async function adminData(): Promise<any> {
   return data;
 }
 
+/** git 열쇠 한 줄 — 누르면 자격 관리 창이 뜬다(내 것 · 게이트웨이 것, 창은 한 벌). */
+function keyRow(title: string, note: string, scope: 'me' | 'gateway'): HTMLElement {
+  return el('button', { class: 'cn-row cn-row-btn', type: 'button', onclick: () => openGitCredentialManager(scope) },
+    el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: '{ }' }),
+    el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: title }), el('div', { class: 'm', text: note })),
+    el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
+}
+
 /** 이 묶음 안의 소제목 — 앱 상세의 번호 매긴 머리(sectHead)와 달리 순서가 아니라 그냥 칸이다. */
 function dataSect(title: string, note: string, body: Node): HTMLElement {
   return el('section', { class: 'cn-sect' },
@@ -219,12 +227,12 @@ export async function renderConnectData(host: HTMLElement, page: string): Promis
     //   것이 없다. 종전엔 목록은 관리탭, 열쇠는 이 앱 목록 발치에 있어 그 둘을 잇는 사람이 아무도 없었다.
     body.replaceChildren(
       dataSect('등록된 저장소', '여기 등록한 저장소로 도메인맵을 만들고, 프로젝트에서 코드 작업을 할 때 내려받습니다', panel),
-      dataSect('내 git 인증', '저장소에서 코드를 받아오고 올릴 때 내 이름으로 쓰는 열쇠입니다',
-        el('button', { class: 'cn-row cn-row-btn', type: 'button', onclick: () => openGitCredentialManager('me') },
-          el('span', { class: 'cn-git-ic', 'aria-hidden': 'true', text: '{ }' }),
-          el('div', { class: 'cn-row-main' }, el('div', { class: 't', text: 'git 인증' }),
-            el('div', { class: 'm', text: 'GitHub·GitLab 저장소에서 코드를 받아오고 올릴 때 씁니다' })),
-          el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }))));
+      dataSect('git 인증', '저장소에서 코드를 받아오고 올릴 때 쓰는 열쇠입니다',
+        el('div', {},
+          keyRow('내 인증', 'GitHub·GitLab 저장소를 내 이름으로 받아오고 올릴 때 씁니다', 'me'),
+          //  게이트웨이 열쇠 — 서버가 공유 클론을 받아올 때 쓰는 것이라 사람의 열쇠와 다른 물건이다. 종전엔
+          //   레포 목록 위 버튼이었는데(관리탭), 열쇠는 열쇠끼리 두는 편이 찾기 쉽다. 관리자만.
+          ...(hasScope('admin') ? [keyRow('게이트웨이 인증', '라이블리 서버가 공유 클론을 받아오고 최신화할 때 씁니다', 'gateway')] : []))));
   } else {
     //  DB 쪽은 칸 제목을 덧대지 않는다 — 패널이 이미 «등록된 DB 소스»·«DB 접속 안전범위» 두 카드로 나뉘어 있어,
     //   그 위에 또 소제목을 얹으면 같은 말이 두 줄 겹친다(실측 2026-09-03).
