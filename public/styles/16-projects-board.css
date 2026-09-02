@@ -216,7 +216,7 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .tree-group-mine > summary { color: var(--blue); }
 .tree-group-mine { margin-bottom: 6px; }
 .tree-group .tree-item { padding-left: 20px; } /* 그룹 내 들여쓰기 */
-/* 우리 팀 하위 — 사업/제품/시스템 대분류(#338). 항상 보이는 가벼운 하위 헤더 + 한 단계 더 들여쓴 항목 */
+/* 우리 팀 하위 — 분류축(#338). 항상 보이는 가벼운 하위 헤더 + 한 단계 더 들여쓴 항목 */
 .tree-group-mine .tree-subhead {
   display: flex; align-items: center; gap: 6px; margin-top: 3px;
   padding: 4px 10px 4px 22px;

@@ -771,7 +771,7 @@ type ProjectSetCategoriesV6Input = z.infer<z.ZodObject<typeof projectSetCategori
 const projectSetCategoriesV6: Capability = {
   name: "project_set_categories_v6",
   title: "프로젝트 카테고리 설정(v6)",
-  description: "프로젝트가 **속한 리스트의 카테고리(도메인, 사업/제품/시스템)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 미분류(리스트 없는) 프로젝트엔 no-op — 먼저 리스트에 넣어야 함. category_list 의 id 참조.",
+  description: "프로젝트가 **속한 리스트의 카테고리(분류축)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 미분류(리스트 없는) 프로젝트엔 no-op — 먼저 리스트에 넣어야 함. category_list 의 id 참조.",
   scope: "memory",
   input: projectSetCategoriesV6Input,
   expose: {
