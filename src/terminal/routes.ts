@@ -43,6 +43,8 @@ import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
 import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
+import { restoreProjectRef } from "./restore-project.js";
+import { getProject } from "../v6/project-store.js";   // #2549 — 삭제된 프로젝트의 세션도 되살린다
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
@@ -1350,12 +1352,16 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  ③ 저장된 대화 파일 경로에서 재독(convIdFromTranscriptPath). ②③ 은 ①이 비었을 때만 본다(=null 전파 자가치유).
       const durableMap = st.claude_session_id ? null : (await nodeSessionMapFor([id]).catch(() => null))?.get(id) ?? null;
       const resumeId = st.claude_session_id || durableMap?.conv_uuid || convIdFromTranscriptPath(st.harness, st.transcript_path);
+      // #2549 — 그 세션이 속했던 프로젝트가 **완전 삭제**됐으면 프로젝트 없이 되살린다. 그대로 넘기면 createSession 의
+      //  DB current 기록이 FK 위반으로 죽어 «프로젝트 소속을 기록하지 못해 세션 생성을 취소했습니다»(503) — 대화가 막다른 길.
+      const projRef = await restoreProjectRef(st, async (pid) => !!(await getProject(pid)));
+      if (projRef.dropped) logger.warn({ id, projectId: st.project_id }, "restore: 세션이 속했던 프로젝트가 더 이상 없다 — 프로젝트 없이 되살린다(#2549)");
       const input: CreateInput = {
         // #2162 — 복원은 **원래 종류를 되살린다**. human 으로 굳히면 앱 세션이 복원될 때 종류를 잃는다.
         kind: normalizeSessionKind(st.kind),
         label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
         harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
-        projectId: st.project_id || undefined, projectSrc: st.project_src === "org" ? "org" : "v6",
+        projectId: projRef.projectId, projectSrc: projRef.projectSrc,
         readOnly: st.read_only, incognito: st.incognito,
         writeVis: st.write_vis ?? undefined, restrictRead: !!st.restrict_read,
         appId: st.app_id || undefined,
