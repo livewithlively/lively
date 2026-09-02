@@ -42,6 +42,15 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
         res.status(507).json({ error: "디스크 공간이 부족합니다 — 관리 ▸ 저장소·로그 에서 워크스페이스를 정리하거나 디스크를 늘리세요." });
         return;
       }
+      // 공유 저장소 연결 끊김(#2548) — 호스트 FUSE(JuiceFS)가 다시 마운트되면 그 전부터 떠 있던 컨테이너의 bind 는
+      //  옛 연결을 붙든 채 ENOTCONN(«Transport endpoint is not connected») 을 낸다. 실측(2026-09-02, 매니지드): 세션 복원의
+      //  mkdir 이 이걸로 죽었는데 500 «internal_error» 로 나가 사용자도 운영자도 원인을 몰랐다. 원인이 명확하니 그대로 말한다
+      //  (503 — 일시적, 브로커가 판을 재생성하면 풀린다). #813 디스크 부족 매핑과 같은 자리·같은 규율.
+      if ((err as NodeJS.ErrnoException)?.code === "ENOTCONN" || /Transport endpoint is not connected|\bENOTCONN\b/i.test(msg)) {
+        logger.error({ err, path: req.path }, "공유 저장소 연결 끊김(ENOTCONN)으로 실패");
+        res.status(503).json({ error: "공유 저장소 연결이 끊겼습니다 — 잠시 뒤 다시 시도하세요. 계속되면 이 워크스페이스의 세션 컨테이너를 다시 띄워야 합니다(관리자)." });
+        return;
+      }
       if (msg.includes("없음")) { res.status(404).json({ error: msg }); return; }
       if (msg.includes("domainmap")) { res.status(502).json({ error: `domainmap 연결 실패 — ${msg}` }); return; }
       if (/검증 실패|허용|필수|미지정|형식/.test(msg)) { res.status(400).json({ error: msg }); return; }
