@@ -28,7 +28,7 @@ import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시�
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
-import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, type SessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir, memberWriteFile, memberShOut } from "./terminal-member-fs.js";
 import os from "node:os";
 import path from "node:path";
@@ -44,7 +44,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessThemeArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxRelayManaged, isNoTmuxServer } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
@@ -54,6 +54,7 @@ import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
+import { shouldFallbackToDesired, unobservedSessionInfo } from "./session-unobserved.js";   // #2544 — 중계가 «못 봤을 때» 목록의 정본은 DB(tmux 는 관측)
 import { sessionNameFromPrompt } from "./session-name.js";
 import { type LabelSource, canRelabel } from "../sessions/session-label-source.js";   // #1979 — 세션 이름 걸쇠
 
@@ -155,15 +156,8 @@ export async function listSessionsRaw(opts?: { strict?: boolean }): Promise<Sess
 //   ② box-* 만이 아니라 **어떤 세션이든** 있으면 빈 서버가 아니다. 사용자의 개인 tmux 세션이 같은 서버에 있으면
 //      그건 무손실이 아니고, Windows psmux 는 소켓 격리가 없어 kill-server 가 곧 'PC 의 모든 세션 종료'다
 //      (2026-08-18 실측 — 테스트 한 줄의 kill-server 로 그 PC 의 라이블리 세션 5개가 한 번에 죽었다).
-/**
- * tmux 실패가 **'서버가 없다'(정상 — 세션 0개)** 인가, **'못 봤다'(장애)** 인가.
- *  이 구분이 곧 "없다"와 "모른다"의 구분이다. 섞으면 모르는 상태를 '없음'으로 단정해 파괴적 결정을 내린다
- *  (#1675 ⑥ 실측: 상시세션 ensure 가 조회 실패를 '세션 없음'으로 읽고 2분마다 새 세션을 만들어 30개까지 쌓였다).
- */
-export function isNoTmuxServer(e: unknown): boolean {
-  const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
-  return /no server running|error connecting/i.test(stderr);
-}
+// isNoTmuxServer 는 tmux-exec.ts 로 내렸다(#2544 — 목록 폴백도 같은 자로 잰다). 호출부를 위해 그대로 재수출한다.
+export { isNoTmuxServer } from "./tmux-exec.js";
 
 export async function killEmptyTmuxServer(): Promise<void> {
   let raw: string;
@@ -177,6 +171,19 @@ export async function killEmptyTmuxServer(): Promise<void> {
   await tmuxQuiet(["kill-server"]);
 }
 
+// 라이브 세션 id 만(#2544 세션 장부용 — 브로커가 게이트웨이에 «지금 tmux 에 무엇이 있나» 를 묻는다).
+//  메타·desired 해소·capture-pane 스크래핑 없이 tmux 한 번이다(장부는 폴링 경로라 collectSessions 를 태우면 비싸다).
+//  «없다» 와 «못 봤다» 의 규약은 collectSessions 와 같다: 서버 부재는 빈 배열(세션 0 확답), 그 외 실패는 strict 면 throw.
+export async function listLiveSessionIds(opts?: { strict?: boolean }): Promise<string[]> {
+  let raw: string;
+  try { raw = await tmux(["list-sessions", "-F", "#{session_name}"]); }
+  catch (e) {
+    if (opts?.strict && !isNoTmuxServer(e)) throw e;   // 못 봤다 — 장부는 이걸 observed:false 로 옮긴다
+    return [];
+  }
+  return raw.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("box-"));
+}
+
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
 /**
  * @param strict true 면 **tmux 를 못 본 것**(서버 없음이 아닌 실패)을 삼키지 않고 throw 한다.
@@ -188,6 +195,11 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   try { out = await tmux(["list-sessions", "-F", LIST_FMT]); }
   catch (e) {
     if (strict && !isNoTmuxServer(e)) throw e;   // 못 봤다 — 호출부가 '없음'으로 오해하면 안 된다
+    // #2544 (2단계) — 매니지드 중계가 «못 봤다»(비확답: 브로커 재접속 창·허브 503·타임아웃)면 빈 목록이 아니라
+    //  DB desired 행을 «관측 못 함»(observed:false) 으로 내보낸다. 빈 목록으로 접으면 호출부가 DB 행 전부를
+    //  «복원 가능(중단됨)» 으로 그려 살아 있는 세션이 그 폴링 한 번에 죽은 것처럼 보인다(session-unobserved 머리말).
+    //  «없다»(서버 부재 확답)와 셀프호스팅은 종전 그대로 빈 목록이다.
+    if (shouldFallbackToDesired(e, tmuxRelayManaged())) return desiredFallbackSessions(me, e);
     return [];
   }
   // 가려진 프로젝트 집합을 **한 번** 조회(#1291) — 세션 수와 무관하게 쿼리 1회, 15초 캐시.
@@ -344,6 +356,37 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
   }
   sessions.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));
   return sessions;
+}
+
+// #2544 — «못 봤다» 의 폴백: DB desired 행을 관측 없는 세션 행으로. 가시성 술어는 collectSessions·listRestorableSessions 와
+//  **같은 것**(canSeeSession · hidden 프로젝트 fail-closed)이라 이 목록이 라이브 목록보다 더 보이거나 덜 보이지 않는다.
+//  노드 세션(node_id)은 뺀다 — 그 세션의 관측은 노드 스냅샷(remote 바구니)이 정본이고, 여기 넣으면 mergeSessionViews 가
+//  이 행(local)을 이겨 노드 좌표(node)를 잃는다(#2111 «node 는 배지가 아니라 좌표다»).
+//  경고는 1분에 한 번만 — 이 함수는 폴링 경로라 장애 중엔 초당 수 회 불린다.
+let lastFallbackWarnAt = 0;
+async function desiredFallbackSessions(me: string | null, cause: unknown): Promise<SessionInfo[]> {
+  let states: SessionState[];
+  try { states = await listAllSessionStates(); } catch { return []; }   // DB 도 죽었다 — 그때는 정말 아무것도 모른다
+  let hidden: HiddenProjects | undefined;
+  let hiddenUnknown = false;
+  if (me !== null) {
+    try { hidden = await hiddenProjects(me); }
+    catch { hiddenUnknown = true; }
+  }
+  const out: SessionInfo[] = [];
+  for (const s of states) {
+    if (s.node_id) continue;
+    if (me !== null && hiddenUnknown && dirToProjectFolder(s.dir || "")) continue;
+    if (me !== null && !canSeeSession({ dir: s.dir ?? "", owner: s.owner, invites: s.invites, projectId: s.project_id ?? 0 }, me, hidden)) continue;
+    out.push(unobservedSessionInfo(s, me));
+  }
+  out.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));
+  const now = Date.now();
+  if (now - lastFallbackWarnAt >= 60_000) {
+    lastFallbackWarnAt = now;
+    console.warn(`[terminal] tmux 중계를 못 봤다 — 목록을 DB desired ${out.length}행(관측 없음)으로 낸다: ${(cause as Error)?.message ?? cause}`);
+  }
+  return out;
 }
 
 // 세션 워크트리(#675)는 #918 에서 제거됐다 — '고른 폴더가 git 저장소면 격리 워크트리에서 돌린다'는 기능이었으나
