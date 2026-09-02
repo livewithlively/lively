@@ -34,9 +34,11 @@ async function feedTargetsEditor(detail, data) {
     catch (e) { toast(e.message, true); }
     drainAll.disabled = false;
   });
+  //  #2556 — 이 칸이 노션 앱 상세에도 뜨면서 관리자 말(투영·정본·authored·인바운드)이 그대로 사용자 앞에 왔다.
+  //   사실은 그대로 두고 말만 바꾼다: 무엇이 어디로 가는지 · 되돌아오지는 않는지 · 사람 페이지는 안전한지.
   body.append(el('p', { class: 'admin-hint' },
-    el('span', { text: '우리 정본 지식(authored)을 노션 등 외부 ‘지식 피드’ DB에 카드로 투영합니다. 읽기전용·단방향 — 전체 내용은 Lively가 정본. 사람 페이지는 건드리지 않고 전용 피드 DB에만 카드를 올립니다. ' }),
-    el('span', { text: '상시 갱신은 스케줄러 잡 ' }), el('b', { text: 'push-wiki-notion' }), el('span', { text: '(관리탭 ▸ 자동화)에서 켭니다.  ' }), drainAll));
+    el('span', { text: '우리가 쓴 지식을 노션에 만든 전용 피드 DB로 보내 카드로 쌓습니다. 보내기만 하고 되받지는 않으며, 원본은 라이블리에 남습니다. 사람이 쓰는 노션 페이지는 건드리지 않고 이 피드 DB에만 올립니다. ' }),
+    el('span', { text: '바뀔 때마다 저절로 보내려면 자동화의 ' }), el('b', { text: 'push-wiki-notion' }), el('span', { text: ' 잡을 켜세요.  ' }), drainAll));
 
   if (!targets.length) body.append(el('p', { class: 'admin-hint' }, ...uiText('아직 등록된 피드가 없습니다. 아래에서 새 피드를 만드세요.')));
   for (const t of targets) body.append(feedTargetCard(t, categories, rerender));
@@ -142,7 +144,8 @@ async function projectOutboundEditor(detail, data) {
   const rerender = () => { void projectOutboundEditor(detail, data); };
 
   const body = el('div', {});
-  body.append(el('p', { class: 'admin-hint' }, ...uiText('우리 프로젝트·과업 편집(라이블리 웹/MCP)을 외부 PM 도구에 미러로 반영합니다(아웃바운드 push). 커넥터(인바운드 싱크)의 역방향 — 우리 DB가 master, 외부는 미러. 소스별로 켜고 끕니다.')));
+  //  #2556 — 클릭업 앱 상세에도 뜨는 칸이라 관리자 말(미러·아웃바운드 push·master)을 걷었다. 사실은 그대로다.
+  body.append(el('p', { class: 'admin-hint' }, ...uiText('라이블리에서 프로젝트와 과업을 고치면 그 변경을 외부 협업 도구에도 그대로 옮깁니다. 원본은 라이블리에 있고 외부에는 사본이 생깁니다. 도구마다 따로 켜고 끕니다.')));
 
   const table = el('table', { class: 'fields-table' });
   table.append(el('tr', {}, el('th', { text: '소스' }), el('th', { text: '상태' }), el('th', { text: '설정' })));
@@ -174,7 +177,7 @@ async function projectOutboundEditor(detail, data) {
       el('td', {}, el('span', { class: 'mini-meta' }, ...uiText('아웃바운드 어댑터 예정 (#975) — SPI write method + 소스별 매핑')))));
   }
   body.append(table);
-  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px' }, ...uiText('※ 인바운드 싱크(외부→우리)와 토큰·컨테이너 설정은 [외부 자료 수집] 탭에 있습니다. 여기는 아웃바운드(우리→외부) on/off 전용입니다.')));
+  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px' }, ...uiText('반대 방향(외부의 것을 우리 자료함으로 가져오기)과 토큰·리스트 설정은 [가져올 자료 정하기]에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.')));
 
   detail.replaceChildren(...head(), el('div', { class: 'card' }, cardHead('내보내는 항목'), body));
 }
