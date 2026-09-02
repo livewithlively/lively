@@ -152,7 +152,10 @@ export function openWsSettings(w: WsRowLike): void {
   //  이 모달은 입구만 잇는다 — 관리탭의 저장은 전부 지금 워크스페이스에만 적힌다.
   const advSec = el('section', { class: 'v2wss-sec' },
     el('h3', { class: 'v2wss-sec-t', text: '기능 설정' }),
-    el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { close(); location.hash = '#/system/profile'; } },
+    //  #1898 — 섹션을 **찍지 않는다**(종전 '#/system/profile'). 그 섹션은 매니지드에서 숨으므로
+    //   (admin-shell PERSONAL_HIDDEN) 찍어 두면 어디로 떨어질지 모르는 링크가 된다. 섹션 없는 '#/system' 은
+    //   renderAdmin 이 **그 사람에게 보이는 첫 섹션**으로 연다 — 권한·프로필이 무엇이든 자기 자리로 간다.
+    el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { close(); location.hash = '#/system'; } },
       el('span', { class: 'v2-wspop-ic' }, icon('sliders')),
       el('span', { class: 'v2-wspop-tt' }, el('b', { text: '관리탭 열기' }),
         el('span', { text: '수집·증류·연결·알림… 전부 이 워크스페이스에만 저장돼요' }))));

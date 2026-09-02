@@ -103,6 +103,26 @@ function uiModeOverride(): UiMode | null {
   try { const o = localStorage.getItem(UI_MODE_KEY); return o === 'classic' || o === 'v2' ? o : null; } catch (_) { return null; }
 }
 
+// ── 셸을 바꾼 직후 그 자리를 되짚어 준다(#1898) ────────────────────────────────
+//  셸 전환은 페이지를 통째로 다시 띄운다(reload) — 사람이 방금 누른 자리(내 프로필·환경설정 창)가 통째로
+//  사라지고, 화면 골격까지 바뀐 채로 남겨진다. 그래서 **새 셸이 뜨면 그 창을 다시 연다**: 되돌리는 버튼이
+//  다시 눈앞에 있어야 한다. 안 그러면 클래식으로 내려간 사람은 되돌아올 길을 설정에서 찾아 들어가야 하고,
+//  그 길(관리탭 [화면])은 매니지드에서 감춰져 있다(admin-shell PERSONAL_HIDDEN).
+//  sessionStorage = **그 탭 한정 · 1회용**(읽는 즉시 지운다) — 다른 탭·다음 방문까지 따라가면 안 된다.
+const SWITCH_KEY = 'lively_ui_mode_switched';
+/** 셸을 바꾸기 직전에 찍는다 — 다음 부팅이 이걸 보고 창을 되연다. */
+function markShellSwitch(): void {
+  try { sessionStorage.setItem(SWITCH_KEY, '1'); } catch (_) { /* 저장 불가 → 되열기만 없다(전환 자체는 정상) */ }
+}
+/** 부팅이 한 번만 읽는다(읽으면 지운다). 두 셸의 boot 가 각자 자기 창을 연다. */
+function takeShellSwitch(): boolean {
+  try {
+    if (sessionStorage.getItem(SWITCH_KEY) !== '1') return false;
+    sessionStorage.removeItem(SWITCH_KEY);
+    return true;
+  } catch (_) { return false; }
+}
+
 export type { AppState, UiMode };
 export {
   state,
@@ -111,4 +131,6 @@ export {
   uiMode,
   setUiModeOverride,
   uiModeOverride,
+  markShellSwitch,
+  takeShellSwitch,
 };

@@ -26,7 +26,7 @@
 //  ⚠ 단 서버를 더 부르는 두 화면([내 AI 계정]·[외부 서비스])은 **처음 펼 때** 그린다 — 열 때마다 넷을 더
 //   부르면(ai-accounts · sessions · credentials · oauth) 안 볼 수도 있는 화면 때문에 창이 늦게 뜨고,
 //   그러면 '잠깐 들르는 창'이 아니게 된다.
-import { api, el, errorNote, logout, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
+import { api, el, errorNote, logout, markShellSwitch, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
 import { field, skeleton } from '../ui-primitives.js';
 import {
   PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips,
@@ -404,6 +404,10 @@ function lookPane(close: () => void): HTMLElement {
   const classicBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '클래식 화면으로 바꾸기',
     onclick: () => {
       close();
+      //  #1898 — 셸을 바꾸면 페이지가 통째로 다시 뜨고 이 창은 사라진다. 도장을 찍어 **클래식 쪽 부팅이
+      //   같은 성격의 창('내 정보')을 다시 열게** 한다: 되돌아오는 버튼이 그 자리에 그대로 있어야 한다.
+      //   안 그러면 화면 골격까지 바뀐 채 남겨져, 되돌릴 길을 설정에서 찾아 들어가야 한다.
+      markShellSwitch();
       setUiModeOverride('classic');
       location.replace(location.pathname + '#/dashboard');
       location.reload();
@@ -443,7 +447,7 @@ function lookPane(close: () => void): HTMLElement {
         el('span', { style: 'font-size:13.5px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))),
       el('p', { class: 'prof-hint' }, ...uiText('첫째 칸을 끄면 AI 하네스가 저마다 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')))),
     field('화면 모드', el('div', { class: 'v2me-inline' }, classicBtn,
-      el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 설정 ▸ 화면 에서 언제든 돌아옵니다.')))));
+      el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('지금은 새 화면입니다. 옛 화면으로 바꿔도 이 브라우저에서만 적용되고, 바꾼 직후 뜨는 「내 정보」 창에서 바로 돌아올 수 있어요.')))));
 }
 
 // ── ⑥ 계정 · 보안 — 어떻게 들어오는가. 프로필(누구로 보이는가)과 축이 달라 따로 둔다. ──
