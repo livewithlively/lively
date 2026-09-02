@@ -1,22 +1,19 @@
 // wiki-side.ts — WIKI 좌측 카테고리 사이드바(#764 재구축의 유일한 '유지' 표면 — knowledge.ts 에서 동작 그대로 이관).
-//  사용자가 명시적으로 유지하라고 한 표면이라 마크업·클래스·동작을 바꾸지 않는다(검색·★내소유·space 그룹·트리 펼침·
+//  사용자가 명시적으로 유지하라고 한 표면이라 마크업·클래스·동작을 바꾸지 않는다(검색·★내소유·트리 펼침·
 //  도구 섹션·폭 리사이즈(--pjv-side-w, localStorage 'pjv:sideW' — 프로젝트 탭 공유)·접기).
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
 import { api, busy, el, keepSideScroll, state, sv } from './core.js';
 import { reviewNavBadge } from './review.js';   // #837 검토 대기 배지(대기 0이면 안 그려진다)
-import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
+import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon } from './wiki-data.js';
 
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
 const KN_INDEXED = '__indexed__';
 
 // ── 데이터 ──
-// 3 space 카테고리를 한 번에 — {business, product, system}. 각 항목 graceful(실패=빈 배열).
-async function fetchAllSpaceCats(): Promise<any> {
-  const out: any = { business: [], product: [], system: [] };
-  const lists = await Promise.all(['business', 'product', 'system'].map((sk) =>
-    api('/api/ui/categories?' + new URLSearchParams({ space: sk })).then((d) => (d && d.categories) || []).catch(() => [])));
-  ['business', 'product', 'system'].forEach((sk, i) => { out[sk] = lists[i]; });
-  return out;
+// 카테고리 전체 — 한 콜, 평면 배열. graceful(실패=빈 배열).
+//  ⚠ #1631 이전엔 space(사업/제품/시스템)마다 한 콜씩 3번 때려 묶음으로 담았다. 그 축을 걷어냈다.
+async function fetchAllCats(): Promise<any[]> {
+  return api('/api/ui/categories').then((d) => (d && d.categories) || []).catch(() => []);
 }
 
 // 내 팀 카테고리 id 집합(state.me.team_category_ids) — 문자열 Set(catVal 비교용). 미로그인/미소속이면 빈 집합.
@@ -41,14 +38,14 @@ function knSideItem(label, catVal, on, opts?) {
     el('span', { class: 'pjv-side-navlabel', text: label }));
 }
 
-// space 섹션 컨테이너 — 프로젝트 탭 스페이스 행(색 아바타 + 볼드 라벨 + 우측 캐럿)과 동일 마크업.
-const KN_SPACE_AVA_COLOR = { business: '#f59e0b', product: '#2D6BF0', system: '#8b5cf6' };
-function knSpaceGroup(sk: string, countEl?: any) {
+// 분류축 섹션 컨테이너 — 프로젝트 탭 폴더 행(볼드 라벨 + 우측 캐럿)과 동일 마크업.
+//  ⚠ #1631: 종전엔 이 자리가 space(사업/제품/시스템) 3묶음이었다. 그 축이 사라져 묶음은 하나다 —
+//   클래스(.kn-space-group)는 검색 필터(knSideFilterNav)가 잡는 셀렉터라 이름 그대로 둔다.
+function knCatGroup(countEl?: any) {
   const caret = el('span', { class: 'pjv-side-folder-caret kn-space-caret', 'aria-hidden': 'true', text: '▾' });
   const grp = el('details', { class: 'kn-space-group', open: '' },
     el('summary', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-navspace kn-space-head' },
-      el('span', { class: 'pjv-side-space-avatar', text: String(SPACE_LABEL[sk] || sk).trim()[0], style: 'background:' + (KN_SPACE_AVA_COLOR[sk] || 'var(--muted-2)') }),
-      el('span', { class: 'pjv-side-navlabel', text: SPACE_LABEL[sk] || sk }),
+      el('span', { class: 'pjv-side-navlabel', text: '분류축' }),
       countEl || null, caret));
   grp.addEventListener('toggle', () => { caret.textContent = (grp as any).open ? '▾' : '▸'; });
   return grp;
@@ -154,8 +151,8 @@ function knNavDocNode(r, depth, onOpen, childN?: Map<string, number>) {
   return el('div', {}, row, kids);
 }
 
-// nav 채우기 — '전체'·'인덱스' → ★내 소유 구역(팀 소유 자동 + 사용자 토글 합집합) → space별 접이식.
-function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
+// nav 채우기 — '전체'·'인덱스' → ★내 소유 구역(팀 소유 자동 + 사용자 토글 합집합) → 분류축 접이식.
+function buildKnowledgeNav(nav, allCats: any[], selected, myIds: Set<string>, opts) {
   const onOpen = (opts && opts.onOpen) || ((name) => { location.hash = '#/k/' + encodeURIComponent(name); });
   const favCatIds: Set<string> = (opts && opts.favCatIds) || new Set();
   const onToggleFav = (opts && opts.onToggleFav) || (() => {});
@@ -170,22 +167,22 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
   const ownedIds = new Set<string>([...favCatIds, ...Array.from(myIds)]);
   const favOpts = { favCatIds: ownedIds, onToggleFav };
   {
-    const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
-    const favCats = allCats.filter((c) => ownedIds.has(String(c.id)));
+    const favCats = (allCats || []).filter((c) => ownedIds.has(String(c.id)));
     if (favCats.length) {
       nav.append(el('div', { class: 'pjv-side-favhead fav-blue', 'aria-hidden': 'true' }, el('span', { class: 'pjv-side-favhead-ic', text: '★' }), el('span', { text: '내 소유 카테고리' })));
       for (const c of favCats) nav.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
       nav.append(el('div', { class: 'pjv-side-favsep', 'aria-hidden': 'true' }));
     }
   }
-  for (const sk of ['business', 'product', 'system']) {
-    const cats = (bySpace[sk] || []);
-    if (!cats.length) continue;
-    const hasCounts = cats.some((c) => Number.isFinite(Number(c.knowledge_count)));
-    const total = cats.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
-    const grp = knSpaceGroup(sk, hasCounts ? el('span', { class: 'pjv-side-navcount', title: '이 스페이스의 지식 수', text: String(total) }) : null);
-    for (const c of cats) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
-    nav.append(grp);
+  {
+    const cats = allCats || [];
+    if (cats.length) {
+      const hasCounts = cats.some((c) => Number.isFinite(Number(c.knowledge_count)));
+      const total = cats.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
+      const grp = knCatGroup(hasCounts ? el('span', { class: 'pjv-side-navcount', title: '전체 지식 수', text: String(total) }) : null);
+      for (const c of cats) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
+      nav.append(grp);
+    }
   }
   // 미분류(#1091) — 어느 카테고리에도 안 걸린 지식. 트리 맨 아래(프로젝트 탭 '기타 (미분류)'와 같은 자리).
   //  카테고리 노드와 **같은 모양**(.kn-nav-catwrap + [data-cat-val])이라 사이드바 검색(knSideFilterNav)이
@@ -332,7 +329,7 @@ function knApplySideW(shell: HTMLElement) {
 //          uncategorized?: boolean     '미분류' 노드(#1091) — 카테고리 축으로 지식을 훑는 셸(WIKI 목록·문서)만 켠다.
 //                                       카테고리 축이 아닌 화면(검증 보드 등)에서는 끈다.
 //          collapsible?: boolean       접기 버튼(문서 셸 전용 — localStorage 'kn-doc-side-collapsed') }
-//  반환: { side, reopenBtn, ready, rebuild, findCat, bySpace }
+//  반환: { side, reopenBtn, ready, rebuild, findCat, cats }
 // ════════════════════════════════════════════
 const KN_SIDE_COLLAPSE_KEY = 'kn-doc-side-collapsed';
 function createWikiSide(opts: any) {
@@ -343,7 +340,7 @@ function createWikiSide(opts: any) {
   const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
   const sideState = { q: '' };
   const myIds = myCatIdSet();
-  let bySpace: any = { business: [], product: [], system: [] };
+  let cats: any[] = [];
   let uncatCount = 0;   // 미분류 지식 수(#1091) — 0 이면 '미분류' 노드를 안 그린다
   const favCatIds = new Set<string>();
 
@@ -364,7 +361,7 @@ function createWikiSide(opts: any) {
   }
 
   function buildSide() {
-    buildKnowledgeNav(nav, bySpace, opts.selected ? opts.selected() : '', myIds,
+    buildKnowledgeNav(nav, cats, opts.selected ? opts.selected() : '', myIds,
       { indexed: true, onOpen: opts.onOpen, favCatIds, onToggleFav: toggleCatFav, uncatCount });
     side.replaceChildren(...[
       el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' }), collapseBtn),
@@ -383,7 +380,7 @@ function createWikiSide(opts: any) {
   });
 
   const ready = (async () => {
-    try { bySpace = await fetchAllSpaceCats(); } catch (_) { /* graceful: 사이드바 생략(콘텐츠는 계속) */ }
+    try { cats = await fetchAllCats(); } catch (_) { /* graceful: 사이드바 생략(콘텐츠는 계속) */ }
     if (opts.uncategorized) {
       try { uncatCount = await knFetchUncategorizedCount(); } catch (_) { /* graceful: '미분류' 노드만 생략 */ }
     }
@@ -393,14 +390,10 @@ function createWikiSide(opts: any) {
 
   function findCat(id: any) {
     if (!id) return null;
-    for (const sk of ['business', 'product', 'system']) {
-      const c = (bySpace[sk] || []).find((x) => String(x.id) === String(id));
-      if (c) return c;
-    }
-    return null;
+    return cats.find((x) => String(x.id) === String(id)) || null;
   }
 
-  return { side, reopenBtn, collapseBtn, ready, rebuild: buildSide, findCat, bySpace: () => bySpace };
+  return { side, reopenBtn, collapseBtn, ready, rebuild: buildSide, findCat, cats: () => cats };
 }
 
 // 문서 셸의 접기 상태 배선 — shell(.kn-shell)에 side-off 클래스 + localStorage. 기본: 저장값 없으면 ≤820px 접힘.
@@ -423,7 +416,7 @@ function wireSideCollapse(shell: HTMLElement, sideCtl: any) {
 export {
   KN_INDEXED,
   createWikiSide,
-  fetchAllSpaceCats,
+  fetchAllCats,
   knApplySideW,
   knSideResizeHandle,
   myCatIdSet,

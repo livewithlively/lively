@@ -144,7 +144,6 @@ function readStores(): void {
   try { groupProj = localStorage.getItem(GROUP_STORE) === 'proj'; } catch (_) { /* 못 읽어도 종전 축으로 돈다 */ }
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
   try { projLens = localStorage.getItem(LENS_STORE) === 'active' ? 'active' : 'tree'; } catch (_) { /* 기본 렌즈(폴더 · 리스트)로 */ }
-  initWikiClosed();
   foldClosed = loadSet(FOLD_CLOSED_STORE);
 }
 
@@ -1374,27 +1373,17 @@ function renderProjTree(): void {
 //   ③ 순서는 개수가 아니라 **우리 팀이 맡은 것 먼저**(`/api/ui/me` 의 team_owner_category_ids). 매일 보는 곳이 위로.
 //   ④ 개수는 모노 글자가 아니라 **알약** — 이름과 같은 줄 오른쪽 끝에 고정폭으로 서서 겉돌지 않는다.
 //  ⚠ 이모지(📌🕘🧩)는 쓰지 않는다 — 아이콘은 `icons.ts` 한 벌에서 온다(원준: "이모티콘 쓸 일 있으면 DS 에 맞게 다시 그려라").
-interface WikiCat { id: number; space: string; name: string; key: string; description?: string | null; knowledge_count?: number }
+interface WikiCat { id: number; name: string; key: string; description?: string | null; knowledge_count?: number }
 let wikiCats: WikiCat[] | null = null;
 let wikiLoading = false;
 let wikiPins: number | null = null;      // WIKI 인덱스(핀) 건수 — 뷰 줄의 알약
 let wikiPinsLoading = false;
-const WIKI_CLOSED_STORE = shellPrefStore('lively_v2_wiki_closed', 'list');   // 접어 둔 스페이스
-let wikiClosed = new Set<string>();
-const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 스페이스 — 페이지 수명(새로 열면 다시 접힌다)
+//  ⚠ #1631: 종전엔 space(제품/사업/시스템) 3카드로 갈라 접었다 폈다. 그 축을 걷어냈으므로 카드는 하나다 —
+//   접기 상태(WIKI_CLOSED_STORE)도, 스페이스 아이콘·라벨도 함께 사라졌다. 「N개 더 보기」 캡은 그대로 남긴다
+//   (분류가 19개면 사이드바가 벽이 되는 건 space 와 무관한 문제였다).
+const wikiMore = new Set<string>();      // 「N개 더 보기」로 편 카드 — 페이지 수명(새로 열면 다시 접힌다)
 const WIKI_CARD_MAX = 6;                 // 카드 하나에 바로 보이는 분류 수. 넘으면 더 보기로 접는다
-const SPACE_LABEL: Record<string, string> = { product: '제품', business: '사업', system: '시스템' };
-const SPACE_ICON: Record<string, string> = { product: 'layers', business: 'chart', system: 'sliders' };
-const SPACE_ORDER = ['product', 'business', 'system'];
-
-/** 첫 방문 기본값 = 제품만 펼침. 카드 셋을 다 펴면 19줄 × 두 줄이라 종전의 '벽'이 그대로 돌아온다. */
-function initWikiClosed(): void {
-  try {
-    const raw = localStorage.getItem(WIKI_CLOSED_STORE);
-    wikiClosed = raw == null ? new Set(['business', 'system']) : new Set<string>(JSON.parse(raw) || []);
-  } catch (_) { wikiClosed = new Set(['business', 'system']); }
-}
-function saveWikiClosed(): void { try { localStorage.setItem(WIKI_CLOSED_STORE, JSON.stringify([...wikiClosed])); } catch (_) { /* 못 남겨도 이번 화면은 된다 */ } shellPrefsPush(); }
+const WIKI_CARD_KEY = 'cats';            // wikiMore 의 유일한 키(카드가 하나뿐)
 
 /** 우리 팀이 맡은 분류 id — `/api/ui/me` 가 이미 싣고 있다(team_owner_category_ids). 없으면 빈 집합(표식만 안 붙는다). */
 function ownerCatIds(): Set<number> {
@@ -1457,12 +1446,6 @@ function renderWiki(): void {
   const own = ownerCatIds();
   const teamName = myTeamName();
   const activeCat = wikiActiveCat();
-  // 지금 보는 분류가 접힌 카드에 들어 있으면 그 카드를 편다 — 선택된 것이 화면에 없으면 사람은 '사라졌다'고 읽는다
-  //  (프로젝트 트리가 선택된 프로젝트를 펴 두는 것과 같은 규율).
-  if (activeCat) {
-    const c = all.find((x) => x.id === activeCat);
-    if (c && wikiClosed.has(c.space)) { wikiClosed.delete(c.space); saveWikiClosed(); }
-  }
   const match = findMatcher(sideFilter);
   const hit = (c: WikiCat) => match(c.name, c.description, c.key);
   // 순서 = 우리 팀이 맡은 것 먼저 → 문서 많은 것 먼저.
@@ -1482,32 +1465,19 @@ function renderWiki(): void {
   };
 
   const rows: HTMLElement[] = [];
-  for (const space of SPACE_ORDER) {
-    const inSpace = all.filter((c) => c.space === space);
-    if (!inSpace.length) continue;
-    const shownAll = inSpace.filter(hit).sort(rank);
-    if (q && !shownAll.length) continue;              // 찾는 중엔 맞는 것이 있는 카드만 선다
-    const open = q ? true : !wikiClosed.has(space);   // 찾는 중엔 전부 편다 — 접힌 카드가 결과를 삼키면 안 된다
-    const capped = !q && !wikiMore.has(space) && shownAll.length > WIKI_CARD_MAX;
+  if (all.length) {
+    const shownAll = all.filter(hit).sort(rank);
+    const capped = !q && !wikiMore.has(WIKI_CARD_KEY) && shownAll.length > WIKI_CARD_MAX;
     const shown = capped ? shownAll.slice(0, WIKI_CARD_MAX) : shownAll;
-    const docs = inSpace.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
-    const head = el('button', { class: 'v2-ksp-h', type: 'button', 'aria-expanded': String(open),
-      title: open ? SPACE_LABEL[space] + ' 접기' : SPACE_LABEL[space] + ' 펼치기 — 분류 ' + inSpace.length + '개',
-      onclick: () => {
-        if (open) wikiClosed.add(space); else wikiClosed.delete(space);
-        saveWikiClosed(); redraw();
-      } },
-      el('span', { class: 'v2-car' + (open ? ' open' : ''), 'aria-hidden': 'true', text: '›' }),
-      icon(SPACE_ICON[space] || 'apps', 'v2-ksp-ic'),
-      el('span', { class: 'n', text: SPACE_LABEL[space] || space }),
-      el('span', { class: 'v2-ksp-n', text: inSpace.length + ' · ' + docs }));
-    const kids: HTMLElement[] = shown.map(catRow);
-    if (capped) {
-      kids.push(el('button', { class: 'v2-kmore', type: 'button', text: (shownAll.length - shown.length) + '개 더 보기',
-        onclick: () => { wikiMore.add(space); redraw(); } }));
+    if (shownAll.length) {
+      const kids: HTMLElement[] = shown.map(catRow);
+      if (capped) {
+        kids.push(el('button', { class: 'v2-kmore', type: 'button', text: (shownAll.length - shown.length) + '개 더 보기',
+          onclick: () => { wikiMore.add(WIKI_CARD_KEY); redraw(); } }));
+      }
+      rows.push(el('section', { class: 'v2-ksp open', 'aria-label': '분류' },
+        el('div', { class: 'v2-ksp-b' }, ...kids)));
     }
-    rows.push(el('section', { class: 'v2-ksp' + (open ? ' open' : ''), 'aria-label': SPACE_LABEL[space] || space },
-      head, ...(open ? [el('div', { class: 'v2-ksp-b' }, ...kids)] : [])));
   }
   if (!rows.length) {
     rows.push(el('p', { class: 'v2-empty', text: wikiCats ? (q ? '찾는 분류가 없어요.' : '아직 분류가 없어요.') : '불러오는 중…' }));

@@ -12,18 +12,19 @@
 //   반려   = { category_id: 제안값,  unlink: true }        (연결을 지워 미분류 인박스로 되돌림)
 import { api, busy, cardHead, el, errorNote, relTime, toast } from './core.js';
 import { skeleton } from './learn.js';
-import { KN_TYPE_LABEL, SPACE_LABEL } from './wiki-data.js';
+import { KN_TYPE_LABEL } from './wiki-data.js';
 import { rqEnsureStyles } from './review.js';   // .rq-*(행·칩·일괄바·빈상태) 재사용 — 검토 큐와 한 몸으로 보이게
 
 type ClsItem = {
   key: string; name: string; title: string; type: string | null;
-  categoryId: number; catKey: string; catName: string; space: string;
+  categoryId: number; catKey: string; catName: string;
   confidence: number | null; evidence: string | null; at: string;
 };
 
 // 모듈 전역 UI 상태(review.ts rqUi 동형) — 탭을 떠났다 와도 필터·펼침·선택이 보존된다.
-const clsUi: { space: string; cat: string; lowOnly: boolean; sel: Set<string>; open: Set<string>; cur: number } = {
-  space: '', cat: '', lowOnly: false, sel: new Set(), open: new Set(), cur: 0,
+//  ⚠ #1631: 'space'(사업/제품/시스템) 필터는 그 축과 함께 사라졌다 — 좁히는 축은 카테고리 하나다.
+const clsUi: { cat: string; lowOnly: boolean; sel: Set<string>; open: Set<string>; cur: number } = {
+  cat: '', lowOnly: false, sel: new Set(), open: new Set(), cur: 0,
 };
 let clsKeys: AbortController | null = null;
 
@@ -83,7 +84,7 @@ async function classificationPanel(detail: HTMLElement): Promise<void> {
   const items: ClsItem[] = entries.map((e: any): ClsItem => ({
     key: e.name + ':' + e.category_id, name: e.name, title: e.title || e.name, type: e.type || null,
     categoryId: Number(e.category_id), catKey: e.category_key || '',
-    catName: e.category_name || e.category_key || '미분류', space: e.space || '',
+    catName: e.category_name || e.category_key || '미분류',
     confidence: e.confidence == null ? null : Number(e.confidence),
     evidence: e.evidence || null, at: e.updated_at,
   }));
@@ -95,8 +96,7 @@ async function classificationPanel(detail: HTMLElement): Promise<void> {
 
   // 필터 적용 후 실제 보이는 것들(키보드 커서·일괄 확정의 대상).
   const visible = (): ClsItem[] => items.filter((i) =>
-    (!clsUi.space || i.space === clsUi.space)
-    && (!clsUi.cat || i.catKey === clsUi.cat)
+    (!clsUi.cat || i.catKey === clsUi.cat)
     && (!clsUi.lowOnly || i.confidence == null || i.confidence < 0.5));
 
   // 낮은 신뢰도(<50% 또는 미측정) — 칩·통계에서 공유하는 판정.
@@ -108,13 +108,12 @@ async function classificationPanel(detail: HTMLElement): Promise<void> {
     onclick: () => { clsUi.lowOnly = !clsUi.lowOnly; clsUi.cur = 0; paint(); },
   })];
 
-  // 카테고리 필터 옵션 — 현재 space 안에 실제로 남아 있는 카테고리만(space 바꾸면 좁아지고, 다 처리하면 사라진다).
+  // 카테고리 필터 옵션 — 인박스에 실제로 남아 있는 카테고리만(다 처리하면 사라진다).
   const catSel = el('select', { class: 'rq-sel', style: 'width:auto;min-width:170px' }) as HTMLSelectElement;
   function rebuildCatSel(): void {
-    const seen = new Map<string, string>();   // key → 표시명(space · 이름)
+    const seen = new Map<string, string>();   // key → 표시명
     for (const it of items) {
-      if (clsUi.space && it.space !== clsUi.space) continue;
-      if (it.catKey && !seen.has(it.catKey)) seen.set(it.catKey, (SPACE_LABEL[it.space] || it.space || '') + ' · ' + it.catName);
+      if (it.catKey && !seen.has(it.catKey)) seen.set(it.catKey, it.catName);
     }
     if (clsUi.cat && !seen.has(clsUi.cat)) clsUi.cat = '';   // 필터로 사라진 카테고리 선택은 해제
     catSel.replaceChildren(el('option', { value: '', text: '모든 카테고리' }),
@@ -122,13 +121,6 @@ async function classificationPanel(detail: HTMLElement): Promise<void> {
     catSel.value = clsUi.cat;
   }
   catSel.onchange = () => { clsUi.cat = catSel.value; clsUi.cur = 0; paint(); };
-
-  const spaceSel = el('select', { class: 'rq-sel', style: 'width:auto;min-width:120px' }) as HTMLSelectElement;
-  for (const [v, t] of [['', '모든 영역'], ['business', SPACE_LABEL.business], ['product', SPACE_LABEL.product], ['system', SPACE_LABEL.system]] as [string, string][]) {
-    spaceSel.append(el('option', { value: v, text: t }));
-  }
-  spaceSel.value = clsUi.space;
-  spaceSel.onchange = () => { clsUi.space = spaceSel.value; clsUi.cat = ''; clsUi.cur = 0; paint(); };
 
   // 처리된 항목을 목록에서 즉시 제거(전체 리로드 없이 — 스크롤·펼침 상태 보존). review.ts drop 동형.
   const drop = (key: string): void => {
@@ -155,7 +147,7 @@ async function classificationPanel(detail: HTMLElement): Promise<void> {
   const card = el('div', { class: 'card' },
     cardHead('분류 검토 대기', '분류기가 제안한 카테고리를 확정·재분류·반려합니다. 신뢰도 낮은순(가장 의심스러운 것 먼저)으로 정렬돼 있습니다.'),
     countEl,
-    el('div', { class: 'rq-bar' }, chips, spaceSel, catSel,
+    el('div', { class: 'rq-bar' }, chips, catSel,
       el('span', { class: 'rq-kbd' },
         el('b', { text: 'j/k' }), el('span', { text: ' 이동 · ' }),
         el('b', { text: 'Enter' }), el('span', { text: ' 근거 · ' }),
@@ -208,8 +200,7 @@ function renderRow(it: ClsItem, idx: number, paint: () => void, drop: (k: string
     title: '문서 열기', onclick: (e: any) => e.stopPropagation(),
   });
 
-  const cat = el('span', { class: 'cls-cat', title: (SPACE_LABEL[it.space] || it.space || '') + ' · ' + (it.catKey || '') },
-    el('span', { class: 'sp', text: SPACE_LABEL[it.space] || it.space || '—' }),
+  const cat = el('span', { class: 'cls-cat', title: it.catKey || '' },
     el('span', { text: it.catName }));
 
   const meta = el('span', { class: 'rq-meta' },
@@ -247,7 +238,7 @@ function renderRow(it: ClsItem, idx: number, paint: () => void, drop: (k: string
 }
 
 // ── 재분류 피커 — openKnMetaPicker(wiki-data) 패턴 복제. 단 저장 대상이 카테고리 id 라 로컬로 둔다(그 함수는 key 기반). ──
-//  space(사업/제품/시스템)별로 묶어 보여주고, 현재 제안 카테고리엔 표식을 단다. 고르면 즉시 재분류(=다른 카테고리로 확정) 쓰기.
+//  현재 제안 카테고리엔 표식을 단다. 고르면 즉시 재분류(=다른 카테고리로 확정) 쓰기.
 function openReclassifyPicker(anchor: HTMLElement, it: ClsItem, drop: (k: string) => void): void {
   const old = document.querySelector('.kn-metapop');
   if (old) { old.remove(); return; }   // 열려 있으면 토글로 닫기(openKnMetaPicker 관례)
@@ -257,18 +248,13 @@ function openReclassifyPicker(anchor: HTMLElement, it: ClsItem, drop: (k: string
   api('/api/ui/categories').then((d: any) => {
     const cats = (d && d.categories) || [];
     const parts: any[] = [];
-    for (const sp of ['business', 'product', 'system']) {
-      const inSp = cats.filter((c: any) => c.space === sp);
-      if (!inSp.length) continue;
-      parts.push(el('div', { class: 'kn-metapop-head', text: SPACE_LABEL[sp] }));
-      for (const c of inSp) {
-        const on = Number(c.id) === it.categoryId;   // 현재 제안 = 이미 걸린 카테고리
-        const b = el('button', { class: 'kn-metapop-item' + (on ? ' on' : ''), type: 'button' },
-          el('span', { text: c.name || c.key }),
-          on ? el('span', { class: 'kn-metapop-check', 'aria-hidden': 'true', text: '✓ 현재 제안' }) : null);
-        b.onclick = () => { close(); void reclassifyOne(it, Number(c.id), drop); };
-        parts.push(b);
-      }
+    for (const c of cats) {
+      const on = Number(c.id) === it.categoryId;   // 현재 제안 = 이미 걸린 카테고리
+      const b = el('button', { class: 'kn-metapop-item' + (on ? ' on' : ''), type: 'button' },
+        el('span', { text: c.name || c.key }),
+        on ? el('span', { class: 'kn-metapop-check', 'aria-hidden': 'true', text: '✓ 현재 제안' }) : null);
+      b.onclick = () => { close(); void reclassifyOne(it, Number(c.id), drop); };
+      parts.push(b);
     }
     pop.replaceChildren(...(parts.length ? parts : [el('div', { class: 'kn-metapop-note', text: '카테고리가 없습니다' })]));
   }).catch(() => pop.replaceChildren(el('div', { class: 'kn-metapop-note', text: '목록을 불러오지 못했습니다' })));

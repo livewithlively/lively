@@ -1,4 +1,4 @@
-// v6 category capability — 사업/제품/시스템 카테고리 CRUD + 도메인 의존 엣지(should).
+// v6 category capability — 분류축(카테고리) CRUD + 축 간 의존 엣지(should).
 //  레거시 domain_* 와 병행(REST-only 로 시작 — 웹 카테고리/지식/프로젝트 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='context'(domainmap authoring 계열 — domain_* 와 동일). 감사는 store(category-store)가 처리.
 import { z } from "zod";
@@ -11,32 +11,25 @@ import {
   getCategoryRepos, setCategoryRepos, getCategoryIsSummary, listCategoryMismatches,
 } from "../v6/category-store.js";
 
-const SPACES = ["business", "product", "system"] as const;
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-function parseSpace(v: unknown): string {
-  const s = String(v ?? "").trim();
-  if (!(SPACES as readonly string[]).includes(s)) {
-    throw new HttpError(400, "space 는 business|product|system 중 하나여야 합니다");
-  }
-  return s;
-}
-
-const categoryListInput = { space: z.enum(SPACES).optional() };
+// ⚠ 2026-09-02(#1631) space(business|product|system) 폐기 — 분류축 위에 **고정 서랍장**을 하나 더 두지 않는다.
+//  그 셋은 소프트웨어 회사의 분류지 쓰는 사람의 분류가 아니었다. 옛 클라이언트가 space 를 보내오면 조용히 무시한다
+//  (400 이 아니다 — 서버가 먼저 나가고 번들이 뒤따르는 배포 순서에서 그 사이 요청을 깨뜨리지 않는다).
+const categoryListInput = {};
 type CategoryListInput = z.infer<z.ZodObject<typeof categoryListInput>>;
 const categoryList: Capability = {
   name: "category_list",
   title: "카테고리 목록",
-  description: "카테고리(사업/제품/시스템)를 space 별 또는 전체 조회. 제품 space 의 카테고리가 도메인.",
+  description: "분류축(카테고리) 전체 조회 — 이 워크스페이스의 지식이 어느 서랍들로 갈라져 있는지.",
   scope: "context",
   input: categoryListInput,
   expose: {
     mcp: true,
-    rest: [{ method: "GET", paths: ["/api/ui/categories"],
-      parse: (req) => ({ space: req.query?.space ? String(req.query.space) : undefined }) }],
+    rest: [{ method: "GET", paths: ["/api/ui/categories"], parse: () => ({}) }],
   },
   // 공개범위(#1291) — 카테고리 행은 전원 공개(분류체계는 조직의 뼈대)지만, 행에 실린 **지식 카운트**는 뷰어 기준이다.
-  handler: async (input: CategoryListInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({ categories: await listCategories(input.space, ctx?.viewer ?? null) }),
+  handler: async (_input: CategoryListInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({ categories: await listCategories(ctx?.viewer ?? null) }),
 };
 
 const categoryGetInput = { id: z.number().int().positive() };
@@ -56,11 +49,12 @@ const categoryGet: Capability = {
     const category = await getCategory(input.id);
     if (!category) throw new Error(`카테고리 #${input.id} 없음`);
     const edges = await listCategoryEdges({ categoryId: input.id });
-    // #1153 — 명시 레포 매핑 + 정의와 어긋나는 지식 목록 + (제품) is 요약.
+    // #1153 — 명시 레포 매핑 + 정의와 어긋나는 지식 목록 + is(코드 앵커) 요약.
     //  mismatches=null 은 '재지 못했다'(임베딩 off · should 공란 · 백필 대기)이지 '어긋난 게 없다'가 아니다.
     const repos = await getCategoryRepos(input.id);
     const mismatches = await listCategoryMismatches(input.id, undefined, ctx?.viewer ?? null);   // 지식 제목이 나가는 자리(#1291)
-    const is = category.space === "product" ? await getCategoryIsSummary(input.id) : null;
+    //  is 는 «코드가 붙어 있으면» 나오고 아니면 0 이다 — 축의 부류로 가르지 않는다(#1631 space 폐기).
+    const is = await getCategoryIsSummary(input.id);
     return { category, edges, repos, mismatches, is };
   },
 };
@@ -95,7 +89,6 @@ const categorySetRepos: Capability = {
 };
 
 const categoryCreateInput = {
-  space: z.enum(SPACES),
   // REST 와 동일 의미: 소문자화 후 슬러그 검증(대문자 입력 허용 → 소문자로 정규화).
   key: z.string().transform((s) => s.trim().toLowerCase()).pipe(z.string().regex(KEY_RE, "key 는 소문자 슬러그(a-z0-9_-, 64자 이내)여야 합니다")),
   name: z.string().min(1).max(200),
@@ -120,7 +113,6 @@ const categoryCreate: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/categories"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        const space = parseSpace(b.space);
         const key = String(b.key ?? "").trim().toLowerCase();
         if (!KEY_RE.test(key)) throw new HttpError(400, "key 는 소문자 슬러그(a-z0-9_-, 64자 이내)여야 합니다");
         const name = String(b.name ?? "").trim();
@@ -128,7 +120,7 @@ const categoryCreate: Capability = {
         const should = String(b.should ?? "").trim();
         if (should.length < 40) throw new HttpError(400, "정의(should)를 40자 이상 적어 주세요 — 이 축이 무엇을 담고 무엇을 담지 않는지가 있어야 분류가 됩니다");
         return {
-          space, key, name,
+          key, name,
           description: b.description ? String(b.description) : undefined,
           should,
           cross_cutting: b.cross_cutting === true || undefined,

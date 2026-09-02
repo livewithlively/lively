@@ -22,7 +22,7 @@ export interface Materialized {
 // v3 까지의 주입 = recalled-kind(K/H) 제목·요약 리스트 + 중요도 캡 + observed 제외 + distill 제외.
 // v4 결정(plan §F·§J): **주입 = 검색(retrieval)**. 정적 랭킹/중요도/제목리스트 폐기.
 //   (a) R(규칙) **전문 항상 주입**(enforced — 맥락무관 강제).
-//   (b) **카테고리 지도** — 전 카테고리(space+key+name+active 유닛수)를 *작고 완전하게* 나열. 에이전트는 이 지도로
+//   (b) **카테고리 지도** — 전 카테고리(key+name+active 유닛수)를 *작고 완전하게* 나열. 에이전트는 이 지도로
 //       어떤 주제가 있는지 알고, 일에 맞춰 `카테고리+검색`(ctx_grep/memory_search/ctx_ls domain=)으로 그때 소환한다.
 //   (c) **쓰기 가이드** — 언제/어디/무엇/분류/외부 를 헤더에 안내(지속지식이 생기면 in-flow 로 ctx_save).
 // 제거: PER_KIND_CAP/TOTAL_CAP(중요도 캡)·recalled-kind 제목 리스트·observed 인덱스제외 필터·distill source_ref 제외절.
@@ -31,13 +31,12 @@ export interface Materialized {
 //     팀메모리 구분은 별도로 유지(P5 정합).
 // redact 게이트(assertNoHardSecrets 쓰기경로 + redactString 서빙경로)는 v4 에서도 유지(defense-in-depth).
 
-// 카테고리 지도 한 항목 — v6 category(space/key/name) + knowledge_category(active 지식수). 모두 itemsPool 단일 DB.
+// 카테고리 지도 한 항목 — v6 category(key/name) + knowledge_category(active 지식수). 모두 itemsPool 단일 DB.
 export interface CategoryMapEntry {
-  space: string;          // 'business' | 'product'(코드앵커) | 'system' — v6 category.space
   key: string;            // category.key(소환 시 domain= 인자)
   name: string;           // 사람용 표시명
   active_units: number;   // 이 카테고리에 매핑된 active knowledge 수(kc.state<>'rejected'). 발견용 메타.
-  mine?: boolean;         // 보는 멤버의 팀이 소유/이해관계인 카테고리(team-scoped 주입에서만 채워짐 — 공간 내 상단 정렬+★).
+  mine?: boolean;         // 보는 멤버의 팀이 소유/이해관계인 카테고리(team-scoped 주입에서만 채워짐 — 상단 정렬+★).
   // ⚠ #1153 에서 한 줄 설명(category.description)을 여기 붙였다가 **철회**했다. 정의를 읽혀야 하는 건 맞지만,
   //  분류 판단이 필요한 순간은 '지식을 저장할 때'뿐인데 그 비용을 전 세션에 항상 물리는 건 낭비다
   //  (온톨로지 원칙 "전부 미리 읽지 않는다 — 그때 소환한다"에도 역행). 정의는 category_list/category_get 이
@@ -48,7 +47,7 @@ export interface CategoryMapEntry {
 // ── (라이브 헬퍼) R(규칙) 전문 — kind='R', lifecycle='active'. enforced 주입 대상. sort, name 순. ──
 //  buildKnowledgeIndex 는 순수함수라 units 인자에서 R 을 직접 필터한다(아래). 이 헬퍼는 호출자 편의용(미사용 가능).
 
-// ── (라이브 헬퍼) 카테고리 지도 — v6 category(space/key/name) + knowledge_category(active 지식수). 단일 DB(itemsPool). ──
+// ── (라이브 헬퍼) 카테고리 지도 — v6 category(key/name) + knowledge_category(active 지식수). 단일 DB(itemsPool). ──
 //  V6: domain/knowledge_unit_domain → category/knowledge_category. 한 DB라 메모리 조인 불필요 — 두 쿼리(전 카테고리 + 카운트)면 충분.
 //  fail-open: 조회가 죽어도 인덱스 생성이 500 나면 안 된다(빈 지도 반환 → 헤더만, 안내문은 유지).
 // mineIds(선택) = 보는 멤버의 팀 소유/이해관계 카테고리 id 집합(team-store.memberCategoryIds). 주어지면 entry.mine 마킹.
@@ -59,14 +58,14 @@ export interface CategoryMapEntry {
 export async function categoryMapForIndex(viewer: Viewer, mineIds?: Set<number>): Promise<CategoryMapEntry[]> {
   try {
     const { itemsPool } = await import("../../db/client.js");
-    // (1) 전 카테고리 — merged 제외. (space,key) 부분유니크. cross_cutting 먼저(교차관심사 상위 노출).
+    // (1) 전 카테고리 — merged 제외. key 부분유니크. cross_cutting 먼저(교차관심사 상위 노출).
     //  ⚠ 카테고리 자체는 거르지 않는다 — 분류체계는 조직의 뼈대(빈 분류도 보여야 어디에 쓸지 판단한다)라
     //   가시성 주체가 아니다. 잠기는 건 그 안의 **지식**이고, 그래서 아래 카운트만 뷰어 기준으로 센다.
     const catRows = (await itemsPool.query(
-      `SELECT c.id, c.space, c.key, c.name, c.cross_cutting
+      `SELECT c.id, c.key, c.name, c.cross_cutting
          FROM category c
         WHERE c.state <> 'merged'
-        ORDER BY c.space, c.cross_cutting, c.key`,
+        ORDER BY c.cross_cutting DESC, c.key`,
     )).rows;
     // (2) active 지식수/category — knowledge_category(rejected 제외) ⋈ knowledge(active). category_id 로 집계 후 key 로 환원.
     const cntParams: unknown[] = [];
@@ -81,7 +80,6 @@ export async function categoryMapForIndex(viewer: Viewer, mineIds?: Set<number>)
     const cnt = new Map<number, number>();
     for (const r of cntRows) cnt.set(Number(r.category_id), Number(r.n) || 0);
     return catRows.map((c) => ({
-      space: (c.space as string) ?? "product",
       key: c.key as string,
       name: (c.name as string) ?? (c.key as string),
       active_units: cnt.get(Number(c.id)) ?? 0,
@@ -95,7 +93,7 @@ export async function categoryMapForIndex(viewer: Viewer, mineIds?: Set<number>)
 
 // ── 컨텍스트 온톨로지 가이드(주입 골격) — buildKnowledgeIndex 가 굽는 Knowledge Index **전체 템플릿**. ──
 //  06-23 재설계(윤상민): 3섹션으로 쪼개지 않고 **하나의 편집 가능한 템플릿**. 동적 데이터는 플레이스홀더로 주입:
-//   `${categories}` = 카테고리 지도 항목(space별 'key — name (N)'), `${rules}` = 사용자-저작 강제 규칙(R) 전문.
+//   `${categories}` = 카테고리 지도 항목('key — name (N)'), `${rules}` = 사용자-저작 강제 규칙(R) 전문.
 //  편집값(섹션)이 비거나 DB 가 없으면 이 상수로 폴백 → 계약(온톨로지 골격) 안 깨짐. 기본값은 코드가 단일 출처
 //  (쓰기 가이드는 이 템플릿의 '## 맥락 로드/기록 가이드' 섹션으로 통합 — 별도 블록 없음. 06-23 재설계).
 export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
@@ -109,7 +107,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "**맥락(Context)** 은 일할 때 알아야 할 조직의 모든 것이다. 세 축으로 본다.",
   "",
-  "- **카테고리 — 분류축.** 맥락을 *어디에 두는지*. 3 space: **사업**(개발 불필요 업무)·**제품**(개발 필요 업무)·**시스템**(조직·업무방식 등 메타). 각 space 아래 하위 카테고리가 있고, **제품의 하위 카테고리 = 도메인**이다. 도메인은 정의·범위·규칙(**should**) + 코드 구현·의존(**is**) + 둘의 갭(**debt**) + 도메인 간 관계(엣지)를 합쳐 **도메인맵**을 이룬다.",
+  "- **카테고리 — 분류축.** 맥락을 *어디에 두는지*. 이 조직이 자기 일에서 뽑아낸 서랍들이고, 위에 고정된 상위 분류는 없다(무엇이 축이 될지는 조직마다 다르다). 각 축은 **정의(should)** — 무엇을 담고 무엇을 담지 않는지 — 를 갖는다. 코드가 붙는 축이면 거기에 구현·의존(**is**)과 둘의 갭(**debt**), 축 간 관계(엣지)가 더 붙어 **도메인맵**을 이룬다.",
   "- **지식 — 맥락의 *기록*(정적).** 지속되는 사실·결정·설계·런북. 카테고리 1개(단일 home)에 속한다 — 교차주제는 복수 카테고리 태깅이 아니라 `knowledge_link`(지식↔지식)로 잇는다(`knowledge_link_category`는 append 가 아니라 교체 시맨틱). 두 직교 속성 — **injection**(`always`=항상 주입되는 규칙·페르소나 / `recalled`=검색 소환), **provenance**(`authored`=저작 / `observed`=외부 미러).",
   "- **프로젝트 — 맥락의 *변화*(동적).** 맥락을 바꾸는 일. **project ▸ task ▸ subtask** 위계. 카테고리 1개(단일 home)에 속한다 — 프로젝트 간 관계는 `project_link_project_v6`(선후속 등)로 잇는다. **필요지식**(required)을 요구하고 **산출지식**(produced)을 만든다. 진척은 **작업(activity)** 으로 기록되고, 작업 중 **커밋은 도메인의 is**를, **비커밋(결정·리뷰 등)은 should**를 바꾼다.",
   "",
@@ -122,7 +120,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "**로드 — 필요한 맥락을 그때 소환한다 (전부 미리 읽지 않는다).**",
   "- 위 **카테고리** 목록에서 관련 주제를 찾는다.",
-  "- 지식: `knowledge_search`(의미·자연어 — 벡터+grep RRF 하이브리드; 임베딩 off 면 grep 폴백) · `knowledge_grep`(정확 토큰/정규식 grep) · `knowledge_list`(space·category·injection 필터) · `knowledge_get`(name→전문, 부분읽기).",
+  "- 지식: `knowledge_search`(의미·자연어 — 벡터+grep RRF 하이브리드; 임베딩 off 면 grep 폴백) · `knowledge_grep`(정확 토큰/정규식 grep) · `knowledge_list`(category·injection 필터) · `knowledge_get`(name→전문, 부분읽기).",
   "- 도메인맵: `category_list` / `category_get`(should·is·debt·의존 엣지) · `category_edge_list`.",
   "- 프로젝트: `project_list_v6` / `project_get_v6`(태스크 위계·필요/산출지식).",
   "- 라이브 데이터(코드·DB): `db_query`(admin이면 별도 등록 없이 내장 `self` 소스로 이 라이블리 DB=지식·프로젝트·카테고리·도메인맵을 읽기전용 SQL 조회) · `context_overview`.",
@@ -191,23 +189,18 @@ export function effectiveSectionTemplate(section: string, bodyMd: string | null 
 // (#335) ${rules}/buildRulesBlock·SECTION_R_NAMES 폐기 — 항상-주입은 '섹션 문서'(injection='always' 행, publish.buildSectionBlocks)뿐이다.
 //  비-섹션 지식의 injection=always 경로는 제거됨(사용자 노출 X). 섹션 본문은 substituteBlocks 로 ${team}/${categories}/${wiki} 만 치환.
 
-// ${categories} 치환 블록 — 전 카테고리를 space(product→business)별 'key — name (N)'. 없으면 "". 뒤따르는 ## 와 분리되게 \n\n 종결.
+// ${categories} 치환 블록 — 전 카테고리를 'key — name (N)' 평면 목록. 없으면 "". 뒤따르는 ## 와 분리되게 \n\n 종결.
+//  ⚠ #1631 이전엔 space(사업/제품/시스템) 소제목으로 묶었다. 그 축을 걷어냈으므로 묶음도 없앴다 —
+//   축이 없는데 소제목만 남기면 없는 위계를 읽는 쪽에 가르치게 된다.
 function buildCategoryBlock(categoryMap: CategoryMapEntry[]): string {
   if (!categoryMap.length) return "";
-  const order = (s: string): number => (s === "product" ? 0 : s === "business" ? 1 : 2);
-  const spaces = [...new Set(categoryMap.map((a) => a.space))].sort((x, y) => order(x) - order(y) || x.localeCompare(y));
-  const out: string[] = [];
-  for (const sp of spaces) {
-    out.push(`### ${sp}`);
-    // 우리 팀(mine) 카테고리를 공간 내 상단으로 정렬하고 ★ 마킹(표면화 사이드바 '우리 팀 우선'의 텍스트 인덱스 판본).
-    //  V8 sort 는 stable — mine 이 하나도 없으면(정적/멤버무관) 비교가 전부 0이라 기존 순서·출력 불변.
-    const ordered = [...categoryMap.filter((x) => x.space === sp)].sort((a, b) => (a.mine === b.mine ? 0 : a.mine ? -1 : 1));
-    for (const a of ordered) {
-      const n = a.active_units > 0 ? ` (${a.active_units})` : "";
-      out.push(`- ${a.key} — ${a.name}${n}${a.mine ? " ★" : ""}`);
-    }
-    out.push("");
-  }
+  // 우리 팀(mine) 카테고리를 상단으로 정렬하고 ★ 마킹(표면화 사이드바 '우리 팀 우선'의 텍스트 인덱스 판본).
+  //  V8 sort 는 stable — mine 이 하나도 없으면(정적/멤버무관) 비교가 전부 0이라 들어온 순서(교차관심사→key) 그대로.
+  const ordered = [...categoryMap].sort((a, b) => (a.mine === b.mine ? 0 : a.mine ? -1 : 1));
+  const out = ordered.map((a) => {
+    const n = a.active_units > 0 ? ` (${a.active_units})` : "";
+    return `- ${a.key} — ${a.name}${n}${a.mine ? " ★" : ""}`;
+  });
   return out.join("\n").trimEnd() + "\n\n";
 }
 

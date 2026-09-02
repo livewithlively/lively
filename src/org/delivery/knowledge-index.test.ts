@@ -36,7 +36,7 @@ const unit = (over: Partial<KnowledgeRow>): KnowledgeRow => ({
 });
 
 const category = (over: Partial<CategoryMapEntry>): CategoryMapEntry =>
-  ({ space: "product", key: "k", name: "n", active_units: 0, ...over });
+  ({ key: "k", name: "n", active_units: 0, ...over });
 
 // ── (a) #335: always 지식(비-섹션)은 더 이상 인덱스에 전문 주입되지 않는다(${rules} 폐기). 항상-주입은 섹션 문서뿐. ──
 t("a: always 지식의 전문/제목은 인덱스에 주입되지 않는다('## 강제 규칙' 폐기)", () => {
@@ -77,19 +77,21 @@ t("b: recalled 지식은 정적 주입 안 됨(제목·본문·name 미노출)",
   assert.ok(!idx.includes("픽스처제목ZZH"), "recalled 는 정적 주입 안 됨");
 });
 
-// ── (categories) 카테고리 지도 — 전 카테고리를 space 별 'key — name (active수)' 로(발견용, product→business 순). ──
-t("categories: 카테고리 지도가 space 별로 key — name (N) 렌더(product→business 순)", () => {
+// ── (categories) 카테고리 지도 — 전 카테고리를 'key — name (active수)' 평면 목록으로(발견용, 들어온 순서 유지). ──
+//  #1631: space 소제목(### product 등)은 사라졌다 — 축이 없는데 소제목만 남기면 없는 위계를 읽는 쪽에 가르친다.
+t("categories: 카테고리 지도가 key — name (N) 평면 목록으로 렌더(space 소제목 없음)", () => {
   const idx = buildKnowledgeIndex([], [
-    category({ space: "product", key: "agent-gateway", name: "에이전트 게이트웨이", active_units: 8 }),
-    category({ space: "business", key: "gtm", name: "GTM", active_units: 16 }),
-    category({ space: "product", key: "audit-history", name: "감사 이력", active_units: 0 }),
+    category({ key: "agent-gateway", name: "에이전트 게이트웨이", active_units: 8 }),
+    category({ key: "gtm", name: "GTM", active_units: 16 }),
+    category({ key: "audit-history", name: "감사 이력", active_units: 0 }),
   ]);
   assert.ok(idx.includes("## 카테고리 (주제 — 검색으로 소환)"), "카테고리 지도 헤더");
-  assert.ok(idx.includes("### product") && idx.includes("### business"), "space 섹션");
+  assert.ok(!/^### (product|business|system)$/m.test(idx), "space 소제목이 남으면 없는 위계를 가르친다");
   assert.ok(idx.includes("- agent-gateway — 에이전트 게이트웨이 (8)"), "active>0 은 (N) 표기");
-  assert.ok(idx.includes("- audit-history — 감사 이력"), "active=0 area 도 완전성 위해 나열");
+  assert.ok(idx.includes("- gtm — GTM (16)"), "옛 business 축도 같은 목록에 나온다");
+  assert.ok(idx.includes("- audit-history — 감사 이력"), "active=0 축도 완전성 위해 나열");
   assert.ok(!idx.includes("- audit-history — 감사 이력 (0)"), "active=0 은 (0) 미표기");
-  assert.ok(idx.indexOf("### product") < idx.indexOf("### business"), "product 가 business 보다 먼저");
+  assert.ok(idx.indexOf("- agent-gateway") < idx.indexOf("- gtm"), "들어온 순서를 뒤집지 않는다(정렬은 stable)");
 });
 
 t("wiki: is_wiki 핀이 ${wiki} 블록에 소환키·제목·category 로 인덱스됨(본문 제외)", () => {
@@ -140,7 +142,7 @@ t("guide: 맥락 로드/기록 가이드가 항상 주입된다(빈 입력에도
 // ── (mask) H1-b 시크릿 출력게이트: 동적 블록(카테고리 표시명)·템플릿 본문의 시크릿이 [REDACTED] 로 마스킹(서빙=throw 금지). ──
 t("mask: 카테고리 표시명·템플릿 본문의 토큰이 [REDACTED] 로 마스킹", () => {
   const idx = buildKnowledgeIndex(
-    [], [category({ space: "product", key: "k", name: "area 이름 lvk_zyxwvutsrqponmlkjihgfedcba" })],
+    [], [category({ key: "k", name: "area 이름 lvk_zyxwvutsrqponmlkjihgfedcba" })],
     "키 sk-ABCDEFGHIJKLMNOP1234 가 템플릿에\n\n${categories}",
   );
   assert.ok(!idx.includes("lvk_zyxwvutsrqponmlkjihgfedcba"), "카테고리 표시명 토큰 마스킹");
@@ -149,14 +151,14 @@ t("mask: 카테고리 표시명·템플릿 본문의 토큰이 [REDACTED] 로 �
 });
 
 t("mask: 시크릿 없는 정상 입력은 마스킹 없이 원문 유지", () => {
-  const idx = buildKnowledgeIndex([], [category({ space: "product", key: "billing", name: "결제" })]);
+  const idx = buildKnowledgeIndex([], [category({ key: "billing", name: "결제" })]);
   assert.ok(!idx.includes("[REDACTED]"));
   assert.ok(idx.includes("- billing — 결제"));
 });
 
 // ── (idem) WYSIWYG 불변식: 같은 입력 → byte-identical, 헤더 중복 누적 0. ──
 t("idem: 멱등 — 같은 입력 2회 호출 byte-identical(중복 누적 0)", () => {
-  const amap = [category({ space: "product", key: "k1", name: "n1", active_units: 3 })];
+  const amap = [category({ key: "k1", name: "n1", active_units: 3 })];
   const a = buildKnowledgeIndex([], amap);
   const b = buildKnowledgeIndex([], amap);
   assert.equal(a, b, "동일 입력은 동일 출력(결정적 = WYSIWYG byte-identical)");

@@ -9,7 +9,7 @@ import { audit } from "./audit.js";
 export interface ClassifierRow {
   id: number; key: string; label: string | null; enabled: boolean; priority: number;
   target: string; confidence_below: number | null;
-  match_spaces: string[] | null; match_types: string[] | null; match_provenance: string | null;
+  match_types: string[] | null; match_provenance: string | null;
   match_systems: string[] | null; exclude_names: string[] | null;
   min_chars: number; lookback_days: number | null;
   criteria_md: string | null; candidate_categories: string[] | null; confirm_threshold: number;
@@ -22,7 +22,7 @@ export interface ClassifierRow {
 }
 
 const COLS = `id, key, label, enabled, priority, target, confidence_below,
-  match_spaces, match_types, match_provenance, match_systems, exclude_names,
+  match_types, match_provenance, match_systems, exclude_names,
   min_chars, lookback_days, criteria_md, candidate_categories, confirm_threshold,
   batch_size, mode, session_ref, model, effort, requester,
   last_run_at, last_status, last_summary, note`;
@@ -31,7 +31,6 @@ const COLS = `id, key, label, enabled, priority, target, confidence_below,
 function scopeText(r: ClassifierRow): string {
   const bits: string[] = [];
   bits.push(r.target === "unmapped" ? "미분류" : r.target === "low_confidence" ? "낮은 확신도 재분류" : "미분류 + 재분류");
-  if (r.match_spaces?.length) bits.push(`space ${r.match_spaces.join("·")}`);
   if (r.match_types?.length) bits.push(`유형 ${r.match_types.join("·")}`);
   if (r.match_provenance) bits.push(r.match_provenance === "authored" ? "저작" : "미러");
   if (r.match_systems?.length) bits.push(`출처 ${r.match_systems.join("·")}`);
@@ -68,13 +67,8 @@ export function scopeWhere(r: ClassifierRow, params: unknown[]): string {
   if (r.exclude_names?.length) { params.push(r.exclude_names); w.push(`NOT (k.name = ANY($${params.length}::text[]))`); }
   if (r.min_chars > 0) { params.push(r.min_chars); w.push(`char_length(COALESCE(k.body_md,'')) >= $${params.length}`); }
   if (r.lookback_days) { params.push(r.lookback_days); w.push(`k.updated_at >= now() - ($${params.length} || ' days')::interval`); }
-  // space 는 지식에 직접 없다 — 이미 붙은 분류의 space 로 좁힌다(재분류 시나리오에서 의미가 있고,
-  //  미분류 지식은 space 가 없으므로 이 조건을 걸면 자연히 제외된다).
-  if (r.match_spaces?.length) {
-    params.push(r.match_spaces);
-    w.push(`EXISTS (SELECT 1 FROM knowledge_category kc2 JOIN category c2 ON c2.id=kc2.category_id
-              WHERE kc2.name=k.name AND c2.space = ANY($${params.length}::text[]))`);
-  }
+  //  (#1631) 종전엔 '분류의 space 로 좁히기'가 있었다. 그 공간 자체를 걷어냈으므로 축도 함께 없앤다 —
+  //   좁히고 싶으면 candidate_categories(후보 축)를 쓴다.
   return w.join(" AND ");
 }
 
@@ -173,7 +167,7 @@ export async function markClassifierSeen(classifierId: number, names: string[], 
 export interface ClassifierUpsertInput {
   id?: number; key?: string; label?: string | null; enabled?: boolean; priority?: number;
   target?: string; confidence_below?: number | null;
-  match_spaces?: string[] | string | null; match_types?: string[] | string | null;
+  match_types?: string[] | string | null;
   match_provenance?: string | null; match_systems?: string[] | string | null;
   exclude_names?: string[] | string | null;
   min_chars?: number; lookback_days?: number | null;
@@ -207,7 +201,6 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
     priority: Number(pick(input.priority, cur?.priority ?? 0)) || 0,
     target: pick(input.target, cur?.target ?? "unmapped"),
     confidence_below: input.confidence_below === undefined ? (cur?.confidence_below ?? null) : input.confidence_below,
-    match_spaces: input.match_spaces === undefined ? (cur?.match_spaces ?? null) : toList(input.match_spaces),
     match_types: input.match_types === undefined ? (cur?.match_types ?? null) : toList(input.match_types),
     match_provenance: input.match_provenance === undefined ? (cur?.match_provenance ?? null) : (input.match_provenance || null),
     match_systems: input.match_systems === undefined ? (cur?.match_systems ?? null) : toList(input.match_systems),
@@ -227,7 +220,7 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
   };
 
   const vals = [row.key, row.label, row.enabled, row.priority, row.target, row.confidence_below,
-    row.match_spaces, row.match_types, row.match_provenance, row.match_systems, row.exclude_names,
+    row.match_types, row.match_provenance, row.match_systems, row.exclude_names,
     row.min_chars, row.lookback_days, row.criteria_md, row.candidate_categories, row.confirm_threshold,
     row.batch_size, row.mode, row.session_ref, row.model, row.effort, row.requester, row.note, actor ?? null];
 
@@ -235,19 +228,19 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
   if (cur) {
     await itemsPool.query(
       `UPDATE org_classifier SET key=$1, label=$2, enabled=$3, priority=$4, target=$5, confidence_below=$6,
-              match_spaces=$7, match_types=$8, match_provenance=$9, match_systems=$10, exclude_names=$11,
-              min_chars=$12, lookback_days=$13, criteria_md=$14, candidate_categories=$15, confirm_threshold=$16,
-              batch_size=$17, mode=$18, session_ref=$19, model=$20, effort=$21, requester=$22, note=$23,
-              version=version+1, updated_at=now(), updated_by=$24
-         WHERE id=$25`, [...vals, cur.id]);
+              match_types=$7, match_provenance=$8, match_systems=$9, exclude_names=$10,
+              min_chars=$11, lookback_days=$12, criteria_md=$13, candidate_categories=$14, confirm_threshold=$15,
+              batch_size=$16, mode=$17, session_ref=$18, model=$19, effort=$20, requester=$21, note=$22,
+              version=version+1, updated_at=now(), updated_by=$23
+         WHERE id=$24`, [...vals, cur.id]);
     id = cur.id;
   } else {
     const ins = await itemsPool.query(
       `INSERT INTO org_classifier(key, label, enabled, priority, target, confidence_below,
-         match_spaces, match_types, match_provenance, match_systems, exclude_names,
+         match_types, match_provenance, match_systems, exclude_names,
          min_chars, lookback_days, criteria_md, candidate_categories, confirm_threshold,
          batch_size, mode, session_ref, model, effort, requester, note, created_by, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$24)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$23)
        RETURNING id`, vals);
     id = Number((ins.rows[0] as { id: string | number }).id);
   }

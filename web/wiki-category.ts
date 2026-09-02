@@ -120,7 +120,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     cover.replaceChildren();
     cover.removeAttribute('style');
     const hasCustom = !!cv && applyCoverBg(cover, cv);
-    if (!hasCustom) cover.append(wkAurora(String(cat.key || cat.id), cat.space, { cls: 'wk-cat-aurora', watermark: ic || letterOf() }));
+    if (!hasCustom) cover.append(wkAurora(String(cat.key || cat.id), { cls: 'wk-cat-aurora', watermark: ic || letterOf() }));
     if (canDoc) {
       cover.append(el('div', { class: 'wk-cover-btns' },
         el('button', { class: 'wk-cover-btn', type: 'button', text: hasCustom ? '커버 변경' : '커버 직접 고르기',
@@ -477,7 +477,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
   // 갤러리 카드 — 오로라 커버 + 제목(#764v2 시각 자산 재사용).
   function galCard(x: any) {
     const c = el('div', { class: 'wk-galc', role: 'link', tabindex: '0', title: x.title || x.name },
-      wkAurora(x.name, cat.space, { cls: 'wk-galc-cov', watermark: x.icon || '' }),
+      wkAurora(x.name, { cls: 'wk-galc-cov', watermark: x.icon || '' }),
       el('div', { class: 'wk-galc-b' },
         el('div', { class: 'wk-galc-t', text: x.title || x.name }),
         el('div', { class: 'wk-galc-m' }, wkTick(x), x.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[x.type] || x.type }) : null)));
@@ -681,9 +681,8 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
 
   // #1841 — ① 오로라 커버 폐지(카테고리마다 다른 그라디언트가 표면을 제각각으로 만들었다. 아이콘·제목·설명은 그대로)
   //  ② 머리 3층을 인다 — 좌측 사이드바가 없어졌으니 여기서 나가는 길(WIKI › 스페이스 › 이 카테고리 · 표면 탭)이 화면 안에 있어야 한다.
-  const SPACE_KO = { business: '사업', product: '제품', system: '시스템' };
   const catHeader = wkBoardHeader({
-    crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: SPACE_KO[cat.space] || '카테고리', href: '#/knowledge?cats=1' }, { label: cat.name || cat.key }],
+    crumbs: [{ label: 'WIKI', href: '#/knowledge' }, { label: '카테고리', href: '#/knowledge?cats=1' }, { label: cat.name || cat.key }],
     sub: Number.isFinite(Number(cat.knowledge_count)) ? '문서 ' + Number(cat.knowledge_count) + '건' : '',
     tabs: wkSurfaceTabs('cats'),
   });

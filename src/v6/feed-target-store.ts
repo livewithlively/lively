@@ -82,10 +82,10 @@ export async function feedTargetsForCategory(categoryId: number): Promise<FeedTa
 }
 
 // 관리탭 표시용 — 이 feed_target 에 매핑된 카테고리들.
-export async function categoriesForFeedTarget(feedTargetId: number): Promise<Array<{ id: number; key: string; name: string | null; space: string }>> {
+export async function categoriesForFeedTarget(feedTargetId: number): Promise<Array<{ id: number; key: string; name: string | null }>> {
   return (await q(itemsPool,
-    `SELECT c.id, c.key, c.name, c.space FROM category_feed cf JOIN category c ON c.id=cf.category_id
-     WHERE cf.feed_target_id=$1 ORDER BY c.space, c.key`, [feedTargetId])) as Array<{ id: number; key: string; name: string | null; space: string }>;
+    `SELECT c.id, c.key, c.name FROM category_feed cf JOIN category c ON c.id=cf.category_id
+     WHERE cf.feed_target_id=$1 ORDER BY c.key`, [feedTargetId])) as Array<{ id: number; key: string; name: string | null }>;
 }
 
 // 드레인 대상 해소 — 이 feed_target 으로 발행할 지식 이름들.

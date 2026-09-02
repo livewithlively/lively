@@ -17,7 +17,7 @@ import { api, busy, el, errorNote, fmtNum, pageHead, toast, uiText } from './cor
 import { skeleton } from './learn.js';
 import { confirmDialog, hasScope } from './admin.js';
 import { copyText } from './ui-primitives.js';
-import { SPACE_SUBS, openCategoryForm } from './category-form.js';
+import { openCategoryForm } from './category-form.js';
 
 // 분류축이 0개인 조직에 줄 착지점(#1618) — AI 에게 맡기는 프롬프트.
 //  스킬 이름을 문장에 박는 이유: 하네스가 그 이름으로 절차(정의 규격·경계 문장·이동 규칙)를 찾아간다.
@@ -77,9 +77,6 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
   }
 
   const reload = () => renderCategoriesInner(view, withHead);
-  const bySpace: Record<string, any[]> = {};
-  for (const s of SPACE_SUBS) bySpace[s.key] = cats.filter((c) => c.space === s.key);
-
   const head = withHead
     ? pageHead('분류체계',
         '지식과 프로젝트를 어떤 갈래로 나눌지 정합니다. 정의가 오래되면 여기서 먼저 드러납니다.', [], '분류체계')
@@ -103,18 +100,17 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
       el('span', { class: 'wikicat-summary-txt', text: '모든 분류에 정의가 있고, 정의에서 크게 벗어난 지식도 없습니다.' })));
   }
 
+  //  #1631: 종전엔 사업/제품/시스템 3묶음으로 갈라 그렸다. 그 축이 없어져 한 묶음이다.
   const list = el('div', { class: 'wikicat' });
-  for (const s of SPACE_SUBS) {
-    const items = bySpace[s.key] || [];
-    const isProduct = s.key === 'product';
+  {
+    const items = cats;
     const groupHead = el('div', { class: 'wikicat-grouphead' },
-      el('span', { class: 'wikicat-grouptitle', text: s.label }),
-      isProduct ? el('span', { class: 'dm-tag', text: '도메인' }) : null,
+      el('span', { class: 'wikicat-grouptitle', text: '분류축' }),
       el('span', { class: 'wikicat-groupcount', text: String(items.length) }));
     if (canEdit) {
       groupHead.append(el('button', {
         class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 추가',
-        onclick: () => openCategoryForm(s.key, null, reload, { repos }),
+        onclick: () => openCategoryForm(null, reload, { repos }),
       }));
     }
 
@@ -122,7 +118,7 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
     if (!items.length) {
       rows.append(el('div', { class: 'wikicat-empty', text: '아직 없습니다.' }));
     } else {
-      for (const c of items) rows.append(categoryRow(c, s.key, { canEdit, teams, repos, reload }));
+      for (const c of items) rows.append(categoryRow(c, { canEdit, teams, repos, reload }));
     }
     list.append(el('div', { class: 'wikicat-group' }, groupHead, rows));
   }
@@ -131,8 +127,7 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
     head,
     canEdit ? null : el('p', { class: 'admin-hint' },
       el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한이 필요합니다.'),
-    // 분류축이 **하나도** 없을 때만 착지점을 준다(#1618). 공간별 '아직 없습니다'는 그대로 둔다 —
-    //  일부 공간이 빈 건 정상이고, 여기서 다루는 건 "아무것도 없어서 시작을 못 하는" 상태다.
+    // 분류축이 **하나도** 없을 때만 착지점을 준다(#1618).
     cats.length === 0 ? emptyTaxonomyCard(canEdit) : null,
     summary,
     list,
@@ -179,8 +174,8 @@ function emptyTaxonomyCard(canEdit: boolean) {
   return card;
 }
 
-// 한 행 — 이름·키·오너 팀·정의 한 줄 + 표류 배지 + (제품) 연결 레포. 액션은 hover 시 진해진다(wikicat-row-acts).
-function categoryRow(c: any, space: string, ctx: { canEdit: boolean; teams: any[]; repos: string[]; reload: () => void }) {
+// 한 행 — 이름·키·오너 팀·정의 한 줄 + 표류 배지 + 연결 레포. 액션은 hover 시 진해진다(wikicat-row-acts).
+function categoryRow(c: any, ctx: { canEdit: boolean; teams: any[]; repos: string[]; reload: () => void }) {
   const { canEdit, teams, repos, reload } = ctx;
   const should = (c.should || '').trim();
 
@@ -253,7 +248,7 @@ function categoryRow(c: any, space: string, ctx: { canEdit: boolean; teams: any[
 
   const acts = canEdit ? el('div', { class: 'wikicat-row-acts' },
     el('button', { class: 'btn btn-ghost btn-sm', text: '수정',
-      onclick: () => openCategoryForm(space, c, reload, { repos }) }),
+      onclick: () => openCategoryForm(c, reload, { repos }) }),
     el('button', { class: 'btn btn-ghost btn-sm btn-text-danger', text: '삭제',
       onclick: () => deleteCategory(c, reload) })) : null;
 

@@ -307,7 +307,6 @@ function managerEditor(m: any | null, reload: () => void) {
   actionSel.append(el('option', { value: 'auto', text: '자동으로 고침 — 되돌릴 수 있는 조치만' }));
   actionSel.value = m?.action_level ?? 'report';
 
-  const spacesIn = el('input', { type: 'text', style: S, value: (m?.match_spaces || []).join(', '), placeholder: '비우면 전체' }) as HTMLInputElement;
   const catsIn = el('input', { type: 'text', style: S, value: (m?.match_categories || []).join(', '), placeholder: '비우면 전체' }) as HTMLInputElement;
 
   // 민감도 — kind 마다 뜻이 다르므로 라벨·힌트를 바꿔 단다(같은 칸에 다른 의미가 들어가면 잘못 넣는다).
@@ -348,7 +347,7 @@ function managerEditor(m: any | null, reload: () => void) {
         ...(m ? { id: m.id } : { kind: kindSel.value }), key,
         label: labelIn.value.trim() || null, enabled: enabledChk.checked,
         action_level: actionSel.value,
-        match_spaces: spacesIn.value, match_categories: catsIn.value,
+        match_categories: catsIn.value,
         threshold: thIn.value.trim() ? Number(thIn.value) : null,
         stale_days: staleIn.value.trim() ? Number(staleIn.value) : null,
         criteria_md: critIn.value.trim() || null,
@@ -369,7 +368,6 @@ function managerEditor(m: any | null, reload: () => void) {
     F('식별자', '영문·숫자 슬러그.', keyIn),
     F('이름', '목록에 보일 이름입니다.', labelIn),
     F('찾은 뒤 어떻게 할까', '자동으로 고치는 것은 되돌릴 수 있는 조치에만 적용됩니다. 처음에는 “찾기만 함”으로 두고 결과를 보세요.', actionSel),
-    F('검사할 갈래', '이 space 만 검사합니다. 비우면 전체.', spacesIn),
     F('검사할 분류축', '이 분류축의 지식만 검사합니다. 비우면 전체.', catsIn),
     thField, staleField,
     F('판단 기준', '이 조직에서 무엇을 문제로 볼지 적으세요. 판단이 필요한 종류(모순·코드 비교)의 AI 지시문에 들어갑니다.', critIn),

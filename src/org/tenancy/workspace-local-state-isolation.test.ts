@@ -80,7 +80,6 @@ const SCOPED: Array<[string, string]> = [
   ["web/v2/side.ts", "lively_v2_side_grpopened"],
   ["web/v2/side.ts", "lively_v2_proj_fold_closed"],
   ["web/v2/side.ts", "lively_v2_proj_fav_top"],
-  ["web/v2/side.ts", "lively_v2_wiki_closed"],
   ["web/v2/apps.ts", "lively_v2_recent_apps"],
   ["web/v2/rail.ts", "lively_v2_rail_main"],
   ["web/v2/rail.ts", "lively_v2_rail_pins"],

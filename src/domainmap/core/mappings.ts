@@ -83,8 +83,8 @@ export async function setCodeUnitMapping(args: SetMappingArgs): Promise<{ id: nu
       : await one(client, "SELECT id, path FROM code_unit WHERE repo_id=$1 AND path=$2 AND COALESCE(state,'active')='active'", [repo.id, args.path]);
     if (!cu) throw httpErr(404, "no such code_unit: " + (args.path ?? args.targetId));
     const cat = args.categoryId != null
-      ? await one(client, "SELECT id, key FROM category WHERE id=$1 AND space='product' AND state<>'merged'", [args.categoryId])
-      : await one(client, "SELECT id, key FROM category WHERE space='product' AND key=$1 AND state<>'merged'", [args.categoryKey]);
+      ? await one(client, "SELECT id, key FROM category WHERE id=$1 AND state<>'merged'", [args.categoryId])
+      : await one(client, "SELECT id, key FROM category WHERE key=$1 AND state<>'merged'", [args.categoryKey]);
     if (!cat) throw httpErr(400, "no such product category: " + (args.categoryKey ?? args.categoryId));
     const ex = await one(client, "SELECT id FROM mapping WHERE target_kind='code_unit' AND target_id=$1 AND category_id=$2", [cu.id, cat.id]);
     let id: number, action: string;

@@ -1255,7 +1255,7 @@
   "rest": [
    "POST /api/ui/org/classifiers"
   ],
-  "input_hash": "0f169305127f063e"
+  "input_hash": "bfc1f8b6dd7b4189"
  },
  {
   "name": "org_classifier_preview",
@@ -1295,7 +1295,7 @@
   "rest": [
    "POST /api/ui/org/managers"
   ],
-  "input_hash": "01b7bed06326289a"
+  "input_hash": "ed7c69b280563191"
  },
  {
   "name": "org_manager_run",
@@ -2166,7 +2166,7 @@
   "rest": [
    "GET /api/ui/categories"
   ],
-  "input_hash": "8267442e26753e4f"
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "category_get",
@@ -2186,7 +2186,7 @@
   "rest": [
    "POST /api/ui/categories"
   ],
-  "input_hash": "14ed1bd2ed76c1e3"
+  "input_hash": "e3bfc02fd5bbcf33"
  },
  {
   "name": "category_update",
@@ -2346,7 +2346,7 @@
   "rest": [
    "GET /api/ui/knowledge"
   ],
-  "input_hash": "d5d8814340d4262c"
+  "input_hash": "b9df3216275e6914"
  },
  {
   "name": "knowledge_grep",
@@ -2784,7 +2784,7 @@
   "rest": [
    "GET /api/ui/v6/projects"
   ],
-  "input_hash": "ed787db9358eb149"
+  "input_hash": "58a40d9e96c6e092"
  },
  {
   "name": "project_grep",

@@ -45,7 +45,7 @@ const feedTargetList: Capability = {
       return { ...t, categories: cats, card_count: (cnt.rows[0]?.n as number) ?? 0 };
     }));
     const categories = (await itemsPool.query(
-      `SELECT id, name, space, key FROM category WHERE state='active' ORDER BY space, key`)).rows;
+      `SELECT id, name, key FROM category WHERE state='active' ORDER BY key`)).rows;
     return { targets: withMeta, categories };
   },
 };
