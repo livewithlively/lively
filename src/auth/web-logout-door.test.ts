@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-const webPath = (rel: string): string => new URL(`../../web/${rel}`, import.meta.url).pathname.replace("/dist/", "/src/").replace("/src/web/", "/web/");
+const webPath = (rel: string): string => new URL(`../../web/${rel}`, import.meta.url).pathname;   // dist/auth → 레포 루트의 web/ (src 와 같은 깊이)
 const readWeb = (rel: string): string => readFileSync(webPath(rel), "utf8");
 
 async function loadPure<T>(rel: string): Promise<T> {
@@ -57,6 +57,10 @@ test("C1 core.ts 의 logout 은 CP 로그아웃 문을 지난다", () => {
   const fn = core.slice(core.indexOf("async function logout("));
   assert.ok(fn.includes("logoutRedirectTarget("), "🔴 logout 이 게이트만 띄운다 — 매니지드에선 CP 세션으로 자동 재로그인된다");
   assert.ok(/location\.replace\(/.test(fn), "문이 있으면 그 문으로 **최상위 이동**해야 한다(fetch 로는 남의 오리진 쿠키를 못 지운다)");
+  // C1b 떠나기로 정한 뒤 게이트가 로그인 문으로 덮어쓰면 안 된다 — 로그아웃 직후 배경 401 이 showGate 를 부르는 경합.
+  assert.ok(/leavingToLogout\s*=\s*true/.test(fn), "🔴 로그아웃이 떠나는 깃발을 세우지 않는다 — 배경 401 의 게이트가 로그인 문으로 덮어쓴다");
+  const gate = core.slice(core.indexOf("function showGate("), core.indexOf("async function logout("));
+  assert.ok(/leavingToLogout/.test(gate), "🔴 게이트가 그 깃발을 보지 않는다");
 });
 
 test("C2 클래식 셸(main.ts)은 자기 로그아웃 경로를 갖지 않는다 — 문은 하나(core.logout)", () => {

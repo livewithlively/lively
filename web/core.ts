@@ -38,6 +38,12 @@ function loginRedirectUrl(): Promise<string | null> {
   return loginRedirectP;
 }
 
+// 로그아웃이 CP 로그아웃 문으로 떠나기로 정했다 — 그 뒤 게이트는 자기 리다이렉트(로그인 문)를 걸지 않는다.
+//  로그아웃 직후 배경 폴링이 401 을 받아 showGate 를 부르면, 같은 auth-config 약속에 매달린 두 continuation 중
+//  **나중 것이 이긴다**(location.replace 두 번). 게이트가 이기면 사람은 로그인 문으로 가서 살아 있는 CP 세션으로
+//  도로 입장한다 — 이 수정이 막으려는 그 사고가 좁은 창으로 되살아난다. 그래서 떠나기로 한 사실을 깃발로 둔다.
+let leavingToLogout = false;
+
 // ── 토큰 게이트 ──
 let gateRedirectChecked = false;
 function showGate(message?: any) {
@@ -46,7 +52,7 @@ function showGate(message?: any) {
   if (!gateRedirectChecked) {
     gateRedirectChecked = true;
     void loginRedirectUrl().then((u) => {
-      if (!u) return;
+      if (!u || leavingToLogout) return;
       const target = new URL(u);
       // 돌아올 자리를 함께 보낸다(#1771) — CLI/데스크톱 디바이스 승인(#/activate?code=…)처럼 **해시에 상태가 있는**
       //  화면에서 게이트를 만나면, CP 로 튕기는 순간 그 해시가 사라져 승인 화면으로 못 돌아온다.
@@ -74,6 +80,7 @@ async function logout(message?: any) {
   //  여기서 localStorage 만 지우면 다음 창 열기에서 도로 로그인돼 '로그아웃이 안 된다' 로 보인다. 브라우저에선 없는 다리라 그대로 지나간다.
   const desk = (window as any).livelyDesktop;
   if (desk && typeof desk.logout === 'function') { try { await desk.logout(); } catch (_) { /* 앱 쪽 실패는 아래 웹 로그아웃을 막지 않는다 */ } }
+  const cpP = loginRedirectUrl();   // 세션 회수와 **나란히** 묻는다 — 셀프호스팅에서 게이트가 왕복 하나만큼 늦게 뜨지 않게(캐시돼 있으면 즉답)
   try { await fetch(apiUrl('/api/ui/logout'), { method: 'POST' }); } catch (_) { /* noop */ }
   localStorage.removeItem(TOKEN_KEY);
   state.me = null;
@@ -81,8 +88,8 @@ async function logout(message?: any) {
   // 매니지드(#2536): 여기서 게이트를 띄우면 게이트가 CP 로 튕기고, CP 는 살아 있는 자기 세션으로 곧장 재입장시킨다 —
   //  «로그인 창 1~2초 뒤 자동 재로그인». 로그아웃은 CP 의 로그아웃 문으로 **최상위 이동**해 CP 세션까지 끝낸다
   //  (돌아올 자리 to 동봉 — 재로그인하면 같은 자리). 셀프호스팅·CP 없음·조회 실패면 종전 게이트.
-  const door = logoutRedirectTarget(await loginRedirectUrl(), location.href);
-  if (door) { location.replace(door); return; }
+  const door = logoutRedirectTarget(await cpP, location.href);
+  if (door) { leavingToLogout = true; location.replace(door); return; }
   showGate(message || '로그아웃되었습니다.');
 }
 
