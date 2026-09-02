@@ -6,32 +6,26 @@
 //  표면은 프로젝트 표 문법(wiki-table) 그대로 — 머리 3층 · 같은 행 · 같은 크롬.
 import { api, busy, el, errorNote, relTime, state, toast } from './core.js';
 import { confirmDialog, skeletonRows } from './ui-primitives.js';
-import { KN_TYPE_LABEL, SPACE_LABEL, isCategoryHomeDoc } from './wiki-data.js';
+import { KN_TYPE_LABEL, isCategoryHomeDoc } from './wiki-data.js';
 import { wkDayLabel, wkEmpty } from './wiki-ui.js';
 import { wkBoardHeader, wkColHead, wkSurfaceTabs, wkTableGroup, wkTableRow, wkTbPill, wkTbPrimary, wkTbSearch } from './wiki-table.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 import { pjvPopover } from './projects/popover.js';
 
-const SPACES = ['business', 'product', 'system'] as const;
-
-// ── 카테고리 목록(3 space) — 사이드바가 없어졌으니 이 화면이 직접 읽는다. 세션 캐시 1콜. ──
-let catsCache: Promise<any> | null = null;
-export function knLoadCats(force?: boolean): Promise<any> {
+// ── 카테고리 목록 — 사이드바가 없어졌으니 이 화면이 직접 읽는다. 세션 캐시 1콜. ──
+//  ⚠ #1631 이전엔 space(사업/제품/시스템)마다 한 번씩 3콜을 때려 { business, product, system } 으로 담았다.
+//   그 축을 걷어냈으므로 **한 콜, 평면 배열**이다.
+let catsCache: Promise<any[]> | null = null;
+export function knLoadCats(force?: boolean): Promise<any[]> {
   if (force) catsCache = null;
   if (!catsCache) {
-    catsCache = Promise.all(SPACES.map((sk) =>
-      api('/api/ui/categories?' + new URLSearchParams({ space: sk })).then((d: any) => (d && d.categories) || []).catch(() => [])))
-      .then((lists) => {
-        const bySpace: any = { business: [], product: [], system: [] };
-        SPACES.forEach((sk, i) => { bySpace[sk] = lists[i]; });
-        return bySpace;
-      });
+    catsCache = api('/api/ui/categories').then((d: any) => (d && d.categories) || []).catch(() => []);
   }
   return catsCache;
 }
-export function knFindCatIn(bySpace: any, val: string) {
+export function knFindCatIn(cats: any[], val: string) {
   const v = String(val || '');
-  for (const sk of SPACES) for (const c of (bySpace[sk] || [])) if (String(c.id) === v || c.key === v) return c;
+  for (const c of (cats || [])) if (String(c.id) === v || c.key === v) return c;
   return null;
 }
 function myCatIds(): Set<string> {
@@ -39,22 +33,21 @@ function myCatIds(): Set<string> {
   return new Set((ids as any[]).map((x) => String(x)));
 }
 
-// ── 카테고리 칩 — 행에서 그 카테고리로 가는 링크. 스페이스마다 점 색만 다르다(§0.5 컬러 예산: 채운 배지 금지). ──
-function catChip(e: any, bySpace: any) {
+// ── 카테고리 칩 — 행에서 그 카테고리로 가는 링크. ──
+function catChip(e: any, cats: any[]) {
   const name = e.category_name || '';
   if (!name) return el('span', { class: 'pjv-fval wk-catchip wk-catchip-none', text: '미분류' });
-  const cat = (e.category_id != null && knFindCatIn(bySpace, String(e.category_id))) || null;
-  const sp = (cat && cat.space) || '';
-  const a = el('a', { class: 'wk-catchip' + (sp ? ' sp-' + sp : ''), href: '#/knowledge?category=' + encodeURIComponent(cat ? cat.id : name), title: (SPACE_LABEL[sp] || '') + (sp ? ' · ' : '') + name },
+  const cat = (e.category_id != null && knFindCatIn(cats, String(e.category_id))) || null;
+  const a = el('a', { class: 'wk-catchip', href: '#/knowledge?category=' + encodeURIComponent(cat ? cat.id : name), title: name },
     el('i', { class: 'wk-catchip-dot', 'aria-hidden': 'true' }), el('span', { text: name }));
   a.onclick = (ev: any) => ev.stopPropagation();
   return a;
 }
 
 // ── 첫 화면(최근) 열: 카테고리 · 유형 · 작성 · 시각 ──
-function recentCols(bySpace: any) {
+function recentCols(cats: any[]) {
   return [
-    { key: 'cat', label: '카테고리', width: '176px', align: 'left' as const, render: (e: any) => catChip(e, bySpace) },
+    { key: 'cat', label: '카테고리', width: '176px', align: 'left' as const, render: (e: any) => catChip(e, cats) },
     { key: 'type', label: '유형', width: '84px', render: (e: any) => el('span', { class: 'pjv-fval', text: e.type ? (KN_TYPE_LABEL[e.type] || e.type) : '' }) },
     { key: 'who', label: '작성', width: '72px', render: (e: any) => el('span', { class: 'pjv-fval wk-twho' + (e.confidence === 'human' ? ' human' : ''), text: e.confidence === 'human' ? '사람' : (e.provenance === 'observed' ? '미러' : 'AI') }) },
     { key: 'updated', label: '시각', width: '92px', render: (e: any) => el('span', { class: 'pjv-fval', title: e.updated_at || '', text: e.updated_at ? relTime(e.updated_at) : '' }) },
@@ -92,30 +85,31 @@ function withinPeriod(iso: string, period: string): boolean {
 // ════════════════════════════════════════════
 export async function renderRecentSurface(box: HTMLElement, ctx: any) {
   const f = ctx.f;
-  const r = f.recent = f.recent || { space: '', type: '', author: '', period: '' };
+  const r = f.recent = f.recent || { cat: '', type: '', author: '', period: '' };
   busy(box, el('div', { class: 'wk-home wk-board-pad' }, skeletonRows(5)));
 
   const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at', injection: 'recalled' });
   if (r.type) p.set('type', r.type);
   let entries: any[] = [];
-  let bySpace: any = { business: [], product: [], system: [] };
+  let cats: any[] = [];
   try {
-    [entries, bySpace] = await Promise.all([
+    [entries, cats] = await Promise.all([
       api('/api/ui/knowledge?' + p).then((d: any) => ((d && d.entries) || []).filter((e: any) => !isCategoryHomeDoc(e.name))),
       knLoadCats(),
     ]);
   } catch (e) { box.replaceChildren(errorNote(e, '목록을 불러오지 못했습니다')); return; }
 
-  // 스페이스 필터는 카테고리 id → space 로 접어 건다(서버 필터가 없다 — 목록은 이미 한 벌만 받는다).
-  const spaceOf = (e: any) => { const c = e.category_id != null ? knFindCatIn(bySpace, String(e.category_id)) : null; return (c && c.space) || ''; };
-  const shown = entries.filter((e) => (!r.space || spaceOf(e) === r.space)
+  // 카테고리 필터는 목록 안에서 접어 건다(서버 필터가 없다 — 목록은 이미 한 벌만 받는다).
+  //  #1631: 종전엔 '스페이스'(사업/제품/시스템) 알약이었다. 그 축이 사라져 알약 자리는 카테고리 자체가 받는다.
+  const shown = entries.filter((e) => (!r.cat || String(e.category_id ?? '') === r.cat)
     && (!r.author || (r.author === 'human' ? e.confidence === 'human' : r.author === 'observed' ? e.provenance === 'observed' : (e.confidence !== 'human' && e.provenance !== 'observed')))
     && withinPeriod(e.updated_at, r.period));
 
   const repaint = () => renderRecentSurface(box, ctx);
   const left: any[] = [
-    wkTbPill('전체', { active: !r.space, title: '전 스페이스', onClick: () => { r.space = ''; repaint(); } }),
-    ...SPACES.map((sk) => wkTbPill(SPACE_LABEL[sk], { active: r.space === sk, title: SPACE_LABEL[sk] + ' 스페이스만', onClick: () => { r.space = sk; repaint(); } })),
+    wkTbPill('전체', { active: !r.cat, title: '전 카테고리', onClick: () => { r.cat = ''; repaint(); } }),
+    dropPill('카테고리', [['', '카테고리 전체'], ...cats.map((c: any) => [String(c.id), String(c.name || c.key)] as [string, string])],
+      r.cat, (v) => { r.cat = v; repaint(); }),
     el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }),
     dropPill('유형', [['', '유형 전체'], ...Object.entries(KN_TYPE_LABEL) as any], r.type, (v) => { r.type = v; repaint(); }),
     dropPill('작성', AUTHORS, r.author, (v) => { r.author = v; repaint(); }),
@@ -135,7 +129,7 @@ export async function renderRecentSurface(box: HTMLElement, ctx: any) {
   });
 
   const body = el('div', { class: 'wk-board-body' });
-  const cols = recentCols(bySpace);
+  const cols = recentCols(cats);
   const names = shown.map((e) => e.name);
   const open = (x: any, rowEl: HTMLElement) => { setWikiPeekList(names); openWikiPeek(x.name, { onRefresh: ctx.repaint, originEl: rowEl }); };
 
@@ -149,12 +143,12 @@ export async function renderRecentSurface(box: HTMLElement, ctx: any) {
     for (const [day, list] of byDay) body.append(wkTableGroup(day, list, { cols, open, titleLabel: '문서' }));
   }
   box.replaceChildren(el('div', { class: 'wk-home wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, body)));
-  void paintReviewLane(reviewBox, bySpace, ctx);   // 뒤따라 채운다 — 검토 조회가 첫 화면을 붙잡지 않게
+  void paintReviewLane(reviewBox, cats, ctx);   // 뒤따라 채운다 — 검토 조회가 첫 화면을 붙잡지 않게
 }
 
 // ── [검토할 것](안 5) — 내 카테고리에 걸린 지식·수정 제안. 없으면 아예 안 그린다. ──
 //  줄에서 바로 승인·반려한다(검토 대기 화면까지 안 들어가도 되게). 반려는 되돌리기 어려워 확인창을 거친다.
-async function paintReviewLane(host: HTMLElement, bySpace: any, ctx: any) {
+async function paintReviewLane(host: HTMLElement, cats: any[], ctx: any) {
   let pending: any[] = [], revs: any[] = [], mine: string[] = [];
   try {
     [pending, revs, mine] = await Promise.all([
@@ -165,7 +159,7 @@ async function paintReviewLane(host: HTMLElement, bySpace: any, ctx: any) {
   } catch { return; }
   if (!host.isConnected) return;
   const mineSet = new Set(mine.map((x) => String(x)));
-  const catKeyOf = (e: any) => { const c = e.category_id != null ? knFindCatIn(bySpace, String(e.category_id)) : null; return (c && c.key) || ''; };
+  const catKeyOf = (e: any) => { const c = e.category_id != null ? knFindCatIn(cats, String(e.category_id)) : null; return (c && c.key) || ''; };
   type Item = { kind: 'new' | 'rev'; e: any; id?: number; title: string; why: string };
   const all: Item[] = [
     ...pending.map((k: any): Item => ({ kind: 'new', e: k, title: k.title || k.name, why: '새 지식 · ' + (k.confidence === 'human' ? '사람' : 'AI') + ' 가 남김' })),
@@ -176,7 +170,7 @@ async function paintReviewLane(host: HTMLElement, bySpace: any, ctx: any) {
   if (!items.length) return;
 
   const cols = [
-    { key: 'cat', label: '카테고리', width: '176px', align: 'left' as const, render: (e: any) => catChip(e, bySpace) },
+    { key: 'cat', label: '카테고리', width: '176px', align: 'left' as const, render: (e: any) => catChip(e, cats) },
     { key: 'type', label: '유형', width: '84px', render: (e: any) => el('span', { class: 'pjv-fval', text: e.type ? (KN_TYPE_LABEL[e.type] || e.type) : '' }) },
     { key: 'updated', label: '올라온 때', width: '92px', render: (e: any) => el('span', { class: 'pjv-fval', text: e.updated_at ? relTime(e.updated_at) : '' }) },
     { key: 'act', label: '', width: '150px', render: (e: any) => e.__acts },
@@ -224,10 +218,10 @@ async function paintReviewLane(host: HTMLElement, bySpace: any, ctx: any) {
 // ════════════════════════════════════════════
 export async function renderCatsSurface(box: HTMLElement, ctx: any) {
   busy(box, el('div', { class: 'wk-home wk-board-pad' }, skeletonRows(4)));
-  let bySpace: any = { business: [], product: [], system: [] };
+  let cats: any[] = [];
   let review: any = null;
   try {
-    [bySpace, review] = await Promise.all([knLoadCats(), api('/api/ui/review-queue/summary').catch(() => null)]);
+    [cats, review] = await Promise.all([knLoadCats(), api('/api/ui/review-queue/summary').catch(() => null)]);
   } catch (e) { box.replaceChildren(errorNote(e, '카테고리를 불러오지 못했습니다')); return; }
   const byCat = new Map<string, number>();
   for (const row of ((review && review.by_category) || [])) if (row && row.key) byCat.set(String(row.key), Number(row.n) || 0);
@@ -237,7 +231,7 @@ export async function renderCatsSurface(box: HTMLElement, ctx: any) {
     crumbs: [{ label: 'WIKI' }],
     sub: '분류축 — 어디에 무엇이 얼마나 쌓였나',
     tabs: wkSurfaceTabs('cats'),
-    left: [wkTbPill('전체 ' + SPACES.reduce((n, sk) => n + ((bySpace[sk] || []).length), 0), { active: true, title: '등록된 카테고리 수' })],
+    left: [wkTbPill('전체 ' + cats.length, { active: true, title: '등록된 카테고리 수' })],
     right: [
       wkTbSearch('', '카테고리 찾기…', (q) => { const t = q.trim(); for (const w of Array.from(box.querySelectorAll('.wk-trow-wrap'))) { const el2 = w as HTMLElement; const nm = (el2.textContent || ''); el2.hidden = !!t && !nm.toLowerCase().includes(t.toLowerCase()); } }),
       el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }),
@@ -263,24 +257,24 @@ export async function renderCatsSurface(box: HTMLElement, ctx: any) {
     row.style.gridTemplateColumns = track;
     return el('div', { class: 'pjv-trow-wrap wk-trow-wrap' }, row);
   };
-  let total = 0;
-  for (const sk of SPACES) {
-    const cats = (bySpace[sk] || []).slice().sort((a: any, b: any) => (Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0));
-    if (!cats.length) continue;
-    total += cats.length;
+  //  #1631: 종전엔 스페이스(사업/제품/시스템) 3묶음으로 갈라 그렸다. 그 축이 없어져 **한 묶음**이다 —
+  //   축이 없는데 소제목만 남기면 없는 위계를 화면이 가르친다. 정렬은 문서 많은 축 먼저.
+  const total = cats.length;
+  {
+    const ordered = cats.slice().sort((a: any, b: any) => (Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0));
     const head = el('div', { class: 'pjv-tgroup-head wk-tgroup-head' },
       el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
-      el('span', { class: 'pjv-tgroup-label', text: SPACE_LABEL[sk] }),
-      el('span', { class: 'pjv-tgroup-count', text: String(cats.length) }));
+      el('span', { class: 'pjv-tgroup-label', text: '분류축' }),
+      el('span', { class: 'pjv-tgroup-count', text: String(ordered.length) }));
     const grpBody = el('div', { class: 'pjv-tgroup-body wk-tbody' },
       el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead wk-colhead' },
         el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '카테고리' })),
         ...[['n', '문서'], ['rv', '검토 대기'], ['own', '소유 팀'], ['up', '정의 갱신']].map(([k, label]) =>
           el('div', { class: 'pjv-tcell pjv-colhead pjv-stdcol' + (k === 'own' ? ' wk-col-left' : ''), 'data-col': k }, el('span', { class: 'pjv-thcol-name', text: label }))),
         el('div', { class: 'pjv-tcell pjv-tcell-add' }, el('span', {}))),
-      ...cats.map(rowOf));
+      ...ordered.map(rowOf));
     (grpBody.firstChild as HTMLElement).style.gridTemplateColumns = track;
-    body.append(el('div', { class: 'pjv-tgroup wk-tgroup' }, head, grpBody));
+    if (total) body.append(el('div', { class: 'pjv-tgroup wk-tgroup' }, head, grpBody));
   }
   if (!total) body.append(wkEmpty('아직 카테고리가 없어요 — [맥락 관리 ▸ 분류 ▸ 분류축]에서 만듭니다.'));
   box.replaceChildren(el('div', { class: 'wk-home wk-board-pad' }, el('div', { class: 'card pjv-listboard wk-board' }, header, body)));

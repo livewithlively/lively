@@ -120,7 +120,6 @@ async function assertProjectVisible(rowId: number, ctx?: CapabilityCtx, label = 
 
 // 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 매핑).
 const projectListV6Input = {
-  space: z.string().optional(),
   categoryId: z.number().int().positive().optional(),
   status: z.enum(STATUSES).optional(),
   mine: z.boolean().optional(),
@@ -135,7 +134,7 @@ type ProjectListV6Input = z.infer<z.ZodObject<typeof projectListV6Input>>;
 const projectListV6: Capability = {
   name: "project_list_v6",
   title: "프로젝트 목록(v6)",
-  description: "프로젝트(level=project)를 space/카테고리/status 로 최신순 조회. 보관(아카이브)한 프로젝트는 기본 제외 — archived=include|only 로 본다. 웹 v6 프로젝트 탭 전용.",
+  description: "프로젝트(level=project)를 카테고리/status 로 최신순 조회. 보관(아카이브)한 프로젝트는 기본 제외 — archived=include|only 로 본다. 웹 v6 프로젝트 탭 전용.",
   scope: "memory",
   input: projectListV6Input,
   expose: {
@@ -144,7 +143,6 @@ const projectListV6: Capability = {
       parse: (req) => {
         const query = (req.query ?? {}) as Record<string, unknown>;
         return {
-          space: query.space ? String(query.space) : undefined,
           categoryId: query.category ? Number(query.category) : undefined,
           status: query.status ? String(query.status) : undefined,
           mine: query.mine === "1" || query.mine === "true",
@@ -160,7 +158,7 @@ const projectListV6: Capability = {
     //   이미 필터되고 있었다(webOnly 분기는 도달 불가였다). 이제 웹·MCP 가 한 필드를 공유해 규칙이 하나로 모인다.
     const viewerVis = ctx?.viewer ?? null;
     const projects = await listProjects({
-      space: input.space, categoryId: input.categoryId, status: input.status,
+      categoryId: input.categoryId, status: input.status,
       viewer: input.mine ? (ctx?.actor ?? user?.userId ?? null) : undefined,
       viewerVis,
       archived: input.archived,
@@ -773,7 +771,7 @@ type ProjectSetCategoriesV6Input = z.infer<z.ZodObject<typeof projectSetCategori
 const projectSetCategoriesV6: Capability = {
   name: "project_set_categories_v6",
   title: "프로젝트 카테고리 설정(v6)",
-  description: "프로젝트가 **속한 리스트의 카테고리(도메인, 사업/제품/시스템)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 미분류(리스트 없는) 프로젝트엔 no-op — 먼저 리스트에 넣어야 함. category_list 의 id 참조.",
+  description: "프로젝트가 **속한 리스트의 카테고리(분류축)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 미분류(리스트 없는) 프로젝트엔 no-op — 먼저 리스트에 넣어야 함. category_list 의 id 참조.",
   scope: "memory",
   input: projectSetCategoriesV6Input,
   expose: {

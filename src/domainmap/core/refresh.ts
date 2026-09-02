@@ -184,7 +184,7 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
         });
         tally.deleted++;
         // If a CONFIRMED mapping pointed here, flag an orphan (do NOT delete the mapping).
-        //  V6: mapping.domain_id→category_id, domain→category(space='product'). 매핑은 타깃(code_unit.id)으로
+        //  V6: mapping.domain_id→category_id, domain→category. 매핑은 타깃(code_unit.id)으로
         //  스코프(repo_id 잉여) — 그 code_unit 의 confirmed 매핑이 닿는 category 라벨을 부채 문구에 쓴다.
         const conf = await q(client, `SELECT m.id, c.key domain_key, c.name domain_name
           FROM mapping m JOIN category c ON c.id=m.category_id

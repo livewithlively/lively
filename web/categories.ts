@@ -17,15 +17,15 @@ import { api, busy, el, errorNote, fmtNum, pageHead, toast, uiText } from './cor
 import { skeleton } from './learn.js';
 import { confirmDialog, hasScope } from './admin.js';
 import { copyText } from './ui-primitives.js';
-import { SPACE_SUBS, openCategoryForm } from './category-form.js';
+import { openCategoryForm } from './category-form.js';
 
 // 분류축이 0개인 조직에 줄 착지점(#1618) — AI 에게 맡기는 프롬프트.
 //  스킬 이름을 문장에 박는 이유: 하네스가 그 이름으로 절차(정의 규격·경계 문장·이동 규칙)를 찾아간다.
 //  '확인을 받아'를 넣는 이유: 분류축은 한번 세우면 지식이 그 위에 쌓여서, 말없이 만들어지면 되돌리기가 비싸다.
 const TAXONOMY_PROMPT =
   "우리 조직의 분류체계(카테고리)를 처음부터 세워줘. `lively-taxonomy` 스킬을 따라서 — " +
-  "우리가 무슨 일을 하는지 먼저 파악하고(지식·프로젝트·레포를 훑어), 사업·제품·시스템 아래 " +
-  "하위 분류를 제안해줘. 각 분류에는 범위·포함·경계가 드러나는 정의를 붙이고, " +
+  "우리가 무슨 일을 하는지 먼저 파악하고(지식·프로젝트·레포를 훑어), 우리 일에서 나오는 " +
+  "분류축을 제안해줘. 각 분류에는 범위·포함·경계가 드러나는 정의를 붙이고(정의는 필수야), " +
   "만들기 전에 목록을 보여주고 내 확인을 받아.";
 
 // 어긋남 판정 — 정의(should) 벡터에서 먼 소속 지식이 몇 건인가. 절대 기준이 없으니 보수적으로 잡는다
@@ -77,9 +77,6 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
   }
 
   const reload = () => renderCategoriesInner(view, withHead);
-  const bySpace: Record<string, any[]> = {};
-  for (const s of SPACE_SUBS) bySpace[s.key] = cats.filter((c) => c.space === s.key);
-
   const head = withHead
     ? pageHead('분류체계',
         '지식과 프로젝트를 어떤 갈래로 나눌지 정합니다. 정의가 오래되면 여기서 먼저 드러납니다.', [], '분류체계')
@@ -103,18 +100,17 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
       el('span', { class: 'wikicat-summary-txt', text: '모든 분류에 정의가 있고, 정의에서 크게 벗어난 지식도 없습니다.' })));
   }
 
+  //  #1631: 종전엔 사업/제품/시스템 3묶음으로 갈라 그렸다. 그 축이 없어져 한 묶음이다.
   const list = el('div', { class: 'wikicat' });
-  for (const s of SPACE_SUBS) {
-    const items = bySpace[s.key] || [];
-    const isProduct = s.key === 'product';
+  {
+    const items = cats;
     const groupHead = el('div', { class: 'wikicat-grouphead' },
-      el('span', { class: 'wikicat-grouptitle', text: s.label }),
-      isProduct ? el('span', { class: 'dm-tag', text: '도메인' }) : null,
+      el('span', { class: 'wikicat-grouptitle', text: '분류축' }),
       el('span', { class: 'wikicat-groupcount', text: String(items.length) }));
     if (canEdit) {
       groupHead.append(el('button', {
         class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 추가',
-        onclick: () => openCategoryForm(s.key, null, reload, { repos }),
+        onclick: () => openCategoryForm(null, reload, { repos }),
       }));
     }
 
@@ -122,7 +118,7 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
     if (!items.length) {
       rows.append(el('div', { class: 'wikicat-empty', text: '아직 없습니다.' }));
     } else {
-      for (const c of items) rows.append(categoryRow(c, s.key, { canEdit, teams, repos, reload }));
+      for (const c of items) rows.append(categoryRow(c, { canEdit, teams, repos, reload }));
     }
     list.append(el('div', { class: 'wikicat-group' }, groupHead, rows));
   }
@@ -131,8 +127,7 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
     head,
     canEdit ? null : el('p', { class: 'admin-hint' },
       el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한이 필요합니다.'),
-    // 분류축이 **하나도** 없을 때만 착지점을 준다(#1618). 공간별 '아직 없습니다'는 그대로 둔다 —
-    //  일부 공간이 빈 건 정상이고, 여기서 다루는 건 "아무것도 없어서 시작을 못 하는" 상태다.
+    // 분류축이 **하나도** 없을 때만 착지점을 준다(#1618).
     cats.length === 0 ? emptyTaxonomyCard(canEdit) : null,
     summary,
     list,
@@ -144,9 +139,9 @@ async function renderCategoriesInner(view: any, withHead: boolean) {
  *
  *  왜 특별 취급하나: 분류축이 없으면 들어오는 지식이 전부 미분류가 되고, **미분류 지식은 AI 가 검색해도
  *  안 나온다**(소환 질의가 분류를 타고 조인한다). 즉 지식을 아무리 쌓아도 안 쓰이는 상태인데, 종전 화면은
- *  공간마다 '아직 없습니다' 한 줄만 보여줘서 그 사실도, 무엇을 해야 하는지도 알 수 없었다.
+ *  '아직 없습니다' 한 줄만 보여줘서 그 사실도, 무엇을 해야 하는지도 알 수 없었다.
  *
- *  왜 AI 경로를 1순위로 두나: 처음 세우는 사람에게 "사업·제품·시스템 아래 하위 분류를 만드세요"는 백지다.
+ *  왜 AI 경로를 1순위로 두나: 처음 세우는 사람에게 "우리 분류축을 만드세요"는 백지다.
  *  분류축 설계는 정의 규격·인접 축 경계·이동 규칙이 얽힌 일이라 이미 스킬(lively-taxonomy)로 정리돼 있는데,
  *  그 존재가 웹에서는 전혀 발견되지 않았다. 여기서 프롬프트를 그대로 쥐여준다.
  *  (업종별 템플릿을 심는 대안은 택하지 않았다 — 조직마다 축이 달라서 잘못된 축을 굳힐 위험이 더 크다.)
@@ -179,8 +174,8 @@ function emptyTaxonomyCard(canEdit: boolean) {
   return card;
 }
 
-// 한 행 — 이름·키·오너 팀·정의 한 줄 + 표류 배지 + (제품) 연결 레포. 액션은 hover 시 진해진다(wikicat-row-acts).
-function categoryRow(c: any, space: string, ctx: { canEdit: boolean; teams: any[]; repos: string[]; reload: () => void }) {
+// 한 행 — 이름·키·오너 팀·정의 한 줄 + 표류 배지 + 연결 레포. 액션은 hover 시 진해진다(wikicat-row-acts).
+function categoryRow(c: any, ctx: { canEdit: boolean; teams: any[]; repos: string[]; reload: () => void }) {
   const { canEdit, teams, repos, reload } = ctx;
   const should = (c.should || '').trim();
 
@@ -253,7 +248,7 @@ function categoryRow(c: any, space: string, ctx: { canEdit: boolean; teams: any[
 
   const acts = canEdit ? el('div', { class: 'wikicat-row-acts' },
     el('button', { class: 'btn btn-ghost btn-sm', text: '수정',
-      onclick: () => openCategoryForm(space, c, reload, { repos }) }),
+      onclick: () => openCategoryForm(c, reload, { repos }) }),
     el('button', { class: 'btn btn-ghost btn-sm btn-text-danger', text: '삭제',
       onclick: () => deleteCategory(c, reload) })) : null;
 

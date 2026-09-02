@@ -34,11 +34,6 @@ function scopeConds(m: ManagerRow, params: unknown[], alias = "k"): string[] {
     w.push(`EXISTS (SELECT 1 FROM knowledge_category kc JOIN category c ON c.id=kc.category_id
               WHERE kc.name=${alias}.name AND kc.state<>'rejected' AND c.key = ANY($${params.length}::text[]))`);
   }
-  if (m.match_spaces?.length) {
-    params.push(m.match_spaces);
-    w.push(`EXISTS (SELECT 1 FROM knowledge_category kc2 JOIN category c2 ON c2.id=kc2.category_id
-              WHERE kc2.name=${alias}.name AND kc2.state<>'rejected' AND c2.space = ANY($${params.length}::text[]))`);
-  }
   return w;
 }
 
@@ -208,7 +203,6 @@ export interface CodeDriftCandidate {
 export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Promise<CodeDriftCandidate[]> {
   const params: unknown[] = [];
   const conds: string[] = ["COALESCE(c.should,'') <> ''"];
-  if (m.match_spaces?.length) { params.push(m.match_spaces); conds.push(`c.space = ANY($${params.length}::text[])`); }
   if (m.match_categories?.length) { params.push(m.match_categories); conds.push(`c.key = ANY($${params.length}::text[])`); }
   params.push(limit);
   const limP = `$${params.length}`;

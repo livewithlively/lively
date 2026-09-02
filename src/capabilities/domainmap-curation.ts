@@ -156,7 +156,7 @@ const dmDomainmapView: Capability = {
       },
     }],
   },
-  // v6 컷오버: 소스를 레거시 domain/mapping/debt(레포 스코프)에서 category(space='product') 로 교체.
+  // v6 컷오버: 소스를 레거시 domain/mapping/debt(레포 스코프)에서 category 로 교체(#1631: 전 분류축).
   //  응답 shape 동일(domains/debts/should_changes/is_commit_changes) — 카테고리 탭 제품 도메인맵 + 구 #/domainmap 둘 다 무변경 렌더.
   //  repo 파람은 accept-and-ignore(category 는 repo-free) — back-compat 위해 입력 repo 를 응답 repo 키로 echo.
   //  dmRead 엔벨로프는 유지(읽기 에러를 구 dmGet shape 로 재현). 골든리드 핀 queries.ts 는 무수정 — v6 reader 신규.

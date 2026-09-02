@@ -132,8 +132,8 @@ const whoami: Capability = {
       gatewayUrl().catch(() => null),
     ]);
     const scopes = Array.isArray(user?.scopes) ? user.scopes : [];
-    const cat = (c: { category_id: number; space: string; key: string; name: string | null }) =>
-      ({ id: Number(c.category_id), space: c.space, key: c.key, name: c.name });
+    const cat = (c: { category_id: number; key: string; name: string | null }) =>
+      ({ id: Number(c.category_id), key: c.key, name: c.name });
     // 앱 세션 토큰(#1780 v2.1 R4-M1) — 앱(제3자 코드)에게는 사람의 **외부 시스템 계정·팀·카테고리**를 주지 않는다.
     //  동의한 도구가 0 이어도 whoami 는 배관이라 열려 있으므로, 여기서 축약하지 않으면 동의 모델이 뚫린다.
     //  member_id·이름·이메일·scopes 는 남긴다(앱이 "누구 이름으로 도는가" 를 알아야 on_behalf_of 가 성립).

@@ -108,7 +108,7 @@ export async function syncTaskAssignees(taskId: number, assignees: string[]): Pr
 //   판정은 v6/visibility.ts 로 일원화한다(리스트 자기 설정 ∩ 상위 스페이스 — 상속을 한 곳에서만 계산).
 // archived(#1851): exclude(기본 — 보관한 프로젝트는 평소 목록에서 빠진다) · include(전부) · only(아카이브 화면).
 export type ArchivedFilter = "exclude" | "include" | "only";
-export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string; viewerVis?: Viewer; archived?: ArchivedFilter; trashed?: ArchivedFilter }
+export interface ProjectFilter { categoryId?: number; status?: string; viewer?: string; viewerVis?: Viewer; archived?: ArchivedFilter; trashed?: ArchivedFilter }
 
 // ── 내 할 일(#1232) — 사람 축으로 뒤집은 태스크 조회. ─────────────────────
 //  listProjects 는 `level='project'` 고정이라 "내가 맡은 태스크"를 프로젝트 가로질러 볼 방법이 없었다(프로젝트를
@@ -261,15 +261,11 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
   // 가시 리스트 집합을 **한 번** 계산해 세미조인으로 붙인다(#1291). 행마다 서브쿼리를 평가하는 대신
   //  수십 행짜리 리스트 테이블을 1회 훑는다 — 보드는 프로젝트 수백 행을 한 번에 그리므로 이 차이가 크다.
   const visIds = filter.viewerVis === undefined ? null : await visibleListIds(filter.viewerVis);
-  // 카테고리/스페이스 필터 = 소속 리스트의 카테고리 상속(#541 후속 — project_category 대체). 프로젝트→리스트→카테고리.
-  //  categoryId 우선, 없으면 space 로 카테고리 조인. list_id NULL(미분류) 프로젝트는 카테고리가 없어 자연히 제외.
+  // 카테고리 필터 = 소속 리스트의 카테고리 상속(#541 후속 — project_category 대체). 프로젝트→리스트→카테고리.
+  //  list_id NULL(미분류) 프로젝트는 카테고리가 없어 자연히 제외. (#1631 space 폐기 — 공간으로 좁히기는 함께 사라졌다.)
   if (filter.categoryId != null) {
     params.push(filter.categoryId);
     join = `JOIN project_list plc ON plc.id=p.list_id AND plc.category_id=$${params.length}`;
-  } else if (filter.space) {
-    params.push(filter.space);
-    join = `JOIN project_list plc ON plc.id=p.list_id
-            JOIN category c ON c.id=plc.category_id AND c.space=$${params.length}`;
   }
   const wh: string[] = [`p.level='project'`];
   if (filter.status) { params.push(filter.status); wh.push(`p.status=$${params.length}`); }
@@ -378,7 +374,7 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
   // 카테고리(도메인) — 소속 리스트에서 상속(#541 후속 — 프로젝트 단위 project_category 대체). 리스트 미지정/미분류면 0건.
   //  AGENTS.md 도메인 줄·지식추천·상세 표시가 이 필드를 소비 → 리스트 카테고리만 바꾸면 자동 반영.
   const categories = await q(itemsPool,
-    `SELECT pl.category_id, c.space, c.key, c.name
+    `SELECT pl.category_id, c.key, c.name
      FROM project p JOIN project_list pl ON pl.id=p.list_id JOIN category c ON c.id=pl.category_id
      WHERE p.id=$1`, [id]);
 

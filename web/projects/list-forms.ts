@@ -8,7 +8,6 @@
 //  소비자 import 는 web/projects.ts 배럴 재수출로 무변경(openListForm 은 dashboard-home 도 쓴다).
 import { api, el, toast, visAxisOn } from '../core.js';
 import { overlayBox } from '../learn.js';
-import { SPACE_LABEL } from '../wiki-data.js';
 import { avatarColor, memberPicker, pjvTeamPicker } from './files.js';
 import { compactPicker, pjvPopover } from './popover.js';
 import { pjvLoadStatusTemplates, pjvNormStatusDefs, pjvStatusTemplatesCache } from './status.js';
@@ -20,7 +19,7 @@ function pjvSaveListMembers(id, ids) {
     .catch((e) => toast('리스트 멤버 저장 실패 — ' + e.message, true));
 }
 
-// 리스트 카테고리 단일 선택 필드(#541 후속) — 카테고리는 리스트 소유, 소속 프로젝트가 상속. space 별 그룹 드롭다운.
+// 리스트 카테고리 단일 선택 필드(#541 후속) — 카테고리는 리스트 소유, 소속 프로젝트가 상속.
 //  #1128 — '미분류(카테고리 없음)' 선택지를 없앴다. 리스트는 반드시 카테고리 하나를 이어야 소속 프로젝트가 물려받는다.
 //  빈 값은 '아직 안 고름'(플레이스홀더)일 뿐 저장 가능한 값이 아니다 — 호출부가 저장 전에 ready()/getSelected() 로 막는다.
 function pjvListCategoryField(currentId) {
@@ -33,17 +32,11 @@ function pjvListCategoryField(currentId) {
     let cats: any[] = [];
     try { cats = await api('/api/ui/categories').then((d) => (d && d.categories) || []); } catch (_) { /* 실패 시 loaded=false 유지 → 저장이 현재값 보존 */ return; }
     selectEl.replaceChildren(el('option', { value: '', text: cats.length ? '카테고리를 선택하세요' : '고를 수 있는 카테고리가 없어요' }));
-    const bySpace: any = {};
-    for (const c of cats) (bySpace[c.space] = bySpace[c.space] || []).push(c);
-    for (const sp of ['business', 'product', 'system']) {
-      const list = bySpace[sp]; if (!list || !list.length) continue;
-      const og: any = el('optgroup', { label: SPACE_LABEL[sp] || sp });
-      for (const c of list) {
-        const o: any = el('option', { value: String(c.id), text: c.name || c.key });
-        if (cur === Number(c.id)) o.selected = true;
-        og.append(o);
-      }
-      selectEl.append(og);
+    //  #1631: 종전엔 space(사업/제품/시스템) optgroup 으로 묶었다. 그 축이 없어져 평면 목록이다.
+    for (const c of cats) {
+      const o: any = el('option', { value: String(c.id), text: c.name || c.key });
+      if (cur === Number(c.id)) o.selected = true;
+      selectEl.append(o);
     }
     count = cats.length;
     selectEl.disabled = false;

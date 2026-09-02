@@ -21,7 +21,7 @@ export const classifiersCapabilities: Capability[] = [
     async () => ({ classifiers: await listClassifiers(), coverage: await classifierCoverage() })),
 
   restWork("org_classifier_upsert", "분류기 저장",
-    "분류기를 만들거나 고친다. 스코프(대상·space·유형·출처·기간) · 기준(criteria_md·후보 축 제한) · 확신도 문턱 · 실행(배치·모델·의뢰자)을 정한다. " +
+    "분류기를 만들거나 고친다. 스코프(대상·유형·출처·기간) · 기준(criteria_md·후보 축 제한) · 확신도 문턱 · 실행(배치·모델·의뢰자)을 정한다. " +
     "id 나 key 로 기존 것을 지정하면 수정, 없으면 생성. 기준을 바꿔 이미 판정한 것을 다시 보고 싶으면 reset_seen=true.",
     [{ method: "POST", paths: ["/api/ui/org/classifiers"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -33,7 +33,7 @@ export const classifiersCapabilities: Capability[] = [
         priority: input.priority === undefined ? undefined : Number(input.priority),
         target: input.target === undefined ? undefined : str(input.target, "target", 20),
         confidence_below: input.confidence_below === undefined ? undefined : (input.confidence_below === null ? null : Number(input.confidence_below)),
-        match_spaces: input.match_spaces as never, match_types: input.match_types as never,
+        match_types: input.match_types as never,
         match_provenance: input.match_provenance === undefined ? undefined : (input.match_provenance === null || input.match_provenance === "" ? null : str(input.match_provenance, "match_provenance", 20)),
         match_systems: input.match_systems as never, exclude_names: input.exclude_names as never,
         min_chars: input.min_chars === undefined ? undefined : Number(input.min_chars),
@@ -59,7 +59,6 @@ export const classifiersCapabilities: Capability[] = [
       priority: z.number().int().optional().describe("높을수록 먼저 가져간다. 낮은 값 + 넓은 스코프 = 나머지를 받는 기본 라인"),
       target: z.enum(["unmapped", "low_confidence", "both"]).optional().describe("미분류만 | 낮은 확신도 재분류 | 둘 다"),
       confidence_below: z.number().min(0).max(1).nullable().optional().describe("재분류 기준 확신도(기본 0.8 미만)"),
-      match_spaces: z.array(z.string()).or(z.string()).nullable().optional().describe("space 로 좁힘(business·product·system)"),
       match_types: z.array(z.string()).or(z.string()).nullable().optional().describe("page-type 으로 좁힘(decision·how-to 등)"),
       match_provenance: z.string().nullable().optional().describe("authored(저작) | observed(미러)"),
       match_systems: z.array(z.string()).or(z.string()).nullable().optional().describe("출처 시스템(notion·slack 등)"),

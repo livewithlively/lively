@@ -29,7 +29,7 @@ test("전역 유일 컬럼이 하나라도 있으면 자연키가 아니다 — 
 
 test("전역 유일이 없으면 자연키다 — 두 테넌트가 같은 값을 쓰고 싶어 한다", () => {
   assert.equal(isNaturalKey("knowledge", ["name"], G("task.id")), true);
-  assert.equal(isNaturalKey("category", ["key", "space"], G()), true);
+  assert.equal(isNaturalKey("category", ["key"], G()), true);
 });
 
 // ★★ 여기가 이 파일의 핵심 명제다. "기본값이 있으면 대리키" 는 틀렸다 —

@@ -141,7 +141,6 @@ function editor(c: any | null, reload: () => void) {
   for (const [v, t] of Object.entries(TARGET_LABEL)) targetSel.append(el('option', { value: v, text: t }));
   targetSel.value = c?.target ?? 'unmapped';
 
-  const spacesIn = el('input', { type: 'text', style: S, value: (c?.match_spaces || []).join(', '), placeholder: '비우면 전체 (business, product, system)' }) as HTMLInputElement;
   const systemsIn = el('input', { type: 'text', style: S, value: (c?.match_systems || []).join(', '), placeholder: '비우면 전체 (notion, slack …)' }) as HTMLInputElement;
   const critIn = el('textarea', { style: S + ';min-height:100px;resize:vertical',
     placeholder: '예) 제품 사양·설계 문서는 반드시 해당 도메인으로. 회의록은 주제가 여럿이면 가장 많이 다룬 쪽으로.' }) as HTMLTextAreaElement;
@@ -164,7 +163,7 @@ function editor(c: any | null, reload: () => void) {
         ...(c ? { id: c.id } : {}), key,
         label: labelIn.value.trim() || null, enabled: enabledChk.checked,
         priority: Number(prioIn.value) || 0, target: targetSel.value,
-        match_spaces: spacesIn.value, match_systems: systemsIn.value,
+        match_systems: systemsIn.value,
         criteria_md: critIn.value.trim() || null, candidate_categories: candIn.value,
         confirm_threshold: Number(thIn.value), batch_size: Number(batchIn.value) || 50,
         requester: reqIn.value.trim() || null,
@@ -183,7 +182,6 @@ function editor(c: any | null, reload: () => void) {
     F('이름', '목록에 보일 이름입니다.', labelIn),
     F('우선순위', '높을수록 지식을 먼저 가져갑니다. 낮은 값 + 넓은 범위 = 나머지를 받는 기본 분류기.', prioIn),
     F('무엇을 분류할까', '미분류만 볼지, 이미 붙었지만 확신이 낮은 것도 다시 볼지 정합니다.', targetSel),
-    F('대상 갈래 제한', '이 space 의 지식만 봅니다. 비우면 전체.', spacesIn),
     F('대상 출처 제한', '이 출처에서 온 지식만 봅니다. 비우면 전체.', systemsIn),
     F('분류 기준', '이 팀에서 무엇을 어디에 넣을지 그대로 쓰세요. 이 문장이 AI 의 판단 기준이 됩니다.', critIn),
     F('후보 분류축 제한', '이 축들 중에서만 고르게 합니다. 팀이 자기 갈래 안에서만 분류하게 할 때.', candIn),
