@@ -53,9 +53,11 @@ async function reposPanel(detail, data) {
   detail.replaceChildren(...[
     embeddedHost(detail) ? null : sectionHead('레포(git) · ' + repos.length + '개', '우리 코드 레포를 등록합니다. 여기 등록한 레포로 도메인맵을 만들고, 프로젝트에서 코드 작업을 할 때 내려받습니다.'),
     canEdit ? null : el('p', { class: 'admin-sub', style: 'margin:-4px 0 12px' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요'),
-    (canEdit || state.admin.canEdit) ? el('div', { class: 'admin-actions', style: 'margin:0 0 14px' },
+    //  ⚠ [게이트웨이 git 계정 관리]는 흡수된 자리(#2556 [코드 저장소])에서는 그리지 않는다 — 그 화면은 열쇠를
+    //   [git 인증] 칸에 모아 두고 있어서, 여기서도 그리면 같은 열쇠 창을 여는 버튼이 한 화면에 둘이 된다.
+    (canEdit || (state.admin.canEdit && !embeddedHost(detail))) ? el('div', { class: 'admin-actions', style: 'margin:0 0 14px' },
       canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '+ 레포 추가', onclick: () => openRepoForm(null, reload) }) : null,
-      state.admin.canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정 관리', onclick: () => openGitCredentialManager('gateway') }) : null) : null,
+      (state.admin.canEdit && !embeddedHost(detail)) ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정 관리', onclick: () => openGitCredentialManager('gateway') }) : null) : null,
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, rows)),
   ].filter(Boolean));
 }
