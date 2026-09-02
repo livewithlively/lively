@@ -96,6 +96,7 @@
   "dist/terminal/session-name.js",
   "dist/terminal/session-project.js",
   "dist/terminal/session-runtime-mode.js",
+  "dist/terminal/session-unobserved.js",
   "dist/terminal/sessions.js",
   "dist/terminal/terminal-isolation.js",
   "dist/terminal/terminal-member-fs.js",

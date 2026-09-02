@@ -367,6 +367,18 @@ export async function listAllSessionStates(): Promise<SessionState[]> {
   return r.rows.map(rowToState);
 }
 
+// #2544 — 세션 장부용 최소 열(브로커가 «원한다/은퇴했다» 를 가르는 데 필요한 것만). **superseded 행도 준다** —
+//  listAllSessionStates 는 이어진 행을 빼는데(되살릴 목록이므로), 장부의 소비자는 그 행을 «은퇴했다» 로 읽어야 한다
+//  (빼면 «행 없음» 이 되어 오늘의 합의 경로로 떨어질 뿐이지만, 은퇴를 은퇴라 말할 수 있어야 좀비 사본을 회수한다).
+export interface SessionLedgerRow { id: string; superseded_by: string | null; node_id: string | null }
+export async function listSessionLedgerRows(): Promise<SessionLedgerRow[]> {
+  if (ON_NODE) return [];
+  const r = await itemsPool.query("SELECT id, superseded_by, node_id FROM org_session_state");
+  return r.rows.map((x: Record<string, unknown>) => ({
+    id: String(x.id), superseded_by: (x.superseded_by as string | null) ?? null, node_id: (x.node_id as string | null) ?? null,
+  }));
+}
+
 // 세션 생성/재생성 시 desired-state 미러 upsert(#1059 E). id 충돌 시 전량 갱신 + last_seen=now.
 //  ⚠ best-effort 로 호출된다(createSession 이 실패를 삼킴) — DB 가 죽어도 세션 생성 자체는 진행돼야 한다.
 export async function upsertSessionState(s: SessionStateInput): Promise<void> {
