@@ -8,12 +8,12 @@
 //  판 명령은 box-spawn 이다 — 컨테이너 안 tmux 가 이미 멤버 uid 로 돌므로 sudo 도 spawn 훅도 필요 없고, box-spawn 은
 //  env 계약(deploy/linux/session-env.sh)·cwd·exec 만 한다(셀프호스트 격리와 같은 파일, 같은 계약).
 //
-// ── 켜는 법 — 둘 다 있어야 한다(무회귀) ─────────────────────────────────────
+// ── 켜는 법 — ensure 훅 하나로 갈린다(#2546 4단계에서 글롭 게이트 폐지) ──────────
 //  · LIVELY_SESSION_ENSURE = "<프로그램> … {slug}" — 세션 컨테이너를 미리 확보하는 훅(매니지드: session-ensure-relay.cjs).
-//    표준입력으로 요청 JSON, 표준출력으로 JSON {container, created}. 비-0 은 실패다.
-//  · LIVELY_TMUX_IN_SESSION = 슬러그 글롭 목록("e2e-b-*, acme" · "*") — 어느 테넌트의 **새 세션**이 새 경로인가.
-//  셀프호스트는 둘 다 없어 종전 그대로. 목록 밖 테넌트도 종전 그대로. 기존 세션은 어느 쪽이든 안 바뀐다(태어날 때 정해진다).
-//  ⚠ 호출 시점에 env 를 읽는다(tmuxExecArgv 와 같은 이유 — 모듈 로드 시점 고정은 부팅 순서·테스트에서 깨진다).
+//    표준입력으로 요청 JSON, 표준출력으로 JSON {container, created}. 비-0 은 실패다. **이게 설정된 배포(=매니지드)면
+//    격리 새 세션은 항상 세션 컨테이너 안 tmux 다.** 셀프호스트는 이 훅이 없어 종전(wrapAsMember=box-spawn) 그대로.
+//  · (폐지) LIVELY_TMUX_IN_SESSION — 3단계의 점진 롤아웃 게이트였다. 4단계에서 옛 경로를 없애 게이트할 대상이 없어졌다(이제 무시).
+//  기존 세션은 어느 쪽이든 안 바뀐다(태어날 때 정해진다). ⚠ 호출 시점에 env 를 읽는다(tmuxExecArgv 와 같은 이유).
 //
 // ⚠ 이 모듈은 노드 에이전트 번들에도 실린다(sessions.ts 가 import) — DB·자격 모듈을 끌어오지 않는다.
 import { spawn } from "node:child_process";
@@ -24,20 +24,14 @@ export function sessionEnsureConfigured(env: NodeJS.ProcessEnv = process.env): b
   return !!(env.LIVELY_SESSION_ENSURE || "").trim();
 }
 
-//  글롭은 `*` 하나만 안다 — 나머지는 글자 그대로(`.` 은 정규식이 아니다).
-function globToRe(pattern: string): RegExp {
-  const parts = pattern.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return new RegExp(`^${parts.join(".*")}$`);
-}
-
 /**
  * (순수) 이 테넌트의 **새 세션**이 «자기 세션 컨테이너 안 tmux» 로 뜨나.
- *  훅이 없으면 컨테이너를 먼저 만들 길이 없으니 거짓. 슬러그가 없으면(단일 테넌트 셀프호스트) 거짓 — 목록이 `*` 여도.
+ *  #2546 (4단계) — 옛 경로를 없앴으므로 **매니지드(= ensure 훅 설정)면 항상 참**이다. 슬러그가 없으면(단일 테넌트
+ *  셀프호스트) 거짓 — 훅에 테넌트 컨텍스트를 줄 수 없다. 셀프호스트(훅 없음)도 거짓 → wrapAsMember(box-spawn) 그대로.
+ *  종전의 LIVELY_TMUX_IN_SESSION 글롭 게이트는 폐지했다(게이트할 옛 경로가 없다).
  */
 export function tmuxInSessionContainer(slug: string | null, env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = (env.LIVELY_TMUX_IN_SESSION || "").trim();
-  if (!raw || !slug || !sessionEnsureConfigured(env)) return false;
-  return raw.split(/[,\s]+/).filter(Boolean).some((p) => globToRe(p).test(slug));
+  return !!slug && sessionEnsureConfigured(env);
 }
 
 /**
