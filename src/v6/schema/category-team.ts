@@ -68,9 +68,20 @@ export async function initV6CategoryTeam(pool: Pool): Promise<void> {
     ALTER TABLE category DROP CONSTRAINT IF EXISTS category_space_chk;
     ALTER TABLE category DROP COLUMN IF EXISTS space;
   `);
-  //  유일 인덱스는 보류형 — 위 가르기가 못 푼 중복(merged 경계 등)이 남아도 부팅을 죽이지 않는다.
+  //  ── key 유일 인덱스 ──
+  //  ⚠ **이미 tenant_id 가 붙은 DB 에선 `(key)` 단독으로 만들 수 없다**(dev 실측 2026-09-02):
+  //   워크스페이스 97개가 각자 'ops' 를 쓰므로 전역 유일이 깨져 softUniqueIndex 가 보류하고,
+  //   보류하면 tenant-column 단계가 **재작성할 인덱스 자체를 못 찾아** 영영 안 걸린다(교착).
+  //   그래서 컬럼이 이미 있으면 처음부터 `(tenant_id, key)` 로 만든다 — team_key_uq 가 지금 그 모양이고,
+  //   tenant-column 플래너는 tenant_id 가 든 인덱스를 건너뛰므로(중복 재작성 없음) 멱등하다.
+  //   컬럼이 아직 없는 새 DB 는 종전대로 `(key)` 로 만들고, 같은 부팅의 tenant-column 이 재작성한다.
+  const tenantScoped = ((await pool.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name='category' AND column_name='tenant_id'`)).rowCount ?? 0) > 0;
+  //  보류형 — 위 가르기가 못 푼 중복(merged 경계 등)이 남아도 부팅을 죽이지 않는다.
   await softUniqueIndex(pool,
-    `CREATE UNIQUE INDEX IF NOT EXISTS category_key_uq ON category(key) WHERE state <> 'merged'`,
+    tenantScoped
+      ? `CREATE UNIQUE INDEX IF NOT EXISTS category_key_uq ON category(tenant_id, key) WHERE state <> 'merged'`
+      : `CREATE UNIQUE INDEX IF NOT EXISTS category_key_uq ON category(key) WHERE state <> 'merged'`,
     "category_key_uq 보류(분류축 key 중복)");
 
   // ── 2) category_edge — 도메인間 관계. axis='should'(의도, 수동 저작) | 'is'(코드 import 의존, 스캔 도출). ──

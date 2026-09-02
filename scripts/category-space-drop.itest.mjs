@@ -6,7 +6,8 @@
 //   (softUniqueIndex 가 보류) → 두 축이 같은 이름으로 공존하고 getCategoryByKey 가 아무거나 준다.
 //   그래서 **space 가 있는 옛 스키마를 실제로 만들어 놓고** 마이그레이션을 태운다.
 //
-//  사양·엣지 표: 이 파일 아래 시나리오가 spec 의 ④⑤⑥ 행과 1:1 이다(④ 빈 DB · ⑤ 충돌 2건 · ⑥ 대체 이름도 선점).
+//  사양·엣지 표: 이 파일 아래 시나리오가 spec 의 행과 1:1 이다(④ 빈 DB·멱등 · ⑤ 충돌 2건 · ⑥ 대체 이름도 선점
+//   · ⑦ **이미 다중테넌트인 DB**에서 부팅 — 실제로 dev 에서 밟은 자리다).
 import { execFileSync, execSync } from "node:child_process";
 import assert from "node:assert/strict";
 
@@ -77,7 +78,7 @@ try {
     const idx = (await itemsPool.query(
       `SELECT indexname FROM pg_indexes WHERE tablename='category'`)).rows.map((r) => r.indexname);
     assert.ok(!idx.includes("category_space_key_uq"), "옛 (space,key) 유니크가 남으면 안 된다");
-    assert.ok(idx.includes("category_key_uq"), "key 단독 유니크가 걸려야 한다");
+    assert.ok(idx.includes("category_key_uq"), "key 유일 인덱스가 걸려야 한다");
     const chk = (await itemsPool.query(
       `SELECT 1 FROM pg_constraint WHERE conrelid='category'::regclass AND conname='category_space_chk'`)).rowCount;
     assert.equal(chk, 0, "space CHECK 도 함께 사라져야 한다");
@@ -111,6 +112,35 @@ try {
     const { listCategories } = await import("../dist/v6/category-store.js");
     assert.deepEqual(await listCategories(null), [], "빈 DB 의 목록은 빈 배열");
     ok("④ 분류축이 하나도 없어도 목록이 조용히 빈 배열을 준다");
+  }
+
+  {
+    //  ⑦ ★ 이미 tenant_id 가 붙은 DB(= 두 번째 부팅 이후 · 실 운영의 모든 DB)에서 다시 부팅.
+    //   dev 실측(2026-09-02): 여기서 `(key)` 단독 유니크는 **만들어질 수 없다** — 워크스페이스 97개가
+    //   각자 'ops' 를 쓰므로 전역 유일이 깨진다. 보류하면 tenant-column 이 재작성할 인덱스를 못 찾아
+    //   유일성이 영영 안 걸린다(교착). 그래서 컬럼이 있으면 처음부터 (tenant_id, key) 로 만들어야 한다.
+    //  ⚠ 그냥 다시 부팅하면 이 시험은 **아무것도 안 본다** — 인덱스가 이미 있어 IF NOT EXISTS 가 no-op 이다.
+    //   dev 를 재현하려면 ① 두 워크스페이스가 같은 key 를 쓰고 ② 그 이름의 인덱스가 **없는** 상태에서 부팅해야 한다.
+    //   (dev 가 정확히 그랬다: tenant_id 는 오래전에 붙었고 category_key_uq 는 이번에 새로 도입한 이름이었다.)
+    const A = "11111111-1111-1111-1111-111111111111", B = "22222222-2222-2222-2222-222222222222";
+    const put = (tenant, key) => itemsPool.query(
+      `INSERT INTO category(tenant_id, key, name, status, state) VALUES($1,$2,$2,'confirmed','active')`, [tenant, key]);
+    await put(A, "ops"); await put(B, "ops");
+    await itemsPool.query(`DROP INDEX IF EXISTS category_key_uq`);
+    assert.equal((await itemsPool.query(
+      `SELECT 1 FROM pg_indexes WHERE tablename='category' AND indexname='category_key_uq'`)).rowCount, 0,
+    "배선 확인 — 이 부팅은 인덱스가 **없는** 상태에서 시작해야 한다(있으면 IF NOT EXISTS 가 no-op 이라 아무것도 안 본다)");
+
+    await initAllSchemas();
+
+    const uqDef = (await itemsPool.query(
+      `SELECT indexdef FROM pg_indexes WHERE tablename='category' AND indexname='category_key_uq'`)).rows[0]?.indexdef ?? "";
+    assert.match(uqDef, /\(tenant_id, key\)/,
+      "★ 두 워크스페이스가 같은 key 를 쓰는 DB 에서 (key) 단독으로 만들려 하면 전역 유일이 깨져 보류된다 — "
+      + "보류하면 tenant-column 이 재작성할 인덱스를 못 찾아 유일성이 영영 안 걸린다(dev 실측)");
+    await assert.rejects(() => put(A, "ops"), /duplicate key|unique/i, "같은 테넌트 안에서는 여전히 유일해야 한다");
+    await itemsPool.query(`DELETE FROM category WHERE tenant_id IN ($1,$2)`, [A, B]);
+    ok("⑦ 다중테넌트 DB — 유일 인덱스가 (tenant_id, key) 로 걸리고, 두 워크스페이스가 같은 이름을 쓸 수 있다");
   }
 
   {
