@@ -155,7 +155,7 @@ async function projectOutboundEditor(detail, data) {
   const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: enabled ? '끄기' : '켜기' });
   if (!canEdit) toggle.disabled = true;
   toggle.addEventListener('click', async () => {
-    if (!enabled && !container) { toast('먼저 컨테이너 리스트를 설정하세요 (외부 자료 수집 ▸ ClickUp)', true); return; }
+    if (!enabled && !container) { toast('먼저 수집 설정에서 ClickUp 컨테이너 리스트를 고르세요.', true); return; }
     toggle.disabled = true;
     try {
       await api('/api/ui/cron', { method: 'POST', body: JSON.stringify({ id: 'push-clickup', action: 'connector_push', interval_sec: (pushClickup && pushClickup.interval_sec) || 120, params: { system: 'clickup' }, enabled: !enabled }) });
@@ -167,17 +167,24 @@ async function projectOutboundEditor(detail, data) {
     el('td', {}, el('span', { class: 'pill' + (enabled ? ' pill-ok' : ''), text: enabled ? '켜짐 · 2분마다' : '꺼짐' }), ' ', toggle),
     el('td', {},
       container ? el('span', { class: 'mini-meta', text: '컨테이너 리스트: ' + container }) : el('span', { class: 'pill', text: '⚠ 컨테이너 미설정' }),
-      el('span', { text: '  ' }), el('a', { href: '#/system/connectors', text: '커넥터 설정 →' }))));
+      //  종전 링크는 #/system/connectors 였다 — 그 화면은 #1419 에서 없어졌고 옛 URL 이 리다이렉트로 여기 오고 있었다.
+      //   앱 상세에서도 뜨는 칸이라 한 번 더 튕기지 않게 도착지를 바로 가리킨다.
+      el('span', { text: '  ' }), el('a', { href: '#/context/sources/collectors', text: '수집 설정 열기 →' }))));
 
-  // GitHub Issues · Jira — 아웃바운드 어댑터 미구현.
-  for (const s of ['GitHub Issues', 'Jira']) {
-    table.append(el('tr', {},
-      el('td', {}, el('span', { class: 'mini-title', text: s })),
-      el('td', {}, el('span', { class: 'pill', text: '미구현' })),
-      el('td', {}, el('span', { class: 'mini-meta' }, ...uiText('아웃바운드 어댑터 예정 (#975) — SPI write method + 소스별 매핑')))));
+  // GitHub Issues · Jira — 아웃바운드 어댑터 미구현. **관리 화면에서만** 알린다: 여기는 '어느 도구로 내보낼 수
+  //  있나'를 한눈에 보는 자리라 아직 없는 것도 알 값어치가 있지만, 클릭업 앱 상세(#2556)에서는 남의 앱 이야기다.
+  if (!embeddedHost(detail)) {
+    for (const s of ['GitHub Issues', 'Jira']) {
+      table.append(el('tr', {},
+        el('td', {}, el('span', { class: 'mini-title', text: s })),
+        el('td', {}, el('span', { class: 'pill', text: '아직 없음' })),
+        el('td', {}, el('span', { class: 'mini-meta' }, ...uiText('내보내기를 아직 만들지 않았습니다(#975).')))));
+    }
   }
   body.append(table);
-  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px' }, ...uiText('반대 방향(외부의 것을 우리 자료함으로 가져오기)과 토큰·리스트 설정은 [가져올 자료 정하기]에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.')));
+  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px' }, ...uiText(embeddedHost(detail)
+    ? '반대 방향(ClickUp의 것을 우리 자료함으로 가져오기)은 위 [가져올 자료 정하기]에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.'
+    : '반대 방향(외부의 것을 우리 자료함으로 가져오기)과 토큰·리스트 설정은 [맥락 관리 ▸ 수집]에 있습니다. 여기서는 내보내기를 켜고 끄기만 합니다.')));
 
   detail.replaceChildren(...head(), el('div', { class: 'card' }, cardHead('내보내는 항목'), body));
 }
