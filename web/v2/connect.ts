@@ -385,6 +385,11 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     el('span', { text: st === 'on'
       ? '처음 설정이나 다른 화면에서 시작하셨다면 이 탭은 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
       : '아래 [내 계정으로 직접 사용] 스위치로 한 번 더 해 보세요.' })) : null;
+  //  #2243 — 카탈로그에서 **내려 둔** 앱(LOGIN_SERVICES.hidden). 목록엔 없고 주소로만 들어온다 — 그 사실을 화면이 먼저 말한다.
+  //   행을 지우지 않는 이유는 me-logins.ts 표 머리말에: 이미 등록한 토큰(헤드리스 크론이 그걸로 돈다)의 관리 창구를 없애면 안 된다.
+  const hiddenNote = (svc as any).hidden ? el('div', { class: 'cn-arrived off' },
+    el('b', { text: '이 앱은 지금 외부 앱 목록에 내밀지 않아요. ' }),
+    el('span', { text: '이 주소로만 들어올 수 있어요. 등록해 둔 토큰이 있으면 여기서 그대로 교체·해제할 수 있습니다.' })) : null;
 
   // ── 해제 — 두 얼굴을 한 번에. 잃는 것만 말한다(#1582). ──
   const disconnect = async (): Promise<void> => {
@@ -524,6 +529,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
 
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
     backLink(),
+    ...(hiddenNote ? [hiddenNote] : []),
     ...(arrived ? [arrived] : []),
     el('div', { class: 'cn-head' }, svcTile(svc.key, svc.label, st === 'on'),
       el('div', { class: 'cn-head-tt' }, el('h1', { class: 'v2-title', text: svc.label }),
