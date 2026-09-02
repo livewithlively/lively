@@ -20,7 +20,7 @@ import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 �
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { renderArchive, renderTrash } from './bins.js';   // #1851 — 아카이브(#/archive) · 휴지통(#/trash) 화면
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
-import { renderConnect, renderConnectApp } from './connect.js';
+import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
 import { createTimeline, type TimelineHandle } from '../timeline.js';
@@ -839,7 +839,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'sources') return { title: segs[1] ? (routeTitleHint.get(key) || '자료') : '자료', noAside: true };
   if (p === 'archive') return { title: '아카이브', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
   if (p === 'trash') return { title: '휴지통', noAside: false };
-  if (p === 'connect') return { title: segs[1] ? '앱 연결' : '외부 앱 연결', noAside: true };
+  if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
   if (p === 'liv') return { title: '리브', noAside: true };
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
   // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
@@ -1040,7 +1040,11 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       markActive('connect');
       tab.aside.replaceChildren();
       // 목록과 앱 상세는 같은 라우트의 두 깊이 — seq 로 늦은 응답을 버린다(빠르게 오가면 옛 화면이 덮는다).
-      if (segs[1]) await renderConnectApp(tab.center, decodeURIComponent(segs[1]));
+      //  #2556 — 밑줄로 시작하는 두 자리(_git·_db)는 앱이 아니라 «코드와 데이터»다. 앱 키가 될 수 없는 모양이라
+      //   언젠가 같은 이름의 커넥터가 생겨도 서로 가리지 않는다.
+      const seg1 = segs[1] ? decodeURIComponent(segs[1]) : '';
+      if (seg1 === '_git' || seg1 === '_db') await renderConnectData(tab.center, seg1);
+      else if (seg1) await renderConnectApp(tab.center, seg1);
       else await renderConnect(tab.center);
       if (seq !== tab.seq) return;
     } else if (page === 'liv') {
