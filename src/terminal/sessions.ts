@@ -27,8 +27,9 @@ import { assertDiskWritable } from "../ops/disk-guard.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
+import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessionContainerViaRelay } from "./session-tmux.js";   // #2545 — 새 세션은 자기 세션 컨테이너 안 tmux(3단계)
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
-import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, type SessionState } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir, memberWriteFile, memberShOut } from "./terminal-member-fs.js";
 import os from "node:os";
 import path from "node:path";
@@ -555,6 +556,25 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         : harnessLaunchArgv(harness.key, cmd);
 
   const invites = await validInvites(input.invites, ownerId(user));
+  // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식. 근거는 아래 tmux(args) 뒤 주석).
+  //  #2545 — 선언을 여기로 올렸다: 새 경로는 desired 행을 new-session **전**에 쓴다(생성 순서 역전). 값은 종전과 같다.
+  const label = cleanLabel(input.label) || cleanLabel(sessionNameFromPrompt(input.initialPrompt || "")) || id;
+  const labelSource: LabelSource = cleanLabel(input.label) ? "human" : (label === id ? "id" : "rule");
+  const createdSec = Math.floor(Date.now() / 1000);
+  //  desired-state 행(#1059 E) — 두 자리에서 쓴다(새 경로: 컨테이너 확보 전 · 옛 경로: 종전대로 생성 뒤). 한 벌로 둔다.
+  const desiredRow = (): SessionStateInput => ({
+    id, owner: ownerId(user), label, harness: harness.key, dir: target,
+    root_key: rootKeyUsed || null, subpath: subpathUsed || null,   // 복원은 사용자가 고른 같은 workspace 좌표로 돌아간다.
+    flags: appliedFlags, auto_approve: !!input.autoApprove, invites,
+    project_id: input.projectId || null, project_src: input.projectId ? (input.projectSrc === "org" ? "org" : "v6") : null,
+    read_only: !!input.readOnly, incognito: !!input.incognito,
+    write_vis: input.writeVis ?? null, restrict_read: !!input.restrictRead,
+    app_id: input.appId || null,   // #1780 D4 — 앱 세션 desired-state 미러(복원이 앱 축을 잃지 않게)
+    kind: input.kind,               // #2162 — 종류는 태어날 때 정해진다(복원이 되살린다)
+    label_source: labelSource,     // #1979 — 이름 걸쇠. INSERT 때만 정해진다(복원은 저장된 출처를 유지)
+    created: createdSec, last_busy: null,
+  });
+  let mirrored = false;   // #2545 — 새 경로가 행을 먼저 썼나(뒤쪽 미러를 건너뛰고, 실패하면 지운다)
   const args = ["new-session", "-d", "-s", id];
   // 한글(멀티바이트) 편집 정상화 — pane 에 UTF-8 로케일 주입(#633). 세션스코프 -e 라 전역/타세션 누수 없음.
   //  격리(box-spawn=sudo)·비격리 두 분기 공통으로 먼저 넣는다(sudo 기본 env_keep 이 LANG/LC_* 를 보존). 근거는 PANE_LOCALE 주석.
@@ -595,10 +615,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  공유 게이트웨이에서는 그 env 가 전역이라 테넌트를 구분할 수 없다 — 세션스코프 -e 가 유일한 통로다.
   //  단일 테넌트 배포에서는 컨텍스트가 없어 **아무것도 안 넣는다**(무회귀).
   //  ⚠ 이 값이 없는데 훅이 테넌트별 소켓을 기대하면 훅이 실패해야 한다(조용한 폴백 금지) — 그건 훅 쪽 계약이다.
-  {
-    const slug = tenantSlug();
-    if (slug) args.push("-e", `LVLY_TENANT_SLUG=${slug}`);
-  }
+  const slug = tenantSlug();
+  if (slug) args.push("-e", `LVLY_TENANT_SLUG=${slug}`);
+  //  #2545 (3단계) — 이 세션이 **자기 세션 컨테이너 안 tmux** 로 뜨나. 격리(osUser)이고, ensure 훅과 슬러그 목록이 이 테넌트를
+  //   가리킬 때만이다. 기존 세션은 안 바뀐다(태어날 때 정해진다) — 옛 경로는 아래 else(wrapAsMember) 그대로다.
+  const inside = !!osUser && tmuxInSessionContainer(slug);
   // 실행 모드 세션(#1007+) — 이 pane 의 하네스만 그 모드로. MCP 헤더 `x-lively-mode: ${LIVELY_MODE:-}` 가 이 env 를 확장해
   //  게이트웨이가 이 세션의 요청에만 모드를 강제한다(readonly=쓰기 툴 소거 · incognito=lively 전체 차단). **per-session env 라 동시 실행 세션 중 이것만, 나머지는 정상**(사용자 요구).
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 동일 성질).
@@ -619,7 +640,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       enabled: sp.shared_cache_enabled,
       relocateHome: sp.shared_cache_relocate_home,
     });
-    for (const [k, v] of Object.entries(cacheEnv)) args.push("-e", `${k}=${v}`);
+    //  #2545 — 새 경로(세션 컨테이너 안 tmux)엔 싣지 않는다: 이 값의 경로는 게이트웨이 뷰라 세션 컨테이너에 없고, 옛 경로에서도
+    //   세션 spawn 훅(container-spawn.sh)이 이 값을 하네스에 넘기지 않았다 — 하네스가 보는 env 를 그대로 둔다.
+    if (!inside) for (const [k, v] of Object.entries(cacheEnv)) args.push("-e", `${k}=${v}`);
   } catch (err) {
     // 정책을 못 읽어도 세션 생성을 막지 않는다 — 캐시 공유는 최적화지 필수 기능이 아니다.
     console.warn(`[terminal] 공유 캐시 env 주입 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
@@ -643,9 +666,35 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     } catch (err) {
       console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
     }
-    // ★ session: true — 여기가 **유일한 세션 spawn** 이다. 파일 브리지 호출들과 구별되어야
-    //  세션 spawn 훅(LIVELY_SESSION_SPAWN)이 그쪽까지 가로채지 않는다(terminal-isolation 헤더 참조).
-    args.push(...wrapAsMember(osUser, launch, target, cg, { session: true }));
+    if (inside) {
+      // ── #2545 (3단계) 새 경로 — 생성 순서 역전: ① DB desired 행 → ② 브로커에 세션 컨테이너 → ③ 그 안에서 tmux ──
+      //  종전엔 판(pane)이 먼저 뜨고 그 안의 spawn 훅이 컨테이너를 요청했다(닭과 달걀 — PTY 두 겹·dtach·exec 한 홉의 뿌리).
+      //  ① 행을 먼저 쓴다 — 브로커 장부(#2544)가 이 세션을 처음부터 «원한다» 로 보게(회수 ② 가 새 컨테이너를 고아로 오판하지 않게).
+      //   best-effort 는 종전과 같다(DB 가 죽어도 세션은 뜬다). 상시세션(managed)은 종전대로 행이 없다(#1059 E).
+      if (input.kind !== "managed") {
+        try { await upsertSessionState(desiredRow()); mirrored = true; }
+        catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
+      }
+      //  ② 컨테이너 — ensure 훅(매니지드: 브로커 /lvly/session/ensure). 실패는 **실패다**: 방금 쓴 행을 지우고 503.
+      //   옛 경로로 조용히 접지 않는다(옛 판/새 판이 섞인 반쪽 상태가 가장 나쁘다 — tmux-relocation-plan 규율 1).
+      try {
+        await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
+          sessionId: id, osUser, cwd: target,
+          memMb: cg?.maxMb && cg.maxMb > 0 ? cg.maxMb : (cg?.highMb ?? 0),   // container-spawn.sh 와 같은 셈(max 없으면 high, 0 = 브로커 기본)
+          memRequestMb: cg?.requestMb ?? 0,
+          tmux: "inside",
+        });
+      } catch (e) {
+        if (mirrored) await deleteSessionState(id).catch(() => undefined);
+        throw new HttpError(503, `세션 컨테이너를 확보하지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
+      }
+      //  ③ 판 명령 — 컨테이너 안 tmux 가 멤버 uid 로 돌므로 sudo 도 spawn 훅도 없다. box-spawn 이 env 계약·cwd·exec 만 한다.
+      args.push(...sessionPaneArgv(target, launch));
+    } else {
+      // ★ session: true — 여기가 **유일한 세션 spawn** 이다. 파일 브리지 호출들과 구별되어야
+      //  세션 spawn 훅(LIVELY_SESSION_SPAWN)이 그쪽까지 가로채지 않는다(terminal-isolation 헤더 참조).
+      args.push(...wrapAsMember(osUser, launch, target, cg, { session: true }));
+    }
   } else {
     args.push("-c", target);
     // 멀티프로필(#346·#1014): 비격리 경로에서도 **항상 이 멤버 전용 CLAUDE_CONFIG_DIR** 을 준다(공유 폴백 폐기).
@@ -725,16 +774,21 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       };
     await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);
   }
-  await tmux(args);
+  try { await tmux(args); }
+  catch (e) {
+    //  #2545 — 새 경로는 행을 먼저 썼다. 판이 안 떴으면 지운다(안 지우면 화면에 유령 «중단됨» 이 뜬다). 컨테이너는 브로커 ①(유휴)이 거둔다.
+    if (inside && mirrored) await deleteSessionState(id).catch(() => undefined);
+    throw e;
+  }
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
   //  화면은 그때 pane 제목·중앙 기록 첫 지시로 이름 자리를 채우고, 대화가 시작되면 session-autoname 이 진짜 이름을 박는다).
   //  ⚠ 여기에 '프로젝트명'은 없다 — 한 프로젝트 아래 세션이 전부 같은 이름이 되던 뿌리였다(실측 71%).
-  const label = cleanLabel(input.label) || cleanLabel(sessionNameFromPrompt(input.initialPrompt || "")) || id;
+  //  (label 선언은 위로 올렸다 — #2545. 값·규칙은 그대로다.)
   // #1979 — 이름 옆에 **누가 지었나**를 같이 남긴다. 이게 "한 번만 짓고 고정"의 걸쇠다(session-label-source.ts).
   //  사람이 준 이름 = human(에이전트가 못 덮는다) · 첫 지시 규칙 이름 = rule(에이전트가 한 번 다듬는다) · id = 아직 이름 없음.
   //  ⚠ 복원(restore)도 이 함수를 타지만 그때는 이 값이 무시된다 — upsert 의 ON CONFLICT 가 label_source 를
   //   손대지 않는다(안 그러면 복원 한 번에 걸쇠가 풀린다. 근거는 session-state.ts 의 그 주석).
-  const labelSource: LabelSource = cleanLabel(input.label) ? "human" : (label === id ? "id" : "rule");
+  //  (labelSource 선언도 위로 — #2545.)
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
@@ -788,27 +842,16 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
-  const createdSec = Math.floor(Date.now() / 1000);
   // 세션 desired-state DB 미러(#1059 E) — 재부팅(tmux 사망)에도 복원 가능한 목록으로 남긴다. tmux @box_* 와 같은 값을 미러.
   //  ⚠ best-effort: DB 가 죽어도 세션 생성은 이미 끝났다(위 tmux new-session) — upsert 실패로 세션을 되돌리지 않는다.
   //  managed(상시) 세션은 skip — keep-alive(ensureAllManagedSessions)가 그 영속을 소유하므로 restorable 로 이중화하면
   //   재부팅 후 keep-alive 재생성과 사용자 수동복원이 충돌한다(#1059 E 설계).
   // #2162 — 종전 `input.managed` 불리언 대신 kind 를 본다(신호 이원화 제거). 상시 세션은 keep-alive 가
   //  영속을 소유하므로 desired-state 미러를 만들지 않는다(#1059 E) — 판정 근거만 바뀌고 동작은 같다.
-  if (input.kind !== "managed") {
+  //  #2545 — 새 경로는 이미 썼다(mirrored). 옛 경로는 종전대로 여기서 쓴다(값은 desiredRow 한 벌).
+  if (input.kind !== "managed" && !mirrored) {
     try {
-      await upsertSessionState({
-        id, owner: ownerId(user), label, harness: harness.key, dir: target,
-        root_key: rootKeyUsed || null, subpath: subpathUsed || null,   // 복원은 사용자가 고른 같은 workspace 좌표로 돌아간다.
-        flags: appliedFlags, auto_approve: !!input.autoApprove, invites,
-        project_id: input.projectId || null, project_src: input.projectId ? (input.projectSrc === "org" ? "org" : "v6") : null,
-        read_only: !!input.readOnly, incognito: !!input.incognito,
-        write_vis: input.writeVis ?? null, restrict_read: !!input.restrictRead,
-        app_id: input.appId || null,   // #1780 D4 — 앱 세션 desired-state 미러(복원이 앱 축을 잃지 않게)
-        kind: input.kind,               // #2162 — 종류는 태어날 때 정해진다(복원이 되살린다)
-        label_source: labelSource,     // #1979 — 이름 걸쇠. INSERT 때만 정해진다(복원은 저장된 출처를 유지)
-        created: createdSec, last_busy: null,
-      });
+      await upsertSessionState(desiredRow());
     } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
   }
   // 이름을 **AI 가 다시 짓는 일은 여기서 하지 않는다**(#1979 — 발의 윤상민 2026-08-25).
