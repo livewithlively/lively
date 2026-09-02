@@ -5,7 +5,7 @@
 //  import 방향: main → 각 탭 모듈(단방향). **역으로 어떤 모듈도 main 을 import 하지 않는다** — 그러면
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
-import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, personName, profileAvatar, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, logout, markSecretInput, navOn, personName, profileAvatar, showGate, state } from './core.js';
 import { claimLocalOwner } from './lib/local-owner.js';   // #2460 — 이 브라우저의 기억은 누구 것인가(사람 축)
 import { watchStaleShell } from './gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
@@ -383,17 +383,12 @@ async function boot() {
   route();
 }
 
-// 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트.
+// 로그아웃 — core.logout 한 문으로(#2536). 종전엔 여기 별도 경로(세션 회수 → 게이트)가 있어, 매니지드에서 CP 세션을 남기는
+//  그 경로가 클래식 셸에만 남아 있었다. 문이 둘이면 하나만 고쳐진다.
 (() => {
   const btn = document.getElementById('logout-btn');
   if (!btn) return;
-  btn.addEventListener('click', async () => {
-    try { await fetch(apiUrl('/api/ui/logout'), { method: 'POST' }); } catch (_) { /* noop */ }
-    localStorage.removeItem(TOKEN_KEY);
-    state.me = null;
-    btn.hidden = true;
-    showGate('로그아웃되었습니다.');
-  });
+  btn.addEventListener('click', () => { void logout(); });
 })();
 // 내 프로필 — 우측 상단 본인 표시(버튼) 클릭 시 '내 정보' 팝업 열기(#762). 관리 페이지로 이동하지 않는다.
 //  (내 정보 편집을 관리에서 분리 — 관리엔 me-profile 섹션이 더는 없다. 팝업이 유일한 진입점.)

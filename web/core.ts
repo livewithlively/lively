@@ -21,26 +21,40 @@
 // 토큰·API 베이스·fetch 는 leaf 모듈 web/lib/net.ts 소관(R29a). 401 처리기 배선은 main.ts 최상단(setUnauthorizedHandler).
 import { TOKEN_KEY, apiUrl } from './lib/net.js';
 import { state } from './lib/state.js';
+import { logoutRedirectTarget } from './lib/logout-target.js';   // #2536 — 매니지드 로그아웃은 CP 세션까지 끝내야 한다
+
+// ── 매니지드 배포의 CP 주소(auth-config.login_redirect_url) — 없으면(셀프호스팅) null, 같은 호스트면 null(자기에게 튕기는 루프 방지).
+//  1회만 조회·캐시. 게이트(자동 SSO 재입장)와 로그아웃(CP 세션까지 끝내기, #2536)이 **같은 값**을 본다 — 두 자리가 따로 물으면 갈린다.
+let loginRedirectP: Promise<string | null> | null = null;
+function loginRedirectUrl(): Promise<string | null> {
+  if (!loginRedirectP) {
+    loginRedirectP = fetch('/api/ui/auth-config').then((r) => r.ok ? r.json() : null).then((c) => {
+      const u = c && typeof c.login_redirect_url === 'string' ? c.login_redirect_url : '';
+      if (!u) return null;
+      const target = new URL(u, location.href);
+      return target.host === location.host ? null : target.toString();
+    }).catch(() => null);
+  }
+  return loginRedirectP;
+}
 
 // ── 토큰 게이트 ──
 let gateRedirectChecked = false;
 function showGate(message?: any) {
   // 매니지드 배포: 이 화면 대신 CP 로 — 자체 로그인은 셀프호스팅용이라 여기선 막다른 길이다(#1437).
-  //  실패·null 이면 종전 게이트 그대로(셀프호스팅 무영향). 1회만 조회.
+  //  실패·null 이면 종전 게이트 그대로(셀프호스팅 무영향). 1회만.
   if (!gateRedirectChecked) {
     gateRedirectChecked = true;
-    fetch('/api/ui/auth-config').then((r) => r.ok ? r.json() : null).then((c) => {
-      const u = c && typeof c.login_redirect_url === 'string' ? c.login_redirect_url : '';
+    void loginRedirectUrl().then((u) => {
       if (!u) return;
-      const target = new URL(u, location.href);
-      if (target.host === location.host) return;
+      const target = new URL(u);
       // 돌아올 자리를 함께 보낸다(#1771) — CLI/데스크톱 디바이스 승인(#/activate?code=…)처럼 **해시에 상태가 있는**
       //  화면에서 게이트를 만나면, CP 로 튕기는 순간 그 해시가 사라져 승인 화면으로 못 돌아온다.
       //  CP 는 이 값의 호스트가 자기 테넌트 도메인인지 검증하고 SSO 입장 뒤 같은 자리로 돌려보낸다(열린 리다이렉트 아님).
       //  구 CP 는 모르는 쿼리를 무시하므로 붙여도 무해하다.
       target.searchParams.set('to', location.href);
       location.replace(target.toString());
-    }).catch(() => {});
+    });
   }
   document.getElementById('app')!.hidden = true;
   const gate = document.getElementById('gate')!;
@@ -64,6 +78,11 @@ async function logout(message?: any) {
   localStorage.removeItem(TOKEN_KEY);
   state.me = null;
   const lb = document.getElementById('logout-btn'); if (lb) (lb as any).hidden = true;
+  // 매니지드(#2536): 여기서 게이트를 띄우면 게이트가 CP 로 튕기고, CP 는 살아 있는 자기 세션으로 곧장 재입장시킨다 —
+  //  «로그인 창 1~2초 뒤 자동 재로그인». 로그아웃은 CP 의 로그아웃 문으로 **최상위 이동**해 CP 세션까지 끝낸다
+  //  (돌아올 자리 to 동봉 — 재로그인하면 같은 자리). 셀프호스팅·CP 없음·조회 실패면 종전 게이트.
+  const door = logoutRedirectTarget(await loginRedirectUrl(), location.href);
+  if (door) { location.replace(door); return; }
   showGate(message || '로그아웃되었습니다.');
 }
 
