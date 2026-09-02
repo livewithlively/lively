@@ -100,14 +100,19 @@ const categoryCreateInput = {
   key: z.string().transform((s) => s.trim().toLowerCase()).pipe(z.string().regex(KEY_RE, "key 는 소문자 슬러그(a-z0-9_-, 64자 이내)여야 합니다")),
   name: z.string().min(1).max(200),
   description: z.string().max(4000).optional(),
-  should: z.string().max(8000).optional(),
+  //  ★ 정의(should)는 **필수**다(#1631 실측). 정의 없이 만들어진 축은 이름만 남아, 분류·소환이
+  //   그 이름의 어감으로만 판정하게 된다 — 실측에서 한 워크스페이스는 축 3개가 전부 정의 0자였고
+  //   다른 워크스페이스는 81~114자였다. 같은 코드가 같은 일을 두 가지로 하면 그건 규정이 빈 자리다.
+  //   40자 하한은 «한 문장은 쓰게» 하는 최소치일 뿐이고, 권장 분량은 아래 설명에 적는다.
+  should: z.string().trim().min(40, "정의(should)를 40자 이상 적어 주세요 — 이 축이 무엇을 담고 무엇을 담지 않는지가 있어야 분류가 됩니다").max(8000),
   cross_cutting: z.boolean().optional(),
 };
 type CategoryCreateInput = z.infer<z.ZodObject<typeof categoryCreateInput>>;
 const categoryCreate: Capability = {
   name: "category_create",
   title: "카테고리 생성",
-  description: "space(사업/제품/시스템) 하위에 카테고리를 만든다. 제품이면 도메인(is/debt 추적 대상).",
+  description: "카테고리(분류축)를 만든다. **should(정의)가 필수** — 이 축이 무엇을 담고 무엇을 담지 않는지, 인접 축과의 경계를 400~600자로 적는다(하한 40자). "
+    + "정의가 없으면 분류·소환이 축 이름의 어감으로만 판정한다.",
   scope: "context",
   input: categoryCreateInput,
   expose: {
@@ -120,10 +125,12 @@ const categoryCreate: Capability = {
         if (!KEY_RE.test(key)) throw new HttpError(400, "key 는 소문자 슬러그(a-z0-9_-, 64자 이내)여야 합니다");
         const name = String(b.name ?? "").trim();
         if (!name) throw new HttpError(400, "name 이 필요합니다");
+        const should = String(b.should ?? "").trim();
+        if (should.length < 40) throw new HttpError(400, "정의(should)를 40자 이상 적어 주세요 — 이 축이 무엇을 담고 무엇을 담지 않는지가 있어야 분류가 됩니다");
         return {
           space, key, name,
           description: b.description ? String(b.description) : undefined,
-          should: b.should ? String(b.should) : undefined,
+          should,
           cross_cutting: b.cross_cutting === true || undefined,
         };
       } }],

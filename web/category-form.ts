@@ -66,7 +66,9 @@ function openCategoryForm(space, existing, reload, opts) {
   const back = overlayBox(editing ? '분류 수정' : ('새 분류 · ' + (SPACE_LABEL[space] || space)),
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '키' }), keyIn),
-    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '정의·범위·규칙 (should)' }), shouldIn),
+    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '정의 — 무엇을 담고 무엇을 담지 않나 (필수)' }), shouldIn,
+      el('p', { class: 'admin-hint', style: 'margin:6px 0 0' },
+        '이 분류로 무엇이 들어오고 무엇은 옆 분류로 가는지 적어 주세요. 이 글이 없으면 분류가 이름의 어감으로만 판정합니다. 400~600자 권장.')),
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn),
     repoField,
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
@@ -87,8 +89,15 @@ function openCategoryForm(space, existing, reload, opts) {
       } else {
         const key = (keyIn.value.trim() || slugifyKey(name));
         if (!key) { saveBtn.disabled = false; keyIn.focus(); toast('키를 입력하세요(이름에 영문이 없으면 자동 생성이 안 됩니다)', true); return; }
+        //  정의는 **만들 때 필수**다(#1631) — 서버도 40자 하한으로 막지만, 여기서 먼저 막아야
+        //   사람이 «왜 실패했는지» 를 그 칸 옆에서 안다(서버 오류 토스트는 어느 칸인지 안 알려 준다).
+        if (shouldIn.value.trim().length < 40) {
+          saveBtn.disabled = false; shouldIn.focus();
+          toast('정의를 40자 이상 적어 주세요 — 무엇을 담고 무엇을 담지 않는지가 있어야 분류가 됩니다', true);
+          return;
+        }
         const r = await api('/api/ui/categories', { method: 'POST', body: JSON.stringify({
-          space, key, name, should: shouldIn.value.trim() || undefined, description: descIn.value.trim() || undefined,
+          space, key, name, should: shouldIn.value.trim(), description: descIn.value.trim() || undefined,
         }) });
         // 레포는 생성 응답의 id 로 이어 저장. id 를 못 받으면(응답 형태 변화) 분류 생성 자체는 성공했으므로
         //  실패로 되돌리지 않고 레포만 건너뛴다 — 사용자는 [수정]에서 다시 지정할 수 있다.

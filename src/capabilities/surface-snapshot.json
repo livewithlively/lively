@@ -2186,7 +2186,7 @@
   "rest": [
    "POST /api/ui/categories"
   ],
-  "input_hash": "bee986d6e21cabcc"
+  "input_hash": "14ed1bd2ed76c1e3"
  },
  {
   "name": "category_update",
