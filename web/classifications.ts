@@ -246,7 +246,8 @@ function openReclassifyPicker(anchor: HTMLElement, it: ClsItem, drop: (k: string
   const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
   pop.append(el('div', { class: 'kn-metapop-note', text: '불러오는 중…' }));
   api('/api/ui/categories').then((d: any) => {
-    const cats = (d && d.categories) || [];
+    //  #1631: 재분류 후보도 활성 축만.
+    const cats = ((d && d.categories) || []).filter((c: any) => (c.state ?? 'active') === 'active');
     const parts: any[] = [];
     for (const c of cats) {
       const on = Number(c.id) === it.categoryId;   // 현재 제안 = 이미 걸린 카테고리

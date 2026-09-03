@@ -6,16 +6,25 @@
 //  설계는 옳았고(성공을 가장하지 않는다), 빠진 것은 **사유**였다.
 //
 // ★ 이 파일이 잠그는 핵심: **실패한 `[]` 와 성공적으로 해제한 `[]` 는 겉모습이 같다.**
-//   그 둘을 가르는 유일한 값이 `applied` 다(E1 ↔ E3). 그게 없으면 호출자는 영원히 구분하지 못한다.
+//   그 둘을 가르는 유일한 값이 `applied` 다(E4 ↔ E3). 그게 없으면 호출자는 영원히 구분하지 못한다.
+//
+// ⚠ 2026-09-03(#1631) 계약 변경 — **카테고리를 정하면 자리를 만들어 준다.** 종전 E1(리스트 없음 + 축 지정)은
+//  «말하는 no-op» 이었는데, 그건 사유를 말할 뿐 여전히 **막다른 길**이었다: 세션이 자동 생성하는 프로젝트는
+//  리스트 없이 태어나고 리스트를 정해 주는 경로가 없어서, 실측(dev 페르소나 2명) 프로젝트 7개 중 카테고리가
+//  붙은 것이 0이었다. 이제 그 축을 소유한 리스트를 찾고(형제와 공유), 없으면 만든다.
+//  **해제(빈 배열)는 여전히 자리를 만들지 않는다** — 없는 것을 지우려고 자리를 만들 이유가 없다(E4 유지).
 //
 // ── 입력 조합 × 기대 (엣지 표 — 행마다 테스트 ≥1) ─────────────────────────────
 // #  | 소속 리스트 | 입력 categoryIds | 기대
-// E1 | 없음        | [55]             | applied=false · reason="no_list" · categoryIds=[] · listId=null
+// E1 | 없음        | [55]             | 그 축의 리스트에 넣는다 → applied=true · categoryIds=[55] (계약 변경)
 // E2 | 있음        | [55]             | applied=true · reason=null · categoryIds=[55] · UPDATE 1건
-// E3 | 있음        | [] (해제)        | applied=true · categoryIds=[]  ← E1 과 배열은 같고 applied 가 다르다
-// E4 | 없음        | [] (해제)        | applied=false · reason="no_list" — 해제조차 못 한다
+// E3 | 있음        | [] (해제)        | applied=true · categoryIds=[]  ← E4 와 배열은 같고 applied 가 다르다
+// E4 | 없음        | [] (해제)        | applied=false · reason="no_list" — 해제는 자리를 만들지 않는다
 // E5 | 있음        | [55] 재설정      | applied=true · categoryIds=[55] · UPDATE 0건(무변경 — 허위 audit 방지)
 // E6 | 있음        | [55, 53]         | 첫 항목만 → [55] (하위호환 계약 유지)
+//
+// ⚠ 여기 페이크는 «그 축의 리스트가 **이미 있는**» 갈래만 태운다(형제 공유). «없어서 새로 만드는» 갈래는
+//  createProjectList 까지 내려가 실 DB 가 필요하므로 scripts/category-reach.itest.mjs 의 ②가 본다.
 //
 // 실행: npm run build && node dist/v6/project-categories-noop.test.js
 import assert from "node:assert/strict";
@@ -30,8 +39,10 @@ const ok = (n: string): void => { pass++; console.log(`ok  ${n}`); };
 const state = {
   listId: null as number | null,      // 프로젝트의 소속 리스트
   categoryId: null as number | null,  // 그 리스트의 현재 카테고리
+  listForCat: null as number | null,  // 그 카테고리를 이미 소유한 리스트(형제 공유 대상)
   updates: 0,
   audits: 0,
+  attached: 0,                        // 프로젝트를 리스트에 넣은 횟수(#1631)
 };
 
 (itemsPool as any).query = async (sqlIn: unknown, params: unknown[] = []) => {
@@ -39,6 +50,21 @@ const state = {
   const p = params as any[];
   if (sql.startsWith("SELECT p.list_id, pl.category_id FROM project p")) {
     return { rows: [{ list_id: state.listId, category_id: state.categoryId }] };
+  }
+  //  #1631 — 자리 만들기 경로. listIdOfProject → 축 조회 → 그 축의 리스트 찾기 → 프로젝트를 넣기.
+  if (sql.startsWith("SELECT list_id FROM project WHERE id=")) {
+    return { rows: [{ list_id: state.listId }] };
+  }
+  if (sql.startsWith("SELECT name, key FROM category WHERE id=")) {
+    return { rows: [{ name: "거래처", key: "partners" }] };
+  }
+  if (sql.startsWith("SELECT id FROM project_list WHERE category_id=")) {
+    return { rows: state.listForCat == null ? [] : [{ id: state.listForCat }] };
+  }
+  if (sql.startsWith("UPDATE project SET list_id=")) {
+    state.attached++;
+    state.listId = (p[1] ?? null) as number | null;
+    return { rows: [] };
   }
   if (sql.startsWith("UPDATE project_list SET category_id")) {
     state.updates++;
@@ -52,23 +78,24 @@ const state = {
   throw new Error("unhandled SQL in fake: " + sql);
 };
 
-const reset = (listId: number | null, categoryId: number | null): void => {
+const reset = (listId: number | null, categoryId: number | null, listForCat: number | null = null): void => {
   state.listId = listId;
   state.categoryId = categoryId;
+  state.listForCat = listForCat;
   state.updates = 0;
   state.audits = 0;
+  state.attached = 0;
 };
 
-// E1 — 미분류 프로젝트. 이번 사고의 실제 상황이다(#2457 은 list_id=null 이었다).
+// E1 — 미분류 프로젝트에 축을 정한다. 그 축을 이미 소유한 리스트(43)가 있으니 **거기 넣는다**(형제 공유).
 {
-  reset(null, null);
+  reset(null, null, 43);
   const r = await setProjectCategories(1, [55]);
-  assert.deepEqual(r.categoryIds, [], "E1 반영할 자리가 없으니 빈 배열");
-  assert.equal(r.applied, false, "E1 applied=false 여야 호출자가 실패를 안다");
-  assert.equal(r.reason, "no_list", "E1 사유가 없으면 '왜'를 여전히 모른다");
-  assert.equal(r.listId, null);
-  assert.equal(state.updates, 0, "E1 리스트가 없는데 UPDATE 가 나갔다");
-  ok("E1 리스트 없음 → applied=false · reason=no_list · 쓰기 0건");
+  assert.equal(r.applied, true, "E1 자리를 만들어 줬으니 반영된다(종전엔 no-op 이었다)");
+  assert.deepEqual(r.categoryIds, [55]);
+  assert.equal(r.listId, 43, "E1 그 축을 이미 소유한 리스트에 붙는다");
+  assert.equal(state.attached, 1, "E1 프로젝트를 리스트에 넣는 쓰기가 정확히 한 번");
+  ok("E1 리스트 없음 + 그 축의 리스트 있음 → 거기 붙고 applied=true (형제 공유)");
 }
 
 // E2 — 정상 경로.
@@ -83,21 +110,22 @@ const reset = (listId: number | null, categoryId: number | null): void => {
   ok("E2 리스트 있음 → categoryIds=[55] · applied=true · UPDATE 1건");
 }
 
-// E3 ★ 핵심 — 성공적으로 **해제**해도 배열은 `[]` 다. E1 과 배열만으로는 구분되지 않는다.
+// E3 ★ 핵심 — 성공적으로 **해제**해도 배열은 `[]` 다. E4(자리 없는 해제)와 배열만으로는 구분되지 않는다.
 {
   reset(43, 55);
   const r = await setProjectCategories(1, []);
   assert.deepEqual(r.categoryIds, [], "E3 해제했으니 빈 배열");
   assert.equal(r.applied, true, "E3 해제는 성공이다 — 실패로 보이면 안 된다");
   assert.equal(r.reason, null);
-  ok("E3 해제 → categoryIds=[] 이지만 applied=true (E1 과 갈린다)");
+  ok("E3 해제 → categoryIds=[] 이지만 applied=true (E4 와 갈린다)");
 }
 
-// ★ 배선 단언 — E1 과 E3 이 정말로 `categoryIds` 만으로는 구분 불가함을 못박는다.
+// ★ 배선 단언 — E4 와 E3 이 정말로 `categoryIds` 만으로는 구분 불가함을 못박는다.
 //   이 단언이 없으면 "applied 가 왜 필요한가"가 코드 어디에도 남지 않는다.
 {
+  //  #1631 뒤로 «실패한 []» 는 **해제인데 자리가 없는** 경우다(축 지정은 자리를 만들어 주므로 더는 실패하지 않는다).
   reset(null, null);
-  const fail = await setProjectCategories(1, [55]);
+  const fail = await setProjectCategories(1, []);
   reset(43, 55);
   const cleared = await setProjectCategories(1, []);
   assert.deepEqual(fail.categoryIds, cleared.categoryIds, "두 경우의 배열이 같아야 이 문제가 성립한다");
@@ -105,14 +133,15 @@ const reset = (listId: number | null, categoryId: number | null): void => {
   ok("★ 배선 — 실패한 [] 와 해제한 [] 는 applied 로만 갈린다");
 }
 
-// E4 — 리스트가 없으면 해제조차 못 한다(성공으로 보고하면 거짓말이 된다).
+// E4 ★ — 해제는 **자리를 만들지 않는다**. 없는 것을 지우려고 리스트를 만들 이유가 없다(#1631 A3).
 {
-  reset(null, null);
+  reset(null, null, 43);   // 그 축의 리스트가 있어도 해제라면 붙지 않는다
   const r = await setProjectCategories(1, []);
   assert.equal(r.applied, false, "E4 자리가 없으면 해제도 실패다");
   assert.equal(r.reason, "no_list");
   assert.equal(state.updates, 0);
-  ok("E4 리스트 없음 + 해제 → applied=false · 쓰기 0건");
+  assert.equal(state.attached, 0, "★ E4 해제가 프로젝트를 리스트에 붙이면 안 된다");
+  ok("E4 리스트 없음 + 해제 → applied=false · 붙이기 0건 · 쓰기 0건");
 }
 
 // E5 — 같은 값 재설정은 성공이되 쓰기·감사는 없어야 한다(허위 audit 방지 계약).

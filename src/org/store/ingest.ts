@@ -213,6 +213,35 @@ async function ensureJobForEnabled(row: Record<string, unknown>, actor?: string)
   }
 }
 
+/**
+ * 레인 목적지 판정(순수) — 이 `target_category` 를 저장해도 되나. (#1631)
+ *
+ *  왜 막나: 이 값은 TEXT 컬럼이라 지금껏 **무엇이든** 들어갔고, 증류 프롬프트가 그걸 그대로
+ *   *"분류(category)는 'comms' 로 고정해 저장한다"* 로 싣는다(distiller.ts). 그 축이 없으면 LLM 이
+ *   알아서 다른 데 넣는데 — 실측(2026-09-02, 서리재): 가장 많이 일한 레인 `liv-comms` 의 목적지 `comms` 가
+ *   실존하지 않았고, 자료 54건에서 나온 지식 17건이 다른 5축으로 흩어졌다. **결과는 나쁘지 않았지만
+ *   화면은 여전히 «목적지: comms» 라고 말한다** — 설정이 사실이 아니다. 그걸 저장 시점에 막는다.
+ *
+ *  비활성(deprecated) 축도 거절한다 — 새 지식을 그리로 보내는 건 «비활성» 의 뜻과 정반대다.
+ *  빈 값·null 은 통과: catch-all 레인의 정상 상태다(목적지를 안 정하고 분류기에 맡긴다).
+ */
+export function judgeTargetCategory(
+  target: string | null | undefined,
+  stateByKey: ReadonlyMap<string, string>,
+): { ok: true } | { ok: false; reason: "unknown" | "deprecated" } {
+  const t = String(target ?? "").trim();
+  if (!t) return { ok: true };
+  const state = stateByKey.get(t);
+  if (state === undefined) return { ok: false, reason: "unknown" };
+  return state === "active" ? { ok: true } : { ok: false, reason: "deprecated" };
+}
+
+/** 위 판정의 재료 — 분류축 key → state. merged 는 이미 사라진 축이라 담지 않는다(=unknown 취급). */
+async function categoryStateByKey(): Promise<Map<string, string>> {
+  const r = await itemsPool.query(`SELECT key, state FROM category WHERE state <> 'merged'`);
+  return new Map(r.rows.map((x: { key: string; state: string }) => [String(x.key), String(x.state)]));
+}
+
 export async function upsertDistiller(input: DistillerUpsertInput, actor?: string, source?: string): Promise<Record<string, unknown>> {
   // 대상 행 — id 우선, 없으면 key(멱등 upsert: 같은 key 로 다시 저장하면 갱신).
   let targetId = input.id ?? null;
@@ -223,6 +252,18 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
   }
   if (!targetId && !key) throw new Error("key 가 필요합니다(증류기 식별자).");
   if (key && !DKEY_RE.test(key)) throw new Error("key 는 소문자 슬러그(a-z0-9._-, 64자 이내)");
+
+  //  목적지 검증(#1631) — 없는 축·비활성 축으로는 저장할 수 없다. 판정은 위 순수 함수가 한다.
+  //  ⚠ undefined(미지정)는 부분 갱신에서 «안 건드림» 이라 검사하지 않는다 — 명시한 값만 본다.
+  if (input.target_category !== undefined) {
+    const verdict = judgeTargetCategory(input.target_category, await categoryStateByKey());
+    if (!verdict.ok) {
+      const live = [...(await categoryStateByKey())].filter(([, st]) => st === "active").map(([k]) => k);
+      throw new Error(verdict.reason === "unknown"
+        ? `목적지 분류축 '${String(input.target_category).trim()}' 이(가) 없습니다 — 있는 축: ${live.join(", ") || "(없음)"}`
+        : `목적지 분류축 '${String(input.target_category).trim()}' 은(는) 비활성입니다 — 새 지식을 비활성 축으로 보낼 수 없습니다. 있는 축: ${live.join(", ") || "(없음)"}`);
+    }
+  }
 
   // ⚠ **부분 갱신** — 기존 행이 있으면 입력에 없는 필드는 현 값을 유지한다.
   //  종전엔 미지정 필드를 기본값으로 덮어써서, `{key, batch_size}` 한 줄이 그 증류기의 기준·형식·채널·
