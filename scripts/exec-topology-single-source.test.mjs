@@ -37,7 +37,8 @@ const TOPOLOGY_ENV = [
 // 테넌시/DB·경로 축이 계속 소유하는 자리(토폴로지가 아니다). 이 목록 밖에서 읽으면 실패한다.
 const TENANCY_AXIS = new Set([
   "src/boot/tenancy-env.ts",              // 부팅 최초 재배선 — 이 값을 **쓴다**(읽는 자리가 아니다)
-  "src/boot/housekeeping.ts",             // 자식 프로세스 env 에서 지운다(부모 process.env 아님)
+  "src/boot/housekeeping.ts",             // 자식 env **사본**에서 지운다(`delete env.X`). 부모 process.env 는 안 건드리지만
+                                          //  아래 스캐너가 바로 그 `env.X` 철자를 «읽기» 로 세므로 목록이 필요하다.
   "src/db/tenant-binding-boot.ts",        // DB RLS 바인딩 모드
   "src/org/tenancy/state.ts",             // registryModeActive() — 테넌시 축 술어의 정본
   "src/org/tenant-middleware.ts",         // 요청별 워크스페이스 해석
@@ -67,7 +68,13 @@ const rel = (p) => relative(ROOT, p).split(sep).join("/");
 function readsOf(file, names) {
   const hits = [];
   const lines = readFileSync(file, "utf8").split("\n");
-  const re = new RegExp(String.raw`(?:process\.)?\benv\.(${names.join("|")})\b`);
+  // ⚠ 철자를 바꿔 우회하는 길을 함께 막는다(블라인드 검증 2026-09-03 지적): 점 접근뿐 아니라
+  //  대괄호 접근(`process.env["X"]`)과 구조분해(`const { X } = process.env`)도 «읽는 자리»다.
+  //  동적 키(`process.env[k]`)는 정적으로 못 잡는다 — 그건 이 시험의 알려진 한계다(머리말 참조).
+  const alt = names.join("|");
+  const re = new RegExp(String.raw`(?:process\.)?\benv\.(${alt})\b`
+    + String.raw`|(?:process\.)?\benv\[\s*["'\`](${alt})["'\`]\s*\]`
+    + String.raw`|\{[^{}]*\b(${alt})\b[^{}]*\}\s*=\s*process\.env`);
   let inBlockComment = false;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
@@ -77,7 +84,7 @@ function readsOf(file, names) {
     const code = raw.replace(/\/\/.*$/, "");              // 줄 끝 주석 제거
     if (/^\s*"[a-z_]+":\s*"/.test(code)) continue;        // JSON 문자열로 실린 훅 소스
     const m = re.exec(code);
-    if (m) hits.push({ line: i + 1, env: m[1], text: raw.trim().slice(0, 110) });
+    if (m) hits.push({ line: i + 1, env: m[1] ?? m[2] ?? m[3], text: raw.trim().slice(0, 110) });
   }
   return hits;
 }
@@ -122,9 +129,14 @@ t("[S4] 게이트웨이·노드 두 진입점이 부팅에서 토폴로지를 �
   assert.match(gw, /freezeExecTopology\(\)/, "게이트웨이 진입점(src/index.ts)이 토폴로지를 확정하지 않는다");
   assert.match(node, /freezeExecTopology\(\)/, "노드 진입점(src/node/agent.ts)이 토폴로지를 확정하지 않는다");
   // 순서 불변식: tenancy-env 가 부팅 중에 LIVELY_TENANCY_MODE 를 **쓰므로** 확정은 그 import 뒤여야 한다.
-  const importIdx = gw.indexOf('import "./boot/tenancy-env.js"');
-  const freezeIdx = gw.indexOf("freezeExecTopology()");
-  assert.ok(importIdx >= 0 && freezeIdx > importIdx,
+  // ⚠ 인덱스 비교는 철자에 취약하다 — 따옴표를 바꾸거나 주석에 함수 이름을 적기만 해도 엉뚱한 진단을 준다.
+  //  그래서 ⓐ 두 자리를 **정규식**으로 찾고 ⓑ 못 찾으면 «순서가 틀렸다» 가 아니라 «못 찾았다» 로 말한다
+  //  ⓒ freeze 는 주석이 아닌 **실행문**(줄 시작)만 센다.
+  const importM = /^\s*import\s+["'][.\/]*boot\/tenancy-env\.js["']/m.exec(gw);
+  const freezeM = /^\s*freezeExecTopology\(\)/m.exec(gw);
+  assert.ok(importM, "src/index.ts 에서 boot/tenancy-env import 를 못 찾았다 — 철자가 바뀌었으면 이 시험도 함께 고쳐라");
+  assert.ok(freezeM, "src/index.ts 본문에 freezeExecTopology() 실행문이 없다(주석 말고 실행문이어야 한다)");
+  assert.ok(freezeM.index > importM.index,
     "확정이 boot/tenancy-env import 보다 앞이면 틀린 워크스페이스 모드가 굳는다");
 });
 
@@ -135,7 +147,12 @@ t("[S6] 토폴로지 env 를 **쓰는** 자리도 boot/tenancy-env.ts 하나다"
   //  지금은 boot/tenancy-env.ts 하나뿐이고 그건 index.ts 의 문자 그대로 첫 import 라 안전하다 —
   //  이 시험은 그 «하나뿐» 을 지킨다. (자식 프로세스에 넘길 env 사본을 만드는 것은 여기 안 걸린다:
   //   `const env = {...process.env}` 뒤의 `env.X = …` 는 이 프로세스의 값을 안 바꾼다.)
-  const WRITE_RE = /process\.env\.(LIVELY_[A-Z_]+|LVLY_[A-Z_]+)\s*=(?!=)|delete\s+process\.env\.(LIVELY_[A-Z_]+|LVLY_[A-Z_]+)/;
+  const KEY = "LIVELY_[A-Z_]+|LVLY_[A-Z_]+";
+  const WRITE_RE = new RegExp(
+    `process\\.env\\.(?:${KEY})\\s*=(?!=)`                       // process.env.X = …
+    + `|delete\\s+process\\.env\\.(?:${KEY})`                     // delete process.env.X
+    + `|process\\.env\\[\\s*["'\`](?:${KEY})["'\`]\\s*\\]\\s*=(?!=)`   // process.env["X"] = …
+    + `|Object\\.assign\\(\\s*process\\.env`);                   // Object.assign(process.env, …)
   const offenders = [];
   for (const f of files) {
     const r = rel(f);
@@ -160,6 +177,24 @@ t("[S5] 셀프 노드 판정의 «선결 조건»이 #2592 집행 지점에 물�
   const reg = readFileSync(join(ROOT, "src/node/registry.ts"), "utf8");
   assert.match(reg, /selfNodePossible\(\)/,
     "node/registry.looksLikeGatewayBox 가 토폴로지의 선결 조건을 묻지 않는다");
+});
+
+t("[S7] 확정 해제(unfreezeExecTopology)는 프로덕션 코드가 안 부른다 — 시험 전용이다", () => {
+  // 「한 프로세스 한 답」이 존재 이유인 모듈이 그걸 무효화하는 손잡이를 공개로 달고 있다. 주석은 «시험 전용»
+  //  이라 말하지만 강제하는 것이 없었다(블라인드 검증 2026-09-03 지적). 여기서 강제한다.
+  const offenders = [];
+  for (const f of files) {
+    if (rel(f) === OWNER) continue;   // 정의부는 당연히 그 이름을 갖는다
+    const lines = readFileSync(f, "utf8").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\s*(\/\/|\*)/.test(lines[i])) continue;
+      if (/\bunfreezeExecTopology\b/.test(lines[i].replace(/\/\/.*$/, ""))) {
+        offenders.push(`${rel(f)}:${i + 1}  — ${lines[i].trim().slice(0, 110)}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [],
+    "프로덕션 코드가 토폴로지 확정을 푼다. 그 순간부터 같은 질문에 두 답이 나올 수 있다:\n  " + offenders.join("\n  "));
 });
 
 console.log(`\n${pass} passed — 실행 토폴로지 단일 출처(#2599 T2)`);

@@ -646,6 +646,28 @@ test("§4 확정을 두 번 하면 **나중 값**이 이긴다(머리말이 그�
   } finally { unfreezeExecTopology(); }
 });
 
+test("★ §2 «매니지드인가»는 **두 질문**이다 — 격리 기제(container)와 세션의 자리(relay)는 서로 파생되지 않는다", () => {
+  // 오늘의 매니지드가 둘을 함께 켤 뿐이다. 한쪽만 켠 배포도 성립하고, 그때 두 축은 각자 답해야 한다.
+  //  이 시험이 없으면 다음 사람이 «어차피 같이 켜지니까» 하며 한 축을 다른 축에서 파생시킨다.
+  const ensureOnly = computeExecTopology(E({ LIVELY_SESSION_ENSURE: "ensure {slug}" }));
+  assert.equal(ensureOnly.isolation, "container", "컨테이너로 가른다");
+  assert.equal(ensureOnly.sessionHost, "local", "그런데 tmux 는 이 호스트에 있다 — 중계가 아니다");
+
+  const relayOnly = computeExecTopology(E({ LIVELY_TMUX_EXEC: "relay {slug}" }));
+  assert.equal(relayOnly.sessionHost, "relay", "tmux 가 중계 너머다");
+  assert.equal(relayOnly.isolation, "os-user", "그런데 컨테이너로 가르지는 않는다");
+});
+
+test("★ §4 확정된 토폴로지는 **같은 객체**를 돌려준다(미확정은 매번 새 객체) — 참조 비교가 갈리면 안 된다", () => {
+  try {
+    const frozen = freezeExecTopology(E({}));
+    assert.equal(execTopology(), frozen, "확정 뒤에는 참조까지 같아야 한다");
+    assert.equal(execTopology(), execTopology());
+    unfreezeExecTopology();
+    assert.notEqual(execTopology(), execTopology(), "미확정은 매번 파생이라 참조가 다르다(캐싱 금지 신호)");
+  } finally { unfreezeExecTopology(); }
+});
+
 test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 100% 같다(골든)", () => {
   assert.deepEqual(computeExecTopology(E()), {
     sessionHost: "local",
