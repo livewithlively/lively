@@ -209,6 +209,25 @@ export function unfreezeExecTopology(): void { frozen = null; }
 export function onNode(): boolean { return execTopology().sessionHost === "node"; }
 
 /**
+ * **이 호출**의 tmux 서버가 그 워크스페이스 전용인가 (#2599 T3).
+ *
+ * ⚠ 이건 **프로세스 축이 아니라 요청 축**이다. `tmux.socket` 이 있다는 것은 «이 배포가 registry 모드로 떴다» 일
+ *  뿐이고, 그런 게이트웨이도 **primary 워크스페이스를 무컨텍스트로 함께 서비스한다**(`org/tenant-middleware`:
+ *  «헤더 없음/primary → 컨텍스트 없이 통과», `db/tenant-binding-boot`: «primary 는 남이 아니라 종전의 그
+ *  워크스페이스 자신»). 그 호출은 아래 `tmuxArgvFor` 가 **기본(공용) 소켓**으로 보낸다. 그러니 부팅 상수만 보고
+ *  «전용 서버다» 라고 답하면 primary 트래픽까지 전용으로 오분류된다.
+ *  ⇒ **슬러그를 함께 받아야 한다.** 같은 함정을 T3 이 `attachTransport` 에서 필드째 지운 적이 있다
+ *   (프로세스 한 벌로 얼린 값이 요청마다 갈리는 분기를 대표하지 못한다).
+ *
+ * 쓰는 곳 둘 — argv 조립(`tmuxArgvFor`)과 «서버 부재 = 세션 소실 확답» 판정(`terminal/tmux-exec`).
+ *  **둘이 반드시 같은 답을 봐야** 「전용 소켓으로 보냈는데 확답은 공용 규약으로 준다」 같은 어긋남이 안 생긴다.
+ */
+export function tmuxServerIsDedicated(slug: string | null, t: TmuxPlacement = execTopology().tmux): boolean {
+  if (t.kind === "exec") return true;   // 테넌트별 중계 = 그 테넌트만의 tmux 컨테이너
+  return !!t.socket && !!slug && slug !== "primary";
+}
+
+/**
  * tmux argv 접두사 — **부팅 상수(placement) × 테넌트 컨텍스트(slug)** 의 결합을 이 모듈이 소유한다.
  *  종전 `tmuxExecArgv()` 안에 숨어 있던 결합을 그대로 옮긴 것이라 결과가 바이트 단위로 같다.
  *
@@ -227,8 +246,9 @@ export function tmuxArgvFor(slug: string | null, tmuxBin: string): string[] {
     // ── 셀프호스트 registry(#1750 S3) — 같은 호스트에서 워크스페이스마다 tmux 서버를 가른다. ──
     //  secondary 면 `-L lvly-<slug>` 전용 소켓: 목록·옵션·attach 가 전부 그 서버 안이라 **다른 워크스페이스의
     //  세션이 목록에 뜨는 일 자체가 없다**(이름 규약이 아니라 서버 격리). primary·무컨텍스트는 기본 소켓 = 종전 그대로.
-    if (!t.socket || !slug || slug === "primary") return [];
-    return [tmuxBin, "-L", t.socket.replace("{slug}", slug)];
+    //  ⚠ 그 «전용이냐» 판정은 아래 `tmuxServerIsDedicated` 가 소유한다 — 여기서 조건을 다시 쓰면 두 벌이 된다(#2599 T3).
+    if (!t.socket || !tmuxServerIsDedicated(slug, t)) return [];
+    return [tmuxBin, "-L", t.socket.replace("{slug}", slug!)];
   }
   // ── 테넌트별 중계(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스하면 tmux 서버도 워크스페이스마다 다르다.
   if (!t.command.includes("{slug}")) return t.command.split(/\s+/);

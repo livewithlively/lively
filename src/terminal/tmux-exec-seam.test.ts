@@ -186,38 +186,84 @@ const onSurface = <T>(env: Record<string, string | undefined>, fn: () => T): T =
   }
 };
 
-// 표면 × 두 술어. `final` 이 «tmux 서버 부재 = 세션 영구 소실 확답», `relay` 가 «호출이 중계를 지나나».
-const SURFACES: ReadonlyArray<{ name: string; env: Record<string, string | undefined>; final: boolean; relay: boolean }> = [
-  { name: "셀프호스트 primary(기본 소켓)",        env: {},                                                     final: false, relay: false },
-  { name: "셀프호스트 registry secondary(전용 소켓)", env: { LIVELY_TENANCY_MODE: "registry" },                    final: true,  relay: false },
-  { name: "셀프호스트 리눅스 격리(기본 소켓)",     env: { LIVELY_BOX_SPAWN: "/opt/lively/libexec/box-spawn" },  final: false, relay: false },
-  { name: "매니지드(중계)",                       env: { LIVELY_TMUX_EXEC: "tmux-relay.cjs {slug}" },          final: true,  relay: true  },
-  { name: "멤버 노드(기본 소켓)",                 env: { LIVELY_NODE_TOKEN: "nt-abc" },                        final: false, relay: false },
+// 표면(부팅 상수) × **이 호출의 슬러그**(요청 축) × 두 술어.
+//  `final` 이 «tmux 서버 부재 = 세션 영구 소실 확답», `relay` 가 «호출이 중계를 지나나».
+//  ★ 슬러그 칸이 있는 이유: registry 로 뜬 게이트웨이도 **primary 를 무컨텍스트로 함께 서비스**하고
+//   그 호출은 공용 기본 소켓으로 간다. 부팅 상수만 보면 그 트래픽까지 «전용» 으로 오분류된다.
+const SURFACES: ReadonlyArray<{ name: string; env: Record<string, string | undefined>; slug: string | null; final: boolean; relay: boolean }> = [
+  { name: "셀프호스트 primary(기본 소켓)",              env: {},                                                    slug: null,      final: false, relay: false },
+  { name: "registry 게이트웨이 · secondary 요청(전용 소켓)", env: { LIVELY_TENANCY_MODE: "registry" },                   slug: "acme",    final: true,  relay: false },
+  { name: "★registry 게이트웨이 · primary 요청(공용 소켓)",  env: { LIVELY_TENANCY_MODE: "registry" },                   slug: "primary", final: false, relay: false },
+  { name: "★registry 게이트웨이 · 무컨텍스트 호출(공용 소켓)", env: { LIVELY_TENANCY_MODE: "registry" },                   slug: null,      final: false, relay: false },
+  { name: "셀프호스트 리눅스 격리(기본 소켓)",           env: { LIVELY_BOX_SPAWN: "/opt/lively/libexec/box-spawn" }, slug: null,      final: false, relay: false },
+  { name: "매니지드(중계)",                            env: { LIVELY_TMUX_EXEC: "tmux-relay.cjs {slug}" },         slug: "acme",    final: true,  relay: true  },
+  { name: "멤버 노드(기본 소켓)",                      env: { LIVELY_NODE_TOKEN: "nt-abc" },                       slug: null,      final: false, relay: false },
 ];
 
-test("★ T3 표면 × 두 술어 — 전용 tmux 서버(중계·registry 전용소켓)에서만 «부재 = 소실 확답»", () => {
+test("★ T3 표면 × 슬러그 × 두 술어 — «이 호출이» 전용 서버로 갔을 때만 «부재 = 소실 확답»", () => {
   for (const s of SURFACES) {
     onSurface(s.env, () => {
-      assert.equal(tmuxServerAbsenceIsFinal(), s.final, `${s.name}: 서버 부재 확답 판정`);
+      assert.equal(tmuxServerAbsenceIsFinal(s.slug), s.final, `${s.name}: 서버 부재 확답 판정`);
       assert.equal(tmuxViaRelay(), s.relay, `${s.name}: 중계 경유 판정`);
     });
   }
 });
 
-test("★ T3 두 술어가 갈리는 표면이 실제로 있다 — 없으면 가른 의미가 없다", () => {
+// ★★ 이 시험이 이 변경의 핵심 안전망이다 — 첫 구현은 여기서 틀렸다(리뷰가 잡았다).
+//  판정과 argv 조립이 **같은 함수**를 봐야 「전용 소켓으로 보냈는데 확답은 공용 규약으로 준다」가 안 생긴다.
+test("★★ T3 확답 판정과 argv 조립이 언제나 같은 답을 본다(전용 소켓 ⟺ 확답)", () => {
+  for (const s of SURFACES) {
+    onSurface(s.env, () => {
+      installTenantSlugResolver(() => s.slug);
+      try {
+        const argv = tmuxExecArgv();
+        const wentToDedicatedSocket = argv.includes("-L");
+        if (!tmuxViaRelay()) {
+          assert.equal(wentToDedicatedSocket, tmuxServerAbsenceIsFinal(s.slug),
+            `${s.name}: argv 는 ${wentToDedicatedSocket ? "전용" : "공용"} 소켓으로 가는데 확답 판정이 다르다`);
+        }
+        // 기본값 인자(tenantSlug())도 명시 인자와 같은 답이어야 한다 — 호출부는 대개 인자를 안 준다.
+        assert.equal(tmuxServerAbsenceIsFinal(), s.final, `${s.name}: 기본 인자(tenantSlug) 경로`);
+      } finally { installTenantSlugResolver(() => null); }
+    });
+  }
+});
+
+test("★ T3 두 술어가 갈리는 자리가 실제로 있다 — 없으면 가른 의미가 없다", () => {
   const split = SURFACES.filter((s) => s.final !== s.relay);
-  assert.deepEqual(split.map((s) => s.name), ["셀프호스트 registry secondary(전용 소켓)"],
-    "registry secondary 가 두 술어를 가른 유일한 이유다 — 이 표면이 표에서 사라지면 술어를 다시 합쳐야 한다");
+  assert.deepEqual(split.map((s) => s.name), ["registry 게이트웨이 · secondary 요청(전용 소켓)"],
+    "registry secondary 요청이 두 술어를 가른 유일한 이유다 — 이 칸이 표에서 사라지면 술어를 다시 합쳐야 한다");
+});
+
+test("★ T3 같은 registry 게이트웨이가 요청마다 답을 달리한다 — 부팅 상수로는 못 가른다", () => {
+  onSurface({ LIVELY_TENANCY_MODE: "registry" }, () => {
+    assert.equal(tmuxServerAbsenceIsFinal("acme"), true, "secondary 요청 = 전용 소켓 = 확답");
+    assert.equal(tmuxServerAbsenceIsFinal("primary"), false, "primary 요청 = 공용 소켓 = 종전 보수 규약");
+    assert.equal(tmuxServerAbsenceIsFinal(null), false, "무컨텍스트 호출(크론·하우스키핑)도 공용 소켓이다");
+  });
 });
 
 test("★ T3 registry secondary 의 서버 부재 문구가 이제 gone 확답이다(종전엔 판정 불가였다)", () => {
   onSurface({ LIVELY_TENANCY_MODE: "registry" }, () => {
+    installTenantSlugResolver(() => "acme");   // 이 호출은 전용 소켓 `-L lvly-acme` 로 간다
+    try {
     // 전용 소켓 `-L lvly-<slug>` 의 서버가 죽으면 그 워크스페이스 세션은 인메모리째 증발한다 —
     //  스스로 안 돌아오므로 «종료됨» 을 확답해야 클라가 복원으로 넘어간다(#1437 이 매니지드에서 고친 증상).
     assert.equal(isSessionGoneError({ code: 1, stderr: "no server running on /tmp/tmux-501/lvly-acme" }), true);
     assert.equal(isSessionGoneError({ code: 1, stderr: "error connecting to /tmp/tmux-501/lvly-acme (No such file or directory)" }), true);
     // 판정 불가는 그대로 판정 불가 — 타임아웃(시그널 종료)은 확답이 아니다(#835).
     assert.equal(isSessionGoneError({ killed: true, signal: "SIGTERM", stderr: "no server running on /tmp/tmux-501/lvly-acme" }), false);
+    } finally { installTenantSlugResolver(() => null); }
+  });
+});
+
+test("★★ T3 같은 registry 박스라도 primary 요청의 서버 부재는 여전히 판정 불가다", () => {
+  onSurface({ LIVELY_TENANCY_MODE: "registry" }, () => {
+    installTenantSlugResolver(() => "primary");
+    try {
+      assert.equal(isSessionGoneError({ code: 1, stderr: "no server running on /private/tmp/tmux-501/default" }), false,
+        "공용 기본 소켓의 일시 장애를 «세션 종료» 로 확답하면 살아 있는 세션이 죽은 것으로 보인다(#835)");
+    } finally { installTenantSlugResolver(() => null); }
   });
 });
 

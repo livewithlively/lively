@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
-import { execTopology, tmuxArgvFor } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
+import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -153,19 +153,25 @@ export async function listSessionPanePids(): Promise<{ ok: boolean; panes: Map<s
 /**
  * tmux 서버 부재("no server running")를 **세션 영구 소실의 확답**으로 승격해도 되는 자리인가(#1437).
  *
- * 참인 조건은 «그 tmux 서버가 이 워크스페이스 전용인가» 다 — 전용 서버가 없으면 그 서버에만 살던
- *  인메모리 세션은 실제로 증발한 것이고, 스스로 돌아오지 않는다(복원만이 길이다).
+ * 참인 조건은 «**이 호출이** 간 tmux 서버가 그 워크스페이스 전용인가» 다 — 전용 서버가 없으면 그 서버에만
+ *  살던 인메모리 세션은 실제로 증발한 것이고, 스스로 돌아오지 않는다(복원만이 길이다).
  *  · `exec`(매니지드 중계) — 테넌트별 tmux 컨테이너. #1437 이 고친 원래 자리.
- *  · `socket` **이면서 이름이 있는 소켓**(registry secondary `-L lvly-<slug>`) — 워크스페이스 전용 소켓이라
- *    같은 논리가 그대로 성립한다. T2 까지는 여기가 «판정 불가» 로 접혀 셀프호스트 secondary 가 #1437 이전
- *    증상(복원이 영영 안 열리고 클라가 무한 재연결)을 그대로 갖고 있었다 — 조사 함정 4 가 지목한 구멍이다.
- *  · 기본 소켓(primary, `socket === null`)은 **종전 그대로 거짓**. 그 소켓은 이 워크스페이스 전용이 아니라
- *    박스의 공용이라 «전용 서버 부재 = 그 워크스페이스 세션 소실» 이라는 논리가 성립하지 않는다.
- *    #835 의 보수적 규약(모르면 종료라 말하지 않는다)을 그대로 둔다.
+ *  · 이름 있는 소켓 + 슬러그 있음(registry **secondary**, `-L lvly-<slug>`) — 워크스페이스 전용 소켓이라
+ *    같은 논리가 성립한다. T2 까지는 여기가 «판정 불가» 로 접혀 셀프호스트 secondary 가 #1437 이전 증상
+ *    (복원이 영영 안 열리고 클라가 무한 재연결)을 그대로 갖고 있었다 — 조사 함정 4 가 지목한 구멍이다.
+ *  · 기본 소켓(공용)은 **종전 그대로 거짓** — #835 의 보수적 규약(모르면 종료라 말하지 않는다)을 지킨다.
+ *
+ * ⚠ **부팅 상수가 아니라 요청 축이다.** registry 모드로 뜬 게이트웨이도 primary 워크스페이스를
+ *  무컨텍스트로 함께 서비스하고, 그 호출은 `tmuxArgvFor` 가 **공용 기본 소켓**으로 보낸다. 그래서 슬러그를
+ *  받아야 하고, 판정은 argv 를 만드는 쪽과 **같은 함수**(`tmuxServerIsDedicated`)를 봐야 어긋나지 않는다.
+ *  (첫 구현은 `tmux.socket !== null` 만 봤다가 리뷰에서 잡혔다 — T3 이 `attachTransport` 를 지운 이유와 같은 함정.)
+ *
+ * ⚠ 소켓 **파일이 사라진** 경우("error connecting … No such file or directory")도 확답으로 둔다.
+ *  서버 프로세스가 살아 있더라도 경로가 unlink 되면 **어떤 클라이언트도 다시 붙을 수 없다**(tmux 에 다른
+ *  통로가 없다). 즉 그 세션들은 실제로 회수 불가이고, 사람에게 옳은 안내는 «복원» 이다.
  */
-export function tmuxServerAbsenceIsFinal(): boolean {
-  const t = execTopology().tmux;
-  return t.kind === "exec" || t.socket !== null;
+export function tmuxServerAbsenceIsFinal(slug: string | null = tenantSlug()): boolean {
+  return tmuxServerIsDedicated(slug);
 }
 
 /**
