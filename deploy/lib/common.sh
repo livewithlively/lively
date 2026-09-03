@@ -87,6 +87,8 @@ run_as_service() {
   local h; h="$(getent passwd "$svc" | cut -d: -f6)"
   sudo -u "$svc" env HOME="$h" PATH="$PATH" \
     BOOTSTRAP_ADMIN_EMAIL="${BOOTSTRAP_ADMIN_EMAIL:-}" ORG_DOMAIN="${ORG_DOMAIN:-}" \
+    BOOTSTRAP_ADMIN_PASSWORD="${BOOTSTRAP_ADMIN_PASSWORD:-}" BOOTSTRAP_ADMIN_ID="${BOOTSTRAP_ADMIN_ID:-}" BOOTSTRAP_ADMIN_NAME="${BOOTSTRAP_ADMIN_NAME:-}" \
+    BOOTSTRAP_RETRY_MAX_MS="${BOOTSTRAP_RETRY_MAX_MS:-}" SKIP_BASELINE="${SKIP_BASELINE:-}" SKIP_CONNECTORS="${SKIP_CONNECTORS:-}" BASELINE_FORCE="${BASELINE_FORCE:-}" \
     PUBLIC_URL="${PUBLIC_URL:-}" PORT="${PORT:-}" \
     LIVELY_GATEWAY="${LIVELY_GATEWAY:-}" LIVELY_TOKEN="${LIVELY_TOKEN:-}" KIT_HARNESS="${KIT_HARNESS:-}" \
     "$@"
@@ -471,7 +473,7 @@ store_up() {
   fi
 }
 
-# 게이트웨이 /healthz 200 대기.
+# 게이트웨이 /healthz 200 대기 — «listen 했다» 까지만. 스키마·부트스트랩 안전은 아래 wait_ready 가 본다(#2578).
 wait_healthz() {
   local port="${PORT:-8080}" url
   url="http://localhost:${port}/healthz"
@@ -481,6 +483,66 @@ wait_healthz() {
   else
     die "게이트웨이가 $url 에 응답 없음 — 로그: $APP_DIR/logs/gateway.log"
   fi
+}
+
+# 게이트웨이 /readyz 의 **스키마 준비 신호** 대기(#2578) — wait_healthz 뒤, 부트스트랩·키트 설치 앞에.
+#  /healthz 200 은 listen 일 뿐이다: 스키마 마이그레이션은 listen **뒤** 비동기로 돌고(src/boot/housekeeping.ts), 첫 부팅은
+#  워크스페이스 등록부 활성화 뒤 스스로 exit(0) 해 슈퍼바이저가 10초 뒤 다시 띄운다. 그 사이에 부트스트랩을 돌리면
+#  `column "tenant_id" does not exist`(42703) 로 관리자 없는 박스가 '완료'로 끝났다(2026-09-03 EC2 t4g.medium 실측).
+#  판정은 /readyz 응답의 `"schema"` 하나로(jq 없이 grep):
+#    ready      → 통과(두 번째 부팅까지 끝났다).   skipped → 이 프로세스는 체인을 안 돌린다(기다릴 것 없음) → 통과.
+#    pending / restarting / 응답 없음(재기동 중 connection refused) → 1초 뒤 다시.
+#    failed     → 즉시 die(로그 안내) — 타임아웃까지 기다렸다 모호하게 죽지 않는다.
+#  인자: 최대 대기 초(기본 180 — 첫 부팅 ~5s + RestartSec 10s + 두 번째 부팅 ~5s 가 정상 경로, 콜드 DB·느린 박스 여유).
+wait_ready() {
+  local port="${PORT:-8080}" tries="${1:-180}" url body schema i
+  url="http://localhost:${port}/readyz"
+  log "준비 대기(스키마 마이그레이션 · 첫 부팅 자가 재기동 포함): $url (최대 ${tries}s)"
+  for ((i = 1; i <= tries; i++)); do
+    body="$(curl -s --max-time 5 "$url" 2>/dev/null || true)"
+    # ⚠ `|| true` 필수 — 호출자(install.sh)는 set -e + pipefail 이다. 재기동 창(응답 없음)이나 schema 없는 응답에서
+    #  grep 이 1 을 내면 대입문 자체가 errexit 로 스크립트를 **조용히** 죽인다(EC2 실측: '준비 대기' 한 줄 뒤 exit 1).
+    schema="$(printf '%s' "$body" | grep -oE '"schema":"[a-z]+"' | head -n1 | cut -d'"' -f4 || true)"
+    case "$schema" in
+      ready)   ok "게이트웨이 준비 완료(schema=ready · ${i}s)"; return 0 ;;
+      skipped) ok "게이트웨이가 스키마 체인을 돌리지 않는 모드(schema=skipped) — 대기 생략"; return 0 ;;
+      failed)  die "게이트웨이 스키마 초기화 실패(schema=failed) — 부트스트랩을 진행하지 않습니다. 로그: $APP_DIR/logs/gateway.log ('schema init failed')" ;;
+    esac
+    sleep 1
+  done
+  die "게이트웨이가 ${tries}s 안에 준비되지 않음(마지막 schema='${schema:-none}' — none 이면 구버전 게이트웨이이거나 응답 없음) — 로그: $APP_DIR/logs/gateway.log"
+}
+
+# ── 부트스트랩 단계(#2578) — 실패를 삼키지 않는다 ──
+#  종전엔 warn 만 내고 진행한 뒤 마지막 요약이 에러 텍스트를 `✓ 첫 관리자: …` 로 찍었다(관리자 없는 박스가 '완료'로 보임).
+#  이제 실패는 BOOTSTRAP_FAILURES 에 쌓여 bootstrap_summary 가 ✗ 로 내고, install.sh 가 비-0 으로 끝난다.
+#  stdout(결과 JSON)만 캡처(BOOTSTRAP_LAST_OUT)하고 stderr(재시도 로그·에러)는 그대로 흘려 install.log 에 남긴다.
+BOOTSTRAP_FAILURES=""     # 줄 단위 "라벨 — 재시도: 명령"
+# shellcheck disable=SC2034  # install.sh 가 읽는다(요약의 관리자 JSON)
+BOOTSTRAP_LAST_OUT=""     # 직전 성공 단계의 stdout
+# bootstrap_step <라벨> <재시도 명령 힌트> <cmd…>  → 0(성공) / 1(실패·기록됨). set -e 아래선 `if` 또는 `|| true` 로 받는다.
+# shellcheck disable=SC2034  # BOOTSTRAP_LAST_OUT 은 install.sh 가 읽는다
+bootstrap_step() {
+  local label="$1" hint="$2"; shift 2
+  local out=""
+  if out="$("$@")"; then
+    BOOTSTRAP_LAST_OUT="$out"
+    ok "$label 완료"
+    return 0
+  fi
+  BOOTSTRAP_LAST_OUT=""
+  BOOTSTRAP_FAILURES="${BOOTSTRAP_FAILURES}${label} — 재시도: ${hint}"$'\n'
+  warn "$label 실패 — 설치 끝에 ✗ 로 요약하고 비-0 으로 종료합니다(재시도: $hint)"
+  return 1
+}
+# 실패가 있으면 ✗ 목록을 내고 1 을 반환(호출자가 exit 1 로 끝낸다). 없으면 0.
+bootstrap_summary() {
+  [ -n "$BOOTSTRAP_FAILURES" ] || return 0
+  local line
+  while IFS= read -r line; do
+    if [ -n "$line" ]; then printf '%s✗%s %s\n' "$(_c '1;31')" "$(_c 0)" "$line" >&2; fi
+  done <<< "$BOOTSTRAP_FAILURES"
+  return 1
 }
 
 # TLS 리버스 프록시(Caddy) 기동 — .env 의 LIVELY_DOMAIN 이 있을 때만(자동 HTTPS). 멱등.

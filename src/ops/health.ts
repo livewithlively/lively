@@ -21,7 +21,8 @@ import { logger } from "../log.js";
 const DB_TIMEOUT_MS = Number(process.env.HEALTH_DB_TIMEOUT_MS ?? 3000);
 
 export type Level = "ok" | "warn" | "critical";
-export type Status = "ok" | "degraded" | "down";
+// starting(#2578) — 프로세스는 떠 있는데 스키마 마이그레이션·첫 부팅 재기동이 아직이다(503). gateBySchema 만 낸다.
+export type Status = "ok" | "degraded" | "down" | "starting";
 
 /** 디스크 임계치 — **관리탭(DB) 저장소 정책이 단일 출처**(src/org/policies/storage-policy.ts). 호출자가 주입한다. */
 export interface Thresholds {
@@ -160,4 +161,28 @@ export async function readyReport(opts: {
   ]);
   const { ok, status } = summarize(db, disks);
   return { ok, status, db, disks, thresholds, uptimeSec: Math.round(process.uptime()) };
+}
+
+// ── /readyz 의 스키마 게이트(#2578) ──────────────────────────────────────────────────────────────
+//  «DB 에 닿는다»(readyReport)와 «스키마·시딩이 끝났다»(boot/boot-state.ts)는 다른 질문이다. 2026-09-03 EC2 실측:
+//  healthz 200 직후 부트스트랩이 `column "tenant_id" does not exist` 로 죽고 설치는 '완료'로 끝났다 — readyz 도
+//  «DB 도달 + 디스크»라 그걸 못 가렸다. 설치·업데이트 스크립트(deploy/lib/common.sh wait_ready)는 이제 이 게이트를 기다린다.
+//   · pending / restarting → 503 + status=starting: 마이그레이션 중이거나 첫 부팅이 곧 재기동한다. 부트스트랩 금지.
+//     (DB 자체가 죽어 있으면 그 판정(down)을 덮지 않는다 — 더 근본적인 사유다.)
+//   · failed → 503 + status=down: 스키마가 서기 전에 체인이 던졌다(로그 'schema init failed'). 기다려도 안 온다 →
+//     설치 스크립트는 타임아웃 대신 즉시 멈추고 로그를 가리킨다.
+//   · ready / skipped → 종전 그대로(200/503 은 DB·디스크가 정한다). skipped = 이 프로세스가 체인을 안 돌린다(매니지드
+//     중앙 게이트웨이 · DB 없음). **매니지드 무영향의 근거가 여기다** — 거기선 이 게이트가 응답을 바꾸지 않는다.
+//  ⚠ 200+degraded 정책은 그대로다: 디스크 경고로 503 을 내지 않는 규칙(ops/disk-guard.ts)에 새 사유를 얹지 않았다.
+//   새 503 은 «아직 못 선다(starting)»와 «스키마가 깨졌다(failed)» 뿐이고, 둘 다 트래픽을 받으면 안 되는 상태다.
+//  응답에 `schema` 를 항상 싣는다(값 하나짜리 grep 으로 셸에서 판정할 수 있게 — jq 없는 박스).
+import type { SchemaBootPhase } from "../boot/boot-state.js";
+
+export interface SchemaGated<T> { httpStatus: number; body: T & { schema: SchemaBootPhase } }
+
+export function gateBySchema<T extends { ok: boolean; status: Status }>(body: T, schema: SchemaBootPhase): SchemaGated<T> {
+  const out = { ...body, schema };
+  if (schema === "ready" || schema === "skipped") return { httpStatus: body.ok ? 200 : 503, body: out };
+  if (schema === "failed") return { httpStatus: 503, body: { ...out, ok: false, status: "down" } };
+  return { httpStatus: 503, body: { ...out, ok: false, status: body.ok ? "starting" : body.status } };
 }

@@ -4,8 +4,10 @@
 //  근거: 온보딩-진행상황-sot-웹페이지-하네스주입-단일소스 / 태스크 #272.
 //
 // 실행(앱 루트, 빌드·.env·게이트웨이 기동 후): node --env-file=.env deploy/bootstrap-baseline.mjs
-//  env: SKIP_BASELINE=1 → 건너뜀. BASELINE_FORCE=1 → 기존이 있어도 덮어씀(주의).
+//  env: SKIP_BASELINE=1 → 건너뜀. BASELINE_FORCE=1 → 기존이 있어도 덮어씀(주의). BOOTSTRAP_RETRY_MAX_MS(기본 60000)
+//  #2578: 스키마 미준비(42703/42P01)·DB 기동 중이면 ≤60s 백오프 재시도(lib/bootstrap-retry.mjs). 실패 = exit 1.
 import { getSection, updateSection } from "../dist/org/store.js";
+import { withBootstrapRetry, exitOnBootstrapFailure } from "./lib/bootstrap-retry.mjs";
 
 if (process.env.SKIP_BASELINE === "1") {
   console.log(JSON.stringify({ ok: true, seeded: false, reason: "SKIP_BASELINE=1" }));
@@ -30,13 +32,18 @@ const BASELINE = `## 이 조직의 AI 파트너 (기본 템플릿 — 관리자�
 
 > ⚙️ 이건 익명 조직 기본값입니다. 웹UI **관리 탭 ▸ 맥락 관리**에서 회사 정체성·페르소나·규칙으로 바꾸세요. (온보딩: \`/ui/#/onboarding\`)`;
 
-const existing = await getSection("org-defaults");
-const hasContent = !!(existing && existing.body_md && existing.body_md.trim());
-
-if (hasContent && process.env.BASELINE_FORCE !== "1") {
-  console.log(JSON.stringify({ ok: true, seeded: false, reason: "org-defaults already set (preserved)" }));
-} else {
-  await updateSection("org-defaults", BASELINE, "bootstrap", "deploy/baseline");
-  console.log(JSON.stringify({ ok: true, seeded: true, forced: process.env.BASELINE_FORCE === "1" }));
+try {
+  const result = await withBootstrapRetry("bootstrap-baseline", async () => {
+    const existing = await getSection("org-defaults");
+    const hasContent = !!(existing && existing.body_md && existing.body_md.trim());
+    if (hasContent && process.env.BASELINE_FORCE !== "1") {
+      return { ok: true, seeded: false, reason: "org-defaults already set (preserved)" };
+    }
+    await updateSection("org-defaults", BASELINE, "bootstrap", "deploy/baseline");
+    return { ok: true, seeded: true, forced: process.env.BASELINE_FORCE === "1" };
+  });
+  console.log(JSON.stringify(result));
+  process.exit(0);
+} catch (err) {
+  exitOnBootstrapFailure("bootstrap-baseline", err);
 }
-process.exit(0);
