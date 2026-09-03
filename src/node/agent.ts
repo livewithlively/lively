@@ -31,11 +31,13 @@ import {
 import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
-import { freezeExecTopology } from "../exec-topology.js";   // #2599 T2 — 부팅 때 한 번 확정
+import { freezeExecTopology, tmuxNeedsTenantSlug } from "../exec-topology.js";   // #2599 T2 — 부팅 때 한 번 확정
+import { installTenantSlugResolver, tenantSlugIsWellFormed, TENANT_SLUG_SHAPE } from "../terminal/catalog.js";   // #2600 T2 — 매니지드 세션 호스트는 테넌트가 프로세스에 붙는다
 import { WorkerHost, WorkerBundleStager, type WorkerStartSpec, type WorkerStopReason } from "../apps/worker-host.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
-const TOKEN = freezeExecTopology().nodeToken;   // #2599 T2 — 노드 진입점에서 토폴로지를 확정한다(이 프로세스는 sessionHost="node")
+const TOPOLOGY = freezeExecTopology();   // #2599 T2 — 노드 진입점에서 토폴로지를 확정한다(이 프로세스는 sessionHost="node")
+const TOKEN = TOPOLOGY.nodeToken;
 const NODE_ID = process.env.LIVELY_NODE_ID || ""; // 표시용 — 신원은 서버가 토큰으로 특정한다
 let workerStateSocket: WebSocket | null = null;
 const chatSubscribed = new Set<string>();   // #2439 — 세션마다 한 번만 구독한다(두 번이면 사건이 두 번 올라간다)
@@ -120,6 +122,29 @@ async function maybeSelfUpdate(latest: string | null | undefined): Promise<void>
 if (!GW_URL || !TOKEN) {
   console.error("LIVELY_GATEWAY_URL / LIVELY_NODE_TOKEN 이 필요합니다");
   process.exit(2);
+}
+
+// ── 매니지드 세션 호스트 — 이 프로세스가 **어느 테넌트의** 세션을 소유하나 (#2600 T2) ──────
+//  멤버 PC 의 노드는 tmux 가 로컬이라 여기 안 걸린다(`tmux={kind:"socket"}`). 걸리는 것은 tmux 가
+//  **중계 너머**인 배포 — 매니지드 노드 박스에서 브로커 옆에 서는 세션 호스트다. 그 자리에서 tmux 대상은
+//  «그 테넌트의 브로커 소켓» 이고, 코어는 `{slug}` 치환으로 그걸 고른다(`tmuxArgvFor`).
+//  ⚠ 슬러그가 요청이 아니라 **프로세스**에 붙는다: 이 프로세스는 테넌트 하나만 본다. 그게 브로커의
+//   «소켓 하나 = 테넌트 하나» 를 그대로 복제한 격리이고, T1 이 남긴 불변식(«한 프로세스에 세션 호스트
+//   하나»)과도 같은 방향이다 — 여러 테넌트를 한 프로세스에 담으려면 프로세스를 갈라야 한다.
+//  ⚠ **부팅에서 선다.** 안 그러면 첫 attach 가 올 때까지 멀쩡해 보이다가 거기서 던진다.
+//  ⚠ **형식까지 여기서 본다.** `tenantSlug()` 는 형식을 통과 못 한 값을 «없음»(null)으로 접는데,
+//   그러면 슬러그를 실어 줬는데도 attach 에서 «컨텍스트가 필요합니다» 로 던진다 — 부팅 가드를 둔
+//   이유가 정확히 그 증상을 없애는 것이라, 비었나만 보면 그 목적이 샌다(공백이 든 값은 치환 뒤
+//   `split(/\s+/)` 에서 argv 길이까지 바꾼다).
+if (tmuxNeedsTenantSlug(TOPOLOGY.tmux)) {
+  const slug = (process.env.LVLY_TENANT_SLUG || "").trim();
+  //  `installTenantSlugResolver` 는 **공급**(누가 슬러그를 답하나)이고, 격리는 그 답이 프로세스
+  //   수명 내내 상수라는 데서 온다 — 아래처럼 닫힌 값을 돌려주면 요청에 따라 갈릴 자리가 없다.
+  if (!slug || !tenantSlugIsWellFormed(slug)) {
+    console.error(`이 배포의 tmux 는 테넌트 중계입니다 — LVLY_TENANT_SLUG 가 필요합니다(형식: ${TENANT_SLUG_SHAPE}). 받은 값: ${slug ? JSON.stringify(slug) : "(없음)"}`);
+    process.exit(2);
+  }
+  installTenantSlugResolver(() => slug);
 }
 
 const STATE_PUSH_MS = 3_000;

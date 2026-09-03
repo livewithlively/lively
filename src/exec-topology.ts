@@ -251,9 +251,24 @@ export function tmuxArgvFor(slug: string | null, tmuxBin: string): string[] {
     return [tmuxBin, "-L", t.socket.replace("{slug}", slug!)];
   }
   // ── 테넌트별 중계(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스하면 tmux 서버도 워크스페이스마다 다르다.
-  if (!t.command.includes("{slug}")) return t.command.split(/\s+/);
+  if (!tmuxNeedsTenantSlug(t)) return t.command.split(/\s+/);
   if (!slug) throw new Error("tmux 중계에 테넌트 컨텍스트가 필요합니다 — 컨텍스트 밖에서 호출됐습니다");
   return t.command.replace("{slug}", slug).split(/\s+/);
+}
+
+/**
+ * 이 배포의 tmux 가 **테넌트 컨텍스트를 요구하나** (#2600 T2).
+ *
+ * 게이트웨이는 요청마다 컨텍스트가 있어 이 질문을 할 일이 없었다 — 없으면 위에서 던지면 그만이다.
+ *  그런데 **세션 호스트 프로세스**(매니지드 노드 박스)는 요청이 아니라 **부팅**에서 이 답이 필요하다:
+ *  컨텍스트가 필요한데 슬러그를 안 실어 줬으면, 그 프로세스는 첫 attach 가 올 때까지 멀쩡해 보이다가
+ *  거기서 던진다. 부팅에서 물어 **그 자리에서 서게** 하려고 술어를 뽑았다.
+ *
+ * ⚠ 판정을 여기 한 곳에 둔다 — 호출부에서 `command.includes("{slug}")` 를 다시 쓰면, 치환자 규약이
+ *  바뀔 때 한쪽만 고쳐져 «부팅은 통과하는데 attach 에서 던지는» 상태가 만들어진다.
+ */
+export function tmuxNeedsTenantSlug(t: TmuxPlacement = execTopology().tmux): boolean {
+  return t.kind === "exec" && t.command.includes("{slug}");
 }
 
 /**
