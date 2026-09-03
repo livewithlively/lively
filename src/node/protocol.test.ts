@@ -68,12 +68,21 @@ assert.equal(nodeSessionVisible({ owner: "yoon", invites: [] }, "jang"), false);
 
 // ── caps 로 선언한 op 는 **에이전트가 실제로 구현**해야 한다(선언과 구현의 드리프트 방지). ──
 //  runOp 는 tmux 를 실제로 띄우므로 호출해서 확인할 수 없다 → 디스패치에 case 가 있는지 본다.
-//  대상은 **실제로 노드에 배포되는 산출물**(같은 디렉터리의 컴파일된 agent.js) — 소스가 아니라 나가는 바이트를 본다.
+//  대상은 **실제로 노드에 배포되는 산출물**(컴파일된 .js) — 소스가 아니라 나가는 바이트를 본다.
 //  ⚠ 모양 검사라 완벽하진 않지만, 여기서 어긋나면 **게이트웨이가 못 하는 걸 한다고 믿고 보내게 된다**.
+//
+//  ★ #2600 T1 — 디스패치가 **두 파일**로 갈렸다. `agent.js` 는 전송 어댑터라 노드 전용 op(파일·위탁
+//   태스크·앱 워커·provision·대화)만 갖고, 세션 op 는 `terminal/session-ops.js` 한 곳이 갖는다
+//   (매니지드 세션 호스트 #2600 T2 가 같은 표를 쓴다). 둘 다 노드 번들에 실리므로 **합집합**을 본다 —
+//   불변식은 «선언한 op 는 노드에 실려 나가는 바이트 안에 구현이 있다» 로 그대로다.
 {
-  const src = readFileSync(new URL("./agent.js", import.meta.url), "utf8");
+  const shipped = [
+    new URL("./agent.js", import.meta.url),
+    new URL("../terminal/session-ops.js", import.meta.url),
+  ].map((u) => readFileSync(u, "utf8")).join("\n");
   for (const op of NODE_OPS) {
-    assert.ok(src.includes(`case "${op}"`), `🔴 caps 에 '${op}' 를 선언하는데 agent.ts 에 구현(case)이 없다 — 게이트웨이가 믿고 보낸다`);
+    assert.ok(shipped.includes(`case "${op}"`),
+      `🔴 caps 에 '${op}' 를 선언하는데 노드에 실려 나가는 코드에 구현(case)이 없다 — 게이트웨이가 믿고 보낸다`);
   }
 }
 
