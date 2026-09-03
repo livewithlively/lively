@@ -138,6 +138,12 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       //  ★ fail-open: handoff 가 false(비활성·상한·포크/핸드오프 실패)면 아래 게이트웨이 내부 attach 로 폴백 —
       //   최악의 경우라도 «오늘 동작»이지 attach 가 깨지지 않는다(매니지드 공유 게이트웨이 blast radius 대응).
       const tenantForWorker: TenantContext | null = tr.ok ? tr.tenant : (regCtx ?? null);
+      // ★ 허가된 attach 를 **남긴다** (#2625 T0). 종전엔 거부만 로그가 있고 성공은 한 줄도 없었다 —
+      //  그래서 «아무도 안 쓰는 세션에 3분마다 클라이언트가 하나씩 붙는다» 를 관측하고도 **누가 붙는지
+      //  물어볼 자리가 없었다**(20분을 봐도 로그가 0줄이다). 빈도는 탭 열기·재연결 단위라 낮다.
+      //  ua 는 자동 재연결(브라우저)과 다른 것을 가르는 최소 축이다 — 토큰은 싣지 않는다.
+      const via = attachWorkerHost.enabled() ? "worker" : "gateway";
+      logger.info({ id, userId: tk.userId, via, ua: String(req.headers["user-agent"] ?? "").slice(0, 80) }, "ws attach 허가");
       if (attachWorkerHost.enabled()) {
         const handed = await attachWorkerHost.handoff({ req, socket, head, id, tenant: tenantForWorker });
         if (handed) return; // 워커가 소켓을 소유 — 게이트웨이는 이 연결에서 손을 뗀다
