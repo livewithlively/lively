@@ -226,7 +226,7 @@ const kill = (r: ReapAttempt) => async (): Promise<ReapAttempt> => r;
 {
   const sp = spy();
   // GIVE_UP_AFTER=10 → 이미 9회 실패한 건이 한 번 더 실패하면 10회 = 상한 도달.
-  const r = await reapFailedTaskSessions(kill({ done: false, why: "본인 세션이 아닙니다" }),
+  const r = await reapFailedTaskSessions(kill({ done: false, reached: true, why: "본인 세션이 아닙니다" }),
     { keep: 0, ttlMin: 0 }, deps(sp, [stuck(1, { reap_fails: 9 })]));
   assert.equal(sp.gaveUp.length, 1, "상한에 닿았는데 포기하지 않았다 — 끝이 없다");
   assert.equal(sp.gaveUp[0].fails, 10);
@@ -238,7 +238,7 @@ const kill = (r: ReapAttempt) => async (): Promise<ReapAttempt> => r;
 // ── ⑦ 경계 — 상한 직전이면 아직 포기하지 않는다 ──
 {
   const sp = spy();
-  const r = await reapFailedTaskSessions(kill({ done: false, why: "본인 세션이 아닙니다" }),
+  const r = await reapFailedTaskSessions(kill({ done: false, reached: true, why: "본인 세션이 아닙니다" }),
     { keep: 0, ttlMin: 0 }, deps(sp, [stuck(1, { reap_fails: 8 })]));
   assert.equal(sp.gaveUp.length, 0, "상한 직전(9회)에서 포기했다 — 오프바이원, 한 번 일찍 누수를 만든다");
   assert.equal(sp.attempts.length, 1);
@@ -249,7 +249,7 @@ const kill = (r: ReapAttempt) => async (): Promise<ReapAttempt> => r;
 {
   const sp = spy();
   const rows = [1, 2, 3].map((i) => stuck(i, { reap_fails: 9 }));
-  await reapFailedTaskSessions(kill({ done: false, why: "본인 세션이 아닙니다" }),
+  await reapFailedTaskSessions(kill({ done: false, reached: true, why: "본인 세션이 아닙니다" }),
     { keep: 0, ttlMin: 0 }, deps(sp, rows));
   assert.equal(sp.gaveUp.length, 3, "3건 다 포기해야 한다");
   assert.equal(sp.alerts.length, 1, "포기 건수만큼 경보를 보냈다 — 31건이면 알림 31개다(#1675 쿨다운 교훈)");
@@ -273,6 +273,33 @@ const kill = (r: ReapAttempt) => async (): Promise<ReapAttempt> => r;
       { keep: 0, ttlMin: 0 }, deps(sp, [stuck(1, { reap_fails: 2, reap_next_at: bad })]));
     assert.deepEqual(sp.killed, [1], `다음시도 값이 '${bad}' 라고 시도를 건너뛰었다 — 오염 한 번에 회수가 영구 정지한다`);
   }
+}
+// ── ⑯ ★못 닿는 노드는 포기하지 않는다 — 잠든 노트북은 돌아온다 ──
+//  실측(2026-09-04 셀프호스트 게이트웨이): 이 로그를 채운 상위 넷이 전부 사람 노트북이었다
+//  (haruui-macbookair 21,414 · hammurabi 549 · honest-ai-pilot 366 · win-e2e-1541 183).
+//  2시간 만에 포기하면 노트북이 돌아와도 그 세션은 **아무도 다시 안 걷는다** = #1675 ★② 의 영구 누수.
+{
+  //  상한을 훌쩍 넘겨도(99회) 못 닿았으면 포기하지 않고 백오프만 계속한다.
+  const sp = spy();
+  const r = await reapFailedTaskSessions(kill({ done: false, reached: false, why: "node-offline" }),
+    { keep: 0, ttlMin: 0 }, deps(sp, [stuck(1, { reap_fails: 99 })]));
+  assert.equal(sp.gaveUp.length, 0,
+    "못 닿는 노드를 포기했다 — 잠든 노트북이 돌아와도 그 세션은 아무도 다시 안 걷는다(#1675 ★② 재발)");
+  assert.equal(sp.alerts.length, 0, "못 닿았을 뿐인데 사람을 불렀다");
+  assert.equal(sp.attempts.length, 1, "포기도 안 하고 재시도 예약도 안 했다 — 그 세션은 미아가 된다");
+  assert.equal(r.gaveUp, 0);
+  assert.equal(r.failed, 1);
+
+  //  대비 — 같은 횟수여도 **노드가 답을 했으면** 포기한다(회복될 길이 없다).
+  const sp2 = spy();
+  await reapFailedTaskSessions(kill({ done: false, reached: true, why: "본인 세션이 아닙니다" }),
+    { keep: 0, ttlMin: 0 }, deps(sp2, [stuck(1, { reap_fails: 99 })]));
+  assert.equal(sp2.gaveUp.length, 1, "노드가 답을 하고도 안 되는데 영원히 재시도한다 — 끝이 없다");
+
+  //  decideReap 이 reached 를 옳게 정한다 — 「살아있다」 확답도 닿은 것이다.
+  assert.equal(decideReap(false, null, "node-offline", false).reached, false, "못 닿았는데 닿았다고 했다");
+  assert.equal(decideReap(false, null, "본인 세션이 아닙니다", true).reached, true, "노드가 답했는데 못 닿았다고 했다");
+  assert.equal(decideReap(false, false, "x", false).reached, true, "「살아있다」 확답을 받았으면 닿은 것이다");
 }
 // ── ⑮ ★수정이 스스로 만든 새 영구 실패 — 상한 밖 미래는 백오프로 인정하지 않는다 ──
 //  사다리 끝(30분)보다 먼 미래가 그 칸에 들어가면 그 태스크는 영원히 건너뛰어져 **포기에도 안 닿는다**.
@@ -317,7 +344,7 @@ const kill = (r: ReapAttempt) => async (): Promise<ReapAttempt> => r;
 //  종전엔 호출부가 노드 원문을 버리고 「닿지 못함」이라는 합성 문구만 남겨, 이틀치 로그로도 원인을 못 봤다.
 {
   const sp = spy();
-  await reapFailedTaskSessions(kill({ done: false, why: "본인 세션이 아닙니다" }),
+  await reapFailedTaskSessions(kill({ done: false, reached: true, why: "본인 세션이 아닙니다" }),
     { keep: 0, ttlMin: 0 }, deps(sp, [stuck(1, { reap_fails: 9 })]));
   assert.equal(sp.gaveUp[0].why, "본인 세션이 아닙니다", "포기 기록이 원문을 잃었다 — 사후에 원인을 알 길이 없다");
   assert.equal(sp.alerts[0].detail.why, "본인 세션이 아닙니다", "경보가 원문을 잃었다");

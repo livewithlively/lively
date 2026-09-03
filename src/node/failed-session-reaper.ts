@@ -124,6 +124,19 @@ export function reapBackoffMs(fails: number): number {
  */
 export interface ReapAttempt {
   done: boolean;
+  /**
+   * 노드가 **답을 했나**(닿았나). 포기 카운터를 올릴지 가르는 축이다.
+   *
+   * ⚠ **못 닿은 것으로는 포기하지 않는다.** 실측(2026-09-04, 셀프호스트 게이트웨이): 이 로그를 채운
+   *  상위 넷이 전부 사람 노트북이었다(`haruui-macbookair` 21,414 · `hammurabi` 549 · `honest-ai-pilot` 366 ·
+   *  `win-e2e-1541` 183). 노트북은 밤새 잔다 — 2시간 만에 포기하면 그 세션은 노트북이 돌아와도
+   *  **아무도 다시 안 걷는다.** 그게 #1675 ★② 가 닫은 영구 누수를 다시 여는 것이다.
+   *  못 닿는 동안에도 백오프는 계속 길어지므로(핫루프는 사라진다) 무한 재시도의 비용은 없다.
+   *
+   * `true` 는 **노드가 실제로 거절했다**는 뜻일 때만이다 — 그때는 스스로 회복될 길이 없으니 끝을 낸다.
+   *  오프라인·무응답(타임아웃)은 `false`: 모르면 사용자 자산을 안 건드린다.
+   */
+  reached?: boolean;
   /** 실패 사유 — **노드가 준 원문**을 넣는다. 종전엔 호출부가 이걸 버리고 「닿지 못함」이라는 합성 문구만
    *  남겨서, 이틀치 로그를 다 읽어도 진짜 이유(403 「본인 세션이 아닙니다」)를 알 수 없었다. */
   why?: string;
@@ -141,10 +154,11 @@ export interface ReapAttempt {
  * ⚠ `null` 은 성공이 아니다. 「모르겠다」를 회수로 접는 순간 #1675 리뷰가 잡은 거짓 성공(못 걷은 세션을
  *  걷었다고 기록 → 노드가 돌아오면 멀쩡히 살아 있는 영구 누수)이 그대로 재현된다.
  */
-export function decideReap(killed: boolean, confirmedGone: boolean | null, why?: string): ReapAttempt {
+export function decideReap(killed: boolean, confirmedGone: boolean | null, why?: string, reached?: boolean): ReapAttempt {
   if (killed) return { done: true };
   if (confirmedGone === true) return { done: true, why: "이미 없는 세션(멱등 회수)" };
-  return { done: false, why };
+  // 「살아있다」는 확답(false)도 **닿았다**는 뜻이다 — 노드가 답을 했으니까.
+  return { done: false, reached: reached === true || confirmedGone === false, why };
 }
 
 /** 회수 대상 조회 — 실패·취소로 끝났는데 세션이 아직 안 걷힌 위탁. */
@@ -289,7 +303,9 @@ export async function reapFailedTaskSessions(
 
     const fails = (t.reap_fails ?? 0) + 1;
     const why = r.why ?? "(사유 없음)";
-    if (fails >= GIVE_UP_AFTER) {
+    // ⚠ 포기는 **노드가 답을 하고도 안 되는** 경우에만이다(위 ReapAttempt.reached 주석). 못 닿는 노드는
+    //  백오프만 계속 길어지고(핫루프 없음) 돌아오면 그때 걷힌다 — 잠든 노트북을 포기하면 그게 영구 누수다.
+    if (fails >= GIVE_UP_AFTER && r.reached === true) {
       gaveUp.push({ id, node: t.node_id, why });
       await markGaveUp(id, fails, why).catch((e) =>
         logger.warn({ err: (e as Error)?.message, task: id }, "실패 위탁 세션 회수 포기 표시 실패"));
