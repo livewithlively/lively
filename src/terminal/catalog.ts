@@ -73,6 +73,11 @@ function tenantRootBase(): string | null {
   // 셀프호스트 registry(#1750 S3) — 템플릿 미설정이면 홈 아래 기본 자리로 워크스페이스별 파일루트를 가른다.
   //  primary 는 slug 가 없어 여기 안 걸린다(= 종전 경로 그대로, 기존 파일 무회귀). DB 만 갈라지고 파일이
   //  섞이면 파일 탐색기에서 곧바로 남의 파일이 보인다 — 그래서 기본값이 있어야 한다(옵트인이 아니라).
+  //  ⚠ #2599 T3 — 이 술어의 **정본은 `org/tenancy/state.registryModeActive()`** 이고, 다른 인라인
+  //   재구현 3곳은 그 호출로 접었다. 여기만 남긴 이유는 «못 접어서» 가 아니라 **번들 경계** 다:
+  //   catalog 는 노드 에이전트 번들에 실리는데(scripts/node-agent-allowed-modules.json) 정본이 사는
+  //   org/tenancy/state 는 안 실린다 — import 하면 ops/state-dir 까지 딸려 들어간다(#2165: 간선 하나가
+  //   11개를 끌었다). 접는 값보다 경계를 지키는 값이 커서 남긴다. 철자를 고칠 일이 생기면 **정본과 함께** 고쳐라.
   const tpl = process.env.LIVELY_TENANT_ROOT_TEMPLATE
     || ((process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry"
       ? path.join(os.homedir(), "lively", "workspaces", "{slug}") : "");

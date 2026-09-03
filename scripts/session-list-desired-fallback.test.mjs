@@ -26,7 +26,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   ok(strictThrow > 0, "①-a strict 호출은 종전 그대로 던진다(«없음» 으로 오해하지 않는다)");
   ok(fallback > strictThrow, "①-b strict 가 아니면 shouldFallbackToDesired 로 «못 봤다 vs 없다» 를 가른다 — strict throw 뒤에");
   ok(call > fallback, "①-c 폴백이면 desiredFallbackSessions(DB desired 행) 로 간다");
-  ok(/shouldFallbackToDesired\(e,\s*tmuxRelayManaged\(\)\)/.test(blk), "①-d 폴백 여부는 매니지드 중계일 때만(tmuxRelayManaged) — 셀프호스팅은 종전 그대로 빈 목록");
+  ok(/shouldFallbackToDesired\(e,\s*tmuxViaRelay\(\)\)/.test(blk), "①-d 폴백 여부는 매니지드 **중계**일 때만(tmuxViaRelay) — 셀프호스팅(primary·registry secondary)은 종전 그대로 빈 목록. #2599 T3 이 gone 확답(tmuxServerAbsenceIsFinal)과 갈라놨으니 그쪽으로 바꿔 끼우면 안 된다");
   // 폴백 행은 관측이 아니다 — 회수·복원 판정이 이 행을 «살아 있다» 로 읽으면 안 되므로 observed:false 를 싣는다.
   const uo = read("src/terminal/session-unobserved.ts");
   ok(/observed:\s*false/.test(uo), "①-e 폴백 행은 observed:false 다");

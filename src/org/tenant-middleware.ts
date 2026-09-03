@@ -22,6 +22,7 @@
 
 import type { RequestHandler } from "express";
 import { resolveTenantFromHeaders, withTenant, type TenantContext } from "./tenant-context.js";
+import { registryModeActive } from "./tenancy/state.js";   // #2599 T3 — 테넌시 축 술어의 정본(인라인 재구현 금지)
 
 /** 셀프호스트 다중 워크스페이스(#1750 S1)의 요청 헤더 — 프론트 api()/하네스가 선택한 워크스페이스 slug. */
 export const WORKSPACE_HEADER = "x-lively-workspace";
@@ -98,7 +99,7 @@ export function tenantContextMiddleware(env: NodeJS.ProcessEnv = process.env, lo
   //  ⚠ 여기는 "어느 워크스페이스인가"만 정한다. "이 사람이 거기 멤버인가"는 인증이 끝나야 알 수 있으므로
   //   **인증 계층의 게이트**(org/tenancy/gate.ts — userFromSession·BearerVerifier)가 담당한다. 게이트가
   //   빠진 신규 인증 경로가 생기면 새는 것 아니냐 — 아니다: 인증 자체가 그 두 함수로 수렴한다(구조 테스트로 잠근다).
-  if ((env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry" && lookup
+  if (registryModeActive(env) && lookup
       && !(env.LIVELY_TENANT_HEADER_SECRET || "").trim()) {
     return (req, res, next) => {
       if (isTenantAgnosticPath(req.url || "")) { next(); return; }

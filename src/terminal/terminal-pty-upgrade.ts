@@ -13,6 +13,7 @@ import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import { logger } from "../log.js";
 import { resolveTenantFromHeaders, withTenant, type TenantContext } from "../org/tenant-context.js";
+import { registryModeActive } from "../org/tenancy/state.js";   // #2599 T3 — 테넌시 축 술어의 정본(인라인 재구현 금지)
 import { attachWorkerHost } from "./attach-worker-host.js";
 import { canAttach, sessionGone, ensureSessionOpts } from "./terminal-sessions.js";
 import { nodeCanAttach, nodeRelayAttach, isSelfNode } from "../node/registry.js";
@@ -65,7 +66,7 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
     //  이게 없으면 secondary 세션 attach 가 primary 컨텍스트로 돌아 기본 tmux 소켓을 뒤지고 4410(가짜
     //  '세션 없음')이 된다 — 세션은 lvly-<slug> 소켓에 살아 있는데.
     const registrySessionCtx = async (): Promise<{ id: string; slug: string } | null> => {
-      if (tr.ok || (process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() !== "registry") return null;
+      if (tr.ok || !registryModeActive()) return null;
       const sid = url.searchParams.get("session") || "";
       if (!sid) return null;
       const { workspaceForSession } = await import("../org/tenancy/registry.js");

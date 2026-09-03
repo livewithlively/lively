@@ -24,6 +24,17 @@
 //  여기서는 **tmux 소켓 파생값만** 소유하고 DB 쪽(`db/tenant-binding-boot` · `org/tenancy/state` ·
 //  `org/tenant-middleware`)과 파일 루트(`terminal/catalog`)는 손대지 않는다.
 //
+// ── 이름 붙은 술어를 «얇은 별칭» 이라 부르지 마라 (#2599 T3) ────────────────────────────────────
+// T2 가 종전 판정 함수들의 **몸통**을 이 모듈 조회로 바꿨다(`isolationEnabled` → `isolation !== "none"`,
+//  `memberExecConfigured` → `storage === "detached"`, `sessionExecConfigured`·`sessionSpawnPath` …).
+//  T3 이 그것들을 지우고 호출부마다 `execTopology().X === "y"` 를 인라인할 수도 있었지만 **안 했다** —
+//  그러면 «필드 값이 무슨 뜻인가» 의 판정이 1곳에서 N곳(memberExecConfigured 만 8자리)으로 늘어난다.
+//  이 프로젝트가 없애려는 것이 정확히 그 모양이라, 인라인은 «두 벌» 을 되만드는 일이다.
+//  ⇒ 규율은 **«env 는 여기서만 읽는다»(S1 이 지킨다) + «한 질문에 이름 하나»** 다. 이름이 남아 있는 것은
+//   빚이 아니라 그 두 번째 규율의 실행이다. 이름이 **두 질문**에 답하고 있으면 그때가 가를 때다 —
+//   T3 이 `tmuxRelayManaged()` 를 `tmuxServerAbsenceIsFinal` / `tmuxViaRelay` 로 가른 것이 그 사례다
+//   (조사 함정 4 가 T2 까지 안 고쳐진 이유가 바로 «한 이름이 두 답을 붙들고 있었다» 였다).
+//
 // ⚠ 이 모듈은 **런타임 import 가 없다**(순수 잎). 노드 에이전트 번들에 실리므로 무엇도 끌어오면 안 된다
 //  (#2165 의 교훈 — 간선 하나가 11개를 끌었다). 그 불변식은 node-agent-bundle-boundary 시험이 지킨다.
 
@@ -38,9 +49,6 @@ export type SessionHost =
 
 /** 세션을 무엇으로 가르나. 실제 격리 성립은 멤버별 게이트(`resolveMemberOsUser`)가 따로 본다 — 여기는 **배포가 고른 방식**이다. */
 export type IsolationMode = "none" | "os-user" | "container";
-
-/** 웹터미널 attach 바이트가 지나는 길. */
-export type AttachTransport = "inproc" | "worker-fd" | "node-relay";
 
 /** 세션 파일이 이 프로세스 호스트에 있나(= 게이트웨이와 같은 저장소인가). */
 export type StorageLocality = "colocated" | "detached";
@@ -78,7 +86,6 @@ export interface ExecTopology {
   sessionHost: SessionHost;
   tmux: TmuxPlacement;
   isolation: IsolationMode;
-  attachTransport: AttachTransport;
   storage: StorageLocality;
   hooks: TopologyHooks;
   /** 노드 에이전트의 자기 인증값(`LIVELY_NODE_TOKEN`). "" = 게이트웨이. `sessionHost==="node"` 의 근거이기도 하다. */
@@ -112,7 +119,7 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   // ⚠ 트림하지 않는다 — 종전 판별자가 `!!process.env.LIVELY_NODE_TOKEN` 이었다(공백 하나도 «노드»였다).
   //  여기서 트림하면 그 극단값에서 동작이 갈린다. 값 자체는 노드 에이전트가 인증에 그대로 쓴다.
   const nodeToken = env.LIVELY_NODE_TOKEN || "";
-  const relayTmux = (env.LIVELY_TMUX_EXEC || "").trim();                      // ← tmuxExecArgv · tmuxRelayManaged
+  const relayTmux = (env.LIVELY_TMUX_EXEC || "").trim();                      // ← tmuxExecArgv · tmuxViaRelay/tmuxServerAbsenceIsFinal
   const registryMode = (env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry";
   const hooks: TopologyHooks = {
     sessionEnsure: (env.LIVELY_SESSION_ENSURE || "").trim(),                  // ← sessionEnsureConfigured · sessionEnsureArgv
@@ -149,13 +156,14 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   const isolation: IsolationMode =
     env.LIVELY_MEMBER_ISOLATION === "off" ? "none" : hooks.sessionEnsure ? "container" : "os-user";
 
-  // ── attachTransport ──
-  //  노드의 attach 는 노드 데몬이 로컬 `tmux -CC` 를 물고 게이트웨이로 중계한다(node-relay).
-  //  ⚠ **오늘 이 값으로 분기하는 코드가 없다**(attach 워커 host 는 K 로 직접 판단한다). 이 프로젝트가
-  //   없애려는 것이 «쓰는 사람 없이 자란 판정»인데 여기서 하나를 새로 심는 셈이라, 기한을 못박는다 —
-  //   **T3(#2604)이 소비처를 옮기거나, 안 옮길 거면 이 필드를 지운다.** 안 쓰는 필드는 거짓말이 된다.
-  const attachTransport: AttachTransport =
-    sessionHost === "node" ? "node-relay" : attachWorkerK > 0 ? "worker-fd" : "inproc";
+  // ── attachTransport 는 없다 (#2599 T3 에서 제거) ──
+  //  T2 가 `inproc|worker-fd|node-relay` 를 두고 «소비처를 옮기거나 지워라» 로 기한을 걸었다. 옮길 수
+  //   없어서 지웠다 — 소비처가 없어서가 아니라 **축이 다르기 때문이다.** 그 셋을 실제로 고르는 자리는
+  //   `terminal-pty-upgrade` 의 업그레이드 핸들러인데, 거기서 node-relay 는 **요청의 `?node=<id>`** 로
+  //   갈린다(같은 게이트웨이가 어떤 요청은 워커로, 어떤 요청은 노드로 보낸다). 프로세스 한 벌로 얼린
+  //   값은 그 분기를 못 대표한다 — 게이트웨이에서 이 필드는 영영 `node-relay` 가 아니므로, 그 이름을
+  //   보고 `=== "node-relay"` 를 쓰면 **항상 거짓인 분기**가 된다. 남겨 두는 편이 위험했다.
+  //  ⇒ 프로세스 축의 노브인 `attachWorkerK` 만 남는다(`attach-worker-host` 가 그 하나만 읽는다).
 
   // ── storage ──
   //  «세션 파일이 이 호스트에 있나». 종전엔 `memberExecConfigured()` 가 이 질문을 이름 없이 답했다
@@ -165,7 +173,7 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   //   그건 폴더가 아니라 **프로세스**의 지역성이라 같은 축이고, 두 자리가 같은 낱말을 쓰는 것이 의도다.
   const storage: StorageLocality = hooks.memberExec ? "detached" : "colocated";
 
-  return { sessionHost, tmux, isolation, attachTransport, storage, hooks, nodeToken, attachWorkerK };
+  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK };
 }
 
 let frozen: ExecTopology | null = null;
@@ -201,6 +209,25 @@ export function unfreezeExecTopology(): void { frozen = null; }
 export function onNode(): boolean { return execTopology().sessionHost === "node"; }
 
 /**
+ * **이 호출**의 tmux 서버가 그 워크스페이스 전용인가 (#2599 T3).
+ *
+ * ⚠ 이건 **프로세스 축이 아니라 요청 축**이다. `tmux.socket` 이 있다는 것은 «이 배포가 registry 모드로 떴다» 일
+ *  뿐이고, 그런 게이트웨이도 **primary 워크스페이스를 무컨텍스트로 함께 서비스한다**(`org/tenant-middleware`:
+ *  «헤더 없음/primary → 컨텍스트 없이 통과», `db/tenant-binding-boot`: «primary 는 남이 아니라 종전의 그
+ *  워크스페이스 자신»). 그 호출은 아래 `tmuxArgvFor` 가 **기본(공용) 소켓**으로 보낸다. 그러니 부팅 상수만 보고
+ *  «전용 서버다» 라고 답하면 primary 트래픽까지 전용으로 오분류된다.
+ *  ⇒ **슬러그를 함께 받아야 한다.** 같은 함정을 T3 이 `attachTransport` 에서 필드째 지운 적이 있다
+ *   (프로세스 한 벌로 얼린 값이 요청마다 갈리는 분기를 대표하지 못한다).
+ *
+ * 쓰는 곳 둘 — argv 조립(`tmuxArgvFor`)과 «서버 부재 = 세션 소실 확답» 판정(`terminal/tmux-exec`).
+ *  **둘이 반드시 같은 답을 봐야** 「전용 소켓으로 보냈는데 확답은 공용 규약으로 준다」 같은 어긋남이 안 생긴다.
+ */
+export function tmuxServerIsDedicated(slug: string | null, t: TmuxPlacement = execTopology().tmux): boolean {
+  if (t.kind === "exec") return true;   // 테넌트별 중계 = 그 테넌트만의 tmux 컨테이너
+  return !!t.socket && !!slug && slug !== "primary";
+}
+
+/**
  * tmux argv 접두사 — **부팅 상수(placement) × 테넌트 컨텍스트(slug)** 의 결합을 이 모듈이 소유한다.
  *  종전 `tmuxExecArgv()` 안에 숨어 있던 결합을 그대로 옮긴 것이라 결과가 바이트 단위로 같다.
  *
@@ -219,8 +246,9 @@ export function tmuxArgvFor(slug: string | null, tmuxBin: string): string[] {
     // ── 셀프호스트 registry(#1750 S3) — 같은 호스트에서 워크스페이스마다 tmux 서버를 가른다. ──
     //  secondary 면 `-L lvly-<slug>` 전용 소켓: 목록·옵션·attach 가 전부 그 서버 안이라 **다른 워크스페이스의
     //  세션이 목록에 뜨는 일 자체가 없다**(이름 규약이 아니라 서버 격리). primary·무컨텍스트는 기본 소켓 = 종전 그대로.
-    if (!t.socket || !slug || slug === "primary") return [];
-    return [tmuxBin, "-L", t.socket.replace("{slug}", slug)];
+    //  ⚠ 그 «전용이냐» 판정은 아래 `tmuxServerIsDedicated` 가 소유한다 — 여기서 조건을 다시 쓰면 두 벌이 된다(#2599 T3).
+    if (!t.socket || !tmuxServerIsDedicated(slug, t)) return [];
+    return [tmuxBin, "-L", t.socket.replace("{slug}", slug!)];
   }
   // ── 테넌트별 중계(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스하면 tmux 서버도 워크스페이스마다 다르다.
   if (!t.command.includes("{slug}")) return t.command.split(/\s+/);
