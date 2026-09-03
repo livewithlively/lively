@@ -22,10 +22,14 @@ import { isNoTmuxServer } from "./tmux-exec.js";
 
 /**
  * tmux 목록 실패가 «못 봤다» 인가(순수) — 매니지드 중계에서만 참. «없다»(서버 부재 확답)는 거짓.
- *  relayManaged 는 tmuxRelayManaged()(LIVELY_TMUX_EXEC 유무) — 호출부가 넘긴다(호출 시점 env 를 읽는 규약).
+ *  viaRelay 는 `tmux-exec.tmuxViaRelay()` — 호출부가 넘긴다(순수성 유지).
+ *  ⚠ #2599 T3 — 종전엔 `tmuxRelayManaged()` 였고, 그 이름은 gone 확답 판정과 **같은 술어를 공유**했다.
+ *   T3 이 둘을 갈랐다(`tmuxServerAbsenceIsFinal` / `tmuxViaRelay`). 여기가 받아야 하는 것은 **중계 여부**다 —
+ *   위 머리말의 «registry 는 이 조각에 들어오지 않는다» 가 #2544 의 완료 조건이라, gone 확답이 전용 소켓까지
+ *   넓어져도 이 폴백은 그대로 중계 전용으로 남는다.
  */
-export function shouldFallbackToDesired(err: unknown, relayManaged: boolean): boolean {
-  return relayManaged && !isNoTmuxServer(err);
+export function shouldFallbackToDesired(err: unknown, viaRelay: boolean): boolean {
+  return viaRelay && !isNoTmuxServer(err);
 }
 
 /**

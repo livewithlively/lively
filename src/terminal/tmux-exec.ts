@@ -144,20 +144,46 @@ export async function listSessionPanePids(): Promise<{ ok: boolean; panes: Map<s
 //  웹터미널이 '세션 종료됨'을 띄우려면 ⓑ여야 한다 — ⓒ를 종료로 오인하면 살아있는 세션을 죽었다고 알리게 되는데,
 //  그게 #687 이 막으려던 바로 그 오인이다(그래서 그때 프론트를 '계속 재연결'로 바꿨고, 이번엔 그 반대급부인
 //  '진짜 닫혔는데 영원히 재접속중'을 고친다). 따라서 tmux 가 **응답해서 "그런 세션 없음"이라고 말할 때만** true.
-// 관리형 중계 배포인가(#1437) — tmux 가 **테넌트별 컨테이너** 안에 사는 배포. 이 판정이 gone 확답의 범위를 바꾼다:
-//  중계에선 tmux 서버 부재("no server running")가 '일시장애'가 아니라 그 테넌트 세션의 **영구 소실**이다(아래 머리말).
-//  · 토폴로지의 tmux 자리가 `exec`(중계 클라이언트 tmux-relay.cjs)일 때만 참이다. registry 모드(`-L lvly-<slug>`
-//    로컬 소켓)는 자리가 `socket` 이라 여기 안 걸린다 — 로컬 단일호스트의 보수적 판정(서버 부재=판정 불가)을
-//    그대로 유지한다(무회귀). ⚠ 이 «안 걸린다» 는 의도가 아니라 부작용이다(조사 함정 4) — 셀프호스트 전용
-//    소켓의 서버도 통째로 증발할 수 있는데 그때 gone 확답을 못 준다. 고치는 것은 T3 이다.
-export function tmuxRelayManaged(): boolean {
+// ── 종전 `tmuxRelayManaged()` 를 두 술어로 가른다 (#2599 T3 · 조사 함정 4) ─────────────────────────
+// 그 이름 하나가 **서로 다른 두 질문**에 답하고 있었다. 답이 갈리는 표면(registry secondary)이 있어서,
+//  한쪽을 고치면 다른 쪽이 함께 바뀌는 구조였다 — 그게 함정 4 가 T2 까지 안 고쳐진 이유다.
+//   Q1 «tmux 서버가 없다 = 그 세션들이 영구 소실됐다는 확답인가»  → 아래 tmuxServerAbsenceIsFinal
+//   Q2 «tmux 호출이 중계를 지나나(= 실패가 전송 장애일 수 있나)»   → 아래 tmuxViaRelay
+
+/**
+ * tmux 서버 부재("no server running")를 **세션 영구 소실의 확답**으로 승격해도 되는 자리인가(#1437).
+ *
+ * 참인 조건은 «그 tmux 서버가 이 워크스페이스 전용인가» 다 — 전용 서버가 없으면 그 서버에만 살던
+ *  인메모리 세션은 실제로 증발한 것이고, 스스로 돌아오지 않는다(복원만이 길이다).
+ *  · `exec`(매니지드 중계) — 테넌트별 tmux 컨테이너. #1437 이 고친 원래 자리.
+ *  · `socket` **이면서 이름이 있는 소켓**(registry secondary `-L lvly-<slug>`) — 워크스페이스 전용 소켓이라
+ *    같은 논리가 그대로 성립한다. T2 까지는 여기가 «판정 불가» 로 접혀 셀프호스트 secondary 가 #1437 이전
+ *    증상(복원이 영영 안 열리고 클라가 무한 재연결)을 그대로 갖고 있었다 — 조사 함정 4 가 지목한 구멍이다.
+ *  · 기본 소켓(primary, `socket === null`)은 **종전 그대로 거짓**. 그 소켓은 이 워크스페이스 전용이 아니라
+ *    박스의 공용이라 «전용 서버 부재 = 그 워크스페이스 세션 소실» 이라는 논리가 성립하지 않는다.
+ *    #835 의 보수적 규약(모르면 종료라 말하지 않는다)을 그대로 둔다.
+ */
+export function tmuxServerAbsenceIsFinal(): boolean {
+  const t = execTopology().tmux;
+  return t.kind === "exec" || t.socket !== null;
+}
+
+/**
+ * tmux 호출이 **중계를 지나나**(매니지드) — 목록 실패를 «못 봤다» 로 볼 수 있는 자리인가(#2544).
+ *
+ * ⚠ 위 술어와 **일부러 다르다.** 중계는 브로커 재접속·허브 503·타임아웃 같은 «전송이 못 닿았다» 가 있어
+ *  목록 실패가 «세션 0개» 를 뜻하지 않는다. 로컬 소켓(primary·registry secondary)은 전송 층이 없어서
+ *  그 폴백이 성립하지 않는다 — `session-unobserved` 머리말이 «registry 는 이 조각에 들어오지 않는다» 를
+ *  #2544 의 완료 조건으로 적어 두었다. 그래서 gone 확답을 secondary 로 넓히면서도 이쪽은 안 넓힌다.
+ */
+export function tmuxViaRelay(): boolean {
   return execTopology().tmux.kind === "exec";
 }
 // 중계에서 'tmux 서버 자체가 없다'의 확답 문구 — 소켓이 스테일(서버 죽음)이면 "no server running on <path>",
 //  소켓 파일이 없으면(재생성된 빈 컨테이너) "error connecting to <path> (No such file or directory)".
 //  ⚠ 컨테이너 보장/생성 실패("tmux 컨테이너 …")는 여기 안 걸린다 = 판정 불가로 남는다(도커·노드 일시장애 → 재연결 유지).
 const RELAY_SERVER_GONE_RE = /\bno server running\b|error connecting to .+\((?:No such file or directory|Connection refused)\)/i;
-export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, relayManaged: boolean = tmuxRelayManaged()): boolean {
+export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, serverAbsenceIsFinal: boolean = tmuxServerAbsenceIsFinal()): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown; code?: unknown };
   if (e.killed || e.signal) return false; // 타임아웃(SIGTERM 으로 kill)·시그널 종료 → 판정 불가
@@ -171,7 +197,7 @@ export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, relayMa
   //  (상민님 실측 2026-08-26, lively-46e3/box-sangmin-yoon: has-session → "no server running", 복원 두 번 뜨고 실패).
   //  #835 오검출 위험 없음: **살아 있는 세션은 서버가 살아 있다는 뜻**이라 이 문구가 나올 수 없다(그땐 has-session 성공
   //  또는 "can't find session"). 컨테이너 정지→재기동 창의 서버 부재도 그 테넌트 세션이 실제로 증발한 상태라 gone 이 맞다.
-  if (relayManaged && RELAY_SERVER_GONE_RE.test(String(e.stderr ?? ""))) return true;
+  if (serverAbsenceIsFinal && RELAY_SERVER_GONE_RE.test(String(e.stderr ?? ""))) return true;
   // psmux(윈도우 노드, #1791 실측): `has-session -t <없는 id>` 가 **stderr 한 글자 없이 exit 1** 로 끝난다(tmux 의 "can't find
   //  session" 문구가 없다). 그래서 종전엔 윈도우 노드의 죽은 세션이 영영 '판정 불가'였다 — nodeCanAttach 가 4410 대신 4403 을
   //  내고, #1791 복원·삭제의 gone 확답도 못 받았다(복원이 already 로 끝남, 실측). psmux 는 서버가 세션당 프로세스라
