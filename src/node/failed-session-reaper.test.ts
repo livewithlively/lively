@@ -2,7 +2,7 @@
 //  이 판정이 틀리면: 너무 적게 걷으면 어니스트 2026-08-12 재발(세션 2,300개 → 스왑 고갈 → 박스 다운),
 //  너무 많이 걷으면 검시 대상을 잃는다(실패 원인을 못 본다).
 import { strict as assert } from "node:assert";
-import { planFailedSessionReap, reapFailedTaskSessions, reapBackoffMs, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
+import { planFailedSessionReap, reapFailedTaskSessions, reapBackoffMs, decideReap, isBackedOff, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
 
 const NOW = new Date("2026-08-13T00:00:00.000Z").getTime();
 const minsAgo = (m: number): string => new Date(NOW - m * 60_000).toISOString();
@@ -273,6 +273,26 @@ const kill = (r: ReapAttempt) => async (): Promise<ReapAttempt> => r;
       { keep: 0, ttlMin: 0 }, deps(sp, [stuck(1, { reap_fails: 2, reap_next_at: bad })]));
     assert.deepEqual(sp.killed, [1], `다음시도 값이 '${bad}' 라고 시도를 건너뛰었다 — 오염 한 번에 회수가 영구 정지한다`);
   }
+}
+// ── ⑮ ★수정이 스스로 만든 새 영구 실패 — 상한 밖 미래는 백오프로 인정하지 않는다 ──
+//  사다리 끝(30분)보다 먼 미래가 그 칸에 들어가면 그 태스크는 영원히 건너뛰어져 **포기에도 안 닿는다**.
+//  이 프로젝트가 없애려는 「종료 조건 없는 상태」를 수정이 다시 만드는 자리다.
+{
+  const min = 60_000;
+  assert.equal(isBackedOff(null, NOW), false, "칸이 없는데 건너뛰었다");
+  assert.equal(isBackedOff(undefined, NOW), false, "칸이 없는데 건너뛰었다");
+  assert.equal(isBackedOff("언젠가", NOW), false, "읽을 수 없는 값에 건너뛰었다");
+  assert.equal(isBackedOff(new Date(NOW - min).toISOString(), NOW), false, "이미 지난 시각인데 건너뛰었다");
+  assert.equal(isBackedOff(new Date(NOW + 10 * min).toISOString(), NOW), true, "정상 백오프 중인데 시도했다");
+  assert.equal(isBackedOff(new Date(NOW + 29 * min).toISOString(), NOW), true, "사다리 안(29분)인데 시도했다");
+  assert.equal(isBackedOff("3000-01-01T00:00:00.000Z", NOW), false,
+    "상한 밖 먼 미래를 백오프로 인정했다 — 그 태스크는 영원히 건너뛰어져 포기에도 안 닿는다");
+
+  //  회수기 배선 — 먼 미래 값이 박혀 있어도 회수는 계속된다.
+  const sp = spy();
+  await reapFailedTaskSessions(async (t) => { sp.killed.push(t.id); return { done: true }; },
+    { keep: 0, ttlMin: 0 }, deps(sp, [stuck(1, { reap_fails: 2, reap_next_at: "3000-01-01T00:00:00.000Z" })]));
+  assert.deepEqual(sp.killed, [1], "먼 미래 값 하나로 그 세션의 회수가 영구 정지했다");
 }
 // ── ⑪⑫ 백오프 사다리 경계 — 0회는 즉시, 사다리를 넘으면 포화 ──
 {

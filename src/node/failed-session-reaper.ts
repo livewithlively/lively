@@ -94,6 +94,22 @@ const BACKOFF_MS = [30_000, 60_000, 120_000, 240_000, 480_000, 960_000, 1_800_00
 /** 이만큼 연속 실패하면 포기한다(마지막 값 포화 포함 ≈ 2시간). 회수는 급한 일이 아니라 넉넉히 준다. */
 const GIVE_UP_AFTER = 10;
 
+/** 사다리 끝 = 우리가 만들 수 있는 최대 대기. 이보다 먼 미래는 우리가 쓴 값이 아니다. */
+const MAX_BACKOFF_MS = BACKOFF_MS[BACKOFF_MS.length - 1];
+
+/**
+ * 지금은 건너뛸 때인가(순수) — `reap_next_at` 이 **읽히고, 미래고, 상한 안**일 때만 true.
+ *
+ * 세 조건 모두 「모르면 시도한다」 쪽으로 기운다. 회수를 한 번 더 시도하는 비용은 RPC 한 번이지만,
+ *  잘못 건너뛰면 그 세션은 아무도 다시 안 본다.
+ */
+export function isBackedOff(nextAt: string | null | undefined, now: number): boolean {
+  if (!nextAt) return false;
+  const due = Date.parse(nextAt);
+  if (!Number.isFinite(due)) return false;              // 오염 — 백오프 없음으로 본다
+  return due > now && due <= now + MAX_BACKOFF_MS;      // 상한 밖 미래는 우리 값이 아니다 → 지금 시도한다
+}
+
 /** 실패 n 회 뒤 다음 시도 시각(ms). */
 export function reapBackoffMs(fails: number): number {
   if (fails <= 0) return 0;
@@ -260,9 +276,11 @@ export async function reapFailedTaskSessions(
   for (const id of plan.reap) {
     const t = byId.get(id);
     if (!t) continue;
-    const due = t.reap_next_at ? Date.parse(t.reap_next_at) : 0;
     // 시각을 못 읽으면(오염) 백오프가 없는 것으로 본다 — 파싱 실패로 회수가 영영 멈추지 않게.
-    if (Number.isFinite(due) && due > now) { backedOff++; continue; }
+    //  ⚠ **읽히는 값도 상한을 씌운다.** 우리가 쓰는 최대치는 사다리 끝(now+30분)인데, 그 칸이 어떤 경위로든
+    //   먼 미래(예: 3000년)가 되면 그 태스크는 영원히 건너뛰어져 포기에도 안 닿는다 — 이 프로젝트가 없애려는
+    //   «종료 조건 없는 상태» 를 수정이 스스로 다시 만드는 꼴이다. 상한 밖이면 지금 시도할 때가 된 것으로 본다.
+    if (isBackedOff(t.reap_next_at, now)) { backedOff++; continue; }
 
     let r: ReapAttempt;
     try { r = await killSession(t); }
