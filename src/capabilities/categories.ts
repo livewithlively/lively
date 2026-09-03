@@ -166,6 +166,9 @@ const categoryUpdate: Capability = {
           description: b.description != null ? String(b.description) : undefined,
           should: b.should != null ? String(b.should) : undefined,
           cross_cutting: typeof b.cross_cutting === "boolean" ? b.cross_cutting : undefined,
+          //  ⚠ 입력 스키마에만 넣고 여기 빠뜨리면 **웹·REST 에서 조용히 무시된다**(MCP 만 동작).
+          //   dev 실측(2026-09-03): [치우기] 버튼이 200 을 받고 아무 일도 안 했다 — 실패조차 아니었다.
+          state: b.state === "active" || b.state === "deprecated" ? b.state : undefined,
         };
       } }],
   },
