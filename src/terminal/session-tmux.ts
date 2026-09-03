@@ -12,7 +12,6 @@
 //  · LIVELY_SESSION_ENSURE = "<프로그램> … {slug}" — 세션 컨테이너를 미리 확보하는 훅(매니지드: session-ensure-relay.cjs).
 //    표준입력으로 요청 JSON, 표준출력으로 JSON {container, created}. 비-0 은 실패다. **이게 설정된 배포(=매니지드)면
 //    격리 새 세션은 항상 세션 컨테이너 안 tmux 다.** 셀프호스트는 이 훅이 없어 종전(wrapAsMember=box-spawn) 그대로.
-//  · (폐지) LIVELY_TMUX_IN_SESSION — 3단계의 점진 롤아웃 게이트였다. 4단계에서 옛 경로를 없애 게이트할 대상이 없어졌다(이제 무시).
 //  기존 세션은 어느 쪽이든 안 바뀐다(태어날 때 정해진다). ⚠ 호출 시점에 env 를 읽는다(tmuxExecArgv 와 같은 이유).
 //
 // ⚠ 이 모듈은 노드 에이전트 번들에도 실린다(sessions.ts 가 import) — DB·자격 모듈을 끌어오지 않는다.
@@ -28,7 +27,6 @@ export function sessionEnsureConfigured(env: NodeJS.ProcessEnv = process.env): b
  * (순수) 이 테넌트의 **새 세션**이 «자기 세션 컨테이너 안 tmux» 로 뜨나.
  *  #2546 (4단계) — 옛 경로를 없앴으므로 **매니지드(= ensure 훅 설정)면 항상 참**이다. 슬러그가 없으면(단일 테넌트
  *  셀프호스트) 거짓 — 훅에 테넌트 컨텍스트를 줄 수 없다. 셀프호스트(훅 없음)도 거짓 → wrapAsMember(box-spawn) 그대로.
- *  종전의 LIVELY_TMUX_IN_SESSION 글롭 게이트는 폐지했다(게이트할 옛 경로가 없다).
  */
 export function tmuxInSessionContainer(slug: string | null, env: NodeJS.ProcessEnv = process.env): boolean {
   return !!slug && sessionEnsureConfigured(env);
@@ -71,7 +69,7 @@ export interface SessionEnsureRequest {
 
 /**
  * 훅을 실행해 세션 컨테이너를 확보한다. 실패(비-0·비JSON·container 없음·타임아웃·실행 불가)는 **던진다** — 조용한 폴백 금지.
- *  타임아웃 기본 130초: 매니지드의 세션 spawn 훅(container-spawn.sh)이 브로커에 주던 `--max-time 120` 과 같은 급이다
+ *  타임아웃 기본 130초: 옛 경로의 세션 spawn 훅(5단계 #2547 에서 삭제)이 브로커에 주던 `--max-time 120` 과 같은 급이다
  *  (이미지 전개·용량 심사·CNI·runsc 기동이 다 여기 든다).
  */
 export async function ensureSessionContainerViaRelay(

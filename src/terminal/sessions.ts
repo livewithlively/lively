@@ -644,7 +644,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       relocateHome: sp.shared_cache_relocate_home,
     });
     //  #2545 — 새 경로(세션 컨테이너 안 tmux)엔 싣지 않는다: 이 값의 경로는 게이트웨이 뷰라 세션 컨테이너에 없고, 옛 경로에서도
-    //   세션 spawn 훅(container-spawn.sh)이 이 값을 하네스에 넘기지 않았다 — 하네스가 보는 env 를 그대로 둔다.
+    //   (옛 경로의) 세션 spawn 훅도 이 값을 하네스에 넘기지 않았다 — 하네스가 보는 env 를 그대로 둔다.
     if (!inside) for (const [k, v] of Object.entries(cacheEnv)) args.push("-e", `${k}=${v}`);
   } catch (err) {
     // 정책을 못 읽어도 세션 생성을 막지 않는다 — 캐시 공유는 최적화지 필수 기능이 아니다.
@@ -683,7 +683,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       try {
         await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
           sessionId: id, osUser, cwd: target,
-          memMb: cg?.maxMb && cg.maxMb > 0 ? cg.maxMb : (cg?.highMb ?? 0),   // container-spawn.sh 와 같은 셈(max 없으면 high, 0 = 브로커 기본)
+          memMb: cg?.maxMb && cg.maxMb > 0 ? cg.maxMb : (cg?.highMb ?? 0),   // 옛 spawn 훅과 같은 셈(max 없으면 high, 0 = 브로커 기본)
           memRequestMb: cg?.requestMb ?? 0,
           tmux: "inside",
         });
