@@ -26,7 +26,7 @@
 import { anchoredPopover, api, apiUrl, el, personFace, sv, toast, TOKEN_KEY } from '../core.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 곁칸 배치는 이 창의 사실
 import { canOpenInAside, openInAside } from './aside-slot.js';
-import { makeSplitter } from './split.js';
+import { makeSplitter, readSplit } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { hasBrowserSurface } from './browser-surface.js';
@@ -165,7 +165,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  이 세션은 웹을 띄워 두고, 저 세션은 타임라인을 본다. 그걸 매번 다시 고르게 하지 않는다.
   //  기록은 이 브라우저에(칸 배치와 같은 급의 보기 취향), 세션 id 로 — 없으면 공용 기본값(lay.act)으로 떨어진다.
   const ACT_KEY = 'pn_act_by_sess';
-  const actKey = (): string => String(opts.sessionId || ('p' + id));
+  //  ⚠ **`opts.sessionId` 를 쓰면 안 된다**(원준 2026-09-03 신고의 한 갈래) — 서랍에서 세션을 갈아 끼울 때
+  //   이 셸은 다시 그리지 않으므로 그 값은 **처음 연 세션에 굳는다**. 그러면 '세션마다 기억한다'가 실은
+  //   '이 창을 처음 연 세션에 전부 덮어쓴다'가 된다. 지금 보는 세션은 curSession() 만이 안다.
+  const actKey = (): string => String(curSession() || ('p' + id));
   type ActMap = Record<string, Partial<Record<Zone, PartType>>>;
   function readActs(): ActMap {
     try { const m = JSON.parse(localStorage.getItem(ACT_KEY) || '{}'); return m && typeof m === 'object' ? m as ActMap : {}; }
@@ -185,7 +188,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     } catch (_) { /* noop */ }
   }
   /** 이 세션이 마지막으로 보던 탭을 되살린다 — 지금 칸에 실제로 들어 있는 것만(빠진 탭은 무시). */
-  (function applySessionAct(): void {
+  function applySessionAct(): void {
     if (loose) return;
     const mine = readActs()[actKey()];
     if (!mine) return;
@@ -193,7 +196,35 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const t = mine[z];
       if (t && lay[z].includes(t)) lay.act[z] = t;
     }
-  })();
+  }
+  applySessionAct();
+
+  // ── 곁칸의 '보기 상태'는 세션마다 (원준 2026-09-03) ────────────────────────────────
+  //  #1819 확정 원문: *"지식과 자료 위젯을 제외하고는 모두 다 각 세션에 딸려있는 거야 … 단 띄워져 있는
+  //  창의 종류만 같은 프로젝트 안의 다른 세션들이 공유하게."* 그런데 **크기·접힘은 그 판정표에 없었고**,
+  //  실제 구현은 브라우저 전역 한 값이었다(split.ts 의 `panes_side`·`panes_bottom` 키 하나씩). 그래서
+  //  한 세션에서 곁칸을 넓히면 **모든 세션·모든 프로젝트가 같이 넓어졌다** — 결정된 적 없는 자리라 고친다.
+  //   · 세션마다: 폭·높이 · 접힘(sideOn·bottomOn) · 활성 탭. (좌우 자리는 폭에서 자동으로 따라온다 — side-swap)
+  //   · 공유(프로젝트): **탭의 종류**(칸에 무엇이 들어 있나) — 위 확정의 그 한 줄.
+  //  ⚠ 처음 여는 세션은 **마지막으로 쓰던 값을 물려받는다** — 세션마다 매번 다시 끌게 하면 그게 #1719 가
+  //   피하려던 '설정할 게 많다'로 되돌아간다(배치의 `last` 폴백과 같은 규칙). 전역 키는 그 '마지막 값'으로 남는다.
+  const VIEW_KEY = 'pn_view_by_sess';
+  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean };
+  function readViews(): Record<string, View> {
+    try { const m = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return m && typeof m === 'object' ? m as Record<string, View> : {}; }
+    catch (_) { return {}; }
+  }
+  function saveView(patch: View): void {
+    if (loose || EMBEDDED) return;               // 자투리 화면·끼워 넣은 판의 임시 상태를 정본으로 굳히지 않는다
+    try {
+      const m = readViews();
+      const k = actKey();
+      m[k] = { ...(m[k] || {}), ...patch };
+      const keys = Object.keys(m);
+      if (keys.length > 300) for (const kk of keys.slice(0, keys.length - 300)) delete m[kk];   // act 맵과 같은 상한
+      localStorage.setItem(VIEW_KEY, JSON.stringify(m));
+    } catch (_) { /* noop */ }
+  }
 
   //  ⭐ 이름만은 **셸 목록**에서 가져온다(#2579 — 판단은 lib/door-name.ts 한 자리에).
   //   `detail` 은 이 탭을 열 때 한 번 읽고 마는데(refreshDetail 은 마운트와 「프로젝트 상세」 변경에서만 돈다),
@@ -315,7 +346,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onChanged: () => { void refreshDetail(); opts.onProjectChanged?.(); },
     openSettings: () => openSettings(),
     sessionId: opts.sessionId || null,
-    onSessionPicked: (sid) => { trailFor(sid); announceSession(sid); opts.onSessionPicked?.(sid); paintDoor(); },
+    onSessionPicked: (sid) => { trailFor(sid); announceSession(sid); opts.onSessionPicked?.(sid); applySessionAct(); applyView(); paintAll(); },
     // 세션 화면을 붙일 때 **그 세션의 발자취 그릇**을 함께 넘긴다 — 대화가 읽히는 대로 타임라인 칸이 자란다.
     mountSession: opts.mountSession ? (host, sid) => opts.mountSession!(host, sid, { trail: trailFor(sid) }) : undefined,
     onSessionCreated: (row) => { opts.onSessionCreated?.(row); paintDoor(); },
@@ -418,15 +449,31 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     grow: () => (body.classList.contains('sw-left') ? 1 : -1),
     label: '곁칸 너비',
     onDrag: (px) => swap?.onDrag(px),
-    onEnd: (px) => swap?.onEnd(px),
+    //  놓는 순간 **이 세션의 폭**으로 적는다. makeSplitter 는 전역 키에도 그대로 남기는데(그건 '마지막으로 쓰던 값'),
+    //  그게 다음에 처음 여는 세션이 물려받을 값이다 — 둘은 싸우지 않는다(읽을 때 세션 값이 먼저다).
+    onEnd: (px) => { swap?.onEnd(px); saveView({ sideW: Math.round(px) }); },
   });
-  const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이' });
+  const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이',
+    onEnd: (px) => saveView({ bottomH: Math.round(px) }) });
+
+  /** 지금 보는 세션의 폭·높이·접힘을 화면에 입힌다 — 없으면 마지막으로 쓰던 값(전역 키)으로 떨어진다.
+   *  ⚠ 여기서는 **전역 키에 쓰지 않는다**(CSS 변수만 세팅) — 세션을 훑어보기만 해도 '마지막 값'이 흔들리면
+   *   다음에 새로 여는 세션이 방금 스쳐 본 세션의 폭을 물려받는다. */
+  function applyView(): void {
+    const v = loose ? {} : (readViews()[actKey()] || {});
+    const w = Math.max(220, Math.min(swap?.maxSideW() ?? 620, Number(v.sideW) || readSplit('panes_side', 340)));
+    const h = Math.max(120, Math.min(560, Number(v.bottomH) || readSplit('panes_bottom', 240)));
+    body.style.setProperty('--pn-side-w', w + 'px');
+    colMain.style.setProperty('--pn-bottom-h', h + 'px');
+    if (typeof v.sideOn === 'boolean') lay.sideOn = v.sideOn;
+    if (typeof v.bottomOn === 'boolean') lay.bottomOn = v.bottomOn;
+  }
   colMain.append(mainPane.root, splitY, bottomPane.root);
   // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
   //  격자 칸을 차지하지 않고 오른쪽 위에 떠 있는다(no-side 격자를 안 건드리기 위해).
   const sideReopen = el('button', {
     class: 'pn-side-reopen', type: 'button', title: '곁칸을 폅니다 — 자료·지식이 여기 들어 있어요.', 'aria-label': '곁칸 펴기',
-    onclick: () => { lay.sideOn = true; saveLayout(); paintAll(); },
+    onclick: () => { lay.sideOn = true; saveLayout(); saveView({ sideOn: true }); paintAll(); },
   }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
   body.append(colMain, splitX, sidePane.root, sideReopen);
   swap = mountSideSwap({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn });
@@ -447,8 +494,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const list = lay[zone];
     if (!list.includes(type)) list.push(type);
     lay.act[zone] = type;
-    if (zone === 'side') lay.sideOn = true;
-    if (zone === 'bottom') lay.bottomOn = true;
+    if (zone === 'side') { lay.sideOn = true; saveView({ sideOn: true }); }
+    if (zone === 'bottom') { lay.bottomOn = true; saveView({ bottomOn: true }); }
     saveLayout(); paintAll();
   }
   // 미리보기 칸에서 "이 주소 열어" 하고 부르면 웹 칸을 켠다 — 없으면 곁칸에 만들고, 이미 있으면 그 칸이 스스로 받는다.
@@ -565,7 +612,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
         //  고르는 자리는 여기뿐이라, 닫힌 아래 칸의 유일한 입구와 되돌리기를 이 발치에 둔다.
         el('div', { class: 'pn-pop-foot' },
-          loose || lay.bottomOn ? null : el('button', { class: 'btn-text', type: 'button', text: '아래 칸 열기', onclick: () => { close(); lay.bottomOn = true; saveLayout(); paintAll(); } }),
+          loose || lay.bottomOn ? null : el('button', { class: 'btn-text', type: 'button', text: '아래 칸 열기', onclick: () => { close(); lay.bottomOn = true; saveLayout(); saveView({ bottomOn: true }); paintAll(); } }),
           el('button', { class: 'btn-text', type: 'button', text: '기본 배치로 되돌리기', onclick: () => { close(); resetLayout(); } }))));
     };
     return b;
@@ -590,9 +637,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     lay.act[zone] = act;
 
     const hideBtn = zone === 'side'
-      ? el('button', { class: 'pn-pane-hide', type: 'button', title: '곁칸을 접습니다', 'aria-label': '곁칸 접기', onclick: () => { lay.sideOn = false; saveLayout(); paintAll(); } }, pnIcon('chev', 'pn-i sm'))
+      ? el('button', { class: 'pn-pane-hide', type: 'button', title: '곁칸을 접습니다', 'aria-label': '곁칸 접기', onclick: () => { lay.sideOn = false; saveLayout(); saveView({ sideOn: false }); paintAll(); } }, pnIcon('chev', 'pn-i sm'))
       : zone === 'bottom'
-        ? el('button', { class: 'pn-pane-hide', type: 'button', title: '아래 칸을 닫습니다', 'aria-label': '아래 칸 닫기', onclick: () => { lay.bottomOn = false; saveLayout(); paintAll(); } }, pnIcon('x', 'pn-i sm'))
+        ? el('button', { class: 'pn-pane-hide', type: 'button', title: '아래 칸을 닫습니다', 'aria-label': '아래 칸 닫기', onclick: () => { lay.bottomOn = false; saveLayout(); saveView({ bottomOn: false }); paintAll(); } }, pnIcon('x', 'pn-i sm'))
         : null;
     // 'sessions' 는 탭 하나가 아니라 **세션마다 탭 하나**로 펼친다(그 부품이 살아 있어야 하므로 먼저 만든다).
     const tabsOf = (t: PartType): HTMLElement[] => {
@@ -824,6 +871,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     paintDoor();
   }, 8000);
 
+  applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
   paintAll();
   if (!loose && !detail) void refreshDetail();
 
