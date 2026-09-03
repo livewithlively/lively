@@ -20,6 +20,8 @@ import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
 import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions, bindNodeSessionProjectOrKill, injectDeferredFirstPrompt } from "../node/provision-remote.js";
+import { isSelfNode } from "../node/registry.js";
+import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
@@ -479,7 +481,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  known:false = 실행 주체가 재시작돼 작업 기억을 잃음 → 화면이 '다시 준비' 를 권한다(여기서 몰래 재시작하지 않는다).
   app.get(`${prefix}/:id/provision/status`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id), req);
-    const nodeId = String(req.query.node ?? "").trim();
+    //  #2592 — 셀프 노드 좌표는 접는다(relayNodeId): 그 provision 은 이 박스에서 돈 것이라 중앙 상태가 정본이다.
+    const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
     const st = nodeId ? await provisionStatusOnNode(nodeId, project.id) : projectProvisionStatus(project.id);
     res.setHeader("Cache-Control", "no-store");
     res.json(st);

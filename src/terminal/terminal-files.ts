@@ -20,7 +20,8 @@ import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, type LsEntry } from "./terminal-member-fs.js";
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
 import { ingestLocalUpload, supersedeLocalPath, localRootForBrowse } from "../ingest/local-file.js";   // #1881 올린 파일 = 자료 1건
-import { nodeCanAttach, nodeRpc } from "../node/registry.js";
+import { nodeCanAttach, nodeRpc, isSelfNode } from "../node/registry.js";
+import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import { folderVariants } from "../project/project-fs.js";
 import {
   sharedFolderGate, renameSharedFolderAclPrefix, restrictedProjectFolders, projectFolderOf,
@@ -81,7 +82,8 @@ async function resolveInSession(req: express.Request, requireFile: boolean, cano
 // 노드 세션 파일 릴레이(#875) — ?node= 면 게이트웨이가 nodeCanAttach 로 인가(정책=게이트웨이, 실행=노드 F7)하고 nodeId 반환.
 //  중앙 세션이면 null(로컬 fs 경로). 거부 코드: 4410 gone→404 · 4462 offline→503 · 그 외 no-access→403.
 async function nodeFor(req: express.Request): Promise<string | null> {
-  const nodeId = String(req.query.node ?? "").trim();
+  //  #2592 — 셀프 노드 좌표는 접는다(relayNodeId): 그 파일은 이 박스의 fs 에 그대로 있어 로컬 경로가 정답이다.
+  const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
   if (!nodeId) return null;
   const v = await nodeCanAttach(nodeId, req.params.id, idOf(userOf(req)));
   if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);

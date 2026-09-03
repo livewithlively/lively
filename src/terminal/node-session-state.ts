@@ -11,8 +11,9 @@
 // 이 모듈은 **게이트웨이 전용**이다 — node/registry(WS 서버)를 import 하므로 노드 에이전트 번들에 들어가면 안 된다
 //  (sessions.ts 가 이걸 import 하지 않는 이유. routes 가 부른다).
 import type { CreateInput, SessionInfo } from "./catalog.js";
-import { upsertSessionState, insertDiscoveredSessionState, getSessionStates, type SessionStateInput } from "../sessions/session-state.js";
-import { liveNodes, onNodeSessions } from "../node/registry.js";
+import { upsertSessionState, insertDiscoveredSessionState, getSessionStates, clearSelfNodeSessionRows, type SessionStateInput } from "../sessions/session-state.js";
+import { liveNodes, onNodeSessions, onSelfNodeJudged, isSelfNode } from "../node/registry.js";
+import { selfNodeMessage } from "../node/self-node.js";
 import { listNodes } from "../node/store.js";
 import { logger } from "../log.js";
 
@@ -65,6 +66,12 @@ const seenNodeSessions = new Set<string>();
 
 /** 스냅샷 한 판 — 처음 보는 세션만 골라 행을 적는다. best-effort(실패해도 다음 push 가 다시 본다). */
 export async function discoverNodeSessions(nodeId: string, sessions: SessionInfo[]): Promise<number> {
+  // ★ #2592 — 셀프 노드의 스냅샷은 **발견이 아니다.** 그 세션들은 게이트웨이 자신의 tmux 에 있는 중앙 세션이고,
+  //  중앙 경로가 만든 것이면 이미 정확한 좌표를 가진 행이 있다. 여기서 적으면 «좌표 미상 + node_id=그 노드» 라는
+  //  거짓 행이 생기고, 그건 되살릴 수 없는 채로 사이드바에 영원히 남는다(discovered 행은 복원 거절 — routes.ts).
+  //  dev 실측(2026-09-03): 그렇게 쌓인 행 286개 중 72개가 «복원 불가 노드 세션» 으로 목록에 남아 있었다.
+  //  판정이 서기 전 첫 스냅샷도 새지 않는다 — registry.applyState 가 판정 완결 뒤에 이 구독자를 부른다.
+  if (isSelfNode(nodeId)) return 0;
   const fresh = sessions.filter((s) => s && s.id && !seenNodeSessions.has(s.id));
   if (!fresh.length) return 0;
   let wrote = 0;
@@ -99,6 +106,32 @@ export async function discoverNodeSessions(nodeId: string, sessions: SessionInfo
 /** 부팅 때 한 번 — 노드 상태 push 를 구독한다(registry 는 DB 를 모르므로 이쪽에서 건다). */
 export function armNodeSessionDiscovery(): void {
   onNodeSessions((nodeId, sessions) => { void discoverNodeSessions(nodeId, sessions); });
+  // #2592 — 판정이 **새로 설 때** 그 노드 이름으로 쌓인 거짓 좌표를 치운다. 부팅 훅이 아닌 이유: 판정은
+  //  관측이라(같은 tmux 를 봐야 성립) 부팅 시점엔 아직 없다. 멱등이라 게이트웨이가 재배포될 때마다 다시 돌아도 무해.
+  onSelfNodeJudged((nodeId) => cleanupSelfNodeRows(nodeId));
+}
+
+/**
+ * 셀프 노드로 판정된 노드의 기존 행 정리(#2592). **살아 있는 세션 목록을 확답으로 얻었을 때만** 돈다 —
+ *  tmux 를 못 본 판을 '세션 0' 으로 읽으면 살아 있는 세션의 행까지 삭제 갈래로 몰린다(clearSelfNodeSessionRows 계약).
+ */
+export async function cleanupSelfNodeRows(nodeId: string): Promise<void> {
+  let liveIds: Set<string>;
+  try {
+    const { listSessionsRaw } = await import("./sessions.js");
+    liveIds = new Set((await listSessionsRaw({ strict: true })).map((s) => s.id));
+  } catch (e) {
+    logger.warn({ err: e, node: nodeId }, "셀프 노드 기존 행 정리 보류 — 지금 살아 있는 세션을 확인하지 못했다(다음 판정에 재시도)");
+    return;
+  }
+  try {
+    const r = await clearSelfNodeSessionRows(nodeId, liveIds);
+    if (r.deleted || r.cleared) {
+      logger.warn({ node: nodeId, ...r }, `셀프 노드가 남긴 세션 행을 정리했습니다 — ${selfNodeMessage(nodeId)}`);
+    }
+  } catch (e) {
+    logger.warn({ err: e, node: nodeId }, "셀프 노드 기존 행 정리 실패(비치명 — 다음 판정에 재시도)");
+  }
 }
 
 /**
@@ -106,6 +139,10 @@ export function armNodeSessionDiscovery(): void {
  *  (그 모듈은 노드 번들에도 들어가 레지스트리를 못 본다). 여기서 레지스트리(연결·스냅샷)와 DB(이름)로 채운다. 제자리 수정.
  */
 export async function decorateNodeRows(rows: SessionInfo[]): Promise<void> {
+  // #2592 — **먼저** 거짓 좌표를 턴다. 이 행들의 좌표는 라이브 스냅샷이 아니라 DB(org_session_state.node_id)에서
+  //  오므로, 아래 마이그레이션이 돌기 전(또는 다른 게이트웨이가 쓴 행)에는 셀프 노드 id 가 그대로 실려 온다.
+  //  좌표가 붙은 채로 나가면 화면이 `&node=` 로 붙어 릴레이 경로를 다시 연다 — 목록만 고치고 여기를 빼면 새는 자리다.
+  for (const r of rows) if (r.node && isSelfNode(r.node.id)) delete r.node;
   const need = rows.filter((r) => r.node && r.restorable);
   if (!need.length) return;
   const live = new Map(liveNodes().map((n) => [n.id, n]));
