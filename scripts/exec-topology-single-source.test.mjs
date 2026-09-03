@@ -35,15 +35,20 @@ const TOPOLOGY_ENV = [
 ];
 
 // 테넌시/DB·경로 축이 계속 소유하는 자리(토폴로지가 아니다). 이 목록 밖에서 읽으면 실패한다.
+//  ⚠ **이 목록은 술어를 다시 써도 된다는 허가가 아니다** — 축의 술어 정본은 `org/tenancy/state.registryModeActive()`
+//   하나다. #2599 T3 이 인라인 재구현 3곳(db/tenant-binding-boot · org/tenant-middleware ·
+//   terminal/terminal-pty-upgrade)을 그 호출로 접었고, 여기 남은 넷은 **술어를 쓰는 자리가 아니다**:
+//   둘은 값을 쓰거나 지우고, 하나가 정본이며, 마지막 하나는 아래 사유로 정본을 import 할 수 없다.
 const TENANCY_AXIS = new Set([
   "src/boot/tenancy-env.ts",              // 부팅 최초 재배선 — 이 값을 **쓴다**(읽는 자리가 아니다)
   "src/boot/housekeeping.ts",             // 자식 env **사본**에서 지운다(`delete env.X`). 부모 process.env 는 안 건드리지만
                                           //  아래 스캐너가 바로 그 `env.X` 철자를 «읽기» 로 세므로 목록이 필요하다.
-  "src/db/tenant-binding-boot.ts",        // DB RLS 바인딩 모드
-  "src/org/tenancy/state.ts",             // registryModeActive() — 테넌시 축 술어의 정본
-  "src/org/tenant-middleware.ts",         // 요청별 워크스페이스 해석
-  "src/terminal/catalog.ts",              // 테넌트별 파일 루트(tenantRootBase) — 저장 경로 축
-  "src/terminal/terminal-pty-upgrade.ts", // WS 업그레이드에서 세션 정본으로 테넌트 되찾기
+  "src/org/tenancy/state.ts",             // registryModeActive() — 테넌시 축 술어의 **정본**
+  "src/terminal/catalog.ts",              // 테넌트별 파일 루트(tenantRootBase) — 저장 경로 축.
+                                          //  ★ 여기만 정본을 못 부른다: catalog 는 **노드 에이전트 번들에 실리고**
+                                          //   (node-agent-allowed-modules.json) 정본이 사는 org/tenancy/state 는 안 실린다.
+                                          //   import 하면 ops/state-dir 까지 번들에 끌려 들어간다(#2165 — 간선 하나가 11개를 끌었다).
+                                          //   술어를 합치는 값보다 번들 경계를 지키는 값이 커서 남긴다.
 ]);
 
 const files = [];
