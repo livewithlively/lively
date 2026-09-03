@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
+import { execTopology, tmuxArgvFor } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -35,34 +36,12 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
  * 계약: 지정한 프로그램에 **tmux argv 를 그대로 이어 붙여** 실행한다. stdout 이 tmux 의 stdout 이고,
  *  0 이 아닌 종료코드는 예외다(로컬 실행과 같은 규약 — 상위의 try/catch 가 그대로 동작해야 한다).
  *
- * ⚠ **호출 시점에 읽는다.** 모듈 로드 시점에 굳히면 부팅 순서·테스트에서 값이 안 먹는다
- *  (세션 spawn 훅에서 같은 함정을 밟았다).
+ * #2599 T2 — 「tmux 가 어디 있나」(부팅 상수)와 「지금 요청이 어느 워크스페이스인가」(요청 컨텍스트)의
+ *  **결합은 토폴로지 모듈이 소유한다.** 여기 남은 것은 그 두 입력을 건네는 일뿐이다.
  * ⚠ attach(`tmux -CC`)는 이 경로가 아니다 — 그건 PTY 라 terminal-pty 가 따로 다룬다.
  */
 export function tmuxExecArgv(): string[] {
-  const raw = (process.env.LIVELY_TMUX_EXEC || "").trim();
-  if (!raw) {
-    // ── 셀프호스트 registry(#1750 S3) — 같은 호스트에서 워크스페이스마다 tmux 서버를 가른다. ──
-    //  secondary 컨텍스트면 `-L lvly-<slug>` 전용 소켓: 세션 목록·옵션·attach 가 전부 그 서버 안이라
-    //  **다른 워크스페이스의 세션이 목록에 뜨는 일 자체가 없다**(이름 규약이 아니라 서버 격리).
-    //  primary(무컨텍스트)는 기본 소켓 = 종전 그대로(기존 세션 무회귀). 매니지드는 raw(중계)가 있어 여기 안 온다.
-    if ((process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry") {
-      const slug = tenantSlug();
-      if (slug && slug !== "primary") return [TMUX_BIN, "-L", `lvly-${slug}`];
-    }
-    return [];
-  }
-  if (!raw.includes("{slug}")) return raw.split(/\s+/);
-  // ── 테넌트별 중계(#1437 v1 5단계) ──
-  //  게이트웨이 하나가 여러 워크스페이스를 서비스하면 **tmux 서버도 워크스페이스마다 다르다.**
-  //  중계 명령에 `{slug}` 를 넣어 그 테넌트의 tmux 컨테이너를 가리키게 한다.
-  //   예: `docker exec -u 200001 lvly-s-{slug}-tmux tmux`
-  const slug = tenantSlug();
-  // ★★ **로컬 tmux 로 폴백하지 않는다.** 폴백하면 게이트웨이 호스트에서 tmux 가 돌아
-  //  ⓐ 그 세션이 엉뚱한 자리에 생기고 ⓑ 모든 테넌트가 **같은 tmux 서버**를 공유하게 된다
-  //  (= 남의 세션이 목록에 보인다). 컨텍스트를 잃은 건 배선 버그이고, 배선 버그는 오류로 드러나야 한다.
-  if (!slug) throw new Error("tmux 중계에 테넌트 컨텍스트가 필요합니다 — 컨텍스트 밖에서 호출됐습니다");
-  return raw.replace("{slug}", slug).split(/\s+/);
+  return tmuxArgvFor(tenantSlug(), TMUX_BIN);
 }
 
 export async function tmux(args: string[]): Promise<string> {
@@ -167,10 +146,12 @@ export async function listSessionPanePids(): Promise<{ ok: boolean; panes: Map<s
 //  '진짜 닫혔는데 영원히 재접속중'을 고친다). 따라서 tmux 가 **응답해서 "그런 세션 없음"이라고 말할 때만** true.
 // 관리형 중계 배포인가(#1437) — tmux 가 **테넌트별 컨테이너** 안에 사는 배포. 이 판정이 gone 확답의 범위를 바꾼다:
 //  중계에선 tmux 서버 부재("no server running")가 '일시장애'가 아니라 그 테넌트 세션의 **영구 소실**이다(아래 머리말).
-//  · LIVELY_TMUX_EXEC = 중계 클라이언트(tmux-relay.cjs). registry 모드(`-L lvly-<slug>` 로컬 소켓)는 이 env 가 없어
-//    여기 안 걸린다 — 로컬 단일호스트의 보수적 판정(서버 부재=판정 불가)을 그대로 유지한다(무회귀).
+//  · 토폴로지의 tmux 자리가 `exec`(중계 클라이언트 tmux-relay.cjs)일 때만 참이다. registry 모드(`-L lvly-<slug>`
+//    로컬 소켓)는 자리가 `socket` 이라 여기 안 걸린다 — 로컬 단일호스트의 보수적 판정(서버 부재=판정 불가)을
+//    그대로 유지한다(무회귀). ⚠ 이 «안 걸린다» 는 의도가 아니라 부작용이다(조사 함정 4) — 셀프호스트 전용
+//    소켓의 서버도 통째로 증발할 수 있는데 그때 gone 확답을 못 준다. 고치는 것은 T3 이다.
 export function tmuxRelayManaged(): boolean {
-  return !!(process.env.LIVELY_TMUX_EXEC || "").trim();
+  return execTopology().tmux.kind === "exec";
 }
 // 중계에서 'tmux 서버 자체가 없다'의 확답 문구 — 소켓이 스테일(서버 죽음)이면 "no server running on <path>",
 //  소켓 파일이 없으면(재생성된 빈 컨테이너) "error connecting to <path> (No such file or directory)".

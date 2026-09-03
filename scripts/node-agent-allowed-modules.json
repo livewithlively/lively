@@ -55,6 +55,7 @@
   "dist/sessions/session-share.js",
   "dist/sessions/session-state.js",
   "dist/sessions/transcript-range.js",
+  "dist/exec-topology.js",
   "dist/terminal/catalog.js",
   "dist/terminal/harness-trust.js",
   "dist/terminal/codex-chat-mode.js",
