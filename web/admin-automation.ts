@@ -241,6 +241,25 @@ async function cronDelete(id, reload, autoSys?) {
 
 // ── 상시 세션(에이전트) — 항상 떠있는 에이전트 세션 CRUD + 격리 워크스페이스 + keep-alive. 크론(map_unmapped 등)이 타깃. ──
 //  '에이전트를 위한 프로젝트' — createSession + 공유폴더(managed/<id>) 재사용. account=라이블리 계정/프로필(클로드 로그인, 멀티프로필 대비).
+// 상시세션 계정의 rate-limit 소진율(5시간·7일) 배지. 값은 statusLine 훅이 계정 단위로 보고(usage-store).
+//  rate_limits 는 구독 계정·첫 API 응답 후에만 존재하고 각 창이 독립적으로 부재할 수 있다 → 없으면 '미보고'로 그린다
+//  (0% 과 구분: 0% 은 "안 썼다", 미보고는 "모른다"). 어느 창이든 80%↑ 면 경고색. 리셋 시각은 툴팁(KST).
+function usagePill(u) {
+  if (!u || (!u.five_hour && !u.seven_day)) {
+    return withTip(el('span', { class: 'pill', text: '사용량 미보고' }),
+      '이 계정에서 rate-limit 소진율 보고가 아직 없습니다 — 세션이 떠서 statusLine 이 렌더될 때 채워집니다(구독 계정·첫 응답 이후에만 존재).');
+  }
+  const fmtReset = (r) => (typeof r === 'number' && r > 0)
+    ? new Date(r * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : '미상';
+  // 소진율 + 리셋 시각(KST)을 인라인으로 함께 보인다 — 툴팁 없이 목록에서 바로 읽힌다.
+  const seg = (label, w) => w ? label + ' ' + Math.round(w.used_percentage) + '% (리셋 ' + fmtReset(w.resets_at) + ')' : null;
+  const parts = [seg('5시간', u.five_hour), seg('7일', u.seven_day)].filter(Boolean);
+  // 경고색 판정을 표시값(반올림)과 맞춘다 — raw 79.6% 가 "80%"로 보이면서 경고색이 아닌 불일치 방지.
+  const hot = (u.five_hour && Math.round(u.five_hour.used_percentage) >= 80) || (u.seven_day && Math.round(u.seven_day.used_percentage) >= 80);
+  return el('span', { class: 'pill' + (hot ? ' pill-warn' : ''), text: parts.join(' · ') });
+}
+
 async function managedSessionsPanel(detail, data) {
   const reload = () => managedSessionsPanel(detail, data);
   busy(detail, el('div', { class: 'card' }, skeleton('상시 에이전트를 불러오는 중')));
@@ -283,7 +302,9 @@ async function managedSessionsPanel(detail, data) {
           '같은 작업 폴더에 이 에이전트가 만들지 않은 세션이 ' + m.unmarked_count + '개 떠 있습니다. '
           + '사람이 연 세션이거나 이 표식이 생기기 전에 만들어진 세션입니다 — 자동으로 정리하지 않습니다. '
           + '정리하려면 터미널에서 직접 확인하고 종료하세요.')
-        : null));
+        : null),
+      // 계정 rate-limit 소진율(5시간·7일) — statusLine 훅이 계정 단위로 보고(usage-store). 미보고면 '모름'으로 구분.
+      usagePill(m.usage));
     const acts = el('div', { class: 'wikicat-row-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', text: '시작/재생성', onclick: () => managedEnsure(m.id, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: m.enabled ? '끄기' : '켜기', onclick: () => managedToggle(m, reload) }),

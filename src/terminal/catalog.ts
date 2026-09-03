@@ -763,6 +763,33 @@ export function harnessThemeArgv(harnessKey: string, theme: unknown): string[] {
   return t && h?.argv ? h.argv(t) : [];
 }
 
+// 상시(managed) 세션 statusLine — 세션 사용량(5시간·7일 rate-limit 소진율) 수집구.
+//  rate_limits 는 **statusLine stdin 에만** 실린다(hook stdin·REST 어디에도 없음 — Claude Code 문서 확인) → 이 경로가
+//  게이트웨이가 그 값을 얻는 유일 길이다. usage-report.mjs 가 파싱해 POST /api/ui/terminal/usage 로 계정 단위 보고한다.
+//  ⚠ 스폰타임 --settings 로만 얹는다(theme 과 동일 검증된 seam, catalog.ts HARNESS_THEME 주석). 사람 설정 파일 불변이고
+//   **managed 세션에만** 준다 — 사람 웹터미널 세션의 footer 를 바꾸지 않기 위해(스폰타임 --settings 는 파일 statusLine 을 덮음).
+//  ⚠ node 는 실행 셸 PATH 에 없을 수 있어(#355) 번들 node 우선·PATH node 폴백을 command 안에서 sh 로 해소한다.
+//   $HOME 은 그 세션 셸이 확장(설치시점 아님) — 프로필/계정 무관하게 그 홈의 훅·번들노드를 가리킨다.
+function managedStatusLineSpec(): { type: string; command: string } {
+  const script = "$HOME/.lively/hooks/usage-report.mjs";
+  const bundled = "$HOME/.lively/runtime/current/bin/node";
+  return { type: "command", command: `N="${bundled}"; [ -x "$N" ] || N=node; exec "$N" "${script}"` };
+}
+
+/**
+ * claude 스폰 argv 에 얹을 `--settings` 인자 — theme·statusLine 을 **한 객체로 합쳐 한 번만** 준다.
+ *  같은 `--settings` 플래그를 두 번 줬을 때 머지되는지 뒤가 이기는지가 미검증이라 합쳐서 준다(안전).
+ *  claude 외 하네스는 statusLine 주입 경로가 없어 종전 테마 argv 그대로(무회귀).
+ */
+export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean }): string[] {
+  if (String(harnessKey || "") !== "claude") return harnessThemeArgv(harnessKey, opts.theme);
+  const s: Record<string, unknown> = {};
+  const t = normalizeTheme(opts.theme);
+  if (t) s.theme = t;
+  if (opts.managed) s.statusLine = managedStatusLineSpec();
+  return Object.keys(s).length ? ["--settings", JSON.stringify(s)] : [];
+}
+
 // ── 실행 중 세션의 테마 전환 (#1683 후속2) ─────────────────────────────────
 //
 // 왜 별도인가: 위 harnessThemeArgv/EnvArgs 는 **새로 뜨는** 세션에만 통한다. pane env·실행 인자는 exec 시점에

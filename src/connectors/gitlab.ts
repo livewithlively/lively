@@ -11,6 +11,31 @@ import { sinceFloor } from "./sync-cursor.js";
 
 const PAGE_SIZE = 100;
 export const MAX_PAGES = 30;
+/** 진행 로그 최소 간격. 러너의 정체 감지(무출력 15분)보다 훨씬 짧게 둬서, 큰 저장소를 훑는 동안에도 살아있음이 드러나게 한다. */
+export const PROGRESS_LOG_INTERVAL_MS = 15_000;
+
+/**
+ * 마지막 출력 이후 간격이 지났을 때만 찍는 진행 로그.
+ * 큰 저장소는 이슈·MR 마다 노트 페이지를 또 돌아 줄 수가 수천으로 불어난다 — 매 페이지 찍으면 로그가 못 쓰게 되고,
+ * 안 찍으면 러너가 정체로 보고 죽인다(초기 백필이 15분마다 강제 종료돼 커서가 영영 안 올랐다).
+ * 그래서 '건수'가 아니라 '시간'으로 조인다.
+ */
+export function makeProgressLogger(
+  intervalMs: number = PROGRESS_LOG_INTERVAL_MS,
+  // 벽시계(Date.now)는 NTP step 으로 뒤로 갈 수 있고, 그러면 역행 폭만큼 로그가 통째로 억제된다 — 정체 오판이 다시 열린다.
+  // 단조 증가하는 시계를 쓰면 그 경우가 설계상 존재하지 않는다.
+  now: () => number = () => performance.now(),
+  emit: (msg: string) => void = (m) => console.log(m),
+): (msg: string, force?: boolean) => void {
+  let last: number | null = null;
+  /** force 는 간격을 무시하고 찍되 **타이머도 갱신한다** — 경계 로그 직후의 잔줄까지 쏟아지지 않게. */
+  return (msg, force = false) => {
+    const t = now();
+    if (!force && last !== null && t - last < intervalMs) return;
+    last = t;
+    emit(msg);
+  };
+}
 
 /** `projects` 설정 → 프로젝트 경로(group/sub/project) 목록. 주소를 그대로 붙여넣어도 된다. */
 export function parseProjectList(v: string | undefined, host?: string): string[] {
@@ -106,6 +131,8 @@ async function glGet<T>(token: string, url: string): Promise<{ data: T; nextPage
     const res = await fetch(url, { headers: { "PRIVATE-TOKEN": token } });
     if (res.status === 429 && attempt < 3) {
       const wait = Math.min(Number(res.headers.get("retry-after") ?? 5) * 1000, 90_000);
+      // 이 대기는 최대 90초 × 3회다. 조용히 자면 정체 감지가 노리는 무출력 창이 그대로 남으므로 대기 사실을 남긴다.
+      console.warn(`gitlab: 속도 제한 — ${Math.round((wait > 0 ? wait : 5000) / 1000)}초 대기 (${attempt + 1}/4)`);
       await res.text().catch(() => ""); await sleep(wait > 0 ? wait : 5000); continue;
     }
     if (!res.ok) {
@@ -120,11 +147,13 @@ async function glGet<T>(token: string, url: string): Promise<{ data: T; nextPage
   throw new Error(`GitLab 속도 제한이 풀리지 않습니다 — ${url}`);
 }
 
-async function* pages<T>(token: string, base: string, label: string): AsyncGenerator<T[]> {
+export async function* pages<T>(token: string, base: string, label: string, onPage?: (label: string, n: number, got: number) => void): AsyncGenerator<T[]> {
   let page: string | null = "1";
   for (let n = 0; page && n < MAX_PAGES; n++) {
     const r: { data: T[]; nextPage: string | null } = await glGet<T[]>(token, `${base}&page=${page}`);
-    yield Array.isArray(r.data) ? r.data : [];
+    const data = Array.isArray(r.data) ? r.data : [];
+    onPage?.(label, n + 1, data.length);
+    yield data;
     page = r.nextPage;
     if (page && n === MAX_PAGES - 1) console.warn(`gitlab: ${label} — 페이지 상한(${MAX_PAGES}) 도달, 나머지는 다음 run 이 이어갑니다`);
   }
@@ -161,16 +190,20 @@ export const gitlabConnector: Connector = {
     const since = sinceIso ? `&updated_after=${encodeURIComponent(sinceIso)}` : "";
     const sinceMs = sinceIso ? Date.parse(sinceIso) : NaN;
 
+    const progress = makeProgressLogger();
+    const onPage = (label: string, n: number, got: number) => progress(`gitlab: ${label} — ${n}페이지 ${got}건`);
+    let started = 0;
     for (const project of projects) {
       const pp = `${api}/projects/${encodeURIComponent(project)}`;
+      progress(`gitlab: [${++started}/${projects.length}] ${project} 시작`, true);
       try {
         const kinds: Array<{ mr: boolean; path: string }> = [{ mr: false, path: "issues" }, ...(includeMrs ? [{ mr: true, path: "merge_requests" }] : [])];
         for (const k of kinds) {
-          for await (const page of pages<GlIssue>(token, `${pp}/${k.path}?scope=all&order_by=updated_at&sort=asc&per_page=${PAGE_SIZE}${since}`, `${project} ${k.path}`)) {
+          for await (const page of pages<GlIssue>(token, `${pp}/${k.path}?scope=all&order_by=updated_at&sort=asc&per_page=${PAGE_SIZE}${since}`, `${project} ${k.path}`, onPage)) {
             for (const i of page) {
               yield issueItem(project, host, i, k.mr);
               if ((i.user_notes_count ?? 0) > 0) {
-                for await (const notes of pages<GlNote>(token, `${pp}/${k.path}/${i.iid}/notes?order_by=updated_at&sort=asc&per_page=${PAGE_SIZE}`, `${project} ${k.path}/${i.iid} notes`)) {
+                for await (const notes of pages<GlNote>(token, `${pp}/${k.path}/${i.iid}/notes?order_by=updated_at&sort=asc&per_page=${PAGE_SIZE}`, `${project} ${k.path}/${i.iid} notes`, onPage)) {
                   for (const n of notes) { const it = noteItem(project, host, i.iid, k.mr, n); if (it) yield it; }
                 }
               }
@@ -178,6 +211,7 @@ export const gitlabConnector: Connector = {
           }
         }
         if (includeReleases) {
+          progress(`gitlab: ${project} releases 조회`);
           const r = await glGet<GlRelease[]>(token, `${pp}/releases?per_page=${PAGE_SIZE}`);
           for (const rel of Array.isArray(r.data) ? r.data : []) {
             const t = Date.parse(rel.released_at ?? rel.created_at ?? "");

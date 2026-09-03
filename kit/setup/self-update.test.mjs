@@ -226,6 +226,27 @@ try {
     (serving.installHits === before) ? ok("⑧ 배선 없는 홈 → 무동작") : bad("⑧ 미배선", `installHits +${serving.installHits - before}`);
   }
 
+  // ⑧b **PATH 에 하네스 바이너리가 있어도** 배선 없는 홈이면 무동작 — ⑧ 의 CI 사각지대를 막는다.
+  //   ⑧ 은 «PATH 에 아무 하네스도 없는» 러너에서는 구조적으로 초록이다(GitHub 러너엔 claude·codex 가
+  //   없다). 그래서 PATH 를 보는 판정이 들어오면 ⑧ 은 **실제 사용자 머신에서만** 빨개지고 CI 는 끝까지
+  //   초록이다 — 회귀가 CI 를 통과해 배포된다. 여기서 스텁 바이너리를 직접 심어 그 창을 닫는다.
+  //   (실측 2026-08-27: PATH 보탬에 kit 설치 게이트가 없던 판이 CI 4체크 전부 초록인 채로 ⑧ 을 깼다.)
+  {
+    serving.body = makeBundle("v-bare"); serving.version = "v-bare";
+    const before = serving.installHits;
+    const home = mkdtempSync(join(BOX, "barepath-"));
+    mkdirSync(join(home, ".lively"), { recursive: true });   // ⚠ hooks/ 는 만들지 않는다 = kit 미설치
+    writeFileSync(lv(home, "token"), "test-token");
+    writeFileSync(lv(home, "gateway-url"), GW);
+    const binDir = mkdtempSync(join(BOX, "barebin-"));
+    writeFileSync(join(binDir, WIN ? "claude.CMD" : "claude"), WIN ? "@echo off\r\n" : "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    await runUpdater(home, { PATH: `${binDir}${WIN ? ";" : ":"}${process.env.PATH || ""}` }, ["--to", "v-bare"]).catch(() => {});
+    (serving.installHits === before)
+      ? ok("⑧b PATH 에 하네스가 있어도 배선 없는 홈이면 무동작(엉뚱한 머신 보호)")
+      : bad("⑧b 미배선 + PATH", `installHits +${serving.installHits - before} — PATH 만 보고 lively 를 쓴 적 없는 홈에 설치했다`);
+  }
+
   // ══ 프로덕션 경로 통합 — session-preload(훅) → detached 업데이터 → 설치 ══
   //  여기까지 붙어야 "멤버가 세션을 켜기만 하면 갱신된다"가 증명된다. 위 케이스들은 업데이터 단독 실행이었다.
   const PRELOAD = join(HERE, "..", "hooks", "session-preload.mjs");
@@ -293,6 +314,60 @@ try {
     (stamped === "v-eee" && runners && userKept && wired)
       ? ok("⑪ Codex 패리티 — 자동 업데이트 + config.toml 관리블록 갱신 + 사용자 키 보존")
       : bad("⑪ Codex", `stamp=${stamped} runners=${runners} userKept=${userKept} wired=${wired}`);
+  }
+
+  // ⑪b **미배선 하네스도 PATH 에 있으면 갱신 대상이 된다** — 자기증식 데드락 회귀 락.
+  //   재현(2026-08-27 실측): claude 만 배선된 홈 + codex 는 PATH 에 있는데 config.toml 엔 관리 센티넬이 없는
+  //   상태(codex 가 자기 설정만 만들어 둔 홈). 종전 판정(배선 신호 only)은 codex 를 영영 목록에 못 넣었고 —
+  //   claude 가 배선돼 있어 `!out.length` 폴백도 안 탄다 — 사람이 손으로 `lively update` 를 칠 때까지
+  //   웹세션 Codex 에 MCP 가 안 붙었다(한 박스 23홈 중 codex 배선 3홈).
+  //   ⚠ 판정 결과는 다운로드 **전에** update.log 머리줄(harness=…)로 관측한다 — 그래야 이 락이
+  //    네트워크(픽스처 게이트웨이 도달성·host-effects 정책)에 의존하지 않는다.
+  {
+    serving.body = makeBundle("v-eeb"); serving.version = "v-eeb";
+    const home = mkdtempSync(join(BOX, "cdxpath-"));
+    mkdirSync(join(home, ".lively", "hooks"), { recursive: true });
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(lv(home, "token"), "test-token");
+    writeFileSync(lv(home, "gateway-url"), GW);
+    // claude 는 배선됨(데드락의 필요조건 — 폴백 분기가 안 열린다).
+    writeFileSync(join(home, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ command: "node $HOME/.lively/hooks/session-preload.mjs" }] }] } }));
+    // codex 는 미배선 — 자기 설정만 있다(lively-managed 센티넬 없음).
+    writeFileSync(join(home, ".codex", "config.toml"), 'service_tier = "default"\n');
+    // PATH 에만 존재하는 codex 바이너리(스텁 — 존재 여부만 본다).
+    const binDir = mkdtempSync(join(BOX, "bin-"));
+    writeFileSync(join(binDir, WIN ? "codex.CMD" : "codex"), WIN ? "@echo off\r\n" : "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    await runUpdater(home, { PATH: `${binDir}${WIN ? ";" : ":"}${process.env.PATH || ""}` }, ["--to", "v-eeb"]).catch(() => {});
+    const head = (readIf(lv(home, "update.log")) || "").split("\n").find((l) => l.includes("harness=")) || "";
+    const picked = (head.split("harness=")[1] || "").trim();
+    (picked.split(",").includes("codex") && picked.split(",").includes("claude"))
+      ? ok("⑪b 미배선 codex + PATH 바이너리 → 갱신 대상에 포함(CLI detectHarnesses 와 판정 통일)")
+      : bad("⑪b PATH 감지", `harness=${picked || "(로그 없음)"}`);
+  }
+
+  // ⑪c **세션 하네스 힌트는 폴백이 아니라 합집합** — PATH 감지가 힌트를 선점하지 않는다.
+  //   배선 신호가 하나도 없는 홈에서 LIVELY_HARNESS=claude 세션이 업데이터를 띄웠는데 detached PATH 엔
+  //   codex 만 있는 경우: 힌트가 `!out.length` 가드 안에 있으면 out=[codex] 로 채워져 **정작 자기 세션
+  //   하네스(claude)가 빠진다**(reconcileClaudeMcp 까지 조용히 스킵). 둘 다 잡혀야 맞다.
+  {
+    serving.body = makeBundle("v-eec"); serving.version = "v-eec";
+    const home = mkdtempSync(join(BOX, "hint-"));
+    mkdirSync(join(home, ".lively", "hooks"), { recursive: true });
+    writeFileSync(lv(home, "token"), "test-token");
+    writeFileSync(lv(home, "gateway-url"), GW);
+    // 배선 신호 없음 — settings.json·config.toml 둘 다 만들지 않는다.
+    const binDir = mkdtempSync(join(BOX, "bin2-"));
+    writeFileSync(join(binDir, WIN ? "codex.CMD" : "codex"), WIN ? "@echo off\r\n" : "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    await runUpdater(home, { PATH: `${binDir}`, LIVELY_HARNESS: "claude" }, ["--to", "v-eec"]).catch(() => {});
+    const head = (readIf(lv(home, "update.log")) || "").split("\n").find((l) => l.includes("harness=")) || "";
+    const picked = (head.split("harness=")[1] || "").trim().split(",");
+    (picked.includes("claude") && picked.includes("codex"))
+      ? ok("⑪c 세션 하네스 힌트 = 합집합(PATH 감지가 선점하지 않음)")
+      : bad("⑪c 힌트 합집합", `harness=${picked.join(",") || "(로그 없음)"}`);
   }
 
   // ⑬ **토큰 비유출** — 업데이터는 토큰으로 인증하지만, 그 값이 로그·stdout·상태파일 어디에도 남으면 안 된다.

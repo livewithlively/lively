@@ -124,10 +124,10 @@ if [ -n "${LIVELY_TOKEN:-}" ]; then
      && tar -xzf "$KTMP/b.tgz" -C "$KTMP" 2>/dev/null && [ -f "$KTMP/setup/user-install.mjs" ]; then
     chown -R "$OSUSER:$OSUSER" "$KTMP"
     runuser -u "$OSUSER" -- env HOME="$HOME_DIR" LIVELY_TOKEN="$LIVELY_TOKEN" \
-      node "$KTMP/setup/user-install.mjs" --allow-host-effects --harness claude >/dev/null 2>&1 || echo "  ⚠ user-install 경고(훅 머지)"
+      node "$KTMP/setup/user-install.mjs" --allow-host-effects --harness claude,codex >/dev/null 2>&1 || echo "  ⚠ user-install 경고(claude 훅 머지 / codex config.toml·AGENTS.md 중 어느 쪽인지는 구분되지 않음)"
     runuser -u "$OSUSER" -- env HOME="$HOME_DIR" LIVELY_TOKEN="$LIVELY_TOKEN" STORE_URL="${GW_URL}/mcp" \
       bash "$KTMP/setup/register-clients.sh" >/dev/null 2>&1 || echo "  ⚠ MCP 등록 경고"
-    echo "멤버 claude 키트 완료(settings.json 훅 + lively MCP=멤버 토큰)"
+    echo "멤버 키트 완료(claude settings.json 훅 + codex config.toml·AGENTS.md + lively MCP=멤버 토큰)"
   else
     echo "  ⚠ kit 번들 다운로드 실패($GW_URL/install) — 훅/MCP 미설정. 세션은 뜨나 lively 미연동(게이트웨이/토큰 확인 후 재프로비저닝)."
   fi
@@ -148,5 +148,23 @@ else
   echo "  ⚠ install-claude-user 헬퍼 없음 — 멤버 네이티브 claude 스킵(자동 업뎃 원하면 install-isolation.sh 재실행)"
 fi
 
-echo "✓ $OSUSER 프로비저닝 완료 (홈 700 · 그룹 · .lively · 스켈레톤 · .claude · box · 키트 · 네이티브 claude)"
+# ⚠ 후속(이 커밋 범위 밖): **이미 프로비저닝된** 멤버는 codex 키트 배선(~/.codex/config.toml 의
+#  lively-managed 블록 · AGENTS.md)이 없다 — 위 키트 블록은 새 프로비저닝에서만 돌고, refresh-member-kits 는
+#  하네스 **바이너리**만 백필한다. 그래서 이 배포 직후 기존 멤버의 codex 는 '뜨지만 lively 미연동'이다.
+#  당장 필요하면 관리자가 그 멤버에 이 스크립트를 다시 돌리면 된다(멱등) — refresh 에서 user-install 을
+#  재실행하는 건 멤버 토큰·kit 번들 경로 의존이 있어 별도 트랙으로 둔다.
+# 멤버 codex 자동 업데이트 — claude(#1023)와 **같은 원인의 codex 판**. codex 는 시작할 때 스스로
+#  `npm install -g @openai/codex` 를 실행하는데(끄는 플래그가 없다), root 전역(/usr/lib/node_modules)
+#  설치면 비-root 멤버가 못 써서 EACCES → **codex 가 로그인 화면도 못 띄운 채 즉시 종료**된다(실측 exit 243).
+#  헬퍼가 npm prefix 를 멤버 홈(~/.npm-global — box-spawn PATH 에 이미 예약된 자리)으로 돌리고 거기에 1회
+#  설치해, 이후 codex 가 자기 홈에서 스스로 최신화한다. 멱등·OFFLINE 스킵·이미 있으면 스킵·best-effort.
+CODEX_HELPER="$_SELFDIR/install-codex-user.sh"
+[ -f "$CODEX_HELPER" ] || CODEX_HELPER="/opt/lively/libexec/install-codex-user"
+if [ -f "$CODEX_HELPER" ]; then
+  bash "$CODEX_HELPER" "$OSUSER" || true
+else
+  echo "  ⚠ install-codex-user 헬퍼 없음 — 멤버 홈 codex 스킵(codex 세션이 자동 업뎃 EACCES 로 즉시 종료될 수 있음)"
+fi
+
+echo "✓ $OSUSER 프로비저닝 완료 (홈 700 · 그룹 · .lively · 스켈레톤 · .claude · box · 키트 · 네이티브 claude · 멤버홈 codex)"
 echo "  로그인(멤버 1회, 자기 세션에서): claude → /login   (자격증명은 $HOME_DIR/.claude 에 격리)"

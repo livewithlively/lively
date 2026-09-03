@@ -20,51 +20,17 @@ set -euo pipefail
 _u="$(id -un)"
 _home="$(getent passwd "$_u" | cut -d: -f6 || true)"
 [ -n "$_home" ] && [ -d "$_home" ] || _home="/home/$_u"
-export USER="$_u" LOGNAME="$_u" HOME="$_home"
 
-# 툴체인 PATH — 세션이 node/claude/codex/git/tmux 를 찾도록. 게이트웨이 유닛 PATH 를 상속하되(sudo -n 은
-#  기본 env_reset 로 PATH 를 secure_path 로 바꿀 수 있어) 표준 경로 + 멤버 소유 bin 을 항상 보강한다.
-#  ⚠ #1023: 멤버 소유 bin(~/.local/bin — 네이티브 self-update claude, ~/.npm-global/bin — 멤버 npm 전역)을
-#   시스템 경로보다 **앞**에 둔다. 이유: claude 가 root 전역(/usr/bin/claude → /usr/lib)으로 깔린 박스는
-#   비-root 멤버가 못 고쳐 자동 업뎃이 no_permissions 로 스테일된다. 멤버 홈의 self-update claude 를 우선
-#   해소(맥미니처럼 각자 최신화). 멤버가 네이티브 claude 미설치면 이 경로엔 파일이 없어 자연히 시스템
-#   claude 로 폴백(무회귀). ($HOME 는 위에서 passwd 로 결정적으로 되읽음.)
-export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-# UTF-8 로케일(없으면 tmux/한글 렌더 깨짐 — 게이트웨이 불변식과 동일).
-: "${LANG:=C.UTF-8}"; : "${LC_ALL:=C.UTF-8}"; : "${LC_CTYPE:=C.UTF-8}"
-export LANG LC_ALL LC_CTYPE
-
-# 시간대(#778) — 세션 안 하네스(클로드코드 등)가 **조직 시간대**로 시각을 표시하게 한다(박스 OS TZ 는 대개 UTC).
-#  경로: 게이트웨이가 tmux `-e TZ=<조직 시간대>` 로 pane 에 주입 → sudo 는 sudoers 의 `env_keep += "TZ"` 로 보존
-#  (이 파일 헤더의 교리대로 sudo 의 env 처리를 신뢰하지 않고 **명시** 보존시킨다) → 여기서 재-export 로 계약을 못박는다.
-#  미설정(구 sudoers·비주입)이면 손대지 않는다 → 시스템 TZ 그대로 = 종전 동작(무회귀).
-if [ -n "${TZ:-}" ]; then export TZ; fi
-
-# 세션 신원(#852) — 이 pane 이 **어느 터미널 세션인지**. 세션 안 하네스(클로드코드 등)가 MCP 헤더
-#  `x-lively-session: ${LIVELY_SESSION_ID:-}` 로 되보내면, 게이트웨이가 "이 작업을 어느 세션에서 했나"를
-#  자동 기록한다(자기보고 아님 — author_agent 를 접속 헤더로 식별하는 것과 같은 원리).
-#  경로는 TZ 와 동일: 게이트웨이 tmux `-e LIVELY_SESSION_ID=box-…` → sudoers `env_keep` → 여기서 재-export.
-#  미설정(구 sudoers·비주입)이면 손대지 않는다 → 하네스가 빈 값을 보내고 게이트웨이가 무시 = 종전 동작(무회귀).
-if [ -n "${LIVELY_SESSION_ID:-}" ]; then export LIVELY_SESSION_ID; fi
-
-# 자격 리스(#1289) — 위탁 태스크 의뢰자가 등록한 클로드 셋업토큰. 경로는 TZ 와 동일:
-#  게이트웨이 tmux `-e CLAUDE_CODE_OAUTH_TOKEN=…` → sudoers `env_keep` → 여기서 재-export 로 계약을 못박는다.
-#  미설정(리스 없음·구 sudoers)이면 손대지 않는다 → 하네스가 디스크 자격(~/.claude)으로 폴백 = 종전 동작(무회귀).
-#  ⚠ 값은 절대 echo/로그 금지 — 존재만 보고 재-export 한다.
-if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then export CLAUDE_CODE_OAUTH_TOKEN; fi
-
-# TERM — 웹터미널은 tmux pane → control mode → **xterm.js(브라우저)** 로 렌더된다. 그래서 xterm-256color 로
-#  강제하는 게 옳고(렌더러와 일치) + 가장 견고하다: sudo 가 TERM 을 'unknown' 으로 떨구거나, tmux 가 넘긴
-#  'tmux-256color' terminfo 엔트리가 그 박스에 없으면(ncurses-term 미설치 흔함) claude/Codex 의 Ink TUI 가
-#  REPL 진입 시 죽는다(#524: 트러스트/로그인은 뜨는데 대화창 직전 종료). xterm-256color 는 terminfo 가 어디에나 있다.
-export TERM=xterm-256color
-
-# lively 훅/코덱스 MCP 용 멤버 토큰(있으면). 토큰 리터럴은 코드/로그에 없다 — 파일에서만 읽는다.
-if [ -z "${LIVELY_TOKEN:-}" ] && [ -r "$HOME/.lively/token" ]; then
-  LIVELY_TOKEN="$(cat "$HOME/.lively/token")" || true
-  export LIVELY_TOKEN
-fi
+# ── env 계약 — **정본 한 벌**(deploy/linux/session-env.sh, #2258 이동 2) ──────
+#  종전엔 이 아래에 신원·PATH·로케일·TERM·통과항목이 손으로 적혀 있었고, 같은 것이 매니지드
+#  (container-spawn.sh)와 로컬(node/tasks.ts)에도 각각 적혀 있었다 — 세 언어로 세 번. 실제로 갈렸다
+#  (그 표는 session-env.sh 머리말). 이제 셋이 같은 파일을 소비한다.
+#  ⚠ 이 스크립트는 sudo 로 **멤버 uid** 에서 돈다 — 그래서 상속 PATH(게이트웨이 유닛 것)를 이어받고
+#   멤버 홈의 토큰 파일을 읽는다. 컨테이너 표면은 둘 다 안 한다(그쪽엔 상속할 PATH 도, 그 파일도 없다).
+_envlib="${LVLY_SESSION_ENV_LIB:-$(dirname "$0")/session-env.sh}"
+# shellcheck source=/dev/null
+. "$_envlib"
+lvly_session_env "$_u" "$_home" --inherit-path --read-token-file
 
 # 작업 디렉터리 — 세션 spawn 은 '--cwd <dir>' 로 넘어온다(#524: 게이트웨이가 tmux -c 로 멤버 700 홈에
 #  chdir 못 해 'chdir(2) failed: Permission denied' 반복 → 여기서 **멤버 uid** 로 cd). 파일 브리지 호출

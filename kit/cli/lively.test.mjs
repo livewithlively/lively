@@ -239,12 +239,27 @@ try {
     // (b) register-clients.sh parity — fresh 설치·멤버 온보딩의 주 경로다(deploy/install-kit.sh·provision-member.sh 가
     //  직접 호출). 여기가 CLI 와 다른 transport 로 등록하면 **그 경로로 깐 첫 세션은 여전히 http** 라 #1079 가 그대로 남는다.
     //  두 트윈(scripts/ 소스 · kit/setup/) 모두 본다 — 한쪽만 고치는 드리프트가 실제로 있었다.
+    //
+    //  ⚠ 종전엔 셸에서 `--transport stdio` **문자열**을 찾았다. 그런데 #2476 에서 등록을 셸의 `claude mcp add`
+    //   에서 **파일 쓰기**(setup/mcp-register.mjs)로 내렸다 — 매니지드 중계가 나가는 컨테이너에 하네스
+    //   바이너리가 있으리라는 보장이 없어서다. 구현 문자열을 요구하던 이 단언은 그 순간 거짓 실패를 냈다.
+    //   그래서 **위임을 따라가 산출을 검사한다**: 셸이 등록기에 위임하는지 + 그 등록기가 CLI 와 같은 모양을
+    //   내는지. 문자열이 아니라 성질이라 다음 구현 변경에도 안 깨지고, 진짜 드리프트는 여전히 잡는다.
     for (const rel of [["scripts", "register-clients.sh"], ["kit", "setup", "register-clients.sh"]]) {
-      const p = join(REPO, ...rel);
-      const sh = readFileSync(p, "utf8");
-      check(`④ ${rel.join("/")} 가 CLI 와 같은 transport 로 lively 등록(parity)`,
-        /--transport +stdio +--scope +user +"?\$\{?MCP_LABEL/.test(sh) || /lively["']? +mcp\b/.test(sh),
-        `${rel.join("/")} 가 아직 http 직결로 lively 를 등록한다 — 이 경로로 깐 첫 세션은 #1079 를 그대로 겪는다(CLI·self-update 와 drift)`);
+      const sh = readFileSync(join(REPO, ...rel), "utf8");
+      const code = sh.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+      check(`④ ${rel.join("/")} 가 등록기에 위임한다(하네스 바이너리를 부르지 않는다)`,
+        /mcp-register\.mjs/.test(code) && !/(^|[;&|(]\s*)claude\s/m.test(code),
+        `${rel.join("/")} 가 claude 를 직접 부르거나 등록기를 안 부른다 — 그 자리에 바이너리가 없으면 시딩이 통째로 죽는다(#2476)`);
+    }
+    {
+      const { planServers } = await import(pathToFileURL(join(REPO, "kit", "setup", "mcp-register.mjs")).href);
+      const [lively] = planServers({ shim: shimPath, shimUsable: true, storeUrl: "http://x/mcp", token: "T", env: {} });
+      check("④ 등록기가 CLI 와 같은 모양을 낸다(parity — stdio 프록시 · args:[mcp])",
+        lively.type === "stdio" && lively.command === shimPath && JSON.stringify(lively.args) === '["mcp"]',
+        `got=${JSON.stringify(lively)}`);
+      check("④ 등록기 stdio 경로에 평문 토큰이 없다(#1079)",
+        !JSON.stringify(lively).includes("Bearer"), `got=${JSON.stringify(lively)}`);
     }
     // (c) self-update.mjs — 기존 멤버를 재설치 없이 옮기는 4번째 동기화 지점. stdio 마이그레이션과,
     //  롤백 시 살아나는 종전 헤더 계약을 **둘 다** 알고 있어야 한다.

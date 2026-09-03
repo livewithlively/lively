@@ -9,14 +9,20 @@ set -euo pipefail
 #     별도 하드닝 런북 — 이 스크립트는 uid-격리 메커니즘만 깐다(무회귀: 게이트웨이 env 로 켜기 전엔 무효).
 #
 # 사용: sudo [GATEWAY_USER=<user>] bash deploy/linux/install-isolation.sh
-#   GATEWAY_USER 기본 = lively-gateway 유닛의 User= (없으면 SUDO_USER).
+#   GATEWAY_USER 기본 = lively-gateway 유닛 User= → (blue-green) 실행 중 lively-gateway@<color> 인스턴스 User= → SUDO_USER.
+#   ⚠ blue-green 배포에선 **GATEWAY_USER 를 명시**하라(deploy-release.sh 가 SERVICE_USER 로 넘긴다). 비인스턴스
+#     lively-gateway 조회가 템플릿 유닛에선 빈값이라, 미지정 시 SUDO_USER(=root)로 폴백해 sudoers 주체를 root 로
+#     오기록하는 함정이 있다. 아래 인스턴스 조회 tier 가 그 폴백을 대부분 막지만, 확실한 건 명시다.
 # ─────────────────────────────────────────────────────────────────────────────
 [ "$(id -u)" = 0 ] || { echo "✗ root 필요: sudo bash $0"; exit 1; }
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 게이트웨이 유저(sudoers 주체) 결정: env > 유닛 User= > SUDO_USER
+# 게이트웨이 유저(sudoers 주체) 결정: env > 비인스턴스 유닛 User= > 실행 중 템플릿 인스턴스 User= > SUDO_USER
 GW="${GATEWAY_USER:-}"
 [ -n "$GW" ] || GW="$(systemctl show -p User --value lively-gateway 2>/dev/null || true)"
+# blue-green 은 템플릿 유닛 lively-gateway@<color> 라 위 비인스턴스 조회가 빈값 → 실행 중인 인스턴스에서 User 를 읽는다.
+#  (SUDO_USER 폴백은 배포/SSM 컨텍스트에서 root 라 sudoers 주체를 오기록하므로, 그 전에 실제 게이트웨이 유저를 잡는다.)
+[ -n "$GW" ] || GW="$(systemctl show -p User --value "$(systemctl list-units 'lively-gateway@*' --state=running --no-legend --plain 2>/dev/null | awk 'NR==1{print $1}')" 2>/dev/null || true)"
 [ -n "$GW" ] || GW="${SUDO_USER:-}"
 [ -n "$GW" ] || { echo "✗ 게이트웨이 유저 결정 실패 — GATEWAY_USER=<user> 로 지정"; exit 1; }
 id "$GW" >/dev/null 2>&1 || { echo "✗ 게이트웨이 유저 '$GW' 없음"; exit 1; }
@@ -51,6 +57,11 @@ echo "공유 워크스페이스 → $SHARED_DIR (root:lively-shared 2775 setgid)
 
 # ② box-spawn wrapper (root:root 0755) — 코드(terminal-isolation.ts BOX_SPAWN)와 경로 일치
 install -d -m 0755 /opt/lively/libexec
+#  ★ env 계약 정본을 **먼저** 놓는다 — box-spawn 이 이걸 source 한다(#2258 이동 2).
+#   순서가 뒤면 새 box-spawn 이 옛 박스에서 «session-env.sh 없음» 으로 죽는다.
+#   실행 파일이 아니라 라이브러리라 0644(멤버가 못 고치게 root 소유는 동일).
+install -m 0644 -o root -g root "$DIR/session-env.sh" /opt/lively/libexec/session-env.sh
+echo "session-env.sh → /opt/lively/libexec/session-env.sh (root:root 0644)"
 install -m 0755 -o root -g root "$DIR/box-spawn" /opt/lively/libexec/box-spawn
 echo "box-spawn → /opt/lively/libexec/box-spawn (root:root 0755)"
 # ②-cg box-cgspawn wrapper(#1059 D — per-session cgroup 메모리 격리, root:root 0755) — 코드(terminal-isolation.ts
@@ -67,6 +78,11 @@ echo "provision-member → /opt/lively/libexec/provision-member (root:root 0755)
 #     self-update claude(~/.local/bin) 를 깔 때 호출(root 전역 스테일 claude no_permissions 근절).
 install -m 0755 -o root -g root "$DIR/../install-claude-user.sh" /opt/lively/libexec/install-claude-user
 echo "install-claude-user → /opt/lively/libexec/install-claude-user (root:root 0755)"
+# ②-d install-codex-user(멤버 홈 codex + npm prefix 헬퍼) — claude 와 같은 이유의 codex 판.
+#     codex 는 시작 시 `npm install -g @openai/codex` 로 자기를 올리는데, root 전역 설치면 멤버가 못 써서
+#     EACCES 로 **즉시 종료**된다(끄는 플래그 없음). prefix 를 멤버 홈으로 돌려 자기 홈에 쓰게 한다.
+install -m 0755 -o root -g root "$DIR/../install-codex-user.sh" /opt/lively/libexec/install-codex-user
+echo "install-codex-user → /opt/lively/libexec/install-codex-user (root:root 0755)"
 
 # ③ 잠긴 sudoers — 템플릿의 'lively' 주체를 실제 게이트웨이 유저로 치환, visudo 검증 후 설치
 TMPS="$(mktemp)"

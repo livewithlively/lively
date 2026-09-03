@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-const webPath = (rel: string): string => new URL(`../../web/${rel}`, import.meta.url).pathname;   // dist/auth → 레포 루트의 web/ (src 와 같은 깊이)
+const webPath = (rel: string): string => new URL(`../../web/${rel}`, import.meta.url).pathname.replace("/dist/", "/src/").replace("/src/web/", "/web/");
 const readWeb = (rel: string): string => readFileSync(webPath(rel), "utf8");
 
 async function loadPure<T>(rel: string): Promise<T> {

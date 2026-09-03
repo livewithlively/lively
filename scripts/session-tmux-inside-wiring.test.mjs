@@ -24,7 +24,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const branch = blk.indexOf("if (inside) {");
   ok(branch > sw, "①-b 새 경로 분기(if (inside))가 있다");
   const elseWrap = blk.indexOf("wrapAsMember(", branch);
-  ok(elseWrap > branch, "①-c 옛 경로(wrapAsMember)는 그 분기의 else 로 남는다 — 순수 추가");
+  ok(elseWrap > branch, "①-c 셀프호스트 경로(wrapAsMember)는 그 분기의 else 로 남는다 — 매니지드의 옛 경로가 아니라 ensure 훅 없는 배포의 것(#2547)");
   // ── 순서: DB 행 → 컨테이너 → 판 명령(box-spawn) → new-session ──
   const up = blk.indexOf("upsertSessionState(", branch);
   const ens = blk.indexOf("ensureSessionContainerViaRelay(", branch);

@@ -38,6 +38,12 @@ export const HOOK_SCRIPTS = [
   "opencode-plugin.js",
   "antigravity-adapter.mjs",
   "grok-adapter.mjs",
+  // usage-report.mjs 는 훅(이벤트 배선)이 아니라 **statusLine 스크립트**다 — settings 훅 블록에 안 걸리고,
+  //  스폰타임 `--settings` 로 상시세션에만 얹힌다(src/terminal/catalog.ts managedStatusLineSpec).
+  //  여기 등재하는 건 파일을 ~/.lively/hooks/ 로 같은 복사·chmod·자동업데이트 파이프라인에 태우기 위해서다
+  //  — 그래야 그 statusLine command 가 실재 파일을 가리킨다. 빠지면 command 가 없는 경로를 가리키며
+  //  **조용히** 아무것도 안 나온다(타입체크·테스트로는 안 잡히는 무증상 실패).
+  "usage-report.mjs",
 ];
 
 // ── 훅이 hooks/ **밖에서** 끌어 쓰는 공유 모듈 ───────────────────────────────
@@ -58,6 +64,10 @@ export const SETUP_FILES = [
   "work-roots-header.mjs",  // user-install 이 import 하는 공유 상수(#270)
   "work.mjs",               // '내 컴퓨터에서 작업' 부트스트랩 — 설치기가 ~/.lively/work.mjs 로 복사
   "kit-manifest.mjs",       // 이 파일 — 설치 목록 단일 출처(user-install 이 import)
+  //  MCP 등록기(#2476) — register-clients.sh 가 부른다. 빠지면 그 셸이 «없는 파일» 을 불러 시딩이 죽는다.
+  //  ⚠ 이게 .mjs 인 이유: 종전엔 셸이 `claude mcp add` 를 불렀는데, 매니지드 중계가 나가는 컨테이너에
+  //   하네스 바이너리가 있으리라는 보장이 없어 통째로 깨졌다(2026-08-31 실측). 파일 쓰기로 내렸다.
+  "mcp-register.mjs",
 ];
 
 // kit 트리(<repo>/kit 또는 릴리스 <release>/kit)에서 읽어 갈 실제 경로 + 설치 위치 쌍.

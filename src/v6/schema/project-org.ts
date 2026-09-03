@@ -208,23 +208,60 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
     ${ensureCheck("project_folder_binding", { project_folder_binding_sync_chk: "sync IN ('none','pull','both')" })}
   `);
 
-  // ── 6b) project_member FK 교정 — 구 org/schema.ts(:304)가 project_member 를 org_project 참조로 **먼저**
-  //   만들면, 위 CREATE TABLE IF NOT EXISTS(project 참조)가 기존 테이블을 덮지 못한다(IF NOT EXISTS 함정).
-  //   그 결과 FK 가 org_project 를 가리킨 채 남아, v6 project 생성+팀원추가가 FK 위반(500)으로 깨졌다.
-  //   → project 참조로 재지정. 멱등: 이미 project 를 가리키면 skip. 재지정 전 project 에 없는 잔재 행 제거(FK 충족 불가).
+  // ── 6b) project_member FK 보장 — project_id 는 project(id) 를 가리키는 FK 여야 한다. 두 가지로 깨져 있었다:
+  //   ① 잘못된 대상: 구 org/schema.ts(:304)가 org_project 참조로 **먼저** 만들면 위 CREATE TABLE IF NOT EXISTS
+  //      (project 참조)가 기존 테이블을 못 덮어(IF NOT EXISTS 함정) FK 가 org_project 를 가리킨 채 남는다.
+  //   ② FK 부재: 더 옛 정의(core.ts:166 `project_id INT NOT NULL`, REFERENCES 없음)로 만들어진 배포는 FK 가
+  //      **아예 없다**. 이게 tenant-column 재작성 버그의 뿌리다 — FK 가 없으면 isNaturalKey 의 FK 전파
+  //      (tenant-column.ts:197)가 project_member.project_id 를 전역유일로 못 올려 자연키 오판 → 매 부팅
+  //      PK 를 (tenant_id, …) 로 재작성 → 미러 42P10. 그래서 '잘못된 FK 교정'만으론 부족하고 **부재 시 생성**이 필수다.
+  //   → project(id) FK 가 정확히 걸려 있지 않으면(부재·오대상 불문) 잔재 행 제거 후 (재)생성. 멱등: 이미 맞으면 skip.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname='project_member_project_id_fkey'
+          AND conrelid='project_member'::regclass
+          AND confrelid='project'::regclass
+      ) THEN
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname='project_member_project_id_fkey'
+            AND conrelid='project_member'::regclass
+        ) THEN
+          ALTER TABLE project_member DROP CONSTRAINT project_member_project_id_fkey;
+        END IF;
+        DELETE FROM project_member pm WHERE NOT EXISTS (SELECT 1 FROM project p WHERE p.id = pm.project_id);
+        ALTER TABLE project_member ADD CONSTRAINT project_member_project_id_fkey
+          FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE;
+      END IF;
+    END $$;
+  `);
+
+  // ── 6b-2) project_member PK 교정 — 이 표는 tenant-column 재작성 제외 대상이다(isNaturalKey: project_id 가
+  //   project.id 대리키 FK 라 전역 유일). ⚠ 그 제외는 **6b 가 FK 를 실재시킨 뒤에만** 성립한다(FK 없으면
+  //   전파 실패 → 재작성). 그래서 이 heal 은 반드시 6b 뒤에 온다 — 6b(FK 생성)로 이후 재작성을 막고, 여기서
+  //   이미 오염된 PK 를 되돌린다. 그런데 #126 멀티테넌시 일괄치환이 이 자연키 PK 를
+  //   (tenant_id, project_id, member_id) 로 잘못 재작성했고, #1821 이 신규 설치는 제외로 고쳤으나 **이미
+  //   재작성된 배포의 PK 는 원복되지 않아 남았다**. 그 결과 커넥터 미러의 `ON CONFLICT (project_id, member_id)`
+  //   (mirror-project.ts syncProjectMembers)가 42P10 "no unique constraint matching" 으로 죽어, 어사이니가
+  //   있는 프로젝트가 전건 미러 실패했다. → PK 에 tenant_id 가 끼어 있으면 자연키 (project_id, member_id) 로
+  //   되돌린다. 멱등: 이미 올바르면 skip. 단일 테넌트에서 (project_id, member_id) 는 유일하므로 원복 안전(중복이
+  //   있으면 ADD 가 실패해 부팅이 멈춘다 — 그건 데이터 이상 신호이지 이 교정의 결함이 아니다).
   await pool.query(`
     DO $$
     BEGIN
       IF EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname='project_member_project_id_fkey'
-          AND conrelid='project_member'::regclass
-          AND confrelid <> 'project'::regclass
+        SELECT 1 FROM pg_constraint c
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+        WHERE c.conname='project_member_pkey'
+          AND c.contype='p'
+          AND c.conrelid='project_member'::regclass
+          AND a.attname='tenant_id'
       ) THEN
-        ALTER TABLE project_member DROP CONSTRAINT project_member_project_id_fkey;
-        DELETE FROM project_member pm WHERE NOT EXISTS (SELECT 1 FROM project p WHERE p.id = pm.project_id);
-        ALTER TABLE project_member ADD CONSTRAINT project_member_project_id_fkey
-          FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE;
+        ALTER TABLE project_member DROP CONSTRAINT project_member_pkey;
+        ALTER TABLE project_member ADD CONSTRAINT project_member_pkey PRIMARY KEY (project_id, member_id);
       END IF;
     END $$;
   `);

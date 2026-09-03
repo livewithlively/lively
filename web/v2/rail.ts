@@ -17,7 +17,7 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
-import { el, navOn, personName, profileAvatar, state, toast, wsKey } from '../core.js';
+import { el, navOn, personName, profileAvatar, state, toast } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
 import { APPS, appHref, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
@@ -77,8 +77,9 @@ const HIDE_STORE = deviceStore('lively_v2_rail_hidden');   // ⚠ 이름에 `_KE
 const MAIN_STORE = shellPrefStore('lively_v2_rail_main', 'list');
 const PIN_STORE = deviceStore('lively_v2_rail_pins');      // 4차의 기억(고정 앱만 따로) — 5차 첫 로드에 MAIN_STORE 로 옮기고 지운다.
 //  자료를 독에서 한 번 내렸다는 표식(#2423) — 아래 init() 주석. 한 번만 하고, 그 뒤엔 사람의 결정이 이긴다.
-//  ⚠ 1회성 이관 표식이라 계정으로 올리지 않는다(#2460) — 기기마다 한 번씩 도는 것이 맞다.
-const SRC_UNPIN_STORE = wsKey('lively_v2_rail_src_unpinned');
+//  ⚠ 이 기기에 둔다(deviceStore): «한 번 내렸나» 는 그 사람의 결정이 아니라 이 브라우저가 옛 기본값을 이미
+//   청소했다는 사실이다. 계정에 올리면 다른 기기의 옛 순서를 청소할 기회가 사라진다.
+const SRC_UNPIN_STORE = deviceStore('lively_v2_rail_src_unpinned');
 const RECENT_N = 4;
 const NARROW_MQ = '(max-width: 900px)';   // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 
@@ -87,6 +88,8 @@ let hidden = false;
 let host: HTMLElement | null = null;
 let hooks: RailHooks = {};
 let inited = false;
+//  이번 로드의 init() 이 #2423 '자료 독 내리기' 청소를 실행했나 — 정본이 도착하면 거기에도 한 번 반영한다.
+let cleanedSrcThisLoad = false;
 let spaces: Array<{ slug: string; name: string; kind: string; is_primary?: boolean; role?: string | null; member_count?: number | null; kind_effective?: string; pending_invites?: number }> = [];
 let order: string[] = [];   // 메인 그룹 — 구역·리브 키와 고정한 앱 키가 섞여 선다(표시 순서 그대로)
 
@@ -111,6 +114,7 @@ function init(): void {
     //   두 번 내리지 않는다 — 사람이 다시 고정하면 그 결정이 그대로 산다.
     if (!localStorage.getItem(SRC_UNPIN_STORE)) {
       localStorage.setItem(SRC_UNPIN_STORE, '1');
+      cleanedSrcThisLoad = true;   // ⚠ 아래 reloadRailPrefs 주석 — 정본이 도착한 뒤 한 번 더 내려야 실제로 내려간다
       if (order.includes('sources')) { order = order.filter((k) => k !== 'sources'); localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
     }
     localStorage.removeItem('lively_v2_rail_open');   // 232px 펼침 모드(2차)의 기억 — 이제 뜻이 없다
@@ -129,6 +133,15 @@ export function reloadRailPrefs(): void {
     const raw = localStorage.getItem(MAIN_STORE);
     order = raw ? normalizeOrder(JSON.parse(raw)) : defaultOrder();
   } catch (_) { return; }   // 못 읽으면 들고 있던 순서 그대로
+  //  ⚠ #2423 청소를 여기서 **한 번 더** 한다. init() 의 청소는 캐시만 고치는데, 그 직후 이 함수가 서버 정본
+  //   (아직 옛 기본값의 'sources' 를 든 사본)으로 order 를 갈아끼우므로 청소가 그대로 되돌려진다 — 표식은
+  //   이미 서 있어 두 번 다시 돌지 않는다. 그래서 **이번 로드에 청소한 경우에만** 정본에도 반영한다.
+  //   (표식 자체는 init() 이 세우므로 «브라우저당 한 번» 은 그대로다 — 사람이 나중에 다시 고정하면 그 결정이 산다.)
+  if (cleanedSrcThisLoad && order.includes('sources')) {
+    order = order.filter((k) => k !== 'sources');
+    try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
+    shellPrefsPush();   // 정본에도 내려야 다른 기기·다음 로드가 다시 밀어 넣지 않는다
+  }
   drawRail();
 }
 
