@@ -91,3 +91,50 @@ test("G1/G2 누수 지표 무회귀 — ownedPids(워커 pid)의 attach 자식�
   assert.equal(legacy.children, 1, "ownedPids 없으면 게이트웨이 자식만(무변경)");
   assert.equal(legacy.orphans, 1);
 });
+
+// ── 불변식 3ᵍ — 폴백도 sticky 다 (#2600 T1, 2026-09-03 실측 결함 수정) ────────
+//
+// 왜: 워커 확보에 실패해 게이트웨이 인프로세스로 떨어진 세션이, 잠시 뒤(슬롯이 나서) 워커로도 붙으면
+//  같은 세션의 attach 가 **두 프로세스로 갈린다.** `attachRefs` 는 프로세스마다 따로라 양쪽이
+//  «내가 마지막» 으로 오판하고, 먼저 닫힌 쪽이 `detach-client -s` 를 쏴 **살아 있는 다른 화면까지 끊는다.**
+//  실측으로 재현했다: 워커1 + 게이트웨이1 = tmux 클라이언트 2 → 게이트웨이 탭만 닫으니 **0**.
+//  상한 도달·fork 실패는 일시적이라(탭1 폴백 → 탭2 워커) 실제로 도달 가능한 경로다.
+
+test("3ᵍ-① 폴백한 세션은 게이트웨이 소유로 표시된다", () => {
+  const r = new AttachRouter(4);
+  assert.equal(r.isGatewayOwned("box-a-1"), false, "표시 전엔 워커 후보다");
+  r.claimForGateway("box-a-1");
+  assert.equal(r.isGatewayOwned("box-a-1"), true);
+});
+
+test("3ᵍ-② 게이트웨이 소유는 그 세션에만 걸린다 — 다른 세션은 그대로 워커로", () => {
+  const r = new AttachRouter(4);
+  r.claimForGateway("box-a-1");
+  assert.equal(r.isGatewayOwned("box-a-2"), false, "한 세션의 폴백이 다른 세션까지 게이트웨이로 몰면 안 된다");
+});
+
+test("3ᵍ-③ 세션이 비면 소유가 풀린다 — 다음 attach 는 다시 워커 후보", () => {
+  const r = new AttachRouter(4);
+  r.claimForGateway("box-a-1");
+  r.releaseSession("box-a-1");
+  assert.equal(r.isGatewayOwned("box-a-1"), false,
+    "안 풀리면 그 세션은 영영 게이트웨이에 묶여 워커의 이점을 못 받는다");
+});
+
+// ★ 이 행이 결함 그 자체다 — 워커에 매핑돼 있던 세션이 폴백하면, 그 뒤로는 워커로 가면 안 된다.
+test("3ᵍ-④ 워커 매핑이 있던 세션이 폴백해도, 소유 표시가 그 뒤 배정을 막는다", () => {
+  const r = new AttachRouter(4);
+  r.assign("box-a-1", 100);                       // 탭1이 워커 100 에 붙어 있었다
+  r.claimForGateway("box-a-1");                   // 탭2가 폴백(워커 상한 등)
+  assert.equal(r.isGatewayOwned("box-a-1"), true,
+    "여기가 false 면 탭3이 다시 워커로 가서 장부가 세 갈래로 갈린다");
+});
+
+test("3ᵍ-⑤ 소유 해제는 워커 매핑 해제와 같은 문으로 들어온다(장부가 하나다)", () => {
+  const r = new AttachRouter(4);
+  r.assign("box-a-1", 100);
+  r.claimForGateway("box-a-1");
+  r.releaseSession("box-a-1");
+  assert.equal(r.isGatewayOwned("box-a-1"), false);
+  assert.equal(r.workerForSession("box-a-1"), undefined, "워커 매핑도 함께 풀려야 한다");
+});

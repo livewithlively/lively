@@ -18,8 +18,9 @@ import { attachWorkerHost } from "./attach-worker-host.js";
 import { canAttach, sessionGone, ensureSessionOpts } from "./terminal-sessions.js";
 import { nodeCanAttach, nodeRelayAttach, isSelfNode } from "../node/registry.js";
 import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다
-import { attachSession, reapOrphanAttachClients, attachClose,
+import { reapOrphanAttachClients, attachClose,
   type AttachSocket, type TicketLookup } from "./terminal-pty.js";
+import { SessionHost } from "./session-host.js";
 
 const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
 type LiveWS = WebSocket & { isAlive?: boolean };
@@ -43,10 +44,18 @@ export function startHeartbeat(): void {   // #2165 — 업그레이드 핸들�
 //  이 서버는 업그레이드 핸들러만 쓴다(noServer — 소켓을 직접 넘겨받는다).
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
-//  브라우저 WebSocket 을 attach 본체(양쪽 공용)에 넘기는 얇은 어댑터.
-function attach(ws: WebSocket, id: string): void {
-  attachSession(ws as unknown as AttachSocket, id);
-}
+// 게이트웨이 인프로세스 attach 의 세션 호스트 (#2600 T1).
+//
+//  ★ 왜 이 자리도 세션 호스트를 쓰나: 폴백으로 여기 붙은 세션의 «마지막 소켓» 을 **라우터에 알려 줘야**
+//   하기 때문이다. 그게 없으면 그 세션이 비어도 게이트웨이 소유가 안 풀려 영영 워커로 못 간다.
+//   그리고 이제 attach 를 소유하는 **세 자리가 모두 같은 모듈**을 쓴다(워커 fd · 노드 WS 중계 · 여기).
+//
+//  ⚠ `onIdle` 을 주지 않는다 — 게이트웨이는 상주 프로세스다. 세션 호스트는 콜백이 없으면 유휴 종료를
+//   아예 안 건다(그 규약이 여기서 게이트웨이를 지킨다). `shutdown()` 도 안 건다: 게이트웨이의 PTY 회수는
+//   index.ts 의 시그널 핸들러가 이미 `killAttachedPtys` 로 맡고 있어, 여기서 또 부르면 두 벌이 된다.
+const gatewayHost = new SessionHost({
+  onSessionEmpty: (id) => attachWorkerHost.releaseSession(id),
+});
 
 export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): void {
   startHeartbeat();                     // 죽은 attach 소켓 주기 회수(#687)
@@ -133,7 +142,8 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         const handed = await attachWorkerHost.handoff({ req, socket, head, id, tenant: tenantForWorker });
         if (handed) return; // 워커가 소켓을 소유 — 게이트웨이는 이 연결에서 손을 뗀다
       }
-      wss.handleUpgrade(req, socket, head, (ws) => inTenant(() => attach(ws, id)));
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        gatewayHost.attach(ws as unknown as AttachSocket, id, inTenant));
       })());
     })();
   });

@@ -14,6 +14,13 @@
 //  (2) 매핑은 딱 두 경우에만 풀린다 — 그 세션의 마지막 WS 가 닫혀 워커가 'session-empty' 를 알릴 때,
 //      또는 워커가 죽어 그 워커의 세션 전체가 한꺼번에 떨어질 때(dropWorker). 두 경우 모두 **살아 있는
 //      attach 가 없는 시점**이라, 그 뒤 같은 세션이 다른 워커로 새로 붙어도 유령 정리와 겹치지 않는다.
+//  (3ᵍ) **폴백도 sticky 다** — 워커를 못 잡아 게이트웨이 인프로세스로 떨어진 세션은, 그 세션이 완전히
+//      빌 때까지 계속 게이트웨이로 간다. 안 그러면 같은 세션이 게이트웨이와 워커에 **나뉘어** 붙고,
+//      `attachRefs` 는 프로세스마다 따로라 양쪽 다 «내가 마지막» 으로 오판한다 → 먼저 닫힌 쪽이
+//      `detach-client -s` 를 쏴 **다른 쪽의 살아 있는 화면까지 끊는다**(#2148 그 사고).
+//      ⚠ 실측으로 확인한 결함이다(2026-09-03): 워커 1 + 게이트웨이 1 = tmux 클라이언트 2 인 상태에서
+//      게이트웨이 탭만 닫으니 **클라이언트가 0** 이 됐다. 상한 도달·fork 실패는 **일시적**이라
+//      (탭1은 폴백, 잠시 뒤 탭2는 워커로) 실제로 도달 가능한 경로다.
 //  (3) K 는 **서로 다른 세션 수**의 상한이다. 이미 매핑된 세션은 K 와 무관하게 자기 워커로 간다
 //      (그 세션은 이미 슬롯을 차지하고 있다). 새 세션만 size<K 인 워커를 찾고, 없으면 새 워커가 필요하다.
 //
@@ -39,6 +46,8 @@ export class AttachRouter {
   readonly k: number;
   private readonly sessionWorker = new Map<string, WorkerKey>();
   private readonly workerSessions = new Map<WorkerKey, Set<string>>();
+  /** 폴백으로 **게이트웨이가 소유**하게 된 세션(불변식 3ᵍ). 비워질 때까지 워커로 안 보낸다. */
+  private readonly gatewaySessions = new Set<string>();
 
   constructor(k: number) { this.k = k; }
 
@@ -70,8 +79,19 @@ export class AttachRouter {
     return { worker: best, sticky: false };
   }
 
-  /** 세션의 마지막 WS 가 닫혀 워커가 'session-empty' 를 알릴 때 — 매핑만 푼다(워커는 그대로 살아 다른 세션을 본다). */
+  /**
+   * 이 세션을 게이트웨이가 소유한다고 못박는다(불변식 3ᵍ) — 워커 확보에 실패해 인프로세스로 떨어질 때.
+   *  이후 이 세션의 attach 는 전부 게이트웨이로 가서 `attachRefs` 가 한 프로세스에 모인다.
+   */
+  claimForGateway(id: string): void { this.gatewaySessions.add(id); }
+
+  /** 이 세션이 지금 게이트웨이 소유인가 — 참이면 워커로 보내면 안 된다(장부가 갈린다). */
+  isGatewayOwned(id: string): boolean { return this.gatewaySessions.has(id); }
+
+  /** 세션의 마지막 WS 가 닫혔을 때 — 매핑만 푼다(워커는 그대로 살아 다른 세션을 본다).
+   *  워커의 'session-empty' 와 **게이트웨이 세션 호스트의 onSessionEmpty** 둘 다 이 자리로 온다. */
   releaseSession(id: string): void {
+    this.gatewaySessions.delete(id);   // 게이트웨이 소유도 여기서 풀린다(다음 attach 는 다시 워커 후보)
     const w = this.sessionWorker.get(id);
     if (w === undefined) return;
     this.sessionWorker.delete(id);
