@@ -78,12 +78,11 @@ const withEnv = (over: Record<string, string | undefined>, fn: () => void): void
   }
 };
 
-/** §1 표의 다섯 칸만 뽑는다(hooks·토큰·K 는 별도 시험). */
+/** §1 표의 네 칸만 뽑는다(hooks·토큰·K 는 별도 시험). attachTransport 는 #2599 T3 에서 제거됐다 — §2-4 참조. */
 const axes = (t: ExecTopology) => ({
   sessionHost: t.sessionHost,
   tmux: t.tmux,
   isolation: t.isolation,
-  attachTransport: t.attachTransport,
   storage: t.storage,
 });
 
@@ -109,7 +108,6 @@ test("§1-1 셀프호스트 primary(아무 설정 없음) — 같은 호스트·
     sessionHost: "local",
     tmux: { kind: "socket", socket: null },
     isolation: "os-user",
-    attachTransport: "inproc",
     storage: "colocated",
   });
 });
@@ -119,7 +117,6 @@ test("§1-2 셀프호스트 registry secondary(워크스페이스 모드=registr
   assert.equal(t.sessionHost, "local");
   assert.notEqual(socketOf(t), null, "registry 는 기본 소켓이 아니라 워크스페이스 전용 소켓이다");
   assert.equal(t.isolation, "os-user");
-  assert.equal(t.attachTransport, "inproc");
   assert.equal(t.storage, "colocated");
 });
 
@@ -129,7 +126,6 @@ test("§1-3 셀프호스트 리눅스 격리(멤버 uid 강하 wrapper 경로) �
     sessionHost: "local",
     tmux: { kind: "socket", socket: null },
     isolation: "os-user",
-    attachTransport: "inproc",
     storage: "colocated",
   });
   assert.equal(t.hooks.boxSpawn, "/usr/local/libexec/box-spawn");
@@ -140,7 +136,6 @@ test("§1-4 매니지드(tmux 중계+세션 확보 훅+세션 경계 중계+멤�
   assert.equal(t.sessionHost, "relay");
   assert.equal(t.tmux.kind, "exec");
   assert.equal(t.isolation, "container");
-  assert.equal(t.attachTransport, "inproc", "워커 풀을 안 켰으면 매니지드라도 이 프로세스 안이다");
   assert.equal(t.storage, "detached");
 });
 
@@ -150,7 +145,6 @@ test("§1-5 멤버 노드(노드 토큰) — 노드·기본 소켓·OS 계정·�
     sessionHost: "node",
     tmux: { kind: "socket", socket: null },
     isolation: "os-user",
-    attachTransport: "node-relay",
     storage: "colocated",
   });
   assert.equal(t.nodeToken, "nt-abc123", "노드 인증값은 그대로 실려야 한다");
@@ -178,7 +172,6 @@ test("§2-1 노드도 중계도 아니면 같은 호스트", () => {
 test("★ §2-1 노드 인증값이 «공백 하나» 여도 있음으로 본다 — 여기서 트림하면 극단값에서 동작이 갈린다", () => {
   const t = computeExecTopology(E({ LIVELY_NODE_TOKEN: " " }));
   assert.equal(t.sessionHost, "node");
-  assert.equal(t.attachTransport, "node-relay", "노드면 attach 도 노드 중계여야 한다(공백 토큰도 예외 없다)");
 });
 
 test("§2-1 노드 인증값이 빈 문자열이면 «없음» — 중계/로컬 판정으로 내려간다", () => {
@@ -277,25 +270,30 @@ test("§2-3 세션 컨테이너 확보 훅이 빈 문자열이면 «없음» —
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// §2-4. attach 전송 + 워커 풀 설정값 표
+// §2-4. attach 워커 풀 설정값 표
+//  ⚠ 종전에 여기 있던 `attachTransport`(inproc|worker-fd|node-relay) 는 #2599 T3 에서 **제거**됐다.
+//   그 셋을 실제로 고르는 자리(`terminal-pty-upgrade`)에서 node-relay 는 요청의 `?node=` 로 갈리는데,
+//   프로세스 한 벌로 얼린 값은 그 분기를 대표하지 못한다(게이트웨이에서는 영영 node-relay 가 아니다).
+//   프로세스 축의 노브인 `attachWorkerK` 만 남는다 — 아래가 그 표다.
 // ════════════════════════════════════════════════════════════════════════════
 
-test("§2-4 노드면 노드 중계 — 워커 풀이 켜져 있어도 노드가 먼저다", () => {
+test("§2-4 노드여도 워커 풀 K 는 그대로 실린다 — 두 값은 서로 파생되지 않는다", () => {
   const t = computeExecTopology(E({ LIVELY_NODE_TOKEN: "nt-1", LIVELY_ATTACH_WORKER_K: "4" }));
-  assert.equal(t.attachTransport, "node-relay");
+  assert.equal(t.sessionHost, "node");
+  assert.equal(t.attachWorkerK, 4, "노드라고 K 를 지우지 않는다(누가 읽을지는 읽는 쪽이 정한다)");
 });
 
-test("§2-4 노드가 아니고 워커 풀이 켜져 있으면 워커 프로세스", () => {
-  assert.equal(computeExecTopology(E({ LIVELY_ATTACH_WORKER_K: "4" })).attachTransport, "worker-fd");
-  assert.equal(computeExecTopology(E({ ...MANAGED, LIVELY_ATTACH_WORKER_K: "2" })).attachTransport, "worker-fd");
-  assert.equal(computeExecTopology(E({ LIVELY_ATTACH_WORKER_K: "inf" })).attachTransport, "worker-fd");
+test("§2-4 워커 풀이 켜지면 K 가 양수다 — 표면과 무관하다", () => {
+  assert.equal(computeExecTopology(E({ LIVELY_ATTACH_WORKER_K: "4" })).attachWorkerK, 4);
+  assert.equal(computeExecTopology(E({ ...MANAGED, LIVELY_ATTACH_WORKER_K: "2" })).attachWorkerK, 2);
+  assert.equal(computeExecTopology(E({ LIVELY_ATTACH_WORKER_K: "inf" })).attachWorkerK, Infinity);
 });
 
-test("§2-4 워커 풀이 꺼져 있으면 이 프로세스 안", () => {
+test("§2-4 워커 풀이 꺼져 있으면 K=0(= attach 는 게이트웨이 안)", () => {
   for (const v of [undefined, "", "0", "off", "false", "no", "-1", "abc"]) {
     assert.equal(
-      computeExecTopology(E({ LIVELY_ATTACH_WORKER_K: v })).attachTransport,
-      "inproc",
+      computeExecTopology(E({ LIVELY_ATTACH_WORKER_K: v })).attachWorkerK,
+      0,
       `꺼진 값이다: ${JSON.stringify(v)}`,
     );
   }
@@ -499,7 +497,7 @@ test("★ §4 확정하면 프로세스 수명 동안 답이 안 변한다 — �
     assert.equal(execTopology().sessionHost, "local", "확정 뒤 env 변경은 답을 바꾸지 못한다");
     assert.equal(execTopology().tmux.kind, "socket");
     assert.equal(execTopology().storage, "colocated");
-    assert.equal(execTopology().attachTransport, "inproc");
+    assert.equal(execTopology().attachWorkerK, 0);
   });
 });
 
@@ -673,7 +671,6 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
     sessionHost: "local",
     tmux: { kind: "socket", socket: null },
     isolation: "os-user",
-    attachTransport: "inproc",
     storage: "colocated",
     hooks: {
       sessionEnsure: "",

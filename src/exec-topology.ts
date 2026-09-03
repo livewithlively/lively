@@ -39,9 +39,6 @@ export type SessionHost =
 /** 세션을 무엇으로 가르나. 실제 격리 성립은 멤버별 게이트(`resolveMemberOsUser`)가 따로 본다 — 여기는 **배포가 고른 방식**이다. */
 export type IsolationMode = "none" | "os-user" | "container";
 
-/** 웹터미널 attach 바이트가 지나는 길. */
-export type AttachTransport = "inproc" | "worker-fd" | "node-relay";
-
 /** 세션 파일이 이 프로세스 호스트에 있나(= 게이트웨이와 같은 저장소인가). */
 export type StorageLocality = "colocated" | "detached";
 
@@ -78,7 +75,6 @@ export interface ExecTopology {
   sessionHost: SessionHost;
   tmux: TmuxPlacement;
   isolation: IsolationMode;
-  attachTransport: AttachTransport;
   storage: StorageLocality;
   hooks: TopologyHooks;
   /** 노드 에이전트의 자기 인증값(`LIVELY_NODE_TOKEN`). "" = 게이트웨이. `sessionHost==="node"` 의 근거이기도 하다. */
@@ -149,13 +145,14 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   const isolation: IsolationMode =
     env.LIVELY_MEMBER_ISOLATION === "off" ? "none" : hooks.sessionEnsure ? "container" : "os-user";
 
-  // ── attachTransport ──
-  //  노드의 attach 는 노드 데몬이 로컬 `tmux -CC` 를 물고 게이트웨이로 중계한다(node-relay).
-  //  ⚠ **오늘 이 값으로 분기하는 코드가 없다**(attach 워커 host 는 K 로 직접 판단한다). 이 프로젝트가
-  //   없애려는 것이 «쓰는 사람 없이 자란 판정»인데 여기서 하나를 새로 심는 셈이라, 기한을 못박는다 —
-  //   **T3(#2604)이 소비처를 옮기거나, 안 옮길 거면 이 필드를 지운다.** 안 쓰는 필드는 거짓말이 된다.
-  const attachTransport: AttachTransport =
-    sessionHost === "node" ? "node-relay" : attachWorkerK > 0 ? "worker-fd" : "inproc";
+  // ── attachTransport 는 없다 (#2599 T3 에서 제거) ──
+  //  T2 가 `inproc|worker-fd|node-relay` 를 두고 «소비처를 옮기거나 지워라» 로 기한을 걸었다. 옮길 수
+  //   없어서 지웠다 — 소비처가 없어서가 아니라 **축이 다르기 때문이다.** 그 셋을 실제로 고르는 자리는
+  //   `terminal-pty-upgrade` 의 업그레이드 핸들러인데, 거기서 node-relay 는 **요청의 `?node=<id>`** 로
+  //   갈린다(같은 게이트웨이가 어떤 요청은 워커로, 어떤 요청은 노드로 보낸다). 프로세스 한 벌로 얼린
+  //   값은 그 분기를 못 대표한다 — 게이트웨이에서 이 필드는 영영 `node-relay` 가 아니므로, 그 이름을
+  //   보고 `=== "node-relay"` 를 쓰면 **항상 거짓인 분기**가 된다. 남겨 두는 편이 위험했다.
+  //  ⇒ 프로세스 축의 노브인 `attachWorkerK` 만 남는다(`attach-worker-host` 가 그 하나만 읽는다).
 
   // ── storage ──
   //  «세션 파일이 이 호스트에 있나». 종전엔 `memberExecConfigured()` 가 이 질문을 이름 없이 답했다
@@ -165,7 +162,7 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   //   그건 폴더가 아니라 **프로세스**의 지역성이라 같은 축이고, 두 자리가 같은 낱말을 쓰는 것이 의도다.
   const storage: StorageLocality = hooks.memberExec ? "detached" : "colocated";
 
-  return { sessionHost, tmux, isolation, attachTransport, storage, hooks, nodeToken, attachWorkerK };
+  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK };
 }
 
 let frozen: ExecTopology | null = null;
