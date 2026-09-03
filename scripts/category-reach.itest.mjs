@@ -184,10 +184,22 @@ try {
     const { upsertDistiller } = await import("../dist/org/store/ingest.js");
     await upsertDistiller({ key: "lane-ok", target_category: "partners" }, "itest", "web");
     await upsertDistiller({ key: "lane-catchall", target_category: null }, "itest", "web");
-    await assert.rejects(() => upsertDistiller({ key: "lane-bad", target_category: "comms" }, "itest", "web"),
-      /'comms' 이\(가\) 없습니다/, "⑧ 없는 축으로는 저장할 수 없다(실측에서 실제로 저장돼 있던 값)");
-    await assert.rejects(() => upsertDistiller({ key: "lane-dep", target_category: "no-name-axis" }, "itest", "web"),
-      /비활성입니다/, "⑧ 비활성 축으로도 저장할 수 없다");
+    //  ★ 상태코드까지 본다. 평범한 Error 로 던지면 rest-util 이 500 «internal_error» 로 뭉개서
+    //   «있는 축은 이것들이다» 안내가 통째로 사라진다 — dev 실측(2026-09-03)에서 실제로 그렇게 나갔다.
+    //   «막혔다» 만 보는 단언은 그 회귀를 못 잡는다(스토어에선 똑같이 throw 하므로 초록이다).
+    const rejects400 = async (fn, re, label) => {
+      try { await fn(); assert.fail(`${label} — 거절돼야 하는데 통과했다`); }
+      catch (e) {
+        if (e?.code === "ERR_ASSERTION") throw e;
+        assert.equal(e?.status, 400, `${label} — 400 이어야 한다(지금 ${e?.status ?? "상태 없음"} → 500 으로 뭉개진다)`);
+        assert.match(String(e?.message ?? ""), re, `${label} — 무엇을 넣어야 하는지가 문구에 있어야 한다`);
+        assert.match(String(e?.message ?? ""), /있는 축:/, `${label} — 있는 축 목록을 알려 줘야 한다`);
+      }
+    };
+    await rejects400(() => upsertDistiller({ key: "lane-bad", target_category: "comms" }, "itest", "web"),
+      /'comms' 이\(가\) 없습니다/, "⑧ 없는 축(실측에서 실제로 저장돼 있던 값)");
+    await rejects400(() => upsertDistiller({ key: "lane-dep", target_category: "no-name-axis" }, "itest", "web"),
+      /비활성입니다/, "⑧ 비활성 축");
     //  부분 갱신에서 target_category 를 안 주면 검사하지 않는다(«안 건드림» 이라 기존 값을 지킨다).
     await upsertDistiller({ key: "lane-ok", batch_size: 5 }, "itest", "web");
   });

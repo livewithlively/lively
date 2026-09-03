@@ -1,6 +1,7 @@
 // 자동 인입 라인 — org_ingest_policy(허용선 정책 #638) · org_distiller(자료 증류기 #1289) · 인입 게이트 관측(#656).
 //  (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
+import { HttpError } from "../../http-error.js";
 import { invalidateIngestPolicyCache } from "../ingest/ingest-policy-load.js";   // #783 정책 쓰기 → 캐시 즉시 무효화(스위치가 곧바로 먹게)
 import { audit } from "./audit.js";
 import { keepDrawerTarget } from "../liv/lane-skeleton.js";   // #1631 — 서랍 레인의 목적지를 잃지 않는다
@@ -259,7 +260,11 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
     const verdict = judgeTargetCategory(input.target_category, await categoryStateByKey());
     if (!verdict.ok) {
       const live = [...(await categoryStateByKey())].filter(([, st]) => st === "active").map(([k]) => k);
-      throw new Error(verdict.reason === "unknown"
+      //  ⚠ **HttpError(400) 로 던진다.** 평범한 Error 면 rest-util 이 500 «internal_error» 로 뭉개서
+      //   «있는 축은 이것들이다» 라는 안내가 통째로 사라진다(dev 실측 2026-09-03: 실제로 그랬다).
+      //   막는 것보다 **왜 막혔고 무엇을 넣어야 하나**가 이 검증의 값어치다 — #2474 가 배운 그 자리다.
+      //   (스토어가 HttpError 를 쓰는 전례: v6/shared-folder-store.ts. http-error.ts 는 독립 모듈이라 순환 없음.)
+      throw new HttpError(400, verdict.reason === "unknown"
         ? `목적지 분류축 '${String(input.target_category).trim()}' 이(가) 없습니다 — 있는 축: ${live.join(", ") || "(없음)"}`
         : `목적지 분류축 '${String(input.target_category).trim()}' 은(는) 비활성입니다 — 새 지식을 비활성 축으로 보낼 수 없습니다. 있는 축: ${live.join(", ") || "(없음)"}`);
     }
