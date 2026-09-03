@@ -106,6 +106,7 @@ else
   launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.lvly.lively.plist"
 fi
 wait_healthz
+wait_ready   # #2578 — 스키마 마이그레이션·(단일→registry) 자가 재기동까지 끝난 뒤에야 시드·프록시로(healthz 는 listen 일 뿐)
 # 기본 커넥터 카탈로그(#746) — DCR 지원 호스팅 OAuth MCP(Notion·Linear 등) '없으면 등록'(멱등, 기존 보존).
 #  기존 박스도 업데이트 때 신규 기본 커넥터를 수령. 삭제로 영구 제외하려면 disable(존재하면 보존).
 run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-connectors.mjs" 2>&1 || warn "커넥터 시드 경고 — 수동: node --env-file=.env deploy/bootstrap-connectors.mjs"
@@ -119,4 +120,4 @@ else
 fi
 
 ok "업데이트 완료 — ${PUBLIC_URL:-http://localhost:${PORT:-8080}}"
-log "확인: /healthz · 웹UI /ui/ · 온보딩 /ui/#/onboarding"
+log "확인: /healthz · /readyz(schema=ready) · 웹UI /ui/ · 온보딩 /ui/#/onboarding"

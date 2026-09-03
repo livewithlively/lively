@@ -117,3 +117,33 @@ const hangPool = (): QueryablePool => ({ query: () => new Promise(() => { /* 영
 }
 
 console.log("health.test.ts ok — DB 다운을 초록으로 보고하지 않는다 + 자격증명 미노출 + 디스크 임계/중복제거");
+
+// ── #2578 스키마 게이트: «DB 에 닿는다»와 «스키마·시딩이 끝났다»는 다른 질문이다 ──
+//  2026-09-03 EC2 실측: healthz 200 직후 부트스트랩이 42703 으로 죽었는데 readyz 도 200 이었다(DB 도달 + 디스크만 봤다).
+{
+  const { gateBySchema } = await import("./health.js");
+  const okBody = { ok: true, status: "ok" as const, extra: 1 };
+  // ready/skipped — 종전 그대로(200/503 은 DB·디스크가 정한다). skipped = 매니지드 중앙 게이트웨이 → 무영향의 근거.
+  assert.deepEqual(gateBySchema(okBody, "ready"), { httpStatus: 200, body: { ...okBody, schema: "ready" } });
+  assert.deepEqual(gateBySchema(okBody, "skipped"), { httpStatus: 200, body: { ...okBody, schema: "skipped" } });
+  const degraded = { ok: true, status: "degraded" as const };
+  assert.equal(gateBySchema(degraded, "ready").httpStatus, 200, "200+degraded 정책은 그대로다(디스크 경고로 LB 에서 빼지 않는다)");
+  assert.equal(gateBySchema(degraded, "skipped").httpStatus, 200);
+  const down = { ok: false, status: "down" as const };
+  assert.equal(gateBySchema(down, "ready").httpStatus, 503, "DB 다운은 스키마와 무관하게 503");
+  // pending/restarting — 503 + starting. 설치 스크립트는 여기서 기다린다.
+  for (const phase of ["pending", "restarting"] as const) {
+    const g = gateBySchema(okBody, phase);
+    assert.equal(g.httpStatus, 503, `${phase} 는 503`);
+    assert.equal(g.body.ok, false);
+    assert.equal(g.body.status, "starting");
+    assert.equal(g.body.schema, phase, "schema 값은 그대로 실린다(셸이 grep 으로 판정)");
+    // DB 자체가 죽어 있으면 그 판정(down)을 starting 으로 덮지 않는다 — 더 근본적인 사유다.
+    assert.equal(gateBySchema(down, phase).body.status, "down");
+  }
+  // failed — 503 + down. 기다려도 안 온다 → 설치 스크립트는 즉시 멈춘다.
+  const f = gateBySchema(okBody, "failed");
+  assert.equal(f.httpStatus, 503);
+  assert.equal(f.body.status, "down");
+  assert.equal(f.body.schema, "failed");
+}

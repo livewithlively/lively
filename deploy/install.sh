@@ -11,6 +11,7 @@ set -euo pipefail
 #     LIVELY_DOMAIN=gw.org.com               설정 시 Caddy 자동 HTTPS(Let's Encrypt) + PUBLIC_URL 기본 https
 #     PUBLIC_URL=http://<host>:8080         외부 접속 URL(LIVELY_DOMAIN 설정 시 https://도메인 자동)
 #     BOOTSTRAP_ADMIN_EMAIL=you@org.com      첫 관리자(웹 로그인) 이메일
+#     BOOTSTRAP_ADMIN_PASSWORD=…             첫 관리자 초기 비번(생략 시 랜덤 — 요약에 출력)
 #     ORG_DOMAIN=org.com                     에이전트 토큰 이메일 도메인
 #     WITH_EMBEDDINGS=1                      임베딩 사이드카 동반(t4g.large+ 권장)
 #     FORCE=1                                기존 게이트웨이 감지해도 강행
@@ -65,33 +66,31 @@ main() {
 
   # ⚠ 순서: 스키마는 게이트웨이가 '기동 시 listen 성공 후' 자가 마이그레이션한다 → 부트스트랩(테이블 필요)은
   #   반드시 서비스 기동·헬스체크 '뒤'에. (먼저 돌리면 org_member 테이블이 아직 없어 실패.)
-  phase "5/7 게이트웨이 서비스 설치·기동 + 헬스체크(스키마 자가 마이그레이션) + TLS 프록시"
+  #   #2578: healthz(listen) 만으론 부족하다 — 마이그레이션은 listen 뒤 비동기고 첫 부팅은 등록부 활성화 뒤 자가 재기동한다.
+  #   wait_ready 가 /readyz 의 schema=ready(두 번째 부팅까지 완료)를 기다린 뒤에야 6/7 로 간다.
+  phase "5/7 게이트웨이 서비스 설치·기동 + 헬스체크 + 준비 대기(스키마 자가 마이그레이션·첫 부팅 재기동) + TLS 프록시"
   ensure_host_memory_safety   # #1059 OOM 재발방지 — swap 완충 + earlyoom(sshd 보호·폭주 kill). 서비스 기동 전. 비치명.
   os_install_service
   wait_healthz
+  wait_ready
   proxy_up   # LIVELY_DOMAIN 설정 시 Caddy 자동 HTTPS(미설정 시 no-op)
 
-  phase "6/7 부트스트랩 — 첫 관리자 + 익명 baseline(페르소나·규칙)"
+  phase "6/7 부트스트랩 — 첫 관리자 + 익명 baseline(페르소나·규칙) + 기본 커넥터"
   # P4(#524): 게이트웨이 유저(lively)로 실행 — 키트가 그 유저 홈(~/.claude)에 써야 하고, 부트스트랩도 같은 유저로 통일.
   #  (.env 는 운영자 소유·그룹 lively·640 이라 lively/운영자 둘 다 읽음. SERVICE_USER=설치유저면 run_as_service 는 그냥 실행.)
+  #  #2578: 실패는 bootstrap_step 이 기록해 요약에서 ✗ + exit 1 로 올린다(종전엔 warn 후 '완료'로 끝나 관리자 없는 박스가 됐다).
+  #   각 스크립트는 스키마 미준비·DB 기동 중이면 스스로 ≤60s 재시도한다(deploy/lib/bootstrap-retry.mjs — 2차 방어).
   local admin_out=""
-  if admin_out="$(run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-admin.mjs" 2>&1)"; then
-    ok "관리자 시드 완료"
-  else
-    warn "관리자 부트스트랩 경고(나중에 재시도): $admin_out"
+  if bootstrap_step "관리자 시드" "BOOTSTRAP_ADMIN_EMAIL=<email> node --env-file=.env deploy/bootstrap-admin.mjs" \
+       run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-admin.mjs"; then
+    admin_out="$BOOTSTRAP_LAST_OUT"
   fi
   # 익명 조직 baseline(org-defaults 페르소나·규칙) — 빈 경우에만(편집 보존). 신규 조직이 맥락 블라인드를 안 넘게.
-  if run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-baseline.mjs" 2>&1; then
-    ok "baseline 시드 처리(빈 org-defaults 만)"
-  else
-    warn "baseline 시드 경고(나중에 재시도: node --env-file=.env deploy/bootstrap-baseline.mjs)"
-  fi
+  bootstrap_step "baseline 시드(빈 org-defaults 만)" "node --env-file=.env deploy/bootstrap-baseline.mjs" \
+    run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-baseline.mjs" || true
   # 기본 커넥터 카탈로그(#746) — DCR 지원 호스팅 OAuth MCP(Notion·Linear 등) '없으면 등록'(멱등, 기존 보존).
-  if run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-connectors.mjs" 2>&1; then
-    ok "기본 커넥터 시드 처리(없는 것만)"
-  else
-    warn "커넥터 시드 경고(나중에 재시도: node --env-file=.env deploy/bootstrap-connectors.mjs)"
-  fi
+  bootstrap_step "기본 커넥터 시드(없는 것만)" "node --env-file=.env deploy/bootstrap-connectors.mjs" \
+    run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-connectors.mjs" || true
 
   # 중앙박스 키트 — 이 호스트의 claude 에 lively(MCP+훅+컨텍스트) 설치 → 웹터미널 세션이 맥락 CRUD 가능.
   phase "7/7 중앙박스 키트 설치(게이트웨이 유저의 claude 를 lively-aware 로)"
@@ -115,17 +114,22 @@ main() {
   # ── 요약 ──
   phase "완료"
   ok "게이트웨이: ${PUBLIC_URL:-http://localhost:$PORT}"
-  ok "헬스: ${PUBLIC_URL:-http://localhost:$PORT}/healthz   ·   웹UI: ${PUBLIC_URL:-http://localhost:$PORT}/ui/"
-  [ -n "$admin_out" ] && ok "첫 관리자: $admin_out"
-  [ -n "${AGENT_TOKEN:-}" ] && ok "에이전트 토큰(.env AUTH_TOKENS_JSON): $AGENT_TOKEN"
+  ok "헬스: ${PUBLIC_URL:-http://localhost:$PORT}/healthz   ·   준비: …/readyz (schema=ready)   ·   웹UI: ${PUBLIC_URL:-http://localhost:$PORT}/ui/"
+  # #2578: 성공한 경우에만 결과 JSON 을 찍는다 — 종전엔 실패 시 에러 텍스트가 이 자리에 ✓ 로 찍혔다.
+  if [ -n "$admin_out" ]; then ok "첫 관리자: $admin_out"; fi
+  if [ -n "${AGENT_TOKEN:-}" ]; then ok "에이전트 토큰(.env AUTH_TOKENS_JSON): $AGENT_TOKEN"; fi
   ok "중앙박스: 호스트 claude 에 lively 키트 설치됨 — 웹터미널 세션이 맥락 CRUD 가능 (claude mcp list 로 확인)"
   echo ""
   log "다음: 이 호스트에서 'claude' 로그인(중앙박스 세션이 쓸 계정) → 웹UI 로그인 → 고객 DB(읽기전용)·구성원 등록."
-  [ "$OS" = linux ] && log "서비스 로그: journalctl -u lively-gateway -f   또는   tail -f $APP_DIR/logs/gateway.log"
+  if [ "$OS" = linux ]; then log "서비스 로그: journalctl -u lively-gateway -f   또는   tail -f $APP_DIR/logs/gateway.log"; fi
   # macOS 는 SG 같은 방화벽 계층이 없다(#250) — 전 인터페이스 바인딩(기본)이면 같은 LAN 의 임의 기기가 :$PORT 에 도달한다.
-  #  ⚠ `[ … ] && warn` 금지: main 의 마지막 명령이라 비-mac 에서 main 이 1 을 반환해 스크립트가 exit 1 로 끝난다.
+  #  ⚠ `[ … ] && warn` 금지: 비-mac 에서 그 조건식이 1 을 반환해 main 의 반환값을 오염시킨다(종전 사고) — if 로 쓴다.
   if [ "$OS" = mac ]; then
     warn "이 호스트는 방화벽 계층이 없습니다 — 같은 LAN 노출을 원치 않으면 .env 에 BIND_HOST=127.0.0.1 을 넣고 재기동한 뒤, 원격 접속은 tailscale serve 등 앞단으로 노출하세요."
+  fi
+  # #2578: 부트스트랩 실패는 설치 실패다 — ✗ 목록 + 비-0 종료(게이트웨이는 떠 있으니 ✗ 항목만 재실행하면 된다).
+  if ! bootstrap_summary; then
+    die "설치는 끝났지만 부트스트랩이 실패했습니다 — 위 ✗ 항목을 $APP_DIR 에서 재실행한 뒤 웹UI 로그인하세요(관리자 시드 실패 = 로그인 계정 없음)."
   fi
 }
 main "$@"

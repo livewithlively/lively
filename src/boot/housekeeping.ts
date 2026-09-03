@@ -50,6 +50,7 @@ import { sendBoxAlert } from "../ops/alerts.js";
 import { recoverOrphanConnectorRuns } from "../connectors/run-tracker.js";
 import { migrateConnectorsToCollectors } from "../org/store/collectors.js"; // #1419 T1 — 레거시 커넥터 → 수집기 승격(멱등)
 import { logger } from "../log.js";
+import { markSchemaBoot, schemaBootPhase } from "./boot-state.js";   // #2578 — /readyz 의 schema 신호(설치 스크립트 wait_ready 가 본다)
 
 // 스케줄러 게이트 단일 판정(#1313 R17) — 종전 인라인 `process.env.LIVELY_NO_SCHEDULER !== "1"` 6곳을 한 곳으로.
 //  배경(왜 게이트인가)은 'scheduler' 스텝 원문 주석 참조.
@@ -156,6 +157,11 @@ export const LISTEN_STEPS: BootStep[] = [
   { name: "preview-ws", gate: "always", run: ({ server }) => setupPreviewWsUpgrade(server) },
 ];
 
+// #2578 — 이 스텝까지 끝나면 «스키마가 섰다»: 마이그레이션(schemas)·정책(self-rls)·등록부 활성화(재기동 판정)가
+//  다 지났다. 이 뒤(시딩·스케줄러·재니터)는 best-effort 라 거기서 던져도 /readyz 의 schema 는 ready 다 —
+//  그 신호가 약속하는 것(마이그레이션 완료 · 곧 재기동하지 않음)은 이미 성립한다. 판정은 runBootHousekeeping.
+export const SCHEMA_ESTABLISHED_AFTER_STEP = "workspace-registry";
+
 // ── DB 부팅 직렬 체인(ITEMS_DATABASE_URL 필요) — 종전 .then 체인과 동일 순서. 스텝 하나가 throw 하면
 //    뒤 스텝은 돌지 않는다(runBootHousekeeping 의 단일 catch — 종전 체인 말미 .catch 와 동일 시맨틱). ──
 export const DB_BOOT_STEPS: BootStep[] = [
@@ -184,6 +190,11 @@ export const DB_BOOT_STEPS: BootStep[] = [
     const r = await autoActivateWorkspaceRegistry();
     if (r.status !== "activated") return;
     logger.info("다중 워크스페이스 활성화 완료 — 앱 role 재배선을 위해 재기동합니다(상시구동 슈퍼바이저가 다시 띄웁니다. 수동 실행이면 다시 시작하세요)");
+    // #2578 — 이 부팅은 ready 가 **아니다**: /readyz 는 schema=restarting(503)을 내고, 설치·업데이트 스크립트는
+    //  다음 부팅의 ready 를 기다린다(healthz 200 직후 ~10초 다운 창에 부트스트랩·키트 설치가 걸리지 않게).
+    //  뒤 스텝은 돌리지 않는다(runBootHousekeeping 이 restarting 을 보고 체인을 끊는다) — 어차피 재기동 뒤 다시 도는
+    //  일이고, 500ms 뒤 exit 와 겹쳐 시딩 트랜잭션이 중간에 끊기는 것보다 낫다.
+    markSchemaBoot("restarting");
     // 로그 flush·진행 중 healthz 응답 여유만 주고 끝낸다. 종료코드 0 = 의도된 재기동(launchd/systemd KeepAlive).
     setTimeout(() => process.exit(0), 500);
   } },
@@ -417,16 +428,31 @@ export function runBootHousekeeping(ctx: BootContext): void {
     if (step.gate === "scheduler" && (!schedulerEnabled() || requestScopedTenancy())) continue;
     void step.run(ctx);
   }
-  if (!process.env.ITEMS_DATABASE_URL) return;
+  // #2578 — 체인을 안 도는 프로세스는 /readyz 에 schema=skipped 로 알린다(기다릴 것이 없다 — pending 에 영영 걸리지 않게).
+  //  매니지드 중앙 게이트웨이(요청별 테넌시)가 정확히 이 경로다 → 거기서 readyz 는 종전과 같은 200/503 을 낸다.
+  if (!process.env.ITEMS_DATABASE_URL) { markSchemaBoot("skipped"); return; }
   // ★★ 요청별 테넌시에서는 DB 부팅 체인을 통째로 건너뛴다(requestScopedTenancy 머리말).
   if (requestScopedTenancy()) {
     logger.info("부팅 하우스키핑 건너뜀 — 이 프로세스는 요청별로 여러 워크스페이스를 서비스한다");
+    markSchemaBoot("skipped");
     return;
   }
+  let schemaEstablished = false;
   (async () => {
     for (const step of DB_BOOT_STEPS) {
       if (step.gate === "scheduler" && !schedulerEnabled()) continue;
+      // #2578 — 첫 부팅 자가 재기동(workspace-registry)이 결정되면 뒤 스텝은 돌리지 않는다(재기동 뒤 다시 돈다).
+      if (schemaBootPhase() === "restarting") break;
       await step.run(ctx);
+      if (step.name === SCHEMA_ESTABLISHED_AFTER_STEP) schemaEstablished = true;
     }
-  })().catch((err) => logger.error({ err }, "schema init failed"));
+    // restarting 이면 no-op(pending 에서만 나간다) — 다음 부팅이 ready 를 낸다.
+    markSchemaBoot("ready");
+  })().catch((err) => {
+    // ⚠ 문구 유지 — lvly-cloud/deploy/lvly-shared-migrate.sh 가 이 문자열을 체인 실패 마커로 grep 한다.
+    logger.error({ err }, "schema init failed");
+    // #2578 — 스키마가 서기 전(SCHEMA_ESTABLISHED_AFTER_STEP 이전)에 던졌으면 failed: 부트스트랩을 돌리면 안 되고,
+    //  설치 스크립트는 기다리지 않고 즉시 멈춘다. 그 뒤 스텝의 실패는 종전처럼 로그로만 남기고 ready — 무회귀.
+    markSchemaBoot(schemaEstablished ? "ready" : "failed");
+  });
 }
