@@ -34,10 +34,11 @@ import {
 import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
+import { freezeExecTopology } from "../exec-topology.js";   // #2599 T2 — 부팅 때 한 번 확정
 import { WorkerHost, WorkerBundleStager, type WorkerStartSpec, type WorkerStopReason } from "../apps/worker-host.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
-const TOKEN = process.env.LIVELY_NODE_TOKEN || "";
+const TOKEN = freezeExecTopology().nodeToken;   // #2599 T2 — 노드 진입점에서 토폴로지를 확정한다(이 프로세스는 sessionHost="node")
 const NODE_ID = process.env.LIVELY_NODE_ID || ""; // 표시용 — 신원은 서버가 토큰으로 특정한다
 let workerStateSocket: WebSocket | null = null;
 const chatSubscribed = new Set<string>();   // #2439 — 세션마다 한 번만 구독한다(두 번이면 사건이 두 번 올라간다)

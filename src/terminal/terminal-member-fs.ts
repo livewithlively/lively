@@ -7,6 +7,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { memberExecConfigured, wrapAsMember } from "./terminal-isolation.js";
 import { tenantSlug } from "./catalog.js";
+import { execTopology } from "../exec-topology.js";   // #2599 T2 — 중계 설정의 단일 출처
 
 // node one-liner(멤버 PATH 의 node 로 실행). argv[1]=대상 절대경로. 셸 미경유(argv) — 인젝션 없음.
 // 심링크(#1744): dirent 의 isDirectory() 는 링크에 대해 **항상 false** 라, 폴더를 가리키는 링크가 '파일'로 나왔다
@@ -40,7 +41,7 @@ const STAT_JS =
  *  컨테이너의 (존재하지 않거나 남의) 경로를 만진다 — tmuxExecArgv 의 판단과 같은 교리다.
  */
 export function memberExecArgv(): string[] {
-  const raw = (process.env.LIVELY_MEMBER_EXEC || "").trim();
+  const raw = execTopology().hooks.memberExec;
   if (!raw) return [];
   if (!raw.includes("{slug}")) return raw.split(/\s+/);
   const slug = tenantSlug();

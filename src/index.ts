@@ -41,6 +41,14 @@ import { loadEnterprise } from "./enterprise/load.js";
 import { logger } from "./log.js";
 import { shutdownGatewayWorkers } from "./apps/worker-service.js";
 import { shutdownAttachWorkers } from "./terminal/attach-worker-host.js"; // #2228 C안 — attach 워커 일괄 회수
+import { freezeExecTopology } from "./exec-topology.js";   // #2599 T2 — 실행 토폴로지를 부팅 때 한 번 확정
+
+// ★ 실행 토폴로지 확정(#2599 T2) — 「이 세션이 어디서 도나」를 여기서 **한 번** 정하고, 그 뒤 어느 코드도
+//  env 를 직접 읽지 않는다. ⚠ 자리는 여기여야 한다: 위 `boot/tenancy-env.js` 가 부팅 중에
+//  LIVELY_TENANCY_MODE 를 **쓰는데**, ESM 은 import 를 전부 실행한 뒤 본문을 돌리므로 이 줄은 그 뒤다.
+//  (모듈 로드 중 토폴로지를 묻는 자리들 — 예: terminal-isolation 의 BOX_SPAWN — 도 tenancy-env 뒤라
+//   같은 값을 본다. 이 확정은 그 값을 프로세스 수명 동안 못 박는 일이다.)
+freezeExecTopology();
 
 const PORT = Number(process.env.PORT ?? 8080);
 // 바인드 주소(#250) — 기본은 종전과 동일한 전 인터페이스(회귀 없음). SG 같은 방화벽 계층이 없는 호스트

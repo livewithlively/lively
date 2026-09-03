@@ -21,7 +21,8 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { TenantContext } from "../org/tenant-context.js";
 import { installAttachOwnedPids, installAttachWorkerTally } from "./terminal-pty.js";
-import { AttachRouter, parseWorkerK } from "./attach-router.js";
+import { AttachRouter } from "./attach-router.js";
+import { execTopology } from "../exec-topology.js";   // #2599 T2 — K 는 토폴로지가 이미 해석해 든다
 import { logger } from "../log.js";
 
 const ENTRY = fileURLToPath(new URL("./attach-worker-entry.js", import.meta.url));
@@ -48,7 +49,7 @@ export class AttachWorkerHost {
   private readonly router: AttachRouter;
   private readonly workers = new Map<number, Worker>();
 
-  constructor(k: number = parseWorkerK(process.env.LIVELY_ATTACH_WORKER_K)) {
+  constructor(k: number = execTopology().attachWorkerK) {
     this.k = k;
     this.router = new AttachRouter(k);
     // #687 누수 지표 무회귀 — 게이트웨이의 liveAttachCount()/scanAttachProcs() 가 워커로 옮겨간 attach 도

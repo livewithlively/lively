@@ -30,14 +30,9 @@ export interface Placement {
 }
 
 /** K 파싱 — env 문자열 → 정수 상한. 미설정/0/off/음수/오류 = 0(=비활성). "inf"/"∞" = Infinity(B 모드, 워커 1개). */
-export function parseWorkerK(raw: string | undefined): number {
-  const s = (raw ?? "").trim().toLowerCase();
-  if (s === "" || s === "0" || s === "off" || s === "false" || s === "no") return 0;
-  if (s === "inf" || s === "infinity" || s === "∞" || s === "all") return Infinity;
-  const n = Number(s);
-  if (!Number.isFinite(n) || n < 1) return 0;
-  return Math.floor(n);
-}
+// #2599 T2 — 파서는 그 env 의 **유일한 소유자**(exec-topology)로 옮겼다. 여기 두면 이 파일도 «env 를 읽는 자리»가 되기 쉽다.
+//  이름은 그대로 재수출한다(호출부·기존 시험 무변경).
+export { parseWorkerK } from "../exec-topology.js";
 
 export class AttachRouter {
   /** 서로 다른 세션 수의 워커당 상한. Infinity = 워커 1개에 전부(B 모드). */
