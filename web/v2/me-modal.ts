@@ -198,6 +198,21 @@ function pane(title: string, hint: string, ...kids: any[]): HTMLElement {
 function saveRow(btn: HTMLElement, status: HTMLElement): HTMLElement {
   return el('div', { class: 'v2me-save' }, btn, status);
 }
+/**
+ * 한 화면 안에서 **나란히 서는 덩어리** 하나 — [제목 · (상태) · 한 줄 설명 · 내용].
+ *
+ * 왜 부품으로 뽑았나(#1631, 원준님 2026-09-03): [AI 개인 규칙]의 두 덩어리(「온보딩에서 알려주신 것」과
+ *  「내가 적는 것」)는 **같은 위계**인데 얼굴이 달랐다 — 앞은 제목·배지·설명을 갖춘 틴트 카드였고, 뒤는
+ *  11px 회색 라벨 한 줄이 폼 위에 떠 있는 것이 전부였다. 그래서 뒤가 앞의 각주처럼 읽혔다.
+ *  형제는 **머리가 같아야** 형제로 읽힌다. 다른 것은 내용의 성격뿐이라, 그 차이는 본문 면에서만 말한다
+ *  (모여 온 것 = 틴트 판, 내가 쓰는 것 = 그냥 폼). 머리 규격을 인자로 흩뜨리지 않고 여기 한 곳에 둔다.
+ */
+function meSection(o: { title: string; desc?: string | null; pill?: HTMLElement | null }, ...kids: any[]): HTMLElement {
+  return el('section', { class: 'v2me-sec' },
+    el('div', { class: 'v2me-sec-h' }, el('h4', { class: 'v2me-sec-t', text: o.title }), o.pill ?? null),
+    o.desc ? el('p', { class: 'v2me-sec-d' }, ...uiText(o.desc)) : null,
+    el('div', { class: 'v2me-sec-b' }, ...kids));
+}
 // 이 창에서 관리탭 안쪽 화면으로 건너가는 줄 — 여기서 다 하지 않고 **어디로 가면 되는지**만 말한다.
 function moreLink(href: string, label: string, desc: string, close: () => void, opts?: { gated?: boolean }): HTMLElement {
   return el('a', { class: 'v2me-more', href, onclick: () => close() },
@@ -275,21 +290,16 @@ function onboardingCard(liv: any): HTMLElement {
     rows.push({ k: String(a.question || a.key || '').trim() || String(a.key || ''), v: picked.join(' · ') });
   });
 
-  const head = el('div', { class: 'v2me-ob-h' }, el('span', { class: 'v2me-ob-t', text: '온보딩에서 알려주신 것' }));
-  const card = el('section', { class: 'v2me-ob' }, head);
   if (!rows.length) {
-    card.append(
-      el('p', { class: 'v2me-ob-d' }, ...uiText('아직 리브와 나눈 이야기가 없어요. 리브가 묻는 것에 답하면 하는 일·일하는 방식이 여기에 저절로 모이고, 그대로 내 AI 세션에 실립니다.')),
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/liv', text: '리브와 이야기하기' }));
-    return card;
+    return meSection({ title: '온보딩에서 알려주신 것',
+      desc: '아직 리브와 나눈 이야기가 없어요. 리브가 묻는 것에 답하면 하는 일·일하는 방식이 여기에 저절로 모이고, 그대로 내 AI 세션에 실립니다.' },
+    el('a', { class: 'btn btn-ghost btn-sm', href: '#/liv', text: '리브와 이야기하기' }));
   }
-
-  head.append(el('span', { class: 'pill pill-ok', text: '반영 중' }));
-  card.append(
-    el('p', { class: 'v2me-ob-d' }, ...uiText('리브와 이야기하며 알려주신 내용이에요. 따로 저장하지 않아도 내 AI 가 매 세션 시작할 때 아래 항목들과 함께 읽습니다. 고치려면 리브에게 말씀하세요.')),
-    el('dl', { class: 'v2me-ob-l' }, ...rows.map((r) => el('div', { class: 'v2me-ob-r' },
-      el('dt', { text: r.k }), el('dd', { text: r.v })))));
-  return card;
+  return meSection({ title: '온보딩에서 알려주신 것',
+    pill: el('span', { class: 'pill pill-ok', text: '반영 중' }),
+    desc: '리브와 이야기하며 알려주신 내용이에요. 따로 저장하지 않아도 내 AI 가 매 세션 시작할 때 아래 항목들과 함께 읽습니다. 고치려면 리브에게 말씀하세요.' },
+  el('dl', { class: 'v2me-ob-l' }, ...rows.map((r) => el('div', { class: 'v2me-ob-r' },
+    el('dt', { text: r.k }), el('dd', { text: r.v })))));
 }
 
 // ── ② AI 개인 규칙 — 내 AI 가 매 세션 시작에 읽는 개인 레이어(org_member.body_md). ──
@@ -345,16 +355,19 @@ function aiPane(data: any, liv: any): HTMLElement {
 
   return pane('AI 개인 규칙', '내 AI 가 나에 대해 무엇을 알고 일할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.',
     onboardingCard(liv),
-    el('div', { class: 'v2me-k', text: '내가 적는 것' }),
-    field('역할', roleIn),
-    field('개발 이해도', el('div', {}, devChips, devHint)),
-    field('호칭 (AI 가 나를 부르는 말)', addressIn),
-    field('말투', toneChips),
-    field('사용 언어 (AI 가 답하는 언어)', el('div', {}, langChips,
-      el('p', { class: 'prof-hint' }, ...uiText('고르거나 직접 적은 언어로 내 AI 가 답합니다. 비우면 조직 기본값(주로 한국어)을 따릅니다.')))),
-    field('추가 메모', el('div', {}, memoTa,
-      el('p', { class: 'prof-hint' }, ...uiText('비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.')))),
-    saveRow(btn, status));
+    meSection({ title: '내가 적는 것', desc: '내가 직접 정하는 항목입니다. 저장하면 다음 세션부터 내 AI 가 반영합니다.' },
+      //  ⚠ 짧은 값 두 개(역할·호칭)를 각각 전폭으로 두면 다섯 글자짜리 답에 520px 짜리 칸이 붙는다 —
+      //   화면이 비어 보이고 아래 칩 묶음과 리듬도 안 맞는다. 한 줄에 나란히 두고 좁은 화면에서만 접는다.
+      el('div', { class: 'v2me-f2' },
+        field('역할', roleIn),
+        field('호칭 (AI 가 나를 부르는 말)', addressIn)),
+      field('개발 이해도', el('div', {}, devChips, devHint)),
+      field('말투', toneChips),
+      field('사용 언어 (AI 가 답하는 언어)', el('div', {}, langChips,
+        el('p', { class: 'prof-hint' }, ...uiText('고르거나 직접 적은 언어로 내 AI 가 답합니다. 비우면 조직 기본값(주로 한국어)을 따릅니다.')))),
+      field('추가 메모', el('div', {}, memoTa,
+        el('p', { class: 'prof-hint' }, ...uiText('비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.')))),
+      saveRow(btn, status)));
 }
 
 // ── ③ 내 AI 계정 — 내 세션이 **무엇으로, 누구 계정으로** 도나(#1085 카드 그대로). ──
