@@ -46,7 +46,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxRelayManaged, isNoTmuxServer } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
@@ -201,7 +201,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     //  DB desired 행을 «관측 못 함»(observed:false) 으로 내보낸다. 빈 목록으로 접으면 호출부가 DB 행 전부를
     //  «복원 가능(중단됨)» 으로 그려 살아 있는 세션이 그 폴링 한 번에 죽은 것처럼 보인다(session-unobserved 머리말).
     //  «없다»(서버 부재 확답)와 셀프호스팅은 종전 그대로 빈 목록이다.
-    if (shouldFallbackToDesired(e, tmuxRelayManaged())) return desiredFallbackSessions(me, e);
+    if (shouldFallbackToDesired(e, tmuxViaRelay())) return desiredFallbackSessions(me, e);
     return [];
   }
   // 가려진 프로젝트 집합을 **한 번** 조회(#1291) — 세션 수와 무관하게 쿼리 1회, 15초 캐시.

@@ -108,7 +108,7 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   // ⚠ 트림하지 않는다 — 종전 판별자가 `!!process.env.LIVELY_NODE_TOKEN` 이었다(공백 하나도 «노드»였다).
   //  여기서 트림하면 그 극단값에서 동작이 갈린다. 값 자체는 노드 에이전트가 인증에 그대로 쓴다.
   const nodeToken = env.LIVELY_NODE_TOKEN || "";
-  const relayTmux = (env.LIVELY_TMUX_EXEC || "").trim();                      // ← tmuxExecArgv · tmuxRelayManaged
+  const relayTmux = (env.LIVELY_TMUX_EXEC || "").trim();                      // ← tmuxExecArgv · tmuxViaRelay/tmuxServerAbsenceIsFinal
   const registryMode = (env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry";
   const hooks: TopologyHooks = {
     sessionEnsure: (env.LIVELY_SESSION_ENSURE || "").trim(),                  // ← sessionEnsureConfigured · sessionEnsureArgv
