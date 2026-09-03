@@ -285,7 +285,13 @@ async function renderProjectV2Detail(view, idStr) {
       if (fin) return; fin = true;
       const nv = inp.value.trim().replace(/\s+/g, ' '); inp.replaceWith(titleEl);
       if (save && nv && nv !== p.name) {
-        try { await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ name: nv }) }); p.name = nv; titleEl.textContent = nv; }
+        try {
+          await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ name: nv }) }); p.name = nv; titleEl.textContent = nv;
+          // 이 화면은 새 셸 안에서 **앱 프레임(iframe)** 으로 뜬다 — 셸의 사이드바·탭·문패는 다른 창이라
+          //  여기서 고친 이름을 모르고 8초 폴링까지 옛 이름을 들고 있었다(#2579). 한 줄 알려 주면 그 순간 맞춘다.
+          //  프레임 밖(단독 페이지)이면 parent === window 라 아무 데도 안 간다 — 해가 없다.
+          try { window.parent?.postMessage({ type: 'lively:project-renamed', id: Number(id), name: nv }, location.origin); } catch (_) { /* 부모가 닫혔다 */ }
+        }
         catch (e) { toast('이름 수정 실패 — ' + e.message, true); }
       }
     };

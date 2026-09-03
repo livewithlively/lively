@@ -113,6 +113,20 @@
 .pn-title-btn:hover .pn-title-ic { stroke: var(--blue); }
 .pn-title-btn:hover .pn-title-t { color: var(--blue); }
 .pn-title-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* 이름 고치기 = **연필**(원준 2026-09-03). 제목 클릭은 이동으로 남기고 편집은 이 단추가 쥔다 —
+   생김새·손짓 모두 세션 이름의 연필과 같다(36-chat.css .sc-title-penbtn). 손을 올렸을 때만 나타난다. */
+.pn-title-penbtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-left: 2px;
+  vertical-align: middle; border: 0; background: none; padding: 0; border-radius: 6px; cursor: pointer;
+  opacity: 0; transition: opacity .12s ease; flex: none; }
+.pn-title:hover .pn-title-penbtn, .pn-title-penbtn:focus-visible { opacity: 1; }
+.pn-title-penbtn:hover { background: var(--bg-tint); }
+.pn-title-penbtn:hover .pn-title-pen { stroke: var(--blue); }
+.pn-title-pen { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round; }
+.pn-title-in { font: inherit; width: min(46ch, 46vw); margin-left: -8px; padding: 2px 8px;
+  border: 1px solid var(--blue); border-radius: 9px; background: var(--bg); color: var(--ink); }
+.pn-title-in:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-fill) 18%, transparent); }
+.pn-title-in:disabled { opacity: .6; }
 .pn-door-r { display: flex; align-items: center; gap: 8px; flex: none; }
 /* 얼굴 줄(#2116) — **[공유] 바로 왼쪽에 상주**한다(구글 문서와 같은 자리). 겹쳐 세워 자리를 아끼되
    첫 얼굴은 왼쪽으로 새지 않게 여백을 되돌린다. 최대 3명, 넘으면 마지막 칸이 `+N` 이 된다(panes.ts FACE_MAX). */
