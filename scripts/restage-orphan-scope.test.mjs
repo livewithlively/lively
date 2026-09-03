@@ -14,6 +14,11 @@
 //     실측: `cb69da04`(정본이 어디에도 없던 커밋)가 «안전» 으로 나왔다.
 //  🔴 반대로 진짜 작업 브랜치를 «다른 곳» 에서 빼면 — 옮겨 둔 커밋까지 고아로 잡혀,
 //     안내대로 브랜치로 옮겨도 검사를 빠져나갈 수 없다(막다른 가드).
+//  🔴 **patch-id 만 보면 «같은 변경, 다른 베이스»를 남남으로 본다.** 우리 운영이 정확히 그렇다 —
+//     정식 브랜치로 PR 을 내고 같은 변경을 stage 에도 체리픽한다. 베이스가 다르면 문맥 줄이 달라져
+//     patch-id 가 갈리고, **이미 main 에 있는 내용이 «고아» 로 잡힌다.** 그러면 가드가 늑대를 외치고,
+//     세션은 «잃을 게 있다» 는 말을 믿지 않게 된다(#2615 ② 와 같은 실패 — 실측 오탐 cb69da04).
+//     그래서 마지막에 **내용 대조**를 한 겹 둔다: main 위에 얹어 본 트리가 main 과 같으면 이미 있는 것이다.
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -38,7 +43,8 @@ function makeWorld() {
   const clone = join(root, 'clone');
   execFileSync('git', ['init', '--bare', '-b', 'main', remote], { env: { ...process.env, ...ENV } });
   execFileSync('git', ['clone', '-q', remote, clone], { env: { ...process.env, ...ENV } });
-  writeFileSync(join(clone, 'a.txt'), 'a\n');
+  // 문맥(context) 줄이 있어야 «베이스가 다르면 patch-id 가 갈린다» 를 재현할 수 있다.
+  writeFileSync(join(clone, 'f.txt'), Array.from({ length: 12 }, (_, i) => `line${i + 1}`).join('\n') + '\n');
   git(clone, 'add', '.'); git(clone, 'commit', '-qm', 'init');
   git(clone, 'branch', 'stage'); git(clone, 'push', '-q', 'origin', 'main', 'stage');
   return { root, clone };
@@ -47,7 +53,9 @@ function makeWorld() {
 /** stage 에 직접 커밋 하나를 얹고 그 sha 를 준다. */
 function directCommitOnStage(clone, name) {
   git(clone, 'checkout', '-q', 'stage');
-  writeFileSync(join(clone, `${name}.txt`), `${name}\n`);
+  const lines = Array.from({ length: 12 }, (_, i) => `line${i + 1}`);
+  lines[5] = `line6 — ${name} 이 고친 줄`;
+  writeFileSync(join(clone, 'f.txt'), lines.join('\n') + '\n');
   git(clone, 'add', '.'); git(clone, 'commit', '-qm', `직접 커밋 ${name}`);
   git(clone, 'push', '-q', 'origin', 'stage');
   return git(clone, 'rev-parse', 'HEAD');
@@ -60,6 +68,18 @@ function copyTo(clone, sha, ref, base) {
   git(clone, 'push', '-q', 'origin', `HEAD:refs/heads/${ref}`);
   git(clone, 'checkout', '-q', 'stage');
   git(clone, 'branch', '-qD', '_tmp');
+}
+
+/** main 을 한 걸음 진행시킨다 — 같은 파일의 **다른 줄**을 고쳐 문맥을 바꾼다.
+ *  이러면 같은 변경을 main 위에 얹어도 patch-id 가 stage 판과 갈린다(운영에서 늘 일어나는 일). */
+function advanceMain(clone) {
+  git(clone, 'checkout', '-q', 'main');
+  const lines = Array.from({ length: 12 }, (_, i) => `line${i + 1}`);
+  lines[3] = 'line4 — main 이 먼저 고친 줄';   // 6번 줄 변경의 **문맥 안**이라 diff 가 달라진다
+  writeFileSync(join(clone, 'f.txt'), lines.join('\n') + '\n');
+  git(clone, 'add', '.'); git(clone, 'commit', '-qm', 'main 이 같은 파일의 이웃 줄을 고친다');
+  git(clone, 'push', '-q', 'origin', 'main');
+  git(clone, 'checkout', '-q', 'stage');
 }
 
 /** restage --dry-run 을 돌려 «고아로 중단했나» 를 본다. */
@@ -79,6 +99,20 @@ const cases = [
   { where: 'backup/…',                ref: 'backup/stage-local',    base: 'origin/main',  blocked: true },
   { where: 'stage-orphans/…',         ref: 'stage-orphans/2026-09-03', base: 'origin/main', blocked: true },
 ];
+
+// ★ 이 레포의 실제 운영 모양 — 같은 변경이 정식 브랜치(→ main)와 stage 에 **따로** 얹힌다.
+//  베이스가 달라 patch-id 가 갈리므로 `git cherry` 는 남남으로 본다. 그래도 재조립하면
+//  main 위에 다시 쌓이니 **잃는 것이 없다** — 막으면 안 된다.
+test('고아 판정 — 같은 변경이 main 에 다른 베이스로 이미 있으면 통과한다(체리픽 쌍둥이)', () => {
+  const { root, clone } = makeWorld();
+  try {
+    const sha = directCommitOnStage(clone, 'twin');
+    advanceMain(clone);                     // main 이 이웃 줄을 고쳐 문맥이 달라진다
+    copyTo(clone, sha, 'main', 'origin/main');
+    assert.equal(orphanBlocked(clone), false,
+      '🔴 이미 main 에 있는 내용을 고아로 잡았다 — 가드가 늑대를 외치면 아무도 안 믿는다');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 for (const c of cases) {
   test(`고아 판정 — 사본이 ${c.where} 에 있으면 ${c.blocked ? '막는다' : '통과한다'}`, () => {
