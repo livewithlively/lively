@@ -26,7 +26,7 @@
 import { anchoredPopover, api, apiUrl, el, personFace, sv, toast, TOKEN_KEY } from '../core.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 곁칸 배치는 이 창의 사실
 import { canOpenInAside, openInAside } from './aside-slot.js';
-import { makeSplitter, readSplit } from './split.js';
+import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { hasBrowserSurface } from './browser-surface.js';
@@ -206,8 +206,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  한 세션에서 곁칸을 넓히면 **모든 세션·모든 프로젝트가 같이 넓어졌다** — 결정된 적 없는 자리라 고친다.
   //   · 세션마다: 폭·높이 · 접힘(sideOn·bottomOn) · 활성 탭. (좌우 자리는 폭에서 자동으로 따라온다 — side-swap)
   //   · 공유(프로젝트): **탭의 종류**(칸에 무엇이 들어 있나) — 위 확정의 그 한 줄.
-  //  ⚠ 처음 여는 세션은 **마지막으로 쓰던 값을 물려받는다** — 세션마다 매번 다시 끌게 하면 그게 #1719 가
-  //   피하려던 '설정할 게 많다'로 되돌아간다(배치의 `last` 폴백과 같은 규칙). 전역 키는 그 '마지막 값'으로 남는다.
+  //  ⭐ **물려받지 않는다**(원준 2026-09-03 "완전히 독립으로 해") — 끌어 본 적 없는 세션은 언제나 기본값이다.
+  //   '마지막으로 쓰던 값'을 물려주면 방금 스쳐 본 세션의 폭이 다음 세션으로 새어 나가 독립이 깨진다.
+  //   #1719 가 걱정한 '설정할 게 많다'는 **기본값이 늘 쓸 만한 자리**(곁칸 340)라는 것으로 답한다.
   const VIEW_KEY = 'pn_view_by_sess';
   type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean };
   function readViews(): Record<string, View> {
@@ -456,15 +457,19 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이',
     onEnd: (px) => saveView({ bottomH: Math.round(px) }) });
 
-  /** 지금 보는 세션의 폭·높이·접힘을 화면에 입힌다 — 없으면 마지막으로 쓰던 값(전역 키)으로 떨어진다.
-   *  ⚠ 여기서는 **전역 키에 쓰지 않는다**(CSS 변수만 세팅) — 세션을 훑어보기만 해도 '마지막 값'이 흔들리면
-   *   다음에 새로 여는 세션이 방금 스쳐 본 세션의 폭을 물려받는다. */
+  /** 지금 보는 세션의 폭·높이·접힘을 화면에 입힌다.
+   *  ⭐ **물려받지 않는다**(원준 2026-09-03 "완전히 독립으로 해") — 그 세션이 직접 끌어 본 적이 없으면
+   *   언제나 기본값(곁칸 340 · 아래 칸 240)이다. 종전 초안은 '마지막으로 쓰던 값'을 물려주려 했는데,
+   *   그러면 방금 스쳐 본 세션의 폭이 다음 세션으로 새어 나가 **독립이 아니게 된다**. 기본값은 늘 같은 자리다.
+   *  ⚠ 전역 키(`lively_v2_split_panes_*`)는 **읽지도 쓰지도 않는다** — 읽으면 위의 새어 나감이 그대로 돌아온다.
+   *   (makeSplitter 가 끌 때마다 그 키에 남기는 것은 막지 않는다. 아무도 안 읽으므로 화면에 영향이 없다.) */
   function applyView(): void {
     const v = loose ? {} : (readViews()[actKey()] || {});
-    const w = Math.max(220, Math.min(swap?.maxSideW() ?? 620, Number(v.sideW) || readSplit('panes_side', 340)));
-    const h = Math.max(120, Math.min(560, Number(v.bottomH) || readSplit('panes_bottom', 240)));
+    const w = Math.max(220, Math.min(swap?.maxSideW() ?? 620, Number(v.sideW) || 340));
+    const h = Math.max(120, Math.min(560, Number(v.bottomH) || 240));
     body.style.setProperty('--pn-side-w', w + 'px');
     colMain.style.setProperty('--pn-bottom-h', h + 'px');
+    // 접힘도 그 세션이 정한 적이 있을 때만 따른다 — 없으면 이 프로젝트의 기본 배치 그대로(칸의 '종류'와 같은 축).
     if (typeof v.sideOn === 'boolean') lay.sideOn = v.sideOn;
     if (typeof v.bottomOn === 'boolean') lay.bottomOn = v.bottomOn;
   }
