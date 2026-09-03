@@ -1,8 +1,11 @@
 // 단위 체크(node:assert) — '확인 필요'(waiting) pane 판정. 픽스처는 tmux capture-pane 실측(#853).
 // 실행: npm run build && node dist/terminal/terminal-sessions.test.js
+// ⚠ 런처를 실제로 실행하는 절(E1~E7)의 stdin 은 파이프가 아니라 **파일**로 준다 — 파이프로 주면
+//  자식이 먼저 끝난 순간 부모의 write 가 EPIPE 가 되어 멀쩡한 런처가 빨간불이 되고, 그 한 줄이
+//  머지 큐를 통째로 떨어뜨린다(#2613). 근거·실측은 아래 «세션 런처» 절 머리말.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync, openSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, harnessThemeArgv, harnessThemeEnvArgs, harnessFollowsTheme, harnessLiveThemeSteps, harnessLiveThemeSupported, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
@@ -312,6 +315,31 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
 //  회귀 시나리오: codex 는 인증 만료 시 stderr 한 줄 뒤 exit 1 로 즉사한다 → 종전엔 pane 이 사라져 tmux
 //   세션이 통째로 닫혔고 사용자는 에러를 읽을 기회조차 없었다(상민님 신고 2026-08-04 · 실측 재현).
 {
+  // ── ★ stdin 은 파이프가 아니라 **진짜 파일**로 준다 (#2613) ───────────────────────────────
+  //  계기(실측 2026-09-03, merge_group run 33721421618): 이 파일 한 줄로 머지 큐가 통째로 떨어져
+  //   재큐됐다(≈5분 + 사람 개입). FAIL 은 `[배선] 런처가 실제로 실행됐다 — 런처를 실행하지 못했다(EPIPE)`
+  //   인데, **바로 다음 세 단언**(HARNESS_BYE 있음 · SHELL_ALIVE 없음 · 실패 안내 없음)은 전부 통과했다.
+  //   즉 런처는 제대로 돌았고(exit 0 · stdout 온전) 실패한 것은 **우리가 준 stdin 의 write** 였다.
+  //  원인: E1 은 하네스도 런처도 stdin 을 **한 글자도 안 읽고** 끝나는 유일한 갈래다. 자식이 먼저 끝나면
+  //   파이프의 읽는 쪽이 사라져 부모의 write 가 EPIPE 가 되고, `spawnSync` 는 그걸 status·stdout 이
+  //   멀쩡한 채로 `result.error` 에 올린다(재현: 4MB 입력 + 자식이 `exec 0<&-` → error=EPIPE·status=0).
+  //  실측 재현·검증(node:22-slim · /bin/sh=dash · --cpus=2 · E1 모양 400회 × 8병렬 = 3200회):
+  //     파이프 stdin → EPIPE 110회(3.4%) · 파일 stdin → 0회. 두 방식의 출력은 리눅스에서 바이트까지 같다.
+  //  ⚠ 왜 «재시도 감싸기» 가 아니라 파일인가: 재시도는 확률만 낮춘다. 게다가 이 절의 관측('SHELL_ALIVE 가
+  //   안 나온다')은 **입력이 실제로 전달됐다**는 전제 위에서만 뜻이 있어, EPIPE 로 입력이 안 간 시도는
+  //   통과해도 아무것도 안 본 vacuous 통과다. 파일에는 '읽는 쪽'이 없으니 경합이 **원리적으로** 사라진다
+  //   (프로젝트 지시의 «파이프 수명 보장»). 폴백 셸(`exec … -il`)은 파일 stdin 도 종전처럼 읽고 EOF 에 끝난다.
+  //  ⚠ 입력 자체를 없애는 건 답이 아니다 — ALIVE 는 폴백 셸이 떴는지 보는 **탐침**이라, 안 주면 E1 의
+  //   `!/SHELL_ALIVE/` 가 영원히 참인 vacuous 단언이 된다.
+  const stdinDir = mkdtempSync(join(tmpdir(), "lively-2613-"));
+  process.on("exit", () => rmSync(stdinDir, { recursive: true, force: true }));
+  let stdinSeq = 0;
+  const stdinFile = (text: string): string => {
+    const f = join(stdinDir, `stdin-${stdinSeq++}`);
+    writeFileSync(f, text);
+    return f;
+  };
+
   // pane 이 실제로 보게 되는 것 = stdout + stderr(같은 tty 로 섞인다). 둘 다 합쳐 돌려준다.
   const runLaunch = (argv: string[], stdin = "", opts: { noShell?: boolean } = {}): string => {
     // ⚠ 'SHELL 없음'은 **빈 문자열**로 재현한다. env 에서 지우면(unset) 재현이 안 된다 — macOS 의 /bin/sh(bash)는
@@ -326,17 +354,28 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     //  그래서 **일시적 포크 실패만** 짧게 물러났다 다시 시도한다. 다른 실패(ENOENT 등)는 그대로 올린다 —
     //  그건 진짜 결함이고, 여기서 삼키면 이 파일이 무엇도 안 보는 테스트가 된다.
     const TRANSIENT = new Set(["EAGAIN", "ENOMEM"]);
-    let r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    // ⚠ 시도마다 fd 를 **새로 연다** — 읽힌 만큼 파일 오프셋이 앞으로 가므로, 같은 fd 를 재시도에 물려주면
+    //  두 번째 시도의 폴백 셸은 EOF 부터 읽어 탐침을 한 줄도 실행하지 않는다(= 조용한 vacuous 통과).
+    const once = () => {
+      const fd = openSync(stdinFile(stdin), "r");
+      try {
+        return spawnSync(argv[0], argv.slice(1), { stdio: [fd, "pipe", "pipe"], encoding: "utf8", env: env as NodeJS.ProcessEnv });
+      } finally { closeSync(fd); }
+    };
+    let r = once();
     for (let i = 0; i < 4 && r.error && TRANSIENT.has(String((r.error as NodeJS.ErrnoException).code ?? "")); i++) {
       // 동기 백오프 — 이 테스트는 동기 흐름이라 await 를 못 쓴다. **바쁜 대기는 쓰지 않는다**:
       //  CPU 가 모자라 포크가 실패한 그 순간에 CPU 를 태우면 상황을 더 나쁘게 만든다.
       //  Atomics.wait 는 스레드를 실제로 재운다 — 러너가 숨 돌릴 틈을 준다.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150 * (i + 1));
-      r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+      r = once();
     }
     // [배선] 관측 장치가 죽어 있으면 아래 단언은 통과하면서 아무것도 안 본다(vacuous).
     //  ⚠ 실패 문구에 **이유**를 싣는다. 종전엔 "런처가 실제로 실행됐다"만 남아서, 포크가 안 된 것인지
     //   런처가 깨진 것인지 로그만 보고는 구분할 수 없었다(그 구분이 없어 플레이크를 제품 결함으로 쫓았다).
+    //  ⚠ EPIPE 는 이제 이 자리에 올 수 없다 — stdin 이 파이프가 아니라 파일이라 '읽는 쪽이 닫혔다'가
+    //   성립하지 않는다(위 절 머리말의 #2613 실측). 그래서 EPIPE 갈래를 따로 두지 않는다: 만에 하나
+    //   다시 보인다면 그건 배관 전제가 깨졌다는 뜻이라 **빨간불이 맞다**.
     const code = r.error ? String((r.error as NodeJS.ErrnoException).code ?? "") : "";
     const why = r.error
       // 두 갈래를 **문구에서** 가른다: 재시도까지 했는데 못 띄운 자원 문제 vs 진짜 실행 실패(없는 파일 등).
