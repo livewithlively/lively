@@ -342,6 +342,38 @@ export async function insertDiscoveredSessionState(s: SessionStateInput): Promis
   return (r.rowCount ?? 0) > 0;
 }
 
+/**
+ * #2592 — **셀프 노드가 남긴 거짓 좌표를 치운다.** 멱등(몇 번 돌아도 결과가 같다).
+ *
+ * `node_id` 는 «이 세션을 그 컴퓨터로 릴레이하라»는 좌표다. 그런데 셀프 노드(게이트웨이가 도는 그 박스)의
+ *  좌표가 붙은 행은 전부 **중앙 세션**이다 — 노드가 자기 tmux(=게이트웨이 tmux)를 훑어 올린 스냅샷이
+ *  발견 기록으로 들어간 것이다(dev 실측 2026-09-03: 286행, 그중 72행이 «복원 불가 노드 세션»으로 사이드바에 잔류).
+ *
+ * 두 갈래로 나눈다 — 판정 기준은 **되살릴 수 있는가**다:
+ *  ⓐ 좌표를 모르는 발견 행(`discovered AND root_key IS NULL`)이면서 지금 tmux 에도 없는 것 → **삭제**.
+ *     이 행은 제품이 복원을 거절하고(terminal/routes.ts 409) 라이브도 아니므로, 남겨 둬야 사이드바에
+ *     되살릴 수 없는 줄로만 남는다. 세션 기록(트랜스크립트 파일)은 이 행과 무관하게 디스크에 그대로 있다.
+ *  ⓑ 그 밖(살아 있거나·좌표를 아는 행) → **좌표만 턴다**(`node_id=NULL`). 행은 중앙 세션의 desired-state 로
+ *     그대로 쓸모가 있다(라벨·초대·마지막 프롬프트·대화 uuid). 지우면 그것들이 함께 사라진다.
+ *
+ * @param nodeId 셀프 노드로 판정된 노드 id
+ * @param liveIds 지금 이 게이트웨이 tmux 에 **살아 있는** 세션 id — 못 봤으면 빈 집합이 아니라 호출하지 말 것
+ *  (빈 집합을 주면 살아 있는 세션의 행까지 ⓐ 로 몰려 삭제된다).
+ */
+export async function clearSelfNodeSessionRows(
+  nodeId: string, liveIds: ReadonlySet<string>,
+): Promise<{ deleted: number; cleared: number }> {
+  if (ON_NODE) return { deleted: 0, cleared: 0 };
+  const live = [...liveIds];
+  const del = await itemsPool.query(
+    `DELETE FROM org_session_state
+      WHERE node_id=$1 AND discovered=true AND root_key IS NULL AND NOT (id = ANY($2::text[]))`,
+    [nodeId, live]);
+  const upd = await itemsPool.query(
+    `UPDATE org_session_state SET node_id=NULL, updated_at=now() WHERE node_id=$1`, [nodeId]);
+  return { deleted: del.rowCount ?? 0, cleared: upd.rowCount ?? 0 };
+}
+
 /** 여러 세션의 desired-state 를 **한 번에**(#2022). 화면 하나가 세션 수십 개의 이름·소속을 물을 때
  *  건별 왕복(N+1)을 만들지 않기 위한 것 — 없는 id 는 결과 Map 에 그냥 빠진다. */
 export async function getSessionStates(ids: string[]): Promise<Map<string, SessionState>> {

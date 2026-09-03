@@ -27,7 +27,7 @@ import { applySessionProject } from "../terminal/session-project.js";   // #1719
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
 import {
-  nodeWsUrl, PROTO_VER, NODE_OPS, encodeChanFrame, decodeChanFrame, parseMsg,
+  nodeWsUrl, PROTO_VER, NODE_OPS, CLOSE_SELF_NODE, encodeChanFrame, decodeChanFrame, parseMsg,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
@@ -503,7 +503,7 @@ function connect(): void {
     if (m.t === "close") { chans.get(m.chan)?.feedClose(); return; }
   });
 
-  const teardown = (): void => {
+  const teardown = (code?: number, reason?: string): void => {
     if (workerStateSocket === ws) workerStateSocket = null;
     if (chatEventSocket === ws) chatEventSocket = null;
     if (pusher) { clearInterval(pusher); pusher = null; }
@@ -514,6 +514,18 @@ function connect(): void {
     // remote worker를 전부 fail-closed 정지한다. 재연결 뒤 명시 open이 같은 run 계약으로 다시 시작한다.
     void nodeWorkerHost.shutdown();
     workerBundleStages.clear();
+    // ★ #2592 — **종결 코드는 재연결하지 않는다.** 이 PC 가 게이트웨이가 도는 그 박스면 게이트웨이는
+    //  CLOSE_SELF_NODE 로 끊는다. 그건 «지금은 안 된다»(오프라인·재배포)가 아니라 «여기서는 영영 안 된다» 라,
+    //  재연결 루프를 돌면 게이트웨이가 초당 한 번씩 인증·판정·거절을 반복할 뿐이다(구 번들에서 실제로 그렇게 된다).
+    //  프로세스를 끝낸다 — 데몬 런처가 되살리더라도 그 주기(launchd 최소 10초)로 늦춰지고, 로그에 사유가 남는다.
+    if (code === CLOSE_SELF_NODE) {
+      logger.error({ code, reason },
+        "이 컴퓨터에서는 노드를 띄우지 않습니다 — 게이트웨이가 도는 바로 그 컴퓨터입니다(같은 tmux)."
+        + " 세션은 웹에서 '중앙 컴퓨터(기본)' 로 그대로 열립니다. 이 데몬은 `lively node stop` 으로 내려 주세요.");
+      try { killAttachedPtys(); } catch { /* noop */ }
+      try { keepAwake.stop(); } catch { /* noop */ }
+      process.exit(0);
+    }
     const delay = reconnectDelayMs(attempt++);
     logger.warn({ delay }, "게이트웨이 연결 끊김 — 재연결 예약");
     // ⚠ unref 금지(#1541 실기기 로그로 확정): teardown 뒤엔 이 타이머가 이벤트 루프를 지탱하는 유일한 핸들이라,
@@ -522,7 +534,7 @@ function connect(): void {
     //  데몬은 런처가 우연히 가려 주지만, 포그라운드(lively node — 런처 없음)는 끊김 한 번에 노드가 통째로 죽는다.
     setTimeout(connect, delay);
   };
-  ws.once("close", teardown);
+  ws.once("close", (code, reason) => teardown(Number(code), String(reason ?? "")));
   ws.once("error", (err) => { logger.warn({ err: (err as Error)?.message }, "노드 WSS 오류"); try { ws.terminate(); } catch { /* noop */ } });
 }
 

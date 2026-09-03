@@ -15,7 +15,8 @@ import { logger } from "../log.js";
 import { resolveTenantFromHeaders, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { attachWorkerHost } from "./attach-worker-host.js";
 import { canAttach, sessionGone, ensureSessionOpts } from "./terminal-sessions.js";
-import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
+import { nodeCanAttach, nodeRelayAttach, isSelfNode } from "../node/registry.js";
+import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다
 import { attachSession, reapOrphanAttachClients, attachClose,
   type AttachSocket, type TicketLookup } from "./terminal-pty.js";
 
@@ -80,7 +81,11 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       const id = url.searchParams.get("session") || "";
       // 노드 세션(#869) — ?node=<id> 면 그 노드의 아웃바운드 채널로 릴레이한다. 정책(가시성)은 여기(게이트웨이)서
       //  판정하고 노드는 기계적으로 attach 만 실행(F7). 거부 사유는 로컬과 같은 코드 체계(4410/4403)+4462(노드 오프라인).
-      const nodeId = url.searchParams.get("node") || "";
+      //  ⚠ #2592 — 셀프 노드 좌표(`?node=<게이트웨이 자신>`)는 여기서 **버린다**. 남겨 두면 같은 tmux 를 노드 WS 로
+      //   한 바퀴 돌아 attach 하게 되는데(노드 데몬이 `tmux -CC attach` 로 서빙), 그 한 바퀴가 부팅 직후 4462 거부와
+      //   3초 스냅샷 지연을 만든다. 좌표를 접으면 아래 중앙 경로로 그대로 흘러 같은 세션에 즉답으로 붙는다.
+      //   (구 화면·열려 있던 탭이 옛 좌표를 들고 다시 붙어도 이 자리에서 정정된다.)
+      const nodeId = relayNodeId(url.searchParams.get("node"), isSelfNode);
       if (nodeId) {
         const verdict = await nodeCanAttach(nodeId, id, tk.userId);
         wss.handleUpgrade(req, socket, head, (ws) => {

@@ -32,7 +32,10 @@ function body(src, header) {
 
 // ── W1. 시도 가드가 **최소간격 검사보다 먼저** 온다 ─────────────────────────
 //  이 순서가 곧 이 수정의 전부다. 뒤에 오면 헛시도가 여전히 간격을 먹는다(고친 게 없다).
-const probe = body(REG, "async function probeSelfNodes()");
+//  ⚠ 헤더에 `async` 를 박아 두지 않는다(#2592): 이 함수는 «지금 낼 수 있는 판정이 다 났다» 를 뜻하는
+//   프로미스를 **직접 만들어** 돌려주게 바뀌었다(호출부 applyState 가 그걸 기다린 뒤 발견 기록을 부른다).
+//   서명이 바뀔 때마다 이 테스트가 «함수를 못 찾았다» 로 죽으면, 그건 배선이 아니라 문자열을 재는 것이다.
+const probe = body(REG, "function probeSelfNodes()");
 const iGuard = probe.indexOf("hasSelfProbeCandidate");
 const iThrottle = probe.indexOf("SELF_PROBE_MS");
 ok(iGuard >= 0, "W1a probeSelfNodes 가 시도 가드를 본다");

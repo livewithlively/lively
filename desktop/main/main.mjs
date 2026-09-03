@@ -151,6 +151,8 @@ async function refreshNodeStatus(cli) {
   //  ⚠ 문구는 서버가 만든다 — 앱이 지으면 웹·CLI 와 다른 말을 하게 된다.
   patchState({ nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null,
     nodeConnected: typeof n.connected === "boolean" ? n.connected : null,
+    // #2592 — 이 컴퓨터가 게이트웨이 박스인가(확답일 때만 true). nextAfterSetup 이 이 값으로 노드 자동 시작을 건너뛴다.
+    nodeSelfBox: typeof n.selfBox === "boolean" ? n.selfBox : null,
     nodeSleepNote: (n.sleep && typeof n.sleep.note === "string" && n.sleep.note) ? n.sleep.note : null });
   renderTray(); send(IPC.STATE, state);
 }
