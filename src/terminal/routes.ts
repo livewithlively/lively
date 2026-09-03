@@ -40,7 +40,7 @@ const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, liveNodes, nodeOfSession, nodeSessionHarness, nodeAgentStale } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
-import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
+import { relayNodeId, sessionRelayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
@@ -1202,13 +1202,26 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.json({ ok: true });
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
-    //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
-    const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
     // 회수(보관) 여부는 **노드 분기보다 먼저** 읽는다 — 종전엔 아래(박스 분기)에서만 읽어, 노드 세션은
     //  reclaim=1 을 줘도 desired-state 를 지워 '보관'이 곧 '완전 삭제'가 됐다(#1719 원준의 세션 보관함).
     const reclaimQ = req.query.reclaim === "1" || req.query.reclaim === "true";
     // 맵 정리는 best-effort — 남은 행은 무해하다(세션 id 는 무작위라 재사용되지 않고, 죽은 세션은 참조되지 않는다).
     const forgetTenantMap = (): void => { void clearSessionWorkspace(req.params.id!).catch(() => { /* 비치명 */ }); };
+    // ★ #2636 — 좌표는 **화면이 안 줬으면 서버가 되찾는다**(sessionRelayNodeId 머리말). 종전엔 `?node=` 만 봐서,
+    //  좌표를 안 싣는 호출(대시보드 '내 AI 세션' 위젯 — 그 목록엔 노드 세션이 병합돼 있다)이 오면 아래 중앙 경로가
+    //  **게이트웨이 로컬 tmux** 로 노드 세션의 생사를 판정했다. 그 tmux 는 그 세션을 본 적이 없어 언제나 「없다」고
+    //  답하므로(T0 실측: 실제 노드 세션 id 6개 전부 `can't find session`) 노드에 묻지도 않고 행만 지우고
+    //  «종료했어요» 로 끝났다 — 세션은 그 컴퓨터에 그대로(누수), 행이 사라진 뒤의 다음 호출은 403.
+    //  ⚠ desired-state 는 **여기서 한 번만** 읽어 노드 분기가 그대로 쓴다(왕복이 늘지 않는다).
+    //  ⚠ 조회 실패를 500 으로 세우지 않는다 — 그 답은 레지스트리 스냅샷도 알고 있다. 좌표를 끝내 못 찾으면
+    //   종전 중앙 경로로 흘러 거기서 다시 읽고 정직하게 실패한다(중앙 세션의 종전 동작 무변경).
+    //  #2592 — 셀프 노드 좌표는 어느 출처에서 와도 접힌다: 같은 tmux 라 중앙 경로가 같은 답을 즉답으로 준다.
+    const desired = await getSessionState(req.params.id).catch(() => undefined);
+    const nodeId = sessionRelayNodeId({
+      query: req.query.node as string | undefined,
+      desired: desired?.node_id,
+      snapshot: nodeOfSession(req.params.id),
+    }, isSelfNode);
     if (nodeId) {
       const me = idOf(userOf(req));
       const id = req.params.id;
@@ -1216,7 +1229,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  **스냅샷이 아니라 노드에 묻는다**(gone op — nodeCanAttach 의 '확답 only' #835 와 같은 원칙): 스냅샷은 게이트웨이
       //  재시작 직후·생성 직후 3초 동안 비어 있고 뷰어별 가시성 필터라(admin 이 남의 세션을 지울 때) 살아 있는 세션을
       //  '죽었다'고 오판해 **행만 지우고 tmux 는 남기는** 고아를 만든다 — 그게 이 과업이 없애려던 사고 그 자체다.
-      const st = await getSessionState(id);
+      const st = desired;
       const snap = nodeSessionsFor(me).find((x) => x.node?.id === nodeId && x.id === id);
       if (!st && !snap) throw new HttpError(404, "그 노드에 이 세션이 없습니다");
       // 행이 있으면 그 행의 노드여야 한다 — 박스 세션(node_id NULL)에 ?node= 를 붙여 오면 엉뚱한 노드가 '없다'고 답해
