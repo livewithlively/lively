@@ -12,7 +12,7 @@
 //  src/sessions/session-reaper.ts(#1059 F — idle 회수 시 이 레코드를 보존해 restorable 로 남긴다).
 //
 // #1791 — **노드 세션(node_id 있음)도 여기 산다. 쓰는 쪽은 게이트웨이뿐이다.** 노드 에이전트 프로세스(멤버 PC·워커)에는
-//  DB 가 없다 — 그래서 이 모듈의 쓰기·읽기는 노드에서 **조용히 no-op** 이다(아래 ON_NODE). 종전엔 노드의 createSession 이
+//  DB 가 없다 — 그래서 이 모듈의 쓰기·읽기는 노드에서 **조용히 no-op** 이다(아래 onNode()). 종전엔 노드의 createSession 이
 //  같은 upsert 를 시도해 세션마다 "desired-state 미러 실패" 를 찍고, collectSessions 의 desired 조회가 3초마다 실패 로그를
 //  남겼다(하루 9천 줄 — 실 오류를 가렸다). 노드 세션의 정본 행은 게이트웨이가 create 릴레이 직후 쓴다
 //  (terminal/node-session-state.ts). 노드가 이 표를 읽지 않아도 되는 이유: 노드는 자기 tmux(@box_*)로 충분하고,

@@ -621,6 +621,31 @@ test("§5 토폴로지를 안 주면 이 프로세스의 토폴로지로 답한�
 
 // ════════════════════════════════════════════════════════════════════════════
 
+test("★ §2 훅 넷 중 **세션 그릇 확장점만** 트림하지 않는다 — 종전 판정의 비대칭을 그대로 보존한다", () => {
+  // 종전 `sessionSpawnPath()` 는 `process.env.LIVELY_SESSION_SPAWN || ""` 였고 트림이 없었다.
+  //  나머지 셋(ensure·exec·member)은 종전에도 `.trim()` 을 거쳤다. 이 비대칭은 «무회귀» 의 결과지
+  //  실수가 아니다 — 그걸 시험으로 적어 두지 않으면 다음 사람이 «일관성» 이라며 트림을 붙인다.
+  const t = computeExecTopology(E({
+    LIVELY_SESSION_SPAWN: " ", LIVELY_SESSION_ENSURE: " ", LIVELY_SESSION_EXEC: " ", LIVELY_MEMBER_EXEC: " ",
+  }));
+  assert.equal(t.hooks.sessionSpawn, " ", "세션 그릇 확장점은 공백을 그대로 싣는다(종전과 같다)");
+  assert.equal(t.hooks.sessionEnsure, "", "나머지 셋은 공백뿐이면 «없음»");
+  assert.equal(t.hooks.sessionExec, "");
+  assert.equal(t.hooks.memberExec, "");
+  assert.equal(t.isolation, "os-user", "공백뿐인 ensure 훅은 컨테이너로 안 친다");
+  assert.equal(t.storage, "colocated", "공백뿐인 멤버 중계는 «파일이 여기 없다» 로 안 친다");
+});
+
+test("§4 확정을 두 번 하면 **나중 값**이 이긴다(머리말이 그렇게 약속한다)", () => {
+  try {
+    freezeExecTopology(E({}));
+    assert.equal(execTopology().sessionHost, "local");
+    freezeExecTopology(E({ LIVELY_NODE_TOKEN: "nt-1" }));
+    assert.equal(execTopology().sessionHost, "node", "두 번째 확정이 이겨야 한다");
+    assert.equal(onNode(), true);
+  } finally { unfreezeExecTopology(); }
+});
+
 test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 100% 같다(골든)", () => {
   assert.deepEqual(computeExecTopology(E()), {
     sessionHost: "local",

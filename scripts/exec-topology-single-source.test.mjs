@@ -128,6 +128,31 @@ t("[S4] 게이트웨이·노드 두 진입점이 부팅에서 토폴로지를 �
     "확정이 boot/tenancy-env import 보다 앞이면 틀린 워크스페이스 모드가 굳는다");
 });
 
+t("[S6] 토폴로지 env 를 **쓰는** 자리도 boot/tenancy-env.ts 하나다", () => {
+  // 읽기만 한 곳으로 모아도, 부팅 중에 그 값을 **쓰는** 코드가 새로 생기면 «같은 질문에 두 답» 이 되살아난다:
+  //  모듈 로드 중에 토폴로지를 묻는 자리(terminal-isolation 의 BOX_SPAWN/BOX_CGSPAWN)는 진입점의
+  //  freezeExecTopology() 보다 **먼저** 평가되므로, 그 사이에 새 쓰기가 끼면 확정 전후의 답이 갈린다.
+  //  지금은 boot/tenancy-env.ts 하나뿐이고 그건 index.ts 의 문자 그대로 첫 import 라 안전하다 —
+  //  이 시험은 그 «하나뿐» 을 지킨다. (자식 프로세스에 넘길 env 사본을 만드는 것은 여기 안 걸린다:
+  //   `const env = {...process.env}` 뒤의 `env.X = …` 는 이 프로세스의 값을 안 바꾼다.)
+  const WRITE_RE = /process\.env\.(LIVELY_[A-Z_]+|LVLY_[A-Z_]+)\s*=(?!=)|delete\s+process\.env\.(LIVELY_[A-Z_]+|LVLY_[A-Z_]+)/;
+  const offenders = [];
+  for (const f of files) {
+    const r = rel(f);
+    if (r === "src/boot/tenancy-env.ts") continue;
+    const lines = readFileSync(f, "utf8").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const code = lines[i].replace(/\/\/.*$/, "");
+      if (/^\s*(\/\/|\*|\/\*)/.test(lines[i])) continue;
+      if (WRITE_RE.test(code)) offenders.push(`${r}:${i + 1}  — ${lines[i].trim().slice(0, 110)}`);
+    }
+  }
+  assert.deepEqual(offenders, [],
+    "이 프로세스의 LIVELY_*/LVLY_* env 를 부팅 중에 쓰는 자리가 늘었다. 토폴로지 확정 전후로 답이 갈릴 수 "
+    + "있으니, 정말 필요하면 boot/tenancy-env.ts 로 모으고 그 이유를 커밋 메시지에 남겨라:\n  "
+    + offenders.join("\n  "));
+});
+
 t("[S5] 셀프 노드 판정의 «선결 조건»이 #2592 집행 지점에 물려 있다", () => {
   // 토폴로지가 소유하는 것은 «그 모순이 애초에 성립하는 배포인가» 하나다(증거 규칙·사유 문구는 #2592 소유).
   //  그 한 줄이 빠지면 매니지드 게이트웨이가 노드 등록마다 의미 없는 tmux 조회를 하고, 「위치를 되추론하지
