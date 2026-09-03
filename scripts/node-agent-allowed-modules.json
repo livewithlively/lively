@@ -95,6 +95,8 @@
   "dist/terminal/session-env-contract.js",
   "dist/terminal/session-exec.js",
   "dist/terminal/session-first-prompt.js",
+  "dist/terminal/session-host.js",
+  "dist/terminal/session-ops.js",
   "dist/terminal/session-name.js",
   "dist/terminal/session-project.js",
   "dist/terminal/session-runtime-mode.js",
