@@ -147,6 +147,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   // 프로젝트 없는 세션 화면 — 공유 폴더·지식·할 일이 없으니 곁칸에 넣을 것도 없다. 빈 칸을 보여 주느니 접어 둔다.
   if (loose) { lay = { ...lay, side: lay.side.filter((t) => t === 'timeline'), bottom: [], bottomOn: false, sideOn: false }; }
 
+  // 칸 하나 = 탭 줄 + 본문(만드는 곳은 아래 makePane). **이 두 줄은 함수 맨 앞이어야 한다** —
+  //  curSession() 이 `panes` 를 읽는데, actKey() → applySessionAct() 로 이어지는 그 길을 마운트가
+  //  **칸을 만들기 전에** 이미 한 번 지난다. 선언이 뒤에 있으면 그 순간 TDZ 로 죽어 세션·프로젝트
+  //  화면이 통째로 «화면을 불러오지 못했습니다 — Cannot access 'panes' before initialization» 가 된다
+  //  (2026-09-03 dev 실측, 윤상민 신고 — #762 에서 actKey 를 curSession() 으로 바꾼 판에서 났다).
+  //  마운트 시점엔 빈 Map 이라 curSession() 은 opts.sessionId 로 떨어진다 — 그때는 그게 지금 보는 세션이다.
+  interface Pane { zone: Zone; root: HTMLElement; bar: HTMLElement; tabs: HTMLElement; tail: HTMLElement; bodyEl: HTMLElement; parts: Map<PartType, Part> }
+  const panes = new Map<Zone, Pane>();
+
   function saveLayout(): void {
     if (loose) return;                          // 자투리 화면의 임시 배치를 정본으로 굳히지 않는다
     if (EMBEDDED) return;                       // 끼워 넣은 판(미리보기 프레임 안) — 바깥 사람의 배치를 덮어쓰지 않는다
@@ -375,8 +384,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   (원준 2026-08-20 신고 "탭 공간이 부족해 가려져서 ×로 지우거나 ＋를 하기 힘들다" — 곁칸 기본 폭 339px 에
   //   부품 9개를 넣으면 띠가 884px 이라 ＋는 x=1918, 즉 칸 밖이었다). 손잡이를 띠 밖에 두면 탭이 몇 개가 되든
   //   ＋·접기는 늘 같은 자리에 있고, 가려진 탭은 [모두 보기]로 골라 켜거나 거기서 ×로 뺀다.
-  interface Pane { zone: Zone; root: HTMLElement; bar: HTMLElement; tabs: HTMLElement; tail: HTMLElement; bodyEl: HTMLElement; parts: Map<PartType, Part> }
-  const panes = new Map<Zone, Pane>();
+  //   (Pane 의 모양과 `panes` 맵은 **함수 맨 앞**에 있다 — 왜 거기여야 하는지는 그 자리 주석.)
   const ros: ResizeObserver[] = [];
 
   function makePane(zone: Zone): Pane {
