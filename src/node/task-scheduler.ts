@@ -110,18 +110,24 @@ type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
  *  호출부가 「노드에 닿지 못함」이라는 합성 문구만 남겼다 — 그래서 이틀치 로그를 다 읽어도 진짜 이유
  *  (403 「본인 세션이 아닙니다」 = 그 세션은 이미 없다)를 알 수 없었다. 진단은 원문에서 나온다.
  */
-async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; why?: string }> {
-  if (!t.session_id) return { gone: true };             // 걷을 세션이 애초에 없다 = 완료
+async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; reached: boolean; why?: string }> {
+  if (!t.session_id) return { gone: true, reached: true };   // 걷을 세션이 애초에 없다 = 완료
   if (t.node_id === CENTRAL_NODE_ID) {
     await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
-    return { gone: true };
+    return { gone: true, reached: true };
   }
-  if (!t.node_id) return { gone: false, why: "노드 좌표 없음" };
-  if (!nodeOnline(t.node_id)) return { gone: false, why: "node-offline" };   // 노드에 못 닿았다 — 아직 안 걷혔다
+  if (!t.node_id) return { gone: false, reached: false, why: "노드 좌표 없음" };
+  if (!nodeOnline(t.node_id)) return { gone: false, reached: false, why: "node-offline" };   // 못 닿았다 — 아직 안 걷혔다
   try {
     await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id });
-    return { gone: true };
-  } catch (e) { return { gone: false, why: (e as Error)?.message ?? String(e) }; }
+    return { gone: true, reached: true };
+  } catch (e) {
+    const why = (e as Error)?.message ?? String(e);
+    // ⚠ **답이 없는 것과 답이 거절인 것은 다르다**(회수기의 포기 판정이 이 축을 쓴다).
+    //  오프라인·타임아웃은 «못 닿았다» — 잠든 노트북·먹통 노드를 포기하면 그 세션은 영구 누수다.
+    //  그 외(노드가 준 오류·미지원 op)는 노드가 답을 한 것이고, 스스로 회복될 길이 없으니 끝을 낼 수 있다.
+    return { gone: false, reached: why !== "node-offline" && why !== "node-rpc-timeout", why };
+  }
 }
 
 /**
@@ -140,7 +146,7 @@ async function reapKill(t: FailedTaskRow): Promise<ReapAttempt> {
   const gone = r.gone || !t.node_id || t.node_id === CENTRAL_NODE_ID || !t.session_id
     ? null
     : await nodeSessionGone(t.node_id, t.session_id).catch(() => null);
-  return decideReap(r.gone, gone, r.why);
+  return decideReap(r.gone, gone, r.why, r.reached);
 }
 
 // 실패 세션 회수 tick(#1675 ①) — 보존 상한(개수·TTL) 밖의 실패 세션을 걷는다.
