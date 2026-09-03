@@ -133,7 +133,11 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
     : { kind: "socket", socket: registryMode ? TENANT_SOCKET : null };
 
   // ── isolation ──
-  //  `=off` 만 하드 비활성(킬스위치). 그 외에는 «세션 컨테이너 확보 훅이 있으면 컨테이너»다 —
+  //  **정확히** `off` 만 하드 비활성(킬스위치). 대소문자·공백을 안 봐준다 — 종전 판정이 그랬고
+  //  (`process.env.LIVELY_MEMBER_ISOLATION !== "off"`), 킬스위치는 «관대하게 읽어 주는» 쪽이 더 위험하다
+  //  (`" off"` 를 끔으로 읽으면 격리가 조용히 꺼진다). 워커 풀 K 만 대소문자·공백을 무시하는데, 그건
+  //  사람이 손으로 넣는 노브라 관대함이 맞고 잘못 읽어도 성능만 달라진다 — 비대칭은 의도다.
+  //  그 외에는 «세션 컨테이너 확보 훅이 있으면 컨테이너»다 —
   //  이게 지금 «이 배포가 매니지드인가»의 사실상 정의이고(#2546 4단계가 글롭 게이트를 없앤 뒤),
   //  T2 가 그 사후 추론을 **필드 이름으로 끌어올린 자리**다(조사 함정 6).
   const isolation: IsolationMode =
