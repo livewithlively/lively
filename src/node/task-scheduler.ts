@@ -18,7 +18,7 @@ import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-s
 import { getRuntimeConfig } from "../org/store.js";
 import { getMember } from "../org/store/members.js";
 import { resolveRepoInject } from "../project/project-provision.js";
-import { nodeOnline, nodeRpc, schedulableRemotes, onTaskDone } from "./registry.js";
+import { nodeOnline, nodeRpc, nodeSessionGone, schedulableRemotes, onTaskDone } from "./registry.js";
 import { getNode, listNodes } from "./store.js";
 import { remoteDelegateAllowed } from "./node-access.js";
 import {
@@ -29,7 +29,7 @@ import { spawnTaskSession, checkTask, killTaskSession, sampleResources, detectDo
 import { nodeHarnesses } from "./protocol.js";
 import { detectAuthFailure, cronJobIdFromMarker } from "./task-failure.js";
 import { handleAuthFailure } from "./auth-failure-response.js";
-import { reapFailedTaskSessions, type FailedTaskRow } from "./failed-session-reaper.js";
+import { reapFailedTaskSessions, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
 
 export const CENTRAL_NODE_ID = "central";
 const TICK_MS = 5_000;
@@ -96,7 +96,7 @@ async function progressBytes(t: DelegateTask): Promise<number> {
 //   DelegateTask 전체가 아니라 그 세 칸만 요구한다(회수기는 DB 에서 그 칸만 읽어온다).
 type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
 /**
- * 반환값 = **그 세션이 지금 확실히 없어졌나**(회수기가 '걷었다'고 기록해도 되는가).
+ * 반환값 `gone` = **그 세션이 지금 확실히 없어졌나**(회수기가 '걷었다'고 기록해도 되는가).
  *
  * ⚠ 이 구분이 없으면 회수기가 거짓 성공을 기록한다(#1675 리뷰에서 잡힌 결함): 종전 구현은 오프라인 노드에서
  *  **아무 일도 안 하고 정상 반환**했고, 호출부는 그걸 성공으로 보고 `session_reaped` 를 찍었다. 그러면 그 세션은
@@ -104,19 +104,43 @@ type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
  *
  *  · 중앙(로컬 tmux): kill 이 실패해도 **true**. 로컬에서 실패하는 사유는 사실상 '이미 없음'이고,
  *    그걸 미완으로 두면 존재하지도 않는 세션에 영원히 재시도한다.
- *  · 원격: 노드에 **닿았을 때만** true. 오프라인·RPC 실패는 false → 다음 tick 에 다시 시도한다.
+ *  · 원격: 노드에 **닿았을 때만** true. 오프라인·RPC 실패는 false → 호출부가 다시 판단한다.
+ *
+ * ⚠ `why`(실패 사유)를 **버리지 마라**(#2622). 종전엔 `catch { return false; }` 로 노드가 준 원문을 삼키고
+ *  호출부가 「노드에 닿지 못함」이라는 합성 문구만 남겼다 — 그래서 이틀치 로그를 다 읽어도 진짜 이유
+ *  (403 「본인 세션이 아닙니다」 = 그 세션은 이미 없다)를 알 수 없었다. 진단은 원문에서 나온다.
  */
-async function killTaskAnywhere(t: SessionCoords): Promise<boolean> {
-  if (!t.session_id) return true;                       // 걷을 세션이 애초에 없다 = 완료
+async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; why?: string }> {
+  if (!t.session_id) return { gone: true };             // 걷을 세션이 애초에 없다 = 완료
   if (t.node_id === CENTRAL_NODE_ID) {
     await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
-    return true;
+    return { gone: true };
   }
-  if (!t.node_id || !nodeOnline(t.node_id)) return false;   // 노드에 못 닿았다 — 아직 안 걷혔다
+  if (!t.node_id) return { gone: false, why: "노드 좌표 없음" };
+  if (!nodeOnline(t.node_id)) return { gone: false, why: "node-offline" };   // 노드에 못 닿았다 — 아직 안 걷혔다
   try {
     await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id });
-    return true;
-  } catch { return false; }
+    return { gone: true };
+  } catch (e) { return { gone: false, why: (e as Error)?.message ?? String(e) }; }
+}
+
+/**
+ * 회수기용 kill 한 번(#2622 ⓐ) — **멱등 회수**.
+ *
+ * kill 이 실패해도 그것만으로 「아직 살아 있다」가 아니다. 실측된 이 사고의 실제 모양은 정반대였다:
+ *  세션이 **이미 없어서** 노드의 소유 확인(assertManage → ownerMeta)이 403 을 냈고, 회수기는 그걸
+ *  「닿지 못함」으로 읽어 이틀을 재시도했다. 그래서 실패하면 **그 세션이 없는지 노드에 확답을 구한다.**
+ *
+ * ⚠ `nodeSessionGone` 은 #835 의 「확답 only」 계약이다 — `true`(없다) · `false`(살아있다) · `null`(판정 불가).
+ *  `true` 일 때만 회수 성공으로 접는다. `null` 을 성공으로 접으면 그게 바로 #1675 리뷰의 거짓 성공이다.
+ */
+async function reapKill(t: FailedTaskRow): Promise<ReapAttempt> {
+  const r = await killTaskAnywhere(t);
+  // 확답을 구하는 건 **kill 이 실패했을 때뿐**이다 — 성공했으면 RPC 를 한 번 더 쏠 이유가 없다.
+  const gone = r.gone || !t.node_id || t.node_id === CENTRAL_NODE_ID || !t.session_id
+    ? null
+    : await nodeSessionGone(t.node_id, t.session_id).catch(() => null);
+  return decideReap(r.gone, gone, r.why);
 }
 
 // 실패 세션 회수 tick(#1675 ①) — 보존 상한(개수·TTL) 밖의 실패 세션을 걷는다.
@@ -125,10 +149,7 @@ async function reapFailedSessions(): Promise<void> {
   try {
     const p = await effectiveDelegatePolicy(loadDelegatePolicy);
     await reapFailedTaskSessions(
-      async (t: FailedTaskRow) => {
-        // 못 걷었으면 **던진다** — 회수기는 그때만 '다음 tick 재시도'로 남긴다(마킹하지 않는다).
-        if (!(await killTaskAnywhere(t))) throw new Error(`세션 회수 미완(노드 ${t.node_id ?? "?"} 에 닿지 못함)`);
-      },
+      reapKill,
       { keep: p.keep_failed_sessions, ttlMin: p.failed_session_ttl_min },
     );
   } catch (err) {
