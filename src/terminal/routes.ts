@@ -39,6 +39,7 @@ const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, liveNodes, nodeOfSession, nodeSessionHarness, nodeAgentStale } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
+import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme } from "./catalog.js"; // #1683 테마 값 정규화(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
@@ -505,7 +506,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  매핑의 node_id 와 지금 행의 노드가 다르면 버린다(노드 재등록·이름 재사용으로 남은 낡은 매핑 오염 방지).
     try {
       const nmap = await nodeSessionMapFor(remote.filter((s) => !s.claudeSessionId).map((s) => s.id));   // #1791 — 행이 없는 옛 노드 세션의 폴백
-      for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
+      for (const s of remote) { const m = nmap.get(s.id); if (m && s.node && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
     } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
     //  ⚠ **«node 필드가 있다» 를 «다른 기계에 있다» 로 읽으면 안 된다.** 게이트웨이 박스가 노드로도
@@ -583,11 +584,13 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const id = req.params.id;
     res.setHeader("Cache-Control", "no-store");
     // 노드 세션(#869) — 마지막 상태 스냅샷에서 가시성 판정 후 라벨 반환(노드 오프라인이어도 표시 가능).
-    const nodeId = String(req.query.node ?? "").trim();
+    //  #2592 — 셀프 노드 좌표는 접는다(relayNodeId): 그 세션은 중앙 tmux 에 그대로 있으므로 아래 desired/박스
+    //   갈래가 즉답으로 판정한다. 남겨 두면 «노드에 물어보는» 갈래로 새서 3초 스냅샷 지연을 그대로 얻는다.
+    const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
     // 🔴 #2108 — 이 메타는 **부팅 게이트(maybeRestoreOnOpen)의 유일한 입력**이다. 여기서 restorable 을 한 번
     //  잘못 내면 화면은 WS 도 안 붙이고 곧장 복원으로 간다 — 그래서 '모름'을 '죽음'으로 접으면 안 된다.
     if (nodeId) {
-      const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === id);
+      const s = nodeSessionsFor(uid).find((x) => x.node?.id === nodeId && x.id === id);
       if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 }); return; }
       // #1791 — 스냅샷에 없다 = 그 노드에서 죽었다(또는 노드가 스냅샷을 아직 안 올렸다). 아래 desired-state 경로로 떨어져
       //  '복원 가능'을 알린다(종전엔 여기서 403 — 노드 세션은 desired-state 가 없어 알릴 것이 없었다).
@@ -606,7 +609,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  스냅샷은 메모리 레지스트리라 새 왕복이 없다.
       let alive: NodeSessionInfo | undefined;
       const mode = nodeSessionMetaMode(nodeId, st.node_id, (nid) => {
-        alive = nodeSessionsFor(uid).find((x) => x.node.id === nid && x.id === id);
+        alive = nodeSessionsFor(uid).find((x) => x.node?.id === nid && x.id === id);
         return !!alive;
       });
       if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge }); return; }
@@ -667,7 +670,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   //  접근통제: canAttach(입장 가능한 사람 = 대화도 볼 수 있음, 프로젝트 세션은 전원 #452). 대화 기록 = ~/.claude 트랜스크립트.
   app.get("/api/ui/terminal/sessions/:id/prompts", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
-    const nodeId = String(req.query.node ?? "").trim();
+    //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
+    const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
     if (nodeId) { // 노드 세션(#875 ③) — 인가(nodeCanAttach) 후 노드 트랜스크립트 릴레이.
       const v = await nodeCanAttach(nodeId, req.params.id, uid);
       if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
@@ -1132,7 +1136,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const input = sessionHandoffInput(st, harness, flags, b.context);
     input.theme = themeOf(req, b);
     res.setHeader("Cache-Control", "no-store");
-    const nodeId = st.node_id || nodeOfSession(id) || "";
+    const nodeId = relayNodeId(st.node_id, isSelfNode) || nodeOfSession(id) || "";   // #2592 — 셀프 좌표는 중앙 경로로
     if (nodeId) {
       await requireCreatableNode(req, nodeId);
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
@@ -1152,7 +1156,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const nodeId = String(b.node ?? req.query.node ?? "").trim();
+    //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
+    const nodeId = relayNodeId(String(b.node ?? req.query.node ?? ""), isSelfNode);
     if (nodeId) {
       const me = idOf(userOf(req));
       const invites = b.invites !== undefined ? await validateInvites(b.invites, me) : undefined;
@@ -1196,7 +1201,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.json({ ok: true });
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
-    const nodeId = String(req.query.node ?? "").trim();
+    //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
+    const nodeId = relayNodeId(req.query.node as string | undefined, isSelfNode);
     // 회수(보관) 여부는 **노드 분기보다 먼저** 읽는다 — 종전엔 아래(박스 분기)에서만 읽어, 노드 세션은
     //  reclaim=1 을 줘도 desired-state 를 지워 '보관'이 곧 '완전 삭제'가 됐다(#1719 원준의 세션 보관함).
     const reclaimQ = req.query.reclaim === "1" || req.query.reclaim === "true";
@@ -1210,7 +1216,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       //  재시작 직후·생성 직후 3초 동안 비어 있고 뷰어별 가시성 필터라(admin 이 남의 세션을 지울 때) 살아 있는 세션을
       //  '죽었다'고 오판해 **행만 지우고 tmux 는 남기는** 고아를 만든다 — 그게 이 과업이 없애려던 사고 그 자체다.
       const st = await getSessionState(id);
-      const snap = nodeSessionsFor(me).find((x) => x.node.id === nodeId && x.id === id);
+      const snap = nodeSessionsFor(me).find((x) => x.node?.id === nodeId && x.id === id);
       if (!st && !snap) throw new HttpError(404, "그 노드에 이 세션이 없습니다");
       // 행이 있으면 그 행의 노드여야 한다 — 박스 세션(node_id NULL)에 ?node= 를 붙여 오면 엉뚱한 노드가 '없다'고 답해
       //  kill 없이 행만 지워지는 구멍이 된다(리뷰 지적). 행이 없는 옛 노드 세션(#1791 이전 생성)만 스냅샷으로 진행.
@@ -1333,9 +1339,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //  아니라 노드 스냅샷으로 본다 ② 이어받을 대화 파일이 노드에 있어 여기서 존재 확인(transcriptExists)을 못 한다: 훅이
     //  보고한 대화 id 가 있으면 그대로 시도하고, 없으면 picker. 없는 id 로 열려도 #1516 런처(POSIX)가 세션을 살려 두고,
     //  윈도우(psmux)는 원문 에러가 화면에 남는다 — 어느 쪽도 조용한 루프는 아니다(restored=1 게이트가 한 번 더 막는다).
-    if (st.node_id) {
-      const nodeId = st.node_id;
-      if (nodeSessionsFor(me).some((x) => x.node.id === nodeId && x.id === id)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
+    //  #2592 — DB 에 남은 셀프 노드 좌표는 접는다: 그 세션의 tmux 는 이 박스에 있으므로 아래 중앙 복원이 정답이다
+    //   (마이그레이션 전이거나 다른 게이트웨이가 쓴 행이면 여전히 셀프 좌표가 실려 온다).
+    const stNodeId = relayNodeId(st.node_id, isSelfNode);
+    if (stNodeId) {
+      const nodeId = stNodeId;
+      if (nodeSessionsFor(me).some((x) => x.node?.id === nodeId && x.id === id)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
       // #1849 — "연결돼 있지 않습니다"에서 끝내지 않는다: 게이트웨이는 그 노드의 연결 이력을 갖고 있으므로
       //  **왜 그런지(잠자기 추정)와 무엇을 하면 되는지**까지 말할 수 있다. 진단 조회가 실패해도 원래 문구는 나간다.
       if (!nodeOnline(nodeId)) {
@@ -1504,7 +1513,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const me = idOf(userOf(req));
     const st = await getSessionState(id);
     // #1791 — 노드 세션도 이제 행이 있다(node_id). 그 세션의 tmux 는 노드에 있으니 아래 릴레이 분기로(여기서 로컬 tmux 를 만지면 안 된다).
-    if (st && !st.node_id) {
+    //  #2592 — 단, 셀프 노드 좌표는 좌표가 아니다(같은 tmux) → 중앙 분기로 접는다.
+    const stNodeId = relayNodeId(st?.node_id, isSelfNode);
+    if (st && !stNodeId) {
       if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
       const change = await markSessionActive(id, phase).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
       // #1842 — 단계가 **바뀐** 순간 그 자리에서 앱으로 민다. 폴링이 30초 뒤에 같은 사실을 다시 발견하는 대신,
@@ -1513,13 +1524,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       res.json({ ok: true });
       return;
     }
-    if (st && st.node_id && st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
+    if (st && stNodeId && st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     // 노드 세션(#869) — 중앙 DB 에 desired-state 가 없다(노드엔 DB 가 없어 레코드를 안 만든다). 그 세션의 tmux 는
     //  멤버 PC 에 있어 게이트웨이가 직접 못 쓰므로 **소유자 확인 후 노드로 릴레이**한다(정책=게이트웨이, 실행=노드 F7).
     //  이게 없으면 노드 세션은 훅을 배선해도 영영 404 라 화면 스크래핑에 묶인다 — 하네스 보고가 중앙에서만 되면
     //  같은 세션이 어디서 도느냐에 따라 상태 품질이 갈린다.
     const ns = nodeSessionsFor(me).find((x) => x.id === id);
-    if (!ns) throw new HttpError(404, "세션 상태 기록이 없습니다");
+    if (!ns?.node) throw new HttpError(404, "세션 상태 기록이 없습니다");   // #2592 — 좌표 없는 행 = 이 박스 세션(릴레이 대상 아님)
     if (ns.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     // 구 노드(caps 미선언)는 이 op 를 모른다 → 보내지 않는다. 그 노드 세션은 종전대로 자기 tmux 스크래핑으로 판정된다(무회귀).
     if (nodeSupports(ns.node.id, "markActive")) {

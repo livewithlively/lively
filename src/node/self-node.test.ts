@@ -6,7 +6,7 @@
 //  그래서 '겹치면 자기 자신'만 참으로 두고, '안 겹치면 아니다'는 **결론으로 쓰지 않는다**(없음 ≠ 아니다).
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { sharesGatewayTmux, hasSelfProbeCandidate } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, relayNodeId, selfNodeMessage } from "./self-node.js";
 
 const box = (...ids: string[]): ReadonlySet<string> => new Set(ids);
 const A = "box-yoon-1a2b3c4d", B = "box-won-9f8e7d6c", C = "box-yoon-deadbeef";
@@ -86,4 +86,52 @@ test("판정 여부는 스코프 키로 가른다(같은 노드 id, 다른 테�
 // 7) 경계 — 세션이 **정확히 하나**여도 판정할 값이다. `> 0` 을 `> 1` 로 쓴 오프바이원을 여기서 잡는다.
 test("세션이 정확히 하나뿐이어도 시도한다", () => {
   assert.equal(hasSelfProbeCandidate([cand("t/n", 1)], judged()), true);
+});
+
+// ── #2592 relayNodeId — «좌표 접기». 사양 엣지 표 A 7행을 그대로 옮긴다. ─────────────────────────
+//
+//  🔴 틀리는 두 방향의 값이 여기서도 갈린다:
+//   · 과하게 접는다(진짜 원격 노드 좌표를 버린다) → 그 멤버 PC 의 세션이 **중앙 tmux 에서** 찾아지고,
+//     없으니 «세션이 종료됨»으로 답한다. 살아 있는 남의 세션을 죽었다고 말하는 것이라 가장 나쁘다.
+//   · 덜 접는다(셀프 좌표를 남긴다) → 이 프로젝트가 닫으려는 구멍 그대로다(같은 tmux 를 노드 WS 로 한 바퀴).
+//  그래서 판정기(isSelf)에 **정확히 무엇을 묻는지**까지 잰다(A7) — 안 물으면 통과하면서 아무것도 안 보는 테스트가 된다.
+
+const NEVER = (): boolean => { throw new Error("좌표가 없는데 판정기를 불렀다 — 셀프 판정은 tmux 를 묻는 비용이 있다"); };
+const SELF = (): boolean => true, REMOTE = (): boolean => false;
+
+// A1) 진짜 원격 노드 — 좌표는 릴레이 지시다. 여기서 접으면 멤버 PC 세션이 통째로 안 열린다.
+test("원격 노드 좌표는 그대로 둔다", () => {
+  assert.equal(relayNodeId("macmini", REMOTE), "macmini");
+});
+// A2) 이 프로젝트의 본체 — 셀프 노드 좌표는 «같은 tmux 로 한 바퀴 돌아오라» 라 좌표가 아니다.
+test("셀프 노드 좌표는 버린다(중앙 경로로 접는다)", () => {
+  assert.equal(relayNodeId("macmini", SELF), "");
+});
+// A3·A4) 좌표 없음 — 종전 동작 그대로. DB `node_id` 는 NULL 일 수 있고(A4), 그때 판정기를 부르면 안 된다.
+test("빈 좌표는 그대로 빈 값(판정기를 부르지 않는다)", () => {
+  assert.equal(relayNodeId("", NEVER), "");
+});
+test("좌표가 아예 없으면(null·undefined) 빈 값 — DB node_id 는 NULL 일 수 있다", () => {
+  assert.equal(relayNodeId(null, NEVER), "");
+  assert.equal(relayNodeId(undefined, NEVER), "");
+});
+// A5) 종전 호출부들이 하던 `.trim()` 을 이 함수가 이어받는다(호출부에서 사라진 동작이 여기 있어야 한다).
+test("앞뒤 공백은 다듬는다(종전 호출부의 trim 을 이어받는다)", () => {
+  assert.equal(relayNodeId("  macmini  ", REMOTE), "macmini");
+});
+// A6) 경계 — **트림한 값으로 판정**해야 한다. 원문으로 물으면 공백 하나에 판정이 빗나가 구멍이 그대로 열린다.
+test("공백이 붙어 있어도 셀프 노드로 판정된다(트림 후 판정)", () => {
+  assert.equal(relayNodeId("  macmini  ", (id) => id === "macmini"), "");
+});
+// A7) 배선 — 판정기를 **정확히 한 번, 트림된 값으로** 묻는다. 안 물으면 위 단언들이 전부 vacuous 가 된다.
+test("판정기에 트림된 id 를 정확히 한 번 묻는다", () => {
+  const asked: string[] = [];
+  relayNodeId(" macmini ", (id) => { asked.push(id); return false; });
+  assert.deepEqual(asked, ["macmini"]);
+});
+
+// 문구는 여러 표면(등록 409·close 사유·관리 배지·CLI)이 나눠 쓰는 단일 출처다 — 비어 있으면 그 표면들이 침묵한다.
+test("사람에게 할 말이 있고, 노드 id 를 주면 그 노드를 지목한다", () => {
+  assert.ok(selfNodeMessage().length > 20);
+  assert.ok(selfNodeMessage("macmini").includes("macmini"));
 });

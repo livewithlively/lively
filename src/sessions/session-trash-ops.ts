@@ -3,7 +3,8 @@
 import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
 import { listSessions, killSession, sessionGone } from "../terminal/terminal-sessions.js";
-import { nodeSessionsFor, nodeRpc, nodeOnline } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeOnline, isSelfNode } from "../node/registry.js";
+import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다
 import { getSessionState, deleteSessionState, sessionStateByClaudeUuid } from "./session-state.js";
 import { sessionNames, isLiveByAnyName } from "./session-names.js";   // #2151 — 세션의 두 이름(박스 id·대화 uuid)을 재는 규칙
 import { closeSessionAppInstances } from "../org/store/app-instances.js";   // #2022 — 완전 삭제한 세션의 앱 인스턴스도 함께 닫는다(안 닫으면 좌측 목록에 유령 행이 남는다)
@@ -102,7 +103,7 @@ export async function applySessionTrashOp(u: LivelyUser, me: string, op: TrashOp
         if (op !== "purge" && !(op === "trash" && opts.stopLive)) { skipped.push({ id, why: "아직 돌고 있는 세션 — 먼저 지난 세션으로 보내 주세요" }); continue; }
         const boxId = r.boxId ?? id;   // 멈추는 것은 tmux/노드 — 그쪽이 아는 이름으로만 부른다
         const st = await getSessionState(boxId).catch(() => undefined);
-        const nodeId = st?.node_id || nodeSessionsFor(me).find((x) => x.id === boxId)?.node.id || null;
+        const nodeId = relayNodeId(st?.node_id, isSelfNode) || nodeSessionsFor(me).find((x) => x.id === boxId)?.node?.id || null;   // #2592 — 셀프 좌표는 중앙(tmux 직접)으로
         const stopped = await stopForPurge(u, me, boxId, nodeId);
         if (stopped !== true) { skipped.push({ id, why: stopped }); continue; }
       }
