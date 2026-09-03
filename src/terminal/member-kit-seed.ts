@@ -5,7 +5,7 @@
 //  `.lively/`(token·gateway-url·hooks·lib·context) + `~/.claude/settings.json`(훅) + lively MCP(멤버 토큰).
 //  중계 배포에서는 그 경로가 **영영 안 불린다** — resolveMemberOsUser 가 즉시 osUser 를 돌려주므로
 //  ensureMemberOsUser 의 lazy provision 분기(provisionMemberOs)에 들어가지 않고, 멤버 홈은 세션 스폰이
-//  빈 채로 만든다(container-spawn 의 mkdir). 결과: 훅이 없어 work-flag 가 대화 uuid 를 보고하지 못하고
+//  빈 채로 만든다(당시 매니지드 spawn 훅 container-spawn 의 mkdir — #2547 에서 삭제, 지금은 브로커의 세션 컨테이너 확보가 그 자리). 결과: 훅이 없어 work-flag 가 대화 uuid 를 보고하지 못하고
 //  대화창이 404 로 남는다(설계문서 §21-3 실측 — 파일 중계(§21-2)가 있어도 매핑이 없으면 못 읽는다).
 //
 //  ── 어떻게 ──
