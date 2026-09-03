@@ -4,12 +4,12 @@
 //   탭으로 밀어내고 관리탭까지 다녀오게 하면, 프사 한 장 바꾸려고 작업 맥락을 잃는다. 슬랙·노션·리니어가 전부
 //   프로필/환경설정을 오버레이로 두는 이유가 이것이고, 우리 발치의 [나] 행도 같은 문법을 따른다.
 //
-//  구조(슬랙 환경설정 문법): [좌 목록 | 우 내용] 2단. 왼쪽은 **주제**(프로필 · 계정 · 보안 | AI 개인 규칙 ·
-//   자동 주입문 · 내 AI 계정 | 알림 · 화면 | 고급 설정)이고, 오른쪽만 갈아 끼운다. 발치에는 로그아웃 — 슬랙과
+//  구조(슬랙 환경설정 문법): [좌 목록 | 우 내용] 2단. 왼쪽은 **주제**(프로필 · 계정 · 보안 · 화면 · 알림 |
+//   AI 계정 연결 · AI 개인화 · AI 주입 문구 | 고급 설정)이고, 오른쪽만 갈아 끼운다. 발치에는 로그아웃 — 슬랙과
 //   같은 자리다(계정을 떠나는 일은 목록 맨 아래). 순서의 근거는 SECS 위 주석.
 //
 //  ── #1898 — 내보내던 링크를 창 안으로 ────────────────────────────────────────────────
-//  [내 AI 계정]은 종전에 이 창이 관리탭으로 **내보내던 링크**였다([계정 · 보안 ▸ 더 자세한 설정]). 개인
+//  [AI 계정 연결]은 종전에 이 창이 관리탭으로 **내보내던 링크**였다([계정 · 보안 ▸ 더 자세한 설정]). 개인
 //   설정을 보러 들어와서 다른 앱으로 튕겨 나가면 그건 창을 닫는 것과 같다 — 그래서 이 창으로 들였다.
 //   **새로 만들지 않는다**: 관리탭이 쓰던 바로 그 부품(myAiAccountsCard)을 그대로 부른다. 부품 소유는
 //   저쪽에 두고 여기선 자리만 내준다 — 두 벌이 되면 한쪽만 고쳐진다.
@@ -22,9 +22,9 @@
 //   닫히며 그 화면이 가운데 액자로 뜬다. [계정 · 보안]에 있던 [내 스킬 · 훅] 링크도 그 목차로 옮겼다(문은 하나).
 //
 //  ⚠ 저장 규약: 서버(POST /api/ui/me/profile)는 **미전송 필드를 보존**하는 patch 다. 그래서 [프로필]은
-//   body_md 를 안 보내고 [AI 개인 규칙]은 이름·아바타를 안 보낸다 — 한 창에 둘이 같이 있어도 서로를 지우지 않는다.
+//   body_md 를 안 보내고 [AI 개인화]은 이름·아바타를 안 보낸다 — 한 창에 둘이 같이 있어도 서로를 지우지 않는다.
 //  ⚠ 칸에 적던 것이 탭을 옮기면 사라지면 안 된다 → 화면을 **한 번 만들어 두고 보이기만 토글**한다(다시 짓지 않는다).
-//  ⚠ 단 서버를 더 부르는 화면([내 AI 계정]·[자동 주입문]·[고급 설정])은 **처음 펼 때** 그린다 — 열 때마다
+//  ⚠ 단 서버를 더 부르는 화면([AI 계정 연결]·[AI 주입 문구]·[고급 설정])은 **처음 펼 때** 그린다 — 열 때마다
 //   ai-accounts·sessions 까지 부르면 안 볼 수도 있는 화면 때문에 창이 늦게 뜨고, 그러면 '잠깐 들르는 창'이
 //   아니게 된다.
 import { api, el, errorNote, logout, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
@@ -47,32 +47,31 @@ export interface MeModalOpts {
   tab?: SecKey;
 }
 
-type SecKey = 'profile' | 'account' | 'ai' | 'auto' | 'aiacct' | 'notify' | 'look' | 'advanced';
+type SecKey = 'profile' | 'account' | 'look' | 'notify' | 'aiacct' | 'ai' | 'auto' | 'advanced';
 interface Sec { key: SecKey; label: string; icon: string[] }
 
-// 좌 목록 — 순서가 곧 위계다. 세 묶음과 그 너머로 가는 문 하나로 읽힌다.
-//  ① 나 — 나를 가리키는 것(프로필) → 내가 들어오는 법(계정 · 보안)
-//  ② 내 AI — 나를 대하는 법(AI 개인 규칙) → 매 대화에 자동으로 들어가는 것(자동 주입문) → 무엇으로 도나(내 AI 계정)
-//  ③ 쓰는 법 — 나를 부르는 법(알림) → 내가 보는 화면
-//  ④ 그 너머로 가는 문(고급 설정)
-//  ⚠ [계정 · 보안]은 [프로필] 바로 뒤다(2026-09-03). 둘 다 '나'인데 종전처럼 [화면] 뒤에 떨어뜨리면 '나' 묶음이
-//   목록 양 끝으로 갈라져, 가운데 다섯을 건너뛰며 읽어야 한다. 창 머리가 이미 얼굴 · 이름 · 이메일을 보여주니
-//   그 바로 아래에서 '나는 누구인가 → 나는 어떻게 들어오나'로 이어지는 게 눈이 가는 순서다.
-//  ⚠ 알림은 'AI 를 어떻게 세팅하나'가 아니라 **내가 무엇을 언제 받나**다. 그래서 AI 묶음(규칙·주입문·계정)
-//   뒤, 화면 바로 앞에 둔다(원준 2026-08-26) — 앞에 끼면 AI 설정이 갈라져 읽힌다.
+// 좌 목록 — 순서가 곧 위계다. **나**에 관한 것을 먼저 다 보고, 그다음 **내 AI**, 마지막이 그 너머로 가는 문이다
+//  (원준 2026-09-03 — 이 순서·이 이름으로 정했다).
+//  ① 나 — 나를 가리키는 것(프로필) → 내가 들어오는 법(계정 · 보안) → 내가 보는 것(화면) → 나를 부르는 법(알림)
+//  ② 내 AI — 무엇으로 도나(AI 계정 연결) → 나를 어떻게 대하나(AI 개인화) → 매 대화에 늘 실리는 것(AI 주입 문구)
+//  ③ 고급 설정 — 그 너머(조직 · AI 능력 · 데이터 · 운영)로 가는 문
+//  ⚠ AI 묶음 안의 순서는 **닿는 순서**다: 계정이 안 이어져 있으면 개인화도 주입 문구도 실릴 데가 없다.
+//   그래서 [AI 계정 연결]이 먼저고, 그다음이 '어떻게 일하나'(개인화) · '무엇을 늘 읽나'(주입 문구)다.
+//  ⚠ 알림이 AI 묶음 **앞**으로 온 것은 종전 판단(2026-08-26 — AI 묶음 뒤·화면 앞)을 뒤집은 것이다. 알림·화면은
+//   'AI 를 어떻게 세팅하나'가 아니라 **내가 무엇을 언제 받고 무엇을 보나** 라서, AI 가 아니라 '나' 묶음에 붙는다.
 //  ⚠ '무엇에 닿나'(외부 서비스)는 여기 없다 — 사이드바 발치 [외부 앱 연결]이 그 자리다(2026-09-03).
 const SECS: Sec[] = [
   { key: 'profile', label: '프로필', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'] },
-  // 방패 — 내가 이 서비스에 '들어오는 법'(로그인 수단 · 비밀번호). 아래 [내 AI 계정]의 열쇠와 겹치지 않는 붓.
+  // 방패 — 내가 이 서비스에 '들어오는 법'(로그인 수단 · 비밀번호). 아래 [AI 계정 연결]의 열쇠와 겹치지 않는 붓.
   { key: 'account', label: '계정 · 보안', icon: ['M12 3.4 19 6v5.6c0 4.2-2.9 7.4-7 9-4.1-1.6-7-4.8-7-9V6z', 'M9.3 12.1l1.9 1.9 3.5-3.6'] },
-  { key: 'ai', label: 'AI 개인 규칙', icon: ['M12 3.4l1.9 5.7 5.7 1.9-5.7 1.9L12 18.6l-1.9-5.7-5.7-1.9 5.7-1.9z', 'M18.5 16.5l.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7z'] },
-  // 시계 — 이 화면은 '언제 무슨 일이 자동으로 일어나나'를 다룬다(#1898). 규칙(위)이 '무엇을'이면 이건 '언제'.
-  { key: 'auto', label: '자동 주입문', icon: ['M12 4.6a7.4 7.4 0 1 0 0 14.8 7.4 7.4 0 0 0 0-14.8', 'M12 8.2V12l2.6 1.6'] },
-  // 열쇠 — 이 화면이 하는 일은 '로그인' 하나다(상태 확인 + 다시 로그인). 위 방패(계정 · 보안)와 겹치지 않는 붓.
-  { key: 'aiacct', label: '내 AI 계정', icon: ['M16 4.9a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2', 'M13.5 11 5 19.5', 'M7 17.5l2 2', 'M9.5 15l2 2'] },
-  // 종 — 나를 부르는 법(#1842). 규칙(위)이 'AI 가 나를 대하는 법'이면, 이건 'AI 가 나를 부르는 법'이다.
-  { key: 'notify', label: '알림', icon: ['M12 4.2a5 5 0 0 0-5 5v3.1l-1.5 2.7h13L17 12.3V9.2a5 5 0 0 0-5-5z', 'M10.1 18a1.95 1.95 0 0 0 3.8 0'] },
   { key: 'look', label: '화면', icon: ['M4 5.5h16v10H4z', 'M9 19.5h6', 'M12 15.5v4'] },
+  // 종 — 나를 부르는 법(#1842). 화면(위)이 '내가 무엇을 보나'면, 이건 '내가 무엇을 언제 받나'다.
+  { key: 'notify', label: '알림', icon: ['M12 4.2a5 5 0 0 0-5 5v3.1l-1.5 2.7h13L17 12.3V9.2a5 5 0 0 0-5-5z', 'M10.1 18a1.95 1.95 0 0 0 3.8 0'] },
+  // 열쇠 — 이 화면이 하는 일은 '로그인' 하나다(상태 확인 + 다시 로그인). 위 방패(계정 · 보안)와 겹치지 않는 붓.
+  { key: 'aiacct', label: 'AI 계정 연결', icon: ['M16 4.9a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2', 'M13.5 11 5 19.5', 'M7 17.5l2 2', 'M9.5 15l2 2'] },
+  { key: 'ai', label: 'AI 개인화', icon: ['M12 3.4l1.9 5.7 5.7 1.9-5.7 1.9L12 18.6l-1.9-5.7-5.7-1.9 5.7-1.9z', 'M18.5 16.5l.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7z'] },
+  // 시계 — 이 화면은 '언제 무슨 일이 자동으로 일어나나'를 다룬다(#1898). 개인화(위)가 '무엇을'이면 이건 '언제'.
+  { key: 'auto', label: 'AI 주입 문구', icon: ['M12 4.6a7.4 7.4 0 1 0 0 14.8 7.4 7.4 0 0 0 0-14.8', 'M12 8.2V12l2.6 1.6'] },
   // 슬라이더 — 여기서 고치는 게 아니라 **더 깊은 자리로 가는 문**(#2199). 톱니는 [나] 행이 이미 쓰는 표식이라 겹치지 않게.
   //  맨 끝인 이유: 위 일곱은 '나'의 것이고 이건 그 너머(조직 · AI 능력 · 데이터 · 운영)다 — 슬랙 환경설정의 [고급] 자리.
   { key: 'advanced', label: '고급 설정', icon: ['M20.5 5h-6', 'M10.5 5h-7', 'M20.5 12h-8', 'M8.5 12h-5', 'M20.5 19h-4', 'M12.5 19h-9', 'M14.5 3v4', 'M8.5 10v4', 'M16.5 17v4'] },
@@ -162,7 +161,7 @@ export function openMeModal(opts: MeModalOpts = {}): void {
   // 초점을 창 안으로 — 첫 항목(프로필)에 둔다. 키보드만 쓰는 사람이 Tab 한 번에 목록을 훑을 수 있는 자리다.
   navBtns.get(cur)?.focus();
 
-  // ── 데이터 한 번 — [프로필]과 [AI 개인 규칙]이 같은 레코드를 나눠 쓴다(GET /api/ui/me/profile). ──
+  // ── 데이터 한 번 — [프로필]과 [AI 개인화]이 같은 레코드를 나눠 쓴다(GET /api/ui/me/profile). ──
   void (async () => {
     let data: any;
     try { data = await api('/api/ui/me/profile'); }
@@ -170,18 +169,18 @@ export function openMeModal(opts: MeModalOpts = {}): void {
     // 로그인 수단(#1520)은 있으면 [계정]에 얹고, 없으면(OIDC 미설정 배포) 그 칸만 안 그린다 — 나머지는 그대로 쓴다.
     let logins: any = null;
     try { logins = await api('/api/ui/me/logins'); } catch (_) { /* 부가 정보 — 조용히 넘어간다 */ }
-    // 리브가 온보딩에서 알게 된 것(#1843). 실패해도 [AI 개인 규칙]은 종전대로 열린다 — 그 칸만 안 그린다.
+    // 리브가 온보딩에서 알게 된 것(#1843). 실패해도 [AI 개인화]은 종전대로 열린다 — 그 칸만 안 그린다.
     let liv: any = null;
     try { liv = await api('/api/ui/me/liv-profile'); } catch (_) { /* 옛 서버·조회 실패 — 칸을 접는다 */ }
 
     const saved = (): void => { paintHead(); opts.onSaved?.(); };
     panes.set('profile', profilePane(data, saved));
     panes.set('account', accountPane(data, logins));
+    panes.set('look', lookPane(close));
+    panes.set('notify', notifyPane());
+    const acct = aiAccountPane();  panes.set('aiacct', acct.node); lazy.set('aiacct', acct.init);
     panes.set('ai', aiPane(data, liv));
     const auto = autoPane({ close, pane });  panes.set('auto', auto.node); lazy.set('auto', auto.init);
-    const acct = aiAccountPane();  panes.set('aiacct', acct.node); lazy.set('aiacct', acct.init);
-    panes.set('notify', notifyPane());
-    panes.set('look', lookPane(close));
     const adv = advancedPane(close); panes.set('advanced', adv.node); lazy.set('advanced', adv.init);   // #2199 — 권한 데이터를 더 부르므로 처음 펼 때
     contEl.replaceChildren(...panes.values());
     show(cur);
@@ -232,7 +231,7 @@ function profilePane(data: any, onSaved: () => void): HTMLElement {
   const btn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   btn.addEventListener('click', async () => {
     (btn as any).disabled = true;
-    // body_md 는 안 보낸다 — 서버가 보존하므로 [AI 개인 규칙]이 지워지지 않는다.
+    // body_md 는 안 보낸다 — 서버가 보존하므로 [AI 개인화]이 지워지지 않는다.
     const payload = { display_name: (nameIn as any).value.trim(), nickname: (nickIn as any).value.trim(),
       use_nickname: useNick.checked, ...ava.payload() };
     try {
@@ -292,7 +291,7 @@ function onboardingCard(liv: any): HTMLElement {
   return card;
 }
 
-// ── ② AI 개인 규칙 — 내 AI 가 매 세션 시작에 읽는 개인 레이어(org_member.body_md). ──
+// ── ② AI 개인화 — 내 AI 가 매 세션 시작에 읽는 개인 레이어(org_member.body_md). ──
 //  선택지·직렬화·복원은 me-profile.ts 소유를 그대로 쓴다(PROF_* · profChips · parseMyProfile) —
 //  규약이 두 벌이 되면 관리탭 [내 AI 설정]과 이 창의 저장이 서로를 지운다.
 function aiPane(data: any, liv: any): HTMLElement {
@@ -343,7 +342,7 @@ function aiPane(data: any, liv: any): HTMLElement {
     (btn as any).disabled = false;
   });
 
-  return pane('AI 개인 규칙', '내 AI 가 나에 대해 무엇을 알고 일할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.',
+  return pane('AI 개인화', '내 AI 가 나에 대해 무엇을 알고 일할지 정합니다. 나에게만 적용되고 팀에는 공유되지 않습니다.',
     onboardingCard(liv),
     el('div', { class: 'v2me-k', text: '내가 적는 것' }),
     field('역할', roleIn),
@@ -357,12 +356,12 @@ function aiPane(data: any, liv: any): HTMLElement {
     saveRow(btn, status));
 }
 
-// ── ③ 내 AI 계정 — 내 세션이 **무엇으로, 누구 계정으로** 도나(#1085 카드 그대로). ──
+// ── ③ AI 계정 연결 — 내 세션이 **무엇으로, 누구 계정으로** 도나(#1085 카드 그대로). ──
 //  카드 본체는 me-ai.ts 소유다 — 로그인 세션을 여는 법(claude 는 그 하네스로, codex 는 셸 + device-auth)이
 //  거기 적혀 있고, 그 규칙이 두 벌이 되면 한쪽이 낡는다. 여기선 자리와 문구만 준다.
 function aiAccountPane(): { node: HTMLElement; init: () => void } {
   const host = el('div');
-  const node = pane('내 AI 계정',
+  const node = pane('AI 계정 연결',
     '내 AI 세션이 어떤 AI 로, 누구 계정으로 실행되는지 봅니다. 세션에서 로그인 오류가 나면 여기서 다시 로그인하세요.',
     host);
   node.classList.add('v2me-pane-wide');   // 계정 행은 [이름 · 배지 · 버튼] 한 줄이라 520px 에선 버튼이 접힌다
@@ -450,7 +449,7 @@ function accountPane(data: any, logins: any): HTMLElement {
       el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿉니다.')))));
   }
   if (logins && logins.oidcAvailable) kids.push(field('회사 계정 로그인', companyLoginRow(logins)));
-  //  [내 AI 계정]은 이 창의 화면이 됐다(#1898) — 더는 밖으로 내보내지 않는다.
+  //  [AI 계정 연결]은 이 창의 화면이 됐다(#1898) — 더는 밖으로 내보내지 않는다.
   //  [내 스킬 · 훅]으로 건너가던 '더 자세한 설정' 줄도 뺐다(원준 지시 2026-08-27): 이 칸은
   //  '어떻게 들어오는가'인데 그 줄만 축이 달랐고, 관리탭에 같은 자리가 이미 있다.
   //  남아 있던 [내 스킬 · 훅] 링크는 [고급 설정] ▸ 내 설정으로 옮겼다(#2199) — 설정 화면으로 가는 문은 그 탭 하나다.
@@ -480,7 +479,7 @@ function accountPane(data: any, logins: any): HTMLElement {
 //  ⚠ **기기가 아니라 사람 단위**다(서버 저장). 기기별로 두면 사무실 맥에서 끈 것이 노트북에선 그대로 떠
 //   "껐는데 뜬다"가 된다. 그래서 끄고 켜는 자리도 여기 하나뿐이고, 앱은 이 값을 읽기만 한다.
 //  ⚠ 스위치는 **누르는 순간 저장한다**(저장 버튼 없음). 스위치를 내린 것 자체가 결정이라, 한 번 더 누르게
-//   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인 규칙]이 저장 버튼을 쓰는 것과 다른
+//   하면 "껐는데 안 꺼졌다"가 난다. 텍스트를 고치는 [프로필]·[AI 개인화]이 저장 버튼을 쓰는 것과 다른
 //   이유이고, 그 구분은 일반적인 관례와 같다.
 const NOTIFY_ROWS: Array<{ key: string; label: string; desc: string }> = [
   { key: 'session_waiting', label: 'AI 가 확인을 기다릴 때',

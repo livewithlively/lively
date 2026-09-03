@@ -2,7 +2,7 @@
 //  (#1313 R38, admin.ts 에서 verbatim 분리).
 //  ⚠ web/main.ts 가 changePasswordModal·openMyProfileModal 을 './admin.js' 에서 import 한다 — admin.ts 가
 //   이 모듈을 그대로 재수출해 main.ts 를 무수정으로 둔다(소비자 import 문 무변경 계약).
-//  PROF_* · profChips · parseMyProfile 은 내 프로필 창의 [AI 개인 규칙] 탭(v2/me-modal.ts)이 함께 쓴다 —
+//  PROF_* · profChips · parseMyProfile 은 내 프로필 창의 [AI 개인화] 탭(v2/me-modal.ts)이 함께 쓴다 —
 //   같은 저장 경로(POST /api/ui/me/profile)를 부분 갱신으로 나눠 쓰기 때문에 직렬화 규약이 한 곳이어야 한다.
 //   (관리탭 [내 AI 설정]의 규칙 폼은 그 창으로 옮겨 가며 걷었다 — #1843·#1898.)
 import { api, apiUrl, el, errorNote, logout, personName, profileAvatar, setPersonAvatar, state, toast, uiText, usernameAnchor } from './core.js';
@@ -260,7 +260,7 @@ export async function openMyProfileModal(): Promise<void> {
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true;
-    // body_md 는 **안 보낸다** — 서버가 미전송 필드를 보존하므로 [AI 개인 규칙]이 지워지지 않는다.
+    // body_md 는 **안 보낸다** — 서버가 미전송 필드를 보존하므로 [AI 개인화]가 지워지지 않는다.
     const payload = { display_name: nameIn.value.trim(), nickname: nickIn.value.trim(), ...ava.payload() };
     try {
       const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
