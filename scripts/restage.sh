@@ -116,11 +116,18 @@ if [[ -n "$DIRECT" ]]; then
   # 후보는 '아직 main 에 안 들어간 origin 브랜치'뿐. `--no-merged` 가 그 판정을 ref 순회 1회로 한다
   #  (종전엔 브랜치마다 merge-base 를 불러 620회였다).
   #  ⚠ macOS 기본 bash 는 3.2 라 `mapfile` 이 없다(bash 4+). while-read 로 담는다.
+  #  ⚠ **stage 자신의 사본은 후보가 아니다**(2026-09-03, #2615). stage-guard(#2457)가 stage push 마다
+  #   stage 를 통째로 `stage-snapshot/<날짜>` 로 밀어 넣고, 재조립은 `backup/…`·`stage-orphans/…` 를 남긴다.
+  #   그것들을 후보에 넣으면 **모든 stage 직접 커밋이 자기 사본 덕에 «작업 브랜치에 있음»으로 판정**되어
+  #   고아 검사가 통째로 무력해진다 — 이 검사가 지키려던 그 유실을 그대로 통과시킨다.
+  #   실측: 그래서 `cb69da04`(#1631 폼 재조판, 정본이 어디에도 없음)가 «안전» 으로 나왔다.
+  #   판정의 뜻은 «이 커밋이 **다른 곳에도** 살아 있나» 이고, stage 사본은 그 «다른 곳»이 아니다.
   CAND=()
   while IFS= read -r b; do
     [[ -n "$b" ]] && CAND+=("$b")
   done < <(git for-each-ref --format='%(refname:strip=3)' --no-merged "$BASE_SHA" "refs/remotes/${REMOTE}" \
-             | grep -vxE "HEAD|${STAGE}|${BASE}" || true)
+             | grep -vxE "HEAD|${STAGE}|${BASE}" \
+             | grep -vE "^(stage-snapshot|stage-orphans|backup)/" || true)
   # 후보에서 patch-id 집합을 한 번에 만든다. `git log -p` 의 커밋 헤더 덕에 patch-id 가
   #  "<patch-id> <커밋sha>" 짝을 뱉는다(= git cherry 가 내부에서 하는 것과 같은 판정).
   #
