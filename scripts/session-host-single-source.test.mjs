@@ -45,24 +45,27 @@ const HOST = "src/terminal/session-host.ts";
 const OPS = "src/terminal/session-ops.ts";
 const FD_ADAPTER = "src/terminal/attach-worker-entry.ts";   // 같은 호스트 — fd 이관
 const WS_ADAPTER = "src/node/agent.ts";                     // 다른 호스트 — WS 중계
+const GW_INPROC = "src/terminal/terminal-pty-upgrade.ts";   // 게이트웨이 인프로세스(워커 실패 시 폴백)
 //  ⚠ 이 파일은 «구현이 한 곳인가» 만 본다. «그 구현이 노드에 실제로 실려 나가는가» 는 다른 가드의 몫이다
 //   (`scripts/node-agent-allowed-modules.json` + `scripts/node-agent-bundle-boundary.test.mjs`, 그리고
 //   `src/node/protocol.test.ts` 의 «선언한 op 는 구현이 있다»). op 를 셋째 파일로 또 쪼개면 **그 셋을 함께**
 //   고쳐야 한다 — 서로를 모르는 가드라 하나만 고치면 조용히 어긋난다.
-const ADAPTERS = [FD_ADAPTER, WS_ADAPTER];
+//  attach 를 소유하는 **세 자리**. 셋 다 같은 모듈을 써야 «마지막 소켓» 판정이 한 벌이 된다 —
+//   게이트웨이 폴백이 빠지면 그 세션의 장부가 라우터에 안 이어져 sticky 가 깨진다(불변식 3ᵍ).
+const ADAPTERS = [FD_ADAPTER, WS_ADAPTER, GW_INPROC];
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
 
 // ── S1: 두 어댑터가 세션 호스트를 통해서만 attach 를 소유한다 ────────────────
-t("[S1] 두 전송 어댑터가 세션 호스트를 쓴다", () => {
+t("[S1] attach 를 소유하는 세 자리가 전부 세션 호스트를 쓴다", () => {
   for (const f of ADAPTERS) {
     assert.match(read(f), /from "\.\.?\/(terminal\/)?session-host\.js"/,
       `${f} 가 세션 호스트를 안 쓴다 — 살림을 자기가 다시 갖고 있다는 뜻이다`);
   }
 });
 
-t("[S2] 어댑터는 attach 본체(attachSession)를 직접 부르지 않는다", () => {
+t("[S2] 세 자리 어디도 attach 본체(attachSession)를 직접 부르지 않는다", () => {
   for (const f of ADAPTERS) {
     assert.ok(!/\battachSession\s*\(/.test(code(f)),
       `${f} 가 attachSession 을 직접 부른다 — 그러면 장부(마지막 소켓·유휴·회수)가 그 파일로 새어 나간다`);
@@ -130,9 +133,24 @@ t("[S7b] 세션 호스트 층에 DB 표면이 없다(정본은 게이트웨이 D
 //  «전송 둘» 로 줄이면서 인프로세스 폴백을 지우면 매니지드 공유 게이트웨이의 폭발 반경이 커진다.
 //  T1 은 그 갈래를 건드리지 않는다 — 이 시험이 그 약속이다.
 t("[S8] 게이트웨이의 인프로세스 attach 폴백(fail-open)이 그대로 있다", () => {
-  const src = code("src/terminal/terminal-pty-upgrade.ts");
+  const src = code(GW_INPROC);
   assert.match(src, /attachWorkerHost\.handoff/, "fd 이관 갈래가 사라졌다");
-  assert.match(src, /\battachSession\s*\(/, "인프로세스 폴백이 사라졌다 — 워커 실패 시 attach 가 통째로 깨진다");
+  assert.match(src, /\bgatewayHost\.attach\s*\(/,
+    "인프로세스 폴백이 사라졌다 — 워커 실패 시(K=0·상한·fork 실패) attach 가 통째로 깨진다");
+});
+
+// ── S8b: 불변식 3ᵍ — 폴백도 sticky 다 ───────────────────────────────────────
+//  실측 결함(2026-09-03): 같은 세션이 워커와 게이트웨이에 나뉘어 붙으면, `attachRefs` 가 프로세스마다
+//  따로라 양쪽이 «내가 마지막» 으로 오판한다 → 먼저 닫힌 쪽이 `detach-client -s` 를 쏴 **살아 있는 다른
+//  화면까지 끊는다**(워커1+게이트웨이1 = tmux 클라 2 → 게이트웨이만 닫으니 0). 배선 셋이 다 있어야 막힌다.
+t("[S8b] 폴백이 sticky 하다 — 게이트웨이 소유 표시·거절·해제 셋이 다 이어져 있다", () => {
+  const host = code("src/terminal/attach-worker-host.ts");
+  assert.match(host, /isGatewayOwned\([^)]*\)\s*\)\s*return false/,
+    "게이트웨이 소유 세션을 워커로 보내면 장부가 갈린다");
+  assert.match(host, /claimForGateway\(/, "폴백했는데 소유 표시를 안 하면 다음 attach 가 워커로 간다");
+  const gw = code(GW_INPROC);
+  assert.match(gw, /onSessionEmpty[\s\S]{0,80}releaseSession/,
+    "세션이 비어도 소유가 안 풀리면 그 세션은 영영 워커로 못 간다");
 });
 
 // ── S9: shutdown 은 **끝나는 길에서만** 부른다 ──────────────────────────────
