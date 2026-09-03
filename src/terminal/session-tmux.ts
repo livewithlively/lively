@@ -12,15 +12,17 @@
 //  · LIVELY_SESSION_ENSURE = "<프로그램> … {slug}" — 세션 컨테이너를 미리 확보하는 훅(매니지드: session-ensure-relay.cjs).
 //    표준입력으로 요청 JSON, 표준출력으로 JSON {container, created}. 비-0 은 실패다. **이게 설정된 배포(=매니지드)면
 //    격리 새 세션은 항상 세션 컨테이너 안 tmux 다.** 셀프호스트는 이 훅이 없어 종전(wrapAsMember=box-spawn) 그대로.
-//  기존 세션은 어느 쪽이든 안 바뀐다(태어날 때 정해진다). ⚠ 호출 시점에 env 를 읽는다(tmuxExecArgv 와 같은 이유).
+//  기존 세션은 어느 쪽이든 안 바뀐다(태어날 때 정해진다). ⚠ 값은 실행 토폴로지에서 온다(#2599 T2) —
+//  이 판정이 곧 토폴로지의 `isolation === "container"` 이고, 「배포 종류를 훅 하나로 추론」하던 자리를 이름으로 끌어올린 것이다.
 //
 // ⚠ 이 모듈은 노드 에이전트 번들에도 실린다(sessions.ts 가 import) — DB·자격 모듈을 끌어오지 않는다.
 import { spawn } from "node:child_process";
 import { BOX_SPAWN } from "./terminal-isolation.js";
+import { execTopology, type ExecTopology } from "../exec-topology.js";   // #2599 T2 — 「매니지드인가」의 단일 출처
 
-/** (순수) 세션 컨테이너 확보 훅이 설정됐나. */
-export function sessionEnsureConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !!(env.LIVELY_SESSION_ENSURE || "").trim();
+/** (순수) 세션 컨테이너 확보 훅이 설정됐나. #2599 T2 — env 가 아니라 토폴로지를 받는다(시험은 computeExecTopology 로 표면을 만든다). */
+export function sessionEnsureConfigured(t: ExecTopology = execTopology()): boolean {
+  return !!t.hooks.sessionEnsure;
 }
 
 /**
@@ -28,16 +30,16 @@ export function sessionEnsureConfigured(env: NodeJS.ProcessEnv = process.env): b
  *  #2546 (4단계) — 옛 경로를 없앴으므로 **매니지드(= ensure 훅 설정)면 항상 참**이다. 슬러그가 없으면(단일 테넌트
  *  셀프호스트) 거짓 — 훅에 테넌트 컨텍스트를 줄 수 없다. 셀프호스트(훅 없음)도 거짓 → wrapAsMember(box-spawn) 그대로.
  */
-export function tmuxInSessionContainer(slug: string | null, env: NodeJS.ProcessEnv = process.env): boolean {
-  return !!slug && sessionEnsureConfigured(env);
+export function tmuxInSessionContainer(slug: string | null, t: ExecTopology = execTopology()): boolean {
+  return !!slug && sessionEnsureConfigured(t);
 }
 
 /**
  * (순수) 훅 argv. `{slug}` 는 테넌트로 치환한다 — 컨텍스트가 없으면 **던진다**(기본값으로 접으면 남의 테넌트에 컨테이너를 만든다).
  *  설정이 없으면 빈 배열(호출자가 «이 배포는 옛 경로» 로 읽는다).
  */
-export function sessionEnsureArgv(slug: string | null, env: NodeJS.ProcessEnv = process.env): string[] {
-  const raw = (env.LIVELY_SESSION_ENSURE || "").trim();
+export function sessionEnsureArgv(slug: string | null, t: ExecTopology = execTopology()): string[] {
+  const raw = t.hooks.sessionEnsure;
   if (!raw) return [];
   if (!raw.includes("{slug}")) return raw.split(/\s+/);
   if (!slug) throw new Error("세션 컨테이너 확보 훅에 테넌트 컨텍스트가 필요합니다 — 컨텍스트 밖에서 호출됐습니다");

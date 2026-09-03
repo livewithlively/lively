@@ -13,6 +13,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
+import { execTopology } from "../exec-topology.js";   // #2599 T2 — 배포 훅·경로·킬스위치의 단일 출처
 
 const execFileAsync = promisify(execFile);
 
@@ -33,17 +34,17 @@ export function osUsername(slug: string): string { return `${OS_USER_PREFIX}${sl
 //  ⚠ 그래서 "업데이트=코드"는 동작을 안 바꾸고, "install-isolation + provision=셋업"이 곧 활성 신호가 된다.
 //  LIVELY_MEMBER_ISOLATION=off 면 하드 비활성(킬스위치 — 긴급 롤백). 그 외 값(unset 포함)은 활성.
 export function isolationEnabled(): boolean {
-  return process.env.LIVELY_MEMBER_ISOLATION !== "off";
+  return execTopology().isolation !== "none";
 }
 
 // 게이트웨이가 sudoers 로 그 멤버 계정에서 실행하도록 허용된 **고정 wrapper**(root 소유·멤버 비쓰기).
 //  sudoers 의 Cmnd 경로와 **문자열이 일치**해야 한다(불변식). 배포가 /opt/lively/libexec/box-spawn 로 설치.
-export const BOX_SPAWN = process.env.LIVELY_BOX_SPAWN || "/opt/lively/libexec/box-spawn";
+export const BOX_SPAWN = execTopology().hooks.boxSpawn;
 
 // per-session cgroup 메모리 격리(#1059 D)의 root wrapper. 게이트웨이가 root 로 이것만 호출해 systemd-run
 //  --scope 로 세션을 MemoryHigh/Max scope 에 가둔다(claude 는 네이티브라 힙제한 불가 → cgroup 이 유일 수단,
 //  비-root 게이트웨이는 polkit 때문에 cgroup 불가 → root wrapper). sudoers Cmnd·설치경로와 문자열 일치(불변식).
-export const BOX_CGSPAWN = process.env.LIVELY_BOX_CGSPAWN || "/opt/lively/libexec/box-cgspawn";
+export const BOX_CGSPAWN = execTopology().hooks.boxCgspawn;
 
 // 세션을 **어디에 담아 띄울지**를 배포자가 갈아끼우는 확장점(선택). 설정되면 위 두 경로보다 우선한다.
 //
@@ -64,9 +65,10 @@ export const BOX_CGSPAWN = process.env.LIVELY_BOX_CGSPAWN || "/opt/lively/libexe
 //   멤버 uid 로 잠깐 도는 일회성 exec 이지 "세션"이 아니다. 처음엔 이 구분 없이 전부 훅으로 보냈다가
 //   파일 op 마다 세션 컨테이너를 띄우려 해서 깨졌다(실측). 훅을 쓰는 배포가 "세션 하나 = 컨테이너 하나"
 //   같은 무거운 일을 한다면, 그 무거운 일이 파일 존재 확인에서도 벌어지면 안 된다.
-//  ⚠ 위 둘과 달리 **호출 시점에 읽는다**. BOX_SPAWN/BOX_CGSPAWN 은 설치 경로(정적)지만 이건 배포 정책
-//   스위치라, 프로세스 수명 중 바뀔 수 있는 값으로 다루는 편이 정직하고 테스트도 모듈 캐시를 안 건드린다.
-export function sessionSpawnPath(): string { return process.env.LIVELY_SESSION_SPAWN || ""; }
+//  ⚠ 위 둘과 달리 **함수**로 둔다 — 다만 종전의 근거(«프로세스 수명 중 바뀔 수 있는 값»)는 #2599 T2 로
+//   무효가 됐다. 프로덕션에서는 토폴로지가 부팅에 확정되므로 이 함수도 **매번 같은 값**을 준다.
+//   함수로 남기는 실익은 하나뿐이다: 시험이 모듈 캐시를 안 건드리고 표면을 갈아끼울 수 있다.
+export function sessionSpawnPath(): string { return execTopology().hooks.sessionSpawn; }
 
 // per-session 메모리 한도(#1059 D) — MemoryHigh/Max(MB). 0/미지정 = 그 축 무제한(box-cgspawn 이 생략).
 export interface CgroupLimit {
@@ -150,10 +152,11 @@ export async function osUserExists(osUser: string): Promise<boolean> {
  * 게이트웨이가 파일이 있는 호스트와 **다른 호스트**에 있는 배포(예: 파일은 실행 노드, 게이트웨이는
  *  중앙 컨테이너)에서 켠다. 그때 파일 op 는 로컬 uid 강하(sudo box-spawn)가 아니라 지정한 중계
  *  프로그램으로 나간다 — 계약은 terminal-member-fs.memberExecArgv 참조.
- * ⚠ **호출 시점에 읽는다**(tmuxExecArgv 와 같은 이유 — 모듈 로드 시점 고정은 부팅 순서·테스트에서 깨진다).
+ * #2599 T2 — 이 질문은 토폴로지의 «저장 지역성» 그 자체다(중계가 설정됐다 = 파일이 여기 없다).
+ *  종전엔 이름 없는 사후 추론이었고, 지금은 필드 이름이 그 뜻을 말한다.
  */
 export function memberExecConfigured(): boolean {
-  return !!(process.env.LIVELY_MEMBER_EXEC || "").trim();
+  return execTopology().storage === "detached";
 }
 
 // 세션 격리 게이트 — 활성 && 인프라 설치됨(box-spawn) && 그 멤버 OS 유저 존재 → osUser 반환, 아니면 null(→ 공유 폴백).

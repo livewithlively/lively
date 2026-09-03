@@ -28,6 +28,7 @@ import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시�
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessionContainerViaRelay } from "./session-tmux.js";   // #2545 — 새 세션은 자기 세션 컨테이너 안 tmux(3단계)
+import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir, memberWriteFile, memberShOut } from "./terminal-member-fs.js";
@@ -825,7 +826,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     await tmux(["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"]);
     // v6 프로젝트 세션은 실행 전에 DB current가 반드시 존재해야 한다. DB가 SoT인데 이 기록을 best-effort로
     // 삼키면 첫 훅이 미연결로 보고 새 프로젝트를 중복 생성한다. 노드는 DB가 없으므로 게이트웨이 릴레이가 기록한다.
-    if (input.projectSrc !== "org" && !process.env.LIVELY_NODE_TOKEN) {
+    if (input.projectSrc !== "org" && !onNode()) {
       try {
         const cur = await setExecutionSessionProject({ id, owner: ownerId(user), harness: harness.key, projectId: input.projectId });
         if (!cur) throw new Error("execution session owner claim failed");
@@ -881,7 +882,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //   사람이 고른 임의 폴더면 사람이 답한다(autoTrustWorkspace). 이 판정을 빼면 프로젝트 세션의 첫 지시가 대화상자에 막힌다(실측).
     //   ⚠ 값은 위 신뢰 블록에서 **이미 냈다**(`trustOk`) — 여기서 다시 계산하면 파생지가 둘이 되어 한쪽만 고쳐지는
     //    어긋남이 난다(#2478 이 정확히 그 모양이었다: 이 층은 가드가 있고 파일 시딩 층은 없었다).
-    const onNode = !!process.env.LIVELY_NODE_TOKEN;   // 노드 에이전트 프로세스에만 있는 값(게이트웨이엔 없다 — 안전한 판별자)
+    const isNode = onNode();   // #2599 T2 — 실행 토폴로지가 답한다(게이트웨이엔 노드 토큰이 없다)
     if (chatMode === "app-server") {
       // ★ app-server 세션의 pane 은 **셸**이다. 그런데 아웃박스 배달자는 "입력창이 뜨면 send-keys" 로 넣는다 —
       //  그 세션에서는 사람의 첫 문장이 **zsh 프롬프트에 타이핑**된다(명령으로 실행되거나 그냥 사라진다).
@@ -901,7 +902,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
           await enqueuePrompt(id, prompt, { trustOk }).catch(() => undefined);
         }
       })();
-    } else if (onNode) {
+    } else if (isNode) {
       void import("./session-first-prompt.js")
         .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk }))
         .catch((e) => { console.warn(`[terminal] 노드 첫 지시 주입 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });

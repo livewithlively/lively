@@ -17,6 +17,7 @@ import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type Or
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
 import { sharesGatewayTmux, hasSelfProbeCandidate, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
 
@@ -246,6 +247,10 @@ function dropSelfNodeConn(key: string): void {
  */
 export async function looksLikeGatewayBox(nodeSessionIds: readonly string[]): Promise<boolean> {
   if (!nodeSessionIds.length) return false;
+  // #2599 T2 — 이 판정이 **성립하는 자리인가**는 실행 토폴로지가 답한다. 게이트웨이의 tmux 가 이 호스트에
+  //  없으면(매니지드 중계·이 프로세스가 노드) 노드가 그것을 공유할 길이 없으므로, tmux 를 묻는 일 자체가
+  //  낭비다. 증거 규칙(sharesGatewayTmux)과 사유 문구(selfNodeMessage)는 #2592 가 그대로 소유한다.
+  if (!selfNodePossible()) return false;
   try {
     const { listSessionsRaw } = await import("../terminal/sessions.js");
     const mine = new Set((await listSessionsRaw({ strict: true })).map((s) => s.id));

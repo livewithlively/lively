@@ -11,28 +11,32 @@ import path from "node:path";
 import test from "node:test";
 import { BOX_SPAWN } from "./terminal-isolation.js";
 import { ensureSessionContainerViaRelay, sessionEnsureArgv, sessionEnsureConfigured, sessionPaneArgv, tmuxInSessionContainer } from "./session-tmux.js";
+import { computeExecTopology } from "../exec-topology.js";
 
+// #2599 T2 — 이 판정들은 env 가 아니라 **실행 토폴로지**를 받는다. 시험은 표면(env 한 벌)에서 토폴로지를 만들어 넘긴다.
 const ENV_ON = { LIVELY_SESSION_ENSURE: "node /opt/lively/libexec/session-ensure-relay.cjs {slug}" };
+const ON = computeExecTopology(ENV_ON);
+const OFF = computeExecTopology({});
 
 test("① 스위치(#2546 4단계) — ensure 훅 + 슬러그면 항상 새 경로", () => {
   //  ensure 훅이 있으면(=매니지드) 어느 테넌트든 새 경로다.
-  assert.equal(tmuxInSessionContainer("e2e-b-20260902-2555", ENV_ON), true);
-  assert.equal(tmuxInSessionContainer("lively-46e3", ENV_ON), true, "훅만 있으면 모든 테넌트 새 경로");
+  assert.equal(tmuxInSessionContainer("e2e-b-20260902-2555", ON), true);
+  assert.equal(tmuxInSessionContainer("lively-46e3", ON), true, "훅만 있으면 모든 테넌트 새 경로");
   //  훅이 없으면(=셀프호스트) wrapAsMember 경로. 컨테이너를 먼저 만들 길이 없다.
-  assert.equal(tmuxInSessionContainer("e2e-b-x", {}), false, "훅 없음 = 셀프호스트 경로");
+  assert.equal(tmuxInSessionContainer("e2e-b-x", OFF), false, "훅 없음 = 셀프호스트 경로");
   //  슬러그가 없으면(단일 테넌트 셀프호스트) 훅이 있어도 셀프호스트 경로 — 훅에 테넌트 컨텍스트를 줄 수 없다.
-  assert.equal(tmuxInSessionContainer(null, ENV_ON), false, "테넌트 컨텍스트가 없으면 셀프호스트 경로");
+  assert.equal(tmuxInSessionContainer(null, ON), false, "테넌트 컨텍스트가 없으면 셀프호스트 경로");
   //  ★ 5단계(#2547): 3단계의 글롭 게이트(LIVELY_TMUX_IN_SESSION)는 코드에서 흔적까지 사라졌다 — 되살아나면 여기서 걸린다.
   assert.ok(!/LIVELY_TMUX_IN_SESSION/.test(fs.readFileSync(path.join(process.cwd(), "src", "terminal", "session-tmux.ts"), "utf8")), "글롭 게이트가 되살아났다");
 });
 
 test("① ensure 훅 argv — {slug} 치환, 없으면 빈 배열, 컨텍스트 없으면 던진다(남의 테넌트로 폴백 금지)", () => {
-  assert.equal(sessionEnsureConfigured({}), false);
-  assert.equal(sessionEnsureConfigured(ENV_ON), true);
-  assert.deepEqual(sessionEnsureArgv("acme", ENV_ON), ["node", "/opt/lively/libexec/session-ensure-relay.cjs", "acme"]);
-  assert.deepEqual(sessionEnsureArgv("acme", {}), []);
-  assert.throws(() => sessionEnsureArgv(null, ENV_ON), /테넌트 컨텍스트/);
-  assert.deepEqual(sessionEnsureArgv(null, { LIVELY_SESSION_ENSURE: "/usr/local/bin/ensure" }), ["/usr/local/bin/ensure"], "{slug} 가 없으면 그대로");
+  assert.equal(sessionEnsureConfigured(OFF), false);
+  assert.equal(sessionEnsureConfigured(ON), true);
+  assert.deepEqual(sessionEnsureArgv("acme", ON), ["node", "/opt/lively/libexec/session-ensure-relay.cjs", "acme"]);
+  assert.deepEqual(sessionEnsureArgv("acme", OFF), []);
+  assert.throws(() => sessionEnsureArgv(null, ON), /테넌트 컨텍스트/);
+  assert.deepEqual(sessionEnsureArgv(null, computeExecTopology({ LIVELY_SESSION_ENSURE: "/usr/local/bin/ensure" })), ["/usr/local/bin/ensure"], "{slug} 가 없으면 그대로");
 });
 
 test("② 판 명령 — box-spawn --cwd <dir> <launch…>; 셸 세션(launch 비면)은 box-spawn 이 로그인 셸을 띄운다", () => {

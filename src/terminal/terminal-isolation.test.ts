@@ -2,6 +2,7 @@
 // 실행: npm run build && node dist/terminal/terminal-isolation.test.js
 import assert from "node:assert/strict";
 import { osUsername, wrapAsMember, cgspawnArgv, sessionSpawnArgv, cgroupInfraReady, isolationEnabled, BOX_SPAWN, BOX_CGSPAWN, OS_USER_PREFIX } from "./terminal-isolation.js";
+import { execTopology } from "../exec-topology.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -200,6 +201,17 @@ t("★ session:false 를 명시해도 훅을 타지 않는다", () => {
   withHook("/opt/x/session-spawn", () => {
     assert.ok(!wrapAsMember("box_x", ["sh"], undefined, undefined, { session: false }).includes("/opt/x/session-spawn"));
   });
+});
+
+// #2599 T2 — 이 둘은 **모듈 로드 시점**에 토폴로지를 물어 상수로 얼린다. 그 계산은 진입점의
+//  freezeExecTopology() 보다 **먼저** 일어나므로(ESM: import 본문이 먼저), 확정된 값과 어긋날 여지가 구조적으로 있다.
+//  오늘은 부팅 중에 이 두 env 를 쓰는 코드가 없어 같지만(단일출처 시험 S6 가 그 «없음»을 지킨다),
+//  **같다는 사실 자체는 아무도 안 재고 있었다**(블라인드 검증 2026-09-03 지적). sudoers Cmnd 와 문자열이
+//  일치해야 하는 값이라 어긋나면 격리가 통째로 깨진다.
+t("T2 모듈 로드 상수(BOX_SPAWN·BOX_CGSPAWN)가 토폴로지의 값과 같다 — 확정 전 스냅샷이 어긋나면 격리가 깨진다", () => {
+  const topo = execTopology();
+  assert.equal(BOX_SPAWN, topo.hooks.boxSpawn);
+  assert.equal(BOX_CGSPAWN, topo.hooks.boxCgspawn);
 });
 
 console.log(`\n${pass} passed`);
