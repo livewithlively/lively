@@ -697,11 +697,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const doorRow = boxRow(curSession());
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
+        // ⭐ 순서는 **이름 › 번호 › 상태**(원준 2026-09-03: "프로젝트 이름이 제일 왼쪽으로 가야 밸런스가 맞는다").
+        //  종전엔 눈썹(#id · 상태)이 앞에 서서, 왼쪽 끝에 오는 것이 제목이 아니라 좌표였다 — 화면의 주인공은
+        //  이름인데 12.5px 회색 글자가 25px 굵은 글자보다 먼저 읽혔다. 이름을 왼쪽 끝으로 되돌리고
+        //  좌표·상태는 그 뒤 꼬리표로 붙인다(같은 줄인 것은 그대로 — 문패는 한 줄이라는 결정은 유효하다).
+        titleNode(String(p.name || '프로젝트 #' + id)),
         el('div', { class: 'pn-eyebrow' },
           loose ? el('span', { text: '아직 어느 프로젝트에도 붙지 않았어요.' }) : el('span', { class: 'mono', text: '#' + p.id }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
-          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t })),
-        titleNode(String(p.name || '프로젝트 #' + id))),
+          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }))),
       el('div', { class: 'pn-door-r' },
         facesNode(doorRow),
         shareNode(doorRow),
