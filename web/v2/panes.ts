@@ -23,7 +23,7 @@
 //  서랍에서 세션을 갈아 끼울 때 이 셸은 다시 그리지 않는다(자료·지식·문패가 그대로 산다) — 주소만 바뀐다.
 //
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
-import { anchoredPopover, api, apiUrl, el, personFace, toast, TOKEN_KEY } from '../core.js';
+import { anchoredPopover, api, apiUrl, el, personFace, sv, toast, TOKEN_KEY } from '../core.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 곁칸 배치는 이 창의 사실
 import { canOpenInAside, openInAside } from './aside-slot.js';
 import { makeSplitter } from './split.js';
@@ -39,6 +39,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
 import { type V2Data } from './views.js';
+import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 
 export interface PanesOpts {
   data: () => V2Data;
@@ -55,9 +56,13 @@ export interface PanesOpts {
   onSessionCreated?: (row: any) => void;
   /** 세션 탭에서 고친 이름 — main.ts 의 renameSession 이 서버·사이드바·셸 탭·세션 머리줄까지 한 번에 갱신한다. */
   onRenameSession?: (id: string, name: string) => Promise<void>;
+  /** 문패 연필로 고친 프로젝트 이름 — main.ts 의 renameProject 가 서버·목록·사이드바·탭까지 한 번에 갱신한다(#2579). */
+  onRenameProject?: (id: number, name: string) => Promise<void>;
 }
 export interface PanesHandle {
   destroy(): void;
+  /** 문패만 그 자리에서 다시 그린다 — 이름을 다른 화면에서 바꿨을 때 8초 틱을 기다리지 않게(#2579). */
+  repaintDoor(): void;
   /** 이 셸을 '새 세션 자리'로 돌린다 — 사이드바 [＋]와 문패 [＋ 세션]이 같은 곳을 부른다(#1719 원준 2026-08-20). */
   newSession(): void;
 }
@@ -190,7 +195,16 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     }
   })();
 
-  const pj = (): any => (loose ? { id: 0, name: '프로젝트 없는 세션' } : (detail && detail.project) || { id, name: '프로젝트 #' + id });
+  //  ⭐ 이름만은 **셸 목록**에서 가져온다(#2579 — 판단은 lib/door-name.ts 한 자리에).
+  //   `detail` 은 이 탭을 열 때 한 번 읽고 마는데(refreshDetail 은 마운트와 「프로젝트 상세」 변경에서만 돈다),
+  //   이름은 다른 화면에서도 바뀐다 — 프로젝트 탭 상세, 사이드바 줄 더블클릭. 그래서 종전엔 이 문패만
+  //   **탭을 닫았다 열기 전까지 옛 이름을 들고 있었다**(8초 틱은 옛 값으로 다시 그릴 뿐이다).
+  const pj = (): any => {
+    if (loose) return { id: 0, name: '프로젝트 없는 세션' };
+    const base = (detail && detail.project) || { id, name: '프로젝트 #' + id };
+    const name = doorProjectName(opts.data().projects as any, id, String(base.name || ''));
+    return name === base.name ? base : { ...base, name };
+  };
 
   // ── 발자취 — **세션마다 한 벌**, 그릇은 셸이 쥔다(원준 2026-08-20) ─────────────────
   //  왜 타임라인 칸이 아니라 여기서 만드나: 재료는 세션 화면(session-chat)이 대화를 읽으며 흘려 준다.
@@ -718,12 +732,50 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   맞는 주소는 **`#/projects2/p/<id>`** — 그 프로젝트의 상세 화면(본문·할 일·보드)이다.
   //  아이콘은 이 굵은 글자가 **프로젝트 이름**임을 말한다(세션 이름과 한 화면에 있어 둘이 헷갈렸다).
   //  '프로젝트 없는 세션'(loose)은 갈 곳이 없으므로 평범한 제목으로 둔다.
+  //  ── 이름 고치기는 **연필**로 (원준 2026-09-03) ────────────────────────────────
+  //   위 결정(제목 클릭 = 이동)은 그대로 두되, 종전엔 이 화면에서 이름을 고칠 길이 **아예 없었다** — 사람은
+  //   「사이드바 줄 더블클릭」을 미리 알고 있어야 했다. 세션 이름 옆엔 연필이 있는데 프로젝트 이름 옆엔 없으니
+  //   같은 화면 안에서 규칙이 둘이었다. 그래서 연필을 붙인다: **그림도 손짓도 세션 이름과 같다**
+  //   (session-chat.ts penBtn/startRename — 같은 path, Enter=저장 · Esc=취소 · 다른 데 누르면 저장).
+  function startRenameProject(host: HTMLElement, cur: string): void {
+    const input = el('input', { class: 'pn-title-in', type: 'text', maxlength: '200', value: cur,
+      'aria-label': '프로젝트 이름', spellcheck: 'false' }) as HTMLInputElement;
+    let closed = false;
+    const cancel = (): void => { if (closed) return; closed = true; paintDoor(); };
+    const save = async (): Promise<void> => {
+      if (closed) return;
+      const to = input.value.replace(/\s+/g, ' ').trim();
+      if (!to || to === cur) { cancel(); return; }
+      closed = true; input.disabled = true;
+      try {
+        await opts.onRenameProject!(id, to);
+        if (detail && detail.project) detail.project.name = to;   // 이 판이 든 사본도 곧바로 새 이름으로
+        toast('프로젝트 이름을 바꿨어요.');
+      } catch (e: any) { toast('이름을 바꾸지 못했습니다 — ' + ((e as Error)?.message || e), true); }
+      paintDoor();
+    };
+    input.onkeydown = (e: KeyboardEvent) => {
+      if (e.isComposing) return;             // 한글 조합 중의 Enter 는 확정이지 저장이 아니다
+      if (e.key === 'Enter') { e.preventDefault(); void save(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    };
+    input.onblur = () => { void save(); };   // 다른 데를 누르면 그대로 저장(취소는 Esc)
+    host.replaceChildren(input);
+    input.focus(); input.select();
+  }
   function titleNode(name: string): HTMLElement {
     if (loose) return el('h1', { class: 'pn-title', text: name });
-    return el('h1', { class: 'pn-title' },
+    const h = el('h1', { class: 'pn-title' },
       el('a', { class: 'pn-title-btn', href: '#/projects2/p/' + id, title: name + ' — 프로젝트 전체 화면으로 갑니다' },
         pnIcon('proj', 'pn-title-ic'),
         el('span', { class: 'pn-title-t', text: name })));
+    if (opts.onRenameProject) h.append(el('button', {
+      class: 'pn-title-penbtn', type: 'button', 'aria-label': '프로젝트 이름 바꾸기',
+      title: '프로젝트 이름 바꾸기 — 제목을 누르면 그 프로젝트로 갑니다',
+      onclick: () => startRenameProject(h, name),
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'pn-title-pen', 'aria-hidden': 'true' },
+      sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }))));
+    return h;
   }
 
   function resetLayout(): void {
@@ -788,6 +840,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   return {
     newSession,
+    repaintDoor(): void { paintDoor(); },
     destroy(): void {
       wrap.removeEventListener('pn:open-web', onOpenWeb);
       window.removeEventListener('message', onMsg);
