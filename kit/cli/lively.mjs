@@ -1717,7 +1717,7 @@ async function gatherStatus() {
     node: null,
   };
   try {
-    const { nodeCommands: _n, nodeStatus, nodeConnectedFrom, nodeSleepInfoFrom } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    const { nodeCommands: _n, nodeStatus, nodeConnectedFrom, nodeSleepInfoFrom, nodeSelfFrom } = await import(new URL("./cmd-node.mjs", import.meta.url));
     if (typeof nodeStatus === "function") st.node = nodeStatus();
     // '붙어 있는가' 축(#1541) — 프로세스가 돌아도 게이트웨이엔 오프라인일 수 있다(절전 뒤 좀비, 실측 3시간·나흘).
     //  게이트웨이에 못 물으면 null(모름) — false 로 눕히면 정상 노드를 '끊김' 이라 거짓말한다.
@@ -1725,6 +1725,8 @@ async function gatherStatus() {
       try {
         const payload = await api("/api/ui/nodes", { timeoutMs: 5000 });
         st.node.connected = nodeConnectedFrom(payload, st.node.id);
+        // #2592 — 게이트웨이가 판정한 self 를 그대로 나른다. 못 읽으면 null(모름) — 데스크톱은 확답일 때만 건너뛴다.
+        if (typeof nodeSelfFrom === "function") st.node.selfBox = nodeSelfFrom(payload, st.node.id);
         // #1849 — "붙어 있나" 옆의 **왜 안 붙어 있나**. 서버가 만든 문구를 그대로 나른다(문구 출처 단일화).
         if (typeof nodeSleepInfoFrom === "function") st.node.sleep = nodeSleepInfoFrom(payload, st.node.id);
       } catch { st.node.connected = null; }
