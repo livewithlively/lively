@@ -4,9 +4,12 @@
 //   옮겨 갔다(#1843 이 그 창을 만들고 #1898 이 이쪽 사본을 걷었다) — 같은 레코드를 고치는 폼이 두 화면에
 //   있으면 어느 쪽이 정본인지 아무도 모른다. 직렬화 규약(PROF_* · profChips · parseMyProfile)은 그대로
 //   me-profile.ts 소유이고, 이제 그 창(v2/me-modal.ts)만 쓴다.
-import { api, busy, cardHead, el, errorNote, state, toast, uiText, withTip } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime, state, toast, uiText, withTip } from './core.js';
+import { overlay } from './ui-primitives.js';
 import { sessionTermUrl } from './lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { sectionHead } from './admin-widgets.js';
+//  헤드리스 토큰을 다시 넣는 폼 — 자격 금고 소유 그대로 부른다(여기서 폼을 다시 만들지 않는다).
+import { svcTokenForm } from './admin-credentials.js';
 //  ★ #2477 — «화면에서 끝나는 로그인» 의 프로토콜은 한 벌이다(처음 설정과 공유). 여기선 그리기만 한다.
 import {
   isInlineCardHarness, startInlineAiLogin, ensureLoginTerminal, loginTerminalSrc, loginTerminalPopoutUrl,
@@ -230,6 +233,48 @@ function aiAccountRow(a, mySessions, reload) {
     //   **아무 일도 안 일어난다**(오류도 없다). 실측(2026-09-01, 상민님 신고)으로 밟았다.
     panel);
 }
+// ── 헤드리스 인증 실패 줄(#1675 → 여기로 옮겨 되살림, 2026-09-03) ────────────────────────
+//  **무엇이 다른가:** 위 계정 행들은 «내가 앉아서 쓰는 세션» 이 무엇으로 도는지다. 이 줄은 «사람이 안 보는
+//   동안 도는 것»(증류 · 분류 · 에이전트 크론 · 위탁)이 무엇으로 도는지다 — 그 실행은 내가 등록해 둔
+//   `claude setup-token`(member_secret kind=claude_setup_token)을 빌려 **내 Claude 계정으로** 돈다
+//   (src/node/task-scheduler.ts — CLAUDE_CODE_OAUTH_TOKEN 으로 리스).
+//  **왜 실패를 화면이 말해야 하나:** 그 토큰이 폐기·만료되면 자동 작업이 auth/init 에서 막히는데, 화면은
+//   아무 데도 안 변한다 — 증류가 안 돌고 크론이 안 도는 것을 며칠 뒤에 안다. #1675 가 그래서 배지를 만들었다.
+//  ⚠ **그 배지가 한동안 어디에도 안 떴다.** 배지는 [외부 서비스]의 «Claude (헤드리스 실행)» 행에 붙어
+//   있었는데, #2243 이 그 앱을 `LOGIN_SERVICES.hidden` 으로 내렸고 me-logins 의 `partition` 은 hidden 을
+//   네 버킷 전부에서 건너뛴다 → 행이 안 만들어지니 배지도 못 붙었다(주소로 여는 상세에도 없었다).
+//   그래서 **자리를 옮겨** 되살린다: 여기는 앱 카탈로그가 아니라 «내 AI 가 무엇으로 도나» 를 보는 화면이라,
+//   목록에서 내려도 사라지지 않는다. 신호 출처는 그대로 서버 한 곳이다(me/credentials 의 headless_auth_failure).
+//  ⚠ 실패가 **마지막 등록보다 나중**일 때만 말한다 — 다시 등록했으면 지난 실패는 이미 해결된 것이다.
+function headlessAuthWarn(creds: any, reload: () => void): HTMLElement | null {
+  const fail = creds?.headless_auth_failure;
+  if (!fail) return null;
+  const cred = (creds.credentials || []).find((c: any) => c.kind === 'claude_setup_token');
+  if (!cred?.has_secret) return null;   // 등록한 적 없는 사람에게 남의 실패를 보여주지 않는다
+  const failAt = fail.at ? new Date(fail.at).getTime() : 0;
+  const setAt = cred.updated_at ? new Date(cred.updated_at).getTime() : 0;
+  if (!(failAt > setAt)) return null;
+  //  ⚠ 카드 안에 카드를 만들지 않는다(디자인시스템 §9 — me-logins.ts 가 같은 자리에 적어 둔 규칙).
+  //   이 카드 body 의 **맨 위 한 줄**로 앉힌다: 계정 행들을 읽기 전에 먼저 눈에 들어와야 하는 사실이다.
+  return el('div', { class: 'svc-conn-blurb', style: 'margin:0 0 12px' },
+    el('span', { class: 'pill pill-warn', text: '인증 실패' }),
+    el('span', { text: ' ' + relTime(fail.at) + ' · ' + String(fail.label || '')
+      + ' — 사람 없이 도는 작업(증류 · 분류 · 에이전트 크론 · 위탁)이 내 Claude 계정으로 인증하지 못했습니다.'
+      + ' 터미널에서 `claude setup-token` 을 다시 실행해 나온 토큰으로 바꾸세요.'
+      + ' 내 PC(노드)에서 실행된 작업이었다면 그 PC 의 Claude 로그인을 다시 하셔야 합니다 —'
+      + ' 그 경우 이 안내는 30일 뒤 저절로 사라집니다.'
+      + ' 이 실패로 멈춘 예약 작업이 있다면 관리 ▸ 자동화에서 다시 켜세요.' }),
+    el('div', { class: 'admin-actions', style: 'margin:8px 0 0' },
+      el('button', {
+        type: 'button', class: 'btn btn-ghost btn-sm', text: '토큰 교체',
+        onclick: () => {
+          const host = el('div', { class: 'svc-form-host', style: 'min-width:min(460px, 78vw)' });
+          const back = overlay('Claude 헤드리스 토큰 교체', host);
+          host.append(svcTokenForm('claude_setup_token', () => { back.remove(); reload(); }));
+        },
+      })));
+}
+
 function myAiAccountsCard() {
   const body = el('div');
   // 제목이 '내 AI 계정'이면 거짓말이 될 수 있다 — 구성원별 격리가 없는 서버에서는 아래 상태가 **서버 공용 계정**의
@@ -241,15 +286,18 @@ function myAiAccountsCard() {
     busy(body, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
     try {
       // 세션은 실패해도 계정 카드는 보여준다(개수는 부가정보) — 터미널이 없는 배포에서도 로그인 상태는 유효하다.
-      const [acc, ses] = await Promise.all([
+      //  자격도 같다 — 못 읽으면 헤드리스 경고 줄만 없고 계정 행은 그대로 뜬다(부가 신호 하나가 화면을 못 잡아먹는다).
+      const [acc, ses, creds] = await Promise.all([
         api('/api/ui/me/ai-accounts'),
         api('/api/ui/terminal/sessions?includeProjects=1').catch(() => ({ sessions: [] })),
+        api('/api/ui/me/credentials').catch(() => null),
       ]);
       const meId = (state.me && (state.me.userId || state.me.email)) || '';
       const mine = (((ses || {}) as any).sessions || []).filter((s) => s.owner === meId);   // 프로젝트 세션은 전원 공개라 소유자로 좁힌다
       const accounts = ((acc || {}) as any).accounts || [];
       // 공용 계정이라는 사실은 행의 '서버 공용' 배지(+툴팁)로 충분하다 — 같은 말을 배너로 또 적지 않는다(사용자 요구).
-      body.replaceChildren(...(accounts.length
+      const warn = headlessAuthWarn(creds, load);   // 있으면 계정 행보다 **위**에 — 먼저 읽혀야 하는 사실이다
+      body.replaceChildren(...(warn ? [warn] : []), ...(accounts.length
         ? accounts.map((a) => aiAccountRow(a, mine, load))
         : [el('p', { class: 'admin-hint' }, ...uiText('이 서버에 로그인이 필요한 AI 가 없습니다.'))]));
     } catch (e) { body.replaceChildren(errorNote(e, '내 AI 계정 상태를 불러오지 못했습니다')); }
