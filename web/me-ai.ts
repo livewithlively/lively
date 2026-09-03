@@ -1,6 +1,6 @@
 // me-ai.ts — [내 설정 ▸ 내 AI 계정] 패널: 연결된 AI 계정(무엇으로·누구 계정으로)
 //  (#1313 R38, admin.ts 에서 verbatim 분리).
-//  AI 개인 규칙(org_member.body_md) 편집 폼도 여기 있었는데, 좌하단 내 프로필 창의 [AI 개인 규칙] 탭으로
+//  AI 개인화(org_member.body_md) 편집 폼도 여기 있었는데, 좌하단 내 프로필 창의 [AI 개인화] 탭으로
 //   옮겨 갔다(#1843 이 그 창을 만들고 #1898 이 이쪽 사본을 걷었다) — 같은 레코드를 고치는 폼이 두 화면에
 //   있으면 어느 쪽이 정본인지 아무도 모른다. 직렬화 규약(PROF_* · profChips · parseMyProfile)은 그대로
 //   me-profile.ts 소유이고, 이제 그 창(v2/me-modal.ts)만 쓴다.
@@ -259,20 +259,20 @@ function myAiAccountsCard() {
 }
 
 // ── [내 설정 ▸ 내 AI 계정] — 화면 조립(**클래식 전용 자리**). ──
-//  AI 개인 규칙 편집 폼(개인 레이어 org_member.body_md — #846 이 주입 배선을 완성)은 좌하단 내 프로필 창의
-//  [AI 개인 규칙] 탭으로 옮겨 갔다(#1843·#1898). 여기는 계정 카드만 남고, 규칙은 안내 한 줄로 그 창을 가리킨다.
-//  ⚠ 새 셸에서는 이 화면이 통째로 그 창의 [내 AI 계정] 탭이다(#1898) — admin-shell sectionHidden 이
+//  AI 개인화 편집 폼(개인 레이어 org_member.body_md — #846 이 주입 배선을 완성)은 좌하단 내 프로필 창의
+//  [AI 개인화] 탭으로 옮겨 갔다(#1843·#1898). 여기는 계정 카드만 남고, 규칙은 안내 한 줄로 그 창을 가리킨다.
+//  ⚠ 새 셸에서는 이 화면이 통째로 그 창의 [AI 계정 연결] 탭이다(#1898) — admin-shell sectionHidden 이
 //   새 셸에서만 감춘다. 클래식엔 그 창이 없으므로 여기가 유일한 자리라 지우지 않는다.
 function myAiSection(detail) {
   detail.replaceChildren(
     sectionHead('내 AI 계정', '내 AI 세션이 어떤 AI 로, 누구 계정으로 실행되는지 보고 필요하면 로그인합니다.'),
     el('div', { class: 'admin-stack' },
       myAiAccountsCard(),
-      el('p', { class: 'admin-hint' }, ...uiText('역할·호칭·말투·사용 언어 같은 **AI 개인 규칙**은 화면 왼쪽 아래의 내 이름을 눌러 열리는 내 프로필 창 [AI 개인 규칙] 에서 편집합니다.'))));
+      el('p', { class: 'admin-hint' }, ...uiText('역할·호칭·말투·사용 언어 같은 **AI 개인화**는 화면 왼쪽 아래의 내 이름을 눌러 열리는 내 프로필 창 [AI 개인화] 에서 편집합니다.'))));
 }
 
 export {
-  //  #1898 — 내 프로필 창([내 AI 계정] 탭)이 **이 카드를 그대로** 쓴다. 로그인 세션을 여는 규칙
+  //  #1898 — 내 프로필 창([AI 계정 연결] 탭)이 **이 카드를 그대로** 쓴다. 로그인 세션을 여는 규칙
   //  (claude 는 그 하네스로 · codex 는 셸 + device-auth)이 여기 한 곳에만 있어야 한다.
   myAiAccountsCard,
   myAiSection,
