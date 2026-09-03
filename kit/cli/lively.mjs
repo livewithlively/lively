@@ -543,7 +543,17 @@ function writeLively(name, val, mode = 0o600) {
 }
 // gateway-url 은 항상 **/mcp 없이** 저장한다(user-install.mjs 와 같은 계약).
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
-const gateway = () => normGw(process.env.LIVELY_GATEWAY_URL || readLively("gateway-url"));
+// 주소도 **파일이 SoT** 다(#2617) — #916 이 아래 token() 에 적용한 판정의 **나머지 절반**이다.
+//  env 는 override 가 아니라 '파일의 캐시'다(셸 rc·tmux 서버가 시작 시점 값을 굳혀 물려준다). 그래서
+//  env-우선과 파일-우선이 갈리는 경우가 **정확히 버그 케이스 하나**뿐이다:
+//   · 새 셸 — 같다(차이 없음)  · **주소를 바꾼 뒤 — env 가 옛것**(파일-우선만이 맞다)  · 파일 없음(CI·프로비저닝) — 어차피 env 로 폴백.
+//  실측 2026-09-03: 8/26 에 뜬 tmux 서버가 9/1 의 주소 변경(dev→olddev)을 못 따라가 그 박스의 세션이 전부
+//   옛 게이트웨이로 나가 401 을 받았다. **토큰은 멀쩡했는데** doctor 는 '토큰 만료'로 오진해 재로그인을 시켰고
+//   (그래도 안 낫는다 — 주소가 틀린 것이다), lively-local MCP 는 repo_* 를 통째로 잃어 워크트리가 서버 대장에
+//   안 잡혔다 → workspace_reclaim 이 회수 대상을 못 봤다.
+//  ⚠ 파일-우선이면 tmux 서버를 죽이거나 세션을 다시 만들지 않아도 낫는다 — 앱·CLI 어느 쪽으로 로그인하든
+//   그 쪽이 파일에 쓰고, 살아 있는 세션의 CLI·MCP 가 그 값을 즉시 읽는다(앱↔CLI 상태가 갈리지 않는다).
+const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GATEWAY_URL);
 // ⚠ **파일이 정본이고 LIVELY_TOKEN env 는 그 캐시다**(#916 — 순서를 뒤집지 말 것).
 //  설치기가 codex 때문에(config.toml 은 토큰 리터럴을 거부하고 bearer_token_env_var 만 받는다) 셸 rc 에
 //  `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 를 심는다 → env 는 '셸 시작 시각의 파일 스냅샷'이지
@@ -2126,6 +2136,19 @@ async function cmdDoctor(opts) {
   const tokFile = readLively("token");
   chk("토큰", !!token(), tokFile ? "~/.lively/token" : (token() ? "LIVELY_TOKEN 환경변수 (파일 없음)" : "없음"), "lively login");
   chk("토큰 유효", st.account.authenticated, st.account.authenticated ? (st.account.name || st.account.id || "인증됨") : "미인증", "lively login");
+  // #2617 — 아래 #916 신원 검사의 **주소 축**. gateway() 는 이제 파일 우선이라 CLI·lively-local MCP 는
+  //  파일을 쓴다(그래서 이건 ✗ 여도 위 두 줄은 정상이다) — 그럼에도 알리는 이유는, 이 셸에 남은 옛 env 를
+  //  **직접 읽는 것**(스크립트·LIVELY_GATEWAY_URL 을 그대로 쓰는 도구)이 있으면 그쪽만 옛 게이트웨이로 가기 때문이다.
+  //  ⚠ 처방이 `source ~/.zshrc` 만이 아닌 이유: 라이블리 세션은 tmux pane 이고, tmux 서버는 **처음 뜬 시점의
+  //   환경**을 global 로 굳혀 물려준다 — 같은 서버에서 새 창을 열어도 옛 값 그대로다(2026-09-03 실측:
+  //   8/26 에 뜬 서버가 9/1 의 주소 변경을 못 따라가 40일 가까이 옛 주소를 물려줬다).
+  //  ⚠ 주소는 시크릿이 아니라 **값을 보여준다**(토큰 검사와 다른 점) — 어느 쪽이 옛것인지 사람이 봐야 고친다.
+  const gwFile = readLively("gateway-url"), gwEnv = (process.env.LIVELY_GATEWAY_URL || "").trim();
+  if (gwEnv && gwFile && normGw(gwEnv) !== normGw(gwFile)) {
+    chk("게이트웨이 일치(이 셸 env ↔ 파일)", false,
+      `이 셸 env: ${normGw(gwEnv)} · 파일: ${normGw(gwFile)} — CLI·MCP 는 파일을 쓰지만 env 를 직접 읽는 도구는 앞의 주소로 갑니다`,
+      `tmux set-environment -g LIVELY_GATEWAY_URL ${normGw(gwFile)}  후 새 세션 (또는 ${RELOAD_SHELL_HINT})`);
+  }
   // #916 — 이 셸의 env 가 파일과 다르면 **codex 와 이미 떠 있는 세션은 옛 신원으로** 게이트웨이에 붙는다.
   //  CLI 는 파일을 정본으로 쓰므로 위 두 줄은 멀쩡해 보이는데, 그 상태가 정확히 #916 이었다.
   //  진단이 이걸 안 보여줘서 그때는 /api/ui/me 를 손으로 찔러보고서야 잡혔다 → 도구화한다. ⚠ 값은 안 찍는다(사실만).

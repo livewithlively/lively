@@ -158,7 +158,9 @@ function newHome(name) {
 
 // CLI 실행 — 샌드박스 HOME + 스텁 PATH. 절대 실기기·실게이트웨이에 닿지 않는다.
 //  ⚠ HOME 과 LIVELY_HOME 을 **둘 다** 준다: 설치기는 LIVELY_HOME 을, 셸 rc 탐색은 HOME 을 본다(#858 함정③).
-//  ⚠ 셸의 LIVELY_TOKEN/LIVELY_GATEWAY_URL 은 파일보다 우선하므로 명시적으로 비운다(그렇지 않으면 테스트가 무의미해진다).
+//  ⚠ 셸의 LIVELY_TOKEN/LIVELY_GATEWAY_URL 은 **명시적으로 비운다** — 실행하는 개발자의 셸 값이 새어들면
+//   테스트가 자기 픽스처가 아닌 실 게이트웨이를 볼 수 있다. (둘 다 이제 파일 우선이지만 #916·#2617, 파일이
+//   없는 케이스에선 env 로 폴백하므로 비우지 않으면 그 케이스가 조용히 오염된다.)
 async function lively(h, args, { env = {}, expectFail = false } = {}) {
   try {
     const r = await pExecFile(process.execPath, [CLI, ...args], {
@@ -661,6 +663,32 @@ try {
     check("⑱ #916/#1079 — install 이 .claude.json 에 토큰을 굽지 않는다(lively=stdio 프록시)",
       livelyAdd.length > 0 && livelyAdd.every((l) => l.includes("--transport stdio")) && leaked.length === 0,
       `lively=${JSON.stringify(livelyAdd)} leaked=${JSON.stringify(leaked)}`);
+  }
+
+  // ⑱-b **#2617 — 게이트웨이 주소도 파일이 SoT.** 바로 위 ⑱(#916)이 token() 에 적용한 판정의 **나머지 절반**이다.
+  //   env 는 override 가 아니라 '파일의 캐시'다(셸 rc 가 로그인 시각의 값을 export 하고, 라이블리 세션은 tmux
+  //   pane 이라 **서버가 처음 뜬 시점의 환경**을 물려받는다). 그래서 env-우선과 파일-우선이 갈리는 경우가
+  //   정확히 하나뿐이고 그게 곧 버그다 — **주소를 바꾼 뒤**. 그때 env 가 이기면 살아 있는 세션이 전부 옛
+  //   게이트웨이로 나가 401 을 받는데, 토큰은 멀쩡하므로 재로그인으로는 낫지 않는다(doctor 는 '토큰 만료'로 오진했다).
+  //   실측 2026-09-03: 8/26 에 뜬 tmux 서버가 9/1 의 주소 변경을 못 따라가 그 박스의 lively-local MCP 가 세션 내내
+  //   401 → repo_worktree 를 못 써 워크트리가 서버 대장에 안 잡혔고 workspace_reclaim 이 회수 대상을 통째로 못 봤다.
+  //   ⚠ env 에 **죽은 주소**를 준다 — env 가 이기면 그리로 나가 인증이 통째로 실패하므로, 파일-우선이 깨지는
+  //    순간 이 검사가 빨간불이 된다(수정 전 코드에서 실제로 빨간불임을 확인하고 넣었다 — 공허하게 통과하지 않는다).
+  {
+    const h = newHome("h-2617-gw");
+    await lively(h, ["login", "--gateway", GW, "--token", TOKEN]);                              // 파일 = 새 주소
+    const DEAD = "http://127.0.0.1:1";                                                          // 아무도 안 듣는다(즉시 거부)
+    const r = await lively(h, ["status", "--json"], { env: { LIVELY_GATEWAY_URL: DEAD } });     // 셸 env = 스테일 옛 주소
+    const st = JSON.parse(r.out);
+    check("⑱-b #2617 — 주소는 파일이 env 를 이긴다(주소를 바꾸면 살아있는 셸도 새 주소로)",
+      st.gateway.url === GW && st.account.authenticated === true,
+      `기대 ${GW}/auth=true · 실제 ${st.gateway.url}/auth=${st.account.authenticated}`);
+    // 무회귀 — 파일이 없으면 env 로 폴백해야 한다. 프로비저닝·CI 는 파일을 안 만들고 env 로만 주소를 준다
+    //  ('파일 우선' 을 '파일만' 으로 바꾸면 그 경로가 통째로 죽는다 — #916 이 token() 에서 지킨 것과 같은 폴백).
+    rmSync(join(h.home, ".lively", "gateway-url"));
+    const r2 = await lively(h, ["status", "--json"], { env: { LIVELY_GATEWAY_URL: GW } });
+    check("⑱-b #2617 — 파일이 없으면 env 로 폴백(프로비저닝·CI 무회귀)",
+      JSON.parse(r2.out).gateway.url === GW, r2.out.slice(0, 200));
   }
 
   // ⑲ **#916 — 로그인 탈출구 분기표**(loginEscapeToken). 이 분기는 **제어단말(/dev/tty)이 있어야** 밟히는데
