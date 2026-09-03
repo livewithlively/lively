@@ -11,8 +11,9 @@
 //  ④ **컨텍스트를 잃으면 조용히 폴백하지 않고 오류로 드러난다**: 중계 명령에 `{slug}` 가 있는데 워크스페이스가
 //     없으면 던진다(§3 마지막 줄). 로컬 tmux 로 접으면 남의 세션이 목록에 보인다.
 //  ⑤ **확정되면 프로세스 수명 동안 안 변한다**(§4). 같은 질문에 두 답이 나오는 창을 없애는 것이 존재 이유다.
-//  ⑥ **노드 등록 모순은 판정하고 사유를 만든다**(§5). 증거는 밖에서 받고, «같은 호스트» 가 아니면 성립하지 않으며,
-//     증거 음성은 «판정 보류» 를 포함한 «아님» 이다.
+//  ⑥ **노드 등록 모순의 «선결 조건»만 소유한다**(§5, 2026-09-03 개정). 증거 규칙도 사유 문구도 #2592 가 이미
+//     한 벌로 갖고 있어, 토폴로지가 두 번째를 만들면 그것이 곧 «두 벌»이다. 여기서 답하는 것은
+//     «이 배포에서 그 모순이 애초에 성립할 수 있나» 하나다.
 //  ⑦ **무회귀**(§7): 설정 없는 배포는 종전과 100% 같고, 매니지드 argv·registry 소켓 이름·킬스위치 의미·
 //     wrapper 기본 경로 문자열이 바이트 단위로 같다.
 //
@@ -28,7 +29,7 @@ import {
   computeExecTopology,
   execTopology,
   freezeExecTopology,
-  nodeSelfConflict,
+  selfNodePossible,
   onNode,
   parseWorkerK,
   tmuxArgvFor,
@@ -583,59 +584,41 @@ test("§4 computeExecTopology() 를 인자 없이 부르면 지금 process.env �
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// §5. 노드 등록 모순 — 게이트웨이 박스 위의 노드 (세션호스트 3값 × 증거 2값)
+// §5. 노드 등록 모순 — 토폴로지는 **선결 조건**만 답한다 (2026-09-03 개정: #2592 가 판정·사유를 소유)
 // ════════════════════════════════════════════════════════════════════════════
 
 const LOCAL_T = computeExecTopology(E());
 const RELAY_T = computeExecTopology(E({ LIVELY_TMUX_EXEC: "ssh box tmux" }));
 const NODE_T = computeExecTopology(E({ LIVELY_NODE_TOKEN: "nt-1" }));
 
-test("★ §5 같은 호스트 + 증거 양성 → 모순이고, 사람이 읽을 사유가 함께 온다", () => {
-  const got = nodeSelfConflict({ sharesGatewayTmux: true }, LOCAL_T);
-  assert.notEqual(got, null, "게이트웨이 박스 위의 노드는 모순이다");
-  assert.equal(typeof got?.reason, "string");
-  assert.ok((got?.reason ?? "").trim().length > 0, "사유가 비어 있으면 안 된다");
-  assert.ok((got?.reason ?? "").trim().length >= 8, "사유는 사람이 읽고 무엇을 해야 하는지 알 수 있어야 한다");
+test("★ §5 같은 호스트 → 그 모순이 성립할 수 있다(증거를 잴 가치가 있는 자리다)", () => {
+  assert.equal(selfNodePossible(LOCAL_T), true);
 });
 
-test("§5 같은 호스트 + 증거 음성 → 모순 아님 (여기서의 «아님» 은 판정 보류를 포함한다)", () => {
-  assert.equal(
-    nodeSelfConflict({ sharesGatewayTmux: false }, LOCAL_T),
-    null,
-    "겹침이 없다는 것을 «자기 자신이 아니다» 로 뒤집으면 안 된다 — 세션이 0개면 볼 것이 없을 뿐이다",
-  );
+test("★ §5 중계 너머(매니지드) → 성립할 수 없다 — 게이트웨이의 tmux 가 이 호스트에 없다", () => {
+  assert.equal(selfNodePossible(RELAY_T), false, "노드가 공유할 tmux 자체가 이 호스트에 없다");
 });
 
-test("★ §5 중계 너머 + 증거 양성 → 모순 아님 (게이트웨이의 tmux 가 이 호스트에 없다)", () => {
-  assert.equal(nodeSelfConflict({ sharesGatewayTmux: true }, RELAY_T), null);
+test("★ §5 이 프로세스가 노드 → 성립할 수 없다", () => {
+  assert.equal(selfNodePossible(NODE_T), false);
 });
 
-test("§5 중계 너머 + 증거 음성 → 모순 아님", () => {
-  assert.equal(nodeSelfConflict({ sharesGatewayTmux: false }, RELAY_T), null);
-});
-
-test("★ §5 노드 + 증거 양성 → 모순 아님 (세션 호스트가 «같은 호스트» 가 아니면 성립하지 않는다)", () => {
-  assert.equal(nodeSelfConflict({ sharesGatewayTmux: true }, NODE_T), null);
-});
-
-test("§5 노드 + 증거 음성 → 모순 아님", () => {
-  assert.equal(nodeSelfConflict({ sharesGatewayTmux: false }, NODE_T), null);
-});
-
-test("§5 토폴로지를 안 주면 이 프로세스의 토폴로지로 판정한다", () => {
+test("§5 토폴로지를 안 주면 이 프로세스의 토폴로지로 답한다", () => {
   withEnv({}, () => {
     unfreezeExecTopology();
-    assert.notEqual(nodeSelfConflict({ sharesGatewayTmux: true }), null, "설정 없는 배포는 같은 호스트다");
-    assert.equal(nodeSelfConflict({ sharesGatewayTmux: false }), null);
+    assert.equal(selfNodePossible(), true, "설정 없는 배포는 같은 호스트다");
   });
   withEnv({ LIVELY_NODE_TOKEN: "nt-1" }, () => {
     unfreezeExecTopology();
-    assert.equal(nodeSelfConflict({ sharesGatewayTmux: true }), null, "노드에서는 성립하지 않는다");
+    assert.equal(selfNodePossible(), false);
   });
+  withEnv({ LIVELY_TMUX_EXEC: "ssh box tmux" }, () => {
+    unfreezeExecTopology();
+    assert.equal(selfNodePossible(), false);
+  });
+  unfreezeExecTopology();
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// §7. 무회귀 — 이 변경으로 동작이 바뀌면 안 되는 것
 // ════════════════════════════════════════════════════════════════════════════
 
 test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 100% 같다(골든)", () => {

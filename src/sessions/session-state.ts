@@ -362,7 +362,7 @@ export async function insertDiscoveredSessionState(s: SessionStateInput): Promis
 export async function clearSelfNodeSessionRows(
   nodeId: string, liveIds: ReadonlySet<string>,
 ): Promise<{ deleted: number; cleared: number }> {
-  if (ON_NODE) return { deleted: 0, cleared: 0 };
+  if (onNode()) return { deleted: 0, cleared: 0 };
   const live = [...liveIds];
   const del = await itemsPool.query(
     `DELETE FROM org_session_state

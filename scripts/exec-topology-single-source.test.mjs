@@ -128,4 +128,13 @@ t("[S4] 게이트웨이·노드 두 진입점이 부팅에서 토폴로지를 �
     "확정이 boot/tenancy-env import 보다 앞이면 틀린 워크스페이스 모드가 굳는다");
 });
 
+t("[S5] 셀프 노드 판정의 «선결 조건»이 #2592 집행 지점에 물려 있다", () => {
+  // 토폴로지가 소유하는 것은 «그 모순이 애초에 성립하는 배포인가» 하나다(증거 규칙·사유 문구는 #2592 소유).
+  //  그 한 줄이 빠지면 매니지드 게이트웨이가 노드 등록마다 의미 없는 tmux 조회를 하고, 「위치를 되추론하지
+  //  않는다」는 이 프로젝트의 계약이 그 자리에서만 조용히 깨진다 — 증상이 없어 아무도 모른다.
+  const reg = readFileSync(join(ROOT, "src/node/registry.ts"), "utf8");
+  assert.match(reg, /selfNodePossible\(\)/,
+    "node/registry.looksLikeGatewayBox 가 토폴로지의 선결 조건을 묻지 않는다");
+});
+
 console.log(`\n${pass} passed — 실행 토폴로지 단일 출처(#2599 T2)`);

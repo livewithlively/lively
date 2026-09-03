@@ -217,26 +217,19 @@ export function tmuxArgvFor(slug: string | null, tmuxBin: string): string[] {
 }
 
 /**
- * 노드 등록이 **토폴로지와 모순인가** — 게이트웨이가 도는 그 박스에서 노드 데몬이 뜬 경우(#2592 A).
+ * 이 배포에서 «게이트웨이 박스 위의 노드»(#2592)가 **성립할 수 있나** — 토폴로지가 답하는 **선결 조건**.
  *
- * 이 모듈이 **판정과 사유**를 소유하고, 증거(같은 tmux 서버를 보는가)는 넘겨받는다.
- *  증거 규칙을 여기로 복사하지 않는 이유: 그 규칙(`node/self-node.sharesGatewayTmux`)에는 «**양성일 때만
- *  참**» 이라는 비대칭 규율이 붙어 있고 — 겹침이 없다고 «아니다»로 뒤집으면 세션이 하나도 없는 순간에
- *  «자기 자신인데 아니라고 판정»이 되어 장치가 통째로 무력해진다 — 그 규율이 증거와 한 파일에 있어야 산다.
+ * 게이트웨이의 tmux 가 이 프로세스 호스트에 없으면(매니지드 중계 · 이 프로세스 자체가 노드) 노드가 그것을
+ *  공유하는 일이 원천적으로 불가능하다. 그러면 증거를 재는 일(tmux 겹침 조회)도 의미가 없다 —
+ *  #2592 의 집행 지점(`node/registry.looksLikeGatewayBox`)이 이 값으로 먼저 물러난다.
  *
- * 토폴로지가 더하는 것은 **선결 조건**이다: 게이트웨이의 tmux 가 이 호스트에 없으면(매니지드 중계·노드)
- *  노드가 그것을 공유할 수 없으므로 애초에 모순이 성립하지 않는다.
- *
- * @returns 모순이면 사람에게 보일 사유, 아니면 null(«아니다»가 아니라 «모순 아님/판정 보류» 포함)
+ * ⚠ **판정도 사유 문구도 여기서 만들지 않는다.** 둘 다 #2592 가 이미 한 벌로 갖고 있다 —
+ *  증거 규칙은 `node/self-node.sharesGatewayTmux`(«양성일 때만 참» 이라는 비대칭 규율이 붙어 있어
+ *  증거와 한 파일에 있어야 산다), 사람에게 할 말은 `node/self-node.selfNodeMessage()`(등록 409·close
+ *  사유·관리 배지·CLI 가 **같은 문장**을 쓰게 만든 자리). 여기서 두 번째 문장을 만들면 같은 상황을 겪은
+ *  두 사람이 서로 다른 원인을 짚게 된다 — 이 프로젝트가 없애려는 바로 그 «두 벌»이다.
+ *  토폴로지가 더하는 것은 그 판정이 **애초에 성립하는 자리인가** 하나다.
  */
-export function nodeSelfConflict(
-  evidence: { sharesGatewayTmux: boolean },
-  t: ExecTopology = execTopology(),
-): { reason: string } | null {
-  if (t.sessionHost !== "local") return null;   // 게이트웨이 tmux 가 이 호스트에 없다 = 공유 자체가 불가
-  if (!evidence.sharesGatewayTmux) return null; // 겹침 없음 = 판정 보류(≠ 아니다)
-  return {
-    reason: "이 기계에서 게이트웨이가 돌고 있습니다 — 같은 tmux 서버를 쓰므로 노드로 등록하면 "
-      + "한 세션이 두 경로로 접근되어 접속·목록·용량이 어긋납니다. 이 박스에서는 노드 데몬이 필요 없습니다.",
-  };
+export function selfNodePossible(t: ExecTopology = execTopology()): boolean {
+  return t.sessionHost === "local";
 }
