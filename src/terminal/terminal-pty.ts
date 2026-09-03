@@ -136,7 +136,10 @@ export function attachRefCount(id: string): number { return attachRefs.get(id) ?
  */
 function detachGhostClients(bin: string, prefix: string[], id: string, env: Record<string, string>): void {
   void execFileP(bin, [...prefix, "detach-client", "-s", id], { timeout: 5000, env, windowsHide: true })
-    .catch(() => { /* 세션이 이미 없거나 tmux 무응답 — 비치명 */ });
+    //  #2625 T1 — **실패를 삼키지 않고 남긴다**(동작은 그대로 비치명). 종전엔 «안 불렸다» 와
+    //   «불렸는데 중계가 404·타임아웃으로 죽었다» 가 둘 다 완전히 조용해, 유령이 쌓이는 20분을
+    //   들여다봐도 어느 쪽인지 물어볼 자리가 없었다. 세션이 이미 없어 실패하는 것도 흔하므로 warn 이다.
+    .catch((err) => logger.warn({ id, err: (err as Error)?.message ?? String(err) }, "유령 attach 정리 실패"));
 }
 // 스폰 실패 폭주 차단(#869) — node-pty spawn 이 반복 실패하면(예: 노드에서 fd 고갈 EMFILE) 매 실패가 pty fd 를 새게 해
 //  가속 붕괴한다(실측: 노드 에이전트 fd 1543개, 10K 실패). 세션별 최근 연속 실패를 세어 임계 초과 시 **스폰 자체를 건너뛰고**
@@ -438,7 +441,11 @@ export function attachSession(ws: AttachSocket, id: string): void {
         if (released) return;
         released = true;
         // #2148 — 이 세션의 마지막 WS 였다면 컨테이너 안에 남은 유령 클라이언트를 끊는다(위 머리말).
-        if (releaseAttachRef(id)) detachGhostClients(abin!, aprefix, id, env);
+        //  #2625 T1 — **불렸는지 아닌지가 로그에 남는다.** 종전엔 «안 불린 것»과 «불렸는데 실패한 것»을
+        //   구별할 수단이 없었다(둘 다 조용하다). 남은 참조수를 함께 남겨 장부가 새는 것도 여기서 보인다.
+        const last = releaseAttachRef(id);
+        logger.info({ id, last, refs: attachRefCount(id) }, "ws attach 종료");
+        if (last) detachGhostClients(abin!, aprefix, id, env);
       };
       ws.on("close", cleanup);
       ws.on("error", cleanup);
