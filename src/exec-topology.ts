@@ -24,6 +24,17 @@
 //  여기서는 **tmux 소켓 파생값만** 소유하고 DB 쪽(`db/tenant-binding-boot` · `org/tenancy/state` ·
 //  `org/tenant-middleware`)과 파일 루트(`terminal/catalog`)는 손대지 않는다.
 //
+// ── 이름 붙은 술어를 «얇은 별칭» 이라 부르지 마라 (#2599 T3) ────────────────────────────────────
+// T2 가 종전 판정 함수들의 **몸통**을 이 모듈 조회로 바꿨다(`isolationEnabled` → `isolation !== "none"`,
+//  `memberExecConfigured` → `storage === "detached"`, `sessionExecConfigured`·`sessionSpawnPath` …).
+//  T3 이 그것들을 지우고 호출부마다 `execTopology().X === "y"` 를 인라인할 수도 있었지만 **안 했다** —
+//  그러면 «필드 값이 무슨 뜻인가» 의 판정이 1곳에서 N곳(memberExecConfigured 만 8자리)으로 늘어난다.
+//  이 프로젝트가 없애려는 것이 정확히 그 모양이라, 인라인은 «두 벌» 을 되만드는 일이다.
+//  ⇒ 규율은 **«env 는 여기서만 읽는다»(S1 이 지킨다) + «한 질문에 이름 하나»** 다. 이름이 남아 있는 것은
+//   빚이 아니라 그 두 번째 규율의 실행이다. 이름이 **두 질문**에 답하고 있으면 그때가 가를 때다 —
+//   T3 이 `tmuxRelayManaged()` 를 `tmuxServerAbsenceIsFinal` / `tmuxViaRelay` 로 가른 것이 그 사례다
+//   (조사 함정 4 가 T2 까지 안 고쳐진 이유가 바로 «한 이름이 두 답을 붙들고 있었다» 였다).
+//
 // ⚠ 이 모듈은 **런타임 import 가 없다**(순수 잎). 노드 에이전트 번들에 실리므로 무엇도 끌어오면 안 된다
 //  (#2165 의 교훈 — 간선 하나가 11개를 끌었다). 그 불변식은 node-agent-bundle-boundary 시험이 지킨다.
 
