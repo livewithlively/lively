@@ -163,4 +163,20 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
     "E26 무대 안 프레임은 폭·높이를 갖는다 — 없으면 칸이 아무리 커도 페이지가 150px 만 그려진다");
 }
 
+// ══ 마운트 순서 — 마운트 도중 부르는 helper 가 읽는 값은 그보다 **앞**에 서 있어야 한다 (2026-09-03 회귀) ══
+//  #762 에서 `actKey()` 를 `opts.sessionId` → `curSession()` 으로 바꿨다(지금 보는 세션을 아는 건 그것뿐이라
+//  옳은 변경이다). 그런데 `curSession()` 은 `panes` 를 읽고, 그 `panes` 는 파일 한참 아래에서 선언돼 있었다.
+//  마운트는 칸을 만들기 **전에** `applySessionAct()` 를 한 번 부르므로 그 순간 TDZ 로 죽었다 —
+//  «화면을 불러오지 못했습니다 — Cannot access 'panes' before initialization», 세션·프로젝트 화면 전멸
+//  (2026-09-03 dev 실측, 윤상민 신고). tsc 는 이걸 못 잡는다: 직접 참조가 아니라 **함수를 거친** 참조라
+//  TS2448 이 안 뜬다(그 커밋도 typecheck:web·build:web 을 통과하고 배포됐다). 그래서 순서를 여기서 못 박는다.
+{
+  ok(/const actKey = \(\): string => String\(curSession\(\)/.test(PANES),
+    "E27 활성 탭 열쇠는 curSession() 으로 잡는다 — opts.sessionId 는 처음 연 세션에 굳는다(#762)");
+  const decl = PANES.indexOf("const panes = new Map<Zone, Pane>();");
+  const call = PANES.indexOf("\n  applySessionAct();");
+  ok(decl >= 0 && call >= 0 && decl < call,
+    "E28 ★ `panes` 선언이 마운트 중 부르는 applySessionAct() 보다 앞이다 — 뒤면 TDZ 로 화면이 통째로 안 뜬다");
+}
+
 console.log(`\n# ${pass} passed`);
