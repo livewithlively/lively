@@ -124,6 +124,21 @@ ok(/"\/api\/ui\/nodes\/self-check"/.test(NROUTES),
     "B8c self-check 응답에 세션 id 를 싣지 않는다(테넌트 간 노출 없음)");
 }
 
+// ── B11. 기존 행 정리는 **hello 에서도** 재시도된다 ───────────────────────────
+//  ★ dev 라이브 검증이 잡은 구멍(2026-09-03): 정리를 «판정이 서는 순간» 한 곳에만 걸었더니, 부팅 경로에서
+//   hydrateNodeStates 가 **구독이 걸리기 전에** 판정을 내는 배포에서는 정리가 한 번도 안 돌았다.
+//   판정은 sticky 라 두 번 다시 서지 않는다 = 재시도가 영영 없다. 그래서 «그 뒤 반드시 지나는 자리» 에도 건다.
+{
+  const probe = body(REG, "function probeSelfNodes()");
+  const hello = body(REG, "function onNodeControlMsg(");
+  ok(/maybeCleanSelfNode\(/.test(probe), "B11a 판정이 서는 순간 정리를 부른다");
+  ok(/maybeCleanSelfNode\(/.test(hello), "B11b ★hello 에서도 부른다(부팅 판정이 구독보다 빨랐던 경우의 유일한 재시도)");
+  const clean = body(REG, "function maybeCleanSelfNode(");
+  ok(/selfNodeCleaned\.has\(/.test(clean), "B11c 프로세스당 한 번으로 접는다(10초 재연결 루프가 SQL 을 반복하지 않게)");
+  ok(/selfNodeCleaned\.delete\(/.test(clean), "B11d 실패한 판은 안 한 것으로 되돌린다(다음 연결이 다시 본다)");
+  ok(/inTenant\(c,/.test(clean), "B11e 연결의 테넌트 컨텍스트로 연다 — 없으면 공유 게이트웨이에서 RLS 가 조용히 0행을 만든다");
+}
+
 // ── B9. 노드 에이전트 — 종결 코드는 재연결하지 않는다 ─────────────────────────
 //  이게 없으면 게이트웨이가 초당 한 번씩 인증·판정·거절을 반복한다(attempt 가 open 마다 0 으로 리셋된다).
 {

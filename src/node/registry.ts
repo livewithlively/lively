@@ -188,7 +188,8 @@ function probeSelfNodes(): Promise<void> {
         if (selfNodes.has(k)) continue;
         if (!sharesGatewayTmux(mine, st.sessions.map((s) => s.id))) continue;
         selfNodes.add(k);
-        logger.warn({ node: k },
+        //  로그엔 **맨 노드 id** 를 싣는다 — k 는 스코프 키라 앞에 구분자(NUL)가 붙어 나온다(실측 로그: node 값 앞의 \u0000).
+        logger.warn({ node: conns.get(k)?.node.id ?? k },
           "이 노드는 게이트웨이 자신과 같은 tmux 를 씁니다 — 같은 박스입니다. 연결을 끊고 '중앙 컴퓨터'로 안내합니다");
         // #2592 — 판정이 선 바로 그 자리에서 **끊는다**. 두면 이 노드는 계속 스냅샷을 올리고(발견 기록·목록
         //  좌표의 원천), 화면이 그 좌표로 붙으면 릴레이 attach 가 열린다. 판정을 안 지나간 값이 하나도 없게
@@ -196,10 +197,7 @@ function probeSelfNodes(): Promise<void> {
         //  ⚠ 끊기 **전에** 구독자를 부른다 — 구독자(기존 행 정리)는 이 연결의 테넌트 컨텍스트가 필요하고,
         //   그 컨텍스트는 연결이 들고 있다(WS 이벤트엔 요청 컨텍스트가 없다 — inTenant 머리말).
         const c = conns.get(k);
-        if (c && selfNodeHandler) {
-          inTenant(c, () => void Promise.resolve(selfNodeHandler?.(c.node.id))
-            .catch((err) => logger.warn({ err, node: c.node.id }, "셀프 노드 기존 행 정리 실패(비치명 — 다음 판정에 재시도)")));
-        }
+        if (c) maybeCleanSelfNode(c);
         dropSelfNodeConn(k);
       }
     } catch { /* tmux 를 못 봤다 = 판정 불가. 양성일 때만 표시하므로 조용히 넘어간다 */ }
@@ -207,6 +205,29 @@ function probeSelfNodes(): Promise<void> {
   })();
   selfProbing = run;
   return run;
+}
+
+/**
+ * 이 셀프 노드가 남긴 거짓 좌표를 **이 프로세스에서 한 번** 치운다(#2592).
+ *
+ * 판정 시점과 hello 거부 시점 **양쪽에서** 부른다. 판정 한 곳만으로는 새는 자리가 실측으로 드러났다
+ *  (2026-09-03 dev 라이브 검증): 부팅 경로에서 `hydrateNodeStates` 가 **구독이 걸리기 전에** 판정을 내면
+ *  그 판정은 sticky 라 두 번 다시 서지 않고, 정리는 영원히 안 돈다. hello 는 그 뒤 반드시 지나는 자리다.
+ *  (정리 자체는 멱등이지만 10초마다 SQL·tmux 를 때릴 이유가 없어 프로세스당 한 번으로 접는다.)
+ *
+ * 왜 «구독 시점에 이미 선 판정을 재생» 이 아닌가: 재생에는 그 노드의 **테넌트 컨텍스트**가 없다(연결만이
+ *  들고 있다). 컨텍스트 없이 부르면 공유 게이트웨이에서 RLS 가 조용히 0행을 만든다 — 돌았는데 아무 일도
+ *  안 한 것이 제일 나쁘다. 연결이 있는 자리에서만 부른다.
+ */
+const selfNodeCleaned = new Set<string>();
+function maybeCleanSelfNode(c: NodeConn): void {
+  const k = keyOf(c.node.id, c.tenant);
+  if (!selfNodeHandler || selfNodeCleaned.has(k)) return;
+  selfNodeCleaned.add(k);
+  inTenant(c, () => void Promise.resolve(selfNodeHandler?.(c.node.id)).catch((err) => {
+    selfNodeCleaned.delete(k);   // 실패한 판은 안 한 것으로 — 다음 hello 가 다시 본다
+    logger.warn({ err, node: c.node.id }, "셀프 노드 기존 행 정리 실패(비치명 — 다음 연결에 재시도)");
+  }));
 }
 
 /** 셀프 노드로 판정된 연결을 종결 코드로 끊는다(#2592). 스코프 키로 받는다 — selfNodes·states·conns 가 같은 키다. */
@@ -520,6 +541,7 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
     if (isSelfNode(c.node.id)) {
       try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); } catch { /* noop */ }
       logger.warn({ node: c.node.id, agentVer: m.agentVer }, `노드 연결 거부 — ${selfNodeMessage(c.node.id)}`);
+      maybeCleanSelfNode(c);   // 부팅 판정(hydrate)이 구독보다 빨랐던 경우의 유일한 재시도 자리 — 위 머리말
       try { c.ws.close(CLOSE_SELF_NODE, SELF_NODE_REASON); } catch { /* noop */ }
       return;
     }
