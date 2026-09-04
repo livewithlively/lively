@@ -82,6 +82,41 @@ lvly_session_env() {
   if [ -n "${LIVELY_SESSION_ID:-}" ]; then export LIVELY_SESSION_ID; fi
   if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then export CLAUDE_CODE_OAUTH_TOKEN; fi
 
+  # ⑦ node 도구 힙 상한 — **세션 대신 명령이 죽게 한다** (#3546)
+  #   V8 은 자기 힙 천장을 «머신 메모리»에서 파생하는데, 컨테이너 안에서 그 값은 **세션 캡 전체**다
+  #   (실측 2026-09-04, 캡 1536MB 매니지드 세션: node 기본 heap_size_limit = **792MB**). 그런데 그 캡
+  #   안에는 claude 와 MCP 가 이미 ~1.0GB 상주한다 — 즉 V8 은 «792MB 까지 써도 된다» 고 믿고 GC 를
+  #   미루는데 실제 여유는 그 절반이다. 그래서 `npx tsc --noEmit` 한 번이 cgroup OOM 을 불러
+  #   **세션 컨테이너를 통째로** 데려갔다(실측: 그 호출 중간에서 트랜스크립트가 끊겼다).
+  #   힙을 미리 묶으면 같은 상황이 «그 명령만 heap out of memory 로 실패» 로 끝난다 — 세션과 대화는 산다.
+  #   같은 실측에서 힙을 520MB 로 묶은 `tsc` 는 peak RSS 584MB 로 **정상 완료**했다. 도구가 무거워서가
+  #   아니라 **자기 여유를 잘못 알아서** 죽는 것이다.
+  #  ⚠ claude 자신은 네이티브 ELF 라 이 값에 안 걸린다(src/sessions/session-memory-policy.ts 머리말).
+  #   여기서 조이는 대상은 사람이 세션에서 돌리는 node 도구(tsc·번들러·린터)다.
+  #  · 사람이 명시한 NODE_OPTIONS 는 건드리지 않는다(미설정일 때만 기본값을 준다).
+  #  · 메모리가 넉넉한 표면(> 4GB)에는 안 건다 — 거긴 이 실패 모드가 없다(무회귀).
+  #  · 35% 근거(2026-09-04 실측, 이 레포 콜드 `tsc --noEmit` = 증분 캐시 제거 후):
+  #      힙 560MB → heap OOM(exit 134) · 힙 660MB → 통과. 즉 필요량은 560 < x ≤ 660.
+  #      캡 1536 → 537MB : 여유(실측 835MB) 안에 안전하게 들어가지만 이 레포엔 **모자란다** —
+  #        그때 죽는 것은 세션이 아니라 그 명령 하나이고, 메시지가 «캡을 올려라» 를 정확히 말한다.
+  #      캡 2560 → 896MB : 660MB 를 넘어 **실제로 통과한다.**
+  #      어느 쪽이든 힙 + 비힙(~150~200MB) < 그 캡의 실측 여유라 컨테이너는 안 죽는다.
+  #  ⚠ 캡 1536 에서는 **어떤 힙 값을 골라도** 이 레포를 콜드 타입체크할 수 없다(세션이 이미 ~1.0GB
+  #   상주). 힙 캡은 부족한 메모리를 만들어내지 못한다 — 안전판이지 해결책이 아니다.
+  #  · 메모리 출처는 시험이 갈아낄 수 있다(LVLY_MEMINFO) — CI 머신 크기에 시험이 좌우되면 안 된다.
+  #    같은 파일의 LVLY_SESSION_ENV_LIB 와 같은 성격의 seam 이다.
+  _lvly_meminfo="${LVLY_MEMINFO:-/proc/meminfo}"
+  if [ -z "${NODE_OPTIONS:-}" ] && [ -r "$_lvly_meminfo" ]; then
+    _lvly_mem_mb="$(awk '/^MemTotal:/ { print int($2/1024) }' "$_lvly_meminfo" 2>/dev/null || echo 0)"
+    if [ "${_lvly_mem_mb:-0}" -gt 0 ] && [ "${_lvly_mem_mb}" -le 4096 ]; then
+      _lvly_heap_mb=$(( _lvly_mem_mb * 35 / 100 ))
+      if [ "$_lvly_heap_mb" -lt 256 ]; then _lvly_heap_mb=256; fi
+      export NODE_OPTIONS="--max-old-space-size=${_lvly_heap_mb}"
+    fi
+    unset _lvly_mem_mb _lvly_heap_mb 2>/dev/null || true
+  fi
+  unset _lvly_meminfo 2>/dev/null || true
+
   # ⑥ 멤버 토큰 — 표면이 고른다(위 머리말). 리터럴은 코드·로그에 없다 — 파일에서만 읽는다.
   if [ "$_read_token" = 1 ] && [ -z "${LIVELY_TOKEN:-}" ] && [ -r "$_home/.lively/token" ]; then
     LIVELY_TOKEN="$(cat "$_home/.lively/token")" || true
