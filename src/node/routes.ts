@@ -16,7 +16,7 @@ import { authNodeTokenDetailed, createNode, deleteNode, getNode, listNodes, revo
 import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
 import { linkDiagMessage, linkDiagSummary, keepAwakeLine, staleAgentNote } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로 · #2127 낡은 인스턴스
 import { nodeOpenTo } from "./node-access.js";
-import { liveNodes, isSelfNode, logNodeAuthDenial, looksLikeGatewayBox } from "./registry.js";
+import { liveNodes, isSelfNode, logNodeAuthDenial, looksLikeGatewayBox, forgetNode } from "./registry.js";
 import { selfNodeMessage } from "./self-node.js";   // #2592 — «이 노드는 게이트웨이 자신» 을 말하는 문장의 단일 출처
 import { nodeHarnesses, agentIsLatest } from "./protocol.js";
 import { AGENT_BUNDLE, AGENT_BUNDLE_ROOT, servedAgentVersion, agentBundleExists } from "./agent-bundle.js";
@@ -243,6 +243,12 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
   app.delete("/api/ui/nodes/:id", auth, wrap(async (req, res) => {
     const n = await requireOwn(req);
     const r = await deleteNode(n.id, idOf(userOf(req)));
+    // DB 삭제 뒤엔 **이 프로세스의 스냅샷 캐시도** 지운다(#3558). 안 지우면 지운 노드가 재시작 전까지
+    //  자기 세션들을 계속 소유해, 그 세션들의 대화·attach 가 전부 «노드 오프라인»(4462/503)으로 막힌다
+    //  — 새로고침으로도 안 낫는다(좌표를 서버가 목록에 실어 준다). 사연·순서 계약은 forgetNode 머리말.
+    //  `deleted:false`(그 사이 남이 지웠다) 여도 부른다 — 그때도 이 프로세스의 캐시엔 남아 있을 수 있고,
+    //  없는 키를 지우는 것은 무해하다. 「지웠을 때만」으로 좁히면 그 창이 정확히 이 결함으로 되돌아온다.
+    forgetNode(n.id);
     logger.info({ node: n.id }, "노드 삭제(토큰 회수)");
     res.json(r);
   }));
