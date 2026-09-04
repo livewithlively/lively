@@ -16,7 +16,7 @@ import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import type { Duplex } from "node:stream";
 import type { IncomingMessage } from "node:http";
-import { AttachWorkerHost } from "./attach-worker-host.js";
+import { AttachWorkerHost, PROCESS_EXIT_DEADLINE_MS, STOP_GRACE_MS } from "./attach-worker-host.js";
 
 /** 가짜 워커 — 게이트웨이가 실제로 쓰는 표면(pid·on/once·send·kill)만 흉내낸다. */
 class FakeChild extends EventEmitter {
@@ -143,4 +143,30 @@ test("W9 세션이 비면 «세션→테넌트» 기억도 함께 풀린다 — 
     { sessions: r.host.stats().sessions, slugs: r.host.stats().slugs },
     { sessions: 0, slugs: 0 },
     "라우터 매핑과 슬러그 기억이 **같이** 풀려야 한다(푸는 문은 하나)");
+});
+
+test("W10 워커가 SIGTERM 에 안 죽어도 shutdown 이 하드 데드라인 안에 끝나고 유령을 내보낸다", async () => {
+  const r = rig(4);
+  assert.equal(await r.hand("box-a-1", "t1"), true);
+  // 이 워커는 'exit' 을 영영 안 낸다(멎은 워커) — shutdown 은 유예만큼만 기다리고 넘어가야 한다.
+  const t0 = Date.now();
+  await r.host.shutdown();
+  const spent = Date.now() - t0;
+  assert.deepEqual(r.detached, [{ id: "box-a-1", slug: "t1" }],
+    "멎은 워커의 세션도 유령 정리가 나가야 한다 — 이게 안 되면 롤·재배포마다 샌다");
+  assert.ok(spent < 1_500, `shutdown 이 ${spent}ms 걸렸다 — index.ts 의 1.5초 하드 데드라인을 넘기면 이 정리가 통째로 안 돈다`);
+});
+
+test("W11 종료 유예 < 하드 데드라인 = index.ts 의 실제 값 — 세 숫자가 말없이 어긋나지 않게", async () => {
+  // ★ 이 상수는 index.ts 의 값을 **베껴 든 것**이라 저절로 따라오지 않는다. 어긋나면 증상이
+  //  「롤·재배포에서만 유령 정리가 통째로 안 돈다」인데, 그건 단위시험에 안 잡히고 사람 눈에도
+  //  안 띈다(#2625 가 1년 가까이 못 본 것과 같은 종류의 침묵). 그래서 원본과 대조한다.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../src/index.ts", import.meta.url), "utf8");
+  const hits = [...src.matchAll(/process\.exit\((?:0|1)\), (\d[\d_]*)\)/g)].map((m) => Number(m[1]!.replace(/_/g, "")));
+  assert.ok(hits.length >= 2, `index.ts 에서 하드 데드라인을 못 찾았다(${hits.length}건) — 종료 경로가 바뀌었으면 이 시험도 같이 고쳐라`);
+  assert.equal(Math.min(...hits), PROCESS_EXIT_DEADLINE_MS,
+    "index.ts 의 하드 데드라인이 바뀌었다 — attach-worker-host 의 베낀 값도 같이 고쳐라");
+  assert.ok(STOP_GRACE_MS < PROCESS_EXIT_DEADLINE_MS,
+    "워커 유예가 하드 데드라인 이상이면, 워커가 멎었을 때 유령 정리가 한 건도 안 나간다");
 });
