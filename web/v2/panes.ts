@@ -220,7 +220,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   '마지막으로 쓰던 값'을 물려주면 방금 스쳐 본 세션의 폭이 다음 세션으로 새어 나가 독립이 깨진다.
   //   #1719 가 걱정한 '설정할 게 많다'는 **기본값이 늘 쓸 만한 자리**(곁칸 340)라는 것으로 답한다.
   const VIEW_KEY = 'pn_view_by_sess';
-  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean };
+  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean; sideLeft?: boolean };   // sideLeft = 곁칸이 왼쪽(자리바꿈, #762)
   function readViews(): Record<string, View> {
     try { const m = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return m && typeof m === 'object' ? m as Record<string, View> : {}; }
     catch (_) { return {}; }
@@ -481,6 +481,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     // 접힘도 그 세션이 정한 적이 있을 때만 따른다 — 없으면 이 프로젝트의 기본 배치 그대로(칸의 '종류'와 같은 축).
     if (typeof v.sideOn === 'boolean') lay.sideOn = v.sideOn;
     if (typeof v.bottomOn === 'boolean') lay.bottomOn = v.bottomOn;
+    // ★ 자리(곁칸이 왼쪽인가)도 폭을 입힌 **뒤에** 되살린다(#762) — 폭보다 먼저 판정하면 늘 기본 폭으로 «안 바꿈»이 된다.
+    //   적어 둔 자리가 있으면 그대로, 없으면(그 세션에서 자리가 바뀐 적이 없으면) 폭으로 판정한다.
+    swap?.restore(w, typeof v.sideLeft === 'boolean' ? v.sideLeft : undefined);
   }
   colMain.append(mainPane.root, splitY, bottomPane.root);
   // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
@@ -490,7 +493,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onclick: () => { lay.sideOn = true; saveLayout(); saveView({ sideOn: true }); paintAll(); },
   }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
   body.append(colMain, splitX, sidePane.root, sideReopen);
-  swap = mountSideSwap({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn });
+  swap = mountSideSwap({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn,
+    //  자리가 바뀌면 **이 세션의 것**으로 적는다 — 폭·접힘과 같은 표에(나갔다 들어와도 그 자리, 원준 2026-09-04).
+    onChange: (v) => saveView({ sideLeft: v }) });
 
   // ── 탭 ──
   function ensurePart(pane: Pane, type: PartType): Part {

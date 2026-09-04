@@ -1035,6 +1035,9 @@ function viewerPart(ctx: PartCtx): Part {
   let list: FlatFile[] = [];
   let path = '';
   let q = '';
+  //  살아 있는 미리보기(아래) — open() 이 읽으므로 **그보다 앞에** 선언한다(마운트 중 TDZ 사고의 재발 방지).
+  let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(목록 화면·아직 여는 중)
+  let checking = false;
   //  덮어쓰기 판정에 쓰는 **실제로 있는 것 전부**(list 는 휴지통·잡동사니를 걸러 낸 화면용이라 이름 자리를 놓친다).
   let taken = new Set<string>();
   const urls: string[] = [];
@@ -1107,6 +1110,10 @@ function viewerPart(ctx: PartCtx): Part {
     bar.replaceChildren(
       el('button', { class: 'pn-web-btn', type: 'button', text: '← 자료', title: '파일 목록으로 돌아갑니다', onclick: () => void open('') }),
       el('b', { class: 'pn-ed-name ell', text: base(path), title: path }),
+      //  새로고침(#762, 원준 2026-09-04) — 같은 파일을 **다시 받아** 편다(세션이 방금 고친 시안·PDF 를 그 자리에서 본다).
+      //  배율은 그대로다(세션마다 기억하는 값이라 다시 펴도 안 바뀐다). 웹 칸의 ↺ 와 같은 아이콘·같은 자리.
+      el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 다시 불러옵니다', 'aria-label': '다시 불러오기',
+        onclick: () => { void loadList().then(() => open(path, true, true)); } }, pnIcon('undo', 'pn-i sm')),
       upBtn(false),
       el('a', { class: 'pn-web-btn', href: fileUrl(path) + '&download=1', download: base(path), title: '내려받기' }, pnIcon('drop', 'pn-i sm')));
   }
@@ -1147,18 +1154,29 @@ function viewerPart(ctx: PartCtx): Part {
     window.setTimeout(() => { if (q) search.focus(); }, 0);
   }
 
-  async function open(p2: string): Promise<void> {
+  /** 파일을 편다. `fresh` 면 브라우저 캐시를 건너뛰고 **다시 받는다** — 안 그러면 방금 바뀐 파일도 옛 것이 뜬다.
+   *  `quiet` 면 «여는 중…» 을 안 띄운다 — 살아 있는 미리보기가 다시 펼 때 화면이 깜빡이지 않게(옛 그림이 새 그림이 올 때까지 남는다). */
+  async function open(p2: string, fresh = false, quiet = false): Promise<void> {
     path = p2;
     remember(p2);
     paintBar();
-    if (!p2) { paintPicker(); return; }
+    if (!p2) { shownStamp = ''; paintPicker(); return; }
     const k = kindOf(p2);
-    showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '여는 중…' }));
+    const fetchOpts: RequestInit = { headers: authHeaders(), cache: fresh ? 'no-store' : 'default' };
+    //  도장 = 서버가 준 (수정 시각 ms · 크기). 옛 서버라 헤더가 없으면 매니페스트의 값으로 대신한다.
+    const stampFrom = (r: Response): string => {
+      const m = r.headers.get('x-file-mtime');
+      if (m) return m + ':' + (r.headers.get('x-file-size') || '');
+      const f = list.find((x) => x.path === p2);
+      return f ? f.mtime + ':' + f.size : '';
+    };
+    if (!quiet) showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '여는 중…' }));
     if (k.kind === 'text' || k.kind === 'page') {
-      const r = await fetch(fileUrl(p2), { headers: authHeaders() }).catch(() => null);
+      const r = await fetch(fileUrl(p2), fetchOpts).catch(() => null);
       if (!r || !r.ok) { showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
       const txt = await r.text();
       if (path !== p2) return;                       // 그 사이 다른 걸 골랐다
+      shownStamp = stampFrom(r);
       if (k.kind === 'page') {
         // 시안(HTML)은 격리 프레임(srcdoc)으로 — 스크립트·폼·상위 접근이 모두 막힌 채 그림만 보인다.
         const f = el('iframe', { class: 'pn-ed-pv full', sandbox: '', tabindex: '-1' }) as HTMLIFrameElement;
@@ -1173,10 +1191,11 @@ function viewerPart(ctx: PartCtx): Part {
       return;
     }
     if (k.kind === 'img' || k.kind === 'pdf' || k.kind === 'video') {
-      const r = await fetch(fileUrl(p2), { headers: authHeaders() }).catch(() => null);
+      const r = await fetch(fileUrl(p2), fetchOpts).catch(() => null);
       if (!r || !r.ok) { showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
       const bl = await r.blob();
       if (path !== p2) return;
+      shownStamp = stampFrom(r);
       const u = URL.createObjectURL(k.kind === 'pdf' ? new Blob([bl], { type: 'application/pdf' }) : bl);
       urls.push(u);
       if (k.kind === 'img') {
@@ -1225,10 +1244,44 @@ function viewerPart(ctx: PartCtx): Part {
   void loadList().then(() => openRemembered());
   // 세션을 갈아 끼우면 그 세션이 펴 두었던 파일로 — 단 **고치는 중이면 건드리지 않는다**(저장 안 한 글을 뺏지 않는다).
   const offSess = ctx.onSession(() => openRemembered());
+
+  // ── 살아 있는 미리보기 (#762, 원준 2026-09-04: "우측에서 바로 수정하고 있으면 실시간 반영") ─────────
+  //  세션이 시안(HTML)·PDF 를 고치는 동안 사람은 왼쪽 뷰어를 본다. 바뀔 때마다 새로고침을 누르게 하면 그 화면은
+  //  «보는 화면»이 아니라 «확인하러 가는 화면»이 된다. 그래서 파일이 열려 있고 이 칸이 **보이는 동안만** 1.5초마다
+  //  HEAD 로 도장(수정 시각·크기)을 묻고, 달라지면 조용히 다시 편다(옛 그림이 새 그림이 올 때까지 남는다).
+  //  ⚠ 몸통을 받지 않는다 — 서버가 HEAD 를 머리만으로 끝낸다(project-routes). 1.5초마다 PDF 를 통째로 받으면 안 된다.
+  //  ⚠ 안 보이는 칸은 묻지 않는다 — 웹 칸이 «안 보이면 재운다»와 같은 이유(탭을 쌓아 둘수록 폴링이 쌓인다).
+  //  옛 서버(도장 헤더 없음)에서는 8초 tick 의 매니페스트 비교가 대신한다 — 느리지만 같은 일을 한다.
+  const visible = (): boolean => !!root.isConnected && root.getClientRects().length > 0;
+  const reopenIfChanged = (stamp: string): void => {
+    if (!path || !shownStamp || !stamp || stamp === shownStamp) return;
+    shownStamp = stamp;           // 먼저 적는다 — 다시 펴는 동안 같은 변경으로 또 펴지 않게
+    void open(path, true, true);
+  };
+  const checkFresh = async (): Promise<void> => {
+    if (checking || !path || !shownStamp || !visible()) return;
+    checking = true;
+    try {
+      const r = await fetch(fileUrl(path), { method: 'HEAD', headers: authHeaders(), cache: 'no-store' });
+      const m = r.ok ? r.headers.get('x-file-mtime') : null;
+      if (m) reopenIfChanged(m + ':' + (r.headers.get('x-file-size') || ''));
+    } catch (_) { /* 잠깐 못 물은 것 — 다음 박자에 다시 */ }
+    finally { checking = false; }
+  };
+  const watch = window.setInterval(() => { void checkFresh(); }, 1500);
+
   return {
     root,
-    tick: () => { void loadList().then(() => { if (!path) paintPicker(); paintBar(); }); },
-    destroy: () => { offSess(); zoom.destroy(); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    tick: () => {
+      void loadList().then(() => {
+        if (!path) paintPicker();
+        paintBar();
+        //  옛 서버 폴백 — 매니페스트의 도장으로도 같은 판정을 한다(새 서버에선 HEAD 가 먼저 잡아 여기선 이미 같다).
+        const f = path ? list.find((x) => x.path === path) : null;
+        if (f) reopenIfChanged(f.mtime + ':' + f.size);
+      });
+    },
+    destroy: () => { offSess(); zoom.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 

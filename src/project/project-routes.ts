@@ -212,6 +212,11 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const download = req.query.download === "1";
     if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
     res.setHeader("Cache-Control", "no-store");
+    // 파일 도장(#762) — 뷰어의 «살아 있는 미리보기»가 HEAD 로 「바뀌었나」만 묻는다. 시각은 ms, 크기까지 둘이라
+    //  같은 초 안에 두 번 저장한 것도 가른다(Last-Modified 는 초 단위라 그걸로는 못 가른다 — 표준 클라이언트용으로만 둔다).
+    res.setHeader("Last-Modified", st.mtime.toUTCString());
+    res.setHeader("X-File-Mtime", String(Math.round(st.mtimeMs)));
+    res.setHeader("X-File-Size", String(st.size));
     // 미리보기는 실제 MIME 으로(PDF=application/pdf → iframe 네이티브 뷰어 렌더). 다운로드는 octet-stream +
     //  Content-Disposition: attachment 로 강제 저장(브라우저가 인라인 표시하지 않게).
     if (download) {
@@ -220,6 +225,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     } else {
       res.setHeader("Content-Type", contentTypeFor(abs));
     }
+    // HEAD 는 머리만 — 익스프레스는 HEAD 를 GET 핸들러로 보내는데, 여기서 안 끊으면 1.5초마다 PDF 를 통째로 읽는다.
+    if (req.method === "HEAD") { res.end(); return; }
     fs.createReadStream(abs).pipe(res);
   }));
 
