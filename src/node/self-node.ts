@@ -45,6 +45,46 @@ export function sharesGatewayTmux(
   return nodeSessionIds.some((id) => gatewaySessionIds.has(id));
 }
 
+/**
+ * 이 노드가 **선언된 세션 호스트**인가 — #2592 겹침 판정에서 면제할 **유일한** 근거 (#2600 T2).
+ *
+ * 세션 호스트는 게이트웨이와 같은 tmux 를 본다. 그건 사고가 아니라 설계다(그 테넌트의 세션을 맡으라고
+ *  띄운 프로세스이고, 같은 브로커 소켓으로 그 tmux 에 닿는다). 사고로 생긴 셀프 노드와는 **관측만으로
+ *  구별되지 않는다** — 겹침이 양쪽에서 똑같이 참이다. 그래서 **선언**으로 가른다.
+ *
+ * ⚠ «없으면 면제» 로 뒤집지 마라. 값이 없거나 모르는 노드(구 행·조회 실패)는 면제하지 **않는다** —
+ *  그래야 방어가 조용히 꺼지지 않는다(fail-closed). 선언은 관리자만 할 수 있다(node/routes.ts).
+ */
+export function declaredSessionHost(n: { session_host?: boolean } | null | undefined): boolean {
+  return n?.session_host === true;
+}
+
+/**
+ * 이 노드를 셀프 노드로 **새로 표시할 것인가** — 판정 한 칸의 결정 (#2600 T2).
+ *
+ * ⚠ 이름이 «이 노드가 셀프 노드인가» 가 **아니다**. 이미 확정된 노드에는 `false` 를 돌려준다(다시 표시할
+ *  이유가 없어서다). 술어로 오해해 «통과시켜도 되나» 를 여기에 물으면 **확정된 셀프 노드를 통과시킨다** —
+ *  그 질문의 답은 `registry.isSelfNode` 다.
+ *
+ * 종전엔 세 조건이 `registry.probeSelfNodes` 의 루프 안에 흩어져 있어 «면제가 실제로 도나» 를 시험할 수
+ *  없었다(실측: 면제를 통째로 지워도 관련 시험 29개가 전부 초록이었다). 결정을 밖으로 내면 그 자리가 생긴다.
+ *  판정 재료(`sharesGatewayTmux`)는 그대로 쓰고, 순서와 면제만 여기서 고정한다.
+ *
+ * ⚠ `declaredSessionHost` 를 **불리언으로 받는다** — 호출부가 «어디서 읽었나» 를 고르게 하려는 것이다.
+ *  그 값은 반드시 **상태 스냅샷**에서 와야 한다(연결이 아니라): 부팅 직후 판정은 연결이 하나도 없는 채로
+ *  돌고, 그때 연결에서 읽으면 선언이 안 보여 선언된 세션 호스트가 **sticky 하게** 셀프 노드로 확정된다.
+ */
+export function shouldMarkSelfNode(o: {
+  alreadyJudged: boolean;
+  declaredSessionHost: boolean;
+  gatewaySessionIds: ReadonlySet<string>;
+  nodeSessionIds: readonly string[];
+}): boolean {
+  if (o.alreadyJudged) return false;              // 판정은 sticky — 두 번 하지 않는다
+  if (o.declaredSessionHost) return false;        // 선언된 세션 호스트는 겹쳐도 자기 자신이 아니다
+  return sharesGatewayTmux(o.gatewaySessionIds, o.nodeSessionIds);
+}
+
 // ── #2592 — 그 판정을 **집행**하는 자리들이 쓰는 순수 술어 ────────────────────────
 //
 // #2108 은 이 판정으로 «그 노드로 새로 만들기»만 막았다. 그런데 셀프 노드가 새는 구멍은 넷이었다

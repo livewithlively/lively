@@ -10,6 +10,7 @@
 //  "정본 ← 캐시" 방향의 지연만 있고(무변경 최대 60초), 값이 갈라지지는 않는다. 여러 게이트웨이가 같은 DB 를
 //  보는 배치라도 각자 자기에게 붙은 노드만 쓰므로 행이 겹치지 않는다.
 import { itemsPool } from "../db/client.js";
+import { declaredSessionHost } from "./self-node.js";   // #2600 T2 — fail-closed 판정은 한 곳에서만(인라인 재구현 금지)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { NodeResources } from "./protocol.js";
 
@@ -42,12 +43,14 @@ export function isFresh(reportedAt: number, now: number): boolean {
 export interface StoredNodeState {
   nodeId: string; reportedAt: number; sessions: SessionInfo[]; res: NodeResources | null;
   name: string; kind: string; owner: string;
+  /** #2600 T2 — 이 노드가 «세션 호스트» 로 선언됐나(org_node.session_host). 셀프 노드 면제의 근거. */
+  sessionHost: boolean;
 }
 
 /** 정본 전체를 읽는다(부팅 hydrate). org_node 조인이라 **지워진 노드의 잔재는 애초에 안 나온다**. */
 export async function loadNodeStates(now: number = Date.now()): Promise<StoredNodeState[]> {
   const r = await itemsPool.query(
-    `SELECT s.node_id, s.reported_at, s.sessions, s.res, n.name, n.kind, n.owner_member
+    `SELECT s.node_id, s.reported_at, s.sessions, s.res, n.name, n.kind, n.owner_member, n.session_host
        FROM org_node_state s JOIN org_node n ON n.id = s.node_id`,
   );
   const out: StoredNodeState[] = [];
@@ -62,6 +65,11 @@ export async function loadNodeStates(now: number = Date.now()): Promise<StoredNo
       name: String(row.name || row.node_id),
       kind: String(row.kind || "member"),
       owner: String(row.owner_member || ""),
+      // #2600 T2 — 선언(세션 호스트)은 **상태와 함께 다닌다**. 셀프 노드 면제가 «지금 연결돼 있나» 에
+      //  걸리면 안 되기 때문이다: 부팅 직후 판정은 이 스냅샷으로 도는데 그때 연결은 아직 하나도 없다
+      //  (hydrateNodeStates 가 복구 직후 곧바로 판정한다 — #2172). 연결에서 읽으면 그 순간 선언이 안 보여
+      //  선언된 세션 호스트가 **sticky 하게** 셀프 노드로 확정된다(되돌리는 경로가 없다 — R2).
+      sessionHost: declaredSessionHost(row as { session_host?: boolean }),
     });
   }
   return out;

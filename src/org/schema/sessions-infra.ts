@@ -405,6 +405,14 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     -- #1849 — 이 PC 가 자지 않게 붙잡고 있나(에이전트 hello 보고: {active, method, gaps, reason}).
     --  NULL = **모름**(구 번들은 안 보낸다)이지 '안 걸림'이 아니다 — 그 구분을 화면이 해야 사용자를 오도하지 않는다.
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS keep_awake JSONB;
+    -- #2600 T2 — 이 노드는 **그 워크스페이스의 세션 호스트로 선언**됐나.
+    --  왜 별도 축인가: kind 는 «자격·용량» 축이지 다른 뜻을 겸하면 안 된다 — 종전에 kind='worker' 가
+    --  «전체 개방» 을 겸했다가 위탁이 그 경계를 우회했고, 그래서 shared 를 따로 뺐다(#1540). 같은 실수를
+    --  반복하지 않는다.
+    --  무엇을 뜻하나: 이 노드는 게이트웨이와 **같은 tmux 를 보는 것이 정상**이다(그게 존재 이유다).
+    --  그래서 #2592 의 겹침 판정(셀프 노드)에서 **면제**된다 — 사고로 생긴 셀프 노드와 갈리는 유일한 근거가
+    --  이 선언이다. 그러므로 **관리자만** 켠다(routes 의 admin 게이트). 기본은 false = 종전 그대로.
+    ALTER TABLE org_node ADD COLUMN IF NOT EXISTS session_host BOOLEAN NOT NULL DEFAULT false;
 
     -- shared 이관(#1540) — **컬럼을 방금 만든 경우에만** 백필한다.
     --  ⚠ 조건 없이 UPDATE 로 두면, 관리자가 공유를 끈 worker 노드가 게이트웨이 재시작마다 다시 공유로

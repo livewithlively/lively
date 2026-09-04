@@ -157,13 +157,20 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     //  두 경로(중앙 즉답 / 노드 3초 스냅샷+릴레이)로 잡혀 접속·목록·발견 기록이 전부 샌다(#2108 은 «그 노드로
     //  새로 만들기»만 막았다). 판정 근거는 등록하는 쪽이 실어 보낸 자기 tmux 세션 id 와의 겹침 — #2108 과
     //  **같은 술어**라 오탐이 없고(원격 PC 의 세션 id 가 이 박스 tmux 에 있을 수 없다), 겹친 id 는 응답에 안 싣는다.
-    if (await looksLikeGatewayBox(boxProbe(b))) throw new HttpError(409, selfNodeMessage());
+    // #2600 T2 — **선언된 세션 호스트**는 이 판정에서 면제된다. 그 노드는 게이트웨이와 같은 tmux 를 보는
+    //  것이 정상이다(그게 존재 이유다) — «사고로 생긴 셀프 노드» 와 갈리는 유일한 근거가 이 선언이라,
+    //  선언을 **관리자만** 할 수 있게 두고(아래 게이트) 판정 자체(#2592 의 겹침, 오탐 0)는 손대지 않는다.
+    //  ⚠ 순서: 면제는 admin 게이트 **뒤**여야 한다. 앞에 두면 아무나 `sessionHost:true` 를 실어
+    //   셀프 노드 방어를 스스로 끌 수 있다.
+    const sessionHost = !!b.sessionHost;
+    if (sessionHost && !isAdmin(u)) throw new HttpError(403, "세션 호스트 지정은 admin 권한이 필요합니다");
+    if (!sessionHost && await looksLikeGatewayBox(boxProbe(b))) throw new HttpError(409, selfNodeMessage());
     if (b.shared && !isAdmin(u)) throw new HttpError(403, "공유 노드 지정은 admin 권한이 필요합니다");
     const { node, token } = await createNode(
-      { id: String(b.id ?? b.name ?? ""), name: String(b.name ?? b.id ?? ""), kind, owner: me, shared: !!b.shared },
+      { id: String(b.id ?? b.name ?? ""), name: String(b.name ?? b.id ?? ""), kind, owner: me, shared: !!b.shared, sessionHost },
       me,
     );
-    logger.info({ node: node.id, kind, owner: me, shared: !!b.shared }, "노드 등록");
+    logger.info({ node: node.id, kind, owner: me, shared: !!b.shared, sessionHost }, "노드 등록");
     res.setHeader("Cache-Control", "no-store");
     res.json({ node: toView(node, new Map()), token, install: installHint(node.id) });
   }));

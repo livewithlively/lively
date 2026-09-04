@@ -16,7 +16,7 @@ import {
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
-import { sharesGatewayTmux, hasSelfProbeCandidate, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
@@ -64,7 +64,10 @@ interface NodeConn {
 //  노드가 다시 붙을 때까지(최악 33초) 살아 있는 세션이 화면에서 사라졌다 — 그 빈 판을 본 세션 화면이
 //  '이 세션은 없어졌다'로 오판해 다른 세션으로 갈아타는 사고까지 났다(web/v2/panes-parts.ts 주석).
 //  조회는 계속 이 캐시가 답한다(동기 API 유지 — 목록 API 가 조회마다 DB 를 때리지 않는다).
-interface NodeState { ts: number; sessions: SessionInfo[]; name: string; kind: string; owner: string; res: NodeResources | null }
+interface NodeState { ts: number; sessions: SessionInfo[]; name: string; kind: string; owner: string; res: NodeResources | null;
+  /** #2600 T2 — 선언된 세션 호스트인가. **상태와 함께 다닌다** — 면제가 «지금 연결돼 있나» 에 걸리면
+   *  부팅 직후(연결 0) 판정에서 선언이 안 보여 sticky 오분류가 난다(node-state-store 의 같은 주석). */
+  sessionHost: boolean }
 
 // ── 인메모리 맵의 **테넌트 스코프** (#2044) ─────────────────────────────────
 // 판정(나눠야 하는가·어느 스코프인가)은 순수 모듈 registry-scope.ts 가 소유한다 — 사연·불변식은 거기 머리말.
@@ -102,7 +105,7 @@ export async function hydrateNodeStates(): Promise<number> {
   for (const r of rows) {
     const k = keyOf(r.nodeId);
     if (states.has(k)) continue;
-    states.set(k, { ts: r.reportedAt, sessions: r.sessions, name: r.name, kind: r.kind, owner: r.owner, res: r.res });
+    states.set(k, { ts: r.reportedAt, sessions: r.sessions, name: r.name, kind: r.kind, owner: r.owner, res: r.res, sessionHost: r.sessionHost });
     persisted.set(k, { digest: sessionsDigest(r.sessions), at: r.reportedAt });
     n++;
   }
@@ -159,6 +162,7 @@ export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
 //  호스트명 대용물을 거부한 것과 같은 비대칭이다. 프로세스가 새로 뜨면 첫 스냅샷에서 다시 도출된다(그 창은
 //  아래 applyState 가 발견 기록을 판정 뒤로 미뤄 막는다).
 const selfNodes = new Set<string>();          // states 와 같은 스코프 키
+
 const SELF_PROBE_MS = 30_000;
 let selfProbeAt = 0;
 let selfProbing: Promise<void> | null = null;
@@ -186,8 +190,19 @@ function probeSelfNodes(): Promise<void> {
       const { listSessionsRaw } = await import("../terminal/sessions.js");
       const mine = new Set((await listSessionsRaw({ strict: true })).map((s) => s.id));
       for (const [k, st] of states) {
-        if (selfNodes.has(k)) continue;
-        if (!sharesGatewayTmux(mine, st.sessions.map((s) => s.id))) continue;
+        // #2600 T2 — **선언된 세션 호스트는 면제한다.** 그 노드는 게이트웨이와 같은 tmux 를 보는 것이
+        //  정상이다(매니지드 세션 호스트는 같은 브로커 소켓으로 그 tmux 에 닿는다 — 그게 존재 이유다).
+        //  ⚠ 판정(sharesGatewayTmux)은 손대지 않는다: 그 오탐 0 이 #2592 의 값어치라, «의도한 공유» 와
+        //   «사고인 공유» 를 가르는 일은 **선언**이 한다. 선언은 admin 만 할 수 있다(node/routes.ts).
+        //  ⚠ 여기서 건너뛰면 `selfNodes` 에 안 들어가고, 그러면 아래 소비처(relayNodeId 좌표 접기 ·
+        //   nodeRelayAttach 거부 · hello 거부)가 **전부** 정상 동작한다 — 면제를 한 자리에만 둘 수 있는 이유다.
+        if (!shouldMarkSelfNode({
+          alreadyJudged: selfNodes.has(k),
+          //  ★ **상태**에서 읽는다(연결이 아니라) — 부팅 직후 판정은 연결이 0인 채로 돈다.
+          declaredSessionHost: st.sessionHost,
+          gatewaySessionIds: mine,
+          nodeSessionIds: st.sessions.map((s) => s.id),
+        })) continue;
         selfNodes.add(k);
         //  로그엔 **맨 노드 id** 를 싣는다 — k 는 스코프 키라 앞에 구분자(NUL)가 붙어 나온다(실측 로그: node 값 앞의 \u0000).
         logger.warn({ node: conns.get(k)?.node.id ?? k },
@@ -432,6 +447,10 @@ function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | 
     kind: c.node.kind ?? prev?.kind ?? "member",
     owner: c.node.owner_member ?? prev?.owner ?? "",
     res: res ?? prev?.res ?? null,
+    //  #2600 T2 — 살아 있는 연결에선 그 행이 가장 신선하다. 앞선 스냅샷 값은 **되돌리지 않는다**:
+    //   선언은 등록에서만 켜지므로(UPDATE 경로 없음) 연결이 «모른다» 고 답할 일이 없고, 굳이 폴백을
+    //   두면 «모름» 이 «선언 취소» 로 읽힐 자리가 생긴다.
+    sessionHost: declaredSessionHost(c.node) || prev?.sessionHost === true,
   };
   states.set(k, st);
   // #2022 — 처음 보는 세션이 있으면 그 자리에서 기억한다(구독자가 판단·기록, 여기선 알리기만).
