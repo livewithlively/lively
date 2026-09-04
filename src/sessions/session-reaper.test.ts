@@ -1,7 +1,7 @@
 // idle 세션 회수 결정 로직 테스트 (#1059 F) — 정당 세션 오kill 금지 안전 불변식(#687 교훈)이 핵심.
 //  주입 seam(deps)으로 tmux·DB 없이 결정만 검증한다. 엣지 표(스크래치패드 spec.md)의 모든 행 = 시나리오.
 import assert from "node:assert/strict";
-import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView } from "./session-reaper.js";
+import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView, resolveLiveJobs } from "./session-reaper.js";
 import type { ProcEntry } from "./session-rss.js";
 import { invalidateSessionReclaimPolicyCache, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
@@ -915,3 +915,72 @@ for (const [maxReap, expect] of [[0, ["u-1"]], [2, ["u-1", "u-2"]]] as Array<[nu
 }
 
 console.log("session-reaper(⑥ 백그라운드 작업 보호 · 못 잰 곳 상한): all passed");
+
+// ── F. 컨테이너 프로브 경로(#2652 후속) — 사양·엣지 표: 스크래치패드 spec2.md 표 F ────────────────
+//  매니지드는 세션마다 컨테이너가 달라 게이트웨이의 프로세스 표에 그 pane pid 가 아예 없다.
+//  그러면 ① 로컬 판정이 조용히 «작업 없음» 이 되므로, 판정조차 못 한 세션만 골라 ② 컨테이너 안에서 본다.
+
+/** 매니지드 실측 모양(2026-09-04): sh(pane) → claude(하네스·제 그룹) → node·node(하네스 그룹 상속) */
+const inContainer = (withJob: boolean): Map<number, ProcEntry> => {
+  const t = new Map<number, ProcEntry>([
+    [28, { ppid: 27, rssKb: 2_420, name: "sh", pgid: 28, tpgid: 0 }],
+    [36, { ppid: 28, rssKb: 750_848, name: "claude", pgid: 36, tpgid: 0 }],
+    [188, { ppid: 36, rssKb: 146_564, name: "node", pgid: 36, tpgid: 0 }],
+  ]);
+  if (withJob) t.set(900, { ppid: 36, rssKb: 1_200, name: "zsh", pgid: 900, tpgid: 0 });
+  return t;
+};
+/** 게이트웨이 자신의 표 — 세션 프로세스가 **없다**(pid 28 은 이 표에 없다). */
+const gwOnly = (): Map<number, ProcEntry> => new Map<number, ProcEntry>([
+  [1, { ppid: 0, rssKb: 2_988, name: "tini", pgid: 1, tpgid: 0 }],
+  [9, { ppid: 1, rssKb: 125_688, name: "node", pgid: 9, tpgid: 0 }],
+]);
+const view = (panes: Array<[string, number[]]>) => ({ ok: true, panes: new Map(panes) });
+
+// F2 — 로컬 표에 없으면 컨테이너에서 떠 판정한다(작업 있음/없음 둘 다)
+{
+  const probed: string[] = [];
+  const busy = await resolveLiveJobs(new Set(["box-m"]), view([["box-m", [28]]]), gwOnly(),
+    async (sid) => { probed.push(sid); return inContainer(true); });
+  assert.deepEqual([...busy], ["box-m"], "컨테이너 안에서 백그라운드 작업을 잡는다 — 매니지드에서 ⑥ 이 켜지는 자리");
+  assert.deepEqual(probed, ["box-m"], "판정 못 한 세션만 프로브한다");
+  const idle = await resolveLiveJobs(new Set(["box-m"]), view([["box-m", [28]]]), gwOnly(), async () => inContainer(false));
+  assert.equal(idle.size, 0, "작업이 없으면 보호하지 않는다(과보호 금지)");
+}
+
+// F1 — 로컬 표로 판정된 세션은 프로브하지 않는다(셀프호스트 경로 무회귀)
+{
+  let calls = 0;
+  const local = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 11 }],
+  ]);
+  const out = await resolveLiveJobs(new Set(["box-n"]), view([["box-n", [10]]]), local,
+    async () => { calls++; return new Map(); });
+  assert.equal(out.size, 0, "로컬 표로 '작업 없음'을 판정했다");
+  assert.equal(calls, 0, "이미 판정된 세션에 컨테이너 프로브를 걸면 셀프호스트에 없던 왕복이 생긴다");
+}
+
+// F3 — 한 세션의 프로브 실패가 다른 세션 판정을 막지 않는다
+{
+  const out = await resolveLiveJobs(new Set(["box-bad", "box-ok"]),
+    view([["box-bad", [28]], ["box-ok", [28]]]), gwOnly(),
+    async (sid) => { if (sid === "box-bad") throw new Error("중계 타임아웃"); return inContainer(true); });
+  assert.deepEqual([...out], ["box-ok"], "실패한 세션만 판정 불가로 두고 나머지는 계속한다");
+}
+
+// F4 — 중계가 없으면(셀프호스트) 빈 표가 오고, 그건 '판정 불가'다(보호하지 않는다)
+{
+  const out = await resolveLiveJobs(new Set(["box-o"]), view([["box-o", [28]]]), gwOnly(), async () => new Map());
+  assert.equal(out.size, 0, "판정 불가에 보호를 주면 그 배포에서 회수가 통째로 멈춘다");
+}
+
+// F5 — 후보가 없으면 아무것도 안 한다
+{
+  let calls = 0;
+  const out = await resolveLiveJobs(new Set(), view([["box-p", [28]]]), gwOnly(), async () => { calls++; return new Map(); });
+  assert.equal(out.size, 0);
+  assert.equal(calls, 0);
+}
+
+console.log("session-reaper(⑥ 컨테이너 프로브 경로 — 매니지드): all passed");
