@@ -105,7 +105,9 @@ const categoryCreate: Capability = {
   name: "category_create",
   title: "카테고리 생성",
   description: "카테고리(분류축)를 만든다. **should(정의)가 필수** — 이 축이 무엇을 담고 무엇을 담지 않는지, 인접 축과의 경계를 400~600자로 적는다(하한 40자). "
-    + "정의가 없으면 분류·소환이 축 이름의 어감으로만 판정한다.",
+    + "정의가 없으면 분류·소환이 축 이름의 어감으로만 판정한다. "
+    + "⚠ 정의는 **주제 경계**만 적는다 — 민감정보·개인정보 정책(«계좌번호는 싣지 않는다» 류)은 쓰지 마라. "
+    + "분류기가 그 문장을 분류 기준으로 읽고, 실제 차단은 공개범위·마스킹 층이 하므로 여기 적어 둬도 한 줄도 막지 못한다.",
   scope: "context",
   input: categoryCreateInput,
   expose: {
@@ -139,6 +141,12 @@ const categoryUpdateInput = {
   description: z.string().max(4000).optional(),
   should: z.string().max(8000).optional(),
   cross_cutting: z.boolean().optional(),
+  //  ★ 축을 «치우는» 유일한 수단(#1631). 삭제는 비가역이라 사람(웹)만 되는데, 비활성조차 없어서
+  //   리브가 쓸 수 있는 게 **이름 칸뿐**이었다 — 실측(서리재): 분류축 이름이
+  //   「(통합됨) 행정·신고·세무 → 관공서·인허가/정산·자금」 이 됐다. 이름은 안내문 자리가 아니다.
+  //   지식이 남아 있으면 거절한다(미분류는 소환에 안 잡힌다).
+  state: z.enum(["active", "deprecated"]).optional()
+    .describe("비활성으로 치우거나 되살린다. 지우는 게 아니라 **분류 후보에서 빼는 것** — 이미 든 지식이 있으면 거절되니 먼저 옮겨라. 삭제는 사람(웹)만 가능."),
 };
 type CategoryUpdateInput = z.infer<z.ZodObject<typeof categoryUpdateInput>>;
 const categoryUpdate: Capability = {
@@ -158,6 +166,12 @@ const categoryUpdate: Capability = {
           description: b.description != null ? String(b.description) : undefined,
           should: b.should != null ? String(b.should) : undefined,
           cross_cutting: typeof b.cross_cutting === "boolean" ? b.cross_cutting : undefined,
+          //  ⚠ 입력 스키마에만 넣고 여기 빠뜨리면 **웹·REST 에서 조용히 무시된다**(MCP 만 동작).
+          //   dev 실측(2026-09-03): [치우기] 버튼이 200 을 받고 아무 일도 안 했다 — 실패조차 아니었다.
+          //  ⚠ 값을 **여기서 거르지 않는다.** REST 경로엔 zod 검증이 없어서(입력 스키마는 MCP·표면 스냅샷용)
+          //   여기서 모르는 값을 undefined 로 떨구면 스토어의 가드가 영영 안 돌고 200 이 나간다 —
+          //   dev 실측(2026-09-04): `{"state":"merged"}` 가 조용히 무시됐다. 판정은 스토어 한 곳에서만 한다.
+          state: b.state != null ? String(b.state) : undefined,
         };
       } }],
   },

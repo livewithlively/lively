@@ -2196,7 +2196,7 @@
   "rest": [
    "POST /api/ui/categories/:id"
   ],
-  "input_hash": "38a618c7a3efdbdb"
+  "input_hash": "5edd52e84ff3bb5e"
  },
  {
   "name": "category_view_set",
@@ -2656,7 +2656,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "98bbfd788a56f291"
+  "input_hash": "e59688fdc0bc2f6e"
  },
  {
   "name": "source_undistilled",
