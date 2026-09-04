@@ -10,7 +10,7 @@ import { anchoredPopover, api, apiUrl, el, relTime, toast } from '../core.js';
 import { fmtSize } from '../projects/files.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
-import { openInViewerPart, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
+import { openInViewerPart, PV_PAGE_W, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
 export function filesPart(ctx: PartCtx): Part {
@@ -438,14 +438,19 @@ export function filesPart(ctx: PartCtx): Part {
   /** 카드 폭에 맞춰 종이(300×246)를 줄인다 — 칸 폭이 바뀌면 다시 맞춘다. */
   function fitPaper(box: HTMLElement, paper: HTMLElement): void {
     const w = box.clientWidth || 92;
-    paper.style.transform = 'scale(' + (w / PV_W).toFixed(4) + ')';
+    const lw = Number(paper.dataset.lw) || PV_W;      // 종이마다 논리 폭이 다르다(글 300 · 시안 1180)
+    paper.style.transform = 'scale(' + (w / lw).toFixed(4) + ')';
   }
   const fits: Array<[HTMLElement, HTMLElement]> = [];
   const ro: ResizeObserver | null = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => { for (const [b, pp] of fits) fitPaper(b, pp); })
     : null;
-  function paper(box: HTMLElement, inner: HTMLElement): void {
+  /** 미리보기 한 장을 카드에 앉힌다 — `logicalW` 는 **그 내용이 제대로 펴지는 폭**이고, 카드 폭으로 줄여 그린다. */
+  function paper(box: HTMLElement, inner: HTMLElement, logicalW = PV_W): void {
     const pp = el('div', { class: 'pn-fpaper' }, inner) as HTMLElement;
+    pp.dataset.lw = String(logicalW);
+    pp.style.width = logicalW + 'px';
+    pp.style.height = Math.round(logicalW * 0.82) + 'px';   // 카드 비율(1 : .82)과 같게 — 아래가 잘리지 않는다
     box.replaceChildren(pp);
     fits.push([box, pp]);
     fitPaper(box, pp);
@@ -480,7 +485,7 @@ export function filesPart(ctx: PartCtx): Part {
       //  srcdoc 은 내용을 그 자리에 넘기므로 출처 문제가 없고, 빈 sandbox 가 스크립트·폼·상위 접근을 모두 막는다.
       const frame = el('iframe', { class: 'pn-fframe', sandbox: '', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }) as HTMLIFrameElement;
       frame.srcdoc = raw.slice(0, 400_000);
-      paper(box, frame);
+      paper(box, frame, PV_PAGE_W);
       return;
     }
     const r = await fetch(url, { headers: authHeaders() });
