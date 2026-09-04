@@ -18,7 +18,7 @@ import { hasBrowserSurface } from './browser-surface.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
-import { NOISE_RE, TRASH_DIR, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
 import { createRunPicker } from './run-picker.js';
@@ -616,6 +616,108 @@ export function openInWebPart(ctx: PartCtx, url: string): void {
   ctx.paneRoot().dispatchEvent(new CustomEvent(WEB_OPEN_EVT, { detail: { url: u } }));
 }
 
+// ══ 배율 — 웹 칸과 뷰어가 **같은 부품**을 쓴다 (#762, 원준 2026-09-04) ═══════════
+//  두 가지를 한꺼번에 고친다.
+//  ① **맞춤이 칸 폭을 따라가야 한다** — "곁칸 가로 사이즈를 조절하면 그 폭에 맞게 비율이 확대·축소돼야
+//   하는데 배율이 그대로다". 맞춤은 고정된 숫자가 아니라 **칸과 내용물의 관계**라, 칸 폭이 바뀌면 다시 잰다.
+//  ② **단추가 보여야 한다** — "확대 축소하는 버튼이랑 위치랑 안 느껴져". 종전엔 주소줄에 28px 짜리
+//   [−][배율][+] 셋이 뒤로·앞으로·다시와 **똑같은 모양으로** 끼어 있어 배율인지 읽히지 않았고, 뷰어에는
+//   아예 없었다. 무대 오른쪽 아래에 떠 있는 알약 하나로 모은다 — 지도·PDF 뷰어가 쓰는 그 자리라
+//   찾지 않아도 눈에 걸리고, 두 칸이 **같은 자리·같은 모양**이라 한 번 배우면 둘 다 안다.
+const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+type ZoomOpts = {
+  /** 배율을 재는 자 — 지금 칸의 안쪽 폭. */
+  stage: HTMLElement;
+  /** 담긴 것의 **제 크기**(가로 px). 0 이면 맞춤을 셀 수 없다(=100%, 글처럼 스스로 흐르는 것). */
+  baseW: () => number;
+  /** 잰 배율을 실제로 입힌다. */
+  paint: (z: number) => void;
+  /** 배율은 **세션마다** 따로 기억한다 — 곁칸 부품은 그 세션의 것이다(#1819). */
+  keyOf: () => string;
+  /** 맞춤의 **하한**. 웹 칸은 0.25 아래로 내려가면 글자를 못 읽어 거기서 멈추지만(대신 가로로 구른다),
+   *  그림·PDF 는 '칸에 담기는 것'이 목적이라 하한이 곧 넘침이 된다 — 뷰어는 훨씬 낮게 준다. */
+  minFit?: number;
+};
+type Zoom = { el: HTMLElement; apply: () => void; isFit: () => boolean; destroy: () => void };
+function makeZoom(o: ZoomOpts): Zoom {
+  const zooms = new Map<string, number | null>();      // null = 맞춤(칸 폭에 맞춰 자동)
+  const less = el('button', { class: 'pn-zoom-b', type: 'button', 'aria-label': '축소', title: '축소합니다 (⌘−)', text: '−' }) as HTMLButtonElement;
+  const more = el('button', { class: 'pn-zoom-b', type: 'button', 'aria-label': '확대', title: '확대합니다 (⌘+)', text: '+' }) as HTMLButtonElement;
+  const lbl = el('button', { class: 'pn-zoom-lbl', type: 'button' }) as HTMLButtonElement;
+  const box = el('div', { class: 'pn-zoom', role: 'group', 'aria-label': '배율' }, less, lbl, more);
+  /** 맞춤 배율 — 칸 폭 ÷ 제 크기. 1 을 넘겨 키우지는 않는다(원래보다 크게 만들면 되레 답답하다). */
+  const fitZ = (): number => {
+    const b = o.baseW();
+    const w = o.stage.clientWidth;
+    if (!(b > 0) || !(w > 0)) return 1;
+    return Math.max(o.minFit ?? ZOOM_STEPS[0], Math.min(1, Math.round((w / b) * 1000) / 1000));
+  };
+  const eff = (): number => { const z = zooms.get(o.keyOf()); return z != null ? z : fitZ(); };
+  const isFit = (): boolean => zooms.get(o.keyOf()) == null;
+  const apply = (): void => {
+    const fit = isFit();
+    const z = eff();
+    box.classList.toggle('is-fit', fit);
+    lbl.textContent = (fit ? '맞춤 ' : '') + Math.round(z * 100) + '%';
+    lbl.title = fit
+      ? '칸 폭에 맞춰 자동으로 맞춥니다 — 누르면 100% 로 고정합니다.'
+      : '누르면 다시 칸 폭에 맞춥니다 (⌘0).';
+    less.disabled = z <= ZOOM_STEPS[0] + 0.001;
+    more.disabled = z >= ZOOM_STEPS[ZOOM_STEPS.length - 1] - 0.001;
+    o.paint(z);
+  };
+  const set = (z: number | null): void => { zooms.set(o.keyOf(), z); apply(); };
+  const step = (d: -1 | 1): void => {
+    const cur = eff();
+    const i = ZOOM_STEPS.findIndex((v) => (d > 0 ? v > cur + 0.001 : v >= cur - 0.001));
+    set(d > 0
+      ? (i < 0 ? ZOOM_STEPS[ZOOM_STEPS.length - 1] : ZOOM_STEPS[i])
+      : (i <= 0 ? ZOOM_STEPS[0] : ZOOM_STEPS[i - 1]));
+  };
+  less.onclick = () => step(-1);
+  more.onclick = () => step(1);
+  //  가운데를 누르면 맞춤 ↔ 100% 를 오간다(브라우저에서 배율 숫자를 눌러 되돌리는 관용 그대로).
+  lbl.onclick = () => set(isFit() ? 1 : null);
+  // ★ 칸 폭이 바뀌면(경계 끌기·곁칸 여닫기·창 크기) 맞춤을 **다시 잰다**.
+  //  ⚠ 배율을 입히면 무대 안 크기가 따라 바뀌어 관찰자가 곧바로 다시 불릴 수 있다(세로 막대가 생겼다 사라지는
+  //   경우) — 폭이 **실제로 달라졌을 때만** 다시 재서 되먹임을 끊는다.
+  let lastW = -1;
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    const w = o.stage.clientWidth;
+    if (w === lastW) return;
+    lastW = w;
+    if (isFit()) apply();
+  }) : null;
+  ro?.observe(o.stage);
+  // 단축키 — 마지막으로 만진 칸이 여기일 때만(웹 칸의 ⌘R 과 같은 규칙).
+  //  ⚠ **⌘+ 는 자판에 따라 ⇧ 를 함께 누른다(⌘⇧=).** ⇧ 를 먼저 걸러 내면 확대가 영영 안 먹는다.
+  let mine = false;
+  const paneOf = (): HTMLElement => (o.stage.closest('.pn-pane') as HTMLElement | null) || o.stage;
+  const mark = (e: Event): void => { const t = e.target; mine = t instanceof Node && paneOf().contains(t); };
+  const onKey = (e: KeyboardEvent): void => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    if (!mine || box.hidden || !box.offsetParent) return;          // 다른 칸을 보고 있거나 이 칸이 접혀 있으면 내 차례가 아니다
+    const k = String(e.key);
+    if (k === '+' || k === '=' || e.code === 'Equal') { e.preventDefault(); step(1); return; }
+    if (k === '-' || k === '_' || e.code === 'Minus') { e.preventDefault(); step(-1); return; }
+    if (k === '0' || e.code === 'Digit0') { e.preventDefault(); set(null); }
+  };
+  document.addEventListener('pointerdown', mark, true);
+  document.addEventListener('focusin', mark, true);
+  window.addEventListener('keydown', onKey, true);
+  return {
+    el: box,
+    apply,
+    isFit,
+    destroy: () => {
+      ro?.disconnect();
+      document.removeEventListener('pointerdown', mark, true);
+      document.removeEventListener('focusin', mark, true);
+      window.removeEventListener('keydown', onKey, true);
+    },
+  };
+}
+
 function webPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-web' });
   const KEY = WEB_URL_KEY;
@@ -623,9 +725,6 @@ function webPart(ctx: PartCtx): Part {
   //  ⚠ 아래쪽에 선언하면 adopt() 가 초기화 전에 읽어 TDZ 로 죽는다.
   let hiddenSince = 0;
   let asleep = '';                               // 재우기 전에 보던 주소('' = 깨어 있음)
-  // 배율 — 세션마다 따로(곁칸 부품은 그 세션의 것). null = **폭 맞춤**(칸 폭에 맞춰 자동).
-  const zooms = new Map<string, number | null>();
-  const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
   //  폭 맞춤의 기준 폭 — 데스크톱 배치가 통째로 들어오는 폭이다. 이보다 좁은 칸에서는 그만큼 줄여서
   //  **가로가 잘리지 않게** 보여 준다(원준 2026-08-21: "곁칸 가로 폭을 인식해서 가로화면이 잘리지 않게").
   const FIT_BASE = 1280;
@@ -725,14 +824,10 @@ function webPart(ctx: PartCtx): Part {
   const fwdBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '앞으로',
     title: live ? '뒤로 오기 전 화면으로 갑니다.' : '뒤로 오기 전에 보던 주소로 다시 갑니다.',
     onclick: () => step(1) }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
-  // 배율 조절 — [－][지금 배율][＋]. 가운데를 누르면 **폭 맞춤 ↔ 100%** 를 오간다(브라우저에서 배율을 눌러 되돌리는 관용).
   //  ⚠ [열기] 단추는 뺐다(원준 2026-08-21 재배치) — 주소칸에서 Enter 가 같은 일을 하고, 좁은 곁칸에서 그 자리는
   //   주소가 보이는 폭이 더 값지다. 밖으로 내보내는 [↗]는 그대로 둔다(그건 Enter 로 못 하는 일이다).
-  const zoomOut = el('button', { class: 'pn-web-btn ic', type: 'button', title: '축소합니다.', 'aria-label': '축소', onclick: () => stepZoom(-1) }) as HTMLButtonElement;
-  zoomOut.textContent = '−';
-  const zoomIn = el('button', { class: 'pn-web-btn ic', type: 'button', title: '확대합니다.', 'aria-label': '확대', onclick: () => stepZoom(1) }) as HTMLButtonElement;
-  zoomIn.textContent = '+';
-  const zoomLbl = el('button', { class: 'pn-web-btn zl', type: 'button', onclick: () => { setZoom(zooms.get(keyOf()) == null ? 1 : null); } }) as HTMLButtonElement;
+  //  배율 단추도 주소줄에서 뺐다(#762) — 무대 오른쪽 아래 알약으로 간다. 여기 있던 28px 짜리 셋은 옆
+  //   [뒤로][앞으로][다시]와 생김새가 같아 배율로 읽히지 않았고, 좁은 칸에서 주소칸을 먹기까지 했다.
   const stage = el('div', { class: 'pn-webstage' }, frame);
   root.append(
     el('div', { class: 'pn-web-bar' },
@@ -740,46 +835,27 @@ function webPart(ctx: PartCtx): Part {
         backBtn, fwdBtn,
         el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm'))),
       input,
-      el('span', { class: 'pn-web-navs' }, zoomOut, zoomLbl, zoomIn),
       openTab),
     stage,
     live ? null : el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요. 데스크톱 앱에서는 이 칸 안에 그대로 뜹니다.' }));
-  /** 지금 실제로 걸리는 배율 — 폭 맞춤이면 칸 폭에서 계산한다(1 을 넘겨 키우지는 않는다). */
-  function effZoom(): number {
-    const z = zooms.get(keyOf());
-    if (z != null) return z;
-    const w = stage.clientWidth || root.clientWidth || FIT_BASE;
-    return Math.max(0.25, Math.min(1, Math.round((w / FIT_BASE) * 100) / 100));
-  }
   /** 배율을 화면에 입힌다. 앱은 <webview> 의 진짜 배율, 웹은 프레임을 넓게 잡고 줄여 그린다.
    *  ⚠ 웹(iframe)에서 폭을 그대로 두고 축소만 하면 오른쪽에 빈 자리가 생긴다 — **논리 폭을 1/배율 로 키워야**
    *   사이트가 그만큼 넓은 화면인 줄 알고 데스크톱 배치를 펴고, 그게 칸 안에 통째로 들어온다. */
-  function applyZoom(): void {
-    const z = effZoom();
-    const fit = zooms.get(keyOf()) == null;
-    zoomLbl.textContent = fit ? '맞춤' : Math.round(z * 100) + '%';
-    zoomLbl.title = fit
-      ? '칸 폭에 맞춰 자동으로 줄입니다 — 누르면 100% 로 돌아갑니다.'
-      : Math.round(z * 100) + '% 로 보고 있습니다 — 누르면 칸 폭에 맞춥니다.';
-    zoomOut.disabled = z <= ZOOM_STEPS[0] + 0.001;
-    zoomIn.disabled = z >= ZOOM_STEPS[ZOOM_STEPS.length - 1] - 0.001;
-    if (live) {
-      try { (frame as any).setZoomFactor?.(z); } catch (_) { /* 아직 안 붙었다 — dom-ready 에서 다시 건다 */ }
-      frame.removeAttribute('style');
-      return;
-    }
-    const pct = (100 / z).toFixed(4) + '%';
-    frame.setAttribute('style', `width:${pct};height:${pct};transform:scale(${z});`);
-  }
-  function setZoom(z: number | null): void { zooms.set(keyOf(), z); applyZoom(); }
-  function stepZoom(d: -1 | 1): void {
-    const cur = effZoom();
-    const i = ZOOM_STEPS.findIndex((v) => (d > 0 ? v > cur + 0.001 : v >= cur - 0.001));
-    const next = d > 0
-      ? (i < 0 ? ZOOM_STEPS[ZOOM_STEPS.length - 1] : ZOOM_STEPS[i])
-      : (i <= 0 ? ZOOM_STEPS[0] : ZOOM_STEPS[i - 1]);
-    setZoom(next);
-  }
+  const zoom = makeZoom({
+    stage,
+    keyOf,
+    baseW: () => FIT_BASE,
+    paint: (z) => {
+      if (live) {
+        try { (frame as any).setZoomFactor?.(z); } catch (_) { /* 아직 안 붙었다 — dom-ready 에서 다시 건다 */ }
+        frame.removeAttribute('style');
+        return;
+      }
+      const pct = (100 / z).toFixed(4) + '%';
+      frame.setAttribute('style', `width:${pct};height:${pct};transform:scale(${z});`);
+    },
+  });
+  stage.append(zoom.el);
 
   /** 단추가 갈 수 있는지 — 갈 데가 없으면 끈다(눌러도 아무 일 없는 단추를 켜 두지 않는다). */
   function syncNav(): void {
@@ -813,12 +889,9 @@ function webPart(ctx: PartCtx): Part {
     syncNav();
   }
   adopt();
-  applyZoom();
-  // 칸 폭이 바뀌면(경계 끌기·곁칸 여닫기·창 크기) 폭 맞춤을 다시 잰다 — '맞춤'은 고정값이 아니라 관계다.
-  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { if (zooms.get(keyOf()) == null) applyZoom(); }) : null;
-  ro?.observe(stage);
-  if (live) frame.addEventListener('dom-ready', () => applyZoom());
-  const offSess = ctx.onSession(() => { adopt(); applyZoom(); });
+  zoom.apply();
+  if (live) frame.addEventListener('dom-ready', () => zoom.apply());
+  const offSess = ctx.onSession(() => { adopt(); zoom.apply(); });
 
   // ── 안 보이면 재운다 (원준 2026-08-21 신고: "웹에 뭘 띄워 놓으면 그 다음부터 랙이 걸린다") ─────────
   //  프레임 안 페이지는 **칸을 안 보고 있어도 계속 돈다** — 타이머·폴링·애니메이션·영상이 그대로 살아서
@@ -877,7 +950,7 @@ function webPart(ctx: PartCtx): Part {
     tick: () => { if (visible()) { hiddenSince = 0; wake(); } },
     destroy: () => {
       offSess();
-      ro?.disconnect();
+      zoom.destroy();
       window.clearInterval(watch);
       evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
       document.removeEventListener('pointerdown', mark, true);
@@ -899,14 +972,66 @@ function webPart(ctx: PartCtx): Part {
 //  다시 돌아와야 했다. 올린 파일은 **자료와 같은 곳**(프로젝트 공유 폴더)에 그대로 저장된다 — 뷰어만의 사본이나
 //  보관함 같은 건 만들지 않는다. 그래서 올리는 즉시 자료 칸에도 뜨고, 이 프로젝트의 세션들도 곧바로 참고한다.
 //  올린 뒤엔 그 파일을 이 칸이 바로 펴 준다(올린 이유는 보려는 것이다).
-const VIEWER_EVT = 'pn-viewer-open';   // 자료 칸의 우클릭 ▸ [뷰어에서 보기] 가 **그 곁칸에 대고** 쏘는 신호(window 금지)
 type FlatFile = { path: string; size: number; mtime: number };   // 뷰어는 폴더를 다루지 않는다 — 평평한 매니페스트 한 줄
 function viewerPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-ed' });
-  const KEY = 'pn_ed_path';
+  const KEY = ED_PATH_KEY;
   const bar = el('div', { class: 'pn-ed-bar' });
   const body = el('div', { class: 'pn-ed-body' });
+  //  무대 — 펴 놓은 것이 서는 자리(넘치면 여기서 구른다). 배율 알약은 무대 **밖**(body)에 붙인다:
+  //  안에 두면 내용과 함께 굴러가 자리를 지키지 못한다.
+  const stage = el('div', { class: 'pn-ed-stage' });
+  body.append(stage);
   root.append(bar, body);
+  //  ★ 배율 (#762, 원준 2026-09-04) — 펴 놓은 것마다 '제 크기'가 다르다: 그림·영상은 제 픽셀, PDF 는
+  //   종이 한 장, 시안은 데스크톱 폭. 그 크기와 칸 폭의 비가 맞춤이고, **칸 폭이 바뀌면 다시 잰다**.
+  const PDF_BASE = 820;     // A4·레터 한 장의 가로(96dpi) — 이 폭이면 종이가 통째로 들어온다
+  const PAGE_BASE = 1280;   // 시안(HTML)은 데스크톱 배치가 펴지는 폭 — 웹 칸과 같은 기준
+  type Shown = { node: HTMLElement; mode: 'px' | 'scale'; baseW: () => number };
+  let shown: Shown | null = null;
+  const zoom = makeZoom({
+    stage,
+    keyOf: () => ctx.memKey(),
+    baseW: () => (shown ? shown.baseW() : 0),
+    minFit: 0.05,   // 아주 큰 그림도 일단 칸에 담기게 — 자세히 볼 사람은 [+] 로 키운다
+    paint: (z) => {
+      const s2 = shown;
+      if (!s2) return;
+      if (s2.mode === 'px') {
+        //  그림·영상 — **가로를 정하면 세로는 따라온다**. 종전(object-fit: contain)은 칸의 **세로**에 걸려
+        //  가로를 넓혀도 크기가 그대로였다(원준 신고). 폭으로 재면 칸 폭에 정확히 비례한다.
+        //  ⚠ 올림이 아니라 **내림** — 맞춤에서 1px 이라도 넘치면 가로 막대가 생겨 '맞춤인데 넘친다'가 된다.
+        const b = s2.baseW();
+        s2.node.style.width = b > 0 ? Math.max(1, Math.floor(b * z)) + 'px' : '100%';
+        s2.node.style.height = 'auto';
+        return;
+      }
+      //  프레임·글 — 논리 폭을 1/배율 로 키우고 그만큼 줄여 그린다(웹 칸과 같은 방법). PDF 는 제 뷰어가
+      //  그 논리 폭에 종이를 맞추므로, 줄인 결과가 곧 '칸 폭에 맞춘 종이'다.
+      const pct = (100 / z).toFixed(4) + '%';
+      s2.node.style.width = pct;
+      if (s2.node instanceof HTMLIFrameElement) s2.node.style.height = pct;
+      s2.node.style.transform = z === 1 ? '' : 'scale(' + z + ')';
+    },
+  });
+  body.append(zoom.el);
+  /** 무대에 **배율이 걸리는 것**을 세운다 — 무엇을 세웠는지(제 크기·재는 법)를 배율이 알아야 한다. */
+  const show = (node: HTMLElement, mode: 'px' | 'scale', baseW: () => number): void => {
+    shown = { node, mode, baseW };
+    stage.classList.toggle('frame', node instanceof HTMLIFrameElement);
+    stage.classList.remove('list');
+    stage.replaceChildren(node);
+    zoom.el.hidden = false;
+    zoom.apply();
+  };
+  /** 배율이 뜻 없는 것(목록·안내·오류)을 세운다 — 알약은 숨긴다(눌러도 아무 일 없는 단추를 켜 두지 않는다). */
+  const showPlain = (node: HTMLElement, isList = false): void => {
+    shown = null;
+    stage.classList.toggle('list', isList);
+    stage.classList.remove('frame');
+    stage.replaceChildren(node);
+    zoom.el.hidden = true;
+  };
   let list: FlatFile[] = [];
   let path = '';
   let q = '';
@@ -1018,7 +1143,7 @@ function viewerPart(ctx: PartCtx): Part {
     };
     search.addEventListener('input', () => { q = search.value; draw(); });
     draw();
-    body.replaceChildren(el('div', { class: 'pn-ed-pick2' }, search, rows));
+    showPlain(el('div', { class: 'pn-ed-pick2' }, search, rows), true);
     window.setTimeout(() => { if (q) search.focus(); }, 0);
   }
 
@@ -1028,47 +1153,55 @@ function viewerPart(ctx: PartCtx): Part {
     paintBar();
     if (!p2) { paintPicker(); return; }
     const k = kindOf(p2);
-    body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '여는 중…' }));
+    showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '여는 중…' }));
     if (k.kind === 'text' || k.kind === 'page') {
       const r = await fetch(fileUrl(p2), { headers: authHeaders() }).catch(() => null);
-      if (!r || !r.ok) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
+      if (!r || !r.ok) { showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
       const txt = await r.text();
       if (path !== p2) return;                       // 그 사이 다른 걸 골랐다
       if (k.kind === 'page') {
         // 시안(HTML)은 격리 프레임(srcdoc)으로 — 스크립트·폼·상위 접근이 모두 막힌 채 그림만 보인다.
         const f = el('iframe', { class: 'pn-ed-pv full', sandbox: '', tabindex: '-1' }) as HTMLIFrameElement;
         f.srcdoc = txt.slice(0, 400_000);
-        body.replaceChildren(f);
+        show(f, 'scale', () => PAGE_BASE);
       } else if (/\.(md|markdown)$/i.test(p2)) {
-        body.replaceChildren(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000))));
+        //  글은 제 폭이 없다(칸에 맞춰 스스로 흐른다) — 맞춤 = 100%. 단추를 누르면 글자가 커진다.
+        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000))), 'scale', () => 0);
       } else {
-        body.replaceChildren(el('pre', { class: 'pn-ed-pre', text: txt.slice(0, 400_000) }));
+        show(el('pre', { class: 'pn-ed-pre', text: txt.slice(0, 400_000) }), 'scale', () => 0);
       }
       return;
     }
     if (k.kind === 'img' || k.kind === 'pdf' || k.kind === 'video') {
       const r = await fetch(fileUrl(p2), { headers: authHeaders() }).catch(() => null);
-      if (!r || !r.ok) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
+      if (!r || !r.ok) { showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
       const bl = await r.blob();
       if (path !== p2) return;
       const u = URL.createObjectURL(k.kind === 'pdf' ? new Blob([bl], { type: 'application/pdf' }) : bl);
       urls.push(u);
-      body.replaceChildren(k.kind === 'img'
-        ? el('img', { class: 'pn-ed-img', src: u, alt: base(p2) })
-        : k.kind === 'video'
-          ? el('video', { class: 'pn-ed-img', src: u, controls: 'true' })
-          : el('iframe', { class: 'pn-ed-pv full', src: u + '#toolbar=1&view=FitH' }));
+      if (k.kind === 'img') {
+        const im = el('img', { class: 'pn-ed-img', src: u, alt: base(p2) }) as HTMLImageElement;
+        show(im, 'px', () => im.naturalWidth || 0);
+        //  제 크기는 다 받아야 안다 — 그림이 들어온 뒤 한 번 더 잰다(그 전엔 0 이라 맞춤이 100% 로 보인다).
+        im.addEventListener('load', () => { if (shown && shown.node === im) zoom.apply(); });
+      } else if (k.kind === 'video') {
+        const vd = el('video', { class: 'pn-ed-img', src: u, controls: 'true' }) as HTMLVideoElement;
+        show(vd, 'px', () => vd.videoWidth || 0);
+        vd.addEventListener('loadedmetadata', () => { if (shown && shown.node === vd) zoom.apply(); });
+      } else {
+        show(el('iframe', { class: 'pn-ed-pv full', src: u + '#toolbar=1&view=FitH' }), 'scale', () => PDF_BASE);
+      }
       return;
     }
     // 브라우저가 그릴 방법이 없는 형식 — 할 수 있는 것(내려받기)만 정직하게 말한다.
-    body.replaceChildren(el('div', { class: 'pn-empty' },
+    showPlain(el('div', { class: 'pn-empty' },
       pnIcon('doc', 'pn-i big'),
       el('b', { text: '이 형식은 브라우저에서 볼 수 없어요.' }),
       el('p', { class: 'pn-fine', text: '파워포인트·워드·엑셀·한글은 브라우저가 그릴 방법이 없습니다. 위 [내려받기]로 원래 앱에서 여세요.' })));
   }
 
   if (!(ctx.id > 0)) {
-    body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '이 화면은 프로젝트 폴더가 없어 자료를 열 수 없어요.' }));
+    showPlain(el('p', { class: 'pn-fine', style: 'padding:14px', text: '이 화면은 프로젝트 폴더가 없어 자료를 열 수 없어요.' }));
     return { root };
   }
   // 컴퓨터에서 끌어다 놓기 — 목록을 보든 파일을 펴 놓았든 이 칸 어디서나 받는다.
@@ -1095,7 +1228,7 @@ function viewerPart(ctx: PartCtx): Part {
   return {
     root,
     tick: () => { void loadList().then(() => { if (!path) paintPicker(); paintBar(); }); },
-    destroy: () => { offSess(); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    destroy: () => { offSess(); zoom.destroy(); ctx.paneRoot().removeEventListener(VIEWER_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 
