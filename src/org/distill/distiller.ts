@@ -331,8 +331,11 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
 //  여기서 «아무도 안 집는다» 를 정확히 센다: 켜진 어느 증류기의 **스코프에도** 안 드는 미증류 자료.
 //  ⚠ 인박스가 비었다는 것과 스코프에 없다는 것은 다르다. 인박스는 이미 판정(seen)한 것을 빼므로,
 //   «처리 중» 인 자료까지 방치로 세면 **같은 자료를 두 번 증류**하게 된다. 스코프로 재야 그 실수가 없다.
-export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | null, limit: number): { sql: string; values: unknown[] } {
-  const p = new Params();
+/** 방치 자료의 **판정부만** — `buildStrandedQuery`(배치)와 coverage(집계)가 이 술어를 공유한다.
+ *  ⚠ 갈라 두면 화면이 "사각지대 N건"이라 말하는 집합과 폴백이 실제로 집는 집합이 달라진다. 그러면
+ *   사각지대를 줄이는 판단 자체가 불가능해진다(2026-09-04 실측: 담당 축만 보게 고친 뒤에도 coverage 가
+ *   옛 전체 술어를 다시 조립해 두 값이 갈렸다). 단일 출처로 둔다. */
+export function strandedWhereSql(enabled: DistillerRow[], p: Params, viewer: string | null): string {
   let visWhere = "TRUE";
   if (viewer != null) { p.add(viewer); visWhere = sourceVisSql(p.values.length); }
   //  켜진 레인 각각의 **담당** 스코프 — 하나라도 참이면 그 레인이 언젠가 가져간다(방치가 아니다).
@@ -353,18 +356,25 @@ export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | nul
     optOut.push("COALESCE(s.fields->>'is_bot','false') <> 'true' AND COALESCE(s.fields->>'author_is_bot','false') <> 'true'");
   }
   const notOptedOut = optOut.length ? optOut.map((x) => `(${x})`).join(" AND ") : "TRUE";
-  const lim = p.add(Math.min(limit, 500));
   //  ⚠ 판정 기록(org_stranded_seen)을 빼야 인박스가 전진한다 — 레인 인박스의 unprocessedSql 과 같은 이유다.
-  //   증류에 성공한 자료는 위의 knowledge_source 가 거르고, **보고 버린 것**은 이 테이블이 거른다.
+  //   증류에 성공한 자료는 knowledge_source 가 거르고, **보고 버린 것**은 이 테이블이 거른다.
   //   둘이 합쳐지지 않으면 skip 한 자료가 매 배치 다시 올라온다(왜·실측 = org_stranded_seen DDL 주석).
-  return {
-    sql: `SELECT ${S_LIST_SEL} FROM source s
-     WHERE s.lifecycle='active'
+  return `s.lifecycle='active'
        AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id AND ks.created_at >= s.updated_at)
        AND NOT EXISTS (SELECT 1 FROM org_stranded_seen ss WHERE ss.source_id = s.id AND ss.seen_at >= s.updated_at)
        AND ${visWhere}
        AND ${notClaimed}
-       AND ${notOptedOut}
+       AND ${notOptedOut}`;
+}
+
+/** 아무 켜진 레인도 담당하지 않는 미증류 자료(배치용 — 정렬·상한 포함). 판정부는 strandedWhereSql 이 단일 출처. */
+export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | null, limit: number): { sql: string; values: unknown[] } {
+  const p = new Params();
+  const where = strandedWhereSql(enabled, p, viewer);
+  const lim = p.add(Math.min(limit, 500));
+  return {
+    sql: `SELECT ${S_LIST_SEL} FROM source s
+     WHERE ${where}
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${lim}`,
     values: p.values,
   };
@@ -808,24 +818,20 @@ export async function distillerCoverage(): Promise<DistillerCoverage> {
     });
   }
 
-  // 사각지대 — enabled 증류기 전부에 안 걸리는 미증류 자료.
+  // 사각지대 — **폴백이 실제로 집을 자료**와 같은 정의를 써야 한다.
+  //  ⚠ 종전엔 여기서 distillerScopeSql 전체 술어를 다시 조립했다. 그래서 buildStrandedQuery(담당 축만 +
+  //   제외 존중)와 답이 갈렸다 — 화면은 "사각지대 N건"이라 하는데 폴백은 다른 집합을 집는 상태가 된다.
+  //   지표와 동작이 갈리면 사각지대를 줄이는 판단 자체가 불가능해지므로 빌더를 공유한다(단일 출처).
   const p = new Params();
-  const notAny = enabled.length
-    ? enabled.map((h) => `NOT COALESCE((${distillerScopeSql(h, p)}), false)`).join(" AND ")
-    : "TRUE";
+  const strandedWhere = strandedWhereSql(enabled, p, null);
   const uncoveredRows = await q(itemsPool,
-    `SELECT count(*)::int AS n FROM source s
-      WHERE s.lifecycle='active' AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
-        AND ${notAny}`, p.values);
+    `SELECT count(*)::int AS n FROM source s WHERE ${strandedWhere}`, p.values);
 
   const p2 = new Params();
-  const notAny2 = enabled.length
-    ? enabled.map((h) => `NOT COALESCE((${distillerScopeSql(h, p2)}), false)`).join(" AND ")
-    : "TRUE";
+  const strandedWhere2 = strandedWhereSql(enabled, p2, null);
   const chRows = await q(itemsPool,
     `SELECT s.fields->>'container_name' AS channel, count(*)::int AS n FROM source s
-      WHERE s.lifecycle='active' AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
-        AND ${notAny2}
+      WHERE ${strandedWhere2}
       GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, p2.values);
 
   return {

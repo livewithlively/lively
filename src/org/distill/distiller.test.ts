@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import {
   Params, distillerScopeSql, distillerExclusiveSql, higherThan,
   buildDistillerPrompt, describeScope, composeDistillPrompt,
-  buildInboxQuery, buildBacklogQuery, markDistillerSeen, buildStrandedQuery, markStrandedSeen,
+  buildInboxQuery, buildBacklogQuery, markDistillerSeen, buildStrandedQuery, markStrandedSeen, strandedWhereSql,
   prefilterThresholds, prefilterSql, DEFAULT_DECISIVE_KEYWORDS, type DistillerRow,
   buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS, mergeDraftDistiller, isPrefilterActive, unfilteredImpact,} from "./distiller.js";
 
@@ -322,6 +322,25 @@ t("N7 방치 판정은 담당 축만 본다 — 제외·품질 필터를 뒤집�
   assert.ok(!/now\(\) - \(/.test(own), "lookback 이 방치 판정에 섞였다 — 창 밖 자료가 방치로 뒤집힌다");
   //  제외는 '담당 판정'에서 빠지되(그래야 뒤집히지 않는다) **별도 절로 방치에서도 배제**돼야 한다.
   assert.match(own, /<> ALL\(\$\d+::text\[\]\)/, "제외 채널이 방치 질의에서 배제되지 않는다 — 폴백이 주워 간다");
+});
+
+t("N11 화면 지표와 폴백이 같은 판정을 쓴다 — 갈리면 사각지대를 줄이는 판단이 불가능해진다", () => {
+  //  🔴 실측(2026-09-04): 폴백을 담당 축만 보게 고쳤는데 coverage 는 옛 전체 술어를 다시 조립하고 있어
+  //   화면이 말하는 사각지대와 폴백이 집는 집합이 갈렸다. 판정부는 단일 출처여야 한다.
+  const lane = mk({ id: 5, include_channels: ["keep"], exclude_channels: ["drop"], min_chars: 200 });
+  const p = new Params();
+  const where = strandedWhereSql([lane], p, null);
+  const batch = buildStrandedQuery([lane], null, 50).sql;
+  //  배치 질의는 그 판정부를 그대로 담고 있어야 한다(문자열 포함으로 공유를 못박는다).
+  assert.ok(batch.includes(where.split("\n")[0].trim()), "배치 질의가 공유 판정부를 쓰지 않는다");
+  //  판정부 자체에 담당·제외·seen 배제가 다 들어 있어야 한다.
+  assert.match(where, /container_name' = ANY/, "담당 판정이 없다");
+  assert.match(where, /org_stranded_seen ss/, "판정 기록 배제가 없다");
+  assert.match(where, /<> ALL\(\$\d+::text\[\]\)/, "제외 배제가 없다");
+  //  품질 축은 없어야 한다(있으면 미달분이 방치로 뒤집힌다).
+  assert.ok(!/length\(COALESCE\(s\.body_md/.test(where), "min_chars 가 판정부에 섞였다");
+  //  판정부에 LIMIT 이 없어야 coverage 가 전량을 셀 수 있다(있으면 "사각지대 50건"으로 굳는다).
+  assert.ok(!/LIMIT/i.test(where), "판정부에 LIMIT 이 있다 — 집계가 상한에 묶인다");
 });
 
 t("N10 봇 제외는 한 레인이라도 켜 두면 방치에서도 배제된다", () => {
