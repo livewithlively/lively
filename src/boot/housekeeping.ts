@@ -2,6 +2,7 @@
 //  실행 순서 = 배열 순서 그대로(종전 .then 체인과 동일). 각 스텝의 원문 주석은 스텝 선언 위로 이사.
 //  게이트 2종:
 //   · gate:'scheduler' — LIVELY_NO_SCHEDULER=1 이면 건너뜀(단일 프로세스 전제 하우스키핑). 판정은 schedulerEnabled() 한 곳
+//     ★ 겹치는 프로세스(무중단 롤 교대)는 env 로 못 가른다 → **런타임 리더선출**이 따로 있다(scheduler/leader.ts, #2664).
 //     (종전 index.ts 인라인 if 6곳을 단일화).
 //   · DB_BOOT_STEPS 전체 — ITEMS_DATABASE_URL 없으면 체인 자체를 돌리지 않는다(종전 if 블록과 동일).
 import type express from "express";
@@ -240,17 +241,25 @@ export const DB_BOOT_STEPS: BootStep[] = [
       .then((r) => { if (r.migrated.length) logger.info({ migrated: r.migrated }, "레거시 커넥터 → 수집기 마이그레이션 완료"); })
       .catch((err) => logger.warn({ err }, "수집기 마이그레이션 실패(비치명) — 레거시 커넥터 경로로 계속 동작")) },
   // 스키마 직렬 체인 완료 후 인프로세스 스케줄러 기동(org_cron 테이블 보장됨) — 서버사이드 cron 트리거.
-  //  ⚠ 스케줄러는 단일 프로세스 전제(리더선출 없음) — 보조/검증 인스턴스는 LIVELY_NO_SCHEDULER=1 로 꺼서
-  //   라이브 게이트웨이와 org_cron tick 이 중복(동일 잡 동시 실행)되지 않게 한다. 같은 DB 를 공유하는 스모크용.
+  //  ⚠ 보조/검증 인스턴스는 LIVELY_NO_SCHEDULER=1 로 아예 꺼서 라이브와 겹치지 않게 한다(스모크용).
+  //  ★ 그러나 **env 플래그로는 못 가르는 겹침**이 생겼다 (#2664 3단계): 매니지드 무중단 롤은
+  //   옛·새 게이트웨이를 수십 초 겹쳐 띄우는데, 그 둘은 **같은 이미지·같은 env** 다.
+  //   그래서 「누가 도나」를 런타임에 정하는 리더선출을 뒀다 — scheduler/leader.ts(DB advisory lock).
+  //   기동은 그대로 하고, **틱에서** 자격을 본다. 아래 넷 중 리더에 거는 것은 **둘**이다:
   { name: "scheduler", gate: "scheduler", run: () => startScheduler() },
   // 위탁 태스크 스케줄러(P2 #869) — org_task 큐를 노드 리소스와 대조 배치·감시·재스케줄. 같은 단일 프로세스 게이트.
   { name: "task-scheduler", gate: "scheduler", run: () => startTaskScheduler() },
   // 로그 재니터(#813 T4) — logs/ 의 로그가 상한(관리탭 저장소 정책)을 넘으면 copytruncate 로 회전한다.
   //  유닛이 append 로 무한히 쓰는 구조라(systemd StandardOutput=append) 이게 없으면 상한이 없다.
   //  스케줄러와 같은 게이트: 하우스키핑은 단일 프로세스 전제 — 두 인스턴스가 같은 파일을 동시에 copytruncate 하면 꼬인다.
+  //  ⚠ **리더선출에는 걸지 않았다**(#2664 3단계). 이건 디스크가 차는 것을 막는 장치인데, 리더 판정이
+  //   DB 에 달려 있어서 걸면 **DB 가 안 붙는 동안 로그 회전이 멈춘다** — 고치려는 것보다 나쁜 고장이다.
+  //   겹치는 창(롤 교대 수십 초)에 회전이 두 번 겹쳐 몇 줄이 어긋나는 쪽을 택한다.
   { name: "log-janitor", gate: "scheduler", run: () => startLogJanitor(loadStoragePolicy) },
   // 호출 감사로그 prune(#1082) — mcp_call_log 를 보존기간(관리탭) 밖까지만 남긴다. 도입 이래 무기한 쌓이던 표라
   //  기간 정책이 없으면 개인 단위 활동 기록이 박스 수명 내내 축적된다. 같은 단일 프로세스 게이트(중복 DELETE 방지).
+  //  ⚠ **리더선출에는 걸지 않았다**(#2664 3단계) — 보존기간 밖을 지우는 DELETE 는 멱등이라 두 번 돌아도
+  //   결과가 같다. 겹침이 해를 안 주는 것에까지 자격을 걸면, 그 자격이 고장났을 때 잃는 것만 늘어난다.
   { name: "call-log-prune", gate: "scheduler", run: () => startCallLogPrune(loadCallLogPolicy) },
   // 공유 빌드 캐시(#813 T3) — 세션이 쓸 캐시 디렉터리를 그룹쓰기(2775)로 미리 보장한다.
   //  멤버별 격리 OS 유저(#524)들이 같은 캐시를 써야 하므로 권한이 중요하다. 비치명(툴이 각자 만들기도 한다).

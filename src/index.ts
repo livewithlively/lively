@@ -40,6 +40,7 @@ import { schemaBootPhase, schemaBootChangedAt } from "./boot/boot-state.js";   /
 import { loadEnterprise } from "./enterprise/load.js";
 import { logger } from "./log.js";
 import { shutdownGatewayWorkers } from "./apps/worker-service.js";
+import { releaseSchedulerLeadership } from "./scheduler/leader.js";
 import { shutdownAttachWorkers } from "./terminal/attach-worker-host.js"; // #2228 C안 — attach 워커 일괄 회수
 import { freezeExecTopology } from "./exec-topology.js";   // #2599 T2 — 실행 토폴로지를 부팅 때 한 번 확정
 
@@ -71,7 +72,12 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.once(sig, () => {
     logger.info({ sig }, "shutdown — attach PTY·앱 worker 정리 후 종료");
     try { killAttachedPtys(); } catch { /* noop */ }
-    void Promise.allSettled([shutdownGatewayWorkers(), shutdownAttachWorkers()]).finally(() => process.exit(0));
+    //  ★ 리더 자리를 **비워 주고** 나간다 (#2664 3단계). 안 해도 커넥션이 닫히며 락은 풀리지만,
+    //   명시적으로 풀면 후임 게이트웨이가 재시도 주기를 기다리지 않고 다음 시도에서 바로 잡는다 —
+    //   무중단 롤의 교대 창에서 «주기 잡이 잠깐 아무도 안 도는» 구간이 그만큼 짧아진다.
+    //  ⚠ 실패해도 종료를 막지 않는다(allSettled + 아래 하드 타임아웃).
+    void Promise.allSettled([shutdownGatewayWorkers(), shutdownAttachWorkers(), releaseSchedulerLeadership()])
+      .finally(() => process.exit(0));
     setTimeout(() => process.exit(0), 1_500).unref();
   });
 }

@@ -20,7 +20,6 @@ import { nodeCanAttach, nodeRelayAttach, isSelfNode } from "../node/registry.js"
 import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다
 import { reapOrphanAttachClients, attachClose,
   type AttachSocket, type TicketLookup } from "./terminal-pty.js";
-import { clientFingerprint } from "./attach-client-id.js";   // #3521 — 「누가 붙나」 귀속 축
 import { SessionHost } from "./session-host.js";
 
 const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
@@ -126,7 +125,7 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         //   4410 session-gone — tmux 가 '그런 세션 없다'고 확답 → 세션이 진짜 끝남 → 클라는 재연결을 멈추고 '종료됨'을 명시.
         //   4403 no-access    — 권한 없음, 또는 판정 불가(tmux 과부하·타임아웃 = #687 의 '가짜 4403') → 클라는 몇 번 더 재시도.
         //  판정 불가를 gone 으로 넘기지 않는 게 핵심 — 살아있는 세션을 '종료됨'으로 오인하는 건 재연결 반복보다 나쁘다.
-        logger.info({ id, userId: tk.userId, ok, gone, tenant: (tr.ok ? tr.tenant.slug : regCtx?.slug) ?? "", ...clientFingerprint(req) }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
+        logger.info({ id, userId: tk.userId, ok, gone }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
         wss.handleUpgrade(req, socket, head, (ws) => {
           try { ws.close(close.code, close.reason); } catch { /* noop */ }
         });
@@ -143,13 +142,8 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       //  그래서 «아무도 안 쓰는 세션에 3분마다 클라이언트가 하나씩 붙는다» 를 관측하고도 **누가 붙는지
       //  물어볼 자리가 없었다**(20분을 봐도 로그가 0줄이다). 빈도는 탭 열기·재연결 단위라 낮다.
       //  ua 는 자동 재연결(브라우저)과 다른 것을 가르는 최소 축이다 — 토큰은 싣지 않는다.
-      //
-      //  ★ #3521 — `ua` 하나로는 «브라우저가 아니다» 까지밖에 못 간다(실측: 한 세션에 14회, 6~8초 간격,
-      //   `ua` 전부 빈 문자열). 체인이 UA 를 지우지 않는 것도 확인했으므로 그 판정 자체는 옳지만,
-      //   **무엇인지**는 코어·클라우드 어느 레포에도 그런 클라이언트가 없어 코드로 답이 안 나온다.
-      //   그래서 지문(원격 주소·XFF·Origin·헤더 이름 순서·쿠키 이름)을 함께 남긴다 — 값은 싣지 않는다.
       const via = attachWorkerHost.enabled() ? "worker" : "gateway";
-      logger.info({ id, userId: tk.userId, via, tenant: tenantForWorker?.slug ?? "", ...clientFingerprint(req) }, "ws attach 허가");
+      logger.info({ id, userId: tk.userId, via, ua: String(req.headers["user-agent"] ?? "").slice(0, 80) }, "ws attach 허가");
       if (attachWorkerHost.enabled()) {
         const handed = await attachWorkerHost.handoff({ req, socket, head, id, tenant: tenantForWorker });
         if (handed) return; // 워커가 소켓을 소유 — 게이트웨이는 이 연결에서 손을 뗀다

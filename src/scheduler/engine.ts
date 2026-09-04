@@ -2,7 +2,10 @@
 //  트리거 표준화(2026-06-26 결정): git push 웹훅 대신 서버사이드 cron 을 베이스라인으로. 게이트웨이가 바깥으로
 //  fetch 하므로 inbound 도달성·repo당 등록 불요(직원 0·repo셋업 0). refresh/sync 는 멱등(last_refreshed_sha/커서)이라
 //  반복 안전. 도메인 귀속: 스케줄러 엔진=횡단, 액션 refresh→도메인맵(D2)/connector_sync→컨텍스트저장소(D1).
-//  단일 프로세스(launchd 상시구동) 전제 → 리더선출 불요(HA 면 advisory lock 추가). 잡당 인메모리 락으로 중첩 방지.
+//  ★ 리더선출이 생겼다(#2664 3단계, scheduler/leader.ts) — 매니지드 무중단 롤이 옛·새 게이트웨이를
+//   수십 초 **겹쳐** 띄우기 때문이다. 종전 전제(단일 프로세스 → 리더선출 불요)는 자가호스팅에서만 참이었고,
+//   잡당 인메모리 락(`running`)은 자기 프로세스 안에서만 듣는다. 이제 **리더만 틱을 돈다**(tickAllTenants).
+//   ⚠ 인메모리 락은 그대로 남는다 — 리더 안에서의 중첩(긴 잡이 다음 틱과 겹침)은 여전히 그게 막는다.
 //  보안: action 은 org_cron CHECK allowlist(임의 셸 금지). connector_sync 만 서브프로세스(검증된 run-sync CLI).
 //  스케줄 2모드: cron_expr 있으면 절대(벽시계, cron-expr.ts), 없으면 interval_sec 상대(last_run+interval).
 //  R16: 액션 구현·프롬프트는 registry.ts(선언+run 합류)·actions/* 로 — 여기는 틱·due 판정·실행 기록만(액션명 분기 없음).
@@ -15,6 +18,7 @@ import { sendBoxAlert } from "../ops/alerts.js";
 import { logger } from "../log.js";
 import { withTenant } from "../org/tenant-context.js";
 import { schedulerTargets } from "./tenant-fanout.js";
+import { isSchedulerLeader, startSchedulerLeadership } from "./leader.js";
 
 /** 구 DB(컬럼 부재)에서 쓸 기본 임계 — 스키마 마이그레이션 전에도 보호가 걸리게. */
 const DEFAULT_MAX_FAIL_STREAK = 5;
@@ -131,6 +135,12 @@ export async function runSchedulerTickOnce(): Promise<void> { return tick(); }
 //  tick() 자체는 그대로다: **테넌트 컨텍스트 안에서 부르면** itemsPool 파사드가 그 테넌트로 바인딩돼
 //  org_cron 조회·실행이 전부 그 스코프가 된다. 바뀐 것은 "누가 어떤 컨텍스트로 부르는가" 뿐이다.
 async function tickAllTenants(): Promise<void> {
+  //  ★ 리더만 돈다 (#2664 3단계). 이 파일 머리말의 「단일 프로세스 전제」가 매니지드에서는
+  //   더 이상 참이 아니다 — 무중단 롤이 옛·새 게이트웨이를 수십 초 겹쳐 띄운다. 인메모리 락
+  //   (`running`)은 자기 프로세스 안에서만 들으므로, 겹치는 동안 같은 크론이 두 번 발화한다.
+  //  ⚠ 조용히 건너뛴다 — 30초마다 «나는 리더가 아니다» 를 로그에 남기면 로그가 그것만 남는다.
+  //   자격의 획득·상실은 leader.ts 가 전이 시점에 한 번씩 말한다.
+  if (!isSchedulerLeader()) return;
   const targets = await schedulerTargets();
   if (targets === null) return tick();     // 단일 테넌트 배포 — 종전 경로
   for (const t of targets) {
@@ -166,7 +176,11 @@ let timer: NodeJS.Timeout | null = null;
 // 부팅 시 1회 호출(index.ts, 스키마 init 직렬 체인 후). 멱등(중복 호출 무시).
 export function startScheduler(): void {
   if (timer) return;
-  logger.info("scheduler started (in-process, org_cron)");
+  //  ★ 선출을 **함께** 시작한다 (#2664 3단계). 부트 순서에 기대지 않으려는 것이다 —
+  //   스케줄러를 켜는 쪽이 어디든, 켜는 순간 «내가 돌 자격이 있나» 를 묻는 장치도 함께 선다.
+  //   멱등이라 위탁 큐가 또 불러도 한 번만 선다.
+  startSchedulerLeadership();
+  logger.info("scheduler started (in-process, org_cron) — 리더일 때만 틱이 돈다");
   timer = setInterval(() => { tickAllTenants().catch((e) => logger.warn({ err: e }, "scheduler tick failed")); }, TICK_MS);
   if (timer.unref) timer.unref(); // 스케줄러 타이머가 프로세스 정상 종료를 막지 않게.
   // 기존 설치 이행(#586) — notion 활성 커넥터의 일일 full 스윕 잡이 없으면 생성(커넥터 재저장 없이도 적용).

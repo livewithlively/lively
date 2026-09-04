@@ -9,9 +9,12 @@
 //  ⑤ 하네스(#1884): 후보는 **그 하네스를 실제로 띄울 수 있는 노드**뿐이다(원격=hello 의 agent_harnesses · 중앙=detectHarnesses).
 //     ⚠ 종전 규칙은 `리스 있으면 아무 노드나` 였다 — 리스 하나로 남의 노트북이 열렸다(#1540 이 닫은 구멍).
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
+//  ★ 그 전제를 **리더선출로 바꿨다**(#2664 3단계, scheduler/leader.ts) — 매니지드 무중단 롤이
+//   게이트웨이를 겹쳐 띄우므로 env 플래그로는 못 가른다(두 프로세스가 같은 이미지·같은 env 다).
 import { logger } from "../log.js";
 import { withTenant } from "../org/tenant-context.js";
 import { schedulerTargets } from "../scheduler/tenant-fanout.js";
+import { isSchedulerLeader, startSchedulerLeadership } from "../scheduler/leader.js";
 import { sharedRoot } from "../terminal/terminal-sessions.js";
 import { effectiveDelegatePolicy, type DelegatePolicy } from "../org/policies/delegate-policy.js";
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
@@ -465,7 +468,12 @@ async function watchRunning(): Promise<void> {
 
 export function startTaskScheduler(): void {
   armTaskDoneHook();
+  //  ★ 크론 스케줄러와 **같은 리더**를 쓴다 (#2664 3단계). 멱등이라 둘 다 불러도 한 번만 선다.
+  startSchedulerLeadership();
   setInterval(() => {
+    //  ★ 리더만 배치한다. 무중단 롤은 옛·새 게이트웨이를 수십 초 겹쳐 띄우는데, 그동안 둘이
+    //   같은 `org_task` 큐를 보면 **같은 위탁이 두 노드에 배치된다** — 그건 멱등이 아니다.
+    if (!isSchedulerLeader()) return;
     if (ticking) return;
     ticking = true;
     void (async () => {
