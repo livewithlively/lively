@@ -2,6 +2,7 @@
 //  여기 사는 것: 아이콘 · 인증 헤더 · 파일 종류 판정(미리보기 방식) · 이름 겹침 회피 · 그 자리 우클릭 메뉴.
 //  부품 자신(세션·자료·지식…)은 panes-parts.ts / panes-files.ts 에 산다.
 import { TOKEN_KEY, el, sv } from '../core.js';
+import { EMBEDDED } from './embed.js';
 
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
 const ICON_PATHS: Record<string, string> = {
@@ -206,4 +207,26 @@ export function folderIcon(cls = 'pn-folder', opts?: { empty?: boolean; plain?: 
     <path d="M2 17.6A3.6 3.6 0 0 1 5.6 14h36.8a3.6 3.6 0 0 1 3.6 3.6v15.8a3.6 3.6 0 0 1-3.6 3.6H5.6A3.6 3.6 0 0 1 2 33.4z" fill="url(#${front})"/>
     <path d="M5.9 14.75h36.2" stroke="#FFFFFF" stroke-opacity=".5" stroke-width="1.1" stroke-linecap="round" fill="none"/>`;
   return svg;
+}
+
+// ══ 뷰어 칸에 파일 펴기 — 자료 칸과 뷰어를 잇는 한 통로 (#762) ═══════════════════
+/** 이 곁칸의 뷰어에 대고 쏘는 신호. ⚠ window 금지 — 문서 전체로 뿌리면 열려 있는 **모든 세션 탭**의
+ *  뷰어가 같은 파일로 갈아입고 각자 자기 열쇠에 그걸 기억한다(pane-signal-scope-and-embed-isolation-1819). */
+export const VIEWER_EVT = 'pn-viewer-open';
+/** 어떤 파일을 펴 두었나 — 세션마다 따로(곁칸 부품은 그 세션의 것). */
+export const ED_PATH_KEY = 'pn_ed_path';
+/** 밖(자료 칸)에서 뷰어에 파일을 펴는 **유일한 통로** — 뷰어 칸이 없으면 셸(panes.ts)이 듣고 곁칸에 만든다.
+ *  ⚠ 저장을 **먼저** 한 다음 알린다: 새로 만들어진 뷰어는 이 신호를 이미 놓친 뒤라 저장된 값에서 읽는다
+ *   (웹 칸의 openInWebPart 와 같은 규칙 — 둘 중 하나만 하면 '처음 한 번'이 조용히 안 먹는다). */
+export function openInViewerPart(ctx: { id: number; memKey: () => string; paneRoot: () => HTMLElement }, path: string): void {
+  const p = String(path || '');
+  if (!p) return;
+  if (!EMBEDDED) {                      // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
+    try {
+      const m = JSON.parse(localStorage.getItem(ED_PATH_KEY) || '{}') || {};
+      m[ctx.memKey()] = p;
+      localStorage.setItem(ED_PATH_KEY, JSON.stringify(m));
+    } catch (_) { /* 저장이 막혀도 아래 알림으로 지금 떠 있는 칸은 바뀐다 */ }
+  }
+  ctx.paneRoot().dispatchEvent(new CustomEvent(VIEWER_EVT, { detail: { id: ctx.id, path: p } }));
 }
