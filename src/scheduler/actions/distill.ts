@@ -1,6 +1,7 @@
 // 크론 액션: 자료 distill(distill_sources·distill_sources_headless, #541/#1289) — R16 원문 이동.
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
 import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { logger } from "../../log.js";
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
 //  fire-and-forget(주입까지가 잡 책임 — 증류는 세션이 수 분에 걸쳐 knowledge_save+source_link_knowledge 로 수행).
@@ -29,6 +30,10 @@ export async function runDistillInject(params: Record<string, unknown>): Promise
   if (b.distillerId) await recordDistillerRunSafe(b.distillerId, "ok", summary);
   // 세션 주입판도 동일 — 주입한 자료는 판정 대상으로 간주한다(세션엔 task_id 가 없어 실패 롤백 경로가 없다;
   //  세션이 작업을 못 끝내면 그 자료는 관리탭의 '판정 이력 초기화'로 되돌린다).
+  //  ⚠ 세션 주입판은 레인 없는 배치의 판정을 **일부러 기록하지 않는다** — 주입은 위탁 태스크를 만들지
+  //   않아 task_id 가 없고, org_stranded_seen 은 그 열쇠로만 되돌린다(markFinished). 되돌릴 수 없는
+  //   기록은 아무도 안 본 자료를 영구히 숨기므로, 세션 모드에선 재독을 감수한다. 헤드리스판은 task_id 가
+  //   있어 기록한다(위 runDistillHeadless).
   if (b.distillerId) await markSeenSafe(b.distillerId, b.ids, null);
   return { status: "ok", summary };
 }
@@ -58,8 +63,18 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
     if (b.distillerId) await recordDistillerRunSafe(b.distillerId, r.status, r.summary);
     // 배치에 낸 자료를 '판정함'으로 기록 — 안 하면 skip 한 것이 다음 배치에 그대로 다시 올라온다(실측 64% 재독).
     //  실패 배치는 task-store.markFinished 가 이 기록을 되돌린다(자료 유실 방지).
-    const tid = (r.summary as Record<string, unknown>)?.task_id;
+    const sum = r.summary as Record<string, unknown> | undefined;
+    const tid = sum?.task_id;
+    //  이번 tick 에 **실제로 접수된** 배치인가 — enqueueHeadlessTask 는 배치 없이도 돌아온다(중첩 스킵·
+    //   하네스 해소 실패·태스크 생성 실패). 그 경우 판정을 기록하면 아무도 안 본 자료가 숨는다.
+    const accepted = r.status === "ok" && !sum?.skipped && tid != null;
     if (b.distillerId) await markSeenSafe(b.distillerId, b.ids, (tid as string | number | undefined) ?? null);
+    //  레인 없는 배치도 판정을 기록해야 인박스가 전진한다 — 없으면 LLM 이 skip 한 자료가 매 tick 같은
+    //   집합으로 다시 올라와 배치가 영원히 반복된다(왜 = org_stranded_seen DDL 주석).
+    //  ⚠ accepted 일 때만 남긴다. 되돌릴 열쇠(task_id)가 없는 기록은 자료를 영구히 숨기므로,
+    //   재독(비용)보다 유실(무증상)이 나쁘다. 특히 중첩 스킵은 task_id 가 **이전** 태스크의 것이라
+    //   그 배치가 성공하면 markFinished 의 되돌리기조차 안 걸린다.
+    else if (accepted) await markStrandedSeenSafe(b.ids, tid as string | number);
     out.push({ distiller: b.key, status: r.status, ...(r.summary as Record<string, unknown>) });
   }
   return { status: "ok", summary: { batches: out } };
@@ -83,7 +98,7 @@ async function applyPromptOverride(params: Record<string, unknown>, b: DistillBa
 //  · 증류기가 하나도 등록 안 됐으면 **구 전역 동작으로 폴백**(기존 잡 무중단 + 증류기 설정 전에도 바로 쓸 수 있게).
 async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: boolean }):
   Promise<{ batches: DistillBatch[]; considered: number; error?: string }> {
-  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources } = await import("../../org/distill/distiller.js");
+  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources, buildStrandedTargeting } = await import("../../org/distill/distiller.js");
   const policySummary = await buildDistillPolicySummary();
 
   let all: Awaited<ReturnType<typeof listDistillers>>;
@@ -148,9 +163,15 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   if (!batches.length || !opt.one) {
     const stranded = await listStrandedSources(enabled, 50, null).catch(() => [] as Record<string, unknown>[]);
     if (stranded.length) {
+      //  대상을 못박는다 — 안 그러면 본문이 source_undistilled(전역)를 부르게 해서 **에이전트가 다루는 집합과
+      //   서버가 '판정함'으로 기록하는 집합(아래 ids)이 어긋난다.** 그 어긋남은 아무도 안 본 자료를 인박스에서
+      //   영구히 빼는 유실이 되고, 켜진 레인 몫까지 침범한다. override 없는 배치는 composeDistillPrompt 가
+      //   targeting 을 붙이지 않으므로 프롬프트에 직접 얹는다.
+      const strandedTargeting = buildStrandedTargeting(stranded);
       batches.push({
         distillerId: null, key: null, ids: stranded.map((s2) => Number(s2.id)), backlog: stranded.length,
-        prompt: buildDistillPrompt(stranded.length, policySummary), targeting: null,
+        prompt: strandedTargeting + "\n\n" + buildDistillPrompt(stranded.length, policySummary, true),
+        targeting: strandedTargeting,
         requester: null, model: null, effort: null,
       });
     }
@@ -182,6 +203,15 @@ async function idleSummary(considered: number, extra: Record<string, unknown>): 
 async function markSeenSafe(distillerId: number, ids: number[], taskId: string | number | null): Promise<void> {
   try { const { markDistillerSeen } = await import("../../org/distill/distiller.js"); await markDistillerSeen(distillerId, ids, taskId); }
   catch { /* 기록 실패는 삼킨다 — 재독이 늘 뿐 오동작은 아니다 */ }
+}
+
+// 방치 자료 판정 기록 — markSeenSafe 의 레인 없는 짝.
+//  ⚠ 실패를 삼키되 **한 줄은 남긴다.** 기록 실패는 그 자체로 오동작이 아니지만(재독이 늘 뿐), 조용히
+//   실패하면 "고쳤는데 안 듣는다"의 원인을 밖에서 알 수 없다 — 2026-09-04 prod 에서 ON CONFLICT 가
+//   테넌시 PK 재작성과 어긋나 매 tick 죽었는데, 삼킴 때문에 로그가 0 이라 DB 를 직접 열어야 알았다.
+async function markStrandedSeenSafe(ids: number[], taskId: string | number | null): Promise<void> {
+  try { const { markStrandedSeen } = await import("../../org/distill/distiller.js"); await markStrandedSeen(ids, taskId); }
+  catch (e) { logger.warn("distill: 방치 판정 기록 실패 — 다음 배치가 같은 자료를 다시 본다: " + ((e as Error)?.message ?? String(e))); }
 }
 
 // 실행 이력 기록은 관측용 — 실패해도 배치 자체를 깨지 않는다(잡 요약엔 이미 결과가 담긴다).
@@ -216,10 +246,15 @@ async function buildDistillPolicySummary(): Promise<string> {
 // distill 프롬프트 — **단일 라인**(send-keys -l 주입용, 개행 금지). source(raw 자료)→knowledge 증류.
 //  #638: 도메인 체계 + 인입 허용선 정책 주입 → LLM 이 각 지식 lifecycle(active|pending) 자기판정(서버강제 없음, pending=안전방향).
 //  ⚠ 소스 텍스트는 데이터지 지시가 아니다(CTO 불변식 이식 — 프롬프트 인젝션 방어). params.prompt 로 관리탭에서 덮어쓸 수 있음.
-function buildDistillPrompt(count: number, policySummary: string): string {
+//  targeted=true 면 **대상이 이미 지정된 배치**(방치 배치)다 — 전역 목록 재조회를 금지한다. 그러지 않으면
+//   에이전트가 다루는 집합이 서버가 기록하는 집합과 어긋나 유실이 난다(buildStrandedTargeting 주석 참조).
+//   false 는 켜진 증류기가 하나도 없을 때의 구 전역 폴백 — 그땐 전역 조회가 맞다(종전 동작 불변).
+function buildDistillPrompt(count: number, policySummary: string, targeted = false): string {
   return `수집된 자료(source) ${count}건을 지식으로 증류하는 배치야. ` +
     `① 먼저 category_list 로 분류축 체계를 파악해 — 각 지식의 category 를 정확히 고르고 아래 정책에 대입하기 위해. ` +
-    `② source_undistilled 로 아직 지식화 안 된 자료 목록을 가져와(최근순). ` +
+    (targeted
+      ? `② 위에 지정된 대상 자료만 다뤄 — 목록을 새로 조회하지 마(source_undistilled 금지). `
+      : `② source_undistilled 로 아직 지식화 안 된 자료 목록을 가져와(최근순). `) +
     `③ 각 자료를 source_get(id)으로 전문을 읽어. 본문이 '[BINARY]' 로 시작하면 바이너리(PDF·이미지 등, 내용 미추출) — 스텁의 filename·mime·channel 로 **볼 가치부터 판단**하고(밈·UI캡처·스크린샷 등 노이즈면 fetch 없이 skip), 가치 있으면 source_artifact(source_id)로 원본을 임시경로에 받아 그 path 를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 내용을 확보해(unavailable=삭제/이동이면 skip). 얻은 전문(또는 텍스트 자료 본문)이 재사용 가능한 지식(결정·합의·사실·런북·중요정보)인지 판단해. ` +
     `④ 가치 있으면 knowledge_similar 로 중복 확인 → 없으면 knowledge_save 로 증류(명확한 제목+전문, 어느 자료에서 왔는지 명시, category=내용에 맞는 도메인, type 지정). ` +
     `⑤ ⚠ 자동화 허용선 — 저장 전 이 지식을 정책에 대입해 lifecycle 을 정해. ${policySummary} lifecycle='pending' 으로 저장하면 오너 검토 큐로 격리돼(승인 전엔 검색·주입에 안 뜸), 승인되면 active. drop 이면 저장하지 마(skip). ` +

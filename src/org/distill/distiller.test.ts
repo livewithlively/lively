@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import {
   Params, distillerScopeSql, distillerExclusiveSql, higherThan,
   buildDistillerPrompt, describeScope, composeDistillPrompt,
-  buildInboxQuery, buildBacklogQuery, markDistillerSeen,
+  buildInboxQuery, buildBacklogQuery, markDistillerSeen, buildStrandedQuery, markStrandedSeen, strandedWhereSql,
   prefilterThresholds, prefilterSql, DEFAULT_DECISIVE_KEYWORDS, type DistillerRow,
   buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS, mergeDraftDistiller, isPrefilterActive, unfilteredImpact,} from "./distiller.js";
 
@@ -296,6 +296,58 @@ t("N1 인박스는 '이미 판정한 자료'를 제외한다(증류됨 + 보고�
   assert.ok(values.includes(7), "판정 이력은 증류기별로 걸러야 한다(자기 id 바인딩)");
 });
 
+t("N5 방치 질의도 '보고 버림'을 제외한다 — 레인 인박스와 같은 규약", () => {
+  const { sql } = buildStrandedQuery([mk({ id: 3 })], null, 50);
+  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM knowledge_source/, "지식이 된 자료 제외");
+  //  이게 없으면 LLM 이 skip 한 자료가 매 tick 같은 집합으로 다시 올라온다(진행이 영원히 0).
+  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM org_stranded_seen ss WHERE ss\.source_id = s\.id/,
+    "보고 버린 방치 자료 제외 — 없으면 배치가 영원히 반복된다");
+  //  존재 검사가 아니라 시각 비교여야 수정된 자료가 다시 올라온다(레인 unprocessedSql 과 동일 규약).
+  assert.match(sql, /ss\.seen_at >= s\.updated_at/,
+    "판정 시각을 자료 수정 시각과 비교하지 않는다 — 원문이 바뀌어도 영구 배제된다");
+  //  레인 스코프 판정은 그대로 살아 있어야 한다(방치 = 어느 레인도 안 집는 것).
+  assert.match(sql, /NOT \(COALESCE/, "레인 스코프로 방치를 재지 않는다");
+});
+
+t("N7 방치 판정은 담당 축만 본다 — 제외·품질 필터를 뒤집어 방치로 만들지 않는다", () => {
+  //  🔴 종전 결함: buildStrandedQuery 가 NOT(담당 AND 제외 AND 품질) 을 써서, 운영자가 exclude 한 채널과
+  //   min_chars·lookback 미달분이 '아무도 안 집는 자료'로 뒤집혀 필터 없는 폴백으로 되돌아왔다.
+  //   폴백의 목적은 담당이 없어 굶는 자료를 구제하는 것이지(#1631) 제외·미달분을 되살리는 것이 아니다.
+  const lane = mk({ id: 3, include_channels: ["keep"], exclude_channels: ["drop"], min_chars: 200, lookback_days: 30 });
+  const own = buildStrandedQuery([lane], null, 50).sql;
+  //  담당 축은 살아 있어야 한다.
+  assert.match(own, /container_name' = ANY/, "담당(include) 판정이 사라졌다");
+  //  품질 축은 담당 판정에서 빠져야 한다 — 방치 질의 안에 길이·기간 술어가 있으면 미달분이 방치로 잡힌다.
+  assert.ok(!/length\(COALESCE\(s\.body_md/.test(own), "min_chars 가 방치 판정에 섞였다 — 짧은 자료가 방치로 뒤집힌다");
+  assert.ok(!/now\(\) - \(/.test(own), "lookback 이 방치 판정에 섞였다 — 창 밖 자료가 방치로 뒤집힌다");
+  //  제외는 '담당 판정'에서 빠지되(그래야 뒤집히지 않는다) **별도 절로 방치에서도 배제**돼야 한다.
+  assert.match(own, /<> ALL\(\$\d+::text\[\]\)/, "제외 채널이 방치 질의에서 배제되지 않는다 — 폴백이 주워 간다");
+});
+
+t("N11 화면 지표와 폴백이 같은 판정을 쓴다 — 갈리면 사각지대를 줄이는 판단이 불가능해진다", () => {
+  //  🔴 실측(2026-09-04): 폴백을 담당 축만 보게 고쳤는데 coverage 는 옛 전체 술어를 다시 조립하고 있어
+  //   화면이 말하는 사각지대와 폴백이 집는 집합이 갈렸다. 판정부는 단일 출처여야 한다.
+  const lane = mk({ id: 5, include_channels: ["keep"], exclude_channels: ["drop"], min_chars: 200 });
+  const p = new Params();
+  const where = strandedWhereSql([lane], p, null);
+  const batch = buildStrandedQuery([lane], null, 50).sql;
+  //  배치 질의는 그 판정부를 그대로 담고 있어야 한다(문자열 포함으로 공유를 못박는다).
+  assert.ok(batch.includes(where.split("\n")[0].trim()), "배치 질의가 공유 판정부를 쓰지 않는다");
+  //  판정부 자체에 담당·제외·seen 배제가 다 들어 있어야 한다.
+  assert.match(where, /container_name' = ANY/, "담당 판정이 없다");
+  assert.match(where, /org_stranded_seen ss/, "판정 기록 배제가 없다");
+  assert.match(where, /<> ALL\(\$\d+::text\[\]\)/, "제외 배제가 없다");
+  //  품질 축은 없어야 한다(있으면 미달분이 방치로 뒤집힌다).
+  assert.ok(!/length\(COALESCE\(s\.body_md/.test(where), "min_chars 가 판정부에 섞였다");
+  //  판정부에 LIMIT 이 없어야 coverage 가 전량을 셀 수 있다(있으면 "사각지대 50건"으로 굳는다).
+  assert.ok(!/LIMIT/i.test(where), "판정부에 LIMIT 이 있다 — 집계가 상한에 묶인다");
+});
+
+t("N10 봇 제외는 한 레인이라도 켜 두면 방치에서도 배제된다", () => {
+  const sql = buildStrandedQuery([mk({ id: 4, exclude_bots: true })], null, 50).sql;
+  assert.match(sql, /author_is_bot','false'\) <> 'true'/, "봇 자료가 방치로 흘러 폴백에 먹힌다");
+});
+
 t("N4 판정은 증류기별로 격리된다 — 다른 증류기 id 로는 안 걸린다", () => {
   const a = buildInboxQuery(mk({ id: 11 }), []);
   const b = buildInboxQuery(mk({ id: 22 }), []);
@@ -330,6 +382,10 @@ assert.equal(await markDistillerSeen(0, [1, 2], null), 0, "증류기 id 가 없�
 assert.equal(await markDistillerSeen(5, [], null), 0, "빈 목록이면 기록하지 않는다");
 assert.equal(await markDistillerSeen(5, [Number.NaN], null), 0, "유효하지 않은 id 만 있으면 기록하지 않는다");
 pass++; console.log("ok  N3 방어: 빈 목록·0번 증류기는 DB 접근 없이 0");
+
+assert.equal(await markStrandedSeen([], null), 0, "빈 목록이면 기록하지 않는다");
+assert.equal(await markStrandedSeen([Number.NaN], null), 0, "유효하지 않은 id 만 있으면 기록하지 않는다");
+pass++; console.log("ok  N6 방어: 방치 판정도 빈 목록·비정상 id 는 DB 접근 없이 0");
 
 
 // ── F. 사전 필터 레버 — LLM 에 먹이기 전 서버가 거른다 ─────────────────────────

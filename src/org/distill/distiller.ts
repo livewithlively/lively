@@ -94,7 +94,17 @@ const nonEmpty = (a: string[] | null | undefined): string[] | null => {
 // 한 증류기의 스코프 술어. 조건이 하나도 없으면 TRUE(= 나머지 전부를 받는 catch-all).
 //  ⚠ 반환 술어는 NULL 을 낼 수 있다(예: 채널이 NULL 인 자료에 include_channels 대조) —
 //   호출부는 반드시 COALESCE(...,false) 로 감싼다. 안 그러면 NOT NULL=NULL 이라 배타 배정이 조용히 샌다.
-export function distillerScopeSql(d: DistillerRow, p: Params, alias = "s"): string {
+/** 이 증류기의 스코프 술어.
+ *
+ *  ⚠ `ownershipOnly` — 세 축의 성격이 다르다. 사각지대(stranded) 판정은 **담당 축만** 봐야 한다.
+ *   · 담당(match_kinds·match_system·include_*) = "내가 본다"
+ *   · 제외(exclude_*) = "증류 대상이 아니다" — 운영자의 의사표시
+ *   · 품질(min_chars·lookback_days) = "이번엔 안 본다" — 담당은 그대로다
+ *   `buildStrandedQuery` 가 `NOT(담당 AND 제외 AND 품질)` 을 쓰면 뒤 두 축에 걸린 자료가
+ *   **'아무도 안 집는 자료'로 뒤집혀** 필터 없는 폴백으로 되돌아온다. 거를수록 사각지대가 커지고,
+ *   운영자가 제외한 채널이 폴백에서 되살아난다(2026-09-04 실측: 사각지대 35,738건의 대부분이 이 경로).
+ *   폴백의 원래 목적은 **담당이 없어 굶는 자료를 구제하는 것**이지(#1631) 제외·미달분을 되살리는 것이 아니다. */
+export function distillerScopeSql(d: DistillerRow, p: Params, alias = "s", ownershipOnly = false): string {
   const c: string[] = [];
   const kinds = nonEmpty(d.match_kinds);
   if (kinds) c.push(`${alias}.kind = ANY(${p.add(kinds)}::text[])`);
@@ -103,19 +113,19 @@ export function distillerScopeSql(d: DistillerRow, p: Params, alias = "s"): stri
   const inc = nonEmpty(d.include_channels);
   if (inc) c.push(`${alias}.fields->>'container_name' = ANY(${p.add(inc)}::text[])`);
   const exc = nonEmpty(d.exclude_channels);
-  if (exc) c.push(`COALESCE(${alias}.fields->>'container_name','') <> ALL(${p.add(exc)}::text[])`);
+  if (exc && !ownershipOnly) c.push(`COALESCE(${alias}.fields->>'container_name','') <> ALL(${p.add(exc)}::text[])`);
 
   const incA = nonEmpty(d.include_authors);
   if (incA) c.push(`${alias}.fields->>'author_name' = ANY(${p.add(incA)}::text[])`);
   const excA = nonEmpty(d.exclude_authors);
-  if (excA) c.push(`COALESCE(${alias}.fields->>'author_name','') <> ALL(${p.add(excA)}::text[])`);
+  if (excA && !ownershipOnly) c.push(`COALESCE(${alias}.fields->>'author_name','') <> ALL(${p.add(excA)}::text[])`);
 
   // 봇 제외 — 커넥터가 채우는 두 축(#735 실측: is_bot / author_is_bot) 모두 본다.
-  if (d.exclude_bots) {
+  if (d.exclude_bots && !ownershipOnly) {
     c.push(`COALESCE(${alias}.fields->>'is_bot','false') <> 'true' AND COALESCE(${alias}.fields->>'author_is_bot','false') <> 'true'`);
   }
-  if (d.min_chars > 0) c.push(`length(COALESCE(${alias}.body_md,'')) >= ${p.add(d.min_chars)}`);
-  if (d.lookback_days && d.lookback_days > 0) {
+  if (d.min_chars > 0 && !ownershipOnly) c.push(`length(COALESCE(${alias}.body_md,'')) >= ${p.add(d.min_chars)}`);
+  if (d.lookback_days && d.lookback_days > 0 && !ownershipOnly) {
     c.push(`COALESCE(${alias}.occurred_at, ${alias}.updated_at) >= now() - (${p.add(String(d.lookback_days))} || ' days')::interval`);
   }
   return c.length ? c.map((x) => `(${x})`).join(" AND ") : "TRUE";
@@ -321,20 +331,50 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
 //  여기서 «아무도 안 집는다» 를 정확히 센다: 켜진 어느 증류기의 **스코프에도** 안 드는 미증류 자료.
 //  ⚠ 인박스가 비었다는 것과 스코프에 없다는 것은 다르다. 인박스는 이미 판정(seen)한 것을 빼므로,
 //   «처리 중» 인 자료까지 방치로 세면 **같은 자료를 두 번 증류**하게 된다. 스코프로 재야 그 실수가 없다.
-export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | null, limit: number): { sql: string; values: unknown[] } {
-  const p = new Params();
+/** 방치 자료의 **판정부만** — `buildStrandedQuery`(배치)와 coverage(집계)가 이 술어를 공유한다.
+ *  ⚠ 갈라 두면 화면이 "사각지대 N건"이라 말하는 집합과 폴백이 실제로 집는 집합이 달라진다. 그러면
+ *   사각지대를 줄이는 판단 자체가 불가능해진다(2026-09-04 실측: 담당 축만 보게 고친 뒤에도 coverage 가
+ *   옛 전체 술어를 다시 조립해 두 값이 갈렸다). 단일 출처로 둔다. */
+export function strandedWhereSql(enabled: DistillerRow[], p: Params, viewer: string | null): string {
   let visWhere = "TRUE";
   if (viewer != null) { p.add(viewer); visWhere = sourceVisSql(p.values.length); }
-  //  켜진 레인 각각의 스코프 — 하나라도 참이면 그 레인이 언젠가 가져간다(방치가 아니다).
-  const claimed = enabled.map((d) => `COALESCE((${distillerScopeSql(d, p)}), false)`);
+  //  켜진 레인 각각의 **담당** 스코프 — 하나라도 참이면 그 레인이 언젠가 가져간다(방치가 아니다).
+  //  ⚠ ownershipOnly=true — 제외·품질 축을 빼고 담당만 본다. 종전엔 전체 술어를 썼는데, 그러면
+  //   exclude 한 채널과 min_chars·lookback 미달분이 'NOT(...)' 에서 뒤집혀 방치로 잡혔다.
+  const claimed = enabled.map((d) => `COALESCE((${distillerScopeSql(d, p, "s", true)}), false)`);
   const notClaimed = claimed.length ? `NOT (${claimed.join(" OR ")})` : "TRUE";
+  //  🔴 어느 레인이든 **명시적으로 제외**한 것은 폴백도 손대지 않는다. exclude_* 는 운영자의 "증류 대상
+  //   아님" 의사표시이고, 폴백의 목적은 담당이 없어 굶는 자료를 구제하는 것이다(#1631) — 제외분을
+  //   되살리는 것이 아니다. 종전엔 제외가 곧 '아무도 안 집음'이 되어 폴백이 그대로 주워 갔다.
+  //   봇 제외는 한 레인이라도 켜 두면 조직 의사로 본다(자료 축이 아니라 정책 축이다).
+  const optOut: string[] = [];
+  const excCh = Array.from(new Set(enabled.flatMap((d) => nonEmpty(d.exclude_channels) ?? [])));
+  if (excCh.length) optOut.push(`COALESCE(s.fields->>'container_name','') <> ALL(${p.add(excCh)}::text[])`);
+  const excAu = Array.from(new Set(enabled.flatMap((d) => nonEmpty(d.exclude_authors) ?? [])));
+  if (excAu.length) optOut.push(`COALESCE(s.fields->>'author_name','') <> ALL(${p.add(excAu)}::text[])`);
+  if (enabled.some((d) => d.exclude_bots)) {
+    optOut.push("COALESCE(s.fields->>'is_bot','false') <> 'true' AND COALESCE(s.fields->>'author_is_bot','false') <> 'true'");
+  }
+  const notOptedOut = optOut.length ? optOut.map((x) => `(${x})`).join(" AND ") : "TRUE";
+  //  ⚠ 판정 기록(org_stranded_seen)을 빼야 인박스가 전진한다 — 레인 인박스의 unprocessedSql 과 같은 이유다.
+  //   증류에 성공한 자료는 knowledge_source 가 거르고, **보고 버린 것**은 이 테이블이 거른다.
+  //   둘이 합쳐지지 않으면 skip 한 자료가 매 배치 다시 올라온다(왜·실측 = org_stranded_seen DDL 주석).
+  return `s.lifecycle='active'
+       AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id AND ks.created_at >= s.updated_at)
+       AND NOT EXISTS (SELECT 1 FROM org_stranded_seen ss WHERE ss.source_id = s.id AND ss.seen_at >= s.updated_at)
+       AND ${visWhere}
+       AND ${notClaimed}
+       AND ${notOptedOut}`;
+}
+
+/** 아무 켜진 레인도 담당하지 않는 미증류 자료(배치용 — 정렬·상한 포함). 판정부는 strandedWhereSql 이 단일 출처. */
+export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | null, limit: number): { sql: string; values: unknown[] } {
+  const p = new Params();
+  const where = strandedWhereSql(enabled, p, viewer);
   const lim = p.add(Math.min(limit, 500));
   return {
     sql: `SELECT ${S_LIST_SEL} FROM source s
-     WHERE s.lifecycle='active'
-       AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id AND ks.created_at >= s.updated_at)
-       AND ${visWhere}
-       AND ${notClaimed}
+     WHERE ${where}
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${lim}`,
     values: p.values,
   };
@@ -426,6 +466,30 @@ export async function markDistillerSeen(distillerId: number, sourceIds: number[]
      --  머물러 매 배치 반복된다. 판정 시각을 전진시켜야 '이번에 다시 봤다'가 기록된다(#1289).
      DO UPDATE SET seen_at=now(), task_id=EXCLUDED.task_id`,
     [distillerId, ids, Number.isFinite(tid as number) ? tid : null]);
+  return r.rowCount ?? 0;
+}
+
+/** 방치(어느 레인 스코프에도 안 드는) 자료를 '판정함' 으로 기록한다 — markDistillerSeen 의 레인 없는 짝.
+ *  레인이 없어 org_distiller_seen(FK distiller_id)에 쓸 수 없으므로 org_stranded_seen 에 남긴다.
+ *  수렴 규약은 같다 — ON CONFLICT 에서 seen_at 을 now() 로 전진시켜 재판정이 다음 배치엔 빠지게 한다. */
+export async function markStrandedSeen(sourceIds: number[], taskId: number | string | null): Promise<number> {
+  const ids = sourceIds.filter((n) => Number.isFinite(n));
+  if (!ids.length) return 0;
+  const tid = taskId === null || taskId === undefined ? null : Number(taskId);
+  //  ⚠ ON CONFLICT 를 **컬럼이 아니라 제약 이름**으로 추론한다. 멀티테넌트 배포에서는 tenant-column
+  //   레이어가 이 표의 PK 를 (tenant_id, source_id) 로 재작성한다 — PK 가 테넌트 스코프 컬럼을 안 품어
+  //   테넌트를 가로질러 source_id 가 충돌할 수 있기 때문이고, 그 판정은 옳다. 그때 `ON CONFLICT (source_id)`
+  //   는 부분집합으로 유니크 인덱스를 추론할 수 없어 42P10 으로 죽는다(2026-09-04 prod 실측: 이 표의
+  //   행이 계속 0 이었고 아래 호출부가 예외를 삼켜 로그도 없었다). 제약 이름은 재작성 전후 동일하므로
+  //   단일 테넌트·멀티 테넌트 양쪽에서 같은 문장이 선다.
+  //   자매 표(org_distiller_seen·org_classifier_seen)가 컬럼 추론으로 사는 것은 그 PK 가 각각
+  //   distiller_id·classifier_id 를 품어 이미 테넌트로 유일하다고 판정돼 재작성을 건너뛰기 때문이다.
+  const r = await itemsPool.query(
+    `INSERT INTO org_stranded_seen(source_id, task_id)
+       SELECT unnest($1::int[]), $2
+     ON CONFLICT ON CONSTRAINT org_stranded_seen_pkey
+       DO UPDATE SET seen_at=now(), task_id=EXCLUDED.task_id`,
+    [ids, Number.isFinite(tid as number) ? tid : null]);
   return r.rowCount ?? 0;
 }
 
@@ -754,24 +818,20 @@ export async function distillerCoverage(): Promise<DistillerCoverage> {
     });
   }
 
-  // 사각지대 — enabled 증류기 전부에 안 걸리는 미증류 자료.
+  // 사각지대 — **폴백이 실제로 집을 자료**와 같은 정의를 써야 한다.
+  //  ⚠ 종전엔 여기서 distillerScopeSql 전체 술어를 다시 조립했다. 그래서 buildStrandedQuery(담당 축만 +
+  //   제외 존중)와 답이 갈렸다 — 화면은 "사각지대 N건"이라 하는데 폴백은 다른 집합을 집는 상태가 된다.
+  //   지표와 동작이 갈리면 사각지대를 줄이는 판단 자체가 불가능해지므로 빌더를 공유한다(단일 출처).
   const p = new Params();
-  const notAny = enabled.length
-    ? enabled.map((h) => `NOT COALESCE((${distillerScopeSql(h, p)}), false)`).join(" AND ")
-    : "TRUE";
+  const strandedWhere = strandedWhereSql(enabled, p, null);
   const uncoveredRows = await q(itemsPool,
-    `SELECT count(*)::int AS n FROM source s
-      WHERE s.lifecycle='active' AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
-        AND ${notAny}`, p.values);
+    `SELECT count(*)::int AS n FROM source s WHERE ${strandedWhere}`, p.values);
 
   const p2 = new Params();
-  const notAny2 = enabled.length
-    ? enabled.map((h) => `NOT COALESCE((${distillerScopeSql(h, p2)}), false)`).join(" AND ")
-    : "TRUE";
+  const strandedWhere2 = strandedWhereSql(enabled, p2, null);
   const chRows = await q(itemsPool,
     `SELECT s.fields->>'container_name' AS channel, count(*)::int AS n FROM source s
-      WHERE s.lifecycle='active' AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
-        AND ${notAny2}
+      WHERE ${strandedWhere2}
       GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, p2.values);
 
   return {
@@ -934,6 +994,26 @@ export function buildDistillerTargeting(d: DistillerRow, rows: Record<string, un
     `조회가 필요하면 source_get 은 id=**숫자**를 받는다(source_get({id: 36835}) — name 으로 넘기면 실패한다).`,
     ...(digest ? ["", digest] : []),
     ...(threadKnowledge.length ? ["", buildThreadKnowledgeBlock(threadKnowledge)] : []),
+  ].join("\n");
+}
+
+/** 방치(레인 스코프 밖) 배치의 대상 지정 — `buildDistillerTargeting` 의 레인 없는 짝.
+ *
+ *  ⚠ 이게 없으면 **서버가 기록하는 집합과 에이전트가 다루는 집합이 어긋난다.** 방치 배치의 본문 프롬프트는
+ *   종전에 `source_undistilled`(조직 전체 미증류)를 부르게 했는데, 서버는 `listStrandedSources`(레인
+ *   스코프 밖)로 고른 id 를 '판정함'으로 기록한다. 두 집합이 다르므로 에이전트가 보지도 않은 자료가
+ *   판정 기록돼 인박스에서 영구히 빠진다(유실). 대상을 못박아 두 집합을 일치시킨다.
+ *  ⚠ 레인 몫 침범도 같이 막는다 — 전역 목록에는 켜진 레인이 담당하는 자료가 섞여 있다. */
+export function buildStrandedTargeting(rows: Record<string, unknown>[]): string {
+  const ids = rows.map((r) => Number(r.id)).filter(Number.isFinite);
+  const digest = buildSourceDigest(rows);
+  return [
+    "대상 자료 id(이것만 다뤄, 목록을 새로 조회하지 마 — 서버가 '켜진 어느 레인 스코프에도 안 드는 자료'로 "
+      + `이미 골라 배정한 것이다): ${ids.join(",")}.`,
+    "⚠ source_undistilled 를 부르지 마 — 그건 조직 전체 미증류 목록이라 켜진 레인이 담당하는 자료까지 집어 오고, "
+      + "서버가 '판정함'으로 기록하는 집합과 어긋나 아무도 안 본 자료가 인박스에서 빠진다.",
+    "조회가 필요하면 source_get 은 id=**숫자**를 받는다(source_get({id: 36835}) — name 으로 넘기면 실패한다).",
+    ...(digest ? ["", digest] : []),
   ].join("\n");
 }
 
