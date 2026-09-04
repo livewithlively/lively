@@ -13,6 +13,40 @@ import { upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem }
 import { openInViewerPart, PV_PAGE_W, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
+// ── PDF 첫 장을 그림으로 (#762) ─────────────────────────────────────────────────
+//  pdf.js 는 **필요할 때만** 받는다(1.7MB) — 자료 격자에 PDF 가 없으면 한 바이트도 안 받는다.
+//  일꾼(worker) 주소까지 같은 벤더 폴더로 못박는다: 기본값은 CDN 을 보는데 이 제품은 제 오리진만 쓴다.
+let pdfLibP: Promise<any> | null = null;
+function pdfLib(): Promise<any> {
+  if (!pdfLibP) {
+    const base = new URL('../vendor/pdfjs/', import.meta.url).href;
+    pdfLibP = import(/* @vite-ignore */ base + 'pdf.min.mjs').then((m: any) => {
+      m.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.mjs';
+      return m;
+    }).catch((e) => { pdfLibP = null; throw e; });
+  }
+  return pdfLibP;
+}
+/** 첫 장을 PV_W 폭 캔버스로. 못 그리면 null — 카드는 아이콘 그대로 둔다(빈 흰 칸을 남기지 않는다). */
+async function pdfFirstPage(buf: ArrayBuffer): Promise<HTMLCanvasElement | null> {
+  try {
+    const lib = await pdfLib();
+    const doc = await lib.getDocument({ data: buf, disableAutoFetch: true, disableStream: true, isEvalSupported: false }).promise;
+    try {
+      const page = await doc.getPage(1);
+      const base = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: PV_W / (base.width || PV_W) });
+      const cv = el('canvas', { class: 'pn-fpdf' }) as HTMLCanvasElement;
+      cv.width = Math.max(1, Math.round(vp.width));
+      cv.height = Math.max(1, Math.round(vp.height));
+      const cx = cv.getContext('2d');
+      if (!cx) return null;
+      await page.render({ canvasContext: cx, viewport: vp }).promise;
+      return cv;
+    } finally { void doc.destroy?.(); }
+  } catch (_) { return null; }   // 암호 걸린 PDF·깨진 파일 — 아이콘으로 두는 것이 정직하다
+}
+
 export function filesPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-files', tabindex: '0' }) as HTMLElement;
   const body = el('div', { class: 'pn-fbody' });          // 격자 또는 목록이 사는 자리(스크롤 주체)
@@ -460,17 +494,19 @@ export function filesPart(ctx: PartCtx): Part {
   async function fillPreview(box: HTMLElement, path: string, kind: string, size: number): Promise<void> {
     if (ctx.dead() || !box.isConnected) return;
     if (size && size > (PV_MAX[kind] || 4e6)) return;              // 너무 큰 것은 아이콘 그대로
-    // ⚠ **PDF 는 썸네일을 만들지 않는다** (#762, 원준 2026-09-04 신고: "뜬금없이 플로팅 바가 많이 나온다").
-    //  크롬은 프레임 안 PDF 를 DOM 이 아니라 **플러그인 레이어**로 그린다. 그 레이어는 우리 히트테스트
-    //  밖에서 마우스를 받아 카드마다 제 도구모음(돋보기±·인쇄·내려받기)을 띄우고, 합성도 따로 하므로
-    //  `.pn-fpaper` 의 pointer-events:none 도 카드의 overflow:hidden 도 그 위엔 닿지 않는다 —
-    //  **도구모음이 카드 밖으로 넘쳐** 격자를 뒤덮었다(실측: 한 화면에 10개 이상, 미리보기 모달 위에서도).
-    //  `#toolbar=0` 은 이 크롬에서 이미 무시된다. 즉 CSS·파라미터로 막을 수 있는 것이 아니라서
-    //  **플러그인을 아예 띄우지 않는 것**이 유일한 길이다. PDF 는 아이콘 카드로 두고, 첫 장을 봐야 하면
-    //  뷰어·우패널에서 연다(거기선 도구모음이 제자리에 있고 쓸모도 있다).
-    //  ⚠ 되살리려면 pdf.js 로 첫 장을 캔버스에 그려야 한다 — 플러그인을 다시 띄우면 이 증상도 함께 돌아온다.
-    if (kind === 'pdf') return;
     const url = apiUrl(pUrl('/file?path=' + encodeURIComponent(path)));
+    //  PDF 는 **첫 장을 그림으로 그린다**(#762) — 크롬 내장 뷰어를 프레임에 띄우던 종전 방식은
+    //  플러그인 레이어라 우리 CSS·히트테스트 밖에서 제 도구모음을 띄웠고, 그게 카드 밖으로 넘쳐 격자를
+    //  뒤덮었다(`pointer-events:none`·`overflow:hidden`·`#toolbar=0` 셋 다 안 닿는다). 그림에는 그 문제가 없다.
+    if (kind === 'pdf') {
+      const buf = await fetch(url, { headers: authHeaders() }).then((r2) => (r2.ok ? r2.arrayBuffer() : null)).catch(() => null);
+      if (!buf || ctx.dead() || !box.isConnected) return;
+      const cv = await pdfFirstPage(buf);
+      if (!cv || ctx.dead() || !box.isConnected) return;
+      box.classList.add('has-pv');
+      paper(box, cv, PV_W);
+      return;
+    }
     if (kind === 'text' || kind === 'page') {
       // 앞부분만 — Range 를 무시하는 서버여도 글자만 잘라 쓰므로 화면은 같다. 416(범위 거부)이면 통째로 받는다.
       let r = await fetch(url, { headers: { ...authHeaders(), Range: 'bytes=0-' + (kind === 'page' ? 400_000 : 4095) } });

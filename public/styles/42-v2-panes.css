@@ -441,6 +441,8 @@
 /* 미리보기 한 장 — 논리 크기는 JS 가 내용에 맞춰 준다(글 300 · 시안 1180). 여기서는 자리와 규율만. */
 .pn-fpaper { position: absolute; inset: 0; width: 300px; height: 246px; transform-origin: top left; overflow: hidden; background: var(--surface); pointer-events: none; }
 .pn-fpaper > .pn-fframe { width: 100%; height: 100%; }
+/* PDF 첫 장 그림(#762) — 종이 폭에 맞춰 눕고, 종이보다 길면 아래가 잘린다(카드 = 첫 장의 윗부분). */
+.pn-fpaper > .pn-fpdf { display: block; width: 100%; height: auto; }
 .pn-fframe { width: 300px; height: 246px; border: 0; background: var(--surface); }
 .pn-fpre { margin: 0; padding: 10px 11px; width: 300px; height: 246px; overflow: hidden; white-space: pre-wrap; word-break: break-all;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; line-height: 1.5; color: var(--ink-sub); }
