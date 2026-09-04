@@ -149,6 +149,9 @@ test("W10 워커가 SIGTERM 에 안 죽어도 shutdown 이 하드 데드라인 �
   const r = rig(4);
   assert.equal(await r.hand("box-a-1", "t1"), true);
   // 이 워커는 'exit' 을 영영 안 낸다(멎은 워커) — shutdown 은 유예만큼만 기다리고 넘어가야 한다.
+  //  ★ 이 시험 파일엔 다른 핸들이 없다 — 즉 «유예 타이머 하나가 루프를 붙들 수 있나» 를 그대로 잰다.
+  //   유예 타이머가 unref 면 루프가 말라 이 await 가 영영 안 풀린다(CI 실측: node:test 가
+  //   'event loop has already resolved' 로 잡았다. 로컬 Node 26 은 우연히 통과해 **로컬만 보면 못 잡는다**).
   const t0 = Date.now();
   await r.host.shutdown();
   const spent = Date.now() - t0;

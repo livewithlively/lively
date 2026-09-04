@@ -265,8 +265,14 @@ export class AttachWorkerHost {
     await new Promise<void>((resolve) => {
       let left = workers.length;
       const done = () => { if (--left <= 0) resolve(); };
-      const t = setTimeout(() => { for (const w of workers) { try { w.child.kill("SIGKILL"); } catch { /* noop */ } } resolve(); }, STOP_GRACE_MS);
-      if (t.unref) t.unref();
+      //  ★ #3545 — 이 타이머는 **unref 하지 않는다.** 종전엔 unref 였는데, 그러면 이벤트 루프에 다른
+      //   핸들이 없는 순간 이 유예가 **아예 안 돌고** 그 뒤(SIGKILL 승격 → reap → 유령 정리)가 통째로
+      //   건너뛰어진다. 이 파일이 방금 고친 것과 **같은 병**이다: «나중에 하겠다» 를 unref 로 적으면
+      //   프로세스가 곧 끝나는 경로에서는 «안 하겠다» 와 같다.
+      //   ⚠ 붙들어도 안전하다 — 이 자리는 이미 종료 중이고, 최대 STOP_GRACE_MS(하드 데드라인 안쪽)이며,
+      //    `index.ts` 가 그 위에 1.5초 강제 exit 을 또 걸어 둔다. (CI 실측: unref 면 워커가 멎었을 때
+      //    이 promise 가 영영 안 풀린다 — node:test 가 «event loop has already resolved» 로 잡았다.)
+      setTimeout(() => { for (const w of workers) { try { w.child.kill("SIGKILL"); } catch { /* noop */ } } resolve(); }, STOP_GRACE_MS);
       for (const w of workers) w.child.once("exit", done);
     });
     for (const w of workers) this.reap(w.pid, "shutdown");
