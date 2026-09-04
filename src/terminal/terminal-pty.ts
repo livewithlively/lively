@@ -139,8 +139,30 @@ function detachGhostClients(bin: string, prefix: string[], id: string, env: Reco
   void execFileP(bin, [...prefix, "detach-client", "-s", id], { timeout: 5000, env, windowsHide: true })
     //  #2625 T1 — **실패를 삼키지 않고 남긴다**(동작은 그대로 비치명). 종전엔 «안 불렸다» 와
     //   «불렸는데 중계가 404·타임아웃으로 죽었다» 가 둘 다 완전히 조용해, 유령이 쌓이는 20분을
-    //   들여다봐도 어느 쪽인지 물어볼 자리가 없었다. 세션이 이미 없어 실패하는 것도 흔하므로 warn 이다.
-    .catch((err) => logger.warn({ id, err: (err as Error)?.message ?? String(err) }, "유령 attach 정리 실패"));
+    //   들여다봐도 어느 쪽인지 물어볼 자리가 없었다.
+    //  #3545 — 다만 «끊을 것이 없었다» 는 **실패가 아니다**(아래 nothingToDetach). 그걸 warn 으로
+    //   남기면 정상 경로가 매번 빨간 줄을 찍어, 진짜 실패가 그 잡음에 묻힌다(프로덕션 실측:
+    //   워커가 죽으면 릴레이가 함께 죽어 이미 걷힌 뒤라, 이 자리는 거의 항상 «없음» 으로 온다).
+    .catch((err) => {
+      const msg = (err as Error)?.message ?? String(err);
+      if (nothingToDetach(msg)) { logger.info({ id }, "유령 attach 정리 — 끊을 클라이언트가 없었다"); return; }
+      logger.warn({ id, err: msg }, "유령 attach 정리 실패");
+    });
+}
+
+/**
+ * `detach-client` 가 «할 일이 없었다» 로 끝났나 (순수 — 표를 시험이 지킨다) (#3545).
+ *
+ * tmux 는 이 둘을 **비-0 종료코드**로 알린다. 그런데 둘 다 우리가 원하던 상태(그 세션에 붙어 있는
+ *  클라이언트가 없다)라 **성공과 구별할 이유가 없다**:
+ *   · `no current client`  — 그 세션에 클라이언트가 하나도 없다
+ *   · `can't find session` / `session not found` — 세션 자체가 이미 갔다(유령도 함께 갔다)
+ *
+ * ⚠ 그 밖은 전부 warn 으로 남긴다 — 중계 404·타임아웃·권한처럼 **정말 못 끊은** 경우가 여기 온다.
+ *  「모르면 시끄럽게」가 이 자리의 규율이다(#2625 T1 이 조용함 때문에 1년 가까이 못 본 자리다).
+ */
+export function nothingToDetach(errMessage: string): boolean {
+  return /no current client|can'?t find session|session not found|no such session/i.test(errMessage);
 }
 
 /**
