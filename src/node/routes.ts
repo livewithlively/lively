@@ -189,7 +189,7 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
   app.post("/api/ui/nodes/:id/revoke-token", auth, wrap(async (req, res) => {
     const n = await requireOwn(req);
     const r = await revokeNodeToken(n.id, idOf(userOf(req)));
-    logger.info({ node: n.id, actor: idOf(userOf(req)), revoked: r.revoked }, "노드 토큰 회수");
+    logger.info({ node: n.id, actor: idOf(userOf(req)), revoked: r.revoked, outcome: r.outcome }, "노드 토큰 회수");
     res.setHeader("Cache-Control", "no-store");
     res.json(r);
   }));
