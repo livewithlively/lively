@@ -7,10 +7,10 @@
 //  계약(panes-parts.ts 의 Part 와 같다): root 를 칸 본문에 붙이고, tick() 은 8초마다, destroy() 는 정리.
 //  ⚠ tick 은 **서명이 같으면 아무것도 하지 않는다** — 선택·스크롤·미리보기를 8초마다 날리면 쓸 수 없는 칸이 된다.
 import { anchoredPopover, api, apiUrl, el, relTime, toast } from '../core.js';
-import { fmtSize, openFileViewer } from '../projects/files.js';
+import { fmtSize } from '../projects/files.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { upDirSupported, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
-import { FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
+import { openInViewerPart, PV_PAGE_W, FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
 export function filesPart(ctx: PartCtx): Part {
@@ -278,7 +278,10 @@ export function filesPart(ctx: PartCtx): Part {
   }
   function open(f: FileItem): void {
     if (f.type === 'dir') { goto(f.path); return; }
-    void openFileViewer(ctx.id, f.path, f.name, () => { sig = ''; void load(); }, '/api/ui/v6/projects/');
+    // 파일을 누르면 **곁칸의 뷰어 탭**으로 편다 (#762, 원준 2026-09-04: "따로 뷰어 위젯을 띄우지 않더라도
+    //  곁칸에서 탭으로 뜨면 좋겠다"). 종전엔 화면 한가운데 모달이라 ① 그 파일을 보면서 세션을 볼 수 없었고
+    //  ② 뷰어 칸을 미리 넣어 둔 사람만 칸에서 볼 수 있었다. 칸이 없으면 셸이 이 신호를 듣고 만든다.
+    openInViewerPart(ctx, f.path);
   }
   function download(f: FileItem): void {
     window.open(apiUrl(pUrl('/file?path=' + encodeURIComponent(f.path) + '&download=1')), '_blank');
@@ -302,14 +305,8 @@ export function filesPart(ctx: PartCtx): Part {
     const rows: Array<{ label: string; run?: () => void; danger?: boolean; sep?: boolean; off?: boolean }> = [];
     if (f) {
       rows.push({ label: many.length > 1 ? `${many.length}개 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => { for (const x of many.slice(0, 8)) open(x); } });
-      if (f.type !== 'dir') rows.push({ label: '뷰어에서 보기', run: () => {
-        // ⚠ **이 곁칸 안에서만** 찾고 이 곁칸에만 알린다(웹 칸과 같은 규칙 — pane-signal-scope-and-embed-isolation-1819).
-        //  window 로 쏘면 열려 있는 모든 세션 탭의 뷰어가 같은 파일을 함께 열고 각자 자기 열쇠에 그 파일을 기억한다.
-        //  찾는 것도 document 로 하면 안 된다 — 옆 세션에 뷰어가 있다는 이유로 이 세션에서는 아무 일도 안 일어난 채
-        //  안내조차 안 뜬다(있는 줄 알고 쏘고 끝난다).
-        if (!ctx.paneRoot().querySelector('.pn-ed')) { toast('먼저 어느 칸에든 [뷰어]를 넣어 주세요 — 칸 위의 ＋ 에서 고릅니다.', true); return; }
-        ctx.paneRoot().dispatchEvent(new CustomEvent('pn-viewer-open', { detail: { id: ctx.id, path: f.path } }));
-      } });
+      // 왼쪽 클릭과 같은 일 — 뷰어 칸이 없으면 셸이 곁칸에 만든다(종전엔 "먼저 [뷰어]를 넣어 주세요"로 돌려보냈다).
+      if (f.type !== 'dir') rows.push({ label: '뷰어에서 보기', run: () => openInViewerPart(ctx, f.path) });
       if (f.type !== 'dir') rows.push({ label: '내려받기', run: () => { for (const x of many) if (x.type !== 'dir') download(x); } });
       rows.push({ label: '이름 바꾸기', off: many.length !== 1, run: () => { renameAt = f.path; render(); } });
       if (cwd) rows.push({ label: '상위 폴더로 옮기기', run: () => void moveMany(many.map((x) => x.path), cwd.includes('/') ? cwd.slice(0, cwd.lastIndexOf('/')) : '') });
@@ -441,14 +438,19 @@ export function filesPart(ctx: PartCtx): Part {
   /** 카드 폭에 맞춰 종이(300×246)를 줄인다 — 칸 폭이 바뀌면 다시 맞춘다. */
   function fitPaper(box: HTMLElement, paper: HTMLElement): void {
     const w = box.clientWidth || 92;
-    paper.style.transform = 'scale(' + (w / PV_W).toFixed(4) + ')';
+    const lw = Number(paper.dataset.lw) || PV_W;      // 종이마다 논리 폭이 다르다(글 300 · 시안 1180)
+    paper.style.transform = 'scale(' + (w / lw).toFixed(4) + ')';
   }
   const fits: Array<[HTMLElement, HTMLElement]> = [];
   const ro: ResizeObserver | null = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => { for (const [b, pp] of fits) fitPaper(b, pp); })
     : null;
-  function paper(box: HTMLElement, inner: HTMLElement): void {
+  /** 미리보기 한 장을 카드에 앉힌다 — `logicalW` 는 **그 내용이 제대로 펴지는 폭**이고, 카드 폭으로 줄여 그린다. */
+  function paper(box: HTMLElement, inner: HTMLElement, logicalW = PV_W): void {
     const pp = el('div', { class: 'pn-fpaper' }, inner) as HTMLElement;
+    pp.dataset.lw = String(logicalW);
+    pp.style.width = logicalW + 'px';
+    pp.style.height = Math.round(logicalW * 0.82) + 'px';   // 카드 비율(1 : .82)과 같게 — 아래가 잘리지 않는다
     box.replaceChildren(pp);
     fits.push([box, pp]);
     fitPaper(box, pp);
@@ -458,6 +460,16 @@ export function filesPart(ctx: PartCtx): Part {
   async function fillPreview(box: HTMLElement, path: string, kind: string, size: number): Promise<void> {
     if (ctx.dead() || !box.isConnected) return;
     if (size && size > (PV_MAX[kind] || 4e6)) return;              // 너무 큰 것은 아이콘 그대로
+    // ⚠ **PDF 는 썸네일을 만들지 않는다** (#762, 원준 2026-09-04 신고: "뜬금없이 플로팅 바가 많이 나온다").
+    //  크롬은 프레임 안 PDF 를 DOM 이 아니라 **플러그인 레이어**로 그린다. 그 레이어는 우리 히트테스트
+    //  밖에서 마우스를 받아 카드마다 제 도구모음(돋보기±·인쇄·내려받기)을 띄우고, 합성도 따로 하므로
+    //  `.pn-fpaper` 의 pointer-events:none 도 카드의 overflow:hidden 도 그 위엔 닿지 않는다 —
+    //  **도구모음이 카드 밖으로 넘쳐** 격자를 뒤덮었다(실측: 한 화면에 10개 이상, 미리보기 모달 위에서도).
+    //  `#toolbar=0` 은 이 크롬에서 이미 무시된다. 즉 CSS·파라미터로 막을 수 있는 것이 아니라서
+    //  **플러그인을 아예 띄우지 않는 것**이 유일한 길이다. PDF 는 아이콘 카드로 두고, 첫 장을 봐야 하면
+    //  뷰어·우패널에서 연다(거기선 도구모음이 제자리에 있고 쓸모도 있다).
+    //  ⚠ 되살리려면 pdf.js 로 첫 장을 캔버스에 그려야 한다 — 플러그인을 다시 띄우면 이 증상도 함께 돌아온다.
+    if (kind === 'pdf') return;
     const url = apiUrl(pUrl('/file?path=' + encodeURIComponent(path)));
     if (kind === 'text' || kind === 'page') {
       // 앞부분만 — Range 를 무시하는 서버여도 글자만 잘라 쓰므로 화면은 같다. 416(범위 거부)이면 통째로 받는다.
@@ -473,13 +485,13 @@ export function filesPart(ctx: PartCtx): Part {
       //  srcdoc 은 내용을 그 자리에 넘기므로 출처 문제가 없고, 빈 sandbox 가 스크립트·폼·상위 접근을 모두 막는다.
       const frame = el('iframe', { class: 'pn-fframe', sandbox: '', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }) as HTMLIFrameElement;
       frame.srcdoc = raw.slice(0, 400_000);
-      paper(box, frame);
+      paper(box, frame, PV_PAGE_W);
       return;
     }
     const r = await fetch(url, { headers: authHeaders() });
     if (!r.ok || ctx.dead() || !box.isConnected) return;
     const bl = await r.blob();
-    const u = URL.createObjectURL(kind === 'pdf' ? new Blob([bl], { type: 'application/pdf' }) : bl);
+    const u = URL.createObjectURL(bl);
     blobUrls.push(u);
     if (ctx.dead() || !box.isConnected) return;
     box.classList.add('has-pv');
@@ -491,9 +503,6 @@ export function filesPart(ctx: PartCtx): Part {
       box.replaceChildren(v);
       // 첫 프레임을 세운다 — metadata 만으로 검은 칸이 남는 브라우저가 있어 0.1초로 옮겨 한 장을 그린다.
       v.addEventListener('loadedmetadata', () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 10); } catch (_) { /* noop */ } }, { once: true });
-    } else if (kind === 'pdf') {
-      // 크롬·사파리는 PDF 를 프레임 안에서 직접 그린다 — 첫 장만, 도구모음 없이.
-      paper(box, el('iframe', { class: 'pn-fframe', src: u + '#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }));
     }
   }
 

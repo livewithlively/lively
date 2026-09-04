@@ -29,6 +29,7 @@ import { canOpenInAside, openInAside } from './aside-slot.js';
 import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
+import { VIEWER_EVT } from './panes-kit.js';
 import { hasBrowserSurface } from './browser-surface.js';
 import { onViewers, viewersOf } from './presence.js';           // #2116 — 지금 이 세션을 보고 있는 사람
 import { openSharePopover, shareSessOf } from './share-session.js';   // #2116 — 문패 [공유]
@@ -509,6 +510,18 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   켜진다(실측 2026-08-21: 미리보기 한 번에 두 세션 탭 모두 칸이 생기고 저장값도 둘 다 물들었다).
   const onOpenWeb = (): void => { addTab('side', 'web'); };
   wrap.addEventListener('pn:open-web', onOpenWeb);
+  // 자료 칸에서 파일을 누르면 뷰어 탭으로 (#762, 원준 2026-09-04) — 웹 칸과 같은 길이다.
+  //  ⚠ 이미 뷰어가 있으면 **또 만들지 않고 그 칸을 켠다**(부품은 칸마다 한 벌이라 두 곳에 생기면 둘이 따로 논다).
+  //   접혀 있던 칸이면 펴 준다 — 신호를 보냈는데 아무 일도 안 일어난 것처럼 보이면 안 된다.
+  const onOpenViewer = (): void => {
+    const zone = (['side', 'main', 'bottom'] as Zone[]).find((z) => lay[z].includes('editor'));
+    if (!zone) { addTab('side', 'editor'); return; }
+    if (zone === 'side' && !lay.sideOn) { lay.sideOn = true; saveView({ sideOn: true }); }
+    if (zone === 'bottom' && !lay.bottomOn) { lay.bottomOn = true; saveView({ bottomOn: true }); }
+    activate(zone, 'editor');
+    paintAll();
+  };
+  wrap.addEventListener(VIEWER_EVT, onOpenViewer);
   // 터미널 iframe 이 미리보기 링크를 넘겨 온다 — 새 탭 대신 웹 칸에 싣는다(원준 2026-08-21).
 
   //  ⚠ 출처를 반드시 확인한다(남의 프레임이 우리 칸을 마음대로 열지 못하게). 받았으면 답을 보내
@@ -900,6 +913,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     repaintDoor(): void { paintDoor(); },
     destroy(): void {
       wrap.removeEventListener('pn:open-web', onOpenWeb);
+      wrap.removeEventListener(VIEWER_EVT, onOpenViewer);
       window.removeEventListener('message', onMsg);
       dead = true;
       offViewers();
