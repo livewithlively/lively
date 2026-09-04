@@ -94,7 +94,17 @@ const nonEmpty = (a: string[] | null | undefined): string[] | null => {
 // 한 증류기의 스코프 술어. 조건이 하나도 없으면 TRUE(= 나머지 전부를 받는 catch-all).
 //  ⚠ 반환 술어는 NULL 을 낼 수 있다(예: 채널이 NULL 인 자료에 include_channels 대조) —
 //   호출부는 반드시 COALESCE(...,false) 로 감싼다. 안 그러면 NOT NULL=NULL 이라 배타 배정이 조용히 샌다.
-export function distillerScopeSql(d: DistillerRow, p: Params, alias = "s"): string {
+/** 이 증류기의 스코프 술어.
+ *
+ *  ⚠ `ownershipOnly` — 세 축의 성격이 다르다. 사각지대(stranded) 판정은 **담당 축만** 봐야 한다.
+ *   · 담당(match_kinds·match_system·include_*) = "내가 본다"
+ *   · 제외(exclude_*) = "증류 대상이 아니다" — 운영자의 의사표시
+ *   · 품질(min_chars·lookback_days) = "이번엔 안 본다" — 담당은 그대로다
+ *   `buildStrandedQuery` 가 `NOT(담당 AND 제외 AND 품질)` 을 쓰면 뒤 두 축에 걸린 자료가
+ *   **'아무도 안 집는 자료'로 뒤집혀** 필터 없는 폴백으로 되돌아온다. 거를수록 사각지대가 커지고,
+ *   운영자가 제외한 채널이 폴백에서 되살아난다(2026-09-04 실측: 사각지대 35,738건의 대부분이 이 경로).
+ *   폴백의 원래 목적은 **담당이 없어 굶는 자료를 구제하는 것**이지(#1631) 제외·미달분을 되살리는 것이 아니다. */
+export function distillerScopeSql(d: DistillerRow, p: Params, alias = "s", ownershipOnly = false): string {
   const c: string[] = [];
   const kinds = nonEmpty(d.match_kinds);
   if (kinds) c.push(`${alias}.kind = ANY(${p.add(kinds)}::text[])`);
@@ -103,19 +113,19 @@ export function distillerScopeSql(d: DistillerRow, p: Params, alias = "s"): stri
   const inc = nonEmpty(d.include_channels);
   if (inc) c.push(`${alias}.fields->>'container_name' = ANY(${p.add(inc)}::text[])`);
   const exc = nonEmpty(d.exclude_channels);
-  if (exc) c.push(`COALESCE(${alias}.fields->>'container_name','') <> ALL(${p.add(exc)}::text[])`);
+  if (exc && !ownershipOnly) c.push(`COALESCE(${alias}.fields->>'container_name','') <> ALL(${p.add(exc)}::text[])`);
 
   const incA = nonEmpty(d.include_authors);
   if (incA) c.push(`${alias}.fields->>'author_name' = ANY(${p.add(incA)}::text[])`);
   const excA = nonEmpty(d.exclude_authors);
-  if (excA) c.push(`COALESCE(${alias}.fields->>'author_name','') <> ALL(${p.add(excA)}::text[])`);
+  if (excA && !ownershipOnly) c.push(`COALESCE(${alias}.fields->>'author_name','') <> ALL(${p.add(excA)}::text[])`);
 
   // 봇 제외 — 커넥터가 채우는 두 축(#735 실측: is_bot / author_is_bot) 모두 본다.
-  if (d.exclude_bots) {
+  if (d.exclude_bots && !ownershipOnly) {
     c.push(`COALESCE(${alias}.fields->>'is_bot','false') <> 'true' AND COALESCE(${alias}.fields->>'author_is_bot','false') <> 'true'`);
   }
-  if (d.min_chars > 0) c.push(`length(COALESCE(${alias}.body_md,'')) >= ${p.add(d.min_chars)}`);
-  if (d.lookback_days && d.lookback_days > 0) {
+  if (d.min_chars > 0 && !ownershipOnly) c.push(`length(COALESCE(${alias}.body_md,'')) >= ${p.add(d.min_chars)}`);
+  if (d.lookback_days && d.lookback_days > 0 && !ownershipOnly) {
     c.push(`COALESCE(${alias}.occurred_at, ${alias}.updated_at) >= now() - (${p.add(String(d.lookback_days))} || ' days')::interval`);
   }
   return c.length ? c.map((x) => `(${x})`).join(" AND ") : "TRUE";
@@ -325,9 +335,24 @@ export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | nul
   const p = new Params();
   let visWhere = "TRUE";
   if (viewer != null) { p.add(viewer); visWhere = sourceVisSql(p.values.length); }
-  //  켜진 레인 각각의 스코프 — 하나라도 참이면 그 레인이 언젠가 가져간다(방치가 아니다).
-  const claimed = enabled.map((d) => `COALESCE((${distillerScopeSql(d, p)}), false)`);
+  //  켜진 레인 각각의 **담당** 스코프 — 하나라도 참이면 그 레인이 언젠가 가져간다(방치가 아니다).
+  //  ⚠ ownershipOnly=true — 제외·품질 축을 빼고 담당만 본다. 종전엔 전체 술어를 썼는데, 그러면
+  //   exclude 한 채널과 min_chars·lookback 미달분이 'NOT(...)' 에서 뒤집혀 방치로 잡혔다.
+  const claimed = enabled.map((d) => `COALESCE((${distillerScopeSql(d, p, "s", true)}), false)`);
   const notClaimed = claimed.length ? `NOT (${claimed.join(" OR ")})` : "TRUE";
+  //  🔴 어느 레인이든 **명시적으로 제외**한 것은 폴백도 손대지 않는다. exclude_* 는 운영자의 "증류 대상
+  //   아님" 의사표시이고, 폴백의 목적은 담당이 없어 굶는 자료를 구제하는 것이다(#1631) — 제외분을
+  //   되살리는 것이 아니다. 종전엔 제외가 곧 '아무도 안 집음'이 되어 폴백이 그대로 주워 갔다.
+  //   봇 제외는 한 레인이라도 켜 두면 조직 의사로 본다(자료 축이 아니라 정책 축이다).
+  const optOut: string[] = [];
+  const excCh = Array.from(new Set(enabled.flatMap((d) => nonEmpty(d.exclude_channels) ?? [])));
+  if (excCh.length) optOut.push(`COALESCE(s.fields->>'container_name','') <> ALL(${p.add(excCh)}::text[])`);
+  const excAu = Array.from(new Set(enabled.flatMap((d) => nonEmpty(d.exclude_authors) ?? [])));
+  if (excAu.length) optOut.push(`COALESCE(s.fields->>'author_name','') <> ALL(${p.add(excAu)}::text[])`);
+  if (enabled.some((d) => d.exclude_bots)) {
+    optOut.push("COALESCE(s.fields->>'is_bot','false') <> 'true' AND COALESCE(s.fields->>'author_is_bot','false') <> 'true'");
+  }
+  const notOptedOut = optOut.length ? optOut.map((x) => `(${x})`).join(" AND ") : "TRUE";
   const lim = p.add(Math.min(limit, 500));
   //  ⚠ 판정 기록(org_stranded_seen)을 빼야 인박스가 전진한다 — 레인 인박스의 unprocessedSql 과 같은 이유다.
   //   증류에 성공한 자료는 위의 knowledge_source 가 거르고, **보고 버린 것**은 이 테이블이 거른다.
@@ -339,6 +364,7 @@ export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | nul
        AND NOT EXISTS (SELECT 1 FROM org_stranded_seen ss WHERE ss.source_id = s.id AND ss.seen_at >= s.updated_at)
        AND ${visWhere}
        AND ${notClaimed}
+       AND ${notOptedOut}
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${lim}`,
     values: p.values,
   };

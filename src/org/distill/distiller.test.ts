@@ -309,6 +309,26 @@ t("N5 방치 질의도 '보고 버림'을 제외한다 — 레인 인박스와 �
   assert.match(sql, /NOT \(COALESCE/, "레인 스코프로 방치를 재지 않는다");
 });
 
+t("N7 방치 판정은 담당 축만 본다 — 제외·품질 필터를 뒤집어 방치로 만들지 않는다", () => {
+  //  🔴 종전 결함: buildStrandedQuery 가 NOT(담당 AND 제외 AND 품질) 을 써서, 운영자가 exclude 한 채널과
+  //   min_chars·lookback 미달분이 '아무도 안 집는 자료'로 뒤집혀 필터 없는 폴백으로 되돌아왔다.
+  //   폴백의 목적은 담당이 없어 굶는 자료를 구제하는 것이지(#1631) 제외·미달분을 되살리는 것이 아니다.
+  const lane = mk({ id: 3, include_channels: ["keep"], exclude_channels: ["drop"], min_chars: 200, lookback_days: 30 });
+  const own = buildStrandedQuery([lane], null, 50).sql;
+  //  담당 축은 살아 있어야 한다.
+  assert.match(own, /container_name' = ANY/, "담당(include) 판정이 사라졌다");
+  //  품질 축은 담당 판정에서 빠져야 한다 — 방치 질의 안에 길이·기간 술어가 있으면 미달분이 방치로 잡힌다.
+  assert.ok(!/length\(COALESCE\(s\.body_md/.test(own), "min_chars 가 방치 판정에 섞였다 — 짧은 자료가 방치로 뒤집힌다");
+  assert.ok(!/now\(\) - \(/.test(own), "lookback 이 방치 판정에 섞였다 — 창 밖 자료가 방치로 뒤집힌다");
+  //  제외는 '담당 판정'에서 빠지되(그래야 뒤집히지 않는다) **별도 절로 방치에서도 배제**돼야 한다.
+  assert.match(own, /<> ALL\(\$\d+::text\[\]\)/, "제외 채널이 방치 질의에서 배제되지 않는다 — 폴백이 주워 간다");
+});
+
+t("N10 봇 제외는 한 레인이라도 켜 두면 방치에서도 배제된다", () => {
+  const sql = buildStrandedQuery([mk({ id: 4, exclude_bots: true })], null, 50).sql;
+  assert.match(sql, /author_is_bot','false'\) <> 'true'/, "봇 자료가 방치로 흘러 폴백에 먹힌다");
+});
+
 t("N4 판정은 증류기별로 격리된다 — 다른 증류기 id 로는 안 걸린다", () => {
   const a = buildInboxQuery(mk({ id: 11 }), []);
   const b = buildInboxQuery(mk({ id: 22 }), []);
