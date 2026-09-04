@@ -568,6 +568,10 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   // 프로젝트 init 코어(#905) — lively.mjs(`lively init`)·lively-mcp-local.mjs 가 import. 번들 동봉(둘 옆에 둬야 import 해결).
   copyMjsWithHeader(kitAbs("cli/project-init-core.mjs"), join(target, "cli", "project-init-core.mjs"), "kit/cli/project-init-core.mjs", orgLabel);
   copied.push("cli/project-init-core.mjs");
+  // 워크스페이스 회수 코어(#2621) — lively.mjs(`lively reclaim`)가 dynamic import. 번들 동봉(옆에 둬야 import 해결).
+  //  게이트웨이(src/ops/workspace-reclaim.ts)도 **이 같은 파일**을 읽는다 — 삭제 규칙이 두 벌로 갈라지지 않게.
+  copyMjsWithHeader(kitAbs("cli/workspace-reclaim-core.mjs"), join(target, "cli", "workspace-reclaim-core.mjs"), "kit/cli/workspace-reclaim-core.mjs", orgLabel);
+  copied.push("cli/workspace-reclaim-core.mjs");
   // 서브커맨드 모듈(#1313 R52) — lively.mjs 가 `node`·`delegate`·`resume/backfill/share` 에서 dynamic import.
   //  번들 동봉(lively.mjs 옆에 둬야 import 해결) → kit_version 지문 포함 → 자동 업뎃(#858)이 함께 갱신.
   for (const f of ["cmd-node.mjs", "cmd-delegate.mjs", "cmd-session.mjs"]) {

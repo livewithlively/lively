@@ -400,7 +400,7 @@ const winSpawnArgs = (cmd, args) => [winArg(cmd), args.map(winArg)];
 // dropEnv: 상속 env 에서 **키를 지운다**(빈 문자열로 덮지 않는다). 빈 문자열은 '설정됨' 으로 읽히는 도구가 많아
 //  (실측 #1541: electron-builder 가 빈 CSC_LINK 를 인증서 경로로 보고 죽었다) 지우는 것과 결과가 다르다.
 //  여기 쓰임: claude 를 **기본 위치**($HOME/.claude.json)로 돌리려면 CLAUDE_CONFIG_DIR 가 없어야 한다.
-function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeout } = {}) {
+function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeout, cwd } = {}) {
   const merged = { ...process.env, ...(env || {}) };
   for (const k of dropEnv || []) delete merged[k];
   const [c, a] = WIN ? winSpawnArgs(cmd, args) : [cmd, args];
@@ -409,6 +409,7 @@ function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeou
     env: merged,
     encoding: "utf8",
     shell: WIN,
+    ...(cwd ? { cwd } : {}),   // 워크트리별로 git 을 돌려야 하는 호출자용(회수 — #2621). 안 주면 종전대로 프로세스 cwd.
     ...(timeout ? { timeout, killSignal: "SIGKILL" } : {}),
   });
   if (r.error && !allowFail) throw r.error;
@@ -2529,6 +2530,94 @@ async function cmdInit(rest) {
 
 // `lively repo` — 워크트리 셀프서비스 CLI(사람·스크립트용). MCP 툴 lively_local_repo_* 과 **같은 코어**를 쓴다
 //  (repo-worktree-core.mjs — 드리프트 0). ctx 계약: sh → {stdout,stderr,code}(run 의 out/err 매핑) · api → JSON · cwd.
+// reclaim — 이 PC 의 프로젝트 폴더에서 **재생성 가능한 것만** 회수한다(#2621).
+//  왜 CLI 에 있나: 서버의 `workspace_reclaim` 은 `reposIn(dir)` 로 **게이트웨이 호스트의 파일시스템만**
+//  스캔한다. 개인 PC 노드의 `~/workspace/project/<id>/` 는 원리적으로 그 범위 밖이라, 회수가 «레포가
+//  없습니다» 라고 답하고 사람이 손으로 찾아 지워야 했다(실측: 이 맥북 workspace/project 5.1GB).
+//  삭제 규칙(무엇을 지우고 무엇을 지키나)은 `workspace-reclaim-core.mjs` **한 벌** — 서버와 같은 코드다.
+async function cmdReclaim(rest) {
+  const core = await import(new URL("./workspace-reclaim-core.mjs", import.meta.url));
+  const ops = core.createReclaim({
+    // 코어는 외부 프로세스를 직접 쥐지 않는다(kit R5) — 여기서 이 CLI 의 실행기를 준다.
+    //  계약은 promisify(execFile) 과 같다: 성공하면 {stdout}, 실패하면 throw.
+    exec: async (file, args, opts = {}) => {
+      const r = run(file, args, { quiet: true, allowFail: true, cwd: opts.cwd, env: opts.env });
+      if (r.code !== 0) throw new Error(String(r.err || "").trim().split("\n")[0] || `${file} 실패(exit ${r.code})`);
+      return { stdout: r.out };
+    },
+  });
+
+  const o = {}; const pos = [];
+  for (const t of rest) {
+    if (t === "--apply") o.apply = true;
+    else if (t === "--remove-worktree") o.removeWorktree = true;
+    else if (t === "--json") o.json = true;
+    else if (t === "-h" || t === "--help") {
+      say("사용법: lively reclaim [<경로>] [--apply] [--remove-worktree] [--json]\n"
+        + dim("  경로 생략 시 현재 디렉터리. 기본은 dry-run(아무것도 지우지 않고 계획만 보여준다).\n")
+        + dim("  --apply 로 실제 삭제. 지우는 것은 'gitignored 인 동시에 알려진 파생물 이름'뿐이고,\n")
+        + dim("  시크릿(.env)·로컬 데이터(data/)·미분류 항목은 절대 건드리지 않는다."));
+      return;
+    }
+    else pos.push(t);
+  }
+  const target = resolve(pos[0] || process.cwd());
+
+  // 이 워크트리에서 **작업 중인 세션**이 있으면 회수를 통째로 막는다(빌드 중인 node_modules 를 지우면 그 세션이 깨진다).
+  //  서버는 세션 레지스트리를 보지만 이 PC 엔 그게 없다 — tmux pane 들의 현재 경로 + 지금 이 셸의 cwd 를 쓴다.
+  //  tmux 가 없거나 실패하면 빈 목록이 되는데, 그래도 코어의 나머지 안전선(gitignored∩allow-list·보호목록)은 그대로다.
+  const paneDirs = (() => {
+    const r = run("tmux", ["list-panes", "-a", "-F", "#{pane_current_path}"], { quiet: true, allowFail: true });
+    return r.code === 0 ? String(r.out).split("\n").map((x) => x.trim()).filter(Boolean) : [];
+  })();
+  const activeSessionDirs = [...new Set([...paneDirs, process.cwd()])];
+
+  // 대상이 레포 자신이면 그것만, 프로젝트 폴더면 그 안의 레포 전부(한 프로젝트에 여러 레포가 붙는다).
+  const self = existsSync(join(target, ".git")) ? [target] : [];
+  const worktrees = self.length ? self : await core.reposIn(target);
+  if (!worktrees.length) {
+    say(dim(`정리할 것이 없습니다 — ${target} 안에 git 레포(워크트리)가 없습니다.`));
+    return;
+  }
+
+  const mb = (n) => (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + "MB";
+  const out = [];
+  let total = 0;
+  let heldBack = 0;   // 작업 중인 세션 때문에 손대지 않는 몫 — 총계에 섞으면 «회수 가능» 이 거짓말이 된다.
+  for (const wt of worktrees) {
+    const plan = await ops.planReclaim(wt, { activeSessionDirs });
+    const applied = o.apply
+      ? await ops.applyReclaim(plan, { removeWorktree: !!o.removeWorktree, repoRoot: await ops.baseRepoOf(wt) })
+      : null;
+    // 활성 세션이면 applyReclaim 이 아무것도 안 한다 → dry-run 총계도 같은 판정을 따라야 한다(안 그러면
+    //  «726MB 회수 가능» 이라고 해놓고 --apply 가 0바이트를 지우는 어긋남이 난다).
+    if (plan.active_session) heldBack += plan.reclaimableBytes;
+    else total += applied ? applied.freedBytes : plan.reclaimableBytes;
+    out.push({ worktree: wt, plan, applied });
+  }
+
+  if (o.json) { say(JSON.stringify({ dry_run: !o.apply, target, results: out }, null, 2)); return; }
+
+  say(bold(`${o.apply ? "회수" : "회수 계획(dry-run)"} — ${target}`) + dim(`  · 워크트리 ${worktrees.length}개`));
+  for (const { worktree, plan, applied } of out) {
+    const derived = plan.entries.filter((e) => e.kind === "derived");
+    const unclassified = plan.entries.filter((e) => e.kind === "unclassified" && e.bytes > 0);
+    say("\n" + bold(worktree.replace(target + "/", "")) + (plan.active_session ? red("  · 작업 중인 세션이 있어 건너뜁니다") : ""));
+    if (!derived.length) say(dim("  회수할 파생물 없음"));
+    for (const e of derived) say(`  ${applied ? green("지움") : dim("지울 것")}  ${e.rel}  ${dim(mb(e.bytes))}`);
+    if (unclassified.length) {
+      say(dim(`  미분류(안 지움) ${unclassified.length}건 — 가장 큰 것: ${unclassified[0].rel} ${mb(unclassified[0].bytes)}`));
+    }
+    if (o.removeWorktree) {
+      const reason = applied ? applied.worktreeSkippedReason : plan.worktree_check.reason;
+      say(applied?.worktreeRemoved ? green("  워크트리 제거됨") : dim(`  워크트리 유지 — ${reason || "확인 필요"}`));
+    }
+  }
+  say("\n" + bold(o.apply ? `되찾은 공간 ${mb(total)}` : `회수 가능 ${mb(total)}`)
+    + (heldBack ? yellow(`  · 작업 중이라 손대지 않음 ${mb(heldBack)}`) : "")
+    + (o.apply ? "" : dim("  · 실제로 지우려면 --apply")));
+}
+
 async function cmdRepo(rest) {
   const { repoList, repoWorktree, repoWorktreeRemove, repoPin, repoPinRemove } = await import(new URL("./repo-worktree-core.mjs", import.meta.url));
   const ctx = {
@@ -2683,6 +2772,7 @@ ${bold("작업")}
   repo list              이 머신에서 뜰 수 있는 레포 + 로컬 상태
   repo pin <레포>        코드 근거 분석용 읽기전용 핀(SHA 고정) ${dim("--ref main  --path .  ·  pin remove <레포>")}
   repo worktree <레포>   워크트리 생성(코드 작업면) — 프로젝트면 그 폴더의 <레포> 자리 ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
+  reclaim [<경로>]       재생성 가능한 파생물 회수(node_modules·dist…) — ${dim("기본 dry-run  ·  --apply 로 실제 삭제  ·  --remove-worktree")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
@@ -2829,6 +2919,8 @@ async function dispatch(cmd, o, argv) {
     case "mcp": return cmdMcpGateway();
     // repo — 워크트리 셀프서비스(list/worktree). MCP 툴과 같은 코어. 나머지 인자 원형 보존.
     case "repo": return cmdRepo(argv.slice(argv.indexOf("repo") + 1));
+    // reclaim — 이 PC 의 프로젝트 폴더에서 파생물 회수(#2621). 서버 workspace_reclaim 과 **같은 코어**.
+    case "reclaim": return cmdReclaim(argv.slice(argv.indexOf("reclaim") + 1));
     // resume — 다른 환경에서 내 세션 이어받기(#905 C1). 중앙 트랜스크립트를 이 PC 로 내려 claude --resume.
     case "resume": return cmdResume(argv.slice(argv.indexOf("resume") + 1));
     // backfill — 이 머신의 기존 claude 트랜스크립트를 중앙에 소급 업로드(#905 C1). 웹뷰에 과거 세션도 보이게.
