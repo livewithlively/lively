@@ -2,7 +2,9 @@
 //  "회수해도 압박이 안 풀리는" #1220 의 원래 실패가 그대로 재현된다. 순수 함수만 검증한다(/proc 불요).
 //  사양·엣지 표: 스크래치패드 spec.md 표 B(R1~R8).
 import assert from "node:assert/strict";
-import { parseProcStatus, sessionRssMb, sessionPidOwners, readProcTable, type ProcEntry } from "./session-rss.js";
+import {
+  parseProcStatus, parseProcStat, parsePsTable, sessionRssMb, sessionPidOwners, sessionsWithLiveJobs, readProcTable, type ProcEntry,
+} from "./session-rss.js";
 
 // R1 — 부모·점유가 다 있는 정상 프로세스
 {
@@ -67,13 +69,134 @@ import { parseProcStatus, sessionRssMb, sessionPidOwners, readProcTable, type Pr
   assert.equal(sessionRssMb(t, new Map([["box-e", [40]]])).get("box-e"), 2, "kB→MB 반올림");
 }
 
-// 배선 단언 — 비-Linux(이 개발 머신 등)에서는 빈 표를 돌려주되 **throw 하지 않는다**.
-//  (측정이 예외를 던지면 회수 tick 전체가 죽는다.)
+// 배선 단언(S8) — 지원 플랫폼(Linux·macOS)에서는 **실제로 재고**, 나머지는 빈 표를 돌려주되 throw 하지 않는다.
+//  ⚠ macOS 가 «무조건 빈 표»였던 것이 #2652 의 절반이다: 못 재면 압박 회수의 정지 조건이 성립할 수 없어
+//   후보를 전부 걷는다(실측 2026-09-03~04 맥미니 13회 발동·30세션, 전부 rssMeasured=false). 여기서 못박는다.
 {
   const t = await readProcTable();
   assert.ok(t instanceof Map, "readProcTable 은 항상 Map 을 돌려준다(플랫폼 무관, throw 금지)");
-  if (process.platform !== "linux") assert.equal(t.size, 0, "비-Linux 면 빈 표");
-  else assert.ok(t.size > 0, "Linux 면 자기 자신이라도 잡혀야 한다(빈 표면 측정 경로가 죽은 것)");
+  if (process.platform === "linux" || process.platform === "darwin") {
+    const self = t.get(process.pid);
+    assert.ok(self, "자기 pid 는 표에 있어야 한다(빈 표면 측정 경로가 죽은 것)");
+    assert.ok((self?.rssKb ?? 0) > 0, "자기 RSS 는 양수 — 0 이면 '못 잰 것'과 구별되지 않는다");
+    assert.ok((self?.pgid ?? 0) > 0, "pgid 가 없으면 작업 판정(⑥)이 통째로 죽는다");
+  } else {
+    assert.equal(t.size, 0, "미지원 플랫폼이면 빈 표");
+  }
+}
+
+// ── A. /proc/<pid>/stat 파싱 — comm 에 공백·괄호가 들어가므로 **마지막 ')' 뒤**부터 센다 ──────────────
+// A1 — 정상: state·ppid 다음이 pgrp(5), 그 뒤 session·tty_nr·tpgid(8)
+{
+  assert.deepEqual(parseProcStat("4242 (claude) S 4240 4242 4242 34816 4300 4194304 ..."), { pgid: 4242, tpgid: 4300 });
+}
+// A2 — comm 에 공백과 괄호: 앞에서 세면 값이 밀린다
+{
+  assert.deepEqual(parseProcStat("77 (npm exec (x)) S 10 55 55 0 -1 ..."), { pgid: 55, tpgid: -1 },
+    "마지막 ')' 기준이어야 pgrp 가 안 밀린다");
+}
+// A3 — 형식 불일치: 추측하지 않는다
+{
+  assert.equal(parseProcStat("쓰레기"), null);
+}
+// A4 — tpgid 자리가 없다: pgid 는 살리고 tpgid 는 -1
+{
+  assert.deepEqual(parseProcStat("9 (x) S 1 42"), { pgid: 42, tpgid: -1 }, "그룹은 알고 tty 만 모를 수 있다");
+}
+
+// ── B. ps 표 파싱(macOS 경로) — 실측 출력 모양(2026-09-04 맥미니) ─────────────────────────────
+{
+  const t = parsePsTable([
+    "  62416   26098   62416   62418      896 sh",                                  // B1 pane(래퍼 셸)
+    "  62418   62416   62418   62418   346544 claude",                              // B1 하네스
+    "  62689   62418   62418   62418    34432 npm exec @playwright/mcp@latest",      // B2 comm 에 공백
+    "  95326   62418   95326       0     1184 /bin/zsh",                             // B4 tpgid=0(제어 tty 없음)
+    "  95999   62418   95999       0      100",                                      // B5 comm 없음
+    "  쓰레기   줄",                                                                  // B3 버린다
+  ].join("\n"));
+  assert.equal(t.size, 5, "B3 — 수치가 안 나오는 줄만 버린다");
+  assert.deepEqual(t.get(62418), { ppid: 62416, rssKb: 346544, name: "claude", pgid: 62418, tpgid: 62418 }, "B1");
+  assert.equal(t.get(62689)?.name, "npm exec @playwright/mcp@latest", "B2 — comm 은 공백을 품은 채 통째로");
+  assert.equal(t.get(95326)?.tpgid, 0, "B4 — 제어 tty 없음은 0 그대로(그룹 판정에서 무시된다)");
+  assert.equal(t.get(95999)?.name, "", "B5 — 이름이 없어도 죽지 않는다");
+  assert.equal(t.get(95999)?.pgid, 95999);
+}
+
+// ── C. ⑥ 작업 판정 — 실측 모양: pane(sh) → claude → {MCP·caffeinate}(하네스 그룹) · 작업 셸(자기 그룹) ──
+const jobTable = (over: Array<[number, ProcEntry]> = []): Map<number, ProcEntry> => new Map<number, ProcEntry>([
+  [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 11 }],           // pane — tty 포그라운드 = 하네스(11)
+  [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 11 }],  // 하네스
+  [12, { ppid: 11, rssKb: 30_000, name: "node", pgid: 11, tpgid: 11 }],     // MCP stdio 서버 — 하네스 그룹
+  [13, { ppid: 11, rssKb: 1_600, name: "caffeinate", pgid: 11, tpgid: 11 }],
+  ...over,
+]);
+
+// C1 — 유휴 AI 세션: 상주 자식(MCP·caffeinate)은 작업이 아니다
+{
+  assert.equal(sessionsWithLiveJobs(jobTable(), new Map([["box-a", [10]]])).has("box-a"), false,
+    "상주 자식을 작업으로 세면 AI 세션은 영원히 회수되지 않는다");
+}
+// C2 — 백그라운드 작업: 자기 그룹의 셸 + 그 자식
+{
+  const out = sessionsWithLiveJobs(jobTable([
+    [20, { ppid: 11, rssKb: 1_200, name: "zsh", pgid: 20, tpgid: -1 }],
+    [21, { ppid: 20, rssKb: 500, name: "sleep", pgid: 20, tpgid: -1 }],
+  ]), new Map([["box-a", [10]]]));
+  assert.equal(out.has("box-a"), true, "하네스가 띄운 셸 작업 = spine 밖 그룹");
+}
+// C3 — pane 프로세스가 하네스 자신(래퍼 셸 없음): 유무를 정확히 가른다
+{
+  const idle = new Map<number, ProcEntry>([
+    [11, { ppid: 1, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 11 }],
+    [12, { ppid: 11, rssKb: 30_000, name: "node", pgid: 11, tpgid: 11 }],
+  ]);
+  assert.equal(sessionsWithLiveJobs(idle, new Map([["box-b", [11]]])).has("box-b"), false);
+  const busy = new Map(idle).set(20, { ppid: 11, rssKb: 1_200, name: "zsh", pgid: 20, tpgid: -1 });
+  assert.equal(sessionsWithLiveJobs(busy, new Map([["box-b", [11]]])).has("box-b"), true);
+}
+// C4 — 그룹 정보가 없는 표(구 플랫폼·hidepid): **판정하지 않는다**(빈 집합 = 종전 동작)
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh" }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude" }],
+    [20, { ppid: 11, rssKb: 1_200, name: "zsh" }],
+  ]);
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-c", [10]]])).size, 0,
+    "판정 불가에 '보호'를 주면 그 플랫폼에선 회수가 통째로 멈춘다 — 모르면 종전대로 둔다");
+}
+// C4b — 그룹은 읽히는데 **tty 포그라운드(tpgid)를 못 읽는** 표: 역시 판정하지 않는다.
+//  이게 «하네스가 제 그룹을 가진 배치»에서 하네스를 작업으로 오인해 회수를 통째로 멈추는 것을 막는 갈래다
+//  (procfs 가 tpgid 를 안 주는 면 — 예: gVisor 샌드박스, 2026-09-04 미실측).
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 0 }],             // pane — 포그라운드 미상
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 0 }],    // 하네스가 제 그룹을 가졌다
+    [12, { ppid: 11, rssKb: 30_000, name: "node", pgid: 11, tpgid: 0 }],
+  ]);
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-g", [10]]])).size, 0,
+    "포그라운드를 모르면 하네스 그룹을 spine 에 못 넣는다 → 판정 포기(보호도 안 걸리지만, 회수가 멈추지도 않는다)");
+}
+
+// C5 — pane 이 이미 죽어 표에 없다
+{
+  assert.equal(sessionsWithLiveJobs(jobTable(), new Map([["box-d", [999]]])).size, 0);
+}
+// C6 — 한 세션에 pane 이 둘, 한쪽에서만 작업이 돈다
+{
+  const t = jobTable([
+    [30, { ppid: 1, rssKb: 900, name: "sh", pgid: 30, tpgid: 31 }],
+    [31, { ppid: 30, rssKb: 200_000, name: "claude", pgid: 31, tpgid: 31 }],
+    [32, { ppid: 31, rssKb: 800, name: "zsh", pgid: 32, tpgid: -1 }],
+  ]);
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-e", [10, 30]]])).has("box-e"), true);
+}
+// C7 — 부모 포인터가 사이클을 이루는 비정상 표: 무한루프 없이 끝난다(방어가 멈추면 안 된다)
+{
+  const t = new Map<number, ProcEntry>([
+    [40, { ppid: 41, rssKb: 10, name: "a", pgid: 40, tpgid: 40 }],
+    [41, { ppid: 40, rssKb: 10, name: "b", pgid: 40, tpgid: 40 }],
+  ]);
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-f", [40]]])).size, 0, "사이클에서도 종료한다");
 }
 
 // ── #1251 sessionPidOwners — kill 된 pid 를 세션으로 되짚기 위한 스냅샷 ────────────────────
