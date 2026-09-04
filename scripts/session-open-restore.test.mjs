@@ -153,4 +153,32 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "⑤복원·이어받기 둘 다 생성 응답을 created-cache 에 남긴다(새 id 로 옮긴 직후의 '세션을 찾을 수 없어요' 방지)");
 }
 
+// ── ⑥ 목록이 «이미 이어진(은퇴한) id» 를 내보내지 않는다 (#2231 후속 · 2026-09-04 신고) ────────
+//  ①과 같은 종류의 실패다: 판정은 멀쩡한데 **한쪽 경로가 그 판정을 안 부른다.** 목록의 DB 절반
+//  (listAllSessionStates)은 superseded_by 로 거르는데, 라이브 관측(tmux)·노드 스냅샷은 안 거른다 —
+//  이어진 뒤에도 옛 tmux 가 남아 있으면 그 id 가 «살아 있는 세션»으로 사이드바에 다시 오르고,
+//  누르면 개별 조회가 movedTo 를 내 화면이 이어진 세션으로 튕긴다(그 세션이 죽어 있으면 무한 리로드).
+//  실측: 은퇴 100건 중 7건이 목록에 올라 있었다.
+{
+  const src = read("src/terminal/routes.ts");
+  const i = src.indexOf('app.get("/api/ui/terminal/sessions"');
+  assert.ok(i > 0, "세션 목록 라우트를 찾지 못했습니다");
+  const blk = src.slice(i, src.indexOf("res.json({ sessions: merged })", i));
+  const merge = blk.indexOf("mergeSessionViews(");
+  const retired = blk.indexOf("retiredSessionIds(");
+  ok(retired > 0, "⑥-a 목록이 retiredSessionIds 로 은퇴행을 묻는다");
+  ok(merge > 0 && merge < retired,
+    "⑥-b 은퇴행 필터가 병합 **뒤**다 — 라이브·노드·복원가능 세 출처를 한꺼번에 걸러야 한 곳이라도 새지 않는다");
+}
+
+// ── ⑦ 이동(moved)도 연쇄에 상한이 있다 — 이동↔복원이 번갈아 돌면 어느 상한도 안 세던 자리 ────────
+{
+  const chat = read("web/session-chat.ts");
+  ok(/function movedHopAllowed\(/.test(chat), "⑦-a 이동 연쇄 상한 판정이 있다");
+  const i = chat.indexOf("lively-term-gone");
+  const blk = chat.slice(i, i + 1200);
+  ok(blk.indexOf("movedHopAllowed()") > 0 && blk.indexOf("movedHopAllowed()") < blk.indexOf("이어진 세션으로 옮겼습니다"),
+    "⑦-b 프레임발 자동 이동이 옮기기 **전에** 상한을 묻는다");
+}
+
 console.log(`\n${pass}건 통과`);

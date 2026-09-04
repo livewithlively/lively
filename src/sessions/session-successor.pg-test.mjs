@@ -33,7 +33,7 @@ await admin.query(`CREATE TABLE ${SCHEMA}.org_node_session_map(
 // 모듈 전역 풀이 이 스키마만 보게 한 뒤 import 한다(import 시점에 풀이 만들어진다).
 process.env.ITEMS_DATABASE_URL = withSchema(dsn0);
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
-const { resolveSessionSuccessor, markSessionSuperseded } = await import(`${DIST}/sessions/session-state.js`);
+const { resolveSessionSuccessor, markSessionSuperseded, retiredSessionIds } = await import(`${DIST}/sessions/session-state.js`);
 
 let pass = 0, fail = 0;
 const chk = (n, got, want) => {
@@ -94,6 +94,22 @@ chk("C8 근거 없으면 null", await resolveSessionSuccessor("box-nothing-at-al
 
 // ── C9 자기 자신을 가리키는 이정표는 이정표가 아니다(무한고리 방지 — 쓰기 쪽 걸쇠).
 chk("C9 자기 자신 이정표는 기록하지 않는다", await markSessionSuperseded("box-a-3", "box-a-3"), false);
+
+// ── D 표: retiredSessionIds — 목록이 «이미 이어진 id» 를 걸러내는 근거 (#2231 후속, 2026-09-04 신고).
+//  🔴 못 거르면: 이어진 옛 id 가 사이드바에 «살아 있는 세션»으로 남고, 누르면 개별 조회가 movedTo 를 내
+//   화면이 튕긴다 → 이동↔복원 무한 리로드(실측: 은퇴 100건 중 7건이 그 상태였다).
+//  🔴 과하게 거르면: 멀쩡한 세션이 목록에서 사라진다 — 그건 «삭제된 줄» 알게 되는 더 나쁜 실패다.
+const setOf = async (ids) => [...(await retiredSessionIds(ids))].sort().join(",");
+
+await state("box-d-live", "yoon", "conv-d1");                                  // 은퇴 안 함
+await state("box-d-retired", "yoon", "conv-d1", { superseded_by: "box-d-live" });
+chk("D1 이어진 id 만 골라낸다", await setOf(["box-d-live", "box-d-retired"]), "box-d-retired");
+chk("D2 은퇴가 없으면 빈 집합", await setOf(["box-d-live"]), "");
+chk("D3 행이 없는 id 는 은퇴가 아니다", await setOf(["box-d-no-such-row"]), "");
+chk("D4 빈 입력은 조회하지 않는다", await setOf([]), "");
+// 소유자를 안 가린다 — 이 판정은 «이 행이 은퇴했나» 이지 «누구 것인가» 가 아니다(가시성은 호출부가 이미 걸렀다).
+await state("box-d-jang", "jang", "conv-d2", { superseded_by: "box-d-live" });
+chk("D5 소유자와 무관하게 은퇴를 은퇴라 한다", await setOf(["box-d-jang", "box-d-live"]), "box-d-jang");
 
 await admin.query(`DROP SCHEMA ${SCHEMA} CASCADE`);
 await admin.end();

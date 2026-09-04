@@ -569,6 +569,23 @@ async function successorByConversation(id: string): Promise<string | null> {
   return byMap.rows[0]?.box_id ? String(byMap.rows[0].box_id) : null;
 }
 
+/**
+ * #2231 후속 — 주어진 id 중 **이미 이어진(은퇴한)** 것만 돌려준다.
+ *
+ *  목록의 라이브 절반(tmux 관측 collectSessions · 노드 스냅샷)은 DB 를 안 본다. 그래서 이어진 뒤에도 그 tmux 가
+ *  남아 있으면 옛 id 를 «살아 있는 세션»으로 다시 싣는다 — 목록만 «있다» 하고 개별 조회·복원은 전부 «이미
+ *  이어졌다» 하는 막다른 행이 된다. 그 행을 목록에서 걷어내는 데 쓴다.
+ *  ⚠ PK 조회다(전량 스캔 아님) — 목록 폴링에 얹어도 싸다.
+ */
+export async function retiredSessionIds(ids: string[]): Promise<Set<string>> {
+  if (onNode() || !ids.length) return new Set();
+  const r = await itemsPool.query(
+    "SELECT id FROM org_session_state WHERE id = ANY($1) AND superseded_by IS NOT NULL",
+    [ids],
+  );
+  return new Set(r.rows.map((x: Record<string, unknown>) => String(x.id)));
+}
+
 // desired-state 삭제 — 사용자가 **명시적으로 kill** 한 세션만(복원 안 함). reaper 회수는 보존(restorable) 하므로 호출 안 함.
 export async function deleteSessionState(id: string): Promise<void> {
   if (onNode()) return;   // #1791 — 노드엔 DB 가 없다(노드 세션 kill 은 게이트웨이 DELETE 라우트가 행을 지운다)
