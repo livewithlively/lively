@@ -23,7 +23,10 @@ const { isEmbedded, EMBEDDED } = await import(join(root, "public/app/v2/embed.js
 const PARTS = read("web/v2/panes-parts.ts");
 const PANES = read("web/v2/panes.ts");
 const TABS = read("web/v2/tabs.ts");
-const FILES = read("web/v2/panes-files.ts");   // 자료 칸 — [뷰어에서 보기] 신호가 여기서 나간다
+const FILES = read("web/v2/panes-files.ts");   // 자료 칸 — 파일을 누르면 여기서 뷰어를 부른다
+//  신호를 **쏘는 자리**는 panes-kit 의 openInViewerPart 하나다(#762) — 자료 칸도 우클릭 메뉴도 그 통로만 쓴다.
+//  잎 모듈에 둔 이유: panes-parts 가 panes-files 를 값으로 가져오므로 그 반대 방향은 순환이 된다.
+const KIT = read("web/v2/panes-kit.ts");
 
 /** 함수 하나만 잘라 본다 — 고정 길이로 자르면 그 함수가 자랐을 때 단언이 구간 밖으로 밀려 거짓 실패한다. */
 function slice(src, from, to) {
@@ -133,12 +136,14 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
 //  웹 칸과 판박이 구조였고, 판박이로 새고 있었다: window 로 쏘고 window 에서 들어서 열려 있는 모든 세션 탭의
 //  뷰어가 같은 파일을 함께 열고 각자 자기 열쇠에 그 파일을 기억했다.
 {
-  ok(/ctx\.paneRoot\(\)\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
-    "E23 자료 칸의 [뷰어에서 보기] 가 **이 곁칸**에 대고 알린다");
-  ok(!/window\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
+  ok(/ctx\.paneRoot\(\)\.dispatchEvent\(new CustomEvent\(VIEWER_EVT/.test(KIT),
+    "E23 뷰어를 부르는 통로(openInViewerPart)가 **이 곁칸**에 대고 알린다");
+  ok(!/window\.dispatchEvent\(new CustomEvent\(VIEWER_EVT/.test(KIT) && !/window\.dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(KIT + FILES),
     "E23 ★ window 로 쏘면 모든 세션 탭의 뷰어가 같은 파일을 연다 — 웹 칸과 같은 뿌리");
-  ok(/ctx\.paneRoot\(\)\.querySelector\('\.pn-ed'\)/.test(FILES) && !/document\.querySelector\('\.pn-ed'\)/.test(FILES),
-    "E24 뷰어가 있나도 **이 곁칸에서** 본다 — 옆 세션의 뷰어를 보고 '있다'고 판단하면 이 세션엔 안내조차 안 뜬다");
+  ok(/openInViewerPart\(ctx, f\.path\)/.test(FILES) && !/dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
+    "E24 자료 칸은 그 통로만 쓴다 — 사본을 두면 한쪽만 고쳐져 규율이 갈라진다");
+  ok(/localStorage\.setItem\(ED_PATH_KEY/.test(KIT) && /if \(!EMBEDDED\)/.test(KIT),
+    "E24 ★ 펴 둔 파일은 이 세션 열쇠에만 적는다(끼워 넣은 판에서는 아예 안 적는다 — 바깥 사람 것을 덮는다)");
 
   const viewer = VIEWER_PART();
   ok(/paneRoot\(\)[\s\S]{0,120}addEventListener\(VIEWER_EVT/.test(viewer) && !/window\.addEventListener\(VIEWER_EVT/.test(viewer),
