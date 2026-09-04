@@ -16,7 +16,8 @@ import { authNodeTokenDetailed, createNode, deleteNode, getNode, listNodes, revo
 import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
 import { linkDiagMessage, linkDiagSummary, keepAwakeLine, staleAgentNote } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로 · #2127 낡은 인스턴스
 import { nodeOpenTo } from "./node-access.js";
-import { liveNodes, isSelfNode, logNodeAuthDenial } from "./registry.js";
+import { liveNodes, isSelfNode, logNodeAuthDenial, looksLikeGatewayBox } from "./registry.js";
+import { selfNodeMessage } from "./self-node.js";   // #2592 — «이 노드는 게이트웨이 자신» 을 말하는 문장의 단일 출처
 import { nodeHarnesses, agentIsLatest } from "./protocol.js";
 import { AGENT_BUNDLE, AGENT_BUNDLE_ROOT, servedAgentVersion, agentBundleExists } from "./agent-bundle.js";
 import { logger } from "../log.js";
@@ -35,6 +36,24 @@ function installHint(id: string): string {
   //   정규화라 '/mcp' 를 못 벗었다). 다시 필요해지면 gatewayUrlForRequest(단일 소스)를 쓸 것 — 여기서
   //   정규화를 재구현하지 말 것.
   return `lively node --daemon --id ${id}`;
+}
+
+/**
+ * #2592 — 요청 본문에서 «내 tmux 세션 id» 프로브를 꺼낸다(등록·프리플라이트 공용).
+ *
+ * 형식을 여기서 좁히는 이유: 이 값은 곧바로 게이트웨이 자기 세션 목록과 대조되는 재료라, 길이·타입이
+ *  통제되지 않으면 큰 배열 하나로 판정 비용을 밀어 넣을 수 있다. 세션 id 형식(box-*)만·상한 200개만 받는다.
+ *  없거나 형식 밖이면 빈 배열 = 판정 불가(양성일 때만 참 — sharesGatewayTmux 계약).
+ */
+function boxProbe(b: Record<string, unknown>): string[] {
+  const raw = Array.isArray(b.boxSessions) ? b.boxSessions : [];
+  const out: string[] = [];
+  for (const v of raw) {
+    const id = String(v ?? "").trim();
+    if (/^box-[A-Za-z0-9._-]{1,120}$/.test(id)) out.push(id);
+    if (out.length >= 200) break;
+  }
+  return out;
 }
 
 // 번들 위치·지문은 node/agent-bundle.ts 단일 출처(#1713 — registry 도 같은 값을 써야 노드에게 알려줄 수 있다).
@@ -91,8 +110,10 @@ function toView(
     // #2108 — 이 노드가 게이트웨이 자신인가(같은 tmux 를 쓰는 것을 확답으로 관측). 관리 화면에선 **숨기지 않는다**
     //  — 데몬이 돌고 있다는 사실 자체를 관리자가 봐야 내릴지 말지 정할 수 있다. 다만 세션 생성 대상에선 빠진다.
     self: isSelfNode(n.id),
+    //  #2592 — 이제는 «빠진다»가 아니라 **연결 자체를 거부한다**. 배지가 그 사실을 말해야 관리자가
+    //   "왜 이 노드는 계속 오프라인인가" 를 헤매지 않는다.
     self_note: isSelfNode(n.id)
-      ? "이 노드는 게이트웨이가 도는 바로 그 컴퓨터입니다(같은 tmux 를 씁니다). 세션은 '중앙 컴퓨터(기본)'로 여세요 — 노드로 열면 같은 세션이 두 경로로 잡혀 새 세션이 복원으로 새 버립니다. 그 컴퓨터에서 `lively node stop` 을 실행하면 이 항목이 사라집니다."
+      ? `${selfNodeMessage()} 그래서 이 노드의 연결은 거부되고 있습니다(세션은 '중앙 컴퓨터(기본)' 로 정상 동작합니다).`
       : null,
   };
 }
@@ -132,6 +153,11 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     const b = (req.body ?? {}) as Record<string, unknown>;
     const kind = b.kind === "worker" ? "worker" : "member";
     if (kind === "worker" && !isAdmin(u)) throw new HttpError(403, "worker 노드 등록은 admin 권한이 필요합니다");
+    // #2592 — **게이트웨이가 도는 그 박스는 노드로 등록되지 않는다.** 등록되면 그 순간부터 같은 tmux 가
+    //  두 경로(중앙 즉답 / 노드 3초 스냅샷+릴레이)로 잡혀 접속·목록·발견 기록이 전부 샌다(#2108 은 «그 노드로
+    //  새로 만들기»만 막았다). 판정 근거는 등록하는 쪽이 실어 보낸 자기 tmux 세션 id 와의 겹침 — #2108 과
+    //  **같은 술어**라 오탐이 없고(원격 PC 의 세션 id 가 이 박스 tmux 에 있을 수 없다), 겹친 id 는 응답에 안 싣는다.
+    if (await looksLikeGatewayBox(boxProbe(b))) throw new HttpError(409, selfNodeMessage());
     if (b.shared && !isAdmin(u)) throw new HttpError(403, "공유 노드 지정은 admin 권한이 필요합니다");
     const { node, token } = await createNode(
       { id: String(b.id ?? b.name ?? ""), name: String(b.name ?? b.id ?? ""), kind, owner: me, shared: !!b.shared },
@@ -140,6 +166,14 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     logger.info({ node: node.id, kind, owner: me, shared: !!b.shared }, "노드 등록");
     res.setHeader("Cache-Control", "no-store");
     res.json({ node: toView(node, new Map()), token, install: installHint(node.id) });
+  }));
+
+  // 프리플라이트(#2592) — `lively node` 가 **등록을 건너뛰는 실행**(토큰 재사용)에서도 물어본다.
+  //  응답은 불리언 하나 + 사람에게 할 말. 겹친 세션 id 는 싣지 않는다(#2108 규율 — 테넌트 간 노출 없음).
+  app.post("/api/ui/nodes/self-check", auth, wrap(async (req, res) => {
+    const self = await looksLikeGatewayBox(boxProbe((req.body ?? {}) as Record<string, unknown>));
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ self, note: self ? selfNodeMessage() : null });
   }));
 
   const requireOwn = async (req: express.Request): Promise<OrgNode> => {

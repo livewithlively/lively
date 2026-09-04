@@ -21,6 +21,7 @@
     "test:itest": "node scripts/run-tests.mjs --build --itest",
     "test:ci": "node scripts/run-tests.mjs --build -j 4 --budget=45",
     "dm": "node --env-file-if-exists=.env dist/domainmap/cli.js",
+    "gen:sudoers": "node scripts/gen-sudoers-env-keep.mjs --write",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {

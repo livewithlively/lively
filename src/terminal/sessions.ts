@@ -28,6 +28,7 @@ import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시�
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessionContainerViaRelay } from "./session-tmux.js";   // #2545 — 새 세션은 자기 세션 컨테이너 안 tmux(3단계)
+import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir, memberWriteFile, memberShOut } from "./terminal-member-fs.js";
@@ -45,7 +46,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxRelayManaged, isNoTmuxServer } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
@@ -200,7 +201,7 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
     //  DB desired 행을 «관측 못 함»(observed:false) 으로 내보낸다. 빈 목록으로 접으면 호출부가 DB 행 전부를
     //  «복원 가능(중단됨)» 으로 그려 살아 있는 세션이 그 폴링 한 번에 죽은 것처럼 보인다(session-unobserved 머리말).
     //  «없다»(서버 부재 확답)와 셀프호스팅은 종전 그대로 빈 목록이다.
-    if (shouldFallbackToDesired(e, tmuxRelayManaged())) return desiredFallbackSessions(me, e);
+    if (shouldFallbackToDesired(e, tmuxViaRelay())) return desiredFallbackSessions(me, e);
     return [];
   }
   // 가려진 프로젝트 집합을 **한 번** 조회(#1291) — 세션 수와 무관하게 쿼리 1회, 15초 캐시.
@@ -644,7 +645,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       relocateHome: sp.shared_cache_relocate_home,
     });
     //  #2545 — 새 경로(세션 컨테이너 안 tmux)엔 싣지 않는다: 이 값의 경로는 게이트웨이 뷰라 세션 컨테이너에 없고, 옛 경로에서도
-    //   세션 spawn 훅(container-spawn.sh)이 이 값을 하네스에 넘기지 않았다 — 하네스가 보는 env 를 그대로 둔다.
+    //   (옛 경로의) 세션 spawn 훅도 이 값을 하네스에 넘기지 않았다 — 하네스가 보는 env 를 그대로 둔다.
     if (!inside) for (const [k, v] of Object.entries(cacheEnv)) args.push("-e", `${k}=${v}`);
   } catch (err) {
     // 정책을 못 읽어도 세션 생성을 막지 않는다 — 캐시 공유는 최적화지 필수 기능이 아니다.
@@ -683,7 +684,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       try {
         await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
           sessionId: id, osUser, cwd: target,
-          memMb: cg?.maxMb && cg.maxMb > 0 ? cg.maxMb : (cg?.highMb ?? 0),   // container-spawn.sh 와 같은 셈(max 없으면 high, 0 = 브로커 기본)
+          memMb: cg?.maxMb && cg.maxMb > 0 ? cg.maxMb : (cg?.highMb ?? 0),   // 옛 spawn 훅과 같은 셈(max 없으면 high, 0 = 브로커 기본)
           memRequestMb: cg?.requestMb ?? 0,
           tmux: "inside",
         });
@@ -825,7 +826,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     await tmux(["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"]);
     // v6 프로젝트 세션은 실행 전에 DB current가 반드시 존재해야 한다. DB가 SoT인데 이 기록을 best-effort로
     // 삼키면 첫 훅이 미연결로 보고 새 프로젝트를 중복 생성한다. 노드는 DB가 없으므로 게이트웨이 릴레이가 기록한다.
-    if (input.projectSrc !== "org" && !process.env.LIVELY_NODE_TOKEN) {
+    if (input.projectSrc !== "org" && !onNode()) {
       try {
         const cur = await setExecutionSessionProject({ id, owner: ownerId(user), harness: harness.key, projectId: input.projectId });
         if (!cur) throw new Error("execution session owner claim failed");
@@ -881,7 +882,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //   사람이 고른 임의 폴더면 사람이 답한다(autoTrustWorkspace). 이 판정을 빼면 프로젝트 세션의 첫 지시가 대화상자에 막힌다(실측).
     //   ⚠ 값은 위 신뢰 블록에서 **이미 냈다**(`trustOk`) — 여기서 다시 계산하면 파생지가 둘이 되어 한쪽만 고쳐지는
     //    어긋남이 난다(#2478 이 정확히 그 모양이었다: 이 층은 가드가 있고 파일 시딩 층은 없었다).
-    const onNode = !!process.env.LIVELY_NODE_TOKEN;   // 노드 에이전트 프로세스에만 있는 값(게이트웨이엔 없다 — 안전한 판별자)
+    const isNode = onNode();   // #2599 T2 — 실행 토폴로지가 답한다(게이트웨이엔 노드 토큰이 없다)
     if (chatMode === "app-server") {
       // ★ app-server 세션의 pane 은 **셸**이다. 그런데 아웃박스 배달자는 "입력창이 뜨면 send-keys" 로 넣는다 —
       //  그 세션에서는 사람의 첫 문장이 **zsh 프롬프트에 타이핑**된다(명령으로 실행되거나 그냥 사라진다).
@@ -901,7 +902,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
           await enqueuePrompt(id, prompt, { trustOk }).catch(() => undefined);
         }
       })();
-    } else if (onNode) {
+    } else if (isNode) {
       void import("./session-first-prompt.js")
         .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk }))
         .catch((e) => { console.warn(`[terminal] 노드 첫 지시 주입 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });

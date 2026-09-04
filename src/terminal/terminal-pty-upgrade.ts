@@ -13,11 +13,14 @@ import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import { logger } from "../log.js";
 import { resolveTenantFromHeaders, withTenant, type TenantContext } from "../org/tenant-context.js";
+import { registryModeActive } from "../org/tenancy/state.js";   // #2599 T3 — 테넌시 축 술어의 정본(인라인 재구현 금지)
 import { attachWorkerHost } from "./attach-worker-host.js";
 import { canAttach, sessionGone, ensureSessionOpts } from "./terminal-sessions.js";
-import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
-import { attachSession, reapOrphanAttachClients, attachClose,
+import { nodeCanAttach, nodeRelayAttach, isSelfNode } from "../node/registry.js";
+import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다
+import { reapOrphanAttachClients, attachClose,
   type AttachSocket, type TicketLookup } from "./terminal-pty.js";
+import { SessionHost } from "./session-host.js";
 
 const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
 type LiveWS = WebSocket & { isAlive?: boolean };
@@ -41,10 +44,18 @@ export function startHeartbeat(): void {   // #2165 — 업그레이드 핸들�
 //  이 서버는 업그레이드 핸들러만 쓴다(noServer — 소켓을 직접 넘겨받는다).
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
-//  브라우저 WebSocket 을 attach 본체(양쪽 공용)에 넘기는 얇은 어댑터.
-function attach(ws: WebSocket, id: string): void {
-  attachSession(ws as unknown as AttachSocket, id);
-}
+// 게이트웨이 인프로세스 attach 의 세션 호스트 (#2600 T1).
+//
+//  ★ 왜 이 자리도 세션 호스트를 쓰나: 폴백으로 여기 붙은 세션의 «마지막 소켓» 을 **라우터에 알려 줘야**
+//   하기 때문이다. 그게 없으면 그 세션이 비어도 게이트웨이 소유가 안 풀려 영영 워커로 못 간다.
+//   그리고 이제 attach 를 소유하는 **세 자리가 모두 같은 모듈**을 쓴다(워커 fd · 노드 WS 중계 · 여기).
+//
+//  ⚠ `onIdle` 을 주지 않는다 — 게이트웨이는 상주 프로세스다. 세션 호스트는 콜백이 없으면 유휴 종료를
+//   아예 안 건다(그 규약이 여기서 게이트웨이를 지킨다). `shutdown()` 도 안 건다: 게이트웨이의 PTY 회수는
+//   index.ts 의 시그널 핸들러가 이미 `killAttachedPtys` 로 맡고 있어, 여기서 또 부르면 두 벌이 된다.
+const gatewayHost = new SessionHost({
+  onSessionEmpty: (id) => attachWorkerHost.releaseSession(id),
+});
 
 export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): void {
   startHeartbeat();                     // 죽은 attach 소켓 주기 회수(#687)
@@ -64,7 +75,7 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
     //  이게 없으면 secondary 세션 attach 가 primary 컨텍스트로 돌아 기본 tmux 소켓을 뒤지고 4410(가짜
     //  '세션 없음')이 된다 — 세션은 lvly-<slug> 소켓에 살아 있는데.
     const registrySessionCtx = async (): Promise<{ id: string; slug: string } | null> => {
-      if (tr.ok || (process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() !== "registry") return null;
+      if (tr.ok || !registryModeActive()) return null;
       const sid = url.searchParams.get("session") || "";
       if (!sid) return null;
       const { workspaceForSession } = await import("../org/tenancy/registry.js");
@@ -80,7 +91,11 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       const id = url.searchParams.get("session") || "";
       // 노드 세션(#869) — ?node=<id> 면 그 노드의 아웃바운드 채널로 릴레이한다. 정책(가시성)은 여기(게이트웨이)서
       //  판정하고 노드는 기계적으로 attach 만 실행(F7). 거부 사유는 로컬과 같은 코드 체계(4410/4403)+4462(노드 오프라인).
-      const nodeId = url.searchParams.get("node") || "";
+      //  ⚠ #2592 — 셀프 노드 좌표(`?node=<게이트웨이 자신>`)는 여기서 **버린다**. 남겨 두면 같은 tmux 를 노드 WS 로
+      //   한 바퀴 돌아 attach 하게 되는데(노드 데몬이 `tmux -CC attach` 로 서빙), 그 한 바퀴가 부팅 직후 4462 거부와
+      //   3초 스냅샷 지연을 만든다. 좌표를 접으면 아래 중앙 경로로 그대로 흘러 같은 세션에 즉답으로 붙는다.
+      //   (구 화면·열려 있던 탭이 옛 좌표를 들고 다시 붙어도 이 자리에서 정정된다.)
+      const nodeId = relayNodeId(url.searchParams.get("node"), isSelfNode);
       if (nodeId) {
         const verdict = await nodeCanAttach(nodeId, id, tk.userId);
         wss.handleUpgrade(req, socket, head, (ws) => {
@@ -123,11 +138,18 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       //  ★ fail-open: handoff 가 false(비활성·상한·포크/핸드오프 실패)면 아래 게이트웨이 내부 attach 로 폴백 —
       //   최악의 경우라도 «오늘 동작»이지 attach 가 깨지지 않는다(매니지드 공유 게이트웨이 blast radius 대응).
       const tenantForWorker: TenantContext | null = tr.ok ? tr.tenant : (regCtx ?? null);
+      // ★ 허가된 attach 를 **남긴다** (#2625 T0). 종전엔 거부만 로그가 있고 성공은 한 줄도 없었다 —
+      //  그래서 «아무도 안 쓰는 세션에 3분마다 클라이언트가 하나씩 붙는다» 를 관측하고도 **누가 붙는지
+      //  물어볼 자리가 없었다**(20분을 봐도 로그가 0줄이다). 빈도는 탭 열기·재연결 단위라 낮다.
+      //  ua 는 자동 재연결(브라우저)과 다른 것을 가르는 최소 축이다 — 토큰은 싣지 않는다.
+      const via = attachWorkerHost.enabled() ? "worker" : "gateway";
+      logger.info({ id, userId: tk.userId, via, ua: String(req.headers["user-agent"] ?? "").slice(0, 80) }, "ws attach 허가");
       if (attachWorkerHost.enabled()) {
         const handed = await attachWorkerHost.handoff({ req, socket, head, id, tenant: tenantForWorker });
         if (handed) return; // 워커가 소켓을 소유 — 게이트웨이는 이 연결에서 손을 뗀다
       }
-      wss.handleUpgrade(req, socket, head, (ws) => inTenant(() => attach(ws, id)));
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        gatewayHost.attach(ws as unknown as AttachSocket, id, inTenant));
       })());
     })();
   });

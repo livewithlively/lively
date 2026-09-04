@@ -203,9 +203,14 @@ export function titlebarOverlayPatch(input) {
  *  사람은 어느 쪽이든 "이 PC 가 라이블리에 붙는다"를 기대하고, 분기하면 그 기대가 배포 종류에 따라 갈린다.
  *  매니지드에서 이게 조용히 실패하던 원인(노드 WS 가 테넌트 컨텍스트 밖)은 코어에서 고쳤다 —
  *  src/node/registry-scope.ts 머리말. 여기서 조건을 붙여 증상을 가리는 쪽으로 가지 마라.
+ * ★ 단 하나의 예외 (#2592): **이 컴퓨터가 게이트웨이가 도는 그 박스일 때.** 그때 노드를 세우면 그 노드는
+ *  게이트웨이와 같은 tmux 를 보고 중앙 세션을 자기 것으로 보고한다 — 접속이 노드 릴레이로 새고 목록에 거짓
+ *  좌표가 붙는다(dev 실측 2026-09-03). 배포 모양(매니지드/셀프호스트)이 아니라 **이 기계에 대한 사실**로
+ *  갈리므로 위 원칙과 어긋나지 않는다. 모름(null·undefined)은 시작 쪽이다 — 확답일 때만 건너뛴다.
  * @returns "node-start" | null
  */
 export function nextAfterSetup(state) {
+  if (state && state.nodeSelfBox === true) return null;
   if (state && state.nodeRunning) return null;
   return "node-start";
 }

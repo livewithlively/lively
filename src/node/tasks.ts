@@ -16,6 +16,7 @@ import {
   TMUX_BIN, PANE_LOCALE, HARNESSES, resolveRootPath, resolveProfileConfigDir, profileConfigDir, sessionPrefix, ensureMemberOsUser,
 } from "../terminal/terminal-sessions.js";
 import { wrapAsMember, isolationInfraReady } from "../terminal/terminal-isolation.js";
+import { envKeepPolicy } from "../terminal/session-env-contract.js";
 import { provisionTaskRepo, type RepoProvisionAuth } from "../project/project-provision.js";
 // 공유폴더 그룹쓰기 계약(2770/660) — 위탁 작업 폴더도 격리 워커(box_<멤버>)가 써야 하므로 같은 계약을 적용한다.
 import { grantSharedGroupWrite, SHARED_FILE_MODE } from "../project/project-fs.js";
@@ -369,8 +370,22 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   //  세션 id 를 실어야 게이트웨이가 캡을 조회할 수 있고, 캡은 tmux 옵션(아래)이 권위다.
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
   // 자격 리스(§8-3) — setup-token env. 리스가 없으면 노드 로컬 프로필/자격 폴백(중앙=box_ 홈, 멤버 PC=본인 ~/.claude).
+  //  ⚠ 중앙 박스 격리(osUser)에서는 이 판이 곧 `sudo → box-spawn` 이라, sudoers 가 보존하지 않는 이름은
+  //   **오류 없이** 사라진다. 이름이 런타임에 정해지는 유일한 주입 자리라 시험이 정적으로 못 덮는다 —
+  //   그래서 여기서 계약(session-env-contract)에 대조해 «조용한 유실» 을 최소한 **보이게** 만든다.
+  //   (막지는 않는다: 리스 표에 하네스를 더하는 사람이 배포 전에 이 줄을 로그에서 보게 하는 것이 목적이고,
+  //    비격리·멤버 PC 경로는 sudo 를 안 타 정상 동작하므로 여기서 죽이면 그쪽까지 막는다.)
   for (const [k, v] of Object.entries(input.env ?? {})) {
     if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(k)) continue;
+    //  ⚠ `sudo-default`(로케일)는 sudo 자신이 보존하므로 경고 대상이 아니다 — 그것까지 경고하면
+    //   «틀린 경고» 가 섞여 진짜 유실 신호의 신뢰가 떨어진다.
+    const policy = envKeepPolicy(k);
+    if (osUser && policy !== "keep" && policy !== "sudo-default") {
+      console.warn(
+        `[tasks] ${k} 은 세션 env 계약에 keep 으로 없다 — 격리 세션에서 sudo 가 지운다(task ${input.taskId}). ` +
+        "src/terminal/session-env-contract.ts 에 선언하고 `npm run gen:sudoers` 로 재생성하라",
+      );
+    }
     args.push("-e", `${k}=${v}`);
   }
   const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions });

@@ -23,7 +23,7 @@
 //  서랍에서 세션을 갈아 끼울 때 이 셸은 다시 그리지 않는다(자료·지식·문패가 그대로 산다) — 주소만 바뀐다.
 //
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
-import { anchoredPopover, api, apiUrl, el, personFace, toast, TOKEN_KEY } from '../core.js';
+import { anchoredPopover, api, apiUrl, el, personFace, sv, toast, TOKEN_KEY } from '../core.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 곁칸 배치는 이 창의 사실
 import { canOpenInAside, openInAside } from './aside-slot.js';
 import { makeSplitter } from './split.js';
@@ -39,6 +39,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
 import { type V2Data } from './views.js';
+import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 
 export interface PanesOpts {
   data: () => V2Data;
@@ -55,9 +56,13 @@ export interface PanesOpts {
   onSessionCreated?: (row: any) => void;
   /** 세션 탭에서 고친 이름 — main.ts 의 renameSession 이 서버·사이드바·셸 탭·세션 머리줄까지 한 번에 갱신한다. */
   onRenameSession?: (id: string, name: string) => Promise<void>;
+  /** 문패 연필로 고친 프로젝트 이름 — main.ts 의 renameProject 가 서버·목록·사이드바·탭까지 한 번에 갱신한다(#2579). */
+  onRenameProject?: (id: number, name: string) => Promise<void>;
 }
 export interface PanesHandle {
   destroy(): void;
+  /** 문패만 그 자리에서 다시 그린다 — 이름을 다른 화면에서 바꿨을 때 8초 틱을 기다리지 않게(#2579). */
+  repaintDoor(): void;
   /** 이 셸을 '새 세션 자리'로 돌린다 — 사이드바 [＋]와 문패 [＋ 세션]이 같은 곳을 부른다(#1719 원준 2026-08-20). */
   newSession(): void;
 }
@@ -160,7 +165,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  이 세션은 웹을 띄워 두고, 저 세션은 타임라인을 본다. 그걸 매번 다시 고르게 하지 않는다.
   //  기록은 이 브라우저에(칸 배치와 같은 급의 보기 취향), 세션 id 로 — 없으면 공용 기본값(lay.act)으로 떨어진다.
   const ACT_KEY = 'pn_act_by_sess';
-  const actKey = (): string => String(opts.sessionId || ('p' + id));
+  //  ⚠ **`opts.sessionId` 를 쓰면 안 된다**(원준 2026-09-03 신고의 한 갈래) — 서랍에서 세션을 갈아 끼울 때
+  //   이 셸은 다시 그리지 않으므로 그 값은 **처음 연 세션에 굳는다**. 그러면 '세션마다 기억한다'가 실은
+  //   '이 창을 처음 연 세션에 전부 덮어쓴다'가 된다. 지금 보는 세션은 curSession() 만이 안다.
+  const actKey = (): string => String(curSession() || ('p' + id));
   type ActMap = Record<string, Partial<Record<Zone, PartType>>>;
   function readActs(): ActMap {
     try { const m = JSON.parse(localStorage.getItem(ACT_KEY) || '{}'); return m && typeof m === 'object' ? m as ActMap : {}; }
@@ -180,7 +188,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     } catch (_) { /* noop */ }
   }
   /** 이 세션이 마지막으로 보던 탭을 되살린다 — 지금 칸에 실제로 들어 있는 것만(빠진 탭은 무시). */
-  (function applySessionAct(): void {
+  function applySessionAct(): void {
     if (loose) return;
     const mine = readActs()[actKey()];
     if (!mine) return;
@@ -188,9 +196,47 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const t = mine[z];
       if (t && lay[z].includes(t)) lay.act[z] = t;
     }
-  })();
+  }
+  applySessionAct();
 
-  const pj = (): any => (loose ? { id: 0, name: '프로젝트 없는 세션' } : (detail && detail.project) || { id, name: '프로젝트 #' + id });
+  // ── 곁칸의 '보기 상태'는 세션마다 (원준 2026-09-03) ────────────────────────────────
+  //  #1819 확정 원문: *"지식과 자료 위젯을 제외하고는 모두 다 각 세션에 딸려있는 거야 … 단 띄워져 있는
+  //  창의 종류만 같은 프로젝트 안의 다른 세션들이 공유하게."* 그런데 **크기·접힘은 그 판정표에 없었고**,
+  //  실제 구현은 브라우저 전역 한 값이었다(split.ts 의 `panes_side`·`panes_bottom` 키 하나씩). 그래서
+  //  한 세션에서 곁칸을 넓히면 **모든 세션·모든 프로젝트가 같이 넓어졌다** — 결정된 적 없는 자리라 고친다.
+  //   · 세션마다: 폭·높이 · 접힘(sideOn·bottomOn) · 활성 탭. (좌우 자리는 폭에서 자동으로 따라온다 — side-swap)
+  //   · 공유(프로젝트): **탭의 종류**(칸에 무엇이 들어 있나) — 위 확정의 그 한 줄.
+  //  ⭐ **물려받지 않는다**(원준 2026-09-03 "완전히 독립으로 해") — 끌어 본 적 없는 세션은 언제나 기본값이다.
+  //   '마지막으로 쓰던 값'을 물려주면 방금 스쳐 본 세션의 폭이 다음 세션으로 새어 나가 독립이 깨진다.
+  //   #1719 가 걱정한 '설정할 게 많다'는 **기본값이 늘 쓸 만한 자리**(곁칸 340)라는 것으로 답한다.
+  const VIEW_KEY = 'pn_view_by_sess';
+  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean };
+  function readViews(): Record<string, View> {
+    try { const m = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return m && typeof m === 'object' ? m as Record<string, View> : {}; }
+    catch (_) { return {}; }
+  }
+  function saveView(patch: View): void {
+    if (loose || EMBEDDED) return;               // 자투리 화면·끼워 넣은 판의 임시 상태를 정본으로 굳히지 않는다
+    try {
+      const m = readViews();
+      const k = actKey();
+      m[k] = { ...(m[k] || {}), ...patch };
+      const keys = Object.keys(m);
+      if (keys.length > 300) for (const kk of keys.slice(0, keys.length - 300)) delete m[kk];   // act 맵과 같은 상한
+      localStorage.setItem(VIEW_KEY, JSON.stringify(m));
+    } catch (_) { /* noop */ }
+  }
+
+  //  ⭐ 이름만은 **셸 목록**에서 가져온다(#2579 — 판단은 lib/door-name.ts 한 자리에).
+  //   `detail` 은 이 탭을 열 때 한 번 읽고 마는데(refreshDetail 은 마운트와 「프로젝트 상세」 변경에서만 돈다),
+  //   이름은 다른 화면에서도 바뀐다 — 프로젝트 탭 상세, 사이드바 줄 더블클릭. 그래서 종전엔 이 문패만
+  //   **탭을 닫았다 열기 전까지 옛 이름을 들고 있었다**(8초 틱은 옛 값으로 다시 그릴 뿐이다).
+  const pj = (): any => {
+    if (loose) return { id: 0, name: '프로젝트 없는 세션' };
+    const base = (detail && detail.project) || { id, name: '프로젝트 #' + id };
+    const name = doorProjectName(opts.data().projects as any, id, String(base.name || ''));
+    return name === base.name ? base : { ...base, name };
+  };
 
   // ── 발자취 — **세션마다 한 벌**, 그릇은 셸이 쥔다(원준 2026-08-20) ─────────────────
   //  왜 타임라인 칸이 아니라 여기서 만드나: 재료는 세션 화면(session-chat)이 대화를 읽으며 흘려 준다.
@@ -301,7 +347,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onChanged: () => { void refreshDetail(); opts.onProjectChanged?.(); },
     openSettings: () => openSettings(),
     sessionId: opts.sessionId || null,
-    onSessionPicked: (sid) => { trailFor(sid); announceSession(sid); opts.onSessionPicked?.(sid); paintDoor(); },
+    onSessionPicked: (sid) => { trailFor(sid); announceSession(sid); opts.onSessionPicked?.(sid); applySessionAct(); applyView(); paintAll(); },
     // 세션 화면을 붙일 때 **그 세션의 발자취 그릇**을 함께 넘긴다 — 대화가 읽히는 대로 타임라인 칸이 자란다.
     mountSession: opts.mountSession ? (host, sid) => opts.mountSession!(host, sid, { trail: trailFor(sid) }) : undefined,
     onSessionCreated: (row) => { opts.onSessionCreated?.(row); paintDoor(); },
@@ -404,15 +450,35 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     grow: () => (body.classList.contains('sw-left') ? 1 : -1),
     label: '곁칸 너비',
     onDrag: (px) => swap?.onDrag(px),
-    onEnd: (px) => swap?.onEnd(px),
+    //  놓는 순간 **이 세션의 폭**으로 적는다. makeSplitter 는 전역 키에도 그대로 남기는데(그건 '마지막으로 쓰던 값'),
+    //  그게 다음에 처음 여는 세션이 물려받을 값이다 — 둘은 싸우지 않는다(읽을 때 세션 값이 먼저다).
+    onEnd: (px) => { swap?.onEnd(px); saveView({ sideW: Math.round(px) }); },
   });
-  const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이' });
+  const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이',
+    onEnd: (px) => saveView({ bottomH: Math.round(px) }) });
+
+  /** 지금 보는 세션의 폭·높이·접힘을 화면에 입힌다.
+   *  ⭐ **물려받지 않는다**(원준 2026-09-03 "완전히 독립으로 해") — 그 세션이 직접 끌어 본 적이 없으면
+   *   언제나 기본값(곁칸 340 · 아래 칸 240)이다. 종전 초안은 '마지막으로 쓰던 값'을 물려주려 했는데,
+   *   그러면 방금 스쳐 본 세션의 폭이 다음 세션으로 새어 나가 **독립이 아니게 된다**. 기본값은 늘 같은 자리다.
+   *  ⚠ 전역 키(`lively_v2_split_panes_*`)는 **읽지도 쓰지도 않는다** — 읽으면 위의 새어 나감이 그대로 돌아온다.
+   *   (makeSplitter 가 끌 때마다 그 키에 남기는 것은 막지 않는다. 아무도 안 읽으므로 화면에 영향이 없다.) */
+  function applyView(): void {
+    const v = loose ? {} : (readViews()[actKey()] || {});
+    const w = Math.max(220, Math.min(swap?.maxSideW() ?? 620, Number(v.sideW) || 340));
+    const h = Math.max(120, Math.min(560, Number(v.bottomH) || 240));
+    body.style.setProperty('--pn-side-w', w + 'px');
+    colMain.style.setProperty('--pn-bottom-h', h + 'px');
+    // 접힘도 그 세션이 정한 적이 있을 때만 따른다 — 없으면 이 프로젝트의 기본 배치 그대로(칸의 '종류'와 같은 축).
+    if (typeof v.sideOn === 'boolean') lay.sideOn = v.sideOn;
+    if (typeof v.bottomOn === 'boolean') lay.bottomOn = v.bottomOn;
+  }
   colMain.append(mainPane.root, splitY, bottomPane.root);
   // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
   //  격자 칸을 차지하지 않고 오른쪽 위에 떠 있는다(no-side 격자를 안 건드리기 위해).
   const sideReopen = el('button', {
     class: 'pn-side-reopen', type: 'button', title: '곁칸을 폅니다 — 자료·지식이 여기 들어 있어요.', 'aria-label': '곁칸 펴기',
-    onclick: () => { lay.sideOn = true; saveLayout(); paintAll(); },
+    onclick: () => { lay.sideOn = true; saveLayout(); saveView({ sideOn: true }); paintAll(); },
   }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
   body.append(colMain, splitX, sidePane.root, sideReopen);
   swap = mountSideSwap({ body, colMain, sidePane: sidePane.root, sideOn: () => lay.sideOn });
@@ -433,8 +499,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const list = lay[zone];
     if (!list.includes(type)) list.push(type);
     lay.act[zone] = type;
-    if (zone === 'side') lay.sideOn = true;
-    if (zone === 'bottom') lay.bottomOn = true;
+    if (zone === 'side') { lay.sideOn = true; saveView({ sideOn: true }); }
+    if (zone === 'bottom') { lay.bottomOn = true; saveView({ bottomOn: true }); }
     saveLayout(); paintAll();
   }
   // 미리보기 칸에서 "이 주소 열어" 하고 부르면 웹 칸을 켠다 — 없으면 곁칸에 만들고, 이미 있으면 그 칸이 스스로 받는다.
@@ -551,7 +617,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
         //  고르는 자리는 여기뿐이라, 닫힌 아래 칸의 유일한 입구와 되돌리기를 이 발치에 둔다.
         el('div', { class: 'pn-pop-foot' },
-          loose || lay.bottomOn ? null : el('button', { class: 'btn-text', type: 'button', text: '아래 칸 열기', onclick: () => { close(); lay.bottomOn = true; saveLayout(); paintAll(); } }),
+          loose || lay.bottomOn ? null : el('button', { class: 'btn-text', type: 'button', text: '아래 칸 열기', onclick: () => { close(); lay.bottomOn = true; saveLayout(); saveView({ bottomOn: true }); paintAll(); } }),
           el('button', { class: 'btn-text', type: 'button', text: '기본 배치로 되돌리기', onclick: () => { close(); resetLayout(); } }))));
     };
     return b;
@@ -576,9 +642,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     lay.act[zone] = act;
 
     const hideBtn = zone === 'side'
-      ? el('button', { class: 'pn-pane-hide', type: 'button', title: '곁칸을 접습니다', 'aria-label': '곁칸 접기', onclick: () => { lay.sideOn = false; saveLayout(); paintAll(); } }, pnIcon('chev', 'pn-i sm'))
+      ? el('button', { class: 'pn-pane-hide', type: 'button', title: '곁칸을 접습니다', 'aria-label': '곁칸 접기', onclick: () => { lay.sideOn = false; saveLayout(); saveView({ sideOn: false }); paintAll(); } }, pnIcon('chev', 'pn-i sm'))
       : zone === 'bottom'
-        ? el('button', { class: 'pn-pane-hide', type: 'button', title: '아래 칸을 닫습니다', 'aria-label': '아래 칸 닫기', onclick: () => { lay.bottomOn = false; saveLayout(); paintAll(); } }, pnIcon('x', 'pn-i sm'))
+        ? el('button', { class: 'pn-pane-hide', type: 'button', title: '아래 칸을 닫습니다', 'aria-label': '아래 칸 닫기', onclick: () => { lay.bottomOn = false; saveLayout(); saveView({ bottomOn: false }); paintAll(); } }, pnIcon('x', 'pn-i sm'))
         : null;
     // 'sessions' 는 탭 하나가 아니라 **세션마다 탭 하나**로 펼친다(그 부품이 살아 있어야 하므로 먼저 만든다).
     const tabsOf = (t: PartType): HTMLElement[] => {
@@ -683,11 +749,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const doorRow = boxRow(curSession());
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
+        // ⭐ 순서는 **이름 › 번호 › 상태**(원준 2026-09-03: "프로젝트 이름이 제일 왼쪽으로 가야 밸런스가 맞는다").
+        //  종전엔 눈썹(#id · 상태)이 앞에 서서, 왼쪽 끝에 오는 것이 제목이 아니라 좌표였다 — 화면의 주인공은
+        //  이름인데 12.5px 회색 글자가 25px 굵은 글자보다 먼저 읽혔다. 이름을 왼쪽 끝으로 되돌리고
+        //  좌표·상태는 그 뒤 꼬리표로 붙인다(같은 줄인 것은 그대로 — 문패는 한 줄이라는 결정은 유효하다).
+        titleNode(String(p.name || '프로젝트 #' + id)),
         el('div', { class: 'pn-eyebrow' },
           loose ? el('span', { text: '아직 어느 프로젝트에도 붙지 않았어요.' }) : el('span', { class: 'mono', text: '#' + p.id }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
-          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t })),
-        titleNode(String(p.name || '프로젝트 #' + id))),
+          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }))),
       el('div', { class: 'pn-door-r' },
         facesNode(doorRow),
         shareNode(doorRow),
@@ -718,12 +788,50 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   맞는 주소는 **`#/projects2/p/<id>`** — 그 프로젝트의 상세 화면(본문·할 일·보드)이다.
   //  아이콘은 이 굵은 글자가 **프로젝트 이름**임을 말한다(세션 이름과 한 화면에 있어 둘이 헷갈렸다).
   //  '프로젝트 없는 세션'(loose)은 갈 곳이 없으므로 평범한 제목으로 둔다.
+  //  ── 이름 고치기는 **연필**로 (원준 2026-09-03) ────────────────────────────────
+  //   위 결정(제목 클릭 = 이동)은 그대로 두되, 종전엔 이 화면에서 이름을 고칠 길이 **아예 없었다** — 사람은
+  //   「사이드바 줄 더블클릭」을 미리 알고 있어야 했다. 세션 이름 옆엔 연필이 있는데 프로젝트 이름 옆엔 없으니
+  //   같은 화면 안에서 규칙이 둘이었다. 그래서 연필을 붙인다: **그림도 손짓도 세션 이름과 같다**
+  //   (session-chat.ts penBtn/startRename — 같은 path, Enter=저장 · Esc=취소 · 다른 데 누르면 저장).
+  function startRenameProject(host: HTMLElement, cur: string): void {
+    const input = el('input', { class: 'pn-title-in', type: 'text', maxlength: '200', value: cur,
+      'aria-label': '프로젝트 이름', spellcheck: 'false' }) as HTMLInputElement;
+    let closed = false;
+    const cancel = (): void => { if (closed) return; closed = true; paintDoor(); };
+    const save = async (): Promise<void> => {
+      if (closed) return;
+      const to = input.value.replace(/\s+/g, ' ').trim();
+      if (!to || to === cur) { cancel(); return; }
+      closed = true; input.disabled = true;
+      try {
+        await opts.onRenameProject!(id, to);
+        if (detail && detail.project) detail.project.name = to;   // 이 판이 든 사본도 곧바로 새 이름으로
+        toast('프로젝트 이름을 바꿨어요.');
+      } catch (e: any) { toast('이름을 바꾸지 못했습니다 — ' + ((e as Error)?.message || e), true); }
+      paintDoor();
+    };
+    input.onkeydown = (e: KeyboardEvent) => {
+      if (e.isComposing) return;             // 한글 조합 중의 Enter 는 확정이지 저장이 아니다
+      if (e.key === 'Enter') { e.preventDefault(); void save(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    };
+    input.onblur = () => { void save(); };   // 다른 데를 누르면 그대로 저장(취소는 Esc)
+    host.replaceChildren(input);
+    input.focus(); input.select();
+  }
   function titleNode(name: string): HTMLElement {
     if (loose) return el('h1', { class: 'pn-title', text: name });
-    return el('h1', { class: 'pn-title' },
+    const h = el('h1', { class: 'pn-title' },
       el('a', { class: 'pn-title-btn', href: '#/projects2/p/' + id, title: name + ' — 프로젝트 전체 화면으로 갑니다' },
         pnIcon('proj', 'pn-title-ic'),
         el('span', { class: 'pn-title-t', text: name })));
+    if (opts.onRenameProject) h.append(el('button', {
+      class: 'pn-title-penbtn', type: 'button', 'aria-label': '프로젝트 이름 바꾸기',
+      title: '프로젝트 이름 바꾸기 — 제목을 누르면 그 프로젝트로 갑니다',
+      onclick: () => startRenameProject(h, name),
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'pn-title-pen', 'aria-hidden': 'true' },
+      sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }))));
+    return h;
   }
 
   function resetLayout(): void {
@@ -768,6 +876,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     paintDoor();
   }, 8000);
 
+  applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
   paintAll();
   if (!loose && !detail) void refreshDetail();
 
@@ -788,6 +897,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   return {
     newSession,
+    repaintDoor(): void { paintDoor(); },
     destroy(): void {
       wrap.removeEventListener('pn:open-web', onOpenWeb);
       window.removeEventListener('message', onMsg);

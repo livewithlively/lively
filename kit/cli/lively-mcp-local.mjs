@@ -60,7 +60,14 @@ const LIVELY = join(HOME, ".lively");
 const readLively = (n) => { try { return readFileSync(join(LIVELY, n), "utf8").trim(); } catch { return ""; } };
 // gateway-url / token 규약은 lively.mjs 와 동일(/mcp 없이 저장, Bearer 헤더).
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
-const gateway = () => normGw(process.env.LIVELY_GATEWAY_URL || readLively("gateway-url"));
+// 주소는 **파일이 SoT**(#2617) — lively.mjs 의 gateway() 와 같은 판정이고 근거도 거기 적어 뒀다. 요지:
+//  env 는 '파일의 캐시'라 둘이 갈리는 유일한 경우가 곧 버그다. 이 파일은 **세션 pane 안에서** 도는데,
+//  tmux 서버는 처음 뜬 시점 환경을 global 로 굳혀 물려주고 killEmptyTmuxServer 는 세션이 살아 있으면
+//  서버를 보존하므로, 세션이 끊이지 않는 박스에서 그 env 는 **영영 갱신되지 않는다** — 이 표면이 정확히
+//  env-우선의 피해자였다(2026-09-03: 이 MCP 의 repo_list·repo_worktree 가 세션 내내 401).
+//  ⚠ token() 은 반대로 env 우선인 채 둔다 — 그건 캐시가 아니라 **세션별 신원 주입**이다(#2234, sessions.ts 가
+//   pane 마다 다른 토큰을 심는다). 주소는 박스당 하나라 그 사정이 없다. 두 값의 규약이 다른 이유가 이것이다.
+const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GATEWAY_URL);
 const token = () => (process.env.LIVELY_TOKEN || readLively("token")).trim();
 
 // stdout 은 JSON-RPC 전용이다 — 실수로 새어나간 console.log 가 프로토콜을 깨지 않게 stderr 로 묶는다.
@@ -79,6 +86,15 @@ function makeCtx(callCwd) {
       const headers = { authorization: `Bearer ${tok}` };
       if (body !== undefined) headers["content-type"] = "application/json";
       const res = await fetch(gw + path, { method, signal: ctl.signal, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+      // 401/403 은 **무엇을 하라는지**까지 말한다(#2617). 종전 문구는 "게이트웨이 401 (/api/ui/repos)" 뿐이라,
+      //  이걸 받은 에이전트가 처방을 몰라 로컬 툴을 통째로 포기하고 손으로 우회했다(실측 2026-09-03 — 그 바람에
+      //  워크트리가 서버 대장에 안 잡혀 workspace_reclaim 이 회수 대상을 통째로 못 봤다). 어느 주소로 물었는지도
+      //  함께 말한다: 주소가 예상과 다르면 그 자체가 답이고(파일이 비어 env 로 폴백한 경우), 맞으면 토큰 문제로
+      //  좁혀진다. 진단은 `lively doctor` 한 곳으로 모은다 — 한 조직이 두 곳에서 다르게 진단하면 안 된다.
+      if (!res.ok && (res.status === 401 || res.status === 403)) {
+        throw new Error(`게이트웨이 ${res.status} (${path}) — ${gw} 에 접속 열쇠가 통하지 않습니다`
+          + "(만료·해제됨? 또는 이 주소가 그 열쇠를 발급한 곳이 아님). `lively doctor` 로 진단하고, 열쇠 문제면 `lively login` 으로 다시 등록하세요.");
+      }
       if (!res.ok) throw new Error(`게이트웨이 ${res.status} (${path})`);
       return await res.json();
     } finally { clearTimeout(timer); }

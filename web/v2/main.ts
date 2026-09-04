@@ -74,7 +74,7 @@ let suppressHash = 0;                    // 탭 전환이 만든 hashchange 를 
 // 프로젝트 화면(#1757) 핸들 — **탭마다 하나**. 탭이 다른 화면으로 가거나 닫힐 때 destroy(리브 턴 폴링 정지).
 //  탭 전환(숨김)에는 살려 둔다 — 탭의 존재 이유(상태 보존)와 같은 원칙.
 //  뷰가 둘(기본·캔버스)이라 핸들은 공통 계약 하나로만 본다 — 셸이 아는 것은 '언젠가 정리해야 한다'뿐이다.
-const projViews = new Map<ShellTab, { destroy(): void; newSession?(): void }>();
+const projViews = new Map<ShellTab, { destroy(): void; newSession?(): void; repaintDoor?(): void }>();
 // 그 탭의 셸이 **어느 프로젝트로** 마운트됐나(#1834 후속). 세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데,
 //  종전엔 그 상태가 그대로 굳어 문패가 '프로젝트 없는 세션'이 되고 그 셸의 세션 목록도 남의 것이 됐다.
 //  8초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
@@ -176,6 +176,7 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     detail,
     sessionId,
     onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
+    onRenameProject: (pid, name) => renameProject(pid, name),   // 문패 연필 — 사이드바 줄 더블클릭과 같은 경로(#2579)
     // 서랍에서 세션을 갈아 끼웠다 — 셸은 살려 두고 **주소·탭 제목만** 그 세션 것으로(라우터를 다시 돌리지 않는다).
     onSessionPicked: (sid) => {
       // 세션을 고르면 그 세션 주소, 새 세션 자리로 돌아가면 **?new=1** 을 붙인 프로젝트 주소.
@@ -412,6 +413,14 @@ export async function bootV2(): Promise<void> {
   window.addEventListener('message', (ev: MessageEvent) => {
     if (ev.origin !== location.origin || !ev.source || !tabsApi) return;
     const m: any = ev.data;
+    //  프로젝트 탭(앱 프레임) 안에서 이름을 고쳤다 — 셸은 그 사실을 알 길이 없어 **8초 폴링까지** 옛 이름을
+    //   들고 있었다(원준 2026-09-03: "8초 걸리는거 이상해"). 프레임이 한 줄 알려 주면 그 순간 맞춘다(#2579).
+    //   ⚠ 아래 탭 확인(우리 탭의 프레임인가)을 거치지 않는다 — 이건 **이 창 안의 표시만** 고치는 알림이라
+    //    어느 탭이 보냈든 결과가 같다(같은 오리진 검사는 이미 위에서 했다). 서버는 프레임이 이미 고쳤다.
+    if (m && m.type === 'lively:project-renamed' && Number(m.id) > 0 && typeof m.name === 'string') {
+      applyProjectName(Number(m.id), m.name);
+      return;
+    }
     if (!m || (m.type !== ASIDE_MSG.ping && m.type !== ASIDE_MSG.open)) return;
     const tab = tabsApi.tabs.find((t) => {
       const f = t.center.querySelector('iframe') as HTMLIFrameElement | null;
@@ -2037,10 +2046,19 @@ async function renameSessionEverywhere(sessionId: string, label: string): Promis
  *  안 고친 것보다 나쁘다 — 그래서 로컬 목록을 먼저 손보고(즉시 반응) 서버에서 다시 읽어 맞춘다. */
 async function renameProject(projectId: number, name: string): Promise<void> {
   await api('/api/ui/v6/projects/' + projectId, { method: 'POST', body: JSON.stringify({ name }) });
+  applyProjectName(projectId, name);
+  void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
+}
+
+/** 새 이름을 **이 창의 모든 자리**에 즉시 앉힌다 — 서버 왕복을 기다리지 않는다(#2579).
+ *  이름은 사이드바·탭 제목·판 문패에 흩어져 있어 한곳만 고치면 나머지가 옛 이름으로 남는다.
+ *  ⚠ 문패를 빠뜨렸던 것이 이 프로젝트의 신고 중 하나다 — 판은 자기 `detail` 사본을 들고 있어서
+ *   목록만 고치면 **탭을 닫았다 열기 전까지** 옛 이름이었다(panes.ts pj() 머리말). */
+function applyProjectName(projectId: number, name: string): void {
   const pj0 = data.projects.find((x: any) => Number(x.id) === Number(projectId));
   if (pj0) pj0.name = name;
   drawSide(); tabsApi?.paint();
-  void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
+  for (const view of projViews.values()) view.repaintDoor?.();
 }
 
 async function renameSession(sessionId: string, label: string, tab: ShellTab | null): Promise<void> {

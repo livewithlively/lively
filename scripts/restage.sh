@@ -116,11 +116,18 @@ if [[ -n "$DIRECT" ]]; then
   # 후보는 '아직 main 에 안 들어간 origin 브랜치'뿐. `--no-merged` 가 그 판정을 ref 순회 1회로 한다
   #  (종전엔 브랜치마다 merge-base 를 불러 620회였다).
   #  ⚠ macOS 기본 bash 는 3.2 라 `mapfile` 이 없다(bash 4+). while-read 로 담는다.
+  #  ⚠ **stage 자신의 사본은 후보가 아니다**(2026-09-03, #2615). stage-guard(#2457)가 stage push 마다
+  #   stage 를 통째로 `stage-snapshot/<날짜>` 로 밀어 넣고, 재조립은 `backup/…`·`stage-orphans/…` 를 남긴다.
+  #   그것들을 후보에 넣으면 **모든 stage 직접 커밋이 자기 사본 덕에 «작업 브랜치에 있음»으로 판정**되어
+  #   고아 검사가 통째로 무력해진다 — 이 검사가 지키려던 그 유실을 그대로 통과시킨다.
+  #   실측: 그래서 `cb69da04`(#1631 폼 재조판, 정본이 어디에도 없음)가 «안전» 으로 나왔다.
+  #   판정의 뜻은 «이 커밋이 **다른 곳에도** 살아 있나» 이고, stage 사본은 그 «다른 곳»이 아니다.
   CAND=()
   while IFS= read -r b; do
     [[ -n "$b" ]] && CAND+=("$b")
   done < <(git for-each-ref --format='%(refname:strip=3)' --no-merged "$BASE_SHA" "refs/remotes/${REMOTE}" \
-             | grep -vxE "HEAD|${STAGE}|${BASE}" || true)
+             | grep -vxE "HEAD|${STAGE}|${BASE}" \
+             | grep -vE "^(stage-snapshot|stage-orphans|backup)/" || true)
   # 후보에서 patch-id 집합을 한 번에 만든다. `git log -p` 의 커밋 헤더 덕에 patch-id 가
   #  "<patch-id> <커밋sha>" 짝을 뱉는다(= git cherry 가 내부에서 하는 것과 같은 판정).
   #
@@ -137,6 +144,12 @@ if [[ -n "$DIRECT" ]]; then
       | git patch-id --stable > "$KNOWN" || true
   fi
   for c in $DIRECT; do git show "$c" 2>/dev/null; done | git patch-id --stable > "$MINE" || true
+  # ③(아래)이 쓸 기준 트리. `merge-tree --write-tree` 는 git 2.38+ 이라, 없으면 빈 값으로 두고 건너뛴다
+  #  — 그 경우 판정은 종전(patch-id 만)으로 되돌아간다. 없는 기능 때문에 스크립트가 죽지는 않는다.
+  BASE_TREE=""
+  if git merge-tree --write-tree --merge-base "${REMOTE}/${BASE}" "${REMOTE}/${BASE}" "${REMOTE}/${BASE}" >/dev/null 2>&1; then
+    BASE_TREE="$(git rev-parse "${REMOTE}/${BASE}^{tree}")"
+  fi
 
   for c in $DIRECT; do
     line="$(git log -1 --format='%h  %an  %s' "$c")"
@@ -157,6 +170,17 @@ if [[ -n "$DIRECT" ]]; then
       saved="$(git for-each-ref --format='%(refname:strip=3)' --contains "$twin" "refs/remotes/${REMOTE}" 2>/dev/null \
                  | grep -vxE "HEAD|${STAGE}" | head -1)"
       RESCUED+="${line}   → ${saved:-작업 브랜치} 에 있음"$'\n'
+    elif [[ -n "$BASE_TREE" ]] && [[ "$(git merge-tree --write-tree --merge-base "${c}^" "${REMOTE}/${BASE}" "$c" 2>/dev/null)" == "$BASE_TREE" ]]; then
+      # ③ 마지막으로 **내용**을 본다. ①②는 patch-id(=diff 바이트) 대조라 «같은 변경, 다른 베이스»를
+      #    남남으로 본다 — 그런데 우리 운영이 정확히 그렇다: 정식 브랜치로 PR 을 내고 **같은 변경을
+      #    stage 에도 따로 얹는다**. 베이스가 다르면 문맥 줄이 달라져 patch-id 가 갈린다.
+      #    그러면 **이미 main 에 있는 내용이 «고아» 로 잡혀** 재조립이 멀쩡히 막힌다(실측 2026-09-03:
+      #    `cb69da04` — 같은 변경이 PR #702 로 main 에 있었는데 고아로 나왔다).
+      #    가드가 늑대를 외치면 아무도 «잃을 게 있다» 를 믿지 않게 된다 — 그게 이 가드를 두 번 죽인다.
+      #  판정: 이 커밋을 main 위에 3-way 로 얹어 본 트리가 **main 그대로**면, 그 변경은 이미 main 에 있다.
+      #   `merge-tree --write-tree` 는 워크트리·인덱스를 건드리지 않고 결과 트리만 계산한다(git 2.38+).
+      #   충돌하면 비-0 로 빈 문자열이 되어 아래 고아로 떨어진다 — 애매하면 막는 쪽이 안전하다.
+      RESCUED+="${line}   → ${BASE} 에 내용이 있음(다른 베이스로 얹힌 쌍둥이)"$'\n'
     else
       ORPHANS+="${line}"$'\n'
     fi

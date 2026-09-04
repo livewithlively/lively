@@ -16,28 +16,28 @@ import { linkIsStale, LINK_CHECK_MS, LINK_STALE_MS } from "./link-liveness.js"; 
 import { startKeepAwake } from "./keep-awake.js";        // #1849 — 이 PC 가 자지 않게 붙잡는다
 import { reconnectDelayMs } from "./reconnect-delay.js";   // #1865 — 재연결 지연(두 구간)
 import {
-  listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,
-  markSessionActive, markSessionSeen, isReportedPhase, type CreateInput,
+  listSessionsRaw, killEmptyTmuxServer, sessionDir, sharedRoot,
 } from "../terminal/terminal-sessions.js";
-import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/terminal-pty.js";
-import { sendKeysToSession } from "../terminal/send-keys.js";
-import { injectFirstPrompt } from "../terminal/session-first-prompt.js";
-import { applySessionProject } from "../terminal/session-project.js";   // #1719 세션 프로젝트 소속(노드 로컬 적용)
+import { type AttachSocket } from "../terminal/terminal-pty.js";
+// #2600 T1 — 세션을 소유하는 살림과 세션 op 는 **코어 한 곳**이다. 이 파일에 남는 것은 WS 중계 전송뿐.
+import { SessionHost } from "../terminal/session-host.js";
+import { isSessionOp, runSessionOp } from "../terminal/session-ops.js";
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
-import type { LivelyUser } from "../context.js";
 import {
-  nodeWsUrl, PROTO_VER, NODE_OPS, encodeChanFrame, decodeChanFrame, parseMsg,
+  nodeWsUrl, PROTO_VER, NODE_OPS, CLOSE_SELF_NODE, encodeChanFrame, decodeChanFrame, parseMsg,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
 import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
+import { freezeExecTopology, tmuxNeedsTenantSlug } from "../exec-topology.js";   // #2599 T2 — 부팅 때 한 번 확정
+import { installTenantSlugResolver, tenantSlugIsWellFormed, TENANT_SLUG_SHAPE } from "../terminal/catalog.js";   // #2600 T2 — 매니지드 세션 호스트는 테넌트가 프로세스에 붙는다
 import { WorkerHost, WorkerBundleStager, type WorkerStartSpec, type WorkerStopReason } from "../apps/worker-host.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
-const TOKEN = process.env.LIVELY_NODE_TOKEN || "";
+const TOPOLOGY = freezeExecTopology();   // #2599 T2 — 노드 진입점에서 토폴로지를 확정한다(이 프로세스는 sessionHost="node")
+const TOKEN = TOPOLOGY.nodeToken;
 const NODE_ID = process.env.LIVELY_NODE_ID || ""; // 표시용 — 신원은 서버가 토큰으로 특정한다
 let workerStateSocket: WebSocket | null = null;
 const chatSubscribed = new Set<string>();   // #2439 — 세션마다 한 번만 구독한다(두 번이면 사건이 두 번 올라간다)
@@ -124,10 +124,41 @@ if (!GW_URL || !TOKEN) {
   process.exit(2);
 }
 
+// ── 매니지드 세션 호스트 — 이 프로세스가 **어느 테넌트의** 세션을 소유하나 (#2600 T2) ──────
+//  멤버 PC 의 노드는 tmux 가 로컬이라 여기 안 걸린다(`tmux={kind:"socket"}`). 걸리는 것은 tmux 가
+//  **중계 너머**인 배포 — 매니지드 노드 박스에서 브로커 옆에 서는 세션 호스트다. 그 자리에서 tmux 대상은
+//  «그 테넌트의 브로커 소켓» 이고, 코어는 `{slug}` 치환으로 그걸 고른다(`tmuxArgvFor`).
+//  ⚠ 슬러그가 요청이 아니라 **프로세스**에 붙는다: 이 프로세스는 테넌트 하나만 본다. 그게 브로커의
+//   «소켓 하나 = 테넌트 하나» 를 그대로 복제한 격리이고, T1 이 남긴 불변식(«한 프로세스에 세션 호스트
+//   하나»)과도 같은 방향이다 — 여러 테넌트를 한 프로세스에 담으려면 프로세스를 갈라야 한다.
+//  ⚠ **부팅에서 선다.** 안 그러면 첫 attach 가 올 때까지 멀쩡해 보이다가 거기서 던진다.
+//  ⚠ **형식까지 여기서 본다.** `tenantSlug()` 는 형식을 통과 못 한 값을 «없음»(null)으로 접는데,
+//   그러면 슬러그를 실어 줬는데도 attach 에서 «컨텍스트가 필요합니다» 로 던진다 — 부팅 가드를 둔
+//   이유가 정확히 그 증상을 없애는 것이라, 비었나만 보면 그 목적이 샌다(공백이 든 값은 치환 뒤
+//   `split(/\s+/)` 에서 argv 길이까지 바꾼다).
+if (tmuxNeedsTenantSlug(TOPOLOGY.tmux)) {
+  const slug = (process.env.LVLY_TENANT_SLUG || "").trim();
+  //  `installTenantSlugResolver` 는 **공급**(누가 슬러그를 답하나)이고, 격리는 그 답이 프로세스
+  //   수명 내내 상수라는 데서 온다 — 아래처럼 닫힌 값을 돌려주면 요청에 따라 갈릴 자리가 없다.
+  if (!slug || !tenantSlugIsWellFormed(slug)) {
+    console.error(`이 배포의 tmux 는 테넌트 중계입니다 — LVLY_TENANT_SLUG 가 필요합니다(형식: ${TENANT_SLUG_SHAPE}). 받은 값: ${slug ? JSON.stringify(slug) : "(없음)"}`);
+    process.exit(2);
+  }
+  installTenantSlugResolver(() => slug);
+}
+
 const STATE_PUSH_MS = 3_000;
 // 재연결 지연은 reconnect-delay.ts 가 계산한다(#1865) — 왜 두 구간(촘촘/느슨)으로 갈랐는지는 그 파일 머리말.
 //  ⚠ 상수를 여기 다시 두지 마라: 종전엔 여기 하나뿐이라 '재배포 직후'와 '오래 죽어 있음'을 같은 곡선으로 다뤘고,
 //   그래서 게이트웨이가 살아난 뒤에도 노드가 8~16초를 더 기다렸다.
+
+// 세션 호스트(#2600 T1) — attach 를 소유하는 살림은 attach 워커와 **같은 모듈**이다.
+//  ⚠ 이름을 `attachHost` 로 둔 이유: 토폴로지 필드 `execTopology().sessionHost` 는 «세션이 **어디서**
+//   도나»(`"node"|"local"|"relay"`)를 뜻해서, 같은 낱말을 이 객체에도 쓰면 한 파일에서 두 뜻이 된다. 이 파일에 남는 것은
+//  전송(아래 ChanSocket · open/ctl/close)뿐이다. 수명은 토폴로지가 정한다: 이 프로세스는 `sessionHost="node"`
+//  라 `resident` 로 파생돼 유휴 자진 종료가 안 걸린다(노드 데몬은 붙은 세션이 없어도 지시를 기다려야 한다).
+//  누수 지표 보고(onStat)도 안 건다 — 그건 게이트웨이가 자기 워커를 합산하는 통로다(#687).
+const attachHost = new SessionHost();
 
 // ── attach 채널 어댑터 — 게이트웨이행 단일 WSS 위의 가상 채널을 AttachSocket 으로 위장해
 //    terminal-pty.attachSession(tmux -CC · 큐잉 · 정리)을 그대로 재사용한다. ──
@@ -227,8 +258,12 @@ async function nodeSessionAbs(id: string, sub: string, requireSub = false): Prom
 
 // ── ops 디스패치 — 게이트웨이가 이미 정책(소유·초대 검증)을 끝냈다는 전제의 기계적 실행. ──
 //  user 는 게이트웨이가 넘긴 신원 그대로 tmux 메타(@box_owner)·소유자 확인(assertManage)에 쓰인다.
+//
+//  ★ #2600 T1 — **세션 op 는 여기서 구현하지 않는다.** `terminal/session-ops.ts` 한 곳이 갖고, 이 파일은
+//   봉투를 그대로 넘기는 전송 어댑터다. 아래 남은 case 들은 노드 전용(그 PC 의 파일·위탁 태스크·앱 워커·
+//   provision·대화 런타임)이라 세션 호스트의 몫이 아니다.
 async function runOp(op: string, args: Record<string, unknown>): Promise<unknown> {
-  const user = (args.user ?? {}) as LivelyUser;
+  if (isSessionOp(op)) return runSessionOp(op, args);
   switch (op) {
     case "stageWorkerChunk": return workerBundleStages.stage(args);
     case "startWorker": {
@@ -274,36 +309,6 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     //  confineToWorkspace·assertDiskWritable)은 노드 자기 workspace 기준으로 동작한다.
     case "provision": return startProvision(args);
     case "provisionStatus": return provisionStatus(Number(args.projectId));
-    case "list": return listSessionsRaw();
-    // #1221 — 게이트웨이가 릴레이한 하네스 보고(활동 시각 + 실행단계)를 이 노드 tmux 에 새긴다. 인가(소유자
-    //  확인)는 게이트웨이가 이미 끝냈다(F7 — runOp 는 기계적 실행만). 모르는 state 는 무시하고 활동 시각만 갱신.
-    case "markActive": {
-      const st = args.state;
-      // #1842 — 전이(prev→phase)를 게이트웨이에 **돌려준다**. 노드 세션의 tmux 는 이 PC 에 있어 게이트웨이가
-      //  직접 볼 수 없으므로, 이 응답이 없으면 다른 PC 에서 도는 세션만 실시간 알림에서 빠져 30초 폴링에 묶인다.
-      //  구 게이트웨이는 이 필드를 모르고 무시한다(무회귀).
-      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
-      return { ok: true, change: change ?? null };
-    }
-    // #1954 3차 — 게이트웨이가 릴레이한 '이 화면을 보고 있다' 도장을 이 노드 tmux 에 새긴다. markActive 와 같은
-    //  구조·같은 인가 전제(F7 — 게이트웨이가 이미 확인했다).
-    case "markSeen": {
-      await markSessionSeen(String(args.id));
-      return { ok: true };
-    }
-    // #1664 — 게이트웨이가 이 노드의 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). 인가(소유·초대)는
-    //  게이트웨이가 끝냈다는 전제(F7). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와 flush 지연 규약은
-    //  terminal/send-keys 안에 갇혀 있어 게이트웨이 로컬 주입과 **같은 코드**로 돈다.
-    case "sendKeys": {
-      await sendKeysToSession(String(args.id), String(args.text ?? ""));
-      return { ok: true };
-    }
-    // 세션 프로젝트 소속(붙이기·떼기). 게이트웨이가 소유권·공개범위를 검증하고 DB desired를 먼저 기록한다.
-    // 노드는 tmux 실행 캐시만 갱신하며 cwd나 프로젝트 표현 파일을 만들지 않는다.
-    case "setProject": {
-      const b = args.bind as { projectId: number; folder: string; name?: string | null; src?: "v6" | "org" } | null | undefined;
-      return applySessionProject(user, String(args.id), b && Number(b.projectId) > 0 ? b : null);
-    }
     //  ★ #2439 — **노드에서 대화 런타임을 돌린다.** 그 세션의 tmux 가 여기 있으니 런타임도 여기서
     //   돌아야 승인·선택지·작업 목록이 생긴다. 사건은 chatEvent 로 게이트웨이에 올라가고,
     //   게이트웨이는 그것을 자기 버스에 흘린다 — 화면·SSE 는 한 줄도 안 바뀐다.
@@ -326,32 +331,6 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       const ok = answer(String(args.id ?? ""), String(args.askId ?? ""), args.value);
       return { ok, stale: !ok };
     }
-    case "injectFirstPrompt": {
-      const id = String(args.id);
-      const harness = String(args.harness || "claude");
-      const prompt = String(args.text || "");
-      // 신뢰 대화상자 자동 수락 여부는 **게이트웨이가 판정해 실어 보낸다**(#1867 autoTrustWorkspace) — 노드엔 프로젝트 폴더 규약이 없다.
-      if (prompt.trim()) void injectFirstPrompt(id, harness, prompt, { trustOk: args.trustOk === true })
-        .catch((e) => console.warn(`[node] 첫 지시 주입 실패(${id}):`, (e as Error)?.message ?? e));
-      return { ok: true };
-    }
-    case "create":
-    case "createAppSession": {
-      const session = await createSession(user, args.input as CreateInput);
-      // 초대는 게이트웨이가 구성원 디렉터리로 검증해 넘긴다 — 노드엔 DB 가 없어 createSession 내부 검증이 빈 배열이 됨.
-      const invites = Array.isArray(args.invites) ? (args.invites as string[]) : [];
-      if (invites.length) { await applyValidatedInvites(user, session.id, invites); session.invites = invites; }
-      return session;
-    }
-    case "kill": await killSession(user, String(args.id)); return { ok: true };
-    case "edit": {
-      const patch = (args.patch ?? {}) as { label?: string };
-      if (patch.label !== undefined) await editSession(user, String(args.id), { label: patch.label });
-      if (args.invites !== undefined) await applyValidatedInvites(user, String(args.id), args.invites);
-      return { ok: true };
-    }
-    case "gone": return sessionGone(String(args.id));
-    case "label": return getSessionLabel(String(args.id));
     // 노드 세션 파일 릴레이(#875) — @box_dir 봉쇄(.. 탈출 거부). 노드는 멤버 본인 머신(단일 유저)이라 OS-유저 격리 없이
     //  plain fs. 인가는 게이트웨이(nodeCanAttach)가 이미 끝냈다는 전제(F7 — runOp 는 기계적 실행만).
     case "fsLs": {
@@ -491,7 +470,15 @@ function connect(): void {
       const sock = new ChanSocket(ws, m.chan, (chan) => chans.delete(chan));
       chans.set(m.chan, sock);
       try {
-        attachSession(sock, m.session);
+        // #2600 T1 — attach 소유는 세션 호스트가 한다(워커와 같은 모듈). 이 파일은 채널을 만들어 넘길 뿐.
+        //  노드엔 테넌트 개념이 없어 컨텍스트 래퍼는 항등이다(기본값).
+        //  호스트가 거절하면(종료 중) «열렸다» 가 아니라 실패로 답한다 — opened 직후 close 를 보내면
+        //  게이트웨이가 «열렸다 끊겼다» 로 읽고 재시도 판단을 잘못한다.
+        if (!attachHost.attach(sock, m.session)) {
+          chans.delete(m.chan);
+          ws.send(JSON.stringify({ t: "openfail", chan: m.chan, code: 4462, reason: "node-shutting-down" } satisfies NodeToGwMsg));
+          return;
+        }
         ws.send(JSON.stringify({ t: "opened", chan: m.chan } satisfies NodeToGwMsg));
       } catch (e) {
         chans.delete(m.chan);
@@ -503,7 +490,7 @@ function connect(): void {
     if (m.t === "close") { chans.get(m.chan)?.feedClose(); return; }
   });
 
-  const teardown = (): void => {
+  const teardown = (code?: number, reason?: string): void => {
     if (workerStateSocket === ws) workerStateSocket = null;
     if (chatEventSocket === ws) chatEventSocket = null;
     if (pusher) { clearInterval(pusher); pusher = null; }
@@ -514,6 +501,18 @@ function connect(): void {
     // remote worker를 전부 fail-closed 정지한다. 재연결 뒤 명시 open이 같은 run 계약으로 다시 시작한다.
     void nodeWorkerHost.shutdown();
     workerBundleStages.clear();
+    // ★ #2592 — **종결 코드는 재연결하지 않는다.** 이 PC 가 게이트웨이가 도는 그 박스면 게이트웨이는
+    //  CLOSE_SELF_NODE 로 끊는다. 그건 «지금은 안 된다»(오프라인·재배포)가 아니라 «여기서는 영영 안 된다» 라,
+    //  재연결 루프를 돌면 게이트웨이가 초당 한 번씩 인증·판정·거절을 반복할 뿐이다(구 번들에서 실제로 그렇게 된다).
+    //  프로세스를 끝낸다 — 데몬 런처가 되살리더라도 그 주기(launchd 최소 10초)로 늦춰지고, 로그에 사유가 남는다.
+    if (code === CLOSE_SELF_NODE) {
+      logger.error({ code, reason },
+        "이 컴퓨터에서는 노드를 띄우지 않습니다 — 게이트웨이가 도는 바로 그 컴퓨터입니다(같은 tmux)."
+        + " 세션은 웹에서 '중앙 컴퓨터(기본)' 로 그대로 열립니다. 이 데몬은 `lively node stop` 으로 내려 주세요.");
+      attachHost.shutdown();   // #2600 T1 — PTY 일괄 회수는 세션 호스트의 몫(워커와 같은 코드)
+      try { keepAwake.stop(); } catch { /* noop */ }
+      process.exit(0);
+    }
     const delay = reconnectDelayMs(attempt++);
     logger.warn({ delay }, "게이트웨이 연결 끊김 — 재연결 예약");
     // ⚠ unref 금지(#1541 실기기 로그로 확정): teardown 뒤엔 이 타이머가 이벤트 루프를 지탱하는 유일한 핸들이라,
@@ -522,7 +521,7 @@ function connect(): void {
     //  데몬은 런처가 우연히 가려 주지만, 포그라운드(lively node — 런처 없음)는 끊김 한 번에 노드가 통째로 죽는다.
     setTimeout(connect, delay);
   };
-  ws.once("close", teardown);
+  ws.once("close", (code, reason) => teardown(Number(code), String(reason ?? "")));
   ws.once("error", (err) => { logger.warn({ err: (err as Error)?.message }, "노드 WSS 오류"); try { ws.terminate(); } catch { /* noop */ } });
 }
 
@@ -536,7 +535,7 @@ const keepAwake = startKeepAwake({
 //  잠자기 억제도 같이 푼다 — 자식은 부모 pid 를 감시해 스스로도 끝나지만(계약 ②), 여기서 끊으면 즉시 풀린다.
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.once(sig, () => {
-    try { killAttachedPtys(); } catch { /* noop */ }
+    attachHost.shutdown();   // #2600 T1 — 〃(워커의 SIGTERM 경로와 같은 불변식)
     try { keepAwake.stop(); } catch { /* noop */ }   // #1849 — 억제도 즉시 푼다(자식은 스스로도 끝난다)
     void nodeWorkerHost.shutdown().finally(() => setTimeout(() => process.exit(0), 50));
     setTimeout(() => process.exit(0), 1_500).unref();

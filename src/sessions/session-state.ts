@@ -12,16 +12,15 @@
 //  src/sessions/session-reaper.ts(#1059 F — idle 회수 시 이 레코드를 보존해 restorable 로 남긴다).
 //
 // #1791 — **노드 세션(node_id 있음)도 여기 산다. 쓰는 쪽은 게이트웨이뿐이다.** 노드 에이전트 프로세스(멤버 PC·워커)에는
-//  DB 가 없다 — 그래서 이 모듈의 쓰기·읽기는 노드에서 **조용히 no-op** 이다(아래 ON_NODE). 종전엔 노드의 createSession 이
+//  DB 가 없다 — 그래서 이 모듈의 쓰기·읽기는 노드에서 **조용히 no-op** 이다(아래 onNode()). 종전엔 노드의 createSession 이
 //  같은 upsert 를 시도해 세션마다 "desired-state 미러 실패" 를 찍고, collectSessions 의 desired 조회가 3초마다 실패 로그를
 //  남겼다(하루 9천 줄 — 실 오류를 가렸다). 노드 세션의 정본 행은 게이트웨이가 create 릴레이 직후 쓴다
 //  (terminal/node-session-state.ts). 노드가 이 표를 읽지 않아도 되는 이유: 노드는 자기 tmux(@box_*)로 충분하고,
 //  가시성·복원 판정은 전부 게이트웨이 몫이다(F7 정책/실행 분리).
 import { itemsPool } from "../db/client.js";
 import { type LabelSource } from "./session-label-source.js";
-
-// 노드 에이전트 프로세스 판별자 — sessions.ts 의 첫 지시 주입 분기와 같은 값(게이트웨이엔 없다).
-const ON_NODE = !!process.env.LIVELY_NODE_TOKEN;
+// 노드 에이전트 프로세스 판별자 — #2599 T2 이후 실행 토폴로지가 그 판정의 단일 출처다(자리마다 되묻지 않는다).
+import { onNode } from "../exec-topology.js";
 
 export interface SessionState {
   id: string;                 // 세션 id(box-<slug>-<hex>) = tmux 세션명 = claude --resume 인자(#905 C1)
@@ -327,7 +326,7 @@ export async function getSessionState(id: string): Promise<SessionState | undefi
  *  되살릴 수 없게 된다. 있으면 그대로 두는 것이 이 함수의 계약이다(ON CONFLICT DO NOTHING).
  */
 export async function insertDiscoveredSessionState(s: SessionStateInput): Promise<boolean> {
-  if (ON_NODE) return false;   // 노드엔 DB 가 없다(upsertSessionState 와 같은 규약)
+  if (onNode()) return false;   // 노드엔 DB 가 없다(upsertSessionState 와 같은 규약)
   const r = await itemsPool.query(
     `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites,
        project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id,
@@ -340,6 +339,38 @@ export async function insertDiscoveredSessionState(s: SessionStateInput): Promis
      JSON.stringify(s.invites ?? []), s.project_id, s.project_src, s.read_only, s.incognito, s.write_vis ?? null,
      s.restrict_read, s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null]);
   return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * #2592 — **셀프 노드가 남긴 거짓 좌표를 치운다.** 멱등(몇 번 돌아도 결과가 같다).
+ *
+ * `node_id` 는 «이 세션을 그 컴퓨터로 릴레이하라»는 좌표다. 그런데 셀프 노드(게이트웨이가 도는 그 박스)의
+ *  좌표가 붙은 행은 전부 **중앙 세션**이다 — 노드가 자기 tmux(=게이트웨이 tmux)를 훑어 올린 스냅샷이
+ *  발견 기록으로 들어간 것이다(dev 실측 2026-09-03: 286행, 그중 72행이 «복원 불가 노드 세션»으로 사이드바에 잔류).
+ *
+ * 두 갈래로 나눈다 — 판정 기준은 **되살릴 수 있는가**다:
+ *  ⓐ 좌표를 모르는 발견 행(`discovered AND root_key IS NULL`)이면서 지금 tmux 에도 없는 것 → **삭제**.
+ *     이 행은 제품이 복원을 거절하고(terminal/routes.ts 409) 라이브도 아니므로, 남겨 둬야 사이드바에
+ *     되살릴 수 없는 줄로만 남는다. 세션 기록(트랜스크립트 파일)은 이 행과 무관하게 디스크에 그대로 있다.
+ *  ⓑ 그 밖(살아 있거나·좌표를 아는 행) → **좌표만 턴다**(`node_id=NULL`). 행은 중앙 세션의 desired-state 로
+ *     그대로 쓸모가 있다(라벨·초대·마지막 프롬프트·대화 uuid). 지우면 그것들이 함께 사라진다.
+ *
+ * @param nodeId 셀프 노드로 판정된 노드 id
+ * @param liveIds 지금 이 게이트웨이 tmux 에 **살아 있는** 세션 id — 못 봤으면 빈 집합이 아니라 호출하지 말 것
+ *  (빈 집합을 주면 살아 있는 세션의 행까지 ⓐ 로 몰려 삭제된다).
+ */
+export async function clearSelfNodeSessionRows(
+  nodeId: string, liveIds: ReadonlySet<string>,
+): Promise<{ deleted: number; cleared: number }> {
+  if (onNode()) return { deleted: 0, cleared: 0 };
+  const live = [...liveIds];
+  const del = await itemsPool.query(
+    `DELETE FROM org_session_state
+      WHERE node_id=$1 AND discovered=true AND root_key IS NULL AND NOT (id = ANY($2::text[]))`,
+    [nodeId, live]);
+  const upd = await itemsPool.query(
+    `UPDATE org_session_state SET node_id=NULL, updated_at=now() WHERE node_id=$1`, [nodeId]);
+  return { deleted: del.rowCount ?? 0, cleared: upd.rowCount ?? 0 };
 }
 
 /** 여러 세션의 desired-state 를 **한 번에**(#2022). 화면 하나가 세션 수십 개의 이름·소속을 물을 때
@@ -372,7 +403,7 @@ export async function listAllSessionStates(): Promise<SessionState[]> {
 //  (빼면 «행 없음» 이 되어 오늘의 합의 경로로 떨어질 뿐이지만, 은퇴를 은퇴라 말할 수 있어야 좀비 사본을 회수한다).
 export interface SessionLedgerRow { id: string; superseded_by: string | null; node_id: string | null }
 export async function listSessionLedgerRows(): Promise<SessionLedgerRow[]> {
-  if (ON_NODE) return [];
+  if (onNode()) return [];
   const r = await itemsPool.query("SELECT id, superseded_by, node_id FROM org_session_state");
   return r.rows.map((x: Record<string, unknown>) => ({
     id: String(x.id), superseded_by: (x.superseded_by as string | null) ?? null, node_id: (x.node_id as string | null) ?? null,
@@ -382,7 +413,7 @@ export async function listSessionLedgerRows(): Promise<SessionLedgerRow[]> {
 // 세션 생성/재생성 시 desired-state 미러 upsert(#1059 E). id 충돌 시 전량 갱신 + last_seen=now.
 //  ⚠ best-effort 로 호출된다(createSession 이 실패를 삼킴) — DB 가 죽어도 세션 생성 자체는 진행돼야 한다.
 export async function upsertSessionState(s: SessionStateInput): Promise<void> {
-  if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다. 노드 세션의 행은 게이트웨이가 릴레이 직후 쓴다(헤더).
+  if (onNode()) return;   // #1791 — 노드엔 DB 가 없다. 노드 세션의 행은 게이트웨이가 릴레이 직후 쓴다(헤더).
   await itemsPool.query(
     `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, label_source, kind, last_seen, updated_at)
      VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,$21,COALESCE($22,'human'),now(),now())
@@ -417,7 +448,7 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
 
 // 라벨/초대 변경(editSession) 미러. 레코드 없으면 no-op(구 세션은 다음 upsert 계기에 편입).
 export async function updateSessionStateMeta(id: string, patch: { label?: string; label_source?: LabelSource; invites?: string[]; project_id?: number | null; project_src?: "v6" | "org" | null }): Promise<void> {
-  if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다(게이트웨이가 릴레이 뒤 자기 행을 고친다)
+  if (onNode()) return;   // #1791 — 노드엔 DB 가 없다(게이트웨이가 릴레이 뒤 자기 행을 고친다)
   const sets: string[] = [];
   const vals: unknown[] = [id];
   if (patch.label !== undefined) { vals.push(patch.label); sets.push(`label=$${vals.length}`); }
@@ -440,7 +471,7 @@ export async function updateSessionStateMeta(id: string, patch: { label?: string
 //  owner 게이트는 setClaudeSessionId 와 같은 규칙 — 호출자가 앞에서 한 번 더 막지만 쓰기 문장 자체가 닫혀 있어야 한다.
 //   둘 다 **실패가 아니다** — 호출자는 지금 이름을 그대로 두면 된다(이름은 화면 장식이지 작업이 아니다).
 export async function claimSessionLabel(id: string, label: string, source: LabelSource, owner: string): Promise<boolean> {
-  if (ON_NODE) return false;   // #1791 — 노드엔 DB 가 없다. 걸쇠는 게이트웨이가 쥔다(노드는 tmux 반영만).
+  if (onNode()) return false;   // #1791 — 노드엔 DB 가 없다. 걸쇠는 게이트웨이가 쥔다(노드는 tmux 반영만).
   const RANK = "CASE $4 WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'rule' THEN 2 ELSE 1 END";
   const CUR = "CASE COALESCE(label_source,'rule') WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'rule' THEN 2 ELSE 1 END";
   const r = await itemsPool.query(
@@ -454,7 +485,7 @@ export async function claimSessionLabel(id: string, label: string, source: Label
 // 마지막 작업 시각 갱신(#1059 E) — collectSessions 의 @box_last_busy 30초 스로틀 쓰기부에 편승(같은 주기).
 //  restorable 카드의 '마지막 작업' 표시가 정확하도록. 레코드 없으면 no-op(비치명). last_seen 도 함께(라이브 관측).
 export async function touchSessionBusy(id: string, lastBusy: number): Promise<void> {
-  if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다(노드 세션의 last_busy 는 상태 push 로 게이트웨이가 알고 있다)
+  if (onNode()) return;   // #1791 — 노드엔 DB 가 없다(노드 세션의 last_busy 는 상태 push 로 게이트웨이가 알고 있다)
   await itemsPool.query("UPDATE org_session_state SET last_busy=$2, last_seen=now(), updated_at=now() WHERE id=$1", [id, lastBusy]);
 }
 
@@ -464,7 +495,7 @@ export async function touchSessionBusy(id: string, lastBusy: number): Promise<vo
 //  이정표가 남으면 그 옛 주소들이 **영구히** 새 세션으로 이어진다(만료 없음 — 옛 링크는 나중에 눌릴수록 값지다).
 //  ⚠ 목록에서 빠지는 건 종전과 같다(listAllSessionStates 가 superseded_by IS NULL 로 거른다).
 export async function markSessionSuperseded(id: string, newId: string): Promise<boolean> {
-  if (ON_NODE) return false;   // #1791 — 노드엔 DB 가 없다(복원은 게이트웨이가 하므로 노드에선 안 불린다)
+  if (onNode()) return false;   // #1791 — 노드엔 DB 가 없다(복원은 게이트웨이가 하므로 노드에선 안 불린다)
   if (!id || !newId || id === newId) return false;   // 자기 자신을 가리키면 이정표가 아니라 무한고리다
   const r = await itemsPool.query("UPDATE org_session_state SET superseded_by=$2, updated_at=now() WHERE id=$1", [id, newId]);
   return (r.rowCount ?? 0) > 0;
@@ -480,7 +511,7 @@ export async function markSessionSuperseded(id: string, newId: string): Promise<
  *  ⚠ 고리 방어 — 이론상 A→B→A 가 생기면 영원히 돈다. 본 적 있는 id 를 만나면 멈춘다(hop 상한도 함께).
  */
 export async function resolveSessionSuccessor(id: string, maxHops = 16): Promise<string | null> {
-  if (ON_NODE) return null;
+  if (onNode()) return null;
   const seen = new Set<string>([id]);
   let cur = id;
   let last: string | null = null;
@@ -540,6 +571,6 @@ async function successorByConversation(id: string): Promise<string | null> {
 
 // desired-state 삭제 — 사용자가 **명시적으로 kill** 한 세션만(복원 안 함). reaper 회수는 보존(restorable) 하므로 호출 안 함.
 export async function deleteSessionState(id: string): Promise<void> {
-  if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다(노드 세션 kill 은 게이트웨이 DELETE 라우트가 행을 지운다)
+  if (onNode()) return;   // #1791 — 노드엔 DB 가 없다(노드 세션 kill 은 게이트웨이 DELETE 라우트가 행을 지운다)
   await itemsPool.query("DELETE FROM org_session_state WHERE id=$1", [id]);
 }

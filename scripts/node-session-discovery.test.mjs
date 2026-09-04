@@ -90,7 +90,9 @@ ok(/armNodeSessionDiscovery/.test(BOOT),
 ok(/ADD COLUMN IF NOT EXISTS discovered BOOLEAN NOT NULL DEFAULT false/.test(SCHEMA),
   "C11 discovered 컬럼은 멱등 추가된다(기존 행은 false = 종전 의미 그대로)");
 
-ok(/if \(ON_NODE\) return false;/.test(INSERT()),
+// #2599 T2 — 판별자의 철자가 `ON_NODE`(모듈 상수) 에서 `onNode()`(실행 토폴로지 조회)로 바뀌었다.
+//  지키려는 불변식은 그대로다: **노드에서는 이 쓰기가 no-op 이어야 한다**(노드엔 DB 가 없다).
+ok(/if \(onNode\(\)\) return false;/.test(INSERT()),
   "C12 노드에서 실행될 땐 no-op — 노드엔 DB 가 없다(upsertSessionState 와 같은 규약)");
 
 console.log(`node-session-discovery: ${pass} passed`);

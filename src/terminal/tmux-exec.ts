@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
+import { execTopology, tmuxArgvFor, tmuxServerIsDedicated } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -35,34 +36,12 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
  * 계약: 지정한 프로그램에 **tmux argv 를 그대로 이어 붙여** 실행한다. stdout 이 tmux 의 stdout 이고,
  *  0 이 아닌 종료코드는 예외다(로컬 실행과 같은 규약 — 상위의 try/catch 가 그대로 동작해야 한다).
  *
- * ⚠ **호출 시점에 읽는다.** 모듈 로드 시점에 굳히면 부팅 순서·테스트에서 값이 안 먹는다
- *  (세션 spawn 훅에서 같은 함정을 밟았다).
+ * #2599 T2 — 「tmux 가 어디 있나」(부팅 상수)와 「지금 요청이 어느 워크스페이스인가」(요청 컨텍스트)의
+ *  **결합은 토폴로지 모듈이 소유한다.** 여기 남은 것은 그 두 입력을 건네는 일뿐이다.
  * ⚠ attach(`tmux -CC`)는 이 경로가 아니다 — 그건 PTY 라 terminal-pty 가 따로 다룬다.
  */
 export function tmuxExecArgv(): string[] {
-  const raw = (process.env.LIVELY_TMUX_EXEC || "").trim();
-  if (!raw) {
-    // ── 셀프호스트 registry(#1750 S3) — 같은 호스트에서 워크스페이스마다 tmux 서버를 가른다. ──
-    //  secondary 컨텍스트면 `-L lvly-<slug>` 전용 소켓: 세션 목록·옵션·attach 가 전부 그 서버 안이라
-    //  **다른 워크스페이스의 세션이 목록에 뜨는 일 자체가 없다**(이름 규약이 아니라 서버 격리).
-    //  primary(무컨텍스트)는 기본 소켓 = 종전 그대로(기존 세션 무회귀). 매니지드는 raw(중계)가 있어 여기 안 온다.
-    if ((process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry") {
-      const slug = tenantSlug();
-      if (slug && slug !== "primary") return [TMUX_BIN, "-L", `lvly-${slug}`];
-    }
-    return [];
-  }
-  if (!raw.includes("{slug}")) return raw.split(/\s+/);
-  // ── 테넌트별 중계(#1437 v1 5단계) ──
-  //  게이트웨이 하나가 여러 워크스페이스를 서비스하면 **tmux 서버도 워크스페이스마다 다르다.**
-  //  중계 명령에 `{slug}` 를 넣어 그 테넌트의 tmux 컨테이너를 가리키게 한다.
-  //   예: `docker exec -u 200001 lvly-s-{slug}-tmux tmux`
-  const slug = tenantSlug();
-  // ★★ **로컬 tmux 로 폴백하지 않는다.** 폴백하면 게이트웨이 호스트에서 tmux 가 돌아
-  //  ⓐ 그 세션이 엉뚱한 자리에 생기고 ⓑ 모든 테넌트가 **같은 tmux 서버**를 공유하게 된다
-  //  (= 남의 세션이 목록에 보인다). 컨텍스트를 잃은 건 배선 버그이고, 배선 버그는 오류로 드러나야 한다.
-  if (!slug) throw new Error("tmux 중계에 테넌트 컨텍스트가 필요합니다 — 컨텍스트 밖에서 호출됐습니다");
-  return raw.replace("{slug}", slug).split(/\s+/);
+  return tmuxArgvFor(tenantSlug(), TMUX_BIN);
 }
 
 export async function tmux(args: string[]): Promise<string> {
@@ -165,18 +144,52 @@ export async function listSessionPanePids(): Promise<{ ok: boolean; panes: Map<s
 //  웹터미널이 '세션 종료됨'을 띄우려면 ⓑ여야 한다 — ⓒ를 종료로 오인하면 살아있는 세션을 죽었다고 알리게 되는데,
 //  그게 #687 이 막으려던 바로 그 오인이다(그래서 그때 프론트를 '계속 재연결'로 바꿨고, 이번엔 그 반대급부인
 //  '진짜 닫혔는데 영원히 재접속중'을 고친다). 따라서 tmux 가 **응답해서 "그런 세션 없음"이라고 말할 때만** true.
-// 관리형 중계 배포인가(#1437) — tmux 가 **테넌트별 컨테이너** 안에 사는 배포. 이 판정이 gone 확답의 범위를 바꾼다:
-//  중계에선 tmux 서버 부재("no server running")가 '일시장애'가 아니라 그 테넌트 세션의 **영구 소실**이다(아래 머리말).
-//  · LIVELY_TMUX_EXEC = 중계 클라이언트(tmux-relay.cjs). registry 모드(`-L lvly-<slug>` 로컬 소켓)는 이 env 가 없어
-//    여기 안 걸린다 — 로컬 단일호스트의 보수적 판정(서버 부재=판정 불가)을 그대로 유지한다(무회귀).
-export function tmuxRelayManaged(): boolean {
-  return !!(process.env.LIVELY_TMUX_EXEC || "").trim();
+// ── 종전 `tmuxRelayManaged()` 를 두 술어로 가른다 (#2599 T3 · 조사 함정 4) ─────────────────────────
+// 그 이름 하나가 **서로 다른 두 질문**에 답하고 있었다. 답이 갈리는 표면(registry secondary)이 있어서,
+//  한쪽을 고치면 다른 쪽이 함께 바뀌는 구조였다 — 그게 함정 4 가 T2 까지 안 고쳐진 이유다.
+//   Q1 «tmux 서버가 없다 = 그 세션들이 영구 소실됐다는 확답인가»  → 아래 tmuxServerAbsenceIsFinal
+//   Q2 «tmux 호출이 중계를 지나나(= 실패가 전송 장애일 수 있나)»   → 아래 tmuxViaRelay
+
+/**
+ * tmux 서버 부재("no server running")를 **세션 영구 소실의 확답**으로 승격해도 되는 자리인가(#1437).
+ *
+ * 참인 조건은 «**이 호출이** 간 tmux 서버가 그 워크스페이스 전용인가» 다 — 전용 서버가 없으면 그 서버에만
+ *  살던 인메모리 세션은 실제로 증발한 것이고, 스스로 돌아오지 않는다(복원만이 길이다).
+ *  · `exec`(매니지드 중계) — 테넌트별 tmux 컨테이너. #1437 이 고친 원래 자리.
+ *  · 이름 있는 소켓 + 슬러그 있음(registry **secondary**, `-L lvly-<slug>`) — 워크스페이스 전용 소켓이라
+ *    같은 논리가 성립한다. T2 까지는 여기가 «판정 불가» 로 접혀 셀프호스트 secondary 가 #1437 이전 증상
+ *    (복원이 영영 안 열리고 클라가 무한 재연결)을 그대로 갖고 있었다 — 조사 함정 4 가 지목한 구멍이다.
+ *  · 기본 소켓(공용)은 **종전 그대로 거짓** — #835 의 보수적 규약(모르면 종료라 말하지 않는다)을 지킨다.
+ *
+ * ⚠ **부팅 상수가 아니라 요청 축이다.** registry 모드로 뜬 게이트웨이도 primary 워크스페이스를
+ *  무컨텍스트로 함께 서비스하고, 그 호출은 `tmuxArgvFor` 가 **공용 기본 소켓**으로 보낸다. 그래서 슬러그를
+ *  받아야 하고, 판정은 argv 를 만드는 쪽과 **같은 함수**(`tmuxServerIsDedicated`)를 봐야 어긋나지 않는다.
+ *  (첫 구현은 `tmux.socket !== null` 만 봤다가 리뷰에서 잡혔다 — T3 이 `attachTransport` 를 지운 이유와 같은 함정.)
+ *
+ * ⚠ 소켓 **파일이 사라진** 경우("error connecting … No such file or directory")도 확답으로 둔다.
+ *  서버 프로세스가 살아 있더라도 경로가 unlink 되면 **어떤 클라이언트도 다시 붙을 수 없다**(tmux 에 다른
+ *  통로가 없다). 즉 그 세션들은 실제로 회수 불가이고, 사람에게 옳은 안내는 «복원» 이다.
+ */
+export function tmuxServerAbsenceIsFinal(slug: string | null = tenantSlug()): boolean {
+  return tmuxServerIsDedicated(slug);
+}
+
+/**
+ * tmux 호출이 **중계를 지나나**(매니지드) — 목록 실패를 «못 봤다» 로 볼 수 있는 자리인가(#2544).
+ *
+ * ⚠ 위 술어와 **일부러 다르다.** 중계는 브로커 재접속·허브 503·타임아웃 같은 «전송이 못 닿았다» 가 있어
+ *  목록 실패가 «세션 0개» 를 뜻하지 않는다. 로컬 소켓(primary·registry secondary)은 전송 층이 없어서
+ *  그 폴백이 성립하지 않는다 — `session-unobserved` 머리말이 «registry 는 이 조각에 들어오지 않는다» 를
+ *  #2544 의 완료 조건으로 적어 두었다. 그래서 gone 확답을 secondary 로 넓히면서도 이쪽은 안 넓힌다.
+ */
+export function tmuxViaRelay(): boolean {
+  return execTopology().tmux.kind === "exec";
 }
 // 중계에서 'tmux 서버 자체가 없다'의 확답 문구 — 소켓이 스테일(서버 죽음)이면 "no server running on <path>",
 //  소켓 파일이 없으면(재생성된 빈 컨테이너) "error connecting to <path> (No such file or directory)".
 //  ⚠ 컨테이너 보장/생성 실패("tmux 컨테이너 …")는 여기 안 걸린다 = 판정 불가로 남는다(도커·노드 일시장애 → 재연결 유지).
 const RELAY_SERVER_GONE_RE = /\bno server running\b|error connecting to .+\((?:No such file or directory|Connection refused)\)/i;
-export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, relayManaged: boolean = tmuxRelayManaged()): boolean {
+export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, serverAbsenceIsFinal: boolean = tmuxServerAbsenceIsFinal()): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown; code?: unknown };
   if (e.killed || e.signal) return false; // 타임아웃(SIGTERM 으로 kill)·시그널 종료 → 판정 불가
@@ -190,7 +203,7 @@ export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, relayMa
   //  (상민님 실측 2026-08-26, lively-46e3/box-sangmin-yoon: has-session → "no server running", 복원 두 번 뜨고 실패).
   //  #835 오검출 위험 없음: **살아 있는 세션은 서버가 살아 있다는 뜻**이라 이 문구가 나올 수 없다(그땐 has-session 성공
   //  또는 "can't find session"). 컨테이너 정지→재기동 창의 서버 부재도 그 테넌트 세션이 실제로 증발한 상태라 gone 이 맞다.
-  if (relayManaged && RELAY_SERVER_GONE_RE.test(String(e.stderr ?? ""))) return true;
+  if (serverAbsenceIsFinal && RELAY_SERVER_GONE_RE.test(String(e.stderr ?? ""))) return true;
   // psmux(윈도우 노드, #1791 실측): `has-session -t <없는 id>` 가 **stderr 한 글자 없이 exit 1** 로 끝난다(tmux 의 "can't find
   //  session" 문구가 없다). 그래서 종전엔 윈도우 노드의 죽은 세션이 영영 '판정 불가'였다 — nodeCanAttach 가 4410 대신 4403 을
   //  내고, #1791 복원·삭제의 gone 확답도 못 받았다(복원이 already 로 끝남, 실측). psmux 는 서버가 세션당 프로세스라

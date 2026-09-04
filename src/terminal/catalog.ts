@@ -55,6 +55,21 @@ export function installTenantSlugResolver(fn: TenantSlugResolver): void {
 /** 슬러그는 경로에 들어간다 — 형식을 통과 못 하면 **테넌트 경로를 쓰지 않는다**(폴백이 아니라 무시). */
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
+/** 사람에게 보여 줄 형식 설명 — 배선을 고치는 쪽이 규칙을 추측하지 않게(정규식과 한 자리). */
+export const TENANT_SLUG_SHAPE = "소문자·숫자로 시작, 소문자·숫자·하이픈 1~63자";
+
+/**
+ * 이 값이 테넌트 슬러그로 **쓰일 수 있나** (#2600 T2).
+ *
+ * `tenantSlug()` 는 형식을 통과 못 한 값을 «없음»(null)으로 **접는다** — 요청 경로에서는 그게 맞다
+ *  (단일 테넌트로 떨어지는 안전한 기본값). 그런데 **부팅에서 배선을 검사하는 쪽**은 «접혔다»와
+ *  «애초에 없었다»를 구별해야 한다: 접히면 그 프로세스는 슬러그를 실어 줬는데도 테넌트를 모르는
+ *  상태로 살아 있고, 그 사실은 첫 attach 에서야 드러난다. 그래서 같은 자로 재는 술어를 따로 낸다.
+ */
+export function tenantSlugIsWellFormed(s: string): boolean {
+  return SAFE_SLUG.test(s);
+}
+
 /**
  * 지금 이 요청의 테넌트 슬러그(형식 검증 통과분만). 없으면 null = 단일 테넌트.
  *  ⚠ 이 값은 경로·컨테이너 이름에 들어가므로 **여기서 한 번만** 검증한다 — 호출부마다 다시 재면 갈린다.
@@ -73,6 +88,11 @@ function tenantRootBase(): string | null {
   // 셀프호스트 registry(#1750 S3) — 템플릿 미설정이면 홈 아래 기본 자리로 워크스페이스별 파일루트를 가른다.
   //  primary 는 slug 가 없어 여기 안 걸린다(= 종전 경로 그대로, 기존 파일 무회귀). DB 만 갈라지고 파일이
   //  섞이면 파일 탐색기에서 곧바로 남의 파일이 보인다 — 그래서 기본값이 있어야 한다(옵트인이 아니라).
+  //  ⚠ #2599 T3 — 이 술어의 **정본은 `org/tenancy/state.registryModeActive()`** 이고, 다른 인라인
+  //   재구현 3곳은 그 호출로 접었다. 여기만 남긴 이유는 «못 접어서» 가 아니라 **번들 경계** 다:
+  //   catalog 는 노드 에이전트 번들에 실리는데(scripts/node-agent-allowed-modules.json) 정본이 사는
+  //   org/tenancy/state 는 안 실린다 — import 하면 ops/state-dir 까지 딸려 들어간다(#2165: 간선 하나가
+  //   11개를 끌었다). 접는 값보다 경계를 지키는 값이 커서 남긴다. 철자를 고칠 일이 생기면 **정본과 함께** 고쳐라.
   const tpl = process.env.LIVELY_TENANT_ROOT_TEMPLATE
     || ((process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry"
       ? path.join(os.homedir(), "lively", "workspaces", "{slug}") : "");

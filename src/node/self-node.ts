@@ -44,3 +44,69 @@ export function sharesGatewayTmux(
   if (!gatewaySessionIds.size || !nodeSessionIds.length) return false;   // 볼 것이 없다 = 판정 불가(≠ 아니다)
   return nodeSessionIds.some((id) => gatewaySessionIds.has(id));
 }
+
+// ── #2592 — 그 판정을 **집행**하는 자리들이 쓰는 순수 술어 ────────────────────────
+//
+// #2108 은 이 판정으로 «그 노드로 새로 만들기»만 막았다. 그런데 셀프 노드가 새는 구멍은 넷이었다
+//  (2026-09-03 dev 실측): 접속(`?node=` 릴레이) · 목록 좌표 · DB 발견 기록 · 자기등록.
+//  판정 술어는 **손대지 않는다**(오탐 0 이 그 술어의 값어치다) — 아래 얇은 함수들이 그 넷을 같은 술어에 문다.
+
+/**
+ * 화면·DB 가 준 노드 좌표를 **릴레이 지시로 쓸 값**으로 정규화한다 — 셀프 노드면 좌표를 버린다.
+ *
+ * `node` 는 배지가 아니라 **좌표**다(session-merge.ts 머리말): 화면은 그 값으로 `?node=`/`&node=` 를 붙여
+ *  입장·메타조회·프롬프트·종료를 그 노드로 릴레이한다. 그런데 셀프 노드의 좌표가 뜻하는 것은 «저 컴퓨터로 가라»가
+ *  아니라 **같은 tmux 로 한 바퀴 돌아오라**다. 그 한 바퀴가 3초 스냅샷 지연·부팅 직후 4462(node-offline) 거부·
+ *  노드 데몬의 `tmux -CC attach` 릴레이를 만든다 — 중앙 경로가 tmux 에 직접 물어 즉답을 받는 자리에서.
+ *  빈 문자열로 접으면 호출부는 종전의 중앙 경로를 그대로 탄다. **같은 tmux 라 결과가 같고**, 더 빠르다.
+ *
+ * @param raw 화면이 준 `?node=` 또는 DB `node_id`(빈 값·공백 허용)
+ * @param isSelf 셀프 노드 판정(registry.isSelfNode — 확답 관측일 때만 true)
+ */
+export function relayNodeId(raw: string | null | undefined, isSelf: (id: string) => boolean): string {
+  const id = String(raw ?? "").trim();
+  if (!id) return "";
+  return isSelf(id) ? "" : id;
+}
+
+/**
+ * 이 세션의 좌표를 **되찾는다** — «누가 이 세션의 생사에 답할 자격이 있나»(#2636).
+ *
+ * `relayNodeId` 는 **화면이 준 값 하나**를 정규화한다. 그런데 좌표를 아는 것은 화면만이 아니다:
+ *  desired-state(`org_session_state.node_id`)와 노드 레지스트리 스냅샷도 안다. 종전 세션 DELETE 라우트는
+ *  `?node=` 만 봤고, 그래서 **좌표를 안 싣는 호출**(대시보드 '내 AI 세션' 위젯)이 오면 노드 세션의 생사를
+ *  게이트웨이 **로컬 tmux** 로 판정했다. 그 tmux 는 그 세션을 본 적이 없으니 언제나 「없다」고 답한다
+ *  (#2636 T0 실측: 실제 노드 세션 id 6개 전부 `can't find session`) — 라우트는 노드에 묻지도 않고
+ *  desired-state 행만 지운 뒤 «종료했어요» 라고 답했다. 세션은 그 컴퓨터에 그대로 남는다(누수).
+ *  그리고 행이 사라진 다음 호출은 `ownerMeta` 가 null 이 되어 **403 「본인 세션이 아닙니다」**가 된다.
+ *
+ * 좌표를 되찾으면 그 세션은 **이미 옳은 분기**(노드 릴레이 — `gone` op 3값 계약 · kill 릴레이 · 실패 시
+ *  재확인)로 흘러간다. 중앙 경로에 판정을 새로 심지 않는 이유다 — 같은 규율이 두 벌로 갈리면 한쪽이
+ *  반드시 뒤처지고, 그게 #2622 가 회수기만 고치고 이 라우트를 남긴 그 모양이다.
+ *
+ * 순서는 **확실한 것부터**: 화면이 준 좌표 → desired-state → 레지스트리 스냅샷.
+ *  ⚠ 셋 다 `relayNodeId` 를 거친다 — 셀프 노드 좌표는 **어느 출처에서 와도** 접어야 한다(#2592: 마이그레이션
+ *   전 행이나 다른 게이트웨이가 쓴 행에는 셀프 노드 id 가 그대로 실려 온다).
+ *  ⚠ 빈 문자열은 «중앙 세션이다»가 아니라 **«좌표를 못 찾았다»**이다. 호출부가 그 구분을 진다.
+ */
+export function sessionRelayNodeId(
+  sources: { query?: string | null; desired?: string | null; snapshot?: string | null },
+  isSelf: (id: string) => boolean,
+): string {
+  return relayNodeId(sources.query, isSelf)
+    || relayNodeId(sources.desired, isSelf)
+    || relayNodeId(sources.snapshot, isSelf);
+}
+
+/**
+ * 사람에게 할 말 — «이 노드는 게이트웨이 자신이다» 하나의 사실을 여러 표면(등록 409·close 사유·관리 배지·CLI)이
+ *  각자 다른 문장으로 말하면, 같은 상황을 겪은 두 사람이 서로 다른 원인을 짚는다. 문구를 여기 한 곳에 둔다.
+ */
+export const SELF_NODE_REASON = "self-node";
+export function selfNodeMessage(nodeId?: string): string {
+  const who = nodeId ? `노드 '${nodeId}' 는` : "이 노드는";
+  return `${who} 게이트웨이가 도는 바로 그 컴퓨터입니다(같은 tmux 를 씁니다).`
+    + " 이 컴퓨터의 세션은 노드를 거치지 않고 '중앙 컴퓨터(기본)'로 열립니다 — 노드로 한 번 더 돌면 같은 세션이"
+    + " 두 경로로 잡혀 접속이 노드 릴레이로 새고 목록에 거짓 좌표가 붙습니다."
+    + " 그 컴퓨터에서 `lively node stop` 을 실행하면 노드 연결이 내려갑니다.";
+}

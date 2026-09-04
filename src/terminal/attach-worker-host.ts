@@ -21,7 +21,8 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { TenantContext } from "../org/tenant-context.js";
 import { installAttachOwnedPids, installAttachWorkerTally } from "./terminal-pty.js";
-import { AttachRouter, parseWorkerK } from "./attach-router.js";
+import { AttachRouter } from "./attach-router.js";
+import { execTopology } from "../exec-topology.js";   // #2599 T2 — K 는 토폴로지가 이미 해석해 든다
 import { logger } from "../log.js";
 
 const ENTRY = fileURLToPath(new URL("./attach-worker-entry.js", import.meta.url));
@@ -48,7 +49,7 @@ export class AttachWorkerHost {
   private readonly router: AttachRouter;
   private readonly workers = new Map<number, Worker>();
 
-  constructor(k: number = parseWorkerK(process.env.LIVELY_ATTACH_WORKER_K)) {
+  constructor(k: number = execTopology().attachWorkerK) {
     this.k = k;
     this.router = new AttachRouter(k);
     // #687 누수 지표 무회귀 — 게이트웨이의 liveAttachCount()/scanAttachProcs() 가 워커로 옮겨간 attach 도
@@ -68,6 +69,10 @@ export class AttachWorkerHost {
    */
   async handoff(input: HandoffInput): Promise<boolean> {
     if (!this.enabled()) return false;
+    //  ★ 불변식 3ᵍ — 이 세션이 이미 게이트웨이 소유면 **워커로 보내지 않는다.** 보내면 같은 세션의
+    //   attach 가 두 프로세스로 갈리고, `attachRefs` 는 프로세스마다 따로라 양쪽이 «내가 마지막» 으로
+    //   오판해 먼저 닫힌 쪽이 `detach-client -s` 로 **살아 있는 다른 화면을 끊는다**(#2148 실측 재현).
+    if (this.router.isGatewayOwned(input.id)) return false;
     const msg = {
       t: "attach" as const, id: input.id, tenant: input.tenant,
       method: input.req.method, url: input.req.url, headers: input.req.headers,
@@ -82,8 +87,18 @@ export class AttachWorkerHost {
       // send 실패 = 채널이 끊겼다 → 핸들이 전달되지 않았다(소켓은 아직 우리 것). 워커를 버리고 재시도.
       this.reap(w.pid, "send-failed");
     }
+    //  폴백이 확정됐다 — 이 세션은 이제 **게이트웨이가 소유**한다(불변식 3ᵍ). 그 세션이 빌 때
+    //   `releaseSession` 이 풀어 준다(게이트웨이 세션 호스트의 onSessionEmpty → 아래 releaseSession).
+    this.router.claimForGateway(input.id);
     return false;
   }
+
+  /**
+   * 게이트웨이 인프로세스 attach 가 끝나 그 세션이 비었다 — 소유를 푼다.
+   *  `terminal-pty-upgrade` 의 세션 호스트가 `onSessionEmpty` 로 부른다. 워커의 'session-empty' 와
+   *  **같은 자리**로 들어온다(장부가 하나라 소유자가 누구든 푸는 문이 하나다).
+   */
+  releaseSession(id: string): void { this.router.releaseSession(id); }
 
   /** 이 세션을 받을 워커를 확보한다(sticky 재사용 또는 신규 포크). null = 상한/포크 실패 → fail-open. */
   private acquire(id: string): Worker | null {

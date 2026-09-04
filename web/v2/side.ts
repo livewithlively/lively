@@ -812,6 +812,14 @@ function render(): void {
   //  흩어진다(실측: 아무것도 안 해도 30초에 한 번 입력칸이 새로 난다). renderLegacy 의 `renaming` 가드와 같은 규율:
   //  갱신은 **다시 오지만**, 사람이 치던 글자는 다시 오지 않는다. 조합이 끝나면 다음 폴링이 곧 따라잡는다.
   if (findComposing) return;
+  // 이름을 고치는 중이면 이번 판은 건너뛴다 — 같은 규율, 같은 이유(사람이 치던 글자는 다시 오지 않는다).
+  //  ⚠ #2579 — 이 가드는 종전에 **renderLegacy 에만** 있었다(#1883 에서 붓이 renderProjects/renderTree 로
+  //   옮겨 갔는데 가드는 따라오지 않았다). 그래서 프로젝트 줄을 더블클릭하면: 첫 클릭이 항해 → 그 라우팅이 부른
+  //   drawSide 가 **구역을 통째로 다시 세워**(renderProjects 의 host.replaceChildren) 방금 연 입력칸을 지웠다.
+  //   그러면 finish 가 못 돌아 종전 불리언 플래그가 true 로 굳었고, 그 뒤로는 **세션 이름까지 포함해 이 페이지가
+  //   끝날 때까지 rename 이 한 번도 안 열렸다**(사람 눈엔 「폴더만 열렸다 닫힘」).
+  //   ⚠ 반드시 render() 자리여야 한다 — renderTree() 안에 두면 위 replaceChildren 이 이미 지운 뒤라 늦다.
+  if (renamingAlive()) return;
   const wsReg: any = (state.me as any)?.workspace_registry || {};
   const wsKind = (wsReg.active && wsReg.kind) || ((state.me as any)?.workspace?.kind);
   const sideRoot = last.host.closest('.v2-side');
@@ -1636,7 +1644,7 @@ function renderLegacy(): void {
   if (!last) return;
   // 이름을 고치는 중이면 이번 판은 건너뛴다 — 20초 폴링이 입력 중인 칸을 지우면 치던 이름이 사라진다.
   //  (편집은 blur·Enter·Esc 로 반드시 끝나고, 끝나면 그 경로가 다시 그린다.)
-  if (renaming) return;
+  if (renamingAlive()) return;
   const { host, data } = last;
   // 개인 워크스페이스 = 웜 캔버스(안3 문패의 온도축) — 클래스는 사이드바 뿌리(.v2-side)에 건다.
   const wsReg: any = (state.me as any)?.workspace_registry || {};
@@ -2353,7 +2361,14 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
       { label: '휴지통으로 보내기', danger: true, run: () => void trashProject(p, r) },
     ]);
   });
-  // 세션 줄과 같은 손짓 — 더블클릭하면 그 자리에서 이름을 고친다(문패 제목 클릭과 같은 편집).
+  // 세션 줄과 같은 손짓 — 더블클릭하면 그 자리에서 이름을 고친다(문패 연필과 같은 편집).
+  //  ⚠ #2579 — 이 줄은 `<a href>` 다. 더블클릭의 **두 번째 click 까지 그대로 두면 항해가 일어나고**,
+  //   그 항해가 부른 loadData 응답이 사이드바를 다시 그려 방금 연 입력칸을 지운다. 그래서 두 번째 클릭
+  //   (`detail >= 2`)의 기본 동작만 막는다 — 첫 클릭의 이동은 그대로다(단일 클릭 문법을 안 건드린다).
+  //   ⌘/Ctrl 클릭(새 탭)은 손대지 않는다.
+  if (p) row.addEventListener('click', (e: MouseEvent) => {
+    if (e.detail >= 2 && !e.metaKey && !e.ctrlKey) { e.preventDefault(); e.stopPropagation(); }
+  });
   if (p) row.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); beginRenameProject(pk, p); });
   const head = sess.slice(0, MAX_SESS);
   const pastHead = past.slice(0, MAX_SESS);
@@ -2486,17 +2501,27 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
 //  ⚠ 세션은 이름 자리에 그려진 글(main)이 **원래 이름이 아닐 수 있다** — sessText 가 프로젝트명 되풀이를 걷어내고
 //   pane 제목·첫 지시를 그 자리에 올리기 때문이다(#1808). 그래서 편집칸의 초기값은 화면 글이 아니라
 //   **진짜 이름**(세션 s.label · 프로젝트 p.name)이다. 그리지 않은 것을 고치게 하면 사용자는 자기가 안 쓴 글을 지우게 된다.
-let renaming = false;
+/** 지금 열려 있는 이름 입력칸. null 이면 아무도 안 고치는 중이다.
+ *  ⚠ 불리언이 아니라 **그 노드**를 든다(#2579): 불리언은 한 번 어긋나면 스스로 못 푼다 — 입력칸이 어떤 이유로든
+ *   화면에서 뜯겨 나가면(다른 코드의 replaceChildren·탭 교체) finish 가 못 돌고 플래그가 true 로 굳어
+ *   **그 뒤 모든 rename 이 조용히 막힌다**. 노드를 들고 isConnected 로 물으면 그 상태가 원리적으로 없다. */
+let renamingEl: HTMLElement | null = null;
+/** 이름을 고치는 중인가 — 화면에 붙어 있는 입력칸이 실제로 있을 때만 참(스스로 낫는 판정). */
+function renamingAlive(): boolean {
+  if (renamingEl && renamingEl.isConnected) return true;
+  renamingEl = null;
+  return false;
+}
 function inlineRename(nameEl: HTMLElement, cfg: { value: string; label: string; save: (next: string) => Promise<void> }): void {
-  if (renaming) return;
-  renaming = true;
+  if (renamingAlive()) return;
   const shown = nameEl.textContent || '';
   const input = el('input', { class: 'v2-ss-edit', type: 'text', value: cfg.value || shown, 'aria-label': cfg.label }) as HTMLInputElement;
   nameEl.replaceChildren(input);
+  renamingEl = input;
   input.focus(); input.select();
   let done = false;
   const finish = async (save: boolean): Promise<void> => {
-    if (done) return; done = true; renaming = false;
+    if (done) return; done = true; renamingEl = null;
     const next = input.value.trim();
     if (!save || !next || next === cfg.value) { nameEl.replaceChildren(document.createTextNode(shown)); return; }
     nameEl.replaceChildren(document.createTextNode(next));

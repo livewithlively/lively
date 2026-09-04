@@ -30,16 +30,25 @@ import { listProjectActivities } from "./v6/project-activity-store.js";
 import { createProjectFolder } from "./project/project-fs.js";
 import { stateRoot } from "./ops/state-dir.js";
 import { roots } from "./terminal/terminal-sessions.js";
-import { readyReport } from "./ops/health.js";
+import { readyReport, gateBySchema } from "./ops/health.js";
 import { readStageSync } from "./ops/stage-sync-status.js";   // #2116 — dev 동기가 막혔는지 밖에서 보이게
 import { buildInfo } from "./build-info.js";
 import { effectiveStoragePolicy } from "./org/policies/storage-policy.js";
 import { registerMcpTransport } from "./boot/mcp-transport.js";
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
+import { schemaBootPhase, schemaBootChangedAt } from "./boot/boot-state.js";   // #2578 — /readyz 의 schema 신호
 import { loadEnterprise } from "./enterprise/load.js";
 import { logger } from "./log.js";
 import { shutdownGatewayWorkers } from "./apps/worker-service.js";
 import { shutdownAttachWorkers } from "./terminal/attach-worker-host.js"; // #2228 C안 — attach 워커 일괄 회수
+import { freezeExecTopology } from "./exec-topology.js";   // #2599 T2 — 실행 토폴로지를 부팅 때 한 번 확정
+
+// ★ 실행 토폴로지 확정(#2599 T2) — 「이 세션이 어디서 도나」를 여기서 **한 번** 정하고, 그 뒤 어느 코드도
+//  env 를 직접 읽지 않는다. ⚠ 자리는 여기여야 한다: 위 `boot/tenancy-env.js` 가 부팅 중에
+//  LIVELY_TENANCY_MODE 를 **쓰는데**, ESM 은 import 를 전부 실행한 뒤 본문을 돌리므로 이 줄은 그 뒤다.
+//  (모듈 로드 중 토폴로지를 묻는 자리들 — 예: terminal-isolation 의 BOX_SPAWN — 도 tenancy-env 뒤라
+//   같은 값을 본다. 이 확정은 그 값을 프로세스 수명 동안 못 박는 일이다.)
+freezeExecTopology();
 
 const PORT = Number(process.env.PORT ?? 8080);
 // 바인드 주소(#250) — 기본은 종전과 동일한 전 인터페이스(회귀 없음). SG 같은 방화벽 계층이 없는 호스트
@@ -138,7 +147,12 @@ app.get("/healthz", (_req, res) => {
 //  DB 불가 → 503(진짜 not-ready). 디스크 경고는 200 + status=degraded — 멀쩡한 서비스를 LB 에서 빼지 않는다(health.ts 참조).
 //  미인증: LB·모니터가 호출한다(k8s readiness 관례). 응답의 DB 에러는 health.ts 가 자격증명을 마스킹한다.
 //  저장소 정책 로더(loadStoragePolicy — 관리탭 DB 단일 출처·DB 다운에도 판정)는 boot/housekeeping.ts 참조.
+//  #2578 — 여기에 **스키마 준비 신호(schema)** 를 싣는다. healthz 200 은 listen 일 뿐 스키마 체인은 그 뒤 비동기라,
+//  설치 스크립트가 healthz 만 보고 부트스트랩을 돌려 `column "tenant_id" does not exist` 로 관리자 없는 박스가 됐다
+//  (2026-09-03 EC2 실측). pending/restarting/failed 면 503 — 판정 규칙·매니지드 무영향 근거는 ops/health.ts gateBySchema.
+//  설치·업데이트는 deploy/lib/common.sh 의 wait_ready 가 `"schema":"ready"` 를 기다린다(첫 부팅 자가 재기동 포함).
 app.get("/readyz", async (_req, res) => {
+  const schema = schemaBootPhase();
   try {
     const policy = await effectiveStoragePolicy(loadStoragePolicy);
     const report = await readyReport({
@@ -152,16 +166,18 @@ app.get("/readyz", async (_req, res) => {
     //  ⚠ 503 으로 만들지 않는다: 동기가 막힌 것은 '못 선다'가 아니라 '내용이 낡았다'이다(디스크 경고와 같은 등급).
     const sync = await readStageSync();
     const degraded = !!sync && !sync.ok;
-    res.status(report.ok ? 200 : 503).json({
+    const gated = gateBySchema({
       ...report,
-      ...(degraded && report.ok ? { status: "degraded" } : {}),
+      ...(degraded && report.ok ? { status: "degraded" as const } : {}),
       ...(sync ? { stageSync: sync } : {}),
       build: buildInfo(),
-    });
+      schemaSince: new Date(schemaBootChangedAt()).toISOString(),   // «얼마나 오래 pending 인가»를 밖에서 보게
+    }, schema);
+    res.status(gated.httpStatus).json(gated.body);
   } catch (err) {
     // 점검 자체가 터지면 '준비됨'이라 우길 근거가 없다 → fail-closed.
     logger.error({ err }, "readyz 점검 실패");
-    res.status(503).json({ ok: false, status: "down" });
+    res.status(503).json({ ok: false, status: "down", schema });
   }
 });
 

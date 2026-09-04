@@ -10,13 +10,14 @@ import { logger } from "../log.js";
 import { servedAgentVersion } from "./agent-bundle.js";   // #1713 — 노드에게 알려줄 서빙 번들 지문(단일 출처)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import {
-  NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, projectNodeSession, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
+  NODE_WS_PATH, PROTO_VER, CLOSE_SELF_NODE, decodeChanFrame, parseMsg, nodeSessionVisible, projectNodeSession, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
-import { sharesGatewayTmux, hasSelfProbeCandidate } from "./self-node.js";
+import { sharesGatewayTmux, hasSelfProbeCandidate, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
 
@@ -152,37 +153,109 @@ export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
 // 매니지드 공유 게이트웨이: 판정은 **박스 단위**이고 테넌트를 안 탄다 — 컨테이너 안에서 도는 노드는 어느
 //  테넌트가 등록했든 자기 자신이 맞고(같은 tmux), 멤버의 개인 PC 는 이 박스 tmux 와 겹칠 수 없어 절대 안 걸린다.
 //  겹친 id 자체는 어떤 응답에도 싣지 않는다(테넌트 간 노출 없음 — 노드마다 불리언 하나만 나간다).
+//
+// #2592 — 판정은 그대로 두고 **집행**을 늘렸다. 판정이 서는 순간 그 연결을 4409 로 끊는다(아래 probeSelfNodes).
+//  판정을 DB 에 굳히지 않는 이유: 굳히면 «한 번 잘못 선 판정이 그 멤버의 PC 를 영원히 숨긴다» — #2108 이
+//  호스트명 대용물을 거부한 것과 같은 비대칭이다. 프로세스가 새로 뜨면 첫 스냅샷에서 다시 도출된다(그 창은
+//  아래 applyState 가 발견 기록을 판정 뒤로 미뤄 막는다).
 const selfNodes = new Set<string>();          // states 와 같은 스코프 키
 const SELF_PROBE_MS = 30_000;
 let selfProbeAt = 0;
-let selfProbing = false;
+let selfProbing: Promise<void> | null = null;
 /** 지금 states 에 있는 것들을 판정 후보 형태로 — 순수 판정(hasSelfProbeCandidate)이 쓸 최소 형태만 넘긴다. */
 function* selfProbeCandidates(): Generator<{ key: string; sessionCount: number }> {
   for (const [k, st] of states) yield { key: k, sessionCount: st.sessions.length };
 }
-async function probeSelfNodes(): Promise<void> {
-  if (selfProbing) return;
+/**
+ * 판정을 한 판 돌린다. **반환 프로미스는 «지금 낼 수 있는 판정이 다 났다»는 뜻**이다(#2592) —
+ *  이미 도는 판정이 있으면 그것을, 스로틀·후보없음이면 즉시 완결을 준다. 호출부(applyState)가 이 값을
+ *  기다린 뒤에야 발견 기록 구독자를 부르므로, «판정 서기 전 첫 스냅샷»이 DB 에 새는 창이 없다.
+ */
+function probeSelfNodes(): Promise<void> {
+  if (selfProbing) return selfProbing;
   // ⚠ 순서가 중요하다 — **스로틀보다 먼저** 본다. 판정할 후보가 없으면 tmux 를 묻지도, 백오프를 쓰지도 않고
   //  물러난다. 부팅 직후가 정확히 그 상태이고(노드 WS 가 DB hydrate 보다 먼저 열린다), 종전엔 그 헛시도가
   //  30초를 먹어 그 동안 게이트웨이 자신이 목록에 남았다(#2172 실측 — 자기노드가 '내 노드' + 가장 최근
   //  연결이라 새 세션의 기본 실행 노드로까지 뽑혔다).
-  if (!hasSelfProbeCandidate(selfProbeCandidates(), selfNodes)) return;
-  if (Date.now() - selfProbeAt < SELF_PROBE_MS) return;
-  selfProbing = true;
+  if (!hasSelfProbeCandidate(selfProbeCandidates(), selfNodes)) return Promise.resolve();
+  if (Date.now() - selfProbeAt < SELF_PROBE_MS) return Promise.resolve();
   selfProbeAt = Date.now();                   // 실패도 백오프시킨다(tmux 불통일 때 3초마다 재시도하지 않게)
+  const run = (async () => {
+    try {
+      // strict — tmux 가 **답해서** 준 목록일 때만 쓴다. '못 봤다'를 빈 목록으로 접으면 판정 근거가 사라진다.
+      const { listSessionsRaw } = await import("../terminal/sessions.js");
+      const mine = new Set((await listSessionsRaw({ strict: true })).map((s) => s.id));
+      for (const [k, st] of states) {
+        if (selfNodes.has(k)) continue;
+        if (!sharesGatewayTmux(mine, st.sessions.map((s) => s.id))) continue;
+        selfNodes.add(k);
+        //  로그엔 **맨 노드 id** 를 싣는다 — k 는 스코프 키라 앞에 구분자(NUL)가 붙어 나온다(실측 로그: node 값 앞의 \u0000).
+        logger.warn({ node: conns.get(k)?.node.id ?? k },
+          "이 노드는 게이트웨이 자신과 같은 tmux 를 씁니다 — 같은 박스입니다. 연결을 끊고 '중앙 컴퓨터'로 안내합니다");
+        // #2592 — 판정이 선 바로 그 자리에서 **끊는다**. 두면 이 노드는 계속 스냅샷을 올리고(발견 기록·목록
+        //  좌표의 원천), 화면이 그 좌표로 붙으면 릴레이 attach 가 열린다. 판정을 안 지나간 값이 하나도 없게
+        //  하려면 원천을 닫는 것이 유일하게 확실하다. 아래 hello 도 같은 코드로 거부한다(재연결 즉시 종결).
+        //  ⚠ 끊기 **전에** 구독자를 부른다 — 구독자(기존 행 정리)는 이 연결의 테넌트 컨텍스트가 필요하고,
+        //   그 컨텍스트는 연결이 들고 있다(WS 이벤트엔 요청 컨텍스트가 없다 — inTenant 머리말).
+        const c = conns.get(k);
+        if (c) maybeCleanSelfNode(c);
+        dropSelfNodeConn(k);
+      }
+    } catch { /* tmux 를 못 봤다 = 판정 불가. 양성일 때만 표시하므로 조용히 넘어간다 */ }
+    finally { selfProbing = null; }
+  })();
+  selfProbing = run;
+  return run;
+}
+
+/**
+ * 이 셀프 노드가 남긴 거짓 좌표를 **이 프로세스에서 한 번** 치운다(#2592).
+ *
+ * 판정 시점과 hello 거부 시점 **양쪽에서** 부른다. 판정 한 곳만으로는 새는 자리가 실측으로 드러났다
+ *  (2026-09-03 dev 라이브 검증): 부팅 경로에서 `hydrateNodeStates` 가 **구독이 걸리기 전에** 판정을 내면
+ *  그 판정은 sticky 라 두 번 다시 서지 않고, 정리는 영원히 안 돈다. hello 는 그 뒤 반드시 지나는 자리다.
+ *  (정리 자체는 멱등이지만 10초마다 SQL·tmux 를 때릴 이유가 없어 프로세스당 한 번으로 접는다.)
+ *
+ * 왜 «구독 시점에 이미 선 판정을 재생» 이 아닌가: 재생에는 그 노드의 **테넌트 컨텍스트**가 없다(연결만이
+ *  들고 있다). 컨텍스트 없이 부르면 공유 게이트웨이에서 RLS 가 조용히 0행을 만든다 — 돌았는데 아무 일도
+ *  안 한 것이 제일 나쁘다. 연결이 있는 자리에서만 부른다.
+ */
+const selfNodeCleaned = new Set<string>();
+function maybeCleanSelfNode(c: NodeConn): void {
+  const k = keyOf(c.node.id, c.tenant);
+  if (!selfNodeHandler || selfNodeCleaned.has(k)) return;
+  selfNodeCleaned.add(k);
+  inTenant(c, () => void Promise.resolve(selfNodeHandler?.(c.node.id)).catch((err) => {
+    selfNodeCleaned.delete(k);   // 실패한 판은 안 한 것으로 — 다음 hello 가 다시 본다
+    logger.warn({ err, node: c.node.id }, "셀프 노드 기존 행 정리 실패(비치명 — 다음 연결에 재시도)");
+  }));
+}
+
+/** 셀프 노드로 판정된 연결을 종결 코드로 끊는다(#2592). 스코프 키로 받는다 — selfNodes·states·conns 가 같은 키다. */
+function dropSelfNodeConn(key: string): void {
+  const c = conns.get(key);
+  if (!c) return;
+  try { c.ws.close(CLOSE_SELF_NODE, SELF_NODE_REASON); } catch { /* 이미 닫힘 — close 이벤트가 정리한다 */ }
+}
+
+/**
+ * 남이 «내가 그 게이트웨이 박스인가»를 물을 때의 판정(#2592 등록 프리플라이트) — 같은 술어·같은 확답 규율.
+ *
+ * 등록 시점엔 그 노드가 아직 스냅샷을 올린 적이 없어 probeSelfNodes 가 볼 것이 없다. 그래서 **묻는 쪽이**
+ *  자기 tmux 세션 id 를 실어 보내고, 게이트웨이는 자기 목록과 겹치는지만 답한다(불리언 하나 — 겹친 id 는
+ *  어떤 응답에도 싣지 않는다는 #2108 규율 그대로).
+ */
+export async function looksLikeGatewayBox(nodeSessionIds: readonly string[]): Promise<boolean> {
+  if (!nodeSessionIds.length) return false;
+  // #2599 T2 — 이 판정이 **성립하는 자리인가**는 실행 토폴로지가 답한다. 게이트웨이의 tmux 가 이 호스트에
+  //  없으면(매니지드 중계·이 프로세스가 노드) 노드가 그것을 공유할 길이 없으므로, tmux 를 묻는 일 자체가
+  //  낭비다. 증거 규칙(sharesGatewayTmux)과 사유 문구(selfNodeMessage)는 #2592 가 그대로 소유한다.
+  if (!selfNodePossible()) return false;
   try {
-    // strict — tmux 가 **답해서** 준 목록일 때만 쓴다. '못 봤다'를 빈 목록으로 접으면 판정 근거가 사라진다.
     const { listSessionsRaw } = await import("../terminal/sessions.js");
     const mine = new Set((await listSessionsRaw({ strict: true })).map((s) => s.id));
-    for (const [k, st] of states) {
-      if (selfNodes.has(k)) continue;
-      if (!sharesGatewayTmux(mine, st.sessions.map((s) => s.id))) continue;
-      selfNodes.add(k);
-      logger.warn({ node: k },
-        "이 노드는 게이트웨이 자신과 같은 tmux 를 씁니다 — 같은 박스입니다. 세션 생성 대상에서 빼고 '중앙 컴퓨터'로 안내합니다");
-    }
-  } catch { /* tmux 를 못 봤다 = 판정 불가. 양성일 때만 표시하므로 조용히 넘어간다 */ }
-  finally { selfProbing = false; }
+    return sharesGatewayTmux(mine, nodeSessionIds);
+  } catch { return false; }   // tmux 를 못 봤다 = 판정 불가(양성일 때만 참)
 }
 /** 이 노드가 **게이트웨이 자신이 도는 박스**인가(#2108). 확답으로 관측됐을 때만 true. */
 export function isSelfNode(id: string): boolean { return selfNodes.has(keyOf(id)); }
@@ -204,14 +277,21 @@ export async function nodeAgentStale(id: string): Promise<boolean> {
 // 뷰어에게 보이는 노드 세션들(개인 세션 규칙: 소유자 또는 초대 — 프로젝트 전체공개 규칙은 원격에 미적용, D2).
 //  오프라인 노드 세션은 마지막 스냅샷으로 보여주되 라이브 신호(agentState·attached·working·awaiting)를 접는다
 //  (projectNodeSession — 왜 넷 다인지의 사연은 그 함수 머리말, #2533).
-export interface NodeSessionInfo extends SessionInfo { node: { id: string; name: string; online: boolean } }
+//  ⚠ #2592 — **셀프 노드의 행에는 좌표를 안 싣는다**(node 를 통째로 뺀다). 좌표는 배지가 아니라 릴레이 지시이고
+//   (relayNodeId 머리말), 셀프 노드의 좌표는 «같은 tmux 로 한 바퀴 돌아오라»는 거짓 좌표다. 행 자체는 남긴다 —
+//   같은 박스이므로 그 세션은 local(중앙 tmux) 목록에도 반드시 있고, 병합이 local 을 이기게 두면 화면은 종전대로
+//   한 장을 얻되 중앙 경로로 붙는다. 좌표만 떼는 이유는 행을 빼면 «remote 에만 보이던 행»이 사라질 여지가
+//   남기 때문이다(가시성 술어가 두 목록에서 다르다 — D2 원격 미적용 규칙).
+export interface NodeSessionInfo extends SessionInfo { node?: { id: string; name: string; online: boolean } }
 export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
   const out: NodeSessionInfo[] = [];
   for (const [id, st] of inScope(states)) {
     const online = conns.has(keyOf(id));
+    const self = isSelfNode(id);
     for (const s of st.sessions) {
       if (!nodeSessionVisible(s, viewer)) continue;
-      out.push({ ...projectNodeSession(s, online, viewer), node: { id, name: st.name, online } });
+      const row = projectNodeSession(s, online, viewer) as NodeSessionInfo;
+      out.push(self ? row : { ...row, node: { id, name: st.name, online } });
     }
   }
   return out;
@@ -221,8 +301,14 @@ export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
 //  주입(#1664)처럼 **세션 id 만 들고 오는 호출자**가 로컬/원격을 가르는 자리다. 스냅샷(3s push) 기준이라
 //  방금 만든 세션은 잠깐 안 보일 수 있는데, 그때는 로컬로 폴백해 `has-session` 이 정직하게 실패한다
 //  — 못 찾은 걸 '로컬에 있다'고 단정해 엉뚱한 세션에 키를 흘리는 일은 없다(id 가 겹칠 수 없으므로).
+//  ⚠ #2592 — 셀프 노드는 답으로 내놓지 않는다(null = 중앙 세션). 이 함수의 뜻은 "어디로 **릴레이**할까"이고,
+//   셀프 노드로 릴레이하는 것은 같은 tmux 를 한 바퀴 도는 것이다. 호출자(프롬프트 배달·kill·chatAnswer·meta)가
+//   전부 이 한 자리를 지나므로, 여기서 접으면 그 경로 전체가 종전 중앙 경로로 정확히 되돌아간다.
 export function nodeOfSession(sessionId: string): string | null {
-  for (const [id, st] of inScope(states)) if (st.sessions.some((s) => s.id === sessionId)) return id;
+  for (const [id, st] of inScope(states)) {
+    if (!st.sessions.some((s) => s.id === sessionId)) continue;
+    return isSelfNode(id) ? null : id;
+  }
   return null;
 }
 
@@ -301,6 +387,14 @@ export async function nodeCanAttach(nodeId: string, sessionId: string, viewer: s
 //  브라우저→노드: 텍스트(JSON 제어 i/r/cap)를 ctl 로 포워딩(노드가 안전한 tmux 명령으로 번역 — 명령 구성은 서버측 불변).
 //  노드→브라우저: 바이너리 채널 프레임의 payload 를 그대로 send(무디코드 — 멀티바이트 경계 보존).
 export function nodeRelayAttach(nodeId: string, sessionId: string, browser: WebSocket): void {
+  // #2592 — 셀프 노드로는 **릴레이하지 않는다**. 호출부가 좌표를 이미 접으므로(relayNodeId) 여기 오면 배선 사고다.
+  //  조용히 릴레이해 주면 그게 바로 이 프로젝트가 닫는 구멍(같은 tmux 를 노드 WS 로 한 바퀴 도는 attach)이라,
+  //  통과시키느니 사유를 남기고 닫는다 — 화면은 좌표 없는 URL 로 다시 붙어 중앙 경로로 열린다.
+  if (isSelfNode(nodeId)) {
+    logger.error({ node: nodeId, session: sessionId }, `셀프 노드로 attach 릴레이가 들어왔다(배선 사고) — ${selfNodeMessage(nodeId)}`);
+    try { browser.close(CLOSE_SELF_NODE, SELF_NODE_REASON); } catch { /* noop */ }
+    return;
+  }
   const c = conns.get(keyOf(nodeId));
   if (!c) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } return; }
   // WS liveness(#687·#869) — 이게 없으면 게이트웨이 heartbeat 가 **살아있는** 노드-릴레이 브라우저도 매 주기 isAlive=false
@@ -340,10 +434,15 @@ function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | 
     res: res ?? prev?.res ?? null,
   };
   states.set(k, st);
-  void probeSelfNodes();   // #2108 — 이 노드가 게이트웨이 자신인가(스로틀·비치명, 아래 주석)
   // #2022 — 처음 보는 세션이 있으면 그 자리에서 기억한다(구독자가 판단·기록, 여기선 알리기만).
   //  best-effort: 실패해도 스냅샷 반영은 그대로 간다(이 함수는 라이브 목록의 정본을 세우는 자리다).
-  if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 스냅샷을 막지 않는다 */ } }
+  //  ★ #2592 — **판정(probeSelfNodes)이 끝난 뒤에** 부른다. 종전엔 둘을 나란히 띄웠는데, 판정은 tmux 왕복이라
+  //   늘 늦게 끝나서 **셀프 노드의 첫 스냅샷이 판정 전에 DB 로 들어갔다**(dev 실측 org_session_state 의 셀프
+  //   discovered 행 286개의 출처 중 하나가 이 순서다 — 게이트웨이가 재배포될 때마다 그 창이 다시 열린다).
+  //   판정은 후보가 없거나 스로틀이면 즉시 완결하므로(probeSelfNodes 반환값의 계약) 정상 경로의 비용은 0 이다.
+  void probeSelfNodes().then(() => {   // #2108 — 이 노드가 게이트웨이 자신인가(스로틀·비치명, 위 주석)
+    if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 스냅샷을 막지 않는다 */ } }
+  });
   // 정본(org_node_state)으로 흘려보낸다(#1834) — 이 게이트웨이가 재배포로 죽어도 다음 부팅이 여기서 목록을 되찾는다.
   //  세션 목록이 바뀌었을 때 즉시, 그대로면 최소 간격마다(node-state-store.shouldPersist). 비치명 —
   //  실패하면 기억을 지워 다음 보고(3초 뒤)가 곧바로 다시 시도한다.
@@ -371,6 +470,11 @@ export function onNodeReady(cb: (nodeId: string) => void | Promise<void>): void 
 //  노드가 꺼지는 순간 어디에도 없는 세션이 되던 것을 막는다.
 let nodeSessionsHandler: ((nodeId: string, sessions: SessionInfo[]) => void | Promise<void>) | null = null;
 export function onNodeSessions(cb: (nodeId: string, sessions: SessionInfo[]) => void | Promise<void>): void { nodeSessionsHandler = cb; }
+// #2592 — 어떤 노드가 «게이트웨이 자신»으로 **새로 판정됐다**. 그 순간까지 그 노드 이름으로 쌓인 거짓 좌표
+//  (org_session_state.node_id)를 치우는 구독자가 붙는다. 부팅 훅이 아니라 이 훅인 이유: 판정은 관측이라
+//  부팅 시점엔 아직 없고, 게이트웨이가 재배포될 때마다 새로 도출된다(멱등이라 매번 돌아도 무해).
+let selfNodeHandler: ((nodeId: string) => void | Promise<void>) | null = null;
+export function onSelfNodeJudged(cb: (nodeId: string) => void | Promise<void>): void { selfNodeHandler = cb; }
 let workerStateHandler: ((nodeId: string, snapshot: unknown) => void | Promise<void>) | null = null;
 export function onWorkerState(cb: (nodeId: string, snapshot: unknown) => void | Promise<void>): void { workerStateHandler = cb; }
 
@@ -432,6 +536,18 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
       logger.warn({ node: c.node.id, nodeVer: m.ver, gatewayVer: PROTO_VER, agentVer: m.agentVer },
         "노드 프로토콜 버전 불일치 — 연결 거부(노드 에이전트를 업데이트해야 한다)");
       try { c.ws.close(4426, `proto-ver-mismatch:${PROTO_VER}`); } catch { /* noop */ }
+      return;
+    }
+    // #2592 — 이미 «게이트웨이 자신»으로 판정된 노드는 여기서 끊는다(재연결해도 결과가 같은 종결 코드).
+    //  probeSelfNodes 가 판정 순간에도 끊지만, 그 판정은 이 프로세스 안에서만 산다 — 재연결·게이트웨이 재시작
+    //  뒤 첫 연결은 이 자리를 지나므로 여기에도 같은 술어가 있어야 «생성만 막고 나머지는 샌다»가 재발하지 않는다.
+    //  ⚠ helloOk 를 **먼저** 보낸다: 구 번들은 그 값으로 스스로 최신 번들을 받아 재기동하고(#1713), 그 새 번들이
+    //   이 코드를 종결로 알아 재연결 루프를 끝낸다. 순서를 뒤집으면 구 번들은 영원히 붙었다 끊었다 한다.
+    if (isSelfNode(c.node.id)) {
+      try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); } catch { /* noop */ }
+      logger.warn({ node: c.node.id, agentVer: m.agentVer }, `노드 연결 거부 — ${selfNodeMessage(c.node.id)}`);
+      maybeCleanSelfNode(c);   // 부팅 판정(hydrate)이 구독보다 빨랐던 경우의 유일한 재시도 자리 — 위 머리말
+      try { c.ws.close(CLOSE_SELF_NODE, SELF_NODE_REASON); } catch { /* noop */ }
       return;
     }
     c.hasDocker = !!m.hasDocker;
