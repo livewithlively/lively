@@ -44,12 +44,16 @@ const parseOf = (name: string) => {
   assert.equal(out.state, "deprecated", "치우기 값이 그대로 실려야 한다");
 }
 
-// state 는 두 값만 지나간다 — 아무 문자열이나 통과하면 zod 가 400 을 내지만, 여기서 먼저 거른다.
+// ★ parse 는 값을 **거르지 않는다.** REST 경로엔 zod 검증이 없어서(입력 스키마는 MCP·표면 스냅샷용),
+//  여기서 모르는 값을 undefined 로 떨구면 스토어의 가드가 영영 안 돌고 200 이 나간다 — 조용한 no-op 이다.
+//  실제 판정은 스토어 한 곳(updateCategory)에서만 하고, 그게 400 을 내는 건 itest ⑨가 잠근다.
 {
   const parse = parseOf("category_update");
   assert.equal(parse({ state: "active" }).state, "active");
-  assert.equal(parse({ state: "merged" }).state, undefined, "merged 는 병합 경로가 소유한다 — 여기로 못 들어온다");
-  assert.equal(parse({ state: "" }).state, undefined);
+  assert.equal(parse({ state: "deprecated" }).state, "deprecated");
+  assert.equal(parse({ state: "merged" }).state, "merged",
+    "★ 거르지 말고 넘겨야 스토어가 «merged 는 병합 경로가 정합니다» 로 400 을 낼 수 있다");
+  assert.equal(parse({ state: "아무거나" }).state, "아무거나", "모르는 값도 스토어까지 간다(거기서 거절된다)");
   assert.equal(parse({}).state, undefined, "미지정은 undefined — 부분 수정에서 «안 건드림» 이다");
 }
 
