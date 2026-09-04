@@ -36,6 +36,18 @@ try {
   await initAllSchemas();
 
   const { createCategory, updateCategory, listCategories } = await import("../dist/v6/category-store.js");
+
+  //  ★ 거절은 **상태코드까지** 본다. 평범한 Error 로 던지면 rest-util 이 500 «internal_error» 로 뭉개
+  //   «무엇을 넣어야/옮겨야 하나» 안내가 통째로 사라진다 — dev 실측(2026-09-03·04)에서 두 번 그랬다.
+  //   «막혔다» 만 보는 단언은 그 회귀를 못 잡는다(스토어에선 어느 쪽이든 똑같이 throw 하므로 초록이다).
+  const rejects400 = async (fn, re, label) => {
+    try { await fn(); assert.fail(`${label} — 거절돼야 하는데 통과했다`); }
+    catch (e) {
+      if (e?.code === "ERR_ASSERTION") throw e;
+      assert.equal(e?.status, 400, `${label} — 400 이어야 한다(지금 ${e?.status ?? "상태 없음"} → 500 으로 뭉개진다)`);
+      assert.match(String(e?.message ?? ""), re, `${label} — 무엇을 해야 하는지가 문구에 있어야 한다`);
+    }
+  };
   const { createProject, setProjectCategories } = await import("../dist/v6/project-store.js");
   const { listSources, getSource } = await import("../dist/v6/source-store.js");
 
@@ -148,8 +160,8 @@ try {
   // ── D. 축 치우기 ──
   await step("⑨ 비활성은 «비어 있을 때만» — 지식이 남으면 거절, merged 는 못 만든다", async () => {
     //  ⑨ 지식이 남아 있으면 비활성으로 못 만든다.
-    await assert.rejects(() => updateCategory(brewing.id, { state: "deprecated" }, ctx),
-      /지식 1건이 남아 있어/, "⑨ 지식이 남아 있으면 거절하고, 몇 건인지 말해야 한다");
+    await rejects400(() => updateCategory(brewing.id, { state: "deprecated" }, ctx),
+      /지식 1건이 남아 있어.*먼저 다른 축으로 옮기세요/s, "⑨ 지식이 남아 있으면 거절 — 몇 건인지·무엇을 해야 하는지까지");
 
     //  ⑨ 비어 있으면 통과.
     const after = await updateCategory(noName.id, { state: "deprecated" }, ctx);
@@ -160,7 +172,7 @@ try {
     await updateCategory(noName.id, { state: "deprecated" }, ctx);
 
     //  ⑨ merged 는 병합 경로가 소유한다.
-    await assert.rejects(() => updateCategory(noName.id, { state: "merged" }, ctx),
+    await rejects400(() => updateCategory(noName.id, { state: "merged" }, ctx),
       /active\|deprecated/, "⑨ merged 는 여기서 못 만든다");
   });
 
@@ -187,17 +199,8 @@ try {
     //  ★ 상태코드까지 본다. 평범한 Error 로 던지면 rest-util 이 500 «internal_error» 로 뭉개서
     //   «있는 축은 이것들이다» 안내가 통째로 사라진다 — dev 실측(2026-09-03)에서 실제로 그렇게 나갔다.
     //   «막혔다» 만 보는 단언은 그 회귀를 못 잡는다(스토어에선 똑같이 throw 하므로 초록이다).
-    const rejects400 = async (fn, re, label) => {
-      try { await fn(); assert.fail(`${label} — 거절돼야 하는데 통과했다`); }
-      catch (e) {
-        if (e?.code === "ERR_ASSERTION") throw e;
-        assert.equal(e?.status, 400, `${label} — 400 이어야 한다(지금 ${e?.status ?? "상태 없음"} → 500 으로 뭉개진다)`);
-        assert.match(String(e?.message ?? ""), re, `${label} — 무엇을 넣어야 하는지가 문구에 있어야 한다`);
-        assert.match(String(e?.message ?? ""), /있는 축:/, `${label} — 있는 축 목록을 알려 줘야 한다`);
-      }
-    };
     await rejects400(() => upsertDistiller({ key: "lane-bad", target_category: "comms" }, "itest", "web"),
-      /'comms' 이\(가\) 없습니다/, "⑧ 없는 축(실측에서 실제로 저장돼 있던 값)");
+      /'comms' 이\(가\) 없습니다.*있는 축:/s, "⑧ 없는 축(실측에서 실제로 저장돼 있던 값)");
     await rejects400(() => upsertDistiller({ key: "lane-dep", target_category: "no-name-axis" }, "itest", "web"),
       /비활성입니다/, "⑧ 비활성 축");
     //  부분 갱신에서 target_category 를 안 주면 검사하지 않는다(«안 건드림» 이라 기존 값을 지킨다).
