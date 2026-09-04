@@ -138,6 +138,44 @@ export function liveNodes(): NodePublic[] {
 
 export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
 
+/**
+ * 지운 노드를 **이 프로세스의 기억에서도** 지운다(#3558). `store.deleteNode`(DB 3표) 직후에 부른다.
+ *
+ * 종전엔 삭제가 DB 만 지우고 여기 캐시는 그대로 뒀다. 그래서 **지운 노드가 게이트웨이 재시작 전까지 자기
+ *  세션들을 계속 «소유»** 했다 — 스냅샷은 정본이 사라져도 메모리에 남고, 아래 셋이 전부 그 스냅샷을 읽는다:
+ *   · `nodeOfSession()` 이 지운 노드를 답한다 → transcript·/seen·프롬프트가 **요청에 좌표가 없어도** 4462 → 503
+ *   · `nodeSessionsFor()` 가 목록 행에 죽은 좌표를 실어 준다 → 새로고침해도 브라우저가 다시 `?node=<지운 노드>`
+ *     로 붙어 2초마다 4462 를 맞는다(«이 세션의 노드가 연결돼 있지 않습니다 — 재연결 중…» 무한반복)
+ *   · `liveNodes()` 가 지운 노드를 «오프라인» 으로 계속 보여준다
+ *  즉 새로고침으로도 안 낫는다 — 좌표를 쥐고 있는 쪽이 브라우저가 아니라 **서버**이기 때문이다.
+ *
+ * 실측(2026-09-04, 매니지드 `lively-46e3`): 시험용 세션 호스트 노드 `t2607-sh` 를 지운 뒤 그 테넌트의 세션
+ *  화면이 통째로 막혔다. 세션 호스트는 그 테넌트의 세션을 **전부** 스냅샷에 싣기 때문에 폭발반경이
+ *  «그 노드의 세션» 이 아니라 **테넌트 전체**다.
+ *
+ * ⚠ 순서가 계약이다 — 연결을 **먼저** 떼고, 소켓을 **terminate** 한 뒤에 스냅샷을 지운다.
+ *   · 연결을 먼저 떼면 곧 도착할 close 이벤트에서 `onNodeDisconnected` 가 «이미 교체됨» 으로 일찍 돌아가,
+ *     방금 지운 행에 last_seen·연결이력을 되쓰지 않는다(그래서 정리는 여기서 직접 한다).
+ *   · close 핸드셰이크를 기다리면 그 사이 도착한 상태 push 가 `applyState` 로 스냅샷을 **되살린다**.
+ *
+ * 다른 게이트웨이 프로세스가 그 노드를 물고 있었다면 그쪽 메모리까지는 못 지운다 — 캐시가 프로세스마다
+ *  따로인 구조의 한계이고(맵 머리말), 노드는 한 게이트웨이에만 붙으므로 실무에서 그 창은 열리지 않는다.
+ */
+export function forgetNode(nodeId: string): void {
+  const k = keyOf(nodeId);
+  const c = conns.get(k);
+  if (c) {
+    conns.delete(k);
+    for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(new Error("node-offline")); }
+    c.pending.clear();
+    for (const { browser } of c.chans.values()) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
+    c.chans.clear();
+    try { c.ws.terminate(); } catch { /* noop */ }
+  }
+  states.delete(k);
+  persisted.delete(k);
+}
+
 // ── 게이트웨이 자신이 노드로도 등록된 경우(#2108) ──
 //
 // `lively node --daemon` 은 self-register 라, **게이트웨이가 도는 그 박스에서** 실행하면 평범한 member 노드로
