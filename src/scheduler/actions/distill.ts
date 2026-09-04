@@ -1,6 +1,7 @@
 // 크론 액션: 자료 distill(distill_sources·distill_sources_headless, #541/#1289) — R16 원문 이동.
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
 import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessFlags, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { logger } from "../../log.js";
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
 //  fire-and-forget(주입까지가 잡 책임 — 증류는 세션이 수 분에 걸쳐 knowledge_save+source_link_knowledge 로 수행).
@@ -198,10 +199,13 @@ async function markSeenSafe(distillerId: number, ids: number[], taskId: string |
   catch { /* 기록 실패는 삼킨다 — 재독이 늘 뿐 오동작은 아니다 */ }
 }
 
-// 방치 자료 판정 기록 — markSeenSafe 의 레인 없는 짝(같은 이유로 실패를 삼킨다).
+// 방치 자료 판정 기록 — markSeenSafe 의 레인 없는 짝.
+//  ⚠ 실패를 삼키되 **한 줄은 남긴다.** 기록 실패는 그 자체로 오동작이 아니지만(재독이 늘 뿐), 조용히
+//   실패하면 "고쳤는데 안 듣는다"의 원인을 밖에서 알 수 없다 — 2026-09-04 prod 에서 ON CONFLICT 가
+//   테넌시 PK 재작성과 어긋나 매 tick 죽었는데, 삼킴 때문에 로그가 0 이라 DB 를 직접 열어야 알았다.
 async function markStrandedSeenSafe(ids: number[], taskId: string | number | null): Promise<void> {
   try { const { markStrandedSeen } = await import("../../org/distill/distiller.js"); await markStrandedSeen(ids, taskId); }
-  catch { /* 기록 실패는 삼킨다 — 재독이 늘 뿐 오동작은 아니다 */ }
+  catch (e) { logger.warn("distill: 방치 판정 기록 실패 — 다음 배치가 같은 자료를 다시 본다: " + ((e as Error)?.message ?? String(e))); }
 }
 
 // 실행 이력 기록은 관측용 — 실패해도 배치 자체를 깨지 않는다(잡 요약엔 이미 결과가 담긴다).

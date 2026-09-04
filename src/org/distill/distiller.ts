@@ -440,10 +440,19 @@ export async function markStrandedSeen(sourceIds: number[], taskId: number | str
   const ids = sourceIds.filter((n) => Number.isFinite(n));
   if (!ids.length) return 0;
   const tid = taskId === null || taskId === undefined ? null : Number(taskId);
+  //  ⚠ ON CONFLICT 를 **컬럼이 아니라 제약 이름**으로 추론한다. 멀티테넌트 배포에서는 tenant-column
+  //   레이어가 이 표의 PK 를 (tenant_id, source_id) 로 재작성한다 — PK 가 테넌트 스코프 컬럼을 안 품어
+  //   테넌트를 가로질러 source_id 가 충돌할 수 있기 때문이고, 그 판정은 옳다. 그때 `ON CONFLICT (source_id)`
+  //   는 부분집합으로 유니크 인덱스를 추론할 수 없어 42P10 으로 죽는다(2026-09-04 prod 실측: 이 표의
+  //   행이 계속 0 이었고 아래 호출부가 예외를 삼켜 로그도 없었다). 제약 이름은 재작성 전후 동일하므로
+  //   단일 테넌트·멀티 테넌트 양쪽에서 같은 문장이 선다.
+  //   자매 표(org_distiller_seen·org_classifier_seen)가 컬럼 추론으로 사는 것은 그 PK 가 각각
+  //   distiller_id·classifier_id 를 품어 이미 테넌트로 유일하다고 판정돼 재작성을 건너뛰기 때문이다.
   const r = await itemsPool.query(
     `INSERT INTO org_stranded_seen(source_id, task_id)
        SELECT unnest($1::int[]), $2
-     ON CONFLICT (source_id) DO UPDATE SET seen_at=now(), task_id=EXCLUDED.task_id`,
+     ON CONFLICT ON CONSTRAINT org_stranded_seen_pkey
+       DO UPDATE SET seen_at=now(), task_id=EXCLUDED.task_id`,
     [ids, Number.isFinite(tid as number) ? tid : null]);
   return r.rowCount ?? 0;
 }

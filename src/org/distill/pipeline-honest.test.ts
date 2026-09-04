@@ -51,8 +51,15 @@ test("②-b 방치 배치도 판정을 기록하고 그 기록을 빼야 인박�
   //  기록이 없으면 빼도 소용없고, 빼지 않으면 기록해도 소용없다 — 둘이 짝이다.
   assert.match(ACTION, /await markStrandedSeenSafe\(b\.ids/, "방치 배치가 판정을 기록하지 않는다");
   //  수렴 규약 — DO NOTHING 이면 수정된 자료가 다시 올라와도 seen_at 이 옛 시각에 머물러 매 배치 반복된다.
-  assert.match(DISTILLER, /ON CONFLICT \(source_id\) DO UPDATE SET seen_at=now\(\)/,
-    "재판정이 판정 시각을 전진시키지 않는다");
+  assert.match(DISTILLER, /DO UPDATE SET seen_at=now\(\)/, "재판정이 판정 시각을 전진시키지 않는다");
+  //  🔴 추론을 **컬럼이 아니라 제약 이름**으로 — 멀티테넌트에서 tenant-column 레이어가 이 표의 PK 를
+  //   (tenant_id, source_id) 로 재작성하면 `ON CONFLICT (source_id)` 는 부분집합이라 42P10 으로 죽는다
+  //   (2026-09-04 prod 실측: 행이 계속 0, 호출부 삼킴 때문에 로그도 없었다).
+  assert.match(DISTILLER, /ON CONFLICT ON CONSTRAINT org_stranded_seen_pkey/,
+    "컬럼 추론이면 테넌시 PK 재작성 환경에서 매 INSERT 가 죽는다");
+  //  조용한 실패 금지 — 기록 실패가 로그를 안 남기면 '고쳤는데 안 듣는다'의 원인을 밖에서 알 수 없다.
+  assert.match(ACTION, /markStrandedSeenSafe[\s\S]{0,400}?logger\.warn/,
+    "방치 판정 기록 실패를 조용히 삼킨다 — 최소 한 줄은 남겨야 한다");
   //  배치 실패 시 되돌리기 — 안 그러면 아무도 안 본 자료가 인박스에서 영구히 빠진다(유실).
   assert.match(TASK_STORE, /DELETE FROM org_stranded_seen WHERE task_id=\$1/,
     "실패한 방치 배치의 기록을 되돌리지 않는다 — 자료가 유실된다");
