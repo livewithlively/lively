@@ -9,6 +9,7 @@
 import { HttpError } from "../../http-error.js";
 import { itemsPool, withTx } from "../../db/client.js";
 import { SINGLE_TENANT_ID } from "../../db/tenant-column.js";
+import { managedMode } from "./state.js";   // #3564 — «매핑 부재» 의 기본값이 배포마다 다르다(sessionInWorkspace 머리말)
 
 /** primary(기존 박스 워크스페이스)의 테넌트 id — 기존 행의 tenant_id 상수와 같다. */
 export const PRIMARY_TENANT_ID = SINGLE_TENANT_ID;
@@ -445,12 +446,29 @@ export async function workspaceForSession(sessionId: string): Promise<RegistryWo
  */
 /**
  * 세션이 **지금 보고 있는 워크스페이스**의 것인가(#1875 목록 격리의 단일 규칙 — SQL·JS 두 필터가 같은 명제를 쓴다).
- *  `mappedWsId` = gw_session_map 이 준 소속(active 만; 부재/보관됨이면 undefined). 규칙: 소속 = mappedWsId ?? primary,
+ *  `mappedWsId` = gw_session_map 이 준 소속(active 만; 부재/보관됨이면 undefined). 규칙: 소속 = mappedWsId ?? 기본값,
  *  그것이 현재 워크스페이스와 같을 때만 보인다. 그래서 ① 안 묶인 옛 세션은 primary(박스)에서만 보이고 개인 ws 엔
  *  안 새며 ② 개인 ws 세션은 그 ws 에서만 보이고 primary·다른 개인 ws 엔 안 샌다.
+ *
+ * ★ **«매핑 부재» 의 기본값은 배포마다 다르다**(#3564 실측). 셀프호스트에선 primary 의 id 가 곧
+ *  `PRIMARY_TENANT_ID` 라 «부재 = primary» 가 참이다. 그런데 **매니지드에선 현재 워크스페이스 id 가 테넌트
+ *  uuid** 라 `PRIMARY_TENANT_ID` 와 절대 같아질 수 없다 — 그래서 매핑이 없는 세션이 **전량** 목록에서 사라졌다
+ *  (2026-09-04 lively-46e3: 901건 중 869건이 부재였고 API 가 매핑된 8건만 돌려줬다. 사용자에겐 «세션이 다 사라짐»).
+ *  매핑을 쓰기 시작한 것(#1750 후속 recordSessionTenant)보다 오래된 세션이 전부 그 상태였고, 백필이 없었다.
+ *
+ *  매니지드에는 워크스페이스 등록부가 없고(`gw_workspace` 0행) 요청당 워크스페이스는 하나이며,
+ *  `org_session_state` 는 이미 **RLS 로 그 테넌트만** 준다. 그러니 거기서 «부재» 는 primary 가 아니라
+ *  **이 워크스페이스**로 읽는 것이 맞다(그래야 «모름» 이 유출이 아니라 정상이 된다).
+ *
+ * @param managed 이 배포가 매니지드인가(테스트가 주입한다 — 기본은 env 판정 한 곳: state.ts managedMode)
  */
-export function sessionInWorkspace(mappedWsId: string | null | undefined, currentWsId: string): boolean {
-  return (mappedWsId ?? PRIMARY_TENANT_ID) === currentWsId;
+export function sessionInWorkspace(
+  mappedWsId: string | null | undefined,
+  currentWsId: string,
+  managed: boolean = managedMode(),
+): boolean {
+  const fallback = managed ? currentWsId : PRIMARY_TENANT_ID;
+  return (mappedWsId ?? fallback) === currentWsId;
 }
 
 export async function sessionWorkspaceIds(sessionIds: string[]): Promise<Map<string, string>> {

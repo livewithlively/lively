@@ -12,6 +12,10 @@
 //   E3 [개인A, 개인A]   → 보임   (자기 것)
 //   E4 [개인A, 개인B]   → 숨김   ★개인↔개인 누수
 //   E5 [개인A, primary] → 숨김   ★대칭(개인 세션이 박스로 누수)
+//   ── 매니지드(#3564) — 기본값이 다르다 ──
+//   M1 [부재, 테넌트]   → 보임   ★이 사고(매니지드에선 현재 ws=테넌트 uuid 라 primary 로 접으면 전량 사라진다)
+//   M2 [개인A, 테넌트]  → 숨김   (격리는 매니지드에서도 그대로)
+//   M3 셀프호스트 규칙 무회귀 — 부재 = primary
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -44,6 +48,29 @@ test("★ E4 개인 워크스페이스 세션은 다른 개인 워크스페이�
 test("★ E5 개인 워크스페이스 세션은 primary(박스)에도 새지 않는다", () => {
   // 대칭 — 개인에서 만든 세션이 팀/박스 목록에 뜨면 그것도 격리 위반이다.
   assert.equal(sessionInWorkspace(WS_A, PRIMARY), false);
+});
+
+// ── 매니지드(#3564) — «매핑 부재» 의 기본값이 배포마다 다르다 ───────────────────────────
+//  실측 2026-09-04(lively-46e3): 세션 901건 중 869건이 gw_session_map 부재였고, 목록 API 가 매핑된 8건만
+//  돌려줬다. 사용자에겐 «세션이 다 사라짐» 이다. 매니지드에선 현재 ws 가 테넌트 uuid 라 PRIMARY_TENANT_ID
+//  로 접으면 **절대** 같아질 수 없다 — 부재는 primary 가 아니라 «이 워크스페이스» 로 읽어야 한다.
+const TENANT = "a4b68262-535b-4be0-a1dc-50ec71576441";   // 실측 테넌트 uuid 모양
+
+test("★ M1 매니지드에서 매핑 없는 세션은 **지금 워크스페이스**의 것이다 — 이 사고의 핵심", () => {
+  assert.equal(sessionInWorkspace(undefined, TENANT, true), true);
+  assert.equal(sessionInWorkspace(null, TENANT, true), true);
+  //  기본값을 primary 로 접으면 테넌트 uuid 와 같아질 수 없어 전량 사라진다(회귀 시 여기가 red).
+  assert.equal(sessionInWorkspace(undefined, TENANT, false), false, "셀프호스트 규칙을 매니지드에 적용하면 이렇게 사라진다");
+});
+
+test("★ M2 매니지드라도 **다른 워크스페이스에 묶인** 세션은 여전히 안 보인다(격리는 그대로)", () => {
+  assert.equal(sessionInWorkspace(WS_A, TENANT, true), false);
+  assert.equal(sessionInWorkspace(TENANT, TENANT, true), true);
+});
+
+test("M3 셀프호스트(비매니지드) 규칙은 종전 그대로 — 부재 = primary", () => {
+  assert.equal(sessionInWorkspace(undefined, PRIMARY, false), true);
+  assert.equal(sessionInWorkspace(undefined, WS_A, false), false);   // E2 의 누수 방어가 살아 있다
 });
 
 // ── 구조·배선: 두 목록 경로가 실제로 워크스페이스로 거른다(누가 필터를 떼면 red) ──────────
