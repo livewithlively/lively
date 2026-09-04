@@ -164,17 +164,66 @@ const jobTable = (over: Array<[number, ProcEntry]> = []): Map<number, ProcEntry>
   assert.equal(sessionsWithLiveJobs(t, new Map([["box-c", [10]]])).size, 0,
     "판정 불가에 '보호'를 주면 그 플랫폼에선 회수가 통째로 멈춘다 — 모르면 종전대로 둔다");
 }
-// C4b — 그룹은 읽히는데 **tty 포그라운드(tpgid)를 못 읽는** 표: 역시 판정하지 않는다.
-//  이게 «하네스가 제 그룹을 가진 배치»에서 하네스를 작업으로 오인해 회수를 통째로 멈추는 것을 막는 갈래다
-//  (procfs 가 tpgid 를 안 주는 면 — 예: gVisor 샌드박스, 2026-09-04 미실측).
+// ── E. tpgid 가 **없는** 면(gVisor)에서도 하네스를 찾는다 (#2652 후속) ────────────────────────
+//  실측 2026-09-04 매니지드 세션 컨테이너: pane 프로세스도 tty_nr=0·tpgid=0 인데 트리 모양은 맥과 같다
+//   (sh(pane,28) → claude(하네스,36) → node·node(36 상속)). 그래서 «pane 에서 내려오는 단일 자식
+//   사슬에서 처음으로 pane 과 다른 그룹» 으로 하네스를 찾는다.
+// E2 — 실측 모양 그대로: 작업 없음 / 있음을 정확히 가른다
+{
+  const idle = new Map<number, ProcEntry>([
+    [28, { ppid: 27, rssKb: 2_420, name: "sh", pgid: 28, tpgid: 0 }],           // pane
+    [36, { ppid: 28, rssKb: 750_848, name: "claude", pgid: 36, tpgid: 0 }],     // 하네스 — 단일 자식·새 그룹
+    [188, { ppid: 36, rssKb: 146_564, name: "node", pgid: 36, tpgid: 0 }],      // MCP — 하네스 그룹
+    [189, { ppid: 36, rssKb: 126_708, name: "node", pgid: 36, tpgid: 0 }],
+  ]);
+  assert.equal(sessionsWithLiveJobs(idle, new Map([["box-g", [28]]])).has("box-g"), false,
+    "tpgid 가 없어도 MCP 를 작업으로 오인하지 않는다");
+  const busy = new Map(idle).set(900, { ppid: 36, rssKb: 1_200, name: "zsh", pgid: 900, tpgid: 0 });
+  assert.equal(sessionsWithLiveJobs(busy, new Map([["box-g", [28]]])).has("box-g"), true,
+    "tpgid 없이도 백그라운드 작업을 잡는다 — 이게 매니지드에서 ⑥ 이 켜지는 자리다");
+}
+
+// E3 — 사슬 중간에 pane 과 **같은 그룹**인 껍데기가 있어도 지나쳐 내려가 하네스를 찾는다(격리 경로 모양)
 {
   const t = new Map<number, ProcEntry>([
-    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 0 }],             // pane — 포그라운드 미상
-    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 0 }],    // 하네스가 제 그룹을 가졌다
-    [12, { ppid: 11, rssKb: 30_000, name: "node", pgid: 11, tpgid: 0 }],
+    [10, { ppid: 1, rssKb: 900, name: "sudo", pgid: 10, tpgid: 0 }],            // pane
+    [11, { ppid: 10, rssKb: 900, name: "box-spawn", pgid: 10, tpgid: 0 }],      // 껍데기 — pane 그룹 그대로
+    [12, { ppid: 11, rssKb: 300_000, name: "claude", pgid: 12, tpgid: 0 }],     // 하네스
+    [13, { ppid: 12, rssKb: 1_000, name: "zsh", pgid: 13, tpgid: 0 }],          // 작업
   ]);
-  assert.equal(sessionsWithLiveJobs(t, new Map([["box-g", [10]]])).size, 0,
-    "포그라운드를 모르면 하네스 그룹을 spine 에 못 넣는다 → 판정 포기(보호도 안 걸리지만, 회수가 멈추지도 않는다)");
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-h", [10]]])).has("box-h"), true,
+    "껍데기를 지나 하네스(12)를 찾고, 그 밑의 새 그룹(13)을 작업으로 잡는다");
+}
+
+// E4 — pane 이 **즉시 갈라지면** 하네스를 확정할 수 없다 → 판정 안 함(S3: 오인하면 회수가 통째로 멈춘다)
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 0 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 0 }],
+    [12, { ppid: 10, rssKb: 1_000, name: "other", pgid: 12, tpgid: 0 }],        // pane 의 둘째 자식
+  ]);
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-i", [10]]])).size, 0,
+    "하네스가 어느 쪽인지 모르면 판정하지 않는다 — 틀리면 그 세션이 영원히 안 걷힌다");
+}
+
+// E5 — 사슬 끝까지 pane 그룹뿐(하네스가 제 그룹을 안 가진 배치): 판정 안 함
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 0 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 10, tpgid: 0 }],
+  ]);
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-j", [10]]])).size, 0);
+}
+
+// E7 — 하네스가 **유일 자식으로** 작업을 띄운 경우에도 잡는다(사슬은 하네스에서 멈춘다)
+{
+  const t = new Map<number, ProcEntry>([
+    [10, { ppid: 1, rssKb: 900, name: "sh", pgid: 10, tpgid: 0 }],
+    [11, { ppid: 10, rssKb: 300_000, name: "claude", pgid: 11, tpgid: 0 }],     // 하네스 — 여기서 사슬 끝
+    [12, { ppid: 11, rssKb: 1_000, name: "zsh", pgid: 12, tpgid: 0 }],          // 유일 자식이지만 작업이다
+  ]);
+  assert.equal(sessionsWithLiveJobs(t, new Map([["box-k", [10]]])).has("box-k"), true,
+    "하네스를 찾자마자 멈추지 않으면 바로 이 작업을 spine 에 넣어 못 잡는다");
 }
 
 // C5 — pane 이 이미 죽어 표에 없다
