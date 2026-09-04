@@ -168,7 +168,10 @@ const categoryUpdate: Capability = {
           cross_cutting: typeof b.cross_cutting === "boolean" ? b.cross_cutting : undefined,
           //  ⚠ 입력 스키마에만 넣고 여기 빠뜨리면 **웹·REST 에서 조용히 무시된다**(MCP 만 동작).
           //   dev 실측(2026-09-03): [치우기] 버튼이 200 을 받고 아무 일도 안 했다 — 실패조차 아니었다.
-          state: b.state === "active" || b.state === "deprecated" ? b.state : undefined,
+          //  ⚠ 값을 **여기서 거르지 않는다.** REST 경로엔 zod 검증이 없어서(입력 스키마는 MCP·표면 스냅샷용)
+          //   여기서 모르는 값을 undefined 로 떨구면 스토어의 가드가 영영 안 돌고 200 이 나간다 —
+          //   dev 실측(2026-09-04): `{"state":"merged"}` 가 조용히 무시됐다. 판정은 스토어 한 곳에서만 한다.
+          state: b.state != null ? String(b.state) : undefined,
         };
       } }],
   },
