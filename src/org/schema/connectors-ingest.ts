@@ -479,6 +479,23 @@ export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS org_distiller_seen_src_idx ON org_distiller_seen(source_id);
   `);
 
+  // ── org_stranded_seen — 어느 레인 스코프에도 안 드는(방치) 자료의 판정 기록. ──
+  //  왜 별 테이블인가: org_distiller_seen 은 (distiller_id, source_id) 가 PK 이고 distiller_id 가
+  //  org_distiller 를 FK 로 참조한다. 방치 배치는 레인이 없어(distillerId=null) 그 테이블에 못 쓴다 —
+  //  그래서 판정 기록이 아예 없었고, LLM 이 skip 한 자료가 **매 tick 같은 50건으로 다시 올라왔다.**
+  //  레인 인박스는 org_distiller_seen 이 이 병을 막는데(실측 64% 재독), 방치 배치만 무방비였다.
+  //  실측(2026-09-04): 방치 배치가 증류 실행시간의 77% 를 쓰고 그중 41% 가 산출 0건 —
+  //  구성비 대부분이 '봤는데 안 만든' 자료의 재독이었고, 잔량(backlog)이 50 에서 줄지 않았다.
+  //  ⚠ seen_at 을 source.updated_at 과 비교하는 수렴 규약은 org_distiller_seen 과 동일하다(내용이
+  //   바뀌면 다시 올라오고, 재판정 배치가 seen_at 을 now() 로 갱신해 다음 배치엔 다시 빠진다).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_stranded_seen(
+      source_id INT PRIMARY KEY,
+      task_id BIGINT,
+      seen_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS org_stranded_seen_task_idx ON org_stranded_seen(task_id) WHERE task_id IS NOT NULL;
+  `);
+
   // ── 사전 필터(#1289 후속) — LLM 에 먹이기 **전에** 서버가 스레드를 걸러낸다. ──
   //  계기(실측 2026-07-31): 배치 1건(자료 100건)이 **2,600만~7,000만 토큰**을 썼다. 구성비가 결정적이다 —
   //  캐시읽기 73% + 캐시생성 26% + 실입력·출력 1%. 즉 새 정보를 넣는 비용은 1%고, 나머지 99%는

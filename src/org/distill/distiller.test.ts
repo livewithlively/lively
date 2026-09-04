@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import {
   Params, distillerScopeSql, distillerExclusiveSql, higherThan,
   buildDistillerPrompt, describeScope, composeDistillPrompt,
-  buildInboxQuery, buildBacklogQuery, markDistillerSeen,
+  buildInboxQuery, buildBacklogQuery, markDistillerSeen, buildStrandedQuery, markStrandedSeen,
   prefilterThresholds, prefilterSql, DEFAULT_DECISIVE_KEYWORDS, type DistillerRow,
   buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS, mergeDraftDistiller, isPrefilterActive, unfilteredImpact,} from "./distiller.js";
 
@@ -296,6 +296,19 @@ t("N1 인박스는 '이미 판정한 자료'를 제외한다(증류됨 + 보고�
   assert.ok(values.includes(7), "판정 이력은 증류기별로 걸러야 한다(자기 id 바인딩)");
 });
 
+t("N5 방치 질의도 '보고 버림'을 제외한다 — 레인 인박스와 같은 규약", () => {
+  const { sql } = buildStrandedQuery([mk({ id: 3 })], null, 50);
+  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM knowledge_source/, "지식이 된 자료 제외");
+  //  이게 없으면 LLM 이 skip 한 자료가 매 tick 같은 집합으로 다시 올라온다(진행이 영원히 0).
+  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM org_stranded_seen ss WHERE ss\.source_id = s\.id/,
+    "보고 버린 방치 자료 제외 — 없으면 배치가 영원히 반복된다");
+  //  존재 검사가 아니라 시각 비교여야 수정된 자료가 다시 올라온다(레인 unprocessedSql 과 동일 규약).
+  assert.match(sql, /ss\.seen_at >= s\.updated_at/,
+    "판정 시각을 자료 수정 시각과 비교하지 않는다 — 원문이 바뀌어도 영구 배제된다");
+  //  레인 스코프 판정은 그대로 살아 있어야 한다(방치 = 어느 레인도 안 집는 것).
+  assert.match(sql, /NOT \(COALESCE/, "레인 스코프로 방치를 재지 않는다");
+});
+
 t("N4 판정은 증류기별로 격리된다 — 다른 증류기 id 로는 안 걸린다", () => {
   const a = buildInboxQuery(mk({ id: 11 }), []);
   const b = buildInboxQuery(mk({ id: 22 }), []);
@@ -330,6 +343,10 @@ assert.equal(await markDistillerSeen(0, [1, 2], null), 0, "증류기 id 가 없�
 assert.equal(await markDistillerSeen(5, [], null), 0, "빈 목록이면 기록하지 않는다");
 assert.equal(await markDistillerSeen(5, [Number.NaN], null), 0, "유효하지 않은 id 만 있으면 기록하지 않는다");
 pass++; console.log("ok  N3 방어: 빈 목록·0번 증류기는 DB 접근 없이 0");
+
+assert.equal(await markStrandedSeen([], null), 0, "빈 목록이면 기록하지 않는다");
+assert.equal(await markStrandedSeen([Number.NaN], null), 0, "유효하지 않은 id 만 있으면 기록하지 않는다");
+pass++; console.log("ok  N6 방어: 방치 판정도 빈 목록·비정상 id 는 DB 접근 없이 0");
 
 
 // ── F. 사전 필터 레버 — LLM 에 먹이기 전 서버가 거른다 ─────────────────────────

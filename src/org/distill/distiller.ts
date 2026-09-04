@@ -329,10 +329,14 @@ export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | nul
   const claimed = enabled.map((d) => `COALESCE((${distillerScopeSql(d, p)}), false)`);
   const notClaimed = claimed.length ? `NOT (${claimed.join(" OR ")})` : "TRUE";
   const lim = p.add(Math.min(limit, 500));
+  //  ⚠ 판정 기록(org_stranded_seen)을 빼야 인박스가 전진한다 — 레인 인박스의 unprocessedSql 과 같은 이유다.
+  //   증류에 성공한 자료는 위의 knowledge_source 가 거르고, **보고 버린 것**은 이 테이블이 거른다.
+  //   둘이 합쳐지지 않으면 skip 한 자료가 매 배치 다시 올라온다(왜·실측 = org_stranded_seen DDL 주석).
   return {
     sql: `SELECT ${S_LIST_SEL} FROM source s
      WHERE s.lifecycle='active'
        AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id AND ks.created_at >= s.updated_at)
+       AND NOT EXISTS (SELECT 1 FROM org_stranded_seen ss WHERE ss.source_id = s.id AND ss.seen_at >= s.updated_at)
        AND ${visWhere}
        AND ${notClaimed}
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${lim}`,
@@ -426,6 +430,21 @@ export async function markDistillerSeen(distillerId: number, sourceIds: number[]
      --  머물러 매 배치 반복된다. 판정 시각을 전진시켜야 '이번에 다시 봤다'가 기록된다(#1289).
      DO UPDATE SET seen_at=now(), task_id=EXCLUDED.task_id`,
     [distillerId, ids, Number.isFinite(tid as number) ? tid : null]);
+  return r.rowCount ?? 0;
+}
+
+/** 방치(어느 레인 스코프에도 안 드는) 자료를 '판정함' 으로 기록한다 — markDistillerSeen 의 레인 없는 짝.
+ *  레인이 없어 org_distiller_seen(FK distiller_id)에 쓸 수 없으므로 org_stranded_seen 에 남긴다.
+ *  수렴 규약은 같다 — ON CONFLICT 에서 seen_at 을 now() 로 전진시켜 재판정이 다음 배치엔 빠지게 한다. */
+export async function markStrandedSeen(sourceIds: number[], taskId: number | string | null): Promise<number> {
+  const ids = sourceIds.filter((n) => Number.isFinite(n));
+  if (!ids.length) return 0;
+  const tid = taskId === null || taskId === undefined ? null : Number(taskId);
+  const r = await itemsPool.query(
+    `INSERT INTO org_stranded_seen(source_id, task_id)
+       SELECT unnest($1::int[]), $2
+     ON CONFLICT (source_id) DO UPDATE SET seen_at=now(), task_id=EXCLUDED.task_id`,
+    [ids, Number.isFinite(tid as number) ? tid : null]);
   return r.rowCount ?? 0;
 }
 
