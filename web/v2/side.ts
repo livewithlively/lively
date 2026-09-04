@@ -353,6 +353,11 @@ export interface SideInstance {
    *  홈에 없는 행(=[AI 세션]·[확인할 것]의 세션)만 자기 주소를 들고 온다(#2033). 없으면 셸이 못 열어
    *  아무 데도 안 가는 행이 된다 — 실측으로 밟았다. */
   route?: string;
+  /** 이 행의 ×(치우기)가 **무슨 뜻인가**(#3568). 목록이 × 를 켠 뒤(RowOpts.close), 뜻은 행이 정한다.
+   *  · 안 주면(undefined) 홈의 뜻 — 열린 목록에서 치우기(hooks.onCloseInstance).
+   *  · null 이면 **이 행엔 × 가 없다** — 남의 세션이 그렇다(서버도 소유자만 허용한다).
+   *  · 객체면 그 뜻으로 그린다 — [AI 세션] 구역은 프로젝트 트리 행과 같은 것을 싣는다(보관 · 휴지통). */
+  close?: { kind: 'x' | 'trash'; label: string; title: string; run: () => void } | null;
 }
 // ══ #2043 — [프로젝트] 구역의 **렌즈 둘**: 진행 중 ↔ 폴더 · 리스트 ═══════════════════════
 //  레일 [프로젝트]를 누르면 사이드바가 둘 떴다 — 이 트리(진행 중 · 프로젝트 › 세션)와, 액자 안 클래식 앱이 들고 온
@@ -524,7 +529,12 @@ interface RowOpts {
   close?: boolean;
 }
 function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
-  const one = !!o.one, canPin = o.pin !== false, canClose = o.close !== false;
+  const one = !!o.one, canPin = o.pin !== false;
+  //  × 를 그리나 — **목록이 켜고(o.close), 행이 끈다**(inst.close === null). 뜻은 행이 들고 오고(act),
+  //   안 들고 오면 홈의 뜻이다. 아래 `--plain`(행 조작이 없는 목록)도 이 판정을 그대로 쓴다 —
+  //   × 가 안 서는 행에서 상태 점을 호버에 숨기면 그 자리가 빈다.
+  const act = inst.close;
+  const canClose = o.close !== false && act !== null;
   //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
   const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
   const tip = [
@@ -559,10 +569,16 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
       onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); toggleAppPin(inst.id); } },
       sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: PIN_NEEDLE }), sv('path', { d: PIN_BODY }))),
     //  × 는 **이 목록 안에서는** 어느 행에나 있고 뜻도 하나다 — 목록에서 치우기(#1954).
-    !canClose ? null : el('button', { class: 'v2-app-inst-close', type: 'button', 'aria-label': `「${inst.title}」 목록에서 치우기`,
-      title: inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
-      onclick: () => hooks.onCloseInstance?.(inst.id) },
-      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
+    //  ⚠ 그 '하나의 뜻'은 **목록마다** 다르다(#3568): 홈은 열린 목록에서 치우기지만, [AI 세션]은 전수 명부라
+    //   치울 목록이 없다 — 거기서는 행이 프로젝트 트리와 같은 뜻(보관 · 휴지통)을 들고 온다(inst.close).
+    !canClose ? null : el('button', { class: 'v2-app-inst-close' + (act && act.kind === 'trash' ? ' v2-app-inst-close--trash' : ''), type: 'button',
+      'aria-label': act ? act.label : `「${inst.title}」 목록에서 치우기`,
+      title: act ? act.title : inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
+      onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); if (act) act.run(); else hooks.onCloseInstance?.(inst.id); } },
+      act && act.kind === 'trash'
+        ? sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' },
+            sv('path', { d: 'M4 7h16' }), sv('path', { d: 'M9 7V4h6v3' }), sv('path', { d: 'M6 7l1 13h10l1-13' }))
+        : sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
     //  ⚠ 한 줄 모드(#2033)에서는 둘째 줄을 **만들지 않는다** — 숨기기(display:none)로 두면 빈 그리드 행이 남아
     //   행 높이가 두 축에서 어긋난다. 소속은 머리글이, 시각·상태어는 툴팁이 말한다.
     //  둘째 줄 — 세션이면 **내 마지막 말**(#2016 6차, 아직 모르면 프로젝트명을 글자로), 그 밖의 앱은 종전대로 프로젝트 단추.
@@ -1139,6 +1155,17 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     //   여기 없던 게 더 이상했다.
     owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },
     at: s.lastSeen || 0,
+    //  × 의 뜻 — 이 목록에서는 '치우기'가 아니라 **프로젝트 트리 행과 같은 것**이다(#3568):
+    //   도는 세션은 보관(지난 세션으로), 지난 세션은 휴지통. 같은 사슬을 두 목록이 같은 붓으로 말한다.
+    //  ⚠ 남의 세션엔 안 그린다(null) — 서버도 소유자만 허용하므로, 그리면 눌러 보고 실패하는 단추가 된다.
+    close: !isMine(s) ? null
+      : pastRow
+        ? { kind: 'trash' as const, label: `「${t.main}」 휴지통으로`,
+            title: '휴지통으로 보내기 — 목록에서 빠지고, 휴지통에서 되돌리거나 완전히 지울 수 있어요',
+            run: () => { void doTrash(s); } }
+        : { kind: 'x' as const, label: `「${t.main}」 보관(지난 세션으로)`,
+            title: '지난 세션으로 보내기 — 지금 실행만 멈추고, 나중에 열어서 이어서 할 수 있어요',
+            run: () => { void doArchive(s); } },
   };
 }
 
@@ -1156,10 +1183,15 @@ function renderSessions(): void {
   for (const s of live) counts.set(s.stateKey, (counts.get(s.stateKey) || 0) + 1);
   const fh = findHold();
   //  ★ 홈과 **같은 붓**을 쓴다(#2033) — 행 문법도 묶는 축 토글도 여기서 새로 만들지 않는다.
-  //   ⚠ 압정·× 는 안 그린다. 목록의 성질이 다르기 때문이다: 홈은 내가 지금 붙들고 있는 것만 담은 **작업 큐**라
-  //    맨 위 고정도, 치우기도 뜻이 있다. 여기는 **전수 명부**고 순서의 정본은 상태(bySeen)다 —
-  //    치우면 찾을 곳이 없어지고, 고정은 상태 순서를 흔든다(프로젝트 트리도 프로젝트만 고정하지 세션은 안 한다).
-  const rowOpts: RowOpts = { pin: false, close: false };
+  //   ⚠ 압정은 안 그린다: 여기는 **전수 명부**고 순서의 정본은 상태(bySeen)라, 고정은 그 순서를 흔든다
+  //    (프로젝트 트리도 프로젝트만 고정하지 세션은 안 한다).
+  //   ★ × 는 그린다(#3568). #2033 이 뺐던 근거 «치우면 찾을 곳이 없어진다» 는 **홈의 ×**(열린 목록에서
+  //    치우기)의 이야기다. 여기 × 의 뜻은 프로젝트 트리 행과 같은 **보관(지난 세션으로)** 이라 명부에서
+  //    사라지지 않는다 — 같은 목록의 [지난 세션] 으로 옮겨 갈 뿐이고 되돌릴 수 있다. 그게 없어서
+  //    이 구역에서는 도는 세션이 몇백 줄로 쌓여도 한 줄도 접을 수 없었다(상민님 2026-09-05
+  //    "너무 혼잡스러워 못 닫아서" · 그때 매니지드 실측: `/api/ui/terminal/sessions` 가 내 세션 721행을 냈고
+  //    그중 restorable 397 을 뺀 **324행이 «돌고 있는 것»으로** 섰다).
+  const rowOpts: RowOpts = { pin: false, close: true };
   //  ★ 재료를 **함수로** 둔다(#2534) — 검색 한 글자마다 목록만 갈아 끼우기 위해서다(홈과 같은 방식).
   //   종전엔 여기서 한 번 계산하고 전면 재렌더에 기댔는데, 그러면 매 글자마다 검색칸이 새로 나 포커스가 날아갔다.
   const kids = (): HTMLElement[] => {
